@@ -67,6 +67,8 @@ const MODULE_OWNER_PREFIXES = [
   'lib/components/news',
   'lib/stores/matrix.ts', 'lib/stores/calendar.ts', 'lib/stores/call-store.svelte.ts',
   'lib/components/VideoCallPip.svelte',
+  // TASK-205b: the shell chrome a module half contributes (lib/modules/layout-slot.ts) and its own components
+  'lib/modules/slots', 'lib/components/messaging',
   // route module roots (the module's own UI + API)
   'routes/finance', 'routes/calendar', 'routes/messages', 'routes/files',
   'routes/elections', 'routes/votes', 'routes/polls', 'routes/content',

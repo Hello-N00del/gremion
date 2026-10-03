@@ -4,12 +4,19 @@ import { composePageAccess } from '$lib/modules/registry'
 export { Role }
 export type { SessionUser, TenantVocabularySource }
 
-// Role hierarchy: it-admin > council-admin > member > guest
+// Role hierarchy: it-admin > council-admin > finance > member > guest
+// (TASK-205a: Finance and Auditor re-applied from the source, see types.ts.)
 const ROLE_HIERARCHY: Record<Role, Role[]> = {
-  [Role.ITAdmin]: [Role.ITAdmin, Role.CouncilAdmin, Role.Member, Role.Guest],
-  [Role.CouncilAdmin]: [Role.CouncilAdmin, Role.Member, Role.Guest],
+  [Role.ITAdmin]: [Role.ITAdmin, Role.CouncilAdmin, Role.Finance, Role.Member, Role.Guest],
+  [Role.CouncilAdmin]: [Role.CouncilAdmin, Role.Finance, Role.Member, Role.Guest],
+  [Role.Finance]: [Role.Finance, Role.Member, Role.Guest],
   [Role.Member]: [Role.Member, Role.Guest],
-  [Role.Guest]: [Role.Guest]
+  [Role.Guest]: [Role.Guest],
+  // Auditor is a STANDALONE finance read-only role (D1(a)). It is deliberately NOT folded into any other
+  // role's array and confers only itself + Guest: its finance see-all is read at the finance access seam
+  // (read/access.ts `seesAllFinance`), not via this page-role hierarchy. There is intentionally no
+  // PAGE_ACCESS entry until the governance programme introduces actual auditor accounts.
+  [Role.Auditor]: [Role.Auditor, Role.Guest]
 }
 
 /** Returns true if the user's roles include the required role (respects hierarchy). */
@@ -68,6 +75,10 @@ export const PAGE_ACCESS_PUBLIC_SEGMENTS: ReadonlySet<string> = new Set([
   'auth',
   'legal',
   'setup',
+  // TASK-205b (messaging): the Element Call widget host and the LiveKit proxy are public surfaces; their own
+  // handlers authorise (the widget token), authGuard's publicPaths short-circuits them before canAccess.
+  'livekit',
+  'element-call',
   'api',
   'healthz',
 ])

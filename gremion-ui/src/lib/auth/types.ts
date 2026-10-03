@@ -1,8 +1,15 @@
 export enum Role {
   Guest = 'guest',
   Member = 'member',
+  // TASK-205a: re-applied from the source (the carve removed them so the kernel compiled without the
+  // finance module). Finance gates the finance module's write surfaces; the 'finance' and 'auditor'
+  // realm roles map in through hooks.server.ts validRoles = Object.values(Role).
+  Finance = 'finance',
   CouncilAdmin = 'council-admin',
-  ITAdmin = 'it-admin'
+  ITAdmin = 'it-admin',
+  // Dedicated finance read-only auditor (D1(a)). Standalone role: it confers finance see-all (read) but
+  // NO write, decoupled from it-admin, which used to double as the auditor stand-in.
+  Auditor = 'auditor'
 }
 
 /**

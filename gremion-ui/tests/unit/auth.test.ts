@@ -28,6 +28,30 @@ describe('hasRole', () => {
   })
 })
 
+// TASK-205a TDD 9: the Role.Finance / Role.Auditor vocabulary the finance module reads.
+describe('Role vocabulary — Finance and Auditor (TASK-205a)', () => {
+  it('the enum carries finance and auditor with their realm-role strings', () => {
+    expect(Role.Finance).toBe('finance')
+    expect(Role.Auditor).toBe('auditor')
+    expect(Object.values(Role)).toEqual(expect.arrayContaining(['finance', 'auditor']))
+  })
+
+  it('finance sits between member and council-admin: council-admin and it-admin imply it, member does not', () => {
+    expect(hasRole([Role.Finance], Role.Member)).toBe(true)
+    expect(hasRole([Role.CouncilAdmin], Role.Finance)).toBe(true)
+    expect(hasRole([Role.ITAdmin], Role.Finance)).toBe(true)
+    expect(hasRole([Role.Member], Role.Finance)).toBe(false)
+    expect(hasRole([Role.Finance], Role.CouncilAdmin)).toBe(false)
+  })
+
+  it('auditor is standalone read-only: it confers itself and guest, and nothing else confers it', () => {
+    expect(hasRole([Role.Auditor], Role.Guest)).toBe(true)
+    expect(hasRole([Role.Auditor], Role.Member)).toBe(false)
+    expect(hasRole([Role.Auditor], Role.Finance)).toBe(false)
+    for (const r of [Role.ITAdmin, Role.CouncilAdmin, Role.Finance, Role.Member]) expect(hasRole([r], Role.Auditor)).toBe(false)
+  })
+})
+
 describe('canAccess (legacy smoke tests)', () => {
   it('guest cannot access members', () => {
     expect(canAccess([Role.Guest], 'members')).toBe(false)
@@ -80,23 +104,27 @@ describe('canAccess (legacy smoke tests)', () => {
  * extending the tables will fail CI.
  */
 describe('canAccess — exhaustive PAGE_ACCESS coverage (G-065)', () => {
-  // Per required role: roles that MUST grant access (positive matrix). The
-  // governance-only kernel role ladder is guest < member < council-admin <
-  // it-admin (the finance/auditor roles were carved out with their module).
+  // Per required role: roles that MUST grant access (positive matrix). The role ladder is
+  // guest < member < finance < council-admin < it-admin; Auditor is a standalone read-only role that no
+  // page requires (TASK-205a re-applied Finance and Auditor with the finance vocabulary).
   const POSITIVE_ROLES_FOR: Record<Role, Role[]> = {
-    [Role.Guest]: [Role.Guest, Role.Member, Role.CouncilAdmin, Role.ITAdmin],
-    [Role.Member]: [Role.Member, Role.CouncilAdmin, Role.ITAdmin],
+    [Role.Guest]: [Role.Guest, Role.Member, Role.Finance, Role.CouncilAdmin, Role.ITAdmin],
+    [Role.Member]: [Role.Member, Role.Finance, Role.CouncilAdmin, Role.ITAdmin],
+    [Role.Finance]: [Role.Finance, Role.CouncilAdmin, Role.ITAdmin],
     [Role.CouncilAdmin]: [Role.CouncilAdmin, Role.ITAdmin],
     [Role.ITAdmin]: [Role.ITAdmin],
+    [Role.Auditor]: [Role.Auditor],
   }
 
   // Per required role: role states that MUST be denied (negative matrix).
   // For Role.Guest the only way to be denied is to hold no roles at all.
   const NEGATIVE_ROLES_FOR: Record<Role, Role[][]> = {
     [Role.Guest]: [[]],
-    [Role.Member]: [[], [Role.Guest]],
-    [Role.CouncilAdmin]: [[], [Role.Guest], [Role.Member]],
-    [Role.ITAdmin]: [[], [Role.Guest], [Role.Member], [Role.CouncilAdmin]],
+    [Role.Member]: [[], [Role.Guest], [Role.Auditor]],
+    [Role.Finance]: [[], [Role.Guest], [Role.Member], [Role.Auditor]],
+    [Role.CouncilAdmin]: [[], [Role.Guest], [Role.Member], [Role.Finance]],
+    [Role.ITAdmin]: [[], [Role.Guest], [Role.Member], [Role.Finance], [Role.CouncilAdmin]],
+    [Role.Auditor]: [[], [Role.Guest], [Role.Member]],
   }
 
   // Build the parametrised test cases at collection time.

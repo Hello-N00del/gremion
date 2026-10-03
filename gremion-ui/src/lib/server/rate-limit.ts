@@ -1,4 +1,5 @@
 import { json } from '@sveltejs/kit'
+import type { ClientAddress } from '$lib/server/client-ip'
 import { currentTenantId } from '$lib/server/tenant/context'
 
 /**
@@ -46,8 +47,27 @@ function sweepExpired(now: number): void {
 export const RATE_LIMITS = {
   /** `/api/setup/{config,admins}` — IP-keyed, 5/hour. */
   setup: { limit: 5, windowMs: ONE_HOUR_MS },
+  /**
+   * The setup budget for callers with NO resolvable address — ONE shared,
+   * separately-bounded bucket (T04 round 3).
+   *
+   * Round 2 refused these outright. That is fail-closed and it also refused a
+   * documented deploy step: gremion-ui runs with `ADDRESS_HEADER=x-forwarded-for`,
+   * so a host-local `wget http://127.0.0.1:3000/api/setup/seed` — the netcup
+   * runbook's own Step-37 invocation, and the shape of the container's
+   * healthcheck — makes adapter-node throw and the address is null. The
+   * operator saw "Rate limit exceeded" on the first attempt of a fresh deploy.
+   *
+   * The ORIGINAL defect is still fixed. What was wrong with `'unknown'` was
+   * that it was used as if it were an address, so un-addressable callers spent
+   * the SAME 5/hour a real client's key gets. This bucket is keyed on a name no
+   * address can produce, so it can only ever spend itself.
+   */
+  setupNoAddress: { limit: 5, windowMs: ONE_HOUR_MS },
   /** `/api/newsletter/unsubscribe` — IP-keyed, 10/hour. */
   unsubscribe: { limit: 10, windowMs: ONE_HOUR_MS },
+  /** The unsubscribe twin of `setupNoAddress`. */
+  unsubscribeNoAddress: { limit: 10, windowMs: ONE_HOUR_MS },
   /** `/api/newsletter/[id]/send-now` — user-id-keyed, 3/hour. */
   newsletterSendNow: { limit: 3, windowMs: ONE_HOUR_MS },
 } as const
@@ -102,9 +122,27 @@ function tooManyRequests(retryAfterSec = 60): Response {
  * blast radius. Call BEFORE token validation so wrong-token attempts still
  * count.
  */
-export function requireSetupRateLimit(ip: string): Response | null {
+export function requireSetupRateLimit(client: ClientAddress): Response | null {
+  // T04 round 3 — a DEDICATED bounded bucket, not an unconditional refusal.
+  //
+  // Round 2's `if (ip === null) return tooManyRequests()` was fail-closed and
+  // undiagnosable, and it refused the runbook's own seed step (see
+  // RATE_LIMITS.setupNoAddress). The key below cannot collide with any address,
+  // so an un-addressable caller still cannot spend a real client's allowance —
+  // which is the property the round-2 change existed to establish.
+  if (client.ip === null) {
+    console.warn(
+      `[rate-limit] setup request with no resolvable client address (reason=${client.reason}); ` +
+        'using the shared no-address bucket. If this is a host-local call, send ' +
+        'X-Forwarded-For so it gets its own budget.',
+    )
+    const { limit, windowMs } = RATE_LIMITS.setupNoAddress
+    return checkAndIncrement(`${currentTenantId()}|setup:no-client-address`, limit, windowMs)
+      ? null
+      : tooManyRequests()
+  }
   const { limit, windowMs } = RATE_LIMITS.setup
-  if (!checkAndIncrement(`${currentTenantId()}|setup:${ip}`, limit, windowMs)) {
+  if (!checkAndIncrement(`${currentTenantId()}|setup:${client.ip}`, limit, windowMs)) {
     return tooManyRequests()
   }
   return null
@@ -119,9 +157,22 @@ export function requireSetupRateLimit(ip: string): Response | null {
  */
 // PUBLIC pre-auth path: tenantResolveHandle (sequence element 0) MUST run before
 // any rate-limit guard so currentTenantId() is set even here (spec §7.2).
-export function requireUnsubscribeRateLimit(ip: string): Response | null {
+export function requireUnsubscribeRateLimit(client: ClientAddress): Response | null {
+  // Same shape as requireSetupRateLimit, and deliberately identical to it: the
+  // two endpoints share one threat model and must not drift into different
+  // answers for the same question.
+  if (client.ip === null) {
+    console.warn(
+      `[rate-limit] unsubscribe request with no resolvable client address (reason=${client.reason}); ` +
+        'using the shared no-address bucket.',
+    )
+    const { limit, windowMs } = RATE_LIMITS.unsubscribeNoAddress
+    return checkAndIncrement(`${currentTenantId()}|unsubscribe:no-client-address`, limit, windowMs)
+      ? null
+      : tooManyRequests()
+  }
   const { limit, windowMs } = RATE_LIMITS.unsubscribe
-  if (!checkAndIncrement(`${currentTenantId()}|unsubscribe:${ip}`, limit, windowMs)) {
+  if (!checkAndIncrement(`${currentTenantId()}|unsubscribe:${client.ip}`, limit, windowMs)) {
     return tooManyRequests()
   }
   return null

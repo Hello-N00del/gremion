@@ -303,7 +303,7 @@
       "path": "modules/finance/test/api.integration.test.ts",
       "reason": "postgres major pin (lint-postgres-major): the pre-pin major-16 alpine tag -> the pinned major-18 alpine tag, in a test-DB guard's guidance string",
       "owner": "TASK-200",
-      "blob": "964e8fa4fb82ff08d65165b7b583d59e3ed63358"
+      "blob": "7fa5f4331d98a676785f7a19e728c38c36155286"
     },
     {
       "path": "modules/finance/test/org-unit-mirror.integration.test.ts",
@@ -514,6 +514,1194 @@
       "reason": "R29-KHYG2-K: removed, the leaf-aggregator parity guard compared src/aggregator/{aggregator,types}.ts with the app oracle gremion-ui/src/lib/votes/{aggregator,types}.ts, which the kernel does not carry (2 ENOENT failures, `vitest run` for the package could not pass; StuRaOS keeps its copy). The elections app half (lib/votes) enters in-tree with TASK-205, which re-adds the guard re-pointed at it (modules/COUPLED-TESTS.json entry removed with it)",
       "owner": "TASK-205",
       "blob": null
+    },
+    {
+      "path": "modules/calendar/app/lib/components/calendar/WeekGrid.svelte",
+      "reason": "post-f2 StuRaOS b14639b7: fix(calendar-ui): key the week view's all-day row by id and start (F1-FIX-08 S1c#12 follow-through)",
+      "owner": "TASK-205",
+      "blob": "901ef892f45a564f2782cf9674cffc9038399dc8"
+    },
+    {
+      "path": "modules/files/app/lib/files/editable-types.test.ts",
+      "reason": "post-f2 StuRaOS b91c10dc: fix(files): an uploaded SVG never runs on the app origin; fixed Content-Type and sandbox CSP on every file res",
+      "owner": "TASK-205",
+      "blob": "76427824774de72dc13484336866e347321dd55c"
+    },
+    {
+      "path": "modules/files/app/lib/files/editable-types.ts",
+      "reason": "post-f2 StuRaOS b91c10dc: fix(files): an uploaded SVG never runs on the app origin; fixed Content-Type and sandbox CSP on every file res",
+      "owner": "TASK-205",
+      "blob": "6a0b58b992de844820ff7334109341118b71583b"
+    },
+    {
+      "path": "modules/board/app/lib/modules/manifests/board.ts",
+      "reason": "post-f2 StuRaOS cee6f398: fix(board): drop product literal from board manifest scope comment; TASK-205: comment names the kernel migration with its 4-digit padded name (the register lint refuses a pad-3 kernel-data name outside its allow-list)",
+      "owner": "TASK-205",
+      "blob": "b7efb46a6bd40b557f066e4fdcaf1581662ea2fc"
+    },
+    {
+      "path": "modules/board/app/lib/server/board/backend/index.test.ts",
+      "reason": "post-f2 StuRaOS af928687: feat(board): port create path createBoard/createStack; in-process transaction, service POSTs without retry (R2",
+      "owner": "TASK-205",
+      "blob": "14679e5770901b1bfc33b0a0776a2e30e44da697"
+    },
+    {
+      "path": "modules/board/app/lib/server/board/backend/index.ts",
+      "reason": "post-f2 StuRaOS af928687: feat(board): port create path createBoard/createStack; in-process transaction, service POSTs without retry (R2",
+      "owner": "TASK-205",
+      "blob": "bbe2c36fb0293f7dd27a108ee8d872a4dd5d02c7"
+    },
+    {
+      "path": "modules/board/app/lib/server/board/backend/inprocess-client.ts",
+      "reason": "post-f2 StuRaOS af928687: feat(board): port create path createBoard/createStack; in-process transaction, service POSTs without retry (R2",
+      "owner": "TASK-205",
+      "blob": "55de40f52eda9c5ecc02635afcb3a46901669935"
+    },
+    {
+      "path": "modules/board/app/lib/server/board/backend/port.ts",
+      "reason": "post-f2 StuRaOS af928687: feat(board): port create path createBoard/createStack; in-process transaction, service POSTs without retry (R2",
+      "owner": "TASK-205",
+      "blob": "51bed145a688fc882fa167d8783ff686c714738c"
+    },
+    {
+      "path": "modules/board/app/lib/server/board/backend/route-parity.test.ts",
+      "reason": "post-f2 StuRaOS af928687: feat(board): port create path createBoard/createStack; in-process transaction, service POSTs without retry (R2",
+      "owner": "TASK-205",
+      "blob": "a635f894f1d537c5987a27916b671e0cde1d124b"
+    },
+    {
+      "path": "modules/board/app/lib/server/board/backend/service-client.test.ts",
+      "reason": "post-f2 StuRaOS af928687: feat(board): port create path createBoard/createStack; in-process transaction, service POSTs without retry (R2",
+      "owner": "TASK-205",
+      "blob": "bdee4ba74cc9ddcaf153307b53b3ac063149bc6f"
+    },
+    {
+      "path": "modules/board/app/lib/server/board/backend/service-client.ts",
+      "reason": "post-f2 StuRaOS af928687: feat(board): port create path createBoard/createStack; in-process transaction, service POSTs without retry (R2",
+      "owner": "TASK-205",
+      "blob": "aa1249473d01ba32b473ff3a80b5904f44d93294"
+    },
+    {
+      "path": "modules/board/app/lib/server/board/board-db.ts",
+      "reason": "post-f2 StuRaOS af928687: feat(board): port create path createBoard/createStack; in-process transaction, service POSTs without retry (R2",
+      "owner": "TASK-205",
+      "blob": "67af90c4ca7326d4d99ebd4c67992c22f4e1134f"
+    },
+    {
+      "path": "modules/calendar/app/lib/server/calendar/caldav-client.test.ts",
+      "reason": "post-f2 StuRaOS 52203876: fix(calendar): recurrence until/exceptions are Berlin civil days, not UTC-midnight instants (F1-FIX-08 round 2",
+      "owner": "TASK-205",
+      "blob": "12ae770c0021330d5a54e3bcf7f7aa6d52500e1a"
+    },
+    {
+      "path": "modules/calendar/app/lib/server/calendar/caldav-client.ts",
+      "reason": "post-f2 StuRaOS 770458ad: fix(calendar): in-process CalDAV DELETE treats 404/410 as done (F1-FIX-08 round 2, acceptance 5); TASK-205a: CALDAV_SHARED_USER / NEXTCLOUD_ADMIN_USER read through serviceEnv (the deleted default-tenant env reader); TASK-205a: no product literal in gremion-ui/src (brand.guard.test.ts): PRODID and comment say Gremion",
+      "owner": "TASK-205",
+      "blob": "c8e187b2f16790b2f721c8c08052c8274fe2d7c3"
+    },
+    {
+      "path": "modules/calendar/app/lib/server/calendar/caldav-sync.test.ts",
+      "reason": "post-f2 StuRaOS 2167f054: fix(calendar): in-process drain queues the D-2 cleanup of already-pushed private events (F1-FIX-08 round 2); TASK-205a: per-tenant CalDAV map in the kernel JSON format, both tenants explicit",
+      "owner": "TASK-205",
+      "blob": "1a5386c30d7215c582670433b00b07cb0e3cfaa4"
+    },
+    {
+      "path": "modules/calendar/app/lib/server/calendar/caldav-sync.tick.test.ts",
+      "reason": "post-f2 StuRaOS 2167f054: fix(calendar): in-process drain queues the D-2 cleanup of already-pushed private events (F1-FIX-08 round 2); TASK-205a: per-tenant CalDAV map in the kernel JSON format, both tenants explicit; no default-tenant slug variable",
+      "owner": "TASK-205",
+      "blob": "82fb70d4297c2b89d601b23501c366b8a2a22c22"
+    },
+    {
+      "path": "modules/calendar/app/lib/server/calendar/caldav-sync.ts",
+      "reason": "post-f2 StuRaOS 2167f054: fix(calendar): in-process drain queues the D-2 cleanup of already-pushed private events (F1-FIX-08 round 2); TASK-205a: resolveCaldavTarget defaults to serviceCaldavVars()",
+      "owner": "TASK-205",
+      "blob": "6766894b69d90a51d6eea88b4023ef8bf9ca02c8"
+    },
+    {
+      "path": "modules/calendar/app/lib/server/calendar/caldav-target.ts",
+      "reason": "post-f2 StuRaOS 93b435e6: fix(calendar): in-process CalDAV drain mirrors per-tenant target and D-2 never-push-non-public (F1-FIX-08 H06); TASK-205a: kernel rules (twin of modules/calendar/src/caldav/target.ts): JSON map or {slug} template, no 'legacy pair for the default tenant' (TASK-042 deletion assertion); service vars through serviceEnv; TASK-205a: no product literal in gremion-ui/src",
+      "owner": "TASK-205",
+      "blob": "d069e8dcd9af9b10c80dc9d2831c7a5cd801d0b0"
+    },
+    {
+      "path": "modules/calendar/app/lib/server/calendar/calendar-db.ts",
+      "reason": "post-f2 StuRaOS 2167f054: fix(calendar): in-process drain queues the D-2 cleanup of already-pushed private events (F1-FIX-08 round 2)",
+      "owner": "TASK-205",
+      "blob": "a3b3d513cddd509c606d8e7b106636fc87b75461"
+    },
+    {
+      "path": "modules/calendar/app/lib/server/calendar/event-authz.ts",
+      "reason": "post-f2 StuRaOS 21eaff18: fix(calendar): limit event edit/delete/publish to creator, committee members or CouncilAdmin (F1-FIX-08 S3#29)",
+      "owner": "TASK-205",
+      "blob": "ada246bf647b006c0cb958ceaa639dbc4af43006"
+    },
+    {
+      "path": "modules/calendar/app/lib/server/calendar/recurrence-expand.test.ts",
+      "reason": "post-f2 StuRaOS 52203876: fix(calendar): recurrence until/exceptions are Berlin civil days, not UTC-midnight instants (F1-FIX-08 round 2",
+      "owner": "TASK-205",
+      "blob": "768c0d370f302ff79882364cb65624c8fbc72eed"
+    },
+    {
+      "path": "modules/calendar/app/lib/server/calendar/recurrence-expand.ts",
+      "reason": "post-f2 StuRaOS 52203876: fix(calendar): recurrence until/exceptions are Berlin civil days, not UTC-midnight instants (F1-FIX-08 round 2",
+      "owner": "TASK-205",
+      "blob": "a6aeb739a977b283c9e44274f3448d1e1a14e27e"
+    },
+    {
+      "path": "modules/calendar/app/lib/server/calendar/register.server.test.ts",
+      "reason": "post-f2 StuRaOS ba6c04ce: fix(calendar): dashboard upcoming-events yields one row per series (F1-FIX-08 round 2); TASK-205a: mocks platformEnv instead of the deleted default-env",
+      "owner": "TASK-205",
+      "blob": "56816af19ab905682ad9361a3d060a7fad206418"
+    },
+    {
+      "path": "modules/calendar/app/lib/server/calendar/register.server.ts",
+      "reason": "post-f2 StuRaOS ba6c04ce: fix(calendar): dashboard upcoming-events yields one row per series (F1-FIX-08 round 2); TASK-205a: NATS_URL read through platformEnv (the default-tenant env family is deleted, TASK-042 T1)",
+      "owner": "TASK-205",
+      "blob": "7dd60f3aa0bfc02506c9d58bc5b43ba1325ec49c"
+    },
+    {
+      "path": "modules/calendar/app/lib/server/events/calendar-audit-consumer.ts",
+      "reason": "post-f2 StuRaOS 871636a9: fix(types): svelte-check 12 -> 0 errors (R29-SVCHECK-S)",
+      "owner": "TASK-205",
+      "blob": "2a90da3dc8496ec5575c78aba7e2a6a74c259b12"
+    },
+    {
+      "path": "modules/board/app/lib/server/seed/seed-board.ts",
+      "reason": "post-f2 StuRaOS 754e0ce7: feat(seed): demo boards seed through the board port, gated on config.modules.board (R29-BOARD-STORE-S item 6, ",
+      "owner": "TASK-205",
+      "blob": "d39322fad563747965836760822f030e7b546fd0"
+    },
+    {
+      "path": "modules/board/app/routes/api/board/[id]/cards/+server.ts",
+      "reason": "post-f2 StuRaOS 52ab9d16: fix(board): web-tier object binding - stack, card and action item must belong to the scoped board, else 404 (R",
+      "owner": "TASK-205",
+      "blob": "c3cbfbda0b48af84f0cf3e3cc4c39158d8cc9f41"
+    },
+    {
+      "path": "modules/board/app/routes/api/board/[id]/promote/+server.ts",
+      "reason": "post-f2 StuRaOS 52ab9d16: fix(board): web-tier object binding - stack, card and action item must belong to the scoped board, else 404 (R",
+      "owner": "TASK-205",
+      "blob": "2f619a03d8e02008d622b9c36750abd5268e4893"
+    },
+    {
+      "path": "modules/board/app/routes/api/board/board-binding.test.ts",
+      "reason": "post-f2 StuRaOS 52ab9d16: fix(board): web-tier object binding - stack, card and action item must belong to the scoped board, else 404 (R",
+      "owner": "TASK-205",
+      "blob": "5163f592be45d3d1d1c8a847f7c1451343824204"
+    },
+    {
+      "path": "modules/board/app/routes/api/board/board-write.test.ts",
+      "reason": "post-f2 StuRaOS 52ab9d16: fix(board): web-tier object binding - stack, card and action item must belong to the scoped board, else 404 (R",
+      "owner": "TASK-205",
+      "blob": "0ea72deccff15404fc73c44e9e569242e7711ac0"
+    },
+    {
+      "path": "modules/calendar/app/routes/api/calendar/automations/helios/+server.ts",
+      "reason": "post-f2 StuRaOS 44089f7a: fix(calendar): the Helios election automation requires a CouncilAdmin (F1-FIX-03-S S3#4 S3#30)",
+      "owner": "TASK-205",
+      "blob": "8dd797fb843c52ca0accf21cd1caad2d049a6b10"
+    },
+    {
+      "path": "modules/calendar/app/routes/api/calendar/automations/helios/helios.test.ts",
+      "reason": "post-f2 StuRaOS 44089f7a: fix(calendar): the Helios election automation requires a CouncilAdmin (F1-FIX-03-S S3#4 S3#30)",
+      "owner": "TASK-205",
+      "blob": "0caca391f78fbaa357b0d53d5b9a7abfdc423505"
+    },
+    {
+      "path": "modules/calendar/app/routes/api/calendar/automations/minutes/confirm/+server.ts",
+      "reason": "post-f2 StuRaOS b78c0b0c: fix(calendar): the minutes-confirm session path requires a CouncilAdmin (F1-FIX-03-S r2, house review HIGH)",
+      "owner": "TASK-205",
+      "blob": "9f4196ecc3b97e272715e4e3027564aa360ca172"
+    },
+    {
+      "path": "modules/calendar/app/routes/api/calendar/automations/minutes/confirm/confirm.test.ts",
+      "reason": "post-f2 StuRaOS b78c0b0c: fix(calendar): the minutes-confirm session path requires a CouncilAdmin (F1-FIX-03-S r2, house review HIGH)",
+      "owner": "TASK-205",
+      "blob": "3b83e1c299e8602b5158dca372620a1dfd8802b0"
+    },
+    {
+      "path": "modules/calendar/app/routes/api/calendar/events/+server.ts",
+      "reason": "post-f2 StuRaOS 9666f2a1: fix(calendar): RFC 5545-valid CalDAV ICS and validated BYDAY (F1-FIX-08 S1c#13, K4#21)",
+      "owner": "TASK-205",
+      "blob": "29610ea8cc40d1d48dd4d109814b61cb83bca39b"
+    },
+    {
+      "path": "modules/calendar/app/routes/api/calendar/events/[id]/+server.ts",
+      "reason": "post-f2 StuRaOS 85c701e0: fix(calendar): PATCH with a series occurrence's times no longer moves the whole series (F1-FIX-08 round 2)",
+      "owner": "TASK-205",
+      "blob": "155bbcdf4b46a8d70066381dc7e7d7bff6de6fff"
+    },
+    {
+      "path": "modules/calendar/app/routes/api/calendar/events/[id]/event-authz.test.ts",
+      "reason": "post-f2 StuRaOS 8f84fdfa: test(calendar): keep F1-FIX-08 guards inside the oxlint ratchet",
+      "owner": "TASK-205",
+      "blob": "a576050b91b369438c1f4dc7f4ad3618e973ba39"
+    },
+    {
+      "path": "modules/calendar/app/routes/api/calendar/events/[id]/occurrence-patch.test.ts",
+      "reason": "post-f2 StuRaOS 85c701e0: fix(calendar): PATCH with a series occurrence's times no longer moves the whole series (F1-FIX-08 round 2)",
+      "owner": "TASK-205",
+      "blob": "9f12f2a3a061e3852ff6038a04e6ce5e5775090e"
+    },
+    {
+      "path": "modules/calendar/app/routes/api/calendar/events/events-recurrence.test.ts",
+      "reason": "post-f2 StuRaOS 443c635f: fix(calendar): recurring events no longer vanish after their first occurrence (F1-FIX-08 S1c#12)",
+      "owner": "TASK-205",
+      "blob": "e23c0504df2c1578e2e8f8da8c3e1892093a3907"
+    },
+    {
+      "path": "modules/files/app/routes/api/files/[...path]/+server.ts",
+      "reason": "post-f2 StuRaOS b91c10dc: fix(files): an uploaded SVG never runs on the app origin; fixed Content-Type and sandbox CSP on every file res",
+      "owner": "TASK-205",
+      "blob": "c9c765b14b85c803f000b1fcf4b28e01bd700a28"
+    },
+    {
+      "path": "modules/files/app/routes/api/files/[...path]/file-serving.test.ts",
+      "reason": "post-f2 StuRaOS b91c10dc: fix(files): an uploaded SVG never runs on the app origin; fixed Content-Type and sandbox CSP on every file res",
+      "owner": "TASK-205",
+      "blob": "335c6f63891465cd158f6c9c6584883ae1efda54"
+    },
+    {
+      "path": "modules/files/app/lib/server/files/backend/service-client.test.ts",
+      "reason": "excluded: reads contracts/files/openapi.files-internal.json, a module contract the kernel does not carry (product-module-contracts); returns with the contract harvest (TASK-011), like contracts-newsletter-specs",
+      "owner": "TASK-011",
+      "blob": null
+    },
+    {
+      "path": "modules/calendar/app/lib/server/events/calendar-audit-consumer.integration.test.ts",
+      "reason": "TASK-205a: no default-tenant registration (deleted, TASK-042); registers tenant-a through createTestTenant; TASK-205a: neutral tenant-b issuer host (kernel hygiene h2/i1: no retired product host in a shipped surface)",
+      "owner": "TASK-205",
+      "blob": "b7b966a27f366acb02bbba6915759b3791a1ece9"
+    },
+    {
+      "path": "modules/files/app/lib/server/files/backend/inprocess-client.ts",
+      "reason": "TASK-205a: Nextcloud endpoint through serviceEnv (the deleted default-tenant env reader)",
+      "owner": "TASK-205",
+      "blob": "7084011d37a5162d2277a9ec84f8838d6ad17a8a"
+    },
+    {
+      "path": "modules/files/app/lib/server/files/backend/route-parity.test.ts",
+      "reason": "TASK-205a: drives the serviceEnv seam instead of $env/dynamic/private",
+      "owner": "TASK-205",
+      "blob": "c62a8e27417ea8c1046f41bdf76f2cb294af1748"
+    },
+    {
+      "path": "modules/files/app/lib/server/files/nextcloud-client.ts",
+      "reason": "TASK-205a: Nextcloud endpoint through serviceEnv (the deleted default-tenant env reader)",
+      "owner": "TASK-205",
+      "blob": "69ffb32d3a76e6fd1d6d4dffdb0b9b40604f9fae"
+    },
+    {
+      "path": "modules/files/app/lib/server/files/protocol-documents.ts",
+      "reason": "TASK-205a: NEXTCLOUD_ADMIN_USER through serviceEnv (the deleted default-tenant env reader)",
+      "owner": "TASK-205",
+      "blob": "08cefb8219198e440c4724794cd1966064682b8e"
+    },
+    {
+      "path": "modules/files/app/lib/server/files/register.server.ts",
+      "reason": "TASK-205a: NEXTCLOUD_OIDC_PROVIDER_ID through serviceEnv (the deleted default-tenant env reader)",
+      "owner": "TASK-205",
+      "blob": "a759bf4cdf65249f5cecd1aa114ce1c606f44ce8"
+    },
+    {
+      "path": "modules/files/app/routes/api/files/upload-chunk/upload-chunk.test.ts",
+      "reason": "TASK-205a: drives the serviceEnv seam instead of $env/dynamic/private",
+      "owner": "TASK-205",
+      "blob": "8340d010c36e6212b672953b2dcea75c059f0edb"
+    },
+    {
+      "path": "modules/calendar/app/lib/server/calendar/notification-scheduler.ts",
+      "reason": "TASK-205a: no product literal in gremion-ui/src (brand.guard.test.ts): subject prefix says Gremion (carries the civitas-modules 1295a40 fix from f2)",
+      "owner": "TASK-205",
+      "blob": "573fdb193b167eb54bf69b77da9699cac8381069"
+    },
+    {
+      "path": "modules/content/src/http/routes.ts",
+      "reason": "kernel-ahead of f2: 6151e5ca fix(content): the HTTP claim route returns the claim token and the failed route fences on it (R29-LO",
+      "owner": "TASK-205",
+      "blob": "027112e23e15d18de175c4693f202e1660e545ff"
+    },
+    {
+      "path": "modules/files/src/nextcloud/webdav-client.ts",
+      "reason": "kernel-ahead of f2: 6e9754d3 fix(files-leaf): no admin fallback for browser ops, every path validated and encoded once (F1-FIX-03",
+      "owner": "TASK-205",
+      "blob": "b80560b00964dc9cc471f1ad16f55b022eaad427"
+    },
+    {
+      "path": "modules/finance/migrations/manifest.json",
+      "reason": "kernel-ahead of f2: b29f7eac fix(finance): one open approval per approvable, one live payment order per expense (F1-FIX-05-K, H20",
+      "owner": "TASK-205",
+      "blob": "eb710ad2b699ea0ce295bb41d745017b9bb50dfd"
+    },
+    {
+      "path": "modules/finance/src/http/routes.ts",
+      "reason": "kernel-ahead of f2: 7a9bd423 fix(finance): central/admin scope on fiscal-year and sub-org-type mutations; mirror-confirmed sub-or",
+      "owner": "TASK-205",
+      "blob": "32df2be45c2bbf0a9276b0ba40fad120300a854a"
+    },
+    {
+      "path": "modules/finance/src/nextcloud/webdav-client.ts",
+      "reason": "kernel-ahead of f2: f115cbdf fix(finance): Nextcloud receipt PUT is create-only (If-None-Match: *) (F1-FIX-05-K r2)",
+      "owner": "TASK-205",
+      "blob": "da568f0d7920949842fd2b83cb0db1355a32a8e3"
+    },
+    {
+      "path": "modules/finance/src/store/index.ts",
+      "reason": "kernel-ahead of f2: 7a9bd423 fix(finance): central/admin scope on fiscal-year and sub-org-type mutations; mirror-confirmed sub-or",
+      "owner": "TASK-205",
+      "blob": "2d36b04921c25993d0ab718ae34f8c27de293e10"
+    },
+    {
+      "path": "modules/finance/test/bank-money.integration.test.ts",
+      "reason": "kernel-ahead of f2: b6f13077 fix(finance): payouts move the authorised amount on an in-scope Titel of the booked year (F1-FIX-05-",
+      "owner": "TASK-205",
+      "blob": "0c2455752a0503ba2d7a4de9cf9abd5e2dba39e6"
+    },
+    {
+      "path": "modules/finance/test/bank-money.store.test.ts",
+      "reason": "kernel-ahead of f2: b6f13077 fix(finance): payouts move the authorised amount on an in-scope Titel of the booked year (F1-FIX-05-",
+      "owner": "TASK-205",
+      "blob": "258b122f6d8c02152d3dcb338e80181e64b776b8"
+    },
+    {
+      "path": "modules/votes/src/helios/helios-client.ts",
+      "reason": "kernel-ahead of f2: 0a4740c8 fix(votes): apply anonymous/description/expire to created polls, validate election uuids (F1-FIX-08-",
+      "owner": "TASK-205",
+      "blob": "4790c4f0d8877254e87c05a0b091f32e78708361"
+    },
+    {
+      "path": "modules/votes/src/polls/polls-client.ts",
+      "reason": "kernel-ahead of f2: 0a4740c8 fix(votes): apply anonymous/description/expire to created polls, validate election uuids (F1-FIX-08-",
+      "owner": "TASK-205",
+      "blob": "590ff78faec620eeb12594df97a01d84d988a4d1"
+    },
+    {
+      "path": "modules/calendar/src/caldav/client.ts",
+      "reason": "kernel-ahead of f2: d2cfe36c fix(calendar): validate RRULE BYDAY and fold ICS lines at 75 octets (F1-FIX-08-K K4#21)",
+      "owner": "TASK-205",
+      "blob": "e4a90b5629e9a30222581570cf670b027d15e9d5"
+    },
+    {
+      "path": "modules/calendar/src/caldav/pusher.ts",
+      "reason": "kernel-ahead of f2: e291d8d1 fix(calendar): resolve the CalDAV target per tenant and refuse to drain without one (F1-FIX-08-K H06",
+      "owner": "TASK-205",
+      "blob": "92c0dd17afc019cce41b918199b1efadd6563879"
+    },
+    {
+      "path": "modules/calendar/src/caldav/sync.ts",
+      "reason": "kernel-ahead of f2: e291d8d1 fix(calendar): resolve the CalDAV target per tenant and refuse to drain without one (F1-FIX-08-K H06",
+      "owner": "TASK-205",
+      "blob": "660cf292d047f3fc865099daad395480817bbf0f"
+    },
+    {
+      "path": "modules/calendar/src/http/routes.ts",
+      "reason": "kernel-ahead of f2: d2cfe36c fix(calendar): validate RRULE BYDAY and fold ICS lines at 75 octets (F1-FIX-08-K K4#21)",
+      "owner": "TASK-205",
+      "blob": "7ec200651541742b2fa3042160b284601a2d602f"
+    },
+    {
+      "path": "modules/calendar/src/index.ts",
+      "reason": "kernel-ahead of f2: e291d8d1 fix(calendar): resolve the CalDAV target per tenant and refuse to drain without one (F1-FIX-08-K H06",
+      "owner": "TASK-205",
+      "blob": "1d8d8037df301b0755edb6b8b9e7222145ec688d"
+    },
+    {
+      "path": "modules/calendar/src/store/events.ts",
+      "reason": "kernel-ahead of f2: 3f010693 fix(calendar): updateEvent can clear nullable fields; recurring events stay in later windows (F1-FIX",
+      "owner": "TASK-205",
+      "blob": "cb134702285d7a296276b3248b722d70b10662ca"
+    },
+    {
+      "path": "modules/calendar/test/caldav-sync.test.ts",
+      "reason": "kernel-ahead of f2: 4d4b1985 fix(calendar): never push is_public=false events to the shared CalDAV calendar; DELETE 404 is succes",
+      "owner": "TASK-205",
+      "blob": "c407796ed1dce0c9dc6095fba5ca419ded79cf46"
+    },
+    {
+      "path": "modules/calendar/test/store.integration.test.ts",
+      "reason": "kernel-ahead of f2: 30fb5dd9 test(calendar,votes): fold the F1-FIX-08-K integration guards into store.integration.test.ts and cle",
+      "owner": "TASK-205",
+      "blob": "a34ca045a968e11cd87c2fc64a9ad5c655b689e2"
+    },
+    {
+      "path": "modules/content/src/dispatch.ts",
+      "reason": "kernel-ahead of f2: 42ec8ec3 fix(content): leaf - a mixed pass says do not re-publish; a delivered mail's ledger write failure ne",
+      "owner": "TASK-205",
+      "blob": "68a0ae47becd666b93402703b7b5c09b2de586e5"
+    },
+    {
+      "path": "modules/content/src/http/guard.ts",
+      "reason": "kernel-ahead of f2: 3f972290 fix(content): /healthz/tenants needs the internal secret and answers booleans only (F1-FIX-07 K5#12,",
+      "owner": "TASK-205",
+      "blob": "e3a0b763bc549f342faa1139b38942a31ad6ccaf"
+    },
+    {
+      "path": "modules/content/src/http/server.ts",
+      "reason": "kernel-ahead of f2: 3f972290 fix(content): /healthz/tenants needs the internal secret and answers booleans only (F1-FIX-07 K5#12,",
+      "owner": "TASK-205",
+      "blob": "cbbadf3872011ad4a790a59215007acf832dfe70"
+    },
+    {
+      "path": "modules/content/src/index.ts",
+      "reason": "kernel-ahead of f2: 03903452 fix(content): no localhost unsubscribe links; an unusable link base fails the email publish closed (",
+      "owner": "TASK-205",
+      "blob": "7e309a572d8f90d429de6a08a12c6639f46119d8"
+    },
+    {
+      "path": "modules/content/src/publish-channel.ts",
+      "reason": "kernel-ahead of f2: 42ec8ec3 fix(content): leaf - a mixed pass says do not re-publish; a delivered mail's ledger write failure ne",
+      "owner": "TASK-205",
+      "blob": "fa80411ef6bb13e82003d1f1c415475eb582031d"
+    },
+    {
+      "path": "modules/content/src/scheduler.ts",
+      "reason": "kernel-ahead of f2: e13c74f1 fix(content): a failed scheduled publish is logged, and an unusable link base parks the channel (F1-",
+      "owner": "TASK-205",
+      "blob": "5b511e559f248b2a5c87314dd02c085fbe4e2323"
+    },
+    {
+      "path": "modules/content/src/store/channels.ts",
+      "reason": "kernel-ahead of f2: e13c74f1 fix(content): a failed scheduled publish is logged, and an unusable link base parks the channel (F1-",
+      "owner": "TASK-205",
+      "blob": "dee2187587815d21aae98ad1de9fc790a775c765"
+    },
+    {
+      "path": "modules/content/src/store/deliveries.ts",
+      "reason": "kernel-ahead of f2: 42ec8ec3 fix(content): leaf - a mixed pass says do not re-publish; a delivered mail's ledger write failure ne",
+      "owner": "TASK-205",
+      "blob": "19feb2d8af8c64e92a5c290db6cacbaceebc4c85"
+    },
+    {
+      "path": "modules/content/src/store/index.ts",
+      "reason": "kernel-ahead of f2: 42ec8ec3 fix(content): leaf - a mixed pass says do not re-publish; a delivered mail's ledger write failure ne",
+      "owner": "TASK-205",
+      "blob": "35f84f8eb46bd8c0251d648f18f08bef02bb5cbc"
+    },
+    {
+      "path": "modules/content/test/api.integration.test.ts",
+      "reason": "kernel-ahead of f2: 6151e5ca fix(content): the HTTP claim route returns the claim token and the failed route fences on it (R29-LO",
+      "owner": "TASK-205",
+      "blob": "1c7f985ac692876edfbf5be0c217309ad6d0006a"
+    },
+    {
+      "path": "modules/content/test/dispatch.integration.test.ts",
+      "reason": "kernel-ahead of f2: 42ec8ec3 fix(content): leaf - a mixed pass says do not re-publish; a delivered mail's ledger write failure ne",
+      "owner": "TASK-205",
+      "blob": "457a92158d891b5efd3c830d213698ed47dc79ac"
+    },
+    {
+      "path": "modules/content/test/publish-channel.integration.test.ts",
+      "reason": "kernel-ahead of f2: 42ec8ec3 fix(content): leaf - a mixed pass says do not re-publish; a delivered mail's ledger write failure ne",
+      "owner": "TASK-205",
+      "blob": "de89d639f9c98e7cd77be76a946128a0964ee91c"
+    },
+    {
+      "path": "modules/content/test/scheduler.integration.test.ts",
+      "reason": "kernel-ahead of f2: e13c74f1 fix(content): a failed scheduled publish is logged, and an unusable link base parks the channel (F1-",
+      "owner": "TASK-205",
+      "blob": "71193872faa680fb42d7fbb9b518c491ec850cff"
+    },
+    {
+      "path": "modules/content/test/scheduler.test.ts",
+      "reason": "kernel-ahead of f2: dd358682 fix(content): the scheduler tick resets posts stuck in sending (F1-FIX-07 K5#6, S4#8)",
+      "owner": "TASK-205",
+      "blob": "e3f963ef221a9d6ca618b0e2c6a7e3d70e482ee5"
+    },
+    {
+      "path": "modules/content/test/store.integration.test.ts",
+      "reason": "kernel-ahead of f2: e69fccb9 fix(content): a late markFailed can no longer turn a delivered row into a re-send (F1-FIX-07 r2, ver",
+      "owner": "TASK-205",
+      "blob": "c4bb12a41b99edd6eb24c7a79f839dd9e041c7c3"
+    },
+    {
+      "path": "modules/files/src/http/server.ts",
+      "reason": "kernel-ahead of f2: a73cd41e fix(files-leaf): a failed download stream logs code, tenant and path; a client abort is info (F1-FIX",
+      "owner": "TASK-205",
+      "blob": "876b773b78b6962f4f2ceeb6cb53d5d0851df6ce"
+    },
+    {
+      "path": "modules/files/src/nextcloud/webdav-path.ts",
+      "reason": "kernel-ahead of f2: 6e9754d3 fix(files-leaf): no admin fallback for browser ops, every path validated and encoded once (F1-FIX-03",
+      "owner": "TASK-205",
+      "blob": "18840cda1bb0fab6496d85ac3692392c6bfd7094"
+    },
+    {
+      "path": "modules/finance/src/fints/sync.ts",
+      "reason": "kernel-ahead of f2: c3066104 fix(finance): a failed FinTS sync no longer advances last_sync_at (F1-FIX-05-K, K4#13)",
+      "owner": "TASK-205",
+      "blob": "ec7a31b7e0185edf23aa2cee081cbe54d27e0b51"
+    },
+    {
+      "path": "modules/finance/src/http/guard.ts",
+      "reason": "kernel-ahead of f2: 70f983b9 fix(finance): /healthz/tenants behind the internal secret, booleans only (F1-FIX-05-K, K4#32)",
+      "owner": "TASK-205",
+      "blob": "ef2ee4495cd4277dc6d444a1fcbfe0a4a5ba340b"
+    },
+    {
+      "path": "modules/finance/src/http/server.ts",
+      "reason": "kernel-ahead of f2: 06bbe1a9 fix(finance): malformed or non-object JSON body is a 400, not an empty body (F1-FIX-05-K, K4#4)",
+      "owner": "TASK-205",
+      "blob": "b9b953554ea2e02d00ac57ebe71b673a5d840945"
+    },
+    {
+      "path": "modules/finance/src/index.ts",
+      "reason": "kernel-ahead of f2: 21793d1a docs(finance): leaf runbook for receipt keys, the 006 duplicate refusal and the write-scope gates (F",
+      "owner": "TASK-205",
+      "blob": "3238a29d757595e0d36a6f25b3c268bc305dc6be"
+    },
+    {
+      "path": "modules/finance/src/storage/local.ts",
+      "reason": "kernel-ahead of f2: 442337c5 fix(finance): server-built receipt storage key with tenant id and UUID (F1-FIX-05-K, H05 leaf)",
+      "owner": "TASK-205",
+      "blob": "470f871b3877845ffd92a6047544ec5ab13e917e"
+    },
+    {
+      "path": "modules/finance/src/storage/nextcloud.ts",
+      "reason": "kernel-ahead of f2: f115cbdf fix(finance): Nextcloud receipt PUT is create-only (If-None-Match: *) (F1-FIX-05-K r2)",
+      "owner": "TASK-205",
+      "blob": "72cc536b62a4a3c00f950344c417e38645409b1a"
+    },
+    {
+      "path": "modules/finance/test/fints.service.test.ts",
+      "reason": "kernel-ahead of f2: c3066104 fix(finance): a failed FinTS sync no longer advances last_sync_at (F1-FIX-05-K, K4#13)",
+      "owner": "TASK-205",
+      "blob": "29d8231ab1d795e6106b9685babf7ebd4f06729f"
+    },
+    {
+      "path": "modules/finance/test/lane-e2.integration.test.ts",
+      "reason": "kernel-ahead of f2: 442337c5 fix(finance): server-built receipt storage key with tenant id and UUID (F1-FIX-05-K, H05 leaf)",
+      "owner": "TASK-205",
+      "blob": "13df6318437c0152561fc0c958da828ba72b3599"
+    },
+    {
+      "path": "modules/finance/test/lane-e3.integration.test.ts",
+      "reason": "kernel-ahead of f2: fdf85c85 test(finance): type the lane-e3 on-screen parity read without an any-cast (R29-FIN-SIGN-K)",
+      "owner": "TASK-205",
+      "blob": "ae0587471901a362fcae34f9a28ae8f1c3f12b4c"
+    },
+    {
+      "path": "modules/finance/test/receipt-write.store.test.ts",
+      "reason": "kernel-ahead of f2: 442337c5 fix(finance): server-built receipt storage key with tenant id and UUID (F1-FIX-05-K, H05 leaf)",
+      "owner": "TASK-205",
+      "blob": "c436bfd5aebae88570885f282f4f57e074470818"
+    },
+    {
+      "path": "modules/finance/test/storage.test.ts",
+      "reason": "kernel-ahead of f2: f115cbdf fix(finance): Nextcloud receipt PUT is create-only (If-None-Match: *) (F1-FIX-05-K r2)",
+      "owner": "TASK-205",
+      "blob": "93edbe079cd584a1a5a372173398bff7105b0c28"
+    },
+    {
+      "path": "modules/votes/src/http/server.ts",
+      "reason": "kernel-ahead of f2: c0ba5aab fix(votes): degrade a non-UUID tracked election instead of 400 for the whole request",
+      "owner": "TASK-205",
+      "blob": "d7b9aeb762ecc37136a2073b4bc9c2ec077ddfdd"
+    },
+    {
+      "path": "modules/votes/src/index.ts",
+      "reason": "kernel-ahead of f2: 0a4740c8 fix(votes): apply anonymous/description/expire to created polls, validate election uuids (F1-FIX-08-",
+      "owner": "TASK-205",
+      "blob": "c7a4d434cde9c74410c90d845ffc104bf05f9dc3"
+    },
+    {
+      "path": "modules/votes/test/http-acl.test.ts",
+      "reason": "kernel-ahead of f2: 0a4740c8 fix(votes): apply anonymous/description/expire to created polls, validate election uuids (F1-FIX-08-",
+      "owner": "TASK-205",
+      "blob": "b76c2c64d13443b2e1cdbe0836f36a05c3039861"
+    },
+    {
+      "path": "modules/content/app/lib/server/content/backend/index.ts",
+      "reason": "kernel-ahead of f2: 317a5f53 fix(content): native path - claim token fence (L1), do-not-re-publish wins a mixed pass (L2), unknow",
+      "owner": "TASK-205",
+      "blob": "3277338948ae0c5f6fcb30a807cbbeca724a038c"
+    },
+    {
+      "path": "modules/content/app/lib/server/content/backend/inprocess-client.test.ts",
+      "reason": "kernel-ahead of f2: 317a5f53 fix(content): native path - claim token fence (L1), do-not-re-publish wins a mixed pass (L2), unknow",
+      "owner": "TASK-205",
+      "blob": "81ae78d400c1f6e6063e91b89e2bd7b49b7ba567"
+    },
+    {
+      "path": "modules/content/app/lib/server/content/backend/inprocess-client.ts",
+      "reason": "kernel-ahead of f2: 317a5f53 fix(content): native path - claim token fence (L1), do-not-re-publish wins a mixed pass (L2), unknow",
+      "owner": "TASK-205",
+      "blob": "c38adb52f2d1002759236355a397c81321f89c06"
+    },
+    {
+      "path": "modules/content/app/lib/server/content/backend/port.ts",
+      "reason": "kernel-ahead of f2: 317a5f53 fix(content): native path - claim token fence (L1), do-not-re-publish wins a mixed pass (L2), unknow",
+      "owner": "TASK-205",
+      "blob": "8a87b21c5ca9c5709933d8e9ad6cbad9d33b53c8"
+    },
+    {
+      "path": "modules/content/app/lib/server/content/backend/service-client.test.ts",
+      "reason": "kernel-ahead of f2: 317a5f53 fix(content): native path - claim token fence (L1), do-not-re-publish wins a mixed pass (L2), unknow",
+      "owner": "TASK-205",
+      "blob": "2643cd861736badd21e0675ecb496ce103512666"
+    },
+    {
+      "path": "modules/content/app/lib/server/content/backend/service-client.ts",
+      "reason": "kernel-ahead of f2: 317a5f53 fix(content): native path - claim token fence (L1), do-not-re-publish wins a mixed pass (L2), unknow",
+      "owner": "TASK-205",
+      "blob": "5500eed417de4b706e7a8dd45745c7809fbe94b1"
+    },
+    {
+      "path": "modules/content/app/lib/server/content/channels/email-renderer.test.ts",
+      "reason": "kernel-ahead of f2: 4d71287d fix(content): native renderer - a transport error is an UNKNOWN outcome unless provably pre-handover",
+      "owner": "TASK-205",
+      "blob": "a3ed45dab280f94e75bbe9871986be87a4f35ec1"
+    },
+    {
+      "path": "modules/content/app/lib/server/content/channels/email-renderer.ts",
+      "reason": "kernel-ahead of f2: 4d71287d fix(content): native renderer - a transport error is an UNKNOWN outcome unless provably pre-handover",
+      "owner": "TASK-205",
+      "blob": "e41573125475b908bf1467375792dfac443c8b68"
+    },
+    {
+      "path": "modules/content/app/lib/server/content/content-db.publish.integration.test.ts",
+      "reason": "kernel-ahead of f2: 317a5f53 fix(content): native path - claim token fence (L1), do-not-re-publish wins a mixed pass (L2), unknow",
+      "owner": "TASK-205",
+      "blob": "f3e8c52b14a5f53427a8699f0cc2cb85f80d5649"
+    },
+    {
+      "path": "modules/content/app/lib/server/content/content-db.ts",
+      "reason": "kernel-ahead of f2: 317a5f53 fix(content): native path - claim token fence (L1), do-not-re-publish wins a mixed pass (L2), unknow",
+      "owner": "TASK-205",
+      "blob": "2b8125ff59f4aa980b88ee77c964918d33d86800"
+    },
+    {
+      "path": "modules/content/app/routes/api/content/lists/[id]/+server.ts",
+      "reason": "kernel-ahead of f2: 327c900e fix(content): route ids can no longer steer the leaf URL; publish gets its own timeout (F1-FIX-07 H0",
+      "owner": "TASK-205",
+      "blob": "0e3fb40a74b39442b67d9497284ef1be1a52b8ed"
+    },
+    {
+      "path": "modules/content/app/routes/api/content/lists/[id]/members/+server.ts",
+      "reason": "kernel-ahead of f2: 327c900e fix(content): route ids can no longer steer the leaf URL; publish gets its own timeout (F1-FIX-07 H0",
+      "owner": "TASK-205",
+      "blob": "6115e65b1e0eb034dde27500a3bb278e437fddf2"
+    },
+    {
+      "path": "modules/content/app/routes/api/content/lists/[id]/members/[memberId]/+server.ts",
+      "reason": "kernel-ahead of f2: 327c900e fix(content): route ids can no longer steer the leaf URL; publish gets its own timeout (F1-FIX-07 H0",
+      "owner": "TASK-205",
+      "blob": "d42bdeaffb1bf31f5ddb943f972bb393c98692d9"
+    },
+    {
+      "path": "modules/content/app/routes/api/content/posts/[id]/+server.ts",
+      "reason": "kernel-ahead of f2: 327c900e fix(content): route ids can no longer steer the leaf URL; publish gets its own timeout (F1-FIX-07 H0",
+      "owner": "TASK-205",
+      "blob": "db39b4fa0335bd206144c4f9cf20e925f3bdef99"
+    },
+    {
+      "path": "modules/content/app/routes/api/content/posts/[id]/post-id.test.ts",
+      "reason": "kernel-ahead of f2: 327c900e fix(content): route ids can no longer steer the leaf URL; publish gets its own timeout (F1-FIX-07 H0",
+      "owner": "TASK-205",
+      "blob": "2d539f2228afd1e915d002bda8c688eb5536a2c4"
+    },
+    {
+      "path": "modules/content/app/routes/content/unsubscribe/+page.server.ts",
+      "reason": "kernel-ahead of f2: 8dd9f899 docs(content): drop the RFC 8058 one-click claim from the unsubscribe route (F1-FIX-07 r2, verifier ",
+      "owner": "TASK-205",
+      "blob": "6d1d6d1e0622eec0c7dfb5c676ebaa55772a7d22"
+    },
+    {
+      "path": "modules/content/app/routes/content/unsubscribe/+page.svelte",
+      "reason": "kernel-ahead of f2: c64a7a29 fix(content): unsubscribe consumes the token on POST, never on GET (F1-FIX-07 K5#19, S3#38)",
+      "owner": "TASK-205",
+      "blob": "da557cefca8c1e7641028c765f2df2913e443058"
+    },
+    {
+      "path": "modules/content/app/routes/content/unsubscribe/unsubscribe.test.ts",
+      "reason": "kernel-ahead of f2: 8dd9f899 docs(content): drop the RFC 8058 one-click claim from the unsubscribe route (F1-FIX-07 r2, verifier ",
+      "owner": "TASK-205",
+      "blob": "d176f3df32360f0bacb132c6db35d6160f2f3a07"
+    },
+    {
+      "path": "modules/content/app/routes/news/[id]/edit/+page.server.ts",
+      "reason": "kernel-ahead of f2: cde71433 fix(content): news drafts are per tenant and never overwritten by an empty stub (F1-FIX-07 H09, S3#9",
+      "owner": "TASK-205",
+      "blob": "416f5993bc2b6c58f3cf592713c08652e5d524a7"
+    },
+    {
+      "path": "modules/calendar/src/caldav/target.ts",
+      "reason": "added in the kernel after f2: e291d8d1 fix(calendar): resolve the CalDAV target per tenant and refuse to drain without one (F1-FIX-08-K H06",
+      "owner": "TASK-205",
+      "blob": "11468cbb903ac1ead6b8746e17ddc39c5ff6ae18"
+    },
+    {
+      "path": "modules/calendar/src/caldav/tenant-drain.ts",
+      "reason": "added in the kernel after f2: e291d8d1 fix(calendar): resolve the CalDAV target per tenant and refuse to drain without one (F1-FIX-08-K H06",
+      "owner": "TASK-205",
+      "blob": "5fb1fcefc52ddf305164c20b91caf615d3f982f9"
+    },
+    {
+      "path": "modules/calendar/test/caldav-pusher.test.ts",
+      "reason": "added in the kernel after f2: 30fb5dd9 test(calendar,votes): fold the F1-FIX-08-K integration guards into store.integration.test.ts and cle",
+      "owner": "TASK-205",
+      "blob": "87ff82659ea169f60f93447e34c4978f47b72936"
+    },
+    {
+      "path": "modules/calendar/test/caldav-tenant-target.test.ts",
+      "reason": "added in the kernel after f2: e291d8d1 fix(calendar): resolve the CalDAV target per tenant and refuse to drain without one (F1-FIX-08-K H06",
+      "owner": "TASK-205",
+      "blob": "4bd3de8d2db1d54acb20f317b9007c63f01bca95"
+    },
+    {
+      "path": "modules/calendar/test/ics-validity.test.ts",
+      "reason": "added in the kernel after f2: d2cfe36c fix(calendar): validate RRULE BYDAY and fold ICS lines at 75 octets (F1-FIX-08-K K4#21)",
+      "owner": "TASK-205",
+      "blob": "4446c42be76dc0d6c715905948cc284cb950a0b4"
+    },
+    {
+      "path": "modules/content/app/lib/server/content/channels/smtp-outcome.test.ts",
+      "reason": "added in the kernel after f2: 4d71287d fix(content): native renderer - a transport error is an UNKNOWN outcome unless provably pre-handover",
+      "owner": "TASK-205",
+      "blob": "6d8d9811b8d567e7f2098f129db332d9a8967eaa"
+    },
+    {
+      "path": "modules/content/app/lib/server/content/channels/smtp-outcome.ts",
+      "reason": "added in the kernel after f2: 4d71287d fix(content): native renderer - a transport error is an UNKNOWN outcome unless provably pre-handover",
+      "owner": "TASK-205",
+      "blob": "e42b85fc4242e0a403a87d8da305b97a742349bc"
+    },
+    {
+      "path": "modules/content/app/lib/server/content/ids.ts",
+      "reason": "added in the kernel after f2: 327c900e fix(content): route ids can no longer steer the leaf URL; publish gets its own timeout (F1-FIX-07 H0",
+      "owner": "TASK-205",
+      "blob": "336d3b30d0b7c1c6e1ede07da2aee065a257e4c5"
+    },
+    {
+      "path": "modules/content/app/lib/server/news/draft-file.ts",
+      "reason": "added in the kernel after f2: cde71433 fix(content): news drafts are per tenant and never overwritten by an empty stub (F1-FIX-07 H09, S3#9",
+      "owner": "TASK-205",
+      "blob": "a9f4a3dd7711f73c35a1681f11e4294430098362"
+    },
+    {
+      "path": "modules/content/app/routes/api/content/lists/list-id.test.ts",
+      "reason": "added in the kernel after f2: 327c900e fix(content): route ids can no longer steer the leaf URL; publish gets its own timeout (F1-FIX-07 H0",
+      "owner": "TASK-205",
+      "blob": "7c36044f2461cde9d825f2a715d83250384eafa5"
+    },
+    {
+      "path": "modules/content/app/routes/news/[id]/edit/draft-path.test.ts",
+      "reason": "added in the kernel after f2: cde71433 fix(content): news drafts are per tenant and never overwritten by an empty stub (F1-FIX-07 H09, S3#9",
+      "owner": "TASK-205",
+      "blob": "c6347805a576c79e2a482afd1bf1ebaaa428bc12"
+    },
+    {
+      "path": "modules/content/src/link-base.ts",
+      "reason": "added in the kernel after f2: 791462cc style(content): clear the two oxlint errors the link-base files added (F1-FIX-07)",
+      "owner": "TASK-205",
+      "blob": "2204c6ab8d034b61c3c37412f21611600838c37c"
+    },
+    {
+      "path": "modules/content/test/healthz-tenants.test.ts",
+      "reason": "added in the kernel after f2: 3f972290 fix(content): /healthz/tenants needs the internal secret and answers booleans only (F1-FIX-07 K5#12,",
+      "owner": "TASK-205",
+      "blob": "1a776b3d9fa8d794ddd0074a0d65e1a7523e1928"
+    },
+    {
+      "path": "modules/content/test/link-base.test.ts",
+      "reason": "added in the kernel after f2: 791462cc style(content): clear the two oxlint errors the link-base files added (F1-FIX-07)",
+      "owner": "TASK-205",
+      "blob": "0f87cd79093f5254f15e109ecca8dc59e5394126"
+    },
+    {
+      "path": "modules/files/test/download-stream.test.ts",
+      "reason": "added in the kernel after f2: a73cd41e fix(files-leaf): a failed download stream logs code, tenant and path; a client abort is info (F1-FIX",
+      "owner": "TASK-205",
+      "blob": "16acb2824e7fd0c13d9356b9fc51885a0bc7c9b7"
+    },
+    {
+      "path": "modules/files/test/fixtures/stream-harness.ts",
+      "reason": "added in the kernel after f2: a73cd41e fix(files-leaf): a failed download stream logs code, tenant and path; a client abort is info (F1-FIX",
+      "owner": "TASK-205",
+      "blob": "3ce24a431749d1635e6a196aad89ad61a582942b"
+    },
+    {
+      "path": "modules/files/test/webdav-client.test.ts",
+      "reason": "added in the kernel after f2: 6e9754d3 fix(files-leaf): no admin fallback for browser ops, every path validated and encoded once (F1-FIX-03",
+      "owner": "TASK-205",
+      "blob": "d92dede887c71116839c1f225e39d5e2fe65efe4"
+    },
+    {
+      "path": "modules/finance/RUNBOOK.md",
+      "reason": "added in the kernel after f2: 21793d1a docs(finance): leaf runbook for receipt keys, the 006 duplicate refusal and the write-scope gates (F",
+      "owner": "TASK-205",
+      "blob": "691157bcd76b595b7ae9127ddbfaa76d1857342a"
+    },
+    {
+      "path": "modules/finance/migrations/006_approval_single_open.sql",
+      "reason": "added in the kernel after f2: b29f7eac fix(finance): one open approval per approvable, one live payment order per expense (F1-FIX-05-K, H20",
+      "owner": "TASK-205",
+      "blob": "18bcb2a2ecfca67d42274742ae86729133e51ae5"
+    },
+    {
+      "path": "modules/finance/test/approval-single-open.integration.test.ts",
+      "reason": "added in the kernel after f2: 5ea17f78 test(finance): one migration-006 refusal case per arm, no direct driver connection (F1-FIX-05-K r2)",
+      "owner": "TASK-205",
+      "blob": "b7d1d7b98f4482006476ba474ace47962266922a"
+    },
+    {
+      "path": "modules/finance/test/bad-json-body.test.ts",
+      "reason": "added in the kernel after f2: 67aa1729 test(finance): type the bad-JSON response body (F1-FIX-05-K)",
+      "owner": "TASK-205",
+      "blob": "7330b7063dbe302fa163949921fc88ed790d380c"
+    },
+    {
+      "path": "modules/finance/test/healthz-tenants.test.ts",
+      "reason": "added in the kernel after f2: 166faa2f test(finance): neutral leak markers in the healthz redaction test (F1-FIX-05-K)",
+      "owner": "TASK-205",
+      "blob": "241dbf1b4ecc487c8c98374692029413b0b1064a"
+    },
+    {
+      "path": "modules/finance/test/leaf-write-scope.integration.test.ts",
+      "reason": "added in the kernel after f2: 7a9bd423 fix(finance): central/admin scope on fiscal-year and sub-org-type mutations; mirror-confirmed sub-or",
+      "owner": "TASK-205",
+      "blob": "29a7fcb635462d076c3351e4f53fe4540be99382"
+    },
+    {
+      "path": "modules/finance/test/receipt-key.store.test.ts",
+      "reason": "added in the kernel after f2: 442337c5 fix(finance): server-built receipt storage key with tenant id and UUID (F1-FIX-05-K, H05 leaf)",
+      "owner": "TASK-205",
+      "blob": "a98ba7c8b61d36119682e9cdf6ffb7614c8f0d2f"
+    },
+    {
+      "path": "modules/votes/src/boot-config.ts",
+      "reason": "added in the kernel after f2: 0a4740c8 fix(votes): apply anonymous/description/expire to created polls, validate election uuids (F1-FIX-08-",
+      "owner": "TASK-205",
+      "blob": "c0ae1c4e18cb244764ca282f59fcdd69a792cc5d"
+    },
+    {
+      "path": "modules/votes/test/polls-client.test.ts",
+      "reason": "added in the kernel after f2: 30fb5dd9 test(calendar,votes): fold the F1-FIX-08-K integration guards into store.integration.test.ts and cle",
+      "owner": "TASK-205",
+      "blob": "d30b47dbd7074ec86eea11d089fc5c8b3933fd2b"
+    },
+    {
+      "path": "modules/votes/test/server-validation.test.ts",
+      "reason": "added in the kernel after f2: c0ba5aab fix(votes): degrade a non-UUID tracked election instead of 400 for the whole request",
+      "owner": "TASK-205",
+      "blob": "662b7f3fda780406363157332861a74d9faa1488"
+    },
+    {
+      "path": "modules/calendar/app/lib/server/events/calendar-audit-consumer.nats-topology.test.ts",
+      "reason": "added by TASK-205a: the calendar share of f2 nats-topology-wiring.test.ts, split per module (R28-O2: a kernel test may not import a module)",
+      "owner": "TASK-205",
+      "blob": "d51693d6d207dd1d6bc022f337e1a779f8a78ce7"
+    },
+    {
+      "path": "modules/calendar/app/lib/server/events/calendar-audit-consumer.supervised.test.ts",
+      "reason": "added by TASK-205a: the calendar share of the f2 consumer-state.test.ts describe 'the audit consumers under a rejecting broker', split per module (R28-O2)",
+      "owner": "TASK-205",
+      "blob": "ddc1208d787d39a0efa7a537cfaf5277dfdaaca5"
+    },
+    {
+      "path": "modules/messaging/app/lib/server/messages/auto-join.integration.test.ts",
+      "reason": "post-f2 StuRaOS 8928249a: fix(notifications): elections join on org_unit_id, scope elections and published protocols per D-3, log degrad; TASK-205b: the kernel database has no finance schema, so the truncate names org_units only (CASCADE reaches the dependents); an afterAll leaves the shared database as found",
+      "owner": "TASK-205",
+      "blob": "b51d8b7679c5b15d900d85e9930a01cc8a00ae67"
+    },
+    {
+      "path": "modules/messaging/app/lib/server/messages/auto-join.ts",
+      "reason": "post-f2 StuRaOS a811a984: fix(messages): first-login Matrix auto-join only into the caller's own unit rooms, never for Guests (F1-FIX-04",
+      "owner": "TASK-205",
+      "blob": "ca522bbcac719ff0420a6735c58cc26647dc1128"
+    },
+    {
+      "path": "modules/votes/app/lib/server/polls/polls-client.test.ts",
+      "reason": "post-f2 StuRaOS e28191a1: fix(votes): apply requested anonymous/description/expire when creating a poll (F1-FIX-08 H16); TASK-205b: the suite feeds the serviceEnv seam from its $env/dynamic/private mock",
+      "owner": "TASK-205",
+      "blob": "59de31cc48ad00155abaf0fc6087e8c998e3716c"
+    },
+    {
+      "path": "modules/votes/app/lib/server/polls/polls-client.ts",
+      "reason": "post-f2 StuRaOS e28191a1: fix(votes): apply requested anonymous/description/expire when creating a poll (F1-FIX-08 H16); TASK-205b: service endpoints through serviceEnv (the deleted default-tenant env reader)",
+      "owner": "TASK-205",
+      "blob": "ceebe19efb9614caf62f5765970cefc50f53cb9d"
+    },
+    {
+      "path": "modules/messaging/app/routes/api/auth/matrix-token/+server.ts",
+      "reason": "post-f2 StuRaOS f01e7d6d: fix(messages): matrix-token first-login auto-join only for a Synapse-confirmed Matrix id, never a guessed one ; TASK-205b: service endpoints through serviceEnv (the deleted default-tenant env reader)",
+      "owner": "TASK-205",
+      "blob": "982a9db1b9059f72064056decf53a92a00a31f44"
+    },
+    {
+      "path": "modules/messaging/app/routes/api/auth/matrix-token/matrix-token-auto-join.test.ts",
+      "reason": "post-f2 StuRaOS f01e7d6d: fix(messages): matrix-token first-login auto-join only for a Synapse-confirmed Matrix id, never a guessed one ",
+      "owner": "TASK-205",
+      "blob": "0bc4a548a9a989967d122cb4e422c076b25c5391"
+    },
+    {
+      "path": "modules/messaging/app/routes/api/messages/rooms/+server.ts",
+      "reason": "post-f2 StuRaOS a811a984: fix(messages): first-login Matrix auto-join only into the caller's own unit rooms, never for Guests (F1-FIX-04; TASK-205b: service endpoints through serviceEnv; no default-tenant branch (services refs honoured for every tenant, TASK-042)",
+      "owner": "TASK-205",
+      "blob": "a1422f0b020e798e335d4338d33ff4b66356da78"
+    },
+    {
+      "path": "modules/messaging/app/routes/api/messages/rooms/rooms-archived-flag.test.ts",
+      "reason": "post-f2 StuRaOS a811a984: fix(messages): first-login Matrix auto-join only into the caller's own unit rooms, never for Guests (F1-FIX-04",
+      "owner": "TASK-205",
+      "blob": "2dafb62bdbbd87e26be50d0e7297223aa509cc32"
+    },
+    {
+      "path": "modules/messaging/app/routes/api/messages/rooms/rooms-auto-join-scope.test.ts",
+      "reason": "post-f2 StuRaOS a811a984: fix(messages): first-login Matrix auto-join only into the caller's own unit rooms, never for Guests (F1-FIX-04",
+      "owner": "TASK-205",
+      "blob": "449a3accccac54e71b1744c6d98c446efce7ba06"
+    },
+    {
+      "path": "modules/votes/app/routes/votes/votes-service-degrade.test.ts",
+      "reason": "post-f2 StuRaOS 1d9df363: test(votes): /votes loader renders degraded cards when the service leaf degrades non-UUID tracked elections (R",
+      "owner": "TASK-205",
+      "blob": "0a9e1f606be77fd2a6ae5377c9ef70e6ca72f0df"
+    },
+    {
+      "path": "modules/messaging/app/lib/server/messages/admin/room-admin.ts",
+      "reason": "TASK-205b: service endpoints through serviceEnv (the deleted default-tenant env reader)",
+      "owner": "TASK-205",
+      "blob": "d77f999f07c134d63b2575aecc4828fbe7ab4465"
+    },
+    {
+      "path": "modules/messaging/app/lib/server/messages/matrix-creds.ts",
+      "reason": "TASK-205b: service endpoints through serviceEnv (the deleted default-tenant env reader)",
+      "owner": "TASK-205",
+      "blob": "db36521fdb59493d07306adf246d3ac32fc7715a"
+    },
+    {
+      "path": "modules/messaging/app/lib/server/messages/register.server.ts",
+      "reason": "TASK-205b: service endpoints through serviceEnv (the deleted default-tenant env reader)",
+      "owner": "TASK-205",
+      "blob": "6ad5867a7b5a0278a4b1fb29d24d3644fb48add0"
+    },
+    {
+      "path": "modules/messaging/app/routes/api/messages/rooms/[roomId]/typing/+server.ts",
+      "reason": "TASK-205b: service endpoints through serviceEnv (the deleted default-tenant env reader)",
+      "owner": "TASK-205",
+      "blob": "b0bb7370179d085ee7e2dbc6f97a95400df4092a"
+    },
+    {
+      "path": "modules/messaging/app/routes/api/video/matrix-widget-action/+server.ts",
+      "reason": "TASK-205b: service endpoints through serviceEnv (the deleted default-tenant env reader)",
+      "owner": "TASK-205",
+      "blob": "7d3d288d6a0a8d8d59fec5514e2c1c8370a7a743"
+    },
+    {
+      "path": "modules/messaging/app/routes/api/video/openid-token/+server.ts",
+      "reason": "TASK-205b: service endpoints through serviceEnv (the deleted default-tenant env reader)",
+      "owner": "TASK-205",
+      "blob": "8ddb4e40246ce3581361fd252f5fa720d673e2be"
+    },
+    {
+      "path": "modules/messaging/app/lib/server/messages/livekit-jwt.ts",
+      "reason": "TASK-205b: service endpoints through serviceEnv; no default-tenant branch (services refs honoured for every tenant, TASK-042)",
+      "owner": "TASK-205",
+      "blob": "361168a915f0703739577cb525c28613c015f0a0"
+    },
+    {
+      "path": "modules/messaging/app/lib/server/messages/matrix-client.ts",
+      "reason": "TASK-205b: service endpoints through serviceEnv; no default-tenant branch (services refs honoured for every tenant, TASK-042)",
+      "owner": "TASK-205",
+      "blob": "8df7c3beb97ada298bcd27cd0b1b247f6e4ac5c8"
+    },
+    {
+      "path": "modules/messaging/app/lib/server/messages/synapse-admin.ts",
+      "reason": "TASK-205b: service endpoints through serviceEnv; no default-tenant branch (services refs honoured for every tenant, TASK-042)",
+      "owner": "TASK-205",
+      "blob": "530845ca57cd669e41587a056b1ef34f67b8bdfd"
+    },
+    {
+      "path": "modules/messaging/app/lib/server/messages/livekit-client.ts",
+      "reason": "TASK-205b: every tenant resolves its LiveKit url/key/secret and gets the t.<slug>. room namespace (no default-tenant branch, TASK-042 / the leaf livekitRoomNamespace); endpoints through serviceEnv",
+      "owner": "TASK-205",
+      "blob": "9af3ce423e820be1ecc750b4443eed9ae5c9f487"
+    },
+    {
+      "path": "modules/messaging/app/lib/server/messages/livekit-client.test.ts",
+      "reason": "TASK-205b: room names carry the tenant namespace for every tenant; seam mock",
+      "owner": "TASK-205",
+      "blob": "75cac7bd02bd4d581f5b2d562fe12268316cbd06"
+    },
+    {
+      "path": "modules/messaging/app/lib/server/messages/livekit.tenant.test.ts",
+      "reason": "TASK-205b: the default-tenant pins become every-tenant cases (env fallback for a tenant without refs, namespace for all, cross-tenant rejection); seam mock",
+      "owner": "TASK-205",
+      "blob": "2e849f9b4533649593305a3265665eb535b7f8a0"
+    },
+    {
+      "path": "modules/messaging/app/lib/server/messages/matrix-synapse.tenant.test.ts",
+      "reason": "TASK-205b: the default-tenant pins become the no-services env fallback for any tenant; seam mock",
+      "owner": "TASK-205",
+      "blob": "9b59dc74bd21bd0dcb8c95ac0733dee7fcbf86fa"
+    },
+    {
+      "path": "modules/messaging/app/lib/server/messages/admin/room-admin.test.ts",
+      "reason": "TASK-205b: the suite feeds the serviceEnv seam from its $env/dynamic/private mock",
+      "owner": "TASK-205",
+      "blob": "cae0de83cbea39af44d0a2706e0bbeec8109d628"
+    },
+    {
+      "path": "modules/messaging/app/lib/server/messages/matrix-client.test.ts",
+      "reason": "TASK-205b: the suite feeds the serviceEnv seam from its $env/dynamic/private mock",
+      "owner": "TASK-205",
+      "blob": "7409ed187be754c02fa1352b1485a0a410423823"
+    },
+    {
+      "path": "modules/messaging/app/routes/api/messages/rooms/rooms-tenant-url.test.ts",
+      "reason": "TASK-205b: the suite feeds the serviceEnv seam from its $env/dynamic/private mock",
+      "owner": "TASK-205",
+      "blob": "bc02dbf3e5575f90221af3fcb34888e0f4088ebc"
+    },
+    {
+      "path": "modules/messaging/app/lib/server/messages/register.server.test.ts",
+      "reason": "TASK-205b: comment names serviceEnv, not the deleted default-tenant env reader",
+      "owner": "TASK-205",
+      "blob": "db9340e33ff0d4e4036c4384e5e819248cfec347"
+    },
+    {
+      "path": "modules/messaging/app/routes/api/video/meeting-room/+server.ts",
+      "reason": "TASK-205b: no product literal in gremion-ui/src (brand.guard.test.ts)",
+      "owner": "TASK-205",
+      "blob": "01bb2d8d9d68b4b7f9cee4c9088d68434c6bf6db"
+    },
+    {
+      "path": "modules/messaging/app/routes/messages/+page.svelte",
+      "reason": "TASK-205b: the eyebrow no longer reads brand.matrixHomeserver (the carve dropped that Brand field and its config/readiness pipeline); it says Matrix",
+      "owner": "TASK-205",
+      "blob": "a8a45ed61921c2e61b02792075c53734e7c86483"
+    },
+    {
+      "path": "modules/messaging/app/lib/server/messages/backend/service-client.test.ts",
+      "reason": "excluded: reads contracts/messages/openapi.messages-internal.json, a module contract the kernel does not carry (product-module-contracts); returns with the contract harvest (TASK-011)",
+      "owner": "TASK-011",
+      "blob": null
+    },
+    {
+      "path": "modules/elections/app/lib/server/elections/helios-client.ts",
+      "reason": "TASK-205b: service endpoints through serviceEnv; no default-tenant branch (services refs honoured for every tenant, TASK-042); post-f2 StuRaOS 10bae9e5 (R30-FOLLOWUPS-S item 8a): isHeliosUuid + encodeURIComponent through one heliosElectionPath helper, a non-UUID election id rejects before any fetch",
+      "owner": "TASK-205",
+      "blob": "750259dbb166f0662f5c858c03e62903ff3ba028"
+    },
+    {
+      "path": "modules/elections/app/lib/server/elections/helios-client.test.ts",
+      "reason": "TASK-205b: the suite feeds the serviceEnv seam from its $env/dynamic/private mock; post-f2 StuRaOS 10bae9e5: non-UUID rejection cases per uuid method, slug fixtures moved to UUIDs",
+      "owner": "TASK-205",
+      "blob": "cf7431b032ada4d0a79f31b7af93cd86b947e880"
+    },
+    {
+      "path": "modules/elections/app/lib/server/elections/helios-client.tenant.test.ts",
+      "reason": "TASK-205b: the default-tenant pin becomes a tenant-without-services env fallback; seam mock; post-f2 StuRaOS 10bae9e5: the election id fixture is a UUID",
+      "owner": "TASK-205",
+      "blob": "0116dcf4d843a555002d767b55b76ed40f3c99f6"
+    },
+    {
+      "path": "modules/elections/app/routes/elections/manage/+page.server.ts",
+      "reason": "TASK-205b: service endpoints through serviceEnv (the deleted default-tenant env reader)",
+      "owner": "TASK-205",
+      "blob": "758b035b4072cac40253a2f9a1f6f47123c31582"
+    },
+    {
+      "path": "modules/elections/app/lib/modules/manifests/elections.ts",
+      "reason": "TASK-205b (TASK-058 Q10): the StuRa manifest owned /elections, /polls and /votes; after the split elections owns /elections only, the merged rail entry moves to the votes manifest; TASK-205: comment names the kernel migration with its 4-digit padded name (the register lint refuses a pad-3 kernel-data name outside its allow-list)",
+      "owner": "TASK-205",
+      "blob": "aeba4cf66f3733a2b2b8105f5c87ea77ff80d380"
+    },
+    {
+      "path": "modules/elections/app/lib/server/elections/backend/service-client.test.ts",
+      "reason": "excluded: reads contracts/votes/openapi.votes-internal.json, a module contract the kernel does not carry (product-module-contracts); returns with the contract harvest (TASK-011)",
+      "owner": "TASK-011",
+      "blob": null
+    },
+    {
+      "path": "modules/votes/app/routes/votes/+page.server.ts",
+      "reason": "TASK-205b (TASK-058 Q10): the landing page shows polls only while the elections module is off for the tenant (no committee_elections read, no Helios probe, heliosStatus null, electionsEnabled in the page data)",
+      "owner": "TASK-205",
+      "blob": "3a7a08dc7a44e13c262964668dd28e1799f34f2d"
+    },
+    {
+      "path": "modules/votes/app/routes/votes/+page.svelte",
+      "reason": "TASK-205b (TASK-058 Q10): no Helios pill, legend entry, sub-title or Helios-Wahl choice while elections is off",
+      "owner": "TASK-205",
+      "blob": "aa3996cb78ef28265624045e95cb4b306354fdda"
+    },
+    {
+      "path": "modules/votes/app/routes/votes/votes.reflow.browser.test.ts",
+      "reason": "TASK-205b: the kernel catalogue is messages/de.json (Paraglide, TASK-062), not the removed $lib/i18n/de module",
+      "owner": "TASK-205",
+      "blob": "8336a5c49111e3793d88f87bf7e23fb7d99e958c"
+    },
+    {
+      "path": "modules/votes/app/lib/modules/manifests/votes.ts",
+      "reason": "added by TASK-205b (TASK-058 Q10): the votes manifest split out of the elections manifest - owns /votes, /polls and the merged rail entry",
+      "owner": "TASK-205",
+      "blob": "7e94389425783245c5406e325fa3553305293d0b"
+    },
+    {
+      "path": "modules/votes/app/routes/votes/votes-elections-off.test.ts",
+      "reason": "added by TASK-205b (TASK-058 Q10): the Helios items follow the elections module",
+      "owner": "TASK-205",
+      "blob": "475e7d2d24924bfb23acf0c542badcb5c78a1b5c"
+    },
+    {
+      "path": "modules/messaging/app/lib/components/messaging/MatrixChip.svelte",
+      "reason": "added by TASK-205b: the Matrix chip of the TopBar chips slot part (was inline in the source TopBar; TASK-208 slot contract, UX-071a.6)",
+      "owner": "TASK-205",
+      "blob": "14b00c2263cfed4f0637eeb3c8d1b5e2fad833a0"
+    },
+    {
+      "path": "modules/messaging/app/lib/components/messaging/CallLiveChip.svelte",
+      "reason": "added by TASK-205b: the live-call indicator of the TopBar liveCall slot part (was inline in the source TopBar)",
+      "owner": "TASK-205",
+      "blob": "ddf050b428831a12f35526354e5091d1c4753cf0"
+    },
+    {
+      "path": "modules/messaging/app/lib/components/messaging/NotificationBell.svelte",
+      "reason": "added by TASK-205b: the bell and its popover (min(348px, 100vw - 32px)) of the TopBar bell slot part; chat source only, the kernel carries no aggregated notifications API",
+      "owner": "TASK-205",
+      "blob": "15c1c75c829867c266b81b6ac9a209b7d7874be2"
+    },
+    {
+      "path": "modules/messaging/app/lib/components/messaging/fixtures/MessagingShellFixture.svelte",
+      "reason": "added by TASK-205b: browser-suite fixture mounting AppShell with the real messaging slot components",
+      "owner": "TASK-205",
+      "blob": "cd2416c81ef2a9650f3fda0e0a1e1c1a76190d95"
+    },
+    {
+      "path": "modules/messaging/app/lib/components/messaging/messaging-topbar.browser.test.ts",
+      "reason": "added by TASK-205b: the messaging TopBar parts in real Chromium (chips hidden below 768 px, live-call and bell kept, 44 px target, popover width, no marking); stubs VideoCallPip instead of mocking $env/dynamic/public (kit-3 rule K3)",
+      "owner": "TASK-205",
+      "blob": "b7520d6fd155eca4c42c9906fbb66b16a3f58ce9"
+    },
+    {
+      "path": "modules/messaging/app/lib/modules/slots/messaging.slot.ts",
+      "reason": "added by TASK-205b: the messaging module's contribution to the shell chrome (chips, live call, bell, call picture-in-picture) for the root layout's interim slot composition",
+      "owner": "TASK-205",
+      "blob": "029d491f439c6520e953ee1ecbc2cab6fc989382"
+    },
+    {
+      "path": "modules/messaging/app/routes/api/internal/push/+server.ts",
+      "reason": "TASK-205b: the shared constantTimeEqual replaces the local timingSafeEqual copy (the kernel Q4 guard in boot-exempt.test.ts requires every /api/internal/ handler to call isInternalTrustRequest or constantTimeEqual)",
+      "owner": "TASK-205",
+      "blob": "86908ba440fc792016a1db180e8858259ed685e7"
+    },
+    {
+      "path": "modules/elections/app/lib/server/elections/election-db.integration.test.ts",
+      "reason": "TASK-205b: the kernel database has no finance schema (the finance migrations are not in its chain), so the truncate names org_units only (CASCADE reaches committee_elections); TASK-205b: the kernel database has no finance schema (the finance migrations are not in its chain), so the truncate names org_units only (CASCADE reaches committee_elections); an afterAll clears the rows it created (a left-behind committee_elections row broke every later file that deletes org_units)",
+      "owner": "TASK-205",
+      "blob": "a9c2a185829b84358d10a68000c519aa90ce3762"
+    },
+    {
+      "path": "modules/calendar/app/lib/modules/manifests/calendar.test.ts",
+      "reason": "TASK-205: comment names the kernel migration with its 4-digit padded name (the register lint refuses a pad-3 kernel-data name outside its allow-list)",
+      "owner": "TASK-205",
+      "blob": "0ff648a89a152b5b16770455aee31d14cea09280"
+    },
+    {
+      "path": "modules/calendar/app/lib/modules/manifests/calendar.ts",
+      "reason": "TASK-205: comment names the kernel migration with its 4-digit padded name (the register lint refuses a pad-3 kernel-data name outside its allow-list)",
+      "owner": "TASK-205",
+      "blob": "6a4368dd21431984732e3506393c378c34c5c504"
     }
   ]
 }

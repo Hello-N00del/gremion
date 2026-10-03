@@ -12,12 +12,16 @@ const PKG_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
 const CODEGEN = join(PKG_ROOT, 'scripts', 'build-module-manifest.mjs')
 const GENERATED_BARREL = join(PKG_ROOT, 'src', 'lib', 'modules', 'manifests', 'index.generated.ts')
 
-// Carve note: the governance-only kernel ships exactly two always-on manifests —
-// `core` (dashboard/settings/systemstatus) and `governance`
-// (members/committees/portal/protokolle/beschluesse). The former toggleable
-// feature manifests (finance/elections/content/newsletter/users) are carved out,
-// so every golden below is the [core, governance] composition.
+// The kernel ships two always-on manifests of its own — `core`
+// (dashboard/settings/systemstatus) and `governance`
+// (members/committees/portal/protokolle/beschluesse) — and the build composes the ENABLED module halves
+// on top (TASK-205: gremion-ui/scripts/interim-module-overlay.mjs overlays modules/<id>/app onto src/
+// before the manifest barrel is generated). Disabled modules (modules/disabled.json) contribute nothing.
+// So every golden below is the composition of the enabled set; each module commit updates it in the same
+// commit. TASK-205: elections, votes, calendar, files, messages, board (registration = `order` sequence).
 const KERNEL_MANIFEST_IDS = ['core', 'governance'] as const
+const MODULE_MANIFEST_IDS = ['elections', 'votes', 'calendar', 'files', 'messages', 'board'] as const
+const COMPOSED_MANIFEST_IDS = [...KERNEL_MANIFEST_IDS, ...MODULE_MANIFEST_IDS] as const
 
 describe('WP2-1 codegen — generated barrel is the single registration source', () => {
   // STALENESS GUARD: the committed index.generated.ts MUST byte-equal a fresh
@@ -40,14 +44,14 @@ describe('WP2-1 codegen — generated barrel is the single registration source',
   // yield exactly these ids in this registration order. A mis-ordered or absent
   // barrel reds here.
   it('the generated barrel exposes exactly the fixed id set in registration order', () => {
-    expect(GENERATED_MANIFESTS.map((m) => m.id)).toEqual([...KERNEL_MANIFEST_IDS])
+    expect(GENERATED_MANIFESTS.map((m) => m.id)).toEqual([...COMPOSED_MANIFEST_IDS])
   })
 
   // The re-export seam (registry.ts → manifests/index.ts → index.generated.ts)
   // is the SAME array the generated barrel exposes — no second source of truth.
   it('MODULE_MANIFESTS (via registry) is the generated barrel array', () => {
     expect(MODULE_MANIFESTS).toBe(GENERATED_MANIFESTS)
-    expect(MODULE_MANIFESTS.map((m) => m.id)).toEqual([...KERNEL_MANIFEST_IDS])
+    expect(MODULE_MANIFESTS.map((m) => m.id)).toEqual([...COMPOSED_MANIFEST_IDS])
   })
 
   // MODULE_MANIFESTS is a synchronously-available array (not a Promise) — the
@@ -62,20 +66,17 @@ describe('MODULE_MANIFESTS — barrel source order (P3-WP2)', () => {
   // Pin the manifest registration order. The barrel (manifests/index.ts) is the
   // single source of this order now; moduleRoutePrefixes() ordering depends on it.
   it('registers the manifests in the fixed source order', () => {
-    expect(MODULE_MANIFESTS.map((m) => m.id)).toEqual([...KERNEL_MANIFEST_IDS])
+    expect(MODULE_MANIFESTS.map((m) => m.id)).toEqual([...COMPOSED_MANIFEST_IDS])
   })
 
-  // Both kernel manifests are always-on (toggleable:false) — there are no
-  // toggleable feature modules in the governance-only kernel.
+  // The kernel's own manifests are always-on (toggleable:false); only module manifests may toggle.
   it('every kernel manifest is always-on (non-toggleable)', () => {
-    expect(MODULE_MANIFESTS.every((m) => m.toggleable === false)).toBe(true)
+    expect(MODULE_MANIFESTS.filter((m) => (KERNEL_MANIFEST_IDS as readonly string[]).includes(m.id)).every((m) => m.toggleable === false)).toBe(true)
   })
 })
 
-// Golden snapshot of the composed PAGE_ACCESS map for the [core, governance]
-// kernel (auth/index.ts composePageAccess). Carved feature segments
-// (files/messages/calendar/elections/polls/votes/finance/newsletter/users/tasks/
-// news/content) are gone with their modules.
+// Golden snapshot of the composed PAGE_ACCESS map for the composed manifest set (auth/index.ts
+// composePageAccess): the kernel's core + governance segments and the enabled modules' own.
 const KERNEL_PAGE_ACCESS: Record<string, Role> = {
   // core
   dashboard: Role.Guest,
@@ -87,6 +88,14 @@ const KERNEL_PAGE_ACCESS: Record<string, Role> = {
   portal: Role.CouncilAdmin,
   protokolle: Role.Guest,
   beschluesse: Role.Guest,
+  // the composed modules (TASK-205): elections, votes (polls + votes), calendar, files, messages, board (tasks)
+  elections: Role.Member,
+  polls: Role.Member,
+  votes: Role.Member,
+  calendar: Role.Guest,
+  files: Role.Member,
+  messages: Role.Member,
+  tasks: Role.Member,
 }
 
 describe('registry — composePageAccess (golden)', () => {
@@ -99,15 +108,25 @@ describe('registry — composePageAccess (golden)', () => {
 })
 
 describe('registry — moduleRoutePrefixes (golden vs hooks.server.ts)', () => {
-  it('exposes no module-disable route prefixes (kernel has no toggleable modules)', () => {
-    expect(moduleRoutePrefixes()).toEqual([])
+  it('exposes exactly the toggleable modules route prefixes, in registration order (the kernel manifests add none)', () => {
+    expect(moduleRoutePrefixes()).toEqual([
+      { prefix: '/elections', moduleId: 'elections' },
+      { prefix: '/api/elections', moduleId: 'elections' },
+      { prefix: '/votes', moduleId: 'votes' },
+      { prefix: '/polls', moduleId: 'votes' },
+      { prefix: '/api/polls', moduleId: 'votes' },
+      { prefix: '/calendar', moduleId: 'calendar' },
+      { prefix: '/api/calendar', moduleId: 'calendar' },
+      { prefix: '/tasks', moduleId: 'board' },
+      { prefix: '/api/board', moduleId: 'board' },
+    ])
   })
 })
 
 describe('registry — composeCapabilities (single composition seam)', () => {
-  it('is empty in the governance-only kernel (no manifest declares capabilities)', () => {
-    // core + governance declare no capabilities; concrete per-module capability
-    // maps (e.g. finance.*) arrive with their modules.
+  it('is empty while no composed manifest declares capabilities', () => {
+    // core, governance, calendar, files and board declare no capabilities; concrete per-module
+    // capability maps (e.g. finance.*) arrive with their modules.
     expect(composeCapabilities()).toEqual({})
   })
 })

@@ -791,8 +791,8 @@ describe('authGuard publicPaths segment-boundary matching (netcup T03)', () => {
    * matcher must require an exact hit or a '/'-delimited prefix.
    *
    * Only the entries WITHOUT a trailing slash carry that hazard: '/auth/',
-   * '/legal/' and '/api/public/protocols/' already end on a separator, so no
-   * extension of them can slip past a bare startsWith. The two boundary-less
+   * '/legal/', '/livekit/', '/element-call/' and '/api/public/protocols/' already end on a separator, so no
+   * extension of them can slip past a bare startsWith. The boundary-less
    * entries below are therefore the complete negative set, and each one is
    * exercised. ('/setup' left the list with the first-run wizard, TASK-042 Q1;
    * '/setupmalicious' is covered by the deleted-wizard case further down.)
@@ -800,6 +800,7 @@ describe('authGuard publicPaths segment-boundary matching (netcup T03)', () => {
   const BOUNDARY_LESS_ENTRIES = [
     { entry: '/api/setup/seed', attack: '/api/setup/seedling' },
     { entry: '/api/health', attack: '/api/healthz' },
+    { entry: '/element-call', attack: '/element-callXYZ' },
   ] as const
 
   for (const { entry, attack } of BOUNDARY_LESS_ENTRIES) {
@@ -858,6 +859,9 @@ describe('authGuard publicPaths segment-boundary matching (netcup T03)', () => {
     { entry: '/auth/', path: '/auth/login' },
     { entry: '/auth/', path: '/auth/signout' },
     { entry: '/legal/', path: '/legal/imprint' },
+    { entry: '/livekit/', path: '/livekit/jwt' },
+    { entry: '/element-call/', path: '/element-call/index.html' },
+    { entry: '/element-call', path: '/element-call' },
     { entry: '/api/setup/seed', path: '/api/setup/seed' },
     { entry: '/api/health', path: '/api/health' },
     { entry: '/api/public/protocols/*/pdf', path: '/api/public/protocols/42/pdf' },
@@ -867,7 +871,8 @@ describe('authGuard publicPaths segment-boundary matching (netcup T03)', () => {
   // longer public. The pin reads the SHIPPED list, not a copy of it.
   // F1-FIX-03 / S1a#28: the /api entries are EXACT routes now, not subtrees;
   // only the two page trees '/auth/' and '/legal/' stay prefixes.
-  const FIVE = ['/api/health', '/api/public/protocols/*/pdf', '/api/setup/seed', '/auth/', '/legal/']
+  // TASK-205b: plus the messaging module's three public entries (LiveKit proxy, Element Call SPA).
+  const FIVE = ['/api/health', '/api/public/protocols/*/pdf', '/api/setup/seed', '/auth/', '/element-call', '/element-call/', '/legal/', '/livekit/']
 
   // F1-FIX-03 / S1a#28: a path BELOW or BESIDE a public /api route is not public.
   // A route the kernel later adds there must not be served unauthenticated just
@@ -899,12 +904,12 @@ describe('authGuard publicPaths segment-boundary matching (netcup T03)', () => {
     })
   }
 
-  it('the shipped publicPaths list is exactly the five entries (no /setup)', async () => {
+  it('the shipped publicPaths list is exactly the pinned entries (no /setup)', async () => {
     const mod = await import('./hooks.server')
     expect([...mod.PUBLIC_PATHS].sort()).toEqual([...FIVE].sort())
   })
 
-  it('covers every one of the five publicPaths entries', async () => {
+  it('covers every one of the pinned publicPaths entries', async () => {
     const covered = new Set(PUBLIC_HITS.map((h) => h.entry))
     expect([...covered].sort()).toEqual([...FIVE].sort())
   })

@@ -15,30 +15,36 @@ const sectionChildren = (nav: NavItem[], label: string): string[] => {
   return section.children.map((c) => c.label);
 };
 
-// DEEP full-tree golden — the GOVERNANCE-ONLY kernel rail. The carved-out feature
-// modules (calendar/tasks/files/messages/news, elections/votes, finance) and
-// their rail entries are gone; what remains is the governance core. There are no
-// module-owned nav fragments to weave in (no toggleable modules), so the composed
-// tree equals the base template, and the exported navSchema equals it too.
+// DEEP full-tree golden — the kernel rail plus the rail entries of the module halves the build composes
+// (TASK-205: calendar, tasks, files and chat inline in Arbeitsbereich as in the source; the votes entry and
+// the Räume entry woven in at their `{ slot:'module' }` anchors from their manifests). Modules that are not
+// built (finance, vault, handover, content) contribute nothing. The composed tree equals the base template
+// with its slots resolved, and the exported navSchema equals it too.
 const NAV_SCHEMA_GOLDEN: NavItem[] = [
   { kind: 'section', label: 'Arbeitsbereich', children: [
     { kind: 'item', href: '/',          label: 'Übersicht',     icon: 'home',      role: Role.Guest },
+    { kind: 'item', href: '/calendar',  label: 'Kalender',      icon: 'calendar',  role: Role.Guest },
+    { kind: 'item', href: '/tasks',     label: 'Aufgaben',      icon: 'checklist', role: Role.Member, moduleId: 'board' },
+    { kind: 'item', href: '/files',     label: 'Dokumente',     icon: 'folder',    role: Role.Member },
+    { kind: 'item', href: '/messages',  label: 'Matrix · Chat', icon: 'chat',      role: Role.Member, badge: 'unread' },
   ] },
   { kind: 'section', label: 'Gremien', termKey: 'gremien', children: [
     { kind: 'item', href: '/committees',  label: 'Gremien & Referate',     icon: 'users', role: Role.Guest, termKey: 'navCommittees' },
     { kind: 'item', href: '/protokolle',  label: 'Protokolle & Beschlüsse', icon: 'file', role: Role.Guest },
+    { kind: 'item', href: '/votes', label: 'Abstimmungen & Wahlen', icon: 'vote', role: Role.Member, badge: 'live', moduleId: 'votes' },
   ] },
   { kind: 'section', label: 'Öffentlichkeit', children: [
     { kind: 'item', href: '/portal', label: 'Portal-Verwaltung', icon: 'globe', role: Role.CouncilAdmin },
   ] },
   { kind: 'section', label: 'Verwaltung', children: [
     { kind: 'item', href: '/members',  label: 'Mitglieder',    icon: 'badge',    role: Role.Member },
+    { kind: 'item', href: '/messages/manage', label: 'Räume', icon: 'matrix', role: Role.CouncilAdmin, moduleId: 'messages' },
     { kind: 'item', href: '/settings', label: 'Einstellungen', icon: 'settings', role: Role.ITAdmin },
     { kind: 'item', href: '/systemstatus', label: 'Systemstatus', icon: 'activity', role: Role.ITAdmin },
   ] },
 ];
 
-describe('navSchema deep full-tree golden (governance-only kernel)', () => {
+describe('navSchema deep full-tree golden (kernel rail + composed module entries)', () => {
   test('composeNavSchema(baseNavSchema, MODULE_MANIFESTS) reproduces the golden tree byte-for-byte', () => {
     expect(composeNavSchema(baseNavSchema, MODULE_MANIFESTS)).toEqual(NAV_SCHEMA_GOLDEN);
   });
@@ -58,24 +64,29 @@ describe('navSchema initial shape', () => {
     ]);
   });
 
-  test('is exactly 7 items across 4 sections (governance-only kernel)', () => {
-    // Arbeitsbereich(1: Übersicht) + Gremien(2: committees, protokolle) +
-    // Öffentlichkeit(1: portal) + Verwaltung(3: members, settings, systemstatus).
+  test('is exactly 12 items across 4 sections (kernel rail + the composed module entries)', () => {
+    // Arbeitsbereich(5: Übersicht, Kalender, Aufgaben, Dokumente, Chat) + Gremien(3: committees, protokolle,
+    // Abstimmungen & Wahlen) + Öffentlichkeit(1: portal) + Verwaltung(4: members, Räume, settings, systemstatus).
     const items = navSchema.flatMap((s) => (s.kind === 'section' ? s.children : [s]));
     expect(navSchema.length).toBe(4);
-    expect(items.length).toBe(7);
+    expect(items.length).toBe(13);
   });
 
-  test('Arbeitsbereich carries only Übersicht (feature workspace items carved out)', () => {
+  test('Arbeitsbereich carries Übersicht and the workspace entries of the composed modules', () => {
     expect(sectionChildren(navSchema, 'Arbeitsbereich')).toEqual([
       'Übersicht',
+      'Kalender',
+      'Aufgaben',
+      'Dokumente',
+      'Matrix · Chat',
     ]);
   });
 
-  test('Gremien merges Protokolle+Beschlüsse (elections /votes carved out)', () => {
+  test('Gremien merges Protokolle+Beschlüsse and carries the votes module entry', () => {
     expect(sectionChildren(navSchema, 'Gremien')).toEqual([
       'Gremien & Referate',
       'Protokolle & Beschlüsse',
+      'Abstimmungen & Wahlen',
     ]);
   });
 
@@ -95,9 +106,10 @@ describe('filterNavForSession — guest (unauthenticated / no elevated role)', (
     expect(topLabels(nav)).toEqual(['Arbeitsbereich', 'Gremien']);
   });
 
-  test('sees the guest Arbeitsbereich item', () => {
+  test('sees the guest Arbeitsbereich items (Übersicht, Kalender)', () => {
     expect(sectionChildren(nav, 'Arbeitsbereich')).toEqual([
       'Übersicht',
+      'Kalender',
     ]);
   });
 
@@ -120,7 +132,12 @@ describe('filterNavForSession — member (mitglied, no elevated groups)', () => 
     ]);
   });
 
-  test('Verwaltung shows Mitglieder but not Einstellungen', () => {
+  test('Arbeitsbereich shows the member workspace entries and Gremien the votes entry', () => {
+    expect(sectionChildren(nav, 'Arbeitsbereich')).toEqual(['Übersicht', 'Kalender', 'Aufgaben', 'Dokumente', 'Matrix · Chat']);
+    expect(sectionChildren(nav, 'Gremien')).toContain('Abstimmungen & Wahlen');
+  });
+
+  test('Verwaltung shows Mitglieder but neither Räume (council-admin) nor Einstellungen', () => {
     expect(sectionChildren(nav, 'Verwaltung')).toEqual(['Mitglieder']);
   });
 
@@ -142,6 +159,7 @@ describe('filterNavForSession — council-admin', () => {
   test('Verwaltung shows Mitglieder, not Einstellungen', () => {
     const children = sectionChildren(nav, 'Verwaltung');
     expect(children).toContain('Mitglieder');
+    expect(children).toContain('Räume'); // the messages module's rail entry is council-admin gated
     expect(children).not.toContain('Einstellungen');
   });
 });
@@ -158,8 +176,8 @@ describe('filterNavForSession — it-admin with admin group sees everything', ()
     ]);
   });
 
-  test('Verwaltung shows Mitglieder + Einstellungen + Systemstatus', () => {
-    expect(sectionChildren(nav, 'Verwaltung')).toEqual(['Mitglieder', 'Einstellungen', 'Systemstatus']);
+  test('Verwaltung shows Mitglieder + Räume + Einstellungen + Systemstatus', () => {
+    expect(sectionChildren(nav, 'Verwaltung')).toEqual(['Mitglieder', 'Räume', 'Einstellungen', 'Systemstatus']);
   });
 });
 

@@ -69,7 +69,17 @@ the flag.
   `modules/`. New module code (TASK-152..157, TASK-190, TASK-205) is linted
   in full, and a new error in a frozen file still fails (both watched RED).
   A task that edits one of these files fixes the finding and deletes the
-  path from its override; an override left with no files is deleted. File
+  path from its override; an override left with no files is deleted.
+  TASK-205 (2026-10-02) added the in-process halves it moved (`modules/{board,
+  calendar,elections,files,messaging,votes}/app`): 66 files, 7 rules, 113 findings
+  (`typescript/no-redundant-type-constituents` 72 of them - the
+  type-aware pass cannot resolve `./$types` or `$lib` from `modules/*/app`, so
+  the route handlers' types read as `any` - plus
+  `vitest/no-conditional-expect`, `unicorn/prefer-string-starts-ends-with`,
+  `eslint/no-unused-vars`, `vitest/require-to-throw-message`,
+  `unicorn/no-useless-fallback-in-spread`, `typescript/no-base-to-string`).
+  The same files, once overlaid onto `gremion-ui/src`, are type-checked in full
+  by `svelte-check` (0 errors). New files of that task are linted in full. File
   paths containing `[` or `]` (SvelteKit route params) are written with `?`
   in their place, because the override globs treat brackets as a class.
 

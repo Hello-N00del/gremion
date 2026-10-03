@@ -42,13 +42,12 @@ export type NavTemplateEntry = NavTemplateItem | NavTemplateSection | ModuleNavS
 const isModuleSlot = (e: NavTemplateEntry): e is ModuleNavSlot =>
   'slot' in e && e.slot === 'module';
 
-// Governance-only kernel rail. The carved-out feature modules (calendar, tasks,
-// files, messages, news, elections, finance) and their rail entries are gone;
-// what remains is the governance core: the workspace overview, the Gremien
-// section (committees + protokolle/beschlüsse), the portal admin, and the
-// Verwaltung section. Feature-module rail entries re-attach via their manifests
-// at `{ slot:'module' }` anchors when a module is present — composeNavSchema
-// still resolves any such anchors, but the kernel base declares none.
+// The kernel rail: the governance core (the workspace overview, the Gremien section with
+// committees + protokolle/beschlüsse, the portal admin, the Verwaltung section) plus the rail entries of the
+// module halves the build composes (TASK-205: calendar, tasks, files, chat inline in Arbeitsbereich as in the
+// source; the votes and Räume entries at `{ slot:'module' }` anchors that resolve to nothing when the module
+// is absent). Entries of modules that are not built (finance, vault, handover, content) are not declared here;
+// they re-attach with their halves.
 //
 // P3-WP1: this is the module-NEUTRAL base template. Module-owned rail entries
 // live on their manifests and are woven back in by composeNavSchema; a kernel
@@ -57,6 +56,18 @@ const isModuleSlot = (e: NavTemplateEntry): e is ModuleNavSlot =>
 export const baseNavSchema: NavTemplateEntry[] = [
   { kind: 'section', label: 'Arbeitsbereich', children: [
     { kind: 'item', href: '/',          label: 'Übersicht',     icon: 'home',      role: Role.Guest },
+    // TASK-205 (carve-keep hunk re-applied, MODULE): the workspace items of the moved module halves.
+    // Each href is a route its module's app/ half provides (the interim overlay puts it under src/routes).
+    { kind: 'item', href: '/calendar',  label: 'Kalender',      icon: 'calendar',  role: Role.Guest },
+    // /tasks is owned by the toggleable board module (manifests/board.ts routePrefixes ['/tasks', '/api/board']):
+    // moduleId:'board' hides the entry for a board-OFF tenant instead of dangling a link into the
+    // module-disabled surface (isItemVisible below).
+    { kind: 'item', href: '/tasks',     label: 'Aufgaben',      icon: 'checklist', role: Role.Member, moduleId: 'board' },
+    // Dokumente is member-gated (#194): guests are never provisioned a Nextcloud account, so /files always
+    // failed for them. Hiding the rail entry + member-gating the page (PAGE_ACCESS.files) keeps guests away
+    // from a surface that can never work for them.
+    { kind: 'item', href: '/files',     label: 'Dokumente',     icon: 'folder',    role: Role.Member },
+    { kind: 'item', href: '/messages',  label: 'Matrix · Chat', icon: 'chat',      role: Role.Member, badge: 'unread' },
   ] },
   { kind: 'section', label: 'Gremien', termKey: 'gremien', children: [
     // committees + protokolle are guest-readable (council structure is
@@ -68,12 +79,17 @@ export const baseNavSchema: NavTemplateEntry[] = [
     // Merged: the dedicated /beschluesse route still exists, but Protokolle and
     // Beschlüsse share one rail entry (Protokolle's landing surfaces both).
     { kind: 'item', href: '/protokolle',  label: 'Protokolle & Beschlüsse', icon: 'file', role: Role.Guest },
+    // The votes module owns the merged /votes rail entry (Abstimmungen + Umfragen + Wahlen); spliced in here.
+    // A votes-OFF tenant has no entry; an elections-OFF tenant still has it (polls only).
+    { slot: 'module', moduleId: 'votes' },
   ] },
   { kind: 'section', label: 'Öffentlichkeit', children: [
     { kind: 'item', href: '/portal', label: 'Portal-Verwaltung', icon: 'globe', role: Role.CouncilAdmin },
   ] },
   { kind: 'section', label: 'Verwaltung', children: [
     { kind: 'item', href: '/members',  label: 'Mitglieder',    icon: 'badge',    role: Role.Member },
+    // TASK-009 lane B (FLOW-MSG-001): the messages module owns the Räume rail entry (/messages/manage).
+    { slot: 'module', moduleId: 'messages' },
     { kind: 'item', href: '/settings', label: 'Einstellungen', icon: 'settings', role: Role.ITAdmin },
     // #264 (HANDOVER-v8 Part C): instance provisioning-convergence status. IT-admin
     // only; the page itself is read-only with it-admin-gated retry actions.

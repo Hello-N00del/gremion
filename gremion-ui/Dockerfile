@@ -68,6 +68,19 @@ COPY modules/files/module.json ./modules/files/
 COPY modules/handover/module.json ./modules/handover/
 COPY modules/messaging/module.json ./modules/messaging/
 COPY modules/votes/module.json ./modules/votes/
+# TASK-205 Q1: the in-process half of every ENABLED module (routes, api routes, lib/server,
+# components, manifest) lives once under modules/<id>/app and is copied onto gremion-ui/src by
+# scripts/interim-module-overlay.mjs, the first step of `pnpm build`'s prebuild. Without these COPYs
+# the overlay would find no module and refuse (zero modules), so the image build fails loudly
+# instead of shipping a kernel with no module routes. disabled.json is what keeps a disabled
+# module out of the overlay. interim-module-overlay.test.mjs pins this list against modules/*/app.
+COPY modules/disabled.json ./modules/
+COPY modules/board/app ./modules/board/app/
+COPY modules/calendar/app ./modules/calendar/app/
+COPY modules/files/app ./modules/files/app/
+COPY modules/messaging/app ./modules/messaging/app/
+COPY modules/votes/app ./modules/votes/app/
+COPY modules/elections/app ./modules/elections/app/
 COPY gremion-ui ./gremion-ui/
 
 # Build the SvelteKit app (@gremion/db + @gremion/ports bundled via ssr.noExternal)

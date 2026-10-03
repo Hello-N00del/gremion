@@ -57,6 +57,7 @@
       "files": [
         "modules/calendar/scripts/backfill.ts",
         "modules/content/test/dispatch.integration.test.ts",
+        "modules/files/app/lib/server/files/protocol-documents.ts",
         "modules/finance/test/sub-org.store.test.ts"
       ],
       "rules": { "eslint/no-unused-vars": "off" }
@@ -65,6 +66,7 @@
       "files": [
         "modules/content/app/lib/server/content/instagram/adapter.test.ts",
         "modules/content/scripts/backfill.ts",
+        "modules/files/app/lib/server/files/nextcloud-client.test.ts",
         "modules/finance/scripts/backfill.ts",
         "modules/publishing/scripts/backfill.ts"
       ],
@@ -78,6 +80,26 @@
     },
     {
       "files": [
+        "modules/board/app/routes/api/board/+server.ts",
+        "modules/board/app/routes/api/board/?id?/+server.ts",
+        "modules/board/app/routes/api/board/?id?/cards/+server.ts",
+        "modules/board/app/routes/api/board/?id?/promotable/+server.ts",
+        "modules/board/app/routes/api/board/?id?/promote/+server.ts",
+        "modules/board/app/routes/api/board/board-binding.test.ts",
+        "modules/board/app/routes/tasks/+page.server.ts",
+        "modules/calendar/app/lib/server/calendar/caldav-client.ts",
+        "modules/calendar/app/routes/api/calendar/automations/helios/+server.ts",
+        "modules/calendar/app/routes/api/calendar/automations/holidays/sync/+server.ts",
+        "modules/calendar/app/routes/api/calendar/automations/minutes/+server.ts",
+        "modules/calendar/app/routes/api/calendar/automations/minutes/confirm/+server.ts",
+        "modules/calendar/app/routes/api/calendar/event-types/+server.ts",
+        "modules/calendar/app/routes/api/calendar/event-types/?id?/+server.ts",
+        "modules/calendar/app/routes/api/calendar/events/+server.ts",
+        "modules/calendar/app/routes/api/calendar/events/?id?/+server.ts",
+        "modules/calendar/app/routes/api/calendar/settings/committees/?id?/+server.ts",
+        "modules/calendar/app/routes/api/calendar/settings/shared/+server.ts",
+        "modules/calendar/app/routes/calendar/+page.server.ts",
+        "modules/calendar/app/routes/calendar/invite/?uid?/+page.server.ts",
         "modules/content/app/lib/server/content/route-auth.ts",
         "modules/content/app/lib/server/news/news-db.ts",
         "modules/content/app/routes/api/content/posts/posts.test.ts",
@@ -85,7 +107,40 @@
         "modules/content/app/routes/api/news/?id?/+server.ts",
         "modules/content/app/routes/news/+page.server.ts",
         "modules/content/app/routes/news/?id?/edit/+page.server.ts",
-        "modules/files/test/webdav-path.test.ts"
+        "modules/elections/app/routes/api/elections/+server.ts",
+        "modules/elections/app/routes/elections/+page.server.ts",
+        "modules/elections/app/routes/elections/?id?/+page.server.ts",
+        "modules/elections/app/routes/elections/?id?/manage/+page.server.ts",
+        "modules/elections/app/routes/elections/manage/+page.server.ts",
+        "modules/elections/app/routes/elections/new/+page.server.ts",
+        "modules/files/app/routes/api/files/?...path?/+server.ts",
+        "modules/files/app/routes/api/files/edit-token/?...path?/+server.ts",
+        "modules/files/app/routes/api/files/files-rename.integration.test.ts",
+        "modules/files/app/routes/api/files/upload-chunk/+server.ts",
+        "modules/files/app/routes/api/files/upload-chunk/upload-chunk.test.ts",
+        "modules/files/app/routes/files/+page.server.ts",
+        "modules/files/app/routes/files/?...path?/+page.server.ts",
+        "modules/files/app/routes/files/edit/?...path?/+page.server.ts",
+        "modules/files/app/routes/files/groups/?group?/+page.server.ts",
+        "modules/files/test/webdav-path.test.ts",
+        "modules/messaging/app/lib/server/messages/admin/room-admin.ts",
+        "modules/messaging/app/routes/api/messages/rooms/+server.ts",
+        "modules/messaging/app/routes/api/messages/rooms/?roomId?/+server.ts",
+        "modules/messaging/app/routes/api/messages/rooms/?roomId?/archive/+server.ts",
+        "modules/messaging/app/routes/api/messages/rooms/?roomId?/media/+server.ts",
+        "modules/messaging/app/routes/api/messages/rooms/?roomId?/messages/+server.ts",
+        "modules/messaging/app/routes/api/messages/rooms/?roomId?/read/+server.ts",
+        "modules/messaging/app/routes/api/messages/rooms/?roomId?/typing/+server.ts",
+        "modules/messaging/app/routes/api/messages/rooms/?roomId?/unit/+server.ts",
+        "modules/messaging/app/routes/api/messages/sync/+server.ts",
+        "modules/messaging/app/routes/api/video/meeting-room/+server.ts",
+        "modules/messaging/app/routes/api/video/token/+server.ts",
+        "modules/messaging/app/routes/messages/manage/+page.server.ts",
+        "modules/votes/app/routes/api/polls/+server.ts",
+        "modules/votes/app/routes/api/polls/?id?/+server.ts",
+        "modules/votes/app/routes/api/polls/?id?/options/+server.ts",
+        "modules/votes/app/routes/polls/?id?/+page.server.ts",
+        "modules/votes/app/routes/votes/+page.server.ts"
       ],
       "rules": { "typescript/no-redundant-type-constituents": "off" }
     },
@@ -100,6 +155,7 @@
         "modules/board/test/no-phantom-stura-db.test.ts",
         "modules/calendar/test/no-phantom-stura-db.test.ts",
         "modules/content/test/no-phantom-stura-db.test.ts",
+        "modules/elections/app/lib/votes/aggregator.test.ts",
         "modules/finance/test/no-phantom-stura-db.test.ts",
         "modules/publishing/test/no-phantom-stura-db.test.ts"
       ],
@@ -107,8 +163,15 @@
     },
     {
       "files": [
+        "modules/board/app/lib/server/board/backend/resolve.test.ts",
+        "modules/calendar/app/lib/server/calendar/backend/resolve.test.ts",
         "modules/content/app/lib/server/content/backend/resolve.test.ts",
+        "modules/elections/app/lib/server/elections/helios-client.test.ts",
+        "modules/files/app/routes/api/files/api-integration.integration.test.ts",
         "modules/files/test/webdav-path.test.ts",
+        "modules/messaging/app/routes/api/messages/api-integration.integration.test.ts",
+        "modules/messaging/app/routes/api/messages/rooms/?roomId?/media/media.test.ts",
+        "modules/messaging/app/routes/api/messages/rooms/?roomId?/read/read.test.ts",
         "modules/publishing/test/api.integration.test.ts"
       ],
       "rules": { "vitest/no-conditional-expect": "off" }
@@ -124,6 +187,7 @@
         "modules/calendar/test/holiday-dedup.integration.test.ts",
         "modules/content/app/lib/server/content/instagram/adapter.test.ts",
         "modules/content/test/dispatch.integration.test.ts",
+        "modules/files/app/lib/server/files/webdav-path.test.ts",
         "modules/finance/test/fints.crypto.test.ts",
         "modules/publishing/test/dispatch.integration.test.ts",
         "modules/publishing/test/origin.test.ts",
@@ -138,6 +202,13 @@
         "modules/finance/test/project.store.test.ts"
       ],
       "rules": { "vitest/valid-title": "off" }
+    },
+    {
+      "files": [
+        "modules/elections/app/lib/server/elections/helios-client.tenant.test.ts",
+        "modules/messaging/app/routes/messages/messages-page.test.ts"
+      ],
+      "rules": { "unicorn/prefer-string-starts-ends-with": "off" }
     }
   ],
   "ignorePatterns": [

@@ -48,9 +48,10 @@ describe('ConfigStore', () => {
       const config = readConfig()
 
       expect(config.setup_complete).toBe(false)
-      // Governance-only kernel: no always-on feature modules, so the default
-      // modules map is empty (pinned by the WP3 default golden below).
-      expect(config.modules).toEqual({})
+      // The default modules map is the toggleable manifests the build composes (TASK-205: the
+      // enabled module halves are overlaid before the barrels are generated); pinned by the WP3
+      // default golden below.
+      expect(config.modules).toEqual({ elections: true, votes: true, calendar: true, board: true })
       expect(config.backups.retention_days).toBe(30)
     })
 
@@ -492,9 +493,10 @@ describe('WP3 config.modules dynamic open record — (b) defaultModulesConfig()'
     const { defaultModulesConfig } = await import('./config')
     // Byte-identical pin — if this changes, a module was added/removed/renamed
     // and the change is intentional; update this literal in the SAME commit.
-    // Governance-only kernel: no always-on (REQUIRED_MODULES) ids and the kept
-    // manifests (core, governance) are non-toggleable, so this is empty.
-    expect(defaultModulesConfig()).toEqual({})
+    // No always-on (REQUIRED_MODULES) ids; the kept manifests (core, governance) are non-toggleable,
+    // so the pin is exactly the toggleable manifests of the overlaid enabled modules (TASK-205a:
+    // elections, votes, calendar and board; messages and files are always-on).
+    expect(defaultModulesConfig()).toEqual({ elections: true, votes: true, calendar: true, board: true })
   })
 })
 

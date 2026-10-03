@@ -17,6 +17,7 @@
 // agent tool call. A part run is always a partial record; only a full
 // `verify` (every required suite, `unit` whole) satisfies check-record.
 import { existsSync, globSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs'
+import { createRequire } from 'node:module'
 import path from 'node:path'
 import { headSha } from '../lib/git.mjs'
 import { combineParts } from '../lib/guard.mjs'
@@ -25,11 +26,12 @@ import { run, tail, toolAvailable } from '../lib/proc.mjs'
 import { REPO_ROOT, runVitestJson } from '../lib/vitest.mjs'
 
 /** One package's own test script, run with the JSON reporter. */
-export function vitestSubcheck({ cwd, testScript = 'test:unit', root = REPO_ROOT, label = `${path.basename(cwd)} vitest (${testScript})` }) {
+export function vitestSubcheck({ cwd, testScript = 'test:unit', root = REPO_ROOT, label = `${path.basename(cwd)} vitest (${testScript})`, extraArgs = [] }) {
   // Runs the package's OWN script (`pnpm run <testScript>`), not a
   // hand-assembled `vitest run`, so a flag or config a package adds to its
-  // script is what verify runs too.
-  return runVitestJson({ label, cwd, cmd: 'pnpm', args: ['run', testScript], root })
+  // script is what verify runs too. `extraArgs` reach vitest through the
+  // script (the modules part's --coupled-excludes arguments).
+  return runVitestJson({ label, cwd, cmd: 'pnpm', args: ['run', testScript, ...extraArgs], root })
 }
 
 // Runs node --test PER FILE, one process per file, exactly like the
@@ -193,8 +195,29 @@ function scriptTestFiles(root) {
   // __fixtures__/** is deliberately excluded: those files exist to be
   // seeded-bad (zero declared tests, all-skip) for verify's OWN guard tests
   // and must never be swept into the real suite they are fixtures for.
-  return globSync('scripts/**/*.test.mjs', { cwd: root })
+  // gremion-ui/scripts/*.test.mjs joins (TASK-205a): the interim module overlay's own guard lives beside the
+  // script it guards, outside root scripts/, and a node:test file nobody collects passes vacuously.
+  return [...globSync('scripts/**/*.test.mjs', { cwd: root }), ...globSync('gremion-ui/scripts/*.test.mjs', { cwd: root })]
     .filter((f) => !f.split(/[\\/]/).includes('__fixtures__'))
+    .sort()
+}
+
+/**
+ * Every modules/<id> whose package.json defines a `test` script (TASK-205a, TASK-200 residual (b)). Each is a
+ * workspace package with its own vitest suite (the leaf service's unit tests); none of them runs through
+ * gremion-ui's vitest, so without this part a module's suite ran in NO verify suite. A module directory with
+ * no package.json test script (the app-only ids elections and handover) is not a suite. Returns bare ids.
+ */
+export function moduleDirsWithTestScript(root = REPO_ROOT) {
+  const modulesDir = path.join(root, 'modules')
+  return readdirSync(modulesDir, { withFileTypes: true })
+    .filter((d) => d.isDirectory())
+    .map((d) => d.name)
+    .filter((id) => {
+      const pj = path.join(modulesDir, id, 'package.json')
+      if (!existsSync(pj)) return false
+      return typeof JSON.parse(readFileSync(pj, 'utf8')).scripts?.test === 'string'
+    })
     .sort()
 }
 
@@ -257,8 +280,42 @@ export const UNIT_PARTS = {
   'control-panel': (root) => [
     vitestSubcheck({ cwd: path.join(root, 'apps', 'control-panel'), testScript: 'test', root, label: 'control-panel vitest (test)' }),
   ],
+  // TASK-205a: one vitest part per modules/<id> package with a test script. Zero such modules is itself a
+  // failing part (an empty module set must not read as a pass). Brief §6.12: each run carries
+  // `check-module-source-scan.mjs --coupled-excludes <id>` (a test modules/COUPLED-TESTS.json allows to reach
+  // outside its module is excluded from the per-package run); an absent, invalid or stale list refuses the
+  // part (unparseable, named) instead of running the module unexcluded.
+  // The scan module lives outside scripts/verify/, so it is loaded lazily (synchronous require of ESM) only
+  // when this part runs: the verify CLI must still start from a copy of scripts/verify/ alone (the space-path
+  // tests in verify.test.mjs / check-record.test.mjs). A scan that cannot load refuses the part, named.
+  modules: (root) => {
+    const ids = moduleDirsWithTestScript(root)
+    if (ids.length === 0) return [{ label: 'modules vitest (no modules/*/package.json defines a test script)', collected: 0, passed: 0, failed: 0, skipped: 0 }]
+    let coupledExcludes
+    try {
+      ;({ coupledExcludes } = loadModuleSourceScan())
+    } catch (err) {
+      return ids.map((id) => ({ label: `module ${id} vitest (test)`, unparseable: true, detail: `--coupled-excludes ${id} refused: check-module-source-scan.mjs did not load: ${err.message}` }))
+    }
+    return ids.map((id) => {
+      const label = `module ${id} vitest (test)`
+      let excludes
+      try {
+        excludes = coupledExcludes(root, id)
+      } catch (err) {
+        return { label, unparseable: true, detail: `--coupled-excludes ${id} refused: ${err.message}` }
+      }
+      return vitestSubcheck({ cwd: path.join(root, 'modules', id), testScript: 'test', root, label, extraArgs: excludes })
+    })
+  },
   node: (root) => nodeTestParts({ cwd: root, files: scriptTestFiles(root) }),
   bats: (root) => [batsPart({ cwd: root, patterns: ['test/*.bats', 'test/host/*.bats'] })],
+}
+
+/** scripts/check-module-source-scan.mjs, loaded on first use by the `modules` part only (never at import
+ * time of this suite). Exported so the lazy-load guard can assert the module surface it relies on. */
+export function loadModuleSourceScan() {
+  return createRequire(import.meta.url)('../../check-module-source-scan.mjs')
 }
 
 /** Every packages/* directory whose package.json defines a `test` script --

@@ -10,13 +10,21 @@
       "command": "pnpm run test:unit",
       "timeoutMs": 600000,
       "requiresStack": false,
+      "//": "TASK-205a/b: modules/<id>/app/** of every module the interim overlay enables (gremion-ui/scripts/interim-module-overlay.mjs; pretest:unit / pretest:browser copy app/** onto gremion-ui/src) runs here, so each enabled module's app tests are claimed per module. Their *.integration.test.ts run under kernel-ui-vitest-integration (pretest:integration overlays them too). content/app stays disabled (kernel-module-content-app-overlay-vitest).",
       "testGlobs": [
         "gremion-ui/tests/unit/**/*.test.ts",
         "gremion-ui/src/**/*.test.ts",
         "gremion-ui/scripts/install-git-hooks.test.ts",
         "packages/db/src/**/*.test.ts",
-        "packages/ports/src/**/*.test.ts"
-      ]
+        "packages/ports/src/**/*.test.ts",
+        "modules/board/app/**/*.test.ts",
+        "modules/calendar/app/**/*.test.ts",
+        "modules/elections/app/**/*.test.ts",
+        "modules/files/app/**/*.test.ts",
+        "modules/messaging/app/**/*.test.ts",
+        "modules/votes/app/**/*.test.ts"
+      ],
+      "excludeGlobs": ["modules/*/app/**/*.integration.test.ts"]
     },
     {
       "id": "kernel-ui-vitest-integration",
@@ -27,7 +35,26 @@
       "command": "node -e \"const e=process.env,k='GREMION_PRODUCTION_STACK';if(!(e[k]||'').trim())e[k]='none';process.exit(require('node:child_process').spawnSync('pnpm run test:integration',{stdio:'inherit',shell:true}).status??1)\"",
       "timeoutMs": 600000,
       "requiresStack": true,
-      "testGlobs": ["gremion-ui/src/**/*.integration.test.ts"]
+      "testGlobs": [
+        "gremion-ui/src/**/*.integration.test.ts",
+        "modules/board/app/**/*.integration.test.ts",
+        "modules/calendar/app/**/*.integration.test.ts",
+        "modules/elections/app/**/*.integration.test.ts",
+        "modules/files/app/**/*.integration.test.ts",
+        "modules/messaging/app/**/*.integration.test.ts",
+        "modules/votes/app/**/*.integration.test.ts"
+      ]
+    },
+    {
+      "//": "TASK-205a: the interim module overlay's and the disabled-module test lane's own node:test guards live beside the scripts they guard (scripts/verify/suites/unit.mjs#scriptTestFiles collects the same glob).",
+      "id": "kernel-ui-scripts-node-test",
+      "repo": "kernel",
+      "category": "unit",
+      "cwd": ".",
+      "kind": "node-test",
+      "command": "node --test --test-reporter=tap \"gremion-ui/scripts/*.test.mjs\"",
+      "requiresStack": false,
+      "testGlobs": ["gremion-ui/scripts/*.test.mjs"]
     },
     {
       "id": "kernel-ui-vitest-deselection",

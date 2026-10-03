@@ -23,6 +23,9 @@ node_modules/
 **/.svelte-kit/
 **/build/
 **/coverage/
+# TASK-205a: the disabled-module test lane (gremion-ui/scripts/module-lane.mjs) is a full src copy that
+# runLane removes after every run; a lane a killed run left behind must never reach the image.
+gremion-ui/_module-lane/
 
 # Environment secrets
 .env

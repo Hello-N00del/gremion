@@ -19,14 +19,15 @@ describe('roleVocabularyForTenant (D-VOCAB seam)', () => {
   })
 
   it('the exported default vocabulary IS Object.values(Role) (golden pin)', () => {
-    // Governance-only kernel Role enum: the finance + auditor roles were carved
-    // out with the finance module, so the default vocabulary is the four
-    // governance roles.
+    // The Role enum: the governance roles plus finance and auditor, re-applied with the finance
+    // vocabulary (TASK-205a; the carve had removed them with the finance module).
     expect(DEFAULT_ROLE_VOCABULARY).toEqual([
       'guest',
       'member',
+      'finance',
       'council-admin',
       'it-admin',
+      'auditor',
     ])
     expect(Object.isFrozen(DEFAULT_ROLE_VOCABULARY)).toBe(true)
   })

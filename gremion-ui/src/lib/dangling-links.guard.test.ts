@@ -86,6 +86,9 @@ describe('no dangling internal links', () => {
     // Pins the second arm: without it the guard would force every module link
     // out of the kernel instead of letting a manifest re-enable it.
     expect(moduleOwnsSegment('committees')).toBe(true)
-    expect(moduleOwnsSegment('votes')).toBe(false)
+    // TASK-205b: the votes module owns /votes now; a segment of a module that is not built (finance) is
+    // owned by nobody, so a link to it is still dangling.
+    expect(moduleOwnsSegment('votes')).toBe(true)
+    expect(moduleOwnsSegment('finance')).toBe(false)
   })
 })
