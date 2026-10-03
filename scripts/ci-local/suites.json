@@ -306,6 +306,16 @@
       "testGlobs": ["modules/content/app/scripts/*.test.mjs"]
     },
     {
+      "id": "kernel-module-messaging-synapse-node-test",
+      "repo": "kernel",
+      "category": "unit",
+      "cwd": ".",
+      "kind": "node-test",
+      "command": "node --test --test-reporter=tap \"modules/messaging/synapse/test/*.test.mjs\"",
+      "requiresStack": false,
+      "testGlobs": ["modules/messaging/synapse/test/*.test.mjs"]
+    },
+    {
       "id": "kernel-module-content-app-overlay-vitest",
       "repo": "kernel",
       "category": "unit",
