@@ -158,7 +158,7 @@ load_host_facts() {
 # `config --services` used to yield an empty field on both sides, which
 # compared equal. Each project renders from its own directory, as
 # scripts/check-pooled-stack.mjs does (ops and mail name COMPOSE_FILEs
-# relative to infra/host/ops and infra/host/mail).
+# relative to compose/observability and infra/host/mail).
 container_fingerprint() {
     local n f name dir svcs="" out
     out="$(docker ps -q)" || die "TRD-440: docker ps failed" "$GREMION_EXIT_ASSERT"
@@ -167,7 +167,7 @@ container_fingerprint() {
         f="${ROOT}/etc/env/${name}.env"
         [[ -f "$f" ]] || continue
         case "$name" in
-            ops)  dir="${RELEASE_DIR}/infra/host/ops" ;;
+            ops)  dir="${RELEASE_DIR}/compose/observability" ;;
             mail) dir="${RELEASE_DIR}/infra/host/mail" ;;
             *)    dir="$RELEASE_DIR" ;;
         esac
@@ -335,6 +335,9 @@ init_realm_only_kcadm() {   # <container> <origin>
         if [[ "$(jq -r '.attributes["gremion.ops-realm.sha256"] // ""' <<< "$have" | tr -d '\r')" == "$fp" ]]; then
             [[ -s "${ROOT}/etc/secrets/control-panel/client_secret" ]] \
                 || die "realm platform is present and equal, but etc/secrets/control-panel/client_secret is missing: regenerate the control-panel client's secret in Keycloak and write it there (0600)" "$GREMION_EXIT_ASSERT"
+            # TASK-039: the grafana client's secret (compose/observability).
+            [[ -s "${ROOT}/etc/secrets/grafana/client_secret" ]] \
+                || die "realm platform is present and equal, but etc/secrets/grafana/client_secret is missing: regenerate the grafana client's secret in Keycloak and write it there (0600)" "$GREMION_EXIT_ASSERT"
             ok "realm platform is present and equal to realm-export.ops.json for ${origin}"
             return 0
         fi
@@ -349,21 +352,29 @@ init_realm_only_kcadm() {   # <container> <origin>
     mkdir -p "$(dirname "$secret_file")"
     chmod 700 "$(dirname "$secret_file")"
     secret="$(openssl rand -hex 32 | tr -d '\r\n')"
-    OPS_CLIENT_SECRET="$secret" jq -c --arg origin "$origin" --arg fp "$fp" '
+    # TASK-039: the grafana client's secret, generated here like the panel's.
+    local gsecret gsecret_file="${ROOT}/etc/secrets/grafana/client_secret"
+    gsecret="$(openssl rand -hex 32 | tr -d '\r\n')"
+    OPS_CLIENT_SECRET="$secret" GRAFANA_CLIENT_SECRET="$gsecret" jq -c --arg origin "$origin" --arg fp "$fp" '
         (.clients[] | select(.clientId == "control-panel")) |= (
             .secret = $ENV.OPS_CLIENT_SECRET
             | .redirectUris = [$origin + "/*"]
             | .webOrigins = [$origin]
             | .attributes["post.logout.redirect.uris"] = ($origin + "/*"))
+        | (.clients[] | select(.clientId == "grafana")) |= (.secret = $ENV.GRAFANA_CLIENT_SECRET)
         | .attributes["gremion.ops-realm.sha256"] = $fp' "$tmpl" \
         | docker exec -i "$kc" "$KCADM_BIN" create realms -f - >/dev/null \
-        || { secret=""; die "kcadm refused to create realm platform (the client secret file was not touched)" "$GREMION_EXIT_ASSERT"; }
+        || { secret=""; gsecret=""; die "kcadm refused to create realm platform (the client secret files were not touched)" "$GREMION_EXIT_ASSERT"; }
     docker exec "$kc" "$KCADM_BIN" get realms/platform --fields realm >/dev/null \
-        || { secret=""; die "realm platform is absent after create (the client secret file was not touched)" "$GREMION_EXIT_ASSERT"; }
+        || { secret=""; gsecret=""; die "realm platform is absent after create (the client secret files were not touched)" "$GREMION_EXIT_ASSERT"; }
     # Written only now: after create AND the read-back succeeded.
     printf '%s\n' "$secret" | atomic_write "$secret_file" 600
     secret=""
-    ok "realm platform created; the control-panel client secret is in ${secret_file} (0600)"
+    mkdir -p "$(dirname "$gsecret_file")"
+    chmod 700 "$(dirname "$gsecret_file")"
+    printf '%s\n' "$gsecret" | atomic_write "$gsecret_file" 600
+    gsecret=""
+    ok "realm platform created; the control-panel client secret is in ${secret_file}, the grafana client secret in ${gsecret_file} (0600)"
 }
 
 cmd_init() {
@@ -418,6 +429,11 @@ cmd_init() {
     else
         info "WARNING: no mail.env on this host: the ops realm has no sender; add operators with --no-mail (Q23)"
     fi
+    # TASK-039: on this path tenant-create creates the ops realm from the
+    # template, so Keycloak generates the grafana client's secret; the ops
+    # project reads it from etc/secrets/grafana.
+    [[ -s "${ROOT}/etc/secrets/grafana/client_secret" ]] \
+        || info "NOTE: etc/secrets/grafana/client_secret is absent: Grafana (compose/observability) signs nobody in until the grafana client's secret is read with kcadm and written there, 0600 (compose/observability/README.md, Access, block A)"
     ok "init done"
 }
 

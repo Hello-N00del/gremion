@@ -24,3 +24,4 @@ expand-contract
 render-guards
 boundary-lint
 vendor-mail
+observability

@@ -1,0 +1,458 @@
+# compose/observability/grafana/provisioning/alerting/rules.yaml -- the
+# Grafana-managed alert rules (TASK-039; TRD-181/182/224, FLOW-OPS-009)
+# [D R17-23: Grafana alerting replaces Alertmanager].
+#
+# One rule per condition. Every rule reads ONE recording rule of
+# ../../../prometheus/rules.yml (gremion:cond:<name>, 0 or 1, labelled by
+# `component`) and fires on `> 0`; the threshold logic and every absent() arm
+# live there, under promtool tests. The title is the alertname; together with
+# `component` it is the grouping key of ../alerting/policies.yaml, so one
+# breached component is one e-mail.
+#
+# No data and an evaluation error both ALERT: a recording rule that stopped
+# producing, or a Prometheus that does not answer, is not a healthy world.
+# Templates are written plainly (`{{ $labels.component }}`): measured on the
+# pinned Grafana 12.4.0, alerting provisioning files are NOT environment-
+# expanded, and a `$$` stays literal and breaks the template. The README
+# carries the rule table; compose/observability/alerting.test.mjs pins every
+# field below.
+apiVersion: 1
+
+groups:
+  - orgId: 1
+    name: gremion-ops
+    folder: Gremion operations
+    interval: 1m
+    rules:
+      - uid: gremion-disk-above-70
+        title: DiskAbove70
+        condition: B
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: prometheus
+            model:
+              refId: A
+              expr: gremion:cond:disk_above_70
+              instant: true
+              range: false
+          - refId: B
+            datasourceUid: __expr__
+            relativeTimeRange:
+              from: 0
+              to: 0
+            model:
+              refId: B
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0]
+        noDataState: Alerting
+        execErrState: Alerting
+        for: 15m
+        isPaused: false
+        labels:
+          severity: warning
+        annotations:
+          summary: "Root filesystem above 70 percent, or its byte counts stopped arriving"
+          component: "{{ $labels.component }}"
+      - uid: gremion-memory-pressure
+        title: MemoryPressure
+        condition: B
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: prometheus
+            model:
+              refId: A
+              expr: gremion:cond:memory_pressure
+              instant: true
+              range: false
+          - refId: B
+            datasourceUid: __expr__
+            relativeTimeRange:
+              from: 0
+              to: 0
+            model:
+              refId: B
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0]
+        noDataState: Alerting
+        execErrState: Alerting
+        for: 10m
+        isPaused: false
+        labels:
+          severity: warning
+        annotations:
+          summary: "Less than 10 percent memory available, or the procfs reading is blind"
+          component: "{{ $labels.component }}"
+      - uid: gremion-container-unhealthy
+        title: ContainerUnhealthy2m
+        condition: B
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: prometheus
+            model:
+              refId: A
+              expr: gremion:cond:container_unhealthy
+              instant: true
+              range: false
+          - refId: B
+            datasourceUid: __expr__
+            relativeTimeRange:
+              from: 0
+              to: 0
+            model:
+              refId: B
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0]
+        noDataState: Alerting
+        execErrState: Alerting
+        for: 2m
+        isPaused: false
+        labels:
+          severity: critical
+        annotations:
+          summary: "A container is unhealthy, the log pipeline (vector) is not running, or the host collector stopped"
+          component: "{{ $labels.component }}"
+      - uid: gremion-cert-expiry
+        title: CertExpiresUnder20d
+        condition: B
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: prometheus
+            model:
+              refId: A
+              expr: gremion:cond:cert_expiry
+              instant: true
+              range: false
+          - refId: B
+            datasourceUid: __expr__
+            relativeTimeRange:
+              from: 0
+              to: 0
+            model:
+              refId: B
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0]
+        noDataState: Alerting
+        execErrState: Alerting
+        for: 1h
+        isPaused: false
+        labels:
+          severity: critical
+        annotations:
+          summary: "A served certificate expires in under 20 days, or the probe is blind"
+          component: "{{ $labels.component }}"
+      - uid: gremion-backup-failed
+        title: BackupFailedOrOverdue
+        condition: B
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: prometheus
+            model:
+              refId: A
+              expr: gremion:cond:backup_failed
+              instant: true
+              range: false
+          - refId: B
+            datasourceUid: __expr__
+            relativeTimeRange:
+              from: 0
+              to: 0
+            model:
+              refId: B
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0]
+        noDataState: Alerting
+        execErrState: Alerting
+        for: 10m
+        isPaused: false
+        labels:
+          severity: critical
+        annotations:
+          summary: "The last backup failed, or the backup timer is enabled and no backup ran in 26 hours"
+          component: "{{ $labels.component }}"
+      - uid: gremion-mail-queue
+        title: MailQueueOldest1h
+        condition: B
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: prometheus
+            model:
+              refId: A
+              expr: gremion:cond:mail_queue
+              instant: true
+              range: false
+          - refId: B
+            datasourceUid: __expr__
+            relativeTimeRange:
+              from: 0
+              to: 0
+            model:
+              refId: B
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0]
+        noDataState: Alerting
+        execErrState: Alerting
+        for: 5m
+        isPaused: false
+        labels:
+          severity: warning
+        annotations:
+          summary: "Oldest queued message older than one hour, or the mail scrape is blind"
+          component: "{{ $labels.component }}"
+      - uid: gremion-postgres-connections
+        title: PostgresConnections80pct
+        condition: B
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: prometheus
+            model:
+              refId: A
+              expr: gremion:cond:postgres_connections
+              instant: true
+              range: false
+          - refId: B
+            datasourceUid: __expr__
+            relativeTimeRange:
+              from: 0
+              to: 0
+            model:
+              refId: B
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0]
+        noDataState: Alerting
+        execErrState: Alerting
+        for: 10m
+        isPaused: false
+        labels:
+          severity: warning
+        annotations:
+          summary: "Postgres connections above 80 percent of max, or the collector is blind"
+          component: "{{ $labels.component }}"
+      - uid: gremion-edge-port80
+        title: EdgePort80Down
+        condition: B
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: prometheus
+            model:
+              refId: A
+              expr: gremion:cond:edge_port80
+              instant: true
+              range: false
+          - refId: B
+            datasourceUid: __expr__
+            relativeTimeRange:
+              from: 0
+              to: 0
+            model:
+              refId: B
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0]
+        noDataState: Alerting
+        execErrState: Alerting
+        for: 5m
+        isPaused: false
+        labels:
+          severity: critical
+        annotations:
+          summary: "Port 80 on the edge address is not answering the ACME challenge probe"
+          component: "{{ $labels.component }}"
+      - uid: gremion-broker-consumer-stalled
+        title: BrokerConsumerStalled
+        condition: B
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: prometheus
+            model:
+              refId: A
+              expr: gremion:cond:broker_consumer_stalled
+              instant: true
+              range: false
+          - refId: B
+            datasourceUid: __expr__
+            relativeTimeRange:
+              from: 0
+              to: 0
+            model:
+              refId: B
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0]
+        noDataState: Alerting
+        execErrState: Alerting
+        for: 5m
+        isPaused: false
+        labels:
+          severity: critical
+        annotations:
+          summary: "A broker consumer has work outstanding and its ack floor has not moved in 10 minutes, or the broker reading is blind"
+          component: "{{ $labels.component }}"
+      - uid: gremion-storage-above-70
+        title: StorageComponentAbove70pct
+        condition: B
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: prometheus
+            model:
+              refId: A
+              expr: gremion:cond:storage_above_70
+              instant: true
+              range: false
+          - refId: B
+            datasourceUid: __expr__
+            relativeTimeRange:
+              from: 0
+              to: 0
+            model:
+              refId: B
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0]
+        noDataState: Alerting
+        execErrState: Alerting
+        for: 15m
+        isPaused: false
+        labels:
+          severity: warning
+        annotations:
+          summary: "A tracked storage component holds more than 70 percent of the host's provisioned disk (TRD-224)"
+          component: "{{ $labels.component }}"
+      - uid: gremion-third-party-unreachable
+        title: ThirdPartyUnreachable
+        condition: B
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: prometheus
+            model:
+              refId: A
+              expr: gremion:cond:third_party_unreachable
+              instant: true
+              range: false
+          - refId: B
+            datasourceUid: __expr__
+            relativeTimeRange:
+              from: 0
+              to: 0
+            model:
+              refId: B
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0]
+        noDataState: Alerting
+        execErrState: Alerting
+        for: 5m
+        isPaused: false
+        labels:
+          severity: warning
+        annotations:
+          summary: "A third-party service a council relies on is not answering (PRD-DEP-002)"
+          component: "{{ $labels.component }}"
+      - uid: gremion-signal-absent
+        title: SignalAbsent
+        condition: B
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: prometheus
+            model:
+              refId: A
+              expr: gremion:cond:signal_absent
+              instant: true
+              range: false
+          - refId: B
+            datasourceUid: __expr__
+            relativeTimeRange:
+              from: 0
+              to: 0
+            model:
+              refId: B
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0]
+        noDataState: Alerting
+        execErrState: Alerting
+        for: 5m
+        isPaused: false
+        labels:
+          severity: critical
+        annotations:
+          summary: "A monitoring signal stopped arriving (TRD-181): the named component is blind"
+          component: "{{ $labels.component }}"

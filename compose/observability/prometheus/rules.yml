@@ -1,0 +1,139 @@
+# compose/observability/prometheus/rules.yml -- the alert CONDITIONS (TASK-039).
+#
+# Each gremion:cond:<name> series is 0 (healthy) or 1 (breached) and carries a
+# `component` label naming what it is about. Grafana-managed rules
+# (grafana/provisioning/alerting/rules.yaml) alert on `cond > 0`, grouped by
+# [alertname, component], so one breached component is one e-mail [D R17-23].
+#
+# Fail-closed, as spec A section K asked of the eight original rules: every
+# condition but third_party_unreachable carries an `absent(...)` arm, so a
+# series that stops arriving (a dead collector, a blind scrape) FIRES instead
+# of reading as a comfortable 0. third_party_unreachable has none on purpose:
+# the operator's probe list may be empty; the blackbox exporter going blind is
+# caught by signal_absent{component="blackbox"} and by cert_expiry's own arm.
+# Conditions that could otherwise return nothing in a healthy world end in a
+# `vector(0)` fallback, because Grafana treats "no data" as alerting.
+#
+# Tested by prometheus/rules.test.yml (promtool test rules, both directions and
+# every scenario of the brief's TDD 4, 5, 8 and 9) through
+# test/host/integration/ops-check-configs.sh.
+groups:
+  - name: gremion-cond
+    interval: 15s
+    rules:
+      # Root filesystem above 70 percent (spec A DiskAbove70). Bytes from the
+      # host collector's df, never from an ops mount (Q16).
+      - record: gremion:cond:disk_above_70
+        expr: |
+          label_replace(
+            100 * (1 - max(gremion_host_filesystem_avail_bytes{mountpoint="/"}) / max(gremion_host_filesystem_size_bytes{mountpoint="/"})) > bool 70,
+            "component", "rootfs", "", "")
+          or label_replace(absent(gremion_host_filesystem_size_bytes{mountpoint="/"}), "component", "rootfs", "", "")
+          or label_replace(absent(gremion_host_filesystem_avail_bytes{mountpoint="/"}), "component", "rootfs", "", "")
+
+      # Less than 10 percent of memory available (procfs via Alloy).
+      - record: gremion:cond:memory_pressure
+        expr: |
+          label_replace(
+            100 * max(node_memory_MemAvailable_bytes) / max(node_memory_MemTotal_bytes) < bool 10,
+            "component", "memory", "", "")
+          or label_replace(absent(node_memory_MemAvailable_bytes), "component", "memory", "", "")
+          or label_replace(absent(node_memory_MemTotal_bytes), "component", "memory", "", "")
+
+      # A container Docker reports unhealthy, or the log pipeline (vector) not
+      # running at all: while it is stopped nothing rotates or prunes the edge
+      # logs (docs/log-retention-policy.md, "Residuals").
+      - record: gremion:cond:container_unhealthy
+        expr: |
+          label_replace(
+            max by (name) (gremion_container_unhealthy or (gremion_container_up{service="vector"} == bool 0)),
+            "component", "$1", "name", "(.*)")
+          or label_replace(absent(gremion_container_up{service="vector"}), "component", "vector", "", "")
+          or label_replace(absent(gremion_metrics_textfile_timestamp_seconds), "component", "host-collector", "", "")
+
+      # A served certificate expires in under 20 days.
+      - record: gremion:cond:cert_expiry
+        expr: |
+          label_replace(
+            min by (instance) (probe_ssl_earliest_cert_expiry{job=~"blackbox-https|blackbox-control|blackbox-tls|blackbox-smtp"} - time()) / 86400 < bool 20,
+            "component", "$1", "instance", "(.*)")
+          or label_replace(absent(probe_ssl_earliest_cert_expiry{job="blackbox-https"}), "component", "blackbox-https", "", "")
+
+      # Q8, rewritten from BackupOlderThan26h [D R15-1]: the last run FAILED,
+      # or the timer is ENABLED and the last run is older than 26 hours. A
+      # disabled timer with a good last run is silent; a missing
+      # last-backup.json is signal_absent{component="backup-record"}; a blind
+      # collector (no timer state at all) fires here.
+      - record: gremion:cond:backup_failed
+        expr: |
+          label_replace(
+            clamp_max(
+              (max(gremion_backup_last_ok) == bool 0)
+              + on() ((max(gremion_backup_timer_enabled) == bool 1) * on() ((time() - max(gremion_backup_last_ts_seconds)) > bool 93600)),
+              1),
+            "component", "backup", "", "")
+          or label_replace(absent(gremion_backup_timer_enabled), "component", "backup", "", "")
+          or label_replace(vector(0), "component", "backup", "", "")
+
+      # UNVERIFIED SERIES (spec A): series name unverified until section L
+      # step 7; see S4. Fail-closed, so a wrong name alerts, never goes quiet.
+      - record: gremion:cond:mail_queue
+        expr: |
+          label_replace(max(stalwart_queue_oldest_message_seconds) > bool 3600, "component", "stalwart", "", "")
+          or label_replace(absent(stalwart_queue_oldest_message_seconds), "component", "stalwart", "", "")
+
+      - record: gremion:cond:postgres_connections
+        expr: |
+          label_replace(
+            max(gremion_postgres_connections_used) / max(gremion_postgres_connections_max) > bool 0.8,
+            "component", "postgres", "", "")
+          or label_replace(absent(gremion_postgres_connections_used), "component", "postgres", "", "")
+          or label_replace(absent(gremion_postgres_connections_max), "component", "postgres", "", "")
+
+      # :80 must answer the ACME challenge probe (section C).
+      - record: gremion:cond:edge_port80
+        expr: |
+          label_replace(min by (instance) (probe_success{job="blackbox-acme"}) == bool 0, "component", "$1", "instance", "(.*)")
+          or label_replace(absent(probe_success{job="blackbox-acme"}), "component", "blackbox-acme", "", "")
+
+      # TRD-181 broker lag: a consumer with work outstanding (pending or
+      # unacknowledged) whose ack floor has not moved in 10 minutes. Gauges
+      # from the host collector's `jsz` read inside the broker container (Q3).
+      - record: gremion:cond:broker_consumer_stalled
+        expr: |
+          label_join(
+            max by (account, stream, consumer) (
+              ((gremion_nats_consumer_num_pending + gremion_nats_consumer_num_ack_pending) > bool 0)
+              * (changes(gremion_nats_consumer_ack_floor_stream_seq[10m]) == bool 0)
+            ),
+            "component", "/", "account", "stream", "consumer")
+          or label_replace(absent(gremion_nats_jsz_up), "component", "nats", "", "")
+          or label_replace(vector(0), "component", "nats", "", "")
+
+      # TRD-224: a tracked storage component above 70 percent of the host's
+      # PROVISIONED disk -- the filesystem at GREMION_DISK_ROOT, never `/`.
+      - record: gremion:cond:storage_above_70
+        expr: |
+          (max by (component) (gremion_storage_component_bytes) / on() group_left() max(gremion_host_disk_provisioned_bytes)) > bool 0.70
+          or label_replace(absent(gremion_host_disk_provisioned_bytes), "component", "disk-root", "", "")
+          or label_replace(absent(gremion_storage_component_bytes), "component", "storage-components", "", "")
+
+      # PRD-DEP-002 (operator half): a third-party service a council relies on
+      # is not answering. No absent() arm: see the header.
+      - record: gremion:cond:third_party_unreachable
+        expr: |
+          label_replace(min by (service) (probe_success{kind="third_party"}) == bool 0, "component", "$1", "service", "(.*)")
+          or label_replace(vector(0), "component", "third-party", "", "")
+
+      # TRD-181: a signal that stopped arriving. One component per source, so
+      # a dead collector is one e-mail naming it, not silence.
+      - record: gremion:cond:signal_absent
+        expr: |
+          label_replace(absent(gremion_metrics_textfile_timestamp_seconds), "component", "host-collector", "", "")
+          or label_replace((time() - max(gremion_metrics_textfile_timestamp_seconds)) > bool 600, "component", "host-collector", "", "")
+          or label_replace(absent(gremion_backup_last_ok), "component", "backup-record", "", "")
+          or label_replace(absent(node_memory_MemAvailable_bytes), "component", "host-procfs", "", "")
+          or label_replace(absent(gremion_nats_jsz_up), "component", "nats", "", "")
+          or label_replace(absent(probe_success{job="blackbox-https"}), "component", "blackbox", "", "")
+          or label_replace(absent(gremion_storage_component_bytes), "component", "storage-components", "", "")
+          or label_replace(vector(0), "component", "none", "", "")

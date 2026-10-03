@@ -1,0 +1,28 @@
+# compose/observability/grafana/provisioning/alerting/policies.yaml -- the
+# notification policy (TRD-182, FLOW-OPS-009).
+#
+# Exactly one deduplicated, grouped e-mail per breached component, and one
+# resolve notice when it clears:
+#   group_by        [alertname, component]: a second breach of the SAME
+#                   component while the group fires adds no e-mail; a breach
+#                   of another component is its own group.
+#   group_wait      30s: the first notice waits this long for siblings.
+#   group_interval  5m: a group that changed is re-notified at most this often.
+#   repeat_interval 8760h: an unchanged open condition is not repeated (Q7).
+#                   Grafana's embedded Alertmanager keeps its notification log
+#                   for a bounded period (about 5 days), so an alert that stays
+#                   open longer may be notified again once the log entry has
+#                   expired: a named deviation for the operator [A, R16-6].
+# The resolve notice is the contact point's (disableResolveMessage: false,
+# rendered by render-ops.sh into runtime/ops/grafana-provisioning).
+# compose/observability/alerting.test.mjs refuses a shorter repeat, a group_by
+# without alertname, and a contact point with resolve notices off.
+apiVersion: 1
+
+policies:
+  - orgId: 1
+    receiver: platform
+    group_by: ["alertname", "component"]
+    group_wait: 30s
+    group_interval: 5m
+    repeat_interval: 8760h

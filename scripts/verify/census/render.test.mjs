@@ -56,7 +56,7 @@ test('TASK-048b: the state plan with docker-compose.state-pins.yml notes "pins: 
 })
 
 test('mail and ops render from their own project directories', () => {
-  for (const [name, dir] of [['mail', 'infra/host/mail'], ['ops', 'infra/host/ops']]) {
+  for (const [name, dir] of [['mail', 'infra/host/mail'], ['ops', 'compose/observability']]) {
     const plan = planRender(byName(name), { root: '/r', exists: () => true, readText: fakeTemplate(['COMPOSE_FILE=docker-compose.yml', 'COMPOSE_PROFILES=x']) })
     assert.equal(plan.argv[plan.argv.indexOf('--project-directory') + 1], path.resolve('/r', dir))
     assert.equal(plan.argv[plan.argv.indexOf('-f') + 1], path.join(path.resolve('/r', dir), 'docker-compose.yml'))

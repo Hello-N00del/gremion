@@ -30,6 +30,7 @@ import { runFixtureMissingTool, runFixtureNodeZero, runFixtureVitestAllskip } fr
 import { DEFERRED_BATS_NOTE, INTEGRATION_PARTS, runIntegrationSuite } from './suites/integration.mjs'
 import { runIsolationSuite } from './suites/isolation.mjs'
 import { runMigrationHashSuite } from './suites/migration-hash.mjs'
+import { runObservabilitySuite } from './suites/observability.mjs'
 import { runTypecheckSuite } from './suites/typecheck.mjs'
 import { runUnitSuite, UNIT_PARTS } from './suites/unit.mjs'
 import { run, tail } from './lib/proc.mjs'
@@ -108,6 +109,8 @@ export const SUITE_REGISTRY = {
     }
     return { toolMissing: null, unparseable: true, collected: 0, passed: 0, failed: 0, skipped: 0, detail: `ops/vendor-mail/suite-cli.mjs: exit ${String(res.code ?? res.signal)} without a result line\n${tail(String(res.stdout) + String(res.stderr))}` }
   },
+  // TASK-039 (TDD 18): the ops project's static guards, compose/observability/*.test.mjs.
+  observability: () => runObservabilitySuite({ root: REPO_ROOT }),
   ...UNIT_PART_ENTRIES,
   ...INTEGRATION_PART_ENTRIES,
   __fixture_node_zero__: runFixtureNodeZero,

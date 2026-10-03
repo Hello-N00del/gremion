@@ -3,8 +3,9 @@
 //
 //   node ops/vendor-mail/check-identities.mjs [--mail-env F] [--ops-env F]
 //
-// Alertmanager authenticates as ALERT_SMTP_USER and writes ALERT_EMAIL_FROM
-// into every alert (infra/host/ops/alertmanager.yml.tmpl). Stalwart's
+// The alert sender (Grafana alerting in compose/observability since TASK-039,
+// Alertmanager before) authenticates as ALERT_SMTP_USER and writes
+// ALERT_EMAIL_FROM into every alert. Stalwart's
 // must-match-sender (config.toml.tmpl [session.auth]) refuses a From that is
 // not the authenticated principal's with 5.7.1, so the two MUST be the same
 // address, and it must be the principal provision-roles.sh creates:
@@ -43,7 +44,7 @@ export function identityViolations(mail, ops) {
   const a = mail.ALERT_SMTP_PASSWORD
   const b = ops.ALERT_SMTP_PASSWORD
   if (!a || !b) out.push('ALERT_SMTP_PASSWORD is missing from mail.env or ops.env')
-  else if (sha256(a) !== sha256(b)) out.push('ALERT_SMTP_PASSWORD differs between mail.env and ops.env (alert_smtp drift): Alertmanager would authenticate with a password alerts@ does not hold')
+  else if (sha256(a) !== sha256(b)) out.push('ALERT_SMTP_PASSWORD differs between mail.env and ops.env (alert_smtp drift): Grafana alerting (compose/observability) would authenticate with a password alerts@ does not hold')
   return { unparseable: null, violations: out }
 }
 

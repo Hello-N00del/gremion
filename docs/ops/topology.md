@@ -121,9 +121,16 @@ is not yet fixed — TRD-352 assigns pinning it to the re-init, owner the operat
 | Kernel API service (Fastify) | new deployment unit, class-5 | — [D R19-D22] | `[A]` to pin at re-init |
 | Governance core service (meeting, Antrag, Beschluss, Protokoll; option G2) | new deployment unit, class-5 | — [D R19-D9] | `[A]` to pin at re-init |
 | Valkey | cache tier, class-5, replaces Redis | — [D R20-D31] | `[A]` to pin at re-init |
-| Tempo | trace store, class-4 (observability) | — [D R19-D27] | `[A]` to pin at re-init |
+| Tempo | trace store, class-4 (observability) | `grafana/tempo:2.10.0` (digest-pinned, `compose/observability`, TASK-039) [D R19-D27] | pinned |
+| Grafana | ops dashboards and alerting, class-4 (observability) [D R17-23] | `grafana/grafana:12.4.0` (digest-pinned, TASK-039) | pinned |
+| Loki | ops log store, class-4 (observability) [D R17-25] | `grafana/loki:3.7.0` (digest-pinned, TASK-039) | pinned |
+| Alloy | ops collector and OTLP ingest, class-4 (observability) | `grafana/alloy:v1.14.0` (digest-pinned, TASK-039) | pinned |
+| Prometheus, blackbox exporter | ops metrics store and probes, class-4 (observability) | `prom/prometheus:v3.1.0`, `prom/blackbox-exporter:v0.26.0` (digest-pinned) | pinned |
 
-The kernel API service, governance service, Valkey and Tempo are north-star/class-4 additions
+The observability rows (Tempo, Grafana, Loki, Alloy, Prometheus, the blackbox exporter) are one
+exception-class-4 unit, the operator-only `${STACK}-ops` project of `compose/observability/`
+(TASK-039): non-council, no route to a council data store (TRD-203), no member-facing surface
+(TRD-199). The kernel API service, governance service, Valkey and Tempo are north-star/class-4 additions
 already decided before the rebuild (TRD-351 §11.5 rounds 19–20); they enter this record at
 re-initialisation with their own dated class-5 entry and builder-week figure (kernel API, governance
 service, Valkey = class 5; Tempo = class 4), rather than as later pilot-time changes.

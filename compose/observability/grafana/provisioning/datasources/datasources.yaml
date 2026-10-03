@@ -1,0 +1,32 @@
+# compose/observability/grafana/provisioning/datasources/datasources.yaml
+# The three stores of the ops project, by service name on the ops network.
+# Fixed uids: the alert rules (../alerting/rules.yaml) name `prometheus`.
+# None is editable from the UI: provisioning owns them.
+apiVersion: 1
+
+deleteDatasources: []
+
+datasources:
+  - name: Prometheus
+    uid: prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: false
+    jsonData:
+      timeInterval: 15s
+
+  - name: Loki
+    uid: loki
+    type: loki
+    access: proxy
+    url: http://loki:3100
+    editable: false
+
+  - name: Tempo
+    uid: tempo
+    type: tempo
+    access: proxy
+    url: http://tempo:3200
+    editable: false

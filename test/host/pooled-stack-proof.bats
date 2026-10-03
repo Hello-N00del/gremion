@@ -169,7 +169,8 @@ unresolved_compose_files() {
 }
 
 # assert_env_files_resolve: state and both app colours run compose from the
-# repo root, ops and mail from infra/host/<project> (the proof's compose()).
+# repo root, ops from compose/observability (TASK-039) and mail from
+# infra/host/mail (the proof's compose()).
 assert_env_files_resolve() {
     local env="${POOLED_OUT}/env" bad=""
     local p
@@ -177,10 +178,10 @@ assert_env_files_resolve() {
         [ -s "${env}/${p}.env" ]
         bad+="$(unresolved_compose_files "${env}/${p}.env" "$REPO_ROOT")"
     done
-    for p in ops mail; do
-        [ -s "${env}/${p}.env" ]
-        bad+="$(unresolved_compose_files "${env}/${p}.env" "${REPO_ROOT}/infra/host/${p}")"
-    done
+    [ -s "${env}/ops.env" ]
+    bad+="$(unresolved_compose_files "${env}/ops.env" "${REPO_ROOT}/compose/observability")"
+    [ -s "${env}/mail.env" ]
+    bad+="$(unresolved_compose_files "${env}/mail.env" "${REPO_ROOT}/infra/host/mail")"
     [ -z "$bad" ] || { echo "unresolved COMPOSE_FILE entries: $bad" >&2; return 1; }
 }
 
@@ -204,7 +205,8 @@ assert_env_files_resolve() {
     assert_env_files_resolve
     local rel=".scratch/pooled-stack-proof/t040-shim-bats-${BATS_TEST_NUMBER}-$$"
     grep -qxF "COMPOSE_FILE=\"docker-compose.yml:docker-compose.prod.yml:test/host/fixtures/pooled-stack/docker-compose.state-pins.yml:${rel}/state.proof.yml\"" "${POOLED_OUT}/env/state.env"
-    grep -qxF "COMPOSE_FILE=\"docker-compose.yml:../../../${rel}/ops.proof.yml\"" "${POOLED_OUT}/env/ops.env"
+    # TASK-039: ops runs from compose/observability, two levels down.
+    grep -qxF "COMPOSE_FILE=\"docker-compose.yml:../../${rel}/ops.proof.yml\"" "${POOLED_OUT}/env/ops.env"
     grep -qxF "COMPOSE_FILE=\"docker-compose.yml:../../../${rel}/mail.proof.yml\"" "${POOLED_OUT}/env/mail.env"
 }
 

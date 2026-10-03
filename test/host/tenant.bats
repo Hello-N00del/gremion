@@ -501,6 +501,32 @@ exit 0'
     [[ "$output" == *"differs"* ]]
 }
 
+@test "init --realm-only --keycloak-container: the grafana client's secret goes to etc/secrets/grafana/client_secret 0600, never on an argv; an equal realm without it is refused (TASK-039 G11)" {
+    shim_kcadm
+    KEYCLOAK_ADMIN=admin KEYCLOAK_ADMIN_PASSWORD=unit-kc-admin-secret \
+        run "$LAUNCHER" init --realm-only --keycloak-container kc-fixture --panel-origin https://panel.fixture.example
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; cat "$SHIM_LOG"; return 1; }
+    local f="${GREMION_ROOT}/etc/secrets/grafana/client_secret" secret panel
+    [ -s "$f" ]
+    if [ "$(stat -c %a "$f" 2>/dev/null)" != "" ]; then [ "$(stat -c %a "$f")" = 600 ]; fi
+    secret="$(tr -d '\n' < "$f")"
+    panel="$(tr -d '\n' < "${GREMION_ROOT}/etc/secrets/control-panel/client_secret")"
+    [ "${#secret}" -ge 32 ] && [ "$secret" != "$panel" ]
+    run jq -r --arg s "$secret" '.clients[] | select(.clientId == "grafana") | [.secret == $s, (.redirectUris | tostring)] | @tsv' "${GREMION_ROOT}/realm.json"
+    [ "$output" = $'true\t["http://127.0.0.1:3000/login/generic_oauth"]' ] || { echo "$output"; return 1; }
+    ! grep -qF -- "$secret" "$SHIM_LOG" || { echo "grafana client secret on an argv"; return 1; }
+    [[ "$output" != *"$secret"* ]]
+    # The committed template carries no grafana secret at all.
+    run jq -e '.clients[] | select(.clientId == "grafana") | has("secret") | not' "${REL}/docker/keycloak/realm-export.ops.json"
+    [ "$status" -eq 0 ]
+    # Equal realm, grafana secret gone: refused, naming the file.
+    rm -f "$f"
+    KEYCLOAK_ADMIN=admin KEYCLOAK_ADMIN_PASSWORD=unit-kc-admin-secret \
+        run "$LAUNCHER" init --realm-only --keycloak-container kc-fixture --panel-origin https://panel.fixture.example
+    [ "$status" -eq 1 ] || { echo "status=$status $output"; return 1; }
+    [[ "$output" == *"etc/secrets/grafana/client_secret is missing"* ]]
+}
+
 @test "init --realm-only --keycloak-container: a transient kcadm error is never 'absent' -- no create, the client secret untouched (review C, r2)" {
     shim_kcadm
     mkdir -p "${GREMION_ROOT}/etc/secrets/control-panel"

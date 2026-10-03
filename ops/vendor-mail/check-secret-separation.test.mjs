@@ -81,7 +81,7 @@ const renders = (over = {}) =>
     { id: 'state', render: { services: { keycloak: { environment: { A: 'x' } } } } },
     { id: 'app-blue', render: svc({ B: 'y' }) },
     { id: 'app-green', render: svc({ B: 'y' }) },
-    { id: 'ops', render: { services: { alertmanager: { environment: {} } } } },
+    { id: 'ops', render: { services: { grafana: { environment: {} } } } },
     { id: 'mail', render: { services: { stalwart: { environment: { STALWART_PATH: '/opt/stalwart' } } } } },
   ].map((r) => (r.id in over ? { id: r.id, render: over[r.id] } : r))
 
@@ -125,8 +125,8 @@ test('(b) an embedded vendor value (a URL password) is RED too', () => {
 })
 
 test('(b) an ops service holding the alerts@ password in its environment is RED', () => {
-  const r = composeViolations(renders({ ops: { services: { alertmanager: { environment: { P: 'fixture-alert-smtp-value' } } } } }), VENDOR, ALLOW)
-  assert.match(r.violations.join('\n'), /ops\/alertmanager: environment P resolves to the vendor secret ALERT_SMTP_PASSWORD/)
+  const r = composeViolations(renders({ ops: { services: { grafana: { environment: { P: 'fixture-alert-smtp-value' } } } } }), VENDOR, ALLOW)
+  assert.match(r.violations.join('\n'), /ops\/grafana: environment P resolves to the vendor secret ALERT_SMTP_PASSWORD/)
 })
 
 test('(b) zero app services is RED (the arm read nothing)', () => {

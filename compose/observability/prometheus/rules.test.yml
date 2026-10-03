@@ -1,0 +1,360 @@
+# compose/observability/prometheus/rules.test.yml -- run by
+#   promtool test rules rules.test.yml   (from /etc/prometheus in the pinned image)
+# through test/host/integration/ops-check-configs.sh.
+#
+# Both directions of every condition (TASK-039 TDD 4): a healthy world in which
+# not one condition is 1, and a blind world (every collector gone) in which
+# every fail-closed condition is 1. Then the brief's scenarios: the backup
+# signal (TDD 5), the TRD-224 component rule (TDD 8) and the broker lag (TDD 9).
+rule_files:
+  - rules.yml
+
+evaluation_interval: 15s
+
+tests:
+  # ---- healthy: every condition 0 ----------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'gremion_host_filesystem_avail_bytes{mountpoint="/",instance="host",job="host"}'
+        values: '900+0x90'
+      - series: 'gremion_host_filesystem_size_bytes{mountpoint="/",instance="host",job="host"}'
+        values: '1000+0x90'
+      - series: 'node_memory_MemAvailable_bytes{instance="host",job="host"}'
+        values: '800+0x90'
+      - series: 'node_memory_MemTotal_bytes{instance="host",job="host"}'
+        values: '1000+0x90'
+      - series: 'gremion_container_unhealthy{name="gremion-app-blue-gremion-ui-1",instance="host",job="host"}'
+        values: '0+0x90'
+      - series: 'gremion_container_unhealthy{name="gremion-state-vector-1",instance="host",job="host"}'
+        values: '0+0x90'
+      - series: 'gremion_container_up{name="gremion-state-vector-1",service="vector",project="gremion-state",instance="host",job="host"}'
+        values: '1+0x90'
+      - series: 'gremion_metrics_textfile_timestamp_seconds{instance="host",job="host"}'
+        values: '0+60x90'
+      - series: 'probe_ssl_earliest_cert_expiry{job="blackbox-https",instance="https://example.org"}'
+        values: '5184000+0x90'
+      - series: 'probe_success{job="blackbox-https",instance="https://example.org"}'
+        values: '1+0x90'
+      - series: 'gremion_backup_last_ok{instance="host",job="host"}'
+        values: '1+0x90'
+      - series: 'gremion_backup_last_ts_seconds{instance="host",job="host"}'
+        values: '0+0x90'
+      - series: 'gremion_backup_timer_enabled{instance="host",job="host"}'
+        values: '1+0x90'
+      - series: 'stalwart_queue_oldest_message_seconds{job="stalwart",instance="mail.example.org"}'
+        values: '10+0x90'
+      - series: 'gremion_postgres_connections_used{instance="host",job="host"}'
+        values: '10+0x90'
+      - series: 'gremion_postgres_connections_max{instance="host",job="host"}'
+        values: '100+0x90'
+      - series: 'probe_success{job="blackbox-acme",instance="http://203.0.113.10:80/.well-known/acme-challenge/probe"}'
+        values: '1+0x90'
+      - series: 'gremion_nats_jsz_up{instance="host",job="host"}'
+        values: '1+0x90'
+      - series: 'gremion_nats_consumer_num_pending{account="A",stream="S",consumer="C",instance="host",job="host"}'
+        values: '0+0x90'
+      - series: 'gremion_nats_consumer_num_ack_pending{account="A",stream="S",consumer="C",instance="host",job="host"}'
+        values: '0+0x90'
+      - series: 'gremion_nats_consumer_ack_floor_stream_seq{account="A",stream="S",consumer="C",instance="host",job="host"}'
+        values: '7+0x90'
+      - series: 'gremion_storage_component_bytes{component="pg-data",instance="host",job="host"}'
+        values: '10+0x90'
+      - series: 'gremion_host_disk_provisioned_bytes{path="/var/lib/docker",instance="host",job="host"}'
+        values: '100+0x90'
+      - series: 'probe_success{job="blackbox-third-party",kind="third_party",service="nextcloud",instance="https://cloud.example.org/status.php"}'
+        values: '1+0x90'
+    promql_expr_test:
+      - expr: gremion:cond:disk_above_70
+        eval_time: 70m
+        exp_samples:
+          - labels: 'gremion:cond:disk_above_70{component="rootfs"}'
+            value: 0
+      - expr: gremion:cond:memory_pressure
+        eval_time: 70m
+        exp_samples:
+          - labels: 'gremion:cond:memory_pressure{component="memory"}'
+            value: 0
+      - expr: gremion:cond:container_unhealthy
+        eval_time: 70m
+        exp_samples:
+          - labels: 'gremion:cond:container_unhealthy{component="gremion-app-blue-gremion-ui-1",name="gremion-app-blue-gremion-ui-1"}'
+            value: 0
+          - labels: 'gremion:cond:container_unhealthy{component="gremion-state-vector-1",name="gremion-state-vector-1"}'
+            value: 0
+      - expr: gremion:cond:cert_expiry
+        eval_time: 70m
+        exp_samples:
+          - labels: 'gremion:cond:cert_expiry{component="https://example.org",instance="https://example.org"}'
+            value: 0
+      - expr: gremion:cond:backup_failed
+        eval_time: 70m
+        exp_samples:
+          - labels: 'gremion:cond:backup_failed{component="backup"}'
+            value: 0
+      - expr: gremion:cond:mail_queue
+        eval_time: 70m
+        exp_samples:
+          - labels: 'gremion:cond:mail_queue{component="stalwart"}'
+            value: 0
+      - expr: gremion:cond:postgres_connections
+        eval_time: 70m
+        exp_samples:
+          - labels: 'gremion:cond:postgres_connections{component="postgres"}'
+            value: 0
+      - expr: gremion:cond:edge_port80
+        eval_time: 70m
+        exp_samples:
+          - labels: 'gremion:cond:edge_port80{component="http://203.0.113.10:80/.well-known/acme-challenge/probe",instance="http://203.0.113.10:80/.well-known/acme-challenge/probe"}'
+            value: 0
+      - expr: gremion:cond:broker_consumer_stalled
+        eval_time: 70m
+        exp_samples:
+          - labels: 'gremion:cond:broker_consumer_stalled{account="A",component="A/S/C",consumer="C",stream="S"}'
+            value: 0
+          - labels: 'gremion:cond:broker_consumer_stalled{component="nats"}'
+            value: 0
+      - expr: gremion:cond:storage_above_70
+        eval_time: 70m
+        exp_samples:
+          - labels: 'gremion:cond:storage_above_70{component="pg-data"}'
+            value: 0
+      - expr: gremion:cond:third_party_unreachable
+        eval_time: 70m
+        exp_samples:
+          - labels: 'gremion:cond:third_party_unreachable{component="nextcloud",service="nextcloud"}'
+            value: 0
+          - labels: 'gremion:cond:third_party_unreachable{component="third-party"}'
+            value: 0
+      - expr: gremion:cond:signal_absent
+        eval_time: 70m
+        exp_samples:
+          - labels: 'gremion:cond:signal_absent{component="host-collector"}'
+            value: 0
+          - labels: 'gremion:cond:signal_absent{component="none"}'
+            value: 0
+
+  # ---- blind: every collector is gone, every fail-closed condition is 1 ---
+  - interval: 1m
+    input_series:
+      - series: 'up{job="prometheus",instance="127.0.0.1:9090"}'
+        values: '1+0x90'
+    promql_expr_test:
+      - expr: gremion:cond:disk_above_70
+        eval_time: 70m
+        exp_samples:
+          - labels: 'gremion:cond:disk_above_70{component="rootfs",mountpoint="/"}'
+            value: 1
+      - expr: gremion:cond:memory_pressure
+        eval_time: 70m
+        exp_samples:
+          - labels: 'gremion:cond:memory_pressure{component="memory"}'
+            value: 1
+      - expr: gremion:cond:container_unhealthy
+        eval_time: 70m
+        exp_samples:
+          - labels: 'gremion:cond:container_unhealthy{component="vector",service="vector"}'
+            value: 1
+          - labels: 'gremion:cond:container_unhealthy{component="host-collector"}'
+            value: 1
+      - expr: gremion:cond:cert_expiry
+        eval_time: 70m
+        exp_samples:
+          - labels: 'gremion:cond:cert_expiry{component="blackbox-https",job="blackbox-https"}'
+            value: 1
+      - expr: gremion:cond:backup_failed
+        eval_time: 70m
+        exp_samples:
+          - labels: 'gremion:cond:backup_failed{component="backup"}'
+            value: 1
+      - expr: gremion:cond:mail_queue
+        eval_time: 70m
+        exp_samples:
+          - labels: 'gremion:cond:mail_queue{component="stalwart"}'
+            value: 1
+      - expr: gremion:cond:postgres_connections
+        eval_time: 70m
+        exp_samples:
+          - labels: 'gremion:cond:postgres_connections{component="postgres"}'
+            value: 1
+      - expr: gremion:cond:edge_port80
+        eval_time: 70m
+        exp_samples:
+          - labels: 'gremion:cond:edge_port80{component="blackbox-acme",job="blackbox-acme"}'
+            value: 1
+      - expr: gremion:cond:broker_consumer_stalled
+        eval_time: 70m
+        exp_samples:
+          - labels: 'gremion:cond:broker_consumer_stalled{component="nats"}'
+            value: 1
+      - expr: gremion:cond:storage_above_70
+        eval_time: 70m
+        exp_samples:
+          - labels: 'gremion:cond:storage_above_70{component="disk-root"}'
+            value: 1
+          - labels: 'gremion:cond:storage_above_70{component="storage-components"}'
+            value: 1
+      - expr: gremion:cond:signal_absent
+        eval_time: 70m
+        exp_samples:
+          - labels: 'gremion:cond:signal_absent{component="host-collector"}'
+            value: 1
+          - labels: 'gremion:cond:signal_absent{component="backup-record"}'
+            value: 1
+          - labels: 'gremion:cond:signal_absent{component="host-procfs"}'
+            value: 1
+          - labels: 'gremion:cond:signal_absent{component="nats"}'
+            value: 1
+          - labels: 'gremion:cond:signal_absent{component="blackbox",job="blackbox-https"}'
+            value: 1
+          - labels: 'gremion:cond:signal_absent{component="storage-components"}'
+            value: 1
+          - labels: 'gremion:cond:signal_absent{component="none"}'
+            value: 0
+
+  # ---- TDD 5: the backup signal (Q8) ------------------------------------
+  # Timer DISABLED and the last run good but 27 hours old: silent. The old
+  # BackupOlderThan26h fired here for ever once the job was off [D R15-1].
+  - interval: 1h
+    input_series:
+      - series: 'gremion_backup_last_ok{instance="host",job="host"}'
+        values: '1+0x30'
+      - series: 'gremion_backup_last_ts_seconds{instance="host",job="host"}'
+        values: '0+0x30'
+      - series: 'gremion_backup_timer_enabled{instance="host",job="host"}'
+        values: '0+0x30'
+    promql_expr_test:
+      - expr: gremion:cond:backup_failed
+        eval_time: 27h
+        exp_samples:
+          - labels: 'gremion:cond:backup_failed{component="backup"}'
+            value: 0
+
+  # Timer ENABLED and the last run 27 hours old: fires.
+  - interval: 1h
+    input_series:
+      - series: 'gremion_backup_last_ok{instance="host",job="host"}'
+        values: '1+0x30'
+      - series: 'gremion_backup_last_ts_seconds{instance="host",job="host"}'
+        values: '0+0x30'
+      - series: 'gremion_backup_timer_enabled{instance="host",job="host"}'
+        values: '1+0x30'
+    promql_expr_test:
+      - expr: gremion:cond:backup_failed
+        eval_time: 27h
+        exp_samples:
+          - labels: 'gremion:cond:backup_failed{component="backup"}'
+            value: 1
+
+  # The last run FAILED (timer off, run fresh): fires.
+  - interval: 1m
+    input_series:
+      - series: 'gremion_backup_last_ok{instance="host",job="host"}'
+        values: '0+0x30'
+      - series: 'gremion_backup_last_ts_seconds{instance="host",job="host"}'
+        values: '0+60x30'
+      - series: 'gremion_backup_timer_enabled{instance="host",job="host"}'
+        values: '0+0x30'
+    promql_expr_test:
+      - expr: gremion:cond:backup_failed
+        eval_time: 20m
+        exp_samples:
+          - labels: 'gremion:cond:backup_failed{component="backup"}'
+            value: 1
+
+  # No last-backup.json yet (the collector runs and reports the timer): the
+  # backup condition is 0 and the ABSENCE is signal_absent's backup-record.
+  - interval: 1m
+    input_series:
+      - series: 'gremion_backup_timer_enabled{instance="host",job="host"}'
+        values: '1+0x30'
+      - series: 'gremion_metrics_textfile_timestamp_seconds{instance="host",job="host"}'
+        values: '0+60x30'
+    promql_expr_test:
+      - expr: gremion:cond:backup_failed
+        eval_time: 20m
+        exp_samples:
+          - labels: 'gremion:cond:backup_failed{component="backup"}'
+            value: 0
+      - expr: gremion:cond:signal_absent{component="backup-record"}
+        eval_time: 20m
+        exp_samples:
+          - labels: 'gremion:cond:signal_absent{component="backup-record"}'
+            value: 1
+
+  # ---- TDD 8: TRD-224, 71/100 fires, 69/100 silent; the denominator is the
+  # provisioned disk at GREMION_DISK_ROOT, not `/` (whose 10 % use is
+  # irrelevant here) --------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'gremion_host_filesystem_avail_bytes{mountpoint="/",instance="host",job="host"}'
+        values: '900+0x30'
+      - series: 'gremion_host_filesystem_size_bytes{mountpoint="/",instance="host",job="host"}'
+        values: '1000+0x30'
+      - series: 'gremion_storage_component_bytes{component="seeded",instance="host",job="host"}'
+        values: '71+0x30'
+      - series: 'gremion_storage_component_bytes{component="other",instance="host",job="host"}'
+        values: '69+0x30'
+      - series: 'gremion_host_disk_provisioned_bytes{path="/scratch/disk",instance="host",job="host"}'
+        values: '100+0x30'
+    promql_expr_test:
+      - expr: gremion:cond:storage_above_70
+        eval_time: 20m
+        exp_samples:
+          - labels: 'gremion:cond:storage_above_70{component="seeded"}'
+            value: 1
+          - labels: 'gremion:cond:storage_above_70{component="other"}'
+            value: 0
+      - expr: gremion:cond:disk_above_70
+        eval_time: 20m
+        exp_samples:
+          - labels: 'gremion:cond:disk_above_70{component="rootfs"}'
+            value: 0
+
+  # ---- TDD 9: broker lag. A consumer with 5 pending whose ack floor never
+  # moves is stalled; one that keeps acknowledging is not ------------------
+  - interval: 1m
+    input_series:
+      - series: 'gremion_nats_jsz_up{instance="host",job="host"}'
+        values: '1+0x30'
+      - series: 'gremion_nats_consumer_num_pending{account="A",stream="S",consumer="stuck",instance="host",job="host"}'
+        values: '5+0x30'
+      - series: 'gremion_nats_consumer_num_ack_pending{account="A",stream="S",consumer="stuck",instance="host",job="host"}'
+        values: '0+0x30'
+      - series: 'gremion_nats_consumer_ack_floor_stream_seq{account="A",stream="S",consumer="stuck",instance="host",job="host"}'
+        values: '3+0x30'
+      - series: 'gremion_nats_consumer_num_pending{account="A",stream="S",consumer="busy",instance="host",job="host"}'
+        values: '5+0x30'
+      - series: 'gremion_nats_consumer_num_ack_pending{account="A",stream="S",consumer="busy",instance="host",job="host"}'
+        values: '1+0x30'
+      - series: 'gremion_nats_consumer_ack_floor_stream_seq{account="A",stream="S",consumer="busy",instance="host",job="host"}'
+        values: '3+1x30'
+    promql_expr_test:
+      - expr: gremion:cond:broker_consumer_stalled
+        eval_time: 20m
+        exp_samples:
+          - labels: 'gremion:cond:broker_consumer_stalled{account="A",component="A/S/stuck",consumer="stuck",stream="S"}'
+            value: 1
+          - labels: 'gremion:cond:broker_consumer_stalled{account="A",component="A/S/busy",consumer="busy",stream="S"}'
+            value: 0
+          - labels: 'gremion:cond:broker_consumer_stalled{component="nats"}'
+            value: 0
+
+  # ---- TDD 16: an unreachable third party fires its own component only ---
+  - interval: 1m
+    input_series:
+      - series: 'probe_success{job="blackbox-third-party",kind="third_party",service="nextcloud",instance="https://cloud.example.org/status.php"}'
+        values: '0+0x30'
+      - series: 'probe_success{job="blackbox-third-party",kind="third_party",service="helios",instance="https://vote.example.org/"}'
+        values: '1+0x30'
+      - series: 'probe_success{job="blackbox-https",instance="https://example.org"}'
+        values: '1+0x30'
+    promql_expr_test:
+      - expr: gremion:cond:third_party_unreachable
+        eval_time: 20m
+        exp_samples:
+          - labels: 'gremion:cond:third_party_unreachable{component="nextcloud",service="nextcloud"}'
+            value: 1
+          - labels: 'gremion:cond:third_party_unreachable{component="helios",service="helios"}'
+            value: 0
+          - labels: 'gremion:cond:third_party_unreachable{component="third-party"}'
+            value: 0

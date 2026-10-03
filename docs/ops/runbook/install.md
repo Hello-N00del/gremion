@@ -1,6 +1,6 @@
 # Install: the from-zero bring-up
 
-- Version: 4.0.0
+- Version: 4.1.0
 - Wall-clock budget: one working day, from the start of step 1 to the asserted post-condition (PRD-PLAT-005)
 - Implements: TRD-200 (install), TRD-042 (the from-zero rebuild, R15-2), FLOW-OPS-002
 - First run: TASK-038, the pilot re-initialisation
@@ -20,7 +20,7 @@ one stack per host, five compose projects, each named by its own env file under
 |---|---|---|---|
 | `state.env` | `${STACK}-state`: every database and volume, keycloak, the edge | `docker-compose.yml`, `docker-compose.prod.yml`, `docker-compose.state-pins.yml` | step 12 |
 | `app-blue.env`, `app-green.env` | `${STACK}-app-blue`, `${STACK}-app-green`: gremion-ui, gremion-public and the `migrate` one-shot, one colour serving at a time | `docker-compose.app.yml`, `docker-compose.pins.yml` | `gremion-deploy`, step 14 (the first deploy starts blue) |
-| `ops.env` | `${STACK}-ops`: on-box monitoring, non-council | `infra/host/ops/docker-compose.yml` | step 15 |
+| `ops.env` | `${STACK}-ops`: the operator-only observability stack, non-council | `compose/observability/docker-compose.yml` | step 15 |
 | `mail.env` | `${STACK}-mail`: the platform mail server, non-council | `infra/host/mail/docker-compose.yml` | the go-live gate (see Known gaps) |
 
 Every bash step assumes this preamble, typed once per shell:
@@ -152,7 +152,7 @@ for p in state app-blue app-green; do
   gremion-validate-env --env-file "/opt/gremion/etc/env/${p}.env" --release "$REL"
 done
 gremion-validate-env --env-file /opt/gremion/etc/env/mail.env --release "$REL/infra/host/mail"
-gremion-validate-env --env-file /opt/gremion/etc/env/ops.env --release "$REL/infra/host/ops"
+gremion-validate-env --env-file /opt/gremion/etc/env/ops.env --release "$REL/compose/observability"
 ```
 
 9. **Addresses, networks and volumes, firewall.** `networks` creates the
@@ -243,17 +243,23 @@ printf 'TOKEN %s\n' "$GHCR_TOKEN" | sudo -u gremion /opt/gremion/bin/gremion-dep
 unset GHCR_TOKEN
 ```
 
-15. **Start the ops project.** On-box monitoring, non-council, in its own
-    project and network (`infra/host/ops/README.md`). `render-ops.sh` runs as
-    the deploy user, because it refuses to render unless `OPS_UID` and
-    `OPS_GID` in `ops.env` (step 7) are the ids it runs as; it writes the scrape
-    targets, the Alertmanager config and the ops credential files and ends with
-    an `OPS-RENDER:` line. Compose runs from the project's own directory,
-    because `ops.env` names its `COMPOSE_FILE` relative to it.
+15. **Start the ops project.** The operator-only observability stack
+    (Grafana, Prometheus, Loki, Tempo, Alloy, the blackbox exporter),
+    non-council, in its own project and network
+    (`compose/observability/README.md`). `render-ops.sh` runs as the deploy
+    user, because it refuses to render unless `OPS_UID` and `OPS_GID` in
+    `ops.env` (step 7) are the ids it runs as; it writes the probe targets, the
+    Grafana provisioning tree with the alert contact point, and the ops
+    credential files, and ends with an `OPS-RENDER:` line. Its
+    `grafana-sso=pending` means `etc/secrets/grafana/client_secret` is not
+    there yet: Grafana starts and signs nobody in until it is (see Known gaps).
+    Compose runs from the project's own directory, because `ops.env` names its
+    `COMPOSE_FILE` relative to it. Grafana is reached only through an SSH
+    tunnel to `127.0.0.1:3000`.
 
 ```bash
 sudo -u gremion /opt/gremion/current/infra/host/ops/render-ops.sh
-cd /opt/gremion/current/infra/host/ops
+cd /opt/gremion/current/compose/observability
 docker compose --env-file /opt/gremion/etc/env/ops.env up -d
 docker compose --env-file /opt/gremion/etc/env/ops.env ps
 ```
@@ -408,13 +414,14 @@ in [run-record.md](run-record.md).
 - `gremion-deploy` step 3 refuses without `runtime/last-backup.json`, and `gremion-backup` refuses without a reachable off-site remote (`RCLONE_REMOTE`), while the pilot keeps off-site copies off as the north star (R13-4). Step 13 therefore needs a remote for that one run. PENDING TASK-089 (`scripts/backup/`) decides the pilot's verification path.
 - `docker-compose.yml` declares the log pipeline's `ipcrypt_key` secret as `./secrets/ipcrypt_key.txt` in the release tree, while `gremion-render` generates the key once in `etc/secrets/ipcrypt_key.txt` under the host root and nothing in `infra/host` puts it into a release tree; step 12 links it by hand. Every later release tree the state project is started from needs the same link first. Owner: the host tooling of TASK-040 (`infra/**`, `docker-compose*.yml`), merged with this divergence, so it needs a follow-up task. `test/host/runbook.bats` stops asking for the link the day `gremion-render` writes the key into the release tree.
 - Customer creation and the first administrator's sign-in: `gremion-tenant create` exists (TASK-043, `packages/provisioning/`); blocked on TASK-043b's green customer proof, step 17 and the post-condition.
-- The ops project of step 15 (`infra/host/ops/`) is the on-box monitoring until the observability stack moves into its own project: PENDING TASK-039 (`compose/observability/`).
+- The ops project of step 15 is the observability stack of `compose/observability/` (TASK-039). Its Grafana signs in only through the `platform` realm's `grafana` client, whose secret must be in `etc/secrets/grafana/client_secret` (0600). `gremion-tenant init --realm-only --keycloak-container <kc>` writes it; the default pooled-stack `gremion-tenant init` does not (tenant-create creates the realm and Keycloak generates the secret; init prints a NOTE), so after that init the deploy user reads the secret once with kcadm into the file, block A of the Access section of `compose/observability/README.md`, re-runs `render-ops.sh` until it prints `grafana-sso=ready` and restarts Grafana. On a host whose ops realm predates TASK-039, `gremion-tenant init` refuses the changed realm template; the client is added once with block B of the same section, then block A. Writing the file from tenant-create is a named residual (TASK-039-FU). Collection is provisional [A] until the operator answers Q3/Q11: the host collector and a read-only view of Vector's volume, no route to a council network. The weekly footprint record (TRD-223) is TASK-039-FU.
 - The pooled layout (TASK-040, [pooled-stack-layout.md](../pooled-stack-layout.md)) carries a deploy ordering hazard until TASK-034's 34b block lands: neither the apex nor `public.<domain>` has a websecure router, so the first deploy's public verification (step 14) and the post-condition's `/api/health` answer 404. No install is scheduled before 34b; TASK-038's waits carry it.
 - [A] Step 18's end-to-end suites run against the stack its `--stack-env` marker names; which stack that is for the rebuilt host is decided by TASK-038's first run.
 - Mail bring-up is not part of this procedure: it is the go-live gate's item G4-MAIL (`gremion-mail-bringup`), see [go-live-gate.md](../go-live-gate.md).
 
 ## Changelog
 
+- 4.1.0 (2026-10-03): TASK-039. Step 15 starts the observability stack from `compose/observability/` (Grafana-managed alerting, no separate alert router), the project table and step 8 name its directory, and the Known gap on the old ops project is replaced by the Grafana sign-in note. Minor: a step changed, no post-condition did.
 - 4.0.0 (2026-10-03): H10 (F1 sweep K6#19, TASK-048b relay). Step 3 authenticates the release tag against the release signer's `allowed_signers` before step 4 runs code from the tree; step 10 installs that same file as the host's anchor `etc/allowed_signers` (`bootstrap.sh --allowed-signers PATH signers`, `root:root` 0644 like `etc/cosign.pub`), and the post-condition reads both anchors' owner and mode. `gremion-deploy` refuses a tag that is unsigned, signed by an unlisted key or not an ssh signature. Major: a step changed.
 - 3.0.0 (2026-09-30): R29-MAIN-DEFECTS (R29-MD-A). The post-condition's sign-in observation passes the Keycloak admin password to kcadm as `KC_CLI_PASSWORD` by name (no `--password` on any command line), uses `--server` with Keycloak's `/auth` relative path (the URL without it answered 404) and removes kcadm's cached token afterwards. Major: a post-condition changed (Q9).
 - 2.0.0 (2026-09-28): step 12 runs `gremion-render` as the deploy user before the state project's first `up`, links the ipcrypt key into the release tree, and observes both (TASK-037 review).

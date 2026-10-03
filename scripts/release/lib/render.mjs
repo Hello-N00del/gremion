@@ -54,7 +54,7 @@ export const RENDER_ENV = 'scripts/release/fixtures/render/render.env'
 export const TEMPLATE_MAP = Object.freeze({
   state: { dir: '.', renders: [{ id: 'state' }], seed: ['legal/legal.env'] },
   app: { dir: '.', renders: [{ id: 'app-blue', colour: 'blue' }, { id: 'app-green', colour: 'green' }] },
-  ops: { dir: 'infra/host/ops', renders: [{ id: 'ops' }] },
+  ops: { dir: 'compose/observability', renders: [{ id: 'ops' }] },
   mail: { dir: 'infra/host/mail', renders: [{ id: 'mail' }] },
 })
 

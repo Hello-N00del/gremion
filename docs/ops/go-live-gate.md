@@ -179,9 +179,11 @@ docker compose --env-file /opt/gremion/etc/env/state.env stop traefik
 docker compose --env-file /opt/gremion/etc/env/state.env start traefik
 # the probe must close the incident. Record the recovery timestamp.
 gremion-verify
-docker compose --env-file /opt/gremion/etc/env/ops.env exec -T alertmanager \
-  amtool --alertmanager.url=http://127.0.0.1:9093 alert add GateProbe severity=critical
-# the same channel must receive the synthetic alert
+# The on-box alerting is Grafana's (compose/observability, TASK-039). Through
+# the SSH tunnel (ssh -N -L 3000:127.0.0.1:3000 <deploy-user>@<host>), signed
+# in as an operator with the second factor: Alerting > Contact points >
+# platform > Test. The same channel must receive the synthetic notification;
+# record its timestamp.
 ```
 
 Stopping the edge is safe here precisely because this gate runs before any real

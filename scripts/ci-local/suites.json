@@ -631,6 +631,17 @@
       "command": "node --test --test-reporter=tap \"scripts/verify/**/*.test.mjs\"",
       "requiresStack": false,
       "testGlobs": ["scripts/verify/**/*.test.mjs"]
+    },
+    {
+      "//": "TASK-039: the observability stack's static tests (render, access, alerting, retention, TRD-199). Directory-level, so a later compose/observability test file is claimed automatically.",
+      "id": "kernel-compose-observability-node-test",
+      "repo": "kernel",
+      "category": "unit",
+      "cwd": ".",
+      "kind": "node-test",
+      "command": "node --test --test-reporter=tap \"compose/observability/**/*.test.mjs\"",
+      "requiresStack": false,
+      "testGlobs": ["compose/observability/**/*.test.mjs"]
     }
   ],
   "vertical": [

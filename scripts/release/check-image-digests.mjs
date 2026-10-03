@@ -86,7 +86,8 @@ export const PROJECT_ENV = Object.freeze({
   'docker-compose.override.yml': 'infra/host/templates/env/state.env.tmpl',
   'docker-compose.app.yml': 'infra/host/templates/env/app.env.tmpl',
   'docker-compose.app.dev.yml': 'infra/host/templates/env/app.env.tmpl',
-  'infra/host/ops/docker-compose.yml': 'infra/host/templates/env/ops.env.tmpl',
+  // TASK-039: the ops project moved to compose/observability/.
+  'compose/observability/docker-compose.yml': 'infra/host/templates/env/ops.env.tmpl',
   'infra/host/mail/docker-compose.yml': 'infra/host/templates/env/mail.env.tmpl',
   // TASK-043 G11: the standalone control panel (a host without the pooled stack).
   'compose/control-panel/standalone.yml': 'compose/control-panel/standalone.env.tmpl',

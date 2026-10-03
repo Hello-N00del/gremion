@@ -99,11 +99,73 @@
           }
         }
       ]
+    },
+    {
+      "clientId": "grafana",
+      "name": "Gremion Observability",
+      "description": "Operator-only Grafana (TASK-039 Q5): confidential, code + PKCE S256, loopback callback of the SSH tunnel, ACR loa2 default and minimum; secret in etc/secrets/grafana, never committed",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "redirectUris": [
+        "http://127.0.0.1:3000/login/generic_oauth"
+      ],
+      "webOrigins": [
+        "http://127.0.0.1:3000"
+      ],
+      "attributes": {
+        "pkce.code.challenge.method": "S256",
+        "post.logout.redirect.uris": "http://127.0.0.1:3000/*",
+        "default.acr.values": "loa2",
+        "minimum.acr.value": "loa2"
+      },
+      "fullScopeAllowed": false,
+      "defaultClientScopes": [
+        "profile",
+        "email"
+      ],
+      "protocolMappers": [
+        {
+          "name": "acr",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-acr-mapper",
+          "config": {
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "true",
+            "introspection.token.claim": "true"
+          }
+        },
+        {
+          "name": "realm-roles",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-realm-role-mapper",
+          "config": {
+            "claim.name": "realm_access.roles",
+            "multivalued": "true",
+            "jsonType.label": "String",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "true",
+            "introspection.token.claim": "true"
+          }
+        }
+      ]
     }
   ],
   "scopeMappings": [
     {
       "client": "control-panel",
+      "roles": [
+        "operator"
+      ]
+    },
+    {
+      "client": "grafana",
       "roles": [
         "operator"
       ]

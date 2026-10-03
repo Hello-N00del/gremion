@@ -55,14 +55,26 @@ infra/host/templates/** text eol=lf
 # overlap with *.yml and *.sh sets the same value and changes nothing.
 infra/host/mail/** text eol=lf
 
-# Task 11: infra/host/ops/ carries an Alertmanager template (.yml.tmpl) and a
-# README (.md). Neither extension is matched by any rule above — measured with
-# `git check-attr eol`, both answered "unspecified" — so core.autocrlf=true
-# checks them out with CRLF on Windows, and the renderer then writes a CRLF
-# Alertmanager config that amtool rejects. The *.sh and *.yml files here are
+# Task 11: infra/host/ops/ carried an Alertmanager template (.yml.tmpl) and
+# carries a README (.md). Neither extension is matched by any rule above —
+# measured with `git check-attr eol`, both answered "unspecified" — so
+# core.autocrlf=true checked them out with CRLF on Windows, and the renderer
+# then wrote a CRLF config its checker rejected. The *.sh files here are
 # already covered; the directory glob sets the same value for them and changes
-# nothing.
+# nothing. (TASK-039 moved the compose project to compose/observability/.)
 infra/host/ops/** text eol=lf
+
+# TASK-039: the ops project moved to compose/observability/ (its README, the
+# Grafana provisioning YAML render-ops.sh copies, the promtool tests) and its
+# configs to docker/{loki,tempo,alloy}/ (.alloy matches no rule above). LF on
+# every platform: render-ops.sh copies these files into the host's runtime
+# tree, and packages/edge-routers/test/hygiene-j.test.ts plants an edit into
+# the compose file that matches on "\n".
+compose/observability/** text eol=lf
+test/host/fixtures/observability/** text eol=lf
+docker/loki/** text eol=lf
+docker/tempo/** text eol=lf
+docker/alloy/** text eol=lf
 
 # Task 15: test/host/go-live-gate.bats is the only host suite that loads the
 # KERNEL helper test/test_helper/common.bash (it shims nothing and needs only

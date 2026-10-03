@@ -1,4 +1,5 @@
-# infra/host/ops/blackbox.yml — probe modules. Static; targets come from file SD.
+# compose/observability/blackbox.yml — probe modules. Static; targets come from
+# file SD (render-ops.sh). http_2xx also serves the third-party probes.
 modules:
   http_2xx:
     prober: http

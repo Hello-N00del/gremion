@@ -199,7 +199,10 @@ const cases: Record<string, Plant> = {
     l.edit('docker-compose.yml', /(source: \$\{GREMION_ROOT\}\/etc\/edge\n(?:.*\n){0,2}?\s*)read_only: true/, '$1read_only: false'),
   j4OtherService: (l) =>
     l.edit('docker-compose.app.yml', /(\n {2}gremion-public:\n)/, '$1    volumes:\n      - ${GREMION_ROOT}/etc/edge:/etc/traefik/dynamic:ro\n'),
-  j4Ancestor: (l) => l.edit('infra/host/ops/docker-compose.yml', '      - "/:/rootfs:ro"\n', '      - "/:/rootfs:rw"\n'),
+  // TASK-039: no ops service mounts `/` any more (Q16), so the plant inserts
+  // its own writable root mount into the ops project's alloy service.
+  j4Ancestor: (l) =>
+    l.edit('compose/observability/docker-compose.yml', '      - "/proc:/host/proc:ro"\n', '      - "/proc:/host/proc:ro"\n      - "/:/rootfs:rw"\n'),
   j4VolumesFrom: (l) => l.edit('docker-compose.app.yml', /(\n {2}gremion-public:\n)/, '$1    volumes_from:\n      - traefik\n'),
   j4Normalised: (l) =>
     l.edit('docker-compose.yml', '      - traefik-acme:/letsencrypt\n', '      - traefik-acme:/letsencrypt\n      - ${GREMION_ROOT}/etc//edge/:/srv/x:ro\n'),
