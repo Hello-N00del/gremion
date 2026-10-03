@@ -18,6 +18,7 @@
 // `verify` (every required suite, `unit` whole) satisfies check-record.
 import { existsSync, globSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs'
 import path from 'node:path'
+import { coupledExcludes } from '../../check-module-source-scan.mjs'
 import { headSha } from '../lib/git.mjs'
 import { combineParts } from '../lib/guard.mjs'
 import { countDeclaredNodeTests, parseBatsTap, parseNodeTapSummary } from '../lib/parsers.mjs'
@@ -25,11 +26,12 @@ import { run, tail, toolAvailable } from '../lib/proc.mjs'
 import { REPO_ROOT, runVitestJson } from '../lib/vitest.mjs'
 
 /** One package's own test script, run with the JSON reporter. */
-export function vitestSubcheck({ cwd, testScript = 'test:unit', root = REPO_ROOT, label = `${path.basename(cwd)} vitest (${testScript})` }) {
+export function vitestSubcheck({ cwd, testScript = 'test:unit', root = REPO_ROOT, label = `${path.basename(cwd)} vitest (${testScript})`, extraArgs = [] }) {
   // Runs the package's OWN script (`pnpm run <testScript>`), not a
   // hand-assembled `vitest run`, so a flag or config a package adds to its
-  // script is what verify runs too.
-  return runVitestJson({ label, cwd, cmd: 'pnpm', args: ['run', testScript], root })
+  // script is what verify runs too. `extraArgs` reach vitest through the
+  // script (the modules part's --coupled-excludes arguments).
+  return runVitestJson({ label, cwd, cmd: 'pnpm', args: ['run', testScript, ...extraArgs], root })
 }
 
 // Runs node --test PER FILE, one process per file, exactly like the
@@ -279,11 +281,23 @@ export const UNIT_PARTS = {
     vitestSubcheck({ cwd: path.join(root, 'apps', 'control-panel'), testScript: 'test', root, label: 'control-panel vitest (test)' }),
   ],
   // TASK-205a: one vitest part per modules/<id> package with a test script. Zero such modules is itself a
-  // failing part (an empty module set must not read as a pass).
+  // failing part (an empty module set must not read as a pass). Brief §6.12: each run carries
+  // `check-module-source-scan.mjs --coupled-excludes <id>` (a test modules/COUPLED-TESTS.json allows to reach
+  // outside its module is excluded from the per-package run); an absent, invalid or stale list refuses the
+  // part (unparseable, named) instead of running the module unexcluded.
   modules: (root) => {
     const ids = moduleDirsWithTestScript(root)
     if (ids.length === 0) return [{ label: 'modules vitest (no modules/*/package.json defines a test script)', collected: 0, passed: 0, failed: 0, skipped: 0 }]
-    return ids.map((id) => vitestSubcheck({ cwd: path.join(root, 'modules', id), testScript: 'test', root, label: `module ${id} vitest (test)` }))
+    return ids.map((id) => {
+      const label = `module ${id} vitest (test)`
+      let excludes
+      try {
+        excludes = coupledExcludes(root, id)
+      } catch (err) {
+        return { label, unparseable: true, detail: `--coupled-excludes ${id} refused: ${err.message}` }
+      }
+      return vitestSubcheck({ cwd: path.join(root, 'modules', id), testScript: 'test', root, label, extraArgs: excludes })
+    })
   },
   node: (root) => nodeTestParts({ cwd: root, files: scriptTestFiles(root) }),
   bats: (root) => [batsPart({ cwd: root, patterns: ['test/*.bats', 'test/host/*.bats'] })],

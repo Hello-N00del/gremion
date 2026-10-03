@@ -4,10 +4,11 @@
 // every module with a test script is run, a module whose suite FAILS turns the suite red, and an empty module
 // set is a failing (zero-collected) part, never a pass.
 import assert from 'node:assert/strict'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
+import { coupledExcludes } from '../check-module-source-scan.mjs'
 import { moduleDirsWithTestScript, runUnitSuite, UNIT_PARTS } from './suites/unit.mjs'
 
 const REPO_ROOT = path.join(import.meta.dirname, '..', '..')
@@ -19,8 +20,9 @@ function put(root, rel, text) {
 }
 
 /** modules/alpha (green suite), modules/beta (no test script: an app-only id), modules/gamma (a FAILING suite). */
-function fixtureRoot({ withFailing }) {
+function fixtureRoot({ withFailing, coupled = true }) {
   const root = mkdtempSync(path.join(tmpdir(), 't205-unit-modules-'))
+  if (coupled) put(root, 'modules/COUPLED-TESTS.json', JSON.stringify({ comment: 'fixture', entries: [] }))
   put(root, 'modules/alpha/package.json', JSON.stringify({ name: 'alpha', private: true, scripts: { test: `node "${FAKE_GREEN}"` } }))
   put(root, 'modules/beta/package.json', JSON.stringify({ name: 'beta', private: true }))
   if (withFailing) {
@@ -77,6 +79,57 @@ test('GREEN: with only passing module suites nothing fails', () => {
   } finally {
     f.cleanup()
   }
+})
+
+// Brief §6.12 (verifier r1 LOW): each module's run carries `check-module-source-scan.mjs --coupled-excludes <id>`,
+// so a test the scan allows to reach outside its module (modules/COUPLED-TESTS.json) is excluded from the
+// per-package run instead of failing it, and an invalid or stale list refuses the part instead of running it.
+const RECORDER = [
+  "import { writeFileSync } from 'node:fs'",
+  "const out = process.argv.find((a) => a.startsWith('--outputFile=')).slice('--outputFile='.length)",
+  "writeFileSync('argv.json', JSON.stringify(process.argv.slice(2)))",
+  "writeFileSync(out, JSON.stringify({ success: true, numTotalTests: 1, numPassedTests: 1, numFailedTests: 0, numPendingTests: 0, numTodoTests: 0, numFailedTestSuites: 0, testResults: [] }))",
+  '',
+].join('\n')
+
+test('each module run is handed its coupled-test excludes (--coupled-excludes <id>)', () => {
+  const root = mkdtempSync(path.join(tmpdir(), 't205-unit-modules-coupled-'))
+  try {
+    put(root, 'services/alpha/thing.ts', 'export const thing = 1\n')
+    put(root, 'modules/alpha/test/coupled.test.ts', "import { thing } from '../../../services/alpha/thing'\nexport const x = thing\n")
+    put(root, 'modules/alpha/test/plain.test.ts', 'export const y = 1\n')
+    put(root, 'modules/alpha/recorder.mjs', RECORDER)
+    put(root, 'modules/alpha/package.json', JSON.stringify({ name: 'alpha', private: true, scripts: { test: 'node recorder.mjs' } }))
+    put(
+      root,
+      'modules/COUPLED-TESTS.json',
+      JSON.stringify({ comment: 'fixture', entries: [{ path: 'modules/alpha/test/coupled.test.ts', reason: 'reads a leaf tree', owner: 'TASK-205', allows: ['services/alpha'] }] }),
+    )
+    const r = runUnitSuite({ root, only: ['modules'] })
+    assert.equal(r.unparseable, false, r.detail)
+    assert.equal(r.collected, 1)
+    const argv = JSON.parse(readFileSync(path.join(root, 'modules/alpha/argv.json'), 'utf8'))
+    const i = argv.indexOf('--exclude')
+    assert.ok(i !== -1, `the module run got no --exclude: ${argv.join(' ')}`)
+    assert.equal(argv[i + 1], 'test/coupled.test.ts')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('RED: an absent COUPLED-TESTS.json refuses the module parts (never runs them unexcluded)', () => {
+  const f = fixtureRoot({ withFailing: false, coupled: false })
+  try {
+    const r = runUnitSuite({ root: f.root, only: ['modules'] })
+    assert.equal(r.unparseable, true)
+    assert.match(r.detail, /coupled-excludes/)
+  } finally {
+    f.cleanup()
+  }
+})
+
+test('the real tree: every module with a test script resolves its coupled excludes', () => {
+  for (const id of moduleDirsWithTestScript(REPO_ROOT)) assert.ok(Array.isArray(coupledExcludes(REPO_ROOT, id)), id)
 })
 
 test('RED: a root with no module test script is a zero-collected part, never a pass', () => {
