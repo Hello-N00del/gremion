@@ -40,9 +40,10 @@
 # Prints `[obs-proof] N passing (minimum M)` per phase; exit 0 only when every
 # check of the phase passed and N >= M.
 #
-# SC2317: the probe helpers run through wait_until (indirectly). SC2015: every
+# SC2317 (shellcheck < 0.10) and SC2329 (>= 0.10): the probe helpers run
+# through wait_until, so shellcheck sees them as never invoked. SC2015: every
 # `check && ok ... || bad ...` line is deliberate -- ok() always succeeds.
-# shellcheck disable=SC2317,SC2015
+# shellcheck disable=SC2317,SC2329,SC2015
 set -euo pipefail
 export MSYS_NO_PATHCONV=1
 
