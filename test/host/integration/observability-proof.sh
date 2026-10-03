@@ -250,6 +250,14 @@ EOF
 # ---------------------------------------------------------------------------
 phase_prepare() {
     mkdir -p "$OUT" "$SROOT/etc/env" "$SROOT/runtime" "$OUT/kc-realms"
+    # Grafana binds its users to the Keycloak user ids of the realms created
+    # below, which are new on every prepare; a grafana-data left by an earlier
+    # prepare refuses every sign-in ("unable to create user: user not found",
+    # measured 2026-10-03). So it starts empty, and never under a running Grafana.
+    if docker inspect "$(container_of grafana)" >/dev/null 2>&1; then
+        die "the ops project is up: run down before prepare (or refresh to re-render)"
+    fi
+    rm -rf "$SROOT/runtime/ops/grafana-data"
     local taken
     # shellcheck disable=SC2046  # one argument per network id
     taken="$(docker network inspect $(docker network ls -q) --format '{{.Name}} {{range .IPAM.Config}}{{.Subnet}} {{end}}' 2>/dev/null \
