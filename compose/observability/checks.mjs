@@ -353,10 +353,25 @@ export function tempoRetentionViolations(tempo, { regularS = 7 * 86400 } = {}) {
   return r > regularS ? [`tempo: block_retention ${tempo.compactor.compaction.block_retention} exceeds the 7-day RC-LOG-TRC window`] : []
 }
 
+/**
+ * Prometheus' worst case, not its flag: it deletes WHOLE blocks only, a block
+ * spans up to 10 % of the retention window (at most 31 d, the default of
+ * --storage.tsdb.max-block-duration), and the deletion runs after a compaction
+ * (every 2 h). So the oldest sample on disk is window + min(10 %, 31 d) + 2 h.
+ */
+export const PROM_COMPACTION_S = 2 * 3600
+export function promWorstCaseSeconds(value) {
+  const s = seconds(value)
+  return s + Math.min(s / 10, 31 * 86400) + PROM_COMPACTION_S
+}
+
 export function promRetentionViolations(value) {
   const s = seconds(value)
   if (!(s > 0)) return [`prometheus: PROM_RETENTION_TIME ${value} is not a duration`]
-  return s > CEILING_S ? [`prometheus: PROM_RETENTION_TIME ${value} exceeds the 30-day ceiling`] : []
+  const worst = promWorstCaseSeconds(value)
+  return worst > CEILING_S
+    ? [`prometheus: PROM_RETENTION_TIME ${value} reaches ${(worst / 86400).toFixed(2)} d in the worst case (window + 10 % block span + 2 h compaction), above the 30-day ceiling`]
+    : []
 }
 
 // ── TRD-199: no member-facing surface ──────────────────────────────────────

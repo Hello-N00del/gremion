@@ -19,8 +19,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RELEASE_DIR="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 PROVISIONING_SRC="$RELEASE_DIR/compose/observability/grafana/provisioning"
 
-# R29-I6: no store of the ops project keeps anything longer than 30 days.
-PROM_RETENTION_MAX_DAYS=30
+# R29-I6: no store of the ops project keeps anything longer than 30 days, in
+# the worst case. Prometheus deletes whole blocks only (a block spans up to
+# 10 % of the window) after a 2-hourly compaction, so the window may be at most
+# 27 days: 27 d + 2.7 d + 2 h < 30 d (compose/observability/checks.mjs).
+PROM_RETENTION_MAX_DAYS=27
 
 usage() {
     cat >&2 <<'USAGE'
@@ -81,13 +84,13 @@ done
 [[ "$(id -g)" == "$OPS_GID" ]] \
     || die "OPS_GID=$OPS_GID but this process runs as $(id -g); set OPS_GID=$(id -g) in $ENV_FILE" 2
 
-# PROM_RETENTION_TIME: whole days or hours only, never above the ceiling.
+# PROM_RETENTION_TIME: whole days or hours only, never above the window.
 if [[ "$PROM_RETENTION_TIME" =~ ^([0-9]+)d$ ]]; then
     (( BASH_REMATCH[1] <= PROM_RETENTION_MAX_DAYS )) \
-        || die "PROM_RETENTION_TIME=$PROM_RETENTION_TIME exceeds the ${PROM_RETENTION_MAX_DAYS}-day ceiling [D R29-I6]" 2
+        || die "PROM_RETENTION_TIME=$PROM_RETENTION_TIME exceeds the ${PROM_RETENTION_MAX_DAYS}-day window that keeps the worst case under the 30-day ceiling [D R29-I6]" 2
 elif [[ "$PROM_RETENTION_TIME" =~ ^([0-9]+)h$ ]]; then
     (( BASH_REMATCH[1] <= PROM_RETENTION_MAX_DAYS * 24 )) \
-        || die "PROM_RETENTION_TIME=$PROM_RETENTION_TIME exceeds the ${PROM_RETENTION_MAX_DAYS}-day ceiling [D R29-I6]" 2
+        || die "PROM_RETENTION_TIME=$PROM_RETENTION_TIME exceeds the ${PROM_RETENTION_MAX_DAYS}-day window that keeps the worst case under the 30-day ceiling [D R29-I6]" 2
 else
     die "PROM_RETENTION_TIME must be <N>d or <N>h (got '$PROM_RETENTION_TIME')" 2
 fi

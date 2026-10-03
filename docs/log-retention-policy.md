@@ -249,8 +249,10 @@ keeps every line for ever) and one stream per class of the retention catalogue
 | `class="application"` | 28 days [A] | 29 d 2 h 10 min | OTLP logs pushed to the ops ingest (TASK-116) |
 | no class | 14 days | 15 d 2 h 10 min | anything else |
 
-Traces (Tempo) are kept 7 days (RC-LOG-TRC), metrics (Prometheus) 30 days at
-most. `compose/observability/retention.test.mjs` fails on any window whose worst
+Traces (Tempo) are kept 7 days (RC-LOG-TRC), metrics (Prometheus) 27 days:
+Prometheus deletes whole blocks only, a block spans up to 10 % of the window and
+the deletion follows the 2-hourly compaction, so the oldest sample is at most
+29 d 19 h old. `compose/observability/retention.test.mjs` fails on any window whose worst
 case passes 30 days. Container stdout of the council services is not shipped
 (no ops service may read the Docker data root), so the `json-file` residual above
 is unchanged.

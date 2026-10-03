@@ -194,10 +194,10 @@ teardown() {
     grep -qx 'OTLP_INGEST_TOKEN=CHANGE_ME_GEN_hex32_otlp_ingest' "$OPS_TMPL"
 }
 
-@test "ops.env.tmpl keeps Prometheus at 30 days or less (R29-I6)" {
+@test "ops.env.tmpl keeps Prometheus' worst case at 30 days or less: a 27-day window (R29-I6)" {
     run sed -n 's/^PROM_RETENTION_TIME=\([0-9]*\)d$/\1/p' "$OPS_TMPL"
     [ -n "$output" ]
-    [ "$output" -le 30 ]
+    [ "$output" -le 27 ]
 }
 
 # ---------------------------------------------------------------------------
@@ -218,7 +218,7 @@ OPS_UID=$(id -u)
 OPS_GID=$(id -g)
 OPS_V4_SUBNET=10.90.8.0/24
 OPS_V6_SUBNET=fd5a:98::/64
-PROM_RETENTION_TIME=30d
+PROM_RETENTION_TIME=27d
 PLATFORM_DOMAIN=example.org
 EDGE_BIND_IP=203.0.113.10
 EDGE_BIND_IP6=2001:db8::a
@@ -349,16 +349,22 @@ set_key() {   # <KEY> <value>
     [[ "$output" == *"OPS_UID=999999 but this process runs as"* ]]
 }
 
-@test "render-ops refuses a Prometheus retention above 30 days (R29-I6), and accepts 30" {
+@test "render-ops refuses a Prometheus window above 27 days (worst case 30, R29-I6), and accepts 27" {
     write_ops_env
-    set_key PROM_RETENTION_TIME 31d
-    run "$RENDER" --env-file "$GREMION_ROOT/etc/env/ops.env"
-    [ "$status" -eq 2 ]
-    [[ "$output" == *"exceeds the 30-day ceiling"* ]]
-    set_key PROM_RETENTION_TIME 721h
-    run "$RENDER" --env-file "$GREMION_ROOT/etc/env/ops.env"
-    [ "$status" -eq 2 ]
     set_key PROM_RETENTION_TIME 30d
+    run "$RENDER" --env-file "$GREMION_ROOT/etc/env/ops.env"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"exceeds the 27-day window that keeps the worst case under the 30-day ceiling"* ]]
+    set_key PROM_RETENTION_TIME 28d
+    run "$RENDER" --env-file "$GREMION_ROOT/etc/env/ops.env"
+    [ "$status" -eq 2 ]
+    set_key PROM_RETENTION_TIME 649h
+    run "$RENDER" --env-file "$GREMION_ROOT/etc/env/ops.env"
+    [ "$status" -eq 2 ]
+    set_key PROM_RETENTION_TIME 648h
+    run "$RENDER" --env-file "$GREMION_ROOT/etc/env/ops.env"
+    [ "$status" -eq 0 ]
+    set_key PROM_RETENTION_TIME 27d
     run "$RENDER" --env-file "$GREMION_ROOT/etc/env/ops.env"
     [ "$status" -eq 0 ]
 }

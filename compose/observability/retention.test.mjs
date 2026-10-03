@@ -53,11 +53,20 @@ test('Tempo: 7-day block retention (RC-LOG-TRC 7 / 14); RED on 8 days and on non
   assert.match(tempoRetentionViolations(t).join('\n'), /traces kept for ever/)
 })
 
-test('Prometheus: ops.env.tmpl keeps 30 days at most and the compose file takes it from there; RED on 31d', () => {
+test('Prometheus: the worst case of ops.env.tmpl is at most 30 days and the compose file takes it from there; RED on 31d, 30d and 28d', () => {
+  // Prometheus deletes whole blocks only, and a block spans up to 10 % of the
+  // retention window (max 31 d); the deletion runs at the 2-hourly compaction.
+  // The oldest sample on disk is therefore window + 10 % + 2 h old.
   const v = readEnvKey(OPS_TMPL, 'PROM_RETENTION_TIME')
   assert.deepEqual(promRetentionViolations(v), [])
-  assert.match(promRetentionViolations('31d').join('\n'), /exceeds the 30-day ceiling/)
-  assert.match(promRetentionViolations('90d').join('\n'), /exceeds the 30-day ceiling/)
+  assert.equal(v, '27d')
+  assert.deepEqual(promRetentionViolations('27d'), [])
+  assert.deepEqual(promRetentionViolations('648h'), [])
+  assert.match(promRetentionViolations('28d').join('\n'), /28d reaches 30\.88 d in the worst case/)
+  assert.match(promRetentionViolations('30d').join('\n'), /30d reaches 33\.08 d in the worst case .*, above the 30-day ceiling/)
+  assert.match(promRetentionViolations('31d').join('\n'), /above the 30-day ceiling/)
+  assert.match(promRetentionViolations('90d').join('\n'), /above the 30-day ceiling/)
+  assert.match(promRetentionViolations('xd').join('\n'), /is not a duration/)
   assert.match(readText('compose/observability/docker-compose.yml'), /--storage\.tsdb\.retention\.time=\$\{PROM_RETENTION_TIME:\?/)
 })
 

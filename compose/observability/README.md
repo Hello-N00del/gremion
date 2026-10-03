@@ -153,7 +153,7 @@ the rules evaluate and show, nothing is sent.
 | Loki `class=application` | 28 d [A] | 29 d 2 h 10 min | idem |
 | Loki, no class | 14 d | 15 d 2 h 10 min | idem |
 | Tempo | 7 d (RC-LOG-TRC 7 / 14) | under 14 d | `docker/tempo/tempo.yaml` |
-| Prometheus | `PROM_RETENTION_TIME=30d` | 30 d | `ops.env`, refused above 30 d |
+| Prometheus | `PROM_RETENTION_TIME=27d` | 29 d 19 h (window + a block of up to 10 % + the 2-hourly compaction) | `ops.env`, refused above 27 d |
 | Grafana's request log on disk | 7 days | 7 d | `GF_LOG_FILE_MAX_DAYS` |
 
 `retention.test.mjs` fails on any window whose worst case exceeds 30 days.
