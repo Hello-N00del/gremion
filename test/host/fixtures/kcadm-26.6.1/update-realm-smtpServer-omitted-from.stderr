@@ -1,0 +1,1 @@
+Invalid sender address 'null'. If the address contains UTF-8 characters in the local part please ensure the SMTP server supports the SMTPUTF8 extension and enable 'Allow UTF-8' in the email realm configuration.

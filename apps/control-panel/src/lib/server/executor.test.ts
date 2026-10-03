@@ -13,7 +13,7 @@ const good: NewCustomerInput = {
   host: 'rat.musterstadt.example',
   itAdmin: 'IT@musterstadt.example',
   councilAdmin: 'rat@musterstadt.example',
-  enable: ['vault', 'calendar'],
+  enable: ['publishing', 'calendar'],
   configFile: '/opt/gremion/etc/tenants/musterstadt.json',
 }
 
@@ -35,6 +35,9 @@ describe('validateNewCustomer', () => {
     ['itAdmin', { itAdmin: 'nope' }],
     ['councilAdmin', { councilAdmin: '' }],
     ['enable', { enable: ['board'] }],
+    // R30 A1 (PRD-PLAT-012 / PRD-REC-003): the gate behind the panel denies vault by name too
+    ['enable', { enable: ['vault'] }],
+    ['enable', { enable: ['calendar', 'vault'] }],
     ['enable', { enable: ['calendar; rm -rf /'] }],
   ])('refuses a bad %s', (field, over) => {
     expect(Object.keys(validateNewCustomer({ ...good, ...over }))).toContain(field)
@@ -57,7 +60,7 @@ describe('createArgv / startCreate', () => {
       '--operator',
       OP,
       '--enable',
-      'calendar,vault',
+      'calendar,publishing',
     ])
   })
 

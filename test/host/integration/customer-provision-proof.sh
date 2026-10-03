@@ -44,15 +44,27 @@
 #   customer-layout  scratch only: etc/env, runtime/active-colour, etc/edge
 #   customer-before  TRD-440 baseline (running containers, every project's
 #                    config --services), pg_database lists, no gremion_platform
-#   customer-create  `--enable board` refused by name before any write; then
-#                    `gremion-tenant create proof-x --enable calendar,vault` and a
-#                    second customer proof-y; every section 1 "Create" line
+#   customer-create  `--enable board` and `--enable vault` refused by name before
+#                    any write (R29-I1; R30 A1, PRD-PLAT-012 / PRD-REC-003); then
+#                    `gremion-tenant create proof-x --enable calendar,votes` (calendar:
+#                    a database and a broker user; votes: neither) and a second
+#                    customer proof-y; every section 1 "Create" line
 #   customer-rerun   a second create: phase A and B run nothing, the broker is
 #                    not reloaded, the ledger and the database lists unchanged
 #   customer-suspend suspend proof-x: status, realm disabled, the tenant host
 #                    503 through the edge, broker module users evicted, the
-#                    principal revoked; proof-y untouched
-#   customer-resume  every one of those restored (a fresh principal)
+#                    principal revoked, the realm carries no authenticating
+#                    sender; a SECOND suspend exits 0 and changes nothing
+#                    (TASK-043c); proof-y untouched. FIRST it records the
+#                    stored-data fingerprint of proof-x (R30 A2, PRD-OPS-004:
+#                    per table of its kernel and module databases a row count
+#                    and an md5 over the ordered rows, plus the realm's user
+#                    count) in ledger/fingerprint-before-suspend.txt
+#   customer-resume  every one of those restored (a fresh principal); right
+#                    after resume the fingerprint again, judged EQUAL by
+#                    fixtures/customer-provision/data-fingerprint.mjs
+#   (create and resume also read Traefik's STATE of both routers of each
+#   customer: enabled, no error -- TASK-043c; presence is not enough)
 #   customer-reconcile reconcile green; a planted platform@ sender fails
 #                    smtp-server; --apply repairs; check-principals --no-allowances
 #   customer-admins  brief section 1 "Admins sign in" (PRD-IDN-005): the realm's
@@ -567,6 +579,84 @@ edge_wait() { # <api path> -- 0 once Traefik reports it
     while (( s < 30 )); do traefik_has "$1" && return 0; sleep 2; s=$(( s + 2 )); done
     return 1
 }
+# routers_enabled <slug>... -- TASK-043c P1. Traefik's STATE of both routers of
+# each customer (tenant-<slug>@file and tenant-<slug>.kc@file): enabled, no
+# error. A router whose chained @docker middleware does not exist is REPORTED
+# but status "disabled" (the 043b run: "middleware edge-ratelimit-app@docker
+# does not exist"), so presence proves nothing. Polled up to ~40 s (the docker
+# provider converges after the file provider); the judge is
+# fixtures/customer-provision/router-state.mjs (zero routers is a failure). The
+# bodies are appended to ledger/edge-routers.txt; the violations are printed on
+# stdout and the return is non-zero when any remain.
+routers_enabled() { # <slug>...
+    local slug rt body json next tries=0 out rc port
+    port="$(penv TRAEFIK_API_PORT)"
+    while :; do
+        json='{}'
+        for slug in "$@"; do
+            for rt in "tenant-${slug}" "tenant-${slug}.kc"; do
+                body="$(curl -fsS --max-time 5 "http://127.0.0.1:${port}/api/http/routers/${rt}@file" 2>/dev/null)" || body=""
+                # a body jq cannot parse records THIS router as null ("not reported
+                # by Traefik"); resetting the whole object dropped every router
+                # collected so far, and the judge then passed a subset
+                # (into a temporary: a failed substitution would empty $json)
+                if next="$(jq -c --arg k "$rt" --argjson v "${body:-null}" '. + {($k): $v}' <<< "$json" 2>/dev/null)"; then json="$next"
+                else json="$(jq -c --arg k "$rt" '. + {($k): null}' <<< "$json")"; fi
+            done
+        done
+        rc=0
+        out="$(node "$ROOT_H/test/host/fixtures/customer-provision/router-state.mjs" <<< "$json")" || rc=$?
+        (( rc == 0 || tries >= 20 )) && break
+        tries=$(( tries + 1 )); sleep 2
+    done
+    printf '%s %s\n' "$(now)" "$json" | ledger edge-routers.txt
+    printf '%s' "$out"
+    return "$rc"
+}
+# data_fingerprint <slug> -- TASK-043c R30 addendum A2 (PRD-OPS-004): suspend
+# must not alter stored data. Prints one line per table (relkind r, outside
+# pg_catalog / information_schema / pg_toast) of the customer's kernel database
+# and of every ENABLED module that has a database (module.json
+# runtime.database.postgresService; votes has none): "<scope>:<schema>.<table>
+# TAB <row count> TAB <md5 over the rows ordered by their text form | ->", then
+# "realm-users TAB <n>" (Keycloak users/count). The judge is
+# fixtures/customer-provision/data-fingerprint.mjs (equal is the only pass; an
+# empty fingerprint fails). Every read is checked explicitly (`|| return 1`):
+# a caller runs this inside an `if`, where errexit is off.
+FP_SQL="$(cat <<'SQL'
+SELECT format('SELECT %L || E''\t'' || count(*) || E''\t'' || coalesce(md5(string_agg(t::text, E''\n'' ORDER BY t::text)), ''-'') FROM %I.%I t',
+              n.nspname || '.' || c.relname, n.nspname, c.relname)
+  FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+ WHERE c.relkind = 'r' AND n.nspname NOT IN ('pg_catalog', 'information_schema') AND n.nspname NOT LIKE 'pg\_toast%'
+ ORDER BY n.nspname, c.relname
+SQL
+)"
+fp_db() { # <container> <user> <database> <scope> -- the table lines of one database
+    local cid="$1" user="$2" db="$3" scope="$4" rows
+    [[ -n "$cid" ]] || { info "fingerprint: no container for ${scope}" >&2; return 1; }
+    rows="$(printf '%s \\gexec\n' "$FP_SQL" | docker exec -i "$cid" psql -v ON_ERROR_STOP=1 -tAqU "$user" -d "$db" | tr -d '\r')" \
+        || { info "fingerprint: reading ${scope} (${db}) failed" >&2; return 1; }
+    [[ -n "$rows" ]] || { info "fingerprint: ${scope} (${db}) has no table" >&2; return 1; }
+    sed '/^$/d; s/^/'"${scope}"':/' <<< "$rows"
+}
+data_fingerprint() { # <slug>
+    local slug="$1" id hex mods m psvc sid n
+    id="$(customer_id "$slug")" || return 1
+    [[ -n "$id" ]] || { info "fingerprint: no control row for ${slug}" >&2; return 1; }
+    hex="${id//-/}"
+    printf '# fingerprint %s %s %s\n' "$slug" "$id" "$(now)"
+    fp_db "$(svc state postgres)" postgres "t_${hex}__kernel" kernel || return 1
+    mods="$(q gremion_platform "SELECT m.module_key FROM plt.module_enablement e JOIN plt.module m USING (module_id) WHERE e.customer_id = '${id}' AND e.state = 'enabled' ORDER BY 1")" || return 1
+    for m in $mods; do
+        psvc="$(jq -r '.runtime.database.postgresService // empty' "$ROOT/modules/${m}/module.json")" || return 1
+        if [[ -z "$psvc" ]]; then printf '# %s: no database (module.json runtime.database null)\n' "$m"; continue; fi
+        sid="${psvc%-postgres}"
+        fp_db "$(svc state "$psvc")" "$sid" "t_${hex}__${m}" "$m" || return 1
+    done
+    n="$(skc get users/count -r "$slug" | tr -d '\r[:space:]')" || return 1
+    [[ "$n" =~ ^[0-9]+$ ]] || { info "fingerprint: realm ${slug} user count unreadable (${n:-empty})" >&2; return 1; }
+    printf 'realm-users\t%s\n' "$n"
+}
 trd440() { # the container count and every project's service list
     # every measurement must succeed (review C, r2): a failed render on both
     # sides compared equal; each project renders from its own directory
@@ -634,21 +724,25 @@ phase_customer_create() {
     local snap_before snap_after
     snap() { printf '%s|%s' "$(q control "SELECT string_agg(slug || ':' || status, ',' ORDER BY slug) FROM tenant")" \
         "$(q postgres "SELECT 1 FROM pg_database WHERE datname = 'gremion_platform'" | grep -q 1 && q gremion_platform "SELECT count(*) || ':' || coalesce(max(occurred_at)::text, '-') FROM plt.provisioning_step")"; }
-    snap_before="$(snap)"
-    rc=0; out="$(tenant create "$X" --host "$(host_of "$X")" --config "$cfg" --it-admin "$(admin_addr "$X" it)" \
-        --council-admin "$(admin_addr "$X" rat)" --enable calendar,board 2>&1)" || rc=$?
-    snap_after="$(snap)"
-    if (( rc != 0 )) && [[ "$out" == *board* ]] && [[ "$snap_before" == "$snap_after" ]]; then
-        ok "customer-create: --enable board refused by name (exit ${rc}); the control registry and the ledger unchanged"
-    else bad "customer-create: --enable board was not refused before any write (exit ${rc}; before ${snap_before}; after ${snap_after})"; fi
+    # R30 A1 (PRD-PLAT-012 / PRD-REC-003): vault is refused the same way.
+    local denied
+    for denied in board vault; do
+        snap_before="$(snap)"
+        rc=0; out="$(tenant create "$X" --host "$(host_of "$X")" --config "$cfg" --it-admin "$(admin_addr "$X" it)" \
+            --council-admin "$(admin_addr "$X" rat)" --enable "calendar,${denied}" 2>&1)" || rc=$?
+        snap_after="$(snap)"
+        if (( rc != 0 )) && [[ "$out" == *"module ${denied} cannot be enabled"* ]] && [[ "$snap_before" == "$snap_after" ]]; then
+            ok "customer-create: --enable ${denied} refused by name (exit ${rc}); the control registry and the ledger unchanged"
+        else bad "customer-create: --enable ${denied} was not refused before any write (exit ${rc}; before ${snap_before}; after ${snap_after})"; fi
+    done
 
     tenant create "$X" --host "$(host_of "$X")" --config "$cfg" --it-admin "$(admin_addr "$X" it)" \
-        --council-admin "$(admin_addr "$X" rat)" --enable calendar,vault > "$OUT/ledger/create-x.log" 2>&1 \
+        --council-admin "$(admin_addr "$X" rat)" --enable calendar,votes > "$OUT/ledger/create-x.log" 2>&1 \
         || { tail -n 25 "$OUT/ledger/create-x.log" >&2; bad "customer-create: gremion-tenant create ${X} failed"; return; }
     tenant create "$Y" --host "$(host_of "$Y")" --config "$cfg" --it-admin "$(admin_addr "$Y" it)" \
         --council-admin "$(admin_addr "$Y" rat)" > "$OUT/ledger/create-y.log" 2>&1 \
         || { tail -n 25 "$OUT/ledger/create-y.log" >&2; bad "customer-create: gremion-tenant create ${Y} failed"; return; }
-    ok "customer-create: gremion-tenant create ${X} (calendar, vault) and ${Y} exited 0"
+    ok "customer-create: gremion-tenant create ${X} (calendar, votes) and ${Y} exited 0"
 
     if [[ -n "$(q postgres "SELECT 1 FROM pg_database WHERE datname = 'gremion_platform'")" ]]; then ok "customer-create: gremion_platform exists (bootstrapped, Q15)"; else bad "customer-create: no gremion_platform"; fi
     n="$(q gremion_platform "SELECT count(*) FROM plt.module_version")"
@@ -661,10 +755,13 @@ phase_customer_create() {
     comm -13 "$OUT/ledger/dbs-kernel-before.txt" <(dbs_kernel) | grep -v "^t_${yid//-/}__" > "$OUT/ledger/dbs-kernel-new-x.txt" || true
     if [[ "$(cat "$OUT/ledger/dbs-kernel-new-x.txt")" == "$kdb" ]]; then ok "customer-create: the kernel server gained exactly ${kdb}"
     else bad "customer-create: the kernel server gained [$(tr '\n' ' ' < "$OUT/ledger/dbs-kernel-new-x.txt")], want ${kdb}"; fi
-    for m in calendar vault; do
-        if [[ "$(comm -13 "$OUT/ledger/dbs-$m-before.txt" <(dbs_module "$m"))" == "t_${id//-/}__${m}" ]]; then ok "customer-create: ${m}-postgres gained exactly t_…__${m}"
-        else bad "customer-create: ${m}-postgres did not gain exactly t_${id//-/}__${m}"; fi
-    done
+    if [[ "$(comm -13 "$OUT/ledger/dbs-calendar-before.txt" <(dbs_module calendar))" == "t_${id//-/}__calendar" ]]; then ok "customer-create: calendar-postgres gained exactly t_…__calendar"
+    else bad "customer-create: calendar-postgres did not gain exactly t_${id//-/}__calendar"; fi
+    # votes has no database (module.json database: null); vault was refused (R30 A1)
+    # (read first: a failed read must not compare as "gained nothing")
+    local vdbs
+    if vdbs="$(dbs_module vault)" && [[ -z "$(comm -13 "$OUT/ledger/dbs-vault-before.txt" <(printf '%s\n' "$vdbs" | sed '/^$/d'))" ]]; then ok "customer-create: vault-postgres gained no database (vault refused, R30 A1)"
+    else bad "customer-create: vault-postgres gained a database although vault is denied, or could not be read"; fi
     # The kernel database: gremion-ui's own ledger shape, no seed, one body.
     if [[ "$(q "$kdb" "SELECT string_agg(column_name, ',' ORDER BY column_name) FROM information_schema.columns WHERE table_name = 'schema_migrations'")" == "applied_at,filename" ]]; then ok "customer-create: schema_migrations is gremion-ui's (filename, applied_at), no sha256 (Q3)"; else bad "customer-create: schema_migrations has another shape"; fi
     if [[ "$(q "$kdb" "SELECT count(*) FROM schema_migrations WHERE filename LIKE '%seed%'")" == 0 ]]; then ok "customer-create: no *_seed.sql applied (GREMION_DISABLE_SEEDS)"; else bad "customer-create: a seed file was applied"; fi
@@ -693,14 +790,19 @@ phase_customer_create() {
     if [[ "$(q control "SELECT count(*) FROM tenant_domain WHERE tenant_id = '${id}' AND is_primary")" == 1 ]]; then ok "customer-create: one primary tenant_domain row binds $(host_of "$X")"; else bad "customer-create: tenant_domain rows"; fi
     if [[ "$(q gremion_platform "SELECT count(DISTINCT step_kind) || '/' || count(*) FROM plt.provisioning_step WHERE customer_id = '${id}' AND status = 'done'")" == "8/8" ]]; then ok "customer-create: eight done ledger rows, one per kind (Q2)"; else bad "customer-create: the ledger is not eight done rows"; fi
     local acc; acc="$(accounts)"
-    if grep -q '# kernel@' <<< "$acc" && grep -q '# calendar@' <<< "$acc" && ! grep -q '# vault@' <<< "$acc"; then
-        ok "customer-create: the broker account holds kernel and calendar users, none for vault (no flow, Q4)"
+    if grep -q '# kernel@' <<< "$acc" && grep -q '# calendar@' <<< "$acc" && ! grep -q '# votes@' <<< "$acc"; then
+        ok "customer-create: the broker account holds kernel and calendar users, none for votes (no flow, Q4)"
     else bad "customer-create: the broker account's users are not kernel+calendar"; fi
     if grep -qF "    tenant-${X}.kc:" "$(croot)/etc/edge/tenant-${X}.yml" 2>/dev/null; then ok "customer-create: etc/edge/tenant-${X}.yml carries the realm router (Q16, Q17)"; else bad "customer-create: no router file with the realm router"; fi
     local rt
     for rt in "tenant-${X}.kc" "tenant-${Y}.kc"; do
         edge_wait "http/routers/${rt}@file" || info "Traefik does not report the router ${rt}@file"
     done
+    # TASK-043c P1: the STATE, not the presence (the 043b run: all four routers
+    # reported, all four disabled by an undeclared @docker middleware).
+    local rs
+    if rs="$(routers_enabled "$X" "$Y")"; then ok "customer-create: Traefik reports tenant-${X}, tenant-${X}.kc, tenant-${Y} and tenant-${Y}.kc enabled with no error"
+    else bad "customer-create: Traefik routers are not enabled: ${rs}"; fi
     if edge_served "$(host_of "$X")"; then ok "customer-create: $(host_of "$X") is served by gremion-ui through the edge (${EDGE_SHAPE})"
     else bad "customer-create: $(host_of "$X") is not served (${EDGE_SHAPE}; want 302/303 into /auth/login or 200 with gremion-ui's CSP)"; fi
 }
@@ -711,7 +813,7 @@ phase_customer_rerun() {
     id="$(customer_id "$X")"
     before="$(q gremion_platform "SELECT count(*) FROM plt.provisioning_step WHERE customer_id = '${id}'")"
     tenant create "$X" --host "$(host_of "$X")" --config "$cfg" --it-admin "$(admin_addr "$X" it)" \
-        --council-admin "$(admin_addr "$X" rat)" --enable calendar,vault > "$OUT/ledger/rerun-x.log" 2>&1 \
+        --council-admin "$(admin_addr "$X" rat)" --enable calendar,votes > "$OUT/ledger/rerun-x.log" 2>&1 \
         || { tail -n 25 "$OUT/ledger/rerun-x.log" >&2; bad "customer-rerun: the second create failed"; return; }
     after="$(q gremion_platform "SELECT count(*) FROM plt.provisioning_step WHERE customer_id = '${id}'")"
     if [[ "$before" == "$after" ]]; then ok "customer-rerun: the ledger is unchanged (${after} rows)"; else bad "customer-rerun: the ledger grew ${before} -> ${after}"; fi
@@ -723,6 +825,13 @@ phase_customer_rerun() {
 
 phase_customer_suspend() {
     need_pooled
+    # R30 A2 (PRD-OPS-004): the stored-data fingerprint BEFORE suspend; customer-resume
+    # compares it with the one taken right after resume. No fingerprint, no suspend:
+    # without the baseline the "suspend alters no stored data" line cannot be proven.
+    rm -f "$OUT/ledger/fingerprint-before-suspend.txt" "$OUT/ledger/fingerprint-after-resume.txt"
+    if data_fingerprint "$X" > "$OUT/ledger/fingerprint-before-suspend.txt"; then
+        ok "customer-suspend: stored-data fingerprint of ${X} recorded before suspend ($(grep -c $'\t[0-9]*\t' "$OUT/ledger/fingerprint-before-suspend.txt" || true) table(s), $(sed -n 's/^realm-users\t//p' "$OUT/ledger/fingerprint-before-suspend.txt") realm user(s))"
+    else rm -f "$OUT/ledger/fingerprint-before-suspend.txt"; bad "customer-suspend: the stored-data fingerprint of ${X} could not be taken"; return; fi
     tenant suspend "$X" > "$OUT/ledger/suspend-x.log" 2>&1 || { tail -n 20 "$OUT/ledger/suspend-x.log" >&2; bad "customer-suspend: suspend failed"; return; }
     if [[ "$(q control "SELECT status FROM tenant WHERE slug = '${X}'")" == suspended ]]; then ok "customer-suspend: status suspended"; else bad "customer-suspend: status"; fi
     if [[ "$(skc get "realms/$X" --fields enabled | jq -r .enabled)" == false ]]; then ok "customer-suspend: realm ${X} disabled (no sign-in, no token)"; else bad "customer-suspend: realm still enabled"; fi
@@ -731,6 +840,18 @@ phase_customer_suspend() {
     local n
     if n="$(principal_count "$XT")" && [[ "$n" == 0 ]]; then ok "customer-suspend: the principal kc-${XT}@ is revoked (R-E5a; principals list rc 0, KC-PRINCIPALS: 0)"
     else bad "customer-suspend: the principal is not provably revoked (principals list: ${n:-failed})"; fi
+    # TASK-043c P2: the realm carries no authenticating sender (Keycloak 26.6.1
+    # refused the old blank-sender payload and the principal had already been
+    # deleted: the 043b run), and a SECOND suspend converges and changes nothing.
+    local smtp
+    smtp="$(skc get "realms/$X" --fields 'smtpServer(*)' | jq -c '(.smtpServer // {}) | [.user, .from, .auth]')" || smtp=""
+    if [[ -n "$smtp" ]] && jq -e '(.[0] // "") == "" and (.[1] // "") == "" and ((.[2] // "") | tostring) != "true"' <<< "$smtp" >/dev/null; then ok "customer-suspend: realm ${X} carries no authenticating sender (smtpServer user/from/auth: ${smtp})"
+    else bad "customer-suspend: realm ${X} still carries a sender (smtpServer user/from/auth: ${smtp:-unreadable})"; fi
+    if tenant suspend "$X" > "$OUT/ledger/suspend-x-2.log" 2>&1; then
+        if grep -q 'changed=no action=revoked' "$OUT/ledger/suspend-x-2.log" && n="$(principal_count "$XT")" && [[ "$n" == 0 ]] \
+           && [[ "$(q control "SELECT status FROM tenant WHERE slug = '${X}'")" == suspended ]]; then ok "customer-suspend: a second suspend exits 0 and changes nothing (REALM-SMTP changed=no, no principal, still suspended)"
+        else bad "customer-suspend: the second suspend exited 0 but did not converge to a no-op (see ledger/suspend-x-2.log)"; fi
+    else tail -n 20 "$OUT/ledger/suspend-x-2.log" >&2; bad "customer-suspend: a second suspend failed (it must be idempotent)"; fi
     if [[ "$(q control "SELECT status FROM tenant WHERE slug = '${Y}'")" == active ]] && edge_served "$(host_of "$Y")"; then ok "customer-suspend: ${Y} is untouched (active, served: ${EDGE_SHAPE})"
     else bad "customer-suspend: ${Y} was affected (${EDGE_SHAPE})"; fi
 }
@@ -738,10 +859,27 @@ phase_customer_suspend() {
 phase_customer_resume() {
     need_pooled
     tenant resume "$X" > "$OUT/ledger/resume-x.log" 2>&1 || { tail -n 20 "$OUT/ledger/resume-x.log" >&2; bad "customer-resume: resume failed"; return; }
+    # R30 A2 (PRD-OPS-004): taken right after resume, before any request reaches
+    # the host; equal to the one customer-suspend took is the only pass.
+    local fpv fprc=0
+    if [[ ! -s "$OUT/ledger/fingerprint-before-suspend.txt" ]]; then
+        bad "customer-resume: no stored-data fingerprint from before suspend (run customer-suspend in the same \${OUT})"
+    elif ! data_fingerprint "$X" > "$OUT/ledger/fingerprint-after-resume.txt"; then
+        bad "customer-resume: the stored-data fingerprint of ${X} could not be taken after resume"
+    else
+        fpv="$(node "$ROOT_H/test/host/fixtures/customer-provision/data-fingerprint.mjs" compare \
+            "$(host_path "$OUT/ledger/fingerprint-before-suspend.txt")" "$(host_path "$OUT/ledger/fingerprint-after-resume.txt")")" || fprc=$?
+        printf '%s rc=%s %s\n' "$(now)" "$fprc" "$(tr '\n' ';' <<< "$fpv")" | ledger fingerprint-compare.txt
+        if (( fprc == 0 )); then ok "customer-resume: the stored data of ${X} is unchanged across suspend and resume (every table's row count and checksum, the realm's user count)"
+        else bad "customer-resume: suspend/resume altered stored data of ${X}: $(tr '\n' ';' <<< "$fpv")"; fi
+    fi
     if [[ "$(q control "SELECT status FROM tenant WHERE slug = '${X}'")" == active ]]; then ok "customer-resume: status active"; else bad "customer-resume: status"; fi
     if [[ "$(skc get "realms/$X" --fields enabled | jq -r .enabled)" == true ]]; then ok "customer-resume: realm enabled"; else bad "customer-resume: realm still disabled"; fi
     if edge_served "$(host_of "$X")"; then ok "customer-resume: $(host_of "$X") is served by gremion-ui again (${EDGE_SHAPE})"
     else bad "customer-resume: $(host_of "$X") is not served (${EDGE_SHAPE})"; fi
+    local rs
+    if rs="$(routers_enabled "$X" "$Y")"; then ok "customer-resume: Traefik reports both routers of ${X} and of ${Y} enabled with no error"
+    else bad "customer-resume: Traefik routers are not enabled: ${rs}"; fi
     if grep -q '# calendar@' <<< "$(accounts)"; then ok "customer-resume: the calendar broker user is back"; else bad "customer-resume: no calendar broker user"; fi
     local n
     if n="$(principal_count "$XT")" && [[ "$n" == 1 ]]; then ok "customer-resume: a fresh principal kc-${XT}@ exists (KC-PRINCIPALS: 1)"

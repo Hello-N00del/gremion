@@ -31,6 +31,12 @@ describe('edge-proto fixtures', () => {
     expect(compose).not.toMatch(/middlewares\.edge-ratelimit\./)
   })
 
+  it('the traefik container declares the proxy-trust middleware the app chain ends with (a dummy value, never a secret)', () => {
+    const compose = readFileSync(join(FIXTURE, 'docker-compose.yml'), 'utf8')
+    expect(compose).toMatch(/middlewares\.gremion-ui-proxytrust\.headers\.customrequestheaders\.x-proxy-trust: "edgeproto-dummy-not-a-secret"\n/)
+    expect(compose).toContain('trust=$$http_x_proxy_trust')
+  })
+
   it('the traefik container declares an explicit internaltest-only router (no generated default router)', () => {
     const compose = readFileSync(join(FIXTURE, 'docker-compose.yml'), 'utf8')
     expect(compose).toContain('traefik.http.routers.traefik.entrypoints: "internaltest"')

@@ -7,10 +7,13 @@
 // live in the tenant's own emitted file. An app-tier container disappears on
 // every colour switch and would take any middleware declared on it along.
 //
-// This module does not write labels anywhere: the compose labels block is 34b's
-// (after TASK-040/041). It is the single statement of the values so that the
-// emitter's chain, the edge-proto fixture labels and — later — the compose
-// labels can all be asserted against one source.
+// This module does not write labels anywhere. It is the single statement of the
+// values so that the emitter's chain, the edge-proto fixture labels and the
+// production compose labels can all be asserted against one source. TASK-043c
+// landed the HOST-INDEPENDENT half (both HSTS middlewares and the three
+// rate-limit tiers) on the traefik service in docker-compose.prod.yml; the
+// platform host pins (edge-hostpin-*), the static app/portal routers and the
+// retirement of the interim names stay TASK-034's 34b.
 
 /** The HSTS max-age both platform HSTS middlewares send (one year). */
 export const HSTS_MAX_AGE_SECONDS = 31536000
@@ -31,6 +34,14 @@ export type PlatformPin = (typeof PLATFORM_PINS)[number]
 export const MW_HSTS_CUSTOM = 'edge-hsts-custom@docker'
 export const MW_HSTS_PLATFORM = 'edge-hsts-platform@docker'
 export const MW_RATELIMIT_APP = 'edge-ratelimit-app@docker'
+/**
+ * The edge's shared-secret x-proxy-trust stamp (docker-compose.prod.yml, the
+ * interim name TASK-040 Q5; 34b renames it everywhere). gremion-ui 403s any
+ * request lacking it once TENANT_PROXY_SHARED_SECRET is set, which the pooled
+ * app always does (TASK-043c P1b, Qc3). Chained on the APP router only: the
+ * Keycloak router must never receive the app's secret.
+ */
+export const MW_PROXYTRUST = 'gremion-ui-proxytrust@docker'
 
 /**
  * The per-IP in-flight cap each tenant file declares as `edge-perip-<slug>`.

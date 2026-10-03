@@ -4,9 +4,9 @@
 //  - bootstrapPlatform creates, migrates and loads the catalogue rows (Q20),
 //    and a rerun changes nothing;
 //  - pgLedger / pgAttestations round-trip against 0004;
-//  - pgModules enables calendar and vault through the interim operator gate
-//    (Q19) with the ONE attestation as both references; an id outside
-//    --enable is GATE_REFUSED with no database; a module Q20 left undecided
+//  - pgModules enables calendar through the interim operator gate (Q19) with
+//    the ONE attestation as both references; an id outside --enable, and vault
+//    even when passed (R30 A1), is GATE_REFUSED with no database; a module Q20 left undecided
 //    is MODULE_VERSION_UNKNOWN.
 import { randomBytes, randomUUID } from 'node:crypto'
 import { resolve } from 'node:path'
@@ -275,7 +275,7 @@ describe('the platform on a fresh server', () => {
     }
   })
 
-  it('TDD 7: calendar and vault enable through the interim gate with the attestation as both references; publishing (not passed) is refused with no database; a synthetic undecided module (Q20) is MODULE_VERSION_UNKNOWN', async () => {
+  it('TDD 7: calendar enables through the interim gate with the attestation as both references; publishing (not passed) and vault (passed and attested, but denied: R30 A1, PRD-PLAT-012 / PRD-REC-003) are refused with no database; a synthetic undecided module (Q20) is MODULE_VERSION_UNKNOWN', async () => {
     const p = open('gremion_platform', 3, OWNER, OWNER_PW)
     try {
       const X = uuidv7()
@@ -294,14 +294,14 @@ describe('the platform on a fresh server', () => {
       const att = pgAttestations(p)
       const gate = operatorAllowGate(new Set(['calendar', 'vault']), (c, m) => att.lookup(c, m))
       const before = (await admin<{ datname: string }[]>`SELECT datname FROM pg_database`).map((r) => r.datname)
-      for (const m of ['calendar', 'vault']) {
-        await att.ensure(X, m, OPERATOR, ['calendar', 'vault'])
-        expect((await modules.enable(ref, m, gate, OPERATOR)).noop).toBe(false)
-      }
+      for (const m of ['calendar', 'vault']) await att.ensure(X, m, OPERATOR, ['calendar', 'vault'])
+      expect((await modules.enable(ref, 'calendar', gate, OPERATOR)).noop).toBe(false)
+      // R30 A1: vault is denied by name even with --enable and a persisted attestation
+      await expect(modules.enable(ref, 'vault', gate, OPERATOR)).rejects.toMatchObject({ code: 'GATE_REFUSED' })
       const hex = X.replaceAll('-', '')
       const after = (await admin<{ datname: string }[]>`SELECT datname FROM pg_database`).map((r) => r.datname)
-      expect(after.filter((d) => !before.includes(d)).sort()).toEqual([`t_${hex}__calendar`, `t_${hex}__vault`])
-      expect(await modules.enabled(ref)).toEqual(['calendar', 'vault'])
+      expect(after.filter((d) => !before.includes(d)).sort()).toEqual([`t_${hex}__calendar`])
+      expect(await modules.enabled(ref)).toEqual(['calendar'])
       const rows = await p<{ module_key: string; iso: string; dpia: string; by_kind: string; by: string }[]>`
         SELECT m.module_key, e.isolation_test_result_id::text AS iso, e.dpia_decision_id::text AS dpia, e.enabled_by_kind AS by_kind, e.enabled_by::text AS by
           FROM plt.module_enablement e JOIN plt.module m USING (module_id) WHERE e.customer_id = ${X} ORDER BY 1`
@@ -322,7 +322,7 @@ describe('the platform on a fresh server', () => {
       await att.ensure(X, 'votes', OPERATOR, ['votes'])
       const votes = await modules.enable(ref, 'votes', votesGate, OPERATOR)
       expect(votes).toEqual({ noop: false, database: null })
-      expect(await modules.enabled(ref)).toEqual(['calendar', 'vault', 'votes'])
+      expect(await modules.enabled(ref)).toEqual(['calendar', 'votes'])
     } finally {
       await p.end()
     }

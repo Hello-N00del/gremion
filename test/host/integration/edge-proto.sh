@@ -322,6 +322,7 @@ wait_edge_ready() {
               | jq -r '[.[].name] | join(" ")' 2>/dev/null || printf '')"
         missing=""
         for m in edge-ratelimit-app@docker edge-hsts-custom@docker edge-hsts-platform@docker \
+                 gremion-ui-proxytrust@docker \
                  edge-hostpin-apex@docker edge-hostpin-a@file edge-hostpin-b@file \
                  edge-perip-a@file edge-perip-b@file; do
             [[ " ${mw} " == *" ${m} "* ]] || missing="${missing} ${m}"
@@ -376,6 +377,12 @@ prove_s10() {
         wait_api /api/http/routers/tenant-b@file '.status' 'enabled'
 
     wait_body "public entrypoint" "colour=blue" \
+        curl -k -sS --resolve tenant-a.example.org:8443:127.0.0.1 \
+             https://tenant-a.example.org:8443/whoami
+    # TASK-043c P1b: the tenant app chain ends with gremion-ui-proxytrust@docker,
+    # so the app sees the edge's x-proxy-trust stamp (a dummy value in this
+    # fixture). Without it gremion-ui 403s every customer host.
+    wait_body "public entrypoint stamps x-proxy-trust" "trust=edgeproto-dummy-not-a-secret" \
         curl -k -sS --resolve tenant-a.example.org:8443:127.0.0.1 \
              https://tenant-a.example.org:8443/whoami
     wait_body "internaltest entrypoint" "colour=green" \

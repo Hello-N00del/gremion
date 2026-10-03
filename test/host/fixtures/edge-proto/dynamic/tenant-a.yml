@@ -11,8 +11,10 @@
 #   2. the chain is the tenant's own host pin FIRST, then edge-hsts-custom and
 #      edge-ratelimit-app (declared on the Traefik container's labels, @docker,
 #      the one container that exists whenever a router does), then the tenant's
-#      per-IP in-flight cap. The pin SETS X-Forwarded-Host to the router's own
-#      literal host, so a client-supplied value never reaches the app;
+#      per-IP in-flight cap, then gremion-ui-proxytrust (the edge's shared-secret
+#      stamp the app requires; the Keycloak router omits it). The pin SETS
+#      X-Forwarded-Host to the router's own literal host, so a client-supplied
+#      value never reaches the app;
 #   3. the only middlewares declared here are that pin (edge-hostpin-<slug>,
 #      then -<i> for each further host) and edge-perip-<slug>. No service, no
 #      secret and no platform middleware is ever declared in this file;
@@ -31,6 +33,7 @@ http:
         - "edge-hsts-custom@docker"
         - "edge-ratelimit-app@docker"
         - "edge-perip-a@file"
+        - "gremion-ui-proxytrust@docker"
       tls:
         certResolver: "le-http"
   middlewares:

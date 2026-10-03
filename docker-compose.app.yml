@@ -244,9 +244,10 @@ services:
   # operator reaches it with `gremion-tenant panel`, which prints the
   # `ssh -L 127.0.0.1:<p>:<ip>:3000` line for this colour's address on
   # ${STACK}-app-<colour>_app (a public control router is TASK-118's). It
-  # executes nothing: "Neuer Mandant" registers the row and its pending
-  # ledger, `gremion-tenant create` completes it (Q6), so PANEL_EXECUTOR is
-  # `none` here and the button says so.
+  # only DISPLAYS: PANEL_EXECUTOR is `none` here, the image carries no
+  # gremion-tenant and its database role is SELECT-only, so "Neuer Mandant"
+  # writes no tenant row and no ledger (the button says so). Registration and
+  # provisioning are `gremion-tenant create` on the host (Q6).
   control-panel:
     image: ghcr.io/hello-n00del/gremion-control-panel:${IMAGE_TAG:?IMAGE_TAG required}
     build:

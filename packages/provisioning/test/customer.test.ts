@@ -18,7 +18,7 @@ import { ADMINS, deps, hostStamp, OPERATOR, PLATFORM_DOMAIN, UNDECIDED_MODULE, w
 const spec = (over: Partial<CreateSpec> = {}): CreateSpec => ({
   slug: 'musterstadt',
   host: 'rat.musterstadt.example',
-  enable: ['calendar', 'vault'],
+  enable: ['calendar', 'votes'],
   operatorId: OPERATOR,
   admins: ADMINS,
   ...over,
@@ -48,20 +48,20 @@ describe('create (phases A, host, B)', () => {
     expect(w.mutations.indexOf('config:write musterstadt')).toBeLessThan(w.mutations.indexOf(`pg:migrate-kernel ${c.id}`))
     expect(w.kernel.get(c.id)).toMatchObject({ orgUnits: 1, committees: 0, seedRows: [], ledgerColumns: ['filename', 'applied_at'] })
     expect(w.groups.get('musterstadt')).toEqual(['council'])
-    // TDD 7/8: calendar gets a NATS user, vault (NO_BROKER) does not
+    // TDD 7/8: calendar gets a NATS user, votes (NO_BROKER) does not
     expect(w.broker.get('musterstadt')).toEqual(['calendar', 'kernel'])
-    expect(b.enabled).toEqual(['calendar', 'vault'])
+    expect(b.enabled).toEqual(['calendar', 'votes'])
     // TDD 10: two users, each invited once from the realm's own principal
     const r = w.realms.get('musterstadt')!
     expect([...r.users.values()].map((u) => u.role).sort()).toEqual(['council-admin', 'it-admin'])
     expect(r.mails).toEqual([`kc-musterstadt@${PLATFORM_DOMAIN} -> it@customer.example`, `kc-musterstadt@${PLATFORM_DOMAIN} -> council@customer.example`])
     // Q19: one attestation per module, persisted before its enable, both refs = that id
     const mine = w.enabled.get(c.id)!
-    for (const mod of ['calendar', 'vault']) {
+    for (const mod of ['calendar', 'votes']) {
       const att = w.attestations.get(`${c.id}/${mod}`)!
       expect(mine.get(mod)).toEqual({ gateRefs: [att.id, att.id], by: OPERATOR })
       expect(w.mutations.indexOf(`plt:attest ${mod}`)).toBeLessThan(w.mutations.indexOf(`pg:enable musterstadt/${mod}`))
-      expect(att.enableList).toEqual(['calendar', 'vault'])
+      expect(att.enableList).toEqual(['calendar', 'votes'])
     }
     expect(w.mutations.indexOf('control:status musterstadt=active')).toBeGreaterThan(w.mutations.indexOf('ledger:first_accounts_created=done'))
   })
@@ -95,10 +95,11 @@ describe('create (phases A, host, B)', () => {
     expect(w.mutations).toEqual(['nats:ensure musterstadt=[kernel]', 'ledger:broker_account_created=done'])
   })
 
-  it('board is refused by name before any write (R29-I1); an unknown module too', async () => {
+  it('board and vault are refused by name before any write (R29-I1; R30 A1, PRD-PLAT-012 / PRD-REC-003); an unknown module too', async () => {
     const w = world()
     const d = deps(w)
     await expect(createPhaseA(spec({ enable: ['calendar', 'board'] }), d)).rejects.toMatchObject({ code: 'MODULE_DENIED' })
+    await expect(createPhaseA(spec({ enable: ['calendar', 'vault'] }), d)).rejects.toMatchObject({ code: 'MODULE_DENIED' })
     await expect(createPhaseA(spec({ enable: ['nope'] }), d)).rejects.toMatchObject({ code: 'MODULE_UNKNOWN' })
     expect(w.mutations).toEqual([])
     expect(w.control.size).toBe(0)
@@ -129,11 +130,11 @@ describe('create (phases A, host, B)', () => {
     expect(w.control.size).toBe(1)
   })
 
-  it('no module is enabled by default; vault gets an enablement and no broker user', async () => {
+  it('no module is enabled by default; votes gets an enablement and no broker user', async () => {
     const w = world()
     const d = deps(w)
-    const { b } = await createAll(w, d, spec({ enable: ['vault'] }))
-    expect(b.enabled).toEqual(['vault'])
+    const { b } = await createAll(w, d, spec({ enable: ['votes'] }))
+    expect(b.enabled).toEqual(['votes'])
     expect(w.broker.get('musterstadt')).toEqual(['kernel'])
     const w2 = world()
     const { b: b2 } = await createAll(w2, deps(w2), spec({ enable: [] }))
@@ -262,7 +263,7 @@ describe('provisioningStatus', () => {
     const end = await provisioningStatus('musterstadt', d)
     expect(end.complete).toBe(true)
     expect(end.status).toBe('active')
-    expect(end.interimAttestations.map((a) => a.moduleKey).sort()).toEqual(['calendar', 'vault'])
+    expect(end.interimAttestations.map((a) => a.moduleKey).sort()).toEqual(['calendar', 'votes'])
     expect(end.interimAttestations[0]!.basis).toBe('interim gate, no isolation test (TASK-044)')
   })
 })

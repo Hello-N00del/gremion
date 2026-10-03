@@ -250,8 +250,10 @@ kcadm_update_stdin() {
 #      STARTTLS with a password set: nothing to do (changed=no);
 #   4. present but the realm is not stamped (a crash between issue and stamp):
 #      `issue --rotate` (the password is unrecoverable by design), stamp;
-#   5. --revoke: `principals revoke` (it DELETEs the principal), then blank the
-#      realm's user, from and password and read that back; resume is therefore
+#   5. --revoke: set the realm's smtpServer to the EMPTY map and read that back
+#      (no user, no from, no authenticating sender) FIRST, then `principals
+#      revoke` (it DELETEs the principal), then list it gone. Every step is
+#      re-runnable, so a rerun after any failure converges; resume is therefore
 #      a fresh issue (step 2), never --rotate.
 # The app password leaves `principals issue` on its stdout (printed once), is
 # held in a shell variable of THIS process, reaches jq through $ENV and kcadm
@@ -268,26 +270,37 @@ customer_realm_smtp() {
 
     local state
     if [[ "$revoke" == yes ]]; then
-        run_node principals revoke --tenant "$token" >/dev/null \
-            || die "principals revoke --tenant ${token} failed" "$GREMION_EXIT_ASSERT"
-        jq -nc --arg d "$PLATFORM_DOMAIN" \
-            '{smtpServer: {host: ("mail." + $d), port: "587", starttls: "true", ssl: "false", auth: "false",
-                           fromDisplayName: "Gremion", user: "", from: "", password: ""}}' \
-            | kcadm_update_stdin "$realm" \
-            || die "kcadm refused to update realms/${realm}" "$GREMION_EXIT_ASSERT"
+        # Order (TASK-043c, Qc5): the realm is un-stamped and READ BACK first, the
+        # principal is deleted second -- the only irreversible step runs last, so
+        # no failure can leave the principal deleted while the realm still stamps
+        # it (the dangling stamp a field-only reconcile reads as healthy). Each
+        # step is re-runnable, so a rerun of the same verb converges.
+        local raw before_state stamped_before=no
+        raw="$(docker exec "$KC_CID" "$KCADM_BIN" get "realms/$realm" --fields "$SMTP_FIELDS")" \
+            || die "kcadm could not read realms/${realm}" "$GREMION_EXIT_ASSERT"
+        before_state="$(jq -c '(.smtpServer // {}) | {user: (.user // ""), from: (.from // ""), auth: ((.auth // "") | tostring)}' <<<"$raw")" \
+            || die "realms/${realm} read as no JSON" "$GREMION_EXIT_ASSERT"
+        if jq -e '.user != "" or .from != "" or .auth == "true"' <<<"$before_state" >/dev/null; then stamped_before=yes; fi
+        # The payload is the EMPTY smtpServer map: Keycloak 26.6.1 refuses a
+        # sender with from "" (or from omitted) -- "Invalid sender address ''" --
+        # and accepts {}, which drops the host, the user, the sender and the
+        # password together (measured; test/host/fixtures/kcadm-26.6.1/README.md).
+        printf '%s' '{"smtpServer":{}}' | kcadm_update_stdin "$realm" \
+            || die "kcadm refused to update realms/${realm}; the principal ${principal} is NOT revoked, rerun the same command" "$GREMION_EXIT_ASSERT"
         # The post-condition does NOT read the password: Keycloak may answer an
-        # empty one as its mask (review C, r2). No user, no from and SMTP auth
-        # off mean the realm cannot authenticate as anyone; the principal
-        # itself is proven gone by the listing below.
-        local raw
+        # empty one as its mask (review C, r2). No user, no from and no
+        # authenticating SMTP mean the realm cannot authenticate as anyone; the
+        # principal itself is proven gone by the listing below.
         raw="$(docker exec "$KC_CID" "$KCADM_BIN" get "realms/$realm" --fields "$SMTP_FIELDS")" \
             || die "kcadm could not read realms/${realm} back" "$GREMION_EXIT_ASSERT"
         state="$(jq -c '(.smtpServer // {}) | {user: (.user // ""), from: (.from // ""), auth: ((.auth // "") | tostring)}' <<<"$raw")" \
             || die "realms/${realm} read back as no JSON" "$GREMION_EXIT_ASSERT"
-        if [[ "$(jq -r '.user + "|" + .from + "|" + .auth' <<<"$state")" != "||false" ]]; then
-            bad "realms/${realm} smtpServer read back as ${state} after the revoke, expected no user, no from, auth false"
+        if ! jq -e '.user == "" and .from == "" and .auth != "true"' <<<"$state" >/dev/null; then
+            bad "realms/${realm} smtpServer read back as ${state} after the un-stamp, expected no user, no from, no authenticating sender; the principal ${principal} is NOT revoked"
             exit "$GREMION_EXIT_ASSERT"
         fi
+        run_node principals revoke --tenant "$token" >/dev/null \
+            || die "principals revoke --tenant ${token} failed; the realm sender is already un-stamped, so rerunning the same command converges" "$GREMION_EXIT_ASSERT"
         listed="$(run_node principals list --tenant "$token")" \
             || die "principals list --tenant ${token} failed after the revoke" "$GREMION_EXIT_ASSERT"
         if printf '%s\n' "$listed" | grep -qxF -- "$principal"; then
@@ -295,7 +308,7 @@ customer_realm_smtp() {
             exit "$GREMION_EXIT_ASSERT"
         fi
         ok "realms/${realm} has no sender; ${principal} is revoked"
-        printf 'REALM-SMTP: realm=%s user=%s changed=%s action=revoked\n' "$realm" "$principal" "$([[ "$present" == yes ]] && echo yes || echo no)"
+        printf 'REALM-SMTP: realm=%s user=%s changed=%s action=revoked\n' "$realm" "$principal" "$([[ "$present" == yes || "$stamped_before" == yes ]] && echo yes || echo no)"
         return
     fi
 

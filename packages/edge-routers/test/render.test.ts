@@ -82,14 +82,18 @@ describe('renderTenantRouter — TDD 2: what the file declares and chains', () =
     expect(yaml.split('\n').filter((l) => /^\S/.test(l) && !l.startsWith('#'))).toEqual(['http:'])
   })
 
-  it('chains pin, edge-hsts-custom@docker, edge-ratelimit-app@docker, per-IP — on every router', () => {
+  it('chains pin, edge-hsts-custom@docker, edge-ratelimit-app@docker, per-IP, proxy-trust — on every router', () => {
     expect(r.routers).toHaveLength(3)
     for (const x of r.routers) {
+      // TASK-043c P1b (Qc3): the app chain ends with the edge's x-proxy-trust
+      // stamp; without it gremion-ui 403s every customer host once the routers
+      // enable (resolve.ts isProxyTrusted, TENANT_PROXY_SHARED_SECRET always set).
       expect(x.chain).toEqual([
         `${x.pin}@file`,
         'edge-hsts-custom@docker',
         'edge-ratelimit-app@docker',
         'edge-perip-acme@file',
+        'gremion-ui-proxytrust@docker',
       ])
     }
   })
@@ -127,9 +131,14 @@ describe('renderTenantRouter — TDD 2: what the file declares and chains', () =
     // assembled from parts: hygiene j2/j3 scan this file too
     const cdnToken = new RegExp(['CF', 'API', 'TOKEN'].join('_'), 'i')
     const carrier = new RegExp([['edge', 'plan'].join('-'), ['edge', 'Plan'].join(''), 'renderNs' + 'Delegation'].join('|'))
-    for (const bad of [cdnToken, /cloudflare/i, carrier, /\$\{/, /proxytrust|x-proxy-trust/i]) {
+    // The file never carries the shared secret or DECLARES the stamping
+    // middleware (no `x-proxy-trust` header, no `gremion-ui-proxytrust:` key):
+    // it only REFERENCES gremion-ui-proxytrust@docker from the chain (TASK-043c
+    // Qc3), and that name carries no secret; the value lives on the Traefik labels.
+    for (const bad of [cdnToken, /cloudflare/i, carrier, /\$\{/, /x-proxy-trust/i, /^\s*gremion-ui-proxytrust:/m]) {
       expect(yaml).not.toMatch(bad)
     }
+    expect(yaml.match(/^ {8}- "gremion-ui-proxytrust@docker"$/gm)).toHaveLength(3) // one per router
   })
 })
 

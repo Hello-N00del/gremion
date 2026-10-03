@@ -236,7 +236,11 @@ case "$1" in
         echo "$rot" >> "$ST/issue-log"; touch "$ST/principal-$tok"
         echo "KC-PRINCIPAL: $([ "$rot" = yes ] && echo rotated || echo issued) $name"
         echo "APP-PASSWORD: unit-app-password-$c"; exit 0 ;;
-      revoke) rm -f "$ST/principal-$tok"; echo "KC-PRINCIPAL: revoked $name"; exit 0 ;;
+      revoke)
+        echo "revoke-principal $tok" >> "$ST/events"
+        [ -f "$ST/revoke-fails" ] && { echo "FAIL principals revoke simulated failure" >&2; exit 1; }
+        # idempotent like principals.mjs: an absent principal is revoked:false, exit 0
+        rm -f "$ST/principal-$tok"; echo "KC-PRINCIPAL: revoked $name"; exit 0 ;;
     esac
     exit 0 ;;
   *) exit 0 ;;
@@ -256,6 +260,16 @@ for a in "$@"; do case "$a" in realms/*) realm="${a#realms/}" ;; esac; done
 case " $* " in
   *" update realms/"*" -f - "*)
     cat > "$ST/payload-$realm.json"
+    echo "update-realm $realm" >> "$ST/events"
+    [ -f "$ST/update-fails" ] && { echo "HTTP 500 simulated kcadm update failure" >&2; exit 1; }
+    # kc2661: the refusal MEASURED on Keycloak 26.6.1 (fixtures/kcadm-26.6.1/
+    # README.md): a non-empty smtpServer map whose `from` is empty or omitted is
+    # refused with the measured message and exit 1; `{}` is accepted.
+    if [ "$(cat "$ST/mode")" = kc2661 ] \
+       && jq -e "(.smtpServer | length > 0) and ((.smtpServer.from // \"\") == \"\")" "$ST/payload-$realm.json" >/dev/null; then
+      cat "'"${KERNEL_ROOT}"'/test/host/fixtures/kcadm-26.6.1/update-realm-smtpServer-empty-from.stderr" >&2
+      exit 1
+    fi
     # Keycloak answers a set smtpServer password as its mask, never the value.
     mask="if ((.password // \"\") != \"\") then .password = \"**********\" else del(.password) end"
     # maskempty: a Keycloak that masks the key whenever it is PRESENT, an empty
@@ -450,7 +464,144 @@ issue_calls() { grep -c 'principals.mjs issue' "$SHIM_LOG" || true; }
     run "$LAUNCHER" realm-smtp --realm alpha-council --tenant alpha_council --revoke
     [ "$status" -eq 0 ] || { echo "status=$status $output"; cat "${GREMION_ROOT}/kc/realm-alpha-council.json"; return 1; }
     [[ "$output" == *"action=revoked"* ]]
-    run jq -e '.user == "" and .from == "" and .auth == "false"' "${GREMION_ROOT}/kc/realm-alpha-council.json"
+    # TASK-043c Qc4: the un-stamped realm holds no sender at all ({}); the
+    # assertion is the post-condition's shape (no user, no from, auth not "true"),
+    # and it never reads a password.
+    run jq -e '(.user // "") == "" and (.from // "") == "" and ((.auth // "") | tostring) != "true"' "${GREMION_ROOT}/kc/realm-alpha-council.json"
+    [ "$status" -eq 0 ] || { cat "${GREMION_ROOT}/kc/realm-alpha-council.json"; return 1; }
+    refute_app_password
+}
+
+# ---------------------------------------------------------------------------
+# TASK-043c P2: --revoke un-stamps the realm FIRST (with a payload Keycloak
+# 26.6.1 accepts), reads it back, and only then deletes the principal; every
+# step is re-runnable, so a rerun converges. The kc2661 shim refuses what the
+# real Keycloak refused (fixtures/kcadm-26.6.1/README.md).
+# ---------------------------------------------------------------------------
+
+stamp_alpha() {
+    run "$LAUNCHER" realm-smtp --realm alpha-council --tenant alpha_council
+    [ "$status" -eq 0 ] || { echo "stamp: status=$status $output"; return 1; }
+}
+revoke_alpha() { run "$LAUNCHER" realm-smtp --realm alpha-council --tenant alpha_council --revoke; }
+principal_listed() { [ -e "${GREMION_ROOT}/kc/principal-alpha_council" ]; }
+realm_is_unstamped() {
+    jq -e '(.user // "") == "" and (.from // "") == "" and ((.auth // "") | tostring) != "true" and (has("password") | not)' \
+        "${GREMION_ROOT}/kc/realm-alpha-council.json" >/dev/null
+}
+
+@test "revoke on a Keycloak 26.6.1 that refuses an empty sender: exit 0, realm un-stamped, principal gone (TASK-043c P2)" {
+    shim_keycloak kc2661
+    write_state_env
+    stamp_alpha
+    revoke_alpha
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
+    [[ "$output" == *"REALM-SMTP: realm=alpha-council user=kc-alpha_council@example.org changed=yes action=revoked"* ]] || { echo "$output"; return 1; }
+    ! principal_listed
+    realm_is_unstamped || { cat "${GREMION_ROOT}/kc/realm-alpha-council.json"; return 1; }
+    refute_app_password
+    refute_secret_in_argv
+}
+
+@test "revoke order: the realm is un-stamped before the principal is deleted (TASK-043c Qc5)" {
+    shim_keycloak kc2661
+    write_state_env
+    stamp_alpha
+    : > "${GREMION_ROOT}/kc/events"
+    revoke_alpha
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    [ "$(cat "${GREMION_ROOT}/kc/events")" = "$(printf 'update-realm alpha-council\nrevoke-principal alpha_council')" ] \
+        || { cat "${GREMION_ROOT}/kc/events"; return 1; }
+}
+
+@test "revoke whose realm update is refused: non-zero, names the step, and the principal is STILL there (no deleted-but-stamped state)" {
+    shim_keycloak kc2661
+    write_state_env
+    stamp_alpha
+    touch "${GREMION_ROOT}/kc/update-fails"
+    : > "${GREMION_ROOT}/kc/events"
+    revoke_alpha
+    [ "$status" -eq 1 ] || { echo "status=$status $output"; return 1; }
+    [[ "$output" == *"kcadm refused to update realms/alpha-council"* ]] || { echo "$output"; return 1; }
+    principal_listed || { echo "the principal was deleted while the realm still stamps it"; cat "${GREMION_ROOT}/kc/events"; return 1; }
+    ! grep -q '^revoke-principal' "${GREMION_ROOT}/kc/events"
+    refute_app_password
+}
+
+@test "revoke whose read-back disagrees (a Keycloak that keeps another user): non-zero and the principal is NOT deleted" {
+    shim_keycloak broken
+    write_state_env
+    stamp_alpha || true
+    touch "${GREMION_ROOT}/kc/principal-alpha_council"
+    : > "${GREMION_ROOT}/kc/events"
+    revoke_alpha
+    [ "$status" -eq 1 ] || { echo "status=$status $output"; return 1; }
+    [[ "$output" == *"read back"* ]] || { echo "$output"; return 1; }
+    principal_listed
+    ! grep -q '^revoke-principal' "${GREMION_ROOT}/kc/events"
+}
+
+@test "revoke whose principal deletion fails after the realm was un-stamped: non-zero, realm has no sender; the rerun converges (action=revoked, principal gone)" {
+    shim_keycloak kc2661
+    write_state_env
+    stamp_alpha
+    touch "${GREMION_ROOT}/kc/revoke-fails"
+    revoke_alpha
+    [ "$status" -eq 1 ] || { echo "status=$status $output"; return 1; }
+    [[ "$output" == *"principals revoke --tenant alpha_council failed"* ]] || { echo "$output"; return 1; }
+    realm_is_unstamped || { cat "${GREMION_ROOT}/kc/realm-alpha-council.json"; return 1; }
+    principal_listed
+    rm -f "${GREMION_ROOT}/kc/revoke-fails"
+    revoke_alpha
+    [ "$status" -eq 0 ] || { echo "rerun status=$status $output"; return 1; }
+    [[ "$output" == *"changed=yes action=revoked"* ]] || { echo "$output"; return 1; }
+    ! principal_listed
+    realm_is_unstamped
+    refute_app_password
+}
+
+@test "a revoke rerun after a COMPLETE revoke exits 0, changes nothing, and does not rotate or re-issue" {
+    shim_keycloak kc2661
+    write_state_env
+    stamp_alpha
+    revoke_alpha
+    [ "$status" -eq 0 ]
+    : > "$SHIM_LOG"
+    revoke_alpha
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
+    [[ "$output" == *"changed=no action=revoked"* ]] || { echo "$output"; return 1; }
+    ! principal_listed
+    realm_is_unstamped
+    refute_recorded docker 'principals.mjs issue'
+    refute_app_password
+}
+
+@test "revoke converges a realm that the OLD order left half-done (principal gone, realm still stamping it)" {
+    shim_keycloak kc2661
+    write_state_env
+    stamp_alpha
+    rm -f "${GREMION_ROOT}/kc/principal-alpha_council"
+    revoke_alpha
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
+    [[ "$output" == *"changed=yes action=revoked"* ]] || { echo "$output"; return 1; }
+    realm_is_unstamped || { cat "${GREMION_ROOT}/kc/realm-alpha-council.json"; return 1; }
+}
+
+@test "resume after a revoke that stopped halfway issues a FRESH principal (never --rotate) and re-stamps the realm" {
+    shim_keycloak kc2661
+    write_state_env
+    stamp_alpha
+    touch "${GREMION_ROOT}/kc/revoke-fails"
+    revoke_alpha
+    [ "$status" -eq 1 ]
+    rm -f "${GREMION_ROOT}/kc/revoke-fails"
+    rm -f "${GREMION_ROOT}/kc/principal-alpha_council"   # the principal is gone, the realm is un-stamped
+    : > "$SHIM_LOG"
+    run "$LAUNCHER" realm-smtp --realm alpha-council --tenant alpha_council
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
+    [[ "$output" == *"action=issued"* ]] || { echo "$output"; return 1; }
+    refute_recorded docker 'principals.mjs issue --tenant alpha_council --rotate'
+    run jq -e '.user == "kc-alpha_council@example.org" and .auth == "true"' "${GREMION_ROOT}/kc/realm-alpha-council.json"
     [ "$status" -eq 0 ] || { cat "${GREMION_ROOT}/kc/realm-alpha-council.json"; return 1; }
     refute_app_password
 }

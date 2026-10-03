@@ -98,6 +98,10 @@ services:
       traefik.http.middlewares.edge-ratelimit-auth.ratelimit.burst: "10"
       traefik.http.middlewares.edge-ratelimit-auth.ratelimit.period: "1m"
       traefik.http.middlewares.edge-ratelimit-auth.ratelimit.sourcecriterion.ipstrategy.depth: "0"
+      # TASK-043c (Qc3): the interim proxy-trust stamp every tenant APP router
+      # chains last (production: docker-compose.prod.yml, value from
+      # TENANT_PROXY_SHARED_SECRET). A dummy value here, never a secret.
+      traefik.http.middlewares.gremion-ui-proxytrust.headers.customrequestheaders.x-proxy-trust: "edgeproto-dummy-not-a-secret"
     healthcheck:
       test: ["CMD", "traefik", "healthcheck", "--ping"]
       interval: "5s"
@@ -127,7 +131,7 @@ services:
         server {
           listen 3000;
           location = /healthz { add_header Content-Type text/plain; return 200 "ok\n"; }
-          location = /whoami  { add_header Content-Type text/plain; return 200 "colour=__COLOUR__ xfh=$$http_x_forwarded_host\n"; }
+          location = /whoami  { add_header Content-Type text/plain; return 200 "colour=__COLOUR__ xfh=$$http_x_forwarded_host trust=$$http_x_proxy_trust\n"; }
           location / { root /usr/share/nginx/html; index index.html; }
         }
         CONF
@@ -162,7 +166,7 @@ services:
         server {
           listen 3000;
           location = /healthz { add_header Content-Type text/plain; return 200 "ok\n"; }
-          location = /whoami  { add_header Content-Type text/plain; return 200 "colour=__COLOUR__ xfh=$$http_x_forwarded_host\n"; }
+          location = /whoami  { add_header Content-Type text/plain; return 200 "colour=__COLOUR__ xfh=$$http_x_forwarded_host trust=$$http_x_proxy_trust\n"; }
           location / { root /usr/share/nginx/html; index index.html; }
         }
         CONF

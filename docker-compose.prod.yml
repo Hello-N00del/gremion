@@ -183,8 +183,11 @@ services:
   # live on the traefik container — the only container guaranteed to exist
   # whenever a router does (active.yml.tmpl: "no middleware here") — because
   # the app tier they used to sit on is traefik.enable=false now and a colour
-  # switch would make them vanish mid-flight. Interim names (TASK-040 Q5):
-  # TASK-034's 34b replaces them with its edge-*@docker set.
+  # switch would make them vanish mid-flight. Interim names (TASK-040 Q5:
+  # gremion-ui-proxytrust, gremion-ui-starting, public-ratelimit): TASK-034's
+  # 34b retires them together with the static routers, the platform host pins
+  # and the edge-hostpin-* labels. TASK-043c landed the host-independent
+  # edge-* set below (the tenant routers chain it).
   #
   # traefik.enable=true is what makes the docker provider read these labels
   # at all (exposedByDefault: false). A container with no router label gets
@@ -220,6 +223,36 @@ services:
       - "traefik.http.middlewares.public-ratelimit.ratelimit.average=100"
       - "traefik.http.middlewares.public-ratelimit.ratelimit.burst=50"
       - "traefik.http.middlewares.public-ratelimit.ratelimit.period=1m"
+      # TASK-043c (P1): the HOST-INDEPENDENT edge-* set the tenant routers chain
+      # (@gremion/edge-routers render.ts). Before this the names existed only in
+      # the edge-proto test fixture, so every tenant router reported "middleware
+      # edge-ratelimit-app@docker does not exist" and customer hosts 404'd.
+      # The values are packages/edge-routers/src/platform-middlewares.ts
+      # platformMiddlewareLabels, asserted by
+      # packages/edge-routers/test/prod-compose-labels.test.ts and chained-name
+      # coverage by scripts/check-compose-edge.test.mjs guard 5. preload is never
+      # set; edge-hsts-custom never sends includeSubDomains (a customer's own
+      # domain is not this platform's namespace). The platform host pins
+      # (edge-hostpin-*) are NOT declared: they stay 34b's, with the static
+      # routers that chain them.
+      - "traefik.http.middlewares.edge-hsts-platform.headers.stsseconds=31536000"
+      - "traefik.http.middlewares.edge-hsts-platform.headers.stsincludesubdomains=true"
+      - "traefik.http.middlewares.edge-hsts-platform.headers.stspreload=false"
+      - "traefik.http.middlewares.edge-hsts-custom.headers.stsseconds=31536000"
+      - "traefik.http.middlewares.edge-hsts-custom.headers.stsincludesubdomains=false"
+      - "traefik.http.middlewares.edge-hsts-custom.headers.stspreload=false"
+      - "traefik.http.middlewares.edge-ratelimit-app.ratelimit.average=300"
+      - "traefik.http.middlewares.edge-ratelimit-app.ratelimit.burst=100"
+      - "traefik.http.middlewares.edge-ratelimit-app.ratelimit.period=1m"
+      - "traefik.http.middlewares.edge-ratelimit-app.ratelimit.sourcecriterion.ipstrategy.depth=0"
+      - "traefik.http.middlewares.edge-ratelimit-portal.ratelimit.average=100"
+      - "traefik.http.middlewares.edge-ratelimit-portal.ratelimit.burst=50"
+      - "traefik.http.middlewares.edge-ratelimit-portal.ratelimit.period=1m"
+      - "traefik.http.middlewares.edge-ratelimit-portal.ratelimit.sourcecriterion.ipstrategy.depth=0"
+      - "traefik.http.middlewares.edge-ratelimit-auth.ratelimit.average=30"
+      - "traefik.http.middlewares.edge-ratelimit-auth.ratelimit.burst=10"
+      - "traefik.http.middlewares.edge-ratelimit-auth.ratelimit.period=1m"
+      - "traefik.http.middlewares.edge-ratelimit-auth.ratelimit.sourcecriterion.ipstrategy.depth=0"
 
   # ----------------------------------------------------------
   # PR-C (reboot-404): static "starting" fallback. A low-priority (1)
