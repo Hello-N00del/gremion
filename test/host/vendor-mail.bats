@@ -497,7 +497,7 @@ realm_is_unstamped() {
     revoke_alpha
     [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
     [[ "$output" == *"REALM-SMTP: realm=alpha-council user=kc-alpha_council@example.org changed=yes action=revoked"* ]] || { echo "$output"; return 1; }
-    ! principal_listed
+    if principal_listed; then echo "the principal still exists after the revoke"; return 1; fi
     realm_is_unstamped || { cat "${GREMION_ROOT}/kc/realm-alpha-council.json"; return 1; }
     refute_app_password
     refute_secret_in_argv
@@ -524,7 +524,7 @@ realm_is_unstamped() {
     [ "$status" -eq 1 ] || { echo "status=$status $output"; return 1; }
     [[ "$output" == *"kcadm refused to update realms/alpha-council"* ]] || { echo "$output"; return 1; }
     principal_listed || { echo "the principal was deleted while the realm still stamps it"; cat "${GREMION_ROOT}/kc/events"; return 1; }
-    ! grep -q '^revoke-principal' "${GREMION_ROOT}/kc/events"
+    if grep -q '^revoke-principal' "${GREMION_ROOT}/kc/events"; then echo "the principal was revoked although the realm update failed"; cat "${GREMION_ROOT}/kc/events"; return 1; fi
     refute_app_password
 }
 
@@ -538,7 +538,7 @@ realm_is_unstamped() {
     [ "$status" -eq 1 ] || { echo "status=$status $output"; return 1; }
     [[ "$output" == *"read back"* ]] || { echo "$output"; return 1; }
     principal_listed
-    ! grep -q '^revoke-principal' "${GREMION_ROOT}/kc/events"
+    if grep -q '^revoke-principal' "${GREMION_ROOT}/kc/events"; then echo "the principal was revoked although the realm update failed"; cat "${GREMION_ROOT}/kc/events"; return 1; fi
 }
 
 @test "revoke whose principal deletion fails after the realm was un-stamped: non-zero, realm has no sender; the rerun converges (action=revoked, principal gone)" {
@@ -555,7 +555,7 @@ realm_is_unstamped() {
     revoke_alpha
     [ "$status" -eq 0 ] || { echo "rerun status=$status $output"; return 1; }
     [[ "$output" == *"changed=yes action=revoked"* ]] || { echo "$output"; return 1; }
-    ! principal_listed
+    if principal_listed; then echo "the principal still exists after the revoke"; return 1; fi
     realm_is_unstamped
     refute_app_password
 }
@@ -570,7 +570,7 @@ realm_is_unstamped() {
     revoke_alpha
     [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
     [[ "$output" == *"changed=no action=revoked"* ]] || { echo "$output"; return 1; }
-    ! principal_listed
+    if principal_listed; then echo "the principal still exists after the revoke"; return 1; fi
     realm_is_unstamped
     refute_recorded docker 'principals.mjs issue'
     refute_app_password
