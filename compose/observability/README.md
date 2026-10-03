@@ -184,6 +184,16 @@ the rules evaluate and show, nothing is sent.
 `node scripts/verify/verify.mjs --only observability` runs the static half as a
 required verify suite.
 
+## Open operator questions (provisional [A] defaults applied)
+
+- Q3 / Q11: collection by the host collector and a read-only view of Vector's
+  volume, instead of R15-3's Postgres metrics in Alloy, a NATS exporter and
+  Vector shipping to Loki (none has a route under TRD-203).
+- Q6: no ops-local Docker socket proxy (H21, see Collection); per-container
+  memory, CPU and disk come from the host collector.
+- Q7: Grafana's notification-log period on the pinned image (one repeat of an
+  open condition after about five days).
+
 ## Deferred (named)
 
 - TRD-223 (weekly footprint of the three silent-fill components) and the
