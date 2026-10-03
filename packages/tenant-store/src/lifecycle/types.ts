@@ -1,6 +1,8 @@
 // packages/tenant-store/src/lifecycle/types.ts — the lifecycle's injected dependencies.
 import type { Sql } from '@gremion/db'
 import type { CatalogueEntry } from '@gremion/module-catalogue/runtime'
+import type { PhaseFor } from '../phase.js'
+import type { RunMigrationsHooks } from '../runner.js'
 
 /** Who asked (SCHEMA module_enablement_enabled_by_check: a person or an operator). */
 export interface Actor {
@@ -64,6 +66,23 @@ export interface LifecycleDeps {
   exporter: Exporter
   /** Exports land in <exportDir>/<tenant>/<module>/<utc>.dump, mode 0600 (Q7). */
   exportDir: string
+  /**
+   * TASK-075: the release an enable ships, written into every ledger row it
+   * adds (release_ref, 1-64 characters). Required when the module declares a
+   * database.
+   */
+  releaseRef?: string
+  /**
+   * TASK-075: the phase of a headerless module migration. Default: the kernel
+   * baseline of chain `module-<id>` (scripts/migrations/runner/expand-contract-baseline.json).
+   */
+  phaseFor?: (moduleId: string) => PhaseFor | undefined
+  /**
+   * TASK-075 (TRD-206): hooks for a migration run on a database that ALREADY
+   * existed (an upgrade or a resumed enable): the pre-migration dump. A
+   * database this enable just created gets none (nothing to lose, README).
+   */
+  upgradeHooks?: RunMigrationsHooks
   /** Test seam: called after each step's state is written (crash injection). */
   hooks?: { afterStep?(step: LifecycleStep, ctx: { tenantId: string; moduleId: string; database: string | null }): void | Promise<void> }
   log?: (line: string) => void

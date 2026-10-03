@@ -18,7 +18,7 @@
 import { join } from 'node:path'
 import type { Sql } from '@gremion/db'
 import { tenantModuleDbName } from '../names.js'
-import { runMigrations } from '../runner.js'
+import { hasControlChar, runMigrations } from '../runner.js'
 import { execFormatted, sqlState } from './ddl.js'
 import {
   assertLifecycleModuleId,
@@ -28,6 +28,8 @@ import {
   LifecycleError,
   moduleRoles,
 } from './guards.js'
+import { pinnedPhaseFor } from '../phase.js'
+import { PINNED_BASELINE } from '../phase-baseline.js'
 import { assertPlatform, casModuleDatabaseState, lookupModuleVersion, readModuleDatabase } from './platform.js'
 import { scramSha256Verifier } from './scram.js'
 import type { Actor, EnableResult, GateResult, LifecycleDeps, LifecycleModule, ModuleServer } from './types.js'
@@ -145,6 +147,10 @@ export async function enableModule(tenantId: string, module: LifecycleModule, ac
   const log = deps.log ?? (() => {})
   const runtime = module.moduleJson.runtime
   const database = runtime.database
+  // TASK-075: every ledger row names its release; refused before anything is written.
+  if (database && (typeof deps.releaseRef !== 'string' || deps.releaseRef.length < 1 || deps.releaseRef.length > 64 || hasControlChar(deps.releaseRef))) {
+    throw new LifecycleError('INVALID_INPUT', 'deps.releaseRef (the release this enable ships, 1-64 printable characters) is required for a module with a database')
+  }
   await assertPlatform(deps.platform)
 
   // 2. the catalogue must know this module version
@@ -200,7 +206,21 @@ export async function enableModule(tenantId: string, module: LifecycleModule, ac
       // 7. migrations as the owner
       const owned = await openAsOwner(server, dbName, owner)
       try {
-        const r = await runMigrations({ sql: owned, dir: join(module.dir, database.migrations), log })
+        // TASK-075 G1b: a database this call created has nothing to lose, so
+        // no pre-migration dump; an existing one (upgrade, resumed enable)
+        // runs under deps.upgradeHooks (the dump hook).
+        // Default: the baseline this package ships (never a kernel checkout's
+        // scripts/, which the tenant-create image does not carry).
+        const phaseFor = deps.phaseFor ? deps.phaseFor(moduleId) : pinnedPhaseFor(`module-${moduleId}`, PINNED_BASELINE)
+        const hooks = created ? undefined : deps.upgradeHooks
+        const r = await runMigrations({
+          sql: owned,
+          dir: join(module.dir, database.migrations),
+          releaseRef: deps.releaseRef as string,
+          ...(phaseFor ? { phaseFor } : {}),
+          ...(hooks ? { hooks } : {}),
+          log,
+        })
         applied = r.applied
         await grantAppPrivileges(owned, owner, app)
       } finally {

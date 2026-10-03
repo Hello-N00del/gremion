@@ -123,6 +123,7 @@ describe('the platform on a fresh server', () => {
       openPlatform: () => open('gremion_platform', 2, OWNER, OWNER_PW),
       owner: OWNER,
       ownerPassword: OWNER_PW,
+      releaseRef: 'dist-v0.0.1',
       catalogue,
       log: (l) => logs.push(l),
     })
@@ -164,6 +165,7 @@ describe('the platform on a fresh server', () => {
       openPlatform: () => open('gremion_platform', 2, OWNER, OWNER_PW),
       owner: OWNER,
       ownerPassword: OWNER_PW,
+      releaseRef: 'dist-v0.0.1',
       catalogue,
     })
     expect(again).toMatchObject({ platformCreated: false, applied: [] })
@@ -178,6 +180,7 @@ describe('the platform on a fresh server', () => {
       openPlatform: () => open('gremion_platform', 2, OWNER, OWNER_PW),
       owner: OWNER,
       ownerPassword: OWNER_PW,
+      releaseRef: 'dist-v0.0.1',
       catalogue: [...catalogue, undecidedProbe],
       log: (l) => logs.push(l),
     })
@@ -288,6 +291,8 @@ describe('the platform on a fresh server', () => {
           secrets: { appPassword: () => APP_PW },
           exporter: { dump: async () => {}, list: async () => '' },
           exportDir: resolve(REPO, '.scratch/t043/exports'),
+          // TASK-075: the release every module-database ledger row records
+          releaseRef: 'dist-v0.0.1',
           log: () => {},
         },
       })

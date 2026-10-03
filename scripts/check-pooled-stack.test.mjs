@@ -429,6 +429,22 @@ test('real renders: tenant-create reads TENANT_PROVISIONER_SECRET_FILE from its 
   }
 })
 
+// TASK-075: init and phase B write release_ref into every ledger row they
+// apply (gremion_platform, the module databases); tenant-provision refuses to
+// start without GREMION_RELEASE_REF, which must be the colour's own release.
+test('real renders: tenant-create carries GREMION_RELEASE_REF = the colour\'s IMAGE_TAG (its own image tag)', () => {
+  for (const { project, colour } of [
+    { project: PROJECTS[1], colour: 'blue' },
+    { project: PROJECTS[2], colour: 'green' },
+  ]) {
+    const tc = renderProject(project).services?.['tenant-create']
+    assert.ok(tc, `tenant-create is not in the ${colour} render`)
+    const tag = String(tc.image).split(':').at(-1)
+    assert.ok(tag && tag.length > 0, `${colour}: tenant-create image ${tc.image} has no tag`)
+    assert.equal(tc.environment?.GREMION_RELEASE_REF, tag, `${colour}: GREMION_RELEASE_REF`)
+  }
+})
+
 test('real renders: the two colours are one document modulo the colour token and the app subnet', () => {
   const norm = (r, c) =>
     JSON.stringify(r)

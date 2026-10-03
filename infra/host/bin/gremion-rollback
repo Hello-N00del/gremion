@@ -7,7 +7,7 @@
 #   (b) it is gone (an overlap:false release stopped it, or the soak ended):
 #       gremion-deploy <target> --no-switch, then switch. Its duration is the
 #       measured redeploy time, and the migrations of the tag being left are NOT
-#       reverted — the snapshot-restore instruction is printed for the operator.
+#       reverted.
 #
 # USAGE
 #   gremion-rollback [--to-tag dist-vX.Y.Z] [--soak-minutes N]
@@ -16,18 +16,18 @@
 # is driven as:  printf 'TOKEN %s\n' "$GHCR_TOKEN" | gremion-rollback
 # Class (a) needs no token and reads no stdin.
 #
-# RELEASE SNAPSHOTS. gremion-deploy step 5 takes `restic ... --tag class=snapshot
-# --tag label=<tag>` before every release, and Task 9 deliberately scopes its
-# `restic forget` retention to class=daily so those survive. THIS program is the
-# only thing that removes them, and it does so on exactly one branch:
-#   - the abandoned release applied NO migrations → its pre-release snapshot can
-#     restore nothing the rolled-back system does not already have, so it is
-#     forgotten here (`restic forget`, never `--prune`: §K forbids automatic
-#     reclamation, so freeing the space stays an explicit operator step);
-#   - it applied migrations → that snapshot IS the restore point named by
-#     SNAPSHOT-RESTORE-REQUIRED. It is KEPT, and the exact manual forget command
-#     is printed as SNAPSHOT-RETAINED for after the operator has decided.
-# Both branches are documented in docs/ops/host-tooling.md (Task 13).
+# PRE-MIGRATION DUMPS (TASK-075, TRD-206, TRD §6 [D R18-4]). gremion-deploy
+# step 5 takes ONE dump of each database a release's migrations alter
+# (gremion-migration-dump preflight) and deletes it once that release's switch
+# has succeeded (`switched`, after step 11). So:
+#   - after a SUCCEEDED switch no dump exists: this program says so (NO-DUMP)
+#     and does not pretend a restore point exists;
+#   - a LIVE dump means a release stopped before its switch succeeded, or its
+#     step 12b deletion failed after the switch (DUMP-NOT-DELETED). A class
+#     (b) redeploy would be refused by the next preflight anyway (never a
+#     series), so it is refused HERE first, exit 3, naming the operator's
+#     three commands: status, restore (--accept-loss-since), discard (--reason).
+# There is no restic class=snapshot any more; docs/ops/host-tooling.md.
 #
 # EXIT CODES  0 ok · 1 assertion failed · 2 usage/precondition · 3 blocked
 set -euo pipefail
@@ -98,47 +98,65 @@ release_migration_count() { # <tag> → the number of migrations that tag applie
     printf '%s' "$n"
 }
 
+# live_dump_status [<release>] → gremion-migration-dump status output. A status
+# that cannot be read is a refusal, never "no dump".
+live_dump_status() {
+    local prog out
+    prog="$(bin_path gremion-migration-dump)"
+    if [[ $# -ge 1 ]]; then
+        out="$("$prog" status --release "$1")" || die "gremion-migration-dump status failed — cannot tell whether a pre-migration dump is live" 1
+    else
+        out="$("$prog" status)" || die "gremion-migration-dump status failed — cannot tell whether a pre-migration dump is live" 1
+    fi
+    printf '%s\n' "$out"
+}
+
+live_dump_count() { # <status output> → N from "STATUS: N live dump(s)"
+    local n
+    n="$(sed -nE 's/^STATUS: ([0-9]+) live dump\(s\)$/\1/p' <<< "$1")"
+    [[ "$n" =~ ^[0-9]+$ ]] || die "gremion-migration-dump status printed no STATUS line" 1
+    printf '%s' "$n"
+}
+
+# Class (b) with a live dump: the redeploy's preflight would refuse (never a
+# series). The operator decides first; nothing has been touched yet.
+refuse_live_dump() {
+    local out n
+    out="$(live_dump_status)"
+    n="$(live_dump_count "$out")"
+    [[ "$n" -gt 0 ]] || return 0
+    printf '%s\n' "$out" | grep '^LIVE ' >&2 || true
+    printf 'BLOCKED: %s live pre-migration dump(s) — a release stopped before its switch succeeded, or its post-switch deletion failed (DUMP-NOT-DELETED). Decide first:\n' "$n" >&2
+    printf '  gremion-migration-dump status\n' >&2
+    printf '  gremion-migration-dump restore --release <R> --db <D> --accept-loss-since <time>\n' >&2
+    printf '  gremion-migration-dump discard --release <R> --reason <text>\n' >&2
+    exit 3
+}
+
 # The migrations of the tag we are LEAVING are not reverted by a redeploy.
 warn_unreverted_migrations() { # <from tag>
     local n
     n="$(release_migration_count "$1")"
     if [[ "$n" == "unknown" ]]; then
-        printf 'SNAPSHOT-RESTORE-REQUIRED: %s release.json is gone; assume its migrations are applied.\n' "$1"
+        printf 'MIGRATIONS-NOT-REVERTED: %s release.json is gone; assume its migrations are applied.\n' "$1"
         return 0
     fi
     [[ "$n" -gt 0 ]] || return 0
-    cat <<EOF
-SNAPSHOT-RESTORE-REQUIRED: $1 applied ${n} migration(s) that this rollback does not revert.
-  The pre-release snapshot is restic tag label=$1 class=snapshot (taken by gremion-deploy step 5).
-  Restoring it into production is an operator decision — everything written since that deploy is lost.
-  Rehearse it first: gremion-restore-into --stack staging --snapshot <id> --rto
-EOF
+    printf 'MIGRATIONS-NOT-REVERTED: %s applied %s migration(s) that this rollback does not revert (expand/contract: the older release survives them, TRD-361).\n' "$1" "$n"
 }
 
-# resolve_snapshot_fate <abandoned tag> — see the header. Never silent.
-resolve_snapshot_fate() {
-    local tag="$1" n
-    n="$(release_migration_count "$tag")"
-    if [[ "$n" == "0" ]]; then
-        forget_release_snapshot "$tag"
+# resolve_dump_fate <abandoned tag> — see the header. Never silent.
+resolve_dump_fate() {
+    local tag="$1" out n
+    out="$(live_dump_status "$tag")"
+    n="$(live_dump_count "$out")"
+    if [[ "$n" -eq 0 ]]; then
+        printf 'NO-DUMP: no pre-migration dump of %s exists — it was deleted when its switch succeeded (TRD-206, TRD §6 R18-4); there is no restore point to its pre-migration state.\n' "$tag"
         return 0
     fi
-    cat <<EOF
-SNAPSHOT-RETAINED: restic tag label=${tag} class=snapshot is the restore point for the ${n} migration(s) this rollback did not revert.
-  It is kept on purpose; Task 9's retention covers class=daily only, so nothing else will remove it.
-  Forget it only after deciding not to restore it:
-  restic -r \${RESTIC_REPOSITORY} forget --tag class=snapshot --tag label=${tag}
-EOF
-}
-
-forget_release_snapshot() { # <tag>
-    restic forget --tag class=snapshot --tag "label=$1" \
-        || die "restic forget failed for label=$1" 1
-    local left
-    left="$(restic snapshots --tag class=snapshot --tag "label=$1" --json 2>/dev/null || printf '[]')"
-    [[ "$(printf '%s' "$left" | jq 'length')" == "0" ]] \
-        || die "snapshot label=$1 class=snapshot survived forget" 1
-    ok "forgot the pre-release snapshot label=$1 (that release applied no migrations)"
+    printf 'DUMP-LIVE: %s live pre-migration dump(s) of %s:\n' "$n" "$tag"
+    printf '%s\n' "$out" | grep '^LIVE ' || true
+    printf '  gremion-migration-dump restore --release %s --db <D> --accept-loss-since <time>, then discard --release %s --reason <text>\n' "$tag" "$tag"
 }
 
 rollback_class_a() { # <colour>
@@ -179,12 +197,10 @@ main() {
         esac
     done
 
-    need_cmd docker jq restic
+    need_cmd docker jq
     ROOT="$(gremion_root)"
     [[ -d "$ROOT" ]] || die "gremion root absent: $ROOT" 2
     load_env "$ROOT/etc/env/state.env"
-    [[ -n "${RESTIC_REPOSITORY:-}" ]] \
-        || die "RESTIC_REPOSITORY absent from state.env — cannot settle the release snapshot" 2
 
     local active other from_tag to_tag class
     active="$(read_runtime active-colour none)"
@@ -213,12 +229,13 @@ main() {
     else
         class=b
         info "class (b): ${other} does not hold ${to_tag} — redeploying it"
+        refuse_live_dump
         rollback_class_b "$other" "$to_tag"
         warn_unreverted_migrations "$from_tag"
     fi
 
     record_tags "$from_tag" "$to_tag"
-    resolve_snapshot_fate "$from_tag"
+    resolve_dump_fate "$from_tag"
     printf 'ROLLBACK-RESULT: class=%s from=%s to=%s colour=%s\n' \
         "$class" "$from_tag" "$to_tag" "$other"
 }

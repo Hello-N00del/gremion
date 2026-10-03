@@ -1,6 +1,6 @@
 # Upgrade: one release onto a running installation
 
-- Version: 5.0.0
+- Version: 6.0.0
 - Status: provisional (see Known gaps)
 - Wall-clock budget: one working day, from step 1 to the asserted post-condition (PRD-PLAT-005)
 - Implements: TRD-200 (upgrade), TRD-206 (the pre-migration dump, R18-4), TRD-189 (blue/green as the deploy path)
@@ -9,8 +9,12 @@ An upgrade is one run of `gremion-deploy <tag>`: twelve steps, each logged as
 `<timestamp> STEP <n> <name> ok|fail` to `runtime/deploy.log`, the new colour
 started, verified and switched to while the old colour is kept for rollback. The
 procedure around it adds what the program does not do: the check before, the
-short-lived pre-migration dump of TRD-206 (R18-4) and its deletion after a
-succeeded switch, and the read of the result. The program's own reference is
+short-lived pre-migration dump of TRD-206 (R18-4) of a database the program does
+not dump itself and its deletion after a succeeded switch, and the read of the
+result. The program's step 5 (`gremion-migration-dump preflight`, TASK-075)
+dumps the kernel and control databases when the release migrates them, and
+deletes that dump, logged, at its step 12b (`switched`), after step 11 passed
+and step 12 recorded the release. The program's own reference is
 [host-tooling.md](../host-tooling.md), section 4.
 
 This procedure is provisional: where the program and a requirement disagree it
@@ -118,8 +122,14 @@ done
 
 3. **Take the pre-migration dump (TRD-206, R18-4).** Only when `migrations` is
    not empty: one dump of each database the migration alters, kept until the
-   switch has succeeded and not a day longer. This is the interim form, taken by
-   hand, until the migration runner takes it itself (see Known gaps). The dump
+   switch has succeeded and not a day longer. The kernel and control databases
+   are not dumped here: `gremion-deploy` step 5 runs `gremion-migration-dump`
+   preflight, which dumps them itself (from `scripts/migrations/runner/` of the
+   new tree) and refuses while another release's dump is still live. This
+   step takes, by hand, the dump of every other database the release migrates
+   (a module database `<id>-postgres` holds, or `gremion_platform` on `postgres`);
+   a new migration of such a chain names this step in its
+   `-- gremion:manual-dump` line (see Known gaps). The dump
    is personal data, so its file is created private (`umask 077`) and is only
    ever written under a `.part` name: it takes its final name when `pg_dump` has
    finished, so a failed dump leaves no file that looks restorable. Every
@@ -131,7 +141,7 @@ done
 
 ```bash
 db="<the database the migration alters>"
-svc="postgres"          # the state project's server holding it: postgres (kernel) or <id>-postgres (module)
+svc="postgres"          # the state project's server holding it: <id>-postgres (module) or postgres (gremion_platform)
 dumpdir=/opt/gremion/backups
 dump="${dumpdir}/pre-migration-${TAG}-${db}-$(date -u +%Y%m%dT%H%M%SZ).dump"
 cd /opt/gremion/current
@@ -151,14 +161,26 @@ unset GHCR_TOKEN
 ```
 
 5. **Delete the dumps once the switch has succeeded, and log each.** The switch
-   succeeded when `runtime/current-tag` names the new tag and the last deploy
-   line is `STEP 12 record ok`. It deletes every `pre-migration-${TAG}-*.dump`
+   succeeded when `runtime/current-tag` names the new tag and this run logged
+   `STEP 12 record ok` (step 12 records the release right after step 11
+   verified the public edge; 12b deletes the program's own dump, 12c is the
+   soak). It deletes every `pre-migration-${TAG}-*.dump`
    and `.dump.part` of this tag: the dump of this attempt and those of earlier
    attempts, whose state the switch has now made obsolete. If the switch did
-   not succeed, keep them all and follow the failure path below.
+   not succeed, keep them all and follow the failure path below. The dump
+   `gremion-deploy` took at its step 5 is not touched here: the program deleted
+   it at its step 12b, one `deleted` line each. A failure there ends the deploy
+   with exit 1, a `DUMP-NOT-DELETED` line and `STEP 12b dump-delete fail`; the
+   new release is already recorded and serving, the soak (12c) did not run, so
+   the old colour is still up: `gremion-migration-dump` status names what is
+   left, rerun `gremion-migration-dump switched --release "$TAG"`, then stop the
+   old colour once rollback to it is no longer wanted (`docker compose
+   --env-file /opt/gremion/etc/env/app-<old>.env down` from
+   `/opt/gremion/current`, then remove `runtime/colour-<old>-tag`, which is
+   what the soak does), or let the next deploy's step 8 do it.
 
 ```bash
-tail -n 1 /opt/gremion/runtime/deploy.log
+tail -n 3 /opt/gremion/runtime/deploy.log
 if grep -Fxq "$TAG" /opt/gremion/runtime/current-tag; then
   for f in "${dumpdir}"/pre-migration-"${TAG}"-*; do [ -e "$f" ] || continue; rm -f -- "$f"; logger -t premigration-dump "deleted ${f} after the switch to ${TAG} succeeded"; done
 fi
@@ -166,7 +188,8 @@ fi
 
 ## Post-condition
 
-The new release serves, the deploy logged twelve good steps and no failed one,
+The new release serves, the deploy logged fourteen good lines (steps 1-12,
+12b, 12c) and no failed one,
 the serving release keeps every migration the previous one locked, and no dump
 is left on the host:
 
@@ -175,12 +198,12 @@ grep -Fx "$TAG" /opt/gremion/runtime/current-tag
 prev="$(cat /opt/gremion/runtime/previous-tag)"
 jq -s 'map([.chains | to_entries[] | .key + " " + (.value.files | to_entries[] | .key + " " + .value)]) | .[0] - .[1]' \
   "/opt/gremion/releases/${prev}/scripts/migrations/applied.lock.json" /opt/gremion/current/scripts/migrations/applied.lock.json   # []
-tail -n 12 /opt/gremion/runtime/deploy.log | grep -cE ' STEP [0-9]+ [a-z-]+ ok$'     # 12
-tail -n 12 /opt/gremion/runtime/deploy.log | grep -cE ' STEP [0-9]+ [a-z-]+ fail$'   # 0
+tail -n 14 /opt/gremion/runtime/deploy.log | grep -cE ' STEP [0-9]+[a-z]? [a-z-]+ ok$'     # 14 (1-12, 12b, 12c)
+tail -n 14 /opt/gremion/runtime/deploy.log | grep -cE ' STEP [0-9]+[a-z]? [a-z-]+ fail$'   # 0
 jq -r '.ts, .ok, (.failures | length)' /opt/gremion/runtime/last-verify.json        # now, true, 0
 curl -s -o /dev/null -w '%{http_code}\n' "https://${host}/api/health"               # 200
 find /opt/gremion/backups -maxdepth 1 -name 'pre-migration-*' | wc -l               # 0
-journalctl -t premigration-dump --since today                                       # one taken line per attempt, one deleted line per file
+journalctl -t premigration-dump --since today                                       # one taken/created line per dump, one deleted line per file (step 3 and gremion-migration-dump)
 for f in /root/.docker/config.json /home/gremion/.docker/config.json; do
   [ -f "$f" ] && jq -e '(.auths // {}) | length == 0' "$f"                          # no registry credential left
 done
@@ -209,17 +232,24 @@ jq -e '.ok == true' /opt/gremion/runtime/last-verify.json
 The dumps are deleted, and each deletion logged as in step 5, only after a later
 switch has succeeded.
 
+The kernel or control database is restored from the dump `gremion-deploy` took
+at its step 5 instead: `gremion-migration-dump` status names it, restore with
+`--release`, `--db` and `--accept-loss-since` (the attempt's start: everything
+written since is lost, stated explicitly) recreates the database, and the dump
+stays live until the operator's logged discard with `--reason`. While it is
+live, a deploy of any other tag stops at its step 5 and prints both commands.
+
 ## Known gaps
 
 - (a) TRD-348: `gremion-deploy` pulls digest-pinned, signature-verified images from the registry and refuses a `build:` key in production; TRD-348 keeps building from source at redeploy time until the build-versus-registry decision is taken. TASK-123 measures build and redeploy time and decides TRD-348/TRD-349.
-- (b) R15-1 and TRD-206: the deploy's step 5 runs `gremion-snapshot`, which runs `gremion-backup --class snapshot`. That needs a reachable off-site remote and keeps a restic snapshot until it is forgotten, which contradicts both the no-backup posture (R15-1) and the single dump deleted after the switch (TRD-206). With the remote unreachable an upgrade stops at `STEP 5 snapshot fail`, before any colour is stopped.
-- (b) continued: PENDING TASK-075 (`scripts/migrations/runner/`) takes the pre-migration dump inside the migration runner; until then step 3 is the TRD-206 dump, taken by hand.
+- (b) R15-1 and TRD-206: since TASK-075 (`scripts/migrations/runner/`) the deploy's step 5 is `gremion-migration-dump` preflight, no longer `gremion-snapshot` (no restic snapshot, no off-site remote). It dumps only the databases of the `legacy-boot` chains (kernel, control) of `scripts/migrations/runner/chain-runners.json`. The module chains and `gremion_platform` are migrated by `enableModule` / `gremion-tenant` init, which take no dump on the host yet, so step 3 still dumps those databases by hand (TASK-077/084 wire the runner's dump hook there).
 - (d) TRD-344 and TRD-353: the migration register (`scripts/migrations/ranges.json`, `scripts/migrations/applied.lock.json`) is enforced by `scripts/migrations/register.mjs check` in `make lint`, not on the host, so step 1 compares the two releases' locks with `jq`. A running release older than the register has no lock to compare; its upgrade compares the two releases' `migrations` arrays by hand instead. At boot the kernel data plane checks every migration file against its manifest (the file half of TRD-353), but its ledger has no sha256 column, so the applied-row half, `verifyApplied` (`scripts/migrations/verify-applied.mjs`), runs in no service yet (`scripts/migrations/README.md`, Known limits).
 - (e) The register renumbered the kernel chain from three to four digits. The kernel data plane compares its ledger by name only and refuses no ledger that still records the old names: on a kernel database created before the renumber it treats every migration as pending and stops at the first `already exists` error without naming the cause. Such a database is re-initialised, not upgraded; step 1's ledger count observes it.
 - (c) TRD-189: a release with `overlap: false` makes the deploy's step 6 stop the old colour before the migration, so that release has downtime, where TRD-189 asks for a zero-downtime switch. The idle-colour test against live council data with its records marked as test data and removed afterwards (TRD-179) is not done by `gremion-deploy`, whose step 9 checks health and the verification contract only.
 
 ## Changelog
 
+- 6.0.0 (2026-10-03): TASK-075. `gremion-deploy` step 5 is `gremion-migration-dump` preflight (no longer `gremion-snapshot`): it dumps the kernel and control databases a release migrates and deletes that dump, logged, at step 12b (`switched`), after step 11 passed and step 12 recorded the release; a failed deletion exits 1 with `DUMP-NOT-DELETED` before the soak (12c). The post-condition counts fourteen step lines. Step 3 now dumps by hand only the other databases a release migrates (module databases, `gremion_platform`); step 5 leaves the deploy's own dump to the program; the failure path restores the kernel or control database from it (restore, then a logged discard). Known gap (b) describes what landed. Major: a step changed.
 - 5.0.0 (2026-10-03): H10 (F1 sweep K6#19, TASK-048b relay). Step 1 verifies the release tag with `git verify-tag` against the host anchor `/opt/gremion/etc/allowed_signers` before anything in the clone is read (`gremion-deploy` STEP 2 repeats the check, and also refuses a tag whose signature is not an ssh signature). Major: a step changed.
 - 4.0.0 (2026-09-30): TASK-048b. Step 2 first moves a `state.env` rendered before the pins layer split onto `docker-compose.state-pins.yml` by editing its `COMPOSE_FILE` line only (never `gremion-init-secrets --force`, which rotates every live secret); `gremion-deploy` STEP 2 refuses the old layering and names this step. Major: a step changed.
 - 3.0.0 (2026-09-30): R29-MAIN-DEFECTS (R29-MD-A). Step 3 creates the pre-migration dump private from its first byte (`umask 077` in the subshell that holds the redirect, `.part` then `mv`) and writes one UTC-stamped file per attempt, so no attempt overwrites the dump an earlier one took; step 5 deletes every dump of the tag after the success check, one logged line per file; the failure path restores the dump the failing attempt took. Major: a step and the post-condition changed (Q9).

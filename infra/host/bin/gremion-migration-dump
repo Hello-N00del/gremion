@@ -1,0 +1,441 @@
+#!/usr/bin/env bash
+#
+# gremion-migration-dump — the host half of the pre-migration dump (TASK-075, TRD-206).
+#
+# Before a schema migration is applied, ONE dump of the database it alters is
+# taken; it is deleted, with the deletion logged, only once the blue/green
+# switch shipping the migration has succeeded. Never a series: while a release's
+# dump is live, no other release may take one (gremion-deploy's preflight
+# refuses). Every event is one line in <dump dir>/ledger.jsonl (append-only,
+# fsynced; fields 1:1 with DB-OPS-MIGRATION-DUMP, which TASK-086 imports), one
+# stdout audit line, and one `logger -t premigration-dump` line
+# (journalctl -t premigration-dump).
+#
+# The same ledger is written by packages/tenant-store/src/dump (cli.ts migrate
+# and take, the tenant-store-class chains and data jobs such as TASK-031's
+# member import). Both writers take <dump dir>/ledger.lock with O_EXCL and
+# REFUSE on an existing lock: a stale lock is an operator decision.
+#
+# USAGE
+#   gremion-migration-dump preflight --release T [--release-dir DIR]
+#       Refuses (exit 1) while a live dump of a release other than T exists,
+#       printing the restore/discard commands. Then, for every legacy-boot chain
+#       (scripts/migrations/runner/chain-runners.json of the release tree) whose
+#       dirs[] gained a file between $GREMION_ROOT/current and the release tree
+#       (files are lock-immutable, so new = pending), takes the host-side dump:
+#       `docker exec <state postgres> pg_dump -Fc --no-owner` (the server's own
+#       pg_dump). The same tag's live dump is reused (a retry after a failed
+#       step 9, or a --no-switch deploy).
+#   gremion-migration-dump switched --release R
+#       Deletes every live dump of R: unlink, fsync the directory, re-stat, then
+#       one `deleted` line each. No dump of R: exit 0, `no-dump R`. An
+#       unwritable ledger exits 1 and keeps the file.
+#   gremion-migration-dump discard --release R --reason <text>
+#       The logged operator exit for a dump that will not be switched past (a
+#       failed release after restore, or a verified member import).
+#   gremion-migration-dump restore --release R --db D --accept-loss-since <time>
+#       Recreates D from R's live dump (everything written since <time> is lost,
+#       which the operator states explicitly). The dump stays live until discard.
+#   gremion-migration-dump status [--release R]
+#
+# CONFIGURATION  state.env (load_env) when $GREMION_ROOT/etc/env/state.env
+#   exists, else the environment: GREMION_MIGRATION_DUMP_DIR (0700, owned by the
+#   running uid), STACK, POSTGRES_USER, GREMION_DB_NAME, CONTROL_DB_NAME.
+#   GREMION_MIGRATION_DUMP_PG_CONTAINER names the postgres container directly
+#   (a scratch stack); otherwise it is the ${STACK}-state project's `postgres`.
+#
+# EXIT CODES  0 ok · 1 refused/assertion failed · 2 usage/precondition
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../lib/common.sh
+. "$SCRIPT_DIR/../lib/common.sh"
+
+AUDIT_TAG=premigration-dump
+ROOT=""
+DUMP_DIR=""
+LEDGER=""
+LOCK=""
+LOCKED=0
+
+usage() {
+    cat >&2 <<'EOF'
+usage: gremion-migration-dump preflight --release T [--release-dir DIR]
+       gremion-migration-dump switched  --release R
+       gremion-migration-dump discard   --release R --reason <text>
+       gremion-migration-dump restore   --release R --db D --accept-loss-since <time>
+       gremion-migration-dump status    [--release R]
+EOF
+    exit 2
+}
+
+# Only the MAIN shell releases the lock: bash can run an inherited EXIT trap
+# when a command substitution's subshell exits (measured under Git Bash), and a
+# subshell must never remove the lock its parent still holds.
+on_exit() {
+    local rc=$?
+    if [[ "$LOCKED" -eq 1 && "${BASHPID:-$$}" == "$$" ]]; then rm -f -- "$LOCK"; LOCKED=0; fi
+    exit "$rc"
+}
+
+valid_release() { [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ && "$1" != *..* ]]; }
+valid_db()      { [[ "$1" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,62}$ ]]; }
+
+now_iso() { date -u +%Y-%m-%dT%H:%M:%S.%3NZ; }
+
+# RFC 9562 UUIDv7: 48-bit unix ms, version 7, variant 10, 74 random bits.
+uuidv7() {
+    local ms hex r v
+    ms="$(date +%s%3N)"
+    hex="$(printf '%012x' "$ms")"
+    r="$(od -An -N10 -tx1 /dev/urandom | tr -d ' \n')"
+    v="$(printf '%x' $(( (0x${r:3:1} & 3) | 8 )))"
+    printf '%s-%s-7%s-%s%s-%s\n' "${hex:0:8}" "${hex:8:4}" "${r:0:3}" "$v" "${r:4:3}" "${r:7:12}"
+}
+
+# fsync what a created/unlinked entry depends on; GNU sync fsyncs its operands.
+fsync_paths() { sync -- "$@" 2>/dev/null || sync; }
+
+# setup_dump_dir <create:0|1> — a missing directory is created 0700 by
+# preflight (the first deploy after bootstrap); every other command reads a
+# missing directory as "no dump was ever taken" and says so.
+setup_dump_dir() {
+    DUMP_DIR="${GREMION_MIGRATION_DUMP_DIR:-}"
+    [[ -n "$DUMP_DIR" ]] \
+        || die "DUMP_DIR_UNSET: GREMION_MIGRATION_DUMP_DIR is not set (state.env) — no pre-migration dump can be taken or found" 2
+    if [[ ! -e "$DUMP_DIR" && "$1" == "1" ]]; then
+        [[ -d "$(dirname "$DUMP_DIR")" ]] || die "DUMP_DIR_INVALID: the parent of ${DUMP_DIR} does not exist" 2
+        ( umask 077; mkdir -- "$DUMP_DIR" )
+        chmod 700 "$DUMP_DIR"
+        info "created ${DUMP_DIR} (0700)"
+    fi
+    LEDGER="${DUMP_DIR}/ledger.jsonl"
+    LOCK="${DUMP_DIR}/ledger.lock"
+    if [[ ! -e "$DUMP_DIR" ]]; then return 1; fi
+    [[ -d "$DUMP_DIR" && ! -L "$DUMP_DIR" ]] || die "DUMP_DIR_INVALID: ${DUMP_DIR} is not a directory" 2
+}
+
+# The checks a TAKE needs (brief §1): 0700 and owned by this uid.
+check_dump_dir_for_take() {
+    local mode owner
+    mode="$(stat -c '%a' "$DUMP_DIR")"
+    owner="$(stat -c '%u' "$DUMP_DIR")"
+    [[ "$mode" == "700" ]] \
+        || die "DUMP_DIR_MODE: ${DUMP_DIR} has mode ${mode}, want 700 (the dump holds the whole database in clear)" 1
+    [[ "$owner" == "$(id -u)" ]] \
+        || die "DUMP_DIR_OWNER: ${DUMP_DIR} is owned by uid ${owner}, not by this process (uid $(id -u))" 1
+}
+
+# O_EXCL (noclobber) lock; an existing lock refuses and is never broken here.
+take_lock() {
+    if ! ( set -o noclobber; printf '%s %s\n' "$$" "$(now_iso)" > "$LOCK" ) 2>/dev/null; then
+        die "LEDGER_LOCKED: ${LOCK} exists — another dump writer is running, or a stale lock was left (remove it only after checking that none runs)" 1
+    fi
+    LOCKED=1
+}
+
+# Live dumps (created, never deleted) as a JSON array. A ledger line that does
+# not parse is LEDGER_CORRUPT, never skipped.
+live_dumps() {
+    [[ -f "$LEDGER" ]] || { printf '[]\n'; return 0; }
+    jq -cs '
+        (map(select(.event == "deleted") | .migration_dump_id)) as $gone
+        | map(select(.event == "created" and ((.migration_dump_id | IN($gone[])) | not)))' "$LEDGER" 2>/dev/null \
+        || die "LEDGER_CORRUPT: ${LEDGER} holds a line that is not a JSON dump event" 1
+}
+
+audit() { # <line>
+    printf '%s\n' "$1"
+    logger -t "$AUDIT_TAG" -- "$1" || bad "logger -t ${AUDIT_TAG} failed for: $1"
+}
+
+audit_line() { # <event json>
+    jq -r --arg tag "$AUDIT_TAG" '
+        [$tag, .event, "id=\(.migration_dump_id)", "release=\(.release)", "db=\(.database)"]
+        + (if .sha256 then ["sha256=\(.sha256)"] else [] end)
+        + (if .bytes != null then ["bytes=\(.bytes)"] else [] end)
+        + (if .reason then ["reason=\(.reason | tojson)"] else [] end)
+        | join(" ")' <<< "$1"
+}
+
+pg_container() {
+    if [[ -n "${GREMION_MIGRATION_DUMP_PG_CONTAINER:-}" ]]; then
+        printf '%s' "$GREMION_MIGRATION_DUMP_PG_CONTAINER"; return 0
+    fi
+    local ids n
+    ids="$(docker ps -q --filter "label=com.docker.compose.project=${STACK:?STACK required}-state" \
+                       --filter "label=com.docker.compose.service=postgres")"
+    n="$(printf '%s' "$ids" | grep -c . || true)"
+    [[ "$n" == "1" ]] || die "expected exactly one running postgres in ${STACK}-state, found ${n}" 1
+    printf '%s' "$ids"
+}
+
+pg_user() { printf '%s' "${POSTGRES_USER:-postgres}"; }
+
+psql_at() { # <container> <db> <sql>
+    docker exec "$1" psql -X -U "$(pg_user)" -d "$2" -tAq -v ON_ERROR_STOP=1 -c "$3" </dev/null | tr -d '\r[:space:]'
+}
+
+# chain database (ranges.json `database`) -> the database name on this host.
+chain_db() {
+    case "$1" in
+        kernel)  printf '%s' "${GREMION_DB_NAME:?GREMION_DB_NAME required in state.env}" ;;
+        control) printf '%s' "${CONTROL_DB_NAME:?CONTROL_DB_NAME required in state.env}" ;;
+        *)       die "legacy-boot chain database '$1' has no host database mapping" 1 ;;
+    esac
+}
+
+# take_host_dump <release> <db> — one checked dump, recorded; reuses T's own.
+take_host_dump() {
+    local rel="$1" db="$2" live mine c server_major dump_major size free_kb need id file path bytes toc sha at ev
+    live="$(live_dumps)"
+    mine="$(jq -c --arg r "$rel" --arg d "$db" '[.[] | select(.release == $r and .database == $d)] | .[0] // empty' <<< "$live")"
+    if [[ -n "$mine" ]]; then
+        path="${DUMP_DIR}/$(jq -r '.file' <<< "$mine")"
+        [[ -f "$path" ]] || die "DUMP_UNVERIFIED: the live dump of ${rel} for ${db} is missing on disk (${path})" 1
+        [[ "$(sha256sum "$path" | cut -d' ' -f1)" == "$(jq -r '.sha256' <<< "$mine")" ]] \
+            || die "DUMP_UNVERIFIED: the live dump ${path} no longer matches its ledger sha256" 1
+        audit "$(audit_line "$mine" | sed 's/ created / reused /')"
+        return 0
+    fi
+    check_dump_dir_for_take
+    c="$(pg_container)"
+    server_major="$(psql_at "$c" "$db" "SELECT current_setting('server_version_num')::int / 10000")"
+    dump_major="$(docker exec "$c" pg_dump --version </dev/null | sed -nE 's/.*\(PostgreSQL\) ([0-9]+).*/\1/p')"
+    [[ "$server_major" =~ ^[0-9]+$ && "$dump_major" =~ ^[0-9]+$ ]] \
+        || die "PG_DUMP_VERSION: cannot read the server (${server_major}) or pg_dump (${dump_major}) major version" 1
+    [[ "$dump_major" -ge "$server_major" ]] \
+        || die "PG_DUMP_VERSION: pg_dump ${dump_major} is older than the server (${server_major})" 1
+    size="$(psql_at "$c" "$db" "SELECT pg_database_size(current_database())")"
+    [[ "$size" =~ ^[0-9]+$ ]] || die "cannot read pg_database_size of ${db}" 1
+    free_kb="$(df -Pk "$DUMP_DIR" | awk 'NR==2 {print $4}')"
+    [[ "$free_kb" =~ ^[0-9]+$ ]] || die "cannot read free space for ${DUMP_DIR}" 1
+    need=$(( (size * 12 + 9) / 10 ))
+    [[ $(( free_kb * 1024 )) -ge "$need" ]] \
+        || die "DUMP_SPACE: ${DUMP_DIR} has $(( free_kb * 1024 )) B free, the dump of ${db} needs ${need} B (1.2 x pg_database_size ${size})" 1
+
+    ( umask 077; mkdir -p "${DUMP_DIR}/${rel}" )
+    chmod 700 "${DUMP_DIR}/${rel}"
+    at="$(now_iso)"
+    id="$(uuidv7)"
+    file="${rel}/${db}.${id}.dump"
+    path="${DUMP_DIR}/${file}"
+    if ! ( set -o noclobber; umask 077; docker exec "$c" pg_dump -Fc --no-owner -U "$(pg_user)" "$db" </dev/null > "$path" ); then
+        rm -f -- "$path"
+        die "PG_DUMP_FAILED: pg_dump of ${db} failed; the partial file was removed, nothing was migrated" 1
+    fi
+    chmod 600 "$path"
+    fsync_paths "$path" "${DUMP_DIR}/${rel}" "$DUMP_DIR"
+    bytes="$(stat -c '%s' "$path")"
+    if [[ ! "$bytes" =~ ^[0-9]+$ || "$bytes" -le 0 ]]; then
+        rm -f -- "$path"; die "DUMP_UNVERIFIED: the dump of ${db} is empty" 1
+    fi
+    toc="$(docker exec -i "$c" pg_restore --list < "$path" 2>/dev/null || true)"
+    if ! grep -q '^; Archive created at ' <<< "$toc" || ! grep -qE "^;[[:space:]]+dbname: ${db}\$" <<< "$toc"; then
+        rm -f -- "$path"; die "DUMP_UNVERIFIED: pg_restore --list does not describe a dump of ${db}; removed" 1
+    fi
+    sha="$(sha256sum "$path" | cut -d' ' -f1)"
+    ev="$(jq -nc --arg at "$at" --arg id "$id" --arg rel "$rel" --arg db "$db" --arg file "$file" \
+               --arg sha "$sha" --argjson bytes "$bytes" '
+        {v:1, event:"created", at:$at, migration_dump_id:$id, release:$rel, scope:"platform",
+         customer_id:null, module_id:null, database:$db, by_kind:"system",
+         file:$file, sha256:$sha, bytes:$bytes, dump_taken_at:$at}')"
+    printf '%s\n' "$ev" >> "$LEDGER" || die "LEDGER_UNWRITABLE: ${LEDGER}" 1
+    fsync_paths "$LEDGER" "$DUMP_DIR"
+    audit "$(audit_line "$ev")"
+}
+
+# The legacy-boot chains of the release tree whose dirs[] gained a file since
+# the current release. Prints "<chain> <database>" per chain that needs a dump.
+legacy_chains_with_new_files() { # <release dir> <current dir>
+    local rdir="$1" cdir="$2" runners ranges chain dirs d f db new
+    runners="${rdir}/scripts/migrations/runner/chain-runners.json"
+    ranges="${rdir}/scripts/migrations/ranges.json"
+    [[ -f "$runners" && -f "$ranges" ]] \
+        || die "the release tree has no ${runners#"$rdir"/} / ${ranges#"$rdir"/}: cannot tell which chains this host dumps" 1
+    while IFS= read -r chain; do
+        [[ -n "$chain" ]] || continue
+        db="$(jq -r --arg c "$chain" '.chains[] | select(.id == $c) | .database' "$ranges")"
+        dirs="$(jq -r --arg c "$chain" '.chains[] | select(.id == $c) | .dirs[]' "$ranges")"
+        [[ -n "$db" && -n "$dirs" ]] || die "legacy-boot chain ${chain} is not in ranges.json" 1
+        new=0
+        while IFS= read -r d; do
+            [[ -n "$d" && -d "${rdir}/${d}" ]] || continue
+            for f in "${rdir}/${d}"/*.sql; do
+                [[ -e "$f" ]] || continue
+                [[ -e "${cdir}/${d}/$(basename "$f")" ]] || { new=1; break; }
+            done
+            [[ "$new" -eq 0 ]] || break
+        done <<< "$dirs"
+        # stdout carries ONLY the "<chain> <database>" records the caller reads.
+        if [[ "$new" -eq 1 ]]; then printf '%s %s\n' "$chain" "$db"; else info "chain ${chain}: no new migration file — no dump" >&2; fi
+    done < <(jq -r '.chains | to_entries[] | select(.value == "legacy-boot") | .key' "$runners")
+}
+
+cmd_preflight() {
+    local rel="$1" rdir="$2" live other chain db current hostdb records
+    take_lock
+    live="$(live_dumps)"
+    other="$(jq -c --arg r "$rel" '[.[] | select(.release != $r)]' <<< "$live")"
+    if [[ "$(jq 'length' <<< "$other")" -gt 0 ]]; then
+        jq -r '.[] | "DUMP_SERIES: live pre-migration dump \(.migration_dump_id) of release \(.release) for database \(.database) (taken \(.dump_taken_at // .at)) — resolve it before deploying another release:\n  restore: gremion-migration-dump restore --release \(.release) --db \(.database) --accept-loss-since <time>\n  discard: gremion-migration-dump discard --release \(.release) --reason <text>"' <<< "$other" >&2
+        exit 1
+    fi
+    current="${ROOT}/current"
+    if [[ ! -e "$current" ]]; then
+        info "no current release under ${ROOT}: a fresh host has no data to lose — no legacy-boot dump"
+    else
+        [[ -d "$rdir" ]] || die "release tree absent: ${rdir}" 2
+        # Captured first (not a process substitution): a die inside it must
+        # end THIS program, and it cannot from a subshell feeding a loop.
+        records="$(legacy_chains_with_new_files "$rdir" "$current")"
+        while read -r chain db; do
+            [[ -n "$chain" ]] || continue
+            hostdb="$(chain_db "$db")"
+            valid_db "$hostdb" || die "chain ${chain} maps to an invalid database name '${hostdb}'" 1
+            info "chain ${chain} gains migration file(s) at ${rel}: dumping ${hostdb}"
+            take_host_dump "$rel" "$hostdb"
+        done <<< "$records"
+    fi
+    printf 'PREFLIGHT-OK release=%s\n' "$rel"
+}
+
+# delete_release <release> <reason> <by_kind> <verb>
+delete_release() {
+    local rel="$1" reason="$2" kind="$3" verb="$4" live mine n i ev path at fd
+    take_lock
+    # Plain assignments, never nested in a here-string: a LEDGER_CORRUPT die
+    # inside a nested substitution would read as "no dump" and exit 0.
+    live="$(live_dumps)"
+    mine="$(jq -c --arg r "$rel" '[.[] | select(.release == $r)]' <<< "$live")"
+    n="$(jq 'length' <<< "$mine")"
+    [[ "$n" =~ ^[0-9]+$ ]] || die "cannot count the live dumps of ${rel}" 1
+    if [[ "$n" -eq 0 ]]; then
+        printf 'no-dump %s\n' "$rel"
+        return 0
+    fi
+    # The ledger must take the `deleted` line BEFORE anything is unlinked: a
+    # deletion that cannot be logged does not happen (the file is kept).
+    if [[ ! -w "$LEDGER" ]] || ! exec {fd}>>"$LEDGER"; then
+        die "LEDGER_UNWRITABLE: ${LEDGER} cannot be appended — the ${n} dump(s) of ${rel} are KEPT" 1
+    fi
+    for (( i = 0; i < n; i++ )); do
+        ev="$(jq -c --argjson i "$i" '.[$i]' <<< "$mine")"
+        path="${DUMP_DIR}/$(jq -r '.file' <<< "$ev")"
+        rm -f -- "$path"
+        fsync_paths "$(dirname "$path")" "$DUMP_DIR"
+        [[ ! -e "$path" ]] || die "the dump ${path} still exists after unlink" 1
+        at="$(now_iso)"
+        ev="$(jq -c --arg at "$at" --arg reason "$reason" --arg kind "$kind" '
+            {v:1, event:"deleted", at:$at, migration_dump_id, release, scope, customer_id, module_id,
+             database, by_kind:$kind, file, deleted_at:$at, reason:$reason}' <<< "$ev")"
+        printf '%s\n' "$ev" >&"$fd" || die "LEDGER_UNWRITABLE: the deleted line for ${path} could not be written" 1
+        fsync_paths "$LEDGER"
+        audit "$(audit_line "$ev")"
+    done
+    exec {fd}>&-
+    rmdir -- "${DUMP_DIR}/${rel}" 2>/dev/null || true
+    [[ "$(jq --arg r "$rel" '[.[] | select(.release == $r)] | length' <<< "$(live_dumps)")" == "0" ]] \
+        || die "a live dump of ${rel} survived ${verb}" 1
+    if [[ -d "${DUMP_DIR}/${rel}" ]] && compgen -G "${DUMP_DIR}/${rel}/*.dump" >/dev/null; then
+        die "dump file(s) of ${rel} remain under ${DUMP_DIR}/${rel}" 1
+    fi
+    printf '%s-OK release=%s deleted=%s\n' "$(printf '%s' "$verb" | tr '[:lower:]' '[:upper:]')" "$rel" "$n"
+}
+
+cmd_restore() {
+    local rel="$1" db="$2" since="$3" live dump path c owner ev at
+    take_lock
+    live="$(live_dumps)"
+    dump="$(jq -c --arg r "$rel" --arg d "$db" '[.[] | select(.release == $r and .database == $d)]' <<< "$live")"
+    [[ "$(jq 'length' <<< "$dump")" == "1" ]] \
+        || die "no single live dump of ${rel} for database ${db} (gremion-migration-dump status)" 1
+    dump="$(jq -c '.[0]' <<< "$dump")"
+    path="${DUMP_DIR}/$(jq -r '.file' <<< "$dump")"
+    [[ -f "$path" ]] || die "DUMP_UNVERIFIED: ${path} is missing" 1
+    [[ "$(sha256sum "$path" | cut -d' ' -f1)" == "$(jq -r '.sha256' <<< "$dump")" ]] \
+        || die "DUMP_UNVERIFIED: ${path} no longer matches its ledger sha256 — not restored" 1
+    c="$(pg_container)"
+    owner="$(psql_at "$c" postgres "SELECT pg_catalog.pg_get_userbyid(datdba) FROM pg_catalog.pg_database WHERE datname = '${db}'")"
+    [[ -n "$owner" ]] || die "database ${db} does not exist on ${c}" 1
+    info "restoring ${db} from ${path}: everything written since ${since} is lost (accepted by the operator)"
+    docker exec "$c" psql -X -U "$(pg_user)" -d postgres -v ON_ERROR_STOP=1 -q \
+        -c "DROP DATABASE \"${db}\" WITH (FORCE)" -c "CREATE DATABASE \"${db}\" OWNER \"${owner}\"" </dev/null \
+        || die "RESTORE_FAILED: could not recreate ${db}" 1
+    docker exec -i "$c" pg_restore --no-owner --role="$owner" --exit-on-error --single-transaction \
+        -U "$(pg_user)" -d "$db" < "$path" \
+        || die "RESTORE_FAILED: pg_restore of ${path} into ${db} failed" 1
+    at="$(now_iso)"
+    ev="$(jq -c --arg at "$at" --arg since "$since" '
+        {v:1, event:"restored", at:$at, migration_dump_id, release, scope, customer_id, module_id,
+         database, by_kind:"operator", file, restored:true, reason:("accept-loss-since " + $since)}' <<< "$dump")"
+    printf '%s\n' "$ev" >> "$LEDGER" || die "LEDGER_UNWRITABLE: ${LEDGER}" 1
+    fsync_paths "$LEDGER"
+    audit "$(audit_line "$ev")"
+    printf 'RESTORE-OK release=%s db=%s — the dump stays live; when done: gremion-migration-dump discard --release %s --reason <text>\n' "$rel" "$db" "$rel"
+}
+
+cmd_status() {
+    local rel="$1" live
+    live="$(live_dumps)"
+    [[ -z "$rel" ]] || live="$(jq -c --arg r "$rel" '[.[] | select(.release == $r)]' <<< "$live")"
+    jq -r '.[] | "LIVE \(.migration_dump_id) release=\(.release) db=\(.database) taken=\(.dump_taken_at // .at) bytes=\(.bytes) file=\(.file)"' <<< "$live"
+    printf 'STATUS: %s live dump(s)\n' "$(jq 'length' <<< "$live")"
+}
+
+main() {
+    [[ $# -ge 1 ]] || usage
+    local cmd="$1"; shift
+    local rel="" rdir="" reason="" db="" since=""
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --release|--release-dir|--reason|--db|--accept-loss-since)
+                [[ $# -ge 2 && -n "$2" ]] || die "option $1 needs a value" 2
+                case "$1" in
+                    --release) rel="$2" ;; --release-dir) rdir="$2" ;; --reason) reason="$2" ;;
+                    --db) db="$2" ;; --accept-loss-since) since="$2" ;;
+                esac
+                shift 2 ;;
+            -h|--help) usage ;;
+            *) printf 'unexpected argument: %s\n' "$1" >&2; usage ;;
+        esac
+    done
+
+    need_cmd jq logger sha256sum stat df od
+    ROOT="$(gremion_root)"
+    if [[ -f "${ROOT}/etc/env/state.env" ]]; then load_env "${ROOT}/etc/env/state.env"; fi
+    trap on_exit EXIT
+
+    case "$cmd" in
+        preflight|switched|discard|restore)
+            [[ -n "$rel" ]] || die "$cmd needs --release" 2
+            valid_release "$rel" || die "invalid release: $rel" 2 ;;
+        status)
+            [[ -z "$rel" ]] || valid_release "$rel" || die "invalid release: $rel" 2 ;;
+        *) usage ;;
+    esac
+    local create=0
+    [[ "$cmd" != preflight ]] || create=1
+    if ! setup_dump_dir "$create"; then
+        case "$cmd" in
+            switched|discard) printf 'no-dump %s\n' "$rel"; exit 0 ;;
+            status)           printf 'STATUS: 0 live dump(s)\n'; exit 0 ;;
+            *)                die "DUMP_DIR_INVALID: ${DUMP_DIR} does not exist — no dump of ${rel} was ever taken here" 1 ;;
+        esac
+    fi
+    case "$cmd" in
+        preflight) cmd_preflight "$rel" "${rdir:-${ROOT}/releases/${rel}}" ;;
+        switched)  delete_release "$rel" switched system switched ;;
+        discard)
+            [[ -n "${reason//[[:space:]]/}" ]] || die "discard needs --reason <text> (it is logged)" 2
+            delete_release "$rel" "$reason" operator discard ;;
+        restore)
+            [[ -n "$db" ]] || die "restore needs --db" 2
+            valid_db "$db" || die "invalid database name: $db" 2
+            [[ -n "$since" ]] || die "restore needs --accept-loss-since <time>: everything written since then is lost" 2
+            cmd_restore "$rel" "$db" "$since" ;;
+        status) cmd_status "$rel" ;;
+    esac
+}
+
+main "$@"

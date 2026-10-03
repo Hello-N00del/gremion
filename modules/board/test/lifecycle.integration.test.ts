@@ -96,7 +96,8 @@ beforeAll(async () => {
   await admin.unsafe(`DROP DATABASE IF EXISTS ${PLATFORM_DB} WITH (FORCE)`)
   await admin.unsafe(`CREATE DATABASE ${PLATFORM_DB}`)
   platform = connectScratchDb(PLATFORM_DB, { max: 3 })
-  await migratePlatform(platform, { log: () => {} })
+  // TASK-075: every run names its release (ledger release_ref)
+  await migratePlatform(platform, { releaseRef: 'dist-v0.0.1', log: () => {} })
   await platform`
     INSERT INTO plt.module (module_key, name, owning_context_code, toggleable, created_by_kind, updated_by_kind)
     VALUES ('board', 'board', 'brd', true, 'system', 'system')`
@@ -129,6 +130,8 @@ beforeAll(async () => {
       },
     }),
     exportDir: EXPORT_DIR,
+    // TASK-075: enable refuses a module with a database without the release it ships
+    releaseRef: 'dist-v0.0.1',
     log: () => {},
   }
 }, 60_000)

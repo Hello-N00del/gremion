@@ -603,15 +603,33 @@ step_4_render() {
     ok "nats-auth init: seeds and accounts file in place"
 }
 
-# ── step 5 — pre-release snapshot (§F.4.5) ──────────────────────────────────
-# gremion-snapshot itself asserts that its artefact-class counts are >= the last
-# scheduled backup's; a shortfall aborts the deploy from inside that program.
-# The snapshot it takes is restic tag class=snapshot label=<TAG>; Task 9 keeps it
-# out of the daily retention, and gremion-rollback is what forgets it.
-step_5_snapshot() {
-    local prog; prog="$(bin_path gremion-snapshot)"
-    "$prog" "$TAG"
-    ok "pre-release snapshot taken with label $TAG"
+# ── step 5 — the pre-migration dump preflight (§F.4.5, TASK-075, TRD-206) ───
+# Replaces the restic class=snapshot of the whole host: TRD-206 asks for ONE
+# dump of the database a migration alters, kept until the switch shipping it
+# succeeds (step 11, then `switched` at step 12b, below). preflight refuses while another
+# release's dump is live (never a series; it prints the restore/discard
+# commands), reuses this tag's own (a retry, or a --no-switch deploy), and takes
+# the host-side dump of every legacy-boot chain that gains a migration file.
+# Runs before step 6, so a refusal stops nothing.
+step_5_migration_dump() {
+    local prog; prog="$(bin_path gremion-migration-dump)"
+    "$prog" preflight --release "$TAG" --release-dir "$RELEASE_DIR"
+    ok "pre-migration dump preflight passed for $TAG"
+}
+
+# Step 12b, after step 11 passed and step 12 recorded the release: the switch
+# succeeded, so every dump of this release is deleted and the deletion logged.
+# A failure leaves the host serving (and recording) the new release with its
+# dump still on disk, which is loud, never silent: exit 1, DUMP-NOT-DELETED,
+# `STEP 12b dump-delete fail` in deploy.log.
+dump_switched() {
+    local prog rc=0
+    prog="$(bin_path gremion-migration-dump)"
+    "$prog" switched --release "$TAG" || rc=$?
+    if [[ "$rc" -ne 0 ]]; then
+        printf 'DUMP-NOT-DELETED: release=%s (gremion-migration-dump switched exited %s; run it again, or: gremion-migration-dump status)\n' "$TAG" "$rc" >&2
+        exit 1
+    fi
 }
 
 # ── step 6 — overlap:false stops the old colour first (§F.4.6, §F.6) ────────
@@ -864,7 +882,19 @@ step_11_verify_public() {
     ok "public edge verified"
 }
 
-# ── step 12 — record, then the soak (§F.4.12) ───────────────────────────────
+# ── step 12 — record, delete the dump, then the soak (§F.4.12) ──────────────
+# Three logged parts, in this order (TASK-075, TRD-206):
+#   12  record      — previous-tag, current-tag and the current symlink. The
+#                     switch has already succeeded (step 11), so the record
+#                     comes FIRST: whatever fails after it, rollback, the
+#                     tenant tools and the next deploy read the release that
+#                     is actually serving.
+#   12b dump-delete — `gremion-migration-dump switched` (dump_switched above).
+#                     A failure exits 1 with DUMP-NOT-DELETED and a logged
+#                     `STEP 12b dump-delete fail`, before the soak: the old
+#                     colour keeps running, so rollback stays a class (a)
+#                     switch back to it, and the next deploy's step 8 downs it.
+#   12c soak        — the soak window, then the old colour is stopped.
 # The soak runs in this process, so the CI job's SSH session stays open for its
 # duration. If the session dies, the old colour survives; the next deploy's
 # step 8 downs whatever it finds in the colour it is about to use, and
@@ -878,7 +908,10 @@ step_12_record() {
     mv -Tf "$ROOT/current.tmp" "$ROOT/current"
     [[ "$(readlink "$ROOT/current")" == "$RELEASE_DIR" ]] \
         || die "current symlink does not point at $RELEASE_DIR" 1
+    ok "recorded ${TAG} (previous ${prev})"
+}
 
+step_12c_soak() {
     if [[ -n "$OLD_COLOUR" && "$OVERLAP" == "true" ]]; then
         printf 'SOAK-START minutes=%s colour=%s\n' "$SOAK_MINUTES" "$OLD_COLOUR"
         sleep $(( SOAK_MINUTES * 60 ))
@@ -888,8 +921,10 @@ step_12_record() {
         left="$(compose "app-${OLD_COLOUR}" ps -q | grep -c . || true)"
         [[ "$left" == "0" ]] || die "old colour ${OLD_COLOUR} still running after the soak" 1
         rm -f "$ROOT/runtime/colour-${OLD_COLOUR}-tag"
+        ok "old colour ${OLD_COLOUR} stopped after the soak"
+    else
+        info "no old colour left running — no soak"
     fi
-    ok "recorded ${TAG} (previous ${prev})"
 }
 
 main() {
@@ -936,7 +971,7 @@ main() {
     resolve_colours
     run_step 3 space-and-pull step_3_space_and_pull
     run_step 4 render step_4_render
-    run_step 5 snapshot step_5_snapshot
+    run_step 5 migration-dump step_5_migration_dump
     run_step 6 stop-old-colour step_6_stop_old_colour
     run_step 7 migrate step_7_migrate
     run_step 8 start-colour step_8_start_colour
@@ -945,10 +980,14 @@ main() {
         log_skip 10 switch --no-switch
         log_skip 11 verify-public --no-switch
         log_skip 12 record --no-switch
+        log_skip 12b dump-delete --no-switch
+        log_skip 12c soak --no-switch
     else
         run_step 10 switch step_10_switch
         run_step 11 verify-public step_11_verify_public
         run_step 12 record step_12_record
+        run_step 12b dump-delete dump_switched
+        run_step 12c soak step_12c_soak
     fi
 
     printf 'DEPLOY-RESULT: tag=%s colour=%s overlap=%s switched=%s soak-minutes=%s\n' \

@@ -53,9 +53,15 @@ export function pgAttestations(platform: Sql): AttestationPort {
 /**
  * The modules port over @gremion/tenant-store's enableModule. `lifecycle`
  * carries everything but the gate (platform, servers, secrets, exporter,
- * exportDir); the gate is the interim operator gate, passed per call.
+ * exportDir, and -- TASK-075 -- the releaseRef every module-database ledger
+ * row records, required here so a caller cannot omit it and meet enable's
+ * runtime refusal instead); the gate is the interim operator gate, passed per call.
  */
-export function pgModules(opts: { platform: Sql; catalogue: readonly LifecycleModule[]; lifecycle: Omit<LifecycleDeps, 'enableGate' | 'platform'> }): ModulesPort {
+export function pgModules(opts: {
+  platform: Sql
+  catalogue: readonly LifecycleModule[]
+  lifecycle: Omit<LifecycleDeps, 'enableGate' | 'platform' | 'releaseRef'> & { releaseRef: string }
+}): ModulesPort {
   const byId = new Map(opts.catalogue.map((m) => [m.id, m]))
   return {
     catalogueIds: () => [...byId.keys()].sort(),
@@ -92,6 +98,11 @@ export interface BootstrapDeps {
   owner: string
   ownerPassword: string
   catalogue: readonly CatalogueModule[]
+  /**
+   * TASK-075: the release this init ships (the deployed IMAGE_TAG), written
+   * as release_ref into every gremion_platform ledger row it applies.
+   */
+  releaseRef: string
   /** The ops realm (Q5); omitted for a database-only bootstrap. */
   opsRealm?: { ensure(): Promise<{ created: boolean }> }
   log?: (line: string) => void
@@ -205,7 +216,7 @@ export async function bootstrapPlatform(deps: BootstrapDeps): Promise<BootstrapR
   const platform = deps.openPlatform()
   try {
     await assertPlatform(platform)
-    const m = await migratePlatform(platform, { log })
+    const m = await migratePlatform(platform, { releaseRef: deps.releaseRef, log })
     const catalogue = await loadCatalogueRows(platform, deps.catalogue)
     for (const u of catalogue.undecided) log(`catalogue: ${u.moduleKey} NOT loaded: ${u.reason}`)
     for (const r of catalogue.load) if (r.provisional) log(`catalogue: ${provisionalNote(r)}`)

@@ -34,6 +34,7 @@ exit-2 failure, never a default:
 | `MODULE_PG_ADMIN_<ID>_FILE` | one per module server (`MODULE_POSTGRES_IDS`), `etc/secrets/tenant-create/module_pg_admin_<id>` | `ModuleServer.admin` of `enableModule` |
 | `MODULE_APP_PASSWORD_<ID>_FILE` | one per module server, generated once by `gremion-tenant init` | the module's app role password (`secrets.appPassword`) |
 | `TENANT_EXPORT_DIR` | `/var/lib/gremion/exports` | `enableModule`'s export target (tenant-create never exports) |
+| `GREMION_RELEASE_REF` | the colour's `IMAGE_TAG` (compose sets it) | TASK-075: `release_ref` of every ledger row `init` (`migratePlatform`) and phase B (`enableModule`) apply; 1-64 of `A-Z a-z 0-9 . _ -` |
 | `GREMION_DISABLE_SEEDS` | `"true"` | the kernel migration tenant-create runs must never apply a `*_seed.sql` |
 | `PANEL_DB_USER` / `PANEL_DB_PASSWORD` | `gremion_panel` and a generated secret (`app.env`) | `init` makes the control panel's READ-ONLY role (`ensurePanelReader`: LOGIN, SELECT on `tenant`, `tenant_domain`, `plt.provisioning_step` only); the `control-panel` block connects as it, never as a database owner |
 

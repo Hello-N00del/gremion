@@ -8,7 +8,7 @@ import { tenantModuleDbName } from '../../src/names.js'
 import { MigrationRunnerError, runMigrations } from '../../src/runner.js'
 import { createTenantStore } from '../../src/store.js'
 import { connect, ddlAttempts, ledgerFiles, poolerUrl, resetWithProbe } from '../harness/db.js'
-import { FIXTURE_MIGRATIONS } from '../harness/migrations.js'
+import { FIXTURE_MIGRATIONS, FIXTURE_RELEASE } from '../harness/migrations.js'
 
 describe('Q3: PgBouncer in transaction mode', () => {
   const { A } = inject('tenants')
@@ -30,7 +30,7 @@ describe('Q3: PgBouncer in transaction mode', () => {
     const pooled = postgres(poolerUrl(db), { max: 2, prepare: false, onnotice: () => {} })
     const watcher = connect(db, { max: 1 })
     try {
-      const err = await runMigrations({ sql: pooled, dir: FIXTURE_MIGRATIONS, log: () => {} }).catch((e: unknown) => e)
+      const err = await runMigrations({ sql: pooled, dir: FIXTURE_MIGRATIONS, ...FIXTURE_RELEASE, log: () => {} }).catch((e: unknown) => e)
       expect(err).toBeInstanceOf(MigrationRunnerError)
       expect((err as MigrationRunnerError).code).toBe('POOLER_TARGET')
       expect(await ddlAttempts(watcher)).toBe(0)

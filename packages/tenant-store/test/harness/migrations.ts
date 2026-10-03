@@ -8,6 +8,13 @@ import { fileURLToPath } from 'node:url'
 
 export const FIXTURE_MIGRATIONS = fileURLToPath(new URL('../fixtures/migrations/fixture/', import.meta.url))
 
+/**
+ * TASK-075: every run names its release (ledger release_ref), and the
+ * headerless fixture files are expand (the fixture chain is no kernel chain,
+ * so it has no baseline). Specs spread this into their runMigrations options.
+ */
+export const FIXTURE_RELEASE = { releaseRef: 'dist-v0.0.1', phaseFor: () => ({ phase: 'expand' as const }) }
+
 const made: string[] = []
 
 export function writeManifest(dir: string): void {

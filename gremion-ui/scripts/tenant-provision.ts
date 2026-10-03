@@ -131,6 +131,17 @@ function modulePostgresIds(catalogue: readonly LifecycleModule[]): string[] {
 }
 const envId = (id: string) => id.toUpperCase().replace(/-/g, '_')
 
+/**
+ * TASK-075: the release this one-shot ships (compose passes the colour's
+ * IMAGE_TAG), recorded as release_ref in every gremion_platform and
+ * module-database ledger row init and phase B apply. Named, never defaulted.
+ */
+function releaseRef(): string {
+  const v = reqEnv('GREMION_RELEASE_REF')
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(v)) throw new UsageError(`GREMION_RELEASE_REF ${JSON.stringify(v)} is not a release ref (1-64 of A-Z a-z 0-9 . _ -)`)
+  return v
+}
+
 /** Every variable phase A/B and init read, checked BEFORE anything connects. */
 function assertCreateEnv(catalogue: readonly LifecycleModule[], opts: { needEdge: boolean }): void {
   directPostgresUrl('PLATFORM_DATABASE_URL', reqEnv('PLATFORM_DATABASE_URL'))
@@ -140,6 +151,7 @@ function assertCreateEnv(catalogue: readonly LifecycleModule[], opts: { needEdge
     reqFileEnv(`MODULE_APP_PASSWORD_${envId(id)}_FILE`)
   }
   reqEnv('TENANT_EXPORT_DIR')
+  releaseRef()
   if (reqEnv('GREMION_DISABLE_SEEDS') !== 'true') throw new UsageError('GREMION_DISABLE_SEEDS must be "true" in tenant-create (the kernel migration must never apply a *_seed.sql file)')
   reqEnv('DOMAIN')
   reqEnv('DATABASE_URL')
@@ -362,6 +374,7 @@ function resolveLiveEnv(needEdge: boolean) {
     runtimeDatabaseUrl: reqEnv('DATABASE_URL'),
     kernelAdminUrl: directPostgresUrl('KERNEL_PG_ADMIN_FILE', reqFileEnv('KERNEL_PG_ADMIN_FILE')),
     exportDir: reqEnv('TENANT_EXPORT_DIR'),
+    releaseRef: releaseRef(),
     edge: needEdge ? edgeAddresses() : null,
     creds: readProvisionerCreds(),
   }
@@ -432,6 +445,7 @@ async function liveDeps(opts: { configFile?: string; bodyName?: string; needEdge
             list: () => Promise.reject(new Error('tenant-create never disables a module')),
           },
           exportDir: env.exportDir,
+          releaseRef: env.releaseRef,
           log,
         },
       }),
@@ -537,6 +551,7 @@ async function cmdInit(): Promise<void> {
   // BEFORE the first connection (a missing one is a named exit 2).
   const panelRole = reqEnv('PANEL_DB_USER')
   const panelPassword = reqEnv('PANEL_DB_PASSWORD')
+  const release = releaseRef()
   const controlDatabase = decodeURIComponent(new URL(reqEnv('CONTROL_DATABASE_URL')).pathname.replace(/^\//, ''))
   const kernelAdmin = postgres(kernelAdminUrl, { max: 2, onnotice: () => {}, connect_timeout: 15 })
   try {
@@ -546,6 +561,7 @@ async function cmdInit(): Promise<void> {
       owner: decodeURIComponent(platformUrl.username),
       ownerPassword: decodeURIComponent(platformUrl.password),
       catalogue,
+      releaseRef: release,
       opsRealm: { ensure: () => ensureOpsRealm(kc, rawProvisionerTransport()) },
       log,
     })

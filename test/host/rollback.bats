@@ -29,7 +29,7 @@ EOF
     printf 'dist-v1.2.3\n' > "${GREMION_ROOT}/runtime/current-tag"
     printf 'dist-v1.0.0\n' > "${GREMION_ROOT}/runtime/previous-tag"
     write_release_json '["0201_x"]'
-    stub_restic
+    stub_dump_status
 }
 
 write_release_json() { # <migrations json array>
@@ -37,13 +37,19 @@ write_release_json() { # <migrations json array>
         "$1" > "${GREMION_ROOT}/releases/dist-v1.2.3/release.json"
 }
 
-stub_restic() {
-    shim restic '
-case "$1" in
-  forget)    exit 0 ;;
-  snapshots) printf "[]\n"; exit 0 ;;
-esac
-exit 0
+# TASK-075: gremion-migration-dump status answers LIVE_DUMPS live dump(s) of
+# dist-v1.2.3 (default none: the switch succeeded and deleted it).
+stub_dump_status() {
+    shim gremion-migration-dump '
+[ "$1" = status ] || exit 0
+n="${LIVE_DUMPS:-0}"
+i=0
+while [ "$i" -lt "$n" ]; do
+  printf "LIVE 0192f0c1-2b3c-7d4e-8f00-00000000000%s release=dist-v1.2.3 db=gremion taken=t bytes=1 file=dist-v1.2.3/gremion.x.dump\n" "$i"
+  i=$((i + 1))
+done
+printf "STATUS: %s live dump(s)\n" "$n"
+exit "${DUMP_STATUS_EXIT:-0}"
 '
 }
 
@@ -105,13 +111,14 @@ stub_switch() {
     [[ "$output" == *"already running dist-v1.2.3"* ]]
 }
 
-@test "a state.env without RESTIC_REPOSITORY is a precondition failure" {
+@test "TASK-075: rollback no longer needs restic or RESTIC_REPOSITORY (step 5 takes no restic snapshot)" {
     stub_docker_colour_up blue; stub_switch
-    sed -i '/^RESTIC_REPOSITORY=/d' "${GREMION_ROOT}/etc/env/state.env"
+    sed -i '/^RESTIC_/d' "${GREMION_ROOT}/etc/env/state.env"
+    shim restic 'exit 1'
     printf 'dist-v1.0.0\n' > "${GREMION_ROOT}/runtime/colour-blue-tag"
     run "$ROLLBACK"
-    [ "$status" -eq 2 ]
-    [[ "$output" == *"RESTIC_REPOSITORY absent from state.env"* ]]
+    [ "$status" -eq 0 ]
+    assert_absent '^restic' "$SHIM_LOG" 'rollback still calls restic'
 }
 
 @test "class (a): the old colour still holds the target tag — switch only" {
@@ -140,22 +147,48 @@ stub_switch() {
     [[ "$output" == *"ROLLBACK-RESULT: class=b from=dist-v1.2.3 to=dist-v1.0.0 colour=blue"* ]]
 }
 
-@test "class (b) prints the snapshot-restore instruction when the rolled-back tag had migrations" {
+@test "class (b) says the rolled-back tag's migrations are not reverted, and that no dump exists after its succeeded switch" {
     stub_docker_colour_up none
     stub_switch
     shim gremion-deploy 'exit 0'
     run "$ROLLBACK"
-    [[ "$output" == *"SNAPSHOT-RESTORE-REQUIRED: dist-v1.2.3 applied 1 migration(s)"* ]]
-    [[ "$output" == *"restic tag label=dist-v1.2.3 class=snapshot"* ]]
+    [[ "$output" == *"MIGRATIONS-NOT-REVERTED: dist-v1.2.3 applied 1 migration(s)"* ]]
+    [[ "$output" == *"NO-DUMP: no pre-migration dump of dist-v1.2.3 exists"* ]]
+    [[ "$output" != *"restic"* ]]
 }
 
-@test "class (b) prints no restore instruction when the rolled-back tag had no migrations" {
+@test "class (b) prints no not-reverted line when the rolled-back tag had no migrations" {
     stub_docker_colour_up none
     stub_switch
     shim gremion-deploy 'exit 0'
     write_release_json '[]'
     run "$ROLLBACK"
-    [[ "$output" != *"SNAPSHOT-RESTORE-REQUIRED"* ]]
+    [[ "$output" != *"MIGRATIONS-NOT-REVERTED"* ]]
+}
+
+@test "class (b) with a LIVE pre-migration dump exits 3 naming status, restore and discard, before any redeploy" {
+    stub_docker_colour_up none
+    stub_switch
+    shim gremion-deploy 'exit 0'
+    export LIVE_DUMPS=1
+    run "$ROLLBACK"
+    [ "$status" -eq 3 ]
+    [[ "$output" == *"BLOCKED: 1 live pre-migration dump(s)"* ]]
+    [[ "$output" == *"gremion-migration-dump status"* ]]
+    [[ "$output" == *"gremion-migration-dump restore --release <R> --db <D> --accept-loss-since <time>"* ]]
+    [[ "$output" == *"gremion-migration-dump discard --release <R> --reason <text>"* ]]
+    assert_absent '^gremion-deploy' "$SHIM_LOG" 'class (b) redeployed over a live dump'
+}
+
+@test "an unreadable dump status is a refusal, never read as no dump" {
+    stub_docker_colour_up none
+    stub_switch
+    shim gremion-deploy 'exit 0'
+    export DUMP_STATUS_EXIT=1
+    run "$ROLLBACK"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"gremion-migration-dump status failed"* ]]
+    assert_absent '^gremion-deploy' "$SHIM_LOG" 'rollback redeployed without knowing the dump state'
 }
 
 @test "class (b) without a registry token explains what to pipe in" {
@@ -176,29 +209,26 @@ stub_switch() {
     [[ "$output" == *"runtime/active-colour is 'green' after switching to blue"* ]]
 }
 
-@test "the abandoned release's snapshot is forgotten when it applied no migrations" {
+@test "class (a) after a succeeded switch says no dump exists (TRD 6, R18-4) and deletes nothing" {
     stub_docker_colour_up blue
     stub_switch
-    write_release_json '[]'
     printf 'dist-v1.0.0\n' > "${GREMION_ROOT}/runtime/colour-blue-tag"
     run "$ROLLBACK"
     [ "$status" -eq 0 ]
-    assert_recorded restic "forget --tag class=snapshot --tag label=dist-v1.2.3"
-    [[ "$output" == *"forgot the pre-release snapshot label=dist-v1.2.3"* ]]
+    assert_recorded gremion-migration-dump "status --release dist-v1.2.3"
+    [[ "$output" == *"NO-DUMP: no pre-migration dump of dist-v1.2.3 exists — it was deleted when its switch succeeded"* ]]
+    assert_absent 'gremion-migration-dump (switched|discard)' "$SHIM_LOG" 'rollback deleted a dump'
 }
 
-@test "the abandoned release's snapshot is KEPT when it applied migrations, with the manual command" {
+@test "class (a) with a live dump of the abandoned release names it and the restore/discard exit" {
     stub_docker_colour_up blue
     stub_switch
+    export LIVE_DUMPS=1
     printf 'dist-v1.0.0\n' > "${GREMION_ROOT}/runtime/colour-blue-tag"
     run "$ROLLBACK"
     [ "$status" -eq 0 ]
-    # A snapshot behind applied migrations is the only copy of the pre-release
-    # data. Mid-body, `! grep` could not have caught a forget that ran anyway.
-    assert_absent '^restic forget' "$SHIM_LOG" \
-        'the retained snapshot was forgotten (data loss)'
-    [[ "$output" == *"SNAPSHOT-RETAINED: restic tag label=dist-v1.2.3 class=snapshot"* ]]
-    [[ "$output" == *"restic -r \${RESTIC_REPOSITORY} forget --tag class=snapshot --tag label=dist-v1.2.3"* ]]
+    [[ "$output" == *"DUMP-LIVE: 1 live pre-migration dump(s) of dist-v1.2.3"* ]]
+    [[ "$output" == *"gremion-migration-dump restore --release dist-v1.2.3 --db <D> --accept-loss-since <time>, then discard --release dist-v1.2.3 --reason <text>"* ]]
 }
 
 # The colour_is_up half of the class discriminator has its own test: a STALE

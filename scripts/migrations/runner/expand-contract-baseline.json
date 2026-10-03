@@ -1,0 +1,83 @@
+{
+  "$comment": "TASK-075 (TRD-361): the phase of every migration locked before the -- gremion:phase header existed. Written ONCE by baseline.mjs --write; never edited (suite.mjs pins its digest). Files added later carry their own header.",
+  "writtenAt": "2026-10-02",
+  "chains": {
+    "kernel-data": {
+      "0001_governance_schema.sql": "expand",
+      "0002_config_store.sql": "expand",
+      "0003_calendar_schema.sql": "expand",
+      "0004_committee_elections.sql": "expand",
+      "0005_dev_seed.sql": "migrate",
+      "0006_full_seed.sql": "contract",
+      "0007_protocols.sql": "expand",
+      "0008_public_portal.sql": "contract",
+      "0009_audit_log.sql": "expand",
+      "0010_org_units.sql": "contract",
+      "0011_org_units_dev_seed.sql": "migrate",
+      "0012_role_assignment_history_pseudonymize.sql": "contract",
+      "0018_sub_org_type.sql": "expand",
+      "0024_audit_log_composite_index.sql": "contract",
+      "0033_org_unit_child_term.sql": "expand",
+      "0034_deck_board.sql": "expand",
+      "0037_provisioning_member_ops.sql": "expand",
+      "0038_org_unit_kind_catalog.sql": "contract",
+      "0039_caucus.sql": "expand",
+      "0040_event_consumption.sql": "expand",
+      "0041_protocol_resolution_global_nr_unique.sql": "contract",
+      "0042_protocol_resolution_required_majority.sql": "contract",
+      "0043_audit_log_hash_chain.sql": "contract",
+      "0048_resolution_decided_at.sql": "expand",
+      "0049_org_unit_event_outbox.sql": "expand",
+      "0053_notification_read_marker.sql": "expand",
+      "0054_resolution_adoption_mode.sql": "contract",
+      "0055_resolution_challenges.sql": "contract",
+      "0056_role_assignment_history_recalled.sql": "contract",
+      "0057_fk_hot_filter_indexes.sql": "contract",
+      "0058_public_reader_grants.sql": "contract",
+      "0059_audit_log_chain_anchor.sql": "contract",
+      "1200_content_news_posts.sql": "contract",
+      "1201_news_posts_public_reader_columns.sql": "contract"
+    },
+    "control": {
+      "001_tenant_registry.sql": "expand",
+      "002_tenant_migration_runs.sql": "expand",
+      "003_tenant_uniques.sql": "contract",
+      "004_tenant_domain.sql": "expand",
+      "006_boundary_ids_uuidv7.sql": "contract"
+    },
+    "module-board": {
+      "001_init.sql": "expand"
+    },
+    "module-calendar": {
+      "001_init.sql": "expand",
+      "002_add_is_public.sql": "expand",
+      "003_holiday_unique.sql": "contract"
+    },
+    "module-content": {
+      "001_init.sql": "expand",
+      "002_posts_status.sql": "contract",
+      "003_content_audit.sql": "expand"
+    },
+    "module-finance": {
+      "001_finance_init.sql": "contract",
+      "002_org_unit_mirror.sql": "expand",
+      "003_money_running_no_fiscal_year_idx.sql": "contract",
+      "004_money_fk_indexes.sql": "contract",
+      "005_unwrap_double_encoded_jsonb.sql": "migrate",
+      "006_approval_single_open.sql": "contract"
+    },
+    "module-publishing": {
+      "001_init.sql": "contract"
+    },
+    "module-vault": {
+      "001_init.sql": "expand",
+      "002_access_log_survives_delete.sql": "contract"
+    },
+    "platform": {
+      "0001_plt_setup.sql": "contract",
+      "0002_plt_module.sql": "expand",
+      "0003_plt_module_database.sql": "expand",
+      "0004_plt_provisioning_step.sql": "expand"
+    }
+  }
+}

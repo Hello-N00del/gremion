@@ -1,0 +1,50 @@
+{
+  "$comment": "TASK-075: the expand-contract suite lints each canary on every run. A 'fail' canary must still fail with exactly its rule, a 'pass' canary must still pass: a lint that stops refusing (or starts refusing everything) fails the suite even when no real migration was linted. Kept as JSON, not *.sql, so the migration register (TASK-029) sees no stray migration file.",
+  "canaries": [
+    {
+      "name": "expand-drop-column",
+      "expect": "drop",
+      "sql": "-- gremion:phase expand\nSET LOCAL lock_timeout = '5s';\nALTER TABLE canary_t DROP COLUMN canary_c;\n"
+    },
+    {
+      "name": "expand-unknown-statement",
+      "expect": "not-in-allow-list",
+      "sql": "-- gremion:phase expand\nSET LOCAL lock_timeout = '5s';\nCLUSTER canary_t USING canary_idx;\n"
+    },
+    {
+      "name": "expand-index-on-existing-table",
+      "expect": "index-on-existing-table",
+      "sql": "-- gremion:phase expand\nSET LOCAL lock_timeout = '5s';\nCREATE TABLE canary_new (id int);\nCREATE INDEX canary_idx ON canary_old (id);\n"
+    },
+    {
+      "name": "expand-no-lock-timeout",
+      "expect": "no-lock-timeout",
+      "sql": "-- gremion:phase expand\nCREATE TABLE canary_new (id int);\n"
+    },
+    {
+      "name": "no-phase-header",
+      "expect": "phase-header-missing",
+      "sql": "SET LOCAL lock_timeout = '5s';\nCREATE TABLE canary_new (id int);\n"
+    },
+    {
+      "name": "migrate-dml-before-tenant-context",
+      "expect": "dml-before-tenant-context",
+      "sql": "-- gremion:phase migrate\nSET LOCAL lock_timeout = '5s';\nUPDATE canary_t SET canary_c = 1;\n"
+    },
+    {
+      "name": "expand-uuidv7-default",
+      "expect": "uuidv7-default",
+      "sql": "-- gremion:phase expand\nSET LOCAL lock_timeout = '5s';\nALTER TABLE canary_t ADD COLUMN canary_id uuid DEFAULT uuidv7();\n"
+    },
+    {
+      "name": "contract-without-contract-after",
+      "expect": "contract-after-missing",
+      "sql": "-- gremion:phase contract\nSET LOCAL lock_timeout = '5s';\nDROP TABLE canary_t;\n"
+    },
+    {
+      "name": "expand-same-file-table",
+      "expect": null,
+      "sql": "-- gremion:phase expand\nSET LOCAL lock_timeout = '5s';\nCREATE TABLE canary_new (id int);\nCREATE INDEX canary_new_idx ON canary_new (id);\nCREATE TRIGGER canary_trg BEFORE UPDATE ON canary_new FOR EACH ROW EXECUTE FUNCTION canary_fn();\nALTER TABLE canary_new ENABLE ROW LEVEL SECURITY;\nINSERT INTO canary_new (id) VALUES (1);\nALTER TABLE canary_old ADD COLUMN canary_c text;\n"
+    }
+  ]
+}

@@ -27,6 +27,9 @@ const CONTRACT: Record<string, string> = {
   PLATFORM_DOMAIN: 'platform.example',
   EDGE_BIND_IP: '192.0.2.10',
   TENANT_PROVISIONER_SECRET_FILE: FIXTURE,
+  // TASK-075: the release every gremion_platform and module-database ledger
+  // row records (release_ref); compose passes the colour's IMAGE_TAG
+  GREMION_RELEASE_REF: 'dist-v0.0.1',
 }
 
 const FLAGS = [
@@ -109,6 +112,19 @@ describe('tenant-create phase-a env contract (TDD 19, G3)', () => {
     expect(r.out).toContain(missing)
     expect(r.out).not.toMatch(/ECONNREFUSED|ENOTFOUND|getaddrinfo|CONNECT_TIMEOUT/)
   }, 90_000)
+
+  // TASK-075: init migrates gremion_platform, so it names the release too.
+  it('init without GREMION_RELEASE_REF, or with one that is no release ref: exit 2 naming it, before any connection', () => {
+    const panel = { PANEL_DB_USER: 'gremion_panel', PANEL_DB_PASSWORD: 'unit-panel-password-0123456789' }
+    const env: Record<string, string> = { ...CONTRACT, ...panel }
+    delete env.GREMION_RELEASE_REF
+    for (const e of [env, { ...CONTRACT, ...panel, GREMION_RELEASE_REF: 'x'.repeat(65) }, { ...CONTRACT, ...panel, GREMION_RELEASE_REF: 'a b' }]) {
+      const r = run(['init'], e)
+      expect(r.status, r.out).toBe(2)
+      expect(r.out).toContain('GREMION_RELEASE_REF')
+      expect(r.out).not.toMatch(/ECONNREFUSED|ENOTFOUND|getaddrinfo|CONNECT_TIMEOUT/)
+    }
+  }, 180_000)
 
   it('suspend with an operator that is not a uuid is refused (exit 2)', () => {
     const r = run(['suspend', 'musterstadt', '--operator', 'root'], CONTRACT)

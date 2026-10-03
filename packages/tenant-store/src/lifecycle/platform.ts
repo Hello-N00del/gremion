@@ -8,7 +8,9 @@
 import { existsSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import type { Sql } from '@gremion/db'
-import { runMigrations, type RunMigrationsResult } from '../runner.js'
+import { pinnedPhaseFor, type PhaseFor } from '../phase.js'
+import { PINNED_BASELINE } from '../phase-baseline.js'
+import { runMigrations, type RunMigrationsHooks, type RunMigrationsResult } from '../runner.js'
 import { execFormatted, sqlState } from './ddl.js'
 import { LifecycleError } from './guards.js'
 import { scramSha256Verifier } from './scram.js'
@@ -107,10 +109,34 @@ export async function assertPlatform(sql: Sql): Promise<void> {
   }
 }
 
+/** The register chain of gremion_platform (scripts/migrations/ranges.json). */
+export const PLATFORM_CHAIN = 'platform'
+
+export interface MigratePlatformOptions {
+  log?: (line: string) => void
+  /** TASK-075: the release this run ships (ledger release_ref, 1-64 characters). */
+  releaseRef: string
+  /**
+   * TASK-075: phase of a headerless file; default the kernel baseline of chain
+   * `platform` as this package ships it (PINNED_BASELINE), so a tree without
+   * scripts/ (the tenant-create image) phases the same files a checkout does.
+   */
+  phaseFor?: PhaseFor
+  /** TASK-075: e.g. cli.ts's composed chain check + pre-migration dump (an upgrade of an existing catalogue). */
+  hooks?: RunMigrationsHooks
+}
+
 /** Migrates gremion_platform with the one runner (DL-001). `sql` needs a direct pool of >= 2. */
-export async function migratePlatform(sql: Sql, opts: { log?: (line: string) => void } = {}): Promise<RunMigrationsResult> {
+export async function migratePlatform(sql: Sql, opts: MigratePlatformOptions): Promise<RunMigrationsResult> {
   await assertPlatform(sql)
-  return runMigrations({ sql, dir: PLATFORM_MIGRATIONS_DIR, ...(opts.log ? { log: opts.log } : {}) })
+  return runMigrations({
+    sql,
+    dir: PLATFORM_MIGRATIONS_DIR,
+    releaseRef: opts?.releaseRef,
+    phaseFor: opts?.phaseFor ?? pinnedPhaseFor(PLATFORM_CHAIN, PINNED_BASELINE),
+    ...(opts?.hooks ? { hooks: opts.hooks } : {}),
+    ...(opts?.log ? { log: opts.log } : {}),
+  })
 }
 
 export interface ModuleVersionRow {
