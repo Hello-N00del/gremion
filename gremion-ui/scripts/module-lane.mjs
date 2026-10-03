@@ -66,17 +66,40 @@ export function laneTestFiles(root, ids) {
 }
 
 /** Build the scratch app: tracked src + config files + the unit setup file, then the disabled halves overlaid. */
-export function buildLane(root, ids) {
-  rmSync(LANE_DIR, { recursive: true, force: true })
-  mkdirSync(LANE_DIR, { recursive: true })
-  for (const f of COPY_FILES) cpSync(join(UI, f), join(LANE_DIR, f))
-  cpSync(join(UI, 'src'), join(LANE_DIR, 'src'), { recursive: true })
-  if (existsSync(join(UI, 'static'))) cpSync(join(UI, 'static'), join(LANE_DIR, 'static'), { recursive: true })
-  mkdirSync(join(LANE_DIR, 'tests', 'unit'), { recursive: true })
-  cpSync(join(UI, 'tests', 'unit', 'setup.ts'), join(LANE_DIR, 'tests', 'unit', 'setup.ts'))
+export function buildLane(root, ids, laneDir = LANE_DIR) {
+  rmSync(laneDir, { recursive: true, force: true })
+  mkdirSync(laneDir, { recursive: true })
+  for (const f of COPY_FILES) cpSync(join(UI, f), join(laneDir, f))
+  cpSync(join(UI, 'src'), join(laneDir, 'src'), { recursive: true })
+  if (existsSync(join(UI, 'static'))) cpSync(join(UI, 'static'), join(laneDir, 'static'), { recursive: true })
+  mkdirSync(join(laneDir, 'tests', 'unit'), { recursive: true })
+  cpSync(join(UI, 'tests', 'unit', 'setup.ts'), join(laneDir, 'tests', 'unit', 'setup.ts'))
   // the lane's copy of src already holds the ENABLED halves (the overlay ran before); the lane adds the disabled
   // ones. The overlay refuses a destination that exists and is not its own output, so a clash is loud.
-  return runOverlay({ root, target: LANE_DIR, modules: ids, includeDisabled: true })
+  return runOverlay({ root, target: laneDir, modules: ids, includeDisabled: true })
+}
+
+/**
+ * Build the lane, run vitest inside it, and ALWAYS remove it afterwards (verifier r1 MEDIUM): the lane is a full
+ * copy of src (kernel shell + every overlaid module file), and a copy left behind under gremion-ui/ is read by
+ * every tree scanner (`make lint`'s lint-tenant-db-access flagged 6 problems in _module-lane/src/lib/server/**)
+ * and sent into the Docker build context. The lane must sit inside gremion-ui/ (node_modules resolves upward
+ * from it), so it cannot live in an OS temp dir; removal in `finally` is the guarantee, and a lane a killed run
+ * left behind is cleared by the next build's rmSync. `build`/`spawn` are injectable for the node test.
+ * Returns vitest's exit status (1 when it reported none).
+ */
+export function runLane({ root = DEFAULT_ROOT, ids, files, extra = [], laneDir = LANE_DIR, build = buildLane, spawn = spawnSync, log = console.info }) {
+  try {
+    const r = build(root, ids, laneDir)
+    log(`[module-lane] ${r.modules.join(', ')}: ${r.files.length} files overlaid into ${relative(UI, laneDir)}, ${files.length} unit test file(s)`)
+    // SvelteKit's vite plugin pins the project root to the process cwd, so vitest runs INSIDE the lane (not
+    // `--root`); vitest itself resolves from gremion-ui/node_modules.
+    const vitest = join(UI, 'node_modules', 'vitest', 'vitest.mjs')
+    const res = spawn(process.execPath, [vitest, 'run', '--project', 'unit', ...extra, ...files], { cwd: laneDir, stdio: 'inherit' })
+    return res.status ?? 1
+  } finally {
+    rmSync(laneDir, { recursive: true, force: true })
+  }
 }
 
 const isMain = process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])
@@ -103,11 +126,8 @@ if (isMain) {
     console.info(`[module-lane] ${ids.join(', ')}: ${files.length} unit test file(s)\n${files.join('\n')}`)
     process.exit(0)
   }
-  const r = buildLane(DEFAULT_ROOT, ids)
-  console.info(`[module-lane] ${r.modules.join(', ')}: ${r.files.length} files overlaid into ${relative(UI, LANE_DIR)}, ${files.length} unit test file(s)`)
-  // SvelteKit's vite plugin pins the project root to the process cwd, so vitest runs INSIDE the lane (not
-  // `--root`); vitest itself resolves from gremion-ui/node_modules.
-  const vitest = join(UI, 'node_modules', 'vitest', 'vitest.mjs')
-  const res = spawnSync(process.execPath, [vitest, 'run', '--project', 'unit', ...extra, ...files], { cwd: LANE_DIR, stdio: 'inherit' })
-  process.exit(res.status ?? 1)
+  // Ctrl-C reaches vitest (same process group) and ends the spawnSync; a no-op handler keeps THIS process alive
+  // long enough for runLane's finally to remove the lane instead of dying on the default SIGINT/SIGTERM action.
+  for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => {})
+  process.exit(runLane({ root: DEFAULT_ROOT, ids, files, extra }))
 }
