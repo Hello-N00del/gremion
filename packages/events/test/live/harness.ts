@@ -252,3 +252,22 @@ export function countingPublisher(js: JetStreamClient, failWhen: (call: { subjec
   }
   return { calls, publisher: publisher as unknown as Pick<JetStreamClient, 'publish'> }
 }
+
+/** The environment of the tenant-create container, in the scratch stack: what `pnpm exec events|nats-auth` reads. */
+export function cliEnv(): NodeJS.ProcessEnv {
+  const base = `postgres://${SVC_USER}:${encodeURIComponent(SVC_PASSWORD)}@127.0.0.1:${STACK.pg.port}/x`
+  return {
+    ...process.env,
+    NATS_URL,
+    NATS_SECRETS_DIR: SECRETS,
+    NATS_ACCOUNTS_DIR: ACCOUNTS,
+    GREMION_IDT_PG_URL: base,
+    GREMION_FIN_PG_URL: base,
+    GREMION_BRD_PG_URL: base,
+  }
+}
+
+/** Runs `node <bin> <args>` (the scratch equivalent of `pnpm exec <tool>` in the migrate image); returns stdout. */
+export function runCli(bin: string, args: string[]): string {
+  return execFileSync(process.execPath, [bin, ...args], { env: cliEnv(), encoding: 'utf8', timeout: 60_000 })
+}

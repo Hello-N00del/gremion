@@ -100,17 +100,33 @@ async function realDeps(): Promise<CliDeps> {
   }
 }
 
-export async function main(argv: string[], deps?: CliDeps): Promise<number> {
+/** Each verb's flags: the one table main() parses with and the runbook test checks the documented commands against. */
+export const COMMANDS = {
+  'outbox-replay': { allowed: ['ctx', 'customer', 'tenant', 'subjects', 'module', 'identity', 'since'], required: ['ctx', 'customer', 'tenant', 'subjects'] },
+  'outbox-requeue': { allowed: ['ctx', 'customer', 'event-id', 'module'], required: ['ctx', 'customer', 'event-id'] },
+  'dlq-list': { allowed: ['tenant'], required: ['tenant'] },
+  'dlq-replay': { allowed: ['tenant', 'seq'], required: ['tenant', 'seq'] },
+  metrics: { allowed: ['ctx', 'customer', 'module', 'consumer'], required: ['ctx'] },
+} as const
+
+export type Verb = keyof typeof COMMANDS
+
+/** The verb and its flags, validated against COMMANDS: a UsageError names what is wrong. */
+export function parseCommand(argv: string[]): { cmd: Verb; flags: Flags } {
   const [cmd, ...rest] = argv
-  if (!['outbox-replay', 'outbox-requeue', 'dlq-list', 'dlq-replay', 'metrics'].includes(cmd ?? '')) {
-    console.error(USAGE)
-    return 2
-  }
+  if (!cmd || !(cmd in COMMANDS)) throw new UsageError(`unknown command ${JSON.stringify(cmd ?? '')}`)
+  const spec = COMMANDS[cmd as Verb]
+  const flags = parseFlags(rest, spec.allowed)
+  for (const r of spec.required) need(flags, r)
+  return { cmd: cmd as Verb, flags }
+}
+
+export async function main(argv: string[], deps?: CliDeps): Promise<number> {
   try {
+    const { cmd, flags: f } = parseCommand(argv)
     const d = deps ?? (await realDeps())
     switch (cmd) {
       case 'outbox-replay': {
-        const f = parseFlags(rest, ['ctx', 'customer', 'tenant', 'subjects', 'module', 'identity', 'since'])
         const [ctx, customer, tenant] = [need(f, 'ctx'), need(f, 'customer'), need(f, 'tenant')]
         const subjects = loadSubjects(need(f, 'subjects'), tenant)
         const since = f.since ? new Date(f.since) : undefined
@@ -128,7 +144,6 @@ export async function main(argv: string[], deps?: CliDeps): Promise<number> {
         return 0
       }
       case 'outbox-requeue': {
-        const f = parseFlags(rest, ['ctx', 'customer', 'event-id', 'module'])
         const [ctx, customer, eventId] = [need(f, 'ctx'), need(f, 'customer'), need(f, 'event-id')]
         const db = await d.openDb(customer, f.module ?? ctx)
         try {
@@ -140,7 +155,7 @@ export async function main(argv: string[], deps?: CliDeps): Promise<number> {
         return 0
       }
       case 'dlq-list': {
-        const tenant = need(parseFlags(rest, ['tenant']), 'tenant')
+        const tenant = need(f, 'tenant')
         const nats = await d.openNats(tenant, 'admin')
         try {
           for (const e of await listDeadLetters(nats.jsm)) d.out(`${JSON.stringify(e)}\n`)
@@ -150,7 +165,6 @@ export async function main(argv: string[], deps?: CliDeps): Promise<number> {
         return 0
       }
       case 'dlq-replay': {
-        const f = parseFlags(rest, ['tenant', 'seq'])
         const tenant = need(f, 'tenant')
         const seq = Number(need(f, 'seq'))
         if (!Number.isInteger(seq) || seq < 1) throw new UsageError('--seq must be a positive integer')
@@ -174,7 +188,6 @@ export async function main(argv: string[], deps?: CliDeps): Promise<number> {
         return 0
       }
       case 'metrics': {
-        const f = parseFlags(rest, ['ctx', 'customer', 'module', 'consumer'])
         const ctx = need(f, 'ctx')
         const customer = f.customer ?? process.env.GREMION_CUSTOMER_ID
         if (!customer) throw new UsageError('--customer is required (or GREMION_CUSTOMER_ID in the container)')

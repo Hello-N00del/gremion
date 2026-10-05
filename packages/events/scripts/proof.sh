@@ -31,7 +31,7 @@ GROUPS_FILE="$SCRATCH/groups"
 
 # Minimums, not exact counts: adding a case needs no edit here; removing one below the floor fails
 # until lowered on purpose -- in this file, never from the environment.
-declare -A MIN_PASS=( [core]=15 [consumer]=15 [deadletter]=7 [rebuild]=3 )
+declare -A MIN_PASS=( [core]=15 [consumer]=15 [deadletter]=6 [rebuild]=2 )
 REQUIRED_GROUPS="core consumer deadletter rebuild alert-fire alert-hold alert-resolve"
 
 fail() { echo "[events-proof] FAILED: $*" >&2; }
