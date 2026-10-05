@@ -327,12 +327,31 @@ function checkAddColumn(toks) {
   return null
 }
 
+/**
+ * TASK-044: ADD CONSTRAINT <name> FOREIGN KEY (..) REFERENCES <t> (..) [ON
+ * DELETE/UPDATE ..] NOT VALID, where <t> is a table THIS file created. The
+ * SCHEMA §0.10 analogue of the CHECK ... NOT VALID expand form: no existing row
+ * is read, and the serving colour neither locks nor reads a table that did not
+ * exist before this file. Named constraints only (SCHEMA naming rule 19).
+ */
+function isNewTableForeignKeyNotValid(toks, state) {
+  // toks: after ADD
+  if (!isWord(toks[0], 'CONSTRAINT') || identName(toks[1]) === null) return false
+  if (!isWord(toks[2], 'FOREIGN') || !isWord(toks[3], 'KEY') || !isOp(toks[4], '(')) return false
+  const cols = closeParen(toks, 4)
+  if (cols < 0 || !isWord(toks[cols + 1], 'REFERENCES')) return false
+  const ref = qname(toks, cols + 2)
+  if (!ref || !state.created.has(ref.parts)) return false
+  const n = toks.length
+  return n >= 2 && isWord(toks[n - 2], 'NOT') && isWord(toks[n - 1], 'VALID')
+}
+
 /** ALTER TABLE <existing> ADD CONSTRAINT ... / ADD CHECK ... */
-function checkAddConstraint(toks) {
+function checkAddConstraint(toks, state) {
   // toks: after ADD
   let i = 0
   if (isWord(toks[0], 'CONSTRAINT')) i = 2
-  if (isWord(toks[i], 'FOREIGN')) return RULES.foreignKey
+  if (isWord(toks[i], 'FOREIGN')) return isNewTableForeignKeyNotValid(toks, state) ? null : RULES.foreignKey
   if (isWord(toks[i], 'CHECK')) {
     const close = closeParen(toks, i + 1)
     if (close < 0) return RULES.unparseable
@@ -344,11 +363,11 @@ function checkAddConstraint(toks) {
 }
 
 /** One ALTER TABLE action on a table the file did not create. */
-function checkAlterAction(toks) {
+function checkAlterAction(toks, state) {
   const w = toks[0]
   if (isWord(w, 'ADD')) {
     let i = 1
-    if (isWord(toks[1], 'CONSTRAINT', 'CHECK', 'FOREIGN', 'PRIMARY', 'UNIQUE', 'EXCLUDE')) return checkAddConstraint(toks.slice(1))
+    if (isWord(toks[1], 'CONSTRAINT', 'CHECK', 'FOREIGN', 'PRIMARY', 'UNIQUE', 'EXCLUDE')) return checkAddConstraint(toks.slice(1), state)
     i = opt(toks, i, 'COLUMN')
     i = opt(toks, i, 'IF', 'NOT', 'EXISTS')
     return checkAddColumn(toks.slice(i))
@@ -433,9 +452,27 @@ export function createdRoutineNames(text) {
     i = opt(toks, i, 'RECURSIVE')
     if (!isWord(toks[i], 'FUNCTION', 'PROCEDURE', 'VIEW')) continue
     const q = qname(toks, i + 1)
-    if (q) out.add(q.parts.at(-1))
+    // TASK-044: schema.name when qualified (ops.touch_row is not plt.touch_row)
+    if (q) out.add(q.parts.length > 1 ? nameKey(q.parts.slice(-2)) : q.parts[0])
   }
   return out
+}
+
+/**
+ * TASK-044: whether `parts` names a routine an earlier file created. Same rule
+ * as the same-file table set (Created.has): the full names agree, or one side
+ * is unqualified and the last parts agree (the search_path decides it).
+ */
+function routineSeen(prior, parts) {
+  const name = parts.at(-1)
+  const full = parts.length > 1 ? nameKey(parts.slice(-2)) : null
+  for (const p of prior) {
+    const dot = p.lastIndexOf('.')
+    const pName = dot < 0 ? p : p.slice(dot + 1)
+    if (pName !== name) continue
+    if (dot < 0 || full === null || p === full) return true
+  }
+  return false
 }
 
 /**
@@ -496,7 +533,7 @@ function checkStatement(toks, phase, state, priorRoutines) {
     if (isWord(actions[0], 'RENAME')) return state.created.has(q.parts) ? null : RULES.rename
     if (state.created.has(q.parts)) return null
     for (const action of splitTopLevel(actions)) {
-      const rule = checkAlterAction(action)
+      const rule = checkAlterAction(action, state)
       if (rule) return rule
     }
     return null
@@ -566,7 +603,7 @@ function checkStatement(toks, phase, state, priorRoutines) {
     if (isWord(toks[i], 'FUNCTION', 'VIEW')) {
       const q = qname(toks, i + 1)
       if (!q) return RULES.unparseable
-      return priorRoutines.has(q.parts.at(-1)) ? RULES.notNewName : null
+      return routineSeen(priorRoutines, q.parts) ? RULES.notNewName : null
     }
     return RULES.notAllowed
   }

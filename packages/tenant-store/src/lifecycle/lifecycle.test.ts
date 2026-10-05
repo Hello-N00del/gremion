@@ -151,14 +151,27 @@ describe('refusals run no SQL at all', () => {
 describe('the platform migration folder (gremion_platform, schema plt)', () => {
   const files = readVerifiedMigrations(PLATFORM_MIGRATIONS_DIR)
 
-  it('is verified against its sha256 manifest: 0001 setup, 0002 module tables, 0003 module_database, 0004 provisioning ledger (TASK-043)', () => {
-    expect(files.map((f) => f.file)).toEqual(['0001_plt_setup.sql', '0002_plt_module.sql', '0003_plt_module_database.sql', '0004_plt_provisioning_step.sql'])
+  it('is verified against its sha256 manifest: 0001 setup, 0002 module tables, 0003 module_database, 0004 provisioning ledger (TASK-043), then TASK-044\'s ops setup, isolation results and DPIA decisions', () => {
+    expect(files.map((f) => f.file).slice(0, 4)).toEqual(['0001_plt_setup.sql', '0002_plt_module.sql', '0003_plt_module_database.sql', '0004_plt_provisioning_step.sql'])
+    expect(files.map((f) => f.file)).toEqual(expect.arrayContaining(['0005_ops_setup.sql', '0006_plt_isolation_test_result.sql', '0007_ops_dpia_decision.sql']))
     for (const f of files) expect(() => splitStatements(f.text)).not.toThrow()
   })
 
   it('TASK-075 G1b: migratePlatform\'s default phase lookup (the baseline this package ships) knows every locked platform file', () => {
     const phaseFor = pinnedPhaseFor(PLATFORM_CHAIN, PINNED_BASELINE)
-    expect(files.map((f) => resolvePhase(f.file, f.text, phaseFor).phase)).toEqual(['contract', 'expand', 'expand', 'expand'])
+    expect(files.slice(0, 4).map((f) => resolvePhase(f.file, f.text, phaseFor).phase)).toEqual(['contract', 'expand', 'expand', 'expand'])
+    // files after the baseline carry their own header (TASK-044: expand)
+    for (const f of files.slice(4)) expect(resolvePhase(f.file, f.text, phaseFor).phase, f.file).toBe('expand')
+  })
+
+  it('TASK-044: 0006 adds the three omitted isolation-test keys by name, the enablement ones NOT VALID', () => {
+    const text = files.find((f) => f.file === '0006_plt_isolation_test_result.sql')!.text
+    expect(text).toContain('CREATE TABLE plt.isolation_test_result (')
+    for (const k of ['module_version_isol_result_id_module_id_kind_passed_fkey', 'module_enablement_isol_result_id_module_id_kind_passed_fkey', 'module_enablement_xbody_result_id_module_id_kind_passed_fkey']) {
+      expect(text).toMatch(new RegExp(`ADD CONSTRAINT ${k}\\s+FOREIGN KEY [^;]+NOT VALID;`))
+    }
+    expect(text).toContain('VALIDATE CONSTRAINT module_version_isol_result_id_module_id_kind_passed_fkey;')
+    expect(text).not.toMatch(/VALIDATE CONSTRAINT module_enablement_/)
   })
 
   // TASK-075 r2: enableModule's default (no deps.phaseFor, as tenant-create

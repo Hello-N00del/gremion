@@ -6,7 +6,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { after, describe, test } from 'node:test'
-import { checkContract, lintSql, RULES } from './lint.mjs'
+import { checkContract, createdRoutineNames, lintSql, RULES } from './lint.mjs'
 
 const LT = "SET LOCAL lock_timeout = '5s';\n"
 const expand = (body) => `-- gremion:phase expand\n${LT}${body}`
@@ -67,6 +67,35 @@ describe('expand: refused forms name the statement and the rule', () => {
     const prior = new Set(['f'])
     assert.deepEqual(rules(expand('CREATE FUNCTION public.f() RETURNS int LANGUAGE sql AS $$ SELECT 1 $$;\n'), { priorRoutines: prior }), [RULES.notNewName])
     assert.deepEqual(rules(expand('CREATE VIEW f AS SELECT 1;\n'), { priorRoutines: prior }), [RULES.notNewName])
+  })
+
+  // TASK-044: the name check reads the schema. ops.touch_row is not plt.touch_row
+  // (SCHEMA §1.1 gives every schema its own pair); an unqualified name still
+  // collides with any earlier routine of that name (the search_path decides).
+  test('TASK-044: a schema-qualified function of another schema is new; an unqualified one is not', () => {
+    const prior = new Set(['plt.touch_row', 'refuse_update'])
+    assert.deepEqual(rules(expand('CREATE FUNCTION ops.touch_row() RETURNS trigger LANGUAGE plpgsql AS $b$ BEGIN RETURN NEW; END $b$;\n'), { priorRoutines: prior }), [])
+    assert.deepEqual(rules(expand('CREATE FUNCTION plt.touch_row() RETURNS trigger LANGUAGE plpgsql AS $b$ BEGIN RETURN NEW; END $b$;\n'), { priorRoutines: prior }), [RULES.notNewName])
+    assert.deepEqual(rules(expand('CREATE FUNCTION touch_row() RETURNS trigger LANGUAGE plpgsql AS $b$ BEGIN RETURN NEW; END $b$;\n'), { priorRoutines: prior }), [RULES.notNewName])
+    assert.deepEqual(rules(expand('CREATE FUNCTION ops.refuse_update() RETURNS trigger LANGUAGE plpgsql AS $b$ BEGIN RETURN NEW; END $b$;\n'), { priorRoutines: prior }), [RULES.notNewName])
+  })
+
+  test('TASK-044: createdRoutineNames keeps the schema of a qualified name', () => {
+    assert.deepEqual([...createdRoutineNames('CREATE FUNCTION ops.f() RETURNS int LANGUAGE sql AS $$ SELECT 1 $$;\nCREATE VIEW v AS SELECT 1;\n')].sort(), ['ops.f', 'v'])
+  })
+
+  // TASK-044 (SCHEMA §0.10 allows a CHECK added NOT VALID in expand): a FOREIGN
+  // KEY added NOT VALID onto a table the SAME file creates reads no existing
+  // row, and the serving colour holds no lock on, and reads nothing from, a
+  // table that did not exist. Any other key on an existing table stays refused.
+  test('TASK-044: a NOT VALID foreign key onto a table this file creates is expand; any other key is not', () => {
+    const fresh = 'CREATE TABLE s.fresh (id uuid PRIMARY KEY, k text NOT NULL, UNIQUE (id, k));\n'
+    assert.deepEqual(rules(expand(`${fresh}ALTER TABLE s.t ADD CONSTRAINT t_r_fkey FOREIGN KEY (r, k) REFERENCES s.fresh (id, k) ON DELETE RESTRICT NOT VALID;\n`)), [])
+    assert.deepEqual(rules(expand(`${fresh}ALTER TABLE s.t ADD CONSTRAINT t_r_fkey FOREIGN KEY (r, k) REFERENCES s.fresh (id, k) ON DELETE RESTRICT;\n`)), [RULES.foreignKey])
+    assert.deepEqual(rules(expand(`${fresh}ALTER TABLE s.t ADD CONSTRAINT t_r_fkey FOREIGN KEY (r) REFERENCES s.other (id) NOT VALID;\n`)), [RULES.foreignKey])
+    assert.deepEqual(rules(expand(`${fresh}ALTER TABLE s.t ADD FOREIGN KEY (r) REFERENCES s.fresh (id) NOT VALID;\n`)), [RULES.foreignKey])
+    assert.deepEqual(rules(expand(`ALTER TABLE s.t ADD CONSTRAINT t_r_fkey FOREIGN KEY (r) REFERENCES s.fresh (id) NOT VALID;\n${fresh}`)), [RULES.foreignKey])
+    assert.deepEqual(rules(expand(`${fresh}ALTER TABLE s.t VALIDATE CONSTRAINT t_r_fkey;\n`)), [])
   })
 
   test('no header, a header not on line 1, a malformed marker', () => {
