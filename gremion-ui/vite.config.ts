@@ -43,7 +43,10 @@ export default defineConfig({
     strictPort: true
   },
   ssr: {
-    noExternal: ['@gremion/db', '@gremion/ports', '@gremion/storage']
+    // TASK-077 G6: @gremion/tenancy-core ships TypeScript sources (exports ->
+    // ./src/*.ts); bundled here, so the runtime image never loads a .ts file
+    // from node_modules (Node refuses type stripping there).
+    noExternal: ['@gremion/db', '@gremion/ports', '@gremion/storage', '@gremion/tenancy-core']
   },
   test: {
     // Three projects. `unit` is the historical jsdom run (`pnpm test:unit`);
