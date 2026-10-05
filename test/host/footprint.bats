@@ -98,6 +98,9 @@ gauge() { echo "$GREMION_ROOT/runtime/textfile/gremion-footprint.prom"; }
     jq -e '[.components[] | select(.component == "platform_overhead")] | .[0].bytes == 2001500 and .[0].status == "measured"' "$r"
     # every component is either an integer + measured or null + absent
     jq -e 'all(.components[]; (.status == "measured" and (.bytes | type) == "number" and .bytes == (.bytes | floor)) or (.status == "absent" and .bytes == null))' "$r"
+    # the overhead is this stack's six ops containers: the label AND the project, so another stack's ops project is not counted
+    assert_recorded docker "label=gremion.footprint=platform_overhead"
+    assert_recorded docker "label=com.docker.compose.project=staging-ops"
     # no host name, address or secret
     run grep -Ei 'password|secret|token|[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+|\.local|\.com|\.org|not-a-council' "$r"
     [ "$status" -ne 0 ]

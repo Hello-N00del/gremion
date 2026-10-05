@@ -172,7 +172,11 @@ measure_council_files() {
 
 measure_platform_overhead() {
     local sizes size bytes total=0 n=0 src="docker ps --size, label gremion.footprint=platform_overhead"
-    sizes="$(docker ps --all --size --filter 'label=gremion.footprint=platform_overhead' --format '{{.Size}}' 2>/dev/null || true)"
+    # Both filters are ANDed: the label names the six ops services, the project
+    # keeps another stack's ops containers on the same daemon out of this
+    # stack's overhead (named deviation: the brief names the label filter alone).
+    sizes="$(docker ps --all --size --filter 'label=gremion.footprint=platform_overhead' \
+        --filter "label=com.docker.compose.project=${STACK_NAME}-ops" --format '{{.Size}}' 2>/dev/null || true)"
     while IFS= read -r size; do
         [[ -n "$size" ]] || continue
         bytes="$(to_bytes "${size%% *}")"

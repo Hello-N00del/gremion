@@ -861,7 +861,7 @@ phase_footprint_red() {
     rm -rf "$SROOT/runtime/footprint" "$SROOT/runtime/textfile/gremion-footprint.prom"
     docker exec "$C_PG" psql -U postgres -X -q -c "DROP DATABASE IF EXISTS gremion_platform WITH (FORCE)" >/dev/null || die "could not drop the scratch gremion_platform"
     local n
-    n="$(find "$SROOT/runtime/footprint" -name '*.json' 2>/dev/null | wc -l | tr -d ' ')"
+    n="$({ find "$SROOT/runtime/footprint" -name '*.json' 2>/dev/null || true; } | wc -l | tr -d ' ')"
     [[ "$n" == 0 ]] && ok "RED: no runtime/footprint/<week>.json exists (the record post-condition fails)" || bad "RED did not reproduce: $n record file(s)"
     if fp_jobs footprint_measurement >/dev/null 2>&1; then bad "RED did not reproduce: plt.job_run answered"; else ok "RED: no plt.job_run row can be read (no platform database: the row post-condition fails)"; fi
     wait_until 120 bool_not has_series 'gremion_footprint_component_bytes{component="log_volume"}' \
@@ -873,7 +873,7 @@ phase_footprint_red() {
 bool_not() { ! "$@"; }
 
 phase_footprint() {
-    local now week out rc rec lv syn want_syn cf w2 w3 st
+    local now week out rc rec lv syn pre_syn want_syn cf w2 w3 st
     : > "$OUT/footprint.stderr"
     fp_reset_db && ok "gremion_platform created with all ${FP_MIGRATIONS} platform migration files; the seeded definition is there ($(fp_psql "SELECT job_kind || ' ' || cron_expression || ' ' || enabled FROM plt.scheduled_job WHERE job_kind = 'footprint_measurement'"))" \
         || die "the platform migrations did not apply to the scratch database"
@@ -883,9 +883,11 @@ phase_footprint() {
 
     # 1. a real run, the real clock
     now="$(date -u +%s)"; week="$(date -u -d "@${now}" +%G-W%V)"
+    docker exec "$C_MSG" psql -U proofmsg -d postgres -X -q -c "CHECKPOINT" >/dev/null 2>&1 || true
+    pre_syn="$(docker exec "$C_MSG" psql -U proofmsg -d postgres -X -q -tA -c "SELECT pg_database_size('synapse')")"
     if out="$(footprint_run "" "$FP_ROOT_IN")"; then rc=0; else rc=$?; fi
     [[ "$rc" == 0 ]] && ok "footprint.sh exits 0: ${out}" || bad "footprint.sh exited ${rc}: ${out}"
-    rec="$SROOT/runtime/footprint/${week}.json"
+    rec="$(hpf "$SROOT/runtime/footprint/${week}.json")"   # a host-form path: a Windows jq cannot open /c/...
     jq -e . "$rec" >/dev/null 2>&1 && ok "runtime/footprint/${week}.json exists and parses" || bad "no parsable record at runtime/footprint/${week}.json"
     jq -e '.week and .measured_at and .scheduled_for' "$rec" >/dev/null 2>&1 && ok "the record carries week, measured_at and scheduled_for" || bad "record keys missing"
     jq -e 'all(.components[]; (.status == "measured" and (.bytes | type) == "number") or (.status == "absent" and .bytes == null))' "$rec" >/dev/null 2>&1 \
@@ -897,13 +899,15 @@ phase_footprint() {
     [[ "$(jq -r '[.components[] | select(.component == "council_files")] | length' "$rec")" == 1 ]] && ok "the non-uuid directory is not a council" || bad "a non-council directory was counted"
     syn="$(jq -r '[.components[] | select(.component == "synapse_db" and .status == "measured")][0].bytes // empty' "$rec")"
     want_syn="$(docker exec "$C_MSG" psql -U proofmsg -d postgres -X -q -tA -c "SELECT pg_database_size('synapse')")"
-    if [[ -n "$syn" && -n "$want_syn" ]] && awk -v a="$syn" -v b="$want_syn" 'BEGIN { d = a - b; if (d < 0) d = -d; exit !(b > 0 && d <= b * 0.05) }'; then
-        ok "synapse_db ${syn} within 5 percent of pg_database_size('synapse') ${want_syn}"
-    else bad "synapse_db '${syn}' vs ${want_syn}"; fi
+    # taken in the same proof, before and after the run (the database is not static: autovacuum)
+    within5() { awk -v a="$1" -v b="$2" 'BEGIN { d = a - b; if (d < 0) d = -d; exit !(b > 0 && d <= b * 0.05) }'; }
+    if [[ -n "$syn" && -n "$want_syn" ]] && { within5 "$syn" "$want_syn" || within5 "$syn" "$pre_syn"; }; then
+        ok "synapse_db ${syn} within 5 percent of pg_database_size('synapse') taken in the same proof (${pre_syn} before, ${want_syn} after)"
+    else bad "synapse_db '${syn}' vs ${pre_syn} / ${want_syn}"; fi
     jq -e '[.components[] | select(.component == "platform_overhead" and .status == "measured" and (.bytes | type) == "number")] | length == 1' "$rec" >/dev/null 2>&1 \
         && ok "platform_overhead is measured (docker ps --size on the six gremion.footprint=platform_overhead containers)" || bad "platform_overhead is not measured with the ops project up"
-    [[ "$(docker ps --all --filter label=gremion.footprint=platform_overhead --format '{{.Names}}' | wc -l | tr -d ' ')" == 6 ]] \
-        && ok "six containers carry the platform_overhead label" || bad "the label filter does not match six containers"
+    [[ "$(docker ps --all --filter label=gremion.footprint=platform_overhead --filter "label=com.docker.compose.project=${OPS}" --format '{{.Names}}' | wc -l | tr -d ' ')" == 6 ]] \
+        && ok "six containers of ${OPS} carry the platform_overhead label (another stack's ops project on the daemon is not counted)" || bad "the label + project filter does not match six containers"
     grep -qiE "$(hostname)|password|secret|token" "$rec" && bad "the record carries a host name or a secret" || ok "no host name, address or secret in the record"
     st="$(fp_jobs footprint_measurement)"
     [[ "$st" == "1|succeeded|footprint/${week}.json" ]] && ok "one job_run row: ${st}" || bad "job_run row '${st}'"
@@ -925,7 +929,7 @@ phase_footprint() {
     docker stop "$C_MSG" >/dev/null
     w3="$(date -u -d "@$(( now + 14 * 86400 ))" +%G-W%V)"
     if out="$(footprint_run "$(( now + 14 * 86400 ))" "")"; then rc=0; else rc=$?; fi
-    rec="$SROOT/runtime/footprint/${w3}.json"
+    rec="$(hpf "$SROOT/runtime/footprint/${w3}.json")"
     [[ "$rc" == 0 ]] && ok "log_volume alone keeps the run a success: ${out}" || bad "absent run: rc ${rc}: ${out}"
     jq -e '[.components[] | select(.component == "synapse_db")] | .[0].status == "absent" and .[0].bytes == null' "$rec" >/dev/null 2>&1 \
         && ok "no messaging-postgres container: synapse_db is absent, bytes null" || bad "synapse_db is not absent"
