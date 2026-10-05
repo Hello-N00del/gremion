@@ -156,12 +156,21 @@ async function migrate(flags: Map<string, string>, env: NodeJS.ProcessEnv, io: C
   const register = JSON.parse(readFileSync(join(root, 'scripts', 'migrations', 'ranges.json'), 'utf8')) as { chains: Chain[] }
   const chain = register.chains.find((c) => c.id === chainId)
   if (!chain) throw new UsageError(`chain ${chainId} is not in ranges.json`)
+  // TASK-077 (lane note C7): a `<kind>:<name>` chain (service:kernel-api,
+  // module:calendar, ...) lives in one database PER CUSTOMER, with its own
+  // ledger and roles; only its service's own migrate command knows them
+  // (kernel-api migrate: idt.schema_migration, SET ROLE owner, the customer's
+  // database asserted). Pointed at such a database this generic entry point
+  // would write public.schema_migrations -- the ledger TASK-043 Q3 forbids.
+  if (chain.database.includes(':')) {
+    io.err(`chain ${chainId} is applied per customer by its service's own migrate command (database ${chain.database}); this entry point does not apply it; nothing was applied`)
+    return 1
+  }
   const dirs = chain.manifestDirs ?? chain.dirs
-  if (dirs.length !== 1) throw new UsageError(`chain ${chainId} spans ${dirs.length} manifest dirs; the union runner is TASK-077's`)
   const rawUrl = env.GREMION_MIGRATE_URL
   if (!rawUrl) throw new UsageError('GREMION_MIGRATE_URL is not set')
   const url = new URL(rawUrl)
-  if (!chain.database.includes(':') && dbOf(url) !== chain.database) {
+  if (dbOf(url) !== chain.database) {
     io.err(`GREMION_MIGRATE_URL names database ${dbOf(url)}, chain ${chainId} is ${chain.database}; nothing was applied`)
     return 1
   }
@@ -171,7 +180,8 @@ async function migrate(flags: Map<string, string>, env: NodeJS.ProcessEnv, io: C
   try {
     const r = await runMigrations({
       sql,
-      dir: join(root, dirs[0]!),
+      // TASK-077 G3(b): a multi-dir chain is one union sequence.
+      dirs: dirs.map((d) => join(root, d)),
       releaseRef: release,
       phaseFor: pinnedPhaseFor(chainId, PINNED_BASELINE),
       log,

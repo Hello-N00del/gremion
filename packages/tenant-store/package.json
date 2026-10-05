@@ -25,6 +25,9 @@
     },
     "./lifecycle": {
       "import": "./src/lifecycle/index.ts"
+    },
+    "./dump": {
+      "import": "./src/dump/index.ts"
     }
   },
   "publishConfig": {
@@ -37,6 +40,10 @@
       "./lifecycle": {
         "types": "./dist/lifecycle/index.d.ts",
         "import": "./dist/lifecycle/index.js"
+      },
+      "./dump": {
+        "types": "./dist/dump/index.d.ts",
+        "import": "./dist/dump/index.js"
       }
     }
   },

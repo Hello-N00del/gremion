@@ -17,10 +17,10 @@
 // row BELOW the head, a row with no phase, a sha256 mismatch.
 import type { ServerResponse } from 'node:http'
 import type { Sql } from '@gremion/db'
-import { loadManifest } from './manifest.js'
+import { compareMigrationFiles, loadManifest, loadUnionManifest } from './manifest.js'
 import { assertTenantId, isUuidV7 } from './names.js'
 import { compareReleases, releaseVersion } from './phase.js'
-import { LEDGER } from './runner.js'
+import { LEDGER, ledgerName } from './runner.js'
 
 export type SchemaState = 'current' | 'ahead' | 'behind' | 'diverged'
 
@@ -43,6 +43,8 @@ export interface CheckSchemaOptions {
   sql: Sql
   /** The module's migrations directory (manifest.json is read). */
   dir?: string
+  /** TASK-077 G3(b): or several (one union manifest, number order). */
+  dirs?: readonly string[]
   /** Or the manifest itself, already loaded (schemaGate loads it once). */
   manifest?: ReadonlyMap<string, string>
   /**
@@ -51,6 +53,8 @@ export interface CheckSchemaOptions {
    * `diverged`.
    */
   releaseRef?: string
+  /** TASK-077 G3(a): the ledger table, schema-qualified. Default public.schema_migrations. */
+  ledger?: string
 }
 
 interface LedgerRow {
@@ -67,25 +71,27 @@ function survivable(row: LedgerRow, releaseRef: string | undefined): boolean {
   return compareReleases(row.contract_after!, releaseRef!) <= 0
 }
 
-export async function checkSchemaCurrent({ sql, dir, manifest, releaseRef }: CheckSchemaOptions): Promise<SchemaStatus> {
-  const expected = manifest ?? (dir !== undefined ? loadManifest(dir) : undefined)
-  if (!expected) throw new TypeError('checkSchemaCurrent needs dir or manifest')
+export async function checkSchemaCurrent({ sql, dir, dirs, manifest, releaseRef, ledger }: CheckSchemaOptions): Promise<SchemaStatus> {
+  const l = ledgerName(ledger ?? LEDGER)
+  const expected = manifest ?? (dirs !== undefined ? loadUnionManifest(dirs) : dir !== undefined ? loadManifest(dir) : undefined)
+  if (!expected) throw new TypeError('checkSchemaCurrent needs dir, dirs or manifest')
   // An empty manifest would call every database current.
   if (expected.size === 0) throw new TypeError('checkSchemaCurrent: the manifest lists no migration')
   const rows = (await sql.begin('read only', async (tx) => {
-    const [reg] = await tx<{ present: boolean }[]>`SELECT to_regclass(${LEDGER}) IS NOT NULL AS present`
+    const [reg] = await tx<{ present: boolean }[]>`SELECT pg_catalog.to_regclass(${l.text}) IS NOT NULL AS present`
     if (!reg?.present) return []
     // to_jsonb: a ledger written before the phase columns existed reads as
     // null phase (never survivable) instead of failing the check.
     return [
-      ...(await tx<LedgerRow[]>`
-        SELECT m.filename, m.sha256, to_jsonb(m) ->> 'phase' AS phase, to_jsonb(m) ->> 'contract_after' AS contract_after
-          FROM public.schema_migrations m`),
+      ...(await tx.unsafe<LedgerRow[]>(
+        `SELECT m.filename, m.sha256, to_jsonb(m) ->> 'phase' AS phase, to_jsonb(m) ->> 'contract_after' AS contract_after
+           FROM ${l.quoted} m`,
+      )),
     ]
   })) as LedgerRow[]
   const inLedger = new Map(rows.map((r) => [r.filename, r]))
   const pending = [...expected.keys()].filter((f) => !inLedger.has(f)).sort()
-  const unknownRows = rows.filter((r) => !expected.has(r.filename)).sort((a, b) => (a.filename < b.filename ? -1 : 1))
+  const unknownRows = rows.filter((r) => !expected.has(r.filename)).sort((a, b) => compareMigrationFiles(a.filename, b.filename))
   const unknown = unknownRows.map((r) => r.filename)
   const mismatched = rows
     .filter((r) => expected.has(r.filename) && expected.get(r.filename) !== r.sha256)
@@ -94,8 +100,9 @@ export async function checkSchemaCurrent({ sql, dir, manifest, releaseRef }: Che
   let state: SchemaState
   if (mismatched.length) state = 'diverged'
   else if (unknown.length) {
-    const head = [...expected.keys()].sort().at(-1)!
-    const ahead = pending.length === 0 && unknownRows.every((r) => r.filename > head && survivable(r, releaseRef))
+    // Number order: a union manifest (TASK-077 G3 b) is one numbered sequence.
+    const head = [...expected.keys()].sort(compareMigrationFiles).at(-1)!
+    const ahead = pending.length === 0 && unknownRows.every((r) => compareMigrationFiles(r.filename, head) > 0 && survivable(r, releaseRef))
     state = ahead ? 'ahead' : 'diverged'
   } else state = pending.length ? 'behind' : 'current'
   return { state, pending, unknown, mismatched }
@@ -104,8 +111,12 @@ export async function checkSchemaCurrent({ sql, dir, manifest, releaseRef }: Che
 export type GateResult = { ok: true } | { ok: false; reason: SchemaState | 'unavailable'; retryAfterSeconds: number }
 
 export interface SchemaGateOptions {
-  /** The module's migrations directory; manifest.json is loaded ONCE, here. */
-  dir: string
+  /** The module's migrations directory; manifest.json is loaded ONCE, here. Exactly one of dir / dirs. */
+  dir?: string
+  /** TASK-077 G3(b): a chain spanning several dirs; the union manifest is loaded ONCE, here. */
+  dirs?: readonly string[]
+  /** TASK-077 G3(a): the ledger table the runner writes for this chain. Default public.schema_migrations. */
+  ledger?: string
   /** The tenant's database for this gate's module (usually store.openTenantDb(t, module)). */
   openDb: (tenantId: string) => Promise<Sql>
   /**
@@ -138,7 +149,11 @@ export interface SchemaGate {
  * a 503 too and is never cached.
  */
 export function schemaGate(options: SchemaGateOptions): SchemaGate {
-  const manifest = loadManifest(options.dir)
+  if ((options.dir === undefined) === (options.dirs === undefined)) {
+    throw new TypeError('schemaGate needs exactly one of dir or dirs')
+  }
+  const manifest = options.dirs !== undefined ? loadUnionManifest(options.dirs) : loadManifest(options.dir!)
+  const ledger = ledgerName(options.ledger ?? LEDGER).text
   const retryAfterSeconds = options.retryAfterSeconds ?? 30
   const ttl = options.cacheTtlMs ?? 5000
   const log = options.log ?? ((l) => console.warn(`[tenant-store] ${l}`))
@@ -151,7 +166,7 @@ export function schemaGate(options: SchemaGateOptions): SchemaGate {
     if (hit && now() - hit.at < ttl) return hit.result
     let result: GateResult
     try {
-      const status = await checkSchemaCurrent({ sql: await options.openDb(tenantId), manifest, ...(options.releaseRef !== undefined ? { releaseRef: options.releaseRef } : {}) })
+      const status = await checkSchemaCurrent({ sql: await options.openDb(tenantId), manifest, ledger, ...(options.releaseRef !== undefined ? { releaseRef: options.releaseRef } : {}) })
       const served = status.state === 'current' || status.state === 'ahead'
       result = served ? { ok: true } : { ok: false, reason: status.state, retryAfterSeconds }
       if (status.state === 'ahead') {

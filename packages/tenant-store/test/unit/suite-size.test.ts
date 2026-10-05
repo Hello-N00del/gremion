@@ -20,15 +20,16 @@ export const NAMED: Record<'unit' | 'integration', Record<string, number>> = {
     'src/strip-outer-transaction.test.ts': 11,
     // F1-FIX-02-K (T5): +3, the body error propagates through finally; TASK-075: +1 releaseRef refusal
     'src/runner.test.ts': 10,
-    // TASK-075 G2: +7 state `ahead`
-    'src/schema-gate.test.ts': 15,
+    // TASK-075 G2: +7 state `ahead`; TASK-077 G3: +10 ledger / dirs / cacheTtlMs 0
+    'src/schema-gate.test.ts': 25,
     'src/index.test.ts': 2,
     // TASK-075 G1b: +2 (releaseRef refusal, platform baseline phases); r2: +2 (module phases, shipped baseline drift)
     'src/lifecycle/lifecycle.test.ts': 26,
     'src/lifecycle/export.test.ts': 8,
     // TASK-075 G1: phase header / baseline / PHASE_MISSING, the dump module
     'src/phase.test.ts': 7,
-    'src/dump/dump.test.ts': 20,
+    // TASK-077 (C7): +1 a service:/module: chain is refused by the generic CLI
+    'src/dump/dump.test.ts': 21,
     'test/unit/check-tenant-db-access.test.ts': 18,
     'test/unit/suite-size.test.ts': 4,
   },
@@ -48,6 +49,9 @@ export const NAMED: Record<'unit' | 'integration', Record<string, number>> = {
     'test/integration/lifecycle-inspect.test.ts': 7,
     // TASK-075: the dump under the real runner, restore rehearsal, import take, scratch e2e
     'test/integration/dump.test.ts': 7,
+    // TASK-077 G3: the ledger option and the union of dirs (TDD 8, 17); C13 the kernel API reader role
+    'test/integration/ledger-union.test.ts': 9,
+    'test/integration/kernel-api-reader.test.ts': 4,
   },
 }
 

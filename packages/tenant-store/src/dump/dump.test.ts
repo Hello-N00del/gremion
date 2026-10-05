@@ -281,6 +281,26 @@ describe('small parts', () => {
     expect(io.lines.join('\n')).toMatch(/GREMION_MIGRATE_URL is not set/)
   })
 
+  // TASK-077 (lane note C7): a per-customer `<kind>:<name>` chain of class
+  // tenant-store (kernel-api after G10) is refused BEFORE any connection: this
+  // generic entry point would apply it into public.schema_migrations, the
+  // ledger TASK-043 Q3 forbids in a customer's kernel database.
+  it('cli: a service:/module: chain is refused (exit 1) before any connection, naming its own migrate command', async () => {
+    const root = freshDir()
+    mkdirSync(join(root, 'scripts', 'migrations', 'runner'), { recursive: true })
+    writeFileSync(join(root, 'scripts', 'migrations', 'runner', 'chain-runners.json'), JSON.stringify({ chains: { 'kernel-api': 'tenant-store' } }))
+    writeFileSync(
+      join(root, 'scripts', 'migrations', 'ranges.json'),
+      JSON.stringify({ chains: [{ id: 'kernel-api', database: 'service:kernel-api', dirs: ['services/kernel-api/migrations/core'], manifestDirs: ['services/kernel-api/migrations/core'] }] }),
+    )
+    const io = { lines: [] as string[], out(l: string) { this.lines.push(l) }, err(l: string) { this.lines.push(l) } }
+    // Port 1 on loopback: a connection attempt would fail with ECONNREFUSED, not this refusal.
+    const env = { GREMION_MIGRATE_URL: 'postgres://k_app:pw@127.0.0.1:1/t_0192f0c12b3c7d4e8f00112233445566__kernel' }
+    expect(await runCli(['migrate', '--chain', 'kernel-api', '--release', 'dist-v1.0.0', '--root', root], env, io)).toBe(1)
+    expect(io.lines.join('\n')).toMatch(/applied per customer by its service's own migrate command \(database service:kernel-api\)/)
+    expect(io.lines.join('\n')).not.toMatch(/ECONNREFUSED|MIGRATE-RESULT/)
+  })
+
   it('ledger events survive a round trip; liveDumps drops a deleted one', () => {
     const dir = freshDir()
     mkdirSync(join(dir, 'x'), { recursive: true })

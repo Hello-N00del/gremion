@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
@@ -13,9 +13,13 @@ writeFileSync(join(dir, 'manifest.json'), JSON.stringify({ '001_a.sql': H, '002_
 afterAll(() => rmSync(dir, { recursive: true, force: true }))
 
 /** A fake database whose ledger holds `files`; records the begin() mode. */
-function fakeDb(files: string[] | Error, modes: string[] = []): Sql {
-  const tx = ((strings: TemplateStringsArray) =>
-    Promise.resolve(strings.join('').includes('to_regclass') ? [{ present: true }] : (files as string[]).map((f) => ({ filename: f, sha256: H })))) as never
+function fakeDb(files: string[] | Error, modes: string[] = [], queries: string[] = []): Sql {
+  const answer = (text: string) => {
+    queries.push(text)
+    return Promise.resolve(text.includes('to_regclass') ? [{ present: true }] : (files as string[]).map((f) => ({ filename: f, sha256: H })))
+  }
+  // TASK-077 G3(a): the ledger read names a validated ledger, so it goes through unsafe().
+  const tx = Object.assign((strings: TemplateStringsArray) => answer(strings.join('?')), { unsafe: (q: string) => answer(q) }) as never
   return {
     begin: async (mode: string, cb: (t: unknown) => unknown) => {
       modes.push(mode)
@@ -89,12 +93,13 @@ describe('schemaGate', () => {
 // TASK-075 TDD 5 (G2): the serving colour survives the next release's expand.
 type Row = { filename: string; sha256?: string; phase?: string | null; contract_after?: string | null }
 function ledgerDb(rows: Row[]): Sql {
-  const tx = ((strings: TemplateStringsArray) =>
+  const answer = (text: string) =>
     Promise.resolve(
-      strings.join('').includes('to_regclass')
+      text.includes('to_regclass')
         ? [{ present: true }]
         : rows.map((r) => ({ filename: r.filename, sha256: r.sha256 ?? H, phase: r.phase ?? null, contract_after: r.contract_after ?? null })),
-    )) as never
+    )
+  const tx = Object.assign((strings: TemplateStringsArray) => answer(strings.join('?')), { unsafe: (q: string) => answer(q) }) as never
   return { begin: async (_m: string, cb: (t: unknown) => unknown) => cb(tx) } as never
 }
 
@@ -143,5 +148,55 @@ describe('schemaGate: state ahead (TASK-075, TRD-361)', () => {
 
   it('a row ahead with no phase (a ledger predating the columns) is 503', async () => {
     expect(await gate([...both, { filename: '003_c.sql', phase: null }]).check(A)).toMatchObject({ ok: false, reason: 'diverged' })
+  })
+})
+
+// TASK-077 G3: the ledger option and the union of dirs.
+describe('schemaGate: ledger (G3 a) and dirs (G3 b)', () => {
+  const unionRoot = mkdtempSync(join(tmpdir(), 't077-gate-union-'))
+  const core = join(unionRoot, 'core')
+  const bodies = join(unionRoot, 'bodies')
+  const dup = join(unionRoot, 'dup')
+  for (const d of [core, bodies, dup]) mkdirSync(d)
+  writeFileSync(join(core, 'manifest.json'), JSON.stringify({ '0001_core.sql': H, '0003_core.sql': H }))
+  writeFileSync(join(bodies, 'manifest.json'), JSON.stringify({ '0002_bodies.sql': H }))
+  writeFileSync(join(dup, 'manifest.json'), JSON.stringify({ '0003_other.sql': H }))
+  afterAll(() => rmSync(unionRoot, { recursive: true, force: true }))
+
+  it('reads the ledger it is given, quoted, and the default when none is', async () => {
+    const q1: string[] = []
+    await schemaGate({ dir, ledger: 'idt.schema_migration', openDb: async () => fakeDb(['001_a.sql', '002_b.sql'], [], q1), log: () => {} }).check(A)
+    expect(q1.some((q) => q.includes('FROM "idt"."schema_migration" m'))).toBe(true)
+    expect(q1.some((q) => q.includes('schema_migrations'))).toBe(false)
+    const q2: string[] = []
+    await schemaGate({ dir, openDb: async () => fakeDb(['001_a.sql', '002_b.sql'], [], q2), log: () => {} }).check(A)
+    expect(q2.some((q) => q.includes('FROM "public"."schema_migrations" m'))).toBe(true)
+  })
+
+  it.each([['idt'], ['idt.schema_migration; DROP TABLE x'], ['"idt".x'], ['IDT.x'], ['a.b.c']])('refuses ledger %j at construction', (ledger) => {
+    expect(() => schemaGate({ dir, ledger, openDb: async () => fakeDb([]) })).toThrow(/schema\.table/)
+  })
+
+  it('a union of dirs is ONE manifest in number order: current only when every dir is applied', async () => {
+    const dirs = [core, bodies]
+    expect(await schemaGate({ dirs, openDb: async () => fakeDb(['0001_core.sql', '0002_bodies.sql', '0003_core.sql']), log: () => {} }).check(A)).toEqual({ ok: true })
+    expect(await schemaGate({ dirs, openDb: async () => fakeDb(['0001_core.sql', '0003_core.sql']), log: () => {} }).check(A)).toMatchObject({ ok: false, reason: 'behind' })
+  })
+
+  it('refuses a migration number found in two dirs (DUPLICATE_MIGRATION) at construction', () => {
+    expect(() => schemaGate({ dirs: [core, dup], openDb: async () => fakeDb([]) })).toThrow(/DUPLICATE_MIGRATION 0003_other\.sql/)
+  })
+
+  it('needs exactly one of dir or dirs', () => {
+    expect(() => schemaGate({ dir, dirs: [core], openDb: async () => fakeDb([]) })).toThrow(/exactly one/)
+    expect(() => schemaGate({ openDb: async () => fakeDb([]) } as never)).toThrow(/exactly one/)
+  })
+
+  it('cacheTtlMs 0 judges every request afresh (Q9: a newly migrated tenant is served on the very next request)', async () => {
+    let files = ['001_a.sql']
+    const gate = schemaGate({ dir, cacheTtlMs: 0, openDb: async () => fakeDb(files), log: () => {} })
+    expect(await gate.check(A)).toMatchObject({ ok: false, reason: 'behind' })
+    files = ['001_a.sql', '002_b.sql']
+    expect(await gate.check(A)).toEqual({ ok: true })
   })
 })

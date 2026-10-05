@@ -6,10 +6,18 @@ export { assertTargetMatches, envResolveTarget, isUuidV7, moduleUrlVariable, ten
 export type { ResolveTarget, TenantTarget } from './names.js'
 export { createTenantStore, openMigrationDb, openTenantDb } from './store.js'
 export type { MigrationDbOptions, TenantStore, TenantStoreOptions } from './store.js'
-export { loadManifest, MigrationManifestError, readVerifiedMigrations } from './manifest.js'
+export {
+  compareMigrationFiles,
+  loadManifest,
+  loadUnionManifest,
+  MigrationManifestError,
+  migrationNumberOf,
+  readVerifiedMigrations,
+  readVerifiedUnion,
+} from './manifest.js'
 export type { ManifestProblem, ManifestProblemCode, VerifiedMigration } from './manifest.js'
 export { MigrationSqlError, splitStatements, stripOuterTransaction } from './strip-outer-transaction.js'
-export { assertNotPooler, MigrationRunnerError, runMigrations } from './runner.js'
-export type { MigrationRunnerErrorCode, PreApplyContext, RunMigrationsHooks, RunMigrationsOptions, RunMigrationsResult } from './runner.js'
+export { assertNotPooler, LEDGER, ledgerName, MigrationRunnerError, runMigrations } from './runner.js'
+export type { LedgerName, MigrationRunnerErrorCode, PreApplyContext, RunMigrationsHooks, RunMigrationsOptions, RunMigrationsResult } from './runner.js'
 export { checkSchemaCurrent, schemaGate } from './schema-gate.js'
 export type { CheckSchemaOptions, GateResult, SchemaGate, SchemaGateOptions, SchemaState, SchemaStatus } from './schema-gate.js'
