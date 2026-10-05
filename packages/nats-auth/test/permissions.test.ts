@@ -16,6 +16,7 @@ describe('module permissions (TDD 2)', () => {
       publish: {
         allow: [
           'gremion.ta.org-unit.>',
+          'gremion.ta.dlq.kernel.>',
           '$JS.API.INFO',
           '$JS.API.STREAM.INFO.ORGUNIT',
           '$JS.API.STREAM.INFO.NEWSLETTER',
@@ -55,13 +56,25 @@ describe('module permissions (TDD 2)', () => {
 
   test('publishing of tenant ta: owns NEWSLETTER, consumes nothing', () => {
     const p = modulePermissions('ta', 'publishing')
-    expect(p.publish.allow).toEqual(['gremion.ta.newsletter.>', '$JS.API.INFO', '$JS.API.STREAM.INFO.NEWSLETTER'])
+    expect(p.publish.allow).toEqual(['gremion.ta.newsletter.>', 'gremion.ta.dlq.publishing.>', '$JS.API.INFO', '$JS.API.STREAM.INFO.NEWSLETTER'])
     expect(p.subscribe.allow).toEqual(['_INBOX_publishing_ta.>'])
   })
 
   test('every current flow module passes the permission rules', () => {
     for (const m of ['kernel', 'publishing', 'content', 'calendar', 'finance']) {
       expect(permissionViolations('ta', m, modulePermissions('ta', m))).toEqual([])
+    }
+  })
+
+  test('no module key can create or read the DLQ stream, or subscribe to its advisory (only the tenant admin)', () => {
+    for (const m of ['kernel', 'publishing', 'content', 'calendar', 'finance']) {
+      const p = modulePermissions('ta', m)
+      expect(p.publish.allow, m).toContain(`gremion.ta.dlq.${m}.>`)
+      expect(p.publish.allow.filter((a) => a.includes('.DLQ') || a.includes('dlq')), m).toEqual([`gremion.ta.dlq.${m}.>`])
+      for (const d of ['$JS.API.STREAM.CREATE.>', '$JS.API.STREAM.DELETE.>', '$JS.API.STREAM.PURGE.>', '$JS.API.STREAM.MSG.GET.>', '$JS.API.DIRECT.GET.>']) {
+        expect(p.publish.deny, m).toContain(d)
+      }
+      expect(p.subscribe.allow, m).toEqual([`_INBOX_${m}_ta.>`])
     }
   })
 
@@ -90,6 +103,12 @@ describe('module permissions (TDD 2)', () => {
     ['missing STREAM.INFO on an owned stream', (p) => (p.publish.allow = p.publish.allow.filter((a) => a !== '$JS.API.STREAM.INFO.ORGUNIT')), /STREAM\.INFO\.ORGUNIT/],
     ['a consumer grant on a stream with no flow', (p) => p.publish.allow.push('$JS.API.CONSUMER.CREATE.ORGUNIT.>'), /no consume flow/],
     ['a wildcard $JS.API grant', (p) => p.publish.allow.push('$JS.API.>'), /\$JS\.API\.>/],
+    // TASK-079 G5: the dead-letter grant is exactly gremion.<t>.dlq.<module>.>
+    ['another module dead-letter grant', (p) => p.publish.allow.push('gremion.ta.dlq.finance.>'), /dead-letter grant gremion\.ta\.dlq\.finance\.> is not exactly/],
+    ['a tenant-wide dead-letter grant', (p) => p.publish.allow.push('gremion.ta.dlq.>'), /dead-letter grant gremion\.ta\.dlq\.> is not exactly/],
+    ['a dead-letter grant under a tenant wildcard', (p) => p.publish.allow.push('gremion.*.dlq.kernel.>'), /dead-letter grant/],
+    ['the dead-letter grant missing', (p) => (p.publish.allow = p.publish.allow.filter((a) => a !== 'gremion.ta.dlq.kernel.>')), /exactly one dead-letter publish grant/],
+    ['the dead-letter grant twice', (p) => p.publish.allow.push('gremion.ta.dlq.kernel.>'), /exactly one dead-letter publish grant/],
   ]
   for (const [name, brk, re] of breaks) {
     test(`break: ${name} fails`, () => {

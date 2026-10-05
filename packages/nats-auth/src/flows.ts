@@ -42,6 +42,21 @@ export const FLOWS: Readonly<Record<string, ModuleFlow>> = Object.freeze({
   finance: { publishes: [], consumes: ['ORGUNIT'] },
 })
 
+/** System streams a tenant account holds BESIDE the flow streams (TASK-079 Q2, G5). They are not
+ *  in FLOWS and not in the ports STREAMS topology: no module owns or consumes them.
+ *  DLQ: the tenant's dead-letter stream. Consumers publish their poison messages to
+ *  gremion.<t>.dlq.<module>.<consumer> (the one publish grant every flow module key holds beyond
+ *  its own streams), and the server's MAX_DELIVERIES advisory -- the backstop for a consumer that
+ *  crashed on its last delivery -- is captured into it. Created by the tenant `admin` only
+ *  (a module key cannot create streams or read advisories). Same limits as every flow stream
+ *  (@gremion/ports ensureStream: 7 days, dedup 2 min), so a dead letter is replayable for 7 days. */
+export const SYSTEM_STREAMS: Readonly<Record<string, { name: string; subjects: string[] }>> = Object.freeze({
+  DLQ: { name: 'DLQ', subjects: ['gremion.*.dlq.>', '$JS.EVENT.ADVISORY.CONSUMER.MAX_DELIVERIES.>'] },
+})
+
+/** The one dead-letter publish grant of a flow module key: gremion.<t>.dlq.<module>.> */
+export const dlqGrantFor = (tenant: string, module: string): string => `gremion.${tenant}.dlq.${module}.>`
+
 /** Catalogue modules that do not touch the broker (no NATS_URL under
  *  modules/<id>/src, measured 2026-09-28). They get NO user. elections and
  *  handover arrive with TASK-021 and are listed ahead of it so its merge does
@@ -73,7 +88,9 @@ export const NO_STREAM = Object.freeze({
   asOf: '2026-09-28',
   entries: Object.freeze([
     { owner: 'gov', segment: 'gov', until: 'TASK-084' },
-    { owner: 'gov', segment: 'provisioning', until: 'TASK-079' },
+    // TASK-079 built the library, not this event: the provisioning-completed event is TASK-080's
+    // (the kernel API hosts the relay, TRD-407), so the entry is re-dated (TASK-079 Q12).
+    { owner: 'gov', segment: 'provisioning', until: 'TASK-080' },
   ] as NoStreamEntry[]),
 })
 
@@ -106,6 +123,8 @@ export interface MatrixInput {
   flows: Record<string, ModuleFlow>
   noBroker: string[]
   streams: Record<string, { name: string; subjects: string[] }>
+  /** SYSTEM_STREAMS: filters that must stay disjoint from every flow stream. */
+  systemStreams?: Record<string, { name: string; subjects: string[] }>
   registry: RegistryAddress[]
   ownerToModule: Record<string, string>
   noStream: NoStreamEntry[]
@@ -164,11 +183,18 @@ export function matrixViolations(input: MatrixInput): string[] {
     const pubs = Object.entries(flows).filter(([, f]) => f.publishes.includes(s)).map(([id]) => id)
     if (pubs.length !== 1) out.push(`stream ${s} has ${pubs.length} publishers [${pubs.join(', ')}], want exactly 1`)
   }
-  // Disjoint filters.
-  for (let i = 0; i < streamNames.length; i++) {
-    for (let j = i + 1; j < streamNames.length; j++) {
-      const a = streams[streamNames[i]!]!
-      const b = streams[streamNames[j]!]!
+  // Disjoint filters -- the flow streams AND the system streams (DLQ): a dead-letter subject
+  // captured by a flow stream too would be stored twice, and the "one publisher per stream" and
+  // "address under its module's stream" guards stay flow-only.
+  const everyStream = { ...streams, ...(input.systemStreams ?? {}) }
+  const everyName = Object.keys(everyStream)
+  for (const n of Object.keys(input.systemStreams ?? {})) {
+    if (n in streams) out.push(`system stream ${n} has the name of a flow stream`)
+  }
+  for (let i = 0; i < everyName.length; i++) {
+    for (let j = i + 1; j < everyName.length; j++) {
+      const a = everyStream[everyName[i]!]!
+      const b = everyStream[everyName[j]!]!
       for (const x of a.subjects) {
         for (const y of b.subjects) {
           if (patternsOverlap(x, y)) out.push(`streams ${a.name} (${x}) and ${b.name} (${y}) overlap`)

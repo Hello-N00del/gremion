@@ -18,7 +18,8 @@
 //     after the reload succeeded, so a run that dies between the two reloads
 //     on the next;
 //  5. as the tenant admin, every stream a user of this tenant touches is
-//     ensured (same config builder as the modules' boot, so theirs is a read).
+//     ensured (same config builder as the modules' boot, so theirs is a read),
+//     plus the tenant's system streams (SYSTEM_STREAMS: the DLQ, TASK-079).
 //
 // A dropped module's live connection is closed by the server on reload with
 // Authorization Violation, and its old seed is refused from then on (I3).
@@ -26,7 +27,7 @@ import { createHash, randomBytes } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { DEFAULT_ACCOUNTS_DIR, secretsDirOf } from './connect.ts'
-import { FLOWS, KERNEL, NO_BROKER } from './flows.ts'
+import { FLOWS, KERNEL, NO_BROKER, SYSTEM_STREAMS } from './flows.ts'
 import { accountFor, assertTenantId } from './permissions.ts'
 import { renderServerConfig, type ServerState } from './render.ts'
 import { ADMIN_DIR, SeedStore } from './store.ts'
@@ -197,7 +198,9 @@ export async function ensureTenantAccount(
     if (pendingSeeds.length) await broker.assertRevoked(tenant, pendingSeeds)
     for (const m of pending) store.removeModuleSeed(m, tenant)
 
-    await broker.ensureStreams(tenant, streamsFor(users))
+    // The flow streams, then the system streams (DLQ, TASK-079 G5): every tenant account holds the
+    // dead-letter stream, created here by the tenant admin because no module key can.
+    await broker.ensureStreams(tenant, [...streamsFor(users), ...Object.keys(SYSTEM_STREAMS)])
     // Only now is "the server serves these bytes" known: the tenant's admin
     // was admitted and every stream answered.
     if (!loaded) writeAtomic(marker, `${sha256(bytes)}\n`, 0o644)
