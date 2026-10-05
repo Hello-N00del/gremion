@@ -22,6 +22,14 @@
 #   access      TRD-111: operator+MFA in; role-less, loa1 and a council realm out;
 #               Grafana reads Prometheus and Tempo; its requests reach Loki as class=audit
 #   reach-red   RED: ops joined to _state reaches postgres  ·  reach  TRD-203 by IP
+#   footprint-red  RED (TASK-039-FU): no record, no job_run row, no footprint series
+#   footprint   footprint.sh run for real in the collector container against a messaging-
+#               postgres stand-in (synapse db), a seeded Vector volume and council directory,
+#               and a gremion_platform carrying the platform migration files: the dated record,
+#               one idempotent plt.job_run row per ISO week, absent never 0 (TRD-223)
+#   footprint-series  after up + footprint: gremion_footprint_component_bytes and
+#               gremion_job_last_run in Prometheus (host textfile + Alloy, no Alloy change);
+#               a failed row flips the status label
 #   down        teardown by name, verified
 #
 # Proof deviations, each measured on the workstation (Docker Desktop):
@@ -85,6 +93,7 @@ VOL_VECTOR="${STACK}-state_vector-processed-logs"
 VOL_NATSCONF="${STACK}-state_nats-conf"
 C_PG="${STACK}-state-postgres-1"
 C_BOARD="${STACK}-state-board-postgres-1"
+C_MSG="${STACK}-state-messaging-postgres-1"   # TASK-039-FU: the Synapse database's stand-in
 C_NATS="${STACK}-state-nats-1"
 C_VECTOR="${STACK}-state-vector-1"
 C_MAIL="${STACK}-mailpit"
@@ -782,10 +791,185 @@ phase_reach() {
     finish 4
 }
 
+# ---------------------------------------------------------------------------
+# TASK-039-FU (TRD-223): the weekly footprint, run for real. footprint.sh runs
+# in the collector container like metrics-textfile.sh (collect), against the
+# scratch _state slice: a messaging-postgres stand-in holding a `synapse`
+# database, the scratch Vector volume with a seeded file, a council directory on
+# the collector's tmpfs, and a gremion_platform database in the scratch state
+# postgres carrying the platform migration files as the kernel ships them.
+FP_COUNCIL="0192f0c1-2b3c-7d4e-8f00-00000039f001"
+FP_ROOT_IN="/disk/files"
+
+fp_psql() {   # <sql> -- one statement against the scratch gremion_platform, tuples only
+    docker exec "$C_PG" psql -U postgres -d gremion_platform -X -q -tA -v ON_ERROR_STOP=1 -c "$1"
+}
+
+footprint_run() {   # <epoch|""> <file-store root in the collector> -- the script's stdout; its exit status
+    local epoch="$1" froot="$2" args=()
+    [[ -z "$epoch" ]] || args+=(-e "FOOTPRINT_NOW_EPOCH=$epoch")
+    docker exec -e GREMION_ROOT=/g -e STACK="$STACK" -e "GREMION_FOOTPRINT_FILESTORE_ROOT=${froot}" "${args[@]}" \
+        "$C_COLL" bash /src/infra/host/ops/footprint.sh 2>>"$OUT/footprint.stderr"
+}
+
+fp_reset_db() {   # a fresh gremion_platform with every platform migration file the kernel ships, in order
+    local f n=0
+    docker exec "$C_PG" psql -U postgres -X -q -c "DROP DATABASE IF EXISTS gremion_platform WITH (FORCE)" >/dev/null || return 1
+    docker exec "$C_PG" psql -U postgres -X -q -c "CREATE DATABASE gremion_platform" >/dev/null || return 1
+    for f in "$ROOT"/packages/tenant-store/src/lifecycle/platform-migrations/*.sql; do
+        docker exec -i "$C_PG" psql -U postgres -d gremion_platform -X -q -v ON_ERROR_STOP=1 -f - < "$f" >/dev/null 2>"$OUT/fp-migrate.err" \
+            || { cat "$OUT/fp-migrate.err" >&2; return 1; }
+        n=$((n + 1))
+    done
+    FP_MIGRATIONS="$n"
+}
+
+fp_msg_up() {   # the messaging-postgres stand-in (trust auth: no secret exists), with a synapse database
+    if docker inspect "$C_MSG" >/dev/null 2>&1; then docker start "$C_MSG" >/dev/null
+    else
+        docker run -d --name "$C_MSG" --network "$NET_STATE" --label "com.docker.compose.project=${STACK}-state" \
+            --label com.docker.compose.service=messaging-postgres -e POSTGRES_USER=proofmsg -e POSTGRES_HOST_AUTH_METHOD=trust \
+            "$PG_IMAGE" >/dev/null || return 1
+    fi
+    msg_ready() { docker exec "$C_MSG" pg_isready -U proofmsg -d postgres >/dev/null 2>&1; }
+    wait_until 60 msg_ready || return 1
+    docker exec "$C_MSG" psql -U proofmsg -d postgres -X -q -tA -c "SELECT 1 FROM pg_database WHERE datname = 'synapse'" | grep -q 1 \
+        || docker exec "$C_MSG" psql -U proofmsg -d postgres -X -q -c "CREATE DATABASE synapse" >/dev/null || return 1
+    docker exec "$C_MSG" psql -U proofmsg -d synapse -X -q -c \
+        "CREATE TABLE IF NOT EXISTS events AS SELECT g AS id, md5(g::text) AS body FROM generate_series(1, 40000) g" >/dev/null
+}
+
+fp_seed() {   # a 3 MiB file in the Vector volume, a 3 MiB council directory and a non-uuid one on the tmpfs
+    docker run --rm -v "${VOL_VECTOR}:/logs" "$BUSYBOX_IMAGE" sh -c \
+        'dd if=/dev/zero of=/logs/footprint-seed.bin bs=1048576 count=3 2>/dev/null' || return 1
+    docker exec "$C_COLL" sh -c "rm -rf ${FP_ROOT_IN} && mkdir -p ${FP_ROOT_IN}/${FP_COUNCIL} ${FP_ROOT_IN}/not-a-council \
+        && dd if=/dev/zero of=${FP_ROOT_IN}/${FP_COUNCIL}/blob bs=1048576 count=3 2>/dev/null \
+        && dd if=/dev/zero of=${FP_ROOT_IN}/not-a-council/blob bs=1048576 count=1 2>/dev/null"
+}
+
+fp_jobs() {   # <job_kind> -- "count|min(status)|min(detail_ref)" of that kind's runs
+    fp_psql "SELECT count(*) || '|' || coalesce(min(r.status), '') || '|' || coalesce(min(r.detail_ref), '') FROM plt.job_run r JOIN plt.scheduled_job s USING (scheduled_job_id) WHERE s.job_kind = '$1'"
+}
+
+value_eq() { awk -v a="$1" -v b="$2" 'BEGIN { exit !(a != "" && b != "" && a + 0 == b + 0) }'; }
+prom_eq() { value_eq "$(prom_value "$1")" "$2"; }
+
+phase_footprint_red() {
+    # RED first: against the current stack nothing has run footprint.sh. The
+    # three post-conditions of the brief all FAIL, each watched: no dated record,
+    # no job_run row, no footprint series.
+    rm -rf "$SROOT/runtime/footprint" "$SROOT/runtime/textfile/gremion-footprint.prom"
+    docker exec "$C_PG" psql -U postgres -X -q -c "DROP DATABASE IF EXISTS gremion_platform WITH (FORCE)" >/dev/null || die "could not drop the scratch gremion_platform"
+    local n
+    n="$(find "$SROOT/runtime/footprint" -name '*.json' 2>/dev/null | wc -l | tr -d ' ')"
+    [[ "$n" == 0 ]] && ok "RED: no runtime/footprint/<week>.json exists (the record post-condition fails)" || bad "RED did not reproduce: $n record file(s)"
+    if fp_jobs footprint_measurement >/dev/null 2>&1; then bad "RED did not reproduce: plt.job_run answered"; else ok "RED: no plt.job_run row can be read (no platform database: the row post-condition fails)"; fi
+    wait_until 120 bool_not has_series 'gremion_footprint_component_bytes{component="log_volume"}' \
+        && ok "RED: Prometheus has no gremion_footprint_component_bytes{component=log_volume} (the series post-condition fails)" \
+        || bad "RED did not reproduce: the footprint series is present before any run"
+    finish 3
+}
+
+bool_not() { ! "$@"; }
+
+phase_footprint() {
+    local now week out rc rec lv syn want_syn cf w2 w3 st
+    : > "$OUT/footprint.stderr"
+    fp_reset_db && ok "gremion_platform created with all ${FP_MIGRATIONS} platform migration files; the seeded definition is there ($(fp_psql "SELECT job_kind || ' ' || cron_expression || ' ' || enabled FROM plt.scheduled_job WHERE job_kind = 'footprint_measurement'"))" \
+        || die "the platform migrations did not apply to the scratch database"
+    fp_msg_up && fp_seed && ok "seeded: a synapse database (messaging-postgres stand-in), 3 MiB in the Vector volume, a 3 MiB council directory and a non-uuid one" \
+        || die "could not seed the footprint world"
+    rm -rf "$SROOT/runtime/footprint" "$SROOT/runtime/textfile/gremion-footprint.prom"
+
+    # 1. a real run, the real clock
+    now="$(date -u +%s)"; week="$(date -u -d "@${now}" +%G-W%V)"
+    if out="$(footprint_run "" "$FP_ROOT_IN")"; then rc=0; else rc=$?; fi
+    [[ "$rc" == 0 ]] && ok "footprint.sh exits 0: ${out}" || bad "footprint.sh exited ${rc}: ${out}"
+    rec="$SROOT/runtime/footprint/${week}.json"
+    jq -e . "$rec" >/dev/null 2>&1 && ok "runtime/footprint/${week}.json exists and parses" || bad "no parsable record at runtime/footprint/${week}.json"
+    jq -e '.week and .measured_at and .scheduled_for' "$rec" >/dev/null 2>&1 && ok "the record carries week, measured_at and scheduled_for" || bad "record keys missing"
+    jq -e 'all(.components[]; (.status == "measured" and (.bytes | type) == "number") or (.status == "absent" and .bytes == null))' "$rec" >/dev/null 2>&1 \
+        && ok "every component is an integer + measured or null + absent (never a made-up 0)" || bad "a component is neither"
+    lv="$(jq -r '[.components[] | select(.component == "log_volume" and .status == "measured")][0].bytes // empty' "$rec")"
+    [[ -n "$lv" && "$lv" -ge 2097152 ]] && ok "log_volume ${lv} >= 2097152 (the seeded 3 MiB file in the Vector volume)" || bad "log_volume '${lv}'"
+    cf="$(jq -r --arg c "$FP_COUNCIL" '[.components[] | select(.component == "council_files" and .council == $c and .status == "measured")][0].bytes // empty' "$rec")"
+    [[ -n "$cf" && "$cf" -ge 3145728 && "$cf" -lt $(( 3145728 + 1048576 )) ]] && ok "council_files for the seeded council: ${cf} in [3145728, 3145728 + 1 MiB)" || bad "council_files '${cf}'"
+    [[ "$(jq -r '[.components[] | select(.component == "council_files")] | length' "$rec")" == 1 ]] && ok "the non-uuid directory is not a council" || bad "a non-council directory was counted"
+    syn="$(jq -r '[.components[] | select(.component == "synapse_db" and .status == "measured")][0].bytes // empty' "$rec")"
+    want_syn="$(docker exec "$C_MSG" psql -U proofmsg -d postgres -X -q -tA -c "SELECT pg_database_size('synapse')")"
+    if [[ -n "$syn" && -n "$want_syn" ]] && awk -v a="$syn" -v b="$want_syn" 'BEGIN { d = a - b; if (d < 0) d = -d; exit !(b > 0 && d <= b * 0.05) }'; then
+        ok "synapse_db ${syn} within 5 percent of pg_database_size('synapse') ${want_syn}"
+    else bad "synapse_db '${syn}' vs ${want_syn}"; fi
+    jq -e '[.components[] | select(.component == "platform_overhead" and .status == "measured" and (.bytes | type) == "number")] | length == 1' "$rec" >/dev/null 2>&1 \
+        && ok "platform_overhead is measured (docker ps --size on the six gremion.footprint=platform_overhead containers)" || bad "platform_overhead is not measured with the ops project up"
+    [[ "$(docker ps --all --filter label=gremion.footprint=platform_overhead --format '{{.Names}}' | wc -l | tr -d ' ')" == 6 ]] \
+        && ok "six containers carry the platform_overhead label" || bad "the label filter does not match six containers"
+    grep -qiE "$(hostname)|password|secret|token" "$rec" && bad "the record carries a host name or a secret" || ok "no host name, address or secret in the record"
+    st="$(fp_jobs footprint_measurement)"
+    [[ "$st" == "1|succeeded|footprint/${week}.json" ]] && ok "one job_run row: ${st}" || bad "job_run row '${st}'"
+
+    # 2. a rerun inside the same ISO week: no second row, the record rewritten
+    local at1; at1="$(jq -r .measured_at "$rec")"
+    if out="$(footprint_run "$(( now + 120 ))" "$FP_ROOT_IN")"; then rc=0; else rc=$?; fi
+    [[ "$rc" == 0 && "$out" == *"job_run=exists"* ]] && ok "a rerun in the same week prints job_run=exists, exit 0" || bad "rerun: rc ${rc}: ${out}"
+    [[ "$(fp_jobs footprint_measurement)" == "1|succeeded|footprint/${week}.json" ]] && ok "the count stays at 1" || bad "the rerun changed the row count: $(fp_jobs footprint_measurement)"
+    [[ "$(jq -r .measured_at "$rec")" != "$at1" ]] && ok "the record file was rewritten" || bad "the record was not rewritten"
+
+    # 3. the NEXT week (clock injected) adds the second row
+    w2="$(date -u -d "@$(( now + 7 * 86400 ))" +%G-W%V)"
+    if out="$(footprint_run "$(( now + 7 * 86400 ))" "$FP_ROOT_IN")"; then rc=0; else rc=$?; fi
+    [[ "$rc" == 0 && "$out" == *"week=${w2}"* && "$out" == *"job_run=inserted"* ]] && ok "the next ISO week (${w2}) inserts" || bad "next week: rc ${rc}: ${out}"
+    [[ "$(fp_psql "SELECT count(*) FROM plt.job_run")" == 2 ]] && ok "two rows after two weeks" || bad "row count $(fp_psql "SELECT count(*) FROM plt.job_run")"
+
+    # 4. missing is absent, never 0: no messaging-postgres container, no file-store root
+    docker stop "$C_MSG" >/dev/null
+    w3="$(date -u -d "@$(( now + 14 * 86400 ))" +%G-W%V)"
+    if out="$(footprint_run "$(( now + 14 * 86400 ))" "")"; then rc=0; else rc=$?; fi
+    rec="$SROOT/runtime/footprint/${w3}.json"
+    [[ "$rc" == 0 ]] && ok "log_volume alone keeps the run a success: ${out}" || bad "absent run: rc ${rc}: ${out}"
+    jq -e '[.components[] | select(.component == "synapse_db")] | .[0].status == "absent" and .[0].bytes == null' "$rec" >/dev/null 2>&1 \
+        && ok "no messaging-postgres container: synapse_db is absent, bytes null" || bad "synapse_db is not absent"
+    jq -e '[.components[] | select(.component == "council_files")] | .[0].status == "absent" and .[0].bytes == null' "$rec" >/dev/null 2>&1 \
+        && ok "an unset file-store root: council_files is absent, bytes null" || bad "council_files is not absent"
+    [[ "$(grep -c 'component="synapse_db"' "$SROOT/runtime/textfile/gremion-footprint.prom")" == 0 && "$(grep -c 'component="council_files"' "$SROOT/runtime/textfile/gremion-footprint.prom")" == 0 ]] \
+        && ok "the gauge file has NO synapse_db and NO council_files line (grep, not a value compare)" || bad "the gauge file carries a line for an absent component"
+    grep -q 'component="log_volume"' "$SROOT/runtime/textfile/gremion-footprint.prom" && ok "the measured log_volume keeps its line" || bad "log_volume gauge line missing"
+    fp_msg_up || bad "could not restart the messaging stand-in"
+    finish 24
+}
+
+phase_footprint_series() {
+    local gf="$SROOT/runtime/textfile/gremion-footprint.prom" want epoch
+    [[ -s "$gf" ]] || die "run the footprint phase first (no ${gf})"
+    collect && ok "the host collector ran (gremion_job_last_run is read from plt.job_run in the scratch state postgres)" || bad "the collector run failed"
+    want="$(sed -n 's/^gremion_footprint_component_bytes{component="log_volume"} //p' "$gf")"
+    wait_until 150 prom_eq 'max(gremion_footprint_component_bytes{component="log_volume"})' "$want" \
+        && ok "Prometheus returns gremion_footprint_component_bytes{component=log_volume} = ${want}, the seeded value, via the host textfile and Alloy" \
+        || bad "the log_volume series is not ${want} in Prometheus"
+    has_series 'gremion_footprint_component_bytes{component="synapse_db"}' \
+        && bad "a series exists for the ABSENT synapse_db" || ok "no synapse_db series (the last run measured none: absent, not 0)"
+    epoch="$(fp_psql "SELECT extract(epoch FROM finished_at)::bigint FROM plt.job_run ORDER BY finished_at DESC LIMIT 1")"
+    wait_until 120 prom_eq 'max(gremion_job_last_run{job_kind="footprint_measurement",status="succeeded"})' "$epoch" \
+        && ok "Prometheus returns gremion_job_last_run{job_kind=footprint_measurement,status=succeeded} = ${epoch} (finished_at as Unix seconds)" \
+        || bad "gremion_job_last_run succeeded series is not ${epoch}"
+    # a failed row flips the status label (watched)
+    fp_psql "INSERT INTO plt.job_run (scheduled_job_id, scope, scheduled_for, started_at, finished_at, status, detail_ref)
+             SELECT scheduled_job_id, 'platform', '2030-01-07T03:00:00Z', now(), now(), 'failed', 'footprint/2030-W02.json'
+               FROM plt.scheduled_job WHERE job_kind = 'footprint_measurement'" >/dev/null || die "could not write the failed row"
+    collect || bad "the collector run failed"
+    wait_until 150 has_series 'gremion_job_last_run{job_kind="footprint_measurement",status="failed"}' \
+        && ok "a failed run flips the label: status=failed is returned" || bad "no status=failed series"
+    wait_until 150 value_is 'count(gremion_job_last_run{job_kind="footprint_measurement",status="succeeded"}) or vector(0)' 0 \
+        && ok "and the succeeded series is gone (one family, the newest run decides)" || bad "the succeeded series is still there"
+    git -C "$(hp "$ROOT")" diff --quiet "${OBS_PROOF_BASE_KERNEL:-9c724bfa}" -- docker/alloy \
+        && ok "no Alloy change: the textfile directory is read as it is (a second *.prom is picked up)" || bad "docker/alloy differs from the base"
+    finish 7
+}
+
 phase_down() {
     local svc
     compose_ops -- down --remove-orphans > "$OUT/down.log" 2>&1 || true
-    for c in "$C_PG" "$C_BOARD" "$C_NATS" "$C_VECTOR" "$C_MAIL" "$C_KC" "$C_COLL"; do docker rm -f "$c" >/dev/null 2>&1 || true; done
+    for c in "$C_PG" "$C_BOARD" "$C_MSG" "$C_NATS" "$C_VECTOR" "$C_MAIL" "$C_KC" "$C_COLL"; do docker rm -f "$c" >/dev/null 2>&1 || true; done
     for svc in "${OPS_SERVICES[@]}"; do docker rm -f "$(container_of "$svc")" >/dev/null 2>&1 || true; done
     docker network rm "$NET_STATE" "${OPS}_ops" >/dev/null 2>&1 || true
     docker volume rm "$VOL_VECTOR" "$VOL_NATSCONF" >/dev/null 2>&1 || true
@@ -813,6 +997,9 @@ case "$PHASE" in
     access) phase_access ;;
     reach-red) phase_reach_red ;;
     reach) phase_reach ;;
+    footprint-red) phase_footprint_red ;;
+    footprint) phase_footprint ;;
+    footprint-series) phase_footprint_series ;;
     down) phase_down ;;
     *) sed -n '2,40p' "$0" >&2; exit 2 ;;
 esac
