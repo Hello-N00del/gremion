@@ -10,10 +10,9 @@
 //  - SECURITY DEFINER hygiene of every 0005 function: search_path pinned,
 //    nothing executable by PUBLIC, the status view without evidence_token.
 import { spawnSync } from 'node:child_process'
-import postgres from 'postgres'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { ensureExecutorRole, ensurePanelRequester, EXECUTOR_EXECUTES, PANEL_READS } from '../../src/index.ts'
-import { adminUrl, code, open, scratchContainer, setupRoles, submit, submitArgs, type Roles } from './scratch.ts'
+import { code, open, scratchContainer, setupRoles, submit, submitArgs, type Roles } from './scratch.ts'
 
 const FUNCTIONS_0005 = [
   'plt.provisioning_request_guard()',
@@ -153,7 +152,7 @@ describe('the executor role (ensureExecutorRole)', () => {
       encoding: 'utf8',
     })
     expect(`${local.status} ${local.stdout.trim()}`).toBe('0 t')
-    const tcp = postgres(adminUrl('gremion_platform', 'gremion_executor', 'no-password-works'), { max: 1, connect_timeout: 10, onnotice: () => {} })
+    const tcp = open('gremion_platform', 1, 'gremion_executor', 'no-password-works')
     try {
       expect(await code(tcp`SELECT 1`)).toBe('28P01')
     } finally {

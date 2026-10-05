@@ -34,7 +34,10 @@ import { dirname, join } from 'node:path'
 import postgres from 'postgres'
 import {
   bootstrapPlatform,
-  ensurePanelReader,
+  ensureExecutorRole,
+  ensurePanelRequester,
+  EXECUTOR_ROLE,
+  PANEL_EXECUTES,
   PANEL_READS,
   createPhaseA,
   createPhaseB,
@@ -82,6 +85,7 @@ import {
 import { materializeConfig, assertBrandIdentityComplete } from '../src/lib/server/tenant/provisioner/materialize'
 import { tlog } from '../src/lib/server/observability/tenant-log'
 import { deleteTenant, type DeleteDeps, type LeafShredExecutor } from '../src/lib/server/tenant/provisioner/lifecycle'
+import { requestVerb } from './tenant-provision-requests'
 
 const repoRoot = join(import.meta.dirname, '..', '..')
 const kcDir = join(repoRoot, 'docker', 'keycloak')
@@ -568,18 +572,16 @@ async function cmdInit(): Promise<void> {
     log(`init: gremion_platform ${r.platformCreated ? 'created' : 'present'}; ${r.applied.length} migration(s) applied; catalogue rows: +${r.catalogue.insertedModules.length} module(s), +${r.catalogue.insertedVersions.length} version(s); ops realm ${r.opsRealm?.created ? 'created' : 'present'}`)
     for (const u of r.catalogue.undecided) log(`init: ${u.moduleKey} not loaded (${u.reason})`)
     for (const row of r.catalogue.load) if (row.provisional) log(`init: ${provisionalNote(row)}`)
-    const panel = await ensurePanelReader({
-      kernelAdmin,
-      openAdminOn: (db) => {
-        const u = new URL(kernelAdminUrl)
-        u.pathname = `/${encodeURIComponent(db)}`
-        return postgres(u.toString(), { max: 1, onnotice: () => {}, connect_timeout: 15 })
-      },
-      role: panelRole,
-      password: panelPassword,
-      controlDatabase,
-    })
-    log(`init: control-panel reader ${panelRole} ${panel.created ? 'created' : 'present'} (SELECT on ${[...PANEL_READS.control, ...PANEL_READS.platform].join(', ')} only)`)
+    const openAdminOn = (db: string) => {
+      const u = new URL(kernelAdminUrl)
+      u.pathname = `/${encodeURIComponent(db)}`
+      return postgres(u.toString(), { max: 1, onnotice: () => {}, connect_timeout: 15 })
+    }
+    const panel = await ensurePanelRequester({ kernelAdmin, openAdminOn, role: panelRole, password: panelPassword, controlDatabase })
+    log(`init: control-panel role ${panelRole} ${panel.created ? 'created' : 'present'} (SELECT on ${[...PANEL_READS.control, ...PANEL_READS.platform].join(', ')}; EXECUTE on ${PANEL_EXECUTES.join(', ')} only)`)
+    // TASK-043d: the host-side executor's role (no password: the state server's local socket only)
+    const executor = await ensureExecutorRole({ kernelAdmin, openAdminOn })
+    log(`init: executor role ${EXECUTOR_ROLE} ${executor.created ? 'created' : 'present'} (EXECUTE on the request functions only)`)
   } finally {
     await kernelAdmin.end({ timeout: 5 })
   }
@@ -897,7 +899,8 @@ const USAGE = `usage: tenant-create <verb> ...
   reconcile [--verify-only] <slug>|--all
   status <slug>
   operator-add <email> [--no-mail]
-  delete <slug> | bootstrap-provisioner | materialize-config <slug> [--config <path>]`
+  delete <slug> | bootstrap-provisioner | materialize-config <slug> [--config <path>]
+  request-verify <request-id>   (TASK-043d: the executor's trusted-layer verdict, one JSON line)`
 
 async function main(): Promise<void> {
   const verb = process.argv[2]
@@ -935,8 +938,10 @@ async function main(): Promise<void> {
       return cmdBootstrapProvisioner()
     case 'materialize-config':
       return cmdMaterializeConfig()
+    case 'request-verify':
+      return requestVerb(verb, { args: process.argv.slice(3), reqEnv, directPostgresUrl, loadModules, modulesDir: MODULES_DIR, kcInternalBase, provisionerTransport: rawProvisionerTransport, usage: (m) => new UsageError(m), log })
     case 'provision':
-      throw new UsageError('provision is retired (TASK-043): a customer is created by `gremion-tenant create` (phase-a, the host mail step, record-step, phase-b, the router)')
+      throw new UsageError('provision is retired (TASK-043): a customer is created from the control panel ("Neuer Mandant"), which the host-side executor runs (phase-a, the host mail step, record-step, phase-b, the router; TASK-043d)')
     default:
       throw new UsageError(`unknown verb ${verb}\n${USAGE}`)
   }
