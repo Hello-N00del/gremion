@@ -1,16 +1,21 @@
 // packages/events/src/cli.ts -- `events outbox-replay | outbox-requeue | dlq-list | dlq-replay | metrics`
 //
-//   events outbox-replay  --ctx <c> --tenant <t> --subjects <file> [--module <m>] [--identity <i>] [--since <iso>]
-//   events outbox-requeue --ctx <c> --tenant <t> --event-id <uuid> [--module <m>]
-//   events dlq-list       --tenant <t>
-//   events dlq-replay     --tenant <t> --seq <n>
-//   events metrics        --ctx <c> [--tenant <t>] [--module <m>] [--consumer <name>]
+//   events outbox-replay  --ctx <c> --customer <uuid> --tenant <slug> --subjects <file> [--module <m>] [--identity <i>] [--since <iso>]
+//   events outbox-requeue --ctx <c> --customer <uuid> --event-id <uuid> [--module <m>]
+//   events dlq-list       --tenant <slug>
+//   events dlq-replay     --tenant <slug> --seq <n>
+//   events metrics        --ctx <c> [--customer <uuid>] [--module <m>] [--consumer <name>]
+//
+// Two identifiers, as everywhere in the kernel: --customer is the customer id (a UUIDv7, the
+// tenant-store key of the service database), --tenant is the tenant SLUG (the NATS account
+// T_<slug> and the subject token, @gremion/nats-auth).
 //
 // outbox-replay / outbox-requeue / metrics run in the OWNING SERVICE's container (they open
 // that service's database through tenant-store: GREMION_<MODULE>_PG_URL; --module defaults to
-// the context code). outbox-replay publishes as the service's NATS identity (--identity,
-// default the module); dlq-list / dlq-replay run as the tenant's admin (the tenant-create
-// one-shot, docs/runbooks/dead-letter.md). NATS_URL, NATS_SECRETS_DIR as for `nats-auth`.
+// the context code; metrics reads GREMION_CUSTOMER_ID when --customer is absent).
+// outbox-replay publishes as the service's NATS identity (--identity, default the module).
+// dlq-list / dlq-replay run as the tenant's admin (the tenant-create one-shot,
+// docs/runbooks/dead-letter.md). NATS_URL, NATS_SECRETS_DIR as for `nats-auth`.
 // --subjects is the service's event-type -> subject map: a JSON object whose values may
 // contain {tenant}. Never prints a seed, a password or a message body.
 import { readFileSync } from 'node:fs'
@@ -18,11 +23,11 @@ import { collectMetrics, renderMetrics } from './metrics.ts'
 import { listDeadLetters, replayDeadLetter, replayOutbox, requeueOutbox } from './recovery.ts'
 
 const USAGE = [
-  'usage: events outbox-replay --ctx <c> --tenant <t> --subjects <file> [--module <m>] [--identity <i>] [--since <iso>]',
-  '       events outbox-requeue --ctx <c> --tenant <t> --event-id <uuid> [--module <m>]',
-  '       events dlq-list --tenant <t>',
-  '       events dlq-replay --tenant <t> --seq <n>',
-  '       events metrics --ctx <c> [--tenant <t>] [--module <m>] [--consumer <name>]',
+  'usage: events outbox-replay --ctx <c> --customer <uuid> --tenant <slug> --subjects <file> [--module <m>] [--identity <i>] [--since <iso>]',
+  '       events outbox-requeue --ctx <c> --customer <uuid> --event-id <uuid> [--module <m>]',
+  '       events dlq-list --tenant <slug>',
+  '       events dlq-replay --tenant <slug> --seq <n>',
+  '       events metrics --ctx <c> [--customer <uuid>] [--module <m>] [--consumer <name>]',
 ].join('\n')
 
 type Flags = Record<string, string>
@@ -63,9 +68,9 @@ export function loadSubjects(file: string, tenant: string): Record<string, strin
 }
 
 export interface CliDeps {
-  /** Opens the owning service's database; returns the handle and a closer. */
-  openDb(tenant: string, module: string): Promise<{ sql: import('@gremion/db').Sql; close(): Promise<void> }>
-  /** Connects to NATS as a module identity (`admin` = the tenant admin). */
+  /** Opens the owning service's database for a customer; returns the handle and a closer. */
+  openDb(customer: string, module: string): Promise<{ sql: import('@gremion/db').Sql; close(): Promise<void> }>
+  /** Connects to NATS as a module identity (`admin` = the tenant admin) of a tenant slug. */
   openNats(tenant: string, identity: string): Promise<{ js: import('@nats-io/jetstream').JetStreamClient; jsm: import('@nats-io/jetstream').JetStreamManager; close(): Promise<void> }>
   out(text: string): void
 }
@@ -76,9 +81,9 @@ async function realDeps(): Promise<CliDeps> {
   const { connect } = await import('@nats-io/transport-node')
   const { jetstream, jetstreamManager } = await import('@nats-io/jetstream')
   return {
-    async openDb(tenant, module) {
+    async openDb(customer, module) {
       const store = createTenantStore({ maxConnections: 2 })
-      return { sql: await store.openTenantDb(tenant, module), close: () => store.close() }
+      return { sql: await store.openTenantDb(customer, module), close: () => store.close() }
     },
     async openNats(tenant, identity) {
       const url = process.env.NATS_URL
@@ -101,13 +106,13 @@ export async function main(argv: string[], deps?: CliDeps): Promise<number> {
     const d = deps ?? (await realDeps())
     switch (cmd) {
       case 'outbox-replay': {
-        const f = parseFlags(rest, ['ctx', 'tenant', 'subjects', 'module', 'identity', 'since'])
-        const [ctx, tenant] = [need(f, 'ctx'), need(f, 'tenant')]
+        const f = parseFlags(rest, ['ctx', 'customer', 'tenant', 'subjects', 'module', 'identity', 'since'])
+        const [ctx, customer, tenant] = [need(f, 'ctx'), need(f, 'customer'), need(f, 'tenant')]
         const subjects = loadSubjects(need(f, 'subjects'), tenant)
         const since = f.since ? new Date(f.since) : undefined
         if (since && Number.isNaN(since.getTime())) throw new UsageError('--since is not an ISO date')
         const module = f.module ?? ctx
-        const db = await d.openDb(tenant, module)
+        const db = await d.openDb(customer, module)
         const nats = await d.openNats(tenant, f.identity ?? module)
         try {
           const r = await replayOutbox(db.sql, nats.js, { ctx, subjects, since, log: (l) => d.out(`${l}\n`) })
@@ -119,9 +124,9 @@ export async function main(argv: string[], deps?: CliDeps): Promise<number> {
         return 0
       }
       case 'outbox-requeue': {
-        const f = parseFlags(rest, ['ctx', 'tenant', 'event-id', 'module'])
-        const [ctx, tenant, eventId] = [need(f, 'ctx'), need(f, 'tenant'), need(f, 'event-id')]
-        const db = await d.openDb(tenant, f.module ?? ctx)
+        const f = parseFlags(rest, ['ctx', 'customer', 'event-id', 'module'])
+        const [ctx, customer, eventId] = [need(f, 'ctx'), need(f, 'customer'), need(f, 'event-id')]
+        const db = await d.openDb(customer, f.module ?? ctx)
         try {
           await requeueOutbox(db.sql, { ctx, eventId })
           d.out(`requeued ${eventId}: dead_lettered -> pending\n`)
@@ -154,11 +159,11 @@ export async function main(argv: string[], deps?: CliDeps): Promise<number> {
         return 0
       }
       case 'metrics': {
-        const f = parseFlags(rest, ['ctx', 'tenant', 'module', 'consumer'])
+        const f = parseFlags(rest, ['ctx', 'customer', 'module', 'consumer'])
         const ctx = need(f, 'ctx')
-        const tenant = f.tenant ?? process.env.GREMION_TENANT_ID
-        if (!tenant) throw new UsageError('--tenant is required (or GREMION_TENANT_ID in the container)')
-        const db = await d.openDb(tenant, f.module ?? ctx)
+        const customer = f.customer ?? process.env.GREMION_CUSTOMER_ID
+        if (!customer) throw new UsageError('--customer is required (or GREMION_CUSTOMER_ID in the container)')
+        const db = await d.openDb(customer, f.module ?? ctx)
         try {
           d.out(renderMetrics(await collectMetrics(db.sql, { ctx, consumer: f.consumer })))
         } finally {

@@ -1,11 +1,12 @@
 // The CLI surface without a database or broker: usage, flag strictness, the subject-map file.
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { afterAll, describe, expect, test, vi } from 'vitest'
 import { loadSubjects, main, parseFlags, UsageError, type CliDeps } from '../src/cli.ts'
 
-const dir = mkdtempSync(path.join(tmpdir(), 'events-cli-'))
+// Scratch under the package (git-ignored .scratch/), never the system temp directory.
+const dir = path.join(import.meta.dirname, '../.scratch', `cli-${process.pid}`)
+mkdirSync(dir, { recursive: true })
 afterAll(() => rmSync(dir, { recursive: true, force: true }))
 
 const deps = (): CliDeps & { out: ReturnType<typeof vi.fn>; openDb: ReturnType<typeof vi.fn>; openNats: ReturnType<typeof vi.fn> } =>
@@ -53,7 +54,8 @@ describe('main', () => {
 
   test.each([
     [['outbox-replay', '--ctx', 'idt']],
-    [['outbox-requeue', '--ctx', 'idt', '--tenant', 't']],
+    [['outbox-requeue', '--ctx', 'idt', '--customer', 'c']],
+    [['outbox-requeue', '--ctx', 'idt', '--tenant', 't', '--event-id', 'e']],
     [['dlq-replay', '--tenant', 't', '--seq', 'x']],
     [['dlq-list']],
     [['metrics']],
@@ -70,7 +72,7 @@ describe('main', () => {
     const d = deps()
     const sql = { begin: async (fn: (tx: unknown) => unknown) => fn({ unsafe: async (q: string) => (q.includes('set_config') ? [{ c: 'x' }] : [{ o: '1', d: '0', s: '2' }]) }) }
     d.openDb.mockResolvedValue({ sql, close: async () => {} })
-    expect(await main(['metrics', '--ctx', 'fin', '--tenant', 't', '--consumer', 'finance'], d)).toBe(0)
+    expect(await main(['metrics', '--ctx', 'fin', '--customer', 't', '--consumer', 'finance'], d)).toBe(0)
     const text = d.out.mock.calls.map((c) => c[0]).join('')
     expect(text).toContain('gremion_outbox_dead_lettered{ctx="fin"} 1')
     expect(text).toContain('gremion_inbox_stalled{ctx="fin",consumer="finance"} 2')

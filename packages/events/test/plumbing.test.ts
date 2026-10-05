@@ -1,8 +1,7 @@
 // TDD 2 (unit half): the plumbing renders lint-clean for every context and a
 // byte of drift is caught. The DB half (migrate through the runner, the prose
 // CHECK, RLS) runs in test/live/events.live.test.ts against a real Postgres.
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { afterAll, describe, expect, test } from 'vitest'
@@ -80,7 +79,9 @@ describe('template variables are exact', () => {
 })
 
 describe('checkPlumbingMigration (the byte-0 prefix rule)', () => {
-  const dir = mkdtempSync(path.join(tmpdir(), 'events-plumbing-'))
+  // Scratch under the package (git-ignored .scratch/), never the system temp directory.
+  const dir = path.join(import.meta.dirname, '../.scratch', `plumbing-${process.pid}`)
+  mkdirSync(dir, { recursive: true })
   afterAll(() => rmSync(dir, { recursive: true, force: true }))
   const write = (name: string, text: string) => {
     const f = path.join(dir, name)
