@@ -151,14 +151,14 @@ describe('refusals run no SQL at all', () => {
 describe('the platform migration folder (gremion_platform, schema plt)', () => {
   const files = readVerifiedMigrations(PLATFORM_MIGRATIONS_DIR)
 
-  it('is verified against its sha256 manifest: 0001 setup, 0002 module tables, 0003 module_database, 0004 provisioning ledger (TASK-043)', () => {
-    expect(files.map((f) => f.file)).toEqual(['0001_plt_setup.sql', '0002_plt_module.sql', '0003_plt_module_database.sql', '0004_plt_provisioning_step.sql'])
+  it('is verified against its sha256 manifest: 0001 setup, 0002 module tables, 0003 module_database, 0004 provisioning ledger (TASK-043), 0005 request queue (TASK-043d)', () => {
+    expect(files.map((f) => f.file)).toEqual(['0001_plt_setup.sql', '0002_plt_module.sql', '0003_plt_module_database.sql', '0004_plt_provisioning_step.sql', '0005_plt_provisioning_request.sql'])
     for (const f of files) expect(() => splitStatements(f.text)).not.toThrow()
   })
 
   it('TASK-075 G1b: migratePlatform\'s default phase lookup (the baseline this package ships) knows every locked platform file', () => {
     const phaseFor = pinnedPhaseFor(PLATFORM_CHAIN, PINNED_BASELINE)
-    expect(files.map((f) => resolvePhase(f.file, f.text, phaseFor).phase)).toEqual(['contract', 'expand', 'expand', 'expand'])
+    expect(files.map((f) => resolvePhase(f.file, f.text, phaseFor).phase)).toEqual(['contract', 'expand', 'expand', 'expand', 'expand'])
   })
 
   // TASK-075 r2: enableModule's default (no deps.phaseFor, as tenant-create

@@ -76,7 +76,7 @@ describe('ensurePlatformDatabase on a server without gremion_platform (Q15)', ()
     try {
       // TASK-075: every run names its release; the platform baseline phases the four files
       const m = await migratePlatform(owned, { releaseRef: 'dist-v0.0.1', log: () => {} })
-      expect(m.applied).toEqual(['0001_plt_setup.sql', '0002_plt_module.sql', '0003_plt_module_database.sql', '0004_plt_provisioning_step.sql'])
+      expect(m.applied).toEqual(['0001_plt_setup.sql', '0002_plt_module.sql', '0003_plt_module_database.sql', '0004_plt_provisioning_step.sql', '0005_plt_provisioning_request.sql'])
       expect((await migratePlatform(owned, { releaseRef: 'dist-v0.0.1', log: () => {} })).applied).toEqual([])
       const ledger = await owned<{ filename: string; phase: string; release_ref: string }[]>`
         SELECT filename, phase, release_ref FROM public.schema_migrations ORDER BY filename`
@@ -85,10 +85,11 @@ describe('ensurePlatformDatabase on a server without gremion_platform (Q15)', ()
         ['expand', 'dist-v0.0.1'],
         ['expand', 'dist-v0.0.1'],
         ['expand', 'dist-v0.0.1'],
+        ['expand', 'dist-v0.0.1'],
       ])
       const tables = await owned<{ t: string; owner: string }[]>`
         SELECT tablename AS t, tableowner AS owner FROM pg_tables WHERE schemaname = 'plt' ORDER BY 1`
-      expect(tables.map((x) => x.t)).toEqual(['module', 'module_database', 'module_enablement', 'module_version', 'operator_enable_attestation', 'provisioning_step'])
+      expect(tables.map((x) => x.t)).toEqual(['executor_heartbeat', 'module', 'module_database', 'module_enablement', 'module_version', 'operator_enable_attestation', 'provisioning_request', 'provisioning_request_event', 'provisioning_step'])
       expect(new Set(tables.map((x) => x.owner))).toEqual(new Set([OWNER]))
     } finally {
       await owned.end()
