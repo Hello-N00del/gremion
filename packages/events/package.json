@@ -1,0 +1,35 @@
+{
+  "name": "@gremion/events",
+  "version": "0.1.0",
+  "license": "AGPL-3.0-only",
+  "description": "Transactional outbox, idempotent inbox, relay, consumer and dead-letter handling for the Gremion service databases (TASK-079, CAP-EVENTS; TRD-420, TRD-421, TRD-422)",
+  "type": "module",
+  "private": true,
+  "files": ["src", "bin", "sql", "!src/**/*.test.ts"],
+  "exports": {
+    ".": {
+      "import": "./src/index.ts"
+    }
+  },
+  "bin": {
+    "events": "./bin/events.mjs"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@gremion/db": "workspace:*",
+    "@gremion/nats-auth": "workspace:*",
+    "@gremion/tenant-store": "workspace:*",
+    "@nats-io/jetstream": "^3.4.0",
+    "@nats-io/nats-core": "^3.4.0",
+    "@nats-io/transport-node": "^3.4.0",
+    "tsx": "^4.23.13"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.0",
+    "typescript": "^5.4.5",
+    "vitest": "^4.1.11"
+  }
+}
