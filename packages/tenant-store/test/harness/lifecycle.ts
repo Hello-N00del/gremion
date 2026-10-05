@@ -71,7 +71,27 @@ export async function seedCatalogue(platform: Sql, moduleKey: string, semver = '
     ON CONFLICT (module_id, semver) DO NOTHING`
 }
 
-export const passingGate: EnableGate = () => ({ isolationTestResultId: randomUUID(), dpiaDecisionId: randomUUID() })
+/** The release tip the harness's own isolation rows name (any 40 hex). */
+export const HARNESS_TIP = 'a'.repeat(40)
+
+/**
+ * The lifecycle specs' allow gate (test-only; TASK-044 TDD 10 keeps every
+ * allow gate out of src/). Since TASK-044 the enablement's isolation reference
+ * is a foreign key (NOT VALID: every new row is checked), so the gate mints a
+ * REAL passing cross_customer row for the module; the DPIA reference stays an
+ * xref (no FK, SCHEMA :1776), a fresh v7 id.
+ */
+export function passingGateFor(platform: Sql): EnableGate {
+  return async (_tenantId, moduleKey) => {
+    const [r] = await platform<{ id: string }[]>`
+      INSERT INTO plt.isolation_test_result (module_id, test_kind, passed, run_at, evidence_ref, release_tip_sha)
+      SELECT module_id, 'cross_customer', true, now(), 'scratch-fixture:t021-harness', ${HARNESS_TIP}
+        FROM plt.module WHERE module_key = ${moduleKey}
+      RETURNING isolation_test_result_id::text AS id`
+    if (!r) throw new Error(`[t021] no plt.module row for ${moduleKey}: seedCatalogue first`)
+    return { isolationTestResultId: r.id, dpiaDecisionId: uuidv7() }
+  }
+}
 
 /** The module server behind `pgm`, recording every database the lifecycle opens. */
 export function moduleServer(): ModuleServer & { opened: string[]; close(): Promise<void> } {
@@ -115,7 +135,7 @@ export function lifecycleDeps(platform: Sql, server: ModuleServer, overrides: Pa
       if (service !== MODULE_SERVICE) throw new Error(`[t021] the harness has no module server ${service}`)
       return server
     },
-    enableGate: passingGate,
+    enableGate: passingGateFor(platform),
     secrets: { appPassword: () => APP_PASSWORD },
     exporter: containerExporter(),
     exportDir: join(EXPORT_ROOT, String(process.pid)),

@@ -76,19 +76,25 @@ describe('ensurePlatformDatabase on a server without gremion_platform (Q15)', ()
     try {
       // TASK-075: every run names its release; the platform baseline phases the four files
       const m = await migratePlatform(owned, { releaseRef: 'dist-v0.0.1', log: () => {} })
-      expect(m.applied).toEqual(['0001_plt_setup.sql', '0002_plt_module.sql', '0003_plt_module_database.sql', '0004_plt_provisioning_step.sql'])
+      const files = [...loadManifest(PLATFORM_MIGRATIONS_DIR).keys()].sort()
+      expect(m.applied.slice(0, 4)).toEqual(['0001_plt_setup.sql', '0002_plt_module.sql', '0003_plt_module_database.sql', '0004_plt_provisioning_step.sql'])
+      expect(m.applied).toEqual(files)
+      expect(m.applied).toEqual(expect.arrayContaining(['0005_ops_setup.sql', '0006_plt_isolation_test_result.sql', '0007_ops_dpia_decision.sql']))
       expect((await migratePlatform(owned, { releaseRef: 'dist-v0.0.1', log: () => {} })).applied).toEqual([])
       const ledger = await owned<{ filename: string; phase: string; release_ref: string }[]>`
         SELECT filename, phase, release_ref FROM public.schema_migrations ORDER BY filename`
-      expect(ledger.map((r) => [r.phase, r.release_ref])).toEqual([
+      expect(ledger.map((r) => [r.phase, r.release_ref]).slice(0, 4)).toEqual([
         ['contract', 'dist-v0.0.1'],
         ['expand', 'dist-v0.0.1'],
         ['expand', 'dist-v0.0.1'],
         ['expand', 'dist-v0.0.1'],
       ])
+      expect(ledger.every((r) => r.release_ref === 'dist-v0.0.1')).toBe(true)
       const tables = await owned<{ t: string; owner: string }[]>`
-        SELECT tablename AS t, tableowner AS owner FROM pg_tables WHERE schemaname = 'plt' ORDER BY 1`
-      expect(tables.map((x) => x.t)).toEqual(['module', 'module_database', 'module_enablement', 'module_version', 'operator_enable_attestation', 'provisioning_step'])
+        SELECT schemaname || '.' || tablename AS t, tableowner AS owner FROM pg_tables WHERE schemaname IN ('plt', 'ops') ORDER BY 1`
+      expect(tables.map((x) => x.t)).toEqual(expect.arrayContaining(['plt.module', 'plt.module_database', 'plt.module_enablement', 'plt.module_version', 'plt.operator_enable_attestation', 'plt.provisioning_step']))
+      // TASK-044: the isolation results (plt) and the DPIA decisions (ops), owned by the platform owner like the rest
+      expect(tables.map((x) => x.t)).toEqual(expect.arrayContaining(['plt.isolation_test_result', 'ops.dpia_decision']))
       expect(new Set(tables.map((x) => x.owner))).toEqual(new Set([OWNER]))
     } finally {
       await owned.end()
