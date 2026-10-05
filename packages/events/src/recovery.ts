@@ -170,7 +170,16 @@ const stripped = (h: { keys(): string[]; get(k: string): string }): Record<strin
  * a successful PubAck. Q14: a replayed event whose aggregate has moved on ends `skipped_stale`
  * in the consumer; the log line says so.
  */
-export async function replayDeadLetter(jsm: Streams, js: Publisher, opts: ReplayDeadLetterOptions): Promise<ReplayDeadLetterResult> {
+export async function replayDeadLetter(
+  jsm: Streams,
+  /**
+   * Where the re-delivery is published. The tenant admin may not publish stream subjects (and must not:
+   * TASK-024), so the caller passes the PUBLISHER of the target stream (FLOWS: exactly one per stream)
+   * as a function of the stream the entry belongs to, or one client when it knows the stream already.
+   */
+  js: Publisher | ((targetStream: string) => Promise<Publisher>),
+  opts: ReplayDeadLetterOptions,
+): Promise<ReplayDeadLetterResult> {
   const stream = opts.stream ?? DLQ_STREAM
   const log = opts.log ?? ((l) => console.info(`[events] ${l}`))
   const entry = await jsm.streams.getMessage(stream, { seq: opts.seq }).catch(() => null)
@@ -180,7 +189,9 @@ export async function replayDeadLetter(jsm: Streams, js: Publisher, opts: Replay
   let body: Uint8Array
   let hdrs: Record<string, string>
   let eventId: string | undefined
+  let targetStream: string | undefined
   if (kind === 'consumer') {
+    targetStream = entry.header.get(H.dlqStream) || undefined
     const orig = entry.header.get(H.dlqOrigSubject)
     if (!orig) throw new RecoveryError(`[events] DLQ entry ${opts.seq} carries no ${H.dlqOrigSubject} header: it cannot be replayed (use outbox-replay)`)
     subject = orig
@@ -192,13 +203,21 @@ export async function replayDeadLetter(jsm: Streams, js: Publisher, opts: Replay
     if (!adv.stream || !adv.stream_seq) throw new RecoveryError(`[events] advisory entry ${opts.seq} names no stream/stream_seq`)
     const original = await jsm.streams.getMessage(adv.stream, { seq: adv.stream_seq }).catch(() => null)
     if (!original) throw new RecoveryError(`[events] the original message ${adv.stream}#${adv.stream_seq} is gone (7-day retention): re-deliver it with outbox-replay`)
+    targetStream = adv.stream
     subject = original.subject
     body = original.data
     hdrs = stripped(original.header)
     eventId = original.header.get(H.eventId) || undefined
   }
   const msgId = `${eventId ?? `s${opts.seq}`}.r${opts.seq}`
-  const ack = await publishWire(js, subject, body, hdrs, msgId)
+  let publisher: Publisher
+  if (typeof js === 'function') {
+    if (!targetStream) throw new RecoveryError(`[events] DLQ entry ${opts.seq} does not name its stream: cannot choose the publisher`)
+    publisher = await js(targetStream)
+  } else {
+    publisher = js
+  }
+  const ack = await publishWire(publisher, subject, body, hdrs, msgId)
   await jsm.streams.deleteMessage(stream, opts.seq, true)
   log(
     `dlq-replay: ${kind} entry ${opts.seq} (event ${eventId ?? 'unknown'}) republished to ${subject} as ${msgId}${ack.duplicate ? ' (the broker already held it)' : ''}, entry deleted. ` +

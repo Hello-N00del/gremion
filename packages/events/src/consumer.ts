@@ -55,6 +55,8 @@ export interface ConsumerOptions {
   /** Durable consumer name. */
   name: string
   filterSubject?: string
+  /** Where a NEW durable consumer starts: every stored message (default) or only those published after it exists. */
+  startFrom?: 'all' | 'new'
   handler: EventHandler
   /** A consumer that reaches people records `skipped_test` for a test-run event (SCHEMA §0.6). */
   reachesPeople?: boolean
@@ -255,7 +257,7 @@ export function createConsumer(opts: ConsumerOptions): ConsumerHandle {
       name: opts.name,
       durable_name: opts.name,
       ack_policy: AckPolicy.Explicit,
-      deliver_policy: DeliverPolicy.All,
+      deliver_policy: opts.startFrom === 'new' ? DeliverPolicy.New : DeliverPolicy.All,
       max_deliver: maxDeliver,
       backoff: backoff.map((ms) => ms * 1_000_000),
       ...(opts.filterSubject ? { filter_subject: opts.filterSubject } : {}),

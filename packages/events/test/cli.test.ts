@@ -9,8 +9,8 @@ const dir = path.join(import.meta.dirname, '../.scratch', `cli-${process.pid}`)
 mkdirSync(dir, { recursive: true })
 afterAll(() => rmSync(dir, { recursive: true, force: true }))
 
-const deps = (): CliDeps & { out: ReturnType<typeof vi.fn>; openDb: ReturnType<typeof vi.fn>; openNats: ReturnType<typeof vi.fn> } =>
-  ({ out: vi.fn(), openDb: vi.fn(), openNats: vi.fn() }) as never
+const deps = (): CliDeps & { out: ReturnType<typeof vi.fn>; openDb: ReturnType<typeof vi.fn>; openNats: ReturnType<typeof vi.fn>; streamPublisher: ReturnType<typeof vi.fn> } =>
+  ({ out: vi.fn(), openDb: vi.fn(), openNats: vi.fn(), streamPublisher: vi.fn() }) as never
 
 describe('parseFlags', () => {
   test('--key value pairs', () => {
@@ -66,6 +66,29 @@ describe('main', () => {
     expect(d.openDb).not.toHaveBeenCalled()
     expect(d.openNats).not.toHaveBeenCalled()
     err.mockRestore()
+  })
+
+  test('dlq-replay reads as the admin and republishes as the target stream publisher (the admin may not publish stream subjects)', async () => {
+    const d = deps()
+    const entry = {
+      seq: 7,
+      subject: 'gremion.t1.dlq.finance.c',
+      header: { get: (k: string) => ({ 'Gremion-Dlq-Orig-Subject': 'gremion.t1.org-unit.created', 'Gremion-Dlq-Stream': 'ORGUNIT', 'Gremion-Event-Id': 'e1' })[k] ?? '', keys: () => ['Gremion-Dlq-Orig-Subject', 'Gremion-Dlq-Stream', 'Gremion-Event-Id'] },
+      data: new Uint8Array(),
+      time: new Date(),
+    }
+    const published: string[] = []
+    const closed: string[] = []
+    d.streamPublisher.mockImplementation((s: string) => (s === 'ORGUNIT' ? 'kernel' : undefined))
+    d.openNats.mockImplementation(async (_t: string, identity: string) => ({
+      js: { publish: async () => (published.push(identity), { stream: 'ORGUNIT', seq: 1, duplicate: false }) },
+      jsm: { streams: { getMessage: async () => entry, deleteMessage: async () => true } },
+      close: async () => void closed.push(identity),
+    }))
+    expect(await main(['dlq-replay', '--tenant', 't1', '--seq', '7'], d)).toBe(0)
+    expect(d.openNats.mock.calls.map((c) => c[1])).toEqual(['admin', 'kernel'])
+    expect(published).toEqual(['kernel'])
+    expect(closed.sort()).toEqual(['admin', 'kernel'])
   })
 
   test('metrics prints OpenMetrics text from the service database', async () => {

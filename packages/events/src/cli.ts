@@ -14,8 +14,9 @@
 // that service's database through tenant-store: GREMION_<MODULE>_PG_URL; --module defaults to
 // the context code; metrics reads GREMION_CUSTOMER_ID when --customer is absent).
 // outbox-replay publishes as the service's NATS identity (--identity, default the module).
-// dlq-list / dlq-replay run as the tenant's admin (the tenant-create one-shot,
-// docs/runbooks/dead-letter.md). NATS_URL, NATS_SECRETS_DIR as for `nats-auth`.
+// dlq-list / dlq-replay run in the tenant-create one-shot (docs/runbooks/dead-letter.md) as the
+// tenant's admin, which reads and deletes DLQ entries; dlq-replay republishes as the PUBLISHER of
+// the entry's stream (the admin may not publish stream subjects). NATS_URL, NATS_SECRETS_DIR as for `nats-auth`.
 // --subjects is the service's event-type -> subject map: a JSON object whose values may
 // contain {tenant}. Never prints a seed, a password or a message body.
 import { readFileSync } from 'node:fs'
@@ -72,12 +73,14 @@ export interface CliDeps {
   openDb(customer: string, module: string): Promise<{ sql: import('@gremion/db').Sql; close(): Promise<void> }>
   /** Connects to NATS as a module identity (`admin` = the tenant admin) of a tenant slug. */
   openNats(tenant: string, identity: string): Promise<{ js: import('@nats-io/jetstream').JetStreamClient; jsm: import('@nats-io/jetstream').JetStreamManager; close(): Promise<void> }>
+  /** The NATS identity that publishes a stream (FLOWS: exactly one per stream), or undefined. */
+  streamPublisher(stream: string): string | undefined
   out(text: string): void
 }
 
 async function realDeps(): Promise<CliDeps> {
   const { createTenantStore } = await import('@gremion/tenant-store')
-  const { adminConnectOptionsFor, natsConnectOptionsFor } = await import('@gremion/nats-auth')
+  const { adminConnectOptionsFor, natsConnectOptionsFor, FLOWS } = await import('@gremion/nats-auth')
   const { connect } = await import('@nats-io/transport-node')
   const { jetstream, jetstreamManager } = await import('@nats-io/jetstream')
   return {
@@ -92,6 +95,7 @@ async function realDeps(): Promise<CliDeps> {
       const nc = await connect({ servers: url, ...opts, reconnect: false, timeout: 5_000 })
       return { js: jetstream(nc), jsm: await jetstreamManager(nc), close: () => nc.close().then(() => undefined) }
     },
+    streamPublisher: (stream) => Object.entries(FLOWS).find(([, f]) => f.publishes.includes(stream))?.[0],
     out: (t) => process.stdout.write(t),
   }
 }
@@ -150,10 +154,21 @@ export async function main(argv: string[], deps?: CliDeps): Promise<number> {
         const tenant = need(f, 'tenant')
         const seq = Number(need(f, 'seq'))
         if (!Number.isInteger(seq) || seq < 1) throw new UsageError('--seq must be a positive integer')
+        // The admin reads the entry and deletes it; it may NOT publish stream subjects (TASK-024), so the
+        // re-delivery goes out as the target stream's publisher (FLOWS: exactly one per stream).
         const nats = await d.openNats(tenant, 'admin')
+        const publishers: { close(): Promise<void> }[] = []
         try {
-          d.out(`${JSON.stringify(await replayDeadLetter(nats.jsm, nats.js, { seq, log: (l) => d.out(`${l}\n`) }))}\n`)
+          const publisherOf = async (stream: string) => {
+            const identity = d.streamPublisher(stream)
+            if (!identity) throw new UsageError(`no NATS identity publishes stream ${stream}: the entry cannot be replayed (use outbox-replay)`)
+            const p = await d.openNats(tenant, identity)
+            publishers.push(p)
+            return p.js
+          }
+          d.out(`${JSON.stringify(await replayDeadLetter(nats.jsm, publisherOf, { seq, log: (l) => d.out(`${l}\n`) }))}\n`)
         } finally {
+          for (const p of publishers) await p.close()
           await nats.close()
         }
         return 0

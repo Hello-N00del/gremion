@@ -53,7 +53,9 @@ export async function enqueue(tx: Sql, input: EnqueueInput): Promise<string> {
        FROM (SELECT ${ctx}.current_customer_id() AS id) AS c
       WHERE c.id IS NOT NULL
      RETURNING event_id`,
-    [input.eventType, input.source, input.subject ?? null, input.dataschema ?? null, JSON.stringify(data), input.traceparent ?? null, type, id, version, input.testRunId ?? null],
+    // `data` is passed as the object: postgres.js serialises a jsonb parameter itself (a pre-stringified
+    // value would be stored as a JSON STRING and fail outbox_data_check).
+    [input.eventType, input.source, input.subject ?? null, input.dataschema ?? null, data, input.traceparent ?? null, type, id, version, input.testRunId ?? null] as never[],
   )
   const row = rows[0]
   if (!row) throw new EnqueueError(`[events] gremion.customer_id is not set in this transaction: set it (SELECT set_config('gremion.customer_id', <customer>, true)) before enqueue`)
