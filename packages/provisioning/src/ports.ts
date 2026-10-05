@@ -132,11 +132,32 @@ export interface ModulesPort {
   enabled(c: CustomerRef): Promise<string[]>
 }
 
-export interface AttestationPort {
-  lookup(customerId: string, moduleKey: string): Promise<string | null>
-  /** Mints the one row for (customer, module) if absent; returns its id. */
-  ensure(customerId: string, moduleKey: string, operatorId: string, enableList: readonly string[]): Promise<string>
-  list(customerId: string): Promise<{ moduleKey: string; attestationId: string; operatorId: string; createdAt: Date }[]>
+/** TASK-044 (lane note D2): one module's DPIA-applicability decision as a create or enable request carries it. */
+export interface DpiaSpec {
+  requiresDpia: import('@gremion/tenant-store/lifecycle').RequiresDpia
+  /** 1-20 snake_case codes. */
+  reasonCodes: readonly string[]
+  /** The TOM-annex entry the written decision lives in; required for every value (brief Q3). */
+  documentRef: string
+}
+
+/**
+ * TASK-044: the level-1 enable gate and its records over gremion_platform
+ * (lifecycle/enable-gate). Every refusal is an EnableRefused {code, reason}.
+ */
+export interface GatePort {
+  /** The release tip the gate compares with (null: unset, every enable refuses NO_RELEASE_TIP). */
+  readonly releaseTipSha: string | null
+  /** The gate enableModule calls (createEnableGate). */
+  enableGate: import('@gremion/tenant-store/lifecycle').EnableGate
+  /** The customer-independent half, before any write: the tip and a current-tip pass per module. */
+  assertIsolationProven(moduleKeys: readonly string[], customerId: string | null): Promise<void>
+  /** A written DPIA decision is recorded for (customer, module). */
+  hasDpiaDecision(customerId: string, moduleKey: string): Promise<boolean>
+  /** Records the operator's dated decision; an identical latest one is reused. */
+  recordDpia(customerId: string, moduleKey: string, decision: DpiaSpec, operatorId: string): Promise<{ dpiaDecisionId: string; created: boolean }>
+  /** Enabled modules not proven on this release (Q8), for one customer or all. */
+  unproven(customerId?: string): Promise<import('@gremion/tenant-store/lifecycle').UnprovenEnablement[]>
 }
 
 export interface ProvisioningDeps {
@@ -151,7 +172,7 @@ export interface ProvisioningDeps {
   firstBody: FirstBodyPort
   broker: BrokerPort
   modules: ModulesPort
-  attestations: AttestationPort
+  gate: GatePort
   log?: (line: string) => void
   hooks?: { afterStep?(kind: import('./steps.ts').StepKind): void | Promise<void> }
 }

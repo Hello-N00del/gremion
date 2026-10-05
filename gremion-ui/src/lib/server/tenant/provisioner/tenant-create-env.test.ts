@@ -138,3 +138,46 @@ describe('tenant-create phase-a env contract (TDD 19, G3)', () => {
     expect(r.out).toMatch(/gremion-tenant create/)
   }, 90_000)
 })
+
+// TASK-044 (lane note A5, D4): the level-1 gate's verbs. The release tip is
+// GREMION_RELEASE_TIP (derived by gremion-tenant from the authenticated
+// release tree), never a flag; it is NOT part of the env contract above --
+// without it the gate refuses an enable NO_RELEASE_TIP, it never exits 2.
+describe('tenant-create gate verbs (TASK-044)', () => {
+  const OP = '8d6b9c7e-1f2a-4b3c-9d4e-5f6a7b8c9d0e'
+
+  it('--help lists enable-module, dpia-record, isolation-record, gate-status and regate', () => {
+    const r = run(['--help'], {})
+    expect(r.status, r.out).toBe(0)
+    for (const verb of ['enable-module', 'dpia-record', 'isolation-record', 'gate-status', 'regate']) expect(r.out).toContain(verb)
+  }, 90_000)
+
+  it('dpia-record without --document-ref is refused (exit 2) before any connection: the decision is written down whatever requires_dpia says', () => {
+    const r = run(['dpia-record', 'musterstadt', 'votes', '--operator', OP, '--requires-dpia', 'no', '--reason-codes', 'no_special_category'], CONTRACT)
+    expect(r.status, r.out).toBe(2)
+    expect(r.out).toMatch(/--document-ref/)
+    expect(r.out).not.toMatch(/ECONNREFUSED|ENOTFOUND|getaddrinfo|CONNECT_TIMEOUT/)
+  }, 90_000)
+
+  it('enable-module and regate with an operator that is not a uuid, or without a module, are refused (exit 2)', () => {
+    for (const args of [
+      ['enable-module', 'musterstadt', 'votes', '--operator', 'root'],
+      ['enable-module', 'musterstadt', '--operator', OP],
+      ['regate', 'musterstadt', 'votes', '--operator', 'root'],
+    ]) {
+      const r = run(args, CONTRACT)
+      expect(r.status, `${args.join(' ')}\n${r.out}`).toBe(2)
+    }
+  }, 180_000)
+
+  it('isolation-record of a file that cannot be read, and gate-status without PLATFORM_DATABASE_URL, are named exit-2 failures', () => {
+    const missing = run(['isolation-record', join(REPO, '.scratch', 'no-such-evidence.json')], CONTRACT)
+    expect(missing.status, missing.out).toBe(2)
+    expect(missing.out).toMatch(/cannot be read/)
+    const env = { ...CONTRACT }
+    delete env.PLATFORM_DATABASE_URL
+    const gs = run(['gate-status'], env)
+    expect(gs.status, gs.out).toBe(2)
+    expect(gs.out).toContain('PLATFORM_DATABASE_URL')
+  }, 180_000)
+})

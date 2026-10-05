@@ -29,6 +29,8 @@ export const NAMED: Record<'unit' | 'integration', Record<string, number>> = {
     'src/lifecycle/export.test.ts': 8,
     // TASK-044 TDD 3 (no database) and TDD 5 (the evidence stamp)
     'src/lifecycle/enable-gate/gate.test.ts': 21,
+    // TASK-044 TDD 10: no EnableGate implementation outside enable-gate/** and test code
+    'src/lifecycle/enable-gate/source-scan.test.ts': 2,
     // TASK-075 G1: phase header / baseline / PHASE_MISSING, the dump module
     'src/phase.test.ts': 7,
     'src/dump/dump.test.ts': 20,
