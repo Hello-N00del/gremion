@@ -1,0 +1,70 @@
+{
+  "keycloak": "26.6.1",
+  "realm": "docker/keycloak/realm-export.ops.json + configureStepupFlow",
+  "request": {
+    "scope": "openid email profile",
+    "acr_values": "loa2",
+    "max_age": 3600
+  },
+  "flow": [
+    "password",
+    "configure-totp"
+  ],
+  "idToken": {
+    "alg": "RS256",
+    "typ": "JWT",
+    "claims": {
+      "acr": "string",
+      "at_hash": "string",
+      "aud": "string",
+      "azp": "string",
+      "email": "string",
+      "email_verified": "boolean",
+      "exp": "number",
+      "family_name": "string",
+      "given_name": "string",
+      "iat": "number",
+      "iss": "string",
+      "jti": "string",
+      "name": "string",
+      "preferred_username": "string",
+      "sid": "string",
+      "sub": "string",
+      "typ": "string"
+    },
+    "acr": "loa2",
+    "operatorRole": false,
+    "audIncludesControlPanel": true,
+    "azp": "control-panel",
+    "subEqualsUserId": true
+  },
+  "accessToken": {
+    "alg": "RS256",
+    "typ": "JWT",
+    "claims": {
+      "acr": "string",
+      "aud": "string",
+      "azp": "string",
+      "email": "string",
+      "email_verified": "boolean",
+      "exp": "number",
+      "family_name": "string",
+      "given_name": "string",
+      "iat": "number",
+      "iss": "string",
+      "jti": "string",
+      "name": "string",
+      "preferred_username": "string",
+      "realm_access": "object",
+      "realm_access.roles": "array",
+      "scope": "string",
+      "sid": "string",
+      "typ": "string"
+    },
+    "acr": "loa2",
+    "operatorRole": true,
+    "audIncludesControlPanel": true,
+    "azp": "control-panel",
+    "subEqualsUserId": false
+  }
+}
