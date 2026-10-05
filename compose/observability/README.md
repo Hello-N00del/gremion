@@ -196,10 +196,46 @@ required verify suite.
 - Q7: Grafana's notification-log period on the pinned image (one repeat of an
   open condition after about five days).
 
+## Footprint (TRD-223)
+
+Three components fill silently and are written down once per ISO week, so a
+growth curve exists: the Synapse database (`pg_database_size('synapse')` in
+`messaging-postgres`), the per-council file store (`du -sb` of every
+`<root>/<tenant uuid>/` directory under `GREMION_FOOTPRINT_FILESTORE_ROOT`),
+and the pseudonymised-log volume (the Vector volume, as the daemon sizes it).
+The six ops containers are counted apart (`platform_overhead`, TRD-203): they
+carry the label `gremion.footprint: platform_overhead`, which `footprint.sh`
+reads with `docker ps --all --size --filter label=...`.
+
+`gremion-footprint.timer` fires `infra/host/ops/footprint.sh` Monday 03:00 UTC
+(`OnCalendar=Mon *-*-* 03:00:00 UTC`, `Persistent=true`: the same moment as the
+seeded `plt.scheduled_job` cron `0 3 * * 1`; `weekly` would fire at 00:00 local
+and disagree with it [A, named deviation from the TASK-039 brief]). Each run
+writes, in this order, each atomically:
+
+| Artefact | Content |
+|---|---|
+| `runtime/footprint/<ISO-week>.json` | `{schema, week, scheduled_for, measured_at, components: [{component, council?, bytes\|null, status: measured\|absent, source}]}`; kept as measurements (about 1 KB a week), not logs: the 30-day cap of R29-I6 does not apply |
+| `runtime/textfile/gremion-footprint.prom` | its own textfile (the per-minute collector never overwrites it): `gremion_footprint_component_bytes{component[,council]}` for measured entries only, plus `gremion_footprint_timestamp_seconds`; Alloy reads the directory, no Alloy change |
+| one `plt.job_run` row | `job_kind footprint_measurement`, `detail_ref footprint/<ISO-week>.json`, idempotent per week (`UNIQUE (scheduled_job_id, scheduled_for)`, `ON CONFLICT DO NOTHING`) |
+
+A component that cannot be measured is `absent` (`bytes: null`, no gauge line),
+never `0`: with no `messaging-postgres` container `synapse_db` is absent, with
+`GREMION_FOOTPRINT_FILESTORE_ROOT` unset `council_files` is absent (no compose
+file mounts the storage root yet: the app-compose owner mounts it, then sets the
+key), an unmeasurable volume is absent. The collector additionally emits
+`gremion_job_last_run{job_kind,status}` (the newest `plt.job_run` finish time per
+job kind, Unix seconds, one family), absent while the database or the table is
+unreachable. A run that fails shows three ways: the unit's state, a missing or
+old `gremion_footprint_timestamp_seconds`, and a `failed` row. Exit 0 = record,
+gauge and row done; 1 = record and gauge written but the row failed (database
+down, the seed row missing, a platform chain below 0005) or none of the three
+components measurable; 2 = missing runtime directory or tool. No rule or alert
+consumes these series here (the twelve conditions are pinned); the roll-up and an
+"older than 8 days or failed" alert are TASK-099 / TASK-123.
+
 ## Deferred (named)
 
-- TRD-223 (weekly footprint of the three silent-fill components) and the
-  `plt.scheduled_job` / `plt.job_run` tables: TASK-039-FU.
 - TRD-226 / TRD-198 roll-up, idle baseline and dashboards: TASK-099, TASK-123
   (before the first paid offer, P3). This task supplies the per-container
   series.
