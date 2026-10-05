@@ -49,16 +49,10 @@ mkdir -p "$OUT_DIR"
 # Diagnostics go to stderr: stdout is the metrics stream.
 note() { echo "[metrics] $*" >&2; }
 
-# ops_key <KEY> -- the environment's value, else ops.env's, else empty.
-ops_key() {
-    local key="$1" v
-    if [[ -n "${!key+x}" ]]; then printf '%s' "${!key}"; return 0; fi
-    [[ -f "$OPS_ENV" ]] || return 0
-    v="$(sed -n "s/^${key}=//p" "$OPS_ENV" | tail -n 1)"
-    v="${v%$'\r'}"
-    if [[ "$v" == \"*\" || "$v" == \'*\' ]]; then v="${v:1:${#v}-2}"; fi
-    printf '%s' "$v"
-}
+# ops_key, esc, to_bytes and state_container (R31 O14: one copy, shared with
+# footprint.sh). They read OPS_ENV and STACK_NAME, set here.
+# shellcheck source=./ops-lib.sh
+. "$SCRIPT_DIR/ops-lib.sh"
 
 STACK_NAME="$(ops_key STACK)"; STACK_NAME="${STACK_NAME:-gremion}"
 DISK_ROOT="$(ops_key GREMION_DISK_ROOT)"
@@ -75,23 +69,6 @@ to_epoch() {
     else
         date -u -d "$ts" +%s
     fi
-}
-
-# A label value, escaped for the text exposition format.
-esc() { local v="${1//\\/\\\\}"; v="${v//\"/\\\"}"; printf '%s' "${v//$'\n'/ }"; }
-
-# "12.5MiB", "1.2kB", "0B" -> bytes (binary units for docker stats, decimal
-# units for docker ps --size and docker system df). Prints nothing for a
-# value it cannot read.
-to_bytes() {
-    awk -v s="$1" 'BEGIN {
-        if (match(s, /^[0-9]+(\.[0-9]+)?/) == 0) exit
-        n = substr(s, 1, RLENGTH) + 0; u = substr(s, RLENGTH + 1)
-        f["B"]=1; f["kB"]=1e3; f["KB"]=1e3; f["MB"]=1e6; f["GB"]=1e9; f["TB"]=1e12
-        f["KiB"]=1024; f["MiB"]=1048576; f["GiB"]=1073741824; f["TiB"]=1099511627776
-        if (!(u in f)) exit
-        printf "%.0f\n", n * f[u]
-    }'
 }
 
 emit_backup() {
@@ -203,12 +180,6 @@ cached_reading() {
         printf '%s\n' "$body" | atomic_write "$cache" 0644
     fi
     cat "$cache" 2>/dev/null || true
-}
-
-state_container() {   # <compose service> -- the first running container of it in ${STACK}-state
-    docker ps --filter "label=com.docker.compose.project=${STACK_NAME}-state" \
-              --filter "label=com.docker.compose.service=$1" \
-              --format '{{.ID}}' | head -n 1
 }
 
 emit_postgres_connections() {
