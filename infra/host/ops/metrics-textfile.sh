@@ -8,7 +8,10 @@
 #   backup        gremion_backup_{last_ok,last_ts_seconds,timer_enabled}  (Q8)
 #   containers    gremion_container_{unhealthy,up,memory_bytes,disk_bytes}
 #   postgres      gremion_postgres_connections_{used,max}
-#   broker        gremion_nats_jsz_up, gremion_nats_stream_*, gremion_nats_consumer_*
+#   jobs          gremion_job_last_run{job_kind,status}  (plt.job_run, TASK-039-FU;
+#                 the weekly footprint's own series is written by footprint.sh to
+#                 its own file, runtime/textfile/gremion-footprint.prom)
+#   broker       gremion_nats_jsz_up, gremion_nats_stream_*, gremion_nats_consumer_*
 #                 (`jsz` read inside the broker container: its monitor listens
 #                 on the container loopback only, TASK-024)
 #   filesystems   gremion_host_filesystem_{size,avail}_bytes{mountpoint}
@@ -204,6 +207,32 @@ emit_postgres_connections() {
     printf 'gremion_postgres_connections_max %s\n' "$max"
 }
 
+# gremion_job_last_run (TASK-039-FU): the newest plt.job_run row per job kind,
+# read in gremion_platform through the state Postgres, value = finished_at as
+# Unix seconds, one family. Each row is validated (kind|status|digits); an
+# unreachable database, a missing schema (a host whose platform chain has not
+# reached 0005 yet) or garbage emits nothing -- absent, never 0 -- and a note.
+emit_job_last_run() {
+    local cid rows out="" kind status epoch
+    cid="$(state_container postgres)"
+    [[ -n "$cid" ]] || { note "no ${STACK_NAME}-state postgres container -- gremion_job_last_run absent"; return 0; }
+    rows="$(docker exec "$cid" psql -U postgres -d gremion_platform -X -tAF'|' -c \
+        "SELECT DISTINCT ON (s.job_kind) s.job_kind, r.status, extract(epoch FROM r.finished_at)::bigint FROM plt.job_run r JOIN plt.scheduled_job s USING (scheduled_job_id) ORDER BY s.job_kind, r.finished_at DESC" \
+        2>/dev/null || true)"
+    while IFS='|' read -r kind status epoch; do
+        [[ -n "$kind$status$epoch" ]] || continue
+        if [[ "$kind" =~ ^[a-z_]{1,40}$ && "$status" =~ ^(succeeded|failed|skipped)$ && "$epoch" =~ ^[1-9][0-9]*$ ]]; then
+            out+="gremion_job_last_run{job_kind=\"${kind}\",status=\"${status}\"} ${epoch}"$'\n'
+        else
+            note "job-run row '${kind}|${status}|${epoch}' is not <kind>|<status>|<epoch> -- skipped"
+        fi
+    done <<< "$rows"
+    [[ -n "$out" ]] || { note "no job run readable -- gremion_job_last_run is absent"; return 0; }
+    printf '# HELP gremion_job_last_run Unix time the newest run of a scheduled job finished; the status label is its outcome.\n'
+    printf '# TYPE gremion_job_last_run gauge\n'
+    printf '%s' "$out"
+}
+
 # The jq program per family: one family per pass, so every family's samples
 # stay contiguous (the text format requires it). The `$a`, `$s`, `$c` below are
 # jq variables, single-quoted on purpose.
@@ -326,6 +355,7 @@ main() {
         emit_backup
         emit_containers
         emit_postgres_connections
+        emit_job_last_run
         emit_nats
         emit_filesystems
         emit_storage_components

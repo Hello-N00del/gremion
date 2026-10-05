@@ -87,8 +87,10 @@ rotates it; the value goes from kcadm straight into the 0600 file):
     test -s /opt/gremion/etc/secrets/grafana/client_secret && stat -c '%a' /opt/gremion/etc/secrets/grafana/client_secret   # 600
 
 then re-run `render-ops.sh` (it prints `grafana-sso=ready`) and restart Grafana.
-Writing the file from `tenant-create` on the pooled path is a named residual of
-TASK-039 (TASK-039-FU, with the owner of `gremion-ui/scripts/tenant-provision.ts`).
+Writing the file from `tenant-create` on the pooled path is a named residual,
+handed to TASK-043d (the control panel's host-side executor replaces
+`gremion-tenant` as the operator surface; `docs/ops/host-tooling.md` keeps the
+three cases in one place).
 
 ## Collection [A, Q3 / Q11 provisional]
 
