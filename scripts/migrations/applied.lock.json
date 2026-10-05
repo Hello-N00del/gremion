@@ -27,7 +27,9 @@
     "kernel-api": {
       "legacyFloor": 0,
       "legacy": [],
-      "files": {}
+      "files": {
+        "0001_idt_setup.sql": "5959761784f2363867c83a17281d13766d04bf5280b0f010754e6983c041602d"
+      }
     },
     "kernel-data": {
       "legacyFloor": 58,

@@ -167,10 +167,14 @@
         "services/kernel-api/migrations/bodies",
         "services/kernel-api/migrations/authz",
         "services/kernel-api/migrations/roles",
-        "services/kernel-api/migrations/erasure"
+        "services/kernel-api/migrations/erasure",
+        "services/kernel-api/migrations/core"
+      ],
+      "manifestDirs": [
+        "services/kernel-api/migrations/core"
       ],
       "padWidth": 4,
-      "highWater": 0,
+      "highWater": 1,
       "legacyFloor": 0,
       "legacy": []
     },
