@@ -2,12 +2,13 @@
 //  - ensurePlatformDatabase creates gremion_platform on a server that has none
 //    (the module server `pgm`: the harness never creates it there), owned by a
 //    plain LOGIN role, PUBLIC unable to connect; a rerun is a no-op; a foreign
-//    owner is refused; migratePlatform as that owner applies 0001-0004;
+//    owner is refused; migratePlatform as that owner applies every manifest
+//    file (0001-0005);
 //  - plt.provisioning_step (0004) is append-only, done at most once per
 //    (customer, kind), v7 ids only, eight kinds (7 and 8 appended, Q2);
 //  - plt.operator_enable_attestation (Q19) is one row per (customer, module),
 //    append-only.
-import { randomBytes } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
 import { cpSync, existsSync, readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -56,7 +57,7 @@ describe('ensurePlatformDatabase on a server without gremion_platform (Q15)', ()
     await admin.end()
   })
 
-  it('creates it owned by a plain LOGIN role, PUBLIC cannot connect, a rerun is a no-op, and migratePlatform as the owner applies 0001-0004', async () => {
+  it('creates it owned by a plain LOGIN role, PUBLIC cannot connect, a rerun is a no-op, and migratePlatform as the owner applies every manifest file (0001-0005)', async () => {
     const before = (await admin<{ datname: string }[]>`SELECT datname FROM pg_database WHERE datname = ${PLATFORM_DATABASE}`).length
     expect(before).toBe(0)
     const r = await ensurePlatformDatabase(admin, { owner: OWNER, ownerPassword: PASSWORD })
@@ -74,21 +75,25 @@ describe('ensurePlatformDatabase on a server without gremion_platform (Q15)', ()
 
     const owned = asOwner(PLATFORM_DATABASE)
     try {
-      // TASK-075: every run names its release; the platform baseline phases the four files
+      // TASK-075: every run names its release; the platform baseline phases the headerless files.
+      // R31 O6: the expected set is the manifest's keys (which the unit suite pins against the
+      // directory), so a unit adding a platform file adds only a toContain line here.
+      const files = [...loadManifest(PLATFORM_MIGRATIONS_DIR).keys()].sort()
       const m = await migratePlatform(owned, { releaseRef: 'dist-v0.0.1', log: () => {} })
-      expect(m.applied).toEqual(['0001_plt_setup.sql', '0002_plt_module.sql', '0003_plt_module_database.sql', '0004_plt_provisioning_step.sql'])
+      expect(m.applied).toEqual(files)
+      expect(m.applied).toEqual(expect.arrayContaining(['0001_plt_setup.sql', '0004_plt_provisioning_step.sql']))
+      expect(m.applied).toContain('0005_plt_scheduled_job.sql') // TASK-039-FU
       expect((await migratePlatform(owned, { releaseRef: 'dist-v0.0.1', log: () => {} })).applied).toEqual([])
       const ledger = await owned<{ filename: string; phase: string; release_ref: string }[]>`
         SELECT filename, phase, release_ref FROM public.schema_migrations ORDER BY filename`
-      expect(ledger.map((r) => [r.phase, r.release_ref])).toEqual([
-        ['contract', 'dist-v0.0.1'],
-        ['expand', 'dist-v0.0.1'],
-        ['expand', 'dist-v0.0.1'],
-        ['expand', 'dist-v0.0.1'],
-      ])
+      expect(ledger.map((r) => r.filename)).toEqual(files)
+      expect(ledger.every((r) => r.release_ref === 'dist-v0.0.1')).toBe(true)
+      expect(ledger.find((r) => r.filename === '0001_plt_setup.sql')?.phase).toBe('contract')
+      expect(ledger.find((r) => r.filename === '0005_plt_scheduled_job.sql')?.phase).toBe('expand')
       const tables = await owned<{ t: string; owner: string }[]>`
         SELECT tablename AS t, tableowner AS owner FROM pg_tables WHERE schemaname = 'plt' ORDER BY 1`
-      expect(tables.map((x) => x.t)).toEqual(['module', 'module_database', 'module_enablement', 'module_version', 'operator_enable_attestation', 'provisioning_step'])
+      expect(tables.map((x) => x.t)).toEqual(expect.arrayContaining(['module', 'module_database', 'module_enablement', 'module_version', 'operator_enable_attestation', 'provisioning_step']))
+      expect(tables.map((x) => x.t)).toEqual(expect.arrayContaining(['scheduled_job', 'job_run'])) // TASK-039-FU
       expect(new Set(tables.map((x) => x.owner))).toEqual(new Set([OWNER]))
     } finally {
       await owned.end()
@@ -241,6 +246,165 @@ describe('plt.operator_enable_attestation (0004, Q19)', () => {
     expect(await sqlError(platform`TRUNCATE plt.operator_enable_attestation`)).toMatchObject({ code: '23514' })
     const [still] = await platform<{ id: string }[]>`SELECT attestation_id AS id FROM plt.operator_enable_attestation WHERE customer_id = ${c}`
     expect(still?.id).toBe(row!.id)
+  })
+})
+
+// TASK-039-FU (platform 0005): DB-PLT-SCHEDULED-JOB and DB-PLT-JOB-RUN verbatim
+// from SCHEMA-gremion.md; one seeded definition, the weekly footprint measurement.
+describe('plt.scheduled_job and plt.job_run (0005, TASK-039-FU)', () => {
+  let platform: Sql
+  const V4 = '8d6b9c7e-1f2a-4b3c-9d4e-5f6a7b8c9d0e'
+  const created: string[] = []
+  beforeAll(() => {
+    platform = platformDb()
+  })
+  afterAll(async () => {
+    for (const id of created) {
+      await platform`DELETE FROM plt.job_run WHERE scheduled_job_id = ${id}`
+      await platform`DELETE FROM plt.scheduled_job WHERE scheduled_job_id = ${id}`
+    }
+    await platform.end()
+  })
+
+  /** A customer-scope definition (its own made-up customer id), so the platform seed is untouched. */
+  async function customerJob(kind = 'backup_nightly'): Promise<string> {
+    const [r] = await platform<{ id: string }[]>`
+      INSERT INTO plt.scheduled_job (scope, customer_id, job_kind, cron_expression, created_by_kind, updated_by_kind)
+      VALUES ('customer', ${uuidv7()}, ${kind}, '0 2 * * *', 'system', 'system') RETURNING scheduled_job_id AS id`
+    created.push(r!.id)
+    return r!.id
+  }
+
+  it('seeds exactly one footprint_measurement definition (other units seed their own kinds): platform scope, cron 0 3 * * 1, enabled, system, row_version 1', async () => {
+    const rows = await platform<Record<string, unknown>[]>`
+      SELECT scope, customer_id, job_kind, cron_expression, enabled, created_by_kind, created_by, updated_by_kind, row_version::int AS row_version
+        FROM plt.scheduled_job WHERE job_kind = 'footprint_measurement'`
+    expect(rows).toEqual([
+      {
+        scope: 'platform',
+        customer_id: null,
+        job_kind: 'footprint_measurement',
+        cron_expression: '0 3 * * 1',
+        enabled: true,
+        created_by_kind: 'system',
+        created_by: null,
+        updated_by_kind: 'system',
+        row_version: 1,
+      },
+    ])
+  })
+
+  it('scheduled_job: a v4 id, a scope/customer mismatch, a bad job_kind, a four-field cron and a mismatched actor kind are 23514 on their own constraint', async () => {
+    const ins = (over: Record<string, unknown>) => {
+      const r = { id: null, scope: 'customer', customer: uuidv7(), kind: 'backup_nightly', cron: '0 2 * * *', ckind: 'system', cby: null, ...over }
+      return platform`INSERT INTO plt.scheduled_job (scheduled_job_id, scope, customer_id, job_kind, cron_expression, created_by_kind, created_by, updated_by_kind)
+        VALUES (coalesce(${r.id as string | null}::uuid, uuidv7()), ${r.scope as string}, ${r.customer as string | null}, ${r.kind as string}, ${r.cron as string}, ${r.ckind as string}, ${r.cby as string | null}, 'system')`
+    }
+    expect(await sqlError(ins({ id: V4 }))).toMatchObject({ code: '23514', constraint_name: 'scheduled_job_scheduled_job_id_check' })
+    expect(await sqlError(ins({ scope: 'platform' }))).toMatchObject({ code: '23514', constraint_name: 'scheduled_job_scope_check' })
+    expect(await sqlError(ins({ customer: null }))).toMatchObject({ code: '23514', constraint_name: 'scheduled_job_scope_check' })
+    expect(await sqlError(ins({ scope: 'tenant' }))).toMatchObject({ code: '23514', constraint_name: 'scheduled_job_scope_check' })
+    expect(await sqlError(ins({ kind: 'nightly_telepathy' }))).toMatchObject({ code: '23514', constraint_name: 'scheduled_job_job_kind_check' })
+    expect(await sqlError(ins({ cron: '0 3 * *' }))).toMatchObject({ code: '23514', constraint_name: 'scheduled_job_cron_expression_check' })
+    expect(await sqlError(ins({ cron: '0 3 * * * *' }))).toMatchObject({ code: '23514', constraint_name: 'scheduled_job_cron_expression_check' })
+    expect(await sqlError(ins({ ckind: 'system', cby: V4 }))).toMatchObject({ code: '23514', constraint_name: 'scheduled_job_created_by_check' })
+    expect(await sqlError(ins({ ckind: 'operator', cby: null }))).toMatchObject({ code: '23514', constraint_name: 'scheduled_job_created_by_check' })
+  })
+
+  it('scheduled_job: a second platform row for one job_kind is 23505 on scheduled_job_job_kind_customer_id_key (NULLS NOT DISTINCT)', async () => {
+    const err = await sqlError(platform`
+      INSERT INTO plt.scheduled_job (scope, job_kind, cron_expression, created_by_kind, updated_by_kind)
+      VALUES ('platform', 'footprint_measurement', '0 3 * * 1', 'system', 'system')`)
+    expect(err).toMatchObject({ code: '23505', constraint_name: 'scheduled_job_job_kind_customer_id_key' })
+  })
+
+  it('scheduled_job: an UPDATE goes through plt.touch_row (row_version + 1, updated_at bumped) and customer_id stays immutable (23514)', async () => {
+    const id = await customerJob('dpia_reminder')
+    const [before] = await platform<{ u: Date; v: number }[]>`SELECT updated_at AS u, row_version::int AS v FROM plt.scheduled_job WHERE scheduled_job_id = ${id}`
+    await platform`UPDATE plt.scheduled_job SET enabled = false WHERE scheduled_job_id = ${id}`
+    const [after] = await platform<{ u: Date; v: number; e: boolean }[]>`SELECT updated_at AS u, row_version::int AS v, enabled AS e FROM plt.scheduled_job WHERE scheduled_job_id = ${id}`
+    expect(after!.e).toBe(false)
+    expect(after!.v).toBe(before!.v + 1)
+    expect(after!.u.getTime()).toBeGreaterThanOrEqual(before!.u.getTime())
+    expect(await sqlError(platform`UPDATE plt.scheduled_job SET customer_id = ${uuidv7()} WHERE scheduled_job_id = ${id}`)).toMatchObject({ code: '23514' })
+  })
+
+  it('job_run: a v4 id, a scope/customer mismatch, a bad status, finished_at before started_at, and a missing started_at on a non-skipped run are 23514 on their own constraint', async () => {
+    const job = await customerJob('purge_run')
+    const cust = (await platform<{ c: string }[]>`SELECT customer_id AS c FROM plt.scheduled_job WHERE scheduled_job_id = ${job}`)[0]!.c
+    let n = 0
+    const run = (over: Record<string, unknown>) => {
+      const r = { id: null, scope: 'customer', customer: cust, status: 'succeeded', started: '2026-10-05T03:00:00Z', finished: '2026-10-05T03:00:05Z', detail: 'footprint/2026-W41.json', ...over }
+      return platform`INSERT INTO plt.job_run (job_run_id, scheduled_job_id, scope, customer_id, scheduled_for, started_at, finished_at, status, detail_ref)
+        VALUES (coalesce(${r.id as string | null}::uuid, uuidv7()), ${job}, ${r.scope as string}, ${r.customer as string | null},
+                '2026-10-05T03:00:00Z'::timestamptz + (${n++} * interval '1 week'), ${r.started as string | null}, ${r.finished as string}, ${r.status as string}, ${r.detail as string | null})`
+    }
+    expect(await sqlError(run({ id: V4 }))).toMatchObject({ code: '23514', constraint_name: 'job_run_job_run_id_check' })
+    expect(await sqlError(run({ scope: 'platform' }))).toMatchObject({ code: '23514', constraint_name: 'job_run_scope_check' })
+    expect(await sqlError(run({ customer: null }))).toMatchObject({ code: '23514', constraint_name: 'job_run_scope_check' })
+    expect(await sqlError(run({ status: 'running' }))).toMatchObject({ code: '23514', constraint_name: 'job_run_status_check' })
+    expect(await sqlError(run({ finished: '2026-10-05T02:59:59Z' }))).toMatchObject({ code: '23514', constraint_name: 'job_run_finished_at_check' })
+    expect(await sqlError(run({ started: null }))).toMatchObject({ code: '23514', constraint_name: 'job_run_started_at_check' })
+    // skipped may carry no started_at
+    expect(await sqlError(run({ started: null, status: 'skipped' }))).toBeUndefined()
+  })
+
+  it('job_run: an empty or 501-character detail_ref is 23514; 500 characters and a null pointer are accepted', async () => {
+    const job = await customerJob('restore_drill_due')
+    const cust = (await platform<{ c: string }[]>`SELECT customer_id AS c FROM plt.scheduled_job WHERE scheduled_job_id = ${job}`)[0]!.c
+    let n = 0
+    const run = (detail: string | null) =>
+      platform`INSERT INTO plt.job_run (scheduled_job_id, scope, customer_id, scheduled_for, started_at, finished_at, status, detail_ref)
+        VALUES (${job}, 'customer', ${cust}, '2026-11-02T03:00:00Z'::timestamptz + (${n++} * interval '1 week'), now(), now(), 'succeeded', ${detail})`
+    expect(await sqlError(run(''))).toMatchObject({ code: '23514', constraint_name: 'job_run_detail_ref_check' })
+    expect(await sqlError(run('x'.repeat(501)))).toMatchObject({ code: '23514', constraint_name: 'job_run_detail_ref_check' })
+    expect(await sqlError(run('x'.repeat(500)))).toBeUndefined()
+    expect(await sqlError(run(null))).toBeUndefined()
+  })
+
+  it('job_run: one row per (job, scheduled_for) is 23505 on job_run_scheduled_job_id_scheduled_for_key; ON CONFLICT DO NOTHING makes the weekly write idempotent', async () => {
+    const job = await customerJob('backup_nightly')
+    const cust = (await platform<{ c: string }[]>`SELECT customer_id AS c FROM plt.scheduled_job WHERE scheduled_job_id = ${job}`)[0]!.c
+    const ins = () => platform`INSERT INTO plt.job_run (scheduled_job_id, scope, customer_id, scheduled_for, started_at, finished_at, status, detail_ref)
+      VALUES (${job}, 'customer', ${cust}, '2026-10-05T03:00:00Z', now(), now(), 'succeeded', 'a.json')`
+    await ins()
+    expect(await sqlError(ins())).toMatchObject({ code: '23505', constraint_name: 'job_run_scheduled_job_id_scheduled_for_key' })
+    const again = await platform`INSERT INTO plt.job_run (scheduled_job_id, scope, customer_id, scheduled_for, started_at, finished_at, status, detail_ref)
+      VALUES (${job}, 'customer', ${cust}, '2026-10-05T03:00:00Z', now(), now(), 'succeeded', 'b.json')
+      ON CONFLICT (scheduled_job_id, scheduled_for) DO NOTHING RETURNING 1`
+    expect(again.length).toBe(0)
+  })
+
+  it('job_run: an UPDATE is refused 23514 (job_run_append_only_trg) but a DELETE is allowed (the retention purge)', async () => {
+    const job = await customerJob('backup_nightly')
+    const cust = (await platform<{ c: string }[]>`SELECT customer_id AS c FROM plt.scheduled_job WHERE scheduled_job_id = ${job}`)[0]!.c
+    await platform`INSERT INTO plt.job_run (scheduled_job_id, scope, customer_id, scheduled_for, started_at, finished_at, status, detail_ref)
+      VALUES (${job}, 'customer', ${cust}, '2026-10-05T03:00:00Z', now(), now(), 'succeeded', 'a.json')`
+    expect(await sqlError(platform`UPDATE plt.job_run SET status = 'failed' WHERE scheduled_job_id = ${job}`)).toMatchObject({ code: '23514' })
+    expect((await platform`SELECT 1 FROM plt.job_run WHERE scheduled_job_id = ${job} AND status = 'succeeded'`).length).toBe(1)
+    await platform`DELETE FROM plt.job_run WHERE scheduled_job_id = ${job}`
+    expect((await platform`SELECT 1 FROM plt.job_run WHERE scheduled_job_id = ${job}`).length).toBe(0)
+  })
+
+  it('job_run: a run for a job that does not exist is 23503, and deleting a scheduled_job that has runs is 23001 (FK ON DELETE RESTRICT)', async () => {
+    const job = await customerJob('backup_nightly')
+    const cust = (await platform<{ c: string }[]>`SELECT customer_id AS c FROM plt.scheduled_job WHERE scheduled_job_id = ${job}`)[0]!.c
+    expect(
+      await sqlError(platform`INSERT INTO plt.job_run (scheduled_job_id, scope, customer_id, scheduled_for, started_at, finished_at, status)
+        VALUES (${uuidv7()}, 'customer', ${cust}, now(), now(), now(), 'succeeded')`),
+    ).toMatchObject({ code: '23503', constraint_name: 'job_run_scheduled_job_id_fkey' })
+    await platform`INSERT INTO plt.job_run (scheduled_job_id, scope, customer_id, scheduled_for, started_at, finished_at, status, detail_ref)
+      VALUES (${job}, 'customer', ${cust}, '2026-10-05T03:00:00Z', now(), now(), 'succeeded', 'a.json')`
+    // ON DELETE RESTRICT (SCHEMA verbatim) raises restrict_violation 23001, not NO ACTION's 23503
+    expect(await sqlError(platform`DELETE FROM plt.scheduled_job WHERE scheduled_job_id = ${job}`)).toMatchObject({ code: '23001', constraint_name: 'job_run_scheduled_job_id_fkey' })
+  })
+
+  it('the migration file declares its phase on line 1, sets lock_timeout, and the manifest/lock entry matches the bytes', () => {
+    const file = '0005_plt_scheduled_job.sql'
+    const text = readFileSync(join(PLATFORM_MIGRATIONS_DIR, file), 'utf8')
+    expect(text.split('\n')[0]).toBe('-- gremion:phase expand')
+    expect(text).toMatch(/^SET lock_timeout\b/m)
+    expect(loadManifest(PLATFORM_MIGRATIONS_DIR).get(file)).toBe(createHash('sha256').update(readFileSync(join(PLATFORM_MIGRATIONS_DIR, file))).digest('hex'))
   })
 })
 
