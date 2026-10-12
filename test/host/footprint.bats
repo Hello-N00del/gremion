@@ -14,7 +14,9 @@ COUNCIL_B="0192f0c1-2b3c-7d4e-8f00-665544332211"
 
 setup() {
     setup_host_root
-    mkdir -p "$GREMION_ROOT/etc/env"
+    # the file-store root exists (empty = a measured 0); a test that wants it
+    # unset or wrong passes FILES_ROOT
+    mkdir -p "$GREMION_ROOT/etc/env" "$GREMION_ROOT/files"
 }
 
 teardown() {
@@ -27,7 +29,8 @@ at() { date -u -d "$1" +%s; }
 # 7340032 bytes, a state Postgres whose psql answers the job-run SQL (it records
 # its stdin), the daemon's volume sizes and two labelled ops containers.
 # Knobs (files under GREMION_ROOT): no-synapse, no-pg, no-volume, psql-fail,
-# psql-exists, psql-noseed, synapse-garbage, no-overhead.
+# psql-exists, psql-noseed, synapse-garbage, synapse-down, df-fail,
+# no-overhead, ps-fail.
 shim_world() {
     shim docker '
 # ps-fail: the container lookup (docker ps --filter ...) fails as with a daemon that does not answer
@@ -39,6 +42,7 @@ case "$*" in
   *"com.docker.compose.service=postgres"*)           [ -f "$GREMION_ROOT/no-pg" ] || echo "pg222" ;;
   "exec syn111 sh -c"*)
     [ -f "$GREMION_ROOT/synapse-garbage" ] && { echo "psql: could not connect"; exit 0; }
+    [ -f "$GREMION_ROOT/synapse-down" ] && { echo "psql: error: FATAL:  role \"synapse_admin\" does not exist" >&2; exit 2; }
     echo 7340032 ;;
   "exec -i pg222 psql"*)
     cat > "$GREMION_ROOT/psql-stdin"
@@ -47,6 +51,7 @@ case "$*" in
     [ -f "$GREMION_ROOT/psql-exists" ] && { echo "seed=1"; exit 0; }
     printf "seed=1\ninserted\n" ;;
   "system df -v"*)
+    [ -f "$GREMION_ROOT/df-fail" ] && { echo "Error response from daemon: a disk usage operation is already running" >&2; exit 1; }
     [ -f "$GREMION_ROOT/no-volume" ] && { printf "%s" "[{\"Name\":\"other_data\",\"Size\":\"9GB\"}]"; exit 0; }
     printf "%s" "[{\"Name\":\"staging-state_vector-processed-logs\",\"Size\":\"2.1MB\"},{\"Name\":\"staging-state_pg-data\",\"Size\":\"1.5GB\"}]" ;;
   "ps --all --size"*)
@@ -130,7 +135,11 @@ gauge() { echo "$GREMION_ROOT/runtime/textfile/gremion-footprint.prom"; }
     [ "$output" = "0" ]
     run grep -c 'gremion_footprint_component_bytes' "$(gauge)"
     [ "$output" = "0" ]
-    grep -qE '^gremion_footprint_timestamp_seconds [0-9]+$' "$(gauge)"
+    # a run that measured nothing does NOT refresh the timestamp: "missing or
+    # old gremion_footprint_timestamp_seconds" is one of the three failure
+    # channels (round-1 MEDIUM)
+    run grep -c 'gremion_footprint_timestamp_seconds' "$(gauge)"
+    [ "$output" = "0" ]
     run grep -E '"bytes": *0\b' "$r"
     [ "$status" -ne 0 ]
 }
@@ -151,6 +160,65 @@ gauge() { echo "$GREMION_ROOT/runtime/textfile/gremion-footprint.prom"; }
     jq -e '[.components[] | select(.component == "synapse_db")] | .[0].status == "absent"' "$(record 2026-W41)"
     run grep -c 'component="synapse_db"' "$(gauge)"
     [ "$output" = "0" ]
+}
+
+@test "footprint: a component that is NOT PRESENT (no messaging-postgres, no file-store root) leaves the run succeeded, and the row's pointer names what is missing (round-1 M3)" {
+    shim_world
+    touch "$GREMION_ROOT/no-synapse"
+    FILES_ROOT="" run_fp "2026-10-07 09:00:00"
+    [ "$status" -eq 0 ] || { echo "status $status: $output"; return 1; }
+    local r; r="$(record 2026-W41)"
+    jq -e '.outcome.status == "succeeded" and .outcome.measured_of_three == 1 and .outcome.incomplete == ["synapse_db", "council_files"] and .outcome.errored == []' "$r"
+    jq -e '[.components[] | select(.component == "synapse_db" or .component == "council_files")] | all(.status == "absent" and .absent_reason == "not_present")' "$r"
+    assert_recorded docker "status=succeeded"
+    assert_recorded docker "detail=footprint/2026-W41.json#incomplete=synapse_db,council_files"
+    grep -qE '^gremion_footprint_timestamp_seconds [0-9]+$' "$(gauge)"
+}
+
+@test "footprint: a component whose source is there but does not answer is an ERROR: the run is failed, exit 1, the cause is logged, no fresh timestamp (round-1 M3)" {
+    shim_world
+    seed_council "$COUNCIL_A" 1
+    touch "$GREMION_ROOT/synapse-down"
+    run_fp "2026-10-07 09:00:00"
+    [ "$status" -eq 1 ] || { echo "status $status: $output"; return 1; }
+    local r; r="$(record 2026-W41)"
+    jq -e '.outcome.status == "failed" and .outcome.measured_of_three == 2 and .outcome.incomplete == ["synapse_db"] and .outcome.errored == ["synapse_db"]' "$r"
+    jq -e '[.components[] | select(.component == "synapse_db")] | .[0].status == "absent" and .[0].absent_reason == "error" and .[0].bytes == null' "$r"
+    # the measured components keep their gauge lines; the run is not a fresh success
+    grep -q 'component="log_volume"' "$(gauge)"
+    run grep -c 'gremion_footprint_timestamp_seconds' "$(gauge)"
+    [ "$output" = "0" ]
+    assert_recorded docker "status=failed"
+    assert_recorded docker "detail=footprint/2026-W41.json#incomplete=synapse_db"
+    # psql's own error reaches the log
+    run_fp "2026-10-07 09:00:00"
+    [[ "$output" == *'role "synapse_admin" does not exist'* ]] || { echo "$output"; return 1; }
+}
+
+@test "footprint: a failing docker system df and a partly unreadable file store are errors too (round-1 M3)" {
+    shim_world
+    seed_council "$COUNCIL_A" 1
+    touch "$GREMION_ROOT/df-fail"
+    run_fp "2026-10-07 09:00:00"
+    [ "$status" -eq 1 ] || { echo "status $status: $output"; return 1; }
+    jq -e '.outcome.status == "failed" and .outcome.errored == ["log_volume"]' "$(record 2026-W41)"
+    [[ "$output" == *"a disk usage operation is already running"* ]] || { echo "$output"; return 1; }
+    rm -f "$GREMION_ROOT/df-fail"
+    seed_council "$COUNCIL_B" 1
+    shim_du_fails "$COUNCIL_B"
+    run_fp "2026-10-07 09:00:00"
+    [ "$status" -eq 1 ] || { echo "status $status: $output"; return 1; }
+    jq -e '.outcome.status == "failed" and .outcome.measured_of_three == 3 and .outcome.errored == ["council_files"] and .outcome.incomplete == ["council_files"]' "$(record 2026-W41)"
+}
+
+@test "footprint: all three measured is a plain pointer and a succeeded outcome" {
+    shim_world
+    seed_council "$COUNCIL_A" 1
+    run_fp "2026-10-07 09:00:00"
+    [ "$status" -eq 0 ] || { echo "status $status: $output"; return 1; }
+    jq -e '.outcome == {status: "succeeded", measured_of_three: 3, incomplete: [], errored: []}' "$(record 2026-W41)"
+    run grep -E '^docker exec -i pg222 psql .*detail=footprint/2026-W41\.json( |$)' "$SHIM_LOG"
+    [ "$status" -eq 0 ] || { cat "$SHIM_LOG"; return 1; }
 }
 
 @test "footprint: an empty file-store root is a measured zero, a root that is not a directory is absent" {
