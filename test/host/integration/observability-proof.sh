@@ -861,13 +861,22 @@ phase_footprint_red() {
     rm -rf "$SROOT/runtime/footprint" "$SROOT/runtime/textfile/gremion-footprint.prom"
     docker exec "$C_PG" psql -U postgres -X -q -c "DROP DATABASE IF EXISTS gremion_platform WITH (FORCE)" >/dev/null || die "could not drop the scratch gremion_platform"
     local n
+    # Positive controls first (round-1 LOW): an absence only counts as RED when
+    # the thing that would show the presence answers. A stack that is not up
+    # must void this phase, not pass it.
+    [[ "$(docker exec "$C_PG" psql -U postgres -X -q -tA -c "SELECT 1" 2>/dev/null)" == 1 ]] \
+        && ok "control: the scratch state postgres answers" || die "control failed: the scratch state postgres does not answer -- the RED is void"
+    has_series 'up' && ok "control: Prometheus answers (the up series exists)" || die "control failed: Prometheus does not answer -- the RED is void"
     n="$({ find "$SROOT/runtime/footprint" -name '*.json' 2>/dev/null || true; } | wc -l | tr -d ' ')"
     [[ "$n" == 0 ]] && ok "RED: no runtime/footprint/<week>.json exists (the record post-condition fails)" || bad "RED did not reproduce: $n record file(s)"
-    if fp_jobs footprint_measurement >/dev/null 2>&1; then bad "RED did not reproduce: plt.job_run answered"; else ok "RED: no plt.job_run row can be read (no platform database: the row post-condition fails)"; fi
+    # an ANSWER of 0 from the live server, not a failed query
+    [[ "$(docker exec "$C_PG" psql -U postgres -X -q -tA -c "SELECT count(*) FROM pg_database WHERE datname = 'gremion_platform'" 2>/dev/null)" == 0 ]] \
+        && ok "RED: the server answers that no gremion_platform database exists, so no plt.job_run row can exist (the row post-condition fails)" \
+        || bad "RED did not reproduce: a gremion_platform database exists"
     wait_until 120 bool_not has_series 'gremion_footprint_component_bytes{component="log_volume"}' \
         && ok "RED: Prometheus has no gremion_footprint_component_bytes{component=log_volume} (the series post-condition fails)" \
         || bad "RED did not reproduce: the footprint series is present before any run"
-    finish 3
+    finish 5
 }
 
 bool_not() { ! "$@"; }
@@ -925,6 +934,25 @@ phase_footprint() {
     [[ "$rc" == 0 && "$out" == *"week=${w2}"* && "$out" == *"job_run=inserted"* ]] && ok "the next ISO week (${w2}) inserts" || bad "next week: rc ${rc}: ${out}"
     [[ "$(fp_psql "SELECT count(*) FROM plt.job_run")" == 2 ]] && ok "two rows after two weeks" || bad "row count $(fp_psql "SELECT count(*) FROM plt.job_run")"
 
+    # 3b. (round-1 M1) a FAILED week is not frozen: a run whose configured file
+    # store is not a directory errors -> a failed row at the week's key; the
+    # rerun after the fix writes a retry row (job_run=retried); a third run adds
+    # nothing. Monday 12:00Z three weeks out, so the retry stays inside the week.
+    local d5 t5 wk5 r5
+    d5=$(( now + 21 * 86400 )); t5=$(( d5 - ($(date -u -d "@${d5}" +%u) - 1) * 86400 )); t5=$(( t5 - t5 % 86400 + 12 * 3600 ))
+    wk5="$(date -u -d "@${t5}" +%Y-%m-%d)T00:00:00Z"
+    rows5() { fp_psql "SELECT coalesce(string_agg(r.status, ',' ORDER BY r.scheduled_for), '') FROM plt.job_run r JOIN plt.scheduled_job s USING (scheduled_job_id) WHERE s.job_kind = 'footprint_measurement' AND r.scheduled_for >= '${wk5}' AND r.scheduled_for < timestamptz '${wk5}' + interval '7 days'"; }
+    if out="$(footprint_run "$t5" "/disk/not-a-file-store")"; then rc=0; else rc=$?; fi
+    [[ "$rc" == 1 && "$out" == *"job_run=inserted"* && "$(rows5)" == "failed" ]] && ok "an errored file store fails the run: exit 1, one failed row for the week" || bad "failed run: rc ${rc}: ${out} rows '$(rows5)'"
+    if out="$(footprint_run "$(( t5 + 3600 ))" "$FP_ROOT_IN")"; then rc=0; else rc=$?; fi
+    [[ "$rc" == 0 && "$out" == *"job_run=retried"* ]] && ok "the successful rerun in the same week prints job_run=retried, exit 0" || bad "retry: rc ${rc}: ${out}"
+    r5="$(rows5)"
+    [[ "$r5" == "failed,succeeded" ]] && ok "the week holds the failed row (history) and the retry success: ${r5}" || bad "week rows '${r5}'"
+    if out="$(footprint_run "$(( t5 + 7200 ))" "$FP_ROOT_IN")"; then rc=0; else rc=$?; fi
+    [[ "$rc" == 0 && "$out" == *"job_run=exists"* && "$(rows5)" == "failed,succeeded" ]] && ok "a third run in that week adds nothing (job_run=exists)" || bad "third run: rc ${rc}: ${out} rows '$(rows5)'"
+    [[ "$(fp_psql "SELECT status FROM plt.job_run ORDER BY finished_at DESC, job_run_id DESC LIMIT 1")" == succeeded ]] \
+        && ok "the newest row, the one gremion_job_last_run reports, is the success" || bad "the newest row is not the success"
+
     # 4. missing is absent, never 0: no messaging-postgres container, no file-store root
     docker stop "$C_MSG" >/dev/null
     w3="$(date -u -d "@$(( now + 14 * 86400 ))" +%G-W%V)"
@@ -939,7 +967,7 @@ phase_footprint() {
         && ok "the gauge file has NO synapse_db and NO council_files line (grep, not a value compare)" || bad "the gauge file carries a line for an absent component"
     grep -q 'component="log_volume"' "$SROOT/runtime/textfile/gremion-footprint.prom" && ok "the measured log_volume keeps its line" || bad "log_volume gauge line missing"
     fp_msg_up || bad "could not restart the messaging stand-in"
-    finish 24
+    finish 29
 }
 
 phase_footprint_series() {
@@ -965,8 +993,16 @@ phase_footprint_series() {
         && ok "a failed run flips the label: status=failed is returned" || bad "no status=failed series"
     wait_until 150 value_is 'count(gremion_job_last_run{job_kind="footprint_measurement",status="succeeded"}) or vector(0)' 0 \
         && ok "and the succeeded series is gone (one family, the newest run decides)" || bad "the succeeded series is still there"
-    git -C "$(hp "$ROOT")" diff --quiet "${OBS_PROOF_BASE_KERNEL:-9c724bfa}" -- docker/alloy \
-        && ok "no Alloy change: the textfile directory is read as it is (a second *.prom is picked up)" || bad "docker/alloy differs from the base"
+    # The diff only proves "no change" when the base resolves and the path exists
+    # (round-1 LOW: a wrong ref or path made `git diff --quiet` pass vacuously).
+    local base="${OBS_PROOF_BASE_KERNEL:-9c724bfa}"
+    if git -C "$(hp "$ROOT")" rev-parse --verify -q "${base}^{commit}" >/dev/null \
+        && [[ -n "$(git -C "$(hp "$ROOT")" ls-tree --name-only "$base" -- docker/alloy)" && -d "$ROOT/docker/alloy" ]]; then
+        git -C "$(hp "$ROOT")" diff --quiet "$base" -- docker/alloy \
+            && ok "no Alloy change: the textfile directory is read as it is (a second *.prom is picked up)" || bad "docker/alloy differs from the base"
+    else
+        bad "the base ${base} or docker/alloy does not resolve -- the no-Alloy-change check is void"
+    fi
     finish 7
 }
 
