@@ -45,11 +45,20 @@ case "$*" in
     [ -f "$GREMION_ROOT/synapse-down" ] && { echo "psql: error: FATAL:  role \"synapse_admin\" does not exist" >&2; exit 2; }
     echo 7340032 ;;
   "exec -i pg222 psql"*)
+    # answers like the job-run SQL would: the seed line, the week line, the RETURNING line
     cat > "$GREMION_ROOT/psql-stdin"
-    [ -f "$GREMION_ROOT/psql-fail" ] && exit 1
-    [ -f "$GREMION_ROOT/psql-noseed" ] && { echo "seed=0"; exit 0; }
-    [ -f "$GREMION_ROOT/psql-exists" ] && { echo "seed=1"; exit 0; }
-    printf "seed=1\ninserted\n" ;;
+    st="$(printf "%s" "$*" | sed -n "s/.* -v status=\([a-z]*\) .*/\1/p")"
+    [ -f "$GREMION_ROOT/psql-fail" ] && { echo "psql: error: connection to server on socket failed" >&2; exit 2; }
+    [ -f "$GREMION_ROOT/psql-norelation" ] && { echo "ERROR:  relation \"plt.scheduled_job\" does not exist" >&2; exit 3; }
+    [ -f "$GREMION_ROOT/psql-noseed" ] && { printf "seed=0 enabled=none\nweek=\n"; exit 0; }
+    [ -f "$GREMION_ROOT/psql-exists" ] && { printf "seed=1 enabled=true\nweek=succeeded\n"; exit 0; }
+    [ -f "$GREMION_ROOT/psql-disabled" ] && { printf "seed=1 enabled=false\nweek=\ninserted status=skipped\n"; exit 0; }
+    if [ -f "$GREMION_ROOT/psql-week-failed" ]; then
+      printf "seed=1 enabled=true\nweek=failed\n"
+      [ "$st" = succeeded ] && echo "retried status=succeeded"
+      exit 0
+    fi
+    printf "seed=1 enabled=true\nweek=\ninserted status=%s\n" "$st" ;;
   "system df -v"*)
     [ -f "$GREMION_ROOT/df-fail" ] && { echo "Error response from daemon: a disk usage operation is already running" >&2; exit 1; }
     [ -f "$GREMION_ROOT/no-volume" ] && { printf "%s" "[{\"Name\":\"other_data\",\"Size\":\"9GB\"}]"; exit 0; }
@@ -299,13 +308,26 @@ PATH="${PATH#*:}" exec du "$@"'
     grep -qF ":'status'" "$sql"
     grep -qF ":'detail'" "$sql"
     grep -qF "job_kind = 'footprint_measurement'" "$sql"
-    # no value interpolated into the SQL text
-    run grep -E '2026-|footprint/|succeeded|failed' "$sql"
+    # round 2 (M1): the week window and the retry key are binds too
+    grep -qF ":'wk'" "$sql"
+    grep -qF ":'retry'" "$sql"
+    # no value interpolated into the SQL text: no date, no pointer ...
+    run grep -E '2026-|footprint/|W41' "$sql"
     [ "$status" -ne 0 ]
+    # ... and the text is byte-identical for another week and another outcome
+    cp "$sql" "$GREMION_ROOT/sql-first"
+    touch "$GREMION_ROOT/no-synapse" "$GREMION_ROOT/no-volume"
+    FILES_ROOT="" run_fp "2026-10-14 09:00:00"
+    [ "$status" -eq 1 ]
+    assert_recorded docker "status=failed"
+    cmp "$GREMION_ROOT/sql-first" "$sql"
+    rm -f "$GREMION_ROOT/no-synapse" "$GREMION_ROOT/no-volume"
     # the values travel as psql variables on the argv: week, scheduled_for, status, the pointer
     assert_recorded docker "exec -i pg222 psql -U postgres -d gremion_platform"
     assert_recorded docker "-v ON_ERROR_STOP=1"
     assert_recorded docker "sf=2026-10-05T03:00:00Z"
+    assert_recorded docker "wk=2026-10-05T00:00:00Z"
+    assert_recorded docker "retry=2026-10-07T09:00:00Z"
     assert_recorded docker "status=succeeded"
     assert_recorded docker "detail=footprint/2026-W41.json"
     assert_recorded docker "-f -"
@@ -315,9 +337,9 @@ PATH="${PATH#*:}" exec du "$@"'
     refute_recorded docker "password"
     # the synapse size is read with the role name resolved INSIDE the container
     assert_recorded docker 'exec syn111 sh -c psql -U "$POSTGRES_USER"'
-    # exactly one row-writing exec, not a loop
+    # exactly one row-writing exec per run (two runs here), not a loop
     run grep -c '^docker exec -i pg222 psql' "$SHIM_LOG"
-    [ "$output" = "1" ]
+    [ "$output" = "2" ]
 }
 
 @test "footprint: a second run in the same ISO week prints job_run=exists, exits 0 and rewrites the record" {
@@ -340,12 +362,65 @@ PATH="${PATH#*:}" exec du "$@"'
     assert_recorded docker "sf=2026-10-12T03:00:00Z"
 }
 
+@test "footprint: a FAILED week is not hidden by a successful rerun in the same week: the rerun writes a retry row, prints job_run=retried, exits 0 (round-1 M1)" {
+    shim_world
+    seed_council "$COUNCIL_A" 1
+    # run 1, Monday: nothing measurable -> a failed row at the week's key
+    touch "$GREMION_ROOT/no-synapse" "$GREMION_ROOT/no-volume"
+    FILES_ROOT="" run_fp "2026-10-05 03:00:05"
+    [ "$status" -eq 1 ] || { echo "status $status: $output"; return 1; }
+    [[ "$output" == *"job_run=inserted"* ]]
+    assert_recorded docker "status=failed"
+    # run 2, Wednesday, the cause fixed: the week holds only a failed row
+    rm -f "$GREMION_ROOT/no-synapse" "$GREMION_ROOT/no-volume"
+    touch "$GREMION_ROOT/psql-week-failed"
+    run_fp "2026-10-07 09:00:00"
+    [ "$status" -eq 0 ] || { echo "status $status: $output"; return 1; }
+    [[ "$output" == *"job_run=retried"* ]] || { echo "$output"; return 1; }
+    # the operator is told what the week held before
+    [[ "$output" == *"failed"*"retry"* ]] || { echo "$output"; return 1; }
+    # the retry key is this run's measured_at, inside the week
+    assert_recorded docker "retry=2026-10-07T09:00:00Z"
+    jq -e '.outcome.status == "succeeded"' "$(record 2026-W41)"
+}
+
+@test "footprint: a rerun that finds the week already recorded says what the week holds; a failed rerun after a success adds nothing and exits 1 (round-1 M1)" {
+    shim_world
+    touch "$GREMION_ROOT/psql-exists" "$GREMION_ROOT/no-synapse" "$GREMION_ROOT/no-volume"
+    FILES_ROOT="" run_fp "2026-10-07 09:00:00"
+    [ "$status" -eq 1 ] || { echo "status $status: $output"; return 1; }
+    [[ "$output" == *"job_run=exists"* ]]
+    [[ "$output" == *"succeeded"* ]]
+}
+
+@test "footprint: a DISABLED footprint definition gets a skipped row, never a succeeded one (round-1 LOW enabled)" {
+    shim_world
+    touch "$GREMION_ROOT/psql-disabled"
+    run_fp "2026-10-07 09:00:00"
+    [ "$status" -eq 0 ] || { echo "status $status: $output"; return 1; }
+    [[ "$output" == *"job_run=skipped"* ]] || { echo "$output"; return 1; }
+    [[ "$output" == *"disabled"* ]]
+    grep -qF 'CASE WHEN s.enabled THEN' "$GREMION_ROOT/psql-stdin"
+}
+
+@test "footprint: a platform database below 0005 is named, with psql's own error (round-1 MEDIUM stderr)" {
+    shim_world
+    touch "$GREMION_ROOT/psql-norelation"
+    run_fp "2026-10-07 09:00:00"
+    [ "$status" -eq 1 ] || { echo "status $status: $output"; return 1; }
+    [[ "$output" == *"job_run=failed"* ]]
+    [[ "$output" == *'relation "plt.scheduled_job" does not exist'* ]] || { echo "$output"; return 1; }
+    [[ "$output" == *"0005"* ]]
+}
+
 @test "footprint: a failing psql leaves the record and the gauge and exits 1" {
     shim_world
     touch "$GREMION_ROOT/psql-fail"
     run_fp "2026-10-07 09:00:00"
     [ "$status" -eq 1 ] || { echo "status $status: $output"; return 1; }
     [[ "$output" == *"job_run=failed"* ]]
+    # psql's own error is in the note (round-1 MEDIUM: it went to /dev/null)
+    [[ "$output" == *"connection to server on socket failed"* ]] || { echo "$output"; return 1; }
     [ -s "$(record 2026-W41)" ]
     jq -e '.components | length == 4' "$(record 2026-W41)"
     grep -q 'component="log_volume"' "$(gauge)"

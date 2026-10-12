@@ -55,7 +55,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=../lib/common.sh
 . "$SCRIPT_DIR/../lib/common.sh"
 
-need_cmd docker jq date mktemp awk du
+need_cmd docker jq date mktemp awk du sed grep head
 
 ROOT="$(gremion_root)"
 RUNTIME="$ROOT/runtime"
@@ -332,15 +332,46 @@ EXIT=0
 [[ "$STATUS" == succeeded ]] || EXIT=1
 
 # One docker exec, the SQL on stdin, psql's own :'var' quoting: no string-built
-# SQL. The first statement tells "the seed is missing" from "this week is
-# already recorded", which both insert zero rows.
+# SQL (the text is the same for every week and every outcome). It answers
+# three lines:
+#   seed=<n> enabled=<bool|none>  tells "the seed is missing" from "this week is
+#                                 already recorded", which both insert zero rows
+#   week=<status,...>             the rows this ISO week held BEFORE this run
+#   inserted|retried status=<s>   or nothing, when nothing was written
+#
+# One row per ISO week, keyed on the week's Monday 03:00Z (UNIQUE
+# (scheduled_job_id, scheduled_for)), with ONE exception (round-1 M1): job_run
+# is append-only, so a week whose only rows are `failed` could never record a
+# later success. A SUCCEEDED rerun in such a week writes a retry row keyed on
+# its own measured_at (inside the week); the failed row stays as history and
+# the newest row -- the one gremion_job_last_run reports -- is the success.
+# A rerun after a success, or a failed rerun, writes nothing (job_run=exists).
+# A disabled definition gets a `skipped` row (round-1 LOW: the run ledger and
+# the schedule never disagree).
 SQL="$(cat <<'EOSQL'
-SELECT 'seed=' || count(*) FROM plt.scheduled_job WHERE job_kind = 'footprint_measurement' AND scope = 'platform';
+SELECT 'seed=' || count(*) || ' enabled=' || coalesce(bool_and(enabled)::text, 'none')
+  FROM plt.scheduled_job WHERE job_kind = 'footprint_measurement' AND scope = 'platform';
+SELECT 'week=' || coalesce(string_agg(r.status, ',' ORDER BY r.scheduled_for, r.job_run_id), '')
+  FROM plt.job_run r JOIN plt.scheduled_job s USING (scheduled_job_id)
+ WHERE s.job_kind = 'footprint_measurement' AND s.scope = 'platform'
+   AND r.scheduled_for >= :'wk'::timestamptz AND r.scheduled_for < :'wk'::timestamptz + interval '7 days';
 INSERT INTO plt.job_run (scheduled_job_id, scope, scheduled_for, started_at, finished_at, status, detail_ref)
-SELECT scheduled_job_id, 'platform', :'sf'::timestamptz, :'started'::timestamptz, :'finished'::timestamptz, :'status', :'detail'
-  FROM plt.scheduled_job WHERE job_kind = 'footprint_measurement' AND scope = 'platform'
+SELECT s.scheduled_job_id, 'platform',
+       CASE WHEN EXISTS (SELECT 1 FROM plt.job_run r
+                          WHERE r.scheduled_job_id = s.scheduled_job_id AND r.scheduled_for = :'sf'::timestamptz)
+            THEN :'retry'::timestamptz ELSE :'sf'::timestamptz END,
+       :'started'::timestamptz, :'finished'::timestamptz,
+       CASE WHEN s.enabled THEN :'status' ELSE 'skipped' END,
+       :'detail'
+  FROM plt.scheduled_job s
+ WHERE s.job_kind = 'footprint_measurement' AND s.scope = 'platform'
+   AND NOT EXISTS (SELECT 1 FROM plt.job_run r
+                    WHERE r.scheduled_job_id = s.scheduled_job_id
+                      AND r.scheduled_for >= :'wk'::timestamptz
+                      AND r.scheduled_for < :'wk'::timestamptz + interval '7 days'
+                      AND (r.status = 'succeeded' OR NOT s.enabled OR :'status' <> 'succeeded'))
 ON CONFLICT (scheduled_job_id, scheduled_for) DO NOTHING
-RETURNING 'inserted';
+RETURNING CASE WHEN scheduled_for = :'sf'::timestamptz THEN 'inserted' ELSE 'retried' END || ' status=' || status;
 EOSQL
 )"
 
@@ -349,22 +380,40 @@ if [[ -z "$PG" ]]; then
     note "no ${STACK_NAME}-state postgres container -- the plt.job_run row was not written"
     EXIT=1
 else
-    if out="$(docker exec -i "$PG" psql -U postgres -d gremion_platform -X -q -tA -v ON_ERROR_STOP=1 \
-            -v "week=${WEEK}" -v "sf=${SCHEDULED_FOR}" -v "started=${STARTED}" -v "finished=${FINISHED}" \
-            -v "status=${STATUS}" -v "detail=${DETAIL_REF}" -f - <<< "$SQL" 2>/dev/null)"; then
-        if [[ "$out" == *"seed=0"* ]]; then
-            note "plt.scheduled_job has no footprint_measurement platform row (platform migration 0005 not applied or its seed removed) -- no job_run written"
-            EXIT=1
-        elif [[ "$out" == *inserted* ]]; then
-            JOB_RUN="inserted"
-        elif [[ "$out" == *"seed=1"* ]]; then
-            JOB_RUN="exists"
+    rc=0
+    out="$(docker exec -i "$PG" psql -U postgres -d gremion_platform -X -q -tA -v ON_ERROR_STOP=1 \
+            -v "week=${WEEK}" -v "wk=${MONDAY}T00:00:00Z" -v "sf=${SCHEDULED_FOR}" -v "retry=${MEASURED_AT}" \
+            -v "started=${STARTED}" -v "finished=${FINISHED}" \
+            -v "status=${STATUS}" -v "detail=${DETAIL_REF}" -f - <<< "$SQL" 2>"$ERRF")" || rc=$?
+    week_rows="$(sed -n 's/^week=//p' <<< "$out")"
+    if (( rc != 0 )); then
+        if grep -q 'relation "plt\.[a-z_]*" does not exist' "$ERRF" 2>/dev/null; then
+            note "the platform database has no plt job tables (the platform chain has not reached migration 0005): $(first_err) -- no job_run written"
         else
-            note "the job_run write answered '${out}' -- not treated as written"
+            note "the plt.job_run write failed (psql exit ${rc}): $(first_err)"
+        fi
+        EXIT=1
+    elif [[ "$out" == *"seed=0"* ]]; then
+        note "plt.scheduled_job has no footprint_measurement platform row (platform migration 0005 not applied or its seed removed) -- no job_run written"
+        EXIT=1
+    elif [[ "$out" == *"inserted status=skipped"* ]]; then
+        JOB_RUN="skipped"
+        note "the footprint_measurement definition is disabled in plt.scheduled_job -- the week's row is skipped; the record and the gauge are still written"
+    elif [[ "$out" == *"inserted status="* ]]; then
+        JOB_RUN="inserted"
+    elif [[ "$out" == *"retried status="* ]]; then
+        JOB_RUN="retried"
+        note "this week already held '${week_rows}' (no success); this successful rerun is recorded as a retry row at ${MEASURED_AT}, the earlier row stays as history"
+    elif [[ "$out" == *"seed=1"* ]]; then
+        JOB_RUN="exists"
+        note "this week is already recorded ('${week_rows}'); nothing written"
+        if [[ "$STATUS" == succeeded && ",${week_rows}," != *",succeeded,"* ]]; then
+            # Only a retry-key collision gets here (a rerun at the very second of another).
+            note "the week holds no succeeded row and this run's success was NOT written -- rerun it"
             EXIT=1
         fi
     else
-        note "the plt.job_run write failed (database refused it or is not reachable)"
+        note "the job_run write answered '${out}' -- not treated as written"
         EXIT=1
     fi
 fi
