@@ -165,6 +165,7 @@ wait_until() {   # <seconds> <command...> -- poll every 5 s
     done
 }
 has_series() { [[ "$(prom_count "$1")" -gt 0 ]]; }
+no_series() { ! has_series "$1"; }
 value_is() { [[ "$(prom_value "$1")" == "$2" ]]; }
 
 lokiq() {   # <logql> -- matching lines of the last hour, read inside the Loki container
@@ -978,8 +979,14 @@ phase_footprint_series() {
     wait_until 150 prom_eq 'max(gremion_footprint_component_bytes{component="log_volume"})' "$want" \
         && ok "Prometheus returns gremion_footprint_component_bytes{component=log_volume} = ${want}, the seeded value, via the host textfile and Alloy" \
         || bad "the log_volume series is not ${want} in Prometheus"
-    has_series 'gremion_footprint_component_bytes{component="synapse_db"}' \
-        && bad "a series exists for the ABSENT synapse_db" || ok "no synapse_db series (the last run measured none: absent, not 0)"
+    # The footprint phase measured synapse_db in its earlier runs, so Alloy scraped
+    # that series; the last run's file has no such line, and Prometheus drops the
+    # series at the next scrape (staleness marker). An instant query straight
+    # after the phase can still see the older sample (round 3: a 4-second gap
+    # between the phases did), so the absence is WAITED for. A series that never
+    # goes away -- or goes to 0 -- is the failure, and the wait times out on it.
+    wait_until 120 no_series 'gremion_footprint_component_bytes{component="synapse_db"}' \
+        && ok "no synapse_db series (the last run measured none: absent, not 0)" || bad "a series exists for the ABSENT synapse_db"
     epoch="$(fp_psql "SELECT extract(epoch FROM finished_at)::bigint FROM plt.job_run ORDER BY finished_at DESC LIMIT 1")"
     wait_until 120 prom_eq 'max(gremion_job_last_run{job_kind="footprint_measurement",status="succeeded"})' "$epoch" \
         && ok "Prometheus returns gremion_job_last_run{job_kind=footprint_measurement,status=succeeded} = ${epoch} (finished_at as Unix seconds)" \
