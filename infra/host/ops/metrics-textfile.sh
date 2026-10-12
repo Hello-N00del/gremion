@@ -222,12 +222,18 @@ emit_postgres_connections() {
 # database, a missing schema (a host whose platform chain has not reached
 # 0005 yet) or garbage emits nothing -- absent, never 0 -- and a note.
 emit_job_last_run() {
-    local cid rows out="" kind customer status epoch extra uuid_re='^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+    local cid rows errf first_err="" out="" kind customer status epoch extra uuid_re='^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
     cid="$(state_container postgres)"
     [[ -n "$cid" ]] || { note "no ${STACK_NAME}-state postgres container -- gremion_job_last_run absent"; return 0; }
+    # psql's stderr is kept (first line only) for the note: a refused connection,
+    # a missing relation (platform chain below 0005), a permission error and a
+    # typo in this query are different faults and must not read alike.
+    errf="$(mktemp)"
     rows="$(docker exec "$cid" psql -U postgres -d gremion_platform -X -tAF'|' -c \
         "SELECT DISTINCT ON (r.scheduled_job_id) s.job_kind, coalesce(s.customer_id::text, ''), r.status, extract(epoch FROM r.finished_at)::bigint FROM plt.job_run r JOIN plt.scheduled_job s USING (scheduled_job_id) ORDER BY r.scheduled_job_id, r.finished_at DESC, r.job_run_id DESC" \
-        2>/dev/null || true)"
+        2>"$errf" || true)"
+    first_err="$(head -n 1 "$errf" 2>/dev/null || true)"
+    rm -f "$errf"
     while IFS='|' read -r kind customer status epoch extra; do
         [[ -n "$kind$customer$status$epoch$extra" ]] || continue
         if [[ -z "$extra" && "$kind" =~ ^[a-z_]{1,40}$ && ( -z "$customer" || "$customer" =~ $uuid_re ) \
@@ -237,7 +243,7 @@ emit_job_last_run() {
             note "job-run row '${kind}|${customer}|${status}|${epoch}' is not <kind>|<customer uuid or empty>|<status>|<epoch> -- skipped"
         fi
     done <<< "$rows"
-    [[ -n "$out" ]] || { note "no job run readable -- gremion_job_last_run is absent"; return 0; }
+    [[ -n "$out" ]] || { note "no job run readable${first_err:+ (${first_err})} -- gremion_job_last_run is absent"; return 0; }
     printf '# HELP gremion_job_last_run Unix time the newest run of a scheduled job finished; the status label is its outcome.\n'
     printf '# TYPE gremion_job_last_run gauge\n'
     printf '%s' "$out"

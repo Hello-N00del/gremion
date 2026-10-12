@@ -547,7 +547,7 @@ case "$*" in
   "exec abc123 psql"*"plt.job_run"*)
     # TASK-039-FU: the platform database answers the job-run query; dispatch on the SQL text
     [ -f "$GREMION_ROOT/jobrun-down" ] && { echo "psql: error: connection refused" >&2; exit 2; }
-    [ -f "$GREMION_ROOT/jobrun-missing" ] && { echo "ERROR:  relation \"plt.job_run\" does not exist"; exit 1; }
+    [ -f "$GREMION_ROOT/jobrun-missing" ] && { echo "ERROR:  relation \"plt.job_run\" does not exist" >&2; exit 1; }
     [ -f "$GREMION_ROOT/jobrun-garbage" ] && { printf "<html>\n|||\nfootprint_measurement||exploded|123\nfootprint_measurement||succeeded|notanumber\nfootprint_measurement||succeeded|0\nbackup_nightly|not-a-uuid|failed|1791000400\nfootprint_measurement|succeeded|1791000000\n"; exit 0; }
     # one row per DEFINITION (kind|customer|status|epoch): two customers of one kind are two rows
     printf "footprint_measurement||succeeded|1791000000\npurge_run||failed|1791000300\nbackup_nightly|0192f0c1-0000-7000-8000-00000000000a|failed|1791000400\nbackup_nightly|0192f0c1-0000-7000-8000-00000000000b|succeeded|1791000500\n" ;;
@@ -668,11 +668,15 @@ prom() { cat "$GREMION_ROOT/runtime/textfile/gremion.prom"; }
     touch "$GREMION_ROOT/jobrun-down"
     STACK=staging run "$METRICS"
     [ "$status" -eq 0 ]
+    # psql's own first error line is in the note (round-2 silent-failure LOW:
+    # every failure used to read the same generic "no job run readable")
+    [[ "$output" == *"connection refused"* ]] || { echo "$output"; return 1; }
     run grep -c 'gremion_job_last_run' "$GREMION_ROOT/runtime/textfile/gremion.prom"
     [ "$output" = "0" ]
     rm -f "$GREMION_ROOT/jobrun-down"; touch "$GREMION_ROOT/jobrun-missing"
     STACK=staging run "$METRICS"
     [ "$status" -eq 0 ]
+    [[ "$output" == *'relation "plt.job_run" does not exist'* ]] || { echo "$output"; return 1; }
     run grep -c 'gremion_job_last_run' "$GREMION_ROOT/runtime/textfile/gremion.prom"
     [ "$output" = "0" ]
     rm -f "$GREMION_ROOT/jobrun-missing"; touch "$GREMION_ROOT/jobrun-garbage"
