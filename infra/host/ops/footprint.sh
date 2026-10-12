@@ -138,7 +138,15 @@ errored() {   # <component> -- the component's source is there but did not (full
 
 measure_synapse_db() {
     local cid bytes rc=0 src="pg_database_size('synapse') in the messaging Postgres"
-    cid="$(state_container messaging-postgres)"
+    cid="$(state_container_strict messaging-postgres)" || rc=$?
+    if (( rc != 0 )); then
+        # The lookup itself did not answer: the container may well be there, so
+        # this is an error, not a source that does not exist.
+        note "synapse_db: the messaging-postgres container lookup failed (exit ${rc}) -- absent (error), never 0"
+        add_absent synapse_db "$src" error
+        errored synapse_db
+        return 0
+    fi
     if [[ -z "$cid" ]]; then
         note "no ${STACK_NAME}-state messaging-postgres container -- synapse_db is absent (not present), never 0"
         add_absent synapse_db "$src" not_present
@@ -389,8 +397,12 @@ RETURNING CASE WHEN scheduled_for = :'sf'::timestamptz THEN 'inserted' ELSE 'ret
 EOSQL
 )"
 
-PG="$(state_container postgres)"
-if [[ -z "$PG" ]]; then
+pg_rc=0
+PG="$(state_container_strict postgres)" || pg_rc=$?
+if (( pg_rc != 0 )); then
+    note "the ${STACK_NAME}-state postgres container lookup failed (exit ${pg_rc}) -- the plt.job_run row was not written"
+    EXIT=1
+elif [[ -z "$PG" ]]; then
     note "no ${STACK_NAME}-state postgres container -- the plt.job_run row was not written"
     EXIT=1
 else

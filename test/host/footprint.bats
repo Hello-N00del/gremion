@@ -37,6 +37,10 @@ shim_world() {
 if [ -f "$GREMION_ROOT/ps-fail" ] && [ "$1" = ps ] && [ "$2" = --filter ]; then
   echo "Cannot connect to the Docker daemon" >&2; exit 1
 fi
+# ps-fail-synapse: only the messaging-postgres lookup fails (the daemon answers everything else)
+if [ -f "$GREMION_ROOT/ps-fail-synapse" ] && [ "$1" = ps ] && [[ "$*" == *"service=messaging-postgres"* ]]; then
+  echo "error during connect: lookup interrupted" >&2; exit 1
+fi
 case "$*" in
   *"com.docker.compose.service=messaging-postgres"*) [ -f "$GREMION_ROOT/no-synapse" ] || echo "syn111" ;;
   *"com.docker.compose.service=postgres"*)           [ -f "$GREMION_ROOT/no-pg" ] || echo "pg222" ;;
@@ -484,6 +488,24 @@ PATH="${PATH#*:}" exec du "$@"'
     [[ "$output" == *"FOOTPRINT: week=2026-W41 synapse_db=absent "* && "$output" == *"job_run=failed"* ]] || { echo "$output"; return 1; }
     jq -e '[.components[] | select(.component == "synapse_db")] | .[0].status == "absent"' "$(record 2026-W41)"
     grep -q 'component="log_volume"' "$(gauge)"
+}
+
+@test "footprint: a messaging-postgres lookup that FAILS (the daemon answers the rest) is an ERROR, not 'not present': the week is failed and says why (round-2 silent-failure MEDIUM)" {
+    shim_world
+    seed_council "$COUNCIL_A" 1
+    touch "$GREMION_ROOT/ps-fail-synapse"
+    run_fp "2026-10-07 09:00:00"
+    [ "$status" -eq 1 ] || { echo "status $status: $output"; return 1; }
+    local r; r="$(record 2026-W41)"
+    jq -e '[.components[] | select(.component == "synapse_db")] | .[0].status == "absent" and .[0].absent_reason == "error"' "$r"
+    jq -e '.outcome.status == "failed" and .outcome.errored == ["synapse_db"]' "$r"
+    # the log carries the cause, and it does not claim the container is not there
+    [[ "$output" == *"lookup interrupted"* ]] || { echo "$output"; return 1; }
+    [[ "$output" != *"no staging-state messaging-postgres container"* ]] || { echo "$output"; return 1; }
+    # the other components were still measured
+    grep -q 'component="log_volume"' "$(gauge)"
+    run grep -c 'gremion_footprint_timestamp_seconds' "$(gauge)"
+    [ "$output" = "0" ]
 }
 
 @test "footprint: all three components absent writes a FAILED row and exits 1" {

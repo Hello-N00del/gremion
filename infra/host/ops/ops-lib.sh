@@ -58,12 +58,21 @@ to_bytes() {
 # SIGPIPE docker ps when several containers match (pipefail would turn that
 # into 141).
 state_container() {
+    state_container_strict "$1" || true
+}
+
+# state_container_strict <compose service> -- the same lookup, but a docker ps
+# that FAILS returns 3 (after its note), so a caller that must tell "no such
+# container" (empty output, status 0) from "the lookup did not answer" (status
+# 3) can: footprint.sh records the second as an ERROR, not as a source that is
+# not there. Call it as `x="$(state_container_strict s)" || rc=$?`.
+state_container_strict() {
     local ids
     ids="$(docker ps --filter "label=com.docker.compose.project=${STACK_NAME}-state" \
               --filter "label=com.docker.compose.service=$1" \
               --format '{{.ID}}')" || {
         echo "[ops-lib] docker ps failed looking up the ${STACK_NAME}-state $1 container -- treated as none" >&2
-        return 0
+        return 3
     }
     [[ -z "$ids" ]] || printf '%s\n' "${ids%%$'\n'*}"
 }
