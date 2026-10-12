@@ -215,24 +215,43 @@ writes, in this order, each atomically:
 
 | Artefact | Content |
 |---|---|
-| `runtime/footprint/<ISO-week>.json` | `{schema, week, scheduled_for, measured_at, components: [{component, council?, bytes\|null, status: measured\|absent, source}]}`; kept as measurements (about 1 KB a week), not logs: the 30-day cap of R29-I6 does not apply |
-| `runtime/textfile/gremion-footprint.prom` | its own textfile (the per-minute collector never overwrites it): `gremion_footprint_component_bytes{component[,council]}` for measured entries only, plus `gremion_footprint_timestamp_seconds`; Alloy reads the directory, no Alloy change |
-| one `plt.job_run` row | `job_kind footprint_measurement`, `detail_ref footprint/<ISO-week>.json`, idempotent per week (`UNIQUE (scheduled_job_id, scheduled_for)`, `ON CONFLICT DO NOTHING`) |
+| `runtime/footprint/<ISO-week>.json` | `{schema, week, scheduled_for, measured_at, outcome: {status, measured_of_three, incomplete, errored}, components: [{component, council?, bytes\|null, status: measured\|absent, absent_reason?: not_present\|error, source}]}`; kept as measurements (about 1 KB a week), not logs: the 30-day cap of R29-I6 does not apply |
+| `runtime/textfile/gremion-footprint.prom` | its own textfile (the per-minute collector never overwrites it): `gremion_footprint_component_bytes{component[,council]}` for measured entries only, plus `gremion_footprint_timestamp_seconds`, written only by a `succeeded` run; Alloy reads the directory, no Alloy change |
+| one `plt.job_run` row | `job_kind footprint_measurement`, `detail_ref footprint/<ISO-week>.json` (plus `#incomplete=<c>[,<c>]` when one of the three was not fully measured), one row per week (`UNIQUE (scheduled_job_id, scheduled_for)`, `ON CONFLICT DO NOTHING`), except a retry row (below) |
 
 A component that cannot be measured is `absent` (`bytes: null`, no gauge line),
-never `0`: with no `messaging-postgres` container `synapse_db` is absent, with
-`GREMION_FOOTPRINT_FILESTORE_ROOT` unset `council_files` is absent (no compose
-file mounts the storage root yet: the app-compose owner mounts it, then sets the
-key), an unmeasurable volume is absent. The collector additionally emits
-`gremion_job_last_run{job_kind,status}` (the newest `plt.job_run` finish time per
-job kind, Unix seconds, one family), absent while the database or the table is
-unreachable. A run that fails shows three ways: the unit's state, a missing or
-old `gremion_footprint_timestamp_seconds`, and a `failed` row. Exit 0 = record,
+never `0`, and the record says why. `not_present`: there is nothing to measure
+(no `messaging-postgres` container, `GREMION_FOOTPRINT_FILESTORE_ROOT` unset --
+no compose file mounts the storage root yet: the app-compose owner mounts it,
+then sets the key -- or no Vector volume); that does not fail the run.
+`error`: the source is there and did not answer (the size query failed, `du`
+could not read a council directory, `docker system df` failed, the configured
+root is not a directory); that fails the run. A council directory `du` cannot
+fully read (its files belong to the app container's uid, the unit runs as the
+deploy user) is absent with its `council` id: a partial `du` total would
+undercount, so it is never recorded as a number.
+
+The run is `failed` (exit 1) when none of the three components was measured or
+one of them errored, `succeeded` otherwise; a disabled `footprint_measurement`
+definition gets a `skipped` row. `plt.job_run` is append-only, so a week whose
+only rows are `failed` gets a **retry row** when a later run in the same week
+succeeds: keyed on that run's `measured_at`, the failed row stays as history and
+the newest row is the success (`job_run=retried`). A rerun after a success, or a
+failed rerun, writes nothing (`job_run=exists`, naming what the week holds).
+
+The collector additionally emits `gremion_job_last_run{job_kind[,customer],status}`:
+the newest `plt.job_run` finish time per job DEFINITION (Unix seconds, one
+family). A customer-scoped definition (one per customer, e.g. `backup_nightly`)
+carries the pseudonymous customer uuid, so one customer's failure is never
+hidden by another's later success; a platform definition has no `customer`
+label. It is absent while the database or the table is unreachable. A run that
+fails shows three ways: the unit's state, a missing or old
+`gremion_footprint_timestamp_seconds`, and a `failed` row. Exit 0 = record,
 gauge and row done; 1 = record and gauge written but the row failed (database
-down, the seed row missing, a platform chain below 0005) or none of the three
-components measurable; 2 = missing runtime directory or tool. No rule or alert
-consumes these series here (the twelve conditions are pinned); the roll-up and an
-"older than 8 days or failed" alert are TASK-099 / TASK-123.
+down, the seed row missing, a platform chain below 0005, each named with psql's
+own error) or the run is `failed`; 2 = missing runtime directory or tool. No
+rule or alert consumes these series here (the twelve conditions are pinned); the
+roll-up and an "older than 8 days or failed" alert are TASK-099 / TASK-123.
 
 ## Deferred (named)
 
