@@ -254,6 +254,8 @@ measure_council_files() {
     if (( n == 0 && skipped == 0 )); then
         # The root exists and holds no council directory: the source answered "nothing here".
         add_measured council_files 0 "$src (the root holds no council directory)"
+        # `council: null, bytes: 0` (brief s.4): the whole store, not one council
+        COMPONENTS_JSON[-1]="$(jq -c '. + {council: null}' <<< "${COMPONENTS_JSON[-1]}")"
         SUMMARY_FILES="0councils"
         MEASURED_OF_THREE=$((MEASURED_OF_THREE + 1))
         return 0

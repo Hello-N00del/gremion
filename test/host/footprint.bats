@@ -241,6 +241,8 @@ gauge() { echo "$GREMION_ROOT/runtime/textfile/gremion-footprint.prom"; }
     run_fp "2026-10-07 09:00:00"
     [ "$status" -eq 0 ]
     jq -e '[.components[] | select(.component == "council_files")] | length == 1 and .[0].status == "measured" and .[0].bytes == 0' "$(record 2026-W41)"
+    # brief s.4: the measured empty store is `council: null, bytes: 0`
+    jq -e '[.components[] | select(.component == "council_files")] | .[0] | has("council") and .council == null' "$(record 2026-W41)"
     FILES_ROOT="$GREMION_ROOT/nope" run_fp "2026-10-07 09:00:00"
     jq -e '[.components[] | select(.component == "council_files")] | .[0].status == "absent" and .[0].bytes == null' "$(record 2026-W41)"
 }
