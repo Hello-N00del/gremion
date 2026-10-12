@@ -88,12 +88,25 @@ describe('ensurePlatformDatabase on a server without gremion_platform (Q15)', ()
         SELECT filename, phase, release_ref FROM public.schema_migrations ORDER BY filename`
       expect(ledger.map((r) => r.filename)).toEqual(files)
       expect(ledger.every((r) => r.release_ref === 'dist-v0.0.1')).toBe(true)
-      expect(ledger.find((r) => r.filename === '0001_plt_setup.sql')?.phase).toBe('contract')
-      expect(ledger.find((r) => r.filename === '0005_plt_scheduled_job.sql')?.phase).toBe('expand')
+      // the phase per known file (0001 is the one pinned contract file); a future file adds a line here
+      const phaseOf = (f: string) => ledger.find((r) => r.filename === f)?.phase
+      expect(phaseOf('0001_plt_setup.sql')).toBe('contract')
+      for (const f of ['0002_plt_module.sql', '0003_plt_module_database.sql', '0004_plt_provisioning_step.sql', '0005_plt_scheduled_job.sql']) {
+        expect(phaseOf(f)).toBe('expand')
+      }
       const tables = await owned<{ t: string; owner: string }[]>`
         SELECT tablename AS t, tableowner AS owner FROM pg_tables WHERE schemaname = 'plt' ORDER BY 1`
-      expect(tables.map((x) => x.t)).toEqual(expect.arrayContaining(['module', 'module_database', 'module_enablement', 'module_version', 'operator_enable_attestation', 'provisioning_step']))
-      expect(tables.map((x) => x.t)).toEqual(expect.arrayContaining(['scheduled_job', 'job_run'])) // TASK-039-FU
+      // The EXACT table set: the eight tables of the five known files are listed
+      // verbatim (a stray table added to one of them, or a table a file fails to
+      // create, fails here), and a LATER file's tables are derived from its own
+      // CREATE TABLE statements, so a unit that adds a platform file adds nothing
+      // here (the same hot-spot rule as the file list above).
+      const KNOWN_FILES = ['0001_plt_setup.sql', '0002_plt_module.sql', '0003_plt_module_database.sql', '0004_plt_provisioning_step.sql', '0005_plt_scheduled_job.sql']
+      const KNOWN_TABLES = ['job_run', 'module', 'module_database', 'module_enablement', 'module_version', 'operator_enable_attestation', 'provisioning_step', 'scheduled_job']
+      const laterTables = files
+        .filter((f) => !KNOWN_FILES.includes(f))
+        .flatMap((f) => [...readFileSync(join(PLATFORM_MIGRATIONS_DIR, f), 'utf8').matchAll(/^\s*CREATE TABLE(?:\s+IF NOT EXISTS)?\s+plt\.([a-z_]+)/gim)].map((x) => x[1]!))
+      expect(tables.map((x) => x.t).sort()).toEqual([...KNOWN_TABLES, ...laterTables].sort())
       expect(new Set(tables.map((x) => x.owner))).toEqual(new Set([OWNER]))
     } finally {
       await owned.end()
