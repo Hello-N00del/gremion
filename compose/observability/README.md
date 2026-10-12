@@ -225,11 +225,21 @@ never `0`, and the record says why. `not_present`: there is nothing to measure
 no compose file mounts the storage root yet: the app-compose owner mounts it,
 then sets the key -- or no Vector volume); that does not fail the run.
 `error`: the source is there and did not answer (the size query failed, `du`
-could not read a council directory, `docker system df` failed, the configured
-root is not a directory); that fails the run. A council directory `du` cannot
-fully read (its files belong to the app container's uid, the unit runs as the
-deploy user) is absent with its `council` id: a partial `du` total would
-undercount, so it is never recorded as a number.
+could not read a council directory, `docker system df` failed, a container
+lookup did not answer, the configured root is not a directory or cannot be
+listed); that fails the run. A council directory `du` cannot fully read (its
+files belong to the app container's uid, the unit runs as the deploy user) is
+absent with its `council` id: a partial `du` total would undercount, so it is
+never recorded as a number. A root the deploy user cannot list (no `r` bit) is
+absent as `error` too, never an empty store: the root is listed with `find`
+and its exit status checked before any directory is trusted.
+
+Hand-off to the app-compose owner (TASK-117 seam / TASK-040 line): when the
+storage root is mounted and `GREMION_FOOTPRINT_FILESTORE_ROOT` is set, the root
+and its whole tree must be **readable and listable by `DEPLOY_USER`** (group or
+ACL on the host path, not only the container's uid at `0700`). Otherwise every
+week is `failed` with `council_files` absent (error) and the note naming the
+first error line.
 
 The run is `failed` (exit 1) when none of the three components was measured or
 one of them errored, `succeeded` otherwise; a disabled `footprint_measurement`
@@ -252,6 +262,37 @@ down, the seed row missing, a platform chain below 0005, each named with psql's
 own error) or the run is `failed`; 2 = missing runtime directory or tool. No
 rule or alert consumes these series here (the twelve conditions are pinned); the
 roll-up and an "older than 8 days or failed" alert are TASK-099 / TASK-123.
+
+Deferred, named residuals of this unit (platform migration 0005 is frozen by the
+lock, so each needs a later migration or a SCHEMA change):
+
+- **Scoped database role.** `footprint.sh` (the `plt.job_run` write) and the
+  collector's `emit_job_last_run` (the per-minute read) reach `gremion_platform`
+  as `psql -U postgres`. A later platform migration should create a login role
+  with `INSERT` on `plt.job_run` and `SELECT` on `plt.scheduled_job` and
+  `plt.job_run` (and a read-only one for the collector), granted in a LATER
+  platform file (TASK-043d / TASK-089 claim that chain). No injection path today:
+  every value is a psql `:'var'` bind and the SQL text is constant.
+- **`job_run` is not tied to its parent definition.** `job_run.scope` and
+  `customer_id` are not checked against the parent `scheduled_job` row (the DDL is
+  SCHEMA-gremion.md DB-PLT-JOB-RUN verbatim). Raise it against that SCHEMA entry;
+  the fix is a `BEFORE INSERT` trigger or a composite foreign key in a forward
+  migration.
+- **No supporting indexes.** Nothing leads with `customer_id`, and there is no
+  `(scheduled_job_id, finished_at DESC, job_run_id DESC)` index for the
+  collector's per-definition `DISTINCT ON` (it runs every minute). The tables
+  hold a handful of rows today; add both in the forward migration that lands the
+  per-customer kinds (TASK-089 `backup_nightly`, TASK-033-a `purge_run`).
+- **`detail_ref` of a failed row.** Every row of a week points at
+  `footprint/<ISO-week>.json`, which each run rewrites, so after a retry a kept
+  `failed` row points at the record of the later, succeeded run. The failed
+  outcome itself stays in the row's `status` and `#incomplete=` suffix; keying the
+  record per run (`<week>.<measured_at>.json`) is the change if history of the
+  failed measurement is ever needed.
+- **The retry-row SQL has no unit test against a real Postgres.** The bats cases
+  shim `psql` and pin the SQL text; the semantics (failed, then retried, then
+  exists; disabled gives skipped) are proved by the `footprint` phase of
+  `test/host/integration/observability-proof.sh` against a real Postgres.
 
 ## Deferred (named)
 
