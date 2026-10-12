@@ -159,6 +159,60 @@ gauge() { echo "$GREMION_ROOT/runtime/textfile/gremion-footprint.prom"; }
     jq -e '[.components[] | select(.component == "council_files")] | .[0].status == "absent" and .[0].bytes == null' "$(record 2026-W41)"
 }
 
+# du as the deploy user sees a council directory whose files the app container's
+# uid owns: it prints a PARTIAL total for <uuid> and exits 1 (EACCES on a
+# subdirectory); every other directory goes to the real du.
+shim_du_fails() {   # <uuid>
+    shim du '
+case "$*" in
+  *"'"$1"'"*)
+    echo "du: cannot read directory '"'"'${@: -1}/private'"'"': Permission denied" >&2
+    printf "4096\t%s\n" "${@: -1}"
+    exit 1 ;;
+esac
+PATH="${PATH#*:}" exec du "$@"'
+}
+
+@test "footprint: a council directory du cannot read (exit 1, partial total) is ABSENT with its council id, du's error is logged, and the run still writes record, gauge and row (round-1 H1)" {
+    shim_world
+    seed_council "$COUNCIL_A" 1
+    seed_council "$COUNCIL_B" 1
+    shim_du_fails "$COUNCIL_B"
+    run_fp "2026-10-07 09:00:00"
+    # the script ran to its end: the one summary line is printed
+    [[ "$output" == *"FOOTPRINT: week=2026-W41 "* ]] || { echo "status $status: $output"; return 1; }
+    [[ "$output" == *" council_files=1councils+1absent "* ]] || { echo "$output"; return 1; }
+    local r; r="$(record 2026-W41)"
+    [ -s "$r" ]
+    # the unreadable council: absent, bytes null, its id kept -- a partial du total is NOT a measurement
+    jq -e --arg c "$COUNCIL_B" '[.components[] | select(.component == "council_files" and .council == $c)] | length == 1 and .[0].status == "absent" and .[0].bytes == null' "$r"
+    # the readable council is still measured
+    jq -e --arg c "$COUNCIL_A" '[.components[] | select(.component == "council_files" and .council == $c)] | length == 1 and .[0].status == "measured" and .[0].bytes >= 1048576' "$r"
+    # du's own error reaches the log (stderr is part of $output under bats run)
+    [[ "$output" == *"Permission denied"* ]] || { echo "$output"; return 1; }
+    # the gauge: the readable council has a line, the unreadable one has none
+    grep -qF "council=\"$COUNCIL_A\"" "$(gauge)"
+    run grep -c "council=\"$COUNCIL_B\"" "$(gauge)"
+    [ "$output" = "0" ]
+    # the row was still attempted
+    [ -s "$GREMION_ROOT/psql-stdin" ]
+}
+
+@test "footprint: when every council directory is unmeasurable, council_files is never a measured 0 (round-1 H1)" {
+    shim_world
+    seed_council "$COUNCIL_B" 1
+    shim_du_fails "$COUNCIL_B"
+    run_fp "2026-10-07 09:00:00"
+    [[ "$output" == *"FOOTPRINT: week=2026-W41 "* ]] || { echo "status $status: $output"; return 1; }
+    local summary="$output" r; r="$(record 2026-W41)"
+    [[ "$summary" == *" council_files=absent "* ]] || { echo "$summary"; return 1; }
+    # no measured council_files entry at all, so no "the root holds nothing" 0
+    jq -e '[.components[] | select(.component == "council_files" and .status == "measured")] | length == 0' "$r"
+    jq -e --arg c "$COUNCIL_B" '[.components[] | select(.component == "council_files")] | length == 1 and .[0].council == $c and .[0].status == "absent"' "$r"
+    run grep -c 'component="council_files"' "$(gauge)"
+    [ "$output" = "0" ]
+}
+
 @test "footprint writes the job_run through ONE docker exec, SQL on stdin with psql binds, no value in the SQL text, no secret on any argv" {
     shim_world
     run_fp "2026-10-07 09:00:00"

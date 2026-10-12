@@ -93,8 +93,13 @@ add_measured() {   # <component> <bytes> <source> [council]
     GAUGE_LINES+=("gremion_footprint_component_bytes{${label}} ${bytes}")
 }
 
-add_absent() {   # <component> <source>
-    COMPONENTS_JSON+=("$(jq -nc --arg c "$1" --arg s "$2" '{component: $c, bytes: null, status: "absent", source: $s}')")
+add_absent() {   # <component> <source> [council]
+    if [[ -n "${3:-}" ]]; then
+        COMPONENTS_JSON+=("$(jq -nc --arg c "$1" --arg n "$3" --arg s "$2" \
+            '{component: $c, council: $n, bytes: null, status: "absent", source: $s}')")
+    else
+        COMPONENTS_JSON+=("$(jq -nc --arg c "$1" --arg s "$2" '{component: $c, bytes: null, status: "absent", source: $s}')")
+    fi
 }
 
 measure_synapse_db() {
@@ -135,7 +140,7 @@ measure_log_volume() {
 }
 
 measure_council_files() {
-    local dir name bytes n=0 src="du -sb of each <tenant uuid> directory of the file-store root"
+    local dir name bytes rc errf n=0 skipped=0 src="du -sb of each <tenant uuid> directory of the file-store root"
     if [[ -z "$FILESTORE_ROOT" ]]; then
         note "GREMION_FOOTPRINT_FILESTORE_ROOT is not set -- council_files is absent, never 0"
         add_absent council_files "$src"
@@ -146,27 +151,49 @@ measure_council_files() {
         add_absent council_files "$src"
         return 0
     fi
+    errf="$(mktemp)"
     for dir in "$FILESTORE_ROOT"/*/; do
         [[ -d "$dir" ]] || continue
         dir="${dir%/}"
         name="${dir##*/}"
         # A canonical lowercase uuid is a council's pseudonymous id; anything else is not a tenant prefix.
         [[ "$name" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] || continue
-        bytes="$(du -sb "$dir" 2>/dev/null | awk 'NR == 1 && $1 ~ /^[0-9]+$/ { print $1 }')"
-        if [[ -z "$bytes" ]]; then
-            note "council_files: a council directory is not measurable -- skipped, never 0"
+        # Never fatal (set -e): du exits 1 on any file it cannot read -- the
+        # council files belong to the app container's uid, this unit runs as
+        # the deploy user -- and a dead script writes no record, no gauge and
+        # no row. du's own error is kept for the note.
+        rc=0
+        bytes="$(du -sb "$dir" 2>"$errf")" || rc=$?
+        bytes="$(awk 'NR == 1 && $1 ~ /^[0-9]+$/ { print $1 }' <<< "$bytes")"
+        # A PARTIAL total (du exit 1 with a number printed) is NOT a
+        # measurement: it leaves out exactly what du could not read, so it
+        # would undercount. That council is absent for the week, never a
+        # smaller number.
+        if (( rc != 0 )) || [[ -z "$bytes" ]]; then
+            note "council_files: council ${name} is not measurable (du exit ${rc}: $(head -n 1 "$errf")) -- absent, never 0 and never a partial total"
+            add_absent council_files "$src" "$name"
+            skipped=$((skipped + 1))
             continue
         fi
         add_measured council_files "$bytes" "$src" "$name"
         n=$((n + 1))
     done
-    if (( n == 0 )); then
+    rm -f "$errf"
+    if (( n == 0 && skipped == 0 )); then
         # The root exists and holds no council directory: the source answered "nothing here".
         add_measured council_files 0 "$src (the root holds no council directory)"
         SUMMARY_FILES="0councils"
-    else
-        SUMMARY_FILES="${n}councils"
+        MEASURED_OF_THREE=$((MEASURED_OF_THREE + 1))
+        return 0
     fi
+    if (( n == 0 )); then
+        # Every council directory unmeasurable: the component was not measured
+        # (each directory is in the record as absent), never "the root is empty".
+        SUMMARY_FILES="absent"
+        return 0
+    fi
+    SUMMARY_FILES="${n}councils"
+    (( skipped == 0 )) || SUMMARY_FILES+="+${skipped}absent"
     MEASURED_OF_THREE=$((MEASURED_OF_THREE + 1))
 }
 
