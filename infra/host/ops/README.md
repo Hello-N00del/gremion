@@ -7,7 +7,7 @@ This directory keeps only what runs on the HOST:
 | File | What it does |
 |---|---|
 | `render-ops.sh` | renders `runtime/ops/targets/*.yml` (probe lists), `runtime/ops/grafana-provisioning/` (datasources, alert rules, policy, and the contact point from `ALERT_EMAIL_TO` / `ALERT_WEBHOOK_URL`) and the credential files under `etc/secrets/ops/`; prints `OPS-RENDER: files=… targets=… email=… webhook=… stalwart-key=… grafana-sso=…` |
-| `metrics-textfile.sh` | the host collector, run by `gremion-metrics.timer` every minute: backup record and timer state, container health, memory and disk, Postgres connections, the broker's `jsz` gauges, filesystem bytes and the TRD-224 storage components, into `runtime/textfile/gremion.prom` |
+| `metrics-textfile.sh` | the host collector, run by `gremion-metrics.timer` every minute: backup record and timer state, container health, memory and disk, Postgres connections, the broker's `jsz` gauges, the events services' dead-letter gauges (`events metrics` in every container labelled `org.gremion.events-metrics=<ctx>`, TASK-079), filesystem bytes and the TRD-224 storage components, into `runtime/textfile/gremion.prom` |
 | `pin-images.sh` | rewrites every `image:` without a digest to `<ref>@sha256:<digest>` (default: `compose/observability/docker-compose.yml`) |
 
 `render-ops.sh` runs as the deploy user: it refuses to render unless `OPS_UID`

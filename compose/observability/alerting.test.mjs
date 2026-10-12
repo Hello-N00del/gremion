@@ -10,7 +10,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { contactPointViolations, grafanaRuleViolations, policyViolations, readText, readYaml, recordingRuleViolations, seconds } from './checks.mjs'
+import { contactPointViolations, grafanaRuleViolations, NO_ABSENT, policyViolations, readText, readYaml, recordingRuleViolations, seconds } from './checks.mjs'
 
 const RULES = readYaml('compose/observability/prometheus/rules.yml')
 const GRAFANA = readYaml('compose/observability/grafana/provisioning/alerting/rules.yaml')
@@ -18,9 +18,27 @@ const POLICY = readYaml('compose/observability/grafana/provisioning/alerting/pol
 const copy = (o) => JSON.parse(JSON.stringify(o))
 const recs = (doc) => doc.groups.flatMap((g) => g.rules)
 
-test('rules.yml: twelve gremion:cond:* conditions, each fail-closed (absent()) but the documented third_party one', () => {
-  assert.equal(recs(RULES).length, 12)
+test('rules.yml: sixteen gremion:cond:* conditions, each fail-closed (absent()) but the documented ones (third_party, the four TASK-079 dead-letter conditions)', () => {
+  assert.equal(recs(RULES).length, 16)
   assert.deepEqual(recordingRuleViolations(RULES), [])
+})
+
+test('TASK-079: the dead-letter conditions read the gauges the library prints and the collector stamps, one component per path', () => {
+  const byName = Object.fromEntries(recs(RULES).map((r) => [r.record, String(r.expr)]))
+  assert.match(byName['gremion:cond:outbox_dead_lettered'], /max by \(ctx\) \(gremion_outbox_dead_lettered\) > bool 0/)
+  assert.match(byName['gremion:cond:inbox_dead_lettered'], /max by \(ctx, consumer\) \(gremion_inbox_dead_lettered\) > bool 0/)
+  assert.match(byName['gremion:cond:inbox_stalled'], /max by \(ctx, consumer\) \(gremion_inbox_stalled\) > bool 0/)
+  assert.match(byName['gremion:cond:dead_letter_queue'], /gremion_nats_stream_messages\{stream="DLQ"\}\) > bool 0/)
+  // Not fail-closed on purpose (a host without an events service has no gauge): the exemption is explicit.
+  for (const n of ['outbox_dead_lettered', 'inbox_dead_lettered', 'inbox_stalled', 'dead_letter_queue']) {
+    assert.ok(NO_ABSENT.has(`gremion:cond:${n}`), n)
+    assert.ok(!/absent\(/.test(byName[`gremion:cond:${n}`]), `${n} must not carry an absent() arm`)
+  }
+  // RED: drop the exemption and the violation names the condition.
+  const r = copy(RULES)
+  const rec = recs(r).find((x) => x.record === 'gremion:cond:inbox_stalled')
+  rec.record = 'gremion:cond:inbox_stalled_renamed'
+  assert.match(recordingRuleViolations(r).join('\n'), /gremion:cond:inbox_stalled_renamed has no absent\(\) arm/)
 })
 
 test('TDD 4 RED: a condition whose absent() arm is dropped, an alerting rule in Prometheus, zero rules each fail', () => {
@@ -38,9 +56,29 @@ test('Grafana: one rule per condition, threshold > 0 on the prometheus datasourc
   assert.deepEqual(grafanaRuleViolations(GRAFANA, RULES), [])
   const titles = recs(GRAFANA).map((r) => r.title).sort()
   assert.deepEqual(titles, [
-    'BackupFailedOrOverdue', 'BrokerConsumerStalled', 'CertExpiresUnder20d', 'ContainerUnhealthy2m', 'DiskAbove70', 'EdgePort80Down',
-    'MailQueueOldest1h', 'MemoryPressure', 'PostgresConnections80pct', 'SignalAbsent', 'StorageComponentAbove70pct', 'ThirdPartyUnreachable',
+    'BackupFailedOrOverdue', 'BrokerConsumerStalled', 'CertExpiresUnder20d', 'ContainerUnhealthy2m', 'DeadLetterQueueNotEmpty', 'DiskAbove70',
+    'EdgePort80Down', 'InboxDeadLettered', 'InboxStalled', 'MailQueueOldest1h', 'MemoryPressure', 'OutboxDeadLettered', 'PostgresConnections80pct',
+    'SignalAbsent', 'StorageComponentAbove70pct', 'ThirdPartyUnreachable',
   ])
+})
+
+test('TASK-079: each dead-letter path has its OWN Grafana rule on its OWN condition, critical, one e-mail per group (the README rule table lists them)', () => {
+  const want = {
+    OutboxDeadLettered: 'gremion:cond:outbox_dead_lettered',
+    InboxDeadLettered: 'gremion:cond:inbox_dead_lettered',
+    InboxStalled: 'gremion:cond:inbox_stalled',
+    DeadLetterQueueNotEmpty: 'gremion:cond:dead_letter_queue',
+  }
+  const readme = readText('compose/observability/README.md')
+  for (const [title, cond] of Object.entries(want)) {
+    const rule = recs(GRAFANA).find((r) => r.title === title)
+    assert.ok(rule, `${title}: no Grafana rule`)
+    assert.equal(rule.data.find((d) => d.refId === 'A').model.expr, cond)
+    assert.equal(rule.labels.severity, 'critical')
+    assert.equal(rule.annotations.component, '{{ $labels.component }}')
+    assert.ok(seconds(rule.for) > 0, `${title}: no pending period`)
+    assert.ok(readme.includes(`| \`${title}\` |`), `${title}: not in the README rule table`)
+  }
 })
 
 test('Grafana RED: a rule on no condition, a condition with no rule, NoData=OK, a threshold other than > 0 each fail', () => {
@@ -68,7 +106,7 @@ test('a Grafana annotation template is written plainly: alerting provisioning is
     .filter((l) => !l.trimStart().startsWith('#'))
     .join('\n')
   assert.ok(!/\$\$/.test(body), 'a $$ outside a comment')
-  assert.equal((body.match(/\{\{ \$labels\.component \}\}/g) ?? []).length, 12)
+  assert.equal((body.match(/\{\{ \$labels\.component \}\}/g) ?? []).length, 16)
 })
 
 test('TDD 6: the policy groups by [alertname, component], waits 30s, re-groups at 5m, never repeats an open condition (8760h)', () => {

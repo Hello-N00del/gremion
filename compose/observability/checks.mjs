@@ -240,7 +240,14 @@ export function grafanaClientViolations(realm) {
 
 export const RECORD_PREFIX = 'gremion:cond:'
 /** Conditions with no absent() arm, each with its reason in rules.yml. */
-export const NO_ABSENT = new Set(['gremion:cond:third_party_unreachable'])
+export const NO_ABSENT = new Set([
+  'gremion:cond:third_party_unreachable',
+  // TASK-079: a host without an events service has no gauge; an absent() arm would fire there for ever.
+  'gremion:cond:outbox_dead_lettered',
+  'gremion:cond:inbox_dead_lettered',
+  'gremion:cond:inbox_stalled',
+  'gremion:cond:dead_letter_queue',
+])
 
 export function recordingRuleViolations(rulesDoc) {
   const out = []
