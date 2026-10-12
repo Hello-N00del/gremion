@@ -8,7 +8,8 @@
 #   backup        gremion_backup_{last_ok,last_ts_seconds,timer_enabled}  (Q8)
 #   containers    gremion_container_{unhealthy,up,memory_bytes,disk_bytes}
 #   postgres      gremion_postgres_connections_{used,max}
-#   jobs          gremion_job_last_run{job_kind,status}  (plt.job_run, TASK-039-FU;
+#   jobs          gremion_job_last_run{job_kind[,customer],status}  (plt.job_run,
+#                 newest run per plt.scheduled_job definition, TASK-039-FU;
 #                 the weekly footprint's own series is written by footprint.sh to
 #                 its own file, runtime/textfile/gremion-footprint.prom)
 #   broker       gremion_nats_jsz_up, gremion_nats_stream_*, gremion_nats_consumer_*
@@ -207,24 +208,33 @@ emit_postgres_connections() {
     printf 'gremion_postgres_connections_max %s\n' "$max"
 }
 
-# gremion_job_last_run (TASK-039-FU): the newest plt.job_run row per job kind,
-# read in gremion_platform through the state Postgres, value = finished_at as
-# Unix seconds, one family. Each row is validated (kind|status|digits); an
-# unreachable database, a missing schema (a host whose platform chain has not
-# reached 0005 yet) or garbage emits nothing -- absent, never 0 -- and a note.
+# gremion_job_last_run (TASK-039-FU): the newest plt.job_run row per job
+# DEFINITION (plt.scheduled_job row), read in gremion_platform through the
+# state Postgres, value = finished_at as Unix seconds, one family. Keyed per
+# definition, not per kind (round-1 M2): backup_nightly and the other
+# customer-scoped kinds have one definition per customer, and a per-kind
+# DISTINCT ON let customer B's later success hide customer A's failure. A
+# customer-scoped definition carries `customer` (the pseudonymous customer
+# uuid); a platform one has no such label. (job_kind, customer) is unique by
+# scheduled_job_job_kind_customer_id_key, so every sample is its own series.
+# Ties on finished_at break on job_run_id (uuidv7: the later insert wins).
+# Each row is validated (kind|uuid or empty|status|digits); an unreachable
+# database, a missing schema (a host whose platform chain has not reached
+# 0005 yet) or garbage emits nothing -- absent, never 0 -- and a note.
 emit_job_last_run() {
-    local cid rows out="" kind status epoch
+    local cid rows out="" kind customer status epoch extra uuid_re='^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
     cid="$(state_container postgres)"
     [[ -n "$cid" ]] || { note "no ${STACK_NAME}-state postgres container -- gremion_job_last_run absent"; return 0; }
     rows="$(docker exec "$cid" psql -U postgres -d gremion_platform -X -tAF'|' -c \
-        "SELECT DISTINCT ON (s.job_kind) s.job_kind, r.status, extract(epoch FROM r.finished_at)::bigint FROM plt.job_run r JOIN plt.scheduled_job s USING (scheduled_job_id) ORDER BY s.job_kind, r.finished_at DESC" \
+        "SELECT DISTINCT ON (r.scheduled_job_id) s.job_kind, coalesce(s.customer_id::text, ''), r.status, extract(epoch FROM r.finished_at)::bigint FROM plt.job_run r JOIN plt.scheduled_job s USING (scheduled_job_id) ORDER BY r.scheduled_job_id, r.finished_at DESC, r.job_run_id DESC" \
         2>/dev/null || true)"
-    while IFS='|' read -r kind status epoch; do
-        [[ -n "$kind$status$epoch" ]] || continue
-        if [[ "$kind" =~ ^[a-z_]{1,40}$ && "$status" =~ ^(succeeded|failed|skipped)$ && "$epoch" =~ ^[1-9][0-9]*$ ]]; then
-            out+="gremion_job_last_run{job_kind=\"${kind}\",status=\"${status}\"} ${epoch}"$'\n'
+    while IFS='|' read -r kind customer status epoch extra; do
+        [[ -n "$kind$customer$status$epoch$extra" ]] || continue
+        if [[ -z "$extra" && "$kind" =~ ^[a-z_]{1,40}$ && ( -z "$customer" || "$customer" =~ $uuid_re ) \
+              && "$status" =~ ^(succeeded|failed|skipped)$ && "$epoch" =~ ^[1-9][0-9]*$ ]]; then
+            out+="gremion_job_last_run{job_kind=\"${kind}\",${customer:+customer=\"${customer}\",}status=\"${status}\"} ${epoch}"$'\n'
         else
-            note "job-run row '${kind}|${status}|${epoch}' is not <kind>|<status>|<epoch> -- skipped"
+            note "job-run row '${kind}|${customer}|${status}|${epoch}' is not <kind>|<customer uuid or empty>|<status>|<epoch> -- skipped"
         fi
     done <<< "$rows"
     [[ -n "$out" ]] || { note "no job run readable -- gremion_job_last_run is absent"; return 0; }

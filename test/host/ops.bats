@@ -548,8 +548,9 @@ case "$*" in
     # TASK-039-FU: the platform database answers the job-run query; dispatch on the SQL text
     [ -f "$GREMION_ROOT/jobrun-down" ] && { echo "psql: error: connection refused" >&2; exit 2; }
     [ -f "$GREMION_ROOT/jobrun-missing" ] && { echo "ERROR:  relation \"plt.job_run\" does not exist"; exit 1; }
-    [ -f "$GREMION_ROOT/jobrun-garbage" ] && { printf "<html>\n||\nfootprint_measurement|exploded|123\nfootprint_measurement|succeeded|notanumber\nfootprint_measurement|succeeded|0\n"; exit 0; }
-    printf "footprint_measurement|succeeded|1791000000\npurge_run|failed|1791000300\n" ;;
+    [ -f "$GREMION_ROOT/jobrun-garbage" ] && { printf "<html>\n|||\nfootprint_measurement||exploded|123\nfootprint_measurement||succeeded|notanumber\nfootprint_measurement||succeeded|0\nbackup_nightly|not-a-uuid|failed|1791000400\nfootprint_measurement|succeeded|1791000000\n"; exit 0; }
+    # one row per DEFINITION (kind|customer|status|epoch): two customers of one kind are two rows
+    printf "footprint_measurement||succeeded|1791000000\npurge_run||failed|1791000300\nbackup_nightly|0192f0c1-0000-7000-8000-00000000000a|failed|1791000400\nbackup_nightly|0192f0c1-0000-7000-8000-00000000000b|succeeded|1791000500\n" ;;
   "exec abc123 psql"*)                     echo "42|100" ;;
   "exec nats99 wget"*)
     [ -f "$GREMION_ROOT/jsz-broken" ] && { echo "<html>"; exit 0; }
@@ -645,6 +646,14 @@ prom() { cat "$GREMION_ROOT/runtime/textfile/gremion.prom"; }
     [ "$status" -eq 0 ]
     grep -q '^gremion_job_last_run{job_kind="footprint_measurement",status="succeeded"} 1791000000$' "$GREMION_ROOT/runtime/textfile/gremion.prom"
     grep -q '^gremion_job_last_run{job_kind="purge_run",status="failed"} 1791000300$' "$GREMION_ROOT/runtime/textfile/gremion.prom"
+    # round-1 M2: one sample per DEFINITION, so customer A's failed backup is not
+    # hidden by customer B's later success (pseudonymous customer id as the label)
+    grep -q '^gremion_job_last_run{job_kind="backup_nightly",customer="0192f0c1-0000-7000-8000-00000000000a",status="failed"} 1791000400$' "$GREMION_ROOT/runtime/textfile/gremion.prom"
+    grep -q '^gremion_job_last_run{job_kind="backup_nightly",customer="0192f0c1-0000-7000-8000-00000000000b",status="succeeded"} 1791000500$' "$GREMION_ROOT/runtime/textfile/gremion.prom"
+    # the query is keyed per definition with a deterministic tie-break, never per kind
+    assert_recorded docker "DISTINCT ON (r.scheduled_job_id)"
+    assert_recorded docker "r.finished_at DESC, r.job_run_id DESC"
+    refute_recorded docker "DISTINCT ON (s.job_kind)"
     # one family, one HELP/TYPE, read in the platform database through the state postgres
     run grep -c '^# TYPE gremion_job_last_run gauge$' "$GREMION_ROOT/runtime/textfile/gremion.prom"
     [ "$output" = "1" ]
