@@ -145,8 +145,9 @@ export function composeKeys(text, section) {
 export function hardCodedNames(footprintSh, metricsSh) {
   const services = new Set()
   const volumes = new Set()
-  for (const m of footprintSh.matchAll(/state_container ([a-z][a-z-]*)/g)) services.add(m[1])
-  for (const m of metricsSh.matchAll(/state_container ([a-z][a-z-]*)/g)) services.add(m[1])
+  // state_container and state_container_strict (ops-lib.sh) both name a compose service
+  for (const m of footprintSh.matchAll(/state_container(?:_strict)? ([a-z][a-z-]*)/g)) services.add(m[1])
+  for (const m of metricsSh.matchAll(/state_container(?:_strict)? ([a-z][a-z-]*)/g)) services.add(m[1])
   for (const m of footprintSh.matchAll(/\$\{STACK_NAME\}-state_([a-z][a-z-]*)/g)) volumes.add(m[1])
   for (const m of metricsSh.matchAll(/endswith\("([a-z][a-z-]*)"\)/g)) volumes.add(m[1])
   return { services, volumes }
@@ -173,8 +174,8 @@ export function driftViolations(composeText, footprintSh, metricsSh) {
 test('TDD 3: the Vector volume and the postgres services the host scripts hard-code exist in docker-compose.yml', () => {
   const compose = readText(COMPOSE)
   const names = hardCodedNames(readText('infra/host/ops/footprint.sh'), readText('infra/host/ops/metrics-textfile.sh'))
-  assert.ok(names.services.has('messaging-postgres') && names.services.has('postgres'), `scripts name services ${[...names.services]}`)
-  assert.ok(names.volumes.has('vector-processed-logs'), `scripts name volumes ${[...names.volumes]}`)
+  assert.ok(names.services.has('messaging-postgres') && names.services.has('postgres'), `scripts name services ${[...names.services].join(', ')}`)
+  assert.ok(names.volumes.has('vector-processed-logs'), `scripts name volumes ${[...names.volumes].join(', ')}`)
   assert.deepEqual(driftViolations(compose, readText('infra/host/ops/footprint.sh'), readText('infra/host/ops/metrics-textfile.sh')), [])
 })
 
