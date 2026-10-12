@@ -19,7 +19,8 @@
 #   ops_key        strips ONE pair of surrounding quotes and a trailing CR
 #   to_bytes       prints NOTHING for a value or unit it cannot read (absent,
 #                  never 0)
-#   state_container first matching container only (head -n 1)
+#   state_container first matching container only (the first line; since
+#                  round 2 a failing docker ps is "none", never fatal)
 
 # ops_key <KEY> -- the environment's value, else ops.env's, else empty.
 ops_key() {
@@ -49,8 +50,20 @@ to_bytes() {
     }'
 }
 
-state_container() {   # <compose service> -- the first running container of it in ${STACK}-state
-    docker ps --filter "label=com.docker.compose.project=${STACK_NAME}-state" \
+# state_container <compose service> -- the first running container of it in
+# ${STACK}-state, or nothing. Never fatal under the callers' set -euo pipefail:
+# a docker ps that fails (daemon not answering) prints its own error and is
+# "no container", which every caller already treats as absent with a note.
+# The output is captured whole and its first line taken, so no `head` can
+# SIGPIPE docker ps when several containers match (pipefail would turn that
+# into 141).
+state_container() {
+    local ids
+    ids="$(docker ps --filter "label=com.docker.compose.project=${STACK_NAME}-state" \
               --filter "label=com.docker.compose.service=$1" \
-              --format '{{.ID}}' | head -n 1
+              --format '{{.ID}}')" || {
+        echo "[ops-lib] docker ps failed looking up the ${STACK_NAME}-state $1 container -- treated as none" >&2
+        return 0
+    }
+    [[ -z "$ids" ]] || printf '%s\n' "${ids%%$'\n'*}"
 }

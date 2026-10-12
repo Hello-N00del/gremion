@@ -535,6 +535,10 @@ set_key() {   # <KEY> <value>
 # STOPPED vector, a broker whose jsz answers, the daemon's volume sizes.
 shim_docker_world() {
     shim docker '
+# ps-fail: the state-container lookup (docker ps --filter ...) fails as with a daemon that does not answer
+if [ -f "$GREMION_ROOT/ps-fail" ] && [ "$1" = ps ] && [ "$2" = --filter ]; then
+  echo "Cannot connect to the Docker daemon" >&2; exit 1
+fi
 case "$*" in
   "ps --all --size"*)
     printf "staging-state-postgres-1\t1.5kB (virtual 300MB)\nstaging-state-vector-1\t0B (virtual 90MB)\n" ;;
@@ -669,6 +673,17 @@ prom() { cat "$GREMION_ROOT/runtime/textfile/gremion.prom"; }
     [ "$output" = "0" ]
     # the rest of the file is still written
     grep -q '^gremion_postgres_connections_used 42$' "$GREMION_ROOT/runtime/textfile/gremion.prom"
+}
+
+@test "metrics-textfile survives a failing state-container lookup: the postgres, job-run and broker signals are absent, the file is still written (TASK-039-FU round 2, ops-lib state_container)" {
+    shim_docker_world
+    shim_timer enabled
+    touch "$GREMION_ROOT/ps-fail"
+    STACK=staging run "$METRICS"
+    [ "$status" -eq 0 ] || { echo "status $status: $output"; return 1; }
+    grep -qE '^gremion_metrics_textfile_timestamp_seconds [0-9]+$' "$GREMION_ROOT/runtime/textfile/gremion.prom"
+    run grep -cE '^gremion_(postgres_connections_used|job_last_run|nats_jsz_up)' "$GREMION_ROOT/runtime/textfile/gremion.prom"
+    [ "$output" = "0" ]
 }
 
 @test "metrics-textfile turns the broker's jsz into stream and consumer gauges, read inside the broker (TDD 9)" {

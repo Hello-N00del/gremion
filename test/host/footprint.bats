@@ -30,6 +30,10 @@ at() { date -u -d "$1" +%s; }
 # psql-exists, psql-noseed, synapse-garbage, no-overhead.
 shim_world() {
     shim docker '
+# ps-fail: the container lookup (docker ps --filter ...) fails as with a daemon that does not answer
+if [ -f "$GREMION_ROOT/ps-fail" ] && [ "$1" = ps ] && [ "$2" = --filter ]; then
+  echo "Cannot connect to the Docker daemon" >&2; exit 1
+fi
 case "$*" in
   *"com.docker.compose.service=messaging-postgres"*) [ -f "$GREMION_ROOT/no-synapse" ] || echo "syn111" ;;
   *"com.docker.compose.service=postgres"*)           [ -f "$GREMION_ROOT/no-pg" ] || echo "pg222" ;;
@@ -287,6 +291,17 @@ PATH="${PATH#*:}" exec du "$@"'
     [[ "$output" == *"job_run=failed"* ]]
     [ -s "$(record 2026-W41)" ]
     [ -s "$(gauge)" ]
+}
+
+@test "footprint: a failing container lookup (docker ps exits 1) is absent, not a dead script: record, gauge and summary are written, exit 1 (round-1 LOW state_container)" {
+    shim_world
+    seed_council "$COUNCIL_A" 1
+    touch "$GREMION_ROOT/ps-fail"
+    run_fp "2026-10-07 09:00:00"
+    [ "$status" -eq 1 ] || { echo "status $status: $output"; return 1; }
+    [[ "$output" == *"FOOTPRINT: week=2026-W41 synapse_db=absent "* && "$output" == *"job_run=failed"* ]] || { echo "$output"; return 1; }
+    jq -e '[.components[] | select(.component == "synapse_db")] | .[0].status == "absent"' "$(record 2026-W41)"
+    grep -q 'component="log_volume"' "$(gauge)"
 }
 
 @test "footprint: all three components absent writes a FAILED row and exits 1" {
