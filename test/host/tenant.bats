@@ -592,3 +592,45 @@ exit 0'
     [ "$status" -eq 0 ]
     [ "$(cat "${GREMION_ROOT}/etc/secrets/tenant-create/module_app_password_calendar")" = "$before" ]
 }
+
+# ── TASK-044 (lane note D4, A5): the release tip reaches tenant-create ────────
+# The level-1 gate compares isolation evidence with GREMION_RELEASE_TIP, the
+# HEAD of the release tree gremion-deploy authenticated (H10). tc() derives it
+# and passes it on EVERY one-shot; it is never typed by the operator.
+
+# release_repo — make the release dir a git checkout with one commit; prints HEAD.
+release_repo() {
+    git -C "$REL" init -q
+    git -C "$REL" -c user.email=t044@example.invalid -c user.name=t044 -c commit.gpgsign=false commit -q --allow-empty -m release
+    git -C "$REL" rev-parse HEAD
+}
+
+@test "TASK-044: tc passes GREMION_RELEASE_TIP = the release tree's HEAD on every one-shot of create" {
+    local tip; tip="$(release_repo)"
+    [[ "$tip" =~ ^[0-9a-f]{40}$ ]] || { echo "no commit: $tip"; return 1; }
+    create
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
+    local runs with
+    runs="$(grep -c ' run .* tenant-create ' "$SHIM_LOG" || true)"
+    with="$(grep ' run .* tenant-create ' "$SHIM_LOG" | grep -cF -- "-e GREMION_RELEASE_TIP=${tip} " || true)"
+    [ "$runs" -ge 4 ] && [ "$runs" -eq "$with" ] || { echo "runs=$runs with-tip=$with"; cat "$SHIM_LOG"; return 1; }
+}
+
+@test "TASK-044: a release dir that is no git checkout passes an EMPTY tip (even inside another repo), and status and suspend still run" {
+    git -C "$GREMION_ROOT" init -q    # a parent repository must never lend its HEAD
+    git -C "$GREMION_ROOT" -c user.email=t044@example.invalid -c user.name=t044 -c commit.gpgsign=false commit -q --allow-empty -m parent
+    run "$LAUNCHER" status alpha-rat
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    assert_recorded docker '-e GREMION_RELEASE_TIP= -e TRAEFIK_CERT_RESOLVER'
+    run "$LAUNCHER" suspend alpha-rat --operator "$OP"
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    ! grep -E -- '-e GREMION_RELEASE_TIP=[0-9a-f]' "$SHIM_LOG" || { echo "a tip was derived from a tree that is no release checkout"; return 1; }
+}
+
+@test "TASK-044: the tip is not an operator input -- a GREMION_RELEASE_TIP in the caller's environment is ignored" {
+    local tip; tip="$(release_repo)"
+    GREMION_RELEASE_TIP="$(printf 'f%.0s' {1..40})" run "$LAUNCHER" status alpha-rat
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    assert_recorded docker "-e GREMION_RELEASE_TIP=${tip} "
+    ! grep -qF -- "GREMION_RELEASE_TIP=ffffffffffffffffffffffffffffffffffffffff" "$SHIM_LOG" || { echo "the caller's tip reached the one-shot"; return 1; }
+}
