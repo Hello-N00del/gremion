@@ -404,7 +404,12 @@ describe('plt.scheduled_job and plt.job_run (0005, TASK-039-FU)', () => {
     const text = readFileSync(join(PLATFORM_MIGRATIONS_DIR, file), 'utf8')
     expect(text.split('\n')[0]).toBe('-- gremion:phase expand')
     expect(text).toMatch(/^SET lock_timeout\b/m)
-    expect(loadManifest(PLATFORM_MIGRATIONS_DIR).get(file)).toBe(createHash('sha256').update(readFileSync(join(PLATFORM_MIGRATIONS_DIR, file))).digest('hex'))
+    const bytes = createHash('sha256').update(readFileSync(join(PLATFORM_MIGRATIONS_DIR, file))).digest('hex')
+    expect(loadManifest(PLATFORM_MIGRATIONS_DIR).get(file)).toBe(bytes)
+    // round 2: the lock half the title promises (a post-freeze edit with a
+    // regenerated manifest used to pass here; register.mjs check alone caught it)
+    const lock = JSON.parse(readFileSync(fileURLToPath(new URL('../../../../scripts/migrations/applied.lock.json', import.meta.url)), 'utf8'))
+    expect(lock.chains.platform.files[file]).toBe(bytes)
   })
 })
 
