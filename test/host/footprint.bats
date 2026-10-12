@@ -240,6 +240,45 @@ gauge() { echo "$GREMION_ROOT/runtime/textfile/gremion-footprint.prom"; }
     jq -e '[.components[] | select(.component == "council_files")] | .[0].status == "absent" and .[0].bytes == null' "$(record 2026-W41)"
 }
 
+# The file-store root as the deploy user sees it when the app container's uid
+# owns it at mode 0700/0711: no r bit, so the directory cannot be LISTED. The
+# bats runner runs as root, for whom chmod 300 lists fine, so the test cannot
+# use chmod: it shims `find`, the listing command, to answer as the kernel
+# answers a non-root user (verifier probe, uid 65534, root at chmod 300).
+shim_root_unlistable() {
+    shim find '
+case "$*" in
+  *"'"$1"'"*-mindepth*|*-mindepth*"'"$1"'"*)
+    echo "find: '"'"'$1'"'"': Permission denied" >&2
+    exit 1 ;;
+esac
+PATH="${PATH#*:}" exec find "$@"'
+}
+
+@test "footprint: a file-store root the deploy user cannot LIST is ABSENT (error), never a measured 0: the run is failed and says why (round-2 H2)" {
+    shim_world
+    seed_council "$COUNCIL_A" 1
+    shim_root_unlistable "$GREMION_ROOT/files"
+    run_fp "2026-10-07 09:00:00"
+    # the script ran to its end, the run is a visible failure
+    [ "$status" -eq 1 ] || { echo "status $status: $output"; return 1; }
+    [[ "$output" == *" council_files=absent "* ]] || { echo "$output"; return 1; }
+    # find's own error is in the log
+    [[ "$output" == *"Permission denied"* ]] || { echo "$output"; return 1; }
+    local r; r="$(record 2026-W41)"
+    # no measured council_files entry at all: not "the root holds nothing"
+    jq -e '[.components[] | select(.component == "council_files" and .status == "measured")] | length == 0' "$r"
+    jq -e '[.components[] | select(.component == "council_files")] | length == 1 and .[0].status == "absent" and .[0].bytes == null and .[0].absent_reason == "error"' "$r"
+    jq -e '.outcome.status == "failed" and .outcome.errored == ["council_files"] and .outcome.incomplete == ["council_files"]' "$r"
+    # no gauge line, no fresh timestamp
+    run grep -c 'component="council_files"' "$(gauge)"
+    [ "$output" = "0" ]
+    run grep -c 'gremion_footprint_timestamp_seconds' "$(gauge)"
+    [ "$output" = "0" ]
+    assert_recorded docker "status=failed"
+    assert_recorded docker "detail=footprint/2026-W41.json#incomplete=council_files"
+}
+
 # du as the deploy user sees a council directory whose files the app container's
 # uid owns: it prints a PARTIAL total for <uuid> and exits 1 (EACCES on a
 # subdirectory); every other directory goes to the real du.

@@ -21,7 +21,9 @@
 #   error        the source is there but did not answer: the size query failed,
 #                du could not read a council directory (a PARTIAL du total is
 #                not a measurement: it would undercount), docker system df
-#                failed, the configured root is not a directory
+#                failed, the configured root is not a directory or cannot be
+#                LISTED by the deploy user (no r bit: an unexpanded glob would
+#                read as an empty store, a false measured 0)
 #
 # The run's outcome (in the record as .outcome, and in the plt.job_run row):
 #   failed     none of the three TRD-223 components was measured, OR one of
@@ -55,7 +57,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=../lib/common.sh
 . "$SCRIPT_DIR/../lib/common.sh"
 
-need_cmd docker jq date mktemp awk du sed grep head
+need_cmd docker jq date mktemp awk du sed grep head find sort
 
 ROOT="$(gremion_root)"
 RUNTIME="$ROOT/runtime"
@@ -189,7 +191,7 @@ measure_log_volume() {
 }
 
 measure_council_files() {
-    local dir name bytes rc n=0 skipped=0 src="du -sb of each <tenant uuid> directory of the file-store root"
+    local dir name bytes listing rc n=0 skipped=0 src="du -sb of each <tenant uuid> directory of the file-store root"
     if [[ -z "$FILESTORE_ROOT" ]]; then
         note "GREMION_FOOTPRINT_FILESTORE_ROOT is not set -- council_files is absent (not present), never 0"
         add_absent council_files "$src" not_present
@@ -202,9 +204,21 @@ measure_council_files() {
         errored council_files
         return 0
     fi
-    for dir in "$FILESTORE_ROOT"/*/; do
-        [[ -d "$dir" ]] || continue
-        dir="${dir%/}"
+    # PROVE the root can be listed before trusting a listing. A glob over a
+    # directory the deploy user has no r bit on (the app container's uid owns it
+    # at 0700/0711) does not expand, matches nothing, and would read as "the
+    # root holds no council directory" -- a measured 0 for a store that is not
+    # empty (round-2 H2). `find` exits non-zero and says why.
+    rc=0
+    listing="$(find "$FILESTORE_ROOT" -mindepth 1 -maxdepth 1 -type d 2>"$ERRF")" || rc=$?
+    if (( rc != 0 )); then
+        note "council_files: the file-store root cannot be listed (find exit ${rc}: $(first_err)) -- absent (error), never 0; the deploy user needs read access to the root and its tree"
+        add_absent council_files "$src" error
+        errored council_files
+        return 0
+    fi
+    while IFS= read -r dir; do
+        [[ -n "$dir" && -d "$dir" ]] || continue
         name="${dir##*/}"
         # A canonical lowercase uuid is a council's pseudonymous id; anything else is not a tenant prefix.
         [[ "$name" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] || continue
@@ -227,7 +241,7 @@ measure_council_files() {
         fi
         add_measured council_files "$bytes" "$src" "$name"
         n=$((n + 1))
-    done
+    done <<< "$(sort <<< "$listing")"
     (( skipped == 0 )) || errored council_files
     if (( n == 0 && skipped == 0 )); then
         # The root exists and holds no council directory: the source answered "nothing here".
