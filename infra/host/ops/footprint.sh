@@ -376,7 +376,7 @@ SELECT 'seed=' || count(*) || ' enabled=' || coalesce(bool_and(enabled)::text, '
 SELECT 'week=' || coalesce(string_agg(r.status, ',' ORDER BY r.scheduled_for, r.job_run_id), '')
   FROM plt.job_run r JOIN plt.scheduled_job s USING (scheduled_job_id)
  WHERE s.job_kind = 'footprint_measurement' AND s.scope = 'platform'
-   AND r.scheduled_for >= :'wk'::timestamptz AND r.scheduled_for < :'wk'::timestamptz + interval '7 days';
+   AND r.scheduled_for >= :'wk'::timestamptz AND r.scheduled_for < :'wk'::timestamptz + interval '168 hours';
 INSERT INTO plt.job_run (scheduled_job_id, scope, scheduled_for, started_at, finished_at, status, detail_ref)
 SELECT s.scheduled_job_id, 'platform',
        CASE WHEN EXISTS (SELECT 1 FROM plt.job_run r
@@ -390,7 +390,7 @@ SELECT s.scheduled_job_id, 'platform',
    AND NOT EXISTS (SELECT 1 FROM plt.job_run r
                     WHERE r.scheduled_job_id = s.scheduled_job_id
                       AND r.scheduled_for >= :'wk'::timestamptz
-                      AND r.scheduled_for < :'wk'::timestamptz + interval '7 days'
+                      AND r.scheduled_for < :'wk'::timestamptz + interval '168 hours'
                       AND (r.status = 'succeeded' OR NOT s.enabled OR :'status' <> 'succeeded'))
 ON CONFLICT (scheduled_job_id, scheduled_for) DO NOTHING
 RETURNING CASE WHEN scheduled_for = :'sf'::timestamptz THEN 'inserted' ELSE 'retried' END || ' status=' || status;
@@ -433,7 +433,11 @@ else
     elif [[ "$out" == *"seed=1"* ]]; then
         JOB_RUN="exists"
         note "this week is already recorded ('${week_rows}'); nothing written"
-        if [[ "$STATUS" == succeeded && ",${week_rows}," != *",succeeded,"* ]]; then
+        if [[ "$out" == *"enabled=false"* ]]; then
+            # A disabled definition: the week already holds its skipped row and a
+            # rerun can never record a success. Not a fault of this run.
+            note "the footprint_measurement definition is disabled in plt.scheduled_job -- the week keeps its skipped row; the record and the gauge are still written"
+        elif [[ "$STATUS" == succeeded && ",${week_rows}," != *",succeeded,"* ]]; then
             # Only a retry-key collision gets here (a rerun at the very second of another).
             note "the week holds no succeeded row and this run's success was NOT written -- rerun it"
             EXIT=1

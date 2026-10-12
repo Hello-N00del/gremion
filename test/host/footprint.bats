@@ -56,6 +56,7 @@ case "$*" in
     [ -f "$GREMION_ROOT/psql-norelation" ] && { echo "ERROR:  relation \"plt.scheduled_job\" does not exist" >&2; exit 3; }
     [ -f "$GREMION_ROOT/psql-noseed" ] && { printf "seed=0 enabled=none\nweek=\n"; exit 0; }
     [ -f "$GREMION_ROOT/psql-exists" ] && { printf "seed=1 enabled=true\nweek=succeeded\n"; exit 0; }
+    [ -f "$GREMION_ROOT/psql-disabled-rerun" ] && { printf "seed=1 enabled=false\nweek=skipped\n"; exit 0; }
     [ -f "$GREMION_ROOT/psql-disabled" ] && { printf "seed=1 enabled=false\nweek=\ninserted status=skipped\n"; exit 0; }
     if [ -f "$GREMION_ROOT/psql-week-failed" ]; then
       printf "seed=1 enabled=true\nweek=failed\n"
@@ -353,6 +354,11 @@ PATH="${PATH#*:}" exec du "$@"'
     grep -qF "job_kind = 'footprint_measurement'" "$sql"
     # round 2 (M1): the week window and the retry key are binds too
     grep -qF ":'wk'" "$sql"
+    # the window is a fixed 168 hours: a days interval follows the session
+    # TimeZone and is 167 or 169 hours across a DST change (round-2 sql LOW)
+    grep -qF "interval '168 hours'" "$sql"
+    run grep -F "interval '7 days'" "$sql"
+    [ "$status" -ne 0 ]
     grep -qF ":'retry'" "$sql"
     # no value interpolated into the SQL text: no date, no pointer ...
     run grep -E '2026-|footprint/|W41' "$sql"
@@ -444,6 +450,16 @@ PATH="${PATH#*:}" exec du "$@"'
     [[ "$output" == *"job_run=skipped"* ]] || { echo "$output"; return 1; }
     [[ "$output" == *"disabled"* ]]
     grep -qF 'CASE WHEN s.enabled THEN' "$GREMION_ROOT/psql-stdin"
+}
+
+@test "footprint: a RERUN in a week the disabled definition already skipped is not a failure: exit 0, job_run=exists, and the note says disabled, not 'rerun it' (round-2 verifier LOW)" {
+    shim_world
+    touch "$GREMION_ROOT/psql-disabled-rerun"
+    run_fp "2026-10-07 09:00:00"
+    [ "$status" -eq 0 ] || { echo "status $status: $output"; return 1; }
+    [[ "$output" == *"job_run=exists"* ]] || { echo "$output"; return 1; }
+    [[ "$output" == *"disabled"* ]] || { echo "$output"; return 1; }
+    [[ "$output" != *"rerun it"* ]] || { echo "$output"; return 1; }
 }
 
 @test "footprint: a platform database below 0005 is named, with psql's own error (round-1 MEDIUM stderr)" {
