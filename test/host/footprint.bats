@@ -264,6 +264,26 @@ gauge() { echo "$GREMION_ROOT/runtime/textfile/gremion-footprint.prom"; }
     grep -qF "gremion_footprint_component_bytes{component=\"council_files\",council=\"$COUNCIL_A\"} " "$(gauge)"
 }
 
+# A uuid-named SYMLINK inside the root is not a council directory (the local
+# storage backend creates real ones): `find -type d` skips it, and a skip with
+# no trace was a council missing from the week unseen (round-3 LOW). It is
+# recorded absent (error) with its id, like a directory du cannot read.
+@test "footprint: a council directory that is a symlink is ABSENT (error) with its id, never silently left out (round-3 LOW)" {
+    shim_world
+    seed_council "$COUNCIL_A" 1
+    mkdir -p "$GREMION_ROOT/elsewhere"
+    ln -s "$GREMION_ROOT/elsewhere" "$GREMION_ROOT/files/$COUNCIL_B"
+    run_fp "2026-10-07 09:00:00"
+    [ "$status" -eq 1 ] || { echo "status $status: $output"; return 1; }
+    [[ "$output" == *"$COUNCIL_B"*"symlink"* ]] || { echo "$output"; return 1; }
+    local r; r="$(record 2026-W41)"
+    jq -e --arg a "$COUNCIL_A" '[.components[] | select(.component == "council_files" and .status == "measured")] | length == 1 and .[0].council == $a' "$r"
+    jq -e --arg b "$COUNCIL_B" '[.components[] | select(.component == "council_files" and .status == "absent")] | length == 1 and .[0].council == $b and .[0].bytes == null and .[0].absent_reason == "error"' "$r"
+    jq -e '.outcome.status == "failed" and .outcome.errored == ["council_files"]' "$r"
+    run grep -c "council=\"$COUNCIL_B\"" "$(gauge)"
+    [ "$output" = "0" ]
+}
+
 # The file-store root as the deploy user sees it when the app container's uid
 # owns it at mode 0700/0711: no r bit, so the directory cannot be LISTED. The
 # bats runner runs as root, for whom chmod 300 lists fine, so the test cannot

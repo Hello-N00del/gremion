@@ -255,6 +255,18 @@ measure_council_files() {
         add_measured council_files "$bytes" "$src" "$name"
         n=$((n + 1))
     done <<< "$(sort <<< "$listing")"
+    # A uuid-named SYMLINK is not a council directory (the local storage backend
+    # creates real ones) and `-type d` skips it. A silent skip left a council
+    # out of the week with no trace; du on the link would size only the link.
+    # It is absent (error) with its id, like a directory du cannot read.
+    while IFS= read -r dir; do
+        [[ -n "$dir" ]] || continue
+        name="${dir##*/}"
+        [[ "$name" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] || continue
+        note "council_files: ${name} is a symlink, not a council directory -- absent (error), never 0 and never the size of the link"
+        add_absent council_files "$src" error "$name"
+        skipped=$((skipped + 1))
+    done <<< "$(find -H "$FILESTORE_ROOT" -mindepth 1 -maxdepth 1 -type l 2>/dev/null | sort || true)"
     (( skipped == 0 )) || errored council_files
     if (( n == 0 && skipped == 0 )); then
         # The root exists and holds no council directory: the source answered "nothing here".

@@ -232,7 +232,10 @@ files belong to the app container's uid, the unit runs as the deploy user) is
 absent with its `council` id: a partial `du` total would undercount, so it is
 never recorded as a number. A root the deploy user cannot list (no `r` bit) is
 absent as `error` too, never an empty store: the root is listed with `find`
-and its exit status checked before any directory is trusted.
+and its exit status checked before any directory is trusted. The root itself may
+be a symlink to the mount (it is followed); a council directory inside it must be
+a real directory: a uuid-named symlink there is recorded absent as `error` with
+its id, never skipped without a trace.
 
 Hand-off to the app-compose owner (TASK-117 seam / TASK-040 line): when the
 storage root is mounted and `GREMION_FOOTPRINT_FILESTORE_ROOT` is set, the root
