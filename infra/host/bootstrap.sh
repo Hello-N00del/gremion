@@ -80,7 +80,8 @@ Stages:
   networks     shared external networks and volumes        (needs state.env)
   firewall     table inet gremion                          (needs state.env)
   agent        gremion-hostd unit + restricted deploy key
-  timers       gremion-backup.timer + gremion-verify.service
+  timers       gremion-backup.timer + gremion-verify.service + gremion-metrics.timer
+               + gremion-footprint.timer (weekly, TRD-223)
   harden-ssh   key-only SSH   (RUN LAST, gated, not part of 'all')
   trust        pinned cosign + the release public key       (not part of 'all')
   signers      the release-tag signers file (allowed_signers) (not part of 'all')
@@ -950,6 +951,21 @@ stage_timers() {
     systemctl start gremion-metrics.service
     assert "the textfile collector produced runtime/textfile/gremion.prom"         test -s "${root}/runtime/textfile/gremion.prom"
     assert "the collector stamped its own timestamp"         grep -q '^gremion_metrics_textfile_timestamp_seconds ' "${root}/runtime/textfile/gremion.prom"
+
+    # TASK-039-FU (TRD-223): the weekly footprint record. Same two-argument
+    # render_unit. The service is NOT started here: its job_run row needs the
+    # platform chain at 0005, which the control plane applies, so a first run
+    # belongs after that migration (TASK-038 re-init: systemctl start
+    # gremion-footprint.service, then read runtime/footprint/<week>.json).
+    render_unit gremion-footprint.service /etc/systemd/system/gremion-footprint.service
+    render_unit gremion-footprint.timer /etc/systemd/system/gremion-footprint.timer
+    systemctl daemon-reload
+    systemctl enable --now gremion-footprint.timer
+    local fp_next
+    fp_next="$(systemctl show gremion-footprint.timer -p NextElapseUSecRealtime --value)"
+    [[ -n "$fp_next" && "$fp_next" != "n/a" ]] \
+        || die "gremion-footprint.timer is enabled but has no next elapse"
+    ok "gremion-footprint.timer next elapse: ${fp_next}"
 }
 
 # ──────────────────────────────────────────────────────────────────────────

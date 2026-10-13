@@ -7,7 +7,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterAll, describe, expect, it } from 'vitest'
 import type { Sql } from '@gremion/db'
-import { readVerifiedMigrations } from '../manifest.js'
+import { loadManifest, readVerifiedMigrations } from '../manifest.js'
 import { tenantModuleDbName } from '../names.js'
 import { pinBaseline, pinnedPhaseFor, resolvePhase } from '../phase.js'
 import { PINNED_BASELINE } from '../phase-baseline.js'
@@ -151,14 +151,26 @@ describe('refusals run no SQL at all', () => {
 describe('the platform migration folder (gremion_platform, schema plt)', () => {
   const files = readVerifiedMigrations(PLATFORM_MIGRATIONS_DIR)
 
-  it('is verified against its sha256 manifest: 0001 setup, 0002 module tables, 0003 module_database, 0004 provisioning ledger (TASK-043)', () => {
-    expect(files.map((f) => f.file)).toEqual(['0001_plt_setup.sql', '0002_plt_module.sql', '0003_plt_module_database.sql', '0004_plt_provisioning_step.sql'])
+  // R31 O6: the set is derived from the directory listing and the manifest keys
+  // (never a verbatim list), so a unit that adds a platform file only adds a
+  // toContain line below and the three views cannot drift apart unseen.
+  const onDisk = readdirSync(PLATFORM_MIGRATIONS_DIR).filter((f) => f.endsWith('.sql')).sort()
+
+  it('is verified against its sha256 manifest: the files, the directory listing and the manifest keys are one set; the five known files are in it (TASK-043, TASK-039-FU)', () => {
+    expect(files.map((f) => f.file)).toEqual(onDisk)
+    expect(onDisk).toEqual([...loadManifest(PLATFORM_MIGRATIONS_DIR).keys()].sort())
+    expect(onDisk).toEqual(expect.arrayContaining(['0001_plt_setup.sql', '0002_plt_module.sql', '0003_plt_module_database.sql', '0004_plt_provisioning_step.sql']))
+    // TASK-039-FU: the scheduled-job and job-run tables (platform 0005)
+    expect(onDisk).toContain('0005_plt_scheduled_job.sql')
     for (const f of files) expect(() => splitStatements(f.text)).not.toThrow()
   })
 
   it('TASK-075 G1b: migratePlatform\'s default phase lookup (the baseline this package ships) knows every locked platform file', () => {
     const phaseFor = pinnedPhaseFor(PLATFORM_CHAIN, PINNED_BASELINE)
-    expect(files.map((f) => resolvePhase(f.file, f.text, phaseFor).phase)).toEqual(['contract', 'expand', 'expand', 'expand'])
+    // 0001 is the one pinned contract file; every other file is expand, or declares its own phase
+    const phases = files.map((f) => resolvePhase(f.file, f.text, phaseFor).phase)
+    expect(phases).toEqual(files.map((f) => (f.file === '0001_plt_setup.sql' ? 'contract' : 'expand')))
+    expect(resolvePhase('0005_plt_scheduled_job.sql', files.find((f) => f.file === '0005_plt_scheduled_job.sql')!.text, phaseFor).phase).toBe('expand')
   })
 
   // TASK-075 r2: enableModule's default (no deps.phaseFor, as tenant-create
