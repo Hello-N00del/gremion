@@ -217,8 +217,13 @@ measure_council_files() {
     # at 0700/0711) does not expand, matches nothing, and would read as "the
     # root holds no council directory" -- a measured 0 for a store that is not
     # empty (round-2 H2). `find` exits non-zero and says why.
+    # -H: the ROOT itself may be a symlink to the mount (a stable link an
+    # operator points the key at, like the deploy tree's `current`). Under the
+    # default -P find does not follow a starting point that is a link, lists
+    # nothing with rc 0, and a store holding councils read as a measured 0
+    # (round-3 HIGH). -H follows the command-line root only, not links inside it.
     rc=0
-    listing="$(find "$FILESTORE_ROOT" -mindepth 1 -maxdepth 1 -type d 2>"$ERRF")" || rc=$?
+    listing="$(find -H "$FILESTORE_ROOT" -mindepth 1 -maxdepth 1 -type d 2>"$ERRF")" || rc=$?
     if (( rc != 0 )); then
         note "council_files: the file-store root cannot be listed (find exit ${rc}: $(first_err)) -- absent (error), never 0; the deploy user needs read access to the root and its tree"
         add_absent council_files "$src" error

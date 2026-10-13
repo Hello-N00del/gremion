@@ -247,6 +247,23 @@ gauge() { echo "$GREMION_ROOT/runtime/textfile/gremion-footprint.prom"; }
     jq -e '[.components[] | select(.component == "council_files")] | .[0].status == "absent" and .[0].bytes == null' "$(record 2026-W41)"
 }
 
+# The root may be a SYMLINK to the mount (the deploy tree already uses a
+# `current` symlink; an operator may point the key at a stable link). `find`
+# does not follow a starting point that is a symlink unless told to (-H), so
+# the listing came back empty with rc 0 and a store holding a council read as
+# a measured 0 (round-3 verifier HIGH). Needs no shim: it fails as root too.
+@test "footprint: a file-store root that is a SYMLINK to the store is measured through the link, never read as an empty store (round-3 HIGH)" {
+    shim_world
+    seed_council "$COUNCIL_A" 2
+    ln -s "$GREMION_ROOT/files" "$GREMION_ROOT/files-link"
+    FILES_ROOT="$GREMION_ROOT/files-link" run_fp "2026-10-07 09:00:00"
+    [ "$status" -eq 0 ] || { echo "status $status: $output"; return 1; }
+    [[ "$output" == *" council_files=1councils "* ]] || { echo "$output"; return 1; }
+    local r; r="$(record 2026-W41)"
+    jq -e --arg c "$COUNCIL_A" '[.components[] | select(.component == "council_files")] | length == 1 and .[0].status == "measured" and .[0].council == $c and .[0].bytes >= 2097152 and .[0].bytes < 3145728' "$r"
+    grep -qF "gremion_footprint_component_bytes{component=\"council_files\",council=\"$COUNCIL_A\"} " "$(gauge)"
+}
+
 # The file-store root as the deploy user sees it when the app container's uid
 # owns it at mode 0700/0711: no r bit, so the directory cannot be LISTED. The
 # bats runner runs as root, for whom chmod 300 lists fine, so the test cannot
