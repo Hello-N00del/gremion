@@ -20,6 +20,7 @@ describe('@gremion/ports/broker exports the port error classes', () => {
     ['StreamGoneError', () => new broker.StreamGoneError('S', 'p.>')],
     ['ConsumerGoneError', () => new broker.ConsumerGoneError('S', 'p.>', 'consumer deleted')],
     ['ConsumerStalledError', () => new broker.ConsumerStalledError('S', 'p.>', 3)],
+    ['HeartbeatsMissedError', () => new broker.HeartbeatsMissedError('S', 'p.>', 3)],
     ['SetupTimeoutError', () => new broker.SetupTimeoutError('S', 'p.>', 'the cover check', 100)],
   ]
 
