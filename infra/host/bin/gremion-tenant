@@ -131,10 +131,29 @@ need_value() {
 # The optional TC_MOUNT carries extra `run` arguments: create's read-only
 # --config mount, or init's bootstrap-provisioner scratch mount and name-only -e's.
 TC_MOUNT=()
+
+# release_tip — TASK-044 (lane note D4, A6): the full commit id of the release
+# tree gremion-deploy authenticated (H10: HEAD == the verified tag's commit).
+# The level-1 enable gate compares isolation evidence with it. It is DERIVED
+# here and never read from the caller's environment or a request payload; a
+# tree that is no git checkout of its own (a parent repository must not lend
+# its HEAD) or a value that is not 40/64 lowercase hex gives the empty string,
+# which the gate turns into NO_RELEASE_TIP at enable time only.
+release_tip() {
+    local sha=""
+    if [[ -e "${RELEASE_DIR}/.git" ]] && command -v git >/dev/null 2>&1; then
+        sha="$(git -C "$RELEASE_DIR" rev-parse --verify 'HEAD^{commit}' 2>/dev/null || true)"
+    fi
+    [[ "$sha" =~ ^[0-9a-f]{40}([0-9a-f]{24})?$ ]] || sha=""
+    printf '%s' "$sha"
+}
+
 tc() {
     local envfile="${ROOT}/etc/env/app-${COLOUR}.env"
     [[ -f "$envfile" ]] || die "env file absent: ${envfile}" "$GREMION_EXIT_USAGE"
+    local tip; tip="$(release_tip)"
     ( cd "$RELEASE_DIR" && docker compose --env-file "$envfile" run --rm -T \
+        -e "GREMION_RELEASE_TIP=${tip}" \
         -e TRAEFIK_CERT_RESOLVER -e EDGE_BIND_IP -e EDGE_BIND_IP6 -e TENANT_DNS_PREFLIGHT \
         "${TC_MOUNT[@]}" tenant-create "$@" )
 }
