@@ -48,7 +48,7 @@
 
 import type http from 'node:http'
 import { z } from 'zod'
-import type { Sql, TenantRef } from '../tenant-store.js'
+import { TenantIdentityMismatchError, type Sql, type TenantRef } from '../tenant-store.js'
 import type { Route, RouteContext } from './router.js'
 import { readOrMintCorrelationId } from '@gremion/ports/tracer'
 import {
@@ -433,6 +433,11 @@ export function buildApiRoutes(storeFn: StoreFn, publishDeps?: PublishDeps): Rou
           (err instanceof Error && err.message === 'invalid JSON body')
         ) {
           sendError(extended.res, 400, 'invalid JSON body')
+        } else if (err instanceof TenantIdentityMismatchError) {
+          // The (id, slug) pair is not the one the catalog binds (audit #534): a
+          // stale or forged pair, never a server fault. The body names neither tenant.
+          console.warn(`[content:api] ${err.message}`)
+          sendError(extended.res, 409, 'tenant_identity_mismatch')
         } else {
           console.error('[content:api] unhandled route error', err)
           if (!extended.res.headersSent) {
