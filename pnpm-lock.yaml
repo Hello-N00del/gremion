@@ -6,17 +6,18 @@ settings:
 
 overrides:
   cookie@<0.7.0: '>=0.7.2 <1'
-  dompurify: 3.4.13
+  dompurify: '>=3.4.16 <4'
   undici: 7.29.0
   esbuild@>=0.27.3 <0.28.1: '>=0.28.1 <0.29'
   '@sveltejs/kit': '>=2.70.2 <3'
   nanoid@<3.3.18: '>=3.3.18 <4'
   postcss@<8.5.23: '>=8.5.23 <9'
-  nodemailer: '>=9.1.1 <10'
+  nodemailer: '>=10.0.9 <11'
   vitest: '>=4.1.11 <5'
   '@vitest/mocker': '>=4.1.11 <5'
   uuid@<11.1.1: '>=11.1.1 <12'
   devalue: '>=5.9.2 <6'
+  source-map-js@<1.2.2: '>=1.2.2 <2'
 
 importers:
 
@@ -37,10 +38,10 @@ importers:
     dependencies:
       '@auth/core':
         specifier: ^0.41.3
-        version: 0.41.3(nodemailer@9.1.1)
+        version: 0.41.3(nodemailer@10.1.1)
       '@auth/sveltekit':
         specifier: ^1.11.3
-        version: 1.11.3(@sveltejs/kit@2.70.3(@sveltejs/vite-plugin-svelte@7.3.0(svelte@5.56.8)(vite@8.3.0(@types/node@26.6.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.13)(yaml@2.9.0)))(svelte@5.56.8)(typescript@5.9.3)(vite@8.3.0(@types/node@26.6.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.13)(yaml@2.9.0)))(nodemailer@9.1.1)(svelte@5.56.8)
+        version: 1.11.3(@sveltejs/kit@2.70.3(@sveltejs/vite-plugin-svelte@7.3.0(svelte@5.56.8)(vite@8.3.0(@types/node@26.6.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.13)(yaml@2.9.0)))(svelte@5.56.8)(typescript@5.9.3)(vite@8.3.0(@types/node@26.6.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.13)(yaml@2.9.0)))(nodemailer@10.1.1)(svelte@5.56.8)
       bits-ui:
         specifier: 2.19.3
         version: 2.19.3(@internationalized/date@3.12.4)(@sveltejs/kit@2.70.3(@sveltejs/vite-plugin-svelte@7.3.0(svelte@5.56.8)(vite@8.3.0(@types/node@26.6.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.13)(yaml@2.9.0)))(svelte@5.56.8)(typescript@5.9.3)(vite@8.3.0(@types/node@26.6.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.13)(yaml@2.9.0)))(svelte@5.56.8)
@@ -144,10 +145,10 @@ importers:
     dependencies:
       '@auth/core':
         specifier: ^0.41.3
-        version: 0.41.3(nodemailer@9.1.1)
+        version: 0.41.3(nodemailer@10.1.1)
       '@auth/sveltekit':
         specifier: ^1.11.3
-        version: 1.11.3(@sveltejs/kit@2.70.3(@sveltejs/vite-plugin-svelte@7.3.0(svelte@5.56.8)(vite@8.3.0(@types/node@26.6.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.13)(yaml@2.9.0)))(svelte@5.56.8)(typescript@5.9.3)(vite@8.3.0(@types/node@26.6.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.13)(yaml@2.9.0)))(nodemailer@9.1.1)(svelte@5.56.8)
+        version: 1.11.3(@sveltejs/kit@2.70.3(@sveltejs/vite-plugin-svelte@7.3.0(svelte@5.56.8)(vite@8.3.0(@types/node@26.6.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.13)(yaml@2.9.0)))(svelte@5.56.8)(typescript@5.9.3)(vite@8.3.0(@types/node@26.6.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.13)(yaml@2.9.0)))(nodemailer@10.1.1)(svelte@5.56.8)
       '@fontsource/archivo-narrow':
         specifier: ^5.3.0
         version: 5.3.0
@@ -200,8 +201,8 @@ importers:
         specifier: ^4.6.0
         version: 4.6.0
       nodemailer:
-        specifier: '>=9.1.1 <10'
-        version: 9.1.1
+        specifier: '>=10.0.9 <11'
+        version: 10.1.1
       postgres:
         specifier: ^3.4.9
         version: 3.4.9
@@ -843,7 +844,7 @@ packages:
     peerDependencies:
       '@simplewebauthn/browser': ^9.0.1
       '@simplewebauthn/server': ^9.0.2
-      nodemailer: '>=9.1.1 <10'
+      nodemailer: '>=10.0.9 <11'
     peerDependenciesMeta:
       '@simplewebauthn/browser':
         optional: true
@@ -858,7 +859,7 @@ packages:
       '@simplewebauthn/browser': ^9.0.1
       '@simplewebauthn/server': ^9.0.3
       '@sveltejs/kit': '>=2.70.2 <3'
-      nodemailer: '>=9.1.1 <10'
+      nodemailer: '>=10.0.9 <11'
       svelte: ^3.54.0 || ^4.0.0 || ^5.0.0-0
     peerDependenciesMeta:
       '@simplewebauthn/browser':
@@ -2551,8 +2552,8 @@ packages:
   dom-accessibility-api@0.6.3:
     resolution: {integrity: sha512-7ZgogeTnjuHbo+ct10G9Ffp0mif17idi0IyWNVA/wcwcm7NPOD/WEHVP3n7n3MhXqxoIYm8d6MuZohYWIZ4T3w==}
 
-  dompurify@3.4.13:
-    resolution: {integrity: sha512-2vmYIoqjze2d+kakP8S/nS5shfsl587kzwEjcGlTdiksUVgFHnFCsLYDVj/JNqJVOQZGSYBTmuycv0PodwmnMQ==}
+  dompurify@3.4.17:
+    resolution: {integrity: sha512-B/pSlYVHQ58kqISD/yDjuJ1yfzI34m1gF4lAod2bwSRhiN4K5Cl3H8Af7hqB2PmTL911tdEudnnXn5FnhRoz0w==}
 
   duplexer2@0.1.4:
     resolution: {integrity: sha512-asLFVfWWtJ90ZyOUHMqk7/S2w2guQKxUI2itj3d92ADHhxUSbCMGi1f1cBcJ7xM1To+pE/Khbwo1yuNbMEPKeA==}
@@ -3213,9 +3214,9 @@ packages:
     resolution: {integrity: sha512-dRB78srN/l6gqWulah9SrxeYnxeddIG30+GOqK/9OlLVyLg3HPnr6SqOWTWOXKRwC2eGYCkZ59NNuSgvSrpgOA==}
     engines: {node: ^12.20.0 || ^14.13.1 || >=16.0.0}
 
-  nodemailer@9.1.1:
-    resolution: {integrity: sha512-izw9mVKFix6YSnC9eLgV6g1opl9DUlRio9ZNcq+Wu9Ujn2UwF+8Nl0B8nz22kEC+CTZCvinkxwJ0DeFbb6NwcQ==}
-    engines: {node: '>=6.0.0'}
+  nodemailer@10.1.1:
+    resolution: {integrity: sha512-pbqZRoeYUO+1E8TJ/11WeY4D2EVujj1hsYjz3qff/vUFDtGnmi7p3iqzTFslYOfQ6PnjVcWxx/CIUSHCSrO/QA==}
+    engines: {node: '>=20.0.0'}
 
   normalize-path@3.0.0:
     resolution: {integrity: sha512-6eZs5Ls3WtCisHWp9S2GUy8dqkpGi4BVSz3GaqiE6ezub0512ESztXUwUB6C6IKbQkY2Pnb/mD4WYojCRwcwLA==}
@@ -3535,8 +3536,8 @@ packages:
   sonic-boom@4.2.1:
     resolution: {integrity: sha512-w6AxtubXa2wTXAUsZMMWERrsIRAdrK0Sc+FUytWvYAhBJLyuI4llrMIC1DtlNSdI99EI86KZum2MMq3EAZlF9Q==}
 
-  source-map-js@1.2.1:
-    resolution: {integrity: sha512-UXWMKhLOwVKb728IUtQPXxfYU+usdybtUrK/8uGE8CQMvrhOpwvzDBwj0QhSL7MQc7vIsISBG8VQ8+IDQxpfQA==}
+  source-map-js@1.2.2:
+    resolution: {integrity: sha512-KGj/8Y43x35aZVDtt+J4mK1hoLGHULMYfSkODJNQjNDC3oW1PqPoxMwo0pLUsWM/UEGzON/NxeHywEfNXNP3Vw==}
     engines: {node: '>=0.10.0'}
 
   split2@4.2.0:
@@ -3972,7 +3973,7 @@ snapshots:
 
   '@asamuzakjp/nwsapi@2.3.9': {}
 
-  '@auth/core@0.41.3(nodemailer@9.1.1)':
+  '@auth/core@0.41.3(nodemailer@10.1.1)':
     dependencies:
       '@panva/hkdf': 1.2.1
       jose: 6.2.12
@@ -3980,16 +3981,16 @@ snapshots:
       preact: 10.24.3
       preact-render-to-string: 6.5.11(preact@10.24.3)
     optionalDependencies:
-      nodemailer: 9.1.1
+      nodemailer: 10.1.1
 
-  '@auth/sveltekit@1.11.3(@sveltejs/kit@2.70.3(@sveltejs/vite-plugin-svelte@7.3.0(svelte@5.56.8)(vite@8.3.0(@types/node@26.6.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.13)(yaml@2.9.0)))(svelte@5.56.8)(typescript@5.9.3)(vite@8.3.0(@types/node@26.6.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.13)(yaml@2.9.0)))(nodemailer@9.1.1)(svelte@5.56.8)':
+  '@auth/sveltekit@1.11.3(@sveltejs/kit@2.70.3(@sveltejs/vite-plugin-svelte@7.3.0(svelte@5.56.8)(vite@8.3.0(@types/node@26.6.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.13)(yaml@2.9.0)))(svelte@5.56.8)(typescript@5.9.3)(vite@8.3.0(@types/node@26.6.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.13)(yaml@2.9.0)))(nodemailer@10.1.1)(svelte@5.56.8)':
     dependencies:
-      '@auth/core': 0.41.3(nodemailer@9.1.1)
+      '@auth/core': 0.41.3(nodemailer@10.1.1)
       '@sveltejs/kit': 2.70.3(@sveltejs/vite-plugin-svelte@7.3.0(svelte@5.56.8)(vite@8.3.0(@types/node@26.6.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.13)(yaml@2.9.0)))(svelte@5.56.8)(typescript@5.9.3)(vite@8.3.0(@types/node@26.6.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.13)(yaml@2.9.0))
       set-cookie-parser: 2.7.2
       svelte: 5.56.8
     optionalDependencies:
-      nodemailer: 9.1.1
+      nodemailer: 10.1.1
 
   '@babel/code-frame@7.29.0':
     dependencies:
@@ -4821,7 +4822,7 @@ snapshots:
       jiti: 2.7.0
       lightningcss: 1.32.0
       magic-string: 0.30.21
-      source-map-js: 1.2.1
+      source-map-js: 1.2.2
       tailwindcss: 4.3.3
 
   '@tailwindcss/oxide-android-arm64@4.3.3':
@@ -4941,7 +4942,7 @@ snapshots:
 
   '@types/dompurify@3.2.0':
     dependencies:
-      dompurify: 3.4.13
+      dompurify: 3.4.17
 
   '@types/estree@1.0.8': {}
 
@@ -5296,7 +5297,7 @@ snapshots:
   css-tree@3.2.1:
     dependencies:
       mdn-data: 2.27.1
-      source-map-js: 1.2.1
+      source-map-js: 1.2.2
 
   css.escape@1.5.1: {}
 
@@ -5337,7 +5338,7 @@ snapshots:
 
   dom-accessibility-api@0.6.3: {}
 
-  dompurify@3.4.13:
+  dompurify@3.4.17:
     optionalDependencies:
       '@types/trusted-types': 2.0.7
 
@@ -5649,7 +5650,7 @@ snapshots:
 
   isomorphic-dompurify@3.19.0:
     dependencies:
-      dompurify: 3.4.13
+      dompurify: 3.4.17
       jsdom: 29.1.1
     transitivePeerDependencies:
       - '@noble/hashes'
@@ -5908,7 +5909,7 @@ snapshots:
     dependencies:
       '@babel/parser': 7.29.8
       '@babel/types': 7.29.8
-      source-map-js: 1.2.1
+      source-map-js: 1.2.2
 
   make-dir@4.0.0:
     dependencies:
@@ -5987,7 +5988,7 @@ snapshots:
       fetch-blob: 3.2.0
       formdata-polyfill: 4.0.10
 
-  nodemailer@9.1.1: {}
+  nodemailer@10.1.1: {}
 
   normalize-path@3.0.0: {}
 
@@ -6136,7 +6137,7 @@ snapshots:
     dependencies:
       nanoid: 3.3.19
       picocolors: 1.1.1
-      source-map-js: 1.2.1
+      source-map-js: 1.2.2
 
   postgres@3.4.9: {}
 
@@ -6367,7 +6368,7 @@ snapshots:
     dependencies:
       atomic-sleep: 1.0.0
 
-  source-map-js@1.2.1: {}
+  source-map-js@1.2.2: {}
 
   split2@4.2.0: {}
 
