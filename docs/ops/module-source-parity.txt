@@ -1,6 +1,6 @@
 module-source parity (TASK-200) — scripts/check-module-source-parity.mjs
 source: annotated tag extraction-source-f2 -> d0c656d0b266f3a1741f34454e0061bc5078c3f4; set-A base (frozen extraction source) f276af5925abacdcfd05f6613fc11afff2d804c5
-kernel: 430760a087bc3ac69185093da6849d3b0a518291
+kernel: cca5a09868e95299f002b7130060bf884d57a8d3
 mode: tip (only EXTRACTION-DELTA.json paths may differ; set A never)
 
 set A — services/** changed f276af59..extraction-source-f2: 42 files, 10 differ (10 listed, 0 unlisted)
@@ -207,7 +207,7 @@ set C — module in-process halves (gremion-ui/src -> modules/<id>/app; board, c
   listed   modules/votes/app/routes/votes/+page.server.ts  tag=3281b779a449da0481ad8a10e03f685a933c316b kernel=3a7a08dc7a44e13c262964668dd28e1799f34f2d
   listed   modules/votes/app/routes/votes/+page.svelte  tag=f0f86f3e0227f24e312de57f61eb7ca3ba1ad39d kernel=aa3996cb78ef28265624045e95cb4b306354fdda
   listed   modules/votes/app/routes/votes/votes.reflow.browser.test.ts  tag=e6a243481bc87882b4a8c63c4f9797fe8357864d kernel=8336a5c49111e3793d88f87bf7e23fb7d99e958c
-extras — kernel files in a mapped module directory that no tag path maps to: 74 (74 listed)
+extras — kernel files in a mapped module directory that no tag path maps to: 92 (92 listed)
   listed   modules/board/app/routes/api/board/board-binding.test.ts
   listed   modules/board/src/app.ts
   listed   modules/board/src/store/tenant-db.ts
@@ -276,12 +276,30 @@ extras — kernel files in a mapped module directory that no tag path maps to: 7
   listed   modules/messaging/app/lib/server/messages/auto-join.ts
   listed   modules/messaging/app/routes/api/auth/matrix-token/matrix-token-auto-join.test.ts
   listed   modules/messaging/app/routes/api/messages/rooms/rooms-auto-join-scope.test.ts
+  listed   modules/messaging/synapse/.gitattributes
+  listed   modules/messaging/synapse/Dockerfile
+  listed   modules/messaging/synapse/bootstrap.sh
+  listed   modules/messaging/synapse/db-preflight.py
+  listed   modules/messaging/synapse/entrypoint.sh
+  listed   modules/messaging/synapse/healthcheck.sh
+  listed   modules/messaging/synapse/homeserver.yaml
+  listed   modules/messaging/synapse/inject-jwt-key.py
+  listed   modules/messaging/synapse/log.config
+  listed   modules/messaging/synapse/postgres-init/10-synapse-db.sh
+  listed   modules/messaging/synapse/render-homeserver.sh
+  listed   modules/messaging/synapse/test/helpers.mjs
+  listed   modules/messaging/synapse/test/inject.test.mjs
+  listed   modules/messaging/synapse/test/preflight.test.mjs
+  listed   modules/messaging/synapse/test/probe.test.mjs
+  listed   modules/messaging/synapse/test/refusal.test.mjs
+  listed   modules/messaging/synapse/test/render.test.mjs
+  listed   modules/messaging/synapse/test/scratch-proof.sh
   listed   modules/votes/app/lib/modules/manifests/votes.ts
   listed   modules/votes/app/routes/votes/votes-elections-off.test.ts
   listed   modules/votes/app/routes/votes/votes-service-degrade.test.ts
   listed   modules/votes/src/boot-config.ts
   listed   modules/votes/test/polls-client.test.ts
   listed   modules/votes/test/server-validation.test.ts
-delta entries: 265
+delta entries: 283
 
 RESULT: OK
