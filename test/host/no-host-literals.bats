@@ -149,7 +149,7 @@ sri_only_hit() {  # $1 = repo-relative path, $2 = git grep hit "path:line:text",
 
 # Prints "<name> <path>:<line>:<text>" for every un-exempted hit; 1 if any.
 # git grep, not a recursive grep: it honours .gitignore (so node_modules,
-# .superpowers and the rest of the ignored tree can neither slow it down nor
+# .worktrees and the rest of the ignored tree can neither slow it down nor
 # fill it with noise) and skips .git itself, while --untracked makes it see a
 # file that has been created but not yet added -- which is the state a leak is
 # actually in when it matters.

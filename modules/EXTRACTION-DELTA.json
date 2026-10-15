@@ -816,6 +816,12 @@
       "blob": "573fdb193b167eb54bf69b77da9699cac8381069"
     },
     {
+      "path": "modules/calendar/app/lib/server/calendar/calendar-automations.ts",
+      "reason": "comment wording only: the cited design-note path follows the docs/design-specs directory name; no code change",
+      "owner": "TASK-205",
+      "blob": "ca3ec16b6cd23d62cbd942fa8c48ce4c6b473aed"
+    },
+    {
       "path": "modules/content/src/http/routes.ts",
       "reason": "kernel-ahead of f2: 6151e5ca fix(content): the HTTP claim route returns the claim token and the failed route fences on it (R29-LO",
       "owner": "TASK-205",
