@@ -191,14 +191,28 @@ Values are in seconds (days × 86400) and are bounded by server-side hard caps:
 
 | Variable | Default | Hard cap |
 |----------|---------|----------|
-| `LOG_ACCESS_RETENTION_SECONDS` | 14 days (1209600) | 30 days (2592000) |
-| `LOG_APP_RETENTION_SECONDS` | 30 days (2592000) | 90 days (7776000) |
-| `LOG_SECURITY_RETENTION_SECONDS` | 90 days (7776000) | 180 days (15552000) |
-| `LOG_SECURITY_NOPII_RETENTION_SECONDS` | 90 days (7776000) | 365 days (31536000) |
+| `LOG_ACCESS_RETENTION_SECONDS` | 14 days (1209600) | 29 days (2505600) |
+| `LOG_APP_RETENTION_SECONDS` | 28 days (2419200) | 29 days (2505600) |
+| `LOG_SECURITY_RETENTION_SECONDS` | 27 days (2332800) | 29 days (2505600) |
+| `LOG_SECURITY_NOPII_RETENTION_SECONDS` | 27 days (2332800) | 30 days (2592000) |
 
-Operator ceiling 30 d [D R29-I6]; the application tiers change with TASK-033. Until
-then every figure in this table above 30 days is the code's current value, not the
-policy: the edge files and Keycloak's event store above already obey the ceiling.
+Operator ceiling 30 d [D R29-I6], R29-RETENTION-30-K: no figure in this table exceeds
+it. The defaults and caps are those of the gremion-ui retention tiers
+(`gremion-ui/src/lib/retention-tiers.ts`, one registry that the config clamp, the
+settings API and the Settings tab all read): 29 d where the daily purge tick enforces
+the window (29 d + 24 h = 30 d), 30 d for the tier without a purge consumer. A config
+stored with a higher value (the former 90 / 180 / 365 days) is clamped when it is read,
+and the clamp logs one warning per field. Only `LOG_ACCESS_RETENTION_SECONDS` is read
+by `docker-compose.yml`; the other three document the tier defaults.
+
+**Named residual (TASK-033):** of the four application tiers only `security_logs_days`
+has a purge consumer, the daily `auditRetentionTick` in `gremion-ui/src/hooks.server.ts`
+(it purges `audit_log`). Nothing in gremion-ui purges by `access_logs_days`,
+`app_logs_days` or `security_nopii_logs_days`: those three are configuration and
+Löschkonzept text until TASK-033 adds their consumers. The Settings tab and the
+generated Löschkonzept say so. The edge files are bounded independently of these
+values (see "Upper bound"); container stdout stays size-bounded only (see "Container
+logs").
 
 The Vector container receives `LOG_RETENTION_SECONDS` (derived from
 `LOG_ACCESS_RETENTION_SECONDS`) and enforces it in the `enforce_retention`

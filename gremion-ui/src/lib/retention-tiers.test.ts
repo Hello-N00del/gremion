@@ -106,6 +106,93 @@ describe('RETENTION_CAVEATS: tiers without a purge consumer', () => {
   })
 })
 
+describe('infra/hardening/values.yaml seeds the registry values', () => {
+  // Plain-text parse (no yaml dependency in gremion-ui): `  key: 14   # comment`.
+  const yaml = read('../../../infra/hardening/values.yaml')
+  const seeded = (field: string): number => {
+    const m = yaml.match(new RegExp(`^\\s+${field}:\\s*(\\d+)`, 'm'))
+    expect(m, `${field} missing from infra/hardening/values.yaml`).not.toBeNull()
+    return Number(m![1])
+  }
+
+  it.each(RETENTION_FIELDS)('%s equals RETENTION_DEFAULTS and is within RETENTION_CAPS', (f) => {
+    expect(seeded(f)).toBe(RETENTION_DEFAULTS[f])
+    expect(seeded(f)).toBeLessThanOrEqual(RETENTION_CAPS[f])
+  })
+
+  it('the comments cite the operator ceiling, not the superseded 90/180/365 caps', () => {
+    expect(yaml).toContain('R29-I6')
+    expect(yaml).not.toMatch(/hard cap (90|180|365)\b/)
+    expect(yaml).not.toContain('BSI Mindeststandard')
+    expect(yaml).not.toContain('BayLDA')
+  })
+
+  it('the generated-env template does not restate the superseded 90/180/365-day caps', () => {
+    const tmpl = read('../../../infra/hardening/templates/hardening.env.tmpl')
+    expect(tmpl).toContain('R29-I6')
+    expect(tmpl).not.toMatch(/max (90|180|365) days/)
+    expect(tmpl).not.toContain('BSI')
+    expect(tmpl).not.toContain('BayLDA')
+  })
+})
+
+// The compose env surface: .env.example and the host template that renders the
+// per-host state.env carry the same four tiers in seconds (days x 86400). Only
+// LOG_ACCESS_RETENTION_SECONDS is read by docker-compose.yml; the other three
+// document the tier defaults, but they must not document the superseded ones.
+describe('the compose env files carry the registry values in seconds', () => {
+  const DAY = 86400
+  const VAR: Record<(typeof RETENTION_FIELDS)[number], string> = {
+    access_logs_days: 'LOG_ACCESS_RETENTION_SECONDS',
+    app_logs_days: 'LOG_APP_RETENTION_SECONDS',
+    security_logs_days: 'LOG_SECURITY_RETENTION_SECONDS',
+    security_nopii_logs_days: 'LOG_SECURITY_NOPII_RETENTION_SECONDS',
+  }
+  const valueIn = (text: string, name: string): number => {
+    const m = text.match(new RegExp(`^${name}=(\\d+)`, 'm'))
+    expect(m, `${name} missing`).not.toBeNull()
+    return Number(m![1])
+  }
+  const envExample = read('../../../.env.example')
+  const stateTmpl = read('../../../infra/host/templates/env/state.env.tmpl')
+
+  it.each(RETENTION_FIELDS)('.env.example %s default equals RETENTION_DEFAULTS and the stated hard cap equals RETENTION_CAPS', (f) => {
+    expect(valueIn(envExample, VAR[f])).toBe(RETENTION_DEFAULTS[f] * DAY)
+    const line = envExample.split('\n').find((l) => l.startsWith(`${VAR[f]}=`))!
+    const cap = line.match(/hard cap: (\d+)/)
+    expect(cap, `${VAR[f]} states no hard cap`).not.toBeNull()
+    expect(Number(cap![1])).toBe(RETENTION_CAPS[f] * DAY)
+  })
+
+  it.each(RETENTION_FIELDS)('state.env.tmpl %s equals RETENTION_DEFAULTS (and is within RETENTION_CAPS)', (f) => {
+    expect(valueIn(stateTmpl, VAR[f])).toBe(RETENTION_DEFAULTS[f] * DAY)
+    expect(valueIn(stateTmpl, VAR[f])).toBeLessThanOrEqual(RETENTION_CAPS[f] * DAY)
+  })
+
+  it.each(['.env.example', 'docs/ENVIRONMENT.md', 'docs/OPERATIONS.md', 'infra/host/templates/env/state.env.tmpl'])(
+    '%s does not restate the superseded 90/180/365-day windows in seconds',
+    (file) => {
+      const text = read(`../../../${file}`)
+      expect(text).not.toMatch(/\b(7776000|15552000|31536000)\b/)
+    },
+  )
+
+  // The three operator-facing tables `| VAR | default | hard cap |`: the day
+  // figures of each row are the registry's default and cap.
+  it.each(['docs/ENVIRONMENT.md', 'docs/OPERATIONS.md', 'docs/log-retention-policy.md'])(
+    '%s: the LOG_*_RETENTION_SECONDS table rows state the registry default and cap in days',
+    (file) => {
+      const text = read(`../../../${file}`)
+      for (const f of RETENTION_FIELDS) {
+        const row = text.split('\n').find((l) => l.startsWith(`| \`${VAR[f]}\``))
+        expect(row, `${file}: no table row for ${VAR[f]}`).toBeDefined()
+        const days = [...row!.matchAll(/(\d+)\s*(?:d\b|days?\b)/g)].map((m) => Number(m[1]))
+        expect(days, `${file}: ${VAR[f]}`).toEqual([RETENTION_DEFAULTS[f], RETENTION_CAPS[f]])
+      }
+    },
+  )
+})
+
 describe('no surface keeps a private copy of the old tiers', () => {
   const settingsApi = read('../routes/api/settings/+server.ts')
   const tab = read('../routes/settings/tabs/TabRetention.svelte')
