@@ -1,5 +1,5 @@
 // TASK-044 on the scratch stack (PG18, the harness's two servers):
-//   TDD 1  the platform schema 0005-0007: CHECKs, append-only, the DPIA
+//   TDD 1  the platform schema 0006-0008: CHECKs, append-only, the DPIA
 //          document rule, the NOT VALID isolation keys as the DB backstop
 //          (TRD-063: 23503 for a failed / foreign / unknown result, 23514 for
 //          null references);
@@ -84,7 +84,7 @@ async function moduleIds(platform: Sql, moduleKey: string): Promise<{ module_id:
   return ids!
 }
 
-describe('TDD 1: the platform schema 0005-0007 (SCHEMA verbatim, keys NOT VALID)', () => {
+describe('TDD 1: the platform schema 0006-0008 (SCHEMA verbatim, keys NOT VALID)', () => {
   let platform: Sql
   beforeAll(async () => {
     platform = platformDb()
@@ -175,7 +175,7 @@ describe('TDD 1: the platform schema 0005-0007 (SCHEMA verbatim, keys NOT VALID)
       constraint_name: 'module_enablement_xbody_result_id_module_id_kind_passed_fkey',
     })
     await platform`UPDATE plt.module_enablement SET cross_body_test_result_id = ${crossBody} WHERE customer_id = ${X}`
-    // module_version's key, validated in 0006
+    // module_version's key, validated in 0007
     expect(await sqlError(platform`UPDATE plt.module_version SET isolation_test_result_id = ${failed} WHERE module_version_id = ${a.module_version_id}`)).toMatchObject({
       code: '23503',
       constraint_name: 'module_version_isol_result_id_module_id_kind_passed_fkey',

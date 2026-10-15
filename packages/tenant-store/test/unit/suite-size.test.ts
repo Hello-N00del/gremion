@@ -24,7 +24,7 @@ export const NAMED: Record<'unit' | 'integration', Record<string, number>> = {
     'src/schema-gate.test.ts': 15,
     'src/index.test.ts': 2,
     // TASK-075 G1b: +2 (releaseRef refusal, platform baseline phases); r2: +2 (module phases, shipped baseline drift)
-    // TASK-044: +2 (the platform files after the baseline, 0006's keys)
+    // TASK-044: +2 (the platform files after the baseline, 0007's keys)
     'src/lifecycle/lifecycle.test.ts': 28,
     'src/lifecycle/export.test.ts': 8,
     // TASK-044 TDD 3 (no database) and TDD 5 (the evidence stamp)

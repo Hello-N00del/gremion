@@ -14,7 +14,7 @@
 //   regateEnablement         re-runs the real gate for one enabled pair and
 //                            writes its references in one transaction.
 //   validateGateForeignKeys  VALIDATEs the two NOT VALID enablement keys of
-//                            0006 once no row violates them.
+//                            0007 once no row violates them.
 // plt.operator_enable_attestation stays as append-only history (K5); nothing
 // reads it for gating any more.
 import type { Sql } from '@gremion/db'
@@ -191,7 +191,7 @@ export async function regateEnablement(opts: EnableGateOptions & { customerId: s
   })
 }
 
-/** The two enablement keys 0006 adds NOT VALID. */
+/** The two enablement keys 0007 adds NOT VALID. */
 export const ENABLEMENT_GATE_KEYS = [
   { name: 'module_enablement_isol_result_id_module_id_kind_passed_fkey', column: 'isolation_test_result_id', kind: 'cross_customer' },
   { name: 'module_enablement_xbody_result_id_module_id_kind_passed_fkey', column: 'cross_body_test_result_id', kind: 'cross_body' },
@@ -218,7 +218,7 @@ export async function validateGateForeignKeys(platform: Sql): Promise<ValidateKe
     const [c] = await platform<{ valid: boolean }[]>`
       SELECT convalidated AS valid FROM pg_constraint
        WHERE conname = ${k.name} AND conrelid = 'plt.module_enablement'::regclass`
-    if (!c) throw new LifecycleError('TARGET_REFUSED', `plt.module_enablement has no constraint ${k.name}: is gremion_platform migrated past 0006?`)
+    if (!c) throw new LifecycleError('TARGET_REFUSED', `plt.module_enablement has no constraint ${k.name}: is gremion_platform migrated past 0007?`)
     if (c.valid) {
       out.alreadyValid.push(k.name)
       continue

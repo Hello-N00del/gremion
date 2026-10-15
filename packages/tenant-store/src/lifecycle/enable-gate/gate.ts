@@ -20,7 +20,7 @@
 //
 // The null path of EnableGate stays enableModule's GATE_REFUSED; this gate
 // never returns null. The database backstop is the NOT VALID foreign key on
-// module_enablement (0006): a reference to a failed result, another module's
+// module_enablement (0007): a reference to a failed result, another module's
 // result or an unknown id is 23503. The gate reads, the backstop re-checks at
 // write time; a newer failing result recorded between the two (step 3 and
 // step 8 of enableModule) is not caught by the key (accepted, lane note A2).
