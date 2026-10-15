@@ -107,8 +107,31 @@ describe('RETENTION_CAVEATS: tiers without a purge consumer', () => {
 })
 
 describe('no surface keeps a private copy of the old tiers', () => {
+  const settingsApi = read('../routes/api/settings/+server.ts')
+  const tab = read('../routes/settings/tabs/TabRetention.svelte')
   const config = read('./server/config.ts')
   const hooks = read('../hooks.server.ts')
+
+  it('the settings API zod bounds come from RETENTION_CAPS', () => {
+    expect(settingsApi).toContain('RETENTION_CAPS')
+    expect(settingsApi).not.toMatch(/max\((30|90|180|365)\)/)
+    expect(settingsApi).not.toMatch(/Max (30|90|180|365) Tage/)
+    expect(settingsApi).not.toContain('BSI')
+    expect(settingsApi).not.toContain('BayLDA')
+  })
+
+  it('TabRetention.svelte takes its limits from RETENTION_CAPS and cites the operator decision, not BSI/BayLDA tiers', () => {
+    expect(tab).toContain('RETENTION_CAPS')
+    expect(tab).not.toMatch(/:\s*(90|180|365),/)
+    expect(tab).not.toMatch(/Max\. (30|90|180|365) Tage/)
+    expect(tab).not.toContain('BSI')
+    expect(tab).not.toContain('BayLDA')
+  })
+
+  it('the tab takes its caveats from RETENTION_CAVEATS', () => {
+    expect(tab).toContain('RETENTION_CAVEATS')
+    expect(tab).toContain('OPERATOR_DECISION_DE') // reader-facing text is asserted on the rendered tab (TabRetention.test.ts)
+  })
 
   it('config.ts takes defaults and clamps through the module and keeps no literal old cap', () => {
     expect(config).toContain('clampRetentionDays')
