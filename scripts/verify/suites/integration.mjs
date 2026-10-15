@@ -244,7 +244,7 @@ export function judgeNatsAuthTest(res) {
  * count plus the live counts.
  */
 export const EVENTS_MIN_PROOFS = { core: 15, consumer: 15, deadletter: 6, rebuild: 2 }
-export const EVENTS_ALERT_PHASES = ['alert-fire', 'alert-hold', 'alert-resolve']
+export const EVENTS_ALERT_PHASES = ['alert-red', 'alert-fire', 'alert-hold', 'alert-resolve']
 
 export function judgeEventsTest(res) {
   const label = 'make test-events'
@@ -272,7 +272,7 @@ export function judgeEventsTest(res) {
     return {
       label,
       unparseable: true,
-      detail: `exit 0 but not all of the unit "Tests N passed (N)" summary, the four "[events-proof] N passing (minimum >= floor)" group pairs, the three alert phase OK lines, "[events-proof] OK" and "[events-image] OK" -- untrusted\n${tail(out)}`,
+      detail: `exit 0 but not all of the unit "Tests N passed (N)" summary, the four "[events-proof] N passing (minimum >= floor)" group pairs, the four alert phase OK lines (red, fire, hold, resolve), "[events-proof] OK" and "[events-image] OK" -- untrusted\n${tail(out)}`,
     }
   }
   const n = Number(unit[1]) + live

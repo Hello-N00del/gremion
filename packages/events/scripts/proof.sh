@@ -5,6 +5,9 @@
 #
 #   packages/events/scripts/proof.sh up                 the scratch stack (scripts/stack.mjs)
 #   packages/events/scripts/proof.sh test <group>       core | consumer | deadletter | rebuild
+#   packages/events/scripts/proof.sh alert-prepare      TASK-039's scratch stack on t079-owned names (scripts/alert-proof.sh)
+#   packages/events/scripts/proof.sh alert-up           the ops project, the service stand-ins, the quiet baseline
+#   packages/events/scripts/proof.sh alert-red          RED first: the DLQ rule absent -> no e-mail
 #   packages/events/scripts/proof.sh alert-fire         the DLQ conditions fire exactly one e-mail each
 #   packages/events/scripts/proof.sh alert-hold         a still-firing condition sends no second e-mail
 #   packages/events/scripts/proof.sh alert-resolve      a resolve notice follows the clear
@@ -32,7 +35,7 @@ GROUPS_FILE="$SCRATCH/groups"
 # Minimums, not exact counts: adding a case needs no edit here; removing one below the floor fails
 # until lowered on purpose -- in this file, never from the environment.
 declare -A MIN_PASS=( [core]=15 [consumer]=15 [deadletter]=6 [rebuild]=2 )
-REQUIRED_GROUPS="core consumer deadletter rebuild alert-fire alert-hold alert-resolve"
+REQUIRED_GROUPS="core consumer deadletter rebuild alert-red alert-fire alert-hold alert-resolve"
 
 fail() { echo "[events-proof] FAILED: $*" >&2; }
 
@@ -92,8 +95,20 @@ case "$phase" in
     echo "$group" >> "$GROUPS_FILE"
     echo "[events-proof] group ${group} OK"
     ;;
-  alert-fire|alert-hold|alert-resolve)
-    exec bash "$PKG/scripts/alert-proof.sh" "$phase"
+  alert-prepare|alert-up|alert-red|alert-fire|alert-hold|alert-resolve)
+    mkdir -p "$LOGS" "$SCRATCH"
+    log="$LOGS/$phase.log"
+    set +e
+    bash "$PKG/scripts/alert-proof.sh" "$phase" > "$log" 2>&1
+    status=$?
+    set -e
+    grep -E '^[[:space:]]+(ok|FAIL|subject:)|^\[alert-proof\]|^FATAL' "$log" || true
+    if [ "$status" -ne 0 ]; then fail "the ${phase} phase exited ${status} (log: $log)"; exit "$status"; fi
+    # prepare and up are set-up phases; the others are acceptance groups the verdict requires.
+    case "$phase" in
+      alert-prepare|alert-up) echo "[events-proof] phase ${phase} done" ;;
+      *) echo "$phase" >> "$GROUPS_FILE"; echo "[events-proof] group ${phase} OK" ;;
+    esac
     ;;
   down)
     node "$PKG/scripts/stack.mjs" down
@@ -107,7 +122,7 @@ case "$phase" in
     fi
     ;;
   *)
-    echo "usage: $0 up | test <group> | alert-fire | alert-hold | alert-resolve | down" >&2
+    echo "usage: $0 up | test <group> | alert-prepare | alert-up | alert-red | alert-fire | alert-hold | alert-resolve | down" >&2
     exit 2
     ;;
 esac

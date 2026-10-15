@@ -206,7 +206,7 @@ test-events:
 		for g in core consumer deadletter rebuild; do bash packages/events/scripts/proof.sh test $$g || { rc=$$?; break; }; done; \
 	fi; \
 	if [ $$rc -eq 0 ]; then \
-		for p in alert-fire alert-hold alert-resolve; do bash packages/events/scripts/proof.sh $$p || { rc=$$?; break; }; done; \
+		for p in alert-prepare alert-up alert-red alert-fire alert-hold alert-resolve; do bash packages/events/scripts/proof.sh $$p || { rc=$$?; break; }; done; \
 	fi; \
 	out="$$(bash packages/events/scripts/proof.sh down)"; printf '%s\n' "$$out"; \
 	[ $$rc -eq 0 ] && printf '%s\n' "$$out" | grep -qx '\[events-proof\] OK' || exit 1

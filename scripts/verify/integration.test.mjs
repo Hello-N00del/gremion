@@ -85,6 +85,7 @@ const EVENTS_OK =
   '[events-proof] group deadletter OK\n' +
   '[events-proof] 2 passing (minimum 2)\n' +
   '[events-proof] group rebuild OK\n' +
+  '[events-proof] group alert-red OK\n' +
   '[events-proof] group alert-fire OK\n' +
   '[events-proof] group alert-hold OK\n' +
   '[events-proof] group alert-resolve OK\n' +
