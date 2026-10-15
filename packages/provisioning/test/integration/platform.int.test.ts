@@ -9,7 +9,8 @@
 //    even when passed (R30 A1), is GATE_REFUSED with no database; a module Q20 left undecided
 //    is MODULE_VERSION_UNKNOWN.
 import { randomBytes, randomUUID } from 'node:crypto'
-import { resolve } from 'node:path'
+import { readdirSync } from 'node:fs'
+import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { LifecycleModule, ModuleServer } from '@gremion/tenant-store/lifecycle'
 import postgres, { type Sql } from 'postgres'
@@ -128,7 +129,10 @@ describe('the platform on a fresh server', () => {
       log: (l) => logs.push(l),
     })
     expect(r.platformCreated).toBe(true)
-    expect(r.applied).toEqual(['0001_plt_setup.sql', '0002_plt_module.sql', '0003_plt_module_database.sql', '0004_plt_provisioning_step.sql'])
+    // R31 O6: every platform migration file, derived from the directory (a later platform claim adds no line here)
+    const platformFiles = readdirSync(join(REPO, 'packages/tenant-store/src/lifecycle/platform-migrations')).filter((f) => f.endsWith('.sql')).sort()
+    expect(r.applied).toEqual(platformFiles)
+    expect(r.applied).toEqual(expect.arrayContaining(['0001_plt_setup.sql', '0004_plt_provisioning_step.sql', '0005_plt_scheduled_job.sql']))
     expect(r.catalogue.insertedModules).toEqual(ALL_MODULES)
     expect(r.catalogue.insertedVersions).toEqual(r.catalogue.insertedModules)
     // R29-I24: the five database-less modules load under their provisional profiles; nothing is undecided

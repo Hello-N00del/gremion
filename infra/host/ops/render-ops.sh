@@ -68,7 +68,12 @@ require_var() {
     [[ -n "${!name:-}" ]] || die "$name is empty in $ENV_FILE" 2
 }
 for v in PLATFORM_DOMAIN EDGE_BIND_IP OPS_BIND_IP OPS_INGEST_BIND_IP OPS_UID OPS_GID \
-         GREMION_ROOT_DIR PROM_RETENTION_TIME ALERT_EMAIL_FROM ALERT_SMTP_USER; do
+         GREMION_ROOT_DIR PROM_RETENTION_TIME ALERT_EMAIL_FROM ALERT_SMTP_USER \
+         ALERT_SMTP_HOST ALERT_SMTP_PORT; do
+    # ALERT_SMTP_HOST and ALERT_SMTP_PORT (TASK-039-FU): compose/observability
+    # interpolates both with :? on EVERY render, mail on or off, so a stripped
+    # key stops here with a message naming it instead of later in `compose up`.
+    # A CHANGE_ME_ host is "not configured": allowed while e-mail is off.
     require_var "$v"
 done
 
@@ -253,6 +258,11 @@ render_alerting() {
         fi
         if [[ -z "${ALERT_SMTP_HOST:-}" || "${ALERT_SMTP_HOST}" == CHANGE_ME_* ]]; then
             die "BLOCKED: ALERT_SMTP_HOST is not set (the vendor's submission host, mail.<PLATFORM_DOMAIN>)" 3
+        fi
+        # The port goes into GF_SMTP_HOST as <host>:<port>; an empty or
+        # non-numeric one would render `host:` and fail inside Grafana.
+        if ! [[ "${ALERT_SMTP_PORT:-}" =~ ^[0-9]{1,5}$ ]] || (( 10#${ALERT_SMTP_PORT} < 1 || 10#${ALERT_SMTP_PORT} > 65535 )); then
+            die "BLOCKED: ALERT_SMTP_PORT must be a port number from 1 to 65535 (got '${ALERT_SMTP_PORT:-}')" 3
         fi
         EMAIL_STATE="on"
     else
