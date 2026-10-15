@@ -54,7 +54,7 @@ vi.mock('$lib/server/config', () => ({
     smtp: { configured: false, host: '', port: 0, from_address: '' },
     // Every module enabled unless a test disables it by id.
     modules: new Proxy({}, { get: (_t, k) => !disabledModules.has(String(k)) }),
-    retention: { security_logs_days: 90 },
+    retention: { security_logs_days: 27 },
     brand: { product: 'StuRa', org_short: 'StuRa' },
   }),
 }))
