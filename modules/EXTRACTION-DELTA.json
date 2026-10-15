@@ -1756,6 +1756,30 @@
       "reason": "TASK-205c: the shared constantTimeEqual replaces the local timingSafeEqual copy (the kernel Q4 guard in boot-exempt.test.ts requires every /api/internal/ handler to call isInternalTrustRequest or constantTimeEqual)",
       "owner": "TASK-205c",
       "blob": "af6c4cbc514fc2c9af8dd56c2cdbee18ad74bcb8"
+    },
+    {
+      "path": "modules/content/app/lib/server/events/content-audit-consumer.ts",
+      "reason": "post-f2 StuRaOS 871636a: fix(types): svelte-check 12 -> 0 errors (R29-SVCHECK-S); ensureStream takes the mutable string[] NatsBroker.ensureStream takes (the same catch-up calendar-audit-consumer carries)",
+      "owner": "TASK-205c",
+      "blob": "7e0bcb4c3d5e8edfba5e0615c5b0950976524f7f"
+    },
+    {
+      "path": "modules/content/app/routes/api/internal/content/portal-publish/+server.ts",
+      "reason": "TASK-205c: the shared constantTimeEqual replaces the local timingSafeEqual copy (the kernel Q4 guard in boot-exempt.test.ts requires every /api/internal/ handler to call isInternalTrustRequest or constantTimeEqual)",
+      "owner": "TASK-205c",
+      "blob": "3ac0f5b20d2c4aca72718a06445377c07689142d"
+    },
+    {
+      "path": "modules/content/app/routes/api/content/posts/[id]/carousel/[index]/+server.ts",
+      "reason": "TASK-205c: the kernel names the curated palette registry TENANT_PALETTES (lib/theme/instance-theme.ts, TASK-082); INSTANCE_REGISTRY no longer exists",
+      "owner": "TASK-205c",
+      "blob": "b90d1a8e1e15a230e4d87934d3968695546339ea"
+    },
+    {
+      "path": "modules/content/app/routes/news/news-page.test.ts",
+      "reason": "TASK-205c: the German dictionary is the kernel's Paraglide catalogue (lib/i18n/messages/de.json); lib/i18n/de.ts no longer exists",
+      "owner": "TASK-205c",
+      "blob": "293ec73f0953059f50e1b116da727f627b8c9b89"
     }
   ]
 }

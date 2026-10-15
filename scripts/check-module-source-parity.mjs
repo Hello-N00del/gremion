@@ -84,6 +84,10 @@ export const CONTENT_UI_PREFIXES = Object.freeze([
   'gremion-ui/src/lib/components/news/',
   'gremion-ui/src/routes/news/',
   'gremion-ui/src/routes/api/news/',
+  // TASK-205c: the leaf callback route (kernel leaf-trust.ts names it) and the audit consumer content's
+  // register.server.ts imports; both belong to the half, neither was in the TASK-200 table.
+  'gremion-ui/src/routes/api/internal/content/',
+  'gremion-ui/src/lib/server/events/content-audit-consumer.',
 ])
 
 const S = 'gremion-ui/src/'
