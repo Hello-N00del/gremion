@@ -1,0 +1,333 @@
+#!/usr/bin/env bash
+set -euo pipefail
+#
+# gremion-executor — the host-side executor of the control panel's requests
+# (TASK-043d-1, D R31-I4: "ops panel should be able to create the pilot. so
+# ops fully decommissions CLI").
+#
+#   gremion-executor --loop     the daemon (gremion-executor.service)
+#   gremion-executor --once     claim at most ONE request, run it, exit
+#                               (tests, the proofs, a by-hand drain)
+#
+# WHY IT EXISTS: the panel holds no docker, no host tool and no table write;
+# it inserts a request through ONE narrow SECURITY DEFINER function
+# (gremion_platform plt.submit_provisioning_request). This program PULLS
+# those requests -- it opens no socket and listens on nothing (CIS Docker
+# Benchmark 5.31: the panel container never gets the docker socket; NIST SP
+# 800-53 AC-6: only the host component holds docker). Per cycle:
+#   1. plt.executor_beat (the panel greys "Neuer Mandant" out when the beat
+#      is older than 60 s);
+#   2. runtime/hostd.lock taken NON-blocking: a deploy, switch or rollback in
+#      progress skips the cycle (provisioning never races a colour switch);
+#   3. plt.claim_provisioning_request (expires stale requests, re-queues
+#      expired leases, claims the oldest queued one whose customer has no
+#      running request, FOR UPDATE SKIP LOCKED);
+#   4. `tenant-create request-verify <id>` in the active colour (the trusted
+#      layer: kind, args, the operator's signed loa2 evidence or the
+#      break-glass reason, the operator re-read in the ops realm) -> refused:
+#      finished `refused`, nothing runs; ok: plt.mark_provisioning_request_
+#      verified (clears the token), then the kind's handler from
+#      infra/host/lib/executor/registry.sh, every output line an event
+#      (credential lines withheld, 1000 characters at most), the lease renewed
+#      at each step, the request finished `succeeded` or `failed` naming the
+#      step. Every event also goes to runtime/executor/audit.log (append-only;
+#      NIST AC-6(9)).
+# At --loop start its own orphaned `running` requests are re-queued at once
+# (crash-resume; the engine resumes from the ledger).
+#
+# The handlers and customer-ops.sh are sourced from the RELEASE
+# (GREMION_RELEASE_DIR, default <root>/current): the authenticated tree whose
+# tenant-create image the colour runs. The database is reached by docker exec
+# into the state postgres as gremion_executor (lib/executor/db.sh).
+#
+# EXIT CODES: 0 ok (or nothing to do) - 1 the request failed or was refused,
+# or a step of the executor itself failed - 2 usage/precondition - 3 blocked
+# (--once while the host lock is held).
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../lib/common.sh
+. "$SCRIPT_DIR/../lib/common.sh"
+
+umask 077
+
+EXECUTOR_VERSION="043d-1"
+LEASE_SECONDS=600
+POLL_SECONDS="${GREMION_EXECUTOR_POLL_SECONDS:-5}"
+HOST_ID_RE='^[a-z0-9][a-z0-9._-]{0,62}$'
+# The panel's SECRET_LINE rule (TASK-043 executor.ts), moved here with the
+# spawning it guarded: a line that looks like it carries a credential is
+# never copied into an event or the audit log.
+SECRET_LINE_RE='(PASSWORD|SECRET|TOKEN)[[:space:]]*[:=]'
+WITHHELD='[a line carrying a credential was withheld]'
+
+usage() {
+    cat <<'EOF'
+usage: gremion-executor --loop | --once
+EOF
+}
+
+ROOT=""
+RELEASE_DIR=""
+HOST_ID=""
+WORK_ROOT=""
+AUDIT_LOG=""
+CURRENT_WORK=""
+
+cleanup_work() {
+    if [[ -n "$CURRENT_WORK" && -d "$CURRENT_WORK" ]]; then rm -rf -- "$CURRENT_WORK"; fi
+    CURRENT_WORK=""
+}
+trap cleanup_work EXIT
+
+host_id() {
+    local h="${GREMION_EXECUTOR_HOST:-}"
+    [[ -n "$h" ]] || h="$(hostname 2>/dev/null || true)"
+    h="$(printf '%s' "$h" | tr '[:upper:]' '[:lower:]')"
+    [[ "$h" =~ $HOST_ID_RE ]] || die "executor host id '${h}' is not ${HOST_ID_RE} (set GREMION_EXECUTOR_HOST)" "$GREMION_EXIT_USAGE"
+    printf '%s' "$h"
+}
+
+load_release_libs() {
+    local lib="${RELEASE_DIR}/infra/host/lib"
+    [[ -f "${lib}/customer-ops.sh" && -f "${lib}/executor/registry.sh" && -f "${lib}/executor/db.sh" ]] \
+        || die "the release at ${RELEASE_DIR} carries no executor library (infra/host/lib/customer-ops.sh, executor/)" "$GREMION_EXIT_USAGE"
+    # shellcheck source=../lib/customer-ops.sh
+    . "${lib}/customer-ops.sh"
+    # shellcheck source=../lib/executor/db.sh
+    . "${lib}/executor/db.sh"
+    # shellcheck source=../lib/executor/registry.sh
+    . "${lib}/executor/registry.sh"
+}
+
+# redact <line> — the panel's rule, then at most 1000 characters.
+redact() {
+    local line="$1"
+    if [[ "${line^^}" =~ $SECRET_LINE_RE ]]; then line="$WITHHELD"; fi
+    printf '%s' "${line:0:1000}"
+}
+
+audit() {   # <request-id> <text>
+    printf '%s host=%s pid=%d req=%s %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$HOST_ID" "$$" "$1" "$(redact "$2")" >> "$AUDIT_LOG"
+}
+
+event() {   # <request-id> <info|error> <step> <message>
+    local msg
+    msg="$(redact "$4")"
+    audit "$1" "event ${2} ${3}: ${msg}"
+    executor_sql "SELECT plt.record_provisioning_event(:'id'::uuid, :'host', :'level', :'step', :'msg');" \
+        -v id="$1" -v host="$HOST_ID" -v level="$2" -v step="$3" -v msg="$msg" >/dev/null \
+        || bad "could not record an event of request $1 (step $3)"
+}
+
+finish() {   # <request-id> <succeeded|failed|refused> <outcome>
+    local outcome
+    outcome="$(redact "$3")"
+    audit "$1" "finish ${2}: ${outcome}"
+    executor_sql "SELECT plt.finish_provisioning_request(:'id'::uuid, :'host', :'state', :'outcome');" \
+        -v id="$1" -v host="$HOST_ID" -v state="$2" -v outcome="${outcome:0:2000}" >/dev/null \
+        || die "could not finish request $1 as $2" "$GREMION_EXIT_ASSERT"
+    info "request $1: ${2} (${outcome})"
+}
+
+beat() {
+    executor_sql "SELECT plt.executor_beat(:'host', :'version');" -v host="$HOST_ID" -v version="$EXECUTOR_VERSION" >/dev/null \
+        || die "the executor heartbeat could not be written (gremion_platform unreachable, or init has not made the executor role)" "$GREMION_EXIT_ASSERT"
+}
+
+# take_lock — runtime/hostd.lock (gremion-hostd's mutating-verb lock) on fd 9,
+# NON-blocking. 1 when another host operation holds it.
+take_lock() {
+    command -v flock >/dev/null 2>&1 || die "flock is not installed (util-linux); refusing to provision without the host lock" "$GREMION_EXIT_USAGE"
+    local lock="${ROOT}/runtime/hostd.lock"
+    mkdir -p "$(dirname "$lock")"
+    exec 9>>"$lock" || die "cannot open the host lock ${lock}" "$GREMION_EXIT_USAGE"
+    if ! flock -n 9; then
+        exec 9>&-
+        return 1
+    fi
+    return 0
+}
+release_lock() { exec 9>&- 2>/dev/null || true; }
+
+# A step marker on STDERR (stdout of `tc render-router` is the router file).
+executor_step() { printf '@@executor-step %s\n' "$1" >&2; }
+
+# Inside the handler's subshell: tc and vendor_mail announce their step first.
+# The library bodies stay as moved (D10); these wrappers only add the marker.
+executor_wrap_steps() {
+    eval "executor_orig_$(declare -f tc)"
+    eval "executor_orig_$(declare -f vendor_mail)"
+    # shellcheck disable=SC2329  # redefined here, called by customer_create
+    tc() {
+        case "${1:-}" in
+            phase-a|phase-b|record-step) executor_step "$1" ;;
+            render-router) executor_step router ;;
+        esac
+        executor_orig_tc "$@"
+    }
+    # shellcheck disable=SC2329  # redefined here, called by customer_create
+    vendor_mail() { executor_step mail; executor_orig_vendor_mail "$@"; }
+}
+
+# record_stream <request-id> <first step> <workdir> — every line an event; a
+# step marker renews the lease and is remembered (the failure names it).
+record_stream() {
+    local id="$1" step="$2" work="$3" line level
+    printf '%s' "$step" > "${work}/step"
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        line="${line%$'\r'}"
+        [[ -n "$line" ]] || continue
+        if [[ "$line" == "@@executor-step "* ]]; then
+            step="${line#@@executor-step }"
+            printf '%s' "$step" > "${work}/step"
+            executor_sql "SELECT plt.renew_provisioning_lease(:'id'::uuid, :'host', ${LEASE_SECONDS});" -v id="$id" -v host="$HOST_ID" >/dev/null \
+                || bad "could not renew the lease of request ${id}"
+            event "$id" info "$step" "step ${step} started"
+            continue
+        fi
+        level=info
+        [[ "$line" == *"FAIL"* ]] && level=error
+        event "$id" "$level" "$step" "$line"
+    done
+}
+
+# run_request <id> <kind> <slug> <origin> <operator> <attempt> — one claimed
+# request to its terminal state; RUN_RESULT 0 succeeded, 1 otherwise. It
+# always RETURNS 0 and is never called in an `||` / `if` context: there bash
+# switches errexit off for the whole function body, and for the handler's
+# subshell too, whatever `set -e` it says.
+RUN_RESULT=1
+run_request() {
+    local id="$1" kind="$2" slug="$3" origin="$4" operator="$5" attempt="$6"
+    local out rc=0 line verdict reason handler step
+    RUN_RESULT=1
+    CURRENT_WORK="${WORK_ROOT}/${id}"
+    mkdir -p "$CURRENT_WORK"
+    chmod 700 "$CURRENT_WORK"
+    event "$id" info claim "claimed by ${HOST_ID}: ${kind} ${slug} (origin ${origin}, attempt ${attempt})"
+    active_colour
+    # 1. the trusted layer's verdict; nothing runs before it
+    out="$(tc request-verify "$id" 2>"${CURRENT_WORK}/verify.log")" || rc=$?
+    record_stream "$id" verify "$CURRENT_WORK" < "${CURRENT_WORK}/verify.log"
+    if (( rc != 0 )); then
+        finish "$id" failed "verify: request-verify could not decide (exit ${rc}); nothing ran"
+        cleanup_work
+        return 0
+    fi
+    line="$(grep '^{' <<< "$out" | tail -n 1 || true)"
+    verdict="$(jq -r '.verdict // empty' <<< "$line" 2>/dev/null || true)"
+    case "$verdict" in
+        ok) ;;
+        refused)
+            reason="$(jq -r '.reason // "no reason"' <<< "$line")"
+            event "$id" error verify "refused: ${reason}"
+            finish "$id" refused "refused: ${reason}"
+            cleanup_work
+            return 0 ;;
+        *)
+            finish "$id" failed "verify: request-verify printed no verdict; nothing ran"
+            cleanup_work
+            return 0 ;;
+    esac
+    if ! executor_sql "SELECT plt.mark_provisioning_request_verified(:'id'::uuid, :'host');" -v id="$id" -v host="$HOST_ID" >/dev/null; then
+        finish "$id" failed "verify: could not mark the request verified; nothing ran"
+        cleanup_work
+        return 0
+    fi
+    event "$id" info verify "verified: $(jq -r '.evidence // ""' <<< "$line")"
+    # 2. the kind's handler, on the VERIFIED args only
+    if ! handler="$(handler_for "$kind")"; then
+        event "$id" error dispatch "no handler for ${kind}"
+        finish "$id" refused "no handler for ${kind}"
+        cleanup_work
+        return 0
+    fi
+    jq -c '.args' <<< "$line" > "${CURRENT_WORK}/args.json"
+    rc=0
+    set +e
+    ( set -e; executor_wrap_steps; "$handler" "$id" "$slug" "$operator" "${CURRENT_WORK}/args.json" "$CURRENT_WORK" ) 2>&1 \
+        | record_stream "$id" "$kind" "$CURRENT_WORK"
+    rc=${PIPESTATUS[0]}
+    set -e
+    step="$(cat "${CURRENT_WORK}/step" 2>/dev/null || printf '%s' "$kind")"
+    if (( rc == 0 )); then
+        finish "$id" succeeded "${kind} ${slug}: succeeded (last step ${step})"
+        RUN_RESULT=0
+    else
+        finish "$id" failed "${kind} ${slug}: failed in ${step} (exit ${rc}); a new request resumes from the ledger"
+    fi
+    cleanup_work
+    return 0
+}
+
+# one_cycle — CYCLE_RESULT 0 ran a request that succeeded, 1 ran one that did
+# not, 3 the host lock is held, 4 nothing queued. Always returns 0 (see
+# run_request on errexit).
+CYCLE_RESULT=4
+one_cycle() {
+    local row id kind slug origin operator attempt
+    CYCLE_RESULT=4
+    beat
+    if ! take_lock; then
+        info "busy: another host operation holds runtime/hostd.lock; no request is claimed this cycle"
+        CYCLE_RESULT=3
+        return 0
+    fi
+    if ! row="$(executor_sql "SELECT request_id, kind, customer_slug, origin, operator_id, attempt FROM plt.claim_provisioning_request(:'host', ${LEASE_SECONDS});" -v host="$HOST_ID")"; then
+        release_lock
+        die "the claim failed (gremion_platform unreachable?)" "$GREMION_EXIT_ASSERT"
+    fi
+    row="${row%%$'\n'*}"
+    row="${row%$'\r'}"
+    if [[ -z "$row" ]]; then
+        release_lock
+        return 0
+    fi
+    IFS='|' read -r id kind slug origin operator attempt <<< "$row"
+    run_request "$id" "$kind" "$slug" "$origin" "$operator" "$attempt"
+    CYCLE_RESULT="$RUN_RESULT"
+    release_lock
+    return 0
+}
+
+main() {
+    local mode="${1:-}"
+    case "$mode" in
+        --once|--loop) ;;
+        -h|--help) usage; exit "$GREMION_EXIT_OK" ;;
+        *) usage >&2; exit "$GREMION_EXIT_USAGE" ;;
+    esac
+    need_cmd docker jq grep sed tr mktemp realpath
+    ROOT="$(gremion_root)"
+    RELEASE_DIR="${GREMION_RELEASE_DIR:-${ROOT}/current}"
+    HOST_ID="$(host_id)"
+    load_release_libs
+    # customer-ops.sh resets ROOT/RELEASE_DIR from the environment; keep ours.
+    ROOT="$(gremion_root)"
+    RELEASE_DIR="${GREMION_RELEASE_DIR:-${ROOT}/current}"
+    WORK_ROOT="${ROOT}/runtime/executor"
+    AUDIT_LOG="${WORK_ROOT}/audit.log"
+    mkdir -p "$WORK_ROOT"
+    chmod 700 "$WORK_ROOT"
+    : >> "$AUDIT_LOG" || die "the audit log is not writable: ${AUDIT_LOG}" "$GREMION_EXIT_USAGE"
+    if [[ "$mode" == --once ]]; then
+        one_cycle
+        case "$CYCLE_RESULT" in
+            0) exit "$GREMION_EXIT_OK" ;;
+            3) exit "$GREMION_EXIT_BLOCKED" ;;
+            4) info "no request is queued"; exit "$GREMION_EXIT_OK" ;;
+            *) exit "$GREMION_EXIT_ASSERT" ;;
+        esac
+    fi
+    local n
+    n="$(executor_sql "SELECT plt.requeue_own_requests(:'host');" -v host="$HOST_ID")" \
+        || die "could not re-queue this host's orphaned requests" "$GREMION_EXIT_ASSERT"
+    info "gremion-executor ${EXECUTOR_VERSION} on ${HOST_ID}: ${n:-0} orphaned request(s) re-queued; polling every ${POLL_SECONDS} s"
+    while true; do
+        one_cycle
+        # a request just ran: look again at once; otherwise wait
+        if (( CYCLE_RESULT == 3 || CYCLE_RESULT == 4 )); then sleep "$POLL_SECONDS"; fi
+    done
+}
+
+main "$@"

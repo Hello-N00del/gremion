@@ -1,0 +1,96 @@
+#!/usr/bin/env bash
+# test/host/fixtures/executor/docker-shim — plays `docker` for executor.bats
+# and the request cases of tenant.bats (TASK-043d-1). Never a real daemon:
+#   docker exec -i <pg> psql ... -v k=v ... -f -   the request functions of
+#       gremion_platform, answered from files under $GREMION_ROOT (queue,
+#       verdict.json, ...) and recorded: the step order to order.log, every
+#       event to events.log, the finish outcome to outcome;
+#   docker compose ... run ... tenant-create <verb> ...   the one-shot:
+#       request-verify prints verdict.json, the phases print log lines,
+#       render-router prints a router document; fail-<verb> fails it;
+#   docker ps -q / compose config --services   a stable fingerprint
+#       (extra-container + after: one more container).
+R="$GREMION_ROOT"
+order() { printf '%s\n' "$*" >> "$R/order.log"; }
+
+if [ "${1:-}" = exec ]; then
+    shift
+    [ "${1:-}" = -i ] && shift
+    shift   # the container
+    [ "${1:-}" = psql ] || { echo "docker-shim: unexpected exec $*" >&2; exit 1; }
+    role=""
+    declare -A v=()
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            -U) role="$2"; shift 2 ;;
+            -v) v["${2%%=*}"]="${2#*=}"; shift 2 ;;
+            *) shift ;;
+        esac
+    done
+    sql="$(cat)"
+    printf '%s\n' "$role" >> "$R/psql-roles.log"
+    [ -f "$R/pg-down" ] && { echo "psql: error: connection refused" >&2; exit 2; }
+    case "$sql" in
+        *executor_beat*) printf 'beat %s %s\n' "${v[host]}" "${v[version]}" >> "$R/beats.log"; echo "2026-10-05 12:00:00+00" ;;
+        *claim_provisioning_request*)
+            order "psql claim"
+            if [ -s "$R/queue" ]; then head -n 1 "$R/queue"; sed -i 1d "$R/queue"; fi ;;
+        *requeue_own_requests*) order "psql requeue-own ${v[host]}"; echo 0 ;;
+        *mark_provisioning_request_verified*) order "psql mark-verified" ;;
+        *renew_provisioning_lease*) printf 'renew %s %s\n' "${v[id]}" "${v[host]}" >> "$R/renews.log" ;;
+        *record_provisioning_event*) printf '%s %s %s\n' "${v[level]}" "${v[step]}" "${v[msg]}" >> "$R/events.log" ;;
+        *finish_provisioning_request*) order "psql finish ${v[state]}"; printf '%s\n' "${v[outcome]}" > "$R/outcome" ;;
+        *submit_provisioning_request*)
+            [ -f "$R/submit-refused" ] && { echo "ERROR:  submit_provisioning_request: a break-glass request needs a reason" >&2; exit 3; }
+            order "psql submit ${v[kind]} ${v[slug]} actor=${v[actor]} op=${v[op]}"
+            printf '%s\n' "${v[reason]}" > "$R/submitted-reason"
+            printf '%s\n' "${v[args]}" > "$R/submitted-args"
+            echo "0192f0c4-0000-7000-8000-000000000001" ;;
+        *provisioning_request_status*) order "psql requests slug=${v[slug]}"; echo "0192f0c4-0000-7000-8000-000000000001|2026-10-05 12:00:00+00|create|alpha-rat|host|succeeded|0|ok" ;;
+        *) echo "docker-shim: unexpected sql: ${sql}" >&2; exit 1 ;;
+    esac
+    exit 0
+fi
+
+case " $* " in
+    *" run "*" tenant-create "*)
+        all="$*"
+        # the read-only mounts the create passes (tenant config, DPIA decisions)
+        for a in "$@"; do
+            case "$a" in
+                *:/run/gremion/tenant-config.json:ro)
+                    src="${a%:/run/gremion/tenant-config.json:ro}"
+                    { stat -c %a "$src" 2>/dev/null || echo "?"; cat "$src"; } > "$R/config-seen" ;;
+                *:/run/gremion/dpia.json:ro)
+                    src="${a%:/run/gremion/dpia.json:ro}"
+                    { stat -c %a "$src" 2>/dev/null || echo "?"; cat "$src"; } > "$R/dpia-seen" ;;
+            esac
+        done
+        rest="${all##* tenant-create }"
+        # shellcheck disable=SC2086
+        set -- $rest
+        verb="$1"; slug="${2:-}"
+        order "tc ${verb} ${slug}"
+        printf '%s\n' "$all" >> "$R/tc-argv.log"
+        [ -f "$R/fail-${verb}" ] && { echo "[tenant-create] FAILED: ${verb} (fixture)" >&2; exit 1; }
+        case "$verb" in
+            request-verify)
+                echo "[tenant-create] request-verify ${slug}: checking" >&2
+                cat "$R/verdict.json" ;;
+            phase-a)
+                echo "[tenant-create] phase A ${slug}: ran [realm_created, database_created]" >&2
+                [ -f "$R/leak" ] && echo "APP-PASSWORD: unit-app-secret-t043d" >&2
+                echo '{"phase":"a"}' ;;
+            phase-b) echo "[tenant-create] phase B ${slug}: enabled [calendar, votes]" >&2 ;;
+            render-router)
+                # TRD-440 fixture: a container appears while the router is written
+                [ -f "$R/extra-container" ] && touch "$R/after"
+                printf "# tenant-%s.yml\nhttp:\n  routers:\n    tenant-%s:\n      rule: \"Host(\`x\`)\"\n    tenant-%s.kc:\n      rule: \"x\"\n" "$slug" "$slug" "$slug" ;;
+        esac
+        exit 0 ;;
+    *" ps -q "*)
+        n=3; [ -f "$R/extra-container" ] && [ -f "$R/after" ] && n=4
+        i=0; while [ "$i" -lt "$n" ]; do echo "c$i"; i=$((i + 1)); done; exit 0 ;;
+    *" config --services "*) echo gremion-ui; echo control-panel; exit 0 ;;
+esac
+exit 0
