@@ -13,7 +13,7 @@
 # two RETIRED hosts (the stopped staging deployment and an unowned domain) and
 # runs under `make lint-hygiene`, which needs a Node toolchain. This list runs
 # under `make test-unit`, which needs only bash and bats -- the toolchain a
-# Debian host and a fresh agent worktree actually have. Two lists, two homes,
+# Debian host and a fresh worktree actually have. Two lists, two homes,
 # one stated reason. Folding this into (i1) as an (i3) is a legitimate
 # follow-up; it is not done here because this plan's file list is fixed.
 #
