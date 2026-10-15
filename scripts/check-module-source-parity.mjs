@@ -96,7 +96,7 @@ const S = 'gremion-ui/src/'
  * a trailing dot = every file of that stem, anything else = that file or file stem).
  *
  * Not in the table on purpose: users/** (TASK-131), vaultwarden.* (TASK-157), the shell files, and the
- * modules TASK-205c/d move later (publishing, vault, finance, handover); each joins this table in the
+ * modules TASK-205d moves later (finance, handover); each joins this table in the
  * commit that moves it.
  */
 export const MODULE_APP_PREFIXES = Object.freeze({
@@ -152,6 +152,23 @@ export const MODULE_APP_PREFIXES = Object.freeze({
     S + 'lib/stores/call-store.svelte.ts',
     S + 'lib/components/VideoCallPip.svelte',
     S + 'lib/modules/manifests/messages.',
+  ],
+  publishing: [
+    S + 'routes/newsletter/',
+    S + 'routes/api/newsletter/',
+    S + 'routes/api/internal/newsletter/',
+    S + 'lib/server/newsletter/',
+    S + 'lib/server/events/newsletter-audit-consumer.',
+    S + 'lib/server/seed/seed-newsletter.ts',
+    S + 'lib/modules/manifests/newsletter.',
+  ],
+  vault: [
+    S + 'routes/vault/',
+    S + 'routes/vault-extern/',
+    S + 'routes/api/vault/',
+    S + 'lib/server/vault/',
+    S + 'lib/vault/',
+    S + 'lib/modules/manifests/vault.',
   ],
   votes: [
     S + 'routes/polls/',

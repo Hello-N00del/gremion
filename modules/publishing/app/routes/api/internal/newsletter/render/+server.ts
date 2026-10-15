@@ -1,0 +1,83 @@
+// gremion-ui/src/routes/api/internal/newsletter/render/+server.ts
+// Task 11 — kernel callback: render an ODT newsletter body to HTML.
+//
+// The newsletter leaf calls this via kernel-client.ts `render(odtPath)`.
+// The kernel owns Nextcloud + Collabora access; the leaf never touches either.
+//
+// Guard: x-internal-auth header validated with timingSafeEqual against
+//   INTERNAL_NEWSLETTER_SECRET (mirrors the api/internal/push pattern).
+// This path is exempted from session-auth in hooks.server.ts publicPaths.
+import { json } from '@sveltejs/kit'
+import { timingSafeEqual } from 'crypto'
+import { z } from 'zod'
+import type { RequestHandler } from './$types'
+import { createNextcloudClient } from '$lib/server/files/nextcloud-client'
+import { convertOdtToHtml } from '$lib/server/newsletter/collabora-convert'
+
+/** Constant-time string comparison — prevents timing-side-channel secret leaks. */
+function safeCompare(a: string, b: string): boolean {
+  try {
+    const bufA = Buffer.from(a.padEnd(b.length))
+    const bufB = Buffer.from(b.padEnd(a.length))
+    const len = Math.max(bufA.length, bufB.length)
+    return (
+      timingSafeEqual(Buffer.concat([bufA], len), Buffer.concat([bufB], len)) &&
+      a.length === b.length
+    )
+  } catch {
+    return false
+  }
+}
+
+const RenderBody = z.object({
+  odtPath: z.string().min(1),
+})
+
+export const POST: RequestHandler = async ({ request }) => {
+  // ── 1. Guard: validate shared internal secret ─────────────────────────────
+  const secret = request.headers.get('x-internal-auth')
+  const expected = process.env.INTERNAL_NEWSLETTER_SECRET
+  if (!expected || !secret || !safeCompare(secret, expected)) {
+    return json({ success: false, error: 'Forbidden' }, { status: 403 })
+  }
+
+  // Tenancy D1 HARDENING-3: there is no tenant cross-check here any more, and
+  // its absence is not a gap. It existed because the leaf carried a REPLICA of
+  // the tenant's registered host and picked the tenant with it, so a stale
+  // replica could aim this write at another tenant and the check made that a
+  // loud 409. The element-0 resolver now selects this request's tenant FROM the
+  // `x-tenant-id` the leaf sends, under the same secret validated above
+  // (tenant/leaf-trust.ts) — so "the leaf's tenant" and "the resolved tenant"
+  // are the same value by construction. Asserting they agree would be a
+  // tautology; the property is now structural rather than checked.
+
+  // ── 2. Validate body ──────────────────────────────────────────────────────
+  let body: unknown
+  try {
+    body = await request.json()
+  } catch {
+    return json({ success: false, error: 'Invalid JSON' }, { status: 400 })
+  }
+
+  const parsed = RenderBody.safeParse(body)
+  if (!parsed.success) {
+    return json(
+      { success: false, error: 'Missing or invalid odtPath' },
+      { status: 400 }
+    )
+  }
+
+  const { odtPath } = parsed.data
+
+  // ── 3. Fetch ODT from Nextcloud + convert via Collabora ───────────────────
+  try {
+    const nc = createNextcloudClient()
+    const res = await nc.download(odtPath, 'admin')
+    const odtBuffer = await res.arrayBuffer()
+    const html = await convertOdtToHtml(odtBuffer)
+    return json({ html })
+  } catch (err) {
+    console.error('[newsletter:render] render failed', { odtPath, err })
+    return json({ success: false, error: 'Render failed' }, { status: 500 })
+  }
+}
