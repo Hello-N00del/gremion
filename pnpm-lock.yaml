@@ -221,6 +221,9 @@ importers:
       '@gremion/edge-routers':
         specifier: workspace:*
         version: link:../packages/edge-routers
+      '@gremion/events':
+        specifier: workspace:*
+        version: link:../packages/events
       '@gremion/nats-auth':
         specifier: workspace:*
         version: link:../packages/nats-auth

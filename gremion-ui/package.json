@@ -30,6 +30,7 @@
   },
   "devDependencies": {
     "@gremion/edge-routers": "workspace:*",
+    "@gremion/events": "workspace:*",
     "@gremion/nats-auth": "workspace:*",
     "@gremion/provisioning": "workspace:*",
     "@gremion/tenant-store": "workspace:*",
