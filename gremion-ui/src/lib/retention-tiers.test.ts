@@ -193,6 +193,47 @@ describe('the compose env files carry the registry values in seconds', () => {
   )
 })
 
+// The compliance documents restate the tiers in prose tables; a drifting figure
+// there tells a data subject or an auditor a window the system does not enforce.
+describe('the compliance documents state the registry tiers', () => {
+  const cells = (line: string): string[] => line.split('|').slice(1, -1).map((c) => c.trim())
+  const rowStarting = (text: string, start: string): string[] => {
+    const line = text.split('\n').find((l) => l.startsWith(start))
+    expect(line, `no table row starting with ${start}`).toBeDefined()
+    return cells(line!)
+  }
+
+  it.each(RETENTION_FIELDS)('docs/compliance.md row %s: default and hard cap equal the registry', (f) => {
+    const row = rowStarting(read('../../../docs/compliance.md'), `| \`${f}\` |`)
+    expect(Number(row[1])).toBe(RETENTION_DEFAULTS[f])
+    expect(Number(row[2].replaceAll('*', ''))).toBe(RETENTION_CAPS[f])
+  })
+
+  const CPS_ROW: Record<(typeof RETENTION_FIELDS)[number], string> = {
+    access_logs_days: '| Access logs |',
+    app_logs_days: '| Application logs |',
+    security_logs_days: '| Security logs (`audit_log`) |',
+    security_nopii_logs_days: '| Security logs without PII |',
+  }
+
+  it.each(RETENTION_FIELDS)('docs/compliance/controller-processor-split.md row %s: default and hard cap equal the registry', (f) => {
+    const row = rowStarting(read('../../../docs/compliance/controller-processor-split.md'), CPS_ROW[f])
+    expect(row[1]).toBe(`${RETENTION_DEFAULTS[f]} d`)
+    expect(row[2]).toBe(`${RETENTION_CAPS[f]} d`)
+  })
+
+  it('docs/compliance.md no longer shows the superseded Math.min caps or the fallback 90', () => {
+    const text = read('../../../docs/compliance.md')
+    expect(text).not.toMatch(/Math\.min\(\.\.\., (30|90|180|365)\)/)
+    expect(text).not.toContain('fallback 90')
+    expect(text).not.toContain("the code's current value")
+  })
+
+  it('docs/log-retention-policy.md no longer calls the table figures the code value rather than the policy', () => {
+    expect(read('../../../docs/log-retention-policy.md')).not.toContain("code's current value")
+  })
+})
+
 describe('no surface keeps a private copy of the old tiers', () => {
   const settingsApi = read('../routes/api/settings/+server.ts')
   const tab = read('../routes/settings/tabs/TabRetention.svelte')
