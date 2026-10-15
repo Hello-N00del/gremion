@@ -5,7 +5,7 @@ import { resolveNewsletterBackendOr503 } from '$lib/server/newsletter/backend/re
 import { createNextcloudClient } from '$lib/server/files/nextcloud-client'
 import { convertOdtToHtml } from '$lib/server/newsletter/collabora-convert'
 import { sanitizeRichHtml } from '$lib/server/security/html-sanitize'
-import { defaultTenantEnv } from '$lib/server/tenant/default-env'
+import { serviceEnv } from '$lib/server/env/service-env'
 
 export const GET: RequestHandler = async ({ params, locals }) => {
   if (!locals.user || !hasRole(locals.user.roles, Role.Finance)) {
@@ -21,7 +21,7 @@ export const GET: RequestHandler = async ({ params, locals }) => {
   const nc = createNextcloudClient()
   // Same sys-user resolution as the write path (api/newsletter POST) and the
   // wopi-token route — the ODT lives in the admin space, not the requester's.
-  const res = await nc.download(newsletter.odt_path, defaultTenantEnv('NEXTCLOUD_ADMIN_USER') ?? 'admin')
+  const res = await nc.download(newsletter.odt_path, serviceEnv('NEXTCLOUD_ADMIN_USER') ?? 'admin')
   const odtBuffer = await res.arrayBuffer()
   // #232 — this endpoint serves Collabora/LibreOffice HTML as text/html at the
   // app origin (directly navigable); sanitize the untrusted conversion output

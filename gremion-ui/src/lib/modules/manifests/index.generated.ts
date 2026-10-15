@@ -11,6 +11,7 @@ import { coreManifest } from './core'
 import { governanceManifest } from './governance'
 import { electionsManifest } from './elections'
 import { votesManifest } from './votes'
+import { newsletterManifest } from './newsletter'
 import { calendarManifest } from './calendar'
 import { filesManifest } from './files'
 import { messagesManifest } from './messages'
@@ -22,6 +23,7 @@ export const MODULE_MANIFESTS: ModuleManifest[] = [
   governanceManifest,
   electionsManifest,
   votesManifest,
+  newsletterManifest,
   calendarManifest,
   filesManifest,
   messagesManifest,

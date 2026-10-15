@@ -4,7 +4,7 @@ import { hasRole, Role } from '$lib/auth'
 import { resolveNewsletterBackendOr503 } from '$lib/server/newsletter/backend/resolve'
 import { createNextcloudClient } from '$lib/server/files/nextcloud-client'
 import { createEmptyOdt } from '$lib/server/newsletter/collabora-convert'
-import { defaultTenantEnv } from '$lib/server/tenant/default-env'
+import { serviceEnv } from '$lib/server/env/service-env'
 import { z } from 'zod'
 
 const createSchema = z.object({
@@ -43,7 +43,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
   const nc = createNextcloudClient()
   // #412: same sys-user resolution as the wopi-token route, so the write path
   // and the admin-side editor read path agree on the owning WebDAV space.
-  const adminUser = defaultTenantEnv('NEXTCLOUD_ADMIN_USER') ?? 'admin'
+  const adminUser = serviceEnv('NEXTCLOUD_ADMIN_USER') ?? 'admin'
 
   const folderPath = `/remote.php/dav/files/${adminUser}/_newsletters`
   try {

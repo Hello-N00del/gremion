@@ -1702,6 +1702,60 @@
       "reason": "TASK-205: comment names the kernel migration with its 4-digit padded name (the register lint refuses a pad-3 kernel-data name outside its allow-list)",
       "owner": "TASK-205",
       "blob": "6a4368dd21431984732e3506393c378c34c5c504"
+    },
+    {
+      "path": "modules/publishing/app/lib/server/events/newsletter-audit-consumer.ts",
+      "reason": "post-f2 StuRaOS 871636a: fix(types): svelte-check 12 -> 0 errors (R29-SVCHECK-S); ensureStream takes the mutable string[] NatsBroker.ensureStream takes (the same catch-up calendar-audit-consumer carries)",
+      "owner": "TASK-205c",
+      "blob": "44294143616b00a3c8e61a2c80f993b5459dd0b8"
+    },
+    {
+      "path": "modules/publishing/app/lib/server/newsletter/register.server.ts",
+      "reason": "TASK-205c: NATS_URL read through platformEnv (the default-tenant env family is deleted, TASK-042 T1)",
+      "owner": "TASK-205c",
+      "blob": "2d623f5ee46cf0e6f42efb54b440577c23ed5ae7"
+    },
+    {
+      "path": "modules/publishing/app/routes/api/newsletter/+server.ts",
+      "reason": "TASK-205c: NEXTCLOUD_ADMIN_USER through serviceEnv (the deleted default-tenant env reader)",
+      "owner": "TASK-205c",
+      "blob": "96409b9863fb9c63dc01ce058480ab99053232da"
+    },
+    {
+      "path": "modules/publishing/app/routes/api/newsletter/[id]/preview/+server.ts",
+      "reason": "TASK-205c: NEXTCLOUD_ADMIN_USER through serviceEnv (the deleted default-tenant env reader)",
+      "owner": "TASK-205c",
+      "blob": "24acad6c0bb7f5a8f1bc22b8b8760854f974407b"
+    },
+    {
+      "path": "modules/publishing/app/routes/api/newsletter/[id]/wopi-token/+server.ts",
+      "reason": "TASK-205c: NEXTCLOUD_ADMIN_USER through serviceEnv (the deleted default-tenant env reader)",
+      "owner": "TASK-205c",
+      "blob": "d7e0204ea46f95992a0f683b829de9de22696ef6"
+    },
+    {
+      "path": "modules/publishing/app/routes/api/newsletter/[id]/wopi-token/wopi-token.test.ts",
+      "reason": "TASK-205c: the seam mock follows the route: serviceEnv instead of the deleted default-tenant env reader",
+      "owner": "TASK-205c",
+      "blob": "28fce2b5a26f8679dfcd7820e75b620639eefa96"
+    },
+    {
+      "path": "modules/publishing/app/routes/api/internal/newsletter/render/+server.ts",
+      "reason": "TASK-205c: the shared constantTimeEqual replaces the local timingSafeEqual copy (the kernel Q4 guard in boot-exempt.test.ts requires every /api/internal/ handler to call isInternalTrustRequest or constantTimeEqual)",
+      "owner": "TASK-205c",
+      "blob": "28042f83d3fa9c935422be756f440d4c6a95e7a7"
+    },
+    {
+      "path": "modules/publishing/app/routes/api/internal/newsletter/resolve-group/+server.ts",
+      "reason": "TASK-205c: the shared constantTimeEqual replaces the local timingSafeEqual copy (the kernel Q4 guard in boot-exempt.test.ts requires every /api/internal/ handler to call isInternalTrustRequest or constantTimeEqual)",
+      "owner": "TASK-205c",
+      "blob": "d26ba46b8ace21ae28afc0a79e9d61341112abd0"
+    },
+    {
+      "path": "modules/publishing/app/routes/api/internal/newsletter/send-mail/+server.ts",
+      "reason": "TASK-205c: the shared constantTimeEqual replaces the local timingSafeEqual copy (the kernel Q4 guard in boot-exempt.test.ts requires every /api/internal/ handler to call isInternalTrustRequest or constantTimeEqual)",
+      "owner": "TASK-205c",
+      "blob": "af6c4cbc514fc2c9af8dd56c2cdbee18ad74bcb8"
     }
   ]
 }

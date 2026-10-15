@@ -21,7 +21,7 @@ const { mockCreateNextcloudClient, mockGetFileId, mockGetCollaboraEditorUrl } = 
   mockGetFileId: vi.fn(),
   mockGetCollaboraEditorUrl: vi.fn(),
 }))
-const { mockDefaultTenantEnv } = vi.hoisted(() => ({ mockDefaultTenantEnv: vi.fn() }))
+const { mockServiceEnv } = vi.hoisted(() => ({ mockServiceEnv: vi.fn() }))
 
 vi.mock('$lib/auth', () => ({
   hasRole: mockHasRole,
@@ -33,8 +33,8 @@ vi.mock('$lib/server/newsletter/backend/resolve', () => ({
 vi.mock('$lib/server/files/nextcloud-client', () => ({
   createNextcloudClient: mockCreateNextcloudClient,
 }))
-vi.mock('$lib/server/tenant/default-env', () => ({
-  defaultTenantEnv: mockDefaultTenantEnv,
+vi.mock('$lib/server/env/service-env', () => ({
+  serviceEnv: mockServiceEnv,
 }))
 
 import { GET } from './+server'
@@ -56,7 +56,7 @@ describe('GET /api/newsletter/[id]/wopi-token — #412 admin-resolved editor tok
     mockCreateNextcloudClient.mockReset()
     mockGetFileId.mockReset()
     mockGetCollaboraEditorUrl.mockReset()
-    mockDefaultTenantEnv.mockReset().mockImplementation((name: string) =>
+    mockServiceEnv.mockReset().mockImplementation((name: string) =>
       name === 'NEXTCLOUD_ADMIN_USER' ? 'ncadmin' : undefined
     )
 

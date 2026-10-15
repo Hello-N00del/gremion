@@ -3,7 +3,7 @@ import type { RequestHandler } from './$types'
 import { hasRole, Role } from '$lib/auth'
 import { resolveNewsletterBackendOr503 } from '$lib/server/newsletter/backend/resolve'
 import { createNextcloudClient } from '$lib/server/files/nextcloud-client'
-import { defaultTenantEnv } from '$lib/server/tenant/default-env'
+import { serviceEnv } from '$lib/server/env/service-env'
 
 // #412: the draft ODT lives in the ADMIN Nextcloud space (uploaded by the
 // api/newsletter POST as the sys user), so the generic per-user /files/edit
@@ -11,7 +11,7 @@ import { defaultTenantEnv } from '$lib/server/tenant/default-env'
 // Collabora token admin-side instead — same pattern as the protocols WOPI path
 // (protocol-documents.ts getDraftWopiToken).
 function sysUser(): string {
-  return defaultTenantEnv('NEXTCLOUD_ADMIN_USER') ?? 'admin'
+  return serviceEnv('NEXTCLOUD_ADMIN_USER') ?? 'admin'
 }
 
 export const GET: RequestHandler = async ({ params, locals }) => {

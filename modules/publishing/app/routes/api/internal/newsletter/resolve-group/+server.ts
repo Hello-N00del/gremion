@@ -12,25 +12,12 @@
 //   INTERNAL_NEWSLETTER_SECRET (mirrors the api/internal/push pattern).
 // This path is exempted from session-auth in hooks.server.ts publicPaths.
 import { json } from '@sveltejs/kit'
-import { timingSafeEqual } from 'crypto'
 import { z } from 'zod'
 import type { RequestHandler } from './$types'
+// TASK-205c: the shared constant-time compare replaces the local copy (the kernel Q4 guard in boot-exempt.test.ts
+// requires every /api/internal/ handler to call isInternalTrustRequest or constantTimeEqual).
+import { constantTimeEqual } from '$lib/server/internal-fetch'
 import { getKeycloakAdminClientForCurrentTenant } from '$lib/server/keycloak-admin'
-
-/** Constant-time string comparison — prevents timing-side-channel secret leaks. */
-function safeCompare(a: string, b: string): boolean {
-  try {
-    const bufA = Buffer.from(a.padEnd(b.length))
-    const bufB = Buffer.from(b.padEnd(a.length))
-    const len = Math.max(bufA.length, bufB.length)
-    return (
-      timingSafeEqual(Buffer.concat([bufA], len), Buffer.concat([bufB], len)) &&
-      a.length === b.length
-    )
-  } catch {
-    return false
-  }
-}
 
 const ResolveGroupBody = z.object({
   groupId: z.string().min(1),
@@ -40,7 +27,7 @@ export const POST: RequestHandler = async ({ request }) => {
   // ── 1. Guard: validate shared internal secret ─────────────────────────────
   const secret = request.headers.get('x-internal-auth')
   const expected = process.env.INTERNAL_NEWSLETTER_SECRET
-  if (!expected || !secret || !safeCompare(secret, expected)) {
+  if (!expected || !secret || !constantTimeEqual(secret, expected)) {
     return json({ success: false, error: 'Forbidden' }, { status: 403 })
   }
 

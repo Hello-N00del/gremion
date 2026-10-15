@@ -6,7 +6,7 @@
 // this at cold start.
 import { registerServerInitHook } from '$lib/server/modules/runtime-registry'
 import { makeLogTracer, noopTracer } from '$lib/server/ports/tracer'
-import { defaultTenantEnv } from '$lib/server/tenant/default-env'
+import { platformEnv } from '$lib/server/env/platform-env'
 import {
   startNewsletterAuditConsumer,
   NEWSLETTER_AUDIT_WORKER,
@@ -23,7 +23,7 @@ import { superviseWorker, markWorkerOff } from '$lib/server/events/consumer-stat
 // for the span binding (correlationId is per-envelope in the span attributes,
 // not the tracer's bind point for this long-lived consumer).
 registerServerInitHook(async () => {
-  const natsUrl = defaultTenantEnv('NATS_URL')
+  const natsUrl = platformEnv('NATS_URL')
   if (!natsUrl) {
     console.info('[newsletter-audit-consumer] NATS_URL not set — consumer off')
     markWorkerOff(NEWSLETTER_AUDIT_WORKER, 'NATS_URL not set')
