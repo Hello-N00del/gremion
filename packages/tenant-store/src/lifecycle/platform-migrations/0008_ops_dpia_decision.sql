@@ -1,5 +1,5 @@
 -- gremion:phase expand
--- gremion_platform, 0007 (TASK-044, brief Q3): DB-OPS-DPIA-DECISION verbatim
+-- gremion_platform, 0008 (TASK-044, brief Q3): DB-OPS-DPIA-DECISION verbatim
 -- from SCHEMA-gremion.md (:2420-2446). The enablement references it as an
 -- xref (plt.module_enablement.dpia_decision_id, no FK: SCHEMA :1776, :1788);
 -- the level-1 gate (lifecycle/enable-gate) reads the latest decision for the

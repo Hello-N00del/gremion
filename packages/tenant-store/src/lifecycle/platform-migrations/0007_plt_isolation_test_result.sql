@@ -1,5 +1,5 @@
 -- gremion:phase expand
--- gremion_platform, 0006 (TASK-044): DB-PLT-ISOLATION-TEST-RESULT verbatim
+-- gremion_platform, 0007 (TASK-044): DB-PLT-ISOLATION-TEST-RESULT verbatim
 -- from SCHEMA-gremion.md (:1432-1457), and the three foreign keys TASK-021
 -- omitted from 0002 (SCHEMA :1512-1515, :1756-1763), added here by ALTER TABLE
 -- with their SCHEMA names.

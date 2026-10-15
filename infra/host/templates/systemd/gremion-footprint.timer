@@ -1,0 +1,15 @@
+[Unit]
+Description=Run the Gremion storage footprint record weekly (TRD-223: at least weekly)
+
+[Timer]
+# Monday 03:00 UTC: the same moment as the seeded plt.scheduled_job cron
+# '0 3 * * 1' (platform migration 0005). One schedule, stated once: `weekly`
+# would fire Monday 00:00 in the host's local time and disagree with it.
+OnCalendar=Mon *-*-* 03:00:00 UTC
+# A host that was down at 03:00 still records on the next boot; the record is
+# keyed by the ISO week, so a late run lands in the same week's file and row.
+Persistent=true
+Unit=gremion-footprint.service
+
+[Install]
+WantedBy=timers.target

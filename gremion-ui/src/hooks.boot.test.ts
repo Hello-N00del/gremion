@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vitest'
 import { isRedirect } from '@sveltejs/kit'
 import { startTenantEvictListener } from '$lib/server/tenant/evict-listener'
 
@@ -178,6 +178,19 @@ afterEach(() => {
   exitSpy.mockRestore()
   vi.useRealTimers()
 })
+
+// TASK-039-FU residual 3 (r30-9 gate: 6.1 s against vitest's 5 s default, 58/58
+// alone). The first test of the file pays the whole transform of hooks.server's
+// module graph on its first `await import`; later tests re-import against a warm
+// transform cache (beforeEach resets the module registry, not the transform
+// cache). The cold cost is moved onto this hook, which has its own budget, so
+// every test keeps vitest's default 5 s: the project testTimeout is NOT raised.
+// `building` is already true (the hoisted appEnv), so the module-load boot()
+// does not run during this import.
+beforeAll(async () => {
+  appEnv.building = true
+  await import('./hooks.server')
+}, 120_000)
 
 /**
  * Wait for the boot() that hooks.server.ts starts at module load to settle,

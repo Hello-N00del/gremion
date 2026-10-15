@@ -8,7 +8,11 @@
 #   backup        gremion_backup_{last_ok,last_ts_seconds,timer_enabled}  (Q8)
 #   containers    gremion_container_{unhealthy,up,memory_bytes,disk_bytes}
 #   postgres      gremion_postgres_connections_{used,max}
-#   broker        gremion_nats_jsz_up, gremion_nats_stream_*, gremion_nats_consumer_*
+#   jobs          gremion_job_last_run{job_kind[,customer],status}  (plt.job_run,
+#                 newest run per plt.scheduled_job definition, TASK-039-FU;
+#                 the weekly footprint's own series is written by footprint.sh to
+#                 its own file, runtime/textfile/gremion-footprint.prom)
+#   broker       gremion_nats_jsz_up, gremion_nats_stream_*, gremion_nats_consumer_*
 #                 (`jsz` read inside the broker container: its monitor listens
 #                 on the container loopback only, TASK-024)
 #   filesystems   gremion_host_filesystem_{size,avail}_bytes{mountpoint}
@@ -49,16 +53,10 @@ mkdir -p "$OUT_DIR"
 # Diagnostics go to stderr: stdout is the metrics stream.
 note() { echo "[metrics] $*" >&2; }
 
-# ops_key <KEY> -- the environment's value, else ops.env's, else empty.
-ops_key() {
-    local key="$1" v
-    if [[ -n "${!key+x}" ]]; then printf '%s' "${!key}"; return 0; fi
-    [[ -f "$OPS_ENV" ]] || return 0
-    v="$(sed -n "s/^${key}=//p" "$OPS_ENV" | tail -n 1)"
-    v="${v%$'\r'}"
-    if [[ "$v" == \"*\" || "$v" == \'*\' ]]; then v="${v:1:${#v}-2}"; fi
-    printf '%s' "$v"
-}
+# ops_key, esc, to_bytes and state_container (R31 O14: one copy, shared with
+# footprint.sh). They read OPS_ENV and STACK_NAME, set here.
+# shellcheck source=./ops-lib.sh
+. "$SCRIPT_DIR/ops-lib.sh"
 
 STACK_NAME="$(ops_key STACK)"; STACK_NAME="${STACK_NAME:-gremion}"
 DISK_ROOT="$(ops_key GREMION_DISK_ROOT)"
@@ -75,23 +73,6 @@ to_epoch() {
     else
         date -u -d "$ts" +%s
     fi
-}
-
-# A label value, escaped for the text exposition format.
-esc() { local v="${1//\\/\\\\}"; v="${v//\"/\\\"}"; printf '%s' "${v//$'\n'/ }"; }
-
-# "12.5MiB", "1.2kB", "0B" -> bytes (binary units for docker stats, decimal
-# units for docker ps --size and docker system df). Prints nothing for a
-# value it cannot read.
-to_bytes() {
-    awk -v s="$1" 'BEGIN {
-        if (match(s, /^[0-9]+(\.[0-9]+)?/) == 0) exit
-        n = substr(s, 1, RLENGTH) + 0; u = substr(s, RLENGTH + 1)
-        f["B"]=1; f["kB"]=1e3; f["KB"]=1e3; f["MB"]=1e6; f["GB"]=1e9; f["TB"]=1e12
-        f["KiB"]=1024; f["MiB"]=1048576; f["GiB"]=1073741824; f["TiB"]=1099511627776
-        if (!(u in f)) exit
-        printf "%.0f\n", n * f[u]
-    }'
 }
 
 emit_backup() {
@@ -205,12 +186,6 @@ cached_reading() {
     cat "$cache" 2>/dev/null || true
 }
 
-state_container() {   # <compose service> -- the first running container of it in ${STACK}-state
-    docker ps --filter "label=com.docker.compose.project=${STACK_NAME}-state" \
-              --filter "label=com.docker.compose.service=$1" \
-              --format '{{.ID}}' | head -n 1
-}
-
 emit_postgres_connections() {
     local cid row used max
     cid="$(state_container postgres)"
@@ -231,6 +206,47 @@ emit_postgres_connections() {
     printf '# HELP gremion_postgres_connections_max The server max_connections setting.\n'
     printf '# TYPE gremion_postgres_connections_max gauge\n'
     printf 'gremion_postgres_connections_max %s\n' "$max"
+}
+
+# gremion_job_last_run (TASK-039-FU): the newest plt.job_run row per job
+# DEFINITION (plt.scheduled_job row), read in gremion_platform through the
+# state Postgres, value = finished_at as Unix seconds, one family. Keyed per
+# definition, not per kind (round-1 M2): backup_nightly and the other
+# customer-scoped kinds have one definition per customer, and a per-kind
+# DISTINCT ON let customer B's later success hide customer A's failure. A
+# customer-scoped definition carries `customer` (the pseudonymous customer
+# uuid); a platform one has no such label. (job_kind, customer) is unique by
+# scheduled_job_job_kind_customer_id_key, so every sample is its own series.
+# Ties on finished_at break on job_run_id (uuidv7: the later insert wins).
+# Each row is validated (kind|uuid or empty|status|digits); an unreachable
+# database, a missing schema (a host whose platform chain has not reached
+# 0005 yet) or garbage emits nothing -- absent, never 0 -- and a note.
+emit_job_last_run() {
+    local cid rows errf first_err="" out="" kind customer status epoch extra uuid_re='^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+    cid="$(state_container postgres)"
+    [[ -n "$cid" ]] || { note "no ${STACK_NAME}-state postgres container -- gremion_job_last_run absent"; return 0; }
+    # psql's stderr is kept (first line only) for the note: a refused connection,
+    # a missing relation (platform chain below 0005), a permission error and a
+    # typo in this query are different faults and must not read alike.
+    errf="$(mktemp)"
+    rows="$(docker exec "$cid" psql -U postgres -d gremion_platform -X -tAF'|' -c \
+        "SELECT DISTINCT ON (r.scheduled_job_id) s.job_kind, coalesce(s.customer_id::text, ''), r.status, extract(epoch FROM r.finished_at)::bigint FROM plt.job_run r JOIN plt.scheduled_job s USING (scheduled_job_id) ORDER BY r.scheduled_job_id, r.finished_at DESC, r.job_run_id DESC" \
+        2>"$errf" || true)"
+    first_err="$(head -n 1 "$errf" 2>/dev/null || true)"
+    rm -f "$errf"
+    while IFS='|' read -r kind customer status epoch extra; do
+        [[ -n "$kind$customer$status$epoch$extra" ]] || continue
+        if [[ -z "$extra" && "$kind" =~ ^[a-z_]{1,40}$ && ( -z "$customer" || "$customer" =~ $uuid_re ) \
+              && "$status" =~ ^(succeeded|failed|skipped)$ && "$epoch" =~ ^[1-9][0-9]*$ ]]; then
+            out+="gremion_job_last_run{job_kind=\"${kind}\",${customer:+customer=\"${customer}\",}status=\"${status}\"} ${epoch}"$'\n'
+        else
+            note "job-run row '${kind}|${customer}|${status}|${epoch}' is not <kind>|<customer uuid or empty>|<status>|<epoch> -- skipped"
+        fi
+    done <<< "$rows"
+    [[ -n "$out" ]] || { note "no job run readable${first_err:+ (${first_err})} -- gremion_job_last_run is absent"; return 0; }
+    printf '# HELP gremion_job_last_run Unix time the newest run of a scheduled job finished; the status label is its outcome.\n'
+    printf '# TYPE gremion_job_last_run gauge\n'
+    printf '%s' "$out"
 }
 
 # The jq program per family: one family per pass, so every family's samples
@@ -355,6 +371,7 @@ main() {
         emit_backup
         emit_containers
         emit_postgres_connections
+        emit_job_last_run
         emit_nats
         emit_filesystems
         emit_storage_components

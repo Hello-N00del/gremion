@@ -1,5 +1,5 @@
 -- gremion:phase expand
--- gremion_platform, 0005 (TASK-044, brief Q10): SCHEMA-gremion.md §1.1
+-- gremion_platform, 0006 (TASK-044, brief Q10): SCHEMA-gremion.md §1.1
 -- restricted to schema ops, as 0001_plt_setup.sql did for plt: the ops schema,
 -- its two shared trigger functions (ops.touch_row, ops.refuse_update) and
 -- ops.freeze_terminal. SCHEMA §1.1 creates the per-schema pair in one DO loop;

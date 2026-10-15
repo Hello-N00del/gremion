@@ -473,7 +473,7 @@ describe('TDD 9 + lane note A3: an attested enablement survives the migration, i
 
     // (a)
     const m = await migratePlatform(platform, { releaseRef: 'dist-v0.0.2', log: () => {} })
-    expect(m.applied).toEqual(expect.arrayContaining(['0005_ops_setup.sql', '0006_plt_isolation_test_result.sql', '0007_ops_dpia_decision.sql']))
+    expect(m.applied).toEqual(expect.arrayContaining(['0006_ops_setup.sql', '0007_plt_isolation_test_result.sql', '0008_ops_dpia_decision.sql']))
     const [kept] = await platform<{ iso: string; state: string }[]>`SELECT isolation_test_result_id::text AS iso, state FROM plt.module_enablement WHERE customer_id = ${X}`
     expect(kept).toEqual({ iso: att!.id, state: 'enabled' })
 
