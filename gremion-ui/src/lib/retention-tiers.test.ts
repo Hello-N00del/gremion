@@ -110,6 +110,7 @@ describe('no surface keeps a private copy of the old tiers', () => {
   const settingsApi = read('../routes/api/settings/+server.ts')
   const tab = read('../routes/settings/tabs/TabRetention.svelte')
   const config = read('./server/config.ts')
+  const loesch = read('./server/loeschkonzept.ts')
   const hooks = read('../hooks.server.ts')
 
   it('the settings API zod bounds come from RETENTION_CAPS', () => {
@@ -128,7 +129,15 @@ describe('no surface keeps a private copy of the old tiers', () => {
     expect(tab).not.toContain('BayLDA')
   })
 
-  it('the tab takes its caveats from RETENTION_CAVEATS', () => {
+  it('the Loeschkonzept text names the operator decision in plain German, not the BSI tiers or a plan id', () => {
+    expect(loesch).toContain('OPERATOR_DECISION_DE')
+    expect(loesch).not.toContain('R29-I6')
+    expect(loesch).not.toContain('BSI-Mindeststandard')
+    expect(loesch).not.toContain('BayLDA')
+  })
+
+  it('the Loeschkonzept and the tab take their caveats from RETENTION_CAVEATS', () => {
+    expect(loesch).toContain('RETENTION_CAVEATS')
     expect(tab).toContain('RETENTION_CAVEATS')
     expect(tab).toContain('OPERATOR_DECISION_DE') // reader-facing text is asserted on the rendered tab (TabRetention.test.ts)
   })
