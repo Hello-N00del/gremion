@@ -97,7 +97,7 @@ claim into any of them.
 - gremion-ui's own ledger (`db.ts`) has no sha256 column, so the kernel data
   plane checks file = manifest for every file at boot (G5) but not
   applied row = manifest; that half lands with the move onto tenant-store
-  (owner named by the orchestrator; TASK-038 re-asserts).
+  (owner named by the maintainer; TASK-038 re-asserts).
 - Nothing in the kernel data plane refuses a **pre-renumber (pad-3) ledger**.
   `db.ts` compares ledger names only through `applied.has(file)`, so on a
   database whose `schema_migrations` still records the 31 pad-3 names it

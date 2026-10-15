@@ -709,13 +709,13 @@
     },
     {
       "path": "modules/calendar/app/routes/api/calendar/automations/minutes/confirm/+server.ts",
-      "reason": "post-f2 StuRaOS b78c0b0c: fix(calendar): the minutes-confirm session path requires a CouncilAdmin (F1-FIX-03-S r2, house review HIGH)",
+      "reason": "post-f2 StuRaOS b78c0b0c: fix(calendar): the minutes-confirm session path requires a CouncilAdmin (F1-FIX-03-S r2, code review HIGH)",
       "owner": "TASK-205",
       "blob": "9f4196ecc3b97e272715e4e3027564aa360ca172"
     },
     {
       "path": "modules/calendar/app/routes/api/calendar/automations/minutes/confirm/confirm.test.ts",
-      "reason": "post-f2 StuRaOS b78c0b0c: fix(calendar): the minutes-confirm session path requires a CouncilAdmin (F1-FIX-03-S r2, house review HIGH)",
+      "reason": "post-f2 StuRaOS b78c0b0c: fix(calendar): the minutes-confirm session path requires a CouncilAdmin (F1-FIX-03-S r2, code review HIGH)",
       "owner": "TASK-205",
       "blob": "3b83e1c299e8602b5158dca372620a1dfd8802b0"
     },
@@ -1207,7 +1207,7 @@
     },
     {
       "path": "modules/content/app/routes/content/unsubscribe/+page.server.ts",
-      "reason": "kernel-ahead of f2: 8dd9f899 docs(content): drop the RFC 8058 one-click claim from the unsubscribe route (F1-FIX-07 r2, verifier ",
+      "reason": "kernel-ahead of f2: 8dd9f899 docs(content): drop the RFC 8058 one-click claim from the unsubscribe route (F1-FIX-07 r2)",
       "owner": "TASK-205",
       "blob": "6d1d6d1e0622eec0c7dfb5c676ebaa55772a7d22"
     },
@@ -1219,7 +1219,7 @@
     },
     {
       "path": "modules/content/app/routes/content/unsubscribe/unsubscribe.test.ts",
-      "reason": "kernel-ahead of f2: 8dd9f899 docs(content): drop the RFC 8058 one-click claim from the unsubscribe route (F1-FIX-07 r2, verifier ",
+      "reason": "kernel-ahead of f2: 8dd9f899 docs(content): drop the RFC 8058 one-click claim from the unsubscribe route (F1-FIX-07 r2)",
       "owner": "TASK-205",
       "blob": "d176f3df32360f0bacb132c6db35d6160f2f3a07"
     },
@@ -1231,9 +1231,9 @@
     },
     {
       "path": "modules/calendar/src/caldav/target.ts",
-      "reason": "added in the kernel after f2: e291d8d1 fix(calendar): resolve the CalDAV target per tenant and refuse to drain without one (F1-FIX-08-K H06",
+      "reason": "added in the kernel after f2: e291d8d1 fix(calendar): resolve the CalDAV target per tenant and refuse to drain without one (F1-FIX-08-K H06); comment wording only: the compose-wiring note names the maintainer",
       "owner": "TASK-205",
-      "blob": "11468cbb903ac1ead6b8746e17ddc39c5ff6ae18"
+      "blob": "d6bdea8bb38d3b5d20f9008f920a7707950fc91c"
     },
     {
       "path": "modules/calendar/src/caldav/tenant-drain.ts",

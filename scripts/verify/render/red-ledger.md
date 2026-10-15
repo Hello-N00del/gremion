@@ -28,7 +28,7 @@ strings unchanged); G3 gremion-ui `scripts/boundary-lint.ts` (`collectAll(root)`
 - `Makefile:293` (was `:276` before main 535aae89) still says "TASK-053 wires `verify`", but
   `lint-pooled-stack` has been in `verify` since 14c02f63. The Makefile is not this unit's
   file; the note goes to its owner.
-- Seeded-regression chronology: the rescued WIP commit 0afbf0a9 (orchestrator, R28) already
+- Seeded-regression chronology: the rescued WIP commit 0afbf0a9 (maintainer, R28) already
   held a G2 body when this lane resumed. It had no import, so it threw a ReferenceError on
   every app render. The section 1 seed was therefore run at the guard commit 0b72442e (G2 not
   applied) in the scratch tree, and G2 was completed afterwards in 81d24a16. The binding order
@@ -37,7 +37,7 @@ strings unchanged); G3 gremion-ui `scripts/boundary-lint.ts` (`collectAll(root)`
   used the name `kernel-api` itself, not `seed-probe`.
 - Allowances (brief Q4): `render/allowances.json` carries dated rows for `tenant-create` (app)
   and `legal`, `vector`, `fallback` (state), all retiring with TASK-048b. X-053 goes to
-  TASK-048b through the orchestrator.
+  TASK-048b through the maintainer.
 - r4 merge order (2026-09-30, merge 54d33da8 of kernel `main` 535aae89): TASK-048 landed
   before this unit, against the brief's Q10 order. It pinned third-party images by digest and
   moved the first-party `:-latest` defaults to `:-dev`, but it shipped no state-pins release

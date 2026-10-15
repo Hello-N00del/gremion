@@ -29,7 +29,7 @@ nine merges: eight release-1 units plus one hygiene fix, in merge order (oldest 
 Eight unit merges (B00, B37, B1b, B1a, B0, B2, B3, B4) match PLAN §7's verdict table exactly: "8
 merged (B0, B00, B1a, B1b, B2, B3, B4, B37)" under KEEP.
 
-**StuRaOS (orchestrator-observed, not independently re-checked in this worktree — the StuRaOS repo
+**StuRaOS (maintainer-observed, not independently re-checked in this worktree — the StuRaOS repo
 is not present here):** local master `b412f083` carries B3's StuRaOS half merged locally and not
 pushed; `origin/master` `f276af59` is what the test environment currently runs.
 
@@ -243,7 +243,7 @@ are then (PRD-REC-008), not carried forward from this one.
   `routes/+page.server.ts` and the `financeRoleLabels` hunk of `routes/api/notifications/+server.ts`
   (source commit `87797e42`): the kernel has no notifications route. Holder: none. OPEN. The other
   "found" item there, the missing publish lock on resolution PATCH and DELETE, was closed by the
-  house review fixes on that unit and is not carried here.
+  code review fixes on that unit and is not carried here.
 - **StuRaOS runbooks outside TASK-011's list.** `docs/runbooks/` in StuRaOS also holds the
   board, calendar, content, messages and newsletter cutover runbooks, `helios-image-update`,
   `helios-service-account`, `nextcloud-theming`, `object-storage`, `satellite-theming`,
