@@ -127,9 +127,9 @@
     },
     {
       "path": "modules/board/test/lifecycle.integration.test.ts",
-      "reason": "added by R29-BOARD-STORE-K A8: enableModule / disableModule round trip, role proof, no-sleep refusal",
+      "reason": "added by R29-BOARD-STORE-K A8: enableModule / disableModule round trip, role proof, no-sleep refusal; names its release and phase (TASK-075, 4498f081)",
       "owner": "TASK-152",
-      "blob": "0b479373af1a18afea75d4a8b99d115102ed6a2c"
+      "blob": "69081d3177beeb265404235c9dba569a959d96d6"
     },
     {
       "path": "modules/board/test/no-phantom-stura-db.test.ts",
@@ -169,9 +169,9 @@
     },
     {
       "path": "modules/board/test/support/scratch-pg.ts",
-      "reason": "added by R29-BOARD-STORE-K: the suites' one direct scratch-server connection file (allow-listed in tenant-db-access.allow.json)",
+      "reason": "added by R29-BOARD-STORE-K: the suites' one direct scratch-server connection file (allow-listed in tenant-db-access.allow.json); runMigrations names its release and phase (TASK-075, 4498f081)",
       "owner": "TASK-152",
-      "blob": "cf5e4c2214b5e567d1cc036b3021f139222ef755"
+      "blob": "744b5da1c6796c38113d5cfd9a620e3dc0c79f85"
     },
     {
       "path": "modules/board/test/support/tenants.ts",
