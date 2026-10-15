@@ -3,7 +3,7 @@
 // counts come from what the target says it proved, not a fixed 1.
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { INTEGRATION_PARTS, integrationVitestEnv, judgeFreshInit, judgeNatsAuthTest, judgeNatsTest } from './suites/integration.mjs'
+import { INTEGRATION_PARTS, integrationVitestEnv, judgeEventsTest, judgeFreshInit, judgeNatsAuthTest, judgeNatsTest } from './suites/integration.mjs'
 
 const NATS_OK =
   '[nats-test] running the ports suite against nats://127.0.0.1:4222\n' +
@@ -69,7 +69,56 @@ test('test-nats-auth: a non-zero exit is a failure', () => {
 
 test('the nats-auth part is registered beside nats', () => {
   assert.equal(typeof INTEGRATION_PARTS['nats-auth'], 'function')
-  assert.deepEqual(Object.keys(INTEGRATION_PARTS).slice(-2), ['nats', 'nats-auth'])
+  assert.deepEqual(Object.keys(INTEGRATION_PARTS).slice(-3), ['nats', 'nats-auth', 'events'])
+})
+
+// TASK-079: make test-events -- the unit suite, four live groups, three alert phases, the image check.
+const EVENTS_OK =
+  '      Tests  83 passed (83)\n' +
+  '[events-proof] stack t079-0123abcd up\n' +
+  '      Tests  16 passed (16)\n' +
+  '[events-proof] 16 passing (minimum 15)\n' +
+  '[events-proof] group core OK\n' +
+  '[events-proof] 15 passing (minimum 15)\n' +
+  '[events-proof] group consumer OK\n' +
+  '[events-proof] 6 passing (minimum 6)\n' +
+  '[events-proof] group deadletter OK\n' +
+  '[events-proof] 2 passing (minimum 2)\n' +
+  '[events-proof] group rebuild OK\n' +
+  '[events-proof] group alert-fire OK\n' +
+  '[events-proof] group alert-hold OK\n' +
+  '[events-proof] group alert-resolve OK\n' +
+  '[events-proof] OK\n' +
+  '[events-image] OK -- pnpm exec events and the package import work in t079-0123abcd-migrate\n'
+
+test('test-events: the unit summary, every group at its floor, the alert phases, OK and the image line pass, counting unit + live', () => {
+  const p = judgeEventsTest({ code: 0, stdout: EVENTS_OK, stderr: '' })
+  assert.equal(p.unparseable ?? false, false, JSON.stringify(p))
+  assert.equal(p.collected, 83 + 16 + 15 + 6 + 2)
+  assert.equal(p.failed, 0)
+})
+
+for (const [missing, drop] of [
+  ['the unit summary', /^\s+Tests  83 passed \(83\)\n/m],
+  ['the rebuild group', /^\[events-proof\] 2 passing \(minimum 2\)\n\[events-proof\] group rebuild OK\n/m],
+  ['an alert phase', /^\[events-proof\] group alert-hold OK\n/m],
+  ['the final OK line', /^\[events-proof\] OK\n/m],
+  ['the image line', /^\[events-image\] OK.*\n/m],
+]) {
+  test(`test-events: exit 0 without ${missing} is untrusted, never a pass`, () => {
+    const p = judgeEventsTest({ code: 0, stdout: EVENTS_OK.replace(drop, ''), stderr: '' })
+    assert.equal(p.unparseable, true, JSON.stringify(p))
+  })
+}
+
+test('test-events: a group run with its floor lowered below the pinned one is untrusted', () => {
+  const p = judgeEventsTest({ code: 0, stdout: EVENTS_OK.replace('6 passing (minimum 6)', '1 passing (minimum 1)'), stderr: '' })
+  assert.equal(p.unparseable, true, JSON.stringify(p))
+})
+
+test('test-events: a non-zero exit is a failure', () => {
+  const p = judgeEventsTest({ code: 1, stdout: '[events-proof] FAILED: the core suite exited 1\n', stderr: '' })
+  assert.ok(p.failed > 0 && !p.unparseable, JSON.stringify(p))
 })
 
 const FRESH_OK = '  ok tables exist\n  ok column present\n  ok check definition\n[fresh-init] all post-conditions hold\n'

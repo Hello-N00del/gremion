@@ -232,6 +232,54 @@ export function judgeNatsAuthTest(res) {
 }
 
 /**
+ * `make test-events` (TASK-079): @gremion/events' unit suite, then
+ * packages/events/scripts/proof.sh against a scratch Postgres and the
+ * authenticated broker (four live groups and three alert phases), then the
+ * migrate-image reach check. Judged like judgeNatsAuthTest: exit 0 counts only
+ * with the unit run's all-passed summary, every live group's own
+ * "[events-proof] N passing (minimum M)" + "group <g> OK" pair at or above the
+ * floor pinned HERE (a log claiming a lower floor did not run the proof this
+ * judge vouches for), the three alert phases' OK lines, the proof's final
+ * "[events-proof] OK" and the image check's OK line. collected is the unit
+ * count plus the live counts.
+ */
+export const EVENTS_MIN_PROOFS = { core: 15, consumer: 15, deadletter: 6, rebuild: 2 }
+export const EVENTS_ALERT_PHASES = ['alert-fire', 'alert-hold', 'alert-resolve']
+
+export function judgeEventsTest(res) {
+  const label = 'make test-events'
+  const out = `${res.stdout}\n${res.stderr}`
+  // The unit run prints BEFORE the proof starts; the proof echoes its own live-suite
+  // summaries, which must not stand in for the unit one.
+  const unit = out.split(/^\[events-proof\]/m)[0].match(/^\s*Tests\s+(\d+) passed \(\1\)\s*$/m)
+  const groups = new Map()
+  for (const m of out.matchAll(/^\[events-proof\] (\d+) passing \(minimum (\d+)\)\s*\n\[events-proof\] group ([\w-]+) OK\s*$/gm)) {
+    groups.set(m[3], { passing: Number(m[1]), minimum: Number(m[2]) })
+  }
+  const groupsOk = Object.entries(EVENTS_MIN_PROOFS).every(([g, floor]) => {
+    const r = groups.get(g)
+    return r !== undefined && r.minimum >= floor && r.passing >= r.minimum
+  })
+  const alertsOk = EVENTS_ALERT_PHASES.every((p) => new RegExp(`^\\[events-proof\\] group ${p} OK\\s*$`, 'm').test(out))
+  const ok = /^\[events-proof\] OK\s*$/m.test(out)
+  const image = /^\[events-image\] OK\b/m.test(out)
+  const live = [...groups.values()].reduce((a, r) => a + r.passing, 0)
+  if (res.code !== 0) {
+    const n = Math.max(1, (unit ? Number(unit[1]) : 0) + live)
+    return { label, collected: n, passed: 0, failed: n, skipped: 0, detail: tail(out) }
+  }
+  if (!unit || !groupsOk || !alertsOk || !ok || !image) {
+    return {
+      label,
+      unparseable: true,
+      detail: `exit 0 but not all of the unit "Tests N passed (N)" summary, the four "[events-proof] N passing (minimum >= floor)" group pairs, the three alert phase OK lines, "[events-proof] OK" and "[events-image] OK" -- untrusted\n${tail(out)}`,
+    }
+  }
+  const n = Number(unit[1]) + live
+  return { label, collected: n, passed: n, failed: 0, skipped: 0 }
+}
+
+/**
  * `make fresh-init-proof` (gremion-ui/scripts/fresh-init-proof.sh). Its
  * checks print `  ok <name>` / `FAIL <name>: ...`; collected is their count,
  * and exit 0 must come with its own "[fresh-init] all post-conditions hold".
@@ -264,6 +312,7 @@ export const INTEGRATION_PARTS = {
   'fresh-init': (root) => makePart('fresh-init-proof', judgeFreshInit, root),
   nats: (root) => makePart('test-ports-nats', judgeNatsTest, root),
   'nats-auth': (root) => makePart('test-nats-auth', judgeNatsAuthTest, root),
+  events: (root) => makePart('test-events', judgeEventsTest, root),
 }
 
 export function runIntegrationSuite({ root = REPO_ROOT, only } = {}) {

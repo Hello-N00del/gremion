@@ -538,6 +538,29 @@
       "testGlobs": ["packages/nats-auth/test/live/**/*.test.ts"]
     },
     {
+      "id": "kernel-events-unit",
+      "repo": "kernel",
+      "category": "unit",
+      "cwd": "packages/events",
+      "kind": "vitest",
+      "command": "pnpm run test",
+      "timeoutMs": 600000,
+      "requiresStack": false,
+      "testGlobs": ["packages/events/test/**/*.test.ts"],
+      "excludeGlobs": ["packages/events/test/live/**"]
+    },
+    {
+      "id": "kernel-events-live",
+      "repo": "kernel",
+      "category": "integration",
+      "cwd": ".",
+      "kind": "vitest",
+      "command": "make test-events",
+      "timeoutMs": 1200000,
+      "requiresStack": true,
+      "testGlobs": ["packages/events/test/live/**/*.test.ts"]
+    },
+    {
       "id": "kernel-provisioning-unit",
       "repo": "kernel",
       "category": "unit",
