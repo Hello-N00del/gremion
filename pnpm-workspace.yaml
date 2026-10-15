@@ -65,7 +65,16 @@ overrides:
   # talks to Keycloak over HTTPS pinned to an internal CA (G-080), so a
   # dispatcher-level verification bypass undermines that trust anchor.
   # The same override is applied in every repository that consumes this workspace.
-  undici: 7.29.0
+  #
+  # Then GHSA-w293-vg96-wgc3 (HIGH, a TLS certificate validation bypass through a dropped
+  # connection, >=7.24.1), GHSA-rfgv-xxqx-mfg5 (HIGH, unrequested WebSocket subprotocol DoS)
+  # and eight more (cookie-cache cross-user disclosure, retry-interceptor response splitting,
+  # unbounded decompression, WebSocketStream close, ...) landed on every release below 7.29.1.
+  # This was an EXACT pin at 7.29.0 — the shape that already went stale once (7.28.0 in the
+  # product repository): a pin cannot follow an advisory, it holds the tree one release inside
+  # the vulnerable range. A floor bounded to 7.x patches the line and lets the next fix land by
+  # re-lock. jsdom declares a 7.x range, so the ceiling costs nothing.
+  undici: '>=7.29.1 <8'
   # GHSA-g7r4-m6w7-qqqr — esbuild dev-server arbitrary file read on Windows.
   # Pulled in via tsx's own `esbuild: ~0.28.0` dependency, which is patched
   # only starting at 0.28.1 (patch bump within tsx's own allowed range).
