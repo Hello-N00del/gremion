@@ -3,9 +3,11 @@
 // BEFORE anything connects, and each missing one is a NAMED exit-2 failure,
 // never a default. Spawns the real CLI entrypoint (tsx + the SvelteKit env shim).
 import { spawnSync } from 'node:child_process'
+import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
+import { EnableRefused, refusalLine } from '../../../../../scripts/tenant-provision-gate'
 
 const UI = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '..', '..')
 const REPO = join(UI, '..')
@@ -180,4 +182,29 @@ describe('tenant-create gate verbs (TASK-044)', () => {
     expect(gs.status, gs.out).toBe(2)
     expect(gs.out).toContain('PLATFORM_DATABASE_URL')
   }, 180_000)
+
+  // A gate refusal is a refusal, not a usage error: exit 1, `REFUSED <code>: <reason>`
+  // on stderr (lane note A5). The mapping is a pure function plus the one catch in
+  // main(); the catch must consult it BEFORE the usage classification, so a refusal
+  // can never fall into the exit-2 branch (watched RED with the order swapped).
+  it('an EnableRefused is rendered as REFUSED <code>: <reason>; any other error is not a refusal', () => {
+    const refused = new EnableRefused('NO_RELEASE_TIP', 'the tip is unset', 'votes', null, null)
+    expect(refusalLine(refused)).toBe('REFUSED NO_RELEASE_TIP: the tip is unset')
+    expect(refusalLine(new Error('NO_RELEASE_TIP: boom'))).toBeNull()
+    expect(refusalLine('NO_RELEASE_TIP')).toBeNull()
+  })
+
+  it('the entrypoint exits 1 on a refusal, checked before the exit-2 usage classification', () => {
+    const src = readFileSync(join(UI, 'scripts', 'tenant-provision.ts'), 'utf8')
+    const catchAt = src.indexOf('.catch((err) => {')
+    expect(catchAt).toBeGreaterThan(0)
+    const block = src.slice(catchAt)
+    const refusal = block.indexOf('refusalLine(err)')
+    const usage = block.indexOf('const usage =')
+    expect(refusal).toBeGreaterThan(0)
+    expect(usage).toBeGreaterThan(refusal)
+    const refusalBranch = block.slice(refusal, usage)
+    expect(refusalBranch).toMatch(/process\.exitCode = 1\b/)
+    expect(refusalBranch).not.toMatch(/process\.exitCode = 2\b/)
+  })
 })
