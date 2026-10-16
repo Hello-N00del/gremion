@@ -117,8 +117,9 @@ kernel's encoding and `smtp-outcome`) is a content decision for the unit that en
 recipient with no session, and the publishing leaf calls three kernel callbacks with a shared secret, so
 `PUBLIC_PATHS` gains five EXACT entries (nothing below or beside them is public; StuRaOS master has the same
 routes, as a page subtree for the page and exact entries for the API and the callbacks, the kernel matcher is
-stricter for the page): `/newsletter/unsubscribe` (static page that calls the API), `/api/newsletter/unsubscribe`
-(GET; 400 without a token, 404 unknown, 410 expired, no address echoed, IP rate limit first),
+stricter for the page): `/newsletter/unsubscribe` (confirm page: opening the mailed link requests nothing, the click POSTs the token),
+`/api/newsletter/unsubscribe` (POST with a JSON body, GET is 405; 400 without a token, 404 unknown, 410 expired,
+no address echoed, IP rate limit first),
 `/api/internal/newsletter/render`, `/resolve-group` and `/send-mail` (each handler refuses with 403 unless
 `x-internal-auth` constant-time-equals `INTERNAL_NEWSLETTER_SECRET`; an unset or empty server secret refuses
 everything). They are the newsletter keys of `LEAF_CALLBACK_ROUTES`; `hooks.boot.test.ts` pins the exact list, a
