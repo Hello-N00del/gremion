@@ -1,6 +1,6 @@
 module-source parity (TASK-200) — scripts/check-module-source-parity.mjs
 source: annotated tag extraction-source-f2 -> d0c656d0b266f3a1741f34454e0061bc5078c3f4; set-A base (frozen extraction source) f276af5925abacdcfd05f6613fc11afff2d804c5
-kernel: ac7d9c343ced4c5489465a8b404c61f4bb4fc7fd
+kernel: e426998213ba56c6a21325736ffee924c7440d8e
 mode: tip (only EXTRACTION-DELTA.json paths may differ; set A never)
 
 set A — services/** changed f276af59..extraction-source-f2: 42 files, 14 differ (14 listed, 0 unlisted)
@@ -18,7 +18,7 @@ set A — services/** changed f276af59..extraction-source-f2: 42 files, 14 diffe
   listed   modules/publishing/src/tenant-store.ts  tag=cc8ae3e9dcf09b4dbb691109f8077a70f7b01390 kernel=134b18f75139cb63ba558787fd8fc7e70d2855d3
   listed   modules/votes/src/helios/helios-client.ts  tag=ee030fe51a9dd26447f8dcfb99dd9e60dd0eb380 kernel=4790c4f0d8877254e87c05a0b091f32e78708361
   listed   modules/votes/src/polls/polls-client.ts  tag=393dc41f1f4c21d84b6bc006d7a02d16aaab3b74 kernel=590ff78faec620eeb12594df97a01d84d988a4d1
-set B — services/** at extraction-source-f2: 383 files, 104 differ (104 listed, 0 unlisted)
+set B — services/** at extraction-source-f2: 383 files, 105 differ (105 listed, 0 unlisted)
   listed   modules/board/migrations/manifest.json  tag=a6c5997f4e48b3a501b016c9935745af6c2cb8bc kernel=d9f35ed80842e07e55851c97c61979ab662d8d55
   listed   modules/board/package.json  tag=5beb993e71595aadb3e26b708a92af2d204b066d kernel=8704df34f2be6a22f183aaba31900f9984305427
   listed   modules/board/scripts/backfill.ts  tag=9a1bc6c298d987a101aa757ab6bc46cc23ebf786 kernel=absent
@@ -40,7 +40,7 @@ set B — services/** at extraction-source-f2: 383 files, 104 differ (104 listed
   listed   modules/calendar/src/caldav/sync.ts  tag=4fe2c9ef605e1083baf6883af3a18873e574d400 kernel=660cf292d047f3fc865099daad395480817bbf0f
   listed   modules/calendar/src/http/guard.ts  tag=0ca94fd5b9adfa83becf4f24de7ac217912181c5 kernel=15db8367697bf2201c89fb377fbda5a79a6ca754
   listed   modules/calendar/src/http/routes.ts  tag=3908b76e050ae3f18392bafc835bf62ece1a62fb kernel=cce8fefcc78c2727cd2195f2f3622d466f379242
-  listed   modules/calendar/src/index.ts  tag=f7b9702d7c3a086d140473d92e1d2c858f57e0ca kernel=1d8d8037df301b0755edb6b8b9e7222145ec688d
+  listed   modules/calendar/src/index.ts  tag=f7b9702d7c3a086d140473d92e1d2c858f57e0ca kernel=9ae4c3cd80ce5a1e6d67242a84965075eddda785
   listed   modules/calendar/src/store/events.ts  tag=32d0317f9fd65be1e47d021369cd91e211e68cd6 kernel=cb134702285d7a296276b3248b722d70b10662ca
   listed   modules/calendar/src/tenant-store.ts  tag=db39d263ae8915ec85d8ef3d079a98c397615f56 kernel=e737c3a37d7704f5213e7bbcfd8486c0a57e8a17
   listed   modules/calendar/test/api.integration.test.ts  tag=a405181ab3c13cfff2c5c8f0b553fb1dab49fe69 kernel=5eabb877c8a6cffedb973de010a94a7d2a1c3ce5
@@ -56,7 +56,7 @@ set B — services/** at extraction-source-f2: 383 files, 104 differ (104 listed
   listed   modules/content/src/http/guard.ts  tag=4a64a89de15a478257958a5deb25dd1ac11244ed kernel=86867e451f958e80b77f072533d20400585315f6
   listed   modules/content/src/http/routes.ts  tag=34a4d1e8955c6861efb8461a6ba157b0a4ba5a70 kernel=53953d8ed9227f460827e0b030c1b8d1888a2b0c
   listed   modules/content/src/http/server.ts  tag=c102234d848139e29435199afd0911ea1f74ac44 kernel=cbbadf3872011ad4a790a59215007acf832dfe70
-  listed   modules/content/src/index.ts  tag=2dd71e101fb9049251bac58bbe841125da267985 kernel=7e309a572d8f90d429de6a08a12c6639f46119d8
+  listed   modules/content/src/index.ts  tag=2dd71e101fb9049251bac58bbe841125da267985 kernel=13d232ae19b77578f7c79691a9b219c320483d4d
   listed   modules/content/src/publish-channel.ts  tag=8bcc8d04eaae2d3e383b3f85ede1b150ae6f987d kernel=fa80411ef6bb13e82003d1f1c415475eb582031d
   listed   modules/content/src/scheduler.ts  tag=15f21246ea5c291fa197306a21af345e30d293ab kernel=5b511e559f248b2a5c87314dd02c085fbe4e2323
   listed   modules/content/src/store/channels.ts  tag=2daf650e29b9792179bd5a9911e5583c19f225a2 kernel=dee2187587815d21aae98ad1de9fc790a775c765
@@ -107,6 +107,7 @@ set B — services/** at extraction-source-f2: 383 files, 104 differ (104 listed
   listed   modules/publishing/src/dispatch.ts  tag=ca2e8cf414c67f480fca8c7d25294d582faa16a1 kernel=0d5d13733a8ddfe8a4f4aeece997a7cfdf938df8
   listed   modules/publishing/src/http/guard.ts  tag=ac333cb44e48d5dc57f8f59522c54d5248eb70d8 kernel=21ea66037de13a6e73a450f527f61b3a662f5a39
   listed   modules/publishing/src/http/routes.ts  tag=dbcb71434d7cd734d896e0b7ba52d5712a6d1f4f kernel=b42c2813179edcf1739e85a5858aca3406dafd51
+  listed   modules/publishing/src/index.ts  tag=111bbac9fe9d13bc30306f0a614b98063950e8ab kernel=a8f1dcfb8ca950afa83abda90890f6372e20a3b8
   listed   modules/publishing/src/tenant-store.ts  tag=cc8ae3e9dcf09b4dbb691109f8077a70f7b01390 kernel=134b18f75139cb63ba558787fd8fc7e70d2855d3
   listed   modules/publishing/test/api.integration.test.ts  tag=90be789a4a40c08df7b4837d4822ae1b98772b27 kernel=80dc9e28454fbe218d29e873e7b28482fbde68c2
   listed   modules/publishing/test/deploy-drift.test.ts  tag=622790af4e17d17c468039e2f95ef341a5102f50 kernel=absent
@@ -251,7 +252,7 @@ set C — module in-process halves (gremion-ui/src -> modules/<id>/app; board, c
   listed   modules/votes/app/routes/votes/+page.server.ts  tag=3281b779a449da0481ad8a10e03f685a933c316b kernel=3a7a08dc7a44e13c262964668dd28e1799f34f2d
   listed   modules/votes/app/routes/votes/+page.svelte  tag=f0f86f3e0227f24e312de57f61eb7ca3ba1ad39d kernel=aa3996cb78ef28265624045e95cb4b306354fdda
   listed   modules/votes/app/routes/votes/votes.reflow.browser.test.ts  tag=e6a243481bc87882b4a8c63c4f9797fe8357864d kernel=8336a5c49111e3793d88f87bf7e23fb7d99e958c
-extras — kernel files in a mapped module directory that no tag path maps to: 119 (119 listed)
+extras — kernel files in a mapped module directory that no tag path maps to: 125 (125 listed)
   listed   modules/board/app/routes/api/board/board-binding.test.ts
   listed   modules/board/src/app.ts
   listed   modules/board/src/store/tenant-db.ts
@@ -281,10 +282,12 @@ extras — kernel files in a mapped module directory that no tag path maps to: 1
   listed   modules/calendar/app/routes/api/calendar/events/events-recurrence.test.ts
   listed   modules/calendar/src/caldav/target.ts
   listed   modules/calendar/src/caldav/tenant-drain.ts
+  listed   modules/calendar/src/relay-tick.ts
   listed   modules/calendar/test/caldav-pusher.test.ts
   listed   modules/calendar/test/caldav-tenant-target.test.ts
   listed   modules/calendar/test/ics-validity.test.ts
   listed   modules/calendar/test/identity-mismatch-http.test.ts
+  listed   modules/calendar/test/relay-tick.test.ts
   listed   modules/calendar/test/tenant-isolation.integration.test.ts
   listed   modules/calendar/test/tenant-store.identity-binding.integration.test.ts
   listed   modules/calendar/test/tenant-store.identity-binding.test.ts
@@ -300,11 +303,13 @@ extras — kernel files in a mapped module directory that no tag path maps to: 1
   listed   modules/content/app/scripts/news-posts-public-grant-proof.sh
   listed   modules/content/app/scripts/news-posts-public-grant-proof.test.mjs
   listed   modules/content/src/link-base.ts
+  listed   modules/content/src/relay-tick.ts
   listed   modules/content/test/admin-routes.teardown.integration.test.ts
   listed   modules/content/test/admin-routes.teardown.test.ts
   listed   modules/content/test/healthz-tenants.test.ts
   listed   modules/content/test/identity-mismatch-http.test.ts
   listed   modules/content/test/link-base.test.ts
+  listed   modules/content/test/relay-tick.test.ts
   listed   modules/content/test/route-parity.test.ts
   listed   modules/content/test/tenant-isolation.integration.test.ts
   listed   modules/content/test/tenant-store.identity-binding.integration.test.ts
@@ -361,7 +366,9 @@ extras — kernel files in a mapped module directory that no tag path maps to: 1
   listed   modules/publishing/app/routes/api/internal/newsletter/callback-auth.test.ts
   listed   modules/publishing/app/routes/api/newsletter/unsubscribe/unsubscribe.test.ts
   listed   modules/publishing/app/routes/newsletter/unsubscribe/unsubscribe-page.test.ts
+  listed   modules/publishing/src/relay-tick.ts
   listed   modules/publishing/test/identity-mismatch-http.test.ts
+  listed   modules/publishing/test/relay-tick.test.ts
   listed   modules/publishing/test/tenant-isolation.integration.test.ts
   listed   modules/publishing/test/tenant-store.identity-binding.integration.test.ts
   listed   modules/publishing/test/tenant-store.identity-binding.test.ts
@@ -371,6 +378,6 @@ extras — kernel files in a mapped module directory that no tag path maps to: 1
   listed   modules/votes/src/boot-config.ts
   listed   modules/votes/test/polls-client.test.ts
   listed   modules/votes/test/server-validation.test.ts
-delta entries: 350
+delta entries: 357
 
 RESULT: OK
