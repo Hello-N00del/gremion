@@ -1,6 +1,6 @@
 module-source parity (TASK-200) — scripts/check-module-source-parity.mjs
 source: annotated tag extraction-source-f2 -> d0c656d0b266f3a1741f34454e0061bc5078c3f4; set-A base (frozen extraction source) f276af5925abacdcfd05f6613fc11afff2d804c5
-kernel: bc25309c9e196474f7f1331c63c77caa9d6230f5
+kernel: 8484c50d3fefafd462df5a22237229ca1df03981
 mode: tip (only EXTRACTION-DELTA.json paths may differ; set A never)
 
 set A — services/** changed f276af59..extraction-source-f2: 42 files, 14 differ (14 listed, 0 unlisted)
@@ -52,7 +52,7 @@ set B — services/** at extraction-source-f2: 383 files, 104 differ (104 listed
   listed   modules/calendar/test/tenant-store.init-retry.test.ts  tag=400fb059c6f21e3cb5d978a43323305b7b719d01 kernel=9aeeeb41fce47402c261bad800dfbf0ae5552bdd
   listed   modules/calendar/tsconfig.test.json  tag=d306bca9249596a8a3e47f9019a8b52467448215 kernel=b7657adb0ccd629df81b20045a5b72a96dac9b1d
   listed   modules/content/src/dispatch.ts  tag=98551f282bb5e4012cea13dbadb803b7fe714dcf kernel=68a0ae47becd666b93402703b7b5c09b2de586e5
-  listed   modules/content/src/http/admin-routes.ts  tag=b1c9c2be5e4acde50c28ea4e9d5b495f38e366a4 kernel=8c344770537997d7ba52d366c56c2586908d9a5a
+  listed   modules/content/src/http/admin-routes.ts  tag=b1c9c2be5e4acde50c28ea4e9d5b495f38e366a4 kernel=a44226b0524245e7bbf890b2c8c2c83d8d8d9ffc
   listed   modules/content/src/http/guard.ts  tag=4a64a89de15a478257958a5deb25dd1ac11244ed kernel=c92a0d401faa1d0dd9961e0be209a0c94beb6ff1
   listed   modules/content/src/http/routes.ts  tag=34a4d1e8955c6861efb8461a6ba157b0a4ba5a70 kernel=53953d8ed9227f460827e0b030c1b8d1888a2b0c
   listed   modules/content/src/http/server.ts  tag=c102234d848139e29435199afd0911ea1f74ac44 kernel=cbbadf3872011ad4a790a59215007acf832dfe70
@@ -251,7 +251,7 @@ set C — module in-process halves (gremion-ui/src -> modules/<id>/app; board, c
   listed   modules/votes/app/routes/votes/+page.server.ts  tag=3281b779a449da0481ad8a10e03f685a933c316b kernel=3a7a08dc7a44e13c262964668dd28e1799f34f2d
   listed   modules/votes/app/routes/votes/+page.svelte  tag=f0f86f3e0227f24e312de57f61eb7ca3ba1ad39d kernel=aa3996cb78ef28265624045e95cb4b306354fdda
   listed   modules/votes/app/routes/votes/votes.reflow.browser.test.ts  tag=e6a243481bc87882b4a8c63c4f9797fe8357864d kernel=8336a5c49111e3793d88f87bf7e23fb7d99e958c
-extras — kernel files in a mapped module directory that no tag path maps to: 115 (115 listed)
+extras — kernel files in a mapped module directory that no tag path maps to: 119 (119 listed)
   listed   modules/board/app/routes/api/board/board-binding.test.ts
   listed   modules/board/src/app.ts
   listed   modules/board/src/store/tenant-db.ts
@@ -285,6 +285,7 @@ extras — kernel files in a mapped module directory that no tag path maps to: 1
   listed   modules/calendar/test/caldav-tenant-target.test.ts
   listed   modules/calendar/test/ics-validity.test.ts
   listed   modules/calendar/test/identity-mismatch-http.test.ts
+  listed   modules/calendar/test/tenant-isolation.integration.test.ts
   listed   modules/calendar/test/tenant-store.identity-binding.integration.test.ts
   listed   modules/calendar/test/tenant-store.identity-binding.test.ts
   listed   modules/content/app/lib/server/content/channels/smtp-outcome.test.ts
@@ -305,6 +306,7 @@ extras — kernel files in a mapped module directory that no tag path maps to: 1
   listed   modules/content/test/identity-mismatch-http.test.ts
   listed   modules/content/test/link-base.test.ts
   listed   modules/content/test/route-parity.test.ts
+  listed   modules/content/test/tenant-isolation.integration.test.ts
   listed   modules/content/test/tenant-store.identity-binding.integration.test.ts
   listed   modules/content/test/tenant-store.identity-binding.test.ts
   listed   modules/elections/src/index.ts
@@ -325,6 +327,7 @@ extras — kernel files in a mapped module directory that no tag path maps to: 1
   listed   modules/finance/test/identity-mismatch-http.test.ts
   listed   modules/finance/test/leaf-write-scope.integration.test.ts
   listed   modules/finance/test/receipt-key.store.test.ts
+  listed   modules/finance/test/tenant-isolation.integration.test.ts
   listed   modules/finance/test/tenant-store.identity-binding.integration.test.ts
   listed   modules/finance/test/tenant-store.identity-binding.test.ts
   listed   modules/messaging/app/lib/components/messaging/CallLiveChip.svelte
@@ -359,6 +362,7 @@ extras — kernel files in a mapped module directory that no tag path maps to: 1
   listed   modules/publishing/app/routes/api/newsletter/unsubscribe/unsubscribe.test.ts
   listed   modules/publishing/app/routes/newsletter/unsubscribe/unsubscribe-page.test.ts
   listed   modules/publishing/test/identity-mismatch-http.test.ts
+  listed   modules/publishing/test/tenant-isolation.integration.test.ts
   listed   modules/publishing/test/tenant-store.identity-binding.integration.test.ts
   listed   modules/publishing/test/tenant-store.identity-binding.test.ts
   listed   modules/votes/app/lib/modules/manifests/votes.ts
@@ -367,6 +371,6 @@ extras — kernel files in a mapped module directory that no tag path maps to: 1
   listed   modules/votes/src/boot-config.ts
   listed   modules/votes/test/polls-client.test.ts
   listed   modules/votes/test/server-validation.test.ts
-delta entries: 346
+delta entries: 350
 
 RESULT: OK

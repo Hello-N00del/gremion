@@ -1885,9 +1885,9 @@
     },
     {
       "path": "modules/content/src/http/admin-routes.ts",
-      "reason": "kernel-ahead of f2: StuRaOS#534 hardening: teardown evicts the tenant pool before DROP DATABASE, the catalog row is kept (409) while its database exists, the reserved slug control is never dropped, dbPrefix dependency",
+      "reason": "kernel-ahead of f2: StuRaOS#534 hardening: teardown evicts the tenant pool before DROP DATABASE, the catalog row is kept (409) while its database exists, the reserved slug control is never dropped, dbPrefix dependency; teardown retry: DROP DATABASE is retried once after a second pool eviction when a request raced the first eviction",
       "owner": "TASK-205",
-      "blob": "8c344770537997d7ba52d366c56c2586908d9a5a"
+      "blob": "a44226b0524245e7bbf890b2c8c2c83d8d8d9ffc"
     },
     {
       "path": "modules/content/test/admin-routes.teardown.integration.test.ts",
@@ -1897,9 +1897,9 @@
     },
     {
       "path": "modules/content/test/admin-routes.teardown.test.ts",
-      "reason": "kernel-ahead of f2: StuRaOS#534 hardening: hardening tests",
+      "reason": "kernel-ahead of f2: StuRaOS#534 hardening: hardening tests; teardown retry tests",
       "owner": "TASK-205",
-      "blob": "1029514938d4bf81dace86d1b441fdc8ed6b132d"
+      "blob": "3844bf1e6562c44c8af5ac724c9c8a2449cc0c02"
     },
     {
       "path": "modules/calendar/src/tenant-store.ts",
@@ -2080,6 +2080,30 @@
       "reason": "kernel-ahead of f2: StuRaOS#534 hardening: fixture tenant ids made canonical for the guard",
       "owner": "TASK-205",
       "blob": "80dc9e28454fbe218d29e873e7b28482fbde68c2"
+    },
+    {
+      "path": "modules/content/test/tenant-isolation.integration.test.ts",
+      "reason": "TRD-060 isolation guard: two-tenant read/list/update/delete isolation and (id, slug) binding refusal against a real Postgres",
+      "owner": "TASK-205",
+      "blob": "704440b794a66729f77bc2e7b51c66f9dd31bd42"
+    },
+    {
+      "path": "modules/calendar/test/tenant-isolation.integration.test.ts",
+      "reason": "TRD-060 isolation guard: two-tenant read/list/update/delete isolation and (id, slug) binding refusal against a real Postgres",
+      "owner": "TASK-205",
+      "blob": "f077543254793909c619302380ffcabb210514aa"
+    },
+    {
+      "path": "modules/publishing/test/tenant-isolation.integration.test.ts",
+      "reason": "TRD-060 isolation guard: two-tenant read/list/update/delete isolation and (id, slug) binding refusal against a real Postgres",
+      "owner": "TASK-205",
+      "blob": "87f39322ad1d2de09639f5ae2fde81714780c606"
+    },
+    {
+      "path": "modules/finance/test/tenant-isolation.integration.test.ts",
+      "reason": "TRD-060 isolation guard: two-tenant read/list/update/delete isolation and (id, slug) binding refusal against a real Postgres",
+      "owner": "TASK-205",
+      "blob": "7e969da503bc092ac99086c5a9a86313db710245"
     }
   ]
 }

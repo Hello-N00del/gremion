@@ -23,6 +23,8 @@ const h = vi.hoisted(() => ({
   /** Every statement that reached the driver, in order. */
   log: [] as string[],
   opened: 0,
+  /** The next N DROP DATABASE statements fail with this error (a request raced the eviction). */
+  dropFailures: [] as { code?: string; message: string; whileRacing?: () => void }[],
 }))
 
 vi.mock('postgres', () => {
@@ -31,6 +33,9 @@ vi.mock('postgres', () => {
     const drop = /^DROP DATABASE IF EXISTS "([^"]+)"/i.exec(sqlText)
     if (drop) {
       h.log.push(`DROP ${drop[1]}`)
+      const failure = h.dropFailures.shift()
+      failure?.whileRacing?.()
+      if (failure) throw Object.assign(new Error(failure.message), failure.code ? { code: failure.code } : {})
       h.databases.delete(drop[1]!)
       return []
     }
@@ -110,6 +115,7 @@ beforeEach(() => {
   h.databases.clear()
   h.log.length = 0
   h.opened = 0
+  h.dropFailures.length = 0
   vi.spyOn(console, 'log').mockImplementation(() => {})
   vi.spyOn(console, 'warn').mockImplementation(() => {})
   vi.spyOn(console, 'error').mockImplementation(() => {})
@@ -156,6 +162,58 @@ describe('DELETE /api/admin/tenants/:slug/db evicts the pool', () => {
   it('is idempotent: a tenant with no pool and no database is a 200', async () => {
     const res = await del(`/api/admin/tenants/${A.slug}/db`)
     expect(res.status).toBe(200)
+  })
+
+  const inUse = (db: string) => ({ code: '55006', message: `database "${db}" is being accessed by other users` })
+
+  it('retries the DROP once after a second eviction when a request raced the first one', async () => {
+    h.databases.add(PREFIX + A.slug)
+    const first = stubPool()
+    _poolRegistryForTests.set(A.id, first.pool, A.slug)
+    // The raced request re-opens a pool for the slug after the first eviction.
+    const late = stubPool()
+    h.dropFailures.push({
+      ...inUse(PREFIX + A.slug),
+      whileRacing: () => _poolRegistryForTests.set(A.id, late.pool, A.slug),
+    })
+
+    const res = await del(`/api/admin/tenants/${A.slug}/db`)
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ success: true, dropped: PREFIX + A.slug })
+    expect(h.log.filter((l) => l.startsWith('DROP '))).toEqual([`DROP ${PREFIX}${A.slug}`, `DROP ${PREFIX}${A.slug}`])
+    expect(first.ended()).toBe(1)
+    expect(late.ended()).toBe(1) // the second eviction ended the pool the racing request opened
+    expect(late.endedAt()[0]).toBeLessThanOrEqual(h.log.lastIndexOf(`DROP ${PREFIX}${A.slug}`))
+    expect(_poolRegistryForTests.get(A.id)).toBeUndefined()
+    expect(h.databases.has(PREFIX + A.slug)).toBe(false)
+  })
+
+  it('recognises the in-use error by its message alone (a driver error without a code)', async () => {
+    h.databases.add(PREFIX + A.slug)
+    h.dropFailures.push({ message: inUse(PREFIX + A.slug).message })
+    const res = await del(`/api/admin/tenants/${A.slug}/db`)
+    expect(res.status).toBe(200)
+    expect(h.log.filter((l) => l.startsWith('DROP '))).toHaveLength(2)
+    expect(h.databases.has(PREFIX + A.slug)).toBe(false)
+  })
+
+  it('gives up after one retry: a second in-use failure is a 500 and the database is kept', async () => {
+    h.databases.add(PREFIX + A.slug)
+    h.dropFailures.push(inUse(PREFIX + A.slug), inUse(PREFIX + A.slug))
+    const res = await del(`/api/admin/tenants/${A.slug}/db`)
+    expect(res.status).toBe(500)
+    expect(await res.json()).toMatchObject({ success: false, error: expect.stringContaining('being accessed by other users') })
+    expect(h.log.filter((l) => l.startsWith('DROP '))).toHaveLength(2)
+    expect(h.databases.has(PREFIX + A.slug)).toBe(true)
+  })
+
+  it('does not retry any other DROP failure', async () => {
+    h.databases.add(PREFIX + A.slug)
+    h.dropFailures.push({ code: '42501', message: 'permission denied to drop database' })
+    const res = await del(`/api/admin/tenants/${A.slug}/db`)
+    expect(res.status).toBe(500)
+    expect(h.log.filter((l) => l.startsWith('DROP '))).toHaveLength(1)
+    expect(h.databases.has(PREFIX + A.slug)).toBe(true)
   })
 
   it('refuses the reserved slug control: <prefix>control is the catalog database, it is never dropped', async () => {
