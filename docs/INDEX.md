@@ -27,6 +27,7 @@ repositories — one per module — and carry their own docs.
 | [log-retention-policy.md](./log-retention-policy.md) | The Vector log pipeline, retention windows, IP pseudonymisation |
 | [compliance/controller-processor-split.md](./compliance/controller-processor-split.md) | DRAFT: how GDPR controller / processor roles are intended to fall for a self-hosted install and for a hosted control plane |
 | [security/test-smtp-guard.md](./security/test-smtp-guard.md) | The outbound target guard on `/api/setup/test-smtp`: canonical-bytes address predicate, resolve-once, the `SMTP_TEST_ALLOW_PRIVATE` range opt-in and its carve-outs, DNS classification — and the named residuals |
+| [pilot/poll-usage/README.md](./pilot/poll-usage/README.md) | The two open-poll forms of the pilot, the no-anonymity and no-eligibility wording rule, and how poll usage is measured from go-live |
 
 ## Develop
 
