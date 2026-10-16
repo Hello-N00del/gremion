@@ -99,7 +99,8 @@ vi.mock('postgres', () => {
 })
 
 // Imported AFTER vi.mock so the stand-in driver is in place.
-const { storeFor, _poolRegistryForTests, _resetTenantStoreForTests } = await import('../src/tenant-store.ts')
+const { storeFor, InvalidTenantIdError, InvalidTenantSlugError, _poolRegistryForTests, _resetTenantStoreForTests } =
+  await import('../src/tenant-store.ts')
 
 const PREFIX = 'content_test_'
 const CONTROL_DB = PREFIX + 'control'
@@ -189,6 +190,27 @@ describe('storeFor refuses a pair the catalog does not bind (cold miss)', () => 
     await expect(storeFor({ id: A.id.toUpperCase(), slug: A.slug }, OPTS)).rejects.toThrow(/canonical lowercase uuid/)
     await expect(storeFor({ id: 'not-a-uuid', slug: A.slug }, OPTS)).rejects.toThrow(/canonical lowercase uuid/)
     expect(h.opened).toEqual([])
+  })
+
+  it('a non-canonical tenant id is the typed InvalidTenantIdError (TENANT_ID_INVALID) and its message names no id', async () => {
+    for (const id of [A.id.toUpperCase(), 'not-a-uuid', '', ` ${A.id}`, `${A.id}\n`, 'x'.repeat(200)]) {
+      const err = await storeFor({ id, slug: A.slug }, OPTS).catch((e: unknown) => e)
+      expect(err).toBeInstanceOf(InvalidTenantIdError)
+      expect(err).toMatchObject({ code: 'TENANT_ID_INVALID', name: 'InvalidTenantIdError' })
+      expect((err as Error).message).not.toContain(id.trim() === '' ? 'never-present' : id.trim())
+    }
+    expect(h.opened).toEqual([])
+    expect(h.writes).toEqual([])
+  })
+
+  it('a slug off the grammar is the typed InvalidTenantSlugError (INVALID_TENANT_SLUG), before the driver is touched', async () => {
+    for (const slug of ['Bad Slug', '-lead', 'trail-', '', 'a'.repeat(31), 'a_b']) {
+      const err = await storeFor({ id: A.id, slug }, OPTS).catch((e: unknown) => e)
+      expect(err).toBeInstanceOf(InvalidTenantSlugError)
+      expect(err).toMatchObject({ code: 'INVALID_TENANT_SLUG', name: 'InvalidTenantSlugError' })
+    }
+    expect(h.opened).toEqual([])
+    expect(h.writes).toEqual([])
   })
 })
 

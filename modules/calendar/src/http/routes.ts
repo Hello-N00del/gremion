@@ -35,7 +35,13 @@
 
 import type http from 'node:http'
 import { z } from 'zod'
-import { TenantIdentityMismatchError, type Sql, type TenantRef } from '../tenant-store.js'
+import {
+  InvalidTenantIdError,
+  InvalidTenantSlugError,
+  TenantIdentityMismatchError,
+  type Sql,
+  type TenantRef,
+} from '../tenant-store.js'
 import type { Route, RouteContext } from './router.js'
 import { enqueueOutbox } from '../outbox.js'
 import { BYDAY_PATTERN } from '../caldav/client.js'
@@ -206,6 +212,16 @@ export function buildApiRoutes(storeFn: StoreFn): Route[] {
           // stale or forged pair, never a server fault. The body names neither tenant.
           console.warn(`[calendar:api] ${err.message}`)
           sendError(extended.res, 409, 'tenant_identity_mismatch')
+        } else if (err instanceof InvalidTenantIdError) {
+          // A tenant id that is not a canonical lowercase uuid (follow-up to audit
+          // #534): the caller's error, never a server fault. The body names nothing.
+          console.warn(`[calendar:api] ${err.message}`)
+          sendError(extended.res, 400, 'invalid_tenant_id')
+        } else if (err instanceof InvalidTenantSlugError) {
+          // A slug storeFor will not build a database name from (reserved, or the
+          // grammar): the caller's error. The body names nothing.
+          console.warn(`[calendar:api] ${err.message}`)
+          sendError(extended.res, 400, 'invalid_tenant_slug')
         } else {
           console.error('[calendar:api] unhandled route error', err)
           if (!extended.res.headersSent) {

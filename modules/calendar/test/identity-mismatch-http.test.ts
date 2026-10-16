@@ -15,6 +15,7 @@ import { createServer } from '../src/http/server.ts'
 import { buildApiRoutes } from '../src/http/routes.ts'
 import {
   storeFor,
+  InvalidTenantIdError,
   TenantIdentityMismatchError,
   _poolRegistryForTests,
   _resetTenantStoreForTests,
@@ -98,5 +99,45 @@ describe('calendar http: tenant_identity_mismatch', () => {
     expect(err).toBeInstanceOf(Error)
     expect(err.code).toBe('TENANT_IDENTITY_MISMATCH')
     expect(err.name).toBe('TenantIdentityMismatchError')
+  })
+})
+
+describe('calendar http: invalid_tenant_id', () => {
+  let base: string
+  let server: ReturnType<typeof createServer>
+
+  beforeAll(async () => {
+    // A store that refuses the id the way tenant-store does when the guard is bypassed.
+    server = createServer({
+      secret: SECRET,
+      routes: buildApiRoutes(() => Promise.reject(new InvalidTenantIdError())),
+    })
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
+  })
+
+  afterAll(async () => {
+    await new Promise<void>((resolve) => server.close(() => resolve()))
+  })
+
+  beforeEach(() => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+  })
+
+  it('InvalidTenantIdError is a 400 invalid_tenant_id that names nothing, not a 500', async () => {
+    const res = await fetch(`${base}${ROUTE}`, { headers: headers(BOUND.slug) })
+    expect(res.status).toBe(400)
+    const text = await res.text()
+    expect(JSON.parse(text)).toEqual({ success: false, error: 'invalid_tenant_id' })
+    expect(text).not.toContain(BOUND.id)
+    expect(text).not.toContain(BOUND.slug)
+  })
+
+  it('exports the refusal as a coded error', () => {
+    const err = new InvalidTenantIdError()
+    expect(err).toBeInstanceOf(Error)
+    expect(err.code).toBe('TENANT_ID_INVALID')
+    expect(err.name).toBe('InvalidTenantIdError')
   })
 })

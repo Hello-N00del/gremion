@@ -116,6 +116,30 @@ export class TenantIdentityMismatchError extends Error {
   }
 }
 
+/**
+ * The tenant id is not a canonical lowercase uuid (Postgres' own rendering). The
+ * catalog comparison is on tenant_id::text and the id keys the pool registry, so
+ * any other spelling is refused before a catalog row, a database or a pool is
+ * touched. The HTTP layer answers 400 invalid_tenant_id; the message and the
+ * response name nothing the caller sent (follow-up to audit #534).
+ */
+export class InvalidTenantIdError extends Error {
+  readonly code = 'TENANT_ID_INVALID'
+  constructor() {
+    super('[tenant-store] tenant id is not a canonical lowercase uuid - refusing (no database created, nothing upserted)')
+    this.name = 'InvalidTenantIdError'
+  }
+}
+
+/** A slug storeFor refuses to build a database name from (grammar, or reserved). */
+export class InvalidTenantSlugError extends Error {
+  readonly code = 'INVALID_TENANT_SLUG'
+  constructor(message: string) {
+    super(message)
+    this.name = 'InvalidTenantSlugError'
+  }
+}
+
 /** Latched by closeAllPools(); cleared only by the test reset helpers. */
 let _closing = false
 
@@ -642,7 +666,7 @@ const SLUG_PATTERN = /^[a-z0-9]([a-z0-9-]{0,28}[a-z0-9])?$/
  */
 function assertValidSlug(slug: string): void {
   if (slug.length === 0 || slug.length > 30 || !SLUG_PATTERN.test(slug)) {
-    throw new Error(
+    throw new InvalidTenantSlugError(
       `[tenant-store] invalid tenant slug "${slug}": ` +
         `slug must be 1–30 lowercase alphanumeric characters (a-z, 0-9, hyphen), ` +
         `must not start or end with a hyphen. ` +
@@ -947,9 +971,7 @@ export async function storeFor(tenant: TenantRef, options: StoreForOptions = {})
 
   // The catalog comparison is on tenant_id::text (canonical lowercase): refuse
   // any other spelling before a catalog row or a database is touched.
-  if (!TENANT_ID_TEXT.test(tenant.id)) {
-    throw new Error(`[tenant-store] tenant id ${JSON.stringify(tenant.id)} is not a canonical lowercase uuid - refusing`)
-  }
+  if (!TENANT_ID_TEXT.test(tenant.id)) throw new InvalidTenantIdError()
 
   // Validate slug BEFORE building any DB identifier (F2 — prevents identifier injection).
   assertValidSlug(tenant.slug)

@@ -9,7 +9,7 @@ import http from 'node:http'
 import { createRouter, type Route, type RouteContext } from './router.js'
 import { checkGuard, hasInternalSecret, isHealthzPath } from './guard.js'
 import { BadJsonBodyError, tenantHealthHandler, type TenantLister, type StoreFn } from './routes.js'
-import { TenantIdentityMismatchError } from '../tenant-store.js'
+import { InvalidTenantIdError, InvalidTenantSlugError, TenantIdentityMismatchError } from '../tenant-store.js'
 
 export interface ServerOptions {
   /** Shared secret expected in x-internal-auth (INTERNAL_FINANCE_SECRET). */
@@ -90,6 +90,17 @@ export function createServer(opts: ServerOptions): http.Server {
       if (err instanceof TenantIdentityMismatchError && !res.headersSent) {
         console.warn(`[finance] ${err.message}`)
         return sendJson(res, 409, { success: false, error: 'tenant_identity_mismatch' })
+      }
+      // A tenant id that is not a canonical lowercase uuid, or a slug storeFor will not
+      // build a database name from (follow-up to audit #534): the caller's error, never
+      // a server fault. The body names nothing.
+      if (err instanceof InvalidTenantIdError && !res.headersSent) {
+        console.warn(`[finance] ${err.message}`)
+        return sendJson(res, 400, { success: false, error: 'invalid_tenant_id' })
+      }
+      if (err instanceof InvalidTenantSlugError && !res.headersSent) {
+        console.warn(`[finance] ${err.message}`)
+        return sendJson(res, 400, { success: false, error: 'invalid_tenant_slug' })
       }
       throw err
     }
