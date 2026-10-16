@@ -163,6 +163,33 @@ The contact point `platform` is rendered by `render-ops.sh` from
 sentinel, Q12). With neither set, no contact point and no policy are rendered:
 the rules evaluate and show, nothing is sent.
 
+## Dashboards
+
+`grafana/provisioning/dashboards/` holds the dashboards, provisioned as code:
+`dashboards.yaml` is a read-only file provider (`allowUiUpdates: false`,
+`disableDeletion: true`) and `gremion-betrieb.json` is **Gremion – Betrieb**,
+the operator overview in folder *Betrieb*. It rides the provisioning tree that
+`render-ops.sh` copies and the Grafana service mounts read-only, so there is no
+extra mount; a changed dashboard is read when Grafana starts. Ten panels, all on
+the provisioned `prometheus` datasource and only on series that exist today:
+
+| Panel | Series |
+|---|---|
+| Backup | `gremion_backup_last_ts_seconds`, `gremion_backup_last_ok` |
+| Wöchentliche Messung | `gremion_footprint_timestamp_seconds` |
+| Host: CPU und Arbeitsspeicher | `node_cpu_seconds_total`, `node_memory_MemAvailable_bytes`, `node_memory_MemTotal_bytes` |
+| Host: Dateisysteme | `gremion_host_filesystem_{avail,size}_bytes` |
+| Container | `gremion_container_up`, `gremion_container_unhealthy` (no restart counter exists: status changes per 24 h stand in) |
+| Postgres: Verbindungen | `gremion_postgres_connections_{used,max}` |
+| NATS: Rückstand je Consumer | `gremion_nats_consumer_num_pending`, `gremion_nats_consumer_num_ack_pending` |
+| Speicher-Komponenten (TRD-224) | `gremion_storage_component_bytes`, `gremion_host_disk_provisioned_bytes` |
+| Geplante Jobs: letzter Lauf | `gremion_job_last_run` |
+| Wöchentlicher Fußabdruck | `gremion_footprint_component_bytes` |
+
+`dashboards.test.mjs` fails on a panel that names a metric the host collector,
+the footprint job or Alloy does not emit. The TRD-198 roll-up dashboards (per
+council and fleet) are still later work, see Deferred.
+
 ## Retention (R29-I6: 30 days at most, worst case)
 
 | Store | Window | Worst case | Where |
@@ -179,7 +206,7 @@ the rules evaluate and show, nothing is sent.
 
 ## Checks
 
-    node --test "compose/observability/*.test.mjs"     # static: render, mounts, access, alerting, retention, TRD-199
+    node --test "compose/observability/*.test.mjs"     # static: render, mounts, access, alerting, dashboards, retention, TRD-199
     OPS_ROOT=<rendered root> test/host/integration/ops-check-configs.sh   # promtool, Loki, Alloy, blackbox, from the pinned images
     test/host/integration/observability-proof.sh       # the running proof (scratch stack t039-<sha8>)
 

@@ -278,6 +278,8 @@ set_key() {   # <KEY> <value>
     cmp -s "$OBS_DIR/grafana/provisioning/alerting/rules.yaml" "$GREMION_ROOT/$PROV/alerting/rules.yaml"
     cmp -s "$OBS_DIR/grafana/provisioning/alerting/policies.yaml" "$GREMION_ROOT/$PROV/alerting/policies.yaml"
     cmp -s "$OBS_DIR/grafana/provisioning/datasources/datasources.yaml" "$GREMION_ROOT/$PROV/datasources/datasources.yaml"
+    cmp -s "$OBS_DIR/grafana/provisioning/dashboards/dashboards.yaml" "$GREMION_ROOT/$PROV/dashboards/dashboards.yaml"
+    cmp -s "$OBS_DIR/grafana/provisioning/dashboards/gremion-betrieb.json" "$GREMION_ROOT/$PROV/dashboards/gremion-betrieb.json"
     grep -q "url: 'http://127.0.0.1:9099/hook'" "$cp"
     grep -q '^      - uid: platform-webhook$' "$cp"
     run grep -c 'disableResolveMessage: false' "$cp"
