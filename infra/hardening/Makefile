@@ -42,8 +42,8 @@ ic = v.get('ipcrypt', {})
 env = {
     'LOG_ACCESS_RETENTION_SECONDS': str(r['access_logs_days'] * 86400),
     'LOG_APP_RETENTION_SECONDS':    str(r['app_logs_days'] * 86400),
-    'LOG_SEC_RETENTION_SECONDS':    str(r['security_logs_days'] * 86400),
-    'LOG_SECNOPII_RETENTION_SECONDS': str(r['security_nopii_logs_days'] * 86400),
+    'LOG_SECURITY_RETENTION_SECONDS': str(r['security_logs_days'] * 86400),
+    'LOG_SECURITY_NOPII_RETENTION_SECONDS': str(r['security_nopii_logs_days'] * 86400),
     'BACKUP_LOCAL_RETENTION_DAYS':  str(b['local_retention_days']),
     'BACKUP_REMOTE_RETENTION_DAYS': str(b['remote_retention_days']),
     'BACKUP_FINANCIAL_RETENTION_DAYS': str(b['financial_retention_days']),

@@ -14,7 +14,13 @@ import { legacyAccentToPalette } from '$lib/theme/instance-theme'
 // R29-RETENTION-30-K [D R29-I6]: log-retention defaults, caps and the clamp
 // live in one pure module so the settings API, the Settings tab and the purge
 // tick cannot drift from this file.
-import { RETENTION_CAPS, RETENTION_DEFAULTS, RETENTION_FIELDS, clampRetentionDays } from '$lib/retention-tiers'
+import {
+  OPERATOR_CEILING_DAYS,
+  RETENTION_CAPS,
+  RETENTION_DEFAULTS,
+  RETENTION_FIELDS,
+  clampRetentionDays,
+} from '$lib/retention-tiers'
 
 /** The narrow slice of TenantContext this module consumes. */
 export interface ConfigTenant {
@@ -546,7 +552,7 @@ function clampStoredRetention(storedRetention: StoredConfig['retention']): Gremi
         : ''
     console.warn(
       `[config] retention.${field}: stored value ${stored} is outside the allowed range 1..${RETENTION_CAPS[field]} ` +
-        `(operator ceiling 30 days, R29-I6) and is clamped to ${clamped[field]}${purge}`,
+        `(operator ceiling ${OPERATOR_CEILING_DAYS} days, R29-I6) and is clamped to ${clamped[field]}${purge}`,
     )
   }
   return clamped
