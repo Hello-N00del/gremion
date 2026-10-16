@@ -246,6 +246,8 @@ interface PendingDrain {
   id: number
   timer: ReturnType<typeof setTimeout>
   tenantId: string
+  /** The catalog slug the pool was bound under (teardown matches on it). */
+  slug: string
   sql: Sql
 }
 
@@ -316,7 +318,7 @@ function endEvictedPool(tenantId: string, sql: Sql): Promise<boolean> {
  * immediately, so simultaneously-open pools never exceed
  * POOL_REGISTRY_MAX + PENDING_DRAIN_MAX.
  */
-function deferDrain(tenantId: string, sql: Sql): void {
+function deferDrain(tenantId: string, sql: Sql, slug: string): void {
   const id = _nextDrainId++
   const timer = setTimeout(() => {
     _pendingDrains.delete(id)
@@ -330,7 +332,7 @@ function deferDrain(tenantId: string, sql: Sql): void {
   // Node returns a Timeout (unref keeps shutdown clean); fake timers return a
   // number - hence the defensive optional call.
   ;(timer as unknown as { unref?: () => void }).unref?.()
-  _pendingDrains.set(id, { id, timer, tenantId, sql })
+  _pendingDrains.set(id, { id, timer, tenantId, slug, sql })
   installDrainOnExit()
   enforcePendingDrainBound()
 }
@@ -545,7 +547,7 @@ function setPool(tenantId: string, sql: Sql, slug: string): void {
       // undiagnosable from the victim tenant's side — it just sees connection
       // errors. Name the tenant so the log identifies the victim.
       warnEviction(lruKey)
-      deferDrain(lruKey, evicted.sql)
+      deferDrain(lruKey, evicted.sql, evicted.slug)
     }
   }
   const existing = _poolMap.get(tenantId)
@@ -563,9 +565,37 @@ function setPool(tenantId: string, sql: Sql, slug: string): void {
         EVICTED_POOL_DRAIN_GRACE_MS +
         'ms instead of being orphaned',
     )
-    deferDrain(tenantId, existing.sql)
+    deferDrain(tenantId, existing.sql, existing.slug)
   }
   _poolMap.set(tenantId, { sql, slug, lastUsedOrder: _nextOrder++ })
+}
+
+/**
+ * Teardown seam (the admin DELETE routes): end and remove every pool this
+ * process holds for a tenant whose database or catalog row is being removed -
+ * the live registry entry AND any capacity-evicted pool still inside its drain
+ * grace window. Both keep connections open, an open connection blocks DROP
+ * DATABASE, and a pool left behind would keep serving (or re-creating) a tenant
+ * that no longer exists. Matches on the tenant id and/or the catalog slug.
+ * Resolves to how many pools were ended.
+ */
+export async function evictTenantPools(match: { id?: string; slug?: string }): Promise<number> {
+  const hit = (id: string, slug: string): boolean =>
+    (match.id !== undefined && id === match.id) || (match.slug !== undefined && slug === match.slug)
+  const ending: Promise<boolean>[] = []
+  for (const [id, entry] of _poolMap) {
+    if (!hit(id, entry.slug)) continue
+    _poolMap.delete(id)
+    ending.push(endEvictedPool(id, entry.sql))
+  }
+  for (const pending of _pendingDrains.values()) {
+    if (!hit(pending.tenantId, pending.slug)) continue
+    clearTimeout(pending.timer)
+    _pendingDrains.delete(pending.id)
+    ending.push(endEvictedPool(pending.tenantId, pending.sql))
+  }
+  await Promise.all(ending)
+  return ending.length
 }
 
 /**
