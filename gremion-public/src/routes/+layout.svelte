@@ -54,16 +54,22 @@
 <div class="flex min-h-screen flex-col bg-paper font-body text-ink">
 
   <!-- ── Utility bar ─────────────────────────────────────────────────────── -->
-  <div class="border-b border-ink-subtle bg-ink text-[11px] tracking-widest text-white/60">
-    <div class="mx-auto flex max-w-7xl items-center justify-between px-5 py-1.5">
-      <nav aria-label="Barrierefreiheit" class="flex items-center gap-4">
+  <div
+    class="border-b border-ink-subtle bg-ink text-[11px] tracking-widest text-white/60"
+    data-testid="portal-utility-bar"
+  >
+    <!-- Below `sm` the two groups (and the links inside the nav) may wrap
+         instead of overflowing: at 360px the strip was ~22px wider than the
+         viewport. Unchanged from `sm` up, where everything fits on one line. -->
+    <div class="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-x-4 gap-y-1 px-5 py-1.5">
+      <nav aria-label="Barrierefreiheit" class="flex flex-wrap items-center gap-x-4 gap-y-1">
         <a href="#main-content" class="uppercase hover:text-white/90">DE</a>
         <span class="text-white/20">·</span>
         <a href="{resolve('/kontakt')}#barrierefreiheit" class="uppercase hover:text-white/90">Barrierefreiheit</a>
         <span class="text-white/20">·</span>
         <a href="{resolve('/kontakt')}#leichte-sprache" class="uppercase hover:text-white/90">Leichte Sprache</a>
       </nav>
-      <div class="flex items-center gap-3 text-white/40 uppercase">
+      <div class="flex flex-wrap items-center gap-x-3 gap-y-1 text-white/40 uppercase">
         <span>Öffentliches Portal</span>
         <!-- PUBLIC_PRODUCT_NAME is unset on an unconfigured kernel deploy, and
              it no longer defaults to any instance's name. Render nothing —
