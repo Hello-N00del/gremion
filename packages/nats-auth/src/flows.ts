@@ -186,7 +186,7 @@ export function matrixViolations(input: MatrixInput): string[] {
   // Disjoint filters -- the flow streams AND the system streams (DLQ): a dead-letter subject
   // captured by a flow stream too would be stored twice, and the "one publisher per stream" and
   // "address under its module's stream" guards stay flow-only.
-  const everyStream = { ...streams, ...(input.systemStreams ?? {}) }
+  const everyStream = { ...streams, ...input.systemStreams }
   const everyName = Object.keys(everyStream)
   for (const n of Object.keys(input.systemStreams ?? {})) {
     if (n in streams) out.push(`system stream ${n} has the name of a flow stream`)

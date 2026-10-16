@@ -153,7 +153,7 @@ function down() {
     ['volume', ['volume', 'rm', '-f', names.volume]],
   ]) {
     const r = sh('docker', args, { allowFail: true })
-    if (r.status !== 0 && !/no such/i.test(r.stderr ?? '')) left.push(`${what} ${args.at(-1)}: ${(r.stderr ?? '').trim()}`)
+    if (r.status !== 0 && !/no such/i.test(r.stderr ?? '')) left.push(`${String(what)} ${String(args.at(-1))}:${(r.stderr ?? '').trim()}`)
   }
   rmSync(STATE_FILE, { force: true })
   if (left.length) throw new Error(`teardown left resources behind:\n  ${left.join('\n  ')}`)

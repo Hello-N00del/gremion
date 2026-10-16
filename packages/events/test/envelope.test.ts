@@ -20,6 +20,14 @@ const ROW: OutboxRow = {
 
 const wire = (row: OutboxRow = ROW) => ({ hdrs: headersOf(row), data: new TextEncoder().encode(JSON.stringify(bodyOf(row))) })
 const parse = (hdrs: Record<string, string>, data: Uint8Array) => parseEnvelope((n) => hdrs[n], data)
+type Parsed = ReturnType<typeof parse>
+/** The parsed event, or a thrown error naming why the message was refused (keeps the expects unconditional). */
+const eventOf = (r: Parsed) => {
+  if (!r.ok) throw new Error(`expected a valid envelope, got: ${r.problem.reason}`)
+  return r.event
+}
+/** The refusal reason, or '' for a message that parsed. */
+const reasonOf = (r: Parsed) => (r.ok ? '' : r.problem.reason)
 
 describe('stable identity (TRD-422)', () => {
   test('outbox.event_id = body eventId = Gremion-Event-Id = Nats-Msg-Id', () => {
@@ -63,12 +71,11 @@ describe('parseEnvelope (TDD 4): a message missing one header is envelope_invali
   test('the intact message parses, with the trace and test-run carried to the handler', () => {
     const r = parse(wire().hdrs, wire().data)
     expect(r.ok).toBe(true)
-    if (r.ok) {
-      expect(r.event.eventId).toBe(ROW.event_id)
-      expect(r.event.sourceContext).toBe('idt')
-      expect(r.event.aggregate).toEqual({ type: 'orgunit', id: ROW.aggregate_id, version: 1 })
-      expect(r.event.traceparent).toBe(ROW.traceparent)
-    }
+    const event = eventOf(r)
+    expect(event.eventId).toBe(ROW.event_id)
+    expect(event.sourceContext).toBe('idt')
+    expect(event.aggregate).toEqual({ type: 'orgunit', id: ROW.aggregate_id, version: 1 })
+    expect(event.traceparent).toBe(ROW.traceparent)
   })
 
   test.each([...REQUIRED_HEADERS])('without %s', (missing) => {
@@ -76,17 +83,14 @@ describe('parseEnvelope (TDD 4): a message missing one header is envelope_invali
     delete hdrs[missing]
     const r = parse(hdrs, data)
     expect(r.ok).toBe(false)
-    if (!r.ok) expect(r.problem.reason).toContain(missing)
+    expect(reasonOf(r)).toContain(missing)
   })
 
   test('the inbox key ignores Nats-Msg-Id: a replay msg id does not change the parsed key', () => {
     const { hdrs, data } = wire()
-    const a = parse(hdrs, data)
-    const b = parse({ ...hdrs, [H.msgId]: `${ROW.event_id}.r7` }, data)
-    expect(a.ok && b.ok).toBe(true)
-    if (a.ok && b.ok) {
-      expect([b.event.source, b.event.eventId]).toEqual([a.event.source, a.event.eventId])
-    }
+    const a = eventOf(parse(hdrs, data))
+    const b = eventOf(parse({ ...hdrs, [H.msgId]: `${ROW.event_id}.r7` }, data))
+    expect([b.source, b.eventId]).toEqual([a.source, a.eventId])
   })
 
   test.each([

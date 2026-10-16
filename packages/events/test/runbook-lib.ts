@@ -32,7 +32,7 @@ export function extractCommands(text = readFileSync(RUNBOOK, 'utf8')): RunbookCo
   const out: RunbookCommand[] = []
   let inFence = false
   for (const raw of text.split(/\r?\n/)) {
-    if (/^```/.test(raw)) {
+    if (raw.startsWith('```')) {
       inFence = !inFence
       continue
     }

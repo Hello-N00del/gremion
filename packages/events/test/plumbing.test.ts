@@ -98,11 +98,16 @@ describe('checkPlumbingMigration (the byte-0 prefix rule)', () => {
     const drifted = plumbingSql('idt').replace('lock_timeout = \'5s\'', 'lock_timeout = \'6s\'')
     const f = write('drift.sql', drifted)
     expect(() => checkPlumbingMigration(f, 'idt')).toThrow(PlumbingDriftError)
-    try {
-      checkPlumbingText(drifted, 'idt')
-    } catch (e) {
-      expect((e as PlumbingDriftError).offset).toBe(plumbingSql('idt').indexOf("'5s'") + 1)
-    }
+    const thrown = (() => {
+      try {
+        checkPlumbingText(drifted, 'idt')
+      } catch (e) {
+        return e
+      }
+      return undefined
+    })()
+    expect(thrown).toBeInstanceOf(PlumbingDriftError)
+    expect(thrown instanceof PlumbingDriftError ? thrown.offset : -1).toBe(plumbingSql('idt').indexOf("'5s'") + 1)
   })
 
   test('anything before the block is RED (not the byte-0 prefix)', () => {

@@ -11,7 +11,7 @@ describe('limits (Q3)', () => {
     expect([...CONSUMER_BACKOFF_MS]).toEqual([1000, 10_000, 60_000, 300_000])
     expect(() => assertConsumerLimits(CONSUMER_MAX_DELIVER, CONSUMER_BACKOFF_MS)).not.toThrow()
     expect(() => assertConsumerLimits(3, CONSUMER_BACKOFF_MS)).toThrow(/BackOff length <= MaxDeliver/)
-    expect(() => assertConsumerLimits(5, [])).toThrow()
+    expect(() => assertConsumerLimits(5, [])).toThrow(/non-empty list of positive integer ms/)
   })
 
   test('the nak delay follows the BackOff and repeats its last entry', () => {

@@ -120,8 +120,8 @@ describe('TDD 14 rebuild from the outbox (TRD-422)', () => {
     // The wipe: the stream, its consumers, the DLQ stream.
     await admin.jsm.streams.delete('ORGUNIT')
     await admin.jsm.streams.delete('DLQ')
-    await expect(admin.jsm.streams.info('ORGUNIT')).rejects.toThrow()
-    await expect(admin.jsm.consumers.info('ORGUNIT', 'rb-fin')).rejects.toThrow()
+    await expect(admin.jsm.streams.info('ORGUNIT')).rejects.toThrow(/not found/i)
+    await expect(admin.jsm.consumers.info('ORGUNIT', 'rb-fin')).rejects.toThrow(/not found/i)
 
     // The runbook, as written: ensure first (the streams are recreated by the admin), then the replay.
     runCli(binOf('nats-auth'), fill(find('nats-auth', 'ensure').args, { slug: T.slug, modules: 'finance' }))

@@ -266,7 +266,7 @@ describe('TDD 7 head-of-line: a backing-off or dead-lettered v2 holds v3 back (Q
     const agg = uuidv7()
     await createOrgUnit(idt, { id: agg, name: 'hol2' })
     const v2 = await renameOrgUnit(idt, agg, 'hol2-two')
-    const v3 = await renameOrgUnit(idt, agg, 'hol2-three')
+    await renameOrgUnit(idt, agg, 'hol2-three')
     let failV2 = true
     const { calls, publisher } = countingPublisher(kernel.js, (c) => failV2 && c.version === 2)
     const relay = relayOf(publisher, { maxAttempts: 2 })
@@ -319,7 +319,7 @@ describe('TDD 17 authenticated', () => {
       const nc = await connect({ servers: NATS_URL, reconnect: false, timeout: 3_000 })
       return (await import('@nats-io/jetstream')).jetstream(nc)
     })
-    await expect(relay.runOnce()).rejects.toThrow()
+    await expect(relay.runOnce()).rejects.toThrow(/authorization/i)
     expect(await outboxState(eventId)).toEqual({ relay_state: 'pending', attempt_count: 0 })
   })
 

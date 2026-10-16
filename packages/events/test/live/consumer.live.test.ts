@@ -3,7 +3,7 @@
 // stable-identity chain of TDD 3 through to the inbox. Identity `finance` consumes ORGUNIT.
 import { headers as natsHeaders } from '@nats-io/nats-core'
 import { afterAll, beforeAll, describe, expect, test } from 'vitest'
-import { createConsumer, dlqSubjectFor, type ConsumedEvent, type ConsumerHandle } from '../../src/consumer.ts'
+import { createConsumer, dlqSubjectFor, type ConsumerHandle } from '../../src/consumer.ts'
 import { bodyOf, H, headersOf, REQUIRED_HEADERS, type OutboxRow } from '../../src/envelope.ts'
 import { collectMetrics } from '../../src/metrics.ts'
 import { publishRow } from '../../src/publish.ts'
@@ -21,7 +21,6 @@ import {
   newTenantIds,
   projectionDomain,
   projector,
-  renameOrgUnit,
   rows,
   subjectsFor,
   uuidv7,
@@ -104,7 +103,6 @@ const wireRow = (id: string, version: number, over: Partial<OutboxRow> = {}): Ou
   test_run_id: null,
   ...over,
 })
-const subjectOfRow = (r: OutboxRow) => (r.aggregate_version === '1' ? SUBJECT() : RENAMED())
 
 beforeAll(async () => {
   await ensureTenant(T.slug)
