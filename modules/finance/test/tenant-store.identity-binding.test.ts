@@ -99,7 +99,8 @@ vi.mock('postgres', () => {
 })
 
 // Imported AFTER vi.mock so the stand-in driver is in place.
-const { storeFor, _poolRegistryForTests, _resetTenantStoreForTests } = await import('../src/tenant-store.ts')
+const { storeFor, InvalidTenantIdError, InvalidTenantSlugError, _poolRegistryForTests, _resetTenantStoreForTests } =
+  await import('../src/tenant-store.ts')
 
 const PREFIX = 'finance_test_'
 const CONTROL_DB = PREFIX + 'control'
@@ -190,6 +191,27 @@ describe('storeFor refuses a pair the catalog does not bind (cold miss)', () => 
     await expect(storeFor({ id: 'not-a-uuid', slug: A.slug }, OPTS)).rejects.toThrow(/canonical lowercase uuid/)
     expect(h.opened).toEqual([])
   })
+
+  it('a non-canonical tenant id is the typed InvalidTenantIdError (TENANT_ID_INVALID) and its message names no id', async () => {
+    for (const id of [A.id.toUpperCase(), 'not-a-uuid', '', ` ${A.id}`, `${A.id}\n`, 'x'.repeat(200)]) {
+      const err = await storeFor({ id, slug: A.slug }, OPTS).catch((e: unknown) => e)
+      expect(err).toBeInstanceOf(InvalidTenantIdError)
+      expect(err).toMatchObject({ code: 'TENANT_ID_INVALID', name: 'InvalidTenantIdError' })
+      expect((err as Error).message).not.toContain(id.trim() === '' ? 'never-present' : id.trim())
+    }
+    expect(h.opened).toEqual([])
+    expect(h.writes).toEqual([])
+  })
+
+  it('a slug off the grammar is the typed InvalidTenantSlugError (INVALID_TENANT_SLUG), before the driver is touched', async () => {
+    for (const slug of ['Bad Slug', '-lead', 'trail-', '', 'a'.repeat(31), 'a_b']) {
+      const err = await storeFor({ id: A.id, slug }, OPTS).catch((e: unknown) => e)
+      expect(err).toBeInstanceOf(InvalidTenantSlugError)
+      expect(err).toMatchObject({ code: 'INVALID_TENANT_SLUG', name: 'InvalidTenantSlugError' })
+    }
+    expect(h.opened).toEqual([])
+    expect(h.writes).toEqual([])
+  })
 })
 
 describe('storeFor refuses a pair the catalog does not bind (warm pool)', () => {
@@ -217,6 +239,47 @@ describe('storeFor refuses a pair the catalog does not bind (warm pool)', () => 
     await expect(storeFor({ id: A.id, slug: B.slug }, OPTS)).rejects.toMatchObject(MISMATCH)
     expect(await storeFor(A, OPTS)).toBe(stub)
     expect(h.opened).toEqual([])
+  })
+})
+
+describe('storeFor refuses a slug that is not a tenant database (B2b, B2d), before any database work', () => {
+  const nothingTouched = (): void => {
+    expect(h.opened).toEqual([])
+    expect(h.writes).toEqual([])
+    expect(h.databases.size).toBe(0)
+    expect(h.catalog).toEqual([])
+  }
+
+  it('the reserved slug "control" is refused: <prefix>control is the catalog database', async () => {
+    const err = await storeFor({ id: A.id, slug: 'control' }, OPTS).catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(InvalidTenantSlugError)
+    expect(err).toMatchObject({ code: 'INVALID_TENANT_SLUG', name: 'InvalidTenantSlugError' })
+    expect((err as Error).message).toMatch(/reserved/)
+    nothingTouched()
+  })
+
+  it('a slug that merely contains control is a tenant like any other', async () => {
+    h.databases.add(CONTROL_DB)
+    await expect(storeFor({ id: A.id, slug: 'control-room' }, OPTS)).resolves.toBeDefined()
+    expect(h.catalog.map((r) => r.slug)).toEqual(['control-room'])
+  })
+
+  it('a slug whose database name is the maintenance database of the admin url is refused', async () => {
+    // An empty prefix makes <prefix><slug> the url database itself.
+    await expect(storeFor({ id: A.id, slug: 'postgres' }, { ...OPTS, dbPrefix: '' })).rejects.toThrow(/maintenance database/)
+    await expect(
+      storeFor({ id: A.id, slug: 'maint' }, { pgUrl: 'postgres://u:p@127.0.0.1:59999/maint', dbPrefix: '' }),
+    ).rejects.toThrow(/maintenance database/)
+    nothingTouched()
+  })
+
+  it('postgres and the template databases are never served as a tenant database', async () => {
+    for (const slug of ['postgres', 'template0', 'template1']) {
+      await expect(
+        storeFor({ id: A.id, slug }, { pgUrl: 'postgres://u:p@127.0.0.1:59999/other', dbPrefix: '' }),
+      ).rejects.toThrow(/maintenance database/)
+    }
+    nothingTouched()
   })
 })
 

@@ -4,7 +4,7 @@
 //   1. a correct `x-internal-auth` shared secret (constant-time compare via
 //      timingSafeEqual — mirrors gremion-ui/src/routes/api/internal/push/+server.ts;
 //      env var INTERNAL_CALENDAR_SECRET) → else 403, and
-//   2. `x-tenant-id` + a grammar-valid `x-tenant-slug` (slug grammar mirrors
+//   2. `x-tenant-id` (a canonical lowercase UUID) + a grammar-valid `x-tenant-slug` (slug grammar mirrors
 //      gremion-ui/src/lib/server/tenant/slug.ts — this is a SEPARATE process so the
 //      rule is duplicated, not imported; keep the two in sync) → else 400.
 // Order matters: the secret is checked FIRST so an unauthenticated caller never
@@ -13,6 +13,15 @@ import { timingSafeEqual } from 'node:crypto'
 
 /** Mirror of SLUG_PATTERN in gremion-ui/src/lib/server/tenant/slug.ts. */
 export const SLUG_PATTERN = /^[a-z0-9-]{1,30}$/
+
+/**
+ * A canonical lowercase RFC 9562 uuid (version 1-8, variant 10xx). StuRaOS
+ * tenant ids are gen_random_uuid() v4 and the kernel's are v7; Postgres renders a
+ * uuid in exactly this form. The id keys the tenant's pool and is bound to the
+ * slug by the store's catalog, so anything else is refused here, before any store
+ * access (same pattern as the board leaf's guard).
+ */
+export const TENANT_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
 
 export interface TenantHeaders {
   id: string
@@ -61,6 +70,9 @@ export function checkGuard(input: GuardInput): GuardResult {
   // 2. Tenant identity headers.
   const id = headers['x-tenant-id']
   if (!id) return { ok: false, status: 400, message: 'missing x-tenant-id header' }
+  if (!TENANT_ID_PATTERN.test(id)) {
+    return { ok: false, status: 400, message: 'x-tenant-id must be a canonical lowercase UUID' }
+  }
   const slug = headers['x-tenant-slug']
   if (!slug) return { ok: false, status: 400, message: 'missing x-tenant-slug header' }
   if (!SLUG_PATTERN.test(slug)) {

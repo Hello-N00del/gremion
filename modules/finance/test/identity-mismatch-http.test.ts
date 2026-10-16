@@ -15,6 +15,7 @@ import { createServer } from '../src/http/server.ts'
 import { buildApiRoutes } from '../src/http/routes.ts'
 import {
   storeFor,
+  InvalidTenantIdError,
   TenantIdentityMismatchError,
   _poolRegistryForTests,
   _resetTenantStoreForTests,
@@ -26,9 +27,9 @@ const SECRET = 'identity-mismatch-secret'
 const BOUND: TenantRef = { id: 'a1000000-0000-4000-8000-0000000000a1', slug: 'bind-a' }
 const ROUTE = '/api/v1/projects'
 
-const headers = (slug: string): Record<string, string> => ({
+const headers = (slug: string, id: string = BOUND.id): Record<string, string> => ({
   'x-internal-auth': SECRET,
-  'x-tenant-id': BOUND.id,
+  'x-tenant-id': id,
   'x-tenant-slug': slug,
   'content-type': 'application/json',
   'x-finance-user-id': 'u',
@@ -79,6 +80,15 @@ describe('finance http: tenant_identity_mismatch', () => {
     expect(res.status).toBeLessThan(500)
   })
 
+  it.each(['not-a-uuid', BOUND.id.toUpperCase(), '11111111-1111-1111-1111-111111111111', ''])(
+    'an x-tenant-id that is not a canonical lowercase uuid (%j) is a 400 at the guard, before any store access',
+    async (id) => {
+      const res = await fetch(`${base}${ROUTE}`, { headers: headers(BOUND.slug, id) })
+      expect(res.status).toBe(400)
+      expect(storeCalls).toHaveLength(0)
+    },
+  )
+
   it('another slug for the same id is a 409 tenant_identity_mismatch, not a 500 and not a served response', async () => {
     const res = await fetch(`${base}${ROUTE}`, { headers: headers('bind-b') })
     expect(res.status).toBe(409)
@@ -95,10 +105,57 @@ describe('finance http: tenant_identity_mismatch', () => {
     expect(text).not.toContain('bind-b')
   })
 
+  it('the reserved slug "control" reaches the store and is a 400 invalid_tenant_slug, not a 500', async () => {
+    const res = await fetch(`${base}${ROUTE}`, { headers: headers('control', 'a2000000-0000-4000-8000-0000000000a2') })
+    expect(res.status).toBe(400)
+    expect(await res.json()).toEqual({ success: false, error: 'invalid_tenant_slug' })
+    expect(storeCalls).toHaveLength(1)
+  })
+
   it('exports the refusal as a coded error', () => {
     const err = new TenantIdentityMismatchError(BOUND, { id: BOUND.id, slug: 'other' })
     expect(err).toBeInstanceOf(Error)
     expect(err.code).toBe('TENANT_IDENTITY_MISMATCH')
     expect(err.name).toBe('TenantIdentityMismatchError')
+  })
+})
+
+describe('finance http: invalid_tenant_id', () => {
+  let base: string
+  let server: ReturnType<typeof createServer>
+
+  beforeAll(async () => {
+    // A store that refuses the id the way tenant-store does when the guard is bypassed.
+    server = createServer({
+      secret: SECRET,
+      routes: buildApiRoutes(() => Promise.reject(new InvalidTenantIdError())),
+    })
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
+  })
+
+  afterAll(async () => {
+    await new Promise<void>((resolve) => server.close(() => resolve()))
+  })
+
+  beforeEach(() => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+  })
+
+  it('InvalidTenantIdError is a 400 invalid_tenant_id that names nothing, not a 500', async () => {
+    const res = await fetch(`${base}${ROUTE}`, { headers: headers(BOUND.slug) })
+    expect(res.status).toBe(400)
+    const text = await res.text()
+    expect(JSON.parse(text)).toEqual({ success: false, error: 'invalid_tenant_id' })
+    expect(text).not.toContain(BOUND.id)
+    expect(text).not.toContain(BOUND.slug)
+  })
+
+  it('exports the refusal as a coded error', () => {
+    const err = new InvalidTenantIdError()
+    expect(err).toBeInstanceOf(Error)
+    expect(err.code).toBe('TENANT_ID_INVALID')
+    expect(err.name).toBe('InvalidTenantIdError')
   })
 })

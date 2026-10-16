@@ -125,6 +125,30 @@ export class TenantIdentityMismatchError extends Error {
   }
 }
 
+/**
+ * The tenant id is not a canonical lowercase uuid (Postgres' own rendering). The
+ * catalog comparison is on tenant_id::text and the id keys the pool registry, so
+ * any other spelling is refused before a catalog row, a database or a pool is
+ * touched. The HTTP layer answers 400 invalid_tenant_id; the message and the
+ * response name nothing the caller sent (follow-up to audit #534).
+ */
+export class InvalidTenantIdError extends Error {
+  readonly code = 'TENANT_ID_INVALID'
+  constructor() {
+    super('[tenant-store] tenant id is not a canonical lowercase uuid - refusing (no database created, nothing upserted)')
+    this.name = 'InvalidTenantIdError'
+  }
+}
+
+/** A slug storeFor refuses to build a database name from (grammar, or reserved). */
+export class InvalidTenantSlugError extends Error {
+  readonly code = 'INVALID_TENANT_SLUG'
+  constructor(message: string) {
+    super(message)
+    this.name = 'InvalidTenantSlugError'
+  }
+}
+
 /** Latched by closeAllPools(); cleared only by the test reset helpers. */
 let _closing = false
 
@@ -228,6 +252,8 @@ interface PendingDrain {
   id: number
   timer: ReturnType<typeof setTimeout>
   tenantId: string
+  /** The catalog slug the pool was bound under (teardown matches on it). */
+  slug: string
   sql: Sql
 }
 
@@ -298,7 +324,7 @@ function endEvictedPool(tenantId: string, sql: Sql): Promise<boolean> {
  * immediately, so simultaneously-open pools never exceed
  * POOL_REGISTRY_MAX + PENDING_DRAIN_MAX.
  */
-function deferDrain(tenantId: string, sql: Sql): void {
+function deferDrain(tenantId: string, sql: Sql, slug: string): void {
   const id = _nextDrainId++
   const timer = setTimeout(() => {
     _pendingDrains.delete(id)
@@ -312,7 +338,7 @@ function deferDrain(tenantId: string, sql: Sql): void {
   // Node returns a Timeout (unref keeps shutdown clean); fake timers return a
   // number - hence the defensive optional call.
   ;(timer as unknown as { unref?: () => void }).unref?.()
-  _pendingDrains.set(id, { id, timer, tenantId, sql })
+  _pendingDrains.set(id, { id, timer, tenantId, slug, sql })
   installDrainOnExit()
   enforcePendingDrainBound()
 }
@@ -528,7 +554,7 @@ function setPool(tenantId: string, sql: Sql, slug: string): void {
       // undiagnosable from the victim tenant's side — it just sees connection
       // errors. Name the tenant so the log identifies the victim.
       warnEviction(lruKey)
-      deferDrain(lruKey, evicted.sql)
+      deferDrain(lruKey, evicted.sql, evicted.slug)
     }
   }
   const existing = _poolMap.get(tenantId)
@@ -546,9 +572,37 @@ function setPool(tenantId: string, sql: Sql, slug: string): void {
         EVICTED_POOL_DRAIN_GRACE_MS +
         'ms instead of being orphaned',
     )
-    deferDrain(tenantId, existing.sql)
+    deferDrain(tenantId, existing.sql, existing.slug)
   }
   _poolMap.set(tenantId, { sql, slug, lastUsedOrder: _nextOrder++ })
+}
+
+/**
+ * Teardown seam (the admin DELETE routes): end and remove every pool this
+ * process holds for a tenant whose database or catalog row is being removed -
+ * the live registry entry AND any capacity-evicted pool still inside its drain
+ * grace window. Both keep connections open, an open connection blocks DROP
+ * DATABASE, and a pool left behind would keep serving (or re-creating) a tenant
+ * that no longer exists. Matches on the tenant id and/or the catalog slug.
+ * Resolves to how many pools were ended.
+ */
+export async function evictTenantPools(match: { id?: string; slug?: string }): Promise<number> {
+  const hit = (id: string, slug: string): boolean =>
+    (match.id !== undefined && id === match.id) || (match.slug !== undefined && slug === match.slug)
+  const ending: Promise<boolean>[] = []
+  for (const [id, entry] of _poolMap) {
+    if (!hit(id, entry.slug)) continue
+    _poolMap.delete(id)
+    ending.push(endEvictedPool(id, entry.sql))
+  }
+  for (const pending of _pendingDrains.values()) {
+    if (!hit(pending.tenantId, pending.slug)) continue
+    clearTimeout(pending.timer)
+    _pendingDrains.delete(pending.id)
+    ending.push(endEvictedPool(pending.tenantId, pending.sql))
+  }
+  await Promise.all(ending)
+  return ending.length
 }
 
 /**
@@ -651,11 +705,38 @@ const SLUG_PATTERN = /^[a-z0-9]([a-z0-9-]{0,28}[a-z0-9])?$/
  */
 function assertValidSlug(slug: string): void {
   if (slug.length === 0 || slug.length > 30 || !SLUG_PATTERN.test(slug)) {
-    throw new Error(
+    throw new InvalidTenantSlugError(
       `[tenant-store] invalid tenant slug "${slug}": ` +
         `slug must be 1–30 lowercase alphanumeric characters (a-z, 0-9, hyphen), ` +
         `must not start or end with a hyphen. ` +
         `Refusing to build a database name from this value.`,
+    )
+  }
+  // <prefix>control is the catalog database. A tenant with the slug `control`
+  // would be handed the catalog as its own database (board's B2b).
+  if (RESERVED_SLUGS.has(slug)) {
+    throw new InvalidTenantSlugError(
+      `[tenant-store] invalid tenant slug "${slug}": reserved (<prefix>${slug} is the catalog database).`,
+    )
+  }
+}
+
+/** Slugs whose <prefix><slug> is not a tenant database. */
+export const RESERVED_SLUGS: ReadonlySet<string> = new Set(['control'])
+
+/** Databases every cluster has, whatever the admin url names: never a tenant's. */
+const CLUSTER_DATABASES: ReadonlySet<string> = new Set(['postgres', 'template0', 'template1'])
+
+/**
+ * storeFor never hands out a pool on the maintenance database named by the admin
+ * url (its own path), nor on postgres or a template database (board's B2d). With
+ * an empty prefix a slug such as `postgres` would otherwise name one of them.
+ */
+function assertNotMaintenanceDb(adminUrl: string, dbName: string): void {
+  const maintenance = decodeURIComponent(new URL(adminUrl).pathname.slice(1))
+  if (dbName === maintenance || CLUSTER_DATABASES.has(dbName)) {
+    throw new Error(
+      `[tenant-store] refusing to serve the maintenance database "${dbName}" of the admin url as a tenant database`,
     )
   }
 }
@@ -950,14 +1031,13 @@ export async function storeFor(tenant: TenantRef, options: StoreForOptions = {})
 
   // The catalog comparison is on tenant_id::text (canonical lowercase): refuse
   // any other spelling before a catalog row or a database is touched.
-  if (!TENANT_ID_TEXT.test(tenant.id)) {
-    throw new Error(`[tenant-store] tenant id ${JSON.stringify(tenant.id)} is not a canonical lowercase uuid - refusing`)
-  }
+  if (!TENANT_ID_TEXT.test(tenant.id)) throw new InvalidTenantIdError()
 
   // Validate slug BEFORE building any DB identifier (F2 — prevents identifier injection).
   assertValidSlug(tenant.slug)
 
   const dbName = dbPrefix + tenant.slug
+  assertNotMaintenanceDb(pgUrl, dbName)
 
   // 2. Ensure the control DB + tenant_catalog table (idempotent).
   const ctrl = await ensureControlDb(pgUrl, dbPrefix)

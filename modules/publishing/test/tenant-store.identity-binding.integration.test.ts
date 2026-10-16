@@ -162,4 +162,33 @@ describe('storeFor binds (id, slug) to the catalog (audit #534)', () => {
     expect(rows[0]!.slug).toBe('bind-race')
     expect(await databases()).toEqual([TEST_DB_PREFIX + 'bind-race'])
   })
+
+  it('two first contacts for ONE id under different slugs: exactly one catalog row and one database, the loser refused', async () => {
+    const slugs = ['bind-race-a', 'bind-race-b']
+    const results = await Promise.allSettled(slugs.map((slug) => storeFor({ id: A.id, slug }, OPTS)))
+    const won = results.flatMap((r, i) => (r.status === 'fulfilled' ? [i] : []))
+    const lost = results.filter((r): r is PromiseRejectedResult => r.status === 'rejected')
+    expect(won).toHaveLength(1)
+    expect(lost).toHaveLength(1)
+    expect(lost[0]!.reason).toMatchObject(MISMATCH)
+
+    const winner = slugs[won[0]!]!
+    expect(await catalog()).toEqual([{ tenant_id: A.id, slug: winner, db_name: TEST_DB_PREFIX + winner }])
+    expect(await databases()).toEqual([TEST_DB_PREFIX + winner])
+    // the winner's pair is the one served from now on, warm and cold
+    await expect(storeFor({ id: A.id, slug: slugs[1 - won[0]!]! }, OPTS)).rejects.toMatchObject(MISMATCH)
+    await _resetTenantStoreForTests()
+    await expect(storeFor({ id: A.id, slug: winner }, OPTS)).resolves.toBeDefined()
+  })
+
+  it('a burst of first contacts for one id under many slugs still leaves one row and one database', async () => {
+    const slugs = Array.from({ length: 6 }, (_, i) => `bind-burst-${i}`)
+    const results = await Promise.allSettled(slugs.map((slug) => storeFor({ id: C.id, slug }, OPTS)))
+    expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1)
+    const refused = results.filter((r): r is PromiseRejectedResult => r.status === 'rejected')
+    expect(refused).toHaveLength(slugs.length - 1)
+    for (const r of refused) expect(r.reason).toMatchObject(MISMATCH)
+    expect(await catalog()).toHaveLength(1)
+    expect(await databases()).toHaveLength(1)
+  })
 })

@@ -38,8 +38,8 @@ assertSafeTestEnv(TEST_PG_URL, TEST_DB_PREFIX)
 
 // -- test tenants -------------------------------------------------------------
 
-const T1: TenantRef = { id: 'a1a1a1a1-a1a1-a1a1-a1a1-a1a1a1a1a1a1', slug: 'apitenant1' }
-const T2: TenantRef = { id: 'b2b2b2b2-b2b2-b2b2-b2b2-b2b2b2b2b2b2', slug: 'apitenant2' }
+const T1: TenantRef = { id: 'a1a1a1a1-a1a1-41a1-81a1-a1a1a1a1a1a1', slug: 'apitenant1' }
+const T2: TenantRef = { id: 'b2b2b2b2-b2b2-42b2-82b2-b2b2b2b2b2b2', slug: 'apitenant2' }
 
 const TEST_SECRET = 'test-api-secret-123'
 
@@ -517,7 +517,7 @@ describe('DELETE /api/v1/event-types/:id', () => {
 // -- committee settings -------------------------------------------------------
 
 describe('GET/PUT /api/v1/committee-settings/:committeeId', () => {
-  const COMMITTEE_ID = '9999cccc-cccc-cccc-cccc-cccccccccccc'
+  const COMMITTEE_ID = '9999cccc-cccc-4ccc-8ccc-cccccccccccc'
 
   it('returns 404 when no settings exist yet', async () => {
     const r = await callServer(
