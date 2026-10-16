@@ -950,6 +950,48 @@ describe('authGuard publicPaths segment-boundary matching (netcup T03)', () => {
     })
   }
 
+  // The five publishing entries are exact string matches on the raw pathname: a trailing slash, a doubled slash (leading
+  // or inside), another letter case, or a %-encoded letter is a different path and takes the session gate, not the
+  // public short-circuit.
+  const PUBLISHING_EXACT = [
+    '/newsletter/unsubscribe',
+    '/api/newsletter/unsubscribe',
+    '/api/internal/newsletter/render',
+    '/api/internal/newsletter/resolve-group',
+    '/api/internal/newsletter/send-mail',
+  ]
+  for (const entry of PUBLISHING_EXACT) {
+    for (const path of nearMisses(entry)) {
+      it(`does NOT treat the near-miss '${path}' of '${entry}' as public`, async () => {
+        const mod = await import('./hooks.server')
+        await mod.boot()
+        const event = makeFakeEvent(path)
+        // Tenant-resolved, as every edge request is: an /api/internal/ path with no tenant is the container-network
+        // exemption (boot-exempt.ts), which is a different gate.
+        event.locals.tenant = { id: 't1', slug: 't1', issuer: 'https://kc/realms/t1' }
+        event.locals.auth = async () => null
+        let resolveCalled = false
+        let thrown: unknown = null
+        let res: Response | null = null
+        try {
+          res = (await mod.authGuard({
+            event: event as never,
+            resolve: async () => {
+              resolveCalled = true
+              return new Response('public-short-circuit', { status: 200 })
+            },
+          } as never)) as Response
+        } catch (err) {
+          thrown = err
+        }
+        expect(resolveCalled).toBe(false)
+        // An /api/ path answers a machine-readable 401; anything else redirects to the login page.
+        const outcome = res ? res.status : isRedirect(thrown) ? 'redirect' : 'other'
+        expect(outcome).toBe(path.startsWith('/api/') ? 401 : 'redirect')
+      })
+    }
+  }
+
   it('the shipped publicPaths list is exactly the pinned entries (no /setup)', async () => {
     const mod = await import('./hooks.server')
     expect([...mod.PUBLIC_PATHS].sort()).toEqual([...FIVE].sort())
@@ -1135,6 +1177,15 @@ describe('cspGuard (G-011b)', () => {
 //    *after* the 503 check (in the success branch). The 503 short-circuit
 //    means the rest of the event object is never read, so a bare URL is
 //    enough.
+// Paths that differ from an exact public entry only by a trailing slash, a leading or an inner doubled slash, letter case,
+// or a %-encoded first letter of the last segment.
+function nearMisses(entry: string): string[] {
+  const i = entry.lastIndexOf('/')
+  const last = entry.slice(i + 1)
+  const encoded = `${entry.slice(0, i + 1)}%${last.charCodeAt(0).toString(16)}${last.slice(1)}`
+  return [`${entry}/`, `/${entry}`, `${entry.slice(0, i)}/${entry.slice(i)}`, entry.toUpperCase(), encoded]
+}
+
 function makeFakeEvent(path: string, routeId: string | null = path) {
   return {
     url: new URL(`http://localhost${path}`),
