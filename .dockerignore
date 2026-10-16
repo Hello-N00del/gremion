@@ -12,6 +12,12 @@ docs/
 legal/
 test/
 scripts/
+# TASK-077: the kernel API image reads the migration register (ranges.json) and
+# bundles the register reader (pre-apply.mjs); nothing else of scripts/ ships.
+!scripts/migrations/
+scripts/migrations/*
+!scripts/migrations/pre-apply.mjs
+!scripts/migrations/ranges.json
 
 # Root node_modules (installed fresh inside container)
 node_modules/
