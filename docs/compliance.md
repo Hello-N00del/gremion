@@ -35,8 +35,11 @@ in three layers:
 
 1. **Configurable retention windows** held per tenant in `GremionConfig.retention`
    ([`gremion-ui/src/lib/server/config.ts`](../gremion-ui/src/lib/server/config.ts)).
-   The defaults track the BSI Mindeststandard Protokollierung v2.1 (Nov 2024)
-   and the BayLDA recommendation for access logs.
+   The defaults and caps live in one registry
+   ([`gremion-ui/src/lib/retention-tiers.ts`](../gremion-ui/src/lib/retention-tiers.ts))
+   and follow the operator ceiling of 30 days for every log class
+   [D R29-I6] (R29-RETENTION-30-K); the earlier BSI Mindeststandard 90/180-day
+   and BayLDA tiers are superseded.
 2. **Scheduled purge jobs** that hard-delete rows older than the configured
    window. The scheduler runs inside the SvelteKit server process so it picks
    up live config changes without a redeploy, and runs once per **active**
@@ -57,21 +60,33 @@ recoverable, that is a gap, not a feature.
 
 Schema:
 [`gremion-ui/src/lib/server/config.ts`](../gremion-ui/src/lib/server/config.ts)
-(`GremionConfig.retention`). Hard caps are enforced inside `writeConfig`
-(`Math.min` clamp) so a malicious or careless PATCH cannot lengthen retention
-beyond policy.
+(`GremionConfig.retention`). Hard caps are enforced by `clampRetentionDays` from the
+tier registry: inside `writeConfig` (so a malicious or careless PATCH cannot lengthen
+retention beyond policy), **on every read** of the stored config (so a value persisted
+before the ceiling, such as 90, is clamped before the purge tick reads it; the clamp
+logs one warning per field), and by the settings API's zod bounds, which refuse a
+larger value with HTTP 422.
 
-| Field | Default | Hard cap | Legal basis | Implementation |
+| Field | Default | Hard cap | Basis | Implementation |
 |---|---|---|---|---|
-| `access_logs_days` | 14 | **30** | BayLDA recommendation; Art. 5(1)(e) | reverse-proxy / container log rotation — see `docs/log-retention-policy.md` |
-| `app_logs_days` | 30 | **90** | Art. 5(1)(e); Art. 6(1)(f) legitimate interest | Vector retention filter + logrotate backstop |
-| `security_logs_days` | 90 | **180** | BSI Mindeststandard Protokollierung v2.1 | `purgeAuditLogsOlderThan` (see §2.1) |
-| `security_nopii_logs_days` | 90 | **365** | BSI Mindeststandard exception (no PII) | Vector retention filter |
+| `access_logs_days` | 14 | **29** | Operator ceiling 30 d [D R29-I6]; Art. 5(1)(e) | none in the application yet (see the note below); the edge files are bounded by `docs/log-retention-policy.md` |
+| `app_logs_days` | 28 | **29** | Operator ceiling 30 d [D R29-I6]; Art. 5(1)(e); Art. 6(1)(f) legitimate interest | none in the application yet (see the note below) |
+| `security_logs_days` | 27 | **29** | Operator ceiling 30 d [D R29-I6] | `purgeAuditLogsOlderThan` (see §2.1) |
+| `security_nopii_logs_days` | 27 | **30** | Operator ceiling 30 d [D R29-I6]; operator value [R31-I4a] | none in the application yet (see the note below) |
 
-Operator ceiling 30 d [D R29-I6]; the application tiers change with TASK-033. The
-edge and identity-provider logs already obey it: raw access and Traefik logs 14 d,
-pseudonymised security and retained logs at most 29 d 2 h 5 min, Keycloak login and
-admin events 29 d (`docs/log-retention-policy.md`, "Upper bound").
+> **Operator ceiling 30 d [D R29-I6] (R29-RETENTION-30-K).** No log class is kept
+> longer than 30 days. The caps are 29 d where the daily purge tick enforces the
+> window (29 d + 24 h tick = 30 d); `security_nopii_logs_days` keeps cap 30.
+> **Named residual (TASK-033):** nothing in gremion-ui purges by
+> `security_nopii_logs_days`, `access_logs_days` or `app_logs_days` — the only
+> consumer of a tier value is the `audit_log` purge tick, which reads
+> `security_logs_days` (`gremion-ui/src/hooks.server.ts`, `auditRetentionTick`).
+> The three values are configuration and Löschkonzept text until a purge consumer
+> exists; the Settings tab and the generated Löschkonzept say so. The edge and
+> identity-provider logs are bounded independently and already obey the ceiling:
+> raw access and Traefik logs 14 d, pseudonymised security and retained logs at most
+> 29 d 2 h 5 min, Keycloak login and admin events 29 d
+> (`docs/log-retention-policy.md`, "Upper bound").
 
 ### 2.1 `audit_log` (Postgres) — security-log retention
 
@@ -101,10 +116,14 @@ Its retention window must be controlled by policy, not by an ops tool.
   [`gremion-ui/src/hooks.server.ts`](../gremion-ui/src/hooks.server.ts) runs every
   24 h. The interval callback iterates **every active tenant**
   (`forEachActiveTenant('audit-retention', …)`), establishes that tenant's
-  context, reads its `config.retention.security_logs_days` (fallback 90), and
-  calls `purgeAuditLogsOlderThan` against that tenant's data plane. The
-  interval is `.unref()`-ed so it does not keep the process alive during
-  graceful shutdown / test teardown.
+  context, reads its `config.retention.security_logs_days` (fallback: the registry
+  default, 27), and calls `purgeAuditLogsOlderThan` against that tenant's data
+  plane. The interval is `.unref()`-ed so it does not keep the process alive during
+  graceful shutdown / test teardown. Operator ceiling 30 d [D R29-I6]: default 27 d,
+  cap 29 d, so a row is purged at most 29 d + 24 h = 30 d after it was written
+  (R29-RETENTION-30-K); the purge removes the aged prefix and moves the chain anchor
+  in one transaction (migration 0059), so the shorter window keeps
+  `audit_log_verify_chain()` intact.
 
 ### 2.2 Per-module retention
 
@@ -196,10 +215,12 @@ from the retention windows the system actually enforces.
   fields).
 - **Output:** a Markdown document covering: responsible party (`§1`),
   processing purpose + Art. 6 GDPR lawful basis (`§2`), retention table per
-  data category (`§3`), technical deletion mechanisms (`§4` — IP
-  pseudonymisation, Vector + logrotate, encrypted backups with automatic
-  cleanup, daily pseudonymisation-key rotation), and a change-history pointer to
-  the `audit_log` table (`§5`).
+  data category (`§3`; the basis column names the operator ceiling, and a tier
+  without a purge consumer carries the `RETENTION_CAVEATS` hint that it is
+  configuration, not an enforced deletion window), technical deletion
+  mechanisms (`§4` — IP pseudonymisation, Vector + logrotate, encrypted backups
+  with automatic cleanup, daily pseudonymisation-key rotation), and a
+  change-history pointer to the `audit_log` table (`§5`).
 
 If a new retention category is added to `GremionConfig.retention`, the
 Löschkonzept template **must** be extended in the same change — otherwise the
@@ -210,17 +231,17 @@ generated document under-reports retention to data subjects.
 ## 6. Hard caps
 
 `writeConfig` ([`config.ts`](../gremion-ui/src/lib/server/config.ts)) clamps every
-retention field to its policy maximum on every PATCH:
+retention field to its policy maximum on every PATCH, and `readConfig` does the same
+for a stored value:
 
 ```ts
-mergedRetention.access_logs_days         = Math.min(..., 30)   // BayLDA
-mergedRetention.app_logs_days            = Math.min(..., 90)
-mergedRetention.security_logs_days       = Math.min(..., 180)  // BSI v2.1
-mergedRetention.security_nopii_logs_days = Math.min(..., 365)
+// gremion-ui/src/lib/retention-tiers.ts — the one place the numbers live
+RETENTION_CAPS = { access_logs_days: 29, app_logs_days: 29,
+                   security_logs_days: 29, security_nopii_logs_days: 30 }
 ```
 
-These caps are the code's current values. Operator ceiling 30 d [D R29-I6]; the
-application tiers change with TASK-033.
+Operator ceiling 30 d [D R29-I6]: the caps are 29 d where the daily purge tick
+enforces the window, 30 d for the no-PII tier (§2).
 
 Additional non-retention hard limits enforced in the same function:
 
@@ -234,5 +255,7 @@ Additional non-retention hard limits enforced in the same function:
 - `setup_complete` is append-only (`current.setup_complete || update === true`)
   — once setup is finished, the wizard cannot be re-entered via a config write.
 
-There is no UI surface for raising a cap. To change a cap, edit `config.ts`,
-extend the Löschkonzept template (§5), and update §2 of this document.
+There is no UI surface for raising a cap. To change a cap, edit
+`gremion-ui/src/lib/retention-tiers.ts` (the settings API, the Settings tab and
+`infra/hardening/values.yaml` follow it; a guard test fails if one keeps a private
+copy), extend the Löschkonzept template (§5), and update §2 of this document.

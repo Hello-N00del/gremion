@@ -64,7 +64,7 @@ vi.mock('$lib/server/config', () => ({
   readConfig: () => ({
     smtp: { configured: false, host: '', port: 0, from_address: '' },
     modules: { finance: true, elections: true },
-    retention: { security_logs_days: 90 },
+    retention: { security_logs_days: 27 },
     // P2.1c (T15 / §6-P2.2): the boot fleet asserts a COMPLETE brand identity per
     // tenant after its migrations succeed. The default tenant is MATERIALIZED in
     // production (real brand values), so the mock carries a complete brand — a

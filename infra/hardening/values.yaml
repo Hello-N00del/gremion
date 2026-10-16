@@ -4,10 +4,12 @@
 # docker-compose and K8s outputs.
 
 retention:
-  access_logs_days: 14        # Tier 1 — hard cap 30 (BayLDA)
-  app_logs_days: 30           # Tier 2 — hard cap 90
-  security_logs_days: 90      # Tier 3 — hard cap 180 (BSI Mindeststandard v2.1)
-  security_nopii_logs_days: 90 # Tier 4 — hard cap 365
+  # Values mirror RETENTION_DEFAULTS in gremion-ui/src/lib/retention-tiers.ts;
+  # caps follow RETENTION_CAPS under the operator ceiling of 30 days [D R29-I6].
+  access_logs_days: 14        # Tier 1 — hard cap 29 (30 d ceiling minus the daily purge tick)
+  app_logs_days: 28           # Tier 2 — hard cap 29
+  security_logs_days: 27      # Tier 3 — hard cap 29
+  security_nopii_logs_days: 27 # Tier 4 — hard cap 30 (no purge tick, operator value R31-I4a)
 
 backup:
   local_retention_days: 30
