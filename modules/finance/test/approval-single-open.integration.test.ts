@@ -11,7 +11,13 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest'
 import type { AddressInfo } from 'node:net'
 import { createServer } from '../src/http/server.ts'
 import { buildApiRoutes } from '../src/http/routes.ts'
-import { storeFor, _resetTenantStoreForTests, type TenantRef, type Sql } from '../src/tenant-store.ts'
+import {
+  storeFor,
+  _poolRegistryForTests,
+  _resetTenantStoreForTests,
+  type TenantRef,
+  type Sql,
+} from '../src/tenant-store.ts'
 
 const TEST_DB_PREFIX = 'finance_test_'
 const TEST_PG_URL = (() => {
@@ -180,13 +186,17 @@ describe('finance leaf -- one open approval and one live payment_order per appro
   // at once, a regression that silently DELETEs the surplus approvals stayed green,
   // because the payment_order arm's RAISE rolled the DELETE back (verifier, r1).
   //
-  // The boot is re-run through storeFor() under a second tenant id that shares the
-  // slug (so the same tenant DB): the pool map is keyed by id, so this opens a FRESH
-  // pool and runs every migration exactly as a leaf's first contact does, while the
-  // suite's `sql` pool on TENANT stays open to read and repair the rows. No direct
-  // driver connection in this file (kernel lint-tenant-db-access).
-  const REBOOT: TenantRef = { id: 'f105f105-0000-4000-8000-f105f105f106', slug: TENANT.slug }
-  const reboot = () => storeFor(REBOOT, { pgUrl: TEST_PG_URL, dbPrefix: TEST_DB_PREFIX })
+  // The boot is re-run through storeFor() for the SAME tenant after its registry entry
+  // is dropped (a leaf restart): the registry is empty, so this opens a FRESH pool on
+  // the same tenant DB and runs every migration exactly as a leaf's first contact does,
+  // while the suite's `sql` pool on TENANT stays open (reset() drops the entry, it does
+  // not end the pool) to read and repair the rows. A second tenant id sharing the slug,
+  // which this used to use, is the pair the catalog binding refuses. No direct driver
+  // connection in this file (kernel lint-tenant-db-access).
+  const reboot = () => {
+    _poolRegistryForTests.reset()
+    return storeFor(TENANT, { pgUrl: TEST_PG_URL, dbPrefix: TEST_DB_PREFIX })
+  }
 
   async function dropSingleOpenIndexes(): Promise<void> {
     await sql`DROP INDEX IF EXISTS finance.approval_one_open_per_approvable_idx`
