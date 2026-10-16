@@ -925,9 +925,9 @@
     },
     {
       "path": "modules/calendar/src/index.ts",
-      "reason": "kernel-ahead of f2: e291d8d1 fix(calendar): resolve the CalDAV target per tenant and refuse to drain without one (F1-FIX-08-K H06",
+      "reason": "kernel-ahead of f2: e291d8d1 fix(calendar): resolve the CalDAV target per tenant and refuse to drain without one (F1-FIX-08-K H06 ; RELAY-ISOLATION: the relay tick isolates each tenant (a store that refuses, e.g. TenantIdentityMismatchError, is logged by tenant id and the tick moves on to the next tenant); the same change in the content, calendar and newsletter leaves",
       "owner": "TASK-205",
-      "blob": "1d8d8037df301b0755edb6b8b9e7222145ec688d"
+      "blob": "9ae4c3cd80ce5a1e6d67242a84965075eddda785"
     },
     {
       "path": "modules/calendar/src/store/events.ts",
@@ -967,9 +967,9 @@
     },
     {
       "path": "modules/content/src/index.ts",
-      "reason": "kernel-ahead of f2: 03903452 fix(content): no localhost unsubscribe links; an unusable link base fails the email publish closed (",
+      "reason": "kernel-ahead of f2: 03903452 fix(content): no localhost unsubscribe links; an unusable link base fails the email publish closed ( ; RELAY-ISOLATION: the relay tick isolates each tenant (a store that refuses, e.g. TenantIdentityMismatchError, is logged by tenant id and the tick moves on to the next tenant); the same change in the content, calendar and newsletter leaves",
       "owner": "TASK-205",
-      "blob": "7e309a572d8f90d429de6a08a12c6639f46119d8"
+      "blob": "13d232ae19b77578f7c79691a9b219c320483d4d"
     },
     {
       "path": "modules/content/src/publish-channel.ts",
@@ -2104,6 +2104,48 @@
       "reason": "TRD-060 isolation guard: two-tenant read/list/update/delete isolation and (id, slug) binding refusal against a real Postgres",
       "owner": "TASK-205",
       "blob": "7e969da503bc092ac99086c5a9a86313db710245"
+    },
+    {
+      "path": "modules/content/src/relay-tick.ts",
+      "reason": "added by RELAY-ISOLATION: one relay tick with per-tenant isolation; byte-identical in the three leaves",
+      "owner": "TASK-205",
+      "blob": "7acafb81a44270cd147ae95255e6585ec7ee2704"
+    },
+    {
+      "path": "modules/content/test/relay-tick.test.ts",
+      "reason": "added by RELAY-ISOLATION: two tenants, the first one's store throws, the second is still processed; byte-identical in the three leaves",
+      "owner": "TASK-205",
+      "blob": "4c2ecca5983f5e2fc530414c0b58d147789d416f"
+    },
+    {
+      "path": "modules/calendar/src/relay-tick.ts",
+      "reason": "added by RELAY-ISOLATION: one relay tick with per-tenant isolation; byte-identical in the three leaves",
+      "owner": "TASK-205",
+      "blob": "7acafb81a44270cd147ae95255e6585ec7ee2704"
+    },
+    {
+      "path": "modules/calendar/test/relay-tick.test.ts",
+      "reason": "added by RELAY-ISOLATION: two tenants, the first one's store throws, the second is still processed; byte-identical in the three leaves",
+      "owner": "TASK-205",
+      "blob": "4c2ecca5983f5e2fc530414c0b58d147789d416f"
+    },
+    {
+      "path": "modules/publishing/src/relay-tick.ts",
+      "reason": "added by RELAY-ISOLATION: one relay tick with per-tenant isolation; byte-identical in the three leaves",
+      "owner": "TASK-205",
+      "blob": "7acafb81a44270cd147ae95255e6585ec7ee2704"
+    },
+    {
+      "path": "modules/publishing/test/relay-tick.test.ts",
+      "reason": "added by RELAY-ISOLATION: two tenants, the first one's store throws, the second is still processed; byte-identical in the three leaves",
+      "owner": "TASK-205",
+      "blob": "4c2ecca5983f5e2fc530414c0b58d147789d416f"
+    },
+    {
+      "path": "modules/publishing/src/index.ts",
+      "reason": "RELAY-ISOLATION: the relay tick isolates each tenant (a store that refuses, e.g. TenantIdentityMismatchError, is logged by tenant id and the tick moves on to the next tenant); the same change in the content, calendar and newsletter leaves",
+      "owner": "TASK-205",
+      "blob": "a8f1dcfb8ca950afa83abda90890f6372e20a3b8"
     }
   ]
 }
