@@ -1,6 +1,6 @@
 module-source parity (TASK-200) — scripts/check-module-source-parity.mjs
 source: annotated tag extraction-source-f2 -> d0c656d0b266f3a1741f34454e0061bc5078c3f4; set-A base (frozen extraction source) f276af5925abacdcfd05f6613fc11afff2d804c5
-kernel: c961c9d7cdc6afda2765bf1efb4c32bf56777880
+kernel: 3c1e711ce1f31c286335d19b645e9388633eec7d
 mode: tip (only EXTRACTION-DELTA.json paths may differ; set A never)
 
 set A — services/** changed f276af59..extraction-source-f2: 42 files, 14 differ (14 listed, 0 unlisted)
@@ -239,7 +239,7 @@ set C — module in-process halves (gremion-ui/src -> modules/<id>/app; board, c
   listed   modules/votes/app/routes/votes/+page.server.ts  tag=3281b779a449da0481ad8a10e03f685a933c316b kernel=3a7a08dc7a44e13c262964668dd28e1799f34f2d
   listed   modules/votes/app/routes/votes/+page.svelte  tag=f0f86f3e0227f24e312de57f61eb7ca3ba1ad39d kernel=aa3996cb78ef28265624045e95cb4b306354fdda
   listed   modules/votes/app/routes/votes/votes.reflow.browser.test.ts  tag=e6a243481bc87882b4a8c63c4f9797fe8357864d kernel=8336a5c49111e3793d88f87bf7e23fb7d99e958c
-extras — kernel files in a mapped module directory that no tag path maps to: 104 (104 listed)
+extras — kernel files in a mapped module directory that no tag path maps to: 106 (106 listed)
   listed   modules/board/app/routes/api/board/board-binding.test.ts
   listed   modules/board/src/app.ts
   listed   modules/board/src/store/tenant-db.ts
@@ -335,6 +335,8 @@ extras — kernel files in a mapped module directory that no tag path maps to: 1
   listed   modules/messaging/synapse/test/refusal.test.mjs
   listed   modules/messaging/synapse/test/render.test.mjs
   listed   modules/messaging/synapse/test/scratch-proof.sh
+  listed   modules/publishing/app/routes/api/internal/newsletter/callback-auth.test.ts
+  listed   modules/publishing/app/routes/api/newsletter/unsubscribe/unsubscribe.test.ts
   listed   modules/publishing/test/identity-mismatch-http.test.ts
   listed   modules/publishing/test/tenant-store.identity-binding.integration.test.ts
   listed   modules/publishing/test/tenant-store.identity-binding.test.ts
@@ -344,6 +346,6 @@ extras — kernel files in a mapped module directory that no tag path maps to: 1
   listed   modules/votes/src/boot-config.ts
   listed   modules/votes/test/polls-client.test.ts
   listed   modules/votes/test/server-validation.test.ts
-delta entries: 323
+delta entries: 325
 
 RESULT: OK
