@@ -113,17 +113,22 @@ other 13 differ from master by design, not by omission. Same finding ids, differ
 The two lines are not reconciled line by line. A single reconciliation (master's UUID refusal and naming against the
 kernel's encoding and `smtp-outcome`) is a content decision for the unit that enables content, not a catch-up.
 
-**Shell hunks not applied (files owned by another unit: `hooks.server.ts`).** Publishing is wired, but two
-behaviours need `PUBLIC_PATHS` entries (exact, per the F1-FIX-03 rule; the f2 list had prefixes): `/newsletter/unsubscribe`
-and `/api/newsletter/unsubscribe` (the unsubscribe page and POST must work without a session), and
-`/api/internal/newsletter/render`, `/resolve-group`, `/send-mail` (the leaf calls them with `x-internal-auth`; the
-element-0 `leaf-trust.ts` already selects the tenant, but without an entry the session guard answers 401 for want of a
-session). For content when it is
-enabled: `/content/unsubscribe`, `/api/internal/content/portal-publish`. `hooks.boot.test.ts` pins the current 401 for
-`/api/internal/newsletter/render` through the session guard (`a tenant-resolved request still goes through Auth.js`);
-that case flips with the entry and should use a path that stays guarded. No nav rail entry exists for newsletter in the
-source; vault's rail anchor (`{ slot: 'module', moduleId: 'vault' }` in the Verwaltung section) joins `nav-schema.ts`
-when vault is enabled.
+**Shell hunk in `hooks.server.ts`, publishing only.** The unsubscribe link in a sent newsletter is opened by a
+recipient with no session, and the publishing leaf calls three kernel callbacks with a shared secret, so
+`PUBLIC_PATHS` gains five EXACT entries (nothing below or beside them is public; StuRaOS master has the same
+routes, as a page subtree for the page and exact entries for the API and the callbacks, the kernel matcher is
+stricter for the page): `/newsletter/unsubscribe` (static page that calls the API), `/api/newsletter/unsubscribe`
+(GET; 400 without a token, 404 unknown, 410 expired, no address echoed, IP rate limit first),
+`/api/internal/newsletter/render`, `/resolve-group` and `/send-mail` (each handler refuses with 403 unless
+`x-internal-auth` constant-time-equals `INTERNAL_NEWSLETTER_SECRET`; an unset or empty server secret refuses
+everything). They are the newsletter keys of `LEAF_CALLBACK_ROUTES`; `hooks.boot.test.ts` pins the exact list, a
+tenant-resolved request for each is served, near-misses and `/api/internal/content/portal-publish` stay 401, and a
+lockstep case fails if the leaf-trust table and the public list drift. The handler gates are proved by
+`callback-auth.test.ts` and `unsubscribe.test.ts` (new, delta-listed). Content stays disabled, so
+`/content/unsubscribe` and `/api/internal/content/portal-publish` join the list with the content half. The 401 case
+of `hooks.boot.test.ts` that used the newsletter render path now uses the content callback. No nav rail entry
+exists for newsletter in the source; vault's rail anchor (`{ slot: 'module', moduleId: 'vault' }` in the
+Verwaltung section) joins `nav-schema.ts` when vault is enabled.
 
 **K3.** The unit adds no `$env/dynamic/*` mock: its own test edits mock `$lib/server/env/service-env` or nothing. Seven
 byte-equal files keep the f2 form until TASK-032's K-scan: `vault-flags.ts`, `vault-extern/+page.server.ts` and

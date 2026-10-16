@@ -1942,6 +1942,18 @@
       "reason": "added in the kernel after f2: fix(security) bind storeFor to the catalogued tenant identity (audit #534), regression test",
       "owner": "TASK-205",
       "blob": "349816f0b4a4cbf5df7719badc0f1ff9416e019e"
+    },
+    {
+      "path": "modules/publishing/app/routes/api/internal/newsletter/callback-auth.test.ts",
+      "reason": "added by TASK-205c: the three leaf callbacks are public by exact PUBLIC_PATHS entry, so the shared secret is their only gate; table-driven refusal cases (no header, wrong, prefix and extension of the real secret, unset or empty server secret, other header names) and a check that nothing behind the gate is reached",
+      "owner": "TASK-205c",
+      "blob": "999b0abe99a3f924596b83a61cc4c1864335d481"
+    },
+    {
+      "path": "modules/publishing/app/routes/api/newsletter/unsubscribe/unsubscribe.test.ts",
+      "reason": "added by TASK-205c: the unsubscribe API is public by exact PUBLIC_PATHS entry, so the single-use token is its only credential; 400 without a token, 404 unknown, 410 expired, no address echoed, rate limit before the lookup, GET only",
+      "owner": "TASK-205c",
+      "blob": "a0676ecf3240c5a73d0482f2236b5c4d614badd6"
     }
   ]
 }
