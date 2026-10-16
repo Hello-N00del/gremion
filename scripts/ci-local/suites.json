@@ -379,6 +379,17 @@
       "testGlobs": ["modules/content/app/**/*.integration.test.ts"]
     },
     {
+      "id": "kernel-module-elections-unit",
+      "repo": "kernel",
+      "category": "unit",
+      "cwd": "modules/elections",
+      "kind": "vitest",
+      "command": "pnpm run test",
+      "timeoutMs": 600000,
+      "requiresStack": false,
+      "testGlobs": ["modules/elections/test/**/*.test.ts"]
+    },
+    {
       "id": "kernel-module-files-unit",
       "repo": "kernel",
       "category": "unit",
