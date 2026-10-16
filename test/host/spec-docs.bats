@@ -1,9 +1,9 @@
 #!/usr/bin/env bats
 # The two operator-approved design specs (spec B, spec D; 2026-09-15) must live
 # IN the kernel and be TRACKED, because every later unit cites them by repo path.
-# They arrived in a directory .gitignore blanket-ignores as AI tooling output
-# (.gitignore:188 `docs/superpowers/`), so "the file is on disk" was never the
-# same as "the repo carries it" — which is the state this suite pins.
+# They arrived in a directory .gitignore used to blanket-ignore as generated
+# scratch output, so "the file is on disk" was never the same as "the repo
+# carries it" — which is the state this suite pins.
 #
 # Every test asserts through `git ls-files`, not `test -f`: an untracked file
 # reads identical on disk and ships nowhere.
@@ -21,15 +21,15 @@ KERNEL_ROOT="${PROJECT_ROOT}"
 
 @test "exactly one tracked spec-b-*.md and one tracked spec-d-*.md" {
   local b d
-  b="$(git -C "$KERNEL_ROOT" ls-files -- 'docs/superpowers/specs/spec-b-*.md' | wc -l)"
-  d="$(git -C "$KERNEL_ROOT" ls-files -- 'docs/superpowers/specs/spec-d-*.md' | wc -l)"
+  b="$(git -C "$KERNEL_ROOT" ls-files -- 'docs/design-specs/spec-b-*.md' | wc -l)"
+  d="$(git -C "$KERNEL_ROOT" ls-files -- 'docs/design-specs/spec-d-*.md' | wc -l)"
   [ "$b" -eq 1 ]
   [ "$d" -eq 1 ]
 }
 
 @test "the tracked spec B carries the B0 row, the P1-P5 posture and the ledger path" {
   local f
-  f="$(git -C "$KERNEL_ROOT" ls-files -- 'docs/superpowers/specs/spec-b-*.md')"
+  f="$(git -C "$KERNEL_ROOT" ls-files -- 'docs/design-specs/spec-b-*.md')"
   grep -qF 'B0-spec-docs-and-waiver-ledger' "${KERNEL_ROOT}/${f}"
   grep -qF 'Release-1 posture (P1' "${KERNEL_ROOT}/${f}"
   grep -qF 'docs/ops/release-1-waivers.md' "${KERNEL_ROOT}/${f}"
@@ -37,16 +37,16 @@ KERNEL_ROOT="${PROJECT_ROOT}"
 
 @test "the tracked spec D carries its own unit registry" {
   local f
-  f="$(git -C "$KERNEL_ROOT" ls-files -- 'docs/superpowers/specs/spec-d-*.md')"
+  f="$(git -C "$KERNEL_ROOT" ls-files -- 'docs/design-specs/spec-d-*.md')"
   grep -qF 'D2-module-json-and-dist-schema' "${KERNEL_ROOT}/${f}"
 }
 
-@test "nothing else under docs/superpowers is tracked (the tooling ignore still holds)" {
+@test "nothing else under docs/design-specs is tracked (only the two approved specs live there)" {
   local extra
-  extra="$(git -C "$KERNEL_ROOT" ls-files -- 'docs/superpowers' \
-            | grep -vE '^docs/superpowers/specs/spec-[bd]-[^/]+\.md$' || true)"
+  extra="$(git -C "$KERNEL_ROOT" ls-files -- 'docs/design-specs' \
+            | grep -vE '^docs/design-specs/spec-[bd]-[^/]+\.md$' || true)"
   if [ -n "$extra" ]; then
-    echo "tooling artefact(s) tracked under docs/superpowers:" >&2
+    echo "unexpected file(s) tracked under docs/design-specs:" >&2
     printf '%s\n' "$extra" >&2
   fi
   [ -z "$extra" ]
@@ -61,7 +61,7 @@ KERNEL_ROOT="${PROJECT_ROOT}"
   run awk '/^### The Keycloak realm/{f=1;next} f&&/^### /{exit} f' \
       "${KERNEL_ROOT}/KNOWN_ISSUES.md"
   [ -n "$output" ]
-  [[ "$output" == *"docs/superpowers/specs/spec-b-"* ]]
+  [[ "$output" == *"docs/design-specs/spec-b-"* ]]
   [[ "$output" == *"B1a-realm-identity-and-boot-import"* ]]
 }
 

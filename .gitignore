@@ -175,25 +175,15 @@ desktop.ini
 logs/
 
 # -------------------------------------------------------------
-# Git worktrees (from `git worktree add` — tooling artefact)
+# Git worktrees (from `git worktree add`)
 # -------------------------------------------------------------
 .worktrees/
 
 # -------------------------------------------------------------
-# AI tooling (Claude Code / Superpowers) — never commit tooling artefacts
+# Local tool and editor state — never commit
 # -------------------------------------------------------------
 .claude/
-.superpowers/
 CLAUDE.md
-# AI tooling output stays out of the repo — EXCEPT the approved design specs,
-# which are the authority every spec-B/spec-D unit cites by repo path. A
-# directory that is itself excluded cannot have a child re-included, so the
-# exclusion is written per level.
-docs/superpowers/*
-!docs/superpowers/specs/
-docs/superpowers/specs/*
-!docs/superpowers/specs/spec-b-*.md
-!docs/superpowers/specs/spec-d-*.md
 
 # -------------------------------------------------------------
 # WP-Migration (Track M) — generated diff reports contain financial PII

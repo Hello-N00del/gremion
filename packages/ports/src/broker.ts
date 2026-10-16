@@ -61,7 +61,11 @@ export const LIVENESS_FAULT_BOUND_MS = 5_000
 export const SETUP_TIMEOUT_MS = 10_000
 /** close() waits at most this long for live subscriptions to settle before it
  *  drains the connection regardless, warning with the patterns still pending.
- *  The drain is what must happen; the wait is a courtesy. */
+ *  The drain is what must happen; the wait is a courtesy. The drain itself gets
+ *  the same allowance: a drain still pending after this long is abandoned with a
+ *  warning and the connection is closed outright (whatever it had not flushed is
+ *  lost). The two waits run one after the other, so close() returns after at
+ *  most twice this plus the connection's own close(). */
 export const CLOSE_TIMEOUT_MS = 5_000
 
 // ── Port errors ──────────────────────────────────────────────────────────────
@@ -190,6 +194,31 @@ export class ConsumerStalledError extends Error {
         `${probes} consecutive probes although the stream and the consumer both exist, so it is receiving nothing. Resubscribe.`,
     )
     this.name = 'ConsumerStalledError'
+  }
+}
+
+/** A live subscription went SILENT and the probe could not say why: the server
+ *  sent no heartbeat across `probes` consecutive probes, and at least one of
+ *  them could not confirm whether the stream and the consumer still exist (a
+ *  JetStream API timeout, a connection that is closing). The probe's last
+ *  failure is the `cause`. Unlike {@link ConsumerStalledError} nothing here says
+ *  the server is healthy — only that the subscription is receiving nothing and
+ *  that waiting longer would not tell. */
+export class HeartbeatsMissedError extends Error {
+  constructor(
+    readonly stream: string,
+    readonly pattern: string,
+    readonly probes: number,
+    options?: ErrorOptions,
+  ) {
+    const why = options?.cause === undefined ? '' : `: ${options.cause instanceof Error ? options.cause.message : String(options.cause)}`
+    super(
+      `[nats-broker] subscription "${pattern}" on stream ${stream} went silent: no heartbeat from the server across ` +
+        `${probes} consecutive probes, and the probe could not confirm that the stream and the consumer still exist` +
+        `${why}, so it is receiving nothing. Resubscribe.`,
+      options,
+    )
+    this.name = 'HeartbeatsMissedError'
   }
 }
 

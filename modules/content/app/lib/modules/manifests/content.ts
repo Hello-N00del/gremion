@@ -39,5 +39,5 @@ export const contentManifest: ModuleManifest = {
   // nav at a matching `{ slot:'module', moduleId }` anchor in baseNavSchema;
   // there is no 'content' anchor yet, so a nav fragment here would be dead
   // config. The rail entry + its base-template anchor are a later
-  // Claude-Design handover (the authoring UI is reached directly via /content).
+  // design hand-off (the authoring UI is reached directly via /content).
 }

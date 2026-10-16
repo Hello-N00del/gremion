@@ -13,7 +13,7 @@
 #   4. shellcheck every scripts/release/*.sh (shellcheck missing = FAIL).
 #
 # Intended target: `make lint-release` (the Makefile is TASK-045's; the
-# one-line registration is a residual the orchestrator adds when merging).
+# one-line registration is a residual the maintainer adds when merging).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"

@@ -1,6 +1,6 @@
 // TASK-045 (TRD-341): the result record. verify.mjs writes exactly one of
-// these per run; check-record.mjs is the only reader, and is the thing an
-// orchestrator's merge step calls to decide pass/fail without re-running
+// these per run; check-record.mjs is the only reader, and is the thing a
+// maintainer's merge step calls to decide pass/fail without re-running
 // anything.
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import path from 'node:path'

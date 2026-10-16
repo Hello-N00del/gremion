@@ -42,7 +42,7 @@ export const REQUIRED_SUITES_PATH = path.join(import.meta.dirname, 'required-sui
 // INTEGRATION_PARTS key, generated from those modules' own key lists so a
 // part added there (or removed) is reachable through `--only` (or reported as
 // dropped by meta.test.mjs) without anyone having to remember a second,
-// hand-kept list here. Each fits a single 4-minute agent tool call even when
+// hand-kept list here. Each fits a single 4-minute time budget even when
 // the whole suite (`unit`, `integration`) does not (brief S7: gremion-ui's
 // vitest alone runs ~185-340s) -- round 2 MEDIUM: these existed as
 // UNIT_PARTS/INTEGRATION_PARTS keys but were reachable from nowhere `--only`

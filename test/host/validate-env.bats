@@ -265,6 +265,48 @@ set_key() {
     done
 }
 
+# gremion#6: the base realm opens both email paths (loginWithEmailAllowed,
+# resetPasswordAllowed) and carries an smtpServer block, so a host whose app env
+# holds no platform mail identity cannot send a reset or a verification mail.
+# The clause "validate-env fails closed when mail is unset" is met by the
+# template-driven checks, not by a mail-specific branch: PLATFORM_SMTP_PASSWORD is
+# a generated secret in app.env.tmpl (load_env refuses it empty or still a
+# sentinel; the template-key check refuses it absent) and PLATFORM_DOMAIN, from
+# which the platform sender (platform@, mail.<domain>) is derived, is an operator
+# key. These cases pin that, so loosening the template cannot go unnoticed.
+@test "the app env refuses an unset platform mail identity: PLATFORM_SMTP_PASSWORD and PLATFORM_DOMAIN, absent, empty or still a sentinel (gremion#6)" {
+    local realm="${BATS_TEST_DIRNAME}/../../docker/keycloak/realm-export.base.json"
+    grep -q '"loginWithEmailAllowed": true' "$realm"
+    grep -q '"resetPasswordAllowed": true' "$realm"
+    grep -q '"smtpServer"' "$realm"
+    grep -q '^PLATFORM_SMTP_PASSWORD=CHANGE_ME_GEN_' "${HOST_SRC}/templates/env/app.env.tmpl"
+    grep -q '^PLATFORM_DOMAIN=CHANGE_ME_OPERATOR_' "${HOST_SRC}/templates/env/app.env.tmpl"
+    render_filled
+    local f="${ENV_DIR}/app-blue.env" k mutation want
+    run "$VALIDATE" --env-file "$f" --release "$RELEASE"
+    [ "$status" -eq 0 ] || { echo "the filled app env must validate first: $output"; return 1; }
+    local secret
+    secret="$(value_of "$f" PLATFORM_SMTP_PASSWORD)"
+    [ -n "$secret" ]
+    for k in PLATFORM_SMTP_PASSWORD PLATFORM_DOMAIN; do
+        for mutation in absent empty blank sentinel; do
+            cp "$f" "${f}.bak"
+            case "$mutation" in
+                absent)   sed -i "/^${k}=/d" "$f";                          want=1 ;;
+                empty)    sed -i "s/^${k}=.*/${k}=/" "$f";                  want=$([ "$k" = PLATFORM_SMTP_PASSWORD ] && echo 2 || echo 1) ;;
+                blank)    sed -i "s/^${k}=.*/${k}=\"  \"/" "$f";            want=$([ "$k" = PLATFORM_SMTP_PASSWORD ] && echo 2 || echo 1) ;;
+                sentinel) sed -i "s/^${k}=.*/${k}=CHANGE_ME_GEN_alnum32_platform_smtp/" "$f"; want=2 ;;
+            esac
+            run "$VALIDATE" --env-file "$f" --release "$RELEASE"
+            [ "$status" -eq "$want" ] || { echo "${k} ${mutation}: expected exit ${want}, got ${status}: ${output}"; return 1; }
+            [[ "$output" == *"$k"* ]] || { echo "${k} ${mutation}: the refusal does not name the key: ${output}"; return 1; }
+            [[ "$output" != *"VALIDATE-ENV: ok"* ]]
+            [[ "$output" != *"$secret"* ]] || { echo "${k} ${mutation}: the generated secret was printed"; return 1; }
+            mv "${f}.bak" "$f"
+        done
+    done
+}
+
 @test "no generated secret value is printed on success or on any failure" {
     render_filled
     local f="${ENV_DIR}/state.env" tmpl="${HOST_SRC}/templates/env/state.env.tmpl"

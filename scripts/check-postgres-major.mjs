@@ -70,9 +70,9 @@ export function checkEvidence(text) {
 //
 //  1. Frozen copies of the APPROVED specs quote the pre-pin tag verbatim. They
 //     are a record of what was decided, not a place a tag is configured;
-//     rewriting them would falsify the record. It is also the only tracked path
-//     under docs/superpowers — B0 un-ignores exactly
-//     docs/superpowers/specs/spec-{b,d}-*.md and nothing else.
+//     rewriting them would falsify the record. The directory is also narrow:
+//     B0 tracks exactly docs/design-specs/spec-{b,d}-*.md and nothing else
+//     (test/host/spec-docs.bats pins it).
 //  2. The `tree-stale` and `tree-stale-module` fixtures EXIST to carry a stale
 //     tag: they are what prove `--tree` goes RED (the second one digest-pinned
 //     on an older major, TASK-019). Excluding the whole `postgres-major` fixture
@@ -85,7 +85,7 @@ export function checkEvidence(text) {
 //     carry; TASK-126 owns them. Anchored at the repo root, so `docs/k8s.md` or
 //     `infra/k8s/` would still be scanned.
 export const EXCLUDED = [
-  /^docs\/superpowers\/specs\//,
+  /^docs\/design-specs\//,
   /^test\/host\/fixtures\/postgres-major\/tree-stale(-module)?\//,
   /^k8s\//,
 ]

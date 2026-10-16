@@ -2,6 +2,7 @@ import { json } from '@sveltejs/kit'
 import type { RequestHandler } from './$types'
 import { readConfig, writeConfig } from '$lib/server/config'
 import { writeAuditEntry } from '$lib/server/audit-db'
+import { OPERATOR_DECISION_DE, RETENTION_CAPS } from '$lib/retention-tiers'
 import { hasRole, Role } from '$lib/auth'
 import type { SessionUser } from '$lib/auth/types'
 import { z } from 'zod'
@@ -53,10 +54,11 @@ const settingsPatchSchema = z.strictObject({
     .optional(),
   retention: z
     .object({
-      access_logs_days: z.number().int().min(1).max(30).optional(),
-      app_logs_days: z.number().int().min(1).max(90).optional(),
-      security_logs_days: z.number().int().min(1).max(180).optional(),
-      security_nopii_logs_days: z.number().int().min(1).max(365).optional(),
+      // [D R29-I6]: bounds come from the one tier registry (`$lib/retention-tiers`).
+      access_logs_days: z.number().int().min(1).max(RETENTION_CAPS.access_logs_days).optional(),
+      app_logs_days: z.number().int().min(1).max(RETENTION_CAPS.app_logs_days).optional(),
+      security_logs_days: z.number().int().min(1).max(RETENTION_CAPS.security_logs_days).optional(),
+      security_nopii_logs_days: z.number().int().min(1).max(RETENTION_CAPS.security_nopii_logs_days).optional(),
     })
     .optional(),
   compliance: z
@@ -96,14 +98,19 @@ export const PATCH: RequestHandler = async ({ request, locals }) => {
   const parsed = settingsPatchSchema.safeParse(body)
   if (!parsed.success) {
     const issue = parsed.error.issues[0]
+    // [D R29-I6]: the cap message names the operator ceiling (no log class is
+    // kept longer than 30 days), not the earlier per-class tiers. Only an
+    // over-the-cap value gets it; 0 or a fraction keeps zod's own message.
+    const capMessage = (field: keyof typeof RETENTION_CAPS) =>
+      `Max ${RETENTION_CAPS[field]} Tage (Betreiber-Obergrenze 30 Tage für jede Protokollklasse, ${OPERATOR_DECISION_DE})`
     const legalContext: Record<string, string> = {
-      'retention.access_logs_days': 'Max 30 Tage gemäß BayLDA-Empfehlung (DSGVO Art. 5 Abs. 1 lit. e)',
-      'retention.app_logs_days': 'Max 90 Tage gemäß DSGVO Art. 5 Abs. 1 lit. e + Art. 6 Abs. 1 lit. f',
-      'retention.security_logs_days': 'Max 180 Tage gemäß BSI-Mindeststandard Protokollierung v2.1',
-      'retention.security_nopii_logs_days': 'Max 365 Tage gemäß BSI-Mindeststandard Ausnahmeregelung',
+      'retention.access_logs_days': capMessage('access_logs_days'),
+      'retention.app_logs_days': capMessage('app_logs_days'),
+      'retention.security_logs_days': capMessage('security_logs_days'),
+      'retention.security_nopii_logs_days': capMessage('security_nopii_logs_days'),
     }
     const path = issue?.path.join('.') ?? ''
-    const message = legalContext[path] ?? issue?.message ?? 'Invalid input'
+    const message = (issue?.code === 'too_big' ? legalContext[path] : undefined) ?? issue?.message ?? 'Invalid input'
     return json({ success: false, error: message }, { status: 422 })
   }
 

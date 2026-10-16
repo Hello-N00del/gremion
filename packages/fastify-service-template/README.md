@@ -100,7 +100,7 @@ path. That list is the seam for later platform routes, for example TASK-035's
 evict.
 
 **Proposed `verify` registration (brief §5 Q2).** `scripts/verify/**` is owned by
-TASK-045 and is not in this unit. When it exists, the orchestrator can register
+TASK-045 and is not in this unit. When it exists, the maintainer can register
 this one line:
 
 ```sh

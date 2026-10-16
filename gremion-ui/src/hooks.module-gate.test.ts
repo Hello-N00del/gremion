@@ -22,7 +22,7 @@ vi.mock('$lib/server/config', () => ({
   readConfig: () => ({
     smtp: { configured: false },
     modules: { ...modulesState },
-    retention: { security_logs_days: 90 },
+    retention: { security_logs_days: 27 },
   }),
 }))
 // Inject a synthetic toggleable module's prefixes into the gate's registry seam.

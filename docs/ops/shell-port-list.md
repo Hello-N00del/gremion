@@ -198,7 +198,7 @@ the page data); the revoke `reason` bound (4000) is only in the contract's
 description (a `maxLength` would be a breaking change against the branch
 head for the staged-spec gate).
 
-## 206-A house review r1 (APPROVE, MEDIUM/LOW only): MEDIUM fixes, fixer round 2
+## 206-A code review r1 (APPROVE, MEDIUM/LOW only): MEDIUM fixes, fix round 2
 
 Kernel main 535aae89 merged into the unit branch first (no rebase, no conflict).
 

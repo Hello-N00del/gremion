@@ -14,7 +14,7 @@
 // Each part can also be run on its own as `verify --only unit:<part>` (see
 // UNIT_PARTS / verify.mjs's registry) -- gremion-ui's vitest alone takes
 // about three minutes, so the whole suite does not fit a single 4-minute
-// agent tool call. A part run is always a partial record; only a full
+// time budget. A part run is always a partial record; only a full
 // `verify` (every required suite, `unit` whole) satisfies check-record.
 import { existsSync, globSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs'
 import { createRequire } from 'node:module'

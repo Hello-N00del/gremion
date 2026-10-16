@@ -411,7 +411,10 @@ Because the server says nothing, every signal is produced client-side, by
   answered case of stream deletion, fault in 1–3 ms; the unanswered case
   (four runs of the twenty) faults in about 2 s by the heartbeat path —
   inside the bound, with room. Both still present and still no heartbeat is a stall;
-  `STALL_PROBE_LIMIT` consecutive such probes fault with `ConsumerStalledError`.
+  `STALL_PROBE_LIMIT` consecutive such probes fault with `ConsumerStalledError`. A
+  probe that cannot decide (a JetStream API error or timeout) is logged with its
+  error and counts toward the same limit; a run that held one faults with
+  `HeartbeatsMissedError`, the last probe error as its `cause`.
 - An **opt-in repoint faults the repointing broker's own live subscriptions**:
   each one logs at error level and rejects `closed` with
   `StreamRepointedError`. That signal reaches only the process that performed
@@ -518,12 +521,21 @@ the server-truth cover check and its precedence over a clean stop,
 and the faulting it causes, and the termination semantics (`unsubscribe()`, a
 closed connection, a deleted stream and a deleted consumer — each inside
 `LIVENESS_FAULT_BOUND_MS`, imported by the proof — publish after a deleted
-stream, and `close()`, which is idempotent and bounded by `CLOSE_TIMEOUT_MS`). The target asserts
+stream, and `close()`, which is idempotent and bounded by `CLOSE_TIMEOUT_MS` twice over: once for
+the subscriptions' outcomes and once for the drain, after which the connection is closed outright). The target asserts
 the post-condition rather than the exit code — vitest exits 0 on a skipped file
 — by counting that file's passing tests in the verbose output and failing below
 a pinned minimum. The same paths are specified against doubles in
 [`packages/ports/src/nats-broker-subscribe.integration.test.ts`](../packages/ports/src/nats-broker-subscribe.integration.test.ts),
 which runs under the plain `pnpm --filter @gremion/ports test`.
+
+A claim that the proofs pass every time rests on a record, not on a count in
+prose: `make test-ports-nats-nruns N=20`
+([`packages/ports/scripts/nats-test-nruns.sh`](../packages/ports/scripts/nats-test-nruns.sh))
+repeats the target above N times, each against its own fresh container, and
+leaves a per-run table (`runs.tsv`), the full log of every run and a
+`summary.txt` with the pass/fail distribution, the duration spread and a count
+per failing test. It exits non-zero unless every run passed.
 
 An existing deployment that upgrades past the rename faces a hard cutover of
 every stream at once. The interface delta and the order in which the streams

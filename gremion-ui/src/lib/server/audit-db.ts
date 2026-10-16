@@ -65,8 +65,9 @@ export async function readAuditLog(field?: string, limit = 50): Promise<AuditRec
 /**
  * G-024: hard-delete audit_log rows older than `days`. Driven by the 24-hour
  * retention scheduler booted from hooks.server.ts so the table doesn't grow
- * unbounded past the BSI / GDPR security-log retention cap configured in
- * `config.retention.security_logs_days`.
+ * unbounded past the security-log retention window configured in
+ * `config.retention.security_logs_days` (default 27 d, cap 29 d, so a row lives
+ * at most 30 d: [D R29-I6], `$lib/retention-tiers`).
  *
  * H01 (F1-FIX-02): the purge runs in the database (migration 0059,
  * audit_log_purge_before) so the INV-1 chain survives it: under the chain lock
