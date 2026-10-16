@@ -211,7 +211,9 @@ export class HeartbeatsMissedError extends Error {
     readonly probes: number,
     options?: ErrorOptions,
   ) {
-    const why = options?.cause === undefined ? '' : `: ${options.cause instanceof Error ? options.cause.message : String(options.cause)}`
+    const cause: unknown = options?.cause
+    const why =
+      cause === undefined ? '' : `: ${cause instanceof Error ? cause.message : typeof cause === 'string' ? cause : 'non-error cause'}`
     super(
       `[nats-broker] subscription "${pattern}" on stream ${stream} went silent: no heartbeat from the server across ` +
         `${probes} consecutive probes, and the probe could not confirm that the stream and the consumer still exist` +
