@@ -21,6 +21,7 @@ import { startScheduler } from './scheduler.js'
 import { drainCaldavForTenant } from './caldav/tenant-drain.js'
 import { NatsBroker } from './nats-broker.js'
 import { runRelayPass } from './relay.js'
+import { runRelayTick } from './relay-tick.js'
 import type { TenantRef } from './tenant-store.js'
 import { makeLogTracer, noopTracer, type TracerPort } from '@gremion/ports/tracer'
 import { STREAMS } from '@gremion/ports/broker'
@@ -192,19 +193,23 @@ async function main(): Promise<void> {
         relayTimer = setInterval(() => {
           void (async () => {
             try {
-              const tenants = await listTenants()
-              for (const tenant of tenants) {
-                const sql = await storeFor(tenant)
-                // Per-pass tracer mint so relay spans are traceable.
-                const { randomUUID: relayUUID } = await import('node:crypto')
-                const relayTracer = makeTracer(relayUUID())
-                await runRelayPass(sql, tenant.id, natsBroker!, { tracer: relayTracer }).catch((err) => {
-                  console.error(
-                    `[relay] pass failed tenant ${tenant.slug}:`,
-                    err instanceof Error ? err.message : String(err),
-                  )
-                })
-              }
+              // Per-tenant isolation lives in runRelayTick: one tenant's store refusal
+              // (TenantIdentityMismatchError, ...) skips that tenant only.
+              await runRelayTick({
+                listTenants: () => listTenants(),
+                storeFn: (tenant) => storeFor(tenant),
+                pass: async (sql, tenant) => {
+                  // Per-pass tracer mint so relay spans are traceable.
+                  const { randomUUID: relayUUID } = await import('node:crypto')
+                  const relayTracer = makeTracer(relayUUID())
+                  await runRelayPass(sql, tenant.id, natsBroker!, { tracer: relayTracer }).catch((err) => {
+                    console.error(
+                      `[relay] pass failed tenant ${tenant.slug}:`,
+                      err instanceof Error ? err.message : String(err),
+                    )
+                  })
+                },
+              })
             } catch (err) {
               console.error('[relay] tick error:', err instanceof Error ? err.message : String(err))
             }
