@@ -24,7 +24,7 @@ import { describe, it, expect, beforeAll, beforeEach, afterEach } from 'vitest'
 import { getDb } from '$lib/server/db'
 import { getControlDb } from '$lib/server/tenant/control-db'
 import { runControlMigrations } from '$lib/server/tenant/control-migrations'
-import { registerDefaultTenant } from '$lib/server/tenant/register-default'
+import { createTestTenant } from '../../../../tests/integration/create-test-tenant'
 import {
   registerTenant,
   resolveTenantBySlug,
@@ -93,8 +93,9 @@ describe('content-audit-consumer', () => {
     // Clean control plane.
     await getControlDb()`TRUNCATE tenant, tenant_provisioning_resource RESTART IDENTITY CASCADE`
     _resetResolutionCacheForTests()
-    // Register the default tenant (points at DATABASE_URL = the integration DB).
-    await registerDefaultTenant()
+    // TASK-042: no default tenant exists; the suite registers its own first tenant (data plane = the
+    // integration DB, DATABASE_URL).
+    await createTestTenant({ slug: 'tenant-a', host: 'tenant-a.test' })
 
     // Clean data-plane tables used by these tests.
     const sql = getDb()
@@ -120,7 +121,7 @@ describe('content-audit-consumer', () => {
 
     const fixedEventId = 'c0ffee00-0000-0000-0000-000000000002'
     // The envelope carries the tenant UUID (what the leaf publishes), resolved by id.
-    const defaultId = await tenantId('default')
+    const defaultId = await tenantId('tenant-a')
 
     // First delivery.
     await deliverEvent(broker, defaultId, 'publish.succeeded', {
@@ -165,7 +166,7 @@ describe('content-audit-consumer', () => {
       status: 'active',
       dbConnRef: 'env:DATABASE_URL',
       realmName: 'tenant-b',
-      issuer: 'https://sturaos.com/auth/realms/tenant-b',
+      issuer: 'https://tenant-b.test/auth/realms/tenant-b',
       kcInternal: 'http://keycloak:8080/auth/realms/tenant-b',
       kcClientId: 'stura-admin',
       kcClientRef: 'env:KEYCLOAK_ADMIN_CLIENT_SECRET',
@@ -181,7 +182,7 @@ describe('content-audit-consumer', () => {
     })
 
     // Sanity-check both tenants are resolvable (the consumer's registry lookup).
-    const ctxA = await resolveTenantBySlug('default')
+    const ctxA = await resolveTenantBySlug('tenant-a')
     const ctxB = await resolveTenantBySlug('tenant-b')
     expect(ctxA).not.toBeNull()
     expect(ctxB).not.toBeNull()
@@ -227,7 +228,7 @@ describe('content-audit-consumer', () => {
     wireContentAuditConsumer(broker)
 
     const correlationId = 'e2e1c0ff-eeee-4abc-a123-000000000002'
-    await deliverEvent(broker, await tenantId('default'), 'publish.failed', { correlationId })
+    await deliverEvent(broker, await tenantId('tenant-a'), 'publish.failed', { correlationId })
 
     const sql = getDb()
     const rows = await sql<{ field: string; correlation_id: string | null }[]>`
@@ -274,7 +275,7 @@ describe('content-audit-consumer', () => {
     const broker = new InMemoryBroker()
     wireContentAuditConsumer(broker)
 
-    const defaultId = await tenantId('default')
+    const defaultId = await tenantId('tenant-a')
     // Prove the envelope key is a UUID (not a slug) — the exact shape the leaf publishes.
     expect(defaultId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i)
 
@@ -303,8 +304,8 @@ describe('content-audit-consumer', () => {
     })
 
     await broker.publish(
-      contentSubject('default', 'publish.succeeded'),
-      makeEnvelope({ eventType: 'publish.succeeded', tenantId: 'default', correlationId: null, payload: {} }),
+      contentSubject('no-such-tenant', 'publish.succeeded'),
+      makeEnvelope({ eventType: 'publish.succeeded', tenantId: 'no-such-tenant', correlationId: null, payload: {} }),
     )
     await broker.publish(
       contentSubject('tenant-x', 'channel.portal.sent'),
@@ -316,7 +317,7 @@ describe('content-audit-consumer', () => {
     // point of this assertion is that CONSUMER_PATTERN covers what the helper
     // emits, and a literal subject would silently pin the wire root too.
     expect(received).toEqual([
-      contentSubject('default', 'publish.succeeded'),
+      contentSubject('no-such-tenant', 'publish.succeeded'),
       contentSubject('tenant-x', 'channel.portal.sent'),
     ])
   })

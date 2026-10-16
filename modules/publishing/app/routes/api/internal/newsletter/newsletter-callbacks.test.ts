@@ -259,7 +259,7 @@ describe('POST /api/internal/newsletter/send-mail', () => {
   it('RED→GREEN: returns 200 with optional from_address and from_name forwarded', async () => {
     mockSendMailForTenant.mockResolvedValue({ messageId: '<msg2@example.org>' })
 
-    const bodyWithFrom = { ...VALID_BODY, from_address: 'noreply@sturaos.de', from_name: 'StuRa' }
+    const bodyWithFrom = { ...VALID_BODY, from_address: 'noreply@example.org', from_name: 'StuRa' }
     const res = await sendMailModule.POST(makeEvent(bodyWithFrom, TEST_SECRET) as never)
     expect(res.status).toBe(200)
 
@@ -267,7 +267,7 @@ describe('POST /api/internal/newsletter/send-mail', () => {
       to: VALID_BODY.to,
       subject: VALID_BODY.subject,
       html: VALID_BODY.html,
-      from_address: 'noreply@sturaos.de',
+      from_address: 'noreply@example.org',
       from_name: 'StuRa',
     })
   })

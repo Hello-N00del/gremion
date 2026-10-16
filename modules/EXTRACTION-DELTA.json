@@ -1780,6 +1780,24 @@
       "reason": "TASK-205c: the German dictionary is the kernel's Paraglide catalogue (lib/i18n/messages/de.json); lib/i18n/de.ts no longer exists",
       "owner": "TASK-205c",
       "blob": "293ec73f0953059f50e1b116da727f627b8c9b89"
+    },
+    {
+      "path": "modules/publishing/app/lib/server/events/newsletter-audit-consumer.integration.test.ts",
+      "reason": "TASK-205c: no default-tenant registration (deleted, TASK-042); registers tenant-a through createTestTenant, the unknown-tenant cases use a slug no tenant has; neutral tenant-b issuer host (kernel hygiene h2/i1: no retired product host in a shipped surface); same adaptation calendar-audit-consumer.integration.test.ts carries",
+      "owner": "TASK-205c",
+      "blob": "a199df489a27016da5032626a73a695a8400c4c1"
+    },
+    {
+      "path": "modules/content/app/lib/server/events/content-audit-consumer.integration.test.ts",
+      "reason": "TASK-205c: no default-tenant registration (deleted, TASK-042); registers tenant-a through createTestTenant, the unknown-tenant cases use a slug no tenant has; neutral tenant-b issuer host (kernel hygiene h2/i1: no retired product host in a shipped surface); same adaptation calendar-audit-consumer.integration.test.ts carries",
+      "owner": "TASK-205c",
+      "blob": "beb5efb873ddfc18c6e812dc77f684615304a7e3"
+    },
+    {
+      "path": "modules/publishing/app/routes/api/internal/newsletter/newsletter-callbacks.test.ts",
+      "reason": "TASK-205c: neutral sender address in the from_address forwarding case (kernel hygiene h1/h2: no retired wire-root literal or product host in a shipped surface)",
+      "owner": "TASK-205c",
+      "blob": "d2fac80e5343babc2312491a00bea2c0c893b645"
     }
   ]
 }
