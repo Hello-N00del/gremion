@@ -1,6 +1,6 @@
 module-source parity (TASK-200) — scripts/check-module-source-parity.mjs
 source: annotated tag extraction-source-f2 -> d0c656d0b266f3a1741f34454e0061bc5078c3f4; set-A base (frozen extraction source) f276af5925abacdcfd05f6613fc11afff2d804c5
-kernel: 8484c50d3fefafd462df5a22237229ca1df03981
+kernel: ac7d9c343ced4c5489465a8b404c61f4bb4fc7fd
 mode: tip (only EXTRACTION-DELTA.json paths may differ; set A never)
 
 set A — services/** changed f276af59..extraction-source-f2: 42 files, 14 differ (14 listed, 0 unlisted)
@@ -38,22 +38,22 @@ set B — services/** at extraction-source-f2: 383 files, 104 differ (104 listed
   listed   modules/calendar/src/caldav/client.ts  tag=b506e7cede15a2af8f1b25f565c3c782b6160d9b kernel=e4a90b5629e9a30222581570cf670b027d15e9d5
   listed   modules/calendar/src/caldav/pusher.ts  tag=540b648fb761627f1b1dff7ccde9004803bd5304 kernel=92c0dd17afc019cce41b918199b1efadd6563879
   listed   modules/calendar/src/caldav/sync.ts  tag=4fe2c9ef605e1083baf6883af3a18873e574d400 kernel=660cf292d047f3fc865099daad395480817bbf0f
-  listed   modules/calendar/src/http/guard.ts  tag=0ca94fd5b9adfa83becf4f24de7ac217912181c5 kernel=122745bd4bc920185dc9666bb9eccec998a01abe
+  listed   modules/calendar/src/http/guard.ts  tag=0ca94fd5b9adfa83becf4f24de7ac217912181c5 kernel=15db8367697bf2201c89fb377fbda5a79a6ca754
   listed   modules/calendar/src/http/routes.ts  tag=3908b76e050ae3f18392bafc835bf62ece1a62fb kernel=cce8fefcc78c2727cd2195f2f3622d466f379242
   listed   modules/calendar/src/index.ts  tag=f7b9702d7c3a086d140473d92e1d2c858f57e0ca kernel=1d8d8037df301b0755edb6b8b9e7222145ec688d
   listed   modules/calendar/src/store/events.ts  tag=32d0317f9fd65be1e47d021369cd91e211e68cd6 kernel=cb134702285d7a296276b3248b722d70b10662ca
   listed   modules/calendar/src/tenant-store.ts  tag=db39d263ae8915ec85d8ef3d079a98c397615f56 kernel=e737c3a37d7704f5213e7bbcfd8486c0a57e8a17
   listed   modules/calendar/test/api.integration.test.ts  tag=a405181ab3c13cfff2c5c8f0b553fb1dab49fe69 kernel=5eabb877c8a6cffedb973de010a94a7d2a1c3ce5
   listed   modules/calendar/test/caldav-sync.test.ts  tag=3faa76f47455799eacbdb7e8429acfbeb81890c5 kernel=c407796ed1dce0c9dc6095fba5ca419ded79cf46
-  listed   modules/calendar/test/guard.test.ts  tag=33e78ea083e4b7989f99e6510192d2704b0bf088 kernel=79b3d16fce215b70bdd3af4d2702f121fbfe0869
+  listed   modules/calendar/test/guard.test.ts  tag=33e78ea083e4b7989f99e6510192d2704b0bf088 kernel=c421831a06868fda6ce0cc0ce76b1c33b45e0fd8
   listed   modules/calendar/test/kernel-client.test.ts  tag=c3263f61bda3e2e8d2bb437b3a420c39ff43644d kernel=16e00150ac28e7541a8150d1fa513c37db8eb228
   listed   modules/calendar/test/store.integration.test.ts  tag=4eceaeed10328d98542afddf2ab32a10951d3d76 kernel=a34ca045a968e11cd87c2fc64a9ad5c655b689e2
   listed   modules/calendar/test/support/pg-test-guard.ts  tag=d47b5d8015fb07be77586d362083d9316e0aecf2 kernel=e8001d9539f6ed68805a07418052bf8767417a21
   listed   modules/calendar/test/tenant-store.init-retry.test.ts  tag=400fb059c6f21e3cb5d978a43323305b7b719d01 kernel=9aeeeb41fce47402c261bad800dfbf0ae5552bdd
   listed   modules/calendar/tsconfig.test.json  tag=d306bca9249596a8a3e47f9019a8b52467448215 kernel=b7657adb0ccd629df81b20045a5b72a96dac9b1d
   listed   modules/content/src/dispatch.ts  tag=98551f282bb5e4012cea13dbadb803b7fe714dcf kernel=68a0ae47becd666b93402703b7b5c09b2de586e5
-  listed   modules/content/src/http/admin-routes.ts  tag=b1c9c2be5e4acde50c28ea4e9d5b495f38e366a4 kernel=a44226b0524245e7bbf890b2c8c2c83d8d8d9ffc
-  listed   modules/content/src/http/guard.ts  tag=4a64a89de15a478257958a5deb25dd1ac11244ed kernel=c92a0d401faa1d0dd9961e0be209a0c94beb6ff1
+  listed   modules/content/src/http/admin-routes.ts  tag=b1c9c2be5e4acde50c28ea4e9d5b495f38e366a4 kernel=1983ce7cca85936a10a1c77c63d8a65691f20d83
+  listed   modules/content/src/http/guard.ts  tag=4a64a89de15a478257958a5deb25dd1ac11244ed kernel=86867e451f958e80b77f072533d20400585315f6
   listed   modules/content/src/http/routes.ts  tag=34a4d1e8955c6861efb8461a6ba157b0a4ba5a70 kernel=53953d8ed9227f460827e0b030c1b8d1888a2b0c
   listed   modules/content/src/http/server.ts  tag=c102234d848139e29435199afd0911ea1f74ac44 kernel=cbbadf3872011ad4a790a59215007acf832dfe70
   listed   modules/content/src/index.ts  tag=2dd71e101fb9049251bac58bbe841125da267985 kernel=7e309a572d8f90d429de6a08a12c6639f46119d8
@@ -65,7 +65,7 @@ set B — services/** at extraction-source-f2: 383 files, 104 differ (104 listed
   listed   modules/content/src/tenant-store.ts  tag=e3f8f5a09d3e722e67e5779c4adf7cd9f4bae4f6 kernel=344e2d0e733f229bfe397a8e562d042cff44406e
   listed   modules/content/test/api.integration.test.ts  tag=962ab7b0ab1350e411a73742b62b4aab964092be kernel=0f2cd74d5e04cd4a075d43d6251a49d69f14c6b7
   listed   modules/content/test/dispatch.integration.test.ts  tag=23027634727d5c4e4e8eee977f600f42990a088f kernel=457a92158d891b5efd3c830d213698ed47dc79ac
-  listed   modules/content/test/guard.test.ts  tag=8aba9f45c36139f6051ea420e9421e42d3905d31 kernel=b53c868af5944bc41d24353435ce92e923f96b8d
+  listed   modules/content/test/guard.test.ts  tag=8aba9f45c36139f6051ea420e9421e42d3905d31 kernel=171e287356d6d196e8dabdfad8bc05de9fcad4e1
   listed   modules/content/test/kernel-client.test.ts  tag=05a43ba32288201b29d287affe6afc8ecc15c544 kernel=39e7783915eccb5690dd0409b5d42aff42ae7008
   listed   modules/content/test/publish-channel.integration.test.ts  tag=68caaa2fa456eedd4f355f63c6fa44588a0d247c kernel=de89d639f9c98e7cd77be76a946128a0964ee91c
   listed   modules/content/test/scheduler.integration.test.ts  tag=cd37629f4e39e344d0fc7b5d3a29020d502709e4 kernel=ce4811c526de09861a0231296cd693cf5b0740bd
@@ -79,7 +79,7 @@ set B — services/** at extraction-source-f2: 383 files, 104 differ (104 listed
   listed   modules/files/src/nextcloud/webdav-path.ts  tag=3fd5a77ccac76066bd83d1551154049837dcac24 kernel=18840cda1bb0fab6496d85ac3692392c6bfd7094
   listed   modules/finance/migrations/manifest.json  tag=f361925b7e8a13b7be57333a9d98ecd691ea742c kernel=eb710ad2b699ea0ce295bb41d745017b9bb50dfd
   listed   modules/finance/src/fints/sync.ts  tag=dcff6dccc7ebbb94f1936155deef9278fd750857 kernel=ec7a31b7e0185edf23aa2cee081cbe54d27e0b51
-  listed   modules/finance/src/http/guard.ts  tag=a625f9dfdc8b6012ac2d839a9984a8615689c2dd kernel=afad513231b87e0e6d4dd496c9b3702bc497686f
+  listed   modules/finance/src/http/guard.ts  tag=a625f9dfdc8b6012ac2d839a9984a8615689c2dd kernel=59111f6530162d581197a6132bbb0392cc0febb2
   listed   modules/finance/src/http/routes.ts  tag=82d9b4fd5fc3d81b50bee3aaf97c6d06743f62dd kernel=32df2be45c2bbf0a9276b0ba40fad120300a854a
   listed   modules/finance/src/http/server.ts  tag=b617baddb2c0c5a5f3c754854a9df2dc25775b7a kernel=3bc0ab5941923ea5de4500d500379b804edb9925
   listed   modules/finance/src/index.ts  tag=354765695b8c9b157e8c20c5b50076ac704d33c6 kernel=3238a29d757595e0d36a6f25b3c268bc305dc6be
@@ -92,7 +92,7 @@ set B — services/** at extraction-source-f2: 383 files, 104 differ (104 listed
   listed   modules/finance/test/bank-money.integration.test.ts  tag=e83954c467322d92c2e0dfe3012eb696b5905327 kernel=0c2455752a0503ba2d7a4de9cf9abd5e2dba39e6
   listed   modules/finance/test/bank-money.store.test.ts  tag=0cc30f7ac29c4df4068a82311fdb60d75c53384e kernel=258b122f6d8c02152d3dcb338e80181e64b776b8
   listed   modules/finance/test/fints.service.test.ts  tag=3db597d131bd8954f8a5d097e2cbe4ce74229a49 kernel=29d8231ab1d795e6106b9685babf7ebd4f06729f
-  listed   modules/finance/test/guard.test.ts  tag=54a91f0a6df06a743edd24aec0ddb96567c12091 kernel=5aafc2e2dd6608568a0d4df8a3a636f03f1151e3
+  listed   modules/finance/test/guard.test.ts  tag=54a91f0a6df06a743edd24aec0ddb96567c12091 kernel=8e1afd7963a06f43818a5270694c321848d0e92e
   listed   modules/finance/test/lane-e2.integration.test.ts  tag=3846cf776e8b8e50f730bef305198f461fb59d31 kernel=13df6318437c0152561fc0c958da828ba72b3599
   listed   modules/finance/test/lane-e3.integration.test.ts  tag=d8e32edaede805abba681225d5ab6f3d82dea06a kernel=ae0587471901a362fcae34f9a28ae8f1c3f12b4c
   listed   modules/finance/test/org-unit-mirror.integration.test.ts  tag=0f43978db14ee058c1c97788c7ad59d62045f322 kernel=6578e97a47f0aa10efe0d227c37ef48eae7fe485
@@ -105,12 +105,12 @@ set B — services/** at extraction-source-f2: 383 files, 104 differ (104 listed
   listed   modules/messaging/src/livekit/livekit-client.ts  tag=de5cbedd5c55c4e8177cc9d3c9e207cdc4767098 kernel=bb948a0b637ab2bd8786a71153dfd0509bf2348c
   listed   modules/messaging/test/forwarding.test.ts  tag=7c2dd50cbf21af0c858c007923dd2404e023e93c kernel=5302e71fcfe0244c9c151d690e0c640a2110320e
   listed   modules/publishing/src/dispatch.ts  tag=ca2e8cf414c67f480fca8c7d25294d582faa16a1 kernel=0d5d13733a8ddfe8a4f4aeece997a7cfdf938df8
-  listed   modules/publishing/src/http/guard.ts  tag=ac333cb44e48d5dc57f8f59522c54d5248eb70d8 kernel=aba5a719e971b7ada08f53e9d7eb8e4f673e707a
+  listed   modules/publishing/src/http/guard.ts  tag=ac333cb44e48d5dc57f8f59522c54d5248eb70d8 kernel=21ea66037de13a6e73a450f527f61b3a662f5a39
   listed   modules/publishing/src/http/routes.ts  tag=dbcb71434d7cd734d896e0b7ba52d5712a6d1f4f kernel=b42c2813179edcf1739e85a5858aca3406dafd51
   listed   modules/publishing/src/tenant-store.ts  tag=cc8ae3e9dcf09b4dbb691109f8077a70f7b01390 kernel=134b18f75139cb63ba558787fd8fc7e70d2855d3
   listed   modules/publishing/test/api.integration.test.ts  tag=90be789a4a40c08df7b4837d4822ae1b98772b27 kernel=80dc9e28454fbe218d29e873e7b28482fbde68c2
   listed   modules/publishing/test/deploy-drift.test.ts  tag=622790af4e17d17c468039e2f95ef341a5102f50 kernel=absent
-  listed   modules/publishing/test/guard.test.ts  tag=8260df8df3d7a89fb0d719daa39bd7500e83e688 kernel=d1e6d228127198327e427bf3128a9bedc52f7f20
+  listed   modules/publishing/test/guard.test.ts  tag=8260df8df3d7a89fb0d719daa39bd7500e83e688 kernel=3cf472ab50234cec57ca3b408ade317347a9ac8f
   listed   modules/publishing/test/kernel-client.test.ts  tag=cf8cabdcd28e8f139eee28a9f4ac705868783dfc kernel=7296832e4ef7f282110871002579c9eaecfa3903
   listed   modules/publishing/test/origin.test.ts  tag=97d8760e6624b5d57a34e7b581e3b38682c98f76 kernel=383e7a45ce7258560c65ddad58156b1cc1833277
   listed   modules/publishing/test/support/pg-test-guard.ts  tag=5f074ca4d068c633c51ffbac6d958e134f1e66d9 kernel=7dea3d923120ce4b7d2013455b7213950d34c75b

@@ -125,7 +125,7 @@ export function buildAdminRoutes(deps: AdminRouteDeps): Route[] {
         if (!SLUG_PATTERN.test(slug)) {
           return sendJson(res, 400, {
             success: false,
-            error: 'invalid slug: must match ^[a-z0-9-]{1,30}$',
+            error: 'invalid slug: must be 1-30 lowercase alphanumerics or hyphens, not starting or ending with a hyphen',
           })
         }
 

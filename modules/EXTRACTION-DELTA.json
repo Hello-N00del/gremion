@@ -283,9 +283,9 @@
     },
     {
       "path": "modules/content/test/guard.test.ts",
-      "reason": "kernel hygiene h2/(i): retired host -> example.org, lowercase product token -> gremion; StuRaOS#534 hardening: hardening tests",
+      "reason": "kernel hygiene h2/(i): retired host -> example.org, lowercase product token -> gremion; StuRaOS#534 hardening: hardening tests; slug-guard tests",
       "owner": "TASK-200",
-      "blob": "b53c868af5944bc41d24353435ce92e923f96b8d"
+      "blob": "171e287356d6d196e8dabdfad8bc05de9fcad4e1"
     },
     {
       "path": "modules/content/test/kernel-client.test.ts",
@@ -487,9 +487,9 @@
     },
     {
       "path": "modules/publishing/test/guard.test.ts",
-      "reason": "kernel hygiene h2/(i): retired host -> example.org, lowercase product token -> gremion; StuRaOS#534 hardening: hardening tests",
+      "reason": "kernel hygiene h2/(i): retired host -> example.org, lowercase product token -> gremion; StuRaOS#534 hardening: hardening tests; slug-guard tests",
       "owner": "TASK-200",
-      "blob": "d1e6d228127198327e427bf3128a9bedc52f7f20"
+      "blob": "3cf472ab50234cec57ca3b408ade317347a9ac8f"
     },
     {
       "path": "modules/publishing/test/kernel-client.test.ts",
@@ -955,9 +955,9 @@
     },
     {
       "path": "modules/content/src/http/guard.ts",
-      "reason": "kernel-ahead of f2: 3f972290 fix(content): /healthz/tenants needs the internal secret and answers booleans only (F1-FIX-07 K5#12,; StuRaOS#534 hardening: x-tenant-id must be a canonical lowercase UUID, refused 400 before any store access",
+      "reason": "kernel-ahead of f2: 3f972290 fix(content): /healthz/tenants needs the internal secret and answers booleans only (F1-FIX-07 K5#12,; StuRaOS#534 hardening: x-tenant-id must be a canonical lowercase UUID, refused 400 before any store access; x-tenant-slug guard uses the store canonical slug rule (no leading or trailing hyphen)",
       "owner": "TASK-205",
-      "blob": "c92a0d401faa1d0dd9961e0be209a0c94beb6ff1"
+      "blob": "86867e451f958e80b77f072533d20400585315f6"
     },
     {
       "path": "modules/content/src/http/server.ts",
@@ -1057,9 +1057,9 @@
     },
     {
       "path": "modules/finance/src/http/guard.ts",
-      "reason": "kernel-ahead of f2: 70f983b9 fix(finance): /healthz/tenants behind the internal secret, booleans only (F1-FIX-05-K, K4#32); StuRaOS#534 hardening: x-tenant-id must be a canonical lowercase UUID, refused 400 before any store access",
+      "reason": "kernel-ahead of f2: 70f983b9 fix(finance): /healthz/tenants behind the internal secret, booleans only (F1-FIX-05-K, K4#32); StuRaOS#534 hardening: x-tenant-id must be a canonical lowercase UUID, refused 400 before any store access; x-tenant-slug guard uses the store canonical slug rule (no leading or trailing hyphen)",
       "owner": "TASK-205",
-      "blob": "afad513231b87e0e6d4dd496c9b3702bc497686f"
+      "blob": "59111f6530162d581197a6132bbb0392cc0febb2"
     },
     {
       "path": "modules/finance/src/http/server.ts",
@@ -1885,9 +1885,9 @@
     },
     {
       "path": "modules/content/src/http/admin-routes.ts",
-      "reason": "kernel-ahead of f2: StuRaOS#534 hardening: teardown evicts the tenant pool before DROP DATABASE, the catalog row is kept (409) while its database exists, the reserved slug control is never dropped, dbPrefix dependency; teardown retry: DROP DATABASE is retried once after a second pool eviction when a request raced the first eviction",
+      "reason": "kernel-ahead of f2: StuRaOS#534 hardening: teardown evicts the tenant pool before DROP DATABASE, the catalog row is kept (409) while its database exists, the reserved slug control is never dropped, dbPrefix dependency; teardown retry: DROP DATABASE is retried once after a second pool eviction when a request raced the first eviction; x-tenant-slug guard uses the store canonical slug rule (no leading or trailing hyphen)",
       "owner": "TASK-205",
-      "blob": "a44226b0524245e7bbf890b2c8c2c83d8d8d9ffc"
+      "blob": "1983ce7cca85936a10a1c77c63d8a65691f20d83"
     },
     {
       "path": "modules/content/test/admin-routes.teardown.integration.test.ts",
@@ -1927,9 +1927,9 @@
     },
     {
       "path": "modules/calendar/src/http/guard.ts",
-      "reason": "kernel-ahead of f2: StuRaOS#534 hardening: x-tenant-id must be a canonical lowercase UUID, refused 400 before any store access",
+      "reason": "kernel-ahead of f2: StuRaOS#534 hardening: x-tenant-id must be a canonical lowercase UUID, refused 400 before any store access; x-tenant-slug guard uses the store canonical slug rule (no leading or trailing hyphen)",
       "owner": "TASK-205",
-      "blob": "122745bd4bc920185dc9666bb9eccec998a01abe"
+      "blob": "15db8367697bf2201c89fb377fbda5a79a6ca754"
     },
     {
       "path": "modules/calendar/test/api.integration.test.ts",
@@ -1939,9 +1939,9 @@
     },
     {
       "path": "modules/calendar/test/guard.test.ts",
-      "reason": "kernel-ahead of f2: StuRaOS#534 hardening: hardening tests",
+      "reason": "kernel-ahead of f2: StuRaOS#534 hardening: hardening tests; slug-guard tests",
       "owner": "TASK-205",
-      "blob": "79b3d16fce215b70bdd3af4d2702f121fbfe0869"
+      "blob": "c421831a06868fda6ce0cc0ce76b1c33b45e0fd8"
     },
     {
       "path": "modules/publishing/src/tenant-store.ts",
@@ -1999,9 +1999,9 @@
     },
     {
       "path": "modules/finance/test/guard.test.ts",
-      "reason": "kernel-ahead of f2: StuRaOS#534 hardening: hardening tests",
+      "reason": "kernel-ahead of f2: StuRaOS#534 hardening: hardening tests; slug-guard tests",
       "owner": "TASK-205",
-      "blob": "5aafc2e2dd6608568a0d4df8a3a636f03f1151e3"
+      "blob": "8e1afd7963a06f43818a5270694c321848d0e92e"
     },
     {
       "path": "modules/publishing/app/routes/api/internal/newsletter/callback-auth.test.ts",
@@ -2071,9 +2071,9 @@
     },
     {
       "path": "modules/publishing/src/http/guard.ts",
-      "reason": "kernel-ahead of f2: StuRaOS#534 hardening: x-tenant-id must be a canonical lowercase UUID, refused 400 before any store access",
+      "reason": "kernel-ahead of f2: StuRaOS#534 hardening: x-tenant-id must be a canonical lowercase UUID, refused 400 before any store access; x-tenant-slug guard uses the store canonical slug rule (no leading or trailing hyphen)",
       "owner": "TASK-205",
-      "blob": "aba5a719e971b7ada08f53e9d7eb8e4f673e707a"
+      "blob": "21ea66037de13a6e73a450f527f61b3a662f5a39"
     },
     {
       "path": "modules/publishing/test/api.integration.test.ts",
