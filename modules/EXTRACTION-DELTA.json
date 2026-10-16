@@ -1764,6 +1764,24 @@
       "blob": "96409b9863fb9c63dc01ce058480ab99053232da"
     },
     {
+      "path": "modules/publishing/app/routes/api/newsletter/unsubscribe/+server.ts",
+      "reason": "NEWSLETTER-UNSUB-POST: the single-use unsubscribe token is consumed by a POST with a JSON body only, never by a GET (mail-security scanners and prefetchers GET every link); the route exports POST alone so every other method is 405, the IP rate limit still runs before the body is read and the token looked up",
+      "owner": "TASK-205c",
+      "blob": "8aaf391a8167a05a5d976a61d520f0f9b866818c"
+    },
+    {
+      "path": "modules/publishing/app/routes/newsletter/unsubscribe/+page.svelte",
+      "reason": "NEWSLETTER-UNSUB-POST: opening the mailed link renders a confirm button and requests nothing; only the click POSTs the token (JSON body, not the URL) to /api/newsletter/unsubscribe",
+      "owner": "TASK-205c",
+      "blob": "1af5fd4407b408eea1ce674656678a4a9b0b7519"
+    },
+    {
+      "path": "modules/publishing/app/routes/newsletter/unsubscribe/unsubscribe-page.test.ts",
+      "reason": "added by NEWSLETTER-UNSUB-POST: the page makes no request on load, shows the confirm button, POSTs the token in a JSON body on click only (no second POST while in flight), and maps 410/404/429/503/network failure to their own messages",
+      "owner": "TASK-205c",
+      "blob": "a960bc5f100cbef3a1e33d720faa5b2ef155867a"
+    },
+    {
       "path": "modules/publishing/app/routes/api/newsletter/[id]/preview/+server.ts",
       "reason": "TASK-205c: NEXTCLOUD_ADMIN_USER through serviceEnv (the deleted default-tenant env reader)",
       "owner": "TASK-205c",
@@ -1951,9 +1969,9 @@
     },
     {
       "path": "modules/publishing/app/routes/api/newsletter/unsubscribe/unsubscribe.test.ts",
-      "reason": "added by TASK-205c: the unsubscribe API is public by exact PUBLIC_PATHS entry, so the single-use token is its only credential; 400 without a token, 404 unknown, 410 expired, no address echoed, rate limit before the lookup, GET only",
+      "reason": "added by TASK-205c: the unsubscribe API is public by exact PUBLIC_PATHS entry, so the single-use token is its only credential; 400 without a token in a JSON body, 404 unknown, 410 expired, no address echoed, rate limit before the body is read and the lookup, POST only (NEWSLETTER-UNSUB-POST: a GET never consumes the token)",
       "owner": "TASK-205c",
-      "blob": "a0676ecf3240c5a73d0482f2236b5c4d614badd6"
+      "blob": "65878d9532d24993b78b73b0056e3b05df75f655"
     }
   ]
 }
