@@ -78,6 +78,15 @@ describe('publishing http: tenant_identity_mismatch', () => {
     expect(res.status).toBeLessThan(500)
   })
 
+  it.each(['not-a-uuid', BOUND.id.toUpperCase(), '11111111-1111-1111-1111-111111111111', ''])(
+    'an x-tenant-id that is not a canonical lowercase uuid (%j) is a 400 at the guard, before any store access',
+    async (id) => {
+      const res = await fetch(`${base}${ROUTE}`, { headers: headers(BOUND.slug, id) })
+      expect(res.status).toBe(400)
+      expect(storeCalls).toHaveLength(0)
+    },
+  )
+
   it('another slug for the same id is a 409 tenant_identity_mismatch, not a 500 and not a served response', async () => {
     const res = await fetch(`${base}${ROUTE}`, { headers: headers('bind-b') })
     expect(res.status).toBe(409)
