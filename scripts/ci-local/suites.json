@@ -178,6 +178,16 @@
       "testGlobs": ["scripts/check-cve-floors.test.mjs"]
     },
     {
+      "id": "kernel-nats-nruns-selftest",
+      "repo": "kernel",
+      "category": "unit",
+      "cwd": ".",
+      "kind": "node-test",
+      "command": "node --test --test-reporter=tap packages/ports/scripts/nats-test-nruns.test.mjs",
+      "requiresStack": false,
+      "testGlobs": ["packages/ports/scripts/nats-test-nruns.test.mjs"]
+    },
+    {
       "id": "kernel-known-secrets-guard",
       "repo": "kernel",
       "category": "tree-guard",
