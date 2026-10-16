@@ -4,7 +4,7 @@
 import { connect } from '@nats-io/transport-node'
 import { afterAll, beforeAll, describe, expect, test } from 'vitest'
 import { inTenantTx } from '../../src/db.ts'
-import { enqueue, EnqueueError } from '../../src/enqueue.ts'
+import { enqueue } from '../../src/enqueue.ts'
 import { H } from '../../src/envelope.ts'
 import { collectMetrics } from '../../src/metrics.ts'
 import { createRelay } from '../../src/relay.ts'
@@ -78,7 +78,7 @@ describe('TDD 1 co-commit (TRD-422)', () => {
     const id = uuidv7()
     await expect(
       enqueue(idt.sql, { eventType: 'de.gremion.idt.orgunit.created.v1', source: '/gremion/idt', aggregate: { type: 'orgunit', id, version: 1 }, data: {} }),
-    ).rejects.toThrow(EnqueueError)
+    ).rejects.toThrow(/open transaction/)
     expect(await count(idt, 'outbox', 'aggregate_id = $1', [id])).toBe(0)
   })
 })
