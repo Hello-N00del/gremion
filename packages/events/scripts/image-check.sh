@@ -8,7 +8,8 @@
 # t079-<sha8>-migrate -- or uses EVENTS_MIGRATE_IMAGE when set -- and runs, inside it, from
 # tenant-create's working_dir /repo/gremion-ui, the call the runbook makes:
 #   pnpm exec events                  prints the usage and exits 2 (the bin is linked: not "Command not found")
-#   import('@gremion/events')         resolves and exports plumbingSql / enqueue
+#   import.meta.resolve('@gremion/events')   resolves to packages/events/src/index.ts (the sources are TypeScript run
+#                                     in place through tsx, so a plain node import cannot load them; the bin did)
 # Optional negative: EVENTS_RUNNER_IMAGE=<gremion-ui runner tag> also asserts the runner CANNOT import
 # @gremion/events (devDependency, left out by `deploy --prod`); only a proven ERR_MODULE_NOT_FOUND passes.
 # The built tag is removed BY NAME on exit, never a prune.
@@ -40,13 +41,15 @@ fi
 rc=0
 out="$(MSYS_NO_PATHCONV=1 docker run --rm -w /repo/gremion-ui "$IMG" sh -c '
   pnpm exec events 2>&1 || echo "@@events-exit=$?@@"
-  node --input-type=module -e "const m = await import(\"@gremion/events\"); console.log(\"@@events-exports=\" + [\"enqueue\",\"createRelay\",\"createConsumer\",\"plumbingSql\"].filter((k) => typeof m[k] === \"function\").length + \"@@\")" 2>&1
+  # The package is TypeScript run in place (tsx loads it, as in the bin), so a plain node import cannot load it;
+  # resolution from gremion-ui is what reachability means, and the bin above already loaded the sources.
+  node --input-type=module -e "console.log(\"@@events-resolves=\" + import.meta.resolve(\"@gremion/events\") + \"@@\")" 2>&1
 ' 2>&1)" || rc=$?
 printf '%s\n' "$out"
 [ "$rc" -eq 0 ] || fail "docker run in $IMG exited $rc"
 case "$out" in *"Command \"events\" not found"*) fail "pnpm exec cannot resolve events (the bin was copied after pnpm install)" ;; esac
 printf '%s\n' "$out" | grep -q '@@events-exit=2@@' || fail "pnpm exec events did not print its usage and exit 2"
-printf '%s\n' "$out" | grep -q '@@events-exports=4@@' || fail "import('@gremion/events') did not export enqueue, createRelay, createConsumer and plumbingSql"
+printf '%s\n' "$out" | grep -Eq '@@events-resolves=file:///.*/packages/events/src/index\.ts@@' || fail "@gremion/events does not resolve to packages/events/src/index.ts from gremion-ui"
 
 if [ -n "${EVENTS_RUNNER_IMAGE:-}" ]; then
   rrc=0
