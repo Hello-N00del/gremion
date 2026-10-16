@@ -22,6 +22,8 @@ import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vite
  */
 
 const purgeCalls = vi.hoisted(() => [] as Array<{ scope: string; days: number }>)
+// Steerable per test (R29-RETENTION-30-K): the retention block readConfig() returns.
+const retentionCfg = vi.hoisted(() => ({ value: { security_logs_days: 42 } as Record<string, number> }))
 
 vi.mock('$app/environment', () => ({ building: true }))
 
@@ -37,13 +39,13 @@ vi.mock('$lib/server/db', () => ({
   getDb: () => ({}),
 }))
 
-// retention.security_logs_days = 42 — asserting 42 below proves the purge
-// reads the per-tenant config, not a hardcoded 90.
+// retention.security_logs_days = 42 (retentionCfg) — asserting 42 below proves
+// the purge reads the per-tenant config, not a hardcoded window.
 vi.mock('$lib/server/config', () => ({
   readConfig: () => ({
     smtp: { configured: false, host: '', port: 0, from_address: '' },
     modules: {},
-    retention: { security_logs_days: 42 },
+    retention: retentionCfg.value,
   }),
 }))
 
@@ -137,6 +139,7 @@ beforeAll(async () => {
 beforeEach(async () => {
   process.exitCode = 0
   purgeCalls.length = 0
+  retentionCfg.value = { security_logs_days: 42 }
   activeTenants.length = 0
   const { _resetWorkerFleetForTests } = await import('$lib/server/tenant/worker-fleet')
   _resetWorkerFleetForTests()
@@ -206,6 +209,22 @@ describe('hooks.server audit-retention interval — P2.1b T4 fleet wrap', () => 
     await tick()
 
     expect(purgeCalls).toEqual([{ scope: 'tid-default', days: 42 }])
+  })
+
+  // R29-RETENTION-30-K [D R29-I6]: the tick's own `?? RETENTION_DEFAULTS` fallback
+  // (formerly a literal 90 d) is the registry default (27 d). SCOPE OF THIS TEST:
+  // readConfig is mocked here, so it exercises that defensive branch only. In
+  // production the real readConfig always returns a clamped, fully populated
+  // retention block, so the branch is a second line of defence; the claim "a real
+  // config without the key purges at 27" is proven against the REAL readConfig in
+  // config.test.ts ("a config without security_logs_days reads back 27").
+  it('the tick falls back to the registry default 27, not 90, when the (mocked) config block lacks the key', async () => {
+    retentionCfg.value = {}
+    activeTenants.push({ id: 'tid-default', slug: 'default', status: 'active' })
+
+    await tick()
+
+    expect(purgeCalls).toEqual([{ scope: 'tid-default', days: 27 }])
   })
 
   // Adversarial-review fix (als-worker): the purge tick DELETEs from the

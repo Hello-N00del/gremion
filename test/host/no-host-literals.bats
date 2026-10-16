@@ -13,7 +13,7 @@
 # two RETIRED hosts (the stopped staging deployment and an unowned domain) and
 # runs under `make lint-hygiene`, which needs a Node toolchain. This list runs
 # under `make test-unit`, which needs only bash and bats -- the toolchain a
-# Debian host and a fresh agent worktree actually have. Two lists, two homes,
+# Debian host and a fresh worktree actually have. Two lists, two homes,
 # one stated reason. Folding this into (i1) as an (i3) is a legitimate
 # follow-up; it is not done here because this plan's file list is fixed.
 #
@@ -149,7 +149,7 @@ sri_only_hit() {  # $1 = repo-relative path, $2 = git grep hit "path:line:text",
 
 # Prints "<name> <path>:<line>:<text>" for every un-exempted hit; 1 if any.
 # git grep, not a recursive grep: it honours .gitignore (so node_modules,
-# .superpowers and the rest of the ignored tree can neither slow it down nor
+# .worktrees and the rest of the ignored tree can neither slow it down nor
 # fill it with noise) and skips .git itself, while --untracked makes it see a
 # file that has been created but not yet added -- which is the state a leak is
 # actually in when it matters.

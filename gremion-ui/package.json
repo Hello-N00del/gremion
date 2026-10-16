@@ -78,7 +78,7 @@
     "livekit-server-sdk": "^2.15.3",
     "lru-cache": "^11.5.2",
     "node-cron": "^4.6.0",
-    "nodemailer": "^9.1.1",
+    "nodemailer": "^10.0.9",
     "postgres": "^3.4.9",
     "svelte-dnd-action": "^0.9.69",
     "svelte-sonner": "^1.1.1",

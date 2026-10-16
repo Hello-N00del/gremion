@@ -150,7 +150,7 @@ test('FU review LOW fix: "secrets" appearing only as the CONTENT of a quoted str
 
 // --- round-5 HIGH fix: structural runs-on classification, fail closed ------
 // The old text-regex denylist failed OPEN on every one of these — proven in
-// round 4's verifier probe (.scratch/probe-rp.mjs) against the PRE-fix code.
+// round 4's reviewer probe (.scratch/probe-rp.mjs) against the PRE-fix code.
 // checkWorkflowText must now flag every one of them.
 
 test('checkWorkflowText is RED on runs-on: self-hosted with a trailing YAML comment (the round-4 HIGH: the old end-of-line-anchored regex could not see past it)', () => {

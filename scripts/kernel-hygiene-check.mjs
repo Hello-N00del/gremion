@@ -75,10 +75,9 @@ check('a4 install-bats.sh is gone', () =>
 
 // B0 CARVE-OUT, shared by (a5), (h1) and (i1) below.
 //
-// docs/superpowers/specs/ holds the two operator-approved design specs (spec B,
-// spec D; 2026-09-15). They are committed BYTE-IDENTICAL to the approved
-// originals under a `cmp` gate, so they cannot be edited to satisfy a guard —
-// and they are the design record OF these very removals: spec B quotes the
+// docs/design-specs/ holds the two operator-approved design specs (spec B,
+// spec D; 2026-09-15). They are the approved record, so they are not reworded
+// to satisfy a guard — and they are the design record OF these very removals: spec B quotes the
 // retired wire root and the retired staging host precisely because B1a/B1b are
 // the units that delete them, and spec D explains why a module is cloned by
 // manifest rather than by submodule. A historical description is not an
@@ -88,8 +87,8 @@ check('a4 install-bats.sh is gone', () =>
 // literals — is NOT carved out here: check (k1) below scans `docs` with no
 // exemption for this directory, and test/host/no-host-literals.bats scans the
 // whole tracked tree. Both still see these two files.
-const SPEC_DOCS_DIR = join(ROOT, 'docs', 'superpowers', 'specs')
-const SPEC_DOCS_REL = /^docs[/]superpowers[/]specs[/]/
+const SPEC_DOCS_DIR = join(ROOT, 'docs', 'design-specs')
+const SPEC_DOCS_REL = /^docs[/]design-specs[/]/
 
 check('a5 no doc or build file tells the reader to init submodules for BATS', () => {
   const roots = ['docs', '.github', 'README.md', 'CONTRIBUTING.md', 'Makefile']
@@ -871,12 +870,11 @@ check('h2 the retired product token survives nowhere as a bare identifier', () =
     if (PRODUCT_TOKEN_EXEMPT_PATHS.some((re) => re.test(rel))) continue
     // The specs quote the rename they order. NOW LIVE: B0-spec-docs-and-waiver-
     // ledger tracks exactly two files here, spec-b-*.md and spec-d-*.md, both
-    // committed byte-identical to the operator-approved originals, so the token
-    // they quote cannot be edited out of them. Nothing else under the directory
-    // is tracked (.gitignore:188-196 re-includes only those two globs, and
-    // test/host/spec-docs.bats fails if a third path appears), so this carve-out
-    // covers the two frozen records and nothing more.
-    if (rel.startsWith('docs/superpowers/specs/')) continue
+    // the operator-approved record, so the token they quote is not edited out
+    // of them. Nothing else under the directory is tracked
+    // (test/host/spec-docs.bats fails if a third path appears), so this
+    // carve-out covers the two frozen records and nothing more.
+    if (rel.startsWith('docs/design-specs/')) continue
     const abs = join(ROOT, rel)
     if (!existsSync(abs)) continue
     readFileSync(abs, 'utf8').split('\n').forEach((line, i) => {
@@ -1429,14 +1427,14 @@ const IMPORT_REALM_CARRIERS = new Set([
 
 // The two operator-approved design specs that B0 tracks are the FROZEN record
 // of this very change: they name `--import-realm` as the argument the work
-// deletes, and they are committed byte-identical to the approved originals
-// (which is why .gitattributes pins them to LF), so they cannot be reworded to
-// satisfy a guard. They are a design record, never an instruction to a reader.
+// deletes, and they are the approved record (which is why .gitattributes pins
+// them to LF), so they are not reworded to satisfy a guard. They are a design
+// record, never an instruction to a reader.
 // Exactly these two paths are exempt — e7 keeps its tree-wide scope everywhere
 // else, and if the spec files are ever renamed this pattern matches nothing and
 // e7 goes red on them again rather than silently widening. h2 above carves the
 // same directory out for the same reason.
-const DESIGN_SPEC_RECORD = /^docs\/superpowers\/specs\/spec-[bd]-[^/]+\.md$/
+const DESIGN_SPEC_RECORD = /^docs\/design-specs\/spec-[bd]-[^/]+\.md$/
 
 function trackedGrep(args) {
   const res = spawnSync('git', ['grep', '-n', ...args], { cwd: ROOT, encoding: 'utf8' })
@@ -1751,7 +1749,7 @@ check('n3 the "absent from the kernel" arithmetic is the product chain minus wha
 //
 // There is no j1: the StuRa j1 banned Vaultwarden, which is supported here
 // (R8-4, TRD-263). The needles are assembled from parts so this file carries
-// none of the literals it hunts for. docs/superpowers/specs/ is the B0
+// none of the literals it hunts for. docs/design-specs/ is the B0
 // carve-out (byte-identical approved specs that describe these deletions).
 
 // The tracked-file list is read lazily, INSIDE the checks that need it: a

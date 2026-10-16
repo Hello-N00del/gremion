@@ -9,7 +9,7 @@
 // configuration: with only the legacy CALDAV_SHARED_CALENDAR set the drain
 // refuses (see tenant-drain.ts) and pushes nothing.
 //
-// Configuration (env; the compose wiring is the orchestrator's, see the unit's
+// Configuration (env; the compose wiring belongs to the maintainer, see the unit's
 // residuals):
 //   CALDAV_TENANT_CALENDARS   JSON object { "<tenant-slug>": "<calendar name>" }.
 //                             An explicit mapping; wins over the template.

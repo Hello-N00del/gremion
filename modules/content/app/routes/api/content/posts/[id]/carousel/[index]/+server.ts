@@ -42,7 +42,7 @@ export const GET: RequestHandler = async (event) => {
   // FACTOR is not representable in this hsl placeholder — the saturation
   // literal stays as-is). When it resolves to null (unset/invalid → default
   // theme) pass '' so the template keeps its own neutral placeholder fallback.
-  // The exact slide palette is Claude Design's (this template is the §7
+  // The exact slide palette is the designer's (this template is the §7
   // hand-off placeholder); this only makes the accent a valid, hue-correct
   // colour instead of black.
   const palette = resolvePaletteId(brand.palette)

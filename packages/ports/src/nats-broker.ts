@@ -99,6 +99,14 @@
 //    faults on whichever is gone. Both present and still no heartbeat is a
 //    STALL; STALL_PROBE_LIMIT consecutive such probes fault the subscription
 //    with ConsumerStalledError (a heartbeat in between starts the count over).
+//    A probe that cannot DECIDE (a JetStream API error or timeout, a closing
+//    connection) is logged with its error and counts toward the same limit: the
+//    heartbeats are still missing, and "unknown" is not a reason to wait
+//    forever. A run that held any such probe faults with HeartbeatsMissedError
+//    (the last probe error is its `cause`) instead of claiming a confirmed
+//    stall. Each probe is itself bounded by the JetStream API request timeout,
+//    so on a server that answers nothing the fault lands STALL_PROBE_LIMIT
+//    probe round trips after the first missed heartbeat.
 //
 // Failure paths — every one of these used to end in silence. Each is specified
 // against doubles in nats-broker-subscribe.integration.test.ts and proved
@@ -145,7 +153,11 @@
 //  - call broker.close() on shutdown — it stops every live subscription
 //    FIRST, waits for each one's outcome for at most CLOSE_TIMEOUT_MS (a
 //    warning names any still pending), then drains, so a clean shutdown is
-//    quiet and resolves every `closed`. Idempotent and shared: concurrent and
+//    quiet and resolves every `closed`. The drain is bounded too: one still
+//    pending after CLOSE_TIMEOUT_MS is abandoned with a warning and the
+//    connection is closed outright (what it had not flushed is lost). The two
+//    waits are sequential, so close() returns after at most 2 * CLOSE_TIMEOUT_MS
+//    plus the connection's own close(). Idempotent and shared: concurrent and
 //    repeated calls get the ONE in-flight shutdown; a drain that fails because
 //    the connection is already closed is tolerated (debug log); any other
 //    failure is rethrown AND forgotten, so a later close() tries again.
@@ -178,6 +190,7 @@ import {
   StreamGoneError,
   ConsumerGoneError,
   ConsumerStalledError,
+  HeartbeatsMissedError,
   SetupTimeoutError,
   LIVENESS_FAULT_BOUND_MS,
   SETUP_TIMEOUT_MS,
@@ -207,6 +220,7 @@ export {
   StreamGoneError,
   ConsumerGoneError,
   ConsumerStalledError,
+  HeartbeatsMissedError,
   SetupTimeoutError,
   LIVENESS_FAULT_BOUND_MS,
   SETUP_TIMEOUT_MS,
@@ -338,8 +352,11 @@ interface LiveSubscription {
   fault(err: Error): void
 }
 
-/** What the liveness probe found on the server after missed heartbeats. */
-type ProbeVerdict = 'stream-gone' | 'consumer-gone' | 'present' | 'unknown'
+/** What the liveness probe found on the server after missed heartbeats. An
+ *  'unknown' verdict carries the failure that kept the probe from deciding. */
+type ProbeVerdict =
+  | { readonly verdict: 'stream-gone' | 'consumer-gone' | 'present' }
+  | { readonly verdict: 'unknown'; readonly error: unknown }
 
 export class NatsBroker implements BrokerPort {
   /** Every live subscription, so close() can stop them all BEFORE draining
@@ -419,22 +436,23 @@ export class NatsBroker implements BrokerPort {
   }
 
   /** After missed heartbeats: is the stream still there, and is the consumer?
-   *  Answers 'unknown' for any failure that is not a not-found — a connection
-   *  that is closing, an API timeout — because that is not a verdict about the
-   *  server, and the message loop or the connection-closed path will speak. */
+   *  Answers 'unknown' (with the error) for any failure that is not a
+   *  not-found — a connection that is closing, an API timeout — because that
+   *  is not a verdict about the server. It is not silence either: the caller
+   *  logs it and counts it toward STALL_PROBE_LIMIT. */
   private async probeLiveness(consumer: Consumer): Promise<ProbeVerdict> {
     try {
       await this.jsm.streams.info(this.streamName)
     } catch (err) {
-      return isStreamNotFound(err) ? 'stream-gone' : 'unknown'
+      return isStreamNotFound(err) ? { verdict: 'stream-gone' } : { verdict: 'unknown', error: err }
     }
     try {
       await consumer.info()
     } catch (err) {
-      if (isConsumerGone(err)) return 'consumer-gone'
-      return isStreamNotFound(err) ? 'stream-gone' : 'unknown'
+      if (isConsumerGone(err)) return { verdict: 'consumer-gone' }
+      return isStreamNotFound(err) ? { verdict: 'stream-gone' } : { verdict: 'unknown', error: err }
     }
-    return 'present'
+    return { verdict: 'present' }
   }
 
   /**
@@ -747,7 +765,11 @@ export class NatsBroker implements BrokerPort {
     // The liveness watch (see LIVENESS in the header). Ends when the library
     // stops the consumer — close() stops every status() listener.
     const watchLiveness = (source: ConsumerMessages, consumer: Consumer) => {
+      // Consecutive missed-heartbeat probes that found nothing gone (present or
+      // undecided); `undecided` holds the last probe error among them, so a run
+      // that included an undecided probe is not reported as a confirmed stall.
       let stalls = 0
+      let undecided: { readonly error: unknown } | undefined
       ;(async () => {
         for await (const n of source.status()) {
           if (!active) return
@@ -766,24 +788,41 @@ export class NatsBroker implements BrokerPort {
               return
             }
             case 'heartbeats_missed': {
-              const verdict = await this.probeLiveness(consumer)
+              const probe = await this.probeLiveness(consumer)
               if (!active) return
-              if (verdict === 'stream-gone') {
+              if (probe.verdict === 'stream-gone') {
                 entry.fault(new StreamGoneError(this.streamName, subjectPattern))
                 return
               }
-              if (verdict === 'consumer-gone') {
+              if (probe.verdict === 'consumer-gone') {
                 entry.fault(new ConsumerGoneError(this.streamName, subjectPattern, 'the probe after missed heartbeats found no consumer'))
                 return
               }
-              if (verdict === 'present' && ++stalls >= STALL_PROBE_LIMIT) {
-                entry.fault(new ConsumerStalledError(this.streamName, subjectPattern, stalls))
+              stalls++
+              if (probe.verdict === 'unknown') {
+                undecided = { error: probe.error }
+                console.warn(
+                  '[nats-broker] liveness probe for %s on stream %s could not decide after missed heartbeats (%d of %d before the subscription is faulted): %s',
+                  subjectPattern,
+                  this.streamName,
+                  stalls,
+                  STALL_PROBE_LIMIT,
+                  messageOf(probe.error),
+                )
+              }
+              if (stalls >= STALL_PROBE_LIMIT) {
+                entry.fault(
+                  undecided
+                    ? new HeartbeatsMissedError(this.streamName, subjectPattern, stalls, { cause: undecided.error })
+                    : new ConsumerStalledError(this.streamName, subjectPattern, stalls),
+                )
                 return
               }
               break
             }
             case 'heartbeat':
               stalls = 0
+              undecided = undefined
               break
             default:
               break
@@ -930,6 +969,12 @@ export class NatsBroker implements BrokerPort {
    * the server never answers, a handler that never returns) is named in a
    * warning and the drain proceeds without it — the drain is what must happen.
    *
+   * The drain is bounded too, by the same CLOSE_TIMEOUT_MS: one still pending
+   * after that (a server that stopped answering mid-flush) is abandoned with a
+   * warning and the connection is closed outright, so unflushed data is lost
+   * but the process can exit. The two waits are sequential: close() returns
+   * after at most 2 * CLOSE_TIMEOUT_MS plus the connection's own close().
+   *
    * Idempotent and shared: concurrent and repeated calls get the ONE in-flight
    * shutdown; a call after the connection already went away is a quiet no-op,
    * and a drain that fails because the connection closed underneath it is
@@ -975,7 +1020,34 @@ export class NatsBroker implements BrokerPort {
     }
     if (this.nc.isClosed()) return
     try {
-      await this.nc.drain()
+      // The drain is bounded like the wait above: a server that stopped
+      // answering leaves it pending forever, and close() is what a SIGTERM
+      // handler awaits. Past the bound it is abandoned and the connection is
+      // closed outright; whatever it had not flushed is lost, and the warning
+      // says so.
+      const draining = this.nc.drain()
+      let drainTimer: ReturnType<typeof setTimeout> | undefined
+      const drainOutcome = await Promise.race([
+        draining.then(() => 'drained' as const),
+        new Promise<'timed-out'>((resolve) => {
+          drainTimer = setTimeout(() => resolve('timed-out'), this.timeouts.closeMs)
+        }),
+      ]).finally(() => {
+        if (drainTimer) clearTimeout(drainTimer)
+      })
+      if (drainOutcome === 'timed-out') {
+        // Closing the connection under the pending drain rejects it; that
+        // rejection has no reader any more and must not surface as unhandled.
+        draining.catch((late: unknown) => {
+          console.debug('[nats-broker] close() on stream %s: the abandoned drain ended with: %s', this.streamName, messageOf(late))
+        })
+        console.warn(
+          '[nats-broker] close() on stream %s: drain did not complete within %d ms, closing the connection without it (unflushed data is lost)',
+          this.streamName,
+          this.timeouts.closeMs,
+        )
+        await this.nc.close()
+      }
     } catch (err) {
       // The connection went away between the check and the drain, or the
       // drain itself found it closed: nothing left to drain, not a failure.

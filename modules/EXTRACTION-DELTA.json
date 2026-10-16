@@ -211,9 +211,9 @@
     },
     {
       "path": "modules/content/app/lib/server/content/caption.ts",
-      "reason": "toolchain guard (TASK-017 Q2: @ts-expect-error only in *.test.ts): the untyped-jsdom suppression replaced by the ambient declaration in jsdom-shim.d.ts; the file already casts the instance to its own JsdomInstance type",
+      "reason": "toolchain guard (TASK-017 Q2: @ts-expect-error only in *.test.ts): the untyped-jsdom suppression replaced by the ambient declaration in jsdom-shim.d.ts; the file already casts the instance to its own JsdomInstance type; comment wording only: the caption rule note names a language model neutrally",
       "owner": "TASK-200",
-      "blob": "5cd14c9d2f865e0169842b029de6bf9c6e1b1c0c"
+      "blob": "b3d67f9714b3c25c2390439b67aa571ed6b35a9e"
     },
     {
       "path": "modules/content/app/lib/server/content/channels/instagram-renderer.ts",
@@ -709,13 +709,13 @@
     },
     {
       "path": "modules/calendar/app/routes/api/calendar/automations/minutes/confirm/+server.ts",
-      "reason": "post-f2 StuRaOS b78c0b0c: fix(calendar): the minutes-confirm session path requires a CouncilAdmin (F1-FIX-03-S r2, house review HIGH)",
+      "reason": "post-f2 StuRaOS b78c0b0c: fix(calendar): the minutes-confirm session path requires a CouncilAdmin (F1-FIX-03-S r2, code review HIGH)",
       "owner": "TASK-205",
       "blob": "9f4196ecc3b97e272715e4e3027564aa360ca172"
     },
     {
       "path": "modules/calendar/app/routes/api/calendar/automations/minutes/confirm/confirm.test.ts",
-      "reason": "post-f2 StuRaOS b78c0b0c: fix(calendar): the minutes-confirm session path requires a CouncilAdmin (F1-FIX-03-S r2, house review HIGH)",
+      "reason": "post-f2 StuRaOS b78c0b0c: fix(calendar): the minutes-confirm session path requires a CouncilAdmin (F1-FIX-03-S r2, code review HIGH)",
       "owner": "TASK-205",
       "blob": "3b83e1c299e8602b5158dca372620a1dfd8802b0"
     },
@@ -814,6 +814,12 @@
       "reason": "TASK-205a: no product literal in gremion-ui/src (brand.guard.test.ts): subject prefix says Gremion (carries the civitas-modules 1295a40 fix from f2)",
       "owner": "TASK-205",
       "blob": "573fdb193b167eb54bf69b77da9699cac8381069"
+    },
+    {
+      "path": "modules/calendar/app/lib/server/calendar/calendar-automations.ts",
+      "reason": "comment wording only: the cited design-note path follows the docs/design-specs directory name; no code change",
+      "owner": "TASK-205",
+      "blob": "ca3ec16b6cd23d62cbd942fa8c48ce4c6b473aed"
     },
     {
       "path": "modules/content/src/http/routes.ts",
@@ -1200,8 +1206,14 @@
       "blob": "2d539f2228afd1e915d002bda8c688eb5536a2c4"
     },
     {
+      "path": "modules/content/app/routes/api/content/posts/[id]/carousel/[index]/+server.ts",
+      "reason": "TASK-205c: the kernel names the curated palette registry TENANT_PALETTES (lib/theme/instance-theme.ts, TASK-082); INSTANCE_REGISTRY no longer exists; comment wording: the design hand-off is named neutrally",
+      "owner": "TASK-205c",
+      "blob": "f51ba5e303745ae9719a45fcfb41de9f3be702ce"
+    },
+    {
       "path": "modules/content/app/routes/content/unsubscribe/+page.server.ts",
-      "reason": "kernel-ahead of f2: 8dd9f899 docs(content): drop the RFC 8058 one-click claim from the unsubscribe route (F1-FIX-07 r2, verifier ",
+      "reason": "kernel-ahead of f2: 8dd9f899 docs(content): drop the RFC 8058 one-click claim from the unsubscribe route (F1-FIX-07 r2)",
       "owner": "TASK-205",
       "blob": "6d1d6d1e0622eec0c7dfb5c676ebaa55772a7d22"
     },
@@ -1213,9 +1225,27 @@
     },
     {
       "path": "modules/content/app/routes/content/unsubscribe/unsubscribe.test.ts",
-      "reason": "kernel-ahead of f2: 8dd9f899 docs(content): drop the RFC 8058 one-click claim from the unsubscribe route (F1-FIX-07 r2, verifier ",
+      "reason": "kernel-ahead of f2: 8dd9f899 docs(content): drop the RFC 8058 one-click claim from the unsubscribe route (F1-FIX-07 r2)",
       "owner": "TASK-205",
       "blob": "d176f3df32360f0bacb132c6db35d6160f2f3a07"
+    },
+    {
+      "path": "modules/content/app/routes/content/+page.svelte",
+      "reason": "comment wording only: the design hand-off is named neutrally; no code change",
+      "owner": "TASK-205",
+      "blob": "a0c436407832b62334f5f37ce09d75dd8f14780b"
+    },
+    {
+      "path": "modules/content/app/routes/content/[id]/edit/+page.svelte",
+      "reason": "comment wording only: the design hand-off is named neutrally; no code change",
+      "owner": "TASK-205",
+      "blob": "fccbe69b60a34572c52a3d451f93e2608d28db8d"
+    },
+    {
+      "path": "modules/content/app/routes/content/lists/+page.svelte",
+      "reason": "comment wording only: the design hand-off is named neutrally; no code change",
+      "owner": "TASK-205",
+      "blob": "fd4bf0dcf4329688d83a7b6612c9def44f4bbe81"
     },
     {
       "path": "modules/content/app/routes/news/[id]/edit/+page.server.ts",
@@ -1225,9 +1255,9 @@
     },
     {
       "path": "modules/calendar/src/caldav/target.ts",
-      "reason": "added in the kernel after f2: e291d8d1 fix(calendar): resolve the CalDAV target per tenant and refuse to drain without one (F1-FIX-08-K H06",
+      "reason": "added in the kernel after f2: e291d8d1 fix(calendar): resolve the CalDAV target per tenant and refuse to drain without one (F1-FIX-08-K H06); comment wording only: the compose-wiring note names the maintainer",
       "owner": "TASK-205",
-      "blob": "11468cbb903ac1ead6b8746e17ddc39c5ff6ae18"
+      "blob": "d6bdea8bb38d3b5d20f9008f920a7707950fc91c"
     },
     {
       "path": "modules/calendar/src/caldav/tenant-drain.ts",
@@ -1272,10 +1302,22 @@
       "blob": "336d3b30d0b7c1c6e1ede07da2aee065a257e4c5"
     },
     {
+      "path": "modules/content/app/lib/server/content/carousel/template.tsx",
+      "reason": "comment wording only: the design hand-off is named neutrally; no code change",
+      "owner": "TASK-205",
+      "blob": "e7492851308495114237b4982b217bde0f23bbe8"
+    },
+    {
       "path": "modules/content/app/lib/server/news/draft-file.ts",
       "reason": "added in the kernel after f2: cde71433 fix(content): news drafts are per tenant and never overwritten by an empty stub (F1-FIX-07 H09, S3#9",
       "owner": "TASK-205",
       "blob": "a9f4a3dd7711f73c35a1681f11e4294430098362"
+    },
+    {
+      "path": "modules/content/app/lib/modules/manifests/content.ts",
+      "reason": "comment wording only: the design hand-off is named neutrally; no code change",
+      "owner": "TASK-205",
+      "blob": "6731085e076698caabc9b47b6cfbaf5995d39eb3"
     },
     {
       "path": "modules/content/app/routes/api/content/lists/list-id.test.ts",
@@ -1768,12 +1810,6 @@
       "reason": "TASK-205c: the shared constantTimeEqual replaces the local timingSafeEqual copy (the kernel Q4 guard in boot-exempt.test.ts requires every /api/internal/ handler to call isInternalTrustRequest or constantTimeEqual)",
       "owner": "TASK-205c",
       "blob": "3ac0f5b20d2c4aca72718a06445377c07689142d"
-    },
-    {
-      "path": "modules/content/app/routes/api/content/posts/[id]/carousel/[index]/+server.ts",
-      "reason": "TASK-205c: the kernel names the curated palette registry TENANT_PALETTES (lib/theme/instance-theme.ts, TASK-082); INSTANCE_REGISTRY no longer exists",
-      "owner": "TASK-205c",
-      "blob": "b90d1a8e1e15a230e4d87934d3968695546339ea"
     },
     {
       "path": "modules/content/app/routes/news/news-page.test.ts",

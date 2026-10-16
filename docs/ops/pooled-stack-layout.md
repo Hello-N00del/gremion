@@ -191,7 +191,7 @@ ledger's `limits.tsv` and `rss.tsv` were later overwritten by the guard-efficacy
 runs (the starved-Keycloak re-break: keycloak `521.2MiB / 600MiB`, 86 %), so
 the TRD-177 numbers below have no surviving green ledger. A green
 `pooled-stack-proof.sh all` at the merge commit, with efficacy runs under
-their own `POOLED_OUT`, replaces this section (owner: the orchestrator's
+their own `POOLED_OUT`, replaces this section (owner: the maintainer's
 merge train, before TASK-038's live re-run; see Named residuals).
 
 - **TRD-177:** 16 running containers were inspected (state, app-blue, ops,
@@ -257,16 +257,16 @@ Left open by TASK-040, each with its owner:
   account per tenant (`packages/nats-auth`); a tenant add reloads it, never
   adds a container. TASK-043 drops its publishing -> newsletter alias; the
   live host re-runs the proof under TASK-038.
-- **Dev loop proof (Q6; orchestrator or operator).** `make up` serving
+- **Dev loop proof (Q6; maintainer or operator).** `make up` serving
   `127.0.0.1:3001` / `:3002` has not been run and recorded; only the dev
   render is guarded (loopback-only binds). `make up` brings up the base
-  compose file, which unit agents may not run: run it once in a scratch
-  `DEV_STACK` and record `curl` of both ports, or accept this residual
+  compose file, which contributors without host access may not run: run it
+  once in a scratch `DEV_STACK` and record `curl` of both ports, or accept this residual
   explicitly.
-- **Running proof at the merge commit (orchestrator's merge train).**
+- **Running proof at the merge commit (maintainer's merge train).**
   `bash test/host/integration/pooled-stack-proof.sh all` on
   `STACK=t040-<sha8>` of the merge commit, including cold-state, with the
   green `limits.tsv`, `rss.tsv`, `isolation.txt`, `trd440-*`,
   `state-*-switch.txt` and `cold-state.log` saved to the unit's ledger. The
-  state project renders the base `docker-compose.yml`, which unit agents may
-  not run under `docker compose`.
+  state project renders the base `docker-compose.yml`, which contributors
+  without host access may not run under `docker compose`.

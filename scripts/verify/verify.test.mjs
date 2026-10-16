@@ -8,7 +8,7 @@
 //
 // RED evidence (brief S6 item 1, captured 2026-09-25 before this test file
 // existed, in a scratch copy under
-// C:/Users/PIXELL~1/AppData/Local/Temp/claude/p1w1-scratch/TASK-045/guard-efficacy/,
+// <scratch>/TASK-045/guard-efficacy/,
 // never in this worktree): with lib/guard.mjs's zero-collected AND
 // all-skipped checks both commented out, `runFixtureNodeZero()`'s raw output
 // ({collected: 0, passed: 0, failed: 0, skipped: 0}) evaluated to

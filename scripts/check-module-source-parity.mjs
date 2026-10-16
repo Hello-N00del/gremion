@@ -48,9 +48,9 @@ import { readFrozenExtractionSource } from './lib/extraction-source.mjs'
 export const KERNEL_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 
 /**
- * The annotated tag's commit, decided by the orchestrator (R24-6 Q1). Moving the tag is a new decision:
+ * The annotated tag's commit, decided by the maintainer (R24-6 Q1). Moving the tag is a new decision:
  * extraction-source-f1 (0c9d342e) was superseded by extraction-source-f2 (StuRa master after R25-4 S-C,
- * verify-r4 finding b), created and pushed by the orchestrator on 2026-09-27.
+ * verify-r4 finding b), created and pushed by the maintainer on 2026-09-27.
  */
 export const EXPECTED_TAG_COMMIT = 'd0c656d0b266f3a1741f34454e0061bc5078c3f4'
 
