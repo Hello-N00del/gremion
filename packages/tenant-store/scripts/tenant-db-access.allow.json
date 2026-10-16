@@ -4,7 +4,7 @@
       "path": "gremion-ui/src/lib/server/db/pool-registry.ts",
       "calls": 1,
       "imports": 1,
-      "adoptedBy": "TASK-077",
+      "adoptedBy": "TASK-192",
       "since": "2026-09-25",
       "reason": "gremion-ui's per-tenant pool registry (createDb); replaced by openTenantDb when gremion-ui adopts the package"
     },
@@ -12,7 +12,7 @@
       "path": "gremion-ui/src/lib/server/db.ts",
       "calls": 0,
       "imports": 1,
-      "adoptedBy": "TASK-077",
+      "adoptedBy": "TASK-192",
       "since": "2026-09-25",
       "reason": "gremion-ui's kernel runner imports the driver as a value (used only for a type today); its runner is replaced by runMigrations on adoption"
     },
@@ -20,7 +20,7 @@
       "path": "gremion-ui/src/lib/server/tenant/control-db.ts",
       "calls": 1,
       "imports": 1,
-      "adoptedBy": "TASK-077",
+      "adoptedBy": "TASK-192",
       "since": "2026-09-25",
       "reason": "the control-plane pool (the tenant registry database, not a tenant database); Q5: allow-listed, not refactored here"
     },
@@ -68,9 +68,41 @@
       "path": "gremion-ui/scripts/tenant-health.ts",
       "calls": 1,
       "imports": 1,
-      "adoptedBy": "TASK-077",
+      "adoptedBy": "TASK-192",
       "since": "2026-09-25",
       "reason": "the control-plane health probe; Q5: allow-listed, not refactored here"
+    },
+    {
+      "path": "services/kernel-api/src/app/wire.ts",
+      "calls": 1,
+      "imports": 1,
+      "adoptedBy": "TASK-192",
+      "since": "2026-10-16",
+      "reason": "TASK-077 kernel API: the two READ pools of the control plane (the control registry's tenant / tenant_domain and gremion_platform's plt.module tables) as the SELECT-only ensureKernelApiReader role, never a tenant database; the customers' own kernel databases are opened only through tenant-store (createTenantStore in gate.ts); the registry tables move with the tnt.* relocation (TASK-192)"
+    },
+    {
+      "path": "services/kernel-api/src/migrate/cli.ts",
+      "calls": 1,
+      "imports": 1,
+      "adoptedBy": "TASK-192",
+      "since": "2026-10-16",
+      "reason": "TASK-077 `kernel-api migrate`: the control-registry READ pool that lists the customers (TRD-082 pinned exemption 3); the customers' databases are reached only through migrate.ts's runner connection"
+    },
+    {
+      "path": "services/kernel-api/src/migrate/migrate.ts",
+      "calls": 1,
+      "imports": 1,
+      "adoptedBy": "TASK-192",
+      "since": "2026-10-16",
+      "reason": "TASK-077 migrate job: ONE direct (never pooled) connection per customer to t_<hex32>__kernel, asserted by assertTargetMatches and current_database(), on which tenant-store's runMigrations takes its session advisory lock; openTenantDb opens pooled runtime connections and cannot hold the lock"
+    },
+    {
+      "path": "services/kernel-api/test/harness/scratch.ts",
+      "calls": 1,
+      "imports": 1,
+      "adoptedBy": "TASK-077",
+      "since": "2026-10-16",
+      "reason": "destructive scratch-server proof, not a tenant connection: builds the control and gremion_platform databases and the throwaway customers' kernel databases on the named t077-<sha8> PostgreSQL 18 (assertNonProductionDbUrl: 127.0.0.1, this run's ports only); stays allow-listed while the test exists"
     },
     {
       "path": "gremion-public/src/lib/server/public-db.ts",
