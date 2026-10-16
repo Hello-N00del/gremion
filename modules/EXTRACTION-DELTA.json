@@ -825,7 +825,7 @@
       "path": "modules/content/src/http/routes.ts",
       "reason": "kernel-ahead of f2: 6151e5ca fix(content): the HTTP claim route returns the claim token and the failed route fences on it (R29-LO",
       "owner": "TASK-205",
-      "blob": "027112e23e15d18de175c4693f202e1660e545ff"
+      "blob": "ae83606a0453b44ad0f8b8cbf029876deb060b15"
     },
     {
       "path": "modules/files/src/nextcloud/webdav-client.ts",
@@ -903,7 +903,7 @@
       "path": "modules/calendar/src/http/routes.ts",
       "reason": "kernel-ahead of f2: d2cfe36c fix(calendar): validate RRULE BYDAY and fold ICS lines at 75 octets (F1-FIX-08-K K4#21)",
       "owner": "TASK-205",
-      "blob": "7ec200651541742b2fa3042160b284601a2d602f"
+      "blob": "fe51518c107c6de3661183013587d0ea635be9ba"
     },
     {
       "path": "modules/calendar/src/index.ts",
@@ -1047,7 +1047,7 @@
       "path": "modules/finance/src/http/server.ts",
       "reason": "kernel-ahead of f2: 06bbe1a9 fix(finance): malformed or non-object JSON body is a 400, not an empty body (F1-FIX-05-K, K4#4)",
       "owner": "TASK-205",
-      "blob": "b9b953554ea2e02d00ac57ebe71b673a5d840945"
+      "blob": "a4e120c0a71091588310f2c9711227084d1714ed"
     },
     {
       "path": "modules/finance/src/index.ts",
@@ -1383,7 +1383,7 @@
       "path": "modules/finance/test/approval-single-open.integration.test.ts",
       "reason": "added in the kernel after f2: 5ea17f78 test(finance): one migration-006 refusal case per arm, no direct driver connection (F1-FIX-05-K r2)",
       "owner": "TASK-205",
-      "blob": "b7d1d7b98f4482006476ba474ace47962266922a"
+      "blob": "0cd12bcfc1e6d3d2515c7b1a0d1445df4bf13274"
     },
     {
       "path": "modules/finance/test/bad-json-body.test.ts",
@@ -1744,6 +1744,108 @@
       "reason": "TASK-205: comment names the kernel migration with its 4-digit padded name (the register lint refuses a pad-3 kernel-data name outside its allow-list)",
       "owner": "TASK-205",
       "blob": "6a4368dd21431984732e3506393c378c34c5c504"
+    },
+    {
+      "path": "modules/content/src/tenant-store.ts",
+      "reason": "kernel-ahead of f2: fix(security) bind storeFor to the catalogued tenant identity; a changed slug is refused, not followed (audit #534)",
+      "owner": "TASK-205",
+      "blob": "5dd294897ac69c5a7d651b47dbc7d0cebb084201"
+    },
+    {
+      "path": "modules/content/test/identity-mismatch-http.test.ts",
+      "reason": "added in the kernel after f2: fix(security) bind storeFor to the catalogued tenant identity (audit #534), regression test",
+      "owner": "TASK-205",
+      "blob": "8872452f8abd416a2dbc6d77c58f5eaf0326c4ca"
+    },
+    {
+      "path": "modules/content/test/tenant-store.identity-binding.test.ts",
+      "reason": "added in the kernel after f2: fix(security) bind storeFor to the catalogued tenant identity (audit #534), regression test",
+      "owner": "TASK-205",
+      "blob": "41b02433810da55035278d793ace025a05d7df88"
+    },
+    {
+      "path": "modules/content/test/tenant-store.identity-binding.integration.test.ts",
+      "reason": "added in the kernel after f2: fix(security) bind storeFor to the catalogued tenant identity (audit #534), regression test",
+      "owner": "TASK-205",
+      "blob": "a56640f47e816bb80882a5d93b7d88821a1f819f"
+    },
+    {
+      "path": "modules/calendar/src/tenant-store.ts",
+      "reason": "kernel-ahead of f2: fix(security) bind storeFor to the catalogued tenant identity; a changed slug is refused, not followed (audit #534)",
+      "owner": "TASK-205",
+      "blob": "0c0d2ab6e5f79ab3b5fa3573558a45b0c7a697c9"
+    },
+    {
+      "path": "modules/calendar/test/identity-mismatch-http.test.ts",
+      "reason": "added in the kernel after f2: fix(security) bind storeFor to the catalogued tenant identity (audit #534), regression test",
+      "owner": "TASK-205",
+      "blob": "dc48e8cfd07d064f2dd9985bacc9782f471e2b70"
+    },
+    {
+      "path": "modules/calendar/test/tenant-store.identity-binding.test.ts",
+      "reason": "added in the kernel after f2: fix(security) bind storeFor to the catalogued tenant identity (audit #534), regression test",
+      "owner": "TASK-205",
+      "blob": "7def37132d1ff45e5318f61ddf17d9662809666e"
+    },
+    {
+      "path": "modules/calendar/test/tenant-store.identity-binding.integration.test.ts",
+      "reason": "added in the kernel after f2: fix(security) bind storeFor to the catalogued tenant identity (audit #534), regression test",
+      "owner": "TASK-205",
+      "blob": "49784cf9f4cd85ef268d88de8cba41723bdf596c"
+    },
+    {
+      "path": "modules/publishing/src/tenant-store.ts",
+      "reason": "kernel-ahead of f2: fix(security) bind storeFor to the catalogued tenant identity; a changed slug is refused, not followed (audit #534)",
+      "owner": "TASK-205",
+      "blob": "d8b99191d6aed0d8511ae9c83c63fe1a55ea387b"
+    },
+    {
+      "path": "modules/publishing/src/http/routes.ts",
+      "reason": "kernel-ahead of f2: fix(security) bind storeFor to the catalogued tenant identity; a changed slug is refused, not followed (audit #534)",
+      "owner": "TASK-205",
+      "blob": "bff60881f35f35a6e87a8b42f682b81dd88e1c3c"
+    },
+    {
+      "path": "modules/publishing/test/identity-mismatch-http.test.ts",
+      "reason": "added in the kernel after f2: fix(security) bind storeFor to the catalogued tenant identity (audit #534), regression test",
+      "owner": "TASK-205",
+      "blob": "0f5f636cfad3729ae49646bf2d372d49dd02b030"
+    },
+    {
+      "path": "modules/publishing/test/tenant-store.identity-binding.test.ts",
+      "reason": "added in the kernel after f2: fix(security) bind storeFor to the catalogued tenant identity (audit #534), regression test",
+      "owner": "TASK-205",
+      "blob": "16c2bb3483245dcb3d934136f7ab5b89547c097d"
+    },
+    {
+      "path": "modules/publishing/test/tenant-store.identity-binding.integration.test.ts",
+      "reason": "added in the kernel after f2: fix(security) bind storeFor to the catalogued tenant identity (audit #534), regression test",
+      "owner": "TASK-205",
+      "blob": "1700e0e5ffaf415d676fad26d87e5983bfa827b4"
+    },
+    {
+      "path": "modules/finance/src/tenant-store.ts",
+      "reason": "kernel-ahead of f2: fix(security) bind storeFor to the catalogued tenant identity; a changed slug is refused, not followed (audit #534)",
+      "owner": "TASK-205",
+      "blob": "e9688b13be262b7d8d3ce691a7c6e50418119d02"
+    },
+    {
+      "path": "modules/finance/test/identity-mismatch-http.test.ts",
+      "reason": "added in the kernel after f2: fix(security) bind storeFor to the catalogued tenant identity (audit #534), regression test",
+      "owner": "TASK-205",
+      "blob": "b157c2bc02ca5c58721e60239bd97d62019db194"
+    },
+    {
+      "path": "modules/finance/test/tenant-store.identity-binding.test.ts",
+      "reason": "added in the kernel after f2: fix(security) bind storeFor to the catalogued tenant identity (audit #534), regression test",
+      "owner": "TASK-205",
+      "blob": "15c4df872e3df4112d49427a43b5dd5c1c32e526"
+    },
+    {
+      "path": "modules/finance/test/tenant-store.identity-binding.integration.test.ts",
+      "reason": "added in the kernel after f2: fix(security) bind storeFor to the catalogued tenant identity (audit #534), regression test",
+      "owner": "TASK-205",
+      "blob": "349816f0b4a4cbf5df7719badc0f1ff9416e019e"
     }
   ]
 }
