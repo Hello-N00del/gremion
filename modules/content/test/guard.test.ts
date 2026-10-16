@@ -129,6 +129,18 @@ describe('checkGuard — tenant headers', () => {
     const r = checkGuard({ path: '/x', headers: headers({ 'x-tenant-slug': 'gemeinde-musterstadt-2' }), secret: SECRET })
     expect(r.ok).toBe(true)
   })
+
+  it("refuses a slug the store would refuse (leading/trailing hyphen, hyphen only) with 400, before any store call", () => {
+    for (const slug of ['-a', 'a-', '--', '-', '-abc-']) {
+      const r = checkGuard({ path: '/x', headers: headers({ 'x-tenant-slug': slug }), secret: SECRET })
+      expect(r.ok, slug).toBe(false)
+      if (r.ok) throw new Error('unreachable')
+      expect(r.status).toBe(400)
+    }
+    for (const slug of ['a', 'a-b', 'a--b', '0-9']) {
+      expect(checkGuard({ path: '/x', headers: headers({ 'x-tenant-slug': slug }), secret: SECRET }).ok, slug).toBe(true)
+    }
+  })
 })
 
 describe('checkGuard — evaluation order', () => {
