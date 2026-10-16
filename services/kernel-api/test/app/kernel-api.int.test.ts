@@ -257,7 +257,8 @@ describe('the kernel API on PG18 (scratch stack)', () => {
     world.env[P.ref.slice(4)] = url(kernelDatabaseOf(P.id))
     const { code, lines } = await migrate(['--customer', P.id], { GREMION_KERNEL_PG_DIRECT_URL: url('postgres', { pooler: true }) })
     expect(code).toBe(1)
-    expect(lines.join('\n')).toMatch(/POOLER_TARGET/)
+    // the runner's POOLER_TARGET refusal reaches the operator by its message
+    expect(lines.join('\n')).toMatch(new RegExp(`MIGRATE-FAILED customer=${P.id} .*not a direct Postgres connection`))
     expect(await ledgerOf(P)).toBeNull()
   })
 })
