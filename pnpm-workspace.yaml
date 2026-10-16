@@ -45,10 +45,11 @@ onlyBuiltDependencies:
 # resolved tree honours it, and rejects an UNBOUNDED replacement — a bare
 # `>=x.y.z` raises the floor but removes the ceiling, admitting the next major.
 overrides:
-  # GHSA — cookie <0.7.0. The ceiling is NEW: while this read a bare '>=0.7.2'
-  # it forced cookie 1.1.1 into @sveltejs/kit, which declares 'cookie: ^0.6.0' —
-  # two majors outside its own range. '<1' still clears the advisory (0.7.2 is
-  # the first patched release) without the unrequested major jump.
+  # GHSA-pxg6-pf52-xh8x (CVE-2024-47764) — cookie <0.7.0 accepts out-of-bounds
+  # characters in name, path and domain; first patched release 0.7.0, the floor is
+  # held at 0.7.2. The ceiling is NEW: while this read a bare '>=0.7.2' it forced
+  # cookie 1.1.1 into @sveltejs/kit, which declares 'cookie: ^0.6.0' — two majors
+  # outside its own range. '<1' still clears the advisory without that major jump.
   cookie@<0.7.0: '>=0.7.2 <1'
   # GHSA — dompurify <=3.4.12: mXSS sanitiser bypass (Dependabot #58); GHSA-p98j-92pf-mc4p
   # + GHSA-6688-9rhm-gjv2 — 3.4.13 to 3.4.15: a node-removing afterSanitize hook leaves a
