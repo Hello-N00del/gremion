@@ -169,6 +169,16 @@ describe('the compose env files carry the registry values in seconds', () => {
     expect(valueIn(stateTmpl, VAR[f])).toBeLessThanOrEqual(RETENTION_CAPS[f] * DAY)
   })
 
+  // infra/hardening renders .env.hardening from values.yaml: its Makefile fills the template's ${VAR} placeholders by
+  // name, so both must use the same variable names as the env files above (not abbreviated LOG_SEC_ / LOG_SECNOPII_).
+  it.each(RETENTION_FIELDS)('infra/hardening Makefile and template both name %s as the env files do', (f) => {
+    const makefile = read('../../../infra/hardening/Makefile')
+    const tmpl = read('../../../infra/hardening/templates/hardening.env.tmpl')
+    expect(makefile).toContain(`'${VAR[f]}':`)
+    expect(tmpl).toMatch(new RegExp(`^${VAR[f]}=\\$\\{${VAR[f]}\\}$`, 'm'))
+    for (const text of [makefile, tmpl]) expect(text).not.toMatch(/LOG_SEC_|LOG_SECNOPII_/)
+  })
+
   it.each(['.env.example', 'docs/ENVIRONMENT.md', 'docs/OPERATIONS.md', 'infra/host/templates/env/state.env.tmpl'])(
     '%s does not restate the superseded 90/180/365-day windows in seconds',
     (file) => {
