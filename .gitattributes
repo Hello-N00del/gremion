@@ -85,11 +85,11 @@ docker/alloy/** text eol=lf
 # w/crlf for it.
 test/test_helper/*.bash text eol=lf
 
-# B0: the two approved design specs are committed byte-identical to the
-# operator-approved originals (a `cmp` gate at commit time). Nothing above
-# matches *.md, so core.autocrlf=true would check them out with CRLF on Windows
-# and the byte-identity claim would stop being reproducible after a checkout.
-docs/superpowers/specs/*.md text eol=lf
+# B0: the two approved design specs are kept as the approved record. Nothing
+# above matches *.md, so core.autocrlf=true would check them out with CRLF on
+# Windows and a byte comparison against the approved text would stop being
+# reproducible after a checkout.
+docs/design-specs/*.md text eol=lf
 
 # The signed waiver ledger is a machine contract: gremion-verify parses its
 # rows at run time. A CRLF working copy would change the bytes the parser sees

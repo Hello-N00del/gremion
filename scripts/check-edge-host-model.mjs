@@ -50,7 +50,7 @@ const REASON = {
   fixtures: 'RED fixtures of this guard: each file exists to violate a rule',
   guard: 'the guard quotes the patterns it forbids',
   k8s: 'k8s trees are frozen for deletion (decision-log D16); residual #431 (TASK-041 Q5)',
-  superpowers: 'spec history under docs/superpowers is a record, not an instruction',
+  designSpecs: 'spec history under docs/design-specs is a record, not an instruction',
   migrations: 'migrations are hash-pinned (scripts/verify/suites/migration-hash.mjs) and describe history',
 }
 
@@ -97,7 +97,7 @@ export const RULES = Object.freeze([
     scope: ['**'],
     exempt: [
       { glob: 'k8s/**', reason: REASON.k8s },
-      { glob: 'docs/superpowers/**', reason: REASON.superpowers },
+      { glob: 'docs/design-specs/**', reason: REASON.designSpecs },
       { glob: '**/migrations*/**', reason: REASON.migrations },
       ...GUARD_OWN_FILES.map((glob) => ({ glob, reason: REASON.guard })),
       { glob: FIXTURE_GLOB, reason: REASON.fixtures },
@@ -117,7 +117,7 @@ export const RULES = Object.freeze([
       'docs/**',
     ],
     exempt: [
-      { glob: 'docs/superpowers/**', reason: REASON.superpowers },
+      { glob: 'docs/design-specs/**', reason: REASON.designSpecs },
       { glob: FIXTURE_GLOB, reason: REASON.fixtures },
     ],
   },
@@ -145,7 +145,7 @@ export const RULES = Object.freeze([
       'docs/**',
     ],
     exempt: [
-      { glob: 'docs/superpowers/**', reason: REASON.superpowers },
+      { glob: 'docs/design-specs/**', reason: REASON.designSpecs },
       { glob: '**/migrations*/**', reason: REASON.migrations + ' (004_tenant_domain.sql:4)' },
       { glob: 'k8s/**', reason: REASON.k8s },
       ...GUARD_OWN_FILES.map((glob) => ({ glob, reason: REASON.guard })),

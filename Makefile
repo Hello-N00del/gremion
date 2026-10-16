@@ -555,12 +555,12 @@ lint-compliance:
 
 # TASK-020 (R25): the tenant-DB access scan -- a direct postgres()/createDb/Pool
 # connection outside @gremion/tenant-store fails unless it is on the dated
-# allow-list naming its adopting task. Line granted to the orchestrator by the brief.
+# allow-list naming its adopting task. Line granted to the maintainer by the brief.
 lint-tenant-db-access:
 	@echo "Checking tenant-DB access..."
 	@node packages/tenant-store/scripts/check-tenant-db-access.mjs
 
-# TASK-200 (R27 orchestrator grant): the in-tree module guards. lint-module-scan
+# TASK-200 (R27 maintainer grant): the in-tree module guards. lint-module-scan
 # refuses a modules/** import, path literal or Dockerfile COPY that leaves its
 # own modules/<id>/ (or names upstream/, services/, the StuRa tree, @stura*)
 # unless modules' reasoned allowlist names it; lint-module-migration-names

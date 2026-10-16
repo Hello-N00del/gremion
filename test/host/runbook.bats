@@ -77,7 +77,7 @@ FORBIDDEN_FIXTURES=(vendor-contact compose-f compose-profile compose-p down-v
 # the existence check; the expiry test at the bottom fails the moment a listed
 # path DOES exist, naming the entry to delete. An allowlist that cannot outlive
 # its reason is the only kind this file accepts (brief Q5: the owning task's own
-# gate goes RED, and the orchestrator grants the line edit).
+# gate goes RED, and the maintainer grants the line edit).
 PENDING_PATHS=(
     'scripts/backup/|TASK-089'                 # the one-off verification (backup.md)
     'services/kernel-api/export/|TASK-119'     # tenant export (restore.md)
