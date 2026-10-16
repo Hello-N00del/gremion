@@ -83,7 +83,8 @@ describe.each(HANDLERS)('/api/internal/newsletter/$name refuses without the shar
   })
 
   it('403 when the right secret arrives in any other header (only x-internal-auth counts)', async () => {
-    for (const headers of [{ 'x-internal-secret': SECRET }, { authorization: `Bearer ${SECRET}` }, { 'x-internal-push': SECRET }]) {
+    const others: Record<string, string>[] = [{ 'x-internal-secret': SECRET }, { authorization: `Bearer ${SECRET}` }, { 'x-internal-push': SECRET }]
+    for (const headers of others) {
       const res = await post(event(body, headers))
       expect(res.status, Object.keys(headers)[0]).toBe(403)
     }

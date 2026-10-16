@@ -1947,7 +1947,7 @@
       "path": "modules/publishing/app/routes/api/internal/newsletter/callback-auth.test.ts",
       "reason": "added by TASK-205c: the three leaf callbacks are public by exact PUBLIC_PATHS entry, so the shared secret is their only gate; table-driven refusal cases (no header, wrong, prefix and extension of the real secret, unset or empty server secret, other header names) and a check that nothing behind the gate is reached",
       "owner": "TASK-205c",
-      "blob": "999b0abe99a3f924596b83a61cc4c1864335d481"
+      "blob": "d46bad787662704a49593e9c41e7b96dee304d87"
     },
     {
       "path": "modules/publishing/app/routes/api/newsletter/unsubscribe/unsubscribe.test.ts",
