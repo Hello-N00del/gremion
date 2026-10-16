@@ -35,7 +35,7 @@
 
 import type http from 'node:http'
 import { z } from 'zod'
-import type { Sql, TenantRef } from '../tenant-store.js'
+import { TenantIdentityMismatchError, type Sql, type TenantRef } from '../tenant-store.js'
 import type { Route, RouteContext } from './router.js'
 import { enqueueOutbox } from '../outbox.js'
 import { BYDAY_PATTERN } from '../caldav/client.js'
@@ -201,6 +201,11 @@ export function buildApiRoutes(storeFn: StoreFn): Route[] {
           sendError(extended.res, 404, err.message)
         } else if (err instanceof Error && err.message === 'Cannot delete system event type') {
           sendError(extended.res, 400, err.message)
+        } else if (err instanceof TenantIdentityMismatchError) {
+          // The (id, slug) pair is not the one the catalog binds (audit #534): a
+          // stale or forged pair, never a server fault. The body names neither tenant.
+          console.warn(`[calendar:api] ${err.message}`)
+          sendError(extended.res, 409, 'tenant_identity_mismatch')
         } else {
           console.error('[calendar:api] unhandled route error', err)
           if (!extended.res.headersSent) {

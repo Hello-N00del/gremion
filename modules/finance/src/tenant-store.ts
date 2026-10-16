@@ -7,7 +7,7 @@
 //  1. Control DB (`finance_control`): holds `tenant_catalog` (tenant_id, slug,
 //     db_name, created_at). Created once on first use.
 //  2. Per-tenant DB ensure: on first contact for a tenant, CREATE DATABASE
-//     `finance_<slug>` (if not exists) + upsert its catalog row.
+//     `finance_<slug>` (if not exists) + bind its catalog row (id, slug).
 //  3. Leaf migration runner: manifest-hash pattern (G-012). Reads
 //     migrations/*.sql, verifies SHA-256 against migrations/manifest.json, runs
 //     each pending migration IN ORDER (idempotent — the DDL uses IF NOT EXISTS).
@@ -100,6 +100,30 @@ export class ShuttingDownError extends Error {
   }
 }
 
+/**
+ * The (tenant id, slug) pair of a request disagrees with the one the catalog
+ * binds: on a warm pool (the registry entry keeps the catalog slug) or on a cold
+ * miss (a catalog row for the id with another slug, or for the slug with another
+ * id). Nothing is created, nothing is upserted and no pool is handed out; the
+ * HTTP layer answers 409 tenant_identity_mismatch.
+ *
+ * The database name is derived from the slug alone, so a store that follows a
+ * changed slug silently hands the tenant a new, empty database and orphans the
+ * old one. A slug rename is an operator procedure (rename the database, update
+ * the catalog row, restart the leaf), never a side effect of a request. Same
+ * contract as the board store's R29-BOARD-STORE-S B2c; audit #534.
+ */
+export class TenantIdentityMismatchError extends Error {
+  readonly code = 'TENANT_IDENTITY_MISMATCH'
+  constructor(tenant: TenantRef, bound: TenantRef) {
+    super(
+      `[tenant-store] tenant identity mismatch: request (${tenant.id}, ${tenant.slug}) vs ` +
+        `catalogued (${bound.id}, ${bound.slug}) - refusing (no database created, nothing upserted)`,
+    )
+    this.name = 'TenantIdentityMismatchError'
+  }
+}
+
 /** Latched by closeAllPools(); cleared only by the test reset helpers. */
 let _closing = false
 
@@ -154,6 +178,12 @@ const EVICTION_WARN_THROTTLE_MS = 60_000
 
 interface PoolEntry {
   sql: Sql
+  /**
+   * The catalog slug this tenant id is bound to. The hot path compares it with
+   * the request's slug before handing the pool out, so the identity binding
+   * holds on a warm cache too, not only on a miss.
+   */
+  slug: string
   /** Monotonic recency stamp — bumped on every get AND every set (true LRU). */
   lastUsedOrder: number
 }
@@ -161,14 +191,18 @@ interface PoolEntry {
 let _nextOrder = 0
 const _poolMap = new Map<string, PoolEntry>()
 
-function getPool(tenantId: string): Sql | undefined {
+function getEntry(tenantId: string): PoolEntry | undefined {
   const entry = _poolMap.get(tenantId)
   if (entry === undefined) return undefined
   // A read IS a use. Without this bump the registry degrades to FIFO and
   // evicts the HOTTEST tenant (inserted first, touched on every request) the
   // moment POOL_REGISTRY_MAX is reached.
   entry.lastUsedOrder = _nextOrder++
-  return entry.sql
+  return entry
+}
+
+function getPool(tenantId: string): Sql | undefined {
+  return getEntry(tenantId)?.sql
 }
 
 /**
@@ -469,7 +503,7 @@ function warnEviction(tenantId: string): void {
   )
 }
 
-function setPool(tenantId: string, sql: Sql): void {
+function setPool(tenantId: string, sql: Sql, slug: string): void {
   if (_poolMap.size >= POOL_REGISTRY_MAX && !_poolMap.has(tenantId)) {
     let lruKey: string | undefined
     let lruOrder = Infinity
@@ -507,7 +541,7 @@ function setPool(tenantId: string, sql: Sql): void {
     )
     deferDrain(tenantId, existing.sql)
   }
-  _poolMap.set(tenantId, { sql, lastUsedOrder: _nextOrder++ })
+  _poolMap.set(tenantId, { sql, slug, lastUsedOrder: _nextOrder++ })
 }
 
 /**
@@ -521,7 +555,9 @@ export const _poolRegistryForTests = {
   PENDING_MAX: PENDING_DRAIN_MAX,
   WARN_THROTTLE_MS: EVICTION_WARN_THROTTLE_MS,
   get: (tenantId: string): Sql | undefined => getPool(tenantId),
-  set: (tenantId: string, sql: Sql): void => setPool(tenantId, sql),
+  set: (tenantId: string, sql: Sql, slug = 'registry-test'): void => setPool(tenantId, sql, slug),
+  /** The catalog slug a live entry is bound to (undefined when absent). */
+  slug: (tenantId: string): string | undefined => _poolMap.get(tenantId)?.slug,
   keys: (): string[] => [..._poolMap.keys()],
   /**
    * Recency stamp of a live entry (undefined when absent). Lets the LRU test
@@ -609,6 +645,13 @@ function assertValidSlug(slug: string): void {
     )
   }
 }
+
+/**
+ * A tenant id as Postgres renders a uuid (canonical, lowercase). The catalog
+ * comparison is on tenant_id::text, so this is the store's own floor: any other
+ * spelling is refused before a catalog row or a database is touched.
+ */
+const TENANT_ID_TEXT = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
 // ── control DB state ──────────────────────────────────────────────────────────
 
@@ -716,15 +759,44 @@ async function ensureControlDb(adminUrl: string, dbPrefix: string): Promise<Sql>
   return attempt
 }
 
-async function upsertCatalog(ctrl: Sql, tenant: TenantRef, dbName: string): Promise<void> {
+/**
+ * Refuse unless every catalog row naming this tenant's id OR its slug is
+ * exactly (id, slug). Returns how many rows matched (0 or 1).
+ */
+async function assertCatalogBinding(ctrl: Sql, tenant: TenantRef): Promise<number> {
+  const rows = await ctrl.unsafe<{ tenant_id: string; slug: string }[]>(
+    `SELECT tenant_id::text AS tenant_id, slug FROM tenant_catalog WHERE tenant_id = $1 OR slug = $2`,
+    [tenant.id, tenant.slug],
+  )
+  for (const row of rows) {
+    if (row.tenant_id !== tenant.id || row.slug !== tenant.slug) {
+      throw new TenantIdentityMismatchError(tenant, { id: row.tenant_id, slug: row.slug })
+    }
+  }
+  return rows.length
+}
+
+/**
+ * Bind (id, slug) in the catalog BEFORE any database is created. Replaces the
+ * blind upsert, which followed a changed slug and so rebound a renamed tenant to
+ * a new, empty database.
+ *   - a row for the id with another slug, or for the slug with another id:
+ *     TenantIdentityMismatchError, nothing written;
+ *   - no row: INSERT … ON CONFLICT DO NOTHING (a concurrent claim of the same
+ *     id or slug by another pair loses here), then re-check, so the pair that
+ *     proceeds is the one the catalog holds.
+ */
+async function claimCatalog(ctrl: Sql, tenant: TenantRef, dbName: string): Promise<void> {
+  if ((await assertCatalogBinding(ctrl, tenant)) === 1) return
   await ctrl.unsafe(
     `INSERT INTO tenant_catalog (tenant_id, slug, db_name)
      VALUES ($1, $2, $3)
-     ON CONFLICT (tenant_id) DO UPDATE
-       SET slug    = EXCLUDED.slug,
-           db_name = EXCLUDED.db_name`,
+     ON CONFLICT DO NOTHING`,
     [tenant.id, tenant.slug, dbName],
   )
+  if ((await assertCatalogBinding(ctrl, tenant)) !== 1) {
+    throw new Error(`[tenant-store] catalog claim for (${tenant.id}, ${tenant.slug}) did not land - refusing`)
+  }
 }
 
 async function ensureTenantDb(adminUrl: string, dbName: string): Promise<void> {
@@ -793,23 +865,45 @@ async function runMigrations(sql: Sql, overrideManifest?: Record<string, string>
  * Return a ready postgres-js Sql instance for the given tenant, creating the
  * database + running migrations if this is the first contact. Two calls with the
  * same tenant.id return the SAME Sql instance until the pool is evicted/reset.
+ *
+ * Identity BINDING: on every call the (id, slug) pair must be the one the
+ * catalog holds — checked on the warm path against the registry entry's slug and
+ * on a cold miss against the catalog — else TenantIdentityMismatchError, with no
+ * database created and nothing upserted. The database name is derived from the
+ * slug alone, so a pair the catalog does not bind must never reach it.
  */
 export async function storeFor(tenant: TenantRef, options: StoreForOptions = {}): Promise<Sql> {
   // Checked BEFORE the cache lookup: after closeAllPools() the registry is empty, so
   // every call would otherwise fall through to opening a fresh pool behind the drain.
   if (_closing) throw new ShuttingDownError(`storeFor(${tenant.slug})`)
 
-  const existing = getPool(tenant.id)
-  if (existing) return existing
+  // The entry keeps the catalog slug: a warm hit is refused unless the
+  // request's slug is the bound one — without this the binding would be
+  // checked on a cold cache only.
+  const existing = getEntry(tenant.id)
+  if (existing) {
+    if (existing.slug !== tenant.slug) {
+      throw new TenantIdentityMismatchError(tenant, { id: tenant.id, slug: existing.slug })
+    }
+    return existing.sql
+  }
 
   const pgUrl = requireRuntimePgUrl(options.pgUrl, 'FINANCE_PG_URL')
   const dbPrefix = options.dbPrefix ?? DEFAULT_DB_PREFIX
+
+  // The catalog comparison is on tenant_id::text (canonical lowercase): refuse
+  // any other spelling before a catalog row or a database is touched.
+  if (!TENANT_ID_TEXT.test(tenant.id)) {
+    throw new Error(`[tenant-store] tenant id ${JSON.stringify(tenant.id)} is not a canonical lowercase uuid - refusing`)
+  }
 
   assertValidSlug(tenant.slug)
 
   const dbName = dbPrefix + tenant.slug
 
   const ctrl = await ensureControlDb(pgUrl, dbPrefix)
+  // Bind (id, slug) in the catalog BEFORE any database is created.
+  await claimCatalog(ctrl, tenant, dbName)
   await ensureTenantDb(pgUrl, dbName)
 
   const tenantUrl = dbUrlFor(pgUrl, dbName)
@@ -822,8 +916,7 @@ export async function storeFor(tenant: TenantRef, options: StoreForOptions = {})
     throw err
   }
 
-  await upsertCatalog(ctrl, tenant, dbName)
-  setPool(tenant.id, sql)
+  setPool(tenant.id, sql, tenant.slug)
 
   return sql
 }
