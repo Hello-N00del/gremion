@@ -1954,6 +1954,42 @@
       "reason": "added by TASK-205c: the unsubscribe API is public by exact PUBLIC_PATHS entry, so the single-use token is its only credential; 400 without a token, 404 unknown, 410 expired, no address echoed, rate limit before the lookup, GET only",
       "owner": "TASK-205c",
       "blob": "a0676ecf3240c5a73d0482f2236b5c4d614badd6"
+    },
+    {
+      "path": "modules/elections/src/index.ts",
+      "reason": "added in the kernel after f2: TASK-058-A module entry re-exporting the notice",
+      "owner": "TASK-058",
+      "blob": "ad3ee02d22c1e3d93cb3fe9ad8c7cf6fd0ab029f"
+    },
+    {
+      "path": "modules/elections/src/notice/index.ts",
+      "reason": "added in the kernel after f2: TASK-058-A notice barrel",
+      "owner": "TASK-058",
+      "blob": "ab7c15f01cb21d1708fa4f41fe421823e82e68fe"
+    },
+    {
+      "path": "modules/elections/src/notice/notice.ts",
+      "reason": "added in the kernel after f2: TASK-058-A the enable-time notice text (optional, off by default, no statutory election; Du and Sie)",
+      "owner": "TASK-058",
+      "blob": "4a0e51def45a91e8d8c142685298ca0f8e27c014"
+    },
+    {
+      "path": "modules/elections/test/notice.test.ts",
+      "reason": "added in the kernel after f2: TASK-058-A regression test pinning the notice wording",
+      "owner": "TASK-058",
+      "blob": "7cd7036741962fb7c3bb2b8b0faffaf14ca20ec9"
+    },
+    {
+      "path": "modules/elections/tsconfig.json",
+      "reason": "added in the kernel after f2: TASK-058-A typecheck config for the module src and test",
+      "owner": "TASK-058",
+      "blob": "c2a13d33b9e55ba088e5bc02ef82565dfe989374"
+    },
+    {
+      "path": "modules/elections/vitest.config.ts",
+      "reason": "added in the kernel after f2: TASK-058-A test config for the module src and test",
+      "owner": "TASK-058",
+      "blob": "a47aa3e52d93ed3fd65cb6f922fbd69b11f2aa85"
     }
   ]
 }
