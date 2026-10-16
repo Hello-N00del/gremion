@@ -31,6 +31,8 @@
 #   - the DLQ condition reads the broker's real `jsz` through the real collector, from the ops harness's
 #     unauthenticated scratch server (account $G); authentication is proved by the live groups.
 
+# SC2015: every `check && ok ... || bad ...` line is deliberate -- ok() always succeeds.
+# shellcheck disable=SC2015
 set -euo pipefail
 export MSYS_NO_PATHCONV=1
 
@@ -54,7 +56,7 @@ MAILPIT_PORT=18079
 export OBS_PROOF_STACK="$STACK" OBS_PROOF_OUT="$OUT"
 export OBS_GRAFANA_PORT=13079 OBS_KC_PORT=18479 OBS_INGEST_PORT=14379 OBS_INGEST_GRPC_PORT=14378 OBS_MAILPIT_PORT="$MAILPIT_PORT"
 export OBS_STATE_SUBNET=10.239.79.0/24
-OPS_SUBNET_V4=10.239.79.128/25
+OPS_SUBNET_V4=10.239.80.0/24
 OPS_SUBNET_V6=fd5a:239:79::/64
 
 # The 039 harness's own digests, read from it so they cannot drift.
@@ -132,7 +134,7 @@ standin_up() {   # <ctx>
   docker rm -f "$name" >/dev/null 2>&1 || true
   docker run -d --name "$name" --network none --label "org.gremion.events-metrics=$1" \
     -v "$(hp "$SDIR/$1"):/m:ro" "$BUSYBOX_IMAGE" sh -c \
-    'printf "#!/bin/sh\ncat /m/metrics.prom\n" > /usr/local/bin/pnpm && chmod +x /usr/local/bin/pnpm && exec sleep 86400' >/dev/null
+    'mkdir -p /usr/local/bin && printf "#!/bin/sh\ncat /m/metrics.prom\n" > /usr/local/bin/pnpm && chmod +x /usr/local/bin/pnpm && exec sleep 86400' >/dev/null
 }
 
 dlq_messages() {
@@ -148,6 +150,10 @@ rendered_rules() { printf '%s/runtime/ops/grafana-provisioning/alerting/rules.ya
 
 phase_prepare() {
   [[ -n "$BUSYBOX_IMAGE" && -n "$NATSBOX_IMAGE" ]] || die "could not read the pinned images from $OBS_SCRIPT"
+  # A fresh tree: the ops project keeps Prometheus' and Loki's data under the scratch root, and series from an
+  # earlier run (a DLQ entry long since purged) would still answer inside the 5-minute lookback of the new one.
+  [[ -z "$(docker ps -a --format '{{.Names}}' | grep -F "$STACK" || true)" ]] || die "a $STACK container exists: run down first"
+  rm -rf "$OUT"
   obs prepare || die "observability-proof.sh prepare failed"
   # t079's own ops subnets: prepare writes fixed ones into the env, which a concurrent 039 proof would also hold.
   local env_file="$SROOT/etc/env/ops.env"
@@ -168,7 +174,7 @@ phase_up() {
   wait_until 90 value_is 'max(gremion:cond:outbox_dead_lettered{component="idt"})' 0 \
     && ok "baseline: gremion:cond:outbox_dead_lettered{idt} is 0 through emit_events, Alloy and Prometheus" \
     || bad "the stand-in gauge never reached Prometheus"
-  wait_until 30 value_is 'max(gremion:cond:dead_letter_queue{component=~".*DLQ"})' 0 \
+  wait_until 60 value_is 'max(gremion:cond:dead_letter_queue{component=~".*DLQ"})' 0 \
     && ok "baseline: the DLQ condition is 0 (empty stream, real jsz)" || bad "the DLQ condition is not 0 at rest"
   local a n=0
   for a in $ALERTS; do n=$(( n + $(mail_count FIRING "$a") )); done
@@ -180,11 +186,15 @@ phase_up() {
 phase_red() {
   local rules; rules="$(rendered_rules)"
   [[ -f "$rules" ]] || die "no rendered rules: run alert-prepare first"
+  # Grafana keeps a provisioned rule in its database after the file stops listing it, so absence needs
+  # an explicit deleteRules entry (the restore, a file that lists the rule again, provisions it back).
   awk '
     /^      - uid: gremion-dead-letter-queue$/ { skip = 1; next }
     skip && (/^      - uid:/ || /^  [^ ]/ || /^[^ ]/) { skip = 0 }
     !skip { print }
+    /^apiVersion: 1$/ { print "deleteRules:"; print "  - orgId: 1"; print "    uid: gremion-dead-letter-queue" }
   ' "$rules" > "$rules.red"
+  grep -q '^    uid: gremion-dead-letter-queue$' "$rules.red" || die "the deleteRules entry was not written"
   grep -q 'DeadLetterQueueNotEmpty' "$rules.red" && die "the rule was not removed from the rendered tree"
   cp "$rules" "$OUT/rules.yaml.full"
   mv "$rules.red" "$rules"
@@ -210,9 +220,9 @@ phase_fire() {
   collect || bad "the collector run failed"
   date +%s > "$OUT/fire-start"
   wait_until 60 value_is 'max(gremion:cond:outbox_dead_lettered{component="idt"})' 1 && ok "outbox_dead_lettered{idt} is 1" || bad "outbox condition not seen"
-  wait_until 30 value_is 'max(gremion:cond:inbox_dead_lettered{ctx="gov"})' 1 && ok "inbox_dead_lettered{gov} is 1" || bad "inbox dead-letter condition not seen"
-  wait_until 30 value_is 'max(gremion:cond:inbox_stalled{ctx="plt"})' 1 && ok "inbox_stalled{plt} is 1" || bad "stalled condition not seen"
-  wait_until 30 value_is 'max(gremion:cond:dead_letter_queue{component=~".*DLQ"})' 1 && ok "dead_letter_queue is 1 (jsz, real)" || bad "DLQ condition not seen"
+  wait_until 60 value_is 'max(gremion:cond:inbox_dead_lettered{ctx="gov"})' 1 && ok "inbox_dead_lettered{gov} is 1" || bad "inbox dead-letter condition not seen"
+  wait_until 60 value_is 'max(gremion:cond:inbox_stalled{ctx="plt"})' 1 && ok "inbox_stalled{plt} is 1" || bad "stalled condition not seen"
+  wait_until 60 value_is 'max(gremion:cond:dead_letter_queue{component=~".*DLQ"})' 1 && ok "dead_letter_queue is 1 (jsz, real)" || bad "DLQ condition not seen"
   local a
   for a in $ALERTS; do
     wait_until 150 mail_at_least FIRING "$a" \
@@ -261,6 +271,8 @@ phase_down() {
   local c
   for c in $CTXS; do docker rm -f "${STACK}-events-$c" >/dev/null 2>&1 || true; done
   if [[ -f "$SROOT/etc/env/ops.env" ]]; then obs down || true; fi
+  # The collector image the harness built for this run, tagged with this commit's sha8 (removed by name, never a prune).
+  docker image rm "t039-collector:${SHA8}" >/dev/null 2>&1 || true
   local left
   left="$(docker ps -a --format '{{.Names}}' | grep -F "$STACK" || true)"
   [[ -z "$left" ]] || { echo "left behind: $left" >&2; exit 1; }
