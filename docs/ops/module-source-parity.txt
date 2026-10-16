@@ -1,20 +1,24 @@
 module-source parity (TASK-200) — scripts/check-module-source-parity.mjs
 source: annotated tag extraction-source-f2 -> d0c656d0b266f3a1741f34454e0061bc5078c3f4; set-A base (frozen extraction source) f276af5925abacdcfd05f6613fc11afff2d804c5
-kernel: 430760a087bc3ac69185093da6849d3b0a518291
+kernel: eb31b3698f254cfa185eee180a7c463304062a34
 mode: tip (only EXTRACTION-DELTA.json paths may differ; set A never)
 
-set A — services/** changed f276af59..extraction-source-f2: 42 files, 10 differ (10 listed, 0 unlisted)
-  listed   modules/content/src/http/routes.ts  tag=34a4d1e8955c6861efb8461a6ba157b0a4ba5a70 kernel=027112e23e15d18de175c4693f202e1660e545ff
+set A — services/** changed f276af59..extraction-source-f2: 42 files, 14 differ (14 listed, 0 unlisted)
+  listed   modules/calendar/src/tenant-store.ts  tag=db39d263ae8915ec85d8ef3d079a98c397615f56 kernel=0c0d2ab6e5f79ab3b5fa3573558a45b0c7a697c9
+  listed   modules/content/src/http/routes.ts  tag=34a4d1e8955c6861efb8461a6ba157b0a4ba5a70 kernel=ae83606a0453b44ad0f8b8cbf029876deb060b15
+  listed   modules/content/src/tenant-store.ts  tag=e3f8f5a09d3e722e67e5779c4adf7cd9f4bae4f6 kernel=5dd294897ac69c5a7d651b47dbc7d0cebb084201
   listed   modules/files/src/nextcloud/webdav-client.ts  tag=bd2b34d6378d55358d32ad34fdef7202920d4687 kernel=b80560b00964dc9cc471f1ad16f55b022eaad427
   listed   modules/finance/migrations/manifest.json  tag=f361925b7e8a13b7be57333a9d98ecd691ea742c kernel=eb710ad2b699ea0ce295bb41d745017b9bb50dfd
   listed   modules/finance/src/http/routes.ts  tag=82d9b4fd5fc3d81b50bee3aaf97c6d06743f62dd kernel=32df2be45c2bbf0a9276b0ba40fad120300a854a
   listed   modules/finance/src/nextcloud/webdav-client.ts  tag=baf187d48bc6378217a4fd06c60de4317d453fa6 kernel=da568f0d7920949842fd2b83cb0db1355a32a8e3
   listed   modules/finance/src/store/index.ts  tag=e7b4d644b89b55e39ca393577d23acb5d335ab48 kernel=2d36b04921c25993d0ab718ae34f8c27de293e10
+  listed   modules/finance/src/tenant-store.ts  tag=c857a409a4762601677a56481a5b5e369947f589 kernel=e9688b13be262b7d8d3ce691a7c6e50418119d02
   listed   modules/finance/test/bank-money.integration.test.ts  tag=e83954c467322d92c2e0dfe3012eb696b5905327 kernel=0c2455752a0503ba2d7a4de9cf9abd5e2dba39e6
   listed   modules/finance/test/bank-money.store.test.ts  tag=0cc30f7ac29c4df4068a82311fdb60d75c53384e kernel=258b122f6d8c02152d3dcb338e80181e64b776b8
+  listed   modules/publishing/src/tenant-store.ts  tag=cc8ae3e9dcf09b4dbb691109f8077a70f7b01390 kernel=d8b99191d6aed0d8511ae9c83c63fe1a55ea387b
   listed   modules/votes/src/helios/helios-client.ts  tag=ee030fe51a9dd26447f8dcfb99dd9e60dd0eb380 kernel=4790c4f0d8877254e87c05a0b091f32e78708361
   listed   modules/votes/src/polls/polls-client.ts  tag=393dc41f1f4c21d84b6bc006d7a02d16aaab3b74 kernel=590ff78faec620eeb12594df97a01d84d988a4d1
-set B — services/** at extraction-source-f2: 383 files, 92 differ (92 listed, 0 unlisted)
+set B — services/** at extraction-source-f2: 383 files, 97 differ (97 listed, 0 unlisted)
   listed   modules/board/migrations/manifest.json  tag=a6c5997f4e48b3a501b016c9935745af6c2cb8bc kernel=d9f35ed80842e07e55851c97c61979ab662d8d55
   listed   modules/board/package.json  tag=5beb993e71595aadb3e26b708a92af2d204b066d kernel=8704df34f2be6a22f183aaba31900f9984305427
   listed   modules/board/scripts/backfill.ts  tag=9a1bc6c298d987a101aa757ab6bc46cc23ebf786 kernel=absent
@@ -34,9 +38,10 @@ set B — services/** at extraction-source-f2: 383 files, 92 differ (92 listed, 
   listed   modules/calendar/src/caldav/client.ts  tag=b506e7cede15a2af8f1b25f565c3c782b6160d9b kernel=e4a90b5629e9a30222581570cf670b027d15e9d5
   listed   modules/calendar/src/caldav/pusher.ts  tag=540b648fb761627f1b1dff7ccde9004803bd5304 kernel=92c0dd17afc019cce41b918199b1efadd6563879
   listed   modules/calendar/src/caldav/sync.ts  tag=4fe2c9ef605e1083baf6883af3a18873e574d400 kernel=660cf292d047f3fc865099daad395480817bbf0f
-  listed   modules/calendar/src/http/routes.ts  tag=3908b76e050ae3f18392bafc835bf62ece1a62fb kernel=7ec200651541742b2fa3042160b284601a2d602f
+  listed   modules/calendar/src/http/routes.ts  tag=3908b76e050ae3f18392bafc835bf62ece1a62fb kernel=fe51518c107c6de3661183013587d0ea635be9ba
   listed   modules/calendar/src/index.ts  tag=f7b9702d7c3a086d140473d92e1d2c858f57e0ca kernel=1d8d8037df301b0755edb6b8b9e7222145ec688d
   listed   modules/calendar/src/store/events.ts  tag=32d0317f9fd65be1e47d021369cd91e211e68cd6 kernel=cb134702285d7a296276b3248b722d70b10662ca
+  listed   modules/calendar/src/tenant-store.ts  tag=db39d263ae8915ec85d8ef3d079a98c397615f56 kernel=0c0d2ab6e5f79ab3b5fa3573558a45b0c7a697c9
   listed   modules/calendar/test/caldav-sync.test.ts  tag=3faa76f47455799eacbdb7e8429acfbeb81890c5 kernel=c407796ed1dce0c9dc6095fba5ca419ded79cf46
   listed   modules/calendar/test/kernel-client.test.ts  tag=c3263f61bda3e2e8d2bb437b3a420c39ff43644d kernel=16e00150ac28e7541a8150d1fa513c37db8eb228
   listed   modules/calendar/test/store.integration.test.ts  tag=4eceaeed10328d98542afddf2ab32a10951d3d76 kernel=a34ca045a968e11cd87c2fc64a9ad5c655b689e2
@@ -45,7 +50,7 @@ set B — services/** at extraction-source-f2: 383 files, 92 differ (92 listed, 
   listed   modules/calendar/tsconfig.test.json  tag=d306bca9249596a8a3e47f9019a8b52467448215 kernel=b7657adb0ccd629df81b20045a5b72a96dac9b1d
   listed   modules/content/src/dispatch.ts  tag=98551f282bb5e4012cea13dbadb803b7fe714dcf kernel=68a0ae47becd666b93402703b7b5c09b2de586e5
   listed   modules/content/src/http/guard.ts  tag=4a64a89de15a478257958a5deb25dd1ac11244ed kernel=e3a0b763bc549f342faa1139b38942a31ad6ccaf
-  listed   modules/content/src/http/routes.ts  tag=34a4d1e8955c6861efb8461a6ba157b0a4ba5a70 kernel=027112e23e15d18de175c4693f202e1660e545ff
+  listed   modules/content/src/http/routes.ts  tag=34a4d1e8955c6861efb8461a6ba157b0a4ba5a70 kernel=ae83606a0453b44ad0f8b8cbf029876deb060b15
   listed   modules/content/src/http/server.ts  tag=c102234d848139e29435199afd0911ea1f74ac44 kernel=cbbadf3872011ad4a790a59215007acf832dfe70
   listed   modules/content/src/index.ts  tag=2dd71e101fb9049251bac58bbe841125da267985 kernel=7e309a572d8f90d429de6a08a12c6639f46119d8
   listed   modules/content/src/publish-channel.ts  tag=8bcc8d04eaae2d3e383b3f85ede1b150ae6f987d kernel=fa80411ef6bb13e82003d1f1c415475eb582031d
@@ -53,6 +58,7 @@ set B — services/** at extraction-source-f2: 383 files, 92 differ (92 listed, 
   listed   modules/content/src/store/channels.ts  tag=2daf650e29b9792179bd5a9911e5583c19f225a2 kernel=dee2187587815d21aae98ad1de9fc790a775c765
   listed   modules/content/src/store/deliveries.ts  tag=dd7b690c5408aef3bd2ddefaece0081581a08fd3 kernel=19feb2d8af8c64e92a5c290db6cacbaceebc4c85
   listed   modules/content/src/store/index.ts  tag=aa9bd05b25ec01796fd33e13bfaf6170c1fbbb1b kernel=35f84f8eb46bd8c0251d648f18f08bef02bb5cbc
+  listed   modules/content/src/tenant-store.ts  tag=e3f8f5a09d3e722e67e5779c4adf7cd9f4bae4f6 kernel=5dd294897ac69c5a7d651b47dbc7d0cebb084201
   listed   modules/content/test/api.integration.test.ts  tag=962ab7b0ab1350e411a73742b62b4aab964092be kernel=1c7f985ac692876edfbf5be0c217309ad6d0006a
   listed   modules/content/test/dispatch.integration.test.ts  tag=23027634727d5c4e4e8eee977f600f42990a088f kernel=457a92158d891b5efd3c830d213698ed47dc79ac
   listed   modules/content/test/guard.test.ts  tag=8aba9f45c36139f6051ea420e9421e42d3905d31 kernel=ba6a7948e9415bab9db865cebd7304d4265a4651
@@ -71,12 +77,13 @@ set B — services/** at extraction-source-f2: 383 files, 92 differ (92 listed, 
   listed   modules/finance/src/fints/sync.ts  tag=dcff6dccc7ebbb94f1936155deef9278fd750857 kernel=ec7a31b7e0185edf23aa2cee081cbe54d27e0b51
   listed   modules/finance/src/http/guard.ts  tag=a625f9dfdc8b6012ac2d839a9984a8615689c2dd kernel=ef2ee4495cd4277dc6d444a1fcbfe0a4a5ba340b
   listed   modules/finance/src/http/routes.ts  tag=82d9b4fd5fc3d81b50bee3aaf97c6d06743f62dd kernel=32df2be45c2bbf0a9276b0ba40fad120300a854a
-  listed   modules/finance/src/http/server.ts  tag=b617baddb2c0c5a5f3c754854a9df2dc25775b7a kernel=b9b953554ea2e02d00ac57ebe71b673a5d840945
+  listed   modules/finance/src/http/server.ts  tag=b617baddb2c0c5a5f3c754854a9df2dc25775b7a kernel=a4e120c0a71091588310f2c9711227084d1714ed
   listed   modules/finance/src/index.ts  tag=354765695b8c9b157e8c20c5b50076ac704d33c6 kernel=3238a29d757595e0d36a6f25b3c268bc305dc6be
   listed   modules/finance/src/nextcloud/webdav-client.ts  tag=baf187d48bc6378217a4fd06c60de4317d453fa6 kernel=da568f0d7920949842fd2b83cb0db1355a32a8e3
   listed   modules/finance/src/storage/local.ts  tag=c71ce04e5953d52ca07e21a0906ef2cf0fa073d1 kernel=470f871b3877845ffd92a6047544ec5ab13e917e
   listed   modules/finance/src/storage/nextcloud.ts  tag=bb8c71745f2e4f150b5742cc3d8abf152a7b9d1e kernel=72cc536b62a4a3c00f950344c417e38645409b1a
   listed   modules/finance/src/store/index.ts  tag=e7b4d644b89b55e39ca393577d23acb5d335ab48 kernel=2d36b04921c25993d0ab718ae34f8c27de293e10
+  listed   modules/finance/src/tenant-store.ts  tag=c857a409a4762601677a56481a5b5e369947f589 kernel=e9688b13be262b7d8d3ce691a7c6e50418119d02
   listed   modules/finance/test/api.integration.test.ts  tag=5e8bfceb7998b9f7696edf0cd6c3cb08abfa4d46 kernel=7fa5f4331d98a676785f7a19e728c38c36155286
   listed   modules/finance/test/bank-money.integration.test.ts  tag=e83954c467322d92c2e0dfe3012eb696b5905327 kernel=0c2455752a0503ba2d7a4de9cf9abd5e2dba39e6
   listed   modules/finance/test/bank-money.store.test.ts  tag=0cc30f7ac29c4df4068a82311fdb60d75c53384e kernel=258b122f6d8c02152d3dcb338e80181e64b776b8
@@ -93,6 +100,8 @@ set B — services/** at extraction-source-f2: 383 files, 92 differ (92 listed, 
   listed   modules/messaging/src/livekit/livekit-client.ts  tag=de5cbedd5c55c4e8177cc9d3c9e207cdc4767098 kernel=bb948a0b637ab2bd8786a71153dfd0509bf2348c
   listed   modules/messaging/test/forwarding.test.ts  tag=7c2dd50cbf21af0c858c007923dd2404e023e93c kernel=5302e71fcfe0244c9c151d690e0c640a2110320e
   listed   modules/publishing/src/dispatch.ts  tag=ca2e8cf414c67f480fca8c7d25294d582faa16a1 kernel=0d5d13733a8ddfe8a4f4aeece997a7cfdf938df8
+  listed   modules/publishing/src/http/routes.ts  tag=dbcb71434d7cd734d896e0b7ba52d5712a6d1f4f kernel=bff60881f35f35a6e87a8b42f682b81dd88e1c3c
+  listed   modules/publishing/src/tenant-store.ts  tag=cc8ae3e9dcf09b4dbb691109f8077a70f7b01390 kernel=d8b99191d6aed0d8511ae9c83c63fe1a55ea387b
   listed   modules/publishing/test/deploy-drift.test.ts  tag=622790af4e17d17c468039e2f95ef341a5102f50 kernel=absent
   listed   modules/publishing/test/guard.test.ts  tag=8260df8df3d7a89fb0d719daa39bd7500e83e688 kernel=43536182a2bb433675becbf037c1f53e9d6e5f8f
   listed   modules/publishing/test/kernel-client.test.ts  tag=cf8cabdcd28e8f139eee28a9f4ac705868783dfc kernel=7296832e4ef7f282110871002579c9eaecfa3903
@@ -107,13 +116,14 @@ set B — services/** at extraction-source-f2: 383 files, 92 differ (92 listed, 
   listed   modules/votes/src/polls/polls-client.ts  tag=393dc41f1f4c21d84b6bc006d7a02d16aaab3b74 kernel=590ff78faec620eeb12594df97a01d84d988a4d1
   listed   modules/votes/test/aggregator-parity.test.ts  tag=2c9b6d458de65cfee7ee29d95f7fff5037b633ca kernel=absent
   listed   modules/votes/test/http-acl.test.ts  tag=14bcf7e5783b94589aea8d80f7620e56873e6c08 kernel=b76c2c64d13443b2e1cdbe0836f36a05c3039861
-set C — module in-process halves (gremion-ui/src -> modules/<id>/app; board, calendar, content, elections, files, messaging, votes): 351 files, 99 differ (99 listed, 0 unlisted)
+set C — module in-process halves (gremion-ui/src -> modules/<id>/app; board, calendar, content, elections, files, messaging, publishing, vault, votes): 431 files, 122 differ (122 listed, 0 unlisted)
   listed   modules/calendar/app/lib/components/calendar/WeekGrid.svelte  tag=5ae713c81921f3d4b63255838c3c163010d038d3 kernel=901ef892f45a564f2782cf9674cffc9038399dc8
   listed   modules/files/app/lib/files/editable-types.test.ts  tag=6e92198811e02d87c18b5cd97e1344f010e89012 kernel=76427824774de72dc13484336866e347321dd55c
   listed   modules/files/app/lib/files/editable-types.ts  tag=472fa2671ca431e8ef090f6853d3fe96e4142349 kernel=6a0b58b992de844820ff7334109341118b71583b
   listed   modules/board/app/lib/modules/manifests/board.ts  tag=452b8588113d96381bf9088a86bcb94fb9b1afa7 kernel=b7efb46a6bd40b557f066e4fdcaf1581662ea2fc
   listed   modules/calendar/app/lib/modules/manifests/calendar.test.ts  tag=ca7a7cfa5fc366cbb3af337e39add025feb7c4b1 kernel=0ff648a89a152b5b16770455aee31d14cea09280
   listed   modules/calendar/app/lib/modules/manifests/calendar.ts  tag=01a309e9edd52fc6e15ca83ec89851bec5b05b79 kernel=6a4368dd21431984732e3506393c378c34c5c504
+  listed   modules/content/app/lib/modules/manifests/content.ts  tag=c4bf82cc357af1992e2f7ca552f8a5518f52bca2 kernel=6731085e076698caabc9b47b6cfbaf5995d39eb3
   listed   modules/elections/app/lib/modules/manifests/elections.ts  tag=ba58070b58177b0ba9b5a539533f1a68b9e08d9c kernel=aeba4cf66f3733a2b2b8105f5c87ea77ff80d380
   listed   modules/board/app/lib/server/board/backend/index.test.ts  tag=5d54818cf0e990eae0ac885b6788e58e221b64fd kernel=14679e5770901b1bfc33b0a0776a2e30e44da697
   listed   modules/board/app/lib/server/board/backend/index.ts  tag=8523b725d3f188f616ce2dfaa72a36194032ce0f kernel=bbe2c36fb0293f7dd27a108ee8d872a4dd5d02c7
@@ -128,6 +138,7 @@ set C — module in-process halves (gremion-ui/src -> modules/<id>/app; board, c
   listed   modules/calendar/app/lib/server/calendar/caldav-sync.test.ts  tag=72721a078d700af69636e95cff33957229ec65ac kernel=1a5386c30d7215c582670433b00b07cb0e3cfaa4
   listed   modules/calendar/app/lib/server/calendar/caldav-sync.tick.test.ts  tag=de666a948c3964c486509712c986191d7478fea5 kernel=82fb70d4297c2b89d601b23501c366b8a2a22c22
   listed   modules/calendar/app/lib/server/calendar/caldav-sync.ts  tag=f3f531bab19a87af13276608f1a1698422d82ff0 kernel=6766894b69d90a51d6eea88b4023ef8bf9ca02c8
+  listed   modules/calendar/app/lib/server/calendar/calendar-automations.ts  tag=738dd68c760a5f80457b7e25f71ed9117935e1f7 kernel=ca3ec16b6cd23d62cbd942fa8c48ce4c6b473aed
   listed   modules/calendar/app/lib/server/calendar/calendar-db.ts  tag=9d2bf9c13d8a77235787f4487dd2afdafffb0d7c kernel=a3b3d513cddd509c606d8e7b106636fc87b75461
   listed   modules/calendar/app/lib/server/calendar/notification-scheduler.ts  tag=77fed81ed626c22fbbdd5b79a93abbc0aa929602 kernel=573fdb193b167eb54bf69b77da9699cac8381069
   listed   modules/calendar/app/lib/server/calendar/register.server.ts  tag=32f1525e4c9714079778b471ea1e5c25d9b59e9a kernel=7dd60f3aa0bfc02506c9d58bc5b43ba1325ec49c
@@ -137,7 +148,8 @@ set C — module in-process halves (gremion-ui/src -> modules/<id>/app; board, c
   listed   modules/content/app/lib/server/content/backend/port.ts  tag=43c95b14e01d835a430f1481144874f53aeac657 kernel=8a87b21c5ca9c5709933d8e9ad6cbad9d33b53c8
   listed   modules/content/app/lib/server/content/backend/service-client.test.ts  tag=7eb489a6bbf0f2279595da96197a081da2bfa5bc kernel=2643cd861736badd21e0675ecb496ce103512666
   listed   modules/content/app/lib/server/content/backend/service-client.ts  tag=fd5d598bb1f7d2778a28835a882bacda0f2d8216 kernel=5500eed417de4b706e7a8dd45745c7809fbe94b1
-  listed   modules/content/app/lib/server/content/caption.ts  tag=76a72f5ab0b838a70b48dc916f188907eb451e57 kernel=5cd14c9d2f865e0169842b029de6bf9c6e1b1c0c
+  listed   modules/content/app/lib/server/content/caption.ts  tag=76a72f5ab0b838a70b48dc916f188907eb451e57 kernel=b3d67f9714b3c25c2390439b67aa571ed6b35a9e
+  listed   modules/content/app/lib/server/content/carousel/template.tsx  tag=67637ff3da1553586031305512417ea1ffbe7c8b kernel=e7492851308495114237b4982b217bde0f23bbe8
   listed   modules/content/app/lib/server/content/channels/email-renderer.test.ts  tag=6aaa11faa95365cadbaccaced7e200daf8eb16c2 kernel=a3ed45dab280f94e75bbe9871986be87a4f35ec1
   listed   modules/content/app/lib/server/content/channels/email-renderer.ts  tag=ebed1bcabecb6f2aab890584d6924ab3133de878 kernel=e41573125475b908bf1467375792dfac443c8b68
   listed   modules/content/app/lib/server/content/channels/instagram-renderer.ts  tag=d089942af62aba7786b623892646228835a6f15a kernel=fd9d2cbb6c5722b0e5c620ccc41eabb456852989
@@ -152,6 +164,10 @@ set C — module in-process halves (gremion-ui/src -> modules/<id>/app; board, c
   listed   modules/elections/app/lib/server/elections/helios-client.ts  tag=72b1172fbad119c2fe1c342693abf26c7076a7f6 kernel=750259dbb166f0662f5c858c03e62903ff3ba028
   listed   modules/calendar/app/lib/server/events/calendar-audit-consumer.integration.test.ts  tag=24cc2d19b9851853699949872edd84af6a60f1dc kernel=b7b966a27f366acb02bbba6915759b3791a1ece9
   listed   modules/calendar/app/lib/server/events/calendar-audit-consumer.ts  tag=b65e6fd10c03d6f24ea412744a269c2f7b0bddd1 kernel=2a90da3dc8496ec5575c78aba7e2a6a74c259b12
+  listed   modules/content/app/lib/server/events/content-audit-consumer.integration.test.ts  tag=f441d1d124b5dee27ff41b4b065a8d8b12fbcc02 kernel=beb5efb873ddfc18c6e812dc77f684615304a7e3
+  listed   modules/content/app/lib/server/events/content-audit-consumer.ts  tag=1d196378262bf039456948155aec2f0b1dfc80ad kernel=7e0bcb4c3d5e8edfba5e0615c5b0950976524f7f
+  listed   modules/publishing/app/lib/server/events/newsletter-audit-consumer.integration.test.ts  tag=b0721bd5eac0079849822b306b5a05ac98255afa kernel=a199df489a27016da5032626a73a695a8400c4c1
+  listed   modules/publishing/app/lib/server/events/newsletter-audit-consumer.ts  tag=d91b4abf7390b4aa0c2931e58dd7b757644b0f9a kernel=44294143616b00a3c8e61a2c80f993b5459dd0b8
   listed   modules/files/app/lib/server/files/backend/inprocess-client.ts  tag=1a33b152368118d91d862b39dbf41c4433904310 kernel=7084011d37a5162d2277a9ec84f8838d6ad17a8a
   listed   modules/files/app/lib/server/files/backend/route-parity.test.ts  tag=b9258342a9c9617bb16f2d0799e5d4009729c453 kernel=c62a8e27417ea8c1046f41bdf76f2cb294af1748
   listed   modules/files/app/lib/server/files/backend/service-client.test.ts  tag=5427ca9510478df8e36a74c99c8a2c397002ebdc kernel=absent
@@ -172,9 +188,11 @@ set C — module in-process halves (gremion-ui/src -> modules/<id>/app; board, c
   listed   modules/messaging/app/lib/server/messages/register.server.test.ts  tag=4ba44653a895ef61147ed2a8a0ba3d3a14846cef kernel=db9340e33ff0d4e4036c4384e5e819248cfec347
   listed   modules/messaging/app/lib/server/messages/register.server.ts  tag=2a964c5007c9fdacb7f76e72be09ed54baa8d0a8 kernel=6ad5867a7b5a0278a4b1fb29d24d3644fb48add0
   listed   modules/messaging/app/lib/server/messages/synapse-admin.ts  tag=138e6f7a97d5706b32ff7c72b15156e4d09673a2 kernel=530845ca57cd669e41587a056b1ef34f67b8bdfd
+  listed   modules/publishing/app/lib/server/newsletter/register.server.ts  tag=4a657e38ac1f495a067134cb8847f97c03476a64 kernel=2d623f5ee46cf0e6f42efb54b440577c23ed5ae7
   listed   modules/votes/app/lib/server/polls/polls-client.test.ts  tag=e17cda59ebd6f5b7bbb28312397f0ac806a7e3c7 kernel=59de31cc48ad00155abaf0fc6087e8c998e3716c
   listed   modules/votes/app/lib/server/polls/polls-client.ts  tag=88d91d516ccc2bbee13270b1296afc7c6cd346e3 kernel=ceebe19efb9614caf62f5765970cefc50f53cb9d
   listed   modules/board/app/lib/server/seed/seed-board.ts  tag=15b9714293b805c3f3848794bbc4839d3fd6d12f kernel=d39322fad563747965836760822f030e7b546fd0
+  listed   modules/publishing/app/lib/server/seed/seed-newsletter.ts  tag=06b076501950c06e3e71ea493059e59d1b6164e9 kernel=aec3f98e21774b44d05e9c91e6e113ef9343e87e
   listed   modules/messaging/app/routes/api/auth/matrix-token/+server.ts  tag=63cec8b3d0a2ff4746bade93667ad5f63b96b6d2 kernel=982a9db1b9059f72064056decf53a92a00a31f44
   listed   modules/board/app/routes/api/board/[id]/cards/+server.ts  tag=856edefd66754e0069c4f8ea39b4686377e87e99 kernel=c3cbfbda0b48af84f0cf3e3cc4c39158d8cc9f41
   listed   modules/board/app/routes/api/board/[id]/promote/+server.ts  tag=5877b7b345263c65d03fd88c1f41e9bdf6e4a585 kernel=2f619a03d8e02008d622b9c36750abd5268e4893
@@ -187,27 +205,41 @@ set C — module in-process halves (gremion-ui/src -> modules/<id>/app; board, c
   listed   modules/content/app/routes/api/content/lists/[id]/members/+server.ts  tag=454cfe5476a9d3cb1695cc6b147c5415f6877721 kernel=6115e65b1e0eb034dde27500a3bb278e437fddf2
   listed   modules/content/app/routes/api/content/lists/[id]/members/[memberId]/+server.ts  tag=dde56b3e024826a77c793f7904e6b043a1e29c27 kernel=d42bdeaffb1bf31f5ddb943f972bb393c98692d9
   listed   modules/content/app/routes/api/content/posts/[id]/+server.ts  tag=24b9c85352b7d3c52a422a944a3f652da64a1f68 kernel=db39b4fa0335bd206144c4f9cf20e925f3bdef99
+  listed   modules/content/app/routes/api/content/posts/[id]/carousel/[index]/+server.ts  tag=35e51e5e9eb1f2abf790a588a18419304a50beff kernel=f51ba5e303745ae9719a45fcfb41de9f3be702ce
   listed   modules/content/app/routes/api/content/posts/[id]/post-id.test.ts  tag=eb04a71778ff0d7c4a2189bc00be474fa3377eae kernel=2d539f2228afd1e915d002bda8c688eb5536a2c4
   listed   modules/files/app/routes/api/files/[...path]/+server.ts  tag=fe1b069402c5c972dcf72c619a7ce6125881cb78 kernel=c9c765b14b85c803f000b1fcf4b28e01bd700a28
   listed   modules/files/app/routes/api/files/upload-chunk/upload-chunk.test.ts  tag=349cde22e64f904b7e4edea1d74d44a3f04c8fb6 kernel=8340d010c36e6212b672953b2dcea75c059f0edb
+  listed   modules/content/app/routes/api/internal/content/portal-publish/+server.ts  tag=7308260033bb555c05181ce9739010fa3b68910a kernel=3ac0f5b20d2c4aca72718a06445377c07689142d
+  listed   modules/publishing/app/routes/api/internal/newsletter/newsletter-callbacks.test.ts  tag=27b8fc41ea54cce7f579d177dad9982211ed27b5 kernel=d2fac80e5343babc2312491a00bea2c0c893b645
+  listed   modules/publishing/app/routes/api/internal/newsletter/render/+server.ts  tag=1f3327d2542d9157a4fe6de29505f61fb3336af0 kernel=28042f83d3fa9c935422be756f440d4c6a95e7a7
+  listed   modules/publishing/app/routes/api/internal/newsletter/resolve-group/+server.ts  tag=98b84f9e32721f966be42b81115465586ccf471f kernel=d26ba46b8ace21ae28afc0a79e9d61341112abd0
+  listed   modules/publishing/app/routes/api/internal/newsletter/send-mail/+server.ts  tag=5795c838cc79d62fa7dbe40a5c952e181f0f96d3 kernel=af6c4cbc514fc2c9af8dd56c2cdbee18ad74bcb8
   listed   modules/messaging/app/routes/api/internal/push/+server.ts  tag=32659b11fe33f2f2b8955837780cfac464058163 kernel=86908ba440fc792016a1db180e8858259ed685e7
   listed   modules/messaging/app/routes/api/messages/rooms/+server.ts  tag=d7fbca2194e846fd337f4cda3c302d3f37d0159d kernel=a1422f0b020e798e335d4338d33ff4b66356da78
   listed   modules/messaging/app/routes/api/messages/rooms/[roomId]/typing/+server.ts  tag=dc6220f811d71ce838becc30d2b99949f8dea0f1 kernel=b0bb7370179d085ee7e2dbc6f97a95400df4092a
   listed   modules/messaging/app/routes/api/messages/rooms/rooms-archived-flag.test.ts  tag=4d4b82c8939bc8d5e2e4c3e4834e4bfaa85745d7 kernel=2dafb62bdbbd87e26be50d0e7297223aa509cc32
   listed   modules/messaging/app/routes/api/messages/rooms/rooms-tenant-url.test.ts  tag=0f30ce24db40a3d7e2535f191b9168a2c58720b7 kernel=bc02dbf3e5575f90221af3fcb34888e0f4088ebc
+  listed   modules/publishing/app/routes/api/newsletter/+server.ts  tag=6ca42d0eb223b69b7812a8bc9590ccf322b636c9 kernel=96409b9863fb9c63dc01ce058480ab99053232da
+  listed   modules/publishing/app/routes/api/newsletter/[id]/preview/+server.ts  tag=0c4deead3efe5c4d4392e6e039b22e67a2e35970 kernel=24acad6c0bb7f5a8f1bc22b8b8760854f974407b
+  listed   modules/publishing/app/routes/api/newsletter/[id]/wopi-token/+server.ts  tag=835f42c7e0dd98ea3a250236b9bb18feaf47d341 kernel=d7e0204ea46f95992a0f683b829de9de22696ef6
+  listed   modules/publishing/app/routes/api/newsletter/[id]/wopi-token/wopi-token.test.ts  tag=33d897c29bb628cab9029ab0a983b9f377749fe6 kernel=28fce2b5a26f8679dfcd7820e75b620639eefa96
   listed   modules/messaging/app/routes/api/video/matrix-widget-action/+server.ts  tag=a846b4556ea2eda727ea6a157181ee742e5433ce kernel=7d3d288d6a0a8d8d59fec5514e2c1c8370a7a743
   listed   modules/messaging/app/routes/api/video/meeting-room/+server.ts  tag=c613e0ecca08730017c97969a9a8b9b737fa12e9 kernel=01bb2d8d9d68b4b7f9cee4c9088d68434c6bf6db
   listed   modules/messaging/app/routes/api/video/openid-token/+server.ts  tag=92068357a21b13afa8cb1e22fc186cab902dd72f kernel=8ddb4e40246ce3581361fd252f5fa720d673e2be
+  listed   modules/content/app/routes/content/+page.svelte  tag=2512e18e95a395b1ddcf14228fb6d6d2d554319f kernel=a0c436407832b62334f5f37ce09d75dd8f14780b
+  listed   modules/content/app/routes/content/[id]/edit/+page.svelte  tag=f0dc34134b464d96b45bf07953dbe5184a795264 kernel=fccbe69b60a34572c52a3d451f93e2608d28db8d
+  listed   modules/content/app/routes/content/lists/+page.svelte  tag=621d51821783c8b94f9ff41f89a2f3e14b0b5096 kernel=fd4bf0dcf4329688d83a7b6612c9def44f4bbe81
   listed   modules/content/app/routes/content/unsubscribe/+page.server.ts  tag=60830f724409751440ba0c3a9a75699c00c5a97c kernel=6d1d6d1e0622eec0c7dfb5c676ebaa55772a7d22
   listed   modules/content/app/routes/content/unsubscribe/+page.svelte  tag=39ad72800cfc18b66ce32911011fe38150409854 kernel=da557cefca8c1e7641028c765f2df2913e443058
   listed   modules/content/app/routes/content/unsubscribe/unsubscribe.test.ts  tag=189891248e14b7a858236cbef24dbe4e6a967ab6 kernel=d176f3df32360f0bacb132c6db35d6160f2f3a07
   listed   modules/elections/app/routes/elections/manage/+page.server.ts  tag=c77788f2dd60bf3679ef2163ac243d063fb29d3c kernel=758b035b4072cac40253a2f9a1f6f47123c31582
   listed   modules/messaging/app/routes/messages/+page.svelte  tag=119efe8aa6837abcf1767dc531a3c76127a8266a kernel=a8a45ed61921c2e61b02792075c53734e7c86483
   listed   modules/content/app/routes/news/[id]/edit/+page.server.ts  tag=82b7479e1f6047e81e756e581b934eec583bf3e0 kernel=416f5993bc2b6c58f3cf592713c08652e5d524a7
+  listed   modules/content/app/routes/news/news-page.test.ts  tag=6cd80daf0d075d47d6a8fbf7ba75fe4e108dba09 kernel=293ec73f0953059f50e1b116da727f627b8c9b89
   listed   modules/votes/app/routes/votes/+page.server.ts  tag=3281b779a449da0481ad8a10e03f685a933c316b kernel=3a7a08dc7a44e13c262964668dd28e1799f34f2d
   listed   modules/votes/app/routes/votes/+page.svelte  tag=f0f86f3e0227f24e312de57f61eb7ca3ba1ad39d kernel=aa3996cb78ef28265624045e95cb4b306354fdda
   listed   modules/votes/app/routes/votes/votes.reflow.browser.test.ts  tag=e6a243481bc87882b4a8c63c4f9797fe8357864d kernel=8336a5c49111e3793d88f87bf7e23fb7d99e958c
-extras — kernel files in a mapped module directory that no tag path maps to: 74 (74 listed)
+extras — kernel files in a mapped module directory that no tag path maps to: 106 (106 listed)
   listed   modules/board/app/routes/api/board/board-binding.test.ts
   listed   modules/board/src/app.ts
   listed   modules/board/src/store/tenant-db.ts
@@ -240,6 +272,9 @@ extras — kernel files in a mapped module directory that no tag path maps to: 7
   listed   modules/calendar/test/caldav-pusher.test.ts
   listed   modules/calendar/test/caldav-tenant-target.test.ts
   listed   modules/calendar/test/ics-validity.test.ts
+  listed   modules/calendar/test/identity-mismatch-http.test.ts
+  listed   modules/calendar/test/tenant-store.identity-binding.integration.test.ts
+  listed   modules/calendar/test/tenant-store.identity-binding.test.ts
   listed   modules/content/app/lib/server/content/channels/smtp-outcome.test.ts
   listed   modules/content/app/lib/server/content/channels/smtp-outcome.ts
   listed   modules/content/app/lib/server/content/ids.ts
@@ -253,8 +288,11 @@ extras — kernel files in a mapped module directory that no tag path maps to: 7
   listed   modules/content/app/scripts/news-posts-public-grant-proof.test.mjs
   listed   modules/content/src/link-base.ts
   listed   modules/content/test/healthz-tenants.test.ts
+  listed   modules/content/test/identity-mismatch-http.test.ts
   listed   modules/content/test/link-base.test.ts
   listed   modules/content/test/route-parity.test.ts
+  listed   modules/content/test/tenant-store.identity-binding.integration.test.ts
+  listed   modules/content/test/tenant-store.identity-binding.test.ts
   listed   modules/files/app/routes/api/files/[...path]/file-serving.test.ts
   listed   modules/files/test/download-stream.test.ts
   listed   modules/files/test/fixtures/stream-harness.ts
@@ -264,8 +302,11 @@ extras — kernel files in a mapped module directory that no tag path maps to: 7
   listed   modules/finance/test/approval-single-open.integration.test.ts
   listed   modules/finance/test/bad-json-body.test.ts
   listed   modules/finance/test/healthz-tenants.test.ts
+  listed   modules/finance/test/identity-mismatch-http.test.ts
   listed   modules/finance/test/leaf-write-scope.integration.test.ts
   listed   modules/finance/test/receipt-key.store.test.ts
+  listed   modules/finance/test/tenant-store.identity-binding.integration.test.ts
+  listed   modules/finance/test/tenant-store.identity-binding.test.ts
   listed   modules/messaging/app/lib/components/messaging/CallLiveChip.svelte
   listed   modules/messaging/app/lib/components/messaging/MatrixChip.svelte
   listed   modules/messaging/app/lib/components/messaging/NotificationBell.svelte
@@ -276,12 +317,35 @@ extras — kernel files in a mapped module directory that no tag path maps to: 7
   listed   modules/messaging/app/lib/server/messages/auto-join.ts
   listed   modules/messaging/app/routes/api/auth/matrix-token/matrix-token-auto-join.test.ts
   listed   modules/messaging/app/routes/api/messages/rooms/rooms-auto-join-scope.test.ts
+  listed   modules/messaging/synapse/.gitattributes
+  listed   modules/messaging/synapse/Dockerfile
+  listed   modules/messaging/synapse/bootstrap.sh
+  listed   modules/messaging/synapse/db-preflight.py
+  listed   modules/messaging/synapse/entrypoint.sh
+  listed   modules/messaging/synapse/healthcheck.sh
+  listed   modules/messaging/synapse/homeserver.yaml
+  listed   modules/messaging/synapse/inject-jwt-key.py
+  listed   modules/messaging/synapse/log.config
+  listed   modules/messaging/synapse/postgres-init/10-synapse-db.sh
+  listed   modules/messaging/synapse/render-homeserver.sh
+  listed   modules/messaging/synapse/test/helpers.mjs
+  listed   modules/messaging/synapse/test/inject.test.mjs
+  listed   modules/messaging/synapse/test/preflight.test.mjs
+  listed   modules/messaging/synapse/test/probe.test.mjs
+  listed   modules/messaging/synapse/test/refusal.test.mjs
+  listed   modules/messaging/synapse/test/render.test.mjs
+  listed   modules/messaging/synapse/test/scratch-proof.sh
+  listed   modules/publishing/app/routes/api/internal/newsletter/callback-auth.test.ts
+  listed   modules/publishing/app/routes/api/newsletter/unsubscribe/unsubscribe.test.ts
+  listed   modules/publishing/test/identity-mismatch-http.test.ts
+  listed   modules/publishing/test/tenant-store.identity-binding.integration.test.ts
+  listed   modules/publishing/test/tenant-store.identity-binding.test.ts
   listed   modules/votes/app/lib/modules/manifests/votes.ts
   listed   modules/votes/app/routes/votes/votes-elections-off.test.ts
   listed   modules/votes/app/routes/votes/votes-service-degrade.test.ts
   listed   modules/votes/src/boot-config.ts
   listed   modules/votes/test/polls-client.test.ts
   listed   modules/votes/test/server-validation.test.ts
-delta entries: 265
+delta entries: 325
 
 RESULT: OK

@@ -396,6 +396,17 @@ export const PUBLIC_PATHS: readonly string[] = [
   '/livekit/',
   '/element-call/',
   '/element-call',
+  // TASK-205c (carve-keep hunk re-applied, MODULE: publishing): the unsubscribe link in a sent newsletter is opened
+  // by a recipient with no session. The page and its API are EXACT routes (nothing below them is public); the API
+  // consumes a single-use token and answers 400/404/410 without a valid one. The three callbacks are the publishing
+  // leaf's LEAF_CALLBACK_ROUTES keys (tenant/leaf-trust.ts): each handler refuses without INTERNAL_NEWSLETTER_SECRET
+  // in x-internal-auth (constantTimeEqual), and nothing else under /api/internal/newsletter/ is public. Content's
+  // callback and unsubscribe join with the content half when it is enabled.
+  '/newsletter/unsubscribe',
+  '/api/newsletter/unsubscribe',
+  '/api/internal/newsletter/render',
+  '/api/internal/newsletter/resolve-group',
+  '/api/internal/newsletter/send-mail',
   '/api/setup/seed',
   '/api/health',
   '/api/public/protocols/*/pdf',

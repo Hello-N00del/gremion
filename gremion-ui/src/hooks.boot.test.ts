@@ -629,8 +629,10 @@ describe('the full handle sequence (TASK-023)', () => {
     const mod = await import('./hooks.server')
     await mod.boot()
     const tenant = { id: 't1', slug: 't1', issuer: 'https://kc/realms/t1' }
-    const res = await throughHandle(mod, '/api/internal/newsletter/render', tenant)
-    expect(authHandleCalls).toEqual(['/api/internal/newsletter/render'])
+    // TASK-205c: the newsletter callbacks are public (exact PUBLIC_PATHS entries, each self-guarded by its secret); the
+    // content callback is not until the content half is enabled, so it still takes the session gate.
+    const res = await throughHandle(mod, '/api/internal/content/portal-publish', tenant)
+    expect(authHandleCalls).toEqual(['/api/internal/content/portal-publish'])
     // ...and then the session guard: no session, so a machine-readable 401.
     expect(res.status).toBe(401)
   })
@@ -771,7 +773,9 @@ describe('authGuard boot gate (TASK-023 item 3)', () => {
     const mod = await import('./hooks.server')
     await mod.boot()
     const o = await (async () => {
-      const event = makeFakeEvent('/api/internal/newsletter/render')
+      // TASK-205c: not a newsletter callback (those are public by exact path, each self-guarded by its secret): the
+      // content callback stays behind the session until the content half is enabled.
+      const event = makeFakeEvent('/api/internal/content/portal-publish')
       event.locals.tenant = { id: 't1', slug: 't1', issuer: 'https://kc/realms/t1' }
       event.locals.auth = async () => null
       let reached = false
@@ -814,6 +818,11 @@ describe('authGuard publicPaths segment-boundary matching (netcup T03)', () => {
     { entry: '/api/setup/seed', attack: '/api/setup/seedling' },
     { entry: '/api/health', attack: '/api/healthz' },
     { entry: '/element-call', attack: '/element-callXYZ' },
+    // TASK-205c: publishing's entries are exact; a longer name or a child path is not public.
+    { entry: '/newsletter/unsubscribe', attack: '/newsletter/unsubscribeX' },
+    { entry: '/newsletter/unsubscribe', attack: '/newsletter/unsubscribe/extra' },
+    { entry: '/api/newsletter/unsubscribe', attack: '/api/newsletter/unsubscribes' },
+    { entry: '/api/newsletter/unsubscribe', attack: '/api/newsletter/unsubscribe/extra' },
   ] as const
 
   for (const { entry, attack } of BOUNDARY_LESS_ENTRIES) {
@@ -875,6 +884,11 @@ describe('authGuard publicPaths segment-boundary matching (netcup T03)', () => {
     { entry: '/livekit/', path: '/livekit/jwt' },
     { entry: '/element-call/', path: '/element-call/index.html' },
     { entry: '/element-call', path: '/element-call' },
+    { entry: '/newsletter/unsubscribe', path: '/newsletter/unsubscribe' },
+    { entry: '/api/newsletter/unsubscribe', path: '/api/newsletter/unsubscribe' },
+    { entry: '/api/internal/newsletter/render', path: '/api/internal/newsletter/render' },
+    { entry: '/api/internal/newsletter/resolve-group', path: '/api/internal/newsletter/resolve-group' },
+    { entry: '/api/internal/newsletter/send-mail', path: '/api/internal/newsletter/send-mail' },
     { entry: '/api/setup/seed', path: '/api/setup/seed' },
     { entry: '/api/health', path: '/api/health' },
     { entry: '/api/public/protocols/*/pdf', path: '/api/public/protocols/42/pdf' },
@@ -885,7 +899,22 @@ describe('authGuard publicPaths segment-boundary matching (netcup T03)', () => {
   // F1-FIX-03 / S1a#28: the /api entries are EXACT routes now, not subtrees;
   // only the two page trees '/auth/' and '/legal/' stay prefixes.
   // TASK-205b: plus the messaging module's three public entries (LiveKit proxy, Element Call SPA).
-  const FIVE = ['/api/health', '/api/public/protocols/*/pdf', '/api/setup/seed', '/auth/', '/element-call', '/element-call/', '/legal/', '/livekit/']
+  // TASK-205c: plus the publishing module's five (unsubscribe page and API, the three leaf callbacks), all exact.
+  const FIVE = [
+    '/api/health',
+    '/api/internal/newsletter/render',
+    '/api/internal/newsletter/resolve-group',
+    '/api/internal/newsletter/send-mail',
+    '/api/newsletter/unsubscribe',
+    '/api/public/protocols/*/pdf',
+    '/api/setup/seed',
+    '/auth/',
+    '/element-call',
+    '/element-call/',
+    '/legal/',
+    '/livekit/',
+    '/newsletter/unsubscribe',
+  ]
 
   // F1-FIX-03 / S1a#28: a path BELOW or BESIDE a public /api route is not public.
   // A route the kernel later adds there must not be served unauthenticated just
@@ -898,6 +927,10 @@ describe('authGuard publicPaths segment-boundary matching (netcup T03)', () => {
     '/api/public/protocols/42/attachments',
     '/api/public/protocols/',
     '/api/public/protocols//pdf',
+    // TASK-205c: the rest of the newsletter API stays behind the session.
+    '/api/newsletter',
+    '/api/newsletter/lists',
+    '/api/newsletter/42/send-now',
   ]) {
     it(`does NOT treat '${path}' as public (S1a#28): an unauthenticated call is a 401`, async () => {
       const mod = await import('./hooks.server')
@@ -973,6 +1006,69 @@ describe('authGuard publicPaths segment-boundary matching (netcup T03)', () => {
       expect(await res.text()).toBe('public')
     })
   }
+})
+
+// TASK-205c: the publishing leaf's three callbacks are public ONLY by exact path, and a request the resolver handed on
+// WITH a tenant (the leaf sends x-tenant-id, tenant/leaf-trust.ts) takes the same short-circuit; their handlers then
+// refuse without the shared secret (modules/publishing/app/routes/api/internal/newsletter/callback-auth.test.ts).
+describe('authGuard leaf callbacks (TASK-205c)', () => {
+  beforeEach(() => {
+    migrationsImpl = async () => {}
+  })
+
+  const tenant = { id: 't1', slug: 't1', issuer: 'https://kc/realms/t1' }
+  const NEWSLETTER_CALLBACKS = ['/api/internal/newsletter/render', '/api/internal/newsletter/resolve-group', '/api/internal/newsletter/send-mail']
+
+  async function guard(path: string): Promise<{ res: Response; resolved: boolean }> {
+    const mod = await import('./hooks.server')
+    await mod.boot()
+    const event = makeFakeEvent(path)
+    event.locals.tenant = tenant
+    event.locals.auth = async () => null
+    let resolved = false
+    const res = (await mod.authGuard({
+      event: event as never,
+      resolve: async () => {
+        resolved = true
+        return new Response('public', { status: 200 })
+      },
+    } as never)) as Response
+    return { res, resolved }
+  }
+
+  for (const path of NEWSLETTER_CALLBACKS) {
+    it(`serves the tenant-resolved callback '${path}' without a session (its handler checks the secret)`, async () => {
+      const { res, resolved } = await guard(path)
+      expect(resolved).toBe(true)
+      expect(res.status).toBe(200)
+    })
+  }
+
+  for (const path of [
+    '/api/internal/newsletter/render/extra',
+    '/api/internal/newsletter/renderX',
+    '/api/internal/newsletter/',
+    '/api/internal/newsletter/other',
+    '/api/internal/content/portal-publish',
+    '/api/internal/push',
+  ]) {
+    it(`does NOT serve the tenant-resolved '${path}' without a session: a 401`, async () => {
+      const { res, resolved } = await guard(path)
+      expect(resolved).toBe(false)
+      expect(res.status).toBe(401)
+    })
+  }
+
+  it('PUBLIC_PATHS holds exactly the newsletter keys of LEAF_CALLBACK_ROUTES (content stays guarded until its half is enabled)', async () => {
+    const mod = await import('./hooks.server')
+    const { LEAF_CALLBACK_ROUTES } = await import('$lib/server/tenant/leaf-trust')
+    const newsletterKeys = Object.keys(LEAF_CALLBACK_ROUTES).filter((k) => k.startsWith('/api/internal/newsletter/'))
+    expect(newsletterKeys.toSorted()).toEqual([...NEWSLETTER_CALLBACKS].toSorted())
+    for (const key of newsletterKeys) expect(mod.PUBLIC_PATHS).toContain(key)
+    for (const key of Object.keys(LEAF_CALLBACK_ROUTES).filter((k) => !k.startsWith('/api/internal/newsletter/'))) {
+      expect(mod.PUBLIC_PATHS, `${key} is a content callback: public only with the content half`).not.toContain(key)
+    }
+  })
 })
 
 describe('cspGuard (G-011b)', () => {

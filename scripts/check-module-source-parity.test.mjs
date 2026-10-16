@@ -51,6 +51,8 @@ const APP_FIXTURE = [
   ['lib/server/files/', 'f.ts', 'files'],
   ['lib/server/messages/', 'm.ts', 'messaging'],
   ['lib/server/polls/', 'p.ts', 'votes'],
+  ['lib/server/newsletter/', 'q.ts', 'publishing'],
+  ['lib/server/vault/', 'w.ts', 'vault'],
 ]
 
 function blobOf(root, rel) {
@@ -128,7 +130,19 @@ test('the id map renames exactly messages and newsletter', () => {
   assert.equal(mapSourcePath('gremion-ui/src/lib/votes/aggregator.ts'), 'modules/elections/app/lib/votes/aggregator.ts')
   assert.equal(mapSourcePath('gremion-ui/src/lib/client/cast-service.ts'), 'modules/votes/app/lib/client/cast-service.ts')
   assert.equal(mapSourcePath('gremion-ui/src/routes/users/+page.svelte'), null, 'users/** is TASK-131, not a module app file')
-  for (const id of ['board', 'calendar', 'content', 'elections', 'files', 'messaging', 'votes']) assert.ok(MODULE_APP_PREFIXES[id].length > 0, id)
+  // TASK-205c: publishing (the newsletter half, its leaf callback routes and audit consumer) and vault (vault and vault-extern).
+  assert.equal(mapSourcePath('gremion-ui/src/routes/newsletter/+page.svelte'), 'modules/publishing/app/routes/newsletter/+page.svelte')
+  assert.equal(mapSourcePath('gremion-ui/src/routes/api/internal/newsletter/render/+server.ts'), 'modules/publishing/app/routes/api/internal/newsletter/render/+server.ts')
+  assert.equal(mapSourcePath('gremion-ui/src/lib/server/events/newsletter-audit-consumer.ts'), 'modules/publishing/app/lib/server/events/newsletter-audit-consumer.ts')
+  assert.equal(mapSourcePath('gremion-ui/src/lib/modules/manifests/newsletter.ts'), 'modules/publishing/app/lib/modules/manifests/newsletter.ts')
+  assert.equal(mapSourcePath('gremion-ui/src/routes/vault/+page.svelte'), 'modules/vault/app/routes/vault/+page.svelte')
+  assert.equal(mapSourcePath('gremion-ui/src/routes/vault-extern/+page.svelte'), 'modules/vault/app/routes/vault-extern/+page.svelte')
+  assert.equal(mapSourcePath('gremion-ui/src/lib/modules/manifests/vault.ts'), 'modules/vault/app/lib/modules/manifests/vault.ts')
+  assert.equal(mapSourcePath('gremion-ui/src/lib/modules/manifests/vaultwarden.ts'), null, 'vaultwarden.* is TASK-157, not the vault half')
+  assert.equal(mapSourcePath('gremion-ui/src/lib/server/handover/handover-vault-links.ts'), null, 'handover-vault-links moves with the handover half (TASK-205d)')
+  assert.equal(mapSourcePath('gremion-ui/src/routes/api/internal/content/portal-publish/+server.ts'), 'modules/content/app/routes/api/internal/content/portal-publish/+server.ts')
+  assert.deepEqual(appOwners('gremion-ui/src/lib/server/events/content-audit-consumer.ts'), ['content'])
+  for (const id of ['board', 'calendar', 'content', 'elections', 'files', 'messaging', 'publishing', 'vault', 'votes']) assert.ok(MODULE_APP_PREFIXES[id].length > 0, id)
   assert.deepEqual(appOwners('gremion-ui/src/lib/server/board/x.ts'), ['board'])
 })
 

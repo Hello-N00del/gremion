@@ -127,9 +127,9 @@
     },
     {
       "path": "modules/board/test/lifecycle.integration.test.ts",
-      "reason": "added by R29-BOARD-STORE-K A8: enableModule / disableModule round trip, role proof, no-sleep refusal",
+      "reason": "added by R29-BOARD-STORE-K A8: enableModule / disableModule round trip, role proof, no-sleep refusal; names its release and phase (TASK-075, 4498f081)",
       "owner": "TASK-152",
-      "blob": "0b479373af1a18afea75d4a8b99d115102ed6a2c"
+      "blob": "69081d3177beeb265404235c9dba569a959d96d6"
     },
     {
       "path": "modules/board/test/no-phantom-stura-db.test.ts",
@@ -169,9 +169,9 @@
     },
     {
       "path": "modules/board/test/support/scratch-pg.ts",
-      "reason": "added by R29-BOARD-STORE-K: the suites' one direct scratch-server connection file (allow-listed in tenant-db-access.allow.json)",
+      "reason": "added by R29-BOARD-STORE-K: the suites' one direct scratch-server connection file (allow-listed in tenant-db-access.allow.json); runMigrations names its release and phase (TASK-075, 4498f081)",
       "owner": "TASK-152",
-      "blob": "cf5e4c2214b5e567d1cc036b3021f139222ef755"
+      "blob": "744b5da1c6796c38113d5cfd9a620e3dc0c79f85"
     },
     {
       "path": "modules/board/test/support/tenants.ts",
@@ -1207,9 +1207,9 @@
     },
     {
       "path": "modules/content/app/routes/api/content/posts/[id]/carousel/[index]/+server.ts",
-      "reason": "comment wording only: the design hand-off is named neutrally; no code change",
-      "owner": "TASK-205",
-      "blob": "6f3be310e9ba46f58207cf99bd74993245625454"
+      "reason": "TASK-205c: the kernel names the curated palette registry TENANT_PALETTES (lib/theme/instance-theme.ts, TASK-082); INSTANCE_REGISTRY no longer exists; comment wording: the design hand-off is named neutrally",
+      "owner": "TASK-205c",
+      "blob": "f51ba5e303745ae9719a45fcfb41de9f3be702ce"
     },
     {
       "path": "modules/content/app/routes/content/unsubscribe/+page.server.ts",
@@ -1746,6 +1746,102 @@
       "blob": "6a4368dd21431984732e3506393c378c34c5c504"
     },
     {
+      "path": "modules/publishing/app/lib/server/events/newsletter-audit-consumer.ts",
+      "reason": "post-f2 StuRaOS 871636a: fix(types): svelte-check 12 -> 0 errors (R29-SVCHECK-S); ensureStream takes the mutable string[] NatsBroker.ensureStream takes (the same catch-up calendar-audit-consumer carries)",
+      "owner": "TASK-205c",
+      "blob": "44294143616b00a3c8e61a2c80f993b5459dd0b8"
+    },
+    {
+      "path": "modules/publishing/app/lib/server/newsletter/register.server.ts",
+      "reason": "TASK-205c: NATS_URL read through platformEnv (the default-tenant env family is deleted, TASK-042 T1)",
+      "owner": "TASK-205c",
+      "blob": "2d623f5ee46cf0e6f42efb54b440577c23ed5ae7"
+    },
+    {
+      "path": "modules/publishing/app/routes/api/newsletter/+server.ts",
+      "reason": "TASK-205c: NEXTCLOUD_ADMIN_USER through serviceEnv (the deleted default-tenant env reader)",
+      "owner": "TASK-205c",
+      "blob": "96409b9863fb9c63dc01ce058480ab99053232da"
+    },
+    {
+      "path": "modules/publishing/app/routes/api/newsletter/[id]/preview/+server.ts",
+      "reason": "TASK-205c: NEXTCLOUD_ADMIN_USER through serviceEnv (the deleted default-tenant env reader)",
+      "owner": "TASK-205c",
+      "blob": "24acad6c0bb7f5a8f1bc22b8b8760854f974407b"
+    },
+    {
+      "path": "modules/publishing/app/routes/api/newsletter/[id]/wopi-token/+server.ts",
+      "reason": "TASK-205c: NEXTCLOUD_ADMIN_USER through serviceEnv (the deleted default-tenant env reader)",
+      "owner": "TASK-205c",
+      "blob": "d7e0204ea46f95992a0f683b829de9de22696ef6"
+    },
+    {
+      "path": "modules/publishing/app/routes/api/newsletter/[id]/wopi-token/wopi-token.test.ts",
+      "reason": "TASK-205c: the seam mock follows the route: serviceEnv instead of the deleted default-tenant env reader",
+      "owner": "TASK-205c",
+      "blob": "28fce2b5a26f8679dfcd7820e75b620639eefa96"
+    },
+    {
+      "path": "modules/publishing/app/routes/api/internal/newsletter/render/+server.ts",
+      "reason": "TASK-205c: the shared constantTimeEqual replaces the local timingSafeEqual copy (the kernel Q4 guard in boot-exempt.test.ts requires every /api/internal/ handler to call isInternalTrustRequest or constantTimeEqual)",
+      "owner": "TASK-205c",
+      "blob": "28042f83d3fa9c935422be756f440d4c6a95e7a7"
+    },
+    {
+      "path": "modules/publishing/app/routes/api/internal/newsletter/resolve-group/+server.ts",
+      "reason": "TASK-205c: the shared constantTimeEqual replaces the local timingSafeEqual copy (the kernel Q4 guard in boot-exempt.test.ts requires every /api/internal/ handler to call isInternalTrustRequest or constantTimeEqual)",
+      "owner": "TASK-205c",
+      "blob": "d26ba46b8ace21ae28afc0a79e9d61341112abd0"
+    },
+    {
+      "path": "modules/publishing/app/routes/api/internal/newsletter/send-mail/+server.ts",
+      "reason": "TASK-205c: the shared constantTimeEqual replaces the local timingSafeEqual copy (the kernel Q4 guard in boot-exempt.test.ts requires every /api/internal/ handler to call isInternalTrustRequest or constantTimeEqual)",
+      "owner": "TASK-205c",
+      "blob": "af6c4cbc514fc2c9af8dd56c2cdbee18ad74bcb8"
+    },
+    {
+      "path": "modules/content/app/lib/server/events/content-audit-consumer.ts",
+      "reason": "post-f2 StuRaOS 871636a: fix(types): svelte-check 12 -> 0 errors (R29-SVCHECK-S); ensureStream takes the mutable string[] NatsBroker.ensureStream takes (the same catch-up calendar-audit-consumer carries)",
+      "owner": "TASK-205c",
+      "blob": "7e0bcb4c3d5e8edfba5e0615c5b0950976524f7f"
+    },
+    {
+      "path": "modules/content/app/routes/api/internal/content/portal-publish/+server.ts",
+      "reason": "TASK-205c: the shared constantTimeEqual replaces the local timingSafeEqual copy (the kernel Q4 guard in boot-exempt.test.ts requires every /api/internal/ handler to call isInternalTrustRequest or constantTimeEqual)",
+      "owner": "TASK-205c",
+      "blob": "3ac0f5b20d2c4aca72718a06445377c07689142d"
+    },
+    {
+      "path": "modules/content/app/routes/news/news-page.test.ts",
+      "reason": "TASK-205c: the German dictionary is the kernel's Paraglide catalogue (lib/i18n/messages/de.json); lib/i18n/de.ts no longer exists",
+      "owner": "TASK-205c",
+      "blob": "293ec73f0953059f50e1b116da727f627b8c9b89"
+    },
+    {
+      "path": "modules/publishing/app/lib/server/events/newsletter-audit-consumer.integration.test.ts",
+      "reason": "TASK-205c: no default-tenant registration (deleted, TASK-042); registers tenant-a through createTestTenant, the unknown-tenant cases use a slug no tenant has; neutral tenant-b issuer host (kernel hygiene h2/i1: no retired product host in a shipped surface); same adaptation calendar-audit-consumer.integration.test.ts carries",
+      "owner": "TASK-205c",
+      "blob": "a199df489a27016da5032626a73a695a8400c4c1"
+    },
+    {
+      "path": "modules/content/app/lib/server/events/content-audit-consumer.integration.test.ts",
+      "reason": "TASK-205c: no default-tenant registration (deleted, TASK-042); registers tenant-a through createTestTenant, the unknown-tenant cases use a slug no tenant has; neutral tenant-b issuer host (kernel hygiene h2/i1: no retired product host in a shipped surface); same adaptation calendar-audit-consumer.integration.test.ts carries",
+      "owner": "TASK-205c",
+      "blob": "beb5efb873ddfc18c6e812dc77f684615304a7e3"
+    },
+    {
+      "path": "modules/publishing/app/routes/api/internal/newsletter/newsletter-callbacks.test.ts",
+      "reason": "TASK-205c: neutral sender address in the from_address forwarding case (kernel hygiene h1/h2: no retired wire-root literal or product host in a shipped surface)",
+      "owner": "TASK-205c",
+      "blob": "d2fac80e5343babc2312491a00bea2c0c893b645"
+    },
+    {
+      "path": "modules/publishing/app/lib/server/seed/seed-newsletter.ts",
+      "reason": "TASK-205c: the first demo issue title drops the product name (brand.guard.test.ts: no source file inlines the product literal)",
+      "owner": "TASK-205c",
+      "blob": "aec3f98e21774b44d05e9c91e6e113ef9343e87e"
+    },
+    {
       "path": "modules/content/src/tenant-store.ts",
       "reason": "kernel-ahead of f2: fix(security) bind storeFor to the catalogued tenant identity; a changed slug is refused, not followed (audit #534)",
       "owner": "TASK-205",
@@ -1846,6 +1942,18 @@
       "reason": "added in the kernel after f2: fix(security) bind storeFor to the catalogued tenant identity (audit #534), regression test",
       "owner": "TASK-205",
       "blob": "349816f0b4a4cbf5df7719badc0f1ff9416e019e"
+    },
+    {
+      "path": "modules/publishing/app/routes/api/internal/newsletter/callback-auth.test.ts",
+      "reason": "added by TASK-205c: the three leaf callbacks are public by exact PUBLIC_PATHS entry, so the shared secret is their only gate; table-driven refusal cases (no header, wrong, prefix and extension of the real secret, unset or empty server secret, other header names) and a check that nothing behind the gate is reached",
+      "owner": "TASK-205c",
+      "blob": "d46bad787662704a49593e9c41e7b96dee304d87"
+    },
+    {
+      "path": "modules/publishing/app/routes/api/newsletter/unsubscribe/unsubscribe.test.ts",
+      "reason": "added by TASK-205c: the unsubscribe API is public by exact PUBLIC_PATHS entry, so the single-use token is its only credential; 400 without a token, 404 unknown, 410 expired, no address echoed, rate limit before the lookup, GET only",
+      "owner": "TASK-205c",
+      "blob": "a0676ecf3240c5a73d0482f2236b5c4d614badd6"
     }
   ]
 }

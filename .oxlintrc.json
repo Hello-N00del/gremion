@@ -136,6 +136,11 @@
         "modules/messaging/app/routes/api/video/meeting-room/+server.ts",
         "modules/messaging/app/routes/api/video/token/+server.ts",
         "modules/messaging/app/routes/messages/manage/+page.server.ts",
+        "modules/vault/app/routes/api/vault/+server.ts",
+        "modules/vault/app/routes/api/vault/?id?/+server.ts",
+        "modules/vault/app/routes/api/vault/?id?/secret/+server.ts",
+        "modules/vault/app/routes/api/vault/access-log/+server.ts",
+        "modules/vault/app/routes/vault/+page.server.ts",
         "modules/votes/app/routes/api/polls/+server.ts",
         "modules/votes/app/routes/api/polls/?id?/+server.ts",
         "modules/votes/app/routes/api/polls/?id?/options/+server.ts",
@@ -172,6 +177,7 @@
         "modules/messaging/app/routes/api/messages/api-integration.integration.test.ts",
         "modules/messaging/app/routes/api/messages/rooms/?roomId?/media/media.test.ts",
         "modules/messaging/app/routes/api/messages/rooms/?roomId?/read/read.test.ts",
+        "modules/publishing/app/lib/server/newsletter/backend/resolve.test.ts",
         "modules/publishing/test/api.integration.test.ts"
       ],
       "rules": { "vitest/no-conditional-expect": "off" }
