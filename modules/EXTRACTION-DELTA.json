@@ -228,6 +228,12 @@
       "blob": "5c37bc2a416e001ada04da05a0ad868726e02de7"
     },
     {
+      "path": "modules/content/app/lib/server/content/publish-errors.ts",
+      "reason": "kernel-ahead of f2: StuRaOS#534 follow-up (BFF-409-MISMATCH): TenantIdentityMismatchError and its leaf-body check; the publish client and route answer a leaf 409 tenant_identity_mismatch with its own operator error (502, German text) before the 409 channel-not-publishable mapping",
+      "owner": "TASK-205",
+      "blob": "3fd985fbdde2ee70daf9626cb345ca9777d76cfa"
+    },
+    {
       "path": "modules/content/app/lib/server/content/register.server.ts",
       "reason": "TASK-042 (Q3, G6): the import of the deleted default-tenant env helper replaced by platformEnv('NATS_URL') from $lib/server/env/platform-env - NATS_URL is deployment-global and the kernel boots with zero tenants",
       "owner": "TASK-042",
@@ -250,6 +256,18 @@
       "reason": "added: forward migration narrowing 1200's whole-table public-reader grant to the seven portal columns of published rows, with RLS (Q9); numbered 1201 per R26-25; not a StuRa file",
       "owner": "TASK-200",
       "blob": "7573db1aa2d4f6adc5c5a5572554b55f1483b745"
+    },
+    {
+      "path": "modules/content/app/routes/api/content/posts/[id]/publish/[channel]/+server.ts",
+      "reason": "kernel-ahead of f2: StuRaOS#534 follow-up (BFF-409-MISMATCH): the publish client and route answer a leaf 409 tenant_identity_mismatch with its own operator error (502, German text) before the 409 channel-not-publishable mapping",
+      "owner": "TASK-205",
+      "blob": "800ed66791a612eb957092fa654390917e9b5c23"
+    },
+    {
+      "path": "modules/content/app/routes/api/content/posts/[id]/publish/[channel]/publish-channel.test.ts",
+      "reason": "kernel-ahead of f2: StuRaOS#534 follow-up (BFF-409-MISMATCH): the publish client and route answer a leaf 409 tenant_identity_mismatch with its own operator error (502, German text) before the 409 channel-not-publishable mapping; the route test pins the 502 mapping",
+      "owner": "TASK-205",
+      "blob": "45431d49da9cc568c2bfb81f60954e2af91c339a"
     },
     {
       "path": "modules/content/app/scripts/news-posts-public-grant-proof.sh",
@@ -1141,15 +1159,15 @@
     },
     {
       "path": "modules/content/app/lib/server/content/backend/service-client.test.ts",
-      "reason": "kernel-ahead of f2: 317a5f53 fix(content): native path - claim token fence (L1), do-not-re-publish wins a mixed pass (L2), unknow",
+      "reason": "kernel-ahead of f2: 317a5f53 fix(content): native path - claim token fence (L1), do-not-re-publish wins a mixed pass (L2), unknow; StuRaOS#534 follow-up (BFF-409-MISMATCH): the publish client and route answer a leaf 409 tenant_identity_mismatch with its own operator error (502, German text) before the 409 channel-not-publishable mapping",
       "owner": "TASK-205",
-      "blob": "2643cd861736badd21e0675ecb496ce103512666"
+      "blob": "f070fd92cfca53d3c0a339a62a7150561842512d"
     },
     {
       "path": "modules/content/app/lib/server/content/backend/service-client.ts",
-      "reason": "kernel-ahead of f2: 317a5f53 fix(content): native path - claim token fence (L1), do-not-re-publish wins a mixed pass (L2), unknow",
+      "reason": "kernel-ahead of f2: 317a5f53 fix(content): native path - claim token fence (L1), do-not-re-publish wins a mixed pass (L2), unknow; StuRaOS#534 follow-up (BFF-409-MISMATCH): the publish client and route answer a leaf 409 tenant_identity_mismatch with its own operator error (502, German text) before the 409 channel-not-publishable mapping",
       "owner": "TASK-205",
-      "blob": "5500eed417de4b706e7a8dd45745c7809fbe94b1"
+      "blob": "cd475aa0a9b773a0664b64c29901020049adb340"
     },
     {
       "path": "modules/content/app/lib/server/content/channels/email-renderer.test.ts",
