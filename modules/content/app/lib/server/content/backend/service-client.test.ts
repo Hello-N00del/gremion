@@ -10,7 +10,7 @@ vi.mock('$lib/server/tenant/context', () => ({
 }))
 
 import { ServiceContentClient, ContentServiceError } from './service-client'
-import { ChannelNotPublishableError } from '../publish-errors'
+import { ChannelNotPublishableError, TenantIdentityMismatchError } from '../publish-errors'
 
 beforeEach(() => {
   process.env.CONTENT_SERVICE_URL = 'http://content-service:8080'
@@ -185,6 +185,19 @@ describe('ServiceContentClient', () => {
     ;(c as any).fetchImpl = fetchImpl
     await expect(c.publish('post-7', 'email')).rejects.toBeInstanceOf(ChannelNotPublishableError)
     // POST is not retried.
+    expect(fetchImpl).toHaveBeenCalledTimes(1)
+  })
+
+  it('publish surfaces a leaf 409 tenant_identity_mismatch as TenantIdentityMismatchError, not ChannelNotPublishableError', async () => {
+    const fetchImpl = vi.fn(async () =>
+      jsonRes({ success: false, error: 'tenant_identity_mismatch' }, 409),
+    )
+    const c = new ServiceContentClient()
+    ;(c as any).fetchImpl = fetchImpl
+    const err = await c.publish('post-7', 'email').catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(TenantIdentityMismatchError)
+    expect(err).not.toBeInstanceOf(ChannelNotPublishableError)
+    expect((err as Error).message).toMatch(/Mandantenzuordnung/)
     expect(fetchImpl).toHaveBeenCalledTimes(1)
   })
 
