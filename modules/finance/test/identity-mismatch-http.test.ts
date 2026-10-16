@@ -27,9 +27,9 @@ const SECRET = 'identity-mismatch-secret'
 const BOUND: TenantRef = { id: 'a1000000-0000-4000-8000-0000000000a1', slug: 'bind-a' }
 const ROUTE = '/api/v1/projects'
 
-const headers = (slug: string): Record<string, string> => ({
+const headers = (slug: string, id: string = BOUND.id): Record<string, string> => ({
   'x-internal-auth': SECRET,
-  'x-tenant-id': BOUND.id,
+  'x-tenant-id': id,
   'x-tenant-slug': slug,
   'content-type': 'application/json',
   'x-finance-user-id': 'u',
@@ -94,6 +94,13 @@ describe('finance http: tenant_identity_mismatch', () => {
     expect(text).not.toContain(BOUND.id)
     expect(text).not.toContain(BOUND.slug)
     expect(text).not.toContain('bind-b')
+  })
+
+  it('the reserved slug "control" reaches the store and is a 400 invalid_tenant_slug, not a 500', async () => {
+    const res = await fetch(`${base}${ROUTE}`, { headers: headers('control', 'a2000000-0000-4000-8000-0000000000a2') })
+    expect(res.status).toBe(400)
+    expect(await res.json()).toEqual({ success: false, error: 'invalid_tenant_slug' })
+    expect(storeCalls).toHaveLength(1)
   })
 
   it('exports the refusal as a coded error', () => {

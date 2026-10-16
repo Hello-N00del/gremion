@@ -242,6 +242,47 @@ describe('storeFor refuses a pair the catalog does not bind (warm pool)', () => 
   })
 })
 
+describe('storeFor refuses a slug that is not a tenant database (B2b, B2d), before any database work', () => {
+  const nothingTouched = (): void => {
+    expect(h.opened).toEqual([])
+    expect(h.writes).toEqual([])
+    expect(h.databases.size).toBe(0)
+    expect(h.catalog).toEqual([])
+  }
+
+  it('the reserved slug "control" is refused: <prefix>control is the catalog database', async () => {
+    const err = await storeFor({ id: A.id, slug: 'control' }, OPTS).catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(InvalidTenantSlugError)
+    expect(err).toMatchObject({ code: 'INVALID_TENANT_SLUG', name: 'InvalidTenantSlugError' })
+    expect((err as Error).message).toMatch(/reserved/)
+    nothingTouched()
+  })
+
+  it('a slug that merely contains control is a tenant like any other', async () => {
+    h.databases.add(CONTROL_DB)
+    await expect(storeFor({ id: A.id, slug: 'control-room' }, OPTS)).resolves.toBeDefined()
+    expect(h.catalog.map((r) => r.slug)).toEqual(['control-room'])
+  })
+
+  it('a slug whose database name is the maintenance database of the admin url is refused', async () => {
+    // An empty prefix makes <prefix><slug> the url database itself.
+    await expect(storeFor({ id: A.id, slug: 'postgres' }, { ...OPTS, dbPrefix: '' })).rejects.toThrow(/maintenance database/)
+    await expect(
+      storeFor({ id: A.id, slug: 'maint' }, { pgUrl: 'postgres://u:p@127.0.0.1:59999/maint', dbPrefix: '' }),
+    ).rejects.toThrow(/maintenance database/)
+    nothingTouched()
+  })
+
+  it('postgres and the template databases are never served as a tenant database', async () => {
+    for (const slug of ['postgres', 'template0', 'template1']) {
+      await expect(
+        storeFor({ id: A.id, slug }, { pgUrl: 'postgres://u:p@127.0.0.1:59999/other', dbPrefix: '' }),
+      ).rejects.toThrow(/maintenance database/)
+    }
+    nothingTouched()
+  })
+})
+
 // ── source guard: the binding cannot be removed or bypassed unnoticed ──────────
 const here = path.dirname(fileURLToPath(import.meta.url))
 const SRC = path.resolve(here, '..', 'src')

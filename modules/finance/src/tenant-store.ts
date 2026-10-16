@@ -668,6 +668,33 @@ function assertValidSlug(slug: string): void {
         `Refusing to build a database name from this value.`,
     )
   }
+  // <prefix>control is the catalog database. A tenant with the slug `control`
+  // would be handed the catalog as its own database (board's B2b).
+  if (RESERVED_SLUGS.has(slug)) {
+    throw new InvalidTenantSlugError(
+      `[tenant-store] invalid tenant slug "${slug}": reserved (<prefix>${slug} is the catalog database).`,
+    )
+  }
+}
+
+/** Slugs whose <prefix><slug> is not a tenant database. */
+export const RESERVED_SLUGS: ReadonlySet<string> = new Set(['control'])
+
+/** Databases every cluster has, whatever the admin url names: never a tenant's. */
+const CLUSTER_DATABASES: ReadonlySet<string> = new Set(['postgres', 'template0', 'template1'])
+
+/**
+ * storeFor never hands out a pool on the maintenance database named by the admin
+ * url (its own path), nor on postgres or a template database (board's B2d). With
+ * an empty prefix a slug such as `postgres` would otherwise name one of them.
+ */
+function assertNotMaintenanceDb(adminUrl: string, dbName: string): void {
+  const maintenance = decodeURIComponent(new URL(adminUrl).pathname.slice(1))
+  if (dbName === maintenance || CLUSTER_DATABASES.has(dbName)) {
+    throw new Error(
+      `[tenant-store] refusing to serve the maintenance database "${dbName}" of the admin url as a tenant database`,
+    )
+  }
 }
 
 /**
@@ -922,6 +949,7 @@ export async function storeFor(tenant: TenantRef, options: StoreForOptions = {})
   assertValidSlug(tenant.slug)
 
   const dbName = dbPrefix + tenant.slug
+  assertNotMaintenanceDb(pgUrl, dbName)
 
   const ctrl = await ensureControlDb(pgUrl, dbPrefix)
   // Bind (id, slug) in the catalog BEFORE any database is created.
