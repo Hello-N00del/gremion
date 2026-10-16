@@ -26,7 +26,7 @@ export async function seedNewsletter(
     update: Parameters<NewsletterBackendPort['updateNewsletter']>[1]
   }> = [
     {
-      title: 'StuRaOS Update April 2026',
+      title: 'Update April 2026',
       update: { status: 'sent', sent_at: '2026-04-01T10:00:00' },
     },
     {

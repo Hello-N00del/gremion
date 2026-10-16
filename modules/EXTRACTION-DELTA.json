@@ -1798,6 +1798,12 @@
       "reason": "TASK-205c: neutral sender address in the from_address forwarding case (kernel hygiene h1/h2: no retired wire-root literal or product host in a shipped surface)",
       "owner": "TASK-205c",
       "blob": "d2fac80e5343babc2312491a00bea2c0c893b645"
+    },
+    {
+      "path": "modules/publishing/app/lib/server/seed/seed-newsletter.ts",
+      "reason": "TASK-205c: the first demo issue title drops the product name (brand.guard.test.ts: no source file inlines the product literal)",
+      "owner": "TASK-205c",
+      "blob": "aec3f98e21774b44d05e9c91e6e113ef9343e87e"
     }
   ]
 }
