@@ -283,9 +283,9 @@
     },
     {
       "path": "modules/content/test/guard.test.ts",
-      "reason": "kernel hygiene h2/(i): retired host -> example.org, lowercase product token -> gremion",
+      "reason": "kernel hygiene h2/(i): retired host -> example.org, lowercase product token -> gremion; StuRaOS#534 hardening: hardening tests",
       "owner": "TASK-200",
-      "blob": "ba6a7948e9415bab9db865cebd7304d4265a4651"
+      "blob": "b53c868af5944bc41d24353435ce92e923f96b8d"
     },
     {
       "path": "modules/content/test/kernel-client.test.ts",
@@ -319,9 +319,9 @@
     },
     {
       "path": "modules/finance/test/api.integration.test.ts",
-      "reason": "postgres major pin (lint-postgres-major): the pre-pin major-16 alpine tag -> the pinned major-18 alpine tag, in a test-DB guard's guidance string",
+      "reason": "postgres major pin (lint-postgres-major): the pre-pin major-16 alpine tag -> the pinned major-18 alpine tag, in a test-DB guard's guidance string; StuRaOS#534 hardening: fixture tenant ids made canonical for the guard",
       "owner": "TASK-200",
-      "blob": "7fa5f4331d98a676785f7a19e728c38c36155286"
+      "blob": "f6f29360c035a395617c9d0cdebbdbfac0745828"
     },
     {
       "path": "modules/finance/test/org-unit-mirror.integration.test.ts",
@@ -487,9 +487,9 @@
     },
     {
       "path": "modules/publishing/test/guard.test.ts",
-      "reason": "kernel hygiene h2/(i): retired host -> example.org, lowercase product token -> gremion",
+      "reason": "kernel hygiene h2/(i): retired host -> example.org, lowercase product token -> gremion; StuRaOS#534 hardening: hardening tests",
       "owner": "TASK-200",
-      "blob": "43536182a2bb433675becbf037c1f53e9d6e5f8f"
+      "blob": "d1e6d228127198327e427bf3128a9bedc52f7f20"
     },
     {
       "path": "modules/publishing/test/kernel-client.test.ts",
@@ -841,9 +841,9 @@
     },
     {
       "path": "modules/content/src/http/routes.ts",
-      "reason": "kernel-ahead of f2: 6151e5ca fix(content): the HTTP claim route returns the claim token and the failed route fences on it (R29-LO",
+      "reason": "kernel-ahead of f2: 6151e5ca fix(content): the HTTP claim route returns the claim token and the failed route fences on it (R29-LO; StuRaOS#534 hardening: the typed tenant id and slug refusals answer 400 (invalid_tenant_id, invalid_tenant_slug)",
       "owner": "TASK-205",
-      "blob": "ae83606a0453b44ad0f8b8cbf029876deb060b15"
+      "blob": "53953d8ed9227f460827e0b030c1b8d1888a2b0c"
     },
     {
       "path": "modules/files/src/nextcloud/webdav-client.ts",
@@ -919,9 +919,9 @@
     },
     {
       "path": "modules/calendar/src/http/routes.ts",
-      "reason": "kernel-ahead of f2: d2cfe36c fix(calendar): validate RRULE BYDAY and fold ICS lines at 75 octets (F1-FIX-08-K K4#21)",
+      "reason": "kernel-ahead of f2: d2cfe36c fix(calendar): validate RRULE BYDAY and fold ICS lines at 75 octets (F1-FIX-08-K K4#21); StuRaOS#534 hardening: the typed tenant id and slug refusals answer 400 (invalid_tenant_id, invalid_tenant_slug)",
       "owner": "TASK-205",
-      "blob": "fe51518c107c6de3661183013587d0ea635be9ba"
+      "blob": "cce8fefcc78c2727cd2195f2f3622d466f379242"
     },
     {
       "path": "modules/calendar/src/index.ts",
@@ -955,9 +955,9 @@
     },
     {
       "path": "modules/content/src/http/guard.ts",
-      "reason": "kernel-ahead of f2: 3f972290 fix(content): /healthz/tenants needs the internal secret and answers booleans only (F1-FIX-07 K5#12,",
+      "reason": "kernel-ahead of f2: 3f972290 fix(content): /healthz/tenants needs the internal secret and answers booleans only (F1-FIX-07 K5#12,; StuRaOS#534 hardening: x-tenant-id must be a canonical lowercase UUID, refused 400 before any store access",
       "owner": "TASK-205",
-      "blob": "e3a0b763bc549f342faa1139b38942a31ad6ccaf"
+      "blob": "c92a0d401faa1d0dd9961e0be209a0c94beb6ff1"
     },
     {
       "path": "modules/content/src/http/server.ts",
@@ -1003,9 +1003,9 @@
     },
     {
       "path": "modules/content/test/api.integration.test.ts",
-      "reason": "kernel-ahead of f2: 6151e5ca fix(content): the HTTP claim route returns the claim token and the failed route fences on it (R29-LO",
+      "reason": "kernel-ahead of f2: 6151e5ca fix(content): the HTTP claim route returns the claim token and the failed route fences on it (R29-LO; StuRaOS#534 hardening: fixture tenant ids made canonical for the guard",
       "owner": "TASK-205",
-      "blob": "1c7f985ac692876edfbf5be0c217309ad6d0006a"
+      "blob": "0f2cd74d5e04cd4a075d43d6251a49d69f14c6b7"
     },
     {
       "path": "modules/content/test/dispatch.integration.test.ts",
@@ -1021,9 +1021,9 @@
     },
     {
       "path": "modules/content/test/scheduler.integration.test.ts",
-      "reason": "kernel-ahead of f2: e13c74f1 fix(content): a failed scheduled publish is logged, and an unusable link base parks the channel (F1-",
+      "reason": "kernel-ahead of f2: e13c74f1 fix(content): a failed scheduled publish is logged, and an unusable link base parks the channel (F1-; StuRaOS#534 hardening: fixture tenant ids made canonical for the guard",
       "owner": "TASK-205",
-      "blob": "71193872faa680fb42d7fbb9b518c491ec850cff"
+      "blob": "ce4811c526de09861a0231296cd693cf5b0740bd"
     },
     {
       "path": "modules/content/test/scheduler.test.ts",
@@ -1057,15 +1057,15 @@
     },
     {
       "path": "modules/finance/src/http/guard.ts",
-      "reason": "kernel-ahead of f2: 70f983b9 fix(finance): /healthz/tenants behind the internal secret, booleans only (F1-FIX-05-K, K4#32)",
+      "reason": "kernel-ahead of f2: 70f983b9 fix(finance): /healthz/tenants behind the internal secret, booleans only (F1-FIX-05-K, K4#32); StuRaOS#534 hardening: x-tenant-id must be a canonical lowercase UUID, refused 400 before any store access",
       "owner": "TASK-205",
-      "blob": "ef2ee4495cd4277dc6d444a1fcbfe0a4a5ba340b"
+      "blob": "afad513231b87e0e6d4dd496c9b3702bc497686f"
     },
     {
       "path": "modules/finance/src/http/server.ts",
-      "reason": "kernel-ahead of f2: 06bbe1a9 fix(finance): malformed or non-object JSON body is a 400, not an empty body (F1-FIX-05-K, K4#4)",
+      "reason": "kernel-ahead of f2: 06bbe1a9 fix(finance): malformed or non-object JSON body is a 400, not an empty body (F1-FIX-05-K, K4#4); StuRaOS#534 hardening: the typed tenant id and slug refusals answer 400 (invalid_tenant_id, invalid_tenant_slug)",
       "owner": "TASK-205",
-      "blob": "a4e120c0a71091588310f2c9711227084d1714ed"
+      "blob": "3bc0ab5941923ea5de4500d500379b804edb9925"
     },
     {
       "path": "modules/finance/src/index.ts",
@@ -1861,105 +1861,147 @@
     },
     {
       "path": "modules/content/src/tenant-store.ts",
-      "reason": "kernel-ahead of f2: fix(security) bind storeFor to the catalogued tenant identity; a changed slug is refused, not followed (audit #534)",
+      "reason": "kernel-ahead of f2: fix(security) bind storeFor to the catalogued tenant identity; a changed slug is refused, not followed (audit #534); StuRaOS#534 hardening: typed InvalidTenantIdError and InvalidTenantSlugError, the reserved slug and the maintenance database refused, evictTenantPools for teardown",
       "owner": "TASK-205",
-      "blob": "5dd294897ac69c5a7d651b47dbc7d0cebb084201"
+      "blob": "344e2d0e733f229bfe397a8e562d042cff44406e"
     },
     {
       "path": "modules/content/test/identity-mismatch-http.test.ts",
-      "reason": "added in the kernel after f2: fix(security) bind storeFor to the catalogued tenant identity (audit #534), regression test",
+      "reason": "added in the kernel after f2: fix(security) bind storeFor to the catalogued tenant identity (audit #534), regression test; StuRaOS#534 hardening: hardening tests",
       "owner": "TASK-205",
-      "blob": "8872452f8abd416a2dbc6d77c58f5eaf0326c4ca"
+      "blob": "dd9785e1a185c2ae5f2076dd3901b3f6bc1b1433"
     },
     {
       "path": "modules/content/test/tenant-store.identity-binding.test.ts",
-      "reason": "added in the kernel after f2: fix(security) bind storeFor to the catalogued tenant identity (audit #534), regression test",
+      "reason": "added in the kernel after f2: fix(security) bind storeFor to the catalogued tenant identity (audit #534), regression test; StuRaOS#534 hardening: hardening tests",
       "owner": "TASK-205",
-      "blob": "41b02433810da55035278d793ace025a05d7df88"
+      "blob": "dc49f83b3dd9363b8ebe7472c2af682cdf41f91f"
     },
     {
       "path": "modules/content/test/tenant-store.identity-binding.integration.test.ts",
-      "reason": "added in the kernel after f2: fix(security) bind storeFor to the catalogued tenant identity (audit #534), regression test",
+      "reason": "added in the kernel after f2: fix(security) bind storeFor to the catalogued tenant identity (audit #534), regression test; StuRaOS#534 hardening: hardening tests",
       "owner": "TASK-205",
-      "blob": "a56640f47e816bb80882a5d93b7d88821a1f819f"
+      "blob": "bc5f8b99258aa78635ce87c73100475af7b04405"
+    },
+    {
+      "path": "modules/content/src/http/admin-routes.ts",
+      "reason": "kernel-ahead of f2: StuRaOS#534 hardening: teardown evicts the tenant pool before DROP DATABASE, the catalog row is kept (409) while its database exists, the reserved slug control is never dropped, dbPrefix dependency",
+      "owner": "TASK-205",
+      "blob": "8c344770537997d7ba52d366c56c2586908d9a5a"
+    },
+    {
+      "path": "modules/content/test/admin-routes.teardown.integration.test.ts",
+      "reason": "kernel-ahead of f2: StuRaOS#534 hardening: hardening tests",
+      "owner": "TASK-205",
+      "blob": "e94d22e0a863a27fc3d6fd789c2a2bd6a67d3c6f"
+    },
+    {
+      "path": "modules/content/test/admin-routes.teardown.test.ts",
+      "reason": "kernel-ahead of f2: StuRaOS#534 hardening: hardening tests",
+      "owner": "TASK-205",
+      "blob": "1029514938d4bf81dace86d1b441fdc8ed6b132d"
     },
     {
       "path": "modules/calendar/src/tenant-store.ts",
-      "reason": "kernel-ahead of f2: fix(security) bind storeFor to the catalogued tenant identity; a changed slug is refused, not followed (audit #534)",
+      "reason": "kernel-ahead of f2: fix(security) bind storeFor to the catalogued tenant identity; a changed slug is refused, not followed (audit #534); StuRaOS#534 hardening: typed InvalidTenantIdError and InvalidTenantSlugError, the reserved slug and the maintenance database refused, evictTenantPools for teardown",
       "owner": "TASK-205",
-      "blob": "0c0d2ab6e5f79ab3b5fa3573558a45b0c7a697c9"
+      "blob": "e737c3a37d7704f5213e7bbcfd8486c0a57e8a17"
     },
     {
       "path": "modules/calendar/test/identity-mismatch-http.test.ts",
-      "reason": "added in the kernel after f2: fix(security) bind storeFor to the catalogued tenant identity (audit #534), regression test",
+      "reason": "added in the kernel after f2: fix(security) bind storeFor to the catalogued tenant identity (audit #534), regression test; StuRaOS#534 hardening: hardening tests",
       "owner": "TASK-205",
-      "blob": "dc48e8cfd07d064f2dd9985bacc9782f471e2b70"
+      "blob": "d8705e6288bccd57e0ef3e27cd4e9b67740c1ef7"
     },
     {
       "path": "modules/calendar/test/tenant-store.identity-binding.test.ts",
-      "reason": "added in the kernel after f2: fix(security) bind storeFor to the catalogued tenant identity (audit #534), regression test",
+      "reason": "added in the kernel after f2: fix(security) bind storeFor to the catalogued tenant identity (audit #534), regression test; StuRaOS#534 hardening: hardening tests",
       "owner": "TASK-205",
-      "blob": "7def37132d1ff45e5318f61ddf17d9662809666e"
+      "blob": "0a77c68bedb74027b755cb7866e5b66f4c56c624"
     },
     {
       "path": "modules/calendar/test/tenant-store.identity-binding.integration.test.ts",
-      "reason": "added in the kernel after f2: fix(security) bind storeFor to the catalogued tenant identity (audit #534), regression test",
+      "reason": "added in the kernel after f2: fix(security) bind storeFor to the catalogued tenant identity (audit #534), regression test; StuRaOS#534 hardening: hardening tests",
       "owner": "TASK-205",
-      "blob": "49784cf9f4cd85ef268d88de8cba41723bdf596c"
+      "blob": "9c0daf051e295199ceb70cf844f79aaa76267328"
+    },
+    {
+      "path": "modules/calendar/src/http/guard.ts",
+      "reason": "kernel-ahead of f2: StuRaOS#534 hardening: x-tenant-id must be a canonical lowercase UUID, refused 400 before any store access",
+      "owner": "TASK-205",
+      "blob": "122745bd4bc920185dc9666bb9eccec998a01abe"
+    },
+    {
+      "path": "modules/calendar/test/api.integration.test.ts",
+      "reason": "kernel-ahead of f2: StuRaOS#534 hardening: fixture tenant ids made canonical for the guard",
+      "owner": "TASK-205",
+      "blob": "5eabb877c8a6cffedb973de010a94a7d2a1c3ce5"
+    },
+    {
+      "path": "modules/calendar/test/guard.test.ts",
+      "reason": "kernel-ahead of f2: StuRaOS#534 hardening: hardening tests",
+      "owner": "TASK-205",
+      "blob": "79b3d16fce215b70bdd3af4d2702f121fbfe0869"
     },
     {
       "path": "modules/publishing/src/tenant-store.ts",
-      "reason": "kernel-ahead of f2: fix(security) bind storeFor to the catalogued tenant identity; a changed slug is refused, not followed (audit #534)",
+      "reason": "kernel-ahead of f2: fix(security) bind storeFor to the catalogued tenant identity; a changed slug is refused, not followed (audit #534); StuRaOS#534 hardening: typed InvalidTenantIdError and InvalidTenantSlugError, the reserved slug and the maintenance database refused, evictTenantPools for teardown",
       "owner": "TASK-205",
-      "blob": "d8b99191d6aed0d8511ae9c83c63fe1a55ea387b"
+      "blob": "134b18f75139cb63ba558787fd8fc7e70d2855d3"
     },
     {
       "path": "modules/publishing/src/http/routes.ts",
-      "reason": "kernel-ahead of f2: fix(security) bind storeFor to the catalogued tenant identity; a changed slug is refused, not followed (audit #534)",
+      "reason": "kernel-ahead of f2: fix(security) bind storeFor to the catalogued tenant identity; a changed slug is refused, not followed (audit #534); StuRaOS#534 hardening: the typed tenant id and slug refusals answer 400 (invalid_tenant_id, invalid_tenant_slug)",
       "owner": "TASK-205",
-      "blob": "bff60881f35f35a6e87a8b42f682b81dd88e1c3c"
+      "blob": "b42c2813179edcf1739e85a5858aca3406dafd51"
     },
     {
       "path": "modules/publishing/test/identity-mismatch-http.test.ts",
-      "reason": "added in the kernel after f2: fix(security) bind storeFor to the catalogued tenant identity (audit #534), regression test",
+      "reason": "added in the kernel after f2: fix(security) bind storeFor to the catalogued tenant identity (audit #534), regression test; StuRaOS#534 hardening: hardening tests",
       "owner": "TASK-205",
-      "blob": "0f5f636cfad3729ae49646bf2d372d49dd02b030"
+      "blob": "22e0df52b211e4d1ece32322b45bc8d050416ca9"
     },
     {
       "path": "modules/publishing/test/tenant-store.identity-binding.test.ts",
-      "reason": "added in the kernel after f2: fix(security) bind storeFor to the catalogued tenant identity (audit #534), regression test",
+      "reason": "added in the kernel after f2: fix(security) bind storeFor to the catalogued tenant identity (audit #534), regression test; StuRaOS#534 hardening: hardening tests",
       "owner": "TASK-205",
-      "blob": "16c2bb3483245dcb3d934136f7ab5b89547c097d"
+      "blob": "85577ce2cdb4b5d880f8f672b44c51f18bb391bd"
     },
     {
       "path": "modules/publishing/test/tenant-store.identity-binding.integration.test.ts",
-      "reason": "added in the kernel after f2: fix(security) bind storeFor to the catalogued tenant identity (audit #534), regression test",
+      "reason": "added in the kernel after f2: fix(security) bind storeFor to the catalogued tenant identity (audit #534), regression test; StuRaOS#534 hardening: hardening tests",
       "owner": "TASK-205",
-      "blob": "1700e0e5ffaf415d676fad26d87e5983bfa827b4"
+      "blob": "1063442413bf11f46b14a437f202c16fef6fe3d4"
     },
     {
       "path": "modules/finance/src/tenant-store.ts",
-      "reason": "kernel-ahead of f2: fix(security) bind storeFor to the catalogued tenant identity; a changed slug is refused, not followed (audit #534)",
+      "reason": "kernel-ahead of f2: fix(security) bind storeFor to the catalogued tenant identity; a changed slug is refused, not followed (audit #534); StuRaOS#534 hardening: typed InvalidTenantIdError and InvalidTenantSlugError, the reserved slug and the maintenance database refused, evictTenantPools for teardown",
       "owner": "TASK-205",
-      "blob": "e9688b13be262b7d8d3ce691a7c6e50418119d02"
+      "blob": "e461f660420a9648b552959615cfe044c5cb2e91"
     },
     {
       "path": "modules/finance/test/identity-mismatch-http.test.ts",
-      "reason": "added in the kernel after f2: fix(security) bind storeFor to the catalogued tenant identity (audit #534), regression test",
+      "reason": "added in the kernel after f2: fix(security) bind storeFor to the catalogued tenant identity (audit #534), regression test; StuRaOS#534 hardening: hardening tests",
       "owner": "TASK-205",
-      "blob": "b157c2bc02ca5c58721e60239bd97d62019db194"
+      "blob": "54b795b34f17a083f403bb6ba423efeb44bdf5e0"
     },
     {
       "path": "modules/finance/test/tenant-store.identity-binding.test.ts",
-      "reason": "added in the kernel after f2: fix(security) bind storeFor to the catalogued tenant identity (audit #534), regression test",
+      "reason": "added in the kernel after f2: fix(security) bind storeFor to the catalogued tenant identity (audit #534), regression test; StuRaOS#534 hardening: hardening tests",
       "owner": "TASK-205",
-      "blob": "15c4df872e3df4112d49427a43b5dd5c1c32e526"
+      "blob": "264929c126832bb488d12394cc0aecda39b11881"
     },
     {
       "path": "modules/finance/test/tenant-store.identity-binding.integration.test.ts",
-      "reason": "added in the kernel after f2: fix(security) bind storeFor to the catalogued tenant identity (audit #534), regression test",
+      "reason": "added in the kernel after f2: fix(security) bind storeFor to the catalogued tenant identity (audit #534), regression test; StuRaOS#534 hardening: hardening tests",
       "owner": "TASK-205",
-      "blob": "349816f0b4a4cbf5df7719badc0f1ff9416e019e"
+      "blob": "0b0b4cecef2a6249f77fe5b4994a01e01f6545c8"
+    },
+    {
+      "path": "modules/finance/test/guard.test.ts",
+      "reason": "kernel-ahead of f2: StuRaOS#534 hardening: hardening tests",
+      "owner": "TASK-205",
+      "blob": "5aafc2e2dd6608568a0d4df8a3a636f03f1151e3"
     },
     {
       "path": "modules/publishing/app/routes/api/internal/newsletter/callback-auth.test.ts",
@@ -2026,6 +2068,18 @@
       "reason": "added by NEWSLETTER-UNSUB-POST: the page makes no request on load, shows the confirm button, POSTs the token in a JSON body on click only (no second POST while in flight), and maps 410/404/429/503/network failure to their own messages",
       "owner": "TASK-205c",
       "blob": "a960bc5f100cbef3a1e33d720faa5b2ef155867a"
+    },
+    {
+      "path": "modules/publishing/src/http/guard.ts",
+      "reason": "kernel-ahead of f2: StuRaOS#534 hardening: x-tenant-id must be a canonical lowercase UUID, refused 400 before any store access",
+      "owner": "TASK-205",
+      "blob": "aba5a719e971b7ada08f53e9d7eb8e4f673e707a"
+    },
+    {
+      "path": "modules/publishing/test/api.integration.test.ts",
+      "reason": "kernel-ahead of f2: StuRaOS#534 hardening: fixture tenant ids made canonical for the guard",
+      "owner": "TASK-205",
+      "blob": "80dc9e28454fbe218d29e873e7b28482fbde68c2"
     }
   ]
 }
