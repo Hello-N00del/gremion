@@ -288,21 +288,25 @@ test('real tree: kernel-data holds the 31 legacy files (floor 58), the F1-FIX-02
   assert.equal(s.slugs.slugs.length, 29)
 })
 
-test('real tree: the platform chain holds TASK-021 plt migrations 0001-0003 (legacy, floor 3) and TASK-043 0004 (Q18 claim), locked, next claim 0005', () => {
+test('real tree: the platform chain holds TASK-021 plt migrations 0001-0003 (legacy, floor 3) and every later claim (0004 TASK-043, 0005 TASK-039-FU, ...), locked, next claim is highWater + 1', () => {
   const s = treeState()
   const c = s.register.chains.find((x) => x.id === 'platform')
   assert.ok(c, 'ranges.json declares no platform chain (TASK-077 precondition, TASK-043 Q18)')
   const dir = 'packages/tenant-store/src/lifecycle/platform-migrations'
   const legacy = ['0001_plt_setup.sql', '0002_plt_module.sql', '0003_plt_module_database.sql']
-  const names = [...legacy, '0004_plt_provisioning_step.sql']
+  // derived from the tree (R31 O6): a later platform claim adds a toContain line, never a rewrite of a verbatim list
+  const names = s.files.filter((f) => f.path.startsWith(`${dir}/`)).map((f) => f.path.slice(dir.length + 1))
   assert.equal(c.database, 'gremion_platform')
   assert.deepEqual(c.dirs, [dir])
   assert.deepEqual(c.manifestDirs, [dir])
   assert.equal(c.padWidth, 4)
   assert.equal(c.legacyFloor, 3)
-  assert.equal(c.highWater, 4)
   assert.deepEqual([...c.legacy].sort(byName), legacy)
-  assert.deepEqual(s.files.filter((f) => f.path.startsWith(`${dir}/`)).map((f) => f.path.slice(dir.length + 1)), names)
-  assert.deepEqual(Object.keys(s.lock.chains.platform?.files ?? {}), names)
-  assert.equal(claim({ register: s.register, files: s.files.map((f) => f.path), chain: 'platform', name: 'next' }).filename, '0005_next.sql')
+  assert.deepEqual(names.slice(0, 4), [...legacy, '0004_plt_provisioning_step.sql'])
+  assert.ok(names.includes('0005_plt_scheduled_job.sql'), 'TASK-039-FU claimed platform 0005')
+  assert.deepEqual([...names].sort(byName), names, 'files are in numeric order')
+  assert.equal(c.highWater, names.length, 'highWater is the highest file number (no gap above the legacy floor)')
+  assert.equal(Number(names.at(-1).slice(0, 4)), c.highWater)
+  assert.deepEqual(Object.keys(s.lock.chains.platform?.files ?? {}).sort(byName), names)
+  assert.equal(claim({ register: s.register, files: s.files.map((f) => f.path), chain: 'platform', name: 'next' }).filename, `${String(c.highWater + 1).padStart(4, '0')}_next.sql`)
 })
