@@ -42,6 +42,13 @@
       "file": "contracts/governance/asyncapi.gov.json",
       "status": "active",
       "owner": "gov"
+    },
+    {
+      "name": "kernel-core",
+      "type": "openapi",
+      "file": "services/kernel-api/openapi/kernel-core.json",
+      "status": "active",
+      "owner": "idt"
     }
   ]
 }
