@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import * as fs from 'fs'
 import type { ModuleManifest } from '$lib/modules/types'
+import { OPERATOR_CEILING_DAYS } from '$lib/retention-tiers'
 import type { GremionConfig } from './config'
 
 // Mock the $env/dynamic/private module
@@ -442,6 +443,7 @@ describe('ConfigStore', () => {
         expect(msgs[0]).toContain('stored value 90')
         expect(msgs[0]).toContain('clamped to 29')
         expect(msgs[0]).toContain('audit_log')
+        expect(msgs[0]).toContain(`operator ceiling ${OPERATOR_CEILING_DAYS} days`)
       })
 
       it('warns only once per field, however often the config is read', async () => {
