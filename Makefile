@@ -2,9 +2,9 @@
         shell-kc shell-db \
         keycloak-configure dev-configure dev-ui fresh-start \
         update-legal update-legal-k8s \
-        test test-unit test-host-docker test-integration test-all test-ports-nats test-nats-auth nats-init \
+        test test-unit test-host-docker test-integration test-all test-ports-nats test-ports-nats-nruns test-nats-auth nats-init \
         lint lint-sh lint-yaml lint-json lint-compose \
-        lint-hygiene lint-cve-floors lint-packages lint-port-back lint-postgres-major lint-extraction-source \
+        lint-hygiene lint-cve-floors lint-nats-nruns lint-packages lint-port-back lint-postgres-major lint-extraction-source \
         lint-unshipped-migrations lint-toolchain lint-compliance lint-tenant-db-access fresh-init-proof \
         verify \
         health validate-env
@@ -212,12 +212,21 @@ test-ports-nats:
 	@echo "Running @gremion/ports against a real NATS JetStream server..."
 	@bash packages/ports/scripts/nats-test.sh
 
+# The N-run record behind a "passes every time" claim: test-ports-nats N times,
+# each against its own fresh container, with a per-run table and the pass/fail
+# distribution left in a directory (NATS_NRUN_OUT, default a new one under
+# $TMPDIR). Exits non-zero unless every run passed. NOT part of test-all: N
+# server starts is a deliberate, occasional run (make test-ports-nats-nruns N=20).
+N ?= 20
+test-ports-nats-nruns:
+	@bash packages/ports/scripts/nats-test-nruns.sh "$(N)"
+
 # ── Linting ──────────────────────────────────────────────────────────────
 
 # Lint shell scripts with shellcheck.
-# packages/ports/scripts/nats-test.sh is listed explicitly: it lives outside
-# scripts/, so the glob above never saw it and the one script that gates the
-# JetStream proofs was the one script nothing linted.
+# packages/ports/scripts/nats-test.sh and nats-test-nruns.sh are listed explicitly:
+# they live outside scripts/, so the glob above never saw them and the script that
+# gates the JetStream proofs was the one script nothing linted.
 # gremion-ui/scripts/hooks/pre-commit likewise: it is EXTENSIONLESS (git requires
 # that name) and lives under gremion-ui/, so neither `scripts/*.sh` nor a `.sh`
 # glob ever matched it — the one shell file that runs on every commit, and that
@@ -253,7 +262,7 @@ test-ports-nats:
 # lose a file.
 lint-sh:
 	@echo "Linting shell scripts..."
-	@shellcheck -x scripts/*.sh ops/scripts/*.sh docker/postgres/init-databases.sh docker/legal/entrypoint.sh packages/ports/scripts/nats-test.sh packages/nats-auth/scripts/proof.sh packages/nats-auth/scripts/image-check.sh
+	@shellcheck -x scripts/*.sh ops/scripts/*.sh docker/postgres/init-databases.sh docker/legal/entrypoint.sh packages/ports/scripts/nats-test.sh packages/ports/scripts/nats-test-nruns.sh packages/nats-auth/scripts/proof.sh packages/nats-auth/scripts/image-check.sh
 	@shellcheck -x -s sh gremion-ui/scripts/hooks/pre-commit
 	@shellcheck -x modules/messaging/synapse/*.sh modules/messaging/synapse/postgres-init/*.sh modules/messaging/synapse/test/*.sh
 	@for f in infra/host/bootstrap.sh infra/host/lib/*.sh infra/host/mail/*.sh infra/host/ops/*.sh test/host/integration/*.sh; do \
@@ -320,6 +329,17 @@ lint-cve-floors:
 	@echo "Checking CVE override floors..."
 	@node --test scripts/check-cve-floors.test.mjs
 	@node scripts/check-cve-floors.mjs
+
+# The N-run recorder's own RED cases (a failing run, a short series, a bad count),
+# against a stand-in target: no Docker. The suite's count is asserted because
+# `node --test <file>` exits 0 on a file that collects zero tests.
+lint-nats-nruns:
+	@echo "Checking the NATS N-run recorder..."
+	@out=$$(node --test --test-reporter=tap packages/ports/scripts/nats-test-nruns.test.mjs 2>&1); status=$$?; \
+	 printf '%s\n' "$$out" | grep -E '^(not ok|# (tests|pass|fail))' >&2; \
+	 [ "$$status" -eq 0 ] || exit "$$status"; \
+	 n=$$(printf '%s\n' "$$out" | tr -d '\r' | sed -n 's/^# tests \([0-9][0-9]*\)$$/\1/p' | tail -n1); \
+	 [ -n "$$n" ] && [ "$$n" -gt 0 ] || { echo "lint-nats-nruns: the suite collected no tests" >&2; exit 1; }
 
 # D-01: the three handover migrations ship in NO release-1 tree. The suite runs
 # first so the guard's own RED cases (planted file, renumbered file, empty tree)
@@ -669,7 +689,7 @@ lint-image-digests:
 	@node scripts/release/check-image-digests.mjs
 	@node scripts/release/check-image-digests.mjs --render
 
-lint: lint-sh lint-yaml lint-json lint-compose lint-pooled-stack lint-hygiene lint-cve-floors lint-packages lint-port-back lint-postgres-major lint-extraction-source lint-unshipped-migrations lint-compliance lint-tenant-db-access lint-edge-host lint-module-scan lint-module-migration-names lint-migration-register lint-image-digests lint-synapse
+lint: lint-sh lint-yaml lint-json lint-compose lint-pooled-stack lint-hygiene lint-cve-floors lint-nats-nruns lint-packages lint-port-back lint-postgres-major lint-extraction-source lint-unshipped-migrations lint-compliance lint-tenant-db-access lint-edge-host lint-module-scan lint-module-migration-names lint-migration-register lint-image-digests lint-synapse
 	@echo "All linters passed."
 
 # ── Local gate (TASK-045, TRD-444/341) ──────────────────────────────────────
