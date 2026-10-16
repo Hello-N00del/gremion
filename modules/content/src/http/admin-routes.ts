@@ -82,6 +82,13 @@ export interface AdminRouteDeps {
   dbPrefix?: string
 }
 
+/** PG object_in_use (55006): "database ... is being accessed by other users". */
+function isDatabaseInUse(err: unknown): boolean {
+  if (typeof err !== 'object' || err === null) return false
+  const { code, message } = err as { code?: unknown; message?: unknown }
+  return code === '55006' || (typeof message === 'string' && /being accessed by other users/i.test(message))
+}
+
 /**
  * Build the admin Route[] for the content leaf teardown pipeline.
  * Mount into the server BEFORE the tenant-guard route table so the server
@@ -135,7 +142,16 @@ export function buildAdminRoutes(deps: AdminRouteDeps): Route[] {
           // blocks DROP DATABASE, and a pool left behind would outlive its database.
           await evictTenantPools({ slug })
           // DROP DATABASE cannot run inside a transaction.
-          await admin.unsafe(`DROP DATABASE IF EXISTS "${dbName}"`)
+          try {
+            await admin.unsafe(`DROP DATABASE IF EXISTS "${dbName}"`)
+          } catch (err) {
+            if (!isDatabaseInUse(err)) throw err
+            // A request that arrived between the eviction and the DROP opened a
+            // pool for this slug again. End it and retry once; a second failure
+            // is reported as it is.
+            await evictTenantPools({ slug })
+            await admin.unsafe(`DROP DATABASE IF EXISTS "${dbName}"`)
+          }
           console.log(`[admin] dropped database ${dbName} (IF EXISTS)`)
           return sendJson(res, 200, { success: true, dropped: dbName })
         } catch (err) {
