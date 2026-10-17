@@ -10,7 +10,7 @@
 # Build context: the repository root.
 #   docker build -f apps/control-panel/Dockerfile -t ghcr.io/hello-n00del/gremion-control-panel:<tag> .
 
-FROM node:26-alpine@sha256:7c6af15abe4e3de859690e7db171d0d711bf37d27528eddfe625b2fe89e097f8 AS builder
+FROM node:26-alpine@sha256:6f08a523443ddedf52941874c203475b0ad503e859ad70cb26ab8be9a517dbd5 AS builder
 WORKDIR /repo
 
 # node:26-alpine bundles no corepack (dropped from core in Node 25+); the pnpm
@@ -30,7 +30,7 @@ WORKDIR /repo
 RUN pnpm --filter control-panel deploy --prod --legacy /deploy
 
 # ---- runtime ----
-FROM node:26-alpine@sha256:7c6af15abe4e3de859690e7db171d0d711bf37d27528eddfe625b2fe89e097f8 AS runner
+FROM node:26-alpine@sha256:6f08a523443ddedf52941874c203475b0ad503e859ad70cb26ab8be9a517dbd5 AS runner
 WORKDIR /app
 ENV NODE_ENV=production \
     HOST=0.0.0.0 \
