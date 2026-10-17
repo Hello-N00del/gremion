@@ -13,6 +13,8 @@
 # The caller sets, before calling:
 #   OPS_ENV      path of etc/env/ops.env            (ops_key)
 #   STACK_NAME   the compose stack name, e.g. gremion (state_container)
+#   STATE_PROJECT_NAME  the compose project holding postgres and nats;
+#                empty: ${STACK_NAME}-state (GREMION_STATE_PROJECT in ops.env)
 #
 # Behaviours kept exactly as they were in metrics-textfile.sh, because the
 # `ops.bats` collector cases are the regression net:
@@ -68,10 +70,11 @@ state_container() {
 # not there. Call it as `x="$(state_container_strict s)" || rc=$?`.
 state_container_strict() {
     local ids
-    ids="$(docker ps --filter "label=com.docker.compose.project=${STACK_NAME}-state" \
+    local project="${STATE_PROJECT_NAME:-${STACK_NAME}-state}"
+    ids="$(docker ps --filter "label=com.docker.compose.project=${project}" \
               --filter "label=com.docker.compose.service=$1" \
               --format '{{.ID}}')" || {
-        echo "[ops-lib] docker ps failed looking up the ${STACK_NAME}-state $1 container -- treated as none" >&2
+        echo "[ops-lib] docker ps failed looking up the ${project} $1 container -- treated as none" >&2
         return 3
     }
     [[ -z "$ids" ]] || printf '%s\n' "${ids%%$'\n'*}"

@@ -641,6 +641,16 @@ prom() { cat "$GREMION_ROOT/runtime/textfile/gremion.prom"; }
     assert_recorded docker "com.docker.compose.project=staging-state"
 }
 
+@test "metrics-textfile looks the state containers up in GREMION_STATE_PROJECT when set (a single-project layout), else in <STACK>-state" {
+    shim_docker_world
+    shim_timer enabled
+    STACK=staging GREMION_STATE_PROJECT=legacy run "$METRICS"
+    [ "$status" -eq 0 ]
+    assert_recorded docker "com.docker.compose.project=legacy"
+    run grep -c "com.docker.compose.project=staging-state" "$SHIM_LOG"
+    [ "$output" = "0" ]
+}
+
 @test "metrics-textfile reports the last job run per job kind from the platform database (TASK-039-FU, one family)" {
     shim_docker_world
     shim_timer enabled

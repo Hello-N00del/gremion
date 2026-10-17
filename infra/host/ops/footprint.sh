@@ -71,6 +71,9 @@ OPS_ENV="$ROOT/etc/env/ops.env"
 . "$SCRIPT_DIR/ops-lib.sh"
 
 STACK_NAME="$(ops_key STACK)"; STACK_NAME="${STACK_NAME:-gremion}"
+# the project holding postgres and nats: <STACK>-state unless a single-project
+# layout names it (GREMION_STATE_PROJECT)
+STATE_PROJECT_NAME="$(ops_key GREMION_STATE_PROJECT)"; STATE_PROJECT_NAME="${STATE_PROJECT_NAME:-${STACK_NAME}-state}"
 FILESTORE_ROOT="$(ops_key GREMION_FOOTPRINT_FILESTORE_ROOT)"
 
 # Diagnostics go to stderr: stdout is the one summary line.
@@ -148,7 +151,7 @@ measure_synapse_db() {
         return 0
     fi
     if [[ -z "$cid" ]]; then
-        note "no ${STACK_NAME}-state messaging-postgres container -- synapse_db is absent (not present), never 0"
+        note "no ${STATE_PROJECT_NAME} messaging-postgres container -- synapse_db is absent (not present), never 0"
         add_absent synapse_db "$src" not_present
         INCOMPLETE+=(synapse_db)
         return 0
@@ -419,10 +422,10 @@ EOSQL
 pg_rc=0
 PG="$(state_container_strict postgres)" || pg_rc=$?
 if (( pg_rc != 0 )); then
-    note "the ${STACK_NAME}-state postgres container lookup failed (exit ${pg_rc}) -- the plt.job_run row was not written"
+    note "the ${STATE_PROJECT_NAME} postgres container lookup failed (exit ${pg_rc}) -- the plt.job_run row was not written"
     EXIT=1
 elif [[ -z "$PG" ]]; then
-    note "no ${STACK_NAME}-state postgres container -- the plt.job_run row was not written"
+    note "no ${STATE_PROJECT_NAME} postgres container -- the plt.job_run row was not written"
     EXIT=1
 else
     rc=0
