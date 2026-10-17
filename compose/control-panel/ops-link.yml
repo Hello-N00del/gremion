@@ -1,0 +1,23 @@
+# compose/control-panel/ops-link.yml — optional overlay on standalone.yml for a
+# host that runs the ops stack (compose/observability, project ${STACK}-ops):
+# the panel joins the ops network so its "Betrieb" page can read Prometheus
+# server-side. The browser never reaches the ops side and Grafana stays on the
+# loopback (TRD-111); Traefik keeps routing over the panel network only
+# (traefik.docker.network in standalone.yml). Without this overlay the page is
+# shown disabled, naming PANEL_PROMETHEUS_URL.
+#
+#   docker compose -f standalone.yml -f ops-link.yml --env-file <env> up -d
+#
+# PANEL_OPS_NETWORK is the ops stack's network, `<STACK>-ops_ops`
+# (`docker network ls`); required, no default.
+services:
+  control-panel:
+    environment:
+      PANEL_PROMETHEUS_URL: http://prometheus:9090
+    networks:
+      - ops
+
+networks:
+  ops:
+    external: true
+    name: "${PANEL_OPS_NETWORK:?PANEL_OPS_NETWORK required (the ops stack's network, <STACK>-ops_ops)}"

@@ -32,6 +32,15 @@ describe('loadConfig', () => {
     expect(r.config.platformDatabaseUrl).toBeNull()
   })
 
+  it('PANEL_PROMETHEUS_URL is optional; plain http only to the loopback or a compose service name', () => {
+    const none = loadConfig(GOOD)
+    expect(none.ok && none.config.prometheusUrl).toBeNull()
+    const svc = loadConfig({ ...GOOD, PANEL_PROMETHEUS_URL: 'http://prometheus:9090/' })
+    expect(svc.ok && svc.config.prometheusUrl).toBe('http://prometheus:9090')
+    expect(problemsOf(loadConfig({ ...GOOD, PANEL_PROMETHEUS_URL: 'http://metrics.example.org:9090' })).join('\n')).toMatch(/PANEL_PROMETHEUS_URL over plain http/)
+    expect(problemsOf(loadConfig({ ...GOOD, PANEL_PROMETHEUS_URL: 'not a url' })).join('\n')).toMatch(/PANEL_PROMETHEUS_URL is not a URL/)
+  })
+
   it('a customer realm as issuer is refused (TRD-048)', () => {
     const r = loadConfig({ ...GOOD, PANEL_OIDC_ISSUER: 'https://rat.musterstadt.example/auth/realms/musterstadt' })
     expect(r.ok).toBe(false)
