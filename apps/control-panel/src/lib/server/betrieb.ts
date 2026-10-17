@@ -17,10 +17,16 @@ export interface BetriebQuery {
   labels?: string[]
 }
 
+/** How the page draws a tile (Grafana's panel kinds): one big number per row, a bar per row, a running/total status, or a table. */
+export type Display = 'stat' | 'bars' | 'status' | 'table'
+
 export interface BetriebPanel {
   id: string
   title: string
   unit: Unit
+  display: Display
+  /** A double-width tile (several values side by side). */
+  wide?: boolean
   queries: BetriebQuery[]
   /** Level of one value; absent: every row is `ok`. */
   assess?: (value: number) => Level
@@ -33,25 +39,27 @@ const above = (warn: number, bad = Infinity) => (v: number): Level => (v > bad ?
 // Thresholds: the dashboard's where it has them (backup 26 h, footprint 8 d,
 // filesystems 70 %, storage components 50/70 %); the rest are the panel's own.
 export const BETRIEB_PANELS: BetriebPanel[] = [
-  { id: 'backup', title: 'Backup', unit: 'age', queries: [{ expr: 'time() - max(gremion_backup_last_ts_seconds)', name: 'Letztes Backup' }], assess: above(93600 * 0.75, 93600) },
-  { id: 'footprint', title: 'Wöchentliche Messung', unit: 'age', queries: [{ expr: 'time() - max(gremion_footprint_timestamp_seconds)', name: 'Letzte Messung' }], assess: above(604800, 691200) },
-  { id: 'cpu', title: 'Host: CPU', unit: 'percent', queries: [{ expr: '100 * (1 - avg(rate(node_cpu_seconds_total{mode="idle"}[5m])))', name: 'CPU' }], assess: above(75, 90) },
-  { id: 'memory', title: 'Host: Arbeitsspeicher', unit: 'percent', queries: [{ expr: '100 * (1 - max(node_memory_MemAvailable_bytes) / max(node_memory_MemTotal_bytes))', name: 'Arbeitsspeicher' }], assess: above(80, 92) },
-  { id: 'filesystems', title: 'Host: Dateisysteme', unit: 'percent', queries: [{ expr: '100 * (1 - max by (mountpoint) (gremion_host_filesystem_avail_bytes) / max by (mountpoint) (gremion_host_filesystem_size_bytes))', labels: ['mountpoint'] }], assess: above(70, 85) },
-  { id: 'containers', title: 'Container', unit: 'count', queries: [{ expr: 'max by (name) (gremion_container_up)', labels: ['name'] }], assess: (v) => (v >= 1 ? 'ok' : 'bad'), limit: 60 },
-  { id: 'unhealthy', title: 'Container: ungesund', unit: 'count', queries: [{ expr: 'max by (name) (gremion_container_unhealthy)', labels: ['name'] }], assess: (v) => (v > 0 ? 'bad' : 'ok'), limit: 60 },
+  { id: 'backup', title: 'Backup', display: 'stat', unit: 'age', queries: [{ expr: 'time() - max(gremion_backup_last_ts_seconds)', name: 'Letztes Backup' }], assess: above(93600 * 0.75, 93600) },
+  { id: 'footprint', title: 'Wöchentliche Messung', display: 'stat', unit: 'age', queries: [{ expr: 'time() - max(gremion_footprint_timestamp_seconds)', name: 'Letzte Messung' }], assess: above(604800, 691200) },
+  { id: 'cpu', title: 'Host: CPU', display: 'stat', unit: 'percent', queries: [{ expr: '100 * (1 - avg(rate(node_cpu_seconds_total{mode="idle"}[5m])))', name: 'CPU' }], assess: above(75, 90) },
+  { id: 'memory', title: 'Host: Arbeitsspeicher', display: 'stat', unit: 'percent', queries: [{ expr: '100 * (1 - max(node_memory_MemAvailable_bytes) / max(node_memory_MemTotal_bytes))', name: 'Arbeitsspeicher' }], assess: above(80, 92) },
+  { id: 'filesystems', title: 'Host: Dateisysteme', display: 'bars', unit: 'percent', queries: [{ expr: '100 * (1 - max by (mountpoint) (gremion_host_filesystem_avail_bytes) / max by (mountpoint) (gremion_host_filesystem_size_bytes))', labels: ['mountpoint'] }], assess: above(70, 85) },
+  { id: 'containers', title: 'Container', display: 'status', unit: 'count', queries: [{ expr: 'max by (name) (gremion_container_up)', labels: ['name'] }], assess: (v) => (v >= 1 ? 'ok' : 'bad'), limit: 60 },
+  { id: 'unhealthy', title: 'Container: ungesund', display: 'status', unit: 'count', queries: [{ expr: 'max by (name) (gremion_container_unhealthy)', labels: ['name'] }], assess: (v) => (v > 0 ? 'bad' : 'ok'), limit: 60 },
   {
     id: 'postgres',
     title: 'Postgres: Verbindungen',
+    display: 'stat',
+    wide: true,
     unit: 'count',
     queries: [
       { expr: 'max(gremion_postgres_connections_used)', name: 'Belegt' },
       { expr: 'max(gremion_postgres_connections_max)', name: 'Maximum' },
     ],
   },
-  { id: 'nats', title: 'NATS: Rückstand je Consumer', unit: 'count', queries: [{ expr: 'sum by (account, stream, consumer) (gremion_nats_consumer_num_pending + gremion_nats_consumer_num_ack_pending)', labels: ['account', 'stream', 'consumer'] }], assess: above(100, 1000), limit: 15 },
-  { id: 'storage', title: 'Speicher-Komponenten', unit: 'percent', queries: [{ expr: '100 * max by (component) (gremion_storage_component_bytes) / on() group_left() max(gremion_host_disk_provisioned_bytes)', labels: ['component'] }], assess: above(50, 70) },
-  { id: 'jobs', title: 'Geplante Jobs: letzter Lauf', unit: 'age', queries: [{ expr: 'time() - gremion_job_last_run', labels: ['job_kind', 'customer', 'status'] }], assess: above(8 * 86400, 15 * 86400), limit: 30 },
+  { id: 'nats', title: 'NATS: Rückstand je Consumer', display: 'table', unit: 'count', queries: [{ expr: 'sum by (account, stream, consumer) (gremion_nats_consumer_num_pending + gremion_nats_consumer_num_ack_pending)', labels: ['account', 'stream', 'consumer'] }], assess: above(100, 1000), limit: 15 },
+  { id: 'storage', title: 'Speicher-Komponenten', display: 'bars', unit: 'percent', queries: [{ expr: '100 * max by (component) (gremion_storage_component_bytes) / on() group_left() max(gremion_host_disk_provisioned_bytes)', labels: ['component'] }], assess: above(50, 70) },
+  { id: 'jobs', title: 'Geplante Jobs: letzter Lauf', display: 'table', unit: 'age', queries: [{ expr: 'time() - gremion_job_last_run', labels: ['job_kind', 'customer', 'status'] }], assess: above(8 * 86400, 15 * 86400), limit: 30 },
 ]
 
 export interface Sample {
@@ -87,6 +95,8 @@ export interface BetriebPanelResult {
   id: string
   title: string
   unit: Unit
+  display: Display
+  wide: boolean
   rows: BetriebRow[]
   /** Rows beyond the panel's limit. */
   hidden: number
@@ -141,7 +151,7 @@ export async function loadBetrieb(c: PanelConfig, fetchImpl: typeof fetch = fetc
       }
       rows.sort((a, b) => ORDER[a.level] - ORDER[b.level] || (p.queries.length > 1 ? 0 : a.name.localeCompare(b.name, 'de')))
       const limit = p.limit ?? rows.length
-      return { id: p.id, title: p.title, unit: p.unit, rows: rows.slice(0, limit), hidden: Math.max(0, rows.length - limit), error }
+      return { id: p.id, title: p.title, unit: p.unit, display: p.display, wide: p.wide === true, rows: rows.slice(0, limit), hidden: Math.max(0, rows.length - limit), error }
     }),
   )
   if (calls > 0 && failures === calls) {

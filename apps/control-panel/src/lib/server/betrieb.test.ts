@@ -60,6 +60,14 @@ describe('BETRIEB_PANELS', () => {
     expect(ours.filter((e) => !known.has(e))).toEqual([])
   })
 
+  it('every panel names how it is drawn; per-item percentages are bars, single values are stats', () => {
+    const by = Object.fromEntries(BETRIEB_PANELS.map((p) => [p.id, p.display]))
+    expect(BETRIEB_PANELS.every((p) => ['stat', 'bars', 'status', 'table'].includes(p.display))).toBe(true)
+    expect(by.filesystems).toBe('bars')
+    expect(by.backup).toBe('stat')
+    expect(by.containers).toBe('status')
+  })
+
   it('panel ids are unique', () => {
     const ids = BETRIEB_PANELS.map((p) => p.id)
     expect(new Set(ids).size).toBe(ids.length)
