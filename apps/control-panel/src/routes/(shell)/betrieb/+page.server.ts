@@ -7,6 +7,10 @@ import type { PageServerLoad } from './$types'
 
 export const load: PageServerLoad = async () => {
   const r = loadConfig(env)
-  if (!r.ok) return { disabled: 'Die Konfiguration ist unvollständig.', unreachable: null, panels: [], readAt: new Date().toISOString() }
+  if (!r.ok) {
+    // the problems name variables, never values (config.ts)
+    console.error(`[control-panel] betrieb: config invalid: ${r.problems.join('; ')}`)
+    return { disabled: 'Die Konfiguration ist unvollständig (die Probleme nennen /healthz und das Panel-Log).', unreachable: null, panels: [], readAt: new Date().toISOString() }
+  }
   return { ...(await loadBetrieb(r.config)), readAt: new Date().toISOString() }
 }

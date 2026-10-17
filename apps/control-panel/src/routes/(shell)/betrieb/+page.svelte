@@ -1,6 +1,6 @@
 <script lang="ts">
   import { invalidateAll } from '$app/navigation'
-  import { formatValue } from '$lib/betrieb-format'
+  import { formatValue, summarize } from '$lib/betrieb-format'
   import type { PageData } from './$types'
 
   let { data }: { data: PageData } = $props()
@@ -8,7 +8,7 @@
   const LEVEL_LABEL: Record<string, string> = { bad: 'kritisch', warn: 'Warnung', ok: '' }
 
   const readAt = $derived(new Date(data.readAt).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit', second: '2-digit' }))
-  const problems = $derived(data.panels.reduce((n, p) => n + p.rows.filter((r) => r.level !== 'ok').length + (p.error ? 1 : 0), 0))
+  const summary = $derived(summarize(data.panels))
 
   let refreshing = $state(false)
   async function refresh() {
@@ -38,8 +38,8 @@
 {:else if data.unreachable}
   <p class="notice bad" role="alert">{data.unreachable}</p>
 {:else}
-  <p class="summary" class:attention={problems > 0}>
-    {problems === 0 ? 'Keine Auffälligkeiten.' : `${problems} ${problems === 1 ? 'Auffälligkeit' : 'Auffälligkeiten'}, oben in den Kacheln.`}
+  <p class="summary" class:attention={summary.attention}>
+    {summary.text}
     Verlauf und Details: Grafana (Ordner „Betrieb“) über den SSH-Tunnel.
   </p>
   <div class="grid">

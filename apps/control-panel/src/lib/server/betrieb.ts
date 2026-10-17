@@ -135,7 +135,7 @@ export async function loadBetrieb(c: PanelConfig, fetchImpl: typeof fetch = fetc
         } catch (err) {
           failures++
           // the reason goes to the log; the page names only the failed panel
-          console.error(`[control-panel] betrieb query ${p.id} failed: ${(err as Error)?.message ?? String(err)}`)
+          console.error(`[control-panel] betrieb query ${p.id} failed: ${err instanceof Error ? err.message : String(err)}`)
           error = 'Abfrage fehlgeschlagen (Details im Panel-Log).'
         }
       }
@@ -145,7 +145,8 @@ export async function loadBetrieb(c: PanelConfig, fetchImpl: typeof fetch = fetc
     }),
   )
   if (calls > 0 && failures === calls) {
-    return { disabled: null, unreachable: `Prometheus ist nicht erreichbar (${base}; Details im Panel-Log).`, panels: [] }
+    console.error(`[control-panel] betrieb: every query failed; Prometheus at ${base} is not reachable`)
+    return { disabled: null, unreachable: 'Prometheus ist nicht erreichbar (Details im Panel-Log).', panels: [] }
   }
   return { disabled: null, unreachable: null, panels }
 }

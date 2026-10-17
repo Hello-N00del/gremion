@@ -136,13 +136,21 @@ function parseConfig(env: Env, readFile: (p: string) => string): ConfigResult {
   let prometheusUrl: string | null = null
   if (env.PANEL_PROMETHEUS_URL) {
     const raw = env.PANEL_PROMETHEUS_URL.replace(/\/$/, '')
-    if (!/^https?:\/\/[^/]+(\/.*)?$/.test(raw)) problems.push('PANEL_PROMETHEUS_URL is not a URL')
+    let u: URL | null = null
+    try {
+      u = /^https?:\/\/[^/]+(\/.*)?$/.test(raw) ? new URL(raw) : null
+    } catch {
+      u = null
+    }
+    if (u === null) problems.push('PANEL_PROMETHEUS_URL is not a URL')
+    else if (u.username || u.password) problems.push('PANEL_PROMETHEUS_URL must not carry credentials')
     else {
-      const u = new URL(raw)
-      if (u.protocol === 'http:' && !['127.0.0.1', 'localhost', '[::1]'].includes(u.hostname) && u.hostname.includes('.')) {
+      // plain http: the loopback, or a single-label compose service name (no
+      // dotted host, no other IPv6 literal)
+      const loopback = ['127.0.0.1', 'localhost', '[::1]'].includes(u.hostname)
+      if (u.protocol === 'http:' && !loopback && !/^[a-z0-9-]+$/i.test(u.hostname)) {
         problems.push('PANEL_PROMETHEUS_URL over plain http is allowed to the loopback or a compose service name only; use https')
-      }
-      prometheusUrl = raw
+      } else prometheusUrl = raw
     }
   }
 

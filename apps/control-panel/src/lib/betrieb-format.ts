@@ -28,3 +28,23 @@ export function formatValue(v: number, unit: Unit): string {
       return nf0.format(v)
   }
 }
+
+export interface SummaryInput {
+  rows: { level: string }[]
+  error: string | null
+}
+
+/**
+ * The page's one-line verdict. A tile without data is NOT healthy (review r1):
+ * it is counted and named, so a missing backup or container metric never
+ * reads as "Keine Auffälligkeiten".
+ */
+export function summarize(panels: SummaryInput[]): { attention: boolean; text: string } {
+  const flagged = panels.reduce((n, p) => n + p.rows.filter((r) => r.level !== 'ok').length + (p.error ? 1 : 0), 0)
+  const empty = panels.filter((p) => p.rows.length === 0 && !p.error).length
+  const parts: string[] = []
+  if (flagged > 0) parts.push(`${flagged} ${flagged === 1 ? 'Auffälligkeit' : 'Auffälligkeiten'}, oben in den Kacheln`)
+  if (empty > 0) parts.push(`${empty} ${empty === 1 ? 'Kachel' : 'Kacheln'} ohne Daten`)
+  if (parts.length === 0) return { attention: false, text: 'Keine Auffälligkeiten.' }
+  return { attention: true, text: `${parts.join('; ')}.` }
+}

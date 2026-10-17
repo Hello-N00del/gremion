@@ -6,6 +6,7 @@ import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
+import { summarize } from '../betrieb-format'
 import { BETRIEB_PANELS, betriebDisabledReason, formatValue, loadBetrieb, queryInstant } from './betrieb'
 import type { PanelConfig } from './config'
 
@@ -110,6 +111,7 @@ describe('loadBetrieb', () => {
     const r = await loadBetrieb(config(BASE), fakeFetch(answers).impl)
     expect(r.disabled).toBeNull()
     expect(r.unreachable).toMatch(/nicht erreichbar/)
+    expect(r.unreachable).not.toContain(BASE)
   })
 
   it('one failing query marks only its panel; an empty result says "keine Daten", never 0', async () => {
@@ -150,5 +152,20 @@ describe('formatValue', () => {
     expect(formatValue(42.345, 'percent')).toBe('42,3 %')
     expect(formatValue(1536, 'bytes')).toBe('1,5 KiB')
     expect(formatValue(7, 'count')).toBe('7')
+  })
+})
+
+describe('summarize (review r1: a tile without data is not healthy)', () => {
+  it('all tiles with ok rows: no attention', () => {
+    expect(summarize([{ rows: [{ level: 'ok' }], error: null }])).toEqual({ attention: false, text: 'Keine Auffälligkeiten.' })
+  })
+  it('an empty tile is counted and named, never "Keine Auffälligkeiten"', () => {
+    const s = summarize([{ rows: [{ level: 'ok' }], error: null }, { rows: [], error: null }])
+    expect(s.attention).toBe(true)
+    expect(s.text).toBe('1 Kachel ohne Daten.')
+  })
+  it('flags and empty tiles are both named', () => {
+    const s = summarize([{ rows: [{ level: 'bad' }, { level: 'warn' }], error: null }, { rows: [], error: 'x' }, { rows: [], error: null }, { rows: [], error: null }])
+    expect(s.text).toBe('3 Auffälligkeiten, oben in den Kacheln; 2 Kacheln ohne Daten.')
   })
 })
