@@ -437,7 +437,7 @@ describe('TDD 9 + lane note A3: an attested enablement survives the migration, i
     mkdirSync(PARTIAL, { recursive: true })
     const manifest = loadManifest(PLATFORM_MIGRATIONS_DIR)
     const upTo4: Record<string, string> = {}
-    for (const [f, sha] of [...manifest.entries()].sort()) {
+    for (const [f, sha] of [...manifest.entries()].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) {
       if (f > '0004_~') continue
       cpSync(join(PLATFORM_MIGRATIONS_DIR, f), join(PARTIAL, f))
       upTo4[f] = sha
