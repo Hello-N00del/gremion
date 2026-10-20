@@ -101,4 +101,38 @@ describe('main', () => {
     expect(text).toContain('gremion_inbox_stalled{ctx="fin",consumer="finance"} 2')
     expect(d.openDb).toHaveBeenCalledWith('t', 'fin')
   })
+
+  describe('outbox-replay refuses a --customer whose database belongs to another tenant', () => {
+    const file = () => {
+      const f = path.join(dir, 'replay-subjects.json')
+      writeFileSync(f, JSON.stringify({ 'de.gremion.idt.orgunit.created.v1': 'gremion.{tenant}.org-unit.created' }))
+      return f
+    }
+    const bound = (token: string) => ({ unsafe: async () => [{ tenant_token: token }], begin: async () => { throw new Error('must not replay') } })
+    const argv = () => ['outbox-replay', '--ctx', 'idt', '--customer', 'c1', '--tenant', 'acme', '--subjects', file()]
+
+    test('a mismatch is a usage error (2) naming both tenants, before NATS is opened and the database closed', async () => {
+      const d = deps()
+      const closed = vi.fn()
+      d.openDb.mockResolvedValue({ sql: bound('other'), close: async () => void closed() })
+      const err = vi.spyOn(console, 'error').mockImplementation(() => {})
+      expect(await main(argv(), d)).toBe(2)
+      const msg = err.mock.calls.join(' ')
+      expect(msg).toContain('other')
+      expect(msg).toContain('acme')
+      expect(d.openNats).not.toHaveBeenCalled()
+      expect(closed).toHaveBeenCalledTimes(1)
+      err.mockRestore()
+    })
+
+    test('a match proceeds to NATS', async () => {
+      const d = deps()
+      d.openDb.mockResolvedValue({ sql: bound('acme'), close: async () => {} })
+      d.openNats.mockRejectedValue(new Error('reached nats'))
+      const err = vi.spyOn(console, 'error').mockImplementation(() => {})
+      await expect(main(argv(), d)).rejects.toThrow(/reached nats/)
+      expect(d.openNats).toHaveBeenCalledTimes(1)
+      err.mockRestore()
+    })
+  })
 })

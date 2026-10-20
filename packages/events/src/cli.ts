@@ -21,6 +21,7 @@
 // contain {tenant}. Never prints a seed, a password or a message body.
 import { readFileSync } from 'node:fs'
 import { collectMetrics, renderMetrics } from './metrics.ts'
+import { assertContext } from './plumbing.ts'
 import { listDeadLetters, replayDeadLetter, replayOutbox, requeueOutbox } from './recovery.ts'
 
 const USAGE = [
@@ -50,6 +51,8 @@ export function parseFlags(args: string[], allowed: readonly string[]): Flags {
   }
   return out
 }
+
+const assertedCtx = (ctx: string): string => (assertContext(ctx), ctx)
 
 const need = (f: Flags, k: string): string => {
   const v = f[k]
@@ -133,12 +136,20 @@ export async function main(argv: string[], deps?: CliDeps): Promise<number> {
         if (since && Number.isNaN(since.getTime())) throw new UsageError('--since is not an ISO date')
         const module = f.module ?? ctx
         const db = await d.openDb(customer, module)
-        const nats = await d.openNats(tenant, f.identity ?? module)
+        let nats: Awaited<ReturnType<CliDeps['openNats']>> | undefined
         try {
-          const r = await replayOutbox(db.sql, nats.js, { ctx, subjects, since, log: (l) => d.out(`${l}\n`) })
+          // --customer picks the database, --tenant the NATS account and subjects: a pair that does not
+          // belong together would publish one tenant's events into another's streams. Refuse it first.
+          const bound = await db.sql.unsafe<{ tenant_token: string }[]>(`SELECT tenant_token FROM ${assertedCtx(ctx)}.database_binding`)
+          const token = bound[0]?.tenant_token
+          if (bound.length !== 1 || token !== tenant) {
+            throw new UsageError(`--customer ${customer} is bound to tenant ${JSON.stringify(token ?? null)}, not --tenant ${JSON.stringify(tenant)}: refusing to replay into another tenant's streams`)
+          }
+          const conn = (nats = await d.openNats(tenant, f.identity ?? module))
+          const r = await replayOutbox(db.sql, conn.js, { ctx, subjects, since, log: (l) => d.out(`${l}\n`) })
           d.out(`${JSON.stringify(r)}\n`)
         } finally {
-          await nats.close()
+          await nats?.close()
           await db.close()
         }
         return 0
