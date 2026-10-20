@@ -29,9 +29,9 @@
   "maxDeltaTimeSeconds": 43200,
   "failureFactor": 5,
   "defaultSignatureAlgorithm": "RS256",
-  "accessTokenLifespan": 1800,
-  "ssoSessionIdleTimeout": 7200,
-  "ssoSessionMaxLifespan": 86400,
+  "accessTokenLifespan": 600,
+  "ssoSessionIdleTimeout": 1800,
+  "ssoSessionMaxLifespan": 43200,
   "internationalizationEnabled": true,
   "supportedLocales": [
     "de",

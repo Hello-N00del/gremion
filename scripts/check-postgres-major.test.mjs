@@ -171,7 +171,7 @@ test('checkFiles excludes the frozen spec copies by rule, not by accident', () =
   const problems = checkFiles([
     {
       // the name B0-spec-docs-and-waiver-ledger lands them under
-      path: 'docs/superpowers/specs/spec-b-kernel-portback-relocatability-release-design.md',
+      path: 'docs/design-specs/spec-b-kernel-portback-relocatability-release-design.md',
       text: `\`${STALE_TAG}\` today\n`,
     },
     { path: 'docker-compose.yml', text: `    image: ${POSTGRES_IMAGE_REF}\n` },
@@ -194,7 +194,7 @@ test('the exclusion list is narrow: a stale tag anywhere else is still a finding
 test('the committed kernel tree carries the pinned tag everywhere, in >= 8 places', () => {
   const files = trackedTextFiles(ROOT)
   const hits = files
-    .filter((f) => !/^docs\/superpowers\/specs\//.test(f.path))
+    .filter((f) => !/^docs\/design-specs\//.test(f.path))
     .flatMap((f) => scanText(f.path, f.text))
   assert.ok(hits.length >= 8, `expected >= 8 postgres: references, found ${hits.length}`)
   assert.deepEqual(checkFiles(files), [])
@@ -555,7 +555,7 @@ import { EXCLUDED } from './check-postgres-major.mjs'
 test('TDD-6: EXCLUDED holds exactly three NAMED rules: specs, the stale fixtures, k8s', () => {
   assert.equal(EXCLUDED.length, 3, EXCLUDED.map(String).join(' '))
   const hit = (p) => EXCLUDED.filter((re) => re.test(p)).length
-  assert.equal(hit('docs/superpowers/specs/spec-b-x.md'), 1)
+  assert.equal(hit('docs/design-specs/spec-b-x.md'), 1)
   assert.equal(hit('test/host/fixtures/postgres-major/tree-stale/compose/calendar.yml'), 1)
   assert.equal(hit('k8s/base/postgres/statefulset.yaml'), 1)
   // the rule is anchored: a path that merely CONTAINS k8s is still scanned

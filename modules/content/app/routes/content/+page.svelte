@@ -1,5 +1,5 @@
 <script lang="ts">
-  // Content Engine authoring list. PLAIN, functional placeholder — Claude Design
+  // Content Engine authoring list. PLAIN, functional placeholder — the designer
   // polishes the visual layer later (this ships against the contract, not the
   // final look). Lists posts with title, last-updated, and channel chips.
   import PageTitle from '$lib/components/PageTitle.svelte'

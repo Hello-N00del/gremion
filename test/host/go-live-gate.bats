@@ -155,7 +155,7 @@ gate_section() {
     done
 }
 
-@test "every Owner is OPERATOR, AGENT or OPERATOR + AGENT" {
+@test "every Owner is OPERATOR, RUNNER or OPERATOR + RUNNER" {
     [ -f "$GATE_DOC" ]
     local owner bad=0 seen=0
     # Only a line that STARTS with the field is an item's Owner. The "How to
@@ -164,7 +164,7 @@ gate_section() {
     while read -r owner; do
         seen=$((seen + 1))
         case "$owner" in
-            'OPERATOR'|'AGENT'|'OPERATOR + AGENT') ;;
+            'OPERATOR'|'RUNNER'|'OPERATOR + RUNNER') ;;
             *) echo "unknown Owner value: '${owner}'" >&2; bad=1 ;;
         esac
     done < <(grep -E '^\*\*Owner:\*\*' "$GATE_TEXT" | sed 's/^\*\*Owner:\*\* *//; s/ *$//')

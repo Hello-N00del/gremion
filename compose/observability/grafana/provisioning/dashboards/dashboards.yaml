@@ -1,0 +1,21 @@
+# compose/observability/grafana/provisioning/dashboards/dashboards.yaml
+# The dashboards of the ops project, provisioned as code. One file provider
+# reads every *.json in this directory (the rendered tree is mounted read-only
+# at /etc/grafana/provisioning, docker-compose.yml). Nothing is editable from
+# the UI and nothing a viewer saves is kept: a change is a change to the JSON
+# in the repository, read at Grafana's start (the tree is rendered fresh by
+# infra/host/ops/render-ops.sh). Datasource uids: ../datasources/datasources.yaml.
+apiVersion: 1
+
+providers:
+  - name: gremion-betrieb
+    orgId: 1
+    folder: Betrieb
+    folderUid: gremion-betrieb
+    type: file
+    disableDeletion: true
+    allowUiUpdates: false
+    updateIntervalSeconds: 60
+    options:
+      path: /etc/grafana/provisioning/dashboards
+      foldersFromFilesStructure: false

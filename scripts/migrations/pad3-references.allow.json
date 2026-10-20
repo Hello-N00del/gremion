@@ -4,7 +4,7 @@
     { "glob": "gremion-ui/migrations/*.sql", "reason": "applied migration bytes are locked (applied.lock.json); their header comments keep the names they were written with" },
     { "glob": "modules/*/migrations/*.sql", "reason": "applied module leaf migration bytes are locked; comments name the kernel file they were squashed from" },
     { "glob": "modules/*/app/migrations/*.sql", "reason": "applied content app-chain bytes are locked (1200_ is frozen, 1201_ is its forward fix)" },
-    { "glob": "docs/superpowers/**", "reason": "brief section 3: do not touch docs/superpowers/" },
+    { "glob": "docs/design-specs/**", "reason": "frozen design-spec record: names the files as they were when the specs were approved" },
     { "glob": "docker/**", "reason": "brief section 3: do not touch docker/ (init-databases.sh error text names 058_; residual for the compose/infra owner)" },
     { "glob": "k8s/**", "reason": "brief section 3: do not touch k8s/ (same error text; residual for the k8s owner)" },
     { "glob": "docs/ops/migration-portback-2026-09-15.md", "reason": "dated provenance record: names the files as they were ported" },

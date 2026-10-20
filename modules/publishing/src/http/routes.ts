@@ -27,7 +27,13 @@
 
 import type http from 'node:http'
 import { z } from 'zod'
-import type { Sql, TenantRef } from '../tenant-store.js'
+import {
+  InvalidTenantIdError,
+  InvalidTenantSlugError,
+  TenantIdentityMismatchError,
+  type Sql,
+  type TenantRef,
+} from '../tenant-store.js'
 import type { Route, RouteContext } from './router.js'
 import { readOrMintCorrelationId } from '@gremion/ports/tracer'
 import {
@@ -198,6 +204,21 @@ export function buildApiRoutes(storeFn: StoreFn, sendDeps?: SendDeps): Route[] {
           (err instanceof Error && err.message === 'invalid JSON body')
         ) {
           sendError(extended.res, 400, 'invalid JSON body')
+        } else if (err instanceof TenantIdentityMismatchError) {
+          // The (id, slug) pair is not the one the catalog binds (audit #534): a
+          // stale or forged pair, never a server fault. The body names neither tenant.
+          console.warn(`[newsletter:api] ${err.message}`)
+          sendError(extended.res, 409, 'tenant_identity_mismatch')
+        } else if (err instanceof InvalidTenantIdError) {
+          // A tenant id that is not a canonical lowercase uuid (follow-up to audit
+          // #534): the caller's error, never a server fault. The body names nothing.
+          console.warn(`[newsletter:api] ${err.message}`)
+          sendError(extended.res, 400, 'invalid_tenant_id')
+        } else if (err instanceof InvalidTenantSlugError) {
+          // A slug storeFor will not build a database name from (reserved, or the
+          // grammar): the caller's error. The body names nothing.
+          console.warn(`[newsletter:api] ${err.message}`)
+          sendError(extended.res, 400, 'invalid_tenant_slug')
         } else {
           console.error('[newsletter:api] unhandled route error', err)
           if (!extended.res.headersSent) {

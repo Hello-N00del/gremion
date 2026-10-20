@@ -26,6 +26,7 @@ const config: PanelConfig = {
   platformDatabaseUrl: null,
   executor: 'none',
   internalPushSecret: null,
+  prometheusUrl: null,
 }
 
 function jwtToken(payload: object): string {

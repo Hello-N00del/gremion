@@ -7,9 +7,15 @@ import { resolveSecret } from '$lib/server/tenant/secrets'
 // Avoids a /login round-trip on every API request and prevents 429s.
 interface CachedMatrixToken {
   matrixToken: string
-  // Expire the cache slightly before the Keycloak JWT expires
+  // Fixed TTL from mint time; independent of the Keycloak JWT exp
   expiresAt: number
 }
+// A Matrix token is cached for this long from mint time. It is deliberately NOT
+// bound to the Keycloak access-token exp: every Keycloak rotation would otherwise
+// force a fresh org.matrix.login.jwt login, and all web users log in from the one
+// app-server address, so Synapse's per-address login rate limit answers 429 and
+// each login creates a new device.
+const MATRIX_TOKEN_TTL_MS = 3_600_000
 const matrixTokenCache = new Map<string, CachedMatrixToken>()
 // In-flight login promises per cache key — prevents concurrent cache misses from
 // all firing a /login request simultaneously (thundering herd on server restart).
@@ -123,11 +129,7 @@ class MatrixClient {
     const loginPromise = this.cs('POST', '/_matrix/client/v3/login', '', loginBody)
       .then((res) => {
         const matrixToken = (res as { access_token: string }).access_token
-        // Cache until 60 s before the Keycloak token expires (max 1 hour)
-        const cacheUntil = keycloakExp > 0
-          ? Math.min(keycloakExp - 60_000, Date.now() + 3_600_000)
-          : Date.now() + 3_600_000
-        matrixTokenCache.set(cacheKey, { matrixToken, expiresAt: cacheUntil })
+        matrixTokenCache.set(cacheKey, { matrixToken, expiresAt: Date.now() + MATRIX_TOKEN_TTL_MS })
         return matrixToken
       })
       .finally(() => {

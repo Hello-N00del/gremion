@@ -90,6 +90,7 @@ COPY modules/files/app ./modules/files/app/
 COPY modules/messaging/app ./modules/messaging/app/
 COPY modules/votes/app ./modules/votes/app/
 COPY modules/elections/app ./modules/elections/app/
+COPY modules/publishing/app ./modules/publishing/app/
 COPY gremion-ui ./gremion-ui/
 
 # Build the SvelteKit app (@gremion/db + @gremion/ports bundled via ssr.noExternal)

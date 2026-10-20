@@ -19,7 +19,7 @@
     "@gremion/db": "workspace:*",
     "@sveltejs/adapter-node": "^5.5.7",
     "@sveltejs/kit": "^2.70.2",
-    "svelte": "^5.56.8",
+    "svelte": "^5.57.1",
     "isomorphic-dompurify": "^3.19.0",
     "postgres": "^3.4.4"
   },

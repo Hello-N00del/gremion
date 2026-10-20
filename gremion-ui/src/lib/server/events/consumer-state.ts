@@ -92,6 +92,7 @@ export function classifyWorkerError(err: unknown): WorkerFault {
     StreamRepointedError: 'stream-gone',
     ConsumerGoneError: 'consumer-gone',
     ConsumerStalledError: 'consumer-stalled',
+    HeartbeatsMissedError: 'consumer-stalled',
     NoStreamError: 'stream-missing',
     SetupTimeoutError: 'setup-timeout',
   }

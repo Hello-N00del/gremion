@@ -22,6 +22,7 @@
         "modules/elections/app/**/*.test.ts",
         "modules/files/app/**/*.test.ts",
         "modules/messaging/app/**/*.test.ts",
+        "modules/publishing/app/**/*.test.ts",
         "modules/votes/app/**/*.test.ts"
       ],
       "excludeGlobs": ["modules/*/app/**/*.integration.test.ts"]
@@ -42,6 +43,7 @@
         "modules/elections/app/**/*.integration.test.ts",
         "modules/files/app/**/*.integration.test.ts",
         "modules/messaging/app/**/*.integration.test.ts",
+        "modules/publishing/app/**/*.integration.test.ts",
         "modules/votes/app/**/*.integration.test.ts"
       ]
     },
@@ -176,6 +178,16 @@
       "command": "node --test --test-reporter=tap scripts/check-cve-floors.test.mjs && node scripts/check-cve-floors.mjs",
       "requiresStack": false,
       "testGlobs": ["scripts/check-cve-floors.test.mjs"]
+    },
+    {
+      "id": "kernel-nats-nruns-selftest",
+      "repo": "kernel",
+      "category": "unit",
+      "cwd": ".",
+      "kind": "node-test",
+      "command": "node --test --test-reporter=tap packages/ports/scripts/nats-test-nruns.test.mjs",
+      "requiresStack": false,
+      "testGlobs": ["packages/ports/scripts/nats-test-nruns.test.mjs"]
     },
     {
       "id": "kernel-known-secrets-guard",
@@ -346,12 +358,36 @@
       "id": "kernel-module-content-app-overlay-vitest",
       "repo": "kernel",
       "category": "unit",
-      "cwd": "modules/content/app",
+      "cwd": "gremion-ui",
       "kind": "vitest",
-      "command": "n/a (no runner in the kernel tree)",
-      "unrunnable": "no runner: modules/content/app is the content UI half, parity-copied from the vertical's gremion-ui/src and importing the shell's $lib/$app aliases; the kernel gremion-ui does not collect it and no kernel vitest config resolves it (its vertical twins run under vertical-ui-vitest-unit). Wire it, then replace this field with a command.",
+      "command": "node scripts/module-lane.mjs",
+      "//": "TASK-205c: the DISABLED modules' app halves (content, vault) run in the module lane (gremion-ui/scripts/module-lane.mjs: a scratch app with every half overlaid; verify part unit:module-lane). Their integration tests need a database and are not part of it.",
       "requiresStack": false,
-      "testGlobs": ["modules/content/app/**/*.test.ts"]
+      "timeoutMs": 600000,
+      "testGlobs": ["modules/content/app/**/*.test.ts", "modules/vault/app/**/*.test.ts"],
+      "excludeGlobs": ["modules/*/app/**/*.integration.test.ts"]
+    },
+    {
+      "id": "kernel-module-content-app-integration",
+      "repo": "kernel",
+      "category": "integration",
+      "cwd": "gremion-ui",
+      "kind": "vitest",
+      "command": "n/a (no runner for the disabled halves' integration tests)",
+      "unrunnable": "no runner: vitest.integration.config.ts collects the overlaid halves of the ENABLED modules; content is disabled (modules/disabled.json), so its *.integration.test.ts files (a scratch PostgreSQL and NATS) are collected by no config. Give the module lane an integration project, then replace this field with a command.",
+      "requiresStack": true,
+      "testGlobs": ["modules/content/app/**/*.integration.test.ts"]
+    },
+    {
+      "id": "kernel-module-elections-unit",
+      "repo": "kernel",
+      "category": "unit",
+      "cwd": "modules/elections",
+      "kind": "vitest",
+      "command": "pnpm run test",
+      "timeoutMs": 600000,
+      "requiresStack": false,
+      "testGlobs": ["modules/elections/test/**/*.test.ts"]
     },
     {
       "id": "kernel-module-files-unit",

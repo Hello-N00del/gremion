@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import * as fs from 'fs'
 import type { ModuleManifest } from '$lib/modules/types'
+import { OPERATOR_CEILING_DAYS } from '$lib/retention-tiers'
 import type { GremionConfig } from './config'
 
 // Mock the $env/dynamic/private module
@@ -341,31 +342,146 @@ describe('ConfigStore', () => {
       mockFs.writeFileSync.mockImplementation(() => undefined)
     })
 
-    it('returns GDPR-safe defaults when no retention config stored', async () => {
+    // R29-RETENTION-30-K [D R29-I6]: every log class is kept at most 30 days.
+    // The daily purge tick adds up to 24 h, so the caps are 29 d for the tiers a
+    // tick enforces (cap + 24 h = 30 d). security_nopii_logs_days keeps cap 30
+    // (an operator-set 30 must stay valid [R31-I4a]).
+    it('returns the R29-I6 defaults when no retention config stored', async () => {
       const { readConfig } = await import('./config')
       const config = readConfig()
       expect(config.retention.access_logs_days).toBe(14)
-      expect(config.retention.app_logs_days).toBe(30)
-      expect(config.retention.security_logs_days).toBe(90)
-      expect(config.retention.security_nopii_logs_days).toBe(90)
+      expect(config.retention.app_logs_days).toBe(28)
+      expect(config.retention.security_logs_days).toBe(27)
+      expect(config.retention.security_nopii_logs_days).toBe(27)
     })
 
-    it('clamps access_logs_days to hard cap of 30', async () => {
+    it('clamps access_logs_days to hard cap of 29', async () => {
       const { writeConfig } = await import('./config')
       const result = writeConfig({ retention: { access_logs_days: 999 } })
-      expect(result.retention.access_logs_days).toBe(30)
+      expect(result.retention.access_logs_days).toBe(29)
     })
 
-    it('clamps security_logs_days to hard cap of 180', async () => {
+    it('clamps app_logs_days to hard cap of 29', async () => {
+      const { writeConfig } = await import('./config')
+      const result = writeConfig({ retention: { app_logs_days: 90 } })
+      expect(result.retention.app_logs_days).toBe(29)
+    })
+
+    it('clamps security_logs_days to hard cap of 29', async () => {
       const { writeConfig } = await import('./config')
       const result = writeConfig({ retention: { security_logs_days: 365 } })
-      expect(result.retention.security_logs_days).toBe(180)
+      expect(result.retention.security_logs_days).toBe(29)
     })
 
-    it('clamps security_nopii_logs_days to hard cap of 365', async () => {
+    it('clamps security_nopii_logs_days to hard cap of 30 (30 itself stays valid)', async () => {
       const { writeConfig } = await import('./config')
-      const result = writeConfig({ retention: { security_nopii_logs_days: 1000 } })
-      expect(result.retention.security_nopii_logs_days).toBe(365)
+      expect(writeConfig({ retention: { security_nopii_logs_days: 1000 } }).retention.security_nopii_logs_days).toBe(30)
+      expect(writeConfig({ retention: { security_nopii_logs_days: 30 } }).retention.security_nopii_logs_days).toBe(30)
+    })
+
+    // A config persisted before R29-I6 carries 90 / 180 / 365. Those must not
+    // survive a READ: the purge tick reads the config and would otherwise keep
+    // rows 90 days. (writeConfig clamping alone never touches a stored file.)
+    it('clamps stored values above the caps on READ (a stored 90 cannot survive)', async () => {
+      mockFs.existsSync.mockReturnValue(true)
+      mockFs.readFileSync.mockReturnValue(
+        JSON.stringify({
+          retention: { access_logs_days: 30, app_logs_days: 90, security_logs_days: 90, security_nopii_logs_days: 365 },
+        }),
+      )
+      const { readConfig } = await import('./config')
+      const r = readConfig().retention
+      expect(r.access_logs_days).toBe(29)
+      expect(r.app_logs_days).toBe(29)
+      expect(r.security_logs_days).toBe(29)
+      expect(r.security_nopii_logs_days).toBe(30)
+    })
+
+    it('leaves stored values within the caps untouched on read', async () => {
+      mockFs.existsSync.mockReturnValue(true)
+      mockFs.readFileSync.mockReturnValue(
+        JSON.stringify({ retention: { security_logs_days: 21, app_logs_days: 7 } }),
+      )
+      const { readConfig } = await import('./config')
+      const r = readConfig().retention
+      expect(r.security_logs_days).toBe(21)
+      expect(r.app_logs_days).toBe(7)
+    })
+
+    // The purge tick reads security_logs_days straight from readConfig(). With the
+    // REAL readConfig (no mock) a config that lacks the key, or the whole block,
+    // reads back the registry default, so the tick never sees undefined.
+    it('a config without security_logs_days reads back 27 (the value the purge tick uses)', async () => {
+      const { readConfig } = await import('./config')
+      for (const stored of [{}, { retention: {} }, { retention: { app_logs_days: 7 } }]) {
+        mockFs.existsSync.mockReturnValue(true)
+        mockFs.readFileSync.mockReturnValue(JSON.stringify(stored))
+        expect(readConfig().retention.security_logs_days).toBe(27)
+      }
+    })
+
+    it('parseConfig clamps too (same merge path as readConfig)', async () => {
+      const { parseConfig } = await import('./config')
+      expect(parseConfig({ retention: { security_logs_days: 180 } }).retention.security_logs_days).toBe(29)
+    })
+
+    // The read-time clamp shortens a stored value right before the daily audit
+    // purge deletes rows older than it. It must not do so silently.
+    describe('clamp warning (once per process and field)', () => {
+      const retentionWarnings = (spy: { mock: { calls: unknown[][] } }) =>
+        spy.mock.calls.map((c) => String(c[0])).filter((m) => m.includes('[config] retention.'))
+
+      it('warns with field, stored value, clamped value and the audit purge when security_logs_days is shortened', async () => {
+        const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+        mockFs.existsSync.mockReturnValue(true)
+        mockFs.readFileSync.mockReturnValue(JSON.stringify({ retention: { security_logs_days: 90 } }))
+        const { readConfig } = await import('./config')
+        readConfig()
+        const msgs = retentionWarnings(warnSpy)
+        expect(msgs).toHaveLength(1)
+        expect(msgs[0]).toContain('security_logs_days')
+        expect(msgs[0]).toContain('stored value 90')
+        expect(msgs[0]).toContain('clamped to 29')
+        expect(msgs[0]).toContain('audit_log')
+        expect(msgs[0]).toContain(`operator ceiling ${OPERATOR_CEILING_DAYS} days`)
+      })
+
+      it('warns only once per field, however often the config is read', async () => {
+        const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+        mockFs.existsSync.mockReturnValue(true)
+        mockFs.readFileSync.mockReturnValue(JSON.stringify({ retention: { security_logs_days: 90, app_logs_days: 90 } }))
+        const { readConfig } = await import('./config')
+        readConfig()
+        readConfig()
+        readConfig()
+        const msgs = retentionWarnings(warnSpy)
+        expect(msgs).toHaveLength(2)
+        expect(msgs.filter((m) => m.includes('security_logs_days'))).toHaveLength(1)
+        expect(msgs.filter((m) => m.includes('app_logs_days'))).toHaveLength(1)
+      })
+
+      it('does not warn for in-cap stored values, absent keys or the defaults', async () => {
+        const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+        mockFs.existsSync.mockReturnValue(true)
+        mockFs.readFileSync.mockReturnValue(JSON.stringify({ retention: { security_logs_days: 29, app_logs_days: 7 } }))
+        const { readConfig } = await import('./config')
+        readConfig()
+        expect(retentionWarnings(warnSpy)).toHaveLength(0)
+      })
+
+      // A type-invalid stored value never reaches the clamp: the schema rejects it.
+      // parseConfig throws; readConfig falls back to defaults WITH a warning that
+      // names the field. The behaviour parseConfig already has is kept (fail loudly).
+      it('a string stored retention value fails loudly: parseConfig throws, readConfig warns naming the field', async () => {
+        const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+        const { parseConfig, readConfig } = await import('./config')
+        expect(() => parseConfig({ retention: { security_logs_days: '90' } })).toThrow(/security_logs_days/)
+        mockFs.existsSync.mockReturnValue(true)
+        mockFs.readFileSync.mockReturnValue(JSON.stringify({ retention: { security_logs_days: '90' } }))
+        readConfig()
+        const all = warnSpy.mock.calls.map((c) => c.map(String).join(' '))
+        expect(all.some((m) => m.includes('failed schema validation') && m.includes('retention.security_logs_days'))).toBe(true)
+      })
     })
   })
 })
@@ -549,9 +665,9 @@ describe('#248: deep-merge all nested config blocks (no shallow-replace / NaN po
     const { parseConfig } = await import('./config')
     const cfg = parseConfig({ retention: { access_logs_days: 7 } })
     expect(cfg.retention.access_logs_days).toBe(7)
-    expect(cfg.retention.app_logs_days).toBe(30)
-    expect(cfg.retention.security_logs_days).toBe(90)
-    expect(cfg.retention.security_nopii_logs_days).toBe(90)
+    expect(cfg.retention.app_logs_days).toBe(28)
+    expect(cfg.retention.security_logs_days).toBe(27)
+    expect(cfg.retention.security_nopii_logs_days).toBe(27)
   })
 
   it('writeConfig over a partial stored backups/retention never produces NaN/null clamps', async () => {
@@ -578,7 +694,7 @@ describe('#248: deep-merge all nested config blocks (no shallow-replace / NaN po
     expect(Number.isNaN(result.backups.retention_days)).toBe(false)
     expect(result.backups.retention_days).toBe(30)
     expect(Number.isNaN(result.retention.app_logs_days)).toBe(false)
-    expect(result.retention.app_logs_days).toBe(30)
+    expect(result.retention.app_logs_days).toBe(28)
     expect(result.retention.access_logs_days).toBe(7)
     expect(written).not.toMatch(/"retention_days":\s*null/)
     expect(written).not.toMatch(/"app_logs_days":\s*null/)

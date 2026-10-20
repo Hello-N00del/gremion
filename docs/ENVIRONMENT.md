@@ -375,13 +375,18 @@ The `vector` service tails Traefik access logs, pseudonymises IPs
 
 | Variable | Default | Hard cap |
 |----------|---------|----------|
-| `LOG_ACCESS_RETENTION_SECONDS` | `1209600` (14 d) | `2592000` (30 d) |
-| `LOG_APP_RETENTION_SECONDS` | `2592000` (30 d) | `7776000` (90 d) |
-| `LOG_SECURITY_RETENTION_SECONDS` | `7776000` (90 d) | `15552000` (180 d) |
-| `LOG_SECURITY_NOPII_RETENTION_SECONDS` | `7776000` (90 d) | `31536000` (365 d) |
+| `LOG_ACCESS_RETENTION_SECONDS` | `1209600` (14 d) | `2505600` (29 d) |
+| `LOG_APP_RETENTION_SECONDS` | `2419200` (28 d) | `2505600` (29 d) |
+| `LOG_SECURITY_RETENTION_SECONDS` | `2332800` (27 d) | `2505600` (29 d) |
+| `LOG_SECURITY_NOPII_RETENTION_SECONDS` | `2332800` (27 d) | `2592000` (30 d) |
 
-Operator ceiling 30 d [D R29-I6]; the application tiers change with TASK-033. The
-edge files, Traefik's own log and Keycloak's event store already obey it
+Operator ceiling 30 d [D R29-I6]: the defaults and caps are those of the gremion-ui
+retention tiers (`gremion-ui/src/lib/retention-tiers.ts`), 29 d where the daily purge
+tick enforces the window and 30 d for the no-PII tier. Only
+`LOG_ACCESS_RETENTION_SECONDS` is read by `docker-compose.yml` (Vector's ingest
+filter); the other three document the tier defaults, and the application tiers
+without a purge consumer change with TASK-033. The edge files, Traefik's own log and
+Keycloak's event store already obey the ceiling
 ([log-retention-policy.md](log-retention-policy.md), "Upper bound").
 
 The IP-pseudonymisation key is supplied to Vector as a Docker secret file

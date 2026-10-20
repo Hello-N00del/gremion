@@ -97,6 +97,8 @@ describe('superviseWorker — the state a health probe can read', () => {
     expect(classifyWorkerError(cover)).toEqual({ errorClass: 'StreamCoverError', code: 'stream-cover' })
     const gone = Object.assign(new Error('deleted on the server'), { name: 'StreamGoneError' })
     expect(classifyWorkerError(gone).code).toBe('stream-gone')
+    const silent = Object.assign(new Error('went silent, probe undecided'), { name: 'HeartbeatsMissedError' })
+    expect(classifyWorkerError(silent)).toEqual({ errorClass: 'HeartbeatsMissedError', code: 'consumer-stalled' })
     expect(classifyWorkerError('connection refused to nats://10.0.0.4:4222')).toEqual({
       errorClass: 'NonError',
       code: 'unknown',

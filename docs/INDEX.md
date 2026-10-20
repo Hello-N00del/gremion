@@ -27,6 +27,7 @@ repositories — one per module — and carry their own docs.
 | [log-retention-policy.md](./log-retention-policy.md) | The Vector log pipeline, retention windows, IP pseudonymisation |
 | [compliance/controller-processor-split.md](./compliance/controller-processor-split.md) | DRAFT: how GDPR controller / processor roles are intended to fall for a self-hosted install and for a hosted control plane |
 | [security/test-smtp-guard.md](./security/test-smtp-guard.md) | The outbound target guard on `/api/setup/test-smtp`: canonical-bytes address predicate, resolve-once, the `SMTP_TEST_ALLOW_PRIVATE` range opt-in and its carve-outs, DNS classification — and the named residuals |
+| [pilot/poll-usage/README.md](./pilot/poll-usage/README.md) | The two open-poll forms of the pilot, the no-anonymity and no-eligibility wording rule, and how poll usage is measured from go-live |
 
 ## Develop
 
@@ -50,8 +51,8 @@ repositories — one per module — and carry their own docs.
 | [ops/go-live-gate.md](./ops/go-live-gate.md) | The go-live gate: the eight conditions an operator-run instance must prove against the running system before it may hold real users or real personal data |
 | [ops/release-1-waivers.md](./ops/release-1-waivers.md) | The six release-1 waivers (P4): what is waived, which §L item and gate it suspends, who lifts it, and the named residuals |
 | [deployment-architecture.md](./deployment-architecture.md) | The deployment shape: two tiers, two colours, networks, the release tree, deploy/switch/rollback and verification |
-| [superpowers/specs/spec-b-kernel-portback-relocatability-release-design.md](./superpowers/specs/spec-b-kernel-portback-relocatability-release-design.md) | Spec B (approved 2026-09-15): kernel port-back, relocatability, release supply chain, the unit registry |
-| [superpowers/specs/spec-d-module-sdk-split-assembler-verticals-design.md](./superpowers/specs/spec-d-module-sdk-split-assembler-verticals-design.md) | Spec D (approved 2026-09-15): module SDK, one repo per module, assembler resolution, the StuRa vertical |
+| [design-specs/spec-b-kernel-portback-relocatability-release-design.md](./design-specs/spec-b-kernel-portback-relocatability-release-design.md) | Spec B (approved 2026-09-15): kernel port-back, relocatability, release supply chain, the unit registry |
+| [design-specs/spec-d-module-sdk-split-assembler-verticals-design.md](./design-specs/spec-d-module-sdk-split-assembler-verticals-design.md) | Spec D (approved 2026-09-15): module SDK, one repo per module, assembler resolution, the StuRa vertical |
 | [runbooks/tenant-edge.md](./runbooks/tenant-edge.md) | Multi-tenancy edge: Traefik `x-forwarded-host` tenant resolution |
 | [runbooks/tenant-lifecycle.md](./runbooks/tenant-lifecycle.md) | Tenant create / provision / evict / delete (with crypto-shred) |
 | [runbooks/pgbouncer.md](./runbooks/pgbouncer.md) | PgBouncer transaction pooling (production profile) |

@@ -20,7 +20,11 @@
 
 import { getTenant } from '$lib/server/tenant/context'
 import { noopTracer, type TracerPort } from '@gremion/ports/tracer'
-import { ChannelNotPublishableError } from '../publish-errors'
+import {
+  ChannelNotPublishableError,
+  TenantIdentityMismatchError,
+  isTenantIdentityMismatchBody,
+} from '../publish-errors'
 import type {
   ChannelId,
   ChannelStatus,
@@ -47,10 +51,13 @@ import type {
  */
 export class ContentServiceError extends Error {
   readonly status: number
+  /** The leaf's raw response body (what follows the status in the message). */
+  readonly body: string
   constructor(status: number, message: string) {
     super(`[content-service-client] Leaf returned ${status}: ${message}`)
     this.name = 'ContentServiceError'
     this.status = status
+    this.body = message
   }
 }
 
@@ -548,6 +555,9 @@ export class ServiceContentClient implements ContentBackendPort {
       )) as PublishResult
     } catch (err) {
       if (err instanceof ContentServiceError && err.status === 409) {
+        // A tenant identity mismatch is a service-assignment fault, not a channel
+        // state: recognise it before the domain mapping below.
+        if (isTenantIdentityMismatchBody(err.body)) throw new TenantIdentityMismatchError()
         throw new ChannelNotPublishableError('content channel is not in a publishable state')
       }
       throw err

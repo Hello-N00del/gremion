@@ -6,13 +6,13 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { DEFAULT_ROOT } from './interim-module-overlay.mjs'
-import { LANE_DIR, laneModules, laneTestFiles, runLane } from './module-lane.mjs'
+import { LANE_DIR, LANE_STAND_INS, buildLane, laneModules, laneTestFiles, runLane, writeStandIns } from './module-lane.mjs'
 
 const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), 'module-lane.mjs')
 
@@ -125,4 +125,48 @@ test('the CLI lists the lane without running it, and refuses an empty selection 
   assert.match(none.stderr, /a lane over nothing must not pass/)
   const bad = spawnSync(process.execPath, [SCRIPT, '--nope'], { encoding: 'utf8' })
   assert.equal(bad.status, 2)
+})
+
+// TASK-205c: the lane is self-contained. It overlays every module with an app/ half and regenerates the
+// manifest barrel, so a disabled module's "is registered in MODULE_MANIFESTS" golden runs against a barrel
+// that holds it; and a half that imports a module the kernel does not carry yet gets a stand-in until the real
+// file lands.
+test('buildLane on the real tree: the disabled manifests are in the lane barrel, the enabled halves are overlaid, the real barrel is untouched', () => {
+  const base = mkdtempSync(join(tmpdir(), 't205c-lane-build-'))
+  const laneDir = join(base, '_module-lane')
+  try {
+    const r = buildLane(DEFAULT_ROOT, ['content', 'vault'], laneDir)
+    const barrel = readFileSync(join(laneDir, 'src/lib/modules/manifests/index.generated.ts'), 'utf8')
+    for (const name of ['contentManifest', 'vaultManifest', 'newsletterManifest', 'boardManifest']) assert.match(barrel, new RegExp(name), `${name} is in the lane barrel`)
+    const realBarrel = readFileSync(join(DEFAULT_ROOT, 'gremion-ui/src/lib/modules/manifests/index.generated.ts'), 'utf8')
+    assert.doesNotMatch(realBarrel, /contentManifest|vaultManifest/, 'a disabled module never reaches the real barrel')
+    assert.ok(r.modules.includes('content') && r.modules.includes('vault') && r.modules.includes('publishing'), `overlaid: ${r.modules.join(', ')}`)
+    assert.ok(existsSync(join(laneDir, 'src/lib/server/newsletter/collabora-convert.ts')), 'an enabled half a disabled one imports is overlaid')
+  } finally {
+    rmSync(base, { recursive: true, force: true })
+  }
+})
+
+test('writeStandIns writes a missing path and leaves a present one alone', () => {
+  const dir = mkdtempSync(join(tmpdir(), 't205c-standin-'))
+  try {
+    put(dir, 'src/real.ts', 'real\n')
+    const written = writeStandIns(dir, { 'src/real.ts': 'stand-in\n', 'src/missing/x.ts': 'stand-in\n' })
+    assert.deepEqual(written, ['src/missing/x.ts'])
+    assert.equal(readFileSync(join(dir, 'src/real.ts'), 'utf8'), 'real\n')
+    assert.equal(readFileSync(join(dir, 'src/missing/x.ts'), 'utf8'), 'stand-in\n')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('no lane stand-in is stale: once a module half provides the file, the stand-in must go', () => {
+  const modulesDir = join(DEFAULT_ROOT, 'modules')
+  const apps = readdirSync(modulesDir).filter((id) => existsSync(join(modulesDir, id, 'app')))
+  for (const rel of Object.keys(LANE_STAND_INS)) {
+    assert.ok(rel.startsWith('src/'), `${rel} is a path under the lane's src/`)
+    const owners = apps.filter((id) => existsSync(join(modulesDir, id, 'app', rel.slice('src/'.length))))
+    assert.deepEqual(owners, [], `${rel} now exists in modules/${owners.join(', modules/')}/app: delete its LANE_STAND_INS entry`)
+    assert.equal(existsSync(join(DEFAULT_ROOT, 'gremion-ui', rel)), false, `${rel} is a shell file: delete its LANE_STAND_INS entry`)
+  }
 })

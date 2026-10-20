@@ -280,6 +280,8 @@ set_key() {   # <KEY> <value>
     cmp -s "$OBS_DIR/grafana/provisioning/alerting/rules.yaml" "$GREMION_ROOT/$PROV/alerting/rules.yaml"
     cmp -s "$OBS_DIR/grafana/provisioning/alerting/policies.yaml" "$GREMION_ROOT/$PROV/alerting/policies.yaml"
     cmp -s "$OBS_DIR/grafana/provisioning/datasources/datasources.yaml" "$GREMION_ROOT/$PROV/datasources/datasources.yaml"
+    cmp -s "$OBS_DIR/grafana/provisioning/dashboards/dashboards.yaml" "$GREMION_ROOT/$PROV/dashboards/dashboards.yaml"
+    cmp -s "$OBS_DIR/grafana/provisioning/dashboards/gremion-betrieb.json" "$GREMION_ROOT/$PROV/dashboards/gremion-betrieb.json"
     grep -q "url: 'http://127.0.0.1:9099/hook'" "$cp"
     grep -q '^      - uid: platform-webhook$' "$cp"
     run grep -c 'disableResolveMessage: false' "$cp"
@@ -639,6 +641,16 @@ prom() { cat "$GREMION_ROOT/runtime/textfile/gremion.prom"; }
     grep -q '^gremion_postgres_connections_used 42$' "$GREMION_ROOT/runtime/textfile/gremion.prom"
     grep -q '^gremion_postgres_connections_max 100$' "$GREMION_ROOT/runtime/textfile/gremion.prom"
     assert_recorded docker "com.docker.compose.project=staging-state"
+}
+
+@test "metrics-textfile looks the state containers up in GREMION_STATE_PROJECT when set (a single-project layout), else in <STACK>-state" {
+    shim_docker_world
+    shim_timer enabled
+    STACK=staging GREMION_STATE_PROJECT=legacy run "$METRICS"
+    [ "$status" -eq 0 ]
+    assert_recorded docker "com.docker.compose.project=legacy"
+    run grep -c "com.docker.compose.project=staging-state" "$SHIM_LOG"
+    [ "$output" = "0" ]
 }
 
 @test "metrics-textfile reports the last job run per job kind from the platform database (TASK-039-FU, one family)" {

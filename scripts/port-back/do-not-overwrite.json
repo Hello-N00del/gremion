@@ -100,7 +100,7 @@
     }
   ],
   "watchedRed": {
-    "verifier": "fresh agent, not the author of the guard (spec B §E)",
+    "verifier": "independent reviewer, not the author of the guard (spec B §E)",
     "on": "2026-09-16",
     "scratchTree": "git clone --no-hardlinks of the kernel into the worktree-local .scratch/b3-red (git-excluded), removed afterwards; the plan spelled /tmp/b3-red, but this box forbids writing under any Temp path, and a clone is a clone wherever it sits",
     "mutations": [
