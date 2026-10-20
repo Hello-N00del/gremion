@@ -44,6 +44,13 @@ describe('plumbingSql renders lint-clean (TRD-361 expand lint, TASK-075)', () =>
     expect(t).toContain('CHECK (uuid_extract_version(event_id) = 7)')
   })
 
+  test('the relay head-of-line probe has its partial index (aggregate order, unpublished rows only)', () => {
+    const t = plumbingSql('gov')
+    expect(t).toContain(
+      "CREATE INDEX outbox_aggregate_unpublished_idx ON gov.outbox (aggregate_type, aggregate_id, aggregate_version) WHERE relay_state <> 'published';",
+    )
+  })
+
   test('RLS is explicit for all four tables: 12 statements, tenant policy names kept', () => {
     const t = plumbingSql('idt')
     for (const tbl of ['outbox', 'inbox', 'applied_aggregate_version', 'job']) {

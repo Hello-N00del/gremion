@@ -97,6 +97,7 @@ CREATE INDEX outbox_next_attempt_at_idx ON {{ctx}}.outbox (next_attempt_at) WHER
 CREATE INDEX outbox_published_at_idx ON {{ctx}}.outbox (published_at) WHERE relay_state = 'published';
 CREATE INDEX outbox_dead_lettered_at_idx ON {{ctx}}.outbox (dead_lettered_at) WHERE relay_state = 'dead_lettered';
 CREATE INDEX outbox_test_run_id_idx ON {{ctx}}.outbox (test_run_id) WHERE test_run_id IS NOT NULL;
+CREATE INDEX outbox_aggregate_unpublished_idx ON {{ctx}}.outbox (aggregate_type, aggregate_id, aggregate_version) WHERE relay_state <> 'published';
 
 CREATE TABLE {{ctx}}.inbox (
   source            text        NOT NULL,
