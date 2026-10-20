@@ -1,4 +1,5 @@
 import { handle as authHandle } from './auth'
+import { sessionEndpointGuard } from '$lib/server/security/session-endpoint-guard'
 import { redirect, type Handle, type HandleFetch, type HandleServerError } from '@sveltejs/kit'
 import { sequence } from '@sveltejs/kit/hooks'
 import { building } from '$app/environment'
@@ -930,6 +931,7 @@ export const handle = sequence(
   cspGuard,
   tenantResolveHandle,
   tenantBrandStyleHandle,
+  sessionEndpointGuard,
   authHandleUnlessExempt,
   authGuard,
   i18nHandle,
