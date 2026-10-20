@@ -634,3 +634,34 @@ release_repo() {
     assert_recorded docker "-e GREMION_RELEASE_TIP=${tip} "
     ! grep -qF -- "GREMION_RELEASE_TIP=ffffffffffffffffffffffffffffffffffffffff" "$SHIM_LOG" || { echo "the caller's tip reached the one-shot"; return 1; }
 }
+
+# ── TASK-044 (D2, section 9): create carries the operator's DPIA decisions ────
+# The level-1 gate wants a written DPIA decision per --enable module BEFORE the
+# customer exists; --dpia-json is the only way a create request carries them.
+
+@test "TASK-044: create --dpia-json mounts the file read-only and passes it to phase A and phase B" {
+    printf '{"calendar":{"requiresDpia":"no","reasonCodes":["x"],"documentRef":"TOM-1"}}' > "${GREMION_ROOT}/dpia.json"
+    run "$LAUNCHER" create alpha-rat --host rat.alpha.example --config "${GREMION_ROOT}/tenant-config.json" \
+        --it-admin it@alpha.example --council-admin rat@alpha.example --enable calendar --dpia-json "${GREMION_ROOT}/dpia.json" --operator "$OP"
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
+    local mounted passed
+    mounted="$(grep -c -- ':/run/gremion/tenant-dpia.json:ro' "$SHIM_LOG" || true)"
+    passed="$(grep -c -- '--dpia-json /run/gremion/tenant-dpia.json' "$SHIM_LOG" || true)"
+    [ "$mounted" -eq 2 ] && [ "$passed" -eq 2 ] || { echo "mounted=$mounted passed=$passed"; cat "$SHIM_LOG"; return 1; }
+}
+
+@test "TASK-044: create without --dpia-json mounts and passes no decision file; a missing file is a usage error" {
+    create
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    ! grep -q 'tenant-dpia.json' "$SHIM_LOG" || { cat "$SHIM_LOG"; return 1; }
+    run "$LAUNCHER" create alpha-rat --host rat.alpha.example --config "${GREMION_ROOT}/tenant-config.json" \
+        --it-admin it@alpha.example --council-admin rat@alpha.example --enable calendar --dpia-json "${GREMION_ROOT}/absent.json" --operator "$OP"
+    [ "$status" -eq 2 ] || { echo "status=$status $output"; return 1; }
+}
+
+@test "TASK-044: every tenant-create one-shot forwards GREMION_SCRATCH_FIXTURES by name only (never a value)" {
+    GREMION_SCRATCH_FIXTURES=t043-0123abcd run "$LAUNCHER" status alpha-rat
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    assert_recorded docker '-e GREMION_SCRATCH_FIXTURES '
+    ! grep -qF -- 'GREMION_SCRATCH_FIXTURES=' "$SHIM_LOG" || { echo "a value was inlined"; return 1; }
+}

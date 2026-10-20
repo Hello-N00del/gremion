@@ -6,7 +6,7 @@ set -euo pipefail
 #   gremion-tenant init [--realm-only] [--panel-origin <origin>]
 #   gremion-tenant init --realm-only --keycloak-container <name> [--panel-origin <origin>]
 #   gremion-tenant create <slug> --host <host> --config <file> --it-admin <email>
-#                         --council-admin <email> [--enable a,b] [--body-name <name>]
+#                         --council-admin <email> [--enable a,b] [--dpia-json <file>] [--body-name <name>]
 #   gremion-tenant suspend <slug> | resume <slug>
 #   gremion-tenant reconcile <slug> [--apply]
 #   gremion-tenant status <slug>
@@ -65,7 +65,7 @@ usage() {
 usage: gremion-tenant <verb> [args...]
   init [--realm-only] [--panel-origin <origin>]
   init --realm-only --keycloak-container <name> [--panel-origin <origin>]
-  create <slug> --host <host> --config <file> --it-admin <email> --council-admin <email> [--enable a,b] [--body-name <name>]
+  create <slug> --host <host> --config <file> --it-admin <email> --council-admin <email> [--enable a,b] [--dpia-json <file>] [--body-name <name>]
   suspend <slug> | resume <slug>
   reconcile <slug> [--apply]
   status <slug>
@@ -154,7 +154,7 @@ tc() {
     local tip; tip="$(release_tip)"
     ( cd "$RELEASE_DIR" && docker compose --env-file "$envfile" run --rm -T \
         -e "GREMION_RELEASE_TIP=${tip}" \
-        -e TRAEFIK_CERT_RESOLVER -e EDGE_BIND_IP -e EDGE_BIND_IP6 -e TENANT_DNS_PREFLIGHT \
+        -e TRAEFIK_CERT_RESOLVER -e EDGE_BIND_IP -e EDGE_BIND_IP6 -e TENANT_DNS_PREFLIGHT -e GREMION_SCRATCH_FIXTURES \
         "${TC_MOUNT[@]}" tenant-create "$@" )
 }
 
@@ -460,7 +460,7 @@ cmd_init() {
 cmd_create() {
     local slug="${1:-}"; shift || true
     need_slug "$slug"
-    local host="" config="" it="" council="" enable="" body=""
+    local host="" config="" it="" council="" enable="" body="" dpia=""
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --host) need_value "$@"; host="$2"; shift 2 ;;
@@ -469,6 +469,7 @@ cmd_create() {
             --council-admin) need_value "$@"; council="$2"; shift 2 ;;
             --enable) need_value "$@"; enable="$2"; shift 2 ;;
             --body-name) need_value "$@"; body="$2"; shift 2 ;;
+            --dpia-json) need_value "$@"; dpia="$2"; shift 2 ;;
             --operator) need_value "$@"; OPERATOR_ID="$2"; shift 2 ;;
             *) usage >&2; die "create: unknown argument: $1" "$GREMION_EXIT_USAGE" ;;
         esac
@@ -479,6 +480,7 @@ cmd_create() {
     [[ "$it" =~ $EMAIL_RE ]] || die "create needs --it-admin <email>" "$GREMION_EXIT_USAGE"
     [[ "$council" =~ $EMAIL_RE ]] || die "create needs --council-admin <email>" "$GREMION_EXIT_USAGE"
     [[ -z "$enable" || "$enable" =~ ^[a-z][a-z0-9_]*(,[a-z][a-z0-9_]*)*$ ]] || die "--enable takes a,b,c module ids" "$GREMION_EXIT_USAGE"
+    [[ -z "$dpia" || -f "$dpia" ]] || die "--dpia-json takes an existing file" "$GREMION_EXIT_USAGE"
     active_colour
     load_host_facts
     local token before after
@@ -489,7 +491,13 @@ cmd_create() {
                     --it-admin "$it" --council-admin "$council")
     [[ -z "$enable" ]] || flags+=(--enable "$enable")
     [[ -z "$body" ]] || flags+=(--body-name "$body")
-    TC_MOUNT=(-v "$(realpath "$config"):/run/gremion/tenant-config.json:ro")
+    # TASK-044 D2: the operator's dated DPIA decision per --enable module, read-only into both phases
+    local -a mounts=(-v "$(realpath "$config"):/run/gremion/tenant-config.json:ro")
+    if [[ -n "$dpia" ]]; then
+        flags+=(--dpia-json /run/gremion/tenant-dpia.json)
+        mounts+=(-v "$(realpath "$dpia"):/run/gremion/tenant-dpia.json:ro")
+    fi
+    TC_MOUNT=("${mounts[@]}")
 
     info "phase A (container): realm, kernel database, domain, storage prefix, first body, broker account"
     tc phase-a "${flags[@]}" || die "phase A of ${slug} failed; a rerun resumes from the ledger" "$GREMION_EXIT_ASSERT"
@@ -499,7 +507,7 @@ cmd_create() {
     TC_MOUNT=()
     tc record-step "$slug" mail_principal_issued --operator "$OPERATOR_ID" \
         || die "record-step mail_principal_issued of ${slug} failed" "$GREMION_EXIT_ASSERT"
-    TC_MOUNT=(-v "$(realpath "$config"):/run/gremion/tenant-config.json:ro")
+    TC_MOUNT=("${mounts[@]}")
     info "phase B (container): first administrators, modules, active"
     tc phase-b "${flags[@]}" || die "phase B of ${slug} failed; a rerun resumes from the ledger" "$GREMION_EXIT_ASSERT"
     TC_MOUNT=()

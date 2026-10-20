@@ -52,6 +52,7 @@ import {
   tokenFor,
   type AdminSpec,
   type CreateSpec,
+  type DpiaSpec,
   type ProvisioningDeps,
 } from '@gremion/provisioning'
 import { assertPlatform, dropKernelDatabase, type LifecycleModule, type ModuleServer } from '@gremion/tenant-store/lifecycle'
@@ -83,6 +84,7 @@ import { materializeConfig, assertBrandIdentityComplete } from '../src/lib/serve
 import { tlog } from '../src/lib/server/observability/tenant-log'
 import { deleteTenant, type DeleteDeps, type LeafShredExecutor } from '../src/lib/server/tenant/provisioner/lifecycle'
 import { GATE_USAGE, GATE_VERBS, refusalLine, runGateVerb } from './tenant-provision-gate'
+import { parseDpiaMap, scratchFixturesAllowed } from './tenant-provision-scratch'
 
 const repoRoot = join(import.meta.dirname, '..', '..')
 const kcDir = join(repoRoot, 'docker', 'keycloak')
@@ -320,6 +322,17 @@ function positional(index = 0): string | undefined {
   return out[index]
 }
 
+/** TASK-044 D2: --dpia-json <file> carries the operator's DPIA decision per --enable module. */
+function dpiaFromFlag(): { dpia?: Record<string, DpiaSpec> } {
+  const path = flag('--dpia-json')
+  if (!path) return {}
+  try {
+    return { dpia: parseDpiaMap(readFileSync(path, 'utf-8')) }
+  } catch (err) {
+    throw new UsageError(`${err instanceof Error ? err.message : String(err)} (${path})`)
+  }
+}
+
 function createSpec(slug: string): CreateSpec & { configFile: string; bodyName: string } {
   const admins: AdminSpec[] = [
     { role: 'it-admin', email: reqFlag('--it-admin') },
@@ -334,6 +347,7 @@ function createSpec(slug: string): CreateSpec & { configFile: string; bodyName: 
     admins,
     configFile: reqFlag('--config'),
     bodyName: flag('--body-name') ?? 'Rat',
+    ...dpiaFromFlag(),
   }
 }
 
@@ -434,7 +448,7 @@ async function liveDeps(opts: { configFile?: string; bodyName?: string; needEdge
       platformDomain: env.platformDomain,
       ledger: pgLedger(platform),
       // TASK-044: the level-1 gate over gremion_platform, on the host's derived release tip
-      gate: pgGate(platform, { releaseTipSha: releaseTip() }),
+      gate: pgGate(platform, { releaseTipSha: releaseTip(), allowFixtureEvidence: scratchFixturesAllowed(process.env.GREMION_SCRATCH_FIXTURES, process.env.PLATFORM_DATABASE_URL) }),
       modules: pgModules({
         platform,
         catalogue,
