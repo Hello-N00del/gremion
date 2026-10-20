@@ -81,7 +81,7 @@ describe('expand: refused forms name the statement and the rule', () => {
   })
 
   test('TASK-044: createdRoutineNames keeps the schema of a qualified name', () => {
-    assert.deepEqual([...createdRoutineNames('CREATE FUNCTION ops.f() RETURNS int LANGUAGE sql AS $$ SELECT 1 $$;\nCREATE VIEW v AS SELECT 1;\n')].sort(), ['ops.f', 'v'])
+    assert.deepEqual([...createdRoutineNames('CREATE FUNCTION ops.f() RETURNS int LANGUAGE sql AS $$ SELECT 1 $$;\nCREATE VIEW v AS SELECT 1;\n')].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)), ['ops.f', 'v'])
   })
 
   // TASK-044 (SCHEMA §0.10 allows a CHECK added NOT VALID in expand): a FOREIGN
