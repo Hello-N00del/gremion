@@ -77,6 +77,10 @@ export async function buildAuthConfig(event: RequestEvent): Promise<SvelteKitAut
         jwks_endpoint: `${internalBase}/protocol/openid-connect/certs`,
       }),
     ],
+    // ASVS 4.0.3 V3.3.2 / NIST SP 800-63B AAL2. Auth.js re-issues the cookie on
+    // every session read, so maxAge is a backstop (sliding); the 12 h absolute
+    // (ssoSessionMaxLifespan 43200 s) and 30 min idle are enforced by Keycloak.
+    session: { strategy: 'jwt', maxAge: 43200 },
     callbacks: { jwt: jwtCallback, session: sessionCallback },
     pages: { signIn: '/auth/login' },
   }
@@ -253,6 +257,11 @@ const sessionCallback: NonNullable<NonNullable<SvelteKitAuthConfig['callbacks']>
         (token.stepUpAt as number | undefined) ??
         (token.authTime as number | undefined) ??
         0
+      // A failed refresh / decode (jwtCallback sets token.error) must reach the
+      // authGuard: hooks.server.ts forces re-login on session.error. Without this
+      // a stale cookie kept rendering pages after the SSO session ended and every
+      // integrated-service call carried an expired bearer.
+      ;(session as unknown as { error?: string }).error = token.error as string | undefined
       // accessToken and idToken are server-side only — never returned in load() data to browser
       ;(session as unknown as { accessToken?: string }).accessToken = token.accessToken as string | undefined
       ;(session as unknown as { idToken?: string }).idToken = token.idToken as string | undefined

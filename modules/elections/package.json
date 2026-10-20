@@ -2,5 +2,15 @@
   "name": "elections-module",
   "version": "0.1.0",
   "private": true,
-  "description": "Elections module placeholder: module.json only (TASK-021)"
+  "type": "module",
+  "description": "Elections module: module.json, the app half under app/, and the enable-time notice under src/notice (PRD-ELE-002, TRD-030)",
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.0",
+    "typescript": "^5.4.5",
+    "vitest": "^4.1.10"
+  }
 }

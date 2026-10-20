@@ -18,9 +18,9 @@ const GENERATED_BARREL = join(PKG_ROOT, 'src', 'lib', 'modules', 'manifests', 'i
 // on top (TASK-205: gremion-ui/scripts/interim-module-overlay.mjs overlays modules/<id>/app onto src/
 // before the manifest barrel is generated). Disabled modules (modules/disabled.json) contribute nothing.
 // So every golden below is the composition of the enabled set; each module commit updates it in the same
-// commit. TASK-205: elections, votes, calendar, files, messages, board (registration = `order` sequence).
+// commit. TASK-205: elections, votes, newsletter, calendar, files, messages, board (registration = `order` sequence).
 const KERNEL_MANIFEST_IDS = ['core', 'governance'] as const
-const MODULE_MANIFEST_IDS = ['elections', 'votes', 'calendar', 'files', 'messages', 'board'] as const
+const MODULE_MANIFEST_IDS = ['elections', 'votes', 'newsletter', 'calendar', 'files', 'messages', 'board'] as const
 const COMPOSED_MANIFEST_IDS = [...KERNEL_MANIFEST_IDS, ...MODULE_MANIFEST_IDS] as const
 
 describe('WP2-1 codegen — generated barrel is the single registration source', () => {
@@ -88,10 +88,11 @@ const KERNEL_PAGE_ACCESS: Record<string, Role> = {
   portal: Role.CouncilAdmin,
   protokolle: Role.Guest,
   beschluesse: Role.Guest,
-  // the composed modules (TASK-205): elections, votes (polls + votes), calendar, files, messages, board (tasks)
+  // the composed modules (TASK-205): elections, votes (polls + votes), newsletter (publishing), calendar, files, messages, board (tasks)
   elections: Role.Member,
   polls: Role.Member,
   votes: Role.Member,
+  newsletter: Role.Finance,
   calendar: Role.Guest,
   files: Role.Member,
   messages: Role.Member,

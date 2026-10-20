@@ -18,6 +18,7 @@ import { resolveContentLinkBase } from './link-base.js'
 import { createKernelClient, type KernelClient } from './kernel-client.js'
 import { NatsBroker } from './nats-broker.js'
 import { runRelayPass } from './relay.js'
+import { runRelayTick } from './relay-tick.js'
 import { drainInstagramPublishOps } from './instagram/drain.js'
 import type { DispatchDeps } from './dispatch.js'
 import type { TenantRef, Sql } from './tenant-store.js'
@@ -304,18 +305,22 @@ async function main(): Promise<void> {
         relayTimer = setInterval(() => {
           void (async () => {
             try {
-              const tenants = await listTenants()
-              for (const tenant of tenants) {
-                const sql = await storeFor(tenant)
-                const { randomUUID: relayUUID } = await import('node:crypto')
-                const relayTracer = makeTracer(relayUUID())
-                await runRelayPass(sql, tenant.id, natsBroker!, { tracer: relayTracer }).catch((err) => {
-                  console.error(
-                    `[relay] pass failed tenant ${tenant.slug}:`,
-                    err instanceof Error ? err.message : String(err),
-                  )
-                })
-              }
+              // Per-tenant isolation lives in runRelayTick: one tenant's store refusal
+              // (TenantIdentityMismatchError, ...) skips that tenant only.
+              await runRelayTick({
+                listTenants: () => listTenants(),
+                storeFn: (tenant) => storeFor(tenant),
+                pass: async (sql, tenant) => {
+                  const { randomUUID: relayUUID } = await import('node:crypto')
+                  const relayTracer = makeTracer(relayUUID())
+                  await runRelayPass(sql, tenant.id, natsBroker!, { tracer: relayTracer }).catch((err) => {
+                    console.error(
+                      `[relay] pass failed tenant ${tenant.slug}:`,
+                      err instanceof Error ? err.message : String(err),
+                    )
+                  })
+                },
+              })
             } catch (err) {
               console.error('[relay] tick error:', err instanceof Error ? err.message : String(err))
             }

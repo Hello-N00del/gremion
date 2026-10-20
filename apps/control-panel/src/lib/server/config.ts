@@ -27,6 +27,8 @@ export interface PanelConfig {
   executor: Executor
   /** gremion-switch's evict bearer; absent: /api/internal/evict refuses everything. */
   internalPushSecret: string | null
+  /** The ops stack's Prometheus, read server-side by /betrieb; absent: the page says why. */
+  prometheusUrl: string | null
 }
 
 export type Env = Readonly<Record<string, string | undefined>>
@@ -64,6 +66,7 @@ const CONFIG_KEYS = [
   'PLATFORM_DATABASE_URL',
   'PANEL_EXECUTOR',
   'INTERNAL_PUSH_SECRET',
+  'PANEL_PROMETHEUS_URL',
 ] as const
 let memo: { key: string; result: ConfigResult } | null = null
 
@@ -128,6 +131,29 @@ function parseConfig(env: Env, readFile: (p: string) => string): ConfigResult {
   const executorRaw = env.PANEL_EXECUTOR ?? 'none'
   if (executorRaw !== 'gremion-tenant' && executorRaw !== 'none') problems.push('PANEL_EXECUTOR must be gremion-tenant or none')
 
+  // The ops stack's Prometheus (compose/control-panel/ops-link.yml): the same
+  // back-channel rule as Keycloak's, plain http only on the panel's own networks.
+  let prometheusUrl: string | null = null
+  if (env.PANEL_PROMETHEUS_URL) {
+    const raw = env.PANEL_PROMETHEUS_URL.replace(/\/$/, '')
+    let u: URL | null = null
+    try {
+      u = /^https?:\/\/[^/]+(\/.*)?$/.test(raw) ? new URL(raw) : null
+    } catch {
+      u = null
+    }
+    if (u === null) problems.push('PANEL_PROMETHEUS_URL is not a URL')
+    else if (u.username || u.password) problems.push('PANEL_PROMETHEUS_URL must not carry credentials')
+    else {
+      // plain http: the loopback, or a single-label compose service name (no
+      // dotted host, no other IPv6 literal)
+      const loopback = ['127.0.0.1', 'localhost', '[::1]'].includes(u.hostname)
+      if (u.protocol === 'http:' && !loopback && !/^[a-z0-9-]+$/i.test(u.hostname)) {
+        problems.push('PANEL_PROMETHEUS_URL over plain http is allowed to the loopback or a compose service name only; use https')
+      } else prometheusUrl = raw
+    }
+  }
+
   if (problems.length) return { ok: false, problems }
   return {
     ok: true,
@@ -144,6 +170,7 @@ function parseConfig(env: Env, readFile: (p: string) => string): ConfigResult {
       platformDatabaseUrl,
       executor: executorRaw as Executor,
       internalPushSecret: env.INTERNAL_PUSH_SECRET ? env.INTERNAL_PUSH_SECRET : null,
+      prometheusUrl,
     },
   }
 }

@@ -11,6 +11,16 @@ import { MODULE_MANIFESTS } from '$lib/modules/registry'
 // the curated palette registry (pure, client-safe module — no cycle:
 // instance-theme imports nothing).
 import { legacyAccentToPalette } from '$lib/theme/instance-theme'
+// R29-RETENTION-30-K [D R29-I6]: log-retention defaults, caps and the clamp
+// live in one pure module so the settings API, the Settings tab and the purge
+// tick cannot drift from this file.
+import {
+  OPERATOR_CEILING_DAYS,
+  RETENTION_CAPS,
+  RETENTION_DEFAULTS,
+  RETENTION_FIELDS,
+  clampRetentionDays,
+} from '$lib/retention-tiers'
 
 /** The narrow slice of TenantContext this module consumes. */
 export interface ConfigTenant {
@@ -104,10 +114,12 @@ export interface GremionConfig {
   legal: { datenschutz_html: string; impressum_html: string; barrierefreiheit_html: string }
   backups: { retention_days: number; last_backup_at: string | null; encryption_key_path: string }
   retention: {
-    access_logs_days: number          // Tier 1 default 14, hard cap 30 (BayLDA)
-    app_logs_days: number             // Tier 2 default 30, hard cap 90
-    security_logs_days: number        // Tier 3 default 90, hard cap 180 (BSI Mindeststandard v2.1)
-    security_nopii_logs_days: number  // Tier 4 default 90, hard cap 365
+    // Defaults and hard caps: `$lib/retention-tiers` ([D R29-I6]: nothing is kept
+    // longer than 30 days; 29-day caps where the daily purge tick enforces).
+    access_logs_days: number          // Tier 1 default 14, hard cap 29
+    app_logs_days: number             // Tier 2 default 28, hard cap 29
+    security_logs_days: number        // Tier 3 default 27, hard cap 29
+    security_nopii_logs_days: number  // Tier 4 default 27, hard cap 30
   }
   compliance: {
     dpo_name: string
@@ -221,12 +233,7 @@ const DEFAULT_CONFIG: GremionConfig = {
     barrierefreiheit_html: DEFAULT_BARRIEREFREIHEIT_HTML,
   },
   backups: { retention_days: 30, last_backup_at: null, encryption_key_path: '/app/config/backup.key' },
-  retention: {
-    access_logs_days: 14,
-    app_logs_days: 30,
-    security_logs_days: 90,
-    security_nopii_logs_days: 90,
-  },
+  retention: { ...RETENTION_DEFAULTS },
   compliance: {
     dpo_name: '',
     dpo_email: '',
@@ -513,9 +520,49 @@ function mergeStored(stored: StoredConfig): GremionConfig {
     calendar: { ...DEFAULT_CONFIG.calendar, ...stored.calendar },
     legal: { ...DEFAULT_CONFIG.legal, ...stored.legal },
     backups: { ...DEFAULT_CONFIG.backups, ...stored.backups },
-    retention: { ...DEFAULT_CONFIG.retention, ...stored.retention },
+    // [D R29-I6]: clamp on READ as well as on write. A config persisted before
+    // the 30-day ceiling carries 90 / 180 / 365; the purge tick reads this block
+    // directly, so a stored 90 must not survive until somebody re-saves it.
+    retention: clampStoredRetention(stored.retention),
     compliance: { ...DEFAULT_CONFIG.compliance, ...stored.compliance },
   } as GremionConfig
+}
+
+/** Fields already warned about in this process (once per process and field). */
+const warnedRetentionClamps = new Set<string>()
+
+/**
+ * Clamp the stored retention block on read and say so when that shortens a
+ * stored value. The daily audit purge deletes every `audit_log` row older than
+ * `security_logs_days`, so a stored 90 silently becoming 29 means ~61 days of
+ * audit rows go on the next tick: the operator must see that in the logs.
+ *
+ * Type-invalid stored values (string, NaN, null) never get here: the schema
+ * rejects them first (`parseConfig` throws, `readConfig` warns and falls back).
+ */
+function clampStoredRetention(storedRetention: StoredConfig['retention']): GremionConfig['retention'] {
+  const clamped = clampRetention({ ...DEFAULT_CONFIG.retention, ...storedRetention })
+  for (const field of RETENTION_FIELDS) {
+    const stored = storedRetention?.[field]
+    if (stored === undefined || stored === clamped[field] || warnedRetentionClamps.has(field)) continue
+    warnedRetentionClamps.add(field)
+    const purge =
+      field === 'security_logs_days'
+        ? '; the daily audit_log purge deletes every row older than the clamped value'
+        : ''
+    console.warn(
+      `[config] retention.${field}: stored value ${stored} is outside the allowed range 1..${RETENTION_CAPS[field]} ` +
+        `(operator ceiling ${OPERATOR_CEILING_DAYS} days, R29-I6) and is clamped to ${clamped[field]}${purge}`,
+    )
+  }
+  return clamped
+}
+
+/** Clamp every retention tier into 1..cap (see `$lib/retention-tiers`). */
+function clampRetention(retention: GremionConfig['retention']): GremionConfig['retention'] {
+  const out = { ...retention }
+  for (const field of RETENTION_FIELDS) out[field] = clampRetentionDays(field, out[field])
+  return out
 }
 
 /**
@@ -616,12 +663,9 @@ export function writeConfig(update: ConfigUpdate, tenant: ConfigTenant = require
   const mergedBackups = { ...current.backups, ...update.backups }
   mergedBackups.retention_days = Math.max(7, mergedBackups.retention_days)
 
-  // Merge and enforce hard caps on log retention tiers (GDPR / BSI Mindeststandard)
-  const mergedRetention = { ...current.retention, ...update.retention }
-  mergedRetention.access_logs_days = Math.min(mergedRetention.access_logs_days, 30)
-  mergedRetention.app_logs_days = Math.min(mergedRetention.app_logs_days, 90)
-  mergedRetention.security_logs_days = Math.min(mergedRetention.security_logs_days, 180)
-  mergedRetention.security_nopii_logs_days = Math.min(mergedRetention.security_nopii_logs_days, 365)
+  // Merge and enforce the hard caps on log retention tiers ([D R29-I6]; the
+  // numbers live in `$lib/retention-tiers`).
+  const mergedRetention = clampRetention({ ...current.retention, ...update.retention })
 
   const mergedCompliance = { ...current.compliance, ...update.compliance }
 

@@ -16,7 +16,7 @@
 # The one published port binds the LOOPBACK only, for on-host diagnostics
 # (a request there must still carry Host: ${PANEL_HOST}). PANEL_NETWORK must be
 # shared by the edge Traefik (traefik.docker.network) and Keycloak's internal
-# endpoints (PANEL_OIDC_INTERNAL_BASE); the orchestrator re-measures it.
+# endpoints (PANEL_OIDC_INTERNAL_BASE); the maintainer re-measures it.
 # Secrets are files mounted read-only; the root filesystem is read-only, every
 # capability dropped. It executes nothing (PANEL_EXECUTOR=none): "Neuer
 # Mandant" is disabled with its reason until TASK-038's re-init.

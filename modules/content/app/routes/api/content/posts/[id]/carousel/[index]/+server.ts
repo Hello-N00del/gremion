@@ -9,7 +9,7 @@ import { resolveContentBackendOr503 } from '$lib/server/content/backend/resolve'
 import { instagramRenderer } from '$lib/server/content/channels/instagram-renderer'
 import { renderSlidePng } from '$lib/server/content/carousel/render'
 import { readConfig } from '$lib/server/config'
-import { INSTANCE_REGISTRY, resolvePaletteId } from '$lib/theme/instance-theme'
+import { TENANT_PALETTES, resolvePaletteId } from '$lib/theme/instance-theme'
 
 export const GET: RequestHandler = async (event) => {
   requireContentRead(event.locals.user)
@@ -42,11 +42,11 @@ export const GET: RequestHandler = async (event) => {
   // FACTOR is not representable in this hsl placeholder — the saturation
   // literal stays as-is). When it resolves to null (unset/invalid → default
   // theme) pass '' so the template keeps its own neutral placeholder fallback.
-  // The exact slide palette is Claude Design's (this template is the §7
+  // The exact slide palette is the designer's (this template is the §7
   // hand-off placeholder); this only makes the accent a valid, hue-correct
   // colour instead of black.
   const palette = resolvePaletteId(brand.palette)
-  const accentColor = palette == null ? '' : `hsl(${INSTANCE_REGISTRY[palette].H} 45% 38%)`
+  const accentColor = palette == null ? '' : `hsl(${TENANT_PALETTES[palette].H} 45% 38%)`
   const png = await renderSlidePng({
     brandTokens: { accent: accentColor, logoUrl: brand.logo_url },
     slide,

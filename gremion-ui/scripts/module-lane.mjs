@@ -19,18 +19,42 @@
  * It refuses an empty selection (no disabled module with a test) and exits with vitest's own code, so a lane
  * that collected nothing cannot pass (vitest exits 1 on "No test files found"). Integration and browser
  * tests need a database or Chromium and are not part of this lane.
+ *
+ * The lane is self-contained (TASK-205c): it does not read the real tree's overlay output. It copies the
+ * tracked shell, drops whatever the real overlay wrote into the copy (gremion-ui/.module-overlay.json lists it),
+ * overlays EVERY module that has an app/ half (the enabled ones a disabled half imports, e.g. publishing's
+ * collabora-convert, and the disabled ones), and regenerates the manifest barrel so a disabled module's own
+ * "is registered in MODULE_MANIFESTS" golden runs against a barrel that holds it. It runs the same on a clean
+ * clone as after `pnpm run test:unit`.
  */
-import { cpSync, existsSync, mkdirSync, readdirSync, rmSync, statSync } from 'node:fs'
+import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { dirname, join, relative, resolve } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { parseArgs } from 'node:util'
 
-import { DEFAULT_ROOT, discoverModules, runOverlay } from './interim-module-overlay.mjs'
+import { DEFAULT_ROOT, MANIFEST_NAME, discoverModules, runOverlay } from './interim-module-overlay.mjs'
 
 const UI = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 export const LANE_DIR = join(UI, '_module-lane')
 const COPY_FILES = ['package.json', 'svelte.config.js', 'vite.config.ts', 'tsconfig.json']
+
+/**
+ * Files a disabled half imports from a module the kernel does not carry yet. Each is written into the lane's
+ * src only when no overlaid module provides the path, so the real file wins the day it lands and the stand-in
+ * is then inert (module-lane.test.mjs pins "absent -> written, present -> untouched"). Test infrastructure,
+ * never product code: the lane's tests mock these modules with a factory, but vite must still resolve the path.
+ */
+export const LANE_STAND_INS = Object.freeze({
+  // vault's /vault page lists the handover tracks that reference an item; handover's half moves with TASK-205d.
+  'src/lib/server/handover/handover-vault-links.ts': [
+    '// lane stand-in (gremion-ui/scripts/module-lane.mjs): the handover half is not in the tree yet (TASK-205d)',
+    'export async function handoverTracksReferencingVaultItems(_ids: readonly string[]): Promise<Map<string, string[]>> {',
+    '  return new Map()',
+    '}',
+    '',
+  ].join('\n'),
+})
 
 function walk(dir, out = []) {
   for (const name of readdirSync(dir).toSorted((a, b) => a.localeCompare(b))) {
@@ -65,18 +89,60 @@ export function laneTestFiles(root, ids) {
   return files
 }
 
-/** Build the scratch app: tracked src + config files + the unit setup file, then the disabled halves overlaid. */
-export function buildLane(root, ids, laneDir = LANE_DIR) {
+/** Repo-relative (posix) paths of the real tree's overlay output, from gremion-ui/.module-overlay.json. */
+function realOverlayOutputs() {
+  const manifest = join(UI, MANIFEST_NAME)
+  if (!existsSync(manifest)) return new Set()
+  try {
+    return new Set(JSON.parse(readFileSync(manifest, 'utf8')).files ?? [])
+  } catch {
+    return new Set()
+  }
+}
+
+/** Write the stand-ins whose path no overlaid module provided. Returns the paths written. */
+export function writeStandIns(laneDir, standIns = LANE_STAND_INS) {
+  const written = []
+  for (const [rel, body] of Object.entries(standIns)) {
+    const abs = join(laneDir, rel)
+    if (existsSync(abs)) continue
+    mkdirSync(dirname(abs), { recursive: true })
+    writeFileSync(abs, body)
+    written.push(rel)
+  }
+  return written
+}
+
+/** Regenerate the manifest barrel inside the lane (a copy of the script resolves src/ beside itself). */
+function regenerateManifestBarrel(laneDir) {
+  mkdirSync(join(laneDir, 'scripts'), { recursive: true })
+  cpSync(join(UI, 'scripts', 'build-module-manifest.mjs'), join(laneDir, 'scripts', 'build-module-manifest.mjs'))
+  const res = spawnSync(process.execPath, [join(laneDir, 'scripts', 'build-module-manifest.mjs')], { cwd: laneDir, encoding: 'utf8' })
+  if (res.status !== 0) throw new Error(`the lane's manifest barrel could not be generated: ${res.stderr || res.stdout}`)
+}
+
+/**
+ * Build the scratch app: the tracked shell (the real tree's overlay output left out), every module's app/ half
+ * overlaid (enabled and disabled: the lane is a scratch target), the manifest barrel regenerated over that
+ * set, and the stand-ins for halves that are not in the tree yet.
+ */
+export function buildLane(root, _ids, laneDir = LANE_DIR) {
   rmSync(laneDir, { recursive: true, force: true })
   mkdirSync(laneDir, { recursive: true })
   for (const f of COPY_FILES) cpSync(join(UI, f), join(laneDir, f))
-  cpSync(join(UI, 'src'), join(laneDir, 'src'), { recursive: true })
+  const outputs = realOverlayOutputs()
+  cpSync(join(UI, 'src'), join(laneDir, 'src'), {
+    recursive: true,
+    filter: (abs) => !outputs.has(relative(UI, abs).split('\\').join('/')),
+  })
   if (existsSync(join(UI, 'static'))) cpSync(join(UI, 'static'), join(laneDir, 'static'), { recursive: true })
   mkdirSync(join(laneDir, 'tests', 'unit'), { recursive: true })
   cpSync(join(UI, 'tests', 'unit', 'setup.ts'), join(laneDir, 'tests', 'unit', 'setup.ts'))
-  // the lane's copy of src already holds the ENABLED halves (the overlay ran before); the lane adds the disabled
-  // ones. The overlay refuses a destination that exists and is not its own output, so a clash is loud.
-  return runOverlay({ root, target: laneDir, modules: ids, includeDisabled: true })
+  // no `modules`: every module with an app/ half, disabled ones included (the overlay's scratch-only mode).
+  const overlaid = runOverlay({ root, target: laneDir, includeDisabled: true })
+  regenerateManifestBarrel(laneDir)
+  const standIns = writeStandIns(laneDir)
+  return { ...overlaid, standIns }
 }
 
 /**
@@ -91,7 +157,7 @@ export function buildLane(root, ids, laneDir = LANE_DIR) {
 export function runLane({ root = DEFAULT_ROOT, ids, files, extra = [], laneDir = LANE_DIR, build = buildLane, spawn = spawnSync, log = console.info }) {
   try {
     const r = build(root, ids, laneDir)
-    log(`[module-lane] ${r.modules.join(', ')}: ${r.files.length} files overlaid into ${relative(UI, laneDir)}, ${files.length} unit test file(s)`)
+    log(`[module-lane] ${ids.join(', ')}: ${r.files.length} files of ${r.modules.join(', ')} overlaid into ${relative(UI, laneDir)}, ${files.length} unit test file(s)`)
     // SvelteKit's vite plugin pins the project root to the process cwd, so vitest runs INSIDE the lane (not
     // `--root`); vitest itself resolves from gremion-ui/node_modules.
     const vitest = join(UI, 'node_modules', 'vitest', 'vitest.mjs')

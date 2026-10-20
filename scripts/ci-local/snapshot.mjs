@@ -7,10 +7,10 @@
 //   node --test scripts/ci-local/snapshot.test.mjs
 //
 // --out is MANDATORY (§5 Q3 default: commit nothing to the kernel — the
-// orchestrator files snapshots in the vault ledger). --only lets a caller
+// maintainer files snapshots in the vault ledger). --only lets a caller
 // stay under a 4-minute wall-clock budget by running a named subset instead
 // of every suite in suites.json — the FULL run across every suite of both
-// repos is the orchestrator's whole-tree gate, run once, not this script's
+// repos is the maintainer's whole-tree gate, run once, not this script's
 // job on every invocation. --stack-env is a marker file only: this script
 // never starts or stops a stack (§5 Q4) — its presence is what lets
 // requiresStack suites run at all; its content is not read.

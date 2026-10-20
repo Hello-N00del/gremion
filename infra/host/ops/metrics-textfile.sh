@@ -59,6 +59,9 @@ note() { echo "[metrics] $*" >&2; }
 . "$SCRIPT_DIR/ops-lib.sh"
 
 STACK_NAME="$(ops_key STACK)"; STACK_NAME="${STACK_NAME:-gremion}"
+# the project holding postgres and nats: <STACK>-state unless a single-project
+# layout names it (GREMION_STATE_PROJECT)
+STATE_PROJECT_NAME="$(ops_key GREMION_STATE_PROJECT)"; STATE_PROJECT_NAME="${STATE_PROJECT_NAME:-${STACK_NAME}-state}"
 DISK_ROOT="$(ops_key GREMION_DISK_ROOT)"
 COMPONENTS="$(ops_key GREMION_STORAGE_COMPONENTS)"
 STORAGE_INTERVAL="$(ops_key GREMION_STORAGE_INTERVAL)"; STORAGE_INTERVAL="${STORAGE_INTERVAL:-900}"
@@ -189,7 +192,7 @@ cached_reading() {
 emit_postgres_connections() {
     local cid row used max
     cid="$(state_container postgres)"
-    [[ -n "$cid" ]] || { note "no ${STACK_NAME}-state postgres container -- PostgresConnections80pct fires by absence"; return 0; }
+    [[ -n "$cid" ]] || { note "no ${STATE_PROJECT_NAME} postgres container -- PostgresConnections80pct fires by absence"; return 0; }
     row="$(docker exec "$cid" psql -U postgres -tAF'|' -c \
         "SELECT (SELECT count(*) FROM pg_stat_activity), (SELECT setting::int FROM pg_settings WHERE name='max_connections')" \
         2>/dev/null || true)"
@@ -224,7 +227,7 @@ emit_postgres_connections() {
 emit_job_last_run() {
     local cid rows errf first_err="" out="" kind customer status epoch extra uuid_re='^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
     cid="$(state_container postgres)"
-    [[ -n "$cid" ]] || { note "no ${STACK_NAME}-state postgres container -- gremion_job_last_run absent"; return 0; }
+    [[ -n "$cid" ]] || { note "no ${STATE_PROJECT_NAME} postgres container -- gremion_job_last_run absent"; return 0; }
     # psql's stderr is kept (first line only) for the note: a refused connection,
     # a missing relation (platform chain below 0005), a permission error and a
     # typo in this query are different faults and must not read alike.
@@ -262,7 +265,7 @@ JSZ_CONSUMERS="${JSZ_STREAMS}"' | ($s.consumer_detail // [])[] as $c'
 emit_nats() {
     local cid json fam
     cid="$(state_container nats)"
-    [[ -n "$cid" ]] || { note "no ${STACK_NAME}-state nats container -- broker signals absent"; return 0; }
+    [[ -n "$cid" ]] || { note "no ${STATE_PROJECT_NAME} nats container -- broker signals absent"; return 0; }
     json="$(docker exec "$cid" wget -qO- 'http://127.0.0.1:8222/jsz?accounts=true&streams=true&consumers=true' 2>/dev/null || true)"
     if ! jq -e 'type == "object" and has("account_details")' >/dev/null 2>&1 <<< "$json"; then
         note "the broker's jsz did not answer with account details -- broker signals absent"
@@ -347,7 +350,7 @@ measure_components() {
             [[ -n "$bytes" ]] || continue
             printf 'gremion_storage_component_bytes{component="%s"} %s\n' "$(esc "$name")" "$bytes"
             n=$((n + 1))
-        done < <(jq -r --arg p "${STACK_NAME}-state_" '.[]? | select((.Name | startswith($p)) and ((.Name | endswith("pg-data")) or (.Name | endswith("vector-processed-logs")))) | [.Name, .Size] | @tsv' <<< "${vols:-[]}" 2>/dev/null || true)
+        done < <(jq -r --arg p "${STACK_NAME}-state_" '.[]? | select((.Name | startswith($p)) and ((.Name | endswith("pg-data")) or (.Name | endswith("vector-processed-logs")))) | [.Name, .Size] | @tsv' <<< "${vols:-[]}" 2>/dev/null | tr -d '\r' || true)
     fi
     (( n > 0 )) || note "no storage component measured -- gremion_storage_component_bytes is absent"
 }

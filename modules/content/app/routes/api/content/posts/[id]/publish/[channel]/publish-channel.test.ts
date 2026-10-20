@@ -38,11 +38,17 @@ vi.mock('$lib/server/content/publish-errors', () => {
       this.name = 'ChannelNotPublishableError'
     }
   }
-  return { ChannelNotPublishableError }
+  class TenantIdentityMismatchError extends Error {
+    constructor(message: string) {
+      super(message)
+      this.name = 'TenantIdentityMismatchError'
+    }
+  }
+  return { ChannelNotPublishableError, TenantIdentityMismatchError }
 })
 
 import { POST } from './+server'
-import { ChannelNotPublishableError } from '$lib/server/content/publish-errors'
+import { ChannelNotPublishableError, TenantIdentityMismatchError } from '$lib/server/content/publish-errors'
 
 type Ev = Parameters<typeof POST>[0]
 
@@ -158,6 +164,13 @@ describe('POST /api/content/posts/[id]/publish/[channel]', () => {
     await expect(
       POST(makeEvent({ user: { roles: ['member'], groups: ['publishers'], id: 'u1' } })),
     ).rejects.toMatchObject({ status: 409 })
+  })
+
+  it('502s a tenant identity mismatch with its own message (not the 409 channel message)', async () => {
+    mockPublish.mockRejectedValue(new TenantIdentityMismatchError('Mandantenzuordnung stimmt nicht überein'))
+    await expect(
+      POST(makeEvent({ user: { roles: ['member'], groups: ['publishers'], id: 'u1' } })),
+    ).rejects.toMatchObject({ status: 502, body: { message: 'Mandantenzuordnung stimmt nicht überein' } })
   })
 
   it('422s an email publish that failed because SMTP is unconfigured', async () => {

@@ -32,6 +32,21 @@ describe('loadConfig', () => {
     expect(r.config.platformDatabaseUrl).toBeNull()
   })
 
+  it('PANEL_PROMETHEUS_URL is optional; plain http only to the loopback or a compose service name', () => {
+    const none = loadConfig(GOOD)
+    expect(none.ok && none.config.prometheusUrl).toBeNull()
+    const svc = loadConfig({ ...GOOD, PANEL_PROMETHEUS_URL: 'http://prometheus:9090/' })
+    expect(svc.ok && svc.config.prometheusUrl).toBe('http://prometheus:9090')
+    expect(problemsOf(loadConfig({ ...GOOD, PANEL_PROMETHEUS_URL: 'http://metrics.example.org:9090' })).join('\n')).toMatch(/PANEL_PROMETHEUS_URL over plain http/)
+    expect(problemsOf(loadConfig({ ...GOOD, PANEL_PROMETHEUS_URL: 'not a url' })).join('\n')).toMatch(/PANEL_PROMETHEUS_URL is not a URL/)
+    // review r1: a value the WHATWG parser rejects is a reported problem, never a thrown 500
+    expect(problemsOf(loadConfig({ ...GOOD, PANEL_PROMETHEUS_URL: 'http://a b' })).join('\n')).toMatch(/PANEL_PROMETHEUS_URL is not a URL/)
+    expect(problemsOf(loadConfig({ ...GOOD, PANEL_PROMETHEUS_URL: 'https://u:p@prom.example' })).join('\n')).toMatch(/must not carry credentials/)
+    expect(problemsOf(loadConfig({ ...GOOD, PANEL_PROMETHEUS_URL: 'http://[fd00::5]:9090' })).join('\n')).toMatch(/over plain http/)
+    const v6 = loadConfig({ ...GOOD, PANEL_PROMETHEUS_URL: 'http://[::1]:9090' })
+    expect(v6.ok && v6.config.prometheusUrl).toBe('http://[::1]:9090')
+  })
+
   it('a customer realm as issuer is refused (TRD-048)', () => {
     const r = loadConfig({ ...GOOD, PANEL_OIDC_ISSUER: 'https://rat.musterstadt.example/auth/realms/musterstadt' })
     expect(r.ok).toBe(false)

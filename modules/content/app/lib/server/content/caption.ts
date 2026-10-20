@@ -2,7 +2,7 @@
 //
 // Instagram has no rich text: the caption is one plain-text blob with a hard
 // length cap. This composes a caption by rule from a post + its segmented
-// sections (see segment.ts) — never an LLM — and surfaces the cap as a warning
+// sections (see segment.ts) — never a language model — and surfaces the cap as a warning
 // rather than silently dropping text. Pure and deterministic.
 
 import type { Post } from './types'

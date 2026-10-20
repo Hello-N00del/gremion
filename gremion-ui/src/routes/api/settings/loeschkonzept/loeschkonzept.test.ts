@@ -14,7 +14,7 @@ const EMPTY_COMPLIANCE = { dpo_name: '', dpo_email: '', controller_name: '', con
 const FULL_CONFIG = {
   org: { name: 'Org', domain: 'example.org' },
   compliance: EMPTY_COMPLIANCE,
-  retention: { access_logs_days: 30, app_logs_days: 90, security_logs_days: 180, security_nopii_logs_days: 365 },
+  retention: { access_logs_days: 14, app_logs_days: 28, security_logs_days: 27, security_nopii_logs_days: 27 },
 }
 
 async function patch(body: unknown) {

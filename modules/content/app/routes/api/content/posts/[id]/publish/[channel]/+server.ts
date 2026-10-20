@@ -10,6 +10,8 @@
 //   - 403 → Instagram while `content.publish.instagram` is ungranted
 //           ("Instagram publishing is not enabled for this tenant.").
 //   - 409 → a missing/disabled channel row.
+//   - 502 → the content service refused the call for a tenant identity mismatch
+//           (its tenant assignment must be checked by the operator).
 //   - 422 → the email channel could not send because SMTP is unconfigured
 //           (status 'failed' + detail) — a recoverable operator-config gap.
 //   - 400 → an invalid channel param.
@@ -23,7 +25,7 @@ import {
   requireContentPublishInstagram,
 } from '$lib/server/content/route-auth'
 import { getContentBackend } from '$lib/server/content/backend'
-import { ChannelNotPublishableError } from '$lib/server/content/publish-errors'
+import { ChannelNotPublishableError, TenantIdentityMismatchError } from '$lib/server/content/publish-errors'
 import type { ChannelId } from '$lib/server/content/types'
 
 const CHANNELS: readonly ChannelId[] = ['email', 'portal', 'instagram']
@@ -53,6 +55,7 @@ export const POST: RequestHandler = async (event) => {
   try {
     result = await backend.publish(event.params.id, channel)
   } catch (err) {
+    if (err instanceof TenantIdentityMismatchError) throw error(502, err.message)
     if (err instanceof ChannelNotPublishableError) throw error(409, err.message)
     throw err
   }

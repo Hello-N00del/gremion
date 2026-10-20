@@ -1,0 +1,109 @@
+/* ======================================================================
+ * Vault / Tresor module CSS (#405, design v11).
+ * Ported from the design prototype web/tokens.css .vt-* block (Prototyp =
+ * Quelle); imported by routes/vault/+layout.svelte so Vite code-splits it
+ * with the vault chunk (handover.css / finance.css pattern).
+ *
+ * Deviations from the prototype block, by design:
+ *   - the prototype leans on the handover .ho-* layout primitives; the vault
+ *     module must not depend on handover.css (handover can be OFF while vault
+ *     is ON), so the primitives it needs are carried here as .vt-* twins
+ *     (.vt-wrap/.vt-head/.vt-cols/.vt-empty-state/.vt-log-card/…);
+ *   - the HoSpecV spec overlay becomes the single honest .vt-notice-marker
+ *     (the E2E-Zielbild vs. heute label — required wording, not dev chrome);
+ *   - .ho-overlay/.ho-create are omitted — dialogs use the shared
+ *     $lib/components/ui/dialog component.
+ * Every value resolves to a design token so .dark auto-switches.
+ * ====================================================================== */
+
+.vt-wrap { width: 100%; max-width: 1240px; }
+.vt-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 24px; margin-bottom: 18px; }
+.vt-head h1 { font-family: var(--font-display); font-size: 26px; font-weight: 600; letter-spacing: -0.01em; margin: 2px 0 0; }
+.vt-sub { color: var(--ink-muted); font-size: 13px; line-height: 1.55; margin: 6px 0 0; max-width: 620px; text-wrap: pretty; }
+.vt-head-acts { display: flex; gap: 8px; flex-shrink: 0; }
+.vt-cols { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 18px; align-items: start; }
+.vt-main, .vt-side { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+
+/* Trust banner — E2E-Zielbild notice + honest heute-marker */
+.vt-notice {
+  display: flex; gap: 10px; align-items: flex-start; padding: 12px 14px;
+  border: 1px solid var(--border); border-radius: var(--r-md);
+  background: var(--surface-2); font-size: 12px; color: var(--ink-2);
+  line-height: 1.55; margin-bottom: 16px;
+}
+.vt-notice svg { flex-shrink: 0; margin-top: 1px; color: var(--ink-muted); }
+.vt-notice span { flex: 1; }
+.vt-notice-marker {
+  flex: 0 0 auto; align-self: flex-start; max-width: 220px;
+  font-family: var(--font-mono); font-size: 9.5px; line-height: 1.5;
+  color: var(--ink-faint); text-align: right;
+}
+
+/* Unit compartments (one Fach per org-unit) */
+.vt-unit { padding: 14px 16px; display: flex; flex-direction: column; gap: 4px; }
+.vt-unit-head { display: flex; align-items: center; gap: 10px; padding-bottom: 8px; border-bottom: 1px solid var(--border); margin-bottom: 4px; flex-wrap: wrap; }
+.vt-unit-head strong { font-family: var(--font-display); font-size: 14.5px; }
+.vt-tile {
+  display: inline-grid; place-items: center; width: 22px; height: 22px;
+  border-radius: 6px; background: hsl(var(--c-hue) 55% 45%);
+  /* #343 R4: white is the invariant text-on-hue-fill colour (see OrgTree). */
+  color: #fff;
+  font-family: var(--font-mono); font-size: 9px; font-weight: 600; flex-shrink: 0;
+}
+.vt-count { font-size: 10px; color: var(--ink-faint); }
+
+/* Item rows */
+.vt-row { display: flex; gap: 14px; align-items: flex-start; padding: 10px 0; border-bottom: 1px solid var(--border); }
+.vt-row:last-of-type { border-bottom: none; }
+.vt-row-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.vt-row-main strong { font-size: 13px; display: inline-flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.vt-ho { font-size: 8.5px; text-decoration: none; color: inherit; transition: border-color var(--d-fast) var(--e-out); }
+.vt-ho:hover { border-color: var(--border-strong); }
+.vt-meta { font-size: 10px; color: var(--ink-faint); }
+.vt-secret {
+  display: flex; gap: 8px; align-items: center; margin-top: 6px; padding: 7px 10px;
+  border: 1px dashed var(--border-strong); border-radius: var(--r-sm);
+  background: var(--surface-2); flex-wrap: wrap;
+}
+.vt-secret > .mono { font-size: 12px; word-break: break-all; }
+.vt-row-acts { display: flex; gap: 6px; flex-shrink: 0; }
+.vt-none { font-size: 12px; color: var(--ink-faint); font-style: italic; padding: 6px 0; }
+
+/* Lock card — the ONE real unlock action is the #164 step-up flow */
+.vt-lock { display: flex; gap: 18px; align-items: flex-start; padding: 24px; max-width: 640px; }
+.vt-lock-icon {
+  flex-shrink: 0; width: 44px; height: 44px; border-radius: var(--r-md);
+  display: grid; place-items: center; background: var(--surface-2); color: var(--ink-muted);
+}
+.vt-lock h2 { font-family: var(--font-display); font-size: 18px; font-weight: 600; margin: 0 0 8px; }
+.vt-lock p { font-size: 13px; color: var(--ink-2); line-height: 1.55; margin: 0 0 14px; text-wrap: pretty; }
+.vt-lock-row { display: flex; gap: 8px; flex-wrap: wrap; }
+.vt-lock-hint { font-size: 11.5px; color: var(--ink-muted); line-height: 1.5; margin-top: 12px; }
+
+/* Empty state (no Fach visible) — ho-empty-state twin */
+.vt-empty-state {
+  display: flex; flex-direction: column; align-items: center; gap: 10px;
+  text-align: center; padding: 42px 32px; color: var(--ink-muted); border-style: dashed;
+}
+.vt-empty-state strong { font-family: var(--font-display); font-size: 15px; color: var(--ink); }
+.vt-empty-state p { font-size: 12.5px; line-height: 1.55; max-width: 380px; margin: 0; }
+
+/* Zugriffsprotokoll card (right column) */
+.vt-log-card { padding: 14px 16px; display: flex; flex-direction: column; gap: 9px; }
+.vt-sec-head { display: flex; align-items: center; gap: 9px; min-width: 0; flex-wrap: wrap; }
+.vt-sec-head strong { font-size: 13.5px; }
+.vt-sec-head .sp { flex: 1; }
+.vt-log-tag { font-family: var(--font-mono); font-size: 9.5px; color: var(--ink-faint); }
+.vt-log-row { display: flex; flex-direction: column; gap: 1px; padding: 6px 0; border-bottom: 1px solid var(--border); font-size: 11.5px; }
+.vt-log-row:last-of-type { border-bottom: none; }
+.vt-log-ts { font-size: 9px; color: var(--ink-faint); }
+.vt-log-line { color: var(--ink-2); }
+.vt-log-foot { font-size: 11.5px; color: var(--ink-muted); line-height: 1.55; text-wrap: pretty; }
+
+/* Dialog innards (Eintrag anlegen / löschen — shared ui/dialog) */
+.vt-lbl { font-size: 11px; font-weight: 600; color: var(--ink-2); margin-top: 2px; display: block; }
+.vt-hint { font-size: 11.5px; color: var(--ink-muted); line-height: 1.5; margin: 0; }
+/* Real errors only (danger appears on this surface only for failed requests) */
+.vt-error { font-size: 12px; color: var(--rust-ink); margin: 0; }
+
+@media (max-width: 1100px) { .vt-cols { grid-template-columns: 1fr; } }

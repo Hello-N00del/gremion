@@ -9,6 +9,7 @@ import http from 'node:http'
 import { createRouter, type Route, type RouteContext } from './router.js'
 import { checkGuard, hasInternalSecret, isHealthzPath } from './guard.js'
 import { BadJsonBodyError, tenantHealthHandler, type TenantLister, type StoreFn } from './routes.js'
+import { InvalidTenantIdError, InvalidTenantSlugError, TenantIdentityMismatchError } from '../tenant-store.js'
 
 export interface ServerOptions {
   /** Shared secret expected in x-internal-auth (INTERNAL_FINANCE_SECRET). */
@@ -83,6 +84,23 @@ export function createServer(opts: ServerOptions): http.Server {
       // F1-FIX-05-K (K4#4): a malformed / non-object JSON body is the caller's error.
       if (err instanceof BadJsonBodyError && !res.headersSent) {
         return sendJson(res, 400, { success: false, error: err.message })
+      }
+      // The (id, slug) pair is not the one the catalog binds (audit #534): a stale or
+      // forged pair, never a server fault. The body names neither tenant.
+      if (err instanceof TenantIdentityMismatchError && !res.headersSent) {
+        console.warn(`[finance] ${err.message}`)
+        return sendJson(res, 409, { success: false, error: 'tenant_identity_mismatch' })
+      }
+      // A tenant id that is not a canonical lowercase uuid, or a slug storeFor will not
+      // build a database name from (follow-up to audit #534): the caller's error, never
+      // a server fault. The body names nothing.
+      if (err instanceof InvalidTenantIdError && !res.headersSent) {
+        console.warn(`[finance] ${err.message}`)
+        return sendJson(res, 400, { success: false, error: 'invalid_tenant_id' })
+      }
+      if (err instanceof InvalidTenantSlugError && !res.headersSent) {
+        console.warn(`[finance] ${err.message}`)
+        return sendJson(res, 400, { success: false, error: 'invalid_tenant_slug' })
       }
       throw err
     }

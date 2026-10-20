@@ -1,5 +1,5 @@
 <script lang="ts">
-  // Content Engine — mailing lists (PLAIN, Claude Design polishes later).
+  // Content Engine — mailing lists (PLAIN, the designer polishes later).
   // List + create content mailing lists; click through to manage members.
   import { invalidateAll } from '$app/navigation'
   import PageTitle from '$lib/components/PageTitle.svelte'

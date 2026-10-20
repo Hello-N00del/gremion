@@ -42,8 +42,8 @@ assertSafeTestEnv(TEST_PG_URL, TEST_DB_PREFIX)
 
 // -- test tenants -------------------------------------------------------------
 
-const T1: TenantRef = { id: 'a1a1a1a1-a1a1-a1a1-a1a1-a1a1a1a1a1a1', slug: 'apitenant1' }
-const T2: TenantRef = { id: 'b2b2b2b2-b2b2-b2b2-b2b2-b2b2b2b2b2b2', slug: 'apitenant2' }
+const T1: TenantRef = { id: 'a1a1a1a1-a1a1-41a1-81a1-a1a1a1a1a1a1', slug: 'apitenant1' }
+const T2: TenantRef = { id: 'b2b2b2b2-b2b2-42b2-82b2-b2b2b2b2b2b2', slug: 'apitenant2' }
 
 const TEST_SECRET = 'test-content-api-secret-123'
 

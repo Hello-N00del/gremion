@@ -1,5 +1,5 @@
 <script lang="ts">
-  // Content Engine editor — PLAIN, functional placeholder (Claude Design polishes
+  // Content Engine editor — PLAIN, functional placeholder (the designer polishes
   // later). Title + RichTextComposer (debounced autosave via the PATCH route),
   // three channel toggle switches (setChannelEnabled via PATCH), and a live
   // preview pane per ENABLED channel:

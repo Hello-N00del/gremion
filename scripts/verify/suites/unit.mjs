@@ -14,7 +14,7 @@
 // Each part can also be run on its own as `verify --only unit:<part>` (see
 // UNIT_PARTS / verify.mjs's registry) -- gremion-ui's vitest alone takes
 // about three minutes, so the whole suite does not fit a single 4-minute
-// agent tool call. A part run is always a partial record; only a full
+// time budget. A part run is always a partial record; only a full
 // `verify` (every required suite, `unit` whole) satisfies check-record.
 import { existsSync, globSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs'
 import { createRequire } from 'node:module'
@@ -308,6 +308,14 @@ export const UNIT_PARTS = {
       return vitestSubcheck({ cwd: path.join(root, 'modules', id), testScript: 'test', root, label, extraArgs: excludes })
     })
   },
+  // TASK-205c (TASK-200 residual (a)): the unit tests of the DISABLED modules' app halves (content, vault). The
+  // overlay never copies a disabled module into the build tree, so gremion-ui's own vitest never collects them;
+  // gremion-ui/scripts/module-lane.mjs builds a scratch app, overlays every half into it and runs vitest's unit
+  // project over exactly those files. A lane that collects nothing exits 1 and writes no report (unparseable).
+  // runVitestJson appends --reporter=json --outputFile=<tmp>, which the lane forwards to vitest after its `--`.
+  'module-lane': (root) => [
+    runVitestJson({ label: 'disabled-module lane vitest (gremion-ui/scripts/module-lane.mjs)', cwd: path.join(root, 'gremion-ui'), cmd: process.execPath, args: ['scripts/module-lane.mjs', '--'], root }),
+  ],
   node: (root) => nodeTestParts({ cwd: root, files: scriptTestFiles(root) }),
   bats: (root) => [batsPart({ cwd: root, patterns: ['test/*.bats', 'test/host/*.bats'] })],
 }

@@ -1,4 +1,5 @@
 import { handle as authHandle } from './auth'
+import { sessionEndpointGuard } from '$lib/server/security/session-endpoint-guard'
 import { redirect, type Handle, type HandleFetch, type HandleServerError } from '@sveltejs/kit'
 import { sequence } from '@sveltejs/kit/hooks'
 import { building } from '$app/environment'
@@ -7,6 +8,7 @@ import { canAccess, pageAccessForTenant, Role } from '$lib/auth'
 import type { SessionUser } from '$lib/auth/types'
 import { acrToLoa } from '$lib/auth/step-up'
 import { readConfig } from '$lib/server/config'
+import { RETENTION_DEFAULTS } from '$lib/retention-tiers'
 import { moduleGateResponse } from '$lib/server/module-gate'
 import { requireBrand } from '$lib/server/brand'
 import { instanceThemeStyleTag } from '$lib/theme/instance-theme'
@@ -229,9 +231,10 @@ export function boot(): Promise<void> {
       }
 
       // T3.3 (G-024): every 24 h, purge audit_log rows older than the configured
-      // security-log retention window (default 90 d, hard cap 180 d enforced by
-      // config.ts). .unref() so the interval doesn't keep the process alive during
-      // graceful shutdown / test teardown.
+      // security-log retention window (default 27 d, hard cap 29 d enforced by
+      // config.ts through `$lib/retention-tiers`, so a row lives at most 30 d:
+      // [D R29-I6]). .unref() so the interval doesn't keep the process alive
+      // during graceful shutdown / test teardown.
       //
       // P2.1b T4: the setInterval callback is a detached async boundary — the
       // ambient ALS scope established during boot does NOT survive into it, so
@@ -245,7 +248,8 @@ export function boot(): Promise<void> {
       const auditRetentionTick = () =>
         forEachActiveTenant('audit-retention', async () => {
           const cfg = readConfig()
-          const days = cfg.retention?.security_logs_days ?? 90
+          // [D R29-I6] fallback = the tier registry default (27 d), never a literal 90.
+          const days = cfg.retention?.security_logs_days ?? RETENTION_DEFAULTS.security_logs_days
           const { purged } = await purgeAuditLogsOlderThan(days)
           if (purged > 0) console.info(`[audit-retention] purged ${purged} rows older than ${days}d`)
         })
@@ -393,6 +397,17 @@ export const PUBLIC_PATHS: readonly string[] = [
   '/livekit/',
   '/element-call/',
   '/element-call',
+  // TASK-205c (carve-keep hunk re-applied, MODULE: publishing): the unsubscribe link in a sent newsletter is opened
+  // by a recipient with no session. The page and its API are EXACT routes (nothing below them is public); the API
+  // consumes a single-use token and answers 400/404/410 without a valid one. The three callbacks are the publishing
+  // leaf's LEAF_CALLBACK_ROUTES keys (tenant/leaf-trust.ts): each handler refuses without INTERNAL_NEWSLETTER_SECRET
+  // in x-internal-auth (constantTimeEqual), and nothing else under /api/internal/newsletter/ is public. Content's
+  // callback and unsubscribe join with the content half when it is enabled.
+  '/newsletter/unsubscribe',
+  '/api/newsletter/unsubscribe',
+  '/api/internal/newsletter/render',
+  '/api/internal/newsletter/resolve-group',
+  '/api/internal/newsletter/send-mail',
   '/api/setup/seed',
   '/api/health',
   '/api/public/protocols/*/pdf',
@@ -916,6 +931,7 @@ export const handle = sequence(
   cspGuard,
   tenantResolveHandle,
   tenantBrandStyleHandle,
+  sessionEndpointGuard,
   authHandleUnlessExempt,
   authGuard,
   i18nHandle,

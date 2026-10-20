@@ -14,7 +14,7 @@
 #   FRESH_INIT_PROOF_OMIT=<basename>  do not apply that file
 #   FRESH_INIT_PROOF_NO_ROLE=1        do not create gremion_public_reader
 #
-# Watched RED 2026-09-17 by a fresh verifier: OMIT=055 aborted 058 with
+# Watched RED 2026-09-17 by an independent reviewer: OMIT=055 aborted 058 with
 # "the anonymous public portal reads table(s) that do not exist:
 # resolution_challenges"; NO_ROLE=1 aborted with "role gremion_public_reader
 # does not exist"; MIN_APPLIED=99 failed the vacuity floor with
