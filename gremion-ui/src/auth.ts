@@ -253,6 +253,11 @@ const sessionCallback: NonNullable<NonNullable<SvelteKitAuthConfig['callbacks']>
         (token.stepUpAt as number | undefined) ??
         (token.authTime as number | undefined) ??
         0
+      // A failed refresh / decode (jwtCallback sets token.error) must reach the
+      // authGuard: hooks.server.ts forces re-login on session.error. Without this
+      // a stale cookie kept rendering pages after the SSO session ended and every
+      // integrated-service call carried an expired bearer.
+      ;(session as unknown as { error?: string }).error = token.error as string | undefined
       // accessToken and idToken are server-side only — never returned in load() data to browser
       ;(session as unknown as { accessToken?: string }).accessToken = token.accessToken as string | undefined
       ;(session as unknown as { idToken?: string }).idToken = token.idToken as string | undefined
