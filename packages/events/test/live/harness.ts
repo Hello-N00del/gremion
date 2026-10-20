@@ -243,7 +243,8 @@ export function countingPublisher(js: JetStreamClient, failWhen: (call: { subjec
       calls.push(call)
       if (failWhen(call)) {
         call.failed = true
-        throw new Error('simulated broker failure')
+        // A row-specific failure (the relay counts it); a transport failure would burn no attempt.
+        throw Object.assign(new Error('simulated row failure'), { name: 'PermissionViolationError' })
       }
       const ack = await js.publish(subject, data, opts as never)
       call.duplicate = ack.duplicate

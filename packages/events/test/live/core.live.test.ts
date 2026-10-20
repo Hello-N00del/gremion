@@ -194,6 +194,27 @@ describe('TDD 5 relay limit', () => {
   })
 })
 
+describe('transport failures burn no attempt (verify round 1)', () => {
+  test('a broker that is unavailable for several passes leaves attempt_count 0 and the row pending; a row-specific error still counts', async () => {
+    const eventId = await createOrgUnit(idt, { id: uuidv7(), name: 'broker-down' })
+    await rows(idt, "UPDATE idt.outbox SET next_attempt_at = now() + interval '1 day' WHERE relay_state = 'pending' AND event_id <> $1", [eventId])
+    const down = relayOf({
+      publish: async () => {
+        throw Object.assign(new Error('503 no responders'), { name: 'NoRespondersError' })
+      },
+    } as never)
+    for (let i = 0; i < 5; i++) await expect(down.runOnce()).rejects.toThrow(/no responders/)
+    expect(await outboxState(eventId)).toEqual({ relay_state: 'pending', attempt_count: 0 })
+
+    const denied = relayOf(countingPublisher(kernel.js, () => true).publisher)
+    expect((await denied.runOnce()).failed).toBe(1)
+    expect(await outboxState(eventId)).toEqual({ relay_state: 'pending', attempt_count: 1 })
+    await makeDue()
+    await relayOf(kernel.js).runOnce()
+    expect((await outboxState(eventId))?.relay_state).toBe('published')
+  })
+})
+
 describe('TDD 6 one relay pass per database', () => {
   test('a pass that finds the advisory lock taken does nothing; released, it publishes', async () => {
     const eventId = await createOrgUnit(idt, { id: uuidv7(), name: 'locked' })

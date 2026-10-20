@@ -73,6 +73,28 @@ const DUE_SQL = (ctx: string) => `
    LIMIT $1
    FOR UPDATE OF o SKIP LOCKED`
 
+/** Error names (nats-core) that are a fact about ONE row's publish: refused subject, invalid subject, payload too large. */
+const ROW_SPECIFIC_NAMES = new Set(['PermissionViolationError', 'InvalidSubjectError', 'InvalidArgumentError'])
+
+/**
+ * True when the failure belongs to the row (no subject configured, permission denied, max payload):
+ * only those burn an attempt. Everything else (PubAck timeout, closed/draining connection, 503 no
+ * responders, anything unclassified) is the broker's or the connection's, and burns nothing.
+ */
+export function isRowSpecificError(err: unknown): boolean {
+  const e = err as { code?: unknown; name?: unknown; message?: unknown } | null
+  if (e?.code === 'no_subject') return true
+  if (typeof e?.name === 'string' && ROW_SPECIFIC_NAMES.has(e.name)) return true
+  return typeof e?.message === 'string' && /max_payload|permissions? violation/i.test(e.message)
+}
+
+export const TRANSPORT_BACKOFF_CAP_MS = 30_000
+
+/** The pause after `failures` (1-based) consecutive transport-failed passes: 1 s doubling, capped at 30 s. */
+export function transportBackoffMs(failures: number): number {
+  return Math.min(2 ** Math.min(Math.max(failures, 1) - 1, 30) * 1000, TRANSPORT_BACKOFF_CAP_MS)
+}
+
 export function subjectOf(subjects: SubjectMap, row: OutboxRow): string {
   const s = typeof subjects === 'function' ? subjects(row) : subjects[row.event_type]
   if (!s) throw Object.assign(new Error(`no subject configured for event type ${row.event_type}`), { code: 'no_subject' })
@@ -93,6 +115,7 @@ export function createRelay(opts: RelayOptions): Relay {
   let running = false
   let loop: Promise<void> | undefined
   let wake: (() => void) | undefined
+  let transportFailures = 0
 
   async function publisher(): Promise<Publisher> {
     if (resolved) return resolved
@@ -105,7 +128,8 @@ export function createRelay(opts: RelayOptions): Relay {
   async function runOnce(): Promise<PassResult> {
     // Pass-level failure (no connection, refused credentials): rows stay pending, untouched.
     const js = await publisher()
-    return inTenantTx(sql, ctx, async (tx) => {
+    let transportError: { err: unknown } | undefined
+    const result = await inTenantTx(sql, ctx, async (tx) => {
       const [l] = await tx`SELECT pg_try_advisory_xact_lock(${lock.classid}::int, ${lock.objid}::int) AS ok`
       if (!l?.ok) return { locked: false, published: 0, failed: 0, deadLettered: 0 }
       const rows = await tx.unsafe<OutboxRow[] & { attempt_count: number }[]>(DUE_SQL(ctx), [batchSize])
@@ -120,6 +144,12 @@ export function createRelay(opts: RelayOptions): Relay {
           await publishRow(js, subjectOf(opts.subjects, row), row, timeoutMs)
           acked = true
         } catch (err) {
+          if (!isRowSpecificError(err)) {
+            // A broker/connection fact, not the row's: nothing is counted; the rest of the batch is left
+            // for the next pass (what was already published stays marked) and the caller backs off.
+            transportError = { err }
+            break
+          }
           const attempt = row.attempt_count + 1
           const dead = attempt >= maxAttempts
           await tx.unsafe(
@@ -150,6 +180,8 @@ export function createRelay(opts: RelayOptions): Relay {
       }
       return res
     })
+    if (transportError) throw transportError.err
+    return result
   }
 
   return {
@@ -162,11 +194,13 @@ export function createRelay(opts: RelayOptions): Relay {
           let busy = false
           try {
             busy = (await runOnce()).published > 0
+            transportFailures = 0
           } catch (err) {
             onError(err, 'pass failed')
+            transportFailures++
           }
           if (running && !busy) await new Promise<void>((r) => {
-            const t = setTimeout(r, pollMs)
+            const t = setTimeout(r, Math.max(pollMs, transportFailures > 0 ? transportBackoffMs(transportFailures) : 0))
             wake = () => {
               clearTimeout(t)
               r()
