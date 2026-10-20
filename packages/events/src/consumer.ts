@@ -113,7 +113,7 @@ export function createConsumer(opts: ConsumerOptions): ConsumerHandle {
     hdrs[H.dlqError] = code
     hdrs[H.dlqOrigMsgId] = msg.headers?.get(H.msgId) ?? ''
     // Its OWN message id: a replay that poisons the same event again must not be deduplicated away.
-    const msgId = `${eventId ?? 'invalid'}.d${seq}.${msg.info.deliveryCount}`
+    const msgId = `${eventId ?? 'invalid'}.d${seq}.${opts.name}.${msg.info.deliveryCount}`
     const ack = await publishWire(opts.js, dlqSubject, msg.data, hdrs, msgId, opts.publishTimeoutMs)
     if (ack.duplicate) throw new Error(`the DLQ publish of ${msgId} was a duplicate: refusing to terminate a message whose dead letter may not be stored`)
   }

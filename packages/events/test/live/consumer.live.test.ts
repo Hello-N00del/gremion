@@ -326,3 +326,21 @@ describe('TDD 11 a second poisoning after a replay gives a second DLQ entry', ()
     expect(calls.get(eventId)).toBeGreaterThanOrEqual(6)
   })
 })
+
+describe('TDD 11b two consumers dead-letter the same event', () => {
+  test('each consumer gets its OWN DLQ entry: the DLQ message id carries the consumer name', async () => {
+    await startConsumer('poison-a')
+    await startConsumer('poison-b', {}, true)
+    const eventId = await createOrgUnit(idt, { id: uuidv7(), name: 'poison-two-consumers' })
+    failing.add(eventId)
+    await relayAll()
+    const entries = await waitFor('one dead letter per consumer', async () => {
+      const e = await dlqEntriesOf(eventId)
+      return e.length >= 2 ? e : undefined
+    }, 45_000)
+    expect(entries.map((e) => e.consumer).sort()).toEqual(['poison-a', 'poison-b'])
+    const ids = new Set<string>()
+    for (const e of entries) ids.add((await admin.jsm.streams.getMessage('DLQ', { seq: e.seq }))!.header.get(H.msgId))
+    expect(ids.size, 'two distinct DLQ message ids').toBe(2)
+  })
+})
