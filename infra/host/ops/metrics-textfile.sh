@@ -404,6 +404,7 @@ main() {
         emit_postgres_connections
         emit_job_last_run
         emit_nats
+        emit_events
         emit_filesystems
         emit_storage_components
         printf '# HELP gremion_metrics_textfile_timestamp_seconds Unix time this collector last completed.\n'
