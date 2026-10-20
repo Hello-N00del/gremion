@@ -350,7 +350,7 @@ measure_components() {
             [[ -n "$bytes" ]] || continue
             printf 'gremion_storage_component_bytes{component="%s"} %s\n' "$(esc "$name")" "$bytes"
             n=$((n + 1))
-        done < <(jq -r --arg p "${STACK_NAME}-state_" '.[]? | select((.Name | startswith($p)) and ((.Name | endswith("pg-data")) or (.Name | endswith("vector-processed-logs")))) | [.Name, .Size] | @tsv' <<< "${vols:-[]}" 2>/dev/null || true)
+        done < <(jq -r --arg p "${STACK_NAME}-state_" '.[]? | select((.Name | startswith($p)) and ((.Name | endswith("pg-data")) or (.Name | endswith("vector-processed-logs")))) | [.Name, .Size] | @tsv' <<< "${vols:-[]}" 2>/dev/null | tr -d '\r' || true)
     fi
     (( n > 0 )) || note "no storage component measured -- gremion_storage_component_bytes is absent"
 }
