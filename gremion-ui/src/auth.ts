@@ -77,6 +77,10 @@ export async function buildAuthConfig(event: RequestEvent): Promise<SvelteKitAut
         jwks_endpoint: `${internalBase}/protocol/openid-connect/certs`,
       }),
     ],
+    // ASVS 4.0.3 V3.3.2 / NIST SP 800-63B AAL2. Auth.js re-issues the cookie on
+    // every session read, so maxAge is a backstop (sliding); the 12 h absolute
+    // (ssoSessionMaxLifespan 43200 s) and 30 min idle are enforced by Keycloak.
+    session: { strategy: 'jwt', maxAge: 43200 },
     callbacks: { jwt: jwtCallback, session: sessionCallback },
     pages: { signIn: '/auth/login' },
   }
