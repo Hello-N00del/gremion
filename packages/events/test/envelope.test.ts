@@ -78,6 +78,10 @@ describe('parseEnvelope (TDD 4): a message missing one header is envelope_invali
     expect(event.traceparent).toBe(ROW.traceparent)
   })
 
+  test('the required header list is pinned (an emptied list would make the per-header cases below vanish, not fail)', () => {
+    expect([...REQUIRED_HEADERS]).toEqual([H.msgId, H.eventId, H.source, H.aggregateType, H.aggregateId, H.aggregateVersion])
+  })
+
   test.each([...REQUIRED_HEADERS])('without %s', (missing) => {
     const { hdrs, data } = wire()
     delete hdrs[missing]
