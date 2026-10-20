@@ -139,3 +139,34 @@ describe('replayDeadLetter', () => {
     expect(lines.join('\n')).toContain('skipped_stale')
   })
 })
+
+describe('replayOutbox orders by publish order, not event_time', () => {
+  const mk = (id: string, publishedAt: string) => ({
+    event_id: id, customer_id: 'c', event_type: 't', source: '/gremion/idt', subject: 's', event_time: new Date('2020-01-01T00:00:00Z'), data: {},
+    traceparent: null, aggregate_type: 'x', aggregate_id: 'a', aggregate_version: 1, test_run_id: null, published_cursor: publishedAt,
+  })
+
+  test('ORDER BY published_at, event_id, and the keyset cursor follows the same pair', async () => {
+    const { replayOutbox } = await import('../src/recovery.ts')
+    const queries: { sql: string; params: unknown[] }[] = []
+    const pages = [[mk('a', '2026-01-01T00:00:01Z'), mk('b', '2026-01-01T00:00:02Z')], [mk('c', '2026-01-01T00:00:03Z')]]
+    const tx = Object.assign(async () => [], {
+      unsafe: async (q: string, params: unknown[] = []) => {
+        if (q.includes('set_config')) return [{ c: 'c' }]
+        queries.push({ sql: q, params })
+        return pages.shift() ?? []
+      },
+    })
+    const sql = { begin: async (fn: (t: unknown) => unknown) => fn(tx) } as never
+    const published: string[] = []
+    const js = { publish: async (_s: string, _d: unknown, o: { msgID: string }) => (published.push(o.msgID), { stream: 'S', seq: 1, duplicate: false }) } as never
+    const r = await replayOutbox(sql, js, { ctx: 'idt', subjects: () => 'gremion.t.x', batchSize: 2, log: () => {} })
+    expect(r.republished).toBe(3)
+    expect(published).toEqual(['a', 'b', 'c'])
+    const q = queries[0]!.sql.replace(/\s+/g, ' ')
+    expect(q).toContain('ORDER BY published_at, event_id')
+    expect(q).toContain('(published_at, event_id) > ($2::timestamptz, $3::uuid)')
+    expect(q).not.toContain('ORDER BY event_time')
+    expect(queries[1]!.params.slice(1, 3)).toEqual(['2026-01-01T00:00:02Z', 'b'])
+  })
+})

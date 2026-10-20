@@ -49,25 +49,26 @@ export interface ReplayOutboxOptions {
   log?: (line: string) => void
 }
 
-/** Republishes `published` rows, oldest first, each under its own event_id. Returns how many. */
+/** Republishes `published` rows, in publish order (published_at, event_id), each under its own event_id. Returns how many. */
 export async function replayOutbox(sql: Sql, js: Publisher, opts: ReplayOutboxOptions): Promise<{ republished: number }> {
   assertContext(opts.ctx)
   const batch = opts.batchSize ?? 200
   const log = opts.log ?? ((l) => console.info(`[events] ${l}`))
-  let after: { t: Date; id: string } | undefined
+  // t is the server's own text rendering of published_at: a JS Date would cut the microseconds and the keyset would re-read its page forever.
+  let after: { t: string; id: string } | undefined
   let republished = 0
   for (;;) {
     const rows = await inTenantTx(sql, opts.ctx, (tx) =>
-      tx.unsafe<OutboxRow[]>(
+      tx.unsafe<(OutboxRow & { published_cursor: string })[]>(
         `SELECT event_id, customer_id, event_type, source, subject, event_time, data, traceparent,
-                aggregate_type, aggregate_id, aggregate_version, test_run_id
+                aggregate_type, aggregate_id, aggregate_version, test_run_id, published_at::text AS published_cursor
            FROM ${opts.ctx}.outbox
           WHERE relay_state = 'published'
             AND ($1::timestamptz IS NULL OR published_at >= $1::timestamptz)
-            AND ($2::timestamptz IS NULL OR (event_time, event_id) > ($2::timestamptz, $3::uuid))
-          ORDER BY event_time, event_id
+            AND ($2::timestamptz IS NULL OR (published_at, event_id) > ($2::timestamptz, $3::uuid))
+          ORDER BY published_at, event_id
           LIMIT $4`,
-        [opts.since?.toISOString() ?? null, after?.t.toISOString() ?? null, after?.id ?? null, batch],
+        [opts.since?.toISOString() ?? null, after?.t ?? null, after?.id ?? null, batch],
       ),
     )
     if (rows.length === 0) break
@@ -76,7 +77,7 @@ export async function replayOutbox(sql: Sql, js: Publisher, opts: ReplayOutboxOp
       republished++
     }
     const last = rows[rows.length - 1]!
-    after = { t: last.event_time, id: last.event_id }
+    after = { t: last.published_cursor, id: last.event_id }
     if (rows.length < batch) break
   }
   log(`outbox-replay ${opts.ctx}: republished ${republished} published row(s)`)
