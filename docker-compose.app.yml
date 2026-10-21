@@ -353,6 +353,7 @@ services:
       state:
         aliases: ["migrate-${COLOUR:?COLOUR required}"]
 
+
   # ============================================================
   # tenant-create — the customer lifecycle one-shot (B-06, TASK-043)
   # ============================================================
@@ -471,6 +472,119 @@ services:
         aliases: ["tenant-create-${COLOUR:?COLOUR required}"]
       state:
         aliases: ["tenant-create-${COLOUR:?COLOUR required}"]
+
+  # ============================================================
+  # kernel-api -- the kernel API: tenancy resolution + module registry
+  # (TASK-077, L3-17). INTERNAL ONLY: no Traefik router, no published port,
+  # not on the edge network. gremion-ui and the modules call it at
+  # http://kernel-api-${COLOUR}:3000 (app.env.tmpl KERNEL_API_URL).
+  # ============================================================
+  # Refuses to boot without TENANT_PROXY_SHARED_SECRET (the proxy-trust gate
+  # fails CLOSED here), and reads the control registry and gremion_platform as
+  # its own SELECT-only role (ensureKernelApiReader) -- never an owner. Per-
+  # customer kernel database credentials are file: refs under the read-only
+  # tenants mount, the same one gremion-ui has. It writes nothing at runtime:
+  # no DDL on the request path (the migrate job below owns every migration).
+  kernel-api:
+    image: ghcr.io/hello-n00del/gremion-kernel-api:${IMAGE_TAG:?IMAGE_TAG required}
+    build:
+      context: .
+      dockerfile: services/kernel-api/Dockerfile
+    restart: unless-stopped
+    logging: *logging
+    deploy: *limits-m
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs:
+      - /tmp
+    labels:
+      traefik.enable: "false"
+      # gremion-switch POSTs its evict fan-out to every long-running app
+      # container; the registry caches no tenant (status is read per request),
+      # so the evict endpoint only acknowledges.
+      gremion.evict: "true"
+    environment:
+      COLOUR: ${COLOUR:?COLOUR required}
+      PLATFORM_DOMAIN: ${PLATFORM_DOMAIN:?PLATFORM_DOMAIN required}
+      TENANT_PROXY_SHARED_SECRET: ${TENANT_PROXY_SHARED_SECRET:?TENANT_PROXY_SHARED_SECRET required}
+      GREMION_RELEASE_REF: ${IMAGE_TAG:?IMAGE_TAG required}
+      # DIRECT postgres, as the control panel's reader does: two reads per
+      # request, no transaction-pooler state to leak between tenants.
+      KERNEL_API_CONTROL_DB_URL: postgresql://${KERNEL_API_DB_USER:-gremion_kernel_api}:${KERNEL_API_DB_PASSWORD:?KERNEL_API_DB_PASSWORD required}@postgres-${STACK:?STACK required}:5432/${CONTROL_DB_NAME:-control}
+      KERNEL_API_PLATFORM_DB_URL: postgresql://${KERNEL_API_DB_USER:-gremion_kernel_api}:${KERNEL_API_DB_PASSWORD:?KERNEL_API_DB_PASSWORD required}@postgres-${STACK:?STACK required}:5432/gremion_platform
+      # Module-to-kernel service tokens (Q8): a module without a secret here
+      # has no trust. Optional -- an unset or short value is ignored.
+      KERNEL_API_MODULE_SECRET_BOARD: ${KERNEL_API_MODULE_SECRET_BOARD:-}
+      KERNEL_API_MODULE_SECRET_CALENDAR: ${KERNEL_API_MODULE_SECRET_CALENDAR:-}
+      KERNEL_API_MODULE_SECRET_CONTENT: ${KERNEL_API_MODULE_SECRET_CONTENT:-}
+      KERNEL_API_MODULE_SECRET_ELECTIONS: ${KERNEL_API_MODULE_SECRET_ELECTIONS:-}
+      KERNEL_API_MODULE_SECRET_FILES: ${KERNEL_API_MODULE_SECRET_FILES:-}
+      KERNEL_API_MODULE_SECRET_FINANCE: ${KERNEL_API_MODULE_SECRET_FINANCE:-}
+      KERNEL_API_MODULE_SECRET_HANDOVER: ${KERNEL_API_MODULE_SECRET_HANDOVER:-}
+      KERNEL_API_MODULE_SECRET_MESSAGING: ${KERNEL_API_MODULE_SECRET_MESSAGING:-}
+      KERNEL_API_MODULE_SECRET_PUBLISHING: ${KERNEL_API_MODULE_SECRET_PUBLISHING:-}
+      KERNEL_API_MODULE_SECRET_VAULT: ${KERNEL_API_MODULE_SECRET_VAULT:-}
+      KERNEL_API_MODULE_SECRET_VOTES: ${KERNEL_API_MODULE_SECRET_VOTES:-}
+    volumes:
+      # Each customer's kernel database credential is a file: ref under
+      # /run/secrets/tenants (read-only, like gremion-ui's mount).
+      - ${TENANT_SECRETS_DIR:-./secrets/tenants}:/run/secrets/tenants:ro
+    networks:
+      app: {}
+      state:
+        aliases: ["kernel-api-${COLOUR:?COLOUR required}"]
+    healthcheck:
+      # The process and a valid config only -- never a database, so it is
+      # healthy before the first customer exists.
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+  # ============================================================
+  # kernel-api-migrate -- the per-customer kernel migration one-shot (Q10)
+  # ============================================================
+  #   docker compose --env-file etc/env/app-<colour>.env run --rm kernel-api-migrate [--customer <id>]
+  # profiles: [kernel-api-migrate] is load-bearing for the same reason as
+  # migrate's: without it `up` creates a container with no healthcheck and
+  # gremion-deploy's wait_healthy kills the deploy. SAME image as kernel-api
+  # (the command differs); gremion-deploy step 7 runs it after `migrate`.
+  kernel-api-migrate:
+    profiles: [kernel-api-migrate]
+    image: ghcr.io/hello-n00del/gremion-kernel-api:${IMAGE_TAG:?IMAGE_TAG required}
+    build:
+      context: .
+      dockerfile: services/kernel-api/Dockerfile
+    command: ["node", "services/kernel-api/dist/index.js", "migrate"]
+    restart: "no"
+    logging: *logging
+    deploy: *limits-m
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs:
+      - /tmp
+      # TASK-075's pre-migration dump (the whole database in clear): 0700, the
+      # image's uid (node, 1000). Memory-backed and bounded -- the host half
+      # (gremion-migration-dump, deploy step 5) keeps the durable dump.
+      - /var/lib/gremion/migration-dump:mode=0700,uid=1000,gid=1000,size=256m
+    labels:
+      traefik.enable: "false"
+    environment:
+      COLOUR: ${COLOUR:?COLOUR required}
+      GREMION_RELEASE_REF: ${IMAGE_TAG:?IMAGE_TAG required}
+      GREMION_MIGRATION_DUMP_DIR: /var/lib/gremion/migration-dump
+      KERNEL_API_CONTROL_DB_URL: postgresql://${KERNEL_API_DB_USER:-gremion_kernel_api}:${KERNEL_API_DB_PASSWORD:?KERNEL_API_DB_PASSWORD required}@postgres-${STACK:?STACK required}:5432/${CONTROL_DB_NAME:-control}
+      # The kernel Postgres server ITSELF (never PgBouncer: DDL, advisory lock
+      # and pg_dump need a session). The migration role is the server's.
+      GREMION_KERNEL_PG_DIRECT_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD required}@postgres-${STACK:?STACK required}:5432/postgres
+    volumes:
+      - ${TENANT_SECRETS_DIR:-./secrets/tenants}:/run/secrets/tenants:ro
+    networks:
+      state:
+        aliases: ["kernel-api-migrate-${COLOUR:?COLOUR required}"]
 
 # ============================================================
 # Networks

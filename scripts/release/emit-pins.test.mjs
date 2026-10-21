@@ -29,13 +29,15 @@ const FP = 'ghcr.io/hello-n00del'
 // The app project's service set, EXACTLY: this list also guards against an
 // unplanned app service. control-panel is the planned one (TASK-043 Q12, the
 // ops shell per colour; its image is gremion-control-panel).
-const SERVICES = ['gremion-ui', 'gremion-public', 'control-panel', 'migrate', 'tenant-create']
+const SERVICES = ['gremion-ui', 'gremion-public', 'control-panel', 'migrate', 'tenant-create', 'kernel-api', 'kernel-api-migrate']
 const LINES = [
   `gremion-ui=${FP}/gremion-ui@sha256:${D('1')}`,
   `gremion-public=${FP}/gremion-public@sha256:${D('2')}`,
   `control-panel=${FP}/gremion-control-panel@sha256:${D('6')}`,
   `migrate=${FP}/gremion-migrate@sha256:${D('3')}`,
   `tenant-create=${FP}/gremion-migrate@sha256:${D('3')}`,
+  `kernel-api=${FP}/gremion-kernel-api@sha256:${D('4')}`,
+  `kernel-api-migrate=${FP}/gremion-kernel-api@sha256:${D('4')}`,
 ]
 const codes = (ps) => ps.map((p) => p.code).sort()
 

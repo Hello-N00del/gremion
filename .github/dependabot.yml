@@ -79,6 +79,8 @@ updates:
       - /gremion-ui
       # TASK-043 G11: the ops control panel image (gremion-control-panel).
       - /apps/control-panel
+      # TASK-077 G7: the kernel API image (gremion-kernel-api).
+      - /services/kernel-api
       # The local bats runner image (test/host/runner). Not shipped, but it
       # pins a base image like any other; scripts/release/
       # check-dependabot-dockerfiles.mjs fails on a tracked Dockerfile whose
