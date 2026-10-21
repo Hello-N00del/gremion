@@ -1,0 +1,9 @@
+{
+  "customer_id": "0198f3a2-7c10-7d2e-9a41-5b6c0d1e2f30",
+  "body_id": null,
+  "period_start": "2026-11-02T00:00:00Z",
+  "period_end": "2026-11-30T00:00:00Z",
+  "polls_opened": 4,
+  "answers_recorded": 23,
+  "count_source": "operator_count"
+}

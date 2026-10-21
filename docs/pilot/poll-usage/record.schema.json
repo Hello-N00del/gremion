@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gremion.invalid/pilot/poll-usage/record.schema.json",
+  "title": "Poll usage record (DB-MSG-POLL-USAGE, msg.poll_usage)",
+  "description": "One counter row of the chat-poll usage measurement (docs/pilot/poll-usage/README.md section 4): counts only, no poll question, option, answer or person. Mirrors the operator-written columns of msg.poll_usage in SCHEMA-gremion.md (DB-MSG-POLL-USAGE); the bookkeeping columns (ids, created_*, updated_*, row_version, recorded_at) are written by the table, not by the operator. Unique per customer, body, period and source.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["customer_id", "body_id", "period_start", "period_end", "polls_opened", "answers_recorded", "count_source"],
+  "properties": {
+    "customer_id": { "type": "string", "format": "uuid" },
+    "body_id": { "type": ["string", "null"], "format": "uuid", "description": "null = customer-wide count" },
+    "period_start": { "type": "string", "format": "date-time", "description": "no earlier than the council's go-live (section 3)" },
+    "period_end": { "type": "string", "format": "date-time", "description": "strictly after period_start" },
+    "polls_opened": { "type": "integer", "minimum": 0 },
+    "answers_recorded": { "type": "integer", "minimum": 0 },
+    "count_source": { "enum": ["homeserver_aggregate", "operator_count"] }
+  }
+}

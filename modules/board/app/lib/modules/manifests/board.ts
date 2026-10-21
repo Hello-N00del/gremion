@@ -8,6 +8,8 @@ import type { ModuleManifest } from '../types'
 // board disable; the flag defaults ON (defaultModulesConfig sources toggleable
 // ids from MODULE_MANIFESTS and sets each true by default).
 //
+// GUARD (R33 F6): gremion-ui/src/lib/modules/migration-ownership.ts crossCuttingViolations() fails if any manifest claims this file;
+// gremion-ui/scripts/fresh-init-proof.sh --module-off board proves the OFF fresh init in a real Postgres.
 // DELIBERATELY no schema-file attribution: 0034_deck_board.sql stays
 // KERNEL-applied. Its DDL CREATEs board/stack/card with cross-DB FKs to
 // org_units(id) AND protocol_action_items(id) — both governance-scoped kernel
