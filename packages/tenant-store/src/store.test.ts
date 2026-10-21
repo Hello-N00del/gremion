@@ -87,6 +87,47 @@ describe('createTenantStore().openTenantDb', () => {
     }
   })
 
+  it('evictTenantDb during an in-flight open: the pending open re-resolves, never caches the pre-eviction secret, and does not clobber the newer opening entry', async () => {
+    const f = fakeFactory()
+    let pw = 'old'
+    const gates: (() => void)[] = []
+    const slow = (t: string, m: string) => {
+      const url = `postgres://u:${pw}@h/${tenantModuleDbName(t, m)}`
+      return new Promise<{ url: string }>((res) => gates.push(() => res({ url })))
+    }
+    const store = createTenantStore({ resolveTarget: slow, createDb: f.createDb })
+    const p1 = store.openTenantDb(A, 'kernel') // resolving with the OLD secret
+    await Promise.resolve()
+    expect(gates).toHaveLength(1)
+    pw = 'new'
+    expect(store.evictTenantDb(A, 'kernel')).toBe(false) // nothing cached yet, but the epoch moves
+    const p2 = store.openTenantDb(A, 'kernel') // fresh open, new secret
+    await Promise.resolve()
+    expect(gates).toHaveLength(2)
+    gates[0]!() // the stale resolve lands first
+    await vi.waitFor(() => expect(gates.length).toBeGreaterThanOrEqual(3)) // it re-resolved instead of caching
+    gates.slice(1).forEach((g) => g())
+    const [a, b] = await Promise.all([p1, p2])
+    for (const m of f.made) expect(m.profile.url).toContain(':new@') // no pool ever built from the old secret
+    expect(await store.openTenantDb(A, 'kernel')).toBe(b)
+    expect(a).toBeDefined()
+    expect(store.size()).toBe(1)
+    await store.close()
+  })
+
+  it('repeated evictions keep retired pools bounded (ended early past the cap), not one per eviction until the grace', async () => {
+    const f = fakeFactory()
+    const store = createTenantStore({ resolveTarget, createDb: f.createDb, maxPools: 2, evictGraceMs: 60_000 })
+    for (let i = 0; i < 10; i++) {
+      await store.openTenantDb(A, 'kernel')
+      store.evictTenantDb(A, 'kernel')
+    }
+    const live = f.made.filter((m) => m.end.mock.calls.length === 0).length
+    expect(live).toBeLessThanOrEqual(2) // retired cap = maxPools
+    await store.close()
+    expect(f.made.every((m) => m.end.mock.calls.length === 1)).toBe(true)
+  })
+
   it('close() ends a retired pool still in its grace', async () => {
     const f = fakeFactory()
     const store = createTenantStore({ resolveTarget, createDb: f.createDb, evictGraceMs: 60_000 })
