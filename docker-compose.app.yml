@@ -587,8 +587,10 @@ services:
       GREMION_MIGRATION_DUMP_DIR: /var/lib/gremion/migration-dump
       KERNEL_API_CONTROL_DB_URL: postgresql://${KERNEL_API_DB_USER:-gremion_kernel_api}:${KERNEL_API_DB_PASSWORD:?KERNEL_API_DB_PASSWORD required}@postgres-${STACK:?STACK required}:5432/${CONTROL_DB_NAME:-control}
       # The kernel Postgres server ITSELF (never PgBouncer: DDL, advisory lock
-      # and pg_dump need a session). The migration role is the server's.
-      GREMION_KERNEL_PG_DIRECT_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD required}@postgres-${STACK:?STACK required}:5432/postgres
+      # and pg_dump need a session). HOST/PORT ONLY: credentials come from each
+      # customer's db_conn_ref (directUrlFor refuses userinfo here), so the
+      # superuser password is never in this container's environment.
+      GREMION_KERNEL_PG_DIRECT_URL: postgresql://postgres-${STACK:?STACK required}:5432/postgres
     volumes:
       - ${TENANT_SECRETS_DIR:-./secrets/tenants}:/run/secrets/tenants:ro
     networks:

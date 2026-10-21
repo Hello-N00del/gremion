@@ -33,6 +33,7 @@
 // customer, no host and no file (details go to the log).
 import { createHash, timingSafeEqual } from 'node:crypto'
 import type { FastifyReply, FastifyRequest } from 'fastify'
+import { errors } from 'jose'
 import { sendProblem } from '@gremion/fastify-service-template'
 import { isReservedPlatformHost, normaliseHost, type HostRejectReason } from '@gremion/tenancy-core'
 import type { KernelApiDeps, TenantRow } from '../app/deps.ts'
@@ -50,12 +51,30 @@ export const PROBLEM = {
   notFound: 'urn:gremion:problem:not-found',
   customerUnavailable: 'urn:gremion:problem:customer-unavailable',
   registryUnavailable: 'urn:gremion:problem:registry-unavailable',
+  identityUnavailable: 'urn:gremion:problem:identity-unavailable',
   notConfigured: 'urn:gremion:problem:not-configured',
 } as const
 
 /** Retry-After of a suspended customer and of a registry outage. */
 export const RETRY_AFTER_SUSPENDED = 30
 export const RETRY_AFTER_REGISTRY = 5
+
+/**
+ * A verifier failure that says the TOKEN is bad (-> 401). Everything else
+ * (JWKS timeout, fetch/network error, unknown throw) is an identity-provider
+ * outage (-> 503, fail closed): the caller should retry, not re-authenticate.
+ */
+export function isTokenRefusal(err: unknown): boolean {
+  return (
+    err instanceof errors.JWTExpired ||
+    err instanceof errors.JWTClaimValidationFailed ||
+    err instanceof errors.JWSSignatureVerificationFailed ||
+    err instanceof errors.JWSInvalid ||
+    err instanceof errors.JWTInvalid ||
+    err instanceof errors.JOSEAlgNotAllowed ||
+    err instanceof errors.JWKSNoMatchingKey
+  )
+}
 
 /** Constant-time comparison of two secrets of any length (hash first, so lengths never leak). */
 export function constantTimeEqual(supplied: string, expected: string): boolean {
@@ -194,7 +213,12 @@ export function createTenancyHook(deps: KernelApiDeps, opts: TenancyHookOptions)
     try {
       claims = await deps.tokens.verify(m[1]!, tenant)
     } catch (err) {
-      deps.log.warn('kernel-api: token refused', { customerId: tenant.customerId, err: (err as Error).message })
+      const errorClass = err instanceof Error ? err.constructor.name : typeof err
+      if (!isTokenRefusal(err)) {
+        deps.log.error('kernel-api: identity provider unavailable', { customerId: tenant.customerId, errorClass, err: err instanceof Error ? err.message : String(err) })
+        return unavailable(reply, PROBLEM.identityUnavailable, RETRY_AFTER_REGISTRY, 'The identity provider of this customer is unavailable.')
+      }
+      deps.log.warn('kernel-api: token refused', { customerId: tenant.customerId, errorClass, err: (err as Error).message })
       return unauthorized(reply, 'The access token is not valid for this customer.')
     }
     const closed = await gate(reply, tenant)

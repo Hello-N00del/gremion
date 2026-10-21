@@ -47,6 +47,7 @@ export function directUrlFor(runtimeUrl: string, directBase: string, customerId:
   const runtime = new URL(runtimeUrl)
   const direct = new URL(directBase)
   if (direct.protocol !== 'postgres:' && direct.protocol !== 'postgresql:') throw new TargetError('the direct server url is not postgres://')
+  if (direct.username !== '' || direct.password !== '') throw new TargetError('the direct server url must carry host and port only, no credentials')
   runtime.hostname = direct.hostname
   runtime.port = direct.port
   runtime.search = direct.search

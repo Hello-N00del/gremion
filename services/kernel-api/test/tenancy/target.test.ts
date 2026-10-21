@@ -55,8 +55,13 @@ describe('kernelTargetResolver (Q3)', () => {
 
 describe('directUrlFor (migrate, C10)', () => {
   it('keeps the credentials and database, takes the DIRECT server host and port', () => {
-    const u = new URL(directUrlFor(url(dbA), 'postgres://ignored:x@postgres:5432/postgres', A_ID))
+    const u = new URL(directUrlFor(url(dbA), 'postgres://postgres:5432/postgres', A_ID))
     expect([u.username, u.password, u.hostname, u.port, u.pathname]).toEqual(['k_app', 'pw', 'postgres', '5432', `/${dbA}`])
+  })
+
+  it('refuses a direct base that carries userinfo (a superuser password must never ride along)', () => {
+    expect(() => directUrlFor(url(dbA), 'postgres://postgres:s3cret@postgres:5432/postgres', A_ID)).toThrow(/credentials/)
+    expect(() => directUrlFor(url(dbA), 'postgres://postgres@postgres:5432/postgres', A_ID)).toThrow(/credentials/)
   })
 
   it("refuses a runtime url of another customer's database", () => {
