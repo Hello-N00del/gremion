@@ -67,13 +67,16 @@ export const LONG_RUNNING_APP = ['gremion-ui', 'gremion-public', 'control-panel'
  * (value = the file that is the evidence). kernel-api is deliberately absent:
  * it serves only routes from openapi/kernel-core.json; its evict route is
  * TASK-035's, and the label would make every switch abort on a non-204.
- * CAVEAT: only control-panel has a literal route file; gremion-ui/-public are
- * allowlisted as the pre-existing labelled services (their HTTP evict route was
- * NOT found in this tree -- only the pg_notify listener) and need a follow-up.
+ * Only a literal `routes/api/internal/evict/+server.ts` with a POST export counts
+ * as evidence (check-pooled-stack.test.mjs enforces it). gremion-ui and
+ * gremion-public are deliberately absent: neither serves the route (gremion-ui
+ * only has the pg_notify listener, gremion-public has no tenant cache), so
+ * labelling them made every gremion-switch abort on a non-204. Their caches are
+ * NOT evicted by the switch: gremion-ui relies on the tenant_evict NOTIFY
+ * listener (suspend/delete) and the ~30 s runtime TTL. Adding the route is the
+ * follow-up that lets gremion-ui rejoin this map.
  */
 export const EVICT_IMPLEMENTERS = {
-  'gremion-ui': 'gremion-ui/src/lib/server/tenant/evict-listener.ts',
-  'gremion-public': 'gremion-public/Dockerfile',
   'control-panel': 'apps/control-panel/src/routes/api/internal/evict/+server.ts',
 }
 export const ONE_SHOTS = { migrate: 'migrate', 'tenant-create': 'tenant-create', 'kernel-api-migrate': 'kernel-api-migrate' }
