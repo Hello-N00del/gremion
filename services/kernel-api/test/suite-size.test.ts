@@ -24,6 +24,7 @@ export const NAMED: Record<'unit' | 'integration', Record<string, number>> = {
     'test/tenancy/module-callers.test.ts': 12,
     'test/tenancy/target.test.ts': 11,
     'test/tenancy/tokens.test.ts': 15,
+    'test/tenancy/token-outage.test.ts': 12,
     // G8 (static half): the audience mapper in the realm template
     'test/keycloak/realm-audience.test.ts': 4,
     'test/suite-size.test.ts': 4,
