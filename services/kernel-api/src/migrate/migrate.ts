@@ -58,6 +58,10 @@ export const MIGRATED_STATUSES_EXPLICIT: ReadonlySet<string> = new Set(['provisi
 const UUID_V7 = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
 const OWNER_ROLE = /^k_[0-9a-f]{32}_owner$/
 
+/** Bounded defaults: a blocked customer fails fast and the job continues (KERNEL_API_MIGRATE_LOCK_WAIT_MS / _DDL_LOCK_TIMEOUT_MS). */
+export const DEFAULT_LOCK_WAIT_TIMEOUT_MS = 60_000
+export const DEFAULT_DDL_LOCK_TIMEOUT_MS = 5_000
+
 export interface MigrateOptions {
   /** The control registry (the reader role suffices: two SELECTs). */
   control: Sql
@@ -72,6 +76,14 @@ export interface MigrateOptions {
   releaseRef: string
   /** GREMION_MIGRATION_DUMP_DIR (0700, this uid). */
   dumpDir: string | undefined
+  /**
+   * How long one customer may wait for the migration advisory lock (another migrate
+   * session on the same database) before it FAILS and the job moves on to the next
+   * customer. Default 60 s (the runner's own default is 10 min per customer).
+   */
+  lockWaitTimeoutMs?: number
+  /** lock_timeout of every migration transaction's DDL (a stuck ACCESS EXCLUSIVE queue fails fast). Default 5 s. */
+  ddlLockTimeoutMs?: number
   log(line: string): void
   /** One stdout line per dump event (TRD-143). */
   audit(line: string): void
@@ -130,6 +142,8 @@ export async function migrateKernelDb(customerId: string, o: MigrateOptions & { 
       dirs: o.dirs,
       ledger: KERNEL_API_LEDGER,
       releaseRef: o.releaseRef,
+      lockWaitTimeoutMs: o.lockWaitTimeoutMs ?? DEFAULT_LOCK_WAIT_TIMEOUT_MS,
+      ddlLockTimeoutMs: o.ddlLockTimeoutMs ?? DEFAULT_DDL_LOCK_TIMEOUT_MS,
       // the runtime role reads/appends the ledger by an explicit grant, not owner membership (TASK-192)
       ledgerGrantTo: owner.replace(/_owner$/, '_app'),
       log,

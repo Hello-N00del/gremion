@@ -183,7 +183,6 @@ function unionProblems(perDir: ReadonlyArray<{ dir: string; files: readonly stri
 /** loadManifest over every dir, merged into ONE map; refuses a duplicate name or number across dirs. */
 export function loadUnionManifest(dirs: readonly string[]): Map<string, string> {
   assertDirs(dirs)
-  if (dirs.length === 1) return loadManifest(dirs[0]!)
   const perDir = dirs.map((dir) => ({ dir, manifest: loadManifest(dir) }))
   const problems = unionProblems(perDir.map(({ dir, manifest }) => ({ dir, files: [...manifest.keys()] })))
   if (problems.length) throw new MigrationManifestError(problems)
@@ -201,7 +200,6 @@ export function loadUnionManifest(dirs: readonly string[]): Map<string, string> 
  */
 export function readVerifiedUnion(dirs: readonly string[]): VerifiedMigration[] {
   assertDirs(dirs)
-  if (dirs.length === 1) return readVerifiedMigrations(dirs[0]!)
   const perDir = dirs.map((dir) => ({ dir, migrations: readVerifiedMigrations(dir) }))
   const problems = unionProblems(perDir.map(({ dir, migrations }) => ({ dir, files: migrations.map((m) => m.file) })))
   if (problems.length) throw new MigrationManifestError(problems)

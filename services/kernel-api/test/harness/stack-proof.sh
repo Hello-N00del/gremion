@@ -25,9 +25,11 @@ SHA8="$(cd "$HERE" && node --input-type=module -e "import('./stack.mjs').then((m
 PGIMAGE="$(cd "$HERE" && node --input-type=module -e "import('../../../../packages/tenant-store/test/harness/stack.mjs').then((m) => console.log(m.moduleImage()))")"
 KCIMAGE="quay.io/keycloak/keycloak:26.6.1"
 NODEIMAGE="node:26-alpine@sha256:7c6af15abe4e3de859690e7db171d0d711bf37d27528eddfe625b2fe89e097f8"
-P="t077-${SHA8}-e2e"
+PFX="${T077_PREFIX:-t077}"   # a lane sets T077_PREFIX=t077r so its objects carry the lane prefix
+P="${PFX}-${SHA8}-e2e"
+N_DUMP="$P-dump"
 N_NET="$P-net"; N_PG="$P-pg"; N_KC="$P-kc"; N_API="$P-api"; N_WEB="$P-web"
-IMAGE="t077-${SHA8}-kernel-api:head"
+IMAGE="${PFX}-${SHA8}-kernel-api:head"
 SDIR="$REPO/.scratch/t077-stack"
 SDIR_M="$SDIR"
 STATE="$SDIR/state.json"
@@ -63,6 +65,7 @@ wait_ready_pg() {
 write_envs() {
   cat > "$SDIR/api.env" <<ENV
 COLOUR=blue
+KERNEL_API_ALLOW_ENV_SECRET_REFS=1
 PLATFORM_DOMAIN=example.org
 TENANT_PROXY_SHARED_SECRET=$PROXY
 GREMION_RELEASE_REF=dist-v1.0.0
@@ -71,16 +74,23 @@ KERNEL_API_PLATFORM_DB_URL=$(jget readerPlatformUrl)
 ENV
   cat > "$SDIR/migrate.env" <<ENV
 COLOUR=blue
+KERNEL_API_ALLOW_ENV_SECRET_REFS=1
 GREMION_RELEASE_REF=dist-v1.0.0
 GREMION_MIGRATION_DUMP_DIR=/var/lib/gremion/migration-dump
 KERNEL_API_CONTROL_DB_URL=$(jget readerControlUrl)
-GREMION_KERNEL_PG_DIRECT_URL=postgresql://t077_admin:$(jget password)@$N_PG:5432/postgres
+GREMION_KERNEL_PG_DIRECT_URL=postgresql://$N_PG:5432/postgres
 ENV
 }
 
 run_migrate() {
+  # The dump dir is a DURABLE mount at the path the host tooling uses (compose: a bind of
+  # GREMION_MIGRATION_DUMP_DIR), 0700 uid 1000 -- here a named volume, owner-fixed once.
+  docker volume inspect "$N_DUMP" >/dev/null 2>&1 || {
+    docker volume create "$N_DUMP" >/dev/null
+    docker run --rm -v "$N_DUMP:/d" "$NODEIMAGE" sh -c 'chown 1000:1000 /d && chmod 700 /d'
+  }
   docker run --rm --network "$N_NET" --read-only --cap-drop ALL --security-opt no-new-privileges:true --tmpfs /tmp \
-    --tmpfs /var/lib/gremion/migration-dump:mode=0700,uid=1000,gid=1000,size=256m --env-file "$SDIR/migrate.env" \
+    -v "$N_DUMP:/var/lib/gremion/migration-dump" --env-file "$SDIR/migrate.env" \
     -v "$SDIR_M/tenants:/run/secrets/tenants:ro" "$IMAGE" node services/kernel-api/dist/index.js migrate "$@"
 }
 
@@ -145,10 +155,10 @@ phase_e2e() {
 phase_late() { (cd "$SERVICE" && T077_SEED_MODE=late T077_STATE="$STATE" T077_SCRATCH="$SHA8" node node_modules/vitest/vitest.mjs run --config vitest.proof.config.ts test/harness/stack-seed.ts) >&2; }
 
 phase_status() {
-  echo "containers: $(docker ps -a --filter "name=t077-${SHA8}" --format '{{.Names}}' | tr '\n' ' ')"
-  echo "volumes:    $(docker volume ls -q --filter "name=t077-${SHA8}" | tr '\n' ' ')"
-  echo "networks:   $(docker network ls --filter "name=t077-${SHA8}" --format '{{.Name}}' | tr '\n' ' ')"
-  echo "images:     $(docker images --format '{{.Repository}}:{{.Tag}}' | grep "t077-${SHA8}" | tr '\n' ' ')"
+  echo "containers: $(docker ps -a --filter "name=${PFX}-${SHA8}" --format '{{.Names}}' | tr '\n' ' ')"
+  echo "volumes:    $(docker volume ls -q --filter "name=${PFX}-${SHA8}" | tr '\n' ' ')"
+  echo "networks:   $(docker network ls --filter "name=${PFX}-${SHA8}" --format '{{.Name}}' | tr '\n' ' ')"
+  echo "images:     $(docker images --format '{{.Repository}}:{{.Tag}}' | grep "${PFX}-${SHA8}" | tr '\n' ' ')"
 }
 
 phase_down() {
@@ -158,6 +168,7 @@ phase_down() {
   done
   if docker network inspect "$N_NET" >/dev/null 2>&1; then docker network rm "$N_NET" >/dev/null || left=1; fi
   if docker image inspect "$IMAGE" >/dev/null 2>&1; then docker rmi "$IMAGE" >/dev/null || left=1; fi
+  if docker volume inspect "$N_DUMP" >/dev/null 2>&1; then docker volume rm "$N_DUMP" >/dev/null || left=1; fi
   rm -rf "$SDIR"
   phase_status
   [ "$left" = 0 ]

@@ -6,7 +6,7 @@
 // builds on the one before.
 import { mkdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
-import { createTenantStore } from '@gremion/tenant-store'
+import { ADVISORY_LOCKS, createTenantStore } from '@gremion/tenant-store'
 import type { FastifyInstance } from 'fastify'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { buildApp } from '../../src/app/build.ts'
@@ -40,6 +40,14 @@ const others: Customer[] = []
 
 const edge = (host: string, token?: string) => ({ host, 'x-forwarded-host': host, 'x-proxy-trust': PROXY, ...(token ? { authorization: `Bearer ${token}` } : {}) })
 
+/** HOST/PORT only (directUrlFor refuses userinfo since 4f2a30ee): each customer's db_conn_ref carries the credentials. */
+const directBase = (o: { pooler?: boolean } = {}) => {
+  const u = new URL(url('postgres', o))
+  u.username = ''
+  u.password = ''
+  return u.toString()
+}
+
 async function migrate(args: string[], env: Record<string, string> = {}) {
   const lines: string[] = []
   const code = await runMigrateCli(
@@ -47,7 +55,7 @@ async function migrate(args: string[], env: Record<string, string> = {}) {
     {
       ...world.env,
       KERNEL_API_CONTROL_DB_URL: world.readerControlUrl,
-      GREMION_KERNEL_PG_DIRECT_URL: url('postgres'),
+      GREMION_KERNEL_PG_DIRECT_URL: directBase(),
       GREMION_RELEASE_REF: 'dist-v1.0.0',
       GREMION_MIGRATION_DUMP_DIR: DUMPS,
       KERNEL_API_PG_DUMP_CONTAINER: stack().container,
@@ -255,11 +263,58 @@ describe('the kernel API on PG18 (scratch stack)', () => {
     others.push(P)
     // its secret names the harness admin (the scratch PgBouncer authenticates only that user) on P's database
     world.env[P.ref.slice(4)] = url(kernelDatabaseOf(P.id))
-    const { code, lines } = await migrate(['--customer', P.id], { GREMION_KERNEL_PG_DIRECT_URL: url('postgres', { pooler: true }) })
+    const { code, lines } = await migrate(['--customer', P.id], { GREMION_KERNEL_PG_DIRECT_URL: directBase({ pooler: true }) })
     expect(code).toBe(1)
     // the runner's POOLER_TARGET refusal reaches the operator by its message
     expect(lines.join('\n')).toMatch(new RegExp(`MIGRATE-FAILED customer=${P.id} .*not a direct Postgres connection`))
     expect(await ledgerOf(P)).toBeNull()
+  })
+
+  it('a customer whose migration lock is held elsewhere fails FAST (bounded lock wait, KERNEL_API_MIGRATE_LOCK_WAIT_MS) and the job continues with the next customer', async () => {
+    const L = await createCustomer(world, 'cust-l', 'l.example.org')
+    const M = await createCustomer(world, 'cust-m', 'm.example.org')
+    others.push(L, M)
+    const holder = connect(kernelDatabaseOf(L.id), { max: 1 })
+    try {
+      await holder`SELECT pg_advisory_lock(${ADVISORY_LOCKS.migration.classid}::int4, ${ADVISORY_LOCKS.migration.objid}::int4)`
+      const t0 = Date.now()
+      const { code, lines } = await migrate([], { KERNEL_API_MIGRATE_LOCK_WAIT_MS: '1500' })
+      const text = lines.join('\n')
+      expect(Date.now() - t0).toBeLessThan(45_000)
+      expect(code).toBe(1)
+      expect(text).toMatch(new RegExp(`MIGRATE-FAILED customer=${L.id} .*not granted within 1500 ms`))
+      expect(text).toMatch(new RegExp(`MIGRATE-RESULT customer=${M.id} applied=[1-9]`))
+      expect(await ledgerOf(L)).toBeNull()
+      expect((await ledgerOf(M))?.length).toBeGreaterThan(0)
+    } finally {
+      await holder.end()
+    }
+  }, 90_000)
+
+  it('a migration DDL stuck behind another transaction fails by lock_timeout (KERNEL_API_MIGRATE_DDL_LOCK_TIMEOUT_MS), nothing applied; then a clean rerun migrates', async () => {
+    const N = await createCustomer(world, 'cust-n', 'n.example.org')
+    others.push(N)
+    const blocker = connect(kernelDatabaseOf(N.id), { max: 1 })
+    try {
+      // an uncommitted CREATE SCHEMA idt: the ledger's own CREATE SCHEMA waits on that transaction
+      await blocker.unsafe('BEGIN; CREATE SCHEMA idt')
+      const t0 = Date.now()
+      const { code, lines } = await migrate(['--customer', N.id], { KERNEL_API_MIGRATE_DDL_LOCK_TIMEOUT_MS: '1000' })
+      expect(Date.now() - t0).toBeLessThan(45_000)
+      expect(code).toBe(1)
+      expect(lines.join('\n')).toMatch(new RegExp(`MIGRATE-FAILED customer=${N.id} .*lock timeout`))
+    } finally {
+      await blocker.unsafe('ROLLBACK').catch(() => {})
+      await blocker.end()
+    }
+    expect(await ledgerOf(N)).toBeNull()
+    expect((await migrate(['--customer', N.id])).code).toBe(0)
+  }, 90_000)
+
+  it('a malformed bound is refused before anything is migrated', async () => {
+    const { code, lines } = await migrate([], { KERNEL_API_MIGRATE_LOCK_WAIT_MS: 'soon' })
+    expect(code).toBe(1)
+    expect(lines.join('\n')).toMatch(/KERNEL_API_MIGRATE_LOCK_WAIT_MS="soon" is not a whole number/)
   })
 })
 
@@ -274,14 +329,14 @@ describe('isolation on PG18 (Q3, TDD 5, TDD 13)', () => {
       [A.id, A.ref],
       [B.id, B.ref],
     ])
-    const store = createTenantStore({ resolveTarget: kernelTargetResolver({ refOf: (id) => refs.get(id), resolveSecret: createSecretResolver({ env: world.env }) }), prepare: false })
+    const store = createTenantStore({ resolveTarget: kernelTargetResolver({ refOf: (id) => refs.get(id), resolveSecret: createSecretResolver({ env: world.env, allowEnvRefs: true }) }), prepare: false })
     try {
       const a = await store.openTenantDb(A.id, 'kernel')
       expect(await a`SELECT v FROM public.t077_sentinel`).toEqual([{ v: 'cust-a' }])
       const b = await store.openTenantDb(B.id, 'kernel')
       expect(await b`SELECT v FROM public.t077_sentinel`).toEqual([{ v: 'cust-b' }])
       refs.set(A.id, B.ref)
-      const fresh = createTenantStore({ resolveTarget: kernelTargetResolver({ refOf: (id) => refs.get(id), resolveSecret: createSecretResolver({ env: world.env }) }) })
+      const fresh = createTenantStore({ resolveTarget: kernelTargetResolver({ refOf: (id) => refs.get(id), resolveSecret: createSecretResolver({ env: world.env, allowEnvRefs: true }) }) })
       await expect(fresh.openTenantDb(A.id, 'kernel')).rejects.toThrow(/does not name database/)
       await fresh.close()
     } finally {

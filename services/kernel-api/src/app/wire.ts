@@ -8,7 +8,7 @@ import { createHostRejectionLog } from '@gremion/tenancy-core'
 import postgres from 'postgres'
 import { platformRegistryStore } from '../registry/store.ts'
 import { loadDeclarations } from '../registry/declarations.ts'
-import { createSecretResolver } from '../tenancy/secrets.ts'
+import { allowsEnvRefs, createSecretResolver } from '../tenancy/secrets.ts'
 import { controlTenancyStore } from '../tenancy/store.ts'
 import { createTokenVerifier } from '../tenancy/tokens.ts'
 import type { KernelApiConfig } from './config.ts'
@@ -37,7 +37,7 @@ export function wireDeps(config: KernelApiConfig, o: { dirs: readonly string[]; 
   const open = (url: string): Sql => postgres(url, { max: 4, prepare: false, onnotice: () => {}, connect_timeout: 10, idle_timeout: 60 })
   const control = open(config.controlDbUrl)
   const platform = open(config.platformDbUrl)
-  const resolveSecret = createSecretResolver({ env: o.env ?? process.env })
+  const resolveSecret = createSecretResolver({ env: o.env ?? process.env, allowEnvRefs: allowsEnvRefs(o.env ?? process.env) })
   const gate = createCustomerGate({ dirs: o.dirs, ...(config.releaseRef ? { releaseRef: config.releaseRef } : {}), resolveSecret, log })
   const declarations = loadDeclarations(config.modulesRoot)
   const deps: KernelApiDeps = {

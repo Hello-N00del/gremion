@@ -610,6 +610,9 @@ step_4_render() {
 # release's dump is live (never a series; it prints the restore/discard
 # commands), reuses this tag's own (a retry, or a --no-switch deploy), and takes
 # the host-side dump of every legacy-boot chain that gains a migration file.
+# The dir (GREMION_MIGRATION_DUMP_DIR, durable host disk, 0700) is the one the
+# kernel-api-migrate one-shot bind-mounts at the same path (step 7), so both
+# halves write the one ledger and the dump outlives the container.
 # Runs before step 6, so a refusal stops nothing.
 step_5_migration_dump() {
     local prog; prog="$(bin_path gremion-migration-dump)"

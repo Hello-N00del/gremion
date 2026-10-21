@@ -15,6 +15,7 @@ const PKG = fileURLToPath(new URL('../', import.meta.url))
 export const NAMED: Record<'unit' | 'integration', Record<string, number>> = {
   unit: {
     'test/app/bundle-entry.test.ts': 1,
+    'test/app/gate-rotation.test.ts': 3,
     'test/app/routes.test.ts': 11,
     'test/app/trd082.test.ts': 5,
     'test/conformance/conformance.test.ts': 14,
@@ -22,7 +23,7 @@ export const NAMED: Record<'unit' | 'integration', Record<string, number>> = {
     'test/registry/registry.test.ts': 7,
     'test/tenancy/host.test.ts': 29,
     'test/tenancy/module-callers.test.ts': 12,
-    'test/tenancy/target.test.ts': 12,
+    'test/tenancy/target.test.ts': 13,
     'test/tenancy/tokens.test.ts': 15,
     'test/tenancy/token-outage.test.ts': 12,
     // G8 (static half): the audience mapper in the realm template
@@ -30,7 +31,7 @@ export const NAMED: Record<'unit' | 'integration', Record<string, number>> = {
     'test/suite-size.test.ts': 4,
   },
   integration: {
-    'test/app/kernel-api.int.test.ts': 14,
+    'test/app/kernel-api.int.test.ts': 17,
     // G8 (live half): real Keycloak tokens carry / lack the audience
     'test/keycloak/audience.int.test.ts': 2,
   },

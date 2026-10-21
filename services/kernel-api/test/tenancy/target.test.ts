@@ -5,7 +5,7 @@
 // RED reference: the env fallback (GREMION_KERNEL_PG_URL) is never consulted.
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
-import { createSecretResolver, SecretRefError } from '../../src/tenancy/secrets.ts'
+import { allowsEnvRefs, createSecretResolver, SecretRefError } from '../../src/tenancy/secrets.ts'
 import { directUrlFor, kernelDatabaseOf, kernelTargetResolver } from '../../src/tenancy/target.ts'
 import { createCustomerGate } from '../../src/app/gate.ts'
 import { A_ID, B_ID, tenantRow } from '../harness/fakes.ts'
@@ -20,7 +20,7 @@ describe('kernelTargetResolver (Q3)', () => {
     [A_ID, 'env:KERNEL_DB_A'],
     [B_ID, 'env:KERNEL_DB_B'],
   ])
-  const resolve = kernelTargetResolver({ refOf: (id) => refs.get(id), resolveSecret: createSecretResolver({ env }) })
+  const resolve = kernelTargetResolver({ refOf: (id) => refs.get(id), resolveSecret: createSecretResolver({ env, allowEnvRefs: true }) })
 
   it("A's ref resolves to A's kernel database, B's to B's", async () => {
     expect((await resolve(A_ID, 'kernel')).url).toBe(url(dbA))
@@ -28,17 +28,17 @@ describe('kernelTargetResolver (Q3)', () => {
   })
 
   it("A's ref pointing at B's database is refused (A can never name B's database)", () => {
-    const bad = kernelTargetResolver({ refOf: () => 'env:A_POINTS_AT_B', resolveSecret: createSecretResolver({ env }) })
+    const bad = kernelTargetResolver({ refOf: () => 'env:A_POINTS_AT_B', resolveSecret: createSecretResolver({ env, allowEnvRefs: true }) })
     expect(() => bad(A_ID, 'kernel')).toThrow(/does not name database/)
   })
 
   it('RED reference: no ref in hand -> refused; the env fallback (GREMION_KERNEL_PG_URL) is never used', () => {
-    const none = kernelTargetResolver({ refOf: () => undefined, resolveSecret: createSecretResolver({ env }) })
+    const none = kernelTargetResolver({ refOf: () => undefined, resolveSecret: createSecretResolver({ env, allowEnvRefs: true }) })
     expect(() => none(A_ID, 'kernel')).toThrow(/no db_conn_ref/)
   })
 
   it('an unset secret is refused, naming the ref and not a value', () => {
-    const unset = kernelTargetResolver({ refOf: () => 'env:NOT_SET', resolveSecret: createSecretResolver({ env }) })
+    const unset = kernelTargetResolver({ refOf: () => 'env:NOT_SET', resolveSecret: createSecretResolver({ env, allowEnvRefs: true }) })
     expect(() => unset(A_ID, 'kernel')).toThrow(/env:NOT_SET is unset/)
   })
 
@@ -48,7 +48,7 @@ describe('kernelTargetResolver (Q3)', () => {
   })
 
   it('a url carrying a startup parameter (options=-c role=...) is refused (tenant-store assertTargetMatches)', () => {
-    const r = kernelTargetResolver({ refOf: () => 'env:X', resolveSecret: createSecretResolver({ env: { X: url(dbA, '?options=-c%20role%3Dpostgres') } }) })
+    const r = kernelTargetResolver({ refOf: () => 'env:X', resolveSecret: createSecretResolver({ env: { X: url(dbA, '?options=-c%20role%3Dpostgres') }, allowEnvRefs: true }) })
     expect(() => r(A_ID, 'kernel')).toThrow(/query parameter 'options'/)
   })
 })
@@ -77,6 +77,20 @@ describe('createSecretResolver (C10)', () => {
     expect(() => r('file:/etc/passwd')).toThrow(/outside \/run\/secrets\//)
   })
 
+  it('env: refs are refused unless the caller opts in explicitly (production never does)', () => {
+    const env = { DB: 'postgresql://127.0.0.1:5432/x' }
+    expect(() => createSecretResolver({ env })('env:DB')).toThrow(SecretRefError)
+    expect(() => createSecretResolver({ env })('env:DB')).toThrow(/env: is not enabled/)
+    expect(() => createSecretResolver({ env, allowEnvRefs: false })('env:DB')).toThrow(SecretRefError)
+    expect(createSecretResolver({ env, allowEnvRefs: true })('env:DB')).toBe(env.DB)
+    // the services' opt-in is the explicit flag, nothing else
+    expect(allowsEnvRefs({})).toBe(false)
+    expect(allowsEnvRefs({ KERNEL_API_ALLOW_ENV_SECRET_REFS: 'true' })).toBe(false)
+    expect(allowsEnvRefs({ KERNEL_API_ALLOW_ENV_SECRET_REFS: '1' })).toBe(true)
+    // the file: scheme is unaffected
+    expect(createSecretResolver({ readFile: () => 'v' })('file:/run/secrets/x')).toBe('v')
+  })
+
   it('refuses an unknown scheme and an empty secret', () => {
     expect(() => createSecretResolver({ env: {} })('vault:x')).toThrow(/unsupported/)
     expect(() => createSecretResolver({ readFile: () => '  \n' })('file:/run/secrets/x')).toThrow(/empty/)
@@ -94,7 +108,7 @@ describe('the customer gate opens only the customer target (Q3) and caches nothi
     }
     const gate = createCustomerGate({
       dirs: [fileURLToPath(new URL('../../migrations/core/', import.meta.url))],
-      resolveSecret: createSecretResolver({ env: { KERNEL_DB_A: url(dbA) } }),
+      resolveSecret: createSecretResolver({ env: { KERNEL_DB_A: url(dbA) }, allowEnvRefs: true }),
       log: { info: () => {}, warn: () => {}, error: () => {} },
       createDb: (p) => {
         opened.push(new URL(p.url).pathname.slice(1))

@@ -528,6 +528,9 @@ ensure_layout() {
     # gremion-verify and the ops blackbox targets. Never recreated if present.
     [[ -f "${root}/etc/tenant-hosts.txt" ]] \
         || install -m 640 -o "${DEPLOY_USER}" -g "${DEPLOY_USER}" /dev/null "${root}/etc/tenant-hosts.txt"
+    # The pre-migration dump (whole database in clear): 0700, the deploy user's.
+    # kernel-api-migrate bind-mounts it and runs as uid 1000, which must own it.
+    install -d -m 700 -o "${DEPLOY_USER}" -g "${DEPLOY_USER}" "${root}/migration-dumps"
     for d in env secrets secrets/tenants secrets/mail edge; do
         install -d -m 700 -o "${DEPLOY_USER}" -g "${DEPLOY_USER}" "${root}/etc/${d}"
     done

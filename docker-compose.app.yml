@@ -578,16 +578,13 @@ services:
     security_opt: ["no-new-privileges:true"]
     tmpfs:
       - /tmp
-      # TASK-075's pre-migration dump (the whole database in clear): 0700, the
-      # image's uid (node, 1000). Memory-backed and bounded -- the host half
-      # (gremion-migration-dump, deploy step 5) keeps the durable dump.
-      - /var/lib/gremion/migration-dump:mode=0700,uid=1000,gid=1000,size=256m
     labels:
       traefik.enable: "false"
     environment:
       COLOUR: ${COLOUR:?COLOUR required}
       GREMION_RELEASE_REF: ${IMAGE_TAG:?IMAGE_TAG required}
-      GREMION_MIGRATION_DUMP_DIR: /var/lib/gremion/migration-dump
+      # The SAME path as the host (state.env GREMION_MIGRATION_DUMP_DIR), bind-mounted below.
+      GREMION_MIGRATION_DUMP_DIR: ${GREMION_MIGRATION_DUMP_DIR:?GREMION_MIGRATION_DUMP_DIR required}
       KERNEL_API_CONTROL_DB_URL: postgresql://${KERNEL_API_DB_USER:-gremion_kernel_api}:${KERNEL_API_DB_PASSWORD:?KERNEL_API_DB_PASSWORD required}@postgres-${STACK:?STACK required}:5432/${CONTROL_DB_NAME:-control}
       # The kernel Postgres server ITSELF (never PgBouncer: DDL, advisory lock
       # and pg_dump need a session). HOST/PORT ONLY: credentials come from each
@@ -595,6 +592,20 @@ services:
       # superuser password is never in this container's environment.
       GREMION_KERNEL_PG_DIRECT_URL: postgresql://postgres-${STACK:?STACK required}:5432/postgres
     volumes:
+      # TASK-075's pre-migration dump (the whole database in clear), on the
+      # DURABLE host dir gremion-migration-dump (deploy step 5) and bootstrap.sh
+      # use, mounted at the SAME path: the host tool and this one-shot share one
+      # ledger, and the dump survives the --rm container and is not counted
+      # against the 512M limit (a tmpfs would be both lost and charged). The
+      # dir must be 0700 and owned by the image's uid (node, 1000) -- the dump
+      # code refuses anything else; bootstrap creates it for the deploy user.
+      # create_host_path: false -- a missing dir fails the run instead of being
+      # created root-owned (which the dump code would then refuse).
+      - type: bind
+        source: ${GREMION_MIGRATION_DUMP_DIR:?GREMION_MIGRATION_DUMP_DIR required}
+        target: ${GREMION_MIGRATION_DUMP_DIR:?GREMION_MIGRATION_DUMP_DIR required}
+        bind:
+          create_host_path: false
       - ${TENANT_SECRETS_DIR:-./secrets/tenants}:/run/secrets/tenants:ro
     networks:
       state:

@@ -60,6 +60,42 @@ describe('createTenantStore().openTenantDb', () => {
     }
   })
 
+  it('evictTenantDb retires one pair: the next open resolves afresh (a rotated secret), the old pool ends after the grace and is never handed out again', async () => {
+    vi.useFakeTimers()
+    try {
+      const f = fakeFactory()
+      let pw = 'old'
+      const rotating = (t: string, m: string) => ({ url: `postgres://u:${pw}@h/${tenantModuleDbName(t, m)}` })
+      const store = createTenantStore({ resolveTarget: rotating, createDb: f.createDb, evictGraceMs: 1000 })
+      const first = await store.openTenantDb(A, 'kernel')
+      const other = await store.openTenantDb(B, 'kernel')
+      pw = 'new'
+      expect(await store.openTenantDb(A, 'kernel')).toBe(first) // cached: the rotation is not seen
+      expect(store.evictTenantDb(A, 'kernel')).toBe(true)
+      expect(store.evictTenantDb(A, 'kernel')).toBe(false)
+      const second = await store.openTenantDb(A, 'kernel')
+      expect(second).not.toBe(first)
+      expect(f.made[2]!.profile.url).toContain(':new@')
+      expect(await store.openTenantDb(B, 'kernel')).toBe(other) // only the named pair
+      expect(f.made[0]!.end).not.toHaveBeenCalled() // a caller may still hold it
+      await vi.advanceTimersByTimeAsync(1001)
+      expect(f.made[0]!.end).toHaveBeenCalledTimes(1)
+      await store.close()
+      expect(f.made[0]!.end).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('close() ends a retired pool still in its grace', async () => {
+    const f = fakeFactory()
+    const store = createTenantStore({ resolveTarget, createDb: f.createDb, evictGraceMs: 60_000 })
+    await store.openTenantDb(A, 'kernel')
+    store.evictTenantDb(A, 'kernel')
+    await store.close()
+    expect(f.made[0]!.end).toHaveBeenCalledTimes(1)
+  })
+
   it('a pair requested again during its grace gets its draining pool back, not a second pool', async () => {
     const f = fakeFactory()
     const store = createTenantStore({ resolveTarget, createDb: f.createDb, maxPools: 1, evictGraceMs: 60_000 })

@@ -498,14 +498,23 @@ test('real renders: kernel-api-migrate is a profile-gated one-shot on the kernel
     assert.deepEqual(m.ports ?? [], [])
     const tag = String(m.image).split(':').at(-1)
     assert.equal(m.environment?.GREMION_RELEASE_REF, tag, `${colour}: GREMION_RELEASE_REF`)
-    assert.match(String(m.environment?.GREMION_KERNEL_PG_DIRECT_URL), /^postgres(ql)?:\/\/postgres-guardstack:5432\//, `${colour}: not DIRECT postgres, or carries userinfo`)
+    assert.match(String(m.environment?.GREMION_KERNEL_PG_DIRECT_URL), /^postgresql?:\/\/postgres-guardstack:5432\//, `${colour}: not DIRECT postgres, or carries userinfo`)
     assert.equal(new URL(String(m.environment?.GREMION_KERNEL_PG_DIRECT_URL)).username, '', `${colour}: the direct url must be credential-less`)
     assert.equal(Object.keys(m.environment ?? {}).filter((k) => /^POSTGRES_PASSWORD$/.test(k)).length, 0, `${colour}: migrate must not hold the superuser password`)
     assert.doesNotMatch(String(m.environment?.GREMION_KERNEL_PG_DIRECT_URL), /pgbouncer|6432/)
     const dump = m.environment?.GREMION_MIGRATION_DUMP_DIR
     assert.ok(dump && dump.startsWith('/'), `${colour}: GREMION_MIGRATION_DUMP_DIR`)
-    const t = (m.tmpfs ?? []).concat((m.volumes ?? []).filter((v) => v.type === 'tmpfs').map((v) => v.target + ':' + JSON.stringify(v.tmpfs ?? {})))
-    assert.ok(t.length > 0 || (m.volumes ?? []).some((v) => v.target === dump), `${colour}: dump dir has no backing mount`)
+    // The dump dir is DURABLE host disk bind-mounted at the SAME path the host tooling uses
+    // (state.env GREMION_MIGRATION_DUMP_DIR): never a tmpfs (lost on --rm, charged to the 512M limit).
+    assert.equal(dump, '/opt/gremion/migration-dumps', `${colour}: the dump path is the host's`)
+    const mount = (m.volumes ?? []).find((v) => v.target === dump)
+    assert.ok(mount, `${colour}: dump dir has no backing mount`)
+    assert.equal(mount.type, 'bind', `${colour}: dump dir must be a host bind, not ${mount.type}`)
+    assert.equal(mount.source, dump, `${colour}: host and container path must be the same`)
+    assert.ok(!mount.read_only, `${colour}: the dump dir must be writable`)
+    assert.equal(mount.bind?.create_host_path, false, `${colour}: a missing host dir must fail, not be created root-owned`)
+    const tmpTargets = (m.tmpfs ?? []).map((x) => String(x).split(':')[0]).concat((m.volumes ?? []).filter((v) => v.type === 'tmpfs').map((v) => v.target))
+    assert.ok(!tmpTargets.includes(dump), `${colour}: dump dir is still a tmpfs`)
     assert.equal(m.read_only, true)
     assert.deepEqual(m.cap_drop, ['ALL'])
   }
