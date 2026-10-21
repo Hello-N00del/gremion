@@ -170,7 +170,10 @@
         "0002_plt_module.sql": "a52fa722eec6bcfedf0214ac4f22412d56296e89b750fc46fea1b45e69830729",
         "0003_plt_module_database.sql": "ad86a84ee8b38a37c6a4771dacf90d02189b79f6971930d7c3937e255e1d975a",
         "0004_plt_provisioning_step.sql": "17626fbd0596c967cf4b730ead64c74f3653687fc36e79bbfe8a07b68d70a03e",
-        "0005_plt_scheduled_job.sql": "db20da25225784fb312d78fc4aeff168f26d64be64aaebd80bb3a826b840d962"
+        "0005_plt_scheduled_job.sql": "db20da25225784fb312d78fc4aeff168f26d64be64aaebd80bb3a826b840d962",
+        "0006_ops_setup.sql": "18c1f09a9227f8b10624ebc6c27cd743af1a9a7d1fb397c9339503b7d3d8396e",
+        "0007_plt_isolation_test_result.sql": "48fbcc82a3f9f3553ecd811b401613b6a3274c38f316d5cdd814c341634f1cb0",
+        "0008_ops_dpia_decision.sql": "38f024036723f77869b1f7958514c350c2649348a3041d80056a7103df09f506"
       }
     }
   }

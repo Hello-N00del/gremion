@@ -11,10 +11,26 @@ export { DONE_KEY, doneKinds, isDuplicateDone, latestStatus, memoryLedger, pgLed
 export type { LedgerPort, StepRow } from './ledger.ts'
 export { openLedger, runPhase } from './machine.ts'
 export type { RunPhaseOptions, RunPhaseResult, StepFns } from './machine.ts'
-export { assertEnableList, DEFAULT_DENY, INTERIM_GATE_BASIS, operatorAllowGate } from './operator-gate.ts'
-export type { AttestationLookup } from './operator-gate.ts'
+export { assertEnableList, DEFAULT_DENY, DENY_REASONS } from './operator-gate.ts'
+// TASK-044: the library verbs over the level-1 gate, and the tenant-store
+// names TASK-043d's executor codes against (lane note S3 contract).
+export { assertDpiaSpec, enableCustomerModule, enableOne, pgGate, preflightGate } from './module-gate.ts'
+export type { EnableCustomerModuleResult } from './module-gate.ts'
+export {
+  assertEnabledModulesProven,
+  attestedEnablements,
+  EnableRefused,
+  IsolationEvidenceError,
+  recordDpiaDecision,
+  recordIsolationResults,
+  regateEnablement,
+  unprovenEnablements,
+  validateGateForeignKeys,
+} from '@gremion/tenant-store/lifecycle'
+export type { EnableRefusedCode, UnprovenEnablement } from '@gremion/tenant-store/lifecycle'
 export {
   assertAdmins,
+  assertEnableLoaded,
   assertHost,
   assertSmtpStamped,
   createPhaseA,
@@ -29,13 +45,12 @@ export type { CreateSpec, PhaseOutcome, ProvisioningStatus } from './customer.ts
 export { loadCatalogueRows, OWNING_CONTEXT_CODES, planCatalogueRows, PROVISIONAL_RETENTION_PROFILES, provisionalNote } from './catalogue-rows.ts'
 export type { CatalogueModule, CatalogueRowPlan, CatalogueRowsResult } from './catalogue-rows.ts'
 export { loadModuleJsons } from './module-tree.ts'
-export { bootstrapPlatform, ensurePanelReader, PANEL_READS, pgAttestations, pgModules, type PanelReaderDeps } from './pg.ts'
+export { bootstrapPlatform, ensurePanelReader, PANEL_READS, pgModules, type PanelReaderDeps } from './pg.ts'
 export { renderCustomerRouter } from './router.ts'
 export type { CustomerRouterInput } from './router.ts'
 export type { BootstrapDeps, BootstrapResult } from './pg.ts'
 export type {
   AdminSpec,
-  AttestationPort,
   BrokerPort,
   ConfigPort,
   ControlPort,
@@ -43,7 +58,9 @@ export type {
   CustomerRef,
   CustomerStatus,
   DomainPort,
+  DpiaSpec,
   FirstBodyPort,
+  GatePort,
   KernelDbPort,
   KernelPostCondition,
   ModulesPort,

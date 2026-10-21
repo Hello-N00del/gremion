@@ -53,9 +53,15 @@ parse fails, naming the file, the statement number and the rule.
   `ENABLE|FORCE ROW LEVEL SECURITY`, `CREATE POLICY`, `INSERT` only on a table
   the same file creates; `CREATE FUNCTION` / `VIEW` of a new name (no
   `OR REPLACE`); `ADD COLUMN` nullable, or with a literal, `now()` or
-  `CURRENT_TIMESTAMP` default; `ADD CONSTRAINT .. CHECK (..) NOT VALID`
-  (a `FOREIGN KEY` is refused); `VALIDATE CONSTRAINT`; `COMMENT`; `GRANT`;
-  `SET [LOCAL] lock_timeout`. Every file sets `lock_timeout` (SCHEMA:4784).
+  `CURRENT_TIMESTAMP` default; `ADD CONSTRAINT .. CHECK (..) NOT VALID`;
+  `ADD CONSTRAINT <name> FOREIGN KEY .. REFERENCES <t> .. NOT VALID` only
+  when `<t>` is a table the same file creates (TASK-044: no existing row is
+  read, and the serving colour neither locks nor reads a table that did not
+  exist; any other `FOREIGN KEY` is refused); `VALIDATE CONSTRAINT`;
+  `COMMENT`; `GRANT`; `SET [LOCAL] lock_timeout`. Every file sets
+  `lock_timeout` (SCHEMA:4784). A `CREATE FUNCTION`/`VIEW` name is compared
+  schema-qualified (TASK-044: `ops.touch_row` is new beside `plt.touch_row`;
+  an unqualified name still collides with any earlier routine of that name).
 - **migrate**: `UPDATE` / `INSERT` only after a statement that sets the tenant
   context (`set_config(.., true)` or `SET LOCAL` of the tenant-store GUC).
   Whether a migrate file is **batched** is a database-lens review item: the

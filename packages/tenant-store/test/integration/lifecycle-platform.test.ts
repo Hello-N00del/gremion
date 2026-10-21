@@ -107,6 +107,11 @@ describe('ensurePlatformDatabase on a server without gremion_platform (Q15)', ()
         .filter((f) => !KNOWN_FILES.includes(f))
         .flatMap((f) => [...readFileSync(join(PLATFORM_MIGRATIONS_DIR, f), 'utf8').matchAll(/^\s*CREATE TABLE(?:\s+IF NOT EXISTS)?\s+plt\.([a-z_]+)/gim)].map((x) => x[1]!))
       expect(tables.map((x) => x.t).sort()).toEqual([...KNOWN_TABLES, ...laterTables].sort())
+      // TASK-044: the DPIA decisions live in schema ops (not in the plt-only set above), owned by the platform owner like the rest
+      const opsTables = await owned<{ t: string; owner: string }[]>`
+        SELECT tablename AS t, tableowner AS owner FROM pg_tables WHERE schemaname = 'ops' ORDER BY 1`
+      expect(opsTables.map((x) => x.t)).toContain('dpia_decision')
+      expect(new Set(opsTables.map((x) => x.owner))).toEqual(new Set([OWNER]))
       expect(new Set(tables.map((x) => x.owner))).toEqual(new Set([OWNER]))
     } finally {
       await owned.end()

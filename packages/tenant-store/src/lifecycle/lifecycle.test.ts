@@ -162,6 +162,8 @@ describe('the platform migration folder (gremion_platform, schema plt)', () => {
     expect(onDisk).toEqual(expect.arrayContaining(['0001_plt_setup.sql', '0002_plt_module.sql', '0003_plt_module_database.sql', '0004_plt_provisioning_step.sql']))
     // TASK-039-FU: the scheduled-job and job-run tables (platform 0005)
     expect(onDisk).toContain('0005_plt_scheduled_job.sql')
+    // TASK-044: the ops setup, the isolation results and the DPIA decisions
+    expect(onDisk).toEqual(expect.arrayContaining(['0006_ops_setup.sql', '0007_plt_isolation_test_result.sql', '0008_ops_dpia_decision.sql']))
     for (const f of files) expect(() => splitStatements(f.text)).not.toThrow()
   })
 
@@ -171,6 +173,18 @@ describe('the platform migration folder (gremion_platform, schema plt)', () => {
     const phases = files.map((f) => resolvePhase(f.file, f.text, phaseFor).phase)
     expect(phases).toEqual(files.map((f) => (f.file === '0001_plt_setup.sql' ? 'contract' : 'expand')))
     expect(resolvePhase('0005_plt_scheduled_job.sql', files.find((f) => f.file === '0005_plt_scheduled_job.sql')!.text, phaseFor).phase).toBe('expand')
+    // files after the baseline carry their own header (TASK-044: expand)
+    for (const f of files.slice(4)) expect(resolvePhase(f.file, f.text, phaseFor).phase, f.file).toBe('expand')
+  })
+
+  it('TASK-044: 0007 adds the three omitted isolation-test keys by name, the enablement ones NOT VALID', () => {
+    const text = files.find((f) => f.file === '0007_plt_isolation_test_result.sql')!.text
+    expect(text).toContain('CREATE TABLE plt.isolation_test_result (')
+    for (const k of ['module_version_isol_result_id_module_id_kind_passed_fkey', 'module_enablement_isol_result_id_module_id_kind_passed_fkey', 'module_enablement_xbody_result_id_module_id_kind_passed_fkey']) {
+      expect(text).toMatch(new RegExp(`ADD CONSTRAINT ${k}\\s+FOREIGN KEY [^;]+NOT VALID;`))
+    }
+    expect(text).toContain('VALIDATE CONSTRAINT module_version_isol_result_id_module_id_kind_passed_fkey;')
+    expect(text).not.toMatch(/VALIDATE CONSTRAINT module_enablement_/)
   })
 
   // TASK-075 r2: enableModule's default (no deps.phaseFor, as tenant-create

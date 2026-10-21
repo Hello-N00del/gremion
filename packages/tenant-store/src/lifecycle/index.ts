@@ -3,6 +3,8 @@
 // its own: the package root exports no create/drop helper (index.test.ts).
 export { disableModule, dropTenantModuleDatabase } from './disable.js'
 export { enableModule, ensureModuleRoles, lockDownDatabase } from './enable.js'
+// TASK-044: the level-1 enable gate, its records and the enabled-module checks (CAP-ISOLATION).
+export * from './enable-gate/index.js'
 export { exportDatabase, exportStamp, pgDumpExporter } from './export.js'
 export type { PgDumpExporterOptions, VerifiedExport } from './export.js'
 export {
