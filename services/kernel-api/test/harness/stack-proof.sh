@@ -83,8 +83,14 @@ ENV
 }
 
 run_migrate() {
+  # The dump dir is a DURABLE mount at the path the host tooling uses (compose: a bind of
+  # GREMION_MIGRATION_DUMP_DIR), 0700 uid 1000 -- here a named volume, owner-fixed once.
+  docker volume inspect "$N_DUMP" >/dev/null 2>&1 || {
+    docker volume create "$N_DUMP" >/dev/null
+    docker run --rm -v "$N_DUMP:/d" "$NODEIMAGE" sh -c 'chown 1000:1000 /d && chmod 700 /d'
+  }
   docker run --rm --network "$N_NET" --read-only --cap-drop ALL --security-opt no-new-privileges:true --tmpfs /tmp \
-    --tmpfs /var/lib/gremion/migration-dump:mode=0700,uid=1000,gid=1000,size=256m --env-file "$SDIR/migrate.env" \
+    -v "$N_DUMP:/var/lib/gremion/migration-dump" --env-file "$SDIR/migrate.env" \
     -v "$SDIR_M/tenants:/run/secrets/tenants:ro" "$IMAGE" node services/kernel-api/dist/index.js migrate "$@"
 }
 
