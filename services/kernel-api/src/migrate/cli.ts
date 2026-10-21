@@ -14,7 +14,7 @@
 // nothing failed, 1 otherwise (naming every failed customer), 2 on usage.
 import type { Sql } from '@gremion/db'
 import postgres from 'postgres'
-import { createSecretResolver } from '../tenancy/secrets.ts'
+import { allowsEnvRefs, createSecretResolver } from '../tenancy/secrets.ts'
 import { MigrateError, migrateAllCustomers, migrateKernelDb, type MigrateOptions } from './migrate.ts'
 
 export interface CliIo {
@@ -70,7 +70,7 @@ export async function runMigrateCli(
   const control = (deps.openControl ?? ((u: string) => postgres(u, { max: 1, onnotice: () => {}, connect_timeout: 15 })))(env.KERNEL_API_CONTROL_DB_URL!)
   const options: MigrateOptions = {
     control,
-    resolveSecret: createSecretResolver({ env }),
+    resolveSecret: createSecretResolver({ env, allowEnvRefs: allowsEnvRefs(env) }),
     directBase: env.GREMION_KERNEL_PG_DIRECT_URL!,
     dirs: roots.dirs,
     kernelRoot: roots.kernelRoot,

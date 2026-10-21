@@ -65,6 +65,7 @@ wait_ready_pg() {
 write_envs() {
   cat > "$SDIR/api.env" <<ENV
 COLOUR=blue
+KERNEL_API_ALLOW_ENV_SECRET_REFS=1
 PLATFORM_DOMAIN=example.org
 TENANT_PROXY_SHARED_SECRET=$PROXY
 GREMION_RELEASE_REF=dist-v1.0.0
@@ -73,6 +74,7 @@ KERNEL_API_PLATFORM_DB_URL=$(jget readerPlatformUrl)
 ENV
   cat > "$SDIR/migrate.env" <<ENV
 COLOUR=blue
+KERNEL_API_ALLOW_ENV_SECRET_REFS=1
 GREMION_RELEASE_REF=dist-v1.0.0
 GREMION_MIGRATION_DUMP_DIR=/var/lib/gremion/migration-dump
 KERNEL_API_CONTROL_DB_URL=$(jget readerControlUrl)

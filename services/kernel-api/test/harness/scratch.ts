@@ -115,7 +115,7 @@ export async function buildWorld(): Promise<ScratchWorld> {
     admin,
     control,
     platform,
-    env: {},
+    env: { KERNEL_API_ALLOW_ENV_SECRET_REFS: '1' },
     readerControlUrl: url(CONTROL_DB, { user: READER_ROLE, password: READER_PASSWORD }),
     readerPlatformUrl: url('gremion_platform', { user: READER_ROLE, password: READER_PASSWORD }),
     catalogueSize: catalogue.load.length,

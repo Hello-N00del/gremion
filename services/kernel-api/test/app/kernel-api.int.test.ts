@@ -329,14 +329,14 @@ describe('isolation on PG18 (Q3, TDD 5, TDD 13)', () => {
       [A.id, A.ref],
       [B.id, B.ref],
     ])
-    const store = createTenantStore({ resolveTarget: kernelTargetResolver({ refOf: (id) => refs.get(id), resolveSecret: createSecretResolver({ env: world.env }) }), prepare: false })
+    const store = createTenantStore({ resolveTarget: kernelTargetResolver({ refOf: (id) => refs.get(id), resolveSecret: createSecretResolver({ env: world.env, allowEnvRefs: true }) }), prepare: false })
     try {
       const a = await store.openTenantDb(A.id, 'kernel')
       expect(await a`SELECT v FROM public.t077_sentinel`).toEqual([{ v: 'cust-a' }])
       const b = await store.openTenantDb(B.id, 'kernel')
       expect(await b`SELECT v FROM public.t077_sentinel`).toEqual([{ v: 'cust-b' }])
       refs.set(A.id, B.ref)
-      const fresh = createTenantStore({ resolveTarget: kernelTargetResolver({ refOf: (id) => refs.get(id), resolveSecret: createSecretResolver({ env: world.env }) }) })
+      const fresh = createTenantStore({ resolveTarget: kernelTargetResolver({ refOf: (id) => refs.get(id), resolveSecret: createSecretResolver({ env: world.env, allowEnvRefs: true }) }) })
       await expect(fresh.openTenantDb(A.id, 'kernel')).rejects.toThrow(/does not name database/)
       await fresh.close()
     } finally {
