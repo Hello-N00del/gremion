@@ -332,6 +332,7 @@ GREMION_ROOT=${SROOT_H}
 PLATFORM_DB_PASSWORD=${pw_plat}
 PANEL_DB_PASSWORD=${pw_panel}
 KERNEL_API_DB_PASSWORD=${pw_kapi}
+GREMION_MIGRATION_DUMP_DIR=${SROOT_H}/migration-dumps
 EOF
     done
     cat > "$ENV_DIR/ops.env" <<EOF

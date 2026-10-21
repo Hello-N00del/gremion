@@ -25,9 +25,11 @@ SHA8="$(cd "$HERE" && node --input-type=module -e "import('./stack.mjs').then((m
 PGIMAGE="$(cd "$HERE" && node --input-type=module -e "import('../../../../packages/tenant-store/test/harness/stack.mjs').then((m) => console.log(m.moduleImage()))")"
 KCIMAGE="quay.io/keycloak/keycloak:26.6.1"
 NODEIMAGE="node:26-alpine@sha256:7c6af15abe4e3de859690e7db171d0d711bf37d27528eddfe625b2fe89e097f8"
-P="t077-${SHA8}-e2e"
+PFX="${T077_PREFIX:-t077}"   # a lane sets T077_PREFIX=t077r so its objects carry the lane prefix
+P="${PFX}-${SHA8}-e2e"
+N_DUMP="$P-dump"
 N_NET="$P-net"; N_PG="$P-pg"; N_KC="$P-kc"; N_API="$P-api"; N_WEB="$P-web"
-IMAGE="t077-${SHA8}-kernel-api:head"
+IMAGE="${PFX}-${SHA8}-kernel-api:head"
 SDIR="$REPO/.scratch/t077-stack"
 SDIR_M="$SDIR"
 STATE="$SDIR/state.json"
@@ -145,10 +147,10 @@ phase_e2e() {
 phase_late() { (cd "$SERVICE" && T077_SEED_MODE=late T077_STATE="$STATE" T077_SCRATCH="$SHA8" node node_modules/vitest/vitest.mjs run --config vitest.proof.config.ts test/harness/stack-seed.ts) >&2; }
 
 phase_status() {
-  echo "containers: $(docker ps -a --filter "name=t077-${SHA8}" --format '{{.Names}}' | tr '\n' ' ')"
-  echo "volumes:    $(docker volume ls -q --filter "name=t077-${SHA8}" | tr '\n' ' ')"
-  echo "networks:   $(docker network ls --filter "name=t077-${SHA8}" --format '{{.Name}}' | tr '\n' ' ')"
-  echo "images:     $(docker images --format '{{.Repository}}:{{.Tag}}' | grep "t077-${SHA8}" | tr '\n' ' ')"
+  echo "containers: $(docker ps -a --filter "name=${PFX}-${SHA8}" --format '{{.Names}}' | tr '\n' ' ')"
+  echo "volumes:    $(docker volume ls -q --filter "name=${PFX}-${SHA8}" | tr '\n' ' ')"
+  echo "networks:   $(docker network ls --filter "name=${PFX}-${SHA8}" --format '{{.Name}}' | tr '\n' ' ')"
+  echo "images:     $(docker images --format '{{.Repository}}:{{.Tag}}' | grep "${PFX}-${SHA8}" | tr '\n' ' ')"
 }
 
 phase_down() {
@@ -158,6 +160,7 @@ phase_down() {
   done
   if docker network inspect "$N_NET" >/dev/null 2>&1; then docker network rm "$N_NET" >/dev/null || left=1; fi
   if docker image inspect "$IMAGE" >/dev/null 2>&1; then docker rmi "$IMAGE" >/dev/null || left=1; fi
+  if docker volume inspect "$N_DUMP" >/dev/null 2>&1; then docker volume rm "$N_DUMP" >/dev/null || left=1; fi
   rm -rf "$SDIR"
   phase_status
   [ "$left" = 0 ]
