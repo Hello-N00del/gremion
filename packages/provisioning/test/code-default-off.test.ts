@@ -10,7 +10,7 @@
 import { readdirSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { assertEnableList, createPhaseA, createPhaseB, recordHostStep, validateCreate, type CreateSpec } from '../src/index.ts'
-import { ADMINS, deps, hostStamp, OPERATOR, UNDECIDED_MODULE, world } from './fakes.ts'
+import { ADMINS, deps, DPIA, hostStamp, OPERATOR, UNDECIDED_MODULE, world } from './fakes.ts'
 
 /** Every module directory of the kernel tree: the set a default could wrongly switch on. */
 function treeModuleIds(): string[] {
@@ -69,7 +69,7 @@ describe('provisioning code default: every module off (TRD-030, TRD-064, R31-I4a
   })
 
   it('a request that names votes only enables votes: elections, finance, board and vault stay off', async () => {
-    const s = spec({ slug: 'rat-mit-abstimmungen', host: 'rat.mit-abstimmungen.example', enable: ['votes'] })
+    const s = spec({ slug: 'rat-mit-abstimmungen', host: 'rat.mit-abstimmungen.example', enable: ['votes'], dpia: { votes: DPIA } })
     const { w, a, b } = await createAll(s, [...treeModuleIds(), UNDECIDED_MODULE])
     expect(b.enabled).toEqual(['votes'])
     const enabled = [...(w.enabled.get(a.customer.id)?.keys() ?? [])]
