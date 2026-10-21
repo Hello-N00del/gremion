@@ -63,7 +63,7 @@ export async function buildKernelDb(name: string, o: { withAuthz?: boolean } = {
   const admin = connect(dbName)
   const files = [
     join(SERVICE_ROOT, 'migrations/core/0001_idt_setup.sql'),
-    join(SERVICE_ROOT, 'test/authz/fixtures/idt-080.sql'),
+    join(SERVICE_ROOT, 'test/authz/fixtures/idt-080.ddl'),
     ...(o.withAuthz === false ? [] : AUTHZ_FILES.map((f) => join(SERVICE_ROOT, f))),
   ]
   for (const f of files) await admin.unsafe(readFileSync(f, 'utf8'))

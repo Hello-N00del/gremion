@@ -5,10 +5,10 @@ import { fileURLToPath } from 'node:url'
 import { checkPlumbingText, plumbingSql } from '@gremion/events'
 import { describe, expect, it } from 'vitest'
 
-const FIXTURE = fileURLToPath(new URL('./fixtures/idt-080.sql', import.meta.url))
+const FIXTURE = fileURLToPath(new URL('./fixtures/idt-080.ddl', import.meta.url))
 const text = () => readFileSync(FIXTURE, 'utf8').replace(/\r\n/g, '\n')
 
-describe('fixtures/idt-080.sql', () => {
+describe('fixtures/idt-080.ddl', () => {
   it('starts with plumbingSql(idt) byte for byte', () => {
     expect(text().startsWith(plumbingSql('idt'))).toBe(true)
     expect(() => checkPlumbingText(text(), 'idt')).not.toThrow()
