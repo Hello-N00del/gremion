@@ -18,6 +18,7 @@
 // password (the env file is the source) and re-asserts the grants.
 import type { Sql } from '@gremion/db'
 import { PLATFORM_DATABASE } from './platform.js'
+import { scramSha256Verifier } from './scram.js'
 
 /** What the kernel API reads, per database, and nothing else. */
 export const KERNEL_API_READS = {
@@ -88,6 +89,12 @@ export async function ensureKernelApiReader(d: KernelApiReaderDeps): Promise<{ c
   if (!IDENT.test(d.role)) throw new KernelApiReaderError('INVALID_INPUT', `kernel API reader role ${JSON.stringify(d.role)} is not a plain identifier`)
   if (!IDENT.test(d.controlDatabase)) throw new KernelApiReaderError('INVALID_INPUT', `control database ${JSON.stringify(d.controlDatabase)} is not a plain identifier`)
   if (typeof d.password !== 'string' || d.password.length < 16) throw new KernelApiReaderError('INVALID_INPUT', 'the kernel API reader password is shorter than 16 characters')
+  let verifier: string
+  try {
+    verifier = scramSha256Verifier(d.password)
+  } catch (e) {
+    throw new KernelApiReaderError('INVALID_INPUT', `the kernel API reader password cannot be hashed: ${(e as Error).message}`)
+  }
   const targets = [
     { db: d.controlDatabase, schema: 'public', tables: KERNEL_API_READS.control, by: 'the migrate one-shot (control registry migrations)' },
     { db: PLATFORM_DATABASE, schema: 'plt', tables: KERNEL_API_READS.platform, by: 'migratePlatform (bootstrapPlatform)' },
@@ -128,8 +135,9 @@ export async function ensureKernelApiReader(d: KernelApiReaderDeps): Promise<{ c
       }
     }
   }
+  // The DDL carries a client-side SCRAM-SHA-256 verifier, never the plaintext (statement logs, pg_stat_statements).
   const attrs = 'LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS PASSWORD %L'
-  await execFmt(d.kernelAdmin, `${exists ? 'ALTER' : 'CREATE'} ROLE %I ${attrs}`, [d.role, d.password])
+  await execFmt(d.kernelAdmin, `${exists ? 'ALTER' : 'CREATE'} ROLE %I ${attrs}`, [d.role, verifier])
   for (const t of targets) await execFmt(d.kernelAdmin, 'GRANT CONNECT ON DATABASE %I TO %I', [t.db, d.role])
   for (const t of targets) {
     const sql = d.openAdminOn(t.db)

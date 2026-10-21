@@ -69,6 +69,33 @@ describe('ensureKernelApiReader (TASK-077 C13)', () => {
     expect(role).toEqual({ login: true, inherit: false, su: false, createdb: false, createrole: false, bypass: false })
   })
 
+  it('stores a SCRAM-SHA-256 verifier computed client-side: the plaintext never appears in the DDL, the role still logs in', async () => {
+    const statements: string[] = []
+    const spy = new Proxy(admin, {
+      apply: (t, self, args) => Reflect.apply(t, self, args),
+      get(t, prop, r) {
+        const v = Reflect.get(t, prop, r)
+        if (prop !== 'unsafe') return typeof v === 'function' ? v.bind(t) : v
+        return (q: string, ...rest: unknown[]) => {
+          statements.push(q)
+          return (v as (...a: unknown[]) => unknown).call(t, q, ...rest)
+        }
+      },
+    }) as typeof admin
+    await ensureKernelApiReader({ ...deps(), kernelAdmin: spy })
+    expect(statements.filter((q) => /ROLE/.test(q))).toHaveLength(1)
+    expect(statements.join(' ')).not.toContain(PASSWORD)
+    expect(statements.join(' ')).toMatch(/PASSWORD 'SCRAM-SHA-256\$4096:/)
+    const [pw] = await admin<{ p: string }[]>`SELECT rolpassword AS p FROM pg_authid WHERE rolname = ${ROLE}`
+    expect(pw!.p).toMatch(/^SCRAM-SHA-256\$4096:/)
+    const r = asReader(CONTROL)
+    try {
+      expect((await r`SELECT 1 AS one`)[0]!.one).toBe(1)
+    } finally {
+      await r.end()
+    }
+  })
+
   it('the role logs in and reads its tables, and is refused writes and every other table (privilege test, guard r)', async () => {
     const control = asReader(CONTROL)
     const platform = asReader('gremion_platform')
