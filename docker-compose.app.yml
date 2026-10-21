@@ -500,10 +500,12 @@ services:
       - /tmp
     labels:
       traefik.enable: "false"
-      # gremion-switch POSTs its evict fan-out to every long-running app
-      # container; the registry caches no tenant (status is read per request),
-      # so the evict endpoint only acknowledges.
-      gremion.evict: "true"
+      # NO gremion.evict label: gremion-switch POSTs /api/internal/evict to
+      # every labelled container and requires a 204, and kernel-api serves only
+      # the routes of openapi/kernel-core.json (the evict route is TASK-035's).
+      # The registry caches no tenant, so there is nothing to evict. Add the
+      # label together with the route; scripts/check-pooled-stack.mjs
+      # (EVICT_IMPLEMENTERS) fails the build until both exist.
     environment:
       COLOUR: ${COLOUR:?COLOUR required}
       PLATFORM_DOMAIN: ${PLATFORM_DOMAIN:?PLATFORM_DOMAIN required}

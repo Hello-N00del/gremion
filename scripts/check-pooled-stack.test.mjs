@@ -24,6 +24,7 @@ import {
   runAll,
   renderProject,
   PROJECTS,
+  EVICT_IMPLEMENTERS,
 } from './check-pooled-stack.mjs'
 
 const STACK = 'teststack'
@@ -61,7 +62,7 @@ function appRender(colour) {
       environment: { COLOUR: colour },
       networks: Object.fromEntries(row.networks.map((n) => [n, ['edge', 'state'].includes(n) ? { aliases: [`${name}-${colour}`] } : null])),
     }
-    if (name === 'gremion-ui' || name === 'gremion-public' || name === 'control-panel' || name === 'kernel-api') svc.labels['gremion.evict'] = 'true'
+    if (name === 'gremion-ui' || name === 'gremion-public' || name === 'control-panel') svc.labels['gremion.evict'] = 'true'
     if (name === 'migrate' || name === 'tenant-create' || name === 'kernel-api-migrate') {
       svc.profiles = [name]
       svc.restart = 'no'
@@ -202,6 +203,12 @@ for (const colour of ['blue', 'green']) {
     const r = appRender(colour)
     delete r.services['gremion-ui'].labels['gremion.evict']
     assert.match(appShapeViolations(r, colour, STACK).join('\n'), /gremion-ui: long-running service without gremion\.evict=true/)
+  })
+
+  test(`app shape (${colour}): evict label on a service with no evict route fails`, () => {
+    const r = appRender(colour)
+    r.services['kernel-api'].labels['gremion.evict'] = 'true'
+    assert.match(appShapeViolations(r, colour, STACK).join('\n'), /kernel-api: carries gremion\.evict=true but is not a known evict implementer/)
   })
 
   test(`app shape (${colour}): a non-external volume fails, top-level and on the service`, () => {
@@ -453,7 +460,7 @@ const COLOURS = [
   { project: PROJECTS[1], colour: 'blue' },
   { project: PROJECTS[2], colour: 'green' },
 ]
-test('real renders: kernel-api is internal (app + state, no port, no router), hardened, evictable, aliased per colour on state', () => {
+test('real renders: kernel-api is internal (app + state, no port, no router), hardened, NOT evictable, aliased per colour on state', () => {
   const byName = (a, b) => a.localeCompare(b)
   for (const { project, colour } of COLOURS) {
     const render = renderProject(project)
@@ -461,7 +468,7 @@ test('real renders: kernel-api is internal (app + state, no port, no router), ha
     assert.ok(svc, `kernel-api is not in the ${colour} render`)
     assert.deepEqual(svc.ports ?? [], [], `${colour} kernel-api publishes a port`)
     assert.equal(String(svc.labels?.['traefik.enable']), 'false')
-    assert.equal(String(svc.labels?.['gremion.evict']), 'true')
+    assert.equal(svc.labels?.['gremion.evict'], undefined, `${colour}: kernel-api serves no /api/internal/evict (TASK-035's route); the label would make every switch abort on a non-204`)
     assert.deepEqual(Object.keys(svc.networks ?? {}).map((k) => render.networks?.[k]?.name ?? k).sort(byName), [`guardstack-app-${colour}_app`, 'guardstack_state'].sort(byName))
     const state = Object.entries(svc.networks).find(([k]) => (render.networks?.[k]?.name ?? k) === 'guardstack_state')[1]
     assert.ok((state?.aliases ?? []).includes(`kernel-api-${colour}`), `${colour}: no kernel-api-${colour} alias on state`)
@@ -508,4 +515,16 @@ test('real renders: the two colours are one document modulo the colour token and
       .replaceAll(c, '@C@')
       .replace(/"(subnet|app-v[46]-subnet)":"[^"]+"/g, '"$1":"@S@"')
   assert.equal(norm(renderProject(PROJECTS[1]), 'blue'), norm(renderProject(PROJECTS[2]), 'green'))
+})
+
+test('real renders: every service carrying gremion.evict=true is a known evict implementer whose source exists', async () => {
+  const { existsSync } = await import('node:fs')
+  for (const { project, colour } of COLOURS) {
+    const render = renderProject(project)
+    for (const [name, svc] of Object.entries(render.services ?? {})) {
+      if (String(svc.labels?.['gremion.evict']) !== 'true') continue
+      assert.ok(name in EVICT_IMPLEMENTERS, `${colour}/${name} carries gremion.evict=true but no source declares its evict route`)
+    }
+  }
+  for (const [name, file] of Object.entries(EVICT_IMPLEMENTERS)) assert.ok(existsSync(new URL(`../${file}`, import.meta.url)), `${name}: evidence file ${file} is missing`)
 })
