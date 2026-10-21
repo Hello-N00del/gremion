@@ -109,9 +109,11 @@ describe('authConfig: request evidence (TASK-043d)', () => {
   afterEach(() => {
     vi.useRealTimers()
   })
-  const ACCESS = () =>
-    jwtToken({ iss: config.issuer, sub: 'u1', acr: 'loa2', auth_time: NOW - 30, realm_access: { roles: ['operator'] }, pad: 'x'.repeat(100) })
-  const account = () => ({ access_token: ACCESS(), id_token: jwtToken({ iss: config.issuer, sub: 'u1', email: 'ops@platform.example' }) })
+  const ACCESS = () => jwtToken({ iss: config.issuer, acr: 'loa2', realm_access: { roles: ['operator'] }, pad: 'x'.repeat(100) })
+  // the realm sets no auth_time (measured, KC 26.6.1): the ID token's iat is the sign-in time
+  const ID = () => jwtToken({ iss: config.issuer, sub: 'u1', email: 'ops@platform.example', iat: NOW - 30, at_hash: 'h', sid: 's' })
+  const PAIR = () => JSON.stringify({ id: ID(), access: ACCESS() })
+  const account = () => ({ access_token: ACCESS(), id_token: ID() })
 
   it('D4b: the authorization request asks for max_age 3600 (an old SSO session must re-authenticate with MFA)', () => {
     const provider = (authConfig(config).providers as unknown as { options?: { authorization?: { params?: Record<string, string> } }; authorization?: { params?: Record<string, string> } }[])[0]!
@@ -119,10 +121,14 @@ describe('authConfig: request evidence (TASK-043d)', () => {
     expect(params?.max_age).toBe(3600)
   })
 
-  it('the jwt keeps the signed access token and its auth_time server-side', async () => {
+  it('the jwt keeps the signed token pair and the ID token iat server-side (no auth_time in the realm)', async () => {
     const t = await callbacks.jwt({ token: {}, account: account() })
     expect(t!.opsAccess).toBe(ACCESS())
+    expect(t!.opsIdToken).toBe(ID())
     expect(t!.opsAuthTime).toBe(NOW - 30)
+    // an auth_time claim, when the realm sets one, wins over iat
+    const withAt = await callbacks.jwt({ token: {}, account: { access_token: ACCESS(), id_token: jwtToken({ iat: NOW - 30, auth_time: NOW - 99 }) } })
+    expect(withAt!.opsAuthTime).toBe(NOW - 99)
   })
 
   it('A10: the session callback result carries no token and no eyJ segment, with or without the evidence in the jwt', async () => {
@@ -130,14 +136,16 @@ describe('authConfig: request evidence (TASK-043d)', () => {
     const s = await callbacks.session({ session: {}, token: t })
     expect(JSON.stringify(s)).not.toContain('eyJ')
     expect(JSON.stringify(s)).not.toContain(ACCESS())
+    expect(JSON.stringify(s)).not.toContain(ID())
     expect(JSON.stringify(s)).not.toMatch(/opsAccess|access_token|id_token/)
   })
 
   it('evidenceFromJwt: loa2 + token + auth_time give the evidence; a missing token, acr or auth_time gives null', async () => {
     const t = (await callbacks.jwt({ token: {}, account: account() }))!
     const ev = evidenceFromJwt(t)
-    expect(ev).toEqual({ token: ACCESS(), acr: 'loa2', authTime: new Date((NOW - 30) * 1000), sessionAt: new Date(NOW * 1000) })
+    expect(ev).toEqual({ token: PAIR(), acr: 'loa2', authTime: new Date((NOW - 30) * 1000), sessionAt: new Date(NOW * 1000) })
     expect(evidenceFromJwt({ ...t, opsAccess: undefined })).toBeNull()
+    expect(evidenceFromJwt({ ...t, opsIdToken: undefined })).toBeNull()
     expect(evidenceFromJwt({ ...t, opsAcr: undefined })).toBeNull()
     expect(evidenceFromJwt({ ...t, opsAuthTime: undefined })).toBeNull()
     expect(evidenceFromJwt({ opsError: 'SessionExpired' })).toBeNull()
@@ -149,7 +157,7 @@ describe('authConfig: request evidence (TASK-043d)', () => {
     const cookie = await encode({ token: t, secret: config.authSecret, salt: name, maxAge: 3600 })
     const req = new Request('http://127.0.0.1:3043/customers/new', { method: 'POST', headers: { cookie: name + '=' + cookie } })
     const ev = await evidenceFromRequest(req, config)
-    expect(ev?.token).toBe(ACCESS())
+    expect(ev?.token).toBe(PAIR())
     expect(ev?.acr).toBe('loa2')
     expect(await evidenceFromRequest(new Request('http://127.0.0.1:3043/x', { method: 'POST' }), config)).toBeNull()
   })

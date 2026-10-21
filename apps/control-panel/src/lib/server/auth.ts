@@ -101,8 +101,14 @@ export function authConfig(c: PanelConfig): SvelteKitAuthConfig {
           // TASK-043d: the SIGNED access token is request evidence. It lives in the
           // encrypted session cookie only; session() below never copies it out, so
           // neither /auth/session nor any page data carries it (A10).
+          // The executor's request-verify wants the PAIR of one code exchange (the
+          // ID token carries sub and at_hash, the access token the roles).
           token.opsAccess = account.access_token
-          const authTime = payloadOf(account.access_token)?.auth_time
+          token.opsIdToken = account.id_token
+          // The sign-in time the verifier will compare with: the ID token's
+          // auth_time when the realm sets one, else its iat (the code exchange).
+          const idp = payloadOf(account.id_token)
+          const authTime = typeof idp?.auth_time === 'number' ? idp.auth_time : idp?.iat
           token.opsAuthTime = typeof authTime === 'number' ? authTime : undefined
           // Stamped ONCE, at the code exchange; a renewal never moves it.
           token.opsAuthAt = now
@@ -177,13 +183,15 @@ export async function startSignIn(event: RequestEvent, config: SvelteKitAuthConf
  * auth_time and the session's sign-in time. Nothing here reaches the browser.
  */
 export function evidenceFromJwt(t: JWT): Evidence | null {
-  const token = t.opsAccess
+  const access = t.opsAccess
+  const id = t.opsIdToken
   const acr = t.opsAcr
   const authTime = t.opsAuthTime
   const authAt = t.opsAuthAt
-  if (typeof token !== 'string' || typeof acr !== 'string') return null
+  if (typeof access !== 'string' || typeof id !== 'string' || typeof acr !== 'string') return null
   if (typeof authTime !== 'number' || !Number.isFinite(authTime) || typeof authAt !== 'number' || !Number.isFinite(authAt)) return null
-  return { token, acr, authTime: new Date(authTime * 1000), sessionAt: new Date(authAt * 1000) }
+  // the ONE string request-verify decodes (encodeEvidence): the pair, in this key order
+  return { token: JSON.stringify({ id, access }), acr, authTime: new Date(authTime * 1000), sessionAt: new Date(authAt * 1000) }
 }
 
 /**
