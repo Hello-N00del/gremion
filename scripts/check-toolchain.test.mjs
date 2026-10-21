@@ -386,7 +386,7 @@ test('resolvePackageDirs: expands packages/* against a real directory and includ
 })
 
 test('resolvePackageDirs: a glob against a nonexistent prefix resolves to nothing, not a throw', () => {
-  assert.deepEqual(resolvePackageDirs(ROOT, "packages:\n  - 'services/*'\n"), [])
+  assert.deepEqual(resolvePackageDirs(ROOT, "packages:\n  - 'no-such-dir/*'\n"), [])
 })
 
 // ── the real tree, end to end ────────────────────────────────────────────
