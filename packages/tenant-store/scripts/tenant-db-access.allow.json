@@ -1,6 +1,14 @@
 {
   "rows": [
     {
+      "path": "gremion-ui/scripts/tenant-provision-scratch.ts",
+      "calls": 1,
+      "imports": 1,
+      "adoptedBy": "TASK-043",
+      "since": "2026-10-21",
+      "reason": "the scratch-fixture gate calls postgres(url).options ONLY to parse PLATFORM_DATABASE_URL with the pool's own parser (r33 residual: new URL() and postgres.js disagree on '@'/',' hosts); it never connects. TASK-043d moves tenant-create onto the package"
+    },
+    {
       "path": "gremion-ui/src/lib/server/db/pool-registry.ts",
       "calls": 1,
       "imports": 1,
