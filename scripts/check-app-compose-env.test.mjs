@@ -17,7 +17,7 @@ const required = [...new Set([...read('docker-compose.app.yml').matchAll(/\$\{([
 const defined = (text) => new Set([...text.matchAll(/^#?\s*([A-Z][A-Z0-9_]*)=/gm)].map((m) => m[1]))
 
 test('the guard sees the :? vars of the app compose', () => {
-  assert.ok(required.length >= 5, `only ${required.length} found`)
+  assert.ok(required.length >= 4, `only ${required.length} found`)
   assert.ok(required.includes('KERNEL_API_DB_PASSWORD'))
 })
 
@@ -46,4 +46,15 @@ test('pooled-stack-proof.sh and setup.sh generate every :? secret of the app com
     const m = envEx.match(new RegExp(`^${v}=(CHANGE_ME\w+)`, 'm'))
     if (m) assert.ok(setup.includes(m[1]), `${v} placeholder ${m[1]} not replaced by setup.sh`)
   }
+})
+
+test('kernel-api-migrate does not reference POSTGRES_PASSWORD (the direct url carries host/port only)', () => {
+  const text = read('docker-compose.app.yml')
+  const start = text.search(/^  kernel-api-migrate:/m)
+  assert.ok(start >= 0, 'kernel-api-migrate not found')
+  const rest = text.slice(start + 1)
+  const next = rest.search(/^  [a-z][\w-]*:|^# =/m)
+  const block = (next < 0 ? rest : rest.slice(0, next)).split(/\r?\n/).filter((l) => !/^\s*#/.test(l)).join(' ')
+  assert.doesNotMatch(block, /POSTGRES_PASSWORD/)
+  assert.match(block, /GREMION_KERNEL_PG_DIRECT_URL: postgresql:\/\/postgres-\$\{STACK:\?STACK required\}:5432\/postgres/)
 })
