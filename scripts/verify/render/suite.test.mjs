@@ -19,7 +19,7 @@ function appServices(colour, released) {
       : { image: `${P}ui:dist`, build, environment: env() },
     'gremion-public': { image: `${P}public@sha256:2222`, environment: env() },
     migrate: { image: `${P}migrate@sha256:3333`, environment: env() },
-    'tenant-create': { image: `${P}migrate:dist`, build, environment: env() },
+    'tenant-create': { image: `${P}migrate:dist`, environment: env() },
   }
 }
 
@@ -51,7 +51,7 @@ test('the suite is green over a conforming stack, one check per (guard, project)
   assert.equal(out.collected, 16)
   assert.equal(evaluateSuite(out).status, 'pass')
   assert.match(out.detail, /build-absence state: judged 0, allowance 4 \(first-party 4\)/)
-  assert.match(out.detail, /build-absence app-blue: judged 3, allowance 1/)
+  assert.match(out.detail, /build-absence app-blue: judged 4, allowance 0/)
 })
 
 test('state renders never contribute names: legal referenced from the app tier passes', () => {
