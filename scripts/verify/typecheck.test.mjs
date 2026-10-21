@@ -34,3 +34,8 @@ test('typecheck discovers every workspace package with a typecheck script, gener
     assert.ok(dirs.includes(expected), `typecheck no longer covers ${expected}: ${dirs.join(', ')}`)
   }
 })
+
+test('typecheck discovers the services/* trees too (TASK-077: the kernel API is not under packages/)', () => {
+  const dirs = typecheckPackageDirs(REPO_ROOT).map((d) => path.relative(REPO_ROOT, d).split(path.sep).join('/'))
+  assert.ok(dirs.includes('services/kernel-api'), `typecheck does not cover services/kernel-api: ${dirs.join(', ')}`)
+})

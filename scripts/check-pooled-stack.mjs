@@ -60,9 +60,23 @@ export const PROJECTS = [
   { id: 'mail', envFile: `${FIXTURE_DIR}/mail.env`, cwd: 'infra/host/mail' },
 ]
 
-export const APP_SERVICES = ['gremion-ui', 'gremion-public', 'control-panel', 'migrate', 'tenant-create']
-export const LONG_RUNNING_APP = ['gremion-ui', 'gremion-public', 'control-panel']
-export const ONE_SHOTS = { migrate: 'migrate', 'tenant-create': 'tenant-create' }
+export const APP_SERVICES = ['gremion-ui', 'gremion-public', 'control-panel', 'migrate', 'tenant-create', 'kernel-api', 'kernel-api-migrate']
+export const LONG_RUNNING_APP = ['gremion-ui', 'gremion-public', 'control-panel', 'kernel-api']
+/**
+ * Services whose source declares the evict endpoint gremion-switch POSTs to
+ * (value = the file that is the evidence). kernel-api is deliberately absent:
+ * it serves only routes from openapi/kernel-core.json; its evict route is
+ * TASK-035's, and the label would make every switch abort on a non-204.
+ * CAVEAT: only control-panel has a literal route file; gremion-ui/-public are
+ * allowlisted as the pre-existing labelled services (their HTTP evict route was
+ * NOT found in this tree -- only the pg_notify listener) and need a follow-up.
+ */
+export const EVICT_IMPLEMENTERS = {
+  'gremion-ui': 'gremion-ui/src/lib/server/tenant/evict-listener.ts',
+  'gremion-public': 'gremion-public/Dockerfile',
+  'control-panel': 'apps/control-panel/src/routes/api/internal/evict/+server.ts',
+}
+export const ONE_SHOTS = { migrate: 'migrate', 'tenant-create': 'tenant-create', 'kernel-api-migrate': 'kernel-api-migrate' }
 export const MODULE_POSTGRES_IDS = ['board', 'calendar', 'content', 'finance', 'newsletter', 'vault', 'messaging']
 /** The leaf services app.env.tmpl names (content-service ... vault-service). */
 export const LEAF_SERVICES = ['content', 'finance', 'files', 'votes', 'messages', 'newsletter', 'calendar', 'board', 'vault'].map(
@@ -107,6 +121,10 @@ export const PLACEMENT = {
     'control-panel': { class: 'council-app', networks: ['app', 'state'] },
     migrate: { class: 'council-oneshot', networks: ['state'] },
     'tenant-create': { class: 'council-oneshot', networks: ['edge', 'state'] },
+    // TASK-077 G7: the kernel API serves tenancy + the module registry to the
+    // app tier and the modules; internal only (no edge, no port, no router).
+    'kernel-api': { class: 'council-app', networks: ['app', 'state'] },
+    'kernel-api-migrate': { class: 'council-oneshot', networks: ['state'] },
   },
   // TASK-039: the observability stack. On `ops` only: no ops service shares a
   // network with _state or with Keycloak (TRD-203, TRD-111); the OTLP ingest
@@ -227,7 +245,8 @@ export function appShapeViolations(render, colour, stack, label = `app-${colour}
       const aliases = att?.aliases ?? []
       if (!aliases.includes(`${name}-${colour}`)) out.push(`${label}/${name}: no ${name}-${colour} alias on ${net}`)
     }
-    if (LONG_RUNNING_APP.includes(name) && String(labels['gremion.evict']) !== 'true') out.push(`${label}/${name}: long-running service without gremion.evict=true`)
+    if (name in EVICT_IMPLEMENTERS && String(labels['gremion.evict']) !== 'true') out.push(`${label}/${name}: long-running service without gremion.evict=true`)
+    if (String(labels['gremion.evict']) === 'true' && !(name in EVICT_IMPLEMENTERS)) out.push(`${label}/${name}: carries gremion.evict=true but is not a known evict implementer (gremion-switch requires a 204 from it; a service with no /api/internal/evict aborts every switch)`)
     if (ONE_SHOTS[name]) {
       const p = svc.profiles ?? []
       if (p.length !== 1 || p[0] !== ONE_SHOTS[name]) out.push(`${label}/${name}: one-shot not gated under profiles: [${ONE_SHOTS[name]}] (has [${p.join(', ')}])`)

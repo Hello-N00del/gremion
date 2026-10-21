@@ -38,8 +38,17 @@ import { tmpdir } from 'node:os'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 
-/** The three files L3-17 takes over unchanged. */
-const ENTRY_FILES = ['host.ts', 'reserved-hosts.ts', 'tenant-domain.ts']
+/**
+ * TASK-077 G6: L3-17 took the files over — they now live in
+ * packages/tenancy-core/src (gremion-ui's host.ts, reserved-hosts.ts,
+ * tenant-domain.ts and host-mismatch-log.ts are re-exports of them), so the
+ * guard scans the package source the kernel API actually runs. The fourth file
+ * joined because the kernel API logs host rejections through it too.
+ */
+const TENANCY_CORE_SRC = '../../../../../packages/tenancy-core/src'
+const ENTRY_FILES = ['host.ts', 'reserved-hosts.ts', 'tenant-domain.ts', 'host-mismatch-log.ts', 'index.ts'].map(
+  (f) => `${TENANCY_CORE_SRC}/${f}`,
+)
 
 /** Q3 default (brief §5): these specifier shapes make a file SvelteKit-bound. */
 const FORBIDDEN_PATTERNS: ReadonlyArray<{ re: RegExp; label: string }> = [

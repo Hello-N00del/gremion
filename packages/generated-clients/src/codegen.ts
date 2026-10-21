@@ -46,6 +46,13 @@ export const GENERATED_CLIENTS: GeneratedClientSpec[] = [
     outputFile: 'packages/generated-clients/src/generated/governance-client.ts',
     factoryName: 'createGovernanceClient',
   },
+  {
+    // TASK-077: the kernel API service's ONE spec (tenancy, module registry;
+    // later dependants append operations under their own tags, Q11).
+    specFile: 'services/kernel-api/openapi/kernel-core.json',
+    outputFile: 'packages/generated-clients/src/generated/kernel-core-client.ts',
+    factoryName: 'createKernelCoreClient',
+  },
 ]
 
 function openApiTypescriptBin(): string {

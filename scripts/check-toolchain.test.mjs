@@ -403,7 +403,7 @@ test('gatherRepoState: Dockerfile discovery is name-based (not a hardcoded path 
   const state = gatherRepoState(ROOT)
   const paths = state.dockerfiles.map((f) => f.path).sort()
   // apps/control-panel/Dockerfile: the ops control panel (TASK-043 G6), node:26-alpine like gremion-ui.
-  const kernelDockerfiles = ['apps/control-panel/Dockerfile', 'gremion-public/Dockerfile', 'gremion-ui/Dockerfile', 'test/host/runner/Dockerfile']
+  const kernelDockerfiles = ['apps/control-panel/Dockerfile', 'gremion-public/Dockerfile', 'gremion-ui/Dockerfile', 'services/kernel-api/Dockerfile', 'test/host/runner/Dockerfile']
   for (const p of kernelDockerfiles) {
     assert.ok(paths.includes(p), `${p} should be discovered as a node Dockerfile`)
   }

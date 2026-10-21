@@ -1,0 +1,37 @@
+{
+  "name": "@gremion/tenancy-core",
+  "version": "0.1.0",
+  "license": "AGPL-3.0-only",
+  "description": "Kernel-portable tenancy primitives: the host normaliser, the platform-reserved hosts, the tenant_domain accessors and the bounded host-rejection log",
+  "type": "module",
+  "private": true,
+  "exports": {
+    ".": {
+      "import": "./src/index.ts"
+    },
+    "./host": {
+      "import": "./src/host.ts"
+    },
+    "./reserved-hosts": {
+      "import": "./src/reserved-hosts.ts"
+    },
+    "./tenant-domain": {
+      "import": "./src/tenant-domain.ts"
+    },
+    "./host-mismatch-log": {
+      "import": "./src/host-mismatch-log.ts"
+    }
+  },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@gremion/db": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.0",
+    "typescript": "^5.4.5",
+    "vitest": "^4.1.11"
+  }
+}

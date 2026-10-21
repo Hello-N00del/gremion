@@ -19,6 +19,8 @@ export type ManifestProblemCode =
   | 'MANIFEST_ENTRY_WITHOUT_FILE'
   | 'HASH_MISMATCH'
   | 'NOT_UTF8'
+  /** TASK-077 G3(b): a filename or a migration number in two dirs of one union. */
+  | 'DUPLICATE_MIGRATION'
 
 export interface ManifestProblem {
   code: ManifestProblemCode
@@ -125,4 +127,83 @@ export function readVerifiedMigrations(dir: string): VerifiedMigration[] {
   if (problems.length === 0 && out.length === 0) problems.push({ code: 'NO_MIGRATIONS' })
   if (problems.length) throw new MigrationManifestError(problems)
   return out
+}
+
+// TASK-077 G3(b): ONE manifest merged across a chain's dirs (TASK-029 register
+// dirs[], e.g. kernel-api core + bodies + authz ...), ordered by migration
+// NUMBER. A number (or a filename) in two dirs is refused: the ledger is keyed
+// by filename and TASK-029's chain is one numbered sequence, so a duplicate
+// would make the apply order -- or which file a ledger row means -- ambiguous.
+
+/** The leading digits of a migration filename (`0007_x.sql` -> 7); NaN when there are none. */
+export function migrationNumberOf(file: string): number {
+  const m = /^(\d+)_/.exec(file)
+  return m ? Number(m[1]) : Number.NaN
+}
+
+/** Number order, then name: the order a union of dirs is applied and judged in. */
+export function compareMigrationFiles(a: string, b: string): number {
+  const na = migrationNumberOf(a)
+  const nb = migrationNumberOf(b)
+  if (na !== nb && !Number.isNaN(na) && !Number.isNaN(nb)) return na - nb
+  return a < b ? -1 : a > b ? 1 : 0
+}
+
+function assertDirs(dirs: readonly string[]): void {
+  if (!Array.isArray(dirs) || dirs.length === 0 || dirs.some((d) => typeof d !== 'string' || d === '')) {
+    throw new TypeError('dirs must be a non-empty array of migration directories')
+  }
+}
+
+/** Refuses a numberless file, a filename or a number found in two dirs (one problem per clash). */
+function unionProblems(perDir: ReadonlyArray<{ dir: string; files: readonly string[] }>): ManifestProblem[] {
+  const problems: ManifestProblem[] = []
+  const byName = new Map<string, string>()
+  const byNumber = new Map<number, { file: string; dir: string }>()
+  for (const { dir, files } of perDir) {
+    for (const file of files) {
+      const n = migrationNumberOf(file)
+      if (Number.isNaN(n)) {
+        problems.push({ code: 'MANIFEST_MALFORMED', file, detail: `${dir}: a union chain orders by number, and this file has none` })
+        continue
+      }
+      const sameName = byName.get(file)
+      if (sameName !== undefined) problems.push({ code: 'DUPLICATE_MIGRATION', file, detail: `in both ${sameName} and ${dir}` })
+      byName.set(file, dir)
+      const sameNumber = byNumber.get(n)
+      if (sameNumber !== undefined && sameNumber.file !== file) {
+        problems.push({ code: 'DUPLICATE_MIGRATION', file, detail: `number ${n} is also ${sameNumber.file} in ${sameNumber.dir}` })
+      }
+      if (sameNumber === undefined) byNumber.set(n, { file, dir })
+    }
+  }
+  return problems
+}
+
+/** loadManifest over every dir, merged into ONE map; refuses a duplicate name or number across dirs. */
+export function loadUnionManifest(dirs: readonly string[]): Map<string, string> {
+  assertDirs(dirs)
+  if (dirs.length === 1) return loadManifest(dirs[0]!)
+  const perDir = dirs.map((dir) => ({ dir, manifest: loadManifest(dir) }))
+  const problems = unionProblems(perDir.map(({ dir, manifest }) => ({ dir, files: [...manifest.keys()] })))
+  if (problems.length) throw new MigrationManifestError(problems)
+  const merged = new Map<string, string>()
+  for (const name of perDir.flatMap(({ manifest }) => [...manifest.keys()]).sort(compareMigrationFiles)) {
+    merged.set(name, perDir.find(({ manifest }) => manifest.has(name))!.manifest.get(name)!)
+  }
+  return merged
+}
+
+/**
+ * readVerifiedMigrations over every dir, as ONE sequence in number order.
+ * Every dir is verified in full (both directions, every sha256) before the
+ * union is formed, so one tampered dir refuses the whole chain.
+ */
+export function readVerifiedUnion(dirs: readonly string[]): VerifiedMigration[] {
+  assertDirs(dirs)
+  if (dirs.length === 1) return readVerifiedMigrations(dirs[0]!)
+  const perDir = dirs.map((dir) => ({ dir, migrations: readVerifiedMigrations(dir) }))
+  const problems = unionProblems(perDir.map(({ dir, migrations }) => ({ dir, files: migrations.map((m) => m.file) })))
+  if (problems.length) throw new MigrationManifestError(problems)
+  return perDir.flatMap(({ migrations }) => migrations).sort((a, b) => compareMigrationFiles(a.file, b.file))
 }

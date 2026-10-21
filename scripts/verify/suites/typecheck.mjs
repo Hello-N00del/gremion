@@ -65,10 +65,20 @@ function svelteCheckParts(appDir, label) {
  * new package (TASK-030's @gremion/generated-clients was the first) is
  * typechecked without anyone remembering to add it here. */
 export function typecheckPackageDirs(root = REPO_ROOT) {
-  const pkgsDir = path.join(root, 'packages')
-  return readdirSync(pkgsDir, { withFileTypes: true })
-    .filter((d) => d.isDirectory())
-    .map((d) => path.join(pkgsDir, d.name))
+  // packages/* is required (a repo with none is a failing part below); services/*
+  // (TASK-077, the kernel API) is optional -- a tree without it is not an error.
+  const trees = ['packages', 'services']
+  return trees
+    .flatMap((tree) => {
+      const treeDir = path.join(root, tree)
+      if (!existsSync(treeDir)) {
+        if (tree === 'packages') readdirSync(treeDir) // throws ENOENT, as before
+        return []
+      }
+      return readdirSync(treeDir, { withFileTypes: true })
+        .filter((d) => d.isDirectory())
+        .map((d) => path.join(treeDir, d.name))
+    })
     .filter((dir) => {
       const pj = path.join(dir, 'package.json')
       if (!existsSync(pj)) return false

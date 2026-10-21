@@ -167,6 +167,9 @@ importers:
       '@gremion/storage':
         specifier: workspace:*
         version: link:../packages/storage
+      '@gremion/tenancy-core':
+        specifier: workspace:*
+        version: link:../packages/tenancy-core
       '@gremion/tokens':
         specifier: workspace:*
         version: link:../packages/tokens
@@ -834,6 +837,22 @@ importers:
         specifier: '>=4.1.11 <5'
         version: 4.1.11(@types/node@26.6.0)(@vitest/browser-playwright@4.1.11)(@vitest/coverage-v8@4.1.11)(jsdom@29.1.1)(msw@2.15.0(@types/node@26.6.0)(typescript@5.9.3))(vite@8.3.0(@types/node@26.6.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.13)(yaml@2.9.0))
 
+  packages/tenancy-core:
+    dependencies:
+      '@gremion/db':
+        specifier: workspace:*
+        version: link:../db
+    devDependencies:
+      '@types/node':
+        specifier: ^26.6.0
+        version: 26.6.0
+      typescript:
+        specifier: ^5.4.5
+        version: 5.9.3
+      vitest:
+        specifier: '>=4.1.11 <5'
+        version: 4.1.11(@types/node@26.6.0)(@vitest/browser-playwright@4.1.11)(@vitest/coverage-v8@4.1.11)(jsdom@29.1.1)(msw@2.15.0(@types/node@26.6.0)(typescript@5.9.3))(vite@8.3.0(@types/node@26.6.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.13)(yaml@2.9.0))
+
   packages/tenant-store:
     dependencies:
       '@gremion/db':
@@ -871,6 +890,55 @@ importers:
       typescript:
         specifier: ^5.4.5
         version: 5.9.3
+
+  services/kernel-api:
+    dependencies:
+      '@fastify/multipart':
+        specifier: 10.1.2
+        version: 10.1.2
+      '@gremion/db':
+        specifier: workspace:*
+        version: link:../../packages/db
+      '@gremion/fastify-service-template':
+        specifier: workspace:*
+        version: link:../../packages/fastify-service-template
+      '@gremion/tenancy-core':
+        specifier: workspace:*
+        version: link:../../packages/tenancy-core
+      '@gremion/tenant-store':
+        specifier: workspace:*
+        version: link:../../packages/tenant-store
+      ajv:
+        specifier: 8.20.0
+        version: 8.20.0
+      ajv-formats:
+        specifier: 3.0.1
+        version: 3.0.1(ajv@8.20.0)
+      fastify:
+        specifier: 5.12.5
+        version: 5.12.5
+      jose:
+        specifier: ^6.2.12
+        version: 6.2.12
+      postgres:
+        specifier: ^3.4.4
+        version: 3.4.9
+    devDependencies:
+      '@gremion/module-catalogue':
+        specifier: workspace:*
+        version: link:../../packages/module-catalogue
+      '@types/node':
+        specifier: 26.6.0
+        version: 26.6.0
+      esbuild:
+        specifier: ^0.28.1
+        version: 0.28.2
+      typescript:
+        specifier: 5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: '>=4.1.11 <5'
+        version: 4.1.11(@types/node@26.6.0)(@vitest/browser-playwright@4.1.11)(@vitest/coverage-v8@4.1.11)(jsdom@29.1.1)(msw@2.15.0(@types/node@26.6.0)(typescript@5.9.3))(vite@8.3.0(@types/node@26.6.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.13)(yaml@2.9.0))
 
 packages:
 

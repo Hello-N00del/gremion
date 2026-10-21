@@ -286,6 +286,18 @@ export const UNIT_PARTS = {
   'control-panel': (root) => [
     vitestSubcheck({ cwd: path.join(root, 'apps', 'control-panel'), testScript: 'test', root, label: 'control-panel vitest (test)' }),
   ],
+  // TASK-077 (G4/G6): the kernel-portable tenancy primitives (host, reserved
+  // hosts, tenant-domain resolver, the bounded rejection log). gremion-ui keeps
+  // its own re-export suites; this is the package's own.
+  'tenancy-core': (root) => [
+    vitestSubcheck({ cwd: path.join(root, 'packages', 'tenancy-core'), testScript: 'test', root, label: '@gremion/tenancy-core vitest (test)' }),
+  ],
+  // TASK-077 (G4): the kernel API service (services/*, not packages/*). Its
+  // database half is `test:integration` (one named scratch PostgreSQL 18), not a
+  // unit part.
+  'kernel-api': (root) => [
+    vitestSubcheck({ cwd: path.join(root, 'services', 'kernel-api'), testScript: 'test', root, label: '@gremion/kernel-api vitest (test)' }),
+  ],
   // TASK-205a: one vitest part per modules/<id> package with a test script. Zero such modules is itself a
   // failing part (an empty module set must not read as a pass). Brief §6.12: each run carries
   // `check-module-source-scan.mjs --coupled-excludes <id>` (a test modules/COUPLED-TESTS.json allows to reach

@@ -517,6 +517,40 @@
       "testGlobs": ["packages/fastify-service-template/test/**/*.test.ts"]
     },
     {
+      "id": "kernel-kernel-api-unit",
+      "repo": "kernel",
+      "category": "unit",
+      "cwd": "services/kernel-api",
+      "kind": "vitest",
+      "command": "pnpm run test",
+      "timeoutMs": 600000,
+      "requiresStack": false,
+      "testGlobs": ["services/kernel-api/test/**/*.test.ts"],
+      "excludeGlobs": ["services/kernel-api/test/**/*.int.test.ts"]
+    },
+    {
+      "id": "kernel-kernel-api-integration",
+      "repo": "kernel",
+      "category": "integration",
+      "cwd": "services/kernel-api",
+      "kind": "vitest",
+      "command": "pnpm run test:integration",
+      "timeoutMs": 600000,
+      "requiresStack": true,
+      "testGlobs": ["services/kernel-api/test/**/*.int.test.ts"]
+    },
+    {
+      "id": "kernel-tenancy-core-unit",
+      "repo": "kernel",
+      "category": "unit",
+      "cwd": "packages/tenancy-core",
+      "kind": "vitest",
+      "command": "pnpm run test",
+      "timeoutMs": 600000,
+      "requiresStack": false,
+      "testGlobs": ["packages/tenancy-core/test/**/*.test.ts"]
+    },
+    {
       "id": "kernel-generated-clients-dart-unit",
       "repo": "kernel",
       "category": "unit",

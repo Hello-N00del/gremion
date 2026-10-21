@@ -115,9 +115,21 @@ describe('tenant-create phase-a env contract (TDD 19, G3)', () => {
     expect(r.out).not.toMatch(/ECONNREFUSED|ENOTFOUND|getaddrinfo|CONNECT_TIMEOUT/)
   }, 90_000)
 
+  // TASK-077: `init` also makes the kernel API's SELECT-only role (the
+  // kernel-api-migrate step of every deploy connects as it), so it needs the
+  // role's name and password -- named, before any connection.
+  it.each(['KERNEL_API_DB_USER', 'KERNEL_API_DB_PASSWORD'])('init without %s: exit 2 naming it, before any connection', (missing) => {
+    const env: Record<string, string> = { ...CONTRACT, PANEL_DB_USER: 'gremion_panel', PANEL_DB_PASSWORD: 'unit-panel-password-0123456789', KERNEL_API_DB_USER: 'gremion_kernel_api', KERNEL_API_DB_PASSWORD: 'unit-kernel-api-password-0123456789' }
+    delete env[missing]
+    const r = run(['init'], env)
+    expect(r.status, r.out).toBe(2)
+    expect(r.out).toContain(missing)
+    expect(r.out).not.toMatch(/ECONNREFUSED|ENOTFOUND|getaddrinfo|CONNECT_TIMEOUT/)
+  }, 90_000)
+
   // TASK-075: init migrates gremion_platform, so it names the release too.
   it('init without GREMION_RELEASE_REF, or with one that is no release ref: exit 2 naming it, before any connection', () => {
-    const panel = { PANEL_DB_USER: 'gremion_panel', PANEL_DB_PASSWORD: 'unit-panel-password-0123456789' }
+    const panel = { PANEL_DB_USER: 'gremion_panel', PANEL_DB_PASSWORD: 'unit-panel-password-0123456789', KERNEL_API_DB_USER: 'gremion_kernel_api', KERNEL_API_DB_PASSWORD: 'unit-kernel-api-password-0123456789' }
     const env: Record<string, string> = { ...CONTRACT, ...panel }
     delete env.GREMION_RELEASE_REF
     for (const e of [env, { ...CONTRACT, ...panel, GREMION_RELEASE_REF: 'x'.repeat(65) }, { ...CONTRACT, ...panel, GREMION_RELEASE_REF: 'a b' }]) {

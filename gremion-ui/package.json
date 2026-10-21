@@ -68,6 +68,7 @@
     "@gremion/db": "workspace:*",
     "@gremion/ports": "workspace:*",
     "@gremion/storage": "workspace:*",
+    "@gremion/tenancy-core": "workspace:*",
     "@gremion/tokens": "workspace:*",
     "@xmldom/xmldom": "^0.9.10",
     "bits-ui": "2.19.3",
