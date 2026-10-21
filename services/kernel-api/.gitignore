@@ -1,0 +1,4 @@
+# the esbuild bundle (pnpm build; the image builds it)
+dist/
+# the scratch stack's connection state (test/harness/stack.mjs), never committed
+.stack-state.json

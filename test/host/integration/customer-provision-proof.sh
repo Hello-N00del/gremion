@@ -37,18 +37,29 @@
 #
 # CUSTOMER (section 1): run against a RUNNING pooled stack -- this script
 # never brings one up. Either a scratch stack from pooled-stack-proof.sh
-# (POOLED_STACK + POOLED_ENV_DIR; customer-layout lays its GREMION_ROOT out
+# (pooled-stack-proof.sh only brings up t040-<sha8> stacks, so the customer
+# phases (TASK-043/TASK-044) run with POOLED_STACK=t040-<sha8>; the scratch-
+# fixture gate accepts any tNNN-<sha8> stack naming its own platform host;
+# POOLED_STACK + POOLED_ENV_DIR; customer-layout lays its GREMION_ROOT out
 # like a host's) or a host after TASK-038's re-init (PROOF_GREMION_ROOT=/opt/gremion,
 # POOLED_STACK=<stack>, POOLED_ENV_DIR=/opt/gremion/etc/env). The operator id
 # of every mutating verb is PROOF_OPERATOR_ID (a platform-realm user id).
 #   customer-layout  scratch only: etc/env, runtime/active-colour, etc/edge
 #   customer-before  TRD-440 baseline (running containers, every project's
 #                    config --services), pg_database lists, no gremion_platform
-#   customer-create  `--enable board` and `--enable vault` refused by name before
-#                    any write (R29-I1; R30 A1, PRD-PLAT-012 / PRD-REC-003); then
+#   customer-init    `gremion-tenant init` (TASK-044: the gremion_platform
+#                    catalogue rows and the ops realm that seed_gate_fixtures and
+#                    the level-1 gate need); a rerun is a no-op when the catalogue
+#                    is loaded. Run it after customer-before, before any create.
+#   customer-create  = the four sub-phases below, in order (each fits a 4-minute
+#                    tool call on its own; run them separately from a supervisor)
+#     customer-create-refuse  `--enable board` and `--enable vault` refused by
+#                    name before any write (R29-I1; R30 A1, PRD-PLAT-012 / PRD-REC-003)
+#     customer-create-x       the gate fixtures, then
 #                    `gremion-tenant create proof-x --enable calendar,votes` (calendar:
-#                    a database and a broker user; votes: neither) and a second
-#                    customer proof-y; every section 1 "Create" line
+#                    a database and a broker user; votes: neither)
+#     customer-create-y       a second customer proof-y
+#     customer-create-check   every section 1 "Create" line (post-conditions)
 #   customer-rerun   a second create: phase A and B run nothing, the broker is
 #                    not reloaded, the ledger and the database lists unchanged
 #   customer-suspend suspend proof-x: status, realm disabled, the tenant host
@@ -455,7 +466,32 @@ skc() { # kcadm in the state keycloak (the admin password by a name-only -e)
 tenant() { # gremion-tenant against the laid-out root, as the operator
     MSYS_NO_PATHCONV=1 GREMION_ROOT="$(host_path "$(croot)")" GREMION_RELEASE_DIR="$ROOT_H" \
         GREMION_OPERATOR_ID="$PROOF_OPERATOR_ID" TENANT_DNS_PREFLIGHT="${PROOF_DNS_PREFLIGHT:-off}" \
+        GREMION_SCRATCH_FIXTURES="$(scratch_stack)" GREMION_PRODUCTION_STACK=none \
         bash "$ROOT/infra/host/bin/gremion-tenant" "$@"
+}
+# TASK-044 Q6: the stack name that lets the container gate accept the proof's
+# `scratch-fixture:` isolation rows -- ONLY a tNNN-<sha8> pooled stack, never a
+# host (PROOF_GREMION_ROOT) or any other name. Empty otherwise.
+scratch_stack() { if [[ -z "${PROOF_GREMION_ROOT:-}" && "$PSTACK" =~ ^t[0-9]{3}[a-z]?-[0-9a-f]{8}$ ]]; then printf '%s' "$PSTACK"; fi; }
+# seed_gate_fixtures <modules,csv> -- the rows the REAL level-1 gate needs for a
+# create with modules (TASK-044 section 9): a passing cross-customer isolation
+# row per module on this release tip (scratch-fixture.sql) and the operator's
+# DPIA decisions (dpia.json, carried by `create --dpia-json`). Scratch only.
+seed_gate_fixtures() {
+    [[ -n "$(scratch_stack)" ]] || die "gate fixtures are seeded only on a scratch pooled stack (POOLED_STACK=${PSTACK})"
+    local tip m dpia='{}'
+    [[ -n "$(q postgres "SELECT 1 FROM pg_database WHERE datname = 'gremion_platform'")" ]]         || die "gate fixtures need gremion_platform and the loaded catalogue (run gremion-tenant init first; --enable needs plt.module_version rows anyway)"
+    tip="$(git -C "$ROOT_H" rev-parse HEAD)"
+    [[ "$tip" =~ ^[0-9a-f]{40}$ ]] || die "no release tip: ${ROOT_H} is not a git checkout"
+    docker exec -i "$(svc state postgres)" psql -v ON_ERROR_STOP=1 -qU postgres -d gremion_platform -v "tip=${tip}" -v "modules=$1" -f - \
+        < "$ROOT_H/test/host/fixtures/customer-provision/scratch-fixture.sql" > /dev/null
+    for m in ${1//,/ }; do
+        [[ "$(q gremion_platform "SELECT count(*) FROM plt.isolation_test_result r JOIN plt.module m USING (module_id) WHERE m.module_key = '${m}' AND r.release_tip_sha = '${tip}' AND r.passed")" -ge 1 ]]             || die "gate fixtures: no passing isolation row for ${m} on ${tip} after seeding (is ${m} in plt.module?)"
+    done
+    for m in ${1//,/ }; do
+        dpia="$(jq -c --arg m "$m" '. + {($m): {requiresDpia: "no", reasonCodes: ["scratch_proof"], documentRef: "scratch-fixture: TOM annex (customer-provision-proof)"}}' <<< "$dpia")"
+    done
+    printf '%s\n' "$dpia" > "$OUT/ledger/dpia.json"
 }
 accounts() { # the rendered NATS accounts file(s)
     docker run --rm --name "${STACK}-accounts" -v "${PSTACK}_nats_accounts:/a:ro" --entrypoint sh "$PG_IMAGE" -c 'cat /a/*' | tr -d '\r'
@@ -714,9 +750,24 @@ phase_customer_before() {
     ok "customer-before: TRD-440 baseline and the database lists recorded"
 }
 
-phase_customer_create() {
+# `gremion-tenant init`: the platform catalogue rows (plt.module_version, plt.module)
+# and the ops realm. seed_gate_fixtures and the level-1 gate need them; before
+# TASK-044's fix no phase ran it. Skipped when the catalogue is already loaded.
+phase_customer_init() {
     need_pooled
-    local cfg="$ROOT/test/host/fixtures/pooled-stack/tenant-t040-b.json" out rc id kdb n
+    mkdir -p "$OUT/ledger"
+    if [[ -n "$(q postgres "SELECT 1 FROM pg_database WHERE datname = 'gremion_platform'")" ]]         && [[ "$(q gremion_platform "SELECT count(*) FROM plt.module_version")" -ge 1 ]]; then
+        ok "customer-init: gremion_platform already carries the module catalogue (a rerun): init not repeated"
+        return
+    fi
+    tenant init --panel-origin "https://${PANEL_HOST}" > "$OUT/ledger/init.log" 2>&1         || { tail -n 25 "$OUT/ledger/init.log" >&2; bad "customer-init: gremion-tenant init failed"; return; }
+    if [[ "$(q gremion_platform "SELECT count(*) FROM plt.module_version")" -ge 1 ]]; then ok "customer-init: gremion-tenant init loaded the catalogue (plt.module_version rows present)"
+    else bad "customer-init: init exited 0 but plt.module_version is empty"; fi
+}
+
+phase_customer_create_refuse() {
+    need_pooled
+    local cfg="$ROOT/test/host/fixtures/pooled-stack/tenant-t040-b.json" out rc
     [[ -f "$cfg" ]] || die "the customer config fixture ${cfg} is absent"
     # R29-I1: board is refused BY NAME, before any write. "No write" is the
     # control registry and the ledger UNCHANGED across the refused call (not
@@ -736,14 +787,34 @@ phase_customer_create() {
         else bad "customer-create: --enable ${denied} was not refused before any write (exit ${rc}; before ${snap_before}; after ${snap_after})"; fi
     done
 
+}
+
+phase_customer_create_x() {
+    need_pooled
+    local cfg="$ROOT/test/host/fixtures/pooled-stack/tenant-t040-b.json"
+    [[ -f "$cfg" ]] || die "the customer config fixture ${cfg} is absent"
+    # TASK-044 section 9: the real gate. Without these rows the create below is REFUSED (NO_ISOLATION_RESULT).
+    seed_gate_fixtures calendar,votes
+    ok "customer-create: gate fixtures seeded (scratch-fixture: isolation rows, DPIA decisions in ledger/dpia.json)"
     tenant create "$X" --host "$(host_of "$X")" --config "$cfg" --it-admin "$(admin_addr "$X" it)" \
-        --council-admin "$(admin_addr "$X" rat)" --enable calendar,votes > "$OUT/ledger/create-x.log" 2>&1 \
+        --council-admin "$(admin_addr "$X" rat)" --enable calendar,votes --dpia-json "$OUT/ledger/dpia.json" > "$OUT/ledger/create-x.log" 2>&1 \
         || { tail -n 25 "$OUT/ledger/create-x.log" >&2; bad "customer-create: gremion-tenant create ${X} failed"; return; }
+    ok "customer-create-x: gremion-tenant create ${X} (calendar, votes) exited 0"
+}
+
+phase_customer_create_y() {
+    need_pooled
+    local cfg="$ROOT/test/host/fixtures/pooled-stack/tenant-t040-b.json"
+    [[ -f "$cfg" ]] || die "the customer config fixture ${cfg} is absent"
     tenant create "$Y" --host "$(host_of "$Y")" --config "$cfg" --it-admin "$(admin_addr "$Y" it)" \
         --council-admin "$(admin_addr "$Y" rat)" > "$OUT/ledger/create-y.log" 2>&1 \
         || { tail -n 25 "$OUT/ledger/create-y.log" >&2; bad "customer-create: gremion-tenant create ${Y} failed"; return; }
-    ok "customer-create: gremion-tenant create ${X} (calendar, votes) and ${Y} exited 0"
+    ok "customer-create: gremion-tenant create ${Y} exited 0"
+}
 
+phase_customer_create_check() {
+    need_pooled
+    local id kdb n
     if [[ -n "$(q postgres "SELECT 1 FROM pg_database WHERE datname = 'gremion_platform'")" ]]; then ok "customer-create: gremion_platform exists (bootstrapped, Q15)"; else bad "customer-create: no gremion_platform"; fi
     n="$(q gremion_platform "SELECT count(*) FROM plt.module_version")"
     if [[ "$n" -ge "$(find "$ROOT/modules" -maxdepth 2 -name module.json | grep -c .)" ]]; then ok "customer-create: ${n} plt.module_version row(s), one per catalogue module (Q20)"; else bad "customer-create: plt.module_version holds ${n} row(s)"; fi
@@ -789,6 +860,14 @@ phase_customer_create() {
     # The control row, the ledger, the broker, the router.
     if [[ "$(q control "SELECT count(*) FROM tenant_domain WHERE tenant_id = '${id}' AND is_primary")" == 1 ]]; then ok "customer-create: one primary tenant_domain row binds $(host_of "$X")"; else bad "customer-create: tenant_domain rows"; fi
     if [[ "$(q gremion_platform "SELECT count(DISTINCT step_kind) || '/' || count(*) FROM plt.provisioning_step WHERE customer_id = '${id}' AND status = 'done'")" == "8/8" ]]; then ok "customer-create: eight done ledger rows, one per kind (Q2)"; else bad "customer-create: the ledger is not eight done rows"; fi
+    # R33 item 4: the post-condition behind handToReader -- every tenant secret
+    # file is 0600 AND owned by the reader uid (a root:root file is EACCES to the readers).
+    local tsd="${PROOF_TENANT_SECRETS_DIR:-$ROOT/secrets/tenants}" tsf tsbad=0 tsn=0 want_uid="${TENANT_SECRETS_UID:-1000}"
+    while IFS= read -r tsf; do
+        tsn=$(( tsn + 1 ))
+        [[ "$(stat -c '%a %u' "$tsf")" == "600 ${want_uid}" ]] || { tsbad=1; info "secret ${tsf}: $(stat -c '%a %u' "$tsf"), want 600 ${want_uid}"; }
+    done < <(find "$tsd" -type f 2>/dev/null)
+    if (( tsn > 0 && tsbad == 0 )); then ok "customer-create: ${tsn} tenant secret file(s) are mode 0600 and owned by uid ${want_uid}"; else bad "customer-create: tenant secret files under ${tsd}: ${tsn} found, ownership/mode wrong (want 600 ${want_uid})"; fi
     local acc; acc="$(accounts)"
     if grep -q '# kernel@' <<< "$acc" && grep -q '# calendar@' <<< "$acc" && ! grep -q '# votes@' <<< "$acc"; then
         ok "customer-create: the broker account holds kernel and calendar users, none for votes (no flow, Q4)"
@@ -805,6 +884,13 @@ phase_customer_create() {
     else bad "customer-create: Traefik routers are not enabled: ${rs}"; fi
     if edge_served "$(host_of "$X")"; then ok "customer-create: $(host_of "$X") is served by gremion-ui through the edge (${EDGE_SHAPE})"
     else bad "customer-create: $(host_of "$X") is not served (${EDGE_SHAPE}; want 302/303 into /auth/login or 200 with gremion-ui's CSP)"; fi
+}
+
+phase_customer_create() {
+    phase_customer_create_refuse
+    phase_customer_create_x
+    phase_customer_create_y
+    phase_customer_create_check
 }
 
 phase_customer_rerun() {
@@ -1085,7 +1171,12 @@ run_phase() {
     case "$1" in
         customer-layout) phase_customer_layout ;;
         customer-before) phase_customer_before ;;
+        customer-init) phase_customer_init ;;
         customer-create) phase_customer_create ;;
+        customer-create-refuse) phase_customer_create_refuse ;;
+        customer-create-x) phase_customer_create_x ;;
+        customer-create-y) phase_customer_create_y ;;
+        customer-create-check) phase_customer_create_check ;;
         customer-rerun) phase_customer_rerun ;;
         customer-suspend) phase_customer_suspend ;;
         customer-resume) phase_customer_resume ;;

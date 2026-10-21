@@ -18,7 +18,7 @@ let base: string
 
 const TENANT_HEADERS = {
   'x-internal-auth': SECRET,
-  'x-tenant-id': '11111111-1111-1111-1111-111111111111',
+  'x-tenant-id': '11111111-1111-4111-8111-111111111111',
   'x-tenant-slug': 'alpha',
 }
 
@@ -127,7 +127,7 @@ function assertSafeTestEnv(url: string, dbPrefix: string): void {
 }
 assertSafeTestEnv(TEST_PG_URL, TEST_DB_PREFIX)
 
-const SAGA_TENANT: TenantRef = { id: 'eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee', slug: 'sagaslice3' }
+const SAGA_TENANT: TenantRef = { id: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee', slug: 'sagaslice3' }
 const SAGA_HEADERS = {
   'x-internal-auth': SECRET,
   'x-tenant-id': SAGA_TENANT.id,
@@ -223,7 +223,7 @@ describe('finance leaf — slice-3 sub-org saga endpoints (real PG)', () => {
 // not just verb+path. One throwaway DB (finance_test_crudslice) is shared across
 // the domain suites; each suite truncates the tables it touches in beforeEach.
 
-const CRUD_TENANT: TenantRef = { id: 'dddddddd-dddd-dddd-dddd-dddddddddddd', slug: 'crudslice' }
+const CRUD_TENANT: TenantRef = { id: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd', slug: 'crudslice' }
 const CRUD_HEADERS = {
   'x-internal-auth': SECRET,
   'x-tenant-id': CRUD_TENANT.id,
@@ -710,7 +710,7 @@ describe('finance leaf — store-backed CRUD domains (real PG)', () => {
 //     / scoped-member-own-units-only / empty-scope-none), incl. out-of-scope
 //     anti-probing, and ORDER BY a.id parity.
 
-const LANEC_TENANT: TenantRef = { id: 'cccccccc-cccc-cccc-cccc-cccccccccccc', slug: 'lanec' }
+const LANEC_TENANT: TenantRef = { id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc', slug: 'lanec' }
 const LANEC_BASE_HEADERS = {
   'x-internal-auth': SECRET,
   'x-tenant-id': LANEC_TENANT.id,

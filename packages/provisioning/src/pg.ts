@@ -1,6 +1,7 @@
 // packages/provisioning/src/pg.ts — the gremion_platform adapters this
-// package owns: the Q19 attestations, the modules port over TASK-021's
-// enableModule, and bootstrapPlatform (Q15, `gremion-tenant init`).
+// package owns: the modules port over TASK-021's enableModule and
+// bootstrapPlatform (Q15, `gremion-tenant init`). The gate's adapter is
+// module-gate.ts's pgGate (TASK-044).
 import type { Sql } from '@gremion/db'
 import {
   assertPlatform,
@@ -13,49 +14,16 @@ import {
   type LifecycleModule,
 } from '@gremion/tenant-store/lifecycle'
 import { loadCatalogueRows, provisionalNote, type CatalogueModule, type CatalogueRowsResult } from './catalogue-rows.ts'
-import { assertUuid, ProvisioningError } from './errors.ts'
-import { INTERIM_GATE_BASIS } from './operator-gate.ts'
-import type { AttestationPort, CustomerRef, ModulesPort } from './ports.ts'
-
-export function pgAttestations(platform: Sql): AttestationPort {
-  // A closure, not `this` (review B1 LOW, r2): the port's methods may be passed detached.
-  const lookup: AttestationPort['lookup'] = async (customerId, moduleKey) => {
-    assertUuid(customerId, 'customer id')
-    const rows = await platform<{ id: string }[]>`
-      SELECT attestation_id::text AS id FROM plt.operator_enable_attestation
-       WHERE customer_id = ${customerId} AND module_key = ${moduleKey}`
-    return rows[0]?.id ?? null
-  }
-  return {
-    lookup,
-    async ensure(customerId, moduleKey, operatorId, enableList) {
-      assertUuid(customerId, 'customer id')
-      assertUuid(operatorId, 'operator id')
-      const inserted = await platform<{ id: string }[]>`
-        INSERT INTO plt.operator_enable_attestation (customer_id, module_key, operator_id, enable_list, basis)
-        VALUES (${customerId}, ${moduleKey}, ${operatorId}, ${[...enableList]}, ${INTERIM_GATE_BASIS})
-        ON CONFLICT (customer_id, module_key) DO NOTHING
-        RETURNING attestation_id::text AS id`
-      const id = inserted[0]?.id ?? (await lookup(customerId, moduleKey))
-      if (!id) throw new ProvisioningError('POSTCONDITION', `no attestation for (${customerId}, ${moduleKey}) after insert`)
-      return id
-    },
-    async list(customerId) {
-      assertUuid(customerId, 'customer id')
-      const rows = await platform<{ module_key: string; id: string; operator_id: string; created_at: Date }[]>`
-        SELECT module_key, attestation_id::text AS id, operator_id::text, created_at
-          FROM plt.operator_enable_attestation WHERE customer_id = ${customerId} ORDER BY module_key`
-      return rows.map((r) => ({ moduleKey: r.module_key, attestationId: r.id, operatorId: r.operator_id, createdAt: r.created_at }))
-    },
-  }
-}
+import { ProvisioningError } from './errors.ts'
+import type { CustomerRef, ModulesPort } from './ports.ts'
 
 /**
  * The modules port over @gremion/tenant-store's enableModule. `lifecycle`
  * carries everything but the gate (platform, servers, secrets, exporter,
  * exportDir, and -- TASK-075 -- the releaseRef every module-database ledger
  * row records, required here so a caller cannot omit it and meet enable's
- * runtime refusal instead); the gate is the interim operator gate, passed per call.
+ * runtime refusal instead); the gate (TASK-044's createEnableGate, through
+ * GatePort.enableGate) is passed per call.
  */
 export function pgModules(opts: {
   platform: Sql

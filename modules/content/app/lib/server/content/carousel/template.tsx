@@ -1,11 +1,11 @@
 // Content Engine (Pillar-1 kernel) — the carousel slide TEMPLATE.
 //
 // =============================================================================
-//  CLAUDE DESIGN HAND-OFF CONTRACT
+//  DESIGN HAND-OFF CONTRACT
 // -----------------------------------------------------------------------------
-//  This file is the agreed seam between the content engine and Claude Design.
+//  This file is the agreed seam between the content engine and the designer.
 //  L1 ships a deliberately PLAIN, functional 1080x1080 placeholder so the whole
-//  satori -> SVG -> PNG pipeline is proven end-to-end. Claude Design later
+//  satori -> SVG -> PNG pipeline is proven end-to-end. The designer later
 //  replaces ONLY the visual body of `SlideTemplate` — it must keep:
 //
 //    * the exported `SlideTemplateProps` shape (brandTokens + slide),
@@ -71,7 +71,7 @@ const PX = 1080
  * A plain placeholder slide: an accent header bar, an optional image box, the
  * heading, the body text, and an index/total footer. 1080x1080. Pure — no I/O.
  *
- * Claude Design replaces the visual body only; the signature + props are locked.
+ * The design hand-off replaces the visual body only; the signature + props are locked.
  */
 export function SlideTemplate(props: SlideTemplateProps): JSX.Element {
 	const { brandTokens, slide } = props
@@ -81,7 +81,7 @@ export function SlideTemplate(props: SlideTemplateProps): JSX.Element {
 	// L1 placeholder: render a labelled IMAGE BOX (a plain div), never a real
 	// <img>. Embedding `slide.imageUrl` as an <img> would force satori to fetch
 	// the remote image to measure it — a network dependency L1 forbids (renders
-	// must be in-process and browser-free). Claude Design wires the real image in
+	// must be in-process and browser-free). The designer wires the real image in
 	// a later handover; the box reserves the layout and shows the source.
 	const imageBox: SatoriElement | null = slide.imageUrl
 		? h(

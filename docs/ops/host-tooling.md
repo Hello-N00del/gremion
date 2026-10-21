@@ -147,6 +147,42 @@ than exit codes.
 | `gremion-restore-into --stack S --snapshot ID\|latest [--rto]` | restore a snapshot into a *different* stack, never into `etc/`, then neuter and prove by content |
 | `gremion-neuter --stack S` | point every SMTP host at a null sink and blank the publish tokens in stack `S` — env files, tenant `config.json`, the control registry and every Keycloak realm's `smtpServer` — asserted through `docker exec … env` and a kcadm read-back |
 
+### The release tip of an enable (`GREMION_RELEASE_TIP`)
+
+Enabling a module for a customer is refused unless the module's latest
+cross-customer isolation result passed on the release being run (TASK-044,
+TRD-060/063). `gremion-tenant` derives that release tip itself: every
+`tenant-create` one-shot gets `-e GREMION_RELEASE_TIP=<sha>`, where `<sha>` is
+`HEAD` of the release tree (`GREMION_RELEASE_DIR`, default `<root>/current`),
+the checkout `gremion-deploy` authenticated against the allowed signers. It is
+never read from the caller's environment or from a request payload. A release
+tree that is not a git checkout of its own, or a value that is not a full
+lowercase commit id, gives an empty tip; only an enable verb then refuses
+(`NO_RELEASE_TIP`), `status` and `suspend` are unaffected. An isolation pass
+recorded for another commit (a re-tag, a docs-only commit after the verify run)
+is refused as `ISOLATION_STALE_TIP`; re-run the isolation harness on the tip.
+
+### The Grafana sign-in secret (`etc/secrets/grafana/client_secret`)
+
+Grafana (the operator-only observability project) signs operators in through the
+`grafana` client of the ops realm, and it needs that client's secret in
+`etc/secrets/grafana/client_secret` (0600). Who writes the file depends on how
+the realm was made, and `render-ops.sh` reports the outcome as `grafana-sso=pending`
+(file absent: Grafana starts, nobody can sign in) or `grafana-sso=ready` (file
+present). Three cases, as in `compose/observability/README.md`:
+
+- `gremion-tenant init --realm-only --keycloak-container <kc>` writes the file
+  itself, 0600, after it has read the realm back.
+- `gremion-tenant init` on the pooled stack (the default) does not write it:
+  `tenant-create` creates the realm and Keycloak generates the secret, so the
+  operator reads it once with block **A** of that README. The pooled-path write
+  belongs to TASK-043d, which replaces `gremion-tenant` as the operator surface.
+- an ops realm made before TASK-039 has no `grafana` client: add it (block **B**),
+  then read the secret (block **A**).
+
+Then re-run `render-ops.sh` and restart Grafana. The secret is never printed,
+copied into a provisioning file or put on a command line.
+
 ### `gremion-verify` and the signed waiver ledger
 
 `gremion-verify` will not run without `docs/ops/release-1-waivers.md`, the

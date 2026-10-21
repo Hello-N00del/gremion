@@ -181,7 +181,7 @@ export function runCensus({ projects, images, blastRadius }) {
 //   node scripts/verify/census/census.mjs --build-only <svc>
 //        builds ONE first-party service exactly as the census does (same
 //        argv, BUILD_SHA included) to warm the Docker cache, one service per
-//        agent tool call, before `verify --only census` (brief Q6). Prints the
+//        4-minute time budget, before `verify --only census` (brief Q6). Prints the
 //        build time; the census tag is removed afterwards, the cache stays.
 // ---------------------------------------------------------------------------
 

@@ -24,6 +24,7 @@ import {
   runAll,
   renderProject,
   PROJECTS,
+  EVICT_IMPLEMENTERS,
 } from './check-pooled-stack.mjs'
 
 const STACK = 'teststack'
@@ -55,14 +56,14 @@ function appRender(colour) {
   const services = {}
   for (const [name, row] of Object.entries(PLACEMENT.app)) {
     const svc = {
-      image: `ghcr.io/hello-n00del/gremion-${name === 'tenant-create' ? 'migrate' : name.replace('gremion-', '')}:dist-v0.0.0`,
+      image: `ghcr.io/hello-n00del/gremion-${name === 'tenant-create' ? 'migrate' : name === 'kernel-api-migrate' ? 'kernel-api' : name.replace('gremion-', '')}:dist-v0.0.0`,
       deploy: lim(),
       labels: { 'traefik.enable': 'false' },
       environment: { COLOUR: colour },
       networks: Object.fromEntries(row.networks.map((n) => [n, ['edge', 'state'].includes(n) ? { aliases: [`${name}-${colour}`] } : null])),
     }
-    if (name === 'gremion-ui' || name === 'gremion-public' || name === 'control-panel') svc.labels['gremion.evict'] = 'true'
-    if (name === 'migrate' || name === 'tenant-create') {
+    if (name === 'control-panel' || name === 'gremion-ui') svc.labels['gremion.evict'] = 'true'
+    if (name === 'migrate' || name === 'tenant-create' || name === 'kernel-api-migrate') {
       svc.profiles = [name]
       svc.restart = 'no'
     }
@@ -200,8 +201,14 @@ for (const colour of ['blue', 'green']) {
 
   test(`app shape (${colour}): no evict label on a long-running service fails`, () => {
     const r = appRender(colour)
-    delete r.services['gremion-ui'].labels['gremion.evict']
-    assert.match(appShapeViolations(r, colour, STACK).join('\n'), /gremion-ui: long-running service without gremion\.evict=true/)
+    delete r.services['control-panel'].labels['gremion.evict']
+    assert.match(appShapeViolations(r, colour, STACK).join('\n'), /control-panel: long-running service without gremion\.evict=true/)
+  })
+
+  test(`app shape (${colour}): evict label on a service with no evict route fails`, () => {
+    const r = appRender(colour)
+    r.services['kernel-api'].labels['gremion.evict'] = 'true'
+    assert.match(appShapeViolations(r, colour, STACK).join('\n'), /kernel-api: carries gremion\.evict=true but is not a known evict implementer/)
   })
 
   test(`app shape (${colour}): a non-external volume fails, top-level and on the service`, () => {
@@ -360,7 +367,7 @@ test('real renders: every project renders, with every profile on, and every prof
   for (const id of ['board', 'calendar', 'content', 'finance', 'newsletter', 'vault']) assert.ok(names.includes(`${id}-postgres`), `${id}-postgres is not in the all-profile render`)
   for (const s of ['traefik', 'docker-socket-proxy', 'pgbouncer', 'fallback', 'mailpit']) assert.ok(names.includes(s), `${s} is not in the all-profile render`)
   const blue = renderProject(PROJECTS[1])
-  for (const s of ['gremion-ui', 'gremion-public', 'migrate', 'tenant-create']) assert.ok(blue.services?.[s], `${s} is not in the all-profile app-blue render`)
+  for (const s of ['gremion-ui', 'gremion-public', 'migrate', 'tenant-create', 'kernel-api', 'kernel-api-migrate']) assert.ok(blue.services?.[s], `${s} is not in the all-profile app-blue render`)
 })
 
 test('real renders: the whole guard is clean over the repository, and it rendered services (not zero)', () => {
@@ -372,7 +379,7 @@ test('real renders: the whole guard is clean over the repository, and it rendere
 test('real renders: the app project without its profiles lists no one-shot (up creates no migrate container)', () => {
   const blue = renderProject(PROJECTS[1], { env: { COMPOSE_PROFILES: 'production' } })
   // TASK-043 Q12: the control panel is long-running like the two apps.
-  assert.deepEqual(Object.keys(blue.services ?? {}).sort(), ['control-panel', 'gremion-public', 'gremion-ui'])
+  assert.deepEqual(Object.keys(blue.services ?? {}).sort(), ['control-panel', 'gremion-public', 'gremion-ui', 'kernel-api'])
 })
 
 // TASK-043 TDD 17 (Q12): the ops shell of each colour publishes no port, has no
@@ -445,10 +452,97 @@ test('real renders: tenant-create carries GREMION_RELEASE_REF = the colour\'s IM
   }
 })
 
+// TASK-077 G7: the kernel API (tenancy + module registry). Internal only: app +
+// state networks, no edge, no published port, no Traefik router; the migrate
+// job shares its image and is a profile-gated one-shot that talks to postgres
+// DIRECT (never the pooler).
+const COLOURS = [
+  { project: PROJECTS[1], colour: 'blue' },
+  { project: PROJECTS[2], colour: 'green' },
+]
+test('real renders: kernel-api is internal (app + state, no port, no router), hardened, NOT evictable, aliased per colour on state', () => {
+  const byName = (a, b) => a.localeCompare(b)
+  for (const { project, colour } of COLOURS) {
+    const render = renderProject(project)
+    const svc = render.services?.['kernel-api']
+    assert.ok(svc, `kernel-api is not in the ${colour} render`)
+    assert.deepEqual(svc.ports ?? [], [], `${colour} kernel-api publishes a port`)
+    assert.equal(String(svc.labels?.['traefik.enable']), 'false')
+    assert.equal(svc.labels?.['gremion.evict'], undefined, `${colour}: kernel-api serves no /api/internal/evict (TASK-035's route); the label would make every switch abort on a non-204`)
+    assert.deepEqual(Object.keys(svc.networks ?? {}).map((k) => render.networks?.[k]?.name ?? k).sort(byName), [`guardstack-app-${colour}_app`, 'guardstack_state'].sort(byName))
+    const state = Object.entries(svc.networks).find(([k]) => (render.networks?.[k]?.name ?? k) === 'guardstack_state')[1]
+    assert.ok((state?.aliases ?? []).includes(`kernel-api-${colour}`), `${colour}: no kernel-api-${colour} alias on state`)
+    assert.equal(svc.read_only, true)
+    assert.deepEqual(svc.cap_drop, ['ALL'])
+    assert.ok((svc.security_opt ?? []).includes('no-new-privileges:true'), `${colour}: no-new-privileges`)
+    assert.equal(svc.environment?.COLOUR, colour)
+    assert.match(String(svc.image), /^ghcr\.io\/hello-n00del\/gremion-kernel-api:/)
+    assert.equal(svc.profiles, undefined, `${colour}: kernel-api is long-running, not profile-gated`)
+    assert.ok((svc.volumes ?? []).some((v) => v.target === '/run/secrets/tenants' && v.read_only === true), `${colour}: tenant secrets not mounted read-only`)
+    assert.ok((svc.volumes ?? []).every((v) => v.type !== 'volume' || render.volumes?.[v.source]?.external), `${colour}: a non-external volume`)
+    assert.match(String(svc.environment?.KERNEL_API_CONTROL_DB_URL), /@postgres-guardstack:5432\//, `${colour}: control URL`)
+  }
+})
+
+test('real renders: kernel-api-migrate is a profile-gated one-shot on the kernel-api image, DIRECT postgres, with a 0700 dump dir and the release ref; it is not evictable', () => {
+  for (const { project, colour } of COLOURS) {
+    const render = renderProject(project)
+    const m = render.services?.['kernel-api-migrate']
+    const api = render.services?.['kernel-api']
+    assert.ok(m && api, `kernel-api-migrate / kernel-api missing from the ${colour} render`)
+    assert.deepEqual(m.profiles, ['kernel-api-migrate'])
+    assert.equal(m.restart, 'no')
+    assert.equal(m.image, api.image, `${colour}: migrate and serve share one image`)
+    assert.equal(m.labels?.['gremion.evict'], undefined)
+    assert.equal(String(m.labels?.['traefik.enable']), 'false')
+    assert.deepEqual(m.ports ?? [], [])
+    const tag = String(m.image).split(':').at(-1)
+    assert.equal(m.environment?.GREMION_RELEASE_REF, tag, `${colour}: GREMION_RELEASE_REF`)
+    assert.match(String(m.environment?.GREMION_KERNEL_PG_DIRECT_URL), /^postgresql?:\/\/postgres-guardstack:5432\//, `${colour}: not DIRECT postgres, or carries userinfo`)
+    assert.equal(new URL(String(m.environment?.GREMION_KERNEL_PG_DIRECT_URL)).username, '', `${colour}: the direct url must be credential-less`)
+    assert.equal(Object.keys(m.environment ?? {}).filter((k) => /^POSTGRES_PASSWORD$/.test(k)).length, 0, `${colour}: migrate must not hold the superuser password`)
+    assert.doesNotMatch(String(m.environment?.GREMION_KERNEL_PG_DIRECT_URL), /pgbouncer|6432/)
+    const dump = m.environment?.GREMION_MIGRATION_DUMP_DIR
+    assert.ok(dump && dump.startsWith('/'), `${colour}: GREMION_MIGRATION_DUMP_DIR`)
+    // The dump dir is DURABLE host disk bind-mounted at the SAME path the host tooling uses
+    // (state.env GREMION_MIGRATION_DUMP_DIR): never a tmpfs (lost on --rm, charged to the 512M limit).
+    assert.equal(dump, '/opt/gremion/migration-dumps', `${colour}: the dump path is the host's`)
+    const mount = (m.volumes ?? []).find((v) => v.target === dump)
+    assert.ok(mount, `${colour}: dump dir has no backing mount`)
+    assert.equal(mount.type, 'bind', `${colour}: dump dir must be a host bind, not ${mount.type}`)
+    assert.equal(mount.source, dump, `${colour}: host and container path must be the same`)
+    assert.ok(!mount.read_only, `${colour}: the dump dir must be writable`)
+    assert.equal(mount.bind?.create_host_path, false, `${colour}: a missing host dir must fail, not be created root-owned`)
+    const tmpTargets = (m.tmpfs ?? []).map((x) => String(x).split(':')[0]).concat((m.volumes ?? []).filter((v) => v.type === 'tmpfs').map((v) => v.target))
+    assert.ok(!tmpTargets.includes(dump), `${colour}: dump dir is still a tmpfs`)
+    assert.equal(m.read_only, true)
+    assert.deepEqual(m.cap_drop, ['ALL'])
+  }
+})
+
 test('real renders: the two colours are one document modulo the colour token and the app subnet', () => {
   const norm = (r, c) =>
     JSON.stringify(r)
       .replaceAll(c, '@C@')
       .replace(/"(subnet|app-v[46]-subnet)":"[^"]+"/g, '"$1":"@S@"')
   assert.equal(norm(renderProject(PROJECTS[1]), 'blue'), norm(renderProject(PROJECTS[2]), 'green'))
+})
+
+test('real renders: every service carrying gremion.evict=true is a known evict implementer whose source exists', async () => {
+  const { existsSync } = await import('node:fs')
+  for (const { project, colour } of COLOURS) {
+    const render = renderProject(project)
+    for (const [name, svc] of Object.entries(render.services ?? {})) {
+      if (String(svc.labels?.['gremion.evict']) !== 'true') continue
+      assert.ok(name in EVICT_IMPLEMENTERS, `${colour}/${name} carries gremion.evict=true but no source declares its evict route`)
+    }
+  }
+  const { readFileSync } = await import('node:fs')
+  for (const [name, file] of Object.entries(EVICT_IMPLEMENTERS)) {
+    assert.ok(existsSync(new URL(`../${file}`, import.meta.url)), `${name}: evidence file ${file} is missing`)
+    // The evidence must be the HTTP route itself, not a neighbour (a pg_notify listener or a Dockerfile
+    // is not a POST /api/internal/evict that answers gremion-switch's 204).
+    assert.match(file, /\/routes\/api\/internal\/evict\/\+server\.ts$/, `${name}: evidence ${file} is not the /api/internal/evict route file`)
+    assert.match(readFileSync(new URL(`../${file}`, import.meta.url), 'utf8'), /export (const|async function|function) POST[: =]/, `${name}: ${file} exports no POST handler`)
+  }
 })

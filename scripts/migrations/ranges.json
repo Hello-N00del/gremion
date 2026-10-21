@@ -167,10 +167,14 @@
         "services/kernel-api/migrations/bodies",
         "services/kernel-api/migrations/authz",
         "services/kernel-api/migrations/roles",
-        "services/kernel-api/migrations/erasure"
+        "services/kernel-api/migrations/erasure",
+        "services/kernel-api/migrations/core"
+      ],
+      "manifestDirs": [
+        "services/kernel-api/migrations/core"
       ],
       "padWidth": 4,
-      "highWater": 0,
+      "highWater": 1,
       "legacyFloor": 0,
       "legacy": []
     },
@@ -206,7 +210,7 @@
         "packages/tenant-store/src/lifecycle/platform-migrations"
       ],
       "padWidth": 4,
-      "highWater": 5,
+      "highWater": 9,
       "legacyFloor": 3,
       "legacy": [
         "0001_plt_setup.sql",
@@ -216,6 +220,18 @@
     }
   ],
   "nonMigration": [
+    {
+      "glob": "packages/events/sql/plumbing.sql",
+      "reason": "TASK-079 plumbing TEMPLATE ({{ctx}} placeholders): rendered by plumbingSql(ctx) and copied byte-for-byte into a service's first migration, never applied itself"
+    },
+    {
+      "glob": "packages/events/test/fixtures/**",
+      "reason": "TASK-079 test fixture: the verbatim schema the plumbing tests compare against"
+    },
+    {
+      "glob": "test/host/fixtures/customer-provision/**",
+      "reason": "TASK-044 proof fixture: isolation evidence customer-provision-proof.sh seeds on a scratch tNNN-<sha8> stack only"
+    },
     {
       "glob": "docker/pgbouncer/pgbouncer-auth.sql",
       "reason": "PgBouncer auth_query function, run by the pooler's init, not a chain migration"

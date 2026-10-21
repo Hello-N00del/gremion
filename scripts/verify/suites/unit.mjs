@@ -14,7 +14,7 @@
 // Each part can also be run on its own as `verify --only unit:<part>` (see
 // UNIT_PARTS / verify.mjs's registry) -- gremion-ui's vitest alone takes
 // about three minutes, so the whole suite does not fit a single 4-minute
-// agent tool call. A part run is always a partial record; only a full
+// time budget. A part run is always a partial record; only a full
 // `verify` (every required suite, `unit` whole) satisfies check-record.
 import { existsSync, globSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs'
 import { createRequire } from 'node:module'
@@ -269,6 +269,12 @@ export const UNIT_PARTS = {
   'nats-auth': (root) => [
     vitestSubcheck({ cwd: path.join(root, 'packages', 'nats-auth'), testScript: 'test', root, label: '@gremion/nats-auth vitest (test)' }),
   ],
+  // TASK-079 (G1): the events library's unit suite (plumbing lint, envelope, relay
+  // limits, recovery, runbook drift). Its real-Postgres/NATS half is
+  // `packages/events/scripts/proof.sh` (kernel-events-live).
+  events: (root) => [
+    vitestSubcheck({ cwd: path.join(root, 'packages', 'events'), testScript: 'test', root, label: '@gremion/events vitest (test)' }),
+  ],
   // TASK-043 (G7): the customer lifecycle's step machine, slug, interim gate,
   // phases over recording fakes and the router render. Its database half is
   // `test:integration` (one named scratch PostgreSQL), not a unit part.
@@ -279,6 +285,18 @@ export const UNIT_PARTS = {
   // hook, the config contract, "Neuer Mandant" and the standalone compose render.
   'control-panel': (root) => [
     vitestSubcheck({ cwd: path.join(root, 'apps', 'control-panel'), testScript: 'test', root, label: 'control-panel vitest (test)' }),
+  ],
+  // TASK-077 (G4/G6): the kernel-portable tenancy primitives (host, reserved
+  // hosts, tenant-domain resolver, the bounded rejection log). gremion-ui keeps
+  // its own re-export suites; this is the package's own.
+  'tenancy-core': (root) => [
+    vitestSubcheck({ cwd: path.join(root, 'packages', 'tenancy-core'), testScript: 'test', root, label: '@gremion/tenancy-core vitest (test)' }),
+  ],
+  // TASK-077 (G4): the kernel API service (services/*, not packages/*). Its
+  // database half is `test:integration` (one named scratch PostgreSQL 18), not a
+  // unit part.
+  'kernel-api': (root) => [
+    vitestSubcheck({ cwd: path.join(root, 'services', 'kernel-api'), testScript: 'test', root, label: '@gremion/kernel-api vitest (test)' }),
   ],
   // TASK-205a: one vitest part per modules/<id> package with a test script. Zero such modules is itself a
   // failing part (an empty module set must not read as a pass). Brief §6.12: each run carries
@@ -308,6 +326,14 @@ export const UNIT_PARTS = {
       return vitestSubcheck({ cwd: path.join(root, 'modules', id), testScript: 'test', root, label, extraArgs: excludes })
     })
   },
+  // TASK-205c (TASK-200 residual (a)): the unit tests of the DISABLED modules' app halves (content, vault). The
+  // overlay never copies a disabled module into the build tree, so gremion-ui's own vitest never collects them;
+  // gremion-ui/scripts/module-lane.mjs builds a scratch app, overlays every half into it and runs vitest's unit
+  // project over exactly those files. A lane that collects nothing exits 1 and writes no report (unparseable).
+  // runVitestJson appends --reporter=json --outputFile=<tmp>, which the lane forwards to vitest after its `--`.
+  'module-lane': (root) => [
+    runVitestJson({ label: 'disabled-module lane vitest (gremion-ui/scripts/module-lane.mjs)', cwd: path.join(root, 'gremion-ui'), cmd: process.execPath, args: ['scripts/module-lane.mjs', '--'], root }),
+  ],
   node: (root) => nodeTestParts({ cwd: root, files: scriptTestFiles(root) }),
   bats: (root) => [batsPart({ cwd: root, patterns: ['test/*.bats', 'test/host/*.bats'] })],
 }

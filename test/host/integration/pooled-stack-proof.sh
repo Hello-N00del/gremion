@@ -259,8 +259,8 @@ phase_render_env() {
     fi
     # TASK-043: gremion_platform's owner and the panel's reader, ONE value for
     # both colours (one role each); docker-compose.app.yml requires both.
-    local pw_plat pw_panel
-    pw_plat="$(gen)"; pw_panel="$(gen)"
+    local pw_plat pw_panel pw_kapi
+    pw_plat="$(gen)"; pw_panel="$(gen)"; pw_kapi="$(gen)"
     local profiles=production
     [[ "${POOLED_CUSTOMER:-0}" == 1 ]] && profiles="production,calendar,vault"
     local mod_keys
@@ -331,6 +331,8 @@ AUTH_KEYCLOAK_ISSUER=https://proof.example.org/auth/realms/gremion
 GREMION_ROOT=${SROOT_H}
 PLATFORM_DB_PASSWORD=${pw_plat}
 PANEL_DB_PASSWORD=${pw_panel}
+KERNEL_API_DB_PASSWORD=${pw_kapi}
+GREMION_MIGRATION_DUMP_DIR=${SROOT_H}/migration-dumps
 EOF
     done
     cat > "$ENV_DIR/ops.env" <<EOF

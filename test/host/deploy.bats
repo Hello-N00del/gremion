@@ -802,6 +802,68 @@ exit 0
     assert_recorded docker "--env-file ${GREMION_ROOT}/etc/env/app-green.env run --rm migrate"
 }
 
+# TASK-077 (lane note C14): step 7 also runs the kernel API's per-customer
+# migration one-shot, after the control/data `migrate`, on the same colour.
+@test "step 7 runs kernel-api-migrate against the NEW colour's env file, after migrate (TASK-077)" {
+    stub_all
+    printf 'blue
+' > "${GREMION_ROOT}/runtime/active-colour"
+    run bash -c "printf 'TOKEN t
+' | '$DEPLOY' dist-v1.2.3"
+    [ "$status" -eq 0 ]
+    assert_recorded docker "--env-file ${GREMION_ROOT}/etc/env/app-green.env run --rm kernel-api-migrate"
+    local m k
+    m="$(grep -n 'run --rm migrate' "$SHIM_LOG" | head -1 | cut -d: -f1)"
+    k="$(grep -n 'run --rm kernel-api-migrate' "$SHIM_LOG" | head -1 | cut -d: -f1)"
+    [ -n "$m" ] && [ -n "$k" ] && [ "$m" -lt "$k" ]
+    [[ "$output" == *"kernel API migrations applied for dist-v1.2.3"* ]]
+}
+
+@test "a failing kernel-api-migrate fails the deploy before the new colour starts (TASK-077)" {
+    stub_git; stub_siblings
+    shim docker '
+args="$*"
+case "$1" in
+  login) cat >/dev/null; exit 0 ;;
+  manifest) printf "{\"config\":{\"size\":1},\"layers\":[{\"size\":1}]}
+"; exit 0 ;;
+  image) exit 0 ;;
+  ps) exit 0 ;;
+  compose) case "$*" in
+      *"config --images"*) "$GREMION_ROOT/.resolve-images"; exit $? ;;
+      *"run --rm kernel-api-migrate"*) echo "MIGRATE-FAILED customer c1" >&2; exit 1 ;;
+    esac; exit 0 ;;
+esac
+exit 0
+'
+    run bash -c "printf 'TOKEN t
+' | '$DEPLOY' dist-v1.2.3"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"kernel-api-migrate failed for dist-v1.2.3"* ]]
+    assert_absent 'app-green.env up -d' "$SHIM_LOG" 'the new colour started after a failed kernel API migration'
+}
+
+@test "a surviving kernel-api-migrate container fails the deploy (TASK-077)" {
+    stub_git; stub_siblings
+    shim docker '
+args="$*"
+case "$1" in
+  login) cat >/dev/null; exit 0 ;;
+  manifest) printf "{\"config\":{\"size\":1},\"layers\":[{\"size\":1}]}
+"; exit 0 ;;
+  image) exit 0 ;;
+  ps) case "$args" in *"service=kernel-api-migrate"*) printf "leftover-kernel-api-migrate
+" ;; esac; exit 0 ;;
+  compose) case "$*" in *"config --images"*) "$GREMION_ROOT/.resolve-images"; exit $? ;; esac; exit 0 ;;
+esac
+exit 0
+'
+    run bash -c "printf 'TOKEN t
+' | '$DEPLOY' dist-v1.2.3"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"kernel-api-migrate container survived --rm"* ]]
+}
+
 @test "a surviving migrate container fails the deploy" {
     stub_git; stub_siblings
     shim docker '
@@ -1161,7 +1223,7 @@ exit 0
                gremion-migrate@sha256:3333333333333333333333333333333333333333333333333333333333333333; do
         assert_recorded cosign "verify --key ${GREMION_ROOT}/etc/cosign.pub --insecure-ignore-tlog=true --output json ghcr.io/hello-n00del/${img}"
     done
-    [[ "$output" == *"8 first-party image(s) verified against ${GREMION_ROOT}/etc/cosign.pub"* ]]
+    [[ "$output" == *"9 first-party image(s) verified against ${GREMION_ROOT}/etc/cosign.pub"* ]]
     # Order: the last verify precedes the first manifest read and the first pull.
     local last_verify first_manifest first_pull
     last_verify="$(grep -n '^cosign verify' "$SHIM_LOG" | tail -1 | cut -d: -f1)"
@@ -1240,8 +1302,8 @@ exit 0'
     export FIXTURE_RELEASE="$tree"
     run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
     [ "$status" -eq 0 ]
-    # 8 first-party pins in release/valid (TASK-198 adds gremion-synapse to the state layer)
-    [ "$(grep -c "^cosign verify --key ${GREMION_ROOT}/etc/cosign.pub " "$SHIM_LOG")" -eq 8 ]
+    # 9 first-party pins in release/valid (TASK-198 adds gremion-synapse to the state layer, TASK-077 gremion-kernel-api to the app layer)
+    [ "$(grep -c "^cosign verify --key ${GREMION_ROOT}/etc/cosign.pub " "$SHIM_LOG")" -eq 9 ]
     [ "$(grep -c 'releases/dist-v1.2.3/cosign.pub' "$SHIM_LOG")" -eq 0 ]
 }
 
@@ -1320,8 +1382,8 @@ PINS
         > "${GREMION_ROOT}/etc/third-party-images"
     run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
     [ "$status" -eq 0 ]
-    # 8 first-party pins in release/valid (TASK-198 adds gremion-synapse to the state layer)
-    [ "$(grep -c '^cosign verify' "$SHIM_LOG")" -eq 8 ]
+    # 9 first-party pins in release/valid (TASK-198 adds gremion-synapse to the state layer, TASK-077 gremion-kernel-api to the app layer)
+    [ "$(grep -c '^cosign verify' "$SHIM_LOG")" -eq 9 ]
     [ "$(grep -c 'redis' "$SHIM_LOG" | tr -d ' ')" -eq 0 ] || ! grep -q '^cosign verify.*redis' "$SHIM_LOG"
     [[ "$output" == *"1 third-party image(s) on the host list"* ]]
 }
@@ -1416,7 +1478,7 @@ PINS
         : > "$SHIM_LOG"
         run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
         [ "$status" -eq 0 ] || { echo "host list '$listed': $output"; return 1; }
-        [[ "$output" == *"8 first-party image(s) verified"*"1 third-party image(s) on the host list"* ]]
+        [[ "$output" == *"9 first-party image(s) verified"*"1 third-party image(s) on the host list"* ]]
         [ "$(grep -c '^cosign verify.*redis' "$SHIM_LOG")" -eq 0 ]
     done
 }
@@ -1446,7 +1508,7 @@ PINS
     export FIXTURE_RELEASE="$tagged"
     run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
     [ "$status" -eq 0 ]
-    [[ "$output" == *"8 first-party image(s) verified"* ]]
+    [[ "$output" == *"9 first-party image(s) verified"* ]]
     assert_recorded cosign "verify --key ${GREMION_ROOT}/etc/cosign.pub --insecure-ignore-tlog=true --output json ghcr.io/hello-n00del/gremion-ui:dist-v1.2.3@sha256:"
 }
 
@@ -1515,9 +1577,9 @@ state_tree() {
                gremion-fallback@sha256:9999999999999999999999999999999999999999999999999999999999999999; do
         assert_recorded cosign "verify --key ${GREMION_ROOT}/etc/cosign.pub --insecure-ignore-tlog=true --output json ghcr.io/hello-n00del/${img}"
     done
-    # release/valid pins 8 first-party images: app gremion-ui, gremion-public, gremion-migrate, gremion-control-panel (TASK-043) + state legal, vector, synapse (matrix, TASK-198), fallback
-    [[ "$output" == *"8 first-party image(s) verified against ${GREMION_ROOT}/etc/cosign.pub"* ]]
-    [[ "$output" == *"8 pinned image(s)"* ]]
+    # release/valid pins 9 first-party images: app gremion-ui, gremion-public, gremion-migrate, gremion-control-panel (TASK-043), gremion-kernel-api (TASK-077) + state legal, vector, synapse (matrix, TASK-198), fallback
+    [[ "$output" == *"9 first-party image(s) verified against ${GREMION_ROOT}/etc/cosign.pub"* ]]
+    [[ "$output" == *"9 pinned image(s)"* ]]
 }
 
 @test "a tag-only, real-build, gremion/ or flow-map image in the STATE layer exits 1 naming the file" {
@@ -1579,7 +1641,7 @@ exit 0
     printf 'services: {}\n' > "$T/docker-compose.state-pins.yml"
     run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
     [ "$status" -eq 0 ]
-    [[ "$output" == *"4 pinned image(s)"* ]]
+    [[ "$output" == *"5 pinned image(s)"* ]]
     printf 'services: {}\n' > "$T/docker-compose.pins.yml"
     rm -rf "${GREMION_ROOT}/releases/dist-v1.2.3"
     : > "$SHIM_LOG"

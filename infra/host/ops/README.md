@@ -7,7 +7,9 @@ This directory keeps only what runs on the HOST:
 | File | What it does |
 |---|---|
 | `render-ops.sh` | renders `runtime/ops/targets/*.yml` (probe lists), `runtime/ops/grafana-provisioning/` (datasources, alert rules, policy, and the contact point from `ALERT_EMAIL_TO` / `ALERT_WEBHOOK_URL`) and the credential files under `etc/secrets/ops/`; prints `OPS-RENDER: files=… targets=… email=… webhook=… stalwart-key=… grafana-sso=…` |
-| `metrics-textfile.sh` | the host collector, run by `gremion-metrics.timer` every minute: backup record and timer state, container health, memory and disk, Postgres connections, the broker's `jsz` gauges, filesystem bytes and the TRD-224 storage components, into `runtime/textfile/gremion.prom` |
+| `metrics-textfile.sh` | the host collector, run by `gremion-metrics.timer` every minute: backup record and timer state, container health, memory and disk, Postgres connections, the newest `plt.job_run` per job definition (`gremion_job_last_run`), the broker's `jsz` gauges, the events services' dead-letter gauges (`events metrics` in every container labelled `org.gremion.events-metrics=<ctx>`, TASK-079), filesystem bytes and the TRD-224 storage components, into `runtime/textfile/gremion.prom` |
+| `footprint.sh` | the weekly footprint record (TRD-223), run by `gremion-footprint.timer` Monday 03:00 UTC: `runtime/footprint/<ISO-week>.json`, its own textfile `runtime/textfile/gremion-footprint.prom` and one `plt.job_run` row per week (a retry row when a failed week is rerun successfully); a component it cannot measure is `absent` with its reason (`not_present` or `error`), never 0 (see [the Footprint section](../../../compose/observability/README.md#footprint-trd-223)) |
+| `ops-lib.sh` | sourced by `metrics-textfile.sh` and `footprint.sh`: `ops_key` (the environment, else `ops.env`), `esc`, `to_bytes` and `state_container` (never fatal: a failing `docker ps` is "no container"), one copy |
 | `pin-images.sh` | rewrites every `image:` without a digest to `<ref>@sha256:<digest>` (default: `compose/observability/docker-compose.yml`) |
 
 `render-ops.sh` runs as the deploy user: it refuses to render unless `OPS_UID`
@@ -18,7 +20,11 @@ in the refusal. With `ALERT_EMAIL_TO` set to a real address and
 rather than rendering a contact point that cannot send. While `ALERT_EMAIL_TO`
 is still its operator sentinel, e-mail alerting is simply **off** and the
 renderer says so (`email=off`): not configured is not the same as configured
-wrongly. The same holds for the webhook (`webhook=off`, Q12). It refuses a
+wrongly. The same holds for the webhook (`webhook=off`, Q12). It exits 2 naming
+`ALERT_SMTP_HOST` or `ALERT_SMTP_PORT` when either key is absent or empty, mail
+on or off (compose interpolates both on every render; a `CHANGE_ME_` host stays
+allowed while e-mail is off), and exits 3 for a port outside 1 to 65535 once
+e-mail is on. It refuses a
 `PROM_RETENTION_TIME` above 30 days [D R29-I6] and an empty or sentinel
 `OTLP_INGEST_TOKEN` (the OTLP ingest is never open, Q15).
 

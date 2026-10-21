@@ -44,7 +44,7 @@ vi.mock('$lib/server/config', () => ({
   readConfig: () => ({
     smtp: { configured: false, host: '', port: 0, from_address: '' },
     modules: {},
-    retention: { security_logs_days: 90 },
+    retention: { security_logs_days: 27 },
   }),
 }))
 

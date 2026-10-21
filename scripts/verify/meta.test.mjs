@@ -78,8 +78,8 @@ test('the root package.json still has "verify": "make verify" (Q1 grant)', () =>
 })
 
 // Round 2 MEDIUM: brief S7 promises `verify --only unit:<part>` /
-// `--only integration:<part>` so a single sub-check fits a 4-minute agent
-// tool call (gremion-ui's vitest alone takes ~185-340s). UNIT_PARTS /
+// `--only integration:<part>` so a single sub-check fits a 4-minute
+// time budget (gremion-ui's vitest alone takes ~185-340s). UNIT_PARTS /
 // INTEGRATION_PARTS existing is not enough on its own -- SUITE_REGISTRY is
 // the only thing runAll() ever looks a name up in, so a part with no
 // matching `unit:<part>` / `integration:<part>` registry entry is reachable

@@ -8,7 +8,7 @@ Windows, Debian and `ubuntu-latest`.
 
 **Prerequisite:** run `pnpm install --frozen-lockfile` at the kernel root
 first. `yaml` is a root `dependencies` entry (pinned 2.9.0) in `package.json` /
-`pnpm-lock.yaml`. Those files belong to TASK-017; the orchestrator granted
+`pnpm-lock.yaml`. Those files belong to TASK-017; the maintainer granted
 this one addition to TASK-012 under decision R24-1 (TASK-012-FU,
 2026-09-25). If `yaml` cannot be imported, nothing crashes: `guards.mjs`
 still writes its dated JSON, the runner-policy arm FAILs with a reason that
@@ -116,7 +116,7 @@ node scripts/ci-local/snapshot.mjs --kernel <path> --vertical <path> --out <dir>
 ```
 
 `--out` is **mandatory** (§5 Q3: nothing is committed to the kernel — the
-orchestrator files snapshots in the vault ledger). Refuses a dirty tree in
+maintainer files snapshots in the vault ledger). Refuses a dirty tree in
 either repo, and refuses an invalid `suites.json` (missing category
 coverage). Writes `<out>/<date>-<kernel-sha7>-<vertical-sha7>.json` and the
 companion `.md`, naming both full SHAs, branches, the OS, start/finish times,
@@ -132,7 +132,7 @@ disappear.
 - `--stack-env <file>` is a marker file only — this script never starts or
   stops a stack. Without it, every `requiresStack: true` suite FAILs "no
   stack" rather than being skipped.
-- The full run across every suite of both repos is the orchestrator's
+- The full run across every suite of both repos is the maintainer's
   whole-tree gate, run once per lane — not something this script does on
   every invocation.
 

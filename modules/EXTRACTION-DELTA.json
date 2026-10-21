@@ -127,9 +127,9 @@
     },
     {
       "path": "modules/board/test/lifecycle.integration.test.ts",
-      "reason": "added by R29-BOARD-STORE-K A8: enableModule / disableModule round trip, role proof, no-sleep refusal",
+      "reason": "added by R29-BOARD-STORE-K A8: enableModule / disableModule round trip, role proof, no-sleep refusal; names its release and phase (TASK-075, 4498f081)",
       "owner": "TASK-152",
-      "blob": "0b479373af1a18afea75d4a8b99d115102ed6a2c"
+      "blob": "69081d3177beeb265404235c9dba569a959d96d6"
     },
     {
       "path": "modules/board/test/no-phantom-stura-db.test.ts",
@@ -169,9 +169,9 @@
     },
     {
       "path": "modules/board/test/support/scratch-pg.ts",
-      "reason": "added by R29-BOARD-STORE-K: the suites' one direct scratch-server connection file (allow-listed in tenant-db-access.allow.json)",
+      "reason": "added by R29-BOARD-STORE-K: the suites' one direct scratch-server connection file (allow-listed in tenant-db-access.allow.json); runMigrations names its release and phase (TASK-075, 4498f081)",
       "owner": "TASK-152",
-      "blob": "cf5e4c2214b5e567d1cc036b3021f139222ef755"
+      "blob": "744b5da1c6796c38113d5cfd9a620e3dc0c79f85"
     },
     {
       "path": "modules/board/test/support/tenants.ts",
@@ -211,9 +211,9 @@
     },
     {
       "path": "modules/content/app/lib/server/content/caption.ts",
-      "reason": "toolchain guard (TASK-017 Q2: @ts-expect-error only in *.test.ts): the untyped-jsdom suppression replaced by the ambient declaration in jsdom-shim.d.ts; the file already casts the instance to its own JsdomInstance type",
+      "reason": "toolchain guard (TASK-017 Q2: @ts-expect-error only in *.test.ts): the untyped-jsdom suppression replaced by the ambient declaration in jsdom-shim.d.ts; the file already casts the instance to its own JsdomInstance type; comment wording only: the caption rule note names a language model neutrally",
       "owner": "TASK-200",
-      "blob": "5cd14c9d2f865e0169842b029de6bf9c6e1b1c0c"
+      "blob": "b3d67f9714b3c25c2390439b67aa571ed6b35a9e"
     },
     {
       "path": "modules/content/app/lib/server/content/channels/instagram-renderer.ts",
@@ -226,6 +226,12 @@
       "reason": "added: ambient `jsdom` declaration replacing three @ts-expect-error lines (toolchain guard, TASK-017 Q2)",
       "owner": "TASK-200",
       "blob": "5c37bc2a416e001ada04da05a0ad868726e02de7"
+    },
+    {
+      "path": "modules/content/app/lib/server/content/publish-errors.ts",
+      "reason": "kernel-ahead of f2: StuRaOS#534 follow-up (BFF-409-MISMATCH): TenantIdentityMismatchError and its leaf-body check; the publish client and route answer a leaf 409 tenant_identity_mismatch with its own operator error (502, German text) before the 409 channel-not-publishable mapping",
+      "owner": "TASK-205",
+      "blob": "3fd985fbdde2ee70daf9626cb345ca9777d76cfa"
     },
     {
       "path": "modules/content/app/lib/server/content/register.server.ts",
@@ -252,6 +258,18 @@
       "blob": "7573db1aa2d4f6adc5c5a5572554b55f1483b745"
     },
     {
+      "path": "modules/content/app/routes/api/content/posts/[id]/publish/[channel]/+server.ts",
+      "reason": "kernel-ahead of f2: StuRaOS#534 follow-up (BFF-409-MISMATCH): the publish client and route answer a leaf 409 tenant_identity_mismatch with its own operator error (502, German text) before the 409 channel-not-publishable mapping",
+      "owner": "TASK-205",
+      "blob": "800ed66791a612eb957092fa654390917e9b5c23"
+    },
+    {
+      "path": "modules/content/app/routes/api/content/posts/[id]/publish/[channel]/publish-channel.test.ts",
+      "reason": "kernel-ahead of f2: StuRaOS#534 follow-up (BFF-409-MISMATCH): the publish client and route answer a leaf 409 tenant_identity_mismatch with its own operator error (502, German text) before the 409 channel-not-publishable mapping; the route test pins the 502 mapping",
+      "owner": "TASK-205",
+      "blob": "45431d49da9cc568c2bfb81f60954e2af91c339a"
+    },
+    {
       "path": "modules/content/app/scripts/news-posts-public-grant-proof.sh",
       "reason": "added: plain-docker-run postgres:18-alpine proof of the Q9 grant (RED with --through 1200_content_news_posts.sql, GREEN on the chain); not a StuRa file",
       "owner": "TASK-200",
@@ -265,9 +283,9 @@
     },
     {
       "path": "modules/content/test/guard.test.ts",
-      "reason": "kernel hygiene h2/(i): retired host -> example.org, lowercase product token -> gremion",
+      "reason": "kernel hygiene h2/(i): retired host -> example.org, lowercase product token -> gremion; StuRaOS#534 hardening: hardening tests; slug-guard tests",
       "owner": "TASK-200",
-      "blob": "ba6a7948e9415bab9db865cebd7304d4265a4651"
+      "blob": "171e287356d6d196e8dabdfad8bc05de9fcad4e1"
     },
     {
       "path": "modules/content/test/kernel-client.test.ts",
@@ -301,9 +319,9 @@
     },
     {
       "path": "modules/finance/test/api.integration.test.ts",
-      "reason": "postgres major pin (lint-postgres-major): the pre-pin major-16 alpine tag -> the pinned major-18 alpine tag, in a test-DB guard's guidance string",
+      "reason": "postgres major pin (lint-postgres-major): the pre-pin major-16 alpine tag -> the pinned major-18 alpine tag, in a test-DB guard's guidance string; StuRaOS#534 hardening: fixture tenant ids made canonical for the guard",
       "owner": "TASK-200",
-      "blob": "7fa5f4331d98a676785f7a19e728c38c36155286"
+      "blob": "f6f29360c035a395617c9d0cdebbdbfac0745828"
     },
     {
       "path": "modules/finance/test/org-unit-mirror.integration.test.ts",
@@ -469,9 +487,9 @@
     },
     {
       "path": "modules/publishing/test/guard.test.ts",
-      "reason": "kernel hygiene h2/(i): retired host -> example.org, lowercase product token -> gremion",
+      "reason": "kernel hygiene h2/(i): retired host -> example.org, lowercase product token -> gremion; StuRaOS#534 hardening: hardening tests; slug-guard tests",
       "owner": "TASK-200",
-      "blob": "43536182a2bb433675becbf037c1f53e9d6e5f8f"
+      "blob": "3cf472ab50234cec57ca3b408ade317347a9ac8f"
     },
     {
       "path": "modules/publishing/test/kernel-client.test.ts",
@@ -709,13 +727,13 @@
     },
     {
       "path": "modules/calendar/app/routes/api/calendar/automations/minutes/confirm/+server.ts",
-      "reason": "post-f2 StuRaOS b78c0b0c: fix(calendar): the minutes-confirm session path requires a CouncilAdmin (F1-FIX-03-S r2, house review HIGH)",
+      "reason": "post-f2 StuRaOS b78c0b0c: fix(calendar): the minutes-confirm session path requires a CouncilAdmin (F1-FIX-03-S r2, code review HIGH)",
       "owner": "TASK-205",
       "blob": "9f4196ecc3b97e272715e4e3027564aa360ca172"
     },
     {
       "path": "modules/calendar/app/routes/api/calendar/automations/minutes/confirm/confirm.test.ts",
-      "reason": "post-f2 StuRaOS b78c0b0c: fix(calendar): the minutes-confirm session path requires a CouncilAdmin (F1-FIX-03-S r2, house review HIGH)",
+      "reason": "post-f2 StuRaOS b78c0b0c: fix(calendar): the minutes-confirm session path requires a CouncilAdmin (F1-FIX-03-S r2, code review HIGH)",
       "owner": "TASK-205",
       "blob": "3b83e1c299e8602b5158dca372620a1dfd8802b0"
     },
@@ -816,10 +834,16 @@
       "blob": "573fdb193b167eb54bf69b77da9699cac8381069"
     },
     {
-      "path": "modules/content/src/http/routes.ts",
-      "reason": "kernel-ahead of f2: 6151e5ca fix(content): the HTTP claim route returns the claim token and the failed route fences on it (R29-LO",
+      "path": "modules/calendar/app/lib/server/calendar/calendar-automations.ts",
+      "reason": "comment wording only: the cited design-note path follows the docs/design-specs directory name; no code change",
       "owner": "TASK-205",
-      "blob": "027112e23e15d18de175c4693f202e1660e545ff"
+      "blob": "ca3ec16b6cd23d62cbd942fa8c48ce4c6b473aed"
+    },
+    {
+      "path": "modules/content/src/http/routes.ts",
+      "reason": "kernel-ahead of f2: 6151e5ca fix(content): the HTTP claim route returns the claim token and the failed route fences on it (R29-LO; StuRaOS#534 hardening: the typed tenant id and slug refusals answer 400 (invalid_tenant_id, invalid_tenant_slug)",
+      "owner": "TASK-205",
+      "blob": "53953d8ed9227f460827e0b030c1b8d1888a2b0c"
     },
     {
       "path": "modules/files/src/nextcloud/webdav-client.ts",
@@ -895,15 +919,15 @@
     },
     {
       "path": "modules/calendar/src/http/routes.ts",
-      "reason": "kernel-ahead of f2: d2cfe36c fix(calendar): validate RRULE BYDAY and fold ICS lines at 75 octets (F1-FIX-08-K K4#21)",
+      "reason": "kernel-ahead of f2: d2cfe36c fix(calendar): validate RRULE BYDAY and fold ICS lines at 75 octets (F1-FIX-08-K K4#21); StuRaOS#534 hardening: the typed tenant id and slug refusals answer 400 (invalid_tenant_id, invalid_tenant_slug)",
       "owner": "TASK-205",
-      "blob": "7ec200651541742b2fa3042160b284601a2d602f"
+      "blob": "cce8fefcc78c2727cd2195f2f3622d466f379242"
     },
     {
       "path": "modules/calendar/src/index.ts",
-      "reason": "kernel-ahead of f2: e291d8d1 fix(calendar): resolve the CalDAV target per tenant and refuse to drain without one (F1-FIX-08-K H06",
+      "reason": "kernel-ahead of f2: e291d8d1 fix(calendar): resolve the CalDAV target per tenant and refuse to drain without one (F1-FIX-08-K H06 ; RELAY-ISOLATION: the relay tick isolates each tenant (a store that refuses, e.g. TenantIdentityMismatchError, is logged by tenant id and the tick moves on to the next tenant); the same change in the content, calendar and newsletter leaves",
       "owner": "TASK-205",
-      "blob": "1d8d8037df301b0755edb6b8b9e7222145ec688d"
+      "blob": "9ae4c3cd80ce5a1e6d67242a84965075eddda785"
     },
     {
       "path": "modules/calendar/src/store/events.ts",
@@ -931,9 +955,9 @@
     },
     {
       "path": "modules/content/src/http/guard.ts",
-      "reason": "kernel-ahead of f2: 3f972290 fix(content): /healthz/tenants needs the internal secret and answers booleans only (F1-FIX-07 K5#12,",
+      "reason": "kernel-ahead of f2: 3f972290 fix(content): /healthz/tenants needs the internal secret and answers booleans only (F1-FIX-07 K5#12,; StuRaOS#534 hardening: x-tenant-id must be a canonical lowercase UUID, refused 400 before any store access; x-tenant-slug guard uses the store canonical slug rule (no leading or trailing hyphen)",
       "owner": "TASK-205",
-      "blob": "e3a0b763bc549f342faa1139b38942a31ad6ccaf"
+      "blob": "86867e451f958e80b77f072533d20400585315f6"
     },
     {
       "path": "modules/content/src/http/server.ts",
@@ -943,9 +967,9 @@
     },
     {
       "path": "modules/content/src/index.ts",
-      "reason": "kernel-ahead of f2: 03903452 fix(content): no localhost unsubscribe links; an unusable link base fails the email publish closed (",
+      "reason": "kernel-ahead of f2: 03903452 fix(content): no localhost unsubscribe links; an unusable link base fails the email publish closed ( ; RELAY-ISOLATION: the relay tick isolates each tenant (a store that refuses, e.g. TenantIdentityMismatchError, is logged by tenant id and the tick moves on to the next tenant); the same change in the content, calendar and newsletter leaves",
       "owner": "TASK-205",
-      "blob": "7e309a572d8f90d429de6a08a12c6639f46119d8"
+      "blob": "13d232ae19b77578f7c79691a9b219c320483d4d"
     },
     {
       "path": "modules/content/src/publish-channel.ts",
@@ -979,9 +1003,9 @@
     },
     {
       "path": "modules/content/test/api.integration.test.ts",
-      "reason": "kernel-ahead of f2: 6151e5ca fix(content): the HTTP claim route returns the claim token and the failed route fences on it (R29-LO",
+      "reason": "kernel-ahead of f2: 6151e5ca fix(content): the HTTP claim route returns the claim token and the failed route fences on it (R29-LO; StuRaOS#534 hardening: fixture tenant ids made canonical for the guard",
       "owner": "TASK-205",
-      "blob": "1c7f985ac692876edfbf5be0c217309ad6d0006a"
+      "blob": "0f2cd74d5e04cd4a075d43d6251a49d69f14c6b7"
     },
     {
       "path": "modules/content/test/dispatch.integration.test.ts",
@@ -997,9 +1021,9 @@
     },
     {
       "path": "modules/content/test/scheduler.integration.test.ts",
-      "reason": "kernel-ahead of f2: e13c74f1 fix(content): a failed scheduled publish is logged, and an unusable link base parks the channel (F1-",
+      "reason": "kernel-ahead of f2: e13c74f1 fix(content): a failed scheduled publish is logged, and an unusable link base parks the channel (F1-; StuRaOS#534 hardening: fixture tenant ids made canonical for the guard",
       "owner": "TASK-205",
-      "blob": "71193872faa680fb42d7fbb9b518c491ec850cff"
+      "blob": "ce4811c526de09861a0231296cd693cf5b0740bd"
     },
     {
       "path": "modules/content/test/scheduler.test.ts",
@@ -1033,15 +1057,15 @@
     },
     {
       "path": "modules/finance/src/http/guard.ts",
-      "reason": "kernel-ahead of f2: 70f983b9 fix(finance): /healthz/tenants behind the internal secret, booleans only (F1-FIX-05-K, K4#32)",
+      "reason": "kernel-ahead of f2: 70f983b9 fix(finance): /healthz/tenants behind the internal secret, booleans only (F1-FIX-05-K, K4#32); StuRaOS#534 hardening: x-tenant-id must be a canonical lowercase UUID, refused 400 before any store access; x-tenant-slug guard uses the store canonical slug rule (no leading or trailing hyphen)",
       "owner": "TASK-205",
-      "blob": "ef2ee4495cd4277dc6d444a1fcbfe0a4a5ba340b"
+      "blob": "59111f6530162d581197a6132bbb0392cc0febb2"
     },
     {
       "path": "modules/finance/src/http/server.ts",
-      "reason": "kernel-ahead of f2: 06bbe1a9 fix(finance): malformed or non-object JSON body is a 400, not an empty body (F1-FIX-05-K, K4#4)",
+      "reason": "kernel-ahead of f2: 06bbe1a9 fix(finance): malformed or non-object JSON body is a 400, not an empty body (F1-FIX-05-K, K4#4); StuRaOS#534 hardening: the typed tenant id and slug refusals answer 400 (invalid_tenant_id, invalid_tenant_slug)",
       "owner": "TASK-205",
-      "blob": "b9b953554ea2e02d00ac57ebe71b673a5d840945"
+      "blob": "3bc0ab5941923ea5de4500d500379b804edb9925"
     },
     {
       "path": "modules/finance/src/index.ts",
@@ -1135,15 +1159,15 @@
     },
     {
       "path": "modules/content/app/lib/server/content/backend/service-client.test.ts",
-      "reason": "kernel-ahead of f2: 317a5f53 fix(content): native path - claim token fence (L1), do-not-re-publish wins a mixed pass (L2), unknow",
+      "reason": "kernel-ahead of f2: 317a5f53 fix(content): native path - claim token fence (L1), do-not-re-publish wins a mixed pass (L2), unknow; StuRaOS#534 follow-up (BFF-409-MISMATCH): the publish client and route answer a leaf 409 tenant_identity_mismatch with its own operator error (502, German text) before the 409 channel-not-publishable mapping",
       "owner": "TASK-205",
-      "blob": "2643cd861736badd21e0675ecb496ce103512666"
+      "blob": "f070fd92cfca53d3c0a339a62a7150561842512d"
     },
     {
       "path": "modules/content/app/lib/server/content/backend/service-client.ts",
-      "reason": "kernel-ahead of f2: 317a5f53 fix(content): native path - claim token fence (L1), do-not-re-publish wins a mixed pass (L2), unknow",
+      "reason": "kernel-ahead of f2: 317a5f53 fix(content): native path - claim token fence (L1), do-not-re-publish wins a mixed pass (L2), unknow; StuRaOS#534 follow-up (BFF-409-MISMATCH): the publish client and route answer a leaf 409 tenant_identity_mismatch with its own operator error (502, German text) before the 409 channel-not-publishable mapping",
       "owner": "TASK-205",
-      "blob": "5500eed417de4b706e7a8dd45745c7809fbe94b1"
+      "blob": "cd475aa0a9b773a0664b64c29901020049adb340"
     },
     {
       "path": "modules/content/app/lib/server/content/channels/email-renderer.test.ts",
@@ -1200,8 +1224,14 @@
       "blob": "2d539f2228afd1e915d002bda8c688eb5536a2c4"
     },
     {
+      "path": "modules/content/app/routes/api/content/posts/[id]/carousel/[index]/+server.ts",
+      "reason": "TASK-205c: the kernel names the curated palette registry TENANT_PALETTES (lib/theme/instance-theme.ts, TASK-082); INSTANCE_REGISTRY no longer exists; comment wording: the design hand-off is named neutrally",
+      "owner": "TASK-205c",
+      "blob": "f51ba5e303745ae9719a45fcfb41de9f3be702ce"
+    },
+    {
       "path": "modules/content/app/routes/content/unsubscribe/+page.server.ts",
-      "reason": "kernel-ahead of f2: 8dd9f899 docs(content): drop the RFC 8058 one-click claim from the unsubscribe route (F1-FIX-07 r2, verifier ",
+      "reason": "kernel-ahead of f2: 8dd9f899 docs(content): drop the RFC 8058 one-click claim from the unsubscribe route (F1-FIX-07 r2)",
       "owner": "TASK-205",
       "blob": "6d1d6d1e0622eec0c7dfb5c676ebaa55772a7d22"
     },
@@ -1213,9 +1243,27 @@
     },
     {
       "path": "modules/content/app/routes/content/unsubscribe/unsubscribe.test.ts",
-      "reason": "kernel-ahead of f2: 8dd9f899 docs(content): drop the RFC 8058 one-click claim from the unsubscribe route (F1-FIX-07 r2, verifier ",
+      "reason": "kernel-ahead of f2: 8dd9f899 docs(content): drop the RFC 8058 one-click claim from the unsubscribe route (F1-FIX-07 r2)",
       "owner": "TASK-205",
       "blob": "d176f3df32360f0bacb132c6db35d6160f2f3a07"
+    },
+    {
+      "path": "modules/content/app/routes/content/+page.svelte",
+      "reason": "comment wording only: the design hand-off is named neutrally; no code change",
+      "owner": "TASK-205",
+      "blob": "a0c436407832b62334f5f37ce09d75dd8f14780b"
+    },
+    {
+      "path": "modules/content/app/routes/content/[id]/edit/+page.svelte",
+      "reason": "comment wording only: the design hand-off is named neutrally; no code change",
+      "owner": "TASK-205",
+      "blob": "fccbe69b60a34572c52a3d451f93e2608d28db8d"
+    },
+    {
+      "path": "modules/content/app/routes/content/lists/+page.svelte",
+      "reason": "comment wording only: the design hand-off is named neutrally; no code change",
+      "owner": "TASK-205",
+      "blob": "fd4bf0dcf4329688d83a7b6612c9def44f4bbe81"
     },
     {
       "path": "modules/content/app/routes/news/[id]/edit/+page.server.ts",
@@ -1225,9 +1273,9 @@
     },
     {
       "path": "modules/calendar/src/caldav/target.ts",
-      "reason": "added in the kernel after f2: e291d8d1 fix(calendar): resolve the CalDAV target per tenant and refuse to drain without one (F1-FIX-08-K H06",
+      "reason": "added in the kernel after f2: e291d8d1 fix(calendar): resolve the CalDAV target per tenant and refuse to drain without one (F1-FIX-08-K H06); comment wording only: the compose-wiring note names the maintainer",
       "owner": "TASK-205",
-      "blob": "11468cbb903ac1ead6b8746e17ddc39c5ff6ae18"
+      "blob": "d6bdea8bb38d3b5d20f9008f920a7707950fc91c"
     },
     {
       "path": "modules/calendar/src/caldav/tenant-drain.ts",
@@ -1272,10 +1320,22 @@
       "blob": "336d3b30d0b7c1c6e1ede07da2aee065a257e4c5"
     },
     {
+      "path": "modules/content/app/lib/server/content/carousel/template.tsx",
+      "reason": "comment wording only: the design hand-off is named neutrally; no code change",
+      "owner": "TASK-205",
+      "blob": "e7492851308495114237b4982b217bde0f23bbe8"
+    },
+    {
       "path": "modules/content/app/lib/server/news/draft-file.ts",
       "reason": "added in the kernel after f2: cde71433 fix(content): news drafts are per tenant and never overwritten by an empty stub (F1-FIX-07 H09, S3#9",
       "owner": "TASK-205",
       "blob": "a9f4a3dd7711f73c35a1681f11e4294430098362"
+    },
+    {
+      "path": "modules/content/app/lib/modules/manifests/content.ts",
+      "reason": "comment wording only: the design hand-off is named neutrally; no code change",
+      "owner": "TASK-205",
+      "blob": "6731085e076698caabc9b47b6cfbaf5995d39eb3"
     },
     {
       "path": "modules/content/app/routes/api/content/lists/list-id.test.ts",
@@ -1341,7 +1401,7 @@
       "path": "modules/finance/test/approval-single-open.integration.test.ts",
       "reason": "added in the kernel after f2: 5ea17f78 test(finance): one migration-006 refusal case per arm, no direct driver connection (F1-FIX-05-K r2)",
       "owner": "TASK-205",
-      "blob": "b7d1d7b98f4482006476ba474ace47962266922a"
+      "blob": "0cd12bcfc1e6d3d2515c7b1a0d1445df4bf13274"
     },
     {
       "path": "modules/finance/test/bad-json-body.test.ts",
@@ -1702,6 +1762,390 @@
       "reason": "TASK-205: comment names the kernel migration with its 4-digit padded name (the register lint refuses a pad-3 kernel-data name outside its allow-list)",
       "owner": "TASK-205",
       "blob": "6a4368dd21431984732e3506393c378c34c5c504"
+    },
+    {
+      "path": "modules/publishing/app/lib/server/events/newsletter-audit-consumer.ts",
+      "reason": "post-f2 StuRaOS 871636a: fix(types): svelte-check 12 -> 0 errors (R29-SVCHECK-S); ensureStream takes the mutable string[] NatsBroker.ensureStream takes (the same catch-up calendar-audit-consumer carries)",
+      "owner": "TASK-205c",
+      "blob": "44294143616b00a3c8e61a2c80f993b5459dd0b8"
+    },
+    {
+      "path": "modules/publishing/app/lib/server/newsletter/register.server.ts",
+      "reason": "TASK-205c: NATS_URL read through platformEnv (the default-tenant env family is deleted, TASK-042 T1)",
+      "owner": "TASK-205c",
+      "blob": "2d623f5ee46cf0e6f42efb54b440577c23ed5ae7"
+    },
+    {
+      "path": "modules/publishing/app/routes/api/newsletter/+server.ts",
+      "reason": "TASK-205c: NEXTCLOUD_ADMIN_USER through serviceEnv (the deleted default-tenant env reader)",
+      "owner": "TASK-205c",
+      "blob": "96409b9863fb9c63dc01ce058480ab99053232da"
+    },
+    {
+      "path": "modules/publishing/app/routes/api/newsletter/[id]/preview/+server.ts",
+      "reason": "TASK-205c: NEXTCLOUD_ADMIN_USER through serviceEnv (the deleted default-tenant env reader)",
+      "owner": "TASK-205c",
+      "blob": "24acad6c0bb7f5a8f1bc22b8b8760854f974407b"
+    },
+    {
+      "path": "modules/publishing/app/routes/api/newsletter/[id]/wopi-token/+server.ts",
+      "reason": "TASK-205c: NEXTCLOUD_ADMIN_USER through serviceEnv (the deleted default-tenant env reader)",
+      "owner": "TASK-205c",
+      "blob": "d7e0204ea46f95992a0f683b829de9de22696ef6"
+    },
+    {
+      "path": "modules/publishing/app/routes/api/newsletter/[id]/wopi-token/wopi-token.test.ts",
+      "reason": "TASK-205c: the seam mock follows the route: serviceEnv instead of the deleted default-tenant env reader",
+      "owner": "TASK-205c",
+      "blob": "28fce2b5a26f8679dfcd7820e75b620639eefa96"
+    },
+    {
+      "path": "modules/publishing/app/routes/api/internal/newsletter/render/+server.ts",
+      "reason": "TASK-205c: the shared constantTimeEqual replaces the local timingSafeEqual copy (the kernel Q4 guard in boot-exempt.test.ts requires every /api/internal/ handler to call isInternalTrustRequest or constantTimeEqual)",
+      "owner": "TASK-205c",
+      "blob": "28042f83d3fa9c935422be756f440d4c6a95e7a7"
+    },
+    {
+      "path": "modules/publishing/app/routes/api/internal/newsletter/resolve-group/+server.ts",
+      "reason": "TASK-205c: the shared constantTimeEqual replaces the local timingSafeEqual copy (the kernel Q4 guard in boot-exempt.test.ts requires every /api/internal/ handler to call isInternalTrustRequest or constantTimeEqual)",
+      "owner": "TASK-205c",
+      "blob": "d26ba46b8ace21ae28afc0a79e9d61341112abd0"
+    },
+    {
+      "path": "modules/publishing/app/routes/api/internal/newsletter/send-mail/+server.ts",
+      "reason": "TASK-205c: the shared constantTimeEqual replaces the local timingSafeEqual copy (the kernel Q4 guard in boot-exempt.test.ts requires every /api/internal/ handler to call isInternalTrustRequest or constantTimeEqual)",
+      "owner": "TASK-205c",
+      "blob": "af6c4cbc514fc2c9af8dd56c2cdbee18ad74bcb8"
+    },
+    {
+      "path": "modules/content/app/lib/server/events/content-audit-consumer.ts",
+      "reason": "post-f2 StuRaOS 871636a: fix(types): svelte-check 12 -> 0 errors (R29-SVCHECK-S); ensureStream takes the mutable string[] NatsBroker.ensureStream takes (the same catch-up calendar-audit-consumer carries)",
+      "owner": "TASK-205c",
+      "blob": "7e0bcb4c3d5e8edfba5e0615c5b0950976524f7f"
+    },
+    {
+      "path": "modules/content/app/routes/api/internal/content/portal-publish/+server.ts",
+      "reason": "TASK-205c: the shared constantTimeEqual replaces the local timingSafeEqual copy (the kernel Q4 guard in boot-exempt.test.ts requires every /api/internal/ handler to call isInternalTrustRequest or constantTimeEqual)",
+      "owner": "TASK-205c",
+      "blob": "3ac0f5b20d2c4aca72718a06445377c07689142d"
+    },
+    {
+      "path": "modules/content/app/routes/news/news-page.test.ts",
+      "reason": "TASK-205c: the German dictionary is the kernel's Paraglide catalogue (lib/i18n/messages/de.json); lib/i18n/de.ts no longer exists",
+      "owner": "TASK-205c",
+      "blob": "293ec73f0953059f50e1b116da727f627b8c9b89"
+    },
+    {
+      "path": "modules/publishing/app/lib/server/events/newsletter-audit-consumer.integration.test.ts",
+      "reason": "TASK-205c: no default-tenant registration (deleted, TASK-042); registers tenant-a through createTestTenant, the unknown-tenant cases use a slug no tenant has; neutral tenant-b issuer host (kernel hygiene h2/i1: no retired product host in a shipped surface); same adaptation calendar-audit-consumer.integration.test.ts carries",
+      "owner": "TASK-205c",
+      "blob": "a199df489a27016da5032626a73a695a8400c4c1"
+    },
+    {
+      "path": "modules/content/app/lib/server/events/content-audit-consumer.integration.test.ts",
+      "reason": "TASK-205c: no default-tenant registration (deleted, TASK-042); registers tenant-a through createTestTenant, the unknown-tenant cases use a slug no tenant has; neutral tenant-b issuer host (kernel hygiene h2/i1: no retired product host in a shipped surface); same adaptation calendar-audit-consumer.integration.test.ts carries",
+      "owner": "TASK-205c",
+      "blob": "beb5efb873ddfc18c6e812dc77f684615304a7e3"
+    },
+    {
+      "path": "modules/publishing/app/routes/api/internal/newsletter/newsletter-callbacks.test.ts",
+      "reason": "TASK-205c: neutral sender address in the from_address forwarding case (kernel hygiene h1/h2: no retired wire-root literal or product host in a shipped surface)",
+      "owner": "TASK-205c",
+      "blob": "d2fac80e5343babc2312491a00bea2c0c893b645"
+    },
+    {
+      "path": "modules/publishing/app/lib/server/seed/seed-newsletter.ts",
+      "reason": "TASK-205c: the first demo issue title drops the product name (brand.guard.test.ts: no source file inlines the product literal)",
+      "owner": "TASK-205c",
+      "blob": "aec3f98e21774b44d05e9c91e6e113ef9343e87e"
+    },
+    {
+      "path": "modules/content/src/tenant-store.ts",
+      "reason": "kernel-ahead of f2: fix(security) bind storeFor to the catalogued tenant identity; a changed slug is refused, not followed (audit #534); StuRaOS#534 hardening: typed InvalidTenantIdError and InvalidTenantSlugError, the reserved slug and the maintenance database refused, evictTenantPools for teardown",
+      "owner": "TASK-205",
+      "blob": "344e2d0e733f229bfe397a8e562d042cff44406e"
+    },
+    {
+      "path": "modules/content/test/identity-mismatch-http.test.ts",
+      "reason": "added in the kernel after f2: fix(security) bind storeFor to the catalogued tenant identity (audit #534), regression test; StuRaOS#534 hardening: hardening tests",
+      "owner": "TASK-205",
+      "blob": "dd9785e1a185c2ae5f2076dd3901b3f6bc1b1433"
+    },
+    {
+      "path": "modules/content/test/tenant-store.identity-binding.test.ts",
+      "reason": "added in the kernel after f2: fix(security) bind storeFor to the catalogued tenant identity (audit #534), regression test; StuRaOS#534 hardening: hardening tests",
+      "owner": "TASK-205",
+      "blob": "dc49f83b3dd9363b8ebe7472c2af682cdf41f91f"
+    },
+    {
+      "path": "modules/content/test/tenant-store.identity-binding.integration.test.ts",
+      "reason": "added in the kernel after f2: fix(security) bind storeFor to the catalogued tenant identity (audit #534), regression test; StuRaOS#534 hardening: hardening tests",
+      "owner": "TASK-205",
+      "blob": "bc5f8b99258aa78635ce87c73100475af7b04405"
+    },
+    {
+      "path": "modules/content/src/http/admin-routes.ts",
+      "reason": "kernel-ahead of f2: StuRaOS#534 hardening: teardown evicts the tenant pool before DROP DATABASE, the catalog row is kept (409) while its database exists, the reserved slug control is never dropped, dbPrefix dependency; teardown retry: DROP DATABASE is retried once after a second pool eviction when a request raced the first eviction; x-tenant-slug guard uses the store canonical slug rule (no leading or trailing hyphen)",
+      "owner": "TASK-205",
+      "blob": "1983ce7cca85936a10a1c77c63d8a65691f20d83"
+    },
+    {
+      "path": "modules/content/test/admin-routes.teardown.integration.test.ts",
+      "reason": "kernel-ahead of f2: StuRaOS#534 hardening: hardening tests",
+      "owner": "TASK-205",
+      "blob": "e94d22e0a863a27fc3d6fd789c2a2bd6a67d3c6f"
+    },
+    {
+      "path": "modules/content/test/admin-routes.teardown.test.ts",
+      "reason": "kernel-ahead of f2: StuRaOS#534 hardening: hardening tests; teardown retry tests",
+      "owner": "TASK-205",
+      "blob": "3844bf1e6562c44c8af5ac724c9c8a2449cc0c02"
+    },
+    {
+      "path": "modules/calendar/src/tenant-store.ts",
+      "reason": "kernel-ahead of f2: fix(security) bind storeFor to the catalogued tenant identity; a changed slug is refused, not followed (audit #534); StuRaOS#534 hardening: typed InvalidTenantIdError and InvalidTenantSlugError, the reserved slug and the maintenance database refused, evictTenantPools for teardown",
+      "owner": "TASK-205",
+      "blob": "e737c3a37d7704f5213e7bbcfd8486c0a57e8a17"
+    },
+    {
+      "path": "modules/calendar/test/identity-mismatch-http.test.ts",
+      "reason": "added in the kernel after f2: fix(security) bind storeFor to the catalogued tenant identity (audit #534), regression test; StuRaOS#534 hardening: hardening tests",
+      "owner": "TASK-205",
+      "blob": "d8705e6288bccd57e0ef3e27cd4e9b67740c1ef7"
+    },
+    {
+      "path": "modules/calendar/test/tenant-store.identity-binding.test.ts",
+      "reason": "added in the kernel after f2: fix(security) bind storeFor to the catalogued tenant identity (audit #534), regression test; StuRaOS#534 hardening: hardening tests",
+      "owner": "TASK-205",
+      "blob": "0a77c68bedb74027b755cb7866e5b66f4c56c624"
+    },
+    {
+      "path": "modules/calendar/test/tenant-store.identity-binding.integration.test.ts",
+      "reason": "added in the kernel after f2: fix(security) bind storeFor to the catalogued tenant identity (audit #534), regression test; StuRaOS#534 hardening: hardening tests",
+      "owner": "TASK-205",
+      "blob": "9c0daf051e295199ceb70cf844f79aaa76267328"
+    },
+    {
+      "path": "modules/calendar/src/http/guard.ts",
+      "reason": "kernel-ahead of f2: StuRaOS#534 hardening: x-tenant-id must be a canonical lowercase UUID, refused 400 before any store access; x-tenant-slug guard uses the store canonical slug rule (no leading or trailing hyphen)",
+      "owner": "TASK-205",
+      "blob": "15db8367697bf2201c89fb377fbda5a79a6ca754"
+    },
+    {
+      "path": "modules/calendar/test/api.integration.test.ts",
+      "reason": "kernel-ahead of f2: StuRaOS#534 hardening: fixture tenant ids made canonical for the guard",
+      "owner": "TASK-205",
+      "blob": "5eabb877c8a6cffedb973de010a94a7d2a1c3ce5"
+    },
+    {
+      "path": "modules/calendar/test/guard.test.ts",
+      "reason": "kernel-ahead of f2: StuRaOS#534 hardening: hardening tests; slug-guard tests",
+      "owner": "TASK-205",
+      "blob": "c421831a06868fda6ce0cc0ce76b1c33b45e0fd8"
+    },
+    {
+      "path": "modules/publishing/src/tenant-store.ts",
+      "reason": "kernel-ahead of f2: fix(security) bind storeFor to the catalogued tenant identity; a changed slug is refused, not followed (audit #534); StuRaOS#534 hardening: typed InvalidTenantIdError and InvalidTenantSlugError, the reserved slug and the maintenance database refused, evictTenantPools for teardown",
+      "owner": "TASK-205",
+      "blob": "134b18f75139cb63ba558787fd8fc7e70d2855d3"
+    },
+    {
+      "path": "modules/publishing/src/http/routes.ts",
+      "reason": "kernel-ahead of f2: fix(security) bind storeFor to the catalogued tenant identity; a changed slug is refused, not followed (audit #534); StuRaOS#534 hardening: the typed tenant id and slug refusals answer 400 (invalid_tenant_id, invalid_tenant_slug)",
+      "owner": "TASK-205",
+      "blob": "b42c2813179edcf1739e85a5858aca3406dafd51"
+    },
+    {
+      "path": "modules/publishing/test/identity-mismatch-http.test.ts",
+      "reason": "added in the kernel after f2: fix(security) bind storeFor to the catalogued tenant identity (audit #534), regression test; StuRaOS#534 hardening: hardening tests",
+      "owner": "TASK-205",
+      "blob": "22e0df52b211e4d1ece32322b45bc8d050416ca9"
+    },
+    {
+      "path": "modules/publishing/test/tenant-store.identity-binding.test.ts",
+      "reason": "added in the kernel after f2: fix(security) bind storeFor to the catalogued tenant identity (audit #534), regression test; StuRaOS#534 hardening: hardening tests",
+      "owner": "TASK-205",
+      "blob": "85577ce2cdb4b5d880f8f672b44c51f18bb391bd"
+    },
+    {
+      "path": "modules/publishing/test/tenant-store.identity-binding.integration.test.ts",
+      "reason": "added in the kernel after f2: fix(security) bind storeFor to the catalogued tenant identity (audit #534), regression test; StuRaOS#534 hardening: hardening tests",
+      "owner": "TASK-205",
+      "blob": "1063442413bf11f46b14a437f202c16fef6fe3d4"
+    },
+    {
+      "path": "modules/finance/src/tenant-store.ts",
+      "reason": "kernel-ahead of f2: fix(security) bind storeFor to the catalogued tenant identity; a changed slug is refused, not followed (audit #534); StuRaOS#534 hardening: typed InvalidTenantIdError and InvalidTenantSlugError, the reserved slug and the maintenance database refused, evictTenantPools for teardown",
+      "owner": "TASK-205",
+      "blob": "e461f660420a9648b552959615cfe044c5cb2e91"
+    },
+    {
+      "path": "modules/finance/test/identity-mismatch-http.test.ts",
+      "reason": "added in the kernel after f2: fix(security) bind storeFor to the catalogued tenant identity (audit #534), regression test; StuRaOS#534 hardening: hardening tests",
+      "owner": "TASK-205",
+      "blob": "54b795b34f17a083f403bb6ba423efeb44bdf5e0"
+    },
+    {
+      "path": "modules/finance/test/tenant-store.identity-binding.test.ts",
+      "reason": "added in the kernel after f2: fix(security) bind storeFor to the catalogued tenant identity (audit #534), regression test; StuRaOS#534 hardening: hardening tests",
+      "owner": "TASK-205",
+      "blob": "264929c126832bb488d12394cc0aecda39b11881"
+    },
+    {
+      "path": "modules/finance/test/tenant-store.identity-binding.integration.test.ts",
+      "reason": "added in the kernel after f2: fix(security) bind storeFor to the catalogued tenant identity (audit #534), regression test; StuRaOS#534 hardening: hardening tests",
+      "owner": "TASK-205",
+      "blob": "0b0b4cecef2a6249f77fe5b4994a01e01f6545c8"
+    },
+    {
+      "path": "modules/finance/test/guard.test.ts",
+      "reason": "kernel-ahead of f2: StuRaOS#534 hardening: hardening tests; slug-guard tests",
+      "owner": "TASK-205",
+      "blob": "8e1afd7963a06f43818a5270694c321848d0e92e"
+    },
+    {
+      "path": "modules/publishing/app/routes/api/internal/newsletter/callback-auth.test.ts",
+      "reason": "added by TASK-205c: the three leaf callbacks are public by exact PUBLIC_PATHS entry, so the shared secret is their only gate; table-driven refusal cases (no header, wrong, prefix and extension of the real secret, unset or empty server secret, other header names) and a check that nothing behind the gate is reached",
+      "owner": "TASK-205c",
+      "blob": "d46bad787662704a49593e9c41e7b96dee304d87"
+    },
+    {
+      "path": "modules/publishing/app/routes/api/newsletter/unsubscribe/unsubscribe.test.ts",
+      "reason": "added by TASK-205c: the unsubscribe API is public by exact PUBLIC_PATHS entry, so the single-use token is its only credential; 400 without a token in a JSON body, 404 unknown, 410 expired, no address echoed, rate limit before the body is read and the lookup, POST only (NEWSLETTER-UNSUB-POST: a GET never consumes the token)",
+      "owner": "TASK-205c",
+      "blob": "65878d9532d24993b78b73b0056e3b05df75f655"
+    },
+    {
+      "path": "modules/elections/src/index.ts",
+      "reason": "added in the kernel after f2: TASK-058-A module entry re-exporting the notice",
+      "owner": "TASK-058",
+      "blob": "ad3ee02d22c1e3d93cb3fe9ad8c7cf6fd0ab029f"
+    },
+    {
+      "path": "modules/elections/src/notice/index.ts",
+      "reason": "added in the kernel after f2: TASK-058-A notice barrel",
+      "owner": "TASK-058",
+      "blob": "ab7c15f01cb21d1708fa4f41fe421823e82e68fe"
+    },
+    {
+      "path": "modules/elections/src/notice/notice.ts",
+      "reason": "added in the kernel after f2: TASK-058-A the enable-time notice text (optional, off by default, no statutory election; Du and Sie)",
+      "owner": "TASK-058",
+      "blob": "4a0e51def45a91e8d8c142685298ca0f8e27c014"
+    },
+    {
+      "path": "modules/elections/test/notice.test.ts",
+      "reason": "added in the kernel after f2: TASK-058-A regression test pinning the notice wording",
+      "owner": "TASK-058",
+      "blob": "7cd7036741962fb7c3bb2b8b0faffaf14ca20ec9"
+    },
+    {
+      "path": "modules/elections/tsconfig.json",
+      "reason": "added in the kernel after f2: TASK-058-A typecheck config for the module src and test",
+      "owner": "TASK-058",
+      "blob": "c2a13d33b9e55ba088e5bc02ef82565dfe989374"
+    },
+    {
+      "path": "modules/elections/vitest.config.ts",
+      "reason": "added in the kernel after f2: TASK-058-A test config for the module src and test",
+      "owner": "TASK-058",
+      "blob": "a47aa3e52d93ed3fd65cb6f922fbd69b11f2aa85"
+    },
+    {
+      "path": "modules/publishing/app/routes/api/newsletter/unsubscribe/+server.ts",
+      "reason": "NEWSLETTER-UNSUB-POST: the single-use unsubscribe token is consumed by a POST with a JSON body only, never by a GET (mail-security scanners and prefetchers GET every link); the route exports POST alone so every other method is 405, the IP rate limit still runs before the body is read and the token looked up",
+      "owner": "TASK-205c",
+      "blob": "8aaf391a8167a05a5d976a61d520f0f9b866818c"
+    },
+    {
+      "path": "modules/publishing/app/routes/newsletter/unsubscribe/+page.svelte",
+      "reason": "NEWSLETTER-UNSUB-POST: opening the mailed link renders a confirm button and requests nothing; only the click POSTs the token (JSON body, not the URL) to /api/newsletter/unsubscribe",
+      "owner": "TASK-205c",
+      "blob": "1af5fd4407b408eea1ce674656678a4a9b0b7519"
+    },
+    {
+      "path": "modules/publishing/app/routes/newsletter/unsubscribe/unsubscribe-page.test.ts",
+      "reason": "added by NEWSLETTER-UNSUB-POST: the page makes no request on load, shows the confirm button, POSTs the token in a JSON body on click only (no second POST while in flight), and maps 410/404/429/503/network failure to their own messages",
+      "owner": "TASK-205c",
+      "blob": "a960bc5f100cbef3a1e33d720faa5b2ef155867a"
+    },
+    {
+      "path": "modules/publishing/src/http/guard.ts",
+      "reason": "kernel-ahead of f2: StuRaOS#534 hardening: x-tenant-id must be a canonical lowercase UUID, refused 400 before any store access; x-tenant-slug guard uses the store canonical slug rule (no leading or trailing hyphen)",
+      "owner": "TASK-205",
+      "blob": "21ea66037de13a6e73a450f527f61b3a662f5a39"
+    },
+    {
+      "path": "modules/publishing/test/api.integration.test.ts",
+      "reason": "kernel-ahead of f2: StuRaOS#534 hardening: fixture tenant ids made canonical for the guard",
+      "owner": "TASK-205",
+      "blob": "80dc9e28454fbe218d29e873e7b28482fbde68c2"
+    },
+    {
+      "path": "modules/content/test/tenant-isolation.integration.test.ts",
+      "reason": "TRD-060 isolation guard: two-tenant read/list/update/delete isolation and (id, slug) binding refusal against a real Postgres",
+      "owner": "TASK-205",
+      "blob": "704440b794a66729f77bc2e7b51c66f9dd31bd42"
+    },
+    {
+      "path": "modules/calendar/test/tenant-isolation.integration.test.ts",
+      "reason": "TRD-060 isolation guard: two-tenant read/list/update/delete isolation and (id, slug) binding refusal against a real Postgres",
+      "owner": "TASK-205",
+      "blob": "f077543254793909c619302380ffcabb210514aa"
+    },
+    {
+      "path": "modules/publishing/test/tenant-isolation.integration.test.ts",
+      "reason": "TRD-060 isolation guard: two-tenant read/list/update/delete isolation and (id, slug) binding refusal against a real Postgres",
+      "owner": "TASK-205",
+      "blob": "87f39322ad1d2de09639f5ae2fde81714780c606"
+    },
+    {
+      "path": "modules/finance/test/tenant-isolation.integration.test.ts",
+      "reason": "TRD-060 isolation guard: two-tenant read/list/update/delete isolation and (id, slug) binding refusal against a real Postgres",
+      "owner": "TASK-205",
+      "blob": "7e969da503bc092ac99086c5a9a86313db710245"
+    },
+    {
+      "path": "modules/content/src/relay-tick.ts",
+      "reason": "added by RELAY-ISOLATION: one relay tick with per-tenant isolation; byte-identical in the three leaves",
+      "owner": "TASK-205",
+      "blob": "7acafb81a44270cd147ae95255e6585ec7ee2704"
+    },
+    {
+      "path": "modules/content/test/relay-tick.test.ts",
+      "reason": "added by RELAY-ISOLATION: two tenants, the first one's store throws, the second is still processed; byte-identical in the three leaves",
+      "owner": "TASK-205",
+      "blob": "4c2ecca5983f5e2fc530414c0b58d147789d416f"
+    },
+    {
+      "path": "modules/calendar/src/relay-tick.ts",
+      "reason": "added by RELAY-ISOLATION: one relay tick with per-tenant isolation; byte-identical in the three leaves",
+      "owner": "TASK-205",
+      "blob": "7acafb81a44270cd147ae95255e6585ec7ee2704"
+    },
+    {
+      "path": "modules/calendar/test/relay-tick.test.ts",
+      "reason": "added by RELAY-ISOLATION: two tenants, the first one's store throws, the second is still processed; byte-identical in the three leaves",
+      "owner": "TASK-205",
+      "blob": "4c2ecca5983f5e2fc530414c0b58d147789d416f"
+    },
+    {
+      "path": "modules/publishing/src/relay-tick.ts",
+      "reason": "added by RELAY-ISOLATION: one relay tick with per-tenant isolation; byte-identical in the three leaves",
+      "owner": "TASK-205",
+      "blob": "7acafb81a44270cd147ae95255e6585ec7ee2704"
+    },
+    {
+      "path": "modules/publishing/test/relay-tick.test.ts",
+      "reason": "added by RELAY-ISOLATION: two tenants, the first one's store throws, the second is still processed; byte-identical in the three leaves",
+      "owner": "TASK-205",
+      "blob": "4c2ecca5983f5e2fc530414c0b58d147789d416f"
+    },
+    {
+      "path": "modules/publishing/src/index.ts",
+      "reason": "RELAY-ISOLATION: the relay tick isolates each tenant (a store that refuses, e.g. TenantIdentityMismatchError, is logged by tenant id and the tick moves on to the next tenant); the same change in the content, calendar and newsletter leaves",
+      "owner": "TASK-205",
+      "blob": "a8f1dcfb8ca950afa83abda90890f6372e20a3b8"
     }
   ]
 }

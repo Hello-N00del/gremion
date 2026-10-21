@@ -3,27 +3,45 @@
 //  - enabling anything before `init` fails (RED without init, Q15);
 //  - bootstrapPlatform creates, migrates and loads the catalogue rows (Q20),
 //    and a rerun changes nothing;
-//  - pgLedger / pgAttestations round-trip against 0004;
-//  - pgModules enables calendar through the interim operator gate (Q19) with
-//    the ONE attestation as both references; an id outside --enable, and vault
-//    even when passed (R30 A1), is GATE_REFUSED with no database; a module Q20 left undecided
-//    is MODULE_VERSION_UNKNOWN.
+//  - pgLedger round-trips against 0004; pgGate records a DPIA decision once;
+//  - TASK-044: pgModules enables calendar through the REAL gate (pgGate over
+//    lifecycle/enable-gate) with the imported verify pass and the recorded
+//    decision as its references; vault and publishing (no pass) are refused
+//    by EnableRefused with no database; a module Q20 left undecided is
+//    MODULE_VERSION_UNKNOWN; a moved tip makes the enabled modules unproven.
 import { randomBytes, randomUUID } from 'node:crypto'
-import { resolve } from 'node:path'
+import { readdirSync } from 'node:fs'
+import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { LifecycleModule, ModuleServer } from '@gremion/tenant-store/lifecycle'
 import postgres, { type Sql } from 'postgres'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import {
   bootstrapPlatform,
+  EnableRefused,
   ensurePanelRequester as ensurePanelReader,
   isDuplicateDone,
   loadModuleJsons,
-  operatorAllowGate,
-  pgAttestations,
+  pgGate,
   pgLedger,
   pgModules,
+  recordIsolationResults,
+  type DpiaSpec,
 } from '../../src/index.ts'
+
+const TIP = 'e'.repeat(40)
+const DPIA: DpiaSpec = { requiresDpia: 'no', reasonCodes: ['no_special_category'], documentRef: 'TOM-Anhang 4.1' }
+
+/** A verify-stamped isolation:tenant PASS on `tip` for `modules` (what verify writes, lane note S5). */
+function evidence(modules: string[], tip = TIP) {
+  return {
+    produced_by: 'verify',
+    tree_clean: true,
+    release_tip_sha: tip,
+    verify_record: { suite: 'isolation:tenant', sha: tip, startedAt: '2026-10-05T10:00:00.000Z', finishedAt: '2026-10-05T10:03:00.000Z', collected: 8, passed: 8, failed: 0 },
+    results: modules.map((m) => ({ module: m, test_kind: 'cross_customer', passed: true, run_at: '2026-10-05T10:02:00.000Z', release_tip_sha: tip, evidence_ref: `sha256:${'0'.repeat(64)} isolation/${tip}.json#${m}` })),
+  }
+}
 
 const REPO = resolve(fileURLToPath(new URL('../../../../', import.meta.url)))
 const OWNER = 't043_platform'
@@ -128,7 +146,13 @@ describe('the platform on a fresh server', () => {
       log: (l) => logs.push(l),
     })
     expect(r.platformCreated).toBe(true)
-    expect(r.applied).toEqual(['0001_plt_setup.sql', '0002_plt_module.sql', '0003_plt_module_database.sql', '0004_plt_provisioning_step.sql', '0005_plt_provisioning_request.sql'])
+    // R31 O6: every platform migration file, derived from the directory (a later platform claim adds no line here)
+    const platformFiles = readdirSync(join(REPO, 'packages/tenant-store/src/lifecycle/platform-migrations')).filter((f) => f.endsWith('.sql')).sort()
+    expect(r.applied).toEqual(platformFiles)
+    expect(r.applied).toEqual(expect.arrayContaining(['0001_plt_setup.sql', '0004_plt_provisioning_step.sql', '0005_plt_scheduled_job.sql']))
+    // TASK-044: the ops setup, the isolation results and the DPIA decisions
+    expect(r.applied).toEqual(expect.arrayContaining(['0006_ops_setup.sql', '0007_plt_isolation_test_result.sql', '0008_ops_dpia_decision.sql']))
+    expect(r.applied).toContain('0009_plt_provisioning_request.sql') // TASK-043d-1
     expect(r.catalogue.insertedModules).toEqual(ALL_MODULES)
     expect(r.catalogue.insertedVersions).toEqual(r.catalogue.insertedModules)
     // R29-I24: the five database-less modules load under their provisional profiles; nothing is undecided
@@ -252,7 +276,7 @@ describe('the platform on a fresh server', () => {
     expect(String((err as Error).message)).toMatch(/public\.tenant.*t043_control_bare.*migrate/s)
   })
 
-  it('pgLedger and pgAttestations round-trip on 0004', async () => {
+  it('pgLedger round-trips on 0004; pgGate records a written DPIA decision once and reports it', async () => {
     const p = open('gremion_platform', 2, OWNER, OWNER_PW)
     try {
       const ledger = pgLedger(p)
@@ -268,20 +292,26 @@ describe('the platform on a fresh server', () => {
       expect(isDuplicateDone(dup)).toBe(true)
       expect((await ledger.rows(c)).map((r) => `${r.kind}=${r.status}`)).toEqual(['realm_created=pending', 'realm_created=done'])
 
-      const att = pgAttestations(p)
-      expect(await att.lookup(c, 'calendar')).toBeNull()
-      const id = await att.ensure(c, 'calendar', OPERATOR, ['calendar', 'vault'])
-      expect(await att.ensure(c, 'calendar', OPERATOR, ['calendar', 'vault'])).toBe(id)
-      expect(await att.lookup(c, 'calendar')).toBe(id)
-      expect((await att.list(c)).map((a) => a.moduleKey)).toEqual(['calendar'])
+      const gate = pgGate(p, { releaseTipSha: TIP })
+      expect(await gate.hasDpiaDecision(c, 'calendar')).toBe(false)
+      const first = await gate.recordDpia(c, 'calendar', DPIA, OPERATOR)
+      expect(first.created).toBe(true)
+      expect(await gate.recordDpia(c, 'calendar', DPIA, OPERATOR)).toEqual({ dpiaDecisionId: first.dpiaDecisionId, created: false })
+      expect(await gate.hasDpiaDecision(c, 'calendar')).toBe(true)
+      const rows = await p<{ id: string; by: string; kind: string }[]>`
+        SELECT dpia_decision_id::text AS id, decided_by::text AS by, decided_by_kind AS kind FROM ops.dpia_decision WHERE customer_id = ${c}`
+      expect(rows).toEqual([{ id: first.dpiaDecisionId, by: OPERATOR, kind: 'operator' }])
     } finally {
       await p.end()
     }
   })
 
-  it('TDD 7: calendar enables through the interim gate with the attestation as both references; publishing (not passed) and vault (passed and attested, but denied: R30 A1, PRD-PLAT-012 / PRD-REC-003) are refused with no database; a synthetic undecided module (Q20) is MODULE_VERSION_UNKNOWN', async () => {
+  it('TDD 7 (TASK-044): calendar enables through the REAL gate with the imported pass and the recorded decision as its references; vault and publishing (no pass) are refused by EnableRefused with no database; a synthetic undecided module (Q20) is MODULE_VERSION_UNKNOWN; a moved tip makes the enabled modules unproven', async () => {
     const p = open('gremion_platform', 3, OWNER, OWNER_PW)
     try {
+      const imported = await recordIsolationResults(p, evidence(['calendar', 'votes']))
+      const passOf = (m: string) => imported.inserted.find((r) => r.module === m)!.isolationTestResultId
+      const gate = pgGate(p, { releaseTipSha: TIP })
       const X = uuidv7()
       const ref = { id: X, slug: 'musterstadt', token: 'musterstadt', realm: 'musterstadt', host: 'rat.musterstadt.example' }
       const modules = pgModules({
@@ -297,13 +327,15 @@ describe('the platform on a fresh server', () => {
           log: () => {},
         },
       })
-      const att = pgAttestations(p)
-      const gate = operatorAllowGate(new Set(['calendar', 'vault']), (c, m) => att.lookup(c, m))
       const before = (await admin<{ datname: string }[]>`SELECT datname FROM pg_database`).map((r) => r.datname)
-      for (const m of ['calendar', 'vault']) await att.ensure(X, m, OPERATOR, ['calendar', 'vault'])
-      expect((await modules.enable(ref, 'calendar', gate, OPERATOR)).noop).toBe(false)
-      // R30 A1: vault is denied by name even with --enable and a persisted attestation
-      await expect(modules.enable(ref, 'vault', gate, OPERATOR)).rejects.toMatchObject({ code: 'GATE_REFUSED' })
+      const decided: Record<string, string> = {}
+      for (const m of ['calendar', 'vault', 'publishing', 'votes']) decided[m] = (await gate.recordDpia(X, m, DPIA, OPERATOR)).dpiaDecisionId
+      expect((await modules.enable(ref, 'calendar', gate.enableGate, OPERATOR)).noop).toBe(false)
+      // vault: no isolation case covers it (brief Q4), so the gate refuses it even with a decision
+      // (and the deny list refuses it by name before the gate: operator-gate.test, customer.test)
+      const vault = await modules.enable(ref, 'vault', gate.enableGate, OPERATOR).then(() => null, (e: unknown) => e)
+      expect(vault).toBeInstanceOf(EnableRefused)
+      expect(vault).toMatchObject({ code: 'NO_ISOLATION_RESULT', moduleKey: 'vault', customerId: X, tipSha: TIP })
       const hex = X.replaceAll('-', '')
       const after = (await admin<{ datname: string }[]>`SELECT datname FROM pg_database`).map((r) => r.datname)
       expect(after.filter((d) => !before.includes(d)).sort()).toEqual([`t_${hex}__calendar`])
@@ -311,24 +343,29 @@ describe('the platform on a fresh server', () => {
       const rows = await p<{ module_key: string; iso: string; dpia: string; by_kind: string; by: string }[]>`
         SELECT m.module_key, e.isolation_test_result_id::text AS iso, e.dpia_decision_id::text AS dpia, e.enabled_by_kind AS by_kind, e.enabled_by::text AS by
           FROM plt.module_enablement e JOIN plt.module m USING (module_id) WHERE e.customer_id = ${X} ORDER BY 1`
-      for (const r of rows) {
-        const id = await att.lookup(X, r.module_key)
-        expect(r).toEqual({ module_key: r.module_key, iso: id, dpia: id, by_kind: 'operator', by: OPERATOR })
-      }
-      // a second enable is a no-op (resume re-reads the same attestation)
-      expect((await modules.enable(ref, 'calendar', gate, OPERATOR)).noop).toBe(true)
+      expect(rows).toEqual([{ module_key: 'calendar', iso: passOf('calendar'), dpia: decided.calendar, by_kind: 'operator', by: OPERATOR }])
+      // a second enable is a no-op
+      expect((await modules.enable(ref, 'calendar', gate.enableGate, OPERATOR)).noop).toBe(true)
 
-      await expect(modules.enable(ref, 'publishing', gate, OPERATOR)).rejects.toMatchObject({ code: 'GATE_REFUSED' })
+      await expect(modules.enable(ref, 'publishing', gate.enableGate, OPERATOR)).rejects.toMatchObject({ code: 'NO_ISOLATION_RESULT' })
       expect((await admin`SELECT 1 FROM pg_database WHERE datname = ${`t_${hex}__publishing`}`).length).toBe(0)
-      await expect(modules.enable(ref, UNDECIDED_ID, operatorAllowGate(new Set([UNDECIDED_ID]), async () => randomUUID()), OPERATOR)).rejects.toMatchObject({
+      // the catalogue check runs before the gate
+      let asked = false
+      await expect(modules.enable(ref, UNDECIDED_ID, async () => ((asked = true), { isolationTestResultId: randomUUID(), dpiaDecisionId: randomUUID() }), OPERATOR)).rejects.toMatchObject({
         code: 'MODULE_VERSION_UNKNOWN',
       })
-      // R29-I24: a database-less module with a provisional profile now enables (no database created)
-      const votesGate = operatorAllowGate(new Set(['votes']), (c, m) => att.lookup(c, m))
-      await att.ensure(X, 'votes', OPERATOR, ['votes'])
-      const votes = await modules.enable(ref, 'votes', votesGate, OPERATOR)
+      expect(asked).toBe(false)
+      // R29-I24: a database-less module with a provisional profile enables (no database created)
+      const votes = await modules.enable(ref, 'votes', gate.enableGate, OPERATOR)
       expect(votes).toEqual({ noop: false, database: null })
       expect(await modules.enabled(ref)).toEqual(['calendar', 'votes'])
+      expect(await gate.unproven(X)).toEqual([])
+      // the next release: both enabled modules lack a pass on its tip (Q8)
+      const next = pgGate(p, { releaseTipSha: 'f'.repeat(40) })
+      expect((await next.unproven(X)).map((u) => [u.moduleKey, u.codes])).toEqual([
+        ['calendar', ['ISOLATION_STALE_TIP']],
+        ['votes', ['ISOLATION_STALE_TIP']],
+      ])
     } finally {
       await p.end()
     }

@@ -17,6 +17,11 @@ COPY packages/nats-auth/package.json ./packages/nats-auth/
 # tenant-create call in make nats-init, gremion-deploy, pooled-stack-proof)
 # fails "Command not found" (TASK-024 image.test.ts, scripts/image-check.sh).
 COPY packages/nats-auth/bin ./packages/nats-auth/bin/
+# TASK-079 G7: @gremion/events (outbox, inbox, relay, consumer, dead-letter) -- the
+# `events` bin must exist at install time for the same reason (the runbook's
+# `pnpm tenant-create exec events dlq-replay`).
+COPY packages/events/package.json ./packages/events/
+COPY packages/events/bin ./packages/events/bin/
 COPY packages/ports/package.json ./packages/ports/
 COPY packages/storage/package.json ./packages/storage/
 COPY packages/tokens/package.json ./packages/tokens/
@@ -29,6 +34,8 @@ COPY packages/tenant-store/package.json ./packages/tenant-store/
 COPY packages/module-catalogue/package.json ./packages/module-catalogue/
 COPY packages/generated-clients/package.json ./packages/generated-clients/
 COPY packages/edge-routers/package.json ./packages/edge-routers/
+# TASK-077 G6: the tenancy primitives gremion-ui's tenant/ files re-export (bundled, ssr.noExternal).
+COPY packages/tenancy-core/package.json ./packages/tenancy-core/
 COPY gremion-ui/package.json ./gremion-ui/
 RUN pnpm install --frozen-lockfile
 
@@ -39,6 +46,10 @@ COPY packages/db ./packages/db/
 # ensureTenantAccount; `deploy --prod` below leaves it out of the runner, so the
 # long-running gremion-ui cannot load it.
 COPY packages/nats-auth ./packages/nats-auth/
+# @gremion/events (TASK-079 G7) is a gremion-ui DEVdependency like nats-auth: the
+# builder stage (migrate / tenant-create) runs the dead-letter recovery CLI;
+# `deploy --prod` leaves it out of the runner.
+COPY packages/events ./packages/events/
 COPY packages/ports ./packages/ports/
 COPY packages/storage ./packages/storage/
 COPY packages/tokens ./packages/tokens/
@@ -47,6 +58,7 @@ COPY packages/tenant-store ./packages/tenant-store/
 COPY packages/module-catalogue ./packages/module-catalogue/
 COPY packages/generated-clients ./packages/generated-clients/
 COPY packages/edge-routers ./packages/edge-routers/
+COPY packages/tenancy-core ./packages/tenancy-core/
 # TASK-043 G4: the module catalogue tenant-create enables from -- every
 # module.json (loadCatalogue's one-entry-per-directory rule) and the migration
 # directory of each module that declares a database. No module source, no
@@ -81,6 +93,7 @@ COPY modules/files/app ./modules/files/app/
 COPY modules/messaging/app ./modules/messaging/app/
 COPY modules/votes/app ./modules/votes/app/
 COPY modules/elections/app ./modules/elections/app/
+COPY modules/publishing/app ./modules/publishing/app/
 COPY gremion-ui ./gremion-ui/
 
 # Build the SvelteKit app (@gremion/db + @gremion/ports bundled via ssr.noExternal)

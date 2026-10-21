@@ -89,20 +89,22 @@ teardown() {
 # Conditions (recording rules) -- Grafana alerts on them
 # ---------------------------------------------------------------------------
 
-@test "rules.yml records exactly the twelve conditions" {
+@test "rules.yml records exactly the sixteen conditions (twelve TASK-039 and the four TASK-079 dead-letter ones)" {
     [ -f "$RULES" ]
     run awk '/^[[:space:]]*#/ {next} /^[[:space:]]+- record:/ {print $3}' "$RULES"
     [ "$status" -eq 0 ]
-    [ "$(echo "$output" | sort | tr '\n' ' ')" = "gremion:cond:backup_failed gremion:cond:broker_consumer_stalled gremion:cond:cert_expiry gremion:cond:container_unhealthy gremion:cond:disk_above_70 gremion:cond:edge_port80 gremion:cond:mail_queue gremion:cond:memory_pressure gremion:cond:postgres_connections gremion:cond:signal_absent gremion:cond:storage_above_70 gremion:cond:third_party_unreachable " ]
+    [ "$(echo "$output" | sort | tr '\n' ' ')" = "gremion:cond:backup_failed gremion:cond:broker_consumer_stalled gremion:cond:cert_expiry gremion:cond:container_unhealthy gremion:cond:dead_letter_queue gremion:cond:disk_above_70 gremion:cond:edge_port80 gremion:cond:inbox_dead_lettered gremion:cond:inbox_stalled gremion:cond:mail_queue gremion:cond:memory_pressure gremion:cond:outbox_dead_lettered gremion:cond:postgres_connections gremion:cond:signal_absent gremion:cond:storage_above_70 gremion:cond:third_party_unreachable " ]
 }
 
-@test "every condition but third_party_unreachable is fail-closed on a blind collector" {
+@test "every condition but third_party_unreachable and the four dead-letter ones is fail-closed on a blind collector" {
     # Comment lines are skipped first: the header explains the absent()
     # contract in prose, and a guard that counts its own documentation lies.
     run awk '/^[[:space:]]*#/ {next} /^[[:space:]]+- record:/{name=$3} /absent\(/{print name}' "$RULES"
     [ "$status" -eq 0 ]
     [ "$(echo "$output" | sort -u | wc -l)" -eq 11 ]
     [[ "$output" != *"third_party_unreachable"* ]]
+    # TASK-079: a host without an events service has no gauge; an absent() arm there would fire for ever.
+    [[ "$output" != *"outbox_dead_lettered"* && "$output" != *"inbox_dead_lettered"* && "$output" != *"inbox_stalled"* && "$output" != *"dead_letter_queue"* ]]
 }
 
 @test "the unverified mail-queue series is labelled as unverified" {
@@ -187,7 +189,8 @@ teardown() {
                ALERT_SMTP_USER ALERT_SMTP_PASSWORD \
                GREMION_ROOT_DIR OPS_BIND_IP OPS_INGEST_BIND_IP OPS_UID OPS_GID PROM_RETENTION_TIME \
                ALERT_EMAIL_FROM STALWART_API_KEY OPS_TENANT_HOSTS_FILE OTLP_INGEST_TOKEN \
-               OPS_THIRD_PARTY_PROBES GREMION_DISK_ROOT GREMION_STORAGE_COMPONENTS; do
+               OPS_THIRD_PARTY_PROBES GREMION_DISK_ROOT GREMION_STORAGE_COMPONENTS \
+               GREMION_FOOTPRINT_FILESTORE_ROOT; do
         grep -qE "^${key}=" "$OPS_TMPL" || { echo "ops.env.tmpl is missing ${key}"; return 1; }
     done
     # The ingest token is generated, never an operator literal (Q15).
@@ -277,6 +280,8 @@ set_key() {   # <KEY> <value>
     cmp -s "$OBS_DIR/grafana/provisioning/alerting/rules.yaml" "$GREMION_ROOT/$PROV/alerting/rules.yaml"
     cmp -s "$OBS_DIR/grafana/provisioning/alerting/policies.yaml" "$GREMION_ROOT/$PROV/alerting/policies.yaml"
     cmp -s "$OBS_DIR/grafana/provisioning/datasources/datasources.yaml" "$GREMION_ROOT/$PROV/datasources/datasources.yaml"
+    cmp -s "$OBS_DIR/grafana/provisioning/dashboards/dashboards.yaml" "$GREMION_ROOT/$PROV/dashboards/dashboards.yaml"
+    cmp -s "$OBS_DIR/grafana/provisioning/dashboards/gremion-betrieb.json" "$GREMION_ROOT/$PROV/dashboards/gremion-betrieb.json"
     grep -q "url: 'http://127.0.0.1:9099/hook'" "$cp"
     grep -q '^      - uid: platform-webhook$' "$cp"
     run grep -c 'disableResolveMessage: false' "$cp"
@@ -423,6 +428,74 @@ set_key() {   # <KEY> <value>
     [[ "$output" == *"BLOCKED: ALERT_SMTP_HOST is not set"* ]]
 }
 
+@test "render-ops exits 2 naming ALERT_SMTP_HOST or ALERT_SMTP_PORT when the key is absent or empty, mail on or off (TASK-039-FU residual 2)" {
+    # compose interpolates both with :? for EVERY render, so a stripped key must stop here
+    local mail key
+    for mail in "" "ops@example.org"; do
+        for key in ALERT_SMTP_HOST ALERT_SMTP_PORT; do
+            write_ops_env "$mail" "s3cret-app-password"
+            set_key "$key" ''
+            run "$RENDER" --env-file "$GREMION_ROOT/etc/env/ops.env"
+            [ "$status" -eq 2 ] || { echo "empty $key (mail='$mail'): status $status: $output"; return 1; }
+            [[ "$output" == *"$key is empty"* ]] || { echo "empty $key not named: $output"; return 1; }
+            write_ops_env "$mail" "s3cret-app-password"
+            sed -i "/^${key}=/d" "$GREMION_ROOT/etc/env/ops.env"
+            run "$RENDER" --env-file "$GREMION_ROOT/etc/env/ops.env"
+            [ "$status" -eq 2 ] || { echo "absent $key (mail='$mail'): status $status: $output"; return 1; }
+            [[ "$output" == *"$key is empty"* ]] || { echo "absent $key not named: $output"; return 1; }
+        done
+    done
+}
+
+@test "render-ops allows a CHANGE_ME host while e-mail is off, and refuses a port outside 1-65535 with e-mail on (exit 3)" {
+    write_ops_env
+    set_key ALERT_SMTP_HOST CHANGE_ME_OPERATOR_alert_smtp_host
+    run "$RENDER" --env-file "$GREMION_ROOT/etc/env/ops.env"
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    [[ "$output" == *"email=off"* ]]
+    local port
+    for port in 0 70000 65536 abc 5.87 -1; do
+        write_ops_env "ops@example.org" "s3cret-app-password"
+        set_key ALERT_SMTP_PORT "$port"
+        run "$RENDER" --env-file "$GREMION_ROOT/etc/env/ops.env"
+        [ "$status" -eq 3 ] || { echo "port '$port': status $status: $output"; return 1; }
+        [[ "$output" == *"BLOCKED: ALERT_SMTP_PORT"* ]] || { echo "port '$port' not named: $output"; return 1; }
+    done
+    # the valid pair renders as before
+    for port in 1 587 65535; do
+        write_ops_env "ops@example.org" "s3cret-app-password"
+        set_key ALERT_SMTP_PORT "$port"
+        run "$RENDER" --env-file "$GREMION_ROOT/etc/env/ops.env"
+        [ "$status" -eq 0 ] || { echo "port '$port': status $status: $output"; return 1; }
+        [[ "$output" == *"email=on"* ]]
+    done
+}
+
+@test "render-ops refusing a missing SMTP key leaves the previous provisioning tree in place" {
+    write_ops_env
+    run "$RENDER" --env-file "$GREMION_ROOT/etc/env/ops.env"
+    [ "$status" -eq 0 ]
+    local before; before="$(cat "$GREMION_ROOT/$PROV/alerting/rules.yaml" | cksum)"
+    sed -i '/^ALERT_SMTP_HOST=/d' "$GREMION_ROOT/etc/env/ops.env"
+    run "$RENDER" --env-file "$GREMION_ROOT/etc/env/ops.env"
+    [ "$status" -eq 2 ]
+    [ -s "$GREMION_ROOT/$PROV/alerting/rules.yaml" ]
+    [ "$(cat "$GREMION_ROOT/$PROV/alerting/rules.yaml" | cksum)" = "$before" ]
+}
+
+@test "docs/ops/host-tooling.md states who writes the Grafana client secret and the grafana-sso states (TASK-039-FU residual 1)" {
+    local doc="${PROJECT_ROOT}/docs/ops/host-tooling.md"
+    # a paragraph of its own under the commands table, not a cell of the gremion-tenant row
+    grep -qF 'etc/secrets/grafana/client_secret' "$doc"
+    grep -qF -- '--realm-only' "$doc"
+    grep -qE 'grafana-sso=pending' "$doc"
+    grep -qE 'grafana-sso=ready' "$doc"
+    # the pooled path does not write it today
+    grep -qE '`gremion-tenant init` on the pooled stack .* does not write it' "$doc"
+    run grep -nE '^\| *`gremion-tenant`.*client_secret' "$doc"
+    [ "$status" -ne 0 ]
+}
+
 @test "render-ops refuses an option with no value instead of using the default" {
     run "$RENDER" --env-file
     [ "$status" -eq 2 ]
@@ -466,11 +539,22 @@ set_key() {   # <KEY> <value>
 # STOPPED vector, a broker whose jsz answers, the daemon's volume sizes.
 shim_docker_world() {
     shim docker '
+# ps-fail: the state-container lookup (docker ps --filter ...) fails as with a daemon that does not answer
+if [ -f "$GREMION_ROOT/ps-fail" ] && [ "$1" = ps ] && [ "$2" = --filter ]; then
+  echo "Cannot connect to the Docker daemon" >&2; exit 1
+fi
 case "$*" in
   "ps --all --size"*)
     printf "staging-state-postgres-1\t1.5kB (virtual 300MB)\nstaging-state-vector-1\t0B (virtual 90MB)\n" ;;
   *"com.docker.compose.service=postgres"*) echo "abc123" ;;
   *"com.docker.compose.service=nats"*) [ -f "$GREMION_ROOT/no-nats" ] || echo "nats99" ;;
+  "exec abc123 psql"*"plt.job_run"*)
+    # TASK-039-FU: the platform database answers the job-run query; dispatch on the SQL text
+    [ -f "$GREMION_ROOT/jobrun-down" ] && { echo "psql: error: connection refused" >&2; exit 2; }
+    [ -f "$GREMION_ROOT/jobrun-missing" ] && { echo "ERROR:  relation \"plt.job_run\" does not exist" >&2; exit 1; }
+    [ -f "$GREMION_ROOT/jobrun-garbage" ] && { printf "<html>\n|||\nfootprint_measurement||exploded|123\nfootprint_measurement||succeeded|notanumber\nfootprint_measurement||succeeded|0\nbackup_nightly|not-a-uuid|failed|1791000400\nfootprint_measurement|succeeded|1791000000\n"; exit 0; }
+    # one row per DEFINITION (kind|customer|status|epoch): two customers of one kind are two rows
+    printf "footprint_measurement||succeeded|1791000000\npurge_run||failed|1791000300\nbackup_nightly|0192f0c1-0000-7000-8000-00000000000a|failed|1791000400\nbackup_nightly|0192f0c1-0000-7000-8000-00000000000b|succeeded|1791000500\n" ;;
   "exec abc123 psql"*)                     echo "42|100" ;;
   "exec nats99 wget"*)
     [ -f "$GREMION_ROOT/jsz-broken" ] && { echo "<html>"; exit 0; }
@@ -559,6 +643,76 @@ prom() { cat "$GREMION_ROOT/runtime/textfile/gremion.prom"; }
     assert_recorded docker "com.docker.compose.project=staging-state"
 }
 
+@test "metrics-textfile looks the state containers up in GREMION_STATE_PROJECT when set (a single-project layout), else in <STACK>-state" {
+    shim_docker_world
+    shim_timer enabled
+    STACK=staging GREMION_STATE_PROJECT=legacy run "$METRICS"
+    [ "$status" -eq 0 ]
+    assert_recorded docker "com.docker.compose.project=legacy"
+    run grep -c "com.docker.compose.project=staging-state" "$SHIM_LOG"
+    [ "$output" = "0" ]
+}
+
+@test "metrics-textfile reports the last job run per job kind from the platform database (TASK-039-FU, one family)" {
+    shim_docker_world
+    shim_timer enabled
+    STACK=staging run "$METRICS"
+    [ "$status" -eq 0 ]
+    grep -q '^gremion_job_last_run{job_kind="footprint_measurement",status="succeeded"} 1791000000$' "$GREMION_ROOT/runtime/textfile/gremion.prom"
+    grep -q '^gremion_job_last_run{job_kind="purge_run",status="failed"} 1791000300$' "$GREMION_ROOT/runtime/textfile/gremion.prom"
+    # round-1 M2: one sample per DEFINITION, so customer A's failed backup is not
+    # hidden by customer B's later success (pseudonymous customer id as the label)
+    grep -q '^gremion_job_last_run{job_kind="backup_nightly",customer="0192f0c1-0000-7000-8000-00000000000a",status="failed"} 1791000400$' "$GREMION_ROOT/runtime/textfile/gremion.prom"
+    grep -q '^gremion_job_last_run{job_kind="backup_nightly",customer="0192f0c1-0000-7000-8000-00000000000b",status="succeeded"} 1791000500$' "$GREMION_ROOT/runtime/textfile/gremion.prom"
+    # the query is keyed per definition with a deterministic tie-break, never per kind
+    assert_recorded docker "DISTINCT ON (r.scheduled_job_id)"
+    assert_recorded docker "r.finished_at DESC, r.job_run_id DESC"
+    refute_recorded docker "DISTINCT ON (s.job_kind)"
+    # one family, one HELP/TYPE, read in the platform database through the state postgres
+    run grep -c '^# TYPE gremion_job_last_run gauge$' "$GREMION_ROOT/runtime/textfile/gremion.prom"
+    [ "$output" = "1" ]
+    assert_recorded docker "exec abc123 psql -U postgres -d gremion_platform"
+    # the postgres-connections reading still gets ITS answer from the same container
+    grep -q '^gremion_postgres_connections_used 42$' "$GREMION_ROOT/runtime/textfile/gremion.prom"
+}
+
+@test "metrics-textfile leaves gremion_job_last_run ABSENT, never 0, when the query fails, the table is missing or the rows are garbage" {
+    shim_docker_world
+    shim_timer enabled
+    touch "$GREMION_ROOT/jobrun-down"
+    STACK=staging run "$METRICS"
+    [ "$status" -eq 0 ]
+    # psql's own first error line is in the note (round-2 silent-failure LOW:
+    # every failure used to read the same generic "no job run readable")
+    [[ "$output" == *"connection refused"* ]] || { echo "$output"; return 1; }
+    run grep -c 'gremion_job_last_run' "$GREMION_ROOT/runtime/textfile/gremion.prom"
+    [ "$output" = "0" ]
+    rm -f "$GREMION_ROOT/jobrun-down"; touch "$GREMION_ROOT/jobrun-missing"
+    STACK=staging run "$METRICS"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *'relation "plt.job_run" does not exist'* ]] || { echo "$output"; return 1; }
+    run grep -c 'gremion_job_last_run' "$GREMION_ROOT/runtime/textfile/gremion.prom"
+    [ "$output" = "0" ]
+    rm -f "$GREMION_ROOT/jobrun-missing"; touch "$GREMION_ROOT/jobrun-garbage"
+    STACK=staging run "$METRICS"
+    [ "$status" -eq 0 ]
+    run grep -c 'gremion_job_last_run' "$GREMION_ROOT/runtime/textfile/gremion.prom"
+    [ "$output" = "0" ]
+    # the rest of the file is still written
+    grep -q '^gremion_postgres_connections_used 42$' "$GREMION_ROOT/runtime/textfile/gremion.prom"
+}
+
+@test "metrics-textfile survives a failing state-container lookup: the postgres, job-run and broker signals are absent, the file is still written (TASK-039-FU round 2, ops-lib state_container)" {
+    shim_docker_world
+    shim_timer enabled
+    touch "$GREMION_ROOT/ps-fail"
+    STACK=staging run "$METRICS"
+    [ "$status" -eq 0 ] || { echo "status $status: $output"; return 1; }
+    grep -qE '^gremion_metrics_textfile_timestamp_seconds [0-9]+$' "$GREMION_ROOT/runtime/textfile/gremion.prom"
+    run grep -cE '^gremion_(postgres_connections_used|job_last_run|nats_jsz_up)' "$GREMION_ROOT/runtime/textfile/gremion.prom"
+    [ "$output" = "0" ]
+}
+
 @test "metrics-textfile turns the broker's jsz into stream and consumer gauges, read inside the broker (TDD 9)" {
     shim_docker_world
     shim_timer enabled
@@ -584,6 +738,58 @@ prom() { cat "$GREMION_ROOT/runtime/textfile/gremion.prom"; }
     rm -f "$GREMION_ROOT/no-nats"; touch "$GREMION_ROOT/jsz-broken"
     STACK=staging run "$METRICS"
     run grep -c '^gremion_nats_.*[0-9]$' "$GREMION_ROOT/runtime/textfile/gremion.prom"
+    [ "$output" = "0" ]
+}
+
+# TASK-079 (G4b): the events services' dead-letter gauges, one `events metrics` per labelled container.
+shim_docker_events_world() {
+    shim docker '
+case "$*" in
+  "ps --filter label=org.gremion.events-metrics"*) printf "evt1 idt\nevt2 fin\nevt3 gov\n" ;;
+  "exec evt1 pnpm exec events metrics --ctx idt")
+    printf "# HELP gremion_outbox_dead_lettered Outbox rows.\n# TYPE gremion_outbox_dead_lettered gauge\ngremion_outbox_dead_lettered{ctx=\"idt\"} 1\n# HELP gremion_inbox_dead_lettered Inbox rows.\n# TYPE gremion_inbox_dead_lettered gauge\ngremion_inbox_dead_lettered{ctx=\"idt\",consumer=\"idt\"} 0\n# HELP gremion_inbox_stalled Stalled.\n# TYPE gremion_inbox_stalled gauge\ngremion_inbox_stalled{ctx=\"idt\",consumer=\"idt\"} 0\n# EOF\n" ;;
+  "exec evt2 pnpm exec events metrics --ctx fin")
+    printf "# HELP gremion_outbox_dead_lettered Outbox rows.\n# TYPE gremion_outbox_dead_lettered gauge\ngremion_outbox_dead_lettered{ctx=\"fin\"} 0\n# HELP gremion_inbox_dead_lettered Inbox rows.\n# TYPE gremion_inbox_dead_lettered gauge\ngremion_inbox_dead_lettered{ctx=\"fin\",consumer=\"finance\"} 2\n# HELP gremion_inbox_stalled Stalled.\n# TYPE gremion_inbox_stalled gauge\ngremion_inbox_stalled{ctx=\"fin\",consumer=\"finance\"} 1\n# EOF\n" ;;
+  "exec evt3 pnpm exec events metrics --ctx gov") echo "events: cannot reach the database" >&2; exit 1 ;;
+  *) : ;;
+esac
+exit 0'
+}
+
+@test "metrics-textfile merges the dead-letter gauges of every labelled service container into one block per family (TASK-079)" {
+    shim_docker_events_world
+    shim_timer enabled
+    STACK=staging run "$METRICS"
+    [ "$status" -eq 0 ]
+    local f="$GREMION_ROOT/runtime/textfile/gremion.prom"
+    grep -q '^gremion_outbox_dead_lettered{ctx="idt"} 1$' "$f"
+    grep -q '^gremion_outbox_dead_lettered{ctx="fin"} 0$' "$f"
+    grep -q '^gremion_inbox_dead_lettered{ctx="fin",consumer="finance"} 2$' "$f"
+    grep -q '^gremion_inbox_stalled{ctx="fin",consumer="finance"} 1$' "$f"
+    # each family named once and contiguous, no OpenMetrics terminator in the middle of a textfile
+    run bash -c "grep -cE '^# TYPE gremion_(outbox_dead_lettered|inbox_dead_lettered|inbox_stalled) ' '$f'"
+    [ "$output" = "3" ]
+    run bash -c "grep -c '^# EOF' '$f' || true"
+    [ "$output" = "0" ]
+    run awk '/^#/ {next} {n=$0; sub(/[{ ].*/, "", n); if (n != last) { if (seen[n]++) { print "interleaved " n; exit 1 } last = n } }' "$f"
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    # read inside each labelled container, by docker exec
+    assert_recorded docker "exec evt1 pnpm exec events metrics --ctx idt"
+    assert_recorded docker "exec evt2 pnpm exec events metrics --ctx fin"
+}
+
+@test "metrics-textfile skips a labelled container that prints no gauges, and prints nothing (absent, never 0) when none is labelled (TASK-079)" {
+    shim_docker_events_world
+    shim_timer enabled
+    STACK=staging run "$METRICS"
+    [ "$status" -eq 0 ]
+    # evt3 (ctx gov) failed: it contributes no sample at all
+    run grep -c 'ctx="gov"' "$GREMION_ROOT/runtime/textfile/gremion.prom"
+    [ "$output" = "0" ]
+    shim_docker_world
+    STACK=staging run "$METRICS"
+    [ "$status" -eq 0 ]
+    run grep -cE '^gremion_(outbox|inbox)_' "$GREMION_ROOT/runtime/textfile/gremion.prom"
     [ "$output" = "0" ]
 }
 
@@ -701,6 +907,16 @@ prom() { cat "$GREMION_ROOT/runtime/textfile/gremion.prom"; }
     grep -q '^WantedBy=timers.target' "${UNIT_DIR}/gremion-metrics.timer"
     # A literal root path here would silently diverge from Task 2's renderer.
     run grep -n '/opt/gremion' "${UNIT_DIR}/gremion-metrics.service"
+    [ "$status" -ne 0 ]
+}
+
+@test "bootstrap's timers stage installs the footprint units through two-argument render_unit and asserts a real next elapse (TASK-039-FU)" {
+    local bs="${PROJECT_ROOT}/infra/host/bootstrap.sh"
+    grep -qF 'render_unit gremion-footprint.service /etc/systemd/system/gremion-footprint.service' "$bs"
+    grep -qF 'render_unit gremion-footprint.timer /etc/systemd/system/gremion-footprint.timer' "$bs"
+    grep -qF 'systemctl enable --now gremion-footprint.timer' "$bs"
+    grep -qF 'systemctl show gremion-footprint.timer -p NextElapseUSecRealtime --value' "$bs"
+    run grep -nE 'render_unit +[A-Za-z0-9._-]+ *\|' "$bs"
     [ "$status" -ne 0 ]
 }
 

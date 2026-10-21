@@ -116,7 +116,7 @@ than they are:
 
 > **The units that own this section are named in the kernel (spec D §"Kept as
 > origin story").** Its resolution is specified in
-> `docs/superpowers/specs/spec-b-kernel-portback-relocatability-release-design.md`:
+> `docs/design-specs/spec-b-kernel-portback-relocatability-release-design.md`:
 > `B1a-realm-identity-and-boot-import` deletes the boot import and the realm
 > identity — that unit has landed, and every entry below is written from the
 > tree it left — and `B1b-theme-rename-and-hygiene-guard` takes the theme

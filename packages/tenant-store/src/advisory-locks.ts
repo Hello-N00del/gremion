@@ -29,6 +29,13 @@ export const ADVISORY_LOCKS = {
     objid: 1,
     purpose: 'schema migration runner, one holder per (tenant, module) database',
   },
+  // TASK-079 (G2): @gremion/events' outbox relay takes it as a TRANSACTION-level lock
+  // (pg_try_advisory_xact_lock) per relay pass, so one pass runs per service database.
+  outboxRelay: {
+    classid: ADVISORY_LOCK_CLASS_ID,
+    objid: 2,
+    purpose: 'outbox relay pass (@gremion/events), one holder per service database',
+  },
 } as const satisfies Record<string, AdvisoryLockKey>
 
 const INT4_MIN = -(2 ** 31)

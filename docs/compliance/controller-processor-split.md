@@ -197,16 +197,17 @@ Enforced in code and clamped so a careless configuration change cannot lengthen 
 
 | Category | Default | Hard cap | Basis |
 |---|---|---|---|
-| Access logs | 14 d | 30 d | BayLDA recommendation |
-| Application logs | 30 d | 90 d | Art. 5(1)(e), Art. 6(1)(f) |
-| Security logs (`audit_log`) | 90 d | 180 d | BSI Mindeststandard Protokollierung v2.1 |
-| Security logs without PII | 90 d | 365 d | as above, PII-free exception |
+| Access logs | 14 d | 29 d | Operator ceiling 30 d [D R29-I6]; Art. 5(1)(e) |
+| Application logs | 28 d | 29 d | as above; Art. 6(1)(f) |
+| Security logs (`audit_log`) | 27 d | 29 d | as above; purged daily, so a row lives at most 30 d |
+| Security logs without PII | 27 d | 30 d | as above, PII-free exception |
 | Newsletter send tokens | expiry at 7 d, bulk sweep at 90 d | — | Art. 5(1)(e) |
 | Backup retention | floor of 7 d | — | availability |
 
-Operator ceiling 30 d [D R29-I6]: every figure above 30 d in this table is the
-code's current value; the application tiers change with TASK-033. Edge and
-identity-provider logs already obey the ceiling (`docs/log-retention-policy.md`).
+Operator ceiling 30 d [D R29-I6]: no figure in this table exceeds it. Of the four log
+tiers only the `audit_log` window has a purge consumer in the application; the other
+three are configuration until TASK-033 adds theirs. Edge and identity-provider logs
+are bounded independently (`docs/log-retention-policy.md`).
 
 A German-language **Löschkonzept** is generated on demand from the live configuration, so
 it cannot drift from the windows actually enforced. It is fed by the `compliance.*`

@@ -1,6 +1,6 @@
 // @gremion/nats-auth — admit NATS clients only by per-module nkey inside one
 // account per tenant (TASK-024, CAP-NATS-AUTH; D12, TRD-419, PRD-PLAT-012).
-export { FLOWS, NO_BROKER, NO_STREAM, OWNER_TO_MODULE, KERNEL, matrixViolations, loadRegistryAddresses } from './flows.ts'
+export { FLOWS, NO_BROKER, NO_STREAM, OWNER_TO_MODULE, KERNEL, SYSTEM_STREAMS, dlqGrantFor, matrixViolations, loadRegistryAddresses } from './flows.ts'
 export type { ModuleFlow, MatrixInput, NoStreamEntry, RegistryAddress } from './flows.ts'
 export {
   modulePermissions,

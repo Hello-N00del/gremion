@@ -29,7 +29,7 @@ nine merges: eight release-1 units plus one hygiene fix, in merge order (oldest 
 Eight unit merges (B00, B37, B1b, B1a, B0, B2, B3, B4) match PLAN §7's verdict table exactly: "8
 merged (B0, B00, B1a, B1b, B2, B3, B4, B37)" under KEEP.
 
-**StuRaOS (orchestrator-observed, not independently re-checked in this worktree — the StuRaOS repo
+**StuRaOS (maintainer-observed, not independently re-checked in this worktree — the StuRaOS repo
 is not present here):** local master `b412f083` carries B3's StuRaOS half merged locally and not
 pushed; `origin/master` `f276af59` is what the test environment currently runs.
 
@@ -229,7 +229,7 @@ are then (PRD-REC-008), not carried forward from this one.
 | 4 | The T08 pre-commit boundary lint | `gremion-ui/scripts/hooks/pre-commit`, `gremion-ui/scripts/install-git-hooks.mjs`, `gremion-ui/scripts/boundary-lint.ts` and the guard `gremion-ui/scripts/install-git-hooks.test.ts`. The kernel hook is fail-closed: every condition under which it cannot run blocks the commit with an instruction. Kernel-native; the StuRaOS commit range `e7076a15` to `1c262ae1` was not diffed against it. | HELD |
 | 5a | The finance-cutover runbook | None. Not in `docs/runbooks/` (kernel holds `email-smtp`, `pgbouncer`, `tenant-edge`, `tenant-lifecycle`). Kernel code already points at it: `modules/finance/Dockerfile`, `modules/finance/src/http/routes.ts`, `modules/finance/src/kernel-client.ts`. | OPEN |
 | 5b | The pilot-host cutover runbook (StuRaOS `docs/runbooks/`, the file named for the host provider) | None. Four module entry points point at its section "Migrating the wire-subject root" (`modules/{calendar,content,finance,publishing}/src/index.ts`); the kernel's `docs/playbooks/nats-root-cutover.md` covers the same migration but is a different document. | OPEN |
-| 6a | `docs/audit`, `docs/external-reviews`, `docs/design-handover`, `docs/planning` (incl. `2026-07-25-carve-drift-baseline.md`), `docs/specs` | None. The kernel has no directory of these names. Its `docs/superpowers/specs/` is a different set. | OPEN |
+| 6a | `docs/audit`, `docs/external-reviews`, `docs/design-handover`, `docs/planning` (incl. `2026-07-25-carve-drift-baseline.md`), `docs/specs` | None. The kernel has no directory of these names. Its `docs/design-specs/` is a different set. | OPEN |
 | 6b | `SECURITY_REVIEW_2026-04-24.md`, `SECURITY_REVIEW_2026-05-23.md` | None. | OPEN |
 | 6c | `GO-LIVE-GATE.md` | `docs/ops/go-live-gate.md`, with its bats guard `test/host/go-live-gate.bats`. Kernel-native; not diffed. | HELD |
 | 7 | The carve tooling as an archived audit record | Not moved, by decision: the StuRa tree is archived with `scripts/carve/**` (eight files) frozen intact (spec D, row D11). The kernel keeps its own, non-overlapping guards: `scripts/port-back/` and `scripts/verify/suites/carve-lint.mjs`. | HELD in the archive. At un-pause, check the eight files are intact at the tag. |
@@ -243,7 +243,7 @@ are then (PRD-REC-008), not carried forward from this one.
   `routes/+page.server.ts` and the `financeRoleLabels` hunk of `routes/api/notifications/+server.ts`
   (source commit `87797e42`): the kernel has no notifications route. Holder: none. OPEN. The other
   "found" item there, the missing publish lock on resolution PATCH and DELETE, was closed by the
-  house review fixes on that unit and is not carried here.
+  code review fixes on that unit and is not carried here.
 - **StuRaOS runbooks outside TASK-011's list.** `docs/runbooks/` in StuRaOS also holds the
   board, calendar, content, messages and newsletter cutover runbooks, `helios-image-update`,
   `helios-service-account`, `nextcloud-theming`, `object-storage`, `satellite-theming`,

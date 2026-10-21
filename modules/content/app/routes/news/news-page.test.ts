@@ -7,7 +7,7 @@ import { render, fireEvent } from '@testing-library/svelte'
 // button labels ("Beitrag anlegen") match the assertions below.
 vi.mock('$lib/i18n', async () => {
   const { readable } = await import('svelte/store')
-  const de = (await import('$lib/i18n/de')).default
+  const de = (await import('$lib/i18n/messages/de.json')).default as Record<string, string>
   return { t: readable((key: string) => de[key] ?? key), lang: readable('de') }
 })
 

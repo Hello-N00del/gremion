@@ -34,7 +34,7 @@
 import type { Sql } from '@gremion/db'
 import type postgres from 'postgres'
 import { ADVISORY_LOCKS } from './advisory-locks.js'
-import { readVerifiedMigrations, MIGRATION_FILENAME } from './manifest.js'
+import { compareMigrationFiles, MIGRATION_FILENAME, readVerifiedUnion } from './manifest.js'
 import { PhaseError, resolvePhase, type PhaseErrorCode, type PhaseFor, type PhaseInfo } from './phase.js'
 import { stripOuterTransaction } from './strip-outer-transaction.js'
 
@@ -43,7 +43,12 @@ type Reserved = postgres.ReservedSql<{}>
 export interface PreApplyContext {
   /** The reserved, lock-holding connection. Not inside a transaction. */
   sql: Reserved
+  /** The first (for a single-dir run, the only) migrations directory. */
   dir: string
+  /** Every migrations directory of this run (TASK-077 G3 b), in the order given. Always set by runMigrations. */
+  dirs?: readonly string[]
+  /** The ledger table this run writes, schema-qualified (TASK-077 G3 a). Always set by runMigrations. */
+  ledger?: string
   /** Files already in the ledger when this run took the lock. */
   applied: readonly string[]
   /** Every file this run will apply, in order. */
@@ -62,8 +67,33 @@ export interface RunMigrationsHooks {
 export interface RunMigrationsOptions {
   /** A DIRECT connection to the (tenant, module) database, never a pooler. */
   sql: Sql
-  /** The module's migrations directory, holding manifest.json. */
-  dir: string
+  /** The module's migrations directory, holding manifest.json. Exactly one of dir / dirs. */
+  dir?: string
+  /**
+   * TASK-077 G3(b): a chain spanning several directories (TASK-029 register
+   * dirs[]), each holding its own manifest.json. Applied as ONE sequence in
+   * migration-number order; a filename or number in two dirs is refused
+   * (DUPLICATE_MIGRATION) before anything runs.
+   */
+  dirs?: readonly string[]
+  /**
+   * TASK-077 G3(a): the ledger table, schema-qualified (`schema.table`, plain
+   * lower-case identifiers). Default `public.schema_migrations`. A run that
+   * creates the ledger issues `CREATE SCHEMA IF NOT EXISTS <schema>` first, in
+   * the same transaction as the first file.
+   */
+  ledger?: string
+  /**
+   * The runtime role that reads the ledger (the schema gate) and appends to it
+   * when it is the connection user (the runner INSERTs after RESET ROLE). The
+   * ledger is created by whatever role the body runs as (a migration's SET
+   * ROLE <owner>), so the runtime role would only reach it through inherited
+   * owner rights, which TASK-192 removes: it is granted USAGE on the ledger's
+   * schema and SELECT, INSERT on the ledger explicitly, in the file's
+   * transaction (idempotent, so a ledger made before this option is covered on
+   * the next run). A plain lower-case identifier.
+   */
+  ledgerGrantTo?: string
   /**
    * The release this run ships (e.g. dist-v1.2.3, or import-<job>): written
    * into every ledger row it adds (release_ref, 1-64 characters).
@@ -121,21 +151,49 @@ export class MigrationRunnerError extends Error {
   }
 }
 
+/** The default ledger (every chain before TASK-077). */
 export const LEDGER = 'public.schema_migrations'
+
+/** `schema.table`, each part a plain lower-case identifier (no quoting needed, none accepted). */
+const LEDGER_NAME = /^([a-z_][a-z0-9_]{0,62})\.([a-z_][a-z0-9_]{0,62})$/
+
+export interface LedgerName {
+  /** `schema.table` as given (to_regclass / ::regclass text). */
+  text: string
+  schema: string
+  table: string
+  /** `"schema"."table"`, safe to interpolate into SQL text. */
+  quoted: string
+}
+
+/**
+ * TASK-077 G3(a): validates a ledger name. Throws a TypeError naming the rule
+ * on anything but `schema.table` of plain identifiers, so a ledger name can
+ * never carry SQL into the runner's or the gate's statements.
+ */
+export function ledgerName(ledger: string = LEDGER): LedgerName {
+  const m = typeof ledger === 'string' ? LEDGER_NAME.exec(ledger) : null
+  if (!m) throw new TypeError(`ledger must be schema.table of plain lower-case identifiers (got ${JSON.stringify(ledger)})`)
+  return { text: ledger, schema: m[1]!, table: m[2]!, quoted: `"${m[1]}"."${m[2]}"` }
+}
 
 // phase / release_ref: SCHEMA 148-160 (DB-<CTX>-SCHEMA-MIGRATION).
 // contract_after [A] (TASK-075 Q8, a SCHEMA deviation filed for a doc patch):
 // the release after which a contract may run, so the serving colour's gate
 // can accept a contract it survives (schema-gate.ts, state 'ahead').
-const LEDGER_DDL = `CREATE TABLE ${LEDGER} (
+// Constraint names follow the table (for the default ledger they are the
+// pre-TASK-077 names, schema_migrations_*).
+function ledgerDdl(l: LedgerName): string {
+  return `CREATE TABLE ${l.quoted} (
   filename       text PRIMARY KEY CHECK (filename ~ '${MIGRATION_FILENAME.source.replaceAll("'", "''")}'),
   sha256         text NOT NULL CHECK (sha256 ~ '^[0-9a-f]{64}$'),
   applied_at     timestamptz NOT NULL DEFAULT clock_timestamp(),
   phase          text NOT NULL CHECK (phase IN ('expand', 'migrate', 'contract')),
   release_ref    text NOT NULL CHECK (char_length(release_ref) BETWEEN 1 AND 64),
   contract_after text NULL,
-  CONSTRAINT schema_migrations_contract_after_check CHECK ((phase = 'contract') = (contract_after IS NOT NULL))
+  CONSTRAINT ${l.table}_contract_after_check CHECK ((phase = 'contract') = (contract_after IS NOT NULL))
 )`
+}
 
 /** The ledger columns TASK-075 added; a ledger without them predates this runner. */
 const LEDGER_COLUMNS = ['phase', 'release_ref', 'contract_after'] as const
@@ -151,27 +209,29 @@ export const PRE_TASK_075_RELEASE_REF = 'pre-task-075'
  * contract its contract_after; then the NOT NULLs and CHECKs of a fresh
  * ledger, under the same constraint names.
  */
-async function upgradeLedger(sql: Reserved, rows: readonly { filename: string; phase: PhaseInfo }[]): Promise<void> {
-  await sql.unsafe(`ALTER TABLE ${LEDGER} ADD COLUMN IF NOT EXISTS phase text, ADD COLUMN IF NOT EXISTS release_ref text, ADD COLUMN IF NOT EXISTS contract_after text`)
+async function upgradeLedger(sql: Reserved, l: LedgerName, rows: readonly { filename: string; phase: PhaseInfo }[]): Promise<void> {
+  await sql.unsafe(`ALTER TABLE ${l.quoted} ADD COLUMN IF NOT EXISTS phase text, ADD COLUMN IF NOT EXISTS release_ref text, ADD COLUMN IF NOT EXISTS contract_after text`)
   const files = rows.map((r) => r.filename)
   const phases = rows.map((r) => r.phase.phase)
   const afters = rows.map((r) => (r.phase.phase === 'contract' ? (r.phase.contractAfter ?? '') : ''))
-  await sql`
-    UPDATE public.schema_migrations m
+  await sql.unsafe(
+    `UPDATE ${l.quoted} m
        SET phase = coalesce(m.phase, u.phase),
-           release_ref = coalesce(m.release_ref, ${PRE_TASK_075_RELEASE_REF}),
+           release_ref = coalesce(m.release_ref, $1::text),
            contract_after = CASE WHEN coalesce(m.phase, u.phase) = 'contract' THEN coalesce(m.contract_after, nullif(u.contract_after, '')) END
-      FROM unnest(${files}::text[], ${phases}::text[], ${afters}::text[]) AS u(filename, phase, contract_after)
-     WHERE m.filename = u.filename`
-  await sql.unsafe(`ALTER TABLE ${LEDGER}
+      FROM unnest($2::text[], $3::text[], $4::text[]) AS u(filename, phase, contract_after)
+     WHERE m.filename = u.filename`,
+    [PRE_TASK_075_RELEASE_REF, files, phases, afters] as never,
+  )
+  await sql.unsafe(`ALTER TABLE ${l.quoted}
     ALTER COLUMN phase SET NOT NULL,
     ALTER COLUMN release_ref SET NOT NULL,
-    DROP CONSTRAINT IF EXISTS schema_migrations_phase_check,
-    ADD CONSTRAINT schema_migrations_phase_check CHECK (phase IN ('expand', 'migrate', 'contract')),
-    DROP CONSTRAINT IF EXISTS schema_migrations_release_ref_check,
-    ADD CONSTRAINT schema_migrations_release_ref_check CHECK (char_length(release_ref) BETWEEN 1 AND 64),
-    DROP CONSTRAINT IF EXISTS schema_migrations_contract_after_check,
-    ADD CONSTRAINT schema_migrations_contract_after_check CHECK ((phase = 'contract') = (contract_after IS NOT NULL))`)
+    DROP CONSTRAINT IF EXISTS ${l.table}_phase_check,
+    ADD CONSTRAINT ${l.table}_phase_check CHECK (phase IN ('expand', 'migrate', 'contract')),
+    DROP CONSTRAINT IF EXISTS ${l.table}_release_ref_check,
+    ADD CONSTRAINT ${l.table}_release_ref_check CHECK (char_length(release_ref) BETWEEN 1 AND 64),
+    DROP CONSTRAINT IF EXISTS ${l.table}_contract_after_check,
+    ADD CONSTRAINT ${l.table}_contract_after_check CHECK ((phase = 'contract') = (contract_after IS NOT NULL))`)
 }
 
 /**
@@ -218,18 +278,19 @@ interface LedgerRow {
 }
 
 /** The ledger's rows; `legacy` when it lacks a TASK-075 column (upgraded with the first pending file). */
-async function readLedger(sql: Reserved): Promise<{ rows: LedgerRow[]; legacy: boolean } | null> {
-  const [reg] = await sql<{ present: boolean }[]>`SELECT to_regclass(${LEDGER}) IS NOT NULL AS present`
+async function readLedger(sql: Reserved, l: LedgerName): Promise<{ rows: LedgerRow[]; legacy: boolean } | null> {
+  // to_regclass answers NULL for a missing table AND for a missing schema.
+  const [reg] = await sql<{ present: boolean }[]>`SELECT pg_catalog.to_regclass(${l.text}) IS NOT NULL AS present`
   if (!reg?.present) return null
   let rows: LedgerRow[]
   try {
-    rows = await sql<LedgerRow[]>`SELECT filename, sha256 FROM public.schema_migrations ORDER BY filename`
+    rows = await sql.unsafe<LedgerRow[]>(`SELECT filename, sha256 FROM ${l.quoted} ORDER BY filename`)
   } catch (err) {
-    throw new MigrationRunnerError('LEDGER_FORMAT', `${LEDGER} exists but cannot be read as (filename, sha256): ${(err as Error).message}`, [], { cause: err })
+    throw new MigrationRunnerError('LEDGER_FORMAT', `${l.text} exists but cannot be read as (filename, sha256): ${(err as Error).message}`, [], { cause: err })
   }
   const cols = await sql<{ attname: string }[]>`
     SELECT attname FROM pg_catalog.pg_attribute
-     WHERE attrelid = ${LEDGER}::regclass AND attnum > 0 AND NOT attisdropped AND attname = ANY(${[...LEDGER_COLUMNS]}::text[])`
+     WHERE attrelid = ${l.text}::regclass AND attnum > 0 AND NOT attisdropped AND attname = ANY(${[...LEDGER_COLUMNS]}::text[])`
   const legacy = LEDGER_COLUMNS.some((c) => !cols.some((r) => r.attname === c))
   return { rows, legacy }
 }
@@ -255,7 +316,18 @@ function assertTimeout(name: string, ms: number | undefined): void {
 }
 
 export async function runMigrations(options: RunMigrationsOptions): Promise<RunMigrationsResult> {
-  const { sql, dir, hooks = {}, log = (l) => console.info(`[tenant-store] ${l}`) } = options
+  const { sql, hooks = {}, log = (l) => console.info(`[tenant-store] ${l}`) } = options
+  if ((options.dir === undefined) === (options.dirs === undefined)) {
+    throw new TypeError('runMigrations needs exactly one of dir (one migrations directory) or dirs (a chain spanning several)')
+  }
+  const dirs: readonly string[] = options.dirs ?? [options.dir!]
+  if (!Array.isArray(dirs) || dirs.length === 0) throw new TypeError('runMigrations: dirs must be a non-empty array')
+  const dir = dirs[0]!
+  const ledger = ledgerName(options.ledger ?? LEDGER)
+  const ledgerGrantTo = options.ledgerGrantTo
+  if (ledgerGrantTo !== undefined && !/^[a-z_][a-z0-9_]{0,62}$/.test(ledgerGrantTo)) {
+    throw new TypeError(`ledgerGrantTo must be a plain lower-case role identifier (got ${JSON.stringify(ledgerGrantTo)})`)
+  }
   assertReleaseRef(options.releaseRef)
   const releaseRef = options.releaseRef
   const lockWaitTimeoutMs = options.lockWaitTimeoutMs ?? 10 * 60_000
@@ -336,15 +408,15 @@ export async function runMigrations(options: RunMigrationsOptions): Promise<RunM
     locked = true
 
     // Everything below this line and above the first BEGIN is read-only.
-    const migrations = readVerifiedMigrations(dir)
-    const read = await readLedger(reserved)
-    const ledger = read?.rows ?? null
+    const migrations = readVerifiedUnion(dirs)
+    const read = await readLedger(reserved, ledger)
+    const rowsInLedger = read?.rows ?? null
     const bySha = new Map(migrations.map((m) => [m.file, m.sha256]))
-    const unknown = (ledger ?? []).filter((r) => !bySha.has(r.filename)).map((r) => r.filename)
+    const unknown = (rowsInLedger ?? []).filter((r) => !bySha.has(r.filename)).map((r) => r.filename)
     if (unknown.length) {
-      throw new MigrationRunnerError('LEDGER_UNKNOWN_FILE', `applied migrations have no file in ${dir}: ${unknown.join(', ')}`, unknown)
+      throw new MigrationRunnerError('LEDGER_UNKNOWN_FILE', `applied migrations have no file in ${dirs.join(', ')}: ${unknown.join(', ')}`, unknown)
     }
-    const changed = (ledger ?? []).filter((r) => bySha.get(r.filename) !== r.sha256).map((r) => r.filename)
+    const changed = (rowsInLedger ?? []).filter((r) => bySha.get(r.filename) !== r.sha256).map((r) => r.filename)
     if (changed.length) {
       throw new MigrationRunnerError(
         'LEDGER_HASH_MISMATCH',
@@ -352,10 +424,12 @@ export async function runMigrations(options: RunMigrationsOptions): Promise<RunM
         changed,
       )
     }
-    const applied = new Set((ledger ?? []).map((r) => r.filename))
+    const applied = new Set((rowsInLedger ?? []).map((r) => r.filename))
     const pending = migrations.filter((m) => !applied.has(m.file))
-    const highest = [...applied].sort().at(-1)
-    const below = highest === undefined ? [] : pending.filter((m) => m.file < highest).map((m) => m.file)
+    // Number order (a union of dirs is one sequence); for one dir with a fixed
+    // pad width this is the filename order the runner always used.
+    const highest = [...applied].sort(compareMigrationFiles).at(-1)
+    const below = highest === undefined ? [] : pending.filter((m) => compareMigrationFiles(m.file, highest) < 0).map((m) => m.file)
     if (below.length) {
       throw new MigrationRunnerError(
         'OUT_OF_ORDER',
@@ -382,12 +456,12 @@ export async function runMigrations(options: RunMigrationsOptions): Promise<RunM
     if (read?.legacy) {
       const text = new Map(migrations.map((m) => [m.file, m.text]))
       upgrade = []
-      for (const r of ledger ?? []) {
+      for (const r of rowsInLedger ?? []) {
         try {
           upgrade.push({ filename: r.filename, phase: resolvePhase(r.filename, text.get(r.filename)!, options.phaseFor) })
         } catch (err) {
           if (err instanceof PhaseError) {
-            throw new MigrationRunnerError(err.code, `${err.message}: ${LEDGER} predates TASK-075 and its applied row ${r.filename} needs a phase for the ledger upgrade; nothing was applied`, [r.filename], { cause: err })
+            throw new MigrationRunnerError(err.code, `${err.message}: ${ledger.text} predates TASK-075 and its applied row ${r.filename} needs a phase for the ledger upgrade; nothing was applied`, [r.filename], { cause: err })
           }
           throw err
         }
@@ -397,10 +471,12 @@ export async function runMigrations(options: RunMigrationsOptions): Promise<RunM
     const ctx: PreApplyContext = {
       sql: reserved,
       dir,
-      applied: [...applied].sort(),
+      dirs,
+      ledger: ledger.text,
+      applied: [...applied].sort(compareMigrationFiles),
       pending: bodies.map((m) => m.file),
     }
-    let ledgerPresent = ledger !== null
+    let ledgerPresent = rowsInLedger !== null
     const done: string[] = []
     for (const m of bodies) {
       sessionTouched = true
@@ -418,8 +494,19 @@ export async function runMigrations(options: RunMigrationsOptions): Promise<RunM
         if (ddlLockTimeoutMs !== undefined) {
           await reserved`SELECT set_config('lock_timeout', ${String(ddlLockTimeoutMs)}, true)`
         }
-        if (!ledgerPresent) await reserved.unsafe(LEDGER_DDL)
-        else if (upgrade !== null) await upgradeLedger(reserved, upgrade)
+        if (!ledgerPresent) {
+          // TASK-077 G3(a): a ledger in its own schema (idt.schema_migration)
+          // needs that schema before the table. Only issued when the schema is
+          // absent: CREATE SCHEMA checks CREATE on the database before IF NOT
+          // EXISTS, and a runner that never needed it (public) must not start to.
+          const [ns] = await reserved<{ present: boolean }[]>`SELECT pg_catalog.to_regnamespace(${ledger.schema}) IS NOT NULL AS present`
+          if (!ns?.present) await reserved.unsafe(`CREATE SCHEMA IF NOT EXISTS "${ledger.schema}"`)
+          await reserved.unsafe(ledgerDdl(ledger))
+        } else if (upgrade !== null) await upgradeLedger(reserved, ledger, upgrade)
+        if (ledgerGrantTo !== undefined) {
+          await reserved.unsafe(`GRANT USAGE ON SCHEMA "${ledger.schema}" TO "${ledgerGrantTo}"`)
+          await reserved.unsafe(`GRANT SELECT, INSERT ON ${ledger.quoted} TO "${ledgerGrantTo}"`)
+        }
         await reserved.unsafe(m.body)
         // A COMMIT that slipped past stripOuterTransaction would leave the
         // rest of the body, and the ledger row, outside this transaction.
@@ -432,9 +519,10 @@ export async function runMigrations(options: RunMigrationsOptions): Promise<RunM
         await reserved.unsafe('RESET ROLE; RESET SESSION AUTHORIZATION')
         // ... and a body that released the lock must not commit (e.g. pg_advisory_unlock_all()).
         if (!(await lockHeld())) throw new MigrationRunnerError('LOCK_NOT_HELD', `${m.file} released the migration lock; rolled back`, [m.file])
-        await reserved`
-          INSERT INTO public.schema_migrations (filename, sha256, phase, release_ref, contract_after)
-          VALUES (${m.file}, ${m.sha256}, ${m.phase.phase}, ${releaseRef}, ${m.phase.phase === 'contract' ? (m.phase.contractAfter ?? null) : null})`
+        await reserved.unsafe(
+          `INSERT INTO ${ledger.quoted} (filename, sha256, phase, release_ref, contract_after) VALUES ($1, $2, $3, $4, $5)`,
+          [m.file, m.sha256, m.phase.phase, releaseRef, m.phase.phase === 'contract' ? (m.phase.contractAfter ?? null) : null],
+        )
         await reserved.unsafe('COMMIT')
       } catch (err) {
         try {
@@ -449,7 +537,7 @@ export async function runMigrations(options: RunMigrationsOptions): Promise<RunM
       // ...) survives COMMIT: reset it, so the next file — and the caller's
       // pool this connection goes back to — start from the defaults.
       await reserved.unsafe('RESET ALL; RESET ROLE; RESET SESSION AUTHORIZATION')
-      if (upgrade !== null) log(`upgraded ${LEDGER} to the TASK-075 columns: ${upgrade.length} applied row(s) backfilled, release_ref ${PRE_TASK_075_RELEASE_REF}`)
+      if (upgrade !== null) log(`upgraded ${ledger.text} to the TASK-075 columns: ${upgrade.length} applied row(s) backfilled, release_ref ${PRE_TASK_075_RELEASE_REF}`)
       upgrade = null
       ledgerPresent = true
       done.push(m.file)

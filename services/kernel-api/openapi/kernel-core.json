@@ -1,0 +1,243 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Gremion kernel API: core (tenancy and the module registry)",
+    "version": "1.0.0",
+    "description": "TASK-077 (L3-17; TRD-407 first half, TRD-082, TRD-353). The kernel API's one spec (Q5, Q11): dependants append their operations under their own tag (bodies: TASK-080, authz: TASK-081) and their handlers to src/handlers/index.ts, sorted by operationId. Every operation except getHealth is tenant-resolved: the WHOLE X-Forwarded-Host (equal to Host) selects the customer in the control registry, behind the proxy-trust header; or a module caller asserts the customer id with its own module secret. Every response body is checked against this document before it is sent (Q4): an undeclared field is a 500 response-contract-violation, never a silent drop.",
+    "license": { "name": "AGPL-3.0-only", "identifier": "AGPL-3.0-only" }
+  },
+  "tags": [
+    { "name": "platform", "description": "Unauthenticated liveness, no tenant." },
+    { "name": "tenancy", "description": "The customer this request resolved to (DB-TNT-CUSTOMER, DB-TNT-DOMAINBINDING, DB-TNT-REALMREF as the API contract; registry of record: the control tenant / tenant_domain tables, Q1)." },
+    { "name": "modules", "description": "The module registry: the customer's enabled modules and their runtime declarations (DB-PLT-MODULE-ENABLEMENT, DB-PLT-MODULE-VERSION)." }
+  ],
+  "paths": {
+    "/healthz": {
+      "get": {
+        "operationId": "getHealth",
+        "summary": "Liveness of the kernel API process (no tenant, no database)",
+        "tags": ["platform"],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "The process is up.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Health" } } }
+          },
+          "500": { "$ref": "#/components/responses/InternalError" }
+        }
+      }
+    },
+    "/api/v1/tenancy/self": {
+      "get": {
+        "operationId": "getTenancySelf",
+        "summary": "The customer this request resolved to",
+        "tags": ["tenancy"],
+        "security": [{ "bearer": [] }, { "moduleCaller": [] }],
+        "parameters": [
+          { "$ref": "#/components/parameters/ForwardedHost" },
+          { "$ref": "#/components/parameters/ProxyTrust" }
+        ],
+        "responses": {
+          "200": {
+            "description": "The resolved customer.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/TenancySelf" } } }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "500": { "$ref": "#/components/responses/InternalError" },
+          "503": { "$ref": "#/components/responses/Unavailable" }
+        }
+      }
+    },
+    "/api/v1/modules": {
+      "get": {
+        "operationId": "listEnabledModules",
+        "summary": "The resolved customer's enabled modules with their runtime declarations",
+        "tags": ["modules"],
+        "security": [{ "bearer": [] }, { "moduleCaller": [] }],
+        "parameters": [
+          { "$ref": "#/components/parameters/ForwardedHost" },
+          { "$ref": "#/components/parameters/ProxyTrust" }
+        ],
+        "responses": {
+          "200": {
+            "description": "Exactly the customer's modules in state enabled, each with the runtime block of the module.json version the customer enabled.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/EnabledModules" } } }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "$ref": "#/components/responses/NotFound" },
+          "500": { "$ref": "#/components/responses/InternalError" },
+          "503": { "$ref": "#/components/responses/Unavailable" }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearer": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+        "description": "An access token of the resolved customer's realm: exact iss (the customer's issuer), aud containing gremion-kernel-api, RS256, exp/nbf (Q7; RFC 8725, RFC 9068)."
+      },
+      "moduleCaller": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "x-internal-auth",
+        "description": "A module calling back into the kernel (Q8, the four B8 clauses): x-gremion-module names it, x-internal-auth matches its own KERNEL_API_MODULE_SECRET_<ID>, x-tenant-id asserts the customer (a UUIDv7), the operation is on the module-caller allowlist, and the module is enabled for that customer."
+      }
+    },
+    "parameters": {
+      "ForwardedHost": {
+        "name": "x-forwarded-host",
+        "in": "header",
+        "required": false,
+        "description": "The customer's host, whole (Tenancy D1). Must equal Host. Absent on a module-caller request.",
+        "schema": { "type": "string", "maxLength": 260 }
+      },
+      "ProxyTrust": {
+        "name": "x-proxy-trust",
+        "in": "header",
+        "required": false,
+        "description": "The proxy shared secret (TENANT_PROXY_SHARED_SECRET). Absent on a module-caller request.",
+        "schema": { "type": "string", "maxLength": 512 }
+      }
+    },
+    "headers": {
+      "RetryAfter": {
+        "description": "Seconds until the client should retry.",
+        "schema": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "responses": {
+      "Unauthorized": {
+        "description": "No, or an unacceptable, credential for the resolved customer.",
+        "content": { "application/problem+json": { "schema": { "$ref": "#/components/schemas/Problem" } } }
+      },
+      "Forbidden": {
+        "description": "The request did not prove it came through the proxy, or a module caller may not call this operation for this customer.",
+        "content": { "application/problem+json": { "schema": { "$ref": "#/components/schemas/Problem" } } }
+      },
+      "NotFound": {
+        "description": "No customer is served at this host (unparseable, reserved, unbound or not active). There is no default customer.",
+        "content": { "application/problem+json": { "schema": { "$ref": "#/components/schemas/Problem" } } }
+      },
+      "Unavailable": {
+        "description": "The customer is suspended, its kernel database is behind its manifest, unreachable or skewed against this image, or the control registry is unreachable. Never cached.",
+        "headers": { "Retry-After": { "$ref": "#/components/headers/RetryAfter" } },
+        "content": { "application/problem+json": { "schema": { "$ref": "#/components/schemas/Problem" } } }
+      },
+      "InternalError": {
+        "description": "An internal error, or a response that would have broken this document (response-contract-violation).",
+        "content": { "application/problem+json": { "schema": { "$ref": "#/components/schemas/Problem" } } }
+      }
+    },
+    "schemas": {
+      "Health": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["status"],
+        "properties": { "status": { "const": "ok" } }
+      },
+      "CustomerId": {
+        "type": "string",
+        "description": "DB-TNT-CUSTOMER id: a canonical lower-case UUIDv7.",
+        "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+      },
+      "TenancySelf": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["customerId", "slug", "realm"],
+        "properties": {
+          "customerId": { "$ref": "#/components/schemas/CustomerId" },
+          "slug": { "type": "string", "pattern": "^[a-z0-9-]{1,30}$" },
+          "realm": { "type": "string", "minLength": 1, "maxLength": 255, "description": "DB-TNT-REALMREF: the customer's Keycloak realm." }
+        }
+      },
+      "EnabledModules": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["customerId", "modules"],
+        "properties": {
+          "customerId": { "$ref": "#/components/schemas/CustomerId" },
+          "modules": { "type": "array", "items": { "$ref": "#/components/schemas/EnabledModule" } }
+        }
+      },
+      "EnabledModule": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["moduleKey", "semver", "runtime"],
+        "properties": {
+          "moduleKey": { "type": "string", "pattern": "^[a-z][a-z_]{1,39}$" },
+          "semver": { "type": "string", "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]{1,40})?$" },
+          "runtime": { "$ref": "#/components/schemas/ModuleRuntime" }
+        }
+      },
+      "ModuleRuntime": {
+        "type": "object",
+        "description": "The runtime block of modules/<key>/module.json (spec D D.1.2), served only for the version the customer enabled.",
+        "additionalProperties": false,
+        "required": ["version", "database", "export", "timedJobs", "platformServer"],
+        "properties": {
+          "version": { "type": "string" },
+          "database": {
+            "oneOf": [
+              { "type": "null" },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["postgresService", "migrations"],
+                "properties": { "postgresService": { "type": "string" }, "migrations": { "type": "string" } }
+              }
+            ]
+          },
+          "export": {
+            "oneOf": [
+              { "type": "null" },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["kind", "retentionProfile"],
+                "properties": { "kind": { "const": "pg_dump" }, "retentionProfile": { "type": "string", "pattern": "^rp-[a-z]+-[a-z0-9-]+$" } }
+              }
+            ]
+          },
+          "timedJobs": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["id", "activeColourOnly"],
+              "properties": { "id": { "type": "string" }, "activeColourOnly": { "type": "boolean" } }
+            }
+          },
+          "platformServer": {
+            "oneOf": [
+              { "type": "null" },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["postgresService", "databases"],
+                "properties": { "postgresService": { "type": "string" }, "databases": { "type": "array", "items": { "type": "string" } } }
+              }
+            ]
+          }
+        }
+      },
+      "Problem": {
+        "type": "object",
+        "description": "RFC 9457 problem details.",
+        "additionalProperties": false,
+        "required": ["type", "title", "status"],
+        "properties": {
+          "type": { "type": "string", "pattern": "^urn:gremion:problem:[a-z0-9-]+$" },
+          "title": { "type": "string" },
+          "status": { "type": "integer", "minimum": 400, "maximum": 599 },
+          "detail": { "type": "string" }
+        }
+      }
+    }
+  }
+}

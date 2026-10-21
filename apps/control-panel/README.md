@@ -48,10 +48,32 @@ without vendor mail, `--no-mail` (a temporary password printed once; Q23).
 | `PLATFORM_DATABASE_URL` | no | gremion_platform; absent: no ledger view and "Neuer Mandant" is disabled with the reason |
 | `PANEL_EXECUTOR` | no | `gremion-tenant` or `none` (default); `none` disables "Neuer Mandant" with the reason |
 | `INTERNAL_PUSH_SECRET` | no | the switch's evict bearer; absent, `/api/internal/evict` refuses everything |
+| `PANEL_PROMETHEUS_URL` | no | the ops stack's Prometheus for the Betrieb page (set by `compose/control-panel/ops-link.yml`: `http://prometheus:9090`); plain http only to the loopback or a compose service name; absent: the page is shown disabled, naming this variable |
 
 `/healthz` answers 200 when the process runs and the contract is valid, 503
 naming the problems (never a value) otherwise. It never reaches Keycloak or a
 database, so the panel is healthy before `gremion-tenant init`.
+
+## The Betrieb page (`/betrieb`)
+
+Key numbers of the host at a glance: backup and weekly-measurement age, CPU,
+memory, filesystems, containers (stopped, unhealthy), Postgres connections,
+NATS backlog per consumer, storage components and scheduled jobs. The panel
+reads them **server-side** from the ops stack's Prometheus with fixed instant
+queries (`src/lib/server/betrieb.ts`); the browser never reaches the ops
+network, and Grafana stays on the loopback for history and detail (TRD-111).
+Every query is one the provisioned dashboard `Gremion – Betrieb` already runs
+(`betrieb.test.ts` enforces it), so the dashboard's metric guard
+(`compose/observability/dashboards.test.mjs`) covers the page as well.
+
+On a host with the ops stack, start the panel with the overlay:
+
+    docker compose -f compose/control-panel/standalone.yml -f compose/control-panel/ops-link.yml --env-file <env> up -d
+
+with `PANEL_OPS_NETWORK=<STACK>-ops_ops` in the env file. Without the overlay
+(or without the ops stack) the page says why it is disabled; a Prometheus that
+does not answer shows one page-level error, a single failing query marks only
+its tile, and a query without data says "Keine Daten" (never a 0).
 
 ## Where it runs
 

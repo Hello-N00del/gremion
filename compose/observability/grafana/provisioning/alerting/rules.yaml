@@ -456,3 +456,149 @@ groups:
         annotations:
           summary: "A monitoring signal stopped arriving (TRD-181): the named component is blind"
           component: "{{ $labels.component }}"
+      # TASK-079: the dead-letter paths (TRD-420), one rule each so each is its own e-mail under
+      # group_by [alertname, component]. Runbook: docs/runbooks/dead-letter.md.
+      - uid: gremion-outbox-dead-lettered
+        title: OutboxDeadLettered
+        condition: B
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: prometheus
+            model:
+              refId: A
+              expr: gremion:cond:outbox_dead_lettered
+              instant: true
+              range: false
+          - refId: B
+            datasourceUid: __expr__
+            relativeTimeRange:
+              from: 0
+              to: 0
+            model:
+              refId: B
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0]
+        noDataState: Alerting
+        execErrState: Alerting
+        for: 1m
+        isPaused: false
+        labels:
+          severity: critical
+        annotations:
+          summary: "The relay gave up on an outbox row: it holds back every later event of its aggregate (docs/runbooks/dead-letter.md, requeue)"
+          component: "{{ $labels.component }}"
+      - uid: gremion-inbox-dead-lettered
+        title: InboxDeadLettered
+        condition: B
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: prometheus
+            model:
+              refId: A
+              expr: gremion:cond:inbox_dead_lettered
+              instant: true
+              range: false
+          - refId: B
+            datasourceUid: __expr__
+            relativeTimeRange:
+              from: 0
+              to: 0
+            model:
+              refId: B
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0]
+        noDataState: Alerting
+        execErrState: Alerting
+        for: 1m
+        isPaused: false
+        labels:
+          severity: critical
+        annotations:
+          summary: "A consumer's message reached its delivery limit and went to the dead-letter stream (docs/runbooks/dead-letter.md, replay)"
+          component: "{{ $labels.component }}"
+      - uid: gremion-inbox-stalled
+        title: InboxStalled
+        condition: B
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: prometheus
+            model:
+              refId: A
+              expr: gremion:cond:inbox_stalled
+              instant: true
+              range: false
+          - refId: B
+            datasourceUid: __expr__
+            relativeTimeRange:
+              from: 0
+              to: 0
+            model:
+              refId: B
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0]
+        noDataState: Alerting
+        execErrState: Alerting
+        for: 1m
+        isPaused: false
+        labels:
+          severity: critical
+        annotations:
+          summary: "An inbox row has stayed received or failed past the delivery horizon: a consumer crashed on its last delivery (docs/runbooks/dead-letter.md)"
+          component: "{{ $labels.component }}"
+      - uid: gremion-dead-letter-queue
+        title: DeadLetterQueueNotEmpty
+        condition: B
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: prometheus
+            model:
+              refId: A
+              expr: gremion:cond:dead_letter_queue
+              instant: true
+              range: false
+          - refId: B
+            datasourceUid: __expr__
+            relativeTimeRange:
+              from: 0
+              to: 0
+            model:
+              refId: B
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0]
+        noDataState: Alerting
+        execErrState: Alerting
+        for: 1m
+        isPaused: false
+        labels:
+          severity: critical
+        annotations:
+          summary: "The tenant's dead-letter stream holds an entry (docs/runbooks/dead-letter.md); it is kept for 7 days"
+          component: "{{ $labels.component }}"

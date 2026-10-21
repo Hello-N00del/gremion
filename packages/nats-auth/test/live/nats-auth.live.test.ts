@@ -380,7 +380,7 @@ describe.runIf(MODE === 'auth')('reload (TRD-440)', () => {
   })
 })
 
-// RESIDUAL R1 (security review, reported to the orchestrator, NOT fixed in
+// RESIDUAL R1 (security review, reported to the maintainer, NOT fixed in
 // this unit): NATS checks publish permission on a message's SUBJECT only,
 // never on its reply subject. Any JetStream API request a module may send
 // ($JS.API.INFO at least) with a reply subject inside another module's

@@ -143,3 +143,64 @@ test('RED: a root with no module test script is a zero-collected part, never a p
     rmSync(root, { recursive: true, force: true })
   }
 })
+
+// TASK-205c (TASK-200 residual (a)): the `module-lane` part runs the disabled modules' app halves through
+// gremion-ui/scripts/module-lane.mjs. The stand-in lane below takes the same argument shape as the real one
+// (`-- <vitest flags>`) and writes its report where vitest would, so these prove the wiring by the report:
+// a failing lane turns the part red, a green lane passes with its counts, and a lane that refuses (exit 1,
+// no report: an empty selection) is unparseable, never a pass.
+function laneRoot(body) {
+  const root = mkdtempSync(path.join(tmpdir(), 't205c-unit-lane-'))
+  put(root, 'gremion-ui/scripts/module-lane.mjs', body)
+  return { root, cleanup: () => rmSync(root, { recursive: true, force: true }) }
+}
+
+const LANE_REPORT = (failed) =>
+  [
+    "import { writeFileSync } from 'node:fs'",
+    "const argv = process.argv.slice(2)",
+    "if (argv[0] !== '--') process.exit(2) // the part hands the lane `--` first, then vitest's flags",
+    "const out = argv.find((a) => a.startsWith('--outputFile=')).slice('--outputFile='.length)",
+    `writeFileSync(out, JSON.stringify({ success: ${failed === 0}, numTotalTests: 4, numPassedTests: ${4 - failed}, numFailedTests: ${failed}, numPendingTests: 0, numTodoTests: 0, numFailedTestSuites: ${failed}, testResults: [] }))`,
+    `process.exit(${failed === 0 ? 0 : 1})`,
+    '',
+  ].join('\n')
+
+test('the module-lane part exists and the real lane script it runs is in the tree', () => {
+  assert.equal(typeof UNIT_PARTS['module-lane'], 'function')
+  assert.ok(readFileSync(path.join(REPO_ROOT, 'gremion-ui/scripts/module-lane.mjs'), 'utf8').includes('--modules'))
+})
+
+test('GREEN: a lane whose report is clean passes with its counts', () => {
+  const f = laneRoot(LANE_REPORT(0))
+  try {
+    const r = runUnitSuite({ root: f.root, only: ['module-lane'] })
+    assert.equal(r.unparseable, false, r.detail)
+    assert.equal(r.collected, 4)
+    assert.equal(r.failed, 0)
+  } finally {
+    f.cleanup()
+  }
+})
+
+test('RED: a failing lane test turns the part red (counted from the report, not the exit code)', () => {
+  const f = laneRoot(LANE_REPORT(2))
+  try {
+    const r = runUnitSuite({ root: f.root, only: ['module-lane'] })
+    assert.equal(r.failed, 2)
+    assert.equal(r.collected, 4)
+  } finally {
+    f.cleanup()
+  }
+})
+
+test('RED: a lane that refuses (exit 1, no report) is unparseable, never a pass', () => {
+  const f = laneRoot("console.error('[module-lane] refused: no disabled module with an app/ unit test')\nprocess.exit(1)\n")
+  try {
+    const r = runUnitSuite({ root: f.root, only: ['module-lane'] })
+    assert.equal(r.unparseable, true)
+    assert.match(r.detail, /no parseable JSON report/)
+  } finally {
+    f.cleanup()
+  }
+})

@@ -15,7 +15,7 @@
     "module-finance": "unadopted",
     "module-publishing": "unadopted",
     "module-vault": "unadopted",
-    "kernel-api": "unadopted",
+    "kernel-api": "tenant-store",
     "governance": "unadopted",
     "mail": "unadopted"
   }

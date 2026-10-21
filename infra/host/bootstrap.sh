@@ -80,7 +80,8 @@ Stages:
   networks     shared external networks and volumes        (needs state.env)
   firewall     table inet gremion                          (needs state.env)
   agent        gremion-hostd unit + restricted deploy key
-  timers       gremion-backup.timer + gremion-verify.service
+  timers       gremion-backup.timer + gremion-verify.service + gremion-metrics.timer
+               + gremion-footprint.timer (weekly, TRD-223)
   harden-ssh   key-only SSH   (RUN LAST, gated, not part of 'all')
   trust        pinned cosign + the release public key       (not part of 'all')
   signers      the release-tag signers file (allowed_signers) (not part of 'all')
@@ -513,8 +514,17 @@ EOF
 # ──────────────────────────────────────────────────────────────────────────
 # user — deploy user, keys, sudo, host layout (§A)
 # ──────────────────────────────────────────────────────────────────────────
+# The images' `node` user is uid 1000; kernel-api-migrate (and the other
+# readers) write the bind-mounted migration-dumps/ as that uid, so the deploy
+# user that owns it must be uid 1000 too.
+assert_deploy_uid() {
+    local uid; uid="$(id -u "${DEPLOY_USER}")"
+    [[ "$uid" == 1000 ]]         || die "deploy user ${DEPLOY_USER} is uid ${uid}, but the migration dump dir needs the container uid 1000: use a deploy user with uid 1000 (a fresh host creates it with --uid 1000)"
+}
+
 ensure_layout() {
     local root; root="$(gremion_root)"
+    assert_deploy_uid
     install -d -m 755 -o "${DEPLOY_USER}" -g "${DEPLOY_USER}" "$root"
     local d
     for d in releases bin backups runtime logs; do
@@ -527,6 +537,9 @@ ensure_layout() {
     # gremion-verify and the ops blackbox targets. Never recreated if present.
     [[ -f "${root}/etc/tenant-hosts.txt" ]] \
         || install -m 640 -o "${DEPLOY_USER}" -g "${DEPLOY_USER}" /dev/null "${root}/etc/tenant-hosts.txt"
+    # The pre-migration dump (whole database in clear): 0700, the deploy user's.
+    # kernel-api-migrate bind-mounts it and runs as uid 1000, which must own it.
+    install -d -m 700 -o "${DEPLOY_USER}" -g "${DEPLOY_USER}" "${root}/migration-dumps"
     for d in env secrets secrets/tenants secrets/mail edge; do
         install -d -m 700 -o "${DEPLOY_USER}" -g "${DEPLOY_USER}" "${root}/etc/${d}"
     done
@@ -541,7 +554,7 @@ stage_user() {
     if id "${DEPLOY_USER}" >/dev/null 2>&1; then
         ok "user ${DEPLOY_USER} exists"
     else
-        adduser --disabled-password --gecos "" "${DEPLOY_USER}"
+        adduser --disabled-password --gecos "" --uid 1000 "${DEPLOY_USER}"
         ok "user ${DEPLOY_USER} created"
     fi
 
@@ -950,6 +963,21 @@ stage_timers() {
     systemctl start gremion-metrics.service
     assert "the textfile collector produced runtime/textfile/gremion.prom"         test -s "${root}/runtime/textfile/gremion.prom"
     assert "the collector stamped its own timestamp"         grep -q '^gremion_metrics_textfile_timestamp_seconds ' "${root}/runtime/textfile/gremion.prom"
+
+    # TASK-039-FU (TRD-223): the weekly footprint record. Same two-argument
+    # render_unit. The service is NOT started here: its job_run row needs the
+    # platform chain at 0005, which the control plane applies, so a first run
+    # belongs after that migration (TASK-038 re-init: systemctl start
+    # gremion-footprint.service, then read runtime/footprint/<week>.json).
+    render_unit gremion-footprint.service /etc/systemd/system/gremion-footprint.service
+    render_unit gremion-footprint.timer /etc/systemd/system/gremion-footprint.timer
+    systemctl daemon-reload
+    systemctl enable --now gremion-footprint.timer
+    local fp_next
+    fp_next="$(systemctl show gremion-footprint.timer -p NextElapseUSecRealtime --value)"
+    [[ -n "$fp_next" && "$fp_next" != "n/a" ]] \
+        || die "gremion-footprint.timer is enabled but has no next elapse"
+    ok "gremion-footprint.timer next elapse: ${fp_next}"
 }
 
 # ──────────────────────────────────────────────────────────────────────────

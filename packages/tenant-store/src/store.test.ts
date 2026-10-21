@@ -60,6 +60,83 @@ describe('createTenantStore().openTenantDb', () => {
     }
   })
 
+  it('evictTenantDb retires one pair: the next open resolves afresh (a rotated secret), the old pool ends after the grace and is never handed out again', async () => {
+    vi.useFakeTimers()
+    try {
+      const f = fakeFactory()
+      let pw = 'old'
+      const rotating = (t: string, m: string) => ({ url: `postgres://u:${pw}@h/${tenantModuleDbName(t, m)}` })
+      const store = createTenantStore({ resolveTarget: rotating, createDb: f.createDb, evictGraceMs: 1000 })
+      const first = await store.openTenantDb(A, 'kernel')
+      const other = await store.openTenantDb(B, 'kernel')
+      pw = 'new'
+      expect(await store.openTenantDb(A, 'kernel')).toBe(first) // cached: the rotation is not seen
+      expect(store.evictTenantDb(A, 'kernel')).toBe(true)
+      expect(store.evictTenantDb(A, 'kernel')).toBe(false)
+      const second = await store.openTenantDb(A, 'kernel')
+      expect(second).not.toBe(first)
+      expect(f.made[2]!.profile.url).toContain(':new@')
+      expect(await store.openTenantDb(B, 'kernel')).toBe(other) // only the named pair
+      expect(f.made[0]!.end).not.toHaveBeenCalled() // a caller may still hold it
+      await vi.advanceTimersByTimeAsync(1001)
+      expect(f.made[0]!.end).toHaveBeenCalledTimes(1)
+      await store.close()
+      expect(f.made[0]!.end).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('evictTenantDb during an in-flight open: the pending open re-resolves, never caches the pre-eviction secret, and does not clobber the newer opening entry', async () => {
+    const f = fakeFactory()
+    let pw = 'old'
+    const gates: (() => void)[] = []
+    const slow = (t: string, m: string) => {
+      const url = `postgres://u:${pw}@h/${tenantModuleDbName(t, m)}`
+      return new Promise<{ url: string }>((res) => gates.push(() => res({ url })))
+    }
+    const store = createTenantStore({ resolveTarget: slow, createDb: f.createDb })
+    const p1 = store.openTenantDb(A, 'kernel') // resolving with the OLD secret
+    await Promise.resolve()
+    expect(gates).toHaveLength(1)
+    pw = 'new'
+    expect(store.evictTenantDb(A, 'kernel')).toBe(false) // nothing cached yet, but the epoch moves
+    const p2 = store.openTenantDb(A, 'kernel') // fresh open, new secret
+    await Promise.resolve()
+    expect(gates).toHaveLength(2)
+    gates[0]!() // the stale resolve lands first
+    await vi.waitFor(() => expect(gates.length).toBeGreaterThanOrEqual(3)) // it re-resolved instead of caching
+    gates.slice(1).forEach((g) => g())
+    const [a, b] = await Promise.all([p1, p2])
+    for (const m of f.made) expect(m.profile.url).toContain(':new@') // no pool ever built from the old secret
+    expect(await store.openTenantDb(A, 'kernel')).toBe(b)
+    expect(a).toBeDefined()
+    expect(store.size()).toBe(1)
+    await store.close()
+  })
+
+  it('repeated evictions keep retired pools bounded (ended early past the cap), not one per eviction until the grace', async () => {
+    const f = fakeFactory()
+    const store = createTenantStore({ resolveTarget, createDb: f.createDb, maxPools: 2, evictGraceMs: 60_000 })
+    for (let i = 0; i < 10; i++) {
+      await store.openTenantDb(A, 'kernel')
+      store.evictTenantDb(A, 'kernel')
+    }
+    const live = f.made.filter((m) => m.end.mock.calls.length === 0).length
+    expect(live).toBeLessThanOrEqual(2) // retired cap = maxPools
+    await store.close()
+    expect(f.made.every((m) => m.end.mock.calls.length === 1)).toBe(true)
+  })
+
+  it('close() ends a retired pool still in its grace', async () => {
+    const f = fakeFactory()
+    const store = createTenantStore({ resolveTarget, createDb: f.createDb, evictGraceMs: 60_000 })
+    await store.openTenantDb(A, 'kernel')
+    store.evictTenantDb(A, 'kernel')
+    await store.close()
+    expect(f.made[0]!.end).toHaveBeenCalledTimes(1)
+  })
+
   it('a pair requested again during its grace gets its draining pool back, not a second pool', async () => {
     const f = fakeFactory()
     const store = createTenantStore({ resolveTarget, createDb: f.createDb, maxPools: 1, evictGraceMs: 60_000 })

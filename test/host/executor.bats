@@ -150,6 +150,18 @@ outcome() { cat "${GREMION_ROOT}/outcome" 2>/dev/null || true; }
     [ "$output" = '{"votes":{"requires_dpia":false,"reason_codes":["no_special_category"],"document_ref":null}}' ] || { echo "$output"; return 1; }
 }
 
+@test "G7 (TASK-044 re-applied): tenant-create gets the release tip DERIVED from the release tree, and the scratch/production flags by name" {
+    command -v git >/dev/null || skip "git absent"
+    git -C "$REL" init -q
+    git -C "$REL" -c user.email=t@e.x -c user.name=t commit -q --allow-empty -m tip
+    local tip; tip="$(git -C "$REL" rev-parse HEAD)"
+    queue create
+    run "$EXEC" --once
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    [ "$(grep -c -- "-e GREMION_RELEASE_TIP=${tip}" "${GREMION_ROOT}/tc-argv.log")" -eq "$(wc -l < "${GREMION_ROOT}/tc-argv.log")" ] || { cat "${GREMION_ROOT}/tc-argv.log"; return 1; }
+    assert_present '-e GREMION_SCRATCH_FIXTURES -e GREMION_PRODUCTION_STACK' "${GREMION_ROOT}/tc-argv.log"
+}
+
 @test "a refused verdict: finished refused with the reason, no phase runs, nothing is marked verified" {
     printf '{"verdict":"refused","reason":"evidence: the ID token has acr loa1, loa2 is required"}\n' > "${GREMION_ROOT}/verdict.json"
     queue create

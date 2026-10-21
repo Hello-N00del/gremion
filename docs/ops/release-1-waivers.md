@@ -38,7 +38,7 @@ row shape `| \`id\` | §L:n | GATE | … |` is what the verifier parses, and
 `test/host/release-1-waivers.bats` pins it.
 
 Authority: spec B §1.4 and §G
-(`docs/superpowers/specs/spec-b-kernel-portback-relocatability-release-design.md`),
+(`docs/design-specs/spec-b-kernel-portback-relocatability-release-design.md`),
 on the decisions of 2026-09-15. §L item numbers are the go-live sequence of the
 private host design; the gate id is the corresponding section of
 `docs/ops/go-live-gate.md` — the off-site row's anchor is that document's

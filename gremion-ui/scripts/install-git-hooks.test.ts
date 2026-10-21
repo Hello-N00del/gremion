@@ -10,7 +10,7 @@
 //      falls through SILENTLY and commits unguarded;
 //   2. the versioned delegate `scripts/hooks/pre-commit` `exit 0`s whenever it
 //      cannot run — no repo root, no lint script, and (the common one) no
-//      `gremion-ui/node_modules`, i.e. in every fresh agent worktree.
+//      `gremion-ui/node_modules`, i.e. in every fresh worktree.
 //
 // Both are replaced by fail-closed branches that block the commit with an
 // instruction; `git commit --no-verify` remains the single VISIBLE bypass.
@@ -650,7 +650,7 @@ describe('installer CLI hooks-dir resolution', () => {
     // exit 0 + a warning + a write into the repo's OWN hooks dir is itself the
     // defect: git obeys the INHERITED value, so that hook is never run — yet
     // stdout would say `created: …` and the exit code would say success, which
-    // is what a postinstall step, CI or an agent harness reads.
+    // is what a postinstall step, CI or a wrapper script reads.
     expect(r.status, `expected a NON-ZERO exit, got:\n${r.stdout}${r.stderr}`).not.toBe(0)
     expect(
       existsSync(join(globalHooks, 'pre-commit')),
@@ -821,7 +821,7 @@ describe('end-to-end rejection (throwaway repo, core.hooksPath)', () => {
   }, 180_000)
 
   it('fails the commit with an instruction when gremion-ui/node_modules is missing', () => {
-    // The kernel base delegate `exit 0`s here — which is every fresh agent
+    // The kernel base delegate `exit 0`s here — which is every fresh
     // worktree, i.e. the most common way this guard silently does nothing.
     const repo = throwawayRepo({ nodeModules: false })
     const { commit, logOut, output } = commitWith(repo, installedHooksDir(), VIOLATION)

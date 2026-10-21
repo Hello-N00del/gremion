@@ -22,7 +22,7 @@ command below reads them from the env file instead of naming them.
 |---|---|
 | **Gate:** | the condition that must hold |
 | **Proof:** | the exact command, run against the running instance, and the line or artefact it must produce |
-| **Owner:** | `OPERATOR` (a decision or an action off the host), `AGENT` (runs the command), or `OPERATOR + AGENT` |
+| **Owner:** | `OPERATOR` (a decision or an action off the host), `RUNNER` (runs the command), or `OPERATOR + RUNNER` |
 | **Evidence:** | the file in the deployment's private annex where the output is filed |
 
 Every Proof block assumes this preamble:
@@ -64,7 +64,7 @@ curl -fsS "https://${PLATFORM_DOMAIN}/impressum" | sha256sum
 
 The four documents are filed by name and date; a draft is not a document.
 
-**Owner:** OPERATOR + AGENT
+**Owner:** OPERATOR + RUNNER
 **Evidence:** `G1-legal.md`
 
 ## G2-RESTORE
@@ -88,7 +88,7 @@ The rehearsal record published on the release tag must name that exact tag and
 carry a green verify output; a release whose tag has no green record does not
 pass this item.
 
-**Owner:** AGENT
+**Owner:** RUNNER
 **Evidence:** `G2-restore.md`
 
 ## G3-VERIFY
@@ -112,7 +112,7 @@ jq -e --argjson boot "$boot" '.ok == true and ((.ts | fromdateiso8601) > $boot)'
 The last assertion is the one that matters: a `last-verify.json` older than the
 boot means the reboot gate did not run, however green the file looks.
 
-**Owner:** AGENT
+**Owner:** RUNNER
 **Evidence:** `G3-verify.md`
 
 ## G4-MAIL
@@ -136,7 +136,7 @@ gremion-dns-check --domain "${PLATFORM_DOMAIN}" \
 `6b=BLOCKED` keeps this item red: the platform's own identity provider must send
 its mail through the authenticated submission path like every other sender.
 
-**Owner:** OPERATOR + AGENT
+**Owner:** OPERATOR + RUNNER
 **Evidence:** `G4-mail.md`
 
 ## G5-TENANT
@@ -161,7 +161,7 @@ docker compose --env-file /opt/gremion/etc/env/state.env exec -T postgres \
 # every row is a real person named in the annex; no example.org or example.com address
 ```
 
-**Owner:** AGENT
+**Owner:** RUNNER
 **Evidence:** `G5-tenant.md`
 
 ## G6-OFFBOX
@@ -189,7 +189,7 @@ gremion-verify
 Stopping the edge is safe here precisely because this gate runs before any real
 user exists.
 
-**Owner:** OPERATOR + AGENT
+**Owner:** OPERATOR + RUNNER
 **Evidence:** `G6-offbox.md`
 
 ## G7-ERASURE
@@ -269,7 +269,7 @@ that order. The ledger must show one row per subsystem the tenant touched, a
 plane's ledger widening; until that lands this item stays
 `BLOCKED: erasure ledger widening`.
 
-**Owner:** AGENT
+**Owner:** RUNNER
 **Evidence:** `G7-erasure.md`
 
 ## G8-GUARDS-RED
@@ -341,7 +341,7 @@ fi
 The annex's RED register lists, per guard, the break command, the observed
 failure text, and who watched it. The author of a guard may not be its witness.
 
-**Owner:** OPERATOR + AGENT
+**Owner:** OPERATOR + RUNNER
 **Evidence:** `G8-guards.md`
 
 ## Sequence

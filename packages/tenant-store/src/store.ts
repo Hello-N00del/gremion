@@ -35,6 +35,13 @@ export interface TenantStoreOptions {
 
 export interface TenantStore {
   openTenantDb(tenantId: string, moduleId: string): Promise<Sql>
+  /**
+   * Retires the (tenant, module) pool: the next openTenantDb resolves the target
+   * afresh (a rotated db_conn_ref or password is picked up). The old pool is
+   * ended after evictGraceMs (a caller may hold it mid-request) and is never
+   * handed out again. Returns whether a pool was retired.
+   */
+  evictTenantDb(tenantId: string, moduleId: string): boolean
   /** Open pools. */
   size(): number
   /** Ends every pool. */
@@ -61,6 +68,13 @@ export function createTenantStore(options: TenantStoreOptions = {}): TenantStore
   // maxPools: past it the oldest is ended early, so open pools stay within
   // 2 x maxPools however fast pairs churn.
   const draining = new Map<string, { sql: Sql; timer: ReturnType<typeof setTimeout> }>()
+  // Evicted ON PURPOSE (evictTenantDb): waiting out the grace, never handed out again.
+  const retired = new Set<{ sql: Sql; timer: ReturnType<typeof setTimeout> }>()
+  // Per-key eviction generation: an open() that resolved before an eviction
+  // must not cache what it resolved (a rotated secret).
+  const epochs = new Map<string, number>()
+  const epochOf = (key: string): number => epochs.get(key) ?? 0
+  const maxRetired = maxPools
   let closed = false
 
   function end(sql: Sql, context: string): Promise<void> {
@@ -88,10 +102,20 @@ export function createTenantStore(options: TenantStoreOptions = {}): TenantStore
 
   async function open(key: string, tenantId: string, moduleId: string): Promise<Sql> {
     const dbName = tenantModuleDbName(tenantId, moduleId)
-    const { url } = await resolveTarget(tenantId, moduleId)
-    assertTargetMatches(url, dbName)
-    // close() ran while the resolver was in flight: pool nothing.
-    if (closed) throw new Error('tenant store is closed')
+    let url: string
+    // An eviction during the resolver call means the target is stale: no pool
+    // has been built yet, so just resolve again.
+    for (;;) {
+      const epoch = epochOf(key)
+      ;({ url } = await resolveTarget(tenantId, moduleId))
+      assertTargetMatches(url, dbName)
+      // close() ran while the resolver was in flight: pool nothing.
+      if (closed) throw new Error('tenant store is closed')
+      if (epochOf(key) === epoch) break
+    }
+    // A newer open (started after an eviction) may have cached already: reuse it.
+    const cached = pools.get(key)
+    if (cached) return cached
     const sql = createDb({ url, max: maxConnections, prepare })
     pools.set(key, sql)
     evictOverflow()
@@ -124,13 +148,49 @@ export function createTenantStore(options: TenantStoreOptions = {}): TenantStore
       }
       const pending = opening.get(key)
       if (pending) return pending
-      const p = open(key, tenantId, moduleId).finally(() => opening.delete(key))
+      const p: Promise<Sql> = open(key, tenantId, moduleId).finally(() => {
+        if (opening.get(key) === p) opening.delete(key)
+      })
       opening.set(key, p)
       return p
+    },
+    evictTenantDb(tenantId, moduleId) {
+      assertTenantId(tenantId)
+      assertModuleId(moduleId)
+      const key = `${tenantId}/${moduleId}`
+      const d = draining.get(key)
+      if (d) clearTimeout(d.timer)
+      const sql = pools.get(key) ?? d?.sql
+      pools.delete(key)
+      draining.delete(key)
+      opening.delete(key)
+      epochs.set(key, epochOf(key) + 1)
+      if (!sql) return false
+      const entry = {
+        sql,
+        timer: setTimeout(() => {
+          retired.delete(entry)
+          void end(sql, `retiring pool ${key}`)
+        }, evictGraceMs),
+      }
+      entry.timer.unref?.()
+      retired.add(entry)
+      // Cap: past maxRetired the oldest is ended early, so repeated evictions
+      // (the gate's unavailable retry) cannot grow connections without limit.
+      while (retired.size > maxRetired) {
+        const old = retired.values().next().value as typeof entry
+        clearTimeout(old.timer)
+        retired.delete(old)
+        void end(old.sql, `retiring pool ${key} early (retired cap)`)
+      }
+      return true
     },
     size: () => pools.size,
     async close() {
       closed = true
+      const retiredSql = [...retired].map((r) => r.sql)
+      for (const r of retired) clearTimeout(r.timer)
+      retired.clear()
       const all = [...pools.entries()]
       pools.clear()
       for (const [key, d] of draining) {
@@ -138,7 +198,7 @@ export function createTenantStore(options: TenantStoreOptions = {}): TenantStore
         all.push([`${key} (evicted)`, d.sql])
       }
       draining.clear()
-      await Promise.all(all.map(([key, sql]) => end(sql, `closing pool ${key}`)))
+      await Promise.all([...all.map(([key, sql]) => end(sql, `closing pool ${key}`)), ...retiredSql.map((sql) => end(sql, 'closing retired pool'))])
     },
   }
 }

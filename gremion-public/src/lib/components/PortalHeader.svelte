@@ -87,13 +87,30 @@
   </div>
 {/if}
 
-<header class="border-b border-border bg-surface">
-  <div class="mx-auto flex max-w-7xl items-center gap-8 px-5 py-4 lg:py-5">
+<header class="border-b border-border bg-surface" data-testid="portal-header">
+  <!-- Narrow screens: with the brand and the login pill both `shrink-0` a long
+       institution name pushed the pill off-screen at 390px. Below `md` the
+       brand now shrinks and the name WRAPS (at most two lines at 390px, never
+       truncated); below `sm` the pill shows the short label, the full label
+       staying in its accessible name, with a tighter gap. From `sm`/`md` up
+       nothing changes.
+       Below `sm` a ~75-character name still needed three lines beside the pill
+       (the pill and the mark leave only ~230px, and two lines of 15px type need
+       ~330px). So there the row becomes a one-cell grid: the pill sits at the
+       top right, on the mark's row, and the name wraps beneath the mark at the
+       full row width, in 15px type with tight leading and balanced lines, so
+       it fits two lines untruncated. -->
+  <div class="mx-auto flex max-w-7xl items-center gap-3 px-5 py-4 max-sm:grid sm:gap-4 md:gap-8 lg:py-5">
 
     <!-- Brand mark + institution -->
-    <a href="{base}/" class="flex shrink-0 items-center gap-3" aria-label="Startseite">
+    <a
+      href="{base}/"
+      class="flex min-w-0 shrink items-center gap-3 max-sm:col-start-1 max-sm:row-start-1 max-sm:flex-wrap
+             max-sm:content-start max-sm:gap-y-2 md:shrink-0"
+      aria-label="Startseite"
+    >
       <span
-        class="relative grid h-9 w-9 place-items-center rounded-sm bg-ink font-display
+        class="relative grid h-9 w-9 shrink-0 place-items-center rounded-sm bg-ink font-display
                text-[17px] font-bold text-paper"
       >
         S
@@ -102,15 +119,23 @@
           aria-hidden="true"
         ></span>
       </span>
-      <span class="leading-tight">
-        <span class="block font-display text-[19px] font-semibold tracking-tight text-ink">
+      <span class="min-w-0 leading-tight max-sm:basis-full">
+        <span
+          class="block font-display text-[15px] font-semibold tracking-tight text-ink
+                 break-words hyphens-auto max-sm:leading-[1.15] max-sm:text-balance sm:text-[19px]"
+          data-testid="portal-institution-name"
+        >
           {institutionName}
         </span>
         <!-- No fallback: this used to default to a specific body type
              ('Studierendenschaft'), which mislabels every other kind of
              institution deploying the kernel. Unset renders nothing. -->
         {#if legislatureLabel}
-          <span class="block font-mono text-[9.5px] tracking-[0.14em] text-ink-muted uppercase">
+          <span
+            class="block font-mono text-[9.5px] tracking-[0.14em] text-ink-muted uppercase
+                   break-words"
+            data-testid="portal-legislature-label"
+          >
             {legislatureLabel}
           </span>
         {/if}
@@ -152,13 +177,16 @@
          default topology the app is a DIFFERENT host from the portal. -->
     {#if mainAppUrl}
       <a
-        class="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-ink px-4 py-2
-               font-mono text-[12px] font-medium tracking-wide text-paper transition-opacity
-               hover:opacity-85 {navLinks.length > 0 ? '' : 'ml-auto'}"
+        class="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-ink px-3 py-2
+               font-mono text-[11px] font-medium tracking-wide whitespace-nowrap text-paper
+               transition-opacity hover:opacity-85 max-sm:col-start-1 max-sm:row-start-1
+               max-sm:mt-0.5 max-sm:self-start max-sm:justify-self-end sm:px-4 sm:text-[12px]
+               {navLinks.length > 0 ? '' : 'ml-auto'}"
+        data-testid="portal-login-cta"
         href={mainAppUrl}
         rel="noreferrer"
       >
-        Login · Mitglieder
+        <span>Login<span class="max-sm:sr-only" data-testid="portal-login-cta-suffix">&nbsp;· Mitglieder</span></span>
       </a>
     {/if}
 

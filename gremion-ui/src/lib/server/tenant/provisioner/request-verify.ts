@@ -113,7 +113,7 @@ export async function verifyRequestEvidence(c: EvidenceCheck): Promise<EvidenceR
     const authTime = timeClaim === 'auth_time' ? (id.auth_time as number) : id.iat
     if (typeof authTime !== 'number' || !Number.isFinite(authTime)) throw new Error('the ID token carries neither auth_time nor iat')
     const age = Math.floor(c.createdAt.getTime() / 1000) - authTime
-    // the database's own bound on the recorded time (plt 0005): [created_at - 3600 s, created_at + 60 s]
+    // the database's own bound on the recorded time (plt 0009): [created_at - 3600 s, created_at + 60 s]
     if (age > EVIDENCE_WINDOW_SECONDS || age < -EVIDENCE_SKEW_SECONDS) {
       throw new Error(`the sign-in (${timeClaim}) is ${age} s before the request; at most ${EVIDENCE_WINDOW_SECONDS} s before (or ${EVIDENCE_SKEW_SECONDS} s after) is accepted`)
     }

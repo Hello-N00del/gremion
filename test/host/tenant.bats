@@ -308,9 +308,7 @@ create() {
     done
     grep -qx 'postgresql://postgres:unit-pg-root-secret@postgres-guardstack:5432/postgres' "${d}/kernel_pg_admin"
     grep -qx 'postgresql://calendar:unit-calendar-secret@calendar-postgres:5432/postgres' "${d}/module_pg_admin_calendar"
-    if [ "$(stat -c %a "${d}/kernel_pg_admin" 2>/dev/null)" != "" ]; then
-        [ "$(stat -c %a "${d}/kernel_pg_admin")" = 600 ]
-    fi
+    assert_mode_600 "${d}/kernel_pg_admin"
     run steps
     [ "${lines[0]}" = "tc bootstrap-provisioner " ] || { steps; return 1; }
     [ "${lines[1]}" = "tc init --panel-origin" ]
@@ -327,7 +325,7 @@ create() {
     [ "$status" -eq 0 ] || { echo "status=$status $output"; steps; cat "$SHIM_LOG"; return 1; }
     local f="${GREMION_ROOT}/etc/secrets/tenant-create/tenant_provisioner"
     [ "$(cat "$f")" = unit-provisioner-sa-secret ] || { echo "credential: $(cat "$f" 2>&1)"; return 1; }
-    if [ "$(stat -c %a "$f" 2>/dev/null)" != "" ]; then [ "$(stat -c %a "$f")" = 600 ]; fi
+    assert_mode_600 "$f"
     # the admin credential came from state.env and reached the one-shot's environment, never an argv
     [ "$(cat "${GREMION_ROOT}/kc-pw-seen")" = unit-kc-admin-state-secret ]
     assert_recorded docker '-e KEYCLOAK_ADMIN_PASSWORD tenant-create bootstrap-provisioner'
@@ -482,7 +480,7 @@ exit 0'
     [ "$status" -eq 0 ] || { echo "status=$status $output"; cat "$SHIM_LOG"; return 1; }
     local f="${GREMION_ROOT}/etc/secrets/control-panel/client_secret" secret
     [ -s "$f" ]
-    if [ "$(stat -c %a "$f" 2>/dev/null)" != "" ]; then [ "$(stat -c %a "$f")" = 600 ]; fi
+    assert_mode_600 "$f"
     secret="$(tr -d '\n' < "$f")"
     run jq -r '.clients[] | select(.clientId == "control-panel") | [.secret == $s, (.redirectUris | tostring), (.webOrigins | tostring)] | @tsv' --arg s "$secret" "${GREMION_ROOT}/realm.json"
     [ "$output" = $'true\t["https://panel.fixture.example/*"]\t["https://panel.fixture.example"]' ] || { echo "$output"; return 1; }
@@ -508,7 +506,7 @@ exit 0'
     [ "$status" -eq 0 ] || { echo "status=$status $output"; cat "$SHIM_LOG"; return 1; }
     local f="${GREMION_ROOT}/etc/secrets/grafana/client_secret" secret panel
     [ -s "$f" ]
-    if [ "$(stat -c %a "$f" 2>/dev/null)" != "" ]; then [ "$(stat -c %a "$f")" = 600 ]; fi
+    assert_mode_600 "$f"
     secret="$(tr -d '\n' < "$f")"
     panel="$(tr -d '\n' < "${GREMION_ROOT}/etc/secrets/control-panel/client_secret")"
     [ "${#secret}" -ge 32 ] && [ "$secret" != "$panel" ]
@@ -591,4 +589,78 @@ exit 0'
     run "$LAUNCHER" init
     [ "$status" -eq 0 ]
     [ "$(cat "${GREMION_ROOT}/etc/secrets/tenant-create/module_app_password_calendar")" = "$before" ]
+}
+
+# ── TASK-044 (lane note D4, A5): the release tip reaches tenant-create ────────
+# The level-1 gate compares isolation evidence with GREMION_RELEASE_TIP, the
+# HEAD of the release tree gremion-deploy authenticated (H10). tc() derives it
+# and passes it on EVERY one-shot; it is never typed by the operator.
+
+# release_repo — make the release dir a git checkout with one commit; prints HEAD.
+release_repo() {
+    git -C "$REL" init -q
+    git -C "$REL" -c user.email=t044@example.invalid -c user.name=t044 -c commit.gpgsign=false commit -q --allow-empty -m release
+    git -C "$REL" rev-parse HEAD
+}
+
+@test "TASK-044: tc passes GREMION_RELEASE_TIP = the release tree's HEAD on every one-shot of create" {
+    local tip; tip="$(release_repo)"
+    [[ "$tip" =~ ^[0-9a-f]{40}$ ]] || { echo "no commit: $tip"; return 1; }
+    create
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
+    local runs with
+    runs="$(grep -c ' run .* tenant-create ' "$SHIM_LOG" || true)"
+    with="$(grep ' run .* tenant-create ' "$SHIM_LOG" | grep -cF -- "-e GREMION_RELEASE_TIP=${tip} " || true)"
+    [ "$runs" -ge 4 ] && [ "$runs" -eq "$with" ] || { echo "runs=$runs with-tip=$with"; cat "$SHIM_LOG"; return 1; }
+}
+
+@test "TASK-044: a release dir that is no git checkout passes an EMPTY tip (even inside another repo), and status and suspend still run" {
+    git -C "$GREMION_ROOT" init -q    # a parent repository must never lend its HEAD
+    git -C "$GREMION_ROOT" -c user.email=t044@example.invalid -c user.name=t044 -c commit.gpgsign=false commit -q --allow-empty -m parent
+    run "$LAUNCHER" status alpha-rat
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    assert_recorded docker '-e GREMION_RELEASE_TIP= -e TRAEFIK_CERT_RESOLVER'
+    run "$LAUNCHER" suspend alpha-rat --operator "$OP"
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    ! grep -E -- '-e GREMION_RELEASE_TIP=[0-9a-f]' "$SHIM_LOG" || { echo "a tip was derived from a tree that is no release checkout"; return 1; }
+}
+
+@test "TASK-044: the tip is not an operator input -- a GREMION_RELEASE_TIP in the caller's environment is ignored" {
+    local tip; tip="$(release_repo)"
+    GREMION_RELEASE_TIP="$(printf 'f%.0s' {1..40})" run "$LAUNCHER" status alpha-rat
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    assert_recorded docker "-e GREMION_RELEASE_TIP=${tip} "
+    ! grep -qF -- "GREMION_RELEASE_TIP=ffffffffffffffffffffffffffffffffffffffff" "$SHIM_LOG" || { echo "the caller's tip reached the one-shot"; return 1; }
+}
+
+# ── TASK-044 (D2, section 9): create carries the operator's DPIA decisions ────
+# The level-1 gate wants a written DPIA decision per --enable module BEFORE the
+# customer exists; --dpia-json is the only way a create request carries them.
+
+@test "TASK-044: create --dpia-json mounts the file read-only and passes it to phase A and phase B" {
+    printf '{"calendar":{"requiresDpia":"no","reasonCodes":["x"],"documentRef":"TOM-1"}}' > "${GREMION_ROOT}/dpia.json"
+    run "$LAUNCHER" create alpha-rat --host rat.alpha.example --config "${GREMION_ROOT}/tenant-config.json" \
+        --it-admin it@alpha.example --council-admin rat@alpha.example --enable calendar --dpia-json "${GREMION_ROOT}/dpia.json" --operator "$OP"
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
+    local mounted passed
+    mounted="$(grep -c -- ':/run/gremion/tenant-dpia.json:ro' "$SHIM_LOG" || true)"
+    passed="$(grep -c -- '--dpia-json /run/gremion/tenant-dpia.json' "$SHIM_LOG" || true)"
+    [ "$mounted" -eq 2 ] && [ "$passed" -eq 2 ] || { echo "mounted=$mounted passed=$passed"; cat "$SHIM_LOG"; return 1; }
+}
+
+@test "TASK-044: create without --dpia-json mounts and passes no decision file; a missing file is a usage error" {
+    create
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    ! grep -q 'tenant-dpia.json' "$SHIM_LOG" || { cat "$SHIM_LOG"; return 1; }
+    run "$LAUNCHER" create alpha-rat --host rat.alpha.example --config "${GREMION_ROOT}/tenant-config.json" \
+        --it-admin it@alpha.example --council-admin rat@alpha.example --enable calendar --dpia-json "${GREMION_ROOT}/absent.json" --operator "$OP"
+    [ "$status" -eq 2 ] || { echo "status=$status $output"; return 1; }
+}
+
+@test "TASK-044: every tenant-create one-shot forwards GREMION_SCRATCH_FIXTURES by name only (never a value)" {
+    GREMION_SCRATCH_FIXTURES=t043-0123abcd run "$LAUNCHER" status alpha-rat
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    assert_recorded docker '-e GREMION_SCRATCH_FIXTURES '
+    assert_recorded docker '-e GREMION_PRODUCTION_STACK '
+    ! grep -qF -- 'GREMION_SCRATCH_FIXTURES=' "$SHIM_LOG" || { echo "a value was inlined"; return 1; }
 }

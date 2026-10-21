@@ -62,6 +62,8 @@ export const CARVE_LINT_TARGETS = [
   // R25-oxlint: the standalone oxlint ratchet (scripts/check-lint-js.mjs).
   { name: 'lint-js', kind: 'make', target: 'lint-js' },
   { name: 'lint-hygiene', kind: 'make', target: 'lint-hygiene' },
+  // TASK-079: the NATS N-run recorder suite (a stand-in target, no Docker).
+  { name: 'lint-nats-nruns', kind: 'make', target: 'lint-nats-nruns' },
   { name: 'lint-cve-floors', kind: 'make', target: 'lint-cve-floors' },
   { name: 'lint-packages', kind: 'make', target: 'lint-packages' },
   // TASK-048 (TRD-350/066/354): every deployed image pinned by digest, no
