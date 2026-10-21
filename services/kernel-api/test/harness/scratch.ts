@@ -157,11 +157,21 @@ export async function createCustomer(world: ScratchWorld, slug: string, host: st
 /** Enables `moduleKey` (its loaded version) for a customer, satisfying module_enablement_gate_check. */
 export async function enableModule(world: ScratchWorld, customerId: string, moduleKey: string, state = 'enabled'): Promise<void> {
   const enabled = state === 'enabled'
+  // TRD-063: an enabled row carries a PASSED isolation_test_result of the same module (composite FK, TASK-044 0007)
+  const [res] = enabled
+    ? await world.platform<{ id: string }[]>`
+        INSERT INTO plt.isolation_test_result (module_id, test_kind, passed, run_at, evidence_ref, release_tip_sha)
+        SELECT module_id, 'cross_customer', true, now(), 'scratch-fixture:t077-harness', ${'0'.repeat(40)}
+          FROM plt.module WHERE module_key = ${moduleKey}
+        RETURNING isolation_test_result_id::text AS id`
+    : []
+  if (enabled && !res) throw new Error(`[t077] no plt.module row for ${moduleKey}`)
   await world.platform`
     INSERT INTO plt.module_enablement (customer_id, module_id, module_version_id, state, isolation_test_result_id,
       dpia_decision_id, enabled_by_kind, enabled_by, enabled_at, created_by_kind, updated_by_kind)
     SELECT ${customerId}::uuid, m.module_id, v.module_version_id, ${state},
-      ${enabled ? uuidv7() : null}::uuid, ${enabled ? uuidv7() : null}::uuid, ${enabled ? 'operator' : null}, ${enabled ? uuidv7() : null}::uuid,
+      ${res?.id ?? null}::uuid,
+      ${enabled ? uuidv7() : null}::uuid, ${enabled ? 'operator' : null}, ${enabled ? uuidv7() : null}::uuid,
       ${enabled ? new Date() : null}, 'system', 'system'
       FROM plt.module m JOIN plt.module_version v ON v.module_id = m.module_id
      WHERE m.module_key = ${moduleKey}`
