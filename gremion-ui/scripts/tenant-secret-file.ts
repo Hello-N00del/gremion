@@ -21,7 +21,7 @@ export function readerIds(env: Record<string, string | undefined>): { uid: numbe
 export function handToReader(
   hostPath: string,
   secretsDir: string,
-  deps: { chown?: (path: string, uid: number, gid: number) => void; log?: (msg: string) => void; env?: Record<string, string | undefined> } = {}
+  deps: { chown?: (path: string, uid: number, gid: number) => void; env?: Record<string, string | undefined> } = {}
 ): void {
   const rel = relative(resolve(secretsDir), resolve(hostPath))
   if (rel === '' || rel.startsWith('..') || isAbsolute(rel)) return
@@ -29,6 +29,8 @@ export function handToReader(
   try {
     ;(deps.chown ?? chownSync)(hostPath, uid, gid)
   } catch (err) {
-    ;(deps.log ?? ((m: string) => console.error(m)))(`WARNING: chown ${uid}:${gid} ${hostPath} failed (${err instanceof Error ? err.message : String(err)}); the reader container may get EACCES`)
+    // Fatal: a file left root:root 0600 under the secrets dir is unreadable to
+    // every reader container (EACCES at runtime, long after the create "passed").
+    throw new Error(`chown ${uid}:${gid} ${hostPath} failed (${err instanceof Error ? err.message : String(err)}); the reader container would get EACCES`)
   }
 }

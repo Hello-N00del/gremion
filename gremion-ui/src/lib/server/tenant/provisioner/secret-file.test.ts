@@ -21,17 +21,14 @@ describe('handToReader', () => {
     handToReader(join(dir + '-sibling', 'f'), dir, { chown: (...a) => calls.push(a) })
     expect(calls).toEqual([])
   })
-  it('reports a failed chown loudly via the logger and does not throw (NTFS, non-root dev)', () => {
-    const logs: string[] = []
+  it('a failed chown on a file under the secrets dir is fatal (a root:root file is unreadable to the readers)', () => {
     expect(() =>
       handToReader(join(dir, 'f'), dir, {
         chown: () => {
           throw new Error('EPERM')
-        },
-        log: (m) => logs.push(m)
+        }
       })
-    ).not.toThrow()
-    expect(logs.join('\n')).toMatch(/WARNING: chown .*EPERM/)
+    ).toThrow(/chown .*EPERM/)
   })
   it('honours TENANT_SECRETS_UID / TENANT_SECRETS_GID and refuses non-numeric values', () => {
     expect(readerIds({ TENANT_SECRETS_UID: '1234', TENANT_SECRETS_GID: '4321' })).toEqual({ uid: 1234, gid: 4321 })

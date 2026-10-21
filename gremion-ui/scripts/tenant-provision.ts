@@ -202,7 +202,7 @@ function writeSecretFile(hostPath: string, value: string): Promise<void> {
   } catch (err) {
     log(`WARNING: chmod 0600 ${hostPath} failed (${err instanceof Error ? err.message : String(err)})`)
   }
-  handToReader(hostPath, tenantSecretsDir(), { log })
+  handToReader(hostPath, tenantSecretsDir())
   return Promise.resolve()
 }
 const tenantSecretsDir = () => process.env.TENANT_SECRETS_DIR ?? join(repoRoot, 'secrets', 'tenants')

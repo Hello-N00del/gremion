@@ -514,8 +514,17 @@ EOF
 # ──────────────────────────────────────────────────────────────────────────
 # user — deploy user, keys, sudo, host layout (§A)
 # ──────────────────────────────────────────────────────────────────────────
+# The images' `node` user is uid 1000; kernel-api-migrate (and the other
+# readers) write the bind-mounted migration-dumps/ as that uid, so the deploy
+# user that owns it must be uid 1000 too.
+assert_deploy_uid() {
+    local uid; uid="$(id -u "${DEPLOY_USER}")"
+    [[ "$uid" == 1000 ]]         || die "deploy user ${DEPLOY_USER} is uid ${uid}, but the migration dump dir needs the container uid 1000: use a deploy user with uid 1000 (a fresh host creates it with --uid 1000)"
+}
+
 ensure_layout() {
     local root; root="$(gremion_root)"
+    assert_deploy_uid
     install -d -m 755 -o "${DEPLOY_USER}" -g "${DEPLOY_USER}" "$root"
     local d
     for d in releases bin backups runtime logs; do
@@ -545,7 +554,7 @@ stage_user() {
     if id "${DEPLOY_USER}" >/dev/null 2>&1; then
         ok "user ${DEPLOY_USER} exists"
     else
-        adduser --disabled-password --gecos "" "${DEPLOY_USER}"
+        adduser --disabled-password --gecos "" --uid 1000 "${DEPLOY_USER}"
         ok "user ${DEPLOY_USER} created"
     fi
 

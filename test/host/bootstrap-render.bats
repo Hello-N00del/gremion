@@ -578,3 +578,18 @@ exit 0'
     hits="$(grep -nE '(render_nft|interfaces_stanza|nftables_conf|nftables_dropin)[^|]*\| *atomic_write' "$BOOTSTRAP" || true)"
     [[ -z "$hits" ]] || { echo "renderer piped into atomic_write:"; echo "$hits"; false; }
 }
+
+@test "R33 item 5: assert_deploy_uid fails bootstrap clearly when the deploy user is not uid 1000" {
+    shim id 'echo 1001'
+    run assert_deploy_uid
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"uid 1000"* ]]
+}
+
+@test "R33 item 5: assert_deploy_uid passes for uid 1000, and ensure_layout calls it before touching migration-dumps" {
+    shim id 'echo 1000'
+    run assert_deploy_uid
+    [ "$status" -eq 0 ]
+    run bash -c "awk '/^ensure_layout\(\)/,/^}/' '$BOOTSTRAP' | grep -n 'assert_deploy_uid\|migration-dumps' | head -1"
+    [[ "$output" == *assert_deploy_uid* ]]
+}
