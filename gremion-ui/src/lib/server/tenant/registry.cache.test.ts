@@ -39,6 +39,7 @@ import {
   resolveTenantBySlug,
   invalidateResolvedTenant,
   evictTenantRuntime,
+  evictAllTenantRuntimes,
   updateTenantStatus,
   getTenantStatusBySlug,
   RESOLUTION_CACHE_TTL_MS,
@@ -190,6 +191,22 @@ describe('T8 — evictTenantRuntime(tenantId)', () => {
     evictTenantRuntime('tid-unrelated')
     await resolveTenantBySlug('alpha')
     expect(slugSelects()).toBe(1) // alpha entry survived the unrelated eviction
+  })
+})
+
+describe('evictAllTenantRuntimes() — the switch evict fan-out (blanket form)', () => {
+  it('drops every cached resolution (slug AND host maps) and runs the per-tenant evictors for each cached tenant', async () => {
+    await resolveTenantBySlug('alpha')
+    expect(slugSelects()).toBe(1)
+    evictAllTenantRuntimes()
+    expect(_hostCacheSizeForTests()).toBe(0)
+    expect(vi.mocked(evictTenantPool)).toHaveBeenCalledWith('tid-alpha')
+    await resolveTenantBySlug('alpha')
+    expect(slugSelects()).toBe(2) // the cache was actually emptied
+  })
+
+  it('is safe on an empty cache', () => {
+    expect(() => evictAllTenantRuntimes()).not.toThrow()
   })
 })
 

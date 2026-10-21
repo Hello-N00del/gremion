@@ -81,11 +81,12 @@ services:
     deploy: *limits-l
     labels:
       traefik.enable: "false"
-      # NO gremion.evict label: gremion-switch POSTs /api/internal/evict to
-      # each labelled container and aborts unless it answers 204; gremion-ui
-      # serves no such route (only the tenant_evict NOTIFY listener, hooks.server).
-      # Its runtime cache is evicted by that listener and the ~30 s TTL, not by
-      # the switch. control-panel carries the label for write_evict_targets.
+      # gremion-switch / gremion-deploy POST /api/internal/evict to every
+      # labelled container and abort unless it answers 204. gremion-ui serves
+      # that route (routes/api/internal/evict, Bearer INTERNAL_PUSH_SECRET,
+      # clears the tenant runtime caches); the tenant_evict NOTIFY listener
+      # (hooks.server) and the ~30 s TTL remain the cross-process backstop.
+      gremion.evict: "true"
     # No depends_on: postgres and keycloak are the STATE project's, and a
     # cross-project depends_on cannot resolve. Boot ordering is TASK-023's
     # boot retry; test/host/integration/pooled-stack-proof.sh asserts app
