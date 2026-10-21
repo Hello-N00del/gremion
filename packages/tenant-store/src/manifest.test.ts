@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it } from 'vitest'
-import { MigrationManifestError, readVerifiedMigrations } from './manifest.js'
+import { loadUnionManifest, MigrationManifestError, readVerifiedMigrations, readVerifiedUnion } from './manifest.js'
 
 const sha = (s: string | Buffer) => createHash('sha256').update(s).digest('hex')
 const dirs: string[] = []
@@ -90,5 +90,22 @@ describe('readVerifiedMigrations', () => {
   it('reads the manifest format the kernel builder writes (TRD-353): the real control set verifies', () => {
     const real = new URL('../../../gremion-ui/migrations-control/', import.meta.url)
     expect(readVerifiedMigrations(fileURLToPath(real)).map((m) => m.file)).toContain('006_boundary_ids_uuidv7.sql')
+  })
+})
+
+describe('the union checks apply to a single dir as well (TASK-077 residual)', () => {
+  it('refuses an unnumbered file and a duplicate number in ONE dir, through both union entry points', () => {
+    const unnumbered = dir({ 'init.sql': F1 }, { 'init.sql': sha(F1) })
+    expect(codeOf(() => readVerifiedUnion([unnumbered]))).toEqual(['MANIFEST_MALFORMED:init.sql'])
+    expect(codeOf(() => loadUnionManifest([unnumbered]))).toEqual(['MANIFEST_MALFORMED:init.sql'])
+    const dup = dir({ '001_a.sql': F1, '001_b.sql': F2 }, { '001_a.sql': sha(F1), '001_b.sql': sha(F2) })
+    expect(codeOf(() => readVerifiedUnion([dup]))).toEqual(['DUPLICATE_MIGRATION:001_b.sql'])
+    expect(codeOf(() => loadUnionManifest([dup]))).toEqual(['DUPLICATE_MIGRATION:001_b.sql'])
+  })
+
+  it('a clean single dir still loads, in number order', () => {
+    const d = dir({ '010_b.sql': F2, '002_a.sql': F1 }, { '002_a.sql': sha(F1), '010_b.sql': sha(F2) })
+    expect(readVerifiedUnion([d]).map((m) => m.file)).toEqual(['002_a.sql', '010_b.sql'])
+    expect([...loadUnionManifest([d]).keys()]).toEqual(['002_a.sql', '010_b.sql'])
   })
 })

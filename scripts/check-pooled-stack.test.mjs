@@ -498,7 +498,7 @@ test('real renders: kernel-api-migrate is a profile-gated one-shot on the kernel
     assert.deepEqual(m.ports ?? [], [])
     const tag = String(m.image).split(':').at(-1)
     assert.equal(m.environment?.GREMION_RELEASE_REF, tag, `${colour}: GREMION_RELEASE_REF`)
-    assert.match(String(m.environment?.GREMION_KERNEL_PG_DIRECT_URL), /^postgres(ql)?:\/\/postgres-guardstack:5432\//, `${colour}: not DIRECT postgres, or carries userinfo`)
+    assert.match(String(m.environment?.GREMION_KERNEL_PG_DIRECT_URL), /^postgresql?:\/\/postgres-guardstack:5432\//, `${colour}: not DIRECT postgres, or carries userinfo`)
     assert.equal(new URL(String(m.environment?.GREMION_KERNEL_PG_DIRECT_URL)).username, '', `${colour}: the direct url must be credential-less`)
     assert.equal(Object.keys(m.environment ?? {}).filter((k) => /^POSTGRES_PASSWORD$/.test(k)).length, 0, `${colour}: migrate must not hold the superuser password`)
     assert.doesNotMatch(String(m.environment?.GREMION_KERNEL_PG_DIRECT_URL), /pgbouncer|6432/)
