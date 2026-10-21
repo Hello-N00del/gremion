@@ -295,6 +295,55 @@ describe('section 1 on the running stack (kernel-api image, real Keycloak, web s
     expect(serverMajor).toBe('18')
   })
 
+  it('EXPIRED TOKEN: a real Keycloak token past exp (beyond the 30 s tolerance) is 401 problem+json; a fresh one is 200 again (lifespan restored)', async () => {
+    const kc = `http://127.0.0.1:${st.kcPort}`
+    const adm = (await (await fetch(`${kc}/realms/master/protocol/openid-connect/token`, { method: 'POST', body: new URLSearchParams({ grant_type: 'password', client_id: 'admin-cli', username: 'a', password: 'a' }) })).json()) as { access_token: string }
+    const auth = { authorization: `Bearer ${adm.access_token}`, 'content-type': 'application/json' }
+    const realm = (await (await fetch(`${kc}/admin/realms/realm-a`, { headers: auth })).json()) as { accessTokenLifespan: number }
+    const original = realm.accessTokenLifespan
+    const put = (n: number) => fetch(`${kc}/admin/realms/realm-a`, { method: 'PUT', headers: auth, body: JSON.stringify({ accessTokenLifespan: n }) })
+    let short = ''
+    try {
+      expect((await put(2)).status).toBe(204)
+      short = await token('realm-a', 'auser')
+      expect(claims(short)).toMatchObject({ iss: `${kc}/realms/realm-a` })
+      const c = JSON.parse(Buffer.from(short.split('.')[1]!, 'base64url').toString('utf8')) as { exp: number; iat: number }
+      expect(c.exp - c.iat).toBe(2)
+    } finally {
+      expect((await put(original)).status).toBe(204)
+    }
+    expect((await call(SELF, edge(st.customers.a.host, short))).status).toBe(200) // inside its life: served
+    await new Promise((r) => setTimeout(r, 36_000)) // 2 s life + the verifier's 30 s tolerance + margin
+    const late = await call(SELF, edge(st.customers.a.host, short))
+    expect(late.status, late.text).toBe(401)
+    expect(problem(late)).toBe(true)
+    expect(late.text).not.toContain(st.customers.a.id)
+    expect((await call(SELF, edge(st.customers.a.host, await token('realm-a', 'auser')))).status).toBe(200)
+  }, 120_000)
+
+  it("Q3 CROSS-DB: A's registry ref aimed at B's database is refused (503 for A, nothing of B served); restored -> 200", async () => {
+    const control = connect(CONTROL_DB, { max: 1 })
+    try {
+      const [a] = await control<{ r: string }[]>`SELECT db_conn_ref AS r FROM tenant WHERE id = ${st.customers.a.id}::uuid`
+      const [b] = await control<{ r: string }[]>`SELECT db_conn_ref AS r FROM tenant WHERE id = ${st.customers.b.id}::uuid`
+      expect(a!.r).not.toBe(b!.r)
+      await control`UPDATE tenant SET db_conn_ref = ${b!.r} WHERE id = ${st.customers.a.id}::uuid`
+      try {
+        const r = await call(SELF, edge(st.customers.a.host, tokA))
+        expect(r.status, r.text).toBe(503)
+        expect(r.text).not.toContain(st.customers.b.id)
+        expect(r.text).not.toContain(st.customers.b.slug)
+      } finally {
+        await control`UPDATE tenant SET db_conn_ref = ${a!.r} WHERE id = ${st.customers.a.id}::uuid`
+      }
+    } finally {
+      await control.end({ timeout: 5 })
+    }
+    const back = await call(SELF, edge(st.customers.a.host, tokA))
+    expect(back.status, back.text).toBe(200)
+    expect(back.text).toContain(st.customers.a.id)
+  })
+
   it('CONFORMANCE: every live response (success and problem) validated against openapi/kernel-core.json', () => {
     expect(seen.length).toBeGreaterThan(15)
     expect(seen.filter((s) => s.violation !== null)).toEqual([])

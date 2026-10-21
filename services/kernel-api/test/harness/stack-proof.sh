@@ -78,7 +78,7 @@ KERNEL_API_ALLOW_ENV_SECRET_REFS=1
 GREMION_RELEASE_REF=dist-v1.0.0
 GREMION_MIGRATION_DUMP_DIR=/var/lib/gremion/migration-dump
 KERNEL_API_CONTROL_DB_URL=$(jget readerControlUrl)
-GREMION_KERNEL_PG_DIRECT_URL=postgresql://t077_admin:$(jget password)@$N_PG:5432/postgres
+GREMION_KERNEL_PG_DIRECT_URL=postgresql://$N_PG:5432/postgres
 ENV
 }
 
