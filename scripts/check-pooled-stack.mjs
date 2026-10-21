@@ -68,15 +68,14 @@ export const LONG_RUNNING_APP = ['gremion-ui', 'gremion-public', 'control-panel'
  * it serves only routes from openapi/kernel-core.json; its evict route is
  * TASK-035's, and the label would make every switch abort on a non-204.
  * Only a literal `routes/api/internal/evict/+server.ts` with a POST export counts
- * as evidence (check-pooled-stack.test.mjs enforces it). gremion-ui and
- * gremion-public are deliberately absent: neither serves the route (gremion-ui
- * only has the pg_notify listener, gremion-public has no tenant cache), so
- * labelling them made every gremion-switch abort on a non-204. Their caches are
- * NOT evicted by the switch: gremion-ui relies on the tenant_evict NOTIFY
- * listener (suspend/delete) and the ~30 s runtime TTL. Adding the route is the
- * follow-up that lets gremion-ui rejoin this map.
+ * as evidence (check-pooled-stack.test.mjs enforces it). gremion-public is
+ * deliberately absent: it serves no such route and caches no tenant, so the
+ * label would make every gremion-switch abort on a non-204. gremion-ui serves
+ * the route (Bearer INTERNAL_PUSH_SECRET, clears the tenant runtime caches) in
+ * addition to its tenant_evict NOTIFY listener.
  */
 export const EVICT_IMPLEMENTERS = {
+  'gremion-ui': 'gremion-ui/src/routes/api/internal/evict/+server.ts',
   'control-panel': 'apps/control-panel/src/routes/api/internal/evict/+server.ts',
 }
 export const ONE_SHOTS = { migrate: 'migrate', 'tenant-create': 'tenant-create', 'kernel-api-migrate': 'kernel-api-migrate' }

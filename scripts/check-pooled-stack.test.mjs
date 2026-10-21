@@ -62,7 +62,7 @@ function appRender(colour) {
       environment: { COLOUR: colour },
       networks: Object.fromEntries(row.networks.map((n) => [n, ['edge', 'state'].includes(n) ? { aliases: [`${name}-${colour}`] } : null])),
     }
-    if (name === 'control-panel') svc.labels['gremion.evict'] = 'true'
+    if (name === 'control-panel' || name === 'gremion-ui') svc.labels['gremion.evict'] = 'true'
     if (name === 'migrate' || name === 'tenant-create' || name === 'kernel-api-migrate') {
       svc.profiles = [name]
       svc.restart = 'no'
