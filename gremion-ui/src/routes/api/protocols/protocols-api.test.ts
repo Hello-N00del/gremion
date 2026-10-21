@@ -104,16 +104,14 @@ describe('POST /api/protocols', () => {
     expect(res.status).toBe(201)
   })
 
-  it('deletes the protocol row and returns 502 when draft-file creation fails (#185)', async () => {
-    mockCreateProtocol.mockResolvedValue({ id: 'p-orphan', status: 'draft' })
+  it('F1: keeps the protocol (in-app only) and returns 201 when Nextcloud draft creation fails', async () => {
+    mockCreateProtocol.mockResolvedValue({ id: 'p-nc-down', status: 'draft' })
     mockCreateDraftFile.mockRejectedValue(new Error('Nextcloud upload failed'))
-    mockDeleteProtocol.mockResolvedValue(undefined)
     // @ts-expect-error partial mock
     const res = await POST(makeEvent({ body: { committeeId: 'c1', meetingDate: '2026-04-16', title: 'VV' } }))
-    expect(res.status).toBe(502)
-    expect(mockDeleteProtocol).toHaveBeenCalledWith('p-orphan')
-    // No draft was ever created, so there is nothing to clean up on Nextcloud.
-    expect(mockDeleteDraftFile).not.toHaveBeenCalled()
+    expect(res.status).toBe(201)
+    expect(mockDeleteProtocol).not.toHaveBeenCalled()
+    expect(mockUpdateProtocolDb).not.toHaveBeenCalled()
   })
 
   it('deletes the protocol row + orphaned draft and returns 502 when updateProtocol fails (#185/#208)', async () => {
@@ -138,14 +136,6 @@ describe('POST /api/protocols', () => {
     expect(res.status).toBe(403)
   })
 
-  // boundary rule A3a-2 degradation: when the files module is absent no ProtocolDocumentPort
-  // is registered, so the draft document subsystem is unavailable. The route must
-  // surface a 'service unavailable' (503) instead of throwing an opaque 500.
-  it('returns 503 when no ProtocolDocumentPort is registered (documents subsystem unavailable)', async () => {
-    _resetRuntimeRegistryForTests() // drop the fake port — none registered
-    mockCreateProtocol.mockResolvedValue({ id: 'p-x', status: 'draft' })
-    // @ts-expect-error partial mock
-    const res = await POST(makeEvent({ body: { committeeId: 'c1', meetingDate: '2026-04-16', title: 'VV' } }))
-    expect(res.status).toBe(503)
-  })
+  // F1: the files module absent (no ProtocolDocumentPort) is no longer a 503; the
+  // protocol is created in-app (see protocols-nofiles.test.ts).
 })

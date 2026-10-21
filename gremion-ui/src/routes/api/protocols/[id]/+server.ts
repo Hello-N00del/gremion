@@ -6,6 +6,7 @@ import {
   getProtocol, updateProtocol, upsertAttendance,
   listAttendance, listResolutions, listActionItems,
 } from '$lib/server/protocols/protocol-db'
+import { sanitizeRichHtml } from '$lib/server/security/html-sanitize'
 import { requireUuidParams } from '$lib/server/protocols/route-ids'
 import { getOrgUnit } from '$lib/server/governance/org-units-db'
 import { seesAllGovernance, viewerCanSeeProtocol } from '$lib/server/governance/visibility'
@@ -71,9 +72,19 @@ export async function PATCH(event: RequestEvent) {
     return json({ attendance })
   }
 
+  // F1 (Q1): the in-app protocol body (protocols.body_html). Sanitized on write
+  // (G-011); editable only while the protocol is a draft, because a submitted
+  // protocol's text is what the committee adopts at publish.
+  let bodyHtml: string | undefined
+  if (typeof body.bodyHtml === 'string') {
+    if (protocol.status !== 'draft') throw error(403, 'Der Protokolltext kann nur im Entwurf bearbeitet werden')
+    bodyHtml = sanitizeRichHtml(body.bodyHtml)
+  }
+
   const updated = await updateProtocol(protocol.id, {
     location: body.location,
     title: body.title,
+    bodyHtml,
     guestEditEnabled: body.guestEditEnabled,
   })
   return json({ protocol: updated })
