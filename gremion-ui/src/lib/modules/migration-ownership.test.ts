@@ -3,7 +3,11 @@ import { readdirSync, readFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { MODULE_MANIFESTS } from './registry'
-import { CROSS_CUTTING_MIGRATIONS, backFillNotice } from './migration-ownership'
+import {
+  CROSS_CUTTING_MIGRATIONS,
+  backFillNotice,
+  crossCuttingViolations,
+} from './migration-ownership'
 import { disabledModuleMigrationFiles } from '$lib/server/module-migrations'
 
 const MIGRATIONS_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'migrations')
@@ -144,5 +148,58 @@ describe('backFillNotice', () => {
         expected: new Set(['0003_calendar_schema.sql', '0034_deck_board.sql']),
       }),
     ).toBeNull()
+  })
+})
+
+describe('F6 guard: calendar_events (003), committee_elections (004), deck_board (034) stay kernel-applied', () => {
+  const kernelFiles = () =>
+    new Set(readdirSync(MIGRATIONS_DIR).filter((f) => f.endsWith('.sql')))
+
+  it('the cross-cutting set is exactly 003/004/034', () => {
+    expect(Object.keys(CROSS_CUTTING_MIGRATIONS).sort()).toEqual([
+      '0003_calendar_schema.sql',
+      '0004_committee_elections.sql',
+      '0034_deck_board.sql',
+    ])
+  })
+
+  it('the real registry and migrations directory have no violation', () => {
+    expect(crossCuttingViolations(MODULE_MANIFESTS, kernelFiles())).toEqual([])
+  })
+
+  it.each(Object.keys(CROSS_CUTTING_MIGRATIONS))(
+    'a manifest claiming %s fails loudly, naming the reason',
+    (file) => {
+      const base = file.replace(/\.sql$/, '')
+      const msgs = crossCuttingViolations(
+        [...MODULE_MANIFESTS, { id: 'rogue', migrations: [base] }],
+        kernelFiles(),
+      )
+      expect(msgs).toHaveLength(1)
+      expect(msgs[0]).toContain("module 'rogue' claims " + file)
+      expect(msgs[0]).toContain('must stay KERNEL-applied')
+      expect(msgs[0]).toContain('0010 ALTERs committee_elections')
+    },
+  )
+
+  it.each(Object.keys(CROSS_CUTTING_MIGRATIONS))(
+    'moving %s out of the kernel directory fails loudly',
+    (file) => {
+      const without = kernelFiles()
+      without.delete(file)
+      const msgs = crossCuttingViolations(MODULE_MANIFESTS, without)
+      expect(msgs).toHaveLength(1)
+      expect(msgs[0]).toContain(file + ' is not in the kernel migrations directory')
+    },
+  )
+
+  it('the real manifests of calendar, elections and board carry no migrations key entry for them', () => {
+    for (const id of ['calendar', 'elections', 'board']) {
+      const m = MODULE_MANIFESTS.find((x) => x.id === id)
+      expect(m, `manifest ${id} registered`).toBeDefined()
+      for (const base of m!.migrations ?? []) {
+        expect(`${base}.sql` in CROSS_CUTTING_MIGRATIONS).toBe(false)
+      }
+    }
   })
 })

@@ -26,6 +26,57 @@ export const CROSS_CUTTING_MIGRATIONS: Readonly<Record<string, string>> = {
 }
 
 /**
+ * WHY these three stay kernel-applied (R33 audit F6, StuRaOS#371/#372; do not
+ * "tidy" them under a module): later UNGATED kernel DDL and grants depend on
+ * the relations they create, and moving a file would renumber it into a gap
+ * below every initialised database's high-water mark (backFillNotice).
+ *   0003 calendar_events    <- 0058_public_reader_grants (portal_tables) and
+ *                              the StuRaOS 008_public_portal ALTER
+ *   0004 committee_elections <- 0010_org_units ALTERs it (column rename)
+ *   0034 deck_board         <- creates board/stack/card, FKs into org_units
+ * Consequence (accepted): these module tables exist while their module is OFF.
+ * Enforced by crossCuttingViolations() below, called from
+ * migration-ownership.test.ts, and by `fresh-init-proof.sh --module-off <id>`.
+ */
+export const CROSS_CUTTING_REASON =
+  'it creates a table that ungated kernel DDL/grants depend on (0010 ALTERs committee_elections, ' +
+  '0058 grants calendar_events, 0034 board FKs); a module-OFF fresh init would skip it and abort ' +
+  'those files. Renumbering is forbidden too (backFillNotice).'
+
+/**
+ * Loud guard: returns one message per violation (empty = fine).
+ *  - a manifest listing a cross-cutting migration in `migrations`
+ *  - a cross-cutting migration missing from the kernel migrations directory
+ * @param manifests  every registered manifest (only id + migrations are read)
+ * @param kernelFiles basenames (with .sql) present in gremion-ui/migrations
+ */
+export function crossCuttingViolations(
+  manifests: ReadonlyArray<{ id: string; migrations?: readonly string[] }>,
+  kernelFiles: ReadonlySet<string>,
+): string[] {
+  const out: string[] = []
+  for (const m of manifests) {
+    for (const base of m.migrations ?? []) {
+      const file = `${base}.sql`
+      if (file in CROSS_CUTTING_MIGRATIONS) {
+        out.push(
+          `module '${m.id}' claims ${file} (owner key ${CROSS_CUTTING_MIGRATIONS[file]}): ` +
+            `${file} must stay KERNEL-applied because ${CROSS_CUTTING_REASON}`,
+        )
+      }
+    }
+  }
+  for (const file of Object.keys(CROSS_CUTTING_MIGRATIONS)) {
+    if (!kernelFiles.has(file)) {
+      out.push(
+        `${file} is not in the kernel migrations directory: it must stay KERNEL-applied because ${CROSS_CUTTING_REASON}`,
+      )
+    }
+  }
+  return out
+}
+
+/**
  * The diagnosis for a migration numbered into a gap BELOW what a database has
  * already applied.
  *
