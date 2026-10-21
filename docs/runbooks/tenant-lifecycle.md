@@ -20,6 +20,19 @@ pnpm -C gremion-ui exec tsx scripts/tenant-provision.ts <subcommand> …
 `<subcommand>` is one of `provision | suspend | resume | delete |
 bootstrap-provisioner | reconcile | materialize-config`.
 
+<!-- gremion-tenant decommission note (R31-I4) -->
+## Decommission note: `gremion-tenant` no longer creates customers
+
+Customers are created, suspended, resumed and reconciled by **requests**: the
+control panel ("Neuer Mandant") submits a row through
+`plt.submit_provisioning_request`, and the host-side `gremion-executor`
+claims, verifies and runs it. The old operator verbs `gremion-tenant create`,
+`suspend`, `resume`, `reconcile` and `status` are gone (they exit 2 and write
+nothing). The one break-glass path is `gremion-tenant request <kind>
+--args-file <0600 json> --operator <uuid> --reason <text>`, which puts the
+same request into the same queue, flagged `origin=host`.
+<!-- /gremion-tenant decommission note -->
+
 ## The control plane and the per-tenant silo
 
 Each tenant is one row in the `tenant` table of the **control DB**
