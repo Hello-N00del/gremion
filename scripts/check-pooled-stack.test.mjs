@@ -62,7 +62,7 @@ function appRender(colour) {
       environment: { COLOUR: colour },
       networks: Object.fromEntries(row.networks.map((n) => [n, ['edge', 'state'].includes(n) ? { aliases: [`${name}-${colour}`] } : null])),
     }
-    if (name === 'gremion-ui' || name === 'gremion-public' || name === 'control-panel') svc.labels['gremion.evict'] = 'true'
+    if (name === 'control-panel') svc.labels['gremion.evict'] = 'true'
     if (name === 'migrate' || name === 'tenant-create' || name === 'kernel-api-migrate') {
       svc.profiles = [name]
       svc.restart = 'no'
@@ -201,8 +201,8 @@ for (const colour of ['blue', 'green']) {
 
   test(`app shape (${colour}): no evict label on a long-running service fails`, () => {
     const r = appRender(colour)
-    delete r.services['gremion-ui'].labels['gremion.evict']
-    assert.match(appShapeViolations(r, colour, STACK).join('\n'), /gremion-ui: long-running service without gremion\.evict=true/)
+    delete r.services['control-panel'].labels['gremion.evict']
+    assert.match(appShapeViolations(r, colour, STACK).join('\n'), /control-panel: long-running service without gremion\.evict=true/)
   })
 
   test(`app shape (${colour}): evict label on a service with no evict route fails`, () => {
@@ -526,5 +526,12 @@ test('real renders: every service carrying gremion.evict=true is a known evict i
       assert.ok(name in EVICT_IMPLEMENTERS, `${colour}/${name} carries gremion.evict=true but no source declares its evict route`)
     }
   }
-  for (const [name, file] of Object.entries(EVICT_IMPLEMENTERS)) assert.ok(existsSync(new URL(`../${file}`, import.meta.url)), `${name}: evidence file ${file} is missing`)
+  const { readFileSync } = await import('node:fs')
+  for (const [name, file] of Object.entries(EVICT_IMPLEMENTERS)) {
+    assert.ok(existsSync(new URL(`../${file}`, import.meta.url)), `${name}: evidence file ${file} is missing`)
+    // The evidence must be the HTTP route itself, not a neighbour (a pg_notify listener or a Dockerfile
+    // is not a POST /api/internal/evict that answers gremion-switch's 204).
+    assert.match(file, /\/routes\/api\/internal\/evict\/\+server\.ts$/, `${name}: evidence ${file} is not the /api/internal/evict route file`)
+    assert.match(readFileSync(new URL(`../${file}`, import.meta.url), 'utf8'), /export (const|async function|function) POST[: =]/, `${name}: ${file} exports no POST handler`)
+  }
 })
