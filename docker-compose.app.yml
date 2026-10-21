@@ -413,6 +413,10 @@ services:
       # control-panel block above connects as it).
       PANEL_DB_USER: ${PANEL_DB_USER:-gremion_panel}
       PANEL_DB_PASSWORD: ${PANEL_DB_PASSWORD:?PANEL_DB_PASSWORD required}
+      # `init` also makes the kernel API's SELECT-only role (ensureKernelApiReader);
+      # deploy step 7 (kernel-api-migrate) and kernel-api connect as it.
+      KERNEL_API_DB_USER: ${KERNEL_API_DB_USER:-gremion_kernel_api}
+      KERNEL_API_DB_PASSWORD: ${KERNEL_API_DB_PASSWORD:?KERNEL_API_DB_PASSWORD required}
       # The servers' POSTGRES_USERs (CREATEDB/CREATEROLE for ensureKernelDatabase
       # and enableModule) and each module's app-role password: files written by
       # `gremion-tenant init` into etc/secrets/tenant-create (0600), mounted

@@ -55,7 +55,7 @@ import {
   type DpiaSpec,
   type ProvisioningDeps,
 } from '@gremion/provisioning'
-import { assertPlatform, dropKernelDatabase, type LifecycleModule, type ModuleServer } from '@gremion/tenant-store/lifecycle'
+import { assertPlatform, dropKernelDatabase, ensureKernelApiReader, KERNEL_API_READS, type LifecycleModule, type ModuleServer } from '@gremion/tenant-store/lifecycle'
 import { MODULE_MANIFESTS } from '../src/lib/modules/registry'
 import { dbNameForSlug, validateSlug } from '../src/lib/server/tenant/slug'
 import { normaliseHost } from '../src/lib/server/tenant/host'
@@ -581,6 +581,8 @@ async function cmdInit(): Promise<void> {
   // BEFORE the first connection (a missing one is a named exit 2).
   const panelRole = reqEnv('PANEL_DB_USER')
   const panelPassword = reqEnv('PANEL_DB_PASSWORD')
+  const kernelApiRole = reqEnv('KERNEL_API_DB_USER')
+  const kernelApiPassword = reqEnv('KERNEL_API_DB_PASSWORD')
   const release = releaseRef()
   const controlDatabase = decodeURIComponent(new URL(reqEnv('CONTROL_DATABASE_URL')).pathname.replace(/^\//, ''))
   const kernelAdmin = postgres(kernelAdminUrl, { max: 2, onnotice: () => {}, connect_timeout: 15 })
@@ -610,6 +612,21 @@ async function cmdInit(): Promise<void> {
       controlDatabase,
     })
     log(`init: control-panel reader ${panelRole} ${panel.created ? 'created' : 'present'} (SELECT on ${[...PANEL_READS.control, ...PANEL_READS.platform].join(', ')} only)`)
+    // TASK-077: the kernel API's SELECT-only role, which deploy step 7
+    // (kernel-api-migrate) and the kernel-api service connect as; nothing else
+    // creates it.
+    const kernelApi = await ensureKernelApiReader({
+      kernelAdmin,
+      openAdminOn: (db) => {
+        const u = new URL(kernelAdminUrl)
+        u.pathname = `/${encodeURIComponent(db)}`
+        return postgres(u.toString(), { max: 1, onnotice: () => {}, connect_timeout: 15 })
+      },
+      role: kernelApiRole,
+      password: kernelApiPassword,
+      controlDatabase,
+    })
+    log(`init: kernel API reader ${kernelApiRole} ${kernelApi.created ? 'created' : 'present'} (SELECT on ${[...KERNEL_API_READS.control, ...KERNEL_API_READS.platform].join(', ')} only)`)
   } finally {
     await kernelAdmin.end({ timeout: 5 })
   }

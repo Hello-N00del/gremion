@@ -666,8 +666,14 @@ step_7_migrate() {
     # (idt schema) migrate in their own one-shot, on the same image the new
     # colour serves, AFTER `migrate` (the control registry it reads from is
     # migrated first). A failure stops the deploy here, before the new colour
-    # starts: the old colour is untouched. The pre-migration dump of step 5
-    # already covers these databases.
+    # starts, so a failing kernel-API migration never serves traffic. The old
+    # colour is NOT untouched: with overlap:false step 6 already stopped it (this
+    # release has downtime), so a failure here leaves NO colour serving until an
+    # operator fixes it or restarts the old colour; with overlap:true it keeps
+    # serving while these migrations run on the databases it uses.
+    # The pre-migration dump of step 5 already covers these databases. The role
+    # this connects as (KERNEL_API_DB_USER) is made by `gremion-tenant init`
+    # (ensureKernelApiReader); a missing role fails here, loudly.
     compose "app-${NEW_COLOUR}" run --rm kernel-api-migrate         || die "kernel-api-migrate failed for $TAG (see MIGRATE-FAILED lines above)" 1
     leftovers="$(docker ps -a -q         --filter "label=com.docker.compose.project=${STACK}-app-${NEW_COLOUR}"         --filter "label=com.docker.compose.service=kernel-api-migrate" | grep -c . || true)"
     [[ "$leftovers" == "0" ]] || die "kernel-api-migrate container survived --rm (${leftovers} left)" 1
