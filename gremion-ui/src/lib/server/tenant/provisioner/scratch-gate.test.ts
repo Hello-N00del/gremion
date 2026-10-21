@@ -17,7 +17,7 @@ describe('scratchFixturesAllowed', () => {
     expect(scratchFixturesAllowed('', URL_OK)).toBe(false)
   })
   it('is true for a scratch stack naming the same stack as the platform host', () => {
-    expect(scratchFixturesAllowed('t043-0123abcd', URL_OK)).toBe(true)
+    expect(scratchFixturesAllowed('t043-0123abcd', URL_OK, 'none')).toBe(true)
   })
   it('is false when the named stack is not the platform database host stack', () => {
     expect(scratchFixturesAllowed('t043-ffffffff', URL_OK)).toBe(false)
@@ -36,6 +36,11 @@ describe('scratchFixturesAllowed', () => {
   it('is false for a unix-socket or host-less url', () => {
     expect(scratchFixturesAllowed('t044-0123abcd', 'postgresql://u:x@/db?host=/var/run/postgresql')).toBe(false)
     expect(scratchFixturesAllowed('t044-0123abcd', 'postgresql:///db')).toBe(false)
+  })
+  it('fails closed when the production stack is unset or empty (compose injects the empty string)', () => {
+    expect(scratchFixturesAllowed('t043-0123abcd', URL_OK)).toBe(false)
+    expect(scratchFixturesAllowed('t043-0123abcd', URL_OK, undefined)).toBe(false)
+    expect(scratchFixturesAllowed('t043-0123abcd', URL_OK, '')).toBe(false)
   })
   it('is false when the stack is the production stack, even if it looks scratch-shaped', () => {
     expect(scratchFixturesAllowed('t043-0123abcd', URL_OK, 't043-0123abcd')).toBe(false)

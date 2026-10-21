@@ -14,12 +14,16 @@ const STACK_HOST = /^postgres-(t\d{3}[a-z]?-[0-9a-f]{8})$/
  * names a scratch stack (GREMION_SCRATCH_FIXTURES) AND the platform database
  * host is that same stack's alias. Fails closed: an unset opt-in, a
  * production-looking stack or host, another stack's alias or an unparseable
- * URL is false. A production host's stack is never a tNNN-<sha8> name.
+ * URL is false, as is an unset/empty GREMION_PRODUCTION_STACK. A production host's stack is never a tNNN-<sha8> name.
  */
-export function scratchFixturesAllowed(stack: string | undefined, platformUrl: string | undefined, productionStack?: string): boolean {
+export function scratchFixturesAllowed(stack: string | undefined, platformUrl: string | undefined, productionStack: string | undefined): boolean {
   if (!stack || !SCRATCH_STACK.test(stack) || !platformUrl) return false
+  // Fail closed: an unset/empty GREMION_PRODUCTION_STACK (compose injects '')
+  // cannot prove the scratch stack is not production. 'none' is the explicit
+  // "this host has no production stack" (the assert-safe-test-db-url contract).
+  if (!productionStack) return false
   // The scratch stack must not be the production stack (GREMION_PRODUCTION_STACK).
-  if (productionStack !== undefined && productionStack === stack) return false
+  if (productionStack === stack) return false
   const host = poolHost(platformUrl)
   return host !== null && STACK_HOST.exec(host)?.[1] === stack
 }

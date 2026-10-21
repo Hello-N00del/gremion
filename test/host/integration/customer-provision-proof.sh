@@ -466,7 +466,7 @@ skc() { # kcadm in the state keycloak (the admin password by a name-only -e)
 tenant() { # gremion-tenant against the laid-out root, as the operator
     MSYS_NO_PATHCONV=1 GREMION_ROOT="$(host_path "$(croot)")" GREMION_RELEASE_DIR="$ROOT_H" \
         GREMION_OPERATOR_ID="$PROOF_OPERATOR_ID" TENANT_DNS_PREFLIGHT="${PROOF_DNS_PREFLIGHT:-off}" \
-        GREMION_SCRATCH_FIXTURES="$(scratch_stack)" \
+        GREMION_SCRATCH_FIXTURES="$(scratch_stack)" GREMION_PRODUCTION_STACK=none \
         bash "$ROOT/infra/host/bin/gremion-tenant" "$@"
 }
 # TASK-044 Q6: the stack name that lets the container gate accept the proof's
