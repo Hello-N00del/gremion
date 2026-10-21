@@ -89,20 +89,22 @@ teardown() {
 # Conditions (recording rules) -- Grafana alerts on them
 # ---------------------------------------------------------------------------
 
-@test "rules.yml records exactly the twelve conditions" {
+@test "rules.yml records exactly the sixteen conditions (twelve TASK-039 and the four TASK-079 dead-letter ones)" {
     [ -f "$RULES" ]
     run awk '/^[[:space:]]*#/ {next} /^[[:space:]]+- record:/ {print $3}' "$RULES"
     [ "$status" -eq 0 ]
-    [ "$(echo "$output" | sort | tr '\n' ' ')" = "gremion:cond:backup_failed gremion:cond:broker_consumer_stalled gremion:cond:cert_expiry gremion:cond:container_unhealthy gremion:cond:disk_above_70 gremion:cond:edge_port80 gremion:cond:mail_queue gremion:cond:memory_pressure gremion:cond:postgres_connections gremion:cond:signal_absent gremion:cond:storage_above_70 gremion:cond:third_party_unreachable " ]
+    [ "$(echo "$output" | sort | tr '\n' ' ')" = "gremion:cond:backup_failed gremion:cond:broker_consumer_stalled gremion:cond:cert_expiry gremion:cond:container_unhealthy gremion:cond:dead_letter_queue gremion:cond:disk_above_70 gremion:cond:edge_port80 gremion:cond:inbox_dead_lettered gremion:cond:inbox_stalled gremion:cond:mail_queue gremion:cond:memory_pressure gremion:cond:outbox_dead_lettered gremion:cond:postgres_connections gremion:cond:signal_absent gremion:cond:storage_above_70 gremion:cond:third_party_unreachable " ]
 }
 
-@test "every condition but third_party_unreachable is fail-closed on a blind collector" {
+@test "every condition but third_party_unreachable and the four dead-letter ones is fail-closed on a blind collector" {
     # Comment lines are skipped first: the header explains the absent()
     # contract in prose, and a guard that counts its own documentation lies.
     run awk '/^[[:space:]]*#/ {next} /^[[:space:]]+- record:/{name=$3} /absent\(/{print name}' "$RULES"
     [ "$status" -eq 0 ]
     [ "$(echo "$output" | sort -u | wc -l)" -eq 11 ]
     [[ "$output" != *"third_party_unreachable"* ]]
+    # TASK-079: a host without an events service has no gauge; an absent() arm there would fire for ever.
+    [[ "$output" != *"outbox_dead_lettered"* && "$output" != *"inbox_dead_lettered"* && "$output" != *"inbox_stalled"* && "$output" != *"dead_letter_queue"* ]]
 }
 
 @test "the unverified mail-queue series is labelled as unverified" {
@@ -736,6 +738,58 @@ prom() { cat "$GREMION_ROOT/runtime/textfile/gremion.prom"; }
     rm -f "$GREMION_ROOT/no-nats"; touch "$GREMION_ROOT/jsz-broken"
     STACK=staging run "$METRICS"
     run grep -c '^gremion_nats_.*[0-9]$' "$GREMION_ROOT/runtime/textfile/gremion.prom"
+    [ "$output" = "0" ]
+}
+
+# TASK-079 (G4b): the events services' dead-letter gauges, one `events metrics` per labelled container.
+shim_docker_events_world() {
+    shim docker '
+case "$*" in
+  "ps --filter label=org.gremion.events-metrics"*) printf "evt1 idt\nevt2 fin\nevt3 gov\n" ;;
+  "exec evt1 pnpm exec events metrics --ctx idt")
+    printf "# HELP gremion_outbox_dead_lettered Outbox rows.\n# TYPE gremion_outbox_dead_lettered gauge\ngremion_outbox_dead_lettered{ctx=\"idt\"} 1\n# HELP gremion_inbox_dead_lettered Inbox rows.\n# TYPE gremion_inbox_dead_lettered gauge\ngremion_inbox_dead_lettered{ctx=\"idt\",consumer=\"idt\"} 0\n# HELP gremion_inbox_stalled Stalled.\n# TYPE gremion_inbox_stalled gauge\ngremion_inbox_stalled{ctx=\"idt\",consumer=\"idt\"} 0\n# EOF\n" ;;
+  "exec evt2 pnpm exec events metrics --ctx fin")
+    printf "# HELP gremion_outbox_dead_lettered Outbox rows.\n# TYPE gremion_outbox_dead_lettered gauge\ngremion_outbox_dead_lettered{ctx=\"fin\"} 0\n# HELP gremion_inbox_dead_lettered Inbox rows.\n# TYPE gremion_inbox_dead_lettered gauge\ngremion_inbox_dead_lettered{ctx=\"fin\",consumer=\"finance\"} 2\n# HELP gremion_inbox_stalled Stalled.\n# TYPE gremion_inbox_stalled gauge\ngremion_inbox_stalled{ctx=\"fin\",consumer=\"finance\"} 1\n# EOF\n" ;;
+  "exec evt3 pnpm exec events metrics --ctx gov") echo "events: cannot reach the database" >&2; exit 1 ;;
+  *) : ;;
+esac
+exit 0'
+}
+
+@test "metrics-textfile merges the dead-letter gauges of every labelled service container into one block per family (TASK-079)" {
+    shim_docker_events_world
+    shim_timer enabled
+    STACK=staging run "$METRICS"
+    [ "$status" -eq 0 ]
+    local f="$GREMION_ROOT/runtime/textfile/gremion.prom"
+    grep -q '^gremion_outbox_dead_lettered{ctx="idt"} 1$' "$f"
+    grep -q '^gremion_outbox_dead_lettered{ctx="fin"} 0$' "$f"
+    grep -q '^gremion_inbox_dead_lettered{ctx="fin",consumer="finance"} 2$' "$f"
+    grep -q '^gremion_inbox_stalled{ctx="fin",consumer="finance"} 1$' "$f"
+    # each family named once and contiguous, no OpenMetrics terminator in the middle of a textfile
+    run bash -c "grep -cE '^# TYPE gremion_(outbox_dead_lettered|inbox_dead_lettered|inbox_stalled) ' '$f'"
+    [ "$output" = "3" ]
+    run bash -c "grep -c '^# EOF' '$f' || true"
+    [ "$output" = "0" ]
+    run awk '/^#/ {next} {n=$0; sub(/[{ ].*/, "", n); if (n != last) { if (seen[n]++) { print "interleaved " n; exit 1 } last = n } }' "$f"
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    # read inside each labelled container, by docker exec
+    assert_recorded docker "exec evt1 pnpm exec events metrics --ctx idt"
+    assert_recorded docker "exec evt2 pnpm exec events metrics --ctx fin"
+}
+
+@test "metrics-textfile skips a labelled container that prints no gauges, and prints nothing (absent, never 0) when none is labelled (TASK-079)" {
+    shim_docker_events_world
+    shim_timer enabled
+    STACK=staging run "$METRICS"
+    [ "$status" -eq 0 ]
+    # evt3 (ctx gov) failed: it contributes no sample at all
+    run grep -c 'ctx="gov"' "$GREMION_ROOT/runtime/textfile/gremion.prom"
+    [ "$output" = "0" ]
+    shim_docker_world
+    STACK=staging run "$METRICS"
+    [ "$status" -eq 0 ]
+    run grep -cE '^gremion_(outbox|inbox)_' "$GREMION_ROOT/runtime/textfile/gremion.prom"
     [ "$output" = "0" ]
 }
 

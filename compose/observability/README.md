@@ -123,7 +123,9 @@ council network. Every request presents `Authorization: Bearer
 <OTLP_INGEST_TOKEN>`; `render-ops.sh` refuses an empty or sentinel token.
 Spans go to Tempo, metrics to Prometheus, logs to Loki as `class=application`.
 Senders push; ops dials nothing on `_state`. TASK-116 builds the senders;
-TASK-079 (DLQ gauges) and TASK-150 (latency) push through the same path.
+TASK-150 (latency) pushes through the same path. TASK-079's dead-letter gauges
+do not: they are CURRENT row counts, so the host collector reads them
+(`emit_events`, see Alerting) instead of every service pushing them [A, 079-R31-1].
 
 ## Alerting (TRD-181, TRD-182, FLOW-OPS-009)
 
@@ -147,6 +149,22 @@ evaluation errors alert too.
 | `StorageComponentAbove70pct` | a component > 70 % of the provisioned disk (TRD-224) | 15m |
 | `ThirdPartyUnreachable` | a third-party service not answering (PRD-DEP-002) | 5m |
 | `SignalAbsent` | a signal stopped arriving (TRD-181) | 5m |
+| `OutboxDeadLettered` | the relay gave up on an outbox row (TASK-079, TRD-420) | 1m |
+| `InboxDeadLettered` | a consumer's message reached MaxDeliver and went to the DLQ stream | 1m |
+| `InboxStalled` | an inbox row received/failed for over 10 min: a crash on the last delivery | 1m |
+| `DeadLetterQueueNotEmpty` | the tenant's DLQ stream holds any entry (kept 7 days) | 1m |
+
+The four TASK-079 conditions have no `absent()` arm (as `ThirdPartyUnreachable`):
+a host that runs no events service yet has no gauge, and an `absent()` arm would
+fire there for ever; a blind collector is `SignalAbsent`'s. The three gauges
+(`gremion_outbox_dead_lettered{ctx}`, `gremion_inbox_dead_lettered{ctx,consumer}`,
+`gremion_inbox_stalled{ctx,consumer}`) are printed by `events metrics` in every
+service container labelled `org.gremion.events-metrics=<ctx>` and written into
+the host collector's textfile by `emit_events`; the DLQ rule reads the
+collector's `gremion_nats_stream_messages{stream="DLQ"}`. One breached path is
+one e-mail; a single poisoned message also fills the DLQ stream, so it raises
+both `InboxDeadLettered` and `DeadLetterQueueNotEmpty`, two groups. Runbook:
+`docs/runbooks/dead-letter.md`.
 
 The policy (`grafana/provisioning/alerting/policies.yaml`) groups by
 `[alertname, component]`, `group_wait 30s`, `group_interval 5m`,

@@ -18,6 +18,7 @@ import { STREAMS } from '@gremion/ports/broker'
 import { NatsBroker } from '@gremion/ports/nats'
 import { adminConnectOptionsFor, type ConnectOptions, sysReloadConnectOptions } from './connect.ts'
 import type { BrokerOps } from './ensure.ts'
+import { SYSTEM_STREAMS } from './flows.ts'
 
 export interface BrokerOpsOptions {
   url: string
@@ -97,7 +98,7 @@ export function natsBrokerOps(opts: BrokerOpsOptions): BrokerOps {
         }
       })
       for (const name of streams) {
-        const d = (STREAMS as Record<string, { name: string; subjects: string[] }>)[name]
+        const d = (STREAMS as Record<string, { name: string; subjects: string[] }>)[name] ?? SYSTEM_STREAMS[name]
         if (!d) throw new Error(`[nats-auth] unknown stream ${name}`)
         const b = await NatsBroker.connect(opts.url, d.name, admin)
         try {

@@ -66,7 +66,7 @@ importers:
         version: 5.56.8
       svelte-check:
         specifier: ^4.7.6
-        version: 4.7.6(picomatch@4.0.7)(svelte@5.56.8)(typescript@5.9.3)
+        version: 4.7.6(picomatch@4.0.5)(svelte@5.56.8)(typescript@5.9.3)
       typescript:
         specifier: ^5.7.3
         version: 5.9.3
@@ -222,6 +222,9 @@ importers:
       '@gremion/edge-routers':
         specifier: workspace:*
         version: link:../packages/edge-routers
+      '@gremion/events':
+        specifier: workspace:*
+        version: link:../packages/events
       '@gremion/nats-auth':
         specifier: workspace:*
         version: link:../packages/nats-auth
@@ -287,7 +290,7 @@ importers:
         version: 5.57.1
       svelte-check:
         specifier: ^4.7.6
-        version: 4.7.6(picomatch@4.0.5)(svelte@5.57.1)(typescript@5.9.3)
+        version: 4.7.6(picomatch@4.0.7)(svelte@5.57.1)(typescript@5.9.3)
       tailwindcss:
         specifier: ^4.3.3
         version: 4.3.3
@@ -609,6 +612,40 @@ importers:
         version: 5.9.3
 
   packages/edge-routers:
+    devDependencies:
+      '@types/node':
+        specifier: ^26.6.0
+        version: 26.6.0
+      typescript:
+        specifier: ^5.4.5
+        version: 5.9.3
+      vitest:
+        specifier: '>=4.1.11 <5'
+        version: 4.1.11(@types/node@26.6.0)(@vitest/browser-playwright@4.1.11)(@vitest/coverage-v8@4.1.11)(jsdom@29.1.1)(msw@2.15.0(@types/node@26.6.0)(typescript@5.9.3))(vite@8.3.0(@types/node@26.6.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.13)(yaml@2.9.0))
+
+  packages/events:
+    dependencies:
+      '@gremion/db':
+        specifier: workspace:*
+        version: link:../db
+      '@gremion/nats-auth':
+        specifier: workspace:*
+        version: link:../nats-auth
+      '@gremion/tenant-store':
+        specifier: workspace:*
+        version: link:../tenant-store
+      '@nats-io/jetstream':
+        specifier: ^3.4.0
+        version: 3.4.0
+      '@nats-io/nats-core':
+        specifier: ^3.4.0
+        version: 3.4.0
+      '@nats-io/transport-node':
+        specifier: ^3.4.0
+        version: 3.4.0
+      tsx:
+        specifier: ^4.23.13
+        version: 4.23.13
     devDependencies:
       '@types/node':
         specifier: ^26.6.0
@@ -6798,25 +6835,12 @@ snapshots:
 
   supports-preserve-symlinks-flag@1.0.0: {}
 
-  svelte-check@4.7.6(picomatch@4.0.5)(svelte@5.57.1)(typescript@5.9.3):
+  svelte-check@4.7.6(picomatch@4.0.5)(svelte@5.56.8)(typescript@5.9.3):
     dependencies:
       '@jridgewell/trace-mapping': 0.3.31
       '@sveltejs/load-config': 0.2.3
       chokidar: 4.0.3
       fdir: 6.5.0(picomatch@4.0.5)
-      picocolors: 1.1.1
-      sade: 1.8.1
-      svelte: 5.57.1
-      typescript: 5.9.3
-    transitivePeerDependencies:
-      - picomatch
-
-  svelte-check@4.7.6(picomatch@4.0.7)(svelte@5.56.8)(typescript@5.9.3):
-    dependencies:
-      '@jridgewell/trace-mapping': 0.3.31
-      '@sveltejs/load-config': 0.2.3
-      chokidar: 4.0.3
-      fdir: 6.5.0(picomatch@4.0.7)
       picocolors: 1.1.1
       sade: 1.8.1
       svelte: 5.56.8

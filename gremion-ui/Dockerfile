@@ -17,6 +17,11 @@ COPY packages/nats-auth/package.json ./packages/nats-auth/
 # tenant-create call in make nats-init, gremion-deploy, pooled-stack-proof)
 # fails "Command not found" (TASK-024 image.test.ts, scripts/image-check.sh).
 COPY packages/nats-auth/bin ./packages/nats-auth/bin/
+# TASK-079 G7: @gremion/events (outbox, inbox, relay, consumer, dead-letter) -- the
+# `events` bin must exist at install time for the same reason (the runbook's
+# `pnpm tenant-create exec events dlq-replay`).
+COPY packages/events/package.json ./packages/events/
+COPY packages/events/bin ./packages/events/bin/
 COPY packages/ports/package.json ./packages/ports/
 COPY packages/storage/package.json ./packages/storage/
 COPY packages/tokens/package.json ./packages/tokens/
@@ -39,6 +44,10 @@ COPY packages/db ./packages/db/
 # ensureTenantAccount; `deploy --prod` below leaves it out of the runner, so the
 # long-running gremion-ui cannot load it.
 COPY packages/nats-auth ./packages/nats-auth/
+# @gremion/events (TASK-079 G7) is a gremion-ui DEVdependency like nats-auth: the
+# builder stage (migrate / tenant-create) runs the dead-letter recovery CLI;
+# `deploy --prod` leaves it out of the runner.
+COPY packages/events ./packages/events/
 COPY packages/ports ./packages/ports/
 COPY packages/storage ./packages/storage/
 COPY packages/tokens ./packages/tokens/

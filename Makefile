@@ -2,7 +2,7 @@
         shell-kc shell-db \
         keycloak-configure dev-configure dev-ui fresh-start \
         update-legal update-legal-k8s \
-        test test-unit test-host-docker test-integration test-all test-ports-nats test-ports-nats-nruns test-nats-auth nats-init \
+        test test-unit test-host-docker test-integration test-all test-ports-nats test-ports-nats-nruns test-nats-auth test-events nats-init \
         lint lint-sh lint-yaml lint-json lint-compose \
         lint-hygiene lint-cve-floors lint-nats-nruns lint-packages lint-port-back lint-postgres-major lint-extraction-source \
         lint-unshipped-migrations lint-toolchain lint-compliance lint-tenant-db-access fresh-init-proof \
@@ -191,7 +191,26 @@ test: test-unit
 # Run all tests including integration (alias). test-ports-nats is IN here on
 # purpose: a target nothing aggregates is a target nobody runs, which is how the
 # JetStream proofs went unexecuted in the first place (integration defect D8).
-test-all: test-unit test-integration test-ports-nats test-nats-auth
+test-all: test-unit test-integration test-ports-nats test-nats-auth test-events
+
+# @gremion/events (TASK-079): the unit suite, then the acceptance against a scratch
+# Postgres 18 and the authenticated broker -- packages/events/scripts/proof.sh runs
+# one phase per call (each under 4 minutes), asserts a minimum of passing live cases
+# per group and tears everything down BY NAME. `down` always runs, and the target
+# fails when any phase failed or `down` reports a group not passed. Last,
+# image-check.sh proves the package resolves in the migrate image.
+test-events:
+	@pnpm --filter @gremion/events test
+	@rc=0; bash packages/events/scripts/proof.sh up || rc=$$?; \
+	if [ $$rc -eq 0 ]; then \
+		for g in core consumer deadletter rebuild; do bash packages/events/scripts/proof.sh test $$g || { rc=$$?; break; }; done; \
+	fi; \
+	if [ $$rc -eq 0 ]; then \
+		for p in alert-prepare alert-up alert-red alert-fire alert-hold alert-resolve; do bash packages/events/scripts/proof.sh $$p || { rc=$$?; break; }; done; \
+	fi; \
+	out="$$(bash packages/events/scripts/proof.sh down)"; printf '%s\n' "$$out"; \
+	[ $$rc -eq 0 ] && printf '%s\n' "$$out" | grep -qx '\[events-proof\] OK' || exit 1
+	@bash packages/events/scripts/image-check.sh
 
 # @gremion/nats-auth (TASK-024): the unit suite, then the acceptance against a
 # REAL broker -- packages/nats-auth/scripts/proof.sh --auth starts the state
@@ -262,7 +281,7 @@ test-ports-nats-nruns:
 # lose a file.
 lint-sh:
 	@echo "Linting shell scripts..."
-	@shellcheck -x scripts/*.sh ops/scripts/*.sh docker/postgres/init-databases.sh docker/legal/entrypoint.sh packages/ports/scripts/nats-test.sh packages/ports/scripts/nats-test-nruns.sh packages/nats-auth/scripts/proof.sh packages/nats-auth/scripts/image-check.sh
+	@shellcheck -x scripts/*.sh ops/scripts/*.sh docker/postgres/init-databases.sh docker/legal/entrypoint.sh packages/ports/scripts/nats-test.sh packages/ports/scripts/nats-test-nruns.sh packages/nats-auth/scripts/proof.sh packages/nats-auth/scripts/image-check.sh packages/events/scripts/proof.sh packages/events/scripts/alert-proof.sh packages/events/scripts/image-check.sh
 	@shellcheck -x -s sh gremion-ui/scripts/hooks/pre-commit
 	@shellcheck -x modules/messaging/synapse/*.sh modules/messaging/synapse/postgres-init/*.sh modules/messaging/synapse/test/*.sh
 	@for f in infra/host/bootstrap.sh infra/host/lib/*.sh infra/host/mail/*.sh infra/host/ops/*.sh test/host/integration/*.sh; do \

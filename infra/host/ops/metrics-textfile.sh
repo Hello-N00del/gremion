@@ -15,6 +15,9 @@
 #   broker       gremion_nats_jsz_up, gremion_nats_stream_*, gremion_nats_consumer_*
 #                 (`jsz` read inside the broker container: its monitor listens
 #                 on the container loopback only, TASK-024)
+#   events        gremion_outbox_dead_lettered, gremion_inbox_{dead_lettered,stalled}
+#                 (TASK-079: `events metrics` run in each service container labelled
+#                 org.gremion.events-metrics=<ctx>; absent when none is labelled)
 #   filesystems   gremion_host_filesystem_{size,avail}_bytes{mountpoint}
 #   TRD-224       gremion_host_disk_provisioned_bytes{path},
 #                 gremion_storage_component_bytes{component}
@@ -285,6 +288,34 @@ emit_nats() {
     done
 }
 
+# TASK-079 (TRD-420, [A, 079-R31-1]): the dead-letter gauges of every service container that
+# carries the label org.gremion.events-metrics=<ctx>. Each is asked for its OWN database's
+# current row counts with `events metrics` (OpenMetrics text, @gremion/events), run in the
+# container's working directory; the families of all containers are merged into one block per
+# family (the text format keeps a family contiguous and names it once). A container that
+# answers without the gauges is skipped and a host with no labelled container prints nothing:
+# ABSENT, never 0 (the four conditions have no absent() arm, see prometheus/rules.yml).
+emit_events() {
+    local cid ctx out="" one
+    while read -r cid ctx; do
+        [[ -n "$cid" && -n "$ctx" ]] || continue
+        one="$(docker exec "$cid" pnpm exec events metrics --ctx "$ctx" 2>/dev/null || true)"
+        if ! grep -q '^gremion_outbox_dead_lettered{' <<< "$one"; then
+            note "events metrics in $cid (ctx $ctx) printed no gauges -- skipped"
+            continue
+        fi
+        out+="$one"$'\n'
+    done < <(docker ps --filter 'label=org.gremion.events-metrics' --format '{{.ID}} {{.Label "org.gremion.events-metrics"}}')
+    [[ -n "$out" ]] || return 0
+    awk '
+        /^# HELP / { f = $3; if (!(f in seen)) { seen[f] = 1; order[++n] = f }; help[f] = help[f] ? help[f] : $0; next }
+        /^# TYPE / { f = $3; if (!(f in seen)) { seen[f] = 1; order[++n] = f }; type[f] = type[f] ? type[f] : $0; next }
+        /^#/ { next }
+        NF { f = $1; sub(/[{].*/, "", f); if (!(f in seen)) { seen[f] = 1; order[++n] = f }; samples[f] = samples[f] $0 "\n" }
+        END { for (i = 1; i <= n; i++) { f = order[i]; if (f in help) print help[f]; if (f in type) print type[f]; printf "%s", samples[f] } }
+    ' <<< "$out"
+}
+
 # df -B1 of the filesystem holding <path>: "<size> <avail>", or nothing.
 fs_bytes() {
     df -B1 --output=size,avail "$1" 2>/dev/null | awk 'NR == 2 && $1 ~ /^[0-9]+$/ && $2 ~ /^[0-9]+$/ { print $1, $2 }'
@@ -376,6 +407,7 @@ main() {
         emit_postgres_connections
         emit_job_last_run
         emit_nats
+        emit_events
         emit_filesystems
         emit_storage_components
         printf '# HELP gremion_metrics_textfile_timestamp_seconds Unix time this collector last completed.\n'

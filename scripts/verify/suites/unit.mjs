@@ -269,6 +269,12 @@ export const UNIT_PARTS = {
   'nats-auth': (root) => [
     vitestSubcheck({ cwd: path.join(root, 'packages', 'nats-auth'), testScript: 'test', root, label: '@gremion/nats-auth vitest (test)' }),
   ],
+  // TASK-079 (G1): the events library's unit suite (plumbing lint, envelope, relay
+  // limits, recovery, runbook drift). Its real-Postgres/NATS half is
+  // `packages/events/scripts/proof.sh` (kernel-events-live).
+  events: (root) => [
+    vitestSubcheck({ cwd: path.join(root, 'packages', 'events'), testScript: 'test', root, label: '@gremion/events vitest (test)' }),
+  ],
   // TASK-043 (G7): the customer lifecycle's step machine, slug, interim gate,
   // phases over recording fakes and the router render. Its database half is
   // `test:integration` (one named scratch PostgreSQL), not a unit part.

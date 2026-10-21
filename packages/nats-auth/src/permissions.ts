@@ -14,7 +14,7 @@
 //    stream, or reads messages around a consumer (DIRECT.GET, STREAM.MSG.GET);
 //  - every connection gets its OWN inbox prefix, _INBOX_<module>_<tenant>, and
 //    is refused the shared _INBOX.>, so no module reads another's replies.
-import { FLOWS, NO_BROKER, TOPOLOGY } from './flows.ts'
+import { dlqGrantFor, FLOWS, NO_BROKER, TOPOLOGY } from './flows.ts'
 
 export interface PermissionSet {
   allow: string[]
@@ -89,6 +89,9 @@ export function modulePermissions(tenant: string, module: string): Permissions {
   const flow = flowFor(module)
   const allow: string[] = []
   for (const s of flow.publishes) allow.push(...tenantSubjects(s, tenant))
+  // TASK-079 G5: the dead-letter publish of this module's consumers (the DLQ system stream).
+  // Exactly one grant, under the module's own name; permissionViolations pins that.
+  allow.push(dlqGrantFor(tenant, module))
   allow.push('$JS.API.INFO')
   for (const s of flow.publishes) allow.push(`$JS.API.STREAM.INFO.${s}`)
   for (const s of flow.consumes) allow.push(...consumerGrants(s).filter((g) => !allow.includes(g)))
@@ -122,6 +125,7 @@ export function permissionViolations(tenant: string, module: string, p: Permissi
   const own = flow.publishes.flatMap((s) => tenantSubjects(s, tenant))
   const consumed = new Set(flow.consumes)
   const touched = new Set([...flow.publishes, ...flow.consumes])
+  const dlq = dlqGrantFor(tenant, module)
   for (const a of p.publish.allow) {
     if (a.startsWith('$JS.API.') || a.startsWith('$JS.ACK.')) {
       if (a === '$JS.API.INFO') continue
@@ -143,7 +147,16 @@ export function permissionViolations(tenant: string, module: string, p: Permissi
       }
       continue
     }
+    if (a === dlq) continue
+    // Any OTHER dead-letter grant (another module's, a tenant-wide gremion.<t>.dlq.>) is a violation.
+    if (a.startsWith(`gremion.${tenant}.dlq.`) || a.startsWith('gremion.*.dlq.')) {
+      out.push(`${module}@${tenant}: dead-letter grant ${a} is not exactly ${dlq}`)
+      continue
+    }
     if (!own.includes(a)) out.push(`${module}@${tenant}: publish grant ${a} is outside its own subjects [${own.join(', ')}]`)
+  }
+  if (p.publish.allow.filter((a) => a === dlq).length !== 1) {
+    out.push(`${module}@${tenant}: must hold exactly one dead-letter publish grant ${dlq}`)
   }
   for (const s of touched) {
     if (!p.publish.allow.includes(`$JS.API.STREAM.INFO.${s}`)) out.push(`${module}@${tenant}: missing $JS.API.STREAM.INFO.${s} (its boot reads the stream)`)
