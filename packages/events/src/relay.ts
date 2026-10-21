@@ -159,6 +159,27 @@ export function createRelay(opts: RelayOptions): Relay {
     return (resolved = await fn())
   }
 
+  /**
+   * A client opened by the `js` function whose connection is CLOSED (or draining) never recovers by itself: forget it
+   * (best-effort close) so the next pass calls the function again and the relay re-establishes the connection. A live
+   * connection that merely lost the broker keeps its own reconnect logic and is left alone. A fixed `js` value
+   * cannot be re-opened here: its owner restarts the process (the error is then the loop's onError, every pass).
+   */
+  async function dropIfClosed(js: Publisher, err: unknown): Promise<void> {
+    if (typeof opts.js !== 'function' || resolved !== js) return
+    const nc = (js as unknown as { nc?: { isClosed?: () => boolean; isDraining?: () => boolean; close?: () => Promise<unknown> } }).nc
+    const name = errFields(err).name
+    const closed = name === 'ClosedConnectionError' || name === 'DrainingConnectionError' || nc?.isClosed?.() === true || nc?.isDraining?.() === true
+    if (!closed) return
+    resolved = undefined
+    log('the NATS connection is closed: it will be re-established on the next pass')
+    try {
+      await nc?.close?.()
+    } catch {
+      /* already closed */
+    }
+  }
+
   const PROBE_TIMEOUT_MS = 2_000
   /** True when the broker answers: a TimeoutError then belongs to the row. No probe available: assume transport. */
   async function brokerHealthy(js: Publisher): Promise<boolean> {
@@ -231,7 +252,10 @@ export function createRelay(opts: RelayOptions): Relay {
       }
       return res
     })
-    if (transportError) throw transportError.err
+    if (transportError) {
+      await dropIfClosed(js, transportError.err)
+      throw transportError.err
+    }
     return result
   }
 

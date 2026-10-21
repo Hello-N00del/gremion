@@ -165,3 +165,39 @@ describe('transportBackoffMs', () => {
     expect([1, 2, 3, 4, 5, 6, 50].map(transportBackoffMs)).toEqual([1000, 2000, 4000, 8000, 16000, 30000, 30000])
   })
 })
+
+describe('the relay re-establishes a closed NATS connection (a js function is re-called)', () => {
+  test('after a ClosedConnectionError the NEXT pass opens a fresh client and publishes through it', async () => {
+    const db = fakeDb(1)
+    let opened = 0
+    const closedClients: number[] = []
+    const factory = async () => {
+      const n = ++opened
+      return {
+        nc: { isClosed: () => n === 1, close: async () => void closedClients.push(n) },
+        publish: async () => {
+          if (n === 1) throw named('ClosedConnectionError')
+          return { stream: 'S', seq: 1, duplicate: false }
+        },
+      } as never
+    }
+    const relay = createRelay({ sql: db.sql, ctx: 'idt', js: factory, subjects: () => 'gremion.t.x', onError: () => {}, log: () => {} })
+    await expect(relay.runOnce()).rejects.toMatchObject({ name: 'ClosedConnectionError' })
+    expect((await relay.runOnce()).published).toBe(1)
+    expect(opened).toBe(2)
+    expect(closedClients).toEqual([1])
+  })
+
+  test('a live connection that only lost the broker is kept (no churn)', async () => {
+    const db = fakeDb(1)
+    let opened = 0
+    const factory = async () => {
+      opened++
+      return { nc: { isClosed: () => false }, publish: async () => { throw named('NoRespondersError') } } as never
+    }
+    const relay = createRelay({ sql: db.sql, ctx: 'idt', js: factory, subjects: () => 'gremion.t.x', onError: () => {}, log: () => {} })
+    await expect(relay.runOnce()).rejects.toBeDefined()
+    await expect(relay.runOnce()).rejects.toBeDefined()
+    expect(opened).toBe(1)
+  })
+})
