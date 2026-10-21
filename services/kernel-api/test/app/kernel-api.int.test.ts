@@ -220,7 +220,7 @@ describe('the kernel API on PG18 (scratch stack)', () => {
 
   it("TRD-353: B's applied sha256 altered -> B 503 (diverged), A 200; the migrate job refuses B; restored -> B 200", async () => {
     const sql = connect(kernelDatabaseOf(B.id), { max: 1 })
-    const [{ sha256 }] = (await sql<{ sha256: string }[]>`SELECT sha256 FROM idt.schema_migration WHERE filename = '0001_idt_setup.sql'`) as [{ sha256: string }]
+    const [{ sha256 }] = (await sql<{ sha256: string }[]>`SELECT sha256 FROM idt.schema_migration WHERE filename = '0001_idt_setup.sql'`) as unknown as [{ sha256: string }]
     try {
       await sql`UPDATE idt.schema_migration SET sha256 = ${'0'.repeat(64)} WHERE filename = '0001_idt_setup.sql'`
       expect((await app.inject({ url: '/api/v1/tenancy/self', headers: edge(B.host, await iss.mint('realm-b')) })).statusCode).toBe(503)
