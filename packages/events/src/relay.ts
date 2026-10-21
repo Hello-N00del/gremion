@@ -23,6 +23,7 @@ import { errorCode, inTenantTx } from './db.ts'
 import type { OutboxRow } from './envelope.ts'
 import { assertContext } from './plumbing.ts'
 import { DEFAULT_PUBLISH_TIMEOUT_MS, publishRow, type Publisher } from './publish.ts'
+import { assertTestHooksAllowed } from './test-hooks.ts'
 
 /** Where an event goes: a map from event type, or a function of the row (Q7: injected per service). */
 export type SubjectMap = Readonly<Record<string, string>> | ((row: OutboxRow) => string)
@@ -137,6 +138,7 @@ export function subjectOf(subjects: SubjectMap, row: OutboxRow): string {
 
 export function createRelay(opts: RelayOptions): Relay {
   assertContext(opts.ctx)
+  assertTestHooksAllowed(`relay ${opts.ctx}`, opts.hooks)
   const { sql, ctx } = opts
   const batchSize = opts.batchSize ?? 50
   const maxAttempts = opts.maxAttempts ?? RELAY_MAX_ATTEMPTS

@@ -34,6 +34,7 @@ import { errorCode, inTenantTx } from './db.ts'
 import { DLQ_HEADERS, H, parseEnvelope, type ParsedEvent } from './envelope.ts'
 import { assertContext } from './plumbing.ts'
 import { publishWire } from './publish.ts'
+import { assertTestHooksAllowed } from './test-hooks.ts'
 
 /** What a handler receives besides its transaction. */
 export interface ConsumedEvent extends ParsedEvent {
@@ -94,6 +95,7 @@ export const dlqSubjectFor = (tenant: string, module: string, consumer: string):
 
 export function createConsumer(opts: ConsumerOptions): ConsumerHandle {
   assertContext(opts.ctx)
+  assertTestHooksAllowed(`consumer ${opts.name}`, opts.hooks)
   const maxDeliver = opts.maxDeliver ?? CONSUMER_MAX_DELIVER
   const backoff = opts.backoffMs ?? CONSUMER_BACKOFF_MS
   assertConsumerLimits(maxDeliver, backoff)
