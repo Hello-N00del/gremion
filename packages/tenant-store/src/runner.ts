@@ -84,6 +84,17 @@ export interface RunMigrationsOptions {
    */
   ledger?: string
   /**
+   * The runtime role that reads the ledger (the schema gate) and appends to it
+   * when it is the connection user (the runner INSERTs after RESET ROLE). The
+   * ledger is created by whatever role the body runs as (a migration's SET
+   * ROLE <owner>), so the runtime role would only reach it through inherited
+   * owner rights, which TASK-192 removes: it is granted USAGE on the ledger's
+   * schema and SELECT, INSERT on the ledger explicitly, in the file's
+   * transaction (idempotent, so a ledger made before this option is covered on
+   * the next run). A plain lower-case identifier.
+   */
+  ledgerGrantTo?: string
+  /**
    * The release this run ships (e.g. dist-v1.2.3, or import-<job>): written
    * into every ledger row it adds (release_ref, 1-64 characters).
    */
@@ -313,6 +324,10 @@ export async function runMigrations(options: RunMigrationsOptions): Promise<RunM
   if (!Array.isArray(dirs) || dirs.length === 0) throw new TypeError('runMigrations: dirs must be a non-empty array')
   const dir = dirs[0]!
   const ledger = ledgerName(options.ledger ?? LEDGER)
+  const ledgerGrantTo = options.ledgerGrantTo
+  if (ledgerGrantTo !== undefined && !/^[a-z_][a-z0-9_]{0,62}$/.test(ledgerGrantTo)) {
+    throw new TypeError(`ledgerGrantTo must be a plain lower-case role identifier (got ${JSON.stringify(ledgerGrantTo)})`)
+  }
   assertReleaseRef(options.releaseRef)
   const releaseRef = options.releaseRef
   const lockWaitTimeoutMs = options.lockWaitTimeoutMs ?? 10 * 60_000
@@ -488,6 +503,10 @@ export async function runMigrations(options: RunMigrationsOptions): Promise<RunM
           if (!ns?.present) await reserved.unsafe(`CREATE SCHEMA IF NOT EXISTS "${ledger.schema}"`)
           await reserved.unsafe(ledgerDdl(ledger))
         } else if (upgrade !== null) await upgradeLedger(reserved, ledger, upgrade)
+        if (ledgerGrantTo !== undefined) {
+          await reserved.unsafe(`GRANT USAGE ON SCHEMA "${ledger.schema}" TO "${ledgerGrantTo}"`)
+          await reserved.unsafe(`GRANT SELECT, INSERT ON ${ledger.quoted} TO "${ledgerGrantTo}"`)
+        }
         await reserved.unsafe(m.body)
         // A COMMIT that slipped past stripOuterTransaction would leave the
         // rest of the body, and the ledger row, outside this transaction.

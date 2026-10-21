@@ -115,4 +115,45 @@ describe('ensureKernelApiReader (TASK-077 C13)', () => {
     await expect(ensureKernelApiReader({ ...deps(), password: 'short' })).rejects.toMatchObject({ code: 'INVALID_INPUT' })
     await expect(ensureKernelApiReader({ ...deps(), controlDatabase: 'postgres' })).rejects.toMatchObject({ code: 'PRECONDITION' })
   })
+
+  it('refuses an existing role that has memberships or owns objects BEFORE any ALTER (a mistyped KERNEL_API_DB_ROLE naming a customer role must not be clobbered)', async () => {
+    const VICTIM = 't077_victim_app'
+    const PARENT = 't077_victim_owner'
+    const OLD = 'old-victim-password-0123456789'
+    await admin.unsafe(`DROP ROLE IF EXISTS ${VICTIM}`)
+    await admin.unsafe(`DROP ROLE IF EXISTS ${PARENT}`)
+    await admin.unsafe(`CREATE ROLE ${PARENT} NOLOGIN`)
+    // like k_<hex>_app: LOGIN, INHERIT (default), a member of its owner
+    await admin.unsafe(`CREATE ROLE ${VICTIM} LOGIN PASSWORD '${OLD}'`)
+    await admin.unsafe(`GRANT ${PARENT} TO ${VICTIM}`)
+    const pw = async () => (await admin<{ p: string }[]>`SELECT rolpassword AS p FROM pg_authid WHERE rolname = ${VICTIM}`)[0]!.p
+    const inherit = async () => (await admin<{ i: boolean }[]>`SELECT rolinherit AS i FROM pg_roles WHERE rolname = ${VICTIM}`)[0]!.i
+    try {
+      const before = await pw()
+      await expect(ensureKernelApiReader({ ...deps(), role: VICTIM })).rejects.toMatchObject({ code: 'PRECONDITION', message: expect.stringMatching(/member of, or has members in/) })
+      expect(await pw()).toBe(before)
+      expect(await inherit()).toBe(true)
+      // owning an object (no membership) is refused just the same
+      await admin.unsafe(`REVOKE ${PARENT} FROM ${VICTIM}`)
+      const c = connect(CONTROL, { max: 1 })
+      try {
+        await c.unsafe(`CREATE TABLE public.t077_victim_owned (a int); ALTER TABLE public.t077_victim_owned OWNER TO ${VICTIM}`)
+        await expect(ensureKernelApiReader({ ...deps(), role: VICTIM })).rejects.toMatchObject({ code: 'PRECONDITION', message: expect.stringMatching(/owns/) })
+        expect(await pw()).toBe(before)
+        expect(await inherit()).toBe(true)
+      } finally {
+        await c.unsafe('DROP TABLE IF EXISTS public.t077_victim_owned')
+        await c.end()
+      }
+    } finally {
+      for (const d of [CONTROL, 'gremion_platform']) {
+        const c = connect(d, { max: 1 })
+        await c.unsafe(`DROP OWNED BY ${VICTIM}`).catch(() => {})
+        await c.end()
+      }
+      await admin.unsafe(`REVOKE CONNECT ON DATABASE gremion_platform FROM ${VICTIM}`).catch(() => {})
+      await admin.unsafe(`DROP ROLE IF EXISTS ${VICTIM}`)
+      await admin.unsafe(`DROP ROLE IF EXISTS ${PARENT}`)
+    }
+  })
 })

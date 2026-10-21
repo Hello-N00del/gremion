@@ -13,7 +13,8 @@ import { chainPreApply } from '../../../../scripts/migrations/pre-apply.mjs'
 import { tenantModuleDbName } from '../../src/names.js'
 import { MigrationRunnerError, runMigrations } from '../../src/runner.js'
 import { checkSchemaCurrent } from '../../src/schema-gate.js'
-import { connect, ddlAttempts, resetWithProbe } from '../harness/db.js'
+import postgres from 'postgres'
+import { connect, dbUrl, ddlAttempts, resetWithProbe } from '../harness/db.js'
 import { FIXTURE_MIGRATIONS, FIXTURE_RELEASE, writeManifest } from '../harness/migrations.js'
 
 const quiet = { log: () => {}, ...FIXTURE_RELEASE }
@@ -143,5 +144,33 @@ describe('runMigrations ledger + dirs (TASK-077 G3)', () => {
   it('writes nothing outside its ledger: no public.schema_migrations appears', async () => {
     await runMigrations({ sql, dir: FIXTURE_MIGRATIONS, ledger: IDT, ...quiet })
     expect(await watcher`SELECT to_regclass('public.schema_migrations') AS t`).toEqual([{ t: null }])
+  })
+
+  it('TASK-077 review: the runtime role is granted USAGE on the ledger schema and SELECT, INSERT on the ledger where it is created (a NOINHERIT role holds no owner rights)', async () => {
+    const RT = 't077_ledger_rt'
+    const admin = connect('postgres', { max: 1 })
+    await admin.unsafe(`DROP ROLE IF EXISTS ${RT}`)
+    await admin.unsafe(`CREATE ROLE ${RT} LOGIN NOINHERIT PASSWORD 'rt-pw-0123456789abcdef'`)
+    await admin.unsafe(`GRANT CONNECT ON DATABASE ${db} TO ${RT}`)
+    const asRt = postgres(`postgres://${RT}:rt-pw-0123456789abcdef@${new URL(dbUrl(db)).host}/${db}`, { max: 1, onnotice: () => {} })
+    try {
+      await runMigrations({ sql, dir: FIXTURE_MIGRATIONS, ledger: IDT, ledgerGrantTo: RT, ...quiet })
+      expect((await asRt<{ n: number }[]>`SELECT count(*)::int AS n FROM idt.schema_migration`)[0]!.n).toBe(3)
+      await asRt.unsafe(`INSERT INTO idt.schema_migration (filename, sha256, phase, release_ref) VALUES ('999_probe.sql', '${'a'.repeat(64)}', 'expand', 'dist-v0.0.1')`)
+      // the gate (the runtime reader) sees the ledger
+      expect((await checkSchemaCurrent({ sql: asRt, dir: FIXTURE_MIGRATIONS, ledger: IDT })).state).toBeDefined()
+      // ... and no more than SELECT, INSERT: no UPDATE, DELETE, TRUNCATE
+      await expect(asRt.unsafe('DELETE FROM idt.schema_migration')).rejects.toMatchObject({ code: '42501' })
+      await expect(asRt.unsafe("UPDATE idt.schema_migration SET release_ref = 'x'")).rejects.toMatchObject({ code: '42501' })
+    } finally {
+      await asRt.end()
+      await resetWithProbe(db)
+      const c = connect(db, { max: 1 })
+      await c.unsafe('DROP SCHEMA IF EXISTS idt CASCADE')
+      await c.end()
+      await admin.unsafe(`REVOKE CONNECT ON DATABASE ${db} FROM ${RT}`)
+      await admin.unsafe(`DROP ROLE IF EXISTS ${RT}`)
+      await admin.end()
+    }
   })
 })

@@ -105,6 +105,29 @@ export async function ensureKernelApiReader(d: KernelApiReaderDeps): Promise<{ c
     }
   }
   const exists = (await d.kernelAdmin`SELECT 1 FROM pg_roles WHERE rolname = ${d.role}`).length > 0
+  // Refuse a pre-existing role that is not already a reader BEFORE any ALTER: a
+  // mistyped KERNEL_API_DB_ROLE naming a customer role (k_<hex>_app, a member of
+  // its owner) or an owner must not have its password and NOINHERIT clobbered.
+  // A reader this function made has no memberships and owns nothing.
+  if (exists) {
+    const [links] = await d.kernelAdmin<{ n: number }[]>`
+      SELECT count(*)::int AS n FROM pg_auth_members m
+        JOIN pg_roles r ON r.oid IN (m.member, m.roleid) WHERE r.rolname = ${d.role}`
+    if ((links?.n ?? 0) > 0) throw new KernelApiReaderError('PRECONDITION', `role ${d.role} already exists and is a member of, or has members in, another role: it is not a kernel API reader; refusing to alter it (check KERNEL_API_DB_USER)`)
+    for (const db of [...new Set([d.controlDatabase, PLATFORM_DATABASE])]) {
+      const sql = d.openAdminOn(db)
+      try {
+        const [o] = await sql<{ n: number }[]>`
+          SELECT count(*)::int AS n FROM pg_catalog.pg_shdepend s
+            JOIN pg_catalog.pg_roles r ON r.oid = s.refobjid
+           WHERE s.refclassid = 'pg_catalog.pg_authid'::regclass AND s.deptype = 'o' AND r.rolname = ${d.role}
+             AND s.dbid IN (0, (SELECT oid FROM pg_catalog.pg_database WHERE datname = pg_catalog.current_database()))`
+        if ((o?.n ?? 0) > 0) throw new KernelApiReaderError('PRECONDITION', `role ${d.role} already exists and owns ${o!.n} object(s) in ${db} (or owns a database): it is not a kernel API reader; refusing to alter it (check KERNEL_API_DB_USER)`)
+      } finally {
+        await sql.end({ timeout: 5 })
+      }
+    }
+  }
   const attrs = 'LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS PASSWORD %L'
   await execFmt(d.kernelAdmin, `${exists ? 'ALTER' : 'CREATE'} ROLE %I ${attrs}`, [d.role, d.password])
   for (const t of targets) await execFmt(d.kernelAdmin, 'GRANT CONNECT ON DATABASE %I TO %I', [t.db, d.role])

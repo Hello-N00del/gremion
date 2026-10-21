@@ -130,6 +130,8 @@ export async function migrateKernelDb(customerId: string, o: MigrateOptions & { 
       dirs: o.dirs,
       ledger: KERNEL_API_LEDGER,
       releaseRef: o.releaseRef,
+      // the runtime role reads/appends the ledger by an explicit grant, not owner membership (TASK-192)
+      ledgerGrantTo: owner.replace(/_owner$/, '_app'),
       log,
       hooks: {
         preApply: composePreApply(

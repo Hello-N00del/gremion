@@ -586,6 +586,12 @@ async function cmdInit(): Promise<void> {
   const release = releaseRef()
   const controlDatabase = decodeURIComponent(new URL(reqEnv('CONTROL_DATABASE_URL')).pathname.replace(/^\//, ''))
   const kernelAdmin = postgres(kernelAdminUrl, { max: 2, onnotice: () => {}, connect_timeout: 15 })
+  // the per-database admin connection both reader roles are granted through
+  const openAdminOn = (db: string) => {
+    const u = new URL(kernelAdminUrl)
+    u.pathname = `/${encodeURIComponent(db)}`
+    return postgres(u.toString(), { max: 1, onnotice: () => {}, connect_timeout: 15 })
+  }
   try {
     const r = await bootstrapPlatform({
       kernelAdmin,
@@ -602,11 +608,7 @@ async function cmdInit(): Promise<void> {
     for (const row of r.catalogue.load) if (row.provisional) log(`init: ${provisionalNote(row)}`)
     const panel = await ensurePanelReader({
       kernelAdmin,
-      openAdminOn: (db) => {
-        const u = new URL(kernelAdminUrl)
-        u.pathname = `/${encodeURIComponent(db)}`
-        return postgres(u.toString(), { max: 1, onnotice: () => {}, connect_timeout: 15 })
-      },
+      openAdminOn,
       role: panelRole,
       password: panelPassword,
       controlDatabase,
@@ -617,11 +619,7 @@ async function cmdInit(): Promise<void> {
     // creates it.
     const kernelApi = await ensureKernelApiReader({
       kernelAdmin,
-      openAdminOn: (db) => {
-        const u = new URL(kernelAdminUrl)
-        u.pathname = `/${encodeURIComponent(db)}`
-        return postgres(u.toString(), { max: 1, onnotice: () => {}, connect_timeout: 15 })
-      },
+      openAdminOn,
       role: kernelApiRole,
       password: kernelApiPassword,
       controlDatabase,
