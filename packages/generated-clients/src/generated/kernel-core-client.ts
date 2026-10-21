@@ -62,6 +62,75 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/authz/decisions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** May this person do this in this body? The one decision point (module callers only) */
+        post: operations["decideAuthz"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/authz/grants": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The grants of one body of the resolved customer */
+        get: operations["listAuthzGrants"];
+        put?: never;
+        /** Issue a grant (a customer administrator inside their own tenant; TRD-091, TRD-090) */
+        post: operations["issueAuthzGrant"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/authz/grants/{grantId}/revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Revoke one open grant */
+        post: operations["revokeAuthzGrant"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/authz/persons/{personId}/revoke-all": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Revoke every open grant of one person in one step-up window (PRD-IDN-002) */
+        post: operations["revokeAllAuthzGrants"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -107,6 +176,67 @@ export interface components {
                 postgresService: string;
                 databases: string[];
             };
+        };
+        AuthzDecisionRequest: {
+            subject: string;
+            /** Format: uuid */
+            bodyId: string;
+            capability: string;
+            resource?: {
+                kind: string;
+                /** Format: uuid */
+                id: string;
+            };
+        };
+        AuthzDecision: {
+            allow: boolean;
+            reason: string;
+            grantIds: string[];
+        };
+        GrantIssueRequest: {
+            /** Format: uuid */
+            bodyId: string;
+            /** Format: uuid */
+            subjectPersonId: string;
+            /** @enum {unknown} */
+            grantKind: "role" | "capability";
+            key: string;
+            granterRole: string;
+            resource?: {
+                kind: string;
+                /** Format: uuid */
+                id: string;
+            };
+            /** Format: date-time */
+            validFrom?: string;
+            /** Format: date-time */
+            validUntil?: string | null;
+        };
+        Grant: {
+            /** Format: uuid */
+            grantId: string;
+            /** Format: uuid */
+            bodyId: string;
+            /** Format: uuid */
+            subjectPersonId: string;
+            /** @enum {unknown} */
+            grantKind: "role" | "capability";
+            key: string;
+            resourceKind?: string | null;
+            resourceId?: string | null;
+            validFrom: string;
+            validUntil?: string | null;
+            /** @enum {unknown} */
+            granterKind: "person" | "operator" | "system";
+            source: string;
+            /** @enum {unknown} */
+            state: "scheduled" | "active" | "expired" | "revoked";
+            revokedAt?: string | null;
+            revokeReason?: string | null;
+            rowVersion: number;
+        };
+        GrantList: {
+            grants: components["schemas"]["Grant"][];
         };
         /** @description RFC 9457 problem details. */
         Problem: {
@@ -156,6 +286,33 @@ export interface components {
         };
         /** @description An internal error, or a response that would have broken this document (response-contract-violation). */
         InternalError: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description The request is malformed. */
+        BadRequest: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description The request conflicts with the current state (module not enabled, grant already closed). */
+        Conflict: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description The request is well-formed but names something this customer does not have, or breaks a grant rule. */
+        Unprocessable: {
             headers: {
                 [name: string]: unknown;
             };
@@ -256,6 +413,181 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["Unavailable"];
+        };
+    };
+    decideAuthz: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AuthzDecisionRequest"];
+            };
+        };
+        responses: {
+            /** @description The decision: allow, or a deny with its reason. A positive deny is a 200 with allow false. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuthzDecision"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Unprocessable"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["Unavailable"];
+        };
+    };
+    listAuthzGrants: {
+        parameters: {
+            query: {
+                bodyId: string;
+                personId?: string;
+            };
+            header?: {
+                /** @description The customer's host, whole (Tenancy D1). Must equal Host. Absent on a module-caller request. */
+                "x-forwarded-host"?: components["parameters"]["ForwardedHost"];
+                /** @description The proxy shared secret (TENANT_PROXY_SHARED_SECRET). Absent on a module-caller request. */
+                "x-proxy-trust"?: components["parameters"]["ProxyTrust"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Only this customer grants (TRD-084). */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GrantList"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Unprocessable"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["Unavailable"];
+        };
+    };
+    issueAuthzGrant: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The customer's host, whole (Tenancy D1). Must equal Host. Absent on a module-caller request. */
+                "x-forwarded-host"?: components["parameters"]["ForwardedHost"];
+                /** @description The proxy shared secret (TENANT_PROXY_SHARED_SECRET). Absent on a module-caller request. */
+                "x-proxy-trust"?: components["parameters"]["ProxyTrust"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GrantIssueRequest"];
+            };
+        };
+        responses: {
+            /** @description The issued grant. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Grant"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Unprocessable"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["Unavailable"];
+        };
+    };
+    revokeAuthzGrant: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The customer's host, whole (Tenancy D1). Must equal Host. Absent on a module-caller request. */
+                "x-forwarded-host"?: components["parameters"]["ForwardedHost"];
+                /** @description The proxy shared secret (TENANT_PROXY_SHARED_SECRET). Absent on a module-caller request. */
+                "x-proxy-trust"?: components["parameters"]["ProxyTrust"];
+            };
+            path: {
+                grantId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The revoked grant. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Grant"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Unprocessable"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["Unavailable"];
+        };
+    };
+    revokeAllAuthzGrants: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The customer's host, whole (Tenancy D1). Must equal Host. Absent on a module-caller request. */
+                "x-forwarded-host"?: components["parameters"]["ForwardedHost"];
+                /** @description The proxy shared secret (TENANT_PROXY_SHARED_SECRET). Absent on a module-caller request. */
+                "x-proxy-trust"?: components["parameters"]["ProxyTrust"];
+            };
+            path: {
+                personId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The grants that were revoked. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GrantList"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Unprocessable"];
             500: components["responses"]["InternalError"];
             503: components["responses"]["Unavailable"];
         };
