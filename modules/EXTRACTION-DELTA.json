@@ -2146,6 +2146,30 @@
       "reason": "RELAY-ISOLATION: the relay tick isolates each tenant (a store that refuses, e.g. TenantIdentityMismatchError, is logged by tenant id and the tick moves on to the next tenant); the same change in the content, calendar and newsletter leaves",
       "owner": "TASK-205",
       "blob": "a8f1dcfb8ca950afa83abda90890f6372e20a3b8"
+    },
+    {
+      "path": "modules/elections/app/lib/components/elections-notice/ElectionsNotice.svelte",
+      "reason": "added in the kernel after f2: TASK-058-A-rest the permanent elections scope notice (Du/Sie, no dismiss control)",
+      "owner": "TASK-058",
+      "blob": "0c876e82011fb5905c3f1c06f0442c781c1f7f25"
+    },
+    {
+      "path": "modules/elections/app/lib/components/elections-notice/ElectionsNotice.test.ts",
+      "reason": "added in the kernel after f2: TASK-058-A-rest notice and layout-mount test (no dismiss, same for member and admin, every page below the layout)",
+      "owner": "TASK-058",
+      "blob": "cb1479c79161ff38557a8b1b04178bc847247156"
+    },
+    {
+      "path": "modules/elections/app/routes/elections/+layout.svelte",
+      "reason": "added in the kernel after f2: TASK-058-A-rest the one mount of the elections scope notice",
+      "owner": "TASK-058",
+      "blob": "32200d49b8c4f9c9d34347d99ec0a9c5e60bc03e"
+    },
+    {
+      "path": "modules/elections/test/notice-keys.test.ts",
+      "reason": "added in the kernel after f2: TASK-058-A-rest pins the elections.notice.* catalogue text to notice.ts",
+      "owner": "TASK-058",
+      "blob": "fbf8be49c1e9c823a2ee7446032d7b2dcd5e8ac5"
     }
   ]
 }

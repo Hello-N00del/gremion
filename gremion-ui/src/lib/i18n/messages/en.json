@@ -218,5 +218,9 @@
   "a11y.mainNav": "Main navigation",
   "votes.poll.new": "New quick poll",
   "votes.poll.create": "Create quick poll",
-  "votes.poll.createSub": "Quick, non-anonymous straw poll. Results visible live."
+  "votes.poll.createSub": "Quick, non-anonymous straw poll. Results visible live.",
+  "elections.notice.title": "Note on the elections module",
+  "elections.notice.scope": "This module does not run the university's statutory elections. It is optional and switched off by default.",
+  "elections.notice.followUpDu": "Only switch it on if your council wants to vote or elect internally. The university's own election is still run by the university.",
+  "elections.notice.followUpSie": "Only switch it on if your council wants to vote or elect internally. The university's own election is still run by the university."
 }
