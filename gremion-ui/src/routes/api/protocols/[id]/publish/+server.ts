@@ -33,7 +33,6 @@ export async function POST(event: RequestEvent) {
   const protocol = await getProtocol(event.params.id!)
   if (!protocol) throw error(404, 'Protokoll nicht gefunden')
   if (protocol.status !== 'submitted') throw error(400, 'Nur eingereichte Protokolle können veröffentlicht werden')
-  if (!protocol.nextcloud_draft_path) throw error(400, 'Kein Entwurfsdokument vorhanden')
 
   // Governance Core INV-5 — quorum gates ADOPTION (publish), not draft
   // data-entry. Checked BEFORE any Nextcloud side-effects so a non-quorate
@@ -51,32 +50,45 @@ export async function POST(event: RequestEvent) {
     }
   }
 
-  // A3a-2: the Nextcloud document ops (download/move/upload) come from the files
-  // module's ProtocolDocumentPort. Resolve it BEFORE any conversion or DB work so
-  // an unavailable documents subsystem fails fast (503) with no side-effects.
+  // F1 (operator ruling Q1, 2026-10-21): the protocol body lives IN-APP
+  // (protocols.body_html) and publish never needs Nextcloud. With the files
+  // module on AND a Nextcloud draft ODT, today's flow runs (download, convert,
+  // move, PDF upload). If that flow fails (Nextcloud down) and an in-app body
+  // exists, publish falls back to the in-app body (no PDF) instead of
+  // hard-failing; with no in-app body the original error still propagates.
   const docs = getProtocolDocumentPort()
-  if (!docs) throw error(503, 'Dokumentdienst nicht verfügbar')
-
-  // #235 (defect 1): use the genuine NextcloudClient surface (download/upload)
-  // via the document port. The previous handler called two methods that do not
-  // exist on the client through double type-assertions, so every publish died
-  // at runtime with a TypeError (masked only by the old test mocks).
-  const odtBuffer = await docs.downloadDraft(protocol.nextcloud_draft_path)
-
-  const [rawBodyHtml, pdfBuffer] = await Promise.all([
-    convertOdtToHtml(odtBuffer),
-    convertOdtToPdf(odtBuffer),
-  ])
-  // G-011: sanitize before any storage, downstream calls, or rendering.
-  const bodyHtml = sanitizeRichHtml(rawBodyHtml)
-
-  // Side-effecting Nextcloud moves/uploads happen BEFORE the DB transaction so
-  // the tx window stays short; if either fails we abort before mutating any row.
-  const publishedDir = await docs.publishFile(protocol.id, protocol.nextcloud_draft_path)
-  // #235 (defect 4): capture the PDF's NC-relative path and persist it into
-  // pdf_nextcloud_path — the column both public PDF proxies read (previously
-  // never written, so the public-PDF feature was structurally dead).
-  const pdfNextcloudPath = await docs.uploadPublishedPdf(publishedDir, pdfBuffer)
+  let bodyHtml = ''
+  let publishedDir: string | undefined
+  let pdfNextcloudPath: string | undefined
+  let ncOk = false
+  if (docs && protocol.nextcloud_draft_path) {
+    try {
+      // #235 (defect 1): use the genuine NextcloudClient surface via the port.
+      const odtBuffer = await docs.downloadDraft(protocol.nextcloud_draft_path)
+      const [rawBodyHtml, pdfBuffer] = await Promise.all([
+        convertOdtToHtml(odtBuffer),
+        convertOdtToPdf(odtBuffer),
+      ])
+      // G-011: sanitize before any storage, downstream calls, or rendering.
+      const converted = sanitizeRichHtml(rawBodyHtml)
+      // Side-effecting Nextcloud moves/uploads happen BEFORE the DB transaction
+      // so the tx window stays short; if either fails we abort before mutating.
+      publishedDir = await docs.publishFile(protocol.id, protocol.nextcloud_draft_path)
+      // #235 (defect 4): persist the PDF's NC-relative path (public PDF proxies).
+      pdfNextcloudPath = await docs.uploadPublishedPdf(publishedDir, pdfBuffer)
+      bodyHtml = converted
+      ncOk = true
+    } catch (ncErr) {
+      if (!protocol.body_html) throw ncErr
+      console.error('[api/protocols/publish] Nextcloud flow failed, publishing the in-app body:', ncErr)
+      publishedDir = undefined
+      pdfNextcloudPath = undefined
+    }
+  }
+  if (!ncOk) {
+    if (!protocol.body_html) throw error(400, 'Kein Protokolltext vorhanden')
+    bodyHtml = sanitizeRichHtml(protocol.body_html)
+  }
 
   const year = new Date(protocol.meeting_date).getFullYear()
 

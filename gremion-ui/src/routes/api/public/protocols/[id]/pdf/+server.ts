@@ -24,7 +24,8 @@ export const GET: RequestHandler = async ({ params }) => {
 
   // A3a-2: the published-PDF download comes from the files module's document port.
   const docs = getProtocolDocumentPort()
-  if (!docs) throw error(503, 'Dokumentdienst nicht verfügbar')
+  // F1: files module off -> no NC document exists to serve: clean 404, no 503.
+  if (!docs) throw error(404, 'PDF not available')
 
   const res = await docs.downloadPublishedPdf(pdfPath)
   if (!res.ok) throw error(502, 'PDF not available from storage')

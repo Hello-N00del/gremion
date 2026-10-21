@@ -83,10 +83,10 @@ describe('GET /api/public/protocols/[id]/pdf (#241, gremion-ui)', () => {
     expect(await statusOf(call(VALID_ID))).toBe(502)
   })
 
-  // boundary rule A3a-2 degradation: no ProtocolDocumentPort registered -> 503.
-  it('returns 503 when no ProtocolDocumentPort is registered', async () => {
+  // boundary rule A3a-2 degradation: no ProtocolDocumentPort registered -> clean 404 (F1).
+  it('returns 404 when no ProtocolDocumentPort is registered', async () => {
     _resetRuntimeRegistryForTests()
     mockGetPath.mockResolvedValue(PDF_PATH)
-    expect(await statusOf(call(VALID_ID))).toBe(503)
+    expect(await statusOf(call(VALID_ID))).toBe(404)
   })
 })
