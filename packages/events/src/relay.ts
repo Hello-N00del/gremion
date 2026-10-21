@@ -39,6 +39,8 @@ export interface RelayOptions {
   maxAttempts?: number
   pollMs?: number
   publishTimeoutMs?: number
+  /** Broker health probe used to classify a publish TimeoutError (default: nc.rtt() of the JetStream client, 2 s). Rejects when unhealthy. */
+  probe?: () => Promise<unknown>
   /** Where a pass-level failure goes (default console.error). */
   onError?: (err: unknown, where: string) => void
   log?: (line: string) => void
@@ -73,19 +75,51 @@ const DUE_SQL = (ctx: string) => `
    LIMIT $1
    FOR UPDATE OF o SKIP LOCKED`
 
-/** Error names (nats-core) that are a fact about ONE row's publish: refused subject, invalid subject, payload too large. */
-const ROW_SPECIFIC_NAMES = new Set(['PermissionViolationError', 'InvalidSubjectError', 'InvalidArgumentError'])
+/** Error names (nats-core / jetstream) that are a fact about the CONNECTION or the broker, never about one row. */
+const TRANSPORT_NAMES = new Set([
+  'ClosedConnectionError', 'DrainingConnectionError', 'NoRespondersError', 'ConnectionError',
+  'StaleConnectionError', 'DisconnectedError',
+])
+
+function errFields(err: unknown): { code?: unknown; name?: unknown; message?: unknown } {
+  return (err ?? {}) as { code?: unknown; name?: unknown; message?: unknown }
+}
+
+/** A publish timeout: transport OR row (a permission denial surfaces as one), told apart by a broker health probe. */
+export function isTimeoutError(err: unknown): boolean {
+  const e = errFields(err)
+  if (e.name === 'RequestError') {
+    const cause = (err as { cause?: unknown }).cause
+    return cause !== undefined && cause !== err && isTimeoutError(cause)
+  }
+  return e.name === 'TimeoutError'
+}
 
 /**
- * True when the failure belongs to the row (no subject configured, permission denied, max payload):
- * only those burn an attempt. Everything else (PubAck timeout, closed/draining connection, 503 no
- * responders, anything unclassified) is the broker's or the connection's, and burns nothing.
+ * True when the failure is the connection's or the broker's (closed/draining connection, 503 / no
+ * responders, connection errors). A TimeoutError is NOT decided here: see isTimeoutError + the probe.
+ */
+export function isTransportError(err: unknown): boolean {
+  const e = errFields(err)
+  // A RequestError is only a wrapper (nats.js wraps a permission denial and a 503 alike): its cause decides.
+  const cause = (err as { cause?: unknown } | null)?.cause
+  if (e.name === 'RequestError') return cause !== undefined && cause !== err && isTransportError(cause)
+  if (e.code === 'no_subject') return false
+  if (typeof e.name === 'string' && TRANSPORT_NAMES.has(e.name)) return true
+  if (e.name === 'JetStreamApiError' || e.name === 'JetStreamError') {
+    return e.code === 503 || e.code === '503' || (typeof e.message === 'string' && /no responders|503/i.test(e.message))
+  }
+  if (e.code === '503' || e.code === 503) return true
+  return typeof e.message === 'string' && /no responders|connection (is )?closed|connection draining|draining/i.test(e.message)
+}
+
+/**
+ * True when the failure belongs to the row. Inverted allowlist: everything that is not a known transport
+ * fact (and not an undecided timeout) burns an attempt, so a row the broker can never accept (stream
+ * max_msg_size, sealed stream, wrong-stream subject, a TypeError) dead-letters instead of wedging the outbox.
  */
 export function isRowSpecificError(err: unknown): boolean {
-  const e = err as { code?: unknown; name?: unknown; message?: unknown } | null
-  if (e?.code === 'no_subject') return true
-  if (typeof e?.name === 'string' && ROW_SPECIFIC_NAMES.has(e.name)) return true
-  return typeof e?.message === 'string' && /max_payload|permissions? violation/i.test(e.message)
+  return !isTransportError(err) && !isTimeoutError(err)
 }
 
 export const TRANSPORT_BACKOFF_CAP_MS = 30_000
@@ -125,6 +159,23 @@ export function createRelay(opts: RelayOptions): Relay {
     return (resolved = await fn())
   }
 
+  const PROBE_TIMEOUT_MS = 2_000
+  /** True when the broker answers: a TimeoutError then belongs to the row. No probe available: assume transport. */
+  async function brokerHealthy(js: Publisher): Promise<boolean> {
+    const nc = (js as unknown as { nc?: { rtt?: () => Promise<unknown> } }).nc
+    const fn = opts.probe ?? (nc?.rtt ? () => nc.rtt!() : undefined)
+    if (!fn) return false
+    let t: ReturnType<typeof setTimeout> | undefined
+    try {
+      await Promise.race([fn(), new Promise((_, rej) => { t = setTimeout(() => rej(new Error('probe timeout')), PROBE_TIMEOUT_MS) })])
+      return true
+    } catch {
+      return false
+    } finally {
+      clearTimeout(t)
+    }
+  }
+
   async function runOnce(): Promise<PassResult> {
     // Pass-level failure (no connection, refused credentials): rows stay pending, untouched.
     const js = await publisher()
@@ -144,7 +195,7 @@ export function createRelay(opts: RelayOptions): Relay {
           await publishRow(js, subjectOf(opts.subjects, row), row, timeoutMs)
           acked = true
         } catch (err) {
-          if (!isRowSpecificError(err)) {
+          if (isTransportError(err) || (isTimeoutError(err) && !(await brokerHealthy(js)))) {
             // A broker/connection fact, not the row's: nothing is counted; the rest of the batch is left
             // for the next pass (what was already published stays marked) and the caller backs off.
             transportError = { err }
