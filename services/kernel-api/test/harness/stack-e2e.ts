@@ -289,8 +289,7 @@ describe('section 1 on the running stack (kernel-api image, real Keycloak, web s
     const kept = docker(['run', '--rm', '--entrypoint', 'sh', '-v', `${st.names.pg.replace(/-pg$/, '-dump')}:/d`, st.apiImage, '-c', 'stat -c %a:%u /d; ls /d; find /d -name "*.dump" | wc -l']).out
     expect(kept).toContain('700:1000')
     expect(kept).toContain('ledger.jsonl')
-    expect(Number(kept.trim().split('
-').at(-1))).toBeGreaterThanOrEqual(2)
+    expect(Number(kept.trim().split(/\r?\n/).at(-1))).toBeGreaterThanOrEqual(2)
     const again = proof('migrate')
     expect(again.code, again.out).toBe(0)
     expect(again.out).not.toMatch(/premigration-dump created/)
