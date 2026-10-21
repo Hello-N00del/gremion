@@ -15,8 +15,8 @@ export const NAMED: Record<'unit' | 'integration', Record<string, number>> = {
   unit: {
     'src/advisory-locks.test.ts': 5,
     'src/names.test.ts': 40,
-    'src/store.test.ts': 18,
-    'src/manifest.test.ts': 10,
+    'src/store.test.ts': 20,
+    'src/manifest.test.ts': 12,
     'src/strip-outer-transaction.test.ts': 11,
     // F1-FIX-02-K (T5): +3, the body error propagates through finally; TASK-075: +1 releaseRef refusal
     'src/runner.test.ts': 10,
@@ -56,7 +56,7 @@ export const NAMED: Record<'unit' | 'integration', Record<string, number>> = {
     'test/integration/dump.test.ts': 7,
     // TASK-077 G3: the ledger option and the union of dirs (TDD 8, 17); C13 the kernel API reader role
     'test/integration/ledger-union.test.ts': 9,
-    'test/integration/kernel-api-reader.test.ts': 4,
+    'test/integration/kernel-api-reader.test.ts': 6,
     // TASK-044: TDD 1, 2, 3, 5, 9 and the A3 re-gate on the scratch stack
     'test/integration/lifecycle-enable-gate.test.ts': 20,
   },

@@ -11,6 +11,11 @@
 //   * the database it reads is the customer's own target (Q3, target.ts),
 //     opened through tenant-store's bounded pool store with prepare off (the
 //     runtime url may be PgBouncer), never an env fallback.
+//   * the per-customer pool is NOT forever: it is evicted when the customer's
+//     db_conn_ref changes (picked up on the very next request) and when a check
+//     comes back 'unavailable' (a rotated password behind the same ref makes the
+//     pool unable to open new sessions), the check then being retried ONCE on a
+//     fresh pool that resolves the secret again.
 // A database behind, diverged or unreachable answers 503 for that customer
 // only; a failed check is never cached.
 import type { DbProfile, Sql } from '@gremion/db'
@@ -31,6 +36,8 @@ export interface CustomerGateOptions {
   /** Test seam (tenant-store createTenantStore's). */
   createDb?: (profile: DbProfile) => Sql
   maxPools?: number
+  /** Grace before an evicted pool is ended (tenant-store evictGraceMs; tests pass 0). */
+  evictGraceMs?: number
 }
 
 export function createCustomerGate(o: CustomerGateOptions): CustomerGate & { close(): Promise<void> } {
@@ -40,10 +47,16 @@ export function createCustomerGate(o: CustomerGateOptions): CustomerGate & { clo
     resolveTarget: kernelTargetResolver({ refOf: (id) => refs.get(id), resolveSecret: o.resolveSecret }),
     maxPools: o.maxPools ?? 64,
     maxConnections: 2,
+    ...(o.evictGraceMs !== undefined ? { evictGraceMs: o.evictGraceMs } : {}),
     prepare: false,
     ...(o.createDb ? { createDb: o.createDb } : {}),
     onError: (err, context) => o.log.error('kernel-api: tenant pool', { context, err: (err as Error).message }),
   })
+  const poolRef = new Map<string, string>() // the ref each customer's open pool was resolved from
+  const evict = (customerId: string) => {
+    poolRef.delete(customerId)
+    store.evictTenantDb(customerId, KERNEL_MODULE)
+  }
   const gate = schemaGate({
     dirs: o.dirs,
     ledger: KERNEL_API_LEDGER,
@@ -55,8 +68,18 @@ export function createCustomerGate(o: CustomerGateOptions): CustomerGate & { clo
   })
   return {
     async check(tenant: TenantRow): Promise<GateVerdict> {
-      refs.set(tenant.customerId, tenant.dbConnRef)
-      return gate.check(tenant.customerId)
+      const id = tenant.customerId
+      const had = poolRef.get(id)
+      if (had !== undefined && had !== tenant.dbConnRef) evict(id) // a changed ref: resolve it afresh now
+      refs.set(id, tenant.dbConnRef)
+      poolRef.set(id, tenant.dbConnRef)
+      const verdict = await gate.check(id)
+      if (verdict.ok || verdict.reason !== 'unavailable') return verdict
+      // Unavailable: the pool may hold a stale credential. Drop it and judge once on a fresh one.
+      evict(id)
+      refs.set(id, tenant.dbConnRef)
+      poolRef.set(id, tenant.dbConnRef)
+      return gate.check(id)
     },
     close: () => store.close(),
   }
