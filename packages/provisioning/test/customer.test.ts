@@ -153,6 +153,32 @@ describe('create (phases A, host, B)', () => {
     expect(w.control.size).toBe(1)
   })
 
+  // G6 (operator decision 2026-10-21: feature modules are deselectable, the kernel works without them)
+  it('G6 module OFF: a create with enable [] reaches active with the ledger complete (8/8) and touches no module at all', async () => {
+    const w = world()
+    const d = deps(w)
+    const { b } = await createAll(w, d, spec({ enable: [], dpia: {} }))
+    const done = w.mutations.filter((x) => x.startsWith('ledger:') && x.endsWith('=done')).map((x) => x.slice(7, -5))
+    expect(done).toEqual(EXECUTION_ORDER)
+    expect(done).toHaveLength(8)
+    expect(w.control.get('musterstadt')?.status).toBe('active')
+    expect(b.activated).toBe(true)
+    expect(b.enabled).toEqual([])
+    expect(w.mutations.filter((x) => /enable|dpia/.test(x))).toEqual([])
+    expect(w.broker.get('musterstadt')).toEqual(['kernel'])
+  })
+
+  it('G6 module subset: votes and calendar only are enabled, nothing else, and the ledger is still 8/8; board is refused BY NAME with no write', async () => {
+    const w = world()
+    const { b } = await createAll(w, deps(w), spec({ enable: ['votes', 'calendar'] }))
+    expect(b.enabled).toEqual(['calendar', 'votes'])
+    expect(w.mutations.filter((x) => x.startsWith('ledger:') && x.endsWith('=done'))).toHaveLength(8)
+    const w2 = world()
+    const before = w2.mutations.length
+    await expect(createPhaseA(spec({ enable: ['board'] }), deps(w2))).rejects.toMatchObject({ code: 'MODULE_DENIED', message: expect.stringContaining('board') })
+    expect(w2.mutations.length).toBe(before)
+  })
+
   it('no module is enabled by default; votes gets an enablement and no broker user', async () => {
     const w = world()
     const d = deps(w)

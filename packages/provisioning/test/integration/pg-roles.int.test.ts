@@ -166,7 +166,7 @@ describe('the executor role (ensureExecutorRole)', () => {
 })
 
 describe('TDD 6: SECURITY DEFINER hygiene of 0005', () => {
-  it('every 0005 function pins search_path = pg_catalog, pg_temp and none is executable by PUBLIC', async () => {
+  it('every 0009 function pins search_path = pg_catalog, pg_temp and none is executable by PUBLIC', async () => {
     const rows = await r.owner<{ sig: string; cfg: string[] | null; pub: boolean; definer: boolean }[]>`
       SELECT p.oid::regprocedure::text AS sig, p.proconfig AS cfg, p.prosecdef AS definer,
              has_function_privilege('public', p.oid, 'EXECUTE') AS pub
