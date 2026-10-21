@@ -136,6 +136,19 @@ export function subjectOf(subjects: SubjectMap, row: OutboxRow): string {
   return s
 }
 
+/** The NATS connection a JetStream client holds (a public `nc` property of @nats-io/jetstream). */
+export interface RelayConn {
+  isClosed?: () => boolean
+  isDraining?: () => boolean
+  close?: () => Promise<unknown>
+  rtt?: () => Promise<unknown>
+}
+/** Type guard in place of a private-shape cast; undefined when the shape is absent (test/relay-nc.test.ts pins it to the real library). */
+export function ncOf(js: Publisher): RelayConn | undefined {
+  const nc = (js as { nc?: unknown }).nc
+  return typeof nc === 'object' && nc !== null ? (nc as RelayConn) : undefined
+}
+
 export function createRelay(opts: RelayOptions): Relay {
   assertContext(opts.ctx)
   assertTestHooksAllowed(`relay ${opts.ctx}`, opts.hooks)
@@ -169,7 +182,7 @@ export function createRelay(opts: RelayOptions): Relay {
    */
   async function dropIfClosed(js: Publisher, err: unknown): Promise<void> {
     if (typeof opts.js !== 'function' || resolved !== js) return
-    const nc = (js as unknown as { nc?: { isClosed?: () => boolean; isDraining?: () => boolean; close?: () => Promise<unknown> } }).nc
+    const nc = ncOf(js)
     const name = errFields(err).name
     const closed = name === 'ClosedConnectionError' || name === 'DrainingConnectionError' || nc?.isClosed?.() === true || nc?.isDraining?.() === true
     if (!closed) return
@@ -185,7 +198,7 @@ export function createRelay(opts: RelayOptions): Relay {
   const PROBE_TIMEOUT_MS = 2_000
   /** True when the broker answers: a TimeoutError then belongs to the row. No probe available: assume transport. */
   async function brokerHealthy(js: Publisher): Promise<boolean> {
-    const nc = (js as unknown as { nc?: { rtt?: () => Promise<unknown> } }).nc
+    const nc = ncOf(js)
     const fn = opts.probe ?? (nc?.rtt ? () => nc.rtt!() : undefined)
     if (!fn) return false
     let t: ReturnType<typeof setTimeout> | undefined
