@@ -57,6 +57,16 @@ export async function runMigrateCli(
     io.err(`kernel-api migrate: ${missing.join(', ')} not set; nothing was migrated`)
     return 1
   }
+  const timeouts: { lockWaitTimeoutMs?: number; ddlLockTimeoutMs?: number } = {}
+  for (const [key, field] of [['KERNEL_API_MIGRATE_LOCK_WAIT_MS', 'lockWaitTimeoutMs'], ['KERNEL_API_MIGRATE_DDL_LOCK_TIMEOUT_MS', 'ddlLockTimeoutMs']] as const) {
+    const raw = env[key]?.trim()
+    if (!raw) continue
+    if (!/^[0-9]{1,9}$/.test(raw)) {
+      io.err(`kernel-api migrate: ${key}=${JSON.stringify(raw)} is not a whole number of milliseconds; nothing was migrated`)
+      return 1
+    }
+    timeouts[field] = Number(raw)
+  }
   const control = (deps.openControl ?? ((u: string) => postgres(u, { max: 1, onnotice: () => {}, connect_timeout: 15 })))(env.KERNEL_API_CONTROL_DB_URL!)
   const options: MigrateOptions = {
     control,
@@ -66,6 +76,7 @@ export async function runMigrateCli(
     kernelRoot: roots.kernelRoot,
     releaseRef: env.GREMION_RELEASE_REF!.trim(),
     dumpDir: env.GREMION_MIGRATION_DUMP_DIR,
+    ...timeouts,
     log: (l) => io.out(l),
     audit: (l) => io.out(l),
     ...(env.KERNEL_API_PG_DUMP_CONTAINER ? { pgDumpContainer: env.KERNEL_API_PG_DUMP_CONTAINER } : {}),
