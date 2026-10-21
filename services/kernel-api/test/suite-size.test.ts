@@ -12,7 +12,7 @@ import { describe, expect, it } from 'vitest'
 const PKG = fileURLToPath(new URL('../', import.meta.url))
 
 /** The named tests per file, as of TASK-077 G8. Raise a floor when you add tests; never lower one. */
-export const NAMED: Record<'unit' | 'integration', Record<string, number>> = {
+export const NAMED: Record<'unit' | 'integration' | 'authz', Record<string, number>> = {
   unit: {
     'test/app/bundle-entry.test.ts': 1,
     'test/app/gate-rotation.test.ts': 3,
@@ -28,12 +28,22 @@ export const NAMED: Record<'unit' | 'integration', Record<string, number>> = {
     'test/tenancy/token-outage.test.ts': 12,
     // G8 (static half): the audience mapper in the realm template
     'test/keycloak/realm-audience.test.ts': 4,
-    'test/suite-size.test.ts': 4,
+    // TASK-081
+    'test/authz/fixture.test.ts': 2,
+    'test/authz/no-role-check.test.ts': 4,
+    'test/authz/stepup.test.ts': 5,
+    'test/suite-size.test.ts': 5,
   },
   integration: {
     'test/app/kernel-api.int.test.ts': 17,
     // G8 (live half): real Keycloak tokens carry / lack the audience
     'test/keycloak/audience.int.test.ts': 2,
+  },
+  // TASK-081: its own scratch stack (test/authz/stack.mjs, vitest.authz-int.config.ts)
+  authz: {
+    'test/authz/grants.int.test.ts': 13,
+    'test/authz/pdp.int.test.ts': 12,
+    'test/authz/schema.int.test.ts': 8,
   },
 }
 
@@ -70,6 +80,10 @@ describe('suite size (TDD 16)', () => {
     expect(() => assertFloor(collected('vitest.integration.config.ts'), NAMED.integration)).not.toThrow()
   }, 60_000)
 
+  it('the authz integration suite collects at least the named total', () => {
+    expect(() => assertFloor(collected('vitest.authz-int.config.ts'), NAMED.authz)).not.toThrow()
+  }, 60_000)
+
   it('zero collected tests is a failure, and so is one missing test', () => {
     expect(() => assertFloor({}, { 'a.test.ts': 1 })).toThrow(/zero tests collected/)
     expect(() => assertFloor({ 'a.test.ts': 1 }, { 'a.test.ts': 2 })).toThrow(/a\.test\.ts: 1 < 2/)
@@ -87,8 +101,8 @@ describe('suite size (TDD 16)', () => {
     }
     walk('src')
     walk('test')
-    expect(specs.length).toBeGreaterThanOrEqual(Object.keys(NAMED.unit).length + Object.keys(NAMED.integration).length)
-    const named = new Set([...Object.keys(NAMED.unit), ...Object.keys(NAMED.integration)])
+    expect(specs.length).toBeGreaterThanOrEqual(Object.keys(NAMED.unit).length + Object.keys(NAMED.integration).length + Object.keys(NAMED.authz).length)
+    const named = new Set([...Object.keys(NAMED.unit), ...Object.keys(NAMED.integration), ...Object.keys(NAMED.authz)])
     expect(specs.filter((f) => !named.has(f))).toEqual([])
     const marked = specs.filter((f) => /\b(?:it|test|describe)\s*\.\s*(?:skip|todo|only|skipIf|runIf)\b/.test(readFileSync(join(PKG, f), 'utf8')))
     expect(marked).toEqual([])

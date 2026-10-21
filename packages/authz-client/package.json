@@ -1,0 +1,22 @@
+{
+  "name": "@gremion/authz-client",
+  "version": "0.1.0",
+  "license": "AGPL-3.0-only",
+  "description": "Server-side HTTP client of the kernel API's policy decision point, POST /api/v1/authz/decisions (TASK-081, CAP-PDP). HTTP only: it depends on no other Gremion package.",
+  "type": "module",
+  "private": true,
+  "exports": {
+    ".": {
+      "import": "./src/index.ts"
+    }
+  },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "devDependencies": {
+    "@types/node": "26.6.0",
+    "typescript": "5.9.3",
+    "vitest": "4.1.11"
+  }
+}

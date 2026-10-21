@@ -6,6 +6,8 @@ import { defineConfig } from 'vitest/config'
 export default defineConfig({
   test: {
     include: ['test/**/*.int.test.ts'],
+    // TASK-081's own scratch stack (test/authz/stack.mjs, vitest.authz-int.config.ts) runs these
+    exclude: ['test/authz/**', '**/node_modules/**'],
     environment: 'node',
     fileParallelism: false,
     testTimeout: 60_000,
