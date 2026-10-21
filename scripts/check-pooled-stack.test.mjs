@@ -55,14 +55,14 @@ function appRender(colour) {
   const services = {}
   for (const [name, row] of Object.entries(PLACEMENT.app)) {
     const svc = {
-      image: `ghcr.io/hello-n00del/gremion-${name === 'tenant-create' ? 'migrate' : name.replace('gremion-', '')}:dist-v0.0.0`,
+      image: `ghcr.io/hello-n00del/gremion-${name === 'tenant-create' ? 'migrate' : name === 'kernel-api-migrate' ? 'kernel-api' : name.replace('gremion-', '')}:dist-v0.0.0`,
       deploy: lim(),
       labels: { 'traefik.enable': 'false' },
       environment: { COLOUR: colour },
       networks: Object.fromEntries(row.networks.map((n) => [n, ['edge', 'state'].includes(n) ? { aliases: [`${name}-${colour}`] } : null])),
     }
-    if (name === 'gremion-ui' || name === 'gremion-public' || name === 'control-panel') svc.labels['gremion.evict'] = 'true'
-    if (name === 'migrate' || name === 'tenant-create') {
+    if (name === 'gremion-ui' || name === 'gremion-public' || name === 'control-panel' || name === 'kernel-api') svc.labels['gremion.evict'] = 'true'
+    if (name === 'migrate' || name === 'tenant-create' || name === 'kernel-api-migrate') {
       svc.profiles = [name]
       svc.restart = 'no'
     }
@@ -360,7 +360,7 @@ test('real renders: every project renders, with every profile on, and every prof
   for (const id of ['board', 'calendar', 'content', 'finance', 'newsletter', 'vault']) assert.ok(names.includes(`${id}-postgres`), `${id}-postgres is not in the all-profile render`)
   for (const s of ['traefik', 'docker-socket-proxy', 'pgbouncer', 'fallback', 'mailpit']) assert.ok(names.includes(s), `${s} is not in the all-profile render`)
   const blue = renderProject(PROJECTS[1])
-  for (const s of ['gremion-ui', 'gremion-public', 'migrate', 'tenant-create']) assert.ok(blue.services?.[s], `${s} is not in the all-profile app-blue render`)
+  for (const s of ['gremion-ui', 'gremion-public', 'migrate', 'tenant-create', 'kernel-api', 'kernel-api-migrate']) assert.ok(blue.services?.[s], `${s} is not in the all-profile app-blue render`)
 })
 
 test('real renders: the whole guard is clean over the repository, and it rendered services (not zero)', () => {
@@ -372,7 +372,7 @@ test('real renders: the whole guard is clean over the repository, and it rendere
 test('real renders: the app project without its profiles lists no one-shot (up creates no migrate container)', () => {
   const blue = renderProject(PROJECTS[1], { env: { COMPOSE_PROFILES: 'production' } })
   // TASK-043 Q12: the control panel is long-running like the two apps.
-  assert.deepEqual(Object.keys(blue.services ?? {}).sort(), ['control-panel', 'gremion-public', 'gremion-ui'])
+  assert.deepEqual(Object.keys(blue.services ?? {}).sort(), ['control-panel', 'gremion-public', 'gremion-ui', 'kernel-api'])
 })
 
 // TASK-043 TDD 17 (Q12): the ops shell of each colour publishes no port, has no
@@ -442,6 +442,63 @@ test('real renders: tenant-create carries GREMION_RELEASE_REF = the colour\'s IM
     const tag = String(tc.image).split(':').at(-1)
     assert.ok(tag && tag.length > 0, `${colour}: tenant-create image ${tc.image} has no tag`)
     assert.equal(tc.environment?.GREMION_RELEASE_REF, tag, `${colour}: GREMION_RELEASE_REF`)
+  }
+})
+
+// TASK-077 G7: the kernel API (tenancy + module registry). Internal only: app +
+// state networks, no edge, no published port, no Traefik router; the migrate
+// job shares its image and is a profile-gated one-shot that talks to postgres
+// DIRECT (never the pooler).
+const COLOURS = [
+  { project: PROJECTS[1], colour: 'blue' },
+  { project: PROJECTS[2], colour: 'green' },
+]
+test('real renders: kernel-api is internal (app + state, no port, no router), hardened, evictable, aliased per colour on state', () => {
+  const byName = (a, b) => a.localeCompare(b)
+  for (const { project, colour } of COLOURS) {
+    const render = renderProject(project)
+    const svc = render.services?.['kernel-api']
+    assert.ok(svc, `kernel-api is not in the ${colour} render`)
+    assert.deepEqual(svc.ports ?? [], [], `${colour} kernel-api publishes a port`)
+    assert.equal(String(svc.labels?.['traefik.enable']), 'false')
+    assert.equal(String(svc.labels?.['gremion.evict']), 'true')
+    assert.deepEqual(Object.keys(svc.networks ?? {}).map((k) => render.networks?.[k]?.name ?? k).sort(byName), [`guardstack-app-${colour}_app`, 'guardstack_state'].sort(byName))
+    const state = Object.entries(svc.networks).find(([k]) => (render.networks?.[k]?.name ?? k) === 'guardstack_state')[1]
+    assert.ok((state?.aliases ?? []).includes(`kernel-api-${colour}`), `${colour}: no kernel-api-${colour} alias on state`)
+    assert.equal(svc.read_only, true)
+    assert.deepEqual(svc.cap_drop, ['ALL'])
+    assert.ok((svc.security_opt ?? []).includes('no-new-privileges:true'), `${colour}: no-new-privileges`)
+    assert.equal(svc.environment?.COLOUR, colour)
+    assert.match(String(svc.image), /^ghcr\.io\/hello-n00del\/gremion-kernel-api:/)
+    assert.equal(svc.profiles, undefined, `${colour}: kernel-api is long-running, not profile-gated`)
+    assert.ok((svc.volumes ?? []).some((v) => v.target === '/run/secrets/tenants' && v.read_only === true), `${colour}: tenant secrets not mounted read-only`)
+    assert.ok((svc.volumes ?? []).every((v) => v.type !== 'volume' || render.volumes?.[v.source]?.external), `${colour}: a non-external volume`)
+    assert.match(String(svc.environment?.KERNEL_API_CONTROL_DB_URL), /@postgres-guardstack:5432\//, `${colour}: control URL`)
+  }
+})
+
+test('real renders: kernel-api-migrate is a profile-gated one-shot on the kernel-api image, DIRECT postgres, with a 0700 dump dir and the release ref; it is not evictable', () => {
+  for (const { project, colour } of COLOURS) {
+    const render = renderProject(project)
+    const m = render.services?.['kernel-api-migrate']
+    const api = render.services?.['kernel-api']
+    assert.ok(m && api, `kernel-api-migrate / kernel-api missing from the ${colour} render`)
+    assert.deepEqual(m.profiles, ['kernel-api-migrate'])
+    assert.equal(m.restart, 'no')
+    assert.equal(m.image, api.image, `${colour}: migrate and serve share one image`)
+    assert.equal(m.labels?.['gremion.evict'], undefined)
+    assert.equal(String(m.labels?.['traefik.enable']), 'false')
+    assert.deepEqual(m.ports ?? [], [])
+    const tag = String(m.image).split(':').at(-1)
+    assert.equal(m.environment?.GREMION_RELEASE_REF, tag, `${colour}: GREMION_RELEASE_REF`)
+    assert.match(String(m.environment?.GREMION_KERNEL_PG_DIRECT_URL), /@postgres-guardstack:5432\//, `${colour}: not DIRECT postgres`)
+    assert.doesNotMatch(String(m.environment?.GREMION_KERNEL_PG_DIRECT_URL), /pgbouncer|6432/)
+    const dump = m.environment?.GREMION_MIGRATION_DUMP_DIR
+    assert.ok(dump && dump.startsWith('/'), `${colour}: GREMION_MIGRATION_DUMP_DIR`)
+    const t = (m.tmpfs ?? []).concat((m.volumes ?? []).filter((v) => v.type === 'tmpfs').map((v) => v.target + ':' + JSON.stringify(v.tmpfs ?? {})))
+    assert.ok(t.length > 0 || (m.volumes ?? []).some((v) => v.target === dump), `${colour}: dump dir has no backing mount`)
+    assert.equal(m.read_only, true)
+    assert.deepEqual(m.cap_drop, ['ALL'])
   }
 })
 

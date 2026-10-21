@@ -60,9 +60,9 @@ export const PROJECTS = [
   { id: 'mail', envFile: `${FIXTURE_DIR}/mail.env`, cwd: 'infra/host/mail' },
 ]
 
-export const APP_SERVICES = ['gremion-ui', 'gremion-public', 'control-panel', 'migrate', 'tenant-create']
-export const LONG_RUNNING_APP = ['gremion-ui', 'gremion-public', 'control-panel']
-export const ONE_SHOTS = { migrate: 'migrate', 'tenant-create': 'tenant-create' }
+export const APP_SERVICES = ['gremion-ui', 'gremion-public', 'control-panel', 'migrate', 'tenant-create', 'kernel-api', 'kernel-api-migrate']
+export const LONG_RUNNING_APP = ['gremion-ui', 'gremion-public', 'control-panel', 'kernel-api']
+export const ONE_SHOTS = { migrate: 'migrate', 'tenant-create': 'tenant-create', 'kernel-api-migrate': 'kernel-api-migrate' }
 export const MODULE_POSTGRES_IDS = ['board', 'calendar', 'content', 'finance', 'newsletter', 'vault', 'messaging']
 /** The leaf services app.env.tmpl names (content-service ... vault-service). */
 export const LEAF_SERVICES = ['content', 'finance', 'files', 'votes', 'messages', 'newsletter', 'calendar', 'board', 'vault'].map(
@@ -107,6 +107,10 @@ export const PLACEMENT = {
     'control-panel': { class: 'council-app', networks: ['app', 'state'] },
     migrate: { class: 'council-oneshot', networks: ['state'] },
     'tenant-create': { class: 'council-oneshot', networks: ['edge', 'state'] },
+    // TASK-077 G7: the kernel API serves tenancy + the module registry to the
+    // app tier and the modules; internal only (no edge, no port, no router).
+    'kernel-api': { class: 'council-app', networks: ['app', 'state'] },
+    'kernel-api-migrate': { class: 'council-oneshot', networks: ['state'] },
   },
   // TASK-039: the observability stack. On `ops` only: no ops service shares a
   // network with _state or with Keycloak (TRD-203, TRD-111); the OTLP ingest
