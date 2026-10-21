@@ -28,7 +28,7 @@
 // 2 usage.
 import { spawn } from 'node:child_process'
 import { readFileSync, realpathSync } from 'node:fs'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import postgres from 'postgres'
 import { chainFileNames, chainPreApply } from '../../../../scripts/migrations/pre-apply.mjs'
@@ -260,6 +260,9 @@ export async function runCli(argv: readonly string[], env: NodeJS.ProcessEnv = p
   }
 }
 
-if (process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) {
+// Main guard. The basename check is load-bearing: in an esbuild bundle every module shares the
+// bundle's import.meta.url, so a service whose bundle ENTRY is dist/index.js (argv[1]) would
+// otherwise run this CLI at import time (found by the TASK-077 stack proof).
+if (process.argv[1] && /^cli\.(ts|js|mjs)$/.test(basename(process.argv[1])) && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) {
   void runCli(process.argv.slice(2)).then((code) => (process.exitCode = code))
 }

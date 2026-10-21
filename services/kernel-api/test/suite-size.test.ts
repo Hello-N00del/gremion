@@ -14,6 +14,7 @@ const PKG = fileURLToPath(new URL('../', import.meta.url))
 /** The named tests per file, as of TASK-077 G8. Raise a floor when you add tests; never lower one. */
 export const NAMED: Record<'unit' | 'integration', Record<string, number>> = {
   unit: {
+    'test/app/bundle-entry.test.ts': 1,
     'test/app/routes.test.ts': 11,
     'test/app/trd082.test.ts': 5,
     'test/conformance/conformance.test.ts': 14,
