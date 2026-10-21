@@ -162,6 +162,27 @@ outcome() { cat "${GREMION_ROOT}/outcome" 2>/dev/null || true; }
     assert_present '-e GREMION_SCRATCH_FIXTURES -e GREMION_PRODUCTION_STACK' "${GREMION_ROOT}/tc-argv.log"
 }
 
+@test "mail_step seam (mail-transport M1): customer_create reaches the mail only through mail_step; the executor announces step mail through it" {
+    local body
+    body="$(awk '/^customer_create\(\) \{/{f=1} f{print} f && /^\}/{exit}' "${HOST_SRC}/lib/customer-ops.sh")"
+    [ -n "$body" ]
+    [[ "$body" == *'mail_step '* ]] || { echo "customer_create does not call mail_step"; return 1; }
+    [[ "$body" != *vendor_mail* ]] || { echo "customer_create still calls vendor_mail directly"; return 1; }
+    [[ "$body" != *mail_principal_issued* ]] || { echo "the record-step moved into the seam"; return 1; }
+    assert_present '^mail_step\(\) \{' "${HOST_SRC}/lib/customer-ops.sh"
+    assert_present 'mail_step\(\) \{ executor_step mail' "${HOST_SRC}/bin/gremion-executor"
+}
+
+@test "mail_step seam: an unknown MAIL_TRANSPORT fails create at the mail step, phase B does not run, no mail principal is issued" {
+    queue create
+    MAIL_TRANSPORT=carrier-pigeon run "$EXEC" --once
+    [ "$status" -eq 1 ] || { echo "status=$status $output"; return 1; }
+    run steps
+    [[ "$output" != *"vendor-mail"* && "$output" != *"phase-b"* && "$output" != *"record-step"* ]] || { echo "$output"; return 1; }
+    [[ "$(outcome)" == *"failed in mail"* ]] || { outcome; return 1; }
+    grep -q 'MAIL_TRANSPORT' "${GREMION_ROOT}/events.log" || { cat "${GREMION_ROOT}/events.log"; return 1; }
+}
+
 @test "a refused verdict: finished refused with the reason, no phase runs, nothing is marked verified" {
     printf '{"verdict":"refused","reason":"evidence: the ID token has acr loa1, loa2 is required"}\n' > "${GREMION_ROOT}/verdict.json"
     queue create

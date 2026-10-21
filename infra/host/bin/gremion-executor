@@ -152,11 +152,11 @@ release_lock() { exec 9>&- 2>/dev/null || true; }
 # A step marker on STDERR (stdout of `tc render-router` is the router file).
 executor_step() { printf '@@executor-step %s\n' "$1" >&2; }
 
-# Inside the handler's subshell: tc and vendor_mail announce their step first.
+# Inside the handler's subshell: tc and mail_step announce their step first.
 # The library bodies stay as moved (D10); these wrappers only add the marker.
 executor_wrap_steps() {
     eval "executor_orig_$(declare -f tc)"
-    eval "executor_orig_$(declare -f vendor_mail)"
+    eval "executor_orig_$(declare -f mail_step)"
     # shellcheck disable=SC2329  # redefined here, called by customer_create
     tc() {
         case "${1:-}" in
@@ -166,7 +166,7 @@ executor_wrap_steps() {
         executor_orig_tc "$@"
     }
     # shellcheck disable=SC2329  # redefined here, called by customer_create
-    vendor_mail() { executor_step mail; executor_orig_vendor_mail "$@"; }
+    mail_step() { executor_step mail; executor_orig_mail_step "$@"; }
 }
 
 # record_stream <request-id> <first step> <workdir> — every line an event; a

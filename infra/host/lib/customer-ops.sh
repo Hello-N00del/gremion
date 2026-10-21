@@ -181,6 +181,31 @@ write_router() {   # <slug>
     ok "router file ${final} written"
 }
 
+# ── the mail step: the ONE seam between phase A and phase B ────────────────
+# mail_step <slug> <token> -- how a customer's mail identity is issued, chosen
+# at deploy time by MAIL_TRANSPORT (operator decision 2026-10-21: external SMTP
+# relay OR slim Stalwart). customer_create calls nothing else for mail, so the
+# mail-transport unit (PLAN-mail-transport M3) adds its `relay` arm HERE and
+# nowhere else. Today only `stalwart` exists, the behaviour this step always
+# had: the customer's own submission principal kc-<token>@ (vendor-mail
+# realm-smtp), then the ledger step mail_principal_issued. An unknown value
+# fails closed BEFORE any principal is issued, so phase B does not run.
+mail_step() {
+    local slug="$1" token="$2"
+    case "${MAIL_TRANSPORT:-stalwart}" in
+        stalwart)
+            info "host: the customer's own submission principal kc-${token}@"
+            vendor_mail realm-smtp --realm "$slug" --tenant "$token" \
+                || die "the mail step of ${slug} failed; phase B does not run (a rerun resumes here)" "$GREMION_EXIT_ASSERT"
+            tc record-step "$slug" mail_principal_issued --operator "$OPERATOR_ID" \
+                || die "record-step mail_principal_issued of ${slug} failed" "$GREMION_EXIT_ASSERT"
+            ;;
+        *)
+            die "MAIL_TRANSPORT=${MAIL_TRANSPORT} is not a mail transport this release knows (stalwart); the mail step of ${slug} did not run and phase B does not run" "$GREMION_EXIT_USAGE"
+            ;;
+    esac
+}
+
 # ── create (was gremion-tenant's cmd_create) ───────────────────────────────
 # customer_create <slug> --host <host> --config <file> --it-admin <email>
 #   --council-admin <email> --operator <uuid> [--enable a,b] [--body-name <name>]
@@ -231,12 +256,8 @@ customer_create() {
 
     info "phase A (container): realm, kernel database, domain, storage prefix, first body, broker account"
     tc phase-a "${flags[@]}" || die "phase A of ${slug} failed; a rerun resumes from the ledger" "$GREMION_EXIT_ASSERT"
-    info "host: the customer's own submission principal kc-${token}@"
-    vendor_mail realm-smtp --realm "$slug" --tenant "$token" \
-        || die "the mail step of ${slug} failed; phase B does not run (a rerun resumes here)" "$GREMION_EXIT_ASSERT"
     TC_MOUNT=()
-    tc record-step "$slug" mail_principal_issued --operator "$OPERATOR_ID" \
-        || die "record-step mail_principal_issued of ${slug} failed" "$GREMION_EXIT_ASSERT"
+    mail_step "$slug" "$token"
     TC_MOUNT=("${mounts[@]}")
     info "phase B (container): first administrators, modules, active"
     tc phase-b "${flags[@]}" || die "phase B of ${slug} failed; a rerun resumes from the ledger" "$GREMION_EXIT_ASSERT"
