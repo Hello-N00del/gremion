@@ -64,12 +64,14 @@ test.describe('Portal header at 390 px', () => {
     expect(m.header).toBeLessThanOrEqual(m.headerBox);
   });
 
-  test('wraps the institution name to at most two lines, untruncated', async ({ page }) => {
+  test('fits the institution name in at most two lines, untruncated', async ({ page }) => {
     const name = page.getByTestId('portal-institution-name');
     await expect(name).toBeVisible();
     await expect(name).toHaveText(LONG_NAME);
     const m = await nameMetrics(page);
-    expect(m.height).toBeGreaterThan(m.lineHeight * 1.5); // it really wrapped
+    // Since the full-width-row change (r33-21) this name fits ONE line at 390 px; the
+    // contract is at most two lines, so no 'it really wrapped' lower bound.
+    expect(m.height).toBeGreaterThan(0);
     expect(m.height).toBeLessThanOrEqual(m.lineHeight * 2 + 1);
     expect(m.clipped).toBe(false);
   });
