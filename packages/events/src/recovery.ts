@@ -165,9 +165,9 @@ const stripped = (h: { keys(): string[]; get(k: string): string }): Record<strin
 }
 
 /**
- * Re-delivers one DLQ entry: a consumer entry republishes the stored body to its original
- * subject; an advisory entry fetches the original by stream_seq (STREAM.MSG.GET, admin only)
- * and republishes that. Message id <event_id>.r<dlq_seq>. The DLQ entry is deleted ONLY after
+ * Re-delivers one DLQ entry: the ORIGINAL message is fetched from its source stream by stream
+ * sequence (STREAM.MSG.GET, admin only) and republished; the DLQ record's own body and headers
+ * are never trusted, and a consumer record whose event id differs from the original's is refused. Message id <event_id>.r<dlq_seq>. The DLQ entry is deleted ONLY after
  * a successful PubAck. Q14: a replayed event whose aggregate has moved on (the consumer's strict
  * order, max_ack_pending 1, only prevents this while the message is still retrying; once it is
  * dead-lettered the stream continues) ends `skipped_stale` in the consumer; the log line says so.
@@ -187,30 +187,35 @@ export async function replayDeadLetter(
   const entry = await jsm.streams.getMessage(stream, { seq: opts.seq }).catch(() => null)
   if (!entry) throw new RecoveryError(`[events] DLQ entry ${opts.seq} does not exist in ${stream} (already replayed, or expired: after its 7 days use outbox-replay)`)
   const kind = toEntry(entry).kind
-  let subject: string
-  let body: Uint8Array
-  let hdrs: Record<string, string>
-  let eventId: string | undefined
-  let targetStream: string | undefined
+  // The DLQ record is NOT trusted (its headers and body are writable by whoever can publish the DLQ
+  // subject): both kinds re-fetch the ORIGINAL from its source stream by stream sequence and replay
+  // THAT payload and those headers. A consumer record must additionally still name the same event id.
+  let origStream: string | undefined
+  let origSeq: number | undefined
+  let recordEventId: string | undefined
   if (kind === 'consumer') {
-    targetStream = entry.header.get(H.dlqStream) || undefined
-    const orig = entry.header.get(H.dlqOrigSubject)
-    if (!orig) throw new RecoveryError(`[events] DLQ entry ${opts.seq} carries no ${H.dlqOrigSubject} header: it cannot be replayed (use outbox-replay)`)
-    subject = orig
-    body = entry.data
-    hdrs = stripped(entry.header)
-    eventId = entry.header.get(H.eventId) || undefined
+    origStream = entry.header.get(H.dlqStream) || undefined
+    origSeq = Number(entry.header.get(H.dlqSeq) || '') || undefined
+    recordEventId = entry.header.get(H.eventId) || undefined
   } else {
     const adv = JSON.parse(new TextDecoder().decode(entry.data)) as { stream?: string; stream_seq?: number }
-    if (!adv.stream || !adv.stream_seq) throw new RecoveryError(`[events] advisory entry ${opts.seq} names no stream/stream_seq`)
-    const original = await jsm.streams.getMessage(adv.stream, { seq: adv.stream_seq }).catch(() => null)
-    if (!original) throw new RecoveryError(`[events] the original message ${adv.stream}#${adv.stream_seq} is gone (7-day retention): re-deliver it with outbox-replay`)
-    targetStream = adv.stream
-    subject = original.subject
-    body = original.data
-    hdrs = stripped(original.header)
-    eventId = original.header.get(H.eventId) || undefined
+    origStream = adv.stream
+    origSeq = adv.stream_seq
   }
+  if (!origStream || !origSeq) throw new RecoveryError(`[events] DLQ entry ${opts.seq} names no source stream/stream sequence: it cannot be replayed (use outbox-replay)`)
+  const original = await jsm.streams.getMessage(origStream, { seq: origSeq }).catch(() => null)
+  if (!original) throw new RecoveryError(`[events] the original message ${origStream}#${origSeq} is gone (7-day retention): re-deliver it with outbox-replay`)
+  const originalEventId = original.header.get(H.eventId) || undefined
+  if (kind === 'consumer' && originalEventId !== recordEventId) {
+    throw new RecoveryError(
+      `[events] refusing to replay DLQ entry ${opts.seq}: the original ${origStream}#${origSeq} has event id ${originalEventId ?? '(none)'} but the DLQ record says ${recordEventId ?? '(none)'}`,
+    )
+  }
+  const targetStream: string = origStream
+  const subject: string = original.subject
+  const body: Uint8Array = original.data
+  const hdrs: Record<string, string> = stripped(original.header)
+  const eventId: string | undefined = originalEventId
   const msgId = `${eventId ?? `s${opts.seq}`}.r${opts.seq}`
   let publisher: Publisher
   if (typeof js === 'function') {

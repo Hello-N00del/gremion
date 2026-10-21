@@ -73,16 +73,18 @@ describe('main', () => {
     const entry = {
       seq: 7,
       subject: 'gremion.t1.dlq.finance.c',
-      header: { get: (k: string) => ({ 'Gremion-Dlq-Orig-Subject': 'gremion.t1.org-unit.created', 'Gremion-Dlq-Stream': 'ORGUNIT', 'Gremion-Event-Id': 'e1' })[k] ?? '', keys: () => ['Gremion-Dlq-Orig-Subject', 'Gremion-Dlq-Stream', 'Gremion-Event-Id'] },
+      header: { get: (k: string) => ({ 'Gremion-Dlq-Orig-Subject': 'gremion.t1.org-unit.created', 'Gremion-Dlq-Stream': 'ORGUNIT', 'Gremion-Dlq-Seq': '41', 'Gremion-Event-Id': 'e1' })[k] ?? '', keys: () => ['Gremion-Dlq-Orig-Subject', 'Gremion-Dlq-Stream', 'Gremion-Dlq-Seq', 'Gremion-Event-Id'] },
       data: new Uint8Array(),
       time: new Date(),
     }
+    // The original in its source stream (the replay re-fetches it by stream sequence).
+    const original = { ...entry, seq: 41, subject: 'gremion.t1.org-unit.created', header: { get: (k: string) => (k === 'Gremion-Event-Id' ? 'e1' : ''), keys: () => ['Gremion-Event-Id'] } }
     const published: string[] = []
     const closed: string[] = []
     d.streamPublisher.mockImplementation((s: string) => (s === 'ORGUNIT' ? 'kernel' : undefined))
     d.openNats.mockImplementation(async (_t: string, identity: string) => ({
       js: { publish: async () => (published.push(identity), { stream: 'ORGUNIT', seq: 1, duplicate: false }) },
-      jsm: { streams: { getMessage: async () => entry, deleteMessage: async () => true } },
+      jsm: { streams: { getMessage: async (stream: string) => (stream === 'ORGUNIT' ? original : entry), deleteMessage: async () => true } },
       close: async () => void closed.push(identity),
     }))
     expect(await main(['dlq-replay', '--tenant', 't1', '--seq', '7'], d)).toBe(0)

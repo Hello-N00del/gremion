@@ -44,8 +44,10 @@ still fails dead-letters it again, as a new entry.
 docker compose --env-file /opt/gremion/etc/env/app-blue.env run --rm --no-deps --entrypoint pnpm tenant-create exec events dlq-replay --tenant <slug> --seq <n>
 ```
 
-The entry is published again to its original subject (a `consumer` entry from its stored body; an `advisory`
-entry by fetching the original from its stream by `stream_seq`) under the message id `<event id>.r<n>`, and is
+The entry is published again to its original subject. The DLQ record itself is never trusted: the command
+fetches the ORIGINAL message from its source stream by `stream_seq` and republishes that payload and those headers
+(it refuses, exit 1, when the original is gone - use `outbox-replay` - or when a `consumer` record's event id differs
+from the original's) under the message id `<event id>.r<n>`, and is
 deleted **only after** the broker has acknowledged the new publish. The consumer's inbox row (`dead_lettered`)
 is claimed again and the event ends `processed`. Re-delivering the same event twice is harmless: the inbox keys
 on the event id, so a second copy is acknowledged and ignored.

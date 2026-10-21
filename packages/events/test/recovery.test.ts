@@ -61,6 +61,16 @@ const consumerEntry = (seq: number): Stored => ({
   time: new Date('2026-10-05T12:00:00Z'),
 })
 
+/** The original message in its source stream at the stream_seq the DLQ record names (41). */
+const original41 = (over: Partial<Stored> = {}): Stored => ({
+  seq: 41,
+  subject: 'gremion.t1.org-unit.created',
+  header: hdr({ [H.eventId]: EVENT, [H.source]: '/gremion/idt', [H.msgId]: EVENT, [H.aggregateType]: 'orgunit' }),
+  data: enc({ eventId: EVENT, payload: { name: 'original' } }),
+  time: new Date('2026-10-05T11:00:00Z'),
+  ...over,
+})
+
 const advisoryEntry = (seq: number): Stored => ({
   seq,
   subject: `${ADVISORY_PREFIX}ORGUNIT.fin-consumer`,
@@ -86,7 +96,7 @@ describe('listDeadLetters', () => {
 
 describe('replayDeadLetter', () => {
   test('a consumer entry republishes the body to its original subject under <event_id>.r<dlq_seq>, then deletes it', async () => {
-    const d = double({ DLQ: [consumerEntry(7)] })
+    const d = double({ DLQ: [consumerEntry(7)], ORGUNIT: [original41()] })
     const r = await replayDeadLetter(d.jsm, d.js, { seq: 7, log: () => {} })
     expect(r).toMatchObject({ kind: 'consumer', republishedTo: 'gremion.t1.org-unit.created', msgId: `${EVENT}.r7` })
     expect(d.published).toHaveLength(1)
@@ -100,7 +110,7 @@ describe('replayDeadLetter', () => {
   })
 
   test('a failed publish deletes NOTHING (the entry survives for another attempt)', async () => {
-    const d = double({ DLQ: [consumerEntry(7)] })
+    const d = double({ DLQ: [consumerEntry(7)], ORGUNIT: [original41()] })
     d.failNext()
     await expect(replayDeadLetter(d.jsm, d.js, { seq: 7, log: () => {} })).rejects.toThrow(/no responders/)
     expect(d.deleted).toEqual([])
@@ -133,10 +143,47 @@ describe('replayDeadLetter', () => {
   })
 
   test('the log line names the stale outcome (Q14)', async () => {
-    const d = double({ DLQ: [consumerEntry(7)] })
+    const d = double({ DLQ: [consumerEntry(7)], ORGUNIT: [original41()] })
     const lines: string[] = []
     await replayDeadLetter(d.jsm, d.js, { seq: 7, log: (l) => lines.push(l) })
     expect(lines.join('\n')).toContain('skipped_stale')
+  })
+})
+
+describe('replayDeadLetter re-fetches the ORIGINAL (the DLQ record is not trusted)', () => {
+  test('a tampered DLQ body and headers are ignored: the original payload, subject and headers are replayed', async () => {
+    const tampered = consumerEntry(7)
+    tampered.data = enc({ eventId: EVENT, payload: { name: 'EVIL' } })
+    tampered.header = hdr({ ...Object.fromEntries(tampered.header.keys().map((k) => [k, tampered.header.get(k)])), [H.dlqOrigSubject]: 'gremion.t1.other.subject' })
+    const orig = original41()
+    const d = double({ DLQ: [tampered], ORGUNIT: [orig] })
+    await replayDeadLetter(d.jsm, d.js, { seq: 7, log: () => {} })
+    expect(d.published[0]!.data).toEqual(orig.data)
+    expect(d.published[0]!.subject).toBe('gremion.t1.org-unit.created')
+    expect(d.published[0]!.opts.headers.get(H.aggregateType)).toBe('orgunit')
+  })
+
+  test('an original that is gone refuses (RecoveryError naming outbox-replay), publishes and deletes nothing', async () => {
+    const d = double({ DLQ: [consumerEntry(7)], ORGUNIT: [] })
+    await expect(replayDeadLetter(d.jsm, d.js, { seq: 7, log: () => {} })).rejects.toThrow(/outbox-replay/)
+    expect(d.published).toEqual([])
+    expect(d.deleted).toEqual([])
+  })
+
+  test('an original whose event id differs from the DLQ record refuses, publishes and deletes nothing', async () => {
+    const other = original41({ header: hdr({ [H.eventId]: '019f2f0a-0000-7000-8000-0000000000ff', [H.source]: '/gremion/idt' }) })
+    const d = double({ DLQ: [consumerEntry(7)], ORGUNIT: [other] })
+    await expect(replayDeadLetter(d.jsm, d.js, { seq: 7, log: () => {} })).rejects.toThrow(/event id/)
+    expect(d.published).toEqual([])
+    expect(d.deleted).toEqual([])
+  })
+
+  test('a DLQ record without its stream or stream sequence refuses', async () => {
+    const e = consumerEntry(7)
+    e.header = hdr({ [H.eventId]: EVENT, [H.dlqOrigSubject]: 'gremion.t1.org-unit.created' })
+    const d = double({ DLQ: [e], ORGUNIT: [original41()] })
+    await expect(replayDeadLetter(d.jsm, d.js, { seq: 7, log: () => {} })).rejects.toThrow(RecoveryError)
+    expect(d.deleted).toEqual([])
   })
 })
 
