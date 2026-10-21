@@ -2,16 +2,24 @@
 // `--help` imports every adapter; every variable phase A reads is checked
 // BEFORE anything connects, and each missing one is a NAMED exit-2 failure,
 // never a default. Spawns the real CLI entrypoint (tsx + the SvelteKit env shim).
-import { spawnSync } from 'node:child_process'
+import { spawnSync, execFileSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { describe, expect, it } from 'vitest'
+import { beforeAll, describe, expect, it } from 'vitest'
 import { EnableRefused, refusalLine } from '../../../../../scripts/tenant-provision-gate'
 
 const UI = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '..', '..')
 const REPO = join(UI, '..')
 const FIXTURE = join(REPO, 'test', 'host', 'fixtures', 'customer-provision', 'env', 'pg-admin.url')
+// The CLI imports the module registry, whose generated barrel names manifests that
+// exist only after the (gitignored, idempotent) module overlay ran. `pnpm test:unit`
+// runs it as `pretest:unit`; a bare `vitest run <file>` did not, and every spawn died
+// on the missing elections manifest. Run it here so the file is runnable on its own.
+beforeAll(() => {
+  execFileSync(process.execPath, [join(UI, 'scripts', 'interim-module-overlay.mjs')], { cwd: UI, stdio: 'pipe' })
+}, 120_000)
+
 const MODULE_SERVERS = ['BOARD', 'CALENDAR', 'CONTENT', 'FINANCE', 'NEWSLETTER', 'VAULT']
 
 const CONTRACT: Record<string, string> = {

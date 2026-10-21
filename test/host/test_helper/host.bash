@@ -282,3 +282,17 @@ fs_carries_modes() {
     rm -f "$probe"
     return "$rc"
 }
+
+# assert_mode_600 <file>
+# The file's mode is 0600 -- strict wherever the filesystem stores POSIX modes
+# (Linux, the Debian host). On NTFS (Git Bash) a chmod reads back as 644, so the
+# mode assertion is SKIPPED with a visible reason instead of failing; the rest of
+# the test body still runs (bats `skip` would abort it and lose those assertions).
+assert_mode_600() {
+    local f="$1"
+    if ! fs_carries_modes "$(dirname "$f")"; then
+        echo "# SKIPPED mode assertion for ${f##*/}: this filesystem cannot hold POSIX modes (NTFS); proven on Linux" >&3
+        return 0
+    fi
+    [ "$(stat -c %a "$f")" = 600 ] || { echo "mode of $f is $(stat -c %a "$f"), expected 600"; return 1; }
+}

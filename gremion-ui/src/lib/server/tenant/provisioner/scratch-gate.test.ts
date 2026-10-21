@@ -27,6 +27,21 @@ describe('scratchFixturesAllowed', () => {
     expect(scratchFixturesAllowed('t043-0123abcd', 'postgresql://u:p@postgres:5432/gremion_platform')).toBe(false)
     expect(scratchFixturesAllowed('t043-0123abcd', 'postgresql://u:p@db.example.com:5432/gremion_platform')).toBe(false)
   })
+  it('is false for crafted urls where the gate and postgres.js would pick different hosts', () => {
+    // new URL() takes the host after the LAST @; postgres.js after the FIRST @ and splits on commas.
+    expect(scratchFixturesAllowed('t044-0123abcd', 'postgresql://u:x@evil,y@postgres-t044-0123abcd:5432/db')).toBe(false)
+    expect(scratchFixturesAllowed('t044-0123abcd', 'postgresql://u:x@evil:5432,postgres-t044-0123abcd:5432/db')).toBe(false)
+    expect(scratchFixturesAllowed('t044-0123abcd', 'postgresql://u:x@postgres-t044-0123abcd:5432,evil:5432/db')).toBe(false)
+  })
+  it('is false for a unix-socket or host-less url', () => {
+    expect(scratchFixturesAllowed('t044-0123abcd', 'postgresql://u:x@/db?host=/var/run/postgresql')).toBe(false)
+    expect(scratchFixturesAllowed('t044-0123abcd', 'postgresql:///db')).toBe(false)
+  })
+  it('is false when the stack is the production stack, even if it looks scratch-shaped', () => {
+    expect(scratchFixturesAllowed('t043-0123abcd', URL_OK, 't043-0123abcd')).toBe(false)
+    expect(scratchFixturesAllowed('t043-0123abcd', URL_OK, 'gremion')).toBe(true)
+    expect(scratchFixturesAllowed('t043-0123abcd', URL_OK, 'none')).toBe(true)
+  })
   it('is false for an unparseable url and never throws', () => {
     expect(scratchFixturesAllowed('t043-0123abcd', 'not a url')).toBe(false)
     expect(scratchFixturesAllowed('t043-0123abcd', undefined)).toBe(false)

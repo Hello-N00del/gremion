@@ -32,6 +32,7 @@ import { createHash, randomBytes } from 'node:crypto'
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import postgres from 'postgres'
+import { handToReader } from './tenant-secret-file'
 import {
   bootstrapPlatform,
   ensurePanelReader,
@@ -201,6 +202,7 @@ function writeSecretFile(hostPath: string, value: string): Promise<void> {
   } catch (err) {
     log(`WARNING: chmod 0600 ${hostPath} failed (${err instanceof Error ? err.message : String(err)})`)
   }
+  handToReader(hostPath, tenantSecretsDir(), { log })
   return Promise.resolve()
 }
 const tenantSecretsDir = () => process.env.TENANT_SECRETS_DIR ?? join(repoRoot, 'secrets', 'tenants')
@@ -448,7 +450,7 @@ async function liveDeps(opts: { configFile?: string; bodyName?: string; needEdge
       platformDomain: env.platformDomain,
       ledger: pgLedger(platform),
       // TASK-044: the level-1 gate over gremion_platform, on the host's derived release tip
-      gate: pgGate(platform, { releaseTipSha: releaseTip(), allowFixtureEvidence: scratchFixturesAllowed(process.env.GREMION_SCRATCH_FIXTURES, process.env.PLATFORM_DATABASE_URL) }),
+      gate: pgGate(platform, { releaseTipSha: releaseTip(), allowFixtureEvidence: scratchFixturesAllowed(process.env.GREMION_SCRATCH_FIXTURES, process.env.PLATFORM_DATABASE_URL, process.env.GREMION_PRODUCTION_STACK) }),
       modules: pgModules({
         platform,
         catalogue,

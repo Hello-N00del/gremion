@@ -308,9 +308,7 @@ create() {
     done
     grep -qx 'postgresql://postgres:unit-pg-root-secret@postgres-guardstack:5432/postgres' "${d}/kernel_pg_admin"
     grep -qx 'postgresql://calendar:unit-calendar-secret@calendar-postgres:5432/postgres' "${d}/module_pg_admin_calendar"
-    if [ "$(stat -c %a "${d}/kernel_pg_admin" 2>/dev/null)" != "" ]; then
-        [ "$(stat -c %a "${d}/kernel_pg_admin")" = 600 ]
-    fi
+    assert_mode_600 "${d}/kernel_pg_admin"
     run steps
     [ "${lines[0]}" = "tc bootstrap-provisioner " ] || { steps; return 1; }
     [ "${lines[1]}" = "tc init --panel-origin" ]
@@ -327,7 +325,7 @@ create() {
     [ "$status" -eq 0 ] || { echo "status=$status $output"; steps; cat "$SHIM_LOG"; return 1; }
     local f="${GREMION_ROOT}/etc/secrets/tenant-create/tenant_provisioner"
     [ "$(cat "$f")" = unit-provisioner-sa-secret ] || { echo "credential: $(cat "$f" 2>&1)"; return 1; }
-    if [ "$(stat -c %a "$f" 2>/dev/null)" != "" ]; then [ "$(stat -c %a "$f")" = 600 ]; fi
+    assert_mode_600 "$f"
     # the admin credential came from state.env and reached the one-shot's environment, never an argv
     [ "$(cat "${GREMION_ROOT}/kc-pw-seen")" = unit-kc-admin-state-secret ]
     assert_recorded docker '-e KEYCLOAK_ADMIN_PASSWORD tenant-create bootstrap-provisioner'
@@ -482,7 +480,7 @@ exit 0'
     [ "$status" -eq 0 ] || { echo "status=$status $output"; cat "$SHIM_LOG"; return 1; }
     local f="${GREMION_ROOT}/etc/secrets/control-panel/client_secret" secret
     [ -s "$f" ]
-    if [ "$(stat -c %a "$f" 2>/dev/null)" != "" ]; then [ "$(stat -c %a "$f")" = 600 ]; fi
+    assert_mode_600 "$f"
     secret="$(tr -d '\n' < "$f")"
     run jq -r '.clients[] | select(.clientId == "control-panel") | [.secret == $s, (.redirectUris | tostring), (.webOrigins | tostring)] | @tsv' --arg s "$secret" "${GREMION_ROOT}/realm.json"
     [ "$output" = $'true\t["https://panel.fixture.example/*"]\t["https://panel.fixture.example"]' ] || { echo "$output"; return 1; }
@@ -508,7 +506,7 @@ exit 0'
     [ "$status" -eq 0 ] || { echo "status=$status $output"; cat "$SHIM_LOG"; return 1; }
     local f="${GREMION_ROOT}/etc/secrets/grafana/client_secret" secret panel
     [ -s "$f" ]
-    if [ "$(stat -c %a "$f" 2>/dev/null)" != "" ]; then [ "$(stat -c %a "$f")" = 600 ]; fi
+    assert_mode_600 "$f"
     secret="$(tr -d '\n' < "$f")"
     panel="$(tr -d '\n' < "${GREMION_ROOT}/etc/secrets/control-panel/client_secret")"
     [ "${#secret}" -ge 32 ] && [ "$secret" != "$panel" ]
@@ -663,5 +661,6 @@ release_repo() {
     GREMION_SCRATCH_FIXTURES=t043-0123abcd run "$LAUNCHER" status alpha-rat
     [ "$status" -eq 0 ] || { echo "$output"; return 1; }
     assert_recorded docker '-e GREMION_SCRATCH_FIXTURES '
+    assert_recorded docker '-e GREMION_PRODUCTION_STACK '
     ! grep -qF -- 'GREMION_SCRATCH_FIXTURES=' "$SHIM_LOG" || { echo "a value was inlined"; return 1; }
 }

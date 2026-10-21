@@ -413,6 +413,8 @@ services:
       # one runner refuses the pooler), as its owner role.
       PLATFORM_DOMAIN: ${PLATFORM_DOMAIN:?PLATFORM_DOMAIN required}
       PLATFORM_DATABASE_URL: postgresql://${PLATFORM_DB_USER:-gremion_platform}:${PLATFORM_DB_PASSWORD:?PLATFORM_DB_PASSWORD required}@postgres-${STACK:?STACK required}:5432/gremion_platform
+      # TASK-044 LOW: the scratch-fixture gate refuses when its stack IS the production stack.
+      GREMION_PRODUCTION_STACK: ${GREMION_PRODUCTION_STACK:-}
       # `init` makes the control panel's read-only role with these (the
       # control-panel block above connects as it).
       PANEL_DB_USER: ${PANEL_DB_USER:-gremion_panel}
