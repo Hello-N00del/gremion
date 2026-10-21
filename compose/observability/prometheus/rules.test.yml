@@ -132,6 +132,27 @@ tests:
             value: 0
           - labels: 'gremion:cond:signal_absent{component="none"}'
             value: 0
+      # TASK-079: no events service, no gauge: the four dead-letter conditions read 0 (not absent-fired).
+      - expr: gremion:cond:outbox_dead_lettered
+        eval_time: 70m
+        exp_samples:
+          - labels: 'gremion:cond:outbox_dead_lettered{component="events-outbox"}'
+            value: 0
+      - expr: gremion:cond:inbox_dead_lettered
+        eval_time: 70m
+        exp_samples:
+          - labels: 'gremion:cond:inbox_dead_lettered{component="events-inbox"}'
+            value: 0
+      - expr: gremion:cond:inbox_stalled
+        eval_time: 70m
+        exp_samples:
+          - labels: 'gremion:cond:inbox_stalled{component="events-stalled"}'
+            value: 0
+      - expr: gremion:cond:dead_letter_queue
+        eval_time: 70m
+        exp_samples:
+          - labels: 'gremion:cond:dead_letter_queue{component="nats-dlq"}'
+            value: 0
 
   # ---- blind: every collector is gone, every fail-closed condition is 1 ---
   - interval: 1m
@@ -209,6 +230,17 @@ tests:
           - labels: 'gremion:cond:signal_absent{component="storage-components"}'
             value: 1
           - labels: 'gremion:cond:signal_absent{component="none"}'
+            value: 0
+      # TASK-079: blind is NOT a dead letter: the four conditions stay 0 (SignalAbsent reports the blindness).
+      - expr: gremion:cond:outbox_dead_lettered
+        eval_time: 70m
+        exp_samples:
+          - labels: 'gremion:cond:outbox_dead_lettered{component="events-outbox"}'
+            value: 0
+      - expr: gremion:cond:dead_letter_queue
+        eval_time: 70m
+        exp_samples:
+          - labels: 'gremion:cond:dead_letter_queue{component="nats-dlq"}'
             value: 0
 
   # ---- TDD 5: the backup signal (Q8) ------------------------------------
@@ -358,3 +390,72 @@ tests:
             value: 0
           - labels: 'gremion:cond:third_party_unreachable{component="third-party"}'
             value: 0
+
+  # ---- TASK-079: the dead-letter conditions fire per path and clear (TRD-420) ----
+  # A relay-dead-lettered outbox row in idt, a dead-lettered and a stalled inbox in fin/finance, and an entry
+  # in one tenant DLQ stream: each condition is 1 for exactly its own component, the others stay 0.
+  - interval: 1m
+    input_series:
+      - series: 'gremion_outbox_dead_lettered{ctx="idt",instance="host",job="host"}'
+        values: '0 0 1 1 1 0 0 0 0 0'
+      - series: 'gremion_outbox_dead_lettered{ctx="gov",instance="host",job="host"}'
+        values: '0+0x9'
+      - series: 'gremion_inbox_dead_lettered{ctx="fin",consumer="finance",instance="host",job="host"}'
+        values: '0 0 1 1 1 1 1 1 1 1'
+      - series: 'gremion_inbox_stalled{ctx="fin",consumer="finance",instance="host",job="host"}'
+        values: '0 0 0 0 1 1 1 1 1 1'
+      - series: 'gremion_nats_stream_messages{account="T_acme",stream="DLQ",instance="host",job="host"}'
+        values: '0 0 2 2 2 2 2 2 2 2'
+      - series: 'gremion_nats_stream_messages{account="T_acme",stream="ORGUNIT",instance="host",job="host"}'
+        values: '5+0x9'
+    promql_expr_test:
+      - expr: gremion:cond:outbox_dead_lettered
+        eval_time: 3m
+        exp_samples:
+          - labels: 'gremion:cond:outbox_dead_lettered{component="idt",ctx="idt"}'
+            value: 1
+          - labels: 'gremion:cond:outbox_dead_lettered{component="gov",ctx="gov"}'
+            value: 0
+          - labels: 'gremion:cond:outbox_dead_lettered{component="events-outbox"}'
+            value: 0
+      - expr: gremion:cond:outbox_dead_lettered
+        eval_time: 7m
+        exp_samples:
+          - labels: 'gremion:cond:outbox_dead_lettered{component="idt",ctx="idt"}'
+            value: 0
+          - labels: 'gremion:cond:outbox_dead_lettered{component="gov",ctx="gov"}'
+            value: 0
+          - labels: 'gremion:cond:outbox_dead_lettered{component="events-outbox"}'
+            value: 0
+      - expr: gremion:cond:inbox_dead_lettered
+        eval_time: 5m
+        exp_samples:
+          - labels: 'gremion:cond:inbox_dead_lettered{component="fin/finance",consumer="finance",ctx="fin"}'
+            value: 1
+          - labels: 'gremion:cond:inbox_dead_lettered{component="events-inbox"}'
+            value: 0
+      - expr: gremion:cond:inbox_stalled
+        eval_time: 3m
+        exp_samples:
+          - labels: 'gremion:cond:inbox_stalled{component="fin/finance",consumer="finance",ctx="fin"}'
+            value: 0
+          - labels: 'gremion:cond:inbox_stalled{component="events-stalled"}'
+            value: 0
+      - expr: gremion:cond:inbox_stalled
+        eval_time: 6m
+        exp_samples:
+          - labels: 'gremion:cond:inbox_stalled{component="fin/finance",consumer="finance",ctx="fin"}'
+            value: 1
+          - labels: 'gremion:cond:inbox_stalled{component="events-stalled"}'
+            value: 0
+      - expr: gremion:cond:dead_letter_queue
+        eval_time: 5m
+        exp_samples:
+          - labels: 'gremion:cond:dead_letter_queue{account="T_acme",component="T_acme/DLQ",stream="DLQ"}'
+            value: 1
+          - labels: 'gremion:cond:dead_letter_queue{component="nats-dlq"}'
+            value: 0
+      # the other streams of the tenant are not the DLQ: a full ORGUNIT stream raises nothing
+      - expr: count(gremion:cond:dead_letter_queue{stream="ORGUNIT"})
+        eval_time: 5m
+        exp_samples: []

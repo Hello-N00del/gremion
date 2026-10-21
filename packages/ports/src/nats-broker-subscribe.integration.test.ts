@@ -64,6 +64,7 @@ import {
   StreamGoneError,
   ConsumerGoneError,
   ConsumerStalledError,
+  HeartbeatsMissedError,
   SetupTimeoutError,
   CONSUME_EXPIRES_MS,
   CONSUME_IDLE_HEARTBEAT_MS,
@@ -198,6 +199,17 @@ function jetStreamDelivering(source: AsyncIterable<unknown>, info: () => Promise
       return consumersRequested
     },
   }
+}
+
+/** A server round trip that never answers. */
+const never = () => new Promise<never>(() => {})
+
+/** `p`, or a rejection naming `what` if it has not settled within `ms`. */
+function within<T>(p: Promise<T>, ms: number, what: string): Promise<T> {
+  return Promise.race([
+    p,
+    new Promise<T>((_, reject) => setTimeout(() => reject(new Error(what + ' did not settle within ' + ms + ' ms')), ms)),
+  ])
 }
 
 afterEach(() => {
@@ -992,6 +1004,126 @@ describe('NatsBroker.subscribe() liveness (status() notifications + probe)', () 
     expect(errors).toHaveBeenCalledTimes(1)
   })
 
+  // A probe that cannot decide (a JetStream API timeout, a connection that is
+  // closing) is not a verdict about the server, but it is not a licence to stay
+  // silent either: the heartbeats are still missing. The count runs on, and at
+  // STALL_PROBE_LIMIT the subscription faults with HeartbeatsMissedError.
+  it('missed heartbeats whose probe cannot decide fault with HeartbeatsMissedError after STALL_PROBE_LIMIT consecutive probes, not before, logging each probe error', async () => {
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const warns = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const probeError = new TimeoutError()
+    let calls = 0
+    const { source, broker } = liveBroker({
+      streamInfo: async () => {
+        calls++
+        if (calls > 1) throw probeError // the cover check read it; every probe after cannot tell
+        return { config: { subjects: [...STREAMS.NEWSLETTER.subjects] } }
+      },
+    })
+    const sub = broker.subscribe(PATTERN, async () => {})
+    await sub.ready
+    let outcome = 'pending'
+    sub.closed.then(
+      () => (outcome = 'resolved'),
+      () => (outcome = 'rejected'),
+    )
+
+    for (let i = 1; i < STALL_PROBE_LIMIT; i++) source.notify({ type: 'heartbeats_missed', count: 2 })
+    await settleTick()
+    expect(outcome, 'faulted on undecided probes before STALL_PROBE_LIMIT').toBe('pending')
+    expect(errors).not.toHaveBeenCalled()
+    expect(warns, 'an undecided probe was not logged').toHaveBeenCalledTimes(STALL_PROBE_LIMIT - 1)
+    const logged = warns.mock.calls.map((c) => c.join(' ')).join('\n')
+    expect(logged).toContain(PATTERN)
+    expect(logged).toContain('NEWSLETTER')
+    expect(logged).toContain(probeError.message)
+
+    source.notify({ type: 'heartbeats_missed', count: 2 })
+    const err = await faultOf(sub.closed)
+    expect(err).toBeInstanceOf(HeartbeatsMissedError)
+    expect(err).not.toBeInstanceOf(ConsumerStalledError)
+    expect(err.message).toContain(PATTERN)
+    expect(err.message).toContain('NEWSLETTER')
+    expect(err).toHaveProperty('probes', STALL_PROBE_LIMIT)
+    expect(err.cause, 'the probe error that could not decide is the cause').toBe(probeError)
+    expect(err.message).toContain(probeError.message)
+    expect(source.closeCalls, 'the consumer iterator was left running after the fault').toBe(1)
+    expect(errors).toHaveBeenCalledTimes(1)
+  })
+
+  it('a heartbeat between undecided probes starts the count over', async () => {
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    let calls = 0
+    const { source, broker } = liveBroker({
+      streamInfo: async () => {
+        calls++
+        if (calls > 1) throw new TimeoutError()
+        return { config: { subjects: [...STREAMS.NEWSLETTER.subjects] } }
+      },
+    })
+    const sub = broker.subscribe(PATTERN, async () => {})
+    await sub.ready
+    let outcome = 'pending'
+    sub.closed.then(
+      () => (outcome = 'resolved'),
+      () => (outcome = 'rejected'),
+    )
+
+    for (let i = 1; i < STALL_PROBE_LIMIT; i++) source.notify({ type: 'heartbeats_missed', count: 2 })
+    source.notify({ type: 'heartbeat' })
+    for (let i = 1; i < STALL_PROBE_LIMIT; i++) source.notify({ type: 'heartbeats_missed', count: 2 })
+    await settleTick()
+    expect(outcome, 'a recovered heartbeat did not reset the undecided count').toBe('pending')
+    expect(errors).not.toHaveBeenCalled()
+    sub.unsubscribe()
+    await expect(sub.closed).resolves.toBeUndefined()
+  })
+
+  it('a consumer.info() probe that cannot decide counts too, and mixes with decided stalls toward the same limit', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const warns = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const probeError = new Error('nats: connection is closing')
+    let infos = 0
+    const { source, broker } = liveBroker({
+      consumerInfo: async () => {
+        infos++
+        if (infos === 2) throw probeError // probe 1 finds both present, probe 2 cannot tell, probe 3 finds both present
+        return {}
+      },
+    })
+    const sub = broker.subscribe(PATTERN, async () => {})
+    await sub.ready
+
+    for (let i = 0; i < STALL_PROBE_LIMIT; i++) source.notify({ type: 'heartbeats_missed', count: 2 })
+
+    const err = await faultOf(sub.closed)
+    expect(err, 'an undecided probe in the run must not be reported as a confirmed stall').toBeInstanceOf(HeartbeatsMissedError)
+    expect(err.cause).toBe(probeError)
+    expect(warns).toHaveBeenCalledTimes(1)
+  })
+
+  it('an undecided probe followed by a verdict still faults on the verdict at once', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    let calls = 0
+    const { source, broker } = liveBroker({
+      streamInfo: async () => {
+        calls++
+        if (calls === 2) throw new TimeoutError()
+        if (calls > 2) throw streamNotFound()
+        return { config: { subjects: [...STREAMS.NEWSLETTER.subjects] } }
+      },
+    })
+    const sub = broker.subscribe(PATTERN, async () => {})
+    await sub.ready
+
+    source.notify({ type: 'heartbeats_missed', count: 2 })
+    source.notify({ type: 'heartbeats_missed', count: 2 })
+
+    expect(await faultOf(sub.closed)).toBeInstanceOf(StreamGoneError)
+  })
+
   it('informational notifications leave the subscription live and quiet', async () => {
     const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
     const { source, broker } = liveBroker()
@@ -1021,13 +1153,6 @@ describe('NatsBroker.subscribe() liveness (status() notifications + probe)', () 
 //    Probe: streams.info() never settles, close() never returned.
 describe('NatsBroker setup bound and close() bound', () => {
   const PATTERN = 'gremion.*.newsletter.>'
-  const never = () => new Promise<never>(() => {})
-  function within<T>(p: Promise<T>, ms: number, what: string): Promise<T> {
-    return Promise.race([
-      p,
-      new Promise<T>((_, reject) => setTimeout(() => reject(new Error(what + ' did not settle within ' + ms + ' ms')), ms)),
-    ])
-  }
 
   it('a setup round trip that never settles rejects ready and closed with SetupTimeoutError inside the setup bound, logged once', async () => {
     const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
@@ -1112,6 +1237,90 @@ describe('NatsBroker.close() drain tolerance and retry', () => {
     expect(drains).toBe(2)
   })
 
+  it('close() bounds the drain itself: a drain that never settles is abandoned after the close bound, warned, and the connection is closed outright', async () => {
+    const warns = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+    let drains = 0
+    let closes = 0
+    let closed = false
+    const nc = {
+      drain: () => {
+        drains++
+        return never()
+      },
+      close: async () => {
+        closes++
+        closed = true
+      },
+      isClosed: () => closed,
+    }
+    const broker = brokerWith(jetStreamDelivering(messageSource()), 'NEWSLETTER', nc, undefined, { closeMs: 150 })
+
+    const startedAt = Date.now()
+    await within(broker.close(), 2000, 'close() with a drain that never settles')
+
+    expect(Date.now() - startedAt, 'close() returned before the drain bound').toBeGreaterThanOrEqual(140)
+    expect(drains).toBe(1)
+    expect(closes, 'a drain that gave up must be followed by close()').toBe(1)
+    expect(warns, 'a close() that abandoned the drain must say so').toHaveBeenCalledTimes(1)
+    const warned = warns.mock.calls.map((c) => c.join(' ')).join('\n')
+    expect(warned).toContain('NEWSLETTER')
+    expect(warned).toContain('drain')
+    expect(warned).toContain('150')
+    expect(errors).not.toHaveBeenCalled()
+  })
+
+  it('a drain abandoned at the bound that rejects LATER is not an unhandled rejection', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    vi.spyOn(console, 'debug').mockImplementation(() => {})
+    const unhandled: unknown[] = []
+    const onUnhandled = (reason: unknown) => unhandled.push(reason)
+    process.on('unhandledRejection', onUnhandled)
+    try {
+      let rejectDrain!: (err: Error) => void
+      let closed = false
+      const nc = {
+        drain: () =>
+          new Promise<void>((_, reject) => {
+            rejectDrain = reject
+          }),
+        close: async () => {
+          closed = true
+          rejectDrain(new Error('nats: connection closed')) // what closing under a pending drain does
+        },
+        isClosed: () => closed,
+      }
+      const broker = brokerWith(jetStreamDelivering(messageSource()), 'NEWSLETTER', nc, undefined, { closeMs: 50 })
+
+      await within(broker.close(), 2000, 'close() with a drain that rejects late')
+      await new Promise((r) => setTimeout(r, 50))
+
+      expect(unhandled, 'the abandoned drain left an unhandled rejection behind').toEqual([])
+    } finally {
+      process.off('unhandledRejection', onUnhandled)
+    }
+  })
+
+  it('a drain that settles inside the close bound is untouched: no warning, no forced close()', async () => {
+    const warns = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    let closes = 0
+    const nc = {
+      drain: async () => {
+        await new Promise((r) => setTimeout(r, 20))
+      },
+      close: async () => {
+        closes++
+      },
+      isClosed: () => false,
+    }
+    const broker = brokerWith(jetStreamDelivering(messageSource()), 'NEWSLETTER', nc, undefined, { closeMs: 500 })
+
+    await broker.close()
+
+    expect(closes).toBe(0)
+    expect(warns).not.toHaveBeenCalled()
+  })
+
   it('shares ONE in-flight shutdown: concurrent close() calls get the same promise and drain once', async () => {
     let drains = 0
     const nc = {
@@ -1159,6 +1368,7 @@ describe('@gremion/ports/nats re-exports the port error classes and bounds from 
     expect(StreamGoneError).toBe(port.StreamGoneError)
     expect(ConsumerGoneError).toBe(port.ConsumerGoneError)
     expect(ConsumerStalledError).toBe(port.ConsumerStalledError)
+    expect(HeartbeatsMissedError).toBe(port.HeartbeatsMissedError)
     expect(SetupTimeoutError).toBe(port.SetupTimeoutError)
     expect(LIVENESS_FAULT_BOUND_MS).toBe(port.LIVENESS_FAULT_BOUND_MS)
   })

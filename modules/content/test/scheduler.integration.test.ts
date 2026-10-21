@@ -50,7 +50,7 @@ const TEST_PG_URL = requireEphemeralTestPgUrl()
 const TEST_DB_PREFIX = 'content_test_'
 assertSafeTestEnv(TEST_PG_URL, TEST_DB_PREFIX)
 
-const TENANT: TenantRef = { id: 'eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee', slug: 'schedtest' }
+const TENANT: TenantRef = { id: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee', slug: 'schedtest' }
 const TEST_SECRET = 'test-content-sched-secret'
 
 // ── fakes ───────────────────────────────────────────────────────────────────

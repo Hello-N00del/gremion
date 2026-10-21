@@ -93,7 +93,8 @@ describe('ensureTenantAccount (TDD 4)', () => {
     const r = await ensureTenantAccount({ tenant: 'ta', modules: ['publishing', 'finance', 'board'] }, { secretsDir, accountsDir, broker: b })
     expect(r).toEqual({ accountRef: 'T_ta', createdUsers: ['admin', 'finance', 'kernel', 'publishing'], removedUsers: [], reloaded: true })
     expect(b.reloads).toBe(1)
-    expect(b.streams).toEqual([{ tenant: 'ta', streams: ['CALENDAR', 'CONTENT', 'NEWSLETTER', 'ORGUNIT'] }])
+    // The flow streams, then the DLQ system stream (TASK-079 G5): created by the tenant admin, in every tenant.
+    expect(b.streams).toEqual([{ tenant: 'ta', streams: ['CALENDAR', 'CONTENT', 'NEWSLETTER', 'ORGUNIT', 'DLQ'] }])
     expect(seedFiles()).toEqual(['_admin/tenant_ta.nk', '_sys/reload.nk', 'finance/tenant_ta.nk', 'kernel/tenant_ta.nk', 'publishing/tenant_ta.nk'])
     expect(conf()).toMatch(/T_ta \{/)
     expect(conf()).not.toMatch(/# board@ta/)

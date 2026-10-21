@@ -1,12 +1,11 @@
-// TDD 7 (unit half, TASK-043 Q19): the interim operator gate. It answers only
-// for an id the operator passed with --enable that is not denied, with the ONE
-// persisted attestation id for (customer, module) as both references; board
-// and vault are refused by name before anything is written.
+// The operator's enable list (TASK-043 TDD 7, unit half): board and vault are
+// refused by name before anything is written; an unknown id too. TASK-044
+// deleted the interim operatorAllowGate (an attestation id as both
+// references): every enable goes through lifecycle/enable-gate (module-gate.ts,
+// module-gate.test.ts); this deny list stays as belt and braces.
 import { describe, expect, it } from 'vitest'
-import { assertEnableList, DEFAULT_DENY, operatorAllowGate, ProvisioningError } from '../src/index.ts'
-
-const T = '01927f00-0000-7000-8000-000000000001'
-const ATT = '01927f00-0000-7000-8000-00000000abcd'
+import { assertEnableList, DEFAULT_DENY, ProvisioningError } from '../src/index.ts'
+import * as provisioning from '../src/index.ts'
 
 /** The refusal of assertEnableList as plain data (null: no refusal). */
 function refusal(ids: readonly string[], known: readonly string[]): { provisioning: boolean; code: string; message: string } | null {
@@ -53,40 +52,10 @@ describe('assertEnableList', () => {
   })
 })
 
-describe('operatorAllowGate', () => {
-  it('answers an enabled id with the persisted attestation as both references', async () => {
-    const gate = operatorAllowGate(new Set(['calendar']), async () => ATT)
-    expect(await gate(T, 'calendar')).toEqual({ isolationTestResultId: ATT, dpiaDecisionId: ATT })
-  })
-
-  it('an id outside --enable gets null (the lifecycle then refuses GATE_REFUSED)', async () => {
-    let looked = false
-    const gate = operatorAllowGate(new Set(['calendar']), async () => ((looked = true), ATT))
-    expect(await gate(T, 'votes')).toBeNull()
-    expect(looked).toBe(false)
-  })
-
-  it('a denied id gets null even when the operator passed it', async () => {
-    const gate = operatorAllowGate(new Set(['board']), async () => ATT)
-    expect(await gate(T, 'board')).toBeNull()
-  })
-
-  it('vault gets null even when the operator passed it and an attestation exists (R30 addendum A1)', async () => {
-    let looked = false
-    const gate = operatorAllowGate(new Set(['vault']), async () => ((looked = true), ATT))
-    expect(await gate(T, 'vault')).toBeNull()
-    expect(looked).toBe(false)
-  })
-
-  it('no persisted attestation -> null, never a fresh random id', async () => {
-    const gate = operatorAllowGate(new Set(['calendar']), async () => null)
-    expect(await gate(T, 'calendar')).toBeNull()
-  })
-
-  it('the same attestation is returned on every call (resume re-reads it)', async () => {
-    const gate = operatorAllowGate(new Set(['calendar']), async () => ATT)
-    const a = await gate(T, 'calendar')
-    const b = await gate(T, 'calendar')
-    expect(a).toEqual(b)
+describe('TASK-044: the interim gate is gone', () => {
+  it('the package exports no operatorAllowGate, no INTERIM_GATE_BASIS and no attestation adapter', () => {
+    const names = Object.keys(provisioning)
+    for (const gone of ['operatorAllowGate', 'INTERIM_GATE_BASIS', 'pgAttestations']) expect(names).not.toContain(gone)
+    expect(names).toEqual(expect.arrayContaining(['enableCustomerModule', 'pgGate', 'EnableRefused', 'recordDpiaDecision', 'recordIsolationResults', 'unprovenEnablements', 'regateEnablement']))
   })
 })

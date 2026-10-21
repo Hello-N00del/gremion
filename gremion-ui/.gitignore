@@ -75,6 +75,14 @@ src/lib/i18n/paraglide/
 /src/lib/votes/
 /src/lib/modules/manifests/elections.*
 /src/lib/server/seed/seed-elections.ts
+# publishing
+/src/routes/newsletter/
+/src/routes/api/newsletter/
+/src/routes/api/internal/newsletter/
+/src/lib/server/newsletter/
+/src/lib/server/events/newsletter-audit-consumer.*
+/src/lib/server/seed/seed-newsletter.ts
+/src/lib/modules/manifests/newsletter.*
 # TASK-205b: the module halves' shell chrome (slots/*.slot.ts, layout-slot.ts consumer) and the messaging components
 /src/lib/modules/slots/
 /src/lib/components/messaging/

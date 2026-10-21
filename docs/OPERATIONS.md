@@ -231,15 +231,18 @@ GDPR-safe defaults and hard caps live in `.env.example`:
 
 | Variable | Default | Hard cap |
 |----------|---------|----------|
-| `LOG_ACCESS_RETENTION_SECONDS` | 14 days | 30 days |
-| `LOG_APP_RETENTION_SECONDS` | 30 days | 90 days |
-| `LOG_SECURITY_RETENTION_SECONDS` | 90 days | 180 days |
-| `LOG_SECURITY_NOPII_RETENTION_SECONDS` | 90 days | 365 days |
+| `LOG_ACCESS_RETENTION_SECONDS` | 14 days | 29 days |
+| `LOG_APP_RETENTION_SECONDS` | 28 days | 29 days |
+| `LOG_SECURITY_RETENTION_SECONDS` | 27 days | 29 days |
+| `LOG_SECURITY_NOPII_RETENTION_SECONDS` | 27 days | 30 days |
 
-Operator ceiling 30 d [D R29-I6]; the application tiers change with TASK-033. The
-edge files, Traefik's own log (`/logs/traefik/traefik.log`, read it through the
-vector container) and Keycloak's event store already obey it; see the "Upper
-bound" section of the policy.
+Operator ceiling 30 d [D R29-I6]: these are the defaults and caps of the gremion-ui
+retention tiers (`gremion-ui/src/lib/retention-tiers.ts`); only
+`LOG_ACCESS_RETENTION_SECONDS` is read by compose, the other three document the
+tier defaults, and the application tiers without a purge consumer change with
+TASK-033. The edge files, Traefik's own log (`/logs/traefik/traefik.log`, read it
+through the vector container) and Keycloak's event store already obey the ceiling;
+see the "Upper bound" section of the policy.
 
 ```bash
 docker compose logs -f vector             # pipeline diagnostics

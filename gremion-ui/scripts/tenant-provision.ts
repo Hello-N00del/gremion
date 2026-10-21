@@ -39,7 +39,7 @@ import {
   createPhaseA,
   createPhaseB,
   loadModuleJsons,
-  pgAttestations,
+  pgGate,
   pgLedger,
   pgModules,
   provisionalNote,
@@ -52,6 +52,7 @@ import {
   tokenFor,
   type AdminSpec,
   type CreateSpec,
+  type DpiaSpec,
   type ProvisioningDeps,
 } from '@gremion/provisioning'
 import { assertPlatform, dropKernelDatabase, type LifecycleModule, type ModuleServer } from '@gremion/tenant-store/lifecycle'
@@ -82,6 +83,8 @@ import {
 import { materializeConfig, assertBrandIdentityComplete } from '../src/lib/server/tenant/provisioner/materialize'
 import { tlog } from '../src/lib/server/observability/tenant-log'
 import { deleteTenant, type DeleteDeps, type LeafShredExecutor } from '../src/lib/server/tenant/provisioner/lifecycle'
+import { GATE_USAGE, GATE_VERBS, refusalLine, runGateVerb } from './tenant-provision-gate'
+import { parseDpiaMap, scratchFixturesAllowed } from './tenant-provision-scratch'
 
 const repoRoot = join(import.meta.dirname, '..', '..')
 const kcDir = join(repoRoot, 'docker', 'keycloak')
@@ -140,6 +143,20 @@ function releaseRef(): string {
   const v = reqEnv('GREMION_RELEASE_REF')
   if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(v)) throw new UsageError(`GREMION_RELEASE_REF ${JSON.stringify(v)} is not a release ref (1-64 of A-Z a-z 0-9 . _ -)`)
   return v
+}
+
+/**
+ * TASK-044 (lane note D4): the release tip the level-1 enable gate compares
+ * isolation evidence with. gremion-tenant derives it on the host from the
+ * H10-authenticated release tree (`git rev-parse HEAD^{commit}`) and passes it
+ * as GREMION_RELEASE_TIP; it is not GREMION_RELEASE_REF (the colour's
+ * IMAGE_TAG). Unset or not 40/64 lowercase hex: null, never an exit here --
+ * the gate then refuses every ENABLE with NO_RELEASE_TIP, and the verbs that
+ * enable nothing (status, suspend, ...) are unaffected.
+ */
+function releaseTip(): string | null {
+  const v = process.env.GREMION_RELEASE_TIP ?? ''
+  return /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/.test(v) ? v : null
 }
 
 /** Every variable phase A/B and init read, checked BEFORE anything connects. */
@@ -305,6 +322,17 @@ function positional(index = 0): string | undefined {
   return out[index]
 }
 
+/** TASK-044 D2: --dpia-json <file> carries the operator's DPIA decision per --enable module. */
+function dpiaFromFlag(): { dpia?: Record<string, DpiaSpec> } {
+  const path = flag('--dpia-json')
+  if (!path) return {}
+  try {
+    return { dpia: parseDpiaMap(readFileSync(path, 'utf-8')) }
+  } catch (err) {
+    throw new UsageError(`${err instanceof Error ? err.message : String(err)} (${path})`)
+  }
+}
+
 function createSpec(slug: string): CreateSpec & { configFile: string; bodyName: string } {
   const admins: AdminSpec[] = [
     { role: 'it-admin', email: reqFlag('--it-admin') },
@@ -319,6 +347,7 @@ function createSpec(slug: string): CreateSpec & { configFile: string; bodyName: 
     admins,
     configFile: reqFlag('--config'),
     bodyName: flag('--body-name') ?? 'Rat',
+    ...dpiaFromFlag(),
   }
 }
 
@@ -418,7 +447,8 @@ async function liveDeps(opts: { configFile?: string; bodyName?: string; needEdge
     const deps: ProvisioningDeps = {
       platformDomain: env.platformDomain,
       ledger: pgLedger(platform),
-      attestations: pgAttestations(platform),
+      // TASK-044: the level-1 gate over gremion_platform, on the host's derived release tip
+      gate: pgGate(platform, { releaseTipSha: releaseTip(), allowFixtureEvidence: scratchFixturesAllowed(process.env.GREMION_SCRATCH_FIXTURES, process.env.PLATFORM_DATABASE_URL) }),
       modules: pgModules({
         platform,
         catalogue,
@@ -648,9 +678,14 @@ async function cmdSuspendResume(which: 'suspend' | 'resume'): Promise<void> {
   })
 }
 
+/** A direct pool to gremion_platform (status and TASK-044's gate verbs); the caller ends it. */
+function openPlatformPool(): postgres.Sql {
+  return postgres(directPostgresUrl('PLATFORM_DATABASE_URL', reqEnv('PLATFORM_DATABASE_URL')), { max: 2, onnotice: () => {} })
+}
+
 async function cmdStatus(): Promise<void> {
   const slug = slugArg('status')
-  const platform = postgres(directPostgresUrl('PLATFORM_DATABASE_URL', reqEnv('PLATFORM_DATABASE_URL')), { max: 2, onnotice: () => {} })
+  const platform = openPlatformPool()
   try {
     await assertPlatform(platform)
     const adapters = customerAdapters({
@@ -672,7 +707,7 @@ async function cmdStatus(): Promise<void> {
         throw new Error('status reads no Keycloak')
       }),
     })
-    const s = await provisioningStatus(slug, { control: adapters.control, ledger: pgLedger(platform), attestations: pgAttestations(platform) })
+    const s = await provisioningStatus(slug, { control: adapters.control, ledger: pgLedger(platform), gate: pgGate(platform, { releaseTipSha: releaseTip() }) })
     console.log(JSON.stringify(s))
   } finally {
     await platform.end({ timeout: 5 })
@@ -897,7 +932,8 @@ const USAGE = `usage: tenant-create <verb> ...
   reconcile [--verify-only] <slug>|--all
   status <slug>
   operator-add <email> [--no-mail]
-  delete <slug> | bootstrap-provisioner | materialize-config <slug> [--config <path>]`
+  delete <slug> | bootstrap-provisioner | materialize-config <slug> [--config <path>]
+${GATE_USAGE}`
 
 async function main(): Promise<void> {
   const verb = process.argv[2]
@@ -937,6 +973,24 @@ async function main(): Promise<void> {
       return cmdMaterializeConfig()
     case 'provision':
       throw new UsageError('provision is retired (TASK-043): a customer is created by `gremion-tenant create` (phase-a, the host mail step, record-step, phase-b, the router)')
+    // TASK-044: the level-1 gate's verbs (tenant-provision-gate.ts)
+    case 'enable-module':
+    case 'dpia-record':
+    case 'isolation-record':
+    case 'gate-status':
+    case 'regate':
+      if (!GATE_VERBS.has(verb)) throw new UsageError(`unknown verb ${verb}`)
+      return runGateVerb(verb, {
+        releaseTip,
+        withLive,
+        openPlatform: openPlatformPool,
+        customerIdForSlug: async (s) => (await getTenantBySlug(s))?.id ?? null,
+        flag,
+        reqFlag,
+        positional,
+        usage: (m) => new UsageError(m),
+        log,
+      })
     default:
       throw new UsageError(`unknown verb ${verb}\n${USAGE}`)
   }
@@ -960,6 +1014,14 @@ function exitWithCode(): void {
 
 main()
   .catch((err) => {
+    // TASK-044: a gate refusal is exit 1 with its code and reason on stderr (a refusal, not a usage error)
+    const refused = refusalLine(err)
+    if (refused) {
+      tlog('error', '[tenant-create] REFUSED', { err: refused })
+      console.error(`[tenant-create] ${refused}`)
+      process.exitCode = 1
+      return
+    }
     const usage = err instanceof UsageError || (err instanceof ProvisioningError && ['INVALID_INPUT', 'MODULE_UNKNOWN', 'MODULE_DENIED', 'MODULE_NOT_LOADED', 'PRECONDITION', 'NOT_FOUND'].includes(err.code))
     tlog('error', '[tenant-create] FAILED', { err: err instanceof Error ? err.message : String(err) })
     console.error(`[tenant-create] ${usage ? 'USAGE' : 'FAILED'}: ${err instanceof Error ? err.message : String(err)}`)

@@ -11,6 +11,7 @@
     <nav aria-label="Hauptnavigation">
       <a href="/">Mandanten</a>
       <a href="/customers/new">Neuer Mandant</a>
+      <a href="/betrieb">Betrieb</a>
     </nav>
     <p class="who">
       Angemeldet als <strong>{data.operator.email ?? 'Operator'}</strong>

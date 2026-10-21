@@ -12,16 +12,21 @@
 //                        broker_account_created (kernel only)
 //   host                 gremion-vendor-mail realm-smtp --tenant, then
 //                        recordHostStep (verifies the stamp over Keycloak)
-//   phase B (container)  first_accounts_created -> per --enable: attestation
-//                        persisted, enableModule through the interim gate ->
-//                        broker users for the enabled modules -> active,
-//                        setup_complete
+//   phase B (container)  first_accounts_created -> per --enable: the
+//                        operator's DPIA decision recorded, enableModule
+//                        through the level-1 gate (TASK-044) -> broker users
+//                        for the enabled modules -> active, setup_complete
 //   host                 the router file (render-router + atomic write)
+// Both phases first run the gate's pre-flight (TASK-044 lane note D2): the
+// release tip, a current-tip isolation pass and a DPIA decision per --enable
+// module, BEFORE the phase's first write.
+import type { UnprovenEnablement } from '@gremion/tenant-store/lifecycle'
 import { assertUuid, ProvisioningError } from './errors.ts'
 import { doneKinds, latestStatus } from './ledger.ts'
 import { openLedger, runPhase, type RunPhaseResult } from './machine.ts'
-import { assertEnableList, INTERIM_GATE_BASIS, operatorAllowGate } from './operator-gate.ts'
-import type { AdminSpec, ControlRow, CustomerRef, ProvisioningDeps } from './ports.ts'
+import { enableOne, preflightGate } from './module-gate.ts'
+import { assertEnableList } from './operator-gate.ts'
+import type { AdminSpec, ControlRow, CustomerRef, DpiaSpec, ProvisioningDeps } from './ports.ts'
 import { assertCustomerSlug, principalFor, tokenFor } from './slug.ts'
 import { EXECUTION_ORDER, isComplete, type StepKind, type StepStatus } from './steps.ts'
 
@@ -37,6 +42,13 @@ export interface CreateSpec {
   operatorId: string
   /** The first IT-administrator and council-administrator (PRD-IDN-005). */
   admins: readonly AdminSpec[]
+  /**
+   * TASK-044 (lane note D2): the operator's dated DPIA-applicability decision
+   * per enabled module, recorded after phase A and before its enable. A module
+   * without one (and none recorded for the customer) refuses NO_DPIA_DECISION
+   * before any write.
+   */
+  dpia?: Readonly<Record<string, DpiaSpec>>
 }
 
 export function assertHost(host: string): string {
@@ -76,7 +88,7 @@ export function validateCreate(spec: CreateSpec, catalogueIds: readonly string[]
  * MODULE_VERSION_UNKNOWN in phase B, after the realm exists and both
  * administrators were invited, and the customer is stuck in `provisioning`.
  */
-async function assertEnableLoaded(enable: readonly string[], deps: ProvisioningDeps): Promise<void> {
+export async function assertEnableLoaded(enable: readonly string[], deps: Pick<ProvisioningDeps, 'modules'>): Promise<void> {
   if (!enable.length) return
   const missing = await deps.modules.unloaded(enable)
   if (missing.length) {
@@ -110,6 +122,8 @@ export interface PhaseOutcome {
 export async function createPhaseA(spec: CreateSpec, deps: ProvisioningDeps): Promise<PhaseOutcome & { registered: boolean }> {
   const v = validateCreate(spec, deps.modules.catalogueIds())
   await assertEnableLoaded(v.enable, deps)
+  // TASK-044 D2: a stale tip, a missing pass or a missing DPIA decision fails before a realm exists
+  await preflightGate(v.enable, spec.dpia, (await deps.control.getBySlug(v.slug))?.id ?? null, spec.operatorId, deps.gate)
   const { row, created } = await ensureControlRow(deps, v.slug, v.host)
   const c = refOf(row, v.host)
   await openLedger(deps.ledger, c.id, spec.operatorId)
@@ -195,6 +209,8 @@ export async function createPhaseB(spec: CreateSpec, deps: ProvisioningDeps): Pr
   const c = await requireCustomer(deps, v.slug)
   if (c.host !== v.host) throw new ProvisioningError('CUSTOMER_STATE', `customer ${v.slug} is bound to ${c.host}, not ${v.host}`)
   if (c.status !== 'provisioning' && c.status !== 'active') throw new ProvisioningError('CUSTOMER_STATE', `customer ${v.slug} is ${c.status}; resume it instead`)
+  // TASK-044 D2: re-checked before the accounts step (the tip or a result may have moved since phase A)
+  await preflightGate(v.enable, spec.dpia, c.id, spec.operatorId, deps.gate)
   const run = await runPhase('b', {
     customerId: c.id,
     operatorId: spec.operatorId,
@@ -208,15 +224,10 @@ export async function createPhaseB(spec: CreateSpec, deps: ProvisioningDeps): Pr
       },
     },
   })
-  // Q19: one attestation per (customer, module) persisted BEFORE its enable
-  // and re-read on resume; the gate answers only for the operator's list.
-  const enabledSet = new Set(v.enable)
-  const gate = operatorAllowGate(enabledSet, (customerId, moduleId) => deps.attestations.lookup(customerId, moduleId))
+  // TASK-044: the same path as a later enable (module-gate.ts): the DPIA
+  // decision recorded (reused on a resume), then enableModule through the gate.
   for (const moduleId of v.enable) {
-    if ((await deps.attestations.lookup(c.id, moduleId)) === null) {
-      await deps.attestations.ensure(c.id, moduleId, spec.operatorId, v.enable)
-    }
-    await deps.modules.enable(c, moduleId, gate, spec.operatorId)
+    await enableOne(c, moduleId, { operatorId: spec.operatorId, dpia: spec.dpia?.[moduleId] }, deps)
   }
   const enabled = (await deps.modules.enabled(c)).sort()
   const broker = await deps.broker.ensure(c, enabled)
@@ -282,11 +293,15 @@ export interface ProvisioningStatus {
   host: string | null
   complete: boolean
   steps: { kind: StepKind; status: StepStatus | 'absent' }[]
-  /** Q19 hand-off to TASK-044: the enablements whose references are interim attestations. */
-  interimAttestations: { moduleKey: string; attestationId: string; operatorId: string; createdAt: string; basis: string }[]
+  /**
+   * TASK-044 (Q8): the customer's enabled modules that are not proven on this
+   * release (no current-tip pass, a stale or interim reference, no written
+   * DPIA decision). Empty before go-live (TASK-038).
+   */
+  unprovenEnablements: Pick<UnprovenEnablement, 'moduleKey' | 'codes' | 'reason'>[]
 }
 
-export async function provisioningStatus(slug: string, deps: Pick<ProvisioningDeps, 'control' | 'ledger' | 'attestations'>): Promise<ProvisioningStatus> {
+export async function provisioningStatus(slug: string, deps: Pick<ProvisioningDeps, 'control' | 'ledger' | 'gate'>): Promise<ProvisioningStatus> {
   const s = assertCustomerSlug(slug)
   const row = await deps.control.getBySlug(s)
   if (!row) throw new ProvisioningError('NOT_FOUND', `no customer ${s}`)
@@ -300,12 +315,6 @@ export async function provisioningStatus(slug: string, deps: Pick<ProvisioningDe
     host: row.host,
     complete: isComplete(done),
     steps: EXECUTION_ORDER.map((kind) => ({ kind, status: latest.get(kind) ?? 'absent' })),
-    interimAttestations: (await deps.attestations.list(row.id)).map((a) => ({
-      moduleKey: a.moduleKey,
-      attestationId: a.attestationId,
-      operatorId: a.operatorId,
-      createdAt: a.createdAt.toISOString(),
-      basis: INTERIM_GATE_BASIS,
-    })),
+    unprovenEnablements: (await deps.gate.unproven(row.id)).map((u) => ({ moduleKey: u.moduleKey, codes: u.codes, reason: u.reason })),
   }
 }

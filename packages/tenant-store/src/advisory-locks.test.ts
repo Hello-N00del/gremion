@@ -18,6 +18,12 @@ describe('ADVISORY_LOCKS registry', () => {
     expect(Number.isInteger(ADVISORY_LOCKS.migration.objid)).toBe(true)
   })
 
+  it('names the outbox relay lock (TASK-079) under the kernel class id, distinct from the migration lock', () => {
+    expect(ADVISORY_LOCKS.outboxRelay.classid).toBe(ADVISORY_LOCK_CLASS_ID)
+    expect(ADVISORY_LOCKS.outboxRelay.objid).toBe(2)
+    expect(ADVISORY_LOCKS.outboxRelay.objid).not.toBe(ADVISORY_LOCKS.migration.objid)
+  })
+
   it('fails on a duplicate (classid, objid), naming both rows', () => {
     const dup = {
       migration: { classid: ADVISORY_LOCK_CLASS_ID, objid: 1, purpose: 'a' },

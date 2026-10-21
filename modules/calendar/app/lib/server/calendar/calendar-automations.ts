@@ -11,7 +11,7 @@
 //
 // The Helios and minutes paths are exposed as shared HTTP endpoints for
 // Stream B2 (Helios-Voting) and Stream B4 (Meeting Minutes) respectively.
-// See `docs/superpowers/specs/2026-04-15-calendar-improvements-design.md`.
+// See `docs/design-specs/2026-04-15-calendar-improvements-design.md`.
 
 import { getCalendarBackend } from './backend'
 import type { EventSource } from './backend'

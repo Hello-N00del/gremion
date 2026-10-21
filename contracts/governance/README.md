@@ -40,7 +40,7 @@ covered. Protocol, resolution, register and poll resources — and their
 events — are P3-additive (DOMAIN's events table) and are deliberately
 **absent** from both documents.
 
-## 4. Decisions carried into the spec (brief §5, orchestrator R23-26 defaults)
+## 4. Decisions carried into the spec (brief §5, maintainer R23-26 defaults)
 
 1. **Channel address**: `gremion.{tenantId}.gov.{entity}.{event}`, matching
    the ports subject grammar. The `govSubject` helper and its NATS topology

@@ -16,6 +16,7 @@ import { describe, expect, it } from 'vitest'
 const REPO = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
 const FILE = join(REPO, 'compose', 'control-panel', 'standalone.yml')
 const TEMPLATE = join(REPO, 'compose', 'control-panel', 'standalone.env.tmpl')
+const OPS_LINK = join(REPO, 'compose', 'control-panel', 'ops-link.yml')
 const HOST = 'panel.fixture.example'
 
 /** The template with every CHANGE_ME_ value filled by a fixture value. */
@@ -34,20 +35,20 @@ function envFromTemplate(over: Record<string, string | null> = {}): Record<strin
   return env
 }
 
-function render(env: Record<string, string>) {
+function render(env: Record<string, string>, files: string[] = [FILE]) {
   const base: Record<string, string> = {}
   for (const k of ['PATH', 'Path', 'SystemRoot', 'HOME', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'DOCKER_HOST', 'DOCKER_CONFIG', 'ProgramFiles', 'ProgramData']) {
     const v = process.env[k]
     if (v !== undefined) base[k] = v
   }
-  return spawnSync('docker', ['compose', '-f', FILE, 'config', '--format', 'json'], { env: { ...base, ...env }, encoding: 'utf8', timeout: 60_000 })
+  return spawnSync('docker', ['compose', ...files.flatMap((f) => ['-f', f]), 'config', '--format', 'json'], { env: { ...base, ...env }, encoding: 'utf8', timeout: 60_000 })
 }
 
 type Svc = Record<string, unknown>
-function service(env: Record<string, string>): Svc {
-  const r = render(env)
+function service(env: Record<string, string>, files?: string[]): Svc {
+  const r = render(env, files)
   expect(r.status, r.stderr).toBe(0)
-  const cfg = JSON.parse(r.stdout) as { services: Record<string, Svc> }
+  const cfg = JSON.parse(r.stdout) as { services: Record<string, Svc>; networks?: Record<string, { name?: string; external?: boolean }> }
   expect(Object.keys(cfg.services)).toEqual(['control-panel'])
   return cfg.services['control-panel']!
 }
@@ -109,5 +110,31 @@ describe('compose/control-panel/standalone.yml (TDD 17b, R29-I11)', () => {
     const svc = service(envFromTemplate({ IMAGE_TAG: 't', PANEL_NETWORK: 'n', PANEL_PORT: '4000' }))
     const ports = svc.ports as { host_ip?: string }[]
     expect(ports.every((p) => p.host_ip === '127.0.0.1')).toBe(true)
+  })
+})
+
+describe('compose/control-panel/ops-link.yml (the Betrieb page reads Prometheus server-side)', () => {
+  const env = () => envFromTemplate({ IMAGE_TAG: 't', PANEL_NETWORK: 'fixture_net', PANEL_OPS_NETWORK: 'fixture-ops_ops' })
+
+  it('adds the ops network and PANEL_PROMETHEUS_URL; Traefik stays pinned to the panel network; still one loopback port', () => {
+    const svc = service(env(), [FILE, OPS_LINK])
+    expect(Object.keys(svc.networks as Record<string, unknown>).sort()).toEqual(['ops', 'panel'])
+    expect((svc.environment as Record<string, string>).PANEL_PROMETHEUS_URL).toBe('http://prometheus:9090')
+    expect((svc.labels as Record<string, string>)['traefik.docker.network']).toBe('fixture_net')
+    expect(svc.ports as unknown[]).toHaveLength(1)
+    const r = render(env(), [FILE, OPS_LINK])
+    const cfg = JSON.parse(r.stdout) as { networks: Record<string, { name?: string; external?: boolean }> }
+    expect(cfg.networks.ops).toMatchObject({ name: 'fixture-ops_ops', external: true })
+  })
+
+  it('PANEL_OPS_NETWORK is required (no default network name)', () => {
+    const r = render(envFromTemplate({ IMAGE_TAG: 't', PANEL_NETWORK: 'fixture_net' }), [FILE, OPS_LINK])
+    expect(r.status).not.toBe(0)
+    expect(r.stderr).toMatch(/PANEL_OPS_NETWORK required/)
+  })
+
+  it('without the overlay the panel has no Prometheus URL (the page shows itself disabled)', () => {
+    const svc = service(envFromTemplate({ IMAGE_TAG: 't', PANEL_NETWORK: 'fixture_net' }))
+    expect((svc.environment as Record<string, string>).PANEL_PROMETHEUS_URL).toBeUndefined()
   })
 })

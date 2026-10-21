@@ -137,3 +137,35 @@ groups:
           or label_replace(absent(probe_success{job="blackbox-https"}), "component", "blackbox", "", "")
           or label_replace(absent(gremion_storage_component_bytes), "component", "storage-components", "", "")
           or label_replace(vector(0), "component", "none", "", "")
+
+      # ---- TASK-079: the dead-letter conditions (TRD-420; docs/runbooks/dead-letter.md) ----
+      # The three service gauges come from `events metrics` in each service container labelled
+      # org.gremion.events-metrics=<ctx>, collected by the host collector (emit_events, [A, 079-R31-1]);
+      # the DLQ stream size is the host collector's own jsz reading. NO absent() arm on any of the
+      # four, deliberately (the third_party_unreachable precedent): a host that runs no events service
+      # yet has no gauge, and an absent() arm would fire for ever there. A blind collector is the
+      # signal_absent and container_unhealthy conditions' to report.
+
+      # An outbox row the relay gave up on (relay_state dead_lettered): one component per context.
+      - record: gremion:cond:outbox_dead_lettered
+        expr: |
+          label_replace(max by (ctx) (gremion_outbox_dead_lettered) > bool 0, "component", "$1", "ctx", "(.*)")
+          or label_replace(vector(0), "component", "events-outbox", "", "")
+
+      # A consumer's message that reached MaxDeliver and went to the DLQ stream (inbox dead_lettered).
+      - record: gremion:cond:inbox_dead_lettered
+        expr: |
+          label_join(max by (ctx, consumer) (gremion_inbox_dead_lettered) > bool 0, "component", "/", "ctx", "consumer")
+          or label_replace(vector(0), "component", "events-inbox", "", "")
+
+      # An inbox row received or failed for over the delivery horizon: a consumer crashed on its last delivery.
+      - record: gremion:cond:inbox_stalled
+        expr: |
+          label_join(max by (ctx, consumer) (gremion_inbox_stalled) > bool 0, "component", "/", "ctx", "consumer")
+          or label_replace(vector(0), "component", "events-stalled", "", "")
+
+      # The tenant's DLQ stream holds any entry (a consumer dead letter or a MAX_DELIVERIES advisory).
+      - record: gremion:cond:dead_letter_queue
+        expr: |
+          label_join(max by (account, stream) (gremion_nats_stream_messages{stream="DLQ"}) > bool 0, "component", "/", "account", "stream")
+          or label_replace(vector(0), "component", "nats-dlq", "", "")

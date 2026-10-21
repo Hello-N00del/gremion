@@ -82,6 +82,10 @@ the flag.
   by `svelte-check` (0 errors). New files of that task are linted in full. File
   paths containing `[` or `]` (SvelteKit route params) are written with `?`
   in their place, because the override globs treat brackets as a class.
+  TASK-205c added the publishing and vault halves: 6 files, 2 rules, 7 findings
+  (`typescript/no-redundant-type-constituents` 6 in the vault routes,
+  `vitest/no-conditional-expect` 1 in publishing's resolve test); the baseline
+  stays at 70.
 
 ## Svelte 5 runes
 

@@ -8,13 +8,20 @@
 //
 // Endpoints:
 //   DELETE /api/admin/tenants/:slug/db
-//     — drops the content_<slug> database (DROP DATABASE IF EXISTS).
+//     — ends and evicts the tenant's in-process pool(s), then drops the
+//       content_<slug> database (DROP DATABASE IF EXISTS). An open connection
+//       blocks the drop, and a pool left in the registry would keep serving a
+//       database that is gone.
 //     — idempotent: missing DB is a no-op (returns 200).
+//     — the reserved slug `control` (the catalog database) is refused (400).
 //     — guard: x-internal-auth timingSafeEqual vs INTERNAL_CONTENT_SECRET.
 //
 //   DELETE /api/admin/tenants/:tenantId/catalog
-//     — removes the tenant row from the control catalog
-//       (DELETE FROM tenant_catalog WHERE tenant_id = $1).
+//     — removes the tenant row from the control catalog and evicts the tenant's
+//       in-process pool(s).
+//     — refused with 409 while the tenant's database still exists: the catalog
+//       row is what binds the id to that database, and removing it first would
+//       let a new id be bound to an old database. Drop the database first.
 //     — idempotent: missing row is a no-op (returns 200).
 //     — guard: x-internal-auth timingSafeEqual vs INTERNAL_CONTENT_SECRET.
 
@@ -23,6 +30,7 @@ import { timingSafeEqual } from 'node:crypto'
 import postgres from 'postgres'
 import type { Route } from './router.js'
 import { SLUG_PATTERN } from './guard.js'
+import { RESERVED_SLUGS, evictTenantPools } from '../tenant-store.js'
 
 // ── secret check (secret-only, no tenant-header requirement) ─────────────────
 
@@ -70,6 +78,15 @@ export interface AdminRouteDeps {
    * Falls back to the process env at call time if not supplied.
    */
   pgUrl?: string
+  /** Database name prefix. Production = `content_` (the default); tests override. */
+  dbPrefix?: string
+}
+
+/** PG object_in_use (55006): "database ... is being accessed by other users". */
+function isDatabaseInUse(err: unknown): boolean {
+  if (typeof err !== 'object' || err === null) return false
+  const { code, message } = err as { code?: unknown; message?: unknown }
+  return code === '55006' || (typeof message === 'string' && /being accessed by other users/i.test(message))
 }
 
 /**
@@ -78,6 +95,8 @@ export interface AdminRouteDeps {
  * can dispatch them via the admin-router (bypassing checkGuard entirely).
  */
 export function buildAdminRoutes(deps: AdminRouteDeps): Route[] {
+  const dbPrefix = deps.dbPrefix ?? 'content_'
+
   function getPgUrl(): string {
     const url = deps.pgUrl ?? process.env.CONTENT_PG_URL
     if (!url) throw new Error('[admin] CONTENT_PG_URL is not set')
@@ -106,16 +125,33 @@ export function buildAdminRoutes(deps: AdminRouteDeps): Route[] {
         if (!SLUG_PATTERN.test(slug)) {
           return sendJson(res, 400, {
             success: false,
-            error: 'invalid slug: must match ^[a-z0-9-]{1,30}$',
+            error: 'invalid slug: must be 1-30 lowercase alphanumerics or hyphens, not starting or ending with a hyphen',
           })
         }
 
-        const dbName = `content_${slug}`
+        // <prefix>control is the catalog database, not a tenant's.
+        if (RESERVED_SLUGS.has(slug)) {
+          return sendJson(res, 400, { success: false, error: 'invalid slug: reserved' })
+        }
+
+        const dbName = `${dbPrefix}${slug}`
         const pgUrl = getPgUrl()
         const admin = postgres(pgUrl, { max: 1, prepare: false })
         try {
+          // End this process's pool(s) for the tenant first: an open connection
+          // blocks DROP DATABASE, and a pool left behind would outlive its database.
+          await evictTenantPools({ slug })
           // DROP DATABASE cannot run inside a transaction.
-          await admin.unsafe(`DROP DATABASE IF EXISTS "${dbName}"`)
+          try {
+            await admin.unsafe(`DROP DATABASE IF EXISTS "${dbName}"`)
+          } catch (err) {
+            if (!isDatabaseInUse(err)) throw err
+            // A request that arrived between the eviction and the DROP opened a
+            // pool for this slug again. End it and retry once; a second failure
+            // is reported as it is.
+            await evictTenantPools({ slug })
+            await admin.unsafe(`DROP DATABASE IF EXISTS "${dbName}"`)
+          }
           console.log(`[admin] dropped database ${dbName} (IF EXISTS)`)
           return sendJson(res, 200, { success: true, dropped: dbName })
         } catch (err) {
@@ -144,28 +180,46 @@ export function buildAdminRoutes(deps: AdminRouteDeps): Route[] {
           return sendJson(res, 403, { success: false, error: 'forbidden' })
         }
 
-        const tenantId = params['tenantId'] ?? ''
+        const rawTenantId = params['tenantId'] ?? ''
         // Validate UUID format (basic check — postgres will reject a bad cast anyway).
         const UUID_PATTERN =
           /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
-        if (!UUID_PATTERN.test(tenantId)) {
+        if (!UUID_PATTERN.test(rawTenantId)) {
           return sendJson(res, 400, {
             success: false,
             error: 'invalid tenantId: must be a UUID',
           })
         }
+        // The pool registry and the catalog comparison use the lowercase spelling.
+        const tenantId = rawTenantId.toLowerCase()
 
         // Connect to the control DB directly (not through the storeFor LRU cache,
         // since the tenant being deleted may already be gone from the registry).
         const pgUrl = getPgUrl()
-        const controlDbName = 'content_control'
+        const controlDbName = `${dbPrefix}control`
         const controlUrl = pgUrl.replace(/\/[^/?#]*(\?|$)/, `/${controlDbName}$1`)
         const ctrl = postgres(controlUrl, { max: 1, prepare: false })
         try {
-          await ctrl.unsafe(
-            `DELETE FROM tenant_catalog WHERE tenant_id = $1::uuid`,
+          // One statement: the row goes only while its database is gone. A row for
+          // a database that still exists is what keeps an old database bound to its
+          // tenant; deleting it would let a NEW id be bound to that database.
+          const deleted = await ctrl.unsafe<{ slug: string }[]>(
+            `DELETE FROM tenant_catalog t
+              WHERE t.tenant_id = $1::uuid
+                AND NOT EXISTS (SELECT 1 FROM pg_database d WHERE d.datname = t.db_name)
+          RETURNING t.slug`,
             [tenantId],
           )
+          if (deleted.length === 0) {
+            const held = await ctrl.unsafe(`SELECT 1 FROM tenant_catalog WHERE tenant_id = $1::uuid`, [tenantId])
+            if (held.length > 0) {
+              return sendJson(res, 409, {
+                success: false,
+                error: 'tenant database still exists: drop it first',
+              })
+            }
+          }
+          await evictTenantPools({ id: tenantId, slug: deleted[0]?.slug })
           console.log(`[admin] deleted tenant_catalog row for ${tenantId} (IF EXISTS)`)
           return sendJson(res, 200, { success: true, tenantId })
         } catch (err) {

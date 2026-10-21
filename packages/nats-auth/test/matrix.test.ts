@@ -4,7 +4,8 @@ import { readdirSync, statSync } from 'node:fs'
 import path from 'node:path'
 import { describe, expect, test } from 'vitest'
 import { STREAMS } from '@gremion/ports/broker'
-import { FLOWS, NO_BROKER, NO_STREAM, OWNER_TO_MODULE, type MatrixInput, matrixViolations, loadRegistryAddresses } from '../src/flows.ts'
+import { FLOWS, NO_BROKER, NO_STREAM, OWNER_TO_MODULE, SYSTEM_STREAMS, type MatrixInput, matrixViolations, loadRegistryAddresses } from '../src/flows.ts'
+import { TENANT_JETSTREAM_LIMITS } from '../src/render.ts'
 
 const REPO = path.resolve(import.meta.dirname, '../../..')
 
@@ -15,6 +16,7 @@ const realInput = (): MatrixInput => ({
   flows: structuredClone(FLOWS) as MatrixInput['flows'],
   noBroker: [...NO_BROKER.ids],
   streams: structuredClone(STREAMS) as MatrixInput['streams'],
+  systemStreams: structuredClone(SYSTEM_STREAMS) as MatrixInput['streams'],
   registry: loadRegistryAddresses(REPO),
   ownerToModule: { ...OWNER_TO_MODULE },
   noStream: structuredClone(NO_STREAM.entries) as MatrixInput['noStream'],
@@ -99,6 +101,37 @@ describe('flow matrix (TDD 1)', () => {
     const input = realInput()
     input.flows.finance = { publishes: [], consumes: ['LEDGER'] }
     expect(matrixViolations(input).join('\n')).toMatch(/finance names unknown stream LEDGER/)
+  })
+
+  test('TASK-079 G5: the DLQ system stream is disjoint from every flow stream, and a flow filter that captures a dead-letter subject fails', () => {
+    expect(SYSTEM_STREAMS.DLQ!.subjects).toEqual(['gremion.*.dlq.>', '$JS.EVENT.ADVISORY.CONSUMER.MAX_DELIVERIES.>'])
+    const input = realInput()
+    input.streams.CONTENT = { name: 'CONTENT', subjects: ['gremion.*.>'] }
+    expect(matrixViolations(input).join('\n')).toMatch(/streams CONTENT .* and DLQ .* overlap/)
+  })
+
+  test('a system stream that overlaps a flow stream (or takes its name) fails', () => {
+    const input = realInput()
+    input.systemStreams!.DLQ = { name: 'DLQ', subjects: ['gremion.*.calendar.>'] }
+    expect(matrixViolations(input).join('\n')).toMatch(/overlap/)
+    const named = realInput()
+    named.systemStreams!.CONTENT = { name: 'CONTENT', subjects: ['gremion.*.x.>'] }
+    expect(matrixViolations(named).join('\n')).toMatch(/system stream CONTENT has the name of a flow stream/)
+  })
+
+  test('the DLQ adds no publisher requirement (the one-publisher-per-stream rule stays flow-only)', () => {
+    expect(matrixViolations(realInput()).join('\n')).not.toMatch(/DLQ has/)
+  })
+
+  test('the per-tenant stream limit leaves headroom: flow + system streams <= max_streams - 1 (TASK-080/084 add more)', () => {
+    const max = Number(/max_streams: (\d+)/.exec(TENANT_JETSTREAM_LIMITS)![1])
+    const used = Object.keys(STREAMS).length + Object.keys(SYSTEM_STREAMS).length
+    expect(used).toBe(5)
+    expect(used).toBeLessThanOrEqual(max - 1)
+  })
+
+  test('the provisioning no-stream entry is re-dated to TASK-080 (TASK-079 Q12)', () => {
+    expect(NO_STREAM.entries.find((e) => e.segment === 'provisioning')?.until).toBe('TASK-080')
   })
 
   test('FLOWS covers the four NATS callers and the kernel', () => {

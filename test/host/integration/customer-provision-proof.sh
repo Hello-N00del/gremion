@@ -455,7 +455,32 @@ skc() { # kcadm in the state keycloak (the admin password by a name-only -e)
 tenant() { # gremion-tenant against the laid-out root, as the operator
     MSYS_NO_PATHCONV=1 GREMION_ROOT="$(host_path "$(croot)")" GREMION_RELEASE_DIR="$ROOT_H" \
         GREMION_OPERATOR_ID="$PROOF_OPERATOR_ID" TENANT_DNS_PREFLIGHT="${PROOF_DNS_PREFLIGHT:-off}" \
+        GREMION_SCRATCH_FIXTURES="$(scratch_stack)" \
         bash "$ROOT/infra/host/bin/gremion-tenant" "$@"
+}
+# TASK-044 Q6: the stack name that lets the container gate accept the proof's
+# `scratch-fixture:` isolation rows -- ONLY a tNNN-<sha8> pooled stack, never a
+# host (PROOF_GREMION_ROOT) or any other name. Empty otherwise.
+scratch_stack() { if [[ -z "${PROOF_GREMION_ROOT:-}" && "$PSTACK" =~ ^t[0-9]{3}[a-z]?-[0-9a-f]{8}$ ]]; then printf '%s' "$PSTACK"; fi; }
+# seed_gate_fixtures <modules,csv> -- the rows the REAL level-1 gate needs for a
+# create with modules (TASK-044 section 9): a passing cross-customer isolation
+# row per module on this release tip (scratch-fixture.sql) and the operator's
+# DPIA decisions (dpia.json, carried by `create --dpia-json`). Scratch only.
+seed_gate_fixtures() {
+    [[ -n "$(scratch_stack)" ]] || die "gate fixtures are seeded only on a scratch pooled stack (POOLED_STACK=${PSTACK})"
+    local tip m dpia='{}'
+    [[ -n "$(q postgres "SELECT 1 FROM pg_database WHERE datname = 'gremion_platform'")" ]]         || die "gate fixtures need gremion_platform and the loaded catalogue (run gremion-tenant init first; --enable needs plt.module_version rows anyway)"
+    tip="$(git -C "$ROOT_H" rev-parse HEAD)"
+    [[ "$tip" =~ ^[0-9a-f]{40}$ ]] || die "no release tip: ${ROOT_H} is not a git checkout"
+    docker exec -i "$(svc state postgres)" psql -v ON_ERROR_STOP=1 -qU postgres -d gremion_platform -v "tip=${tip}" -v "modules=$1" -f - \
+        < "$ROOT_H/test/host/fixtures/customer-provision/scratch-fixture.sql" > /dev/null
+    for m in ${1//,/ }; do
+        [[ "$(q gremion_platform "SELECT count(*) FROM plt.isolation_test_result r JOIN plt.module m USING (module_id) WHERE m.module_key = '${m}' AND r.release_tip_sha = '${tip}' AND r.passed")" -ge 1 ]]             || die "gate fixtures: no passing isolation row for ${m} on ${tip} after seeding (is ${m} in plt.module?)"
+    done
+    for m in ${1//,/ }; do
+        dpia="$(jq -c --arg m "$m" '. + {($m): {requiresDpia: "no", reasonCodes: ["scratch_proof"], documentRef: "scratch-fixture: TOM annex (customer-provision-proof)"}}' <<< "$dpia")"
+    done
+    printf '%s\n' "$dpia" > "$OUT/ledger/dpia.json"
 }
 accounts() { # the rendered NATS accounts file(s)
     docker run --rm --name "${STACK}-accounts" -v "${PSTACK}_nats_accounts:/a:ro" --entrypoint sh "$PG_IMAGE" -c 'cat /a/*' | tr -d '\r'
@@ -736,8 +761,11 @@ phase_customer_create() {
         else bad "customer-create: --enable ${denied} was not refused before any write (exit ${rc}; before ${snap_before}; after ${snap_after})"; fi
     done
 
+    # TASK-044 section 9: the real gate. Without these rows the create below is REFUSED (NO_ISOLATION_RESULT).
+    seed_gate_fixtures calendar,votes
+    ok "customer-create: gate fixtures seeded (scratch-fixture: isolation rows, DPIA decisions in ledger/dpia.json)"
     tenant create "$X" --host "$(host_of "$X")" --config "$cfg" --it-admin "$(admin_addr "$X" it)" \
-        --council-admin "$(admin_addr "$X" rat)" --enable calendar,votes > "$OUT/ledger/create-x.log" 2>&1 \
+        --council-admin "$(admin_addr "$X" rat)" --enable calendar,votes --dpia-json "$OUT/ledger/dpia.json" > "$OUT/ledger/create-x.log" 2>&1 \
         || { tail -n 25 "$OUT/ledger/create-x.log" >&2; bad "customer-create: gremion-tenant create ${X} failed"; return; }
     tenant create "$Y" --host "$(host_of "$Y")" --config "$cfg" --it-admin "$(admin_addr "$Y" it)" \
         --council-admin "$(admin_addr "$Y" rat)" > "$OUT/ledger/create-y.log" 2>&1 \

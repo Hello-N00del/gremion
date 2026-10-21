@@ -24,8 +24,13 @@ export const NAMED: Record<'unit' | 'integration', Record<string, number>> = {
     'src/schema-gate.test.ts': 25,
     'src/index.test.ts': 2,
     // TASK-075 G1b: +2 (releaseRef refusal, platform baseline phases); r2: +2 (module phases, shipped baseline drift)
-    'src/lifecycle/lifecycle.test.ts': 26,
+    // TASK-044: +2 (the platform files after the baseline, 0007's keys)
+    'src/lifecycle/lifecycle.test.ts': 28,
     'src/lifecycle/export.test.ts': 8,
+    // TASK-044 TDD 3 (no database) and TDD 5 (the evidence stamp)
+    'src/lifecycle/enable-gate/gate.test.ts': 21,
+    // TASK-044 TDD 10: no EnableGate implementation outside enable-gate/** and test code
+    'src/lifecycle/enable-gate/source-scan.test.ts': 2,
     // TASK-075 G1: phase header / baseline / PHASE_MISSING, the dump module
     'src/phase.test.ts': 7,
     // TASK-077 (C7): +1 a service:/module: chain is refused by the generic CLI
@@ -52,6 +57,8 @@ export const NAMED: Record<'unit' | 'integration', Record<string, number>> = {
     // TASK-077 G3: the ledger option and the union of dirs (TDD 8, 17); C13 the kernel API reader role
     'test/integration/ledger-union.test.ts': 9,
     'test/integration/kernel-api-reader.test.ts': 4,
+    // TASK-044: TDD 1, 2, 3, 5, 9 and the A3 re-gate on the scratch stack
+    'test/integration/lifecycle-enable-gate.test.ts': 20,
   },
 }
 

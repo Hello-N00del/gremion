@@ -47,4 +47,33 @@ describe('MatrixClient token cache tenant isolation', () => {
     expect(first).toBe('mx-1'); expect(second).toBe('mx-1')
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
+  describe('TTL is fixed from mint time, independent of the Keycloak exp', () => {
+    beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime(new Date('2030-01-01T00:00:00Z')) })
+    afterEach(() => vi.useRealTimers())
+    const jwtExpIn = (sub: string, sec: number) =>
+      `h.${Buffer.from(JSON.stringify({ sub, exp: Math.floor(Date.now() / 1000) + sec })).toString('base64url')}.s`
+
+    it('serves from cache past the Keycloak exp, re-logs-in after the TTL', async () => {
+      const { getMatrixClient, __resetMatrixCachesForTests } = await import('./matrix-client')
+      __resetMatrixCachesForTests()
+      activeTenant = 'a'
+      const jwt = jwtExpIn('ttl-user', 600)
+      expect(await getMatrixClient().getMatrixToken(jwt)).toBe('mx-1')
+      vi.advanceTimersByTime(15 * 60_000)
+      expect(await getMatrixClient().getMatrixToken(jwt)).toBe('mx-1')
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+      vi.advanceTimersByTime(46 * 60_000) // 61 min after mint
+      const fresh = jwtExpIn('ttl-user', 600)
+      expect(await getMatrixClient().getMatrixToken(fresh)).toBe('mx-2')
+      expect(fetchMock).toHaveBeenCalledTimes(2)
+    })
+
+    it('still refuses to mint with an expired JWT and no cache entry', async () => {
+      const { getMatrixClient, __resetMatrixCachesForTests } = await import('./matrix-client')
+      __resetMatrixCachesForTests()
+      activeTenant = 'a'
+      await expect(getMatrixClient().getMatrixToken(jwtExpIn('gone', -10))).rejects.toThrow(/expired/)
+      expect(fetchMock).not.toHaveBeenCalled()
+    })
+  })
 })

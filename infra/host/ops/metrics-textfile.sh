@@ -15,6 +15,9 @@
 #   broker       gremion_nats_jsz_up, gremion_nats_stream_*, gremion_nats_consumer_*
 #                 (`jsz` read inside the broker container: its monitor listens
 #                 on the container loopback only, TASK-024)
+#   events        gremion_outbox_dead_lettered, gremion_inbox_{dead_lettered,stalled}
+#                 (TASK-079: `events metrics` run in each service container labelled
+#                 org.gremion.events-metrics=<ctx>; absent when none is labelled)
 #   filesystems   gremion_host_filesystem_{size,avail}_bytes{mountpoint}
 #   TRD-224       gremion_host_disk_provisioned_bytes{path},
 #                 gremion_storage_component_bytes{component}
@@ -59,6 +62,9 @@ note() { echo "[metrics] $*" >&2; }
 . "$SCRIPT_DIR/ops-lib.sh"
 
 STACK_NAME="$(ops_key STACK)"; STACK_NAME="${STACK_NAME:-gremion}"
+# the project holding postgres and nats: <STACK>-state unless a single-project
+# layout names it (GREMION_STATE_PROJECT)
+STATE_PROJECT_NAME="$(ops_key GREMION_STATE_PROJECT)"; STATE_PROJECT_NAME="${STATE_PROJECT_NAME:-${STACK_NAME}-state}"
 DISK_ROOT="$(ops_key GREMION_DISK_ROOT)"
 COMPONENTS="$(ops_key GREMION_STORAGE_COMPONENTS)"
 STORAGE_INTERVAL="$(ops_key GREMION_STORAGE_INTERVAL)"; STORAGE_INTERVAL="${STORAGE_INTERVAL:-900}"
@@ -189,7 +195,7 @@ cached_reading() {
 emit_postgres_connections() {
     local cid row used max
     cid="$(state_container postgres)"
-    [[ -n "$cid" ]] || { note "no ${STACK_NAME}-state postgres container -- PostgresConnections80pct fires by absence"; return 0; }
+    [[ -n "$cid" ]] || { note "no ${STATE_PROJECT_NAME} postgres container -- PostgresConnections80pct fires by absence"; return 0; }
     row="$(docker exec "$cid" psql -U postgres -tAF'|' -c \
         "SELECT (SELECT count(*) FROM pg_stat_activity), (SELECT setting::int FROM pg_settings WHERE name='max_connections')" \
         2>/dev/null || true)"
@@ -224,7 +230,7 @@ emit_postgres_connections() {
 emit_job_last_run() {
     local cid rows errf first_err="" out="" kind customer status epoch extra uuid_re='^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
     cid="$(state_container postgres)"
-    [[ -n "$cid" ]] || { note "no ${STACK_NAME}-state postgres container -- gremion_job_last_run absent"; return 0; }
+    [[ -n "$cid" ]] || { note "no ${STATE_PROJECT_NAME} postgres container -- gremion_job_last_run absent"; return 0; }
     # psql's stderr is kept (first line only) for the note: a refused connection,
     # a missing relation (platform chain below 0005), a permission error and a
     # typo in this query are different faults and must not read alike.
@@ -262,7 +268,7 @@ JSZ_CONSUMERS="${JSZ_STREAMS}"' | ($s.consumer_detail // [])[] as $c'
 emit_nats() {
     local cid json fam
     cid="$(state_container nats)"
-    [[ -n "$cid" ]] || { note "no ${STACK_NAME}-state nats container -- broker signals absent"; return 0; }
+    [[ -n "$cid" ]] || { note "no ${STATE_PROJECT_NAME} nats container -- broker signals absent"; return 0; }
     json="$(docker exec "$cid" wget -qO- 'http://127.0.0.1:8222/jsz?accounts=true&streams=true&consumers=true' 2>/dev/null || true)"
     if ! jq -e 'type == "object" and has("account_details")' >/dev/null 2>&1 <<< "$json"; then
         note "the broker's jsz did not answer with account details -- broker signals absent"
@@ -280,6 +286,34 @@ emit_nats() {
         printf '# TYPE gremion_nats_%s gauge\n' "${fam%%:*}"
         jq -r "${JSZ_ESC} ${JSZ_CONSUMERS} | \"gremion_nats_${fam%%:*}{account=\\\"\(\$a.name // \$a.id | esc)\\\",stream=\\\"\(\$s.name | esc)\\\",consumer=\\\"\(\$c.name | esc)\\\"} \((${fam#*:}) // 0)\"" <<< "$json"
     done
+}
+
+# TASK-079 (TRD-420, [A, 079-R31-1]): the dead-letter gauges of every service container that
+# carries the label org.gremion.events-metrics=<ctx>. Each is asked for its OWN database's
+# current row counts with `events metrics` (OpenMetrics text, @gremion/events), run in the
+# container's working directory; the families of all containers are merged into one block per
+# family (the text format keeps a family contiguous and names it once). A container that
+# answers without the gauges is skipped and a host with no labelled container prints nothing:
+# ABSENT, never 0 (the four conditions have no absent() arm, see prometheus/rules.yml).
+emit_events() {
+    local cid ctx out="" one
+    while read -r cid ctx; do
+        [[ -n "$cid" && -n "$ctx" ]] || continue
+        one="$(docker exec "$cid" pnpm exec events metrics --ctx "$ctx" 2>/dev/null || true)"
+        if ! grep -q '^gremion_outbox_dead_lettered{' <<< "$one"; then
+            note "events metrics in $cid (ctx $ctx) printed no gauges -- skipped"
+            continue
+        fi
+        out+="$one"$'\n'
+    done < <(docker ps --filter 'label=org.gremion.events-metrics' --format '{{.ID}} {{.Label "org.gremion.events-metrics"}}')
+    [[ -n "$out" ]] || return 0
+    awk '
+        /^# HELP / { f = $3; if (!(f in seen)) { seen[f] = 1; order[++n] = f }; help[f] = help[f] ? help[f] : $0; next }
+        /^# TYPE / { f = $3; if (!(f in seen)) { seen[f] = 1; order[++n] = f }; type[f] = type[f] ? type[f] : $0; next }
+        /^#/ { next }
+        NF { f = $1; sub(/[{].*/, "", f); if (!(f in seen)) { seen[f] = 1; order[++n] = f }; samples[f] = samples[f] $0 "\n" }
+        END { for (i = 1; i <= n; i++) { f = order[i]; if (f in help) print help[f]; if (f in type) print type[f]; printf "%s", samples[f] } }
+    ' <<< "$out"
 }
 
 # df -B1 of the filesystem holding <path>: "<size> <avail>", or nothing.
@@ -347,7 +381,7 @@ measure_components() {
             [[ -n "$bytes" ]] || continue
             printf 'gremion_storage_component_bytes{component="%s"} %s\n' "$(esc "$name")" "$bytes"
             n=$((n + 1))
-        done < <(jq -r --arg p "${STACK_NAME}-state_" '.[]? | select((.Name | startswith($p)) and ((.Name | endswith("pg-data")) or (.Name | endswith("vector-processed-logs")))) | [.Name, .Size] | @tsv' <<< "${vols:-[]}" 2>/dev/null || true)
+        done < <(jq -r --arg p "${STACK_NAME}-state_" '.[]? | select((.Name | startswith($p)) and ((.Name | endswith("pg-data")) or (.Name | endswith("vector-processed-logs")))) | [.Name, .Size] | @tsv' <<< "${vols:-[]}" 2>/dev/null | tr -d '\r' || true)
     fi
     (( n > 0 )) || note "no storage component measured -- gremion_storage_component_bytes is absent"
 }
@@ -373,6 +407,7 @@ main() {
         emit_postgres_connections
         emit_job_last_run
         emit_nats
+        emit_events
         emit_filesystems
         emit_storage_components
         printf '# HELP gremion_metrics_textfile_timestamp_seconds Unix time this collector last completed.\n'

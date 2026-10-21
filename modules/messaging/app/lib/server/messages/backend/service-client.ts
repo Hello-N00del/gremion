@@ -165,12 +165,13 @@ class ServiceMatrixClient implements MatrixClientPort {
       })
       .then((res) => {
         const matrixToken = res.matrixToken
-        // Cache until 60 s before the Keycloak token expires (max 1 hour).
-        const cacheUntil =
-          keycloakExp > 0
-            ? Math.min(keycloakExp - 60_000, Date.now() + 3_600_000)
-            : Date.now() + 3_600_000
-        serviceMatrixTokenCache.set(cacheKey, { matrixToken, expiresAt: cacheUntil })
+        // Fixed 1 h TTL from the exchange, NOT tied to the Keycloak exp: every
+        // access-token rotation used to re-exchange through the leaf (Synapse's
+        // per-address login limit answers 429, and each login creates a device).
+        // Safe: requests from an ended session stop at the authGuard
+        // (session.error), Bearer callers have their JWT exp verified in hooks, and
+        // web callers never see the Matrix token.
+        serviceMatrixTokenCache.set(cacheKey, { matrixToken, expiresAt: Date.now() + 3_600_000 })
         return matrixToken
       })
       .finally(() => {

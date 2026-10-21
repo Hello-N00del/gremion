@@ -79,7 +79,7 @@ test('the rule table is pinned by value: scopes, exemptions and the two internal
       scope: ['**'],
       exempt: [
         'k8s/**',
-        'docs/superpowers/**',
+        'docs/design-specs/**',
         '**/migrations*/**',
         'scripts/check-edge-host-model.mjs',
         'scripts/check-edge-host-model.test.mjs',
@@ -91,7 +91,7 @@ test('the rule table is pinned by value: scopes, exemptions and the two internal
       id: 'R2b',
       kind: 'text',
       scope: ['**/.env*', ...compose, 'docker/traefik/**', 'infra/host/templates/**', 'KNOWN_ISSUES.md', 'docs/**'],
-      exempt: ['docs/superpowers/**', 'test/host/fixtures/edge-host-model/**'],
+      exempt: ['docs/design-specs/**', 'test/host/fixtures/edge-host-model/**'],
       routerExempt: [],
     },
     {
@@ -115,7 +115,7 @@ test('the rule table is pinned by value: scopes, exemptions and the two internal
         'docs/**',
       ],
       exempt: [
-        'docs/superpowers/**',
+        'docs/design-specs/**',
         '**/migrations*/**',
         'k8s/**',
         'scripts/check-edge-host-model.mjs',

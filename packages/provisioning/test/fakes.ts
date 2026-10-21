@@ -2,11 +2,15 @@
 // state a real adapter would read back, and appends to `mutations` ONLY when a
 // call changes that state -- so "a rerun makes zero mutating calls" is an
 // assertion on this list, not on call counts.
-import type { EnableGate } from '@gremion/tenant-store/lifecycle'
+import { EnableRefused, type EnableGate, type EnableRefusedCode, type UnprovenEnablement } from '@gremion/tenant-store/lifecycle'
 import { memoryLedger } from '../src/ledger.ts'
-import type { AdminSpec, ControlRow, CustomerRef, KernelPostCondition, ProvisioningDeps, SmtpReadBack } from '../src/ports.ts'
+import type { AdminSpec, ControlRow, CustomerRef, DpiaSpec, GatePort, KernelPostCondition, ProvisioningDeps, SmtpReadBack } from '../src/ports.ts'
 
 export const OPERATOR = '8d6b9c7e-1f2a-4b3c-9d4e-5f6a7b8c9d0e'
+/** The release tip the fake gate runs on (GREMION_RELEASE_TIP). */
+export const TIP = 'a1'.repeat(20)
+/** A written DPIA decision as the create request carries it (lane note D2). */
+export const DPIA: DpiaSpec = { requiresDpia: 'no', reasonCodes: ['no_special_category'], documentRef: 'TOM-Anhang 4.1' }
 export const PLATFORM_DOMAIN = 'platform.example'
 export const ADMINS: AdminSpec[] = [
   { role: 'it-admin', email: 'it@customer.example' },
@@ -39,7 +43,12 @@ export interface World {
   prefixes: Set<string>
   broker: Map<string, string[]>
   enabled: Map<string, Map<string, { gateRefs: [string, string]; by: string }>>
-  attestations: Map<string, { id: string; operatorId: string; enableList: string[]; createdAt: Date }>
+  /** TASK-044: the release tip the gate compares with (null: unset). */
+  tip: string | null
+  /** TASK-044: the latest cross_customer result per module (absent: none recorded). */
+  isolation: Map<string, { id: string; passed: boolean; tip: string }>
+  /** TASK-044: DPIA decisions per `${customerId}/${module}`, oldest first. */
+  dpia: Map<string, { id: string; decision: DpiaSpec; operatorId: string }[]>
   /** Test knobs. */
   knobs: { seedsOn: boolean; runnerShape: 'gremion-ui' | 'tenant-store'; dnsFails: boolean }
   /**
@@ -63,7 +72,10 @@ export function world(): World {
     prefixes: new Set(),
     broker: new Map(),
     enabled: new Map(),
-    attestations: new Map(),
+    tip: TIP,
+    // every module but the denied ones holds a current-tip pass unless a test says not
+    isolation: new Map(['calendar', 'publishing', 'votes', UNDECIDED_MODULE].map((m) => [m, { id: uuidv7(), passed: true, tip: TIP }])),
+    dpia: new Map(),
     knobs: { seedsOn: false, runnerShape: 'gremion-ui', dnsFails: false },
     unloaded: new Set([UNDECIDED_MODULE]),
   }
@@ -250,24 +262,66 @@ export function deps(w: World, catalogue = ['board', 'calendar', 'publishing', '
         return [...(w.enabled.get(c.id)?.keys() ?? [])]
       },
     },
-    attestations: {
-      async lookup(customerId, moduleKey) {
-        return w.attestations.get(`${customerId}/${moduleKey}`)?.id ?? null
-      },
-      async ensure(customerId, moduleKey, operatorId, enableList) {
-        const key = `${customerId}/${moduleKey}`
-        const cur = w.attestations.get(key)
-        if (cur) return cur.id
-        const id = uuidv7()
-        w.attestations.set(key, { id, operatorId, enableList: [...enableList], createdAt: new Date(Date.UTC(2026, 8, 30)) })
-        m(`plt:attest ${moduleKey}`)
-        return id
-      },
-      async list(customerId) {
-        return [...w.attestations.entries()]
-          .filter(([k]) => k.startsWith(`${customerId}/`))
-          .map(([k, v]) => ({ moduleKey: k.split('/')[1]!, attestationId: v.id, operatorId: v.operatorId, createdAt: v.createdAt }))
-      },
+    gate: fakeGate(w),
+  }
+}
+
+/**
+ * The gate the way lifecycle/enable-gate answers, over the world's isolation
+ * results and DPIA decisions (the real one is proven against PostgreSQL in
+ * tenant-store's lifecycle-enable-gate integration spec).
+ */
+export function fakeGate(w: World): GatePort {
+  const refuse = (code: EnableRefusedCode, m: string, c: string | null, why: string) => new EnableRefused(code, `module ${m} for ${c ?? 'a customer not created yet'}: ${why}`, m, c, w.tip)
+  const isolation = (m: string, c: string | null): string => {
+    if (w.tip === null) throw new EnableRefused('NO_RELEASE_TIP', `module ${m}: the release tip is unset`, m, c, null)
+    const r = w.isolation.get(m)
+    if (!r) throw refuse('NO_ISOLATION_RESULT', m, c, 'no result')
+    if (!r.passed) throw refuse('ISOLATION_FAILED', m, c, 'failed')
+    if (r.tip !== w.tip) throw refuse('ISOLATION_STALE_TIP', m, c, `passed on ${r.tip}`)
+    return r.id
+  }
+  const latestDpia = (c: string, m: string) => w.dpia.get(`${c}/${m}`)?.at(-1)
+  const enableGate: EnableGate = async (c, m) => {
+    const iso = isolation(m, c)
+    const d = latestDpia(c, m)
+    if (!d || !d.decision.documentRef) throw refuse('NO_DPIA_DECISION', m, c, 'no written decision')
+    return { isolationTestResultId: iso, dpiaDecisionId: d.id, crossBodyTestResultId: null }
+  }
+  return {
+    get releaseTipSha() {
+      return w.tip
+    },
+    enableGate,
+    async assertIsolationProven(keys, c) {
+      for (const k of keys) isolation(k, c)
+    },
+    async hasDpiaDecision(c, m) {
+      return !!latestDpia(c, m)?.decision.documentRef
+    },
+    async recordDpia(c, m, decision, operatorId) {
+      const cur = latestDpia(c, m)
+      if (cur && JSON.stringify(cur.decision) === JSON.stringify(decision)) return { dpiaDecisionId: cur.id, created: false }
+      const id = uuidv7()
+      w.dpia.set(`${c}/${m}`, [...(w.dpia.get(`${c}/${m}`) ?? []), { id, decision: { ...decision, reasonCodes: [...decision.reasonCodes] }, operatorId }])
+      w.mutations.push(`ops:dpia ${m}`)
+      return { dpiaDecisionId: id, created: true }
+    },
+    async unproven(customerId) {
+      const out: UnprovenEnablement[] = []
+      for (const [cid, mods] of w.enabled) {
+        if (customerId !== undefined && cid !== customerId) continue
+        for (const [m, e] of mods) {
+          try {
+            const g = await enableGate(cid, m)
+            if (g?.isolationTestResultId !== e.gateRefs[0]) throw refuse('ISOLATION_STALE_TIP', m, cid, 'stored reference is not the current pass')
+          } catch (err) {
+            if (!(err instanceof EnableRefused)) throw err
+            out.push({ customerId: cid, moduleKey: m, isolationTestResultId: e.gateRefs[0], dpiaDecisionId: e.gateRefs[1], codes: [err.code], reason: err.reason })
+          }
+        }
+      }
+      return out
     },
   }
 }

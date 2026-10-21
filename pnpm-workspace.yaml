@@ -47,15 +47,19 @@ onlyBuiltDependencies:
 # resolved tree honours it, and rejects an UNBOUNDED replacement — a bare
 # `>=x.y.z` raises the floor but removes the ceiling, admitting the next major.
 overrides:
-  # GHSA — cookie <0.7.0. The ceiling is NEW: while this read a bare '>=0.7.2'
-  # it forced cookie 1.1.1 into @sveltejs/kit, which declares 'cookie: ^0.6.0' —
-  # two majors outside its own range. '<1' still clears the advisory (0.7.2 is
-  # the first patched release) without the unrequested major jump.
+  # GHSA-pxg6-pf52-xh8x (CVE-2024-47764) — cookie <0.7.0 accepts out-of-bounds
+  # characters in name, path and domain; first patched release 0.7.0, the floor is
+  # held at 0.7.2. The ceiling is NEW: while this read a bare '>=0.7.2' it forced
+  # cookie 1.1.1 into @sveltejs/kit, which declares 'cookie: ^0.6.0' — two majors
+  # outside its own range. '<1' still clears the advisory without that major jump.
   cookie@<0.7.0: '>=0.7.2 <1'
-  # GHSA — dompurify <=3.4.12: mXSS sanitiser bypass (Dependabot #58). Reached
-  # through isomorphic-dompurify in both workspace apps; nothing depends on the
-  # exact pin, so the floor just moves to the first patched release.
-  dompurify: 3.4.13
+  # GHSA — dompurify <=3.4.12: mXSS sanitiser bypass (Dependabot #58); GHSA-p98j-92pf-mc4p
+  # + GHSA-6688-9rhm-gjv2 — 3.4.13 to 3.4.15: a node-removing afterSanitize hook leaves a
+  # sanitisation bypass (first patched 3.4.16). Reached through isomorphic-dompurify in both
+  # workspace apps. This was an EXACT pin at 3.4.13 — a pin cannot follow an advisory: once
+  # 3.4.13 itself was covered it held the tree one release inside the vulnerable range. A
+  # floor bounded to 3.x patches the line instead, and lets the next fix land by re-lock.
+  dompurify: '>=3.4.16 <4'
   # GHSA — undici <7.29.0: TLS certificate validation bypass via dispatcher,
   # cross-origin request routing via SOCKS5, WebSocket client DoS, plus four
   # lower-severity issues (5 open Dependabot alerts, 1 HIGH). Pulled in transitively
@@ -64,7 +68,16 @@ overrides:
   # talks to Keycloak over HTTPS pinned to an internal CA (G-080), so a
   # dispatcher-level verification bypass undermines that trust anchor.
   # The same override is applied in every repository that consumes this workspace.
-  undici: 7.29.0
+  #
+  # Then GHSA-w293-vg96-wgc3 (HIGH, a TLS certificate validation bypass through a dropped
+  # connection, >=7.24.1), GHSA-rfgv-xxqx-mfg5 (HIGH, unrequested WebSocket subprotocol DoS)
+  # and eight more (cookie-cache cross-user disclosure, retry-interceptor response splitting,
+  # unbounded decompression, WebSocketStream close, ...) landed on every release below 7.29.1.
+  # This was an EXACT pin at 7.29.0 — the shape that already went stale once (7.28.0 in the
+  # product repository): a pin cannot follow an advisory, it holds the tree one release inside
+  # the vulnerable range. A floor bounded to 7.x patches the line and lets the next fix land by
+  # re-lock. jsdom declares a 7.x range, so the ceiling costs nothing.
+  undici: '>=7.29.1 <8'
   # GHSA-g7r4-m6w7-qqqr — esbuild dev-server arbitrary file read on Windows.
   # Pulled in via tsx's own `esbuild: ~0.28.0` dependency, which is patched
   # only starting at 0.28.1 (patch bump within tsx's own allowed range).
@@ -92,9 +105,13 @@ overrides:
   # toolchain; scoped selector so the bump stays inside the 8.x line.
   postcss@<8.5.23: '>=8.5.23 <9'
   # GHSA-2x7j-588g-ccc2 (HIGH) + GHSA-wmmp-3585-3rmp + GHSA-cc9r-2j5m-2m83 (nodemailer <9.1.0)
-  # + GHSA-8m3c-c648-2xjj (<=9.1.0). Direct dependency of gremion-ui; the floor is held here so
-  # scripts/check-cve-floors.mjs can watch it. Bounded to 9.x: 10 is a major.
-  nodemailer: '>=9.1.1 <10'
+  # + GHSA-8m3c-c648-2xjj (<=9.1.0), and the ones that are only fixed on the 10.x line:
+  # GHSA-prgh-xp8r-p3m5 (HIGH, <=10.0.4), GHSA-v53p-9fqp-m79j (HIGH, address-parser ReDoS,
+  # <=10.0.5), GHSA-g57g-f23g-4646 (<10.0.9), GHSA-6vj9-mwq6-2f5v + GHSA-8vvx-rff5-p5rq
+  # (<10.0.2). 9.x never receives those fixes, so the floor is the first release past all of
+  # them: 10.0.9. Direct dependency of gremion-ui; the floor is held here so
+  # scripts/check-cve-floors.mjs can watch it. Bounded to 10.x: 11 would be a major.
+  nodemailer: '>=10.0.9 <11'
   # GHSA-82fw-gwwq-j7x9 — vitest >=2.1.0 <4.1.11; the advisory lives in @vitest/mocker, which
   # vitest pins exactly, so both are floored and both stay on the 4.x line.
   vitest: '>=4.1.11 <5'
@@ -108,3 +125,8 @@ overrides:
   # first patched release 5.9.2). Transitive through @sveltejs/kit, which declares
   # `devalue: ^5.x`; bounded to 5.x so the floor never drags kit onto devalue 6.
   devalue: '>=5.9.2 <6'
+  # GHSA-68fv-2mgg-jv7q (HIGH) — source-map-js >=1.0.0 <1.2.2: event-loop denial of service
+  # through indexed source-map section offsets. Build-time only (gremion-public > @sveltejs/kit
+  # > vite > postcss > source-map-js); the postcss floor above does not lift it, because
+  # postcss 8.5.23 still accepts source-map-js 1.2.1. Scoped selector, bounded to 1.x.
+  source-map-js@<1.2.2: '>=1.2.2 <2'
