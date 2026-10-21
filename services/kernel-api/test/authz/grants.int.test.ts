@@ -1,0 +1,200 @@
+// TDD 7, 8, 11, 12, 16 + M-OFF-2/4: the grant service (TRD-091, TRD-090, R29-I7),
+// events in the same transaction, the sweep.
+import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { GrantError } from '../../src/authz/errors.ts'
+import { issueGrant, listGrants, revokeAllForPerson, revokeGrant, type GrantDeps, type Granter } from '../../src/authz/grants.ts'
+import { decide } from '../../src/authz/pdp.ts'
+import { sweepGrants } from '../../src/authz/sweep.ts'
+import { uuidv7 } from './db.ts'
+import { buildWorld, makeRegistry, seedGrant, type World } from './world.ts'
+
+let w: World
+let w2: World
+const reg = makeRegistry(['publishing', 'votes', 'board', 'calendar', 'finance'])
+const NOW = () => Math.floor(Date.now() / 1000)
+const deps: GrantDeps = { enabledModules: reg.read }
+
+const claims = (sub: string, o: Record<string, unknown> = {}): Granter => ({ kind: 'person', claims: { sub, acr: 'loa2', auth_time: NOW() - 10, ...o } })
+const refused = async (p: Promise<unknown>): Promise<GrantError> => {
+  try {
+    await p
+  } catch (e) {
+    if (e instanceof GrantError) return e
+    throw e
+  }
+  throw new Error('expected a GrantError, the call succeeded')
+}
+const count = async (world: World) => Number((await world.db.admin`SELECT count(*)::int AS n FROM idt.authz_grant`)[0]!.n)
+const events = async (world: World, grantId: string) =>
+  world.db.admin<{ event_type: string; aggregate_version: string }[]>`SELECT event_type, aggregate_version::text FROM idt.outbox WHERE aggregate_id = ${grantId}::uuid ORDER BY aggregate_version`
+
+beforeAll(async () => {
+  w = await buildWorld('grants', undefined, ['admin', 'alice', 'bob', 'carol', 'impostor'])
+  w2 = await buildWorld('grants2', undefined, ['admin'])
+  await seedGrant(w.db.admin, w.db.customerId, { bodyId: w.bodyA, personId: w.persons.admin!, key: 'body_admin' })
+  await seedGrant(w.db.admin, w.db.customerId, { bodyId: w.bodyA, personId: w.persons.impostor!, key: 'member' })
+})
+afterAll(async () => {
+  await Promise.allSettled([w?.db.close(), w2?.db.close()])
+})
+
+const base = (o: Record<string, unknown> = {}) => ({ bodyId: w.bodyA, subjectPersonId: w.persons.alice!, grantKind: 'role' as const, key: 'member', granterRole: 'body_admin', ...o })
+
+describe('TRD-091 server-verified granter role', () => {
+  it('a mismatching client-supplied granterRole is 403 with 0 rows; the matching one is 201', async () => {
+    const before = await count(w)
+    const e = await refused(issueGrant(w.db.app, deps, w.db.customerId, claims('sub-admin'), base({ granterRole: 'council_admin' })))
+    expect([e.code, e.status]).toEqual(['granter_role_mismatch', 403])
+    expect(await count(w)).toBe(before)
+    const g = await issueGrant(w.db.app, deps, w.db.customerId, claims('sub-admin'), base())
+    expect(g.state).toBe('active')
+    expect(g.granter_kind).toBe('person')
+    expect(g.source).toBe('customer_admin')
+    expect(await count(w)).toBe(before + 1)
+  })
+  it('a granter without the granting capability is refused; a self-grant is refused', async () => {
+    expect((await refused(issueGrant(w.db.app, deps, w.db.customerId, claims('sub-impostor'), base({ granterRole: 'member' })))).code).toBe('forbidden')
+    expect((await refused(issueGrant(w.db.app, deps, w.db.customerId, claims('sub-admin'), base({ subjectPersonId: w.persons.admin! })))).code).toBe('self_grant')
+  })
+})
+
+describe('R29-I7 customer administrator inside their own tenant', () => {
+  it('cannot grant into another tenant (0 rows) or a platform-level key', async () => {
+    const before2 = await count(w2)
+    const e = await refused(issueGrant(w.db.app, deps, w2.db.customerId, claims('sub-admin'), base({ bodyId: w2.bodyA, subjectPersonId: w2.persons.admin! })))
+    expect(['forbidden', 'unknown_subject']).toContain(e.code)
+    expect(await count(w2)).toBe(before2)
+    const p = await refused(issueGrant(w.db.app, deps, w.db.customerId, claims('sub-admin'), base({ grantKind: 'capability', key: 'platform.operate' })))
+    expect(p.code).toBe('platform_level')
+  })
+})
+
+describe('TRD-090 step-up for privileged grants', () => {
+  const req = (o: Record<string, unknown> = {}) => base({ key: 'body_admin', subjectPersonId: w.persons.bob!, ...o })
+  it('refuses 401 insufficient_user_authentication with 0 rows: acr low, auth_time missing, auth_time stale', async () => {
+    const before = await count(w)
+    for (const c of [{ acr: 'loa1' }, { auth_time: undefined }, { auth_time: NOW() - 301 }]) {
+      const e = await refused(issueGrant(w.db.app, deps, w.db.customerId, claims('sub-admin', c), req()))
+      expect([e.code, e.status]).toEqual(['insufficient_user_authentication', 401])
+    }
+    expect(await count(w)).toBe(before)
+  })
+  it('allows with a fresh step-up (acr loa2, auth_time <= 300 s); an acr-only check would not', async () => {
+    const g = await issueGrant(w.db.app, deps, w.db.customerId, claims('sub-admin', { auth_time: NOW() - 299 }), req())
+    expect(g.role_key).toBe('body_admin')
+  })
+  it('a non-privileged grant needs no step-up', async () => {
+    const g = await issueGrant(w.db.app, deps, w.db.customerId, claims('sub-admin', { acr: 'loa1', auth_time: undefined }), base({ subjectPersonId: w.persons.carol! }))
+    expect(g.state).toBe('active')
+  })
+})
+
+describe('module awareness on issue', () => {
+  it('a capability of a disabled module is refused (409) with 0 rows', async () => {
+    const off = makeRegistry(['votes'])
+    const before = await count(w)
+    const e = await refused(issueGrant(w.db.app, { enabledModules: off.read }, w.db.customerId, claims('sub-admin'), base({ grantKind: 'capability', key: 'newsletter.send' })))
+    expect(e.code).toBe('module_not_enabled')
+    expect(await count(w)).toBe(before)
+  })
+})
+
+describe('events in the same transaction', () => {
+  it('issue -> granted v1; revoke -> revoked v2; rollback leaves no outbox row', async () => {
+    const g = await issueGrant(w.db.app, deps, w.db.customerId, claims('sub-admin'), base({ subjectPersonId: w.persons.bob!, key: 'helper' }))
+    expect((await events(w, g.grant_id)).map((e) => [e.event_type, e.aggregate_version])).toEqual([['de.gremion.idt.grant.granted.v1', '1']])
+    await revokeGrant(w.db.app, deps, w.db.customerId, claims('sub-admin'), g.grant_id)
+    expect((await events(w, g.grant_id)).map((e) => [e.event_type, e.aggregate_version])).toEqual([
+      ['de.gremion.idt.grant.granted.v1', '1'],
+      ['de.gremion.idt.grant.revoked.v1', '2'],
+    ])
+    const outbox = Number((await w.db.admin`SELECT count(*)::int AS n FROM idt.outbox`)[0]!.n)
+    const rows = Number((await w.db.admin`SELECT count(*)::int AS n FROM idt.authz_grant`)[0]!.n)
+    // a failing second statement after the insert+enqueue rolls both back
+    await expect(
+      w.db.app.begin(async (tx) => {
+        await tx`SELECT set_config('gremion.customer_id', ${w.db.customerId}, true)`
+        const { emitGrantEvent } = await import('../../src/authz/events.ts')
+        const id = uuidv7()
+        await tx`INSERT INTO idt.authz_grant (grant_id, customer_id, body_id, subject_person_id, grant_kind, role_key, granter_kind, granted_by, source, state, created_by_kind, created_by, updated_by_kind, updated_by)
+                 VALUES (${id}::uuid, ${w.db.customerId}::uuid, ${w.bodyA}::uuid, ${w.persons.carol!}::uuid, 'role', 'member', 'operator', ${uuidv7()}::uuid, 'control_panel', 'active', 'system', NULL, 'system', NULL)`
+        await emitGrantEvent(tx as never, 'granted', { grant_id: id, body_id: w.bodyA, subject_person_id: w.persons.carol!, grant_kind: 'role', role_key: 'member', capability_key: null, resource_kind: null, resource_id: null, valid_from: new Date(), valid_until: null, granter_kind: 'operator', granted_by: null, source: 'control_panel', state: 'active', revoked_at: null, revoke_reason: null, row_version: 1 })
+        throw new Error('rollback')
+      }),
+    ).rejects.toThrow('rollback')
+    expect(Number((await w.db.admin`SELECT count(*)::int AS n FROM idt.outbox`)[0]!.n)).toBe(outbox)
+    expect(Number((await w.db.admin`SELECT count(*)::int AS n FROM idt.authz_grant`)[0]!.n)).toBe(rows)
+  })
+})
+
+describe('sweep', () => {
+  it('expiry emits expired.v1 once even with two concurrent sweepers; a due scheduled grant activates (granted again, higher version)', async () => {
+    const past = new Date(Date.now() - 7_200_000).toISOString()
+    const expiring = await seedGrant(w.db.admin, w.db.customerId, { bodyId: w.bodyA, personId: w.persons.alice!, key: 'idt.body.read', kind: 'capability', validFrom: past, validUntil: new Date(Date.now() - 1000).toISOString() })
+    const due = await seedGrant(w.db.admin, w.db.customerId, { bodyId: w.bodyA, personId: w.persons.carol!, key: 'idt.body.read', kind: 'capability', state: 'scheduled', validFrom: past })
+    const [a, b] = await Promise.all([sweepGrants(w.db.app, reg.read, w.db.customerId), sweepGrants(w.db.app, reg.read, w.db.customerId)])
+    expect(a.expired + b.expired).toBe(1)
+    expect((await events(w, expiring)).filter((e) => e.event_type.endsWith('expired.v1'))).toHaveLength(1)
+    const ev = await events(w, due)
+    expect(ev.map((e) => e.event_type)).toEqual(['de.gremion.idt.grant.granted.v1'])
+    expect(Number(ev[0]!.aggregate_version)).toBeGreaterThan(1)
+  })
+  it('M-OFF-2: disabling publishing revokes the live grant (module_disabled) with an event; kernel grants untouched', async () => {
+    const news = await seedGrant(w.db.admin, w.db.customerId, { bodyId: w.bodyA, personId: w.persons.alice!, key: 'newsletter.send', kind: 'capability' })
+    const kernel = await seedGrant(w.db.admin, w.db.customerId, { bodyId: w.bodyA, personId: w.persons.alice!, key: 'idt.grant.read', kind: 'capability' })
+    const r = makeRegistry(['votes', 'board', 'calendar', 'finance'])
+    const res = await sweepGrants(w.db.app, r.read, w.db.customerId)
+    expect(res.moduleRevoked).toBeGreaterThanOrEqual(1)
+    const rows = await w.db.admin`SELECT grant_id::text, state, revoke_reason FROM idt.authz_grant WHERE grant_id IN (${news}::uuid, ${kernel}::uuid)`
+    const by = Object.fromEntries(rows.map((x) => [x.grant_id, x]))
+    expect(by[news]).toMatchObject({ state: 'revoked', revoke_reason: 'module_disabled' })
+    expect(by[kernel]).toMatchObject({ state: 'active' })
+    expect((await events(w, news)).map((e) => e.event_type)).toContain('de.gremion.idt.grant.revoked.v1')
+    const cap = await w.db.admin`SELECT state FROM idt.capability WHERE capability_key = 'newsletter.send'`
+    expect(cap[0]!.state).toBe('module_disabled')
+  })
+  it('M-OFF-4: enable -> disable -> enable does not resurrect the revoked grant', async () => {
+    const all = makeRegistry(['publishing', 'votes', 'board', 'calendar', 'finance'])
+    await sweepGrants(w.db.app, all.read, w.db.customerId)
+    const cap = await w.db.admin`SELECT state FROM idt.capability WHERE capability_key = 'newsletter.send'`
+    expect(cap[0]!.state).toBe('available')
+    const revoked = await w.db.admin`SELECT count(*)::int AS n FROM idt.authz_grant WHERE capability_key = 'newsletter.send' AND state = 'revoked' AND revoke_reason = 'module_disabled'`
+    expect(revoked[0]!.n).toBeGreaterThanOrEqual(1)
+    const open = await w.db.admin`SELECT count(*)::int AS n FROM idt.authz_grant WHERE capability_key = 'newsletter.send' AND state IN ('active', 'scheduled')`
+    expect(open[0]!.n).toBe(0)
+    const d = await decide(w.db.app, all.read, { customerId: w.db.customerId, subject: { personId: w.persons.alice! }, bodyId: w.bodyA, capability: 'newsletter.send' })
+    expect(d.allow).toBe(false)
+  })
+})
+
+describe('PRD-IDN-002 revoke-all', () => {
+  it('revokes 20 persons in one step-up window; all their decisions deny; 20 revoked.v1', async () => {
+    const ids: string[] = []
+    for (let i = 0; i < 20; i++) {
+      const p = uuidv7()
+      await w.db.admin`INSERT INTO idt.person (person_id, customer_id, idp_subject) VALUES (${p}::uuid, ${w.db.customerId}::uuid, ${'sub-bulk-' + i})`
+      await seedGrant(w.db.admin, w.db.customerId, { bodyId: w.bodyA, personId: p, key: 'member' })
+      ids.push(p)
+    }
+    const stale = await refused(revokeAllForPerson(w.db.app, deps, w.db.customerId, claims('sub-admin', { auth_time: NOW() - 900 }), ids[0]!))
+    expect(stale.code).toBe('insufficient_user_authentication')
+    const granter = claims('sub-admin')
+    let revoked = 0
+    for (const p of ids) revoked += (await revokeAllForPerson(w.db.app, deps, w.db.customerId, granter, p)).length
+    expect(revoked).toBe(20)
+    for (const p of ids) {
+      expect((await decide(w.db.app, reg.read, { customerId: w.db.customerId, subject: { personId: p }, bodyId: w.bodyA, capability: 'gov.vote.cast' })).allow).toBe(false)
+    }
+    const ev = await w.db.admin`SELECT count(*)::int AS n FROM idt.outbox WHERE event_type = 'de.gremion.idt.grant.revoked.v1' AND data->>'subject_person_id' = ANY (${ids})`
+    expect(ev[0]!.n).toBe(20)
+  })
+})
+
+describe('TRD-084 listing', () => {
+  it('each tenant enumerates only its own grants', async () => {
+    const own = await listGrants(w.db.app, w.db.customerId)
+    const other = await listGrants(w2.db.app, w2.db.customerId)
+    expect(own.length).toBeGreaterThan(0)
+    expect(other).toHaveLength(0)
+  })
+})

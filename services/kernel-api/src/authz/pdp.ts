@@ -49,13 +49,23 @@ const deny = (reason: DenyReason): Decision => ({ allow: false, reason, grantIds
 
 export async function decide(sql: Sql, enabledModules: EnabledModules, input: DecideInput): Promise<Decision> {
   assertUuid(input.bodyId, 'bodyId')
+  return decideChecked(sql, enabledModules, input, (fn) => inCustomerTx(sql, input.customerId, fn))
+}
+
+/** The same decision inside a transaction the caller already opened with the customer context set. */
+export async function decideInTx(tx: Sql, enabledModules: EnabledModules, input: DecideInput): Promise<Decision> {
+  assertUuid(input.bodyId, 'bodyId')
+  return decideChecked(tx, enabledModules, input, (fn) => fn(tx))
+}
+
+async function decideChecked(_sql: Sql, enabledModules: EnabledModules, input: DecideInput, run: <T>(fn: (tx: Sql) => Promise<T>) => Promise<T>): Promise<Decision> {
   const def = capabilityDef(input.capability)
   if (!def) return deny('capability_unknown')
   if (def.moduleKey !== null) {
     const enabled = await enabledModules(input.customerId)
     if (!enabled.has(def.moduleKey)) return deny('module_not_enabled')
   }
-  return inCustomerTx(sql, input.customerId, async (tx) => {
+  return run(async (tx) => {
     const subjectRows =
       'sub' in input.subject
         ? await tx<{ person_id: string }[]>`SELECT person_id::text FROM idt.person WHERE idp_subject = ${input.subject.sub} AND state = 'active'`
