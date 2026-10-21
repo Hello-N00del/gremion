@@ -122,7 +122,7 @@ describe('replayDeadLetter', () => {
       subject: 'gremion.t1.org-unit.created',
       header: hdr({ [H.eventId]: EVENT, [H.source]: '/gremion/idt', [H.msgId]: EVENT }),
       data: enc({ eventId: EVENT, payload: {} }),
-      time: new Date(),
+      time: new Date('2026-10-05T11:00:00Z'),
     }
     const d = double({ DLQ: [advisoryEntry(3)], ORGUNIT: [original] })
     const r = await replayDeadLetter(d.jsm, d.js, { seq: 3, log: () => {} })
@@ -151,16 +151,83 @@ describe('replayDeadLetter', () => {
 })
 
 describe('replayDeadLetter re-fetches the ORIGINAL (the DLQ record is not trusted)', () => {
-  test('a tampered DLQ body and headers are ignored: the original payload, subject and headers are replayed', async () => {
+  test('a tampered DLQ body is ignored: the original payload, subject and headers are replayed', async () => {
     const tampered = consumerEntry(7)
     tampered.data = enc({ eventId: EVENT, payload: { name: 'EVIL' } })
-    tampered.header = hdr({ ...Object.fromEntries(tampered.header.keys().map((k) => [k, tampered.header.get(k)])), [H.dlqOrigSubject]: 'gremion.t1.other.subject' })
     const orig = original41()
     const d = double({ DLQ: [tampered], ORGUNIT: [orig] })
     await replayDeadLetter(d.jsm, d.js, { seq: 7, log: () => {} })
     expect(d.published[0]!.data).toEqual(orig.data)
     expect(d.published[0]!.subject).toBe('gremion.t1.org-unit.created')
     expect(d.published[0]!.opts.headers.get(H.aggregateType)).toBe('orgunit')
+  })
+
+  test('a record whose Orig-Subject differs from the original subject refuses, publishes and deletes nothing', async () => {
+    const tampered = consumerEntry(7)
+    tampered.header = hdr({ ...Object.fromEntries(tampered.header.keys().map((k) => [k, tampered.header.get(k)])), [H.dlqOrigSubject]: 'gremion.t1.other.subject' })
+    const d = double({ DLQ: [tampered], ORGUNIT: [original41()] })
+    await expect(replayDeadLetter(d.jsm, d.js, { seq: 7, log: () => {} })).rejects.toThrow(/was published to gremion.t1.org-unit.created but the DLQ record says gremion.t1.other.subject/)
+    expect(d.published).toEqual([])
+    expect(d.deleted).toEqual([])
+  })
+
+  test('a record naming a stream this package does not create (or the DLQ itself) refuses without reading it', async () => {
+    for (const stream of ['EVIL', 'DLQ']) {
+      const e = consumerEntry(7)
+      e.header = hdr({ ...Object.fromEntries(e.header.keys().map((k) => [k, e.header.get(k)])), [H.dlqStream]: stream })
+      const d = double({ DLQ: [e], EVIL: [original41()], ORGUNIT: [original41()] })
+      await expect(replayDeadLetter(d.jsm, d.js, { seq: 7, log: () => {} })).rejects.toThrow(/is not one of/)
+      expect(d.published).toEqual([])
+      expect(d.deleted).toEqual([])
+    }
+  })
+
+  test('an original stored AFTER the DLQ entry (a recreated stream reused the sequence) refuses, for both kinds', async () => {
+    const younger = original41({ time: new Date('2026-10-06T00:00:00Z') })
+    for (const entry of [consumerEntry(7), advisoryEntry(7)]) {
+      const d = double({ DLQ: [entry], ORGUNIT: [younger] })
+      await expect(replayDeadLetter(d.jsm, d.js, { seq: 7, log: () => {} })).rejects.toThrow(/stream was recreated/)
+      expect(d.published).toEqual([])
+      expect(d.deleted).toEqual([])
+    }
+  })
+
+  test('an advisory naming an unknown stream refuses', async () => {
+    const e = advisoryEntry(3)
+    e.data = enc({ stream: 'EVIL', consumer: 'c', stream_seq: 41 })
+    const d = double({ DLQ: [e], EVIL: [original41()] })
+    await expect(replayDeadLetter(d.jsm, d.js, { seq: 3, log: () => {} })).rejects.toThrow(/is not one of/)
+    expect(d.deleted).toEqual([])
+  })
+
+  test('a failing STREAM.MSG.GET (timeout, permission) is a RecoveryError naming the cause, NOT "gone"', async () => {
+    for (const [name, message] of [['TimeoutError', 'timeout'], ['PermissionViolationError', 'permissions violation']] as const) {
+      const d = double({ DLQ: [consumerEntry(7)], ORGUNIT: [original41()] })
+      const real = (d.jsm as { streams: { getMessage: (s: string, q: { seq: number }) => Promise<unknown> } }).streams.getMessage
+      ;(d.jsm as { streams: { getMessage: unknown } }).streams.getMessage = async (s: string, q: { seq: number }) => {
+        if (s === 'ORGUNIT') throw Object.assign(new Error(message), { name })
+        return real(s, q)
+      }
+      const err = await replayDeadLetter(d.jsm, d.js, { seq: 7, log: () => {} }).catch((e: unknown) => e)
+      expect(err).toBeInstanceOf(RecoveryError)
+      expect((err as Error).message).toContain(name)
+      expect((err as Error).message).not.toMatch(/is gone|outbox-replay/)
+      expect(d.published).toEqual([])
+      expect(d.deleted).toEqual([])
+    }
+  })
+
+  test('a JetStream NoMessageFound / StreamNotFound API error still means gone (outbox-replay)', async () => {
+    const { JetStreamApiError } = await import('@nats-io/jetstream')
+    for (const err_code of [10037, 10059]) {
+      const d = double({ DLQ: [consumerEntry(7)], ORGUNIT: [original41()] })
+      const real = (d.jsm as { streams: { getMessage: (s: string, q: { seq: number }) => Promise<unknown> } }).streams.getMessage
+      ;(d.jsm as { streams: { getMessage: unknown } }).streams.getMessage = async (s: string, q: { seq: number }) => {
+        if (s === 'ORGUNIT') throw new JetStreamApiError({ code: 404, err_code, description: 'nf' })
+        return real(s, q)
+      }
+      await expect(replayDeadLetter(d.jsm, d.js, { seq: 7, log: () => {} })).rejects.toThrow(/is gone.*outbox-replay/)
+    }
   })
 
   test('an original that is gone refuses (RecoveryError naming outbox-replay), publishes and deletes nothing', async () => {

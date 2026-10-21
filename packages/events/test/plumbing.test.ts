@@ -128,4 +128,11 @@ describe('checkPlumbingMigration (the byte-0 prefix rule)', () => {
   test('a truncated block is RED', () => {
     expect(() => checkPlumbingText(plumbingSql('idt').slice(0, -10), 'idt')).toThrow(/inside the idt plumbing block/)
   })
+
+  test('database_binding is deliberately WITHOUT row level security, and the template says why (SCHEMA §0.6 bootstrap)', () => {
+    const t = plumbingSql('gov')
+    expect(t).not.toMatch(/ALTER TABLE gov\.database_binding\s+(ENABLE|FORCE) ROW LEVEL SECURITY/)
+    expect(t).not.toMatch(/CREATE POLICY \w+ ON gov\.database_binding/)
+    expect(t).toMatch(/database_binding has NO row level security, on purpose[\s\S]*BOOTSTRAP of the tenant context/)
+  })
 })

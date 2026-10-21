@@ -114,6 +114,30 @@ export const COMMANDS = {
 
 export type Verb = keyof typeof COMMANDS
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+/** The same token shape @gremion/nats-auth enforces for tenant slugs and module ids (subject token, account name, file name). */
+const SLUG_RE = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/
+const CONSUMER_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/
+
+const SHAPES: Readonly<Record<string, { re: RegExp; what: string }>> = {
+  customer: { re: UUID_RE, what: 'a UUID' },
+  'event-id': { re: UUID_RE, what: 'a UUID' },
+  tenant: { re: SLUG_RE, what: 'a lower-case slug (a-z, 0-9, -)' },
+  module: { re: SLUG_RE, what: 'a lower-case slug (a-z, 0-9, -)' },
+  identity: { re: SLUG_RE, what: 'a lower-case slug (a-z, 0-9, -)' },
+  consumer: { re: CONSUMER_RE, what: 'a consumer name (letters, digits, _ and -)' },
+}
+
+/** Every flag's SHAPE is checked before anything is opened: a malformed value is a usage error (exit 2), never a query or a subject. */
+export function validateFlags(f: Flags): void {
+  for (const [k, v] of Object.entries(f)) {
+    const shape = SHAPES[k]
+    if (shape && !shape.re.test(v)) throw new UsageError(`--${k} ${JSON.stringify(v)} is not ${shape.what}`)
+  }
+  if (f.ctx !== undefined && !/^[a-z]{2,4}$/.test(f.ctx)) throw new UsageError(`--ctx ${JSON.stringify(f.ctx)} is not a context code (2-4 lower-case letters)`)
+  if (f.seq !== undefined && !/^[1-9][0-9]{0,15}$/.test(f.seq)) throw new UsageError('--seq must be a positive integer')
+}
+
 /** The verb and its flags, validated against COMMANDS: a UsageError names what is wrong. */
 export function parseCommand(argv: string[]): { cmd: Verb; flags: Flags } {
   const [cmd, ...rest] = argv
@@ -121,6 +145,7 @@ export function parseCommand(argv: string[]): { cmd: Verb; flags: Flags } {
   const spec = COMMANDS[cmd as Verb]
   const flags = parseFlags(rest, spec.allowed)
   for (const r of spec.required) need(flags, r)
+  validateFlags(flags)
   return { cmd: cmd as Verb, flags }
 }
 
@@ -202,6 +227,7 @@ export async function main(argv: string[], deps?: CliDeps): Promise<number> {
         const ctx = need(f, 'ctx')
         const customer = f.customer ?? process.env.GREMION_CUSTOMER_ID
         if (!customer) throw new UsageError('--customer is required (or GREMION_CUSTOMER_ID in the container)')
+        validateFlags({ customer })
         const db = await d.openDb(customer, f.module ?? ctx)
         try {
           d.out(renderMetrics(await collectMetrics(db.sql, { ctx, consumer: f.consumer })))

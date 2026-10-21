@@ -93,15 +93,48 @@ describe('main', () => {
     expect(closed.sort()).toEqual(['admin', 'kernel'])
   })
 
+  test.each([
+    [['outbox-requeue', '--ctx', 'idt', '--customer', 'not-a-uuid', '--event-id', '019f2f0a-0000-7000-8000-0000000000aa']],
+    [['outbox-requeue', '--ctx', 'idt', '--customer', '019f2f0a-0000-7000-8000-0000000000aa', '--event-id', "x'; DROP TABLE outbox;--"]],
+    [['outbox-requeue', '--ctx', 'IDT', '--customer', '019f2f0a-0000-7000-8000-0000000000aa', '--event-id', '019f2f0a-0000-7000-8000-0000000000bb']],
+    [['dlq-list', '--tenant', 'Acme Corp']],
+    [['dlq-list', '--tenant', 'a.b']],
+    [['dlq-replay', '--tenant', 't1', '--seq', '0']],
+    [['dlq-replay', '--tenant', 't1', '--seq', '1.5']],
+    [['dlq-replay', '--tenant', 't1', '--seq', '1e3']],
+    [['metrics', '--ctx', 'fin', '--customer', '019f2f0a-0000-7000-8000-0000000000aa', '--module', 'Fin/../x']],
+    [['metrics', '--ctx', 'fin', '--customer', '019f2f0a-0000-7000-8000-0000000000aa', '--consumer', 'a b']],
+  ])('%j: a malformed value is a usage error (2) before anything is opened', async (argv) => {
+    const d = deps()
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {})
+    expect(await main(argv, d)).toBe(2)
+    expect(d.openDb).not.toHaveBeenCalled()
+    expect(d.openNats).not.toHaveBeenCalled()
+    err.mockRestore()
+  })
+
+  test('metrics validates GREMION_CUSTOMER_ID from the environment too', async () => {
+    const d = deps()
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {})
+    vi.stubEnv('GREMION_CUSTOMER_ID', 'nope')
+    try {
+      expect(await main(['metrics', '--ctx', 'fin'], d)).toBe(2)
+    } finally {
+      vi.unstubAllEnvs()
+      err.mockRestore()
+    }
+    expect(d.openDb).not.toHaveBeenCalled()
+  })
+
   test('metrics prints OpenMetrics text from the service database', async () => {
     const d = deps()
     const sql = { begin: async (fn: (tx: unknown) => unknown) => fn({ unsafe: async (q: string) => (q.includes('set_config') ? [{ c: 'x' }] : [{ o: '1', d: '0', s: '2' }]) }) }
     d.openDb.mockResolvedValue({ sql, close: async () => {} })
-    expect(await main(['metrics', '--ctx', 'fin', '--customer', 't', '--consumer', 'finance'], d)).toBe(0)
+    expect(await main(['metrics', '--ctx', 'fin', '--customer', '019f2f0a-0000-7000-8000-0000000000aa', '--consumer', 'finance'], d)).toBe(0)
     const text = d.out.mock.calls.map((c) => c[0]).join('')
     expect(text).toContain('gremion_outbox_dead_lettered{ctx="fin"} 1')
     expect(text).toContain('gremion_inbox_stalled{ctx="fin",consumer="finance"} 2')
-    expect(d.openDb).toHaveBeenCalledWith('t', 'fin')
+    expect(d.openDb).toHaveBeenCalledWith('019f2f0a-0000-7000-8000-0000000000aa', 'fin')
   })
 
   describe('outbox-replay refuses a --customer whose database belongs to another tenant', () => {
@@ -111,7 +144,7 @@ describe('main', () => {
       return f
     }
     const bound = (token: string) => ({ unsafe: async () => [{ tenant_token: token }], begin: async () => { throw new Error('must not replay') } })
-    const argv = () => ['outbox-replay', '--ctx', 'idt', '--customer', 'c1', '--tenant', 'acme', '--subjects', file()]
+    const argv = () => ['outbox-replay', '--ctx', 'idt', '--customer', '019f2f0a-0000-7000-8000-0000000000aa', '--tenant', 'acme', '--subjects', file()]
 
     test('a mismatch is a usage error (2) naming both tenants, before NATS is opened and the database closed', async () => {
       const d = deps()

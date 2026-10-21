@@ -11,7 +11,8 @@
 // replayDeadLetter runs as the tenant's `admin` (it reads STREAM.MSG.GET and deletes
 // from the DLQ stream): a module key can do neither (TASK-024).
 import type { Sql } from '@gremion/db'
-import type { JetStreamManager } from '@nats-io/jetstream'
+import { FLOWS } from '@gremion/nats-auth'
+import { JetStreamApiCodes, JetStreamApiError, type JetStreamManager } from '@nats-io/jetstream'
 import { inTenantTx } from './db.ts'
 import { DLQ_HEADERS, H, type OutboxRow } from './envelope.ts'
 import { assertContext } from './plumbing.ts'
@@ -102,6 +103,28 @@ export interface DlqEntry {
 
 type Streams = Pick<JetStreamManager, 'streams'>
 
+/** The streams this package's deployments create: every flow stream (@gremion/nats-auth FLOWS) plus the DLQ. */
+export const KNOWN_STREAMS: readonly string[] = Object.freeze([...new Set([DLQ_STREAM, ...Object.values(FLOWS).flatMap((f) => [...f.publishes, ...f.consumes])])])
+
+type Stored = NonNullable<Awaited<ReturnType<Streams['streams']['getMessage']>>>
+
+/**
+ * STREAM.MSG.GET where ONLY "not found" (no such message, no such stream) is null; a timeout, a permission
+ * denial or a closed connection is a RecoveryError naming the real cause, never "the message is gone".
+ */
+async function fetchStored(jsm: Streams, stream: string, seq: number): Promise<Stored | null> {
+  try {
+    return (await jsm.streams.getMessage(stream, { seq })) ?? null
+  } catch (err) {
+    if (err instanceof JetStreamApiError) {
+      const code = err.apiError().err_code
+      if (code === JetStreamApiCodes.NoMessageFound || code === JetStreamApiCodes.StreamNotFound) return null
+    }
+    const e = err as { name?: unknown; message?: unknown }
+    throw new RecoveryError(`[events] could not read ${stream}#${seq}: ${String(e?.name ?? 'Error')}: ${String(e?.message ?? err)} (this is not "gone": fix the cause and retry)`, { cause: err })
+  }
+}
+
 function toEntry(m: { seq: number; subject: string; header: { get(k: string): string }; data: Uint8Array; time: Date }): DlqEntry {
   const base = { seq: m.seq, subject: m.subject, time: m.time.toISOString() }
   if (m.subject.startsWith(ADVISORY_PREFIX)) {
@@ -133,7 +156,7 @@ export async function listDeadLetters(jsm: Streams, opts: { stream?: string } = 
   const out: DlqEntry[] = []
   if (info.state.messages === 0) return out
   for (let seq = info.state.first_seq; seq <= info.state.last_seq; seq++) {
-    const m = await jsm.streams.getMessage(stream, { seq }).catch(() => null)
+    const m = await fetchStored(jsm, stream, seq)
     if (m) out.push(toEntry(m))
   }
   return out
@@ -142,6 +165,8 @@ export async function listDeadLetters(jsm: Streams, opts: { stream?: string } = 
 export interface ReplayDeadLetterOptions {
   seq: number
   stream?: string
+  /** The streams an entry may name as its source (default: the flow streams of KNOWN_STREAMS; the DLQ itself is never a source). */
+  allowedStreams?: readonly string[]
   log?: (line: string) => void
 }
 
@@ -184,7 +209,7 @@ export async function replayDeadLetter(
 ): Promise<ReplayDeadLetterResult> {
   const stream = opts.stream ?? DLQ_STREAM
   const log = opts.log ?? ((l) => console.info(`[events] ${l}`))
-  const entry = await jsm.streams.getMessage(stream, { seq: opts.seq }).catch(() => null)
+  const entry = await fetchStored(jsm, stream, opts.seq)
   if (!entry) throw new RecoveryError(`[events] DLQ entry ${opts.seq} does not exist in ${stream} (already replayed, or expired: after its 7 days use outbox-replay)`)
   const kind = toEntry(entry).kind
   // The DLQ record is NOT trusted (its headers and body are writable by whoever can publish the DLQ
@@ -203,12 +228,30 @@ export async function replayDeadLetter(
     origSeq = adv.stream_seq
   }
   if (!origStream || !origSeq) throw new RecoveryError(`[events] DLQ entry ${opts.seq} names no source stream/stream sequence: it cannot be replayed (use outbox-replay)`)
-  const original = await jsm.streams.getMessage(origStream, { seq: origSeq }).catch(() => null)
+  const allowed = opts.allowedStreams ?? KNOWN_STREAMS.filter((s) => s !== DLQ_STREAM)
+  if (origStream === stream || !allowed.includes(origStream)) {
+    throw new RecoveryError(`[events] refusing to replay DLQ entry ${opts.seq}: it names source stream ${JSON.stringify(origStream)}, which is not one of ${allowed.join(', ')}`)
+  }
+  const original = await fetchStored(jsm, origStream, origSeq)
   if (!original) throw new RecoveryError(`[events] the original message ${origStream}#${origSeq} is gone (7-day retention): re-deliver it with outbox-replay`)
   const originalEventId = original.header.get(H.eventId) || undefined
   if (kind === 'consumer' && originalEventId !== recordEventId) {
     throw new RecoveryError(
       `[events] refusing to replay DLQ entry ${opts.seq}: the original ${origStream}#${origSeq} has event id ${originalEventId ?? '(none)'} but the DLQ record says ${recordEventId ?? '(none)'}`,
+    )
+  }
+  // Identity: a consumer record names the subject it dead-lettered; and the original can never be YOUNGER than
+  // the record about it, so a stream that was recreated (its sequences restarted) cannot hand a different,
+  // later message to an old entry's stream_seq.
+  const origSubjectInRecord = kind === 'consumer' ? entry.header.get(H.dlqOrigSubject) || undefined : undefined
+  if (kind === 'consumer' && origSubjectInRecord !== original.subject) {
+    throw new RecoveryError(
+      `[events] refusing to replay DLQ entry ${opts.seq}: the original ${origStream}#${origSeq} was published to ${original.subject} but the DLQ record says ${origSubjectInRecord ?? '(none)'}`,
+    )
+  }
+  if (original.time.getTime() > entry.time.getTime()) {
+    throw new RecoveryError(
+      `[events] refusing to replay DLQ entry ${opts.seq}: ${origStream}#${origSeq} was stored at ${original.time.toISOString()}, after the DLQ entry (${entry.time.toISOString()}): the stream was recreated, its sequence now names another message (use outbox-replay)`,
     )
   }
   const targetStream: string = origStream

@@ -34,6 +34,7 @@ import { errorCode, inTenantTx } from './db.ts'
 import { DLQ_HEADERS, H, parseEnvelope, type ParsedEvent } from './envelope.ts'
 import { assertContext } from './plumbing.ts'
 import { publishWire } from './publish.ts'
+import { assertTestHooksAllowed } from './test-hooks.ts'
 
 /** What a handler receives besides its transaction. */
 export interface ConsumedEvent extends ParsedEvent {
@@ -94,6 +95,7 @@ export const dlqSubjectFor = (tenant: string, module: string, consumer: string):
 
 export function createConsumer(opts: ConsumerOptions): ConsumerHandle {
   assertContext(opts.ctx)
+  assertTestHooksAllowed(`consumer ${opts.name}`, opts.hooks)
   const maxDeliver = opts.maxDeliver ?? CONSUMER_MAX_DELIVER
   const backoff = opts.backoffMs ?? CONSUMER_BACKOFF_MS
   assertConsumerLimits(maxDeliver, backoff)
@@ -101,6 +103,7 @@ export function createConsumer(opts: ConsumerOptions): ConsumerHandle {
   const onError = opts.onError ?? ((err, where) => console.error(`[events] consumer ${opts.name}: ${where}:`, err))
   const log = opts.log ?? ((l) => console.info(`[events] consumer ${opts.name}: ${l}`))
   const dlqSubject = dlqSubjectFor(opts.tenant, opts.module, opts.name)
+  const backoffNs = backoff.map((ms) => ms * 1_000_000)
   const workingEveryMs = Math.max(100, Math.floor(backoff[0]! / 2))
   let messages: { close(): Promise<void | Error> } | undefined
   let loop: Promise<void> | undefined
@@ -271,11 +274,36 @@ export function createConsumer(opts: ConsumerOptions): ConsumerHandle {
       throw err
     })
     if (existing) {
-      // consumers.add on an existing durable with another config is an error, so the one drifted field
-      // is UPDATED (max_ack_pending is mutable); a durable created before this decision converges here.
-      if (existing.config.max_ack_pending !== CONSUMER_MAX_ACK_PENDING) {
-        await opts.jsm.consumers.update(opts.stream, opts.name, { max_ack_pending: CONSUMER_MAX_ACK_PENDING })
-        log(`durable consumer ${opts.name}: max_ack_pending ${existing.config.max_ack_pending} -> ${CONSUMER_MAX_ACK_PENDING} (strict per-aggregate order)`)
+      // consumers.add on an existing durable with another config is an error, and silently keeping the old
+      // one would run a consumer that is not what the caller configured. EVERY field this function sets is
+      // compared: the mutable ones are UPDATED (and logged), an immutable one that differs is refused by name.
+      const cfg = existing.config
+      const wantDeliver = opts.startFrom === 'new' ? DeliverPolicy.New : DeliverPolicy.All
+      if (cfg.ack_policy !== AckPolicy.Explicit) {
+        throw new Error(`durable consumer ${opts.name} on ${opts.stream}: ack_policy is ${cfg.ack_policy}, expected ${AckPolicy.Explicit}; it cannot be updated: delete the consumer (or use another name) and start again`)
+      }
+      if (cfg.deliver_policy !== wantDeliver) {
+        throw new Error(`durable consumer ${opts.name} on ${opts.stream}: deliver_policy is ${cfg.deliver_policy}, expected ${wantDeliver} (startFrom ${opts.startFrom ?? 'all'}); it cannot be updated: delete the consumer (or use another name) and start again`)
+      }
+      if (cfg.filter_subjects && cfg.filter_subjects.length > 0) {
+        throw new Error(`durable consumer ${opts.name} on ${opts.stream}: it has filter_subjects ${JSON.stringify(cfg.filter_subjects)}, this consumer sets a single filter_subject; delete the consumer and start again`)
+      }
+      const update: Record<string, unknown> = {}
+      const changes: string[] = []
+      const want = (field: string, have: unknown, wanted: unknown, key: string = field) => {
+        if (JSON.stringify(have) === JSON.stringify(wanted)) return
+        update[key] = wanted
+        changes.push(`${field} ${JSON.stringify(have ?? null)} -> ${JSON.stringify(wanted)}`)
+      }
+      want('max_ack_pending', cfg.max_ack_pending, CONSUMER_MAX_ACK_PENDING)
+      want('max_deliver', cfg.max_deliver, maxDeliver)
+      want('backoff', cfg.backoff ?? [], backoffNs)
+      want('filter_subject', cfg.filter_subject || undefined, opts.filterSubject || undefined)
+      if (changes.length > 0) {
+        // An unset filter is the empty string on the wire.
+        if ('filter_subject' in update && update.filter_subject === undefined) update.filter_subject = ''
+        await opts.jsm.consumers.update(opts.stream, opts.name, update)
+        log(`durable consumer ${opts.name} on ${opts.stream}: config drift updated: ${changes.join('; ')}`)
       }
       return
     }
@@ -286,7 +314,7 @@ export function createConsumer(opts: ConsumerOptions): ConsumerHandle {
       deliver_policy: opts.startFrom === 'new' ? DeliverPolicy.New : DeliverPolicy.All,
       max_deliver: maxDeliver,
       max_ack_pending: CONSUMER_MAX_ACK_PENDING,
-      backoff: backoff.map((ms) => ms * 1_000_000),
+      backoff: backoffNs,
       ...(opts.filterSubject ? { filter_subject: opts.filterSubject } : {}),
     })
   }

@@ -9,6 +9,11 @@ SET lock_timeout = '5s';
 -- public-schema privilege change belong to database creation, and the migration ledger is the runner's.
 CREATE SCHEMA IF NOT EXISTS {{ctx}};
 
+-- database_binding has NO row level security, on purpose (SCHEMA §0.6: it is metadata about the database
+-- itself, not tenant rows). It is the BOOTSTRAP of the tenant context: every transaction reads its one row
+-- to learn the customer and then sets gremion.customer_id from it, so a policy keyed on
+-- current_customer_id() would hide the row from exactly the read that establishes the context. The table
+-- is a singleton (one customer, one context, CHECKed) written only at provisioning.
 CREATE TABLE {{ctx}}.database_binding (
   singleton     boolean     NOT NULL DEFAULT true,
   customer_id   uuid        NOT NULL,
