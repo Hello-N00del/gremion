@@ -44,14 +44,19 @@ function required(env: Env, name: string, problems: string[]): string {
 }
 
 /** The module secrets present in `env`: KERNEL_API_MODULE_SECRET_<ID> -> lower-case module key. */
-export function moduleSecretsFrom(env: Env): Map<string, string> {
+export function moduleSecretsFrom(env: Env, problems: string[] = []): Map<string, string> {
   const out = new Map<string, string>()
   for (const [k, v] of Object.entries(env)) {
     const m = MODULE_SECRET.exec(k)
     if (!m || v === undefined) continue
     const secret = v.trim()
-    // A short secret is as good as none: it is ignored, so that module has no trust.
-    if (secret.length < 24) continue
+    // Empty/unset: the module is simply not authorised. A NON-empty short secret
+    // is a misconfiguration and refuses boot (naming the key, never the value).
+    if (secret === '') continue
+    if (secret.length < 24) {
+      problems.push(`${k} is shorter than 24 characters`)
+      continue
+    }
     out.set(m[1]!.toLowerCase(), secret)
   }
   return out
@@ -66,13 +71,14 @@ export function readConfig(env: Env, defaults: { modulesRoot: string; kernelRoot
   const platformDbUrl = required(env, 'KERNEL_API_PLATFORM_DB_URL', problems)
   const port = Number(env.PORT ?? '3000')
   if (!Number.isInteger(port) || port < 1 || port > 65535) problems.push('PORT is not a TCP port')
+  const moduleSecrets = moduleSecretsFrom(env, problems)
   if (problems.length) throw new ConfigError(`kernel-api refuses to boot: ${problems.join('; ')}`)
   return {
     proxySecret,
     platformDomain,
     controlDbUrl,
     platformDbUrl,
-    moduleSecrets: moduleSecretsFrom(env),
+    moduleSecrets,
     releaseRef: env.GREMION_RELEASE_REF?.trim() || undefined,
     modulesRoot: env.KERNEL_API_MODULES_ROOT?.trim() || defaults.modulesRoot,
     kernelRoot: env.KERNEL_API_KERNEL_ROOT?.trim() || defaults.kernelRoot,

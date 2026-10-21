@@ -200,10 +200,22 @@ describe('boot (Q8)', () => {
     }
   })
 
-  it('a complete environment boots; module secrets are read per module, short ones ignored', () => {
-    const c = readConfig({ ...ENV, KERNEL_API_MODULE_SECRET_CALENDAR: 'c'.repeat(32), KERNEL_API_MODULE_SECRET_VAULT: 'short', GREMION_RELEASE_REF: 'dist-v1.2.3' }, roots)
+  it('a complete environment boots; module secrets are read per module, an empty one means not authorised', () => {
+    const c = readConfig({ ...ENV, KERNEL_API_MODULE_SECRET_CALENDAR: 'c'.repeat(32), KERNEL_API_MODULE_SECRET_VAULT: '  ', GREMION_RELEASE_REF: 'dist-v1.2.3' }, roots)
     expect([...c.moduleSecrets.keys()]).toEqual(['calendar'])
     expect(c.releaseRef).toBe('dist-v1.2.3')
     expect(c.port).toBe(3000)
+  })
+
+  it('refuses to boot on a non-empty module secret shorter than 24 characters, naming the key and never the value', () => {
+    const value = 'tooshort-SECRETVALUE'
+    let msg = ''
+    try {
+      readConfig({ ...ENV, KERNEL_API_MODULE_SECRET_VAULT: value }, roots)
+    } catch (err) {
+      msg = (err as Error).message
+    }
+    expect(msg).toMatch(/KERNEL_API_MODULE_SECRET_VAULT is shorter than 24/)
+    expect(msg).not.toContain(value)
   })
 })

@@ -20,7 +20,7 @@ export const NAMED: Record<'unit' | 'integration', Record<string, number>> = {
     'test/conformance/conformance.test.ts': 14,
     'test/migrate/chain.test.ts': 9,
     'test/registry/registry.test.ts': 7,
-    'test/tenancy/host.test.ts': 28,
+    'test/tenancy/host.test.ts': 29,
     'test/tenancy/module-callers.test.ts': 12,
     'test/tenancy/target.test.ts': 11,
     'test/tenancy/tokens.test.ts': 15,
