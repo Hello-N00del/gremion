@@ -96,6 +96,8 @@ else
     # read-only role (PANEL_DB_PASSWORD). Each appears once in .env.example.
     _sed "s/CHANGE_ME_platform_db/$(gen)/"     .env
     _sed "s/CHANGE_ME_panel_db/$(gen)/"        .env
+    # TASK-077: the kernel API's read-only role (KERNEL_API_DB_PASSWORD).
+    _sed "s/CHANGE_ME_kernel_api_db/$(gen)/"   .env
 
     # gremion_public_reader read-only DB password. Appears twice in .env.example
     # (PUBLIC_DB_PASSWORD and GREMION_PUBLIC_DB_URL) and both must match, so we
