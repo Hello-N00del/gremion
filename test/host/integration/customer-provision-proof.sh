@@ -860,6 +860,14 @@ phase_customer_create_check() {
     # The control row, the ledger, the broker, the router.
     if [[ "$(q control "SELECT count(*) FROM tenant_domain WHERE tenant_id = '${id}' AND is_primary")" == 1 ]]; then ok "customer-create: one primary tenant_domain row binds $(host_of "$X")"; else bad "customer-create: tenant_domain rows"; fi
     if [[ "$(q gremion_platform "SELECT count(DISTINCT step_kind) || '/' || count(*) FROM plt.provisioning_step WHERE customer_id = '${id}' AND status = 'done'")" == "8/8" ]]; then ok "customer-create: eight done ledger rows, one per kind (Q2)"; else bad "customer-create: the ledger is not eight done rows"; fi
+    # R33 item 4: the post-condition behind handToReader -- every tenant secret
+    # file is 0600 AND owned by the reader uid (a root:root file is EACCES to the readers).
+    local tsd="${PROOF_TENANT_SECRETS_DIR:-$ROOT/secrets/tenants}" tsf tsbad=0 tsn=0 want_uid="${TENANT_SECRETS_UID:-1000}"
+    while IFS= read -r tsf; do
+        tsn=$(( tsn + 1 ))
+        [[ "$(stat -c '%a %u' "$tsf")" == "600 ${want_uid}" ]] || { tsbad=1; info "secret ${tsf}: $(stat -c '%a %u' "$tsf"), want 600 ${want_uid}"; }
+    done < <(find "$tsd" -type f 2>/dev/null)
+    if (( tsn > 0 && tsbad == 0 )); then ok "customer-create: ${tsn} tenant secret file(s) are mode 0600 and owned by uid ${want_uid}"; else bad "customer-create: tenant secret files under ${tsd}: ${tsn} found, ownership/mode wrong (want 600 ${want_uid})"; fi
     local acc; acc="$(accounts)"
     if grep -q '# kernel@' <<< "$acc" && grep -q '# calendar@' <<< "$acc" && ! grep -q '# votes@' <<< "$acc"; then
         ok "customer-create: the broker account holds kernel and calendar users, none for votes (no flow, Q4)"
