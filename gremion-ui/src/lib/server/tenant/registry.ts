@@ -575,6 +575,23 @@ export function evictTenantRuntime(tenantId: string): void {
 }
 
 /**
+ * Blanket form of evictTenantRuntime: the target of the host-level evict
+ * fan-out (POST /api/internal/evict from gremion-switch / gremion-deploy). Runs
+ * the full per-tenant eviction for every tenant this process has cached, then
+ * drops both resolution maps outright so no entry (e.g. a host whose ctx names
+ * a tenant already gone) survives.
+ */
+export function evictAllTenantRuntimes(): void {
+  const ids = new Set<string>()
+  for (const entry of _resolutionCache.values()) ids.add(entry.ctx.id)
+  for (const entry of _hostResolutionCache.values()) ids.add(entry.ctx.id)
+  for (const id of ids) evictTenantRuntime(id)
+  bumpEvictionEpoch()
+  _resolutionCache.clear()
+  _hostResolutionCache.clear()
+}
+
+/**
  * P2.1b T8 — the registry status-transition fn (tenant suspend/delete path;
  * the operator-facing script arrives in P2.1c). Updates the control row and
  * evicts the tenant's ENTIRE runtime so no cached handle (pool/JWKS/clients/
