@@ -68,7 +68,7 @@ describe('module callers (TDD 12)', () => {
   })
 
   it('clause 1: an operation off MODULE_CALLER_OPERATIONS -> 403 before the secret is even compared', async () => {
-    expect([...MODULE_CALLER_OPERATIONS].sort()).toEqual(['getTenancySelf', 'listEnabledModules'])
+    expect([...MODULE_CALLER_OPERATIONS].sort()).toEqual(['decideAuthz', 'getTenancySelf', 'listEnabledModules'])
     const { deps, rec } = fakeDeps(world())
     const hook = createTenancyHook(deps, { operationOf: () => 'putBodyMembership', exempt: new Set() })
     let status = 0

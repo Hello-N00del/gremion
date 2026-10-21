@@ -50,6 +50,7 @@ export function wireDeps(config: KernelApiConfig, o: { dirs: readonly string[]; 
     gate,
     declarations: { get: (key) => declarations.get(key) },
     log,
+    kernelDb: (tenant) => gate.db(tenant),
     hostRejection: createHostRejectionLog({ emit: (msg, fields) => log.warn(msg, { tenant: null, ...fields }) }),
   }
   return {

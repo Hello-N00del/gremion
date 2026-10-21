@@ -70,7 +70,7 @@ describe('black-box conformance (Q13, P1)', () => {
   })
 
   it('the suite is not vacuous: every spec operation was exercised', () => {
-    expect(new Set(opByPath.values())).toEqual(new Set(['getHealth', 'getTenancySelf', 'listEnabledModules']))
+    expect(new Set(opByPath.values())).toEqual(new Set(['decideAuthz', 'getHealth', 'getTenancySelf', 'issueAuthzGrant', 'listAuthzGrants', 'listEnabledModules', 'revokeAllAuthzGrants', 'revokeAuthzGrant']))
     expect(cases.length).toBeGreaterThanOrEqual(8)
   })
 })

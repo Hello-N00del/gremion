@@ -40,7 +40,7 @@ export interface CustomerGateOptions {
   evictGraceMs?: number
 }
 
-export function createCustomerGate(o: CustomerGateOptions): CustomerGate & { close(): Promise<void> } {
+export function createCustomerGate(o: CustomerGateOptions): CustomerGate & { db(tenant: TenantRow): Promise<Sql>; close(): Promise<void> } {
   // The ref of the customer being checked, from the request's own control row.
   const refs = new Map<string, string>()
   const store = createTenantStore({
@@ -80,6 +80,12 @@ export function createCustomerGate(o: CustomerGateOptions): CustomerGate & { clo
       refs.set(id, tenant.dbConnRef)
       poolRef.set(id, tenant.dbConnRef)
       return gate.check(id)
+    },
+    /** TASK-081: the customer's kernel database from the SAME bounded pool store the gate judges on. */
+    db(tenant: TenantRow): Promise<Sql> {
+      refs.set(tenant.customerId, tenant.dbConnRef)
+      poolRef.set(tenant.customerId, tenant.dbConnRef)
+      return store.openTenantDb(tenant.customerId, KERNEL_MODULE)
     },
     close: () => store.close(),
   }

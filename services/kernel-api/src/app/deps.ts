@@ -4,6 +4,7 @@
 // tests wire fakes or a scratch stack, and routes:check boots with
 // unwiredDeps() (C18: construct without a database, a secret or a network;
 // fail on USE, never at construction).
+import type { Sql } from '@gremion/db'
 import type { HostRejectionLog } from '@gremion/tenancy-core'
 import type { ModuleRuntimeDecl } from '../registry/declarations.ts'
 
@@ -88,6 +89,8 @@ export interface KernelApiDeps {
   log: Logger
   /** The bounded tenant.host.rejected emitter (TRD-076, G6). */
   hostRejection: HostRejectionLog
+  /** The resolved customer's kernel database (TASK-081 authz): tenant-store pool, role k_<hex>_app. Absent = authz routes answer 503. */
+  kernelDb?: (tenant: TenantRow) => Promise<Sql>
 }
 
 export class NotWiredError extends Error {

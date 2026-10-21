@@ -15,13 +15,13 @@ const spec = loadSpec(SPEC_URL)
 const ops = listOperations(spec)
 
 describe('routes (TDD 1)', () => {
-  it('the route table equals the spec: 3 operations, nothing else (routes:check)', async () => {
+  it('the route table equals the spec: 8 operations (3 core + 5 authz, TASK-081), nothing else (routes:check)', async () => {
     const app = buildApp()
     const r = await checkAppRoutes(app, spec)
     expect(r.problems).toEqual([])
     expect(r.ok).toBe(true)
     expect(getRouteTable(app).sort()).toEqual(ops.map((o) => routeKey(o.method, o.path)).sort())
-    expect(ops.map((o) => o.operationId).sort()).toEqual(['getHealth', 'getTenancySelf', 'listEnabledModules'])
+    expect(ops.map((o) => o.operationId).sort()).toEqual(['decideAuthz', 'getHealth', 'getTenancySelf', 'issueAuthzGrant', 'listAuthzGrants', 'listEnabledModules', 'revokeAllAuthzGrants', 'revokeAuthzGrant'])
     await app.close()
   })
 
@@ -53,7 +53,7 @@ describe('route-table sweep: every spec route but getHealth is tenant-gated (C18
   const gated = ops.filter((o) => !TENANT_EXEMPT_OPERATIONS.has(o.operationId!))
 
   it('covers at least the two tenant operations (not vacuous)', () => {
-    expect(gated.map((o) => o.operationId).sort()).toEqual(['getTenancySelf', 'listEnabledModules'])
+    expect(gated.map((o) => o.operationId).sort()).toEqual(['decideAuthz', 'getTenancySelf', 'issueAuthzGrant', 'listAuthzGrants', 'listEnabledModules', 'revokeAllAuthzGrants', 'revokeAuthzGrant'])
   })
 
   it.each(gated.map((o) => [o.operationId!, o.method, o.path]))('%s: no proxy proof -> 403 before any read', async (_id, method, path) => {

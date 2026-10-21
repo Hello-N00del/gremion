@@ -2,14 +2,15 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Gremion kernel API: core (tenancy and the module registry)",
-    "version": "1.0.0",
-    "description": "TASK-077 (L3-17; TRD-407 first half, TRD-082, TRD-353). The kernel API's one spec (Q5, Q11): dependants append their operations under their own tag (bodies: TASK-080, authz: TASK-081) and their handlers to src/handlers/index.ts, sorted by operationId. Every operation except getHealth is tenant-resolved: the WHOLE X-Forwarded-Host (equal to Host) selects the customer in the control registry, behind the proxy-trust header; or a module caller asserts the customer id with its own module secret. Every response body is checked against this document before it is sent (Q4): an undeclared field is a 500 response-contract-violation, never a silent drop.",
+    "version": "1.1.0",
+    "description": "TASK-077 (L3-17; TRD-407 first half, TRD-082, TRD-353). The kernel API's one spec (Q5, Q11): dependants append their operations under their own tag (bodies: TASK-080, authz: TASK-081 - the policy decision point and the grant table) and their handlers to src/handlers/index.ts, sorted by operationId. Every operation except getHealth is tenant-resolved: the WHOLE X-Forwarded-Host (equal to Host) selects the customer in the control registry, behind the proxy-trust header; or a module caller asserts the customer id with its own module secret. Every response body is checked against this document before it is sent (Q4): an undeclared field is a 500 response-contract-violation, never a silent drop.",
     "license": { "name": "AGPL-3.0-only", "identifier": "AGPL-3.0-only" }
   },
   "tags": [
     { "name": "platform", "description": "Unauthenticated liveness, no tenant." },
     { "name": "tenancy", "description": "The customer this request resolved to (DB-TNT-CUSTOMER, DB-TNT-DOMAINBINDING, DB-TNT-REALMREF as the API contract; registry of record: the control tenant / tenant_domain tables, Q1)." },
-    { "name": "modules", "description": "The module registry: the customer's enabled modules and their runtime declarations (DB-PLT-MODULE-ENABLEMENT, DB-PLT-MODULE-VERSION)." }
+    { "name": "modules", "description": "The module registry: the customer's enabled modules and their runtime declarations (DB-PLT-MODULE-ENABLEMENT, DB-PLT-MODULE-VERSION)." },
+    { "name": "authz", "description": "The one policy decision point over the (tenant, body) grant table and the grant administration (TASK-081; PRD-IDN-007, TRD-084, TRD-090, TRD-091, TRD-429)." }
   ],
   "paths": {
     "/healthz": {
@@ -72,6 +73,19 @@
           "503": { "$ref": "#/components/responses/Unavailable" }
         }
       }
+    },
+    "/api/v1/authz/decisions": {
+      "post": { "operationId": "decideAuthz", "summary": "May this person do this in this body? The one decision point (module callers only)", "tags": ["authz"], "security": [{ "moduleCaller": [] }], "parameters": [], "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AuthzDecisionRequest" } } } }, "responses": { "200": { "description": "The decision: allow, or a deny with its reason. A positive deny is a 200 with allow false.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AuthzDecision" } } } }, "400": { "$ref": "#/components/responses/BadRequest" }, "409": { "$ref": "#/components/responses/Conflict" }, "422": { "$ref": "#/components/responses/Unprocessable" }, "401": { "$ref": "#/components/responses/Unauthorized" }, "403": { "$ref": "#/components/responses/Forbidden" }, "404": { "$ref": "#/components/responses/NotFound" }, "500": { "$ref": "#/components/responses/InternalError" }, "503": { "$ref": "#/components/responses/Unavailable" } } }
+    },
+    "/api/v1/authz/grants": {
+      "get": { "operationId": "listAuthzGrants", "summary": "The grants of one body of the resolved customer", "tags": ["authz"], "security": [{ "bearer": [] }], "parameters": [{ "$ref": "#/components/parameters/ForwardedHost" }, { "$ref": "#/components/parameters/ProxyTrust" }, { "name": "bodyId", "in": "query", "required": true, "schema": { "type": "string", "format": "uuid" } }, { "name": "personId", "in": "query", "required": false, "schema": { "type": "string", "format": "uuid" } }], "responses": { "200": { "description": "Only this customer grants (TRD-084).", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/GrantList" } } } }, "400": { "$ref": "#/components/responses/BadRequest" }, "409": { "$ref": "#/components/responses/Conflict" }, "422": { "$ref": "#/components/responses/Unprocessable" }, "401": { "$ref": "#/components/responses/Unauthorized" }, "403": { "$ref": "#/components/responses/Forbidden" }, "404": { "$ref": "#/components/responses/NotFound" }, "500": { "$ref": "#/components/responses/InternalError" }, "503": { "$ref": "#/components/responses/Unavailable" } } },
+      "post": { "operationId": "issueAuthzGrant", "summary": "Issue a grant (a customer administrator inside their own tenant; TRD-091, TRD-090)", "tags": ["authz"], "security": [{ "bearer": [] }], "parameters": [{ "$ref": "#/components/parameters/ForwardedHost" }, { "$ref": "#/components/parameters/ProxyTrust" }], "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/GrantIssueRequest" } } } }, "responses": { "201": { "description": "The issued grant.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Grant" } } } }, "400": { "$ref": "#/components/responses/BadRequest" }, "409": { "$ref": "#/components/responses/Conflict" }, "422": { "$ref": "#/components/responses/Unprocessable" }, "401": { "$ref": "#/components/responses/Unauthorized" }, "403": { "$ref": "#/components/responses/Forbidden" }, "404": { "$ref": "#/components/responses/NotFound" }, "500": { "$ref": "#/components/responses/InternalError" }, "503": { "$ref": "#/components/responses/Unavailable" } } }
+    },
+    "/api/v1/authz/grants/{grantId}/revoke": {
+      "post": { "operationId": "revokeAuthzGrant", "summary": "Revoke one open grant", "tags": ["authz"], "security": [{ "bearer": [] }], "parameters": [{ "$ref": "#/components/parameters/ForwardedHost" }, { "$ref": "#/components/parameters/ProxyTrust" }, { "name": "grantId", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }], "responses": { "200": { "description": "The revoked grant.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Grant" } } } }, "400": { "$ref": "#/components/responses/BadRequest" }, "409": { "$ref": "#/components/responses/Conflict" }, "422": { "$ref": "#/components/responses/Unprocessable" }, "401": { "$ref": "#/components/responses/Unauthorized" }, "403": { "$ref": "#/components/responses/Forbidden" }, "404": { "$ref": "#/components/responses/NotFound" }, "500": { "$ref": "#/components/responses/InternalError" }, "503": { "$ref": "#/components/responses/Unavailable" } } }
+    },
+    "/api/v1/authz/persons/{personId}/revoke-all": {
+      "post": { "operationId": "revokeAllAuthzGrants", "summary": "Revoke every open grant of one person in one step-up window (PRD-IDN-002)", "tags": ["authz"], "security": [{ "bearer": [] }], "parameters": [{ "$ref": "#/components/parameters/ForwardedHost" }, { "$ref": "#/components/parameters/ProxyTrust" }, { "name": "personId", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }], "responses": { "200": { "description": "The grants that were revoked.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/GrantList" } } } }, "400": { "$ref": "#/components/responses/BadRequest" }, "409": { "$ref": "#/components/responses/Conflict" }, "422": { "$ref": "#/components/responses/Unprocessable" }, "401": { "$ref": "#/components/responses/Unauthorized" }, "403": { "$ref": "#/components/responses/Forbidden" }, "404": { "$ref": "#/components/responses/NotFound" }, "500": { "$ref": "#/components/responses/InternalError" }, "503": { "$ref": "#/components/responses/Unavailable" } } }
     }
   },
   "components": {
@@ -132,7 +146,10 @@
       "InternalError": {
         "description": "An internal error, or a response that would have broken this document (response-contract-violation).",
         "content": { "application/problem+json": { "schema": { "$ref": "#/components/schemas/Problem" } } }
-      }
+      },
+      "BadRequest": { "description": "The request is malformed.", "content": { "application/problem+json": { "schema": { "$ref": "#/components/schemas/Problem" } } } },
+      "Conflict": { "description": "The request conflicts with the current state (module not enabled, grant already closed).", "content": { "application/problem+json": { "schema": { "$ref": "#/components/schemas/Problem" } } } },
+      "Unprocessable": { "description": "The request is well-formed but names something this customer does not have, or breaks a grant rule.", "content": { "application/problem+json": { "schema": { "$ref": "#/components/schemas/Problem" } } } }
     },
     "schemas": {
       "Health": {
@@ -226,6 +243,11 @@
           }
         }
       },
+      "AuthzDecisionRequest": { "type": "object", "additionalProperties": false, "required": ["subject", "bodyId", "capability"], "properties": { "subject": { "type": "string", "minLength": 1, "maxLength": 200 }, "bodyId": { "type": "string", "format": "uuid" }, "capability": { "type": "string", "pattern": "^[a-z][a-z_]{1,39}\\.[a-z][a-z_.]{0,79}$" }, "resource": { "type": "object", "additionalProperties": false, "required": ["kind", "id"], "properties": { "kind": { "type": "string", "pattern": "^[a-z][a-z_]{0,39}$" }, "id": { "type": "string", "format": "uuid" } } } } },
+      "AuthzDecision": { "type": "object", "additionalProperties": false, "required": ["allow", "reason", "grantIds"], "properties": { "allow": { "type": "boolean" }, "reason": { "type": "string" }, "grantIds": { "type": "array", "items": { "type": "string", "format": "uuid" } } } },
+      "GrantIssueRequest": { "type": "object", "additionalProperties": false, "required": ["bodyId", "subjectPersonId", "grantKind", "key", "granterRole"], "properties": { "bodyId": { "type": "string", "format": "uuid" }, "subjectPersonId": { "type": "string", "format": "uuid" }, "grantKind": { "enum": ["role", "capability"] }, "key": { "type": "string", "maxLength": 120 }, "granterRole": { "type": "string", "maxLength": 40 }, "resource": { "type": "object", "additionalProperties": false, "required": ["kind", "id"], "properties": { "kind": { "type": "string", "pattern": "^[a-z][a-z_]{0,39}$" }, "id": { "type": "string", "format": "uuid" } } }, "validFrom": { "type": "string", "format": "date-time" }, "validUntil": { "type": ["string", "null"], "format": "date-time" } } },
+      "Grant": { "type": "object", "additionalProperties": false, "required": ["grantId", "bodyId", "subjectPersonId", "grantKind", "key", "validFrom", "granterKind", "source", "state", "rowVersion"], "properties": { "grantId": { "type": "string", "format": "uuid" }, "bodyId": { "type": "string", "format": "uuid" }, "subjectPersonId": { "type": "string", "format": "uuid" }, "grantKind": { "enum": ["role", "capability"] }, "key": { "type": "string" }, "resourceKind": { "type": ["string", "null"] }, "resourceId": { "type": ["string", "null"] }, "validFrom": { "type": "string" }, "validUntil": { "type": ["string", "null"] }, "granterKind": { "enum": ["person", "operator", "system"] }, "source": { "type": "string" }, "state": { "enum": ["scheduled", "active", "expired", "revoked"] }, "revokedAt": { "type": ["string", "null"] }, "revokeReason": { "type": ["string", "null"] }, "rowVersion": { "type": "integer" } } },
+      "GrantList": { "type": "object", "additionalProperties": false, "required": ["grants"], "properties": { "grants": { "type": "array", "items": { "$ref": "#/components/schemas/Grant" } } } },
       "Problem": {
         "type": "object",
         "description": "RFC 9457 problem details.",
