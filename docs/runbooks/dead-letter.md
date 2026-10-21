@@ -50,7 +50,13 @@ deleted **only after** the broker has acknowledged the new publish. The consumer
 is claimed again and the event ends `processed`. Re-delivering the same event twice is harmless: the inbox keys
 on the event id, so a second copy is acknowledged and ignored.
 
-If the aggregate has moved on to a newer version since (a later event of the same aggregate was applied), the
+Ordering: the durable consumers run with `max_ack_pending` 1 (strict per-aggregate order, operator decision
+2026-10-21), so while a message is retrying NOTHING behind it is delivered: a transient failure of version 2 never
+lets version 3 be applied first. The price is head-of-line blocking: a poison message stalls its stream until
+`MaxDeliver` dead-letters it, after which the stream moves on. Hence a replay comes AFTER later events.
+
+If the aggregate has moved on to a newer version since (a later event of the same aggregate was applied, which
+is the normal case once a poison message was dead-lettered and the stream continued), the
 replayed event ends `skipped_stale`: a newer state is never overwritten by an older one. The command's log line
 says so.
 

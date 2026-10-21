@@ -168,8 +168,9 @@ const stripped = (h: { keys(): string[]; get(k: string): string }): Record<strin
  * Re-delivers one DLQ entry: a consumer entry republishes the stored body to its original
  * subject; an advisory entry fetches the original by stream_seq (STREAM.MSG.GET, admin only)
  * and republishes that. Message id <event_id>.r<dlq_seq>. The DLQ entry is deleted ONLY after
- * a successful PubAck. Q14: a replayed event whose aggregate has moved on ends `skipped_stale`
- * in the consumer; the log line says so.
+ * a successful PubAck. Q14: a replayed event whose aggregate has moved on (the consumer's strict
+ * order, max_ack_pending 1, only prevents this while the message is still retrying; once it is
+ * dead-lettered the stream continues) ends `skipped_stale` in the consumer; the log line says so.
  */
 export async function replayDeadLetter(
   jsm: Streams,

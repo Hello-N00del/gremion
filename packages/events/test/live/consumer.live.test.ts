@@ -28,7 +28,7 @@ import {
   type Nats,
   type Service,
 } from './harness.ts'
-import type { JetStreamManager } from '@nats-io/jetstream'
+import { AckPolicy, DeliverPolicy, type JetStreamManager } from '@nats-io/jetstream'
 
 const T = newTenantIds()
 let idt: Service
@@ -44,6 +44,8 @@ const RENAMED = () => subjectsFor(T.slug)['de.gremion.idt.orgunit.renamed.v1']!
 /** Event ids a test makes fail, and how many handler calls each saw. */
 const failing = new Set<string>()
 const calls = new Map<string, number>()
+/** Event ids in the order their handler effect COMMITTED (a throwing handler is not recorded). */
+const appliedOrder: string[] = []
 const effect = projector('fin')
 
 async function startConsumer(name: string, extra: Partial<Parameters<typeof createConsumer>[0]> = {}, keepOthers = false): Promise<ConsumerHandle> {
@@ -66,6 +68,7 @@ async function startConsumer(name: string, extra: Partial<Parameters<typeof crea
       calls.set(ev.eventId, (calls.get(ev.eventId) ?? 0) + 1)
       await effect(tx, ev)
       if (failing.has(ev.eventId)) throw Object.assign(new Error('the handler fails'), { code: 'poison' })
+      appliedOrder.push(ev.eventId)
     },
     onError: () => {},
     log: () => {},
@@ -251,6 +254,40 @@ describe('TDD 8 apply once (TRD-421)', () => {
     await publishRow(kernel.js, SUBJECT(), row2)
     // Both consumers share this database's inbox: row2 is claimed by whichever consumer gets it first.
     await waitFor('row2 handled', async () => ['skipped_test', 'processed'].includes((await inbox(row2.event_id))?.processing_state ?? ''))
+  })
+})
+
+describe('TDD 8b strict per-aggregate order (operator decision 2026-10-21, max_ack_pending 1)', () => {
+  test('v2 fails transiently, v3 is behind it: v2 is retried and applied BEFORE v3, nothing ends skipped_stale', async () => {
+    await startConsumer('strict-order', { backoffMs: [400, 400, 400] })
+    const id = uuidv7()
+    const v2 = wireRow(id, 2)
+    const v3 = wireRow(id, 3)
+    failing.add(v2.event_id)
+    await publishRow(kernel.js, RENAMED(), v2)
+    await publishRow(kernel.js, RENAMED(), v3)
+    await waitFor('the v2 failure', async () => (await inbox(v2.event_id))?.processing_state === 'failed')
+    failing.delete(v2.event_id)
+    await waitFor('v2 and v3 settled', async () => {
+      const a = (await inbox(v2.event_id))?.processing_state
+      const b = (await inbox(v3.event_id))?.processing_state
+      return a !== 'failed' && a !== 'received' && b !== undefined && b !== 'received' && b !== 'failed'
+    }, 20_000)
+    expect((await inbox(v2.event_id))?.processing_state).toBe('processed')
+    expect((await inbox(v3.event_id))?.processing_state).toBe('processed')
+    expect(appliedOrder.filter((e) => e === v2.event_id || e === v3.event_id)).toEqual([v2.event_id, v3.event_id])
+    expect((await projection(id))?.version).toBe('3')
+    expect((await projection(id))?.applied, 'v2 and v3 both applied').toBe(2)
+  })
+
+  test('the durable consumer is created with max_ack_pending 1, and an EXISTING durable with another value is updated to it', async () => {
+    const name = 'strict-existing'
+    await financeJsm.consumers.add('ORGUNIT', { name, durable_name: name, ack_policy: AckPolicy.Explicit, deliver_policy: DeliverPolicy.New, max_deliver: 3, backoff: [300_000_000, 300_000_000, 300_000_000] })
+    expect((await financeJsm.consumers.info('ORGUNIT', name)).config.max_ack_pending).not.toBe(1)
+    await startConsumer(name)
+    expect((await financeJsm.consumers.info('ORGUNIT', name)).config.max_ack_pending).toBe(1)
+    await startConsumer('strict-fresh')
+    expect((await financeJsm.consumers.info('ORGUNIT', 'strict-fresh')).config.max_ack_pending).toBe(1)
   })
 })
 

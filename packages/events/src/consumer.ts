@@ -18,10 +18,17 @@
 // server's MAX_DELIVERIES advisory (captured into the same DLQ stream, G5) and
 // by the stalled-inbox gauge.
 //
+// STRICT PER-AGGREGATE ORDER (operator decision 2026-10-21): the durable consumer has max_ack_pending 1, so
+// while a message waits out its BackOff after a nak, NOTHING behind it is delivered: a later version of an
+// aggregate is never applied while an earlier one is pending retry (so a redelivery is no longer
+// skipped_stale because of a transient failure). The cost is head-of-line blocking: one poison message
+// stalls its stream until MaxDeliver dead-letters it. skipped_stale remains for genuine late arrivals
+// and for a DLQ replay after the aggregate moved on (Q14).
+//
 // The inbox key is taken from the headers and the body, NEVER from
 // Nats-Msg-Id: a DLQ replay publishes under its own message id.
 import type { Sql } from '@gremion/db'
-import { AckPolicy, DeliverPolicy, type JetStreamClient, type JetStreamManager, type JsMsg } from '@nats-io/jetstream'
+import { AckPolicy, DeliverPolicy, JetStreamApiCodes, JetStreamApiError, type JetStreamClient, type JetStreamManager, type JsMsg } from '@nats-io/jetstream'
 import { assertConsumerLimits, CONSUMER_BACKOFF_MS, CONSUMER_MAX_DELIVER, nakDelayMs } from './backoff.ts'
 import { errorCode, inTenantTx } from './db.ts'
 import { DLQ_HEADERS, H, parseEnvelope, type ParsedEvent } from './envelope.ts'
@@ -79,6 +86,9 @@ export interface ConsumerHandle {
 
 /** The part of a JsMsg the consumer uses. */
 export type DeliveryMessage = Pick<JsMsg, 'subject' | 'data' | 'headers' | 'info' | 'ack' | 'nak' | 'term' | 'working'> & { ackAck?: JsMsg['ackAck'] }
+
+/** One unacknowledged message at a time: a retrying message blocks the stream (strict per-aggregate order). */
+export const CONSUMER_MAX_ACK_PENDING = 1
 
 export const dlqSubjectFor = (tenant: string, module: string, consumer: string): string => `gremion.${tenant}.dlq.${module}.${consumer}`
 
@@ -253,12 +263,29 @@ export function createConsumer(opts: ConsumerOptions): ConsumerHandle {
 
   async function ensureConsumer(): Promise<void> {
     if (!opts.jsm) return
+    // Strict per-aggregate order (operator decision 2026-10-21): max_ack_pending 1 means the server hands
+    // out ONE message at a time, so a nak'd message (waiting out its BackOff) blocks the stream until it
+    // is processed or dead-lettered; a later version is never applied ahead of a pending earlier one.
+    const existing = await opts.jsm.consumers.info(opts.stream, opts.name).catch((err: unknown) => {
+      if (err instanceof JetStreamApiError && err.apiError().err_code === JetStreamApiCodes.ConsumerNotFound) return undefined
+      throw err
+    })
+    if (existing) {
+      // consumers.add on an existing durable with another config is an error, so the one drifted field
+      // is UPDATED (max_ack_pending is mutable); a durable created before this decision converges here.
+      if (existing.config.max_ack_pending !== CONSUMER_MAX_ACK_PENDING) {
+        await opts.jsm.consumers.update(opts.stream, opts.name, { max_ack_pending: CONSUMER_MAX_ACK_PENDING })
+        log(`durable consumer ${opts.name}: max_ack_pending ${existing.config.max_ack_pending} -> ${CONSUMER_MAX_ACK_PENDING} (strict per-aggregate order)`)
+      }
+      return
+    }
     await opts.jsm.consumers.add(opts.stream, {
       name: opts.name,
       durable_name: opts.name,
       ack_policy: AckPolicy.Explicit,
       deliver_policy: opts.startFrom === 'new' ? DeliverPolicy.New : DeliverPolicy.All,
       max_deliver: maxDeliver,
+      max_ack_pending: CONSUMER_MAX_ACK_PENDING,
       backoff: backoff.map((ms) => ms * 1_000_000),
       ...(opts.filterSubject ? { filter_subject: opts.filterSubject } : {}),
     })
@@ -270,7 +297,8 @@ export function createConsumer(opts: ConsumerOptions): ConsumerHandle {
       stopped = false
       await ensureConsumer()
       const consumer = await opts.js.consumers.get(opts.stream, opts.name)
-      const it = await consumer.consume({ max_messages: 10 })
+      // One message in flight (max_ack_pending 1): never request a batch, and the loop below awaits each message.
+      const it = await consumer.consume({ max_messages: 1 })
       messages = it
       loop = (async () => {
         for await (const m of it) {
