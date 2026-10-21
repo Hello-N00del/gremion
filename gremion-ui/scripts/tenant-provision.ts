@@ -448,7 +448,7 @@ async function liveDeps(opts: { configFile?: string; bodyName?: string; needEdge
       platformDomain: env.platformDomain,
       ledger: pgLedger(platform),
       // TASK-044: the level-1 gate over gremion_platform, on the host's derived release tip
-      gate: pgGate(platform, { releaseTipSha: releaseTip(), allowFixtureEvidence: scratchFixturesAllowed(process.env.GREMION_SCRATCH_FIXTURES, process.env.PLATFORM_DATABASE_URL) }),
+      gate: pgGate(platform, { releaseTipSha: releaseTip(), allowFixtureEvidence: scratchFixturesAllowed(process.env.GREMION_SCRATCH_FIXTURES, process.env.PLATFORM_DATABASE_URL, process.env.GREMION_PRODUCTION_STACK) }),
       modules: pgModules({
         platform,
         catalogue,

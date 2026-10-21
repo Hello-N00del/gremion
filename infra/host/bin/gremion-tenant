@@ -154,7 +154,7 @@ tc() {
     local tip; tip="$(release_tip)"
     ( cd "$RELEASE_DIR" && docker compose --env-file "$envfile" run --rm -T \
         -e "GREMION_RELEASE_TIP=${tip}" \
-        -e TRAEFIK_CERT_RESOLVER -e EDGE_BIND_IP -e EDGE_BIND_IP6 -e TENANT_DNS_PREFLIGHT -e GREMION_SCRATCH_FIXTURES \
+        -e TRAEFIK_CERT_RESOLVER -e EDGE_BIND_IP -e EDGE_BIND_IP6 -e TENANT_DNS_PREFLIGHT -e GREMION_SCRATCH_FIXTURES -e GREMION_PRODUCTION_STACK \
         "${TC_MOUNT[@]}" tenant-create "$@" )
 }
 

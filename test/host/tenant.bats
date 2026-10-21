@@ -663,5 +663,6 @@ release_repo() {
     GREMION_SCRATCH_FIXTURES=t043-0123abcd run "$LAUNCHER" status alpha-rat
     [ "$status" -eq 0 ] || { echo "$output"; return 1; }
     assert_recorded docker '-e GREMION_SCRATCH_FIXTURES '
+    assert_recorded docker '-e GREMION_PRODUCTION_STACK '
     ! grep -qF -- 'GREMION_SCRATCH_FIXTURES=' "$SHIM_LOG" || { echo "a value was inlined"; return 1; }
 }

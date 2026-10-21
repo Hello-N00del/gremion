@@ -1,6 +1,7 @@
 // TASK-044 (brief Q6, section 9): the two small inputs that let a scratch
 // stack's running proof create a customer WITH modules through the real
 // level-1 gate (no allow gate in src/).
+import postgres from 'postgres'
 import type { DpiaSpec } from '@gremion/provisioning'
 
 /** The stack names a scratch proof runs under (t043-<sha8>, t044-<sha8>, ...). */
@@ -15,15 +16,30 @@ const STACK_HOST = /^postgres-(t\d{3}[a-z]?-[0-9a-f]{8})$/
  * production-looking stack or host, another stack's alias or an unparseable
  * URL is false. A production host's stack is never a tNNN-<sha8> name.
  */
-export function scratchFixturesAllowed(stack: string | undefined, platformUrl: string | undefined): boolean {
+export function scratchFixturesAllowed(stack: string | undefined, platformUrl: string | undefined, productionStack?: string): boolean {
   if (!stack || !SCRATCH_STACK.test(stack) || !platformUrl) return false
-  let host: string
+  // The scratch stack must not be the production stack (GREMION_PRODUCTION_STACK).
+  if (productionStack !== undefined && productionStack === stack) return false
+  const host = poolHost(platformUrl)
+  return host !== null && STACK_HOST.exec(host)?.[1] === stack
+}
+
+/**
+ * The single TCP host the pool would connect to, derived with the SAME parser
+ * the pool uses (postgres.js options): new URL() takes the host after the LAST
+ * @, postgres.js after the FIRST @ and splits on commas, so the two disagree on
+ * crafted URLs. Null unless exactly one TCP host (no list, no unix socket).
+ */
+function poolHost(url: string): string | null {
   try {
-    host = new URL(platformUrl).hostname
+    const sql = postgres(url, { max: 0 }) // lazy: constructing connects to nothing
+    const { host, path } = sql.options as unknown as { host: string[]; path: string | false }
+    void sql.end({ timeout: 0 }).catch(() => undefined)
+    if (path || !Array.isArray(host) || host.length !== 1 || !host[0]) return null
+    return host[0]
   } catch {
-    return false
+    return null
   }
-  return STACK_HOST.exec(host)?.[1] === stack
 }
 
 /** --dpia-json: {"<module>": {requiresDpia, reasonCodes, documentRef}} (the library validates the values). */
