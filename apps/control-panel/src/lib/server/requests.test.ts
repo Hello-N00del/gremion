@@ -17,7 +17,7 @@ const GOOD: NewCustomerInput = {
   brandProduct: 'Rat',
   brandOrgShort: 'MS',
   enable: ['votes', 'calendar', 'votes'],
-  dpia: { votes: { requiresDpia: false, documentRef: '' }, calendar: { requiresDpia: true, documentRef: 'TOM-1' } },
+  dpia: { votes: { requiresDpia: false, documentRef: 'TOM-2' }, calendar: { requiresDpia: true, documentRef: 'TOM-1' } },
 }
 const EVIDENCE: Evidence = { token: 'x'.repeat(120), acr: 'loa2', authTime: new Date('2026-10-21T10:00:00Z'), sessionAt: new Date('2026-10-21T10:00:01Z') }
 
@@ -59,7 +59,7 @@ describe('createArgs: the args request-verify accepts', () => {
       enable: ['calendar', 'votes'],
       dpia: {
         calendar: { requires_dpia: true, reason_codes: ['operator_decision'], document_ref: 'TOM-1' },
-        votes: { requires_dpia: false, reason_codes: ['operator_decision'], document_ref: null },
+        votes: { requires_dpia: false, reason_codes: ['operator_decision'], document_ref: 'TOM-2' },
       },
     })
     expect(JSON.stringify(a)).not.toMatch(/configFile|\/opt\/|tenant-config/)

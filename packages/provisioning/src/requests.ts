@@ -51,9 +51,11 @@ export const isRequestKind = (k: unknown): k is RequestKind => typeof k === 'str
 
 /** One module's DPIA decision as the operator enters it with the create (C13 -> CreateSpec.dpia, TASK-044 D2). */
 export interface DpiaDecision {
-  requires_dpia: boolean
-  reason_codes: string[]
-  document_ref: string | null
+  requiresDpia: 'yes' | 'no'
+  /** 1-20 snake_case codes (the library's own rule). */
+  reasonCodes: string[]
+  /** Required for every decision (brief Q3); never a placeholder. */
+  documentRef: string
 }
 
 /** The normalised args of a `create` request. */
@@ -87,7 +89,8 @@ export interface VerifyContext {
 }
 
 const TEXT = /^[^\u0000-\u001f\u007f]+$/
-const REASON_CODE = /^[a-z0-9_-]{1,40}$/
+// the library's rule (assertDpiaDecisionInput): 1-20 codes, snake_case
+const REASON_CODE = /^[a-z][a-z0-9_]{0,62}$/
 const CREATE_FIELDS = new Set(['slug', 'host', 'itAdmin', 'councilAdmin', 'bodyName', 'brand', 'enable', 'dpia'])
 
 class Refused extends Error {}
@@ -116,11 +119,16 @@ function dpiaOf(v: unknown, enable: readonly string[]): Record<string, DpiaDecis
     if (!isObject(d)) throw new Refused(`dpia.${id} must be an object`)
     onlyFields(d, new Set(['requires_dpia', 'reason_codes', 'document_ref']), `dpia.${id}.`)
     if (typeof d.requires_dpia !== 'boolean') throw new Refused(`dpia.${id}.requires_dpia must be true or false`)
-    if (!Array.isArray(d.reason_codes) || d.reason_codes.length > 10 || d.reason_codes.some((c) => typeof c !== 'string' || !REASON_CODE.test(c))) {
-      throw new Refused(`dpia.${id}.reason_codes must be up to 10 codes of a-z 0-9 _ -`)
+    if (!Array.isArray(d.reason_codes) || d.reason_codes.length < 1 || d.reason_codes.length > 20 || d.reason_codes.some((c) => typeof c !== 'string' || !REASON_CODE.test(c))) {
+      throw new Refused(`dpia.${id}.reason_codes must be 1 to 20 snake_case codes (a-z 0-9 _, starting with a letter)`)
     }
-    const ref = d.document_ref === null || d.document_ref === undefined ? null : text(d.document_ref, `dpia.${id}.document_ref`, 200)
-    out[id] = { requires_dpia: d.requires_dpia, reason_codes: [...d.reason_codes] as string[], document_ref: ref }
+    if (d.document_ref === null || d.document_ref === undefined || (typeof d.document_ref === 'string' && d.document_ref.trim() === '')) {
+      throw new Refused(`dpia.${id}.document_ref is required: the written decision (TOM-annex entry) must be named for every module, whatever requires_dpia says`)
+    }
+    const ref = text(d.document_ref, `dpia.${id}.document_ref`, 500)
+    // The ONE translation from the panel wire format (snake_case, boolean) to
+    // the library's DpiaSpec, which create.sh writes verbatim as --dpia-json.
+    out[id] = { requiresDpia: d.requires_dpia ? 'yes' : 'no', reasonCodes: [...d.reason_codes] as string[], documentRef: ref }
   }
   return out
 }

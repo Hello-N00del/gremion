@@ -88,6 +88,7 @@
       {/each}
       <p class="muted">„board“ ist noch nicht mandantengetrennt, „vault“ (Tresor) bleibt im Pilotbetrieb abgeschaltet: beide sind nicht wählbar.</p>
       {#if errors.enable}<span class="err">{errors.enable}</span>{/if}
+      {#if errors.dpia}<span class="err">{errors.dpia}</span>{/if}
     </fieldset>
     <p id="hint" class="muted">
       Das Panel legt nichts selbst an: es stellt eine Anfrage, die der Ausführer auf dem Host erneut prüft und Schritt für Schritt umsetzt.

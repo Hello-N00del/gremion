@@ -64,6 +64,11 @@ export function validateNewCustomer(input: NewCustomerInput, deny: Readonly<Reco
   else {
     const denied = input.enable.find((m) => m in deny)
     if (denied !== undefined) errors.enable = deny[denied]!
+    else {
+      // brief Q3: a written decision (document reference) for EVERY ticked module
+      const missing = [...new Set(input.enable)].filter((m) => (input.dpia[m]?.documentRef ?? '').trim() === '')
+      if (missing.length > 0) errors.dpia = `Dokumentverweis zur DPIA-Entscheidung fehlt: ${missing.join(', ')}.`
+    }
   }
   return errors
 }
@@ -75,7 +80,7 @@ export function createArgs(input: NewCustomerInput): Record<string, unknown> {
   for (const id of enable) {
     const d = input.dpia[id]
     if (!d) continue
-    dpia[id] = { requires_dpia: d.requiresDpia, reason_codes: ['operator_decision'], document_ref: d.documentRef === '' ? null : d.documentRef }
+    dpia[id] = { requires_dpia: d.requiresDpia, reason_codes: ['operator_decision'], document_ref: d.documentRef.trim() === '' ? null : d.documentRef.trim() }
   }
   const args: Record<string, unknown> = {
     slug: input.slug,

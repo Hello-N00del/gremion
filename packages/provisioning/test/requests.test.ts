@@ -94,10 +94,17 @@ describe('create args', () => {
   })
 
   it('C13: optional DPIA decisions per enabled module, carried to CreateSpec.dpia; a decision for a module not enabled, or a malformed one, is refused', () => {
-    const dpia = { votes: { requires_dpia: false, reason_codes: ['no_special_category'], document_ref: null } }
-    expect(verify(env({ args: createArgs({ dpia }) }))).toMatchObject({ verdict: 'ok', args: { dpia } })
+    const dpia = { votes: { requires_dpia: false, reason_codes: ['no_special_category'], document_ref: 'TOM-3' } }
+    // translated ONCE, here, to the library's DpiaSpec (what --dpia-json carries)
+    expect(verify(env({ args: createArgs({ dpia }) }))).toMatchObject({
+      verdict: 'ok',
+      args: { dpia: { votes: { requiresDpia: 'no', reasonCodes: ['no_special_category'], documentRef: 'TOM-3' } } },
+    })
+    expect(verify(env({ args: createArgs({ dpia: { votes: { ...dpia.votes, requires_dpia: true } } }) }))).toMatchObject({ verdict: 'ok', args: { dpia: { votes: { requiresDpia: 'yes' } } } })
+    expect(verify(env({ args: createArgs({ dpia: { votes: { ...dpia.votes, document_ref: null } } }) }))).toMatchObject({ verdict: 'refused', reason: expect.stringMatching(/dpia\.votes\.document_ref is required/) })
+    expect(verify(env({ args: createArgs({ dpia: { votes: { ...dpia.votes, reason_codes: [] } } }) }))).toMatchObject({ verdict: 'refused', reason: expect.stringMatching(/dpia\.votes\.reason_codes/) })
     expect(verify(env({ args: createArgs({ dpia: { publishing: dpia.votes } }) }))).toMatchObject({ verdict: 'refused', reason: expect.stringMatching(/dpia names publishing, which is not enabled/) })
-    expect(verify(env({ args: createArgs({ dpia: { votes: { requires_dpia: 'no', reason_codes: [], document_ref: null } } }) }))).toMatchObject({
+    expect(verify(env({ args: createArgs({ dpia: { votes: { requires_dpia: 'no', reason_codes: ['x_y'], document_ref: 'TOM-3' } } }) }))).toMatchObject({
       verdict: 'refused',
       reason: expect.stringMatching(/dpia\.votes\.requires_dpia/),
     })
