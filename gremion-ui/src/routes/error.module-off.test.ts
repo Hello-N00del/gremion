@@ -26,7 +26,7 @@ if (typeof window !== 'undefined' && !window.matchMedia) {
 
 import ErrorPage from './+error.svelte'
 
-const nav: NavItem[] = [{ kind: 'item', href: '/dashboard', label: 'Home' }]
+const nav: NavItem[] = [{ kind: 'item', href: '/dashboard', label: 'Home', icon: 'home' }]
 const shell = (roles: string[]) => ({
   nav,
   brand: null,
