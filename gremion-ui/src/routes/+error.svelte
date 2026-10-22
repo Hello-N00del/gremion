@@ -5,6 +5,22 @@
   import { resolveBrand } from '$lib/brand'
   import { PLUGGABLE_MODULES } from '$lib/instance-status'
   import { t } from '$lib/i18n'
+  import AppShell from '$lib/components/layout/AppShell.svelte'
+  import ModuleOffNotice from '$lib/components/ModuleOffNotice.svelte'
+  import { onMount } from 'svelte'
+  import { initTheme } from '$lib/stores/theme'
+  // A throw from the root layout load renders this page WITHOUT +layout.svelte, so
+  // the global CSS + self-hosted fonts must be pulled in here too (else: unstyled).
+  import '../app.css'
+  import '@fontsource/archivo-narrow/400.css'
+  import '@fontsource/archivo-narrow/500.css'
+  import '@fontsource/archivo-narrow/600.css'
+  import '@fontsource/archivo-narrow/700.css'
+  import '@fontsource/inter/400.css'
+  import '@fontsource/inter/500.css'
+  import '@fontsource/inter/600.css'
+  import '@fontsource/jetbrains-mono/400.css'
+  onMount(initTheme)
 
   // Tenant brand (v4 re-audit slice 10) — from the layout payload, default-backed.
   const brand = $derived(resolveBrand(page.data.brand))
@@ -48,6 +64,12 @@
     return page.error?.message ?? $t('error.detail.unknown')
   })
 
+  // Module-off 403 body carries the shell data (see +layout.server.ts): re-compose the app
+  // shell around the notice so nav stays visible.
+  const shell = $derived((page.error as App.Error | null)?.shell ?? null)
+  const shellRoles = $derived((shell?.user?.roles ?? []) as import('$lib/auth').Role[])
+  const shellAdmin = $derived(shellRoles.includes('it-admin' as never))
+
   const heading = $derived(
     moduleOff
       ? 'Modul nicht aktiv'
@@ -61,25 +83,32 @@
   }
 </script>
 
-<PageTitle title={`${page.status}`} />
+<PageTitle title={moduleOff ? 'Modul nicht aktiv' : `${page.status}`} />
 
+{#snippet moduleNotice()}
+  <ModuleOffNotice moduleId={moduleOff?.id ?? ''} isItAdmin={shellAdmin || isItAdmin} />
+{/snippet}
+
+{#if moduleOff && shell && shell.user}
+  <AppShell
+    nav={shell.nav}
+    activeHref={page.url.pathname}
+    roles={shellRoles}
+    userName={shell.user.name}
+    groups={shell.user.groups}
+    brand={shell.brand as never}
+    sourceUrl={shell.sourceUrl}
+    children={moduleNotice}
+  />
+{:else if moduleOff}
+  <ModuleOffNotice moduleId={moduleOff.id} isItAdmin={isItAdmin} />
+{:else}
 <div class="error-page">
   <div class="error-card">
     <div class="error-status" aria-hidden="true">{page.status}</div>
     <div class="eyebrow">{brand.product} · {page.status}</div>
     <h1 class="display error-heading">{heading}</h1>
 
-    {#if moduleOff}
-      <!-- R26-TRAIN4-FIX (WCAG 3.1.2): not in the catalogue yet (TASK-161), so
-           marked German on a page declared in the person's language. -->
-      <p class="error-detail" lang="de">
-        Das Modul <strong>{moduleOff.label}</strong> ist für diese Instanz abgeschaltet.
-        Es erscheint nicht in der Navigation und belegt keine Rollen oder Realm-Gruppen.
-      </p>
-      {#if moduleOff.note}
-        <div class="error-context" lang="de">{moduleOff.note}</div>
-      {/if}
-    {:else}
       <p class="error-detail">{detail}</p>
 
       {#if page.status === 403}
@@ -101,19 +130,12 @@
           {/if}
         </div>
       {/if}
-    {/if}
 
     <div class="error-actions">
       <a href="/" class="btn btn-primary">
         <Icon name="home" size={14} /> {$t('error.action.home')}
       </a>
-      {#if moduleOff}
-        {#if isItAdmin}
-          <a href="/systemstatus" class="btn" lang="de">
-            <Icon name="activity" size={14} /> Module verwalten
-          </a>
-        {/if}
-      {:else if page.status === 500}
+      {#if page.status === 500}
         <button type="button" class="btn" onclick={reload}>
           <Icon name="refresh" size={14} /> {$t('error.action.retry')}
         </button>
@@ -121,6 +143,7 @@
     </div>
   </div>
 </div>
+{/if}
 
 <style>
   .error-page {
