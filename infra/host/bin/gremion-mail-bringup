@@ -779,6 +779,12 @@ main() {
     # The per-assert tools are declared by need_cmd_for_assert.
     need_cmd mktemp tail date grep sed
     load_env "${MAIL_ENV:-$(gremion_root)/etc/env/mail.env}"
+    # PLAN-mail-transport M3: with an external relay there is no bundled mail
+    # server to render, bind-check or assert. A skipped check must say so; this
+    # refusal is the printed reason (the relay's own checks are M6).
+    if [ "${MAIL_TRANSPORT:-}" = relay ]; then
+        die "MAIL_TRANSPORT=relay: the bundled mail server is not used on this host, so there is nothing to bring up or assert here (set MAIL_TRANSPORT=stalwart to run the bundled Stalwart)"             "$GREMION_EXIT_USAGE"
+    fi
     # shellcheck disable=SC2034  # consumed by render_template via ${!v}
     MAIL_HOSTNAME="mail.${PLATFORM_DOMAIN}"
     DNS_CHECK="$(resolve_dns_check)"
