@@ -123,8 +123,8 @@ export async function importVerb(verb: string, ctx: ImportVerbContext): Promise<
           store: sqlOrgStore(),
           // D-8: a matrix room / Nextcloud folder is asked for only when messaging / files are enabled for the tenant
           modules: { messaging: cfg.modules.messages === true, files: cfg.modules.files === true },
-          readConfig: () => readFileSync(configPathForTenant(tenant), 'utf8'),
-          writeConfig: (text) => ctx.writeConfigFile(configPathForTenant(tenant), text),
+          readConfig: () => readFileSync(configPathForTenant(tenant.slug), 'utf8'),
+          writeConfig: (text) => ctx.writeConfigFile(configPathForTenant(tenant.slug), text),
         })
       })
       ctx.log(`seed-vertical ${slug}: units created ${report.units.created}, adopted ${report.units.adopted}, present ${report.units.present}; terms ${report.terms_written ? 'written' : 'unchanged'}`)
