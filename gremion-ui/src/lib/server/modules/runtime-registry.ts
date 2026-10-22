@@ -329,6 +329,10 @@ export interface SetupHealthProbe {
   /** Validate the module's admin credentials. Swallows its own errors and
    *  returns a boolean (the route never throws out of the health endpoint). */
   validate: () => Promise<boolean>
+  /** F7: the owning feature module's id. When set, /api/health also runs this
+   *  probe as a liveness check while that module is enabled for the tenant, and
+   *  lists `service` under `degraded` when it fails. */
+  moduleId?: string
 }
 
 const _setupHealthProbes: SetupHealthProbe[] = []

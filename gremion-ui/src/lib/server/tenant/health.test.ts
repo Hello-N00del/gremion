@@ -7,8 +7,12 @@
 // fail-closed stance as the resolver's non-active path). T21 adds: the `leaf`
 // health check (newsletter-service /healthz/tenants probe).
 import { describe, it, expect, vi } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import {
+  disabledModulesFromConfig,
   checkFleetHealth,
+  collectModuleOutages,
   renderHealthTable,
   fleetExitCode,
   type HealthDeps,
@@ -305,5 +309,52 @@ describe('renderHealthTable — leaf subscribers/newsletters appended (T21)', ()
     ]
     const table = renderHealthTable({ ok: true, tenants: rows })
     expect(table).not.toMatch(/sub|nl\b/i)
+  })
+})
+describe('collectModuleOutages (F7)', () => {
+  const nc = (ok: boolean) => ({ moduleId: 'files', service: 'nextcloud', validate: vi.fn(async () => ok) })
+  it('enabled module whose service is down is listed', async () => {
+    expect(await collectModuleOutages([nc(false)], { files: true })).toEqual(['nextcloud'])
+  })
+  it('disabled module is not listed and not probed', async () => {
+    const p = nc(false)
+    expect(await collectModuleOutages([p], { files: false })).toEqual([])
+    expect(p.validate).not.toHaveBeenCalled()
+  })
+  it('throwing and hanging probes count as down; healthy ones do not', async () => {
+    const boom = { moduleId: 'messages', service: 'synapse', validate: async () => { throw new Error('x') } }
+    const hang = { moduleId: 'files', service: 'nextcloud', validate: () => new Promise<boolean>(() => {}) }
+    expect(await collectModuleOutages([boom, hang, { moduleId: 'core', service: 'c', validate: async () => true }], { messages: true, files: true, core: true }, 20)).toEqual(['synapse', 'nextcloud'])
+  })
+  it('fleet: satellites of a disabled module are not a fault', async () => {
+    const deps = greenDeps({
+      probeSatellites: vi.fn(async () => ({ nextcloud: 'failed', matrix: 'ok' })),
+      disabledModules: async () => ['files'],
+    })
+    const r = await checkFleetHealth(deps)
+    expect(r.ok).toBe(true)
+    const enabled = await checkFleetHealth(greenDeps({ probeSatellites: vi.fn(async () => ({ nextcloud: 'failed', matrix: 'ok' })) }))
+    expect(enabled.ok).toBe(false)
+  })
+})
+
+describe('disabledModulesFromConfig + fleet CLI wiring (F7)', () => {
+  it('lists the modules switched off in the tenant config, per tenant', async () => {
+    const fn = disabledModulesFromConfig((t) =>
+      t.slug === 't2' ? { files: false, messages: true, content: false } : { files: true },
+    )
+    expect(await fn(tenant({ slug: 't2' }))).toEqual(['files', 'content'])
+    expect(await fn(tenant({ slug: 'other' }))).toEqual([])
+  })
+  it('end to end: a tenant with files OFF is healthy despite a failed nextcloud ledger row', async () => {
+    const deps = greenDeps({
+      probeSatellites: vi.fn(async () => ({ nextcloud: 'failed', matrix: 'ok' })),
+      disabledModules: disabledModulesFromConfig(() => ({ files: false, messages: true })),
+    })
+    expect((await checkFleetHealth(deps)).ok).toBe(true)
+  })
+  it('the fleet CLI really supplies disabledModules (not dead in production)', () => {
+    const src = readFileSync(resolve(__dirname, '../../../../scripts/tenant-health.ts'), 'utf-8')
+    expect(src).toMatch(/disabledModules:\s*disabledModulesFromConfig\(/)
   })
 })
