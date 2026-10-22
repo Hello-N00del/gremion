@@ -296,6 +296,19 @@ teardown() {
     [ "$output" = "0" ]
 }
 
+@test "M3 relay mode: the bundled mail server is not brought up (exit 2 naming the transport, nothing rendered, no docker call); stalwart and an unset key behave as before" {
+    printf 'MAIL_TRANSPORT=relay
+' >> "${GREMION_ROOT}/etc/env/mail.env"
+    run "$BRINGUP" --render-config
+    [ "$status" -eq 2 ] || { echo "$output"; return 1; }
+    [[ "$output" == *"MAIL_TRANSPORT=relay"* ]]
+    [ ! -e "${GREMION_ROOT}/etc/mail/config.toml" ]
+    sed -i 's/^MAIL_TRANSPORT=.*/MAIL_TRANSPORT=stalwart/' "${GREMION_ROOT}/etc/env/mail.env"
+    run "$BRINGUP" --render-config
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    [ -s "${GREMION_ROOT}/etc/mail/config.toml" ]
+}
+
 @test "--render-config substitutes the derived mail hostname" {
     run "$BRINGUP" --render-config
     [ "$status" -eq 0 ]
