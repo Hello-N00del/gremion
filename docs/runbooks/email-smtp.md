@@ -48,7 +48,7 @@ argv, and a file readable by "other" is refused.
 
 Switching mode on an initialised host is a procedure, not a hot toggle: set the
 keys, then re-stamp every realm through `gremion-mail realm-smtp` (customer
-realms: the host-side reconcile run); its `smtp-server` check fails
+realms: the host-side reconcile run, whose `smtp-server` check fails
 loudly while a realm still carries the other mode's stamp).
 
 ## Default: the Mailpit catcher (local dev / staging)
