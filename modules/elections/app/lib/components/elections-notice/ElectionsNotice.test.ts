@@ -31,7 +31,8 @@ describe('ElectionsNotice', () => {
     const text = container.textContent ?? ''
     expect(text).toContain('keine satzungsgemäßen Wahlen')
     expect(text).toContain('optional')
-    expect(text).toContain('standardmäßig ausgeschaltet')
+    expect(text).toContain('von der Verwaltung des Gremiums ausgeschaltet werden')
+    expect(text).not.toMatch(/standardmäßig/i)
   })
 
   test('has no dismiss control of any kind', () => {
@@ -80,6 +81,6 @@ describe('elections layout mount', () => {
     const all: string[] = []
     const walk = (d: string) => readdirSync(d).forEach((e) => (statSync(join(d, e)).isDirectory() ? walk(join(d, e)) : all.push(e)))
     walk(ROUTES)
-    expect(all.filter((n) => /^\+layout@/.test(n) || /^\+page@/.test(n))).toEqual([])
+    expect(all.filter((n) => n.startsWith('+layout@') || n.startsWith('+page@'))).toEqual([])
   })
 })

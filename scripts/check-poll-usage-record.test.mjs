@@ -11,15 +11,16 @@ import { fileURLToPath } from 'node:url'
 const DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'docs', 'pilot', 'poll-usage')
 const load = (n) => JSON.parse(readFileSync(join(DIR, n), 'utf8'))
 const COLUMNS = ['customer_id', 'body_id', 'period_start', 'period_end', 'polls_opened', 'answers_recorded', 'count_source']
+const byStr = (a, b) => (a < b ? -1 : a > b ? 1 : 0)
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 // Lint of the schema document itself; returns the list of problems.
 export function lintSchema(s) {
   const bad = []
   const props = s.properties ?? {}
-  if (JSON.stringify(Object.keys(props).sort()) !== JSON.stringify([...COLUMNS].sort())) bad.push(`properties differ from the table columns: ${Object.keys(props).join(',')}`)
+  if (JSON.stringify(Object.keys(props).sort(byStr)) !== JSON.stringify([...COLUMNS].sort(byStr))) bad.push(`properties differ from the table columns: ${Object.keys(props).join(',')}`)
   if (s.additionalProperties !== false) bad.push('additionalProperties is not false (a content field could ride along)')
-  if (JSON.stringify([...(s.required ?? [])].sort()) !== JSON.stringify([...COLUMNS].sort())) bad.push('required is not exactly the column set')
+  if (JSON.stringify([...(s.required ?? [])].sort(byStr)) !== JSON.stringify([...COLUMNS].sort(byStr))) bad.push('required is not exactly the column set')
   for (const c of ['polls_opened', 'answers_recorded']) {
     if (props[c]?.type !== 'integer' || props[c]?.minimum !== 0) bad.push(`${c} must be an integer with minimum 0`)
   }
@@ -70,6 +71,7 @@ test('RED: records the table would refuse', () => {
   assert.match(validateRecord({ ...ok, polls_opened: -1 }).join(), /polls_opened/)
   assert.match(validateRecord({ ...ok, count_source: 'estimate' }).join(), /count_source/)
   assert.match(validateRecord({ ...ok, poll_question: 'Mensa?' }).join(), /unknown field poll_question/)
-  const { body_id, ...noBody } = ok
+  const noBody = { ...ok }
+  delete noBody.body_id
   assert.match(validateRecord(noBody).join(), /missing body_id/)
 })

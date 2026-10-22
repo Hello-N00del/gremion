@@ -3,9 +3,10 @@
 // A vertical that runs calendar, elections or board OFF still gets these files:
 // later ungated kernel DDL (0010_org_units.sql's ALTER of committee_elections)
 // and gremion-ui/scripts/fresh-init-proof.sh's existence assertions depend on
-// them existing. (0058_public_reader_grants.sql no longer names calendar_events
-// among its own dependencies as of R-E13: it grants only the tables the
-// anonymous portal reads, org_units and protocols.)
+// them existing. (0058_public_reader_grants.sql does NOT grant calendar_events: since R-E13 it
+// grants only org_units and protocols; calendar_events appears there only in a
+// defensive, existence-guarded REVOKE, so 003 should sort before 058 for that
+// REVOKE to bite, but its absence would not abort 058.)
 export const CROSS_CUTTING_MODULE_TABLES = [
   'calendar_events',
   'committee_elections',
@@ -30,8 +31,9 @@ export const CROSS_CUTTING_MIGRATIONS: Readonly<Record<string, string>> = {
  * "tidy" them under a module): later UNGATED kernel DDL and grants depend on
  * the relations they create, and moving a file would renumber it into a gap
  * below every initialised database's high-water mark (backFillNotice).
- *   0003 calendar_events    <- 0058_public_reader_grants (portal_tables) and
- *                              the StuRaOS 008_public_portal ALTER
+ *   0003 calendar_events    <- 0058_public_reader_grants only REVOKEs it
+ *                              (guarded, defensive; no grant) and the StuRaOS
+ *                              008_public_portal ALTER
  *   0004 committee_elections <- 0010_org_units ALTERs it (column rename)
  *   0034 deck_board         <- creates board/stack/card, FKs into org_units
  * Consequence (accepted): these module tables exist while their module is OFF.
@@ -40,7 +42,7 @@ export const CROSS_CUTTING_MIGRATIONS: Readonly<Record<string, string>> = {
  */
 export const CROSS_CUTTING_REASON =
   'it creates a table that ungated kernel DDL/grants depend on (0010 ALTERs committee_elections, ' +
-  '0058 grants calendar_events, 0034 board FKs); a module-OFF fresh init would skip it and abort ' +
+  '0058 revokes calendar_events defensively (no grant), 0034 board FKs); a module-OFF fresh init would skip it and abort ' +
   'those files. Renumbering is forbidden too (backFillNotice).'
 
 /**

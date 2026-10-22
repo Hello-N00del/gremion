@@ -2,7 +2,8 @@
 // TRD-030). Shown to the administrator at the moment the module is enabled.
 //
 // Honest scope: the module does not run the university's statutory election,
-// it is optional, and it is off by default. The wording is the one fixed in
+// it is optional and the council administration can switch it off (no default claim:
+// the running system still serves it on by default until TASK-044-b). The wording is the one fixed in
 // docs/compliance/elections-scope.md section 1; that page's section 2 lists the
 // phrasings no material may use, and notice.test.ts pins this text against them.
 //
@@ -46,7 +47,7 @@ export const ELECTIONS_NOTICE_FACTS: ElectionsNoticeFacts = Object.freeze({
 
 /** The scope statement itself; identical for both forms of address. */
 export const ELECTIONS_SCOPE_STATEMENT =
-  'Dieses Modul führt keine satzungsgemäßen Wahlen der Hochschule durch. Es ist optional und standardmäßig ausgeschaltet.'
+  'Dieses Modul führt keine satzungsgemäßen Wahlen der Hochschule durch. Es ist optional und kann von der Verwaltung des Gremiums ausgeschaltet werden.'
 
 const FOLLOW_UP: Readonly<Record<Address, string>> = Object.freeze({
   du: 'Schalte es nur ein, wenn dein Gremium intern abstimmen oder wählen will. Die Wahl der Hochschule richtet weiterhin die Hochschule aus.',

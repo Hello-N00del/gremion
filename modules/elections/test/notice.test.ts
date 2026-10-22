@@ -37,15 +37,16 @@ const FORBIDDEN = [
 ]
 
 describe('elections enable-time notice', () => {
-  it('states that the module does not run the statutory election, is optional and is off by default', () => {
+  it('states that the module does not run the statutory election, is optional and can be switched off, with no default claim', () => {
     for (const a of ADDRESSES) {
       const t = text(a)
       expect(t).toContain('keine satzungsgemäßen Wahlen der Hochschule')
       expect(t).toContain('optional')
-      expect(t).toContain('standardmäßig ausgeschaltet')
+      expect(t).toContain('von der Verwaltung des Gremiums ausgeschaltet werden')
+      expect(t).not.toMatch(/standardmäßig|by default/i)
     }
     expect(ELECTIONS_SCOPE_STATEMENT).toBe(
-      'Dieses Modul führt keine satzungsgemäßen Wahlen der Hochschule durch. Es ist optional und standardmäßig ausgeschaltet.',
+      'Dieses Modul führt keine satzungsgemäßen Wahlen der Hochschule durch. Es ist optional und kann von der Verwaltung des Gremiums ausgeschaltet werden.',
     )
   })
 

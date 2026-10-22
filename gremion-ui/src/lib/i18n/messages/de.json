@@ -220,7 +220,7 @@
   "votes.poll.create": "Schnellumfrage erstellen",
   "votes.poll.createSub": "Schnelles, nicht-anonymes Meinungsbild. Ergebnis live sichtbar.",
   "elections.notice.title": "Hinweis zum Wahlmodul",
-  "elections.notice.scope": "Dieses Modul führt keine satzungsgemäßen Wahlen der Hochschule durch. Es ist optional und standardmäßig ausgeschaltet.",
+  "elections.notice.scope": "Dieses Modul führt keine satzungsgemäßen Wahlen der Hochschule durch. Es ist optional und kann von der Verwaltung des Gremiums ausgeschaltet werden.",
   "elections.notice.followUpDu": "Schalte es nur ein, wenn dein Gremium intern abstimmen oder wählen will. Die Wahl der Hochschule richtet weiterhin die Hochschule aus.",
   "elections.notice.followUpSie": "Schalten Sie es nur ein, wenn Ihr Gremium intern abstimmen oder wählen möchte. Die Wahl der Hochschule richtet weiterhin die Hochschule aus."
 }

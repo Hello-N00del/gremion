@@ -3,7 +3,7 @@
 // case mutates a throwaway tree and asserts on the report text.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, cpSync, readFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
 import { ROOT, REQUEST_PATH, PANEL_FORM, ENV_DIR, runChecks } from './check-pilot-module-defaults.mjs'
