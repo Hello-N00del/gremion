@@ -2,10 +2,10 @@
 // contract (README.md). Parsed and VALIDATED once; /healthz reports only
 // whether it is valid (never a value). Secrets are read from *_FILE paths,
 // never from the environment itself.
-import { accessSync, constants, readFileSync, statSync } from 'node:fs'
-import { delimiter, join } from 'node:path'
+import { readFileSync } from 'node:fs'
 
-export type Executor = 'gremion-tenant' | 'none'
+/** TASK-043d D9: `queue` = requests in plt.provisioning_request, run by the host-side executor; `gremion-tenant` is decommissioned (R31-I4). */
+export type Executor = 'queue' | 'none'
 
 export interface PanelConfig {
   /** The browser origin (behind `ssh -L`): SvelteKit's CSRF check compares with it. */
@@ -129,7 +129,9 @@ function parseConfig(env: Env, readFile: (p: string) => string): ConfigResult {
   if (platformDatabaseUrl !== null && !/^postgres(ql)?:\/\//.test(platformDatabaseUrl)) problems.push('PLATFORM_DATABASE_URL is not a postgres URL')
 
   const executorRaw = env.PANEL_EXECUTOR ?? 'none'
-  if (executorRaw !== 'gremion-tenant' && executorRaw !== 'none') problems.push('PANEL_EXECUTOR must be gremion-tenant or none')
+  if (executorRaw === 'gremion-tenant') problems.push('PANEL_EXECUTOR=gremion-tenant is decommissioned (R31-I4): use queue (the panel writes requests, the host-side executor runs them)')
+  else if (executorRaw !== 'queue' && executorRaw !== 'none') problems.push('PANEL_EXECUTOR must be queue or none')
+  if (executorRaw === 'queue' && platformDatabaseUrl === null) problems.push('PANEL_EXECUTOR=queue requires PLATFORM_DATABASE_URL (the queue lives in gremion_platform)')
 
   // The ops stack's Prometheus (compose/control-panel/ops-link.yml): the same
   // back-channel rule as Keycloak's, plain http only on the panel's own networks.
@@ -175,41 +177,18 @@ function parseConfig(env: Env, readFile: (p: string) => string): ConfigResult {
   }
 }
 
-/**
- * The absolute path of an executable `name` on `pathEnv`, or null. POSIX: a
- * regular file with an execute bit; Windows (dev only): `name` + a PATHEXT
- * extension. A directory or a plain data file is never an executor.
- */
-export function resolveOnPath(name: string, pathEnv: string = process.env.PATH ?? ''): string | null {
-  if (!name || name.includes('/') || name.includes('\\')) return null
-  const win = process.platform === 'win32'
-  const exts = win ? (process.env.PATHEXT ?? '.EXE;.CMD;.BAT').split(';').filter(Boolean) : ['']
-  for (const dir of pathEnv.split(delimiter)) {
-    if (!dir) continue
-    for (const ext of exts) {
-      const p = join(dir, name + ext)
-      try {
-        const st = statSync(p)
-        if (!st.isFile()) continue
-        if (!win) {
-          if ((st.mode & 0o111) === 0) continue
-          accessSync(p, constants.X_OK)
-        }
-        return p
-      } catch {
-        // absent or not executable: keep looking
-      }
-    }
-  }
-  return null
-}
+/** The executor beats about every 15 s; older than this and "Neuer Mandant" says so (A9). */
+export const HEARTBEAT_STALE_SECONDS = 60
 
-/** Why "Neuer Mandant" is disabled, or null when it is available (Q6, the long-lead rule). */
-export function newCustomerDisabledReason(c: PanelConfig, resolve: (name: string) => string | null = (n) => resolveOnPath(n)): string | null {
+/**
+ * Why "Neuer Mandant" is disabled, or null when it is available (Q6, the
+ * long-lead rule; TASK-043d A9). `heartbeatAgeSeconds` is the age of the newest
+ * plt.executor_heartbeat (null: none yet, or it could not be read).
+ */
+export function newCustomerDisabledReason(c: PanelConfig, heartbeatAgeSeconds: number | null): string | null {
   if (c.platformDatabaseUrl === null) return 'Keine Plattform-Datenbank konfiguriert (PLATFORM_DATABASE_URL): gremion-tenant init ist auf diesem Host noch nicht gelaufen.'
-  if (c.executor === 'none') return 'Kein Ausführer konfiguriert (PANEL_EXECUTOR=none): Mandanten legt gremion-tenant create auf dem Host an.'
-  if (resolve('gremion-tenant') === null) {
-    return 'PANEL_EXECUTOR=gremion-tenant, aber gremion-tenant ist in dieser Umgebung nicht im PATH (das Panel-Image enthält es nicht): Mandanten legt gremion-tenant create auf dem Host an.'
-  }
+  if (c.executor === 'none') return 'Kein Ausführer konfiguriert (PANEL_EXECUTOR=none): Mandanten legt der Ausführer auf dem Host an, sobald PANEL_EXECUTOR=queue gesetzt ist.'
+  if (heartbeatAgeSeconds === null) return 'Ausführer nicht aktiv: es liegt noch kein Lebenszeichen vor (gremion-executor auf dem Host starten).'
+  if (heartbeatAgeSeconds > HEARTBEAT_STALE_SECONDS) return `Ausführer nicht aktiv seit ${Math.floor(heartbeatAgeSeconds)} s (gremion-executor auf dem Host prüfen).`
   return null
 }

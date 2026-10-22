@@ -164,6 +164,8 @@ describe('the platform migration folder (gremion_platform, schema plt)', () => {
     expect(onDisk).toContain('0005_plt_scheduled_job.sql')
     // TASK-044: the ops setup, the isolation results and the DPIA decisions
     expect(onDisk).toEqual(expect.arrayContaining(['0006_ops_setup.sql', '0007_plt_isolation_test_result.sql', '0008_ops_dpia_decision.sql']))
+    // TASK-043d-1: the operator request queue (platform 0009)
+    expect(onDisk).toContain('0009_plt_provisioning_request.sql')
     for (const f of files) expect(() => splitStatements(f.text)).not.toThrow()
   })
 

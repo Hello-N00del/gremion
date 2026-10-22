@@ -3,7 +3,7 @@
 import { error } from '@sveltejs/kit'
 import { env } from '$env/dynamic/private'
 import { loadConfig } from '$lib/server/config'
-import { customerStatus } from '$lib/server/customers'
+import { customerRequests, customerStatus } from '$lib/server/customers'
 import type { PageServerLoad } from './$types'
 
 const SLUG = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/
@@ -17,6 +17,7 @@ export const load: PageServerLoad = async ({ params }) => {
     console.error(`[control-panel] customer status ${params.slug} failed: ${e?.code ?? 'no-sqlstate'}: ${e?.message ?? String(err)}`)
     error(503, 'the control registry or the platform ledger is not reachable (see the panel log)')
   })
-  if (!status) return { slug: params.slug, status: null }
-  return { slug: params.slug, status }
+  const requests = await customerRequests(r.config, params.slug).catch(() => [])
+  if (!status) return { slug: params.slug, status: null, requests }
+  return { slug: params.slug, status, requests }
 }

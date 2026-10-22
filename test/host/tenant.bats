@@ -12,7 +12,9 @@ OP='8d6b9c7e-1f2a-4b3c-9d4e-5f6a7b8c9d0e'
 setup() {
     setup_host_root
     REL="${GREMION_ROOT}/current"
-    mkdir -p "${REL}/infra/host/bin" "${REL}/infra/host/lib" "${REL}/docker/keycloak"
+    mkdir -p "${REL}/infra/host/bin" "${REL}/infra/host/lib/executor" "${REL}/docker/keycloak"
+    cp "${HOST_SRC}/lib/customer-ops.sh" "${REL}/infra/host/lib/"
+    cp "${HOST_SRC}/lib/executor/db.sh" "${REL}/infra/host/lib/executor/"
     cp "${HOST_SRC}/bin/gremion-tenant" "${REL}/infra/host/bin/"
     cp "${HOST_SRC}/lib/common.sh" "${REL}/infra/host/lib/"
     cp "${KERNEL_ROOT}/docker/keycloak/realm-export.ops.json" "${REL}/docker/keycloak/"
@@ -116,9 +118,25 @@ refute_state_secrets() {
     done
 }
 
+# TASK-043d-1 (D10): the create path is customer_create in lib/customer-ops.sh,
+# the function the executor's handler calls; the verb `gremion-tenant create`
+# is decommissioned (A7 below). These cases drive the library function itself.
+lib_create() {   # <customer_create args...>
+    run bash -c 'set -euo pipefail; . "$1/common.sh"; . "$1/customer-ops.sh"; shift; setup_paths; customer_create "$@"' _ \
+        "${REL}/infra/host/lib" "$@"
+}
 create() {
-    run "$LAUNCHER" create alpha-rat --host rat.alpha.example --config "${GREMION_ROOT}/tenant-config.json" \
+    lib_create alpha-rat --host rat.alpha.example --config "${GREMION_ROOT}/tenant-config.json" \
         --it-admin it@alpha.example --council-admin rat@alpha.example --enable calendar,vault --operator "$OP"
+}
+
+@test "A7: gremion-tenant create is refused with exit 2 before anything runs: no docker call, no row, no ledger step" {
+    run "$LAUNCHER" create alpha-rat --host rat.alpha.example --config "${GREMION_ROOT}/tenant-config.json" \
+        --it-admin it@alpha.example --council-admin rat@alpha.example --operator "$OP"
+    [ "$status" -eq 2 ] || { echo "status=$status $output"; return 1; }
+    [[ "$output" == *"decommissioned"* ]]
+    [ ! -s "$SHIM_LOG" ] || { cat "$SHIM_LOG"; return 1; }
+    [ ! -s "$ORDER" ]
 }
 
 @test "gremion-tenant exists and is executable" {
@@ -639,20 +657,20 @@ release_repo() {
 
 @test "TASK-044: create --dpia-json mounts the file read-only and passes it to phase A and phase B" {
     printf '{"calendar":{"requiresDpia":"no","reasonCodes":["x"],"documentRef":"TOM-1"}}' > "${GREMION_ROOT}/dpia.json"
-    run "$LAUNCHER" create alpha-rat --host rat.alpha.example --config "${GREMION_ROOT}/tenant-config.json" \
+    lib_create alpha-rat --host rat.alpha.example --config "${GREMION_ROOT}/tenant-config.json" \
         --it-admin it@alpha.example --council-admin rat@alpha.example --enable calendar --dpia-json "${GREMION_ROOT}/dpia.json" --operator "$OP"
     [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
     local mounted passed
-    mounted="$(grep -c -- ':/run/gremion/tenant-dpia.json:ro' "$SHIM_LOG" || true)"
-    passed="$(grep -c -- '--dpia-json /run/gremion/tenant-dpia.json' "$SHIM_LOG" || true)"
+    mounted="$(grep -c -- ':/run/gremion/dpia.json:ro' "$SHIM_LOG" || true)"
+    passed="$(grep -c -- '--dpia-json /run/gremion/dpia.json' "$SHIM_LOG" || true)"
     [ "$mounted" -eq 2 ] && [ "$passed" -eq 2 ] || { echo "mounted=$mounted passed=$passed"; cat "$SHIM_LOG"; return 1; }
 }
 
 @test "TASK-044: create without --dpia-json mounts and passes no decision file; a missing file is a usage error" {
     create
     [ "$status" -eq 0 ] || { echo "$output"; return 1; }
-    ! grep -q 'tenant-dpia.json' "$SHIM_LOG" || { cat "$SHIM_LOG"; return 1; }
-    run "$LAUNCHER" create alpha-rat --host rat.alpha.example --config "${GREMION_ROOT}/tenant-config.json" \
+    ! grep -q 'dpia.json' "$SHIM_LOG" || { cat "$SHIM_LOG"; return 1; }
+    lib_create alpha-rat --host rat.alpha.example --config "${GREMION_ROOT}/tenant-config.json" \
         --it-admin it@alpha.example --council-admin rat@alpha.example --enable calendar --dpia-json "${GREMION_ROOT}/absent.json" --operator "$OP"
     [ "$status" -eq 2 ] || { echo "status=$status $output"; return 1; }
 }

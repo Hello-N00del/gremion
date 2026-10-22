@@ -87,6 +87,9 @@ record_tags() { # <from> <to>
         mv -Tf "$ROOT/current.tmp" "$ROOT/current"
         [[ "$(readlink "$ROOT/current")" == "$dir" ]] \
             || die "current symlink does not point at $dir" 1
+        # The executor sources its handlers from current/ once at start: a
+        # running one must pick up the rolled-back release (never starts a stopped unit).
+        executor_unit_action try-restart
     fi
 }
 

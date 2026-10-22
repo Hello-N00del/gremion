@@ -93,6 +93,20 @@ describe('protocolDocumentPort.publishFile', () => {
   })
 })
 
+describe('protocolDocumentPort.restoreDraftFile (R33b no-orphan compensation)', () => {
+  beforeEach(() => mockMove.mockReset())
+
+  it('moves the published .odt back to the draft path', async () => {
+    mockMove.mockResolvedValue(undefined)
+    await protocolDocumentPort.restoreDraftFile!(DRAFT_PATH, `/protocols/published/${PROTOCOL_ID}`)
+    expect(mockMove).toHaveBeenCalledWith(
+      `/remote.php/dav/files/admin/protocols/published/${PROTOCOL_ID}/protocol.odt`,
+      DAV_DRAFT_FILE,
+      'admin'
+    )
+  })
+})
+
 describe('protocolDocumentPort.deleteDraftFile', () => {
   beforeEach(() => mockDelete.mockReset())
 

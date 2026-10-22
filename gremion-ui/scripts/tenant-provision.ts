@@ -35,7 +35,10 @@ import postgres from 'postgres'
 import { handToReader } from './tenant-secret-file'
 import {
   bootstrapPlatform,
-  ensurePanelReader,
+  ensureExecutorRole,
+  ensurePanelRequester,
+  EXECUTOR_ROLE,
+  PANEL_EXECUTES,
   PANEL_READS,
   createPhaseA,
   createPhaseB,
@@ -84,6 +87,7 @@ import {
 import { materializeConfig, assertBrandIdentityComplete } from '../src/lib/server/tenant/provisioner/materialize'
 import { tlog } from '../src/lib/server/observability/tenant-log'
 import { deleteTenant, type DeleteDeps, type LeafShredExecutor } from '../src/lib/server/tenant/provisioner/lifecycle'
+import { requestVerb } from './tenant-provision-requests'
 import { GATE_USAGE, GATE_VERBS, refusalLine, runGateVerb } from './tenant-provision-gate'
 import { parseDpiaMap, scratchFixturesAllowed } from './tenant-provision-scratch'
 
@@ -608,14 +612,11 @@ async function cmdInit(): Promise<void> {
     log(`init: gremion_platform ${r.platformCreated ? 'created' : 'present'}; ${r.applied.length} migration(s) applied; catalogue rows: +${r.catalogue.insertedModules.length} module(s), +${r.catalogue.insertedVersions.length} version(s); ops realm ${r.opsRealm?.created ? 'created' : 'present'}`)
     for (const u of r.catalogue.undecided) log(`init: ${u.moduleKey} not loaded (${u.reason})`)
     for (const row of r.catalogue.load) if (row.provisional) log(`init: ${provisionalNote(row)}`)
-    const panel = await ensurePanelReader({
-      kernelAdmin,
-      openAdminOn,
-      role: panelRole,
-      password: panelPassword,
-      controlDatabase,
-    })
-    log(`init: control-panel reader ${panelRole} ${panel.created ? 'created' : 'present'} (SELECT on ${[...PANEL_READS.control, ...PANEL_READS.platform].join(', ')} only)`)
+    const panel = await ensurePanelRequester({ kernelAdmin, openAdminOn, role: panelRole, password: panelPassword, controlDatabase })
+    log(`init: control-panel role ${panelRole} ${panel.created ? 'created' : 'present'} (SELECT on ${[...PANEL_READS.control, ...PANEL_READS.platform].join(', ')}; EXECUTE on ${PANEL_EXECUTES.join(', ')} only)`)
+    // TASK-043d: the host-side executor's role (no password: the state server's local socket only)
+    const executor = await ensureExecutorRole({ kernelAdmin, openAdminOn })
+    log(`init: executor role ${EXECUTOR_ROLE} ${executor.created ? 'created' : 'present'} (EXECUTE on the request functions only)`)
     // TASK-077: the kernel API's SELECT-only role, which deploy step 7
     // (kernel-api-migrate) and the kernel-api service connect as; nothing else
     // creates it.
@@ -950,6 +951,7 @@ const USAGE = `usage: tenant-create <verb> ...
   status <slug>
   operator-add <email> [--no-mail]
   delete <slug> | bootstrap-provisioner | materialize-config <slug> [--config <path>]
+  request-verify <request-id>   (TASK-043d: the executor's trusted-layer verdict, one JSON line)
 ${GATE_USAGE}`
 
 async function main(): Promise<void> {
@@ -988,8 +990,10 @@ async function main(): Promise<void> {
       return cmdBootstrapProvisioner()
     case 'materialize-config':
       return cmdMaterializeConfig()
+    case 'request-verify':
+      return requestVerb(verb, { args: process.argv.slice(3), reqEnv, directPostgresUrl, loadModules, modulesDir: MODULES_DIR, kcInternalBase, provisionerTransport: rawProvisionerTransport, usage: (m) => new UsageError(m), log })
     case 'provision':
-      throw new UsageError('provision is retired (TASK-043): a customer is created by `gremion-tenant create` (phase-a, the host mail step, record-step, phase-b, the router)')
+      throw new UsageError('provision is retired (TASK-043): a customer is created from the control panel ("Neuer Mandant"), which the host-side executor runs (phase-a, the host mail step, record-step, phase-b, the router; TASK-043d)')
     // TASK-044: the level-1 gate's verbs (tenant-provision-gate.ts)
     case 'enable-module':
     case 'dpia-record':

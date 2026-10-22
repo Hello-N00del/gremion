@@ -8,6 +8,7 @@ const h = vi.hoisted(() => ({
   getProtocol: vi.fn(), setStatus: vi.fn(), updateProtocol: vi.fn(),
   listResolutions: vi.fn(), assignGlobalNrs: vi.fn(), recordAdoptions: vi.fn(),
   quorum: vi.fn(), downloadDraft: vi.fn(),
+  publishFile: vi.fn(), uploadPdf: vi.fn(), restore: vi.fn(), convert: vi.fn(), convertPdf: vi.fn(), afterTx: vi.fn(),
 }))
 vi.mock('$lib/server/protocols/protocol-db', () => ({
   getProtocol: h.getProtocol, setProtocolStatus: h.setStatus, updateProtocol: h.updateProtocol,
@@ -15,10 +16,10 @@ vi.mock('$lib/server/protocols/protocol-db', () => ({
   recordResolutionAdoptions: h.recordAdoptions,
 }))
 vi.mock('$lib/server/documents/collabora-convert', () => ({
-  convertOdtToHtml: vi.fn(), convertOdtToPdf: vi.fn(),
+  convertOdtToHtml: h.convert, convertOdtToPdf: h.convertPdf,
 }))
 vi.mock('$lib/server/db', () => ({
-  getDb: () => ({ begin: async (cb: (tx: unknown) => unknown) => cb({ __tx: true }) }),
+  getDb: () => ({ begin: async (cb: (tx: unknown) => unknown) => { const r = await cb({ __tx: true }); h.afterTx(); return r } }),
 }))
 vi.mock('$lib/server/governance/quorum', () => ({ getQuorumContext: h.quorum }))
 vi.mock('$lib/auth', () => ({ hasRole: () => true, Role: { CouncilAdmin: 'council-admin' } }))
@@ -79,18 +80,96 @@ describe('POST /api/protocols/[id]/publish - files off (F1)', () => {
     expect((await POST(ev())).status).toBe(200)
   })
 
-  it('files on but Nextcloud down: falls back to the in-app body instead of failing', async () => {
+  // R33b rule: an ODT that exists IS the reviewed artefact. Publish must use it
+  // (no silent fallback to body_html) and must never leave it moved when the
+  // publish fails. body_html is the fallback only when there is no ODT.
+  const portFull = () => {
+    const port = {
+      downloadDraft: h.downloadDraft, publishFile: h.publishFile,
+      uploadPublishedPdf: h.uploadPdf, restoreDraftFile: h.restore,
+    }
+    registerProtocolDocumentPort(port as unknown as ProtocolDocumentPort)
+  }
+  const withOdt = { ...base, nextcloud_draft_path: '/d/p1.odt' }
+
+  it('ODT exists, Nextcloud down, in-app body present: FAILS (no silent fallback to body_html)', async () => {
     h.downloadDraft.mockRejectedValue(new Error('nc down'))
-    registerProtocolDocumentPort({ downloadDraft: h.downloadDraft } as unknown as ProtocolDocumentPort)
-    h.getProtocol.mockResolvedValue({ ...base, nextcloud_draft_path: '/d/p1.odt' })
-    expect((await POST(ev())).status).toBe(200)
-    expect(h.downloadDraft).toHaveBeenCalled()
+    portFull()
+    h.getProtocol.mockResolvedValue(withOdt)
+    await expect(POST(ev())).rejects.toBeTruthy()
+    expect(h.updateProtocol).not.toHaveBeenCalled()
+    expect(h.setStatus).not.toHaveBeenCalled()
+    expect(h.publishFile).not.toHaveBeenCalled()
   })
 
-  it('files on, Nextcloud down and NO in-app body: still fails (nothing to publish)', async () => {
+  it('ODT exists: the published body is the ODT conversion, not body_html', async () => {
+    h.downloadDraft.mockResolvedValue(Buffer.from('odt'))
+    h.convert.mockResolvedValue('<p>aus ODT</p>')
+    h.convertPdf.mockResolvedValue(Buffer.from('pdf'))
+    h.publishFile.mockResolvedValue('/protocols/published/p1')
+    h.uploadPdf.mockResolvedValue('/protocols/published/p1/protocol.pdf')
+    portFull()
+    h.getProtocol.mockResolvedValue(withOdt)
+    expect((await POST(ev())).status).toBe(200)
+    const arg = h.updateProtocol.mock.calls[0][1] as { bodyHtml?: string }
+    expect(arg.bodyHtml).toBe('<p>aus ODT</p>')
+    expect(h.restore).not.toHaveBeenCalled()
+  })
+
+  it('no orphan: PDF upload fails after the ODT was moved -> ODT is moved back, publish fails', async () => {
+    h.downloadDraft.mockResolvedValue(Buffer.from('odt'))
+    h.convert.mockResolvedValue('<p>x</p>')
+    h.convertPdf.mockResolvedValue(Buffer.from('pdf'))
+    h.publishFile.mockResolvedValue('/protocols/published/p1')
+    h.uploadPdf.mockRejectedValue(new Error('upload failed'))
+    portFull()
+    h.getProtocol.mockResolvedValue(withOdt)
+    await expect(POST(ev())).rejects.toBeTruthy()
+    expect(h.restore).toHaveBeenCalledWith('/d/p1.odt', '/protocols/published/p1')
+    expect(h.setStatus).not.toHaveBeenCalled()
+  })
+
+  it('no orphan: DB transaction fails after the ODT was moved -> ODT is moved back', async () => {
+    h.downloadDraft.mockResolvedValue(Buffer.from('odt'))
+    h.convert.mockResolvedValue('<p>x</p>')
+    h.convertPdf.mockResolvedValue(Buffer.from('pdf'))
+    h.publishFile.mockResolvedValue('/protocols/published/p1')
+    h.uploadPdf.mockResolvedValue('/protocols/published/p1/protocol.pdf')
+    h.updateProtocol.mockRejectedValue(new Error('db down'))
+    portFull()
+    h.getProtocol.mockResolvedValue(withOdt)
+    await expect(POST(ev())).rejects.toBeTruthy()
+    expect(h.restore).toHaveBeenCalledWith('/d/p1.odt', '/protocols/published/p1')
+  })
+
+  it('COMMIT outcome unknown (throw after all statements ran): the ODT is NOT moved back', async () => {
+    h.downloadDraft.mockResolvedValue(Buffer.from('odt'))
+    h.convert.mockResolvedValue('<p>x</p>')
+    h.convertPdf.mockResolvedValue(Buffer.from('pdf'))
+    h.publishFile.mockResolvedValue('/protocols/published/p1')
+    h.uploadPdf.mockResolvedValue('/protocols/published/p1/protocol.pdf')
+    h.afterTx.mockImplementation(() => { throw new Error('connection lost at COMMIT') })
+    portFull()
+    h.getProtocol.mockResolvedValue(withOdt)
+    await expect(POST(ev())).rejects.toBeTruthy()
+    expect(h.restore).not.toHaveBeenCalled()
+  })
+
+  it('no ODT ever uploaded (port on, no draft path): publishes the in-app body', async () => {
+    portFull()
+    expect((await POST(ev())).status).toBe(200)
+    expect(h.downloadDraft).not.toHaveBeenCalled()
+  })
+
+  it('files off with a stale draft path: nothing to read, in-app body is published', async () => {
+    h.getProtocol.mockResolvedValue(withOdt)
+    expect((await POST(ev())).status).toBe(200)
+  })
+
+  it('ODT exists, Nextcloud down and NO in-app body: still fails', async () => {
     h.downloadDraft.mockRejectedValue(new Error('nc down'))
-    registerProtocolDocumentPort({ downloadDraft: h.downloadDraft } as unknown as ProtocolDocumentPort)
-    h.getProtocol.mockResolvedValue({ ...base, body_html: null, nextcloud_draft_path: '/d/p1.odt' })
+    portFull()
+    h.getProtocol.mockResolvedValue({ ...withOdt, body_html: null })
     await expect(POST(ev())).rejects.toBeTruthy()
     expect(h.setStatus).not.toHaveBeenCalled()
   })

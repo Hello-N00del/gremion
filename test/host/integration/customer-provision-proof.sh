@@ -56,9 +56,12 @@
 #     customer-create-refuse  `--enable board` and `--enable vault` refused by
 #                    name before any write (R29-I1; R30 A1, PRD-PLAT-012 / PRD-REC-003)
 #     customer-create-x       the gate fixtures, then
-#                    `gremion-tenant create proof-x --enable calendar,votes` (calendar:
+#                    a create REQUEST for proof-x (panel-create, then `gremion-executor --once`; calendar,votes) (calendar:
 #                    a database and a broker user; votes: neither)
 #     customer-create-y       a second customer proof-y
+#   customer-panel-create-x|y, customer-executor-once-x|y  the two halves of a create, run separately:
+#                    queue the request (break-glass `gremion-tenant request create`, the panel's queue), then
+#                    run the executor for single cycles until that request is finished
 #     customer-create-check   every section 1 "Create" line (post-conditions)
 #   customer-rerun   a second create: phase A and B run nothing, the broker is
 #                    not reloaded, the ledger and the database lists unchanged
@@ -469,6 +472,53 @@ tenant() { # gremion-tenant against the laid-out root, as the operator
         GREMION_SCRATCH_FIXTURES="$(scratch_stack)" GREMION_PRODUCTION_STACK=none \
         bash "$ROOT/infra/host/bin/gremion-tenant" "$@"
 }
+# R31-I4: `gremion-tenant create` is decommissioned as an operator surface; a
+# customer is created by a REQUEST in the platform queue that the host-side
+# executor runs. The proof cannot mint the panel's signed sign-in, so the
+# submission is the break-glass `gremion-tenant request create` (origin=host,
+# the SAME plt.submit_provisioning_request and queue as the panel; the executor
+# verifies and runs it like any panel request).
+executor() { # gremion-executor against the laid-out root, as tenant() runs the host tool
+    MSYS_NO_PATHCONV=1 GREMION_ROOT="$(host_path "$(croot)")" GREMION_RELEASE_DIR="$ROOT_H" \
+        GREMION_OPERATOR_ID="$PROOF_OPERATOR_ID" TENANT_DNS_PREFLIGHT="${PROOF_DNS_PREFLIGHT:-off}" \
+        GREMION_SCRATCH_FIXTURES="$(scratch_stack)" GREMION_PRODUCTION_STACK=none \
+        bash "$ROOT/infra/host/bin/gremion-executor" "$@"
+}
+# panel_create <slug> <enable,csv|-> [dpia.json] -- queue a `create` request in the panel's
+# args shape (request-verify's wire format: brand {product, orgShort}, enable [],
+# dpia {module: {requires_dpia, reason_codes, document_ref}}); prints the request id,
+# also kept in ledger/request-<slug>.id. The args file is 0600 and removed after.
+panel_create() {
+    local slug="$1" enable="$2" dpia_file="${3:-}" cfg="$ROOT/test/host/fixtures/pooled-stack/tenant-t040-b.json" args dpia='{}' en='[]' id
+    [[ -f "$cfg" ]] || die "the customer config fixture ${cfg} is absent"
+    if [[ "$enable" != "-" ]]; then en="$(jq -cn --arg e "$enable" '$e | split(",")')"; fi
+    # dpia.json is the library format (requiresDpia yes|no, reasonCodes, documentRef); the request carries the wire format
+    if [[ -n "$dpia_file" ]]; then
+        dpia="$(jq -c 'with_entries(.value |= {requires_dpia: (.requiresDpia == "yes"), reason_codes: .reasonCodes, document_ref: .documentRef})' "$dpia_file")"
+    fi
+    args="$(mktemp)"; chmod 600 "$args"
+    jq -n --arg slug "$slug" --arg host "$(host_of "$slug")" --arg it "$(admin_addr "$slug" it)" --arg council "$(admin_addr "$slug" rat)" \
+        --slurpfile cfg "$cfg" --argjson enable "$en" --argjson dpia "$dpia" \
+        '{slug: $slug, host: $host, itAdmin: $it, councilAdmin: $council,
+          brand: {product: $cfg[0].brand.product, orgShort: $cfg[0].brand.org_short}, enable: $enable, dpia: $dpia}' > "$args"
+    id="$(tenant request create --args-file "$args" --operator "$PROOF_OPERATOR_ID" --reason "customer-provision-proof: create ${slug} through the queue" | tail -n1)" \
+        || { rm -f "$args"; return 1; }
+    rm -f "$args"
+    [[ "$id" =~ ^[0-9a-f-]{36}$ ]] || return 1
+    mkdir -p "$OUT/ledger"; printf '%s\n' "$id" > "$OUT/ledger/request-${slug}.id"
+    printf '%s\n' "$id"
+}
+# executor_once <request-id> [log] -- run the executor for single cycles until THIS request is
+# finished (at most 3: an older queued request may be claimed first); prints its final state.
+executor_once() {
+    local id="$1" log="${2:-/dev/null}" st n
+    for n in 1 2 3; do
+        executor --once >> "$log" 2>&1 || true
+        st="$(q gremion_platform "SELECT state FROM plt.provisioning_request WHERE request_id = '${id}'")"
+        case "$st" in succeeded|failed|refused|expired|dead) printf '%s' "$st"; return 0 ;; esac
+    done
+    printf '%s' "$st"; return 1
+}
 # TASK-044 Q6: the stack name that lets the container gate accept the proof's
 # `scratch-fixture:` isolation rows -- ONLY a tNNN-<sha8> pooled stack, never a
 # host (PROOF_GREMION_ROOT) or any other name. Empty otherwise.
@@ -776,40 +826,58 @@ phase_customer_create_refuse() {
     snap() { printf '%s|%s' "$(q control "SELECT string_agg(slug || ':' || status, ',' ORDER BY slug) FROM tenant")" \
         "$(q postgres "SELECT 1 FROM pg_database WHERE datname = 'gremion_platform'" | grep -q 1 && q gremion_platform "SELECT count(*) || ':' || coalesce(max(occurred_at)::text, '-') FROM plt.provisioning_step")"; }
     # R30 A1 (PRD-PLAT-012 / PRD-REC-003): vault is refused the same way.
-    local denied
+    local denied rid st oc
     for denied in board vault; do
         snap_before="$(snap)"
-        rc=0; out="$(tenant create "$X" --host "$(host_of "$X")" --config "$cfg" --it-admin "$(admin_addr "$X" it)" \
-            --council-admin "$(admin_addr "$X" rat)" --enable "calendar,${denied}" 2>&1)" || rc=$?
+        rc=0; rid="$(panel_create "$X" "calendar,${denied}")" || rc=$?
+        if (( rc != 0 )); then bad "customer-create: could not queue the ${denied} request"; continue; fi
+        st="$(executor_once "$rid" "$OUT/ledger/refuse-${denied}.log")" || true
+        oc="$(q gremion_platform "SELECT outcome FROM plt.provisioning_request WHERE request_id = '${rid}'")"
         snap_after="$(snap)"
-        if (( rc != 0 )) && [[ "$out" == *"module ${denied} cannot be enabled"* ]] && [[ "$snap_before" == "$snap_after" ]]; then
-            ok "customer-create: --enable ${denied} refused by name (exit ${rc}); the control registry and the ledger unchanged"
-        else bad "customer-create: --enable ${denied} was not refused before any write (exit ${rc}; before ${snap_before}; after ${snap_after})"; fi
+        if [[ "$st" == refused && "$oc" == *"${denied}"* && "$snap_before" == "$snap_after" ]]; then
+            ok "customer-create: --enable ${denied} refused by name by request-verify (request ${rid}: ${oc}); the control registry and the ledger unchanged"
+        else bad "customer-create: --enable ${denied} was not refused before any write (state ${st}; outcome ${oc}; before ${snap_before}; after ${snap_after})"; fi
     done
 
 }
 
-phase_customer_create_x() {
+phase_customer_panel_create_x() {
     need_pooled
-    local cfg="$ROOT/test/host/fixtures/pooled-stack/tenant-t040-b.json"
-    [[ -f "$cfg" ]] || die "the customer config fixture ${cfg} is absent"
     # TASK-044 section 9: the real gate. Without these rows the create below is REFUSED (NO_ISOLATION_RESULT).
     seed_gate_fixtures calendar,votes
     ok "customer-create: gate fixtures seeded (scratch-fixture: isolation rows, DPIA decisions in ledger/dpia.json)"
-    tenant create "$X" --host "$(host_of "$X")" --config "$cfg" --it-admin "$(admin_addr "$X" it)" \
-        --council-admin "$(admin_addr "$X" rat)" --enable calendar,votes --dpia-json "$OUT/ledger/dpia.json" > "$OUT/ledger/create-x.log" 2>&1 \
-        || { tail -n 25 "$OUT/ledger/create-x.log" >&2; bad "customer-create: gremion-tenant create ${X} failed"; return; }
-    ok "customer-create-x: gremion-tenant create ${X} (calendar, votes) exited 0"
+    local rid
+    rid="$(panel_create "$X" calendar,votes "$OUT/ledger/dpia.json")" || { bad "customer-panel-create: could not queue the create request for ${X}"; return; }
+    ok "customer-panel-create-x: create ${X} (calendar, votes) queued as request ${rid} (origin host, the panel's queue)"
+}
+
+phase_customer_executor_once() { # <slug>
+    need_pooled
+    local slug="$1" rid st
+    rid="$(cat "$OUT/ledger/request-${slug}.id" 2>/dev/null)" || { bad "customer-executor-once: no queued request for ${slug} (run its panel-create phase first)"; return; }
+    st="$(executor_once "$rid" "$OUT/ledger/create-${slug}.log")" || true
+    if [[ "$st" == succeeded ]]; then ok "customer-executor-once: gremion-executor --once ran request ${rid}: succeeded"
+    else
+        tail -n 25 "$OUT/ledger/create-${slug}.log" >&2 || true
+        bad "customer-executor-once: request ${rid} is ${st:-unknown}, outcome: $(q gremion_platform "SELECT outcome FROM plt.provisioning_request WHERE request_id = '${rid}'")"
+    fi
+}
+
+phase_customer_create_x() {
+    phase_customer_panel_create_x
+    phase_customer_executor_once "$X"
+}
+
+phase_customer_panel_create_y() {
+    need_pooled
+    local rid
+    rid="$(panel_create "$Y" -)" || { bad "customer-panel-create: could not queue the create request for ${Y}"; return; }
+    ok "customer-panel-create-y: create ${Y} (no module) queued as request ${rid}"
 }
 
 phase_customer_create_y() {
-    need_pooled
-    local cfg="$ROOT/test/host/fixtures/pooled-stack/tenant-t040-b.json"
-    [[ -f "$cfg" ]] || die "the customer config fixture ${cfg} is absent"
-    tenant create "$Y" --host "$(host_of "$Y")" --config "$cfg" --it-admin "$(admin_addr "$Y" it)" \
-        --council-admin "$(admin_addr "$Y" rat)" > "$OUT/ledger/create-y.log" 2>&1 \
-        || { tail -n 25 "$OUT/ledger/create-y.log" >&2; bad "customer-create: gremion-tenant create ${Y} failed"; return; }
-    ok "customer-create: gremion-tenant create ${Y} exited 0"
+    phase_customer_panel_create_y
+    phase_customer_executor_once "$Y"
 }
 
 phase_customer_create_check() {
@@ -895,18 +963,20 @@ phase_customer_create() {
 
 phase_customer_rerun() {
     need_pooled
-    local cfg="$ROOT/test/host/fixtures/pooled-stack/tenant-t040-b.json" id before after b
+    local id before after b rid st
     id="$(customer_id "$X")"
     before="$(q gremion_platform "SELECT count(*) FROM plt.provisioning_step WHERE customer_id = '${id}'")"
-    tenant create "$X" --host "$(host_of "$X")" --config "$cfg" --it-admin "$(admin_addr "$X" it)" \
-        --council-admin "$(admin_addr "$X" rat)" --enable calendar,votes > "$OUT/ledger/rerun-x.log" 2>&1 \
-        || { tail -n 25 "$OUT/ledger/rerun-x.log" >&2; bad "customer-rerun: the second create failed"; return; }
+    # "Fortsetzen" is a NEW create request with the same args; the engine resumes from the ledger.
+    rid="$(panel_create "$X" calendar,votes "$OUT/ledger/dpia.json")" || { bad "customer-rerun: could not queue the second create"; return; }
+    st="$(executor_once "$rid" "$OUT/ledger/rerun-x.log")" || true
+    if [[ "$st" != succeeded ]]; then tail -n 25 "$OUT/ledger/rerun-x.log" >&2 || true; bad "customer-rerun: the second create (request ${rid}) is ${st:-unknown}"; return; fi
     after="$(q gremion_platform "SELECT count(*) FROM plt.provisioning_step WHERE customer_id = '${id}'")"
     if [[ "$before" == "$after" ]]; then ok "customer-rerun: the ledger is unchanged (${after} rows)"; else bad "customer-rerun: the ledger grew ${before} -> ${after}"; fi
-    # `|| true`: a missing phase-B line must reach the bad() branch below, not abort under errexit/pipefail
-    b="$({ grep -h '^{"phase":"b"' "$OUT/ledger/rerun-x.log" || true; } | tail -n1)"
+    # The engine's phase lines are the request's events (plt.provisioning_request_event), not stdout.
+    b="$(q gremion_platform "SELECT message FROM plt.provisioning_request_event WHERE request_id = '${rid}' AND message LIKE '{\"phase\":\"b\"%' ORDER BY at DESC, event_id DESC LIMIT 1")"
     if [[ "$(jq -c '[.reloaded, .ran]' <<< "${b:-{\}}")" == '[false,[]]' ]]; then ok "customer-rerun: phase B ran nothing and did not reload the broker"; else bad "customer-rerun: phase B was ${b:-silent}"; fi
-    if [[ "$(grep -h '^{"phase":"a"' "$OUT/ledger/rerun-x.log" | tail -n1 | jq -c '.ran')" == '[]' ]]; then ok "customer-rerun: phase A ran nothing"; else bad "customer-rerun: phase A ran steps"; fi
+    b="$(q gremion_platform "SELECT message FROM plt.provisioning_request_event WHERE request_id = '${rid}' AND message LIKE '{\"phase\":\"a\"%' ORDER BY at DESC, event_id DESC LIMIT 1")"
+    if [[ "$(jq -c '.ran' <<< "${b:-{\}}")" == '[]' ]]; then ok "customer-rerun: phase A ran nothing"; else bad "customer-rerun: phase A ran steps (${b:-silent})"; fi
 }
 
 phase_customer_suspend() {
@@ -1174,6 +1244,10 @@ run_phase() {
         customer-init) phase_customer_init ;;
         customer-create) phase_customer_create ;;
         customer-create-refuse) phase_customer_create_refuse ;;
+        customer-panel-create-x) phase_customer_panel_create_x ;;
+        customer-panel-create-y) phase_customer_panel_create_y ;;
+        customer-executor-once-x) phase_customer_executor_once "$X" ;;
+        customer-executor-once-y) phase_customer_executor_once "$Y" ;;
         customer-create-x) phase_customer_create_x ;;
         customer-create-y) phase_customer_create_y ;;
         customer-create-check) phase_customer_create_check ;;

@@ -45,7 +45,20 @@ export type { CreateSpec, PhaseOutcome, ProvisioningStatus } from './customer.ts
 export { loadCatalogueRows, OWNING_CONTEXT_CODES, planCatalogueRows, PROVISIONAL_RETENTION_PROFILES, provisionalNote } from './catalogue-rows.ts'
 export type { CatalogueModule, CatalogueRowPlan, CatalogueRowsResult } from './catalogue-rows.ts'
 export { loadModuleJsons } from './module-tree.ts'
-export { bootstrapPlatform, ensurePanelReader, PANEL_READS, pgModules, type PanelReaderDeps } from './pg.ts'
+export { bootstrapPlatform, pgModules, type PanelReaderDeps } from './pg.ts'
+export {
+  ensureExecutorRole,
+  ensurePanelRequester,
+  EXECUTOR_EXECUTES,
+  EXECUTOR_MARKER,
+  EXECUTOR_ROLE,
+  PANEL_EXECUTES,
+  PANEL_READS,
+  PANEL_REQUESTER_MARKER,
+  type ExecutorRoleDeps,
+} from './pg.ts'
+export { HANDLED_KINDS, isRequestKind, KIND_OWNER, REQUEST_KINDS, verifyEnableLoaded, verifyRequestArgs } from './requests.ts'
+export type { CreateRequestArgs, DpiaDecision, RequestEnvelope, RequestKind, RequestVerdict, VerifyContext } from './requests.ts'
 export { renderCustomerRouter } from './router.ts'
 export type { CustomerRouterInput } from './router.ts'
 export type { BootstrapDeps, BootstrapResult } from './pg.ts'
