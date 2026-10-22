@@ -1087,3 +1087,28 @@ shim_reboot_env() {
     run grep -c '^curl ' "$SHIM_LOG"
     [ "$output" = "0" ]
 }
+
+# TASK-043d-1 verify-r1 HIGH 2: a bootstrapped host must get the executor
+# service, or there is no create path (the CLI create is decommissioned).
+@test "bootstrap has an executor stage: installed through two-argument render_unit, enabled, asserted active, in the stage table and in 'all'" {
+    local bs="${PROJECT_ROOT}/infra/host/bootstrap.sh"
+    grep -qE '^stage_executor\(\) \{' "$bs"
+    grep -qF 'render_unit gremion-executor.service /etc/systemd/system/gremion-executor.service' "$bs"
+    grep -qF 'systemctl enable --now gremion-executor.service' "$bs"
+    grep -qF 'systemctl is-active --quiet gremion-executor.service' "$bs"
+    grep -qE '^ +executor\) +stage_executor ;;' "$bs"
+    # 'all' runs it, after the agent stage
+    grep -qE 'stage_agent; stage_executor|stage_firewall; stage_agent; stage_executor' "$bs"
+    run grep -nE 'render_unit +[A-Za-z0-9._-]+ *\|' "$bs"
+    [ "$status" -ne 0 ]
+}
+
+@test "bootstrap's executor stage installs the program and its lib side by side (it resolves ../lib/common.sh from BASH_SOURCE)" {
+    local bs="${PROJECT_ROOT}/infra/host/bootstrap.sh"
+    local body; body="$(awk '/^stage_executor\(\) \{/,/^}/' "$bs")"
+    [ -n "$body" ]
+    grep -qF '$SCRIPT_DIR/bin/gremion-executor' <<<"$body"
+    grep -qF '/bin/gremion-executor"' <<<"$body"
+    grep -qF 'lib/common.sh' <<<"$body"
+    grep -qF 'executor' <(grep -F 'executor' <<<"$(awk '/^usage\(\)/,/^}/' "$bs"; sed -n '/^Stages:/,/^Options:/p' "$bs")")
+}
