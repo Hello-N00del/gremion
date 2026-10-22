@@ -3,7 +3,7 @@ import type { RequestHandler } from './$types'
 import { getBootStatus } from '../../../hooks.server'
 import { readConfig } from '$lib/server/config'
 import { getSetupHealthProbes } from '$lib/server/modules/runtime-registry'
-import { collectModuleOutages } from '$lib/server/tenant/health'
+import { collectModuleOutages, moduleProbeCache } from '$lib/server/tenant/health'
 
 /**
  * PUBLIC (unauthenticated) boot-status probe.
@@ -33,6 +33,8 @@ import { collectModuleOutages } from '$lib/server/tenant/health'
  * that fail their liveness probe. The status stays 200 and `status` stays 'ok'
  * (a feature-module outage must not restart or fail the kernel); a DISABLED
  * module's service is never probed or listed. Names only, no error detail.
+ * Probe results are cached process-wide for 20 s and single-flighted
+ * (`moduleProbeCache`): this endpoint is public, the probes call admin APIs.
  * `/api/health` is added to the hook's `publicPaths` allowlist so it is never
  * auth-gated once boot completes.
  */
@@ -42,7 +44,9 @@ export const GET: RequestHandler = async () => {
   let degraded: { name: string; errorClass: string; code: string }[] = []
   try {
     const probes = getSetupHealthProbes().flatMap((p) =>
-      p.moduleId ? [{ moduleId: p.moduleId, service: p.service, validate: p.validate }] : [],
+      p.moduleId
+        ? [moduleProbeCache.wrap({ moduleId: p.moduleId, service: p.service, validate: p.validate })]
+        : [],
     )
     degraded = (await collectModuleOutages(probes, readConfig().modules)).map((name) => ({
       name,

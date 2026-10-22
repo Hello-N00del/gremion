@@ -156,6 +156,53 @@ export async function collectModuleOutages(
   return [...new Set(results.filter((r): r is string => r !== null))]
 }
 
+/**
+ * Process-level result cache for module liveness probes. `/api/health` is public
+ * and unauthenticated while the probes call admin APIs (Nextcloud OCS, Synapse
+ * admin), so an uncached probe per request would let any caller drive admin
+ * traffic. Entries are single-flight (concurrent callers share the in-flight
+ * promise) and expire `ttlMs` after the probe STARTED, so a hung probe is also
+ * replaced after the TTL.
+ */
+export function createProbeCache(ttlMs = 20_000, now: () => number = () => Date.now()) {
+  const entries = new Map<string, { at: number; result: Promise<boolean> }>()
+  return {
+    wrap(p: ModuleHealthProbe): ModuleHealthProbe {
+      const key = `${p.moduleId}:${p.service}`
+      return {
+        ...p,
+        validate: () => {
+          const hit = entries.get(key)
+          if (hit && now() - hit.at < ttlMs) return hit.result
+          const result = Promise.resolve().then(() => p.validate())
+          entries.set(key, { at: now(), result })
+          return result
+        },
+      }
+    },
+    clear(): void {
+      entries.clear()
+    },
+  }
+}
+
+/** The shared instance used by the public /api/health route. */
+export const moduleProbeCache = createProbeCache()
+
+/**
+ * Derive the ids of the feature modules switched OFF for a tenant from its own
+ * config (`configPathForTenant(slug)`, the same source the app reads). Feeds
+ * `HealthDeps.disabledModules` in the fleet CLI.
+ */
+export function disabledModulesFromConfig(
+  readModules: (tenant: Tenant) => Record<string, boolean>,
+): (tenant: Tenant) => Promise<readonly string[]> {
+  return async (tenant) =>
+    Object.entries(readModules(tenant))
+      .filter(([, on]) => !on)
+      .map(([id]) => id)
+}
+
 type SafeResult<T> = { ok: true; value: T } | { ok: false; error: string }
 async function safe<T>(fn: () => Promise<T>): Promise<SafeResult<T>> {
   try {

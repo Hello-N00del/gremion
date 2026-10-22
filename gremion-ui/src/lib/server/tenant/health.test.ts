@@ -7,7 +7,10 @@
 // fail-closed stance as the resolver's non-active path). T21 adds: the `leaf`
 // health check (newsletter-service /healthz/tenants probe).
 import { describe, it, expect, vi } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import {
+  disabledModulesFromConfig,
   checkFleetHealth,
   collectModuleOutages,
   renderHealthTable,
@@ -335,3 +338,23 @@ describe('collectModuleOutages (F7)', () => {
   })
 })
 
+describe('disabledModulesFromConfig + fleet CLI wiring (F7)', () => {
+  it('lists the modules switched off in the tenant config, per tenant', async () => {
+    const fn = disabledModulesFromConfig((t) =>
+      t.slug === 't2' ? { files: false, messages: true, content: false } : { files: true },
+    )
+    expect(await fn(tenant({ slug: 't2' }))).toEqual(['files', 'content'])
+    expect(await fn(tenant({ slug: 'other' }))).toEqual([])
+  })
+  it('end to end: a tenant with files OFF is healthy despite a failed nextcloud ledger row', async () => {
+    const deps = greenDeps({
+      probeSatellites: vi.fn(async () => ({ nextcloud: 'failed', matrix: 'ok' })),
+      disabledModules: disabledModulesFromConfig(() => ({ files: false, messages: true })),
+    })
+    expect((await checkFleetHealth(deps)).ok).toBe(true)
+  })
+  it('the fleet CLI really supplies disabledModules (not dead in production)', () => {
+    const src = readFileSync(resolve(__dirname, '../../../../scripts/tenant-health.ts'), 'utf-8')
+    expect(src).toMatch(/disabledModules:\s*disabledModulesFromConfig\(/)
+  })
+})
