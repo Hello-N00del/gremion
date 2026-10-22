@@ -9,6 +9,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import {
   checkFleetHealth,
+  collectModuleOutages,
   renderHealthTable,
   fleetExitCode,
   type HealthDeps,
@@ -307,3 +308,30 @@ describe('renderHealthTable — leaf subscribers/newsletters appended (T21)', ()
     expect(table).not.toMatch(/sub|nl\b/i)
   })
 })
+describe('collectModuleOutages (F7)', () => {
+  const nc = (ok: boolean) => ({ moduleId: 'files', service: 'nextcloud', validate: vi.fn(async () => ok) })
+  it('enabled module whose service is down is listed', async () => {
+    expect(await collectModuleOutages([nc(false)], { files: true })).toEqual(['nextcloud'])
+  })
+  it('disabled module is not listed and not probed', async () => {
+    const p = nc(false)
+    expect(await collectModuleOutages([p], { files: false })).toEqual([])
+    expect(p.validate).not.toHaveBeenCalled()
+  })
+  it('throwing and hanging probes count as down; healthy ones do not', async () => {
+    const boom = { moduleId: 'messages', service: 'synapse', validate: async () => { throw new Error('x') } }
+    const hang = { moduleId: 'files', service: 'nextcloud', validate: () => new Promise<boolean>(() => {}) }
+    expect(await collectModuleOutages([boom, hang, { moduleId: 'core', service: 'c', validate: async () => true }], { messages: true, files: true, core: true }, 20)).toEqual(['synapse', 'nextcloud'])
+  })
+  it('fleet: satellites of a disabled module are not a fault', async () => {
+    const deps = greenDeps({
+      probeSatellites: vi.fn(async () => ({ nextcloud: 'failed', matrix: 'ok' })),
+      disabledModules: async () => ['files'],
+    })
+    const r = await checkFleetHealth(deps)
+    expect(r.ok).toBe(true)
+    const enabled = await checkFleetHealth(greenDeps({ probeSatellites: vi.fn(async () => ({ nextcloud: 'failed', matrix: 'ok' })) }))
+    expect(enabled.ok).toBe(false)
+  })
+})
+
