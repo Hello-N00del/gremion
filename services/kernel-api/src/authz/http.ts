@@ -14,7 +14,7 @@ import type { KernelApiDeps, TenantRow } from '../app/deps.ts'
 import { getContext } from '../tenancy/context.ts'
 import { GrantError } from './errors.ts'
 import type { GrantRow } from './events.ts'
-import { issueGrant, listGrants, revokeAllForPerson, revokeGrant, type Granter, type GrantDeps } from './grants.ts'
+import { issueGrant, listGrants, mayReadGrants, revokeAllForPerson, revokeGrant, type Granter, type GrantDeps } from './grants.ts'
 import { decide, type EnabledModules } from './pdp.ts'
 import { STEPUP_MAX_AGE_SECONDS } from './stepup.ts'
 
@@ -87,10 +87,10 @@ export function authzHandlers(deps: Deps): Record<'decideAuthz' | 'listAuthzGran
       }),
     listAuthzGrants: async (request, reply) =>
       run(reply, async () => {
-        const { ctx, tenant, sql, enabledModules } = await setup(deps, request)
+        const { ctx, tenant, sql, gdeps } = await setup(deps, request)
         const q = request.query as { bodyId: string; personId?: string }
         if (ctx.caller.kind !== 'user') return problem(reply, 'forbidden', 403, 'Grants are listed by a person.')
-        const d = await decide(sql, enabledModules, { customerId: tenant.customerId, subject: { sub: String(ctx.caller.claims.sub ?? '') }, bodyId: q.bodyId, capability: 'idt.grant.read' })
+        const d = await mayReadGrants(sql, gdeps, tenant.customerId, ctx.caller.claims, q.bodyId)
         if (!d.allow) return problem(reply, 'forbidden', 403, `Reading grants is not allowed in this body (${d.reason}).`)
         const rows = await listGrants(sql, tenant.customerId, { bodyId: q.bodyId, ...(q.personId ? { personId: q.personId } : {}) })
         return { grants: rows.map(toApiGrant) }

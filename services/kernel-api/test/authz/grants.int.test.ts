@@ -30,7 +30,7 @@ const events = async (world: World, grantId: string) =>
   world.db.admin<{ event_type: string; aggregate_version: string }[]>`SELECT event_type, aggregate_version::text FROM idt.outbox WHERE aggregate_id = ${grantId}::uuid ORDER BY aggregate_version`
 
 beforeAll(async () => {
-  w = await buildWorld('grants', undefined, ['admin', 'alice', 'bob', 'carol', 'impostor', 'dave', 'itv', 'itfach'])
+  w = await buildWorld('grants', undefined, ['admin', 'alice', 'bob', 'carol', 'impostor', 'dave', 'itv', 'itfach', 'fin', 'carev', 'caexp'])
   w2 = await buildWorld('grants2', undefined, ['admin'])
   w3 = await buildWorld('grants3', undefined, ['ca3', 'target3'])
   await seedGrant(w.db.admin, w.db.customerId, { bodyId: w.bodyA, personId: w.persons.admin!, key: 'body_admin' })
@@ -40,6 +40,9 @@ beforeAll(async () => {
   await seedGrant(w.db.admin, w.db.customerId, { bodyId: w.bodyA, personId: w.persons.dave!, key: 'body_admin' })
   await seedGrant(w.db.admin, w.db.customerId, { bodyId: w.verwaltung, personId: w.persons.itv!, key: 'it_admin' })
   await seedGrant(w.db.admin, w.db.customerId, { bodyId: w.bodyA, personId: w.persons.itfach!, key: 'it_admin' }) // customer role in a non-verwaltung body: seeded as the owner
+  await seedGrant(w.db.admin, w.db.customerId, { bodyId: w.verwaltung, personId: w.persons.fin!, key: 'finance' }) // customer-level role WITHOUT idt.grant.manage
+  const revokedId = await seedGrant(w.db.admin, w.db.customerId, { bodyId: w.verwaltung, personId: w.persons.carev!, key: 'council_admin' })
+  await w.db.admin`UPDATE idt.authz_grant SET state = 'revoked', revoked_at = now(), revoke_reason = 'manual', revoked_by_kind = 'system' WHERE grant_id = ${revokedId}::uuid`
   await seedGrant(w3.db.admin, w3.db.customerId, { bodyId: w3.verwaltung, personId: w3.persons.ca3!, key: 'council_admin' })
 })
 afterAll(async () => {
@@ -308,6 +311,24 @@ describe('customer-level granter authority across bodies of one customer', () =>
     for (const bodyId of [w.bodyA, w.bodyB]) {
       const e = await refused(issueGrant(w.db.app, deps, w.db.customerId, claims('sub-itfach'), firstAdmin({ bodyId, granterRole: 'it_admin', key: 'member', subjectPersonId: w.persons.bob! })))
       expect(e.code).toBe('forbidden')
+    }
+    expect(await count(w)).toBe(before)
+  })
+  it('negative: a finance-role holder in the verwaltung (no council_admin / it_admin) cannot grant in body B -> 403 (capability predicate)', async () => {
+    const before = await count(w)
+    for (const granterRole of ['finance', 'council_admin']) {
+      const e = await refused(issueGrant(w.db.app, deps, w.db.customerId, claims('sub-fin'), firstAdmin({ granterRole, key: 'member', subjectPersonId: w.persons.bob! })))
+      expect([e.code, e.status]).toEqual(['forbidden', 403])
+    }
+    expect(await count(w)).toBe(before)
+  })
+  it('negative: a revoked or an expired council_admin loses the customer-wide grant authority -> 403 (state / validity predicate)', async () => {
+    // seeded here, not in beforeAll: the sweep test above counts every past-due grant of this world
+    await seedGrant(w.db.admin, w.db.customerId, { bodyId: w.verwaltung, personId: w.persons.caexp!, key: 'council_admin', validFrom: new Date(Date.now() - 172800000).toISOString(), validUntil: new Date(Date.now() - 86400000).toISOString() })
+    const before = await count(w)
+    for (const sub of ['sub-carev', 'sub-caexp']) {
+      const e = await refused(issueGrant(w.db.app, deps, w.db.customerId, claims(sub), firstAdmin({ key: 'member', subjectPersonId: w.persons.bob! })))
+      expect([e.code, e.status]).toEqual(['forbidden', 403])
     }
     expect(await count(w)).toBe(before)
   })

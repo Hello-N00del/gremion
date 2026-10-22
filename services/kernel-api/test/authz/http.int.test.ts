@@ -15,13 +15,15 @@ let app: FastifyInstance
 const claimsOf = new Map<string, Record<string, unknown>>()
 
 beforeAll(async () => {
-  w = await buildAuthzWorld('http', undefined, ['admin', 'alice', 'bob'])
+  w = await buildAuthzWorld('http', undefined, ['admin', 'alice', 'bob', 'ca'])
   await seedGrant(w.db.admin, w.db.customerId, { bodyId: w.bodyA, personId: w.persons.admin!, key: 'body_admin' })
   const fw = world()
   fw.tenants.set(w.db.customerId, tenantRow(w.db.customerId, 'http'))
   fw.domains.set(HOST, w.db.customerId)
   fw.enabled.set(w.db.customerId, ['publishing', 'votes', 'board', 'calendar', 'finance'].map((moduleKey) => ({ moduleKey, semver: '1.0.0' })))
   fw.moduleSecrets.set('publishing', SECRET)
+  await seedGrant(w.db.admin, w.db.customerId, { bodyId: w.verwaltung, personId: w.persons.ca!, key: 'council_admin' })
+  claimsOf.set('tok-ca', { sub: 'sub-ca', acr: 'loa2', auth_time: NOW() - 20 })
   claimsOf.set('tok-fresh', { sub: 'sub-admin', acr: 'loa2', auth_time: NOW() - 20 })
   claimsOf.set('tok-stale', { sub: 'sub-admin', acr: 'loa2', auth_time: NOW() - 4000 })
   const { deps } = fakeDeps(fw, {
@@ -82,5 +84,11 @@ describe('authz over HTTP', () => {
     expect(again.statusCode).toBe(409)
     const all = await post(`/api/v1/authz/persons/${w.persons.admin!}/revoke-all`, 'tok-stale')
     expect(all.statusCode).toBe(401)
+  })
+  it('listAuthzGrants: a customer-wide granter (council_admin in the verwaltung) lists another body; a body_admin of body A cannot list body B', async () => {
+    const wide = await app.inject({ method: 'GET', url: `/api/v1/authz/grants?bodyId=${w.bodyB}`, headers: edge(HOST, 'tok-ca') })
+    expect(wide.statusCode).toBe(200)
+    const narrow = await app.inject({ method: 'GET', url: `/api/v1/authz/grants?bodyId=${w.bodyB}`, headers: edge(HOST, 'tok-fresh') })
+    expect(narrow.statusCode).toBe(403)
   })
 })

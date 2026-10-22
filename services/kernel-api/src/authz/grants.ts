@@ -210,6 +210,17 @@ export async function revokeAllForPerson(sql: Sql, deps: GrantDeps, customerId: 
   })
 }
 
+/** May this person read the grants of `bodyId`? PDP idt.grant.read in the body, or a customer-level role held in the verwaltung (decision 2026-10-22, same authority as granting). */
+export async function mayReadGrants(sql: Sql, deps: GrantDeps, customerId: string, claims: Record<string, unknown>, bodyId: string): Promise<{ allow: boolean; reason: string }> {
+  return inCustomerTx(sql, customerId, async (tx) => {
+    const personId = await personBySub(tx, claims)
+    const d = await decideInTx(tx, deps.enabledModules, { customerId, subject: { personId }, bodyId, capability: 'idt.grant.read' })
+    if (d.allow) return { allow: true, reason: d.reason }
+    if (d.reason === 'no_grant' && (await customerWideGrantRoles(tx, personId)).length > 0) return { allow: true, reason: 'customer_wide' }
+    return { allow: false, reason: d.reason }
+  })
+}
+
 export async function listGrants(sql: Sql, customerId: string, filter: { bodyId?: string; personId?: string } = {}): Promise<GrantRow[]> {
   return inCustomerTx(sql, customerId, (tx) =>
     tx.unsafe<GrantRow[]>(
