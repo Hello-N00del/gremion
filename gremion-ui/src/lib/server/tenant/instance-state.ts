@@ -14,12 +14,14 @@
 // and fall through to the snapshot's `ok`.
 import type { TenantContext } from './context'
 import { getTenantReadiness, type TenantReadiness } from './readiness'
+import { readConfig } from '$lib/server/config'
 import { getTenantResources, type ResourceStatus } from './registry'
 import {
   type InstanceState,
   type ServiceStatus,
   SILO_SUBSYSTEM_TO_SERVICE,
   overallFromSilo,
+  disabledServices,
 } from '$lib/instance-status'
 
 /** Per-tenant boot readiness → the overall instance state. */
@@ -82,6 +84,14 @@ export async function instanceStatusDetail(
     }
     const realStatuses: Record<string, ServiceStatus> = {}
     const silo: Record<string, ServiceStatus> = {}
+    // F7: services of a feature module that is OFF for this tenant are skipped
+    // (no ledger row is expected, a stale one must not drive the state).
+    let disabled: string[] = []
+    try {
+      disabled = disabledServices(readConfig().modules)
+    } catch {
+      disabled = []
+    }
     for (const r of resources) {
       const svc = SILO_SUBSYSTEM_TO_SERVICE[r.subsystem]
       if (!svc) continue
@@ -92,9 +102,9 @@ export async function instanceStatusDetail(
     // Derive the overall state from the real silo statuses only when the ledger
     // is complete (all four silo rows present); otherwise the picture is partial,
     // so trust the readiness-derived state.
-    const siloComplete =
-      Object.keys(silo).length === Object.keys(SILO_SUBSYSTEM_TO_SERVICE).length
-    const state = siloComplete ? overallFromSilo(silo) : readinessState
+    const expected = Object.values(SILO_SUBSYSTEM_TO_SERVICE).filter((s) => !disabled.includes(s))
+    const siloComplete = expected.every((s) => s in silo)
+    const state = siloComplete ? overallFromSilo(silo, disabled) : readinessState
     return { state, realStatuses }
   } catch {
     return { state: readinessState, realStatuses: {} }

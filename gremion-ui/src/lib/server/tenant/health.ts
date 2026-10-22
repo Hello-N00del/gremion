@@ -87,6 +87,10 @@ export interface SatelliteProbe {
 }
 
 export interface HealthDeps {
+  /** F7 (optional) - ids of the feature modules switched OFF for this tenant.
+   *  Their satellite subsystems (files -> nextcloud, messages -> matrix) are not
+   *  probed as faults. Absent = nothing is skipped (pre-F7 behaviour). */
+  disabledModules?(tenant: Tenant): Promise<readonly string[]>
   /** Walk EVERY registry row (all statuses — the pane reports suspended too). */
   listTenants(): Promise<readonly Tenant[]>
   /** Active-tenant probes — never called for a non-active tenant. */
@@ -103,6 +107,100 @@ export interface HealthDeps {
  *  ok = done; neither is a health fault). */
 function satelliteOk(state: string): boolean {
   return state !== 'failed'
+}
+
+/** The feature module owning each satellite (F7). */
+export const SATELLITE_MODULE = { nextcloud: 'files', matrix: 'messages' } as const
+
+// -- F7: live module outages for the public boot probe (/api/health) ----------
+
+/** A feature module's liveness probe (registered by the module). */
+export interface ModuleHealthProbe {
+  moduleId: string
+  /** Service name reported in `degraded` (e.g. 'nextcloud'). */
+  service: string
+  /** True when the module's backing service answers. May throw / hang. */
+  validate: () => Promise<boolean>
+}
+
+/**
+ * Services of ENABLED feature modules that are down. A probe whose module is
+ * disabled is never called and never listed; a probe that returns false, throws
+ * or exceeds `timeoutMs` counts as down. The caller keeps HTTP 200 and kernel
+ * 'ok': a feature-module outage degrades, it does not fail the kernel.
+ */
+export async function collectModuleOutages(
+  probes: readonly ModuleHealthProbe[],
+  modules: Record<string, boolean>,
+  timeoutMs = 2000,
+): Promise<string[]> {
+  const live = probes.filter((p) => modules[p.moduleId])
+  const results = await Promise.all(
+    live.map(async (p) => {
+      let timer: ReturnType<typeof setTimeout> | undefined
+      try {
+        const ok = await Promise.race([
+          p.validate(),
+          new Promise<boolean>((resolve) => {
+            timer = setTimeout(() => resolve(false), timeoutMs)
+          }),
+        ])
+        return ok ? null : p.service
+      } catch {
+        return p.service
+      } finally {
+        if (timer) clearTimeout(timer)
+      }
+    }),
+  )
+  return [...new Set(results.filter((r): r is string => r !== null))]
+}
+
+/**
+ * Process-level result cache for module liveness probes. `/api/health` is public
+ * and unauthenticated while the probes call admin APIs (Nextcloud OCS, Synapse
+ * admin), so an uncached probe per request would let any caller drive admin
+ * traffic. Entries are single-flight (concurrent callers share the in-flight
+ * promise) and expire `ttlMs` after the probe STARTED, so a hung probe is also
+ * replaced after the TTL.
+ */
+export function createProbeCache(ttlMs = 20_000, now: () => number = () => Date.now()) {
+  const entries = new Map<string, { at: number; result: Promise<boolean> }>()
+  return {
+    wrap(p: ModuleHealthProbe): ModuleHealthProbe {
+      const key = `${p.moduleId}:${p.service}`
+      return {
+        ...p,
+        validate: () => {
+          const hit = entries.get(key)
+          if (hit && now() - hit.at < ttlMs) return hit.result
+          const result = Promise.resolve().then(() => p.validate())
+          entries.set(key, { at: now(), result })
+          return result
+        },
+      }
+    },
+    clear(): void {
+      entries.clear()
+    },
+  }
+}
+
+/** The shared instance used by the public /api/health route. */
+export const moduleProbeCache = createProbeCache()
+
+/**
+ * Derive the ids of the feature modules switched OFF for a tenant from its own
+ * config (`configPathForTenant(slug)`, the same source the app reads). Feeds
+ * `HealthDeps.disabledModules` in the fleet CLI.
+ */
+export function disabledModulesFromConfig(
+  readModules: (tenant: Tenant) => Record<string, boolean>,
+): (tenant: Tenant) => Promise<readonly string[]> {
+  return async (tenant) =>
+    Object.entries(readModules(tenant))
+      .filter(([, on]) => !on)
+      .map(([id]) => id)
 }
 
 type SafeResult<T> = { ok: true; value: T } | { ok: false; error: string }
@@ -123,6 +221,8 @@ async function safe<T>(fn: () => Promise<T>): Promise<SafeResult<T>> {
  */
 async function checkActiveTenant(tenant: Tenant, deps: HealthDeps): Promise<HealthCheck[]> {
   const checks: HealthCheck[] = []
+  const offModules = deps.disabledModules ? await safe(() => deps.disabledModules!(tenant)) : null
+  const off = new Set(offModules && offModules.ok ? offModules.value : [])
 
   const dp = await safe(() => deps.probeDataPlane(tenant))
   checks.push(
@@ -168,7 +268,7 @@ async function checkActiveTenant(tenant: Tenant, deps: HealthDeps): Promise<Heal
     const offenders = [
       ['nextcloud', s.nextcloud] as const,
       ['matrix', s.matrix] as const,
-    ].filter(([, state]) => !satelliteOk(state))
+    ].filter(([name, state]) => !off.has(SATELLITE_MODULE[name]) && !satelliteOk(state))
     checks.push(
       offenders.length === 0
         ? { name: 'satellites', ok: true, detail: '' }
