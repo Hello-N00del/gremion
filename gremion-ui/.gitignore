@@ -70,6 +70,7 @@ src/lib/i18n/paraglide/
 /src/lib/modules/manifests/votes.*
 # elections
 /src/routes/elections/
+/src/lib/components/elections-notice/
 /src/routes/api/elections/
 /src/lib/server/elections/
 /src/lib/votes/

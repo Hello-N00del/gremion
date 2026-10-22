@@ -52,6 +52,7 @@ export interface ModuleManifest {
   capabilities?: Record<string, readonly string[]>
   /** Migration basenames (no .sql) this module owns; skipped on a fresh
    *  finance-OFF init and gated by the migration-ownership guard test (P0.2). */
+  /** NEVER list 0003 / 0004 / 0034 here: they stay kernel-applied (see migration-ownership.ts crossCuttingViolations). */
   migrations?: string[]
   /** Keycloak realm objects this module owns (P0.2 realm generator). */
   realm?: ModuleRealmFragment

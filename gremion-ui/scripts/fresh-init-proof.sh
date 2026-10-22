@@ -48,7 +48,30 @@
 #   [fresh-init] FAILED, exit 1
 # After the fix: 28 data-plane + 4 control files applied, 24 in-database
 # post-conditions held, ending "all post-conditions hold".
+# Module-OFF modes (R33 audit F6; guard: src/lib/modules/migration-ownership.ts):
+#   fresh-init-proof.sh --module-off <id>      one run, <id> OFF (calendar, elections, board, ...)
+#   fresh-init-proof.sh --each-module-off      calendar, elections, board in turn (fresh container each)
+# The skip set is computed by scripts/module-off-skips.mjs from the REAL registry
+# (the db.ts computation), the files in it are not applied, and the extra block
+# near the end asserts, in the database, that the cross-cutting relations of
+# 003/004/034 exist AND the ungated kernel DDL that depends on them applied
+# (0010's rename on committee_elections, 0034's FKs, 0058's portal grants).
+# Containers are named ${FRESH_INIT_PROOF_PREFIX:-gremion-fresh-init}-<id>-<pid>.
 set -euo pipefail
+
+MODULE_OFF="${FRESH_INIT_PROOF_MODULE_OFF:-}"
+case "${1:-}" in
+  --module-off) MODULE_OFF="${2:?--module-off needs a module id}" ;;
+  --each-module-off)
+    self="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+    base_port="${FRESH_INIT_PROOF_PORT:-15433}"; i=0; rc=0
+    for m in calendar elections board; do
+      echo "[fresh-init] ===== module OFF: $m ====="
+      FRESH_INIT_PROOF_PORT=$((base_port + i)) bash "$self" --module-off "$m" || rc=1
+      i=$((i + 1))
+    done
+    exit "$rc" ;;
+esac
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PORT="${FRESH_INIT_PROOF_PORT:-15433}"
@@ -61,7 +84,7 @@ PORT="${FRESH_INIT_PROOF_PORT:-15433}"
 # sees and the form a reader greps for.
 DEFAULT_IMAGE="postgres:18-alpine@sha256:77f585114c32fbca283dc835b0596f4e52b51b4c6662d7810b2f4084f60a1873"
 IMAGE="${FRESH_INIT_PROOF_IMAGE:-$DEFAULT_IMAGE}"
-NAME="gremion-fresh-init-$$"
+NAME="${FRESH_INIT_PROOF_PREFIX:-gremion-fresh-init}${MODULE_OFF:+-$MODULE_OFF}-$$"
 OMIT="${FRESH_INIT_PROOF_OMIT:-}"
 MIN_APPLIED="${FRESH_INIT_PROOF_MIN_APPLIED:-28}"
 
@@ -98,10 +121,21 @@ if [ "${FRESH_INIT_PROOF_NO_ROLE:-}" != "1" ]; then
   "${PSQL[@]}" -d postgres -c "CREATE ROLE gremion_public_reader LOGIN PASSWORD 'proof'"
 fi
 
+SKIPS=""
+if [ -n "$MODULE_OFF" ]; then
+  # tsx, not bare node: the registry is TypeScript. Exit 2/3 (unknown id,
+  # cross-cutting file in the skip set) aborts the proof via set -e.
+  SKIPS="$(cd "$ROOT" && npx tsx scripts/module-off-skips.mjs "$MODULE_OFF")"
+  echo "[fresh-init] module '$MODULE_OFF' OFF; module-owned kernel migrations skipped: ${SKIPS:-none}"
+fi
+
 applied=0
 for f in $(ls "$ROOT/migrations"/*.sql | sort); do
   base="$(basename "$f")"
   case "$base" in *_seed.sql) continue ;; esac          # GREMION_DISABLE_SEEDS
+  if [ -n "$SKIPS" ] && printf '%s\n' "$SKIPS" | grep -qx "$base"; then
+    echo "[fresh-init] module-off skip $base"; continue
+  fi
   [ "$base" = "$OMIT" ] && { echo "[fresh-init] omitted $base"; continue; }
   echo "[fresh-init] applying $base"
   "${PSQL[@]}" -d gremion -f - < "$f"
@@ -207,6 +241,26 @@ if [ "$goodpw_rc" -ne 0 ]; then
   fail=1
 else
   say "ok reader login: gremion_public_reader logs in over SCRAM and reads protocols"
+fi
+
+# -- module-OFF: the ungated kernel DDL that depends on 003/004/034 applied ----
+if [ -n "$MODULE_OFF" ]; then
+  expect_eq "module-off ($MODULE_OFF): none of 003/004/034 was skipped" \
+    "$(printf '%s\n' "$SKIPS" | grep -cE '^(0003_calendar_schema|0004_committee_elections|0034_deck_board)\.sql$' || true)" "0"
+  # 0010 renames committee_elections.committee_id -> org_unit_id: only true if
+  # 0004 created the table before it.
+  expect_eq "module-off ($MODULE_OFF): 0010's rename of committee_elections.org_unit_id applied" \
+    "$(q gremion "SELECT count(*) FROM information_schema.columns WHERE table_name='committee_elections' AND column_name='org_unit_id'")" "1"
+  expect_eq "module-off ($MODULE_OFF): committee_elections.committee_id is gone" \
+    "$(q gremion "SELECT count(*) FROM information_schema.columns WHERE table_name='committee_elections' AND column_name='committee_id'")" "0"
+  # 0034's FK board.org_unit_id -> org_units(id)
+  expect_eq "module-off ($MODULE_OFF): board.org_unit_id references org_units (0034 after 0010)" \
+    "$(q gremion "SELECT count(*) FROM pg_constraint c WHERE c.contype='f' AND c.conrelid='public.board'::regclass AND c.confrelid='public.org_units'::regclass")" "1"
+  # 0058 (reader grants) ran to completion: the role can read protocols and not calendar_events.
+  expect_eq "module-off ($MODULE_OFF): 0058 portal grants applied (reader reads protocols)" \
+    "$(q gremion "SELECT has_table_privilege('gremion_public_reader', 'protocols', 'SELECT')")" "t"
+  expect_eq "module-off ($MODULE_OFF): 0058 left calendar_events ungranted to the reader" \
+    "$(q gremion "SELECT has_table_privilege('gremion_public_reader', 'calendar_events', 'SELECT')")" "f"
 fi
 
 # -- control 004 ---------------------------------------------------------------
