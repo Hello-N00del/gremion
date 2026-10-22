@@ -33,6 +33,8 @@ beforeAll(async () => {
   w2 = await buildWorld('grants2', undefined, ['admin'])
   await seedGrant(w.db.admin, w.db.customerId, { bodyId: w.bodyA, personId: w.persons.admin!, key: 'body_admin' })
   await seedGrant(w.db.admin, w.db.customerId, { bodyId: w.bodyA, personId: w.persons.impostor!, key: 'member' })
+  await seedGrant(w.db.admin, w.db.customerId, { bodyId: w.verwaltung, personId: w.persons.admin!, key: 'body_admin' })
+  await seedGrant(w.db.admin, w.db.customerId, { bodyId: w.verwaltung, personId: w.persons.carol!, key: 'council_admin' })
 })
 afterAll(async () => {
   await Promise.allSettled([w?.db.close(), w2?.db.close()])
@@ -55,6 +57,48 @@ describe('TRD-091 server-verified granter role', () => {
   it('a granter without the granting capability is refused; a self-grant is refused', async () => {
     expect((await refused(issueGrant(w.db.app, deps, w.db.customerId, claims('sub-impostor'), base({ granterRole: 'member' })))).code).toBe('forbidden')
     expect((await refused(issueGrant(w.db.app, deps, w.db.customerId, claims('sub-admin'), base({ subjectPersonId: w.persons.admin! })))).code).toBe('self_grant')
+  })
+})
+
+describe('TRD-113/TRD-091 the granter role must include the granted role (catalogue, not the body)', () => {
+  const code = async (p: Promise<unknown>) => {
+    const e = await refused(p)
+    return [e.code, e.status]
+  }
+  it('A1: a body_admin granting a role it does not include is 403 with 0 rows (finance, council_admin)', async () => {
+    const before = await count(w)
+    expect(await code(issueGrant(w.db.app, deps, w.db.customerId, claims('sub-admin'), base({ key: 'finance' })))).toEqual(['granter_role_mismatch', 403])
+    expect(await code(issueGrant(w.db.app, deps, w.db.customerId, claims('sub-admin'), base({ bodyId: w.verwaltung, key: 'council_admin' })))).toEqual(['granter_role_mismatch', 403])
+    expect(await count(w)).toBe(before)
+  })
+  it('probe: a body_admin granting a capability outside every role it can grant (fin.expense.approve) is 403 with 0 rows', async () => {
+    const before = await count(w)
+    expect(await code(issueGrant(w.db.app, deps, w.db.customerId, claims('sub-admin'), base({ grantKind: 'capability', key: 'fin.expense.approve' })))).toEqual(['granter_role_mismatch', 403])
+    expect(await count(w)).toBe(before)
+  })
+  it('a body_admin may grant a capability that a body role carries (brd.card.own: 201)', async () => {
+    const g = await issueGrant(w.db.app, deps, w.db.customerId, claims('sub-admin'), base({ grantKind: 'capability', key: 'brd.card.own', subjectPersonId: w.persons.bob! }))
+    expect(g.capability_key).toBe('brd.card.own')
+  })
+  it('a council_admin (customer-level) grants finance in the verwaltung (201)', async () => {
+    const g = await issueGrant(w.db.app, deps, w.db.customerId, claims('sub-carol'), base({ bodyId: w.verwaltung, key: 'finance', granterRole: 'council_admin', subjectPersonId: w.persons.bob! }))
+    expect(g.role_key).toBe('finance')
+  })
+  it('DOMAIN: a body-level role is never granted in the verwaltung (422 role_scope, 0 rows)', async () => {
+    const before = await count(w)
+    expect(await code(issueGrant(w.db.app, deps, w.db.customerId, claims('sub-carol'), base({ bodyId: w.verwaltung, key: 'member', granterRole: 'council_admin', subjectPersonId: w.persons.alice! })))).toEqual(['role_scope', 422])
+    expect(await count(w)).toBe(before)
+  })
+})
+
+describe('malformed input is a 400, not a database cast error', () => {
+  it('a malformed validUntil, resource id, or resource kind is bad_request with 0 rows', async () => {
+    const before = await count(w)
+    for (const o of [{ validUntil: 'not-a-date' }, { resource: { kind: 'meeting', id: 'nope' } }, { resource: { kind: '', id: uuidv7() } }]) {
+      const e = await refused(issueGrant(w.db.app, deps, w.db.customerId, claims('sub-admin'), base({ subjectPersonId: w.persons.carol!, ...o })))
+      expect([e.code, e.status]).toEqual(['bad_request', 400])
+    }
+    expect(await count(w)).toBe(before)
   })
 })
 

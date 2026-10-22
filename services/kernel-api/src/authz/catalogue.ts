@@ -25,6 +25,12 @@ export interface RoleDef {
   scopeLevel: 'body' | 'customer'
   privileged: boolean
   capabilities: readonly string[]
+  /**
+   * TRD-113/TRD-091 role inclusion: which roles a holder of this role may grant.
+   * 'body' = the body-level roles, 'all' = every role, 'none' = none. Capabilities are
+   * grantable when a grantable role carries them.
+   */
+  grants: 'body' | 'all' | 'none'
 }
 
 const cap = (key: string, moduleKey: string | null, o: { privileged?: boolean; resourceKind?: string } = {}): CapabilityDef =>
@@ -59,17 +65,17 @@ const MEMBER = [
 /** [D R22-7, R22-15] helper = member minus vote, quorum, office, portfolio (TRD-116). */
 const HELPER = MEMBER.slice(0, 5)
 
-const role = (key: string, labelDe: string, labelEn: string, capabilities: readonly string[], o: { privileged?: boolean; scopeLevel?: 'body' | 'customer' } = {}): RoleDef =>
-  ({ key, labelDe, labelEn, scopeLevel: o.scopeLevel ?? 'body', privileged: o.privileged ?? false, capabilities })
+const role = (key: string, labelDe: string, labelEn: string, capabilities: readonly string[], o: { privileged?: boolean; scopeLevel?: 'body' | 'customer'; grants?: 'body' | 'all' | 'none' } = {}): RoleDef =>
+  ({ key, labelDe, labelEn, scopeLevel: o.scopeLevel ?? 'body', privileged: o.privileged ?? false, capabilities, grants: o.grants ?? 'none' })
 
 export const ROLES: readonly RoleDef[] = Object.freeze([
   role('member', 'Mitglied', 'Member', MEMBER),
   role('helper', 'Helfer:in', 'Helper', HELPER),
   role('chair', 'Vorsitz', 'Chair', ['gov.meeting.chair', 'gov.nonpublic.read']),
   role('protocol_taker', 'Protokollant:in', 'Protocol taker', ['gov.protocol.take', 'gov.nonpublic.read']),
-  role('body_admin', 'Gremienadmin', 'Body admin', ['idt.grant.manage', 'idt.grant.read', 'idt.body.read', 'brd.board.administer'], { privileged: true }),
-  role('council_admin', 'Rats-Admin', 'Council admin', ['idt.grant.manage', 'idt.grant.read', 'idt.body.read', 'cal.event.manage', 'brd.board.administer'], { privileged: true, scopeLevel: 'customer' }),
-  role('it_admin', 'IT-Admin', 'IT admin', ['idt.grant.manage', 'idt.grant.read', 'idt.body.read'], { privileged: true, scopeLevel: 'customer' }),
+  role('body_admin', 'Gremienadmin', 'Body admin', ['idt.grant.manage', 'idt.grant.read', 'idt.body.read', 'brd.board.administer'], { privileged: true, grants: 'body' }),
+  role('council_admin', 'Rats-Admin', 'Council admin', ['idt.grant.manage', 'idt.grant.read', 'idt.body.read', 'cal.event.manage', 'brd.board.administer'], { privileged: true, scopeLevel: 'customer', grants: 'all' }),
+  role('it_admin', 'IT-Admin', 'IT admin', ['idt.grant.manage', 'idt.grant.read', 'idt.body.read'], { privileged: true, scopeLevel: 'customer', grants: 'body' }),
   role('marketing', 'Oeffentlichkeitsarbeit', 'Marketing', ['newsletter.send']),
   role('finance', 'Finanzen', 'Finance', ['fin.expense.approve', 'fin.ledger.read'], { privileged: true, scopeLevel: 'customer' }),
   role('initiative_lead', 'Initiativenleitung', 'Initiative lead', ['brd.card.own', 'brd.card.be_assigned']),
@@ -82,6 +88,16 @@ const ROLE_BY_KEY = new Map(ROLES.map((r) => [r.key, r]))
 
 export const capabilityDef = (key: string): CapabilityDef | undefined => CAP_BY_KEY.get(key)
 export const roleDef = (key: string): RoleDef | undefined => ROLE_BY_KEY.get(key)
+/**
+ * TRD-113/TRD-091: does the role the granter acts under include the role or capability being granted?
+ * The decision lives here with the role-to-capability sets; grants.ts never compares a role key.
+ */
+export function roleIncludes(granterRole: string, grantKind: 'role' | 'capability', key: string): boolean {
+  const g = ROLE_BY_KEY.get(granterRole)
+  if (!g || g.grants === 'none') return false
+  const grantable = ROLES.filter((r) => g.grants === 'all' || r.scopeLevel === 'body')
+  return grantKind === 'role' ? grantable.some((r) => r.key === key) : grantable.some((r) => r.capabilities.includes(key))
+}
 export const isPrivilegedRole = (key: string): boolean => ROLE_BY_KEY.get(key)?.privileged ?? false
 export const isPrivilegedCapability = (key: string): boolean => CAP_BY_KEY.get(key)?.privileged ?? false
 export const moduleOfCapability = (key: string): string | null | undefined => CAP_BY_KEY.get(key)?.moduleKey

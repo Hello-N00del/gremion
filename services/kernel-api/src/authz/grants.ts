@@ -15,12 +15,12 @@
 //  - operator: granter_kind='operator', source='control_panel'. No HTTP caller
 //    at P1 (lane note C4): exercised through the service layer only.
 // A self-grant is always refused (FLOW-IDN-003 self-escalation).
-import { capabilityDef, isPrivilegedCapability, isPrivilegedRole, roleDef } from './catalogue.ts'
+import { capabilityDef, isPrivilegedCapability, isPrivilegedRole, roleDef, roleIncludes } from './catalogue.ts'
 import { GrantError } from './errors.ts'
 import { emitGrantEvent, type GrantRow } from './events.ts'
 import { decideInTx, type EnabledModules } from './pdp.ts'
 import { checkStepUp } from './stepup.ts'
-import { assertUuid, inCustomerTx, type Sql } from './tx.ts'
+import { assertUuid, inCustomerTx, UUID, type Sql } from './tx.ts'
 import { uuidv7 } from './uuid.ts'
 
 export type Granter = { kind: 'person'; claims: Record<string, unknown> } | { kind: 'operator'; operatorId: string }
@@ -99,11 +99,20 @@ export async function issueGrant(sql: Sql, deps: GrantDeps, customerId: string, 
   const source = req.source ?? (granter.kind === 'operator' ? 'control_panel' : 'customer_admin')
   if (granter.kind === 'person' && source !== 'customer_admin') throw new GrantError('forbidden', 'a person grants with source customer_admin only')
   if (granter.kind === 'operator' && source !== 'control_panel' && source !== 'meeting_role') throw new GrantError('forbidden', 'an operator grants with source control_panel only')
+  if (req.validUntil !== undefined && req.validUntil !== null && (typeof req.validUntil !== 'string' || Number.isNaN(Date.parse(req.validUntil)))) throw new GrantError('bad_request', 'validUntil is not a timestamp')
+  if (req.resource !== undefined) {
+    if (typeof req.resource.kind !== 'string' || req.resource.kind === '') throw new GrantError('bad_request', 'resource.kind is required')
+    if (typeof req.resource.id !== 'string' || !UUID.test(req.resource.id)) throw new GrantError('bad_request', 'resource.id is not a uuid')
+  }
   const validFromMs = req.validFrom ? Date.parse(req.validFrom) : now(deps) * 1000
   if (Number.isNaN(validFromMs)) throw new GrantError('bad_request', 'validFrom is not a timestamp')
   return inCustomerTx(sql, customerId, async (tx) => {
     const actor = await authoriseManager(tx, deps, customerId, granter, req.bodyId)
-    if (actor.kind === 'person') await verifyGranterRole(tx, actor.id, req.bodyId, req.granterRole)
+    if (actor.kind === 'person') {
+      await verifyGranterRole(tx, actor.id, req.bodyId, req.granterRole)
+      // TRD-113/TRD-091: holding the role is not enough; it must include what is granted
+      if (!roleIncludes(req.granterRole!, req.grantKind, req.key)) throw new GrantError('granter_role_mismatch', `the granter role does not include ${req.grantKind} ${req.key}`)
+    }
     if (actor.kind === 'person' && actor.id === req.subjectPersonId) throw new GrantError('self_grant', 'a person never grants themselves')
     if (privileged) requireStepUp(granter, deps)
     const person = await tx`SELECT 1 FROM idt.person WHERE person_id = ${req.subjectPersonId}::uuid AND state = 'active'`
@@ -115,8 +124,11 @@ export async function issueGrant(sql: Sql, deps: GrantDeps, customerId: string, 
       if (def.moduleKey !== null && !(await deps.enabledModules(customerId)).has(def.moduleKey)) {
         throw new GrantError('module_not_enabled', `module ${def.moduleKey} is not enabled for this customer`)
       }
-    } else if (roleDef(req.key)!.scopeLevel === 'customer' && body[0]!.body_kind !== 'verwaltung') {
-      throw new GrantError('role_scope', 'customer-level roles are granted in the verwaltung body only')
+    } else {
+      const scope = roleDef(req.key)!.scopeLevel
+      const inVerwaltung = body[0]!.body_kind === 'verwaltung'
+      if (scope === 'customer' && !inVerwaltung) throw new GrantError('role_scope', 'customer-level roles are granted in the verwaltung body only')
+      if (scope === 'body' && inVerwaltung) throw new GrantError('role_scope', 'body-level roles are granted outside the verwaltung only')
     }
     const live = await tx`SELECT 1 FROM idt.${tx.unsafe(req.grantKind === 'role' ? 'role' : 'capability')} WHERE ${tx.unsafe(req.grantKind === 'role' ? 'role_key' : 'capability_key')} = ${req.key} AND ${tx.unsafe(req.grantKind === 'role' ? "state = 'active'" : "state = 'available'")}`
     if (live.length === 0) throw new GrantError('unknown_key', `${req.key} is not available in this customer (run authz sync)`)

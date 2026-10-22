@@ -7,7 +7,7 @@ import type { Sql } from '@gremion/db'
 
 export type { Sql }
 
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+export const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 export function assertUuid(v: unknown, what: string): asserts v is string {
   if (typeof v !== 'string' || !UUID.test(v)) throw new TypeError(`authz: ${what} is not a uuid`)
