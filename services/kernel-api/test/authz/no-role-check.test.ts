@@ -19,6 +19,9 @@ const TS_PATTERNS: RegExp[] = [
   new RegExp(`case\\s+['"](?:${KEY_ALT})['"]`),
   new RegExp(`['"](?:${KEY_ALT})['"]\\s+in\\b`),
   /\bhasRole\(/,
+  // a comparison against a role/capability literal, on either side, whatever the other operand is called
+  new RegExp(`[!=]==?\\s*['"](?:${KEY_ALT})['"]`),
+  new RegExp(`['"](?:${KEY_ALT})['"]\\s*[!=]==?`),
 ]
 const SQL_PATTERN = /\b(role_key|capability_key|grant_kind)\s*(=|<>|!=|IN\b)/i
 
@@ -57,6 +60,12 @@ describe('no role comparison outside the PDP', () => {
     expect(scanText("if (roles.includes('finance')) allow()").length).toBeGreaterThan(0)
     expect(scanText("const q = `SELECT 1 FROM idt.authz_grant WHERE role_key = 'finance'`").length).toBeGreaterThan(0)
     expect(scanText('const x = hasRole(user, a)').length).toBeGreaterThan(0)
+  })
+  it('is watched failing on a comparison against a role or capability LITERAL whatever the left side is', () => {
+    expect(scanText("if (k === 'council_admin') allow()").length).toBeGreaterThan(0)
+    expect(scanText("if ('finance' !== grant.k) deny()").length).toBeGreaterThan(0)
+    expect(scanText('if (x.key == "fin.expense.approve") allow()').length).toBeGreaterThan(0)
+    expect(scanText("return KEYS.filter((k) => k !== 'member')").length).toBeGreaterThan(0)
   })
   it('does not flag harmless text', () => {
     expect(scanText('const roleLabel = 1\nreturn tenant.status === "active"')).toEqual([])
