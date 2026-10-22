@@ -4,7 +4,7 @@
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
-import { loadConfig, newCustomerDisabledReason, resolveOnPath, type Env } from './config'
+import { HEARTBEAT_STALE_SECONDS, loadConfig, newCustomerDisabledReason, type Env } from './config'
 
 const FIX = join(dirname(fileURLToPath(import.meta.url)), '__fixtures__')
 const GOOD: Env = {
@@ -74,7 +74,7 @@ describe('loadConfig', () => {
     expect(a.ok).toBe(true)
     expect(b).toBe(a)
     // a different environment is parsed afresh
-    expect(loadConfig({ ...GOOD, PANEL_EXECUTOR: 'gremion-tenant' })).not.toBe(a)
+    expect(loadConfig({ ...GOOD, PLATFORM_DATABASE_URL: 'postgres://p:u@postgres:5432/gremion_platform', PANEL_EXECUTOR: 'queue' })).not.toBe(a)
   })
 
   it('PANEL_OIDC_INTERNAL_BASE must be https off the compose network: a dotted host over http is refused (review A, r2)', () => {
@@ -96,29 +96,47 @@ describe('loadConfig', () => {
   })
 })
 
-describe('newCustomerDisabledReason (Q6: visibly disabled, never hidden)', () => {
-  it('no platform database, no executor: disabled with the reason; both present: enabled', () => {
-    const base = loadConfig(GOOD)
-    if (!base.ok) throw new Error('fixture')
-    expect(newCustomerDisabledReason(base.config)).toMatch(/PLATFORM_DATABASE_URL/)
-    const withDb = loadConfig({ ...GOOD, PLATFORM_DATABASE_URL: 'postgres://p:u@postgres:5432/gremion_platform' })
-    if (!withDb.ok) throw new Error('fixture')
-    expect(newCustomerDisabledReason(withDb.config)).toMatch(/PANEL_EXECUTOR=none/)
-    const both = loadConfig({ ...GOOD, PLATFORM_DATABASE_URL: 'postgres://p:u@postgres:5432/gremion_platform', PANEL_EXECUTOR: 'gremion-tenant' })
-    if (!both.ok) throw new Error('fixture')
-    expect(newCustomerDisabledReason(both.config, () => '/usr/local/bin/gremion-tenant')).toBeNull()
+describe('PANEL_EXECUTOR (TASK-043d D9): queue | none; gremion-tenant is decommissioned', () => {
+  const DB = { PLATFORM_DATABASE_URL: 'postgres://p:u@postgres:5432/gremion_platform' }
+  it('gremion-tenant is REFUSED with the decommission reason (R31-I4)', () => {
+    const r = loadConfig({ ...GOOD, ...DB, PANEL_EXECUTOR: 'gremion-tenant' })
+    expect(r.ok).toBe(false)
+    expect(problemsOf(r).join(' ')).toMatch(/decommissioned \(R31-I4\).*queue/)
   })
-
-  it('PANEL_EXECUTOR=gremion-tenant but no gremion-tenant on PATH (the runtime image ships none): disabled with that reason', () => {
-    const both = loadConfig({ ...GOOD, PLATFORM_DATABASE_URL: 'postgres://p:u@postgres:5432/gremion_platform', PANEL_EXECUTOR: 'gremion-tenant' })
-    if (!both.ok) throw new Error('fixture')
-    expect(newCustomerDisabledReason(both.config, () => null)).toMatch(/gremion-tenant.*PATH/)
+  it('queue without PLATFORM_DATABASE_URL is a problem naming it', () => {
+    const r = loadConfig({ ...GOOD, PANEL_EXECUTOR: 'queue' })
+    expect(r.ok).toBe(false)
+    expect(problemsOf(r).join(' ')).toMatch(/PANEL_EXECUTOR=queue requires PLATFORM_DATABASE_URL/)
   })
+  it('queue with the platform database parses; anything else is refused', () => {
+    const r = loadConfig({ ...GOOD, ...DB, PANEL_EXECUTOR: 'queue' })
+    expect(r.ok && r.config.executor).toBe('queue')
+    expect(loadConfig({ ...GOOD, PANEL_EXECUTOR: 'sh' }).ok).toBe(false)
+  })
+})
 
-  it('resolveOnPath finds an executable file on PATH and nothing else', () => {
-    expect(resolveOnPath('t043-no-such-gremion-tenant', FIX)).toBeNull()
-    // a directory entry and a non-executable file are not an executor
-    expect(resolveOnPath('__fixtures__', dirname(FIX))).toBeNull()
-    expect(resolveOnPath('client_secret', FIX)).toBeNull()
+describe('newCustomerDisabledReason (Q6 / A9: visibly disabled, never hidden)', () => {
+  const DB = 'postgres://p:u@postgres:5432/gremion_platform'
+  const cfg = (extra: Record<string, string>) => {
+    const r = loadConfig({ ...GOOD, ...extra })
+    if (!r.ok) throw new Error('fixture: ' + r.problems.join('; '))
+    return r.config
+  }
+  it('no platform database: disabled with the reason', () => {
+    expect(newCustomerDisabledReason(cfg({}), 5)).toMatch(/PLATFORM_DATABASE_URL/)
+  })
+  it('PANEL_EXECUTOR=none: disabled with the reason', () => {
+    expect(newCustomerDisabledReason(cfg({ PLATFORM_DATABASE_URL: DB }), 5)).toMatch(/PANEL_EXECUTOR=none/)
+  })
+  it('queue, platform database, a fresh heartbeat: enabled', () => {
+    const c = cfg({ PLATFORM_DATABASE_URL: DB, PANEL_EXECUTOR: 'queue' })
+    expect(newCustomerDisabledReason(c, 0)).toBeNull()
+    expect(newCustomerDisabledReason(c, HEARTBEAT_STALE_SECONDS)).toBeNull()
+  })
+  it('queue but the executor heartbeat is older than 60 s, or there is none: disabled, naming it', () => {
+    const c = cfg({ PLATFORM_DATABASE_URL: DB, PANEL_EXECUTOR: 'queue' })
+    expect(HEARTBEAT_STALE_SECONDS).toBe(60)
+    expect(newCustomerDisabledReason(c, 61)).toMatch(/Ausf.hrer nicht aktiv seit 61 s/)
+    expect(newCustomerDisabledReason(c, null)).toMatch(/Ausf.hrer nicht aktiv/)
   })
 })

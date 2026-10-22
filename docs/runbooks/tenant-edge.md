@@ -101,7 +101,7 @@ A host reaches a tenant only when BOTH exist:
   404; the customer's Keycloak router carries the same chain minus
   `gremion-ui-proxytrust`).
 
-> **A customer's host is bound by `gremion-tenant create` (TASK-043), and by
+> **A customer's host is bound by the create request (TASK-043, run by the executor), and by
 > nothing else.** The resolver selects by the whole bound host only
 > (TASK-041); the apex binds no tenant (TRD-075) and the old wildcard and apex
 > default-tenant routes are gone. `create` writes the ONE primary
@@ -289,7 +289,7 @@ first (TASK-043 Q16). The dot in the name is deliberate: no slug can spell it,
 so it never collides with customer `<slug>-kc`'s host router. Never
 `/auth/admin`, never another realm (the render refuses `master`, `platform`
 and any realm but the slug): the admin console stays on the apex behind its
-allowlist. That file is written by `gremion-tenant create` (render-router);
+allowlist. That file is written by the executor's create handler (render-router);
 `syncTenantRouters` does not co-manage it and refuses to rewrite or prune a
 file that carries the realm router.
 

@@ -1,0 +1,40 @@
+[Unit]
+Description=Gremion executor (the control panel's request queue, TASK-043d)
+Documentation=https://github.com/Hello-N00del/gremion/blob/main/docs/ops/host-tooling.md
+After=docker.service
+Wants=docker.service
+# No release / executor lib yet (fresh host, before the first deploy): a clean
+# skip, not a failed unit. gremion-tenant init starts it after the first deploy.
+ConditionPathExists=${GREMION_ROOT}/current/infra/host/lib/executor/db.sh
+
+[Service]
+# Modelled on gremion-hostd.service, WITHOUT its listener: the executor PULLS
+# requests from gremion_platform and opens no socket at all (no Listen*, no
+# RuntimeDirectory, no socket unit). The control panel never reaches the host;
+# the host reaches the queue.
+# Type=exec: a unit that cannot be exec'd fails to start instead of reporting
+# success for a program that died at once.
+Type=exec
+User=${DEPLOY_USER}
+Group=${DEPLOY_USER}
+# It drives `docker compose run tenant-create` and `docker exec` into the
+# state postgres, as gremion-tenant did by hand before R31-I4.
+SupplementaryGroups=docker
+# Systemd starts units with an EMPTY environment: the install root is stated.
+Environment=GREMION_ROOT=${GREMION_ROOT}
+Environment=PATH=${GREMION_ROOT}/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+UMask=0077
+ExecStart=${GREMION_ROOT}/bin/gremion-executor --loop
+Restart=on-failure
+RestartSec=5s
+# A clean `systemctl stop` (SIGTERM) is not a failure (hostd's reasoning).
+SuccessExitStatus=143
+NoNewPrivileges=true
+PrivateTmp=true
+# ProtectSystem=full keeps /usr, /boot and /etc read-only; the install root
+# (runtime/executor, etc/edge, the audit log) stays writable.
+ProtectSystem=full
+ReadWritePaths=${GREMION_ROOT}
+
+[Install]
+WantedBy=multi-user.target

@@ -463,6 +463,22 @@
       "adoptedBy": "TASK-021",
       "since": "2026-09-27",
       "reason": "test of the vault module's own store/runner against a scratch Postgres (direct admin/test connection); retires with the code it tests when TASK-021 moves the module onto openTenantDb and the one runner; frozen StuRa copy moved in-tree by TASK-200 (byte-equal to extraction-source-f2 or listed in modules/EXTRACTION-DELTA.json)"
+    },
+    {
+      "path": "gremion-ui/scripts/tenant-provision-requests.ts",
+      "calls": 1,
+      "imports": 1,
+      "adoptedBy": "TASK-077",
+      "since": "2026-10-05",
+      "reason": "TASK-043d-1 request-verify: ONE read-only pool on gremion_platform as its owner (the tenant-create one-shot's own credential) to read the claimed request and the loaded module versions; never a tenant database; the registry (TASK-077) takes it over with tenant-provision.ts's platform pool"
+    },
+    {
+      "path": "packages/provisioning/test/integration/scratch.ts",
+      "calls": 1,
+      "imports": 1,
+      "adoptedBy": "TASK-043",
+      "since": "2026-10-05",
+      "reason": "TASK-043d-1 integration helper on the package's own scratch server (test/integration/run.mjs): pools AS the panel role, the executor's test twin and the platform owner, to prove the request queue's grants; openTenantDb cannot address the control plane's roles; stays allow-listed while the tests exist"
     }
   ]
 }

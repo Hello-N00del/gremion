@@ -19,7 +19,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import {
   bootstrapPlatform,
   EnableRefused,
-  ensurePanelReader,
+  ensurePanelRequester as ensurePanelReader,
   isDuplicateDone,
   loadModuleJsons,
   pgGate,
@@ -152,6 +152,7 @@ describe('the platform on a fresh server', () => {
     expect(r.applied).toEqual(expect.arrayContaining(['0001_plt_setup.sql', '0004_plt_provisioning_step.sql', '0005_plt_scheduled_job.sql']))
     // TASK-044: the ops setup, the isolation results and the DPIA decisions
     expect(r.applied).toEqual(expect.arrayContaining(['0006_ops_setup.sql', '0007_plt_isolation_test_result.sql', '0008_ops_dpia_decision.sql']))
+    expect(r.applied).toContain('0009_plt_provisioning_request.sql') // TASK-043d-1
     expect(r.catalogue.insertedModules).toEqual(ALL_MODULES)
     expect(r.catalogue.insertedVersions).toEqual(r.catalogue.insertedModules)
     // R29-I24: the five database-less modules load under their provisional profiles; nothing is undecided
@@ -248,7 +249,8 @@ describe('the platform on a fresh server', () => {
       expect(await code(asPanelControl`INSERT INTO tenant (id, slug) VALUES (${randomUUID()}, 'x')`)).toBe('42501')
       expect(await code(asPanelControl`SELECT * FROM tenant_secret_ref`)).toBe('42501')
       expect(await code(asPanelControl.unsafe('CREATE TABLE panel_owned (x int)'))).toBe('42501')
-      expect(await code(asPanelPlatform`SELECT count(*) FROM plt.module_enablement`)).toBe('42501')
+      // TASK-043d: plt.module_enablement is in the read set now; the attestation table is not
+      expect(await code(asPanelPlatform`SELECT count(*) FROM plt.operator_enable_attestation`)).toBe('42501')
       // DEFAULT VALUES: the privilege check runs before any constraint
       expect(await code(asPanelPlatform`INSERT INTO plt.provisioning_step DEFAULT VALUES`)).toBe('42501')
     } finally {

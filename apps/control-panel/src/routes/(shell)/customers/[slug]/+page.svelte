@@ -1,6 +1,7 @@
 <script lang="ts">
   import { invalidateAll } from '$app/navigation'
   import { onMount } from 'svelte'
+  import { originLabel } from '$lib/request-format'
   import type { PageData } from './$types'
 
   let { data }: { data: PageData } = $props()
@@ -31,7 +32,7 @@
 <h1>{data.slug}</h1>
 
 {#if !data.status}
-  <p class="muted" role="status">Noch nicht registriert. Sobald <code>gremion-tenant create</code> Phase A beginnt, erscheint der Mandant hier.</p>
+  <p class="muted" role="status">Noch nicht registriert. Sobald der Ausführer die Anfrage übernimmt und Phase A beginnt, erscheint der Mandant hier.</p>
 {:else}
   <dl>
     <dt>Status</dt><dd>{data.status.status}</dd>
@@ -50,6 +51,19 @@
       {/each}
     </ol>
   {/if}
+{/if}
+
+{#if data.requests.length}
+  <h2>Anfragen</h2>
+  <ul class="requests">
+    {#each data.requests as q (q.id)}
+      <li>
+        <code>{q.kind}</code> · {q.state}
+        {#if q.origin === 'host'}<strong class="breakglass">{originLabel(q.origin)}</strong> ({q.hostActor ?? '—'}: {q.reason ?? '—'}){/if}
+        {#if q.outcome}<span class="muted"> — {q.outcome}</span>{/if}
+      </li>
+    {/each}
+  </ul>
 {/if}
 
 <style>

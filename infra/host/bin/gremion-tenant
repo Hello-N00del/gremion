@@ -1,32 +1,26 @@
 #!/usr/bin/env bash
 set -euo pipefail
 #
-# gremion-tenant — the host half of the customer lifecycle (TASK-043).
+# gremion-tenant — host BOOTSTRAP and the break-glass of the customer
+# lifecycle (TASK-043; since D R31-I4 / TASK-043d NOT an operator surface for
+# customers: the control panel creates and operates them through the
+# host-side executor, infra/host/bin/gremion-executor).
 #
 #   gremion-tenant init [--realm-only] [--panel-origin <origin>]
 #   gremion-tenant init --realm-only --keycloak-container <name> [--panel-origin <origin>]
-#   gremion-tenant create <slug> --host <host> --config <file> --it-admin <email>
-#                         --council-admin <email> [--enable a,b] [--dpia-json <file>] [--body-name <name>]
-#   gremion-tenant suspend <slug> | resume <slug>
-#   gremion-tenant reconcile <slug> [--apply]
-#   gremion-tenant status <slug>
 #   gremion-tenant panel
 #   gremion-tenant operator add <email> [--no-mail]
 #   gremion-tenant operator add <email> --no-mail --keycloak-container <name>
+#   gremion-tenant request <kind> --args-file <0600 json> --operator <uuid> --reason <text>
+#   gremion-tenant requests [--slug <slug>]
 #
-# Every mutating verb needs the operator's ops-realm user id: --operator <uuid>
-# or GREMION_OPERATOR_ID (it becomes actor_operator_id and enabled_by).
-#
-# PHASES. `create` is container phase A (the tenant-create one-shot of the
-# ACTIVE colour: realm, kernel database, domain, storage prefix, first body,
-# broker account), then THIS host's mail step (gremion-vendor-mail realm-smtp
-# --realm <slug> --tenant <token>: the customer's own submission principal,
-# issued and stamped; tenant-create is not on the mail network, TRD-045),
-# then `record-step mail_principal_issued` (the container re-reads the stamp
-# over Keycloak), then container phase B (first administrators, the --enable
-# modules, active), then the router file, which the host writes (Q17: a
-# compose etc/edge mount is refused, hygiene j4). A failed step STOPS: nothing
-# after it runs, and a rerun resumes from the ledger.
+# `create` is DECOMMISSIONED (exit 2, nothing written): a customer is created
+# in the panel ("Neuer Mandant"); with the panel down, `request create` puts
+# the SAME request into the SAME queue (origin=host, with the reason and the
+# invoking login user, audited), and the executor runs it exactly as a panel
+# request (D10: move, do not duplicate; customer-ops.sh holds the code).
+# The suspend/resume/reconcile/status verbs below retire the same way with the
+# panel's customer screens (TASK-043d-2).
 #
 # suspend: container first (status, realm disabled + notBefore + logout,
 # broker users evicted), then the principal revoked (the realm's sender is
@@ -34,10 +28,6 @@ set -euo pipefail
 # rerunning it, TASK-043c). resume: a FRESH
 # principal issued and stamped first, then the container (realm, broker,
 # status last).
-#
-# TRD-440: `create` counts the running containers and every project's
-# `config --services` before and after, and fails if either moved -- a
-# customer adds databases, a realm and accounts, never a container.
 #
 # SECRETS never reach an argv: the app passwords, admin URLs and the
 # provisioner credential tenant-create reads are 0600 files under
@@ -53,171 +43,35 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 umask 077
 
-SLUG_RE='^[a-z][a-z0-9]*(-[a-z0-9]+)*$'
-UUID_RE='^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'
-EMAIL_RE='^[^[:space:]@]+@[^[:space:]@]+\.[a-z]{2,}$'
+# The customer functions live in the library the executor's handlers call
+# (D10: moved, not duplicated): env_key, active_colour, need_slug,
+# need_operator, token_of, need_value, tc, vendor_mail, load_host_facts,
+# container_fingerprint, write_router, customer_create.
+# shellcheck source=../lib/customer-ops.sh
+. "$SCRIPT_DIR/../lib/customer-ops.sh"
+# shellcheck source=../lib/executor/db.sh
+. "$SCRIPT_DIR/../lib/executor/db.sh"
+
 MODULE_SERVERS="board calendar content finance newsletter vault"
 KCADM_BIN="/opt/keycloak/bin/kcadm.sh"
 KC_SERVER="http://127.0.0.1:8080/auth"
+REQUEST_KINDS_RE='^(create|suspend|resume|reconcile|enable_module|disable_module|import_members|seed_vertical|record_dpia|import_isolation)$'
+DECOMMISSIONED="decommissioned as an operator surface (R31-I4): use the control panel; break-glass: gremion-tenant request <kind> --args-file <file> --operator <uuid> --reason <text>"
 
 usage() {
     cat <<'EOF'
 usage: gremion-tenant <verb> [args...]
   init [--realm-only] [--panel-origin <origin>]
   init --realm-only --keycloak-container <name> [--panel-origin <origin>]
-  create <slug> --host <host> --config <file> --it-admin <email> --council-admin <email> [--enable a,b] [--dpia-json <file>] [--body-name <name>]
-  suspend <slug> | resume <slug>
-  reconcile <slug> [--apply]
-  status <slug>
   panel
   operator add <email> [--no-mail]
   operator add <email> --no-mail --keycloak-container <name>
-  (mutating verbs: --operator <uuid> or GREMION_OPERATOR_ID)
+  request <kind> --args-file <0600 json> --operator <uuid> --reason <text>
+  requests [--slug <slug>]
+Customers are created and operated in the control panel (gremion-tenant
+panel prints the access line); the break-glass `request` puts the same
+request into the same queue the host-side executor runs (R31-I4).
 EOF
-}
-
-ROOT=""
-RELEASE_DIR=""
-COLOUR=""
-OPERATOR_ID="${GREMION_OPERATOR_ID:-}"
-
-setup_paths() {
-    ROOT="$(gremion_root)"
-    RELEASE_DIR="${GREMION_RELEASE_DIR:-${ROOT}/current}"
-}
-
-# env_key <file> <key> — ONE key of an env file (the gremion-vendor-mail reader).
-env_key() {
-    local file="$1" key="$2" n v
-    [[ -f "$file" ]] || die "env file not found: ${file}" "$GREMION_EXIT_USAGE"
-    n="$(grep -c "^${key}=" "$file" || true)"
-    [[ "$n" -le 1 ]] || die "duplicate key ${key} in ${file}" "$GREMION_EXIT_USAGE"
-    v="$(sed -n "s/^${key}=//p" "$file")"
-    v="${v%$'\r'}"
-    if [[ "$v" == \"*\" || "$v" == \'*\' ]]; then v="${v:1:${#v}-2}"; fi
-    printf '%s' "$v"
-}
-
-active_colour() {
-    local f="${ROOT}/runtime/active-colour" c=""
-    [[ -f "$f" ]] && c="$(tr -d '[:space:]' < "$f")"
-    case "$c" in
-        blue|green) COLOUR="$c" ;;
-        *) die "runtime/active-colour is '${c:-absent}', not blue or green: deploy a colour first (tenant-create runs in the active colour)" "$GREMION_EXIT_USAGE" ;;
-    esac
-}
-
-need_slug() {   # <slug>
-    [[ -n "${1:-}" ]] || { usage >&2; die "missing <slug>" "$GREMION_EXIT_USAGE"; }
-    [[ "$1" =~ $SLUG_RE && ${#1} -ge 3 && ${#1} -le 30 && "$1" != platform ]] \
-        || die "invalid customer slug '$1' (^[a-z][a-z0-9]*(-[a-z0-9]+)*$, 3-30, not platform)" "$GREMION_EXIT_USAGE"
-}
-
-need_operator() {
-    [[ -n "$OPERATOR_ID" ]] || die "no operator id: pass --operator <uuid> or export GREMION_OPERATOR_ID (the ops-realm user id)" "$GREMION_EXIT_USAGE"
-    [[ "$OPERATOR_ID" =~ $UUID_RE ]] || die "operator id '${OPERATOR_ID}' is not a lowercase uuid" "$GREMION_EXIT_USAGE"
-}
-
-token_of() { printf '%s' "${1//-/_}"; }
-
-# need_value "$@" — the flag in $1 carries a value in $2 (usage exit 2, named),
-# never a bare `shift 2` failing under errexit with exit 1 and no message.
-need_value() {
-    [[ $# -ge 2 && -n "$2" && "$2" != --* ]] || die "$1 requires a value" "$GREMION_EXIT_USAGE"
-}
-
-# tc <args...> — the tenant-create one-shot of the ACTIVE colour, the one
-# shape a compose command takes on a host (N20): --env-file, no -f, no -p.
-# The optional TC_MOUNT carries extra `run` arguments: create's read-only
-# --config mount, or init's bootstrap-provisioner scratch mount and name-only -e's.
-TC_MOUNT=()
-
-# release_tip — TASK-044 (lane note D4, A6): the full commit id of the release
-# tree gremion-deploy authenticated (H10: HEAD == the verified tag's commit).
-# The level-1 enable gate compares isolation evidence with it. It is DERIVED
-# here and never read from the caller's environment or a request payload; a
-# tree that is no git checkout of its own (a parent repository must not lend
-# its HEAD) or a value that is not 40/64 lowercase hex gives the empty string,
-# which the gate turns into NO_RELEASE_TIP at enable time only.
-release_tip() {
-    local sha=""
-    if [[ -e "${RELEASE_DIR}/.git" ]] && command -v git >/dev/null 2>&1; then
-        sha="$(git -C "$RELEASE_DIR" rev-parse --verify 'HEAD^{commit}' 2>/dev/null || true)"
-    fi
-    [[ "$sha" =~ ^[0-9a-f]{40}([0-9a-f]{24})?$ ]] || sha=""
-    printf '%s' "$sha"
-}
-
-tc() {
-    local envfile="${ROOT}/etc/env/app-${COLOUR}.env"
-    [[ -f "$envfile" ]] || die "env file absent: ${envfile}" "$GREMION_EXIT_USAGE"
-    local tip; tip="$(release_tip)"
-    ( cd "$RELEASE_DIR" && docker compose --env-file "$envfile" run --rm -T \
-        -e "GREMION_RELEASE_TIP=${tip}" \
-        -e TRAEFIK_CERT_RESOLVER -e EDGE_BIND_IP -e EDGE_BIND_IP6 -e TENANT_DNS_PREFLIGHT -e GREMION_SCRATCH_FIXTURES -e GREMION_PRODUCTION_STACK \
-        "${TC_MOUNT[@]}" tenant-create "$@" )
-}
-
-vendor_mail() { "${SCRIPT_DIR}/gremion-vendor-mail" "$@"; }
-
-load_host_facts() {
-    local state="${ROOT}/etc/env/state.env"
-    TRAEFIK_CERT_RESOLVER="$(env_key "$state" TRAEFIK_CERT_RESOLVER)"
-    [[ -n "$TRAEFIK_CERT_RESOLVER" ]] || die "TRAEFIK_CERT_RESOLVER is empty in ${state}" "$GREMION_EXIT_USAGE"
-    # The DNS pre-flight compares the customer's host with the edge's own
-    # public addresses (the state project's required EDGE_BIND_IP/_IP6).
-    EDGE_BIND_IP="$(env_key "$state" EDGE_BIND_IP)"
-    EDGE_BIND_IP6="$(env_key "$state" EDGE_BIND_IP6)"
-    [[ -n "$EDGE_BIND_IP" ]] || die "EDGE_BIND_IP is empty in ${state}" "$GREMION_EXIT_USAGE"
-    export TRAEFIK_CERT_RESOLVER EDGE_BIND_IP EDGE_BIND_IP6
-}
-
-# ── TRD-440: no container per customer ─────────────────────────────────────
-# Every measurement must SUCCEED (review C, r2): a failing `docker ps` or
-# `config --services` used to yield an empty field on both sides, which
-# compared equal. Each project renders from its own directory, as
-# scripts/check-pooled-stack.mjs does (ops and mail name COMPOSE_FILEs
-# relative to compose/observability and infra/host/mail).
-container_fingerprint() {
-    local n f name dir svcs="" out
-    out="$(docker ps -q)" || die "TRD-440: docker ps failed" "$GREMION_EXIT_ASSERT"
-    n="$(grep -c . <<< "$out" || true)"
-    for name in state app-blue app-green ops mail; do
-        f="${ROOT}/etc/env/${name}.env"
-        [[ -f "$f" ]] || continue
-        case "$name" in
-            ops)  dir="${RELEASE_DIR}/compose/observability" ;;
-            mail) dir="${RELEASE_DIR}/infra/host/mail" ;;
-            *)    dir="$RELEASE_DIR" ;;
-        esac
-        out="$(cd "$dir" && docker compose --env-file "$f" config --services)" \
-            || die "TRD-440: docker compose config --services failed for the ${name} project" "$GREMION_EXIT_ASSERT"
-        [[ -n "$out" ]] || die "TRD-440: the ${name} project renders no service" "$GREMION_EXIT_ASSERT"
-        svcs+="${name}:$(sort <<< "$out" | tr '\n' ',');"
-    done
-    printf 'containers=%s services=%s' "$n" "$svcs"
-}
-
-# ── the router file (Q17: the host writes emit.ts's contract) ─────────────
-write_router() {   # <slug>
-    local slug="$1" dir="${ROOT}/etc/edge" final tmp
-    final="${dir}/tenant-${slug}.yml"
-    [[ -d "$dir" ]] || die "etc/edge is absent: ${dir}" "$GREMION_EXIT_USAGE"
-    # The temp name does not end in .yml: Traefik's file provider never loads it.
-    tmp="$(mktemp "${dir}/.tenant-${slug}.XXXXXX.tmp")"
-    # shellcheck disable=SC2064  # expand $tmp now
-    trap "rm -f '${tmp}'" EXIT
-    tc render-router "$slug" > "$tmp" || die "render-router ${slug} failed" "$GREMION_EXIT_ASSERT"
-    if [[ ! -s "$tmp" ]] || ! grep -q '^  routers:' "$tmp"; then
-        die "render-router ${slug} printed no router document" "$GREMION_EXIT_ASSERT"
-    fi
-    grep -qF "    tenant-${slug}.kc:" "$tmp" || die "the router document of ${slug} carries no realm router (Q16)" "$GREMION_EXIT_ASSERT"
-    chmod 644 "$tmp"
-    sync "$tmp" 2>/dev/null || true
-    mv -f "$tmp" "$final" || die "could not move the router file into place: ${final}" "$GREMION_EXIT_ASSERT"
-    sync "$dir" 2>/dev/null || true
-    trap - EXIT
-    ok "router file ${final} written"
 }
 
 # ── init ───────────────────────────────────────────────────────────────────
@@ -453,72 +307,68 @@ cmd_init() {
     # project reads it from etc/secrets/grafana.
     [[ -s "${ROOT}/etc/secrets/grafana/client_secret" ]] \
         || info "NOTE: etc/secrets/grafana/client_secret is absent: Grafana (compose/observability) signs nobody in until the grafana client's secret is read with kcadm and written there, 0600 (compose/observability/README.md, Access, block A)"
+    # The executor needs gremion_platform and its role, which this init just
+    # made: this is where bootstrap's enabled-but-not-started unit is started.
+    executor_unit_action restart
     ok "init done"
 }
 
-# ── create / suspend / resume / reconcile / status ─────────────────────────
-cmd_create() {
-    local slug="${1:-}"; shift || true
-    need_slug "$slug"
-    local host="" config="" it="" council="" enable="" body="" dpia=""
+# ── break-glass: the SAME queue as the panel (D10) ─────────────────────────
+# request <kind> --args-file <0600 json> --operator <uuid> --reason <text>
+# One row origin=host through plt.submit_provisioning_request as the executor
+# role, with the reason and the invoking login user (host_actor); the
+# executor claims and verifies it like any panel request (the operator is
+# re-read in the ops realm; no signed sign-in exists here, so the reason is
+# the evidence). Never a direct SQL insert, never a container verb by hand.
+cmd_request() {
+    local kind="${1:-}"; shift || true
+    [[ "$kind" =~ $REQUEST_KINDS_RE ]] || die "request <kind>: one of create, suspend, resume, reconcile, enable_module, disable_module, import_members, seed_vertical, record_dpia, import_isolation" "$GREMION_EXIT_USAGE"
+    local file="" reason="" slug actor key id
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            --host) need_value "$@"; host="$2"; shift 2 ;;
-            --config) need_value "$@"; config="$2"; shift 2 ;;
-            --it-admin) need_value "$@"; it="$2"; shift 2 ;;
-            --council-admin) need_value "$@"; council="$2"; shift 2 ;;
-            --enable) need_value "$@"; enable="$2"; shift 2 ;;
-            --body-name) need_value "$@"; body="$2"; shift 2 ;;
-            --dpia-json) need_value "$@"; dpia="$2"; shift 2 ;;
+            --args-file) need_value "$@"; file="$2"; shift 2 ;;
             --operator) need_value "$@"; OPERATOR_ID="$2"; shift 2 ;;
-            *) usage >&2; die "create: unknown argument: $1" "$GREMION_EXIT_USAGE" ;;
+            --reason) [[ $# -ge 2 && -n "$2" ]] || die "--reason requires a value" "$GREMION_EXIT_USAGE"; reason="$2"; shift 2 ;;
+            *) die "request: unknown argument: $1" "$GREMION_EXIT_USAGE" ;;
         esac
     done
     need_operator
-    [[ -n "$host" ]] || die "create needs --host <host>" "$GREMION_EXIT_USAGE"
-    [[ -f "$config" ]] || die "create needs --config <existing file>" "$GREMION_EXIT_USAGE"
-    [[ "$it" =~ $EMAIL_RE ]] || die "create needs --it-admin <email>" "$GREMION_EXIT_USAGE"
-    [[ "$council" =~ $EMAIL_RE ]] || die "create needs --council-admin <email>" "$GREMION_EXIT_USAGE"
-    [[ -z "$enable" || "$enable" =~ ^[a-z][a-z0-9_]*(,[a-z][a-z0-9_]*)*$ ]] || die "--enable takes a,b,c module ids" "$GREMION_EXIT_USAGE"
-    [[ -z "$dpia" || -f "$dpia" ]] || die "--dpia-json takes an existing file" "$GREMION_EXIT_USAGE"
-    active_colour
-    load_host_facts
-    local token before after
-    token="$(token_of "$slug")"
-    before="$(container_fingerprint)"
-
-    local -a flags=("$slug" --host "$host" --config /run/gremion/tenant-config.json --operator "$OPERATOR_ID"
-                    --it-admin "$it" --council-admin "$council")
-    [[ -z "$enable" ]] || flags+=(--enable "$enable")
-    [[ -z "$body" ]] || flags+=(--body-name "$body")
-    # TASK-044 D2: the operator's dated DPIA decision per --enable module, read-only into both phases
-    local -a mounts=(-v "$(realpath "$config"):/run/gremion/tenant-config.json:ro")
-    if [[ -n "$dpia" ]]; then
-        flags+=(--dpia-json /run/gremion/tenant-dpia.json)
-        mounts+=(-v "$(realpath "$dpia"):/run/gremion/tenant-dpia.json:ro")
+    [[ ${#reason} -ge 10 && ${#reason} -le 500 ]] || die "request needs --reason <10 to 500 characters>: why the panel is not used (it is audited)" "$GREMION_EXIT_USAGE"
+    [[ -n "$file" && -f "$file" ]] || die "request needs --args-file <an existing JSON file>" "$GREMION_EXIT_USAGE"
+    if fs_carries_modes "$(dirname "$file")"; then
+        [[ "$(stat -c '%a' "$file")" == 600 ]] || die "--args-file ${file} must be mode 0600 (it names the customer's administrators)" "$GREMION_EXIT_USAGE"
     fi
-    TC_MOUNT=("${mounts[@]}")
+    jq -e 'type == "object"' "$file" >/dev/null 2>&1 || die "--args-file ${file} is not a JSON object" "$GREMION_EXIT_USAGE"
+    slug="$(jq -r '.slug // empty' "$file")"
+    need_slug "$slug"
+    actor="$(printf '%s' "${SUDO_USER:-$(id -un)}" | tr '[:upper:]' '[:lower:]')"
+    [[ "$actor" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] || die "the invoking login user '${actor}' is not a plain user name" "$GREMION_EXIT_USAGE"
+    key="$(openssl rand -hex 16 | tr -d '\r\n')"
+    key="${key:0:8}-${key:8:4}-4${key:13:3}-8${key:17:3}-${key:20:12}"
+    id="$(executor_sql "SELECT plt.submit_provisioning_request(:'kind', :'slug', :'args'::jsonb, :'key'::uuid, :'op'::uuid, NULL, NULL, NULL, NULL, :'reason', :'actor');" \
+            -v kind="$kind" -v slug="$slug" -v args="$(jq -c . "$file")" -v key="$key" -v op="$OPERATOR_ID" -v reason="$reason" -v actor="$actor")" \
+        || die "the break-glass request was refused by gremion_platform (see above); nothing was queued" "$GREMION_EXIT_ASSERT"
+    id="${id%%$'\n'*}"
+    id="${id%$'\r'}"
+    [[ "$id" =~ ^[0-9a-f-]{36}$ ]] || die "the break-glass request returned no request id" "$GREMION_EXIT_ASSERT"
+    ok "request ${id} queued: ${kind} ${slug} (origin host, by ${actor}); the executor runs it -- gremion-tenant requests --slug ${slug}"
+    printf '%s\n' "$id"
+}
 
-    info "phase A (container): realm, kernel database, domain, storage prefix, first body, broker account"
-    tc phase-a "${flags[@]}" || die "phase A of ${slug} failed; a rerun resumes from the ledger" "$GREMION_EXIT_ASSERT"
-    info "host: the customer's own submission principal kc-${token}@"
-    vendor_mail realm-smtp --realm "$slug" --tenant "$token" \
-        || die "the mail step of ${slug} failed; phase B does not run (a rerun resumes here)" "$GREMION_EXIT_ASSERT"
-    TC_MOUNT=()
-    tc record-step "$slug" mail_principal_issued --operator "$OPERATOR_ID" \
-        || die "record-step mail_principal_issued of ${slug} failed" "$GREMION_EXIT_ASSERT"
-    TC_MOUNT=("${mounts[@]}")
-    info "phase B (container): first administrators, modules, active"
-    tc phase-b "${flags[@]}" || die "phase B of ${slug} failed; a rerun resumes from the ledger" "$GREMION_EXIT_ASSERT"
-    TC_MOUNT=()
-    write_router "$slug"
-
-    after="$(container_fingerprint)"
-    if [[ "$before" != "$after" ]]; then
-        bad "TRD-440: the container set moved during create (before: ${before}; after: ${after})"
-        exit "$GREMION_EXIT_ASSERT"
-    fi
-    ok "customer ${slug} created (TRD-440: container set unchanged)"
+# requests [--slug <s>] — read-only: the queue as the panel's status view
+# shows it (never the evidence token), newest first, read as the state
+# server's POSTGRES_USER over the local socket.
+cmd_requests() {
+    local slug=""
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --slug) need_value "$@"; slug="$2"; need_slug "$slug"; shift 2 ;;
+            *) die "requests: unknown argument: $1" "$GREMION_EXIT_USAGE" ;;
+        esac
+    done
+    local su
+    su="$(env_key "${ROOT}/etc/env/state.env" POSTGRES_USER)"
+    platform_sql "${su:-postgres}" "SELECT request_id, created_at, kind, customer_slug, origin, state, attempt, coalesce(outcome, '') FROM plt.provisioning_request_status WHERE (:'slug' = '' OR customer_slug = :'slug') ORDER BY created_at DESC LIMIT 50;" -v slug="$slug"
 }
 
 cmd_suspend() {
@@ -679,6 +529,8 @@ main() {
     local verb="$1"; shift
     case "$verb" in
         -h|--help) usage; exit "$GREMION_EXIT_OK" ;;
+        # D R31-I4: refused before anything is read, run or written.
+        create) die "gremion-tenant create is ${DECOMMISSIONED}" "$GREMION_EXIT_USAGE" ;;
     esac
     need_cmd docker jq sed grep tr mktemp realpath openssl
     setup_paths
@@ -686,7 +538,8 @@ main() {
     if [[ "${1:-}" == --operator ]]; then need_value "$@"; OPERATOR_ID="$2"; shift 2; fi
     case "$verb" in
         init)      cmd_init "$@" ;;
-        create)    cmd_create "$@" ;;
+        request)   cmd_request "$@" ;;
+        requests)  cmd_requests "$@" ;;
         suspend)   cmd_suspend "$@" ;;
         resume)    cmd_resume "$@" ;;
         reconcile) cmd_reconcile "$@" ;;

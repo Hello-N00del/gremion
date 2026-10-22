@@ -80,12 +80,13 @@ Stages:
   networks     shared external networks and volumes        (needs state.env)
   firewall     table inet gremion                          (needs state.env)
   agent        gremion-hostd unit + restricted deploy key
+  executor     gremion-executor unit (the control panel's request queue)
   timers       gremion-backup.timer + gremion-verify.service + gremion-metrics.timer
                + gremion-footprint.timer (weekly, TRD-223)
   harden-ssh   key-only SSH   (RUN LAST, gated, not part of 'all')
   trust        pinned cosign + the release public key       (not part of 'all')
   signers      the release-tag signers file (allowed_signers) (not part of 'all')
-  all         base user docker addresses networks firewall agent timers
+  all         base user docker addresses networks firewall agent executor timers
 
 Options:
   --env-file PATH        state env file (default: <root>/etc/env/state.env)
@@ -921,6 +922,46 @@ stage_agent() {
 }
 
 # ──────────────────────────────────────────────────────────────────────────
+# executor — gremion-executor.service: the host side of the control panel's
+# request queue (TASK-043d-1). The CLI create is decommissioned, so a host
+# without this service has no way to create a customer.
+# ──────────────────────────────────────────────────────────────────────────
+stage_executor() {
+    require_root
+    local root; root="$(gremion_root)"
+
+    # Like the agent stage, this INSTALLS from the source tree. The handlers
+    # and customer-ops.sh are NOT installed here: the executor sources them
+    # from the authenticated release (GREMION_RELEASE_DIR, default <root>/current).
+    [[ -f "$SCRIPT_DIR/bin/gremion-executor" ]]         || die "precondition: $SCRIPT_DIR/bin/gremion-executor is missing from the source tree" 2
+    [[ -f "$SCRIPT_DIR/lib/common.sh" ]]         || die "precondition: $SCRIPT_DIR/lib/common.sh is missing from the source tree" 2
+
+    # bin/ and lib/ side by side as REAL FILES: the program resolves
+    # ../lib/common.sh from ${BASH_SOURCE[0]}.
+    install -d -m 755 -o "${DEPLOY_USER}" -g "${DEPLOY_USER}" "${root}/bin" "${root}/lib" "${root}/logs"
+    install -m 0755 -o "${DEPLOY_USER}" -g "${DEPLOY_USER}"         "$SCRIPT_DIR/bin/gremion-executor" "${root}/bin/gremion-executor"
+    install -m 0644 -o "${DEPLOY_USER}" -g "${DEPLOY_USER}"         "$SCRIPT_DIR/lib/common.sh" "${root}/lib/common.sh"
+    assert "gremion-executor is executable" test -x "${root}/bin/gremion-executor"
+    assert "common.sh is beside bin/" test -f "${root}/lib/common.sh"
+
+    info "installing gremion-executor.service"
+    # render_unit takes TWO arguments (the unit's NAME and the destination).
+    render_unit gremion-executor.service /etc/systemd/system/gremion-executor.service
+    systemctl daemon-reload
+    # ENABLE only, no --now: on a fresh host there is no release yet
+    # (<root>/current) and no gremion_platform, so the executor would exit 2 at
+    # once and the unit would crash-loop (or a racy liveness assert would abort 'all'
+    # before the timers stage). The unit carries ConditionPathExists on the
+    # release's executor lib, so a boot before the first deploy is a clean skip.
+    # It is STARTED by gremion-tenant init (after the executor role exists) and
+    # try-restarted by gremion-deploy step 12 (a new release becomes current).
+    systemctl enable gremion-executor.service
+
+    assert "gremion-executor enabled at boot" systemctl is-enabled --quiet gremion-executor.service
+    ok "gremion-executor.service installed and enabled; gremion-tenant init starts it once gremion_platform exists"
+}
+
+# ──────────────────────────────────────────────────────────────────────────
 # timers — daily backup + the reboot gate
 # ──────────────────────────────────────────────────────────────────────────
 stage_timers() {
@@ -1221,12 +1262,13 @@ main() {
         networks)    stage_networks ;;
         firewall)    stage_firewall ;;
         agent)       stage_agent ;;
+        executor)    stage_executor ;;
         timers)      stage_timers ;;
         harden-ssh)  stage_harden_ssh ;;
         trust)       stage_trust ;;
         signers)     stage_signers ;;
         all)        stage_base; stage_user; stage_docker; stage_addresses
-                     stage_networks; stage_firewall; stage_agent; stage_timers
+                     stage_networks; stage_firewall; stage_agent; stage_executor; stage_timers
                      echo; info "'all' does not include harden-ssh — run it explicitly." ;;
         *)           die "unknown stage: ${stage} (see --help)" 2 ;;
     esac

@@ -83,6 +83,7 @@ describe('ensurePlatformDatabase on a server without gremion_platform (Q15)', ()
       expect(m.applied).toEqual(files)
       expect(m.applied).toEqual(expect.arrayContaining(['0001_plt_setup.sql', '0004_plt_provisioning_step.sql']))
       expect(m.applied).toContain('0005_plt_scheduled_job.sql') // TASK-039-FU
+      expect(m.applied).toContain('0009_plt_provisioning_request.sql') // TASK-043d-1
       expect((await migratePlatform(owned, { releaseRef: 'dist-v0.0.1', log: () => {} })).applied).toEqual([])
       const ledger = await owned<{ filename: string; phase: string; release_ref: string }[]>`
         SELECT filename, phase, release_ref FROM public.schema_migrations ORDER BY filename`

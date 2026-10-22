@@ -99,7 +99,7 @@ this repository. Addresses and names on these pages are documentation values
 
 Each of these is named at the step that needs it:
 
-- TASK-043b: creating the pilot customer with `gremion-tenant create` (TASK-043, `packages/provisioning/`) and its first administrator's sign-in waits for the green customer proof (install.md step 17).
+- TASK-043b: creating the pilot customer with a control-panel create request (TASK-043d, `packages/provisioning/`) and its first administrator's sign-in waits for the green customer proof (install.md step 17).
 - PENDING TASK-089 (`scripts/backup/`): the per-module backup verification that replaces today's enumeration (backup.md).
 - PENDING TASK-119 (`services/kernel-api/export/`): the tenant export, and its restore on a clean host by someone who is not the vendor (restore.md).
 
