@@ -167,7 +167,7 @@ export interface ReconcileOptions {
   verifyOnly: boolean
   /** TASK-043 R-E5b: the sender this realm must carry, kc-<token>@<platformDomain>
    *  through mail.<platformDomain>:587 STARTTLS (the realm's own principal). */
-  sender: { platformDomain: string; token: string }
+  sender: MailSender
   /** TASK-043 Q10: the identities that mark a FIXTURE user -- every seed-subject
    *  id parsed from the kernel chain's *_seed.sql files (pad-agnostic) and every
    *  template fixture username (fixture-identities.ts). */
@@ -217,13 +217,52 @@ interface UserRep {
 /** A template sentinel the base realm carries (realm-export.base.json:12-20). */
 const SMTP_SENTINEL = /__SMTP_[A-Z0-9_]*__/
 
-/** TASK-043 R-E5b: the realm's smtpServer against its own principal. Pure. */
-export function smtpServerProblems(smtp: Record<string, unknown> | undefined, sender: { platformDomain: string; token: string }): string[] {
-  const want = `kc-${sender.token}@${sender.platformDomain}`
+/** PLAN-mail-transport M1: the sender a realm must carry, by deploy-time mail
+ *  transport. Host-owned: the host hands it to reconcile (`--sender-json`), the
+ *  container reads no mail.env. A descriptor without a `mode` is the stalwart
+ *  one (the shape every caller had before the relay existed). The relay
+ *  descriptor carries NO password (the host holds that secret). */
+export type MailSender =
+  | { mode?: 'stalwart'; platformDomain: string; token: string }
+  | { mode: 'relay'; platformDomain: string; host: string; port: number; fromAddress: string; user: string }
+
+/** The host's descriptor (`--sender-json`) -> a MailSender. Absent = stalwart. Pure; throws on anything off. */
+export function parseMailSenderJson(raw: string | undefined, platformDomain: string, token: string): MailSender {
+  if (raw === undefined || raw === '') return { mode: 'stalwart', platformDomain, token }
+  let j: unknown
+  try {
+    j = JSON.parse(raw)
+  } catch {
+    throw new Error('reconcile: --sender-json is not JSON (sender descriptor)')
+  }
+  if (typeof j !== 'object' || j === null || Array.isArray(j)) throw new Error('reconcile: --sender-json is not an object (sender descriptor)')
+  const o = j as Record<string, unknown>
+  if (o.mode === 'stalwart') return { mode: 'stalwart', platformDomain, token }
+  if (o.mode !== 'relay') throw new Error(`reconcile: --sender-json mode ${JSON.stringify(o.mode)} is neither relay nor stalwart`)
+  if ('password' in o) throw new Error('reconcile: --sender-json must not carry a password (the host holds the relay secret)')
+  const host = typeof o.host === 'string' ? o.host.trim() : ''
+  if (!host) throw new Error('reconcile: relay sender descriptor has no host')
+  const port = o.port
+  if (typeof port !== 'number' || !Number.isInteger(port) || port <= 0 || port > 65535) throw new Error('reconcile: relay sender descriptor has a bad port')
+  const fromAddress = typeof o.fromAddress === 'string' ? o.fromAddress.trim() : ''
+  if (!fromAddress) throw new Error('reconcile: relay sender descriptor has no fromAddress')
+  const user = typeof o.user === 'string' ? o.user.trim() : ''
+  return { mode: 'relay', platformDomain, host, port, fromAddress, user }
+}
+
+/** TASK-043 R-E5b / PLAN-mail-transport M1: the realm's smtpServer against the
+ *  sender its deploy-time mail transport requires. Pure. */
+export function smtpServerProblems(smtp: Record<string, unknown> | undefined, sender: MailSender): string[] {
   const s = smtp ?? {}
   const str = (k: string): string => (typeof s[k] === 'string' ? (s[k] as string) : '')
   const problems: string[] = []
   if (SMTP_SENTINEL.test(JSON.stringify(s))) problems.push('an unresolved __SMTP_*__ template sentinel')
+  if (sender.mode === 'relay') return relaySmtpProblems(s, sender, problems)
+  const want = `kc-${sender.token}@${sender.platformDomain}`
+  // A realm stamped for the relay while this host runs stalwart: named residue.
+  if (str('host') !== `mail.${sender.platformDomain}` && /^no-reply@/.test(str('from')) && !/^kc-/.test(str('user'))) {
+    problems.push(`the realm carries a relay stamp (host ${JSON.stringify(str('host'))}, from ${str('from')}) but MAIL_TRANSPORT is stalwart -- migration residue`)
+  }
   for (const k of ['user', 'from'] as const) {
     const v = str(k)
     if (v === want) continue
@@ -237,6 +276,29 @@ export function smtpServerProblems(smtp: Record<string, unknown> | undefined, se
   if (str('auth') !== 'true') problems.push(`auth is ${JSON.stringify(str('auth'))}`)
   if (str('password') === '') problems.push('no password is set')
   return problems.length ? [`expected ${want} via mail.${sender.platformDomain}:587 STARTTLS; ${problems.join('; ')}`] : []
+}
+
+function relaySmtpProblems(s: Record<string, unknown>, sender: Extract<MailSender, { mode: 'relay' }>, problems: string[]): string[] {
+  const str = (k: string): string => (typeof s[k] === 'string' ? (s[k] as string) : '')
+  const implicitTls = sender.port === 465
+  const authenticated = sender.user !== ''
+  const user = str('user')
+  if (/^kc-[a-z0-9_]+@/.test(user) || /^kc-[a-z0-9_]+@/.test(str('from'))) {
+    problems.push(`the realm still carries the per-customer principal ${/^kc-/.test(user) ? user : str('from')} but MAIL_TRANSPORT is relay -- migration residue`)
+  } else if (user.startsWith('platform@')) {
+    problems.push(`user is the retired shared sender ${user}`)
+  } else if (user !== sender.user) {
+    problems.push(`user is ${JSON.stringify(user)}`)
+  }
+  if (str('from') !== sender.fromAddress && !/^kc-/.test(str('from'))) problems.push(`from is ${JSON.stringify(str('from'))}`)
+  if (str('host') !== sender.host) problems.push(`host is ${JSON.stringify(str('host'))}`)
+  if (str('port') !== String(sender.port)) problems.push(`port is ${JSON.stringify(str('port'))}`)
+  if (str('starttls') !== (implicitTls ? 'false' : 'true')) problems.push(`starttls is ${JSON.stringify(str('starttls'))}`)
+  if (implicitTls && str('ssl') !== 'true') problems.push(`ssl is ${JSON.stringify(str('ssl'))} (port 465 is implicit TLS)`)
+  if (str('auth') !== (authenticated ? 'true' : 'false')) problems.push(`auth is ${JSON.stringify(str('auth'))}`)
+  if (authenticated && str('password') === '') problems.push('no password is set')
+  const via = `${sender.host}:${sender.port} ${implicitTls ? 'implicit TLS' : 'STARTTLS'}`
+  return problems.length ? [`expected ${sender.fromAddress} via ${via}${authenticated ? ` as ${sender.user}` : ' (unauthenticated relay)'}; ${problems.join('; ')}`] : []
 }
 
 /** The expected acr.loa.map literal (matches the base + the §4-2 apply). */
@@ -489,7 +551,13 @@ export async function reconcileRealm(transport: KcTransport, opts: ReconcileOpti
   // ── TASK-043 R-E5b: the realm's OWN sender ─────────────────────────────────
   const smtp = smtpServerProblems(realmRep.smtpServer, opts.sender)
   if (smtp.length === 0) pass('smtp-server')
-  else fail('smtp-server', `${smtp.join('; ')} (repair: host -- gremion-vendor-mail realm-smtp --realm ${realm} --tenant ${opts.sender.token} --rotate)`)
+  else {
+    const repair =
+      opts.sender.mode === 'relay'
+        ? `gremion-mail realm-smtp --realm ${realm} --tenant ${realm.replace(/-/g, '_')}`
+        : `gremion-vendor-mail realm-smtp --realm ${realm} --tenant ${opts.sender.token} --rotate`
+    fail('smtp-server', `${smtp.join('; ')} (repair: host -- ${repair})`)
+  }
 
   // ── TASK-043 r4: the realm's frontendUrl is the customer's own host ─────────
   // Keycloak has no --hostname: without it every link Keycloak mails is built

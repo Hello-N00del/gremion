@@ -346,17 +346,72 @@ export function smtpServerBlock(smtp: RealmSmtpSettings): Record<string, string>
     throw new Error(`realm-doc: refusing a non-port SMTP port "${String(smtp.port)}" (gremion#6)`)
   }
   const implicitTls = smtp.port === 465
+  // An IP-allow-listed relay (mail transport `relay`, empty RELAY_SMTP_USER)
+  // authenticates nobody: auth false and neither a user nor a password in the
+  // block (an empty password would read back as a set one).
+  const authenticated = smtp.user !== ''
   return {
     host: smtp.host,
     port: String(smtp.port),
     from: smtp.from,
     fromDisplayName: 'Gremion',
-    auth: 'true',
-    user: smtp.user,
-    password: smtp.password,
+    auth: authenticated ? 'true' : 'false',
+    ...(authenticated ? { user: smtp.user, password: smtp.password } : {}),
     starttls: implicitTls ? 'false' : 'true',
     ssl: implicitTls ? 'true' : 'false',
   }
+}
+
+/** PLAN-mail-transport M1: how the platform sends its mail, chosen at deploy
+ *  time (MAIL_TRANSPORT in the host's mail.env).
+ *   - stalwart: the bundled Stalwart; each customer realm sends as its own
+ *     kc-<token>@ principal (nothing here changes that path).
+ *   - relay: an external authenticated SMTP relay; every realm sends as
+ *     no-reply@<fromDomain> through the ONE relay credential.
+ *  PURE and FAIL CLOSED: the caller supplies the env record and a secret reader
+ *  (this module still reads no env and no file of its own). An unset or unknown
+ *  MAIL_TRANSPORT throws -- a silent default to stalwart would send through a
+ *  server that is not running. The relay password is only ever read from its
+ *  secret REF (RELAY_SMTP_PASSWORD_REF); an inline RELAY_SMTP_PASSWORD is ignored. */
+export type MailTransport =
+  | { mode: 'stalwart'; domain: string }
+  | { mode: 'relay'; host: string; port: number; user: string; password: string; fromDomain: string }
+
+export function mailTransportFromEnv(
+  env: Record<string, string | undefined>,
+  readSecret: (ref: string) => string | undefined,
+): MailTransport {
+  const get = (k: string): string => (env[k] ?? '').trim()
+  const mode = get('MAIL_TRANSPORT')
+  if (mode === '') {
+    throw new Error('realm-doc: MAIL_TRANSPORT is unset -- set it to relay or stalwart in mail.env (no default: a wrong guess sends mail through a server that is not running)')
+  }
+  const domain = get('PLATFORM_DOMAIN')
+  if (mode === 'stalwart') {
+    if (!domain) throw new Error('realm-doc: PLATFORM_DOMAIN is unset -- the stalwart sender domain cannot be derived')
+    return { mode: 'stalwart', domain }
+  }
+  if (mode !== 'relay') {
+    throw new Error(`realm-doc: MAIL_TRANSPORT=${mode} is not a mail transport this release knows (relay, stalwart)`)
+  }
+  const host = get('RELAY_SMTP_HOST')
+  if (!host) throw new Error('realm-doc: MAIL_TRANSPORT=relay needs RELAY_SMTP_HOST')
+  const rawPort = get('RELAY_SMTP_PORT') || '587'
+  const port = /^[0-9]{1,5}$/.test(rawPort) ? Number(rawPort) : Number.NaN
+  if (!Number.isInteger(port) || port <= 0 || port > 65535) {
+    throw new Error(`realm-doc: RELAY_SMTP_PORT "${rawPort}" is not a port`)
+  }
+  const fromDomain = get('RELAY_FROM_DOMAIN') || domain
+  if (!fromDomain) throw new Error('realm-doc: MAIL_TRANSPORT=relay needs RELAY_FROM_DOMAIN or PLATFORM_DOMAIN (the From domain the relay signs)')
+  const user = get('RELAY_SMTP_USER')
+  let password = ''
+  if (user !== '') {
+    const ref = get('RELAY_SMTP_PASSWORD_REF')
+    if (!ref) throw new Error('realm-doc: RELAY_SMTP_USER is set but RELAY_SMTP_PASSWORD_REF is empty -- the relay password is a secret ref, never an inline value')
+    password = (readSecret(ref) ?? '').trim()
+    if (!password) throw new Error('realm-doc: RELAY_SMTP_PASSWORD_REF does not resolve to a secret')
+  }
+  return { mode: 'relay', host, port, user, password, fromDomain }
 }
 
 /** FAIL CLOSED: the base template opens both email paths
