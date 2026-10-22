@@ -40,7 +40,7 @@ describe('relay mode: the mail step records mail_principal_issued from the relay
     const d = { ...deps(w, ['calendar']), mailSender: { ...RELAY, user: '' } }
     const a = await createPhaseA(spec(), d)
     relayStamp(w, a.customer.realm, { user: null })
-    await recordHostStep('musterstadt', 'mail_principal_issued', OPERATOR, d)
+    await expect(recordHostStep('musterstadt', 'mail_principal_issued', OPERATOR, d)).resolves.toBeDefined()
   })
 
   it.each([

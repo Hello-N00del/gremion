@@ -199,12 +199,12 @@ export async function assertSmtpStamped(c: CustomerRef, deps: ProvisioningDeps):
     // readSmtp reports a user only when a password is set, so an authenticating
     // relay needs a user read back; an IP-allow-listed one (user '') needs none.
     const problems: string[] = []
-    if (/^kc-/.test(got.user ?? '') || /^kc-/.test(got.from ?? '')) {
+    if ((got.user ?? '').startsWith('kc-') || (got.from ?? '').startsWith('kc-')) {
       problems.push(`the realm carries the per-customer principal ${got.user ?? got.from} but MAIL_TRANSPORT is relay -- migration residue`)
     } else if ((got.user ?? '') !== sender.user) {
       problems.push(`user ${JSON.stringify(got.user)} (want ${JSON.stringify(sender.user === '' ? null : sender.user)})`)
     }
-    if (got.from !== sender.fromAddress && !/^kc-/.test(got.from ?? '')) problems.push(`from ${JSON.stringify(got.from)} (want ${sender.fromAddress})`)
+    if (got.from !== sender.fromAddress && !(got.from ?? '').startsWith('kc-')) problems.push(`from ${JSON.stringify(got.from)} (want ${sender.fromAddress})`)
     if (got.host !== sender.host) problems.push(`host ${JSON.stringify(got.host)} (want ${sender.host})`)
     if (got.port !== String(sender.port)) problems.push(`port ${JSON.stringify(got.port)} (want ${sender.port})`)
     const wantStarttls = sender.port === 465 ? 'false' : 'true'

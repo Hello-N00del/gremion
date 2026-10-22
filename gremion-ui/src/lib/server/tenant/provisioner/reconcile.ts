@@ -260,7 +260,7 @@ export function smtpServerProblems(smtp: Record<string, unknown> | undefined, se
   if (sender.mode === 'relay') return relaySmtpProblems(s, sender, problems)
   const want = `kc-${sender.token}@${sender.platformDomain}`
   // A realm stamped for the relay while this host runs stalwart: named residue.
-  if (str('host') !== `mail.${sender.platformDomain}` && /^no-reply@/.test(str('from')) && !/^kc-/.test(str('user'))) {
+  if (str('host') !== `mail.${sender.platformDomain}` && str('from').startsWith('no-reply@') && !str('user').startsWith('kc-')) {
     problems.push(`the realm carries a relay stamp (host ${JSON.stringify(str('host'))}, from ${str('from')}) but MAIL_TRANSPORT is stalwart -- migration residue`)
   }
   for (const k of ['user', 'from'] as const) {
@@ -284,13 +284,13 @@ function relaySmtpProblems(s: Record<string, unknown>, sender: Extract<MailSende
   const authenticated = sender.user !== ''
   const user = str('user')
   if (/^kc-[a-z0-9_]+@/.test(user) || /^kc-[a-z0-9_]+@/.test(str('from'))) {
-    problems.push(`the realm still carries the per-customer principal ${/^kc-/.test(user) ? user : str('from')} but MAIL_TRANSPORT is relay -- migration residue`)
+    problems.push(`the realm still carries the per-customer principal ${user.startsWith('kc-') ? user : str('from')} but MAIL_TRANSPORT is relay -- migration residue`)
   } else if (user.startsWith('platform@')) {
     problems.push(`user is the retired shared sender ${user}`)
   } else if (user !== sender.user) {
     problems.push(`user is ${JSON.stringify(user)}`)
   }
-  if (str('from') !== sender.fromAddress && !/^kc-/.test(str('from'))) problems.push(`from is ${JSON.stringify(str('from'))}`)
+  if (str('from') !== sender.fromAddress && !str('from').startsWith('kc-')) problems.push(`from is ${JSON.stringify(str('from'))}`)
   if (str('host') !== sender.host) problems.push(`host is ${JSON.stringify(str('host'))}`)
   if (str('port') !== String(sender.port)) problems.push(`port is ${JSON.stringify(str('port'))}`)
   if (str('starttls') !== (implicitTls ? 'false' : 'true')) problems.push(`starttls is ${JSON.stringify(str('starttls'))}`)
