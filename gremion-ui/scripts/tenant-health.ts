@@ -26,6 +26,7 @@ import postgres from 'postgres'
 import {
   listTenants,
   getTenantResources,
+  configPathForTenant,
   type Tenant,
 } from '../src/lib/server/tenant/registry'
 import { getControlDb, _resetControlDbForTests } from '../src/lib/server/tenant/control-db'
@@ -33,6 +34,7 @@ import { tenantSecretHostPath } from '../src/lib/server/tenant/secrets'
 import {
   checkFleetHealth,
   fleetExitCode,
+  disabledModulesFromConfig,
   renderHealthTable,
   type HealthDeps,
   type DataPlaneProbe,
@@ -41,6 +43,7 @@ import {
   type SatelliteProbe,
   type LeafProbe,
 } from '../src/lib/server/tenant/health'
+import { readConfig } from '../src/lib/server/config'
 import { tlog } from '../src/lib/server/observability/tenant-log'
 
 // ── secret-ref resolution (operator-side: env: directly, file: via host path) ──
@@ -177,7 +180,12 @@ async function probeLeaf(tenant: Tenant): Promise<LeafProbe> {
   }
 }
 
+// F7: the disabled feature modules come from each tenant's OWN config file
+// (configPathForTenant(slug), the source the app reads). RESIDUAL: if the operator host
+// cannot reach that path, readConfig falls back to defaults (all modules on),
+// i.e. nothing is skipped (pre-F7 behaviour, never a false "healthy").
 const liveDeps: HealthDeps = {
+  disabledModules: disabledModulesFromConfig((t) => readConfig({ id: t.id, configPath: configPathForTenant(t.slug) }).modules),
   listTenants,
   probeDataPlane,
   probeMigrations,

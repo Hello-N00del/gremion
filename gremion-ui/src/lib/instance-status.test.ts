@@ -6,6 +6,7 @@ import {
   SERVICE_ICON,
   instanceServices,
   overallFromSilo,
+  disabledServices,
   instanceReady,
   type InstanceState,
 } from './instance-status'
@@ -84,6 +85,22 @@ describe('instance-status — #264 convergence contract', () => {
     })
   })
 
+
+  describe('overallFromSilo with disabled modules (F7)', () => {
+    it('nextcloud absent + files OFF -> ready', () => {
+      expect(overallFromSilo({ db: 'ok', keycloak: 'ok', matrix: 'ok' }, disabledServices({ files: false, messages: true }))).toBe('ready')
+    })
+    it('pending/failed rows of a disabled module are ignored', () => {
+      const d = disabledServices({ files: false, messages: false })
+      expect(overallFromSilo({ db: 'ok', keycloak: 'ok', nextcloud: 'provisioning', matrix: 'failed' }, d)).toBe('ready')
+    })
+    it('enabled module failed -> degraded, not failed', () => {
+      expect(overallFromSilo({ db: 'ok', keycloak: 'ok', nextcloud: 'failed', matrix: 'ok' }, disabledServices({ files: true, messages: true }))).toBe('degraded')
+    })
+    it('kernel service failed still -> failed', () => {
+      expect(overallFromSilo({ db: 'ok', keycloak: 'failed', nextcloud: 'ok', matrix: 'ok' }, [])).toBe('failed')
+    })
+  })
   describe('instanceReady', () => {
     it('true only for ready (null defaults to ready/hidden)', () => {
       expect(instanceReady('ready')).toBe(true)

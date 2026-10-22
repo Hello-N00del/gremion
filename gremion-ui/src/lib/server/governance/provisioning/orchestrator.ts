@@ -1,5 +1,6 @@
 // src/lib/server/governance/provisioning/orchestrator.ts
 import { getDb } from '../../db'
+import { readConfig } from '../../config'
 import { getKeycloakAdminClientForCurrentTenant } from '../../keycloak-admin'
 import { buildModuleProvisioningSubsystems } from '$lib/server/modules/runtime-registry'
 import {
@@ -19,14 +20,34 @@ import type { Adapters, ProvisionContext, ProvisioningReport, SubsystemResult, S
 
 const OPTIONAL: Subsystem[] = ['matrix', 'nextcloud']
 
-/** Keycloak always; matrix/nextcloud per wants_* flags. Single source for the inline provision
- *  loop AND the create-side atomic enqueue. */
+/** Feature module that owns each optional subsystem. */
+const SUBSYSTEM_MODULE: Record<'matrix' | 'nextcloud', string> = {
+  matrix: 'messages',
+  nextcloud: 'files',
+}
+
+/** The current tenant's module toggle map, or undefined when it cannot be read
+ *  (no tenant scope): undefined means "do not filter" (the pre-F7 behaviour). */
+function currentModules(): Record<string, boolean> | undefined {
+  try {
+    return readConfig().modules
+  } catch {
+    return undefined
+  }
+}
+
+/** Keycloak always; matrix/nextcloud per wants_* flags AND only when the owning
+ *  feature module (messages / files) is enabled for the tenant (F7: a disabled
+ *  module's subsystem is skipped, never enqueued, never reported failed). Single
+ *  source for the inline provision loop AND the create-side atomic enqueue. */
 export function wantedSubsystems(
-  unit: Pick<OrgUnit, 'wants_matrix_room' | 'wants_nextcloud_folder'>
+  unit: Pick<OrgUnit, 'wants_matrix_room' | 'wants_nextcloud_folder'>,
+  modules: Record<string, boolean> | undefined = currentModules(),
 ): Subsystem[] {
+  const on = (sub: 'matrix' | 'nextcloud') => !modules || !!modules[SUBSYSTEM_MODULE[sub]]
   const subs: Subsystem[] = ['keycloak']
-  if (unit.wants_matrix_room) subs.push('matrix')
-  if (unit.wants_nextcloud_folder) subs.push('nextcloud')
+  if (unit.wants_matrix_room && on('matrix')) subs.push('matrix')
+  if (unit.wants_nextcloud_folder && on('nextcloud')) subs.push('nextcloud')
   return subs
 }
 
@@ -117,7 +138,12 @@ async function provisionOrgUnitLocked(
 
   for (const sub of OPTIONAL) {
     const wanted = wantedSubsystems(unit).includes(sub)
-    if (!wanted) {
+    if (wanted && !adapters[sub]) {
+      // Module ENABLED and wanted but no adapter registered: still skipped, but
+      // never silently (a misconfigured deployment would otherwise look fine).
+      console.warn(`[provisioning] ${sub} is wanted for ${unitId} but has no adapter; skipped`)
+    }
+    if (!wanted || !adapters[sub]) {
       results.push({ subsystem: sub, status: 'skipped', willRetry: false })
       continue
     }
