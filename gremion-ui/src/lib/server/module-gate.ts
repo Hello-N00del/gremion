@@ -11,6 +11,37 @@ import { readConfig, type GremionConfig } from '$lib/server/config'
 import { moduleRoutePrefixes } from '$lib/modules/registry'
 
 /**
+ * F5 r2: routes that stay reachable although their owning module is OFF. A former
+ * subscriber must always be able to opt out, so BOTH the unsubscribe page and its
+ * API are exempt (exact match; every other newsletter route stays gated).
+ */
+export const MODULE_GATE_EXEMPT: readonly string[] = Object.freeze([
+  '/newsletter/unsubscribe',
+  '/api/newsletter/unsubscribe',
+])
+
+/**
+ * F5 r2: public (session-less) paths that still belong to a toggleable module.
+ * They return before the session guard, so the hook consults this list first.
+ * The embedded video client is public by design but is a messages feature.
+ */
+const PUBLIC_MODULE_PATHS: readonly { prefix: string; moduleId: string }[] = Object.freeze([
+  { prefix: '/livekit', moduleId: 'messages' },
+  { prefix: '/element-call', moduleId: 'messages' },
+])
+
+/** The disabled module owning a PUBLIC path (null when none / enabled). */
+export function disabledModuleForPublicPath(
+  pathname: string,
+  config: GremionConfig = readConfig(),
+): string | null {
+  for (const { prefix, moduleId } of PUBLIC_MODULE_PATHS) {
+    if ((pathname === prefix || pathname.startsWith(prefix + '/')) && !config.modules[moduleId]) return moduleId
+  }
+  return null
+}
+
+/**
  * The id of the toggleable module that owns `pathname` AND is DISABLED in the
  * (current tenant's) config — null otherwise. Route map is composed from the
  * module manifests (P0.1). Shared by the machine-readable gate
@@ -22,6 +53,7 @@ export function disabledModuleForPath(
   pathname: string,
   config: GremionConfig = readConfig(),
 ): string | null {
+  if (MODULE_GATE_EXEMPT.some((p) => pathname === p)) return null
   for (const { prefix, moduleId } of moduleRoutePrefixes()) {
     // WP3-modules-dynamic: config.modules is now Record<string, boolean>, so the
     // string moduleId indexes directly — no `as keyof …` cast needed.

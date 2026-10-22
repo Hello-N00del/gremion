@@ -18,7 +18,7 @@ is `test/host/integration/pooled-stack-proof.sh`.
 
 **Tenants cost no containers (TRD-440).** A customer adds databases (its
 kernel database and one per enabled module), a Keycloak realm, a broker
-account and its first accounts (`gremion-tenant create <slug> ...`, TASK-043).
+account and its first accounts (a create request from the control panel, run by the host-side executor, TASK-043 / TASK-043d).
 It adds no container and no compose project, and `create` fails if the
 container count or any project's `config --services` moved. The per-tenant
 column below is 0 on every row.
@@ -36,7 +36,7 @@ exit-2 failure, never a default:
 | `TENANT_EXPORT_DIR` | `/var/lib/gremion/exports` | `enableModule`'s export target (tenant-create never exports) |
 | `GREMION_RELEASE_REF` | the colour's `IMAGE_TAG` (compose sets it) | TASK-075: `release_ref` of every ledger row `init` (`migratePlatform`) and phase B (`enableModule`) apply; 1-64 of `A-Z a-z 0-9 . _ -` |
 | `GREMION_DISABLE_SEEDS` | `"true"` | the kernel migration tenant-create runs must never apply a `*_seed.sql` |
-| `PANEL_DB_USER` / `PANEL_DB_PASSWORD` | `gremion_panel` and a generated secret (`app.env`) | `init` makes the control panel's READ-ONLY role (`ensurePanelReader`: LOGIN, SELECT on `tenant`, `tenant_domain`, `plt.provisioning_step` only); the `control-panel` block connects as it, never as a database owner |
+| `PANEL_DB_USER` / `PANEL_DB_PASSWORD` | `gremion_panel` and a generated secret (`app.env`) | `init` makes the control panel's READ-ONLY role (`ensurePanelRequester`: LOGIN, SELECT on the panel read set, EXECUTE on `plt.submit_provisioning_request` only); the `control-panel` block connects as it, never as a database owner |
 
 `gremion-tenant init` writes the `etc/secrets/tenant-create` files (0600) from
 `state.env`; the compose file mounts that directory read-only into
@@ -46,7 +46,7 @@ exit-2 failure, never a default:
 the control registry's `tenant` and `tenant_domain`, so the `migrate` one-shot
 must have migrated the control registry first. On an unmigrated stack `init`
 stops before it creates anything, with a `PRECONDITION` error that names the
-missing table (`ensurePanelReader`). `plt.provisioning_step` is `init`'s own
+missing table (`ensurePanelRequester`). `plt.provisioning_step` is `init`'s own
 work (`migratePlatform`), so it always exists by the time the grant runs.
 
 **A colour owns no data (TRD-038).** The only volumes an app colour mounts are

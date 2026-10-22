@@ -81,3 +81,35 @@ export async function customerStatus(c: PanelConfig, slug: string): Promise<Cust
     steps: EXECUTION_ORDER.map((kind) => ({ kind, status: latest.get(kind)?.status ?? 'absent', at: latest.get(kind)?.at ?? null })),
   }
 }
+
+/** One request of a customer, as the status page shows it (the view has no evidence token). */
+export interface RequestRow {
+  id: string
+  kind: string
+  state: string
+  origin: 'panel' | 'host'
+  /** Break-glass requests (origin=host) carry the operator's reason and the host login user. */
+  reason: string | null
+  hostActor: string | null
+  outcome: string | null
+  createdAt: string
+}
+
+export async function customerRequests(c: PanelConfig, slug: string): Promise<RequestRow[]> {
+  const p = platformDb(c)
+  if (!p) return []
+  const rows = await p<
+    { request_id: string; kind: string; state: string; origin: 'panel' | 'host'; reason: string | null; host_actor: string | null; outcome: string | null; created_at: Date }[]
+  >`SELECT request_id::text, kind, state, origin, reason, host_actor, outcome, created_at
+      FROM plt.provisioning_request_status WHERE customer_slug = ${slug} ORDER BY created_at DESC LIMIT 20`
+  return rows.map((r) => ({
+    id: r.request_id,
+    kind: r.kind,
+    state: r.state,
+    origin: r.origin,
+    reason: r.reason,
+    hostActor: r.host_actor,
+    outcome: r.outcome,
+    createdAt: r.created_at.toISOString(),
+  }))
+}

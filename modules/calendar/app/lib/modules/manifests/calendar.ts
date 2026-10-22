@@ -7,6 +7,8 @@ import type { ModuleManifest } from '../types'
 // allows per-tenant calendar disable; the flag defaults ON (defaultModulesConfig
 // sources toggleable ids from MODULE_MANIFESTS and sets each true by default).
 //
+// GUARD (R33 F6): gremion-ui/src/lib/modules/migration-ownership.ts crossCuttingViolations() fails if any manifest claims this file;
+// gremion-ui/scripts/fresh-init-proof.sh --module-off calendar proves the OFF fresh init in a real Postgres.
 // DELIBERATELY no `migrations` key (#372): calendar_events
 // (migrations/0003_calendar_schema.sql) stays KERNEL-applied. 0008_public_portal.sql
 // is a cross-cutting kernel migration (attributed to no manifest, therefore

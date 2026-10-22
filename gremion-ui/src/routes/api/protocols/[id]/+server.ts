@@ -6,6 +6,8 @@ import {
   getProtocol, updateProtocol, upsertAttendance,
   listAttendance, listResolutions, listActionItems,
 } from '$lib/server/protocols/protocol-db'
+import { sanitizeRichHtml } from '$lib/server/security/html-sanitize'
+import { getProtocolDocumentPort } from '$lib/server/modules/runtime-registry'
 import { requireUuidParams } from '$lib/server/protocols/route-ids'
 import { getOrgUnit } from '$lib/server/governance/org-units-db'
 import { seesAllGovernance, viewerCanSeeProtocol } from '$lib/server/governance/visibility'
@@ -38,9 +40,15 @@ export async function GET(event: RequestEvent) {
     listActionItems(protocol.id),
   ])
 
-  const { nextcloud_draft_path: _omit, ...safeProtocol } = protocol
+  const { nextcloud_draft_path: draftPath, ...safeProtocol } = protocol
+  // R33b: an ODT draft (path set AND files port present) is the text publish
+  // converts; the page must not offer the in-app editor for it.
+  const hasDraftDocument = Boolean(draftPath) && Boolean(getProtocolDocumentPort())
+  // R33b: body_html is rendered via {@html}; sanitize on read too so a legacy or
+  // directly-written row can never reach the page as live markup (G-011).
+  if (safeProtocol.body_html) safeProtocol.body_html = sanitizeRichHtml(safeProtocol.body_html)
 
-  return json({ protocol: safeProtocol, attendance, resolutions, actionItems })
+  return json({ protocol: { ...safeProtocol, hasDraftDocument }, attendance, resolutions, actionItems })
 }
 
 export async function PATCH(event: RequestEvent) {
@@ -71,9 +79,19 @@ export async function PATCH(event: RequestEvent) {
     return json({ attendance })
   }
 
+  // F1 (Q1): the in-app protocol body (protocols.body_html). Sanitized on write
+  // (G-011); editable only while the protocol is a draft, because a submitted
+  // protocol's text is what the committee adopts at publish.
+  let bodyHtml: string | undefined
+  if (typeof body.bodyHtml === 'string') {
+    if (protocol.status !== 'draft') throw error(403, 'Der Protokolltext kann nur im Entwurf bearbeitet werden')
+    bodyHtml = sanitizeRichHtml(body.bodyHtml)
+  }
+
   const updated = await updateProtocol(protocol.id, {
     location: body.location,
     title: body.title,
+    bodyHtml,
     guestEditEnabled: body.guestEditEnabled,
   })
   return json({ protocol: updated })

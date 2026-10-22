@@ -248,10 +248,12 @@ services:
   # operator reaches it with `gremion-tenant panel`, which prints the
   # `ssh -L 127.0.0.1:<p>:<ip>:3000` line for this colour's address on
   # ${STACK}-app-<colour>_app (a public control router is TASK-118's). It
-  # only DISPLAYS: PANEL_EXECUTOR is `none` here, the image carries no
-  # gremion-tenant and its database role is SELECT-only, so "Neuer Mandant"
-  # writes no tenant row and no ledger (the button says so). Registration and
-  # provisioning are `gremion-tenant create` on the host (Q6).
+  # executes nothing itself (TASK-043d): PANEL_EXECUTOR is `queue`, so
+  # "Neuer Mandant" writes ONE request row through
+  # plt.submit_provisioning_request (its database role has SELECT plus that
+  # one EXECUTE, nothing else); the host-side gremion-executor claims it,
+  # re-verifies the operator's signed sign-in and creates the customer. The
+  # image carries neither docker nor gremion-tenant.
   control-panel:
     image: ghcr.io/hello-n00del/gremion-control-panel:${IMAGE_TAG:?IMAGE_TAG required}
     build:
@@ -284,12 +286,13 @@ services:
       PANEL_OIDC_CLIENT_SECRET_FILE: /run/secrets/control-panel/client_secret
       AUTH_SECRET_FILE: /run/secrets/control-panel/auth_secret
       PANEL_REQUIRED_ACR: loa2
-      # The panel only READS (tenant, tenant_domain, plt.provisioning_step):
-      # its own role, made by `gremion-tenant init` (ensurePanelReader), never
-      # the two databases' owners (r3 verifier MEDIUM #70).
+      # The panel READS (tenant, tenant_domain, the ledger and request views)
+      # and may EXECUTE plt.submit_provisioning_request only: its own role,
+      # made by `gremion-tenant init` (ensurePanelRequester), never the two
+      # databases' owners (r3 verifier MEDIUM #70).
       CONTROL_DATABASE_URL: postgresql://${PANEL_DB_USER:-gremion_panel}:${PANEL_DB_PASSWORD:?PANEL_DB_PASSWORD required}@postgres-${STACK:?STACK required}:5432/${CONTROL_DB_NAME:-control}
       PLATFORM_DATABASE_URL: postgresql://${PANEL_DB_USER:-gremion_panel}:${PANEL_DB_PASSWORD:?PANEL_DB_PASSWORD required}@postgres-${STACK:?STACK required}:5432/gremion_platform
-      PANEL_EXECUTOR: none
+      PANEL_EXECUTOR: queue
     volumes:
       - ${GREMION_ROOT:-/opt/gremion}/etc/secrets/control-panel:/run/secrets/control-panel:ro
       - ./docker/keycloak/certs/internal-ca.pem:/etc/ssl/internal/internal-ca.pem:ro

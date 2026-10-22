@@ -99,7 +99,7 @@ test('a forbidden phrasing read from the elections-scope table fails', () => {
 
 test('the sanctioned honest-scope notice passes', () => {
   const r = run(tree({
-    'docs/about-gremion.md': "This module does not run the university's statutory elections. It is optional and switched off by default.\n",
+    'docs/about-gremion.md': "This module does not run the university's statutory elections. It is optional and can be switched off by the council's administration.\n",
     'gremion-ui/src/lib/i18n/de.ts': "export default { n: 'Dieses Modul führt keine satzungsgemäßen Wahlen der Hochschule durch.' }\n",
   }))
   assert.equal(r.status, 0, r.out)

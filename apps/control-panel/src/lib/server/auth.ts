@@ -5,11 +5,13 @@
 // to Keycloak's internal base. Every authorization request asks for acr loa2
 // (multi-factor); the gate refuses a session that did not get it.
 import { Auth, createActionURL, raw, skipCSRFCheck } from '@auth/core'
+import { getToken, type JWT } from '@auth/core/jwt'
 import Keycloak from '@auth/core/providers/keycloak'
 import type { SvelteKitAuthConfig } from '@auth/sveltekit'
 import type { RequestEvent } from '@sveltejs/kit'
 import type { PanelConfig } from './config'
 import { SESSION_ABSOLUTE_SECONDS, sessionTooOld, type SessionClaims } from './gate'
+import type { Evidence } from './requests'
 
 export const PROVIDER_ID = 'keycloak'
 
@@ -76,7 +78,10 @@ export function authConfig(c: PanelConfig): SvelteKitAuthConfig {
         issuer: c.issuer,
         authorization: {
           url: `${c.issuer}/protocol/openid-connect/auth`,
-          params: { scope: 'openid email profile', acr_values: c.requiredAcr },
+          // max_age (OIDC Core 3.1.2.1, TASK-043d D4b): an SSO session older than the
+          // panel's own hour must re-authenticate, so `auth_time` means "MFA within
+          // the hour" -- the bound the executor re-checks on the trusted layer.
+          params: { scope: 'openid email profile', acr_values: c.requiredAcr, max_age: SESSION_ABSOLUTE_SECONDS },
         },
         token: `${internal}/token`,
         userinfo: `${internal}/userinfo`,
@@ -93,6 +98,18 @@ export function authConfig(c: PanelConfig): SvelteKitAuthConfig {
           token.opsUid = claims.uid
           token.opsEmail = claims.email
           token.opsRoles = claims.roles
+          // TASK-043d: the SIGNED access token is request evidence. It lives in the
+          // encrypted session cookie only; session() below never copies it out, so
+          // neither /auth/session nor any page data carries it (A10).
+          // The executor's request-verify wants the PAIR of one code exchange (the
+          // ID token carries sub and at_hash, the access token the roles).
+          token.opsAccess = account.access_token
+          token.opsIdToken = account.id_token
+          // The sign-in time the verifier will compare with: the ID token's
+          // auth_time when the realm sets one, else its iat (the code exchange).
+          const idp = payloadOf(account.id_token)
+          const authTime = typeof idp?.auth_time === 'number' ? idp.auth_time : idp?.iat
+          token.opsAuthTime = typeof authTime === 'number' ? authTime : undefined
           // Stamped ONCE, at the code exchange; a renewal never moves it.
           token.opsAuthAt = now
           return token
@@ -158,4 +175,32 @@ export async function startSignIn(event: RequestEvent, config: SvelteKitAuthConf
     location: res.redirect,
     cookies: (res.cookies ?? []).map((c) => ({ name: c.name, value: c.value, options: { path: '/', ...c.options } as CookieOptions })),
   }
+}
+
+/**
+ * The request evidence in a decoded session JWT (server-side only), or null
+ * when any part is missing: the signed access token, the acr, the token's
+ * auth_time and the session's sign-in time. Nothing here reaches the browser.
+ */
+export function evidenceFromJwt(t: JWT): Evidence | null {
+  const access = t.opsAccess
+  const id = t.opsIdToken
+  const acr = t.opsAcr
+  const authTime = t.opsAuthTime
+  const authAt = t.opsAuthAt
+  if (typeof access !== 'string' || typeof id !== 'string' || typeof acr !== 'string') return null
+  if (typeof authTime !== 'number' || !Number.isFinite(authTime) || typeof authAt !== 'number' || !Number.isFinite(authAt)) return null
+  // the ONE string request-verify decodes (encodeEvidence): the pair, in this key order
+  return { token: JSON.stringify({ id, access }), acr, authTime: new Date(authTime * 1000), sessionAt: new Date(authAt * 1000) }
+}
+
+/**
+ * Decodes the Auth.js session cookie of `request` (the secret is the panel's
+ * own; the gate has already accepted this session) and returns its evidence.
+ * Used by the "Neuer Mandant" action only.
+ */
+export async function evidenceFromRequest(request: Request, c: Pick<PanelConfig, 'authSecret' | 'origin'>): Promise<Evidence | null> {
+  const secure = c.origin.startsWith('https:')
+  const decoded = await getToken({ req: request, secret: c.authSecret, secureCookie: secure }).catch(() => null)
+  return decoded ? evidenceFromJwt(decoded) : null
 }

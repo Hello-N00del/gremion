@@ -461,11 +461,12 @@ describe('POST /api/protocols/[id]/publish — body_html sanitization', () => {
   })
 
 
-  // boundary rule A3a-2 degradation: no ProtocolDocumentPort registered -> 503, before
-  // any Collabora conversion or DB write.
-  it('returns 503 when no ProtocolDocumentPort is registered', async () => {
+  // F1: no ProtocolDocumentPort (files off) is no longer a 503. With no in-app
+  // body either there is nothing to publish -> 400, before any conversion or DB
+  // write. (The files-off success path is pinned in publish.nofiles.test.ts.)
+  it('returns 400 when no ProtocolDocumentPort is registered and there is no in-app body', async () => {
     _resetRuntimeRegistryForTests() // drop the port — files module absent
-    await expect(POST(makeEvent())).rejects.toMatchObject({ status: 503 })
+    await expect(POST(makeEvent())).rejects.toMatchObject({ status: 400 })
     expect(mockConvertOdtToHtml).not.toHaveBeenCalled()
     expect(mockSetProtocolStatus).not.toHaveBeenCalled()
   })

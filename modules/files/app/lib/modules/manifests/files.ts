@@ -9,19 +9,18 @@ import type { ModuleManifest } from '../types'
 // moduleRoutePrefixes() is unchanged because it emits prefixes only for
 // toggleable modules.
 //
-// toggleable:false — /files stays ALWAYS-ON exactly as it was in core (every
-// member is provisioned a Nextcloud account; #194 gates guests at Role.Member).
-// It is NOT a per-tenant disable-able feature, so it carries no routePrefixes:
-// the /files + /api/files surfaces are governed by the page-access minRole
-// (Role.Member) below, not by the module-disable gate. The FILES_BACKEND
-// inprocess→service cutover is an independent env flag, orthogonal to this.
+// toggleable:true (R33 F5, operator ruling Q3 2026-10-21): files is deselectable at RUNTIME per tenant AND at
+// creation (tenant create --enable). With files OFF the /files page answers the styled "Modul nicht aktiv"
+// surface, /api/files the bare 403, and the Dokumente rail entry is dropped (nav-schema moduleId tag). Users
+// keep their accounts; only the surface is gated. The FILES_BACKEND inprocess->service cutover is an
+// independent env flag, orthogonal to this.
 export const filesManifest: ModuleManifest = {
   id: 'files',
   order: 80,
-  toggleable: false,
+  toggleable: true,
   // #194: /files is member-gated — guests get no Nextcloud account, so every
   // WebDAV call on their bearer 404s. The /api/files handler also 403s guests
   // (defense in depth).
   pages: [{ segment: 'files', minRole: Role.Member }],
-  routePrefixes: [],
+  routePrefixes: ['/files', '/api/files'],
 }

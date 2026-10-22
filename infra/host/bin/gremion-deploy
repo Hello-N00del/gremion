@@ -927,6 +927,9 @@ step_12_record() {
     mv -Tf "$ROOT/current.tmp" "$ROOT/current"
     [[ "$(readlink "$ROOT/current")" == "$RELEASE_DIR" ]] \
         || die "current symlink does not point at $RELEASE_DIR" 1
+    # The executor sources its handlers from current/: a running one picks up
+    # the new release (try-restart never starts a stopped unit).
+    executor_unit_action try-restart
     ok "recorded ${TAG} (previous ${prev})"
 }
 

@@ -5,6 +5,8 @@ export const electionsManifest: ModuleManifest = {
   id: 'elections',
   order: 30,
   toggleable: true,
+  // GUARD (R33 F6): gremion-ui/src/lib/modules/migration-ownership.ts crossCuttingViolations() fails if any manifest claims this file;
+  // gremion-ui/scripts/fresh-init-proof.sh --module-off elections proves the OFF fresh init in a real Postgres.
   // DELIBERATELY no `migrations` key (#371 review): committee_elections
   // (migrations/0004_committee_elections.sql) stays KERNEL-applied.
   // 0010_org_units.sql is a cross-cutting kernel migration (attributed to no

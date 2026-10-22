@@ -3,9 +3,10 @@
 // A vertical that runs calendar, elections or board OFF still gets these files:
 // later ungated kernel DDL (0010_org_units.sql's ALTER of committee_elections)
 // and gremion-ui/scripts/fresh-init-proof.sh's existence assertions depend on
-// them existing. (0058_public_reader_grants.sql no longer names calendar_events
-// among its own dependencies as of R-E13: it grants only the tables the
-// anonymous portal reads, org_units and protocols.)
+// them existing. (0058_public_reader_grants.sql does NOT grant calendar_events: since R-E13 it
+// grants only org_units and protocols; calendar_events appears there only in a
+// defensive, existence-guarded REVOKE, so 003 should sort before 058 for that
+// REVOKE to bite, but its absence would not abort 058.)
 export const CROSS_CUTTING_MODULE_TABLES = [
   'calendar_events',
   'committee_elections',
@@ -23,6 +24,58 @@ export const CROSS_CUTTING_MIGRATIONS: Readonly<Record<string, string>> = {
   '0003_calendar_schema.sql': 'calendar_events',
   '0004_committee_elections.sql': 'committee_elections',
   '0034_deck_board.sql': 'deck_board',
+}
+
+/**
+ * WHY these three stay kernel-applied (R33 audit F6, StuRaOS#371/#372; do not
+ * "tidy" them under a module): later UNGATED kernel DDL and grants depend on
+ * the relations they create, and moving a file would renumber it into a gap
+ * below every initialised database's high-water mark (backFillNotice).
+ *   0003 calendar_events    <- 0058_public_reader_grants only REVOKEs it
+ *                              (guarded, defensive; no grant) and the StuRaOS
+ *                              008_public_portal ALTER
+ *   0004 committee_elections <- 0010_org_units ALTERs it (column rename)
+ *   0034 deck_board         <- creates board/stack/card, FKs into org_units
+ * Consequence (accepted): these module tables exist while their module is OFF.
+ * Enforced by crossCuttingViolations() below, called from
+ * migration-ownership.test.ts, and by `fresh-init-proof.sh --module-off <id>`.
+ */
+export const CROSS_CUTTING_REASON =
+  'it creates a table that ungated kernel DDL/grants depend on (0010 ALTERs committee_elections, ' +
+  '0058 revokes calendar_events defensively (no grant), 0034 board FKs); a module-OFF fresh init would skip it and abort ' +
+  'those files. Renumbering is forbidden too (backFillNotice).'
+
+/**
+ * Loud guard: returns one message per violation (empty = fine).
+ *  - a manifest listing a cross-cutting migration in `migrations`
+ *  - a cross-cutting migration missing from the kernel migrations directory
+ * @param manifests  every registered manifest (only id + migrations are read)
+ * @param kernelFiles basenames (with .sql) present in gremion-ui/migrations
+ */
+export function crossCuttingViolations(
+  manifests: ReadonlyArray<{ id: string; migrations?: readonly string[] }>,
+  kernelFiles: ReadonlySet<string>,
+): string[] {
+  const out: string[] = []
+  for (const m of manifests) {
+    for (const base of m.migrations ?? []) {
+      const file = `${base}.sql`
+      if (file in CROSS_CUTTING_MIGRATIONS) {
+        out.push(
+          `module '${m.id}' claims ${file} (owner key ${CROSS_CUTTING_MIGRATIONS[file]}): ` +
+            `${file} must stay KERNEL-applied because ${CROSS_CUTTING_REASON}`,
+        )
+      }
+    }
+  }
+  for (const file of Object.keys(CROSS_CUTTING_MIGRATIONS)) {
+    if (!kernelFiles.has(file)) {
+      out.push(
+        `${file} is not in the kernel migrations directory: it must stay KERNEL-applied because ${CROSS_CUTTING_REASON}`,
+      )
+    }
+  }
+  return out
 }
 
 /**

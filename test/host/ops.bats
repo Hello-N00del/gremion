@@ -1087,3 +1087,75 @@ shim_reboot_env() {
     run grep -c '^curl ' "$SHIM_LOG"
     [ "$output" = "0" ]
 }
+
+# TASK-043d-1 verify-r1 HIGH 2: a bootstrapped host must get the executor
+# service, or there is no create path (the CLI create is decommissioned).
+@test "bootstrap has an executor stage: installed through two-argument render_unit, enabled (not started), in the stage table and in 'all'" {
+    local bs="${PROJECT_ROOT}/infra/host/bootstrap.sh"
+    grep -qE '^stage_executor\(\) \{' "$bs"
+    grep -qF 'render_unit gremion-executor.service /etc/systemd/system/gremion-executor.service' "$bs"
+    grep -qF 'systemctl enable gremion-executor.service' "$bs"
+    grep -qE '^ +executor\) +stage_executor ;;' "$bs"
+    # 'all' runs it, after the agent stage
+    grep -qE 'stage_agent; stage_executor|stage_firewall; stage_agent; stage_executor' "$bs"
+    run grep -nE 'render_unit +[A-Za-z0-9._-]+ *\|' "$bs"
+    [ "$status" -ne 0 ]
+}
+
+@test "bootstrap's executor stage installs the program and its lib side by side (it resolves ../lib/common.sh from BASH_SOURCE)" {
+    local bs="${PROJECT_ROOT}/infra/host/bootstrap.sh"
+    local body; body="$(awk '/^stage_executor\(\) \{/,/^}/' "$bs")"
+    [ -n "$body" ]
+    grep -qF '$SCRIPT_DIR/bin/gremion-executor' <<<"$body"
+    grep -qF '/bin/gremion-executor"' <<<"$body"
+    grep -qF 'install -m 0644 -o "${DEPLOY_USER}" -g "${DEPLOY_USER}"         "$SCRIPT_DIR/lib/common.sh" "${root}/lib/common.sh"' <<<"$body"
+    grep -qF 'executor' <(grep -F 'executor' <<<"$(awk '/^usage\(\)/,/^}/' "$bs"; sed -n '/^Stages:/,/^Options:/p' "$bs")")
+}
+
+# TASK-043d-1 verify-r2 HIGH: a fresh host has no release and no gremion_platform.
+@test "bootstrap's executor stage enables the unit without --now and asserts is-enabled, never is-active" {
+    local bs="${PROJECT_ROOT}/infra/host/bootstrap.sh"
+    local body; body="$(awk '/^stage_executor\(\) \{/,/^}/' "$bs")"
+    [ -n "$body" ]
+    run grep -F 'enable --now' <<<"$body"
+    [ "$status" -ne 0 ]
+    run grep -F 'is-active' <<<"$body"
+    [ "$status" -ne 0 ]
+    grep -qF 'systemctl enable gremion-executor.service' <<<"$body"
+    grep -qF 'systemctl is-enabled --quiet gremion-executor.service' <<<"$body"
+}
+
+@test "the executor unit template skips cleanly before the first release (ConditionPathExists on the release's executor lib)" {
+    local u="${PROJECT_ROOT}/infra/host/templates/systemd/gremion-executor.service"
+    grep -qxF 'ConditionPathExists=${GREMION_ROOT}/current/infra/host/lib/executor/db.sh' "$u"
+    # the condition belongs to [Unit], before [Service]
+    local cl sl
+    cl="$(grep -n '^ConditionPathExists=' "$u" | cut -d: -f1)"; sl="$(grep -n '^\[Service\]' "$u" | cut -d: -f1)"
+    [ "$cl" -lt "$sl" ]
+}
+
+@test "the executor is started where it can run: gremion-tenant init restarts it, gremion-deploy step 12 and gremion-rollback try-restart it" {
+    local h="${PROJECT_ROOT}/infra/host"
+    grep -qE '^executor_unit_action\(\) \{' "$h/lib/common.sh"
+    local init; init="$(awk '/^cmd_init\(\) \{/,/^}/' "$h/bin/gremion-tenant")"
+    grep -qF 'executor_unit_action restart' <<<"$init"
+    local rec; rec="$(awk '/^step_12_record\(\) \{/,/^}/' "$h/bin/gremion-deploy")"
+    grep -qF 'executor_unit_action try-restart' <<<"$rec"
+    local rb; rb="$(awk '/^record_tags\(\) \{/,/^}/' "$h/bin/gremion-rollback")"
+    grep -qF 'executor_unit_action try-restart' <<<"$rb"
+}
+
+# TASK-043d-1 verify-r1 HIGH 3: the customer proof must not call the
+# decommissioned `gremion-tenant create` (it exits 2); it queues a request and
+# runs the executor for it.
+@test "customer-provision-proof.sh creates through panel-create + executor-once, never the decommissioned gremion-tenant create" {
+    local f="${PROJECT_ROOT}/test/host/integration/customer-provision-proof.sh"
+    bash -n "$f"
+    run grep -nE '(^|[^_a-z-])tenant create ' "$f"
+    [ "$status" -ne 0 ]
+    grep -qE '^panel_create\(\) \{' "$f"
+    grep -qE '^executor_once\(\) \{' "$f"
+    grep -qF 'tenant request create --args-file' "$f"
+    grep -qF 'executor --once' "$f"
+    grep -qE 'customer-executor-once-x\) +phase_customer_executor_once' "$f"
+}
