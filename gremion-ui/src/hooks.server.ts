@@ -9,7 +9,7 @@ import type { SessionUser } from '$lib/auth/types'
 import { acrToLoa } from '$lib/auth/step-up'
 import { readConfig } from '$lib/server/config'
 import { RETENTION_DEFAULTS } from '$lib/retention-tiers'
-import { moduleGateResponse } from '$lib/server/module-gate'
+import { moduleGateResponse, disabledModuleForPublicPath } from '$lib/server/module-gate'
 import { requireBrand } from '$lib/server/brand'
 import { instanceThemeStyleTag } from '$lib/theme/instance-theme'
 import { waitForDbReady, isTransientDbStartupError } from '$lib/server/db'
@@ -561,6 +561,8 @@ export const authGuard: Handle = async ({ event, resolve }) => {
   // '/'-delimited descendant rule made every /api entry a whole subtree
   // (S1a#28). See matchesPublicPath for the three entry shapes.
   if (PUBLIC_PATHS.some((p) => matchesPublicPath(p, path))) {
+    // F5 r2: public video proxy (/element-call, /livekit/) is a messages feature -> 403 when messages is OFF.
+    if (disabledModuleForPublicPath(path)) return new Response('Module disabled', { status: 403 })
     return resolve(event)
   }
 

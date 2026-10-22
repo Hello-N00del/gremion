@@ -10,18 +10,16 @@ import type { ModuleManifest } from '../types'
 // moduleRoutePrefixes() is unchanged because it emits prefixes only for
 // toggleable modules.
 //
-// toggleable:false — /messages stays ALWAYS-ON exactly as it was in core (every
-// member is provisioned a Matrix account). It is NOT a per-tenant disable-able
-// feature, so it carries no routePrefixes: the /messages + /api/messages +
-// /api/video surfaces are governed by the page-access minRole (Role.Member)
-// below, not by the module-disable gate. The MESSAGES_BACKEND inprocess→service
-// cutover is an independent env flag, orthogonal to this.
+// toggleable:true (R33 F5, operator ruling Q3 2026-10-21): messages is deselectable at RUNTIME per tenant AND
+// at creation. With messages OFF /messages answers the styled "Modul nicht aktiv" surface, /api/messages and
+// /api/video the bare 403, and both rail entries (Chat, Raeume) are dropped. Users keep their accounts.
+// The MESSAGES_BACKEND inprocess->service cutover is an independent env flag, orthogonal to this.
 export const messagesManifest: ModuleManifest = {
   id: 'messages',
   order: 90,
-  toggleable: false,
+  toggleable: true,
   pages: [{ segment: 'messages', minRole: Role.Member }],
-  routePrefixes: [],
+  routePrefixes: ['/messages', '/api/messages', '/api/video'],
   // TASK-009 lane B (row 17, FLOW-MSG-001 "Verwaltung -> Räume"): the admin
   // room-overview rail entry. CouncilAdmin-gated (ITAdmin inherits via the
   // role hierarchy, lib/auth/index.ts) — /messages/manage itself re-checks
