@@ -223,6 +223,11 @@ OPS_V4_SUBNET=10.90.8.0/24
 OPS_V6_SUBNET=fd5a:98::/64
 PROM_RETENTION_TIME=27d
 PLATFORM_DOMAIN=example.org
+MAIL_TRANSPORT=${MAIL_TRANSPORT_T:-stalwart}
+RELAY_SMTP_HOST=relay.example.net
+RELAY_SMTP_PORT=587
+RELAY_SMTP_USER=relay-user@example.org
+RELAY_SMTP_PASSWORD_REF=secret:mail/relay-password
 EDGE_BIND_IP=203.0.113.10
 EDGE_BIND_IP6=2001:db8::a
 ALERT_WEBHOOK_URL=http://127.0.0.1:9099/hook
@@ -1158,4 +1163,87 @@ shim_reboot_env() {
     grep -qF 'tenant request create --args-file' "$f"
     grep -qF 'executor --once' "$f"
     grep -qE 'customer-executor-once-x\) +phase_customer_executor_once' "$f"
+}
+
+# ---------------------------------------------------------------------------
+# PLAN-mail-transport M3: the ops render follows MAIL_TRANSPORT (guard 7)
+# ---------------------------------------------------------------------------
+
+relay_ops_env() {   # <ALERT_EMAIL_TO>
+    MAIL_TRANSPORT_T=relay write_ops_env "${1:-}" "CHANGE_ME_GEN_alnum32_alert_smtp"
+    set_key ALERT_SMTP_HOST relay.example.net
+    set_key ALERT_SMTP_USER relay-user@example.org
+    mkdir -p "$GREMION_ROOT/etc/secrets/mail"
+    printf '%s
+' 'unit-relay-pw' > "$GREMION_ROOT/etc/secrets/mail/relay-password"
+    chmod 600 "$GREMION_ROOT/etc/secrets/mail/relay-password"
+}
+
+@test "M3 render-ops: MAIL_TRANSPORT unset or unknown is exit 2 naming the key (no silent default)" {
+    write_ops_env
+    sed -i '/^MAIL_TRANSPORT=/d' "$GREMION_ROOT/etc/env/ops.env"
+    run "$RENDER" --env-file "$GREMION_ROOT/etc/env/ops.env"
+    [ "$status" -eq 2 ] || { echo "$output"; return 1; }
+    [[ "$output" == *"MAIL_TRANSPORT"* ]]
+    write_ops_env
+    set_key MAIL_TRANSPORT carrier-pigeon
+    run "$RENDER" --env-file "$GREMION_ROOT/etc/env/ops.env"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"carrier-pigeon"* ]]
+    write_ops_env
+    set_key MAIL_TRANSPORT CHANGE_ME_OPERATOR_mail_transport
+    run "$RENDER" --env-file "$GREMION_ROOT/etc/env/ops.env"
+    [ "$status" -eq 2 ]
+}
+
+@test "M3 render-ops stalwart: the mail probes, the stalwart scrape and the MailQueueOldest1h rule are all rendered" {
+    write_ops_env
+    run "$RENDER" --env-file "$GREMION_ROOT/etc/env/ops.env"
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    [[ "$output" == *"mail-transport=stalwart"* ]]
+    grep -q 'mail.example.org' "$GREMION_ROOT/runtime/ops/targets/stalwart.yml"
+    grep -q 'mail.example.org:587' "$GREMION_ROOT/runtime/ops/targets/blackbox-smtp.yml"
+    grep -q 'title: MailQueueOldest1h' "$GREMION_ROOT/$PROV/alerting/rules.yaml"
+    grep -q 'uid: gremion-mail-queue' "$GREMION_ROOT/$PROV/alerting/rules.yaml"
+}
+
+@test "M3 render-ops relay: no stalwart scrape target, no mail probe target, no MailQueueOldest1h rule, every other rule kept" {
+    relay_ops_env
+    run "$RENDER" --env-file "$GREMION_ROOT/etc/env/ops.env"
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    [[ "$output" == *"mail-transport=relay"* ]]
+    local f
+    for f in stalwart blackbox-smtp blackbox-smtp25 blackbox-tls; do
+        [ "$(cat "$GREMION_ROOT/runtime/ops/targets/$f.yml")" = "[]" ] || { echo "$f.yml must be an empty target list"; return 1; }
+    done
+    local rules="$GREMION_ROOT/$PROV/alerting/rules.yaml" src="$OBS_DIR/grafana/provisioning/alerting/rules.yaml"
+    ! grep -q 'MailQueueOldest1h\|gremion-mail-queue\|gremion:cond:mail_queue' "$rules"
+    [ "$(grep -c '^      - uid: ' "$rules")" -eq $(( $(grep -c '^      - uid: ' "$src") - 1 )) ]
+    grep -q 'uid: gremion-postgres-connections' "$rules"
+    grep -q 'title: PostgresConnections80pct' "$rules"
+    # the rendered file is still a whole YAML document: every rule block keeps its title
+    [ "$(grep -c '^        title: ' "$rules")" -eq "$(grep -c '^      - uid: ' "$rules")" ]
+}
+
+@test "M3 render-ops relay: the alert mail password comes from the relay secret FILE, never from ALERT_SMTP_PASSWORD" {
+    relay_ops_env "ops@example.org"
+    run "$RENDER" --env-file "$GREMION_ROOT/etc/env/ops.env"
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    [[ "$output" == *"email=on"* ]]
+    [ "$(cat "$GREMION_ROOT/etc/secrets/ops/smtp-password")" = "unit-relay-pw" ]
+    run grep -rl 'unit-relay-pw' "$GREMION_ROOT/runtime" "$GREMION_ROOT/etc/env"
+    [ "$status" -eq 1 ] || { echo "the relay password leaked into: $output"; return 1; }
+}
+
+@test "M3 render-ops relay: a missing or other-readable password file is BLOCKED (exit 3); a host that differs from the relay is exit 2" {
+    relay_ops_env "ops@example.org"
+    rm "$GREMION_ROOT/etc/secrets/mail/relay-password"
+    run "$RENDER" --env-file "$GREMION_ROOT/etc/env/ops.env"
+    [ "$status" -eq 3 ] || { echo "$output"; return 1; }
+    [[ "$output" == *"relay password"* ]]
+    relay_ops_env "ops@example.org"
+    set_key ALERT_SMTP_HOST mail.example.org
+    run "$RENDER" --env-file "$GREMION_ROOT/etc/env/ops.env"
+    [ "$status" -eq 2 ] || { echo "$output"; return 1; }
+    [[ "$output" == *"ALERT_SMTP_HOST"* && "$output" == *"RELAY_SMTP_HOST"* ]]
 }

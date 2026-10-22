@@ -317,3 +317,49 @@ refute_relay_secret() {
     run grep -nE '@(gmail|google|googlemail)\.|smtp-relay\.gmail' "${HOST_SRC}/bin/gremion-mail"
     [ "$status" -eq 1 ] || { echo "$output"; return 1; }
 }
+
+# ── M0: the deploy-time config shape lives in the env templates ─────────────
+
+MAIL_TMPL="${BATS_TEST_DIRNAME}/../../infra/host/templates/env/mail.env.tmpl"
+OPS_TMPL_T="${BATS_TEST_DIRNAME}/../../infra/host/templates/env/ops.env.tmpl"
+
+@test "M0 mail.env.tmpl: MAIL_TRANSPORT is an operator choice with NO default; the relay keys carry the Workspace relay defaults" {
+    grep -qx 'MAIL_TRANSPORT=CHANGE_ME_OPERATOR_mail_transport' "$MAIL_TMPL" \
+        || { echo "MAIL_TRANSPORT must be an operator sentinel (no default)"; return 1; }
+    grep -qx 'RELAY_SMTP_HOST=smtp-relay.gmail.com' "$MAIL_TMPL"
+    grep -qx 'RELAY_SMTP_PORT=587' "$MAIL_TMPL"
+    grep -qE '^RELAY_SMTP_USER=$' "$MAIL_TMPL"
+    grep -qx 'RELAY_SMTP_PASSWORD_REF=secret:mail/relay-password' "$MAIL_TMPL"
+    grep -qE '^RELAY_FROM_DOMAIN=$' "$MAIL_TMPL"
+    run bash -c "grep -oE '^[A-Za-z_][A-Za-z0-9_]*=' '$MAIL_TMPL' | sort | uniq -d"
+    [ -z "$output" ] || { echo "duplicate keys: $output"; return 1; }
+}
+
+@test "M0 the relay password is a file ref only: no inline password key in either env template" {
+    local f
+    for f in "$MAIL_TMPL" "$OPS_TMPL_T"; do
+        run grep -nE '^RELAY_SMTP_PASSWORD=' "$f"
+        [ "$status" -eq 1 ] || { echo "inline relay password key in $f: $output"; return 1; }
+        run grep -nE '^RELAY_SMTP_PASSWORD_REF=(secret:|file:)' "$f"
+        [ "$status" -eq 0 ] || { echo "no secret ref key in $f"; return 1; }
+    done
+}
+
+@test "M0 ops.env.tmpl: MAIL_TRANSPORT is an operator choice with no default and the relay keys are declared once" {
+    grep -qx 'MAIL_TRANSPORT=CHANGE_ME_OPERATOR_mail_transport' "$OPS_TMPL_T"
+    local k
+    for k in RELAY_SMTP_HOST RELAY_SMTP_PORT RELAY_SMTP_USER RELAY_SMTP_PASSWORD_REF; do
+        [ "$(grep -cE "^${k}=" "$OPS_TMPL_T")" -eq 1 ] || { echo "$k must be declared exactly once in ops.env.tmpl"; return 1; }
+    done
+}
+
+@test "M0 a mail.env rendered from the template defaults resolves to the relay: host, port 587, system@/no-reply@ on the platform domain" {
+    sed -e 's|^MAIL_TRANSPORT=.*|MAIL_TRANSPORT=relay|' -e 's|^PLATFORM_DOMAIN=.*|PLATFORM_DOMAIN=example.org|' \
+        -e 's|^STACK=.*|STACK=guardstack|' "$MAIL_TMPL" > "${GREMION_ROOT}/etc/env/mail.env"
+    run "$MAIL" sender-json
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    [ "$(jq -r .mode <<<"$output")" = relay ]
+    [ "$(jq -r .host <<<"$output")" = smtp-relay.gmail.com ]
+    [ "$(jq -r .port <<<"$output")" = 587 ]
+    [ "$(jq -r .fromAddress <<<"$output")" = no-reply@example.org ]
+}
