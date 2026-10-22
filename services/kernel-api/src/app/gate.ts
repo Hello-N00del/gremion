@@ -57,6 +57,14 @@ export function createCustomerGate(o: CustomerGateOptions): CustomerGate & { db(
     poolRef.delete(customerId)
     store.evictTenantDb(customerId, KERNEL_MODULE)
   }
+  /** Record the ref this request resolves from; a changed ref drops the pool resolved from the old one. */
+  const track = (tenant: TenantRow) => {
+    const id = tenant.customerId
+    const had = poolRef.get(id)
+    if (had !== undefined && had !== tenant.dbConnRef) evict(id) // a changed ref: resolve it afresh now
+    refs.set(id, tenant.dbConnRef)
+    poolRef.set(id, tenant.dbConnRef)
+  }
   const gate = schemaGate({
     dirs: o.dirs,
     ledger: KERNEL_API_LEDGER,
@@ -69,10 +77,7 @@ export function createCustomerGate(o: CustomerGateOptions): CustomerGate & { db(
   return {
     async check(tenant: TenantRow): Promise<GateVerdict> {
       const id = tenant.customerId
-      const had = poolRef.get(id)
-      if (had !== undefined && had !== tenant.dbConnRef) evict(id) // a changed ref: resolve it afresh now
-      refs.set(id, tenant.dbConnRef)
-      poolRef.set(id, tenant.dbConnRef)
+      track(tenant)
       const verdict = await gate.check(id)
       if (verdict.ok || verdict.reason !== 'unavailable') return verdict
       // Unavailable: the pool may hold a stale credential. Drop it and judge once on a fresh one.
@@ -83,8 +88,7 @@ export function createCustomerGate(o: CustomerGateOptions): CustomerGate & { db(
     },
     /** TASK-081: the customer's kernel database from the SAME bounded pool store the gate judges on. */
     db(tenant: TenantRow): Promise<Sql> {
-      refs.set(tenant.customerId, tenant.dbConnRef)
-      poolRef.set(tenant.customerId, tenant.dbConnRef)
+      track(tenant)
       return store.openTenantDb(tenant.customerId, KERNEL_MODULE)
     },
     close: () => store.close(),
