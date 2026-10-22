@@ -45,7 +45,7 @@ export const KIND_OWNER: Readonly<Record<RequestKind, string>> = Object.freeze({
 })
 
 /** The kinds this release can run. */
-export const HANDLED_KINDS: ReadonlySet<RequestKind> = new Set<RequestKind>(['create'])
+export const HANDLED_KINDS: ReadonlySet<RequestKind> = new Set<RequestKind>(['create', 'import_members', 'seed_vertical'])
 
 export const isRequestKind = (k: unknown): k is RequestKind => typeof k === 'string' && (REQUEST_KINDS as readonly string[]).includes(k)
 
@@ -72,6 +72,31 @@ export interface CreateRequestArgs {
   dpia: Record<string, DpiaDecision>
 }
 
+/**
+ * The normalised args of an `import_members` request (TASK-031). The member
+ * list travels IN the request (a CSV text, at most 1 MiB), is handed to the
+ * container on STDIN, and is PURGED from the row on any final state (platform
+ * 0010). `validate` reads and reports; `apply` must name the sha256 the
+ * validate reported.
+ */
+export interface ImportMembersArgs {
+  slug: string
+  phase: 'validate' | 'apply'
+  vertical: string
+  csv: string
+  expectSha256?: string
+}
+
+/** The normalised args of a `seed_vertical` request (TASK-031). */
+export interface SeedVerticalArgs {
+  slug: string
+  vertical: string
+}
+
+export type VerifiedRequestArgs = CreateRequestArgs | ImportMembersArgs | SeedVerticalArgs
+
+export const IMPORT_LIST_MAX_BYTES = 1_048_576
+
 export interface RequestEnvelope {
   kind: string
   customerSlug: string
@@ -79,7 +104,7 @@ export interface RequestEnvelope {
   operatorId: string
 }
 
-export type RequestVerdict = { verdict: 'ok'; args: CreateRequestArgs } | { verdict: 'refused'; reason: string }
+export type RequestVerdict = { verdict: 'ok'; args: VerifiedRequestArgs } | { verdict: 'refused'; reason: string }
 
 export interface VerifyContext {
   /** Every module id of the catalogue (modules/<id>/module.json). */
@@ -91,6 +116,10 @@ export interface VerifyContext {
 const TEXT = /^[^\u0000-\u001f\u007f]+$/
 // the library's rule (assertDpiaDecisionInput): 1-20 codes, snake_case
 const REASON_CODE = /^[a-z][a-z0-9_]{0,62}$/
+const IMPORT_FIELDS = new Set(['slug', 'phase', 'vertical', 'csv', 'expectSha256'])
+const SEED_FIELDS = new Set(['slug', 'vertical'])
+const VERTICAL_ID = /^[a-z][a-z0-9-]{0,62}$/
+const SHA256 = /^[0-9a-f]{64}$/
 const CREATE_FIELDS = new Set(['slug', 'host', 'itAdmin', 'councilAdmin', 'bodyName', 'brand', 'enable', 'dpia'])
 
 class Refused extends Error {}
@@ -131,6 +160,37 @@ function dpiaOf(v: unknown, enable: readonly string[]): Record<string, DpiaDecis
     out[id] = { requiresDpia: d.requires_dpia ? 'yes' : 'no', reasonCodes: [...d.reason_codes] as string[], documentRef: ref }
   }
   return out
+}
+
+function verticalOf(v: unknown): string {
+  if (typeof v !== 'string' || !VERTICAL_ID.test(v)) throw new Refused('vertical must be a vertical id (a-z, 0-9, dashes)')
+  return v
+}
+
+function verifyImportMembers(e: RequestEnvelope): ImportMembersArgs {
+  if (!isObject(e.args)) throw new Refused('import_members args must be an object')
+  const a = e.args
+  onlyFields(a, IMPORT_FIELDS, '')
+  if (a.slug !== e.customerSlug) throw new Refused(`args.slug ${String(a.slug)} is not the request's slug ${e.customerSlug}`)
+  if (a.phase !== 'validate' && a.phase !== 'apply') throw new Refused('phase must be validate or apply')
+  const vertical = verticalOf(a.vertical)
+  if (typeof a.csv !== 'string' || a.csv.trim() === '') throw new Refused('csv must be the member list as text')
+  if (Buffer.byteLength(a.csv, 'utf8') > IMPORT_LIST_MAX_BYTES) throw new Refused(`the member list exceeds ${IMPORT_LIST_MAX_BYTES} bytes`)
+  if (a.phase === 'apply') {
+    if (typeof a.expectSha256 !== 'string' || !SHA256.test(a.expectSha256)) {
+      throw new Refused('an apply names the sha256 the validate reported (64 lowercase hex characters)')
+    }
+    return { slug: e.customerSlug, phase: 'apply', vertical, csv: a.csv, expectSha256: a.expectSha256 }
+  }
+  if (a.expectSha256 !== undefined) throw new Refused('a validate carries no expectSha256')
+  return { slug: e.customerSlug, phase: 'validate', vertical, csv: a.csv }
+}
+
+function verifySeedVertical(e: RequestEnvelope): SeedVerticalArgs {
+  if (!isObject(e.args)) throw new Refused('seed_vertical args must be an object')
+  onlyFields(e.args, SEED_FIELDS, '')
+  if (e.args.slug !== e.customerSlug) throw new Refused(`args.slug ${String(e.args.slug)} is not the request's slug ${e.customerSlug}`)
+  return { slug: e.customerSlug, vertical: verticalOf(e.args.vertical) }
 }
 
 function verifyCreate(e: RequestEnvelope, ctx: VerifyContext): CreateRequestArgs {
@@ -187,6 +247,8 @@ export function verifyRequestArgs(e: RequestEnvelope, ctx: VerifyContext): Reque
   if (!isRequestKind(e.kind)) return { verdict: 'refused', reason: `unknown request kind ${e.kind}` }
   if (!HANDLED_KINDS.has(e.kind)) return { verdict: 'refused', reason: `no handler (${KIND_OWNER[e.kind]})` }
   try {
+    if (e.kind === 'import_members') return { verdict: 'ok', args: verifyImportMembers(e) }
+    if (e.kind === 'seed_vertical') return { verdict: 'ok', args: verifySeedVertical(e) }
     return { verdict: 'ok', args: verifyCreate(e, ctx) }
   } catch (err) {
     if (err instanceof Refused || err instanceof ProvisioningError) return { verdict: 'refused', reason: err.message }
