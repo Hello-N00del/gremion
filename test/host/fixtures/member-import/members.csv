@@ -1,0 +1,5 @@
+name,email,body,role
+Ada Alpha,ada.alpha@import-proof.test,Assembly,member
+Ben Beta,ben.beta@import-proof.test,Executive,member
+Cleo Gamma,cleo.gamma@import-proof.test,Operations,helper
+Dan Delta,dan.delta@import-proof.test,Assembly,helper
