@@ -107,6 +107,9 @@ export async function POST(event: RequestEvent) {
   // (was Promise.all over a check-then-act COUNT, handing every resolution the
   // same B-number).
   let updated
+  // Set once every statement ran: a throw after that is from COMMIT, whose
+  // outcome is unknown, so the ODT must stay where it is.
+  let stmtsDone = false
   try {
     updated = await getDb().begin(async (tx) => {
       await updateProtocol(
@@ -122,10 +125,12 @@ export async function POST(event: RequestEvent) {
       // skipped inside the helper (not a vote → no decision).
       await recordResolutionAdoptions(user.id, resolutions, tx)
       // Returned last so `updated` reflects the final published row.
-      return setProtocolStatus(protocol.id, 'published', { tx })
+      const published = await setProtocolStatus(protocol.id, 'published', { tx })
+      stmtsDone = true
+      return published
     })
   } catch (e) {
-    await restoreOdt()
+    if (!stmtsDone) await restoreOdt()
     throw e
   }
 

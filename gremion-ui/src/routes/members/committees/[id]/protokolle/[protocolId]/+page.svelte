@@ -21,6 +21,7 @@
   import AttendanceChips from '$lib/components/protocols/AttendanceChips.svelte'
   import ResolutionRow from '$lib/components/protocols/ResolutionRow.svelte'
   import ActionItemRow from '$lib/components/protocols/ActionItemRow.svelte'
+  import { protocolBodyMode } from '$lib/governance/protocol-body-mode'
   import ProtocolBodyEditor from '$lib/components/protocols/ProtocolBodyEditor.svelte'
   import ProtokollgenehmigungPanel from '$lib/components/protocols/ProtokollgenehmigungPanel.svelte'
 
@@ -29,6 +30,12 @@
   const user = $derived($page.data.user)
   const isAdmin = $derived(user && hasRole(user.roles, Role.CouncilAdmin))
   const isEditable = $derived(data.protocol.status === 'draft')
+  const bodyMode = $derived(protocolBodyMode({
+    isEditable,
+    isAdmin: Boolean(isAdmin),
+    hasWopiToken: Boolean(data.wopiToken),
+    hasDraftDocument: Boolean(data.protocol.hasDraftDocument),
+  }))
 
   const STATUS_LABELS: Record<string, string> = {
     draft: 'Entwurf', submitted: 'Eingereicht', published: 'Veröffentlicht',
@@ -199,14 +206,18 @@
 
   <section class="space-y-2">
     <h3 class="font-medium">Protokollinhalt</h3>
-    {#if isEditable && data.wopiToken}
+    {#if bodyMode === 'collabora' && data.wopiToken}
       <iframe
         src="{data.wopiToken.editorUrl}&lang=de&closebutton=1"
         title="Protokoll bearbeiten"
         class="w-full h-[500px] rounded-md border"
         sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-top-navigation"
       ></iframe>
-    {:else if isEditable && isAdmin}
+    {:else if bodyMode === 'unavailable'}
+      <p role="alert" class="rounded-md border p-4 text-sm">
+        Editor nicht erreichbar. Der Protokolltext liegt als Dokument vor und kann derzeit nicht bearbeitet werden. Bitte später erneut versuchen.
+      </p>
+    {:else if bodyMode === 'in-app'}
       <!-- R33b: no Collabora editor (files module off, or no ODT) -> in-app body editor. -->
       <ProtocolBodyEditor protocolId={data.protocol.id} bodyHtml={data.protocol.body_html} />
     {:else}

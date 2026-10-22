@@ -7,6 +7,7 @@ import {
   listAttendance, listResolutions, listActionItems,
 } from '$lib/server/protocols/protocol-db'
 import { sanitizeRichHtml } from '$lib/server/security/html-sanitize'
+import { getProtocolDocumentPort } from '$lib/server/modules/runtime-registry'
 import { requireUuidParams } from '$lib/server/protocols/route-ids'
 import { getOrgUnit } from '$lib/server/governance/org-units-db'
 import { seesAllGovernance, viewerCanSeeProtocol } from '$lib/server/governance/visibility'
@@ -39,12 +40,15 @@ export async function GET(event: RequestEvent) {
     listActionItems(protocol.id),
   ])
 
-  const { nextcloud_draft_path: _omit, ...safeProtocol } = protocol
+  const { nextcloud_draft_path: draftPath, ...safeProtocol } = protocol
+  // R33b: an ODT draft (path set AND files port present) is the text publish
+  // converts; the page must not offer the in-app editor for it.
+  const hasDraftDocument = Boolean(draftPath) && Boolean(getProtocolDocumentPort())
   // R33b: body_html is rendered via {@html}; sanitize on read too so a legacy or
   // directly-written row can never reach the page as live markup (G-011).
   if (safeProtocol.body_html) safeProtocol.body_html = sanitizeRichHtml(safeProtocol.body_html)
 
-  return json({ protocol: safeProtocol, attendance, resolutions, actionItems })
+  return json({ protocol: { ...safeProtocol, hasDraftDocument }, attendance, resolutions, actionItems })
 }
 
 export async function PATCH(event: RequestEvent) {

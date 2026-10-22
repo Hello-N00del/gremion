@@ -8,7 +8,7 @@ const h = vi.hoisted(() => ({
   getProtocol: vi.fn(), setStatus: vi.fn(), updateProtocol: vi.fn(),
   listResolutions: vi.fn(), assignGlobalNrs: vi.fn(), recordAdoptions: vi.fn(),
   quorum: vi.fn(), downloadDraft: vi.fn(),
-  publishFile: vi.fn(), uploadPdf: vi.fn(), restore: vi.fn(), convert: vi.fn(), convertPdf: vi.fn(),
+  publishFile: vi.fn(), uploadPdf: vi.fn(), restore: vi.fn(), convert: vi.fn(), convertPdf: vi.fn(), afterTx: vi.fn(),
 }))
 vi.mock('$lib/server/protocols/protocol-db', () => ({
   getProtocol: h.getProtocol, setProtocolStatus: h.setStatus, updateProtocol: h.updateProtocol,
@@ -19,7 +19,7 @@ vi.mock('$lib/server/documents/collabora-convert', () => ({
   convertOdtToHtml: h.convert, convertOdtToPdf: h.convertPdf,
 }))
 vi.mock('$lib/server/db', () => ({
-  getDb: () => ({ begin: async (cb: (tx: unknown) => unknown) => cb({ __tx: true }) }),
+  getDb: () => ({ begin: async (cb: (tx: unknown) => unknown) => { const r = await cb({ __tx: true }); h.afterTx(); return r } }),
 }))
 vi.mock('$lib/server/governance/quorum', () => ({ getQuorumContext: h.quorum }))
 vi.mock('$lib/auth', () => ({ hasRole: () => true, Role: { CouncilAdmin: 'council-admin' } }))
@@ -140,6 +140,19 @@ describe('POST /api/protocols/[id]/publish - files off (F1)', () => {
     h.getProtocol.mockResolvedValue(withOdt)
     await expect(POST(ev())).rejects.toBeTruthy()
     expect(h.restore).toHaveBeenCalledWith('/d/p1.odt', '/protocols/published/p1')
+  })
+
+  it('COMMIT outcome unknown (throw after all statements ran): the ODT is NOT moved back', async () => {
+    h.downloadDraft.mockResolvedValue(Buffer.from('odt'))
+    h.convert.mockResolvedValue('<p>x</p>')
+    h.convertPdf.mockResolvedValue(Buffer.from('pdf'))
+    h.publishFile.mockResolvedValue('/protocols/published/p1')
+    h.uploadPdf.mockResolvedValue('/protocols/published/p1/protocol.pdf')
+    h.afterTx.mockImplementation(() => { throw new Error('connection lost at COMMIT') })
+    portFull()
+    h.getProtocol.mockResolvedValue(withOdt)
+    await expect(POST(ev())).rejects.toBeTruthy()
+    expect(h.restore).not.toHaveBeenCalled()
   })
 
   it('no ODT ever uploaded (port on, no draft path): publishes the in-app body', async () => {

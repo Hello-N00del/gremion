@@ -22,7 +22,7 @@ vi.mock('$lib/auth', () => ({ hasRole: () => true, Role: { CouncilAdmin: 'counci
 import { POST } from './+server'
 import { PATCH, GET } from './[id]/+server'
 import { GET as PDF } from '../public/protocols/[id]/pdf/+server'
-import { _resetRuntimeRegistryForTests } from '$lib/server/modules/runtime-registry'
+import { _resetRuntimeRegistryForTests, registerProtocolDocumentPort } from '$lib/server/modules/runtime-registry'
 
 const user = { id: 'u1', roles: ['council-admin'] }
 const ID = '123e4567-e89b-12d3-a456-426614174001'
@@ -71,6 +71,21 @@ describe('F1 protocols without the files module', () => {
     h.lists.forEach((m) => m.mockResolvedValue([]))
     const res = await GET({ locals: { user: { id: 'u1', roles: ['council-admin'] } }, params: { id: ID } } as never)
     expectClean((await res.json()).protocol.body_html)
+  })
+
+  it('GET hasDraftDocument: true only with draft path AND files port', async () => {
+    h.lists.forEach((m) => m.mockResolvedValue([]))
+    const get = async (path: string | null) => {
+      h.getProtocol.mockResolvedValue({ id: ID, status: 'draft', committee_id: 'c', body_html: null, nextcloud_draft_path: path })
+      const res = await GET({ locals: { user: { id: 'u1', roles: ['council-admin'] } }, params: { id: ID } } as never)
+      return (await res.json()).protocol
+    }
+    expect((await get('/d/p1.odt')).hasDraftDocument).toBe(false) // path but no port
+    registerProtocolDocumentPort({} as never)
+    const withOdt = await get('/d/p1.odt')
+    expect(withOdt.hasDraftDocument).toBe(true)
+    expect(withOdt.nextcloud_draft_path).toBeUndefined()
+    expect((await get(null)).hasDraftDocument).toBe(false)
   })
 
   it('PATCH bodyHtml on a submitted protocol is refused (403): the text is frozen once out for adoption', async () => {
