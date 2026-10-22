@@ -77,6 +77,30 @@ for v in PLATFORM_DOMAIN EDGE_BIND_IP OPS_BIND_IP OPS_INGEST_BIND_IP OPS_UID OPS
     require_var "$v"
 done
 
+# PLAN-mail-transport M3: the deploy-time mail transport decides which mail
+# signals exist. REQUIRED, no default: a relay host that rendered the stalwart
+# probes would alert "mail scrape is blind" for ever, and a stalwart host that
+# rendered none would go quiet on a dead mail server.
+case "${MAIL_TRANSPORT:-}" in
+    relay|stalwart) ;;
+    "" | CHANGE_ME_*) die "MAIL_TRANSPORT is unset in $ENV_FILE: set MAIL_TRANSPORT=relay or stalwart (no default; it must equal mail.env's)" 2 ;;
+    *) die "MAIL_TRANSPORT=${MAIL_TRANSPORT} is not a mail transport this release knows (relay, stalwart)" 2 ;;
+esac
+# One owner (mail.env), one copy here: a difference between the two files is a
+# mis-rendered host, caught before anything is written.
+MAIL_ENV_FILE="${MAIL_ENV:-$ROOT/etc/env/mail.env}"
+if [[ -f "$MAIL_ENV_FILE" ]]; then
+    __mail_t="$(sed -n 's/^MAIL_TRANSPORT=//p' "$MAIL_ENV_FILE" | tail -n 1 | tr -d '')"
+    if [[ -n "$__mail_t" && "$__mail_t" != CHANGE_ME_* && "$__mail_t" != "$MAIL_TRANSPORT" ]]; then
+        die "MAIL_TRANSPORT=${MAIL_TRANSPORT} in $ENV_FILE differs from MAIL_TRANSPORT=${__mail_t} in ${MAIL_ENV_FILE}" 2
+    fi
+fi
+if [[ "$MAIL_TRANSPORT" == relay ]]; then
+    for v in RELAY_SMTP_HOST RELAY_SMTP_PORT RELAY_SMTP_PASSWORD_REF; do
+        require_var "$v"
+    done
+fi
+
 for v in OPS_BIND_IP OPS_INGEST_BIND_IP; do
     case "${!v}" in
         0.0.0.0 | :: | "*")
@@ -142,6 +166,14 @@ write_targets() {
     FILE_COUNT=$((FILE_COUNT + 1))
 }
 
+# A target list with no target: Prometheus' file SD reads `[]` as nothing to
+# scrape (the same spelling render_third_party uses for an empty list).
+write_no_targets() {
+    printf -- '[]
+' | atomic_write "$TARGETS_DIR/$1" 0644
+    FILE_COUNT=$((FILE_COUNT + 1))
+}
+
 read_tenant_hosts() {
     [[ -f "$TENANT_HOSTS" ]] \
         || { bad "no tenant host list at $TENANT_HOSTS — platform hosts only"; return 0; }
@@ -195,10 +227,19 @@ render_targets() {
     fi
     write_targets blackbox-acme.yml "${acme_targets[@]}"
 
-    write_targets blackbox-smtp.yml "mail.${PLATFORM_DOMAIN}:587"
-    write_targets blackbox-smtp25.yml "mail.${PLATFORM_DOMAIN}:25"
-    write_targets blackbox-tls.yml "mail.${PLATFORM_DOMAIN}:465" "mail.${PLATFORM_DOMAIN}:993"
-    write_targets stalwart.yml "mail.${PLATFORM_DOMAIN}"
+    if [[ "$MAIL_TRANSPORT" == stalwart ]]; then
+        write_targets blackbox-smtp.yml "mail.${PLATFORM_DOMAIN}:587"
+        write_targets blackbox-smtp25.yml "mail.${PLATFORM_DOMAIN}:25"
+        write_targets blackbox-tls.yml "mail.${PLATFORM_DOMAIN}:465" "mail.${PLATFORM_DOMAIN}:993"
+        write_targets stalwart.yml "mail.${PLATFORM_DOMAIN}"
+    else
+        # relay: there is no mail.<domain> to probe or scrape. The files stay
+        # (the prometheus mounts name them) and are empty lists.
+        write_no_targets blackbox-smtp.yml
+        write_no_targets blackbox-smtp25.yml
+        write_no_targets blackbox-tls.yml
+        write_no_targets stalwart.yml
+    fi
     render_third_party
 }
 
@@ -238,6 +279,38 @@ yaml_value() {
     printf "'%s'" "$v"
 }
 
+# relay_password -> stdout: the relay password from its FILE ref. Absent,
+# empty or readable by "other" is BLOCKED (exit 3): not provisioned yet, not a
+# misconfiguration of the render.
+relay_password() {
+    local ref="${RELAY_SMTP_PASSWORD_REF:-}" path pw perm
+    case "$ref" in
+        secret:*) path="$ROOT/etc/secrets/${ref#secret:}" ;;
+        file:*)   path="${ref#file:}" ;;
+        *) die "RELAY_SMTP_PASSWORD_REF must be secret:<name> or file:<absolute path>, never an inline value" 2 ;;
+    esac
+    [[ "$path" != *..* ]] || die "RELAY_SMTP_PASSWORD_REF may not contain .." 2
+    [[ -s "$path" ]] || { bad "BLOCKED: the relay password file is absent or empty: $path"; exit 3; }
+    perm="$(stat -c '%a' "$path" 2>/dev/null || echo 600)"
+    [[ "${perm: -1}" == 0 ]] || { bad "BLOCKED: the relay password file $path is readable by other (mode $perm); chmod 600"; exit 3; }
+    pw="$(cat "$path")"
+    pw="${pw%$'
+'}"; pw="${pw%$''}"
+    [[ -n "$pw" ]] || { bad "BLOCKED: the relay password file is empty: $path"; exit 3; }
+    printf '%s' "$pw"
+}
+
+# Relay mode drops the one Grafana rule that alerts on the bundled Stalwart's
+# queue (and, on its absence, "the mail scrape is blind"): there is no Stalwart
+# to scrape. Every other rule block is kept byte for byte.
+strip_stalwart_rules() {   # <rules.yaml>
+    local f="$1" tmp
+    tmp="$(mktemp "$f.XXXXXX")"
+    awk '/^      - uid: / { skip = ($0 == "      - uid: gremion-mail-queue") } !skip { print }' "$f" > "$tmp"
+    cat "$tmp" > "$f"
+    rm -f "$tmp"
+}
+
 render_alerting() {
     # ALERT_SMTP_PASSWORD is Task 1's ops.env key (sentinel group alert_smtp,
     # shared with mail.env only: the alerts@ principal, TASK-015). It is NOT
@@ -252,6 +325,17 @@ render_alerting() {
     [[ "$email_to" == CHANGE_ME_* ]] && email_to=""
     # Q12: the webhook is a second contact point, off while a sentinel.
     [[ "$webhook" == CHANGE_ME_* ]] && webhook=""
+    if [[ -n "$email_to" && "$MAIL_TRANSPORT" == relay ]]; then
+        # The alert mail goes through the relay: the same host, port and
+        # account as mail.env's relay keys, the password from the relay's FILE
+        # secret ref. ALERT_SMTP_PASSWORD (a Stalwart principal's) is ignored.
+        local k
+        for k in HOST:RELAY_SMTP_HOST PORT:RELAY_SMTP_PORT USER:RELAY_SMTP_USER; do
+            local a="ALERT_SMTP_${k%%:*}" r="${k#*:}"
+            [[ "${!a:-}" == "${!r:-}" ]]                 || die "$a differs from $r in $ENV_FILE: with MAIL_TRANSPORT=relay the alert mail uses the relay's host, port and account" 2
+        done
+        password="$(relay_password)" || exit $?
+    fi
     if [[ -n "$email_to" ]]; then
         if [[ -z "$password" || "$password" == CHANGE_ME_* ]]; then
             die "BLOCKED: ALERT_SMTP_PASSWORD not provisioned (Stalwart app password, §I)" 3
@@ -299,6 +383,9 @@ render_alerting() {
         # The rules still evaluate and show in Grafana; nothing is sent.
         rm -f "$tmp/alerting/policies.yaml"
     fi
+    if [[ "$MAIL_TRANSPORT" == relay ]]; then
+        strip_stalwart_rules "$tmp/alerting/rules.yaml"
+    fi
     chmod -R a+rX "$tmp"
     rm -rf "$PROVISIONING_DIR"
     mv "$tmp" "$PROVISIONING_DIR"
@@ -341,7 +428,7 @@ main() {
     render_alerting
     grafana_sso_state
     post_conditions
-    echo "OPS-RENDER: files=${FILE_COUNT} targets=${TARGET_COUNT} email=${EMAIL_STATE} webhook=${WEBHOOK_STATE} stalwart-key=${STALWART_KEY_STATE} grafana-sso=${SSO_STATE}"
+    echo "OPS-RENDER: files=${FILE_COUNT} targets=${TARGET_COUNT} email=${EMAIL_STATE} webhook=${WEBHOOK_STATE} stalwart-key=${STALWART_KEY_STATE} grafana-sso=${SSO_STATE} mail-transport=${MAIL_TRANSPORT}"
 }
 
 main "$@"

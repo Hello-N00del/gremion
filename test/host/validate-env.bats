@@ -345,7 +345,8 @@ set_key() {
 #   - a dynamic `export "$k=$v"` (a hand-rolled read loop) -- except load_env's
 #     own line in lib/common.sh.
 # Allow-listed, by exact line: `. /etc/os-release` in bootstrap.sh (the OS's
-# identity file, not a gremion env file). Per-key readers (`sed -n
+# identity file, not a gremion env file) and gremion-mail sourcing its sibling
+# script gremion-vendor-mail (code, not an env file). Per-key readers (`sed -n
 # "s/^KEY=//p"`) are not whole-file readers and are out of this guard's scope.
 second_readers() {
     local -a files=()
@@ -361,7 +362,7 @@ second_readers() {
         | grep -vE '^[^:]+:[0-9]+:[[:space:]]*#' \
         | grep -vE '(source|\.)[[:space:]]+"?[^[:space:]";&|]*\.sh"?([[:space:];)]|$)' \
         | grep -vE '^[^:]*/lib/common\.sh:[0-9]+:[[:space:]]+export "\$\{key\}=\$\{value\}"$' \
-        | grep -vE '^[^:]*/bootstrap\.sh:[0-9]+:[[:space:]]+\. /etc/os-release$' \
+        | grep -vE '^[^:]*/bootstrap\.sh:[0-9]+:[[:space:]]+\. /etc/os-release$'         | grep -vE '^[^:]*/bin/gremion-mail:[0-9]+:[[:space:]]+\. "\$\{SCRIPT_DIR\}/gremion-vendor-mail"$' \
         || true
 }
 

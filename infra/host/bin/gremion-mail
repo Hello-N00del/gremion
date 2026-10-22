@@ -164,7 +164,7 @@ relay_stamp() {
     payload="$(RELAY_REALM_PW="$pw" jq -nc --argjson w "$want" '
         {smtpServer: ($w + {fromDisplayName: "Gremion"}
                       + (if $w.auth == "true" then {password: $ENV.RELAY_REALM_PW} else {} end)
-                      | if $w.auth == "true" then . else del(.user) end)}')"
+                      | del(.user | select($w.auth != "true")))}')"
     pw=""
     printf '%s' "$payload" | kcadm_update_stdin "$realm" \
         || { payload=""; die "kcadm refused to update realms/${realm}" "$GREMION_EXIT_ASSERT"; }
