@@ -1,0 +1,73 @@
+{
+  "keycloak": "26.6.1",
+  "request": {
+    "acr_values": "loa2",
+    "max_age": 300,
+    "basicScopeAdded": false
+  },
+  "flows": {
+    "A_fresh_login": {
+      "kinds": [
+        "password",
+        "configure-totp"
+      ],
+      "acr": "loa2",
+      "id": {
+        "auth_time": 1792689128,
+        "iat": 1792689128
+      },
+      "access": {
+        "auth_time": 1792689128,
+        "iat": 1792689128
+      }
+    },
+    "B_sso_reuse": {
+      "kinds": [],
+      "acr": "loa2",
+      "id": {
+        "auth_time": 1792689128,
+        "iat": 1792689135
+      },
+      "access": {
+        "auth_time": 1792689128,
+        "iat": 1792689135
+      }
+    },
+    "C_second_browser_login": {
+      "kinds": [
+        "password",
+        "otp"
+      ],
+      "acr": "loa2",
+      "id": {
+        "auth_time": 1792689151,
+        "iat": 1792689151
+      },
+      "access": {
+        "auth_time": 1792689151,
+        "iat": 1792689151
+      }
+    },
+    "D_prompt_login": {
+      "kinds": [
+        "password",
+        "otp"
+      ],
+      "acr": "loa2",
+      "id": {
+        "auth_time": 1792689181,
+        "iat": 1792689181
+      },
+      "access": {
+        "auth_time": 1792689181,
+        "iat": 1792689181
+      }
+    }
+  },
+  "verdict": {
+    "auth_time_present_in_all": true,
+    "sso_reuse_keeps_original": true,
+    "second_login_advances": true,
+    "prompt_login_advances": true
+  }
+}
