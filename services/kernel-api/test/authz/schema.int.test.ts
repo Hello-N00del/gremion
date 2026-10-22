@@ -22,14 +22,25 @@ const code = async (p: Promise<unknown>): Promise<string> => {
   }
 }
 
+const constraint = async (p: Promise<unknown>): Promise<string> => {
+  try {
+    await p
+    return 'ok'
+  } catch (e) {
+    const x = e as { code?: string; constraint_name?: string }
+    return `${x.code}:${x.constraint_name}`
+  }
+}
+
 describe('schema constraints', () => {
   it('finance never holds newsletter.send (23514)', async () => {
     const c = await code(w.db.admin`UPDATE idt.role SET capability_keys = array_append(capability_keys, 'newsletter.send') WHERE role_key = 'finance'`)
     expect(c).toBe('23514')
   })
   it('granter_kind customer_admin is a CHECK violation; it is a SOURCE value (guard 8)', async () => {
-    const bad = code(seedGrant(w.db.admin, w.db.customerId, { bodyId: w.bodyA, personId: w.persons.alice!, key: 'member', granterKind: 'customer_admin' as never }))
-    expect(await bad).toBe('23514')
+    // the NAMED granter CHECK must be the refusing one (created_by_kind's own CHECK would also trip, so the code alone proves nothing)
+    const bad = constraint(seedGrant(w.db.admin, w.db.customerId, { bodyId: w.bodyA, personId: w.persons.alice!, key: 'member', granterKind: 'customer_admin' as never }))
+    expect(await bad).toBe('23514:authz_grant_granter_check')
     const ok = await code(seedGrant(w.db.admin, w.db.customerId, { bodyId: w.bodyA, personId: w.persons.alice!, key: 'helper', granterKind: 'person', source: 'customer_admin' }))
     expect(ok).toBe('ok')
   })

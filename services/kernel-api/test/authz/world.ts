@@ -70,11 +70,13 @@ export async function seedGrant(admin: Sql, customerId: string, g: GrantSeed): P
   const kind = g.kind ?? 'role'
   const granterKind = g.granterKind ?? 'operator'
   const granter = granterKind === 'system' ? null : uuidv7()
+  // audit columns keep a legal kind so a bogus granter_kind is refused by authz_grant_granter_check ALONE
+  const auditKind = (granterKind as string) === 'customer_admin' ? 'person' : granterKind
   await admin`
     INSERT INTO idt.authz_grant (grant_id, customer_id, body_id, subject_person_id, grant_kind, role_key, capability_key, resource_kind, resource_id,
       valid_from, valid_until, granter_kind, granted_by, source, state, created_by_kind, created_by, updated_by_kind, updated_by)
     VALUES (${id}::uuid, ${customerId}::uuid, ${g.bodyId}::uuid, ${g.personId}::uuid, ${kind}, ${kind === 'role' ? g.key : null}, ${kind === 'capability' ? g.key : null},
       ${g.resource?.kind ?? null}, ${g.resource?.id ?? null}::uuid, ${g.validFrom ?? new Date().toISOString()}::timestamptz, ${g.validUntil ?? null}::timestamptz,
-      ${granterKind}, ${granter}::uuid, ${g.source ?? 'control_panel'}, ${g.state ?? 'active'}, ${granterKind}, ${granter}::uuid, ${granterKind}, ${granter}::uuid)`
+      ${granterKind}, ${granter}::uuid, ${g.source ?? 'control_panel'}, ${g.state ?? 'active'}, ${auditKind}, ${granter}::uuid, ${auditKind}, ${granter}::uuid)`
   return id
 }
