@@ -16,7 +16,7 @@ describe('GET /api/health module outages (F7)', () => {
   beforeEach(() => { state.complete = true; state.modules = { files: true, messages: true }; state.probes = [] })
   it('enabled NC down -> 200, ok, degraded lists it', async () => {
     state.probes = [nc(false)]
-    expect(await call()).toEqual({ status: 200, body: { status: 'ok', degraded: ['nextcloud'] } })
+    expect(await call()).toEqual({ status: 200, body: { status: 'ok', degraded: [{ name: 'nextcloud', errorClass: 'ModuleUnreachable', code: 'module-down' }] } })
   })
   it('disabled NC down -> not listed', async () => {
     state.probes = [nc(false)]; state.modules = { files: false, messages: true }

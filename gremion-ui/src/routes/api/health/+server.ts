@@ -28,8 +28,8 @@ import { collectModuleOutages } from '$lib/server/tenant/health'
  * via-the-guard but defensively-handled) booting state, and keeps this route a
  * faithful, self-contained boot probe even if the guard ordering ever changes.
  *
- * F7: when boot is complete the body also carries `degraded: string[]`, the
- * services of ENABLED feature modules (files -> nextcloud, messages -> matrix)
+ * F7: when boot is complete the body also carries `degraded: {name, errorClass, code}[]`,
+ * the services of ENABLED feature modules (files -> nextcloud, messages -> matrix)
  * that fail their liveness probe. The status stays 200 and `status` stays 'ok'
  * (a feature-module outage must not restart or fail the kernel); a DISABLED
  * module's service is never probed or listed. Names only, no error detail.
@@ -39,12 +39,16 @@ import { collectModuleOutages } from '$lib/server/tenant/health'
 export const GET: RequestHandler = async () => {
   const { complete } = getBootStatus()
   if (!complete) return json({ status: 'booting' }, { status: 503 })
-  let degraded: string[] = []
+  let degraded: { name: string; errorClass: string; code: string }[] = []
   try {
     const probes = getSetupHealthProbes().flatMap((p) =>
       p.moduleId ? [{ moduleId: p.moduleId, service: p.service, validate: p.validate }] : [],
     )
-    degraded = await collectModuleOutages(probes, readConfig().modules)
+    degraded = (await collectModuleOutages(probes, readConfig().modules)).map((name) => ({
+      name,
+      errorClass: 'ModuleUnreachable',
+      code: 'module-down',
+    }))
   } catch {
     degraded = []
   }
