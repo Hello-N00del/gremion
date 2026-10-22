@@ -34,6 +34,7 @@ export const NAMED: Record<'unit' | 'integration' | 'authz', Record<string, numb
     'test/authz/after-migrate.test.ts': 6,
     'test/authz/no-role-check.test.ts': 5,
     'test/authz/stepup.test.ts': 5,
+    'test/authz/stepup-realm.test.ts': 2,
     'test/suite-size.test.ts': 5,
   },
   integration: {
@@ -44,7 +45,7 @@ export const NAMED: Record<'unit' | 'integration' | 'authz', Record<string, numb
   // TASK-081: its own scratch stack (test/authz/stack.mjs, vitest.authz-int.config.ts)
   authz: {
     'test/authz/after-migrate.int.test.ts': 1,
-    'test/authz/grants.int.test.ts': 19,
+    'test/authz/grants.int.test.ts': 28,
     'test/authz/http.int.test.ts': 5,
     'test/authz/pdp.int.test.ts': 12,
     'test/authz/schema.int.test.ts': 8,
