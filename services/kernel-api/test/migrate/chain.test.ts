@@ -27,6 +27,12 @@ describe('the kernel-api chain (G9, G10)', () => {
     for (const d of chain.manifestDirs ?? []) expect(chain.dirs).toContain(d)
   })
 
+  it('the authz migrations ship: their dir is applied and their manifest names every file (a dir left out of the image would never create idt.authz_grant)', () => {
+    expect(KERNEL_API_MIGRATION_DIRS).toContain('migrations/authz')
+    const manifest = JSON.parse(readFileSync(join(SERVICE_ROOT, 'migrations', 'authz', 'manifest.json'), 'utf8')) as Record<string, string>
+    expect(Object.keys(manifest)).toEqual(['0002_idt_role_capability.sql', '0003_idt_authz_grant.sql'])
+  })
+
   it('the chain database stays service:kernel-api (Q2 "kernel" rejected, C9) and its class is tenant-store (G10)', () => {
     expect(chain.database).toBe('service:kernel-api')
     expect(runners.chains[KERNEL_API_CHAIN]).toBe('tenant-store')
