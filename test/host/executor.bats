@@ -23,7 +23,7 @@ setup() {
     cp "${HOST_SRC}/lib/common.sh" "${REL}/infra/host/lib/"
     cp "${HOST_SRC}/lib/customer-ops.sh" "${REL}/infra/host/lib/"
     cp "${HOST_SRC}/lib/executor/db.sh" "${HOST_SRC}/lib/executor/registry.sh" "${REL}/infra/host/lib/executor/"
-    cp "${HOST_SRC}/lib/executor/handlers/create.sh" "${REL}/infra/host/lib/executor/handlers/"
+    cp "${HOST_SRC}/lib/executor/handlers/"*.sh "${REL}/infra/host/lib/executor/handlers/"
     # the installed layout (bootstrap.sh executor)
     cp "${HOST_SRC}/bin/gremion-executor" "${GREMION_ROOT}/bin/"
     cp "${HOST_SRC}/lib/common.sh" "${GREMION_ROOT}/lib/"

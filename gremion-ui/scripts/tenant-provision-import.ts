@@ -7,7 +7,7 @@
 //
 //   import-validate <slug> --vertical <id>
 //       STDIN: the member list (CSV). STDOUT: ONE JSON line, the result
-//       {status, sha256, counts, rows}. Exit 0 validated, 1 rejected. Writes nothing.
+//       {status, sha256, counts, rows, database}. Exit 0 validated, 1 rejected. Writes nothing.
 //   import-apply <slug> --vertical <id> --expect-sha256 <hex>
 //       STDIN: the same list. Refused unless it validates AND its sha256 is the
 //       validated one AND the realm is stamped with its own mail principal
@@ -32,6 +32,7 @@ import {
   type ImportResult,
   type Vertical,
 } from '@gremion/member-import'
+import { kernelDbName } from '@gremion/tenant-store/lifecycle'
 import { assertSmtpStamped, type CustomerRef, type ProvisioningDeps } from '@gremion/provisioning'
 import { readConfig } from '../src/lib/server/config'
 import { configPathForTenant, getTenantById } from '../src/lib/server/tenant/registry'
@@ -72,6 +73,15 @@ export function readVertical(id: string, dir = verticalsDir()): Vertical {
 
 function print(r: unknown): void {
   process.stdout.write(`${JSON.stringify(r)}\n`)
+}
+
+/**
+ * The ONE result line of import-validate / import-apply: the result plus the
+ * customer's kernel database name, which the host's handler needs to take its
+ * pre-import dump (gremion-migration-dump take) before the first write.
+ */
+export function resultLine<T extends ImportResult>(result: T, customerId: string): T & { database: string } {
+  return { ...result, database: kernelDbName(customerId) }
 }
 
 const failed = (message: string): ImportResult & { error: string } => ({
@@ -149,7 +159,7 @@ export async function importVerb(verb: string, ctx: ImportVerbContext): Promise<
       else throw err
     }
     ctx.log(`${verb} ${slug}: ${result.status}, created ${result.counts.created}, rejected ${result.counts.rejected}`)
-    print(result)
+    print(resultLine(result, c.id))
     if (result.status !== 'validated' && result.status !== 'applied') process.exitCode = 1
   })
 }

@@ -4,7 +4,7 @@ import { cpSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { IMPORT_VERBS, importVerb, readVertical, type ImportVerbContext } from '../../../../../scripts/tenant-provision-import'
+import { IMPORT_VERBS, importVerb, readVertical, resultLine, type ImportVerbContext } from '../../../../../scripts/tenant-provision-import'
 
 const FIXTURE = join(process.cwd(), '..', 'packages', 'member-import', 'test', 'fixtures', 'verticals', 'fixture')
 const tmp: string[] = []
@@ -78,5 +78,12 @@ describe('import verbs', () => {
     const root = verticalsRoot()
     expect(readVertical('fixture', root).manifest.id).toBe('fixture')
     expect(() => readVertical('../fixture', root)).toThrow(/a-z0-9/)
+  })
+
+  it('the result line names the customer kernel database (the host takes its dump before the apply), and never an e-mail', () => {
+    const id = '0190f7a0-1b2c-7d3e-8f4a-5b6c7d8e9f01'
+    const line = resultLine({ status: 'validated', sha256: 'a'.repeat(64), counts: { created: 0, linked_existing: 0, unchanged: 0, rejected: 0, accounts_created: 0, invites_sent: 0 }, rows: [] }, id)
+    expect(line).toMatchObject({ status: 'validated', database: 't_0190f7a01b2c7d3e8f4a5b6c7d8e9f01__kernel' })
+    expect(JSON.stringify(line)).not.toMatch(/@/)
   })
 })
