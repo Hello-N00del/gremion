@@ -346,6 +346,17 @@ export class KcProvisionApi {
   }
 
   /**
+   * TASK-031: the id of the user with exactly this e-mail in the realm, or
+   * null. Read-only (the member import's preflight must not create anyone).
+   */
+  async findUserIdByEmail(realm: string, email: string): Promise<string | null> {
+    const wanted = email.toLowerCase()
+    const users =
+      (await this.realmGet<Array<{ id?: string; email?: string }>>(realm, `/users?email=${encodeURIComponent(wanted)}&exact=true`)) ?? []
+    return users.find((u) => u.email?.toLowerCase() === wanted)?.id ?? null
+  }
+
+  /**
    * TASK-043 FLOW-IDN-002 / Q9: a first administrator. Never an operator-set
    * password: the user gets UPDATE_PASSWORD + CONFIGURE_TOTP and ONE
    * execute-actions mail, sent from the realm's own sender. Idempotent and

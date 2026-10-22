@@ -228,6 +228,9 @@ importers:
       '@gremion/events':
         specifier: workspace:*
         version: link:../packages/events
+      '@gremion/member-import':
+        specifier: workspace:*
+        version: link:../packages/member-import
       '@gremion/nats-auth':
         specifier: workspace:*
         version: link:../packages/nats-auth

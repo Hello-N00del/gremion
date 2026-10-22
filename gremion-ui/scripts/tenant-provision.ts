@@ -89,6 +89,7 @@ import { tlog } from '../src/lib/server/observability/tenant-log'
 import { deleteTenant, type DeleteDeps, type LeafShredExecutor } from '../src/lib/server/tenant/provisioner/lifecycle'
 import { requestVerb } from './tenant-provision-requests'
 import { GATE_USAGE, GATE_VERBS, refusalLine, runGateVerb } from './tenant-provision-gate'
+import { IMPORT_USAGE, IMPORT_VERBS, importVerb } from './tenant-provision-import'
 import { parseDpiaMap, scratchFixturesAllowed } from './tenant-provision-scratch'
 
 const repoRoot = join(import.meta.dirname, '..', '..')
@@ -952,7 +953,8 @@ const USAGE = `usage: tenant-create <verb> ...
   operator-add <email> [--no-mail]
   delete <slug> | bootstrap-provisioner | materialize-config <slug> [--config <path>]
   request-verify <request-id>   (TASK-043d: the executor's trusted-layer verdict, one JSON line)
-${GATE_USAGE}`
+${GATE_USAGE}
+${IMPORT_USAGE}`
 
 async function main(): Promise<void> {
   const verb = process.argv[2]
@@ -1006,6 +1008,22 @@ async function main(): Promise<void> {
         withLive,
         openPlatform: openPlatformPool,
         customerIdForSlug: async (s) => (await getTenantBySlug(s))?.id ?? null,
+        flag,
+        reqFlag,
+        positional,
+        usage: (m) => new UsageError(m),
+        log,
+      })
+    // TASK-031: member import + vertical seed (tenant-provision-import.ts); the list arrives on STDIN, never argv or env
+    case 'import-validate':
+    case 'import-apply':
+    case 'seed-vertical':
+      if (!IMPORT_VERBS.has(verb)) throw new UsageError(`unknown verb ${verb}`)
+      return importVerb(verb, {
+        withLive,
+        provisionerKc: () => provisionerKc(),
+        writeConfigFile,
+        readStdin: () => readFileSync(0, 'utf8'),
         flag,
         reqFlag,
         positional,
