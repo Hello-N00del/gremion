@@ -298,7 +298,7 @@ cmd_init() {
     [[ -s "${ROOT}/etc/secrets/control-panel/client_secret" ]] \
         || die "init: the control-panel client secret is not at etc/secrets/control-panel/client_secret (looked for ${src}); the panel cannot sign in" "$GREMION_EXIT_ASSERT"
     if [[ -f "${ROOT}/etc/env/mail.env" ]]; then
-        vendor_mail realm-smtp --realm platform || die "the ops realm's sender could not be set (gremion-vendor-mail realm-smtp --realm platform)" "$GREMION_EXIT_ASSERT"
+        mail_realm_smtp --realm platform || die "the ops realm's sender could not be set (gremion-mail realm-smtp --realm platform)" "$GREMION_EXIT_ASSERT"
     else
         info "WARNING: no mail.env on this host: the ops realm has no sender; add operators with --no-mail (Q23)"
     fi
@@ -382,7 +382,7 @@ cmd_suspend() {
     # step un-stamps the realm's sender before it deletes the principal, and every
     # step is re-runnable, so a failure here is recovered by the same verb (the
     # container step above repeats harmlessly).
-    vendor_mail realm-smtp --realm "$slug" --tenant "$(token_of "$slug")" --revoke \
+    mail_realm_smtp --realm "$slug" --tenant "$(token_of "$slug")" --revoke \
         || die "the principal of ${slug} could not be revoked; the customer is already suspended, rerun gremion-tenant suspend ${slug} to converge" "$GREMION_EXIT_ASSERT"
     ok "customer ${slug} suspended"
 }
@@ -393,9 +393,10 @@ cmd_resume() {
     while [[ $# -gt 0 ]]; do case "$1" in --operator) need_value "$@"; OPERATOR_ID="$2"; shift 2 ;; *) die "resume: unknown argument: $1" "$GREMION_EXIT_USAGE" ;; esac; done
     need_operator
     active_colour
-    vendor_mail realm-smtp --realm "$slug" --tenant "$(token_of "$slug")" \
+    mail_realm_smtp --realm "$slug" --tenant "$(token_of "$slug")" \
         || die "a fresh principal for ${slug} could not be issued" "$GREMION_EXIT_ASSERT"
-    tc resume "$slug" --operator "$OPERATOR_ID" || die "resume of ${slug} failed in the container" "$GREMION_EXIT_ASSERT"
+    mail_sender_args || die "resume of ${slug}: MAIL_TRANSPORT could not be resolved" "$GREMION_EXIT_USAGE"
+    tc resume "$slug" --operator "$OPERATOR_ID" ${MAIL_SENDER_ARGS[@]+"${MAIL_SENDER_ARGS[@]}"} || die "resume of ${slug} failed in the container" "$GREMION_EXIT_ASSERT"
     ok "customer ${slug} resumed"
 }
 
@@ -405,8 +406,9 @@ cmd_reconcile() {
     local apply=no report
     while [[ $# -gt 0 ]]; do case "$1" in --apply) apply=yes; shift ;; *) die "reconcile: unknown argument: $1" "$GREMION_EXIT_USAGE" ;; esac; done
     active_colour
+    mail_sender_args || die "reconcile of ${slug}: MAIL_TRANSPORT could not be resolved" "$GREMION_EXIT_USAGE"
     if [[ "$apply" == no ]]; then
-        tc reconcile --verify-only "$slug"
+        tc reconcile --verify-only "$slug" ${MAIL_SENDER_ARGS[@]+"${MAIL_SENDER_ARGS[@]}"}
         return
     fi
     # The apply exits 0 (green) or 1 (a check still fails: the drift --apply is
@@ -414,7 +416,7 @@ cmd_reconcile() {
     # or unparseable report, or any other exit fails loudly here (review C, r2)
     # instead of silently skipping the host rotation.
     local out rc=0
-    out="$(tc reconcile "$slug")" || rc=$?
+    out="$(tc reconcile "$slug" ${MAIL_SENDER_ARGS[@]+"${MAIL_SENDER_ARGS[@]}"})" || rc=$?
     (( rc == 0 || rc == 1 )) || die "reconcile --apply of ${slug} failed in the container (exit ${rc})" "$GREMION_EXIT_ASSERT"
     report="$(grep '^{' <<< "$out" | tail -n 1 || true)"
     if [[ -z "$report" ]] || ! jq -e 'type == "object" and (.repairHost | type) == "array"' <<< "$report" >/dev/null 2>&1; then
@@ -422,10 +424,10 @@ cmd_reconcile() {
     fi
     if jq -e '.repairHost | index("smtp-server")' <<< "$report" >/dev/null; then
         info "smtp-server is repair: host -- rotating the principal of ${slug}"
-        vendor_mail realm-smtp --realm "$slug" --tenant "$(token_of "$slug")" --rotate \
+        mail_realm_smtp --realm "$slug" --tenant "$(token_of "$slug")" --rotate \
             || die "the principal of ${slug} could not be rotated" "$GREMION_EXIT_ASSERT"
     fi
-    tc reconcile --verify-only "$slug"
+    tc reconcile --verify-only "$slug" ${MAIL_SENDER_ARGS[@]+"${MAIL_SENDER_ARGS[@]}"}
 }
 
 cmd_status() {

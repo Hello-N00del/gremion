@@ -1,0 +1,297 @@
+#!/usr/bin/env bash
+set -euo pipefail
+#
+# gremion-mail -- the host front of the deploy-time MAIL TRANSPORT
+# (PLAN-mail-transport M2). One switch in mail.env decides how the platform sends
+# its mail:
+#
+#   MAIL_TRANSPORT=stalwart   the bundled Stalwart: every customer realm sends as
+#                             its OWN principal kc-<token>@ (gremion-vendor-mail,
+#                             untouched: this front just hands over to it)
+#   MAIL_TRANSPORT=relay      an external authenticated SMTP relay: NO per-realm
+#                             principal; every realm is stamped with the ONE relay
+#                             sender (a shared credential, an accepted loss of
+#                             per-tenant sender isolation, stated in the runbook)
+#
+# The value is read from the MAIL_TRANSPORT variable of the environment (an
+# operator or test override) and otherwise from mail.env. There is NO default:
+# an unset or unknown value is a named exit-2 failure, because a silent default
+# to stalwart would send through a server that is not running.
+#
+#   gremion-mail transport                    print the resolved transport
+#   gremion-mail sender-json                  the reconcile / record-step descriptor
+#                                             of this transport (one JSON line, no secret)
+#   gremion-mail realm-smtp [same arms as gremion-vendor-mail realm-smtp]
+#       realm-smtp                            master -> the vendor sender
+#       realm-smtp --realm platform           the ops realm -> the vendor sender
+#       realm-smtp --realm <r> --tenant <token> [--rotate|--revoke]
+#                                             a customer realm (relay: --rotate
+#                                             re-stamps, --revoke un-stamps)
+#
+# RELAY KEYS (mail.env, read one key at a time, never the whole file):
+#   RELAY_SMTP_HOST  RELAY_SMTP_PORT (default 587)  RELAY_SMTP_USER (empty = an
+#   IP-allow-listed relay, no authentication)  RELAY_SMTP_PASSWORD_REF
+#   (secret:<name> = <root>/etc/secrets/<name>, or file:<absolute path>)
+#   RELAY_FROM_DOMAIN (default PLATFORM_DOMAIN: the domain the relay DKIM-signs)
+# Senders in relay mode: system@<from domain> (master, platform), no-reply@<from
+# domain> (customer realms).
+#
+# SECRETS. The relay password is read from its FILE ref, held in one shell
+# variable, reaches jq through its environment and kcadm on stdin: never an env
+# of a container, never an argv, never printed. A ref file readable by "other"
+# is refused.
+#
+# EXIT CODES: 0 ok - 1 a post-condition failed - 2 usage / precondition.
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../lib/common.sh
+. "$SCRIPT_DIR/../lib/common.sh"
+
+mail_usage() {
+    cat <<'EOF'
+usage: gremion-mail <subcommand> [args...]
+  transport             print the resolved MAIL_TRANSPORT (relay | stalwart)
+  sender-json           the sender descriptor of this transport, one JSON line
+  realm-smtp [--realm <r> [--tenant <token> [--rotate|--revoke]]]
+EOF
+}
+
+# env_key <file> <key> -- ONE key of an env file. Empty when absent.
+mail_env_key() {
+    local file="$1" key="$2" n v
+    n="$(grep -c "^${key}=" "$file" || true)"
+    [[ "$n" -le 1 ]] || die "duplicate key ${key} in ${file}" "$GREMION_EXIT_USAGE"
+    v="$(sed -n "s/^${key}=//p" "$file")"
+    v="${v%$'\r'}"
+    if [[ "$v" == \"*\" || "$v" == \'*\' ]]; then v="${v:1:${#v}-2}"; fi
+    printf '%s' "$v"
+}
+
+mail_env_file() { printf '%s' "${MAIL_ENV:-$(gremion_root)/etc/env/mail.env}"; }
+
+# resolve_transport -> sets TRANSPORT (relay|stalwart) or dies (exit 2).
+resolve_transport() {
+    local v="${MAIL_TRANSPORT:-}" f
+    if [[ -z "$v" ]]; then
+        f="$(mail_env_file)"
+        [[ -f "$f" ]] || die "MAIL_TRANSPORT is unset and there is no mail env file (${f}): set MAIL_TRANSPORT=relay|stalwart in mail.env (no default)" "$GREMION_EXIT_USAGE"
+        v="$(mail_env_key "$f" MAIL_TRANSPORT)"
+    fi
+    [[ -n "$v" ]] || die "MAIL_TRANSPORT is unset in $(mail_env_file): set MAIL_TRANSPORT=relay or stalwart (no default: a wrong guess sends mail through a server that is not running)" "$GREMION_EXIT_USAGE"
+    case "$v" in
+        relay|stalwart) TRANSPORT="$v" ;;
+        *) die "MAIL_TRANSPORT=${v} is not a mail transport this release knows (relay, stalwart)" "$GREMION_EXIT_USAGE" ;;
+    esac
+}
+
+# ── relay configuration ─────────────────────────────────────────────────────
+RELAY_HOST="" RELAY_PORT="" RELAY_USER="" RELAY_PW_REF="" FROM_DOMAIN="" PLATFORM_DOMAIN_V="" STACK_V=""
+
+load_relay_config() {
+    local f; f="$(mail_env_file)"
+    [[ -f "$f" ]] || die "mail env file not found: ${f}" "$GREMION_EXIT_USAGE"
+    STACK_V="$(mail_env_key "$f" STACK)"
+    PLATFORM_DOMAIN_V="$(mail_env_key "$f" PLATFORM_DOMAIN)"
+    RELAY_HOST="$(mail_env_key "$f" RELAY_SMTP_HOST)"
+    RELAY_PORT="$(mail_env_key "$f" RELAY_SMTP_PORT)"; RELAY_PORT="${RELAY_PORT:-587}"
+    RELAY_USER="$(mail_env_key "$f" RELAY_SMTP_USER)"
+    RELAY_PW_REF="$(mail_env_key "$f" RELAY_SMTP_PASSWORD_REF)"
+    FROM_DOMAIN="$(mail_env_key "$f" RELAY_FROM_DOMAIN)"; FROM_DOMAIN="${FROM_DOMAIN:-$PLATFORM_DOMAIN_V}"
+    [[ -n "$RELAY_HOST" ]] || die "MAIL_TRANSPORT=relay needs RELAY_SMTP_HOST in ${f}" "$GREMION_EXIT_USAGE"
+    [[ "$RELAY_HOST" =~ ^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$ ]] || die "RELAY_SMTP_HOST ${RELAY_HOST} is not a host name" "$GREMION_EXIT_USAGE"
+    [[ "$RELAY_PORT" =~ ^[0-9]{1,5}$ && "$RELAY_PORT" -ge 1 && "$RELAY_PORT" -le 65535 ]] || die "RELAY_SMTP_PORT ${RELAY_PORT} is not a port" "$GREMION_EXIT_USAGE"
+    [[ -n "$FROM_DOMAIN" ]] || die "MAIL_TRANSPORT=relay needs RELAY_FROM_DOMAIN or PLATFORM_DOMAIN in ${f}" "$GREMION_EXIT_USAGE"
+    [[ "$FROM_DOMAIN" =~ ^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$ ]] || die "the relay From domain ${FROM_DOMAIN} is not a lowercase DNS name" "$GREMION_EXIT_USAGE"
+    if [[ -n "$RELAY_USER" ]]; then
+        [[ -n "$RELAY_PW_REF" ]] || die "RELAY_SMTP_USER is set but RELAY_SMTP_PASSWORD_REF is empty in ${f}: the relay password is a secret ref, never an inline value" "$GREMION_EXIT_USAGE"
+    fi
+}
+
+# relay_password -> stdout: the password from its file ref (no trailing newline).
+relay_password() {
+    local ref="$RELAY_PW_REF" path perm
+    case "$ref" in
+        secret:*) path="$(gremion_root)/etc/secrets/${ref#secret:}" ;;
+        file:*)   path="${ref#file:}" ;;
+        *) die "RELAY_SMTP_PASSWORD_REF must be secret:<name> or file:<absolute path>, not an inline value" "$GREMION_EXIT_USAGE" ;;
+    esac
+    [[ "$path" != *..* ]] || die "RELAY_SMTP_PASSWORD_REF may not contain .." "$GREMION_EXIT_USAGE"
+    [[ -s "$path" ]] || die "the relay password file is absent or empty: ${path}" "$GREMION_EXIT_USAGE"
+    perm="$(stat -c '%a' "$path" 2>/dev/null || echo 600)"
+    [[ "${perm: -1}" == 0 ]] || die "the relay password file ${path} is readable by other (mode ${perm}); chmod 600" "$GREMION_EXIT_USAGE"
+    local pw; pw="$(cat "$path")"
+    pw="${pw%$'\n'}"; pw="${pw%$'\r'}"
+    [[ -n "$pw" ]] || die "the relay password file is empty: ${path}" "$GREMION_EXIT_USAGE"
+    printf '%s' "$pw"
+}
+
+# The smtpServer a realm must carry for a given sender address (no password).
+relay_want() {   # <from address> -> canonical JSON
+    local implicit=false
+    [[ "$RELAY_PORT" == 465 ]] && implicit=true
+    jq -nc --arg h "$RELAY_HOST" --arg p "$RELAY_PORT" --arg f "$1" --arg u "$RELAY_USER" --argjson i "$implicit" '
+        {host: $h, port: $p, from: $f,
+         starttls: (if $i then "false" else "true" end),
+         ssl: (if $i then "true" else "false" end),
+         auth: (if $u != "" then "true" else "false" end)}
+        + {user: $u}'
+}
+
+# The realm's smtpServer as a canonical JSON line (password reported as pwset only).
+relay_state() {   # <realm>
+    local out
+    out="$(docker exec "$KC_CID" "$KCADM_BIN" get "realms/$1" --fields "$SMTP_FIELDS")" || return 1
+    printf '%s' "$out" | jq -c '(.smtpServer // {}) | {host: (.host // ""), port: (.port // ""), from: (.from // ""),
+        starttls: ((.starttls // "") | tostring), ssl: ((.ssl // "") | tostring), auth: ((.auth // "") | tostring),
+        user: (.user // ""), pwset: ((.password // "") != "")}'
+}
+
+# relay_stamp <realm> <from address> <rotate yes|no> <label>
+relay_stamp() {
+    local realm="$1" from="$2" rotate="$3" want state stamped=no
+    want="$(relay_want "$from")"
+    state="$(relay_state "$realm")" || die "kcadm could not read realms/${realm}" "$GREMION_EXIT_ASSERT"
+    if [[ "$(jq -c -S 'del(.pwset)' <<<"$state")" == "$(jq -c -S . <<<"$want")" ]]; then
+        if [[ -z "$RELAY_USER" || "$(jq -r .pwset <<<"$state")" == true ]]; then stamped=yes; fi
+    fi
+    if [[ "$stamped" == yes && "$rotate" == no ]]; then
+        ok "realms/${realm} already sends as ${from} via ${RELAY_HOST}:${RELAY_PORT}"
+        printf 'REALM-SMTP: realm=%s user=%s changed=no action=none transport=relay\n' "$realm" "$from"
+        return
+    fi
+    local pw="" payload
+    if [[ -n "$RELAY_USER" ]]; then pw="$(relay_password)"; fi
+    payload="$(RELAY_REALM_PW="$pw" jq -nc --argjson w "$want" '
+        {smtpServer: ($w + {fromDisplayName: "Gremion"}
+                      + (if $w.auth == "true" then {password: $ENV.RELAY_REALM_PW} else {} end)
+                      | if $w.auth == "true" then . else del(.user) end)}')"
+    pw=""
+    printf '%s' "$payload" | kcadm_update_stdin "$realm" \
+        || { payload=""; die "kcadm refused to update realms/${realm}" "$GREMION_EXIT_ASSERT"; }
+    payload=""
+    state="$(relay_state "$realm")" || die "kcadm could not read realms/${realm} back" "$GREMION_EXIT_ASSERT"
+    if [[ "$(jq -c -S 'del(.pwset)' <<<"$state")" != "$(jq -c -S . <<<"$want")" ]] \
+       || { [[ -n "$RELAY_USER" ]] && [[ "$(jq -r .pwset <<<"$state")" != true ]]; }; then
+        bad "realms/${realm} smtpServer read back as ${state}, expected ${want}$([[ -n "$RELAY_USER" ]] && echo ' with a password set')"
+        exit "$GREMION_EXIT_ASSERT"
+    fi
+    ok "realms/${realm} sends as ${from} via ${RELAY_HOST}:${RELAY_PORT} ($([[ "$stamped" == yes ]] && echo rotated || echo stamped))"
+    printf 'REALM-SMTP: realm=%s user=%s changed=yes action=%s transport=relay\n' "$realm" "$from" "$([[ "$stamped" == yes ]] && echo rotated || echo stamped)"
+}
+
+# relay_unstamp <realm> -- the realm's smtpServer becomes the EMPTY map and is read back
+# (Keycloak 26.6.1 refuses a sender with from "", and accepts {}). Nothing to delete
+# on the relay side: there is no per-realm principal.
+relay_unstamp() {
+    local realm="$1" before after
+    before="$(docker exec "$KC_CID" "$KCADM_BIN" get "realms/$realm" --fields "$SMTP_FIELDS")" \
+        || die "kcadm could not read realms/${realm}" "$GREMION_EXIT_ASSERT"
+    before="$(jq -c '(.smtpServer // {}) | {user: (.user // ""), from: (.from // ""), auth: ((.auth // "") | tostring)}' <<<"$before")" \
+        || die "realms/${realm} read as no JSON" "$GREMION_EXIT_ASSERT"
+    printf '%s' '{"smtpServer":{}}' | kcadm_update_stdin "$realm" \
+        || die "kcadm refused to update realms/${realm}; rerun the same command" "$GREMION_EXIT_ASSERT"
+    after="$(docker exec "$KC_CID" "$KCADM_BIN" get "realms/$realm" --fields "$SMTP_FIELDS")" \
+        || die "kcadm could not read realms/${realm} back" "$GREMION_EXIT_ASSERT"
+    after="$(jq -c '(.smtpServer // {}) | {user: (.user // ""), from: (.from // ""), auth: ((.auth // "") | tostring)}' <<<"$after")" \
+        || die "realms/${realm} read back as no JSON" "$GREMION_EXIT_ASSERT"
+    if ! jq -e '.user == "" and .from == "" and .auth != "true"' <<<"$after" >/dev/null; then
+        bad "realms/${realm} smtpServer read back as ${after} after the un-stamp, expected no user, no from, no authenticating sender"
+        exit "$GREMION_EXIT_ASSERT"
+    fi
+    local was=no
+    if jq -e '.user != "" or .from != "" or .auth == "true"' <<<"$before" >/dev/null; then was=yes; fi
+    ok "realms/${realm} has no sender"
+    printf 'REALM-SMTP: realm=%s user= changed=%s action=revoked transport=relay\n' "$realm" "$was"
+}
+
+relay_realm_smtp() {
+    local realm="" tenant="" rotate=no revoke=no
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --realm)  [[ $# -ge 2 ]] || die "--realm requires a value" "$GREMION_EXIT_USAGE"; realm="$2"; shift 2 ;;
+            --tenant) [[ $# -ge 2 ]] || die "--tenant requires a value" "$GREMION_EXIT_USAGE"; tenant="$2"; shift 2 ;;
+            --rotate) rotate=yes; shift ;;
+            --revoke) revoke=yes; shift ;;
+            -h|--help) mail_usage; exit "$GREMION_EXIT_OK" ;;
+            *) mail_usage >&2; die "realm-smtp: unknown argument: $1" "$GREMION_EXIT_USAGE" ;;
+        esac
+    done
+    [[ "$rotate$revoke" != yesyes ]] || die "realm-smtp: --rotate and --revoke exclude each other" "$GREMION_EXIT_USAGE"
+    load_relay_config
+    local from
+    if [[ -z "$tenant" ]]; then
+        [[ "$rotate" == no && "$revoke" == no ]] \
+            || die "realm-smtp: --rotate/--revoke act on a customer realm and need --realm <r> --tenant <token>" "$GREMION_EXIT_USAGE"
+        case "$realm" in
+            ""|platform) ;;
+            master)  die "realm-smtp: master is the default arm; pass no --realm for it" "$GREMION_EXIT_USAGE" ;;
+            *)       die "realm-smtp --realm ${realm} needs --tenant <token>: only the ops realm platform takes no tenant" "$GREMION_EXIT_USAGE" ;;
+        esac
+        from="system@${FROM_DOMAIN}"
+        kc_relay_connect
+        relay_stamp "${realm:-master}" "$from" no
+        return
+    fi
+    [[ -n "$realm" ]] || die "realm-smtp --tenant needs --realm <customer realm>" "$GREMION_EXIT_USAGE"
+    [[ "$realm" != master && "$realm" != platform ]] \
+        || die "realm-smtp --tenant on ${realm}: a vendor realm sends as system@, never as a customer sender" "$GREMION_EXIT_USAGE"
+    [[ "$realm" =~ $REALM_RE && ${#realm} -ge 3 && ${#realm} -le 30 ]] \
+        || die "realm-smtp: realm ${realm} is not a customer slug" "$GREMION_EXIT_USAGE"
+    [[ "$tenant" =~ $TENANT_TOKEN_RE ]] || die "realm-smtp: tenant token ${tenant} does not match ${TENANT_TOKEN_RE}" "$GREMION_EXIT_USAGE"
+    [[ "${realm//-/_}" == "$tenant" ]] \
+        || die "realm-smtp: ${tenant} is not the token of realm ${realm} (the slug with - -> _)" "$GREMION_EXIT_USAGE"
+    kc_relay_connect
+    if [[ "$revoke" == yes ]]; then
+        relay_unstamp "$realm"
+        return
+    fi
+    relay_stamp "$realm" "no-reply@${FROM_DOMAIN}" "$rotate"
+}
+
+# kc_relay_connect -- kcadm login against the state Keycloak, through the
+# gremion-vendor-mail helpers (sourced; STACK comes from mail.env's STACK key).
+kc_relay_connect() {
+    [[ -n "$STACK_V" ]] || die "STACK is not set in $(mail_env_file)" "$GREMION_EXIT_USAGE"
+    # shellcheck disable=SC2034  # read by the sourced kc_connect (gremion-vendor-mail)
+    STACK="$STACK_V"
+    MAIL_ENV="$(mail_env_file)"
+    kc_connect
+}
+
+cmd_sender_json() {
+    if [[ "$TRANSPORT" == stalwart ]]; then
+        printf '{"mode":"stalwart"}\n'
+        return
+    fi
+    load_relay_config
+    jq -nc --arg h "$RELAY_HOST" --argjson p "$RELAY_PORT" --arg f "no-reply@${FROM_DOMAIN}" --arg u "$RELAY_USER" \
+        '{mode: "relay", host: $h, port: $p, fromAddress: $f, user: $u}'
+}
+
+main() {
+    [[ $# -ge 1 ]] || { mail_usage >&2; exit "$GREMION_EXIT_USAGE"; }
+    local sub="$1"; shift
+    case "$sub" in
+        -h|--help) mail_usage; exit "$GREMION_EXIT_OK" ;;
+        transport|sender-json|realm-smtp) ;;
+        *) mail_usage >&2; die "unknown subcommand: ${sub}" "$GREMION_EXIT_USAGE" ;;
+    esac
+    TRANSPORT=""
+    resolve_transport
+    case "$sub" in
+        transport)   printf '%s\n' "$TRANSPORT" ;;
+        sender-json) need_cmd jq; cmd_sender_json ;;
+        realm-smtp)
+            if [[ "$TRANSPORT" == stalwart ]]; then
+                # Byte-identical to calling the stalwart implementation directly.
+                exec "${SCRIPT_DIR}/gremion-vendor-mail" realm-smtp "$@"
+            fi
+            need_cmd docker jq sed grep
+            # shellcheck source=gremion-vendor-mail
+            . "${SCRIPT_DIR}/gremion-vendor-mail"
+            relay_realm_smtp "$@"
+            ;;
+    esac
+}
+
+main "$@"

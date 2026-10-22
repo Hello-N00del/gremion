@@ -551,4 +551,6 @@ main() {
     esac
 }
 
-main "$@"
+# Sourceable: gremion-mail (the transport dispatcher, PLAN-mail-transport M2) reuses
+# the kcadm helpers above for its relay arm; only a direct run starts main.
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then main "$@"; fi

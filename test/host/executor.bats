@@ -38,6 +38,9 @@ printf 'vendor-mail %s\n' "$*" >> "$ORDER"
 exit 0
 STUB
     chmod +x "${REL}/infra/host/bin/gremion-vendor-mail"
+    # the transport front (PLAN-mail-transport M2): every realm-smtp call goes through it
+    cp "${HOST_SRC}/bin/gremion-mail" "${REL}/infra/host/bin/"
+    export MAIL_TRANSPORT=stalwart
     echo blue > "${GREMION_ROOT}/runtime/active-colour"
     cat > "${GREMION_ROOT}/etc/env/state.env" <<'ENV'
 STACK=guardstack
