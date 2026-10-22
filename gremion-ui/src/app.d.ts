@@ -11,6 +11,14 @@ declare global {
     interface Error {
       message: string
       errId?: string
+      /** Module-disabled 403 only: shell data so +error.svelte can render the app shell around the notice. */
+      shell?: {
+        nav: import('$lib/components/layout/nav-schema').NavItem[]
+        brand: unknown
+        sourceUrl?: string
+        modules: Record<string, boolean>
+        user: { name: string; roles: string[]; groups: string[] } | null
+      }
     }
     interface Locals {
       /** Authenticated user — set by authGuard in hooks.server.ts after session validation. */
