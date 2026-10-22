@@ -15,7 +15,7 @@ const PKG = fileURLToPath(new URL('../', import.meta.url))
 export const NAMED: Record<'unit' | 'integration' | 'authz', Record<string, number>> = {
   unit: {
     'test/app/bundle-entry.test.ts': 1,
-    'test/app/gate-rotation.test.ts': 3,
+    'test/app/gate-rotation.test.ts': 4,
     'test/app/routes.test.ts': 11,
     'test/app/trd082.test.ts': 5,
     'test/conformance/conformance.test.ts': 14,
@@ -31,7 +31,8 @@ export const NAMED: Record<'unit' | 'integration' | 'authz', Record<string, numb
     // TASK-081
     'test/authz/cli.test.ts': 4,
     'test/authz/fixture.test.ts': 2,
-    'test/authz/no-role-check.test.ts': 4,
+    'test/authz/after-migrate.test.ts': 6,
+    'test/authz/no-role-check.test.ts': 5,
     'test/authz/stepup.test.ts': 5,
     'test/suite-size.test.ts': 5,
   },
@@ -42,7 +43,8 @@ export const NAMED: Record<'unit' | 'integration' | 'authz', Record<string, numb
   },
   // TASK-081: its own scratch stack (test/authz/stack.mjs, vitest.authz-int.config.ts)
   authz: {
-    'test/authz/grants.int.test.ts': 13,
+    'test/authz/after-migrate.int.test.ts': 1,
+    'test/authz/grants.int.test.ts': 19,
     'test/authz/http.int.test.ts': 5,
     'test/authz/pdp.int.test.ts': 12,
     'test/authz/schema.int.test.ts': 8,

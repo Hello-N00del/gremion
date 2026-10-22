@@ -8,7 +8,8 @@
 // Boot order (each step refuses the boot, naming why): the environment
 // contract (TENANT_PROXY_SHARED_SECRET required, Q8), the shipped migrations
 // against their manifest (TRD-353, Q18), the module declarations the image
-// carries, then listen. No migration and no catalogue write at boot (B21, A1).
+// carries, then listen. No migration at boot (B21, A1). The authz catalogue is
+// written idempotently once the server listens (and after `migrate`, brief s.5.2).
 //
 // Layout: this file (src/main.ts in the tree, dist/index.js in the image) sits
 // ONE level below the service root; the service root sits at
@@ -20,6 +21,7 @@ import { fileURLToPath } from 'node:url'
 import { buildApp } from './app/build.ts'
 import { readConfig } from './app/config.ts'
 import { authzCliDeps, jsonLogger, wireDeps } from './app/wire.ts'
+import { bootSync, syncAfterMigrate } from './authz/after-migrate.ts'
 import { runAuthzCli } from './authz/cli.ts'
 import { assertShippedMigrations } from './migrate/boot-check.ts'
 import { KERNEL_API_MIGRATION_DIRS } from './migrate/chain.ts'
@@ -61,12 +63,19 @@ async function serve(): Promise<void> {
     }, everyMs)
     timer.unref()
   }
+  void bootSync(authzCliDeps(wired), (msg, fields) => log.warn(msg, fields))
   log.info('kernel-api: serving', { port: config.port, migrationFiles: files, releaseRef: config.releaseRef ?? null })
 }
 
 const argv = process.argv.slice(2)
 if (argv[0] === 'migrate') {
-  process.exitCode = await runMigrateCli(argv, process.env, { out: (l) => console.log(l), err: (l) => console.error(l) }, { dirs: DIRS, kernelRoot: KERNEL_ROOT })
+  const io = { out: (l: string) => console.log(l), err: (l: string) => console.error(l) }
+  const migrated = await runMigrateCli(argv, process.env, io, { dirs: DIRS, kernelRoot: KERNEL_ROOT })
+  // brief s.5.2: the catalogue is written after migrate (idempotent; a failed migrate syncs nothing)
+  process.exitCode = await syncAfterMigrate(argv, migrated, io, () => {
+    const wired = wireDeps(readConfig(process.env, { modulesRoot: join(KERNEL_ROOT, 'modules'), kernelRoot: KERNEL_ROOT }), { dirs: DIRS })
+    return { ...authzCliDeps(wired), close: () => wired.close() }
+  })
 } else if (argv[0] === 'authz') {
   const io = { out: (l: string) => console.log(l), err: (l: string) => console.error(l) }
   if ((argv[1] !== 'sync' && argv[1] !== 'sweep') || argv.length > 4) {
