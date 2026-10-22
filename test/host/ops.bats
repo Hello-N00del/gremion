@@ -1090,7 +1090,7 @@ shim_reboot_env() {
 
 # TASK-043d-1 verify-r1 HIGH 2: a bootstrapped host must get the executor
 # service, or there is no create path (the CLI create is decommissioned).
-@test "bootstrap has an executor stage: installed through two-argument render_unit, enabled, asserted active, in the stage table and in 'all'" {
+@test "bootstrap has an executor stage: installed through two-argument render_unit, enabled (not started), in the stage table and in 'all'" {
     local bs="${PROJECT_ROOT}/infra/host/bootstrap.sh"
     grep -qE '^stage_executor\(\) \{' "$bs"
     grep -qF 'render_unit gremion-executor.service /etc/systemd/system/gremion-executor.service' "$bs"
@@ -1134,13 +1134,15 @@ shim_reboot_env() {
     [ "$cl" -lt "$sl" ]
 }
 
-@test "the executor is started where it can run: gremion-tenant init restarts it, gremion-deploy step 12 try-restarts it" {
+@test "the executor is started where it can run: gremion-tenant init restarts it, gremion-deploy step 12 and gremion-rollback try-restart it" {
     local h="${PROJECT_ROOT}/infra/host"
     grep -qE '^executor_unit_action\(\) \{' "$h/lib/common.sh"
     local init; init="$(awk '/^cmd_init\(\) \{/,/^}/' "$h/bin/gremion-tenant")"
     grep -qF 'executor_unit_action restart' <<<"$init"
     local rec; rec="$(awk '/^step_12_record\(\) \{/,/^}/' "$h/bin/gremion-deploy")"
     grep -qF 'executor_unit_action try-restart' <<<"$rec"
+    local rb; rb="$(awk '/^record_tags\(\) \{/,/^}/' "$h/bin/gremion-rollback")"
+    grep -qF 'executor_unit_action try-restart' <<<"$rb"
 }
 
 # TASK-043d-1 verify-r1 HIGH 3: the customer proof must not call the

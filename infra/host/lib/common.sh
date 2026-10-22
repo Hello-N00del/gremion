@@ -382,7 +382,7 @@ state_kc_cid() {
     printf '%s\n' "${ids//[[:space:]]/}"
 }
 
-# executor_unit_action <restart|try-restart> — (re)start gremion-executor.service
+# executor_unit_action <restart|try-restart> - (re)start gremion-executor.service
 # where a release becomes usable. A host without the unit (a scratch tree, a
 # test) is a skip; a systemctl failure is a warning, never a failed deploy/init.
 executor_unit_action() {
