@@ -99,3 +99,29 @@ async function decideChecked(_sql: Sql, enabledModules: EnabledModules, input: D
     return { allow: true, reason: 'granted', grantIds: grants.map((g) => g.grant_id) }
   })
 }
+
+/**
+ * Operator decision 2026-10-22: a CUSTOMER-level role (scope_level 'customer': council_admin, it_admin) held
+ * live in one of this customer's verwaltung bodies is authority to administer grants (idt.grant.manage) in
+ * ANY body of the same customer. The customer boundary is the RLS context of `tx`; a body-level role never
+ * counts here (not even one held in the verwaltung), and a customer-level role held in a non-verwaltung body
+ * does not count either. Returns the role keys the person holds that carry the authority (empty = none).
+ */
+export async function customerWideGrantRoles(tx: Sql, personId: string): Promise<string[]> {
+  assertUuid(personId, 'personId')
+  const rows = await tx<{ role_key: string }[]>`
+    SELECT DISTINCT g.role_key
+      FROM idt.authz_grant g
+      JOIN idt.role r ON r.role_key = g.role_key AND r.state = 'active'
+      JOIN idt.body b ON b.body_id = g.body_id
+     WHERE g.subject_person_id = ${personId}::uuid
+       AND g.grant_kind = 'role'
+       AND r.scope_level = 'customer'
+       AND b.body_kind = 'verwaltung'
+       AND 'idt.grant.manage' = ANY (r.capability_keys)
+       AND g.state IN ('active', 'scheduled')
+       AND g.valid_from <= now()
+       AND (g.valid_until IS NULL OR g.valid_until > now())
+     ORDER BY g.role_key`
+  return rows.map((r) => r.role_key)
+}

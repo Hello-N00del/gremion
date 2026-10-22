@@ -10,6 +10,7 @@ import { buildWorld, makeRegistry, seedGrant, type World } from './world.ts'
 
 let w: World
 let w2: World
+let w3: World
 const reg = makeRegistry(['publishing', 'votes', 'board', 'calendar', 'finance'])
 const NOW = () => Math.floor(Date.now() / 1000)
 const deps: GrantDeps = { enabledModules: reg.read }
@@ -29,15 +30,20 @@ const events = async (world: World, grantId: string) =>
   world.db.admin<{ event_type: string; aggregate_version: string }[]>`SELECT event_type, aggregate_version::text FROM idt.outbox WHERE aggregate_id = ${grantId}::uuid ORDER BY aggregate_version`
 
 beforeAll(async () => {
-  w = await buildWorld('grants', undefined, ['admin', 'alice', 'bob', 'carol', 'impostor'])
+  w = await buildWorld('grants', undefined, ['admin', 'alice', 'bob', 'carol', 'impostor', 'dave', 'itv', 'itfach'])
   w2 = await buildWorld('grants2', undefined, ['admin'])
+  w3 = await buildWorld('grants3', undefined, ['ca3', 'target3'])
   await seedGrant(w.db.admin, w.db.customerId, { bodyId: w.bodyA, personId: w.persons.admin!, key: 'body_admin' })
   await seedGrant(w.db.admin, w.db.customerId, { bodyId: w.bodyA, personId: w.persons.impostor!, key: 'member' })
   await seedGrant(w.db.admin, w.db.customerId, { bodyId: w.verwaltung, personId: w.persons.admin!, key: 'body_admin' })
   await seedGrant(w.db.admin, w.db.customerId, { bodyId: w.verwaltung, personId: w.persons.carol!, key: 'council_admin' })
+  await seedGrant(w.db.admin, w.db.customerId, { bodyId: w.bodyA, personId: w.persons.dave!, key: 'body_admin' })
+  await seedGrant(w.db.admin, w.db.customerId, { bodyId: w.verwaltung, personId: w.persons.itv!, key: 'it_admin' })
+  await seedGrant(w.db.admin, w.db.customerId, { bodyId: w.bodyA, personId: w.persons.itfach!, key: 'it_admin' }) // customer role in a non-verwaltung body: seeded as the owner
+  await seedGrant(w3.db.admin, w3.db.customerId, { bodyId: w3.verwaltung, personId: w3.persons.ca3!, key: 'council_admin' })
 })
 afterAll(async () => {
-  await Promise.allSettled([w?.db.close(), w2?.db.close()])
+  await Promise.allSettled([w?.db.close(), w2?.db.close(), w3?.db.close()])
 })
 
 const base = (o: Record<string, unknown> = {}) => ({ bodyId: w.bodyA, subjectPersonId: w.persons.alice!, grantKind: 'role' as const, key: 'member', granterRole: 'body_admin', ...o })
@@ -240,5 +246,77 @@ describe('TRD-084 listing', () => {
     const other = await listGrants(w2.db.app, w2.db.customerId)
     expect(own.length).toBeGreaterThan(0)
     expect(other).toHaveLength(0)
+  })
+})
+
+// Operator decision 2026-10-22: a customer-level role (council_admin / it_admin) held in the
+// customer's verwaltung body is authority to grant body roles in ANY body of the SAME customer.
+describe('customer-level granter authority across bodies of one customer', () => {
+  const firstAdmin = (o: Record<string, unknown> = {}) =>
+    ({ bodyId: w.bodyB, subjectPersonId: w.persons.alice!, grantKind: 'role' as const, key: 'body_admin', granterRole: 'council_admin', ...o })
+  const decideManage = (personId: string, bodyId: string) =>
+    decide(w.db.app, reg.read, { customerId: w.db.customerId, subject: { personId }, bodyId, capability: 'idt.grant.manage' })
+
+  it('positive: council_admin held in the verwaltung grants the FIRST body_admin of another body (201, then that body_admin decides allow there)', async () => {
+    expect((await decideManage(w.persons.alice!, w.bodyB)).allow).toBe(false)
+    const g = await issueGrant(w.db.app, deps, w.db.customerId, claims('sub-carol'), firstAdmin())
+    expect([g.state, g.role_key, g.body_id, g.granter_kind, g.source]).toEqual(['active', 'body_admin', w.bodyB, 'person', 'customer_admin'])
+    expect(g.granted_by).toBe(w.persons.carol)
+    expect((await decideManage(w.persons.alice!, w.bodyB)).allow).toBe(true)
+  })
+  it('positive: it_admin held in the verwaltung grants a body role in another body', async () => {
+    const g = await issueGrant(w.db.app, deps, w.db.customerId, claims('sub-itv'), firstAdmin({ subjectPersonId: w.persons.bob!, key: 'member', granterRole: 'it_admin' }))
+    expect([g.state, g.role_key, g.body_id]).toEqual(['active', 'member', w.bodyB])
+  })
+  it('positive: the same authority revokes a grant in another body', async () => {
+    const g = await issueGrant(w.db.app, deps, w.db.customerId, claims('sub-carol'), firstAdmin({ subjectPersonId: w.persons.impostor!, key: 'member' }))
+    const r = await revokeGrant(w.db.app, deps, w.db.customerId, claims('sub-carol'), g.grant_id)
+    expect(r.state).toBe('revoked')
+  })
+  it('the customer role still has to be named truthfully (granterRole must be the one held)', async () => {
+    const before = await count(w)
+    const e = await refused(issueGrant(w.db.app, deps, w.db.customerId, claims('sub-carol'), firstAdmin({ subjectPersonId: w.persons.bob!, key: 'chair', granterRole: 'body_admin' })))
+    expect(e.code).toBe('granter_role_mismatch')
+    expect(await count(w)).toBe(before)
+  })
+  it('negative: the same role of ANOTHER customer is refused (own tenant only), 0 rows in both databases', async () => {
+    const b1 = await count(w)
+    const b3 = await count(w3)
+    // ca3 holds council_admin in customer 3's verwaltung. Against customer 1 the token subject is no person there.
+    const e1 = await refused(issueGrant(w.db.app, deps, w.db.customerId, claims('sub-ca3'), firstAdmin({ subjectPersonId: w.persons.bob! })))
+    expect(e1.code).toBe('forbidden')
+    // Against customer 3 itself, a body of customer 1 does not exist.
+    const e3 = await refused(issueGrant(w3.db.app, deps, w3.db.customerId, claims('sub-ca3'), firstAdmin({ subjectPersonId: w3.persons.target3!, bodyId: w.bodyB })))
+    expect(['forbidden', 'unknown_body']).toContain(e3.code)
+    expect(await count(w)).toBe(b1)
+    expect(await count(w3)).toBe(b3)
+  })
+  it('negative: a body_admin of body A cannot grant in body B', async () => {
+    const before = await count(w)
+    const e = await refused(issueGrant(w.db.app, deps, w.db.customerId, claims('sub-dave'), firstAdmin({ granterRole: 'body_admin', key: 'member', subjectPersonId: w.persons.bob! })))
+    expect(e.code).toBe('forbidden')
+    expect(await count(w)).toBe(before)
+  })
+  it('negative: a body_admin held in the verwaltung is a body role and still does not reach another body', async () => {
+    const before = await count(w)
+    const e = await refused(issueGrant(w.db.app, deps, w.db.customerId, claims('sub-admin'), firstAdmin({ granterRole: 'body_admin', key: 'member', subjectPersonId: w.persons.bob! })))
+    expect(e.code).toBe('forbidden')
+    expect(await count(w)).toBe(before)
+  })
+  it('negative: an it_admin held in a non-verwaltung body does not count, in its own body or another', async () => {
+    const before = await count(w)
+    for (const bodyId of [w.bodyA, w.bodyB]) {
+      const e = await refused(issueGrant(w.db.app, deps, w.db.customerId, claims('sub-itfach'), firstAdmin({ bodyId, granterRole: 'it_admin', key: 'member', subjectPersonId: w.persons.bob! })))
+      expect(e.code).toBe('forbidden')
+    }
+    expect(await count(w)).toBe(before)
+  })
+  it('negative: customer-wide authority is not a way around the privileged-grant step-up or the self-grant rule', async () => {
+    const before = await count(w)
+    const stale = await refused(issueGrant(w.db.app, deps, w.db.customerId, claims('sub-carol', { auth_time: NOW() - 900 }), firstAdmin()))
+    expect(stale.code).toBe('insufficient_user_authentication')
+    const self = await refused(issueGrant(w.db.app, deps, w.db.customerId, claims('sub-carol'), firstAdmin({ subjectPersonId: w.persons.carol! })))
+    expect(self.code).toBe('self_grant')
+    expect(await count(w)).toBe(before)
   })
 })

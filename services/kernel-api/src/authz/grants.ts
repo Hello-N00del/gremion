@@ -18,7 +18,7 @@
 import { capabilityDef, isPrivilegedCapability, isPrivilegedRole, roleDef, roleIncludes } from './catalogue.ts'
 import { GrantError } from './errors.ts'
 import { emitGrantEvent, type GrantRow } from './events.ts'
-import { decideInTx, type EnabledModules } from './pdp.ts'
+import { customerWideGrantRoles, decideInTx, type EnabledModules } from './pdp.ts'
 import { checkStepUp } from './stepup.ts'
 import { assertUuid, inCustomerTx, UUID, type Sql } from './tx.ts'
 import { uuidv7 } from './uuid.ts'
@@ -75,13 +75,18 @@ async function authoriseManager(tx: Sql, deps: GrantDeps, customerId: string, gr
   }
   const personId = await personBySub(tx, granter.claims)
   const d = await decideInTx(tx, deps.enabledModules, { customerId, subject: { personId }, bodyId, capability: 'idt.grant.manage' })
-  if (!d.allow) throw new GrantError('forbidden', `granting is not allowed in this body (${d.reason})`)
+  if (!d.allow) {
+    // a customer-level role held in the verwaltung administers grants in every body of this customer (decision 2026-10-22)
+    const wide = d.reason === 'no_grant' ? await customerWideGrantRoles(tx, personId) : []
+    if (wide.length === 0) throw new GrantError('forbidden', `granting is not allowed in this body (${d.reason})`)
+  }
   return { kind: 'person', id: personId }
 }
 
-/** TRD-091: the claimed role must be one the SERVER verifies the granter holds, live, in this body. */
+/** TRD-091: the claimed role must be one the SERVER verifies the granter holds, live, in this body, or a customer-level role held in the verwaltung. */
 async function verifyGranterRole(tx: Sql, personId: string, bodyId: string, granterRole: string | undefined): Promise<void> {
   if (!granterRole) throw new GrantError('bad_request', 'granterRole is required')
+  if ((await customerWideGrantRoles(tx, personId)).includes(granterRole)) return
   const held = await tx<{ n: number }[]>`
     SELECT count(*)::int AS n FROM idt.authz_grant g
      WHERE g.subject_person_id = ${personId}::uuid AND g.body_id = ${bodyId}::uuid AND g.grant_kind = 'role' AND g.role_key = ${granterRole}
