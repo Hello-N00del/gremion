@@ -79,6 +79,7 @@ describe('the customer gate and a rotated credential', () => {
     expect(h.opened).toEqual(['y1']) // unchanged ref: one pool
     await gate.db(tenantRow(A_ID, 'a', 'active', { dbConnRef: 'env:KERNEL_DB_A2' }))
     expect(h.opened).toEqual(['y1', 'y2'])
+    await new Promise((r) => setTimeout(r, 25)) // evictGraceMs 0 ends the old pool on the next timer tick
     expect(h.ended).toEqual(['y1'])
     // and the very next gate check, with the new ref, does not reopen a third pool
     expect(await gate.check(tenantRow(A_ID, 'a', 'active', { dbConnRef: 'env:KERNEL_DB_A2' }))).toEqual({ ok: true })
