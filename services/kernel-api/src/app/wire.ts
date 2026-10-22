@@ -30,6 +30,8 @@ export function jsonLogger(write: (line: string, level: string) => void = (l, le
 
 export interface Wired {
   deps: KernelApiDeps
+  /** The two reader pools (control registry, gremion_platform), for the authz verbs; closed by close(). */
+  pools: { control: Sql; platform: Sql }
   close(): Promise<void>
 }
 
@@ -56,19 +58,17 @@ export function wireDeps(config: KernelApiConfig, o: { dirs: readonly string[]; 
   }
   return {
     deps,
+    pools: { control, platform },
     async close() {
       await Promise.allSettled([gate.close(), control.end({ timeout: 5 }), platform.end({ timeout: 5 })])
     },
   }
 }
 
-/** The `kernel-api authz` verbs' deps: the same pools and gate as serve, no HTTP. */
-export function wireAuthzCli(config: KernelApiConfig, o: { dirs: readonly string[]; log?: Logger; env?: NodeJS.ProcessEnv }): { deps: AuthzCliDeps; close(): Promise<void> } {
-  const w = wireDeps(config, o)
-  const open = (url: string): Sql => postgres(url, { max: 2, prepare: false, onnotice: () => {}, connect_timeout: 10, idle_timeout: 30 })
-  const control = open(config.controlDbUrl)
-  const platform = open(config.platformDbUrl)
-  const deps: AuthzCliDeps = {
+/** The `kernel-api authz` verbs' deps (and the in-process sweep's): the same pools and gate as serve, no extra connection. */
+export function authzCliDeps(w: Wired): AuthzCliDeps {
+  const { control, platform } = w.pools
+  return {
     // TRD-082 exemption: like migrate, the verbs iterate every active customer
     listCustomerIds: async () => (await control<{ id: string }[]>`SELECT t.id::text AS id FROM public.tenant t WHERE t.status = 'active' ORDER BY t.id`).map((r) => r.id),
     lookup: (id) => w.deps.tenancy.lookupId(id),
@@ -83,5 +83,4 @@ export function wireAuthzCli(config: KernelApiConfig, o: { dirs: readonly string
       ),
     enabledModules: async (customerId) => new Set((await w.deps.registry.listEnabled(customerId)).map((m) => m.moduleKey)),
   }
-  return { deps, async close() { await Promise.allSettled([w.close(), control.end({ timeout: 5 }), platform.end({ timeout: 5 })]) } }
 }

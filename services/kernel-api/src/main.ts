@@ -19,7 +19,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { buildApp } from './app/build.ts'
 import { readConfig } from './app/config.ts'
-import { jsonLogger, wireAuthzCli, wireDeps } from './app/wire.ts'
+import { authzCliDeps, jsonLogger, wireDeps } from './app/wire.ts'
 import { runAuthzCli } from './authz/cli.ts'
 import { assertShippedMigrations } from './migrate/boot-check.ts'
 import { KERNEL_API_MIGRATION_DIRS } from './migrate/chain.ts'
@@ -45,6 +45,22 @@ async function serve(): Promise<void> {
   process.once('SIGTERM', () => void stop('SIGTERM'))
   process.once('SIGINT', () => void stop('SIGINT'))
   await app.listen({ host: config.host, port: config.port })
+  // the grant sweep (brief s.5.6): every AUTHZ_SWEEP_INTERVAL_MS (default 60 s, 0 = off, e.g. when the verb runs from cron); never overlaps itself
+  const everyMs = Number(process.env.AUTHZ_SWEEP_INTERVAL_MS ?? 60_000)
+  if (Number.isInteger(everyMs) && everyMs > 0) {
+    const sweepDeps = authzCliDeps(wired)
+    let running = false
+    const timer = setInterval(() => {
+      if (running) return
+      running = true
+      void runAuthzCli(['authz', 'sweep'], { out: () => undefined, err: (l) => log.warn('authz sweep', { line: l }) }, sweepDeps)
+        .catch((err) => log.warn('authz sweep failed', { err: (err as Error).message }))
+        .finally(() => {
+          running = false
+        })
+    }, everyMs)
+    timer.unref()
+  }
   log.info('kernel-api: serving', { port: config.port, migrationFiles: files, releaseRef: config.releaseRef ?? null })
 }
 
@@ -57,8 +73,8 @@ if (argv[0] === 'migrate') {
     process.exitCode = await runAuthzCli(argv, io, undefined as never)
   } else {
     try {
-      const wired = wireAuthzCli(readConfig(process.env, { modulesRoot: join(KERNEL_ROOT, 'modules'), kernelRoot: KERNEL_ROOT }), { dirs: DIRS })
-      process.exitCode = await runAuthzCli(argv, io, wired.deps).finally(() => wired.close())
+      const wired = wireDeps(readConfig(process.env, { modulesRoot: join(KERNEL_ROOT, 'modules'), kernelRoot: KERNEL_ROOT }), { dirs: DIRS })
+      process.exitCode = await runAuthzCli(argv, io, authzCliDeps(wired)).finally(() => wired.close())
     } catch (err) {
       console.error(`kernel-api authz: ${(err as Error).message}`)
       process.exitCode = 1
