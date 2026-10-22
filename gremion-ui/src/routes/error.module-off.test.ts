@@ -3,7 +3,7 @@ import { render } from '@testing-library/svelte'
 import type { NavItem } from '$lib/components/layout/nav-schema'
 
 // R33c UX-1 guard: a disabled module's page deep link (403 'module-disabled:<id>') must render the styled
-// German "Modul nicht aktiv" surface INSIDE the app shell (rail visible, link back to the dashboard) and must
+// German "Modul nicht aktiv" surface INSIDE the app shell (rail visible, link back to the home page) and must
 // never show the raw code string. Revert guard: in +error.svelte drop the `{#if moduleOff && shell && shell.user}`
 // AppShell branch (or in ModuleOffNotice.svelte print the id) and this goes RED.
 const h = vi.hoisted(() => ({
@@ -26,7 +26,7 @@ if (typeof window !== 'undefined' && !window.matchMedia) {
 
 import ErrorPage from './+error.svelte'
 
-const nav: NavItem[] = [{ kind: 'item', href: '/dashboard', label: 'Home', icon: 'home' }]
+const nav: NavItem[] = [{ kind: 'item', href: '/', label: 'Home', icon: 'home' }]
 const shell = (roles: string[]) => ({
   nav,
   brand: null,
@@ -51,8 +51,10 @@ describe('module-disabled 403 surface', () => {
     expect(text).not.toContain('module-disabled')
     expect(container.querySelector('[data-testid="module-off"]')).toBeTruthy()
     expect(container.querySelector('nav')).toBeTruthy()
-    const hrefs = Array.from(container.querySelectorAll('a')).map((a) => a.getAttribute('href'))
-    expect(hrefs).toContain('/dashboard')
+    // The kernel has no /dashboard route: its home is '/'. The notice's own escape link must point there.
+    const noticeHrefs = Array.from(container.querySelectorAll('[data-testid="module-off"] a')).map((a) => a.getAttribute('href'))
+    expect(noticeHrefs).toContain('/')
+    expect(noticeHrefs).not.toContain('/dashboard')
   })
 
   test('non-admins get no admin hint, admins do', () => {

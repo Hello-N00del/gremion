@@ -46,7 +46,7 @@
       </div>
     {/if}
     <div class="mo-actions">
-      <a href="/dashboard" class="btn btn-primary"><Icon name="home" size={14} /> Zurück zur Übersicht</a>
+      <a href="/" class="btn btn-primary"><Icon name="home" size={14} /> Zurück zur Übersicht</a>
       {#if isItAdmin}
         <a href="/systemstatus" class="btn" lang="de"><Icon name="activity" size={14} /> Module verwalten</a>
       {/if}
