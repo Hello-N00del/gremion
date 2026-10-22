@@ -318,6 +318,12 @@
       "blob": "8ae42549a76ff483e918787cb1796d89d1a6aa1c"
     },
     {
+      "path": "modules/files/app/lib/modules/manifests/files.ts",
+      "reason": "R33 F5 (operator ruling Q3): files is deselectable at runtime - toggleable true with route prefixes, so the module-disable gate and the rail drop it when off",
+      "owner": "R33-F5",
+      "blob": "1a1a589a57f293f7b07712bc8cf6808a758bbbc1"
+    },
+    {
       "path": "modules/finance/test/api.integration.test.ts",
       "reason": "postgres major pin (lint-postgres-major): the pre-pin major-16 alpine tag -> the pinned major-18 alpine tag, in a test-DB guard's guidance string; StuRaOS#534 hardening: fixture tenant ids made canonical for the guard",
       "owner": "TASK-200",
@@ -352,6 +358,12 @@
       "reason": "R29-KHYG-K: Vitest 4 dropped test.poolOptions (singleFork was silently ignored); maxWorkers 1 + fileParallelism false run the integration files serially so they stop racing on CREATE DATABASE (mirrors the StuRaOS services/finance fix, F1-FIX-05-S)",
       "owner": "TASK-200",
       "blob": "0a2e633fddce27e3aaa7e57f7d8695cb45093ddc"
+    },
+    {
+      "path": "modules/messaging/app/lib/modules/manifests/messages.ts",
+      "reason": "R33 F5 (operator ruling Q3): messages is deselectable at runtime - toggleable true with route prefixes, so the module-disable gate and the rail drop it when off",
+      "owner": "R33-F5",
+      "blob": "37996302feca2e57a4278d45fe135370de0a22e0"
     },
     {
       "path": "modules/messaging/src/livekit/livekit-client.ts",
@@ -472,6 +484,12 @@
       "reason": "added: not a StuRa services/ file; ported and scrubbed from StuRa docker/synapse at extraction-source-f2",
       "owner": "TASK-198",
       "blob": "83b57fe594791ffb0e19a8488a492c13ba90d3b7"
+    },
+    {
+      "path": "modules/publishing/app/lib/modules/manifests/newsletter.ts",
+      "reason": "R33 F5 (operator ruling Q3): newsletter is deselectable at runtime - toggleable true, route prefixes /newsletter and /api/newsletter, a Newsletter rail entry (kernel system mail is untouched)",
+      "owner": "R33-F5",
+      "blob": "b65b5d8217dd3f45660757f5ea2b801e6e49c040"
     },
     {
       "path": "modules/publishing/src/dispatch.ts",
