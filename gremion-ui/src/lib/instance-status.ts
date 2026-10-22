@@ -169,17 +169,39 @@ export function instanceServices(
   })
 }
 
+/** The feature module that owns a silo service. A service not listed here
+ *  (db, keycloak) is kernel-owned and always counts. */
+export const SERVICE_MODULE: Record<string, string> = {
+  nextcloud: 'files',
+  matrix: 'messages',
+}
+
+/** Silo services that belong to a feature module which is OFF in `modules`
+ *  (the tenant's module toggle map). A missing key counts as OFF, matching the
+ *  module gate (`!config.modules[id]`). */
+export function disabledServices(modules: Record<string, boolean>): string[] {
+  return Object.entries(SERVICE_MODULE)
+    .filter(([, moduleId]) => !modules[moduleId])
+    .map(([service]) => service)
+}
+
 /** Derive the overall state from a set of silo service statuses (server uses this
- *  when real ledger rows exist). all ok → ready; any failed → failed; any
- *  pending/provisioning → provisioning; only matrix down → degraded. */
-export function overallFromSilo(silo: Record<string, ServiceStatus>): InstanceState {
-  const vals = Object.entries(silo)
+ *  when real ledger rows exist). all ok -> ready. Services of a DISABLED feature
+ *  module (`disabled`, service keys) are skipped entirely: not provisioning, not
+ *  failed. A failed kernel service (db, keycloak) -> failed. A failed feature
+ *  service (nextcloud, matrix) is an outage of an optional module -> degraded,
+ *  never failed (the kernel keeps working). Any pending/provisioning -> provisioning. */
+export function overallFromSilo(
+  silo: Record<string, ServiceStatus>,
+  disabled: readonly string[] = [],
+): InstanceState {
+  const vals = Object.entries(silo).filter(([k]) => !disabled.includes(k))
   if (vals.every(([, v]) => v === 'ok')) return 'ready'
-  if (vals.some(([, v]) => v === 'failed')) return 'failed'
-  // A single non-critical silo (matrix) degraded, everything else ok → degraded.
+  if (vals.some(([k, v]) => v === 'failed' && !(k in SERVICE_MODULE))) return 'failed'
   const nonOk = vals.filter(([, v]) => v !== 'ok')
-  if (nonOk.length === 1 && nonOk[0][0] === 'matrix' && nonOk[0][1] === 'degraded') return 'degraded'
-  return 'provisioning'
+  if (nonOk.some(([, v]) => v === 'provisioning' || v === 'queued')) return 'provisioning'
+  // Only feature-module services are non-ok, and none is mid-provision.
+  return 'degraded'
 }
 
 /** True when the instance is fully converged (badge/banner show only when not). */
