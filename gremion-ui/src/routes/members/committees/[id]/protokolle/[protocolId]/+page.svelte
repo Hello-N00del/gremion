@@ -21,6 +21,7 @@
   import AttendanceChips from '$lib/components/protocols/AttendanceChips.svelte'
   import ResolutionRow from '$lib/components/protocols/ResolutionRow.svelte'
   import ActionItemRow from '$lib/components/protocols/ActionItemRow.svelte'
+  import ProtocolBodyEditor from '$lib/components/protocols/ProtocolBodyEditor.svelte'
   import ProtokollgenehmigungPanel from '$lib/components/protocols/ProtokollgenehmigungPanel.svelte'
 
   let { data }: { data: PageData } = $props()
@@ -205,6 +206,9 @@
         class="w-full h-[500px] rounded-md border"
         sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-top-navigation"
       ></iframe>
+    {:else if isEditable && isAdmin}
+      <!-- R33b: no Collabora editor (files module off, or no ODT) -> in-app body editor. -->
+      <ProtocolBodyEditor protocolId={data.protocol.id} bodyHtml={data.protocol.body_html} />
     {:else}
       <div class="rounded-md border p-4 prose prose-sm max-w-none">
         {@html data.protocol.body_html ?? '<em>Noch kein Inhalt.</em>'}

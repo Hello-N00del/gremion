@@ -280,6 +280,8 @@ export interface ProtocolDocumentPort {
   downloadDraft(draftPath: string): Promise<Buffer>
   /** Move the draft .odt into the published dir; returns the published dir path. */
   publishFile(protocolId: string, draftPath: string): Promise<string>
+  /** Undo publishFile: move the ODT back to its draft path (compensation when publish fails after the move). */
+  restoreDraftFile?(draftPath: string, publishedDir: string): Promise<void>
   /** Upload the rendered PDF into the published dir; returns its NC-relative path. */
   uploadPublishedPdf(publishedDir: string, pdfBuffer: Buffer): Promise<string>
   /** Download a validated published PDF (returns the raw NC Response). */

@@ -40,6 +40,9 @@ export async function GET(event: RequestEvent) {
   ])
 
   const { nextcloud_draft_path: _omit, ...safeProtocol } = protocol
+  // R33b: body_html is rendered via {@html}; sanitize on read too so a legacy or
+  // directly-written row can never reach the page as live markup (G-011).
+  if (safeProtocol.body_html) safeProtocol.body_html = sanitizeRichHtml(safeProtocol.body_html)
 
   return json({ protocol: safeProtocol, attendance, resolutions, actionItems })
 }

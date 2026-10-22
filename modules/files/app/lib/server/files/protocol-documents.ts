@@ -62,6 +62,13 @@ async function publishFile(protocolId: string, draftPath: string): Promise<strin
   return publishedDir
 }
 
+/** R33b: undo publishFile (move the ODT back to its draft path) when publish fails after the move. */
+async function restoreDraftFile(draftPath: string, publishedDir: string): Promise<void> {
+  const nc = createNextcloudClient()
+  const user = sysUser()
+  await nc.move(davPath(`${publishedDir.replace(/\/$/, '')}/protocol.odt`), davPath(draftPath), user)
+}
+
 /**
  * #235 (defects 1 & 4): upload the rendered protocol PDF into the published
  * directory and return its Nextcloud-relative path (the value the publish flow
@@ -110,6 +117,7 @@ export const protocolDocumentPort: ProtocolDocumentPort = {
   getDraftWopiToken,
   downloadDraft,
   publishFile,
+  restoreDraftFile,
   uploadPublishedPdf,
   downloadPublishedPdf,
   deleteDraftFile,

@@ -3,20 +3,24 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 // F1 (Q1): protocol create works with NO files ProtocolDocumentPort; the
 // in-app body is editable via PATCH (sanitized) while the protocol is a draft;
 // the public PDF route answers a clean 404 when no NC document exists.
-const h = vi.hoisted(() => ({
-  createProtocol: vi.fn(), updateProtocol: vi.fn(), getProtocol: vi.fn(), pdfPath: vi.fn(),
-}))
+const h = vi.hoisted(() => {
+  const lists = [vi.fn(), vi.fn(), vi.fn()]
+  return {
+    createProtocol: vi.fn(), updateProtocol: vi.fn(), getProtocol: vi.fn(), pdfPath: vi.fn(),
+    lists,
+  }
+})
 vi.mock('$lib/server/protocols/protocol-db', () => ({
   createProtocol: h.createProtocol, listProtocols: vi.fn(), deleteProtocol: vi.fn(),
   updateProtocol: h.updateProtocol, getProtocol: h.getProtocol, upsertAttendance: vi.fn(),
-  listAttendance: vi.fn(), listResolutions: vi.fn(), listActionItems: vi.fn(),
+  listAttendance: (...a: unknown[]) => h.lists[0](...a), listResolutions: (...a: unknown[]) => h.lists[1](...a), listActionItems: (...a: unknown[]) => h.lists[2](...a),
   getPublishedProtocolPdfPath: h.pdfPath,
 }))
 vi.mock('$lib/server/governance/org-units-db', () => ({ getOrgUnit: vi.fn(), isMemberOf: vi.fn() }))
 vi.mock('$lib/auth', () => ({ hasRole: () => true, Role: { CouncilAdmin: 'council-admin' } }))
 
 import { POST } from './+server'
-import { PATCH } from './[id]/+server'
+import { PATCH, GET } from './[id]/+server'
 import { GET as PDF } from '../public/protocols/[id]/pdf/+server'
 import { _resetRuntimeRegistryForTests } from '$lib/server/modules/runtime-registry'
 
@@ -24,7 +28,7 @@ const user = { id: 'u1', roles: ['council-admin'] }
 const ID = '123e4567-e89b-12d3-a456-426614174001'
 
 describe('F1 protocols without the files module', () => {
-  beforeEach(() => { _resetRuntimeRegistryForTests(); Object.values(h).forEach((m) => m.mockReset()) })
+  beforeEach(() => { _resetRuntimeRegistryForTests(); Object.values(h).flat().forEach((m) => m.mockReset()) })
 
   it('POST /api/protocols -> 201 with no document port; no draft path written', async () => {
     h.createProtocol.mockResolvedValue({ id: 'p1', status: 'draft', nextcloud_draft_path: null })
@@ -47,6 +51,26 @@ describe('F1 protocols without the files module', () => {
     const arg = h.updateProtocol.mock.calls[0][1] as { bodyHtml?: string }
     expect(arg.bodyHtml).toContain('<p>Hallo</p>')
     expect(arg.bodyHtml).not.toContain('<script')
+  })
+
+  const XSS = '<p>ok</p><img src="x" onerror="alert(1)"><a href="javascript:alert(2)">l</a><svg onload="alert(3)"></svg><script>x()</script>'
+  const expectClean = (html: string) => {
+    expect(html).toContain('<p>ok</p>')
+    expect(html).not.toMatch(/<script|onerror|onload|javascript:|<svg/i)
+  }
+
+  it('PATCH bodyHtml strips script, onerror and javascript: URLs before it is stored', async () => {
+    h.getProtocol.mockResolvedValue({ id: ID, status: 'draft' })
+    h.updateProtocol.mockResolvedValue({ id: ID })
+    await PATCH({ locals: { user }, params: { id: ID }, request: { json: async () => ({ bodyHtml: XSS }) } } as never)
+    expectClean((h.updateProtocol.mock.calls[0][1] as { bodyHtml: string }).bodyHtml)
+  })
+
+  it('GET returns a sanitized body_html even when a legacy row stored hostile markup', async () => {
+    h.getProtocol.mockResolvedValue({ id: ID, status: 'draft', committee_id: 'c', body_html: XSS, nextcloud_draft_path: null })
+    h.lists.forEach((m) => m.mockResolvedValue([]))
+    const res = await GET({ locals: { user: { id: 'u1', roles: ['council-admin'] } }, params: { id: ID } } as never)
+    expectClean((await res.json()).protocol.body_html)
   })
 
   it('PATCH bodyHtml on a submitted protocol is refused (403): the text is frozen once out for adoption', async () => {
