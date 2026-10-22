@@ -17,7 +17,7 @@ vi.mock('$env/dynamic/private', () => ({ env: { DATABASE_URL: 'postgresql://grem
 vi.mock('$lib/server/db', () => ({ waitForDbReady: vi.fn(async () => {}), runMigrations: vi.fn(async () => {}), getDb: () => ({}) }))
 // Mutable module toggle: each test flips `demo_widget` and the SAME readConfig
 // mock feeds boot(), the cookie gate and the Bearer gate (module-gate.ts).
-const modulesState = { demo_widget: true }
+const modulesState = { demo_widget: true, messages: true }
 vi.mock('$lib/server/config', () => ({
   readConfig: () => ({
     smtp: { configured: false },
@@ -75,6 +75,7 @@ beforeEach(() => {
   process.exitCode = 0
   bearerPayload = null
   modulesState.demo_widget = true
+  modulesState.messages = true
 })
 afterEach(() => { process.exitCode = 0 })
 
@@ -150,5 +151,33 @@ describe('disabledModuleForPath — PAGE module-off detection (#290 / F1 fix)', 
     expect(disabledModuleForPath('/demo-widget')).toBe('demo_widget')
     // … and the authGuard hook itself gates only /api/* prefixes (proven above),
     // so it never emits a bare 403 for a PAGE path.
+  })
+})
+
+// F5 r2: /element-call and /livekit/ are PUBLIC_PATHS (the embedded client carries no session) and used to
+// return before the module gate, leaving the video proxy reachable with messages OFF.
+describe('public video proxy follows the messages module (F5 r2)', () => {
+  const paths = ['/element-call', '/element-call/index.html', '/livekit/jwt/get_token']
+  it.each(paths)('messages OFF -> %s answers 403 Module disabled without a session', async (p) => {
+    modulesState.messages = false
+    const mod = await import('./hooks.server'); await mod.boot()
+    const res = (await mod.authGuard({ event: makeEvent({ path: p }) as never, resolve: resolveSpy } as never)) as Response
+    expect(res.status).toBe(403)
+    expect(await res.text()).toBe('Module disabled')
+  })
+  it.each(paths)('control: messages ON -> %s stays public', async (p) => {
+    const mod = await import('./hooks.server'); await mod.boot()
+    const res = (await mod.authGuard({ event: makeEvent({ path: p }) as never, resolve: resolveSpy } as never)) as Response
+    expect(res.status).toBe(200)
+  })
+})
+
+// F5 r2: the unsubscribe page + API stay reachable with newsletter OFF (former subscribers must opt out).
+describe('newsletter unsubscribe is exempt from the module gate (F5 r2)', () => {
+  it('exempt paths are never reported disabled; sibling paths still are', async () => {
+    const { disabledModuleForPath, MODULE_GATE_EXEMPT } = await import('$lib/server/module-gate')
+    expect(MODULE_GATE_EXEMPT).toContain('/newsletter/unsubscribe')
+    expect(disabledModuleForPath('/newsletter/unsubscribe', { modules: { newsletter: false } } as never)).toBeNull()
+    expect(disabledModuleForPath('/api/newsletter/unsubscribe', { modules: { newsletter: false } } as never)).toBeNull()
   })
 })
