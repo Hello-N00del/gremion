@@ -259,8 +259,8 @@ copy_host_src() {
     # authenticate Keycloak, the leaves and Alertmanager alike, so a leak from
     # any council-facing tier was the vendor's own sender. The split gives
     # system@ (vendor_smtp, mail.env only), alerts@ (alert_smtp, mail.env and
-    # ops.env) and the transitional platform@ (platform_smtp, mail.env and the
-    # app tier) three generated values.
+    # ops.env) and the transitional platform@ (platform_smtp, mail.env only since
+    # M4) three generated values.
     render
     local vendor alert platform key
     vendor="$(value_of "${ENV_DIR}/mail.env" VENDOR_SMTP_PASSWORD)"
@@ -277,7 +277,12 @@ copy_host_src() {
     # alerts@ is the one identity two projects share: provision-roles.sh sets
     # it from mail.env, Alertmanager authenticates with it from ops.env.
     [ "$(value_of "${ENV_DIR}/ops.env" ALERT_SMTP_PASSWORD)" = "$alert" ]
-    [ "$(value_of "${ENV_DIR}/app-blue.env" PLATFORM_SMTP_PASSWORD)" = "$platform" ]
+    # M4 (PLAN-mail-transport): the app tier holds no platform@ password any more.
+    local app
+    for app in app-blue.env app-green.env; do
+        ! grep -q '^PLATFORM_SMTP_PASSWORD=' "${ENV_DIR}/${app}" || { echo "PLATFORM_SMTP_PASSWORD in ${app}"; return 1; }
+        ! grep -qF -- "$platform" "${ENV_DIR}/${app}" || { echo "the platform@ value leaked into ${app}"; return 1; }
+    done
     [ "$(value_of "${ENV_DIR}/ops.env" STALWART_API_KEY)" = "$key" ]
     # The vendor's own password lives in mail.env and nowhere else.
     local f

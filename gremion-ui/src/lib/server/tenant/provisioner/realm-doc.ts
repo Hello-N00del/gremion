@@ -289,12 +289,11 @@ export function assertRoleVocabularyCarried(
   }
 }
 
-/** The platform's authenticating SMTP sender (gremion#6). Derived from the host
- *  env, never configured twice: the principal is `platform@<PLATFORM_DOMAIN>`
- *  (infra/host/mail/provision-roles.sh:251,263), its app password is
- *  PLATFORM_SMTP_PASSWORD, and the submission host is mail.<PLATFORM_DOMAIN>
- *  reached on 587 by its PUBLIC name (spec A §B hairpin), so the setup wizard's
- *  RFC1918-refusing SMTP guard stays intact. */
+/** An authenticating SMTP sender for a realm (gremion#6): the relay sender of
+ *  MAIL_TRANSPORT=relay (mailTransportFromEnv) or a per-realm Stalwart principal.
+ *  The retired app-tier platform@ sender is gone (PLAN-mail-transport M4). The
+ *  stalwart submission host is mail.<PLATFORM_DOMAIN> on 587 by its PUBLIC name
+ *  (spec A §B hairpin), so the setup wizard's RFC1918-refusing SMTP guard stays intact. */
 export interface RealmSmtpSettings {
   host: string
   port: number
@@ -304,32 +303,6 @@ export interface RealmSmtpSettings {
 }
 
 export const TEMPLATE_SENTINEL_PATTERN = /__[A-Z][A-Z0-9_]*__/g
-
-/** PURE: the caller supplies the env record (process.env in the CLI and in the
- *  B19 compose-realm route), so this module still reads no env of its own. */
-export function platformSmtpFromEnv(env: Record<string, string | undefined>): RealmSmtpSettings {
-  const domain = (env.PLATFORM_DOMAIN ?? '').trim()
-  const password = (env.PLATFORM_SMTP_PASSWORD ?? '').trim()
-  if (!domain) {
-    throw new Error(
-      'realm-doc: PLATFORM_DOMAIN is unset — the platform SMTP identity ' +
-        '(platform@<PLATFORM_DOMAIN> on mail.<PLATFORM_DOMAIN>) cannot be derived (gremion#6).',
-    )
-  }
-  if (!password) {
-    throw new Error(
-      'realm-doc: PLATFORM_SMTP_PASSWORD is unset — a realm whose reset-password path is open ' +
-        'must not be provisioned without an authenticating platform sender (gremion#6).',
-    )
-  }
-  return {
-    host: `mail.${domain}`,
-    port: 587,
-    from: `no-reply@${domain}`,
-    user: `platform@${domain}`,
-    password,
-  }
-}
 
 /** The Keycloak smtpServer representation (all values are strings). ONE source
  *  of truth: the template path substitutes exactly these values, and the
