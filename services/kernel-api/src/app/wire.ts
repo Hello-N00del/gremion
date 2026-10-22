@@ -14,6 +14,7 @@ import { createTokenVerifier } from '../tenancy/tokens.ts'
 import type { KernelApiConfig } from './config.ts'
 import type { KernelApiDeps, Logger } from './deps.ts'
 import { createCustomerGate } from './gate.ts'
+import type { AuthzCliDeps } from '../authz/cli.ts'
 
 /** One JSON line per event on stdout/stderr (the house log shape: level, msg, ts, fields). */
 export function jsonLogger(write: (line: string, level: string) => void = (l, level) => (level === 'info' ? console.log(l) : console.error(l))): Logger {
@@ -59,4 +60,28 @@ export function wireDeps(config: KernelApiConfig, o: { dirs: readonly string[]; 
       await Promise.allSettled([gate.close(), control.end({ timeout: 5 }), platform.end({ timeout: 5 })])
     },
   }
+}
+
+/** The `kernel-api authz` verbs' deps: the same pools and gate as serve, no HTTP. */
+export function wireAuthzCli(config: KernelApiConfig, o: { dirs: readonly string[]; log?: Logger; env?: NodeJS.ProcessEnv }): { deps: AuthzCliDeps; close(): Promise<void> } {
+  const w = wireDeps(config, o)
+  const open = (url: string): Sql => postgres(url, { max: 2, prepare: false, onnotice: () => {}, connect_timeout: 10, idle_timeout: 30 })
+  const control = open(config.controlDbUrl)
+  const platform = open(config.platformDbUrl)
+  const deps: AuthzCliDeps = {
+    // TRD-082 exemption: like migrate, the verbs iterate every active customer
+    listCustomerIds: async () => (await control<{ id: string }[]>`SELECT t.id::text AS id FROM public.tenant t WHERE t.status = 'active' ORDER BY t.id`).map((r) => r.id),
+    lookup: (id) => w.deps.tenancy.lookupId(id),
+    db: (tenant) => w.deps.kernelDb!(tenant),
+    moduleIds: async () =>
+      new Map(
+        (
+          await platform<{ module_key: string; module_id: string }[]>`
+            SELECT m.module_key, m.module_id::text FROM plt.module m
+             WHERE EXISTS (SELECT 1 FROM plt.module_version v WHERE v.module_id = m.module_id)`
+        ).map((r) => [r.module_key, r.module_id] as const),
+      ),
+    enabledModules: async (customerId) => new Set((await w.deps.registry.listEnabled(customerId)).map((m) => m.moduleKey)),
+  }
+  return { deps, async close() { await Promise.allSettled([w.close(), control.end({ timeout: 5 }), platform.end({ timeout: 5 })]) } }
 }

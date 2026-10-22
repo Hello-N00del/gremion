@@ -3,6 +3,7 @@
 //
 //   node dist/index.js                         serve (port PORT, default 3000)
 //   node dist/index.js migrate [--customer id] the kernel-api-migrate one-shot (Q10)
+//   node dist/index.js authz sync|sweep [--customer id]  the authz catalogue / grant sweep verbs (TASK-081)
 //
 // Boot order (each step refuses the boot, naming why): the environment
 // contract (TENANT_PROXY_SHARED_SECRET required, Q8), the shipped migrations
@@ -18,7 +19,8 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { buildApp } from './app/build.ts'
 import { readConfig } from './app/config.ts'
-import { jsonLogger, wireDeps } from './app/wire.ts'
+import { jsonLogger, wireAuthzCli, wireDeps } from './app/wire.ts'
+import { runAuthzCli } from './authz/cli.ts'
 import { assertShippedMigrations } from './migrate/boot-check.ts'
 import { KERNEL_API_MIGRATION_DIRS } from './migrate/chain.ts'
 import { runMigrateCli } from './migrate/cli.ts'
@@ -49,6 +51,19 @@ async function serve(): Promise<void> {
 const argv = process.argv.slice(2)
 if (argv[0] === 'migrate') {
   process.exitCode = await runMigrateCli(argv, process.env, { out: (l) => console.log(l), err: (l) => console.error(l) }, { dirs: DIRS, kernelRoot: KERNEL_ROOT })
+} else if (argv[0] === 'authz') {
+  const io = { out: (l: string) => console.log(l), err: (l: string) => console.error(l) }
+  if ((argv[1] !== 'sync' && argv[1] !== 'sweep') || argv.length > 4) {
+    process.exitCode = await runAuthzCli(argv, io, undefined as never)
+  } else {
+    try {
+      const wired = wireAuthzCli(readConfig(process.env, { modulesRoot: join(KERNEL_ROOT, 'modules'), kernelRoot: KERNEL_ROOT }), { dirs: DIRS })
+      process.exitCode = await runAuthzCli(argv, io, wired.deps).finally(() => wired.close())
+    } catch (err) {
+      console.error(`kernel-api authz: ${(err as Error).message}`)
+      process.exitCode = 1
+    }
+  }
 } else if (argv.length === 0) {
   try {
     await serve()

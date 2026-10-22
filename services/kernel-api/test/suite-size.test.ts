@@ -29,6 +29,7 @@ export const NAMED: Record<'unit' | 'integration' | 'authz', Record<string, numb
     // G8 (static half): the audience mapper in the realm template
     'test/keycloak/realm-audience.test.ts': 4,
     // TASK-081
+    'test/authz/cli.test.ts': 4,
     'test/authz/fixture.test.ts': 2,
     'test/authz/no-role-check.test.ts': 4,
     'test/authz/stepup.test.ts': 5,
