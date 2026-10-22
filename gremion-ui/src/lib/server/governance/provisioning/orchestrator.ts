@@ -138,6 +138,11 @@ async function provisionOrgUnitLocked(
 
   for (const sub of OPTIONAL) {
     const wanted = wantedSubsystems(unit).includes(sub)
+    if (wanted && !adapters[sub]) {
+      // Module ENABLED and wanted but no adapter registered: still skipped, but
+      // never silently (a misconfigured deployment would otherwise look fine).
+      console.warn(`[provisioning] ${sub} is wanted for ${unitId} but has no adapter; skipped`)
+    }
     if (!wanted || !adapters[sub]) {
       results.push({ subsystem: sub, status: 'skipped', willRetry: false })
       continue
