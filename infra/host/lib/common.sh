@@ -381,3 +381,16 @@ state_kc_cid() {
     [[ "$n" -eq 1 ]] || return 1
     printf '%s\n' "${ids//[[:space:]]/}"
 }
+
+# executor_unit_action <restart|try-restart> — (re)start gremion-executor.service
+# where a release becomes usable. A host without the unit (a scratch tree, a
+# test) is a skip; a systemctl failure is a warning, never a failed deploy/init.
+executor_unit_action() {
+    local action="${1:?restart|try-restart}" unit=/etc/systemd/system/gremion-executor.service
+    command -v systemctl >/dev/null 2>&1 && [[ -f "$unit" ]] || return 0
+    local -a sc=(systemctl)
+    [[ "${EUID:-$(id -u)}" -eq 0 ]] || sc=(sudo -n systemctl)
+    "${sc[@]}" "$action" gremion-executor.service         || printf 'WARNING: systemctl %s gremion-executor.service failed; start it by hand
+' "$action" >&2
+    return 0
+}

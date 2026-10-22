@@ -40,6 +40,19 @@ describe('validateNewCustomer', () => {
     expect(validateNewCustomer({ ...GOOD, enable: ['board'] }).enable).toMatch(/board/)
     expect(validateNewCustomer({ ...GOOD, enable: ['calendar', 'vault'] }).enable).toMatch(/vault/)
   })
+  it('a ticked module without a document reference is a dpia field error (panel-level)', () => {
+    const blank = validateNewCustomer({ ...GOOD, enable: ['calendar'], dpia: { calendar: { requiresDpia: false, documentRef: '   ' } } })
+    expect(blank.dpia).toMatch(/calendar/)
+    const absent = validateNewCustomer({ ...GOOD, enable: ['calendar', 'votes'], dpia: { votes: { requiresDpia: false, documentRef: 'TOM-2' } } })
+    expect(absent.dpia).toMatch(/calendar/)
+    expect(absent.dpia).not.toMatch(/votes/)
+  })
+  it('the document reference is capped at 500 characters, like request-verify', () => {
+    const at = validateNewCustomer({ ...GOOD, enable: ['calendar'], dpia: { calendar: { requiresDpia: false, documentRef: 'x'.repeat(500) } } })
+    expect(at).toEqual({})
+    const over = validateNewCustomer({ ...GOOD, enable: ['calendar'], dpia: { calendar: { requiresDpia: false, documentRef: 'x'.repeat(501) } } })
+    expect(over.dpia).toMatch(/500/)
+  })
   it('bad slug, platform, host, admins, brand are field errors', () => {
     const e = validateNewCustomer({ ...GOOD, slug: 'platform', host: 'nohost', itAdmin: 'x', councilAdmin: 'y', brandProduct: '', brandOrgShort: 'x'.repeat(21) })
     expect(Object.keys(e).sort()).toEqual(['brandOrgShort', 'brandProduct', 'councilAdmin', 'host', 'itAdmin', 'slug'])

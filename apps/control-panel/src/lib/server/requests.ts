@@ -68,6 +68,11 @@ export function validateNewCustomer(input: NewCustomerInput, deny: Readonly<Reco
       // brief Q3: a written decision (document reference) for EVERY ticked module
       const missing = [...new Set(input.enable)].filter((m) => (input.dpia[m]?.documentRef ?? '').trim() === '')
       if (missing.length > 0) errors.dpia = `Dokumentverweis zur DPIA-Entscheidung fehlt: ${missing.join(', ')}.`
+      else {
+        // the same 500-character cap request-verify applies (document_ref)
+        const long = [...new Set(input.enable)].filter((m) => (input.dpia[m]?.documentRef ?? '').trim().length > 500)
+        if (long.length > 0) errors.dpia = `Dokumentverweis zur DPIA-Entscheidung: höchstens 500 Zeichen (${long.join(', ')}).`
+      }
     }
   }
   return errors

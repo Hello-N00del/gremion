@@ -307,6 +307,9 @@ cmd_init() {
     # project reads it from etc/secrets/grafana.
     [[ -s "${ROOT}/etc/secrets/grafana/client_secret" ]] \
         || info "NOTE: etc/secrets/grafana/client_secret is absent: Grafana (compose/observability) signs nobody in until the grafana client's secret is read with kcadm and written there, 0600 (compose/observability/README.md, Access, block A)"
+    # The executor needs gremion_platform and its role, which this init just
+    # made: this is where bootstrap's enabled-but-not-started unit is started.
+    executor_unit_action restart
     ok "init done"
 }
 

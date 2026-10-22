@@ -1094,8 +1094,7 @@ shim_reboot_env() {
     local bs="${PROJECT_ROOT}/infra/host/bootstrap.sh"
     grep -qE '^stage_executor\(\) \{' "$bs"
     grep -qF 'render_unit gremion-executor.service /etc/systemd/system/gremion-executor.service' "$bs"
-    grep -qF 'systemctl enable --now gremion-executor.service' "$bs"
-    grep -qF 'systemctl is-active --quiet gremion-executor.service' "$bs"
+    grep -qF 'systemctl enable gremion-executor.service' "$bs"
     grep -qE '^ +executor\) +stage_executor ;;' "$bs"
     # 'all' runs it, after the agent stage
     grep -qE 'stage_agent; stage_executor|stage_firewall; stage_agent; stage_executor' "$bs"
@@ -1109,8 +1108,39 @@ shim_reboot_env() {
     [ -n "$body" ]
     grep -qF '$SCRIPT_DIR/bin/gremion-executor' <<<"$body"
     grep -qF '/bin/gremion-executor"' <<<"$body"
-    grep -qF 'lib/common.sh' <<<"$body"
+    grep -qF 'install -m 0644 -o "${DEPLOY_USER}" -g "${DEPLOY_USER}"         "$SCRIPT_DIR/lib/common.sh" "${root}/lib/common.sh"' <<<"$body"
     grep -qF 'executor' <(grep -F 'executor' <<<"$(awk '/^usage\(\)/,/^}/' "$bs"; sed -n '/^Stages:/,/^Options:/p' "$bs")")
+}
+
+# TASK-043d-1 verify-r2 HIGH: a fresh host has no release and no gremion_platform.
+@test "bootstrap's executor stage enables the unit without --now and asserts is-enabled, never is-active" {
+    local bs="${PROJECT_ROOT}/infra/host/bootstrap.sh"
+    local body; body="$(awk '/^stage_executor\(\) \{/,/^}/' "$bs")"
+    [ -n "$body" ]
+    run grep -F 'enable --now' <<<"$body"
+    [ "$status" -ne 0 ]
+    run grep -F 'is-active' <<<"$body"
+    [ "$status" -ne 0 ]
+    grep -qF 'systemctl enable gremion-executor.service' <<<"$body"
+    grep -qF 'systemctl is-enabled --quiet gremion-executor.service' <<<"$body"
+}
+
+@test "the executor unit template skips cleanly before the first release (ConditionPathExists on the release's executor lib)" {
+    local u="${PROJECT_ROOT}/infra/host/templates/systemd/gremion-executor.service"
+    grep -qxF 'ConditionPathExists=${GREMION_ROOT}/current/infra/host/lib/executor/db.sh' "$u"
+    # the condition belongs to [Unit], before [Service]
+    local cl sl
+    cl="$(grep -n '^ConditionPathExists=' "$u" | cut -d: -f1)"; sl="$(grep -n '^\[Service\]' "$u" | cut -d: -f1)"
+    [ "$cl" -lt "$sl" ]
+}
+
+@test "the executor is started where it can run: gremion-tenant init restarts it, gremion-deploy step 12 try-restarts it" {
+    local h="${PROJECT_ROOT}/infra/host"
+    grep -qE '^executor_unit_action\(\) \{' "$h/lib/common.sh"
+    local init; init="$(awk '/^cmd_init\(\) \{/,/^}/' "$h/bin/gremion-tenant")"
+    grep -qF 'executor_unit_action restart' <<<"$init"
+    local rec; rec="$(awk '/^step_12_record\(\) \{/,/^}/' "$h/bin/gremion-deploy")"
+    grep -qF 'executor_unit_action try-restart' <<<"$rec"
 }
 
 # TASK-043d-1 verify-r1 HIGH 3: the customer proof must not call the

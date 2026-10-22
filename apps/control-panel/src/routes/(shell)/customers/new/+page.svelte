@@ -81,7 +81,7 @@
             </label>
             <label>
               Dokumentverweis
-              <input name={`dpiaRef_${m.id}`} autocomplete="off" value={String(dpiaValues[m.id]?.documentRef ?? '')} />
+              <input name={`dpiaRef_${m.id}`} autocomplete="off" maxlength="500" value={String(dpiaValues[m.id]?.documentRef ?? '')} />
             </label>
           </div>
         {/if}

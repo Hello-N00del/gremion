@@ -948,11 +948,17 @@ stage_executor() {
     # render_unit takes TWO arguments (the unit's NAME and the destination).
     render_unit gremion-executor.service /etc/systemd/system/gremion-executor.service
     systemctl daemon-reload
-    systemctl enable --now gremion-executor.service
+    # ENABLE only, no --now: on a fresh host there is no release yet
+    # (<root>/current) and no gremion_platform, so the executor would exit 2 at
+    # once and the unit would crash-loop (or a racy liveness assert would abort 'all'
+    # before the timers stage). The unit carries ConditionPathExists on the
+    # release's executor lib, so a boot before the first deploy is a clean skip.
+    # It is STARTED by gremion-tenant init (after the executor role exists) and
+    # try-restarted by gremion-deploy step 12 (a new release becomes current).
+    systemctl enable gremion-executor.service
 
     assert "gremion-executor enabled at boot" systemctl is-enabled --quiet gremion-executor.service
-    assert "gremion-executor is active"       systemctl is-active --quiet gremion-executor.service
-    ok "gremion-executor.service installed; it pulls requests from gremion_platform and opens no socket"
+    ok "gremion-executor.service installed and enabled; gremion-tenant init starts it once gremion_platform exists"
 }
 
 # ──────────────────────────────────────────────────────────────────────────
