@@ -176,7 +176,7 @@
         "0006_ops_setup.sql": "18c1f09a9227f8b10624ebc6c27cd743af1a9a7d1fb397c9339503b7d3d8396e",
         "0007_plt_isolation_test_result.sql": "48fbcc82a3f9f3553ecd811b401613b6a3274c38f316d5cdd814c341634f1cb0",
         "0008_ops_dpia_decision.sql": "38f024036723f77869b1f7958514c350c2649348a3041d80056a7103df09f506",
-        "0009_plt_provisioning_request.sql": "0ea058cbbf2fbfe0873a73e700fb8628a4ec6766ef2f7184c839362c3628a48f"
+        "0009_plt_provisioning_request.sql": "354ff8108189d593f604b1b2d526c9e38608326f3001e1e32c533b9f00d84398"
       }
     }
   }

@@ -52,9 +52,9 @@ export const actions: Actions = {
     if (!locals.operator) error(403, 'not signed in through the ops realm')
     const s = await situation(r.config)
     const empty = {} as Record<string, string>
-    if (s.disabled) return fail(409, { disabled: s.disabled, errors: empty, values: {}, key: '' })
+    if (s.disabled) return fail(409, { disabled: s.disabled, errors: empty, values: {}, key: randomUUID() })
     const p = platformDb(r.config)
-    if (!p) return fail(409, { disabled: newCustomerDisabledReason(r.config, null), errors: empty, values: {}, key: '' })
+    if (!p) return fail(409, { disabled: newCustomerDisabledReason(r.config, null), errors: empty, values: {}, key: randomUUID() })
     const form = await request.formData()
     const enable = form.getAll('enable').filter((v): v is string => typeof v === 'string')
     const dpia: NewCustomerInput['dpia'] = {}

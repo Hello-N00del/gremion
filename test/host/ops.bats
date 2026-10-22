@@ -1112,3 +1112,18 @@ shim_reboot_env() {
     grep -qF 'lib/common.sh' <<<"$body"
     grep -qF 'executor' <(grep -F 'executor' <<<"$(awk '/^usage\(\)/,/^}/' "$bs"; sed -n '/^Stages:/,/^Options:/p' "$bs")")
 }
+
+# TASK-043d-1 verify-r1 HIGH 3: the customer proof must not call the
+# decommissioned `gremion-tenant create` (it exits 2); it queues a request and
+# runs the executor for it.
+@test "customer-provision-proof.sh creates through panel-create + executor-once, never the decommissioned gremion-tenant create" {
+    local f="${PROJECT_ROOT}/test/host/integration/customer-provision-proof.sh"
+    bash -n "$f"
+    run grep -nE '(^|[^_a-z-])tenant create ' "$f"
+    [ "$status" -ne 0 ]
+    grep -qE '^panel_create\(\) \{' "$f"
+    grep -qE '^executor_once\(\) \{' "$f"
+    grep -qF 'tenant request create --args-file' "$f"
+    grep -qF 'executor --once' "$f"
+    grep -qE 'customer-executor-once-x\) +phase_customer_executor_once' "$f"
+}

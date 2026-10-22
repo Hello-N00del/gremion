@@ -1,5 +1,5 @@
 -- gremion:phase expand
--- gremion_platform, 0005 (TASK-043d-1, D R31-I4): the operator control
+-- gremion_platform, 0009 (TASK-043d-1, D R31-I4): the operator control
 -- panel's request queue and the host-side executor's side of it.
 --
 -- The panel holds no docker, no host tool and no table write: its ONE write is
