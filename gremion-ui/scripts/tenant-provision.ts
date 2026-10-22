@@ -57,6 +57,7 @@ import {
   type AdminSpec,
   type CreateSpec,
   type DpiaSpec,
+  type MailStampExpectation,
   type ProvisioningDeps,
 } from '@gremion/provisioning'
 import { assertPlatform, dropKernelDatabase, ensureKernelApiReader, KERNEL_API_READS, type LifecycleModule, type ModuleServer } from '@gremion/tenant-store/lifecycle'
@@ -81,6 +82,7 @@ import { fixtureIdentities } from '../src/lib/server/tenant/provisioner/fixture-
 import {
   reconcileRealm,
   reconcileFleet,
+  parseMailSenderJson,
   type ReconcileReport,
   type FleetReport,
 } from '../src/lib/server/tenant/provisioner/reconcile'
@@ -415,6 +417,13 @@ function resolveLiveEnv(needEdge: boolean) {
   }
 }
 
+/** PLAN-mail-transport M2: the sender the host stamped, from its `--sender-json`
+ *  descriptor (absent = stalwart). The container reads no mail.env. */
+function mailStampExpectation(): MailStampExpectation {
+  const s = parseMailSenderJson(flag('--sender-json'), reqEnv('PLATFORM_DOMAIN'), 'unused')
+  return s.mode === 'relay' ? { mode: 'relay', host: s.host, port: s.port, fromAddress: s.fromAddress, user: s.user } : { mode: 'stalwart' }
+}
+
 async function liveDeps(opts: { configFile?: string; bodyName?: string; needEdge?: boolean } = {}): Promise<Live> {
   const catalogue = loadModules()
   const env = resolveLiveEnv(opts.needEdge ?? false)
@@ -452,6 +461,7 @@ async function liveDeps(opts: { configFile?: string; bodyName?: string; needEdge
     })
     const deps: ProvisioningDeps = {
       platformDomain: env.platformDomain,
+      mailSender: mailStampExpectation(),
       ledger: pgLedger(platform),
       // TASK-044: the level-1 gate over gremion_platform, on the host's derived release tip
       gate: pgGate(platform, { releaseTipSha: releaseTip(), allowFixtureEvidence: scratchFixturesAllowed(process.env.GREMION_SCRATCH_FIXTURES, process.env.PLATFORM_DATABASE_URL, process.env.GREMION_PRODUCTION_STACK) }),
@@ -798,7 +808,9 @@ async function reconcileOne(tenant: Tenant, base: Record<string, unknown>, verif
     apexDomain: apexDomain(),
     base,
     verifyOnly,
-    sender: { platformDomain: reqEnv('PLATFORM_DOMAIN'), token: tokenFor(tenant.slug) },
+    // PLAN-mail-transport M1: the host (which owns mail.env) hands the sender
+    // descriptor of its deploy-time mail transport; absent = stalwart (legacy).
+    sender: parseMailSenderJson(flag('--sender-json'), reqEnv('PLATFORM_DOMAIN'), tokenFor(tenant.slug)),
     fixtures: fixtureIdentities(MIGRATIONS_DIR),
   })
 }
@@ -943,11 +955,11 @@ function cmdMaterializeConfig(): void {
 const USAGE = `usage: tenant-create <verb> ...
   init [--realm-only] [--panel-origin <origin>]
   phase-a <slug> --host <host> --config <file> --operator <uuid> --it-admin <email> --council-admin <email> [--enable a,b] [--body-name <name>]
-  record-step <slug> mail_principal_issued --operator <uuid>
+  record-step <slug> mail_principal_issued --operator <uuid> [--sender-json <json>]
   phase-b <slug> (the phase-a flags)
   render-router <slug>
   suspend <slug> --operator <uuid> | resume <slug> --operator <uuid>
-  reconcile [--verify-only] <slug>|--all
+  reconcile [--verify-only] <slug>|--all [--sender-json <json>]
   status <slug>
   operator-add <email> [--no-mail]
   delete <slug> | bootstrap-provisioner | materialize-config <slug> [--config <path>]

@@ -76,6 +76,7 @@ export type {
   GatePort,
   KernelDbPort,
   KernelPostCondition,
+  MailStampExpectation,
   ModulesPort,
   ProvisioningDeps,
   RealmPort,
