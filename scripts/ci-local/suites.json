@@ -643,6 +643,17 @@
       "excludeGlobs": ["packages/provisioning/test/integration/**"]
     },
     {
+      "id": "kernel-member-import-unit",
+      "repo": "kernel",
+      "category": "unit",
+      "cwd": "packages/member-import",
+      "kind": "vitest",
+      "command": "pnpm run test",
+      "timeoutMs": 600000,
+      "requiresStack": false,
+      "testGlobs": ["packages/member-import/test/**/*.test.ts"]
+    },
+    {
       "id": "kernel-provisioning-integration",
       "repo": "kernel",
       "category": "integration",

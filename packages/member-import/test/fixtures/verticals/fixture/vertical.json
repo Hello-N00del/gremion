@@ -1,0 +1,1 @@
+{ "schema_version": 1, "id": "fixture", "name": "Fixture vertical", "blueprint": "blueprint.json", "wording": "wording.de.json", "roles": "roles.json" }

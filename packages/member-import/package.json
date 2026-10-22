@@ -1,0 +1,25 @@
+{
+  "name": "@gremion/member-import",
+  "version": "0.1.0",
+  "license": "AGPL-3.0-only",
+  "description": "Member list import and vertical seed for the Gremion governance kernel (TASK-031): parse, validate and plan a member list, load a vertical's data files. SvelteKit-free; every side effect sits behind a port.",
+  "type": "module",
+  "private": true,
+  "exports": {
+    ".": {
+      "import": "./src/index.ts"
+    }
+  },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.0",
+    "typescript": "^5.4.5",
+    "vitest": "^4.1.11"
+  }
+}
