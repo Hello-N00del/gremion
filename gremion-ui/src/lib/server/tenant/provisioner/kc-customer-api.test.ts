@@ -163,6 +163,47 @@ describe('ensureInvitedUser (FLOW-IDN-002, Q9)', () => {
     expect(calls.filter((c) => c.path.includes('execute-actions-email'))).toHaveLength(1)
   })
 
+  // TASK-031 D-5 (operator 2026-10-22): an imported member is asked for a new
+  // password ONLY; the TOTP is enrolled at the first step-up. The parameter is
+  // additive: every other caller keeps the administrator pair above.
+  it('D-5: requiredActions UPDATE_PASSWORD only reaches both the create and the execute-actions mail; names land on create', async () => {
+    let createdUser = false
+    const u1 = userStore('u-1')
+    const { transport, calls } = transportWith({
+      [USERS]: () => (createdUser ? [{ id: 'u-1', email: EMAIL }] : []),
+      [`POST ${R}/users`]: () => {
+        createdUser = true
+        return undefined
+      },
+      [`GET ${R}/roles/member`]: { id: 'r-9', name: 'member' },
+      [`GET ${R}/users/profile`]: DEFAULT_PROFILE,
+      [`GET ${R}/users/u-1`]: u1.get,
+      [`PUT ${R}/users/u-1`]: u1.put,
+    })
+    const r = await new KcProvisionApi(transport).ensureInvitedUser('musterstadt', {
+      email: EMAIL,
+      realmRole: 'member',
+      requiredActions: ['UPDATE_PASSWORD'],
+      firstName: 'Anna Maria',
+      lastName: 'Berger',
+    })
+    expect(r).toEqual({ id: 'u-1', created: true, invited: true })
+    const create = calls.find((c) => c.method === 'POST' && c.path === `${R}/users`)!
+    expect(create.body).toMatchObject({ requiredActions: ['UPDATE_PASSWORD'], firstName: 'Anna Maria', lastName: 'Berger' })
+    expect(calls.find((c) => c.path.startsWith(`${R}/users/u-1/execute-actions-email`))!.body).toEqual(['UPDATE_PASSWORD'])
+  })
+
+  it('skipIfHasCredential: an existing user with a credential and no mark is linked, never mailed', async () => {
+    const { transport, calls } = transportWith({
+      [USERS]: [{ id: 'u-1', email: EMAIL }],
+      [`GET ${R}/roles/member`]: { id: 'r-9', name: 'member' },
+      [`GET ${R}/users/u-1/credentials`]: [{ id: 'c-1', type: 'password' }],
+    })
+    const r = await new KcProvisionApi(transport).ensureInvitedUser('musterstadt', { email: EMAIL, realmRole: 'member', skipIfHasCredential: true })
+    expect(r).toEqual({ id: 'u-1', created: false, invited: false })
+    expect(calls.some((c) => c.path.includes('execute-actions-email'))).toBe(false)
+  })
+
   it('a missing realm role is a loud failure, not a user without a role', async () => {
     const { transport } = transportWith({ [USERS]: [{ id: 'u-1', email: EMAIL }] })
     await expect(new KcProvisionApi(transport).ensureInvitedUser('musterstadt', { email: EMAIL, realmRole: 'it-admin' })).rejects.toThrow(/realm role "it-admin" not found/)

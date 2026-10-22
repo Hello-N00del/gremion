@@ -356,9 +356,21 @@ export class KcProvisionApi {
    */
   async ensureInvitedUser(
     realm: string,
-    spec: { email: string; realmRole: string | null; lifespanSeconds?: number },
+    spec: {
+      email: string
+      realmRole: string | null
+      lifespanSeconds?: number
+      /** Default: the administrator pair, UPDATE_PASSWORD + CONFIGURE_TOTP (043). TASK-031 D-5: an imported member gets ['UPDATE_PASSWORD'] only. */
+      requiredActions?: readonly string[]
+      /** Set on CREATE only; an existing user's names are never updated. */
+      firstName?: string
+      lastName?: string
+      /** A found, never-invited user that already holds a credential is linked, not mailed. */
+      skipIfHasCredential?: boolean
+    },
     nowIso: () => string = () => new Date().toISOString(),
   ): Promise<{ id: string; created: boolean; invited: boolean }> {
+    const requiredActions = [...(spec.requiredActions ?? ['UPDATE_PASSWORD', 'CONFIGURE_TOTP'])]
     const email = spec.email.toLowerCase()
     const find = async () =>
       (await this.realmGet<Array<{ id?: string; email?: string; attributes?: Record<string, string[]> }>>(
@@ -374,7 +386,9 @@ export class KcProvisionApi {
           email,
           emailVerified: false,
           enabled: true,
-          requiredActions: ['UPDATE_PASSWORD', 'CONFIGURE_TOTP'],
+          requiredActions,
+          ...(spec.firstName ? { firstName: spec.firstName } : {}),
+          ...(spec.lastName ? { lastName: spec.lastName } : {}),
         })
         created = true
       } catch (err) {
@@ -390,10 +404,14 @@ export class KcProvisionApi {
       await this.realmReq(realm, 'POST', `/users/${id}/role-mappings/realm`, [role])
     }
     if (found?.attributes?.[INVITE_MARK]?.length) return { id, created, invited: false }
+    if (spec.skipIfHasCredential && !created) {
+      const creds = (await this.realmGet<unknown[]>(realm, `/users/${id}/credentials`)) ?? []
+      if (creds.length > 0) return { id, created, invited: false }
+    }
     // Before any mail: the mark must be able to persist (review B2 MEDIUM, r2).
     await this.ensureInviteMarkDeclared(realm)
     const lifespan = spec.lifespanSeconds ?? 72 * 3600
-    await this.realmReq(realm, 'PUT', `/users/${id}/execute-actions-email?lifespan=${lifespan}`, ['UPDATE_PASSWORD', 'CONFIGURE_TOTP'])
+    await this.realmReq(realm, 'PUT', `/users/${id}/execute-actions-email?lifespan=${lifespan}`, requiredActions)
     // The FULL representation: on Keycloak 24+ a PUT carrying `attributes`
     // replaces the user's attribute set, root attributes included.
     const user = await this.realmGet<Record<string, unknown> & { attributes?: Record<string, string[]> }>(realm, `/users/${id}`)
