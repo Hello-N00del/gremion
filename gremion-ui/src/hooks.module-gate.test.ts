@@ -117,11 +117,10 @@ describe('module-disable gate parity (#256-1)', () => {
   })
 })
 
-// #290 / F1 (HANDOVER-v8 Part D): a disabled-module PAGE deep link must render the
-// styled +error.svelte "Modul nicht aktiv" surface, which means the throw moved to
-// the LAYOUT LOAD (a throw from the handle hook only hits the bare static error
-// template). So the authGuard hook now passes PAGE paths THROUGH (no 403 there);
-// +layout.server.ts uses disabledModuleForPath to throw error(403,'module-disabled:…').
+// #290 / F1 + R33d: a disabled-module PAGE deep link is recognised here (disabledModuleForPath) and answered by
+// the authGuard hook with 403 + the in-shell notice page (module-off-response.ts, unit-tested in
+// lib/server/module-off-response.test.ts; the real built-server proof is the StuRaOS repo gremion-ui/scripts/prove-module-off-page.mjs (kernel tenants are provisioned, no default tenant to seed)).
+// It must not be thrown from the root layout load: SvelteKit then renders the static error template.
 describe('disabledModuleForPath — PAGE module-off detection (#290 / F1 fix)', () => {
   it('returns the owning moduleId for a disabled-module page path', async () => {
     modulesState.demo_widget = false
@@ -135,22 +134,6 @@ describe('disabledModuleForPath — PAGE module-off detection (#290 / F1 fix)', 
     const { disabledModuleForPath } = await import('$lib/server/module-gate')
     expect(disabledModuleForPath('/demo-widget/thing/123')).toBeNull()
     expect(disabledModuleForPath('/dashboard')).toBeNull()
-  })
-
-  it('authGuard does NOT 403 a disabled-module PAGE in the hook (the styled 403 is thrown in the layout load)', async () => {
-    // The hook gates ONLY /api/* (a machine caller gets the bare 403); a disabled
-    // PAGE deep-link is passed through here and surfaced via +layout.server.ts. We
-    // assert the hook's PAGE behavior through disabledModuleForPath (the seam the
-    // layout uses) rather than driving a page path through canAccess, since a
-    // synthetic module has no PAGE_ACCESS entry (canAccess would dev-throw before
-    // the gate is even consulted — which is itself the page-access guard, not the
-    // module gate under test here).
-    modulesState.demo_widget = false
-    const { disabledModuleForPath } = await import('$lib/server/module-gate')
-    // The layout-load seam reports the owning module for the disabled page path …
-    expect(disabledModuleForPath('/demo-widget')).toBe('demo_widget')
-    // … and the authGuard hook itself gates only /api/* prefixes (proven above),
-    // so it never emits a bare 403 for a PAGE path.
   })
 })
 

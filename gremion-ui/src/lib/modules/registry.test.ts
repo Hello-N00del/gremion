@@ -80,6 +80,7 @@ describe('MODULE_MANIFESTS — barrel source order (P3-WP2)', () => {
 const KERNEL_PAGE_ACCESS: Record<string, Role> = {
   // core
   dashboard: Role.Guest,
+  'module-off': Role.Guest,
   settings: Role.Member,
   systemstatus: Role.ITAdmin,
   // governance

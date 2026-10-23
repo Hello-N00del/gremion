@@ -1,7 +1,5 @@
 import type { LayoutServerLoad } from './$types'
-import { error } from '@sveltejs/kit'
 import { Role } from '$lib/auth'
-import { disabledModuleForPath } from '$lib/server/module-gate'
 import { makeAuthHelpers } from '$lib/auth/group-helpers'
 import { capabilitiesForTenant } from '$lib/auth/capabilities'
 import { filterNavForSession, navSchema, retermNav } from '$lib/components/layout/nav-schema'
@@ -96,29 +94,15 @@ export const load: LayoutServerLoad = async (event) => {
   // Read alongside modules from the same config; absent for StuRa tenant #1, so
   // termFor falls back to the built-in literals (byte-identical originator).
   let terms: Record<string, string> | undefined
-  // Keep the resolved config so the #290 module gate below reuses it (no second
-  // readConfig); null when the config read failed (degrade, don't gate).
-  let cfg: GremionConfig | null = null
   try {
-    cfg = readConfig()
+    const cfg: GremionConfig = readConfig()
     modules = cfg.modules
     terms = cfg.terms
   } catch {
-    cfg = null
     modules = {}
     terms = undefined
   }
   const financeEnabled = modules.finance === true
-  // #290 (HANDOVER-v8 Part D): a disabled-module PAGE deep link throws HERE (in the
-  // layout LOAD) so SvelteKit renders the styled +error.svelte "Modul nicht aktiv"
-  // surface — a throw from the handle hook only reaches the bare static error
-  // template (see hooks.server.ts). /api/* stays gated in the hook (bare 403). The
-  // moduleId rides the message so +error.svelte can name the module + offer
-  // "Module verwalten". Reuses the already-read cfg; the event.url guard is
-  // defensive (a real LayoutServerLoadEvent always has url) so a malformed event
-  // can never 500 the whole shell. Runs after auth (locals.user set by authGuard).
-  const disabledModule = cfg && event.url ? disabledModuleForPath(event.url.pathname, cfg) : null
-  // (The throw itself happens below, once nav/brand are built, so the error body can carry the shell.)
   // Guest is the baseline tier — every visitor (even unauthenticated) sees the
   // guest-gated workspace items, so floor the role set at Guest. hasRole([]) is
   // false for *every* role, which would otherwise hide even Übersicht/Kalender.
@@ -152,22 +136,10 @@ export const load: LayoutServerLoad = async (event) => {
   // #290 (HANDOVER-v8 Part D): expose module enablement to the Dashboard so it
   // strips finance KPIs/CTAs on a finance-OFF tenant (no dead links). The default
   // tenant runs finance ON, so the dashboard is byte-identical for tenant #1.
-  // R33c UX-1: still a 403, but the body carries the shell data (nav, brand, who is signed in) because a throw
-  // from the ROOT layout load renders +error.svelte WITHOUT +layout.svelte (no CSS, no rail). +error.svelte
-  // re-composes AppShell from this body, so the person sees the app with a styled "Modul nicht aktiv" page.
-  if (disabledModule) {
-    const u = session?.user as { name?: string; roles?: Role[]; groups?: string[] } | undefined
-    error(403, {
-      message: `module-disabled:${disabledModule}`,
-      shell: {
-        nav,
-        brand,
-        sourceUrl,
-        modules,
-        user: u ? { name: u.name ?? '', roles: u.roles ?? [], groups: u.groups ?? [] } : null,
-      },
-    })
-  }
+  // A disabled-module PAGE deep link never reaches this load: hooks.server.ts answers it with 403 and the
+  // in-shell "Modul nicht aktiv" page (module-off-response.ts) before any route resolves. It must NOT be
+  // thrown from here: an error() from the ROOT layout load renders SvelteKit's static error template, not
+  // +error.svelte inside +layout.svelte (no shell, raw "module-disabled:<id>" text).
   if (!session) return { session: null, nav, counts: emptyCounts, brand, terms: termsPayload, instanceState, financeEnabled, sourceUrl }
   const { user, expires } = session as { user: typeof session.user; expires: string }
   // Fetch DB-backed badge counts and the Matrix unread total in parallel — the

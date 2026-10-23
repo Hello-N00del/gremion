@@ -9,7 +9,8 @@ import type { SessionUser } from '$lib/auth/types'
 import { acrToLoa } from '$lib/auth/step-up'
 import { readConfig } from '$lib/server/config'
 import { RETENTION_DEFAULTS } from '$lib/retention-tiers'
-import { moduleGateResponse, disabledModuleForPublicPath } from '$lib/server/module-gate'
+import { moduleGateResponse, disabledModuleForPublicPath, disabledModuleForPath } from '$lib/server/module-gate'
+import { moduleOffPageResponse } from '$lib/server/module-off-response'
 import { requireBrand } from '$lib/server/brand'
 import { instanceThemeStyleTag } from '$lib/theme/instance-theme'
 import { waitForDbReady, isTransientDbStartupError } from '$lib/server/db'
@@ -727,15 +728,19 @@ export const authGuard: Handle = async ({ event, resolve }) => {
   // above enforces the identical route-prefix 403; nav-hiding / migration-skip
   // is P0.2.
   //
-  // ONLY /api/* is gated HERE: a machine caller gets the bare route-prefix 403.
-  // A disabled-module PAGE deep link is handled in +layout.server.ts instead —
-  // throwing error() from THIS handle hook would render the bare static error
-  // template, NOT +error.svelte (SvelteKit only routes load/render throws to the
-  // error page). #290's styled "Modul nicht aktiv" surface therefore lives in
-  // the layout load (see +layout.server.ts).
+  // /api/* gets the bare machine-readable 403. A disabled-module PAGE deep link
+  // answers 403 with the styled in-shell "Modul nicht aktiv" page: the notice is
+  // a real route (routes/module-off/[id]) fetched in-process and returned with
+  // the 403 status, so the disabled module's own page/layout loads never run and
+  // the page renders INSIDE the root +layout.svelte. (A throw from the ROOT
+  // layout load cannot do this — SvelteKit renders the static error template
+  // when the root layout load fails.) See module-off-response.ts.
   if (path.startsWith('/api/')) {
     const moduleGate = moduleGateResponse(path)
     if (moduleGate) return moduleGate
+  } else {
+    const disabled = disabledModuleForPath(path)
+    if (disabled) return moduleOffPageResponse(event, disabled)
   }
 
   return resolve(event)
