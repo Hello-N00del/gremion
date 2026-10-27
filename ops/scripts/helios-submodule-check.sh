@@ -155,7 +155,7 @@ for candidate in LICENSE LICENSE.txt LICENSE.md; do
 done
 shopt -s nocasematch
 while IFS= read -r name; do
-  [ -n "$name" ] && [ "$name" != "$licence_file" ] || continue
+  if [ -z "$name" ] || [ "$name" = "$licence_file" ]; then continue; fi
   if [[ "$name" =~ ^(LICEN[CS]E|COPYING|UNLICENSE) ]]; then
     report_fail "licence the pinned commit also carries licence file $name next to ${licence_file:-no LICENSE}; review it and this check"
   fi
