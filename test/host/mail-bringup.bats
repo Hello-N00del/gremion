@@ -1597,10 +1597,21 @@ Verify return code: 62 (Hostname mismatch, certificate is not valid for 'relay.e
     for a in 1 2 3 4 5 6a 6b; do
         run "$BRINGUP" --assert "$a"
         [ "$status" -eq 2 ] || { echo "assert $a: status=$status $output"; return 1; }
-        [[ "$output" == *"MAIL_TRANSPORT=relay"* && "$output" == *"r1"* ]] || { echo "assert $a: $output"; return 1; }
+        # the refusal's OWN words: the generic usage text also names MAIL_TRANSPORT=relay and r1
+        [[ "$output" == *"a skipped check is not a pass"* && "$output" != *"unknown assert"* ]] || { echo "assert $a: $output"; return 1; }
     done
     refute_recorded openssl ''
     refute_recorded curl ''
+}
+
+@test "M6 relay: no --assert (or an empty one) is parse_args' named 'nothing to do' (exit 2), never an empty 'unknown assert: '" {
+    write_relay_bringup_env 587
+    run "$BRINGUP"
+    [ "$status" -eq 2 ] || { echo "status=$status $output"; return 1; }
+    [[ "$output" == *"nothing to do"* && "$output" != *"unknown assert"* ]] || { echo "$output"; return 1; }
+    run "$BRINGUP" --assert ""
+    [ "$status" -eq 2 ] || { echo "empty: status=$status $output"; return 1; }
+    [[ "$output" == *"nothing to do"* && "$output" != *"unknown assert"* ]]
 }
 
 @test "M6 stalwart mode is untouched: the relay asserts do not exist there (exit 2, unknown assert)" {
