@@ -129,8 +129,9 @@ order() { cat "$ORDER"; }
     drive handle_import_members
     [ "$status" -eq 0 ]
     [ "$(order | sed -E 's/ stdin=.*//; s/^(dump [a-z]+).*/\1/' | tr '\n' '|')" = "tc import-validate #1|dump take|tc import-apply #1|tc import-apply #2|dump discard|" ]
-    grep -q "^dump take --release import-0192f0c4 --db ${DB}\$" "$ORDER"
-    grep -q '^dump discard --release import-0192f0c4 --reason member import verified' "$ORDER"
+    # full request id: an 8-hex UUIDv7 prefix repeats for ~65 s across customers (r33e verify MED)
+    grep -q "^dump take --release import-${REQ} --db ${DB}\$" "$ORDER"
+    grep -q "^dump discard --release import-${REQ} --reason member import verified" "$ORDER"
     grep -q -- "--expect-sha256 ${SHA}" "$ORDER"
     [[ "$output" == *"import applied and verified"* ]]
 }
@@ -172,7 +173,7 @@ order() { cat "$ORDER"; }
     [ "$status" -ne 0 ]
     [[ "$output" == *"the rerun was not a no-op"* ]]
     [[ "$output" == *"KEPT"* ]]
-    [[ "$output" == *"gremion-migration-dump restore --release import-0192f0c4 --db ${DB} --accept-loss-since"* ]]
+    [[ "$output" == *"gremion-migration-dump restore --release import-${REQ} --db ${DB} --accept-loss-since"* ]]
     ! grep -q '^dump discard' "$ORDER"
 }
 
@@ -204,7 +205,7 @@ order() { cat "$ORDER"; }
     drive handle_import_members
     [ "$status" -ne 0 ]
     [[ "$output" == *"row 2 (Erika Mustermann): role_changed"* ]]
-    grep -q '^dump discard --release import-0192f0c4 --reason member import rejected before any write' "$ORDER"
+    grep -q "^dump discard --release import-${REQ} --reason member import rejected before any write" "$ORDER"
 }
 
 @test "args that name another customer than the request are refused before the container is touched" {

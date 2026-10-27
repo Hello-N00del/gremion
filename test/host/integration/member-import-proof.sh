@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2015  # `cond && ok .. || bad ..`: ok() always returns 0, so bad runs only when cond fails
 # ============================================================
 # member-import-proof.sh -- TASK-031's RUNNING proof (PRD-IDN-010).
 #
@@ -114,8 +115,8 @@ submit() {
 }
 # run_request <id> -> the final state (executor single cycles, at most 3)
 run_request() {
-    local id="$1" st n
-    for n in 1 2 3; do
+    local id="$1" st
+    for _ in 1 2 3; do
         tool gremion-executor --once >> "$OUT/ledger/executor.log" 2>&1 || true
         st="$(q gremion_platform "SELECT state FROM plt.provisioning_request WHERE request_id = '${id}'")"
         case "$st" in succeeded|failed|refused|expired|dead) printf '%s' "$st"; return 0 ;; esac

@@ -104,7 +104,9 @@ handle_import_members() {
     db="$(import_field '.database')"
     [[ "$db" =~ $IMPORT_DB_RE ]] \
         || die "import_members ${id}: the container named no customer kernel database; nothing was written" "$GREMION_EXIT_ASSERT"
-    rel="import-${id:0:8}"
+    # the full request id: an 8-hex UUIDv7 prefix repeats for ~65 s, so two customers' imports
+    # could share a label and one discard would delete the other's recovery dump
+    rel="import-${id}"
 
     import_step dump
     migration_dump take --release "$rel" --db "$db" \
