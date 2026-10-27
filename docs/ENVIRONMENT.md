@@ -351,6 +351,30 @@ from the environment.
 |----------|---------|-------|
 | `EMAIL_HOST_PASSWORD` | (empty) | SMTP relay password for the app shell's mailer (set on the prod host; never in the template) |
 
+### Platform mail transport (Keycloak realms)
+
+Realm mail (login, password reset, verify-email) is separate from the app
+mailer above. `buildTenantRealmDoc` reads these keys at tenant-create time from
+the host's `mail.env` (template `infra/host/templates/env/mail.env.tmpl`), via
+`mailTransportFromEnv` in
+`gremion-ui/src/lib/server/tenant/provisioner/realm-doc.ts`. Realm creation
+**fails closed**: a realm that opens email login or password reset without a
+working sender is refused (`assertSmtpConfiguredForEmailLogin`).
+
+| Variable | Default | Notes |
+|----------|---------|-------|
+| `MAIL_TRANSPORT` | (none) | `relay` or `stalwart`. No default; unset or unknown throws |
+| `PLATFORM_DOMAIN` | (none) | Sender domain for `stalwart`; the `relay` From domain when `RELAY_FROM_DOMAIN` is empty |
+| `RELAY_SMTP_HOST` | (none) | `relay` only. Required |
+| `RELAY_SMTP_PORT` | `587` | `relay` only. 465 = implicit TLS, any other port negotiates STARTTLS |
+| `RELAY_SMTP_USER` | (empty) | `relay` only. Empty = IP-allow-listed relay, no authentication |
+| `RELAY_SMTP_PASSWORD_REF` | (none) | Required when `RELAY_SMTP_USER` is set. A secret **reference**, never the password: `secret:<name>` (`<root>/etc/secrets/<name>`, mode 0600) or `file:<absolute path>` |
+| `RELAY_FROM_DOMAIN` | `PLATFORM_DOMAIN` | `relay` only. The From domain the relay DKIM-signs |
+
+An inline `RELAY_SMTP_PASSWORD` is **ignored**; the password is only ever read
+through its `_REF`. See
+[runbooks/email-smtp.md](runbooks/email-smtp.md#platform-mail-transport-relay-or-bundled-stalwart).
+
 ---
 
 ## Legal Pages (legal)
