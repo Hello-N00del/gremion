@@ -4,7 +4,7 @@
 // disabled, and that a re-enabled Actions pipeline can call unchanged
 // (README.md has the one-line invocation).
 //
-//   node scripts/ci-local/guards.mjs --kernel <path> --vertical <path> [--base <ref>] [--kernel-base <ref>] [--vertical-base <ref>] [--waivers <path>] [--known-secrets-denylist <path>] [--out <dir>]
+//   node scripts/ci-local/guards.mjs --kernel <path> [--vertical <path>] [--base <ref>] [--kernel-base <ref>] [--vertical-base <ref>] [--waivers <path>] [--known-secrets-denylist <path>] [--out <dir>]
 //   node --test scripts/ci-local/guards.test.mjs
 //
 // Arms, run in this order, ALL of them, every time (a failing arm never
@@ -42,7 +42,7 @@
 // path is handed in, so a scratch clone works exactly like a real checkout.
 
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, rmSync, existsSync } from 'node:fs'
 import { join, dirname, relative, resolve, isAbsolute } from 'node:path'
 import { walkFiles } from './lib/discover.mjs'
 import { tmpdir } from 'node:os'
@@ -483,8 +483,8 @@ export function runKnownSecretsArm(repoLabel, repoPath, { denylistPath } = {}) {
  * copy, is what keeps both incidents covered without the kernel importing
  * from the product (the open-core boundary §5 Q2 exists to protect).
  */
-export function runVerticalNativeKnownSecretsArm(sturaosPath, { runFn = run } = {}) {
-  return runScriptArm('known-secrets-vertical-native', 'vertical', resolve(sturaosPath), runFn, [
+export function runVerticalNativeKnownSecretsArm(verticalPath, { runFn = run } = {}) {
+  return runScriptArm('known-secrets-vertical-native', 'vertical', resolve(verticalPath), runFn, [
     { argv: [NODE, '--test', '--test-reporter=tap', 'scripts/check-no-known-secrets.test.mjs'], tap: true },
     { argv: [NODE, 'scripts/check-no-known-secrets.mjs'] },
   ])
@@ -527,11 +527,11 @@ export function runCveFloorArm(kernelPath, { runFn = run } = {}) {
 // Arm 4 — StuRaOS overrides-drift guard, pointed at the KERNEL PATH
 // ---------------------------------------------------------------------------
 
-export function runOverridesDriftArm(sturaosPath, kernelPath, { runFn = run } = {}) {
+export function runOverridesDriftArm(verticalPath, kernelPath, { runFn = run } = {}) {
   // Absolute, so the vertical cwd never re-resolves a relative kernel path,
   // and passed as its own argv element, never spliced into a shell string.
   const kernelWorkspace = join(resolve(kernelPath), 'pnpm-workspace.yaml')
-  return runScriptArm('overrides-drift', 'vertical', resolve(sturaosPath), runFn, [
+  return runScriptArm('overrides-drift', 'vertical', resolve(verticalPath), runFn, [
     { argv: [NODE, '--test', '--test-reporter=tap', 'scripts/check-overrides-drift.test.mjs'], tap: true },
     { argv: [NODE, 'scripts/check-overrides-drift.mjs', '--kernel', kernelWorkspace] },
   ])
@@ -541,13 +541,17 @@ export function runOverridesDriftArm(sturaosPath, kernelPath, { runFn = run } = 
 // Arm 5 — runner-policy, both repos
 // ---------------------------------------------------------------------------
 
-export function runRunnerPolicyArm(kernelPath, sturaosPath, waiversPath) {
+export function runRunnerPolicyArm(kernelPath, verticalPath, waiversPath) {
+  // Kernel-only checkout: no verticalPath means the vertical repo is simply
+  // not evaluated, and the arm's repo label says so ('kernel', not 'both').
+  const hasVertical = Boolean(verticalPath)
+  const armRepo = hasVertical ? 'both' : 'kernel'
   // TASK-012-FU finding 3: runner-policy.mjs loads `yaml` with a caught
   // dynamic import, so a clone without node_modules reaches this point
   // instead of dying on import — and this arm FAILs, naming the fix, while
   // main() still writes the dated JSON result.
   const yamlMissing = yamlUnavailableReason()
-  if (yamlMissing) return { arm: 'runner-policy', repo: 'both', status: 'FAIL', reason: yamlMissing }
+  if (yamlMissing) return { arm: 'runner-policy', repo: armRepo, status: 'FAIL', reason: yamlMissing }
   // LOW fix: loadWaivers now THROWS on a waivers file that is valid JSON but
   // not an array (or has invalid JSON syntax) rather than silently returning
   // []. Wrapped here the same way runKnownSecretsArm wraps its scan, so a
@@ -558,14 +562,14 @@ export function runRunnerPolicyArm(kernelPath, sturaosPath, waiversPath) {
   try {
     waivers = loadWaivers(waiversPath)
   } catch (err) {
-    return { arm: 'runner-policy', repo: 'both', status: 'FAIL', reason: `could not load --waivers '${waiversPath}': ${err.message}` }
+    return { arm: 'runner-policy', repo: armRepo, status: 'FAIL', reason: `could not load --waivers '${waiversPath}': ${err.message}` }
   }
   const today = todayIso()
   const results = []
   const waived = []
   for (const [label, path] of [
     ['kernel', kernelPath],
-    ['vertical', sturaosPath],
+    ...(hasVertical ? [['vertical', verticalPath]] : []),
   ]) {
     // repoLabel is REQUIRED here (evaluateRepo has no default): a waiver is
     // {repo, file}, never {file} alone, so a waiver committed for one repo's
@@ -584,7 +588,7 @@ export function runRunnerPolicyArm(kernelPath, sturaosPath, waiversPath) {
   }
   return {
     arm: 'runner-policy',
-    repo: 'both',
+    repo: armRepo,
     status: results.length === 0 ? 'PASS' : 'FAIL',
     reason: results.length === 0 ? undefined : results.map((r) => `${r.repo}/${r.path}`).join(', '),
     findings: results,
@@ -601,16 +605,16 @@ export function runRunnerPolicyArm(kernelPath, sturaosPath, waiversPath) {
 // ---------------------------------------------------------------------------
 
 /**
- * `<date>T<hhmmss>Z-<kernelShortSha>-<sturaosShortSha>-guards.json` — a NEW
+ * `<date>T<hhmmss>Z-<kernelShortSha>-<verticalShortSha>-guards.json` — a NEW
  * name every run (to the second), naming both tips, so a watch-RED-then-
  * GREEN sequence never overwrites its own RED record (MEDIUM fix: the old
  * `<date>-guards.json` name collided on every same-day re-run, and `--out`
  * was optional at all, so the README's own one-line call recorded nothing).
  */
-export function guardsResultFileName(now, kernelShortSha, sturaosShortSha) {
+export function guardsResultFileName(now, kernelShortSha, verticalShortSha) {
   const date = now.toISOString().slice(0, 10)
   const hhmmss = now.toISOString().slice(11, 19).replace(/:/g, '')
-  return `${date}T${hhmmss}Z-${kernelShortSha}-${sturaosShortSha}-guards.json`
+  return `${date}T${hhmmss}Z-${kernelShortSha}-${verticalShortSha ?? 'novertical'}-guards.json`
 }
 
 /** Every Dockerfile (bare `Dockerfile`, or `Dockerfile.*`) under `repoRoot`, repo-relative POSIX paths, sorted. */
@@ -624,29 +628,43 @@ export function listDockerfiles(repoRoot) {
 // Orchestration
 // ---------------------------------------------------------------------------
 
+/** Arms that need a vertical checkout (skipped, visibly, when none is given). */
+export const VERTICAL_ARMS = ['secret-scan', 'known-secrets', 'known-secrets-vertical-native', 'overrides-drift']
+export const NO_VERTICAL_REASON = 'skipped: no --vertical'
+
+export function skippedVerticalArm(arm) {
+  return { arm, repo: 'vertical', status: 'SKIPPED', reason: NO_VERTICAL_REASON }
+}
+
 /**
  * HIGH fix: a single `base` ref used to be applied to both repos. When it
  * does not resolve in one of them (the kernel's default branch is `main`,
  * StuRaOS's is `master`), that repo's gitleaks arm scanned an empty range
- * and vacuously PASSed. `kernelBase`/`sturaosBase` let a caller name a
+ * and vacuously PASSed. `kernelBase`/`verticalBase` let a caller name a
  * per-repo ref; either falls back to the shared `base` when not given, and
  * `runGitleaksArm` independently verifies whichever ref it ends up with
  * resolves in ITS OWN repo before scanning.
  */
-export function runAllArms({ kernelPath, sturaosPath, base, kernelBase, sturaosBase, waiversPath, denylistPath, runFn = run }) {
+export function runAllArms({ kernelPath, verticalPath, base, kernelBase, verticalBase, waiversPath, denylistPath, runFn = run }) {
   const arms = []
   arms.push(runGitleaksArm('kernel', kernelPath, kernelBase ?? base, { runFn }))
-  arms.push(runGitleaksArm('vertical', sturaosPath, sturaosBase ?? base, { runFn }))
   arms.push(runKnownSecretsArm('kernel', kernelPath, { denylistPath }))
-  arms.push(runKnownSecretsArm('vertical', sturaosPath, { denylistPath }))
-  // HIGH fix: also run StuRaOS's OWN check-no-known-secrets.mjs (its 2 real
-  // incident digests) rather than relying solely on the kernel-ported copy
-  // above, which the kernel's own (empty) KNOWN_COMPROMISED can never fail —
-  // see runVerticalNativeKnownSecretsArm's header.
-  arms.push(runVerticalNativeKnownSecretsArm(sturaosPath, { runFn }))
   arms.push(runCveFloorArm(kernelPath, { runFn }))
-  arms.push(runOverridesDriftArm(sturaosPath, kernelPath, { runFn }))
-  arms.push(runRunnerPolicyArm(kernelPath, sturaosPath, waiversPath))
+  if (verticalPath) {
+    arms.push(runGitleaksArm('vertical', verticalPath, verticalBase ?? base, { runFn }))
+    arms.push(runKnownSecretsArm('vertical', verticalPath, { denylistPath }))
+    // HIGH fix: also run the vertical's OWN check-no-known-secrets.mjs (its
+    // real incident digests) rather than relying solely on the kernel-ported
+    // copy above, which the kernel's own (empty) KNOWN_COMPROMISED can never
+    // fail — see runVerticalNativeKnownSecretsArm's header.
+    arms.push(runVerticalNativeKnownSecretsArm(verticalPath, { runFn }))
+    arms.push(runOverridesDriftArm(verticalPath, kernelPath, { runFn }))
+  } else {
+    // Kernel-only checkout: the vertical arms cannot run. They are listed
+    // as SKIPPED, loudly and by name — never omitted, never counted as PASS.
+    for (const arm of VERTICAL_ARMS) arms.push(skippedVerticalArm(arm))
+  }
+  arms.push(runRunnerPolicyArm(kernelPath, verticalPath, waiversPath))
   const overallExit = arms.some((a) => a.status === 'FAIL') ? 1 : 0
   return { arms, overallExit }
 }
@@ -682,10 +700,10 @@ function tryHeadShortSha(path) {
 
 export function main(argv = process.argv.slice(2)) {
   const kernelPath = argValue(argv, '--kernel')
-  const sturaosPath = argValue(argv, '--vertical')
+  const verticalPath = argValue(argv, '--vertical')
   const base = argValue(argv, '--base') ?? undefined
   const kernelBase = argValue(argv, '--kernel-base') ?? undefined
-  const sturaosBase = argValue(argv, '--vertical-base') ?? undefined
+  const verticalBase = argValue(argv, '--vertical-base') ?? undefined
   const waiversPath = argValue(argv, '--waivers') ?? join(HERE, 'waivers.json')
   const denylistPath = argValue(argv, '--known-secrets-denylist') ?? undefined
   // MEDIUM fix: --out used to be optional, and the README's own one-line
@@ -697,8 +715,15 @@ export function main(argv = process.argv.slice(2)) {
   const outDir = argValue(argv, '--out') ?? defaultGuardsOutDir()
   const imageBuild = argv.includes('--image-build')
 
-  if (!kernelPath || !sturaosPath) {
-    console.error('guards: --kernel <path> and --vertical <path> are both required')
+  if (!kernelPath) {
+    console.error('guards: --kernel <path> is required (--vertical <path> is optional: without it the vertical arms are skipped)')
+    process.exitCode = 1
+    return
+  }
+  // A --vertical that was GIVEN but does not exist is a typo or a bad
+  // checkout, never a reason to silently fall back to kernel-only.
+  if (verticalPath && !existsSync(verticalPath)) {
+    console.error(`guards: --vertical path '${verticalPath}' does not exist`)
     process.exitCode = 1
     return
   }
@@ -707,7 +732,7 @@ export function main(argv = process.argv.slice(2)) {
     console.log('\nci-local --image-build — Dockerfiles the existing docker-build jobs build (informational only, no gate effect):\n')
     for (const [label, path] of [
       ['kernel', kernelPath],
-      ['vertical', sturaosPath],
+      ...(verticalPath ? [['vertical', verticalPath]] : []),
     ]) {
       const files = listDockerfiles(path)
       console.log(`  ${label}:`)
@@ -719,29 +744,29 @@ export function main(argv = process.argv.slice(2)) {
     return
   }
 
-  const { arms, overallExit } = runAllArms({ kernelPath, sturaosPath, base, kernelBase, sturaosBase, waiversPath, denylistPath })
+  const { arms, overallExit } = runAllArms({ kernelPath, verticalPath, base, kernelBase, verticalBase, waiversPath, denylistPath })
 
   console.log(`\nci-local guards — ${new Date().toISOString()}\n`)
   for (const arm of arms) {
     console.log(`  [${arm.status}] ${arm.arm} (${arm.repo})${arm.reason ? ` — ${arm.reason}` : ''}${arm.note ? ` [${arm.note}]` : ''}`)
   }
-  console.log(`\nguards: overall ${overallExit === 0 ? 'PASS' : 'FAIL'} (${arms.filter((a) => a.status === 'FAIL').length}/${arms.length} arm(s) failed)\n`)
+  console.log(`\nguards: overall ${overallExit === 0 ? 'PASS' : 'FAIL'} (${arms.filter((a) => a.status === 'FAIL').length}/${arms.length} arm(s) failed, ${arms.filter((a) => a.status === 'SKIPPED').length} skipped)\n`)
 
   {
     mkdirSync(outDir, { recursive: true })
     const now = new Date()
     // Best-effort SHAs for the filename only — a scratch path that is not a
     // real git repo (or mid-teardown) must never stop the dated result from
-    // being written; the JSON body's own `kernelPath`/`sturaosPath` remain
+    // being written; the JSON body's own `kernelPath`/`verticalPath` remain
     // the authoritative identification either way.
     const kernelShortSha = tryHeadShortSha(kernelPath)
-    const sturaosShortSha = tryHeadShortSha(sturaosPath)
-    const fileName = guardsResultFileName(now, kernelShortSha, sturaosShortSha)
+    const verticalShortSha = verticalPath ? tryHeadShortSha(verticalPath) : null
+    const fileName = guardsResultFileName(now, kernelShortSha, verticalShortSha)
     const path = join(outDir, fileName)
     writeFileSync(
       path,
       JSON.stringify(
-        { date: now.toISOString().slice(0, 10), timestamp: now.toISOString(), kernelPath, sturaosPath, kernelSha: kernelShortSha, sturaosSha: sturaosShortSha, base, kernelBase, sturaosBase, overallExit, arms },
+        { date: now.toISOString().slice(0, 10), timestamp: now.toISOString(), kernelPath, verticalPath: verticalPath ?? null, kernelSha: kernelShortSha, verticalSha: verticalShortSha, base, kernelBase, verticalBase, overallExit, arms },
         null,
         2,
       ),

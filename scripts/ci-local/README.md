@@ -42,12 +42,41 @@ merge must be blocked. This is exactly the call a re-enabled `ci.yml` (or the
 takes an Actions-specific input, and the runner-policy arm (below) is what
 keeps a re-enabled Actions runner honest about TRD-364 in the first place.
 
+## Kernel-only checkout (no `--vertical`)
+
+`--vertical` is optional. From a kernel-only checkout run the same commands
+without it:
+
+```
+node scripts/ci-local/snapshot.mjs --kernel . --out <dir> --list     # dry run: what would run / be skipped
+node scripts/ci-local/snapshot.mjs --kernel . --out <dir>
+node scripts/ci-local/guards.mjs   --kernel .
+node scripts/ci-local/runner-policy.mjs --kernel .
+```
+
+- Every `vertical` suite (snapshot) and every vertical arm (guards:
+  `secret-scan`, `known-secrets`, `known-secrets-vertical-native`,
+  `overrides-drift` on the vertical) is reported **`SKIPPED`** with the reason
+  `skipped: no --vertical` in the console, the JSON and the markdown. A
+  skipped row is never counted as passed, and the exit code reflects the
+  kernel suites/arms only: 0 if they pass, 1 if any fails.
+- `runner-policy` evaluates the kernel only; the guards runner-policy arm
+  reports `repo: kernel` instead of `both`.
+- A `--vertical` path that is given but does not exist is a loud error
+  (exit 1, nothing written) — never a silent fall-back to kernel-only.
+- With `--vertical`, behaviour is unchanged (both repos, clean-tree check,
+  all arms).
+- `snapshot.mjs --list` is the dry run: it prints `WOULD RUN` / `SKIPPED` per
+  suite and runs nothing (no `--out`, no clean tree needed).
+- A kernel-only run is not a full reading: do not file it as the
+  F1/re-init/first-offer snapshot (that needs both repositories).
+
 ## Two entry points
 
 ### `guards.mjs` — the single merge-gate entry point
 
 ```
-node scripts/ci-local/guards.mjs --kernel <path> --vertical <path> [--base <ref>] [--kernel-base <ref>] [--vertical-base <ref>] [--waivers <path>] [--known-secrets-denylist <path>] [--out <dir>]
+node scripts/ci-local/guards.mjs --kernel <path> [--vertical <path>] [--base <ref>] [--kernel-base <ref>] [--vertical-base <ref>] [--waivers <path>] [--known-secrets-denylist <path>] [--out <dir>]
 ```
 
 Runs every arm below, in order, **all of them every time** — a failing arm
@@ -112,7 +141,7 @@ no runtime value) go through a shell.
 ### `snapshot.mjs` — the dated pass/fail census
 
 ```
-node scripts/ci-local/snapshot.mjs --kernel <path> --vertical <path> --out <dir> [--only <suite-id,...>] [--stack-env <file>]
+node scripts/ci-local/snapshot.mjs --kernel <path> [--vertical <path>] --out <dir> [--list] [--only <suite-id,...>] [--stack-env <file>]
 ```
 
 `--out` is **mandatory** (§5 Q3: nothing is committed to the kernel — the

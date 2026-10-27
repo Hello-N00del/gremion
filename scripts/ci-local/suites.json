@@ -165,9 +165,9 @@
       "category": "unit",
       "cwd": ".",
       "kind": "node-test",
-      "command": "node --test --test-reporter=tap \"scripts/*.test.mjs\" \"scripts/port-back/*.test.mjs\" \"scripts/ci-local/**/*.test.mjs\"",
+      "command": "node --test --test-reporter=tap \"scripts/*.test.mjs\" \"scripts/port-back/*.test.mjs\" \"scripts/env/*.test.mjs\" \"scripts/ci-local/**/*.test.mjs\"",
       "requiresStack": false,
-      "testGlobs": ["scripts/*.test.mjs", "scripts/port-back/*.test.mjs", "scripts/ci-local/**/*.test.mjs"]
+      "testGlobs": ["scripts/*.test.mjs", "scripts/port-back/*.test.mjs", "scripts/env/*.test.mjs", "scripts/ci-local/**/*.test.mjs"]
     },
     {
       "id": "kernel-cve-floor-guard",

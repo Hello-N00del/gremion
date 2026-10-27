@@ -303,6 +303,11 @@ node scripts/ci-local/snapshot.mjs --kernel . --vertical "<vertical checkout>" \
   --out "<evidence dir>" --stack-env "<stack marker>"
 ```
 
+Without a vertical checkout, omit `--vertical`: the vertical suites are
+reported `SKIPPED` ("skipped: no --vertical"), never as passed, and the result
+is a kernel-only reading, not the full TRD-340 snapshot. See
+`scripts/ci-local/README.md`.
+
 19. **Close SSH to keys only.** Only after a key-based login as the deploy user
     succeeded from a second session; `harden-ssh` is not part of `all` on
     purpose.
