@@ -20,6 +20,9 @@ export const coreManifest: ModuleManifest = {
   groups: { admin: 'admin', itAdmin: 'it-admin' },
   pages: [
     { segment: 'dashboard', minRole: Role.Guest },
+    // The "Modul nicht aktiv" notice a disabled module's page request is answered with (hooks.server.ts ->
+    // module-off-response.ts). Static, discloses nothing about the module beyond its display name.
+    { segment: 'module-off', minRole: Role.Guest },
     // #167: /settings is reachable by every signed-in member (Konto sections);
     // the Verwaltung/System sections are gated INSIDE the page by isITAdmin and
     // each /api/settings* endpoint keeps its own it-admin gate. hooks.server.ts

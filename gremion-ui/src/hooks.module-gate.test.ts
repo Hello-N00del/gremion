@@ -30,6 +30,8 @@ vi.mock('$lib/modules/registry', async (importOriginal) => {
   const actual = await importOriginal<typeof import('$lib/modules/registry')>()
   return {
     ...actual,
+    // canAccess needs a PAGE_ACCESS entry for the synthetic page segment (else it throws in dev mode).
+    composePageAccess: (...a: Parameters<typeof actual.composePageAccess>) => ({ ...actual.composePageAccess(...a), 'demo-widget': 'member' as const }),
     moduleRoutePrefixes: () => [
       { prefix: '/demo-widget', moduleId: 'demo_widget' },
       { prefix: '/api/demo-widget', moduleId: 'demo_widget' },
@@ -117,11 +119,10 @@ describe('module-disable gate parity (#256-1)', () => {
   })
 })
 
-// #290 / F1 (HANDOVER-v8 Part D): a disabled-module PAGE deep link must render the
-// styled +error.svelte "Modul nicht aktiv" surface, which means the throw moved to
-// the LAYOUT LOAD (a throw from the handle hook only hits the bare static error
-// template). So the authGuard hook now passes PAGE paths THROUGH (no 403 there);
-// +layout.server.ts uses disabledModuleForPath to throw error(403,'module-disabled:…').
+// #290 / F1 + R33d: a disabled-module PAGE deep link is recognised here (disabledModuleForPath) and answered by
+// the authGuard hook with 403 + the in-shell notice page (module-off-response.ts, unit-tested in
+// lib/server/module-off-response.test.ts; the authGuard wiring is pinned by the describe below).
+// It must not be thrown from the root layout load: SvelteKit then renders the static error template.
 describe('disabledModuleForPath — PAGE module-off detection (#290 / F1 fix)', () => {
   it('returns the owning moduleId for a disabled-module page path', async () => {
     modulesState.demo_widget = false
@@ -136,21 +137,83 @@ describe('disabledModuleForPath — PAGE module-off detection (#290 / F1 fix)', 
     expect(disabledModuleForPath('/demo-widget/thing/123')).toBeNull()
     expect(disabledModuleForPath('/dashboard')).toBeNull()
   })
+})
 
-  it('authGuard does NOT 403 a disabled-module PAGE in the hook (the styled 403 is thrown in the layout load)', async () => {
-    // The hook gates ONLY /api/* (a machine caller gets the bare 403); a disabled
-    // PAGE deep-link is passed through here and surfaced via +layout.server.ts. We
-    // assert the hook's PAGE behavior through disabledModuleForPath (the seam the
-    // layout uses) rather than driving a page path through canAccess, since a
-    // synthetic module has no PAGE_ACCESS entry (canAccess would dev-throw before
-    // the gate is even consulted — which is itself the page-access guard, not the
-    // module gate under test here).
+// R33d authGuard-level guard: drives the REAL hook. Revert the `else` branch in authGuard
+// (hooks.server.ts: `const disabled = disabledModuleForPath(path); if (disabled) return moduleOffPageResponse(...)`)
+// and the first two tests go RED (resolve gets called, the module's own loads would run).
+describe('authGuard answers a disabled-module PAGE itself (R33d)', () => {
+  const SESSION = { user: { id: 'u1', roles: ['member'], groups: [] }, accessToken: 'kc', tokenIss: ISS }
+  const pageEvent = (path: string, extra: Record<string, unknown> = {}, session: unknown = SESSION) => {
+    const event = makeEvent({ path, session }) as Record<string, unknown>
+    event.isDataRequest = false
+    Object.assign(event, extra)
+    return event
+  }
+
+  it('document request: 403 + the notice page fetched in-process; resolve is never called', async () => {
     modulesState.demo_widget = false
-    const { disabledModuleForPath } = await import('$lib/server/module-gate')
-    // The layout-load seam reports the owning module for the disabled page path …
-    expect(disabledModuleForPath('/demo-widget')).toBe('demo_widget')
-    // … and the authGuard hook itself gates only /api/* prefixes (proven above),
-    // so it never emits a bare 403 for a PAGE path.
+    const mod = await import('./hooks.server'); await mod.boot()
+    const fetched: string[] = []
+    const event = pageEvent('/demo-widget/thing/123', {
+      fetch: async (u: string) => { fetched.push(u); return new Response('<h1>Modul nicht aktiv</h1>', { status: 200, headers: { 'content-type': 'text/html' } }) },
+    })
+    const resolve = vi.fn(resolveSpy)
+    const res = (await mod.authGuard({ event: event as never, resolve } as never)) as Response
+    expect(res.status).toBe(403)
+    expect(await res.text()).toContain('Modul nicht aktiv')
+    expect(fetched).toEqual(['/module-off/demo_widget'])
+    expect(resolve).not.toHaveBeenCalled()
+  })
+
+  it('__data.json request: JSON 403 "module-disabled:<id>", no in-process fetch, resolve is never called', async () => {
+    modulesState.demo_widget = false
+    const mod = await import('./hooks.server'); await mod.boot()
+    const fetchSpy = vi.fn()
+    const event = pageEvent('/demo-widget/thing/123', { isDataRequest: true, fetch: fetchSpy })
+    const resolve = vi.fn(resolveSpy)
+    const res = (await mod.authGuard({ event: event as never, resolve } as never)) as Response
+    expect(res.status).toBe(403)
+    expect(res.headers.get('content-type')).toContain('application/json')
+    expect(await res.json()).toBe('module-disabled:demo_widget')
+    expect(fetchSpy).not.toHaveBeenCalled()
+    expect(resolve).not.toHaveBeenCalled()
+  })
+
+  it('/api of a disabled module keeps the bare machine-readable 403 (no notice page fetch)', async () => {
+    modulesState.demo_widget = false
+    const mod = await import('./hooks.server'); await mod.boot()
+    const fetchSpy = vi.fn()
+    const event = pageEvent('/api/demo-widget/things', { fetch: fetchSpy })
+    const resolve = vi.fn(resolveSpy)
+    const res = (await mod.authGuard({ event: event as never, resolve } as never)) as Response
+    expect(res.status).toBe(403)
+    expect(await res.text()).toBe('Module disabled')
+    expect(fetchSpy).not.toHaveBeenCalled()
+    expect(resolve).not.toHaveBeenCalled()
+  })
+
+  it('control: the same PAGE with the module ENABLED resolves normally', async () => {
+    const mod = await import('./hooks.server'); await mod.boot()
+    const fetchSpy = vi.fn()
+    const event = pageEvent('/demo-widget/thing/123', { fetch: fetchSpy })
+    const resolve = vi.fn(resolveSpy)
+    const res = (await mod.authGuard({ event: event as never, resolve } as never)) as Response
+    expect(res.status).toBe(200)
+    expect(resolve).toHaveBeenCalledOnce()
+    expect(fetchSpy).not.toHaveBeenCalled()
+  })
+
+  it('an anonymous visitor still gets the login redirect, not the notice (auth runs first)', async () => {
+    modulesState.demo_widget = false
+    const mod = await import('./hooks.server'); await mod.boot()
+    const fetchSpy = vi.fn()
+    const event = pageEvent('/demo-widget/thing/123', { fetch: fetchSpy }, null)
+    const resolve = vi.fn(resolveSpy)
+    // redirect() throws a SvelteKit Redirect rather than returning a Response.
+    await expect(mod.authGuard({ event: event as never, resolve } as never)).rejects.toMatchObject({ status: 302 })
+    expect(fetchSpy).not.toHaveBeenCalled()
+    expect(resolve).not.toHaveBeenCalled()
   })
 })
 
