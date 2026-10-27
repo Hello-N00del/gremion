@@ -78,6 +78,13 @@ export const load: LayoutServerLoad = async (event) => {
   // `invalidate('app:unread')` after marking a room read — without a full
   // navigation. The sidebar + top-bar bell both read `counts.unread`.
   event.depends('app:unread')
+  // DELIBERATE url read: SvelteKit re-runs a server load on client-side navigation only if it touched `event.url`
+  // (uses.url). The disabled-module gate that used to read url.pathname here now lives in hooks.server.ts; dropping
+  // this read would stop the root load from refreshing nav, counts, instanceState and session on navigation, and a
+  // client-side nav to a module page with no server load of its own (/messages, helios-cb) would send no
+  // __data.json, so it would never reach the hook gate and the module's page would render instead of the notice.
+  // Guarded by layout.server.test.ts ('reads event.url.pathname'). Do not remove.
+  void event.url.pathname
   const session = await event.locals.auth()
   const groups = (session?.user as { groups?: string[] } | undefined)?.groups ?? []
   const roles = (session?.user as { roles?: Role[] } | undefined)?.roles ?? []
