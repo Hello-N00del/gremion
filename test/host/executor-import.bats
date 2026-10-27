@@ -113,12 +113,21 @@ order() { cat "$ORDER"; }
     [[ "$output" != *"$SECRET_MAIL"* ]]
 }
 
-@test "validate: a rejected list fails the request and names the rows by number and reason, never the address" {
+@test "validate: a rejected list fails the request and names the rows by number and reason ONLY - no name, no address (events are append-only)" {
     answer import-validate "" 1 '{"status":"rejected","sha256":"'"$SHA"'","counts":{"created":0,"linked_existing":0,"unchanged":0,"rejected":1,"accounts_created":0,"invites_sent":0},"rows":[{"row":2,"name":"Erika Mustermann","reason":"unknown_role"}],"database":"'"$DB"'"}'
     drive handle_import_members
     [ "$status" -ne 0 ]
-    [[ "$output" == *"row 2 (Erika Mustermann): unknown_role"* ]]
+    [[ "$output" == *"  row 2: unknown_role"* ]]
     [[ "$output" != *"$SECRET_MAIL"* ]]
+    [[ "$output" != *"Erika"* && "$output" != *"Mustermann"* ]]
+}
+
+@test "an error line of the container that names an address is scrubbed before it becomes an event" {
+    answer import-validate "" 1 '{"status":"failed","sha256":"","counts":{"created":0,"linked_existing":0,"unchanged":0,"rejected":0,"accounts_created":0,"invites_sent":0},"rows":[],"error":"lookup failed for erika.mustermann@example.org (?email=erika.mustermann%40example.org)"}'
+    drive handle_import_members
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"error: lookup failed for [address]"* ]]
+    [[ "$output" != *"@"* && "$output" != *"%40"* && "$output" != *"Mustermann"* ]]
 }
 
 @test "apply: validate, dump, apply, rerun, discard - in that order, one dump, discarded with a reason" {
@@ -204,7 +213,8 @@ order() { cat "$ORDER"; }
     answer import-apply 1 1 '{"status":"rejected","sha256":"'"$SHA"'","counts":{"created":0,"linked_existing":0,"unchanged":0,"rejected":1,"accounts_created":0,"invites_sent":0},"rows":[{"row":2,"name":"Erika Mustermann","reason":"role_changed"}],"database":"'"$DB"'"}'
     drive handle_import_members
     [ "$status" -ne 0 ]
-    [[ "$output" == *"row 2 (Erika Mustermann): role_changed"* ]]
+    [[ "$output" == *"  row 2: role_changed"* ]]
+    [[ "$output" != *"Erika"* && "$output" != *"Mustermann"* ]]
     grep -q "^dump discard --release import-${REQ} --reason member import rejected before any write" "$ORDER"
 }
 

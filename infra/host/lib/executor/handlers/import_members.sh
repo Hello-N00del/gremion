@@ -26,7 +26,9 @@
 #             discard commands. A list the apply rejects before any write (a
 #             role change) discards its dump, nothing having been written.
 #
-# E-mail addresses are never printed: the report names a row by number + name.
+# Neither an e-mail address nor a NAME is ever printed: every line of this handler
+# becomes an append-only request event and an audit.log line, so a rejected row is
+# named by its row number and reason code only (the operator reads the list).
 
 IMPORT_SHA_RE='^[0-9a-f]{64}$'
 IMPORT_DB_RE='^t_[0-9a-f]{32}__kernel$'
@@ -52,9 +54,10 @@ import_tc() {
 import_report() {
     local phase="$1"
     jq -r --arg p "$phase" '"import \($p): status=\(.status) sha256=\(.sha256) created=\(.counts.created) linked_existing=\(.counts.linked_existing) unchanged=\(.counts.unchanged) rejected=\(.counts.rejected) accounts_created=\(.counts.accounts_created) invites_sent=\(.counts.invites_sent)"' <<< "$IMPORT_JSON"
-    jq -r --argjson max "$IMPORT_ROW_LINES" '.rows[:$max][] | "  row \(.row) (\(.name)): \(.reason)"' <<< "$IMPORT_JSON"
+    jq -r --argjson max "$IMPORT_ROW_LINES" '.rows[:$max][] | "  row \(.row): \(.reason)"' <<< "$IMPORT_JSON"
     jq -r --argjson max "$IMPORT_ROW_LINES" 'select((.rows | length) > $max) | "  ... and \((.rows | length) - $max) more rejected rows"' <<< "$IMPORT_JSON"
-    jq -r 'select(.error) | "  error: \(.error)"' <<< "$IMPORT_JSON"
+    # the container already redacts; a second net here, because this line is an append-only event
+    jq -r 'select(.error) | "  error: \(.error | gsub("\\S*(@|%40)\\S*"; "[address]"))"' <<< "$IMPORT_JSON"
 }
 
 import_field() { jq -r "$1" <<< "$IMPORT_JSON"; }

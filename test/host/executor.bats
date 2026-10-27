@@ -320,3 +320,42 @@ outcome() { cat "${GREMION_ROOT}/outcome" 2>/dev/null || true; }
     # the note exists exactly once
     [ "$(grep -rl --include='*.md' 'gremion-tenant decommission note (R31-I4)' "${root}/docs" | wc -l)" -eq 1 ]
 }
+
+# ---------------------------------------------------------------------------
+# TASK-031 fix round (house review MED 1): `gremion-tenant request` for a kind
+# that carries a member list.
+
+big_args() { # <file> <rows>: an import_members args file well over 128 KiB
+    local i
+    { printf 'name,email,body,role\n'; for ((i = 0; i < $2; i++)); do printf 'Erika Mustermann%d,erika.mustermann%d@example.org,Rat,member\n' "$i" "$i"; done; } > "${GREMION_ROOT}/list.csv"
+    jq -nc --rawfile c "${GREMION_ROOT}/list.csv" '{slug:"alpha-rat",phase:"validate",vertical:"stura",csv:$c}' > "$1"
+    chmod 600 "$1"
+}
+
+@test "request: the args (a member list) travel on STDIN inside the SQL, never in the docker argv (E2BIG above 128 KiB, process table)" {
+    cp "${HOST_SRC}/bin/gremion-tenant" "${REL}/infra/host/bin/"
+    local f="${GREMION_ROOT}/big-args.json"
+    big_args "$f" 5000
+    [ "$(wc -c < "$f")" -gt 262144 ]
+    run "${REL}/infra/host/bin/gremion-tenant" request import_members --operator "$OP" --args-file "$f" --reason "bulk import without the panel"
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    [[ "$output" == *"0192f0c4-0000-7000-8000-000000000001"* ]]
+    # the shim recorded every exec's whole argv: it names no row and is small
+    [ -s "${GREMION_ROOT}/exec-argv.log" ]
+    ! grep -q 'Mustermann' "${GREMION_ROOT}/exec-argv.log"
+    ! grep -q 'example.org' "${GREMION_ROOT}/exec-argv.log"
+    [ "$(wc -c < "${GREMION_ROOT}/exec-argv.log")" -lt 2000 ]
+    # ...and the whole JSON still reached the queue, byte for byte
+    [ "$(cat "${GREMION_ROOT}/submitted-args")" = "$(jq -c . "$f")" ]
+}
+
+@test "request: args with quotes, backslashes, dollar signs and psql-variable look-alikes arrive unchanged (dollar quoting)" {
+    cp "${HOST_SRC}/bin/gremion-tenant" "${REL}/infra/host/bin/"
+    local f="${GREMION_ROOT}/odd-args.json"
+    jq -nc '{slug:"alpha-rat",phase:"validate",vertical:"stura",csv:"name,email,body,role\nO'"'"'Neil $$ :'"'"'kind'"'"' \\ $g1$ \"q\",o@example.org,Rat,member\n"}' > "$f"
+    chmod 600 "$f"
+    run "${REL}/infra/host/bin/gremion-tenant" request import_members --operator "$OP" --args-file "$f" --reason "odd characters in the list"
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    [ "$(cat "${GREMION_ROOT}/submitted-args")" = "$(jq -c . "$f")" ]
+    ! grep -q 'Neil' "${GREMION_ROOT}/exec-argv.log"
+}
