@@ -10,7 +10,7 @@ export function generateLoeschkonzept(config: GremionConfig, asOf: Date = new Da
     return text === null ? '' : ` — **Hinweis:** ${text}`
   }
 
-  return `# Löschkonzept — ${compliance.controller_name || 'StuRa'}
+  return `# Löschkonzept — ${compliance.controller_name || 'Organisation'}
 *Stand: ${dateStr} | Automatisch generiert aus aktueller Systemkonfiguration*
 
 ## 1. Verantwortliche Stelle

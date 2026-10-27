@@ -24,7 +24,7 @@ export const load: LayoutServerLoad = async () => {
     // which `??` would happily pass through. `+layout.svelte` renders the
     // product chip only `{#if data.product}`.
     product:          env.PUBLIC_PRODUCT_NAME || null,
-    institutionName:  env.PUBLIC_CONTACT_NAME ?? 'Studierendenrat',
+    institutionName:  env.PUBLIC_CONTACT_NAME || 'Gremium',
     legislatureLabel: env.PUBLIC_LEGISLATURE_LABEL ?? null,
     mainAppUrl:       env.PUBLIC_MAIN_APP_URL ?? null,
 

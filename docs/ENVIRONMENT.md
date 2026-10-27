@@ -322,11 +322,11 @@ takes Impressum/contact metadata for TMG §5 compliance:
 
 | Variable | Default | Notes |
 |----------|---------|-------|
-| `PUBLIC_CONTACT_NAME` | `Studierendenrat` | Responsible body name |
+| `PUBLIC_CONTACT_NAME` | (empty; portal shows "Gremium") | Responsible body name |
 | `PUBLIC_CONTACT_ADDRESS` | (empty) | Postal address |
 | `PUBLIC_CONTACT_EMAIL` | (empty) | Contact email |
 | `PUBLIC_CONTACT_PHONE` | (empty) | Contact phone |
-| `PUBLIC_IMPRINT_RESPONSIBLE` | `Vorsitz des StuRa` | Person/role responsible for content |
+| `PUBLIC_IMPRINT_RESPONSIBLE` | (empty) | Person/role responsible for content |
 | `PUBLIC_LEGISLATURE_LABEL` | (empty) | Optional legislature/term label |
 
 The compose file also derives `PUBLIC_MAIN_APP_URL=https://${DOMAIN}` and
