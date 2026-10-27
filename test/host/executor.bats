@@ -345,8 +345,8 @@ big_args() { # <file> <rows>: an import_members args file well over 128 KiB
     [[ "$output" == *"0192f0c4-0000-7000-8000-000000000001"* ]]
     # the shim recorded every exec's whole argv: it names no row and is small
     [ -s "${GREMION_ROOT}/exec-argv.log" ]
-    ! grep -q 'Mustermann' "${GREMION_ROOT}/exec-argv.log"
-    ! grep -q 'example.org' "${GREMION_ROOT}/exec-argv.log"
+    assert_absent 'Mustermann' "${GREMION_ROOT}/exec-argv.log" 'a row name reached the docker argv'
+    assert_absent 'example\.org'"${GREMION_ROOT}/exec-argv.log" 'an address reached the docker argv'
     [ "$(wc -c < "${GREMION_ROOT}/exec-argv.log")" -lt 2000 ]
     # ...and the whole JSON still reached the queue, byte for byte
     [ "$(cat "${GREMION_ROOT}/submitted-args")" = "$(jq -c . "$f")" ]

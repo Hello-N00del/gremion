@@ -101,7 +101,7 @@ order() { cat "$ORDER"; }
     [[ "$output" == *"name this sha256 in the apply request"* ]]
     [ "$(grep -c '^tc import-validate' "$ORDER")" -eq 1 ]
     grep -q "stdin=${#CSV}" "$ORDER" || grep -Eq 'stdin=[1-9][0-9]*' "$ORDER"
-    ! grep -q '^dump' "$ORDER"
+    assert_absent '^dump' "$ORDER" 'a validate-only request must not dump'
     ! grep -q 'import-apply' "$ORDER"
 }
 
@@ -109,7 +109,7 @@ order() { cat "$ORDER"; }
     answer import-validate "" 0 "$(validated_json)"
     drive handle_import_members
     [ "$status" -eq 0 ]
-    ! grep -q 'Mustermann' "$ORDER"
+    assert_absent 'Mustermann' "$ORDER" 'a row name reached a recorded argv'
     [[ "$output" != *"$SECRET_MAIL"* ]]
 }
 
@@ -151,7 +151,7 @@ order() { cat "$ORDER"; }
     drive handle_import_members
     [ "$status" -ne 0 ]
     [[ "$output" == *"not the one that was validated"* ]]
-    ! grep -q '^dump' "$ORDER"
+    assert_absent '^dump' "$ORDER" 'a refused list must not dump'
     ! grep -q 'import-apply' "$ORDER"
 }
 
@@ -203,7 +203,7 @@ order() { cat "$ORDER"; }
     drive handle_import_members
     [ "$status" -ne 0 ]
     [[ "$output" == *"KEPT"* ]]
-    ! grep -q '^dump discard' "$ORDER"
+    assert_absent '^dump discard' "$ORDER" 'a failed apply must keep its dump'
     [ "$(grep -c '^tc import-apply' "$ORDER")" -eq 1 ]
 }
 
