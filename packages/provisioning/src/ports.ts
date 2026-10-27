@@ -41,6 +41,12 @@ export interface ControlPort {
    * eviction, one transaction). Only called when getBySlug found nothing.
    */
   registerProvisioning(input: { slug: string; host: string; realm: string }): Promise<ControlRow>
+  /**
+   * Binds the primary host (and the tenant's resource rows) of a row that has
+   * none: the repair of a registerProvisioning that died between the tenant
+   * insert and addTenantDomain. Idempotent.
+   */
+  bindPrimaryHost(id: string, host: string): Promise<void>
   /** Guarded status transition (suspend: active -> suspended; resume: suspended -> active; create: provisioning -> active). */
   setStatus(id: string, status: 'active' | 'suspended'): Promise<void>
 }

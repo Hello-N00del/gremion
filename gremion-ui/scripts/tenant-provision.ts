@@ -10,6 +10,7 @@
 //   record-step <slug> mail_principal_issued --operator <uuid>
 //                                                   the host phase's ledger step (verifies the stamp over Keycloak)
 //   phase-b <slug> <create flags>                   first accounts, --enable modules, active
+//   activate <slug>                                  provisioning -> active (after the router)
 //   render-router <slug>                            the edge router document on STDOUT (Q17)
 //   suspend <slug> --operator <uuid>                status, realm, broker (the host then revokes the principal)
 //   resume <slug> --operator <uuid>                 stamp verified, realm, broker, status last
@@ -40,6 +41,7 @@ import {
   EXECUTOR_ROLE,
   PANEL_EXECUTES,
   PANEL_READS,
+  activateBySlug,
   createPhaseA,
   createPhaseB,
   loadModuleJsons,
@@ -356,6 +358,8 @@ function createSpec(slug: string): CreateSpec & { configFile: string; bodyName: 
     admins,
     configFile: reqFlag('--config'),
     bodyName: flag('--body-name') ?? 'Rat',
+    // H3 (LOW-7): the CLI's phase B NEVER activates; `activate` is the host's last step. --defer-activation is accepted as a no-op.
+    deferActivation: true,
     ...dpiaFromFlag(),
   }
 }
@@ -663,6 +667,16 @@ async function cmdPhase(which: 'a' | 'b'): Promise<void> {
   })
 }
 
+// create-harden H3: the host's last create step, after the router is written.
+async function cmdActivate(): Promise<void> {
+  const slug = slugArg('activate')
+  await withLive({}, async (deps) => {
+    const r = await activateBySlug(slug, deps)
+    log(`activate ${slug}: ${r.activated ? 'activated' : 'already active'}`)
+    console.log(JSON.stringify({ phase: 'activate', slug, activated: r.activated }))
+  })
+}
+
 async function cmdRecordStep(): Promise<void> {
   const slug = slugArg('record-step')
   const kind = positional(1)
@@ -957,7 +971,8 @@ const USAGE = `usage: tenant-create <verb> ...
   init [--realm-only] [--panel-origin <origin>]
   phase-a <slug> --host <host> --config <file> --operator <uuid> --it-admin <email> --council-admin <email> [--enable a,b] [--body-name <name>]
   record-step <slug> mail_principal_issued --operator <uuid> [--sender-json <json>]
-  phase-b <slug> (the phase-a flags)
+  phase-b <slug> (the phase-a flags) [--defer-activation, a no-op: phase-b never activates]
+  activate <slug>
   render-router <slug>
   suspend <slug> --operator <uuid> | resume <slug> --operator <uuid>
   reconcile [--verify-only] <slug>|--all [--sender-json <json>]
@@ -985,6 +1000,8 @@ async function main(): Promise<void> {
       return cmdPhase('a')
     case 'phase-b':
       return cmdPhase('b')
+    case 'activate':
+      return cmdActivate()
     case 'record-step':
       return cmdRecordStep()
     case 'render-router':

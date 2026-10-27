@@ -49,6 +49,12 @@ export interface CreateSpec {
    * before any write.
    */
   dpia?: Readonly<Record<string, DpiaSpec>>
+  /**
+   * create-harden H3: phase B leaves the customer `provisioning`; the host
+   * marks it active (activateCustomer) only after it has written the router,
+   * so a router failure never leaves an active customer with no route.
+   */
+  deferActivation?: boolean
 }
 
 export function assertHost(host: string): string {
@@ -108,6 +114,11 @@ async function ensureControlRow(deps: ProvisioningDeps, slug: string, host: stri
     }
     if (existing.host !== null && existing.host !== host) {
       throw new ProvisioningError('CUSTOMER_STATE', `customer ${slug} is bound to ${existing.host}, not ${host}`)
+    }
+    if (existing.host === null) {
+      // a crash between the tenant insert and addTenantDomain: bind the host now, or domain_bound fails forever
+      await deps.control.bindPrimaryHost(existing.id, host)
+      return { row: { ...existing, host }, created: false }
     }
     return { row: existing, created: false }
   }
@@ -250,15 +261,26 @@ export async function createPhaseB(spec: CreateSpec, deps: ProvisioningDeps): Pr
   }
   const enabled = (await deps.modules.enabled(c)).sort()
   const broker = await deps.broker.ensure(c, enabled)
-  let activated = false
-  if (c.status === 'provisioning') {
-    const done = doneKinds(await deps.ledger.rows(c.id))
-    if (!isComplete(done)) throw new ProvisioningError('STEP_OUT_OF_ORDER', `customer ${v.slug} is not complete (missing ${EXECUTION_ORDER.filter((k) => !done.has(k)).join(', ')})`)
-    await deps.control.setStatus(c.id, 'active')
-    activated = true
-  }
+  const activated = spec.deferActivation ? false : (await activateCustomer(c, deps)).activated
   if (!(await deps.config.setupComplete(c))) await deps.config.markSetupComplete(c)
   return { customer: c, run, enabled, reloaded: broker.reloaded, activated }
+}
+
+/**
+ * The last create step (create-harden H3): `provisioning` -> `active`, once the
+ * ledger is complete. Re-runnable: an active customer is left as it is.
+ */
+export async function activateCustomer(c: CustomerRef & { status: ControlRow['status'] }, deps: ProvisioningDeps): Promise<{ customer: CustomerRef; activated: boolean }> {
+  if (c.status === 'active') return { customer: c, activated: false }
+  if (c.status !== 'provisioning') throw new ProvisioningError('CUSTOMER_STATE', `customer ${c.slug} is ${c.status}; only a provisioning customer is activated`)
+  const done = doneKinds(await deps.ledger.rows(c.id))
+  if (!isComplete(done)) throw new ProvisioningError('STEP_OUT_OF_ORDER', `customer ${c.slug} is not complete (missing ${EXECUTION_ORDER.filter((k) => !done.has(k)).join(', ')})`)
+  await deps.control.setStatus(c.id, 'active')
+  return { customer: c, activated: true }
+}
+
+export async function activateBySlug(slug: string, deps: ProvisioningDeps): Promise<{ customer: CustomerRef; activated: boolean }> {
+  return activateCustomer(await requireCustomer(deps, slug), deps)
 }
 
 /**

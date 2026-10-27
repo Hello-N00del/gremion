@@ -71,7 +71,7 @@ describe('tenant-create --help (TDD 19)', () => {
   it('imports every adapter and prints the verbs', () => {
     const r = run(['--help'], {})
     expect(r.status, r.out).toBe(0)
-    for (const verb of ['init', 'phase-a', 'record-step', 'phase-b', 'render-router', 'suspend', 'resume', 'reconcile', 'status', 'operator-add']) {
+    for (const verb of ['init', 'phase-a', 'record-step', 'phase-b', 'activate', '--defer-activation', 'render-router', 'suspend', 'resume', 'reconcile', 'status', 'operator-add']) {
       expect(r.out).toContain(verb)
     }
   }, 90_000)
@@ -102,6 +102,7 @@ describe('tenant-create phase-a env contract (TDD 19, G3)', () => {
   it.each([
     ['suspend', 'PLATFORM_DOMAIN', ['suspend', 'musterstadt', '--operator', '8d6b9c7e-1f2a-4b3c-9d4e-5f6a7b8c9d0e']],
     ['resume', 'TENANT_EXPORT_DIR', ['resume', 'musterstadt', '--operator', '8d6b9c7e-1f2a-4b3c-9d4e-5f6a7b8c9d0e']],
+    ['activate', 'TENANT_PROVISIONER_SECRET_FILE', ['activate', 'musterstadt']],
     ['record-step', 'TENANT_PROVISIONER_SECRET_FILE', ['record-step', 'musterstadt', 'mail_principal_issued', '--operator', '8d6b9c7e-1f2a-4b3c-9d4e-5f6a7b8c9d0e']],
   ])('%s without %s: exit 2 naming it, before the platform pool opens (no hang, no connection error)', (_verb, missing, args) => {
     const env = { ...CONTRACT }
