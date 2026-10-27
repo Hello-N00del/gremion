@@ -1,9 +1,9 @@
-# services/calendar/Dockerfile
-# D-P1-1 house pattern: build context is the REPO ROOT, NOT services/calendar —
+# modules/calendar/Dockerfile
+# D-P1-1 house pattern: build context is the REPO ROOT, NOT modules/calendar —
 # the workspace dep (packages/ports), pnpm-lock.yaml and pnpm-workspace.yaml
-# live OUTSIDE this directory, so a services/calendar-only context cannot
+# live OUTSIDE this directory, so a modules/calendar-only context cannot
 # resolve them. Build with:
-#   docker build -f services/calendar/Dockerfile -t gremion/calendar:<tag> .
+#   docker build -f modules/calendar/Dockerfile -t gremion/calendar:<tag> .
 # Mirrors gremion-ui/Dockerfile:1-22.
 FROM node:26-alpine AS builder
 WORKDIR /repo
@@ -17,21 +17,18 @@ RUN npm install -g corepack && corepack enable pnpm
 
 # Install workspace deps (cache-friendly: package manifests first).
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
-# #453: @gremion/ports lives in the `upstream/gremion` git submodule (the kernel
-# repo), not in this repo. Requires `git submodule update --init` on the host, and
-# the in-image path must match the host path or `--frozen-lockfile` rejects the
-# importer set. Rationale (no credential in-container for a git dependency):
-# gremion-ui/Dockerfile.
-COPY upstream/gremion/packages/ports/package.json ./upstream/gremion/packages/ports/
-COPY services/calendar/package.json ./services/calendar/
+# @gremion/ports is the in-tree workspace package packages/ports; the in-image
+# path must match the repo path or `--frozen-lockfile` rejects the importer set.
+COPY packages/ports/package.json ./packages/ports/
+COPY modules/calendar/package.json ./modules/calendar/
 RUN pnpm install --frozen-lockfile
 
 # Copy workspace package sources + the service sources.
-COPY upstream/gremion/packages/ports ./upstream/gremion/packages/ports/
-COPY services/calendar ./services/calendar/
+COPY packages/ports ./packages/ports/
+COPY modules/calendar ./modules/calendar/
 
-# Compile TypeScript → services/calendar/dist
-WORKDIR /repo/services/calendar
+# Compile TypeScript → modules/calendar/dist
+WORKDIR /repo/modules/calendar
 RUN pnpm build
 
 # pnpm deploy resolves workspace symlinks into a self-contained dir.
@@ -46,8 +43,8 @@ ENV PORT=8080
 
 COPY --from=builder /deploy/node_modules ./node_modules
 COPY --from=builder /deploy/package.json ./
-COPY --from=builder /repo/services/calendar/dist ./dist
-COPY --from=builder /repo/services/calendar/migrations ./migrations
+COPY --from=builder /repo/modules/calendar/dist ./dist
+COPY --from=builder /repo/modules/calendar/migrations ./migrations
 
 # A-021: run as the image's built-in non-root `node` user (uid/gid 1000).
 USER node

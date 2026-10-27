@@ -1,9 +1,9 @@
-# services/newsletter/Dockerfile
-# D-P1-1 house pattern: build context is the REPO ROOT, NOT services/newsletter —
+# modules/publishing/Dockerfile
+# D-P1-1 house pattern: build context is the REPO ROOT, NOT modules/publishing —
 # the workspace dep (packages/ports), pnpm-lock.yaml and pnpm-workspace.yaml
-# live OUTSIDE this directory, so a services/newsletter-only context cannot
+# live OUTSIDE this directory, so a modules/publishing-only context cannot
 # resolve them. Build with:
-#   docker build -f services/newsletter/Dockerfile -t gremion/newsletter:<tag> .
+#   docker build -f modules/publishing/Dockerfile -t gremion/newsletter:<tag> .
 # Mirrors gremion-ui/Dockerfile:1-22.
 FROM node:26-alpine AS builder
 WORKDIR /repo
@@ -17,21 +17,18 @@ RUN npm install -g corepack && corepack enable pnpm
 
 # Install workspace deps (cache-friendly: package manifests first).
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
-# #453: @gremion/ports lives in the `upstream/gremion` git submodule (the kernel
-# repo), not in this repo. Requires `git submodule update --init` on the host, and
-# the in-image path must match the host path or `--frozen-lockfile` rejects the
-# importer set. Rationale (no credential in-container for a git dependency):
-# gremion-ui/Dockerfile.
-COPY upstream/gremion/packages/ports/package.json ./upstream/gremion/packages/ports/
-COPY services/newsletter/package.json ./services/newsletter/
+# @gremion/ports is the in-tree workspace package packages/ports; the in-image
+# path must match the repo path or `--frozen-lockfile` rejects the importer set.
+COPY packages/ports/package.json ./packages/ports/
+COPY modules/publishing/package.json ./modules/publishing/
 RUN pnpm install --frozen-lockfile
 
 # Copy workspace package sources + the service sources.
-COPY upstream/gremion/packages/ports ./upstream/gremion/packages/ports/
-COPY services/newsletter ./services/newsletter/
+COPY packages/ports ./packages/ports/
+COPY modules/publishing ./modules/publishing/
 
-# Compile TypeScript → services/newsletter/dist
-WORKDIR /repo/services/newsletter
+# Compile TypeScript → modules/publishing/dist
+WORKDIR /repo/modules/publishing
 RUN pnpm build
 
 # pnpm deploy resolves workspace symlinks into a self-contained dir.
@@ -46,8 +43,8 @@ ENV PORT=8080
 
 COPY --from=builder /deploy/node_modules ./node_modules
 COPY --from=builder /deploy/package.json ./
-COPY --from=builder /repo/services/newsletter/dist ./dist
-COPY --from=builder /repo/services/newsletter/migrations ./migrations
+COPY --from=builder /repo/modules/publishing/dist ./dist
+COPY --from=builder /repo/modules/publishing/migrations ./migrations
 
 # A-021: run as the image's built-in non-root `node` user (uid/gid 1000).
 USER node

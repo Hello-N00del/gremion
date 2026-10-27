@@ -1,10 +1,11 @@
-# services/board/Dockerfile
-# House pattern: the build context is the REPO ROOT, NOT services/board — the
+# modules/board/Dockerfile
+# House pattern: the build context is the REPO ROOT, NOT modules/board — the
 # pnpm-lock.yaml and pnpm-workspace.yaml live OUTSIDE this directory, so a
-# services/board-only context cannot resolve the workspace. Build with:
-#   docker build -f services/board/Dockerfile -t gremion/board:<tag> .
-# Mirrors gremion-ui/Dockerfile. The board leaf is self-contained (postgres + zod
-# only — NO @gremion/ports), so no packages/* are copied.
+# modules/board-only context cannot resolve the workspace. Build with:
+#   docker build -f modules/board/Dockerfile -t gremion/board:<tag> .
+# Mirrors gremion-ui/Dockerfile. The board leaf bundles @gremion/tenant-store (per-tenant
+# board store) and its workspace deps @gremion/db + @gremion/module-catalogue (+ @gremion/generated-clients), so those
+# packages are copied from the tree; NO @gremion/ports.
 FROM node:26-alpine AS builder
 WORKDIR /repo
 
@@ -17,14 +18,22 @@ RUN npm install -g corepack && corepack enable pnpm
 
 # Install workspace deps (cache-friendly: package manifests first).
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
-COPY services/board/package.json ./services/board/
+COPY packages/db/package.json ./packages/db/
+COPY packages/generated-clients/package.json ./packages/generated-clients/
+COPY packages/module-catalogue/package.json ./packages/module-catalogue/
+COPY packages/tenant-store/package.json ./packages/tenant-store/
+COPY modules/board/package.json ./modules/board/
 RUN pnpm install --frozen-lockfile
 
-# Copy the service sources.
-COPY services/board ./services/board/
+# Copy workspace package sources + the service sources.
+COPY packages/db ./packages/db/
+COPY packages/generated-clients ./packages/generated-clients/
+COPY packages/module-catalogue ./packages/module-catalogue/
+COPY packages/tenant-store ./packages/tenant-store/
+COPY modules/board ./modules/board/
 
-# Compile TypeScript → services/board/dist
-WORKDIR /repo/services/board
+# Compile TypeScript → modules/board/dist
+WORKDIR /repo/modules/board
 RUN pnpm build
 
 # pnpm deploy resolves the package into a self-contained dir.
@@ -39,8 +48,8 @@ ENV PORT=8080
 
 COPY --from=builder /deploy/node_modules ./node_modules
 COPY --from=builder /deploy/package.json ./
-COPY --from=builder /repo/services/board/dist ./dist
-COPY --from=builder /repo/services/board/migrations ./migrations
+COPY --from=builder /repo/modules/board/dist ./dist
+COPY --from=builder /repo/modules/board/migrations ./migrations
 
 # A-021: run as the image's built-in non-root `node` user (uid/gid 1000).
 USER node
