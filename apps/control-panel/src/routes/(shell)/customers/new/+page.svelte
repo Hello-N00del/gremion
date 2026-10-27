@@ -74,22 +74,22 @@
           <div class="dpia">
             <label>
               DPIA für {m.id}
-              <select name={`dpia_${m.id}`} required>
+              <select name={`dpia_${m.id}`} aria-invalid={errors.dpia ? 'true' : undefined} aria-describedby={errors.dpia ? 'err-dpia' : undefined}>
                 <option value="" selected={typeof dpiaValues[m.id]?.requiresDpia !== 'boolean'}>bitte wählen</option>
                 <option value="no" selected={dpiaValues[m.id]?.requiresDpia === false}>nicht erforderlich</option>
                 <option value="yes" selected={dpiaValues[m.id]?.requiresDpia === true}>erforderlich</option>
               </select>
             </label>
             <label>
-              Dokumentverweis (Pflicht)
-              <input name={`dpiaRef_${m.id}`} required autocomplete="off" maxlength="500" value={String(dpiaValues[m.id]?.documentRef ?? '')} />
+              Dokumentverweis (Pflicht für angekreuzte Module)
+              <input name={`dpiaRef_${m.id}`} aria-invalid={errors.dpia ? 'true' : undefined} aria-describedby={errors.dpia ? 'err-dpia' : undefined} autocomplete="off" maxlength="500" value={String(dpiaValues[m.id]?.documentRef ?? '')} />
             </label>
           </div>
         {/if}
       {/each}
       <p class="muted">„board“ ist noch nicht mandantengetrennt, „vault“ (Tresor) bleibt im Pilotbetrieb abgeschaltet: beide sind nicht wählbar.</p>
       {#if errors.enable}<span class="err">{errors.enable}</span>{/if}
-      {#if errors.dpia}<span class="err">{errors.dpia}</span>{/if}
+      {#if errors.dpia}<span id="err-dpia" class="err">{errors.dpia}</span>{/if}
     </fieldset>
     <p id="hint" class="muted">
       Das Panel legt nichts selbst an: es stellt eine Anfrage, die der Ausführer auf dem Host erneut prüft und Schritt für Schritt umsetzt.

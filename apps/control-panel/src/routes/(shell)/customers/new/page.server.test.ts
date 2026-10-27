@@ -17,7 +17,10 @@ vi.mock('$lib/server/requests', async (orig) => ({
   ...(await orig<typeof import('$lib/server/requests')>()),
   submitCreate,
   heartbeatAgeSeconds: async () => 1,
-  listModuleChoices: async () => [],
+  listModuleChoices: async () => [
+    { id: 'calendar', name: 'Kalender', denied: null },
+    { id: 'votes', name: 'Abstimmungen', denied: null },
+  ],
 }))
 
 const { actions } = await import('./+page.server')
@@ -114,5 +117,30 @@ describe('Neuer Mandant action: validation before any request row', () => {
     await post({ ...GOOD, dpia_calendar: 'yes' })
     await post({ ...GOOD, dpia_calendar: 'no' })
     expect(submitCreate).toHaveBeenCalledTimes(2)
+  })
+
+  it('MED-2: an enable id that is not a toggleable module row is refused even in a hand-made POST', async () => {
+    const o = failed(await post({ ...GOOD, enable: ['calendar', 'ghost'], dpia_ghost: 'no', dpiaRef_ghost: 'TOM-9' }))
+    expect(o.status).toBe(400)
+    expect(o.data.errors.enable).toMatch(/ghost/)
+    expect(submitCreate).not.toHaveBeenCalled()
+  })
+
+  it('LOW-1: a non-ASCII host that folds to ASCII when lower-cased (Kelvin sign) is refused', async () => {
+    const o = failed(await post({ ...GOOD, host: 'rat.\u212Aeller.de' }))
+    expect(o.data.errors.host).toMatch(/ASCII/)
+    expect(submitCreate).not.toHaveBeenCalled()
+  })
+
+  it('HIGH-1: the answers of an unticked module survive a failed submit', async () => {
+    const o = failed(await post({ ...GOOD, brandProduct: 'a\u0007', dpia_votes: 'yes', dpiaRef_votes: 'TOM-7' }))
+    const dpia = (o as unknown as { data: { values: { dpia: Record<string, { requiresDpia: boolean | null; documentRef: string }> } } }).data.values.dpia
+    expect(dpia.votes).toEqual({ requiresDpia: true, documentRef: 'TOM-7' })
+  })
+
+  it('HIGH-2: a reserved slug is refused on the form', async () => {
+    const o = failed(await post({ ...GOOD, slug: 'keycloak' }))
+    expect(o.data.errors.slug).toBeDefined()
+    expect(submitCreate).not.toHaveBeenCalled()
   })
 })
