@@ -32,27 +32,39 @@ describe('validate', () => {
       'Odd Body,b@x.example,Nowhere,\n' + // 6
       'Odd Role,c@x.example,Assembly,king\n' + // 7
       'Not Importable,d@x.example,Assembly,officer\n' + // 8
-      'Twice,e@x.example,Assembly,\n' + // 9 ok
+      'Twice,e@x.example,Assembly,\n' + // 9 duplicate: the FIRST row of the set is rejected too
       'Twice Again,E@X.example ,assembly,\n' // 10 duplicate (normalised)
     const r = validateList(text, ctx())
     expect(r.status).toBe('rejected')
     expect(r.rejected.map((x) => [x.row, x.reason])).toEqual([
       [2, 'missing_name'],
       [3, 'missing_email'],
-      [4, 'invalid_email'],
-      [5, 'missing_body'],
+      [4, 'malformed_email'],
+      [5, 'unknown_body'],
       [6, 'unknown_body'],
       [7, 'unknown_role'],
       [8, 'unknown_role'],
-      [10, 'duplicate_in_body'],
+      [9, 'duplicate_email_in_body'],
+      [10, 'duplicate_email_in_body'],
     ])
     expect(JSON.stringify(validationResult(r))).not.toMatch(/@/)
+  })
+  it('a repeated e-mail rejects EVERY row of the set (duplicate_email_in_body x2) and the list creates no account', async () => {
+    const r = validateList(HEADER + 'First,dup@x.example,Assembly,\nSecond,DUP@x.example,Assembly,helper\nThird,ok@x.example,Assembly,\n', ctx())
+    expect(r.rejected).toEqual([
+      { row: 2, name: 'First', reason: 'duplicate_email_in_body' },
+      { row: 3, name: 'Second', reason: 'duplicate_email_in_body' },
+    ])
+    expect(r.valid.map((v) => v.row)).toEqual([4])
+    const t = new FakeTarget()
+    await expect(applyImport(r, ctx().roles, t, r.sha256)).rejects.toThrow(ImportRefused)
+    expect(t.calls).toEqual([])
   })
   it('the same e-mail in two different bodies is fine; an ambiguous body name is refused', () => {
     const two = validateList(HEADER + 'A,a@x.example,Assembly,\nA,a@x.example,Executive,helper\n', ctx())
     expect(two.status).toBe('validated')
     const dup = { bodies: [...BODIES, { id: 'b-dup', name: 'assembly' }], roles: ctx().roles }
-    expect(validateList(HEADER + 'A,a@x.example,Assembly,\n', dup).rejected[0]?.reason).toBe('ambiguous_body')
+    expect(validateList(HEADER + 'A,a@x.example,Assembly,\n', dup).rejected[0]?.reason).toBe('unknown_body')
   })
   it('the sha256 ignores order, case, whitespace and CRLF but not content', () => {
     const a = validateList(HEADER + 'A One,a@x.example,Assembly,\nB Two,b@x.example,Executive,helper\n', ctx())

@@ -19,8 +19,10 @@ import {
   subsystemsFor,
   type AccountResult,
   type BodyRef,
+  type ExistingCatalog,
   type ExistingMembership,
   type ExistingUnit,
+  type KindData,
   type MemberImportTarget,
   type Role,
   type SeedModules,
@@ -32,6 +34,8 @@ import { enqueueResources } from '$lib/server/governance/provisioning/ledger'
 import { getDb } from '$lib/server/db'
 import type { KcProvisionApi } from './kc-admin-api'
 
+/** The grace period an office created by the seed starts with (the seeder's own default). */
+const SEAT_GRACE_PERIOD_DAYS = 14
 /** The realm role every imported account carries. */
 export const IMPORT_REALM_ROLE = 'member'
 /** D-5: the only action an imported member is asked for. */
@@ -58,12 +62,30 @@ export function keycloakAccounts(kc: KcAccounts, realm: string): Pick<MemberImpo
 
 /** The org-unit side of the import and the seed, over the current tenant's database. */
 export interface OrgStore {
+  /** The bodies a member list may name: the customer's ROOT body only (never a sub-unit). */
   listBodies(): Promise<BodyRef[]>
   membership(bodyId: string, userId: string): Promise<ExistingMembership | null>
   addMembership(m: { bodyId: string; userId: string; role: Role }): Promise<void>
   rearm(bodyIds: readonly string[]): Promise<void>
   listUnits(): Promise<ExistingUnit[]>
-  applySeed(ops: readonly SeedOp[]): Promise<{ created: number; adopted: number; present: number }>
+  /** The kind catalog and the offices already in the tenant database. */
+  listCatalog(): Promise<ExistingCatalog>
+  applySeed(ops: readonly SeedOp[]): Promise<SeedCounts>
+}
+
+export interface SeedCounts {
+  units: { created: number; adopted: number; present: number }
+  kinds: { upserted: number; present: number }
+  seats: { created: number; present: number }
+}
+
+/**
+ * The bodies a member list may name. A list names the customer's BODY (the
+ * single root the seed adopts), never one of its committees or groups: a row
+ * naming a sub-unit must come back `unknown_body` (brief Q6).
+ */
+export function bodiesOf(units: ReadonlyArray<Pick<ExistingUnit, 'id' | 'parentId' | 'name'>>): BodyRef[] {
+  return units.filter((u) => u.parentId === null).map((u) => ({ id: u.id, name: u.name }))
 }
 
 export function memberImportTarget(accounts: Pick<MemberImportTarget, 'findUserId' | 'ensureAccount'>, store: OrgStore): MemberImportTarget {
@@ -80,7 +102,7 @@ export function memberImportTarget(accounts: Pick<MemberImportTarget, 'findUserI
 export function sqlOrgStore(): OrgStore {
   return {
     async listBodies() {
-      return getDb()<BodyRef[]>`SELECT id::text AS id, name FROM org_units ORDER BY created_at, id`
+      return getDb()<BodyRef[]>`SELECT id::text AS id, name FROM org_units WHERE parent_id IS NULL ORDER BY created_at, id`
     },
     async membership(bodyId, userId) {
       const rows = await getDb()<Array<{ membership_type: string; voting: boolean }>>`
@@ -120,15 +142,63 @@ export function sqlOrgStore(): OrgStore {
         wantsNextcloudFolder: r.wants_nextcloud_folder,
       }))
     },
+    async listCatalog() {
+      const kinds = await getDb()<
+        Array<{ key: string; label: string; child_term: string | null; allowed_parent_kinds: string[]; can_be_root: boolean; root_min: number; root_max: number | null; sort_order: number }>
+      >`SELECT key, label, child_term, allowed_parent_kinds, can_be_root, root_min, root_max, sort_order FROM org_unit_kind ORDER BY sort_order, key`
+      const seats = await getDb()<Array<{ org_unit_id: string; name: string }>>`SELECT org_unit_id::text AS org_unit_id, name FROM committee_roles`
+      return {
+        kinds: kinds.map(
+          (k): KindData => ({
+            key: k.key,
+            label: k.label,
+            childTerm: k.child_term,
+            allowedParentKinds: k.allowed_parent_kinds,
+            canBeRoot: k.can_be_root,
+            rootMin: k.root_min,
+            rootMax: k.root_max,
+            sortOrder: k.sort_order,
+          }),
+        ),
+        seats: seats.map((r) => ({ orgUnitId: r.org_unit_id, name: r.name })),
+      }
+    },
     async applySeed(ops) {
       const ids = new Map<string, string>()
-      let created = 0
-      let adopted = 0
-      let present = 0
+      const counts: SeedCounts = { units: { created: 0, adopted: 0, present: 0 }, kinds: { upserted: 0, present: 0 }, seats: { created: 0, present: 0 } }
       for (const op of ops) {
+        if (op.type === 'present-kind') {
+          counts.kinds.present++
+          continue
+        }
+        if (op.type === 'present-seat') {
+          counts.seats.present++
+          continue
+        }
+        if (op.type === 'upsert-kind') {
+          // before the units (org_units.kind references the catalog); added or updated, never pruned
+          const k = op.data
+          await getDb()`
+            INSERT INTO org_unit_kind (key, label, child_term, allowed_parent_kinds, can_be_root, root_min, root_max, sort_order)
+            VALUES (${k.key}, ${k.label}, ${k.childTerm}, ${k.allowedParentKinds}, ${k.canBeRoot}, ${k.rootMin}, ${k.rootMax}, ${k.sortOrder})
+            ON CONFLICT (key) DO UPDATE SET label = EXCLUDED.label, child_term = EXCLUDED.child_term,
+              allowed_parent_kinds = EXCLUDED.allowed_parent_kinds, can_be_root = EXCLUDED.can_be_root,
+              root_min = EXCLUDED.root_min, root_max = EXCLUDED.root_max, sort_order = EXCLUDED.sort_order`
+          counts.kinds.upserted++
+          continue
+        }
+        if (op.type === 'create-seat') {
+          const unitId = ids.get(op.orgUnitKey)
+          if (unitId === undefined) throw new Error(`seed: unit ${op.orgUnitKey} of seat ${op.key} was not placed`)
+          await getDb()`
+            INSERT INTO committee_roles (org_unit_id, name, election_method, is_elected, grace_period_days)
+            VALUES (${unitId}, ${op.data.name}, ${op.data.electionMethod}, ${op.data.isElected}, ${SEAT_GRACE_PERIOD_DAYS})`
+          counts.seats.created++
+          continue
+        }
         if (op.type === 'present') {
           ids.set(op.key, op.id)
-          present++
+          counts.units.present++
           continue
         }
         if (op.type === 'adopt-root') {
@@ -140,7 +210,7 @@ export function sqlOrgStore(): OrgStore {
             await enqueueResources(tx, op.id, subsystemsFor(op.patch))
           })
           ids.set(op.key, op.id)
-          adopted++
+          counts.units.adopted++
           continue
         }
         const parentId = op.parentKey === null ? null : (ids.get(op.parentKey) ?? null)
@@ -162,9 +232,9 @@ export function sqlOrgStore(): OrgStore {
           return unit.id
         })
         ids.set(op.key, id)
-        created++
+        counts.units.created++
       }
-      return { created, adopted, present }
+      return counts
     },
   }
 }
@@ -188,16 +258,18 @@ export interface SeedPorts {
 
 export interface SeedReport {
   status: 'applied'
-  units: { created: number; adopted: number; present: number }
+  units: SeedCounts['units']
+  kinds: SeedCounts['kinds']
+  seats: SeedCounts['seats']
   terms_written: boolean
 }
 
 /** Seeds a vertical onto the customer's tree and merges its wording. Idempotent. */
 export async function seedVertical(vertical: Vertical, ports: SeedPorts): Promise<SeedReport> {
   const existing = await ports.store.listUnits()
-  const ops = planSeed(vertical.blueprint, existing, ports.modules)
-  const units = await ports.store.applySeed(ops)
+  const ops = planSeed(vertical.blueprint, existing, ports.modules, await ports.store.listCatalog())
+  const { units, kinds, seats } = await ports.store.applySeed(ops)
   const merged = configWithTerms(ports.readConfig(), vertical.wording)
   if (merged.changed) ports.writeConfig(merged.text)
-  return { status: 'applied', units, terms_written: merged.changed }
+  return { status: 'applied', units, kinds, seats, terms_written: merged.changed }
 }

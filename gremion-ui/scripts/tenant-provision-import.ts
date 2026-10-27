@@ -127,7 +127,7 @@ export async function importVerb(verb: string, ctx: ImportVerbContext): Promise<
           writeConfig: (text) => ctx.writeConfigFile(configPathForTenant(tenant.slug), text),
         })
       })
-      ctx.log(`seed-vertical ${slug}: units created ${report.units.created}, adopted ${report.units.adopted}, present ${report.units.present}; terms ${report.terms_written ? 'written' : 'unchanged'}`)
+      ctx.log(`seed-vertical ${slug}: units created ${report.units.created}, adopted ${report.units.adopted}, present ${report.units.present}; kinds upserted ${report.kinds.upserted}; seats created ${report.seats.created}; terms ${report.terms_written ? 'written' : 'unchanged'}`)
       print(report)
     })
     return

@@ -52,7 +52,7 @@ describe('seed plan', () => {
 
   it('adopts the root (name kept), creates the rest parents-first', () => {
     const ops = planSeed(bp, [root], { messaging: true, files: true })
-    expect(ops.map((o) => `${o.type}:${o.key}`)).toEqual(['adopt-root:assembly', 'create:board', 'create:ops'])
+    expect(ops.map((o) => `${o.type}:${o.key}`)).toEqual(['adopt-root:assembly', 'create:board', 'create:ops', 'create-seat:chair'])
     expect(ops[0]).toMatchObject({ patch: { childTerm: 'Teams', wantsMatrixRoom: true, wantsNextcloudFolder: true } })
   })
   it('D-8: with messaging and files OFF no unit wants a matrix room or a folder (no projection rows)', () => {
@@ -74,7 +74,38 @@ describe('seed plan', () => {
       { id: 'b', parentId: 'root', name: 'executive', childTerm: null, wantsMatrixRoom: true, wantsNextcloudFolder: false },
       { id: 'o', parentId: 'b', name: 'Operations', childTerm: null, wantsMatrixRoom: false, wantsNextcloudFolder: true },
     ]
-    expect(planSeed(bp, tree, { messaging: true, files: true }).every((o) => o.type === 'present')).toBe(true)
+    const ops = planSeed(bp, tree, { messaging: true, files: true }, { kinds: [], seats: [{ orgUnitId: 'b', name: ' CHAIR ' }] })
+    expect(ops.map((o) => o.type)).toEqual(['present', 'present', 'present', 'present-seat'])
+  })
+  it("seeds the blueprint's kinds BEFORE its units and its seats AFTER them; a rerun is all present", () => {
+    const withSchema = {
+      ...bp,
+      orgSchema: [
+        { key: 'council', label: 'Rat', allowedParentKinds: [], canBeRoot: true, rootMin: 1, rootMax: 1, childTerm: 'Teams' },
+        { key: 'committee', label: 'Ausschuss', allowedParentKinds: ['council'], canBeRoot: false },
+        { key: 'group', label: 'Gruppe', allowedParentKinds: ['council', 'committee'], canBeRoot: false },
+      ],
+    }
+    const first = planSeed(withSchema, [root], { messaging: true, files: true })
+    expect(first.map((o) => o.type)).toEqual(['upsert-kind', 'upsert-kind', 'upsert-kind', 'adopt-root', 'create', 'create', 'create-seat'])
+    expect(first[1]).toMatchObject({ data: { key: 'committee', label: 'Ausschuss', childTerm: null, allowedParentKinds: ['council'], canBeRoot: false, rootMin: 0, rootMax: null, sortOrder: 1 } })
+    expect(first[6]).toMatchObject({ orgUnitKey: 'board', data: { name: 'Chair', electionMethod: 'poll', isElected: true } })
+    const kinds = first.flatMap((o) => (o.type === 'upsert-kind' ? [o.data] : []))
+    const tree: ExistingUnit[] = [
+      { ...root, childTerm: 'Teams', wantsMatrixRoom: true, wantsNextcloudFolder: true },
+      { id: 'b', parentId: 'root', name: 'Executive', childTerm: null, wantsMatrixRoom: true, wantsNextcloudFolder: false },
+      { id: 'o', parentId: 'b', name: 'Operations', childTerm: null, wantsMatrixRoom: false, wantsNextcloudFolder: true },
+    ]
+    const again = planSeed(withSchema, tree, { messaging: true, files: true }, { kinds, seats: [{ orgUnitId: 'b', name: 'Chair' }] })
+    expect(again.map((o) => o.type)).toEqual(['present-kind', 'present-kind', 'present-kind', 'present', 'present', 'present', 'present-seat'])
+    // a kind that differs from the catalog is upserted again
+    const drift = planSeed(withSchema, tree, { messaging: true, files: true }, { kinds: kinds.map((k) => (k.key === 'group' ? { ...k, label: 'Other' } : k)), seats: [] })
+    expect(drift.filter((o) => o.type === 'upsert-kind').map((o) => o.key)).toEqual(['group'])
+  })
+  it("a unit whose kind is not in the blueprint's own orgSchema is refused by the loader", () => {
+    const doc = JSON.parse(readFileSync(join(FIXTURE_DIR, 'blueprint.json'), 'utf8'))
+    doc.orgSchema = [{ key: 'council', label: 'Rat', allowedParentKinds: [], canBeRoot: true }]
+    expect(() => loadVertical(files({ 'blueprint.json': JSON.stringify(doc) }))).toThrow(/not in the blueprint.s orgSchema/)
   })
   it('refuses a customer with two roots', () => {
     expect(() => planSeed(bp, [root, { ...root, id: 'r2' }], { messaging: true, files: true })).toThrow(/top-level bodies/)

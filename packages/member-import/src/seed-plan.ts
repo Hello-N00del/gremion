@@ -6,12 +6,18 @@
 // creates the rest under it, parents before children. A unit that already
 // exists (same parent, same name) is left as it is, so a rerun is a no-op.
 //
+// A vertical's `orgSchema` kinds (the per-tenant kind catalog, parents-first
+// hierarchy via allowedParentKinds / canBeRoot) are upserted BEFORE the units
+// (org_units.kind references the catalog) and its `seats` (offices, the
+// committee_roles rows) are created AFTER them, one per (unit, name). Kinds
+// are only added or updated, never pruned: a tenant's own kinds stay.
+//
 // D-8 (operator decision 2026-10-22): a unit's `wants_matrix_room` /
 // `wants_nextcloud_folder` are written true only when the blueprint wants them
 // AND the tenant has messaging / files enabled; with the module off they are
 // false and no matrix / nextcloud projection row is ever created for the unit.
 import { labelKey } from './normalize.ts'
-import type { BlueprintUnit, VerticalBlueprint } from './vertical.ts'
+import type { BlueprintSeat, BlueprintUnit, VerticalBlueprint } from './vertical.ts'
 
 export interface ExistingUnit {
   id: string
@@ -20,6 +26,29 @@ export interface ExistingUnit {
   childTerm: string | null
   wantsMatrixRoom: boolean
   wantsNextcloudFolder: boolean
+}
+
+export interface KindData {
+  key: string
+  label: string
+  childTerm: string | null
+  allowedParentKinds: string[]
+  canBeRoot: boolean
+  rootMin: number
+  rootMax: number | null
+  sortOrder: number
+}
+
+export interface SeatData {
+  name: string
+  electionMethod: 'helios' | 'poll' | 'manual'
+  isElected: boolean
+}
+
+/** What the tenant database already holds of the kind catalog and the offices. */
+export interface ExistingCatalog {
+  kinds: readonly KindData[]
+  seats: ReadonlyArray<{ orgUnitId: string; name: string }>
 }
 
 export interface SeedModules {
@@ -45,6 +74,10 @@ export type SeedOp =
   | { type: 'adopt-root'; key: string; id: string; patch: { childTerm: string | null; wantsMatrixRoom: boolean; wantsNextcloudFolder: boolean } }
   | { type: 'create'; key: string; parentKey: string | null; data: CreateUnitData }
   | { type: 'present'; key: string; id: string }
+  | { type: 'upsert-kind'; key: string; data: KindData }
+  | { type: 'present-kind'; key: string }
+  | { type: 'create-seat'; key: string; orgUnitKey: string; data: SeatData }
+  | { type: 'present-seat'; key: string }
 
 export class SeedRefused extends Error {
   constructor(message: string) {
@@ -77,11 +110,51 @@ function ordered(bp: VerticalBlueprint): BlueprintUnit[] {
   return out
 }
 
-export function planSeed(bp: VerticalBlueprint, existing: readonly ExistingUnit[], modules: SeedModules): SeedOp[] {
+function kindData(k: NonNullable<VerticalBlueprint['orgSchema']>[number], index: number): KindData {
+  return {
+    key: k.key,
+    label: k.label,
+    childTerm: k.childTerm ?? null,
+    allowedParentKinds: [...k.allowedParentKinds],
+    canBeRoot: k.canBeRoot,
+    rootMin: k.rootMin ?? 0,
+    rootMax: k.rootMax === undefined ? null : k.rootMax,
+    sortOrder: k.sortOrder ?? index,
+  }
+}
+
+const sameKind = (a: KindData, b: KindData): boolean => JSON.stringify(a) === JSON.stringify(b)
+
+/** Kind catalog ops: an absent or differing kind is upserted, an equal one is `present`. */
+function planKinds(bp: VerticalBlueprint, existing: readonly KindData[]): SeedOp[] {
+  return (bp.orgSchema ?? []).map((k, i) => {
+    const want = kindData(k, i)
+    const have = existing.find((e) => e.key === want.key)
+    return have && sameKind(have, want) ? { type: 'present-kind', key: want.key } : { type: 'upsert-kind', key: want.key, data: want }
+  })
+}
+
+/** Office ops: one per (unit, name); a seat on a unit this run creates is always new. */
+function planSeats(seats: readonly BlueprintSeat[], ids: ReadonlyMap<string, string>, existing: ExistingCatalog['seats']): SeedOp[] {
+  return seats.map((s) => {
+    const unitId = ids.get(s.orgUnitKey)
+    const have = unitId !== undefined && existing.some((e) => e.orgUnitId === unitId && labelKey(e.name) === labelKey(s.name))
+    return have
+      ? { type: 'present-seat', key: s.key }
+      : { type: 'create-seat', key: s.key, orgUnitKey: s.orgUnitKey, data: { name: s.name, electionMethod: s.electionMethod, isElected: s.isElected } }
+  })
+}
+
+export function planSeed(
+  bp: VerticalBlueprint,
+  existing: readonly ExistingUnit[],
+  modules: SeedModules,
+  catalog: ExistingCatalog = { kinds: [], seats: [] },
+): SeedOp[] {
   const roots = existing.filter((u) => u.parentId === null)
   if (roots.length > 1) throw new SeedRefused(`the customer already holds ${roots.length} top-level bodies; the seed adopts exactly one root`)
   const ids = new Map<string, string>() // blueprint key -> existing unit id
-  const ops: SeedOp[] = []
+  const ops: SeedOp[] = planKinds(bp, catalog.kinds)
   for (const u of ordered(bp)) {
     const wants = effectiveWants(u, modules)
     if (u.parentKey === null) {
@@ -118,7 +191,7 @@ export function planSeed(bp: VerticalBlueprint, existing: readonly ExistingUnit[
     }
     ops.push({ type: 'create', key: u.key, parentKey: u.parentKey, data: toData(u, wants) })
   }
-  return ops
+  return [...ops, ...planSeats(bp.seats, ids, catalog.seats)]
 }
 
 function toData(u: BlueprintUnit, wants: { wantsMatrixRoom: boolean; wantsNextcloudFolder: boolean }): CreateUnitData {

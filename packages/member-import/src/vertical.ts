@@ -70,6 +70,7 @@ export const wordingSchema = z.record(z.string(), z.string())
 export type VerticalManifest = z.infer<typeof verticalManifestSchema>
 export type VerticalBlueprint = z.infer<typeof verticalBlueprintSchema>
 export type BlueprintUnit = z.infer<typeof blueprintUnitSchema>
+export type BlueprintSeat = z.infer<typeof blueprintSeatSchema>
 
 export interface Vertical {
   manifest: VerticalManifest
@@ -123,6 +124,17 @@ export function assertBlueprintIntegrity(bp: VerticalBlueprint): void {
     for (let k: string | null = u.key; k !== null; k = parent.get(k) ?? null) {
       if (seen.has(k)) throw new VerticalError(`blueprint: unit ${u.key} is part of a parent cycle`)
       seen.add(k)
+    }
+  }
+  // with its own kind catalog every unit must name a kind of it (org_units.kind references the catalog)
+  if (bp.orgSchema) {
+    const kinds = new Set<string>()
+    for (const k of bp.orgSchema) {
+      if (kinds.has(k.key)) throw new VerticalError(`blueprint: kind ${k.key} appears twice in orgSchema`)
+      kinds.add(k.key)
+    }
+    for (const u of bp.orgUnits) {
+      if (!kinds.has(u.kind)) throw new VerticalError(`blueprint: unit ${u.key} has kind ${u.kind}, which is not in the blueprint's orgSchema`)
     }
   }
   for (const s of bp.seats) {

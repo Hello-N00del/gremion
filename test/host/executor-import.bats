@@ -218,10 +218,10 @@ order() { cat "$ORDER"; }
 
 @test "seed_vertical: runs the idempotent seed-vertical verb with no stdin list and reports the counts" {
     jq -nc '{slug:"alpha-rat",vertical:"stura"}' > "${WORK}/args.json"
-    answer seed-vertical "" 0 '{"status":"applied","units":{"created":10,"adopted":1,"present":0},"terms_written":true}'
+    answer seed-vertical "" 0 '{"status":"applied","units":{"created":10,"adopted":1,"present":0},"kinds":{"upserted":3,"present":0},"seats":{"created":8,"present":0},"terms_written":true}'
     drive handle_seed_vertical
     [ "$status" -eq 0 ]
-    [[ "$output" == *"units_created=10 units_adopted=1 units_present=0 terms_written=true"* ]]
+    [[ "$output" == *"units_created=10 units_adopted=1 units_present=0 kinds_upserted=3 seats_created=8 terms_written=true"* ]]
     grep -q '^tc seed-vertical #1 stdin=0 argv=seed-vertical alpha-rat --vertical stura$' "$ORDER"
 }
 

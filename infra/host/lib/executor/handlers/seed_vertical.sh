@@ -19,7 +19,7 @@ handle_seed_vertical() {
     out="$(tc seed-vertical "$slug" --vertical "$vertical" < /dev/null)" || rc=$?
     line="$(grep '^{' <<< "$out" | tail -n 1 || true)"
     [[ -n "$line" ]] || die "seed_vertical ${id}: seed-vertical printed no result (exit ${rc})" "$GREMION_EXIT_ASSERT"
-    jq -r '"seed: status=\(.status) units_created=\(.units.created // 0) units_adopted=\(.units.adopted // 0) units_present=\(.units.present // 0) terms_written=\(.terms_written // false)"' <<< "$line"
+    jq -r '"seed: status=\(.status) units_created=\(.units.created // 0) units_adopted=\(.units.adopted // 0) units_present=\(.units.present // 0) kinds_upserted=\(.kinds.upserted // 0) seats_created=\(.seats.created // 0) terms_written=\(.terms_written // false)"' <<< "$line"
     jq -r 'select(.error) | "  error: \(.error)"' <<< "$line"
     if [[ "$rc" -ne 0 ]] || ! jq -e '.status == "applied"' <<< "$line" >/dev/null; then
         die "seed_vertical ${id}: the seed did not apply (exit ${rc})" "$GREMION_EXIT_ASSERT"

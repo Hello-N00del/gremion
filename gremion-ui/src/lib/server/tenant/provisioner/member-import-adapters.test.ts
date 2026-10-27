@@ -2,8 +2,9 @@
 // in the scratch-stack proof, test/host/integration/member-import-proof.sh).
 import { readFileSync } from 'node:fs'
 import { describe, expect, it, vi } from 'vitest'
-import { applyImport, loadVertical, planSeed, validateList, type ExistingUnit, type SeedOp } from '@gremion/member-import'
+import { applyImport, loadVertical, planSeed, validateList, type ExistingUnit, type KindData, type SeedOp } from '@gremion/member-import'
 import {
+  bodiesOf,
   configWithTerms,
   IMPORT_REALM_ROLE,
   IMPORT_REQUIRED_ACTIONS,
@@ -11,6 +12,7 @@ import {
   memberImportTarget,
   seedVertical,
   type OrgStore,
+  type SeedCounts,
 } from './member-import-adapters'
 
 const FILES: Record<string, unknown> = {
@@ -21,7 +23,11 @@ const FILES: Record<string, unknown> = {
       { key: 'top', name: 'Top', description: null, kind: 'council', parentKey: null, visibility: 'all_members', wantsMatrixRoom: true, wantsNextcloudFolder: true, childTerm: 'Teams' },
       { key: 'sub', name: 'Sub', description: null, kind: 'committee', parentKey: 'top', visibility: 'all_members', wantsMatrixRoom: true, wantsNextcloudFolder: true },
     ],
-    seats: [],
+    seats: [{ key: 'chair', orgUnitKey: 'sub', name: 'Chair', electionMethod: 'poll', isElected: true }],
+    orgSchema: [
+      { key: 'council', label: 'Rat', allowedParentKinds: [], canBeRoot: true, rootMin: 1, rootMax: 1 },
+      { key: 'committee', label: 'Ausschuss', allowedParentKinds: ['council'], canBeRoot: false },
+    ],
   },
   'wording.de.json': { 'unit.plural': 'Gremien' },
   'roles.json': {
@@ -60,13 +66,15 @@ describe('keycloakAccounts (D-5)', () => {
 })
 
 /** An in-memory OrgStore: applySeed really applies the ops, so a rerun sees the tree. */
-function memoryStore(units: ExistingUnit[]): OrgStore & { units: ExistingUnit[]; rows: string[]; members: string[] } {
+function memoryStore(units: ExistingUnit[]): OrgStore & { units: ExistingUnit[]; rows: string[]; members: string[]; kinds: KindData[]; seats: Array<{ orgUnitId: string; name: string }> } {
   const s = {
     units,
     rows: [] as string[],
     members: [] as string[],
+    kinds: [] as KindData[],
+    seats: [] as Array<{ orgUnitId: string; name: string }>,
     async listBodies() {
-      return s.units.map((u) => ({ id: u.id, name: u.name }))
+      return bodiesOf(s.units)
     },
     async membership() {
       return null
@@ -78,30 +86,39 @@ function memoryStore(units: ExistingUnit[]): OrgStore & { units: ExistingUnit[];
     async listUnits() {
       return s.units
     },
-    async applySeed(ops: readonly SeedOp[]) {
-      let created = 0
-      let adopted = 0
-      let present = 0
+    async listCatalog() {
+      return { kinds: s.kinds, seats: s.seats }
+    },
+    async applySeed(ops: readonly SeedOp[]): Promise<SeedCounts> {
+      const c: SeedCounts = { units: { created: 0, adopted: 0, present: 0 }, kinds: { upserted: 0, present: 0 }, seats: { created: 0, present: 0 } }
       const ids = new Map<string, string>()
       for (const op of ops) {
-        if (op.type === 'present') {
+        if (op.type === 'present-kind') c.kinds.present++
+        else if (op.type === 'upsert-kind') {
+          s.kinds = [...s.kinds.filter((k) => k.key !== op.key), op.data]
+          c.kinds.upserted++
+        } else if (op.type === 'present-seat') c.seats.present++
+        else if (op.type === 'create-seat') {
+          s.seats.push({ orgUnitId: ids.get(op.orgUnitKey)!, name: op.data.name })
+          c.seats.created++
+        } else if (op.type === 'present') {
           ids.set(op.key, op.id)
-          present++
+          c.units.present++
         } else if (op.type === 'adopt-root') {
           const u = s.units.find((x) => x.id === op.id)!
           Object.assign(u, op.patch)
           ids.set(op.key, op.id)
-          adopted++
+          c.units.adopted++
         } else {
           const id = `n${s.units.length}`
           s.units.push({ id, parentId: op.parentKey ? ids.get(op.parentKey)! : null, name: op.data.name, childTerm: op.data.childTerm, wantsMatrixRoom: op.data.wantsMatrixRoom, wantsNextcloudFolder: op.data.wantsNextcloudFolder })
           if (op.data.wantsMatrixRoom) s.rows.push(`${id}:matrix`)
           if (op.data.wantsNextcloudFolder) s.rows.push(`${id}:nextcloud`)
           ids.set(op.key, id)
-          created++
+          c.units.created++
         }
       }
-      return { created, adopted, present }
+      return c
     },
   }
   return s
@@ -115,11 +132,25 @@ describe('seedVertical', () => {
     let config = JSON.stringify({ terms: { 'x.own': 'Mine' } })
     const ports = { store, modules: { messaging: true, files: true }, readConfig: () => config, writeConfig: (t: string) => (config = t) }
     const first = await seedVertical(vertical(), ports)
-    expect(first).toEqual({ status: 'applied', units: { created: 1, adopted: 1, present: 0 }, terms_written: true })
+    expect(first).toEqual({
+      status: 'applied',
+      units: { created: 1, adopted: 1, present: 0 },
+      kinds: { upserted: 2, present: 0 },
+      seats: { created: 1, present: 0 },
+      terms_written: true,
+    })
+    expect(store.kinds.map((k) => k.key)).toEqual(['council', 'committee'])
+    expect(store.seats).toEqual([{ orgUnitId: 'n1', name: 'Chair' }])
     expect(store.units.find((u) => u.id === 'r')).toMatchObject({ name: 'Customer Body', childTerm: 'Teams', wantsMatrixRoom: true, wantsNextcloudFolder: true })
     expect(JSON.parse(config).terms).toEqual({ 'unit.plural': 'Gremien', 'x.own': 'Mine' })
     const second = await seedVertical(vertical(), ports)
-    expect(second).toEqual({ status: 'applied', units: { created: 0, adopted: 0, present: 2 }, terms_written: false })
+    expect(second).toEqual({
+      status: 'applied',
+      units: { created: 0, adopted: 0, present: 2 },
+      kinds: { upserted: 0, present: 2 },
+      seats: { created: 0, present: 1 },
+      terms_written: false,
+    })
   })
 
   it('D-8 module-OFF: messaging and files off -> no matrix / nextcloud row is ever asked for', async () => {
@@ -130,7 +161,13 @@ describe('seedVertical', () => {
   })
 
   it('matches the library plan (the store only applies it)', () => {
-    expect(planSeed(vertical().blueprint, [root()], { messaging: false, files: false }).map((o) => o.type)).toEqual(['adopt-root', 'create'])
+    expect(planSeed(vertical().blueprint, [root()], { messaging: false, files: false }).map((o) => o.type)).toEqual([
+      'upsert-kind',
+      'upsert-kind',
+      'adopt-root',
+      'create',
+      'create-seat',
+    ])
   })
 })
 
