@@ -1,0 +1,3 @@
+compactor:
+  compaction:
+    block_retention: 168h

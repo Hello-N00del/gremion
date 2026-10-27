@@ -4,7 +4,7 @@
         update-legal update-legal-k8s \
         test test-unit test-host-docker test-integration test-all test-ports-nats test-ports-nats-nruns test-nats-auth test-events nats-init \
         lint lint-sh lint-yaml lint-json lint-compose \
-        lint-hygiene lint-cve-floors lint-nats-nruns lint-packages lint-port-back lint-postgres-major lint-extraction-source \
+        lint-hygiene lint-tom-annex lint-cve-floors lint-nats-nruns lint-packages lint-port-back lint-postgres-major lint-extraction-source \
         lint-unshipped-migrations lint-toolchain lint-compliance lint-tenant-db-access fresh-init-proof \
         verify \
         health validate-env
@@ -355,6 +355,23 @@ lint-pooled-stack:
 lint-hygiene:
 	@echo "Checking kernel hygiene..."
 	@node scripts/kernel-hygiene-check.mjs
+
+# TRD-140/141/142: the generated TOM annex (docs/compliance/tom-annex.md). The
+# suite runs first (its count asserted: `node --test` exits 0 on a file that
+# collects zero tests), then --check fails when a measure input changed and the
+# annex was not regenerated (node scripts/gen-tom-annex.mjs). Also run by
+# scripts/release/lint-release.sh, i.e. before a release reaches a council.
+.PHONY: lint-tom-annex
+lint-tom-annex:
+	@echo "Checking the TOM annex is current (TRD-141)..."
+	@declared=$$(grep -c '^test(' scripts/gen-tom-annex.test.mjs); \
+	 out=$$(node --test --test-reporter=tap scripts/gen-tom-annex.test.mjs 2>&1); status=$$?; \
+	 [ "$$status" -eq 0 ] || { printf '%s\n' "$$out" >&2; exit "$$status"; }; \
+	 collected=$$(printf '%s\n' "$$out" | tr -d '\r' | sed -n 's/^1\.\.\([0-9][0-9]*\)$$/\1/p' | tail -n1); \
+	 if [ "$$declared" -lt 1 ] || [ "$$collected" != "$$declared" ]; then \
+	   echo "lint-tom-annex: scripts/gen-tom-annex.test.mjs declares $$declared test(s) but node ran '$$collected'." >&2; exit 1; \
+	 fi
+	@node scripts/gen-tom-annex.mjs --check
 
 # CVE override floors: every advisory floor in pnpm-workspace.yaml is held at or
 # above its committed first-patched version, the lockfile has absorbed the
@@ -727,7 +744,7 @@ lint-image-digests:
 	@node scripts/release/check-image-digests.mjs
 	@node scripts/release/check-image-digests.mjs --render
 
-lint: lint-sh lint-yaml lint-json lint-compose lint-compose-latest lint-pooled-stack lint-hygiene lint-cve-floors lint-nats-nruns lint-packages lint-port-back lint-postgres-major lint-extraction-source lint-unshipped-migrations lint-compliance lint-tenant-db-access lint-edge-host lint-module-scan lint-module-migration-names lint-migration-register lint-image-digests lint-synapse
+lint: lint-sh lint-yaml lint-json lint-compose lint-compose-latest lint-pooled-stack lint-hygiene lint-tom-annex lint-cve-floors lint-nats-nruns lint-packages lint-port-back lint-postgres-major lint-extraction-source lint-unshipped-migrations lint-compliance lint-tenant-db-access lint-edge-host lint-module-scan lint-module-migration-names lint-migration-register lint-image-digests lint-synapse
 	@echo "All linters passed."
 
 # ── Local gate (TASK-045, TRD-444/341) ──────────────────────────────────────
