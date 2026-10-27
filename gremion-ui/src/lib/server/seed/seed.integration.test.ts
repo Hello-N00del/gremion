@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { seedUsers, seedOrgUnits, seedMemberships, seedRoles, seedAssignments, seedDevAdminGroups, runSeed } from './seed'
-import { STURA_BLUEPRINT } from './org-blueprint'
+import { STURA_BLUEPRINT } from './stura-fixture'
 import { MUNICIPAL_BLUEPRINT } from './municipal-blueprint'
 import type { GremionConfig } from '../config'
 import { getDb } from '../db'

@@ -33,7 +33,8 @@ vi.mock('$lib/server/tenant/registry', () => ({
 }))
 
 import { POST } from './+server'
-import { STURA_BLUEPRINT } from '$lib/server/seed/org-blueprint'
+import { STURA_BLUEPRINT } from '$lib/server/seed/stura-fixture'
+import { DEFAULT_BLUEPRINT_REF } from '$lib/server/seed/blueprint-registry'
 import { MUNICIPAL_BLUEPRINT } from '$lib/server/seed/municipal-blueprint'
 import { __resetRateLimits } from '$lib/server/rate-limit'
 
@@ -71,7 +72,19 @@ describe('POST /api/setup/seed — blueprint selection (T3)', () => {
     hoisted.seedToken = 'test-seed-token'
     await call('test-seed-token')
     expect(hoisted.runSeed).toHaveBeenCalledTimes(1)
-    expect(hoisted.runSeed.mock.calls[0][0]).toBe(STURA_BLUEPRINT)
+    // served from verticals/stura data: the org tree, not the fixture people
+    const seeded = hoisted.runSeed.mock.calls[0][0] as GremionBlueprint
+    expect(seeded.orgUnits).toEqual(STURA_BLUEPRINT.orgUnits)
+    expect(seeded.roles).toEqual(STURA_BLUEPRINT.roles)
+  })
+
+  it('seeds the neutral kernel blueprint when the tenant carries the default ref', async () => {
+    hoisted.seedToken = 'test-seed-token'
+    hoisted.blueprintRef = DEFAULT_BLUEPRINT_REF
+    await call('test-seed-token')
+    const seeded = hoisted.runSeed.mock.calls[0][0] as GremionBlueprint
+    expect(seeded.orgUnits.map((u) => u.key)).toEqual(['council'])
+    expect(seeded.users).toEqual([])
   })
 
   it('seeds the MUNICIPAL blueprint when the resolved tenant carries MUNICIPAL_BLUEPRINT@1', async () => {

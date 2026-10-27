@@ -1,14 +1,18 @@
 // gremion-ui/src/lib/server/seed/vertical-parity.test.ts
 // TASK-031 G5: verticals/stura/ (the vertical as DATA, read by @gremion/member-import's
-// loader; kernel-owned since the operator decision of 2026-10-27) must equal the in-code
-// STURA_BLUEPRINT it was derived from -- same 11 units, same offices, same terms -- so
-// the data copy cannot drift from the code copy unnoticed. The product repo keeps its own
-// copy of this guard against ITS fork of the blueprint.
+// loader; kernel-owned since the operator decision of 2026-10-27) IS the StuRa blueprint:
+// the registry serves STURA_BLUEPRINT@1 from it, there is no second copy in code. What this
+// file still guards: the data files load, the registry serves exactly the data, and the
+// fictional-people fixture (stura-fixture.ts, test-only) stays consistent with the data
+// tree it is layered on. The product repo keeps its own guard against ITS fork.
 import { readFileSync } from 'node:fs'
 import { loadVertical } from '@gremion/member-import'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { STURA_BLUEPRINT } from './org-blueprint'
+import { STURA_BLUEPRINT } from './stura-fixture'
+import { resolveBlueprint } from './blueprint-registry'
+import { validateBlueprint } from './org-blueprint'
+import { orgSchemaFromBlueprint } from '../governance/org-schema'
 
 const DIR = join(import.meta.dirname, '..', '..', '..', '..', '..', 'verticals', 'stura')
 const read = (file: string): unknown => JSON.parse(readFileSync(join(DIR, file), 'utf8'))
@@ -24,7 +28,7 @@ describe('verticals/stura loads through the kernel loader', () => {
   })
 })
 
-describe('verticals/stura deep-equals STURA_BLUEPRINT (G5)', () => {
+describe('verticals/stura is the StuRa blueprint (G5)', () => {
   const blueprint = read('blueprint.json') as { schema_version: number; orgUnits: unknown[]; seats: unknown[]; orgSchema?: unknown }
 
   it('vertical.json names its three data files and the id stura', () => {
@@ -38,19 +42,20 @@ describe('verticals/stura deep-equals STURA_BLUEPRINT (G5)', () => {
     })
   })
 
-  it('the org-unit tree is the code blueprint\'s, unit for unit (11 units)', () => {
+  it('the registry serves the data tree and offices unchanged (11 units)', () => {
+    const served = resolveBlueprint('STURA_BLUEPRINT@1')
     expect(blueprint.schema_version).toBe(1)
     expect(blueprint.orgUnits).toHaveLength(11)
-    expect(blueprint.orgUnits).toEqual(viaJson(STURA_BLUEPRINT.orgUnits))
+    expect(served.orgUnits).toEqual(blueprint.orgUnits)
+    expect(served.roles).toEqual(blueprint.seats)
+    expect(served.orgSchema).toEqual(blueprint.orgSchema)
+    expect(served.users).toEqual([])
   })
 
-  it('the offices are the code blueprint\'s roles', () => {
-    expect(blueprint.seats).toEqual(viaJson(STURA_BLUEPRINT.roles))
-  })
-
-  it('a custom kind catalogue appears in the data copy only if the code copy has one', () => {
-    const code = STURA_BLUEPRINT.orgSchema
-    expect(blueprint.orgSchema).toEqual(code === undefined ? undefined : viaJson(code))
+  it('the people fixture sits on the data tree: it validates, and owns no tree of its own', () => {
+    expect(STURA_BLUEPRINT.orgUnits).toEqual(resolveBlueprint('STURA_BLUEPRINT@1').orgUnits)
+    const schema = STURA_BLUEPRINT.orgSchema ? orgSchemaFromBlueprint(STURA_BLUEPRINT.orgSchema) : undefined
+    expect(validateBlueprint(STURA_BLUEPRINT, schema)).toEqual([])
   })
 
   it('carries no pointer into code (no blueprintRef, no *_BLUEPRINT token)', () => {

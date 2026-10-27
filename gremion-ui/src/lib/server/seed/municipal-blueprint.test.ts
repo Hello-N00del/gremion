@@ -7,7 +7,8 @@
 // municipal-fixture.test.ts:137).
 import { describe, it, expect } from 'vitest'
 import { parseBlueprintDocument } from './blueprint-schema'
-import { validateBlueprint, STURA_BLUEPRINT } from './org-blueprint'
+import { validateBlueprint } from './org-blueprint'
+import { STURA_BLUEPRINT } from './stura-fixture'
 import { GREMION_ORG_SCHEMA, orgSchemaFromBlueprint } from '../governance/org-schema'
 import { MUNICIPAL_BLUEPRINT } from './municipal-blueprint'
 
