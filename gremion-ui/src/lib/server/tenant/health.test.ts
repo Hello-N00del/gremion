@@ -340,7 +340,7 @@ describe('collectModuleOutages (F7)', () => {
 
 describe('disabledModulesFromConfig + fleet CLI wiring (F7)', () => {
   it('lists the modules switched off in the tenant config, per tenant', async () => {
-    const fn = disabledModulesFromConfig((t) =>
+    const fn = disabledModulesFromConfig((t): Record<string, boolean> =>
       t.slug === 't2' ? { files: false, messages: true, content: false } : { files: true },
     )
     expect(await fn(tenant({ slug: 't2' }))).toEqual(['files', 'content'])
