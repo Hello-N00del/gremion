@@ -39,7 +39,13 @@ if [ "${1:-}" = exec ]; then
             if [ -s "$R/queue" ]; then head -n 1 "$R/queue"; sed -i 1d "$R/queue"; fi ;;
         *requeue_own_requests*) order "psql requeue-own ${v[host]}"; echo 0 ;;
         *mark_provisioning_request_verified*) order "psql mark-verified" ;;
-        *renew_provisioning_lease*) printf 'renew %s %s\n' "${v[id]}" "${v[host]}" >> "$R/renews.log" ;;
+        *renew_provisioning_lease*)
+            [ -f "$R/renew-refused" ] && { echo "ERROR:  request ${v[id]} is not running under ${v[host]}" >&2; exit 3; }
+            if [ -f "$R/hung" ]; then
+                [ -f "$R/refuse-renew-when-hung" ] && { echo "ERROR:  request not running" >&2; exit 3; }
+                [ -f "$R/renew-unreachable-when-hung" ] && { echo "psql: error: connection refused" >&2; exit 2; }
+            fi
+            printf 'renew %s %s\n' "${v[id]}" "${v[host]}" >> "$R/renews.log" ;;
         *record_provisioning_event*) printf '%s %s %s\n' "${v[level]}" "${v[step]}" "${v[msg]}" >> "$R/events.log" ;;
         *finish_provisioning_request*) order "psql finish ${v[state]}"; printf '%s\n' "${v[outcome]}" > "$R/outcome" ;;
         *submit_provisioning_request*)
@@ -75,6 +81,8 @@ case " $* " in
         verb="$1"; slug="${2:-}"
         order "tc ${verb} ${slug}"
         printf '%s\n' "$all" >> "$R/tc-argv.log"
+        [ -f "$R/hang-${verb}" ] && { touch "$R/hung"; echo $$ > "$R/hang.pid"; sleep 60; }
+        [ -f "$R/fail-silent-${verb}" ] && exit 3
         [ -f "$R/fail-${verb}" ] && { echo "[tenant-create] FAILED: ${verb} (fixture)" >&2; exit 1; }
         case "$verb" in
             request-verify)

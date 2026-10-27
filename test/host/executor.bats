@@ -173,7 +173,7 @@ outcome() { cat "${GREMION_ROOT}/outcome" 2>/dev/null || true; }
     [[ "$body" != *vendor_mail* ]] || { echo "customer_create still calls vendor_mail directly"; return 1; }
     [[ "$body" != *mail_principal_issued* ]] || { echo "the record-step moved into the seam"; return 1; }
     assert_present '^mail_step\(\) \{' "${HOST_SRC}/lib/customer-ops.sh"
-    assert_present 'mail_step\(\) \{ executor_step mail' "${HOST_SRC}/bin/gremion-executor"
+    assert_present '^[[:space:]]+executor_step mail$' "${HOST_SRC}/bin/gremion-executor"
 }
 
 @test "mail_step seam: an unknown MAIL_TRANSPORT fails create at the mail step, phase B does not run, no mail principal is issued" {
@@ -361,4 +361,76 @@ big_args() { # <file> <rows>: an import_members args file well over 128 KiB
     [ "$status" -eq 0 ] || { echo "$output"; return 1; }
     [ "$(cat "${GREMION_ROOT}/submitted-args")" = "$(jq -c . "$f")" ]
     ! grep -q 'Neil' "${GREMION_ROOT}/exec-argv.log"
+}
+
+# ---------------------------------------------------------------------------
+# create-harden H4 (a lost lease aborts the handler loudly) and H7 (the event
+# level follows the step's exit status, not only the text "FAIL").
+
+handler_gone() { [ ! -s "${GREMION_ROOT}/hang.pid" ] || ! kill -0 "$(cat "${GREMION_ROOT}/hang.pid")" 2>/dev/null; }
+
+@test "H4: a definitively refused lease renewal aborts the handler (process group killed), records an error event, exits non-zero" {
+    touch "${GREMION_ROOT}/renew-refused" "${GREMION_ROOT}/hang-phase-a"
+    queue create
+    GREMION_EXECUTOR_RENEW_SECONDS=1 run "$EXEC" --once
+    [ "$status" -ne 0 ] || { echo "$output"; return 1; }
+    grep -q '^error .*lease' "${GREMION_ROOT}/events.log" || { cat "${GREMION_ROOT}/events.log"; return 1; }
+    assert_present 'lease' "${GREMION_ROOT}/runtime/executor/audit.log"
+    handler_gone || { echo "the handler survived the lost lease (or never ran)"; return 1; }
+    run steps
+    [[ "$output" != *"tc phase-b"* && "$output" != *"render-router"* ]] || { echo "$output"; return 1; }
+    [[ "$output" != *"finish succeeded"* ]] || { echo "$output"; return 1; }
+}
+
+@test "H4: the background renewer detects a lease lost DURING a long step (no step marker needed)" {
+    touch "${GREMION_ROOT}/hang-phase-b" "${GREMION_ROOT}/refuse-renew-when-hung"
+    queue create
+    GREMION_EXECUTOR_RENEW_SECONDS=1 run "$EXEC" --once
+    [ "$status" -ne 0 ] || { echo "$output"; return 1; }
+    handler_gone || { echo "the handler survived"; return 1; }
+    grep -q '^error .*lease' "${GREMION_ROOT}/events.log" || { cat "${GREMION_ROOT}/events.log"; return 1; }
+}
+
+@test "H4: renewals that cannot reach the database past the local fence deadline abort the handler (self-fence before the lease can lapse)" {
+    touch "${GREMION_ROOT}/hang-phase-b" "${GREMION_ROOT}/renew-unreachable-when-hung"
+    queue create
+    GREMION_EXECUTOR_RENEW_SECONDS=1 GREMION_EXECUTOR_FENCE_SECONDS=3 run "$EXEC" --once
+    [ "$status" -ne 0 ] || { echo "$output"; return 1; }
+    handler_gone || { echo "the handler survived the fence"; return 1; }
+    assert_present 'fence' "${GREMION_ROOT}/runtime/executor/audit.log"
+}
+
+@test "H4: a second --loop executor on the same host is refused (its requeue-own would re-queue the first one's running request)" {
+    command -v flock >/dev/null || skip "flock absent"
+    rm -f "${SHIM_DIR}/flock"
+    local lockf="${GREMION_ROOT}/runtime/executor/executor.lock"
+    mkdir -p "$(dirname "$lockf")"
+    exec 8>>"$lockf"
+    flock -n 8
+    run "$EXEC" --loop
+    exec 8>&-
+    [ "$status" -eq 3 ] || { echo "status=$status $output"; return 1; }
+    printf '%s\n' "$(steps)" > "${GREMION_ROOT}/steps.txt"
+    assert_absent 'requeue-own' "${GREMION_ROOT}/steps.txt" 'requeue-own ran under a second daemon'
+}
+
+@test "H4: the SQL grants the lapsed lease a grace before attempt + 1 and refuses to revive it" {
+    local f; f="$(ls "${KERNEL_ROOT}"/packages/tenant-store/src/lifecycle/platform-migrations/0011_*.sql)"
+    assert_present 'lease_until < now\(\) - interval' "$f"
+    assert_present 'lease_until >= now\(\)' "$f"
+}
+
+@test "H7: a step that exits non-zero without the text FAIL is recorded at level error" {
+    touch "${GREMION_ROOT}/fail-silent-phase-b"
+    queue create
+    run "$EXEC" --once
+    [ "$status" -eq 1 ] || { echo "status=$status $output"; return 1; }
+    grep -q '^error phase-b .*exited 3' "${GREMION_ROOT}/events.log" || { cat "${GREMION_ROOT}/events.log"; return 1; }
+}
+
+@test "H7: a clean run records no error event" {
+    queue create
+    run "$EXEC" --once
+    [ "$status" -eq 0 ]
+    assert_absent '^error ' "${GREMION_ROOT}/events.log" 'an error event on a clean run'
 }

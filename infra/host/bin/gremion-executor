@@ -52,6 +52,17 @@ umask 077
 
 EXECUTOR_VERSION="043d-1"
 LEASE_SECONDS=600
+# create-harden H4: the lease is renewed every RENEW_SECONDS by a background
+# renewer while a handler runs (not only at step markers: one step can outlast
+# the lease). The holder FENCES ITSELF: when no renewal has succeeded for
+# FENCE_SECONDS (default lease - lease/5, always shorter than the lease) it
+# kills its handler's process group. The database re-queues a lapsed lease
+# only 60 s after lease_until (migration 0011), so the kill is complete before
+# attempt + 1 can be claimed.
+RENEW_SECONDS="${GREMION_EXECUTOR_RENEW_SECONDS:-60}"
+FENCE_SECONDS="${GREMION_EXECUTOR_FENCE_SECONDS:-$((LEASE_SECONDS - LEASE_SECONDS / 5))}"
+[[ "$RENEW_SECONDS" =~ ^[1-9][0-9]*$ && "$FENCE_SECONDS" =~ ^[1-9][0-9]*$ ]] \
+    || die "GREMION_EXECUTOR_RENEW_SECONDS / _FENCE_SECONDS must be positive integers" "$GREMION_EXIT_USAGE"
 POLL_SECONDS="${GREMION_EXECUTOR_POLL_SECONDS:-5}"
 HOST_ID_RE='^[a-z0-9][a-z0-9._-]{0,62}$'
 # The panel's SECRET_LINE rule (TASK-043 executor.ts), moved here with the
@@ -149,6 +160,23 @@ take_lock() {
 }
 release_lock() { exec 9>&- 2>/dev/null || true; }
 
+# renew_lease <request-id> — 0 renewed, 1 REFUSED by the database (the request
+# is no longer ours: re-queued, finished, lapsed -- psql exit 3), 2 not
+# answered (database unreachable -- the fence deadline decides).
+renew_lease() {
+    local rc=0
+    executor_sql "SELECT plt.renew_provisioning_lease(:'id'::uuid, :'host', ${LEASE_SECONDS});" -v id="$1" -v host="$HOST_ID" >/dev/null 2>>"${CURRENT_WORK}/renew.err" || rc=$?
+    (( rc == 0 )) && return 0
+    (( rc == 3 )) && return 1
+    return 2
+}
+mark_renewed() { printf '%s' "$EPOCHSECONDS" > "${CURRENT_WORK}/renewed.tmp" && mv -f -- "${CURRENT_WORK}/renewed.tmp" "${CURRENT_WORK}/renewed"; }
+# raise_abort <reason> — first reason wins; the supervisor kills the handler.
+raise_abort() {
+    [[ -e "${CURRENT_WORK}/abort" ]] && return 0
+    printf '%s' "$1" > "${CURRENT_WORK}/abort.tmp" && mv -f -- "${CURRENT_WORK}/abort.tmp" "${CURRENT_WORK}/abort"
+}
+
 # A step marker on STDERR (stdout of `tc render-router` is the router file).
 executor_step() { printf '@@executor-step %s\n' "$1" >&2; }
 
@@ -163,10 +191,21 @@ executor_wrap_steps() {
             phase-a|phase-b|record-step) executor_step "$1" ;;
             render-router) executor_step router ;;
         esac
-        executor_orig_tc "$@"
+        local rc=0 name="${1:-tc}"
+        [[ "$name" == render-router ]] && name=router
+        executor_orig_tc "$@" || rc=$?
+        # H7: the step's exit status, not its text, decides the event level
+        (( rc == 0 )) || printf '@@executor-step-failed %s %d\n' "$name" "$rc" >&2
+        return "$rc"
     }
     # shellcheck disable=SC2329  # redefined here, called by customer_create
-    mail_step() { executor_step mail; executor_orig_mail_step "$@"; }
+    mail_step() {
+        local rc=0
+        executor_step mail
+        executor_orig_mail_step "$@" || rc=$?
+        (( rc == 0 )) || printf '@@executor-step-failed mail %d\n' "$rc" >&2
+        return "$rc"
+    }
 }
 
 # record_stream <request-id> <first step> <workdir> — every line an event; a
@@ -180,15 +219,70 @@ record_stream() {
         if [[ "$line" == "@@executor-step "* ]]; then
             step="${line#@@executor-step }"
             printf '%s' "$step" > "${work}/step"
-            executor_sql "SELECT plt.renew_provisioning_lease(:'id'::uuid, :'host', ${LEASE_SECONDS});" -v id="$id" -v host="$HOST_ID" >/dev/null \
-                || bad "could not renew the lease of request ${id}"
+            local rr=0
+            renew_lease "$id" && mark_renewed || rr=$?
+            if (( rr == 1 )); then
+                raise_abort "lease lost: the database refused the renewal of request ${id} at step ${step}"
+            elif (( rr == 2 )); then
+                bad "could not renew the lease of request ${id} (database unreachable; the fence deadline applies)"
+            fi
             event "$id" info "$step" "step ${step} started"
             continue
         fi
+        if [[ "$line" == "@@executor-step-failed "* ]]; then
+            local f="${line#@@executor-step-failed }"
+            event "$id" error "${f%% *}" "step ${f%% *} exited ${f##* }"
+            continue
+        fi
         level=info
+        # H7: the exit status is authoritative (the marker above); the text
+        # match stays as the fallback for a step that prints FAIL and exits 0.
         [[ "$line" == *"FAIL"* ]] && level=error
         event "$id" "$level" "$step" "$line"
     done
+}
+
+# kill_group <pgid> — TERM, up to 5 s of grace, then KILL, then confirm the
+# group is empty before returning (nothing of the handler may outlive this).
+kill_group() {
+    local g="$1" i
+    kill -TERM -- "-${g}" 2>/dev/null || true
+    for ((i = 0; i < 25; i++)); do
+        kill -0 -- "-${g}" 2>/dev/null || return 0
+        sleep 0.2
+    done
+    kill -KILL -- "-${g}" 2>/dev/null || true
+    for ((i = 0; i < 25; i++)); do
+        kill -0 -- "-${g}" 2>/dev/null || return 0
+        sleep 0.2
+    done
+    bad "the handler's process group ${g} did not die"
+}
+
+# supervise_handler <handler pid/pgid> <renewer pid/pgid> — wait for the
+# handler; abort it when a renewal was refused (abort file) or no renewal has
+# succeeded for FENCE_SECONDS. Sets rc (the handler's status; 143 aborted).
+supervise_handler() {
+    local hp="$1" rp="$2" last
+    while kill -0 "$hp" 2>/dev/null; do
+        if [[ -e "${CURRENT_WORK}/abort" ]]; then break; fi
+        last="$(cat "${CURRENT_WORK}/renewed" 2>/dev/null || printf '0')"
+        if (( EPOCHSECONDS - last >= FENCE_SECONDS )); then
+            raise_abort "lease fence: no successful renewal for ${FENCE_SECONDS} s (the lease is ${LEASE_SECONDS} s); aborting before it can lapse"
+            break
+        fi
+        sleep 0.2
+    done
+    kill_group "$rp"
+    if [[ -e "${CURRENT_WORK}/abort" ]]; then
+        kill_group "$hp"
+        wait "$hp" 2>/dev/null
+        rc=143
+        return 0
+    fi
+    wait "$hp" 2>/dev/null
+    rc="$(cat "${CURRENT_WORK}/rc" 2>/dev/null || printf '1')"
+    return 0
 }
 
 # run_request <id> <kind> <slug> <origin> <operator> <attempt> — one claimed
@@ -199,7 +293,7 @@ record_stream() {
 RUN_RESULT=1
 run_request() {
     local id="$1" kind="$2" slug="$3" origin="$4" operator="$5" attempt="$6"
-    local out rc=0 line verdict reason handler step
+    local out rc=0 line verdict reason handler step hpid rpid
     RUN_RESULT=1
     CURRENT_WORK="${WORK_ROOT}/${id}"
     mkdir -p "$CURRENT_WORK"
@@ -210,6 +304,7 @@ run_request() {
     out="$(tc request-verify "$id" 2>"${CURRENT_WORK}/verify.log")" || rc=$?
     record_stream "$id" verify "$CURRENT_WORK" < "${CURRENT_WORK}/verify.log"
     if (( rc != 0 )); then
+        event "$id" error verify "request-verify exited ${rc}; nothing ran"
         finish "$id" failed "verify: request-verify could not decide (exit ${rc}); nothing ran"
         cleanup_work
         return 0
@@ -243,17 +338,43 @@ run_request() {
         return 0
     fi
     jq -c '.args' <<< "$line" > "${CURRENT_WORK}/args.json"
+    mark_renewed
     rc=0
     set +e
-    ( set -e; executor_wrap_steps; "$handler" "$id" "$slug" "$operator" "${CURRENT_WORK}/args.json" "$CURRENT_WORK" ) 2>&1 \
-        | record_stream "$id" "$kind" "$CURRENT_WORK"
-    rc=${PIPESTATUS[0]}
+    # The handler runs in ITS OWN process group (job control on for the fork),
+    # so a lost lease can kill it and everything it started (H4).
+    set -m
+    {
+        ( set -e; executor_wrap_steps; "$handler" "$id" "$slug" "$operator" "${CURRENT_WORK}/args.json" "$CURRENT_WORK" ) 2>&1 \
+            | record_stream "$id" "$kind" "$CURRENT_WORK"
+        printf '%s' "${PIPESTATUS[0]}" > "${CURRENT_WORK}/rc"
+    } < /dev/null &
+    hpid=$!
+    ( while sleep "$RENEW_SECONDS"; do
+          rr=0
+          renew_lease "$id" && mark_renewed || rr=$?
+          if (( rr == 1 )); then
+              raise_abort "lease lost: the database refused the renewal of request ${id}"
+              exit 0
+          fi
+      done ) < /dev/null &
+    rpid=$!
+    set +m
+    supervise_handler "$hpid" "$rpid"
     set -e
     step="$(cat "${CURRENT_WORK}/step" 2>/dev/null || printf '%s' "$kind")"
-    if (( rc == 0 )); then
+    if [[ -e "${CURRENT_WORK}/abort" ]]; then
+        reason="$(cat "${CURRENT_WORK}/abort")"
+        # LOUD: audit log (always), an error event (the database may refuse it
+        # when the request is no longer ours), a non-zero exit, a failed finish
+        event "$id" error "$step" "${reason}; the handler's process group was terminated" || true
+        ( finish "$id" failed "${kind} ${slug}: aborted in ${step}: ${reason}" ) || true
+        bad "request ${id}: ${reason}; handler aborted"
+    elif (( rc == 0 )); then
         finish "$id" succeeded "${kind} ${slug}: succeeded (last step ${step})"
         RUN_RESULT=0
     else
+        event "$id" error "$step" "${kind} exited ${rc} in step ${step}"
         finish "$id" failed "${kind} ${slug}: failed in ${step} (exit ${rc}); a new request resumes from the ledger"
     fi
     cleanup_work
@@ -319,6 +440,12 @@ main() {
             *) exit "$GREMION_EXIT_ASSERT" ;;
         esac
     fi
+    # H4: one --loop daemon per host. requeue_own_requests re-queues every
+    # request this host holds, so a second daemon would re-queue the first
+    # one's RUNNING request and a second run of the slug could start.
+    command -v flock >/dev/null 2>&1 || die "flock is not installed (util-linux)" "$GREMION_EXIT_USAGE"
+    exec 8>>"${WORK_ROOT}/executor.lock" || die "cannot open ${WORK_ROOT}/executor.lock" "$GREMION_EXIT_USAGE"
+    flock -n 8 || die "another gremion-executor --loop already runs on ${HOST_ID}" "$GREMION_EXIT_BLOCKED"
     local n
     n="$(executor_sql "SELECT plt.requeue_own_requests(:'host');" -v host="$HOST_ID")" \
         || die "could not re-queue this host's orphaned requests" "$GREMION_EXIT_ASSERT"
