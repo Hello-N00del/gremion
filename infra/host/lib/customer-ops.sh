@@ -16,9 +16,18 @@
 # principal, issued and stamped; tenant-create is not on the mail network,
 # TRD-045), then `record-step mail_principal_issued` (the container re-reads
 # the stamp over Keycloak), then container phase B (first administrators, the
-# --enable modules, active), then the router file, which the host writes (Q17:
-# a compose etc/edge mount is refused, hygiene j4). A failed step STOPS:
-# nothing after it runs, and a rerun resumes from the ledger.
+# --enable modules; the customer stays `provisioning`), then the router file,
+# which the host writes (Q17: a compose etc/edge mount is refused, hygiene j4),
+# then `tenant-create activate` (active LAST: a router failure never leaves an
+# active customer with no route). A failed step STOPS: nothing after it runs.
+#
+# A PARTIAL CREATE IS RE-RUN, NOT ROLLED BACK (create-harden H6). Every step is
+# idempotent, so the same request run again resumes and nothing is created
+# twice: phase A/B skip ledger-done steps and use ensure* adapters (realm,
+# database, broker account, first accounts); the mail step lists the principal
+# first and issues only when absent (gremion-vendor-mail G2); record-step reads
+# the stamp back and records once; write_router replaces the file atomically;
+# activate leaves an active customer alone.
 #
 # TRD-440: customer_create counts the running containers and every project's
 # `config --services` before and after, and fails if either moved -- a
@@ -291,10 +300,14 @@ customer_create() {
     TC_MOUNT=()
     mail_step "$slug" "$token"
     TC_MOUNT=("${mounts[@]}")
-    info "phase B (container): first administrators, modules, active"
-    tc phase-b "${flags[@]}" ${MAIL_SENDER_ARGS[@]+"${MAIL_SENDER_ARGS[@]}"} || die "phase B of ${slug} failed; a rerun resumes from the ledger" "$GREMION_EXIT_ASSERT"
+    info "phase B (container): first administrators, modules (the customer stays provisioning until its route exists)"
+    tc phase-b "${flags[@]}" --defer-activation ${MAIL_SENDER_ARGS[@]+"${MAIL_SENDER_ARGS[@]}"} || die "phase B of ${slug} failed; a rerun resumes from the ledger" "$GREMION_EXIT_ASSERT"
     TC_MOUNT=()
     write_router "$slug"
+    # H3: active LAST -- a router failure above leaves the customer provisioning
+    # (no route, not served), never active without one.
+    info "activate (container): the router is written, the customer goes active"
+    tc activate "$slug" || die "activating ${slug} failed; a rerun resumes from the ledger" "$GREMION_EXIT_ASSERT"
 
     after="$(container_fingerprint)"
     if [[ "$before" != "$after" ]]; then

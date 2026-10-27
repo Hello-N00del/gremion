@@ -112,7 +112,7 @@ outcome() { cat "${GREMION_ROOT}/outcome" 2>/dev/null || true; }
     run steps
     local want=("psql claim" "tc request-verify ${REQ}" "psql mark-verified" "tc phase-a alpha-rat"
                 "vendor-mail realm-smtp --realm alpha-rat --tenant alpha_rat" "tc record-step alpha-rat"
-                "tc phase-b alpha-rat" "tc render-router alpha-rat" "psql finish succeeded")
+                "tc phase-b alpha-rat" "tc render-router alpha-rat" "tc activate alpha-rat" "psql finish succeeded")
     [ "${#lines[@]}" -eq "${#want[@]}" ] || { echo "$output"; return 1; }
     local i
     for i in "${!want[@]}"; do [ "${lines[$i]}" = "${want[$i]}" ] || { echo "line $i: '${lines[$i]}' want '${want[$i]}'"; echo "$output"; return 1; }; done
