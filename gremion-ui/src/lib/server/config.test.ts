@@ -49,10 +49,9 @@ describe('ConfigStore', () => {
       const config = readConfig()
 
       expect(config.setup_complete).toBe(false)
-      // The default modules map is the toggleable manifests the build composes (TASK-205; R33 F5 added files, messages,
-      // newsletter: the
-      // enabled module halves are overlaid before the barrels are generated); pinned by the WP3
-      // default golden below.
+      // The default modules map is the toggleable manifests the build composes (TASK-205; R33 F5 added files,
+      // messages and newsletter: the enabled module halves are overlaid before the barrels are generated); pinned by
+      // the WP3 default golden below.
       expect(config.modules).toEqual({ elections: true, votes: true, newsletter: true, calendar: true, files: true, messages: true, board: true })
       expect(config.backups.retention_days).toBe(30)
     })
