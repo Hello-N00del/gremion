@@ -237,6 +237,11 @@ export function customerAdapters(o: CustomerAdapterOptions): Pick<ProvisioningDe
         for (const sub of ['db', 'realm', 'nextcloud', 'matrix'] as const) await ensureTenantResource(t.id, sub)
         return toRow(t)
       },
+      async bindPrimaryHost(id, host) {
+        // the repair of a registration that died after registerTenant (MED-2); both calls re-runnable
+        await addTenantDomain(id, host, { isPrimary: true })
+        for (const sub of ['db', 'realm', 'nextcloud', 'matrix'] as const) await ensureTenantResource(id, sub)
+      },
       async setStatus(id, status) {
         const t = await getTenantById(id)
         if (!t) throw new Error(`no control row ${id}`)

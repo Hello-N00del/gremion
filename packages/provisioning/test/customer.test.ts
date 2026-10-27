@@ -285,6 +285,29 @@ describe('create-harden H3: activation is the host last step', () => {
   })
 })
 
+describe('create-harden MED-2: a crash between registerTenant and addTenantDomain', () => {
+  it('a re-run binds the missing primary host and completes (the slug is not burned)', async () => {
+    const w = world()
+    const d = deps(w)
+    w.knobs.crashAfterRegister = true
+    await expect(createPhaseA(spec(), d)).rejects.toThrow(/crash between/)
+    expect(w.control.get('musterstadt')?.host).toBeNull()
+    const { b } = await createAll(w, d)
+    expect(w.control.get('musterstadt')?.host).toBe('rat.musterstadt.example')
+    expect(w.control.get('musterstadt')?.status).toBe('active')
+    expect(b.activated).toBe(true)
+    expect(w.mutations.filter((x) => x === 'control:bind-host musterstadt')).toHaveLength(1)
+  })
+
+  it('a row that already has its host is not re-bound', async () => {
+    const w = world()
+    const d = deps(w)
+    await createAll(w, d)
+    await createPhaseA(spec(), d)
+    expect(w.mutations.filter((x) => x.startsWith('control:bind-host'))).toHaveLength(0)
+  })
+})
+
 describe('TASK-044: the gate in create (lane note D2: pre-flight before any write)', () => {
   it('a module the request carries no DPIA decision for refuses NO_DPIA_DECISION before phase A writes anything', async () => {
     const w = world()

@@ -358,7 +358,8 @@ function createSpec(slug: string): CreateSpec & { configFile: string; bodyName: 
     admins,
     configFile: reqFlag('--config'),
     bodyName: flag('--body-name') ?? 'Rat',
-    ...(process.argv.includes('--defer-activation') ? { deferActivation: true } : {}),
+    // H3 (LOW-7): the CLI's phase B NEVER activates; `activate` is the host's last step. --defer-activation is accepted as a no-op.
+    deferActivation: true,
     ...dpiaFromFlag(),
   }
 }
@@ -970,7 +971,7 @@ const USAGE = `usage: tenant-create <verb> ...
   init [--realm-only] [--panel-origin <origin>]
   phase-a <slug> --host <host> --config <file> --operator <uuid> --it-admin <email> --council-admin <email> [--enable a,b] [--body-name <name>]
   record-step <slug> mail_principal_issued --operator <uuid> [--sender-json <json>]
-  phase-b <slug> (the phase-a flags) [--defer-activation]
+  phase-b <slug> (the phase-a flags) [--defer-activation, a no-op: phase-b never activates]
   activate <slug>
   render-router <slug>
   suspend <slug> --operator <uuid> | resume <slug> --operator <uuid>

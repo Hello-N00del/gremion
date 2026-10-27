@@ -115,6 +115,11 @@ async function ensureControlRow(deps: ProvisioningDeps, slug: string, host: stri
     if (existing.host !== null && existing.host !== host) {
       throw new ProvisioningError('CUSTOMER_STATE', `customer ${slug} is bound to ${existing.host}, not ${host}`)
     }
+    if (existing.host === null) {
+      // a crash between the tenant insert and addTenantDomain: bind the host now, or domain_bound fails forever
+      await deps.control.bindPrimaryHost(existing.id, host)
+      return { row: { ...existing, host }, created: false }
+    }
     return { row: existing, created: false }
   }
   return { row: await deps.control.registerProvisioning({ slug, host, realm: slug }), created: true }
