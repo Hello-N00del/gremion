@@ -58,7 +58,11 @@ export const actions: Actions = {
     const form = await request.formData()
     const enable = form.getAll('enable').filter((v): v is string => typeof v === 'string')
     const dpia: NewCustomerInput['dpia'] = {}
-    for (const id of enable) dpia[id] = { requiresDpia: textField(form, `dpia_${id}`) === 'yes', documentRef: textField(form, `dpiaRef_${id}`) }
+    // an explicit ja/nein per module: anything but yes/no stays null and is refused by validateNewCustomer
+    for (const id of enable) {
+      const answer = textField(form, `dpia_${id}`)
+      dpia[id] = { requiresDpia: answer === 'yes' ? true : answer === 'no' ? false : null, documentRef: textField(form, `dpiaRef_${id}`) }
+    }
     const input: NewCustomerInput = {
       slug: textField(form, 'slug'),
       host: textField(form, 'host').toLowerCase(),

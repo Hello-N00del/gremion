@@ -15,6 +15,7 @@
 import { validateCreate } from './customer.ts'
 import { DEFAULT_DENY } from './operator-gate.ts'
 import { ProvisioningError } from './errors.ts'
+import { isPrintableText } from './printable-text.ts'
 
 export const REQUEST_KINDS = [
   'create',
@@ -113,7 +114,6 @@ export interface VerifyContext {
   disabledIds: readonly string[]
 }
 
-const TEXT = /^[^\u0000-\u001f\u007f]+$/
 // the library's rule (assertDpiaDecisionInput): 1-20 codes, snake_case
 const REASON_CODE = /^[a-z][a-z0-9_]{0,62}$/
 const IMPORT_FIELDS = new Set(['slug', 'phase', 'vertical', 'csv', 'expectSha256'])
@@ -129,7 +129,7 @@ function isObject(v: unknown): v is Record<string, unknown> {
 }
 
 function text(v: unknown, field: string, max: number): string {
-  if (typeof v !== 'string' || v.trim() === '' || v.length > max || !TEXT.test(v)) {
+  if (!isPrintableText(v, max)) {
     throw new Refused(`${field} must be 1 to ${max} printable characters`)
   }
   return v.trim()

@@ -53,6 +53,30 @@ describe('validateNewCustomer', () => {
     const over = validateNewCustomer({ ...GOOD, enable: ['calendar'], dpia: { calendar: { requiresDpia: false, documentRef: 'x'.repeat(501) } } })
     expect(over.dpia).toMatch(/500/)
   })
+  it('H1: the panel text rule is the provisioning text rule (same corpus, same verdict; the panel image has no such dependency)', async () => {
+    const { isPrintableText } = await import('../../../../../packages/provisioning/src/printable-text')
+    const corpus = ['Rat', 'Stadtrat Süd', 'a'.repeat(80), 'a'.repeat(81), '', '   ', 'a\u0000b', 'a\nb', 'a\tb', 'a\u007fb', 'a\u001fb', 'emoji \u{1F600}']
+    for (const v of corpus) {
+      const panel = validateNewCustomer({ ...GOOD, brandProduct: v }).brandProduct === undefined
+      expect(panel, JSON.stringify(v)).toBe(isPrintableText(v, 80))
+    }
+  })
+  it('H1: control characters in bodyName, brandProduct and brandOrgShort are field errors', () => {
+    const e = validateNewCustomer({ ...GOOD, bodyName: 'a\u0000b', brandProduct: 'a\nb', brandOrgShort: 'a\u007f' })
+    expect(Object.keys(e).sort()).toEqual(['bodyName', 'brandOrgShort', 'brandProduct'])
+  })
+  it('H1: a non-ASCII host gets its own German message (no punycode in the pilot)', () => {
+    expect(validateNewCustomer({ ...GOOD, host: 'rät.müller.de' }).host).toMatch(/ASCII/)
+    expect(validateNewCustomer({ ...GOOD, host: 'xn--rt-pka.example' }).host).toBeUndefined()
+  })
+  it('H2: every enabled module needs an explicit yes/no (null/absent is an error), yes needs a reference', () => {
+    const base = { ...GOOD, enable: ['calendar'] }
+    expect(validateNewCustomer({ ...base, dpia: { calendar: { requiresDpia: null, documentRef: 'TOM-1' } } }).dpia).toMatch(/calendar/)
+    expect(validateNewCustomer({ ...base, dpia: {} }).dpia).toMatch(/calendar/)
+    expect(validateNewCustomer({ ...base, dpia: { calendar: { requiresDpia: true, documentRef: '' } } }).dpia).toMatch(/calendar/)
+    expect(validateNewCustomer({ ...base, dpia: { calendar: { requiresDpia: false, documentRef: 'TOM-1' } } })).toEqual({})
+    expect(validateNewCustomer({ ...base, dpia: { calendar: { requiresDpia: true, documentRef: 'TOM-1' } } })).toEqual({})
+  })
   it('bad slug, platform, host, admins, brand are field errors', () => {
     const e = validateNewCustomer({ ...GOOD, slug: 'platform', host: 'nohost', itAdmin: 'x', councilAdmin: 'y', brandProduct: '', brandOrgShort: 'x'.repeat(21) })
     expect(Object.keys(e).sort()).toEqual(['brandOrgShort', 'brandProduct', 'councilAdmin', 'host', 'itAdmin', 'slug'])

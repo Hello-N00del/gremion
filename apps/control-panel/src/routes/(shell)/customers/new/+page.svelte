@@ -9,7 +9,7 @@
   const values = $derived((form?.values ?? {}) as Record<string, unknown>)
   // a failed submit keeps the chosen modules (a resubmit must not drop them)
   const checkedModules = $derived(Array.isArray(values.enable) ? (values.enable as unknown[]).map(String) : [])
-  const dpiaValues = $derived((values.dpia ?? {}) as Record<string, { requiresDpia?: boolean; documentRef?: string }>)
+  const dpiaValues = $derived((values.dpia ?? {}) as Record<string, { requiresDpia?: boolean | null; documentRef?: string }>)
   const key = $derived(String(form?.key || data.key))
 </script>
 
@@ -74,14 +74,15 @@
           <div class="dpia">
             <label>
               DPIA für {m.id}
-              <select name={`dpia_${m.id}`}>
-                <option value="no" selected={dpiaValues[m.id]?.requiresDpia !== true}>nicht erforderlich</option>
+              <select name={`dpia_${m.id}`} required>
+                <option value="" selected={typeof dpiaValues[m.id]?.requiresDpia !== 'boolean'}>bitte wählen</option>
+                <option value="no" selected={dpiaValues[m.id]?.requiresDpia === false}>nicht erforderlich</option>
                 <option value="yes" selected={dpiaValues[m.id]?.requiresDpia === true}>erforderlich</option>
               </select>
             </label>
             <label>
-              Dokumentverweis
-              <input name={`dpiaRef_${m.id}`} autocomplete="off" maxlength="500" value={String(dpiaValues[m.id]?.documentRef ?? '')} />
+              Dokumentverweis (Pflicht)
+              <input name={`dpiaRef_${m.id}`} required autocomplete="off" maxlength="500" value={String(dpiaValues[m.id]?.documentRef ?? '')} />
             </label>
           </div>
         {/if}
