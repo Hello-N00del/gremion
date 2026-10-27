@@ -29,7 +29,7 @@ import {
   type SeedOp,
   type Vertical,
 } from '@gremion/member-import'
-import { createOrgUnit, addOrgUnitMember } from '$lib/server/governance/org-units-db'
+import { createOrgUnit, addOrgUnitMemberIfAbsent } from '$lib/server/governance/org-units-db'
 import { enqueueResources } from '$lib/server/governance/provisioning/ledger'
 import { getDb } from '$lib/server/db'
 import type { KcProvisionApi } from './kc-admin-api'
@@ -111,9 +111,10 @@ export function sqlOrgStore(): OrgStore {
       return r ? { membershipType: r.membership_type, voting: r.voting } : null
     },
     async addMembership({ bodyId, userId, role }) {
-      // one transaction per membership; the migration's UNIQUE (org_unit_id, user_keycloak_id) makes it idempotent
+      // one transaction per membership; the UNIQUE (org_unit_id, user_keycloak_id) plus DO NOTHING makes it
+      // idempotent AND keeps a membership that appeared meanwhile (type, term, voting) exactly as it is
       await getDb().begin(async (tx) => {
-        await addOrgUnitMember(tx, {
+        await addOrgUnitMemberIfAbsent(tx, {
           orgUnitId: bodyId,
           userKeycloakId: userId,
           membershipType: role.membership_type,

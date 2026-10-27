@@ -1024,6 +1024,8 @@ async function main(): Promise<void> {
         provisionerKc: () => provisionerKc(),
         writeConfigFile,
         readStdin: () => readFileSync(0, 'utf8'),
+        // renews the host executor's lease (record_stream reads the marker off stderr)
+        heartbeat: () => process.stderr.write('@@executor-step import-apply\n'),
         flag,
         reqFlag,
         positional,

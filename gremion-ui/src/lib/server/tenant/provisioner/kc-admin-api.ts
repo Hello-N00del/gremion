@@ -382,6 +382,8 @@ export class KcProvisionApi {
     nowIso: () => string = () => new Date().toISOString(),
   ): Promise<{ id: string; created: boolean; invited: boolean }> {
     const requiredActions = [...(spec.requiredActions ?? ['UPDATE_PASSWORD', 'CONFIGURE_TOTP'])]
+    // Errors below name the realm and the step, NEVER the address: the member import's
+    // errors land in the append-only request events and the audit log (TASK-031).
     const email = spec.email.toLowerCase()
     const find = async () =>
       (await this.realmGet<Array<{ id?: string; email?: string; attributes?: Record<string, string[]> }>>(
@@ -408,7 +410,7 @@ export class KcProvisionApi {
       found = (await find()).find((u) => u.email?.toLowerCase() === email)
     }
     const id = found?.id
-    if (!id) throw new Error(`ensureInvitedUser: user ${email} is absent from realm "${realm}" after create`)
+    if (!id) throw new Error(`ensureInvitedUser: the user is absent from realm "${realm}" after create`)
     if (spec.realmRole) {
       const role = await this.realmGet<Record<string, unknown>>(realm, `/roles/${encodeURIComponent(spec.realmRole)}`)
       if (!role) throw new Error(`ensureInvitedUser: realm role "${spec.realmRole}" not found in realm "${realm}"`)
@@ -426,12 +428,12 @@ export class KcProvisionApi {
     // The FULL representation: on Keycloak 24+ a PUT carrying `attributes`
     // replaces the user's attribute set, root attributes included.
     const user = await this.realmGet<Record<string, unknown> & { attributes?: Record<string, string[]> }>(realm, `/users/${id}`)
-    if (!user) throw new Error(`ensureInvitedUser: user ${email} vanished from realm "${realm}" after the invite`)
+    if (!user) throw new Error(`ensureInvitedUser: the user vanished from realm "${realm}" after the invite`)
     await this.realmReq(realm, 'PUT', `/users/${id}`, { ...user, attributes: { ...user.attributes, [INVITE_MARK]: [nowIso()] } })
     const back = await this.realmGet<{ attributes?: Record<string, string[]> }>(realm, `/users/${id}`)
     if (!back?.attributes?.[INVITE_MARK]?.length) {
       throw new Error(
-        `ensureInvitedUser: the invite mark ${INVITE_MARK} did not persist on ${email} in realm "${realm}" (is it declared in the user profile?); a rerun would invite again`,
+        `ensureInvitedUser: the invite mark ${INVITE_MARK} did not persist on the user in realm "${realm}" (is it declared in the user profile?); a rerun would invite again`,
       )
     }
     return { id, created, invited: true }
