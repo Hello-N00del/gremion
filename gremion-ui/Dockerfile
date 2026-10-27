@@ -125,6 +125,11 @@ COPY --from=builder /repo/gremion-ui/migrations ./migrations
 # image lacks /app/migrations-control and boot fails ENOENT — a deploy bug latent
 # until the first deploy since P2.1a.
 COPY --from=builder /repo/gremion-ui/migrations-control ./migrations-control
+# Vertical data (verticals/<id>/*.json): the blueprint registry serves `<ID>_BLUEPRINT@1` refs (the
+# /api/setup/seed route, existing tenants' STURA_BLUEPRINT@1) from it at runtime, read through
+# loadVertical. Without this COPY a vertical ref would be refused as unknown in the running image.
+COPY --from=builder /repo/verticals ./verticals
+ENV GREMION_VERTICALS_DIR=/app/verticals
 
 # AGPL §4/§5: a conveyed copy must be accompanied by the licence text. This
 # image IS a conveyed copy — without these two files the recipient of the image
