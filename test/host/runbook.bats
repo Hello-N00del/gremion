@@ -39,8 +39,11 @@ PROCEDURE_FILES=(install upgrade backup restore)
 # each of install, upgrade and backup, and each of restore's three arms.
 UNITS=(install upgrade backup restore-A restore-B restore-C)
 
-# gremion-* names the runbook may use that are services, not host programs.
-NON_BIN_NAMES='^(gremion-ui|gremion-ui-oss|gremion-public|gremion-public-oss|gremion-control|gremion-module-sdk)$'
+# gremion-* names the runbook may use that are services or systemd units, not
+# host programs. gremion-footprint is the weekly footprint unit pair
+# (gremion-footprint.service/.timer, TRD-223): its program is
+# infra/host/ops/footprint.sh, not a bin.
+NON_BIN_NAMES='^(gremion-ui|gremion-ui-oss|gremion-public|gremion-public-oss|gremion-control|gremion-module-sdk|gremion-footprint)$'
 
 # Top-level entries a backticked repository path may start with.
 REPO_PATH_RE='^(infra|scripts|docs|compose|test|docker|packages|services|gremion-ui|gremion-public|k8s|modules|ops|contracts)/[A-Za-z0-9._/-]*$'

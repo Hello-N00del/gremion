@@ -55,8 +55,9 @@ describe('readConfig: corruption resilience (G-016)', () => {
 
     // Defaults surface — server stays up.
     expect(config.setup_complete).toBe(false)
-    // No always-on ids: the default map is the toggleable manifests the build composes (TASK-205a).
-    expect(config.modules).toEqual({ elections: true, votes: true, calendar: true, board: true })
+    // No always-on ids: the default map is the toggleable manifests the build composes (TASK-205a; files, messages
+    // and newsletter joined in R33 F5, b2b9cb70, operator ruling Q3 2026-10-21: deselectable at runtime and at creation).
+    expect(config.modules).toEqual({ elections: true, votes: true, newsletter: true, calendar: true, files: true, messages: true, board: true })
     expect(config.backups.retention_days).toBe(30)
     expect(config.org.portal_sections.news).toBe(true)
 

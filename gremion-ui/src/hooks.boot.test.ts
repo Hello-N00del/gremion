@@ -63,7 +63,9 @@ vi.mock('$lib/server/db', () => ({
 vi.mock('$lib/server/config', () => ({
   readConfig: () => ({
     smtp: { configured: false, host: '', port: 0, from_address: '' },
-    modules: { finance: true, elections: true },
+    // messages: true because the public /livekit and /element-call paths are gated on the messages module
+    // (F5 r2, 8feea898: module-gate.ts PUBLIC_MODULE_PATHS); an absent key reads as OFF -> 403.
+    modules: { finance: true, elections: true, messages: true },
     retention: { security_logs_days: 27 },
     // P2.1c (T15 / §6-P2.2): the boot fleet asserts a COMPLETE brand identity per
     // tenant after its migrations succeed. The default tenant is MATERIALIZED in
