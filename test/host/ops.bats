@@ -190,7 +190,8 @@ teardown() {
                GREMION_ROOT_DIR OPS_BIND_IP OPS_INGEST_BIND_IP OPS_UID OPS_GID PROM_RETENTION_TIME \
                ALERT_EMAIL_FROM STALWART_API_KEY OPS_TENANT_HOSTS_FILE OTLP_INGEST_TOKEN \
                OPS_THIRD_PARTY_PROBES GREMION_DISK_ROOT GREMION_STORAGE_COMPONENTS \
-               GREMION_FOOTPRINT_FILESTORE_ROOT; do
+               GREMION_FOOTPRINT_FILESTORE_ROOT \
+               OPS_ACTIVE_HOURS_TZ OPS_ACTIVE_HOURS_START OPS_ACTIVE_HOURS_END OPS_ACTIVE_HOURS_WEEKDAYS; do
         grep -qE "^${key}=" "$OPS_TMPL" || { echo "ops.env.tmpl is missing ${key}"; return 1; }
     done
     # The ingest token is generated, never an operator literal (Q15).
@@ -296,6 +297,39 @@ set_key() {   # <KEY> <value>
     # Measured, not theoretical: Git for Windows' envsubst wrote CRLF once.
     run grep -c $'\r' "$cp"
     [ "$output" = "0" ]
+}
+
+@test "TRD-205: render-ops renders the active-hours interval from ops.env (defaults when the keys are absent)" {
+    write_ops_env
+    run "$RENDER" --env-file "$GREMION_ROOT/etc/env/ops.env"
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    local f="$GREMION_ROOT/$PROV/alerting/time-intervals.yaml"
+    grep -q "name: active-hours" "$f"
+    grep -q "location: 'Europe/Berlin'" "$f"
+    grep -q "weekdays: \['monday:friday'\]" "$f"
+    grep -q "start_time: '08:00'" "$f"
+    grep -q "end_time: '20:00'" "$f"
+    printf 'OPS_ACTIVE_HOURS_TZ=America/New_York\nOPS_ACTIVE_HOURS_START=09:30\nOPS_ACTIVE_HOURS_END=17:45\nOPS_ACTIVE_HOURS_WEEKDAYS=monday,tuesday\n' >> "$GREMION_ROOT/etc/env/ops.env"
+    run "$RENDER" --env-file "$GREMION_ROOT/etc/env/ops.env"
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    grep -q "location: 'America/New_York'" "$f"
+    grep -q "weekdays: \['monday', 'tuesday'\]" "$f"
+    grep -q "start_time: '09:30'" "$f"
+    grep -q "end_time: '17:45'" "$f"
+    # the policy still routes critical without an interval
+    grep -q 'active_time_intervals' "$GREMION_ROOT/$PROV/alerting/policies.yaml"
+}
+
+@test "TRD-205: render-ops refuses a malformed timezone, time or weekday (exit 2)" {
+    write_ops_env
+    local bad
+    for bad in "OPS_ACTIVE_HOURS_TZ=Mars/Olympus" "OPS_ACTIVE_HOURS_START=8am" "OPS_ACTIVE_HOURS_END=25:00" "OPS_ACTIVE_HOURS_WEEKDAYS=funday" "OPS_ACTIVE_HOURS_END=07:00"; do
+        write_ops_env
+        printf '%s\n' "$bad" >> "$GREMION_ROOT/etc/env/ops.env"
+        run "$RENDER" --env-file "$GREMION_ROOT/etc/env/ops.env"
+        [ "$status" -eq 2 ] || { echo "$bad -> $status: $output"; return 1; }
+        [[ "$output" == *OPS_ACTIVE_HOURS* ]] || { echo "$bad: $output"; return 1; }
+    done
 }
 
 @test "render-ops keeps the smtp password out of the provisioning tree, in a 0600 file" {
