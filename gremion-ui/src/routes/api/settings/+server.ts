@@ -6,6 +6,8 @@ import { OPERATOR_DECISION_DE, RETENTION_CAPS } from '$lib/retention-tiers'
 import { hasRole, Role } from '$lib/auth'
 import type { SessionUser } from '$lib/auth/types'
 import { z } from 'zod'
+import { env } from '$env/dynamic/private'
+import { isAllowedSmtpPort, resolveSmtpTarget } from '$lib/server/mail/smtp-target-guard'
 
 // G-098: `.strict()` rejects unknown top-level keys (e.g. typos). Per-field
 // constraints below remain tighter than the baseline `configUpdateSchema`
@@ -112,6 +114,31 @@ export const PATCH: RequestHandler = async ({ request, locals }) => {
     const path = issue?.path.join('.') ?? ''
     const message = (issue?.code === 'too_big' ? legalContext[path] : undefined) ?? issue?.message ?? 'Invalid input'
     return json({ success: false, error: message }, { status: 422 })
+  }
+
+  // MED-4: hold a stored SMTP host/port to the same guard as /api/setup/test-smtp
+  // (internal names, private/loopback ranges, non-SMTP ports) before it is persisted.
+  const smtp = parsed.data.smtp
+  if (smtp?.port !== undefined && !isAllowedSmtpPort(smtp.port, env.SMTP_TEST_ALLOW_PRIVATE === '1')) {
+    return json(
+      { success: false, error: 'SMTP-Port ist nicht zugelassen (erlaubt: 25, 465, 587, 2525)' },
+      { status: 400 },
+    )
+  }
+  if (smtp?.host) {
+    const target = await resolveSmtpTarget(smtp.host)
+    if (!target.allowed) {
+      return json(
+        {
+          success: false,
+          error:
+            target.reason === 'dns'
+              ? 'SMTP-Host konnte nicht aufgelöst werden'
+              : 'SMTP-Host ist keine erlaubte externe Adresse',
+        },
+        { status: 400 },
+      )
+    }
   }
 
   const config = readConfig()
