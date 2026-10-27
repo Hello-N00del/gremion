@@ -27,12 +27,12 @@ export const CROSS_CUTTING_MIGRATIONS: Readonly<Record<string, string>> = {
 }
 
 /**
- * WHY these three stay kernel-applied (R33 audit F6, StuRaOS#371/#372; do not
+ * WHY these three stay kernel-applied (R33 audit F6, consumer-repo issues #371/#372; do not
  * "tidy" them under a module): later UNGATED kernel DDL and grants depend on
  * the relations they create, and moving a file would renumber it into a gap
  * below every initialised database's high-water mark (backFillNotice).
  *   0003 calendar_events    <- 0058_public_reader_grants only REVOKEs it
- *                              (guarded, defensive; no grant) and the StuRaOS
+ *                              (guarded, defensive; no grant) and the consumer's
  *                              008_public_portal ALTER
  *   0004 committee_elections <- 0010_org_units ALTERs it (column rename)
  *   0034 deck_board         <- creates board/stack/card, FKs into org_units

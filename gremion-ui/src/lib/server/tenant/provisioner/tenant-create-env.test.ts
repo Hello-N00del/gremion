@@ -157,7 +157,9 @@ describe('tenant-create phase-a env contract (TDD 19, G3)', () => {
   it('the retired provision verb names its replacement', () => {
     const r = run(['provision', 'musterstadt'], {})
     expect(r.status, r.out).toBe(2)
-    expect(r.out).toMatch(/gremion-tenant create/)
+    // TASK-043d (R31-I4): the CLI create verb is decommissioned; the replacement is the panel, not gremion-tenant create.
+    expect(r.out).toMatch(/control panel .*Neuer Mandant/)
+    expect(r.out).not.toMatch(/gremion-tenant create/)
   }, 90_000)
 })
 

@@ -49,10 +49,11 @@ describe('ConfigStore', () => {
       const config = readConfig()
 
       expect(config.setup_complete).toBe(false)
-      // The default modules map is the toggleable manifests the build composes (TASK-205: the
+      // The default modules map is the toggleable manifests the build composes (TASK-205; R33 F5 added files, messages,
+      // newsletter: the
       // enabled module halves are overlaid before the barrels are generated); pinned by the WP3
       // default golden below.
-      expect(config.modules).toEqual({ elections: true, votes: true, calendar: true, board: true })
+      expect(config.modules).toEqual({ elections: true, votes: true, newsletter: true, calendar: true, files: true, messages: true, board: true })
       expect(config.backups.retention_days).toBe(30)
     })
 
@@ -566,7 +567,7 @@ describe('audit #428: mergeStoredBrand — legacy accent → palette precedence/
 //      ({ modules: { demo_widget: true } } and { demo_widget: false }).
 //  (b) the derived defaultModulesConfig() (exported from config.ts) returns
 //      true for every MODULE_MANIFESTS toggleable id AND deep-equals exactly
-//      {files,messages,calendar,users,finance,elections}:true TODAY (the
+//      {elections,votes,newsletter,calendar,files,messages,board}:true TODAY (the
 //      byte-identical default pin — proves no behaviour drift).
 //  (c) route-gating: a config whose modules['demo_widget'] === false makes
 //      disabledModuleForPath('/api/demo-widget/...', cfg) return 'demo_widget'
@@ -611,8 +612,9 @@ describe('WP3 config.modules dynamic open record — (b) defaultModulesConfig()'
     // and the change is intentional; update this literal in the SAME commit.
     // No always-on (REQUIRED_MODULES) ids; the kept manifests (core, governance) are non-toggleable,
     // so the pin is exactly the toggleable manifests of the overlaid enabled modules (TASK-205a:
-    // elections, votes, calendar and board; messages and files are always-on).
-    expect(defaultModulesConfig()).toEqual({ elections: true, votes: true, calendar: true, board: true })
+    // elections, votes, calendar and board; R33 F5 (b2b9cb70, operator ruling Q3 2026-10-21) made messages, files and
+    // newsletter deselectable, so they are in the pin too).
+    expect(defaultModulesConfig()).toEqual({ elections: true, votes: true, newsletter: true, calendar: true, files: true, messages: true, board: true })
   })
 })
 
