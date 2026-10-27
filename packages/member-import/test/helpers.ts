@@ -75,3 +75,16 @@ export class FakeTarget implements MemberImportTarget {
     this.rearmed.push([...bodyIds])
   }
 }
+
+/** The kernel repository root (this file lives in packages/member-import/test). */
+export const REPO_ROOT = join(here, '..', '..', '..')
+
+/**
+ * The vertical-literal boundary. Vertical DATA (`verticals/**` at the repo
+ * root, and only there) may name its vertical; no other file handed in may.
+ * `files` are repo-relative, forward-slash paths; `read` returns a file's text.
+ * Exported so a guard can be shown RED against a seeded violation.
+ */
+export function verticalLiteralOffenders(files: readonly string[], read: (rel: string) => string): string[] {
+  return files.filter((rel) => !rel.startsWith('verticals/') && verticalLiterals(read(rel)).length > 0)
+}

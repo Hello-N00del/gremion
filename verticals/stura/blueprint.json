@@ -1,0 +1,181 @@
+{
+  "schema_version": 1,
+  "orgUnits": [
+    {
+      "key": "studierendenrat",
+      "name": "Studierendenrat",
+      "description": "Das StuRa-Plenum",
+      "kind": "council",
+      "parentKey": null,
+      "visibility": "all_members",
+      "wantsMatrixRoom": true,
+      "wantsNextcloudFolder": true,
+      "childTerm": "Referate, Fachschaften & Initiativen"
+    },
+    {
+      "key": "vorstand",
+      "name": "Vorstand",
+      "description": "Geschäftsführender Vorstand",
+      "kind": "committee",
+      "parentKey": "studierendenrat",
+      "visibility": "all_members",
+      "wantsMatrixRoom": true,
+      "wantsNextcloudFolder": true,
+      "childTerm": "Arbeitsgruppen",
+      "kindLabel": "Vorstand"
+    },
+    {
+      "key": "it-team",
+      "name": "IT-Team",
+      "description": "Technische Betreuung",
+      "kind": "group",
+      "parentKey": "vorstand",
+      "visibility": "committee_only",
+      "wantsMatrixRoom": true,
+      "wantsNextcloudFolder": true
+    },
+    {
+      "key": "ref-finanzen",
+      "name": "Referat Finanzen",
+      "description": "Haushalt und Finanzen",
+      "kind": "committee",
+      "parentKey": "studierendenrat",
+      "visibility": "all_members",
+      "wantsMatrixRoom": true,
+      "wantsNextcloudFolder": true
+    },
+    {
+      "key": "ref-hochschulpolitik",
+      "name": "Referat Hochschulpolitik",
+      "description": "Hochschulpolitische Arbeit",
+      "kind": "committee",
+      "parentKey": "studierendenrat",
+      "visibility": "all_members",
+      "wantsMatrixRoom": true,
+      "wantsNextcloudFolder": true,
+      "childTerm": "Arbeitsgruppen"
+    },
+    {
+      "key": "ag-nachhaltigkeit",
+      "name": "AG Nachhaltigkeit",
+      "description": "Arbeitsgruppe Nachhaltigkeit",
+      "kind": "group",
+      "parentKey": "ref-hochschulpolitik",
+      "visibility": "all_members",
+      "wantsMatrixRoom": true,
+      "wantsNextcloudFolder": true,
+      "kindLabel": "AG"
+    },
+    {
+      "key": "ref-oeffentlichkeit",
+      "name": "Referat Öffentlichkeitsarbeit",
+      "description": "Presse und Kommunikation",
+      "kind": "committee",
+      "parentKey": "studierendenrat",
+      "visibility": "all_members",
+      "wantsMatrixRoom": true,
+      "wantsNextcloudFolder": true
+    },
+    {
+      "key": "ref-soziales",
+      "name": "Referat Soziales",
+      "description": "Soziale Beratung",
+      "kind": "committee",
+      "parentKey": "studierendenrat",
+      "visibility": "all_members",
+      "wantsMatrixRoom": true,
+      "wantsNextcloudFolder": true
+    },
+    {
+      "key": "fs-informatik",
+      "name": "Fachschaft Informatik",
+      "description": "FS Informatik",
+      "kind": "group",
+      "parentKey": "studierendenrat",
+      "visibility": "all_members",
+      "wantsMatrixRoom": true,
+      "wantsNextcloudFolder": true,
+      "kindLabel": "Fachschaft"
+    },
+    {
+      "key": "fs-maschinenbau",
+      "name": "Fachschaft Maschinenbau",
+      "description": "FS Maschinenbau",
+      "kind": "group",
+      "parentKey": "studierendenrat",
+      "visibility": "all_members",
+      "wantsMatrixRoom": true,
+      "wantsNextcloudFolder": true,
+      "kindLabel": "Fachschaft"
+    },
+    {
+      "key": "ini-kulturcafe",
+      "name": "Initiative Kulturcafé",
+      "description": "Selbstverwaltete Initiative",
+      "kind": "group",
+      "parentKey": "studierendenrat",
+      "visibility": "all_members",
+      "wantsMatrixRoom": true,
+      "wantsNextcloudFolder": true,
+      "kindLabel": "Initiative"
+    }
+  ],
+  "seats": [
+    {
+      "key": "vorsitz",
+      "orgUnitKey": "vorstand",
+      "name": "Vorsitz",
+      "electionMethod": "helios",
+      "isElected": true
+    },
+    {
+      "key": "stellv-vorsitz",
+      "orgUnitKey": "vorstand",
+      "name": "Stellvertretende·r Vorsitz",
+      "electionMethod": "helios",
+      "isElected": true
+    },
+    {
+      "key": "finanzvorstand",
+      "orgUnitKey": "vorstand",
+      "name": "Finanzvorstand",
+      "electionMethod": "helios",
+      "isElected": true
+    },
+    {
+      "key": "referent-finanzen",
+      "orgUnitKey": "ref-finanzen",
+      "name": "Referent·in Finanzen",
+      "electionMethod": "poll",
+      "isElected": true
+    },
+    {
+      "key": "referent-hopo",
+      "orgUnitKey": "ref-hochschulpolitik",
+      "name": "Referent·in Hochschulpolitik",
+      "electionMethod": "poll",
+      "isElected": true
+    },
+    {
+      "key": "referent-oeffi",
+      "orgUnitKey": "ref-oeffentlichkeit",
+      "name": "Referent·in Öffentlichkeitsarbeit",
+      "electionMethod": "poll",
+      "isElected": true
+    },
+    {
+      "key": "referent-soziales",
+      "orgUnitKey": "ref-soziales",
+      "name": "Referent·in Soziales",
+      "electionMethod": "poll",
+      "isElected": true
+    },
+    {
+      "key": "it-verantwortung",
+      "orgUnitKey": "it-team",
+      "name": "IT-Verantwortung",
+      "electionMethod": "manual",
+      "isElected": false
+    }
+  ]
+}
