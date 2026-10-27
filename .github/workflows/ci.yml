@@ -583,8 +583,13 @@ jobs:
       - name: Pull Docker images
         run: docker compose pull postgres keycloak
 
+      # The state tier names its networks and volumes as externals (${STACK}_state
+      # etc.; bootstrap.sh creates them on a host). Create them for the .env's STACK
+      # first, or compose refuses to start postgres.
       - name: Start databases
-        run: docker compose up -d postgres
+        run: |
+          make dev-networks DEV_STACK="$(sed -n 's/^STACK=//p' .env | tail -n 1)"
+          docker compose up -d postgres
 
       - name: Wait for PostgreSQL to be healthy
         run: |
