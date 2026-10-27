@@ -176,6 +176,20 @@ chmod +x docker/postgres/init-databases.sh
 info "Ensuring internal TLS certificates (G-080)..."
 bash docker/keycloak/certs/gen-internal-ca.sh
 
+# ── PgBouncer auth_user credential ──────────────────────────
+# docker-compose.prod.yml bind-mounts docker/pgbouncer/userlist.txt (gitignored
+# credential, 0600). Render it from the PGBOUNCER_AUTH_PASSWORD just seeded in
+# .env so a prod-overlay `up` on a dev machine never finds a missing source.
+info "Rendering the PgBouncer userlist..."
+bash scripts/render-pgbouncer-userlist.sh
+
+# ── Bind-mount source preflight ────────────────────────────
+# Every bind source the compose files name must exist before the first `up`
+# (compose would otherwise create it as a directory). --all also covers the
+# prod overlay.
+info "Checking compose bind-mount sources..."
+bash scripts/check-bind-sources.sh --all
+
 # ── Build & start ──────────────────────────────────────────
 # Two compose projects since TASK-040 (the pooled stack): the STATE project
 # (docker-compose.yml + docker-compose.override.yml) and ONE app colour, blue

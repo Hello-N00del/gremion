@@ -1,4 +1,4 @@
-.PHONY: up down build rebuild logs ps setup gen-realm dev-networks lint-pooled-stack \
+.PHONY: preflight up down build rebuild logs ps setup gen-realm dev-networks lint-pooled-stack \
         shell-kc shell-db \
         keycloak-configure dev-configure dev-ui fresh-start \
         update-legal update-legal-k8s \
@@ -38,8 +38,14 @@ dev-networks:
 nats-init: dev-networks
 	$(DEV_APP) run --rm --no-deps --entrypoint pnpm tenant-create exec nats-auth init
 
+# Fail loudly if a compose bind-mount source is missing (compose would create
+# it as a directory). Generators: docker/keycloak/certs/gen-internal-ca.sh,
+# scripts/render-pgbouncer-userlist.sh -- both run by `make setup`.
+preflight:
+	@bash scripts/check-bind-sources.sh
+
 # Start all services: state first, then the blue app colour
-up: dev-networks nats-init
+up: preflight dev-networks nats-init
 	$(DEV_STATE) up -d
 	$(DEV_APP) up -d
 
@@ -54,7 +60,7 @@ build:
 	$(DEV_APP) build
 
 # Rebuild and restart (nats-init: fresh volumes need the accounts file first)
-rebuild: build dev-networks nats-init
+rebuild: preflight build dev-networks nats-init
 	$(DEV_STATE) up -d --force-recreate
 	$(DEV_APP) up -d --force-recreate
 
