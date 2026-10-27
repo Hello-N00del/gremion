@@ -1,8 +1,8 @@
 # Gremion
 
-**Gremion** is an open, self-hostable **digital-governance kernel** for councils, student parliaments (*Studierendenräte*), associations, and similar deliberative bodies. It provides the substrate every such body needs — identity, multi-tenancy, an org/committee model, protocols & resolutions with a hash-chained audit trail, and a quorum-aware decision engine — plus a **module SDK** that optional features plug into without the kernel ever depending on them.
+**Gremion** is an open, self-hostable **digital-governance kernel** for councils, student parliaments (*Studierendenräte*), associations, and similar deliberative bodies. It provides the substrate every such body needs: identity, multi-tenancy, an org/committee model, protocols & resolutions with a hash-chained audit trail, and a quorum-aware decision engine. On top of that sits a **module SDK** that optional features plug into without the kernel ever depending on them.
 
-> Gremion is the open core of a larger product family. Feature modules (elections, newsletter, calendar, files, messages, board, users, finance, content, vault, handover) live in **their own repositories** — one repository per module — and attach over the module SDK. The kernel **builds and boots standalone with no module present**.
+> Gremion is the open core of a larger product family. Feature modules (elections, newsletter, calendar, files, messages, board, users, finance, content, vault, handover) live in **their own repositories**, one per module, and attach over the module SDK. The kernel **builds and boots standalone with no module present**.
 
 ## License
 
@@ -24,7 +24,7 @@ A feature module is anything the kernel discovers through that SDK; the kernel i
 Say this before you plan around the repository, not after:
 
 - **Not the product's full schema.** 34 data-plane migrations ship here: 31 of the 58 in the reference product plus the kernel-only `0059`, `0060` and `0061`, so **27 are absent** — every one of them module-owned (finance, content) or unshipped (handover). The filename gaps are inherited from that larger chain and are not corruption — see [`gremion-ui/migrations/README.md`](./gremion-ui/migrations/README.md), which lists what is here and names what is not.
-- **Not the full governance feature set.** The contestability / recall **schema** ships here (`055`, `056`); its application half — routes, services, UI — and the second-locus model are implemented in the product and are **absent here**, even though the charter treats accountability and contestability as first-class.
+- **Not the full governance feature set.** The contestability / recall **schema** ships here (`055`, `056`); its application half (routes, services, UI) and the second-locus model are implemented in the product and are **absent here**, even though the charter treats accountability and contestability as first-class.
 - **The module-SDK runtime-registry contract is not frozen.** The manifest shape and `runtime-registry.ts` may still change without a deprecation window. Pin a SHA rather than tracking `main`.
 - **`gremion-ui` and `gremion-public` are a non-normative reference shell.** They are the shell the kernel was extracted with, not a ratified UI contract. Replacing them breaks nothing the kernel guarantees.
 - **No stable release line.** This is 0.1.0. Fixes land on `main`; there is no backport channel for older SHAs.
