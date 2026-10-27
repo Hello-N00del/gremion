@@ -228,9 +228,12 @@ EOF
     # unauthenticated hand-over to the null sink.
     shim_docker_empty
     mkdir -p "${GREMION_ROOT}/etc/secrets/mail"
-    printf '%s
-' live-relay-app-password >"${GREMION_ROOT}/etc/secrets/mail/relay-password"
+    printf '%s\n' live-relay-app-password >"${GREMION_ROOT}/etc/secrets/mail/relay-password"
     chmod 600 "${GREMION_ROOT}/etc/secrets/mail/relay-password"
+    # render-ops copies the relay (= alert) password into the ops secret dir
+    mkdir -p "${GREMION_ROOT}/etc/secrets/ops"
+    printf 'live-relay-app-password\n' >"${GREMION_ROOT}/etc/secrets/ops/smtp-password"
+    chmod 600 "${GREMION_ROOT}/etc/secrets/ops/smtp-password"
     cat >"${GREMION_ROOT}/etc/env/mail.env" <<'EOF2'
 STACK=stg
 MAIL_TRANSPORT=relay

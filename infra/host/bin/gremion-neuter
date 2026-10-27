@@ -204,13 +204,12 @@ rewrite_env_stream() {
 # to the operator: named, not touched). An emptied file fails closed in
 # gremion-mail (absent or empty), which is the point.
 RELAY_SECRETS_EMPTIED=0
-relay_warn() { printf 'WARN %s
-' "$*" >&2; }
+relay_warn() { printf 'WARN %s\n' "$*" >&2; }
 neuter_relay_secrets() {
     local f ref path secrets="${ROOT}/etc/secrets"
     for f in "${ROOT}"/etc/env/*.env; do
         [[ -f "$f" ]] || continue
-        ref="$(sed -n 's/^RELAY_SMTP_PASSWORD_REF=//p' "$f" | tail -n 1 | tr -d '')"
+        ref="$(sed -n 's/^RELAY_SMTP_PASSWORD_REF=//p' "$f" | tail -n 1 | tr -d '\r')"
         [[ -n "$ref" ]] || continue
         case "$ref" in
             secret:*) path="${secrets}/${ref#secret:}" ;;
@@ -226,6 +225,14 @@ neuter_relay_secrets() {
         [[ ! -s "$path" ]] || die "could not empty the relay password file ${path}" 1
         RELAY_SECRETS_EMPTIED=$((RELAY_SECRETS_EMPTIED + 1))
     done
+    # render-ops copies the alert SMTP password (in relay mode: the relay app
+    # password) into etc/secrets/ops/smtp-password; a restored copy must not
+    # keep it at rest either. Re-rendering ops after the neuter rewrites it.
+    if [[ -s "${secrets}/ops/smtp-password" ]]; then
+        : >"${secrets}/ops/smtp-password"
+        [[ ! -s "${secrets}/ops/smtp-password" ]] || die "could not empty ${secrets}/ops/smtp-password" 1
+        RELAY_SECRETS_EMPTIED=$((RELAY_SECRETS_EMPTIED + 1))
+    fi
     ok "relay password files emptied: ${RELAY_SECRETS_EMPTIED}"
 }
 
