@@ -17,6 +17,7 @@ import {
   isFleetPopulated,
   triggerTenantMigrationRetry,
 } from '$lib/server/tenant/readiness'
+import { requestPath } from '$lib/server/request-path'
 import { checkTenantRateLimit } from '$lib/server/tenant/rate-limit'
 import { tlog } from '$lib/server/observability/tenant-log'
 import {
@@ -160,7 +161,7 @@ export const tenantResolveHandle: Handle = async ({ event, resolve }) => {
   // resolution -- no proxy-trust gate, no lookup, no tenant context: /healthz
   // always, an /api/internal/ request only when it names no tenant (see
   // boot-exempt.ts). This must stay the first statement.
-  if (isResolveExemptRequest(event.url.pathname, event.request.headers)) return resolve(event)
+  if (isResolveExemptRequest(requestPath(event), event.request.headers)) return resolve(event)
 
   // P2.1c (T5): executable proxy-trust. When TENANT_PROXY_SHARED_SECRET is set,
   // an edge request that does not prove proxy-trust (the Traefik-injected
@@ -177,7 +178,7 @@ export const tenantResolveHandle: Handle = async ({ event, resolve }) => {
   // request) is the only thing that could gate a header-driven selector.
   // `null` for every other request, which therefore takes the whole-host path
   // below (TASK-041).
-  const leafClaim = leafCallbackClaim(event.url.pathname, event.request.headers)
+  const leafClaim = leafCallbackClaim(requestPath(event), event.request.headers)
 
   if (!isProxyTrusted(event.request, internalTrusted || leafClaim !== null)) {
     return new Response('Forbidden', { status: 403 })

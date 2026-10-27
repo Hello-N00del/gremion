@@ -994,6 +994,27 @@ describe('authGuard publicPaths segment-boundary matching (netcup T03)', () => {
     }
   }
 
+  // Raw-vs-decoded: the router serves '/newsletter/%75nsubscribe' as '/newsletter/unsubscribe', so the guard must
+  // judge it exactly as it judges the plain spelling (public), not by the raw string.
+  for (const entry of PUBLISHING_EXACT) {
+    it(`treats the encoded spelling of '${entry}' exactly like the plain path (public)`, async () => {
+      const mod = await import('./hooks.server')
+      await mod.boot()
+      const event = makeFakeEvent(encodedSpelling(entry))
+      event.locals.tenant = { id: 't1', slug: 't1', issuer: 'https://kc/realms/t1' }
+      event.locals.auth = async () => null
+      let resolveCalled = false
+      await mod.authGuard({
+        event: event as never,
+        resolve: async () => {
+          resolveCalled = true
+          return new Response('public-short-circuit', { status: 200 })
+        },
+      } as never)
+      expect(resolveCalled).toBe(true)
+    })
+  }
+
   it('the shipped publicPaths list is exactly the pinned entries (no /setup)', async () => {
     const mod = await import('./hooks.server')
     expect([...mod.PUBLIC_PATHS].sort()).toEqual([...FIVE].sort())
@@ -1183,9 +1204,15 @@ describe('cspGuard (G-011b)', () => {
 // or a %-encoded first letter of the last segment.
 function nearMisses(entry: string): string[] {
   const i = entry.lastIndexOf('/')
+  // A %-encoded letter is NOT a near miss: the router decodes it, so it is the same route as the plain entry and is
+  // checked against the DECODED path (see 'encoded spelling' below).
+  return [`${entry}/`, `/${entry}`, `${entry.slice(0, i)}/${entry.slice(i)}`, entry.toUpperCase()]
+}
+
+function encodedSpelling(entry: string): string {
+  const i = entry.lastIndexOf('/')
   const last = entry.slice(i + 1)
-  const encoded = `${entry.slice(0, i + 1)}%${last.charCodeAt(0).toString(16)}${last.slice(1)}`
-  return [`${entry}/`, `/${entry}`, `${entry.slice(0, i)}/${entry.slice(i)}`, entry.toUpperCase(), encoded]
+  return `${entry.slice(0, i + 1)}%${last.charCodeAt(0).toString(16)}${last.slice(1)}`
 }
 
 function makeFakeEvent(path: string, routeId: string | null = path) {
