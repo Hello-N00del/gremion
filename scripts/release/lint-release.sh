@@ -56,3 +56,7 @@ echo "[release] suites: ${collected} of ${declared} declared test(s) ran, 0 fail
 command -v shellcheck >/dev/null 2>&1 || { echo "lint-release: shellcheck not on PATH" >&2; exit 1; }
 shellcheck -x scripts/release/*.sh
 echo "[release] shellcheck: OK"
+
+# TRD-141: the TOM annex is regenerated before a change reaches a hosted council.
+node scripts/gen-tom-annex.mjs --check
+echo "[release] TOM annex: current"
