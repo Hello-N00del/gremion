@@ -284,7 +284,7 @@ lint-sh:
 	@shellcheck -x scripts/*.sh ops/scripts/*.sh docker/postgres/init-databases.sh docker/legal/entrypoint.sh packages/ports/scripts/nats-test.sh packages/ports/scripts/nats-test-nruns.sh packages/nats-auth/scripts/proof.sh packages/nats-auth/scripts/image-check.sh packages/events/scripts/proof.sh packages/events/scripts/alert-proof.sh packages/events/scripts/image-check.sh
 	@shellcheck -x -s sh gremion-ui/scripts/hooks/pre-commit
 	@shellcheck -x modules/messaging/synapse/*.sh modules/messaging/synapse/postgres-init/*.sh modules/messaging/synapse/test/*.sh
-	@for f in infra/host/bootstrap.sh infra/host/lib/*.sh infra/host/mail/*.sh infra/host/ops/*.sh test/host/integration/*.sh; do \
+	@for f in infra/host/bootstrap.sh infra/host/lib/*.sh infra/host/lib/executor/*.sh infra/host/lib/executor/handlers/*.sh infra/host/mail/*.sh infra/host/ops/*.sh test/host/integration/*.sh; do \
 		[ -e "$$f" ] || continue; \
 		shellcheck -x --source-path=SCRIPTDIR "$$f" || exit 1; \
 	done

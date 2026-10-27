@@ -69,6 +69,7 @@ import_keep() {
 }
 
 handle_import_members() {
+    # shellcheck disable=SC2034  # the handler signature is the registry's: <id> <slug> <operator> <args> <work>
     local id="$1" slug="$2" operator="$3" args="$4" work="$5"
     local list="${work}/list.csv" phase vertical expect rel db rc status
     [[ -f "$args" ]] || die "import_members ${id}: no verified args" "$GREMION_EXIT_ASSERT"

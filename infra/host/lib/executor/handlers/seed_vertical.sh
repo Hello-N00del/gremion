@@ -10,6 +10,7 @@
 #   Whether a matrix room / Nextcloud folder is asked for is decided inside the
 #   container from the tenant's enabled modules (D-8), never here.
 handle_seed_vertical() {
+    # shellcheck disable=SC2034  # the handler signature is the registry's: <id> <slug> <operator> <args> <work>
     local id="$1" slug="$2" operator="$3" args="$4" work="$5" vertical out line rc=0
     [[ -f "$args" ]] || die "seed_vertical ${id}: no verified args" "$GREMION_EXIT_ASSERT"
     jq -e --arg s "$slug" '.slug == $s' "$args" >/dev/null \
