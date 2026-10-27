@@ -293,4 +293,29 @@ describe('module gate uses the decoded path (encoded-path bypass)', () => {
     await mod.requestPathHandle({ event: ok as never, resolve: resolveSpy } as never)
     expect(ok.locals.decodedPath).toBe('/api/demo-widget')
   })
+
+  it('login redirect callbackUrl keeps the RAW path (%25 is not decoded)', async () => {
+    const mod = await import('./hooks.server'); await mod.boot()
+    for (const raw of ['/files/a%25b', '/files/%2561']) {
+      const event = makeEvent({ path: raw })
+      let loc = ''
+      try {
+        await mod.authGuard({ event: event as never, resolve: resolveSpy } as never)
+      } catch (e) {
+        loc = (e as { location?: string }).location ?? ''
+      }
+      expect(loc).toBe(`/auth/login?callbackUrl=${encodeURIComponent(raw)}`)
+    }
+  })
+
+  it('requestPathHandle precedes tenantResolveHandle and authGuard in the handle sequence', async () => {
+    const { readFileSync } = await import('node:fs')
+    const src = readFileSync(process.cwd() + '/src/hooks.server.ts', 'utf8')
+    const seq = src.slice(src.indexOf('export const handle = sequence('))
+    const idx = (n: string) => seq.indexOf(n + ',')
+    expect(idx('requestPathHandle')).toBeGreaterThan(-1)
+    expect(idx('requestPathHandle')).toBeLessThan(idx('tenantResolveHandle'))
+    expect(idx('requestPathHandle')).toBeLessThan(idx('authHandleUnlessExempt'))
+    expect(idx('requestPathHandle')).toBeLessThan(idx('authGuard'))
+  })
 })

@@ -673,7 +673,7 @@ export const authGuard: Handle = async ({ event, resolve }) => {
         { status: 401, headers: { 'content-type': 'application/json' } }
       )
     }
-    redirect(302, `/auth/login?callbackUrl=${encodeURIComponent(path)}`)
+    redirect(302, `/auth/login?callbackUrl=${encodeURIComponent(event.url.pathname)}`)
   }
 
   const user = session.user as SessionUser
@@ -705,7 +705,7 @@ export const authGuard: Handle = async ({ event, resolve }) => {
         { status: 401, headers: { 'content-type': 'application/json' } }
       )
     }
-    redirect(302, `/auth/login?callbackUrl=${encodeURIComponent(path)}`)
+    redirect(302, `/auth/login?callbackUrl=${encodeURIComponent(event.url.pathname)}`)
   }
   if (!assertIssMatch({ tokenIss: sessionTokenIss, tenantIssuer: event.locals.tenant.issuer })) {
     return tenantMismatchResponse(path)
@@ -720,7 +720,7 @@ export const authGuard: Handle = async ({ event, resolve }) => {
     // PAGE_ACCESS object, so tenant #1 behavior is byte-identical.
     const segment = path.split('/')[1] || 'dashboard'
     if (!canAccess(roles, segment, pageAccessForTenant(event.locals.tenant))) {
-      redirect(302, `/auth/login?error=forbidden&callbackUrl=${encodeURIComponent(path)}`)
+      redirect(302, `/auth/login?error=forbidden&callbackUrl=${encodeURIComponent(event.url.pathname)}`)
     }
   }
 
