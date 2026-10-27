@@ -245,7 +245,7 @@
           <div class="grid gap-4 sm:grid-cols-2">
             <div class="space-y-1">
               <Label for="controller_name">Verantwortliche Stelle</Label>
-              <Input id="controller_name" bind:value={compVals.controller_name} placeholder="StuRa Musteruni" />
+              <Input id="controller_name" bind:value={compVals.controller_name} placeholder="Mustergremium" />
             </div>
             <div class="space-y-1">
               <Label for="controller_address">Anschrift</Label>
