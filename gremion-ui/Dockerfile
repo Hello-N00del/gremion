@@ -36,6 +36,9 @@ COPY packages/generated-clients/package.json ./packages/generated-clients/
 COPY packages/edge-routers/package.json ./packages/edge-routers/
 # TASK-077 G6: the tenancy primitives gremion-ui's tenant/ files re-export (bundled, ssr.noExternal).
 COPY packages/tenancy-core/package.json ./packages/tenancy-core/
+# TASK-031: @gremion/member-import (member list import + vertical loader) -- a gremion-ui DEVdependency like provisioning:
+# the tenant-create image runs the import verbs; `deploy --prod` leaves it out of the runner.
+COPY packages/member-import/package.json ./packages/member-import/
 COPY gremion-ui/package.json ./gremion-ui/
 RUN pnpm install --frozen-lockfile
 
@@ -59,6 +62,10 @@ COPY packages/module-catalogue ./packages/module-catalogue/
 COPY packages/generated-clients ./packages/generated-clients/
 COPY packages/edge-routers ./packages/edge-routers/
 COPY packages/tenancy-core ./packages/tenancy-core/
+COPY packages/member-import ./packages/member-import/
+# TASK-031: vertical data directories (verticals/<id>/{vertical,blueprint,wording.de,roles}.json) the seed-vertical and
+# import verbs read; the cwd of tenant-create is /repo/gremion-ui, so GREMION_VERTICALS_DIR defaults to ../verticals.
+COPY verticals ./verticals/
 # TASK-043 G4: the module catalogue tenant-create enables from -- every
 # module.json (loadCatalogue's one-entry-per-directory rule) and the migration
 # directory of each module that declares a database. No module source, no

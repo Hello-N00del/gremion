@@ -29,3 +29,10 @@ EXECUTOR_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "${EXECUTOR_LIB_DIR}/handlers/create.sh"
 
 register create handle_create
+
+# shellcheck source=handlers/import_members.sh
+. "${EXECUTOR_LIB_DIR}/handlers/import_members.sh"
+register import_members handle_import_members
+# shellcheck source=handlers/seed_vertical.sh
+. "${EXECUTOR_LIB_DIR}/handlers/seed_vertical.sh"
+register seed_vertical handle_seed_vertical

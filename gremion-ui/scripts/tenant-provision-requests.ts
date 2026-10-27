@@ -114,7 +114,8 @@ async function requestVerify(ctx: RequestVerbContext): Promise<void> {
     )
     if (verdict.verdict === 'refused') return refuse(verdict.reason)
     const byId = new Map(catalogue.map((m) => [m.id, m]))
-    const notLoaded = await verifyEnableLoaded(verdict.args.enable, async (ids) => {
+    // only a create enables modules; the import and the vertical seed carry no module list
+    const notLoaded = await verifyEnableLoaded('enable' in verdict.args ? verdict.args.enable : [], async (ids) => {
       const missing: string[] = []
       for (const m of ids) {
         const mod = byId.get(m)

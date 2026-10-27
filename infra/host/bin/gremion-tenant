@@ -323,7 +323,7 @@ cmd_init() {
 cmd_request() {
     local kind="${1:-}"; shift || true
     [[ "$kind" =~ $REQUEST_KINDS_RE ]] || die "request <kind>: one of create, suspend, resume, reconcile, enable_module, disable_module, import_members, seed_vertical, record_dpia, import_isolation" "$GREMION_EXIT_USAGE"
-    local file="" reason="" slug actor key id
+    local file="" reason="" slug actor key id args_literal
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --args-file) need_value "$@"; file="$2"; shift 2 ;;
@@ -345,8 +345,13 @@ cmd_request() {
     [[ "$actor" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] || die "the invoking login user '${actor}' is not a plain user name" "$GREMION_EXIT_USAGE"
     key="$(openssl rand -hex 16 | tr -d '\r\n')"
     key="${key:0:8}-${key:8:4}-4${key:13:3}-8${key:17:3}-${key:20:12}"
-    id="$(executor_sql "SELECT plt.submit_provisioning_request(:'kind', :'slug', :'args'::jsonb, :'key'::uuid, :'op'::uuid, NULL, NULL, NULL, NULL, :'reason', :'actor');" \
-            -v kind="$kind" -v slug="$slug" -v args="$(jq -c . "$file")" -v key="$key" -v op="$OPERATOR_ID" -v reason="$reason" -v actor="$actor")" \
+    # The args (a member list: up to 1 MiB, names and addresses) go on psql's STDIN as a
+    # dollar-quoted literal inside the SQL, never as `-v args=...`: that is a `docker exec`
+    # argv, capped at 128 KiB per argument (E2BIG) and readable by every local user in the
+    # process table (house review MED 1).
+    args_literal="$(sql_jsonb_literal "$(jq -c . "$file")")" || die "could not quote the request args" "$GREMION_EXIT_ASSERT"
+    id="$(executor_sql "SELECT plt.submit_provisioning_request(:'kind', :'slug', ${args_literal}, :'key'::uuid, :'op'::uuid, NULL, NULL, NULL, NULL, :'reason', :'actor');" \
+            -v kind="$kind" -v slug="$slug" -v key="$key" -v op="$OPERATOR_ID" -v reason="$reason" -v actor="$actor")" \
         || die "the break-glass request was refused by gremion_platform (see above); nothing was queued" "$GREMION_EXIT_ASSERT"
     id="${id%%$'\n'*}"
     id="${id%$'\r'}"

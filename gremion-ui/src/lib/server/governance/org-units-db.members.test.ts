@@ -12,21 +12,23 @@
 // org-units-db.integration.test.ts.
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
-const { calls } = vi.hoisted(() => ({
+const { calls, state } = vi.hoisted(() => ({
   calls: [] as Array<{ text: string; params: unknown[] }>,
+  state: { rows: [{ id: 'm-1' }] as unknown[] },
 }))
 
 vi.mock('$lib/server/db', () => ({
   getDb: () => (strings: TemplateStringsArray, ...values: unknown[]) => {
     calls.push({ text: strings.join('$?'), params: values })
-    return Promise.resolve([{ id: 'm-1' }])
+    return Promise.resolve(state.rows)
   },
 }))
 
-import { addOrgUnitMember } from './org-units-db'
+import { addOrgUnitMember, addOrgUnitMemberIfAbsent } from './org-units-db'
 
 beforeEach(() => {
   calls.length = 0
+  state.rows = [{ id: 'm-1' }]
 })
 
 describe('addOrgUnitMember voting upsert', () => {
@@ -65,5 +67,42 @@ describe('addOrgUnitMember voting upsert', () => {
     const q = calls[0]!
     expect(q.params[5]).toBe(false) // explicit value inserted
     expect(q.params[6]).toBe(true) // provided → EXCLUDED.voting wins on conflict
+  })
+})
+
+// TASK-031 fix round (house review LOW): the member import must never overwrite
+// an existing membership's type or term - the upsert above is for the UI paths.
+describe('addOrgUnitMemberIfAbsent (the import path)', () => {
+  const data = { orgUnitId: 'ou-1', userKeycloakId: 'u-1', membershipType: 'unelected' as const, termStart: null, termEnd: null, voting: false }
+
+  it('inserts and does NOTHING on conflict: no DO UPDATE, no SET of type or term', async () => {
+    await addOrgUnitMemberIfAbsent(data)
+    expect(calls).toHaveLength(1)
+    const text = calls[0]!.text
+    expect(text).toMatch(/ON CONFLICT \(org_unit_id, user_keycloak_id\) DO NOTHING/)
+    expect(text).not.toMatch(/DO UPDATE/i)
+    expect(text).not.toMatch(/membership_type = EXCLUDED/)
+    expect(calls[0]!.params).toEqual(['ou-1', 'u-1', 'unelected', null, null, false])
+  })
+
+  it('reports whether it inserted: true for a new row, false when the membership was already there', async () => {
+    await expect(addOrgUnitMemberIfAbsent(data)).resolves.toBe(true)
+    state.rows = []
+    await expect(addOrgUnitMemberIfAbsent(data)).resolves.toBe(false)
+  })
+
+  it('the existing upsert for the UI callers is unchanged', async () => {
+    await addOrgUnitMember({ orgUnitId: 'ou-1', userKeycloakId: 'u-1', membershipType: 'elected', termStart: null, termEnd: null })
+    expect(calls[0]!.text).toMatch(/DO UPDATE SET/)
+  })
+})
+
+describe('the member import adapter uses the do-nothing insert', () => {
+  it('sqlOrgStore.addMembership calls addOrgUnitMemberIfAbsent, never the upsert', async () => {
+    const { readFileSync } = await import('node:fs')
+    const src = readFileSync('src/lib/server/tenant/provisioner/member-import-adapters.ts', 'utf8')
+    expect(src).toMatch(/addOrgUnitMemberIfAbsent\(tx,/)
+    expect(src).not.toMatch(/\baddOrgUnitMember\(/)
+    expect(src).not.toMatch(/import \{[^}]*\baddOrgUnitMember\b[^}]*\} from/)
   })
 })

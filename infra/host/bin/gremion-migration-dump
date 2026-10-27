@@ -26,6 +26,11 @@
 #       `docker exec <state postgres> pg_dump -Fc --no-owner` (the server's own
 #       pg_dump). The same tag's live dump is reused (a retry after a failed
 #       step 9, or a --no-switch deploy).
+#   gremion-migration-dump take --release R --db D
+#       Takes ONE checked dump of database D under release label R (TASK-031: the
+#       member import takes it before it writes, and discards it, with a reason,
+#       once the rerun proved the apply). Same series rule as preflight: another
+#       release's live dump refuses; R's own live dump of D is reused.
 #   gremion-migration-dump switched --release R
 #       Deletes every live dump of R: unlink, fsync the directory, re-stat, then
 #       one `deleted` line each. No dump of R: exit 0, `no-dump R`. An
@@ -61,6 +66,7 @@ LOCKED=0
 usage() {
     cat >&2 <<'EOF'
 usage: gremion-migration-dump preflight --release T [--release-dir DIR]
+       gremion-migration-dump take      --release R --db D
        gremion-migration-dump switched  --release R
        gremion-migration-dump discard   --release R --reason <text>
        gremion-migration-dump restore   --release R --db D --accept-loss-since <time>
@@ -272,15 +278,22 @@ legacy_chains_with_new_files() { # <release dir> <current dir>
     done < <(jq -r '.chains | to_entries[] | select(.value == "legacy-boot") | .key' "$runners")
 }
 
-cmd_preflight() {
-    local rel="$1" rdir="$2" live other chain db current hostdb records
-    take_lock
+# refuse_other_live_dumps <release> — never a series (exit 1, printing the
+# restore and discard commands) while another release's dump is live.
+refuse_other_live_dumps() {
+    local rel="$1" live other
     live="$(live_dumps)"
     other="$(jq -c --arg r "$rel" '[.[] | select(.release != $r)]' <<< "$live")"
     if [[ "$(jq 'length' <<< "$other")" -gt 0 ]]; then
         jq -r '.[] | "DUMP_SERIES: live pre-migration dump \(.migration_dump_id) of release \(.release) for database \(.database) (taken \(.dump_taken_at // .at)) — resolve it before deploying another release:\n  restore: gremion-migration-dump restore --release \(.release) --db \(.database) --accept-loss-since <time>\n  discard: gremion-migration-dump discard --release \(.release) --reason <text>"' <<< "$other" >&2
         exit 1
     fi
+}
+
+cmd_preflight() {
+    local rel="$1" rdir="$2" chain db current hostdb records
+    take_lock
+    refuse_other_live_dumps "$rel"
     current="${ROOT}/current"
     if [[ ! -e "$current" ]]; then
         info "no current release under ${ROOT}: a fresh host has no data to lose — no legacy-boot dump"
@@ -298,6 +311,15 @@ cmd_preflight() {
         done <<< "$records"
     fi
     printf 'PREFLIGHT-OK release=%s\n' "$rel"
+}
+
+# cmd_take <release> <db> — the TASK-031 verb: one checked dump of <db>, no
+# chain logic. The member import takes it before its first write.
+cmd_take() {
+    take_lock
+    refuse_other_live_dumps "$1"
+    take_host_dump "$1" "$2"
+    printf 'TAKE-OK release=%s db=%s\n' "$1" "$2"
 }
 
 # delete_release <release> <reason> <by_kind> <verb>
@@ -407,7 +429,7 @@ main() {
     trap on_exit EXIT
 
     case "$cmd" in
-        preflight|switched|discard|restore)
+        preflight|take|switched|discard|restore)
             [[ -n "$rel" ]] || die "$cmd needs --release" 2
             valid_release "$rel" || die "invalid release: $rel" 2 ;;
         status)
@@ -425,6 +447,10 @@ main() {
     fi
     case "$cmd" in
         preflight) cmd_preflight "$rel" "${rdir:-${ROOT}/releases/${rel}}" ;;
+        take)
+            [[ -n "$db" ]] || die "take needs --db" 2
+            valid_db "$db" || die "invalid database name: $db" 2
+            cmd_take "$rel" "$db" ;;
         switched)  delete_release "$rel" switched system switched ;;
         discard)
             [[ -n "${reason//[[:space:]]/}" ]] || die "discard needs --reason <text> (it is logged)" 2

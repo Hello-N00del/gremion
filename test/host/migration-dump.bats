@@ -344,3 +344,52 @@ seed_live_dump() { # <tag>
     [[ "$output" == *"DUMP_UNVERIFIED"* ]]
     refute_recorded docker "DROP DATABASE"
 }
+
+# ---------------------------------------------------------------------------
+# take (TASK-031: the member import's one dump before its first write)
+# ---------------------------------------------------------------------------
+
+@test "take --release R --db D: ONE checked dump of D, recorded, logged, TAKE-OK; a rerun reuses it" {
+    make_dump_dir
+    run "$TOOL" take --release import-0a1b2c3d --db gremion
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"TAKE-OK release=import-0a1b2c3d db=gremion"* ]]
+    assert_recorded docker "exec pgc pg_dump -Fc --no-owner -U postgres gremion"
+    [ "$(ledger_events)" = "created " ]
+    [ "$(jq -r '.release' "${DUMPS}/ledger.jsonl")" = "import-0a1b2c3d" ]
+    : > "$SHIM_LOG"
+    run "$TOOL" take --release import-0a1b2c3d --db gremion
+    [ "$status" -eq 0 ]
+    refute_recorded docker "pg_dump -Fc"
+    [ "$(ledger_events)" = "created " ]
+}
+
+@test "take refuses another release's live dump (never a series) before any pg_dump" {
+    seed_live_dump dist-v1.1.0
+    : > "$SHIM_LOG"
+    run "$TOOL" take --release import-0a1b2c3d --db gremion
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"DUMP_SERIES: live pre-migration dump"*"of release dist-v1.1.0"* ]]
+    refute_recorded docker "pg_dump"
+}
+
+@test "take needs --release and --db, and a valid database name (usage, exit 2)" {
+    make_dump_dir
+    run "$TOOL" take --release import-0a1b2c3d
+    [ "$status" -eq 2 ]
+    run "$TOOL" take --db gremion
+    [ "$status" -eq 2 ]
+    run "$TOOL" take --release import-0a1b2c3d --db 'a;b'
+    [ "$status" -eq 2 ]
+    refute_recorded docker "pg_dump"
+}
+
+@test "a taken dump is deleted with a logged reason by discard (the import's exit once the rerun proved the apply)" {
+    make_dump_dir
+    run "$TOOL" take --release import-0a1b2c3d --db gremion
+    [ "$status" -eq 0 ]
+    run "$TOOL" discard --release import-0a1b2c3d --reason "member import verified"
+    [ "$status" -eq 0 ]
+    [ "$(ledger_events)" = "created deleted " ]
+    [ "$(jq -rs '.[1].reason' "${DUMPS}/ledger.jsonl")" = "member import verified" ]
+}

@@ -57,8 +57,8 @@ export {
   PANEL_REQUESTER_MARKER,
   type ExecutorRoleDeps,
 } from './pg.ts'
-export { HANDLED_KINDS, isRequestKind, KIND_OWNER, REQUEST_KINDS, verifyEnableLoaded, verifyRequestArgs } from './requests.ts'
-export type { CreateRequestArgs, DpiaDecision, RequestEnvelope, RequestKind, RequestVerdict, VerifyContext } from './requests.ts'
+export { HANDLED_KINDS, IMPORT_LIST_MAX_BYTES, isRequestKind, KIND_OWNER, REQUEST_KINDS, verifyEnableLoaded, verifyRequestArgs } from './requests.ts'
+export type { CreateRequestArgs, DpiaDecision, ImportMembersArgs, RequestEnvelope, RequestKind, RequestVerdict, SeedVerticalArgs, VerifiedRequestArgs, VerifyContext } from './requests.ts'
 export { renderCustomerRouter } from './router.ts'
 export type { CustomerRouterInput } from './router.ts'
 export type { BootstrapDeps, BootstrapResult } from './pg.ts'

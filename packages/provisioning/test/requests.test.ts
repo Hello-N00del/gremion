@@ -24,11 +24,11 @@ const env = (over: Partial<RequestEnvelope> = {}): RequestEnvelope => ({ kind: '
 const verify = (e: RequestEnvelope) => verifyRequestArgs(e, { catalogueIds: CATALOGUE, disabledIds: DISABLED })
 
 describe('the request kinds', () => {
-  it('every kind of the DB CHECK is known; only create has a handler in 043d-1; reserved kinds name their owner', () => {
+  it('every kind of the DB CHECK is known; create + the TASK-031 kinds have a handler; reserved kinds name their owner', () => {
     expect([...REQUEST_KINDS].sort()).toEqual(
       ['create', 'disable_module', 'enable_module', 'import_isolation', 'import_members', 'reconcile', 'record_dpia', 'resume', 'seed_vertical', 'suspend'].sort(),
     )
-    expect([...HANDLED_KINDS]).toEqual(['create'])
+    expect([...HANDLED_KINDS]).toEqual(['create', 'import_members', 'seed_vertical'])
     expect(KIND_OWNER.import_members).toBe('TASK-031')
     expect(KIND_OWNER.seed_vertical).toBe('TASK-031')
     expect(KIND_OWNER.record_dpia).toBe('TASK-044')
@@ -36,8 +36,6 @@ describe('the request kinds', () => {
   })
 
   it.each([
-    ['import_members', 'no handler (TASK-031)'],
-    ['seed_vertical', 'no handler (TASK-031)'],
     ['record_dpia', 'no handler (TASK-044)'],
     ['import_isolation', 'no handler (TASK-044)'],
     ['suspend', 'no handler (TASK-043d-2)'],
@@ -126,5 +124,42 @@ describe('verifyEnableLoaded', () => {
     expect(await verifyEnableLoaded(['votes'], unloaded)).toBeNull()
     expect(await verifyEnableLoaded([], unloaded)).toBeNull()
     expect(asked).toBe(2)
+  })
+})
+
+// TASK-031: the member import and the vertical seed are request kinds. The
+// list rides in the request (platform 0010 raises its cap and purges it on
+// any final state); the container reads it from STDIN.
+describe('import_members args (TASK-031)', () => {
+  const SHA = 'a'.repeat(64)
+  const imp = (args: Record<string, unknown>) => verify(env({ kind: 'import_members', args }))
+  const validate = { slug: 'musterstadt', phase: 'validate', vertical: 'demo', csv: 'name,email,body\nA B,a@x.example,Rat\n' }
+
+  it('a validate is accepted and normalised', () => {
+    expect(imp(validate)).toEqual({ verdict: 'ok', args: validate })
+  })
+  it('an apply must name the validated sha256; a validate must not carry one', () => {
+    expect(imp({ ...validate, phase: 'apply' })).toMatchObject({ verdict: 'refused', reason: expect.stringMatching(/names the sha256/) })
+    expect(imp({ ...validate, phase: 'apply', expectSha256: 'XYZ' })).toMatchObject({ verdict: 'refused' })
+    expect(imp({ ...validate, phase: 'apply', expectSha256: SHA })).toEqual({ verdict: 'ok', args: { ...validate, phase: 'apply', expectSha256: SHA } })
+    expect(imp({ ...validate, expectSha256: SHA })).toMatchObject({ verdict: 'refused', reason: expect.stringMatching(/validate carries no expectSha256/) })
+  })
+  it('refuses another customer, an unknown field, a path-like vertical, an empty or oversized list', () => {
+    expect(imp({ ...validate, slug: 'other' })).toMatchObject({ verdict: 'refused', reason: expect.stringMatching(/not the request's slug/) })
+    expect(imp({ ...validate, members: [] })).toMatchObject({ verdict: 'refused', reason: expect.stringMatching(/unknown field members/) })
+    expect(imp({ ...validate, vertical: '../x' })).toMatchObject({ verdict: 'refused', reason: expect.stringMatching(/vertical id/) })
+    expect(imp({ ...validate, csv: '  ' })).toMatchObject({ verdict: 'refused' })
+    expect(imp({ ...validate, csv: 'x'.repeat(1_048_577) })).toMatchObject({ verdict: 'refused', reason: expect.stringMatching(/exceeds/) })
+    expect(imp({ ...validate, phase: 'wipe' })).toMatchObject({ verdict: 'refused' })
+  })
+})
+
+describe('seed_vertical args (TASK-031)', () => {
+  const seed = (args: Record<string, unknown>) => verify(env({ kind: 'seed_vertical', args }))
+  it('accepts a vertical id for the request customer only', () => {
+    expect(seed({ slug: 'musterstadt', vertical: 'demo' })).toEqual({ verdict: 'ok', args: { slug: 'musterstadt', vertical: 'demo' } })
+    expect(seed({ slug: 'other', vertical: 'demo' })).toMatchObject({ verdict: 'refused' })
+    expect(seed({ slug: 'musterstadt', vertical: 'Demo!' })).toMatchObject({ verdict: 'refused' })
+    expect(seed({ slug: 'musterstadt', vertical: 'demo', force: true })).toMatchObject({ verdict: 'refused' })
   })
 })

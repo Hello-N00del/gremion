@@ -134,7 +134,7 @@ async function tenantOf(c: CustomerRef): Promise<Tenant> {
   return t
 }
 
-async function inProvisioningContext<T>(c: CustomerRef, fn: () => Promise<T>, opts: { dbUrl?: string } = {}): Promise<T> {
+export async function inProvisioningContext<T>(c: CustomerRef, fn: () => Promise<T>, opts: { dbUrl?: string } = {}): Promise<T> {
   const tenant = await tenantOf(c)
   // Pools are keyed by tenant id: drop any pool opened for another url first,
   // and drop this one after, so the owner-role migration pool never serves

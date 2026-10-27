@@ -346,6 +346,17 @@ export class KcProvisionApi {
   }
 
   /**
+   * TASK-031: the id of the user with exactly this e-mail in the realm, or
+   * null. Read-only (the member import's preflight must not create anyone).
+   */
+  async findUserIdByEmail(realm: string, email: string): Promise<string | null> {
+    const wanted = email.toLowerCase()
+    const users =
+      (await this.realmGet<Array<{ id?: string; email?: string }>>(realm, `/users?email=${encodeURIComponent(wanted)}&exact=true`)) ?? []
+    return users.find((u) => u.email?.toLowerCase() === wanted)?.id ?? null
+  }
+
+  /**
    * TASK-043 FLOW-IDN-002 / Q9: a first administrator. Never an operator-set
    * password: the user gets UPDATE_PASSWORD + CONFIGURE_TOTP and ONE
    * execute-actions mail, sent from the realm's own sender. Idempotent and
@@ -356,9 +367,23 @@ export class KcProvisionApi {
    */
   async ensureInvitedUser(
     realm: string,
-    spec: { email: string; realmRole: string | null; lifespanSeconds?: number },
+    spec: {
+      email: string
+      realmRole: string | null
+      lifespanSeconds?: number
+      /** Default: the administrator pair, UPDATE_PASSWORD + CONFIGURE_TOTP (043). TASK-031 D-5: an imported member gets ['UPDATE_PASSWORD'] only. */
+      requiredActions?: readonly string[]
+      /** Set on CREATE only; an existing user's names are never updated. */
+      firstName?: string
+      lastName?: string
+      /** A found, never-invited user that already holds a credential is linked, not mailed. */
+      skipIfHasCredential?: boolean
+    },
     nowIso: () => string = () => new Date().toISOString(),
   ): Promise<{ id: string; created: boolean; invited: boolean }> {
+    const requiredActions = [...(spec.requiredActions ?? ['UPDATE_PASSWORD', 'CONFIGURE_TOTP'])]
+    // Errors below name the realm and the step, NEVER the address: the member import's
+    // errors land in the append-only request events and the audit log (TASK-031).
     const email = spec.email.toLowerCase()
     const find = async () =>
       (await this.realmGet<Array<{ id?: string; email?: string; attributes?: Record<string, string[]> }>>(
@@ -374,7 +399,9 @@ export class KcProvisionApi {
           email,
           emailVerified: false,
           enabled: true,
-          requiredActions: ['UPDATE_PASSWORD', 'CONFIGURE_TOTP'],
+          requiredActions,
+          ...(spec.firstName ? { firstName: spec.firstName } : {}),
+          ...(spec.lastName ? { lastName: spec.lastName } : {}),
         })
         created = true
       } catch (err) {
@@ -383,26 +410,30 @@ export class KcProvisionApi {
       found = (await find()).find((u) => u.email?.toLowerCase() === email)
     }
     const id = found?.id
-    if (!id) throw new Error(`ensureInvitedUser: user ${email} is absent from realm "${realm}" after create`)
+    if (!id) throw new Error(`ensureInvitedUser: the user is absent from realm "${realm}" after create`)
     if (spec.realmRole) {
       const role = await this.realmGet<Record<string, unknown>>(realm, `/roles/${encodeURIComponent(spec.realmRole)}`)
       if (!role) throw new Error(`ensureInvitedUser: realm role "${spec.realmRole}" not found in realm "${realm}"`)
       await this.realmReq(realm, 'POST', `/users/${id}/role-mappings/realm`, [role])
     }
     if (found?.attributes?.[INVITE_MARK]?.length) return { id, created, invited: false }
+    if (spec.skipIfHasCredential && !created) {
+      const creds = (await this.realmGet<unknown[]>(realm, `/users/${id}/credentials`)) ?? []
+      if (creds.length > 0) return { id, created, invited: false }
+    }
     // Before any mail: the mark must be able to persist (review B2 MEDIUM, r2).
     await this.ensureInviteMarkDeclared(realm)
     const lifespan = spec.lifespanSeconds ?? 72 * 3600
-    await this.realmReq(realm, 'PUT', `/users/${id}/execute-actions-email?lifespan=${lifespan}`, ['UPDATE_PASSWORD', 'CONFIGURE_TOTP'])
+    await this.realmReq(realm, 'PUT', `/users/${id}/execute-actions-email?lifespan=${lifespan}`, requiredActions)
     // The FULL representation: on Keycloak 24+ a PUT carrying `attributes`
     // replaces the user's attribute set, root attributes included.
     const user = await this.realmGet<Record<string, unknown> & { attributes?: Record<string, string[]> }>(realm, `/users/${id}`)
-    if (!user) throw new Error(`ensureInvitedUser: user ${email} vanished from realm "${realm}" after the invite`)
+    if (!user) throw new Error(`ensureInvitedUser: the user vanished from realm "${realm}" after the invite`)
     await this.realmReq(realm, 'PUT', `/users/${id}`, { ...user, attributes: { ...user.attributes, [INVITE_MARK]: [nowIso()] } })
     const back = await this.realmGet<{ attributes?: Record<string, string[]> }>(realm, `/users/${id}`)
     if (!back?.attributes?.[INVITE_MARK]?.length) {
       throw new Error(
-        `ensureInvitedUser: the invite mark ${INVITE_MARK} did not persist on ${email} in realm "${realm}" (is it declared in the user profile?); a rerun would invite again`,
+        `ensureInvitedUser: the invite mark ${INVITE_MARK} did not persist on the user in realm "${realm}" (is it declared in the user profile?); a rerun would invite again`,
       )
     }
     return { id, created, invited: true }
