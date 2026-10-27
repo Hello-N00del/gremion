@@ -309,7 +309,36 @@ strip_stalwart_rules() {   # <rules.yaml>
     rm -f "$tmp"
 }
 
+# TRD-205: the operator's active hours, validated BEFORE anything is written.
+# Sets AH_TZ AH_START AH_END AH_WEEKDAYS (YAML flow-list body). The keys are
+# optional (an older ops.env has none): the defaults are the committed ones.
+validate_active_hours() {
+    AH_TZ="${OPS_ACTIVE_HOURS_TZ:-Europe/Berlin}"
+    AH_START="${OPS_ACTIVE_HOURS_START:-08:00}"
+    AH_END="${OPS_ACTIVE_HOURS_END:-20:00}"
+    local days="${OPS_ACTIVE_HOURS_WEEKDAYS:-monday:friday}" re_t='^([01][0-9]|2[0-3]):[0-5][0-9]$'
+    [[ "$AH_TZ" =~ ^[A-Za-z][A-Za-z0-9_+-]*(/[A-Za-z0-9_+-]+)*$ ]] \
+        || die "OPS_ACTIVE_HOURS_TZ='$AH_TZ' is not an IANA timezone name (e.g. Europe/Berlin)" 2
+    if [[ -d /usr/share/zoneinfo && ! -f "/usr/share/zoneinfo/$AH_TZ" ]]; then
+        die "OPS_ACTIVE_HOURS_TZ='$AH_TZ' is not a timezone known to this host" 2
+    fi
+    [[ "$AH_START" =~ $re_t ]] || die "OPS_ACTIVE_HOURS_START='$AH_START' is not HH:MM" 2
+    [[ "$AH_END" =~ $re_t || "$AH_END" == 24:00 ]] || die "OPS_ACTIVE_HOURS_END='$AH_END' is not HH:MM (or 24:00)" 2
+    (( 10#${AH_START%:*} * 60 + 10#${AH_START#*:} < 10#${AH_END%:*} * 60 + 10#${AH_END#*:} )) \
+        || die "OPS_ACTIVE_HOURS_END ($AH_END) must be after OPS_ACTIVE_HOURS_START ($AH_START)" 2
+    local d day_re='(monday|tuesday|wednesday|thursday|friday|saturday|sunday)' parts=() out=()
+    IFS=, read -r -a parts <<< "$days"
+    (( ${#parts[@]} > 0 )) || die "OPS_ACTIVE_HOURS_WEEKDAYS is empty" 2
+    for d in "${parts[@]}"; do
+        [[ "$d" =~ ^${day_re}(:${day_re})?$ ]] \
+            || die "OPS_ACTIVE_HOURS_WEEKDAYS entry '$d' is not <weekday> or <weekday>:<weekday> (lower case, comma separated)" 2
+        out+=("'$d'")
+    done
+    AH_WEEKDAYS="$(IFS=,; printf '%s' "${out[*]}" | sed 's/,/, /g')"
+}
+
 render_alerting() {
+    validate_active_hours
     # ALERT_SMTP_PASSWORD is Task 1's ops.env key (sentinel group alert_smtp,
     # shared with mail.env only: the alerts@ principal, TASK-015). It is NOT
     # called PLATFORM_SMTP_PASSWORD here, and it is not the app tier's value.
@@ -374,6 +403,12 @@ render_alerting() {
     tmp="$(mktemp -d "$OPS_RUNTIME/.grafana-provisioning.XXXXXX")"
     cp -R "$PROVISIONING_SRC/." "$tmp/"
     mkdir -p "$tmp/alerting"
+    {
+        printf '# Rendered by infra/host/ops/render-ops.sh from %s (TRD-205). Do not edit.\n' "$(basename "$ENV_FILE")"
+        printf 'apiVersion: 1\n\nmuteTimes:\n  - orgId: 1\n    name: active-hours\n    time_intervals:\n'
+        printf "      - weekdays: [%s]\n        times:\n          - start_time: '%s'\n            end_time: '%s'\n        location: '%s'\n" \
+            "$AH_WEEKDAYS" "$AH_START" "$AH_END" "$AH_TZ"
+    } > "$tmp/alerting/time-intervals.yaml"
     if [[ "$EMAIL_STATE" == on || "$WEBHOOK_STATE" == on ]]; then
         {
             printf '# Rendered by infra/host/ops/render-ops.sh from %s. Do not edit.\n' "$(basename "$ENV_FILE")"

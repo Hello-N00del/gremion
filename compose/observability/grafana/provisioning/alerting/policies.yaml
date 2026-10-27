@@ -15,6 +15,17 @@
 #                   expired: a named deviation for the operator [A, R16-6].
 # The resolve notice is the contact point's (disableResolveMessage: false,
 # rendered by render-ops.sh into runtime/ops/grafana-provisioning).
+#
+# Quiet hours (TRD-205), routes under the root (first match wins):
+#   severity = critical    -> platform, NO time interval: always immediate.
+#   severity != critical   -> platform, active_time_intervals [active-hours]
+#                          (time-intervals.yaml, rendered from ops.env):
+#                          outside the window the notification is muted and the
+#                          alerts wait in the group; group_by [severity] makes
+#                          that ONE digest (singleEmail contact point), sent at
+#                          the first group_interval flush after the window
+#                          opens (at most 5m after the start of active hours).
+#   the root itself is the default route for any alert the matchers miss.
 # compose/observability/alerting.test.mjs refuses a shorter repeat, a group_by
 # without alertname, and a contact point with resolve notices off.
 apiVersion: 1
@@ -26,3 +37,16 @@ policies:
     group_wait: 30s
     group_interval: 5m
     repeat_interval: 8760h
+    routes:
+      - receiver: platform
+        object_matchers:
+          - ["severity", "=", "critical"]
+      - receiver: platform
+        object_matchers:
+          - ["severity", "!=", "critical"]
+        group_by: ["severity"]
+        group_wait: 30s
+        group_interval: 5m
+        repeat_interval: 8760h
+        active_time_intervals:
+          - active-hours
