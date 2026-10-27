@@ -1,4 +1,5 @@
 #!/bin/bash
+# shellcheck disable=SC2319  # false positive: `check $?` deliberately reads the status of the preceding `[ ... ]` test command, which is what the harness asserts
 # test-retained-prune.sh — R28-VECTOR-RETENTION / R29-RETENTION-30: the day-bucketed
 # retained sink (/logs/processed/retained-YYYY-MM-DD.log, written by vector.toml)
 # is pruned by the DATE IN THE FILE NAME, never by mtime.

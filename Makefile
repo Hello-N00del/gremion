@@ -282,12 +282,16 @@ test-ports-nats-nruns:
 # anywhere. .bats files are deliberately NOT linted here: bats' own idioms
 # (`run`, single-quoted shim bodies) raise SC2016/SC2314 infos by design, and
 # one file-level decision beats a scattering of inline disables.
+# docker/vector/*.sh and docker/keycloak/certs/gen-internal-ca.sh are linted at
+# -S warning only: the vector test-*.sh harnesses carry style-level notes
+# (SC2001, SC2012, SC2016) that are not defects, so that gate is warnings+errors.
 # docker/legal/entrypoint.sh is added here because ci.yml linted it and the
 # Makefile did not; ci.yml now calls this target, and the unification must not
 # lose a file.
 lint-sh:
 	@echo "Linting shell scripts..."
 	@shellcheck -x scripts/*.sh ops/scripts/*.sh docker/postgres/init-databases.sh docker/legal/entrypoint.sh packages/ports/scripts/nats-test.sh packages/ports/scripts/nats-test-nruns.sh packages/nats-auth/scripts/proof.sh packages/nats-auth/scripts/image-check.sh packages/events/scripts/proof.sh packages/events/scripts/alert-proof.sh packages/events/scripts/image-check.sh
+	@shellcheck -x -S warning docker/vector/*.sh docker/keycloak/certs/gen-internal-ca.sh
 	@shellcheck -x -s sh gremion-ui/scripts/hooks/pre-commit
 	@shellcheck -x modules/messaging/synapse/*.sh modules/messaging/synapse/postgres-init/*.sh modules/messaging/synapse/test/*.sh
 	@for f in infra/host/bootstrap.sh infra/host/lib/*.sh infra/host/lib/executor/*.sh infra/host/lib/executor/handlers/*.sh infra/host/mail/*.sh infra/host/ops/*.sh test/host/integration/*.sh; do \
