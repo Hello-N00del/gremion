@@ -27,7 +27,10 @@ export const load: PageServerLoad = async ({ params }) => {
   const requests = await customerRequests(r.config, params.slug).catch(() => [])
   const newest = requests[0]
   const latest = newest ? describeRequest(newest) : null
-  return { slug: params.slug, status, requests, latest }
+  // reload while the newest request is active; with no request, while the setup is
+  // (a terminal newest request ends the refresh even if the customer row still says provisioning)
+  const refresh = latest ? latest.active : status?.status === 'provisioning'
+  return { slug: params.slug, status, requests, latest, refresh }
 }
 
 export const actions: Actions = {

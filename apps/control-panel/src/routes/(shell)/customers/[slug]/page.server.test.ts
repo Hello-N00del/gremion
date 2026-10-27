@@ -61,6 +61,7 @@ const fakeSql = Object.assign(
       submits.push(vals)
       return [{ id: '0192f0c4-0000-7000-8000-0000000000bb' }]
     }
+    if (text.includes("IN ('queued'")) return rows.filter((r) => r.state === 'queued' || r.state === 'running')
     if (text.includes('provisioning_request_status')) return rows
     return []
   },
@@ -92,6 +93,7 @@ vi.mock('$lib/server/auth', () => ({
 }))
 
 const { load, actions } = await import('./+page.server')
+const { EXECUTOR_STEP_LABEL } = await import('$lib/request-state')
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const loadFor = (slug = 'proof-z') => (load as unknown as (e: unknown) => Promise<any>)({ params: { slug } })
@@ -116,22 +118,22 @@ describe('H5: a customer that does not exist yet shows the request state', () =>
     expect((await loadFor()).latest).toMatchObject({ phase: 'verifying', active: true })
   })
   it('running with the current step', async () => {
-    rows = [row({ state: 'running', evidence_verified_at: new Date(), last_step: 'realm_created' })]
+    rows = [row({ state: 'running', evidence_verified_at: new Date(), last_step: 'phase-a' })]
     const d = (await loadFor()).latest
-    expect(d).toMatchObject({ phase: 'running', step: 'realm_created' })
-    expect(d.text).toMatch(/Anmelde-Realm/)
+    expect(d).toMatchObject({ phase: 'running', step: 'phase-a' })
+    expect(d.text).toContain(EXECUTOR_STEP_LABEL['phase-a'])
   })
   it('failed with reason code and German text', async () => {
-    rows = [row({ state: 'failed', outcome: 'create proof-z: failed in database_created (exit 3); a new request resumes from the ledger' })]
+    rows = [row({ state: 'failed', outcome: 'create proof-z: failed in phase-a (exit 3); a new request resumes from the ledger' })]
     const d = (await loadFor()).latest
-    expect(d).toMatchObject({ phase: 'failed', code: 'step_failed:database_created', retryable: true })
-    expect(d.text).toMatch(/Kerndatenbank/)
+    expect(d).toMatchObject({ phase: 'failed', code: 'step_failed:phase-a', retryable: true })
+    expect(d.text).toContain(EXECUTOR_STEP_LABEL['phase-a'])
   })
   it('refused with the verify reason', async () => {
-    rows = [row({ state: 'refused', outcome: 'refused: vault bleibt abgeschaltet' })]
+    rows = [row({ state: 'refused', outcome: 'refused: module vault is disabled in this build (modules/disabled.json)' })]
     const d = (await loadFor()).latest
-    expect(d).toMatchObject({ phase: 'refused', retryable: true })
-    expect(d.text).toContain('vault bleibt abgeschaltet')
+    expect(d).toMatchObject({ phase: 'refused', retryable: false })
+    expect(d.detail).toContain('module vault is disabled')
   })
   it('no request and no customer: latest is null (the page says "Noch nicht registriert")', async () => {
     expect((await loadFor()).latest).toBeNull()
@@ -142,9 +144,25 @@ describe('H5: a customer that does not exist yet shows the request state', () =>
   })
 })
 
+describe('LOW-9a: the page stops refreshing when the newest request is terminal', () => {
+  it('refresh is on for an active request and off for a terminal one', async () => {
+    rows = [row({ state: 'running', evidence_verified_at: new Date() })]
+    expect((await loadFor()).refresh).toBe(true)
+    for (const state of ['failed', 'refused', 'dead', 'expired', 'succeeded']) {
+      rows = [row({ state })]
+      expect((await loadFor()).refresh).toBe(false)
+    }
+  })
+})
+
 describe('H6 panel: retry is a NEW request with a NEW idempotency key', () => {
-  it.each(['failed', 'refused'])('after %s it submits the same kind/args with a fresh key', async (state) => {
-    rows = [row({ state })]
+  it.each([
+    ['failed', null],
+    ['refused', 'refused: evidence: the ID token has acr loa1, loa2 is required'],
+    ['expired', null],
+    ['dead', null],
+  ])('after %s it submits the same kind/args with a fresh key', async (state, outcome) => {
+    rows = [row({ state, outcome })]
     await expect(retry()).rejects.toMatchObject({ status: 303 })
     expect(submits).toHaveLength(1)
     const [kind, slug, args, key, operator] = submits[0]!
@@ -162,6 +180,23 @@ describe('H6 panel: retry is a NEW request with a NEW idempotency key', () => {
     rows = [row({ state })]
     const res = await retry()
     expect(res.status).toBe(409)
+    expect(submits).toHaveLength(0)
+  })
+  it('is refused for a refused request whose refusal is not about the sign-in (args/modules/operator)', async () => {
+    rows = [row({ state: 'refused', outcome: 'refused: module vault is disabled in this build (modules/disabled.json)' })]
+    expect((await retry()).status).toBe(409)
+    expect(submits).toHaveLength(0)
+  })
+  it.each(['suspend', 'resume', 'reconcile'])('is refused for a failed %s request (only create is replayed)', async (kind) => {
+    rows = [row({ state: 'failed', kind })]
+    expect((await retry()).status).toBe(409)
+    expect(submits).toHaveLength(0)
+  })
+  it('is refused when another request of the customer is queued or running (double submit)', async () => {
+    rows = [row({ state: 'queued', request_id: 'b' }), row({ state: 'failed', request_id: 'a' })]
+    expect((await retry()).status).toBe(409)
+    rows = [row({ state: 'failed', request_id: 'b' }), row({ state: 'running', request_id: 'a' })]
+    expect((await retry()).status).toBe(409)
     expect(submits).toHaveLength(0)
   })
   it('is refused when there is no request at all', async () => {

@@ -1,7 +1,7 @@
 <script lang="ts">
   import { enhance } from '$app/forms'
   import { originLabel } from '$lib/request-format'
-  import { STEP_LABEL } from '$lib/request-state'
+  import { LEDGER_STEP_LABEL as STEP_LABEL } from '$lib/request-state'
   import type { ActionData, PageData } from './$types'
 
   let { data, form }: { data: PageData; form: ActionData } = $props()
@@ -9,12 +9,11 @@
   const STATUS_LABEL: Record<string, string> = { done: 'erledigt', pending: 'ausstehend', failed: 'fehlgeschlagen', absent: '—' }
   // No script polls: while a request or the setup is active the page reloads itself
   // (meta refresh, allowed by the panel's CSP), and the link reloads on demand.
-  const active = $derived(Boolean(data.latest?.active) || data.status?.status === 'provisioning')
 </script>
 
 <svelte:head>
   <title>{data.slug} · Gremion Betrieb</title>
-  {#if active}<meta http-equiv="refresh" content="5" />{/if}
+  {#if data.refresh}<meta http-equiv="refresh" content="5" />{/if}
 </svelte:head>
 
 <h1>{data.slug}</h1>
@@ -24,12 +23,15 @@
     <h2 id="req-h">Anfrage: <span class="phase">{data.latest.label}</span></h2>
     <p role="status">{data.latest.text}</p>
     {#if data.latest.code}<p class="muted">Fehlerkennung: <code>{data.latest.code}</code></p>{/if}
+    {#if data.latest.detail}<p class="muted">Begründung (technisch): <code>{data.latest.detail}</code></p>{/if}
     {#if data.latest.active}<p class="muted">Diese Seite lädt sich alle 5 Sekunden neu. <a href="/customers/{data.slug}">Jetzt aktualisieren</a></p>{/if}
     {#if data.latest.retryable}
       <form method="POST" action="?/retry" use:enhance>
         {#if form?.retryError}<p class="error" role="alert">{form.retryError}</p>{/if}
         <button type="submit">Erneut versuchen</button>
       </form>
+    {:else if data.latest.retryNote}
+      <p class="muted">{data.latest.retryNote}</p>
     {/if}
   </section>
 {/if}

@@ -95,7 +95,7 @@ export interface RequestRow {
   createdAt: string
   /** Set by the executor once it has re-verified the evidence ("running" vs "verifying"). */
   evidenceVerifiedAt: string | null
-  /** The step of the request's newest executor event, or null. */
+  /** The step of the newest executor event of the CURRENT claim (events since the latest `claim` event), or null. */
   lastStep: string | null
 }
 
@@ -105,7 +105,10 @@ export async function customerRequests(c: PanelConfig, slug: string): Promise<Re
   const rows = await p<
     { request_id: string; kind: string; state: string; origin: 'panel' | 'host'; reason: string | null; host_actor: string | null; outcome: string | null; created_at: Date; evidence_verified_at: Date | null; last_step: string | null }[]
   >`SELECT s.request_id::text, s.kind, s.state, s.origin, s.reason, s.host_actor, s.outcome, s.created_at, s.evidence_verified_at,
-           (SELECT e.step FROM plt.provisioning_request_event e WHERE e.request_id = s.request_id ORDER BY e.at DESC, e.event_id DESC LIMIT 1) AS last_step
+           (SELECT e.step FROM plt.provisioning_request_event e
+             WHERE e.request_id = s.request_id
+               AND e.at >= coalesce((SELECT max(c.at) FROM plt.provisioning_request_event c WHERE c.request_id = s.request_id AND c.step = 'claim'), '-infinity')
+             ORDER BY e.at DESC, e.event_id DESC LIMIT 1) AS last_step
       FROM plt.provisioning_request_status s WHERE s.customer_slug = ${slug} ORDER BY s.created_at DESC, s.request_id DESC LIMIT 20`
   return rows.map((r) => ({
     id: r.request_id,
