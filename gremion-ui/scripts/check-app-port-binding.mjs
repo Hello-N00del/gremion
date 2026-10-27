@@ -48,6 +48,7 @@
 import { spawnSync } from 'node:child_process'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { withCiPlaceholders } from '../../scripts/env/ci-placeholders.mjs'
 import { LOCAL_ENV_FILES, missingLocalEnvFiles, SETUP_FIRST } from '../../scripts/env/local-setup.mjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -122,7 +123,11 @@ function missingSetupPrerequisite(stderr, root) {
  *  { prereq } for a missing setup file, { ok:false, reason } on a render or
  *  parse error, else { parsed }. */
 function render(fileSet, root) {
-  const env = { ...process.env }
+  // Render-only placeholders for the `:?` variables a bare `.env.example` copy
+  // leaves unset (compose/ci.placeholder.env, shared with the G-037 compose
+  // guard). Read from THIS script's tree, not `root`: the unit test points
+  // `root` at a temp copy. A value the environment already carries wins.
+  const env = withCiPlaceholders({ ...process.env })
   if (!env.PLATFORM_DOMAIN) env.PLATFORM_DOMAIN = RENDER_ONLY_PLATFORM_DOMAIN
   Object.assign(env, fileSet.env)
   const res = spawnSync(
