@@ -457,7 +457,9 @@ export function sourceReferenceScan(root = REPO_ROOT, roots = memberSourceRoots(
       const p = path.join(dir, name)
       const st = statSync(p)
       if (st.isDirectory()) walk(p)
-      else if (/\.(svelte|ts|js|mjs|html|json)$/.test(name)) {
+      // Test sources never ship, so they are not member-facing: a spec naming
+      // grafana as an OIDC client (azp) is not a link to it.
+      else if (/\.(svelte|ts|js|mjs|html|json)$/.test(name) && !/\.(test|spec)\.[a-z]+$/.test(name)) {
         files++
         const text = readFileSync(p, 'utf8')
         if (re.test(text)) hits.push(path.relative(root, p).replace(/\\/g, '/'))
