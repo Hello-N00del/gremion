@@ -12,7 +12,7 @@
     "precheck": "node scripts/interim-module-overlay.mjs",
     "check": "node src/lib/i18n/compile.js && node scripts/check-tenant-env-guard.mjs --enforce --root src && node scripts/check-app-port-binding.mjs && node scripts/check-tenant-secrets-dir.mjs && svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
     "check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
-    "pretest:unit": "node scripts/interim-module-overlay.mjs",
+    "pretest:unit": "node scripts/interim-module-overlay.mjs && pnpm --dir ../apps/control-panel exec svelte-kit sync",
     "test:unit": "vitest run --project unit",
     "pretest:browser": "node scripts/interim-module-overlay.mjs",
     "test:browser": "vitest run --project browser && vitest run --project browser-dsf2",
