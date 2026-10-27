@@ -282,7 +282,7 @@ set_key() {
     # M4 (PLAN-mail-transport): the app tier holds NO platform@ password; the
     # fail-closed mail identity is now MAIL_TRANSPORT (an operator sentinel in
     # mail.env, no default) and PLATFORM_DOMAIN here.
-    ! grep -q '^PLATFORM_SMTP_PASSWORD=' "${HOST_SRC}/templates/env/app.env.tmpl"
+    assert_absent '^PLATFORM_SMTP_PASSWORD=' "${HOST_SRC}/templates/env/app.env.tmpl" "the app tier holds platform@ again"
     grep -q '^MAIL_TRANSPORT=CHANGE_ME_OPERATOR_' "${HOST_SRC}/templates/env/mail.env.tmpl"
     grep -q '^PLATFORM_DOMAIN=CHANGE_ME_OPERATOR_' "${HOST_SRC}/templates/env/app.env.tmpl"
     render_filled

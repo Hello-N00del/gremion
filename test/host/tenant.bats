@@ -201,7 +201,7 @@ STUB
 @test "stalwart create: the container calls carry NO --sender-json (byte-identical to before)" {
     create
     [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
-    ! grep -q -- '--sender-json' "$SHIM_LOG"
+    assert_absent '--sender-json' "$SHIM_LOG" "stalwart mode must not pass --sender-json"
     run steps
     [ "${lines[1]}" = "vendor-mail realm-smtp --realm alpha-rat --tenant alpha_rat" ]
 }

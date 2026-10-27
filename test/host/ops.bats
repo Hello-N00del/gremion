@@ -1217,7 +1217,7 @@ relay_ops_env() {   # <ALERT_EMAIL_TO>
         [ "$(cat "$GREMION_ROOT/runtime/ops/targets/$f.yml")" = "[]" ] || { echo "$f.yml must be an empty target list"; return 1; }
     done
     local rules="$GREMION_ROOT/$PROV/alerting/rules.yaml" src="$OBS_DIR/grafana/provisioning/alerting/rules.yaml"
-    ! grep -q 'MailQueueOldest1h\|gremion-mail-queue\|gremion:cond:mail_queue' "$rules"
+    assert_absent 'MailQueueOldest1h|gremion-mail-queue|gremion:cond:mail_queue' "$rules" "the stalwart queue rule survived in relay mode"
     [ "$(grep -c '^      - uid: ' "$rules")" -eq $(( $(grep -c '^      - uid: ' "$src") - 1 )) ]
     grep -q 'uid: gremion-postgres-connections' "$rules"
     grep -q 'title: PostgresConnections80pct' "$rules"
@@ -1276,13 +1276,13 @@ relay_ops_env() {   # <ALERT_EMAIL_TO>
 
 @test "M3 compose/observability: Grafana's STARTTLS policy is read from ALERT_SMTP_STARTTLS_POLICY (default MandatoryStartTLS), not hard-coded" {
     grep -Fq 'GF_SMTP_STARTTLS_POLICY: "${ALERT_SMTP_STARTTLS_POLICY:-MandatoryStartTLS}"' "$COMPOSE"
-    ! grep -Eq '^\s*GF_SMTP_STARTTLS_POLICY: MandatoryStartTLS\s*$' "$COMPOSE"
     grep -q '^ALERT_SMTP_STARTTLS_POLICY=MandatoryStartTLS$' "${PROJECT_ROOT}/infra/host/templates/env/ops.env.tmpl"
+    assert_absent '^[[:space:]]*GF_SMTP_STARTTLS_POLICY: MandatoryStartTLS[[:space:]]*$' "$COMPOSE" "the policy is hard-coded again"
 }
 
 @test "render-ops.sh holds no raw CR byte and no line-broken \$'...' or printf literal (git saw it as binary)" {
     local f="${OPS_DIR}/render-ops.sh"
     [ "$(tr -cd '\r' < "$f" | wc -c)" -eq 0 ] || { echo "raw CR byte in render-ops.sh"; return 1; }
     # a quote that opens at the end of a line is a raw LF inside $'..' or '..'
-    ! grep -nE "(\$'|printf -- '\[\])\$" "$f"
+    assert_absent "(\$'|printf -- '\[\])\$" "$f" "a raw LF sits inside a quoted escape"
 }
