@@ -147,3 +147,51 @@ test('a hex-only host name (cafe.be) is not an address literal (round 2)', () =>
   const t = read('good-two-gateway-hops.eml').replace('by relay-7.example.net', 'by cafe.be')
   assert.match(check(t).reasons.join('\n'), /a hop above the accepting one is by cafe\.be/)
 })
+
+// PLAN-mail-transport M6: in relay mode the mail does NOT leave from our own
+// server, so the own-server proof (accepting hop from the bind address, every
+// lower hop by mail.<domain>) can never hold; what the relay must prove is that
+// it DKIM-signed the PLATFORM domain and DMARC passed at the receiver.
+const RELAY_OPTS = { ...OPTS, bindIps: [], relay: true }
+const relayCheck = (text, o = {}) => checkReceived(text, { ...RELAY_OPTS, ...o })
+
+test('relay mode: a relayed message with the platform domain DKIM-signed and DMARC pass is proven, with no bind address', () => {
+  assert.deepEqual(relayCheck(read('relay-good.eml')), { unparseable: null, reasons: [] })
+})
+
+test('relay mode is a different proof: the same relayed message is RED in own-server mode (no accepting hop from the bind address)', () => {
+  const r = check(read('relay-good.eml'))
+  assert.match(r.reasons.join('\n'), /no Received hop accepted the message from 192\.0\.2\.25/)
+})
+
+test('relay mode: a DKIM signature of the relay provider own domain is RED (the platform domain is not signed)', () => {
+  assert.match(relayCheck(read('relay-foreign-dkim.eml')).reasons.join('\n'), /no dkim=pass with header\.d=example\.org/)
+})
+
+test('relay mode: dmarc=fail is RED', () => {
+  assert.deepEqual(relayCheck(read('relay-dmarc-fail.eml')).reasons, ['no dmarc=pass with header.from=example.org'])
+})
+
+test('relay mode: spf is reported but not required (the relay envelope may be its own domain); dkim + dmarc carry the proof', () => {
+  const t = read('relay-good.eml').replace('spf=pass', 'spf=softfail')
+  assert.deepEqual(relayCheck(t).reasons, [])
+})
+
+test('relay mode: a foreign authserv-id still does not count', () => {
+  assert.match(relayCheck(read('foreign-authserv-id.eml')).reasons.join('\n'), /no Authentication-Results from the receiver/)
+})
+
+test('relay mode: a third-party mail-API relay is still RED (the ESP markers apply)', () => {
+  const r = relayCheck(read('esp-sendgrid.eml'))
+  assert.match(r.reasons.join('\n'), /third-party relay sendgrid\.net in Received/)
+})
+
+test('the CLI: --relay needs no bind address and prints the relay verdict; without --relay the same file is exit 1', () => {
+  const out = []
+  const log = { log: (m) => out.push(m), error() {} }
+  const base = ['--file', path.join(FX, 'relay-good.eml'), '--domain', 'example.org', '--authserv-id', 'mx.example.net', '--receiver-domain', 'example.net']
+  assert.equal(main([...base, '--relay'], log), 0)
+  assert.match(out.join('\n'), /verdict=relay dkim=pass dmarc=pass/)
+  assert.equal(main([...base, '--bind-ip', '192.0.2.25'], { log() {}, error() {} }), 1)
+  assert.equal(main(['--file', path.join(FX, 'relay-dmarc-fail.eml'), ...base.slice(2), '--relay'], { log() {}, error() {} }), 1)
+})

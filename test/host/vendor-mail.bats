@@ -746,6 +746,14 @@ if [ -n "$out" ]; then cp "'"${GREMION_ROOT}"'/principal-list.json" "$out"; else
     assert_recorded docker 'check-received.mjs --domain example.org --bind-ip 192.0.2.25 --bind-ip6 2001:db8::25 --file /run/gremion/in/received.eml --receiver google'
 }
 
+@test "M6: check-received --relay hands over the From domain and NO bind address (relay mode proves the relay's DKIM, not an own-server hop)" {
+    printf 'RELAY_FROM_DOMAIN=mail-from.example.org\n' >> "${GREMION_ROOT}/etc/env/mail.env"
+    run "$LAUNCHER" check-received --file /dev/null --receiver google --relay
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
+    assert_recorded docker 'check-received.mjs --domain mail-from.example.org --file /run/gremion/in/received.eml --receiver google --relay'
+    refute_recorded docker '--bind-ip'
+}
+
 @test "a relative MAIL_ENV is mounted by its absolute path" {
     cp "${GREMION_ROOT}/etc/env/mail.env" "${GREMION_ROOT}/rel-mail.env"
     ( cd "$GREMION_ROOT" && MAIL_ENV=rel-mail.env "$LAUNCHER" principals list ) || true
