@@ -13,14 +13,23 @@
 // mapping. Named deviation: `role_changed` (apply.ts) is an apply-time refusal
 // of a found membership with another role, not a validation result; it is
 // reported with outcome 'rejected' and has no enum value of its own.
+// Keycloak 26's default user profile is mirrored (a list that validates must not
+// 400 midway through apply): a name with a prohibited character or a part over
+// 255 characters, an address with a local part over 64 or a total over 254. A
+// bad name is reported under `malformed_email`: the schema enum has no
+// name-format value and this round may not extend it. Named deviation [A]: when
+// the schema gains `invalid_name`, change NAME_FORMAT_REASON below, nothing else.
 // E-mail addresses are NEVER echoed in the report (GDPR Art. 5(1)(c)): a
 // rejected row is named by its row number and name only.
 import { createHash } from 'node:crypto'
 import { parseList, type RawRow } from './csv.ts'
-import { isPlausibleEmail, labelKey, normalizeEmail, normalizeName } from './normalize.ts'
+import { isAcceptablePersonName, isPlausibleEmail, labelKey, normalizeEmail, normalizeName } from './normalize.ts'
 import { importableRoles, type RolesDocument } from './roles.ts'
 
 export const DEFAULT_ROLE = 'member'
+
+/** The reason a name Keycloak would refuse is reported under (see the header: deviation [A]). */
+export const NAME_FORMAT_REASON: RejectReason = 'malformed_email'
 
 export type RejectReason =
   | 'missing_name'
@@ -90,6 +99,10 @@ export function validateRows(rows: readonly RawRow[], ctx: ValidateContext): Val
     const email = normalizeEmail(r.email)
     if (!name) {
       reject('missing_name')
+      continue
+    }
+    if (!isAcceptablePersonName(name)) {
+      reject(NAME_FORMAT_REASON)
       continue
     }
     if (!email) {

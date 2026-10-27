@@ -12,7 +12,40 @@ export function normalizeEmail(raw: string): string {
 const EMAIL = /^[^\s@]+@[^\s@.]+(\.[^\s@.]+)+$/
 
 export function isPlausibleEmail(email: string): boolean {
-  return email.length <= 254 && EMAIL.test(email)
+  if (email.length > MAX_EMAIL || !EMAIL.test(email)) return false
+  // RFC 5321: the local part is at most 64 octets (Keycloak 26's email validator refuses more)
+  return email.indexOf('@') <= MAX_LOCAL_PART
+}
+
+export const MAX_EMAIL = 254
+export const MAX_LOCAL_PART = 64
+/** Keycloak 26's length validator on firstName / lastName. */
+export const MAX_PERSON_NAME_PART = 255
+
+// Keycloak 26's default user profile ("person-name-prohibited-characters" on
+// firstName and lastName): a name carrying one of these is a 400 from the
+// Admin API, which would end an apply midway. Mirrored here so such a row is
+// rejected BEFORE the first account is created.
+const PERSON_NAME_PROHIBITED = /[<>&"$%!#?§;*~/\\|^=[\]{}()\p{Cc}]/u
+
+/** True when Keycloak 26's default user profile would accept `name` as a first / last name. */
+export function isAcceptablePersonName(name: string): boolean {
+  if (PERSON_NAME_PROHIBITED.test(name)) return false
+  const i = name.lastIndexOf(' ')
+  const first = i < 0 ? '' : name.slice(0, i)
+  const last = i < 0 ? name : name.slice(i + 1)
+  return first.length <= MAX_PERSON_NAME_PART && last.length <= MAX_PERSON_NAME_PART
+}
+
+/**
+ * Text that may be logged: every e-mail address (plain or url-encoded) and
+ * every `email=` query value removed. A last line of defence for errors of
+ * unknown origin (a transport error names its request path, `?email=`).
+ */
+export function redactAddresses(text: string): string {
+  return text
+    .replace(/email=[^&\s"']*/gi, 'email=[redacted]')
+    .replace(/[^\s"'<>(),;:/=]+(?:@|%40)[^\s"'<>(),;]+/gi, '[address]')
 }
 
 /** NFC, trimmed, inner whitespace collapsed. */

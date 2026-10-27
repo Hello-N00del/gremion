@@ -9,7 +9,7 @@
 //   3. one membership per row; a present identical membership is `unchanged`;
 //   4. the touched bodies are re-armed for the projection worker.
 // A rerun over a completed import therefore creates nothing and mails nothing.
-import { splitName } from './normalize.ts'
+import { redactAddresses, splitName } from './normalize.ts'
 import type { Role, RolesDocument } from './roles.ts'
 import type { ReportRow, ValidationReport, ValidRow } from './validate.ts'
 
@@ -61,6 +61,51 @@ export class ImportRefused extends Error {
   }
 }
 
+export type ApplyFailureCode = 'account_lookup_failed' | 'account_failed' | 'membership_failed'
+
+/**
+ * A port call failed while applying. Carries the row and a reason code ONLY: a
+ * Keycloak / SQL error names the address it was asked about (the request path
+ * carries `?email=`), and this message lands in the append-only request events
+ * and the audit log. The original error is dropped on purpose (no `cause`).
+ */
+export class ImportApplyError extends Error {
+  constructor(
+    readonly row: number,
+    readonly code: ApplyFailureCode,
+    status?: number,
+  ) {
+    super(`row ${row}: ${code}${status ? ` (http ${status})` : ''}`)
+    this.name = 'ImportApplyError'
+  }
+}
+
+/** The HTTP status a Keycloak Admin API error names ("error: 409 on POST ..."), nothing else of it. */
+function statusOf(err: unknown): number | undefined {
+  const m = /\b([1-5]\d\d) on (?:GET|POST|PUT|DELETE|PATCH)\b/.exec(redactAddresses(err instanceof Error ? err.message : String(err)))
+  return m ? Number(m[1]) : undefined
+}
+
+async function atRow<T>(row: number, code: ApplyFailureCode, call: () => Promise<T>): Promise<T> {
+  try {
+    return await call()
+  } catch (err) {
+    throw new ImportApplyError(row, code, statusOf(err))
+  }
+}
+
+export interface ApplyOptions {
+  /**
+   * Called at least every `PROGRESS_EVERY` rows of the preflight and of the
+   * write loop. The host executor's lease is LEASE_SECONDS long and a 2000-row
+   * list takes a Keycloak round trip or three per row: the caller renews its
+   * lease from here.
+   */
+  onProgress?: () => void
+}
+
+export const PROGRESS_EVERY = 200
+
 const zero = (): ImportCounts => ({ created: 0, linked_existing: 0, unchanged: 0, rejected: 0, accounts_created: 0, invites_sent: 0 })
 
 export function validationResult(report: ValidationReport): ImportResult {
@@ -87,6 +132,7 @@ export async function applyImport(
   roles: RolesDocument,
   target: MemberImportTarget,
   expectSha256: string,
+  options: ApplyOptions = {},
 ): Promise<ImportResult> {
   if (report.status !== 'validated') throw new ImportRefused('apply is refused: the list does not validate')
   if (report.sha256 !== expectSha256) {
@@ -94,16 +140,20 @@ export async function applyImport(
   }
   // 1. preflight, read-only
   const known = new Map<string, string | null>()
-  const lookup = async (email: string) => {
-    if (!known.has(email)) known.set(email, await target.findUserId(email))
+  const lookup = async (email: string, row: number) => {
+    if (!known.has(email)) known.set(email, await atRow(row, 'account_lookup_failed', () => target.findUserId(email)))
     return known.get(email)!
   }
+  const beat = (i: number) => {
+    if (options.onProgress && (i + 1) % PROGRESS_EVERY === 0) options.onProgress()
+  }
   const rejected: ReportRow[] = []
-  for (const row of report.valid) {
-    const userId = await lookup(row.email)
+  for (const [i, row] of report.valid.entries()) {
+    beat(i)
+    const userId = await lookup(row.email, row.row)
     if (userId === null) continue
     const role = roleOf(roles, row.role)
-    const have = await target.membership(row.bodyId, userId)
+    const have = await atRow(row.row, 'account_lookup_failed', () => target.membership(row.bodyId, userId))
     if (have && (have.membershipType !== role.membership_type || have.voting !== role.voting)) {
       rejected.push({ row: row.row, name: row.name, reason: 'role_changed' })
     }
@@ -118,23 +168,24 @@ export async function applyImport(
   const account = async (row: ValidRow): Promise<{ acc: AccountResult; existed: boolean }> => {
     const prior = accounts.get(row.email)
     if (prior) return { acc: prior, existed: !prior.created }
-    const wasKnown = (await lookup(row.email)) !== null
+    const wasKnown = (await lookup(row.email, row.row)) !== null
     const { firstName, lastName } = splitName(row.name)
-    const acc = await target.ensureAccount({ email: row.email, firstName, lastName, role: row.role })
+    const acc = await atRow(row.row, 'account_failed', () => target.ensureAccount({ email: row.email, firstName, lastName, role: row.role }))
     accounts.set(row.email, acc)
     if (acc.created) counts.accounts_created++
     if (acc.invited) counts.invites_sent++
     return { acc, existed: wasKnown }
   }
-  for (const row of report.valid) {
+  for (const [i, row] of report.valid.entries()) {
+    beat(i)
     const { acc, existed } = await account(row)
     const role = roleOf(roles, row.role)
-    const have = await target.membership(row.bodyId, acc.userId)
+    const have = await atRow(row.row, 'membership_failed', () => target.membership(row.bodyId, acc.userId))
     if (have) {
       counts.unchanged++
       continue
     }
-    await target.addMembership({ bodyId: row.bodyId, userId: acc.userId, role })
+    await atRow(row.row, 'membership_failed', () => target.addMembership({ bodyId: row.bodyId, userId: acc.userId, role }))
     counts.created++
     if (existed) counts.linked_existing++
     touched.add(row.bodyId)

@@ -91,8 +91,16 @@ export function parseList(text: string): RawRow[] {
   const header = records[0]!.map((h) => h.normalize('NFC').trim().toLowerCase())
   const unknown = header.filter((h) => !(COLUMNS as readonly string[]).includes(h))
   const missing = (['name', 'email', 'body'] as const).filter((h) => !header.includes(h))
+  const repeated = [...new Set(header.filter((h, i) => header.indexOf(h) !== i && (COLUMNS as readonly string[]).includes(h)))]
   if (unknown.length || missing.length || new Set(header).size !== header.length) {
-    throw new ListFormatError('bad_header', `the header must be ${COLUMNS.join(',')} (role optional); got ${header.join(',')}`)
+    // NEVER the parsed header cells: a headerless list makes its first member's
+    // name and address the "header", and this message lands in the append-only
+    // request events and the audit log. Counts and the fixed column names only.
+    const parts = [`${header.length} columns read`]
+    if (unknown.length) parts.push(`${unknown.length} unknown`)
+    parts.push(`missing: ${missing.length ? missing.join(', ') : 'none'}`)
+    if (repeated.length) parts.push(`repeated: ${repeated.join(', ')}`)
+    throw new ListFormatError('bad_header', `the header must be ${COLUMNS.join(',')} (role optional); ${parts.join('; ')}`)
   }
   const data = records.slice(1)
   if (data.length > MAX_ROWS) throw new ListFormatError('too_many_rows', `the list has ${data.length} rows; the cap is ${MAX_ROWS}`)
