@@ -6,6 +6,7 @@
 // gate's pre-flight refuses before any write.
 import { describe, expect, it } from 'vitest'
 import {
+  activateBySlug,
   createPhaseA,
   createPhaseB,
   enableCustomerModule,
@@ -238,6 +239,49 @@ describe('create (phases A, host, B)', () => {
     await expect(createPhaseA(spec({ host: 'Not A Host' }), d)).rejects.toMatchObject({ code: 'INVALID_INPUT' })
     await expect(createPhaseA(spec({ admins: [ADMINS[0]!] }), d)).rejects.toMatchObject({ code: 'INVALID_INPUT' })
     await expect(createPhaseA(spec({ operatorId: 'root' }), d)).rejects.toMatchObject({ code: 'INVALID_INPUT' })
+  })
+})
+
+describe('create-harden H3: activation is the host last step', () => {
+  async function toPhaseB(w: ReturnType<typeof world>, d: ReturnType<typeof deps>, s: CreateSpec) {
+    const a = await createPhaseA(s, d)
+    hostStamp(w, a.customer)
+    await recordHostStep(s.slug, 'mail_principal_issued', s.operatorId, d)
+  }
+
+  it('a deferred phase B leaves the customer provisioning; activate then makes it active', async () => {
+    const w = world()
+    const d = deps(w)
+    const s = spec({ deferActivation: true })
+    await toPhaseB(w, d, s)
+    const b = await createPhaseB(s, d)
+    expect(b.activated).toBe(false)
+    expect(w.control.get('musterstadt')?.status).toBe('provisioning')
+    const r = await activateBySlug('musterstadt', d)
+    expect(r.activated).toBe(true)
+    expect(w.control.get('musterstadt')?.status).toBe('active')
+  })
+
+  it('activate on an already active customer is a no-op (already active)', async () => {
+    const w = world()
+    const d = deps(w)
+    await createAll(w, d)
+    const before = w.mutations.length
+    const r = await activateBySlug('musterstadt', d)
+    expect(r.activated).toBe(false)
+    expect(w.mutations.length).toBe(before)
+  })
+
+  it('activate with an incomplete ledger is refused and the customer stays provisioning', async () => {
+    const w = world()
+    const d = deps(w)
+    await createPhaseA(spec(), d)
+    await expect(activateBySlug('musterstadt', d)).rejects.toMatchObject({ code: 'STEP_OUT_OF_ORDER' })
+    expect(w.control.get('musterstadt')?.status).toBe('provisioning')
+  })
+
+  it('activate of an unknown customer is NOT_FOUND', async () => {
+    await expect(activateBySlug('nobody', deps(world()))).rejects.toMatchObject({ code: 'NOT_FOUND' })
   })
 })
 
