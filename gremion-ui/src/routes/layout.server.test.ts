@@ -89,9 +89,8 @@ let dependedKeys: string[] = [];
 
 const eventStub = (roles: Role[] | null, groups: string[] = []) =>
   ({
-    // A real LayoutServerLoadEvent always carries `url`; the load reads
-    // event.url.pathname for the #290 disabled-module page gate. '/' is not a
-    // module route → disabledModuleForPath returns null → no throw.
+    // A real LayoutServerLoadEvent always carries `url`. The disabled-module page gate no longer lives in this
+    // load (hooks.server.ts answers those requests before any route resolves), so the stub only mirrors the shape.
     url: new URL('http://localhost/'),
     depends: (...keys: string[]) => {
       dependedKeys.push(...keys);

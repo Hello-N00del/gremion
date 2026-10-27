@@ -3,7 +3,7 @@ import { render } from '@testing-library/svelte'
 
 // R33c UX-1 guard (component level): a client-side navigation to a disabled module (403 'module-disabled:<id>')
 // renders the styled German "Modul nicht aktiv" surface and never the raw code string. The shell comes from
-// +layout.svelte; that the full-page-load path really renders it is proven by the StuRaOS repo gremion-ui/scripts/prove-module-off-page.mjs (kernel tenants are provisioned, no default tenant to seed).
+// +layout.svelte; the full-page-load path is answered by the authGuard hook (pinned in hooks.module-gate.test.ts and lib/server/module-off-response.test.ts).
 const h = vi.hoisted(() => ({
   state: { status: 403, error: null as unknown, url: new URL('http://localhost/files'), data: {} as Record<string, unknown> },
 }))

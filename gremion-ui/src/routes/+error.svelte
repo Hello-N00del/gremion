@@ -8,8 +8,9 @@
   import ModuleOffNotice from '$lib/components/ModuleOffNotice.svelte'
   import { onMount } from 'svelte'
   import { initTheme } from '$lib/stores/theme'
-  // A throw from the root layout load renders this page WITHOUT +layout.svelte, so
-  // the global CSS + self-hosted fonts must be pulled in here too (else: unstyled).
+  // Keep the global CSS + self-hosted fonts imported here too: the bundler dedupes them, and the page stays styled if it is
+  // ever rendered outside +layout.svelte (an error from the ROOT layout load falls back to the static error template instead).
+  // The disabled-module notice does NOT rely on this: hooks.server.ts serves it inside the root layout.
   import '../app.css'
   import '@fontsource/archivo-narrow/400.css'
   import '@fontsource/archivo-narrow/500.css'

@@ -25,6 +25,37 @@ describe('moduleOffPageResponse', () => {
     expect(f.mock.calls[0]![0]).toBe('/module-off/a%2Fb')
   })
 
+  test('forwarded response keeps set-cookie, drops the stale content-length, stays no-store', async () => {
+    const inner = new Response('<html>Modul nicht aktiv</html>', { status: 200, headers: { 'content-type': 'text/html', 'content-length': '999' } })
+    inner.headers.append('set-cookie', 'a=1; Path=/; HttpOnly')
+    inner.headers.append('set-cookie', 'b=2; Path=/')
+    inner.headers.set('cache-control', 'public, max-age=600')
+    const res = await moduleOffPageResponse(ev({ fetch: async () => inner }), 'files')
+    expect(res.status).toBe(403)
+    expect(res.headers.getSetCookie()).toEqual(['a=1; Path=/; HttpOnly', 'b=2; Path=/'])
+    expect(res.headers.get('content-length')).toBeNull()
+    expect(res.headers.get('cache-control')).toBe('no-store')
+  })
+
+  test('carries the edge host + proxy-trust headers to the in-process fetch, only when present', async () => {
+    const f = vi.fn(async (_u: string, _init?: RequestInit) => new Response('x'))
+    const withEdge = ev({ fetch: f as never })
+    withEdge.request.headers.set('x-forwarded-host', 'tenant.example.org')
+    withEdge.request.headers.set('x-proxy-trust', 'proof')
+    await moduleOffPageResponse(withEdge, 'files')
+    expect(f.mock.calls[0]![1]!.headers).toMatchObject({ 'x-forwarded-host': 'tenant.example.org', 'x-proxy-trust': 'proof', accept: 'text/html' })
+    f.mockClear()
+    await moduleOffPageResponse(ev({ fetch: f as never }), 'files')
+    expect(f.mock.calls[0]![1]!.headers).toEqual({ accept: 'text/html' })
+  })
+
+  test('HEAD: 403 with the notice headers and no body', async () => {
+    const res = await moduleOffPageResponse(ev({ method: 'HEAD' }), 'files')
+    expect(res.status).toBe(403)
+    expect(res.headers.get('content-type')).toBe('text/html')
+    expect(res.body).toBeNull()
+  })
+
   test('__data.json request: JSON 403 whose body is the message string, no module data', async () => {
     const f = vi.fn()
     const res = await moduleOffPageResponse(ev({ data: true, fetch: f as never }), 'files')
