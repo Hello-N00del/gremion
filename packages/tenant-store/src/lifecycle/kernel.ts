@@ -119,7 +119,7 @@ const GET_AUTH = `
   CREATE OR REPLACE FUNCTION pgbouncer.get_auth(uname text)
     RETURNS TABLE (usename name, passwd text)
     LANGUAGE sql SECURITY DEFINER SET search_path = pg_catalog
-    AS $func$ SELECT usename, passwd FROM pg_catalog.pg_shadow WHERE usename = uname $func$;
+    AS $func$ SELECT usename, passwd FROM pg_catalog.pg_shadow WHERE usename = uname AND NOT usesuper $func$;
   REVOKE ALL ON FUNCTION pgbouncer.get_auth(text) FROM PUBLIC;`
 
 /**
