@@ -418,3 +418,11 @@ OPS_TMPL_T="${BATS_TEST_DIRNAME}/../../infra/host/templates/env/ops.env.tmpl"
     [ "$status" -eq 2 ] || { echo "open pw file: status=$status $output"; return 1; }
     [[ "$output" == *"readable by other"* ]]
 }
+
+@test "controller-processor-split.md names the relay provider as a sub-processor to flag to the DPO (mail-transport review 2)" {
+    local doc="${KERNEL_ROOT:-$BATS_TEST_DIRNAME/../..}/docs/compliance/controller-processor-split.md"
+    [ -f "$doc" ]
+    local row; row="$(grep -F '**Mail relay**' "$doc")"
+    [[ "$row" == *"MAIL_TRANSPORT=relay"* && "$row" == *"sub-processor"* && "$row" == *"DPO"* ]] || { echo "$row"; return 1; }
+    assert_absent 'None, by decision' "$doc" "the unconditional no-mail-processor claim is back"
+}
