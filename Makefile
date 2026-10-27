@@ -312,6 +312,15 @@ lint-compose:
 	@docker compose config > /dev/null
 	@echo "  docker compose config: valid"
 
+# G-037: no externally-pulled :latest image in the compose render, and every
+# first-party image (ui, public, legal, vector, fallback) is built here. Renders
+# the state tier and the app tier; needs docker + jq and the .env /
+# legal/legal.env stubs. CI's "Lint" job runs the same script.
+.PHONY: lint-compose-latest
+lint-compose-latest:
+	@echo "Checking compose for floating :latest images (G-037)..."
+	@bash scripts/check-compose-latest-tags.sh
+
 # TASK-040: the pooled-stack guard (TRD-177/038/045, TRD-440's static half).
 # Renders the state project, both app colours, ops and mail from the fixed
 # env files under test/host/fixtures/pooled-stack/ with EVERY profile on and
@@ -708,7 +717,7 @@ lint-image-digests:
 	@node scripts/release/check-image-digests.mjs
 	@node scripts/release/check-image-digests.mjs --render
 
-lint: lint-sh lint-yaml lint-json lint-compose lint-pooled-stack lint-hygiene lint-cve-floors lint-nats-nruns lint-packages lint-port-back lint-postgres-major lint-extraction-source lint-unshipped-migrations lint-compliance lint-tenant-db-access lint-edge-host lint-module-scan lint-module-migration-names lint-migration-register lint-image-digests lint-synapse
+lint: lint-sh lint-yaml lint-json lint-compose lint-compose-latest lint-pooled-stack lint-hygiene lint-cve-floors lint-nats-nruns lint-packages lint-port-back lint-postgres-major lint-extraction-source lint-unshipped-migrations lint-compliance lint-tenant-db-access lint-edge-host lint-module-scan lint-module-migration-names lint-migration-register lint-image-digests lint-synapse
 	@echo "All linters passed."
 
 # ── Local gate (TASK-045, TRD-444/341) ──────────────────────────────────────
