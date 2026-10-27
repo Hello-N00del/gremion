@@ -22,6 +22,24 @@ export interface ModuleRealmFragment {
   realmRoles?: { name: string; description?: string }[]
 }
 
+/** What a module processes, for the per-customer record of processing
+ *  activities (GDPR Art. 30(1), TRD-162). Domain-neutral wording; a customer
+ *  admin can override each field per tenant. */
+export interface ModuleProcessing {
+  /** Name of the processing activity. */
+  activity: string
+  /** Purpose of the processing. */
+  purpose: string
+  /** Categories of personal data. */
+  dataCategories: string[]
+  /** Categories of data subjects. */
+  dataSubjects: string[]
+  /** Recipients or categories of recipients, if any beyond the controller. */
+  recipients?: string[]
+  /** Envisaged erasure period, in words. */
+  retention: string
+}
+
 export interface ModuleManifest {
   /** Stable id. For toggleable modules this MUST equal the config.modules key. */
   id: string
@@ -70,6 +88,9 @@ export interface ModuleManifest {
     /** One-line explanation shown on the module's card. */
     note?: string
   }
+  /** Processing declaration feeding the record of processing activities
+   *  (TRD-162). A module without one is still listed, flagged "not recorded". */
+  processing?: ModuleProcessing
   /** Nav-rail fragments this module owns (P3-WP1). Woven back into the
    *  module-neutral baseNavSchema by composeNavSchema at each module's
    *  declared anchor slot; absent for modules with no rail entry. */

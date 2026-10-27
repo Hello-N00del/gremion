@@ -127,6 +127,11 @@ export interface GremionConfig {
     controller_name: string
     controller_address: string
     purpose_description: string
+    // TRD-162: per-tenant admin overrides of the record of processing
+    // activities, keyed by module id. Stored (and merged) exactly like the
+    // other compliance fields; kept while a module is disabled so a later
+    // re-enable regenerates the same text. Absent = no overrides.
+    processing_overrides?: Record<string, ProcessingOverride>
   }
 }
 
@@ -378,6 +383,19 @@ const retentionSchema = z
   })
   .partial()
 
+export const processingOverrideSchema = z
+  .object({
+    activity: z.string().max(300),
+    purpose: z.string().max(2000),
+    data_categories: z.array(z.string().max(300)).max(50),
+    data_subjects: z.array(z.string().max(300)).max(50),
+    recipients: z.array(z.string().max(300)).max(50),
+    retention: z.string().max(1000),
+  })
+  .partial()
+
+export type ProcessingOverride = z.infer<typeof processingOverrideSchema>
+
 const complianceSchema = z
   .object({
     dpo_name: z.string(),
@@ -385,6 +403,7 @@ const complianceSchema = z
     controller_name: z.string(),
     controller_address: z.string(),
     purpose_description: z.string(),
+    processing_overrides: z.record(z.string(), processingOverrideSchema),
   })
   .partial()
 
