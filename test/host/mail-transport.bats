@@ -399,9 +399,13 @@ OPS_TMPL_T="${BATS_TEST_DIRNAME}/../../infra/host/templates/env/ops.env.tmpl"
 }
 
 @test "M6 relay-curl-config: refuses in stalwart mode, on a bad recipient, a quote in the path, a missing --to, and a world-readable password file" {
-    write_mail_env stalwart
+    # a stalwart env that is otherwise a COMPLETE relay config: only the
+    # transport guard can refuse it (without these keys load_relay_config would
+    # exit 2 on the missing host and the guard could be deleted unnoticed)
+    write_mail_env stalwart 'RELAY_SMTP_HOST=relay.example.net' 'RELAY_SMTP_PORT=587'         'RELAY_SMTP_USER=relay-user@example.org' 'RELAY_SMTP_PASSWORD_REF=secret:mail/relay-password'
     run "$MAIL" relay-curl-config --to probe@example.net --message /work/msg
     [ "$status" -eq 2 ] || { echo "stalwart: status=$status $output"; return 1; }
+    [[ "$output" == *"relay-mode verb"* && "$output" != *"user ="* ]] || { echo "stalwart: $output"; return 1; }
     relay_env
     run "$MAIL" relay-curl-config --to 'a b@example.net' --message /work/msg
     [ "$status" -eq 2 ] || { echo "bad rcpt: status=$status $output"; return 1; }
