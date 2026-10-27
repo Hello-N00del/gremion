@@ -76,6 +76,7 @@ test('RED — s3 sees aliased, namespace, require, dynamic-import and getBuiltin
   seed(tree, 'gremion-public/src/c.js', "const fs = require('fs')\nfs.createWriteStream('x')\n")
   seed(tree, 'modules/content/d.ts', "const { rm } = await import('node:fs/promises')\nawait rm('x')\n")
   seed(tree, 'packages/foo/src/e.ts', "const fs = process.getBuiltinModule('node:fs')\nfs.renameSync('a', 'b')\n")
+  // nosemgrep: javascript.lang.security.audit.unknown-value-with-script-tag.unknown-value-with-script-tag -- test fixture: writes a .svelte file into a temp tree, no HTML is rendered
   seed(tree, 'gremion-ui/src/f.svelte', "<script>\nimport fse from 'fs-extra'\nfse.outputFileSync('x', 'y')\n</script>\n")
   try {
     const r = scan({ root: tree, allowlist: [] })
