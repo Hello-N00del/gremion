@@ -81,7 +81,9 @@ RESTIC_REPOSITORY="${RESTIC_REPOSITORY:-${BACKUP_DIR}/repo}"
 LOCAL_RETENTION="${BACKUP_LOCAL_RETENTION_DAYS:-30}d"
 RCLONE_REMOTE="${RCLONE_REMOTE:-backup}"
 RCLONE_BUCKET="${RCLONE_BUCKET:-}"
+RCLONE_PATH_EXPLICIT="${RCLONE_REMOTE_PATH:+1}"
 RCLONE_REMOTE_PATH="${RCLONE_REMOTE_PATH:-gremion-restic}"
+LEGACY_REMOTE_PATH="${BACKUP_LEGACY_REMOTE_PATH:-stura-restic}"
 BACKUP_TAG="${BACKUP_TAG:-gremion}"
 CHECK_SUBSET="${RESTIC_CHECK_SUBSET:-10%}"
 DATE=$(date +%Y%m%d-%H%M%S)
@@ -131,6 +133,21 @@ JSON
 
 # Trap to write log even on failure
 trap 'write_json_log "error"' ERR
+
+# ── Guard: legacy remote path ─────────────────────────────────
+# The RCLONE_REMOTE_PATH default changed from the legacy path to gremion-restic.
+# An install that never set it would silently start a fresh repo at the new path
+# while its history stays at the old one. Refuse that case; an explicitly set
+# RCLONE_REMOTE_PATH always wins and is never checked.
+if [[ -n "$RCLONE_BUCKET" && -z "$RCLONE_PATH_EXPLICIT" ]]; then
+    new_listing="$(rclone lsf "${RCLONE_REMOTE}:${RCLONE_BUCKET}/${RCLONE_REMOTE_PATH}" 2>/dev/null || true)"
+    if [[ -z "$new_listing" ]]; then
+        legacy_listing="$(rclone lsf "${RCLONE_REMOTE}:${RCLONE_BUCKET}/${LEGACY_REMOTE_PATH}" 2>/dev/null || true)"
+        if [[ -n "$legacy_listing" ]]; then
+            error "remote ${RCLONE_BUCKET}/${LEGACY_REMOTE_PATH} holds an existing repository but the new default ${RCLONE_BUCKET}/${RCLONE_REMOTE_PATH} is empty; continuing would start a fresh repo. Either set RCLONE_REMOTE_PATH=${LEGACY_REMOTE_PATH} to keep using it, or move it once: rclone moveto ${RCLONE_REMOTE}:${RCLONE_BUCKET}/${LEGACY_REMOTE_PATH} ${RCLONE_REMOTE}:${RCLONE_BUCKET}/${RCLONE_REMOTE_PATH}"
+        fi
+    fi
+fi
 
 # ── Phase 1: Database dumps ───────────────────────────────────
 

@@ -159,8 +159,11 @@ Backups used to tag every snapshot `stura-os` and sync to the remote path
   using it (`RCLONE_REMOTE_PATH=stura-restic` in `.env` / the K8s Secret), or
   move it once, before the next backup run:
   `rclone moveto "$RCLONE_REMOTE:$RCLONE_BUCKET/stura-restic" "$RCLONE_REMOTE:$RCLONE_BUCKET/gremion-restic"`.
-  Without one of the two, the next sync writes a fresh `gremion-restic` copy
-  and the old path is left behind (still restorable from it as above).
+  If you do neither, the backup refuses to run: while `RCLONE_REMOTE_PATH` is
+  unset, `backup.sh` and the K8s cronjob exit non-zero when `gremion-restic` is
+  empty on the remote but `stura-restic` holds a repository, and print both
+  options. An explicitly set `RCLONE_REMOTE_PATH` is never checked. The K8s
+  `rclone-secret` therefore no longer pins the key.
 - Optional retag (rarely needed):
   `restic tag --add gremion --tag stura-os`.
 

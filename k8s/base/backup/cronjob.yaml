@@ -119,6 +119,23 @@ spec:
                   OVERALL_START=$(date +%s)
                   trap 'write_log error' EXIT
 
+                  # ── Guard: legacy remote path ───────────────
+                  # The RCLONE_REMOTE_PATH default changed to gremion-restic. If it
+                  # was NOT set, the new path is empty and the legacy one holds a
+                  # repository, refuse rather than silently start a fresh repo.
+                  # An explicitly set RCLONE_REMOTE_PATH always wins, unchecked.
+                  if [ -n "${RCLONE_BUCKET:-}" ] && [ -z "${RCLONE_REMOTE_PATH:-}" ]; then
+                    g_remote="${RCLONE_REMOTE:-backup}"
+                    g_new="$(/tools/rclone lsf "$g_remote:$RCLONE_BUCKET/gremion-restic" 2>/dev/null || true)"
+                    if [ -z "$g_new" ]; then
+                      g_old="$(/tools/rclone lsf "$g_remote:$RCLONE_BUCKET/stura-restic" 2>/dev/null || true)"
+                      if [ -n "$g_old" ]; then
+                        info "ERROR: remote $RCLONE_BUCKET/stura-restic holds an existing repository but the new default $RCLONE_BUCKET/gremion-restic is empty; continuing would start a fresh repo. Either set RCLONE_REMOTE_PATH=stura-restic to keep using it, or move it once: rclone moveto $g_remote:$RCLONE_BUCKET/stura-restic $g_remote:$RCLONE_BUCKET/gremion-restic"
+                        exit 1
+                      fi
+                    fi
+                  fi
+
                   # ── Phase 1: Dumps ──────────────────────────
                   info "=== Phase 1: Dumping databases ==="
 
