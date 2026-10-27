@@ -30,6 +30,9 @@ printf 'vendor-mail %s\n' "$*" >> "$ORDER"
 exit 0
 STUB
     chmod +x "${REL}/infra/host/bin/gremion-vendor-mail"
+    # the transport front (PLAN-mail-transport M2): every realm-smtp call goes through it
+    cp "${HOST_SRC}/bin/gremion-mail" "${REL}/infra/host/bin/"
+    export MAIL_TRANSPORT=stalwart
     echo blue > "${GREMION_ROOT}/runtime/active-colour"
     cat > "${GREMION_ROOT}/etc/env/state.env" <<'ENV'
 STACK=guardstack
@@ -157,6 +160,76 @@ create() {
     assert_recorded docker '--operator 8d6b9c7e-1f2a-4b3c-9d4e-5f6a7b8c9d0e'
     assert_recorded docker '--enable calendar,vault'
     assert_recorded docker ':/run/gremion/tenant-config.json:ro'
+}
+
+# PLAN-mail-transport M2: relay mode. gremion-mail is a recording stub here (its
+# own behaviour is test/host/mail-transport.bats); these cases prove the WIRING:
+# no vendor-mail call at all, the same 8-step order, and the relay descriptor on
+# the container calls that read the stamp back.
+relay_front() {
+    cat > "${REL}/infra/host/bin/gremion-mail" <<'STUB'
+#!/usr/bin/env bash
+case "$1" in
+  transport) echo relay ;;
+  sender-json) echo '{"mode":"relay","host":"relay.example.net","port":587,"fromAddress":"no-reply@example.org","user":"u@example.org"}' ;;
+  realm-smtp) printf 'mail %s
+' "$*" >> "$ORDER"; [ -f "${GREMION_ROOT}/mail-fails" ] && exit 1 ;;
+esac
+exit 0
+STUB
+    chmod +x "${REL}/infra/host/bin/gremion-mail"
+}
+
+@test "relay create: phase A, the shared relay sender, record-step, phase B -- the same order, no vendor-mail call, the descriptor on record-step and phase B" {
+    relay_front
+    create
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; steps; return 1; }
+    run steps
+    [ "${lines[0]}" = "tc phase-a alpha-rat" ]
+    [ "${lines[1]}" = "mail realm-smtp --realm alpha-rat --tenant alpha_rat" ]
+    [ "${lines[2]}" = "tc record-step alpha-rat" ]
+    [ "${lines[3]}" = "tc phase-b alpha-rat" ]
+    [ "${lines[4]}" = "tc render-router alpha-rat" ]
+    [ "${#lines[@]}" -eq 5 ]
+    [[ "$output" != *"vendor-mail"* ]]
+    # the descriptor rides record-step and phase B (the container reads no mail.env) -- and ONLY those
+    [ "$(grep -c -- '--sender-json' "$SHIM_LOG")" -eq 2 ] || { cat "$SHIM_LOG"; return 1; }
+    grep -E 'record-step.*--sender-json' "$SHIM_LOG" >/dev/null
+    grep -E 'phase-b.*--sender-json' "$SHIM_LOG" >/dev/null
+}
+
+@test "stalwart create: the container calls carry NO --sender-json (byte-identical to before)" {
+    create
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
+    assert_absent '--sender-json' "$SHIM_LOG" "stalwart mode must not pass --sender-json"
+    run steps
+    [ "${lines[1]}" = "vendor-mail realm-smtp --realm alpha-rat --tenant alpha_rat" ]
+}
+
+@test "an unresolved MAIL_TRANSPORT fails create at the mail step: phase B does not run (the real front, no default)" {
+    unset MAIL_TRANSPORT
+    create
+    [ "$status" -ne 0 ] || { echo "$output"; return 1; }
+    run steps
+    [ "${lines[0]}" = "tc phase-a alpha-rat" ]
+    [[ "$output" != *"vendor-mail"* && "$output" != *"phase-b"* && "$output" != *"record-step"* ]] || { steps; return 1; }
+}
+
+@test "relay suspend, resume and reconcile go through the front and hand the container the descriptor" {
+    relay_front
+    run "$LAUNCHER" suspend alpha-rat --operator "$OP"
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
+    run "$LAUNCHER" resume alpha-rat --operator "$OP"
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
+    run "$LAUNCHER" reconcile alpha-rat
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
+    run steps
+    [[ "$output" == *"mail realm-smtp --realm alpha-rat --tenant alpha_rat --revoke"* ]]
+    [[ "$output" == *"mail realm-smtp --realm alpha-rat --tenant alpha_rat"$'
+'* || "$output" == *"mail realm-smtp --realm alpha-rat --tenant alpha_rat" ]]
+    [[ "$output" != *"vendor-mail"* ]]
+    grep -E 'resume.*--sender-json' "$SHIM_LOG" >/dev/null
+    grep -E 'reconcile.*--sender-json' "$SHIM_LOG" >/dev/null
 }
 
 @test "a failed host mail step stops before phase B and writes no router" {

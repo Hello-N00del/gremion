@@ -136,6 +136,21 @@ gremion-dns-check --domain "${PLATFORM_DOMAIN}" \
 `6b=BLOCKED` keeps this item red: the platform's own identity provider must send
 its mail through the authenticated submission path like every other sender.
 
+**With `MAIL_TRANSPORT=relay`** (an external SMTP relay, no bundled mail server)
+asserts 1-6b do not apply and `gremion-mail-bringup` refuses them by name; the
+proof is the relay's own four checks, and the skipped ones are printed with the
+reason (a skipped check is not a pass):
+
+```bash
+gremion-mail-bringup --assert relay --external-to "${GATE_EXTERNAL_MAILBOX_A}" \
+  --results-file <headers of the delivered message>
+# must print: MAIL-BRINGUP: transport=relay r1=ok r2=ok r3=ok r4=ok
+```
+
+`r4=BLOCKED` (the delivered headers not yet supplied) keeps the item red. The
+real MX and the reputation programmes of the platform domain belong to the mail
+provider in this mode.
+
 **Owner:** OPERATOR + RUNNER
 **Evidence:** `G4-mail.md`
 

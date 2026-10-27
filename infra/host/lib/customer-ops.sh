@@ -121,6 +121,27 @@ tc() {
 
 vendor_mail() { "${CUSTOMER_OPS_BIN}/gremion-vendor-mail" "$@"; }
 
+# The mail transport front (PLAN-mail-transport M2): ONE launcher decides, from
+# MAIL_TRANSPORT (relay | stalwart; no default), how a realm's sender is stamped.
+# Every realm-smtp call goes through mail_realm_smtp -- stalwart hands over to
+# gremion-vendor-mail untouched, relay stamps the shared relay sender.
+mail_front() { "${CUSTOMER_OPS_BIN}/gremion-mail" "$@"; }
+mail_realm_smtp() { mail_front realm-smtp "$@"; }
+# mail_sender_args -- sets MAIL_SENDER_ARGS to the container-side flag that tells
+# tenant-create which sender the host stamped (relay only; stalwart passes nothing,
+# so its container calls are byte-identical to before). Fails closed when the
+# transport cannot be resolved.
+MAIL_SENDER_ARGS=()
+mail_sender_args() {
+    local t j
+    MAIL_SENDER_ARGS=()
+    t="$(mail_front transport)" || return 1
+    if [[ "$t" == relay ]]; then
+        j="$(mail_front sender-json)" || return 1
+        MAIL_SENDER_ARGS=(--sender-json "$j")
+    fi
+}
+
 load_host_facts() {
     local state="${ROOT}/etc/env/state.env"
     TRAEFIK_CERT_RESOLVER="$(env_key "$state" TRAEFIK_CERT_RESOLVER)"
@@ -184,24 +205,35 @@ write_router() {   # <slug>
 # ── the mail step: the ONE seam between phase A and phase B ────────────────
 # mail_step <slug> <token> -- how a customer's mail identity is issued, chosen
 # at deploy time by MAIL_TRANSPORT (operator decision 2026-10-21: external SMTP
-# relay OR slim Stalwart). customer_create calls nothing else for mail, so the
-# mail-transport unit (PLAN-mail-transport M3) adds its `relay` arm HERE and
-# nowhere else. Today only `stalwart` exists, the behaviour this step always
-# had: the customer's own submission principal kc-<token>@ (vendor-mail
-# realm-smtp), then the ledger step mail_principal_issued. An unknown value
-# fails closed BEFORE any principal is issued, so phase B does not run.
+# relay OR slim Stalwart). customer_create calls nothing else for mail.
+#   stalwart  the customer's own submission principal kc-<token>@ (vendor-mail
+#             realm-smtp), then the ledger step mail_principal_issued -- the
+#             behaviour this step always had, byte for byte.
+#   relay     NO per-realm principal: the realm is stamped with the shared
+#             relay sender (gremion-mail realm-smtp), then the SAME ledger step
+#             mail_principal_issued records after the container reads the stamp
+#             back (8/8 stays 8/8; the step kind does not change).
+# An unresolved or unknown MAIL_TRANSPORT fails closed BEFORE any identity is
+# issued, so phase B does not run. MAIL_SENDER_ARGS carries the relay descriptor
+# on to the container calls that follow (record-step here, phase B after).
 mail_step() {
-    local slug="$1" token="$2"
-    case "${MAIL_TRANSPORT:-stalwart}" in
+    local slug="$1" token="$2" transport
+    transport="$(mail_front transport)"         || die "MAIL_TRANSPORT is unresolved or not a transport this release knows (relay, stalwart); the mail step of ${slug} did not run and phase B does not run" "$GREMION_EXIT_USAGE"
+    case "$transport" in
         stalwart)
+            MAIL_SENDER_ARGS=()
             info "host: the customer's own submission principal kc-${token}@"
-            vendor_mail realm-smtp --realm "$slug" --tenant "$token" \
-                || die "the mail step of ${slug} failed; phase B does not run (a rerun resumes here)" "$GREMION_EXIT_ASSERT"
-            tc record-step "$slug" mail_principal_issued --operator "$OPERATOR_ID" \
-                || die "record-step mail_principal_issued of ${slug} failed" "$GREMION_EXIT_ASSERT"
+            mail_realm_smtp --realm "$slug" --tenant "$token"                 || die "the mail step of ${slug} failed; phase B does not run (a rerun resumes here)" "$GREMION_EXIT_ASSERT"
+            tc record-step "$slug" mail_principal_issued --operator "$OPERATOR_ID"                 || die "record-step mail_principal_issued of ${slug} failed" "$GREMION_EXIT_ASSERT"
+            ;;
+        relay)
+            mail_sender_args || die "the relay sender of ${slug} could not be resolved; phase B does not run" "$GREMION_EXIT_ASSERT"
+            info "host: the shared relay sender (no per-customer principal)"
+            mail_realm_smtp --realm "$slug" --tenant "$token"                 || die "the mail step of ${slug} failed; phase B does not run (a rerun resumes here)" "$GREMION_EXIT_ASSERT"
+            tc record-step "$slug" mail_principal_issued --operator "$OPERATOR_ID" "${MAIL_SENDER_ARGS[@]}"                 || die "record-step mail_principal_issued of ${slug} failed" "$GREMION_EXIT_ASSERT"
             ;;
         *)
-            die "MAIL_TRANSPORT=${MAIL_TRANSPORT} is not a mail transport this release knows (stalwart); the mail step of ${slug} did not run and phase B does not run" "$GREMION_EXIT_USAGE"
+            die "MAIL_TRANSPORT resolved to ${transport}, which this release does not know (relay, stalwart); the mail step of ${slug} did not run" "$GREMION_EXIT_USAGE"
             ;;
     esac
 }
@@ -260,7 +292,7 @@ customer_create() {
     mail_step "$slug" "$token"
     TC_MOUNT=("${mounts[@]}")
     info "phase B (container): first administrators, modules, active"
-    tc phase-b "${flags[@]}" || die "phase B of ${slug} failed; a rerun resumes from the ledger" "$GREMION_EXIT_ASSERT"
+    tc phase-b "${flags[@]}" ${MAIL_SENDER_ARGS[@]+"${MAIL_SENDER_ARGS[@]}"} || die "phase B of ${slug} failed; a rerun resumes from the ledger" "$GREMION_EXIT_ASSERT"
     TC_MOUNT=()
     write_router "$slug"
 

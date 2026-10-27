@@ -24,6 +24,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MAIL_TMPL_DIR="${MAIL_TMPL_DIR:-$SCRIPT_DIR/../mail}"
 # The vendor mail launcher (TASK-015): realm-smtp and the header checks.
 VENDOR_MAIL_BIN="${VENDOR_MAIL_BIN:-$SCRIPT_DIR/gremion-vendor-mail}"
+# The transport front (PLAN-mail-transport): the one reader of the relay keys.
+MAIL_BIN="${MAIL_BIN:-$SCRIPT_DIR/gremion-mail}"
 # kcadm inside the state Keycloak. The container is found by its compose
 # labels (state_kc_cid, lib/common.sh) and serves under /auth.
 KCADM_BIN="/opt/keycloak/bin/kcadm.sh"
@@ -59,6 +61,7 @@ usage() {
     cat <<'USAGE'
 usage: gremion-mail-bringup [--render-config] [--check-binds]
                             [--assert 1|2|3|4|5|6a|6b|all]
+                            [--assert relay|r1|r2|r3|r4]   (MAIL_TRANSPORT=relay only)
                             [--external-to addr[,addr...]]
                             [--results-file FILE]
 
@@ -611,8 +614,9 @@ blocked_on_receiver() {   # <assert>
     printf '  RECEIVER_DOMAIN=<the receiver'"'"'s own domain> -- not both forms\n'
 }
 
-check_received_headers() {   # <file>
+check_received_headers() {   # <file> [--relay]
     local -a args=(check-received --file "$1")
+    [ "${2:-}" != --relay ] || args+=(--relay)
     if [ -n "${RECEIVER:-}" ]; then
         args+=(--receiver "$RECEIVER")
     else
@@ -772,6 +776,232 @@ assert_6b_keycloak() {
     return 0
 }
 
+# ═══ M6: the relay branch (MAIL_TRANSPORT=relay) ═══════════════════════════════
+# PLAN-mail-transport M6. With an external relay there is no bundled server to
+# bring up, so asserts 1-6b do not apply. They are NOT silently skipped: asking
+# for one is a named refusal, and --assert all|relay runs the relay's own checks
+#   r1  the relay answers on host:port
+#   r2  STARTTLS is offered (465: implicit TLS) and the certificate is trusted
+#       for the relay host name
+#   r3  an authenticated test message from system@<From domain> is accepted
+#       (the credential rides a pipe into `curl -K -`, never an argv)
+#   r4  the delivered message's headers show the relay DKIM-signed the PLATFORM
+#       domain and DMARC passed (check-received --relay)
+# and prints the skipped bundled-server asserts WITH the reason: a skipped check
+# is not a pass.
+RELAY_ASSERTS=(r1 r2 r3 r4)
+RELAY_HOST_V="" RELAY_PORT_V="" RELAY_FROM_DOMAIN_V=""
+RELAY_TLS_OUT="" RELAY_TLS_DONE=0 RELAY_WHY=""
+
+# The relay endpoint, from the one reader of the relay keys (gremion-mail
+# sender-json): a duplicate parser here could drift from what the realms are
+# stamped with.
+relay_load() {
+    local sj
+    sj="$("$MAIL_BIN" sender-json)" \
+        || die "gremion-mail sender-json failed; the relay keys in mail.env are unusable (see above)" "$GREMION_EXIT_USAGE"
+    RELAY_HOST_V="$(jq -r .host <<<"$sj")"
+    RELAY_PORT_V="$(jq -r .port <<<"$sj")"
+    RELAY_FROM_DOMAIN_V="$(jq -r '.fromAddress | sub("^[^@]*@"; "")' <<<"$sj")"
+    if [ -z "$RELAY_HOST_V" ] || [ -z "$RELAY_FROM_DOMAIN_V" ]; then
+        die "gremion-mail sender-json returned no relay host / From domain: ${sj}" "$GREMION_EXIT_USAGE"
+    fi
+}
+
+# --- the decision logic: pure functions of canned text, unit-tested offline ---
+RELAY_UNREACHABLE_RE='errno=|connection refused|getaddrinfo|name or service not known|timed out|no route to host|network is unreachable|could not resolve'
+
+# relay_verdict_reachable <openssl s_client output> -> 0 reachable; 1 with RELAY_WHY
+relay_verdict_reachable() {
+    if grep -Eqi "$RELAY_UNREACHABLE_RE" <<<"$1"; then
+        RELAY_WHY="$(grep -Eim1 "$RELAY_UNREACHABLE_RE" <<<"$1")"
+        return 1
+    fi
+    if ! grep -q 'CONNECTED' <<<"$1"; then
+        RELAY_WHY="no connection was established (no CONNECTED line from openssl)"
+        return 1
+    fi
+    return 0
+}
+
+# relay_verdict_tls <openssl s_client output> -> 0 STARTTLS/TLS ok and the
+# certificate trusted for the host; 1 with RELAY_WHY. Not a pass unless openssl
+# itself reports verify code 0.
+relay_verdict_tls() {
+    local line
+    if grep -Eqi 'didn.t find starttls' <<<"$1"; then
+        RELAY_WHY="the relay does not offer STARTTLS (a plaintext relay is refused)"
+        return 1
+    fi
+    line="$(grep -m1 'Verify return code:' <<<"$1" || true)"
+    if [ -z "$line" ]; then
+        RELAY_WHY="no TLS session was established (no verify result from openssl)"
+        return 1
+    fi
+    if ! grep -q 'Verify return code: 0 (ok)' <<<"$line"; then
+        RELAY_WHY="the certificate is not trusted for ${RELAY_HOST_V}: ${line}"
+        return 1
+    fi
+    return 0
+}
+
+# relay_curl_failure <curl exit code> <curl stderr> -> a named reason
+relay_curl_failure() {
+    case "$1" in
+        67)                   printf 'the relay refused the login (SMTP AUTH): %s' "$2" ;;
+        7)                    printf 'curl could not connect to the relay: %s' "$2" ;;
+        28)                   printf 'the relay did not answer in time: %s' "$2" ;;
+        35|51|58|59|60|64|77) printf 'TLS to the relay failed: %s' "$2" ;;
+        55|56|52)             printf 'the relay rejected the message, sender or recipient: %s' "$2" ;;
+        *)                    printf 'curl exit %s: %s' "$1" "$2" ;;
+    esac
+}
+
+relay_tls_probe() {
+    [ "$RELAY_TLS_DONE" -eq 0 ] || return 0
+    need_cmd openssl timeout
+    local -a args=(s_client -connect "${RELAY_HOST_V}:${RELAY_PORT_V}")
+    [ "$RELAY_PORT_V" = 465 ] || args+=(-starttls smtp)
+    args+=(-servername "$RELAY_HOST_V" -verify_hostname "$RELAY_HOST_V")
+    RELAY_TLS_OUT="$(timeout 30 openssl "${args[@]}" </dev/null 2>&1 || true)"
+    RELAY_TLS_DONE=1
+}
+
+assert_r1_reachable() {
+    relay_tls_probe
+    if relay_verdict_reachable "$RELAY_TLS_OUT"; then
+        ok "the relay ${RELAY_HOST_V}:${RELAY_PORT_V} accepts a connection"
+        return 0
+    fi
+    bad "cannot reach the relay ${RELAY_HOST_V}:${RELAY_PORT_V}: ${RELAY_WHY}"
+    return 1
+}
+
+assert_r2_tls() {
+    relay_tls_probe
+    if ! relay_verdict_reachable "$RELAY_TLS_OUT"; then
+        bad "cannot reach the relay ${RELAY_HOST_V}:${RELAY_PORT_V}: ${RELAY_WHY}"
+        return 1
+    fi
+    if ! relay_verdict_tls "$RELAY_TLS_OUT"; then
+        bad "relay ${RELAY_HOST_V}:${RELAY_PORT_V}: ${RELAY_WHY}"
+        return 1
+    fi
+    if [ "$RELAY_PORT_V" = 465 ]; then
+        ok "the relay speaks implicit TLS on 465 and its certificate is trusted for ${RELAY_HOST_V}"
+    else
+        ok "the relay offers STARTTLS and its certificate is trusted for ${RELAY_HOST_V}"
+    fi
+    return 0
+}
+
+assert_r3_send() {
+    [ -n "$EXTERNAL_TO" ] || die "--external-to is required for relay assert r3 (one external mailbox that receives the test message)" "$GREMION_EXIT_USAGE"
+    need_cmd curl
+    local addr id msg cfg err rc n=0 fail=0
+    # Deliberately unquoted: --external-to is a comma-separated list.
+    # shellcheck disable=SC2086
+    for addr in ${EXTERNAL_TO//,/ }; do
+        n=$((n + 1))
+        id="bringup-r3-$(date -u +%s)-${RANDOM}@${RELAY_FROM_DOMAIN_V}"
+        msg="${TMPDIR_BRINGUP}/r3-${n}.eml"
+        {
+            printf 'From: system@%s\r\n' "$RELAY_FROM_DOMAIN_V"
+            printf 'To: %s\r\n' "$addr"
+            printf 'Subject: Gremion mail bring-up probe (relay r3)\r\n'
+            printf 'Date: %s\r\n' "$(date -u '+%a, %d %b %Y %H:%M:%S +0000')"
+            printf 'Message-ID: <%s>\r\n\r\n' "$id"
+            printf 'This message was submitted through the platform SMTP relay with authentication.\r\n'
+        } > "$msg"
+        cfg="$("$MAIL_BIN" relay-curl-config --to "$addr" --message "$msg")" \
+            || die "gremion-mail relay-curl-config refused (see above)" "$GREMION_EXIT_USAGE"
+        rc=0
+        err="$(printf '%s\nconnect-timeout = 20\nmax-time = 60\n' "$cfg" | curl -sS -K - 2>&1)" || rc=$?
+        cfg=""
+        if [ "$rc" -eq 0 ]; then
+            ok "the relay accepted <${id}> for ${addr} (accepted is not delivered: r4 reads the delivered headers)"
+        else
+            bad "$(relay_curl_failure "$rc" "$err")"
+            fail=1
+        fi
+    done
+    [ "$fail" -eq 0 ]
+}
+
+assert_r4_dkim() {
+    if [ -z "$RESULTS_FILE" ]; then
+        printf 'BLOCKED: waiting for the Authentication-Results header of the delivered relay test message.\n'
+        printf 'Open the external mailbox that received the r3 message, copy its full headers\n'
+        printf 'into a file, and re-run:\n'
+        printf '  gremion-mail-bringup --assert r4 --results-file <file>\n'
+        return 3
+    fi
+    [ -s "$RESULTS_FILE" ] || die "results file is empty: ${RESULTS_FILE}" "$GREMION_EXIT_USAGE"
+    if ! receiver_named; then blocked_on_receiver r4; return 3; fi
+    if check_received_headers "$RESULTS_FILE" --relay; then
+        ok "relay delivery: dkim=pass dmarc=pass for ${RELAY_FROM_DOMAIN_V} (the relay signed the platform domain)"
+        return 0
+    fi
+    bad "the delivered headers do not show the relay DKIM-signing ${RELAY_FROM_DOMAIN_V} with dmarc=pass (check-received --relay)"
+    return 1
+}
+
+relay_main() {
+    if [ "$RENDER_ONLY" -eq 1 ] || [ "$CHECK_BINDS" -eq 1 ]; then
+        die "MAIL_TRANSPORT=relay: the bundled mail server is not used on this host, so there is nothing to render or bind-check (set MAIL_TRANSPORT=stalwart to run the bundled Stalwart; the relay's own checks are --assert relay)" \
+            "$GREMION_EXIT_USAGE"
+    fi
+    local list=() a rc
+    case "$REQUESTED" in
+        all|relay)   list=("${RELAY_ASSERTS[@]}") ;;
+        r1|r2|r3|r4) list=("$REQUESTED") ;;
+        1|2|3|4|5|6a|6b)
+            die "assert ${REQUESTED} checks the bundled mail server, which MAIL_TRANSPORT=relay does not run, and a skipped check is not a pass: use --assert relay (r1 relay reachable, r2 STARTTLS and certificate, r3 authenticated test message, r4 delivered DKIM headers)" \
+                "$GREMION_EXIT_USAGE" ;;
+        *) usage >&2; die "unknown assert: ${REQUESTED}" "$GREMION_EXIT_USAGE" ;;
+    esac
+    need_cmd jq
+    relay_load
+    for a in "${list[@]}"; do
+        info "assert ${a}"
+        rc=0
+        case "$a" in
+            r1) assert_r1_reachable || rc=$? ;;
+            r2) assert_r2_tls       || rc=$? ;;
+            r3) assert_r3_send      || rc=$? ;;
+            r4) assert_r4_dkim      || rc=$? ;;
+        esac
+        case "$rc" in
+            0) RESULT["$a"]="ok" ;;
+            3) RESULT["$a"]="BLOCKED" ;;
+            *) RESULT["$a"]="FAIL" ;;
+        esac
+    done
+    relay_summary
+}
+
+relay_summary() {
+    local line="MAIL-BRINGUP: transport=relay" k any_fail=0 any_block=0 all_ok=1
+    for k in "${RELAY_ASSERTS[@]}"; do
+        line="$line ${k}=${RESULT[$k]:-skipped}"
+        case "${RESULT[$k]:-skipped}" in
+            FAIL)    any_fail=1 ;;
+            BLOCKED) any_block=1 ;;
+        esac
+        [ "${RESULT[$k]:-}" = "ok" ] || all_ok=0
+    done
+    printf '%s\n' "$line"
+    printf 'SKIPPED (MAIL_TRANSPORT=relay: no bundled mail server, so these do not apply and are NOT passes): %s\n' "${ALL_ASSERTS[*]}"
+    if [ "$all_ok" -eq 1 ]; then
+        printf 'RELAY-GATE: GO — the relay is reachable, offers STARTTLS, accepts an authenticated message and signs %s\n' "$RELAY_FROM_DOMAIN_V"
+    else
+        printf 'RELAY-GATE: HOLD — r1-r4 are not all green\n'
+    fi
+    [ "$any_fail" -eq 0 ] || exit "$GREMION_EXIT_ASSERT"
+    [ "$any_block" -eq 0 ] || exit "$GREMION_EXIT_BLOCKED"
+    exit "$GREMION_EXIT_OK"
+}
+
 main() {
     parse_args "$@"
     # mktemp/tail: assert() captures the wrapped command's output through them.
@@ -779,6 +1009,11 @@ main() {
     # The per-assert tools are declared by need_cmd_for_assert.
     need_cmd mktemp tail date grep sed
     load_env "${MAIL_ENV:-$(gremion_root)/etc/env/mail.env}"
+    # PLAN-mail-transport M3/M6: with an external relay there is no bundled mail
+    # server to render, bind-check or assert; the relay has its own checks.
+    if [ "${MAIL_TRANSPORT:-}" = relay ]; then
+        relay_main
+    fi
     # shellcheck disable=SC2034  # consumed by render_template via ${!v}
     MAIL_HOSTNAME="mail.${PLATFORM_DOMAIN}"
     DNS_CHECK="$(resolve_dns_check)"

@@ -17,25 +17,39 @@ import { readTemplates, REPO_ROOT } from './lib/env.mjs'
 import { FIXTURE_REL, fixtureDrift } from './lib/fixture-env.mjs'
 
 const ALLOW = loadAllowances()
-const NONE = { ...ALLOW, separation: [] }
 const real = () => readTemplates()
 const withLine = (templates, file, line) => ({ ...templates, [file]: `${templates[file]}\n${line}\n` })
 
 // ── (a) templates ──────────────────────────────────────────────────────────
 
-test('(a) the real templates pass with the one transitional allowance', () => {
+// M4 (PLAN-mail-transport): the app tier no longer holds a platform@ password,
+// so the one separation allowance is gone and the real templates pass with NONE.
+const RETIRED_ALLOWANCE = {
+  id: 'platform-smtp-transitional',
+  connectorFile: 'app.env.tmpl',
+  connectorKey: 'PLATFORM_SMTP_PASSWORD',
+  vendorGroup: 'platform_smtp',
+  vendorKey: 'PLATFORM_SMTP_PASSWORD',
+}
+
+test('(a) the real templates pass with no allowance at all (M4: the app tier holds no vendor secret)', () => {
+  assert.deepEqual(ALLOW.separation, [])
   const r = staticViolations(real(), ALLOW)
   assert.deepEqual(r.violations, [])
-  assert.ok(r.used.has('platform-smtp-transitional'))
+  assert.equal(r.used.size, 0)
 })
 
-test('(a) without the allowance the real tree is RED on app.env.tmpl PLATFORM_SMTP_PASSWORD (platform_smtp)', () => {
-  const r = staticViolations(real(), NONE)
-  const line = real()['app.env.tmpl'].split('\n').findIndex((l) => l.startsWith('PLATFORM_SMTP_PASSWORD=')) + 1
-  // both halves are true: the GROUP is shared, and the KEY is a vendor key
+test('(a) the retired platform@ pair is stale: its allowance entry left behind is RED (guard 6), never a silent pass', () => {
+  const r = staticViolations(real(), { ...ALLOW, separation: [RETIRED_ALLOWANCE] })
+  assert.match(r.violations.join('\n'), /stale allowance 'platform-smtp-transitional'/)
+})
+
+test('(a) the app tier re-declaring PLATFORM_SMTP_PASSWORD is RED again (the vendor group and key are vendor-only)', () => {
+  const t = withLine(real(), 'app.env.tmpl', 'PLATFORM_SMTP_PASSWORD=CHANGE_ME_GEN_alnum32_platform_smtp')
+  const r = staticViolations(t, ALLOW)
   assert.equal(r.violations.length, 2, r.violations.join('\n'))
-  assert.match(r.violations[0], new RegExp(`^app\\.env\\.tmpl:${line} PLATFORM_SMTP_PASSWORD shares the vendor generator group 'platform_smtp' with PLATFORM_SMTP_PASSWORD \\(mail\\.env\\.tmpl:\\d+\\)`))
-  assert.equal(r.violations[1], `app.env.tmpl:${line} declares the vendor key PLATFORM_SMTP_PASSWORD in the connector set`)
+  assert.match(r.violations.join('\n'), /PLATFORM_SMTP_PASSWORD shares the vendor generator group 'platform_smtp'/)
+  assert.match(r.violations.join('\n'), /declares the vendor key PLATFORM_SMTP_PASSWORD in the connector set/)
 })
 
 test('(a) a connector key seeded with a vendor group is RED (EMAIL_HOST_PASSWORD=..._vendor_smtp)', () => {
@@ -57,13 +71,6 @@ test('(a) EMAIL_HOST_PASSWORD is in the connector set in ANY template, not only 
 test('(a) a vendor key name in the connector set is RED even with a fresh group', () => {
   const r = staticViolations(withLine(real(), 'app.env.tmpl', 'STALWART_API_KEY=CHANGE_ME_GEN_hex32_app_only'), ALLOW)
   assert.match(r.violations.join('\n'), /declares the vendor key STALWART_API_KEY in the connector set/)
-})
-
-test('(a) a stale allowance (its pair gone) is RED, never a silent pass', () => {
-  const t = real()
-  const noPair = { ...t, 'app.env.tmpl': t['app.env.tmpl'].replace(/^PLATFORM_SMTP_PASSWORD=.*$/m, '') }
-  const r = staticViolations(noPair, ALLOW)
-  assert.match(r.violations.join('\n'), /stale allowance 'platform-smtp-transitional'/)
 })
 
 // ── (b) rendered compose ───────────────────────────────────────────────────
@@ -160,7 +167,7 @@ function hostTree() {
   mkdirSync(path.join(sec, 'mail'), { recursive: true })
   mkdirSync(path.join(sec, 'tenants', 'alpha'), { recursive: true })
   writeFileSync(path.join(env, 'mail.env'), Object.entries(VENDOR).map(([k, v]) => `${k}=${v}`).join('\n') + '\nPLATFORM_DOMAIN=example.org\n')
-  for (const c of ['blue', 'green']) writeFileSync(path.join(env, `app-${c}.env`), 'PLATFORM_DOMAIN=example.org\nPLATFORM_SMTP_PASSWORD=fixture-platform-smtp-value\nAUTH_SECRET=other\n')
+  for (const c of ['blue', 'green']) writeFileSync(path.join(env, `app-${c}.env`), 'PLATFORM_DOMAIN=example.org\nAUTH_SECRET=other\n')
   writeFileSync(path.join(env, 'state.env'), 'PLATFORM_DOMAIN=example.org\n')
   writeFileSync(path.join(env, 'ops.env'), 'PLATFORM_DOMAIN=example.org\nALERT_SMTP_PASSWORD=fixture-alert-smtp-value\nSTALWART_API_KEY=fixture-stalwart-api-value\n')
   writeFileSync(path.join(sec, 'mail', 'g2026a.private'), 'dkim-key-fixture')
@@ -168,7 +175,7 @@ function hostTree() {
   return { root, env, sec }
 }
 
-test('--host: separate stores pass (the transitional platform@ pair is allowed)', () => {
+test('--host: separate stores pass (no allowance)', () => {
   const t = hostTree()
   try {
     const r = hostViolations({ envDir: t.env, secretsDir: t.sec, uiEnvFile: null, allowances: ALLOW })
@@ -243,15 +250,13 @@ test('--host: an unreadable NESTED tenant directory is unparseable too', () => {
   }
 })
 
-test('--host: two vendor keys sharing one value are RED, and cannot ride the platform allowance (review A1/B3/C1)', () => {
+test('--host: two vendor keys sharing one value are RED (review A1/B3/C1)', () => {
   const t = hostTree()
   try {
-    // system@'s password equal to platform@'s: the app tier's allowed
-    // PLATFORM_SMTP_PASSWORD would then BE system@'s password.
+    // system@'s password equal to platform@'s: two vendor identities would be one secret.
     writeFileSync(path.join(t.env, 'mail.env'), readFileSync(path.join(t.env, 'mail.env'), 'utf8').replace('VENDOR_SMTP_PASSWORD=fixture-vendor-smtp-value', 'VENDOR_SMTP_PASSWORD=fixture-platform-smtp-value'))
     const r = hostViolations({ envDir: t.env, secretsDir: t.sec, uiEnvFile: null, allowances: ALLOW })
     assert.match(r.violations.join('\n'), /mail\.env PLATFORM_SMTP_PASSWORD holds the same value as mail\.env VENDOR_SMTP_PASSWORD -- two vendor secrets are one/)
-    assert.match(r.violations.join('\n'), /app-blue\.env PLATFORM_SMTP_PASSWORD holds the vendor secret mail\.env VENDOR_SMTP_PASSWORD/)
   } finally {
     rmSync(t.root, { recursive: true, force: true })
   }

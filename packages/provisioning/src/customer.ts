@@ -192,8 +192,27 @@ export async function recordHostStep(slug: string, kind: StepKind, operatorId: s
 }
 
 export async function assertSmtpStamped(c: CustomerRef, deps: ProvisioningDeps): Promise<void> {
-  const want = principalFor(c.token, deps.platformDomain)
   const got = await deps.realm.readSmtp(c.realm)
+  const sender = deps.mailSender ?? { mode: 'stalwart' as const }
+  if (sender.mode === 'relay') {
+    // PLAN-mail-transport: one shared relay credential, no per-realm principal.
+    // readSmtp reports a user only when a password is set, so an authenticating
+    // relay needs a user read back; an IP-allow-listed one (user '') needs none.
+    const problems: string[] = []
+    if ((got.user ?? '').startsWith('kc-') || (got.from ?? '').startsWith('kc-')) {
+      problems.push(`the realm carries the per-customer principal ${got.user ?? got.from} but MAIL_TRANSPORT is relay -- migration residue`)
+    } else if ((got.user ?? '') !== sender.user) {
+      problems.push(`user ${JSON.stringify(got.user)} (want ${JSON.stringify(sender.user === '' ? null : sender.user)})`)
+    }
+    if (got.from !== sender.fromAddress && !(got.from ?? '').startsWith('kc-')) problems.push(`from ${JSON.stringify(got.from)} (want ${sender.fromAddress})`)
+    if (got.host !== sender.host) problems.push(`host ${JSON.stringify(got.host)} (want ${sender.host})`)
+    if (got.port !== String(sender.port)) problems.push(`port ${JSON.stringify(got.port)} (want ${sender.port})`)
+    const wantStarttls = sender.port === 465 ? 'false' : 'true'
+    if (got.starttls !== wantStarttls) problems.push(`starttls ${JSON.stringify(got.starttls)} (want ${wantStarttls})`)
+    if (problems.length) throw new ProvisioningError('POSTCONDITION', `realm ${c.realm} is not stamped with the relay sender: ${problems.join('; ')}`)
+    return
+  }
+  const want = principalFor(c.token, deps.platformDomain)
   const problems: string[] = []
   if (got.user !== want) problems.push(`user ${JSON.stringify(got.user)} (want ${want})`)
   if (got.from !== want) problems.push(`from ${JSON.stringify(got.from)} (want ${want})`)

@@ -160,8 +160,20 @@ export interface GatePort {
   unproven(customerId?: string): Promise<import('@gremion/tenant-store/lifecycle').UnprovenEnablement[]>
 }
 
+/**
+ * PLAN-mail-transport M2: what the host's mail step stamped on a customer
+ * realm, by deploy-time mail transport. Handed in by the host (`--sender-json`);
+ * the container reads no mail.env. Absent = stalwart: the realm's own
+ * kc-<token>@ principal. The relay carries NO password (the host holds it).
+ */
+export type MailStampExpectation =
+  | { mode: 'stalwart' }
+  | { mode: 'relay'; host: string; port: number; fromAddress: string; user: string }
+
 export interface ProvisioningDeps {
   platformDomain: string
+  /** The sender the host stamped (default stalwart). */
+  mailSender?: MailStampExpectation
   ledger: LedgerPort
   control: ControlPort
   config: ConfigPort

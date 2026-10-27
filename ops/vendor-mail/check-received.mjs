@@ -6,7 +6,14 @@
 //   node ops/vendor-mail/check-received.mjs --file <headers>
 //        [--domain D] [--bind-ip IP] [--bind-ip6 IP6]    (default: mail.env)
 //        --receiver NAME | --authserv-id ID --receiver-domain D
-//        [--receivers F]
+//        [--receivers F] [--relay]
+//
+// --relay (MAIL_TRANSPORT=relay, PLAN-mail-transport M6): the mail left through
+// an external SMTP relay, so the own-server hop proof below cannot hold. The
+// proof is then: the receiver's own Authentication-Results show dkim=pass with
+// header.d = the PLATFORM domain (the relay signed our domain, not its own) and
+// dmarc=pass; spf is not required (the relay envelope may be its own domain);
+// the third-party mail-API markers still apply. No bind address is needed.
 //
 // It replaces the substring greps of gremion-mail-bringup asserts 6a/6b,
 // which passed a relayed message (grep "dkim=pass" is satisfied by
@@ -132,7 +139,7 @@ export function byClauseHost(value) {
   return m ? m[1].toLowerCase().replace(/\.$/, '') : null
 }
 
-export function checkReceived(text, { domain, bindIps, authservIds, receiverSuffixes = [], espMarkers }) {
+export function checkReceived(text, { domain, bindIps, authservIds, receiverSuffixes = [], espMarkers, relay = false }) {
   const d = domain.toLowerCase()
   const why = []
   // ONE receiver per run: trusting the union of every known authserv-id is
@@ -155,7 +162,7 @@ export function checkReceived(text, { domain, bindIps, authservIds, receiverSuff
     why.push(`no Authentication-Results from the receiver (${[...trusted].join(', ') || 'no authserv-id given'}); saw ${ar.map((r) => r.authservId || '<none>').join(', ') || 'none'}`)
   } else {
     const pass = (m, ok) => mine.results.some((r) => r.method === m && r.result === 'pass' && ok(r.props))
-    if (!pass('spf', (p) => inDomain(p['smtp.mailfrom'] ?? p['smtp.helo'], d))) why.push(`no spf=pass for a mailfrom in ${d}`)
+    if (!relay && !pass('spf', (p) => inDomain(p['smtp.mailfrom'] ?? p['smtp.helo'], d))) why.push(`no spf=pass for a mailfrom in ${d}`)
     if (!pass('dkim', (p) => domainOf(p['header.d'] ?? p['header.i']) === d)) why.push(`no dkim=pass with header.d=${d}`)
     if (!pass('dmarc', (p) => domainOf(p['header.from']) === d)) why.push(`no dmarc=pass with header.from=${d}`)
   }
@@ -169,7 +176,9 @@ export function checkReceived(text, { domain, bindIps, authservIds, receiverSuff
       break
     }
   }
-  if (accept < 0) why.push(`no Received hop accepted the message from ${[...ips].join(' / ')}`)
+  if (relay) {
+    // The relay is the sender: there is no own-server hop to find.
+  } else if (accept < 0) why.push(`no Received hop accepted the message from ${[...ips].join(' / ')}`)
   else {
     // The accepting hop is the RECEIVER's; an unlisted smarthost that took the
     // message from IP-B and passed it on would otherwise be read as delivery.
@@ -224,6 +233,7 @@ export function main(argv = process.argv.slice(2), log = console) {
       else if (a === '--receiver-domain') o.receiverDomain = v()
       else if (a === '--receivers') o.receivers = v()
       else if (a === '--mail-env') o.mailEnv = v()
+      else if (a === '--relay') o.relay = true
       else throw new Error(`unknown argument ${a}`)
     } catch (e) {
       log.error(`usage: check-received.mjs --file F [--domain D --bind-ip IP --bind-ip6 IP6] [--authserv-id ID]: ${e.message}`)
@@ -238,9 +248,9 @@ export function main(argv = process.argv.slice(2), log = console) {
   try {
     text = readFileSync(o.file, 'utf8')
     receivers = loadReceivers(o.receivers)
-    if (!o.domain || !o.ip) {
+    if (!o.domain || (!o.ip && !o.relay)) {
       const mail = envMap(readFileSync(o.mailEnv, 'utf8'), 'mail.env')
-      o.domain ??= mail.PLATFORM_DOMAIN
+      o.domain ??= o.relay ? (mail.RELAY_FROM_DOMAIN || mail.PLATFORM_DOMAIN) : mail.PLATFORM_DOMAIN
       o.ip ??= mail.MAIL_BIND_IP
       o.ip6 ??= mail.MAIL_BIND_IP6
     }
@@ -248,7 +258,7 @@ export function main(argv = process.argv.slice(2), log = console) {
     log.error(`UNPARSEABLE ${e.code ?? ''} ${e.message}`)
     return 2
   }
-  if (!o.domain || !o.ip) {
+  if (!o.domain || (!o.ip && !o.relay)) {
     log.error('UNPARSEABLE no domain / bind address (pass --domain and --bind-ip, or mount mail.env)')
     return 2
   }
@@ -276,13 +286,13 @@ export function main(argv = process.argv.slice(2), log = console) {
     log.error('usage: name the receiver: --receiver <name in receivers.json> or --authserv-id <id> [--receiver-domain D]')
     return 2
   }
-  const r = checkReceived(text, { domain: o.domain, bindIps: [o.ip, o.ip6], authservIds: ids, receiverSuffixes: suffixes, espMarkers: receivers.espMarkers })
+  const r = checkReceived(text, { domain: o.domain, bindIps: o.relay ? [] : [o.ip, o.ip6], authservIds: ids, receiverSuffixes: suffixes, espMarkers: receivers.espMarkers, relay: Boolean(o.relay) })
   if (r.unparseable) {
     log.error(`UNPARSEABLE ${r.unparseable}`)
     return 2
   }
   for (const w of r.reasons) log.error(`FAIL ${w}`)
-  log.log(`RECEIVED: domain=${o.domain} verdict=${r.reasons.length ? 'not-proven' : 'own-server spf=pass dkim=pass dmarc=pass'}`)
+  log.log(`RECEIVED: domain=${o.domain} verdict=${r.reasons.length ? 'not-proven' : o.relay ? 'relay dkim=pass dmarc=pass' : 'own-server spf=pass dkim=pass dmarc=pass'}`)
   return r.reasons.length ? 1 : 0
 }
 
