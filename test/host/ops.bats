@@ -1247,3 +1247,42 @@ relay_ops_env() {   # <ALERT_EMAIL_TO>
     [ "$status" -eq 2 ] || { echo "$output"; return 1; }
     [[ "$output" == *"ALERT_SMTP_HOST"* && "$output" == *"RELAY_SMTP_HOST"* ]]
 }
+
+# mail-transport review 7: Grafana's STARTTLS policy was hard-coded, so an
+# implicit-TLS relay (RELAY_SMTP_PORT=465) broke the alert mail.
+@test "M3 render-ops: alert mail on 465 (implicit TLS) needs ALERT_SMTP_STARTTLS_POLICY=NoStartTLS, and NoStartTLS is refused on any other port" {
+    relay_ops_env "ops@example.org"
+    set_key RELAY_SMTP_PORT 465
+    set_key ALERT_SMTP_PORT 465
+    run "$RENDER" --env-file "$GREMION_ROOT/etc/env/ops.env"
+    [ "$status" -eq 2 ] || { echo "465 without policy: status=$status $output"; return 1; }
+    [[ "$output" == *"ALERT_SMTP_STARTTLS_POLICY"* && "$output" == *"465"* ]] || { echo "$output"; return 1; }
+    printf 'ALERT_SMTP_STARTTLS_POLICY=NoStartTLS\n' >> "$GREMION_ROOT/etc/env/ops.env"
+    run "$RENDER" --env-file "$GREMION_ROOT/etc/env/ops.env"
+    [ "$status" -eq 0 ] || { echo "465 + NoStartTLS: status=$status $output"; return 1; }
+    [[ "$output" == *"email=on"* ]]
+    # plaintext submission on a STARTTLS port is never allowed
+    relay_ops_env "ops@example.org"
+    printf 'ALERT_SMTP_STARTTLS_POLICY=NoStartTLS\n' >> "$GREMION_ROOT/etc/env/ops.env"
+    run "$RENDER" --env-file "$GREMION_ROOT/etc/env/ops.env"
+    [ "$status" -eq 2 ] || { echo "587 + NoStartTLS: status=$status $output"; return 1; }
+    [[ "$output" == *"NoStartTLS"* ]]
+    # an unknown policy value is refused by name
+    relay_ops_env "ops@example.org"
+    printf 'ALERT_SMTP_STARTTLS_POLICY=OpportunisticStartTLS\n' >> "$GREMION_ROOT/etc/env/ops.env"
+    run "$RENDER" --env-file "$GREMION_ROOT/etc/env/ops.env"
+    [ "$status" -eq 2 ] || { echo "opportunistic: status=$status $output"; return 1; }
+}
+
+@test "M3 compose/observability: Grafana's STARTTLS policy is read from ALERT_SMTP_STARTTLS_POLICY (default MandatoryStartTLS), not hard-coded" {
+    grep -Fq 'GF_SMTP_STARTTLS_POLICY: "${ALERT_SMTP_STARTTLS_POLICY:-MandatoryStartTLS}"' "$COMPOSE"
+    ! grep -Eq '^\s*GF_SMTP_STARTTLS_POLICY: MandatoryStartTLS\s*$' "$COMPOSE"
+    grep -q '^ALERT_SMTP_STARTTLS_POLICY=MandatoryStartTLS$' "${PROJECT_ROOT}/infra/host/templates/env/ops.env.tmpl"
+}
+
+@test "render-ops.sh holds no raw CR byte and no line-broken \$'...' or printf literal (git saw it as binary)" {
+    local f="${OPS_DIR}/render-ops.sh"
+    [ "$(tr -cd '\r' < "$f" | wc -c)" -eq 0 ] || { echo "raw CR byte in render-ops.sh"; return 1; }
+    # a quote that opens at the end of a line is a raw LF inside $'..' or '..'
+    ! grep -nE "(\$'|printf -- '\[\])\$" "$f"
+}

@@ -90,7 +90,7 @@ esac
 # mis-rendered host, caught before anything is written.
 MAIL_ENV_FILE="${MAIL_ENV:-$ROOT/etc/env/mail.env}"
 if [[ -f "$MAIL_ENV_FILE" ]]; then
-    __mail_t="$(sed -n 's/^MAIL_TRANSPORT=//p' "$MAIL_ENV_FILE" | tail -n 1 | tr -d '')"
+    __mail_t="$(sed -n 's/^MAIL_TRANSPORT=//p' "$MAIL_ENV_FILE" | tail -n 1 | tr -d '\r')"
     if [[ -n "$__mail_t" && "$__mail_t" != CHANGE_ME_* && "$__mail_t" != "$MAIL_TRANSPORT" ]]; then
         die "MAIL_TRANSPORT=${MAIL_TRANSPORT} in $ENV_FILE differs from MAIL_TRANSPORT=${__mail_t} in ${MAIL_ENV_FILE}" 2
     fi
@@ -169,8 +169,7 @@ write_targets() {
 # A target list with no target: Prometheus' file SD reads `[]` as nothing to
 # scrape (the same spelling render_third_party uses for an empty list).
 write_no_targets() {
-    printf -- '[]
-' | atomic_write "$TARGETS_DIR/$1" 0644
+    printf -- '[]\n' | atomic_write "$TARGETS_DIR/$1" 0644
     FILE_COUNT=$((FILE_COUNT + 1))
 }
 
@@ -294,8 +293,7 @@ relay_password() {
     perm="$(stat -c '%a' "$path" 2>/dev/null || echo 600)"
     [[ "${perm: -1}" == 0 ]] || { bad "BLOCKED: the relay password file $path is readable by other (mode $perm); chmod 600"; exit 3; }
     pw="$(cat "$path")"
-    pw="${pw%$'
-'}"; pw="${pw%$''}"
+    pw="${pw%$'\n'}"; pw="${pw%$'\r'}"
     [[ -n "$pw" ]] || { bad "BLOCKED: the relay password file is empty: $path"; exit 3; }
     printf '%s' "$pw"
 }
@@ -348,6 +346,19 @@ render_alerting() {
         if ! [[ "${ALERT_SMTP_PORT:-}" =~ ^[0-9]{1,5}$ ]] || (( 10#${ALERT_SMTP_PORT} < 1 || 10#${ALERT_SMTP_PORT} > 65535 )); then
             die "BLOCKED: ALERT_SMTP_PORT must be a port number from 1 to 65535 (got '${ALERT_SMTP_PORT:-}')" 3
         fi
+        # Grafana's STARTTLS policy (compose reads ALERT_SMTP_STARTTLS_POLICY,
+        # default MandatoryStartTLS). Port 465 is implicit TLS and has no
+        # STARTTLS upgrade to demand: it must say NoStartTLS. NoStartTLS on any
+        # other port would submit the password in the clear; any other value
+        # (OpportunisticStartTLS downgrades silently) is refused.
+        local policy="${ALERT_SMTP_STARTTLS_POLICY:-MandatoryStartTLS}"
+        case "$policy" in
+            MandatoryStartTLS)
+                (( 10#${ALERT_SMTP_PORT} != 465 )) || die "ALERT_SMTP_PORT=465 is implicit TLS: set ALERT_SMTP_STARTTLS_POLICY=NoStartTLS in $ENV_FILE (Grafana would otherwise demand a STARTTLS upgrade the server never offers)" 2 ;;
+            NoStartTLS)
+                (( 10#${ALERT_SMTP_PORT} == 465 )) || die "ALERT_SMTP_STARTTLS_POLICY=NoStartTLS is only for implicit TLS on port 465; on port ${ALERT_SMTP_PORT} it would send the password unencrypted" 2 ;;
+            *) die "ALERT_SMTP_STARTTLS_POLICY=${policy} is not allowed (MandatoryStartTLS, or NoStartTLS on port 465)" 2 ;;
+        esac
         EMAIL_STATE="on"
     else
         password="unset"
