@@ -16,8 +16,8 @@ export interface NewCustomerInput {
   brandProduct: string
   brandOrgShort: string
   enable: string[]
-  /** Per enabled module: the operator's DPIA decision (TASK-044 D2). */
-  dpia: Record<string, { requiresDpia: boolean; documentRef: string }>
+  /** Per enabled module: the operator's DPIA decision (TASK-044 D2); null: no explicit yes/no was given. */
+  dpia: Record<string, { requiresDpia: boolean | null; documentRef: string }>
 }
 
 /** The operator's sign-in, as the executor re-verifies it (request-verify, D4). */
@@ -33,7 +33,15 @@ export interface Evidence {
 const SLUG = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/
 const HOST = /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/
 const EMAIL = /^[^\s@<>()[\]\\,;:"]{1,64}@(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/
+// Mirror of @gremion/provisioning printable-text.ts (the panel image has no such
+// dependency); requests.test.ts runs both over one corpus.
+export const PRINTABLE = /^(?:[^\u0000-\u001f\u007f-\u009f\u2028\u2029\u202a-\u202e\u2066-\u2069\ud800-\udfff]|[\ud800-\udbff][\udc00-\udfff])+$/
 const MODULE = /^[a-z][a-z0-9_]*$/
+/** Mirror of @gremion/provisioning's RESERVED_SLUGS (slug.ts); requests.test.ts pins the two equal. */
+export const RESERVED_SLUGS: ReadonlySet<string> = new Set([
+  'platform', 'gremion', 'stura', 'keycloak', 'nextcloud', 'helios', 'postgres', 'control', 'template0', 'template1', 'public', 'cloud', 'matrix', 'elections', 'master',
+])
+const NON_ASCII = /[^\u0000-\u007f]/
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
 
 /**
@@ -48,30 +56,53 @@ export const DENY_REASONS: Readonly<Record<string, string>> = Object.freeze({
   vault: 'vault (Tresor) bleibt im Pilotbetrieb abgeschaltet und kann nicht aktiviert werden (PRD-PLAT-012).',
 })
 
+/** True when `v` is 1 to `max` printable characters (not only blanks), as request-verify requires. */
+function printable(v: string, max: number): boolean {
+  return v.trim() !== '' && v.length <= max && PRINTABLE.test(v)
+}
+
 /** Validates the form and returns the field errors (empty: valid). */
-export function validateNewCustomer(input: NewCustomerInput, deny: Readonly<Record<string, string>> = DENY_REASONS): Record<string, string> {
+export function validateNewCustomer(
+  input: NewCustomerInput,
+  deny: Readonly<Record<string, string>> = DENY_REASONS,
+  /** The module ids the form offered (plt.module toggleable rows); null: not checked. */
+  known: readonly string[] | null = null,
+): Record<string, string> {
   const errors: Record<string, string> = {}
-  if (!SLUG.test(input.slug) || input.slug.length < 3 || input.slug.length > 30 || input.slug === 'platform') {
-    errors.slug = 'Kurzname: 3-30 Zeichen, a-z, 0-9 und einzelne Bindestriche, beginnend mit einem Buchstaben; nicht "platform".'
+  if (!SLUG.test(input.slug) || input.slug.length < 3 || input.slug.length > 30) {
+    errors.slug = 'Kurzname: 3-30 Zeichen, a-z, 0-9 und einzelne Bindestriche, beginnend mit einem Buchstaben.'
+  } else if (RESERVED_SLUGS.has(input.slug)) {
+    errors.slug = `Kurzname „${input.slug}“ ist reserviert und kann nicht vergeben werden.`
   }
-  if (!HOST.test(input.host.toLowerCase())) errors.host = 'Hostname in Kleinbuchstaben, z. B. rat.musterstadt.de.'
+  if (NON_ASCII.test(input.host)) errors.host = 'Hostname nur in ASCII (a-z, 0-9, Punkt, Bindestrich); Umlaute und IDN-Namen sind im Pilotbetrieb nicht möglich, kein Punycode.'
+  else if (!HOST.test(input.host.toLowerCase())) errors.host = 'Hostname in Kleinbuchstaben, z. B. rat.musterstadt.de.'
   if (!EMAIL.test(input.itAdmin.toLowerCase())) errors.itAdmin = 'E-Mail-Adresse der IT-Administration.'
   if (!EMAIL.test(input.councilAdmin.toLowerCase())) errors.councilAdmin = 'E-Mail-Adresse der Gremienverwaltung.'
-  if (input.bodyName.length > 80) errors.bodyName = 'Name des ersten Gremiums: höchstens 80 Zeichen.'
-  if (input.brandProduct.length < 1 || input.brandProduct.length > 80) errors.brandProduct = 'Produktname der Marke: 1-80 Zeichen.'
-  if (input.brandOrgShort.length < 1 || input.brandOrgShort.length > 20) errors.brandOrgShort = 'Kurzname der Organisation: 1-20 Zeichen.'
+  // the printable-character rule request-verify applies, so a bad value is refused HERE, not later
+  if (input.bodyName !== '' && !printable(input.bodyName, 80)) errors.bodyName = 'Name des ersten Gremiums: höchstens 80 Zeichen, keine Steuerzeichen.'
+  if (!printable(input.brandProduct, 80)) errors.brandProduct = 'Produktname der Marke: 1-80 Zeichen, keine Steuerzeichen.'
+  if (!printable(input.brandOrgShort, 20)) errors.brandOrgShort = 'Kurzname der Organisation: 1-20 Zeichen, keine Steuerzeichen.'
   if (input.enable.some((m) => !MODULE.test(m))) errors.enable = 'Module als Kennungen, z. B. calendar.'
   else {
     const denied = input.enable.find((m) => m in deny)
     if (denied !== undefined) errors.enable = deny[denied]!
+    else if (known !== null && input.enable.some((m) => !known.includes(m))) {
+      errors.enable = `Unbekanntes Modul: ${[...new Set(input.enable)].filter((m) => !known.includes(m)).join(', ')}.`
+    }
     else {
-      // brief Q3: a written decision (document reference) for EVERY ticked module
-      const missing = [...new Set(input.enable)].filter((m) => (input.dpia[m]?.documentRef ?? '').trim() === '')
-      if (missing.length > 0) errors.dpia = `Dokumentverweis zur DPIA-Entscheidung fehlt: ${missing.join(', ')}.`
+      const ids = [...new Set(input.enable)]
+      // every ticked module carries an explicit ja/nein: an absent or unknown answer is never read as "nicht erforderlich"
+      const unanswered = ids.filter((m) => typeof input.dpia[m]?.requiresDpia !== 'boolean')
+      // brief Q3: a written decision (document reference) for EVERY ticked module, whatever the answer
+      const missing = ids.filter((m) => (input.dpia[m]?.documentRef ?? '').trim() === '')
+      if (unanswered.length > 0) errors.dpia = `DPIA-Entscheidung (erforderlich oder nicht erforderlich) fehlt: ${unanswered.join(', ')}.`
+      else if (missing.length > 0) errors.dpia = `Dokumentverweis zur DPIA-Entscheidung fehlt: ${missing.join(', ')}.`
       else {
-        // the same 500-character cap request-verify applies (document_ref)
-        const long = [...new Set(input.enable)].filter((m) => (input.dpia[m]?.documentRef ?? '').trim().length > 500)
-        if (long.length > 0) errors.dpia = `Dokumentverweis zur DPIA-Entscheidung: h�chstens 500 Zeichen (${long.join(', ')}).`
+        // the same 500-character cap and printable rule request-verify applies (document_ref)
+        const long = ids.filter((m) => input.dpia[m]!.documentRef.trim().length > 500)
+        const bad = ids.filter((m) => !printable(input.dpia[m]!.documentRef, 500))
+        if (long.length > 0) errors.dpia = `Dokumentverweis zur DPIA-Entscheidung: höchstens 500 Zeichen (${long.join(', ')}).`
+        else if (bad.length > 0) errors.dpia = `Dokumentverweis zur DPIA-Entscheidung: keine Steuerzeichen (${bad.join(', ')}).`
       }
     }
   }
@@ -85,7 +116,7 @@ export function createArgs(input: NewCustomerInput): Record<string, unknown> {
   for (const id of enable) {
     const d = input.dpia[id]
     if (!d) continue
-    dpia[id] = { requires_dpia: d.requiresDpia, reason_codes: ['operator_decision'], document_ref: d.documentRef.trim() === '' ? null : d.documentRef.trim() }
+    dpia[id] = { requires_dpia: d.requiresDpia === true, reason_codes: ['operator_decision'], document_ref: d.documentRef.trim() === '' ? null : d.documentRef.trim() }
   }
   const args: Record<string, unknown> = {
     slug: input.slug,
