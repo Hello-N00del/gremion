@@ -153,7 +153,8 @@ cronjob_script() {   # the `backup` container's shell script, dedented
 cronjob_run() {
     local mode="$1" bin="${TEST_TEMP_DIR}/bin" root="${TEST_TEMP_DIR}/backup"
     mkdir -p "$bin" "$root"
-    cronjob_script | sed "s|BACKUP_DIR=/backup|BACKUP_DIR=${root}|" > "${TEST_TEMP_DIR}/cronjob.sh"
+    cronjob_script | sed -e "s|BACKUP_DIR=/backup|BACKUP_DIR=${root}|" -e "s|/tools/rclone|${bin}/rclone|g" > "${TEST_TEMP_DIR}/cronjob.sh"
+    make_rclone_shim "$bin"
     [ -s "${TEST_TEMP_DIR}/cronjob.sh" ]
     cat > "${bin}/pg_dump" <<'SHIM'
 #!/usr/bin/env bash
@@ -305,4 +306,144 @@ run_tenant_backup_stubbed() {
     run_tenant_backup_stubbed alpha
     grep -q -- "pg_dump -Fc -U pg_stub t_01927f00000070008000000000000001__kernel" "${TEST_TEMP_DIR}/docker.log"
     ! grep -q -- "pg_dump -Fc -U pg_stub t_alpha" "${TEST_TEMP_DIR}/docker.log"
+}
+
+# ---------------------------------------------------------------------------
+# Neutral snapshot tag + remote path (the old product name must not be written)
+# ---------------------------------------------------------------------------
+
+@test "backup.sh tags snapshots with the neutral BACKUP_TAG, not the legacy name" {
+    grep -qF 'BACKUP_TAG="${BACKUP_TAG:-gremion}"' "$BACKUP_SCRIPT"
+    grep -qF -- '--tag "$BACKUP_TAG"' "$BACKUP_SCRIPT"
+    assert_absent '(--tag.*stura|RCLONE_REMOTE_PATH:-stura)' "$BACKUP_SCRIPT" "legacy name written by writer"
+}
+
+@test "backup.sh defaults the rclone remote path to gremion-restic" {
+    grep -qF 'RCLONE_REMOTE_PATH:-gremion-restic' "$BACKUP_SCRIPT"
+}
+
+@test "k8s backup cronjob: restic snapshot carries the neutral tag" {
+    cronjob_run ok
+    [ "$status" -eq 0 ]
+    grep -qE '^restic backup .*--tag gremion( |$)' "$RESTIC_LOG"
+    assert_absent 'stura' "$RESTIC_LOG" "legacy tag written by cronjob"
+}
+
+@test "k8s backup cronjob: BACKUP_TAG overrides the tag" {
+    BACKUP_TAG=custom-tag cronjob_run ok
+    [ "$status" -eq 0 ]
+    grep -qE '^restic backup .*--tag custom-tag( |$)' "$RESTIC_LOG"
+}
+
+@test "k8s backup manifests carry no legacy product name" {
+    assert_absent '(--tag.*stura|RCLONE_REMOTE_PATH:-stura)' "${PROJECT_ROOT}/k8s/base/backup/cronjob.yaml" "legacy name written"
+    assert_absent 'stura' "${PROJECT_ROOT}/k8s/base/backup/rclone-secret.yaml" "legacy name"
+}
+
+# ---------------------------------------------------------------------------
+# Guard: the RCLONE_REMOTE_PATH default moved to gremion-restic. An install that
+# never set it must not silently start a fresh repo while its history stays at
+# the legacy path. Explicitly setting RCLONE_REMOTE_PATH always wins, unchecked.
+# ---------------------------------------------------------------------------
+
+# rclone shim: `lsf` lists FAKE_NEW_LISTING for a .../gremion-restic path and
+# FAKE_LEGACY_LISTING for .../stura-restic; every call is logged.
+make_rclone_shim() {   # $1 = bin dir
+    mkdir -p "$1"
+    cat > "$1/rclone" <<'SHIM'
+#!/usr/bin/env bash
+echo "rclone $*" >> "${RCLONE_LOG:-/dev/null}"
+if [[ "$1" == "lsf" ]]; then
+    case "$2" in
+        *gremion-restic) printf '%s' "${FAKE_NEW_LISTING:-}" ;;
+        *stura-restic)   printf '%s' "${FAKE_LEGACY_LISTING:-}" ;;
+    esac
+    exit 0
+fi
+exit 0
+SHIM
+    chmod +x "$1/rclone"
+    export RCLONE_LOG="${TEST_TEMP_DIR}/rclone.log"
+    : > "$RCLONE_LOG"
+}
+
+# backup.sh in a repo-root-shaped tree; docker fails so a run that gets past the
+# guard dies in Phase 1, after (and never before) the guard has spoken.
+guard_tree() {
+    TREE="${TEST_TEMP_DIR}/tree"
+    mkdir -p "${TREE}/scripts" "${TREE}/bin"
+    cp "$BACKUP_SCRIPT" "${TREE}/scripts/backup.sh"
+    printf 'POSTGRES_USER=postgres\nRESTIC_PASSWORD=fixture\n' > "${TREE}/.env"
+    make_rclone_shim "${TREE}/bin"
+    printf '#!/usr/bin/env bash\nexit 1\n' > "${TREE}/bin/docker"
+    chmod +x "${TREE}/bin/docker"
+    export PATH="${TREE}/bin:${PATH}" RCLONE_BUCKET=bkt
+}
+
+@test "backup.sh refuses an unset RCLONE_REMOTE_PATH when only the legacy path holds a repo" {
+    guard_tree
+    FAKE_LEGACY_LISTING=$'config\ndata/\n' run bash "${TREE}/scripts/backup.sh"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"RCLONE_REMOTE_PATH=stura-restic"* ]]
+    [[ "$output" == *"rclone moveto"* ]]
+    [[ "$output" != *"Phase 1"* ]]
+}
+
+@test "backup.sh: an explicit RCLONE_REMOTE_PATH skips the legacy-path check entirely" {
+    guard_tree
+    FAKE_LEGACY_LISTING=$'config\n' RCLONE_REMOTE_PATH=stura-restic run bash "${TREE}/scripts/backup.sh"
+    [[ "$output" != *"rclone moveto"* ]]
+    [[ "$output" == *"Phase 1"* ]]
+    assert_absent 'lsf' "$RCLONE_LOG" "explicit path must not be probed"
+}
+
+@test "backup.sh: no refusal when the new default path already holds a repo" {
+    guard_tree
+    FAKE_NEW_LISTING=$'config\n' FAKE_LEGACY_LISTING=$'config\n' run bash "${TREE}/scripts/backup.sh"
+    [[ "$output" != *"rclone moveto"* ]]
+    [[ "$output" == *"Phase 1"* ]]
+}
+
+@test "backup.sh: no refusal on a fresh install (neither path exists)" {
+    guard_tree
+    run bash "${TREE}/scripts/backup.sh"
+    [[ "$output" != *"rclone moveto"* ]]
+    [[ "$output" == *"Phase 1"* ]]
+}
+
+@test "backup.sh: no remote configured, no probe" {
+    guard_tree
+    unset RCLONE_BUCKET
+    FAKE_LEGACY_LISTING=$'config\n' run bash "${TREE}/scripts/backup.sh"
+    [[ "$output" != *"rclone moveto"* ]]
+}
+
+@test "k8s backup cronjob refuses an unset RCLONE_REMOTE_PATH when only the legacy path holds a repo" {
+    export RCLONE_BUCKET=bkt
+    unset RCLONE_REMOTE_PATH
+    FAKE_LEGACY_LISTING=$'config\n' cronjob_run ok
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"RCLONE_REMOTE_PATH=stura-restic"* ]]
+    [[ "$output" == *"rclone moveto"* ]]
+    assert_absent '^restic backup ' "$RESTIC_LOG" "snapshotted despite the guard"
+}
+
+@test "k8s backup cronjob: an explicit RCLONE_REMOTE_PATH wins with no check" {
+    export RCLONE_BUCKET=bkt
+    FAKE_LEGACY_LISTING=$'config\n' RCLONE_REMOTE_PATH=stura-restic cronjob_run ok
+    [ "$status" -eq 0 ]
+    assert_absent 'lsf' "$RCLONE_LOG" "explicit path must not be probed"
+    grep -q 'sync .* bkt/stura-restic\|bkt/stura-restic' "$RCLONE_LOG"
+}
+
+@test "k8s backup cronjob: fresh install proceeds to the new default path" {
+    export RCLONE_BUCKET=bkt
+    unset RCLONE_REMOTE_PATH
+    cronjob_run ok
+    [ "$status" -eq 0 ]
+    grep -q 'bkt/gremion-restic' "$RCLONE_LOG"
+}
+
+@test "k8s rclone-secret does not pin RCLONE_REMOTE_PATH (it would disable the guard)" {
+    assert_absent '^[[:space:]]+RCLONE_REMOTE_PATH:' "${PROJECT_ROOT}/k8s/base/backup/rclone-secret.yaml" "pinned path"
 }

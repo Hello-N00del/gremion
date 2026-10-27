@@ -48,3 +48,17 @@ assert_file_not_contains() {
         return 1
     fi
 }
+
+# Assert a file does NOT match an ERE. Captured first, never piped into grep.
+assert_absent() {
+    local re="$1" file="$2" why="${3:-pattern present}" hit
+    if [ ! -f "$file" ]; then
+        echo "assert_absent: no such file: ${file}" >&2
+        return 1
+    fi
+    hit="$(grep -nE -- "$re" "$file" || true)"
+    [ -z "$hit" ] && return 0
+    echo "assert_absent: ${why}: /${re}/ found in ${file}" >&2
+    echo "$hit" >&2
+    return 1
+}
