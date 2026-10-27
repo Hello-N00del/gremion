@@ -171,7 +171,7 @@ spec:
                   restic snapshots --quiet >/dev/null 2>&1 || restic init --quiet
                   t0=$(date +%s)
                   restic backup "$DUMP_DIR" \
-                    --tag "$RUN_ID" --tag stura-os \
+                    --tag "$RUN_ID" --tag "${BACKUP_TAG:-gremion}" \
                     --compression max --quiet
                   record "restic_backup" "$t0" "ok"
 
@@ -187,7 +187,7 @@ spec:
                   if [ -n "${RCLONE_BUCKET:-}" ]; then
                     info "=== Phase 4: rclone sync ==="
                     RCLONE_REMOTE="${RCLONE_REMOTE:-backup}"
-                    RCLONE_REMOTE_PATH="${RCLONE_REMOTE_PATH:-stura-restic}"
+                    RCLONE_REMOTE_PATH="${RCLONE_REMOTE_PATH:-gremion-restic}"
                     t0=$(date +%s)
                     /tools/rclone sync "$RESTIC_REPOSITORY" \
                       "$RCLONE_REMOTE:$RCLONE_BUCKET/$RCLONE_REMOTE_PATH" \

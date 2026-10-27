@@ -306,3 +306,35 @@ run_tenant_backup_stubbed() {
     grep -q -- "pg_dump -Fc -U pg_stub t_01927f00000070008000000000000001__kernel" "${TEST_TEMP_DIR}/docker.log"
     ! grep -q -- "pg_dump -Fc -U pg_stub t_alpha" "${TEST_TEMP_DIR}/docker.log"
 }
+
+# ---------------------------------------------------------------------------
+# Neutral snapshot tag + remote path (the old product name must not be written)
+# ---------------------------------------------------------------------------
+
+@test "backup.sh tags snapshots with the neutral BACKUP_TAG, not the legacy name" {
+    grep -qF 'BACKUP_TAG="${BACKUP_TAG:-gremion}"' "$BACKUP_SCRIPT"
+    grep -qF -- '--tag "$BACKUP_TAG"' "$BACKUP_SCRIPT"
+    assert_absent 'stura' "$BACKUP_SCRIPT" "legacy product name in writer"
+}
+
+@test "backup.sh defaults the rclone remote path to gremion-restic" {
+    grep -qF 'RCLONE_REMOTE_PATH:-gremion-restic' "$BACKUP_SCRIPT"
+}
+
+@test "k8s backup cronjob: restic snapshot carries the neutral tag" {
+    cronjob_run ok
+    [ "$status" -eq 0 ]
+    grep -qE '^restic backup .*--tag gremion( |$)' "$RESTIC_LOG"
+    assert_absent 'stura' "$RESTIC_LOG" "legacy tag written by cronjob"
+}
+
+@test "k8s backup cronjob: BACKUP_TAG overrides the tag" {
+    BACKUP_TAG=custom-tag cronjob_run ok
+    [ "$status" -eq 0 ]
+    grep -qE '^restic backup .*--tag custom-tag( |$)' "$RESTIC_LOG"
+}
+
+@test "k8s backup manifests carry no legacy product name" {
+    assert_absent 'stura' "${PROJECT_ROOT}/k8s/base/backup/cronjob.yaml" "legacy name"
+    assert_absent 'stura' "${PROJECT_ROOT}/k8s/base/backup/rclone-secret.yaml" "legacy name"
+}

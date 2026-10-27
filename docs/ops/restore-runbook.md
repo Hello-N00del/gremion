@@ -127,7 +127,7 @@ mkdir -p /path/to/new-repo
 # 2. Sync from remote (RCLONE_* env vars must be set in .env)
 source .env
 rclone sync \
-  "${RCLONE_REMOTE:-backup}:${RCLONE_BUCKET}/${RCLONE_REMOTE_PATH:-stura-restic}" \
+  "${RCLONE_REMOTE:-backup}:${RCLONE_BUCKET}/${RCLONE_REMOTE_PATH:-gremion-restic}" \
   /path/to/new-repo
 
 # 3. Point restic at the restored repo
@@ -144,6 +144,25 @@ restic check
 rclone remote credentials are read from the `RCLONE_*` variables in `.env`
 (`RCLONE_BACKEND_TYPE`, `RCLONE_ENDPOINT`, `RCLONE_ACCESS_KEY_ID`,
 `RCLONE_SECRET_ACCESS_KEY`, `RCLONE_BUCKET`).
+
+### Migrating from the legacy tag and remote path
+
+Backups used to tag every snapshot `stura-os` and sync to the remote path
+`stura-restic`. New backups write the tag `gremion` (`BACKUP_TAG`) and sync to
+`gremion-restic` (`RCLONE_REMOTE_PATH`).
+
+- **Snapshots stay restorable.** `restore.sh` lists and restores snapshots
+  carrying EITHER `$BACKUP_TAG` (default `gremion`) OR `$BACKUP_LEGACY_TAG`
+  (default `stura-os`). Nothing needs rewriting. Existing snapshots keep their
+  old tag; only new ones carry `gremion`.
+- **Remote path.** Existing remote data lives under `stura-restic`. Either keep
+  using it (`RCLONE_REMOTE_PATH=stura-restic` in `.env` / the K8s Secret), or
+  move it once, before the next backup run:
+  `rclone moveto "$RCLONE_REMOTE:$RCLONE_BUCKET/stura-restic" "$RCLONE_REMOTE:$RCLONE_BUCKET/gremion-restic"`.
+  Without one of the two, the next sync writes a fresh `gremion-restic` copy
+  and the old path is left behind (still restorable from it as above).
+- Optional retag (rarely needed):
+  `restic tag --add gremion --tag stura-os`.
 
 ---
 

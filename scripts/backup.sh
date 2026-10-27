@@ -26,7 +26,8 @@
 #   BACKUP_LOCAL_RETENTION_DAYS  (default: 30)
 #   RCLONE_REMOTE              — rclone remote name (default: backup)
 #   RCLONE_BUCKET              — bucket/container name on remote
-#   RCLONE_REMOTE_PATH         — path within bucket (default: stura-restic)
+#   RCLONE_REMOTE_PATH         — path within bucket (default: gremion-restic)
+#   BACKUP_TAG                 — restic tag on every snapshot (default: gremion)
 #   RESTIC_CHECK_SUBSET        — fraction to read-verify (default: 10%)
 #
 # rclone remote credentials are read from environment variables using
@@ -80,7 +81,8 @@ RESTIC_REPOSITORY="${RESTIC_REPOSITORY:-${BACKUP_DIR}/repo}"
 LOCAL_RETENTION="${BACKUP_LOCAL_RETENTION_DAYS:-30}d"
 RCLONE_REMOTE="${RCLONE_REMOTE:-backup}"
 RCLONE_BUCKET="${RCLONE_BUCKET:-}"
-RCLONE_REMOTE_PATH="${RCLONE_REMOTE_PATH:-stura-restic}"
+RCLONE_REMOTE_PATH="${RCLONE_REMOTE_PATH:-gremion-restic}"
+BACKUP_TAG="${BACKUP_TAG:-gremion}"
 CHECK_SUBSET="${RESTIC_CHECK_SUBSET:-10%}"
 DATE=$(date +%Y%m%d-%H%M%S)
 RUN_ID="backup-${DATE}"
@@ -175,7 +177,7 @@ fi
 t0=$(date +%s)
 restic backup "$DUMP_DIR" \
     --tag "$RUN_ID" \
-    --tag "stura-os" \
+    --tag "$BACKUP_TAG" \
     --compression max \
     --quiet
 t1=$(date +%s)
