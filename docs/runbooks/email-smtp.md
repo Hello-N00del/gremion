@@ -31,7 +31,14 @@ default** (an unset value is a named failure, never a silent guess):
   (DMARC stays `p=reject`). **Accepted loss:** one shared credential means no
   per-tenant sender isolation. No mail project runs, Prometheus has no `stalwart`
   target and no mail probe target, and the `MailQueueOldest1h` alert is not
-  rendered (`gremion-mail-bringup` refuses with the reason).
+  rendered. `gremion-mail-bringup --assert relay --external-to <mailbox>
+  [--results-file <headers>]` is the relay's go-live check: r1 the relay
+  answers, r2 STARTTLS is offered and the certificate is trusted for the relay
+  host, r3 an authenticated test message from `system@` is accepted (the
+  password rides a pipe into `curl -K -`, never an argv), r4 the delivered
+  message's headers show the relay DKIM-signed the platform domain with DMARC
+  pass (`check-received --relay`). The bundled-server asserts 1-6b are refused
+  by name in this mode; a skipped check is not a pass.
 - `stalwart`: the bundled Stalwart; each customer realm sends as its own
   `kc-<token>@` principal (unchanged).
 

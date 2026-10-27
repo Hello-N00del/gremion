@@ -21,6 +21,12 @@ set -euo pipefail
 #   gremion-mail transport                    print the resolved transport
 #   gremion-mail sender-json                  the reconcile / record-step descriptor
 #                                             of this transport (one JSON line, no secret)
+#   gremion-mail relay-curl-config --to <addr> --message <file>
+#                                             (relay only) a curl config for ONE test
+#                                             message through the relay, on stdout, for
+#                                             curl -K -: the bring-up's authenticated
+#                                             probe (M6). It carries the relay password,
+#                                             so it is only ever piped, never stored.
 #   gremion-mail realm-smtp [same arms as gremion-vendor-mail realm-smtp]
 #       realm-smtp                            master -> the vendor sender
 #       realm-smtp --realm platform           the ops realm -> the vendor sender
@@ -52,6 +58,7 @@ mail_usage() {
 usage: gremion-mail <subcommand> [args...]
   transport             print the resolved MAIL_TRANSPORT (relay | stalwart)
   sender-json           the sender descriptor of this transport, one JSON line
+  relay-curl-config --to <addr> --message <file>   (relay only; prints a secret: pipe it to curl -K -)
   realm-smtp [--realm <r> [--tenant <token> [--rotate|--revoke]]]
 EOF
 }
@@ -268,12 +275,46 @@ cmd_sender_json() {
         '{mode: "relay", host: $h, port: $p, fromAddress: $f, user: $u}'
 }
 
+# cmd_relay_curl_config --to <addr> --message <file> -- PLAN-mail-transport M6.
+# The curl config of one authenticated test message through the relay. Values sit
+# in double quotes, so a password quote or backslash is escaped; a recipient or a
+# path that could end the value early is refused before anything is printed.
+cmd_relay_curl_config() {
+    local to="" msg=""
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --to)      [[ $# -ge 2 ]] || die "--to requires a value" "$GREMION_EXIT_USAGE"; to="$2"; shift 2 ;;
+            --message) [[ $# -ge 2 ]] || die "--message requires a value" "$GREMION_EXIT_USAGE"; msg="$2"; shift 2 ;;
+            *) mail_usage >&2; die "relay-curl-config: unknown argument: $1" "$GREMION_EXIT_USAGE" ;;
+        esac
+    done
+    [[ "$TRANSPORT" == relay ]] || die "relay-curl-config is a relay-mode verb; MAIL_TRANSPORT=${TRANSPORT}" "$GREMION_EXIT_USAGE"
+    [[ "$to" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$ ]] \
+        || die "relay-curl-config --to needs one plain recipient address" "$GREMION_EXIT_USAGE"
+    [[ -n "$msg" && "$msg" =~ ^/[A-Za-z0-9._/@+-]+$ ]] \
+        || die "relay-curl-config --message needs an absolute path of plain characters" "$GREMION_EXIT_USAGE"
+    load_relay_config
+    local scheme=smtp
+    [[ "$RELAY_PORT" == 465 ]] && scheme=smtps
+    printf 'url = "%s://%s:%s"\n' "$scheme" "$RELAY_HOST" "$RELAY_PORT"
+    [[ "$scheme" == smtps ]] || printf 'ssl-reqd\n'
+    printf 'mail-from = "system@%s"\n' "$FROM_DOMAIN"
+    printf 'mail-rcpt = "%s"\n' "$to"
+    printf 'upload-file = "%s"\n' "$msg"
+    if [[ -n "$RELAY_USER" ]]; then
+        local pw; pw="$(relay_password)"
+        pw="${pw//\\/\\\\}"
+        pw="${pw//\"/\\\"}"
+        printf 'user = "%s:%s"\n' "$RELAY_USER" "$pw"
+    fi
+}
+
 main() {
     [[ $# -ge 1 ]] || { mail_usage >&2; exit "$GREMION_EXIT_USAGE"; }
     local sub="$1"; shift
     case "$sub" in
         -h|--help) mail_usage; exit "$GREMION_EXIT_OK" ;;
-        transport|sender-json|realm-smtp) ;;
+        transport|sender-json|relay-curl-config|realm-smtp) ;;
         *) mail_usage >&2; die "unknown subcommand: ${sub}" "$GREMION_EXIT_USAGE" ;;
     esac
     TRANSPORT=""
@@ -281,6 +322,7 @@ main() {
     case "$sub" in
         transport)   printf '%s\n' "$TRANSPORT" ;;
         sender-json) need_cmd jq; cmd_sender_json ;;
+        relay-curl-config) cmd_relay_curl_config "$@" ;;
         realm-smtp)
             if [[ "$TRANSPORT" == stalwart ]]; then
                 # Byte-identical to calling the stalwart implementation directly.

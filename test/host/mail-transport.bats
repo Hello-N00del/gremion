@@ -363,3 +363,54 @@ OPS_TMPL_T="${BATS_TEST_DIRNAME}/../../infra/host/templates/env/ops.env.tmpl"
     [ "$(jq -r .port <<<"$output")" = 587 ]
     [ "$(jq -r .fromAddress <<<"$output")" = no-reply@example.org ]
 }
+
+# ── M6: relay-curl-config, the one place the relay password becomes a curl config ──
+# The bring-up's authenticated test message pipes this to `curl -K -`: the
+# password rides a pipe, never an argv, never a file.
+
+@test "M6 relay-curl-config: a STARTTLS relay on 587 gets smtp://, ssl-reqd, the system@ envelope sender and the password as a user line" {
+    relay_env
+    run "$MAIL" relay-curl-config --to probe@example.net --message /work/msg
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
+    [[ "$output" == *'url = "smtp://relay.example.net:587"'* ]]
+    [[ "$output" == *'ssl-reqd'* ]]
+    [[ "$output" == *'mail-from = "system@example.org"'* ]]
+    [[ "$output" == *'mail-rcpt = "probe@example.net"'* ]]
+    [[ "$output" == *'upload-file = "/work/msg"'* ]]
+    [[ "$output" == *"user = \"relay-user@example.org:${RELAY_PW}\""* ]]
+}
+
+@test "M6 relay-curl-config: port 465 is implicit TLS (smtps://, no ssl-reqd); an unauthenticated relay has no user line" {
+    write_mail_env relay 'RELAY_SMTP_HOST=relay.example.net' 'RELAY_SMTP_PORT=465' 'RELAY_SMTP_USER='
+    run "$MAIL" relay-curl-config --to probe@example.net --message /work/msg
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
+    [[ "$output" == *'url = "smtps://relay.example.net:465"'* ]]
+    [[ "$output" != *'ssl-reqd'* ]]
+    [[ "$output" != *'user ='* ]]
+}
+
+@test "M6 relay-curl-config: a password with a quote and a backslash is escaped so it cannot end the curl value early" {
+    relay_env
+    printf '%s\n' 'pa"ss\w' > "${GREMION_ROOT}/etc/secrets/mail/relay-password"
+    chmod 600 "${GREMION_ROOT}/etc/secrets/mail/relay-password"
+    run "$MAIL" relay-curl-config --to probe@example.net --message /work/msg
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
+    [[ "$output" == *'user = "relay-user@example.org:pa\"ss\\w"'* ]] || { echo "$output"; return 1; }
+}
+
+@test "M6 relay-curl-config: refuses in stalwart mode, on a bad recipient, a quote in the path, a missing --to, and a world-readable password file" {
+    write_mail_env stalwart
+    run "$MAIL" relay-curl-config --to probe@example.net --message /work/msg
+    [ "$status" -eq 2 ] || { echo "stalwart: status=$status $output"; return 1; }
+    relay_env
+    run "$MAIL" relay-curl-config --to 'a b@example.net' --message /work/msg
+    [ "$status" -eq 2 ] || { echo "bad rcpt: status=$status $output"; return 1; }
+    run "$MAIL" relay-curl-config --to probe@example.net --message '/work/m"sg'
+    [ "$status" -eq 2 ] || { echo "bad path: status=$status $output"; return 1; }
+    run "$MAIL" relay-curl-config --message /work/msg
+    [ "$status" -eq 2 ] || { echo "no --to: status=$status $output"; return 1; }
+    chmod 644 "${GREMION_ROOT}/etc/secrets/mail/relay-password"
+    run "$MAIL" relay-curl-config --to probe@example.net --message /work/msg
+    [ "$status" -eq 2 ] || { echo "open pw file: status=$status $output"; return 1; }
+    [[ "$output" == *"readable by other"* ]]
+}
