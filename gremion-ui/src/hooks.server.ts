@@ -15,6 +15,7 @@ import { requireBrand } from '$lib/server/brand'
 import { instanceThemeStyleTag } from '$lib/theme/instance-theme'
 import { waitForDbReady, isTransientDbStartupError } from '$lib/server/db'
 import { isBootAndResolveExempt } from '$lib/server/boot-exempt'
+import { decodeRequestPath, requestPath } from '$lib/server/request-path'
 import { startProvisioningWorker } from '$lib/server/governance/provisioning/worker'
 import { verifyBearerJwt } from '$lib/server/jwt-verify'
 import { isInternalBearerRequest } from '$lib/server/internal-fetch'
@@ -497,7 +498,7 @@ function internalBearerRejected(ctx: InternalBearerRejection): Response {
 }
 
 export const authGuard: Handle = async ({ event, resolve }) => {
-  const path = event.url.pathname
+  const path = requestPath(event)
 
   // Default locals to a known shape before any branching. authGuard is the
   // single place that populates `user` and `accessToken`; downstream routes
@@ -922,8 +923,20 @@ export const correlationHandle: Handle = ({ event, resolve }) => {
 // /api/internal/ call naming no tenant — see boot-exempt.ts) skips it; the
 // authGuard below is what answers such a request. A tenant-resolved request
 // goes through Auth.js exactly as before.
+/**
+ * Decode the request path ONCE (400 on a malformed escape) and expose it as
+ * event.locals.decodedPath; every later path check reads that value, never the
+ * raw event.url.pathname (which the router does not match on).
+ */
+export const requestPathHandle: Handle = ({ event, resolve }) => {
+  const decoded = decodeRequestPath(event.url.pathname)
+  if (decoded === null) return new Response('Bad Request', { status: 400 })
+  event.locals.decodedPath = decoded
+  return resolve(event)
+}
+
 export const authHandleUnlessExempt: Handle = ({ event, resolve }) =>
-  isBootAndResolveExempt(event.url.pathname) && !event.locals.tenant
+  isBootAndResolveExempt(requestPath(event)) && !event.locals.tenant
     ? resolve(event)
     : authHandle({ event, resolve })
 
@@ -936,6 +949,7 @@ export const authHandleUnlessExempt: Handle = ({ event, resolve }) =>
 export const handle = sequence(
   correlationHandle,
   cspGuard,
+  requestPathHandle,
   tenantResolveHandle,
   tenantBrandStyleHandle,
   sessionEndpointGuard,

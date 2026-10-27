@@ -244,3 +244,53 @@ describe('newsletter unsubscribe is exempt from the module gate (F5 r2)', () => 
     expect(disabledModuleForPath('/api/newsletter/unsubscribe', { modules: { newsletter: false } } as never)).toBeNull()
   })
 })
+
+// Raw-vs-decoded path: SvelteKit routes on the DECODED path, so the gate must
+// compare the decoded one. `/api/demo-widget` and its encoded spellings must
+// get the identical response.
+describe('module gate uses the decoded path (encoded-path bypass)', () => {
+  const cases: [string, string][] = [
+    ['percent-encoded letter', '/api/demo-w%69dget/things'],
+    ['mixed-case hex digit', '/api/demo-%77idget/things'],
+    ['upper-case hex digit', '/api/%64emo-widget/things'],
+    ['encoded slash after prefix', '/api/demo-widget%2Fthings'],
+    ['encoded slash lower-case', '/api/demo-widget%2fthings'],
+    ['page deep link, encoded', '/demo-w%69dget/x'],
+  ]
+  for (const [name, path] of cases) {
+    it(`${name} (${path}) -> 403, cookie session`, async () => {
+      modulesState.demo_widget = false
+      const mod = await import('./hooks.server'); await mod.boot()
+      const event = makeEvent({ path, session: { user: { id: 'u1', roles: ['member'], groups: [] }, accessToken: 'kc', tokenIss: ISS } })
+      const res = (await mod.authGuard({ event: event as never, resolve: resolveSpy } as never)) as Response
+      expect(res.status).toBe(403)
+    })
+  }
+
+  it('encoded API path -> 403 Module disabled for a BEARER client too', async () => {
+    modulesState.demo_widget = false
+    bearerPayload = { sub: 'mob1', iss: ISS, realm_access: { roles: ['member'] }, exp: 9999999999 }
+    const mod = await import('./hooks.server'); await mod.boot()
+    const event = makeEvent({ path: '/api/demo-w%69dget/things', headers: { Authorization: 'Bearer aaa.bbb.ccc' } })
+    const res = (await mod.authGuard({ event: event as never, resolve: resolveSpy } as never)) as Response
+    expect(res.status).toBe(403)
+    expect(await res.text()).toBe('Module disabled')
+  })
+
+  it('encoded path to an ENABLED module still passes (no over-blocking)', async () => {
+    const mod = await import('./hooks.server'); await mod.boot()
+    const event = makeEvent({ path: '/api/demo-w%69dget/things', session: { user: { id: 'u1', roles: ['member'], groups: [] }, accessToken: 'kc', tokenIss: ISS } })
+    const res = (await mod.authGuard({ event: event as never, resolve: resolveSpy } as never)) as Response
+    expect(res.status).toBe(200)
+  })
+
+  it('requestPathHandle rejects a malformed escape with 400 and decodes otherwise', async () => {
+    const mod = await import('./hooks.server')
+    const bad = makeEvent({ path: '/api/demo-widget/%E0%A4%A' })
+    const res = (await mod.requestPathHandle({ event: bad as never, resolve: resolveSpy } as never)) as Response
+    expect(res.status).toBe(400)
+    const ok = makeEvent({ path: '/api/demo-w%69dget' })
+    await mod.requestPathHandle({ event: ok as never, resolve: resolveSpy } as never)
+    expect(ok.locals.decodedPath).toBe('/api/demo-widget')
+  })
+})
