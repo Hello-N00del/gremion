@@ -39,6 +39,8 @@ export const CARVE_LINT_TARGETS = [
   { name: 'lint-yaml', kind: 'make', target: 'lint-yaml', tool: 'yamllint' },
   { name: 'lint-json', kind: 'make', target: 'lint-json', tool: 'python3' },
   { name: 'lint-compose', kind: 'make', target: 'lint-compose', tool: 'docker' },
+  // G-037: no floating :latest image in the compose render (needs docker + jq).
+  { name: 'lint-compose-latest', kind: 'make', target: 'lint-compose-latest', tool: 'docker' },
   // TASK-022 merged lint-edge-render after this list was written (the meta-test
   // caught it on main, R25). It renders the production composition: docker.
   { name: 'lint-edge-render', kind: 'make', target: 'lint-edge-render', tool: 'docker' },
