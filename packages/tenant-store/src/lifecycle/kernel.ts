@@ -8,7 +8,13 @@
 //   k_<hex32>_app     LOGIN NOBYPASSRLS NOCREATEDB NOCREATEROLE, SCRAM verifier;
 //                     a member of the owner (named deviation until TASK-192:
 //                     gremion-ui's boot fleet still runs DDL as the app);
-//   k_<hex32>_purger  NOLOGIN, NOT a member of the owner (retention jobs).
+//   k_<hex32>_purger  NOLOGIN at rest, no password, NOT a member of the owner
+//                     and of nothing else (retention jobs). The purge run
+//                     (purge.ts) gives it LOGIN and a one-run password that
+//                     expires with the run, and LOGS IN as it: no superuser
+//                     session ever executes a statement that fires tenant code.
+//                     CONNECT + USAGE on public here; SELECT, DELETE on exactly
+//                     the purge tables after the kernel chain (ensureKernelPurgeGrants).
 // Then: PUBLIC loses CONNECT and TEMPORARY, the app gains CONNECT; timezone
 // UTC; PUBLIC loses CREATE on schema public; pgbouncer.get_auth (the
 // auth_query PgBouncer resolves SCRAM verifiers through, which the old
@@ -103,6 +109,8 @@ export async function ensureKernelRoles(admin: Sql, tenantId: string, appPasswor
   await ensureRole(admin, roles.owner, 'NOLOGIN')
   await ensureRole(admin, roles.app, 'LOGIN')
   await ensureRole(admin, roles.purger, 'NOLOGIN')
+  // at rest the purger has no credential at all (purge.ts mints one per run)
+  await execFormatted(admin, 'ALTER ROLE %I PASSWORD NULL', [roles.purger])
   await execFormatted(admin, 'ALTER ROLE %I PASSWORD %L', [roles.app, scramSha256Verifier(appPassword)])
   // Q3 deviation (TASK-192): the app keeps owner membership while gremion-ui's
   // boot fleet runs the kernel chain as the app. The purger never does.
@@ -148,6 +156,8 @@ export async function ensureKernelDatabase(server: ModuleServer, tenantId: strin
     throw new LifecycleError('DATABASE_FOREIGN_OWNER', `${dbName} exists but is owned by ${owner ?? 'nobody'}, not ${roles.owner}: refusing to adopt a database the lifecycle did not create`)
   }
   await lockDownDatabase(server.admin, dbName, roles.app)
+  // the purge run logs in to this database as the purger (purge.ts): CONNECT, never TEMPORARY
+  await execFormatted(server.admin, 'GRANT CONNECT ON DATABASE %I TO %I', [dbName, roles.purger])
   await execFormatted(server.admin, 'ALTER DATABASE %I SET timezone TO %L', [dbName, 'UTC'])
 
   const db = await server.open(dbName)
@@ -156,6 +166,7 @@ export async function ensureKernelDatabase(server: ModuleServer, tenantId: strin
     const [who] = await db<{ db: string }[]>`SELECT current_database() AS db`
     if (who?.db !== dbName) throw new LifecycleError('TARGET_REFUSED', `the admin pool is connected to ${JSON.stringify(who?.db)}, not ${dbName}`)
     await db.unsafe('REVOKE CREATE ON SCHEMA public FROM PUBLIC')
+    await execFormatted(db, 'GRANT USAGE ON SCHEMA public TO %I', [roles.purger])
     await db.unsafe(GET_AUTH)
     const [auth] = await db<{ present: boolean }[]>`SELECT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'pgbouncer_auth') AS present`
     if (auth?.present) {

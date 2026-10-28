@@ -101,3 +101,13 @@ teardown() {
     run env GREMION_ROOT="$GREMION_ROOT" "$RUN" --all
     [ "$status" -eq 2 ]
 }
+
+@test "lock wait + one-shot start + the run's own deadline + the record fit inside TimeoutStartSec (the job_run row is written at the end)" {
+    local timeout wait deadline_ms
+    timeout="$(sed -n 's/^TimeoutStartSec=\([0-9]*\)$/\1/p' "${UNIT_DIR}/gremion-purge.service")"
+    wait="$(sed -n 's/.*flock -w "${PURGE_LOCK_WAIT:-\([0-9]*\)}".*/\1/p' "$PURGE")"
+    deadline_ms="$(sed -n 's/^export const PURGE_DEADLINE_MS = \([0-9_]*\)$/\1/p' "$PURGE_TS" | tr -d _)"
+    [ -n "$timeout" ] && [ -n "$wait" ] && [ -n "$deadline_ms" ]
+    # 15 s for `docker compose run` to start the one-shot, 25 s for the record and teardown
+    (( wait + 15 + deadline_ms / 1000 + 25 <= timeout ))
+}

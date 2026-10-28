@@ -4,7 +4,7 @@ import { readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
-import { PURGE_RESIDUAL, PURGE_RULES, deleteBatchSql, purgeCutoff } from './purge.js'
+import { PURGE_DEADLINE_MS, PURGE_RESIDUAL, PURGE_RULES, deleteBatchSql, purgeCutoff, refusalOf, type PurgeTableShape } from './purge.js'
 
 const REPO = fileURLToPath(new URL('../../../../', import.meta.url))
 const CATALOGUE = readFileSync(join(REPO, 'docs/compliance/retention-catalogue.md'), 'utf8')
@@ -70,6 +70,61 @@ describe('PURGE_RULES against the retention catalogue', () => {
       expect(res.reason.length).toBeGreaterThan(10)
       expect(ruleRows.has(res.catalogueRow) && !res.partOf, `${res.catalogueRow} is a rule and a whole-row residual`).toBe(false)
     }
+  })
+})
+
+describe('the tenant-code refusal (defence in depth under the purger login)', () => {
+  const kernelRules = PURGE_RULES.filter((r) => r.scope === 'kernel')
+  const on = (table: string) => `(?:public\\.)?"?${table}"?\\b`
+
+  it.each(kernelRules.map((r) => [r.id, r] as const))('%s: kernelTriggers is exactly what the kernel migrations create; no policy, rule, RLS or foreign key into it', (_id, rule) => {
+    expect(rule.kernelTriggers, `${rule.id} states its kernel triggers`).toBeDefined()
+    const triggers = [...KERNEL_SQL.matchAll(new RegExp(`CREATE\\s+(?:OR\\s+REPLACE\\s+)?(?:CONSTRAINT\\s+)?TRIGGER\\s+"?(\\w+)"?[^;]*?\\bON\\s+${on(rule.table)}`, 'gi'))].map((m) => m[1])
+    const byName = (a: string | undefined, b: string | undefined) => String(a).localeCompare(String(b))
+    expect(triggers.sort(byName)).toEqual([...rule.kernelTriggers!].sort(byName))
+    expect(KERNEL_SQL).not.toMatch(new RegExp(`CREATE\\s+POLICY[^;]*\\bON\\s+${on(rule.table)}`, 'i'))
+    expect(KERNEL_SQL).not.toMatch(new RegExp(`CREATE\\s+(?:OR\\s+REPLACE\\s+)?RULE[^;]*\\bTO\\s+${on(rule.table)}`, 'i'))
+    expect(KERNEL_SQL).not.toMatch(new RegExp(`ALTER\\s+TABLE\\s+(?:ONLY\\s+)?${on(rule.table)}[^;]*ROW\\s+LEVEL\\s+SECURITY`, 'i'))
+    expect(KERNEL_SQL).not.toMatch(new RegExp(`REFERENCES\\s+${on(rule.table)}`, 'i'))
+  })
+
+  it('the trigger scan finds a trigger the kernel does create (audit_log, 0043), so an empty list is a real finding', () => {
+    const m = [...KERNEL_SQL.matchAll(new RegExp(`CREATE\\s+(?:OR\\s+REPLACE\\s+)?(?:CONSTRAINT\\s+)?TRIGGER\\s+"?(\\w+)"?[^;]*?\\bON\\s+${on('audit_log')}`, 'gi'))].map((x) => x[1])
+    expect(m).toContain('audit_log_hash_chain_trg')
+  })
+
+  const plain: PurgeTableShape = { kind: 'r', children: 0, rls: false, granted: true, triggers: [], policies: [], rules: [], referencedBy: [] }
+  const ec = kernelRules.find((r) => r.table === 'event_consumption')!
+
+  it('a plain, granted table with no tenant code is not refused', () => {
+    expect(refusalOf(ec, plain)).toBeNull()
+  })
+  it.each([
+    ['a trigger the kernel does not create', { triggers: ['esc'] }, /trigger esc/],
+    ['row-level security', { rls: true }, /row-level security/],
+    ['a policy', { policies: ['p'] }, /policy p/],
+    ['a rewrite rule', { rules: ['r'] }, /rewrite rule r/],
+    ['a foreign key into it (ON DELETE CASCADE runs the referencing table\'s triggers)', { referencedBy: ['fk'] }, /foreign key fk/],
+    ['a child table (DELETE without ONLY would reach it)', { children: 1 }, /child table/],
+    ['a view in its place', { kind: 'v' }, /not a plain table/],
+    ['a missing grant', { granted: false }, /lacks SELECT, DELETE/],
+  ] as const)('refuses %s', (_what, patch, msg) => {
+    expect(refusalOf(ec, { ...plain, ...patch })).toMatch(msg)
+  })
+
+  it('the batch SQL is ONLY (no child table) and schema-qualifies what name resolution could shadow', () => {
+    for (const r of PURGE_RULES) {
+      const sql = deleteBatchSql(r)
+      expect(sql).toMatch(/DELETE FROM ONLY /)
+      expect(sql).toMatch(/SELECT ctid FROM ONLY /)
+      expect(sql).toContain('pg_catalog.count(*)')
+      expect(sql).toContain('$1::pg_catalog.timestamptz')
+    }
+  })
+
+  it('the deadline leaves room inside the unit\'s TimeoutStartSec (purge.bats checks the sum with the lock wait)', () => {
+    expect(PURGE_DEADLINE_MS).toBeGreaterThan(0)
+    expect(PURGE_DEADLINE_MS).toBeLessThanOrEqual(120_000)
   })
 })
 

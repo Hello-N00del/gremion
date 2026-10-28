@@ -14,8 +14,9 @@ SupplementaryGroups=docker
 Environment=GREMION_ROOT=${GREMION_ROOT}
 ExecStart=${GREMION_ROOT}/current/infra/host/ops/purge.sh
 # A stuck call dies inside the 4-minute rule instead of hanging the unit. The
-# purge deletes in batches and every rule is "older than now - window", so a
-# run cut short here is finished by the next day's.
+# run stops itself first (PURGE_DEADLINE_MS, 110 s, after purge.sh's 20 s host
+# lock wait) and records a partial plt.job_run row; every rule is "older than
+# now - window", so a run cut short is finished by the next day's.
 TimeoutStartSec=170
 ProtectSystem=full
 NoNewPrivileges=true

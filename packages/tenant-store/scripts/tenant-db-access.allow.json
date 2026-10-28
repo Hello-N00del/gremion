@@ -42,11 +42,11 @@
     },
     {
       "path": "gremion-ui/src/lib/server/tenant/provisioner/customer-adapters.ts",
-      "calls": 3,
+      "calls": 4,
       "imports": 1,
       "adoptedBy": "TASK-077",
       "since": "2026-09-30",
-      "reason": "TASK-043 tenant-create adapters: the kernel server's POSTGRES_USER as the injected ModuleServer of ensureKernelDatabase, and a read-only post-condition read of the new kernel database's ledger and counts; no tenant data-plane pool (the kernel migration runs inside runWithTenant on the provisioning context)"
+      "reason": "TASK-043 tenant-create adapters: the kernel server's POSTGRES_USER as the injected ModuleServer of ensureKernelDatabase, a read-only post-condition read of the new kernel database's ledger and counts, and (TRD-144/145) PurgeServer.login: the purge run's own login AS a customer's k_<hex>_purger with a one-run password (max 1, search_path=pg_catalog), so no superuser session executes the purge DELETE; no tenant data-plane pool (the kernel migration runs inside runWithTenant on the provisioning context)"
     },
     {
       "path": "apps/control-panel/src/lib/server/customers.ts",
