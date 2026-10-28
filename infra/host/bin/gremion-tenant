@@ -492,6 +492,9 @@ cmd_export() {
     local slug="$1" dir="$2" bad
     need_slug "$slug"
     [[ "$dir" == /* ]] || die "export: <dir> must be an absolute path" "$GREMION_EXIT_USAGE"
+    # A trailing slash would make the symlink test below follow the link (lstat of "link/" is the target).
+    while [[ "$dir" == */ ]]; do dir="${dir%/}"; done
+    [[ -n "$dir" ]] || die "export: <dir> must name a directory, not /" "$GREMION_EXIT_USAGE"
     [[ "$dir" =~ ^/[A-Za-z0-9._/-]+$ && "$dir" != *..* ]] || die "export: <dir> may only contain A-Za-z0-9._/- and no '..' (it becomes a docker bind source)" "$GREMION_EXIT_USAGE"
     [[ ! -L "$dir" ]] || die "export: <dir> is a symlink" "$GREMION_EXIT_USAGE"
     if [[ -e "$dir" ]]; then

@@ -902,6 +902,29 @@ release_repo() {
     [ -z "$output" ]
 }
 
+@test "export: a trailing slash does not hide a symlinked <dir> (exit 2), nothing is created or written behind it" {
+    mkdir "${GREMION_ROOT}/real"; ln -s "${GREMION_ROOT}/real" "${GREMION_ROOT}/link"
+    run "$LAUNCHER" export alpha-rat "${GREMION_ROOT}/link/"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"symlink"* ]]
+    run "$LAUNCHER" export alpha-rat "${GREMION_ROOT}/link//"
+    [ "$status" -eq 2 ]
+    [ -z "$(ls -A "${GREMION_ROOT}/real")" ]
+    [ "$(stat -c %a "${GREMION_ROOT}/real")" != 700 ]
+    run "$LAUNCHER" export alpha-rat //
+    [ "$status" -eq 2 ]
+    run steps
+    [ -z "$output" ]
+}
+
+@test "export: a plain <dir> with a trailing slash is accepted as the same directory" {
+    run "$LAUNCHER" export alpha-rat "${GREMION_ROOT}/slashed/"
+    [ "$status" -eq 0 ]
+    [ -d "${GREMION_ROOT}/slashed" ]
+    grep -q -- "${GREMION_ROOT}/slashed:/export" "${GREMION_ROOT}/export-argv"
+    ! grep -q -- "slashed/:/export" "${GREMION_ROOT}/export-argv"
+}
+
 @test "export: creates the directory 0700, runs export then a SEPARATE export-verify, bind-mounted, as the invoking user" {
     run "$LAUNCHER" export alpha-rat "${GREMION_ROOT}/out"
     [ "$status" -eq 0 ]
