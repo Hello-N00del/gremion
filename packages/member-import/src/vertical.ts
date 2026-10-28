@@ -15,6 +15,8 @@ export class VerticalError extends Error {
 }
 
 const key = z.string().regex(/^[a-z][a-z0-9-]{0,62}$/)
+/** a unit kind (org_units.kind): the catalogue's own keys may use underscores (`district_council`) */
+const kindKey = z.string().regex(/^[a-z][a-z0-9_-]{0,62}$/)
 
 export const verticalManifestSchema = z.strictObject({
   schema_version: z.literal(1),
@@ -48,7 +50,7 @@ export const blueprintSeatSchema = z.strictObject({
 })
 
 export const blueprintKindSchema = z.strictObject({
-  key,
+  key: kindKey,
   label: z.string(),
   childTerm: z.string().nullable().optional(),
   allowedParentKinds: z.array(z.string()),

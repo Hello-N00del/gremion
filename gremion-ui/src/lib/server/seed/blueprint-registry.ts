@@ -21,7 +21,6 @@ import { readFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { loadVertical, type Vertical } from '@gremion/member-import'
 import type { GremionBlueprint } from './org-blueprint'
-import { MUNICIPAL_BLUEPRINT } from './municipal-blueprint'
 
 /** The kernel's neutral blueprint ref. */
 export const KERNEL_BLUEPRINT_REF = 'KERNEL_BLUEPRINT@1' as const
@@ -44,11 +43,13 @@ const KERNEL_BLUEPRINT: GremionBlueprint = {
   assignments: [],
 }
 
-/** Refs still served from code (not yet promoted to verticals/<id>/ data). */
+/** Refs served from code: only the neutral kernel default. Every vertical is data. */
 const CODE_BLUEPRINTS: Readonly<Record<string, GremionBlueprint>> = {
   [KERNEL_BLUEPRINT_REF]: KERNEL_BLUEPRINT,
-  'MUNICIPAL_BLUEPRINT@1': MUNICIPAL_BLUEPRINT,
 }
+
+/** The demo-fixture sets the opt-in demo path has seeders for. A vertical may only name one of these. */
+const DEMO_SEEDERS: readonly string[] = ['stura', 'municipal']
 
 /** `<ID>_BLUEPRINT@1` → vertical id (`stura`). Anchored: no separators survive. */
 const VERTICAL_REF = /^([A-Z][A-Z0-9]{0,31})_BLUEPRINT@1$/
@@ -71,10 +72,13 @@ function loadVerticalData(id: string): Vertical | null {
   }
 }
 
-/** A vertical carries organisation only (tree, offices, kinds); the seedable
- *  blueprint has no users, memberships or assignments of its own. */
+/** A vertical carries organisation only (tree, offices, kinds, the Fraktion structure and the
+ *  demo set it uses); the seedable blueprint has no users, memberships or assignments of its own. */
 function fromVertical(v: Vertical): GremionBlueprint {
   const b = v.blueprint
+  if (b.demoSeeder !== undefined && !DEMO_SEEDERS.includes(b.demoSeeder)) {
+    throw new Error(`blueprint vertical "${v.manifest.id}" is unusable: demoSeeder "${b.demoSeeder}" is not a demo set of this kernel (${DEMO_SEEDERS.join(', ')})`)
+  }
   return {
     schema_version: 1,
     users: [],
@@ -83,6 +87,8 @@ function fromVertical(v: Vertical): GremionBlueprint {
     roles: b.seats,
     assignments: [],
     ...(b.orgSchema ? { orgSchema: b.orgSchema } : {}),
+    ...(b.demoSeeder ? { demoSeeder: b.demoSeeder as 'stura' | 'municipal' } : {}),
+    ...(b.caucuses ? { caucuses: b.caucuses } : {}),
   }
 }
 

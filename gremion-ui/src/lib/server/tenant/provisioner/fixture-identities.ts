@@ -10,7 +10,7 @@
 // Pure over its inputs; the CLI reads the files.
 import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { MUNICIPAL_BLUEPRINT } from '$lib/server/seed/municipal-blueprint'
+import { MUNICIPAL_BLUEPRINT } from '$lib/server/seed/municipal-fixture'
 import { STURA_BLUEPRINT } from '$lib/server/seed/stura-fixture'
 
 /** A seed migration, whatever its pad width. */
