@@ -200,14 +200,14 @@ Enforced in code and clamped so a careless configuration change cannot lengthen 
 |---|---|---|---|
 | Access logs | 14 d | 29 d | Operator ceiling 30 d [D R29-I6]; Art. 5(1)(e) |
 | Application logs | 28 d | 29 d | as above; Art. 6(1)(f) |
-| Security logs (`audit_log`) | 27 d | 29 d | as above; purged daily, so a row lives at most 30 d |
+| Security logs (log store) | 27 d | 29 d | as above; the window of the log store, not of the `audit_log` table (a governance record, RC-GOV-CHAIN, deleted by no timer) |
 | Security logs without PII | 27 d | 30 d | as above, PII-free exception |
 | Newsletter send tokens | expiry at 7 d, bulk sweep at 90 d | — | Art. 5(1)(e) |
 | Backup retention | floor of 7 d | — | availability |
 
 Operator ceiling 30 d [D R29-I6]: no figure in this table exceeds it. Of the four log
-tiers only the `audit_log` window has a purge consumer in the application; the other
-three are configuration until TASK-033 adds theirs. Edge and identity-provider logs
+tiers has a purge consumer in the application (TASK-033-a): they are configuration and the
+windows of the log store. The `audit_log` table is a governance record, kept and append-only. Edge and identity-provider logs
 are bounded independently (`docs/log-retention-policy.md`).
 
 A German-language **Löschkonzept** is generated on demand from the live configuration, so

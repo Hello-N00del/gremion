@@ -27,8 +27,8 @@ Keycloak event store are held to it by configuration and proven by
 `docker/vector/test-edge-retention-bound.sh`, the 60-day simulation
 `docker/vector/test-edge-retention-sim.sh` and `test/edge-log-retention.bats`
 (see "Upper bound"). The application-level tiers in "Retention Configuration"
-carry the same ceiling (R29-RETENTION-30-K); the three of them without a purge
-consumer remain configuration until TASK-033.
+carry the same ceiling (R29-RETENTION-30-K); none of them has a purge consumer in the
+application, they are configuration and the windows of the log store.
 
 ---
 
@@ -176,13 +176,13 @@ follow-up in gremion-ui's realm reconcile, owned by TASK-033's amendment.
 |------|-----------|-------------------|
 | Query logs | Not enabled | `log_statement = 'none'` (PostgreSQL default) — statements are not logged |
 | Governance domain data (committees, members, org-units, protocols, resolutions) | Until operator deletion | No automatic data expiry; operator-initiated deletion through the admin shell |
-| INV-1 audit log (hash-chained governance audit trail) | `security_logs_days`: default 27 d, cap 29 d, so a row lives at most 30 d | An integrity record, not a rotating log, but the application does age it out: the daily `auditRetentionTick` (`gremion-ui/src/hooks.server.ts`) calls `audit_log_purge_before`, which removes the oldest aged prefix of the chain and moves the chain anchor in the same transaction (migration 0059), so `audit_log_verify_chain()` stays valid. No single entry is ever deleted from inside the chain. Whether this table should expire at all is open (retention catalogue, gap G6; TASK-033) |
+| INV-1 audit log (hash-chained governance audit trail) | No expiry by a timer: a governance record (RC-GOV-CHAIN, retention catalogue; operator decision 2026-10-28). It is not governed by `security_logs_days` | An integrity record, not a rotating log. Nothing purges it: gremion-ui schedules no purge, the host job `gremion-purge.timer` has no `audit_log` rule, and the application role (and the owner role it is a member of) holds no DELETE, UPDATE or TRUNCATE on it (`ensureKernelAuditAppendOnly`, at provisioning and on `reconcile`). A person's erasure request is answered by redaction, not by deleting the chain. The aged-prefix function `audit_log_purge_before` of migration 0059 stays defined and has no caller |
 
 The INV-1 audit log records governance actions (who decided what, under which
-quorum/decision rule). It is append-only: no row is updated, and the only deletion is
-the aged-prefix purge in the table above. Its classification (governance record or
-audit log) is TASK-033's decision; until then the purge window applies and the
-edge-log rules above do not.
+quorum/decision rule). It is append-only: no row is updated or deleted, by the
+application or by any timer. It is a governance record (retention catalogue gap G6 is
+closed by the operator decision of 2026-10-28), so the edge-log rules above and the
+four log windows below do not apply to it.
 
 ---
 
@@ -207,11 +207,16 @@ stored with a higher value (the former 90 / 180 / 365 days) is clamped when it i
 and the clamp logs one warning per field. Only `LOG_ACCESS_RETENTION_SECONDS` is read
 by `docker-compose.yml`; the other three document the tier defaults.
 
-**Named residual (TASK-033):** of the four application tiers only `security_logs_days`
-has a purge consumer, the daily `auditRetentionTick` in `gremion-ui/src/hooks.server.ts`
-(it purges `audit_log`). Nothing in gremion-ui purges by `access_logs_days`,
-`app_logs_days` or `security_nopii_logs_days`: those three are configuration and
-Löschkonzept text until TASK-033 adds their consumers. The Settings tab and the
+**TASK-033-a (Q6):** the four tiers are no longer a setting an admin can change: the
+Settings API refuses the whole `retention` key (400) and the tab is read-only. The windows
+are fixed by the retention registry (`packages/retention`, one source with
+`docs/compliance/retention-catalogue.md`) and the Loki configuration is rendered from it
+(`docker/loki/loki.yaml`). **Nothing in gremion-ui purges by any of the four fields, and
+none of them is read by anything that deletes**: the in-process `audit_log` tick is gone
+(`audit_log` is a governance record, see "PostgreSQL" above). The daily host purge
+(`gremion-purge.timer`, `purge-run`) applies the database windows of
+`PURGE_RULES`: the plumbing tables `event_consumption` and `scheduled_notifications` (7 d) and `plt.job_run` (29 d) and records one outcome row in
+`plt.job_run`. The values are configuration and Löschkonzept text; the Settings tab and the
 generated Löschkonzept say so. The edge files are bounded independently of these
 values (see "Upper bound"); container stdout stays size-bounded only (see "Container
 logs").
@@ -235,13 +240,12 @@ transform. The `IPCRYPT_KEY_FILE` / `IPCRYPT_KEY_EPOCH` and `RAW_LOG_PATH` /
   held to at most 29 d 2 h 5 min and Keycloak login and admin events to 29 days
   (operator ceiling 30 d [D R29-I6]). Every window has a server-enforced upper
   bound. The application-level tiers carry the same ceiling (defaults 14 / 28 / 27 /
-  27 d, caps 29 / 29 / 29 / 30 d); of those only the `audit_log` window is purged by
-  the application today, the other three wait for TASK-033 (see "Retention
-  Configuration").
+  27 d, caps 29 / 29 / 29 / 30 d); none of them is a purge in the application (see
+  "Retention Configuration"; the `audit_log` table is a governance record, not one
+  of the four tiers).
 - **Integrity (Art. 5(1)(f) / hash chain):** the INV-1 governance audit log is
-  append-only; its only automated deletion is the aged-prefix purge at
-  `security_logs_days`, which keeps the chain verifiable (see "PostgreSQL"; the
-  open classification question is retention catalogue gap G6).
+  append-only and is deleted by no timer (RC-GOV-CHAIN; see "PostgreSQL"; retention
+  catalogue gap G6 is closed by the operator decision of 2026-10-28).
 - **Breach notification:** in the event of a personal-data breach, the operator
   must notify the competent supervisory authority within 72 hours (GDPR Art. 33).
 

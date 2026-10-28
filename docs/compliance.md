@@ -61,38 +61,43 @@ recoverable, that is a gap, not a feature.
 Schema:
 [`gremion-ui/src/lib/server/config.ts`](../gremion-ui/src/lib/server/config.ts)
 (`GremionConfig.retention`). Hard caps are enforced by `clampRetentionDays` from the
-tier registry: inside `writeConfig` (so a malicious or careless PATCH cannot lengthen
-retention beyond policy), **on every read** of the stored config (so a value persisted
-before the ceiling, such as 90, is clamped before the purge tick reads it; the clamp
-logs one warning per field), and by the settings API's zod bounds, which refuse a
-larger value with HTTP 422.
+tier registry: inside `writeConfig`, and **on every read** of the stored config (so a
+value persisted before the ceiling, such as 90, is clamped; the clamp logs one warning
+per field). Since TASK-033-a the four fields are not editable: the settings API refuses
+the whole `retention` key with HTTP 400 and the Settings tab is read-only. The fixed
+windows are `RETENTION_DEFAULTS`, tied by a test to the windows the retention registry
+renders into the log store (`packages/retention`).
 
 | Field | Default | Hard cap | Basis | Implementation |
 |---|---|---|---|---|
 | `access_logs_days` | 14 | **29** | Operator ceiling 30 d [D R29-I6]; Art. 5(1)(e) | none in the application yet (see the note below); the edge files are bounded by `docs/log-retention-policy.md` |
 | `app_logs_days` | 28 | **29** | Operator ceiling 30 d [D R29-I6]; Art. 5(1)(e); Art. 6(1)(f) legitimate interest | none in the application yet (see the note below) |
-| `security_logs_days` | 27 | **29** | Operator ceiling 30 d [D R29-I6] | `purgeAuditLogsOlderThan` (see §2.1) |
+| `security_logs_days` | 27 | **29** | Operator ceiling 30 d [D R29-I6] | none in the application (see the note below); the log store's window (RC-LOG-SEC, 27 d). The `audit_log` table is not this field (see §2.1) |
 | `security_nopii_logs_days` | 27 | **30** | Operator ceiling 30 d [D R29-I6]; operator value [R31-I4a] | none in the application yet (see the note below) |
 
 > **Operator ceiling 30 d [D R29-I6] (R29-RETENTION-30-K).** No log class is kept
-> longer than 30 days. The caps are 29 d where the daily purge tick enforces the
+> longer than 30 days. The caps are 29 d where a daily purge would enforce the
 > window (29 d + 24 h tick = 30 d); `security_nopii_logs_days` keeps cap 30.
-> **Named residual (TASK-033):** nothing in gremion-ui purges by
-> `security_nopii_logs_days`, `access_logs_days` or `app_logs_days` — the only
-> consumer of a tier value is the `audit_log` purge tick, which reads
-> `security_logs_days` (`gremion-ui/src/hooks.server.ts`, `auditRetentionTick`).
-> The three values are configuration and Löschkonzept text until a purge consumer
-> exists; the Settings tab and the generated Löschkonzept say so. The edge and
+> **Nothing in gremion-ui purges by any of the four fields** (TASK-033-a): the
+> in-process `audit_log` purge tick is gone, and no field is read to delete
+> anything. The values are the fixed windows of the log store (Loki, rendered from the
+> registry) and Löschkonzept text; the Settings tab and the generated Löschkonzept say
+> so. The one database window the daily host purge applies is `plt.job_run`:
+> 29 d (RC-OPS-RUN follows RC-LOG-APP, 30 d regular and cap, minus the daily tick).
+> The edge and
 > identity-provider logs are bounded independently and already obey the ceiling:
 > raw access and Traefik logs 14 d, pseudonymised security and retained logs at most
 > 29 d 2 h 5 min, Keycloak login and admin events 29 d
 > (`docs/log-retention-policy.md`, "Upper bound").
 
-### 2.1 `audit_log` (Postgres) — security-log retention
+### 2.1 `audit_log` (Postgres) — a governance record, never purged by a timer
 
 The Postgres `audit_log` is the global, tamper-**evident** governance audit
 trail consulted by the operator audit UI and by external compliance auditors.
-Its retention window must be controlled by policy, not by an ops tool.
+**It is a governance record** (RC-GOV-CHAIN in
+[`compliance/retention-catalogue.md`](compliance/retention-catalogue.md); operator
+decision 2026-10-28): no timer deletes from it, it is not one of the four log tiers
+above, and the application role can only append to it.
 
 - **Table:** `audit_log` (columns: `id`, `created_at`, `user_id`, `field`,
   `old_value`, `new_value`, `correlation_id`, plus the chain columns
@@ -100,30 +105,31 @@ Its retention window must be controlled by policy, not by an ops tool.
 - **Writer:** `writeAuditEntry` in
   [`gremion-ui/src/lib/server/audit-db.ts`](../gremion-ui/src/lib/server/audit-db.ts).
   Governance-domain writes (settings changes, committee / org-unit
-  provisioning, protocol and resolution events) all land here.
+  provisioning, protocol and resolution events) all land here. The actor
+  (`user_id`) is a person's uuid or a component's `<token>-service` principal,
+  never a name (migration 0061, TRD-147); a session without a `sub` is refused at the
+  door (`hooks.server.ts`), so no actor is ever invented.
 - **Tamper-evidence (governance invariant INV-1):** a `BEFORE INSERT` trigger
   hash-chains every row — `row_hash = sha256(prev_hash || canonical(row))` —
   serialized per-DB via an advisory xact lock
   ([`gremion-ui/migrations/0043_audit_log_hash_chain.sql`](../gremion-ui/migrations/0043_audit_log_hash_chain.sql)).
   `verifyAuditChain()` (in `audit-db.ts`) calls the in-DB
   `audit_log_verify_chain()` verifier and returns the id of the first broken
-  row, or `{ ok: true }` when intact. Retention prunes from the chain tail
-  (oldest first), so pruning never breaks the live chain.
-- **Purge function:** `purgeAuditLogsOlderThan(days)` (in `audit-db.ts`)
-  hard-deletes rows with `created_at < now() - $days * INTERVAL '1 day'` and
-  returns the row count.
-- **Scheduler:**
-  [`gremion-ui/src/hooks.server.ts`](../gremion-ui/src/hooks.server.ts) runs every
-  24 h. The interval callback iterates **every active tenant**
-  (`forEachActiveTenant('audit-retention', …)`), establishes that tenant's
-  context, reads its `config.retention.security_logs_days` (fallback: the registry
-  default, 27), and calls `purgeAuditLogsOlderThan` against that tenant's data
-  plane. The interval is `.unref()`-ed so it does not keep the process alive during
-  graceful shutdown / test teardown. Operator ceiling 30 d [D R29-I6]: default 27 d,
-  cap 29 d, so a row is purged at most 29 d + 24 h = 30 d after it was written
-  (R29-RETENTION-30-K); the purge removes the aged prefix and moves the chain anchor
-  in one transaction (migration 0059), so the shorter window keeps
-  `audit_log_verify_chain()` intact.
+  row, or `{ ok: true }` when intact.
+- **Append-only:** `ensureKernelAuditAppendOnly` (`packages/tenant-store`) revokes
+  DELETE, UPDATE and TRUNCATE on `audit_log` (and every write on the chain anchor)
+  from PUBLIC, the app role and the owner role, through the hardened admin path
+  (pinned `search_path`, server-side `format('%I')`, qualified names), at
+  provisioning and on `reconcile` (check `audit-append-only`). Until TASK-192 the
+  app role is a member of the owner role, so this is a speed bump against a bug or
+  a stray statement, not isolation from a tenant that runs arbitrary SQL as its
+  own owner.
+- **Erasure:** answered by redaction, not by deleting the chain (catalogue §8).
+- **Not a purge:** gremion-ui schedules no purge (`purgeAuditLogsOlderThan` and the
+  in-process `audit-retention` tick are removed), and neither does the host job
+  `gremion-purge.timer` (`purge-run`): `PURGE_RULES` has no `audit_log` rule, and a
+  test fails if one appears. The SQL function `audit_log_purge_before` of migration
+  0059 stays defined but has no caller.
 
 ### 2.2 Per-module retention
 
