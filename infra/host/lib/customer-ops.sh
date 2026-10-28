@@ -438,8 +438,15 @@ customer_enable_module() {   # <slug> <module> --operator <uuid> [--dpia-json <f
     active_colour
     before="$(container_fingerprint)"
     local -a argv=(enable-module "$slug" "$MODULE_ID" --operator "$OPERATOR_ID")
-    [[ -z "$DPIA_JSON" ]] || argv+=(--dpia-json "$DPIA_JSON")
-    tc "${argv[@]}" || die "enable of ${MODULE_ID} for ${slug} failed in the container" "$GREMION_EXIT_ASSERT"
+    # The container cannot read a host path: mount the decision read-only and hand it the
+    # container-side path, as customer_create does (a host path is ENOENT in the one-shot).
+    if [[ -n "$DPIA_JSON" ]]; then
+        [[ -f "$DPIA_JSON" ]] || die "enable_module: --dpia-json names no file" "$GREMION_EXIT_USAGE"
+        argv+=(--dpia-json /run/gremion/dpia.json)
+        TC_MOUNT=(-v "$(realpath "$DPIA_JSON"):/run/gremion/dpia.json:ro")
+    fi
+    tc "${argv[@]}" || { TC_MOUNT=(); die "enable of ${MODULE_ID} for ${slug} failed in the container" "$GREMION_EXIT_ASSERT"; }
+    TC_MOUNT=()
     _assert_fingerprint enable_module "$slug" "$before"
     ok "module ${MODULE_ID} enabled for ${slug} (TRD-440: container set unchanged)"
 }
