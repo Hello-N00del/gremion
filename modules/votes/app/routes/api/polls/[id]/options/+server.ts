@@ -3,6 +3,7 @@ import type { RequestHandler } from './$types'
 import { hasRole, Role } from '$lib/auth'
 import type { SessionUser } from '$lib/auth/types'
 import { createPollsClient } from '$lib/server/polls/polls-client'
+import { pollAccessStatus } from '$lib/server/polls/tenant-scope'
 
 /** Click-time fetch of a single poll's options for the /votes detail panel.
  *
@@ -34,6 +35,8 @@ export const GET: RequestHandler = async ({ params, locals }) => {
       })),
     })
   } catch (e) {
+    const status = pollAccessStatus(e)
+    if (status === 404) error(404, 'Umfrage nicht gefunden')
     // Do not pass upstream error messages through — they may include internal
     // hostnames or credentials in connection-refused scenarios.
     console.error('[api/polls/[id]/options]', e)

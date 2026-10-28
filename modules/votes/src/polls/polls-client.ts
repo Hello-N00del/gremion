@@ -6,6 +6,8 @@
 // wrapped in { ocs: { meta, data } } and require Accept: application/json. The
 // leaf reads NEXTCLOUD_URL + admin creds from its own env.
 
+import { assertTenantId, scopePoll, tagTitle } from './tenant-scope.js'
+
 const POLLS_BASE = '/ocs/v2.php/apps/polls/api/v1.0'
 
 export interface NcPollOption {
@@ -69,14 +71,26 @@ async function ncFetch<T>(
 }
 
 export const NextcloudPollsClient = {
-  listPolls: (): Promise<NcPoll[]> =>
-    ncFetch<{ polls: NcPoll[] }>('/polls').then((r) => r.polls),
+  /** Only the polls bound to `tenantId` (marker stripped from the titles). */
+  async listPolls(tenantId: string): Promise<NcPoll[]> {
+    assertTenantId(tenantId)
+    const { polls } = await ncFetch<{ polls: NcPoll[] }>('/polls')
+    return polls.flatMap((p) => scopePoll(p, tenantId, process.env.VOTES_LEGACY_POLL_TENANT_ID) ?? [])
+  },
 
-  async createPoll(dto: CreatePollDto): Promise<NcPoll> {
+  /** Create a poll bound to `tenantId` (the marker is written here, server-side). */
+  async createPoll(tenantId: string, dto: CreatePollDto): Promise<NcPoll> {
+    const created = await createBound(tagTitle(tenantId, dto.title), dto)
+    return scopePoll(created, tenantId) ?? created
+  },
+}
+
+async function createBound(storedTitle: string, dto: CreatePollDto): Promise<NcPoll> {
+  {
     // Step 1: create the poll (NC Polls v9 consumes only { type, title }).
     const { poll } = await ncFetch<{ poll: NcPoll }>('/poll', {
       method: 'POST',
-      body: JSON.stringify({ title: dto.title, type: dto.type }),
+      body: JSON.stringify({ title: storedTitle, type: dto.type }),
     })
 
     // Step 2: add every option in ONE atomic bulk write (addBulk takes a
@@ -123,5 +137,5 @@ export const NextcloudPollsClient = {
       }
       throw e
     }
-  },
+  }
 }

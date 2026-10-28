@@ -573,3 +573,18 @@ Design** — do not close these as part of a design port:
   a self-contained chain cannot detect truncation of the tail. An external-anchor
   follow-up is deferred to a later phase. See [`docs/about-gremion.md`](./docs/about-gremion.md)
   (Governance charter & invariants).
+
+## Votes / Nextcloud Polls tenant separation — CLOSED (K5#29 / S4#18)
+
+Nextcloud is one shared instance (one user table, one OIDC mapping, one admin
+credential), so the platform provisions no per-tenant Nextcloud user or group to
+scope polls by. The votes module therefore binds each poll to its tenant with a
+server-written `[gt:<tenantId>] ` title marker (`modules/votes/src/polls/tenant-scope.ts`
+and its app twin) and enforces it on list, create, read, options and vote. Another
+tenant's poll answers exactly like a missing one. Residuals: (1) polls created
+before this change carry no marker and are invisible to every tenant until an operator
+sets `VOTES_LEGACY_POLL_TENANT_ID` to the one tenant that owns them; (2) the marker
+is visible to anyone who opens the poll in the Nextcloud UI itself, and Nextcloud
+admins can still see all polls - isolation holds inside the module, not inside
+Nextcloud; (3) a vote is attributed per Keycloak user, so a person who is a member
+of two tenants votes once per tenant-bound poll, not once globally.

@@ -7,6 +7,8 @@ vi.mock('$lib/server/env/service-env', async () => {
   const { env } = await import('$env/dynamic/private')
   return { serviceEnv: (name: string) => (env as Record<string, string | undefined>)[name] }
 })
+// Polls are tenant-bound: the client reads the request's tenant (fail-closed without one).
+vi.mock('$lib/server/tenant/context', () => ({ getTenant: () => ({ id: 'tenant-a', slug: 'tenant-a' }) }))
 vi.mock('$env/dynamic/private', () => ({
   env: {
     NEXTCLOUD_URL: 'http://nextcloud-test',
@@ -45,7 +47,7 @@ describe('NextcloudPollsClient', () => {
   const mockPoll = {
     id: 1,
     type: 'textPoll',
-    configuration: { title: 'Test Poll', description: '', allowComment: false, anonymous: false, expire: 0 },
+    configuration: { title: '[gt:tenant-a] Test Poll', description: '', allowComment: false, anonymous: false, expire: 0 },
     status: { expired: false, countOptions: 0 },
     currentUserStatus: { userRole: 'owner', isLocked: false, countVotes: 0 },
   }
@@ -128,7 +130,8 @@ describe('NextcloudPollsClient', () => {
     const [url, opts] = mockFetch.mock.calls[0]
     expect(url).toBe(`${OCS_BASE}/poll`)
     expect(opts.method).toBe('POST')
-    expect(JSON.parse(opts.body as string).title).toBe('New Poll')
+    // the server binds the poll to the calling tenant
+    expect(JSON.parse(opts.body as string).title).toBe('[gt:tenant-a] New Poll')
   })
 
   it('createPoll opens the poll NC-side after creation — private polls 400 per-user reads (#411)', async () => {
@@ -269,13 +272,25 @@ describe('NextcloudPollsClient', () => {
     expect(deleteCall).toBeDefined()
   })
 
-  it('vote sends PUT to correct OCS path', async () => {
-    mockFetch.mockResolvedValue({ ok: true, json: () => Promise.resolve(ocs({})) })
+  it('vote sends PUT to correct OCS path (after verifying poll ownership + option membership)', async () => {
+    mockFetch.mockImplementation((url: string) =>
+      Promise.resolve({
+        ok: true,
+        json: () =>
+          Promise.resolve(
+            url.endsWith('/poll/1')
+              ? ocs({ poll: mockPoll })
+              : url.endsWith('/poll/1/options')
+                ? ocs({ options: [{ id: 42, text: 'Ja', votes: { count: 0, yes: 0, no: 0, maybe: 0, currentUser: null } }] })
+                : ocs({}),
+          ),
+      }),
+    )
 
-    const { NextcloudPollsClient } = await import('./polls-client')
-    await NextcloudPollsClient.vote(1, 42)
+    const { createPollsClient } = await import('./polls-client')
+    await createPollsClient({ oidcBearer: 'kc-token' }).vote(1, 42)
 
-    const [url, opts] = mockFetch.mock.calls[0]
+    const [url, opts] = mockFetch.mock.calls.at(-1)!
     expect(url).toBe(`${OCS_BASE}/option/42/vote/yes`)
     expect(opts.method).toBe('PUT')
   })

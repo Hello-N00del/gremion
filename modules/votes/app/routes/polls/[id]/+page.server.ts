@@ -3,6 +3,7 @@ import type { PageServerLoad } from './$types'
 import { hasRole, Role } from '$lib/auth'
 import type { SessionUser } from '$lib/auth/types'
 import { createPollsClient } from '$lib/server/polls/polls-client'
+import { pollAccessStatus } from '$lib/server/polls/tenant-scope'
 
 export const load: PageServerLoad = async ({ params, locals }) => {
   const session = await locals.auth()
@@ -27,6 +28,7 @@ export const load: PageServerLoad = async ({ params, locals }) => {
     // response. Map a not-found poll (deleted, or an id that never existed) to a
     // clean SvelteKit 404; rethrow everything else (auth, 5xx, network) so the
     // error boundary and logs still see the real failure.
+    if (pollAccessStatus(err) === 404) error(404, 'Umfrage nicht gefunden')
     if (err instanceof Error && /→\s*404\b/.test(err.message)) {
       error(404, 'Umfrage nicht gefunden')
     }
