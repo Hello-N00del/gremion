@@ -7,7 +7,7 @@ import { currentTenantId } from '$lib/server/tenant/context'
 import { getErasureHook } from '$lib/server/modules/runtime-registry'
 import { KERNEL_MODULE_ID, kernelErasureHook } from './kernel-hook'
 import { IDENTITY_MODULE_ID, createIdentityErasureHook } from './identity-hook'
-import { runErasure, subjectRef, type ErasureDeps, type ErasureReport } from './orchestrator'
+import { runErasure, STALE_RUN_MS, subjectRef, type ErasureDeps, type ErasureReport } from './orchestrator'
 import { createPgReportStore, getErasureReport, listErasureReports } from './report-store'
 import { createSubjectResolver } from './subject'
 import type { Sql } from '@gremion/db'
@@ -125,12 +125,25 @@ export function startErasure(
   return runErasure({ tenantId: currentTenantId(), ...input }, deps)
 }
 
-export function readErasureReport(id: string): Promise<ErasureReport | null> {
-  return getErasureReport(getDb(), currentTenantId(), id)
+/** R33f LOW: close crashed runs before they are read, not only when the next erasure starts. Best effort. */
+async function closeStaleRuns(tenantId: string): Promise<void> {
+  try {
+    const now = Date.now()
+    await createPgReportStore(getDb()).sweepStale(tenantId, new Date(now - STALE_RUN_MS), new Date(now))
+  } catch (err) {
+    console.error('[erasure] stale-run sweep on read failed:', err instanceof Error ? err.message : err)
+  }
 }
 
-export function readErasureReports(opts: { subjectId?: string } = {}): Promise<ErasureReport[]> {
+export async function readErasureReport(id: string): Promise<ErasureReport | null> {
   const tenantId = currentTenantId()
+  await closeStaleRuns(tenantId)
+  return getErasureReport(getDb(), tenantId, id)
+}
+
+export async function readErasureReports(opts: { subjectId?: string } = {}): Promise<ErasureReport[]> {
+  const tenantId = currentTenantId()
+  await closeStaleRuns(tenantId)
   return listErasureReports(getDb(), tenantId, {
     subjectRef: opts.subjectId ? subjectRef(tenantId, opts.subjectId) : undefined,
   })

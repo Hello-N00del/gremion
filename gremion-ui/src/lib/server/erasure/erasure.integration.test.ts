@@ -10,7 +10,8 @@ import type { KernelErasureHook } from '$lib/server/modules/runtime-registry'
 import { kernelErasureHook } from './kernel-hook'
 import { createIdentityErasureHook } from './identity-hook'
 import { runErasure, subjectRef, type ErasureDeps } from './orchestrator'
-import { tenantHoldsSubjectData } from './service'
+import { readErasureReport, readErasureReports, tenantHoldsSubjectData } from './service'
+import { currentTenantId } from '$lib/server/tenant/context'
 import { createPgReportStore, getErasureReport, listErasureReports } from './report-store'
 
 process.env.AUTH_SECRET ??= 'integration-test-auth-secret'
@@ -348,6 +349,30 @@ describe('R33f HIGH: tenantHoldsSubjectData binds an id to THIS tenant by its ow
     expect(await tenantHoldsSubjectData(sql, TENANT_A, SUBJECT)).toBe(true)
     // the report's pseudonym is tenant-bound: the same id under another tenant id has no evidence
     expect(await tenantHoldsSubjectData(sql, TENANT_B, SUBJECT)).toBe(false)
+  })
+})
+
+describe('R33f LOW: a crashed run is closed when the reports are READ, not only when the next erasure starts', () => {
+  it('a header still running after the stale window reads as incomplete with the stale reason (list and single)', async () => {
+    const sql = getDb()
+    const tenantId = currentTenantId()
+    const id = await createPgReportStore(sql).begin({
+      tenantId,
+      subjectRef: subjectRef(tenantId, SUBJECT),
+      requestedBy: 'admin',
+      startedAt: new Date(Date.now() - 2 * 60 * 60 * 1000),
+      moduleIds: ['kernel'],
+    })
+    const [listed] = await readErasureReports()
+    expect(listed).toMatchObject({ id, status: 'incomplete', finishReason: expect.stringMatching(/^stale:/) })
+    expect((await readErasureReport(id))?.status).toBe('incomplete')
+  })
+
+  it('a run that is still inside the window stays running', async () => {
+    const sql = getDb()
+    const tenantId = currentTenantId()
+    const id = await createPgReportStore(sql).begin({ tenantId, subjectRef: subjectRef(tenantId, SUBJECT), requestedBy: 'admin', startedAt: new Date(), moduleIds: ['kernel'] })
+    expect((await readErasureReport(id))?.status).toBe('running')
   })
 })
 
