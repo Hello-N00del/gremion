@@ -27,7 +27,7 @@ ROOT="$GREMION_ROOT"
 active_colour() { COLOUR=blue; }
 container_fingerprint() { printf 'fingerprint %s\n' "$(cat "${GREMION_ROOT}/fingerprint")" >> "$ORDER"; cat "${GREMION_ROOT}/fingerprint"; }
 mail_realm_smtp() { printf 'mail %s\n' "$*" >> "$ORDER"; [ ! -f "${GREMION_ROOT}/mail-fails" ]; }
-mail_sender_args() { MAIL_SENDER_ARGS=(); }
+mail_sender_args() { MAIL_SENDER_ARGS=(); [ ! -f "${GREMION_ROOT}/sender-fails" ]; }
 tc() {
     printf 'tc %s\n' "$*" >> "$ORDER"
     [ ! -f "${GREMION_ROOT}/fail-$1" ] || return 1
@@ -145,6 +145,14 @@ router_sum() { sha256sum "${GREMION_ROOT}/etc/edge/tenant-alpha-rat.yml" | cut -
     [ "$status" -ne 0 ]
     [[ "$output" == *"fresh principal"* ]]
     assert_absent '^tc ' "$ORDER" 'the container resumed without a principal'
+}
+
+@test "resume: a MAIL_TRANSPORT that cannot be resolved stops BEFORE a principal is issued (nothing to revoke)" {
+    touch "${GREMION_ROOT}/sender-fails"
+    drive handle_resume
+    [ "$status" -ne 0 ]
+    assert_absent '^mail ' "$ORDER" 'a principal was issued before the transport was resolved'
+    assert_absent '^tc ' "$ORDER" 'the container resumed without a transport'
 }
 
 @test "resume: the router file stays byte-identical" {

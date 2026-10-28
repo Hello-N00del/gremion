@@ -3,7 +3,7 @@
 // gremion_platform: who, when, what, why), which that customer's council
 // administrator reads inside the product. The row is written by
 // oac.record_access, in the SAME statement as the request it belongs to
-// (requests.ts submitCreate, retry.ts retryRequest): the request is refused when
+// (requests.ts submitCreate, retry.ts retryRequest, customer-request.ts queueRequest): the request is refused when
 // its record cannot be written, and no record exists for a refused request. The
 // panel's role holds EXECUTE on that one function and no table privilege.
 //

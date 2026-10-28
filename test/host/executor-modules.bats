@@ -31,12 +31,14 @@ tc() {
     # keep what a --dpia-json file said at the moment of the call (the workdir is removed after the run)
     local prev="" a
     for a in "$@"; do
-        [ "$prev" != "--dpia-json" ] || cp "$a" "${GREMION_ROOT}/dpia-seen.json"
+        # the argv carries the CONTAINER path; the file is what the mount names (-v <host>:/run/gremion/dpia.json:ro)
+        [ "$prev" != "--dpia-json" ] || cp "${TC_MOUNT[1]%:/run/gremion/dpia.json:ro}" "${GREMION_ROOT}/dpia-seen.json"
         prev="$a"
     done
     if [ "$1" = reconcile ]; then
         if [ "${2:-}" = "--verify-only" ]; then
             echo '[tenant-create] reconcile realm "alpha-rat" - verify-only'
+            [ ! -f "${GREMION_ROOT}/verify-crash" ] || { echo 'Error: cannot connect to the database'; return 3; }
             [ ! -f "${GREMION_ROOT}/drift" ] || { echo 'FAIL smtp-server: repair: host'; return 1; }
             [ ! -f "${GREMION_ROOT}/still-drift" ] || { echo 'FAIL smtp-server: repair: host'; return 1; }
             return 0
@@ -98,10 +100,48 @@ enable_args() { jq -nc '{slug:"alpha-rat", module:"votes", dpia:{requiresDpia:"n
     drive handle_enable_module
     [ "$status" -eq 0 ] || { echo "$output"; return 1; }
     run order
-    [ "${lines[0]}" = "tc enable-module alpha-rat votes --operator ${OPERATOR} --dpia-json ${WORK}/dpia.json" ]
+    [ "${lines[0]}" = "tc enable-module alpha-rat votes --operator ${OPERATOR} --dpia-json /run/gremion/dpia.json" ]
     [ "${#lines[@]}" -eq 1 ]
     [ "$(jq -c . "${GREMION_ROOT}/dpia-seen.json")" = '{"requiresDpia":"no","reasonCodes":["operator_decision"],"documentRef":"TOM-3"}' ]
     [ "$(stat -c %a "${WORK}/dpia.json")" = 600 ]
+}
+
+# drive_real_tc <handler> -- like drive, but through the REAL tc() and the docker
+# shim (test/host/fixtures/executor/docker-shim): what the handler hands to
+# `docker compose run tenant-create` (argv and mounts) is what is asserted.
+drive_real_tc() {
+    printf 'STACK=guardstack
+COLOUR=blue
+' > "${GREMION_ROOT}/etc/env/app-blue.env"
+    shim docker "exec bash '${HOST_TEST_DIR}/fixtures/executor/docker-shim' \"\$@\""
+    mkdir -p "${GREMION_ROOT}/current"
+    run bash -c '
+        set -euo pipefail
+        export GREMION_RELEASE_DIR="$2/current"
+        . "$1/common.sh"; . "$1/customer-ops.sh"
+        for h in enable_module; do . "$1/executor/handlers/${h}.sh"; done
+        setup_paths
+        active_colour() { COLOUR=blue; }
+        container_fingerprint() { cat "${GREMION_ROOT}/fingerprint"; }
+        ( set -e; "$3" "$4" "$6" "$7" "$5/args.json" "$5" ) 2>&1
+    ' _ "$SRC" "$GREMION_ROOT" "$1" "$REQ" "$WORK" "${2:-alpha-rat}" "$OPERATOR"
+}
+
+@test "enable_module: through the real tc() the DPIA file is MOUNTED and the container-side path is in argv (not the host path)" {
+    enable_args
+    drive_real_tc handle_enable_module
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    assert_present 'tenant-create enable-module alpha-rat votes --operator '"${OPERATOR}"' --dpia-json /run/gremion/dpia\.json' "${GREMION_ROOT}/tc-argv.log"
+    assert_absent "--dpia-json ${WORK}" "${GREMION_ROOT}/tc-argv.log" 'the host path must not reach the container'
+    # the shim saw a -v <host>:/run/gremion/dpia.json:ro and read the decision through it
+    [ "$(sed -n 2p "${GREMION_ROOT}/dpia-seen" | jq -c .)" = '{"requiresDpia":"no","reasonCodes":["operator_decision"],"documentRef":"TOM-3"}' ]
+}
+
+@test "enable_module without a decision mounts nothing for it" {
+    jq -nc '{slug:"alpha-rat", module:"votes", dpia:null}' > "${WORK}/args.json"
+    drive_real_tc handle_enable_module
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    assert_absent 'dpia' "${GREMION_ROOT}/tc-argv.log" 'no decision was carried'
 }
 
 @test "enable_module without a carried decision passes no --dpia-json (the recorded one is used by the gate)" {
@@ -193,6 +233,15 @@ enable_args() { jq -nc '{slug:"alpha-rat", module:"votes", dpia:{requiresDpia:"n
     [ "$status" -ne 0 ]
     [[ "$output" == *"FAIL smtp-server: repair: host"* && "$output" == *"drift"* ]]
     assert_absent 'reconcile alpha-rat$|rotate' "$ORDER" 'a dry run must not apply'
+}
+
+@test "reconcile dry-run: a crash of the verify (exit 3, not 1) is a failure of the verify, never reported as drift" {
+    jq -nc '{slug:"alpha-rat", apply:false}' > "${WORK}/args.json"
+    touch "${GREMION_ROOT}/verify-crash"
+    drive handle_reconcile
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"verify-only failed in the container (exit 3)"* ]] || { echo "$output"; return 1; }
+    [[ "$output" != *"drift found"* ]] || { echo "$output"; return 1; }
 }
 
 @test "reconcile apply: the repair, the host principal rotated when smtp-server is repair: host, then a verify-only that must be green" {

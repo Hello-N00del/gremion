@@ -26,6 +26,8 @@ handle_reconcile() {
         return 0
     fi
     customer_reconcile "$slug" || rc=$?
+    # exit 1 is the verify's "a check fails" (drift); anything else is a crash or a usage error
+    (( rc == 0 || rc == 1 )) || die "reconcile dry-run of ${slug}: verify-only failed in the container (exit ${rc})" "$GREMION_EXIT_ASSERT"
     (( rc == 0 )) || die "reconcile dry-run of ${slug}: drift found (the checks are in the events above); nothing was changed" "$GREMION_EXIT_ASSERT"
     ok "reconcile dry-run of ${slug}: the realm is in sync, nothing to repair"
 }

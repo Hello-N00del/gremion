@@ -23,8 +23,11 @@
 #     access_record_or_die "$slug" executor_<kind> "<what>" "<why>"
 # (the handler's request is already audited by its own row; the access record
 # adds the council-visible line) and is NOT wired here, because
-# infra/host/bin/gremion-executor belongs to another lane. TODO(executor lane):
-# source this file next to db.sh and call it before each handler runs.
+# infra/host/bin/gremion-executor belongs to another lane. A request queued from
+# the control panel needs no call here: queueRequest/submitCreate/retryRequest
+# write oac.record_access in the same statement as the request (TRD-092). Only
+# the host's own break-glass verbs record through this file.
+# TODO(executor lane): optionally source this file next to db.sh and add an executor-side line per handler.
 #
 # Needs: common.sh (die, GREMION_EXIT_*), executor/db.sh (executor_sql), ROOT.
 

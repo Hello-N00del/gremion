@@ -7,6 +7,7 @@ import { randomUUID } from 'node:crypto'
 import type postgres from 'postgres'
 import type { NewestRequest } from '../lifecycle'
 import type { Evidence } from './requests'
+import { accessWords } from './access-log'
 import { SubmitRefused, submitRefusal } from './requests'
 
 export const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
@@ -32,11 +33,14 @@ export async function queueRequest(sql: postgres.Sql, kind: string, slug: string
     SELECT 1 AS one FROM plt.provisioning_request_status WHERE customer_slug = ${slug} AND state IN ('queued', 'running') LIMIT 1`
   if (inflight.length > 0) throw new SubmitRefused(409, 'Für diesen Mandanten läuft bereits eine Anfrage oder wartet in der Warteschlange.')
   try {
+    // TRD-092: the vendor-access record in the SAME statement; a request whose record cannot be written is refused.
+    const w = accessWords(kind, slug, false)
     const rows = await sql<{ id: string }[]>`
       SELECT plt.submit_provisioning_request(
                ${kind}, ${slug}, ${sql.json(args as never)}, ${randomUUID()}::uuid, ${operatorId}::uuid,
                ${evidence.acr}, ${evidence.authTime}::timestamptz, ${evidence.sessionAt}::timestamptz, ${evidence.token},
-               NULL, NULL)::text AS id`
+               NULL, NULL)::text AS id
+        FROM (SELECT oac.record_access(${slug}, ${w.action}, ${w.what}, ${w.why}, ${operatorId}, NULL)) AS access_record`
     return rows[0]!.id
   } catch (err) {
     throw submitRefusal(err)

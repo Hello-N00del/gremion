@@ -342,7 +342,7 @@ cmd_init() {
 cmd_request() {
     local kind="${1:-}"; shift || true
     [[ "$kind" =~ $REQUEST_KINDS_RE ]] || die "request <kind>: one of create, suspend, resume, reconcile, enable_module, disable_module, import_members, seed_vertical, record_dpia, import_isolation" "$GREMION_EXIT_USAGE"
-    local file="" reason="" slug actor key id args_literal
+    local file="" reason="" slug actor key id args_literal reason_literal
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --args-file) need_value "$@"; file="$2"; shift 2 ;;
@@ -371,8 +371,10 @@ cmd_request() {
     # argv, capped at 128 KiB per argument (E2BIG) and readable by every local user in the
     # process table (house review MED 1).
     args_literal="$(sql_jsonb_literal "$(jq -c . "$file")")" || die "could not quote the request args" "$GREMION_EXIT_ASSERT"
-    id="$(executor_sql "SELECT plt.submit_provisioning_request(:'kind', :'slug', ${args_literal}, :'key'::uuid, :'op'::uuid, NULL, NULL, NULL, NULL, :'reason', :'actor');" \
-            -v kind="$kind" -v slug="$slug" -v key="$key" -v op="$OPERATOR_ID" -v reason="$reason" -v actor="$actor")" \
+    # the operator's reason travels the same way (the access-log rule: WHY never as psql -v)
+    reason_literal="$(access_text_literal "$reason")" || die "could not quote the reason" "$GREMION_EXIT_ASSERT"
+    id="$(executor_sql "SELECT plt.submit_provisioning_request(:'kind', :'slug', ${args_literal}, :'key'::uuid, :'op'::uuid, NULL, NULL, NULL, NULL, ${reason_literal}, :'actor');" \
+            -v kind="$kind" -v slug="$slug" -v key="$key" -v op="$OPERATOR_ID" -v actor="$actor")" \
         || die "the break-glass request was refused by gremion_platform (see above); nothing was queued" "$GREMION_EXIT_ASSERT"
     id="${id%%$'\n'*}"
     id="${id%$'\r'}"
