@@ -138,8 +138,13 @@ export function reconcileKernelAudit(report: ReconcileReport, server: PurgeServe
   return withKernelAuditCheck(
     report,
     {
-      problems: () => kernelAuditAppendOnlyProblems(server, tenantId),
-      repair: async () => void (await ensureKernelAuditAppendOnly(server, tenantId)),
+      // requirePresent: reconcile runs after the kernel chain, so an absent audit table is a problem (as it is fatal at provisioning)
+      problems: () => kernelAuditAppendOnlyProblems(server, tenantId, { requirePresent: true }),
+      repair: async () => {
+        const { absent } = await ensureKernelAuditAppendOnly(server, tenantId)
+        // never discard `absent`: a table the REVOKE could not reach is a failed repair, not a clean one
+        if (absent.length) throw new Error(`${absent.join(', ')} not created by the kernel chain: the audit record cannot be made append-only`)
+      },
     },
     verifyOnly,
   )

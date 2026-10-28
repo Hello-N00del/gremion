@@ -205,6 +205,11 @@ describe('ensureKernelAuditAppendOnly (TASK-033-a: audit_log is a governance rec
     expect(await ensureKernelAuditAppendOnly(server, E)).toEqual({ revoked: [], absent: ['audit_log', 'audit_log_chain_anchor'] })
     // nothing to check on an absent table is not a problem
     expect(await kernelAuditAppendOnlyProblems(server, E)).toEqual([])
+    // reconcile asks requirePresent: the same absent tables are then PROBLEMS, one per table
+    const required = await kernelAuditAppendOnlyProblems(server, E, { requirePresent: true })
+    expect(required).toHaveLength(2)
+    expect(required.join(' | ')).toMatch(/audit_log: table is absent/)
+    expect(required.join(' | ')).toMatch(/audit_log_chain_anchor: table is absent/)
   })
 
   it('CRIT: a tenant ALTER DATABASE SET search_path + planted public.format / current_database cannot escalate through the call (startup pin and bare server)', async () => {

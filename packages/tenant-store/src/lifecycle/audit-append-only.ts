@@ -82,9 +82,17 @@ export async function ensureKernelAuditAppendOnly(server: ModuleServer, tenantId
  * The EFFECTIVE state, read from the catalogue by has_table_privilege (so a
  * grant through PUBLIC or through role membership is seen): one line per
  * privilege the app or the owner still holds on an append-only table. [] = the
- * contract holds (and a table that does not exist yet is not a problem).
+ * contract holds. A table that does not exist yet is not a problem BY DEFAULT (the
+ * chain may not have run); `requirePresent` makes it one, for the callers that run
+ * after the chain (provisioning treats an absent table as fatal; reconcile, verify
+ * and apply, must report it the same way instead of passing a database that has no
+ * audit record to protect).
  */
-export async function kernelAuditAppendOnlyProblems(server: ModuleServer, tenantId: string): Promise<string[]> {
+export async function kernelAuditAppendOnlyProblems(
+  server: ModuleServer,
+  tenantId: string,
+  opts: { requirePresent?: boolean } = {},
+): Promise<string[]> {
   const { app, owner } = kernelRoles(tenantId)
   const dbName = kernelDbName(tenantId)
   const db = await server.open(dbName)
@@ -97,7 +105,10 @@ export async function kernelAuditAppendOnlyProblems(server: ModuleServer, tenant
         if (!PLAIN.test(t.table)) throw new RangeError(`table ${JSON.stringify(t.table)} is not a plain identifier`)
         const qualified = `public.${t.table}`
         const [present] = await tx<{ ok: boolean }[]>`SELECT pg_catalog.to_regclass(${qualified}::pg_catalog.text) IS NOT NULL AS ok`
-        if (!present?.ok) continue
+        if (!present?.ok) {
+          if (opts.requirePresent) problems.push(`${t.table}: table is absent (the kernel chain has not created it, so the audit record cannot be append-only)`)
+          continue
+        }
         for (const role of [app, owner]) {
           for (const priv of t.revoke) {
             const [held] = await tx<{ held: boolean }[]>`

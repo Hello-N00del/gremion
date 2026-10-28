@@ -385,10 +385,32 @@ describe('reconcileKernelAudit: the reconcile verb reads and re-asserts the audi
   it('verify-only reads the effective privileges of THIS tenant and never revokes', async () => {
     lc.kernelAuditAppendOnlyProblems.mockResolvedValue(['audit_log: k_x_app still holds DELETE (the kernel audit record is append-only)'])
     const r = await reconcileKernelAudit(green, server, T, true)
-    expect(lc.kernelAuditAppendOnlyProblems).toHaveBeenCalledWith(server, T)
+    // requirePresent: an absent audit_log / chain anchor is a PROBLEM for reconcile, exactly as it is fatal at provisioning
+    expect(lc.kernelAuditAppendOnlyProblems).toHaveBeenCalledWith(server, T, { requirePresent: true })
     expect(lc.ensureKernelAuditAppendOnly).not.toHaveBeenCalled()
     expect(r.ok).toBe(false)
     expect(r.checks.at(-1)).toMatchObject({ name: 'audit-append-only', ok: false })
+  })
+
+  it('verify-only turns red for an ABSENT audit table (the read asks for requirePresent and its problem surfaces)', async () => {
+    lc.kernelAuditAppendOnlyProblems.mockImplementation(async (_s: unknown, _t: unknown, o?: { requirePresent?: boolean }) =>
+      o?.requirePresent ? ['audit_log: table is absent (the kernel chain has not created it)'] : [],
+    )
+    const r = await reconcileKernelAudit(green, server, T, true)
+    expect(r.ok).toBe(false)
+    expect(r.checks.at(-1)!.detail).toContain('audit_log')
+  })
+
+  it('apply does not discard `absent`: a repair that finds the table missing stays RED even if the re-read is clean', async () => {
+    lc.kernelAuditAppendOnlyProblems.mockResolvedValue([])
+    lc.ensureKernelAuditAppendOnly.mockResolvedValue({ revoked: ['audit_log_chain_anchor'], absent: ['audit_log'] })
+    // a first read with a problem triggers the repair; the repair reports audit_log absent
+    lc.kernelAuditAppendOnlyProblems.mockResolvedValueOnce(['audit_log_chain_anchor: k_x_app still holds INSERT'])
+    const r = await reconcileKernelAudit(green, server, T, false)
+    expect(lc.ensureKernelAuditAppendOnly).toHaveBeenCalledWith(server, T)
+    expect(r.ok).toBe(false)
+    expect(r.checks.at(-1)!.detail).toContain('audit_log')
+    expect(r.applied).not.toContain('audit-append-only')
   })
 
   it('apply runs the tenant-store REVOKE for THIS tenant, re-reads, and the report turns green', async () => {
@@ -397,6 +419,7 @@ describe('reconcileKernelAudit: the reconcile verb reads and re-asserts the audi
     const r = await reconcileKernelAudit(green, server, T, false)
     expect(lc.ensureKernelAuditAppendOnly).toHaveBeenCalledWith(server, T)
     expect(lc.kernelAuditAppendOnlyProblems).toHaveBeenCalledTimes(2)
+    expect(lc.kernelAuditAppendOnlyProblems).toHaveBeenLastCalledWith(server, T, { requirePresent: true })
     expect(r.ok).toBe(true)
     expect(r.applied).toContain('audit-append-only')
   })
