@@ -85,7 +85,7 @@ describe('NextcloudPollsClient.createPoll (H16)', () => {
     const put = calls.find((c) => c.method === 'PUT' && c.path === '/poll/42')
     expect(put, 'a PUT /poll/42 pollConfiguration call must be made').toBeDefined()
     expect(put!.body).toEqual({
-      pollConfiguration: { anonymous: true, description: 'Wohin gehen wir?', expire: 1_900_000_000 },
+      pollConfiguration: { maxVotesPerUser: 1, anonymous: true, description: 'Wohin gehen wir?', expire: 1_900_000_000 },
     })
     expect(created.configuration.anonymous).toBe(true)
     expect(created.configuration.description).toBe('Wohin gehen wir?')
@@ -98,9 +98,9 @@ describe('NextcloudPollsClient.createPoll (H16)', () => {
     expect(order).toEqual(['POST /poll', 'POST /poll/42/options', 'PUT /poll/42'])
   })
 
-  it('makes no configuration call for a plain named poll (nothing to apply)', async () => {
+  it('a plain named poll still gets the NC-side one-vote-per-member limit and nothing else', async () => {
     await NextcloudPollsClient.createPoll('11111111-1111-1111-1111-111111111111', { title: 'T', type: 'textPoll', options: ['A'], anonymous: false })
-    expect(calls.some((c) => c.method === 'PUT')).toBe(false)
+    expect(calls.find((c) => c.method === 'PUT')!.body).toEqual({ pollConfiguration: { maxVotesPerUser: 1 } })
   })
 
   it('rolls the poll back when the configuration write fails: never leave a non-anonymous "Anonym" poll behind', async () => {

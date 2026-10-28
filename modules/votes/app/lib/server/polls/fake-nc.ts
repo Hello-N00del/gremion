@@ -81,6 +81,7 @@ export function makeFakeNc() {
         if (c.anonymous !== undefined) p.anonymous = c.anonymous
         if (c.description !== undefined) p.description = c.description
         if (c.expire !== undefined) p.expire = c.expire
+        if (c.maxVotesPerUser !== undefined) p.maxVotesPerUser = c.maxVotesPerUser
         return json({ poll: view(p, who) })
       }
     }
@@ -88,6 +89,8 @@ export function makeFakeNc() {
       const oid = Number(m[1])
       const p = [...polls.values()].find((x) => x.options.some((o) => o.id === oid))
       if (!p) return json({}, 404)
+      // Nextcloud enforces the per-user vote limit itself (Polls maxVotesPerUser; 0 = unlimited).
+      if (p.maxVotesPerUser && (p.voters.get(who)?.size ?? 0) >= p.maxVotesPerUser) return json({}, 409)
       p.voters.set(who, (p.voters.get(who) ?? new Set()).add(oid))
       return json({ ok: true })
     }

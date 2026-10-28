@@ -122,12 +122,12 @@ async function createBound(storedTitle: string, dto: CreatePollDto): Promise<NcP
     // PUT /poll/{id} { pollConfiguration }. Without this an "Anonym" poll was
     // silently created NON-anonymous. Same rollback contract as the options write:
     // a poll whose privacy setting did not take must never be left behind.
-    const pollConfiguration: Partial<NcPoll['configuration']> = {}
+    // maxVotesPerUser 1: Nextcloud itself enforces one vote per member (the app's
+    // vote() check-then-act alone is racy), so the limit is always applied.
+    const pollConfiguration: Partial<NcPoll['configuration']> & { maxVotesPerUser: number } = { maxVotesPerUser: 1 }
     if (dto.anonymous) pollConfiguration.anonymous = true
     if (dto.description !== undefined) pollConfiguration.description = dto.description
     if (dto.expire !== undefined) pollConfiguration.expire = dto.expire
-    if (Object.keys(pollConfiguration).length === 0) return poll
-
     try {
       const updated = await ncFetch<{ poll?: NcPoll }>(`/poll/${poll.id}`, {
         method: 'PUT',

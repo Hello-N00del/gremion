@@ -101,6 +101,16 @@ describe('vote integrity on the same route', () => {
     await (await client('tok-2')).vote(p.id, o1.id)
   })
 
+  it('Nextcloud itself enforces one vote per member: two concurrent votes on different options record exactly one', async () => {
+    const p = await (await admin()).createPoll(dto('P'))
+    const [o1, o2] = nc.polls.get(p.id)!.options
+    expect(nc.polls.get(p.id)!.maxVotesPerUser).toBe(1)
+    const c = await client('tok-1')
+    const results = await Promise.allSettled([c.vote(p.id, o1.id), c.vote(p.id, o2.id)])
+    expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1)
+    expect([...nc.polls.get(p.id)!.voters.get('Bearer tok-1')!]).toHaveLength(1)
+  })
+
   it('voting window: an expired poll rejects votes (409)', async () => {
     const p = await (await admin()).createPoll({ ...dto('P'), expire: 1 })
     const o = nc.polls.get(p.id)!.options[0]

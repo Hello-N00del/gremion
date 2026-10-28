@@ -192,6 +192,9 @@ export function createPollsClient(opts: { oidcBearer?: string; tenantId?: string
       // - access 'open' (#411): polls default to access=private (creator-only),
       //   which 400s every per-user bearer read/vote — the app gates /polls
       //   itself and all members are NC users, so 'open' is the NC mapping.
+      // - maxVotesPerUser 1: 'one vote per member' is enforced by Nextcloud itself,
+      //   not only by the check-then-act in vote() (two concurrent votes both saw
+      //   countVotes 0). The module casts exactly one 'yes' per member.
       // - anonymous / description / expire (F1-FIX-08, H16): `POST /poll` reads
       //   only { type, title }, so these MUST travel here. anonymous is always
       //   sent explicitly so the privacy setting never rides on NC's default.
@@ -202,7 +205,7 @@ export function createPollsClient(opts: { oidcBearer?: string; tenantId?: string
       try {
         const res = await ncFetch<{ poll?: NcPoll }>(`/poll/${poll.id}`, {
           method: 'PUT',
-          body: JSON.stringify({ pollConfiguration: { access: 'open', ...settings } }),
+          body: JSON.stringify({ pollConfiguration: { access: 'open', maxVotesPerUser: 1, ...settings } }),
         })
         configured = res?.poll
         // Fail closed on privacy: when Nextcloud echoes the stored poll, its

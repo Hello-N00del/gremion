@@ -60,6 +60,11 @@ describe('leaf client: per-tenant creation binding + list filtering', () => {
     expect((await NextcloudPollsClient.listPolls(A)).map((p) => p.id)).toEqual([903])
   })
 
+  it('creates the poll with an NC-side vote limit of one per member', async () => {
+    const created = await NextcloudPollsClient.createPoll(A, dto('Limit'))
+    expect(nc.polls.get(created.id)!.maxVotesPerUser).toBe(1)
+  })
+
   it('refuses a missing / malformed tenant id (fail closed)', async () => {
     await expect(NextcloudPollsClient.listPolls('')).rejects.toThrow(/tenant/i)
     await expect(NextcloudPollsClient.createPoll('a b', dto('x'))).rejects.toThrow(/tenant/i)

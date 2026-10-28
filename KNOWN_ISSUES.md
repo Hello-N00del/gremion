@@ -587,4 +587,11 @@ sets `VOTES_LEGACY_POLL_TENANT_ID` to the one tenant that owns them; (2) the mar
 is visible to anyone who opens the poll in the Nextcloud UI itself, and Nextcloud
 admins can still see all polls - isolation holds inside the module, not inside
 Nextcloud; (3) a vote is attributed per Keycloak user, so a person who is a member
-of two tenants votes once per tenant-bound poll, not once globally.
+of two tenants votes once per tenant-bound poll, not once globally; (4) the marker
+only counts on a poll owned by the module's Nextcloud admin account
+(`NEXTCLOUD_ADMIN_USER`), so a poll typed straight into Nextcloud with a forged
+marker is ignored; (5) the result counts live in Nextcloud and are NOT
+tenant-isolated: any Nextcloud user can still vote in a poll through the
+Nextcloud UI or OCS with their own session, and those votes show in the totals.
+New polls carry a Nextcloud-side limit of one vote per member (`maxVotesPerUser`);
+polls created before that change do not, and keep only the module's own check.
