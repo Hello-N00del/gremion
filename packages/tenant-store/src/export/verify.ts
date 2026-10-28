@@ -43,7 +43,7 @@ export interface VerifyResult {
   problems: Problem[]
 }
 
-const SAFE_PATH = /^[a-z0-9_]+\/(?:[a-z0-9_]+\.)?[a-z0-9_]+\.(csv|json)$/
+const SAFE_PATH = /^[a-z0-9_]+\/(?:[a-z0-9_-]+\.)?[a-z0-9_-]+\.(csv|json)$/
 
 export function verifyExport(dir: string): VerifyResult {
   const problems: Problem[] = []

@@ -81,6 +81,11 @@ beforeAll(async () => {
       CREATE CAST (mood AS text) WITH FUNCTION evil(mood);
       ALTER TABLE notes ADD COLUMN m mood;
       INSERT INTO notes VALUES (1, 'a', 'calm'), (2, 'b', 'loud');
+      -- MED-1: names the tenant chose that are not file names.
+      CREATE TABLE "../../../escaped" (id int PRIMARY KEY);
+      INSERT INTO "../../../escaped" VALUES (1);
+      CREATE TABLE "Members" ("Name" text PRIMARY KEY);
+      INSERT INTO "Members" VALUES ('Ada');
       RESET ROLE;
     `)
   } finally {
@@ -261,6 +266,21 @@ describe('tenant export (TRD-149/150/151)', () => {
     expect(readFileSync(join(dir, 'finance/finance.receipt.csv'), 'utf8')).toBe('id,amount\r\n1,3.00\r\n2,4.00\r\n')
     const empty = { id: 'content', runtimeExport: { kind: 'pg_dump', retentionProfile: 'rp-pub-module-data' }, enabled: true, sql: asReader(EMPTY_DB) }
     await expect(exportTenant({ slug: 'acme', outDir: fresh(), kernel, modules: [empty], kernelTables: ['org_units'] })).rejects.toThrow(/content.*no table/)
+  })
+
+  it('MED-1: a table name is never a path: ../ and capitals become file-safe names inside --out, the export completes', async () => {
+    const escaped = join(SCRATCH, '..', 'escaped.csv')
+    rmSync(escaped, { force: true })
+    rmSync(join(SCRATCH, '..', 'escaped.json'), { force: true })
+    const dir = fresh()
+    const board = { id: 'board', runtimeExport: { kind: 'pg_dump', retentionProfile: 'rp-brd-module-data' }, enabled: true, sql: asReader(EVIL_DB) }
+    const { manifest, verify } = await exportTenant({ slug: 'acme', outDir: dir, kernel, modules: [board], kernelTables: ['org_units'] })
+    expect(existsSync(escaped)).toBe(false)
+    expect(verify).toMatchObject({ ok: true, problems: [] })
+    const byTable = (t: string) => manifest.files.filter((f) => f.scope === 'board' && f.table === t).map((f) => f.path)
+    expect(byTable('../../../escaped')).toEqual(['board/-2e-2e-2f-2e-2e-2f-2e-2e-2fescaped.csv', 'board/-2e-2e-2f-2e-2e-2f-2e-2e-2fescaped.json'])
+    expect(byTable('Members')).toEqual(['board/-4dembers.csv', 'board/-4dembers.json'])
+    expect(readFileSync(join(dir, 'board/-4dembers.csv'), 'utf8')).toBe('Name\r\nAda\r\n')
   })
 
   it('a declared kernel table that does not exist fails the export visibly', async () => {

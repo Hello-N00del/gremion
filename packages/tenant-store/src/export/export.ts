@@ -32,7 +32,7 @@
 // directory that already has content.
 import { createHash } from 'node:crypto'
 import { chmodSync, closeSync, mkdirSync, openSync, readdirSync, writeFileSync, writeSync } from 'node:fs'
-import { join } from 'node:path'
+import { dirname, join, resolve, sep } from 'node:path'
 import type postgres from 'postgres'
 import { csvLine, jsonReplacer } from './csv.js'
 import { assertNotSuperuserCapable } from './reader.js'
@@ -139,9 +139,43 @@ function quoteIdent(id: string): string {
   return `"${id.replaceAll('"', '""')}"`
 }
 
-/** <table> for public, <schema>.<table> otherwise (file names inside the scope directory). */
-function fileStem(schema: string, table: string): string {
-  return schema === 'public' ? table : `${schema}.${table}`
+/**
+ * MED-1: a catalog name as a file-name part. [a-z0-9_] stay as they are;
+ * every other UTF-8 byte becomes -<2 lowercase hex> ("Members" ->
+ * "-4dembers", "../x" -> "-2e-2e-2fx"), so the result is [a-z0-9_-]+, never
+ * holds a dot or a slash, and distinct names stay distinct. The manifest
+ * keeps the real name.
+ */
+export function fileSafeName(name: string): string {
+  let out = ''
+  for (const b of Buffer.from(name, 'utf8')) {
+    const ch = String.fromCharCode(b)
+    out += /[a-z0-9_]/.test(ch) ? ch : `-${b.toString(16).padStart(2, '0')}`
+  }
+  return out
+}
+
+const FILE_PART = /^[a-z0-9_-]+$/
+/** Longest stem before the hash fallback: <stem>.json stays well inside NAME_MAX (255). */
+const MAX_STEM = 200
+
+/** <table> for public, <schema>.<table> otherwise, file-safe (the file names inside the scope directory). */
+export function fileStem(schema: string, table: string): string {
+  const parts = (schema === 'public' ? [table] : [schema, table]).map(fileSafeName)
+  for (const p of parts) if (!FILE_PART.test(p)) throw new ExportError(`refusing table name ${JSON.stringify(`${schema}.${table}`)}: no file-safe name`)
+  const stem = parts.join('.')
+  if (stem.length <= MAX_STEM) return stem
+  const h = createHash('sha256').update(`${schema}\u0000${table}`).digest('hex').slice(0, 16)
+  return `${parts.join('_').slice(0, MAX_STEM - 18)}-h${h}`
+}
+
+/** The file's absolute path, asserted to stay inside <outDir>/<scope> (MED-1). */
+function insideOut(outDir: string, scope: string, file: string): string {
+  if (!IDENT.test(scope)) throw new ExportError(`refusing scope ${JSON.stringify(scope)}`)
+  const base = resolve(outDir, scope)
+  const p = resolve(base, file)
+  if (dirname(p) !== base || !p.startsWith(base + sep)) throw new ExportError(`refusing a file outside ${base}: ${JSON.stringify(file)}`)
+  return p
 }
 
 async function exportTable(tx: postgres.TransactionSql, scope: string, schema: string, table: string, outDir: string): Promise<ManifestFile[]> {
@@ -166,10 +200,13 @@ async function exportTable(tx: postgres.TransactionSql, scope: string, schema: s
   const header = cols.map((c) => c.name)
   const select = `SELECT ${header.map(quoteIdent).join(', ')} FROM ${quoteIdent(schema)}.${quoteIdent(table)} ORDER BY ${orderBy}`
 
+  // Validated BEFORE anything touches the disk.
   const stem = fileStem(schema, table)
-  mkdirSync(join(outDir, scope), { recursive: true, mode: 0o700 })
-  const csv = openSink(join(outDir, scope, `${stem}.csv`))
-  const json = openSink(join(outDir, scope, `${stem}.json`))
+  const csvPath = insideOut(outDir, scope, `${stem}.csv`)
+  const jsonPath = insideOut(outDir, scope, `${stem}.json`)
+  mkdirSync(resolve(outDir, scope), { recursive: true, mode: 0o700 })
+  const csv = openSink(csvPath)
+  const json = openSink(jsonPath)
   let rows = 0
   try {
     json.write('[')
