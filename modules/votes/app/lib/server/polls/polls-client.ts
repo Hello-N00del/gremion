@@ -1,4 +1,8 @@
 import { serviceEnv } from '$lib/server/env/service-env'
+import { getTenant } from '$lib/server/tenant/context'
+import { assertTenantId, PollAccessError, scopePoll, tagTitle } from './tenant-scope'
+
+export { PollAccessError } from './tenant-scope'
 
 // Polls v9 (NC 33) serves its REST API on the OCS mount. The legacy
 // index.php/apps/polls/api/v1.0 mount now only registers the OPTIONS preflight
@@ -78,8 +82,17 @@ function adminAuthHeader(): string {
  * attributes votes and `currentUserStatus` to the acting user (#411) — without
  * it every call runs as the shared NC admin, so the first vote locks the poll
  * for everyone. Omit for admin/system operations (poll creation, aggregators). */
-export function createPollsClient(opts: { oidcBearer?: string } = {}) {
+export function createPollsClient(opts: { oidcBearer?: string; tenantId?: string } = {}) {
   const { oidcBearer } = opts
+
+  // TENANT ISOLATION (K5#29 / S4#18): one shared Nextcloud, so every poll is bound
+  // to its tenant (tenant-scope.ts) and every list / by-id route checks it. The
+  // tenant is read per call from the request context (getTenant() THROWS without
+  // one: fail closed), or pinned via opts.tenantId. Another tenant's poll answers
+  // exactly like a missing one (pollsStatus 404).
+  const tenant = (): string => assertTenantId(opts.tenantId ?? getTenant().id)
+  const legacy = (): string | undefined => serviceEnv('VOTES_LEGACY_POLL_TENANT_ID')
+  const notFound = () => new PollAccessError(404, 'poll not found')
 
   async function ncFetch<T>(
     path: string,
@@ -107,17 +120,30 @@ export function createPollsClient(opts: { oidcBearer?: string } = {}) {
   }
 
   return {
-    listPolls: (): Promise<NcPoll[]> =>
-      ncFetch<{ polls: NcPoll[] }>('/polls').then((r) => r.polls),
+    async listPolls(): Promise<NcPoll[]> {
+      const t = tenant()
+      const { polls } = await ncFetch<{ polls: NcPoll[] }>('/polls')
+      return polls.flatMap((p) => scopePoll(p, t, legacy()) ?? [])
+    },
 
-    getPoll: (id: number): Promise<NcPoll> =>
-      ncFetch<{ poll: NcPoll }>(`/poll/${id}`).then((r) => r.poll),
+    /** The poll, only if it belongs to the calling tenant (else pollsStatus 404). */
+    async getPoll(id: number): Promise<NcPoll> {
+      const t = tenant()
+      let raw: NcPoll
+      try {
+        raw = (await ncFetch<{ poll: NcPoll }>(`/poll/${id}`)).poll
+      } catch (e) {
+        // NC answers 403/404 for polls this user cannot see: same answer as foreign.
+        if (e instanceof Error && /→\s*(403|404)\b/.test(e.message)) throw notFound()
+        throw e
+      }
+      return scopePoll(raw, t, legacy()) ?? Promise.reject(notFound())
+    },
 
     async getPollWithOptions(id: number): Promise<NcPoll> {
-      const [poll, optionsResult] = await Promise.all([
-        this.getPoll(id),
-        ncFetch<{ options: NcPollOption[] }>(`/poll/${id}/options`),
-      ])
+      // Ownership first: a foreign poll's options are never even requested.
+      const poll = await this.getPoll(id)
+      const optionsResult = await ncFetch<{ options: NcPollOption[] }>(`/poll/${id}/options`)
       return { ...poll, options: optionsResult.options }
     },
 
@@ -127,7 +153,7 @@ export function createPollsClient(opts: { oidcBearer?: string } = {}) {
       // here; step 3 applies them with the `PUT /poll/{id}` pollConfiguration.
       const { poll } = await ncFetch<{ poll: NcPoll }>('/poll', {
         method: 'POST',
-        body: JSON.stringify({ title: dto.title, type: dto.type }),
+        body: JSON.stringify({ title: tagTitle(tenant(), dto.title), type: dto.type }),
       })
 
       // Step 2: add every option in ONE atomic bulk write. v9.1.4
@@ -190,13 +216,25 @@ export function createPollsClient(opts: { oidcBearer?: string } = {}) {
 
       // Return what Nextcloud stored; without an echo, overlay the applied
       // configuration so callers never see the stale POST defaults.
-      return configured ?? { ...poll, configuration: { ...poll.configuration, ...settings } }
+      const stored = configured ?? { ...poll, configuration: { ...poll.configuration, ...settings } }
+      return scopePoll(stored, tenant(), legacy()) ?? stored
     },
 
-    vote: (_pollId: number, optionId: number): Promise<unknown> =>
-      ncFetch<unknown>(`/option/${optionId}/vote/yes`, {
-        method: 'PUT',
-      }),
+    /** Cast the acting user's vote. Integrity, in order: acting-user bearer (never
+     *  the shared admin), poll belongs to the calling tenant, the option belongs to
+     *  THAT poll (no smuggling another poll's option through this id), voting window
+     *  open, and one vote per member. */
+    async vote(pollId: number, optionId: number): Promise<unknown> {
+      if (!oidcBearer) throw new PollAccessError(401, 'acting user required')
+      const poll = await this.getPollWithOptions(pollId)
+      if (!(poll.options ?? []).some((o) => o.id === optionId)) throw notFound()
+      const expired =
+        poll.status?.expired === true ||
+        (poll.configuration.expire > 0 && poll.configuration.expire * 1000 <= Date.now())
+      if (expired) throw new PollAccessError(409, 'poll closed')
+      if ((poll.currentUserStatus?.countVotes ?? 0) > 0) throw new PollAccessError(409, 'already voted')
+      return ncFetch<unknown>(`/option/${optionId}/vote/yes`, { method: 'PUT' })
+    },
   }
 }
 

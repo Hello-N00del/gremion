@@ -73,7 +73,7 @@ describe('NextcloudPollsClient.createPoll (H16)', () => {
   })
 
   it('PUTs a pollConfiguration carrying anonymous:true, description and expire, and the result reflects them', async () => {
-    const created = await NextcloudPollsClient.createPoll({
+    const created = await NextcloudPollsClient.createPoll('11111111-1111-1111-1111-111111111111', {
       title: 'Mensa?',
       type: 'textPoll',
       options: ['A', 'B'],
@@ -93,20 +93,20 @@ describe('NextcloudPollsClient.createPoll (H16)', () => {
   })
 
   it('applies the configuration AFTER the options are in place', async () => {
-    await NextcloudPollsClient.createPoll({ title: 'T', type: 'textPoll', options: ['A'], anonymous: true })
+    await NextcloudPollsClient.createPoll('11111111-1111-1111-1111-111111111111', { title: 'T', type: 'textPoll', options: ['A'], anonymous: true })
     const order = calls.map((c) => `${c.method} ${c.path}`)
     expect(order).toEqual(['POST /poll', 'POST /poll/42/options', 'PUT /poll/42'])
   })
 
   it('makes no configuration call for a plain named poll (nothing to apply)', async () => {
-    await NextcloudPollsClient.createPoll({ title: 'T', type: 'textPoll', options: ['A'], anonymous: false })
+    await NextcloudPollsClient.createPoll('11111111-1111-1111-1111-111111111111', { title: 'T', type: 'textPoll', options: ['A'], anonymous: false })
     expect(calls.some((c) => c.method === 'PUT')).toBe(false)
   })
 
   it('rolls the poll back when the configuration write fails: never leave a non-anonymous "Anonym" poll behind', async () => {
     failOn = 'PUT /poll/42'
     await expect(
-      NextcloudPollsClient.createPoll({ title: 'T', type: 'textPoll', options: ['A'], anonymous: true }),
+      NextcloudPollsClient.createPoll('11111111-1111-1111-1111-111111111111', { title: 'T', type: 'textPoll', options: ['A'], anonymous: true }),
     ).rejects.toThrow(/500/)
     expect(calls.at(-1)).toMatchObject({ method: 'DELETE', path: '/poll/42' })
   })
