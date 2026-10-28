@@ -9,6 +9,8 @@ import { PURGE_DEADLINE_MS, PURGE_RESIDUAL, PURGE_RULES, deleteBatchSql, purgeCu
 
 const REPO = fileURLToPath(new URL('../../../../', import.meta.url))
 const CATALOGUE = readFileSync(join(REPO, 'docs/compliance/retention-catalogue.md'), 'utf8')
+/** Spellings that delete from, truncate or purge the governance audit record (RC-GOV-CHAIN). */
+const AUDIT_RECORD_WRITE = /audit_log_purge_before|DELETE\s+FROM\s+(?:public\.)?audit_log\b|TRUNCATE\s+(?:TABLE\s+)?(?:public\.)?audit_log\b/i
 const rowLine = (id: string) => CATALOGUE.split('\n').find((l) => l.startsWith(`| ${id} `))
 
 function migrationsText(dir: string): string {
@@ -65,7 +67,8 @@ describe('PURGE_RULES against the retention catalogue', () => {
 
   it('audit_log is a governance record (RC-GOV-CHAIN): no rule purges it and no runtime source calls audit_log_purge_before or deletes from it', () => {
     expect(PURGE_RULES.filter((r) => /audit_log/.test(r.table) || /audit_log/.test(r.id))).toEqual([])
-    const roots = ['packages/tenant-store/src', 'packages/retention/src', 'gremion-ui/src', 'gremion-ui/scripts', 'infra/host']
+    // every place runtime code lives: all packages and feature modules, not only the two that once held a purge
+    const roots = ['packages', 'modules', 'apps', 'services', 'gremion-ui/src', 'gremion-ui/scripts', 'infra/host']
     const offenders: string[] = []
     const walk = (dir: string): void => {
       for (const e of readdirSync(join(REPO, dir), { withFileTypes: true })) {
@@ -74,12 +77,26 @@ describe('PURGE_RULES against the retention catalogue', () => {
           if (e.name !== 'node_modules') walk(rel)
         } else if (/\.(ts|svelte|mjs|js|sh)$/.test(e.name) && !/\.test\.|\.spec\.|\.bats$/.test(e.name)) {
           const text = readFileSync(join(REPO, rel), 'utf8')
-          if (/audit_log_purge_before|DELETE\s+FROM\s+(?:public\.)?audit_log|TRUNCATE\s+(?:TABLE\s+)?(?:public\.)?audit_log/i.test(text)) offenders.push(rel)
+          if (AUDIT_RECORD_WRITE.test(text)) offenders.push(rel)
         }
       }
     }
     for (const r of roots) walk(r)
     expect(offenders, 'the audit record is append-only: only the 0059 migration defines the (unused) purge function').toEqual([])
+  })
+
+  it('the audit-record scan pattern matches every forbidden spelling and none of the allowed ones (a pattern that cannot match guards nothing)', () => {
+    for (const bad of [
+      'SELECT audit_log_purge_before(now())',
+      'DELETE FROM audit_log WHERE created_at < $1',
+      'delete from public.audit_log',
+      'DELETE\n  FROM audit_log',
+      'TRUNCATE audit_log',
+      'TRUNCATE TABLE public.audit_log;',
+    ]) expect(AUDIT_RECORD_WRITE.test(bad), bad).toBe(true)
+    for (const ok of ['SELECT * FROM audit_log', 'INSERT INTO audit_log (id) VALUES (1)', 'DELETE FROM audit_log_chain_anchor_shadow', 'REVOKE DELETE ON public.audit_log FROM PUBLIC']) {
+      expect(AUDIT_RECORD_WRITE.test(ok), ok).toBe(false)
+    }
   })
 
   it('rule ids are unique, identifiers are plain, and the SQL never embeds the window or a date', () => {
