@@ -17,12 +17,14 @@
 // localized sslRequired partial PUT, and the idempotent gremion-admin SA
 // realm-management grant (A — assignServiceAccountRealmRoles). Drifts the §4-2
 // sequence cannot mechanically repair (per-tenant exact URIs, fixture users,
-// fullScopeAllowed, the sub-mapper) are REPORTED but never auto-repaired — a
-// re-import is the operator's answer.
+// fullScopeAllowed, the gremion-ui sub-mapper) are REPORTED but never auto-repaired — a
+// re-import is the operator's answer. The one exception among the sub checks is
+// `bearer-clients-sub` (TASK-033-a): it adds the missing sub mapper / scope.
 import { KcProvisionApi, realmSeg, stepup2faGateProblem, type FlowExecRep, type KcTransport } from './kc-admin-api'
 import { ADMIN_CLIENT_ID, GREMION_ADMIN_SA_REALM_ROLES } from './pipeline'
 import { frontendUrlFor, REALM_PASSWORD_POLICY } from './realm-doc'
 import type { TenantStatus } from '../registry'
+import { DEFAULT_AUDIENCES } from '../../../auth/audience'
 
 /** The exact, ordered set of named checks reconcile runs (the §4 contract). */
 export const RECONCILE_CHECK_NAMES = [
@@ -37,6 +39,7 @@ export const RECONCILE_CHECK_NAMES = [
   'gremion-ui-client', // §4-1  the gremion-ui client exists
   'gremion-ui-acr-mapper', // §4-1  acr protocol-mapper on gremion-ui
   'gremion-ui-sub-mapper', // §4-1  uid sub protocol-mapper on gremion-ui
+  'bearer-clients-sub', // TASK-033-a  every client whose tokens reach the Bearer branch issues `sub` in its access token
   'gremion-ui-redirect-uris', // §4-4  exact per-tenant redirect URIs (#240)
   'gremion-ui-web-origins', // §4-4  exact per-tenant web-origins (#240)
   'gremion-ui-pkce', // sweep 2 #6  pkce.code.challenge.method == S256 on gremion-ui
@@ -220,6 +223,10 @@ interface MapperRep {
   protocolMapper?: string
   config?: Record<string, string>
 }
+interface ScopeRep {
+  id?: string
+  name?: string
+}
 interface UserRep {
   id?: string
   username?: string
@@ -378,6 +385,33 @@ function expectedUiScopeRoles(base: Record<string, unknown>): string[] {
   const scopeMappings = (base.scopeMappings as Array<{ client?: string; roles?: string[] }> | undefined) ?? []
   const ui = scopeMappings.find((sm) => sm.client === 'gremion-ui')
   return [...(ui?.roles ?? [])]
+}
+
+/** TASK-033-a: the clients whose access tokens reach hooks.server.ts's Bearer branch are the ones the
+ *  verifier accepts the audience of (DEFAULT_AUDIENCES are client ids: gremion-ui, gremion-mobile). */
+export const BEARER_CLIENT_IDS: readonly string[] = DEFAULT_AUDIENCES
+
+/** A mapper that puts `sub` into the ACCESS token (Bearer tokens are access tokens): Keycloak's own
+ *  oidc-sub-mapper (the built-in `basic` scope, 25+) or a property mapper writing claim `sub`. */
+function isAccessTokenSubMapper(m: MapperRep): boolean {
+  const issuesSub = m.protocolMapper === 'oidc-sub-mapper' || m.config?.['claim.name'] === 'sub'
+  return issuesSub && m.config?.['access.token.claim'] === 'true'
+}
+
+/** The mapper reconcile adds when a Bearer client has no sub: the one the base template's gremion-ui carries. */
+const SUB_MAPPER_REP = {
+  name: 'sub',
+  protocol: 'openid-connect',
+  protocolMapper: 'oidc-usermodel-property-mapper',
+  consentRequired: false,
+  config: {
+    'userinfo.token.claim': 'false',
+    'user.attribute': 'id',
+    'id.token.claim': 'false',
+    'access.token.claim': 'true',
+    'claim.name': 'sub',
+    'jsonType.label': 'String',
+  },
 }
 
 export async function reconcileRealm(transport: KcTransport, opts: ReconcileOptions): Promise<ReconcileReport> {
@@ -563,6 +597,36 @@ export async function reconcileRealm(transport: KcTransport, opts: ReconcileOpti
     }
   }
 
+  // ── TASK-033-a: every Bearer client issues `sub` ──────────────────────────────
+  // A token without `sub` has no session (sessionUserFromPayload), so a client whose access token lacks
+  // it locks its own users out. Read, per Bearer client, the client's own mappers and the mappers of its
+  // default client scopes (Keycloak 25+ issues `sub` through the built-in `basic` scope; a realm imported
+  // from our template has no such scope). A client absent from the realm issues no tokens.
+  const subMissing: Array<{ clientId: string; id: string }> = []
+  for (const clientId of BEARER_CLIENT_IDS) {
+    const c = ((await get<ClientRep[]>(`/clients?clientId=${encodeURIComponent(clientId)}`)) ?? [])[0]
+    if (!c?.id) continue
+    let issues = ((await get<MapperRep[]>(`/clients/${c.id}/protocol-mappers/models`)) ?? []).some(isAccessTokenSubMapper)
+    if (!issues) {
+      for (const scope of (await get<ScopeRep[]>(`/clients/${c.id}/default-client-scopes`)) ?? []) {
+        if (!scope.id) continue
+        const mappers = (await get<MapperRep[]>(`/client-scopes/${scope.id}/protocol-mappers/models`)) ?? []
+        if (mappers.some(isAccessTokenSubMapper)) {
+          issues = true
+          break
+        }
+      }
+    }
+    if (!issues) subMissing.push({ clientId, id: c.id })
+  }
+  if (subMissing.length === 0) pass('bearer-clients-sub')
+  else {
+    fail(
+      'bearer-clients-sub',
+      `no sub in the access token of client(s) ${subMissing.map((m) => m.clientId).join(', ')}: neither a sub mapper on the client nor a default client scope (basic) carrying one -- tokens without sub have no session (TRD-147)`,
+    )
+  }
+
   // ── #239 / TASK-043 Q10: no FIXTURE user ─────────────────────────────────────
   // NARROWED, not dropped: a provisioned realm now holds its real first
   // administrators (PRD-IDN-005), so "any non-service-account user" is no
@@ -693,8 +757,24 @@ export async function reconcileRealm(transport: KcTransport, opts: ReconcileOpti
     applied.push('gremion-admin-sa-roles')
   }
 
+  // TASK-033-a: a Bearer client without `sub` gets it. The realm's own `basic` scope when it has one (Keycloak
+  // 25+ native), else the same sub mapper the base template puts on gremion-ui. The post-apply re-verify below
+  // reads the result; nothing here is assumed.
+  if (failedNames.has('bearer-clients-sub') && subMissing.length > 0) {
+    const scopes = (await get<ScopeRep[]>('/client-scopes')) ?? []
+    const basic = scopes.find((sc) => sc.name === 'basic' && sc.id)
+    for (const m of subMissing) {
+      if (basic?.id) {
+        await transport('PUT', `/admin/realms/${realmSeg(realm)}/clients/${m.id}/default-client-scopes/${basic.id}`)
+      } else {
+        await transport('POST', `/admin/realms/${realmSeg(realm)}/clients/${m.id}/protocol-mappers/models`, SUB_MAPPER_REP)
+      }
+    }
+    applied.push('bearer-clients-sub')
+  }
+
   // The remaining failures (exact URIs / fixture users / fullScopeAllowed / the
-  // sub-mapper) are NOT mechanically repaired by the §4-2 sequence — they stay
+  // gremion-ui sub-mapper) are NOT mechanically repaired by the §4-2 sequence — they stay
   // reported so the operator re-imports/re-stamps the realm. Re-verify so the
   // report reflects post-apply state.
   const after = await reconcileRealm(transport, { ...opts, verifyOnly: true })
