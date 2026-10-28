@@ -109,25 +109,62 @@ gt() { run "${REL}/infra/host/bin/gremion-tenant" "$@"; }
     ! grep -q 'psql submit' "$ORDER"
 }
 
-@test "suspend and resume record the access (default why, or --reason) before the container acts; a refused record stops them" {
+@test "suspend and resume require --reason (like request) and record it before the container acts; a refused record stops them" {
+    gt suspend alpha-rat --operator "$OP"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"--reason"* ]]
+    gt resume alpha-rat --operator "$OP"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"--reason"* ]]
+    [ ! -s "${GREMION_ROOT}/access.log" ]
+    ! grep -q '^tc ' "$ORDER"
     gt suspend alpha-rat --operator "$OP" --reason "Anforderung der Gremienverwaltung vom Montag"
     [ "$status" -eq 0 ] || { echo "$output"; return 1; }
     grep -q '^alpha-rat|host_suspend|deploy|.*|Anforderung der Gremienverwaltung vom Montag$' "${GREMION_ROOT}/access.log"
     [ "$(grep -n 'psql access\|^tc suspend' "$ORDER" | head -1 | cut -d: -f2 | cut -d' ' -f1)" = "psql" ]
     : > "$ORDER"
-    gt resume alpha-rat --operator "$OP"
+    gt resume alpha-rat --operator "$OP" --reason "Klaerung abgeschlossen, Freigabe erteilt"
     [ "$status" -eq 0 ] || { echo "$output"; return 1; }
     grep -q '^alpha-rat|host_resume|deploy|' "${GREMION_ROOT}/access.log"
     : > "${GREMION_ROOT}/access-refused"
     : > "$ORDER"
-    gt suspend alpha-rat --operator "$OP"
+    gt suspend alpha-rat --operator "$OP" --reason "Anforderung der Gremienverwaltung vom Montag"
     [ "$status" -ne 0 ]
     ! grep -q '^tc suspend' "$ORDER"
 }
 
-@test "reconcile --apply records the access; plain reconcile (verify only) does not" {
-    gt reconcile alpha-rat
-    [ ! -s "${GREMION_ROOT}/access.log" ]
+@test "reconcile --apply requires --reason and records it; reconcile (verify only) is recorded too, without a reason needed" {
     gt reconcile alpha-rat --apply
-    grep -q '^alpha-rat|host_reconcile|deploy|' "${GREMION_ROOT}/access.log"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"--reason"* ]]
+    [ ! -s "${GREMION_ROOT}/access.log" ]
+    gt reconcile alpha-rat --apply --reason "Abweichung im Mailzugang beheben"
+    grep -q '^alpha-rat|host_reconcile|deploy|.*|Abweichung im Mailzugang beheben$' "${GREMION_ROOT}/access.log"
+    : > "${GREMION_ROOT}/access.log"
+    : > "$ORDER"
+    gt reconcile alpha-rat
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    grep -q '^alpha-rat|host_reconcile_verify|deploy|' "${GREMION_ROOT}/access.log"
+    [ "$(grep -n 'psql access\|^tc reconcile' "$ORDER" | head -1 | cut -d: -f2 | cut -d' ' -f1)" = "psql" ]
+    : > "${GREMION_ROOT}/access-refused"
+    : > "$ORDER"
+    gt reconcile alpha-rat
+    [ "$status" -ne 0 ]
+    ! grep -q '^tc reconcile' "$ORDER"
+}
+
+@test "what and why travel on stdin, never on the docker exec argv (process table); newline-free text with quotes survives" {
+    why="Grund: \$dollar 'quote' \"dq\" und Semikolon; DROP"
+    call access_record alpha-rat break_glass_request "Anfrage create fuer Mandant" "$why"
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    [ "$(cat "${GREMION_ROOT}/access.log")" = "alpha-rat|break_glass_request|deploy|Anfrage create fuer Mandant|${why}" ]
+    ! grep -qF 'Anfrage create fuer Mandant' "${GREMION_ROOT}/exec-argv.log"
+    ! grep -qF 'Semikolon' "${GREMION_ROOT}/exec-argv.log"
+    ! grep -q 'why=' "${GREMION_ROOT}/exec-argv.log"
+    ! grep -q 'what=' "${GREMION_ROOT}/exec-argv.log"
+}
+
+@test "the host actor is documented as the self-asserted login (SUDO_USER, else id -un)" {
+    grep -qi 'self-asserted' "${HOST_SRC}/lib/access-log.sh"
+    grep -q 'SUDO_USER' "${HOST_SRC}/lib/access-log.sh"
 }

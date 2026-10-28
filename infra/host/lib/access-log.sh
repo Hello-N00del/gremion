@@ -4,7 +4,7 @@
 #
 # Every host tool that reaches a council's data as the vendor or an operator
 # (the break-glass `gremion-tenant request`, `suspend`, `resume`,
-# `reconcile --apply`) records WHO (the invoking login user), WHEN (the server's
+# `reconcile`, with or without --apply) records WHO (the invoking login user), WHEN (the server's
 # clock), WHAT (action and what is reached) and WHY, in gremion_platform's
 # oac.access_record through oac.record_access, as the executor role over the
 # state server's local socket (lib/executor/db.sh). The council administrator
@@ -28,12 +28,40 @@
 #
 # Needs: common.sh (die, GREMION_EXIT_*), executor/db.sh (executor_sql), ROOT.
 
+# THE ACTOR is the invoking login user: SUDO_USER, else `id -un`. It is
+# SELF-ASSERTED: under a root shell (su, a root ssh session) SUDO_USER is
+# whatever the shell carries, and root can set it to any plain user name. The
+# record names who the host says is acting; it does not authenticate them (the
+# host's ssh and sudo logs are the corroboration). The council administrator
+# sees the name as written.
+#
+# WHAT and WHY go on STDIN inside the SQL (dollar-quoted, random tag), never as
+# `psql -v`: a -v is an argument of `docker exec`, visible to every local user
+# in the process table. Only the slug, the action and the actor (each validated
+# to a short plain identifier) are -v.
+
 # access_actor -- the invoking login user (sudo-aware), lowercased, validated.
 access_actor() {
     local actor
     actor="$(printf '%s' "${SUDO_USER:-$(id -un)}" | tr '[:upper:]' '[:lower:]')"
     [[ "$actor" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] || return 1
     printf '%s' "$actor"
+}
+
+# access_text_literal <text> -- the text as a dollar-quoted SQL literal for
+# psql's STDIN. Inside a dollar quote psql does no variable interpolation and
+# Postgres no escape processing; the tag is random and refused if the text
+# contains it.
+access_text_literal() {
+    local text="$1" tag n
+    for n in 1 2 3; do
+        tag="g$(openssl rand -hex 8 | tr -d '\r\n')"
+        if [[ "$text" != *"\$${tag}\$"* ]]; then
+            printf '$%s$%s$%s$' "$tag" "$text" "$tag"
+            return 0
+        fi
+    done
+    return 1
 }
 
 # access_record <slug> <action> <what> <why>
@@ -50,8 +78,11 @@ access_record() {
     [[ ${#what} -ge 3 && ${#what} -le 500 ]] || { printf 'access_record: what is 3 to 500 characters\n' >&2; return 2; }
     [[ ${#why} -ge 10 && ${#why} -le 500 ]] || { printf 'access_record: why is 10 to 500 characters\n' >&2; return 2; }
     actor="$(access_actor)" || { printf 'access_record: the invoking login user is not a plain user name\n' >&2; return 2; }
-    id="$(executor_sql "SELECT oac.record_access(:'slug', :'action', :'what', :'why', :'actor', NULL);" \
-            -v slug="$slug" -v action="$action" -v what="$what" -v why="$why" -v actor="$actor")" || return 1
+    local what_lit why_lit
+    what_lit="$(access_text_literal "$what")" && why_lit="$(access_text_literal "$why")" \
+        || { printf 'access_record: could not quote the text\n' >&2; return 2; }
+    id="$(executor_sql "SELECT oac.record_access(:'slug', :'action', ${what_lit}, ${why_lit}, :'actor', NULL);" \
+            -v slug="$slug" -v action="$action" -v actor="$actor")" || return 1
     id="${id%%$'\n'*}"
     id="${id%$'\r'}"
     [[ "$id" =~ ^[0-9a-f-]{36}$ ]] || { printf 'access_record: gremion_platform returned no record id\n' >&2; return 1; }
