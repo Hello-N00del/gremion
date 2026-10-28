@@ -75,6 +75,7 @@ describe('POST /api/polls', () => {
 
     const request = new Request('http://localhost/api/polls', {
       method: 'POST',
+      headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
         title: 'Neue Umfrage',
         type: 'textPoll',
@@ -93,6 +94,7 @@ describe('POST /api/polls', () => {
 
     const request = new Request('http://localhost/api/polls', {
       method: 'POST',
+      headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ title: 'Test', type: 'textPoll', options: ['Only One'], anonymous: false }),
     })
 
@@ -106,6 +108,7 @@ describe('POST /api/polls', () => {
 
     const request = new Request('http://localhost/api/polls', {
       method: 'POST',
+      headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ title: 'T', type: 'textPoll', options: ['A', 'B'], anonymous: false }),
     })
 

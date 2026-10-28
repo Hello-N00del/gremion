@@ -18,7 +18,7 @@
 // It was latent before this change and is not any more. Those copies wrapped
 // `getClientAddress()` in try/catch because a partial test event might omit it;
 // in production the call read the socket and could not throw, so the catch was
-// dead code. docker-compose.prod.yml now sets ADDRESS_HEADER=x-forwarded-for on
+// dead code. docker-compose.app.yml now sets ADDRESS_HEADER=x-forwarded-for on
 // gremion-ui, and adapter-node THROWS when a configured ADDRESS_HEADER is
 // absent from a request. The catch is live, so the sentinel is reachable.
 //
@@ -30,7 +30,7 @@
 // drift into different answers for the same question.
 //
 // In production the value is the REAL client address only because the container
-// is given ADDRESS_HEADER + XFF_DEPTH (docker-compose.prod.yml, and XFF_DEPTH=2
+// is given ADDRESS_HEADER + XFF_DEPTH (docker-compose.app.yml, and XFF_DEPTH=2
 // under the Cloudflare overlay, which has one more proxy hop). Without them
 // adapter-node reports the socket address, which behind Traefik is Traefik's
 // own container IP — one bucket for everyone.

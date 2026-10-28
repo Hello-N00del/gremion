@@ -14,7 +14,7 @@ import { PATCH } from './+server'
 // async auth() returning the session.
 const eventFor = (roles: string[], body: unknown, handle = 'anna.berger') => ({
   params: { handle },
-  request: new Request('http://x', { method: 'PATCH', body: JSON.stringify(body) }),
+  request: new Request('http://x', { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
   locals: { auth: async () => ({ user: { id: 'u1', roles } }) },
 })
 
@@ -38,7 +38,7 @@ it('403 for a plain member', async () => {
 it('403 when not signed in', async () => {
   const ev = {
     params: { handle: 'anna.berger' },
-    request: new Request('http://x', { method: 'PATCH', body: JSON.stringify({ enabled: false }) }),
+    request: new Request('http://x', { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ enabled: false }) }),
     locals: { auth: async () => null },
   }
   await expect(PATCH(ev as never)).rejects.toMatchObject({ status: 403 })
