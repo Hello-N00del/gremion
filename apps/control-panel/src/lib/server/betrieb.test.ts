@@ -139,16 +139,16 @@ describe('loadBetrieb', () => {
     const f = fakeFetch({
       [firstExpr('backup')]: [{ metric: {}, value: [1, String(27 * 3600)] }],
       [firstExpr('containers')]: [
-        { metric: { name: 'sturaos-postgres-1' }, value: [1, '1'] },
-        { metric: { name: 'sturaos-nats-1' }, value: [1, '0'] },
+        { metric: { name: 'gremion-postgres-1' }, value: [1, '1'] },
+        { metric: { name: 'gremion-nats-1' }, value: [1, '0'] },
       ],
     })
     const r = await loadBetrieb(config(BASE), f.impl)
     expect(res(r, 'backup').rows[0]?.level).toBe('bad')
     const rows = res(r, 'containers').rows
     // stopped first, so the problem is at the top of the list
-    expect(rows[0]).toEqual(expect.objectContaining({ name: 'sturaos-nats-1', level: 'bad' }))
-    expect(rows[1]).toEqual(expect.objectContaining({ name: 'sturaos-postgres-1', level: 'ok' }))
+    expect(rows[0]).toEqual(expect.objectContaining({ name: 'gremion-nats-1', level: 'bad' }))
+    expect(rows[1]).toEqual(expect.objectContaining({ name: 'gremion-postgres-1', level: 'ok' }))
   })
 })
 

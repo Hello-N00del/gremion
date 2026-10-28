@@ -15,6 +15,9 @@ setup() {
     mkdir -p "${REL}/infra/host/bin" "${REL}/infra/host/lib/executor" "${REL}/docker/keycloak"
     cp "${HOST_SRC}/lib/customer-ops.sh" "${REL}/infra/host/lib/"
     cp "${HOST_SRC}/lib/executor/db.sh" "${REL}/infra/host/lib/executor/"
+    # TRD-092: the host verbs record the access first (lib/access-log.sh -> oac.record_access)
+    cp "${HOST_SRC}/lib/access-log.sh" "${REL}/infra/host/lib/"
+    export GREMION_EXECUTOR_PG_CONTAINER=t092-pg-fixture
     cp "${HOST_SRC}/bin/gremion-tenant" "${REL}/infra/host/bin/"
     cp "${HOST_SRC}/lib/common.sh" "${REL}/infra/host/lib/"
     cp "${KERNEL_ROOT}/docker/keycloak/realm-export.ops.json" "${REL}/docker/keycloak/"
@@ -68,6 +71,9 @@ teardown() {
 shim_docker() {
     shim docker '
 case " $* " in
+  *" exec "*" psql "*)
+    # oac.record_access (TRD-092): the record id
+    cat > /dev/null; echo "0192f0c4-0000-7000-8000-0000000000ac"; exit 0 ;;
   *" run "*" tenant-create "*)
     all="$*"
     # the bootstrap-provisioner scratch mount (TASK-043b F1), before the args go
@@ -278,9 +284,9 @@ STUB
 
 @test "relay suspend, resume and reconcile go through the front and hand the container the descriptor" {
     relay_front
-    run "$LAUNCHER" suspend alpha-rat --operator "$OP"
+    run "$LAUNCHER" suspend alpha-rat --operator "$OP" --reason "unit-test reason text"
     [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
-    run "$LAUNCHER" resume alpha-rat --operator "$OP"
+    run "$LAUNCHER" resume alpha-rat --operator "$OP" --reason "unit-test reason text"
     [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
     run "$LAUNCHER" reconcile alpha-rat
     [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
@@ -337,7 +343,7 @@ STUB
 }
 
 @test "suspend: the container first, then the principal revoked" {
-    run "$LAUNCHER" suspend alpha-rat --operator "$OP"
+    run "$LAUNCHER" suspend alpha-rat --operator "$OP" --reason "unit-test reason text"
     [ "$status" -eq 0 ] || { echo "$output"; return 1; }
     run steps
     [ "${lines[0]}" = "tc suspend alpha-rat" ]
@@ -345,7 +351,7 @@ STUB
 }
 
 @test "resume: a fresh principal first (never --rotate), then the container" {
-    run "$LAUNCHER" resume alpha-rat --operator "$OP"
+    run "$LAUNCHER" resume alpha-rat --operator "$OP" --reason "unit-test reason text"
     [ "$status" -eq 0 ] || { echo "$output"; return 1; }
     run steps
     [ "${lines[0]}" = "vendor-mail realm-smtp --realm alpha-rat --tenant alpha_rat" ]
@@ -356,10 +362,10 @@ STUB
     command -v flock >/dev/null || skip "flock not installed"
     exec 8>>"${GREMION_ROOT}/runtime/hostd.lock"
     flock -n 8
-    run "$LAUNCHER" suspend alpha-rat --operator "$OP"
+    run "$LAUNCHER" suspend alpha-rat --operator "$OP" --reason "unit-test reason text"
     [ "$status" -eq 3 ] || { echo "$status $output"; return 1; }
     [[ "$output" == *"busy"* ]]
-    run "$LAUNCHER" resume alpha-rat --operator "$OP"
+    run "$LAUNCHER" resume alpha-rat --operator "$OP" --reason "unit-test reason text"
     [ "$status" -eq 3 ]
     exec 8>&-
     run steps
@@ -370,14 +376,14 @@ STUB
     command -v flock >/dev/null || skip "flock not installed"
     exec 8>>"${GREMION_ROOT}/runtime/hostd.lock"
     flock -n 8
-    GREMION_HOST_LOCK_HELD=1 run "$LAUNCHER" suspend alpha-rat --operator "$OP"
+    GREMION_HOST_LOCK_HELD=1 run "$LAUNCHER" suspend alpha-rat --operator "$OP" --reason "unit-test reason text"
     exec 8>&-
     [ "$status" -eq 0 ] || { echo "$output"; return 1; }
 }
 
 @test "a failed revoke fails suspend, and the failure names the rerun that converges (TASK-043c)" {
     touch "${GREMION_ROOT}/vendor-mail-fails"
-    run "$LAUNCHER" suspend alpha-rat --operator "$OP"
+    run "$LAUNCHER" suspend alpha-rat --operator "$OP" --reason "unit-test reason text"
     [ "$status" -eq 1 ]
     [[ "$output" == *"could not be revoked"* ]] || { echo "$output"; return 1; }
     [[ "$output" == *"rerun gremion-tenant suspend alpha-rat"* ]] || { echo "$output"; return 1; }
@@ -385,10 +391,10 @@ STUB
 
 @test "suspend rerun after a failed host step: the container step runs again harmlessly and the rerun exits 0 (TASK-043c)" {
     touch "${GREMION_ROOT}/vendor-mail-fails"
-    run "$LAUNCHER" suspend alpha-rat --operator "$OP"
+    run "$LAUNCHER" suspend alpha-rat --operator "$OP" --reason "unit-test reason text"
     [ "$status" -eq 1 ]
     rm -f "${GREMION_ROOT}/vendor-mail-fails"
-    run "$LAUNCHER" suspend alpha-rat --operator "$OP"
+    run "$LAUNCHER" suspend alpha-rat --operator "$OP" --reason "unit-test reason text"
     [ "$status" -eq 0 ] || { echo "$output"; return 1; }
     run steps
     [ "${lines[0]}" = "tc suspend alpha-rat" ]
@@ -400,11 +406,11 @@ STUB
 
 @test "resume after a half suspend (host step failed): a fresh issue, never --rotate, then the container (TASK-043c)" {
     touch "${GREMION_ROOT}/vendor-mail-fails"
-    run "$LAUNCHER" suspend alpha-rat --operator "$OP"
+    run "$LAUNCHER" suspend alpha-rat --operator "$OP" --reason "unit-test reason text"
     [ "$status" -eq 1 ]
     rm -f "${GREMION_ROOT}/vendor-mail-fails"
     : > "$ORDER"
-    run "$LAUNCHER" resume alpha-rat --operator "$OP"
+    run "$LAUNCHER" resume alpha-rat --operator "$OP" --reason "unit-test reason text"
     [ "$status" -eq 0 ] || { echo "$output"; return 1; }
     run steps
     [ "${lines[0]}" = "vendor-mail realm-smtp --realm alpha-rat --tenant alpha_rat" ]
@@ -413,11 +419,11 @@ STUB
 }
 
 @test "suspend and resume put no app password and no secret on an argv or in the output (TASK-043c)" {
-    run "$LAUNCHER" suspend alpha-rat --operator "$OP"
+    run "$LAUNCHER" suspend alpha-rat --operator "$OP" --reason "unit-test reason text"
     [ "$status" -eq 0 ]
     refute_state_secrets
     [[ "$output" != *"APP-PASSWORD"* ]]
-    run "$LAUNCHER" resume alpha-rat --operator "$OP"
+    run "$LAUNCHER" resume alpha-rat --operator "$OP" --reason "unit-test reason text"
     [ "$status" -eq 0 ]
     refute_state_secrets
     [[ "$output" != *"APP-PASSWORD"* ]]
@@ -426,7 +432,7 @@ STUB
 
 @test "reconcile --apply rotates on the host when smtp-server is repair: host, then re-verifies" {
     touch "${GREMION_ROOT}/smtp-drift"
-    run "$LAUNCHER" reconcile alpha-rat --apply
+    run "$LAUNCHER" reconcile alpha-rat --apply --reason "unit-test reason text"
     [ "$status" -eq 0 ] || { echo "$output"; steps; return 1; }
     run steps
     [ "${lines[0]}" = "tc reconcile alpha-rat" ]
@@ -445,7 +451,7 @@ STUB
 
 @test "reconcile --apply: a crashed apply (no report) fails loudly and never rotates (review C, r2)" {
     touch "${GREMION_ROOT}/smtp-drift" "${GREMION_ROOT}/fail-reconcile"
-    run "$LAUNCHER" reconcile alpha-rat --apply
+    run "$LAUNCHER" reconcile alpha-rat --apply --reason "unit-test reason text"
     [ "$status" -eq 1 ] || { echo "status=$status $output"; return 1; }
     [[ "$output" == *"no parseable report"* ]] || { echo "$output"; return 1; }
     run steps
@@ -455,12 +461,12 @@ STUB
 @test "usage: no operator, a bad slug, platform, and no active colour are exit 2" {
     run "$LAUNCHER" suspend alpha-rat
     [ "$status" -eq 2 ]
-    run "$LAUNCHER" suspend 1ab --operator "$OP"
+    run "$LAUNCHER" suspend 1ab --operator "$OP" --reason "unit-test reason text"
     [ "$status" -eq 2 ]
-    run "$LAUNCHER" suspend platform --operator "$OP"
+    run "$LAUNCHER" suspend platform --operator "$OP" --reason "unit-test reason text"
     [ "$status" -eq 2 ]
     rm -f "${GREMION_ROOT}/runtime/active-colour"
-    run "$LAUNCHER" suspend alpha-rat --operator "$OP"
+    run "$LAUNCHER" suspend alpha-rat --operator "$OP" --reason "unit-test reason text"
     [ "$status" -eq 2 ]
     run steps
     [ -z "$output" ]
@@ -795,7 +801,7 @@ release_repo() {
     run "$LAUNCHER" status alpha-rat
     [ "$status" -eq 0 ] || { echo "$output"; return 1; }
     assert_recorded docker '-e GREMION_RELEASE_TIP= -e TRAEFIK_CERT_RESOLVER'
-    run "$LAUNCHER" suspend alpha-rat --operator "$OP"
+    run "$LAUNCHER" suspend alpha-rat --operator "$OP" --reason "unit-test reason text"
     [ "$status" -eq 0 ] || { echo "$output"; return 1; }
     ! grep -E -- '-e GREMION_RELEASE_TIP=[0-9a-f]' "$SHIM_LOG" || { echo "a tip was derived from a tree that is no release checkout"; return 1; }
 }

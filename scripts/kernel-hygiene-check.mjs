@@ -1423,6 +1423,13 @@ const IMPORT_REALM_CARRIERS = new Set([
   'scripts/kernel-hygiene-check.mjs',    // this file
   'docker/keycloak/README.md',           // states the boot import is gone
   'docs/deployment.md',                  // same, as the B-01 note
+  // The kernel-api test harness starts REAL Keycloak containers in `start-dev`
+  // and feeds them realm files with --import-realm: that is how a throwaway
+  // test container gets its realms, not a deployment instruction (compose, k8s
+  // and the docs have no boot import, which is what the guards above assert).
+  'services/kernel-api/test/harness/keycloak/make-realms.mjs',
+  'services/kernel-api/test/harness/stack-proof.sh',
+  'services/kernel-api/test/keycloak/audience.int.test.ts',
 ])
 
 // The two operator-approved design specs that B0 tracks are the FROZEN record

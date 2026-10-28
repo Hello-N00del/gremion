@@ -84,6 +84,7 @@ Stages:
   timers       gremion-backup.timer + gremion-verify.service + gremion-metrics.timer
                + gremion-footprint.timer (weekly, TRD-223)
                + gremion-purge.timer (daily, TRD-144/145)
+               + gremion-access-purge.timer (daily, TRD-092)
   harden-ssh   key-only SSH   (RUN LAST, gated, not part of 'all')
   trust        pinned cosign + the release public key       (not part of 'all')
   signers      the release-tag signers file (allowed_signers) (not part of 'all')
@@ -1020,6 +1021,20 @@ stage_timers() {
     [[ -n "$fp_next" && "$fp_next" != "n/a" ]] \
         || die "gremion-footprint.timer is enabled but has no next elapse"
     ok "gremion-footprint.timer next elapse: ${fp_next}"
+
+    # TRD-092 / RC-LOG-AUD: the daily purge of the vendor access record
+    # (oac.purge_access_records, 27-day window). Same two-argument render_unit.
+    # Not started here: it needs the platform chain at 0013, which the control
+    # plane applies; the timer's Persistent=true runs it at the first boot after.
+    render_unit gremion-access-purge.service /etc/systemd/system/gremion-access-purge.service
+    render_unit gremion-access-purge.timer /etc/systemd/system/gremion-access-purge.timer
+    systemctl daemon-reload
+    systemctl enable --now gremion-access-purge.timer
+    local ap_next
+    ap_next="$(systemctl show gremion-access-purge.timer -p NextElapseUSecRealtime --value)"
+    [[ -n "$ap_next" && "$ap_next" != "n/a" ]] \
+        || die "gremion-access-purge.timer is enabled but has no next elapse"
+    ok "gremion-access-purge.timer next elapse: ${ap_next}"
 
     # TRD-144/145 (TASK-033-a): the daily purge run. Same two-argument
     # render_unit. The service is NOT started here: its plt.job_run row needs

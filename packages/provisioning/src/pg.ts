@@ -70,6 +70,8 @@ export interface BootstrapDeps {
   kernelAdmin: Sql
   /** Opens gremion_platform AS its owner (a direct pool of >= 2). */
   openPlatform(): Sql
+  /** Opens a database as the server admin (a pool of 1): the access record's ownership transfer (ensureAccessOwner). */
+  openAdminOn(database: string): Sql
   owner: string
   ownerPassword: string
   catalogue: readonly CatalogueModule[]
@@ -121,6 +123,18 @@ export const PANEL_READS = {
 
 /** The panel's ONE write (TASK-043d D2): no table privilege, this function only. */
 export const PANEL_EXECUTES = ['plt.submit_provisioning_request(text, text, jsonb, uuid, uuid, text, timestamptz, timestamptz, text, text, text)'] as const
+
+/**
+ * TRD-092: the access record's writer (0013). Panel and executor each get
+ * EXECUTE on it (the function derives the origin from the marker role); the
+ * executor alone on the purge; the council-admin read function goes to the
+ * UI's own role (ensureAccessReader). No role holds a table privilege in oac.
+ */
+export const PANEL_OAC_EXECUTES = ['oac.record_access(text, text, text, text, text, uuid)'] as const
+export const EXECUTOR_OAC_EXECUTES = ['oac.record_access(text, text, text, text, text, uuid)', 'oac.purge_access_records(interval)'] as const
+export const READER_OAC_EXECUTES = ['oac.list_access_records(text, integer, timestamptz)'] as const
+/** The council-admin read role (gremion-ui): LOGIN, EXECUTE on the read function only. */
+export const ACCESS_READER_ROLE = 'gremion_ui_oac'
 
 /** The host-side executor's functions (TASK-043d D3); no table privilege at all. */
 export const EXECUTOR_EXECUTES = [
@@ -264,6 +278,7 @@ export async function ensurePanelRequester(d: PanelReaderDeps): Promise<{ create
         for (const f of PANEL_EXECUTES) await sql.unsafe(`GRANT EXECUTE ON FUNCTION ${f} TO ${await quoteIdent(sql, d.role)}`)
         await assertNoOtherRelation(sql, d.role, 'plt', tables)
         await assertExecutesExactly(sql, d.role, PANEL_EXECUTES)
+        await grantOac(sql, d.role, PANEL_OAC_EXECUTES)
       }
     } finally {
       await sql.end({ timeout: 5 })
@@ -274,6 +289,116 @@ export async function ensurePanelRequester(d: PanelReaderDeps): Promise<{ create
   if (markers.includes(EXECUTOR_MARKER)) throw new ProvisioningError('POSTCONDITION', `panel role ${d.role} is a member of ${EXECUTOR_MARKER}`)
   if (!markers.includes(PANEL_REQUESTER_MARKER)) throw new ProvisioningError('POSTCONDITION', `panel role ${d.role} is not a member of ${PANEL_REQUESTER_MARKER}`)
   return { created: !exists }
+}
+
+/**
+ * USAGE on schema oac and EXECUTE on exactly `want` among oac's callable
+ * functions, no table privilege in oac (TRD-092: the record is append-only and
+ * reachable through its functions alone).
+ */
+async function grantOac(sql: Sql, role: string, want: readonly string[]): Promise<void> {
+  for (const f of want) {
+    const [r] = await sql<{ present: boolean }[]>`SELECT to_regprocedure(${f}) IS NOT NULL AS present`
+    if (!r?.present) throw new ProvisioningError('PRECONDITION', `function ${f} is absent in gremion_platform; run migratePlatform (bootstrapPlatform, migration 0013) first`)
+  }
+  await execFmt(sql, 'GRANT USAGE ON SCHEMA %I TO %I', ['oac', role])
+  const q = await quoteIdent(sql, role)
+  for (const f of want) await sql.unsafe(`GRANT EXECUTE ON FUNCTION ${f} TO ${q}`)
+  const rows = await sql<{ sig: string; x: boolean }[]>`
+    SELECT p.oid::regprocedure::text AS sig, has_function_privilege(${role}, p.oid, 'EXECUTE') AS x
+      FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+     WHERE n.nspname = 'oac' AND p.prorettype <> 'trigger'::regtype`
+  const wanted = await sql<{ sig: string }[]>`SELECT to_regprocedure(s)::text AS sig FROM unnest(${[...want]}::text[]) AS s`
+  const need = new Set(wanted.map((w) => w.sig))
+  const extra = rows.filter((x) => x.x && !need.has(x.sig)).map((x) => x.sig)
+  const lacking = [...need].filter((sig) => !rows.some((x) => x.x && x.sig === sig))
+  if (extra.length || lacking.length) {
+    throw new ProvisioningError('POSTCONDITION', `role ${role} oac EXECUTE set differs: lacking [${lacking.join(', ')}], extra [${extra.join(', ')}]`)
+  }
+  await assertNoOtherRelation(sql, role, 'oac', [])
+}
+
+/** TRD-092 MED-1: the NOLOGIN role that owns schema oac, its table and its functions. */
+export const ACCESS_OWNER_ROLE = 'oac_owner'
+
+export interface AccessOwnerDeps {
+  kernelAdmin: Sql
+  openAdminOn(database: string): Sql
+}
+
+/**
+ * Makes oac_owner (NOLOGIN, no members, nobody logs in as it) the owner of schema
+ * oac, oac.access_record and every oac function (migration 0013 created them as
+ * the platform owner, which has no CREATEROLE), and lets its SECURITY DEFINER
+ * functions reach the marker lookup. After this the platform owner cannot DISABLE
+ * TRIGGER, INSERT, DELETE or DROP in oac. Idempotent; run by bootstrapPlatform
+ * after every migratePlatform. A superuser still bypasses it (documented in 0013).
+ */
+export async function ensureAccessOwner(d: AccessOwnerDeps): Promise<{ created: boolean }> {
+  const role = ACCESS_OWNER_ROLE
+  const exists = (await d.kernelAdmin`SELECT 1 FROM pg_roles WHERE rolname = ${role}`).length > 0
+  const attrs = 'NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS'
+  await execFmt(d.kernelAdmin, `${exists ? 'ALTER' : 'CREATE'} ROLE %I ${attrs}`, [role])
+  const sql = d.openAdminOn('gremion_platform')
+  try {
+    const [pre] = await sql<{ ok: boolean }[]>`SELECT to_regclass('oac.access_record') IS NOT NULL AS ok`
+    if (!pre?.ok) throw new ProvisioningError('PRECONDITION', 'oac.access_record is absent in gremion_platform; run migratePlatform (bootstrapPlatform, migration 0013) first')
+    await execFmt(sql, 'ALTER SCHEMA %I OWNER TO %I', ['oac', role])
+    await execFmt(sql, 'ALTER TABLE %I.%I OWNER TO %I', ['oac', 'access_record', role])
+    const fns = await sql<{ sig: string }[]>`SELECT p.oid::regprocedure::text AS sig FROM pg_proc p WHERE p.pronamespace = 'oac'::regnamespace`
+    const q = await quoteIdent(sql, role)
+    for (const f of fns) await sql.unsafe(`ALTER FUNCTION ${f.sig} OWNER TO ${q}`)
+    // record_access / purge_access_records ask plt.provisioning_member_of about the SESSION user
+    await execFmt(sql, 'GRANT USAGE ON SCHEMA %I TO %I', ['plt', role])
+    await sql.unsafe(`GRANT EXECUTE ON FUNCTION plt.provisioning_member_of(text) TO ${q}`)
+    const bad = await sql<{ what: string; owner: string }[]>`
+      SELECT 'schema oac' AS what, pg_get_userbyid(nspowner) AS owner FROM pg_namespace WHERE nspname = 'oac' AND nspowner <> ${role}::regrole
+      UNION ALL SELECT 'table oac.access_record', pg_get_userbyid(relowner) FROM pg_class WHERE oid = 'oac.access_record'::regclass AND relowner <> ${role}::regrole
+      UNION ALL SELECT 'function ' || p.oid::regprocedure::text, pg_get_userbyid(p.proowner) FROM pg_proc p WHERE p.pronamespace = 'oac'::regnamespace AND p.proowner <> ${role}::regrole`
+    if (bad.length) throw new ProvisioningError('POSTCONDITION', `oac is not owned by ${role}: ${bad.map((b) => `${b.what} (${b.owner})`).join(', ')}`)
+    const [login] = await d.kernelAdmin<{ canlogin: boolean; members: number }[]>`
+      SELECT r.rolcanlogin AS canlogin, (SELECT count(*)::int FROM pg_auth_members m WHERE m.roleid = r.oid) AS members FROM pg_roles r WHERE r.rolname = ${role}`
+    if (!login || login.canlogin || login.members > 0) throw new ProvisioningError('POSTCONDITION', `${role} must be NOLOGIN with no members`)
+    return { created: !exists }
+  } finally {
+    await sql.end({ timeout: 5 })
+  }
+}
+
+export interface AccessReaderDeps {
+  kernelAdmin: Sql
+  openAdminOn(database: string): Sql
+  /** Default gremion_ui_oac. */
+  role?: string
+  password: string
+}
+
+/**
+ * The council-admin view's database role (TRD-092, PRD-OPS-006): what gremion-ui
+ * connects with (PLATFORM_ACCESS_DATABASE_URL). LOGIN NOINHERIT, CONNECT on
+ * gremion_platform, USAGE on schema oac, EXECUTE on exactly
+ * oac.list_access_records, no table privilege anywhere and no marker role, so it
+ * can neither write a record nor reach the request queue. Idempotent.
+ */
+export async function ensureAccessReader(d: AccessReaderDeps): Promise<{ created: boolean }> {
+  const role = d.role ?? ACCESS_READER_ROLE
+  if (!IDENT.test(role)) throw new ProvisioningError('INVALID_INPUT', `access reader role ${JSON.stringify(role)} is not a plain identifier`)
+  if (role === EXECUTOR_ROLE || role === PANEL_REQUESTER_MARKER || role === EXECUTOR_MARKER) throw new ProvisioningError('INVALID_INPUT', `the access reader role may not be named ${role}`)
+  if (d.password.length < 16) throw new ProvisioningError('INVALID_INPUT', 'the access reader password is shorter than 16 characters')
+  const sql = d.openAdminOn('gremion_platform')
+  try {
+    const exists = (await d.kernelAdmin`SELECT 1 FROM pg_roles WHERE rolname = ${role}`).length > 0
+    const attrs = 'LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS PASSWORD %L'
+    await execFmt(d.kernelAdmin, `${exists ? 'ALTER' : 'CREATE'} ROLE %I ${attrs}`, [role, d.password])
+    await execFmt(d.kernelAdmin, 'GRANT CONNECT ON DATABASE %I TO %I', ['gremion_platform', role])
+    await grantOac(sql, role, READER_OAC_EXECUTES)
+    await assertNoOtherRelation(sql, role, 'plt', [])
+    await assertLoginOnly(d.kernelAdmin, role, 'access reader role')
+    if ((await memberOf(d.kernelAdmin, role)).length > 0) throw new ProvisioningError('POSTCONDITION', `access reader role ${role} is a member of a marker role`)
+    return { created: !exists }
+  } finally {
+    await sql.end({ timeout: 5 })
+  }
 }
 
 async function quoteIdent(sql: Sql, ident: string): Promise<string> {
@@ -319,6 +444,7 @@ export async function ensureExecutorRole(d: ExecutorRoleDeps): Promise<{ created
     for (const f of EXECUTOR_EXECUTES) await sql.unsafe(`GRANT EXECUTE ON FUNCTION ${f} TO ${q}`)
     await assertNoOtherRelation(sql, role, 'plt', [])
     await assertExecutesExactly(sql, role, EXECUTOR_EXECUTES)
+    await grantOac(sql, role, EXECUTOR_OAC_EXECUTES)
     await assertLoginOnly(d.kernelAdmin, role, 'executor role')
     const [pw] = await d.kernelAdmin<{ has: boolean }[]>`SELECT rolpassword IS NOT NULL AS has FROM pg_authid WHERE rolname = ${role}`
     if (!pw || pw.has) throw new ProvisioningError('POSTCONDITION', `executor role ${role} has a password; it must authenticate over the local socket only`)
@@ -346,6 +472,8 @@ export async function bootstrapPlatform(deps: BootstrapDeps): Promise<BootstrapR
   try {
     await assertPlatform(platform)
     const m = await migratePlatform(platform, { releaseRef: deps.releaseRef, log })
+    // TRD-092 MED-1: the platform owner (which just ran the migrations) must not own the access record
+    await ensureAccessOwner({ kernelAdmin: deps.kernelAdmin, openAdminOn: deps.openAdminOn })
     const catalogue = await loadCatalogueRows(platform, deps.catalogue)
     for (const u of catalogue.undecided) log(`catalogue: ${u.moduleKey} NOT loaded: ${u.reason}`)
     for (const r of catalogue.load) if (r.provisional) log(`catalogue: ${provisionalNote(r)}`)

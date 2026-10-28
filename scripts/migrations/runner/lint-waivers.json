@@ -32,6 +32,15 @@
         "or-replace"
       ],
       "reason": "Replaces the 0010 SECURITY DEFINER lease functions plt.renew_provisioning_lease and plt.claim_provisioning_request in place with unchanged signatures (create-harden H4: a lapsed lease cannot be renewed and is requeued only after a 60 s grace); CREATE OR REPLACE is the only way to change a function body while keeping the grants pg.ts issues. The file sets lock_timeout first."
+    },
+    {
+      "chain": "platform",
+      "file": "0013_oac_access_record.sql",
+      "sha256": "b3c10279740cf9509d1d3c2613d2693bad3bf5f1c51c5f93e27facc02bd492c2",
+      "rules": [
+        "revoke"
+      ],
+      "reason": "SECURITY DEFINER functions of the access record: REVOKE ALL ON FUNCTION .. FROM PUBLIC on functions this same file creates is mandatory hardening (Postgres grants EXECUTE to PUBLIC by default) and only tightens objects no colour has seen. The file sets lock_timeout first and creates every relation it touches."
     }
   ]
 }

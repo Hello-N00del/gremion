@@ -59,6 +59,10 @@ umask 077
 . "$SCRIPT_DIR/../lib/customer-ops.sh"
 # shellcheck source=../lib/executor/db.sh
 . "$SCRIPT_DIR/../lib/executor/db.sh"
+# TRD-092: every host action on a customer's data is recorded (who, when, what,
+# why) in gremion_platform's oac.access_record BEFORE it runs, fail closed.
+# shellcheck source=../lib/access-log.sh
+. "$SCRIPT_DIR/../lib/access-log.sh"
 
 MODULE_SERVERS="board calendar content finance newsletter vault"
 KCADM_BIN="/opt/keycloak/bin/kcadm.sh"
@@ -76,7 +80,13 @@ usage: gremion-tenant <verb> [args...]
   operator add <email> --no-mail --keycloak-container <name>
   request <kind> --args-file <0600 json> --operator <uuid> --reason <text>
   requests [--slug <slug>]
+  suspend <slug> --operator <uuid> --reason <text>
+  resume <slug> --operator <uuid> --reason <text>
+  reconcile <slug> [--apply --reason <text>]   (--reason also accepted without --apply)
   export <slug> <dir>
+Every verb that reaches a customer's data is recorded in the access record
+(oac.access_record) first; the actor is the login user (SUDO_USER, else id -un),
+self-asserted under a root shell.
 Customers are created and operated in the control panel (gremion-tenant
 panel prints the access line); the break-glass `request` puts the same
 request into the same queue the host-side executor runs (R31-I4).
@@ -354,6 +364,8 @@ cmd_request() {
     [[ "$actor" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] || die "the invoking login user '${actor}' is not a plain user name" "$GREMION_EXIT_USAGE"
     key="$(openssl rand -hex 16 | tr -d '\r\n')"
     key="${key:0:8}-${key:8:4}-4${key:13:3}-8${key:17:3}-${key:20:12}"
+    # TRD-092: recorded BEFORE it is queued; no record, no request.
+    access_record_or_die "$slug" break_glass_request "Anfrage ${kind} für ${slug} über den Host-Notzugang in die Provisionierungswarteschlange gestellt (Mandantendaten)" "$reason"
     # The args (a member list: up to 1 MiB, names and addresses) go on psql's STDIN as a
     # dollar-quoted literal inside the SQL, never as `-v args=...`: that is a `docker exec`
     # argv, capped at 128 KiB per argument (E2BIG) and readable by every local user in the
@@ -385,6 +397,19 @@ cmd_requests() {
     platform_sql "${su:-postgres}" "SELECT request_id, created_at, kind, customer_slug, origin, state, attempt, coalesce(outcome, '') FROM plt.provisioning_request_status WHERE (:'slug' = '' OR customer_slug = :'slug') ORDER BY created_at DESC LIMIT 50;" -v slug="$slug"
 }
 
+# host_access <verb> <slug> <reason> <what> [optional] -- the access record of
+# a host verb, written BEFORE the access (fail closed). The reason is required
+# (10 to 500 characters), as for `request`; only the read-only verify pass of
+# reconcile passes "optional" and then records a stock line when none is given.
+host_access() {
+    local verb="$1" slug="$2" reason="$3" what="$4" optional="${5:-}"
+    if [[ -z "$reason" && "$optional" == optional ]]; then
+        reason="gremion-tenant ${verb} (nur lesend) auf dem Host, ohne angegebene Begründung"
+    fi
+    [[ ${#reason} -ge 10 && ${#reason} -le 500 ]] || die "${verb} needs --reason <10 to 500 characters>: why the customer's data is reached from the host (it is audited and shown to the council administrator)" "$GREMION_EXIT_USAGE"
+    access_record_or_die "$slug" "host_${verb}" "$what" "$reason"
+}
+
 # The break-glass verbs mutate the host like every other mutating verb: they take
 # runtime/hostd.lock, non-blocking (exit 3 when busy), unless gremion-hostd holds it.
 # (The executor does not come through here: its handlers call the library under its own lock.)
@@ -397,11 +422,60 @@ acquire_host_lock() {
     flock -n 9 || die "busy: another host operation is running (lock ${lock}); retry when it has finished" 3
 }
 
-cmd_suspend() { acquire_host_lock; customer_suspend "$@"; }
+# lifecycle_with_reason <verb> <what> <slug> [args...] -- split --reason out of the
+# arguments (the library verbs, which the executor also calls, do not take it),
+# require it, hold the host lock, record the access (fail closed), THEN act.
+LIFECYCLE_REST=()
+lifecycle_with_reason() {
+    local verb="$1" what="$2" slug="${3:-}" reason=""
+    shift 3 || true
+    need_slug "$slug"
+    LIFECYCLE_REST=()
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --reason) need_value "$@"; reason="$2"; shift 2 ;;
+            *) LIFECYCLE_REST+=("$1"); shift ;;
+        esac
+    done
+    [[ -n "$reason" ]] || die "${verb} needs --reason <10 to 500 characters> (it is audited)" "$GREMION_EXIT_USAGE"
+    acquire_host_lock
+    host_access "$verb" "$slug" "$reason" "${what//@SLUG@/$slug}"
+}
 
-cmd_resume() { acquire_host_lock; customer_resume "$@"; }
+cmd_suspend() {
+    lifecycle_with_reason suspend "Mandant @SLUG@ sperren (Realm und Anwendungszugang des Mandanten)" "$@"
+    customer_suspend "${1:-}" ${LIFECYCLE_REST[@]+"${LIFECYCLE_REST[@]}"}
+}
 
-cmd_reconcile() { customer_reconcile "$@"; }
+cmd_resume() {
+    lifecycle_with_reason resume "Mandant @SLUG@ wieder freigeben (Realm und Anwendungszugang des Mandanten)" "$@"
+    customer_resume "${1:-}" ${LIFECYCLE_REST[@]+"${LIFECYCLE_REST[@]}"}
+}
+
+# reconcile: the library verb (customer_reconcile, also run by the executor) does
+# the work; this wrapper splits --reason out, records the access first (fail
+# closed; --apply requires the reason and holds the host lock, the verify-only
+# pass is recorded with a stock reason when none is given), then delegates.
+cmd_reconcile() {
+    local slug="${1:-}"; shift || true
+    need_slug "$slug"
+    local apply=no reason="" rest=()
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --apply) apply=yes; rest+=("$1"); shift ;;
+            --reason) need_value "$@"; reason="$2"; shift 2 ;;
+            *) rest+=("$1"); shift ;;
+        esac
+    done
+    if [[ "$apply" == no ]]; then
+        host_access reconcile_verify "$slug" "$reason" "Mandant ${slug} abgleichen, nur lesend (reconcile --verify-only)" optional
+    else
+        [[ -n "$reason" ]] || die "reconcile --apply needs --reason <10 to 500 characters> (it is audited)" "$GREMION_EXIT_USAGE"
+        acquire_host_lock
+        host_access reconcile "$slug" "$reason" "Mandant ${slug} abgleichen und Abweichungen beheben (reconcile --apply)"
+    fi
+    customer_reconcile "$slug" ${rest[@]+"${rest[@]}"}
+}
 
 cmd_status() {
     local slug="${1:-}"
@@ -436,6 +510,7 @@ cmd_export() {
     mkdir -p -m 700 "$dir"
     chmod 700 "$dir"
     TC_MOUNT=(--user "$(id -u):$(id -g)" -v "${dir}:/export")
+    host_access export "$slug" "" "Vollständiger Export aller Daten des Mandanten ${slug} in offenen Formaten (export)" optional
     tc export "$slug" --out /export || die "export of ${slug} failed; ${dir} is INCOMPLETE and must not be used" "$GREMION_EXIT_ASSERT"
     tc export-verify /export || die "completeness check of ${dir} failed (the files named above are missing, empty or altered); the export is INCOMPLETE" "$GREMION_EXIT_ASSERT"
     TC_MOUNT=()

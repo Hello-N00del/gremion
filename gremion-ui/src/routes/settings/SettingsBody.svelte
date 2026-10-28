@@ -287,6 +287,12 @@
             Diese Felder fließen in das automatisch generierte Löschkonzept ein. Alle Werte sind
             optional — fehlende Werte werden im Dokument gekennzeichnet.
           </p>
+          {#if data.isAdmin}
+            <p class="text-sm">
+              <a href="/settings/zugriffsprotokoll" class="underline" data-testid="link-zugriffsprotokoll">Zugriffsprotokoll des Betreibers ansehen</a>
+              — wer wann und warum auf die Daten Ihres Gremiums zugegriffen hat.
+            </p>
+          {/if}
           <div class="grid gap-4 sm:grid-cols-2">
             <div class="space-y-1">
               <Label for="controller_name">Verantwortliche Stelle</Label>
