@@ -587,4 +587,24 @@ sets `VOTES_LEGACY_POLL_TENANT_ID` to the one tenant that owns them; (2) the mar
 is visible to anyone who opens the poll in the Nextcloud UI itself, and Nextcloud
 admins can still see all polls - isolation holds inside the module, not inside
 Nextcloud; (3) a vote is attributed per Keycloak user, so a person who is a member
-of two tenants votes once per tenant-bound poll, not once globally.
+of two tenants votes once per tenant-bound poll, not once globally; (4) the marker
+only counts on a poll owned by the module's Nextcloud admin account
+(`NEXTCLOUD_ADMIN_USER`), so a poll typed straight into Nextcloud with a forged
+marker is ignored; (5) the result counts live in Nextcloud and are NOT
+tenant-isolated: any Nextcloud user can still vote in a poll through the
+Nextcloud UI or OCS with their own session, and those votes show in the totals.
+New polls carry a Nextcloud-side limit of one vote per member (`maxVotesPerUser`);
+polls created before that change do not, and keep only the module's own check.
+
+## Messaging: meeting-room alias adoption trusts the existing alias holder
+
+`createRoom` adopts a room that already holds the `#meeting-<eventId>` alias (a race, or
+a room from before the alias rules). It does not check who created that room.
+`alias_creation_rules` (`modules/messaging/synapse/homeserver.yaml`) stops anyone but the
+admin bot from registering NEW aliases, but an alias a member registered on a homeserver
+before that rule existed is still adopted, and attendees invited to that meeting would
+land in a room the squatter controls. A homeserver rendered before the rule needs a
+re-init or an alias sweep (`#meeting-*` aliases not created by the admin bot) before
+meeting rooms are used. A creator check in `createRoom` is not shipped because the
+creator identity differs across room versions (room v12 creators are absent from the
+power-level `users` map) and needs verifying against a live Synapse first.

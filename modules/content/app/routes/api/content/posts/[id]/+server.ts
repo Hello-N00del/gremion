@@ -70,6 +70,19 @@ export const PATCH: RequestHandler = async (event) => {
     scheduled_at?: string | null
   }
 
+  // The scheduler publishes whatever the post holds at tick time, with no capability
+  // check of its own. While any channel is armed ('scheduled'), a title/body edit is
+  // therefore a deferred publish of the new text: the caller needs the same gate(s)
+  // the manual publish route enforces for EVERY scheduled channel (a publisher can
+  // clear the schedule, or edit after it). Checked before any write is applied.
+  if (!internal && (title !== undefined || body_html !== undefined)) {
+    const scheduled = (await backend.getChannels(id)).filter((c) => c.status === 'scheduled')
+    if (scheduled.length > 0) {
+      requireContentPublish(event.locals.user)
+      if (scheduled.some((c) => c.channel === 'instagram')) requireContentPublishInstagram(event.locals.user)
+    }
+  }
+
   let applied = false
 
   if (title !== undefined) {

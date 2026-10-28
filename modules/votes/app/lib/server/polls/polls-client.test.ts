@@ -47,6 +47,7 @@ describe('NextcloudPollsClient', () => {
   const mockPoll = {
     id: 1,
     type: 'textPoll',
+    owner: { userId: 'admin' },
     configuration: { title: '[gt:tenant-a] Test Poll', description: '', allowComment: false, anonymous: false, expire: 0 },
     status: { expired: false, countOptions: 0 },
     currentUserStatus: { userRole: 'owner', isLocked: false, countVotes: 0 },
@@ -154,7 +155,7 @@ describe('NextcloudPollsClient', () => {
     // anonymous is ALWAYS sent explicitly (F1-FIX-08 H16): the requested
     // privacy setting must never depend on Nextcloud's default.
     expect(JSON.parse(configCall![1].body as string)).toEqual({
-      pollConfiguration: { access: 'open', anonymous: false },
+      pollConfiguration: { access: 'open', maxVotesPerUser: 1, anonymous: false },
     })
   })
 
@@ -203,6 +204,7 @@ describe('NextcloudPollsClient', () => {
       expect(JSON.parse(putCall![1].body as string)).toEqual({
         pollConfiguration: {
           access: 'open',
+          maxVotesPerUser: 1,
           anonymous: true,
           description: 'Bitte bis Freitag abstimmen',
           expire: 1767225600,
