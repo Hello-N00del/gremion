@@ -83,6 +83,7 @@ Stages:
   executor     gremion-executor unit (the control panel's request queue)
   timers       gremion-backup.timer + gremion-verify.service + gremion-metrics.timer
                + gremion-footprint.timer (weekly, TRD-223)
+               + gremion-purge.timer (daily, TRD-144/145)
   harden-ssh   key-only SSH   (RUN LAST, gated, not part of 'all')
   trust        pinned cosign + the release public key       (not part of 'all')
   signers      the release-tag signers file (allowed_signers) (not part of 'all')
@@ -1019,6 +1020,21 @@ stage_timers() {
     [[ -n "$fp_next" && "$fp_next" != "n/a" ]] \
         || die "gremion-footprint.timer is enabled but has no next elapse"
     ok "gremion-footprint.timer next elapse: ${fp_next}"
+
+    # TRD-144/145 (TASK-033-a): the daily purge run. Same two-argument
+    # render_unit. The service is NOT started here: its plt.job_run row needs
+    # the platform chain at 0012 (the control plane applies it) and an active
+    # colour, so a first run belongs after the first deploy (systemctl start
+    # gremion-purge.service, then read the newest purge_run row of plt.job_run).
+    render_unit gremion-purge.service /etc/systemd/system/gremion-purge.service
+    render_unit gremion-purge.timer /etc/systemd/system/gremion-purge.timer
+    systemctl daemon-reload
+    systemctl enable --now gremion-purge.timer
+    local pg_next
+    pg_next="$(systemctl show gremion-purge.timer -p NextElapseUSecRealtime --value)"
+    [[ -n "$pg_next" && "$pg_next" != "n/a" ]] \
+        || die "gremion-purge.timer is enabled but has no next elapse"
+    ok "gremion-purge.timer next elapse: ${pg_next}"
 }
 
 # ──────────────────────────────────────────────────────────────────────────

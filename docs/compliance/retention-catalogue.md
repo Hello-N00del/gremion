@@ -17,6 +17,13 @@
 > (30 days) after the module is disabled, pending the DPO's answer (§7.15 RC-MOD-DATA, A-MOD).
 > RC-MOD-EXPORT records the six database modules' disable exports on the same window.
 
+> **Change note 2026-10-27 (TRD-144/145):** the scheduled purge run exists
+> (`packages/tenant-store/src/lifecycle/purge.ts`, `gremion-purge.timer`). It executes only
+> the rows that state a number of days AND whose table is in this repository: RC-K1-PLUMB
+> (7 d; `event_consumption`, `scheduled_notifications`) and RC-OPS-RUN (30 d with
+> RC-LOG-APP; `plt.job_run`). Every other row stays unexecuted and is listed with its
+> reason in `PURGE_RESIDUAL`; `purge.test.ts` fails when a window there differs from this file.
+
 | | |
 |---|---|
 | Task | TASK-070 (plan key L7-14), provides CAP-RETENTION-CATALOGUE |
