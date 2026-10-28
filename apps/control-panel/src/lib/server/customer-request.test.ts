@@ -4,6 +4,7 @@
 // retryRequest. A request whose record cannot be written is refused.
 import { describe, expect, it } from 'vitest'
 import { queueRequest } from './customer-request'
+import { retryRequest } from './retry'
 import { SubmitRefused, type Evidence } from './requests'
 
 const OP = '8d6b9c7e-1f2a-4b3c-9d4e-5f6a7b8c9d0e'
@@ -45,5 +46,27 @@ describe('queueRequest writes the vendor-access record in the same statement', (
     const f = fakeSql(Object.assign(new Error('db'), { code: '42501' }))
     const err = await queueRequest(f.sql, 'suspend', 'alpha-rat', {}, OP, EVIDENCE).catch((e: unknown) => e)
     expect(err).toBeInstanceOf(SubmitRefused)
+  })
+})
+
+describe('retryRequest re-queues a failed disable_module (the resumable disable, with its access record)', () => {
+  it('replays the same args as a new request, in one statement with oac.record_access', async () => {
+    const calls: { text: string; values: unknown[] }[] = []
+    const row = { kind: 'disable_module', state: 'failed', outcome: 'disable_module alpha-rat: failed in disable_module (exit 1); a new request resumes from the ledger', evidence_verified_at: new Date(), args: { slug: 'alpha-rat', module: 'votes' } }
+    const sql = Object.assign(
+      (strings: TemplateStringsArray, ...values: unknown[]) => {
+        const text = strings.join('?')
+        calls.push({ text, values })
+        if (text.includes('args FROM plt.provisioning_request_status')) return Promise.resolve([row])
+        if (text.includes('provisioning_request_status')) return Promise.resolve([])
+        return Promise.resolve([{ id: 'req-2' }])
+      },
+      { json: (v: unknown) => ({ json: v }) },
+    )
+    await expect(retryRequest(sql as never, 'alpha-rat', OP, EVIDENCE)).resolves.toBe('req-2')
+    const submit = calls.find((c) => c.text.includes('plt.submit_provisioning_request('))!
+    expect(submit.text).toContain('oac.record_access(')
+    expect(submit.values).toContain('disable_module')
+    expect((submit.values.find((v) => (v as { json?: unknown })?.json) as { json: unknown }).json).toEqual({ slug: 'alpha-rat', module: 'votes' })
   })
 })

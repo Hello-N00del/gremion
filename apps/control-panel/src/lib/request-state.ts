@@ -105,8 +105,13 @@ export function describeRequest(r: RequestStateInput): RequestDescription {
     code: null,
     ...extra,
   })
-  /** Retryable when the kind is create; otherwise says why not. */
-  const retry = (): Partial<RequestDescription> => (isCreate ? { retryable: true } : { retryNote: r.kind === 'suspend' || r.kind === 'resume' ? REDO_ACTION : MODULE_KINDS.includes(r.kind) ? REDO_MODULE : NOT_REPLAYABLE })
+  /**
+   * Retryable when the kind is create, or disable_module: the latter sets module_enablement to
+   * 'disabled' BEFORE its export, so a failed export leaves the module out of the Module section
+   * (it counts as not enabled) and the retry is the only way back to the resumable disable.
+   * Otherwise says why not.
+   */
+  const retry = (): Partial<RequestDescription> => (isCreate || r.kind === 'disable_module' ? { retryable: true } : { retryNote: r.kind === 'suspend' || r.kind === 'resume' ? REDO_ACTION : MODULE_KINDS.includes(r.kind) ? REDO_MODULE : NOT_REPLAYABLE })
   switch (r.state) {
     case 'queued':
       return d('queued', 'In der Warteschlange', 'Die Anfrage wartet darauf, dass der Ausführer sie übernimmt.', { active: true })

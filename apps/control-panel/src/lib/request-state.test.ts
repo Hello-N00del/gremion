@@ -116,7 +116,14 @@ describe('describeRequest: final states', () => {
 })
 
 describe('describeRequest: the module and reconcile kinds (TRD-044)', () => {
-  it.each(['enable_module', 'disable_module', 'record_dpia', 'reconcile'])('a failed %s is never retried as a copy: the page says to trigger the action again', (kind) => {
+  it('a failed disable_module IS retryable: its export step fails AFTER module_enablement went to disabled, so the module is gone from the Module section and only the retry can resume it', () => {
+    const failed = describeRequest({ ...base, kind: 'disable_module', state: 'failed', outcome: 'disable_module proof-z: failed in disable_module (exit 1); a new request resumes from the ledger' })
+    expect(failed).toMatchObject({ phase: 'failed', retryable: true, retryNote: null })
+    for (const state of ['expired', 'dead']) expect(describeRequest({ ...base, kind: 'disable_module', state }).retryable).toBe(true)
+    // a refusal of the request's own args is no retry (same as create)
+    expect(describeRequest({ ...base, kind: 'disable_module', state: 'refused', outcome: 'refused: module x is not in the catalogue' }).retryable).toBe(false)
+  })
+  it.each(['enable_module', 'record_dpia', 'reconcile'])('a failed %s is never retried as a copy: the page says to trigger the action again', (kind) => {
     const d = describeRequest({ ...base, kind, state: 'failed', outcome: `${kind} proof-z: failed in ${kind} (exit 1); a new request resumes from the ledger` })
     expect(d.retryable).toBe(false)
     expect(d.retryNote).toMatch(/Bereich „Module“/)

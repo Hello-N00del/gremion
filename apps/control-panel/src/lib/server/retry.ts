@@ -1,8 +1,8 @@
 // "Erneut versuchen" (H6, panel half): a failed or refused request is retried
 // as a NEW request -- same kind, same verified-at-submit args -- with a NEW
 // idempotency key and the operator's CURRENT sign-in as evidence. The old row
-// is final and untouched. Offered, and accepted, only for kind create while
-// describeRequest says so (failed, expired, dead, or refused for the sign-in's
+// is final and untouched. Offered, and accepted, only for kinds create and
+// disable_module (resumable) while describeRequest says so (failed, expired, dead, or refused for the sign-in's
 // sake); anything queued, running or succeeded writes no row.
 import { randomUUID } from 'node:crypto'
 import type postgres from 'postgres'
