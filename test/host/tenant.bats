@@ -803,6 +803,20 @@ release_repo() {
     [ -z "$output" ]
 }
 
+@test "export: a symlink anywhere in the parent path is refused (exit 2), nothing is created behind it" {
+    mkdir "${GREMION_ROOT}/elsewhere"; ln -s "${GREMION_ROOT}/elsewhere" "${GREMION_ROOT}/plink"
+    run "$LAUNCHER" export alpha-rat "${GREMION_ROOT}/plink/out"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"symlink"* ]]
+    [ ! -e "${GREMION_ROOT}/elsewhere/out" ]
+    mkdir -p "${GREMION_ROOT}/elsewhere/deep"
+    run "$LAUNCHER" export alpha-rat "${GREMION_ROOT}/plink/deep/out"
+    [ "$status" -eq 2 ]
+    [ ! -e "${GREMION_ROOT}/elsewhere/deep/out" ]
+    run steps
+    [ -z "$output" ]
+}
+
 @test "export: creates the directory 0700, runs export then a SEPARATE export-verify, bind-mounted, as the invoking user" {
     run "$LAUNCHER" export alpha-rat "${GREMION_ROOT}/out"
     [ "$status" -eq 0 ]

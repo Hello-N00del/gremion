@@ -467,6 +467,12 @@ cmd_export() {
     else
         [[ -d "$(dirname "$dir")" ]] || die "export: the parent of ${dir} does not exist" "$GREMION_EXIT_USAGE"
     fi
+    # No symlink anywhere above <dir> either: the bind source and the mkdir
+    # below must be the path the operator named, not wherever a link points.
+    local parent real_parent
+    parent="$(dirname "$dir")"
+    real_parent="$(cd -P -- "$parent" && pwd)" || die "export: cannot resolve ${parent}" "$GREMION_EXIT_USAGE"
+    [[ "$real_parent" == "$parent" ]] || die "export: a component of ${parent} is a symlink (it resolves to ${real_parent}); name the real path" "$GREMION_EXIT_USAGE"
     active_colour
     mkdir -p -m 700 "$dir"
     chmod 700 "$dir"
