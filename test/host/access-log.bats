@@ -117,7 +117,7 @@ gt() { run "${REL}/infra/host/bin/gremion-tenant" "$@"; }
     [ "$status" -eq 2 ]
     [[ "$output" == *"--reason"* ]]
     [ ! -s "${GREMION_ROOT}/access.log" ]
-    ! grep -q '^tc ' "$ORDER"
+    [ ! -f "$ORDER" ] || assert_absent '^tc ' "$ORDER" 'no container verb ran without a reason'
     gt suspend alpha-rat --operator "$OP" --reason "Anforderung der Gremienverwaltung vom Montag"
     [ "$status" -eq 0 ] || { echo "$output"; return 1; }
     grep -q '^alpha-rat|host_suspend|deploy|.*|Anforderung der Gremienverwaltung vom Montag$' "${GREMION_ROOT}/access.log"
@@ -158,10 +158,10 @@ gt() { run "${REL}/infra/host/bin/gremion-tenant" "$@"; }
     call access_record alpha-rat break_glass_request "Anfrage create fuer Mandant" "$why"
     [ "$status" -eq 0 ] || { echo "$output"; return 1; }
     [ "$(cat "${GREMION_ROOT}/access.log")" = "alpha-rat|break_glass_request|deploy|Anfrage create fuer Mandant|${why}" ]
-    ! grep -qF 'Anfrage create fuer Mandant' "${GREMION_ROOT}/exec-argv.log"
-    ! grep -qF 'Semikolon' "${GREMION_ROOT}/exec-argv.log"
-    ! grep -q 'why=' "${GREMION_ROOT}/exec-argv.log"
-    ! grep -q 'what=' "${GREMION_ROOT}/exec-argv.log"
+    assert_absent 'Anfrage create fuer Mandant' "${GREMION_ROOT}/exec-argv.log" 'what text not on argv'
+    assert_absent 'Semikolon' "${GREMION_ROOT}/exec-argv.log" 'why text not on argv'
+    assert_absent 'why=' "${GREMION_ROOT}/exec-argv.log" 'no why= on argv'
+    assert_absent 'what=' "${GREMION_ROOT}/exec-argv.log" 'no what= on argv'
 }
 
 @test "the host actor is documented as the self-asserted login (SUDO_USER, else id -un)" {

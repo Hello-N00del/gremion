@@ -247,6 +247,7 @@ enable_args() { jq -nc '{slug:"alpha-rat", module:"votes", dpia:{requiresDpia:"n
 }
 
 @test "gremion-tenant reconcile delegates to the library function (one copy of the logic)" {
-    assert_present '^cmd_reconcile\(\) \{ customer_reconcile' "${HOST_SRC}/bin/gremion-tenant" 'gremion-tenant keeps no reconcile logic of its own'
+    # cmd_reconcile only records the access (TRD-092) and then hands over.
+    assert_present '^    customer_reconcile "\$slug" ' "${HOST_SRC}/bin/gremion-tenant" 'gremion-tenant delegates reconcile to customer-ops.sh'
     assert_absent 'repairHost' "${HOST_SRC}/bin/gremion-tenant" 'the reconcile body moved to customer-ops.sh'
 }
