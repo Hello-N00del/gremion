@@ -1,0 +1,203 @@
+// @vitest-environment node
+//
+// TRD-196 / PRD-OPS-005 — the erasure orchestrator reports PER MODULE and never
+// publishes an aggregate "complete" that could conceal a skipped or failed module.
+import { describe, expect, it, vi } from 'vitest'
+import type { Sql } from '@gremion/db'
+import type { ModuleErasureOutcome } from '@gremion/ports/erasure'
+import { overallErasureStatus } from '@gremion/ports/erasure'
+import type { KernelErasureHook } from '$lib/server/modules/runtime-registry'
+import {
+  runErasure,
+  subjectRef,
+  type ErasureDeps,
+  type ErasureReportStore,
+} from './orchestrator'
+
+const DB = { tag: 'tenant-db' } as unknown as Sql
+const TENANT = 'tenant-a'
+const SUBJECT = 'kc-user-4711'
+
+function memoryStore(): ErasureReportStore & {
+  headers: unknown[]
+  outcomes: ModuleErasureOutcome[]
+  finished: { id: string; status: string }[]
+} {
+  const s = {
+    headers: [] as unknown[],
+    outcomes: [] as ModuleErasureOutcome[],
+    finished: [] as { id: string; status: string }[],
+    async begin(h: unknown) {
+      s.headers.push(h)
+      return 'report-1'
+    },
+    async record(_id: string, o: ModuleErasureOutcome) {
+      s.outcomes.push(o)
+    },
+    async finish(id: string, status: 'complete' | 'incomplete') {
+      s.finished.push({ id, status })
+    },
+  }
+  return s
+}
+
+function hookOf(moduleId: string, erase?: KernelErasureHook['erase']): KernelErasureHook {
+  return {
+    moduleId,
+    erase: erase ?? (async () => ({ status: 'erased', counts: { rows: 2 } })),
+  }
+}
+
+function deps(
+  enabled: string[],
+  hooks: KernelErasureHook[],
+  opts: { noConnection?: string[]; store?: ErasureReportStore } = {},
+): ErasureDeps {
+  const byId = new Map(hooks.map((h) => [h.moduleId, h]))
+  return {
+    enabledModuleIds: () => enabled,
+    hookFor: (id) => byId.get(id),
+    connectionFor: (id) => (opts.noConnection?.includes(id) ? null : DB),
+    store: opts.store ?? memoryStore(),
+    now: () => new Date('2026-10-27T10:00:00Z'),
+  }
+}
+
+const input = { tenantId: TENANT, subjectId: SUBJECT, requestedBy: 'admin-1' }
+
+describe('overallErasureStatus', () => {
+  it('is incomplete for no modules at all (an empty run proves nothing)', () => {
+    expect(overallErasureStatus([])).toBe('incomplete')
+  })
+})
+
+describe('runErasure', () => {
+  it('all enabled modules erased -> overall complete, every module recorded erased with counts', async () => {
+    const store = memoryStore()
+    const report = await runErasure(
+      input,
+      deps(['kernel', 'calendar'], [hookOf('kernel'), hookOf('calendar')], { store }),
+    )
+    expect(report.status).toBe('complete')
+    expect(report.modules.map((m) => [m.moduleId, m.status])).toEqual([
+      ['kernel', 'erased'],
+      ['calendar', 'erased'],
+    ])
+    expect(report.modules[0].counts).toEqual({ rows: 2 })
+    expect(store.finished).toEqual([{ id: 'report-1', status: 'complete' }])
+  })
+
+  it('a module whose database connection is removed is skipped, its hook is NOT called, overall is NOT complete', async () => {
+    const calendarErase = vi.fn(async () => ({ status: 'erased' as const, counts: { rows: 1 } }))
+    const report = await runErasure(
+      input,
+      deps(['kernel', 'calendar'], [hookOf('kernel'), hookOf('calendar', calendarErase)], {
+        noConnection: ['calendar'],
+      }),
+    )
+    const cal = report.modules.find((m) => m.moduleId === 'calendar')!
+    expect(cal.status).toBe('skipped')
+    expect(cal.reason).toMatch(/no database connection/i)
+    expect(cal.counts).toEqual({})
+    expect(calendarErase).not.toHaveBeenCalled()
+    expect(report.status).toBe('incomplete')
+    expect(report.status).not.toBe('complete')
+  })
+
+  it('a hook that needs no connection still runs when there is none', async () => {
+    const report = await runErasure(
+      input,
+      deps(['kernel', 'x'], [hookOf('kernel'), { ...hookOf('x'), requiresConnection: false }], {
+        noConnection: ['x'],
+      }),
+    )
+    expect(report.modules.find((m) => m.moduleId === 'x')!.status).toBe('erased')
+  })
+
+  it('an enabled module without an erasure hook is skipped with a reason, never erased', async () => {
+    const report = await runErasure(input, deps(['kernel', 'elections'], [hookOf('kernel')]))
+    const el = report.modules.find((m) => m.moduleId === 'elections')!
+    expect(el.status).toBe('skipped')
+    expect(el.reason).toMatch(/no erasure hook/i)
+    expect(report.status).toBe('incomplete')
+  })
+
+  it('a hook that cannot reach its database (connection error) is skipped as unreachable', async () => {
+    const down = hookOf('calendar', async () => {
+      throw Object.assign(new Error('connect ECONNREFUSED 10.0.0.9:5432'), { code: 'ECONNREFUSED' })
+    })
+    const report = await runErasure(input, deps(['kernel', 'calendar'], [hookOf('kernel'), down]))
+    const cal = report.modules.find((m) => m.moduleId === 'calendar')!
+    expect(cal.status).toBe('skipped')
+    expect(cal.reason).toMatch(/unreachable/i)
+    expect(report.status).toBe('incomplete')
+  })
+
+  it('a hook that throws any other error is failed; later modules still run', async () => {
+    const boom = hookOf('calendar', async () => {
+      throw new Error('constraint violated')
+    })
+    const after = vi.fn(async () => ({ status: 'erased' as const, counts: {} }))
+    const report = await runErasure(
+      input,
+      deps(['kernel', 'calendar', 'board'], [hookOf('kernel'), boom, hookOf('board', after)]),
+    )
+    const cal = report.modules.find((m) => m.moduleId === 'calendar')!
+    expect(cal.status).toBe('failed')
+    expect(cal.reason).toMatch(/constraint violated/)
+    expect(after).toHaveBeenCalledOnce()
+    expect(report.status).toBe('incomplete')
+  })
+
+  it('a hook that reports skipped is recorded skipped with its reason', async () => {
+    const h = hookOf('calendar', async () => ({ status: 'skipped', reason: 'data lives in the calendar service' }))
+    const report = await runErasure(input, deps(['kernel', 'calendar'], [hookOf('kernel'), h]))
+    expect(report.modules[1]).toMatchObject({ status: 'skipped', reason: 'data lives in the calendar service' })
+    expect(report.status).toBe('incomplete')
+  })
+
+  it('a malformed "erased" result (no counts object) is failed, not erased', async () => {
+    const bad = hookOf('calendar', (async () => ({ status: 'erased' })) as unknown as KernelErasureHook['erase'])
+    const report = await runErasure(input, deps(['kernel', 'calendar'], [hookOf('kernel'), bad]))
+    expect(report.modules[1].status).toBe('failed')
+    expect(report.status).toBe('incomplete')
+  })
+
+  it('records an outcome for EVERY enabled module (none silently dropped) and persists each', async () => {
+    const store = memoryStore()
+    await runErasure(input, deps(['kernel', 'a', 'b', 'c'], [hookOf('kernel')], { store }))
+    expect(store.outcomes.map((o) => o.moduleId)).toEqual(['kernel', 'a', 'b', 'c'])
+  })
+
+  it('never stores the raw subject id: the report carries a tenant-bound pseudonymous reference', async () => {
+    const store = memoryStore()
+    const report = await runErasure(input, deps(['kernel'], [hookOf('kernel')], { store }))
+    expect(report.subjectRef).toBe(subjectRef(TENANT, SUBJECT))
+    expect(report.subjectRef).toMatch(/^[0-9a-f]{64}$/)
+    expect(subjectRef('tenant-b', SUBJECT)).not.toBe(report.subjectRef)
+    expect(JSON.stringify([store.headers, store.outcomes, report])).not.toContain(SUBJECT)
+  })
+
+  it('passes the tenant id, subject id and the module connection to the hook', async () => {
+    const seen = vi.fn(async () => ({ status: 'erased' as const, counts: {} }))
+    await runErasure(input, deps(['kernel'], [hookOf('kernel', seen)]))
+    expect(seen).toHaveBeenCalledWith({ tenantId: TENANT, subjectId: SUBJECT, db: DB })
+  })
+
+  it('refuses an empty subject id before anything is recorded', async () => {
+    const store = memoryStore()
+    await expect(runErasure({ ...input, subjectId: '  ' }, deps(['kernel'], [hookOf('kernel')], { store }))).rejects.toThrow(
+      /subject/i,
+    )
+    expect(store.headers).toHaveLength(0)
+  })
+
+  it('a store failure while recording an outcome propagates (no silent complete)', async () => {
+    const store = memoryStore()
+    store.record = async () => {
+      throw new Error('db down')
+    }
+    await expect(runErasure(input, deps(['kernel'], [hookOf('kernel')], { store }))).rejects.toThrow('db down')
+    expect(store.finished).toHaveLength(0)
+  })
+})

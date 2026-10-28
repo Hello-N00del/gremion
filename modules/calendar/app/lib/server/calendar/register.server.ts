@@ -8,7 +8,9 @@
 import {
   registerServerInitHook,
   registerDataProvider,
+  registerErasureHook,
 } from '$lib/server/modules/runtime-registry'
+import { calendarErasureHook } from './erasure'
 import { startNotificationScheduler } from './notification-scheduler'
 import { startCalDavSyncWorker } from './caldav-sync'
 import { getCalendarBackend } from './backend'
@@ -20,6 +22,9 @@ import {
   CALENDAR_AUDIT_WORKER,
 } from '$lib/server/events/calendar-audit-consumer'
 import { superviseWorker, markWorkerOff } from '$lib/server/events/consumer-state'
+
+// TRD-196 / PRD-OPS-005: the calendar's data-subject erasure step (per-module report).
+registerErasureHook(calendarErasureHook)
 
 // SP-2 §2.5: the scheduler resolves the sender PER TENANT at tick time via the
 // mail seam (getTenantMailContext), so every active tenant sends from its own

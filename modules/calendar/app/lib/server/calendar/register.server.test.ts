@@ -14,6 +14,7 @@ const h = vi.hoisted(() => ({
 
 vi.mock('$lib/server/modules/runtime-registry', () => ({
   registerServerInitHook: vi.fn(),
+  registerErasureHook: vi.fn(),
   registerDataProvider: vi.fn((key: string, fn: (range: { from: Date; to: Date }) => Promise<unknown>) => {
     h.providers.set(key, fn)
   }),
