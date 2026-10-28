@@ -291,6 +291,29 @@ STUB
     [ "${lines[1]}" = "tc resume alpha-rat" ]
 }
 
+@test "suspend and resume take runtime/hostd.lock: busy host -> exit 3, nothing runs (TRD-044)" {
+    command -v flock >/dev/null || skip "flock not installed"
+    exec 8>>"${GREMION_ROOT}/runtime/hostd.lock"
+    flock -n 8
+    run "$LAUNCHER" suspend alpha-rat --operator "$OP"
+    [ "$status" -eq 3 ] || { echo "$status $output"; return 1; }
+    [[ "$output" == *"busy"* ]]
+    run "$LAUNCHER" resume alpha-rat --operator "$OP"
+    [ "$status" -eq 3 ]
+    exec 8>&-
+    run steps
+    [ -z "$output" ]
+}
+
+@test "suspend and resume skip the lock when gremion-hostd already holds it" {
+    command -v flock >/dev/null || skip "flock not installed"
+    exec 8>>"${GREMION_ROOT}/runtime/hostd.lock"
+    flock -n 8
+    GREMION_HOST_LOCK_HELD=1 run "$LAUNCHER" suspend alpha-rat --operator "$OP"
+    exec 8>&-
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+}
+
 @test "a failed revoke fails suspend, and the failure names the rerun that converges (TASK-043c)" {
     touch "${GREMION_ROOT}/vendor-mail-fails"
     run "$LAUNCHER" suspend alpha-rat --operator "$OP"

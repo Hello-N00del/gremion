@@ -106,7 +106,6 @@ router_sum() { sha256sum "${GREMION_ROOT}/etc/edge/tenant-alpha-rat.yml" | cut -
     drive handle_suspend
     [ "$status" -ne 0 ]
     [[ "$output" == *"could not be revoked"* && "$output" == *"rerun"* ]]
-    [ ! -f "${GREMION_ROOT}/runtime/suspended/alpha-rat.fingerprint" ]
 }
 
 @test "suspend: a container set that moved fails the request (TRD-440)" {
@@ -156,24 +155,22 @@ router_sum() { sha256sum "${GREMION_ROOT}/etc/edge/tenant-alpha-rat.yml" | cut -
     assert_absent 'render-router' "$ORDER" 'resume must not re-render the router'
 }
 
-@test "suspend then resume: the data fingerprint is equal before the suspend and after the resume; the record is cleaned up" {
+@test "suspend then resume across a changed host: the fingerprint is compared only within each run, no record is kept" {
     drive handle_suspend
     [ "$status" -eq 0 ] || { echo "$output"; return 1; }
-    [ "$(head -n 1 "${GREMION_ROOT}/runtime/suspended/alpha-rat.fingerprint")" = "fp-A" ]
+    [ ! -e "${GREMION_ROOT}/runtime/suspended" ]
+    echo 'fp-B' > "${GREMION_ROOT}/fingerprint"   # a deploy or colour switch changed the host in between
     drive handle_resume
     [ "$status" -eq 0 ] || { echo "$output"; return 1; }
-    [[ "$output" == *"equal to before the suspend"* ]]
-    [ ! -f "${GREMION_ROOT}/runtime/suspended/alpha-rat.fingerprint" ]
+    [ ! -e "${GREMION_ROOT}/runtime/suspended" ]
 }
 
-@test "resume: a fingerprint that differs from the one before the suspend fails, and keeps the record" {
-    drive handle_suspend
-    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
-    echo 'fp-B' > "${GREMION_ROOT}/fingerprint"   # the stack changed between the two requests
+@test "resume: a stale record of an older release is ignored and removed" {
+    mkdir -p "${GREMION_ROOT}/runtime/suspended"
+    echo 'fp-OLD' > "${GREMION_ROOT}/runtime/suspended/alpha-rat.fingerprint"
     drive handle_resume
-    [ "$status" -ne 0 ]
-    [[ "$output" == *"TRD-440"* && "$output" == *"before the suspend: fp-A"* ]]
-    [ -f "${GREMION_ROOT}/runtime/suspended/alpha-rat.fingerprint" ]
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    [ ! -e "${GREMION_ROOT}/runtime/suspended/alpha-rat.fingerprint" ]
 }
 
 @test "resume: a container set that moved during the resume fails the request (TRD-440)" {
@@ -183,11 +180,24 @@ router_sum() { sha256sum "${GREMION_ROOT}/etc/edge/tenant-alpha-rat.yml" | cut -
     [[ "$output" == *"TRD-440"* ]]
 }
 
-@test "a suspend rerun keeps the FIRST fingerprint (a converging rerun never overwrites it)" {
-    drive handle_suspend
-    [ "$status" -eq 0 ]
-    echo 'fp-C' > "${GREMION_ROOT}/fingerprint"
-    drive handle_suspend
-    [ "$status" -eq 0 ]
-    [ "$(head -n 1 "${GREMION_ROOT}/runtime/suspended/alpha-rat.fingerprint")" = "fp-A" ]
+@test "resume: a failing container verb revokes the fresh principal again (best effort) and fails" {
+    touch "${GREMION_ROOT}/fail-resume"
+    drive handle_resume
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"resume of alpha-rat failed in the container"* ]]
+    run order
+    [ "${lines[1]}" = "mail --realm alpha-rat --tenant alpha_rat" ]
+    [ "${lines[2]}" = "tc resume alpha-rat --operator ${OPERATOR}" ]
+    [ "${lines[3]}" = "mail --realm alpha-rat --tenant alpha_rat --revoke" ]
+}
+
+@test "resume: a failing container verb AND a failing revoke still fail with the container's message" {
+    touch "${GREMION_ROOT}/fail-resume"
+    # the issue succeeds, the revoke after the failure does not
+    cat >> "${GREMION_ROOT}/stubs.sh" <<'STUB'
+mail_realm_smtp() { printf 'mail %s\n' "$*" >> "$ORDER"; case " $* " in *" --revoke "*) return 1 ;; esac; return 0; }
+STUB
+    drive handle_resume
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"resume of alpha-rat failed in the container"* && "$output" == *"revoke"* ]]
 }

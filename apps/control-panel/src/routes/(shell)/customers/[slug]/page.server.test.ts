@@ -242,6 +242,18 @@ describe('TRD-044: Mandant sperren / fortsetzen are suspend and resume REQUESTS'
     expect((await loadFor()).offer).toEqual({ suspend: true, resume: true })
   })
 
+  it('after a resume that failed, a suspended customer is offered both: resume again, and suspend (revokes the fresh principal)', async () => {
+    customer = cust('suspended')
+    rows = [row({ state: 'failed', kind: 'resume', outcome: 'resume proof-z: failed in resume (exit 1); a new request resumes from the ledger' })]
+    expect((await loadFor()).offer).toEqual({ suspend: true, resume: true })
+    await expect(act('suspend')).rejects.toMatchObject({ status: 303 })
+  })
+  it('a suspended customer whose last resume succeeded is not offered suspend (it is active then)', async () => {
+    customer = cust('suspended')
+    rows = [row({ state: 'succeeded', kind: 'resume' })]
+    expect((await loadFor()).offer).toEqual({ suspend: false, resume: true })
+  })
+
   it('suspend submits kind suspend with the slug only, the operator, the signed evidence and a fresh key', async () => {
     customer = cust('active')
     rows = [row({ state: 'succeeded', kind: 'create' })]

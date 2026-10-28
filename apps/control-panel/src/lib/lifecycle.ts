@@ -24,7 +24,8 @@ export interface LifecycleOffer {
  *  - active: suspend is offered; resume is not.
  *  - suspended: resume is offered; and, after a suspend request that did not
  *    succeed (the status flips first, the mail principal is revoked afterwards),
- *    suspend again too, because rerunning it converges.
+ *    or a resume that did not (it issues a fresh principal before the status
+ *    flips), suspend again too, because rerunning it converges.
  *  - anything else (provisioning, none): nothing.
  * While the newest request is queued or running nothing is offered.
  */
@@ -33,8 +34,10 @@ export function lifecycleOffer(status: string | null, newest: NewestRequest | nu
   if (newest && describeRequest({ ...newest, lastStep: null }).active) return none
   if (status === 'active') return { suspend: true, resume: false }
   if (status === 'suspended') {
-    const halfSuspended = newest !== null && newest.kind === 'suspend' && newest.state !== 'succeeded'
-    return { suspend: halfSuspended, resume: true }
+    // a suspend that did not finish (rerun converges), or a resume that failed after the host issued a
+    // fresh principal (suspend revokes it again)
+    const halfDone = newest !== null && (newest.kind === 'suspend' || newest.kind === 'resume') && newest.state !== 'succeeded'
+    return { suspend: halfDone, resume: true }
   }
   return none
 }

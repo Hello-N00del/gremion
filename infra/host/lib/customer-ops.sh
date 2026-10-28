@@ -311,10 +311,8 @@ customer_create() {
 # mail principal. The router file stays exactly as it is: a suspended customer's
 # route keeps resolving and the app serves its branded 503 on status `suspended`
 # (suspendCustomer sets the status FIRST). Each verb takes the TRD-440 fingerprint
-# before and after and fails if it moved; the suspend leaves its "before" in
-# runtime/suspended/<slug>.fingerprint and the resume must end on the same value,
-# so a resume proves the stack is what it was before the suspend.
-suspended_fingerprint_file() { printf '%s/runtime/suspended/%s.fingerprint' "$ROOT" "$1"; }
+# before and after ITS OWN run and fails if it moved. The two runs may be weeks
+# apart (deploys, colour switches in between), so nothing is compared across them.
 
 # _lifecycle_args <verb> <slug> [--operator <uuid>] -- validates; sets OPERATOR_ID.
 _lifecycle_args() {
@@ -331,7 +329,7 @@ _lifecycle_args() {
 }
 
 customer_suspend() {   # <slug> --operator <uuid>
-    local slug="${1:-}" before after f
+    local slug="${1:-}" before after
     _lifecycle_args suspend "$@"
     active_colour
     before="$(container_fingerprint)"
@@ -347,31 +345,29 @@ customer_suspend() {   # <slug> --operator <uuid>
         bad "TRD-440: the container set moved during suspend (before: ${before}; after: ${after})"
         exit "$GREMION_EXIT_ASSERT"
     fi
-    f="$(suspended_fingerprint_file "$slug")"
-    # keep the FIRST suspend's value: a converging rerun must not overwrite it
-    if [[ ! -f "$f" ]]; then
-        mkdir -p "$(dirname "$f")"
-        printf '%s\n' "$before" | atomic_write "$f" 600 || die "could not record the fingerprint of ${slug}" "$GREMION_EXIT_ASSERT"
-    fi
     ok "customer ${slug} suspended (TRD-440: container set unchanged, data untouched)"
 }
 
 customer_resume() {   # <slug> --operator <uuid>
-    local slug="${1:-}" before after f recorded=""
+    local slug="${1:-}" before after
     _lifecycle_args resume "$@"
     active_colour
-    f="$(suspended_fingerprint_file "$slug")"
-    [[ ! -f "$f" ]] || recorded="$(head -n 1 "$f")"
+    # an older release kept a per-suspend record here; it is never read any more
+    rm -f "${ROOT}/runtime/suspended/${slug}.fingerprint"
     before="$(container_fingerprint)"
     mail_realm_smtp --realm "$slug" --tenant "$(token_of "$slug")" \
         || die "a fresh principal for ${slug} could not be issued" "$GREMION_EXIT_ASSERT"
     mail_sender_args || die "resume of ${slug}: MAIL_TRANSPORT could not be resolved" "$GREMION_EXIT_USAGE"
-    tc resume "$slug" --operator "$OPERATOR_ID" ${MAIL_SENDER_ARGS[@]+"${MAIL_SENDER_ARGS[@]}"} || die "resume of ${slug} failed in the container" "$GREMION_EXIT_ASSERT"
+    if ! tc resume "$slug" --operator "$OPERATOR_ID" ${MAIL_SENDER_ARGS[@]+"${MAIL_SENDER_ARGS[@]}"}; then
+        # The customer is still suspended: do not leave it holding a live principal.
+        mail_realm_smtp --realm "$slug" --tenant "$(token_of "$slug")" --revoke \
+            || bad "the fresh principal of ${slug} could not be revoked again after the failed resume; trigger Mandant sperren to converge"
+        die "resume of ${slug} failed in the container" "$GREMION_EXIT_ASSERT"
+    fi
     after="$(container_fingerprint)"
-    if [[ "$before" != "$after" || ( -n "$recorded" && "$recorded" != "$after" ) ]]; then
-        bad "TRD-440: the container set differs after resume (before resume: ${before}; after: ${after}; before the suspend: ${recorded:-unrecorded})"
+    if [[ "$before" != "$after" ]]; then
+        bad "TRD-440: the container set moved during resume (before: ${before}; after: ${after})"
         exit "$GREMION_EXIT_ASSERT"
     fi
-    rm -f "$f"
-    ok "customer ${slug} resumed (TRD-440: container set equal to before the suspend, data untouched)"
+    ok "customer ${slug} resumed (TRD-440: container set unchanged, data untouched)"
 }
