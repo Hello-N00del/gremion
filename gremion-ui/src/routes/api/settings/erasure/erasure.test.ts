@@ -60,6 +60,13 @@ async function list(query = '', l = locals()) {
   return GET({ url: new URL(`http://localhost/api/settings/erasure${query}`), locals: l })
 }
 
+async function search(body: unknown, l = locals()) {
+  const { POST } = await import('./search/+server')
+  const request = new Request('http://localhost/api/settings/erasure/search', { method: 'POST', body: JSON.stringify(body) })
+  // @ts-expect-error partial event
+  return POST({ request, locals: l })
+}
+
 async function one(id: string, l = locals()) {
   const { GET } = await import('./[id]/+server')
   // @ts-expect-error partial event
@@ -188,11 +195,33 @@ describe('POST /api/settings/erasure', () => {
 })
 
 describe('reading reports (tenant-scoped by the service)', () => {
-  it('GET list returns the reports; ?subjectId narrows by the subject', async () => {
+  it('GET list returns the reports', async () => {
+    const res = await list()
+    expect(res.status).toBe(200)
+    expect(h.readErasureReports).toHaveBeenCalledWith({})
+    expect((await res.json()).data).toHaveLength(1)
+  })
+
+  it('R33f LOW: the subject id never travels in the URL: GET ?subjectId= is refused, nothing is read', async () => {
     const res = await list(`?subjectId=${SUBJ}`)
+    expect(res.status).toBe(400)
+    expect(h.readErasureReports).not.toHaveBeenCalled()
+    expect(JSON.stringify(await res.json())).not.toContain(SUBJ)
+  })
+
+  it('the lookup by subject is a POST body search', async () => {
+    const res = await search({ subjectId: SUBJ })
     expect(res.status).toBe(200)
     expect(h.readErasureReports).toHaveBeenCalledWith({ subjectId: SUBJ })
     expect((await res.json()).data).toHaveLength(1)
+  })
+
+  it('the search is admin-only and rejects a malformed id', async () => {
+    h.hasRole.mockReturnValue(false)
+    expect((await search({ subjectId: SUBJ }, locals(['member']))).status).toBe(403)
+    h.hasRole.mockReturnValue(true)
+    expect((await search({ subjectId: 'u1' })).status).toBe(422)
+    expect(h.readErasureReports).not.toHaveBeenCalled()
   })
 
   it('GET one returns the report', async () => {
