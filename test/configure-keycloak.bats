@@ -289,3 +289,132 @@ assert "browser-stepup" in aliases, \
     "authenticationFlows must contain alias \"browser-stepup\" (#164)"
 ' "${PROJECT_ROOT}/docker/keycloak/realm-export.base.json"
 }
+
+# ---------------------------------------------------------------------------
+# Security sweep 2: step-up second-factor gate, password policy, refresh-token
+# rotation, PKCE (findings 3 and 6)
+# ---------------------------------------------------------------------------
+
+two_fa_state() { cat "${KCSTATE}/two-fa.json" "${KCSTATE}/kids.json" | jq -s -c 'add'; }
+
+@test "sweep2 #3: a legacy REQUIRED OTP form in stepup-2fa is converted to OTP-or-deny, the legacy form deleted LAST" {
+    kc_tree
+    seed_complete_flow
+    kc_configure
+    [ "$status" -eq 0 ]
+    [ -z "$(call_line 'authentication/flows/browser/copy')" ]
+    # the end state: the REQUIRED subflow holds OTP then deny-access, both ALTERNATIVE; no OTP form at level 0
+    run two_fa_state
+    echo "$output" | jq -e '
+        (map(select(.providerId == "auth-otp-form")) | length == 1)
+        and (map(select(.providerId == "auth-otp-form" and .requirement == "ALTERNATIVE" and .level == 1)) | length == 1)
+        and (map(select(.providerId == "deny-access-authenticator" and .requirement == "ALTERNATIVE" and .level == 1)) | length == 1)
+        and (map(select(.displayName == "stepup-2fa second factor" and .requirement == "REQUIRED")) | length == 1)'
+    # crash safety: the old REQUIRED form goes only after the replacement is enabled
+    local enable_last del
+    enable_last="$(grep -nE 'PUT /admin/realms/gremion-test/authentication/flows/browser-stepup/executions' "${KCSTATE}/calls.log" | tail -n1 | cut -d: -f1)"
+    del="$(call_line 'DELETE /admin/realms/gremion-test/authentication/executions/o2')"
+    [ -n "$enable_last" ]
+    [ -n "$del" ]
+    [ "$enable_last" -lt "$del" ]
+}
+
+@test "sweep2 #3: a freshly built flow also ends OTP-or-deny" {
+    kc_tree
+    kc_configure
+    [ "$status" -eq 0 ]
+    [ -n "$(call_line 'authentication/flows/browser/copy')" ]
+    run two_fa_state
+    echo "$output" | jq -e 'map(select(.providerId == "auth-otp-form" and .requirement == "REQUIRED")) | length == 0'
+    echo "$output" | jq -e 'map(select(.providerId == "deny-access-authenticator")) | length == 1'
+}
+
+@test "sweep2 #3: an already OTP-or-deny stepup-2fa is left alone (no execution writes)" {
+    kc_tree
+    seed_complete_flow
+    printf '%s' '[{"id":"c2","providerId":"conditional-level-of-authentication","requirement":"REQUIRED","level":0,"index":0,"authenticationConfig":"cfg2"},{"id":"s2","displayName":"stepup-2fa second factor","authenticationFlow":true,"requirement":"REQUIRED","level":0,"index":1}]' > "${KCSTATE}/two-fa.json"
+    printf '%s' '[{"id":"o2","providerId":"auth-otp-form","requirement":"ALTERNATIVE","level":1,"index":0},{"id":"d2","providerId":"deny-access-authenticator","requirement":"ALTERNATIVE","level":1,"index":1}]' > "${KCSTATE}/kids.json"
+    kc_configure
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"already OTP-or-deny"* ]]
+    [ -z "$(call_line 'authentication/executions')" ]
+    [ -z "$(call_line 'POST .*stepup-2fa')" ]
+    [ -z "$(call_line 'PUT .*browser-stepup/executions')" ]
+}
+
+@test "sweep2 #3: a run that died after creating the subflow resumes (no second subflow)" {
+    kc_tree
+    seed_complete_flow
+    printf '%s' '[{"id":"c2","providerId":"conditional-level-of-authentication","requirement":"REQUIRED","level":0,"index":0,"authenticationConfig":"cfg2"},{"id":"o2","providerId":"auth-otp-form","requirement":"REQUIRED","level":0,"index":1},{"id":"s2","displayName":"stepup-2fa second factor","authenticationFlow":true,"requirement":"DISABLED","level":0,"index":2}]' > "${KCSTATE}/two-fa.json"
+    kc_configure
+    [ "$status" -eq 0 ]
+    [ -z "$(call_line 'POST .*stepup-2fa/executions/flow')" ]
+    run two_fa_state
+    echo "$output" | jq -e '(map(select(.providerId == "auth-otp-form")) | length == 1) and (map(select(.providerId == "auth-otp-form" and .level == 1)) | length == 1)'
+}
+
+@test "sweep2 #6: the realm PUT carries the password policy and refresh-token rotation" {
+    kc_tree
+    seed_complete_flow
+    kc_configure
+    [ "$status" -eq 0 ]
+    local line
+    line="$(grep -E 'PUT /admin/realms/gremion-test \{' "${KCSTATE}/calls.log" | grep browser-stepup | tail -n1)"
+    [[ "$line" == *'"passwordPolicy":"length(12) and notUsername and notEmail and passwordHistory(3)"'* ]]
+    [[ "$line" == *'"revokeRefreshToken":true'* ]]
+    [[ "$line" == *'"refreshTokenMaxReuse":0'* ]]
+}
+
+@test "sweep2 #6: gremion-ui gets PKCE S256 merged into its attributes" {
+    kc_tree
+    seed_complete_flow
+    kc_configure
+    [ "$status" -eq 0 ]
+    run jq -c '.attributes' "${KCSTATE}/ui-client.json"
+    [ "$output" = '{"post.logout.redirect.uris":"x","pkce.code.challenge.method":"S256"}' ]
+}
+
+@test "sweep2 #6: a gremion-ui that already enforces PKCE S256 is not written again" {
+    kc_tree
+    seed_complete_flow
+    printf '%s' '{"id":"cid-ui","clientId":"gremion-ui","attributes":{"pkce.code.challenge.method":"S256"}}' > "${KCSTATE}/ui-client.json"
+    kc_configure
+    [ "$status" -eq 0 ]
+    [ -z "$(call_line 'PUT /admin/realms/gremion-test/clients/cid-ui')" ]
+}
+
+@test "sweep2: the shell and TypeScript password policy strings are the same" {
+    local sh ts
+    sh="$(sed -n 's/^REALM_PASSWORD_POLICY="\(.*\)"$/\1/p' "$KC_SCRIPT")"
+    ts="$(sed -n "s/^export const REALM_PASSWORD_POLICY = '\(.*\)'$/\1/p" "${PROJECT_ROOT}/gremion-ui/src/lib/server/tenant/provisioner/realm-doc.ts")"
+    [ -n "$sh" ]
+    [ "$sh" = "$ts" ]
+}
+
+@test "sweep2: both realm templates carry the OTP-or-deny stepup-2fa, the policy and token rotation" {
+    local f
+    for f in realm-export.base.json realm-export.ops.json; do
+        python3 -c '
+import json, sys
+d = json.load(open(sys.argv[1]))
+flows = {f["alias"]: f for f in d["authenticationFlows"]}
+f2 = flows["stepup-2fa"]["authenticationExecutions"]
+assert not [e for e in f2 if e.get("authenticator") == "auth-otp-form"], "stepup-2fa must not hold an OTP form directly"
+subs = [e for e in f2 if e.get("authenticatorFlow")]
+assert len(subs) == 1 and subs[0]["requirement"] == "REQUIRED" and subs[0]["flowAlias"] == "stepup-2fa second factor"
+kids = sorted(flows["stepup-2fa second factor"]["authenticationExecutions"], key=lambda e: e["priority"])
+assert [(e["authenticator"], e["requirement"]) for e in kids] == [("auth-otp-form", "ALTERNATIVE"), ("deny-access-authenticator", "ALTERNATIVE")]
+assert d["passwordPolicy"] == "length(12) and notUsername and notEmail and passwordHistory(3)"
+assert d["revokeRefreshToken"] is True and d["refreshTokenMaxReuse"] == 0
+' "${PROJECT_ROOT}/docker/keycloak/${f}"
+    done
+}
+
+@test "sweep2: the base template makes gremion-ui use PKCE S256" {
+    python3 -c '
+import json, sys
+d = json.load(open(sys.argv[1]))
+ui = [c for c in d["clients"] if c["clientId"] == "gremion-ui"][0]
+assert ui["attributes"]["pkce.code.challenge.method"] == "S256"
+' "${PROJECT_ROOT}/docker/keycloak/realm-export.base.json"
+}

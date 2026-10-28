@@ -117,6 +117,7 @@
         "https://__APEX_DOMAIN__"
       ],
       "attributes": {
+        "pkce.code.challenge.method": "S256",
         "post.logout.redirect.uris": "http://localhost:3000/auth/login?loggedOut=1##http://localhost:3001/auth/login?loggedOut=1##http://localhost:4001/auth/login?loggedOut=1##http://localhost:5173/auth/login?loggedOut=1##https://__APEX_DOMAIN__/auth/login?loggedOut=1##https://__APEX_DOMAIN__"
       },
       "fullScopeAllowed": false,
@@ -624,10 +625,36 @@
           "userSetupAllowed": false
         },
         {
+          "authenticatorFlow": true,
+          "requirement": "REQUIRED",
+          "priority": 10,
+          "autheticatorFlow": true,
+          "flowAlias": "stepup-2fa second factor",
+          "userSetupAllowed": false
+        }
+      ]
+    },
+    {
+      "id": "5e0f0d7e-6b8c-4a39-9d57-2f6c1a7b8c14",
+      "alias": "stepup-2fa second factor",
+      "description": "OTP if the user already has one, otherwise deny. Never a REQUIRED OTP form: Keycloak would run CONFIGURE_TOTP inside the step-up and then grant loa2 to whoever holds the session.",
+      "providerId": "basic-flow",
+      "topLevel": false,
+      "builtIn": false,
+      "authenticationExecutions": [
+        {
           "authenticator": "auth-otp-form",
           "authenticatorFlow": false,
-          "requirement": "REQUIRED",
-          "priority": 0,
+          "requirement": "ALTERNATIVE",
+          "priority": 10,
+          "autheticatorFlow": false,
+          "userSetupAllowed": false
+        },
+        {
+          "authenticator": "deny-access-authenticator",
+          "authenticatorFlow": false,
+          "requirement": "ALTERNATIVE",
+          "priority": 20,
           "autheticatorFlow": false,
           "userSetupAllowed": false
         }
@@ -652,6 +679,9 @@
       }
     }
   ],
+  "passwordPolicy": "length(12) and notUsername and notEmail and passwordHistory(3)",
+  "revokeRefreshToken": true,
+  "refreshTokenMaxReuse": 0,
   "browserFlow": "browser-stepup",
   "otpPolicyType": "totp",
   "otpPolicyAlgorithm": "HmacSHA1",
