@@ -7,16 +7,15 @@
 // again). The Matrix localpart is the Keycloak username, so the hook resolves it
 // from the Keycloak account first; when that account is already gone the Matrix
 // id can no longer be derived and the module reports `skipped`, never `erased`.
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it, vi, type Mock } from 'vitest'
 import { createMessagingErasureHook } from './erasure'
 
-function hook(over: {
-  localpart?: string | null
-  eraseUser?: ReturnType<typeof vi.fn>
-  resolveLocalpart?: ReturnType<typeof vi.fn>
-}) {
-  const eraseUser = over.eraseUser ?? vi.fn().mockResolvedValue(true)
-  const resolveLocalpart = over.resolveLocalpart ?? vi.fn().mockResolvedValue(over.localpart === undefined ? 'jdoe' : over.localpart)
+type EraseUser = (localpart: string) => Promise<boolean>
+type ResolveLocalpart = (subjectId: string) => Promise<string | null>
+
+function hook(over: { localpart?: string | null; eraseUser?: Mock<EraseUser> }) {
+  const eraseUser = over.eraseUser ?? vi.fn<EraseUser>().mockResolvedValue(true)
+  const resolveLocalpart = vi.fn<ResolveLocalpart>().mockResolvedValue(over.localpart === undefined ? 'jdoe' : over.localpart)
   return { h: createMessagingErasureHook({ resolveLocalpart, synapse: () => ({ eraseUser }) }), eraseUser, resolveLocalpart }
 }
 
@@ -36,7 +35,7 @@ describe('messagingErasureHook', () => {
   })
 
   it('no Matrix account (Synapse does not know it): erased with count 0, idempotent', async () => {
-    const { h } = hook({ eraseUser: vi.fn().mockResolvedValue(false) })
+    const { h } = hook({ eraseUser: vi.fn<EraseUser>().mockResolvedValue(false) })
     expect(await h.erase({ tenantId: 't', subjectId: 'kc-1', db: null })).toEqual({
       status: 'erased',
       counts: { matrix_accounts: 0 },
@@ -52,7 +51,7 @@ describe('messagingErasureHook', () => {
   })
 
   it('a Synapse failure propagates (the orchestrator reports failed)', async () => {
-    const { h } = hook({ eraseUser: vi.fn().mockRejectedValue(new Error('Synapse 502')) })
+    const { h } = hook({ eraseUser: vi.fn<EraseUser>().mockRejectedValue(new Error('Synapse 502')) })
     await expect(h.erase({ tenantId: 't', subjectId: 'kc-1', db: null })).rejects.toThrow('Synapse 502')
   })
 })
