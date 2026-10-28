@@ -5,7 +5,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { EXPORT_VERBS, exportVerb, type ExportVerbContext } from '../../../../../scripts/tenant-provision-export'
+import { EXPORT_VERBS, exportVerb, retireReaders, type ExportVerbContext } from '../../../../../scripts/tenant-provision-export'
 
 const dirs: string[] = []
 afterEach(() => {
@@ -76,6 +76,23 @@ describe('export verbs', () => {
       }
       await expect(exportVerb('export', c)).rejects.toThrow(new RegExp(`finance.*${state}`))
     }
+  })
+
+  it('LOW: a reader that could not be retired makes the verb fail (exit 1), the others are still retired', async () => {
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const seen: unknown[] = []
+    const a = { id: 'a' }
+    const b = { id: 'b' }
+    await retireReaders([a, b] as never, async (admin: unknown) => {
+      seen.push(admin)
+      if (admin === a) throw new Error('connection refused')
+    })
+    expect(seen).toEqual([a, b])
+    expect(process.exitCode).toBe(1)
+    expect(err.mock.calls.flat().join(' ')).toMatch(/not retired.*connection refused/)
+    process.exitCode = undefined
+    await retireReaders([b] as never, async () => undefined)
+    expect(process.exitCode).toBeUndefined()
   })
 
   it('export refuses a missing or malformed slug and a missing --out, before any connection', async () => {

@@ -54,6 +54,20 @@ function withDb(url: string, db: string): string {
   return u.toString()
 }
 
+/**
+ * Retires every reader, each on its own server. A reader that could not be
+ * retired may still log in, so the verb fails (exit 1) and the host does not
+ * print "complete and verified"; the other servers' readers are still retired.
+ */
+export async function retireReaders(admins: Iterable<ExportModule['sql'] & object>, retire: (admin: ExportModule['sql'] & object) => Promise<void> = retireExportReader): Promise<void> {
+  for (const admin of admins) {
+    await retire(admin).catch((err: unknown) => {
+      console.error(`export reader not retired (it may still be able to log in): ${(err as Error).message}`)
+      process.exitCode = 1
+    })
+  }
+}
+
 export async function exportVerb(verb: string, ctx: ExportVerbContext): Promise<void> {
   if (verb === 'export-verify') {
     const dir = ctx.positional(0)
@@ -145,9 +159,7 @@ export async function exportVerb(verb: string, ctx: ExportVerbContext): Promise<
       process.exitCode = 1
     }
   } finally {
-    for (const admin of admins.values()) {
-      await retireExportReader(admin as ExportModule['sql'] & object).catch((err: unknown) => console.error(`export reader password not cleared: ${(err as Error).message}`))
-    }
+    await retireReaders([...admins.values()] as (ExportModule['sql'] & object)[])
     await Promise.all([platform, ...open].map((s) => s.end({ timeout: 5 }).catch(() => undefined)))
   }
 }
