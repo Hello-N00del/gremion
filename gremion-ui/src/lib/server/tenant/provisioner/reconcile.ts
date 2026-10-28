@@ -55,6 +55,10 @@ export const HOST_REPAIRED_CHECKS: readonly ReconcileCheckName[] = ['smtp-server
 
 export type ReconcileCheckName = (typeof RECONCILE_CHECK_NAMES)[number]
 
+/** DB-level checks the verb appends to a realm report (withKernelAuditCheck); not part of the realm contract. */
+export const KERNEL_DB_CHECK_NAMES = ['audit-append-only'] as const
+export type KernelDbCheckName = (typeof KERNEL_DB_CHECK_NAMES)[number]
+
 /** A single named contract check result (machine-readable). */
 export interface NamedCheck {
   name: ReconcileCheckName
@@ -63,13 +67,20 @@ export interface NamedCheck {
   detail: string
 }
 
+/** A check of a report: a realm contract check, or the DB-level one withKernelAuditCheck appends. */
+export interface ReportCheck {
+  name: ReconcileCheckName | KernelDbCheckName
+  ok: boolean
+  detail: string
+}
+
 export interface ReconcileReport {
   realm: string
   /** True iff EVERY check passed (verify-only exits 1 when false). */
   ok: boolean
-  checks: NamedCheck[]
+  checks: ReportCheck[]
   /** In apply mode: the failed check names whose repair was replayed. */
-  applied: ReconcileCheckName[]
+  applied: (ReconcileCheckName | KernelDbCheckName)[]
   /** Failed checks whose repair is the host's (`repair: host`, HOST_REPAIRED_CHECKS). */
   repairHost: ReconcileCheckName[]
 }
@@ -688,4 +699,47 @@ export async function reconcileRealm(transport: KcTransport, opts: ReconcileOpti
   // report reflects post-apply state.
   const after = await reconcileRealm(transport, { ...opts, verifyOnly: true })
   return { realm, ok: after.ok, checks: after.checks, applied, repairHost: after.repairHost }
+}
+
+// ── TASK-033-a: the kernel audit record is append-only ─────────────────────────
+/**
+ * The customer's kernel database, as reconcile sees it for ONE tenant: `problems`
+ * reads the effective privileges (tenant-store kernelAuditAppendOnlyProblems),
+ * `repair` re-asserts them (ensureKernelAuditAppendOnly). The verb supplies the
+ * live pair; this module stays pure over it.
+ */
+export interface KernelAuditPort {
+  problems(): Promise<string[]>
+  repair(): Promise<void>
+}
+
+/**
+ * Appends the `audit-append-only` check to a realm report. The kernel's audit_log is a
+ * governance record (RC-GOV-CHAIN): the app and owner roles must hold no DELETE, UPDATE or
+ * TRUNCATE on it. Verify only reads; apply repairs once and READS AGAIN (the post-condition is
+ * observed, not assumed). A port that throws fails the check with the reason. The check can turn
+ * a green report red, never a red one green.
+ */
+export async function withKernelAuditCheck(report: ReconcileReport, port: KernelAuditPort | null, verifyOnly: boolean): Promise<ReconcileReport> {
+  if (port === null) return report
+  const name: KernelDbCheckName = 'audit-append-only'
+  let problems: string[]
+  let repaired = false
+  try {
+    problems = await port.problems()
+    if (problems.length > 0 && !verifyOnly) {
+      await port.repair()
+      repaired = true
+      problems = await port.problems()
+    }
+  } catch (err) {
+    problems = [`cannot read or repair the kernel database privileges: ${err instanceof Error ? err.message : String(err)}`]
+  }
+  const check = { name, ok: problems.length === 0, detail: problems.join('; ') }
+  return {
+    ...report,
+    ok: report.ok && check.ok,
+    checks: [...report.checks, check],
+    applied: repaired && check.ok ? [...report.applied, name] : report.applied,
+  }
 }

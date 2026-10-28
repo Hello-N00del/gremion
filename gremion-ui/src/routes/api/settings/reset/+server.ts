@@ -41,7 +41,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
       backups: { retention_days: defaults.backups.retention_days },
     })
     await writeAuditEntry({
-      userId: user.id ?? 'unknown',
+      userId: user.id,
       field: 'config.reset',
       oldValue: 'org,smtp,modules,backups.retention_days',
       newValue: 'defaults',

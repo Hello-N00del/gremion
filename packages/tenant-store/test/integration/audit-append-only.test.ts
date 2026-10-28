@@ -5,6 +5,8 @@
 // applies that through the hardened admin path (asAdminIn + execFormatted,
 // qualified names), at provisioning and on reconcile.
 import { randomBytes } from 'node:crypto'
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import type { Sql } from '@gremion/db'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import {
@@ -37,6 +39,16 @@ function kernelServer(opts: { bare?: boolean } = {}): ModuleServer & { close(): 
 }
 
 const sqlState = (e: unknown) => (e as { code?: string }).code
+
+const KERNEL_MIGRATIONS = fileURLToPath(new URL('../../../../gremion-ui/migrations/', import.meta.url))
+/** The real chain files that define audit_log, its hash chain, its anchor and its actor CHECK (0009, 0040, 0043, 0059, 0061). */
+const AUDIT_CHAIN_FILES = [
+  '0009_audit_log.sql',
+  '0040_event_consumption.sql',
+  '0043_audit_log_hash_chain.sql',
+  '0059_audit_log_chain_anchor.sql',
+  '0061_audit_log_actor_uuid_check.sql',
+]
 
 describe('ensureKernelAuditAppendOnly (TASK-033-a: audit_log is a governance record)', () => {
   let server: ReturnType<typeof kernelServer>
@@ -135,6 +147,51 @@ describe('ensureKernelAuditAppendOnly (TASK-033-a: audit_log is a governance rec
       session.release()
     }
     expect(viaOwner).toBe('42501')
+  })
+
+  it('on the REAL chain DDL (0009, 0040, 0043, 0059, 0061): the app still appends through the hash-chain trigger, the chain verifies, DELETE / UPDATE / TRUNCATE are 42501, the actor CHECK holds', async () => {
+    const T = uuidv7()
+    await seed(T, { tables: false })
+    const { owner, app } = kernelRoles(T)
+    const d = connect(kernelDbName(T), { max: 1 })
+    try {
+      for (const f of AUDIT_CHAIN_FILES) {
+        const sql = readFileSync(KERNEL_MIGRATIONS + f, 'utf8')
+        await d.begin(async (tx) => {
+          await tx.unsafe(`SET LOCAL ROLE ${owner}`)
+          await tx.unsafe(sql)
+        })
+      }
+    } finally {
+      await d.end({ timeout: 5 })
+    }
+    expect(await ensureKernelAuditAppendOnly(server, T)).toEqual({ revoked: ['audit_log', 'audit_log_chain_anchor'], absent: [] })
+    expect(await kernelAuditAppendOnlyProblems(server, T)).toEqual([])
+
+    // the app's own session: the default search_path (the chain trigger calls digest() unqualified)
+    const a = connectAs(kernelDbName(T), app, pw, { max: 1 })
+    pools.push(a)
+    const person = '0192f3e0-1a2b-7c3d-8e4f-0123456789ab'
+    for (const [user, field] of [[person, 'org.name'], ['calendar-service', 'event.consumed'], [person, 'org.name']] as const) {
+      await a`INSERT INTO public.audit_log (user_id, field, new_value) VALUES (${user}, ${field}, 'v')`
+    }
+    expect((await a`SELECT public.audit_log_verify_chain() AS broken`)[0]!.broken).toBeNull()
+    const code = async (p: PromiseLike<unknown>) => {
+      try {
+        await p
+        return 'ok'
+      } catch (e) {
+        return sqlState(e)
+      }
+    }
+    expect(await code(a`DELETE FROM public.audit_log`)).toBe('42501')
+    expect(await code(a`UPDATE public.audit_log SET new_value = 'x'`)).toBe('42501')
+    expect(await code(a`TRUNCATE public.audit_log`)).toBe('42501')
+    // 0061: a name or an address is not an actor
+    expect(await code(a`INSERT INTO public.audit_log (user_id, field, new_value) VALUES ('Erika Mustermann', 'f', 'v')`)).toBe('23514')
+    expect(await code(a`INSERT INTO public.audit_log (user_id, field, new_value) VALUES ('erika@example.org', 'f', 'v')`)).toBe('23514')
+    expect(await code(a`INSERT INTO public.audit_log (user_id, field, new_value) VALUES ('Calendar-service', 'f', 'v')`)).toBe('23514')
+    expect((await a`SELECT public.audit_log_verify_chain() AS broken`)[0]!.broken).toBeNull()
   })
 
   it('is idempotent, and a customer whose chain has not created the tables yet is reported absent (no throw)', async () => {

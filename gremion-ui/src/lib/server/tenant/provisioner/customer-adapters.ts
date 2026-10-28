@@ -14,7 +14,15 @@ import postgres from 'postgres'
 import { checkTenantHostDns, type EdgeAddresses } from '@gremion/edge-routers'
 import { ensureTenantAccount } from '@gremion/nats-auth'
 import type { AdminSpec, ControlRow, CustomerRef, KernelPostCondition, ProvisioningDeps, SmtpReadBack } from '@gremion/provisioning'
-import { ensureKernelDatabase, ensureKernelPurgeGrants, kernelDbName, kernelRoles, type PurgeServer } from '@gremion/tenant-store/lifecycle'
+import {
+  ensureKernelAuditAppendOnly,
+  ensureKernelDatabase,
+  ensureKernelPurgeGrants,
+  kernelAuditAppendOnlyProblems,
+  kernelDbName,
+  kernelRoles,
+  type PurgeServer,
+} from '@gremion/tenant-store/lifecycle'
 import type { ModuleManifest } from '$lib/modules/types'
 import { runMigrations } from '$lib/server/db'
 import { createOrgUnit, type OrgUnit } from '$lib/server/governance/org-units-db'
@@ -95,6 +103,28 @@ function authorityOf(url: string, what: string): { scheme: string; hostPort: str
   const m = /^([a-z][a-z0-9+.-]*):\/\/(?:[^@/]*@)?([^/?#]+)[^?#]*(\?[^#]*)?/i.exec(url)
   if (!m) throw new Error(`${what}: cannot parse scheme and authority`)
   return { scheme: m[1]!, hostPort: m[2]!, query: m[3] ?? '' }
+}
+
+/**
+ * What the admin sets on a customer's kernel database once the kernel chain created its tables
+ * (provisioning time; reconcile re-asserts the second half):
+ *   1. the purger's SELECT, DELETE on exactly the purge tables (PURGE_RULES);
+ *   2. TASK-033-a: audit_log is a governance record (RC-GOV-CHAIN), append-only for the app and the
+ *      owner, and the chain anchor read-only. No timer purges it.
+ * The second is a hard requirement of a provisioned customer: a missing audit_log or a privilege that
+ * is still held after the REVOKE fails the step instead of leaving the record deletable.
+ */
+export async function ensureKernelPostMigrationPrivileges(server: PurgeServer, tenantId: string, log: (line: string) => void): Promise<void> {
+  const dbName = kernelDbName(tenantId)
+  const g = await ensureKernelPurgeGrants(server, tenantId)
+  if (g.absent.length) log(`kernel database ${dbName}: purge tables not created by the kernel chain: ${g.absent.join(', ')}`)
+  const a = await ensureKernelAuditAppendOnly(server, tenantId)
+  if (a.absent.length) {
+    throw new Error(`kernel database ${dbName}: ${a.absent.join(', ')} not created by the kernel chain: the audit record cannot be made append-only`)
+  }
+  const problems = await kernelAuditAppendOnlyProblems(server, tenantId)
+  if (problems.length) throw new Error(`kernel database ${dbName}: audit record is not append-only after the REVOKE: ${problems.join('; ')}`)
+  log(`kernel database ${dbName}: audit record append-only (${a.revoked.join(', ')})`)
 }
 
 /** The runtime DATABASE_URL goes through PgBouncer (the pooled stack: pgbouncer-<stack>:6432). */
@@ -374,12 +404,11 @@ export function customerAdapters(o: CustomerAdapterOptions): Pick<ProvisioningDe
         // its session role set to the OWNER (Q3), so every object is the owner's.
         const direct = dbUrl(o.kernelAdminUrl, decodeURIComponent(app.username), decodeURIComponent(app.password), kernelDbName(c.id), `options=${encodeURIComponent(`-c role=${owner}`)}`)
         await inProvisioningContext(c, () => runMigrations(), { dbUrl: direct })
-        // TRD-144/145: the purger's SELECT, DELETE on exactly the purge tables, now that the chain created them
-        // (provisioning time; the purge run never grants, it records a missing grant)
+        // TRD-144/145 + TASK-033-a: the purger's SELECT, DELETE on exactly the purge tables, and audit_log made
+        // append-only, now that the chain created them (provisioning time; the purge run never grants)
         const server = kernelServer(o.kernelAdminUrl)
         try {
-          const g = await ensureKernelPurgeGrants(server, c.id)
-          if (g.absent.length) log(`kernel database ${kernelDbName(c.id)}: purge tables not created by the kernel chain: ${g.absent.join(', ')}`)
+          await ensureKernelPostMigrationPrivileges(server, c.id, log)
         } finally {
           await server.close()
         }

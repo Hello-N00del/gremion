@@ -62,7 +62,6 @@ vi.mock('$lib/server/config', () => ({
 vi.mock('$lib/server/governance/provisioning/worker', () => ({ startProvisioningWorker: vi.fn() }))
 vi.mock('$lib/server/tenant/evict-listener', () => ({ startTenantEvictListener: vi.fn(async () => {}) }))
 vi.mock('$lib/server/audit-db', () => ({
-  purgeAuditLogsOlderThan: vi.fn(async () => ({ purged: 0 })),
   verifyAuditChain: vi.fn(async () => ({ ok: true })),
 }))
 vi.mock('$lib/server/tenant/control-migrations', () => ({ runControlMigrations: vi.fn(async () => {}) }))

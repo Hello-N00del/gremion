@@ -36,8 +36,19 @@ vi.mock('$lib/server/governance/provisioning/orchestrator', () => ({ provisionOr
 vi.mock('$lib/server/governance/provisioning/subsystems/keycloak', () => ({ createKeycloakSubsystem: vi.fn() }))
 vi.mock('$lib/server/tenant/context', () => ({ runWithTenant: vi.fn(), getTenant: vi.fn() }))
 vi.mock('@gremion/nats-auth', () => ({ ensureTenantAccount: vi.fn() }))
-const lc = vi.hoisted(() => ({ ensureKernelDatabase: vi.fn() }))
-vi.mock('@gremion/tenant-store/lifecycle', async (orig) => ({ ...(await orig<Record<string, unknown>>()), ensureKernelDatabase: lc.ensureKernelDatabase }))
+const lc = vi.hoisted(() => ({
+  ensureKernelDatabase: vi.fn(),
+  ensureKernelPurgeGrants: vi.fn(),
+  ensureKernelAuditAppendOnly: vi.fn(),
+  kernelAuditAppendOnlyProblems: vi.fn(),
+}))
+vi.mock('@gremion/tenant-store/lifecycle', async (orig) => ({
+  ...(await orig<Record<string, unknown>>()),
+  ensureKernelDatabase: lc.ensureKernelDatabase,
+  ensureKernelPurgeGrants: lc.ensureKernelPurgeGrants,
+  ensureKernelAuditAppendOnly: lc.ensureKernelAuditAppendOnly,
+  kernelAuditAppendOnlyProblems: lc.kernelAuditAppendOnlyProblems,
+}))
 
 // the real driver (pools connect lazily), recorded: kernelServer's startup parameters
 const pg = vi.hoisted(() => ({ calls: [] as { url: string; opts: Record<string, unknown> }[] }))
@@ -51,7 +62,7 @@ vi.mock('postgres', async (orig) => {
   }
 })
 
-const { customerAdapters, kernelServer } = await import('./customer-adapters')
+const { customerAdapters, kernelServer, ensureKernelPostMigrationPrivileges } = await import('./customer-adapters')
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '..', '..', '..')
 const BASE = JSON.parse(readFileSync(join(REPO, 'docker', 'keycloak', 'realm-export.base.json'), 'utf8')) as Record<string, unknown>
@@ -264,6 +275,48 @@ describe('customerAdapters.control', () => {
     const { a } = adapters(kcFake(true))
     await expect(a.control.setStatus(C.id, 'active')).rejects.toThrow(/refusing/)
     expect(reg.updateTenantStatus).not.toHaveBeenCalled()
+  })
+})
+
+// TASK-033-a: after the kernel chain created the tables, provisioning takes the purger's grants AND
+// makes audit_log append-only (a governance record, RC-GOV-CHAIN). The second is not optional:
+// a customer whose app role can still DELETE from audit_log is not a provisioned customer.
+describe('ensureKernelPostMigrationPrivileges: purge grants, then the append-only audit record', () => {
+  beforeEach(() => vi.clearAllMocks())
+  const server = {} as never
+  const T = '0192f1a2-3b4c-7d5e-8f60-718293a4b5c6'
+
+  it('grants the purger, revokes the audit privileges, then checks the post-condition (in that order)', async () => {
+    const order: string[] = []
+    lc.ensureKernelPurgeGrants.mockImplementation(async () => (order.push('grants'), { granted: ['event_consumption'], absent: [] }))
+    lc.ensureKernelAuditAppendOnly.mockImplementation(async () => (order.push('append-only'), { revoked: ['audit_log', 'audit_log_chain_anchor'], absent: [] }))
+    lc.kernelAuditAppendOnlyProblems.mockImplementation(async () => (order.push('check'), []))
+    await ensureKernelPostMigrationPrivileges(server, T, () => {})
+    expect(order).toEqual(['grants', 'append-only', 'check'])
+    expect(lc.ensureKernelAuditAppendOnly).toHaveBeenCalledWith(server, T)
+  })
+
+  it('FAILS the step when audit_log is absent after the kernel chain (nothing silently stays unprotected)', async () => {
+    lc.ensureKernelPurgeGrants.mockResolvedValue({ granted: [], absent: [] })
+    lc.ensureKernelAuditAppendOnly.mockResolvedValue({ revoked: ['audit_log_chain_anchor'], absent: ['audit_log'] })
+    lc.kernelAuditAppendOnlyProblems.mockResolvedValue([])
+    await expect(ensureKernelPostMigrationPrivileges(server, T, () => {})).rejects.toThrow(/audit_log/)
+  })
+
+  it('FAILS the step when the effective privileges still allow a write (the post-condition is read, not assumed)', async () => {
+    lc.ensureKernelPurgeGrants.mockResolvedValue({ granted: [], absent: [] })
+    lc.ensureKernelAuditAppendOnly.mockResolvedValue({ revoked: ['audit_log', 'audit_log_chain_anchor'], absent: [] })
+    lc.kernelAuditAppendOnlyProblems.mockResolvedValue(['audit_log: k_x_app still holds DELETE (the kernel audit record is append-only)'])
+    await expect(ensureKernelPostMigrationPrivileges(server, T, () => {})).rejects.toThrow(/still holds DELETE/)
+  })
+
+  it('an absent purge table is logged, not fatal (the pre-existing behaviour)', async () => {
+    lc.ensureKernelPurgeGrants.mockResolvedValue({ granted: [], absent: ['event_consumption'] })
+    lc.ensureKernelAuditAppendOnly.mockResolvedValue({ revoked: ['audit_log', 'audit_log_chain_anchor'], absent: [] })
+    lc.kernelAuditAppendOnlyProblems.mockResolvedValue([])
+    const logs: string[] = []
+    await ensureKernelPostMigrationPrivileges(server, T, (m) => logs.push(m))
+    expect(logs.join(' | ')).toContain('event_consumption')
   })
 })
 

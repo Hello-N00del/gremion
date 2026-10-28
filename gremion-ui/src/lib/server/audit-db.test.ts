@@ -47,26 +47,4 @@ describe('audit-db', () => {
 
     expect(mockSql).toHaveBeenCalledOnce()
   })
-
-  // F1-FIX-02-K (K1#36, purge side): a retention window under one whole day
-  // would erase the tamper-evident record (days=0 deletes everything older than
-  // now). The purge refuses it before any SQL runs, whatever config holds.
-  it.each([0, -1, 0.5, Number.NaN, Number.POSITIVE_INFINITY])(
-    'purgeAuditLogsOlderThan(%s) refuses and issues no SQL',
-    async (days) => {
-      mockSql.mockResolvedValue([{ purged: '99' }])
-      const { purgeAuditLogsOlderThan } = await import('./audit-db')
-
-      await expect(purgeAuditLogsOlderThan(days)).rejects.toThrow(RangeError)
-      expect(mockSql).not.toHaveBeenCalled()
-    },
-  )
-
-  it('purgeAuditLogsOlderThan(1) runs the anchored purge once and returns its count', async () => {
-    mockSql.mockResolvedValue([{ purged: '3' }])
-    const { purgeAuditLogsOlderThan } = await import('./audit-db')
-
-    await expect(purgeAuditLogsOlderThan(1)).resolves.toEqual({ purged: 3 })
-    expect(mockSql).toHaveBeenCalledOnce()
-  })
 })

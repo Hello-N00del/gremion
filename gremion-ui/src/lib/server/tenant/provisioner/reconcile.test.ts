@@ -2,7 +2,7 @@
 // transport, no network, no DB. A green realm passes every named check; each
 // single planted drift fails EXACTLY that named check; apply issues exactly the
 // repairing calls (§4-2 idempotent sequence) and nothing else.
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -10,6 +10,8 @@ import type { KcTransport } from './kc-admin-api'
 import {
   reconcileRealm,
   reconcileFleet,
+  withKernelAuditCheck,
+  KERNEL_DB_CHECK_NAMES,
   isRealmBearing,
   REALM_BEARING_STATUSES,
   RECONCILE_CHECK_NAMES,
@@ -973,5 +975,70 @@ describe('(C) reconcileFleet — --all skips non-realm-bearing tenants and never
     const report = await reconcileFleet(fleet, async (tenant) => okReport(tenant.realmName))
     expect(report.rows.every((r) => r.outcome === 'reconciled')).toBe(true)
     expect(report.anyFailed).toBe(false)
+  })
+})
+
+// TASK-033-a: the kernel audit_log is a governance record, append-only for the app (RC-GOV-CHAIN).
+// The privilege lives in the customer's kernel database, not in the realm, so the verb adds ONE
+// DB-level check to the realm report through an injected port: verify reads it, apply re-asserts it.
+describe('withKernelAuditCheck: the audit-append-only check', () => {
+  const green: ReconcileReport = { realm: REALM, ok: true, checks: [{ name: 'ssl-required', ok: true, detail: '' }], applied: [], repairHost: [] }
+  const fakePort = (states: string[][]) => {
+    const seq = [...states]
+    const repair = vi.fn(async () => {})
+    return { problems: vi.fn(async () => (seq.length > 1 ? seq.shift()! : seq[0]!)), repair }
+  }
+
+  it('is a named check of its own, outside the realm contract list', () => {
+    expect([...KERNEL_DB_CHECK_NAMES]).toEqual(['audit-append-only'])
+    expect((RECONCILE_CHECK_NAMES as readonly string[]).includes('audit-append-only')).toBe(false)
+  })
+
+  it('a clean kernel database adds a passing check and keeps the report green', async () => {
+    const port = fakePort([[]])
+    const r = await withKernelAuditCheck(green, port, true)
+    expect(r.ok).toBe(true)
+    expect(r.checks.at(-1)).toEqual({ name: 'audit-append-only', ok: true, detail: '' })
+    expect(port.repair).not.toHaveBeenCalled()
+  })
+
+  it('verify-only reports the privilege still held and does NOT repair', async () => {
+    const port = fakePort([['audit_log: k_x_app still holds DELETE (the kernel audit record is append-only)']])
+    const r = await withKernelAuditCheck(green, port, true)
+    expect(r.ok).toBe(false)
+    expect(r.checks.at(-1)).toMatchObject({ name: 'audit-append-only', ok: false })
+    expect(r.checks.at(-1)!.detail).toContain('still holds DELETE')
+    expect(port.repair).not.toHaveBeenCalled()
+    expect(r.applied).toEqual([])
+  })
+
+  it('apply repairs it once, re-reads, and the report turns green with the repair listed', async () => {
+    const port = fakePort([['audit_log: k_x_app still holds DELETE'], []])
+    const r = await withKernelAuditCheck(green, port, false)
+    expect(port.repair).toHaveBeenCalledTimes(1)
+    expect(r.ok).toBe(true)
+    expect(r.applied).toContain('audit-append-only')
+    expect(r.checks.at(-1)).toMatchObject({ name: 'audit-append-only', ok: true })
+  })
+
+  it('apply that leaves the privilege in place stays RED (the post-condition is read, not assumed)', async () => {
+    const port = fakePort([['audit_log: k_x_app still holds DELETE']])
+    const r = await withKernelAuditCheck(green, port, false)
+    expect(port.repair).toHaveBeenCalledTimes(1)
+    expect(r.ok).toBe(false)
+    expect(r.checks.at(-1)).toMatchObject({ name: 'audit-append-only', ok: false })
+  })
+
+  it('a port that throws fails the check with the reason; it never crashes the report', async () => {
+    const port = { problems: vi.fn(async () => { throw new Error('connection refused') }), repair: vi.fn(async () => {}) }
+    const r = await withKernelAuditCheck(green, port, true)
+    expect(r.ok).toBe(false)
+    expect(r.checks.at(-1)!.detail).toContain('connection refused')
+  })
+
+  it('a realm report that already failed stays failed (the check never flips ok to true)', async () => {
+    const red: ReconcileReport = { ...green, ok: false, checks: [{ name: 'ssl-required', ok: false, detail: 'x' }] }
+    const r = await withKernelAuditCheck(red, fakePort([[]]), true)
+    expect(r.ok).toBe(false)
   })
 })
