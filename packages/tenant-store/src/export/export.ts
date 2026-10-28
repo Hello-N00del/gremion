@@ -15,8 +15,11 @@
 //            and challenges, the audit log. config_store is NOT exported
 //            (it may hold credentials) and is listed under excluded_tables.
 //   modules  a module whose module.json declares runtime.export (kind
-//            pg_dump) AND is enabled for the tenant: every base table of the
-//            tenant's module database except the migration ledger. A module
+//            pg_dump) AND is enabled for the tenant: every base table in
+//            every non-system schema of the tenant's module database
+//            (finance.*, content.*, public.*) except the migration ledger;
+//            a module that yields no table fails the export. A table outside
+//            public is written as <scope>/<schema>.<table>.(csv|json). A module
 //            with runtime.export null is listed under excluded, with the
 //            reason; so are Nextcloud files and Matrix history, which live
 //            outside Postgres and are not exported by this tool.
@@ -136,19 +139,24 @@ function quoteIdent(id: string): string {
   return `"${id.replaceAll('"', '""')}"`
 }
 
-async function exportTable(tx: postgres.TransactionSql, scope: string, table: string, outDir: string): Promise<ManifestFile[]> {
+/** <table> for public, <schema>.<table> otherwise (file names inside the scope directory). */
+function fileStem(schema: string, table: string): string {
+  return schema === 'public' ? table : `${schema}.${table}`
+}
+
+async function exportTable(tx: postgres.TransactionSql, scope: string, schema: string, table: string, outDir: string): Promise<ManifestFile[]> {
   // The table and its columns from pg_catalog (schema-qualified, no search_path).
   const [rel] = await tx<{ oid: number }[]>`
     SELECT c.oid::int AS oid FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
-     WHERE n.nspname = 'public' AND c.relname = ${table} AND c.relkind IN ('r', 'p')`
-  if (!rel) throw new ExportError(`table public.${table} does not exist or has no columns`)
+     WHERE n.nspname = ${schema} AND c.relname = ${table} AND c.relkind IN ('r', 'p')`
+  if (!rel) throw new ExportError(`table ${schema}.${table} does not exist or has no columns`)
   const cols = await tx<{ name: string; pk: number | null }[]>`
     SELECT a.attname::text AS name, pg_catalog.array_position(i.indkey::int2[], a.attnum) AS pk
       FROM pg_catalog.pg_attribute a
       LEFT JOIN pg_catalog.pg_index i ON i.indrelid = a.attrelid AND i.indisprimary
      WHERE a.attrelid = ${rel.oid} AND a.attnum > 0 AND NOT a.attisdropped
      ORDER BY a.attnum`
-  if (cols.length === 0) throw new ExportError(`table public.${table} does not exist or has no columns`)
+  if (cols.length === 0) throw new ExportError(`table ${schema}.${table} does not exist or has no columns`)
   // Deterministic order WITHOUT casting or comparing any value through code the
   // tenant could have defined (HIGH-1): the primary key (built-in btree
   // opclasses only; defining one needs a superuser), else the physical row
@@ -156,11 +164,12 @@ async function exportTable(tx: postgres.TransactionSql, scope: string, table: st
   const pk = cols.filter((c) => c.pk !== null).sort((a, b) => a.pk! - b.pk!)
   const orderBy = pk.length > 0 ? pk.map((c) => quoteIdent(c.name)).join(', ') : 'ctid'
   const header = cols.map((c) => c.name)
-  const select = `SELECT ${header.map(quoteIdent).join(', ')} FROM public.${quoteIdent(table)} ORDER BY ${orderBy}`
+  const select = `SELECT ${header.map(quoteIdent).join(', ')} FROM ${quoteIdent(schema)}.${quoteIdent(table)} ORDER BY ${orderBy}`
 
+  const stem = fileStem(schema, table)
   mkdirSync(join(outDir, scope), { recursive: true, mode: 0o700 })
-  const csv = openSink(join(outDir, scope, `${table}.csv`))
-  const json = openSink(join(outDir, scope, `${table}.json`))
+  const csv = openSink(join(outDir, scope, `${stem}.csv`))
+  const json = openSink(join(outDir, scope, `${stem}.json`))
   let rows = 0
   try {
     json.write('[')
@@ -182,8 +191,8 @@ async function exportTable(tx: postgres.TransactionSql, scope: string, table: st
   const c = csv.end()
   const j = json.end()
   return [
-    { path: `${scope}/${table}.csv`, scope, table, format: 'csv', rows, bytes: c.bytes, sha256: c.sha256 },
-    { path: `${scope}/${table}.json`, scope, table, format: 'json', rows, bytes: j.bytes, sha256: j.sha256 },
+    { path: `${scope}/${stem}.csv`, scope, schema, table, format: 'csv', rows, bytes: c.bytes, sha256: c.sha256 },
+    { path: `${scope}/${stem}.json`, scope, schema, table, format: 'json', rows, bytes: j.bytes, sha256: j.sha256 },
   ]
 }
 
@@ -200,23 +209,34 @@ async function exportDatabase(sql: Sql, scope: string, tables: readonly string[]
       }
     }
     await tx.unsafe(`SET LOCAL search_path TO pg_catalog, pg_temp`)
-    let list: readonly string[]
+    let list: readonly { schema: string; table: string }[]
     if (tables === 'all') {
-      const found = await tx<{ table_name: string }[]>`
-        SELECT table_name::text AS table_name FROM information_schema.tables
-         WHERE table_schema = 'public' AND table_type = 'BASE TABLE' ORDER BY table_name`
-      list = found.map((r) => r.table_name).filter((t) => {
-        if (t === LEDGER_TABLE) {
-          excludedTables.push({ scope, table: t, reason: 'migration ledger (schema bookkeeping, not tenant data)' })
+      // HIGH-2: every schema the module's migrations created (finance.*,
+      // content.*, ...), not just public: ordinary and partitioned tables
+      // (partitions are read through their parent), minus the system schemas
+      // and tables that belong to an extension.
+      const found = await tx<{ schema: string; table: string }[]>`
+        SELECT n.nspname::text AS schema, c.relname::text AS table
+          FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+         WHERE c.relkind IN ('r', 'p') AND NOT c.relispartition
+           AND n.nspname NOT IN ('pg_catalog', 'information_schema') AND n.nspname !~ '^pg_(toast|temp_)'
+           AND NOT EXISTS (SELECT 1 FROM pg_catalog.pg_depend d
+                            WHERE d.classid = 'pg_catalog.pg_class'::pg_catalog.regclass AND d.objid = c.oid AND d.deptype = 'e')
+         ORDER BY n.nspname COLLATE "C", c.relname COLLATE "C"`
+      list = found.filter((t) => {
+        if (t.schema === 'public' && t.table === LEDGER_TABLE) {
+          excludedTables.push({ scope, schema: t.schema, table: t.table, reason: 'migration ledger (schema bookkeeping, not tenant data)' })
           return false
         }
         return true
       })
+      // A module declared exportable that yields nothing is a failed export, not an empty one.
+      if (list.length === 0) throw new ExportError(`module ${scope}: its database has no table in any schema; refusing to record it as exported`)
     } else {
-      list = tables
+      list = tables.map((table) => ({ schema: 'public', table }))
     }
     const files: ManifestFile[] = []
-    for (const t of list) files.push(...(await exportTable(tx, scope, t, outDir)))
+    for (const t of list) files.push(...(await exportTable(tx, scope, t.schema, t.table, outDir)))
     return files
   }) as Promise<ManifestFile[]>
 }
@@ -231,7 +251,7 @@ export async function exportTenant(opts: ExportOptions): Promise<ExportResult> {
   ensureEmptyPrivateDir(opts.outDir)
 
   const files: ManifestFile[] = []
-  const excludedTables: ExportManifest['excluded_tables'] = KERNEL_EXCLUDED_TABLES.map((e) => ({ scope: 'kernel', ...e }))
+  const excludedTables: ExportManifest['excluded_tables'] = KERNEL_EXCLUDED_TABLES.map((e) => ({ scope: 'kernel', schema: 'public', ...e }))
   const modules: ExportManifest['modules'] = []
   const excludedSystems: ExportManifest['excluded_systems'] = ALWAYS_EXCLUDED_SYSTEMS.map((s) => ({ ...s }))
 

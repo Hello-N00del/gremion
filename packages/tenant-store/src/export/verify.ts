@@ -13,6 +13,8 @@ export const MANIFEST_SCHEMA_VERSION = 1
 export interface ManifestFile {
   path: string
   scope: string
+  /** The table's schema (absent in exports written before HIGH-2: public). */
+  schema?: string
   table: string
   format: 'csv' | 'json'
   rows: number
@@ -26,7 +28,7 @@ export interface ExportManifest {
   files: ManifestFile[]
   modules: { id: string; status: 'exported' | 'excluded'; reason?: string }[]
   excluded_systems: { system: string; reason: string }[]
-  excluded_tables: { scope: string; table: string; reason: string }[]
+  excluded_tables: { scope: string; schema?: string; table: string; reason: string }[]
 }
 
 export type ProblemCode = 'MANIFEST_MISSING' | 'MANIFEST_INVALID' | 'MISSING' | 'UNREADABLE' | 'EMPTY' | 'SIZE_MISMATCH' | 'SHA_MISMATCH' | 'ROWCOUNT_MISMATCH' | 'UNLISTED'
@@ -41,7 +43,7 @@ export interface VerifyResult {
   problems: Problem[]
 }
 
-const SAFE_PATH = /^[a-z0-9_]+\/[a-z0-9_]+\.(csv|json)$/
+const SAFE_PATH = /^[a-z0-9_]+\/(?:[a-z0-9_]+\.)?[a-z0-9_]+\.(csv|json)$/
 
 export function verifyExport(dir: string): VerifyResult {
   const problems: Problem[] = []
@@ -60,7 +62,7 @@ export function verifyExport(dir: string): VerifyResult {
   for (const f of manifest.files) {
     listed.add(f.path)
     if (typeof f.path !== 'string' || !SAFE_PATH.test(f.path)) {
-      problems.push({ path: String(f.path), code: 'MANIFEST_INVALID', detail: 'path is not <scope>/<table>.(csv|json)' })
+      problems.push({ path: String(f.path), code: 'MANIFEST_INVALID', detail: 'path is not <scope>/[<schema>.]<table>.(csv|json)' })
       continue
     }
     const p = join(dir, f.path)

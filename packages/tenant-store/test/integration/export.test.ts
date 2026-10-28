@@ -19,6 +19,8 @@ const KERNEL_DB = 'trd149_kernel'
 const MOD_DB = 'trd149_finance'
 /** A scratch tenant database whose owner planted a cast (HIGH-1). */
 const EVIL_DB = 'trd149_evil'
+/** A module database whose migrations created no table (HIGH-2: must fail, not pass as exported). */
+const EMPTY_DB = 'trd149_empty'
 const TENANT_OWNER = 'trd149_tenant_owner'
 const MARKER = `/tmp/trd149-pwned-${process.pid}`
 let kernel: ReturnType<typeof connect>
@@ -50,13 +52,13 @@ beforeAll(async () => {
   mkdirSync(SCRATCH, { recursive: true })
   const admin = connect('t020_test_admin', { max: 1 })
   try {
-    for (const db of [KERNEL_DB, MOD_DB, EVIL_DB]) {
+    for (const db of [KERNEL_DB, MOD_DB, EVIL_DB, EMPTY_DB]) {
       await admin.unsafe(`DROP DATABASE IF EXISTS ${db} WITH (FORCE)`)
       await admin.unsafe(`CREATE DATABASE ${db}`)
     }
     await admin.unsafe(`DROP ROLE IF EXISTS ${TENANT_OWNER}`)
     await admin.unsafe(`CREATE ROLE ${TENANT_OWNER} NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE`)
-    reader = await ensureExportReader(admin, { databases: [KERNEL_DB, MOD_DB, EVIL_DB] })
+    reader = await ensureExportReader(admin, { databases: [KERNEL_DB, MOD_DB, EVIL_DB, EMPTY_DB] })
   } finally {
     await admin.end()
   }
@@ -104,6 +106,10 @@ beforeAll(async () => {
     CREATE TABLE empty_ledger (id int PRIMARY KEY);
     INSERT INTO schema_migrations VALUES ('0001.sql');
     INSERT INTO invoices VALUES (1, 12.50, '\\xdeadbeef'), (2, 99.00, NULL);
+    -- HIGH-2: finance and content keep their tables in their own schema.
+    CREATE SCHEMA finance;
+    CREATE TABLE finance.receipt (id int PRIMARY KEY, amount numeric(12,2));
+    INSERT INTO finance.receipt VALUES (1, 3.00), (2, 4.00);
   `)
   await seedKernel.end()
   await seedFin.end()
@@ -170,7 +176,7 @@ describe('tenant export (TRD-149/150/151)', () => {
     expect(manifest).toMatchObject({ schema_version: 1, tenant: { slug: 'acme' }, generated_at: '2026-10-27T10:00:00.000Z' })
     const paths = manifest.files.map((f) => f.path)
     expect(paths).toEqual([
-      'finance/empty_ledger.csv', 'finance/empty_ledger.json', 'finance/invoices.csv', 'finance/invoices.json',
+      'finance/empty_ledger.csv', 'finance/empty_ledger.json', 'finance/finance.receipt.csv', 'finance/finance.receipt.json', 'finance/invoices.csv', 'finance/invoices.json',
       'kernel/org_units.csv', 'kernel/org_units.json', 'kernel/protocol_resolutions.csv', 'kernel/protocol_resolutions.json',
       'kernel/protocols.csv', 'kernel/protocols.json', 'kernel/role_assignments.csv', 'kernel/role_assignments.json',
     ])
@@ -245,6 +251,16 @@ describe('tenant export (TRD-149/150/151)', () => {
     rmSync(join(dir, 'manifest.json'))
     expect(verifyExport(dir).problems[0]).toMatchObject({ path: 'manifest.json', code: 'MANIFEST_MISSING' })
     expect(existsSync(join(dir, 'kernel/org_units.csv'))).toBe(true)
+  })
+
+  it('HIGH-2: tables in a module\'s own schema are exported (schema-qualified files), and a module that yields no table fails the export', async () => {
+    const dir = fresh()
+    const { manifest } = await run(dir)
+    const receipt = manifest.files.find((f) => f.path === 'finance/finance.receipt.json')!
+    expect(receipt).toMatchObject({ scope: 'finance', schema: 'finance', table: 'receipt', rows: 2 })
+    expect(readFileSync(join(dir, 'finance/finance.receipt.csv'), 'utf8')).toBe('id,amount\r\n1,3.00\r\n2,4.00\r\n')
+    const empty = { id: 'content', runtimeExport: { kind: 'pg_dump', retentionProfile: 'rp-pub-module-data' }, enabled: true, sql: asReader(EMPTY_DB) }
+    await expect(exportTenant({ slug: 'acme', outDir: fresh(), kernel, modules: [empty], kernelTables: ['org_units'] })).rejects.toThrow(/content.*no table/)
   })
 
   it('a declared kernel table that does not exist fails the export visibly', async () => {
