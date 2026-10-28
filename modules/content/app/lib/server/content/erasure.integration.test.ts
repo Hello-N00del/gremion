@@ -3,7 +3,7 @@
 // table of app/migrations/1200). The module is disabled by default, so the test
 // creates its schema in the scratch database and drops it again.
 import { readFileSync } from 'node:fs'
-import { resolve } from 'node:path'
+import { join } from 'node:path'
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { getDb } from '$lib/server/db'
 import { createContentErasureHook, CONTENT_ERASED_MARKER } from './erasure'
@@ -13,14 +13,15 @@ const OTHER = 'kc-content-other'
 const ADDR = 'anna.muster@example.org'
 const hook = createContentErasureHook({ resolveEmail: async () => 'Anna.Muster@Example.org' })
 
-const root = resolve(process.cwd(), '..', 'modules', 'content')
+// The module lane runs this suite from the module root (as content-db.integration.test.ts does).
+const root = process.cwd()
 
 // The migration files carry their own BEGIN/COMMIT; the shared sql wrapper only
 // allows unsafe() inside its own transaction, so those wrappers are stripped.
 const stripTx = (text: string) => text.replace(/^\s*(BEGIN|COMMIT);\s*$/gim, '')
 
 beforeAll(async () => {
-  const files = [resolve(root, 'migrations', '001_init.sql'), resolve(root, 'app', 'migrations', '1200_content_news_posts.sql')]
+  const files = [join(root, 'migrations', '001_init.sql'), join(root, 'app', 'migrations', '1200_content_news_posts.sql')]
   await getDb().begin(async (tx) => {
     for (const f of files) await tx.unsafe(stripTx(readFileSync(f, 'utf8')))
   })

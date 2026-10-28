@@ -507,7 +507,7 @@ cmd_export() {
     real_parent="$(cd -P -- "$parent" && pwd)" || die "export: cannot resolve ${parent}" "$GREMION_EXIT_USAGE"
     [[ "$real_parent" == "$parent" ]] || die "export: a component of ${parent} is a symlink (it resolves to ${real_parent}); name the real path" "$GREMION_EXIT_USAGE"
     active_colour
-    mkdir -p -m 700 "$dir"
+    mkdir -p "$dir"
     chmod 700 "$dir"
     TC_MOUNT=(--user "$(id -u):$(id -g)" -v "${dir}:/export")
     host_access export "$slug" "" "Vollständiger Export aller Daten des Mandanten ${slug} in offenen Formaten (export)" optional

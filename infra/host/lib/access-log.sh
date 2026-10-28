@@ -53,8 +53,8 @@ access_actor() {
 # Postgres no escape processing; the tag is random and refused if the text
 # contains it.
 access_text_literal() {
-    local text="$1" tag n
-    for n in 1 2 3; do
+    local text="$1" tag _
+    for _ in 1 2 3; do
         tag="g$(openssl rand -hex 8 | tr -d '\r\n')"
         if [[ "$text" != *"\$${tag}\$"* ]]; then
             printf '$%s$%s$%s$' "$tag" "$text" "$tag"
@@ -79,8 +79,9 @@ access_record() {
     [[ ${#why} -ge 10 && ${#why} -le 500 ]] || { printf 'access_record: why is 10 to 500 characters\n' >&2; return 2; }
     actor="$(access_actor)" || { printf 'access_record: the invoking login user is not a plain user name\n' >&2; return 2; }
     local what_lit why_lit
-    what_lit="$(access_text_literal "$what")" && why_lit="$(access_text_literal "$why")" \
-        || { printf 'access_record: could not quote the text\n' >&2; return 2; }
+    if ! what_lit="$(access_text_literal "$what")" || ! why_lit="$(access_text_literal "$why")"; then
+        printf 'access_record: could not quote the text\n' >&2; return 2
+    fi
     id="$(executor_sql "SELECT oac.record_access(:'slug', :'action', ${what_lit}, ${why_lit}, :'actor', NULL);" \
             -v slug="$slug" -v action="$action" -v actor="$actor")" || return 1
     id="${id%%$'\n'*}"
