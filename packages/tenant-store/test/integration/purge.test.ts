@@ -352,6 +352,29 @@ describe('runPurge (TRD-144/145)', () => {
     await db(U).unsafe(`DELETE FROM event_consumption WHERE consumer = 'old-dl'`)
   })
 
+  it('HIGH: a deadline that stops a rule after committed batches records the rows those batches deleted', async () => {
+    const ec = 'RC-K1-PLUMB/event_consumption'
+    for (const c of ['dl-1', 'dl-2', 'dl-hold']) {
+      await db(U).unsafe(`INSERT INTO event_consumption (consumer, event_id, consumed_at) VALUES ('${c}', gen_random_uuid(), '${daysAgo(9).toISOString()}')`)
+    }
+    // batch 1 and 2 commit (one row each); batch 3 waits on the held row lock until the deadline
+    let r: Awaited<ReturnType<typeof run>> | undefined
+    try {
+      await db(U).begin(async (tx) => {
+        await tx`SELECT 1 FROM event_consumption WHERE consumer = 'dl-hold' FOR UPDATE`
+        r = await run({ batchSize: 1, deadlineMs: 3000 })
+      })
+      const removed = 3 - (await count(U, `SELECT count(*)::int AS n FROM event_consumption WHERE consumer LIKE 'dl-%'`))
+      expect(removed).toBe(2)
+      expect(r!.partial).toBe('deadline')
+      expect(r!.categories[ec]).toBe(removed)
+      const [row] = await platform<{ detail: any }[]>`SELECT detail FROM plt.job_run WHERE job_run_id = ${r!.jobRunId}::uuid`
+      expect(row!.detail.categories[ec]).toBe(removed)
+    } finally {
+      await db(U).unsafe(`DELETE FROM event_consumption WHERE consumer LIKE 'dl-%'`)
+    }
+  })
+
   it('MED: a rule cut at the batch cap is recorded in detail.batch_limit_hits (rows may remain)', async () => {
     for (const c of ['cap-1', 'cap-2', 'cap-3']) {
       await db(U).unsafe(`INSERT INTO event_consumption (consumer, event_id, consumed_at) VALUES ('${c}', gen_random_uuid(), '${daysAgo(9).toISOString()}')`)

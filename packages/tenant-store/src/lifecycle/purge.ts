@@ -315,6 +315,12 @@ async function pinned<T>(db: Sql, clock: Clock, fn: (tx: Sql) => Promise<T>): Pr
 
 type Runner = (sql: string, params: unknown[]) => Promise<{ n: number }[]>
 
+/**
+ * Batches until fewer than `batch` rows are left, the cap, or a failure. Each
+ * batch commits on its own, so a failure (the deadline, a statement timeout,
+ * any error) still returns the rows the committed batches removed, with the
+ * error in `stopped`: the caller records the count, then handles the error.
+ */
 async function deleteAged(
   rule: PurgeRule,
   run: Runner,
@@ -322,15 +328,19 @@ async function deleteAged(
   batch: number,
   maxBatches: number,
   clock: Clock,
-): Promise<{ total: number; limitHit: boolean }> {
+): Promise<{ total: number; limitHit: boolean; stopped?: unknown }> {
   const sql = deleteBatchSql(rule)
   let total = 0
-  for (let i = 0; i < maxBatches; i++) {
-    clock.check()
-    const [row] = await run(sql, [cutoff.toISOString(), batch])
-    const n = row?.n ?? 0
-    total += n
-    if (n < batch) return { total, limitHit: false }
+  try {
+    for (let i = 0; i < maxBatches; i++) {
+      clock.check()
+      const [row] = await run(sql, [cutoff.toISOString(), batch])
+      const n = row?.n ?? 0
+      total += n
+      if (n < batch) return { total, limitHit: false }
+    }
+  } catch (err) {
+    return { total, limitHit: false, stopped: err }
   }
   return { total, limitHit: true }
 }
@@ -534,6 +544,7 @@ export async function runPurge(deps: PurgeDeps): Promise<PurgeResult> {
             clock,
           )
           categories[rule.id] = (categories[rule.id] ?? 0) + r.total
+          if (r.stopped !== undefined) throw r.stopped
           if (r.limitHit) batchLimitHits.push({ tenant: null, rule: rule.id, batches: maxBatches })
         } catch (err) {
           if (!deadlineHit(err)) errors.push({ tenant: null, rule: rule.id, message: messageOf(err) })
@@ -589,6 +600,7 @@ export async function runPurge(deps: PurgeDeps): Promise<PurgeResult> {
                 clock,
               )
               categories[rule.id] = (categories[rule.id] ?? 0) + r.total
+              if (r.stopped !== undefined) throw r.stopped
               if (r.limitHit) batchLimitHits.push({ tenant: hex, rule: rule.id, batches: maxBatches })
             } catch (err) {
               if (!deadlineHit(err)) errors.push({ tenant: hex, rule: rule.id, message: messageOf(err) })
