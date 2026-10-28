@@ -380,35 +380,7 @@ cmd_suspend() { customer_suspend "$@"; }
 
 cmd_resume() { customer_resume "$@"; }
 
-cmd_reconcile() {
-    local slug="${1:-}"; shift || true
-    need_slug "$slug"
-    local apply=no report
-    while [[ $# -gt 0 ]]; do case "$1" in --apply) apply=yes; shift ;; *) die "reconcile: unknown argument: $1" "$GREMION_EXIT_USAGE" ;; esac; done
-    active_colour
-    mail_sender_args || die "reconcile of ${slug}: MAIL_TRANSPORT could not be resolved" "$GREMION_EXIT_USAGE"
-    if [[ "$apply" == no ]]; then
-        tc reconcile --verify-only "$slug" ${MAIL_SENDER_ARGS[@]+"${MAIL_SENDER_ARGS[@]}"}
-        return
-    fi
-    # The apply exits 0 (green) or 1 (a check still fails: the drift --apply is
-    # for) and prints its report as ONE JSON line on stdout. A crash, a missing
-    # or unparseable report, or any other exit fails loudly here (review C, r2)
-    # instead of silently skipping the host rotation.
-    local out rc=0
-    out="$(tc reconcile "$slug" ${MAIL_SENDER_ARGS[@]+"${MAIL_SENDER_ARGS[@]}"})" || rc=$?
-    (( rc == 0 || rc == 1 )) || die "reconcile --apply of ${slug} failed in the container (exit ${rc})" "$GREMION_EXIT_ASSERT"
-    report="$(grep '^{' <<< "$out" | tail -n 1 || true)"
-    if [[ -z "$report" ]] || ! jq -e 'type == "object" and (.repairHost | type) == "array"' <<< "$report" >/dev/null 2>&1; then
-        die "reconcile --apply of ${slug} printed no parseable report (exit ${rc}); nothing was rotated" "$GREMION_EXIT_ASSERT"
-    fi
-    if jq -e '.repairHost | index("smtp-server")' <<< "$report" >/dev/null; then
-        info "smtp-server is repair: host -- rotating the principal of ${slug}"
-        mail_realm_smtp --realm "$slug" --tenant "$(token_of "$slug")" --rotate \
-            || die "the principal of ${slug} could not be rotated" "$GREMION_EXIT_ASSERT"
-    fi
-    tc reconcile --verify-only "$slug" ${MAIL_SENDER_ARGS[@]+"${MAIL_SENDER_ARGS[@]}"}
-}
+cmd_reconcile() { customer_reconcile "$@"; }
 
 cmd_status() {
     local slug="${1:-}"

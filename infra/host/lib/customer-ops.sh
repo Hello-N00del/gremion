@@ -375,3 +375,115 @@ customer_resume() {   # <slug> --operator <uuid>
     rm -f "$f"
     ok "customer ${slug} resumed (TRD-440: container set equal to before the suspend, data untouched)"
 }
+
+# ── modules, DPIA decision and reconcile (TRD-044; reconcile was gremion-tenant's cmd_*) ──
+# The executor's enable_module / disable_module / record_dpia / reconcile handlers
+# call these. The container verbs hold the rules (the level-1 gate, the DPIA
+# decision, export-before-drop); the host adds the TRD-440 fingerprint around the
+# two that change a customer's module set (the container set must not move: the
+# stack is pooled, a module is data and a broker user, never a container).
+
+# _module_args <verb> <slug> <module> [--operator <uuid>] [--dpia-json <file>] -- sets OPERATOR_ID, MODULE_ID, DPIA_JSON.
+_module_args() {
+    local verb="$1"; shift
+    local slug="${1:-}"; shift || true
+    MODULE_ID="${1:-}"; shift || true
+    DPIA_JSON=""
+    need_slug "$slug"
+    [[ "$MODULE_ID" =~ ^[a-z][a-z0-9-]{0,62}$ ]] || die "${verb}: invalid module id '${MODULE_ID}'" "$GREMION_EXIT_USAGE"
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --operator) need_value "$@"; OPERATOR_ID="$2"; shift 2 ;;
+            --dpia-json) need_value "$@"; DPIA_JSON="$2"; shift 2 ;;
+            *) die "${verb}: unknown argument: $1" "$GREMION_EXIT_USAGE" ;;
+        esac
+    done
+    need_operator
+}
+
+# _assert_fingerprint <verb> <slug> <before> — the container set is what it was.
+_assert_fingerprint() {
+    local after; after="$(container_fingerprint)"
+    if [[ "$3" != "$after" ]]; then
+        bad "TRD-440: the container set moved during ${1} of ${2} (before: ${3}; after: ${after})"
+        exit "$GREMION_EXIT_ASSERT"
+    fi
+}
+
+customer_enable_module() {   # <slug> <module> --operator <uuid> [--dpia-json <file>]
+    local slug="${1:-}" before
+    _module_args enable_module "$@"
+    active_colour
+    before="$(container_fingerprint)"
+    local -a argv=(enable-module "$slug" "$MODULE_ID" --operator "$OPERATOR_ID")
+    [[ -z "$DPIA_JSON" ]] || argv+=(--dpia-json "$DPIA_JSON")
+    tc "${argv[@]}" || die "enable of ${MODULE_ID} for ${slug} failed in the container" "$GREMION_EXIT_ASSERT"
+    _assert_fingerprint enable_module "$slug" "$before"
+    ok "module ${MODULE_ID} enabled for ${slug} (TRD-440: container set unchanged)"
+}
+
+customer_disable_module() {   # <slug> <module> --operator <uuid>
+    local slug="${1:-}" before
+    _module_args disable_module "$@"
+    active_colour
+    before="$(container_fingerprint)"
+    tc disable-module "$slug" "$MODULE_ID" --operator "$OPERATOR_ID" || die "disable of ${MODULE_ID} for ${slug} failed in the container" "$GREMION_EXIT_ASSERT"
+    _assert_fingerprint disable_module "$slug" "$before"
+    ok "module ${MODULE_ID} disabled for ${slug} (exported before it was dropped; TRD-440: container set unchanged)"
+}
+
+customer_record_dpia() {   # <slug> <module> --operator <uuid> --requires-dpia yes|no --reason-codes a,b --document-ref <text>
+    local slug="${1:-}" requires="" codes="" ref=""
+    local -a rest=()
+    shift || true
+    local module="${1:-}"; shift || true
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --requires-dpia) need_value "$@"; requires="$2"; shift 2 ;;
+            --reason-codes) need_value "$@"; codes="$2"; shift 2 ;;
+            --document-ref) need_value "$@"; ref="$2"; shift 2 ;;
+            *) rest+=("$1"); shift ;;
+        esac
+    done
+    _module_args record_dpia "$slug" "$module" ${rest[@]+"${rest[@]}"}
+    [[ "$requires" == yes || "$requires" == no ]] || die "record_dpia: --requires-dpia is yes or no" "$GREMION_EXIT_USAGE"
+    [[ -n "$codes" && -n "$ref" ]] || die "record_dpia: --reason-codes and --document-ref are required" "$GREMION_EXIT_USAGE"
+    active_colour
+    tc dpia-record "$slug" "$MODULE_ID" --operator "$OPERATOR_ID" --requires-dpia "$requires" --reason-codes "$codes" --document-ref "$ref" \
+        || die "the DPIA decision for ${MODULE_ID} of ${slug} could not be recorded" "$GREMION_EXIT_ASSERT"
+    ok "DPIA decision for ${MODULE_ID} of ${slug} recorded (an identical latest one is reused)"
+}
+
+# customer_reconcile <slug> [--apply] — the realm contract. Without --apply: the
+# verify-only report (exit 1 on drift). With --apply: the container repair, then
+# the host rotation of the mail principal when the report says smtp-server is
+# `repair: host`, then a verify-only that must be green.
+customer_reconcile() {
+    local slug="${1:-}"; shift || true
+    need_slug "$slug"
+    local apply=no report
+    while [[ $# -gt 0 ]]; do case "$1" in --apply) apply=yes; shift ;; *) die "reconcile: unknown argument: $1" "$GREMION_EXIT_USAGE" ;; esac; done
+    active_colour
+    mail_sender_args || die "reconcile of ${slug}: MAIL_TRANSPORT could not be resolved" "$GREMION_EXIT_USAGE"
+    if [[ "$apply" == no ]]; then
+        tc reconcile --verify-only "$slug" ${MAIL_SENDER_ARGS[@]+"${MAIL_SENDER_ARGS[@]}"}
+        return
+    fi
+    # The apply exits 0 (green) or 1 (a check still fails: the drift --apply is
+    # for) and prints its report as ONE JSON line on stdout. A crash, a missing
+    # or unparseable report, or any other exit fails loudly here (review C, r2)
+    # instead of silently skipping the host rotation.
+    local out rc=0
+    out="$(tc reconcile "$slug" ${MAIL_SENDER_ARGS[@]+"${MAIL_SENDER_ARGS[@]}"})" || rc=$?
+    (( rc == 0 || rc == 1 )) || die "reconcile --apply of ${slug} failed in the container (exit ${rc})" "$GREMION_EXIT_ASSERT"
+    report="$(grep '^{' <<< "$out" | tail -n 1 || true)"
+    if [[ -z "$report" ]] || ! jq -e 'type == "object" and (.repairHost | type) == "array"' <<< "$report" >/dev/null 2>&1; then
+        die "reconcile --apply of ${slug} printed no parseable report (exit ${rc}); nothing was rotated" "$GREMION_EXIT_ASSERT"
+    fi
+    if jq -e '.repairHost | index("smtp-server")' <<< "$report" >/dev/null; then
+        info "smtp-server is repair: host -- rotating the principal of ${slug}"
+        mail_realm_smtp --realm "$slug" --tenant "$(token_of "$slug")" --rotate \
+            || die "the principal of ${slug} could not be rotated" "$GREMION_EXIT_ASSERT"
+    fi
+    tc reconcile --verify-only "$slug" ${MAIL_SENDER_ARGS[@]+"${MAIL_SENDER_ARGS[@]}"}
+}

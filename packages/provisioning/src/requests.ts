@@ -314,6 +314,8 @@ function verifyRecordDpia(e: RequestEnvelope, ctx: VerifyContext): RecordDpiaArg
     throw new Refused('documentRef is required: the written decision (TOM-annex entry) must be named, whatever requiresDpia says')
   }
   const documentRef = text(a.documentRef, 'documentRef', 500)
+  // it travels as an argv word of the container verb: it must never read as a flag
+  if (documentRef.startsWith('-')) throw new Refused('documentRef must not start with a dash')
   return { slug: e.customerSlug, module, requiresDpia: a.requiresDpia ? 'yes' : 'no', reasonCodes: ['operator_decision'], documentRef }
 }
 

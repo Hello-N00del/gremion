@@ -43,3 +43,16 @@ register suspend handle_suspend
 # shellcheck source=handlers/resume.sh
 . "${EXECUTOR_LIB_DIR}/handlers/resume.sh"
 register resume handle_resume
+# TRD-044 remainder: modules, the DPIA decision and reconcile
+# shellcheck source=handlers/enable_module.sh
+. "${EXECUTOR_LIB_DIR}/handlers/enable_module.sh"
+register enable_module handle_enable_module
+# shellcheck source=handlers/disable_module.sh
+. "${EXECUTOR_LIB_DIR}/handlers/disable_module.sh"
+register disable_module handle_disable_module
+# shellcheck source=handlers/record_dpia.sh
+. "${EXECUTOR_LIB_DIR}/handlers/record_dpia.sh"
+register record_dpia handle_record_dpia
+# shellcheck source=handlers/reconcile.sh
+. "${EXECUTOR_LIB_DIR}/handlers/reconcile.sh"
+register reconcile handle_reconcile

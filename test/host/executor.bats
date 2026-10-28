@@ -207,13 +207,13 @@ outcome() { cat "${GREMION_ROOT}/outcome" 2>/dev/null || true; }
 }
 
 @test "a kind without a handler: refused 'no handler for <kind>', nothing runs" {
-    jq -c '.kind = "reconcile"' "${FIX}/verdict-create-ok.json" > "${GREMION_ROOT}/verdict.json"
-    queue reconcile
+    jq -c '.kind = "import_isolation"' "${FIX}/verdict-create-ok.json" > "${GREMION_ROOT}/verdict.json"
+    queue import_isolation
     run "$EXEC" --once
     [ "$status" -eq 1 ]
     run steps
     [ "$output" = $'psql claim\ntc request-verify '"${REQ}"$'\npsql mark-verified\npsql finish refused' ] || { echo "$output"; return 1; }
-    [ "$(outcome)" = "no handler for reconcile" ]
+    [ "$(outcome)" = "no handler for import_isolation" ]
 }
 
 @test "a phase B failure: finished failed naming phase-b; the events carry its lines; no router" {

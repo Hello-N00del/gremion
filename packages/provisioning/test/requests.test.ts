@@ -221,6 +221,7 @@ describe('enable_module / disable_module / record_dpia / reconcile args (TRD-044
     expect(v('record_dpia', { ...ok, documentRef: undefined })).toMatchObject({ verdict: 'refused', reason: expect.stringMatching(/documentRef/) })
     expect(v('record_dpia', { ...ok, documentRef: 'x'.repeat(501) })).toMatchObject({ verdict: 'refused', reason: expect.stringMatching(/documentRef/) })
     expect(v('record_dpia', { ...ok, documentRef: 'a\u0000b' })).toMatchObject({ verdict: 'refused', reason: expect.stringMatching(/documentRef/) })
+    expect(v('record_dpia', { ...ok, documentRef: '--operator x' })).toMatchObject({ verdict: 'refused', reason: expect.stringMatching(/documentRef must not start with a dash/) })
     expect(v('record_dpia', { ...ok, module: 'finance' })).toMatchObject({ verdict: 'refused', reason: expect.stringMatching(/disabled in this build/) })
     expect(v('record_dpia', { ...ok, reasonCodes: ['x'] })).toMatchObject({ verdict: 'refused', reason: expect.stringMatching(/unknown field reasonCodes/) })
   })
