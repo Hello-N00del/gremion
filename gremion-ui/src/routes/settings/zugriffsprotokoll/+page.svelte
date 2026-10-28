@@ -23,9 +23,16 @@
     <p class="mt-6 rounded-md border border-line p-4 text-sm" role="alert">{data.problem}</p>
   {:else if data.records.length === 0}
     <p class="mt-6 text-sm text-ink-muted" data-testid="zugriffsprotokoll-leer">
-      Im Aufbewahrungszeitraum wurde kein Zugriff des Betreibers auf Ihre Daten protokolliert.
+      {data.paged
+        ? 'Vor diesem Zeitpunkt ist im Aufbewahrungszeitraum kein weiterer Zugriff protokolliert.'
+        : 'Im Aufbewahrungszeitraum wurde kein Zugriff des Betreibers auf Ihre Daten protokolliert.'}
     </p>
   {:else}
+    {#if data.older || data.paged}
+      <p class="mt-6 text-sm text-ink-muted" data-testid="zugriffsprotokoll-seite">
+        Angezeigt werden {data.paged ? 'bis zu' : 'die neuesten'} {data.limit} Einträge{data.paged ? ' vor dem gewählten Zeitpunkt' : ''}.
+      </p>
+    {/if}
     <div class="mt-6 overflow-x-auto">
       <table class="w-full text-left text-sm" data-testid="zugriffsprotokoll">
         <thead>
@@ -50,5 +57,13 @@
         </tbody>
       </table>
     </div>
+    <nav class="mt-4 flex gap-4 text-sm" aria-label="Seiten des Zugriffsprotokolls">
+      {#if data.paged}
+        <a href="/settings/zugriffsprotokoll" class="hover:underline">Neueste Einträge</a>
+      {/if}
+      {#if data.older}
+        <a href={`/settings/zugriffsprotokoll?before=${encodeURIComponent(data.older)}`} class="hover:underline" data-testid="zugriffsprotokoll-aeltere">Ältere Einträge</a>
+      {/if}
+    </nav>
   {/if}
 </div>
