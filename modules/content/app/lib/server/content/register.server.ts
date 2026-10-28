@@ -4,7 +4,8 @@
 // hooks.server.ts never imports content internals. Loaded for its side effects
 // by the generated server-init barrel; runServerInitHooks() invokes this at cold
 // start.
-import { registerServerInitHook } from '$lib/server/modules/runtime-registry'
+import { registerErasureHook, registerServerInitHook } from '$lib/server/modules/runtime-registry'
+import { contentErasureHook } from './erasure'
 import { forEachActiveTenant } from '$lib/server/tenant/worker-fleet'
 import { drainInstagramPublishOps } from './instagram/drain'
 import { drainScheduledPublishes } from './worker'
@@ -80,3 +81,8 @@ registerServerInitHook(async () => {
     start: () => startContentAuditConsumer(natsUrl, auditTracer),
   })
 })
+
+// TRD-196: the content module's data-subject erasure step (authorship, list
+// membership, delivery evidence). Registered regardless of CONTENT_BACKEND: the
+// hook itself reports `skipped` under the service backend.
+registerErasureHook(contentErasureHook)

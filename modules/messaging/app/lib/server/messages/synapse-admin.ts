@@ -181,6 +181,27 @@ class SynapseAdminClient {
     })
   }
 
+  // TRD-196 (GDPR erasure): deactivates @localpart:server AND flags it erased —
+  // Synapse drops the display name, avatar and third-party ids, unbinds identity
+  // server bindings and hides the user's events from users who later join the
+  // rooms. Message events stay in the shared rooms (they are the other
+  // participants' conversation as well). Idempotent. true = a user was processed,
+  // false = Synapse does not know the user (404).
+  // POST /_synapse/admin/v1/deactivate/{userId}  body: { erase: true }
+  async eraseUser(localpart: string): Promise<boolean> {
+    if (localpart.trim() === '' || /[@:]/.test(localpart)) {
+      throw new Error('eraseUser: expected a bare Matrix localpart')
+    }
+    const userId = `@${localpart}:${this.serverName}`
+    try {
+      await this.apiRequest('POST', `/_synapse/admin/v1/deactivate/${encodeURIComponent(userId)}`, { erase: true })
+      return true
+    } catch (err) {
+      if (err instanceof SynapseError && err.status === 404) return false
+      throw err
+    }
+  }
+
   // Get a short-lived Matrix access token for any user via admin API.
   // POST /_synapse/admin/v1/users/{userId}/login
   async getUserLoginToken(localpart: string): Promise<string> {

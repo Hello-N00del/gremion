@@ -20,6 +20,9 @@
     "./tracer": {
       "import": "./src/tracer.ts"
     },
+    "./erasure": {
+      "import": "./src/erasure.ts"
+    },
     "./nats": {
       "import": "./src/nats-broker.ts"
     },
@@ -37,6 +40,10 @@
       "./tracer": {
         "types": "./dist/tracer.d.ts",
         "import": "./dist/tracer.js"
+      },
+      "./erasure": {
+        "types": "./dist/erasure.d.ts",
+        "import": "./dist/erasure.js"
       },
       "./nats": {
         "types": "./dist/nats-broker.d.ts",

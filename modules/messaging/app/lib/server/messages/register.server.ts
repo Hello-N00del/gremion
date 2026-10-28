@@ -9,6 +9,7 @@ import {
   registerProvisioningSubsystem,
   registerDataProvider,
   registerSetupHealthProbe,
+  registerErasureHook,
 } from '$lib/server/modules/runtime-registry'
 import { serviceEnv } from '$lib/server/env/service-env'
 import { evictMatrixClient } from './matrix-client'
@@ -18,6 +19,7 @@ import { getSynapseAdmin } from './synapse-admin'
 import { evictLivekitSettings } from './livekit-client'
 import { evictServiceMatrixTokenCache } from './backend/service-client'
 import { createMatrixSubsystem } from './provisioning/matrix-subsystem'
+import { messagingErasureHook } from './erasure'
 
 // Per-tenant runtime handles the messages module caches. The tenant registry's
 // evictTenantRuntime runs these on the suspend/delete lifecycle seam.
@@ -110,3 +112,7 @@ registerSetupHealthProbe({
   service: 'synapse',
   validate: () => getSynapseAdmin().validateCredentials(),
 })
+
+// TRD-196: the messaging module's data-subject erasure step (the Matrix account,
+// via the Synapse admin API).
+registerErasureHook(messagingErasureHook)

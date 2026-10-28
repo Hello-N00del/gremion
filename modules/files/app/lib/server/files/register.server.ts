@@ -7,11 +7,13 @@ import {
   registerProvisioningSubsystem,
   registerProtocolDocumentPort,
   registerSetupHealthProbe,
+  registerErasureHook,
 } from '$lib/server/modules/runtime-registry'
 import { serviceEnv } from '$lib/server/env/service-env'
 import { createNextcloudClient } from './nextcloud-client'
 import { createNextcloudSubsystem } from './provisioning/nextcloud-subsystem'
 import { protocolDocumentPort } from './protocol-documents'
+import { filesErasureHook } from './erasure'
 
 // The Nextcloud provisioning adapter. The factory captures the files module's
 // own Nextcloud client + the user_oidc provider id; the governance orchestrator
@@ -35,3 +37,6 @@ registerSetupHealthProbe({
   service: 'nextcloud',
   validate: () => createNextcloudClient().validateCredentials(),
 })
+
+// TRD-196: the files module's data-subject erasure step (the Nextcloud account).
+registerErasureHook(filesErasureHook)
