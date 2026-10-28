@@ -34,6 +34,7 @@ export function baseEnv(extra = {}) {
     SYNAPSE_KEYCLOAK_ISSUER_URL: 'https://idp.example.org/auth/realms/council',
     SYNAPSE_OIDC_CLIENT_SECRET: 'oidcTESTsecret02',
     SYNAPSE_REGISTRATION_SHARED_SECRET: 'regTESTsecret03',
+    SYNAPSE_ADMIN_BOT_USER_ID: '@gremion-admin-bot:chat.example.org',
     ...extra,
   }
 }

@@ -741,6 +741,9 @@ services:
       SYNAPSE_OIDC_CLIENT_SECRET:   ${SYNAPSE_OIDC_CLIENT_SECRET:-}
       # Rendered only in a BOOTSTRAP_MODE=1 boot (bootstrap.sh), else stripped.
       SYNAPSE_REGISTRATION_SHARED_SECRET: ${SYNAPSE_REGISTRATION_SHARED_SECRET:-}
+      # The only account allowed to create room aliases (alias_creation_rules). The bot's
+      # localpart is fixed by synapse/bootstrap.sh; the render refuses an empty or malformed id.
+      SYNAPSE_ADMIN_BOT_USER_ID:    ${SYNAPSE_ADMIN_BOT_USER_ID:-@gremion-admin-bot:${PLATFORM_DOMAIN:?PLATFORM_DOMAIN required}}
       BOOTSTRAP_MODE:               ${SYNAPSE_BOOTSTRAP_MODE:-0}
       SYNAPSE_KC_MAX:               ${SYNAPSE_KC_MAX:-30}
     volumes:
