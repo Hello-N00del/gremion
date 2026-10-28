@@ -127,7 +127,7 @@ describe('the kernel API on PG18 (scratch stack)', () => {
   it('migrate --customer A: one created dump line BEFORE the first apply, pg_dump 18 = server 18, ledger idt.schema_migration, objects owned by k_<hex>_owner', async () => {
     const { code, lines } = await migrate(['--customer', A.id])
     expect(code, lines.join('\n')).toBe(0)
-    const created = lines.filter((l) => /^premigration-dump created /.test(l))
+    const created = lines.filter((l) => l.startsWith('premigration-dump created '))
     expect(created).toHaveLength(1)
     expect(created[0]).toContain(`db=${kernelDatabaseOf(A.id)}`)
     expect(lines.findIndex((l) => l.startsWith('premigration-dump created'))).toBeLessThan(lines.findIndex((l) => /applied 0001_idt_setup\.sql/.test(l)))

@@ -55,7 +55,7 @@ function startTestDb({ sha8, pid }) {
     { env },
   )
   if (runRes.code !== 0) {
-    return { ok: false, name, detail: `docker run failed: ${runRes.stderr || runRes.stdout}` }
+    return { ok: false, name, detail: `docker run failed: ${String(runRes.stderr || runRes.stdout)}` }
   }
   // The official postgres image starts TWO servers on a first run: a
   // temporary, unix-socket-only one for initdb's scripts, then the real one.
@@ -141,7 +141,7 @@ function vitestPart({ root }) {
 
     const createControl = psqlAsTestUser(db, 'postgres', ['-c', 'CREATE DATABASE control'])
     if (createControl.code !== 0) {
-      return { label, unparseable: true, detail: `CREATE DATABASE control failed: ${createControl.stderr || createControl.stdout}` }
+      return { label, unparseable: true, detail: `CREATE DATABASE control failed: ${String(createControl.stderr || createControl.stdout)}` }
     }
 
     // migrations/058 ABORTS the chain when `gremion_public_reader` does not
@@ -156,7 +156,7 @@ function vitestPart({ root }) {
         "THEN format('CREATE ROLE gremion_public_reader LOGIN PASSWORD %L', :'_password') ELSE 'SELECT 1' END \\gexec\n",
     })
     if (createPublicReader.code !== 0) {
-      return { label, unparseable: true, detail: `provisioning gremion_public_reader failed: ${createPublicReader.stderr || createPublicReader.stdout}` }
+      return { label, unparseable: true, detail: `provisioning gremion_public_reader failed: ${String(createPublicReader.stderr || createPublicReader.stdout)}` }
     }
 
     const env = integrationVitestEnv({ baseEnv: process.env, db, uiDir })

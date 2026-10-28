@@ -50,7 +50,7 @@ export function evaluateSuite({
   toolMissing = null,
   unparseable = false,
   collected = 0,
-  passed = 0,
+  passed: _passed = 0,
   failed = 0,
   skipped = 0,
   allowedSkips = 0,

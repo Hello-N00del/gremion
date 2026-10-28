@@ -73,7 +73,7 @@ async function token(realm: string, user: string, client = 'gremion-ui'): Promis
   return j.access_token
 }
 const claims = (t: string) => JSON.parse(Buffer.from(t.split('.')[1]!, 'base64url').toString('utf8')) as { iss: string; aud: string | string[] }
-const problem = (r: Res) => /^application\/problem\+json/.test(r.headers['content-type'] ?? '')
+const problem = (r: Res) => (r.headers['content-type'] ?? '').startsWith('application/problem+json')
 
 const pgReady = async () => {
   for (let i = 0; i < 40; i++) {

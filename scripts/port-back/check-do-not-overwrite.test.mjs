@@ -26,7 +26,7 @@ describe('do-not-overwrite.json — shape', () => {
 
   test('doNotDelete carries the 39 remaining measured paths, sorted and unique', () => {
     assert.equal(set.doNotDelete.length, 39)
-    assert.deepEqual(set.doNotDelete, [...new Set(set.doNotDelete)].sort())
+    assert.deepEqual(set.doNotDelete, [...new Set(set.doNotDelete)].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)))
   })
 
   test('every named kernel-ahead surface of spec B §A.1 is in the set', () => {

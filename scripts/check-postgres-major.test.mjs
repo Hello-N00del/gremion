@@ -138,7 +138,7 @@ test('a shell default on the pinned tag passes, and is counted exactly once', ()
 })
 
 test('a shell default naming the bare port is still not an image reference', () => {
-  assert.deepEqual(scanText('x.sh', 'PORT="\${PGHOST:-postgres:5432}"'), [])
+  assert.deepEqual(scanText('x.sh', 'PORT="${PGHOST:-postgres:5432}"'), [])
 })
 
 test('classify names the three states', () => {
@@ -194,7 +194,7 @@ test('the exclusion list is narrow: a stale tag anywhere else is still a finding
 test('the committed kernel tree carries the pinned tag everywhere, in >= 8 places', () => {
   const files = trackedTextFiles(ROOT)
   const hits = files
-    .filter((f) => !/^docs\/design-specs\//.test(f.path))
+    .filter((f) => !f.path.startsWith('docs/design-specs/'))
     .flatMap((f) => scanText(f.path, f.text))
   assert.ok(hits.length >= 8, `expected >= 8 postgres: references, found ${hits.length}`)
   assert.deepEqual(checkFiles(files), [])

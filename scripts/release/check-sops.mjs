@@ -178,7 +178,7 @@ function dotenvSops(text) {
 export function isSopsEncrypted(text, path) {
   const b = basename(path)
   if (/\.ya?ml$/.test(b)) return yamlSops(text)
-  if (/\.env$/.test(b) || /^\.env/.test(b)) return dotenvSops(text)
+  if (b.endsWith('.env') || b.startsWith('.env')) return dotenvSops(text)
   return jsonSops(text) // .json, and SOPS' binary format (a JSON envelope)
 }
 

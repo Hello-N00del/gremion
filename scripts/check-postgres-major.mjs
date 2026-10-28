@@ -334,7 +334,7 @@ export const FORBIDDEN_MODULE_VOLUMES = new Set([
   ...MODULE_POSTGRES_IDS.map((id) => `gremion_${id}_pg_data`),
 ])
 
-const isPostgresService = (s) => s.name === 'postgres' || /-postgres$/.test(s.name) || s.label != null
+const isPostgresService = (s) => s.name === 'postgres' || s.name.endsWith('-postgres') || s.label != null
 
 const unquote = (v) => v.replace(/\s+#.*$/, '').trim().replace(/^(["'])(.*)\1$/, '$2')
 
@@ -416,7 +416,7 @@ function readLabel(svc, text) {
 /** The `image:` of the top-level `x-module-postgres` anchor, or null. */
 export function moduleAnchorImage(text) {
   const lines = text.split('\n').map((l) => l.replace(/\r$/, ''))
-  const start = lines.findIndex((l) => /^x-module-postgres:/.test(l))
+  const start = lines.findIndex((l) => l.startsWith('x-module-postgres:'))
   if (start < 0) return null
   for (let i = start + 1; i < lines.length && !/^[^\s#]/.test(lines[i]); i++) {
     const m = lines[i].match(/^ {2}image:\s*(.*)$/)
@@ -462,7 +462,7 @@ export function checkComposeServices(files) {
   for (const f of files.filter((f) => /\.ya?ml$/.test(f.path))) {
     for (const s of composeServices(f.text).filter(isPostgresService)) {
       if (s.image != null && s.image.includes('${')) {
-        problems.push(`variable image: ${f.path}:${s.imageLine} service ${s.name} image ${s.image} — a Postgres service pins its image literally (${POSTGRES_IMAGE_REF}); a variable runs whatever major the environment names`)
+        problems.push(`variable image: ${f.path}:${s.imageLine} service ${s.name} image ${String(s.image)} — a Postgres service pins its image literally (${POSTGRES_IMAGE_REF}); a variable runs whatever major the environment names`)
       } else if (s.image == null && !s.merge && BASE_COMPOSE.test(f.path)) {
         problems.push(`no image: ${f.path}:${s.line} service ${s.name} declares no image and merges none from an anchor`)
       }
@@ -502,7 +502,7 @@ export function checkModuleSet(text) {
     const s = byName.get(name)
     if (!s) { problems.push(`no ${name} service: the module set (D14) is ${MODULE_POSTGRES_IDS.join(', ')}`); continue }
     if (s.image != null && s.image !== POSTGRES_IMAGE_REF) {
-      problems.push(`${name} runs image ${s.image}, expected ${POSTGRES_IMAGE_REF} (or none, taken from the anchor)`)
+      problems.push(`${name} runs image ${String(s.image)}, expected ${POSTGRES_IMAGE_REF} (or none, taken from the anchor)`)
     } else if (s.image == null && !s.merge) {
       problems.push(`${name} declares no image and merges no anchor`)
     }

@@ -115,8 +115,14 @@ export function stripComments(text) {
         let inClass = false
         while (j < text.length && text[j] !== '\n') {
           if (text[j] === '\\') j += 2
-          else if (text[j] === '[') (inClass = true), j++
-          else if (text[j] === ']') (inClass = false), j++
+          else if (text[j] === '[') {
+            inClass = true
+            j++
+          }
+          else if (text[j] === ']') {
+            inClass = false
+            j++
+          }
           else if (text[j] === '/' && !inClass) break
           else j++
         }
@@ -147,9 +153,9 @@ function isTypeOnlyClause(typeKw, clause) {
 function importsFactory(typeKw, clause) {
   if (typeKw) return false
   const c = clause.trim()
-  if (/^\*/.test(c)) return true // namespace import, or export * from
+  if (c.startsWith('*')) return true // namespace import, or export * from
   const named = /\{([\s\S]*)\}/.exec(c)
-  if (/^[A-Za-z_$][\w$]*/.test(c) && !/^\{/.test(c)) return true // a default import
+  if (/^[A-Za-z_$][\w$]*/.test(c) && !c.startsWith('{')) return true // a default import
   if (!named) return false
   return named[1].split(',').map((s) => s.trim()).some((s) => /^(?:default|createDb)\b/.test(s))
 }

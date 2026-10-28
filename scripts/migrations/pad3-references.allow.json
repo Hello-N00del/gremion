@@ -13,6 +13,7 @@
     { "glob": "modules/*/test/backfill.integration.test.ts", "reason": "TASK-200 module source copy; comment names the kernel file at extraction", "commentOnly": true },
     { "glob": "modules/calendar/src/tenant-store.ts", "reason": "TASK-200 module source copy; comment names the kernel file at extraction", "commentOnly": true },
     { "glob": "gremion-ui/src/lib/server/content-news-posts-migration.test.ts", "reason": "cites the StuRaOS tree's own 008_ file, not this repository's", "commentOnly": true },
+    { "glob": "gremion-ui/src/lib/modules/migration-ownership.ts", "reason": "doc comment cites the consumer repository's own public-portal ALTER file, not this repository's", "commentOnly": true },
     { "glob": "scripts/kernel-hygiene-check.mjs", "reason": "check m1 reads the dated port-back record, which names the files as ported" },
     { "glob": "scripts/check-module-migration-names.mjs", "reason": "G6 comment explaining why slugs are compared (a pad-3 module name vs the pad-4 kernel name)", "commentOnly": true },
     { "glob": "scripts/check-module-migration-names.test.mjs", "reason": "G6 fixtures: a module file named with a kernel slug at pad 3 is the RED case" }
