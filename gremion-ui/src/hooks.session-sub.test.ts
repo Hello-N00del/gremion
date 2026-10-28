@@ -64,6 +64,67 @@ async function run(opts: { path: string; session?: Record<string, unknown> | nul
   }
 }
 
+// r33f review: a refusal must be diagnosable. The Bearer branch says 'no_subject' (not the
+// generic 'no_session' of a garbage token) and both branches leave a structured server-side
+// trace: tenant, azp / client_id, iss -- NEVER the token itself.
+describe('a missing sub is named and traced (r33f review)', () => {
+  let warn: ReturnType<typeof vi.spyOn>
+  beforeEach(() => {
+    warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+  })
+  afterEach(() => warn.mockRestore())
+
+  const warned = () => warn.mock.calls.map((c) => c.map((a) => (typeof a === 'string' ? a : JSON.stringify(a))).join(' '))
+
+  it('verified Bearer token without sub: 401 reason no_subject, with a warn naming tenant, azp and iss but not the token', async () => {
+    const r = await run({
+      path: '/api/ping',
+      bearerPayload: { iss: ISS, azp: 'mobile-app', preferred_username: 'x-service', jti: 'jti-1', realm_access: { roles: ['member'] } },
+    })
+    expect(r.res?.status).toBe(401)
+    expect(await r.res?.json()).toEqual({ error: 'Unauthenticated', reason: 'no_subject' })
+    expect(r.resolve).not.toHaveBeenCalled()
+    const w = warn.mock.calls.find((c) => String(c[0]).includes('no sub'))
+    expect(w, `no warn about the missing sub: ${warned().join(' | ')}`).toBeDefined()
+    expect(w![1]).toMatchObject({ tenant: 'tenant-a', azp: 'mobile-app', iss: ISS })
+    expect(warned().join(' ')).not.toContain('a.b.c')
+  })
+
+  it('azp falls back to client_id when the token has no azp', async () => {
+    await run({ path: '/api/ping', bearerPayload: { iss: ISS, client_id: 'svc-client', realm_access: { roles: ['member'] } } })
+    const w = warn.mock.calls.find((c) => String(c[0]).includes('no sub'))
+    expect(w![1]).toMatchObject({ azp: 'svc-client' })
+  })
+
+  it('a garbage Bearer (no verified payload) still answers no_session and does not claim a missing sub', async () => {
+    const mod = await import('./hooks.server')
+    await mod.boot()
+    const event = {
+      url: new URL('http://localhost/api/ping'),
+      request: new Request('http://localhost/api/ping', { headers: { authorization: 'Bearer garbage' } }),
+      params: {},
+      locals: { tenant: { id: 'a', slug: 'tenant-a', issuer: ISS, config: {} }, user: null, accessToken: null, accessTokenExpires: null, auth: vi.fn(async () => null) } as Record<string, unknown>,
+    }
+    const res = (await mod.authGuard({ event: event as never, resolve: vi.fn(async () => new Response('ok')) } as never)) as Response
+    expect(await res.json()).toMatchObject({ reason: 'no_session' })
+    expect(warned().join(' ')).not.toContain('no sub')
+  })
+
+  it('cookie session with no user id: warns with tenant and iss (no token material), on /api and on pages', async () => {
+    const api = await run({ path: '/api/ping', session: { user: { id: '', roles: ['member'], groups: [] }, accessToken: 'SECRET-ACCESS-TOKEN', tokenIss: ISS } })
+    expect(await api.res?.json()).toMatchObject({ reason: 'no_subject' })
+    const w = warn.mock.calls.find((c) => String(c[0]).includes('no sub'))
+    expect(w, `no warn about the missing sub: ${warned().join(' | ')}`).toBeDefined()
+    expect(w![1]).toMatchObject({ tenant: 'tenant-a', iss: ISS })
+    expect(warned().join(' ')).not.toContain('SECRET-ACCESS-TOKEN')
+    warn.mockClear()
+    vi.resetModules()
+    const page = await run({ path: '/dashboard', session: { user: { id: undefined, roles: ['member'], groups: [] }, accessToken: 't', tokenIss: ISS } })
+    expect(page.redirected).toBe(true)
+    expect(warn.mock.calls.some((c) => String(c[0]).includes('no sub'))).toBe(true)
+  })
+})
+
 describe('a session without sub is refused (TRD-147)', () => {
   it('cookie session with no user id: /api answers 401, never resolves', async () => {
     const r = await run({ path: '/api/ping', session: { user: { id: undefined, roles: ['member'], groups: [] }, accessToken: 't', tokenIss: ISS } })

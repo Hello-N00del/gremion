@@ -442,6 +442,32 @@ function isInternalBearerRoute(method: string, path: string): boolean {
   return INTERNAL_BEARER_ROUTES.some((r) => r.method === method && r.pattern.test(path))
 }
 
+/** The 401 body for a verified token or session that carries no `sub` (TRD-147). */
+function noSubjectResponse(): Response {
+  return new Response(JSON.stringify({ error: 'Unauthenticated', reason: 'no_subject' }), {
+    status: 401,
+    headers: { 'content-type': 'application/json' },
+  })
+}
+
+/** A claim as a short plain string for a log line (a claim is attacker-influenced text: bounded, never an object). */
+function claimForLog(v: unknown): string | undefined {
+  return typeof v === 'string' ? v.slice(0, 200) : undefined
+}
+
+/**
+ * r33f review: a refused no-`sub` token or session leaves a structured server-side trace so the
+ * operator can see WHICH client / realm to fix (the gremion-ui-sub-mapper is the usual cause).
+ * Tenant, azp (or client_id) and iss only: never the token, never other claims.
+ */
+function warnNoSubject(source: 'bearer' | 'session', tenant: { slug?: string } | undefined, claims: { azp?: unknown; client_id?: unknown; iss?: unknown }): void {
+  console.warn(`[authGuard] ${source} refused: no sub`, {
+    tenant: claimForLog(tenant?.slug),
+    azp: claimForLog(claims.azp) ?? claimForLog(claims.client_id),
+    iss: claimForLog(claims.iss),
+  })
+}
+
 /** The 401 reason for an internal Bearer the guard refused (never 'no_session'). */
 export const INTERNAL_BEARER_REJECTED_REASON = 'internal_bearer_not_allowed'
 
@@ -586,7 +612,12 @@ export const authGuard: Handle = async ({ event, resolve }) => {
       const payload = await verifyBearerJwt(token, event.locals.tenant)
       if (payload) {
         const bearerUser = sessionUserFromPayload(payload, roleVocabularyForTenant(event.locals.tenant))
-        if (bearerUser) {
+        if (!bearerUser) {
+          // verified, but no `sub`: say so (not the generic 'no_session' of a garbage token) and trace it
+          warnNoSubject('bearer', event.locals.tenant, payload)
+          return noSubjectResponse()
+        }
+        {
           // iss-match backstop: the token verified against SOME realm's JWKS, but
           // it must be THIS host's tenant realm — else it is a cross-tenant replay.
           if (!bearerTenantMatches(event.locals.tenant, payload)) {
@@ -676,12 +707,8 @@ export const authGuard: Handle = async ({ event, resolve }) => {
   // TASK-033-a / TRD-147: no `sub` (no id), no session. Same api/page split as the
   // no-session branch above: a machine-readable 401 on /api, re-login for pages.
   if (typeof user.id !== 'string' || user.id === '') {
-    if (path.startsWith('/api/')) {
-      return new Response(JSON.stringify({ error: 'Unauthenticated', reason: 'no_subject' }), {
-        status: 401,
-        headers: { 'content-type': 'application/json' },
-      })
-    }
+    warnNoSubject('session', event.locals.tenant, { iss: (session as unknown as { tokenIss?: string }).tokenIss })
+    if (path.startsWith('/api/')) return noSubjectResponse()
     redirect(302, `/auth/login?callbackUrl=${encodeURIComponent(event.url.pathname)}`)
   }
   event.locals.user = user
