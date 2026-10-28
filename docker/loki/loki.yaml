@@ -1,5 +1,7 @@
-# docker/loki/loki.yaml -- the ops log store (TASK-039; first writer, G4;
-# TASK-033 owns the application log classes that will flow into it).
+# docker/loki/loki.yaml -- the ops log store (TASK-039; first writer, G4).
+# RENDERED by packages/retention from its registry (TASK-033-a): edit
+# packages/retention/src/registry.ts and run `node packages/retention/bin/retention.mjs render`,
+# never this file by hand; `render --check` and the retention suite fail on a diff.
 #
 # Single binary, filesystem storage under the ops bind mount, TSDB schema v13
 # with a 24 h index period. RETENTION IS ON: Loki's default keeps every line

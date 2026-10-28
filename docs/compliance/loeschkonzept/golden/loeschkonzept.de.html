@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<title>Löschkonzept (Protokolle und Betriebsdaten)</title>
+</head>
+<body>
+<h1>Löschkonzept (Protokolle und Betriebsdaten)</h1>
+<p>Version 1.0, erzeugt am 22.10.2026. Dieses Dokument wird aus der Löschfrist-Registrierung des Systems erzeugt und bei jeder Änderung einer Frist oder des Modulbestands neu erzeugt (Art. 5 Abs. 2, Art. 30 DSGVO; Aufbau nach DIN EN ISO/IEC 27555).</p>
+
+<h2>1. Zweck und Geltungsbereich</h2>
+<p>Das Konzept legt fest, wann welche Protokolle und Betriebsdaten gelöscht werden. Es gilt für die Protokollklassen des Kerns und für die Module, die für dieses Gremium eingeschaltet sind. Kein Protokoll wird länger als 30 Tage aufbewahrt; das ist die Betreiberentscheidung vom 30.09.2026 und gilt unabhängig von jeder Einstellung durch Gremienverwaltende.</p>
+
+<h2>2. Löschklassen und Fristen der Protokolle</h2>
+<table>
+    <thead>
+        <tr><th>Kategorie</th><th>Löschklasse</th><th>Startereignis</th><th>Frist</th><th>Zweck</th><th>Rechtsgrundlage</th></tr>
+    </thead>
+    <tbody>
+        <tr><td>Zugriffsprotokolle</td><td>K5</td><td>Eintrag geschrieben</td><td>regulär 14 Tage, Obergrenze 30 Tage; durchgesetzt 14 Tage</td><td>Missbrauchs- und Ratenbegrenzungserkennung, kurzfristige Angriffsforensik auf pseudonymisierten Adressen</td><td>Art. 5 Abs. 1 lit. e und c, Art. 32 Abs. 1 DSGVO; keine gesetzliche Pflicht</td></tr>
+        <tr><td>Sicherheitsprotokolle</td><td>K5</td><td>Eintrag geschrieben</td><td>regulär 27 Tage, Obergrenze 30 Tage; durchgesetzt 27 Tage</td><td>Erkennung von Angriffen mit Verweildauer über einen Monat, Rekonstruktion von Vorfällen (einschliesslich Anmelde- und Verwaltungsereignisse des Identitätsanbieters)</td><td>Art. 5 Abs. 1 lit. e, Art. 32 Abs. 1 lit. d, Art. 33 Abs. 5 DSGVO</td></tr>
+        <tr><td>Finanzprotokolle</td><td>K5</td><td>Eintrag geschrieben</td><td>regulär 27 Tage, Obergrenze 30 Tage; durchgesetzt 27 Tage</td><td>Missbrauchserkennung und Vorfallsrekonstruktion bei Finanzvorgängen; wer freigegeben und gezahlt hat, steht in den Finanzunterlagen selbst</td><td>Art. 5 Abs. 1 lit. e DSGVO; die Aufbewahrungspflichten betreffen die Finanzunterlagen, nicht die Protokollzeilen</td></tr>
+        <tr><td>Audit- und Betreiberzugriffsprotokolle</td><td>K5</td><td>Eintrag geschrieben</td><td>regulär 27 Tage, Obergrenze 30 Tage; durchgesetzt 27 Tage</td><td>Nachweis von Betreiber- und Anbieterzugriffen auf Daten des Gremiums; nie kürzer als das Sicherheitsfenster</td><td>Art. 5 Abs. 1 lit. e und Abs. 2, Art. 28 Abs. 3 lit. h DSGVO</td></tr>
+        <tr><td>Anwendungsprotokolle</td><td>K5</td><td>Eintrag geschrieben</td><td>regulär 30 Tage, Obergrenze 30 Tage; durchgesetzt 28 Tage, damit der ungünstigste Fall des Speichers unter der Obergrenze bleibt</td><td>Fehlerdiagnose über einen Monatszyklus aus Release und Review</td><td>Art. 5 Abs. 1 lit. e, Art. 6 Abs. 1 lit. e oder f DSGVO; keine gesetzliche Pflicht</td></tr>
+        <tr><td>Trace-Speicher</td><td>K5</td><td>Eintrag geschrieben</td><td>regulär 7 Tage, Obergrenze 14 Tage; durchgesetzt 7 Tage</td><td>Latenz- und Fehleranalyse einzelner Anfragen; Span-Attribute können Nutzerkennungen tragen</td><td>Art. 5 Abs. 1 lit. e und c DSGVO; keine gesetzliche Pflicht</td></tr>
+    </tbody>
+</table>
+<p>Anwendungsprotokolle: regulär 30 Tage, durchgesetzt 28 Tage. Der Protokollspeicher löscht nicht auf die Minute genau, sondern erst nach seinem Indexzeitraum, einer Löschverzögerung und dem nächsten Verdichtungslauf; die durchgesetzte Frist ist deshalb so gewählt, dass der ungünstigste Fall die Obergrenze von 30 Tagen nicht überschreitet.</p>
+
+<h2>3. Weitere Kategorien des Kerns</h2>
+<table>
+    <thead>
+        <tr><th>Kategorie</th><th>Startereignis</th><th>Frist</th><th>Katalogzeile</th></tr>
+    </thead>
+    <tbody>
+        <tr><td>Audit-Tabelle der Anwendung (Datenbank, hash-verkettet)</td><td>Eintrag geschrieben</td><td>Nachweis der Verwaltungshandlungen des Gremiums (Governance-Datensatz): wird von keinem Zeitgeber gelöscht; die Anwendung darf Einträge nur anhängen, nicht ändern oder löschen; eine Löschung einzelner Personenbezüge erfolgt durch Schwärzung, nicht durch Löschen der Kette</td><td>RC-GOV-CHAIN</td></tr>
+        <tr><td>Läufe geplanter Aufgaben und Bereitstellungsschritte</td><td>Lauf beendet</td><td>29 Tage, täglich gelöscht (ungünstigster Fall 30 Tage)</td><td>RC-OPS-RUN</td></tr>
+        <tr><td>Zwischenspeicher mit personenbezogenen Daten</td><td>Eintrag geschrieben</td><td>höchstens 1 Stunde; sofort bei einem Löschverlangen der genannten Person</td><td>RC-K1-CACHE</td></tr>
+    </tbody>
+</table>
+
+<h2>4. Kategorien eingeschalteter Module</h2>
+<p>Für dieses Gremium ist kein Modul mit eigenen Löschkategorien eingeschaltet. Schaltet das Gremium ein Modul ein, wird dieses Konzept neu erzeugt und führt dessen Kategorien auf.</p>
+
+<h2>5. Verfahren</h2>
+<p>Ein täglich ausgeführter Löschlauf (der Zeitgeber gremion-purge.timer des Betriebsrechners, Aufruf purge-run) entfernt abgelaufene Einträge, schreibt sein Ergebnis als Lauf-Nachweis und ist beliebig wiederholbar. Die Löschfristen der Protokollspeicher sind in deren Konfiguration festgelegt, nicht in einer Einstellung der Anwendung. Die Audit-Tabelle ist davon ausgenommen (Abschnitt 3). Sicherungen sind im Pilotbetrieb nicht vorhanden und deshalb nicht aufgeführt.</p>
+
+<h2>6. Verantwortlichkeiten</h2>
+<p>Die Betreiberin oder der Betreiber verantwortet Löschlauf und Speicherkonfiguration; das Gremium verantwortet die Auswahl der eingeschalteten Module. Änderungen an Fristen erfolgen nur über die Löschfrist-Registrierung und werden in diesem Dokument versioniert.</p>
+</body>
+</html>

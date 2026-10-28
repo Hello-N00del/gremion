@@ -665,6 +665,17 @@
       "testGlobs": ["packages/provisioning/test/integration/**/*.int.test.ts"]
     },
     {
+      "id": "kernel-retention-unit",
+      "repo": "kernel",
+      "category": "unit",
+      "cwd": "packages/retention",
+      "kind": "vitest",
+      "command": "pnpm run test",
+      "timeoutMs": 600000,
+      "requiresStack": false,
+      "testGlobs": ["packages/retention/test/**/*.test.ts"]
+    },
+    {
       "id": "kernel-tenant-store-unit",
       "repo": "kernel",
       "category": "unit",

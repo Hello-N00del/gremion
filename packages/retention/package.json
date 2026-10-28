@@ -1,0 +1,26 @@
+{
+  "name": "@gremion/retention",
+  "version": "0.1.0",
+  "license": "AGPL-3.0-only",
+  "description": "Log retention for the Gremion governance kernel (TASK-033-a, TRD-143/144/145/147): the six log deletion classes, the rendered Loki retention, the catalogue parser, the generated Loeschkonzept and the actor scan. DB-free; the scheduled purge is packages/tenant-store (purge-run).",
+  "type": "module",
+  "private": true,
+  "bin": {
+    "retention": "./bin/retention.mjs"
+  },
+  "exports": {
+    ".": {
+      "import": "./src/index.ts"
+    }
+  },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.0",
+    "typescript": "^5.4.5",
+    "vitest": "^5.0.1",
+    "yaml": "2.9.0"
+  }
+}
