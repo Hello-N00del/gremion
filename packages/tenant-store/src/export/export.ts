@@ -262,6 +262,8 @@ async function exportDatabase(
     else withheldColumns.set(key, (withheldColumns.get(key) ?? new Set()).add(parts[2]!))
   }
   return sql.begin('isolation level repeatable read read only', async (tx) => {
+    // HIGH-1: the catalogs first, before ANY query resolves an operator or a function through a search_path the tenant set.
+    await tx.unsafe(`SET LOCAL search_path TO pg_catalog, pg_temp`)
     // HIGH-1: never read a tenant database as a superuser, or as a role that
     // can become one (tenant code can RESET ROLE to the session user).
     const [who] = await tx<{ session: string; current: string }[]>`SELECT session_user::text AS session, current_user::text AS current`
@@ -272,7 +274,6 @@ async function exportDatabase(
         throw new ExportError(`${scope}: ${(err as Error).message}; connect as the export reader (ensureExportReader)`, { cause: err })
       }
     }
-    await tx.unsafe(`SET LOCAL search_path TO pg_catalog, pg_temp`)
     let list: readonly { schema: string; table: string }[]
     if (tables === 'all') {
       // HIGH-2: every schema the module's migrations created (finance.*,

@@ -22,7 +22,7 @@
 // pg_read_all_data and a fresh password, ensureExportReader). Every tenant
 // database is then read AS that reader, never as the superuser, and its
 // password is cleared again when the run ends.
-import { ensureExportReader, exportTenant, retireExportReader, verifyExport, type ExportModule } from '@gremion/tenant-store/export'
+import { connectExportReader, ensureExportReader, exportTenant, retireExportReader, verifyExport, type ExportModule } from '@gremion/tenant-store/export'
 import { kernelDbName } from '@gremion/tenant-store/lifecycle'
 import { tenantModuleDbName } from '@gremion/tenant-store'
 import type { LifecycleModule } from '@gremion/tenant-store/lifecycle'
@@ -77,8 +77,15 @@ export async function exportVerb(verb: string, ctx: ExportVerbContext): Promise<
   const platform = ctx.openPlatform()
   const open: postgres.Sql[] = []
   const admins = new Map<string, postgres.Sql>()
+  // The admin url, on the server's maintenance database only.
   const connect = (url: string) => {
     const s = postgres(url, { max: 1, onnotice: () => {}, connect_timeout: 15 }) as postgres.Sql
+    open.push(s)
+    return s
+  }
+  // Every connection AS the reader: search_path pinned at startup, no type fetch (HIGH-1).
+  const connectReader = (url: string) => {
+    const s = connectExportReader(url) as unknown as postgres.Sql
     open.push(s)
     return s
   }
@@ -98,7 +105,7 @@ export async function exportVerb(verb: string, ctx: ExportVerbContext): Promise<
       const u = new URL(withDb(p.adminUrl, p.db))
       u.username = c.user
       u.password = encodeURIComponent(c.password)
-      p.assign(connect(u.toString()) as ExportModule['sql'] & object)
+      p.assign(connectReader(u.toString()) as ExportModule['sql'] & object)
     }
   }
   try {

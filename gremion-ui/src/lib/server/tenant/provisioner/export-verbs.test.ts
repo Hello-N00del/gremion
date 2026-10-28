@@ -1,7 +1,7 @@
 // TRD-149/150/151: the export verbs' argument handling and the completeness
 // check's exit code. The database half is packages/tenant-store/test/integration/export.test.ts.
 import { createHash } from 'node:crypto'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -48,6 +48,13 @@ function exportDir(): string {
 describe('export verbs', () => {
   it('are the two dispatcher verbs', () => {
     expect([...EXPORT_VERBS].sort()).toEqual(['export', 'export-verify'])
+  })
+
+  it('HIGH-1: every connection AS the export reader goes through connectExportReader (search_path pinned, no type fetch); raw postgres() is the admin url only', () => {
+    const src = readFileSync(join(process.cwd(), 'scripts', 'tenant-provision-export.ts'), 'utf8')
+    expect(src).toContain('p.assign(connectReader(')
+    expect(src).toContain('connectExportReader(url)')
+    expect(src.split('postgres(').length - 1).toBe(1)
   })
 
   it('export refuses a missing or malformed slug and a missing --out, before any connection', async () => {
