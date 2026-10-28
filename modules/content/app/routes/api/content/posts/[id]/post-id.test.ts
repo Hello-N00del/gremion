@@ -14,6 +14,7 @@ const {
   mockSetEnabled,
   mockSetStatus,
   mockSetScheduledAt,
+  mockGetChannels,
 } = vi.hoisted(() => ({
   mockIsInternalBearer: vi.fn(),
   mockComposeCapabilities: vi.fn(),
@@ -24,6 +25,7 @@ const {
   mockSetEnabled: vi.fn(),
   mockSetStatus: vi.fn(),
   mockSetScheduledAt: vi.fn(),
+  mockGetChannels: vi.fn(),
 }))
 
 vi.mock('$lib/auth', () => ({
@@ -41,6 +43,7 @@ vi.mock('$lib/server/content/content-db', () => ({
   setChannelEnabled: mockSetEnabled,
   setChannelStatus: mockSetStatus,
   setChannelScheduledAt: mockSetScheduledAt,
+  getChannels: mockGetChannels,
 }))
 
 import { GET, PATCH, DELETE } from './+server'
@@ -77,6 +80,7 @@ describe('/api/content/posts/[id]', () => {
     mockDelete.mockReset().mockResolvedValue(undefined)
     mockSetEnabled.mockReset().mockResolvedValue({ post_id: PID, channel: 'email', enabled: true })
     mockSetStatus.mockReset().mockResolvedValue({ post_id: PID, channel: 'email', status: 'scheduled' })
+    mockGetChannels.mockReset().mockResolvedValue([])
     mockSetScheduledAt
       .mockReset()
       .mockResolvedValue({ post_id: PID, channel: 'email', scheduled_at: null })
@@ -173,6 +177,61 @@ describe('/api/content/posts/[id]', () => {
 
     it('still lets an author clear a schedule', async () => {
       const res = await PATCH(makeEvent({ user: author, body: { channel: 'instagram', scheduled_at: null } }))
+      expect(res.status).toBe(200)
+    })
+  })
+
+  describe('a scheduled channel publishes whatever the post holds at tick time: edits need the same gate', () => {
+    const author = { roles: ['member'], groups: ['author'], id: 'u1' }
+    const publisher = { roles: ['member'], groups: ['author', 'publisher'], id: 'u2' }
+    const scheduled = (channel: string) => ({ post_id: PID, channel, enabled: true, status: 'scheduled', scheduled_at: '2026-07-01T10:00:00.000Z' })
+    beforeEach(() => {
+      mockComposeCapabilities.mockReturnValue({
+        'content.author': ['author', 'publisher'],
+        'content.publish': ['publisher'],
+        'content.publish.instagram': ['ig'],
+      })
+    })
+
+    it('403s a body edit by an author without content.publish while email is scheduled', async () => {
+      mockGetChannels.mockResolvedValue([scheduled('email')])
+      await expect(
+        PATCH(makeEvent({ user: author, body: { body_html: '<p>swapped at 17:59</p>' } })),
+      ).rejects.toMatchObject({ status: 403 })
+      expect(mockUpdateBody).not.toHaveBeenCalled()
+    })
+
+    it('403s a title edit likewise', async () => {
+      mockGetChannels.mockResolvedValue([scheduled('portal')])
+      await expect(PATCH(makeEvent({ user: author, body: { title: 'X' } }))).rejects.toMatchObject({ status: 403 })
+      expect(mockUpdateTitle).not.toHaveBeenCalled()
+    })
+
+    it('403s a publisher without content.publish.instagram while instagram is scheduled', async () => {
+      mockGetChannels.mockResolvedValue([scheduled('instagram')])
+      await expect(
+        PATCH(makeEvent({ user: publisher, body: { body_html: '<p>x</p>' } })),
+      ).rejects.toMatchObject({ status: 403 })
+      expect(mockUpdateBody).not.toHaveBeenCalled()
+    })
+
+    it('lets a publisher edit while email is scheduled', async () => {
+      mockGetChannels.mockResolvedValue([scheduled('email')])
+      const res = await PATCH(makeEvent({ user: publisher, body: { body_html: '<p>ok</p>' } }))
+      expect(res.status).toBe(200)
+      expect(mockUpdateBody).toHaveBeenCalled()
+    })
+
+    it('lets an author edit when no channel is scheduled (draft only)', async () => {
+      mockGetChannels.mockResolvedValue([{ ...scheduled('email'), status: 'draft', scheduled_at: null }])
+      const res = await PATCH(makeEvent({ user: author, body: { body_html: '<p>ok</p>' } }))
+      expect(res.status).toBe(200)
+    })
+
+    it('does not gate the trusted internal Bearer path', async () => {
+      mockIsInternalBearer.mockReturnValue(true)
+      mockGetChannels.mockResolvedValue([scheduled('email')])
+      const res = await PATCH(makeEvent({ user: null, body: { body_html: '<p>ok</p>' } }))
       expect(res.status).toBe(200)
     })
   })
