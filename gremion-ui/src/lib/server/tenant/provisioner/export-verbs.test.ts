@@ -50,11 +50,11 @@ describe('export verbs', () => {
     expect([...EXPORT_VERBS].sort()).toEqual(['export', 'export-verify'])
   })
 
-  it('HIGH-1: every connection AS the export reader goes through connectExportReader (search_path pinned, no type fetch); raw postgres() is the admin url only', () => {
+  it('HIGH-1: every connection AS the export reader goes through connectExportReader (search_path pinned, no type fetch); the admin helper is never used for a reader', () => {
     const src = readFileSync(join(process.cwd(), 'scripts', 'tenant-provision-export.ts'), 'utf8')
     expect(src).toContain('p.assign(connectReader(')
     expect(src).toContain('connectExportReader(url)')
-    expect(src.split('postgres(').length - 1).toBe(1)
+    expect(src).not.toContain('p.assign(connect(')
   })
 
   it('MED: a module database still enabling or disabling fails the export naming the module, before any reader is opened', async () => {
