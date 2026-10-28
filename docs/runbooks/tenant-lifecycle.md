@@ -213,9 +213,9 @@ loa2 sign-in as evidence, exactly like "Neuer Mandant"; the executor runs
 - resume: a fresh mail principal first (never `--rotate`), then the container
   verb (realm, broker users, status `active` last).
 - data is untouched: both verbs take the TRD-440 fingerprint (container count and
-  every project's services) before and after and fail if it moved; the suspend
-  keeps its value in `runtime/suspended/<slug>.fingerprint` and the resume must
-  end on the same one, then removes the file.
+  every project's services) before and after their own run and fail if it
+  moved. Nothing is compared across requests: a deploy between a suspend and
+  its resume is normal. A failed resume revokes the fresh mail principal again.
 
 The library commands below are what the container verbs run.
 
