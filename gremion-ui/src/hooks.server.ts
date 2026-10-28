@@ -1,5 +1,6 @@
 import { handle as authHandle } from './auth'
 import { sessionEndpointGuard } from '$lib/server/security/session-endpoint-guard'
+import { csrfOriginGuard } from '$lib/server/security/csrf-origin-guard'
 import { redirect, type Handle, type HandleFetch, type HandleServerError } from '@sveltejs/kit'
 import { sequence } from '@sveltejs/kit/hooks'
 import { building } from '$app/environment'
@@ -576,7 +577,7 @@ export const authGuard: Handle = async ({ event, resolve }) => {
   // alternative to the Auth.js cookie session used by the web frontend.
   if (path.startsWith('/api/')) {
     const authHeader = event.request.headers.get('Authorization')
-    if (authHeader?.startsWith('Bearer ')) {
+    if (authHeader !== null && /^Bearer /i.test(authHeader)) {
       // F1-FIX-03 / H11: an internalFetch self-call. Honoured only when all of
       // these hold: the (method, path) is on the exact allow-list, the request
       // arrived on the internal hop (the resolver validated its
@@ -646,6 +647,19 @@ export const authGuard: Handle = async ({ event, resolve }) => {
           secretMatches: false,
         })
       }
+    }
+    // An Authorization header that did not authenticate (garbage Bearer, a
+    // non-Bearer scheme, a bare "Bearer") must NEVER fall back to the cookie
+    // session: the CSRF origin guard exempts requests carrying Authorization, so
+    // honouring a cookie here would let a cross-site request ride it.
+    if (authHeader !== null) {
+      return new Response(
+        JSON.stringify({
+          error: 'Unauthenticated',
+          reason: internalBearerMismatch ? INTERNAL_BEARER_REJECTED_REASON : 'no_session',
+        }),
+        { status: 401, headers: { 'content-type': 'application/json' } }
+      )
     }
   }
 
@@ -950,6 +964,7 @@ export const handle = sequence(
   correlationHandle,
   cspGuard,
   requestPathHandle,
+  csrfOriginGuard,
   tenantResolveHandle,
   tenantBrandStyleHandle,
   sessionEndpointGuard,

@@ -122,7 +122,15 @@ services:
       # router pins, cross-checked against that same Host. PROTOCOL_HEADER
       # forces https from Traefik's x-forwarded-proto.
       PROTOCOL_HEADER:          x-forwarded-proto
-      KEYCLOAK_ADMIN_URL:       https://keycloak:8443/auth
+      # Per-IP rate limits (rate-limit.ts, client-ip.ts) read the client
+      # address from adapter-node's getClientAddress(). Traefik is the single
+      # proxy hop and appends the real peer to X-Forwarded-For (its entrypoint
+      # trusts forwarded headers from the edge subnets only), so depth 1.
+      # Without these the address is Traefik's own IP: one bucket for all.
+      # Guarded by scripts/check-app-client-ip.test.mjs.
+      ADDRESS_HEADER:           x-forwarded-for
+      XFF_DEPTH:                "1"
+      KEYCLOAK_ADMIN_URL:      https://keycloak:8443/auth
       KEYCLOAK_ADMIN_CLIENT_SECRET: ${KEYCLOAK_ADMIN_CLIENT_SECRET}
       CONFIG_PATH:              /app/config/config.json
       # Data plane through PgBouncer; the control plane stays DIRECT on
