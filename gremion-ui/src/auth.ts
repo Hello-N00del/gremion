@@ -120,7 +120,10 @@ const jwtCallback: NonNullable<NonNullable<SvelteKitAuthConfig['callbacks']>['jw
           // the access token, but the ID token (which drives token.sub below)
           // carries a pairwise sub. Nextcloud, org_unit_members, finance, matrix
           // and audit all key by the real UUID, so derive user.id from here.
-          token.uid = decoded.sub ?? token.sub
+          // TASK-033-a / TRD-147: NO fallback to token.sub (the pairwise ID-token
+          // sub): an access token without `sub` leaves uid undefined, the session
+          // gets no id and authGuard refuses it -- the same rule as a Bearer token.
+          token.uid = decoded.sub
           // #164: carry the LoA (acr) + auth_time for step-up freshness. Prefer the
           // access token; fall back to the id token if the claim landed only there.
           const idDecoded = account.id_token ? safeDecodeAccessToken(account.id_token, vocabulary) : null
@@ -151,8 +154,10 @@ const jwtCallback: NonNullable<NonNullable<SvelteKitAuthConfig['callbacks']>['jw
           token.preferredUsername =
             (profilePayload.preferred_username as string | undefined) ?? token.email
           token.tokenIss = profilePayload.iss as string | undefined // CR2: id-token issuer fallback
-          // No access token: best-effort id from the profile/id-token sub.
-          token.uid = (profilePayload.sub as string | undefined) ?? token.sub
+          // No access token: there is no access-token sub to take, and the
+          // profile / id-token sub is the pairwise one (see above), so NO id
+          // (TRD-147): the session is refused rather than keyed by a wrong actor.
+          token.uid = undefined
           // #164: acr/auth_time from the id-token-derived profile.
           token.acr = profilePayload.acr as string | undefined
           token.authTime = typeof profilePayload.auth_time === 'number' ? (profilePayload.auth_time as number) : undefined
@@ -221,8 +226,10 @@ const jwtCallback: NonNullable<NonNullable<SvelteKitAuthConfig['callbacks']>['jw
           refreshToken: tokens.refresh_token ?? token.refreshToken,
           roles: filterValidRoles(decoded.realmRoles, decoded.vocabulary),
           groups: decoded.groups.length ? decoded.groups : (token.groups as string[] | undefined) ?? [],
-          // Keep the canonical real-UUID id fresh across refreshes.
-          uid: decoded.sub ?? token.uid ?? token.sub,
+          // Keep the canonical real-UUID id fresh across refreshes. Only the
+          // ACCESS-token sub counts (TRD-147): no fallback to a stale uid or to
+          // token.sub, so a refreshed token that lost its sub ends the session.
+          uid: decoded.sub,
           // #164: a refresh doesn't re-authenticate, so preserve the prior acr/authTime
           // (freshness is still gated by authTime downstream). Prefer the freshly
           // decoded values if the refreshed access token carries them.
@@ -245,8 +252,10 @@ const sessionCallback: NonNullable<NonNullable<SvelteKitAuthConfig['callbacks']>
       // user.id MUST be the real Keycloak UUID (token.uid, derived from the
       // access-token sub) — NOT token.sub, which is the gremion-ui client's
       // pairwise ID-token sub and matches nothing in Nextcloud / org_unit_members
-      // / finance / matrix. Fall back to token.sub only if uid is somehow unset.
-      user.id = (token.uid as string | undefined) ?? (token.sub as string)
+      // / finance / matrix. TRD-147: if uid is unset (the access token had no
+      // `sub`) the id stays EMPTY and authGuard refuses the session; it is never
+      // taken from token.sub.
+      user.id = typeof token.uid === 'string' ? token.uid : ''
       const tokenRoles = token.roles as Role[] | undefined
       user.roles = tokenRoles?.length ? tokenRoles : [Role.Guest]
       user.groups = (token.groups as string[]) ?? []
