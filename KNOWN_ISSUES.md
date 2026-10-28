@@ -595,3 +595,16 @@ tenant-isolated: any Nextcloud user can still vote in a poll through the
 Nextcloud UI or OCS with their own session, and those votes show in the totals.
 New polls carry a Nextcloud-side limit of one vote per member (`maxVotesPerUser`);
 polls created before that change do not, and keep only the module's own check.
+
+## Messaging: meeting-room alias adoption trusts the existing alias holder
+
+`createRoom` adopts a room that already holds the `#meeting-<eventId>` alias (a race, or
+a room from before the alias rules). It does not check who created that room.
+`alias_creation_rules` (`modules/messaging/synapse/homeserver.yaml`) stops anyone but the
+admin bot from registering NEW aliases, but an alias a member registered on a homeserver
+before that rule existed is still adopted, and attendees invited to that meeting would
+land in a room the squatter controls. A homeserver rendered before the rule needs a
+re-init or an alias sweep (`#meeting-*` aliases not created by the admin bot) before
+meeting rooms are used. A creator check in `createRoom` is not shipped because the
+creator identity differs across room versions (room v12 creators are absent from the
+power-level `users` map) and needs verifying against a live Synapse first.
