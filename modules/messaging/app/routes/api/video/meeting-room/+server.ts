@@ -13,6 +13,8 @@ import type { RequestHandler } from '@sveltejs/kit'
 import { hasRole, Role } from '$lib/auth'
 import type { SessionUser } from '$lib/auth/types'
 import { getMessagesBackend } from '$lib/server/messages/backend'
+import { resolveCalendarBackendOr503 } from '$lib/server/calendar/backend/resolve'
+import { canManageEvent, loadEventAuthzContext } from '$lib/server/calendar/event-authz'
 
 interface MeetingRoomBody {
   eventId?: string
@@ -50,6 +52,18 @@ export const POST: RequestHandler = async (event) => {
   const creds = await backend.resolveMatrixCreds(event)
   if (!creds.userId || !creds.accessToken) {
     return json({ success: false, error: 'No Matrix credentials for user' }, { status: 403 })
+  }
+
+  // The eventId is the only thing that picks the room, so it must be a real calendar
+  // event the caller takes part in (creator, member of one of its committees, or
+  // CouncilAdmin - the calendar's own canManageEvent). Anything else is a 404, so the
+  // admin bot never invites the caller into another committee's meeting room.
+  const calendar = resolveCalendarBackendOr503()
+  if (calendar instanceof Response) return calendar
+  // A malformed id (not a uuid) makes the lookup throw: treat it as "no such event".
+  const calEvent = await calendar.getEvent(eventId).catch(() => null)
+  if (!calEvent || !canManageEvent(await loadEventAuthzContext(user), calEvent)) {
+    return json({ success: false, error: 'Not found' }, { status: 404 })
   }
 
   // Stable per-meeting alias localpart → createRoom is idempotent by alias, so

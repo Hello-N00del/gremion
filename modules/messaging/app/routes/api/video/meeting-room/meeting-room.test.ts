@@ -1,7 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { Role } from '$lib/auth/types'
 
-const { mockCreateRoom, mockInviteUser, mockJoinRoom, mockResolveMatrixCreds } = vi.hoisted(() => ({
+const { mockCreateRoom, mockInviteUser, mockJoinRoom, mockResolveMatrixCreds, mockGetEvent, mockOrgUnits } = vi.hoisted(() => ({
+  mockGetEvent: vi.fn(),
+  mockOrgUnits: vi.fn(),
   mockCreateRoom: vi.fn(),
   mockInviteUser: vi.fn(),
   mockJoinRoom: vi.fn(),
@@ -19,6 +21,12 @@ vi.mock('$lib/server/messages/matrix-client', () => ({
 vi.mock('$lib/server/messages/matrix-creds', () => ({
   resolveMatrixCreds: mockResolveMatrixCreds,
 }))
+
+// The calendar event the room is for: the caller must be allowed to manage / take part in it.
+vi.mock('$lib/server/calendar/backend/resolve', () => ({
+  resolveCalendarBackendOr503: () => ({ getEvent: mockGetEvent }),
+}))
+vi.mock('$lib/server/governance/org-units-db', () => ({ getOrgUnitIdsForUser: mockOrgUnits }))
 
 vi.mock('$env/dynamic/private', () => ({
   env: new Proxy({}, { get: () => 'sentinel' }),
@@ -46,6 +54,9 @@ let POST: (event: unknown) => Promise<Response>
 beforeEach(async () => {
   vi.resetModules()
   mockCreateRoom.mockReset().mockResolvedValue('!room-meeting:matrix.test')
+  // Default: the caller ('u') created the event, so they may open its room.
+  mockGetEvent.mockReset().mockResolvedValue({ id: 'EVT-42', createdBy: 'u', committeeIds: [] })
+  mockOrgUnits.mockReset().mockResolvedValue([])
   mockInviteUser.mockReset().mockResolvedValue(undefined)
   mockJoinRoom.mockReset().mockResolvedValue(undefined)
   mockResolveMatrixCreds
@@ -128,5 +139,38 @@ describe('POST /api/video/meeting-room', () => {
     mockCreateRoom.mockRejectedValueOnce(new Error('synapse down'))
     const res = await POST(makeEvent({ authed: true, body: { eventId: 'EVT-1' } }))
     expect(res.status).toBe(502)
+  })
+
+  describe('event authorisation', () => {
+    it('404s (and never touches Matrix) when the event does not exist', async () => {
+      mockGetEvent.mockResolvedValue(null)
+      const res = await POST(makeEvent({ authed: true, body: { eventId: 'EVT-404' } }))
+      expect(res.status).toBe(404)
+      expect(mockCreateRoom).not.toHaveBeenCalled()
+      expect(mockInviteUser).not.toHaveBeenCalled()
+    })
+
+    it('404s an event of a committee the caller is not in (no invite, no join)', async () => {
+      mockGetEvent.mockResolvedValue({ id: 'EVT-9', createdBy: 'someone-else', committeeIds: ['c1'] })
+      mockOrgUnits.mockResolvedValue(['c2'])
+      const res = await POST(makeEvent({ authed: true, body: { eventId: 'EVT-9' } }))
+      expect(res.status).toBe(404)
+      expect(mockCreateRoom).not.toHaveBeenCalled()
+      expect(mockInviteUser).not.toHaveBeenCalled()
+      expect(mockJoinRoom).not.toHaveBeenCalled()
+    })
+
+    it('allows a member of one of the event committees', async () => {
+      mockGetEvent.mockResolvedValue({ id: 'EVT-9', createdBy: 'someone-else', committeeIds: ['c1'] })
+      mockOrgUnits.mockResolvedValue(['c1'])
+      const res = await POST(makeEvent({ authed: true, body: { eventId: 'EVT-9' } }))
+      expect(res.status).toBe(200)
+    })
+
+    it('allows a CouncilAdmin', async () => {
+      mockGetEvent.mockResolvedValue({ id: 'EVT-9', createdBy: 'someone-else', committeeIds: ['c1'] })
+      const res = await POST(makeEvent({ authed: true, role: Role.CouncilAdmin, body: { eventId: 'EVT-9' } }))
+      expect(res.status).toBe(200)
+    })
   })
 })
