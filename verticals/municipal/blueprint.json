@@ -1,0 +1,144 @@
+{
+  "schema_version": 1,
+  "demoSeeder": "municipal",
+  "orgSchema": [
+    {
+      "key": "council",
+      "label": "Gemeinderat",
+      "childTerm": "Ausschüsse",
+      "allowedParentKinds": [],
+      "canBeRoot": true,
+      "rootMin": 1,
+      "rootMax": 1,
+      "sortOrder": 0
+    },
+    {
+      "key": "administration",
+      "label": "Verwaltung",
+      "allowedParentKinds": [],
+      "canBeRoot": true,
+      "rootMin": 1,
+      "rootMax": 1,
+      "sortOrder": 1
+    },
+    {
+      "key": "district_council",
+      "label": "Ortschaftsrat",
+      "allowedParentKinds": [],
+      "canBeRoot": true,
+      "rootMin": 0,
+      "rootMax": null,
+      "sortOrder": 2
+    },
+    {
+      "key": "committee",
+      "label": "Ausschuss",
+      "allowedParentKinds": [
+        "council"
+      ],
+      "canBeRoot": false,
+      "rootMin": 0,
+      "rootMax": 0,
+      "sortOrder": 3
+    }
+  ],
+  "orgUnits": [
+    {
+      "key": "gemeinderat",
+      "name": "Gemeinderat",
+      "description": "Das kommunale Hauptorgan",
+      "kind": "council",
+      "parentKey": null,
+      "visibility": "all_members",
+      "wantsMatrixRoom": false,
+      "wantsNextcloudFolder": false
+    },
+    {
+      "key": "verwaltung",
+      "name": "Stadtverwaltung",
+      "description": "Die Verwaltung",
+      "kind": "administration",
+      "parentKey": null,
+      "visibility": "all_members",
+      "wantsMatrixRoom": false,
+      "wantsNextcloudFolder": false
+    },
+    {
+      "key": "or-nord",
+      "name": "Ortschaftsrat Nord",
+      "description": null,
+      "kind": "district_council",
+      "parentKey": null,
+      "visibility": "all_members",
+      "wantsMatrixRoom": false,
+      "wantsNextcloudFolder": false
+    },
+    {
+      "key": "or-sued",
+      "name": "Ortschaftsrat Süd",
+      "description": null,
+      "kind": "district_council",
+      "parentKey": null,
+      "visibility": "all_members",
+      "wantsMatrixRoom": false,
+      "wantsNextcloudFolder": false
+    },
+    {
+      "key": "hauptausschuss",
+      "name": "Hauptausschuss",
+      "description": null,
+      "kind": "committee",
+      "parentKey": "gemeinderat",
+      "visibility": "all_members",
+      "wantsMatrixRoom": false,
+      "wantsNextcloudFolder": false
+    },
+    {
+      "key": "finanzausschuss",
+      "name": "Finanzausschuss",
+      "description": null,
+      "kind": "committee",
+      "parentKey": "gemeinderat",
+      "visibility": "all_members",
+      "wantsMatrixRoom": false,
+      "wantsNextcloudFolder": false
+    },
+    {
+      "key": "kulturausschuss",
+      "name": "Kulturausschuss",
+      "description": null,
+      "kind": "committee",
+      "parentKey": "gemeinderat",
+      "visibility": "all_members",
+      "wantsMatrixRoom": false,
+      "wantsNextcloudFolder": false,
+      "authority": "advisory"
+    }
+  ],
+  "seats": [],
+  "caucuses": {
+    "caucuses": [
+      {
+        "key": "fraktion-a",
+        "councilOrgUnitKey": "gemeinderat",
+        "name": "Fraktion A",
+        "color": "#e11d48",
+        "members": []
+      },
+      {
+        "key": "fraktion-b",
+        "councilOrgUnitKey": "gemeinderat",
+        "name": "Fraktion B",
+        "color": "#0ea5e9",
+        "members": []
+      },
+      {
+        "key": "fraktion-c",
+        "councilOrgUnitKey": "gemeinderat",
+        "name": "Fraktion C",
+        "color": null,
+        "members": []
+      }
+    ]
+  }
+}

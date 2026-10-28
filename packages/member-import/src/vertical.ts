@@ -15,6 +15,8 @@ export class VerticalError extends Error {
 }
 
 const key = z.string().regex(/^[a-z][a-z0-9-]{0,62}$/)
+/** a unit kind (org_units.kind): the catalogue's own keys may use underscores (`district_council`) */
+const kindKey = z.string().regex(/^[a-z][a-z0-9_-]{0,62}$/)
 
 export const verticalManifestSchema = z.strictObject({
   schema_version: z.literal(1),
@@ -48,7 +50,7 @@ export const blueprintSeatSchema = z.strictObject({
 })
 
 export const blueprintKindSchema = z.strictObject({
-  key,
+  key: kindKey,
   label: z.string(),
   childTerm: z.string().nullable().optional(),
   allowedParentKinds: z.array(z.string()),
@@ -58,11 +60,37 @@ export const blueprintKindSchema = z.strictObject({
   sortOrder: z.number().int().optional(),
 })
 
+/** A Fraktion/caucus. The STRUCTURE is vertical data; who sits in one is people data and
+ *  stays out of a vertical (a seeded fixture may fill `members` in tests). */
+export const blueprintCaucusSchema = z.strictObject({
+  key,
+  councilOrgUnitKey: key,
+  name: z.string().min(1),
+  color: z.string().nullable().optional(),
+  members: z.array(z.strictObject({
+    userKey: z.string().min(1),
+    termStart: z.string().nullable().optional(),
+    termEnd: z.string().nullable().optional(),
+  })),
+})
+
+export const blueprintCaucusPolicySchema = z.strictObject({
+  min_size: z.number().int().optional(),
+  allow_groups: z.boolean().optional(),
+  proportional_committee_allocation: z.boolean().optional(),
+})
+
 export const verticalBlueprintSchema = z.strictObject({
   schema_version: z.literal(1),
   orgUnits: z.array(blueprintUnitSchema).min(1),
   seats: z.array(blueprintSeatSchema),
   orgSchema: z.array(blueprintKindSchema).optional(),
+  /** which demo-fixture set the opt-in demo path seeds (absent: the default set); the kernel checks the name */
+  demoSeeder: key.optional(),
+  caucuses: z.strictObject({
+    policy: blueprintCaucusPolicySchema.optional(),
+    caucuses: z.array(blueprintCaucusSchema),
+  }).optional(),
 })
 
 export const wordingSchema = z.record(z.string(), z.string())
@@ -113,7 +141,18 @@ export function assertBlueprintIntegrity(bp: VerticalBlueprint): void {
     keys.add(u.key)
   }
   const roots = bp.orgUnits.filter((u) => u.parentKey === null)
-  if (roots.length !== 1) throw new VerticalError(`blueprint: exactly one root unit is required, found ${roots.length}`)
+  // Without its own kind catalogue a vertical has exactly one top-level body; with one, the
+  // per-kind bounds (canBeRoot, rootMin, rootMax) decide, as they do for the runtime create paths.
+  if (!bp.orgSchema && roots.length !== 1) throw new VerticalError(`blueprint: exactly one root unit is required, found ${roots.length}`)
+  if (roots.length === 0) throw new VerticalError('blueprint: at least one root unit is required')
+  if (bp.orgSchema) {
+    for (const k of bp.orgSchema) {
+      const n = roots.filter((u) => u.kind === k.key).length
+      if (n > 0 && !k.canBeRoot) throw new VerticalError(`blueprint: kind ${k.key} cannot be a root, found ${n} root unit(s)`)
+      if (n < (k.rootMin ?? 0)) throw new VerticalError(`blueprint: kind ${k.key} needs at least ${k.rootMin} root unit(s), found ${n}`)
+      if (k.rootMax != null && n > k.rootMax) throw new VerticalError(`blueprint: kind ${k.key} allows at most ${k.rootMax} root unit(s), found ${n}`)
+    }
+  }
   for (const u of bp.orgUnits) {
     if (u.parentKey !== null && !keys.has(u.parentKey)) throw new VerticalError(`blueprint: unit ${u.key} has unknown parent ${u.parentKey}`)
   }
@@ -136,6 +175,12 @@ export function assertBlueprintIntegrity(bp: VerticalBlueprint): void {
     for (const u of bp.orgUnits) {
       if (!kinds.has(u.kind)) throw new VerticalError(`blueprint: unit ${u.key} has kind ${u.kind}, which is not in the blueprint's orgSchema`)
     }
+  }
+  const caucusKeys = new Set<string>()
+  for (const c of bp.caucuses?.caucuses ?? []) {
+    if (caucusKeys.has(c.key)) throw new VerticalError(`blueprint: caucus ${c.key} appears twice`)
+    caucusKeys.add(c.key)
+    if (!keys.has(c.councilOrgUnitKey)) throw new VerticalError(`blueprint: caucus ${c.key} names unknown council ${c.councilOrgUnitKey}`)
   }
   for (const s of bp.seats) {
     if (!keys.has(s.orgUnitKey)) throw new VerticalError(`blueprint: seat ${s.key} sits in unknown unit ${s.orgUnitKey}`)

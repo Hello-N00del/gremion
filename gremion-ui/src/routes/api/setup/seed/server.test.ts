@@ -35,7 +35,7 @@ vi.mock('$lib/server/tenant/registry', () => ({
 import { POST } from './+server'
 import { STURA_BLUEPRINT } from '$lib/server/seed/stura-fixture'
 import { DEFAULT_BLUEPRINT_REF } from '$lib/server/seed/blueprint-registry'
-import { MUNICIPAL_BLUEPRINT } from '$lib/server/seed/municipal-blueprint'
+import { MUNICIPAL_BLUEPRINT } from '$lib/server/seed/municipal-fixture'
 import { __resetRateLimits } from '$lib/server/rate-limit'
 
 function call(token: string | null) {
@@ -93,7 +93,12 @@ describe('POST /api/setup/seed — blueprint selection (T3)', () => {
     hoisted.blueprintRef = 'MUNICIPAL_BLUEPRINT@1'
     await call('test-seed-token')
     expect(hoisted.runSeed).toHaveBeenCalledTimes(1)
-    expect(hoisted.runSeed.mock.calls[0][0]).toBe(MUNICIPAL_BLUEPRINT)
+    // served from verticals/municipal data: the org tree and Fraktionen, not the fixture people
+    const seeded = hoisted.runSeed.mock.calls[0][0] as GremionBlueprint
+    expect(seeded.orgUnits).toEqual(MUNICIPAL_BLUEPRINT.orgUnits)
+    expect(seeded.demoSeeder).toBe('municipal')
+    expect(seeded.users).toEqual([])
+    expect(seeded.memberships).toEqual([])
   })
 
   it('refuses on an already-seeded database (org_units not empty)', async () => {
