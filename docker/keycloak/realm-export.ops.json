@@ -386,7 +386,5 @@
     }
   ],
   "passwordPolicy": "length(12) and notUsername and notEmail and passwordHistory(3)",
-  "revokeRefreshToken": true,
-  "refreshTokenMaxReuse": 0,
   "browserFlow": "browser-stepup"
 }

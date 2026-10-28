@@ -34,7 +34,6 @@ export const RECONCILE_CHECK_NAMES = [
   'stepup-loa-config', // §4-1  Condition-LoA configs (loa1/36000, loa2/300)
   'stepup-2fa-otp-gate', // sweep 2 #3  stepup-2fa = REQUIRED subflow [OTP ALTERNATIVE, deny-access ALTERNATIVE]; never a REQUIRED OTP form (enrol-then-loa2)
   'password-policy', // sweep 2 #6  realm passwordPolicy == REALM_PASSWORD_POLICY
-  'refresh-token-rotation', // sweep 2 #6  revokeRefreshToken true, refreshTokenMaxReuse 0
   'gremion-ui-client', // §4-1  the gremion-ui client exists
   'gremion-ui-acr-mapper', // §4-1  acr protocol-mapper on gremion-ui
   'gremion-ui-sub-mapper', // §4-1  uid sub protocol-mapper on gremion-ui
@@ -187,8 +186,6 @@ interface RealmRep {
   otpPolicyDigits?: number
   otpPolicyPeriod?: number
   passwordPolicy?: string
-  revokeRefreshToken?: boolean
-  refreshTokenMaxReuse?: number
   attributes?: Record<string, unknown>
   smtpServer?: Record<string, unknown>
 }
@@ -468,15 +465,13 @@ export async function reconcileRealm(transport: KcTransport, opts: ReconcileOpti
     else fail('stepup-2fa-otp-gate', `${problem} (security sweep 2: a stolen session could enroll its own authenticator and pass the fresh-2FA gate)`)
   }
 
-  // ── sweep 2 #6: password policy and refresh-token rotation ───────────────────
+  // ── sweep 2 #6: password policy ───────────────────
   if (realmRep.passwordPolicy === REALM_PASSWORD_POLICY) pass('password-policy')
   else fail('password-policy', `passwordPolicy is ${JSON.stringify(realmRep.passwordPolicy)} (expected ${JSON.stringify(REALM_PASSWORD_POLICY)})`)
-  if (realmRep.revokeRefreshToken === true && realmRep.refreshTokenMaxReuse === 0) pass('refresh-token-rotation')
-  else
-    fail(
-      'refresh-token-rotation',
-      `revokeRefreshToken=${realmRep.revokeRefreshToken} refreshTokenMaxReuse=${realmRep.refreshTokenMaxReuse} (expected true / 0: a stolen refresh token must not stay usable beside the real one)`,
-    )
+  // Refresh-token rotation (revokeRefreshToken / refreshTokenMaxReuse) is
+  // deliberately NOT checked or set: gremion-ui refreshes concurrently (several
+  // locals.auth() consumers per request, parallel tabs), so rotation with no
+  // reuse logs users out. It needs a single-flight refresh first (docs/auth.md).
 
   // ── gremion-ui client: existence, mappers, exact URIs, fullScopeAllowed ────────
   const clients = (await get<ClientRep[]>('/clients?clientId=gremion-ui')) ?? []
@@ -654,17 +649,14 @@ export async function reconcileRealm(transport: KcTransport, opts: ReconcileOpti
     if (failedNames.has('frontend-url')) applied.push('frontend-url')
   }
 
-  // Security sweep 2 #6: password policy + refresh-token rotation ride on one
-  // partial realm PUT (only these fields; a full round-tripped rep 500s on KC 26).
-  if (failedNames.has('password-policy') || failedNames.has('refresh-token-rotation')) {
+  // Security sweep 2 #6: the password policy is one partial realm PUT (only this
+  // field; a full round-tripped rep 500s on KC 26).
+  if (failedNames.has('password-policy')) {
     await transport('PUT', `/admin/realms/${realmSeg(realm)}`, {
       realm,
       passwordPolicy: REALM_PASSWORD_POLICY,
-      revokeRefreshToken: true,
-      refreshTokenMaxReuse: 0,
     })
-    if (failedNames.has('password-policy')) applied.push('password-policy')
-    if (failedNames.has('refresh-token-rotation')) applied.push('refresh-token-rotation')
+    applied.push('password-policy')
   }
 
   // Security sweep 2 #6: PKCE S256 on gremion-ui, a partial client PUT that merges

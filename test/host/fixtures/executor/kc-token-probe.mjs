@@ -6,6 +6,13 @@
 // NAMES and TYPES (never a token, never a value but acr and the role check)
 // to kc2661-token-claims.json beside this file.
 //
+// The operator is created the way `gremion-tenant operator add --no-mail` does
+// (a temporary password, requiredActions UPDATE_PASSWORD + CONFIGURE_TOTP) and
+// enrols the way the runbook says: ONE plain sign-in at the platform realm's
+// account console (loa1, no acr_values), which runs the required actions. Only
+// then does the loa2 panel sign-in run (password, OTP): the step-up flow is
+// OTP-or-deny, so enrolment cannot happen inside it.
+//
 // Run against a scratch Keycloak started by name (teardown by name):
 //   docker run -d --name t043d-<sha8>-kc -p 127.0.0.1:<port>:8080 \
 //     -e KC_BOOTSTRAP_ADMIN_USERNAME -e KC_BOOTSTRAP_ADMIN_PASSWORD \
@@ -84,42 +91,81 @@ async function main() {
   client.webOrigins = [ORIGIN]
   if (!(await kc.realmExists('platform'))) await kc.createRealm(doc)
   await kc.configureStepupFlow('platform')
-  // an operator with a password and TOTP enrolled at first sign-in
+  // an operator as `operator add --no-mail` creates it: a temporary password and
+  // UPDATE_PASSWORD + CONFIGURE_TOTP pending
   const email = 'probe.operator@platform.example'
+  const tmpPw = randomBytes(18).toString('base64url')
   const pw = randomBytes(18).toString('base64url')
   await transport('POST', '/admin/realms/platform/users', {
     username: email, email, enabled: true, emailVerified: true, firstName: 'Probe', lastName: 'Operator',
-    requiredActions: ['CONFIGURE_TOTP'], credentials: [{ type: 'password', value: pw, temporary: false }],
+    requiredActions: ['UPDATE_PASSWORD', 'CONFIGURE_TOTP'], credentials: [{ type: 'password', value: tmpPw, temporary: true }],
   }).catch((e) => { if (!/409/.test(String(e))) throw e })
   const [user] = await transport('GET', `/admin/realms/platform/users?email=${encodeURIComponent(email)}&exact=true`)
   const role = await transport('GET', '/admin/realms/platform/roles/operator')
   await transport('POST', `/admin/realms/platform/users/${user.id}/role-mappings/realm`, [role])
 
-  const verifier = randomBytes(32).toString('base64url')
-  const challenge = createHash('sha256').update(verifier).digest('base64url')
+  // Phase A: the enrolment, outside the loa2 step-up -- a plain sign-in at the
+  // realm's account console (loa1) runs UPDATE_PASSWORD and CONFIGURE_TOTP.
+  const pkce = () => {
+    const v = randomBytes(32).toString('base64url')
+    return { verifier: v, challenge: createHash('sha256').update(v).digest('base64url') }
+  }
+  const accountUrl = `${KC}/realms/platform/account/`
+  const ac = pkce()
+  const accountAuthorize = `${KC}/realms/platform/protocol/openid-connect/auth?${new URLSearchParams({
+    client_id: 'account-console', response_type: 'code', scope: 'openid', redirect_uri: accountUrl,
+    state: randomBytes(8).toString('hex'), code_challenge: ac.challenge, code_challenge_method: 'S256',
+  })}`
+  let secretTotp = null
+  let usedAt = null
+  const enrolment = []
+  {
+    const b0 = new Browser(new Map())
+    let page0 = await b0.follow(accountAuthorize)
+    let current = tmpPw
+    for (let round = 0; round < 8; round++) {
+      if (new URL(page0.url).searchParams.has('code')) break
+      const f = formOf(await page0.res.text())
+      if (!f) throw new Error(`enrolment: no form on ${new URL(page0.url).pathname}`)
+      const body = new URLSearchParams()
+      if (f.fields.has('totpSecret')) {
+        secretTotp = f.fields.get('totpSecret')
+        body.set('totpSecret', secretTotp)
+        body.set('totp', totp(Buffer.from(secretTotp, 'utf8')))
+        body.set('userLabel', 'probe')
+        if (f.fields.has('mode')) body.set('mode', f.fields.get('mode'))
+        usedAt = Date.now()
+        enrolment.push('configure-totp')
+      } else if (f.fields.has('password-new')) {
+        body.set('password-new', pw)
+        body.set('password-confirm', pw)
+        enrolment.push('update-password')
+      } else if (f.fields.has('username') || f.fields.has('password')) {
+        body.set('username', email)
+        body.set('password', current)
+        enrolment.push('password')
+      } else throw new Error(`enrolment: unknown form: ${[...f.fields.keys()].join(',')}`)
+      page0 = await b0.follow(new URL(f.action, page0.url).toString(), { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body })
+    }
+    if (!new URL(page0.url).searchParams.has('code')) throw new Error('enrolment: the account console sign-in never completed')
+    if (!secretTotp) throw new Error('enrolment: CONFIGURE_TOTP did not run at the account console sign-in')
+  }
+
+  // Phase B: the control panel's loa2 sign-in on a clean browser: password, then OTP.
+  const { verifier, challenge } = pkce()
   const authorize = `${KC}/realms/platform/protocol/openid-connect/auth?${new URLSearchParams({
     client_id: 'control-panel', response_type: 'code', scope: 'openid email profile', redirect_uri: REDIRECT,
     acr_values: 'loa2', max_age: '3600', state: randomBytes(8).toString('hex'), code_challenge: challenge, code_challenge_method: 'S256',
   })}`
   const b = new Browser(new Map(), { stopHosts: ['127.0.0.1'] })
   let page = await b.follow(authorize)
-  let secretTotp = null
-  let usedAt = null
   const kinds = []
   for (let round = 0; round < 8 && !page.stopped; round++) {
     const html = await page.res.text()
     const f = formOf(html)
     if (!f) throw new Error(`no form on ${new URL(page.url).pathname}`)
     const body = new URLSearchParams()
-    if (f.fields.has('totpSecret')) {
-      secretTotp = f.fields.get('totpSecret')
-      body.set('totpSecret', secretTotp)
-      body.set('totp', totp(Buffer.from(secretTotp, 'utf8')))
-      body.set('userLabel', 'probe')
-      if (f.fields.has('mode')) body.set('mode', f.fields.get('mode'))
-      usedAt = Date.now()
-      kinds.push('configure-totp')
-    } else if (f.fields.has('otp')) {
+    if (f.fields.has('otp')) {
       const wait = msUntilFreshTotpStep(usedAt)
       if (wait > 0) await new Promise((r) => setTimeout(r, wait))
       body.set('otp', totp(Buffer.from(secretTotp, 'utf8')))
@@ -129,7 +175,7 @@ async function main() {
       body.set('username', email)
       body.set('password', pw)
       kinds.push('password')
-    } else throw new Error(`unknown form: ${[...f.fields.keys()].join(',')}`)
+    } else throw new Error(`unknown form (the loa2 sign-in must not enrol): ${[...f.fields.keys()].join(',')}`)
     page = await b.follow(new URL(f.action, page.url).toString(), { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body })
   }
   if (!page.stopped) throw new Error('the flow never returned to the panel origin')
@@ -149,6 +195,7 @@ async function main() {
     keycloak: '26.6.1',
     realm: 'docker/keycloak/realm-export.ops.json + configureStepupFlow',
     request: { scope: 'openid email profile', acr_values: 'loa2', max_age: 3600 },
+    enrolment,
     flow: kinds,
     idToken: { alg: header(t.id_token).alg, typ: header(t.id_token).typ ?? null, claims: claimShapes(id), acr: id.acr ?? null, operatorRole: roleIn(id), audIncludesControlPanel: audHas(id), azp: id.azp ?? null, subEqualsUserId: id.sub === user.id },
     accessToken: { alg: header(t.access_token).alg, typ: header(t.access_token).typ ?? null, claims: claimShapes(at), acr: at.acr ?? null, operatorRole: roleIn(at), audIncludesControlPanel: audHas(at), azp: at.azp ?? null, subEqualsUserId: at.sub === user.id },

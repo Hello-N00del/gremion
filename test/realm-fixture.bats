@@ -182,12 +182,12 @@ print(\"ok\")
     [ "$output" = "ok" ]
 }
 
-@test "the rendered realm carries the password policy, refresh-token rotation and gremion-ui PKCE S256" {
+@test "the rendered realm carries the password policy and gremion-ui PKCE S256, and no refresh-token rotation" {
     run bash -c "python3 '$RENDER' --realm citest --apex ci.local | python3 -c '
 import json, sys
 d = json.load(sys.stdin)
 assert d[\"passwordPolicy\"] == \"length(12) and notUsername and notEmail and passwordHistory(3)\"
-assert d[\"revokeRefreshToken\"] is True and d[\"refreshTokenMaxReuse\"] == 0
+assert \"revokeRefreshToken\" not in d and \"refreshTokenMaxReuse\" not in d
 ui = [c for c in d[\"clients\"] if c[\"clientId\"] == \"gremion-ui\"][0]
 assert ui[\"attributes\"][\"pkce.code.challenge.method\"] == \"S256\"
 print(\"ok\")

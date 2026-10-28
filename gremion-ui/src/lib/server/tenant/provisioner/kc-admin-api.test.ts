@@ -294,6 +294,46 @@ describe('KcProvisionApi.configureStepupFlow (ported §4-2, idempotent)', () => 
   })
 })
 
+describe('KcProvisionApi.configureStepupFlow: a fresh build is never live in the enrol-then-loa2 shape', () => {
+  it('converts the REQUIRED OTP form to OTP-or-deny BEFORE the realm is pointed at browser-stepup (a crash in between must not serve it)', async () => {
+    const F = '/admin/realms/verein/authentication'
+    const SUB = 'stepup-2fa%20second%20factor'
+    let created = false
+    let adds = 0
+    const calls: Array<{ method: string; path: string; body?: unknown }> = []
+    const legacy = [
+      { id: 'c2', providerId: 'conditional-level-of-authentication', requirement: 'REQUIRED', level: 0, index: 0 },
+      { id: 'o2', providerId: 'auth-otp-form', requirement: 'REQUIRED', level: 0, index: 1 },
+    ]
+    const transport: KcTransport = async (method, path, body) => {
+      calls.push({ method, path, body })
+      if (method === 'POST' && path === `${F}/flows/stepup-2fa/executions/flow`) created = true
+      if (method === 'POST' && path === `${F}/flows/${SUB}/executions/execution`) adds++
+      if (method === 'GET' && path === `${F}/flows`) return []
+      if (method === 'GET' && path === '/admin/realms/verein') return { realm: 'verein', attributes: {} }
+      if (method === 'GET' && path === `${F}/flows/stepup-2fa/executions`) {
+        return created
+          ? [...legacy, { id: 's2', displayName: 'stepup-2fa second factor', authenticationFlow: true, requirement: 'DISABLED', level: 0, index: 2 }]
+          : legacy
+      }
+      if (method === 'GET' && path === `${F}/flows/${SUB}/executions`) {
+        return [
+          ...(adds >= 1 ? [{ id: 'n1', providerId: 'auth-otp-form', requirement: 'DISABLED', level: 0, index: 0 }] : []),
+          ...(adds >= 2 ? [{ id: 'n2', providerId: 'deny-access-authenticator', requirement: 'DISABLED', level: 0, index: 1 }] : []),
+        ]
+      }
+      if (method === 'GET') return []
+      return undefined
+    }
+    await new KcProvisionApi(transport).configureStepupFlow('verein')
+    const bindAt = calls.findIndex((c) => c.method === 'PUT' && c.path === '/admin/realms/verein' && (c.body as { browserFlow?: string }).browserFlow === 'browser-stepup')
+    const legacyGoneAt = calls.findIndex((c) => c.method === 'DELETE' && c.path === `${F}/executions/o2`)
+    expect(bindAt).toBeGreaterThan(-1)
+    expect(legacyGoneAt).toBeGreaterThan(-1)
+    expect(legacyGoneAt).toBeLessThan(bindAt)
+  })
+})
+
 describe('updateRealmSmtp — the gremion#6 delta for an ALREADY-CREATED realm (never a re-import)', () => {
   it('PUTs the realm rep with only realm + smtpServer, on the realm-scoped path', async () => {
     const calls: Array<{ method: string; path: string; body?: unknown }> = []

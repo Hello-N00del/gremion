@@ -59,8 +59,6 @@ const GREEN_2FA_EXECS = () => [
 /** Security sweep 2 (finding 6): the realm-level hardening a green realm carries. */
 const GREEN_HARDENING = {
   passwordPolicy: 'length(12) and notUsername and notEmail and passwordHistory(3)',
-  revokeRefreshToken: true,
-  refreshTokenMaxReuse: 0,
 }
 
 /** A GREEN live realm: every §4 contract element present + correct. Built as a
@@ -273,11 +271,50 @@ describe('reconcileRealm — each single drift fails EXACTLY that named check', 
       'the subflow itself not REQUIRED',
       () => GREEN_2FA_EXECS().map((e) => (e.id === 's2' ? { ...e, requirement: 'ALTERNATIVE' } : e)),
     ],
+    // Review finding (MEDIUM): the subflow must hold EXACTLY [OTP, deny-access].
+    // An allow-access (or any authenticator that needs no user) ALTERNATIVE
+    // between them lets a user without OTP through at loa2.
+    [
+      'an extra allow-access ALTERNATIVE between the OTP form and deny-access',
+      () => [
+        ...GREEN_2FA_EXECS().slice(0, 3),
+        { id: 'a2', providerId: 'allow-access-authenticator', requirement: 'ALTERNATIVE', level: 1, index: 1 },
+        { ...GREEN_2FA_EXECS()[3]!, index: 2 },
+      ],
+    ],
+    [
+      'an extra allow-access ALTERNATIVE after deny-access',
+      () => [...GREEN_2FA_EXECS(), { id: 'a2', providerId: 'allow-access-authenticator', requirement: 'ALTERNATIVE', level: 1, index: 2 }],
+    ],
+    [
+      'a nested flow inside the second-factor subflow',
+      () => [...GREEN_2FA_EXECS(), { id: 'n2', displayName: 'sneaky', authenticationFlow: true, requirement: 'ALTERNATIVE', level: 1, index: 2 }],
+    ],
+    [
+      'the OTP form and deny-access under a DIFFERENT subflow than the second-factor one',
+      () => [
+        GREEN_2FA_EXECS()[0]!,
+        GREEN_2FA_EXECS()[1]!,
+        { id: 'x2', displayName: 'decoy', authenticationFlow: true, requirement: 'REQUIRED', level: 0, index: 2 },
+        GREEN_2FA_EXECS()[2]!,
+        GREEN_2FA_EXECS()[3]!,
+      ],
+    ],
   ])('%s -> only stepup-2fa-otp-gate fails', async (_why, execs) => {
     const failed = await failedNames((r) => {
       r[`GET /admin/realms/${REALM}/authentication/flows/stepup-2fa/executions`] = execs()
     })
     expect(failed).toEqual(['stepup-2fa-otp-gate'])
+  })
+
+  it('a DISABLED extra execution in the second-factor subflow is inert and does not fail the gate', async () => {
+    const failed = await failedNames((r) => {
+      r[`GET /admin/realms/${REALM}/authentication/flows/stepup-2fa/executions`] = [
+        ...GREEN_2FA_EXECS(),
+        { id: 'a2', providerId: 'allow-access-authenticator', requirement: 'DISABLED', level: 1, index: 2 },
+      ]
+    })
+    expect(failed).toEqual([])
   })
 
   it.each([
@@ -292,14 +329,15 @@ describe('reconcileRealm — each single drift fails EXACTLY that named check', 
   })
 
   it.each([
+    ['revokeRefreshToken on', { revokeRefreshToken: true, refreshTokenMaxReuse: 0 }],
     ['revokeRefreshToken off', { revokeRefreshToken: false }],
     ['revokeRefreshToken absent', { revokeRefreshToken: undefined }],
     ['refreshTokenMaxReuse 2', { refreshTokenMaxReuse: 2 }],
-  ])('%s -> only refresh-token-rotation fails', async (_w, patch) => {
+  ])('%s -> no check fails: refresh-token rotation is deliberately NOT reconciled (docs/auth.md residual)', async (_w, patch) => {
     const failed = await failedNames((r) => {
       Object.assign(r[`GET /admin/realms/${REALM}`] as object, patch)
     })
-    expect(failed).toEqual(['refresh-token-rotation'])
+    expect(failed).toEqual([])
   })
 
   it.each([
@@ -789,7 +827,7 @@ describe('reconcileRealm — apply replays ONLY the failed checks (§4-2), nothi
     expect(report.applied).toContain('stepup-2fa-otp-gate')
   })
 
-  it('a missing password policy / refresh rotation -> apply issues ONE partial realm PUT with exactly those fields (no step-up replay)', async () => {
+  it('a missing password policy -> apply issues ONE partial realm PUT with exactly that field (no step-up replay, no refresh-token fields)', async () => {
     const routes = greenRoutes()
     Object.assign(routes[`GET /admin/realms/${REALM}`] as object, {
       passwordPolicy: undefined,
@@ -806,12 +844,10 @@ describe('reconcileRealm — apply replays ONLY the failed checks (§4-2), nothi
         body: {
           realm: REALM,
           passwordPolicy: 'length(12) and notUsername and notEmail and passwordHistory(3)',
-          revokeRefreshToken: true,
-          refreshTokenMaxReuse: 0,
         },
       },
     ])
-    expect(report.applied).toEqual(expect.arrayContaining(['password-policy', 'refresh-token-rotation']))
+    expect(report.applied).toEqual(['password-policy'])
   })
 
   it('a gremion-ui without PKCE -> apply PUTs only the attribute (merged) to the client and records it applied', async () => {

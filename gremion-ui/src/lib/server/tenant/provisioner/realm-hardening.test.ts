@@ -4,8 +4,11 @@
 //    leave with acr=loa2 (the OTP form is an ALTERNATIVE under a REQUIRED
 //    subflow, next to a deny-access ALTERNATIVE; never a REQUIRED OTP form,
 //    which makes Keycloak run CONFIGURE_TOTP and then grant loa2);
-//  - carry a password policy, rotate refresh tokens (no reuse), and make the
-//    confidential gremion-ui client use PKCE S256.
+//  - carry a password policy and make the confidential gremion-ui client use
+//    PKCE S256;
+//  - NOT enable refresh-token rotation (revokeRefreshToken / refreshTokenMaxReuse
+//    stay at the Keycloak defaults): rotation needs per-request session
+//    memoisation AND a single-flight refresh first (docs/auth.md residual).
 // Pure: reads the shipped templates, no Keycloak, no network.
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
@@ -82,9 +85,11 @@ describe.each([
     expect(REALM_PASSWORD_POLICY).toBe('length(12) and notUsername and notEmail and passwordHistory(3)')
   })
 
-  it('rotates refresh tokens and allows no reuse', () => {
-    expect((doc() as any).revokeRefreshToken).toBe(true)
-    expect((doc() as any).refreshTokenMaxReuse).toBe(0)
+  it('does not enable refresh-token rotation (parallel refreshes would log users out)', () => {
+    expect((doc() as any).revokeRefreshToken ?? false).toBe(false)
+    expect((doc() as any).refreshTokenMaxReuse ?? 0).toBe(0)
+    expect(doc()).not.toHaveProperty('revokeRefreshToken')
+    expect(doc()).not.toHaveProperty('refreshTokenMaxReuse')
   })
 })
 

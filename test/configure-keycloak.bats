@@ -353,7 +353,44 @@ two_fa_state() { cat "${KCSTATE}/two-fa.json" "${KCSTATE}/kids.json" | jq -s -c 
     echo "$output" | jq -e '(map(select(.providerId == "auth-otp-form")) | length == 1) and (map(select(.providerId == "auth-otp-form" and .level == 1)) | length == 1)'
 }
 
-@test "sweep2 #6: the realm PUT carries the password policy and refresh-token rotation" {
+@test "sweep2 #3 (review): an extra enabled authenticator inside the second-factor subflow is NOT OTP-or-deny (fails closed, nothing deleted)" {
+    kc_tree
+    seed_complete_flow
+    printf '%s' '[{"id":"c2","providerId":"conditional-level-of-authentication","requirement":"REQUIRED","level":0,"index":0,"authenticationConfig":"cfg2"},{"id":"s2","displayName":"stepup-2fa second factor","authenticationFlow":true,"requirement":"REQUIRED","level":0,"index":1}]' > "${KCSTATE}/two-fa.json"
+    printf '%s' '[{"id":"o2","providerId":"auth-otp-form","requirement":"ALTERNATIVE","level":1,"index":0},{"id":"a2","providerId":"allow-access-authenticator","requirement":"ALTERNATIVE","level":1,"index":1},{"id":"d2","providerId":"deny-access-authenticator","requirement":"ALTERNATIVE","level":1,"index":2}]' > "${KCSTATE}/kids.json"
+    kc_configure
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"not OTP-or-deny"* ]]
+    # the stray row is reported, never deleted by a script that does not own it
+    [ -z "$(call_line 'DELETE .*executions/a2')" ]
+}
+
+@test "sweep2 #3 (review): a DISABLED stray execution in the second-factor subflow is inert" {
+    kc_tree
+    seed_complete_flow
+    printf '%s' '[{"id":"c2","providerId":"conditional-level-of-authentication","requirement":"REQUIRED","level":0,"index":0,"authenticationConfig":"cfg2"},{"id":"s2","displayName":"stepup-2fa second factor","authenticationFlow":true,"requirement":"REQUIRED","level":0,"index":1}]' > "${KCSTATE}/two-fa.json"
+    printf '%s' '[{"id":"o2","providerId":"auth-otp-form","requirement":"ALTERNATIVE","level":1,"index":0},{"id":"d2","providerId":"deny-access-authenticator","requirement":"ALTERNATIVE","level":1,"index":1},{"id":"a2","providerId":"allow-access-authenticator","requirement":"DISABLED","level":1,"index":2}]' > "${KCSTATE}/kids.json"
+    kc_configure
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"already OTP-or-deny"* ]]
+}
+
+@test "sweep2 #3 (review): a run that died with BOTH the new subflow children and the legacy OTP form resumes (flow not dropped and rebuilt)" {
+    kc_tree
+    seed_complete_flow
+    printf '%s' '[{"id":"c2","providerId":"conditional-level-of-authentication","requirement":"REQUIRED","level":0,"index":0,"authenticationConfig":"cfg2"},{"id":"old","providerId":"auth-otp-form","requirement":"REQUIRED","level":0,"index":1},{"id":"s2","displayName":"stepup-2fa second factor","authenticationFlow":true,"requirement":"REQUIRED","level":0,"index":2}]' > "${KCSTATE}/two-fa.json"
+    printf '%s' '[{"id":"o2","providerId":"auth-otp-form","requirement":"ALTERNATIVE","level":1,"index":0},{"id":"d2","providerId":"deny-access-authenticator","requirement":"ALTERNATIVE","level":1,"index":1}]' > "${KCSTATE}/kids.json"
+    kc_configure
+    [ "$status" -eq 0 ]
+    # resumed in place: the flow was neither deleted nor copied afresh, the legacy form went
+    [ -z "$(call_line 'DELETE /admin/realms/gremion-test/authentication/flows/')" ]
+    [ -z "$(call_line 'authentication/flows/browser/copy')" ]
+    [ -n "$(call_line 'DELETE /admin/realms/gremion-test/authentication/executions/old')" ]
+    run two_fa_state
+    echo "$output" | jq -e '(map(select(.providerId == "auth-otp-form")) | length == 1) and (map(select(.providerId == "auth-otp-form" and .level == 1)) | length == 1)'
+}
+
+@test "sweep2 #6: the realm PUT carries the password policy and NOT refresh-token rotation" {
     kc_tree
     seed_complete_flow
     kc_configure
@@ -361,8 +398,9 @@ two_fa_state() { cat "${KCSTATE}/two-fa.json" "${KCSTATE}/kids.json" | jq -s -c 
     local line
     line="$(grep -E 'PUT /admin/realms/gremion-test \{' "${KCSTATE}/calls.log" | grep browser-stepup | tail -n1)"
     [[ "$line" == *'"passwordPolicy":"length(12) and notUsername and notEmail and passwordHistory(3)"'* ]]
-    [[ "$line" == *'"revokeRefreshToken":true'* ]]
-    [[ "$line" == *'"refreshTokenMaxReuse":0'* ]]
+    # Rotation is deliberately off (docs/auth.md residual): the PUT must not carry it.
+    [[ "$line" != *revokeRefreshToken* ]]
+    [[ "$line" != *refreshTokenMaxReuse* ]]
 }
 
 @test "sweep2 #6: gremion-ui gets PKCE S256 merged into its attributes" {
@@ -391,7 +429,7 @@ two_fa_state() { cat "${KCSTATE}/two-fa.json" "${KCSTATE}/kids.json" | jq -s -c 
     [ "$sh" = "$ts" ]
 }
 
-@test "sweep2: both realm templates carry the OTP-or-deny stepup-2fa, the policy and token rotation" {
+@test "sweep2: both realm templates carry the OTP-or-deny stepup-2fa and the policy, and no token rotation" {
     local f
     for f in realm-export.base.json realm-export.ops.json; do
         python3 -c '
@@ -405,7 +443,7 @@ assert len(subs) == 1 and subs[0]["requirement"] == "REQUIRED" and subs[0]["flow
 kids = sorted(flows["stepup-2fa second factor"]["authenticationExecutions"], key=lambda e: e["priority"])
 assert [(e["authenticator"], e["requirement"]) for e in kids] == [("auth-otp-form", "ALTERNATIVE"), ("deny-access-authenticator", "ALTERNATIVE")]
 assert d["passwordPolicy"] == "length(12) and notUsername and notEmail and passwordHistory(3)"
-assert d["revokeRefreshToken"] is True and d["refreshTokenMaxReuse"] == 0
+assert "revokeRefreshToken" not in d and "refreshTokenMaxReuse" not in d, "refresh-token rotation must stay off (docs/auth.md residual)"
 ' "${PROJECT_ROOT}/docker/keycloak/${f}"
     done
 }

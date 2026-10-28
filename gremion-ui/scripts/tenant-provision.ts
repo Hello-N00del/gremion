@@ -91,6 +91,7 @@ import {
   type FleetReport,
 } from '../src/lib/server/tenant/provisioner/reconcile'
 import { materializeConfig, assertBrandIdentityComplete } from '../src/lib/server/tenant/provisioner/materialize'
+import { opsOperatorEnrolmentNotice } from '../src/lib/server/tenant/provisioner/ops-enrolment'
 import { tlog } from '../src/lib/server/observability/tenant-log'
 import { deleteTenant, type DeleteDeps, type LeafShredExecutor } from '../src/lib/server/tenant/provisioner/lifecycle'
 import { requestVerb } from './tenant-provision-requests'
@@ -828,7 +829,7 @@ async function cmdOperatorAdd(): Promise<void> {
   if (!user?.id) throw new Error(`operator ${email} is absent after create`)
   const role = await raw('GET', `/admin/realms/${OPS_REALM}/roles/operator`)
   await raw('POST', `/admin/realms/${OPS_REALM}/users/${user.id}/role-mappings/realm`, [role])
-  log(`operator ${email} created with a temporary password (Q23: no vendor mail on this host); it must be changed and TOTP configured at first sign-in`)
+  log(opsOperatorEnrolmentNotice(email, process.env.PLATFORM_DOMAIN))
   process.stdout.write(`TEMPORARY-PASSWORD: ${temporary}\n`)
 }
 

@@ -265,10 +265,12 @@ _stepup_flow_state() {
         [[ "$sub" == "stepup-2fa" ]] && want="auth-otp-form"
         subex=$(_kc_api GET "/authentication/flows/${sub}/executions") || { echo partial; return 0; }
         if ! printf '%s' "$subex" | jq -e --arg w "$want" '
-                ([.[] | select(.providerId == "conditional-level-of-authentication"
-                               and .requirement == "REQUIRED"
-                               and ((.authenticationConfig // "") != ""))] | length == 1)
-                and ([.[] | select(.providerId == $w and ($w == "auth-otp-form" or .requirement == "REQUIRED"))] | length == 1)' >/dev/null 2>&1; then
+                ([.[] | select(.providerId == $w and ($w == "auth-otp-form" or .requirement == "REQUIRED"))] | length) as $n
+                | ([.[] | select(.providerId == "conditional-level-of-authentication"
+                                 and .requirement == "REQUIRED"
+                                 and ((.authenticationConfig // "") != ""))] | length == 1)
+                  and ($n == 1 or ($w == "auth-otp-form" and $n == 2
+                                   and any(.[]; .authenticationFlow == true and .displayName == "stepup-2fa second factor")))' >/dev/null 2>&1; then
             echo partial; return 0
         fi
     done
@@ -303,17 +305,32 @@ _drop_partial_stepup_flow() {
 STEPUP_2FA_SUBFLOW="stepup-2fa second factor"
 STEPUP_2FA_SUBFLOW_ENC="stepup-2fa%20second%20factor"
 
-# stdin: the flattened stepup-2fa executions; exit 0 iff it has the hardened shape.
+# stdin: the flattened stepup-2fa executions; exit 0 iff it has the hardened shape:
+# a REQUIRED second-factor subflow whose direct children are exactly [OTP form
+# ALTERNATIVE, deny-access ALTERNATIVE] in that order. The subflow's rows are the
+# ones after it that are deeper than it; any other ENABLED row there (an
+# allow-access ALTERNATIVE, a nested flow) could let a user without OTP through,
+# a DISABLED one is inert.
 _stepup_2fa_gate_ok() {
     jq -e --arg sub "$STEPUP_2FA_SUBFLOW" '
-        ([.[] | select(.providerId == "auth-otp-form")]) as $o
+        . as $all
+        | ([.[] | select(.providerId == "auth-otp-form")]) as $o
         | ([.[] | select(.providerId == "deny-access-authenticator")]) as $d
         | ([.[] | select(.authenticationFlow == true and .displayName == $sub)]) as $s
-        | ($o | length) == 1 and ($d | length) == 1 and ($s | length) == 1
-        and $s[0].requirement == "REQUIRED"
-        and $o[0].requirement == "ALTERNATIVE" and $d[0].requirement == "ALTERNATIVE"
-        and ($o[0].level // 0) >= 1 and $o[0].level == $d[0].level
-        and ($o[0].index // 0) < ($d[0].index // 0)' >/dev/null 2>&1
+        | if ($o | length) != 1 or ($d | length) != 1 or ($s | length) != 1 then false else
+            ($s[0].level // 0) as $lvl
+            | ([$all | to_entries[] | select(.value.authenticationFlow == true and .value.displayName == $sub) | .key][0] + 1) as $from
+            | ($all[$from:] | reduce .[] as $e ({m: [], done: false};
+                if .done then . elif ($e.level // 0) > $lvl then .m += [$e] else .done = true end) | .m) as $members
+            | $s[0].requirement == "REQUIRED"
+              and $o[0].requirement == "ALTERNATIVE" and $d[0].requirement == "ALTERNATIVE"
+              and ($o[0].level // 0) == ($lvl + 1) and $o[0].level == $d[0].level
+              and ($o[0].index // 0) < ($d[0].index // 0)
+              and ([$members[] | select(.providerId == "auth-otp-form" or .providerId == "deny-access-authenticator")] | length) == 2
+              and ([$members[] | select(.requirement != "DISABLED"
+                                        and .providerId != "auth-otp-form"
+                                        and .providerId != "deny-access-authenticator")] | length) == 0
+          end' >/dev/null 2>&1
 }
 
 # Idempotent and crash-safe: the replacement is built and enabled FIRST and the
@@ -447,9 +464,9 @@ configure_stepup_flow() {
     #    realm's other attributes are preserved. Runs AFTER the flow exists.
     local attrs
     attrs=$(_kc_api GET "" | jq -c '(.attributes // {}) + {"acr.loa.map":"{\"loa1\":1,\"loa2\":2}"}')
-    _kc_api PUT "" "{\"realm\":\"${REALM}\",\"browserFlow\":\"browser-stepup\",\"otpPolicyType\":\"totp\",\"otpPolicyAlgorithm\":\"HmacSHA1\",\"otpPolicyDigits\":6,\"otpPolicyPeriod\":30,\"otpPolicyLookAheadWindow\":1,\"otpPolicyInitialCounter\":0,\"passwordPolicy\":\"${REALM_PASSWORD_POLICY}\",\"revokeRefreshToken\":true,\"refreshTokenMaxReuse\":0,\"attributes\":${attrs}}" >/dev/null \
-        || error "Failed to set realm otpPolicy/acr.loa.map/browserFlow/passwordPolicy/refresh-token rotation"
-    success "  Realm otpPolicy + acr.loa.map + browserFlow=browser-stepup + passwordPolicy + refresh-token rotation set."
+    _kc_api PUT "" "{\"realm\":\"${REALM}\",\"browserFlow\":\"browser-stepup\",\"otpPolicyType\":\"totp\",\"otpPolicyAlgorithm\":\"HmacSHA1\",\"otpPolicyDigits\":6,\"otpPolicyPeriod\":30,\"otpPolicyLookAheadWindow\":1,\"otpPolicyInitialCounter\":0,\"passwordPolicy\":\"${REALM_PASSWORD_POLICY}\",\"attributes\":${attrs}}" >/dev/null \
+        || error "Failed to set realm otpPolicy/acr.loa.map/browserFlow/passwordPolicy"
+    success "  Realm otpPolicy + acr.loa.map + browserFlow=browser-stepup + passwordPolicy set."
 
     # 3. Ensure the gremion-ui client emits the acr claim (access + id token).
     local client_uuid

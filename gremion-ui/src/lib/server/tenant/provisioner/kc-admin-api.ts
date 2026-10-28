@@ -78,6 +78,21 @@ export function stepup2faGateProblem(execs: readonly FlowExecRep[]): string | nu
   if (deny.requirement !== 'ALTERNATIVE') return `deny-access is ${deny.requirement}, expected ALTERNATIVE`
   if (deny.level !== otp.level || (otp.level ?? 0) < 1) return 'the OTP form and deny-access are not siblings inside the subflow'
   if ((otp.index ?? 0) > (deny.index ?? 0)) return 'deny-access is ordered before the OTP form (a user with OTP would always be denied)'
+  // The subflow's rows are the ones after it in the flattened list, deeper than
+  // it. It must hold exactly [OTP, deny-access] (a DISABLED row is inert): any
+  // other enabled row (an allow-access ALTERNATIVE, a nested flow) can let a user
+  // without OTP through, and OTP/deny must be ITS direct children, not another
+  // subflow's.
+  const subLevel = sub.level ?? 0
+  const members: FlowExecRep[] = []
+  for (let i = execs.indexOf(sub) + 1; i < execs.length && (execs[i]!.level ?? 0) > subLevel; i++) members.push(execs[i]!)
+  if (!members.includes(otp) || !members.includes(deny) || otp.level !== subLevel + 1) {
+    return `the OTP form and deny-access are not the direct children of the "${STEPUP_2FA_SECOND_FACTOR}" subflow`
+  }
+  const extra = members.filter((e) => e !== otp && e !== deny && e.requirement !== 'DISABLED')
+  if (extra.length > 0) {
+    return `the "${STEPUP_2FA_SECOND_FACTOR}" subflow holds ${extra.map((e) => e.providerId ?? e.displayName ?? '?').join(', ')} besides the OTP form and deny-access (a user without OTP could pass)`
+  }
   return null
 }
 
@@ -625,6 +640,12 @@ export class KcProvisionApi {
       if (c2) await this.setCfg(realm, c2, 'stepup-loa2', '2', '300')
     }
 
+    // 1b. Security sweep 2 (finding 3): the 2FA subflow must be OTP-or-deny. Also
+    //    runs for a freshly built flow, whose OTP form was created REQUIRED above,
+    //    and BEFORE the realm is pointed at the flow (step 2): a crash between the
+    //    two must never leave a live realm in the enrol-then-loa2 shape.
+    await this.ensureStepup2faSecondFactor(realm)
+
     // 2. Realm otpPolicy + acr.loa.map + browserFlow. Minimal partial PUT (a full
     //    round-tripped realm rep 500s on KC 26); merge existing attributes. Runs
     //    AFTER the flow exists.
@@ -647,10 +668,6 @@ export class KcProvisionApi {
     //    EXISTING flow whose loa1/loa2 level or maxAge has drifted back to contract
     //    (#164: loa1 level 1 / maxAge 36000, loa2 level 2 / maxAge 300). Idempotent.
     await this.repairStepupLoaConfig(realm)
-
-    // 3b. Security sweep 2 (finding 3): the 2FA subflow must be OTP-or-deny. Also
-    //    runs for a freshly built flow, whose OTP form was created REQUIRED above.
-    await this.ensureStepup2faSecondFactor(realm)
 
     // 4. Ensure the gremion-ui client emits the acr claim (access + id token).
     const clients = await this.realmGet<Array<{ id?: string }>>(realm, '/clients?clientId=gremion-ui')

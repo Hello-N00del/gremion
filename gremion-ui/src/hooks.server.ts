@@ -664,6 +664,13 @@ export const authGuard: Handle = async ({ event, resolve }) => {
   }
 
   const session = await event.locals.auth()
+  // Memoise for the rest of the request. Auth.js rebuilds the session from the
+  // ORIGINAL cookie header on every auth() call, so a second call (root layout
+  // load, +page.server loads, handleFetch sub-requests) after the access token
+  // expired would run a second refresh with the refresh token the first one
+  // already used. Harmless while refresh tokens are reusable; fatal the day
+  // rotation is switched on (see docs/auth.md, refresh-token rotation residual).
+  event.locals.auth = async () => session
 
   // All other routes require authentication
   // Also force re-login when the session has a token refresh error
