@@ -194,6 +194,7 @@ describe('tenant export (TRD-149/150/151)', () => {
     expect(statSync(dir).mode & 0o777).toBe(0o700)
     expect(statSync(join(dir, 'manifest.json')).mode & 0o777).toBe(0o600)
     expect(manifest.files.find((f) => f.path === 'kernel/org_units.json')!.rows).toBe(3)
+    expect(manifest.csv_formula_guard).toMatch(/apostrophe/)
     expect(manifest.files.find((f) => f.path === 'finance/empty_ledger.csv')!.rows).toBe(0)
     // RFC 4180 quoting; null is an empty field; timestamps are ISO; bytea base64
     expect(readFileSync(join(dir, 'kernel/org_units.csv'), 'utf8')).toBe(

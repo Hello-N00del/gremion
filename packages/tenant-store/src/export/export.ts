@@ -34,7 +34,7 @@ import { createHash } from 'node:crypto'
 import { chmodSync, closeSync, mkdirSync, openSync, readdirSync, writeFileSync, writeSync } from 'node:fs'
 import { dirname, join, resolve, sep } from 'node:path'
 import type postgres from 'postgres'
-import { csvLine, jsonReplacer } from './csv.js'
+import { CSV_FORMULA_GUARD, csvLine, jsonReplacer } from './csv.js'
 import { assertNotSuperuserCapable } from './reader.js'
 import { MANIFEST_FILE, MANIFEST_SCHEMA_VERSION, verifyExport, type ExportManifest, type ManifestFile, type VerifyResult } from './verify.js'
 
@@ -321,6 +321,7 @@ export async function exportTenant(opts: ExportOptions): Promise<ExportResult> {
     modules,
     excluded_systems: excludedSystems,
     excluded_tables: excludedTables,
+    csv_formula_guard: CSV_FORMULA_GUARD,
   }
   writeFileSync(join(opts.outDir, MANIFEST_FILE), JSON.stringify(manifest, null, 2) + '\n', { mode: 0o600, flag: 'wx' })
   return { manifest, verify: verifyExport(opts.outDir) }

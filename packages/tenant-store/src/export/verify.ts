@@ -29,6 +29,8 @@ export interface ExportManifest {
   modules: { id: string; status: 'exported' | 'excluded'; reason?: string }[]
   excluded_systems: { system: string; reason: string }[]
   excluded_tables: { scope: string; schema?: string; table: string; reason: string }[]
+  /** The CSV formula guard (MED-2), as applied by the writer. */
+  csv_formula_guard?: string
 }
 
 export type ProblemCode = 'MANIFEST_MISSING' | 'MANIFEST_INVALID' | 'MISSING' | 'UNREADABLE' | 'EMPTY' | 'SIZE_MISMATCH' | 'SHA_MISMATCH' | 'ROWCOUNT_MISMATCH' | 'UNLISTED'
