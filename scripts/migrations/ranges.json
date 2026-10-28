@@ -210,7 +210,7 @@
         "packages/tenant-store/src/lifecycle/platform-migrations"
       ],
       "padWidth": 4,
-      "highWater": 11,
+      "highWater": 12,
       "legacyFloor": 3,
       "legacy": [
         "0001_plt_setup.sql",

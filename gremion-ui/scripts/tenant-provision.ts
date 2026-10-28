@@ -94,6 +94,7 @@ import { deleteTenant, type DeleteDeps, type LeafShredExecutor } from '../src/li
 import { requestVerb } from './tenant-provision-requests'
 import { GATE_USAGE, GATE_VERBS, refusalLine, runGateVerb } from './tenant-provision-gate'
 import { IMPORT_USAGE, IMPORT_VERBS, importVerb } from './tenant-provision-import'
+import { PURGE_USAGE, PURGE_VERBS, purgeVerb } from './tenant-provision-purge'
 import { parseDpiaMap, scratchFixturesAllowed } from './tenant-provision-scratch'
 
 const repoRoot = join(import.meta.dirname, '..', '..')
@@ -981,7 +982,8 @@ const USAGE = `usage: tenant-create <verb> ...
   delete <slug> | bootstrap-provisioner | materialize-config <slug> [--config <path>]
   request-verify <request-id>   (TASK-043d: the executor's trusted-layer verdict, one JSON line)
 ${GATE_USAGE}
-${IMPORT_USAGE}`
+${IMPORT_USAGE}
+${PURGE_USAGE}`
 
 async function main(): Promise<void> {
   const verb = process.argv[2]
@@ -1058,6 +1060,16 @@ async function main(): Promise<void> {
         flag,
         reqFlag,
         positional,
+        usage: (m) => new UsageError(m),
+        log,
+      })
+    // TRD-144/145: the scheduled purge (tenant-provision-purge.ts), run by the host's gremion-purge.timer
+    case 'purge-run':
+      if (!PURGE_VERBS.has(verb)) throw new UsageError(`unknown verb ${verb}`)
+      return purgeVerb(verb, {
+        args: process.argv.slice(3),
+        openPlatform: openPlatformPool,
+        openKernelServer: () => kernelServer(directPostgresUrl('KERNEL_PG_ADMIN_FILE', reqFileEnv('KERNEL_PG_ADMIN_FILE'))),
         usage: (m) => new UsageError(m),
         log,
       })
