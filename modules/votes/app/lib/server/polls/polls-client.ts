@@ -1,3 +1,4 @@
+import { env } from '$env/dynamic/private'
 import { serviceEnv } from '$lib/server/env/service-env'
 import { getTenant } from '$lib/server/tenant/context'
 import { assertTenantId, PollAccessError, scopePoll, tagTitle } from './tenant-scope'
@@ -91,7 +92,8 @@ export function createPollsClient(opts: { oidcBearer?: string; tenantId?: string
   // one: fail closed), or pinned via opts.tenantId. Another tenant's poll answers
   // exactly like a missing one (pollsStatus 404).
   const tenant = (): string => assertTenantId(opts.tenantId ?? getTenant().id)
-  const legacy = (): string | undefined => serviceEnv('VOTES_LEGACY_POLL_TENANT_ID')
+  // A platform-wide operator setting, not a service endpoint: read lazily from the env (env-guard).
+  const legacy = (): string | undefined => env.VOTES_LEGACY_POLL_TENANT_ID || undefined
   const notFound = () => new PollAccessError(404, 'poll not found')
 
   async function ncFetch<T>(
