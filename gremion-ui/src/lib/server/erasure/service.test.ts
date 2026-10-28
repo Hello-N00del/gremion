@@ -12,16 +12,16 @@ import { enabledModuleIds } from './service'
 afterEach(() => _resetRuntimeRegistryForTests())
 
 describe('enabledModuleIds', () => {
-  it('always starts with the kernel step and lists only modules the tenant turned on', () => {
-    expect(enabledModuleIds({ calendar: true, board: false, files: true })).toEqual(['kernel', 'calendar', 'files'])
+  it('always starts with the kernel step and the identity step, then the modules the tenant turned on', () => {
+    expect(enabledModuleIds({ calendar: true, board: false, files: true })).toEqual(['kernel', 'identity', 'calendar', 'files'])
   })
 
   it('does not drop a config-enabled id no manifest knows (it must surface as "no erasure hook")', () => {
-    expect(enabledModuleIds({ somenewmodule: true })).toEqual(['kernel', 'somenewmodule'])
+    expect(enabledModuleIds({ somenewmodule: true })).toEqual(['kernel', 'identity', 'somenewmodule'])
   })
 
-  it('an all-off tenant still runs the kernel step', () => {
-    expect(enabledModuleIds({})).toEqual(['kernel'])
+  it('an all-off tenant still runs the kernel and identity steps', () => {
+    expect(enabledModuleIds({})).toEqual(['kernel', 'identity'])
   })
 })
 
