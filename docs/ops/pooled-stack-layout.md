@@ -37,6 +37,7 @@ exit-2 failure, never a default:
 | `GREMION_RELEASE_REF` | the colour's `IMAGE_TAG` (compose sets it) | TASK-075: `release_ref` of every ledger row `init` (`migratePlatform`) and phase B (`enableModule`) apply; 1-64 of `A-Z a-z 0-9 . _ -` |
 | `GREMION_DISABLE_SEEDS` | `"true"` | the kernel migration tenant-create runs must never apply a `*_seed.sql` |
 | `PANEL_DB_USER` / `PANEL_DB_PASSWORD` | `gremion_panel` and a generated secret (`app.env`) | `init` makes the control panel's READ-ONLY role (`ensurePanelRequester`: LOGIN, SELECT on the panel read set, EXECUTE on `plt.submit_provisioning_request` only); the `control-panel` block connects as it, never as a database owner |
+| `UI_OAC_DB_PASSWORD` | a generated secret (`app.env`, `state.env`) | TRD-092: `init` makes `gremion_ui_oac` (`ensureAccessReader`: LOGIN NOINHERIT, EXECUTE on `oac.list_access_records` only); `gremion-ui` connects as it via `PLATFORM_ACCESS_DATABASE_URL`, direct to `gremion_platform` |
 
 `gremion-tenant init` writes the `etc/secrets/tenant-create` files (0600) from
 `state.env`; the compose file mounts that directory read-only into

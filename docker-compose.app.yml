@@ -132,6 +132,10 @@ services:
       # URL read from inside the container names the stack it targets.
       DATABASE_URL:             postgresql://${GREMION_DB_USER:-gremion}:${GREMION_DB_PASSWORD}@pgbouncer-${STACK:?STACK required}:6432/${GREMION_DB_NAME:-gremion}
       CONTROL_DATABASE_URL:     postgresql://${CONTROL_DB_USER:-control}:${CONTROL_DB_PASSWORD}@postgres-${STACK:?STACK required}:5432/${CONTROL_DB_NAME:-control}
+      # TRD-092: the council-admin access-record view. gremion_ui_oac (EXECUTE on
+      # oac.list_access_records only), DIRECT to gremion_platform like the other
+      # platform roles; without it the view answers 503 "nicht konfiguriert".
+      PLATFORM_ACCESS_DATABASE_URL: postgresql://gremion_ui_oac:${UI_OAC_DB_PASSWORD:?UI_OAC_DB_PASSWORD required}@postgres-${STACK:?STACK required}:5432/gremion_platform
       SEED_TOKEN:               ${SEED_TOKEN:-}
       SEED_USER_PASSWORD:       ${SEED_USER_PASSWORD:-}
       # Keep dev *_seed.sql migrations out of every deployment.
@@ -426,6 +430,9 @@ services:
       # deploy step 7 (kernel-api-migrate) and kernel-api connect as it.
       KERNEL_API_DB_USER: ${KERNEL_API_DB_USER:-gremion_kernel_api}
       KERNEL_API_DB_PASSWORD: ${KERNEL_API_DB_PASSWORD:?KERNEL_API_DB_PASSWORD required}
+      # TRD-092: `init` makes the access-record reader gremion_ui_oac
+      # (ensureAccessReader) with this password; gremion-ui connects as it.
+      UI_OAC_DB_PASSWORD: ${UI_OAC_DB_PASSWORD:?UI_OAC_DB_PASSWORD required}
       # The servers' POSTGRES_USERs (CREATEDB/CREATEROLE for ensureKernelDatabase
       # and enableModule) and each module's app-role password: files written by
       # `gremion-tenant init` into etc/secrets/tenant-create (0600), mounted
