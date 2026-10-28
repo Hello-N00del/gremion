@@ -100,6 +100,7 @@
         "0058_public_reader_grants.sql": "b963388faef6afa033c0c3be29918bd9371986306d9c136b2a30bbd361d854be",
         "0059_audit_log_chain_anchor.sql": "1e344401669805cd84849101b1e5858f7ff29e7ea39f9e42b61990490bfb82cd",
         "0060_erasure_report.sql": "984d2ef720eb67e55015682de2a084f505a4a0b6101e1dea1118505a579767c2",
+        "0061_audit_log_actor_uuid_check.sql": "fc4f1b7a75dfc4279ceb225eb2654de0b3e55d20bb63a42204f09ca02ed6b441",
         "1200_content_news_posts.sql": "dabcd6a81e45b8dc6ac1dbfc4cbfb77286bc5471ee3eb18c2ae5bbacbc508707",
         "1201_news_posts_public_reader_columns.sql": "b3d0f74a26a63a560111ac9cdad9ba603f2e34b9d75b3bf2769c7dc103acd801"
       }

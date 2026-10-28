@@ -280,12 +280,12 @@ test('real tree: kernel-data holds the 31 legacy files (floor 58), the F1-FIX-02
   assert.equal(k.legacy.length, 31)
   assert.equal(k.legacyFloor, 58)
   // F1-FIX-02-K: 0059 claimed through `claim` (highWater 58 -> 59), locked by `freeze`.
-  assert.equal(k.highWater, 60)
+  assert.equal(k.highWater, 61)
   assert.ok(!k.legacy.includes('0059_audit_log_chain_anchor.sql'))
   assert.ok(s.lock.chains['kernel-data'].files['0059_audit_log_chain_anchor.sql'], '0059 is not in the lock')
   const files = s.files.filter((f) => k.dirs.some((d) => f.path.startsWith(`${d}/`)))
   assert.ok(s.lock.chains['kernel-data'].files['0060_erasure_report.sql'], '0060 is not in the lock')
-  assert.equal(files.length, 35)
+  assert.equal(files.length, 36)
   assert.equal(s.slugs.slugs.length, 29)
 })
 
