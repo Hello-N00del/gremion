@@ -30,8 +30,9 @@
 // drift into different answers for the same question.
 //
 // In production the value is the REAL client address only because the container
-// is given ADDRESS_HEADER + XFF_DEPTH (docker-compose.app.yml, and XFF_DEPTH=2
-// under the Cloudflare overlay, which has one more proxy hop). Without them
+// is given ADDRESS_HEADER + XFF_DEPTH (docker-compose.app.yml: XFF_DEPTH=1,
+// Traefik being the single proxy hop; an extra hop in front needs a higher
+// depth). Without them
 // adapter-node reports the socket address, which behind Traefik is Traefik's
 // own container IP — one bucket for everyone.
 
