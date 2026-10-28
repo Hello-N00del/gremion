@@ -29,6 +29,8 @@ export interface ExportManifest {
   modules: { id: string; status: 'exported' | 'excluded'; reason?: string }[]
   excluded_systems: { system: string; reason: string }[]
   excluded_tables: { scope: string; schema?: string; table: string; reason: string }[]
+  /** Columns left out of an exported table (MED-3: module.json runtime.export.withhold). */
+  excluded_columns?: { scope: string; schema: string; table: string; column: string; reason: string }[]
   /** The CSV formula guard (MED-2), as applied by the writer. */
   csv_formula_guard?: string
 }

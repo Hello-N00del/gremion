@@ -284,6 +284,22 @@ describe('tenant export (TRD-149/150/151)', () => {
     expect(readFileSync(join(dir, 'board/-4dembers.csv'), 'utf8')).toBe('Name\r\nAda\r\n')
   })
 
+  it('MED-3: a module\'s withhold declaration keeps tables and columns out of the files and lists them in the manifest', async () => {
+    const dir = fresh()
+    const fin2 = { id: 'finance', runtimeExport: { kind: 'pg_dump', retentionProfile: 'rp-fin-module-data', withhold: ['public.empty_ledger', 'public.invoices.payload'] }, enabled: true, sql: fin }
+    const { manifest, verify } = await exportTenant({ slug: 'acme', outDir: dir, kernel, modules: [fin2], kernelTables: ['org_units'] })
+    expect(verify.ok).toBe(true)
+    const paths = manifest.files.map((f) => f.path)
+    expect(paths).not.toContain('finance/empty_ledger.csv')
+    expect(readFileSync(join(dir, 'finance/invoices.csv'), 'utf8')).toBe('id,amount\r\n1,12.50\r\n2,99.00\r\n')
+    expect(readFileSync(join(dir, 'finance/invoices.json'), 'utf8')).not.toContain('payload')
+    expect(manifest.excluded_tables).toEqual(expect.arrayContaining([expect.objectContaining({ scope: 'finance', schema: 'public', table: 'empty_ledger', reason: expect.stringContaining('withhold') })]))
+    expect(manifest.excluded_columns).toEqual([expect.objectContaining({ scope: 'finance', schema: 'public', table: 'invoices', column: 'payload', reason: expect.stringContaining('withhold') })])
+    // a declaration that names nothing fails visibly (a renamed secret column must not slip out)
+    const typo = { ...fin2, runtimeExport: { ...fin2.runtimeExport, withhold: ['public.invoices.paylod'] } }
+    await expect(exportTenant({ slug: 'acme', outDir: fresh(), kernel, modules: [typo], kernelTables: ['org_units'] })).rejects.toThrow(/paylod/)
+  })
+
   it('a declared kernel table that does not exist fails the export visibly', async () => {
     await expect(exportTenant({ slug: 'acme', outDir: fresh(), kernel, modules: [], kernelTables: ['org_units', 'no_such_table'] })).rejects.toThrow(/no_such_table/)
   })

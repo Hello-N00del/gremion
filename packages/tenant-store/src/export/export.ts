@@ -19,8 +19,12 @@
 //            every non-system schema of the tenant's module database
 //            (finance.*, content.*, public.*) except the migration ledger;
 //            a module that yields no table fails the export. A table outside
-//            public is written as <scope>/<schema>.<table>.(csv|json). A module
-//            with runtime.export null is listed under excluded, with the
+//            public is written as <scope>/<schema>.<table>.(csv|json).
+//            runtime.export.withhold (schema.table or schema.table.column)
+//            keeps a module's secrets (tokens, ciphertexts, credentials) out
+//            of the files; each is listed under excluded_tables /
+//            excluded_columns, and an entry that names nothing fails the
+//            export. A module with runtime.export null is listed under excluded, with the
 //            reason; so are Nextcloud files and Matrix history, which live
 //            outside Postgres and are not exported by this tool.
 // Every database is read in ONE repeatable-read, read-only transaction, so a
@@ -73,8 +77,8 @@ export const ALWAYS_EXCLUDED_SYSTEMS: readonly { system: string; reason: string 
 
 export interface ExportModule {
   id: string
-  /** module.json runtime.export (null when the module declares none). */
-  runtimeExport: { kind: string; retentionProfile: string } | null
+  /** module.json runtime.export (null when the module declares none); withhold: schema.table[.column] left out (MED-3). */
+  runtimeExport: { kind: string; retentionProfile: string; withhold?: readonly string[] } | null
   /** module.json runtime.platformServer, if any. */
   platformServer?: { postgresService: string; databases: readonly string[] } | null
   /** Whether the module is enabled for this tenant (it has a database for it). */
@@ -178,7 +182,9 @@ function insideOut(outDir: string, scope: string, file: string): string {
   return p
 }
 
-async function exportTable(tx: postgres.TransactionSql, scope: string, schema: string, table: string, outDir: string): Promise<ManifestFile[]> {
+const WITHHELD = 'withheld by the module (module.json runtime.export.withhold): a secret or credential, not exported in open formats'
+
+async function exportTable(tx: postgres.TransactionSql, scope: string, schema: string, table: string, outDir: string, withheldColumns: ReadonlySet<string>, excludedColumns: NonNullable<ExportManifest['excluded_columns']>): Promise<ManifestFile[]> {
   // The table and its columns from pg_catalog (schema-qualified, no search_path).
   const [rel] = await tx<{ oid: number }[]>`
     SELECT c.oid::int AS oid FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
@@ -197,7 +203,10 @@ async function exportTable(tx: postgres.TransactionSql, scope: string, schema: s
   // position, stable inside this repeatable-read snapshot.
   const pk = cols.filter((c) => c.pk !== null).sort((a, b) => a.pk! - b.pk!)
   const orderBy = pk.length > 0 ? pk.map((c) => quoteIdent(c.name)).join(', ') : 'ctid'
-  const header = cols.map((c) => c.name)
+  for (const w of withheldColumns) if (!cols.some((c) => c.name === w)) throw new ExportError(`module ${scope}: runtime.export.withhold names ${schema}.${table}.${w}, which does not exist; fix the declaration (a renamed secret column must not slip into the export)`)
+  for (const c of cols) if (withheldColumns.has(c.name)) excludedColumns.push({ scope, schema, table, column: c.name, reason: WITHHELD })
+  const header = cols.map((c) => c.name).filter((c) => !withheldColumns.has(c))
+  if (header.length === 0) throw new ExportError(`module ${scope}: every column of ${schema}.${table} is withheld; withhold the table instead`)
   const select = `SELECT ${header.map(quoteIdent).join(', ')} FROM ${quoteIdent(schema)}.${quoteIdent(table)} ORDER BY ${orderBy}`
 
   // Validated BEFORE anything touches the disk.
@@ -233,7 +242,25 @@ async function exportTable(tx: postgres.TransactionSql, scope: string, schema: s
   ]
 }
 
-async function exportDatabase(sql: Sql, scope: string, tables: readonly string[] | 'all', outDir: string, excludedTables: ExportManifest['excluded_tables']): Promise<ManifestFile[]> {
+async function exportDatabase(
+  sql: Sql,
+  scope: string,
+  tables: readonly string[] | 'all',
+  outDir: string,
+  excludedTables: ExportManifest['excluded_tables'],
+  excludedColumns: NonNullable<ExportManifest['excluded_columns']>,
+  withhold: readonly string[] = [],
+): Promise<ManifestFile[]> {
+  // MED-3: schema.table (whole table) or schema.table.column.
+  const withheldTables = new Set<string>()
+  const withheldColumns = new Map<string, Set<string>>()
+  for (const w of withhold) {
+    const parts = w.split('.')
+    if (parts.length < 2 || parts.length > 3 || parts.some((p) => !/^[a-z_][a-z0-9_]{0,62}$/.test(p))) throw new ExportError(`module ${scope}: runtime.export.withhold entry ${JSON.stringify(w)} is not schema.table or schema.table.column`)
+    const key = `${parts[0]}.${parts[1]}`
+    if (parts.length === 2) withheldTables.add(key)
+    else withheldColumns.set(key, (withheldColumns.get(key) ?? new Set()).add(parts[2]!))
+  }
   return sql.begin('isolation level repeatable read read only', async (tx) => {
     // HIGH-1: never read a tenant database as a superuser, or as a role that
     // can become one (tenant code can RESET ROLE to the session user).
@@ -265,15 +292,26 @@ async function exportDatabase(sql: Sql, scope: string, tables: readonly string[]
           excludedTables.push({ scope, schema: t.schema, table: t.table, reason: 'migration ledger (schema bookkeeping, not tenant data)' })
           return false
         }
+        if (withheldTables.has(`${t.schema}.${t.table}`)) {
+          excludedTables.push({ scope, schema: t.schema, table: t.table, reason: WITHHELD })
+          return false
+        }
         return true
       })
+      // A declaration that names nothing is a mistake to see, not to skip.
+      const present = new Set(found.map((t) => `${t.schema}.${t.table}`))
+      for (const key of [...withheldTables, ...withheldColumns.keys()]) {
+        if (!present.has(key)) throw new ExportError(`module ${scope}: runtime.export.withhold names ${key}, which does not exist; fix the declaration (a renamed secret must not slip into the export)`)
+      }
+      for (const key of withheldColumns.keys()) if (withheldTables.has(key)) throw new ExportError(`module ${scope}: runtime.export.withhold names both ${key} and a column of it`)
       // A module declared exportable that yields nothing is a failed export, not an empty one.
       if (list.length === 0) throw new ExportError(`module ${scope}: its database has no table in any schema; refusing to record it as exported`)
     } else {
+      if (withhold.length > 0) throw new ExportError(`${scope}: withhold applies to module databases only`)
       list = tables.map((table) => ({ schema: 'public', table }))
     }
     const files: ManifestFile[] = []
-    for (const t of list) files.push(...(await exportTable(tx, scope, t.schema, t.table, outDir)))
+    for (const t of list) files.push(...(await exportTable(tx, scope, t.schema, t.table, outDir, withheldColumns.get(`${t.schema}.${t.table}`) ?? new Set(), excludedColumns)))
     return files
   }) as Promise<ManifestFile[]>
 }
@@ -289,10 +327,11 @@ export async function exportTenant(opts: ExportOptions): Promise<ExportResult> {
 
   const files: ManifestFile[] = []
   const excludedTables: ExportManifest['excluded_tables'] = KERNEL_EXCLUDED_TABLES.map((e) => ({ scope: 'kernel', schema: 'public', ...e }))
+  const excludedColumns: NonNullable<ExportManifest['excluded_columns']> = []
   const modules: ExportManifest['modules'] = []
   const excludedSystems: ExportManifest['excluded_systems'] = ALWAYS_EXCLUDED_SYSTEMS.map((s) => ({ ...s }))
 
-  files.push(...(await exportDatabase(opts.kernel, 'kernel', opts.kernelTables ?? KERNEL_EXPORT_TABLES, opts.outDir, excludedTables)))
+  files.push(...(await exportDatabase(opts.kernel, 'kernel', opts.kernelTables ?? KERNEL_EXPORT_TABLES, opts.outDir, excludedTables, excludedColumns)))
 
   for (const m of [...opts.modules].sort((a, b) => a.id.localeCompare(b.id))) {
     if (m.platformServer) {
@@ -307,7 +346,7 @@ export async function exportTenant(opts: ExportOptions): Promise<ExportResult> {
     } else if (!m.sql) {
       throw new ExportError(`module ${m.id} declares runtime.export and is enabled but no database connection was supplied`)
     } else {
-      files.push(...(await exportDatabase(m.sql, m.id, 'all', opts.outDir, excludedTables)))
+      files.push(...(await exportDatabase(m.sql, m.id, 'all', opts.outDir, excludedTables, excludedColumns, m.runtimeExport.withhold ?? [])))
       modules.push({ id: m.id, status: 'exported' })
     }
   }
@@ -321,6 +360,7 @@ export async function exportTenant(opts: ExportOptions): Promise<ExportResult> {
     modules,
     excluded_systems: excludedSystems,
     excluded_tables: excludedTables,
+    excluded_columns: excludedColumns,
     csv_formula_guard: CSV_FORMULA_GUARD,
   }
   writeFileSync(join(opts.outDir, MANIFEST_FILE), JSON.stringify(manifest, null, 2) + '\n', { mode: 0o600, flag: 'wx' })
