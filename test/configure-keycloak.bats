@@ -353,7 +353,7 @@ two_fa_state() { cat "${KCSTATE}/two-fa.json" "${KCSTATE}/kids.json" | jq -s -c 
     echo "$output" | jq -e '(map(select(.providerId == "auth-otp-form")) | length == 1) and (map(select(.providerId == "auth-otp-form" and .level == 1)) | length == 1)'
 }
 
-@test "sweep2 #6: the realm PUT carries the password policy and refresh-token rotation" {
+@test "sweep2 #6: the realm PUT carries the password policy and NOT refresh-token rotation" {
     kc_tree
     seed_complete_flow
     kc_configure
@@ -361,8 +361,9 @@ two_fa_state() { cat "${KCSTATE}/two-fa.json" "${KCSTATE}/kids.json" | jq -s -c 
     local line
     line="$(grep -E 'PUT /admin/realms/gremion-test \{' "${KCSTATE}/calls.log" | grep browser-stepup | tail -n1)"
     [[ "$line" == *'"passwordPolicy":"length(12) and notUsername and notEmail and passwordHistory(3)"'* ]]
-    [[ "$line" == *'"revokeRefreshToken":true'* ]]
-    [[ "$line" == *'"refreshTokenMaxReuse":0'* ]]
+    # Rotation is deliberately off (docs/auth.md residual): the PUT must not carry it.
+    [[ "$line" != *revokeRefreshToken* ]]
+    [[ "$line" != *refreshTokenMaxReuse* ]]
 }
 
 @test "sweep2 #6: gremion-ui gets PKCE S256 merged into its attributes" {
@@ -391,7 +392,7 @@ two_fa_state() { cat "${KCSTATE}/two-fa.json" "${KCSTATE}/kids.json" | jq -s -c 
     [ "$sh" = "$ts" ]
 }
 
-@test "sweep2: both realm templates carry the OTP-or-deny stepup-2fa, the policy and token rotation" {
+@test "sweep2: both realm templates carry the OTP-or-deny stepup-2fa and the policy, and no token rotation" {
     local f
     for f in realm-export.base.json realm-export.ops.json; do
         python3 -c '
@@ -405,7 +406,7 @@ assert len(subs) == 1 and subs[0]["requirement"] == "REQUIRED" and subs[0]["flow
 kids = sorted(flows["stepup-2fa second factor"]["authenticationExecutions"], key=lambda e: e["priority"])
 assert [(e["authenticator"], e["requirement"]) for e in kids] == [("auth-otp-form", "ALTERNATIVE"), ("deny-access-authenticator", "ALTERNATIVE")]
 assert d["passwordPolicy"] == "length(12) and notUsername and notEmail and passwordHistory(3)"
-assert d["revokeRefreshToken"] is True and d["refreshTokenMaxReuse"] == 0
+assert "revokeRefreshToken" not in d and "refreshTokenMaxReuse" not in d, "refresh-token rotation must stay off (docs/auth.md residual)"
 ' "${PROJECT_ROOT}/docker/keycloak/${f}"
     done
 }

@@ -59,8 +59,6 @@ const GREEN_2FA_EXECS = () => [
 /** Security sweep 2 (finding 6): the realm-level hardening a green realm carries. */
 const GREEN_HARDENING = {
   passwordPolicy: 'length(12) and notUsername and notEmail and passwordHistory(3)',
-  revokeRefreshToken: true,
-  refreshTokenMaxReuse: 0,
 }
 
 /** A GREEN live realm: every §4 contract element present + correct. Built as a
@@ -292,14 +290,15 @@ describe('reconcileRealm — each single drift fails EXACTLY that named check', 
   })
 
   it.each([
+    ['revokeRefreshToken on', { revokeRefreshToken: true, refreshTokenMaxReuse: 0 }],
     ['revokeRefreshToken off', { revokeRefreshToken: false }],
     ['revokeRefreshToken absent', { revokeRefreshToken: undefined }],
     ['refreshTokenMaxReuse 2', { refreshTokenMaxReuse: 2 }],
-  ])('%s -> only refresh-token-rotation fails', async (_w, patch) => {
+  ])('%s -> no check fails: refresh-token rotation is deliberately NOT reconciled (docs/auth.md residual)', async (_w, patch) => {
     const failed = await failedNames((r) => {
       Object.assign(r[`GET /admin/realms/${REALM}`] as object, patch)
     })
-    expect(failed).toEqual(['refresh-token-rotation'])
+    expect(failed).toEqual([])
   })
 
   it.each([
@@ -789,7 +788,7 @@ describe('reconcileRealm — apply replays ONLY the failed checks (§4-2), nothi
     expect(report.applied).toContain('stepup-2fa-otp-gate')
   })
 
-  it('a missing password policy / refresh rotation -> apply issues ONE partial realm PUT with exactly those fields (no step-up replay)', async () => {
+  it('a missing password policy -> apply issues ONE partial realm PUT with exactly that field (no step-up replay, no refresh-token fields)', async () => {
     const routes = greenRoutes()
     Object.assign(routes[`GET /admin/realms/${REALM}`] as object, {
       passwordPolicy: undefined,
@@ -806,12 +805,10 @@ describe('reconcileRealm — apply replays ONLY the failed checks (§4-2), nothi
         body: {
           realm: REALM,
           passwordPolicy: 'length(12) and notUsername and notEmail and passwordHistory(3)',
-          revokeRefreshToken: true,
-          refreshTokenMaxReuse: 0,
         },
       },
     ])
-    expect(report.applied).toEqual(expect.arrayContaining(['password-policy', 'refresh-token-rotation']))
+    expect(report.applied).toEqual(['password-policy'])
   })
 
   it('a gremion-ui without PKCE -> apply PUTs only the attribute (merged) to the client and records it applied', async () => {

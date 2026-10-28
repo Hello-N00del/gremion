@@ -447,9 +447,9 @@ configure_stepup_flow() {
     #    realm's other attributes are preserved. Runs AFTER the flow exists.
     local attrs
     attrs=$(_kc_api GET "" | jq -c '(.attributes // {}) + {"acr.loa.map":"{\"loa1\":1,\"loa2\":2}"}')
-    _kc_api PUT "" "{\"realm\":\"${REALM}\",\"browserFlow\":\"browser-stepup\",\"otpPolicyType\":\"totp\",\"otpPolicyAlgorithm\":\"HmacSHA1\",\"otpPolicyDigits\":6,\"otpPolicyPeriod\":30,\"otpPolicyLookAheadWindow\":1,\"otpPolicyInitialCounter\":0,\"passwordPolicy\":\"${REALM_PASSWORD_POLICY}\",\"revokeRefreshToken\":true,\"refreshTokenMaxReuse\":0,\"attributes\":${attrs}}" >/dev/null \
-        || error "Failed to set realm otpPolicy/acr.loa.map/browserFlow/passwordPolicy/refresh-token rotation"
-    success "  Realm otpPolicy + acr.loa.map + browserFlow=browser-stepup + passwordPolicy + refresh-token rotation set."
+    _kc_api PUT "" "{\"realm\":\"${REALM}\",\"browserFlow\":\"browser-stepup\",\"otpPolicyType\":\"totp\",\"otpPolicyAlgorithm\":\"HmacSHA1\",\"otpPolicyDigits\":6,\"otpPolicyPeriod\":30,\"otpPolicyLookAheadWindow\":1,\"otpPolicyInitialCounter\":0,\"passwordPolicy\":\"${REALM_PASSWORD_POLICY}\",\"attributes\":${attrs}}" >/dev/null \
+        || error "Failed to set realm otpPolicy/acr.loa.map/browserFlow/passwordPolicy"
+    success "  Realm otpPolicy + acr.loa.map + browserFlow=browser-stepup + passwordPolicy set."
 
     # 3. Ensure the gremion-ui client emits the acr claim (access + id token).
     local client_uuid

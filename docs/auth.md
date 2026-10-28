@@ -286,10 +286,21 @@ still enroll through the account console before the legitimate user does, so
 mandatory first-login enrollment for members remains a product decision.
 
 The realm also carries `passwordPolicy` (`length(12) and notUsername and
-notEmail and passwordHistory(3)`), `revokeRefreshToken` with
-`refreshTokenMaxReuse 0`, and PKCE S256 on `gremion-ui` (Auth.js sends
-`checks: ['pkce', 'state']`); reconcile checks `password-policy`,
-`refresh-token-rotation` and `gremion-ui-pkce` repair drift on live realms.
+notEmail and passwordHistory(3)`) and PKCE S256 on `gremion-ui` (Auth.js sends
+`checks: ['pkce', 'state']`); reconcile checks `password-policy` and
+`gremion-ui-pkce` and repairs drift on live realms.
+
+**Residual: refresh-token rotation is NOT enabled.** `revokeRefreshToken` /
+`refreshTokenMaxReuse` stay at the Keycloak defaults in every template and
+reconcile neither checks nor sets them (a test pins this). Rotation with
+`refreshTokenMaxReuse 0` accepts a refresh token exactly once, and gremion-ui
+can present the same one twice: Auth.js rebuilds the session from the original
+cookie on every `auth()` call and two tabs refresh in parallel. `authGuard` now
+memoises `locals.auth()` per request, which removes the in-request double
+refresh; before rotation can ship the refresh also needs to be single-flight
+across concurrent requests (or `refreshTokenMaxReuse 1` as a stopgap), with a
+test that two concurrent refreshes with the same token both end in a good
+session.
 
 The kernel ships the LoA primitive and threads `loa` / `authTime` onto every
 session. The concrete protected actions that *call* `evaluateStepUp` are owned by
