@@ -9,10 +9,10 @@ import { createHash } from 'node:crypto'
 import { spawnSync } from 'node:child_process'
 import postgres from 'postgres'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { ensureExportReader, exportTenant, ExportError, KERNEL_EXPORT_TABLES, retireExportReader, type ExportReaderCredentials } from '../../src/export/index.js'
+import { connectExportReader, ensureExportReader, exportTenant, ExportError, KERNEL_EXPORT_TABLES, retireExportReader, type ExportReaderCredentials } from '../../src/export/index.js'
 import { runVerify } from '../../src/export/cli.js'
 import { verifyExport } from '../../src/export/verify.js'
-import { connect, dbUrl, stack } from '../harness/db.js'
+import { connect, connectAs, dbUrl, stack } from '../harness/db.js'
 
 const SCRATCH = join(fileURLToPath(new URL('../../../../', import.meta.url)), '.scratch', `trd149-${process.pid}`)
 const KERNEL_DB = 'trd149_kernel'
@@ -21,6 +21,12 @@ const MOD_DB = 'trd149_finance'
 const EVIL_DB = 'trd149_evil'
 /** A module database whose migrations created no table (HIGH-2: must fail, not pass as exported). */
 const EMPTY_DB = 'trd149_empty'
+/** A tenant database whose owner set ALTER DATABASE ... SET search_path and planted public.=(oid,oid) (HIGH-1: reader hijack). */
+const PLANT_DB = 'trd149_planted'
+/** Databases with PUBLIC's CONNECT revoked, as the tenant databases are: only an explicit grant lets the reader in. */
+const RUN_DB = 'trd149_run'
+const OTHER_DB = 'trd149_other'
+const SPARE_ROLE = 'trd149_spare_reader'
 const TENANT_OWNER = 'trd149_tenant_owner'
 const MARKER = `/tmp/trd149-pwned-${process.pid}`
 let kernel: ReturnType<typeof connect>
@@ -33,7 +39,7 @@ function asReader(db: string) {
   const u = new URL(dbUrl(db))
   u.username = reader.user
   u.password = encodeURIComponent(reader.password)
-  const s = postgres(u.toString(), { max: 2, onnotice: () => {}, connect_timeout: 5 })
+  const s = connectExportReader(u.toString(), { max: 2 })
   opened.push(s)
   return s as unknown as ReturnType<typeof connect>
 }
@@ -52,13 +58,14 @@ beforeAll(async () => {
   mkdirSync(SCRATCH, { recursive: true })
   const admin = connect('t020_test_admin', { max: 1 })
   try {
-    for (const db of [KERNEL_DB, MOD_DB, EVIL_DB, EMPTY_DB]) {
+    for (const db of [KERNEL_DB, MOD_DB, EVIL_DB, EMPTY_DB, PLANT_DB, RUN_DB, OTHER_DB]) {
       await admin.unsafe(`DROP DATABASE IF EXISTS ${db} WITH (FORCE)`)
       await admin.unsafe(`CREATE DATABASE ${db}`)
     }
+    for (const db of [RUN_DB, OTHER_DB]) await admin.unsafe(`REVOKE CONNECT ON DATABASE ${db} FROM PUBLIC`)
     await admin.unsafe(`DROP ROLE IF EXISTS ${TENANT_OWNER}`)
     await admin.unsafe(`CREATE ROLE ${TENANT_OWNER} NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE`)
-    reader = await ensureExportReader(admin, { databases: [KERNEL_DB, MOD_DB, EVIL_DB, EMPTY_DB] })
+    reader = await ensureExportReader(admin, { databases: [KERNEL_DB, MOD_DB, EVIL_DB, EMPTY_DB, PLANT_DB] })
   } finally {
     await admin.end()
   }
@@ -91,6 +98,55 @@ beforeAll(async () => {
   } finally {
     await evil.end()
   }
+  // HIGH-1 (reader hijack): the owner sets the database's search_path to put public first and
+  // plants public.=(oid,oid), the operator postgres-js's own type-fetch query (b.oid = a.typelem)
+  // resolves. Run as the reader, it would set the reader's password to a value the tenant knows.
+  const plant = connect(PLANT_DB, { max: 1 })
+  try {
+    await plant.unsafe(`
+      GRANT CREATE ON SCHEMA public TO ${TENANT_OWNER};
+      SET ROLE ${TENANT_OWNER};
+      CREATE TABLE notes (id int PRIMARY KEY, body text);
+      INSERT INTO notes VALUES (1, 'a');
+      CREATE TABLE amounts (id int PRIMARY KEY, amount numeric(12,2), big bigint, memo text);
+      INSERT INTO amounts VALUES (1, -12.50, -9007199254740993, '-cmd'), (2, 3.00, 7, 'ok');
+      CREATE FUNCTION public.plant_oid_eq(a oid, b oid) RETURNS boolean LANGUAGE plpgsql AS $f$
+      BEGIN
+        IF current_setting('trd149.done', true) IS NULL THEN
+          PERFORM set_config('trd149.done', '1', false);
+          EXECUTE format('ALTER ROLE %I PASSWORD %L', current_user, 'known-to-the-tenant');
+        END IF;
+        RETURN pg_catalog.oideq(a, b);
+      END
+      $f$;
+      CREATE OPERATOR public.= (LEFTARG = oid, RIGHTARG = oid, FUNCTION = public.plant_oid_eq);
+      -- the role-name comparisons of the export's own pre-checks
+      CREATE FUNCTION public.plant_name_eq(a name, b name) RETURNS boolean LANGUAGE plpgsql AS $f$
+      BEGIN
+        IF current_setting('trd149.done', true) IS NULL THEN
+          PERFORM set_config('trd149.done', '1', false);
+          EXECUTE format('ALTER ROLE %I PASSWORD %L', current_user, 'known-to-the-tenant');
+        END IF;
+        RETURN pg_catalog.nameeq(a, b);
+      END
+      $f$;
+      CREATE OPERATOR public.= (LEFTARG = name, RIGHTARG = name, FUNCTION = public.plant_name_eq);
+      CREATE FUNCTION public.plant_name_text_eq(a name, b text) RETURNS boolean LANGUAGE plpgsql AS $f$
+      BEGIN
+        IF current_setting('trd149.done', true) IS NULL THEN
+          PERFORM set_config('trd149.done', '1', false);
+          EXECUTE format('ALTER ROLE %I PASSWORD %L', current_user, 'known-to-the-tenant');
+        END IF;
+        RETURN pg_catalog.nameeqtext(a, b);
+      END
+      $f$;
+      CREATE OPERATOR public.= (LEFTARG = name, RIGHTARG = text, FUNCTION = public.plant_name_text_eq);
+      RESET ROLE;
+    `)
+    await plant.unsafe(`ALTER DATABASE ${PLANT_DB} SET search_path = public, pg_catalog`)
+  } finally {
+    await plant.end()
+  }
   const seedKernel = connect(KERNEL_DB, { max: 1 })
   const seedFin = connect(MOD_DB, { max: 1 })
   await seedKernel.unsafe(`
@@ -99,6 +155,12 @@ beforeAll(async () => {
     CREATE TABLE protocols (id int PRIMARY KEY, title text);
     CREATE TABLE protocol_resolutions (id int PRIMARY KEY, protocol_id int, text text);
     CREATE TABLE config_store (k text PRIMARY KEY, v text);
+    -- MED: tenant data in the kernel database that is in neither the export list nor the excluded list.
+    CREATE TABLE calendar_events (id int PRIMARY KEY, title text);
+    INSERT INTO calendar_events VALUES (1, 'Sitzung');
+    CREATE TABLE schema_migrations (filename text PRIMARY KEY);
+    CREATE SCHEMA extra;
+    CREATE TABLE extra.board (id int PRIMARY KEY);
     INSERT INTO org_units VALUES (1, 'Vorstand', 'comma, "quote"' ), (2, 'Kasse', E'multi\nline'), (3, 'Leer', NULL);
     INSERT INTO role_assignments VALUES (1, 1, 'ada', '2026-01-02T03:04:05Z', '{"a":[1,2]}');
     INSERT INTO protocols VALUES (1, 'Sitzung 1');
@@ -127,6 +189,9 @@ afterAll(async () => {
   const admin = connect('t020_test_admin', { max: 1 })
   try {
     await retireExportReader(admin)
+    await retireExportReader(admin, SPARE_ROLE)
+    await admin.unsafe(`DROP OWNED BY ${SPARE_ROLE}`).catch(() => undefined)
+    await admin.unsafe(`DROP ROLE IF EXISTS ${SPARE_ROLE}`)
   } finally {
     await admin.end()
   }
@@ -159,6 +224,92 @@ describe('tenant export (TRD-149/150/151)', () => {
     expect(verify.ok).toBe(true)
     expect(markerPresent()).toBe(false)
     expect(readFileSync(join(dir, 'kernel/notes.csv'), 'utf8')).toBe('id,body,m\r\n1,a,calm\r\n2,b,loud\r\n')
+  })
+
+  it('HIGH-1: a tenant that plants public.=(oid,oid) and ALTER DATABASE SET search_path never runs code as the reader (the reader pool pins search_path and fetches no types)', async () => {
+    const admin = connect('t020_test_admin', { max: 1 })
+    const verifier = async () => (await admin<{ v: string | null }[]>`SELECT rolpassword AS v FROM pg_authid WHERE rolname = ${reader.user}`)[0]!.v
+    try {
+      const before = await verifier()
+      expect(before).toMatch(/^SCRAM-SHA-256[$]/)
+      const dir = fresh()
+      const { verify } = await exportTenant({ slug: 'acme', outDir: dir, kernel: asReader(PLANT_DB), modules: [], kernelTables: ['notes'] })
+      expect(verify.ok).toBe(true)
+      expect(readFileSync(join(dir, 'kernel/notes.csv'), 'utf8')).toBe('id,body\r\n1,a\r\n')
+      // Post-condition: the planted function did not run (it would have replaced the verifier) and left no role setting.
+      expect(await verifier()).toBe(before)
+      const [cfg] = await admin<{ c: string[] | null }[]>`SELECT rolconfig AS c FROM pg_roles WHERE rolname = ${reader.user}`
+      expect(cfg!.c).toBeNull()
+    } finally {
+      await admin.end()
+    }
+  })
+
+  it('LOW: negative numeric and int8 values keep their sign unprefixed in the CSV; negative-looking text is still guarded; JSON unchanged', async () => {
+    const dir = fresh()
+    const { verify } = await exportTenant({ slug: 'acme', outDir: dir, kernel: asReader(PLANT_DB), modules: [], kernelTables: ['amounts'] })
+    expect(verify.ok).toBe(true)
+    expect(readFileSync(join(dir, 'kernel/amounts.csv'), 'utf8')).toBe("id,amount,big,memo\r\n1,-12.50,-9007199254740993,'-cmd\r\n2,3.00,7,ok\r\n")
+    expect(JSON.parse(readFileSync(join(dir, 'kernel/amounts.json'), 'utf8'))[0]).toEqual({ id: 1, amount: '-12.50', big: '-9007199254740993', memo: '-cmd' })
+  })
+
+  it('HIGH-1: even a caller that forgot to pin search_path (fetch_types off) cannot be hijacked: the export sets it before its first query', async () => {
+    const admin = connect('t020_test_admin', { max: 1 })
+    const verifier = async () => (await admin<{ v: string | null }[]>`SELECT rolpassword AS v FROM pg_authid WHERE rolname = ${reader.user}`)[0]!.v
+    const u = new URL(dbUrl(PLANT_DB))
+    u.username = reader.user
+    u.password = encodeURIComponent(reader.password)
+    const unpinned = postgres(u.toString(), { max: 1, onnotice: () => {}, connect_timeout: 5, fetch_types: false, connection: { search_path: 'public, pg_catalog' } })
+    opened.push(unpinned)
+    try {
+      const before = await verifier()
+      const { verify } = await exportTenant({ slug: 'acme', outDir: fresh(), kernel: unpinned as unknown as ReturnType<typeof connect>, modules: [], kernelTables: ['notes'] })
+      expect(verify.ok).toBe(true)
+      expect(await verifier()).toBe(before)
+    } finally {
+      await admin.end()
+    }
+  })
+
+  it('HIGH-1: ensure revokes CONNECT it granted before and resets role settings; retire revokes CONNECT, resets settings and ends the reader sessions', async () => {
+    const admin = connect('t020_test_admin', { max: 1 })
+    const can = async (db: string) => (await admin<{ ok: boolean }[]>`SELECT has_database_privilege(${SPARE_ROLE}, ${db}, 'CONNECT') AS ok`)[0]!.ok
+    const cfg = async () => (await admin<{ c: string[] | null }[]>`SELECT rolconfig AS c FROM pg_roles WHERE rolname = ${SPARE_ROLE}`)[0]!.c
+    try {
+      // A previous run left CONNECT on OTHER_DB and a role setting behind.
+      await ensureExportReader(admin, { databases: [OTHER_DB], role: SPARE_ROLE })
+      expect(await can(OTHER_DB)).toBe(true)
+      await admin.unsafe(`ALTER ROLE ${SPARE_ROLE} SET search_path = public`)
+      await admin.unsafe(`ALTER ROLE ${SPARE_ROLE} IN DATABASE ${OTHER_DB} SET search_path = public`)
+      // This run covers RUN_DB only: OTHER_DB is no longer reachable, the settings are gone.
+      const creds = await ensureExportReader(admin, { databases: [RUN_DB], role: SPARE_ROLE })
+      expect(await can(OTHER_DB)).toBe(false)
+      expect(await can(RUN_DB)).toBe(true)
+      expect(await cfg()).toBeNull()
+      expect(await admin`SELECT 1 FROM pg_db_role_setting s JOIN pg_roles r ON r.oid = s.setrole WHERE r.rolname = ${SPARE_ROLE}`).toHaveLength(0)
+      // A live session of the reader, with a setting the tenant (as the reader) made.
+      const live = connectAs(RUN_DB, creds.user, creds.password)
+      try {
+        await live.unsafe(`ALTER ROLE ${SPARE_ROLE} SET search_path = public`)
+        expect(await live`SELECT 1 AS one`).toHaveLength(1)
+        await retireExportReader(admin, SPARE_ROLE)
+        expect(await can(RUN_DB)).toBe(false)
+        expect(await can(OTHER_DB)).toBe(false)
+        expect(await cfg()).toBeNull()
+        let left = 1
+        for (let i = 0; i < 40 && left > 0; i++) {
+          left = (await admin<{ n: number }[]>`SELECT count(*)::int AS n FROM pg_stat_activity WHERE usename = ${SPARE_ROLE}`)[0]!.n
+          if (left > 0) await new Promise((r) => setTimeout(r, 100))
+        }
+        expect(left).toBe(0)
+      } finally {
+        await live.end({ timeout: 1 }).catch(() => undefined)
+      }
+      const [pw] = await admin<{ v: string | null }[]>`SELECT rolpassword AS v FROM pg_authid WHERE rolname = ${SPARE_ROLE}`
+      expect(pw!.v).toBeNull()
+    } finally {
+      await admin.end()
+    }
   })
 
   it('HIGH-1: the export reader is LOGIN NOSUPERUSER and cannot become a superuser', async () => {
@@ -224,6 +375,23 @@ describe('tenant export (TRD-149/150/151)', () => {
       ]),
     )
     expect(JSON.stringify(manifest)).not.toContain('hunter2')
+  })
+
+  it('MED: every kernel table that is not exported is named in excluded_tables with a reason (none is dropped silently)', async () => {
+    const dir = fresh()
+    const { manifest, verify } = await run(dir)
+    expect(verify.ok).toBe(true)
+    const kernelExcluded = manifest.excluded_tables.filter((e) => e.scope === 'kernel')
+    const key = (e: { schema?: string; table: string }) => `${e.schema}.${e.table}`
+    // the seeded kernel tables are 4 exported + config_store + calendar_events + extra.board + the migration ledger
+    expect(kernelExcluded.map(key).sort()).toEqual(['extra.board', 'public.calendar_events', 'public.config_store', 'public.schema_migrations'])
+    for (const e of kernelExcluded) expect(e.reason.length).toBeGreaterThan(10)
+    expect(kernelExcluded.find((e) => e.table === 'calendar_events')!.reason).toMatch(/not exported|not in the/)
+    // no table is both exported and excluded
+    const exported = new Set(manifest.files.filter((f) => f.scope === 'kernel').map((f) => `${f.schema ?? 'public'}.${f.table}`))
+    for (const e of kernelExcluded) expect(exported.has(key(e))).toBe(false)
+    // and the data of an excluded table is not in the files
+    expect(manifest.files.some((f) => f.table === 'calendar_events')).toBe(false)
   })
 
   it('the check fails, naming the file, when a written file is deleted before it', async () => {

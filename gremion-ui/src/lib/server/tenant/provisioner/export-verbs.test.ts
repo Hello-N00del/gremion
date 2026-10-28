@@ -1,11 +1,11 @@
 // TRD-149/150/151: the export verbs' argument handling and the completeness
 // check's exit code. The database half is packages/tenant-store/test/integration/export.test.ts.
 import { createHash } from 'node:crypto'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { EXPORT_VERBS, exportVerb, type ExportVerbContext } from '../../../../../scripts/tenant-provision-export'
+import { EXPORT_VERBS, exportVerb, retireReaders, type ExportVerbContext } from '../../../../../scripts/tenant-provision-export'
 
 const dirs: string[] = []
 afterEach(() => {
@@ -48,6 +48,51 @@ function exportDir(): string {
 describe('export verbs', () => {
   it('are the two dispatcher verbs', () => {
     expect([...EXPORT_VERBS].sort()).toEqual(['export', 'export-verify'])
+  })
+
+  it('HIGH-1: every connection AS the export reader goes through connectExportReader (search_path pinned, no type fetch); the admin helper is never used for a reader', () => {
+    const src = readFileSync(join(process.cwd(), 'scripts', 'tenant-provision-export.ts'), 'utf8')
+    expect(src).toContain('p.assign(connectReader(')
+    expect(src).toContain('connectExportReader(url)')
+    expect(src).not.toContain('p.assign(connect(')
+  })
+
+  it('MED: a module database still enabling or disabling fails the export naming the module, before any reader is opened', async () => {
+    for (const state of ['enabling', 'disabling']) {
+      const base = ctx(['acme'], { '--out': '/x' })
+      const rows = [{ module_key: 'finance', state }]
+      const c: ExportVerbContext = {
+        ...base,
+        customerIdForSlug: async () => '11111111-1111-1111-1111-111111111111',
+        openPlatform: () => Object.assign(async () => rows, { end: async () => undefined }) as never,
+        catalogue: () =>
+          [{ id: 'finance', moduleJson: { runtime: { export: { kind: 'pg_dump', retentionProfile: 'rp-fin-module-data' }, database: { postgresService: 'finance-postgres' } } } }] as never,
+        kernelUrl: () => {
+          throw new Error('a connection was attempted')
+        },
+        moduleUrl: () => {
+          throw new Error('a connection was attempted')
+        },
+      }
+      await expect(exportVerb('export', c)).rejects.toThrow(new RegExp(`finance.*${state}`))
+    }
+  })
+
+  it('LOW: a reader that could not be retired makes the verb fail (exit 1), the others are still retired', async () => {
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const seen: unknown[] = []
+    const a = { id: 'a' }
+    const b = { id: 'b' }
+    await retireReaders([a, b] as never, async (admin: unknown) => {
+      seen.push(admin)
+      if (admin === a) throw new Error('connection refused')
+    })
+    expect(seen).toEqual([a, b])
+    expect(process.exitCode).toBe(1)
+    expect(err.mock.calls.flat().join(' ')).toMatch(/not retired.*connection refused/)
+    process.exitCode = undefined
+    await retireReaders([b] as never, async () => undefined)
+    expect(process.exitCode).toBeUndefined()
   })
 
   it('export refuses a missing or malformed slug and a missing --out, before any connection', async () => {

@@ -22,7 +22,7 @@
 // pg_read_all_data and a fresh password, ensureExportReader). Every tenant
 // database is then read AS that reader, never as the superuser, and its
 // password is cleared again when the run ends.
-import { ensureExportReader, exportTenant, retireExportReader, verifyExport, type ExportModule } from '@gremion/tenant-store/export'
+import { assertNoTransitionalModules, connectExportReader, ensureExportReader, exportTenant, retireExportReader, verifyExport, type ExportModule } from '@gremion/tenant-store/export'
 import { kernelDbName } from '@gremion/tenant-store/lifecycle'
 import { tenantModuleDbName } from '@gremion/tenant-store'
 import type { LifecycleModule } from '@gremion/tenant-store/lifecycle'
@@ -54,6 +54,20 @@ function withDb(url: string, db: string): string {
   return u.toString()
 }
 
+/**
+ * Retires every reader, each on its own server. A reader that could not be
+ * retired may still log in, so the verb fails (exit 1) and the host does not
+ * print "complete and verified"; the other servers' readers are still retired.
+ */
+export async function retireReaders(admins: Iterable<ExportModule['sql'] & object>, retire: (admin: ExportModule['sql'] & object) => Promise<void> = retireExportReader): Promise<void> {
+  for (const admin of admins) {
+    await retire(admin).catch((err: unknown) => {
+      console.error(`export reader not retired (it may still be able to log in): ${(err as Error).message}`)
+      process.exitCode = 1
+    })
+  }
+}
+
 export async function exportVerb(verb: string, ctx: ExportVerbContext): Promise<void> {
   if (verb === 'export-verify') {
     const dir = ctx.positional(0)
@@ -77,8 +91,15 @@ export async function exportVerb(verb: string, ctx: ExportVerbContext): Promise<
   const platform = ctx.openPlatform()
   const open: postgres.Sql[] = []
   const admins = new Map<string, postgres.Sql>()
+  // The admin url, on the server's maintenance database only.
   const connect = (url: string) => {
     const s = postgres(url, { max: 1, onnotice: () => {}, connect_timeout: 15 }) as postgres.Sql
+    open.push(s)
+    return s
+  }
+  // Every connection AS the reader: search_path pinned at startup, no type fetch (HIGH-1).
+  const connectReader = (url: string) => {
+    const s = connectExportReader(url) as unknown as postgres.Sql
     open.push(s)
     return s
   }
@@ -98,27 +119,31 @@ export async function exportVerb(verb: string, ctx: ExportVerbContext): Promise<
       const u = new URL(withDb(p.adminUrl, p.db))
       u.username = c.user
       u.password = encodeURIComponent(c.password)
-      p.assign(connect(u.toString()) as ExportModule['sql'] & object)
+      p.assign(connectReader(u.toString()) as ExportModule['sql'] & object)
     }
   }
   try {
-    const enabled = new Set(
+    // Every module database row but the dropped ones: 'enabling' / 'disabling' may still hold rows (MED).
+    const states = new Map(
       (
-        await platform<{ module_key: string }[]>`
-          SELECT m.module_key FROM plt.module_database d JOIN plt.module m USING (module_id)
-           WHERE d.customer_id = ${tenantId} AND d.state = 'enabled'`
-      ).map((r) => r.module_key),
+        await platform<{ module_key: string; state: string }[]>`
+          SELECT m.module_key, d.state FROM plt.module_database d JOIN plt.module m USING (module_id)
+           WHERE d.customer_id = ${tenantId} AND d.state <> 'dropped'`
+      ).map((r) => [r.module_key, r.state] as const),
     )
     const modules: ExportModule[] = ctx.catalogue().map((m) => {
       const rt = m.moduleJson.runtime
-      const isEnabled = enabled.has(m.id)
+      const state = states.get(m.id)
+      const isEnabled = state === 'enabled'
       const base: ExportModule = { id: m.id, runtimeExport: rt.export ?? null, platformServer: rt.platformServer ?? null, enabled: isEnabled }
+      if (state === 'enabling' || state === 'disabling') base.transitional = state
       if (rt.export && isEnabled && rt.database) {
         const svc = rt.database.postgresService.replace(/-postgres$/, '')
         plan.push({ adminUrl: ctx.moduleUrl(svc), db: tenantModuleDbName(tenantId, m.id), assign: (s) => (base.sql = s) })
       }
       return base
     })
+    assertNoTransitionalModules(modules)
     let kernel: (ExportModule['sql'] & object) | undefined
     plan.push({ adminUrl: ctx.kernelUrl(), db: kernelDbName(tenantId), assign: (s) => (kernel = s) })
     await openReaders()
@@ -134,9 +159,7 @@ export async function exportVerb(verb: string, ctx: ExportVerbContext): Promise<
       process.exitCode = 1
     }
   } finally {
-    for (const admin of admins.values()) {
-      await retireExportReader(admin as ExportModule['sql'] & object).catch((err: unknown) => console.error(`export reader password not cleared: ${(err as Error).message}`))
-    }
+    await retireReaders([...admins.values()] as (ExportModule['sql'] & object)[])
     await Promise.all([platform, ...open].map((s) => s.end({ timeout: 5 }).catch(() => undefined)))
   }
 }
