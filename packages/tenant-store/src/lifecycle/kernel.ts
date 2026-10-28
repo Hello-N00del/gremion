@@ -12,7 +12,13 @@
 //                     and of nothing else (retention jobs). The purge run
 //                     (purge.ts) gives it LOGIN and a one-run password that
 //                     expires with the run, and LOGS IN as it: no superuser
-//                     session ever executes a statement that fires tenant code.
+//                     session runs the purge's DELETEs. Where the admin itself
+//                     works inside a customer database (here, and
+//                     ensureKernelPurgeGrants), every statement runs with
+//                     search_path pinned to pg_catalog (asAdminIn, on top of the
+//                     startup parameter the ModuleServer should send) and names
+//                     pg_catalog objects qualified: the owner may ALTER DATABASE
+//                     SET search_path and plant a public.format or pg_roles.
 //                     CONNECT + USAGE on public here; SELECT, DELETE on exactly
 //                     the purge tables after the kernel chain (ensureKernelPurgeGrants).
 // Then: PUBLIC loses CONNECT and TEMPORARY, the app gains CONNECT; timezone
@@ -124,11 +130,25 @@ export async function ensureKernelRoles(admin: Sql, tenantId: string, appPasswor
 
 const GET_AUTH = `
   CREATE SCHEMA IF NOT EXISTS pgbouncer;
-  CREATE OR REPLACE FUNCTION pgbouncer.get_auth(uname text)
-    RETURNS TABLE (usename name, passwd text)
+  CREATE OR REPLACE FUNCTION pgbouncer.get_auth(uname pg_catalog.text)
+    RETURNS TABLE (usename pg_catalog.name, passwd pg_catalog.text)
     LANGUAGE sql SECURITY DEFINER SET search_path = pg_catalog
     AS $func$ SELECT usename, passwd FROM pg_catalog.pg_shadow WHERE usename = uname AND NOT usesuper $func$;
-  REVOKE ALL ON FUNCTION pgbouncer.get_auth(text) FROM PUBLIC;`
+  REVOKE ALL ON FUNCTION pgbouncer.get_auth(pg_catalog.text) FROM PUBLIC;`
+
+/**
+ * The admin's statements inside a CUSTOMER database: one transaction whose
+ * first statement pins search_path to pg_catalog, so no name the admin uses
+ * resolves to an object the customer's owner planted (ALTER DATABASE SET
+ * search_path = public, pg_catalog + a public.format, pg_roles or operator).
+ * The pin holds even when the ModuleServer did not send the startup parameter.
+ */
+export async function asAdminIn<T>(db: Sql, fn: (tx: Sql) => Promise<T>): Promise<T> {
+  return (await db.begin(async (tx) => {
+    await tx.unsafe('SET LOCAL search_path = pg_catalog')
+    return fn(tx as unknown as Sql)
+  })) as T
+}
 
 /**
  * Creates (or re-asserts) the customer's kernel database and roles on the
@@ -163,22 +183,24 @@ export async function ensureKernelDatabase(server: ModuleServer, tenantId: strin
   const db = await server.open(dbName)
   let pgbouncerGrant: EnsureKernelResult['pgbouncerGrant'] = 'skipped-no-role'
   try {
-    const [who] = await db<{ db: string }[]>`SELECT current_database() AS db`
-    if (who?.db !== dbName) throw new LifecycleError('TARGET_REFUSED', `the admin pool is connected to ${JSON.stringify(who?.db)}, not ${dbName}`)
-    await db.unsafe('REVOKE CREATE ON SCHEMA public FROM PUBLIC')
-    await execFormatted(db, 'GRANT USAGE ON SCHEMA public TO %I', [roles.purger])
-    await db.unsafe(GET_AUTH)
-    const [auth] = await db<{ present: boolean }[]>`SELECT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'pgbouncer_auth') AS present`
-    if (auth?.present) {
-      // TASK-043b F4: PgBouncer runs auth_query AS pgbouncer_auth IN the
-      // requested database, and lockDownDatabase took CONNECT from PUBLIC: without
-      // this grant every pooled login failed "permission denied for database".
-      // Exactly CONNECT (never TEMPORARY); a GRANT that is held is a no-op.
-      await execFormatted(server.admin, 'GRANT CONNECT ON DATABASE %I TO pgbouncer_auth', [dbName])
-      await db.unsafe('GRANT USAGE ON SCHEMA pgbouncer TO pgbouncer_auth')
-      await db.unsafe('GRANT EXECUTE ON FUNCTION pgbouncer.get_auth(text) TO pgbouncer_auth')
-      pgbouncerGrant = 'applied'
-    }
+    await asAdminIn(db, async (tx) => {
+      const [who] = await tx<{ db: string }[]>`SELECT pg_catalog.current_database() AS db`
+      if (who?.db !== dbName) throw new LifecycleError('TARGET_REFUSED', `the admin pool is connected to ${JSON.stringify(who?.db)}, not ${dbName}`)
+      await tx.unsafe('REVOKE CREATE ON SCHEMA public FROM PUBLIC')
+      await execFormatted(tx, 'GRANT USAGE ON SCHEMA public TO %I', [roles.purger])
+      await tx.unsafe(GET_AUTH)
+      const [auth] = await tx<{ present: boolean }[]>`SELECT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname OPERATOR(pg_catalog.=) 'pgbouncer_auth') AS present`
+      if (auth?.present) {
+        // TASK-043b F4: PgBouncer runs auth_query AS pgbouncer_auth IN the
+        // requested database, and lockDownDatabase took CONNECT from PUBLIC: without
+        // this grant every pooled login failed "permission denied for database".
+        // Exactly CONNECT (never TEMPORARY); a GRANT that is held is a no-op.
+        await execFormatted(server.admin, 'GRANT CONNECT ON DATABASE %I TO pgbouncer_auth', [dbName])
+        await tx.unsafe('GRANT USAGE ON SCHEMA pgbouncer TO pgbouncer_auth')
+        await tx.unsafe('GRANT EXECUTE ON FUNCTION pgbouncer.get_auth(pg_catalog.text) TO pgbouncer_auth')
+        pgbouncerGrant = 'applied'
+      }
+    })
   } finally {
     await db.end({ timeout: 5 })
   }

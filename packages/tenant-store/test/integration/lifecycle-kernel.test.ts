@@ -19,7 +19,8 @@ function kernelServer(): ModuleServer & { close(): Promise<void> } {
   return {
     admin,
     open(database) {
-      const sql = connect(database, { max: 2 })
+      // as customer-adapters.ts kernelServer: search_path=pg_catalog as a startup parameter
+      const sql = connect(database, { max: 2, connection: { search_path: 'pg_catalog' } })
       pools.push(sql)
       return sql
     },

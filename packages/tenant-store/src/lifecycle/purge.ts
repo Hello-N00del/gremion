@@ -29,7 +29,11 @@
 // random password VALID UNTIL the run's deadline + 60 s, the run logs in with
 // it, and the `finally` puts the role back to NOLOGIN PASSWORD NULL (a crashed
 // run leaves a verifier that has already expired). The admin only ever runs
-// role DDL and catalogue reads; a GRANT or ALTER ROLE fires no tenant code.
+// role DDL, GRANTs and catalogue reads; inside a customer database
+// (ensureKernelPurgeGrants) it does so with search_path pinned to pg_catalog
+// (kernel.ts asAdminIn) and every function qualified, because the owner may
+// ALTER DATABASE SET search_path and plant a public.format that the superuser
+// would otherwise call.
 //   The purger holds CONNECT and USAGE on public from ensureKernelDatabase and
 // SELECT + DELETE on exactly the mapped tables from ensureKernelPurgeGrants
 // (the tenant init path, after the kernel chain created them): a table with no
@@ -66,7 +70,7 @@ import { randomBytes } from 'node:crypto'
 import type { Sql } from '@gremion/db'
 import { ADVISORY_LOCKS } from '../advisory-locks.js'
 import { execFormatted, sqlState } from './ddl.js'
-import { kernelDbName, kernelRoles } from './kernel.js'
+import { asAdminIn, kernelDbName, kernelRoles } from './kernel.js'
 import { scramSha256Verifier } from './scram.js'
 import type { ModuleServer } from './types.js'
 
@@ -335,7 +339,8 @@ async function deleteAged(
  * The SELECT + DELETE grants of the purger on exactly the kernel-scope purge
  * tables (idempotent). The tenant init path calls it after the kernel chain
  * created them; a table the chain has not created yet is returned in `absent`.
- * Executed by the admin: a GRANT fires no tenant code.
+ * Executed by the admin with search_path pinned (asAdminIn): a GRANT fires no
+ * tenant code, and no name here resolves to an object the owner planted.
  */
 export async function ensureKernelPurgeGrants(server: ModuleServer, tenantId: string): Promise<{ granted: string[]; absent: string[] }> {
   const { purger } = kernelRoles(tenantId)
@@ -344,19 +349,21 @@ export async function ensureKernelPurgeGrants(server: ModuleServer, tenantId: st
   const granted: string[] = []
   const absent: string[] = []
   try {
-    const [who] = await db<{ db: string }[]>`SELECT pg_catalog.current_database() AS db`
-    if (who?.db !== dbName) throw new Error(`the admin pool is connected to ${JSON.stringify(who?.db)}, not ${dbName}`)
-    await execFormatted(db, 'GRANT USAGE ON SCHEMA public TO %I', [purger])
-    for (const rule of PURGE_RULES.filter((r) => r.scope === 'kernel')) {
-      if (!PLAIN_TABLE.test(rule.table)) throw new RangeError(`table ${JSON.stringify(rule.table)} is not a plain identifier`)
-      const [present] = await db<{ ok: boolean }[]>`SELECT pg_catalog.to_regclass(${`public.${rule.table}`}) IS NOT NULL AS ok`
-      if (!present?.ok) {
-        absent.push(rule.table)
-        continue
+    await asAdminIn(db, async (tx) => {
+      const [who] = await tx<{ db: string }[]>`SELECT pg_catalog.current_database() AS db`
+      if (who?.db !== dbName) throw new Error(`the admin pool is connected to ${JSON.stringify(who?.db)}, not ${dbName}`)
+      await execFormatted(tx, 'GRANT USAGE ON SCHEMA public TO %I', [purger])
+      for (const rule of PURGE_RULES.filter((r) => r.scope === 'kernel')) {
+        if (!PLAIN_TABLE.test(rule.table)) throw new RangeError(`table ${JSON.stringify(rule.table)} is not a plain identifier`)
+        const [present] = await tx<{ ok: boolean }[]>`SELECT pg_catalog.to_regclass(${`public.${rule.table}`}::pg_catalog.text) IS NOT NULL AS ok`
+        if (!present?.ok) {
+          absent.push(rule.table)
+          continue
+        }
+        await execFormatted(tx, `GRANT SELECT, DELETE ON TABLE public.${rule.table} TO %I`, [purger])
+        granted.push(rule.table)
       }
-      await execFormatted(db, `GRANT SELECT, DELETE ON TABLE public.${rule.table} TO %I`, [purger])
-      granted.push(rule.table)
-    }
+    })
   } finally {
     await db.end({ timeout: 5 })
   }

@@ -17,7 +17,13 @@ import type { PurgeDeps, PurgeServer } from '../../src/lifecycle/index.js'
 import { connect, connectAs } from '../harness/db.js'
 import { platformDb, uuidv7 } from '../harness/lifecycle.js'
 
-function kernelServer(): PurgeServer & { close(): Promise<void>; logins: string[] } {
+/**
+ * The kernel server as customer-adapters.ts kernelServer builds it: every admin
+ * open of a customer database sends search_path=pg_catalog as a startup
+ * parameter (it overrides the owner's ALTER DATABASE SET). `bare` is a
+ * ModuleServer that forgets it: the lifecycle's own pinning must hold alone.
+ */
+function kernelServer(opts: { bare?: boolean } = {}): PurgeServer & { close(): Promise<void>; logins: string[] } {
   const admin = connect('t020_test_admin', { max: 2 })
   const pools: Sql[] = []
   const logins: string[] = []
@@ -25,7 +31,7 @@ function kernelServer(): PurgeServer & { close(): Promise<void>; logins: string[
     admin,
     logins,
     open(database) {
-      const sql = connect(database, { max: 2 })
+      const sql = connect(database, { max: 2, ...(opts.bare ? {} : { connection: { search_path: 'pg_catalog' } }) })
       pools.push(sql)
       return sql
     },
@@ -52,7 +58,13 @@ describe('runPurge (TRD-144/145)', () => {
   const U = uuidv7() // a second customer: aged too, purged by ITS purger role
   const pw = randomBytes(24).toString('base64url')
   const run = (extra: Partial<PurgeDeps> = {}) => runPurge({ platform, server, now: () => NOW, ...extra })
-  const db = (t: string) => server.open(kernelDbName(t)) as Sql
+  // the test's own pools (the default search_path: the seeds name tables unqualified)
+  const seedPools: Sql[] = []
+  const db = (t: string) => {
+    const sql = connect(kernelDbName(t), { max: 2 })
+    seedPools.push(sql)
+    return sql
+  }
   const count = async (t: string, sql: string) => (await db(t).unsafe(sql))[0]!.n as number
 
   async function seed(tenant: string) {
@@ -103,6 +115,7 @@ describe('runPurge (TRD-144/145)', () => {
     await dropKernelDatabase(server, T).catch((e: unknown) => console.error('[purge] teardown', e))
     await dropKernelDatabase(server, U).catch((e: unknown) => console.error('[purge] teardown', e))
     await platform.end()
+    await Promise.all(seedPools.map((s) => s.end({ timeout: 5 }).catch(() => {})))
     await server.close()
   })
 
@@ -219,6 +232,39 @@ describe('runPurge (TRD-144/145)', () => {
       expect(await count(W, `SELECT count(*)::int AS n FROM scheduled_notifications`)).toBe(2)
     } finally {
       await dropKernelDatabase(server, W)
+    }
+  })
+
+  it('CRIT: a tenant ALTER DATABASE SET search_path + planted public.format / current_database / pg_roles cannot escalate through ensureKernelDatabase or ensureKernelPurgeGrants', async () => {
+    const Z = uuidv7()
+    const bare = kernelServer({ bare: true })
+    await ensureKernelDatabase(server, Z, pw)
+    try {
+      await seed(Z)
+      const { owner, app } = kernelRoles(Z)
+      const esc = `EXECUTE pg_catalog.format('ALTER ROLE %I SUPERUSER', '${app}')`
+      // what the tenant (the app role, a member of the owner) can do in its own database
+      await db(Z).begin(async (tx) => {
+        await tx.unsafe(`SET LOCAL ROLE ${owner}`)
+        await tx.unsafe(`
+          CREATE FUNCTION public.format(t text, a text) RETURNS text LANGUAGE plpgsql AS $$ BEGIN ${esc}; RETURN pg_catalog.format(t, a); END $$;
+          CREATE FUNCTION public.format(t text, a text, b text) RETURNS text LANGUAGE plpgsql AS $$ BEGIN ${esc}; RETURN pg_catalog.format(t, a, b); END $$;
+          CREATE FUNCTION public.current_database() RETURNS name LANGUAGE plpgsql AS $$ BEGIN ${esc}; RETURN pg_catalog.current_database(); END $$;
+          CREATE FUNCTION public.esc_roles() RETURNS SETOF pg_catalog.pg_roles LANGUAGE plpgsql AS $$ BEGIN ${esc}; RETURN QUERY SELECT * FROM pg_catalog.pg_roles; END $$;
+          CREATE VIEW public.pg_roles AS SELECT * FROM public.esc_roles();
+          ALTER DATABASE ${kernelDbName(Z)} SET search_path = public, pg_catalog;`)
+      })
+      const isSuper = async () => (await server.admin<{ s: boolean }[]>`SELECT rolsuper AS s FROM pg_roles WHERE rolname = ${app}`)[0]!.s
+      for (const [label, s] of [['startup search_path', server], ['bare server', bare]] as const) {
+        await ensureKernelDatabase(s, Z, pw)
+        expect(await isSuper(), `${label}: ensureKernelDatabase`).toBe(false)
+        expect(await ensureKernelPurgeGrants(s, Z)).toEqual({ granted: ['event_consumption', 'scheduled_notifications'], absent: [] })
+        expect(await isSuper(), `${label}: ensureKernelPurgeGrants`).toBe(false)
+      }
+    } finally {
+      await server.admin.unsafe(`ALTER ROLE ${kernelRoles(Z).app} NOSUPERUSER`).catch(() => {})
+      await dropKernelDatabase(server, Z)
+      await bare.close()
     }
   })
 
