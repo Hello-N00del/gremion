@@ -789,7 +789,7 @@ test('runAllArms with no verticalPath: kernel arms run, every vertical arm is SK
     assert.ok(arms.filter((a) => a.status === 'FAIL').every((a) => a === scanner), 'only the environmental scanner arm may fail')
     const skipped = arms.filter((a) => a.status === 'SKIPPED')
     assert.deepEqual(
-      skipped.map((a) => a.arm).sort(),
+      skipped.map((a) => a.arm).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)),
       ['known-secrets', 'known-secrets-vertical-native', 'overrides-drift', 'secret-scan'],
     )
     for (const a of skipped) {

@@ -16,8 +16,6 @@ import { orgSchemaFromBlueprint } from '../governance/org-schema'
 
 const DIR = join(import.meta.dirname, '..', '..', '..', '..', '..', 'verticals', 'stura')
 const read = (file: string): unknown => JSON.parse(readFileSync(join(DIR, file), 'utf8'))
-// JSON has no `undefined`: compare what a JSON round-trip of the code copy keeps.
-const viaJson = <T>(v: T): T => JSON.parse(JSON.stringify(v)) as T
 
 describe('verticals/stura loads through the kernel loader', () => {
   it('id stura, all four files parse, the blueprint is internally consistent', () => {

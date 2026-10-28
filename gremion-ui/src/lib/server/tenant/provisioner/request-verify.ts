@@ -102,7 +102,7 @@ export async function verifyRequestEvidence(c: EvidenceCheck): Promise<EvidenceR
     for (const [what, t] of [['ID token', id], ['access token', at]] as const) {
       if (t.azp !== c.clientId) throw new Error(`the ${what} has azp ${String(t.azp)}, not ${c.clientId}`)
       if (!audienceHas(t, c.clientId)) throw new Error(`the ${what} is not for ${c.clientId}`)
-      if (t.acr !== 'loa2') throw new Error(`the ${what} has acr ${String(t.acr ?? 'none')}, loa2 is required`)
+      if (t.acr !== 'loa2') throw new Error(`the ${what} has acr ${typeof t.acr === 'string' ? t.acr : 'none'}, loa2 is required`)
     }
     if (typeof id.at_hash !== 'string' || id.at_hash !== atHash(p.access)) throw new Error('the access token is not the one issued with the ID token (at_hash)')
     if (typeof id.sid !== 'string' || id.sid !== at.sid) throw new Error('the two tokens come from different sessions (sid)')

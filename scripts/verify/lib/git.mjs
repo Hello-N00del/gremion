@@ -8,7 +8,7 @@ import { run } from './proc.mjs'
 export function headSha(cwd = process.cwd()) {
   const res = run('git', ['rev-parse', 'HEAD'], { cwd })
   if (res.code !== 0) {
-    throw new Error(`git rev-parse HEAD failed: ${res.stderr || res.error}`)
+    throw new Error(`git rev-parse HEAD failed: ${String(res.stderr || res.error)}`)
   }
   return res.stdout.trim()
 }
@@ -30,7 +30,7 @@ export function headSha(cwd = process.cwd()) {
 export function isDirty(cwd = process.cwd()) {
   const res = run('git', ['status', '--porcelain'], { cwd })
   if (res.code !== 0) {
-    throw new Error(`git status failed: ${res.stderr || res.error}`)
+    throw new Error(`git status failed: ${String(res.stderr || res.error)}`)
   }
   return res.stdout.trim().length > 0
 }

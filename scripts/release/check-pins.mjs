@@ -56,7 +56,7 @@ export function deployPinRegexes(deployPath) {
     imageLine: find('image-line', (g) => g.flag === '-E' && /image:'?$/.test(g.pat + "'") && !g.pat.includes('gremion/')),
     digest: find('digest', (g) => g.flag === '-v' && g.pat === '@sha256:'),
     thirdPartyNamespace: find('gremion/ namespace', (g) => g.flag === '-E' && g.pat.includes('gremion/')),
-    buildLine: find('build-line', (g) => g.flag === '-E' && /build:$/.test(g.pat)),
+    buildLine: find('build-line', (g) => g.flag === '-E' && g.pat.endsWith('build:')),
     buildReset: find('build !reset', (g) => g.flag === '-vE' && g.pat.includes('!reset')),
   }
 }

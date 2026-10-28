@@ -264,7 +264,7 @@ function changedIds(measures, prior) {
   const now = new Map(measures.map((m) => [m.id, m.value]));
   for (const [id, v] of now) if (prior.get(id) !== v) ids.push(id);
   for (const id of prior.keys()) if (!now.has(id)) ids.push(id);
-  return ids.sort();
+  return ids.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
 }
 
 function readAnnex(root) {

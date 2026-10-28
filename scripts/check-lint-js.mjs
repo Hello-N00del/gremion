@@ -37,13 +37,13 @@ export function judge({ errors, baseline }) {
   return { ok: true, message: `lint-js: ${errors} errors (baseline ${baseline})` }
 }
 
-// gremion-ui's and gremion-public's tsconfig.json each extend their own
+// gremion-ui's, gremion-public's and apps/control-panel's tsconfig.json each extend their own
 // SvelteKit-generated .svelte-kit/tsconfig.json (not committed). Without a
 // sync first, --type-aware both misses real type-aware findings in those two
 // apps AND adds two spurious typescript(tsconfig-error) diagnostics naming the
 // missing file -- neither is a real code lint error. Same fix
 // scripts/verify/suites/typecheck.mjs already applies per app.
-const SYNC_DIRS = ['gremion-ui', 'gremion-public']
+const SYNC_DIRS = ['gremion-ui', 'gremion-public', 'apps/control-panel']
 
 function main() {
   for (const dir of SYNC_DIRS) {

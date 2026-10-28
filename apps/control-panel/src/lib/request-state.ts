@@ -123,11 +123,11 @@ export function describeRequest(r: RequestStateInput): RequestDescription {
     }
     case 'refused': {
       const o = r.outcome ?? ''
-      if (/^no handler for /.test(o)) return d('refused', 'Abgelehnt', 'Für diese Art von Anfrage gibt es noch keinen Bearbeiter.', { code: 'no_handler', detail: o, retryNote: FIX_FORM })
+      if (o.startsWith('no handler for ')) return d('refused', 'Abgelehnt', 'Für diese Art von Anfrage gibt es noch keinen Bearbeiter.', { code: 'no_handler', detail: o, retryNote: FIX_FORM })
       const reason = o.replace(/^refused:\s*/, '').trim()
       const detail = reason === '' ? null : reason
       // the sign-in evidence (request-verify "evidence: ..." and a missing token): a fresh sign-in can fix it
-      if (/^evidence: /.test(reason) || /^a panel request without its signed evidence/.test(reason)) {
+      if (reason.startsWith('evidence: ') || reason.startsWith('a panel request without its signed evidence')) {
         return d('refused', 'Abgelehnt', 'Der Anmeldenachweis wurde nicht akzeptiert. Mit einer frischen Anmeldung kann die Anfrage erneut gestellt werden.', { ...retry(), code: 'refused_evidence', detail })
       }
       return d('refused', 'Abgelehnt', 'Die Anfrage wurde bei der Prüfung abgelehnt.', { code: 'refused', detail, retryNote: FIX_FORM })
