@@ -102,6 +102,17 @@ describe('the hook acts on a VERIFIED subject only (R33f HIGH)', () => {
     expect(deleteAccount).not.toHaveBeenCalled()
   })
 
+  it('planted tenant evidence for a foreign id (no realm account, username null): skipped, the shared Nextcloud is never called', async () => {
+    // An IT admin can plant an org_unit_members row for any id; evidence in the tenant database
+    // proves the tenant holds data of the id, NOT that the id owns the tenant's Nextcloud account.
+    const deleteAccount = vi.fn()
+    const hook = createVotesErasureHook({ deleteAccount })
+    const res = await hook.erase({ tenantId: 't', subjectId: 'kc-FOREIGN', subject: { id: 'kc-FOREIGN', username: null, email: null }, db: null })
+    expect(res.status).toBe('skipped')
+    expect(res.status === 'skipped' && res.reason).toMatch(/realm/)
+    expect(deleteAccount).not.toHaveBeenCalled()
+  })
+
   it('deletes the id of the verified identity', async () => {
     const deleteAccount = vi.fn().mockResolvedValue(true)
     const hook = createVotesErasureHook({ deleteAccount })

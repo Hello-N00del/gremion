@@ -7,7 +7,10 @@
 //   1. a user of THIS tenant's Keycloak realm -> verified, with username and e-mail;
 //   2. gone from the realm but the tenant's own database holds data of it (a
 //      membership, a role history, queued remove-ops, or an earlier erasure report
-//      of this tenant) -> verified, identity unresolvable (username/email null);
+//      of this tenant) -> verified for the tenant's OWN stores only, identity unresolvable
+//      (username/email null). Tenant-database rows can be planted for a foreign id, so hooks
+//      that reach a store shared by every tenant (files, votes: one Nextcloud) must act only
+//      on a subject the realm holds right now (username !== null) and skip otherwise;
 //   3. neither -> unknown: the run is refused.
 //
 // Any other realm error is not an answer and propagates (fail closed).

@@ -20,7 +20,9 @@
  * The subject, VERIFIED against the tenant before any hook runs: the id is a user of
  * the tenant's identity realm, or the tenant's own data holds records of it (an
  * account already removed from the realm). A hook that reaches a system shared by
- * every tenant (one Nextcloud serves them all) acts only on a verified id.
+ * every tenant (one Nextcloud serves them all) acts only on a verified id whose
+ * `username` is non-null (the realm holds the account now): tenant-database evidence
+ * alone can be planted for a foreign id and never authorises a shared-store deletion.
  */
 export interface ErasureSubject {
   readonly id: string
