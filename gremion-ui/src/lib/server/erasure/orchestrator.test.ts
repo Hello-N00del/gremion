@@ -176,7 +176,9 @@ describe('runErasure', () => {
     )
     const cal = report.modules.find((m) => m.moduleId === 'calendar')!
     expect(cal.status).toBe('failed')
-    expect(cal.reason).toMatch(/constraint violated/)
+    // the stored reason is the error class only, never the (possibly identifying) message
+    expect(cal.reason).toBe('Error')
+    expect(cal.reason).not.toMatch(/constraint violated/)
     expect(after).toHaveBeenCalledOnce()
     expect(report.status).toBe('incomplete')
   })

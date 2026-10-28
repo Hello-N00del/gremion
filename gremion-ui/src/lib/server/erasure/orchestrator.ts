@@ -139,6 +139,34 @@ function fromHookResult(moduleId: string, result: ErasureHookResult | undefined)
   return { moduleId, status: 'failed', counts: {}, reason: 'malformed erasure hook result', residuals: [] }
 }
 
+/**
+ * The failure text that may be STORED. The report is append-only (the DB guard
+ * refuses UPDATE/DELETE once a run is finished), so nothing identifying may reach
+ * it, and the real client errors do carry it: NextcloudResponseError's message holds
+ * the request path `/ocs/v2.php/cloud/users/<subject id>` and the response body,
+ * SynapseError's the Matrix id `@<username>:<server>` and Synapse's own error text.
+ * So a stored reason is only the error CLASS plus the HTTP status, never a message.
+ */
+export function safeFailureReason(err: unknown): string {
+  const name = err instanceof Error && /^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(err.name) ? err.name : 'Error'
+  const status = (err as { status?: unknown } | null | undefined)?.status
+  return typeof status === 'number' && Number.isInteger(status) && status >= 100 && status <= 599
+    ? `${name} (HTTP ${status})`
+    : name
+}
+
+/** `text` with every occurrence of the given identifiers (and their URL-encoded form) removed. */
+export function redactIdentifiers(text: string, identifiers: readonly (string | null | undefined)[]): string {
+  let out = text
+  for (const id of identifiers) {
+    if (!id) continue
+    for (const variant of new Set([id, encodeURIComponent(id)])) out = out.split(variant).join('[redacted]')
+  }
+  return out
+}
+
+const identifiersOf = (input: ErasureInput) => [input.subjectId]
+
 async function eraseModule(
   moduleId: string,
   input: ErasureInput,
@@ -152,14 +180,17 @@ async function eraseModule(
     const result = await hook.erase({ tenantId: input.tenantId, subjectId: input.subjectId, db })
     return fromHookResult(moduleId, result)
   } catch (err) {
-    // The error text is stored in the report: keep it to the message (no subject id is ever in it).
+    // The operator log keeps the message (redacted); the append-only report only the class.
     const message = err instanceof Error ? err.message : String(err)
-    if (isTransientDbStartupError(err)) return skipped(moduleId, `module database unreachable: ${message}`)
-    return { moduleId, status: 'failed', counts: {}, reason: message, residuals: [] }
+    console.error(`[erasure] ${moduleId} hook failed:`, redactIdentifiers(message, identifiersOf(input)).slice(0, 500))
+    const reason = safeFailureReason(err)
+    if (isTransientDbStartupError(err)) return skipped(moduleId, `module database unreachable: ${reason}`)
+    return { moduleId, status: 'failed', counts: {}, reason, residuals: [] }
   }
 }
 
-const errText = (err: unknown) => (err instanceof Error ? err.message : String(err)).slice(0, 500)
+const errText = (err: unknown, identifiers: readonly (string | null | undefined)[] = []) =>
+  redactIdentifiers(err instanceof Error ? err.message : String(err), identifiers).slice(0, 500)
 
 export async function runErasure(input: ErasureInput, deps: ErasureDeps): Promise<ErasureReport> {
   if (typeof input.subjectId !== 'string' || input.subjectId.trim() === '') {
@@ -217,7 +248,7 @@ export async function runErasure(input: ErasureInput, deps: ErasureDeps): Promis
     // finish it `incomplete` with the reason, and let the original error propagate.
     if (!finished) {
       try {
-        await deps.store.finish(id, 'incomplete', deps.now(), `run aborted: ${errText(failure)}`)
+        await deps.store.finish(id, 'incomplete', deps.now(), `run aborted: ${errText(failure, identifiersOf(input))}`)
       } catch (err) {
         console.error('[erasure] could not mark the aborted run incomplete:', errText(err))
       }
