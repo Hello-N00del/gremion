@@ -23,6 +23,22 @@ import { Role } from '$lib/auth'
 const h = vi.hoisted(() => ({
   fileChallenge: vi.fn(),
   decideChallenge: vi.fn(),
+  getResolutionById: vi.fn(),
+  getProtocol: vi.fn(),
+  getOrgUnit: vi.fn(),
+  isMemberOf: vi.fn(),
+}))
+
+// LOW-6: committee visibility is resolved resolution -> protocol -> org unit.
+// The real governance/visibility predicates run on top of these mocked reads.
+vi.mock('$lib/server/protocols/protocol-db', () => ({
+  getResolutionById: h.getResolutionById,
+  getProtocol: h.getProtocol,
+}))
+vi.mock('$lib/server/governance/org-units-db', () => ({
+  getOrgUnit: h.getOrgUnit,
+  isMemberOf: h.isMemberOf,
+  getOrgUnitIdsForUser: vi.fn(async () => []),
 }))
 
 // Factory-defined error classes: the routes import these from the SAME mocked
@@ -103,6 +119,10 @@ function patchEvent(body: unknown, user: unknown = ADMIN) {
 }
 
 beforeEach(() => {
+  h.getResolutionById.mockReset().mockResolvedValue({ id: OPEN_CHALLENGE.resolution_id, protocol_id: 'p-1' })
+  h.getProtocol.mockReset().mockResolvedValue({ id: 'p-1', committee_id: 'c-1', status: 'published' })
+  h.getOrgUnit.mockReset().mockResolvedValue({ id: 'c-1', visibility: 'all_members' })
+  h.isMemberOf.mockReset().mockResolvedValue(false)
   h.fileChallenge.mockReset().mockResolvedValue(OPEN_CHALLENGE)
   h.decideChallenge.mockReset().mockImplementation(async (input: { status: string; decisionNote: string | null }) => ({
     ...OPEN_CHALLENGE,
@@ -223,5 +243,36 @@ describe('PATCH /api/protocols/resolutions/[resId]/challenges/[challengeId] — 
   it('deciding a challenge that is not open (or unknown) → 404', async () => {
     h.decideChallenge.mockRejectedValueOnce(new ChallengeNotOpenError('123e4567-e89b-12d3-a456-426614174003'))
     await expect(PATCH(patchEvent({ status: 'dismissed' }))).rejects.toMatchObject({ status: 404 })
+  })
+})
+
+describe('POST challenges — committee visibility (LOW-6)', () => {
+  it('404 for a non-member on a committee_only unit, service never called', async () => {
+    h.getOrgUnit.mockResolvedValue({ id: 'c-1', visibility: 'committee_only' })
+    await expect(POST(postEvent({ grounds: 'x' }))).rejects.toMatchObject({ status: 404 })
+    expect(h.fileChallenge).not.toHaveBeenCalled()
+  })
+
+  it('invisible and nonexistent resolutions are indistinguishable (same 404 + message)', async () => {
+    h.getOrgUnit.mockResolvedValue({ id: 'c-1', visibility: 'committee_only' })
+    const invisible = await POST(postEvent({ grounds: 'x' })).catch((e) => e)
+    h.getResolutionById.mockResolvedValue(null)
+    const missing = await POST(postEvent({ grounds: 'x' })).catch((e) => e)
+    expect(invisible.status).toBe(404)
+    expect(missing.status).toBe(404)
+    expect(invisible.body).toEqual(missing.body)
+  })
+
+  it('201 for a member of the committee_only unit', async () => {
+    h.getOrgUnit.mockResolvedValue({ id: 'c-1', visibility: 'committee_only' })
+    h.isMemberOf.mockResolvedValue(true)
+    const res = await POST(postEvent({ grounds: 'x' }))
+    expect(res.status).toBe(201)
+  })
+
+  it('201 for a council-admin regardless of unit', async () => {
+    h.getOrgUnit.mockResolvedValue({ id: 'c-1', visibility: 'committee_only' })
+    const res = await POST(postEvent({ grounds: 'x' }, ADMIN))
+    expect(res.status).toBe(201)
   })
 })

@@ -10,6 +10,9 @@
 import { error, json } from '@sveltejs/kit'
 import type { RequestEvent } from '@sveltejs/kit'
 import { hasRole, Role, type SessionUser } from '$lib/auth'
+import { getResolutionById, getProtocol } from '$lib/server/protocols/protocol-db'
+import { getOrgUnit } from '$lib/server/governance/org-units-db'
+import { seesAllGovernance, viewerCanSeeProtocol } from '$lib/server/governance/visibility'
 import { requireUuidParams } from '$lib/server/protocols/route-ids'
 import {
   fileChallenge,
@@ -43,6 +46,18 @@ export async function POST(event: RequestEvent) {
   // oversize submission gets a clean 400 instead of a CHECK-violation 500.
   if (grounds.length > 4000) {
     throw error(400, 'Begründung zu lang (max. 4000 Zeichen)')
+  }
+
+  // LOW-6: the filer must be able to SEE the resolution's protocol (committee
+  // visibility). An invisible resolution answers the same 404 as a missing one,
+  // so the endpoint is no existence oracle.
+  if (!seesAllGovernance(user)) {
+    const resolution = await getResolutionById(event.params.resId!)
+    const protocol = resolution ? await getProtocol(resolution.protocol_id) : null
+    const unit = protocol ? await getOrgUnit(protocol.committee_id) : null
+    if (!protocol || !unit || !(await viewerCanSeeProtocol(user, protocol.committee_id, unit, protocol.status))) {
+      throw error(404, 'Beschluss nicht gefunden')
+    }
   }
 
   try {
