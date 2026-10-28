@@ -31,7 +31,7 @@
       "rules": [
         "or-replace"
       ],
-      "reason": "Replaces the 0010 SECURITY DEFINER lease functions plt.renew_provisioning_lease and plt.claim_provisioning_request in place with unchanged signatures (create-harden H4: a lapsed lease cannot be renewed and is requeued only after a 60 s grace); CREATE OR REPLACE is the only way to change a function body while keeping the grants pg.ts issues. The file sets lock_timeout first."
+      "reason": "Replaces the SECURITY DEFINER lease functions plt.renew_provisioning_lease (last defined in 0009) and plt.claim_provisioning_request (0010) in place with unchanged signatures (create-harden H4: a lapsed lease cannot be renewed and is requeued only after a 60 s grace); CREATE OR REPLACE is the only way to change a function body while keeping the grants pg.ts issues. The file sets lock_timeout first."
     },
     {
       "chain": "platform",
