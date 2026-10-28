@@ -381,9 +381,10 @@ customer_resume() {   # <slug> --operator <uuid>
     # an older release kept a per-suspend record here; it is never read any more
     rm -f "${ROOT}/runtime/suspended/${slug}.fingerprint"
     before="$(container_fingerprint)"
+    # resolve the transport BEFORE issuing the principal: its failure then leaves nothing to revoke
+    mail_sender_args || die "resume of ${slug}: MAIL_TRANSPORT could not be resolved" "$GREMION_EXIT_USAGE"
     mail_realm_smtp --realm "$slug" --tenant "$(token_of "$slug")" \
         || die "a fresh principal for ${slug} could not be issued" "$GREMION_EXIT_ASSERT"
-    mail_sender_args || die "resume of ${slug}: MAIL_TRANSPORT could not be resolved" "$GREMION_EXIT_USAGE"
     if ! tc resume "$slug" --operator "$OPERATOR_ID" ${MAIL_SENDER_ARGS[@]+"${MAIL_SENDER_ARGS[@]}"}; then
         # The customer is still suspended: do not leave it holding a live principal.
         mail_realm_smtp --realm "$slug" --tenant "$(token_of "$slug")" --revoke \
