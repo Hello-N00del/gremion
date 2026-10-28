@@ -1,9 +1,11 @@
 // src/lib/server/access-records.ts
 // TRD-092 / TRD-191 / PRD-OPS-006: the council administrator's view of the
 // vendor/operator access record. Admin-only and tenant-scoped: the customer slug
-// is the resolved request tenant's, never a parameter of the request, and the
-// database function (oac.list_access_records) filters on it, so one council can
-// not read another's rows even if this layer erred.
+// is the resolved request tenant's (locals.tenant.slug), never a parameter of
+// the request. The database function (oac.list_access_records) returns the rows
+// of whatever slug it is passed: gremion_ui_oac is one shared credential, so the
+// isolation between councils rests on this layer passing the request tenant's
+// slug and nothing else.
 import { hasRole, Role } from '$lib/auth'
 import type { SessionUser } from '$lib/auth/types'
 import { AccessLogNotConfigured, getAccessDb } from './access-records-db'
