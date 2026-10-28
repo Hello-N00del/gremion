@@ -13,7 +13,10 @@
 //            assignments (+ history), committee membership, elections,
 //            caucuses, protocols with attendance, resolutions, action items
 //            and challenges, the audit log. config_store is NOT exported
-//            (it may hold credentials) and is listed under excluded_tables.
+//            (it may hold credentials) and is listed under excluded_tables;
+//            so is every other base table of the kernel database that is not
+//            in the list (calendar, boards, notifications, ...), read from
+//            pg_catalog, so no kernel table is dropped silently.
 //   modules  a module whose module.json declares runtime.export (kind
 //            pg_dump) AND is enabled for the tenant: every base table in
 //            every non-system schema of the tenant's module database
@@ -242,6 +245,26 @@ async function exportTable(tx: postgres.TransactionSql, scope: string, schema: s
   ]
 }
 
+/**
+ * HIGH-2: every schema the database's migrations created (finance.*, content.*,
+ * ...), not just public: ordinary and partitioned tables (partitions are read
+ * through their parent), minus the system schemas and tables that belong to an
+ * extension. Schema-qualified, from pg_catalog; the search_path is already pinned.
+ */
+async function catalogTables(tx: postgres.TransactionSql): Promise<{ schema: string; table: string }[]> {
+  return tx<{ schema: string; table: string }[]>`
+    SELECT n.nspname::text AS schema, c.relname::text AS table
+      FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+     WHERE c.relkind IN ('r', 'p') AND NOT c.relispartition
+       AND n.nspname NOT IN ('pg_catalog', 'information_schema') AND n.nspname !~ '^pg_(toast|temp_)'
+       AND NOT EXISTS (SELECT 1 FROM pg_catalog.pg_depend d
+                        WHERE d.classid = 'pg_catalog.pg_class'::pg_catalog.regclass AND d.objid = c.oid AND d.deptype = 'e')
+     ORDER BY n.nspname COLLATE "C", c.relname COLLATE "C"`
+}
+
+const LEDGER_REASON = 'migration ledger (schema bookkeeping, not tenant data)'
+const UNLISTED_REASON = 'not part of the open-format export (it is not in the exported table list); its rows are NOT in these files'
+
 async function exportDatabase(
   sql: Sql,
   scope: string,
@@ -276,21 +299,10 @@ async function exportDatabase(
     }
     let list: readonly { schema: string; table: string }[]
     if (tables === 'all') {
-      // HIGH-2: every schema the module's migrations created (finance.*,
-      // content.*, ...), not just public: ordinary and partitioned tables
-      // (partitions are read through their parent), minus the system schemas
-      // and tables that belong to an extension.
-      const found = await tx<{ schema: string; table: string }[]>`
-        SELECT n.nspname::text AS schema, c.relname::text AS table
-          FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
-         WHERE c.relkind IN ('r', 'p') AND NOT c.relispartition
-           AND n.nspname NOT IN ('pg_catalog', 'information_schema') AND n.nspname !~ '^pg_(toast|temp_)'
-           AND NOT EXISTS (SELECT 1 FROM pg_catalog.pg_depend d
-                            WHERE d.classid = 'pg_catalog.pg_class'::pg_catalog.regclass AND d.objid = c.oid AND d.deptype = 'e')
-         ORDER BY n.nspname COLLATE "C", c.relname COLLATE "C"`
+      const found = await catalogTables(tx)
       list = found.filter((t) => {
         if (t.schema === 'public' && t.table === LEDGER_TABLE) {
-          excludedTables.push({ scope, schema: t.schema, table: t.table, reason: 'migration ledger (schema bookkeeping, not tenant data)' })
+          excludedTables.push({ scope, schema: t.schema, table: t.table, reason: LEDGER_REASON })
           return false
         }
         if (withheldTables.has(`${t.schema}.${t.table}`)) {
@@ -310,6 +322,16 @@ async function exportDatabase(
     } else {
       if (withhold.length > 0) throw new ExportError(`${scope}: withhold applies to module databases only`)
       list = tables.map((table) => ({ schema: 'public', table }))
+      // MED: the kernel database holds more tenant tables than the fixed list (calendar, boards,
+      // notifications, governance membership records, ...). Every one that is not exported is NAMED
+      // here, so the omission is visible (TRD-150) instead of silent.
+      const exported = new Set(list.map((t) => `${t.schema}.${t.table}`))
+      const named = new Set(excludedTables.filter((e) => e.scope === scope).map((e) => `${e.schema ?? 'public'}.${e.table}`))
+      for (const t of await catalogTables(tx)) {
+        const key = `${t.schema}.${t.table}`
+        if (exported.has(key) || named.has(key)) continue
+        excludedTables.push({ scope, schema: t.schema, table: t.table, reason: t.schema === 'public' && t.table === LEDGER_TABLE ? LEDGER_REASON : UNLISTED_REASON })
+      }
     }
     const files: ManifestFile[] = []
     for (const t of list) files.push(...(await exportTable(tx, scope, t.schema, t.table, outDir, withheldColumns.get(`${t.schema}.${t.table}`) ?? new Set(), excludedColumns)))
@@ -341,7 +363,7 @@ export async function exportTenant(opts: ExportOptions): Promise<ExportResult> {
       }
     }
     if (!m.runtimeExport) {
-      modules.push({ id: m.id, status: 'excluded', reason: 'module.json declares no runtime.export (the module keeps no exportable database of its own)' })
+      modules.push({ id: m.id, status: 'excluded', reason: 'module.json declares no runtime.export (the module keeps no exportable database of its own; any rows it keeps in the kernel database are exported under kernel/ or named in excluded_tables)' })
     } else if (!m.enabled) {
       modules.push({ id: m.id, status: 'excluded', reason: 'module is not enabled for this tenant (no tenant database exists)' })
     } else if (!m.sql) {

@@ -153,6 +153,12 @@ beforeAll(async () => {
     CREATE TABLE protocols (id int PRIMARY KEY, title text);
     CREATE TABLE protocol_resolutions (id int PRIMARY KEY, protocol_id int, text text);
     CREATE TABLE config_store (k text PRIMARY KEY, v text);
+    -- MED: tenant data in the kernel database that is in neither the export list nor the excluded list.
+    CREATE TABLE calendar_events (id int PRIMARY KEY, title text);
+    INSERT INTO calendar_events VALUES (1, 'Sitzung');
+    CREATE TABLE schema_migrations (filename text PRIMARY KEY);
+    CREATE SCHEMA extra;
+    CREATE TABLE extra.board (id int PRIMARY KEY);
     INSERT INTO org_units VALUES (1, 'Vorstand', 'comma, "quote"' ), (2, 'Kasse', E'multi\nline'), (3, 'Leer', NULL);
     INSERT INTO role_assignments VALUES (1, 1, 'ada', '2026-01-02T03:04:05Z', '{"a":[1,2]}');
     INSERT INTO protocols VALUES (1, 'Sitzung 1');
@@ -359,6 +365,23 @@ describe('tenant export (TRD-149/150/151)', () => {
       ]),
     )
     expect(JSON.stringify(manifest)).not.toContain('hunter2')
+  })
+
+  it('MED: every kernel table that is not exported is named in excluded_tables with a reason (none is dropped silently)', async () => {
+    const dir = fresh()
+    const { manifest, verify } = await run(dir)
+    expect(verify.ok).toBe(true)
+    const kernelExcluded = manifest.excluded_tables.filter((e) => e.scope === 'kernel')
+    const key = (e: { schema?: string; table: string }) => `${e.schema}.${e.table}`
+    // the seeded kernel tables are 4 exported + config_store + calendar_events + extra.board + the migration ledger
+    expect(kernelExcluded.map(key).sort()).toEqual(['extra.board', 'public.calendar_events', 'public.config_store', 'public.schema_migrations'])
+    for (const e of kernelExcluded) expect(e.reason.length).toBeGreaterThan(10)
+    expect(kernelExcluded.find((e) => e.table === 'calendar_events')!.reason).toMatch(/not exported|not in the/)
+    // no table is both exported and excluded
+    const exported = new Set(manifest.files.filter((f) => f.scope === 'kernel').map((f) => `${f.schema ?? 'public'}.${f.table}`))
+    for (const e of kernelExcluded) expect(exported.has(key(e))).toBe(false)
+    // and the data of an excluded table is not in the files
+    expect(manifest.files.some((f) => f.table === 'calendar_events')).toBe(false)
   })
 
   it('the check fails, naming the file, when a written file is deleted before it', async () => {
