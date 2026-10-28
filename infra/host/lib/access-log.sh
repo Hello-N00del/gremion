@@ -27,7 +27,7 @@
 # the control panel needs no call here: queueRequest/submitCreate/retryRequest
 # write oac.record_access in the same statement as the request (TRD-092). Only
 # the host's own break-glass verbs record through this file.
-# TODO(executor lane, optional): an executor-side line per handler.
+# TODO(executor lane): optionally source this file next to db.sh and add an executor-side line per handler.
 #
 # Needs: common.sh (die, GREMION_EXIT_*), executor/db.sh (executor_sql), ROOT.
 
