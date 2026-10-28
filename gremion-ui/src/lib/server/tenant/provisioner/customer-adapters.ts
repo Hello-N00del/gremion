@@ -122,7 +122,9 @@ export function kernelServer(adminUrl: string): PurgeServer & { close(): Promise
     open(database) {
       const u = new URL(adminUrl)
       u.pathname = `/${database}`
-      const sql = postgres(u.toString(), { max: 2, onnotice: () => {}, connect_timeout: 15 })
+      // the superuser inside a CUSTOMER database: search_path as a startup parameter overrides the
+      // owner's ALTER DATABASE SET (a planted public.format would otherwise run as the superuser)
+      const sql = postgres(u.toString(), { max: 2, onnotice: () => {}, connect_timeout: 15, connection: { search_path: 'pg_catalog' } })
       pools.push(sql)
       return sql
     },

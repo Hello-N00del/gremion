@@ -39,7 +39,19 @@ vi.mock('@gremion/nats-auth', () => ({ ensureTenantAccount: vi.fn() }))
 const lc = vi.hoisted(() => ({ ensureKernelDatabase: vi.fn() }))
 vi.mock('@gremion/tenant-store/lifecycle', async (orig) => ({ ...(await orig<Record<string, unknown>>()), ensureKernelDatabase: lc.ensureKernelDatabase }))
 
-const { customerAdapters } = await import('./customer-adapters')
+// the real driver (pools connect lazily), recorded: kernelServer's startup parameters
+const pg = vi.hoisted(() => ({ calls: [] as { url: string; opts: Record<string, unknown> }[] }))
+vi.mock('postgres', async (orig) => {
+  const real = ((await orig()) as { default: (url: string, opts: Record<string, unknown>) => unknown }).default
+  return {
+    default: (url: string, opts: Record<string, unknown>) => {
+      pg.calls.push({ url, opts })
+      return real(url, opts)
+    },
+  }
+})
+
+const { customerAdapters, kernelServer } = await import('./customer-adapters')
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '..', '..', '..')
 const BASE = JSON.parse(readFileSync(join(REPO, 'docker', 'keycloak', 'realm-export.base.json'), 'utf8')) as Record<string, unknown>
@@ -252,5 +264,18 @@ describe('customerAdapters.control', () => {
     const { a } = adapters(kcFake(true))
     await expect(a.control.setStatus(C.id, 'active')).rejects.toThrow(/refusing/)
     expect(reg.updateTenantStatus).not.toHaveBeenCalled()
+  })
+})
+
+describe('kernelServer: every admin open of a customer database pins search_path (r33f CRIT)', () => {
+  it('open() sends search_path=pg_catalog as a startup parameter (it overrides the owner\'s ALTER DATABASE SET)', async () => {
+    const server = kernelServer('postgresql://postgres:x@postgres:5432/postgres')
+    try {
+      server.open('t_0192f1a23b4c7d5e8f60718293a4b5c6__kernel')
+      const call = pg.calls.find((c) => c.url.endsWith('/t_0192f1a23b4c7d5e8f60718293a4b5c6__kernel'))
+      expect(call?.opts.connection).toMatchObject({ search_path: 'pg_catalog' })
+    } finally {
+      await server.close()
+    }
   })
 })

@@ -29,7 +29,11 @@
 // random password VALID UNTIL the run's deadline + 60 s, the run logs in with
 // it, and the `finally` puts the role back to NOLOGIN PASSWORD NULL (a crashed
 // run leaves a verifier that has already expired). The admin only ever runs
-// role DDL and catalogue reads; a GRANT or ALTER ROLE fires no tenant code.
+// role DDL, GRANTs and catalogue reads; inside a customer database
+// (ensureKernelPurgeGrants) it does so with search_path pinned to pg_catalog
+// (kernel.ts asAdminIn) and every function qualified, because the owner may
+// ALTER DATABASE SET search_path and plant a public.format that the superuser
+// would otherwise call.
 //   The purger holds CONNECT and USAGE on public from ensureKernelDatabase and
 // SELECT + DELETE on exactly the mapped tables from ensureKernelPurgeGrants
 // (the tenant init path, after the kernel chain created them): a table with no
@@ -66,7 +70,7 @@ import { randomBytes } from 'node:crypto'
 import type { Sql } from '@gremion/db'
 import { ADVISORY_LOCKS } from '../advisory-locks.js'
 import { execFormatted, sqlState } from './ddl.js'
-import { kernelDbName, kernelRoles } from './kernel.js'
+import { asAdminIn, kernelDbName, kernelRoles } from './kernel.js'
 import { scramSha256Verifier } from './scram.js'
 import type { ModuleServer } from './types.js'
 
@@ -309,8 +313,30 @@ async function pinned<T>(db: Sql, clock: Clock, fn: (tx: Sql) => Promise<T>): Pr
   })) as T
 }
 
+/**
+ * One transaction on `db` whose lock waits and statements end within `ms`: the
+ * admin's role DDL (ALTER ROLE waits on the role's row lock) and catalogue
+ * reads must not outlive the run's deadline either.
+ */
+async function bounded<T>(db: Sql, ms: number, fn: (tx: Sql) => Promise<T>): Promise<T> {
+  const t = String(Math.max(1, Math.ceil(ms)))
+  return (await db.begin(async (tx) => {
+    await tx.unsafe(`SET LOCAL search_path = pg_catalog; SET LOCAL lock_timeout = ${t}; SET LOCAL statement_timeout = ${t}`)
+    return fn(tx as unknown as Sql)
+  })) as T
+}
+
+/** The bound of the reset to NOLOGIN: it runs after the deadline too, so it has its own. */
+const RESET_BOUND_MS = 5000
+
 type Runner = (sql: string, params: unknown[]) => Promise<{ n: number }[]>
 
+/**
+ * Batches until fewer than `batch` rows are left, the cap, or a failure. Each
+ * batch commits on its own, so a failure (the deadline, a statement timeout,
+ * any error) still returns the rows the committed batches removed, with the
+ * error in `stopped`: the caller records the count, then handles the error.
+ */
 async function deleteAged(
   rule: PurgeRule,
   run: Runner,
@@ -318,15 +344,19 @@ async function deleteAged(
   batch: number,
   maxBatches: number,
   clock: Clock,
-): Promise<{ total: number; limitHit: boolean }> {
+): Promise<{ total: number; limitHit: boolean; stopped?: unknown }> {
   const sql = deleteBatchSql(rule)
   let total = 0
-  for (let i = 0; i < maxBatches; i++) {
-    clock.check()
-    const [row] = await run(sql, [cutoff.toISOString(), batch])
-    const n = row?.n ?? 0
-    total += n
-    if (n < batch) return { total, limitHit: false }
+  try {
+    for (let i = 0; i < maxBatches; i++) {
+      clock.check()
+      const [row] = await run(sql, [cutoff.toISOString(), batch])
+      const n = row?.n ?? 0
+      total += n
+      if (n < batch) return { total, limitHit: false }
+    }
+  } catch (err) {
+    return { total, limitHit: false, stopped: err }
   }
   return { total, limitHit: true }
 }
@@ -335,7 +365,8 @@ async function deleteAged(
  * The SELECT + DELETE grants of the purger on exactly the kernel-scope purge
  * tables (idempotent). The tenant init path calls it after the kernel chain
  * created them; a table the chain has not created yet is returned in `absent`.
- * Executed by the admin: a GRANT fires no tenant code.
+ * Executed by the admin with search_path pinned (asAdminIn): a GRANT fires no
+ * tenant code, and no name here resolves to an object the owner planted.
  */
 export async function ensureKernelPurgeGrants(server: ModuleServer, tenantId: string): Promise<{ granted: string[]; absent: string[] }> {
   const { purger } = kernelRoles(tenantId)
@@ -344,19 +375,21 @@ export async function ensureKernelPurgeGrants(server: ModuleServer, tenantId: st
   const granted: string[] = []
   const absent: string[] = []
   try {
-    const [who] = await db<{ db: string }[]>`SELECT pg_catalog.current_database() AS db`
-    if (who?.db !== dbName) throw new Error(`the admin pool is connected to ${JSON.stringify(who?.db)}, not ${dbName}`)
-    await execFormatted(db, 'GRANT USAGE ON SCHEMA public TO %I', [purger])
-    for (const rule of PURGE_RULES.filter((r) => r.scope === 'kernel')) {
-      if (!PLAIN_TABLE.test(rule.table)) throw new RangeError(`table ${JSON.stringify(rule.table)} is not a plain identifier`)
-      const [present] = await db<{ ok: boolean }[]>`SELECT pg_catalog.to_regclass(${`public.${rule.table}`}) IS NOT NULL AS ok`
-      if (!present?.ok) {
-        absent.push(rule.table)
-        continue
+    await asAdminIn(db, async (tx) => {
+      const [who] = await tx<{ db: string }[]>`SELECT pg_catalog.current_database() AS db`
+      if (who?.db !== dbName) throw new Error(`the admin pool is connected to ${JSON.stringify(who?.db)}, not ${dbName}`)
+      await execFormatted(tx, 'GRANT USAGE ON SCHEMA public TO %I', [purger])
+      for (const rule of PURGE_RULES.filter((r) => r.scope === 'kernel')) {
+        if (!PLAIN_TABLE.test(rule.table)) throw new RangeError(`table ${JSON.stringify(rule.table)} is not a plain identifier`)
+        const [present] = await tx<{ ok: boolean }[]>`SELECT pg_catalog.to_regclass(${`public.${rule.table}`}::pg_catalog.text) IS NOT NULL AS ok`
+        if (!present?.ok) {
+          absent.push(rule.table)
+          continue
+        }
+        await execFormatted(tx, `GRANT SELECT, DELETE ON TABLE public.${rule.table} TO %I`, [purger])
+        granted.push(rule.table)
       }
-      await execFormatted(db, `GRANT SELECT, DELETE ON TABLE public.${rule.table} TO %I`, [purger])
-      granted.push(rule.table)
-    }
+    })
   } finally {
     await db.end({ timeout: 5 })
   }
@@ -408,29 +441,37 @@ const SHAPE_SQL = `
  * gives the purger LOGIN and a one-run password VALID UNTIL `validUntil`;
  * `close` ends the pool and puts the role back to NOLOGIN PASSWORD NULL.
  * Refuses a purger that is not the NOSUPERUSER, member-of-nothing role
- * ensureKernelRoles made.
+ * ensureKernelRoles made. `bound` is the ms its statements may take (the run
+ * passes the time left before its deadline).
  */
-export async function openPurgerSession(server: PurgeServer, hex: string, validUntil: Date): Promise<{ db: Sql; purger: string; close(): Promise<void> }> {
+export async function openPurgerSession(
+  server: PurgeServer,
+  hex: string,
+  validUntil: Date,
+  bound: () => number = () => 15_000,
+): Promise<{ db: Sql; purger: string; close(): Promise<void> }> {
   const tenantId = uuidOfHex(hex)
   const { purger } = kernelRoles(tenantId)
   if (!PURGER.test(purger)) throw new RangeError(`${JSON.stringify(purger)} is not a kernel purger role name`)
-  const [r] = await server.admin<{ ok: boolean; members: number }[]>`
-    SELECT NOT (r.rolsuper OR r.rolbypassrls OR r.rolcreaterole OR r.rolcreatedb OR r.rolreplication) AS ok,
-           (SELECT count(*)::int FROM pg_catalog.pg_auth_members m WHERE m.member = r.oid) AS members
-      FROM pg_catalog.pg_roles r WHERE r.rolname = ${purger}`
-  if (!r) throw new Error(`${purger} does not exist (ensureKernelDatabase has not run for this customer)`)
-  if (!r.ok || r.members !== 0) {
-    throw new Error(`refused: ${purger} is not the plain role ensureKernelRoles makes (attributes or memberships changed); not logging in as it`)
-  }
   const password = randomBytes(32).toString('base64url')
-  const reset = () => execFormatted(server.admin, 'ALTER ROLE %I NOLOGIN PASSWORD NULL VALID UNTIL %L', [purger, 'infinity'])
-  await execFormatted(server.admin, 'ALTER ROLE %I LOGIN PASSWORD %L VALID UNTIL %L', [purger, scramSha256Verifier(password), validUntil.toISOString()])
+  await bounded(server.admin, bound(), async (tx) => {
+    const [r] = await tx<{ ok: boolean; members: number }[]>`
+      SELECT NOT (r.rolsuper OR r.rolbypassrls OR r.rolcreaterole OR r.rolcreatedb OR r.rolreplication) AS ok,
+             (SELECT count(*)::int FROM pg_catalog.pg_auth_members m WHERE m.member = r.oid) AS members
+        FROM pg_catalog.pg_roles r WHERE r.rolname = ${purger}`
+    if (!r) throw new Error(`${purger} does not exist (ensureKernelDatabase has not run for this customer)`)
+    if (!r.ok || r.members !== 0) {
+      throw new Error(`refused: ${purger} is not the plain role ensureKernelRoles makes (attributes or memberships changed); not logging in as it`)
+    }
+    await execFormatted(tx, 'ALTER ROLE %I LOGIN PASSWORD %L VALID UNTIL %L', [purger, scramSha256Verifier(password), validUntil.toISOString()])
+  })
+  const reset = () => bounded(server.admin, RESET_BOUND_MS, (tx) => execFormatted(tx, 'ALTER ROLE %I NOLOGIN PASSWORD NULL VALID UNTIL %L', [purger, 'infinity']))
   let db: Sql | undefined
   try {
     db = await server.login(kernelDbName(tenantId), purger, password)
-    const [who] = await db<{ su: string; cu: string; sup: boolean }[]>`
+    const [who] = await bounded(db, bound(), (tx) => tx<{ su: string; cu: string; sup: boolean }[]>`
       SELECT session_user::text AS su, current_user::text AS cu,
-             (SELECT r.rolsuper FROM pg_catalog.pg_roles r WHERE r.rolname = session_user) AS sup`
+             (SELECT r.rolsuper FROM pg_catalog.pg_roles r WHERE r.rolname = session_user) AS sup`)
     // strict: a NULL rolsuper is not proof of NOSUPERUSER
     if (who?.su !== purger || who.cu !== purger || who.sup !== false) {
       throw new Error(`refused: the purge session is ${JSON.stringify(who?.su)}/${JSON.stringify(who?.cu)}, not ${purger}`)
@@ -499,7 +540,8 @@ export async function runPurge(deps: PurgeDeps): Promise<PurgeResult> {
     let status: PurgeResult['status'] = 'succeeded'
     /** true when the error is the run's own deadline (recorded as partial, not as an error of that database) */
     const deadlineHit = (err: unknown): boolean => {
-      if (err instanceof DeadlineReached || (sqlState(err) === '57014' && clock.expired())) {
+      // 57014 statement_timeout, 55P03 lock_timeout: both are set to the time left
+      if (err instanceof DeadlineReached || ((sqlState(err) === '57014' || sqlState(err) === '55P03') && clock.expired())) {
         partial = 'deadline'
         return true
       }
@@ -527,6 +569,7 @@ export async function runPurge(deps: PurgeDeps): Promise<PurgeResult> {
             clock,
           )
           categories[rule.id] = (categories[rule.id] ?? 0) + r.total
+          if (r.stopped !== undefined) throw r.stopped
           if (r.limitHit) batchLimitHits.push({ tenant: null, rule: rule.id, batches: maxBatches })
         } catch (err) {
           if (!deadlineHit(err)) errors.push({ tenant: null, rule: rule.id, message: messageOf(err) })
@@ -536,12 +579,16 @@ export async function runPurge(deps: PurgeDeps): Promise<PurgeResult> {
       }
       // --- kernel scope: every customer's kernel database, LOGGED IN as its purger role
       const kernelRules = rules.filter((r) => r.scope === 'kernel')
-      const dbs =
-        partial === null
-          ? await server.admin<{ datname: string; owner: string }[]>`
-              SELECT d.datname, r.rolname AS owner FROM pg_database d JOIN pg_roles r ON r.oid = d.datdba
-               WHERE d.datname ~ '^t_[0-9a-f]{32}__kernel$' AND d.datallowconn ORDER BY d.datname`
-          : []
+      let dbs: { datname: string; owner: string }[] = []
+      try {
+        if (partial === null) {
+          dbs = await bounded(server.admin, clock.left(), (tx) => tx<{ datname: string; owner: string }[]>`
+            SELECT d.datname, r.rolname AS owner FROM pg_database d JOIN pg_roles r ON r.oid = d.datdba
+             WHERE d.datname ~ '^t_[0-9a-f]{32}__kernel$' AND d.datallowconn ORDER BY d.datname`)
+        }
+      } catch (err) {
+        if (!deadlineHit(err)) errors.push({ tenant: null, rule: '*', message: messageOf(err) })
+      }
       for (const { datname, owner } of dbs) {
         if (partial !== null || clock.expired()) {
           partial = 'deadline'
@@ -557,7 +604,7 @@ export async function runPurge(deps: PurgeDeps): Promise<PurgeResult> {
         }
         let session: Awaited<ReturnType<typeof openPurgerSession>> | undefined
         try {
-          session = await openPurgerSession(server, hex, new Date(deadlineAt + 60_000))
+          session = await openPurgerSession(server, hex, new Date(deadlineAt + 60_000), () => clock.left())
           const kdb = session.db
           for (const rule of kernelRules) {
             if (partial !== null) break
@@ -582,6 +629,7 @@ export async function runPurge(deps: PurgeDeps): Promise<PurgeResult> {
                 clock,
               )
               categories[rule.id] = (categories[rule.id] ?? 0) + r.total
+              if (r.stopped !== undefined) throw r.stopped
               if (r.limitHit) batchLimitHits.push({ tenant: hex, rule: rule.id, batches: maxBatches })
             } catch (err) {
               if (!deadlineHit(err)) errors.push({ tenant: hex, rule: rule.id, message: messageOf(err) })

@@ -15,7 +15,7 @@
 --     INSERT .. ON CONFLICT DO NOTHING before it deletes anything, so a
 --     disabled definition stays disabled. gremion-purge.timer fires the same
 --     moment; one schedule, stated once (purge.ts).
-SET lock_timeout = '5s';
+SET LOCAL lock_timeout = '5s';
 
 ALTER TABLE plt.job_run ADD COLUMN detail jsonb;
 ALTER TABLE plt.job_run ADD CONSTRAINT job_run_detail_check

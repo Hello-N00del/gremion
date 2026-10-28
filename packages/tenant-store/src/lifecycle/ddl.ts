@@ -8,10 +8,16 @@
 // string concatenation, and every identifier was validated first (guards.ts).
 import type { Sql } from '@gremion/db'
 
-/** format(template, ...args) evaluated by PostgreSQL. */
+/**
+ * format(template, ...args) evaluated by PostgreSQL. The function and the casts
+ * are pg_catalog-qualified: the admin runs this inside customer databases whose
+ * owner may ALTER DATABASE SET search_path and plant a public.format(text, text)
+ * (an exact match beats pg_catalog.format(text, VARIADIC "any")) or a public.text
+ * domain, which would then run as the superuser.
+ */
 export async function serverFormat(sql: Sql, template: string, args: readonly string[]): Promise<string> {
-  const placeholders = args.map((_, i) => `$${i + 2}::text`).join(', ')
-  const rows = await sql.unsafe<{ stmt: string }[]>(`SELECT format($1::text${placeholders ? `, ${placeholders}` : ''}) AS stmt`, [template, ...args])
+  const placeholders = args.map((_, i) => `$${i + 2}::pg_catalog.text`).join(', ')
+  const rows = await sql.unsafe<{ stmt: string }[]>(`SELECT pg_catalog.format($1::pg_catalog.text${placeholders ? `, ${placeholders}` : ''}) AS stmt`, [template, ...args])
   const stmt = rows[0]?.stmt
   if (typeof stmt !== 'string' || stmt === '') throw new Error(`format(${JSON.stringify(template)}) returned no statement`)
   return stmt

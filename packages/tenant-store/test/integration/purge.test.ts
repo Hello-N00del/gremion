@@ -17,7 +17,13 @@ import type { PurgeDeps, PurgeServer } from '../../src/lifecycle/index.js'
 import { connect, connectAs } from '../harness/db.js'
 import { platformDb, uuidv7 } from '../harness/lifecycle.js'
 
-function kernelServer(): PurgeServer & { close(): Promise<void>; logins: string[] } {
+/**
+ * The kernel server as customer-adapters.ts kernelServer builds it: every admin
+ * open of a customer database sends search_path=pg_catalog as a startup
+ * parameter (it overrides the owner's ALTER DATABASE SET). `bare` is a
+ * ModuleServer that forgets it: the lifecycle's own pinning must hold alone.
+ */
+function kernelServer(opts: { bare?: boolean } = {}): PurgeServer & { close(): Promise<void>; logins: string[] } {
   const admin = connect('t020_test_admin', { max: 2 })
   const pools: Sql[] = []
   const logins: string[] = []
@@ -25,7 +31,7 @@ function kernelServer(): PurgeServer & { close(): Promise<void>; logins: string[
     admin,
     logins,
     open(database) {
-      const sql = connect(database, { max: 2 })
+      const sql = connect(database, { max: 2, ...(opts.bare ? {} : { connection: { search_path: 'pg_catalog' } }) })
       pools.push(sql)
       return sql
     },
@@ -52,7 +58,13 @@ describe('runPurge (TRD-144/145)', () => {
   const U = uuidv7() // a second customer: aged too, purged by ITS purger role
   const pw = randomBytes(24).toString('base64url')
   const run = (extra: Partial<PurgeDeps> = {}) => runPurge({ platform, server, now: () => NOW, ...extra })
-  const db = (t: string) => server.open(kernelDbName(t)) as Sql
+  // the test's own pools (the default search_path: the seeds name tables unqualified)
+  const seedPools: Sql[] = []
+  const db = (t: string) => {
+    const sql = connect(kernelDbName(t), { max: 2 })
+    seedPools.push(sql)
+    return sql
+  }
   const count = async (t: string, sql: string) => (await db(t).unsafe(sql))[0]!.n as number
 
   async function seed(tenant: string) {
@@ -103,6 +115,7 @@ describe('runPurge (TRD-144/145)', () => {
     await dropKernelDatabase(server, T).catch((e: unknown) => console.error('[purge] teardown', e))
     await dropKernelDatabase(server, U).catch((e: unknown) => console.error('[purge] teardown', e))
     await platform.end()
+    await Promise.all(seedPools.map((s) => s.end({ timeout: 5 }).catch(() => {})))
     await server.close()
   })
 
@@ -222,6 +235,39 @@ describe('runPurge (TRD-144/145)', () => {
     }
   })
 
+  it('CRIT: a tenant ALTER DATABASE SET search_path + planted public.format / current_database / pg_roles cannot escalate through ensureKernelDatabase or ensureKernelPurgeGrants', async () => {
+    const Z = uuidv7()
+    const bare = kernelServer({ bare: true })
+    await ensureKernelDatabase(server, Z, pw)
+    try {
+      await seed(Z)
+      const { owner, app } = kernelRoles(Z)
+      const esc = `EXECUTE pg_catalog.format('ALTER ROLE %I SUPERUSER', '${app}')`
+      // what the tenant (the app role, a member of the owner) can do in its own database
+      await db(Z).begin(async (tx) => {
+        await tx.unsafe(`SET LOCAL ROLE ${owner}`)
+        await tx.unsafe(`
+          CREATE FUNCTION public.format(t text, a text) RETURNS text LANGUAGE plpgsql AS $$ BEGIN ${esc}; RETURN pg_catalog.format(t, a); END $$;
+          CREATE FUNCTION public.format(t text, a text, b text) RETURNS text LANGUAGE plpgsql AS $$ BEGIN ${esc}; RETURN pg_catalog.format(t, a, b); END $$;
+          CREATE FUNCTION public.current_database() RETURNS name LANGUAGE plpgsql AS $$ BEGIN ${esc}; RETURN pg_catalog.current_database(); END $$;
+          CREATE FUNCTION public.esc_roles() RETURNS SETOF pg_catalog.pg_roles LANGUAGE plpgsql AS $$ BEGIN ${esc}; RETURN QUERY SELECT * FROM pg_catalog.pg_roles; END $$;
+          CREATE VIEW public.pg_roles AS SELECT * FROM public.esc_roles();
+          ALTER DATABASE ${kernelDbName(Z)} SET search_path = public, pg_catalog;`)
+      })
+      const isSuper = async () => (await server.admin<{ s: boolean }[]>`SELECT rolsuper AS s FROM pg_roles WHERE rolname = ${app}`)[0]!.s
+      for (const [label, s] of [['startup search_path', server], ['bare server', bare]] as const) {
+        await ensureKernelDatabase(s, Z, pw)
+        expect(await isSuper(), `${label}: ensureKernelDatabase`).toBe(false)
+        expect(await ensureKernelPurgeGrants(s, Z)).toEqual({ granted: ['event_consumption', 'scheduled_notifications'], absent: [] })
+        expect(await isSuper(), `${label}: ensureKernelPurgeGrants`).toBe(false)
+      }
+    } finally {
+      await server.admin.unsafe(`ALTER ROLE ${kernelRoles(Z).app} NOSUPERUSER`).catch(() => {})
+      await dropKernelDatabase(server, Z)
+      await bare.close()
+    }
+  })
+
   it('logs in AS the purger (no SET ROLE in an admin session): RESET ROLE stays the purger, which cannot ALTER ROLE; at rest it is NOLOGIN with no password', async () => {
     const { purger, app } = kernelRoles(T)
     expect(server.logins).toContain(purger)
@@ -304,6 +350,53 @@ describe('runPurge (TRD-144/145)', () => {
     expect(row!.status).toBe('failed')
     expect(row!.detail).toMatchObject({ partial: 'deadline', deadline_ms: 1 })
     await db(U).unsafe(`DELETE FROM event_consumption WHERE consumer = 'old-dl'`)
+  })
+
+  it('HIGH: a deadline that stops a rule after committed batches records the rows those batches deleted', async () => {
+    const ec = 'RC-K1-PLUMB/event_consumption'
+    for (const c of ['dl-1', 'dl-2', 'dl-hold']) {
+      await db(U).unsafe(`INSERT INTO event_consumption (consumer, event_id, consumed_at) VALUES ('${c}', gen_random_uuid(), '${daysAgo(9).toISOString()}')`)
+    }
+    // batch 1 and 2 commit (one row each); batch 3 waits on the held row lock until the deadline
+    let r: Awaited<ReturnType<typeof run>> | undefined
+    try {
+      await db(U).begin(async (tx) => {
+        await tx`SELECT 1 FROM event_consumption WHERE consumer = 'dl-hold' FOR UPDATE`
+        r = await run({ batchSize: 1, deadlineMs: 3000 })
+      })
+      const removed = 3 - (await count(U, `SELECT count(*)::int AS n FROM event_consumption WHERE consumer LIKE 'dl-%'`))
+      expect(removed).toBe(2)
+      expect(r!.partial).toBe('deadline')
+      expect(r!.categories[ec]).toBe(removed)
+      const [row] = await platform<{ detail: any }[]>`SELECT detail FROM plt.job_run WHERE job_run_id = ${r!.jobRunId}::uuid`
+      expect(row!.detail.categories[ec]).toBe(removed)
+    } finally {
+      await db(U).unsafe(`DELETE FROM event_consumption WHERE consumer LIKE 'dl-%'`)
+    }
+  })
+
+  it('MED: the admin role DDL is bounded by the deadline: a lock on the purger role does not hang the run past it', async () => {
+    const { purger } = kernelRoles(U)
+    // another admin transaction that altered the same role and is still open (ensureKernelRoles, say)
+    const hold = await server.admin.reserve()
+    await hold`BEGIN`
+    await hold.unsafe(`ALTER ROLE ${purger} NOLOGIN`)
+    const timer = setTimeout(() => void hold`ROLLBACK`.catch(() => {}), 8000)
+    const t0 = Date.now()
+    let r: Awaited<ReturnType<typeof run>> | undefined
+    try {
+      r = await run({ deadlineMs: 3000 })
+    } finally {
+      clearTimeout(timer)
+      await hold`ROLLBACK`.catch(() => {})
+      hold.release()
+    }
+    expect(Date.now() - t0).toBeLessThan(6000)
+    expect(r.partial).toBe('deadline')
+    const [row] = await platform<{ detail: any }[]>`SELECT detail FROM plt.job_run WHERE job_run_id = ${r.jobRunId}::uuid`
+    expect(row!.detail).toMatchObject({ partial: 'deadline' })
+    const [rest] = await server.admin<{ login: boolean }[]>`SELECT rolcanlogin AS login FROM pg_roles WHERE rolname = ${purger}`
+    expect(rest!.login).toBe(false)
   })
 
   it('MED: a rule cut at the batch cap is recorded in detail.batch_limit_hits (rows may remain)', async () => {

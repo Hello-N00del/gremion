@@ -394,7 +394,9 @@ function moduleServerFor(adminUrl: string): ModuleServer & { close(): Promise<vo
         max: 2,
         onnotice: () => {},
         connect_timeout: 15,
-        ...(options?.role ? { connection: { options: `-c role=${options.role}` } } : {}),
+        // as the owner (a migration) the session keeps the database's search_path; as the
+        // superuser itself (inspection) it is pinned, overriding the owner's ALTER DATABASE SET
+        connection: options?.role ? { options: `-c role=${options.role}` } : { search_path: 'pg_catalog' },
       })
       pools.push(sql)
       return sql
