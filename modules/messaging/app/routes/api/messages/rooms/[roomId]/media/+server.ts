@@ -13,6 +13,15 @@ function requireAuth(event: RequestEvent): SessionUser {
   return user
 }
 
+// Upload and download are both room-scoped: the caller must be a member of the room.
+async function requireRoomMember(event: RequestEvent, roomId: string): Promise<void> {
+  const backend = getMessagesBackend()
+  const creds = await backend.resolveMatrixCreds(event)
+  if (!creds.userId || !(await backend.synapse().isRoomMember(roomId, creds.userId))) {
+    throw error(403, 'Not a member of this room')
+  }
+}
+
 async function getKeycloakJwt(event: RequestEvent): Promise<string> {
   const authHeader = event.request.headers.get('Authorization')
   if (authHeader?.startsWith('Bearer ')) return authHeader.slice(7)
@@ -44,6 +53,7 @@ function safeContentType(upstream: string | undefined): string {
 // a raw body 500'd inside formData(); no shape satisfied both.)
 export const POST: RequestHandler = async (event) => {
   requireAuth(event)
+  await requireRoomMember(event, event.params.roomId ?? '')
 
   const contentLength = parseInt(event.request.headers.get('Content-Length') ?? '0', 10)
   if (contentLength > MAX_UPLOAD_BYTES) throw error(413, 'File too large (max 20 MB)')
@@ -97,11 +107,8 @@ export const GET: RequestHandler = async (event) => {
   if (!verifyMedia(mxcUri, roomId, exp, sig)) throw error(403, 'Invalid or expired media signature')
 
   // The URL is a capability for ONE room: the caller must still be a member of it.
+  await requireRoomMember(event, roomId)
   const backend = getMessagesBackend()
-  const creds = await backend.resolveMatrixCreds(event)
-  if (!creds.userId || !(await backend.synapse().isRoomMember(roomId, creds.userId))) {
-    throw error(403, 'Not a member of this room')
-  }
 
   const { data, contentType } = await backend.matrix().downloadMedia(mxcUri)
 

@@ -237,8 +237,9 @@ describe('GET /api/messages/rooms/[roomId]/media (signed URL hardening)', () => 
   })
 
   it('rejects a logged-in user who is not a member of the room', async () => {
+    const url = await signedUrl()
     mockIsRoomMember.mockResolvedValue(false)
-    await expectStatus(GET(getEvent(await signedUrl())), 403)
+    await expectStatus(GET(getEvent(url)), 403)
     expect(mockDownloadMedia).not.toHaveBeenCalled()
   })
 
@@ -257,5 +258,21 @@ describe('GET /api/messages/rooms/[roomId]/media (signed URL hardening)', () => 
     mockDownloadMedia.mockResolvedValue({ data: new ArrayBuffer(3), contentType: 'image/svg+xml' })
     const res2 = await GET(getEvent(await signedUrl()))
     expect(res2.headers.get('Content-Type')).toBe('application/octet-stream')
+  })
+})
+
+describe('POST membership gate', () => {
+  it('403s an upload to a room the caller is not a member of, before touching Matrix media', async () => {
+    mockIsRoomMember.mockResolvedValue(false)
+    const file = mediaFile('p.png', 'image/png')
+    await expectStatus(POST(makeEvent({ request: multipart(file) })), 403)
+    expect(mockUploadMedia).not.toHaveBeenCalled()
+  })
+
+  it('403s when the caller has no Matrix identity', async () => {
+    mockResolveCreds.mockResolvedValue({ userId: '', accessToken: '' })
+    const file = mediaFile('p.png', 'image/png')
+    await expectStatus(POST(makeEvent({ request: multipart(file) })), 403)
+    expect(mockUploadMedia).not.toHaveBeenCalled()
   })
 })
