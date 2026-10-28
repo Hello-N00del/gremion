@@ -31,5 +31,5 @@
   "0057_fk_hot_filter_indexes.sql": "1dc2cdad096597e5710acbd24fe0d0bfebcadc8e094233f941f5799aa2d60cbc",
   "0058_public_reader_grants.sql": "b963388faef6afa033c0c3be29918bd9371986306d9c136b2a30bbd361d854be",
   "0059_audit_log_chain_anchor.sql": "1e344401669805cd84849101b1e5858f7ff29e7ea39f9e42b61990490bfb82cd",
-  "0060_erasure_report.sql": "4733add704982bcad3270ccb19de89cc711304c133af78f473f8710c8572aae5"
+  "0060_erasure_report.sql": "984d2ef720eb67e55015682de2a084f505a4a0b6101e1dea1118505a579767c2"
 }

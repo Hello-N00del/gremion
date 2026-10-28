@@ -16,6 +16,7 @@ import {
   type ErasureDeps,
   type ErasureReportStore,
 } from './orchestrator'
+import { ErasureSubjectUnknownError } from './subject'
 
 const DB = { tag: 'tenant-db' } as unknown as Sql
 const TENANT = 'tenant-a'
@@ -60,13 +61,18 @@ function hookOf(moduleId: string, erase?: KernelErasureHook['erase']): KernelEra
 function deps(
   enabled: string[],
   hooks: KernelErasureHook[],
-  opts: { noConnection?: string[]; store?: ErasureReportStore } = {},
+  opts: {
+    noConnection?: string[]
+    store?: ErasureReportStore
+    resolveSubject?: ErasureDeps['resolveSubject']
+  } = {},
 ): ErasureDeps {
   const byId = new Map(hooks.map((h) => [h.moduleId, h]))
   return {
     enabledModuleIds: () => enabled,
     hookFor: (id) => byId.get(id),
     connectionFor: (id) => (opts.noConnection?.includes(id) ? null : DB),
+    resolveSubject: opts.resolveSubject ?? (async (id) => ({ id, username: 'jdoe', email: 'jdoe@example.org' })),
     store: opts.store ?? memoryStore(),
     now: () => new Date('2026-10-27T10:00:00Z'),
   }
@@ -94,6 +100,51 @@ describe('subjectRef (LOW): keyed, not a bare hash anyone can recompute', () => 
     } finally {
       process.env.AUTH_SECRET = saved
     }
+  })
+})
+
+describe('the subject is bound to the tenant BEFORE any hook runs (R33f HIGH)', () => {
+  it('an id the tenant does not know is refused: no report, no hook, nothing touched', async () => {
+    const store = memoryStore()
+    const erase = vi.fn(async () => ({ status: 'erased' as const, counts: {} }))
+    const resolveSubject = vi.fn(async () => null)
+    await expect(
+      runErasure(input, deps(['kernel', 'files'], [hookOf('kernel', erase), hookOf('files', erase)], { store, resolveSubject })),
+    ).rejects.toBeInstanceOf(ErasureSubjectUnknownError)
+    expect(resolveSubject).toHaveBeenCalledWith(SUBJECT)
+    expect(erase).not.toHaveBeenCalled()
+    expect(store.headers).toHaveLength(0)
+  })
+
+  it('every hook gets the VERIFIED identity in its context', async () => {
+    const seen: unknown[] = []
+    const spy = hookOf('files', async (ctx) => {
+      seen.push(ctx.subject)
+      return { status: 'erased', counts: {} }
+    })
+    await runErasure(
+      input,
+      deps(['files'], [spy], { resolveSubject: async () => ({ id: SUBJECT, username: 'anna', email: 'anna@example.org' }) }),
+    )
+    expect(seen).toEqual([{ id: SUBJECT, username: 'anna', email: 'anna@example.org' }])
+  })
+
+  it('a resolver that answers for a DIFFERENT id is refused', async () => {
+    const erase = vi.fn(async () => ({ status: 'erased' as const, counts: {} }))
+    await expect(
+      runErasure(input, deps(['kernel'], [hookOf('kernel', erase)], { resolveSubject: async () => ({ id: 'someone-else', username: null, email: null }) })),
+    ).rejects.toBeInstanceOf(ErasureSubjectUnknownError)
+    expect(erase).not.toHaveBeenCalled()
+  })
+
+  it('a resolver error (Keycloak down) aborts the run before anything is touched', async () => {
+    const erase = vi.fn(async () => ({ status: 'erased' as const, counts: {} }))
+    const store = memoryStore()
+    await expect(
+      runErasure(input, deps(['kernel'], [hookOf('kernel', erase)], { store, resolveSubject: async () => { throw new Error('keycloak 503') } })),
+    ).rejects.toThrow('keycloak 503')
+    expect(erase).not.toHaveBeenCalled()
+    expect(store.headers).toHaveLength(0)
   })
 })
 
@@ -176,7 +227,9 @@ describe('runErasure', () => {
     )
     const cal = report.modules.find((m) => m.moduleId === 'calendar')!
     expect(cal.status).toBe('failed')
-    expect(cal.reason).toMatch(/constraint violated/)
+    // the stored reason is the error class only, never the (possibly identifying) message
+    expect(cal.reason).toBe('Error')
+    expect(cal.reason).not.toMatch(/constraint violated/)
     expect(after).toHaveBeenCalledOnce()
     expect(report.status).toBe('incomplete')
   })
@@ -202,6 +255,15 @@ describe('runErasure', () => {
     expect(report.modules[0].residuals).toEqual([residual])
     expect(report.modules[1].residuals).toEqual([])
     expect(report.status).toBe('complete')
+  })
+
+  it('a residual whose count the owner cannot obtain (rows null) is accepted and kept', async () => {
+    const residual = { table: 'deliveries', column: 'email', rows: null, reason: 'in the leaf database, not reachable' }
+    const report = await runErasure(
+      input,
+      deps(['kernel'], [hookOf('kernel', async () => ({ status: 'erased', counts: {}, residuals: [residual] }))]),
+    )
+    expect(report.modules[0]).toMatchObject({ status: 'erased', residuals: [residual] })
   })
 
   it('a malformed residual list is failed, not erased', async () => {
@@ -239,7 +301,12 @@ describe('runErasure', () => {
   it('passes the tenant id, subject id and the module connection to the hook', async () => {
     const seen = vi.fn(async () => ({ status: 'erased' as const, counts: {} }))
     await runErasure(input, deps(['kernel'], [hookOf('kernel', seen)]))
-    expect(seen).toHaveBeenCalledWith({ tenantId: TENANT, subjectId: SUBJECT, db: DB })
+    expect(seen).toHaveBeenCalledWith({
+      tenantId: TENANT,
+      subjectId: SUBJECT,
+      subject: { id: SUBJECT, username: 'jdoe', email: 'jdoe@example.org' },
+      db: DB,
+    })
   })
 
   it('refuses an empty subject id before anything is recorded', async () => {

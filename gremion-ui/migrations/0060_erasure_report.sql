@@ -77,8 +77,12 @@ CREATE TABLE IF NOT EXISTS erasure_report_module (
   CHECK (status = 'erased' OR reason IS NOT NULL)
 );
 
--- The honest-reporting invariants, enforced where the data lives (a caller with
--- plain DML on these tables cannot forge or rewrite a report):
+-- The honest-reporting invariants, enforced where the data lives. They protect a
+-- FINISHED report from being rewritten and make `complete` require a module row
+-- for the run's own declared module set. They do NOT stop a caller with plain DML
+-- from inserting a NEW report that declares fewer modules, nor an owner from
+-- TRUNCATE or ALTER ... DISABLE TRIGGER: the application's database role is the
+-- boundary for that, not these triggers.
 --   * a header is inserted `running`; finished_at is set exactly when it is not;
 --   * tenant_id, subject_ref, requested_by, started_at and expected_modules
 --     never change;

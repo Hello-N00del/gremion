@@ -22,7 +22,7 @@
 // module reports `skipped` and touches nothing. CONTENT_BACKEND=service: the
 // content leaf owns its database and the kernel holds no connection -> `skipped`.
 import type { Sql } from '@gremion/db'
-import type { ModuleErasureHook } from '@gremion/ports/erasure'
+import type { ErasureResidual, ModuleErasureHook } from '@gremion/ports/erasure'
 import { getKeycloakAdminClientForCurrentTenant } from '$lib/server/keycloak-admin'
 
 export const CONTENT_ERASED_MARKER = 'erased'
@@ -51,6 +51,7 @@ export function createContentErasureHook(deps: ContentErasureDeps): ModuleErasur
         }
       }
       const addr = email.trim().toLowerCase()
+      const residuals: ErasureResidual[] = []
       const counts = await db.begin(async (tx) => {
         const c: Record<string, number> = {}
         c.posts = (await tx`UPDATE content.posts SET created_by = ${CONTENT_ERASED_MARKER} WHERE created_by = ${subjectId}`).count
@@ -66,9 +67,19 @@ export function createContentErasureHook(deps: ContentErasureDeps): ModuleErasur
         c.deliveries = (
           await tx`UPDATE content.deliveries SET email = 'erased:' || gen_random_uuid() WHERE lower(btrim(email)) = ${addr}`
         ).count
+        // R33f MED: the suppression list stays (see the header); say so, with the real count.
+        const kept = (await tx`SELECT 1 FROM content.unsubscribes WHERE lower(btrim(email)) = ${addr}`).count
+        if (kept > 0) {
+          residuals.push({
+            table: 'content.unsubscribes',
+            column: 'email',
+            rows: kept,
+            reason: 'suppression / consent evidence (RC-NWS-SUB, audit window): deleting it would let a later import mail someone who opted out',
+          })
+        }
         return c
       })
-      return { status: 'erased', counts }
+      return { status: 'erased', counts, ...(residuals.length > 0 ? { residuals } : {}) }
     },
   }
 }

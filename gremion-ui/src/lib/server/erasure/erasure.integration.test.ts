@@ -10,6 +10,8 @@ import type { KernelErasureHook } from '$lib/server/modules/runtime-registry'
 import { kernelErasureHook } from './kernel-hook'
 import { createIdentityErasureHook } from './identity-hook'
 import { runErasure, subjectRef, type ErasureDeps } from './orchestrator'
+import { readErasureReport, readErasureReports, tenantHoldsSubjectData } from './service'
+import { currentTenantId } from '$lib/server/tenant/context'
 import { createPgReportStore, getErasureReport, listErasureReports } from './report-store'
 
 process.env.AUTH_SECRET ??= 'integration-test-auth-secret'
@@ -125,6 +127,19 @@ describe('HIGH-1: external identity removal is queued, never cancelled', () => {
     }
     const res = await createIdentityErasureHook({ drain }).erase({ tenantId: TENANT_A, subjectId: SUBJECT, db: sql })
     expect(res).toMatchObject({ status: 'skipped', reason: expect.stringMatching(/0 ops queued.*Keycloak account/) })
+  })
+
+  it('R33f MED: the remove-ops the run itself created leave no raw subject id behind once the drain settled them', async () => {
+    await seed()
+    const sql = getDb()
+    await kernelErasureHook.erase({ tenantId: TENANT_A, subjectId: SUBJECT, db: sql })
+    const drain = async () => {
+      await sql`UPDATE provisioning_member_ops SET status = 'ok' WHERE user_keycloak_id = ${SUBJECT} AND subsystem = 'keycloak'`
+    }
+    const res = await createIdentityErasureHook({ drain }).erase({ tenantId: TENANT_A, subjectId: SUBJECT, db: sql })
+    // the settled op is gone, the still-queued one (the outbox of its removal) must stay
+    expect(await sql`SELECT subsystem FROM provisioning_member_ops WHERE user_keycloak_id = ${SUBJECT}`).toEqual([{ subsystem: 'matrix' }])
+    expect(res).toMatchObject({ status: 'skipped', reason: expect.stringMatching(/1 ops queued/) })
   })
 
   it('a throwing drain leaves the ops queued and the step skipped (never failed-open to erased)', async () => {
@@ -243,6 +258,7 @@ describe('MED-3: what the kernel step deliberately leaves is reported per column
         enabledModuleIds: () => ['kernel'],
         hookFor: (id) => hooks.get(id),
         connectionFor: () => sql,
+        resolveSubject: async (id) => ({ id, username: null, email: null }),
         store: createPgReportStore(sql),
         now: () => new Date(),
       },
@@ -270,6 +286,7 @@ describe('full run: kernel + calendar, one module connection removed', () => {
       enabledModuleIds: () => ['kernel', 'calendar'],
       hookFor: (id) => hooks.get(id),
       connectionFor: (id) => (noConnection.includes(id) ? null : sql),
+      resolveSubject: async (id) => ({ id, username: null, email: null }),
       store: createPgReportStore(sql),
       now: () => new Date(),
     }
@@ -302,6 +319,60 @@ describe('full run: kernel + calendar, one module connection removed', () => {
     const rows = await getDb()`SELECT to_jsonb(r) AS j FROM erasure_report r UNION ALL SELECT to_jsonb(m) FROM erasure_report_module m`
     expect(JSON.stringify(rows)).not.toContain(SUBJECT)
     expect(report.id).toBeTruthy()
+  })
+})
+
+describe('R33f HIGH: tenantHoldsSubjectData binds an id to THIS tenant by its own data', () => {
+  it('false for an id the tenant has never seen (a user of another tenant)', async () => {
+    await seed()
+    expect(await tenantHoldsSubjectData(getDb(), TENANT_A, '0b5f0e9c-3a56-4f3a-9a7a-1d8f0a2b7caa')).toBe(false)
+  })
+
+  it('true while the tenant holds a membership / role of the id', async () => {
+    await seed()
+    expect(await tenantHoldsSubjectData(getDb(), TENANT_A, SUBJECT)).toBe(true)
+  })
+
+  it('still true after the erasure removed every live row (this tenant own report proves it), but not for another tenant id', async () => {
+    await seed()
+    const sql = getDb()
+    await runErasure({ tenantId: TENANT_A, subjectId: SUBJECT, requestedBy: 'admin' }, {
+      enabledModuleIds: () => ['kernel'],
+      hookFor: () => kernelErasureHook,
+      connectionFor: () => sql,
+      resolveSubject: async (id) => ({ id, username: null, email: null }),
+      store: createPgReportStore(sql),
+      now: () => new Date(),
+    })
+    await sql`DELETE FROM provisioning_member_ops`
+    expect(await sql`SELECT 1 FROM org_unit_members WHERE user_keycloak_id = ${SUBJECT}`).toHaveLength(0)
+    expect(await tenantHoldsSubjectData(sql, TENANT_A, SUBJECT)).toBe(true)
+    // the report's pseudonym is tenant-bound: the same id under another tenant id has no evidence
+    expect(await tenantHoldsSubjectData(sql, TENANT_B, SUBJECT)).toBe(false)
+  })
+})
+
+describe('R33f LOW: a crashed run is closed when the reports are READ, not only when the next erasure starts', () => {
+  it('a header still running after the stale window reads as incomplete with the stale reason (list and single)', async () => {
+    const sql = getDb()
+    const tenantId = currentTenantId()
+    const id = await createPgReportStore(sql).begin({
+      tenantId,
+      subjectRef: subjectRef(tenantId, SUBJECT),
+      requestedBy: 'admin',
+      startedAt: new Date(Date.now() - 2 * 60 * 60 * 1000),
+      moduleIds: ['kernel'],
+    })
+    const [listed] = await readErasureReports()
+    expect(listed).toMatchObject({ id, status: 'incomplete', finishReason: expect.stringMatching(/^stale:/) })
+    expect((await readErasureReport(id))?.status).toBe('incomplete')
+  })
+
+  it('a run that is still inside the window stays running', async () => {
+    const sql = getDb()
+    const tenantId = currentTenantId()
+    const id = await createPgReportStore(sql).begin({ tenantId, subjectRef: subjectRef(tenantId, SUBJECT), requestedBy: 'admin', startedAt: new Date(), moduleIds: ['kernel'] })
+    expect((await readErasureReport(id))?.status).toBe('running')
   })
 })
 

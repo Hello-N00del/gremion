@@ -7,8 +7,11 @@ import { currentTenantId } from '$lib/server/tenant/context'
 import { getErasureHook } from '$lib/server/modules/runtime-registry'
 import { KERNEL_MODULE_ID, kernelErasureHook } from './kernel-hook'
 import { IDENTITY_MODULE_ID, createIdentityErasureHook } from './identity-hook'
-import { runErasure, subjectRef, type ErasureDeps, type ErasureReport } from './orchestrator'
+import { runErasure, STALE_RUN_MS, subjectRef, type ErasureDeps, type ErasureReport } from './orchestrator'
 import { createPgReportStore, getErasureReport, listErasureReports } from './report-store'
+import { createSubjectResolver } from './subject'
+import type { Sql } from '@gremion/db'
+import { getKeycloakAdminClientForCurrentTenant } from '$lib/server/keycloak-admin'
 
 /**
  * The ENABLED module ids of the current tenant, the kernel's own step first and
@@ -74,6 +77,24 @@ const identityErasureHook = createIdentityErasureHook({
   },
 })
 
+/**
+ * True when the TENANT's own database holds data of the id: a membership, a role
+ * (history), a caucus seat, a queued remove-op, or an earlier erasure report of this
+ * tenant. Used for a subject the realm no longer holds (subject.ts, case 2).
+ */
+export async function tenantHoldsSubjectData(sql: Sql, tenantId: string, subjectId: string): Promise<boolean> {
+  const [row] = await sql<{ found: boolean }[]>`
+    SELECT (
+      EXISTS (SELECT 1 FROM org_unit_members WHERE user_keycloak_id = ${subjectId})
+      OR EXISTS (SELECT 1 FROM role_assignments WHERE user_keycloak_id = ${subjectId})
+      OR EXISTS (SELECT 1 FROM role_assignment_history WHERE user_keycloak_id = ${subjectId})
+      OR EXISTS (SELECT 1 FROM caucus_membership WHERE user_keycloak_id = ${subjectId})
+      OR EXISTS (SELECT 1 FROM provisioning_member_ops WHERE user_keycloak_id = ${subjectId})
+      OR EXISTS (SELECT 1 FROM erasure_report WHERE tenant_id = ${tenantId} AND subject_ref = ${subjectRef(tenantId, subjectId)})
+    ) AS found`
+  return row.found
+}
+
 export function defaultErasureDeps(): ErasureDeps {
   return {
     enabledModuleIds: async () => erasureModuleIds(readConfig().modules, await appliedMigrations()),
@@ -88,6 +109,10 @@ export function defaultErasureDeps(): ErasureDeps {
         return null
       }
     },
+    resolveSubject: createSubjectResolver({
+      getUser: (id) => getKeycloakAdminClientForCurrentTenant().getUser(id),
+      hasTenantEvidence: (id) => tenantHoldsSubjectData(getDb(), currentTenantId(), id),
+    }),
     store: createPgReportStore(getDb()),
     now: () => new Date(),
   }
@@ -100,12 +125,25 @@ export function startErasure(
   return runErasure({ tenantId: currentTenantId(), ...input }, deps)
 }
 
-export function readErasureReport(id: string): Promise<ErasureReport | null> {
-  return getErasureReport(getDb(), currentTenantId(), id)
+/** R33f LOW: close crashed runs before they are read, not only when the next erasure starts. Best effort. */
+async function closeStaleRuns(tenantId: string): Promise<void> {
+  try {
+    const now = Date.now()
+    await createPgReportStore(getDb()).sweepStale(tenantId, new Date(now - STALE_RUN_MS), new Date(now))
+  } catch (err) {
+    console.error('[erasure] stale-run sweep on read failed:', err instanceof Error ? err.message : err)
+  }
 }
 
-export function readErasureReports(opts: { subjectId?: string } = {}): Promise<ErasureReport[]> {
+export async function readErasureReport(id: string): Promise<ErasureReport | null> {
   const tenantId = currentTenantId()
+  await closeStaleRuns(tenantId)
+  return getErasureReport(getDb(), tenantId, id)
+}
+
+export async function readErasureReports(opts: { subjectId?: string } = {}): Promise<ErasureReport[]> {
+  const tenantId = currentTenantId()
+  await closeStaleRuns(tenantId)
   return listErasureReports(getDb(), tenantId, {
     subjectRef: opts.subjectId ? subjectRef(tenantId, opts.subjectId) : undefined,
   })

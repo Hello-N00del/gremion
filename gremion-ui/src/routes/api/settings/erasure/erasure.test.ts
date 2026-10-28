@@ -22,6 +22,8 @@ vi.mock('$lib/server/erasure/service', () => ({
 }))
 vi.mock('$lib/server/audit-db', () => ({ writeAuditEntry: h.writeAuditEntry }))
 
+const SUBJ = '0b5f0e9c-3a56-4f3a-9a7a-1d8f0a2b7caa'
+const SUBJ_SECRET = '7c1d2e3f-4a5b-4c6d-8e7f-9a0b1c2d3e4f'
 const RID = '0190a000-0000-7000-8000-00000000000a'
 const REPORT = {
   id: RID,
@@ -36,6 +38,8 @@ const REPORT = {
     { moduleId: 'calendar', status: 'skipped', counts: {}, reason: 'no database connection' },
   ],
 }
+
+import { ErasureSubjectUnknownError } from '$lib/server/erasure/subject'
 
 const nowSec = () => Math.floor(Date.now() / 1000)
 
@@ -56,6 +60,13 @@ async function list(query = '', l = locals()) {
   return GET({ url: new URL(`http://localhost/api/settings/erasure${query}`), locals: l })
 }
 
+async function search(body: unknown, l = locals()) {
+  const { POST } = await import('./search/+server')
+  const request = new Request('http://localhost/api/settings/erasure/search', { method: 'POST', body: JSON.stringify(body) })
+  // @ts-expect-error partial event
+  return POST({ request, locals: l })
+}
+
 async function one(id: string, l = locals()) {
   const { GET } = await import('./[id]/+server')
   // @ts-expect-error partial event
@@ -73,12 +84,12 @@ beforeEach(() => {
 describe('admin-only: non-admin gets 403 and nothing runs', () => {
   it('POST', async () => {
     h.hasRole.mockReturnValue(false)
-    const res = await post({ subjectId: 'u1', confirm: 'LÖSCHEN' }, locals(['member']))
+    const res = await post({ subjectId: SUBJ, confirm: 'LÖSCHEN' }, locals(['member']))
     expect(res.status).toBe(403)
     expect(h.startErasure).not.toHaveBeenCalled()
   })
   it('POST without a session', async () => {
-    const res = await post({ subjectId: 'u1', confirm: 'LÖSCHEN' }, locals(null))
+    const res = await post({ subjectId: SUBJ, confirm: 'LÖSCHEN' }, locals(null))
     expect(res.status).toBe(403)
     expect(h.startErasure).not.toHaveBeenCalled()
   })
@@ -96,21 +107,21 @@ describe('admin-only: non-admin gets 403 and nothing runs', () => {
 
 describe('MED-4: POST requires a FRESH LoA 2 step-up (like the vault reveal)', () => {
   it('401 STEP_UP_REQUIRED for a password-only (LoA 1) admin session; nothing runs', async () => {
-    const res = await post({ subjectId: 'u1', confirm: 'LÖSCHEN' }, locals(['it-admin'], { loa: 1, authTime: nowSec() }))
+    const res = await post({ subjectId: SUBJ, confirm: 'LÖSCHEN' }, locals(['it-admin'], { loa: 1, authTime: nowSec() }))
     expect(res.status).toBe(401)
     expect(await res.json()).toEqual({ error: 'STEP_UP_REQUIRED', requiredLoa: 2 })
     expect(h.startErasure).not.toHaveBeenCalled()
   })
 
   it('401 for a stale LoA 2 (older than the freshness window)', async () => {
-    const res = await post({ subjectId: 'u1', confirm: 'LÖSCHEN' }, locals(['it-admin'], { loa: 2, authTime: nowSec() - 3600 }))
+    const res = await post({ subjectId: SUBJ, confirm: 'LÖSCHEN' }, locals(['it-admin'], { loa: 2, authTime: nowSec() - 3600 }))
     expect(res.status).toBe(401)
     expect(h.startErasure).not.toHaveBeenCalled()
   })
 
   it('a non-admin still gets 403 before the step-up check', async () => {
     h.hasRole.mockReturnValue(false)
-    const res = await post({ subjectId: 'u1', confirm: 'LÖSCHEN' }, locals(['member'], { loa: 1, authTime: 0 }))
+    const res = await post({ subjectId: SUBJ, confirm: 'LÖSCHEN' }, locals(['member'], { loa: 1, authTime: 0 }))
     expect(res.status).toBe(403)
   })
 
@@ -121,7 +132,7 @@ describe('MED-4: POST requires a FRESH LoA 2 step-up (like the vault reveal)', (
 
 describe('POST /api/settings/erasure', () => {
   it('422 without the server-side confirmation phrase', async () => {
-    const res = await post({ subjectId: 'u1', confirm: 'nein' })
+    const res = await post({ subjectId: SUBJ, confirm: 'nein' })
     expect(res.status).toBe(422)
     expect(h.startErasure).not.toHaveBeenCalled()
   })
@@ -132,10 +143,25 @@ describe('POST /api/settings/erasure', () => {
     expect(h.startErasure).not.toHaveBeenCalled()
   })
 
+  it('422 for an id that is not a Keycloak user id (UUID); nothing runs', async () => {
+    for (const bad of ['u1', '../../etc', 'a'.repeat(300), `${SUBJ}/..`, '0b5f0e9c-3a56-4f3a-9a7a-1d8f0a2b7caa%2F']) {
+      expect((await post({ subjectId: bad, confirm: 'LÖSCHEN' })).status).toBe(422)
+    }
+    expect(h.startErasure).not.toHaveBeenCalled()
+  })
+
+  it('404 with a generic message for an id the tenant does not know (R33f HIGH); no audit entry', async () => {
+    h.startErasure.mockRejectedValue(new ErasureSubjectUnknownError())
+    const res = await post({ subjectId: SUBJ, confirm: 'LÖSCHEN' })
+    expect(res.status).toBe(404)
+    expect(JSON.stringify(await res.json())).not.toContain(SUBJ)
+    expect(h.writeAuditEntry).not.toHaveBeenCalled()
+  })
+
   it('runs the erasure as the requesting admin and returns the per-module report with its honest status', async () => {
-    const res = await post({ subjectId: 'u1', confirm: 'LÖSCHEN' })
+    const res = await post({ subjectId: SUBJ, confirm: 'LÖSCHEN' })
     expect(res.status).toBe(200)
-    expect(h.startErasure).toHaveBeenCalledWith({ subjectId: 'u1', requestedBy: 'admin-1' })
+    expect(h.startErasure).toHaveBeenCalledWith({ subjectId: SUBJ, requestedBy: 'admin-1' })
     const body = await res.json()
     expect(body.success).toBe(true)
     expect(body.data.status).toBe('incomplete')
@@ -146,34 +172,56 @@ describe('POST /api/settings/erasure', () => {
   })
 
   it('writes an audit entry that carries the pseudonymous subject ref, never the subject id', async () => {
-    await post({ subjectId: 'u1-secret', confirm: 'LÖSCHEN' })
+    await post({ subjectId: SUBJ_SECRET, confirm: 'LÖSCHEN' })
     expect(h.writeAuditEntry).toHaveBeenCalledOnce()
     const entry = h.writeAuditEntry.mock.calls[0][0]
     expect(entry.field).toBe('erasure.run')
     expect(entry.newValue).toContain(REPORT.subjectRef)
-    expect(JSON.stringify(entry)).not.toContain('u1-secret')
+    expect(JSON.stringify(entry)).not.toContain(SUBJ_SECRET)
   })
 
   it('an audit-write failure does not hide the report', async () => {
     h.writeAuditEntry.mockRejectedValue(new Error('audit down'))
-    const res = await post({ subjectId: 'u1', confirm: 'LÖSCHEN' })
+    const res = await post({ subjectId: SUBJ, confirm: 'LÖSCHEN' })
     expect(res.status).toBe(200)
   })
 
   it('500 with a generic message when the run itself throws', async () => {
     h.startErasure.mockRejectedValue(new Error('boom'))
-    const res = await post({ subjectId: 'u1', confirm: 'LÖSCHEN' })
+    const res = await post({ subjectId: SUBJ, confirm: 'LÖSCHEN' })
     expect(res.status).toBe(500)
     expect(JSON.stringify(await res.json())).not.toContain('boom')
   })
 })
 
 describe('reading reports (tenant-scoped by the service)', () => {
-  it('GET list returns the reports; ?subjectId narrows by the subject', async () => {
-    const res = await list('?subjectId=u1')
+  it('GET list returns the reports', async () => {
+    const res = await list()
     expect(res.status).toBe(200)
-    expect(h.readErasureReports).toHaveBeenCalledWith({ subjectId: 'u1' })
+    expect(h.readErasureReports).toHaveBeenCalledWith({})
     expect((await res.json()).data).toHaveLength(1)
+  })
+
+  it('R33f LOW: the subject id never travels in the URL: GET ?subjectId= is refused, nothing is read', async () => {
+    const res = await list(`?subjectId=${SUBJ}`)
+    expect(res.status).toBe(400)
+    expect(h.readErasureReports).not.toHaveBeenCalled()
+    expect(JSON.stringify(await res.json())).not.toContain(SUBJ)
+  })
+
+  it('the lookup by subject is a POST body search', async () => {
+    const res = await search({ subjectId: SUBJ })
+    expect(res.status).toBe(200)
+    expect(h.readErasureReports).toHaveBeenCalledWith({ subjectId: SUBJ })
+    expect((await res.json()).data).toHaveLength(1)
+  })
+
+  it('the search is admin-only and rejects a malformed id', async () => {
+    h.hasRole.mockReturnValue(false)
+    expect((await search({ subjectId: SUBJ }, locals(['member']))).status).toBe(403)
+    h.hasRole.mockReturnValue(true)
+    expect((await search({ subjectId: 'u1' })).status).toBe(422)
+    expect(h.readErasureReports).not.toHaveBeenCalled()
   })
 
   it('GET one returns the report', async () => {

@@ -33,7 +33,22 @@ export function createFilesErasureHook(deps: FilesErasureDeps): ModuleErasureHoo
   return {
     moduleId: 'files',
     requiresConnection: false,
-    async erase({ subjectId }) {
+    async erase({ subjectId, subject }) {
+      // R33f HIGH: the Nextcloud behind this hook serves EVERY tenant and its account ids are
+      // the Keycloak ids of every realm. Act only on an id the orchestrator verified for this tenant.
+      if (!subject || subject.id !== subjectId) {
+        return { status: 'skipped', reason: 'the subject was not verified as a user of this tenant; the shared Nextcloud was not called' }
+      }
+      // A null username means the realm no longer holds the account: the id was accepted on tenant
+      // database evidence alone, which an IT admin can plant for a foreign id (committee members
+      // accept any id). That proves nothing about who owns the Nextcloud account, so do not act.
+      if (subject.username === null) {
+        return {
+          status: 'skipped',
+          reason:
+            'the realm of this tenant no longer holds the account, so its ownership of the shared Nextcloud account cannot be verified; the shared Nextcloud was not called',
+        }
+      }
       if (deps.adminConfigured && !deps.adminConfigured()) {
         return {
           status: 'skipped',

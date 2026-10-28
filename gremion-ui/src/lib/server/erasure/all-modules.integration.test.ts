@@ -13,6 +13,7 @@ import { calendarErasureHook } from '$lib/server/calendar/erasure'
 import { boardErasureHook } from '$lib/server/board/erasure'
 import { electionsErasureHook } from '$lib/server/elections/erasure'
 import { createFilesErasureHook } from '$lib/server/files/erasure'
+import { NextcloudClient } from '$lib/server/files/nextcloud-client'
 import { createMessagingErasureHook } from '$lib/server/messages/erasure'
 import { createPublishingErasureHook } from '$lib/server/newsletter/erasure'
 import { createVotesErasureHook } from '$lib/server/polls/erasure'
@@ -56,6 +57,7 @@ function deps(hooks: KernelErasureHook[]): ErasureDeps {
     enabledModuleIds: () => MODULES,
     hookFor: (id) => byId.get(id),
     connectionFor: () => sql,
+    resolveSubject: async (id) => ({ id, username: 'jdoe', email: 'anna@example.org' }),
     store: createPgReportStore(sql),
     now: () => new Date(),
   }
@@ -109,13 +111,21 @@ describe('erasure across every in-tree module', () => {
     expect((await getErasureReport(getDb(), TENANT, report.id))?.status).toBe('incomplete')
   })
 
-  it('a module whose external system fails is reported failed, the rest still run', async () => {
-    const failing = createFilesErasureHook({ nc: () => ({ deleteUser: vi.fn().mockRejectedValue(new Error('Nextcloud DELETE → 500')) }) })
-    const hooks = [failing, ...externalHooks().slice(1)] as KernelErasureHook[]
-    const report = await runErasure({ tenantId: TENANT, subjectId: SUBJECT, requestedBy: 'admin' }, deps(hooks))
-    const by = Object.fromEntries(report.modules.map((m) => [m.moduleId, m]))
-    expect(by.files).toMatchObject({ status: 'failed', reason: 'Nextcloud DELETE → 500' })
-    expect(by.votes.status).toBe('erased')
-    expect(report.status).toBe('incomplete')
+  it('a module whose external system fails is reported failed, the rest still run; the stored report never holds the subject id', async () => {
+    // the REAL Nextcloud client: its error message carries the request path with the subject id
+    vi.stubGlobal('fetch', async () => new Response(`boom for ${SUBJECT}`, { status: 500 }))
+    try {
+      const failing = createFilesErasureHook({ nc: () => new NextcloudClient('http://nc.test', 'admin', 'pw') })
+      const hooks = [failing, ...externalHooks().slice(1)] as KernelErasureHook[]
+      const report = await runErasure({ tenantId: TENANT, subjectId: SUBJECT, requestedBy: 'admin' }, deps(hooks))
+      const by = Object.fromEntries(report.modules.map((m) => [m.moduleId, m]))
+      expect(by.files).toMatchObject({ status: 'failed', reason: 'NextcloudResponseError (HTTP 500)' })
+      expect(by.votes.status).toBe('erased')
+      expect(report.status).toBe('incomplete')
+      const rows = await getDb()`SELECT to_jsonb(m)::text AS j FROM erasure_report_module m`
+      expect(rows.map((r) => r.j).join(' ')).not.toContain(SUBJECT)
+    } finally {
+      vi.unstubAllGlobals()
+    }
   })
 })

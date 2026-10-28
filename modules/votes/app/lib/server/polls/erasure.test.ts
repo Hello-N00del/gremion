@@ -10,6 +10,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createVotesErasureHook, deleteNextcloudAccount } from './erasure'
 
+const ctx = { tenantId: 't', subjectId: 'kc-1', subject: { id: 'kc-1', username: 'jdoe', email: null }, db: null }
+
 afterEach(() => vi.unstubAllGlobals())
 
 describe('votesErasureHook', () => {
@@ -22,7 +24,7 @@ describe('votesErasureHook', () => {
   it('deletes the subject account and reports it', async () => {
     const deleteAccount = vi.fn().mockResolvedValue(true)
     const hook = createVotesErasureHook({ deleteAccount })
-    expect(await hook.erase({ tenantId: 't', subjectId: 'kc-1', db: null })).toEqual({
+    expect(await hook.erase(ctx)).toEqual({
       status: 'erased',
       counts: { nextcloud_accounts: 1 },
     })
@@ -31,7 +33,7 @@ describe('votesErasureHook', () => {
 
   it('account already gone: erased with count 0 (idempotent)', async () => {
     const hook = createVotesErasureHook({ deleteAccount: vi.fn().mockResolvedValue(false) })
-    expect(await hook.erase({ tenantId: 't', subjectId: 'kc-1', db: null })).toEqual({
+    expect(await hook.erase(ctx)).toEqual({
       status: 'erased',
       counts: { nextcloud_accounts: 0 },
     })
@@ -40,7 +42,7 @@ describe('votesErasureHook', () => {
   it('without an admin credential: skipped with the reason, nothing is called', async () => {
     const deleteAccount = vi.fn()
     const hook = createVotesErasureHook({ deleteAccount, adminConfigured: () => false })
-    const res = await hook.erase({ tenantId: 't', subjectId: 'kc-1', db: null })
+    const res = await hook.erase(ctx)
     expect(res.status).toBe('skipped')
     expect(res.status === 'skipped' && res.reason).toMatch(/NEXTCLOUD_ADMIN_PASSWORD/)
     expect(deleteAccount).not.toHaveBeenCalled()
@@ -48,7 +50,7 @@ describe('votesErasureHook', () => {
 
   it('a Nextcloud failure propagates (the orchestrator reports failed)', async () => {
     const hook = createVotesErasureHook({ deleteAccount: vi.fn().mockRejectedValue(new Error('Nextcloud 500')) })
-    await expect(hook.erase({ tenantId: 't', subjectId: 'kc-1', db: null })).rejects.toThrow('Nextcloud 500')
+    await expect(hook.erase(ctx)).rejects.toThrow('Nextcloud 500')
   })
 })
 
@@ -80,5 +82,41 @@ describe('deleteNextcloudAccount', () => {
     await expect(deleteNextcloudAccount('admin', cfg)).rejects.toThrow(/admin/)
     await expect(deleteNextcloudAccount(' ', cfg)).rejects.toThrow(/empty/)
     expect(f).not.toHaveBeenCalled()
+  })
+})
+
+describe('the hook acts on a VERIFIED subject only (R33f HIGH)', () => {
+  it('no verified identity in the context: skipped, the shared Nextcloud is never called', async () => {
+    const deleteAccount = vi.fn()
+    const hook = createVotesErasureHook({ deleteAccount })
+    const res = await hook.erase({ tenantId: 't', subjectId: 'kc-OTHER-TENANT', db: null })
+    expect(res.status).toBe('skipped')
+    expect(deleteAccount).not.toHaveBeenCalled()
+  })
+
+  it('a context whose verified identity is a different id than subjectId: skipped, not called', async () => {
+    const deleteAccount = vi.fn()
+    const hook = createVotesErasureHook({ deleteAccount })
+    const res = await hook.erase({ ...ctx, subjectId: 'kc-2' })
+    expect(res.status).toBe('skipped')
+    expect(deleteAccount).not.toHaveBeenCalled()
+  })
+
+  it('planted tenant evidence for a foreign id (no realm account, username null): skipped, the shared Nextcloud is never called', async () => {
+    // An IT admin can plant an org_unit_members row for any id; evidence in the tenant database
+    // proves the tenant holds data of the id, NOT that the id owns the tenant's Nextcloud account.
+    const deleteAccount = vi.fn()
+    const hook = createVotesErasureHook({ deleteAccount })
+    const res = await hook.erase({ tenantId: 't', subjectId: 'kc-FOREIGN', subject: { id: 'kc-FOREIGN', username: null, email: null }, db: null })
+    expect(res.status).toBe('skipped')
+    expect(res.status === 'skipped' && res.reason).toMatch(/realm/)
+    expect(deleteAccount).not.toHaveBeenCalled()
+  })
+
+  it('deletes the id of the verified identity', async () => {
+    const deleteAccount = vi.fn().mockResolvedValue(true)
+    const hook = createVotesErasureHook({ deleteAccount })
+    await hook.erase(ctx)
+    expect(deleteAccount).toHaveBeenCalledWith('kc-1')
   })
 })

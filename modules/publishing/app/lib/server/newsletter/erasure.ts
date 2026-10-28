@@ -22,7 +22,7 @@
 //
 // If the subject's Keycloak account is gone the address cannot be derived and the
 // module reports `skipped` with that reason rather than guess.
-import type { ModuleErasureHook } from '@gremion/ports/erasure'
+import type { ErasureResidual, ModuleErasureHook } from '@gremion/ports/erasure'
 import { getKeycloakAdminClientForCurrentTenant } from '$lib/server/keycloak-admin'
 import { getNewsletterBackend } from './backend'
 import type { NewsletterBackendPort } from './backend/port'
@@ -37,6 +37,18 @@ export interface PublishingErasureDeps {
 
 const norm = (email: string) => email.trim().toLowerCase()
 
+const LEAF_RECORD =
+  'newsletter leaf database: not reachable through the leaf HTTP surface (no erase endpoint); aged out by the leaf retention sweep'
+
+/** What stays in the leaf (header (a)-(c)). The kernel cannot count it, hence rows: null. Never carries the subject. */
+export const PUBLISHING_RESIDUALS: readonly ErasureResidual[] = [
+  { table: 'unsubscribes', column: 'email', rows: null, reason: `${LEAF_RECORD}; suppression / consent evidence (RC-NWS-SUB)` },
+  { table: 'send_tokens', column: 'email', rows: null, reason: `${LEAF_RECORD}; delivery evidence (RC-MAIL-EVID)` },
+  { table: 'deliveries', column: 'email', rows: null, reason: `${LEAF_RECORD}; delivery evidence (RC-NWS-ISSUE, RC-MAIL-EVID)` },
+  { table: 'newsletter_audit', column: 'actor_sub', rows: null, reason: `${LEAF_RECORD}; delivery evidence (RC-MAIL-EVID)` },
+  { table: 'newsletters', column: 'created_by', rows: null, reason: `${LEAF_RECORD}; authorship of newsletters the subject wrote` },
+]
+
 export function createPublishingErasureHook(deps: PublishingErasureDeps): ModuleErasureHook {
   return {
     moduleId: 'publishing',
@@ -50,7 +62,7 @@ export function createPublishingErasureHook(deps: PublishingErasureDeps): Module
         }
       }
       const wanted = norm(email)
-      if (wanted === '') return { status: 'erased', counts: { mailing_list_members: 0 } }
+      if (wanted === '') return { status: 'erased', counts: { mailing_list_members: 0 }, residuals: PUBLISHING_RESIDUALS }
 
       const backend = deps.backend()
       let removed = 0
@@ -61,7 +73,7 @@ export function createPublishingErasureHook(deps: PublishingErasureDeps): Module
           removed++
         }
       }
-      return { status: 'erased', counts: { mailing_list_members: removed } }
+      return { status: 'erased', counts: { mailing_list_members: removed }, residuals: PUBLISHING_RESIDUALS }
     },
   }
 }
