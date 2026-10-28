@@ -1,6 +1,7 @@
 // The completeness check (TRD-151): read manifest.json back FROM DISK and
 // prove every file it names is present, readable, non-empty, the recorded
-// size and sha256, and that its JSON file parses to the recorded row count.
+// size and sha256, and that its JSON file parses to (and its CSV file holds,
+// header aside) the recorded row count.
 // Nothing is taken from the writer's memory. Files the manifest does not name
 // are reported too.
 import { createHash } from 'node:crypto'
@@ -49,6 +50,22 @@ export interface VerifyResult {
 
 const SAFE_PATH = /^[a-z0-9_]+\/(?:[a-z0-9_-]+\.)?[a-z0-9_-]+\.(csv|json)$/
 
+/** RFC 4180 records in `text` (CRLF-terminated; a CR/LF inside a quoted field is data). */
+export function csvRecordCount(text: string): number {
+  let records = 0
+  let quoted = false
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i]
+    if (ch === '"') quoted = !quoted // a doubled quote toggles twice
+    else if (!quoted && ch === '\r' && text[i + 1] === '\n') {
+      records++
+      i++
+    }
+  }
+  if (!quoted && text.length > 0 && !text.endsWith('\r\n')) records++ // an unterminated last record
+  return records
+}
+
 export function verifyExport(dir: string): VerifyResult {
   const problems: Problem[] = []
   const mpath = join(dir, MANIFEST_FILE)
@@ -92,6 +109,9 @@ export function verifyExport(dir: string): VerifyResult {
       } catch (err) {
         problems.push({ path: f.path, code: 'UNREADABLE', detail: `not JSON: ${(err as Error).message}` })
       }
+    } else if (f.format === 'csv' && buf.length > 0) {
+      const rows = csvRecordCount(buf.toString('utf8')) - 1
+      if (rows !== f.rows) problems.push({ path: f.path, code: 'ROWCOUNT_MISMATCH', detail: `${rows} rows in the file, ${f.rows} in the manifest` })
     }
   }
   for (const scope of readdirSync(dir)) {
