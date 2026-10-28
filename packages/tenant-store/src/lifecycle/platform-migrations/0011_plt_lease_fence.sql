@@ -15,6 +15,8 @@
 -- Signatures are unchanged (the executor's grants, pg.ts, are untouched); the
 -- bodies are 0010's with the two lease conditions changed.
 
+SET LOCAL lock_timeout = '5s';
+
 CREATE OR REPLACE FUNCTION plt.renew_provisioning_lease(p_request_id uuid, p_host text, p_lease_seconds integer) RETURNS timestamptz
   LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $body$
 DECLARE
