@@ -375,6 +375,30 @@ describe('runPurge (TRD-144/145)', () => {
     }
   })
 
+  it('MED: the admin role DDL is bounded by the deadline: a lock on the purger role does not hang the run past it', async () => {
+    const { purger } = kernelRoles(U)
+    // another admin transaction that altered the same role and is still open (ensureKernelRoles, say)
+    const hold = await server.admin.reserve()
+    await hold`BEGIN`
+    await hold.unsafe(`ALTER ROLE ${purger} NOLOGIN`)
+    const timer = setTimeout(() => void hold`ROLLBACK`.catch(() => {}), 8000)
+    const t0 = Date.now()
+    let r: Awaited<ReturnType<typeof run>> | undefined
+    try {
+      r = await run({ deadlineMs: 3000 })
+    } finally {
+      clearTimeout(timer)
+      await hold`ROLLBACK`.catch(() => {})
+      hold.release()
+    }
+    expect(Date.now() - t0).toBeLessThan(6000)
+    expect(r.partial).toBe('deadline')
+    const [row] = await platform<{ detail: any }[]>`SELECT detail FROM plt.job_run WHERE job_run_id = ${r.jobRunId}::uuid`
+    expect(row!.detail).toMatchObject({ partial: 'deadline' })
+    const [rest] = await server.admin<{ login: boolean }[]>`SELECT rolcanlogin AS login FROM pg_roles WHERE rolname = ${purger}`
+    expect(rest!.login).toBe(false)
+  })
+
   it('MED: a rule cut at the batch cap is recorded in detail.batch_limit_hits (rows may remain)', async () => {
     for (const c of ['cap-1', 'cap-2', 'cap-3']) {
       await db(U).unsafe(`INSERT INTO event_consumption (consumer, event_id, consumed_at) VALUES ('${c}', gen_random_uuid(), '${daysAgo(9).toISOString()}')`)
