@@ -150,8 +150,11 @@ function vitestPart({ root }) {
     // same way (its password is never read back; only its existence
     // matters). `-c` does not expand a `-v` psql variable, stdin does.
     const publicReaderPassword = randomTestPassword()
-    const createPublicReader = psqlAsTestUser(db, 'gremion', ['-v', `_password=${publicReaderPassword}`], {
+    const createPublicReader = psqlAsTestUser(db, 'gremion', [], {
+      // The password is set on stdin (\set), never as a `-v` argv entry
+      // (base64url: no quote or backslash, safe inside psql's single quotes).
       input:
+        `\\set _password '${publicReaderPassword}'\n` +
         "SELECT CASE WHEN NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'gremion_public_reader') " +
         "THEN format('CREATE ROLE gremion_public_reader LOGIN PASSWORD %L', :'_password') ELSE 'SELECT 1' END \\gexec\n",
     })

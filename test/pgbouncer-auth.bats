@@ -6,21 +6,29 @@
 # the postgres superuser yields none.
 
 REPO_ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
-PG_IMAGE="${PGBOUNCER_AUTH_TEST_IMAGE:-postgres:18-alpine}"
+# Pinned to the docker-compose.yml digest.
+PG_IMAGE="${PGBOUNCER_AUTH_TEST_IMAGE:-postgres:18-alpine@sha256:77f585114c32fbca283dc835b0596f4e52b51b4c6662d7810b2f4084f60a1873}"
 
 setup_file() {
     command -v docker >/dev/null || skip "docker not available"
+    docker info >/dev/null 2>&1 || skip "docker daemon unavailable"
     export PG_CT="pgb-auth-$$-${RANDOM}"
     docker run -d --rm --name "$PG_CT" -e POSTGRES_PASSWORD=scratch "$PG_IMAGE" >/dev/null
-    local i
+    local i ready=0
     for i in $(seq 1 60); do
         # the entrypoint restarts the server once after initdb: require two answers
         if docker exec "$PG_CT" psql -U postgres -tAc 'SELECT 1' >/dev/null 2>&1 \
            && sleep 1 && docker exec "$PG_CT" psql -U postgres -tAc 'SELECT 1' >/dev/null 2>&1; then
+            ready=1
             break
         fi
         sleep 1
     done
+    if [ "$ready" -ne 1 ]; then
+        docker logs "$PG_CT" >&2 || true
+        echo "scratch postgres $PG_CT never became ready" >&2
+        return 1
+    fi
     docker exec -i "$PG_CT" psql -U postgres -v ON_ERROR_STOP=1 -q <<'SQL'
 CREATE ROLE pgbouncer_auth LOGIN;
 CREATE ROLE app_normal LOGIN PASSWORD 'normal-pw';
