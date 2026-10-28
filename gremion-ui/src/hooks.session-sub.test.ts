@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach, type MockInstance } from 'vitest'
 
 // TASK-033-a / TRD-147 (operator decision 2026-10-28): a session WITHOUT a `sub`
 // is refused. audit_log.user_id carries the 0061 CHECK (a uuid or a
@@ -68,7 +68,7 @@ async function run(opts: { path: string; session?: Record<string, unknown> | nul
 // generic 'no_session' of a garbage token) and both branches leave a structured server-side
 // trace: tenant, azp / client_id, iss -- NEVER the token itself.
 describe('a missing sub is named and traced (r33f review)', () => {
-  let warn: ReturnType<typeof vi.spyOn>
+  let warn: MockInstance<(...args: unknown[]) => void>
   beforeEach(() => {
     warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
   })
