@@ -44,7 +44,7 @@ describe('publishingErasureHook', () => {
       3: [member(30, 3, 'third@example.org')],
     })
     const res = await hook.erase({ tenantId: 't', subjectId: 'kc-1', db: null })
-    expect(res).toEqual({ status: 'erased', counts: { mailing_list_members: 2 } })
+    expect(res).toMatchObject({ status: 'erased', counts: { mailing_list_members: 2 } })
     expect(deleteMember.mock.calls).toEqual([
       [1, 10],
       [2, 20],
@@ -53,11 +53,26 @@ describe('publishingErasureHook', () => {
 
   it('not on any list: erased with count 0 (idempotent re-run)', async () => {
     const { hook, deleteMember } = setup({ 1: [member(11, 1, 'other@example.org')] })
-    expect(await hook.erase({ tenantId: 't', subjectId: 'kc-1', db: null })).toEqual({
+    expect(await hook.erase({ tenantId: 't', subjectId: 'kc-1', db: null })).toMatchObject({
       status: 'erased',
       counts: { mailing_list_members: 0 },
     })
     expect(deleteMember).not.toHaveBeenCalled()
+  })
+
+  it('R33f MED: an erased result names what it knowingly keeps in the leaf (count unknown = null), never the subject', async () => {
+    const { hook } = setup({ 1: [member(10, 1, 'anna.muster@example.org')] })
+    const res = await hook.erase({ tenantId: 't', subjectId: 'kc-1', db: null })
+    expect(res.status === 'erased' && res.residuals).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ table: 'send_tokens', rows: null }),
+        expect.objectContaining({ table: 'deliveries', rows: null }),
+        expect.objectContaining({ table: 'newsletter_audit', rows: null }),
+        expect.objectContaining({ table: 'newsletters', column: 'created_by', rows: null }),
+      ]),
+    )
+    expect(JSON.stringify(res)).not.toContain('kc-1')
+    expect(JSON.stringify(res)).not.toContain('anna.muster')
   })
 
   it('Keycloak account gone: skipped with a precise reason, the newsletter service is not called', async () => {
@@ -70,7 +85,7 @@ describe('publishingErasureHook', () => {
 
   it('account without an e-mail address: nothing can be on a list, erased with count 0', async () => {
     const { hook, backend } = setup({ 1: [member(10, 1, '')] }, '')
-    expect(await hook.erase({ tenantId: 't', subjectId: 'kc-1', db: null })).toEqual({
+    expect(await hook.erase({ tenantId: 't', subjectId: 'kc-1', db: null })).toMatchObject({
       status: 'erased',
       counts: { mailing_list_members: 0 },
     })

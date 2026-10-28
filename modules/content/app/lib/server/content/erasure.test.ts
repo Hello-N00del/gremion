@@ -37,14 +37,14 @@ describe('contentErasureHook', () => {
   })
 
   it('erases authorship, list membership, tokens and delivery evidence in one transaction', async () => {
-    const { db, calls } = fakeDb([1, 2, 3, 4, 5])
+    const { db, calls } = fakeDb([1, 2, 3, 4, 5, 0])
     const h = createContentErasureHook({ resolveEmail: async () => 'Anna.Muster@Example.org' })
     const res = await h.erase({ tenantId: 't', subjectId: 'u-1', db })
     expect(res).toEqual({
       status: 'erased',
       counts: { posts: 1, news_posts: 2, mailing_list_members: 3, send_tokens: 4, deliveries: 5 },
     })
-    expect(calls).toHaveLength(5)
+    expect(calls).toHaveLength(6)
     expect(calls[0].text).toMatch(/UPDATE content\.posts SET created_by/)
     expect(calls[0].values).toEqual([CONTENT_ERASED_MARKER, 'u-1'])
     expect(calls[1].text).toMatch(/UPDATE news_posts SET author_id/)
@@ -52,8 +52,26 @@ describe('contentErasureHook', () => {
     expect(calls[2].values).toEqual(['anna.muster@example.org'])
     expect(calls[3].text).toMatch(/DELETE FROM content\.send_tokens/)
     expect(calls[4].text).toMatch(/UPDATE content\.deliveries SET email = 'erased:' \|\| gen_random_uuid\(\)/)
-    // the suppression list is never touched
-    expect(calls.map((c) => c.text).join('\n')).not.toMatch(/unsubscribes/)
+    // the suppression list is only COUNTED (for the residual), never modified
+    expect(calls[5].text).toMatch(/^\s*SELECT 1 FROM content\.unsubscribes/)
+    expect(calls.map((c) => c.text).join('\n')).not.toMatch(/(UPDATE|DELETE FROM|INSERT INTO)\s+content\.unsubscribes/)
+  })
+
+  it('R33f MED: the unsubscribes it keeps are reported as a residual with their real count', async () => {
+    const { db } = fakeDb([1, 2, 3, 4, 5, 2])
+    const h = createContentErasureHook({ resolveEmail: async () => 'anna@example.org' })
+    const res = await h.erase({ tenantId: 't', subjectId: 'u-1', db })
+    expect(res.status === 'erased' && res.residuals).toEqual([
+      expect.objectContaining({ table: 'content.unsubscribes', column: 'email', rows: 2 }),
+    ])
+    expect(JSON.stringify(res)).not.toContain('anna@example.org')
+  })
+
+  it('no unsubscribe row of the subject: no residual', async () => {
+    const { db } = fakeDb([1, 2, 3, 4, 5, 0])
+    const h = createContentErasureHook({ resolveEmail: async () => 'anna@example.org' })
+    const res = await h.erase({ tenantId: 't', subjectId: 'u-1', db })
+    expect(res.status === 'erased' && (res.residuals ?? [])).toEqual([])
   })
 
   it('Keycloak account gone: skipped, nothing touched', async () => {

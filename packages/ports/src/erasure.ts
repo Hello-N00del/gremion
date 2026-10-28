@@ -53,8 +53,9 @@ export interface ErasureContext<Db = unknown> {
 export interface ErasureResidual {
   readonly table: string
   readonly column: string
-  /** Rows that still reference the subject after the hook ran. */
-  readonly rows: number
+  /** Rows that still reference the subject after the hook ran; null when the owning
+   *  store (a leaf service database) gives the hook no way to count them. */
+  readonly rows: number | null
   readonly reason: string
 }
 

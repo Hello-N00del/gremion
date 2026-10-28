@@ -124,8 +124,8 @@ const isResidualList = (v: unknown): v is ErasureResidual[] =>
       nonEmpty((r as ErasureResidual).table) &&
       nonEmpty((r as ErasureResidual).column) &&
       nonEmpty((r as ErasureResidual).reason) &&
-      Number.isInteger((r as ErasureResidual).rows) &&
-      (r as ErasureResidual).rows >= 0,
+      ((r as ErasureResidual).rows === null ||
+        (Number.isInteger((r as ErasureResidual).rows) && (r as ErasureResidual).rows! >= 0)),
   )
 
 function fromHookResult(moduleId: string, result: ErasureHookResult | undefined): ModuleErasureOutcome {

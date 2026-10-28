@@ -257,6 +257,15 @@ describe('runErasure', () => {
     expect(report.status).toBe('complete')
   })
 
+  it('a residual whose count the owner cannot obtain (rows null) is accepted and kept', async () => {
+    const residual = { table: 'deliveries', column: 'email', rows: null, reason: 'in the leaf database, not reachable' }
+    const report = await runErasure(
+      input,
+      deps(['kernel'], [hookOf('kernel', async () => ({ status: 'erased', counts: {}, residuals: [residual] }))]),
+    )
+    expect(report.modules[0]).toMatchObject({ status: 'erased', residuals: [residual] })
+  })
+
   it('a malformed residual list is failed, not erased', async () => {
     const h = hookOf('kernel', (async () => ({
       status: 'erased',

@@ -59,6 +59,8 @@ describe('contentErasureHook (real schema)', () => {
     expect(res).toEqual({
       status: 'erased',
       counts: { posts: 1, news_posts: 1, mailing_list_members: 1, send_tokens: 2, deliveries: 2 },
+      // R33f MED: the suppression row it keeps is named, with its real count
+      residuals: [expect.objectContaining({ table: 'content.unsubscribes', column: 'email', rows: 1 })],
     })
 
     expect(await sql`SELECT 1 FROM content.posts WHERE created_by = ${SUBJECT}`).toHaveLength(0)
@@ -90,6 +92,7 @@ describe('contentErasureHook (real schema)', () => {
     expect(await hook.erase({ tenantId: 't', subjectId: SUBJECT, db: sql })).toEqual({
       status: 'erased',
       counts: { posts: 0, news_posts: 0, mailing_list_members: 0, send_tokens: 0, deliveries: 0 },
+      residuals: [expect.objectContaining({ table: 'content.unsubscribes', rows: 1 })],
     })
   })
 })
