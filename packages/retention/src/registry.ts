@@ -126,7 +126,7 @@ export function enforcedDays(c: LogClass): number {
  * purge tick. Loki's own overhead does not apply to a table (a run on 29 d of
  * job_run is 30 d at worst).
  */
-export function dbWindowDays(c: LogClass): number {
+export function dbWindowDays(c: { regularDays: number; capDays: number }): number {
   return Math.min(c.regularDays, c.capDays - DB_PURGE_TICK_DAYS)
 }
 

@@ -101,9 +101,9 @@ describe('runPurge (TRD-144/145)', () => {
     await ensureKernelDatabase(server, U, pw)
     await seed(T)
     await seed(U)
-    // platform category: job runs past 30 d go, a 29 d one stays
+    // platform category: job runs past 29 d (cap 30 - one tick) go, a 28 d one stays
     const [fp] = await platform<{ id: string }[]>`SELECT scheduled_job_id::text AS id FROM plt.scheduled_job WHERE job_kind = 'footprint_measurement'`
-    for (const age of [31, 45, 29]) {
+    for (const age of [31, 45, 28]) {
       await platform`INSERT INTO plt.job_run (scheduled_job_id, scope, scheduled_for, started_at, finished_at, status)
         VALUES (${fp!.id}, 'platform', ${daysAgo(age)}, ${daysAgo(age)}, ${daysAgo(age)}, 'succeeded')`
     }

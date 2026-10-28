@@ -3,6 +3,7 @@
 import { readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { dbWindowDays, parseLogRows } from '@gremion/retention'
 import { describe, expect, it } from 'vitest'
 import { PURGE_DEADLINE_MS, PURGE_RESIDUAL, PURGE_RULES, deleteBatchSql, purgeCutoff, refusalOf, type PurgeTableShape } from './purge.js'
 
@@ -39,8 +40,20 @@ describe('PURGE_RULES against the retention catalogue', () => {
     // RC-OPS-RUN says "with RC-LOG-APP": the window is that row's regular window
     const source = rule.windowFrom ? rowLine(rule.windowFrom) : line
     expect(source, `${rule.windowFrom ?? rule.catalogueRow} is a row of the catalogue`).toBeDefined()
-    expect(windowDaysOf(source!)).toContain(rule.windowDays)
+    if (rule.windowFrom) {
+      // a window that follows a LOG class row is derived by the registry's one rule (no second copy of the figure)
+      const logRow = parseLogRows(CATALOGUE.replace(/\r\n/g, '\n')).find((r) => r.row === rule.windowFrom)
+      expect(logRow, `${rule.windowFrom} states regular / cap days`).toBeDefined()
+      expect(rule.windowDays, `${rule.id}: min(regular ${logRow!.regularDays}, cap ${logRow!.capDays} - one daily tick)`).toBe(dbWindowDays(logRow!))
+    } else {
+      expect(windowDaysOf(source!)).toContain(rule.windowDays)
+    }
     expect(Number.isInteger(rule.windowDays) && rule.windowDays > 0).toBe(true)
+  })
+
+  it('plt.job_run purges at 29 d: the catalogue cap is 30 d and the run is daily, so 30 d would outlive the cap by up to a day', () => {
+    const jobRun = PURGE_RULES.find((r) => r.id === 'RC-OPS-RUN/plt.job_run')
+    expect(jobRun?.windowDays).toBe(29)
   })
 
   it.each(PURGE_RULES.map((r) => [r.id, r] as const))('%s: its table and columns exist in the migrations of its scope', (_id, rule) => {
