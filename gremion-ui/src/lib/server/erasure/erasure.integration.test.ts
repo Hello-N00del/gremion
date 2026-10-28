@@ -272,11 +272,67 @@ describe('the database itself refuses a dishonest "complete"', () => {
   })
 })
 
+describe('MED-1: the report tables are tamper-resistant at the database', () => {
+  const ref = () => subjectRef(TENANT_A, SUBJECT)
+  const erased = (moduleId: string) => ({ moduleId, status: 'erased' as const, counts: {}, reason: null })
+
+  it('persists the expected module set on the header', async () => {
+    const sql = getDb()
+    const id = await createPgReportStore(sql).begin({ tenantId: TENANT_A, subjectRef: ref(), requestedBy: 'a', startedAt: new Date(), moduleIds: ['kernel', 'calendar'] })
+    const [row] = await sql<{ expected_modules: string[] }[]>`SELECT expected_modules FROM erasure_report WHERE id = ${id}`
+    expect(row.expected_modules).toEqual(['kernel', 'calendar'])
+  })
+
+  it('complete needs a row for EVERY expected module, all erased', async () => {
+    const store = createPgReportStore(getDb())
+    const id = await store.begin({ tenantId: TENANT_A, subjectRef: ref(), requestedBy: 'a', startedAt: new Date(), moduleIds: ['kernel', 'calendar'] })
+    await store.record(id, erased('kernel'))
+    await expect(store.finish(id, 'complete', new Date())).rejects.toThrow(/cannot be complete/)
+    await store.record(id, erased('calendar'))
+    await store.finish(id, 'complete', new Date())
+    expect((await getErasureReport(getDb(), TENANT_A, id))?.status).toBe('complete')
+  })
+
+  it('refuses a module row for a module that was not expected', async () => {
+    const store = createPgReportStore(getDb())
+    const id = await store.begin({ tenantId: TENANT_A, subjectRef: ref(), requestedBy: 'a', startedAt: new Date(), moduleIds: ['kernel'] })
+    await expect(store.record(id, erased('calendar'))).rejects.toThrow(/not an expected module/)
+  })
+
+  it('a header cannot be inserted already finished', async () => {
+    const sql = getDb()
+    await expect(sql`INSERT INTO erasure_report (tenant_id, subject_ref, requested_by, status, finished_at, expected_modules)
+                     VALUES (${TENANT_A}, ${ref()}, 'a', 'complete', now(), '{}')`).rejects.toThrow()
+  })
+
+  it('a finished report is append-only: no module insert/update/delete, no header update/delete', async () => {
+    const sql = getDb()
+    const store = createPgReportStore(sql)
+    const id = await store.begin({ tenantId: TENANT_A, subjectRef: ref(), requestedBy: 'a', startedAt: new Date(), moduleIds: ['kernel', 'calendar'] })
+    await store.record(id, erased('kernel'))
+    await store.finish(id, 'incomplete', new Date())
+    await expect(store.record(id, erased('calendar'))).rejects.toThrow(/finished/)
+    await expect(sql`UPDATE erasure_report_module SET status = 'erased', counts = '{"x":1}' WHERE report_id = ${id}`).rejects.toThrow(/finished/)
+    await expect(sql`DELETE FROM erasure_report_module WHERE report_id = ${id}`).rejects.toThrow(/finished/)
+    await expect(sql`UPDATE erasure_report SET status = 'complete' WHERE id = ${id}`).rejects.toThrow(/finished/)
+    await expect(sql`UPDATE erasure_report SET requested_by = 'x' WHERE id = ${id}`).rejects.toThrow(/finished/)
+    await expect(sql`DELETE FROM erasure_report WHERE id = ${id}`).rejects.toThrow(/finished/)
+    expect((await getErasureReport(sql, TENANT_A, id))?.modules).toHaveLength(1)
+  })
+
+  it('a running header cannot have its identity columns rewritten', async () => {
+    const sql = getDb()
+    const id = await createPgReportStore(sql).begin({ tenantId: TENANT_A, subjectRef: ref(), requestedBy: 'a', startedAt: new Date(), moduleIds: ['kernel'] })
+    await expect(sql`UPDATE erasure_report SET expected_modules = '{}' WHERE id = ${id}`).rejects.toThrow(/immutable/)
+    await expect(sql`UPDATE erasure_report SET subject_ref = ${'b'.repeat(64)} WHERE id = ${id}`).rejects.toThrow(/immutable/)
+  })
+})
+
 describe('tenant isolation of reports', () => {
   it('tenant B cannot read or list tenant A reports', async () => {
     const sql = getDb()
     const store = createPgReportStore(sql)
-    const id = await store.begin({ tenantId: TENANT_A, subjectRef: subjectRef(TENANT_A, SUBJECT), requestedBy: 'a', startedAt: new Date(), moduleIds: [] })
+    const id = await store.begin({ tenantId: TENANT_A, subjectRef: subjectRef(TENANT_A, SUBJECT), requestedBy: 'a', startedAt: new Date(), moduleIds: ['kernel'] })
     await store.record(id, { moduleId: 'kernel', status: 'erased', counts: { n: 1 }, reason: null })
     await store.finish(id, 'complete', new Date())
 

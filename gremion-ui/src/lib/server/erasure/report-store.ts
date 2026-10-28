@@ -28,8 +28,8 @@ export function createPgReportStore(sql: Sql): ErasureReportStore {
   return {
     async begin(h) {
       const rows = await sql<{ id: string }[]>`
-        INSERT INTO erasure_report (tenant_id, subject_ref, requested_by, status, started_at)
-        VALUES (${h.tenantId}, ${h.subjectRef}, ${h.requestedBy}, 'running', ${h.startedAt})
+        INSERT INTO erasure_report (tenant_id, subject_ref, requested_by, status, started_at, expected_modules)
+        VALUES (${h.tenantId}, ${h.subjectRef}, ${h.requestedBy}, 'running', ${h.startedAt}, ${sql.array([...h.moduleIds])}::text[])
         RETURNING id`
       return rows[0].id
     },
@@ -42,7 +42,8 @@ export function createPgReportStore(sql: Sql): ErasureReportStore {
           ${o.status}, ${sql.json({ ...o.counts })}, ${o.reason})`
     },
     async finish(reportId, status, finishedAt) {
-      // The DB trigger refuses `complete` while any module row is not `erased`.
+      // The DB trigger refuses `complete` unless every expected module has an `erased`
+      // row, and refuses any change once the header is finished (append-only).
       await sql`
         UPDATE erasure_report SET status = ${status}, finished_at = ${finishedAt}
         WHERE id = ${reportId}`
