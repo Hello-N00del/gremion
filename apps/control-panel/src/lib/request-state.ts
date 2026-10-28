@@ -37,6 +37,8 @@ export const EXECUTOR_STEP_LABEL: Record<string, string> = {
   verify: 'Anfrage und Anmeldenachweis geprüft',
   dispatch: 'Bearbeiter gewählt',
   create: 'Einrichtung gestartet',
+  suspend: 'Sperren (Anmeldung, Broker, Mail-Absender)',
+  resume: 'Fortsetzen (Mail-Absender, Anmeldung, Broker)',
   'phase-a': 'Phase A (Realm, Kerndatenbank, Host)',
   mail: 'Mail-Absender',
   'record-step': 'Fortschritt im Ledger vermerkt',
@@ -79,6 +81,7 @@ const stepName = (s: string): string => EXECUTOR_STEP_LABEL[s] ?? s
 const STEP_TOKEN = /^[a-z][a-z0-9_-]{0,39}$/
 
 const NOT_REPLAYABLE = 'Nur eine Einrichtung („create“) lässt sich hier wiederholen.'
+const REDO_ACTION = 'Die Aktion „Mandant sperren“ bzw. „Mandant fortsetzen“ kann unten erneut ausgelöst werden; die Daten wurden nicht angetastet.'
 const FIX_FORM = 'Die Angaben der Anfrage selbst wurden abgelehnt. Bitte im Formular „Neuer Mandant“ korrigiert neu anfordern.'
 
 export function describeRequest(r: RequestStateInput): RequestDescription {
@@ -96,7 +99,7 @@ export function describeRequest(r: RequestStateInput): RequestDescription {
     ...extra,
   })
   /** Retryable when the kind is create; otherwise says why not. */
-  const retry = (): Partial<RequestDescription> => (isCreate ? { retryable: true } : { retryNote: NOT_REPLAYABLE })
+  const retry = (): Partial<RequestDescription> => (isCreate ? { retryable: true } : { retryNote: r.kind === 'suspend' || r.kind === 'resume' ? REDO_ACTION : NOT_REPLAYABLE })
   switch (r.state) {
     case 'queued':
       return d('queued', 'In der Warteschlange', 'Die Anfrage wartet darauf, dass der Ausführer sie übernimmt.', { active: true })

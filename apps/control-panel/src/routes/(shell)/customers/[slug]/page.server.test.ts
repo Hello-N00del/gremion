@@ -53,6 +53,7 @@ const row = (over: Partial<Row>): Row => ({
 })
 
 let rows: Row[] = []
+let customer: { id: string; slug: string; status: string; host: string | null } | null = null
 let submits: unknown[][] = []
 const fakeSql = Object.assign(
   async (strings: TemplateStringsArray, ...vals: unknown[]) => {
@@ -72,7 +73,7 @@ vi.mock('$lib/server/customers', async (orig) => {
   return {
     ...real,
     platformDb: () => fakeSql,
-    customerStatus: async () => null,
+    customerStatus: async () => customer,
     customerRequests: async () =>
       rows.map((r) => ({
         id: r.request_id,
@@ -97,12 +98,17 @@ const { EXECUTOR_STEP_LABEL } = await import('$lib/request-state')
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const loadFor = (slug = 'proof-z') => (load as unknown as (e: unknown) => Promise<any>)({ params: { slug } })
+const act = (name: 'suspend' | 'resume', slug = 'proof-z', operator: unknown = { id: OPERATOR }) =>
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (actions[name] as unknown as (e: unknown) => Promise<any>)({ params: { slug }, request: new Request('http://127.0.0.1:3043/x', { method: 'POST' }), locals: { operator } })
+const cust = (status: string) => ({ id: 'c1', slug: 'proof-z', status, host: 'rat.proof.example' })
 const retry = (slug = 'proof-z', operator: unknown = { id: OPERATOR }) =>
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   (actions.retry as unknown as (e: unknown) => Promise<any>)({ params: { slug }, request: new Request('http://127.0.0.1:3043/x', { method: 'POST' }), locals: { operator } })
 
 beforeEach(() => {
   rows = []
+  customer = null
   submits = []
 })
 
@@ -207,5 +213,89 @@ describe('H6 panel: retry is a NEW request with a NEW idempotency key', () => {
     rows = [row({ state: 'failed' })]
     await expect(retry('proof-z', null)).rejects.toMatchObject({ status: 403 })
     expect(submits).toHaveLength(0)
+  })
+})
+
+describe('TRD-044: Mandant sperren / fortsetzen are suspend and resume REQUESTS', () => {
+  it.each([
+    ['active', { suspend: true, resume: false }],
+    ['suspended', { suspend: false, resume: true }],
+    ['provisioning', { suspend: false, resume: false }],
+  ])('the buttons shown for a %s customer with no open request', async (status, offer) => {
+    customer = cust(status)
+    rows = [row({ state: 'succeeded', kind: 'create' })]
+    expect((await loadFor()).offer).toEqual(offer)
+  })
+  it('nothing is shown while a request is queued or running, whatever the status', async () => {
+    customer = cust('active')
+    for (const state of ['queued', 'running']) {
+      rows = [row({ state, kind: 'suspend' })]
+      expect((await loadFor()).offer).toEqual({ suspend: false, resume: false })
+    }
+  })
+  it('nothing is shown when the customer does not exist', async () => {
+    expect((await loadFor()).offer).toEqual({ suspend: false, resume: false })
+  })
+  it('after a suspend that did not succeed, a suspended customer is offered both: the converging rerun and the resume', async () => {
+    customer = cust('suspended')
+    rows = [row({ state: 'failed', kind: 'suspend', outcome: 'suspend proof-z: failed in suspend (exit 1); a new request resumes from the ledger' })]
+    expect((await loadFor()).offer).toEqual({ suspend: true, resume: true })
+  })
+
+  it('suspend submits kind suspend with the slug only, the operator, the signed evidence and a fresh key', async () => {
+    customer = cust('active')
+    rows = [row({ state: 'succeeded', kind: 'create' })]
+    await expect(act('suspend')).rejects.toMatchObject({ status: 303 })
+    expect(submits).toHaveLength(1)
+    const [kind, slug, args, key, operator, acr] = submits[0]!
+    expect([kind, slug, args, operator, acr]).toEqual(['suspend', 'proof-z', { slug: 'proof-z' }, OPERATOR, 'loa2'])
+    expect(String(key)).toMatch(UUID)
+    expect(key).not.toBe(OLD_KEY)
+  })
+  it('resume submits kind resume for a suspended customer', async () => {
+    customer = cust('suspended')
+    rows = [row({ state: 'succeeded', kind: 'suspend' })]
+    await expect(act('resume')).rejects.toMatchObject({ status: 303 })
+    expect(submits[0]!.slice(0, 3)).toEqual(['resume', 'proof-z', { slug: 'proof-z' }])
+  })
+  it.each([
+    ['suspend', 'suspended'],
+    ['suspend', 'provisioning'],
+    ['resume', 'active'],
+    ['resume', 'provisioning'],
+  ] as const)('%s is refused with 409 for a %s customer, and writes no row', async (name, status) => {
+    customer = cust(status)
+    rows = [row({ state: 'succeeded', kind: 'create' })]
+    const res = await act(name)
+    expect(res.status).toBe(409)
+    expect(submits).toHaveLength(0)
+  })
+  it.each(['suspend', 'resume'] as const)('%s is refused with 409 for a customer that does not exist', async (name) => {
+    expect((await act(name)).status).toBe(409)
+    expect(submits).toHaveLength(0)
+  })
+  it.each([
+    ['suspend', 'active'],
+    ['resume', 'suspended'],
+  ] as const)('%s is refused with 409 while another request is queued or running (double submit)', async (name, status) => {
+    customer = cust(status)
+    for (const state of ['queued', 'running']) {
+      rows = [row({ state })]
+      expect((await act(name)).status).toBe(409)
+    }
+    expect(submits).toHaveLength(0)
+  })
+  it('needs a signed-in operator', async () => {
+    customer = cust('active')
+    await expect(act('suspend', 'proof-z', null)).rejects.toMatchObject({ status: 403 })
+    expect(submits).toHaveLength(0)
+  })
+  it('a failed suspend/resume is not "retried" as a copy; the page says to trigger the action again', async () => {
+    customer = cust('active')
+    rows = [row({ state: 'failed', kind: 'suspend', outcome: 'suspend proof-z: failed in suspend (exit 1); a new request resumes from the ledger' })]
+    const d = await loadFor()
+    expect(d.latest.retryable).toBe(false)
+    expect(d.latest.retryNote).toMatch(/Mandant sperren/)
+    expect(d.offer).toEqual({ suspend: true, resume: false })
   })
 })

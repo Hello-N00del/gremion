@@ -36,3 +36,10 @@ register import_members handle_import_members
 # shellcheck source=handlers/seed_vertical.sh
 . "${EXECUTOR_LIB_DIR}/handlers/seed_vertical.sh"
 register seed_vertical handle_seed_vertical
+# TRD-044: the council lifecycle from the control panel
+# shellcheck source=handlers/suspend.sh
+. "${EXECUTOR_LIB_DIR}/handlers/suspend.sh"
+register suspend handle_suspend
+# shellcheck source=handlers/resume.sh
+. "${EXECUTOR_LIB_DIR}/handlers/resume.sh"
+register resume handle_resume
