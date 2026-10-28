@@ -26,7 +26,14 @@
 --    CREATEROLE) makes the role and transfers the ownership. The platform
 --    owner, the role the migrations and the operator tooling run as, therefore
 --    cannot DISABLE TRIGGER, ALTER the table, INSERT, DELETE or DROP anything
---    here. The SECURITY DEFINER functions run as oac_owner.
+--    in oac (it owns the database, though: see NOT covered below). The
+--    SECURITY DEFINER functions run as oac_owner.
+--  * Those functions call NOTHING another role can redefine: only pg_catalog
+--    and oac's own functions (the marker lookup is oac.member_of, a copy of
+--    plt.provisioning_member_of that oac_owner owns; the plt one belongs to the
+--    platform owner, who could otherwise replace its body and have it run as
+--    oac_owner). oac_owner holds no privilege outside schema oac
+--    (ensureAccessOwner's postcondition).
 --  * UPDATE and TRUNCATE are refused by trigger for every role including
 --    oac_owner. DELETE is refused unless the purge function raised the
 --    transaction-local flag AND the row is older than the window floor, so even
@@ -43,6 +50,12 @@
 --    superuser. Superuser access to the state server is the host's docker
 --    group, i.e. the access this record exists to make visible, and is out of
 --    band here.
+--  * NOT covered either: the OWNER OF THE DATABASE gremion_platform (the
+--    platform owner, ensurePlatformDatabase) can DROP or RENAME the whole
+--    database, which takes this record with it, together with the request
+--    queue and everything else the platform holds. It cannot remove or alter a
+--    single row while the database exists. Losing the whole platform database
+--    is loud (the panel and the executor stop), not a silent edit.
 --
 -- WRITER: SECURITY DEFINER with a pinned search_path and no PUBLIC execute, as
 -- 0009/0010. The origin is derived from the caller's LOGIN role's marker
@@ -106,6 +119,18 @@ BEGIN
 END
 $body$;
 
+-- Direct membership of the SESSION user (never current_user, which a SECURITY
+-- DEFINER function replaces) in a marker role. oac's own copy of
+-- plt.provisioning_member_of: the SECURITY DEFINER functions below run as
+-- oac_owner and must call nothing another role can redefine.
+CREATE FUNCTION oac.member_of(p_marker text) RETURNS boolean
+  LANGUAGE sql STABLE SET search_path = pg_catalog, pg_temp AS $body$
+  SELECT EXISTS (SELECT 1 FROM pg_catalog.pg_auth_members m
+                   JOIN pg_catalog.pg_roles r ON r.oid = m.roleid
+                   JOIN pg_catalog.pg_roles u ON u.oid = m.member
+                  WHERE r.rolname = p_marker AND u.rolname = session_user)
+$body$;
+
 -- Inserts come through oac.record_access only, and carry the server's clock.
 CREATE FUNCTION oac.access_record_guard_insert() RETURNS trigger
   LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $body$
@@ -132,8 +157,8 @@ CREATE TRIGGER access_record_no_truncate_trg BEFORE TRUNCATE ON oac.access_recor
 CREATE FUNCTION oac.record_access(p_slug text, p_action text, p_what text, p_why text, p_actor text, p_request_id uuid) RETURNS uuid
   LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $body$
 DECLARE
-  v_panel boolean := plt.provisioning_member_of('plt_panel_requester');
-  v_host boolean := plt.provisioning_member_of('plt_executor');
+  v_panel boolean := oac.member_of('plt_panel_requester');
+  v_host boolean := oac.member_of('plt_executor');
   v_origin text;
   v_id uuid;
 BEGIN
@@ -195,7 +220,7 @@ CREATE FUNCTION oac.purge_access_records(p_window interval) RETURNS integer
 DECLARE
   v_n integer;
 BEGIN
-  IF NOT plt.provisioning_member_of('plt_executor') THEN
+  IF NOT oac.member_of('plt_executor') THEN
     RAISE EXCEPTION 'purge_access_records: role % is not the executor', session_user USING ERRCODE = 'insufficient_privilege';
   END IF;
   IF p_window IS NULL OR p_window < oac.access_window() OR p_window > interval '30 days' THEN
@@ -212,6 +237,7 @@ $body$;
 
 REVOKE ALL ON FUNCTION oac.refuse_update() FROM PUBLIC;
 REVOKE ALL ON FUNCTION oac.access_window() FROM PUBLIC;
+REVOKE ALL ON FUNCTION oac.member_of(text) FROM PUBLIC;
 REVOKE ALL ON FUNCTION oac.access_record_no_delete() FROM PUBLIC;
 REVOKE ALL ON FUNCTION oac.access_record_guard_insert() FROM PUBLIC;
 REVOKE ALL ON FUNCTION oac.record_access(text, text, text, text, text, uuid) FROM PUBLIC;
