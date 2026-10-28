@@ -4,18 +4,34 @@
 import { randomBytes } from 'node:crypto'
 import type { Sql } from '@gremion/db'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { dropKernelDatabase, ensureKernelDatabase, kernelDbName, kernelRoles, runPurge } from '../../src/lifecycle/index.js'
-import type { ModuleServer } from '../../src/lifecycle/index.js'
-import { connect } from '../harness/db.js'
+import {
+  dropKernelDatabase,
+  ensureKernelDatabase,
+  ensureKernelPurgeGrants,
+  kernelDbName,
+  kernelRoles,
+  openPurgerSession,
+  runPurge,
+} from '../../src/lifecycle/index.js'
+import type { PurgeDeps, PurgeServer } from '../../src/lifecycle/index.js'
+import { connect, connectAs } from '../harness/db.js'
 import { platformDb, uuidv7 } from '../harness/lifecycle.js'
 
-function kernelServer(): ModuleServer & { close(): Promise<void> } {
+function kernelServer(): PurgeServer & { close(): Promise<void>; logins: string[] } {
   const admin = connect('t020_test_admin', { max: 2 })
   const pools: Sql[] = []
+  const logins: string[] = []
   return {
     admin,
+    logins,
     open(database) {
       const sql = connect(database, { max: 2 })
+      pools.push(sql)
+      return sql
+    },
+    login(database, user, password) {
+      logins.push(user)
+      const sql = connectAs(database, user, password, { connection: { search_path: 'pg_catalog' } })
       pools.push(sql)
       return sql
     },
@@ -35,7 +51,7 @@ describe('runPurge (TRD-144/145)', () => {
   const T = uuidv7()
   const U = uuidv7() // a second customer: aged too, purged by ITS purger role
   const pw = randomBytes(24).toString('base64url')
-  const run = () => runPurge({ platform, server, now: () => NOW })
+  const run = (extra: Partial<PurgeDeps> = {}) => runPurge({ platform, server, now: () => NOW, ...extra })
   const db = (t: string) => server.open(kernelDbName(t)) as Sql
   const count = async (t: string, sql: string) => (await db(t).unsafe(sql))[0]!.n as number
 
@@ -50,6 +66,8 @@ describe('runPurge (TRD-144/145)', () => {
           recipient_keycloak_id text NOT NULL DEFAULT 'u', scheduled_for timestamptz NOT NULL, sent_at timestamptz, failed_at timestamptz, failure_reason text);
         CREATE TABLE public.audit_log (id bigserial PRIMARY KEY, created_at timestamptz NOT NULL);`)
     })
+    // the tenant init path, after the kernel chain (customer-adapters migrate)
+    expect(await ensureKernelPurgeGrants(server, tenant)).toEqual({ granted: ['event_consumption', 'scheduled_notifications'], absent: [] })
     const d = db(tenant)
     // category 1: aged (8 d, 30 d) and young (6 d)
     for (const [c, age] of [['old-1', 8], ['old-2', 30], ['young', 6]] as const) {
@@ -174,6 +192,131 @@ describe('runPurge (TRD-144/145)', () => {
     expect(row!.status).toBe('failed')
     expect(row!.detail.errors[0]).toMatchObject({ rule: 'RC-K1-PLUMB/event_consumption' })
     expect(String(row!.detail.errors[0].message)).toMatch(/refused/)
+  })
+
+  it('CRIT: a tenant BEFORE DELETE trigger that does RESET ROLE cannot reach a superuser; the table is refused and recorded', async () => {
+    const W = uuidv7()
+    await ensureKernelDatabase(server, W, pw)
+    try {
+      await seed(W)
+      const { owner, app } = kernelRoles(W)
+      // what the tenant (the app role, a member of the owner) can do in its own database
+      await db(W).begin(async (tx) => {
+        await tx.unsafe(`SET LOCAL ROLE ${owner}`)
+        await tx.unsafe(`CREATE FUNCTION public.esc() RETURNS trigger LANGUAGE plpgsql AS $$
+            BEGIN RESET ROLE; EXECUTE format('ALTER ROLE %I SUPERUSER', '${app}'); RETURN OLD; END $$;
+          CREATE TRIGGER esc BEFORE DELETE ON public.event_consumption FOR EACH ROW EXECUTE FUNCTION public.esc()`)
+      })
+      const r = await run()
+      const [su] = await server.admin<{ s: boolean }[]>`SELECT rolsuper AS s FROM pg_roles WHERE rolname = ${app}`
+      expect(su!.s).toBe(false)
+      expect(r.status).toBe('failed')
+      const mine = r.errors.filter((e) => e.tenant === hex(W))
+      expect(mine.map((e) => e.rule)).toEqual(['RC-K1-PLUMB/event_consumption'])
+      expect(mine[0]!.message).toMatch(/refused.*trigger esc/)
+      // refused, so nothing deleted there; the other rule of the same customer still ran
+      expect(await count(W, `SELECT count(*)::int AS n FROM event_consumption WHERE consumer LIKE 'old%'`)).toBe(2)
+      expect(await count(W, `SELECT count(*)::int AS n FROM scheduled_notifications`)).toBe(2)
+    } finally {
+      await dropKernelDatabase(server, W)
+    }
+  })
+
+  it('logs in AS the purger (no SET ROLE in an admin session): RESET ROLE stays the purger, which cannot ALTER ROLE; at rest it is NOLOGIN with no password', async () => {
+    const { purger, app } = kernelRoles(T)
+    expect(server.logins).toContain(purger)
+    const s = await openPurgerSession(server, hex(T), new Date(Date.now() + 60_000))
+    try {
+      const [who] = await s.db<{ su: string; cu: string }[]>`SELECT session_user::text AS su, current_user::text AS cu`
+      expect(who).toEqual({ su: purger, cu: purger })
+      await expect(s.db.unsafe(`RESET ROLE; ALTER ROLE ${app} SUPERUSER`)).rejects.toMatchObject({ code: '42501' })
+      const after = await s.db.reserve()
+      try {
+        await after.unsafe('RESET ROLE')
+        const [w] = await after<{ su: string; cu: string }[]>`SELECT session_user::text AS su, current_user::text AS cu`
+        expect(w).toEqual({ su: purger, cu: purger })
+      } finally {
+        after.release()
+      }
+    } finally {
+      await s.close()
+    }
+    const [r] = await server.admin<{ login: boolean; pw: boolean; members: number }[]>`
+      SELECT a.rolcanlogin AS login, a.rolpassword IS NOT NULL AS pw,
+             (SELECT count(*)::int FROM pg_auth_members m WHERE m.member = a.oid) AS members
+        FROM pg_authid a WHERE a.rolname = ${purger}`
+    expect(r).toEqual({ login: false, pw: false, members: 0 })
+  })
+
+  it('a mapped table the purger was not granted (ensureKernelPurgeGrants not run) is refused and recorded; the run never grants', async () => {
+    const X = uuidv7()
+    await ensureKernelDatabase(server, X, pw)
+    try {
+      const { owner, purger } = kernelRoles(X)
+      await db(X).begin(async (tx) => {
+        await tx.unsafe(`SET LOCAL ROLE ${owner}`)
+        await tx.unsafe(`CREATE TABLE public.event_consumption (consumer text NOT NULL, event_id uuid NOT NULL, consumed_at timestamptz NOT NULL, PRIMARY KEY (consumer, event_id))`)
+      })
+      await db(X)`INSERT INTO event_consumption VALUES ('old', ${uuidv7()}, ${daysAgo(30)})`
+      const r = await run()
+      const mine = r.errors.filter((e) => e.tenant === hex(X))
+      expect(mine.map((e) => e.rule)).toEqual(['RC-K1-PLUMB/event_consumption'])
+      expect(mine[0]!.message).toMatch(/refused: the purger lacks SELECT, DELETE on event_consumption/)
+      expect(await count(X, `SELECT count(*)::int AS n FROM event_consumption`)).toBe(1)
+      const [g] = await db(X)<{ d: boolean }[]>`SELECT has_table_privilege(${purger}, 'public.event_consumption', 'DELETE') AS d`
+      expect(g!.d).toBe(false)
+    } finally {
+      await dropKernelDatabase(server, X)
+    }
+  })
+
+  it('a rewrite rule, row-level security or a foreign key into a purge table is refused too', async () => {
+    const Y = uuidv7()
+    await ensureKernelDatabase(server, Y, pw)
+    try {
+      await seed(Y)
+      const { owner } = kernelRoles(Y)
+      await db(Y).begin(async (tx) => {
+        await tx.unsafe(`SET LOCAL ROLE ${owner}`)
+        await tx.unsafe(`CREATE TABLE public.sink (n int);
+          CREATE RULE r_sink AS ON DELETE TO public.event_consumption DO ALSO INSERT INTO public.sink VALUES (1);
+          ALTER TABLE public.scheduled_notifications ENABLE ROW LEVEL SECURITY;`)
+      })
+      const r = await run()
+      const mine = r.errors.filter((e) => e.tenant === hex(Y)).map((e) => `${e.rule} ${e.message}`)
+      expect(mine).toEqual([
+        expect.stringMatching(/^RC-K1-PLUMB\/event_consumption refused: .*rewrite rule r_sink/),
+        expect.stringMatching(/^RC-K1-PLUMB\/scheduled_notifications refused: .*row-level security/),
+      ])
+    } finally {
+      await dropKernelDatabase(server, Y)
+    }
+  })
+
+  it('MED: a run that reaches its deadline stops, deletes nothing more, and still records a partial (failed) job_run row', async () => {
+    await db(U).unsafe(`INSERT INTO event_consumption (consumer, event_id, consumed_at) VALUES ('old-dl', gen_random_uuid(), '${daysAgo(9).toISOString()}')`)
+    const r = await run({ deadlineMs: 1 })
+    expect(r.status).toBe('failed')
+    expect(r.partial).toBe('deadline')
+    expect(r.errors).toEqual([])
+    expect(await count(U, `SELECT count(*)::int AS n FROM event_consumption WHERE consumer = 'old-dl'`)).toBe(1)
+    const [row] = await platform<{ status: string; detail: any }[]>`SELECT status, detail FROM plt.job_run WHERE job_run_id = ${r.jobRunId}::uuid`
+    expect(row!.status).toBe('failed')
+    expect(row!.detail).toMatchObject({ partial: 'deadline', deadline_ms: 1 })
+    await db(U).unsafe(`DELETE FROM event_consumption WHERE consumer = 'old-dl'`)
+  })
+
+  it('MED: a rule cut at the batch cap is recorded in detail.batch_limit_hits (rows may remain)', async () => {
+    for (const c of ['cap-1', 'cap-2', 'cap-3']) {
+      await db(U).unsafe(`INSERT INTO event_consumption (consumer, event_id, consumed_at) VALUES ('${c}', gen_random_uuid(), '${daysAgo(9).toISOString()}')`)
+    }
+    const r = await run({ batchSize: 1, maxBatches: 2 })
+    expect(r.status).toBe('failed')
+    expect(r.batchLimitHits).toContainEqual({ tenant: hex(U), rule: 'RC-K1-PLUMB/event_consumption', batches: 2 })
+    expect(await count(U, `SELECT count(*)::int AS n FROM event_consumption WHERE consumer LIKE 'cap-%'`)).toBe(1)
+    const [row] = await platform<{ detail: any }[]>`SELECT detail FROM plt.job_run WHERE job_run_id = ${r.jobRunId}::uuid`
+    expect(row!.detail.batch_limit_hits).toContainEqual({ tenant: hex(U), rule: 'RC-K1-PLUMB/event_consumption', batches: 2 })
+    await db(U).unsafe(`DELETE FROM event_consumption WHERE consumer LIKE 'cap-%'`)
   })
 
   it('deletes nothing when the purge_run definition is disabled (a purge with no record is not run)', async () => {

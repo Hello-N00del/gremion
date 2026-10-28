@@ -7,12 +7,15 @@
 //     Runs every retention category docs/compliance/retention-catalogue.md gives
 //     a concrete window and a table in this repository (runPurge in
 //     @gremion/tenant-store/lifecycle): deletes the aged rows as each customer's
-//     purger role, and writes one plt.job_run row (job_kind purge_run) with the
-//     counts per category and the errors. ONE JSON line on STDOUT:
+//     purger role (LOGGED IN as it, never SET ROLE under the admin), and writes
+//     one plt.job_run row (job_kind purge_run) with the counts per category and
+//     the errors; it stops itself at PURGE_DEADLINE_MS and records the run as
+//     partial ("partial":"deadline"). ONE JSON line on STDOUT:
 //       {"verb":"purge-run","status":"succeeded","categories":{...},"errors":0,...}
 //     EXIT 0 succeeded (or skipped: another run holds the lock); 1 failed (a
-//     customer database or rule errored, the row says which) or the run could not
-//     start or record; 2 usage.
+//     customer database or rule errored or was refused, the run reached its
+//     deadline or a batch cap; the row says which) or the run could not start or
+//     record; 2 usage.
 import { runPurge, type PurgeDeps, type PurgeResult } from '@gremion/tenant-store/lifecycle'
 
 export const PURGE_VERBS: ReadonlySet<string> = new Set(['purge-run'])
@@ -48,6 +51,8 @@ export async function purgeVerb(verb: string, ctx: PurgeVerbContext): Promise<vo
         categories: r.categories,
         errors: r.errors.length,
         skipped: r.skipped.length,
+        partial: r.partial,
+        batchLimitHits: r.batchLimitHits.length,
         startedAt: r.startedAt.toISOString(),
         finishedAt: r.finishedAt.toISOString(),
       })}\n`,

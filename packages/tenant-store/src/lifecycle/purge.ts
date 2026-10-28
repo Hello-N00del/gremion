@@ -11,16 +11,49 @@
 // inferred: a rule cites its catalogue row, purge.test.ts re-reads the
 // catalogue and the migrations and fails when a window or a column drifts.
 //
-// AS WHOM: a kernel-scope rule runs as the customer's k_<hex>_purger role
-// (kernel.ts: NOLOGIN, outside the owner). The run connects as the kernel
-// server's admin (the lifecycle's ModuleServer), grants the purger exactly
-// SELECT + DELETE on the mapped table (idempotent), and deletes inside a
-// transaction that does SET LOCAL ROLE <purger>: the DELETE itself carries only
-// the purger's privileges, so a table with no rule (audit_log, the governance
-// records) is out of reach of the run by privilege, not by the SQL text. The
-// platform-scope rule (plt.job_run) runs as the platform connection's own role:
-// gremion_platform has no purger role, and job_run's DELETE is open by design
-// (0005: "a DELETE must stay possible for the retention purge").
+// AS WHOM: a kernel-scope rule runs as the customer's k_<hex>_purger role, and
+// the run LOGS IN as that role: it is the session user, not a SET ROLE inside
+// an admin session. The kernel server's admin is a superuser and the customer's
+// app role is a member of the table owner (TASK-192 deviation), so the tenant
+// can attach code (a trigger, a rule, an RLS policy, an ON DELETE CASCADE into
+// its own table) to a purge table; under SET ROLE that code could RESET ROLE
+// back to the superuser (verified on postgres:18: `RESET ROLE; ALTER ROLE
+// k_<hex>_app SUPERUSER`). Logged in as the purger, RESET ROLE returns to the
+// purger, which is NOSUPERUSER and a member of nothing.
+//   Why a per-customer login and not one platform-wide purge role granted
+// membership in every k_*_purger: the shared role would be the RESET ROLE
+// target of every customer's session, a role that can SET ROLE into every
+// other customer's purger. Why a one-run password and not a stored secret: no
+// credential exists at rest. The admin connection (maintenance database only,
+// never a customer database) gives the purger LOGIN and the SCRAM verifier of a
+// random password VALID UNTIL the run's deadline + 60 s, the run logs in with
+// it, and the `finally` puts the role back to NOLOGIN PASSWORD NULL (a crashed
+// run leaves a verifier that has already expired). The admin only ever runs
+// role DDL and catalogue reads; a GRANT or ALTER ROLE fires no tenant code.
+//   The purger holds CONNECT and USAGE on public from ensureKernelDatabase and
+// SELECT + DELETE on exactly the mapped tables from ensureKernelPurgeGrants
+// (the tenant init path, after the kernel chain created them): a table with no
+// rule (audit_log, the governance records) is out of reach by privilege, not
+// by the SQL text. A run that finds a grant missing records it and deletes
+// nothing there; it never grants.
+//   Defence in depth, per table and before any DELETE: the run refuses (records
+// an error, skips the table) when the table is not a plain table, has a child
+// table, has row-level security, a non-internal trigger outside the kernel's
+// own (PurgeRule.kernelTriggers, checked against the migrations by
+// purge.test.ts), a rewrite rule, or a foreign key pointing at it. Every
+// statement runs in a transaction with search_path pinned to pg_catalog (the
+// owner may ALTER DATABASE SET search_path) and statement_timeout bounded by
+// the deadline. The platform-scope rule (plt.job_run) runs as the platform
+// connection's own role: gremion_platform has no purger role and no tenant
+// writes to it, and job_run's DELETE is open by design (0005: "a DELETE must
+// stay possible for the retention purge").
+//
+// DEADLINE: gremion-purge.service has TimeoutStartSec=170 and the job_run row
+// is written at the end, so the run stops itself at PURGE_DEADLINE_MS (checked
+// before every database, rule and batch, and every statement's timeout is the
+// time left) and records a partial result (status failed, detail.partial =
+// 'deadline'). A rule that stops at the batch cap is recorded too
+// (detail.batch_limit_hits). Either way the next day's run continues.
 //
 // SAFE TO RE-RUN: every rule is "delete rows whose start event is older than
 // now - window", so a second run deletes 0 and still writes its own job_run row.
@@ -29,10 +62,12 @@
 // purge_run definition refuses before it deletes anything (a purge with no record
 // is not run). A failure in one customer database or rule is recorded and the
 // rest still run; the row's status is then `failed`.
+import { randomBytes } from 'node:crypto'
 import type { Sql } from '@gremion/db'
 import { ADVISORY_LOCKS } from '../advisory-locks.js'
-import { execFormatted } from './ddl.js'
-import { kernelRoles } from './kernel.js'
+import { execFormatted, sqlState } from './ddl.js'
+import { kernelDbName, kernelRoles } from './kernel.js'
+import { scramSha256Verifier } from './scram.js'
 import type { ModuleServer } from './types.js'
 
 /** The schedule of the platform purge_run definition (02:30 UTC daily); gremion-purge.timer fires the same moment. */
@@ -59,6 +94,12 @@ export interface PurgeRule {
   readonly windowDays: number
   /** Why this reading of the catalogue row. */
   readonly note: string
+  /**
+   * Kernel scope: the non-internal triggers the kernel's own migrations put on
+   * the table (purge.test.ts re-reads gremion-ui/migrations). Any other trigger
+   * makes the run refuse the table: it would run during the purge's DELETE.
+   */
+  readonly kernelTriggers?: readonly string[]
 }
 
 export const PURGE_RULES: readonly PurgeRule[] = [
@@ -72,6 +113,7 @@ export const PURGE_RULES: readonly PurgeRule[] = [
     startEvent: 'consumed_at',
     windowDays: 7,
     note: 'inbox (applied-event) rows: the 7-day de-duplication and inspection period after the event was applied',
+    kernelTriggers: [],
   },
   {
     id: 'RC-K1-PLUMB/scheduled_notifications',
@@ -83,6 +125,7 @@ export const PURGE_RULES: readonly PurgeRule[] = [
     startEvent: 'coalesce(sent_at, failed_at)',
     windowDays: 7,
     note: 'scheduled-task rows: 7 days after the job is done (sent) or dead (failed); a still-pending row has no start event and is never purged',
+    kernelTriggers: [],
   },
   {
     id: 'RC-OPS-RUN/plt.job_run',
@@ -138,14 +181,21 @@ export function purgeCutoff(now: Date, windowDays: number): Date {
 const PLAIN_TABLE = /^(plt\.)?[a-z_]+$/
 const DEFAULT_BATCH = 5000
 const MAX_BATCHES = 2000
+/**
+ * The run's own deadline. Budget of gremion-purge.service (TimeoutStartSec=170):
+ * purge.sh's host-lock wait (PURGE_LOCK_WAIT, default 20 s) + the one-shot's
+ * start (~15 s) + this + the job_run write and teardown (< 25 s). purge.bats
+ * checks the sum.
+ */
+export const PURGE_DEADLINE_MS = 110_000
 
-/** One batch: delete up to $2 rows whose start event is older than $1; returns {n}. */
+/** One batch: delete up to $2 rows whose start event is older than $1; returns {n}. ONLY: never a child table. */
 export function deleteBatchSql(rule: PurgeRule): string {
   if (!PLAIN_TABLE.test(rule.table)) throw new RangeError(`table ${JSON.stringify(rule.table)} is not a plain identifier`)
   const t = rule.scope === 'kernel' ? `public.${rule.table}` : rule.table
   return (
-    `WITH d AS (DELETE FROM ${t} WHERE ctid IN (SELECT ctid FROM ${t} WHERE ${rule.startEvent} < $1::timestamptz LIMIT $2) RETURNING 1) ` +
-    'SELECT count(*)::int AS n FROM d'
+    `WITH d AS (DELETE FROM ONLY ${t} WHERE ctid IN (SELECT ctid FROM ONLY ${t} WHERE ${rule.startEvent} < $1::pg_catalog.timestamptz LIMIT $2) RETURNING 1) ` +
+    'SELECT pg_catalog.count(*)::int AS n FROM d'
   )
 }
 
@@ -161,11 +211,32 @@ export interface PurgeSkip {
   reason: string
 }
 
+export interface PurgeBatchLimit {
+  tenant: string | null
+  rule: string
+  batches: number
+}
+
+/** The kernel server as the purge run needs it: the admin, and a login as another role. */
+export interface PurgeServer extends ModuleServer {
+  /**
+   * A DIRECT pool to `database` on this server that LOGS IN as `user` with
+   * `password` (never the admin's credential, never a pooler). The
+   * implementation should send search_path=pg_catalog as a startup parameter;
+   * the run pins it per transaction regardless. The caller ends the pool.
+   */
+  login(database: string, user: string, password: string): Sql | Promise<Sql>
+}
+
 export interface PurgeDeps {
   /** gremion_platform, as its owner (the tenant-create container's own credential). */
   platform: Sql
-  /** The kernel server (admin + open), as for ensureKernelDatabase. */
-  server: ModuleServer
+  /** The kernel server: admin (maintenance database, role DDL only) + login as each purger. */
+  server: PurgeServer
+  /** Stop after this many ms and record a partial run (default PURGE_DEADLINE_MS). */
+  deadlineMs?: number
+  /** Batches per rule and database before the run moves on and records the cap (default 2000). */
+  maxBatches?: number
   /** The reference time of the cutoffs (tests pin it). */
   now?: () => Date
   /** The schedule slot this run answers; default the moment the run starts (UNIQUE with the job). */
@@ -180,6 +251,10 @@ export interface PurgeResult {
   categories: Record<string, number>
   errors: PurgeError[]
   skipped: PurgeSkip[]
+  /** Rules that stopped at the batch cap (rows may remain). */
+  batchLimitHits: PurgeBatchLimit[]
+  /** 'deadline' when the run stopped itself before it finished; null otherwise. */
+  partial: 'deadline' | null
   tenantsScanned: number
   jobRunId: string
   startedAt: Date
@@ -187,6 +262,7 @@ export interface PurgeResult {
 }
 
 const KERNEL_DB = /^t_([0-9a-f]{32})__kernel$/
+const PURGER = /^k_[0-9a-f]{32}_purger$/
 const MESSAGE_MAX = 300
 const ERRORS_MAX = 50
 
@@ -194,29 +270,185 @@ function uuidOfHex(h: string): string {
   return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`
 }
 
-/** SET LOCAL ROLE for a role name kernelRoles built from a validated tenant id (k_<hex32>_purger). */
-function setRoleSql(role: string): string {
-  if (!/^k_[0-9a-f]{32}_purger$/.test(role)) throw new RangeError(`${JSON.stringify(role)} is not a kernel purger role name`)
-  return `SET LOCAL ROLE ${role}`
-}
-
 function messageOf(err: unknown): string {
   const m = err instanceof Error ? err.message : String(err)
   return m.replaceAll(/\s+/g, ' ').slice(0, MESSAGE_MAX)
 }
 
+/** The run stopped itself: not an error of the database it was in. */
+class DeadlineReached extends Error {}
+
+interface Clock {
+  /** ms left, at least 1 (a statement_timeout of 0 would mean "none"). */
+  left(): number
+  expired(): boolean
+  /** throws DeadlineReached when expired */
+  check(): void
+}
+
+function clockOf(deadlineAt: number): Clock {
+  return {
+    left: () => Math.max(1, deadlineAt - Date.now()),
+    expired: () => Date.now() >= deadlineAt,
+    check() {
+      if (Date.now() >= deadlineAt) throw new DeadlineReached('the purge run reached its deadline')
+    },
+  }
+}
+
+/**
+ * One transaction with the name resolution and the time bound pinned: the
+ * customer's owner may ALTER DATABASE SET search_path, and a statement must
+ * never outlive the run's deadline.
+ */
+async function pinned<T>(db: Sql, clock: Clock, fn: (tx: Sql) => Promise<T>): Promise<T> {
+  clock.check()
+  return (await db.begin(async (tx) => {
+    await tx.unsafe(`SET LOCAL search_path = pg_catalog; SET LOCAL statement_timeout = ${String(Math.ceil(clock.left()))}`)
+    return fn(tx as unknown as Sql)
+  })) as T
+}
+
 type Runner = (sql: string, params: unknown[]) => Promise<{ n: number }[]>
 
-async function deleteAged(rule: PurgeRule, run: Runner, cutoff: Date, batch: number): Promise<number> {
+async function deleteAged(
+  rule: PurgeRule,
+  run: Runner,
+  cutoff: Date,
+  batch: number,
+  maxBatches: number,
+  clock: Clock,
+): Promise<{ total: number; limitHit: boolean }> {
   const sql = deleteBatchSql(rule)
   let total = 0
-  for (let i = 0; i < MAX_BATCHES; i++) {
+  for (let i = 0; i < maxBatches; i++) {
+    clock.check()
     const [row] = await run(sql, [cutoff.toISOString(), batch])
     const n = row?.n ?? 0
     total += n
-    if (n < batch) return total
+    if (n < batch) return { total, limitHit: false }
   }
-  return total
+  return { total, limitHit: true }
+}
+
+/**
+ * The SELECT + DELETE grants of the purger on exactly the kernel-scope purge
+ * tables (idempotent). The tenant init path calls it after the kernel chain
+ * created them; a table the chain has not created yet is returned in `absent`.
+ * Executed by the admin: a GRANT fires no tenant code.
+ */
+export async function ensureKernelPurgeGrants(server: ModuleServer, tenantId: string): Promise<{ granted: string[]; absent: string[] }> {
+  const { purger } = kernelRoles(tenantId)
+  const dbName = kernelDbName(tenantId)
+  const db = await server.open(dbName)
+  const granted: string[] = []
+  const absent: string[] = []
+  try {
+    const [who] = await db<{ db: string }[]>`SELECT pg_catalog.current_database() AS db`
+    if (who?.db !== dbName) throw new Error(`the admin pool is connected to ${JSON.stringify(who?.db)}, not ${dbName}`)
+    await execFormatted(db, 'GRANT USAGE ON SCHEMA public TO %I', [purger])
+    for (const rule of PURGE_RULES.filter((r) => r.scope === 'kernel')) {
+      if (!PLAIN_TABLE.test(rule.table)) throw new RangeError(`table ${JSON.stringify(rule.table)} is not a plain identifier`)
+      const [present] = await db<{ ok: boolean }[]>`SELECT pg_catalog.to_regclass(${`public.${rule.table}`}) IS NOT NULL AS ok`
+      if (!present?.ok) {
+        absent.push(rule.table)
+        continue
+      }
+      await execFormatted(db, `GRANT SELECT, DELETE ON TABLE public.${rule.table} TO %I`, [purger])
+      granted.push(rule.table)
+    }
+  } finally {
+    await db.end({ timeout: 5 })
+  }
+  return { granted, absent }
+}
+
+/** What the run reads about a purge table before it deletes from it. */
+export interface PurgeTableShape {
+  kind: string
+  children: number
+  rls: boolean
+  granted: boolean
+  triggers: readonly string[]
+  policies: readonly string[]
+  rules: readonly string[]
+  referencedBy: readonly string[]
+}
+
+/** Why the run must not DELETE from this table, or null. */
+export function refusalOf(rule: PurgeRule, t: PurgeTableShape): string | null {
+  if (t.kind !== 'r') return `refused: ${rule.table} is not a plain table (relkind ${t.kind})`
+  if (t.children > 0) return `refused: ${rule.table} has ${String(t.children)} child table(s)`
+  if (t.rls || t.policies.length > 0) return `refused: ${rule.table} has row-level security${t.policies.length ? ` (policy ${t.policies.join(', ')})` : ''}`
+  const allowed = new Set(rule.kernelTriggers ?? [])
+  const foreign = t.triggers.filter((n) => !allowed.has(n))
+  if (foreign.length > 0) return `refused: ${rule.table} has trigger ${foreign.join(', ')} that the kernel migrations do not create`
+  if (t.rules.length > 0) return `refused: ${rule.table} has rewrite rule ${t.rules.join(', ')}`
+  if (t.referencedBy.length > 0) return `refused: ${rule.table} is referenced by foreign key ${t.referencedBy.join(', ')}`
+  if (!t.granted) {
+    return `refused: the purger lacks SELECT, DELETE on ${rule.table} (ensureKernelPurgeGrants has not run for this customer since the kernel chain created it)`
+  }
+  return null
+}
+
+const SHAPE_SQL = `
+  SELECT c.relkind::text AS kind,
+         (SELECT count(*)::int FROM pg_catalog.pg_inherits i WHERE i.inhparent = c.oid) AS children,
+         c.relrowsecurity AS rls,
+         pg_catalog.has_table_privilege(c.oid, 'SELECT') AND pg_catalog.has_table_privilege(c.oid, 'DELETE') AS granted,
+         ARRAY(SELECT t.tgname::text FROM pg_catalog.pg_trigger t WHERE t.tgrelid = c.oid AND NOT t.tgisinternal ORDER BY 1) AS triggers,
+         ARRAY(SELECT p.polname::text FROM pg_catalog.pg_policy p WHERE p.polrelid = c.oid ORDER BY 1) AS policies,
+         ARRAY(SELECT r.rulename::text FROM pg_catalog.pg_rewrite r WHERE r.ev_class = c.oid AND r.rulename <> '_RETURN' ORDER BY 1) AS rules,
+         ARRAY(SELECT f.conname::text FROM pg_catalog.pg_constraint f WHERE f.confrelid = c.oid AND f.contype = 'f' ORDER BY 1) AS "referencedBy"
+    FROM pg_catalog.pg_class c WHERE c.oid = pg_catalog.to_regclass($1)`
+
+/**
+ * Logs in to the customer's kernel database AS its purger (exported for the
+ * integration test of the identity). The admin, on the maintenance database,
+ * gives the purger LOGIN and a one-run password VALID UNTIL `validUntil`;
+ * `close` ends the pool and puts the role back to NOLOGIN PASSWORD NULL.
+ * Refuses a purger that is not the NOSUPERUSER, member-of-nothing role
+ * ensureKernelRoles made.
+ */
+export async function openPurgerSession(server: PurgeServer, hex: string, validUntil: Date): Promise<{ db: Sql; purger: string; close(): Promise<void> }> {
+  const tenantId = uuidOfHex(hex)
+  const { purger } = kernelRoles(tenantId)
+  if (!PURGER.test(purger)) throw new RangeError(`${JSON.stringify(purger)} is not a kernel purger role name`)
+  const [r] = await server.admin<{ ok: boolean; members: number }[]>`
+    SELECT NOT (r.rolsuper OR r.rolbypassrls OR r.rolcreaterole OR r.rolcreatedb OR r.rolreplication) AS ok,
+           (SELECT count(*)::int FROM pg_catalog.pg_auth_members m WHERE m.member = r.oid) AS members
+      FROM pg_catalog.pg_roles r WHERE r.rolname = ${purger}`
+  if (!r) throw new Error(`${purger} does not exist (ensureKernelDatabase has not run for this customer)`)
+  if (!r.ok || r.members !== 0) {
+    throw new Error(`refused: ${purger} is not the plain role ensureKernelRoles makes (attributes or memberships changed); not logging in as it`)
+  }
+  const password = randomBytes(32).toString('base64url')
+  const reset = () => execFormatted(server.admin, 'ALTER ROLE %I NOLOGIN PASSWORD NULL VALID UNTIL %L', [purger, 'infinity'])
+  await execFormatted(server.admin, 'ALTER ROLE %I LOGIN PASSWORD %L VALID UNTIL %L', [purger, scramSha256Verifier(password), validUntil.toISOString()])
+  let db: Sql | undefined
+  try {
+    db = await server.login(kernelDbName(tenantId), purger, password)
+    const [who] = await db<{ su: string; cu: string; sup: boolean }[]>`
+      SELECT session_user::text AS su, current_user::text AS cu,
+             (SELECT r.rolsuper FROM pg_catalog.pg_roles r WHERE r.rolname = session_user) AS sup`
+    // strict: a NULL rolsuper is not proof of NOSUPERUSER
+    if (who?.su !== purger || who.cu !== purger || who.sup !== false) {
+      throw new Error(`refused: the purge session is ${JSON.stringify(who?.su)}/${JSON.stringify(who?.cu)}, not ${purger}`)
+    }
+  } catch (err) {
+    await db?.end({ timeout: 5 }).catch(() => {})
+    await reset().catch(() => {})
+    throw err
+  }
+  const opened = db
+  return {
+    db: opened,
+    purger,
+    async close() {
+      await opened.end({ timeout: 5 }).catch(() => {})
+      await reset()
+    },
+  }
 }
 
 /**
@@ -229,9 +461,13 @@ export async function runPurge(deps: PurgeDeps): Promise<PurgeResult> {
   const { platform, server } = deps
   const now = deps.now ?? (() => new Date())
   const batch = deps.batchSize ?? DEFAULT_BATCH
+  const maxBatches = deps.maxBatches ?? MAX_BATCHES
   const log = deps.log ?? (() => {})
   const rules = PURGE_RULES
   const startedAt = new Date()
+  const deadlineMs = deps.deadlineMs ?? PURGE_DEADLINE_MS
+  const deadlineAt = startedAt.getTime() + deadlineMs
+  const clock = clockOf(deadlineAt)
   const scheduledFor = deps.scheduledFor ?? startedAt
   const reference = now()
 
@@ -257,69 +493,111 @@ export async function runPurge(deps: PurgeDeps): Promise<PurgeResult> {
     const categories: Record<string, number> = Object.fromEntries(rules.map((r) => [r.id, 0]))
     const errors: PurgeError[] = []
     const skipped: PurgeSkip[] = []
+    const batchLimitHits: PurgeBatchLimit[] = []
+    let partial: PurgeResult['partial'] = null
     let tenantsScanned = 0
     let status: PurgeResult['status'] = 'succeeded'
+    /** true when the error is the run's own deadline (recorded as partial, not as an error of that database) */
+    const deadlineHit = (err: unknown): boolean => {
+      if (err instanceof DeadlineReached || (sqlState(err) === '57014' && clock.expired())) {
+        partial = 'deadline'
+        return true
+      }
+      return false
+    }
 
     if (!held) {
       status = 'skipped'
       log('purge: another run holds the lock; recording a skipped run and deleting nothing')
     } else {
-      // --- kernel scope: every customer's kernel database, as its purger role
-      const kernelRules = rules.filter((r) => r.scope === 'kernel')
-      const dbs = await server.admin<{ datname: string }[]>`
-        SELECT datname FROM pg_database WHERE datname ~ '^t_[0-9a-f]{32}__kernel$' AND datallowconn ORDER BY datname`
-      for (const { datname } of dbs) {
-        const hex = KERNEL_DB.exec(datname)?.[1]
-        if (!hex) continue
-        tenantsScanned++
-        let db: Sql | undefined
-        try {
-          const purger = kernelRoles(uuidOfHex(hex)).purger
-          const kdb: Sql = await server.open(datname)
-          db = kdb
-          for (const rule of kernelRules) {
-            try {
-              const [present] = await kdb<{ ok: boolean }[]>`SELECT to_regclass(${`public.${rule.table}`}) IS NOT NULL AS ok`
-              if (!present?.ok) {
-                skipped.push({ tenant: hex, rule: rule.id, reason: `table ${rule.table} is absent (the kernel chain has not created it)` })
-                continue
-              }
-              // the purger holds exactly what the rule needs, nothing else (idempotent)
-              await execFormatted(kdb, 'GRANT USAGE ON SCHEMA public TO %I', [purger])
-              await execFormatted(kdb, `GRANT SELECT, DELETE ON TABLE public.${rule.table} TO %I`, [purger])
-              const cutoff = purgeCutoff(reference, rule.windowDays)
-              const n = await deleteAged(
-                rule,
-                async (sql, params) =>
-                  kdb.begin(async (tx) => {
-                    await tx.unsafe(setRoleSql(purger))
-                    return (await tx.unsafe(sql, params as never[])) as unknown as { n: number }[]
-                  }),
-                cutoff,
-                batch,
-              )
-              categories[rule.id] = (categories[rule.id] ?? 0) + n
-            } catch (err) {
-              errors.push({ tenant: hex, rule: rule.id, message: messageOf(err) })
-            }
-          }
-        } catch (err) {
-          errors.push({ tenant: hex, rule: '*', message: messageOf(err) })
-        } finally {
-          await db?.end({ timeout: 5 }).catch(() => {})
-        }
-      }
-      // --- platform scope: the connection's own role
+      // --- platform scope first (cheap, never starved by the deadline): the connection's own role
       for (const rule of rules.filter((r) => r.scope === 'platform')) {
         try {
           const cutoff = purgeCutoff(reference, rule.windowDays)
-          const n = await deleteAged(rule, async (sql, params) => (await conn.unsafe(sql, params as never[])) as unknown as { n: number }[], cutoff, batch)
-          categories[rule.id] = (categories[rule.id] ?? 0) + n
+          // gremion_platform takes no tenant writes: only the time bound is pinned (on the reserved connection)
+          const r = await deleteAged(
+            rule,
+            async (sql, params) => {
+              await conn.unsafe(`SET statement_timeout = ${String(Math.ceil(clock.left()))}`)
+              return (await conn.unsafe(sql, params as never[])) as unknown as { n: number }[]
+            },
+            cutoff,
+            batch,
+            maxBatches,
+            clock,
+          )
+          categories[rule.id] = (categories[rule.id] ?? 0) + r.total
+          if (r.limitHit) batchLimitHits.push({ tenant: null, rule: rule.id, batches: maxBatches })
         } catch (err) {
-          errors.push({ tenant: null, rule: rule.id, message: messageOf(err) })
+          if (!deadlineHit(err)) errors.push({ tenant: null, rule: rule.id, message: messageOf(err) })
+        } finally {
+          await conn`RESET statement_timeout`
         }
       }
-      if (errors.length > 0) status = 'failed'
+      // --- kernel scope: every customer's kernel database, LOGGED IN as its purger role
+      const kernelRules = rules.filter((r) => r.scope === 'kernel')
+      const dbs =
+        partial === null
+          ? await server.admin<{ datname: string; owner: string }[]>`
+              SELECT d.datname, r.rolname AS owner FROM pg_database d JOIN pg_roles r ON r.oid = d.datdba
+               WHERE d.datname ~ '^t_[0-9a-f]{32}__kernel$' AND d.datallowconn ORDER BY d.datname`
+          : []
+      for (const { datname, owner } of dbs) {
+        if (partial !== null || clock.expired()) {
+          partial = 'deadline'
+          break
+        }
+        const hex = KERNEL_DB.exec(datname)?.[1]
+        if (!hex) continue
+        tenantsScanned++
+        // ensureKernelDatabase refuses to adopt a database it did not create; the purge does not log in to one either
+        if (owner !== kernelRoles(uuidOfHex(hex)).owner) {
+          for (const rule of kernelRules) skipped.push({ tenant: hex, rule: rule.id, reason: `${datname} is owned by ${owner}, not the lifecycle's owner role: not a lifecycle kernel database` })
+          continue
+        }
+        let session: Awaited<ReturnType<typeof openPurgerSession>> | undefined
+        try {
+          session = await openPurgerSession(server, hex, new Date(deadlineAt + 60_000))
+          const kdb = session.db
+          for (const rule of kernelRules) {
+            if (partial !== null) break
+            try {
+              const shape = await pinned(kdb, clock, async (tx) => ((await tx.unsafe(SHAPE_SQL, [`public.${rule.table}`])) as unknown as PurgeTableShape[])[0])
+              if (!shape) {
+                skipped.push({ tenant: hex, rule: rule.id, reason: `table ${rule.table} is absent (the kernel chain has not created it)` })
+                continue
+              }
+              const refused = refusalOf(rule, shape)
+              if (refused) {
+                errors.push({ tenant: hex, rule: rule.id, message: refused })
+                continue
+              }
+              const cutoff = purgeCutoff(reference, rule.windowDays)
+              const r = await deleteAged(
+                rule,
+                async (sql, params) => pinned(kdb, clock, async (tx) => (await tx.unsafe(sql, params as never[])) as unknown as { n: number }[]),
+                cutoff,
+                batch,
+                maxBatches,
+                clock,
+              )
+              categories[rule.id] = (categories[rule.id] ?? 0) + r.total
+              if (r.limitHit) batchLimitHits.push({ tenant: hex, rule: rule.id, batches: maxBatches })
+            } catch (err) {
+              if (!deadlineHit(err)) errors.push({ tenant: hex, rule: rule.id, message: messageOf(err) })
+            }
+          }
+        } catch (err) {
+          if (!deadlineHit(err)) errors.push({ tenant: hex, rule: '*', message: messageOf(err) })
+        } finally {
+          await session?.close().catch((err: unknown) => {
+            errors.push({ tenant: hex, rule: '*', message: `could not put the purger back to NOLOGIN: ${messageOf(err)}` })
+          })
+        }
+      }
+      // incomplete is not succeeded: an error, the deadline, or a rule cut at the batch cap
+      if (errors.length > 0 || partial !== null || batchLimitHits.length > 0) status = 'failed'
+      if (partial !== null) log(`purge: stopped at the ${String(deadlineMs)} ms deadline; recording a partial run`)
     }
 
     const finishedAt = new Date(Math.max(Date.now(), startedAt.getTime()))
@@ -330,6 +608,9 @@ export async function runPurge(deps: PurgeDeps): Promise<PurgeResult> {
       errors: errors.slice(0, ERRORS_MAX),
       errors_total: errors.length,
       skipped: skipped.slice(0, ERRORS_MAX),
+      batch_limit_hits: batchLimitHits.slice(0, ERRORS_MAX),
+      partial,
+      deadline_ms: deadlineMs,
       ...(status === 'skipped' ? { reason: 'another purge run holds the lock' } : {}),
     }
     const [row] = await conn<{ id: string }[]>`
@@ -337,7 +618,7 @@ export async function runPurge(deps: PurgeDeps): Promise<PurgeResult> {
       VALUES (${job.id}::uuid, 'platform', ${scheduledFor}, ${status === 'skipped' ? null : startedAt}, ${finishedAt}, ${status},
               ${`purge/${reference.toISOString().replace(/\.\d+Z$/, 'Z')}`}, ${conn.json(detail as unknown as Parameters<typeof conn.json>[0])})
       RETURNING job_run_id::text AS id`
-    return { status, categories, errors, skipped, tenantsScanned, jobRunId: row!.id, startedAt, finishedAt }
+    return { status, categories, errors, skipped, batchLimitHits, partial, tenantsScanned, jobRunId: row!.id, startedAt, finishedAt }
   } finally {
     if (held) await conn`SELECT pg_advisory_unlock(${lock.classid}, ${lock.objid})`.catch(() => {})
     conn.release()

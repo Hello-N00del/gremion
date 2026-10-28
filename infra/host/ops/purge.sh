@@ -11,11 +11,15 @@
 # category and the errors, and prints one JSON line.
 #
 # It takes runtime/hostd.lock (waiting up to PURGE_LOCK_WAIT seconds, default
-# 120): a deploy, switch or rollback in progress must not race a purge that
+# 20): a deploy, switch or rollback in progress must not race a purge that
 # is about to run in the colour being switched. A host operation that outlasts
 # the wait makes this exit 3 (blocked): the unit fails visibly, and the next
 # day's run purges everything this one would have (every rule is "older than
 # now - window", so skipping a day only delays deletion by a day).
+# The wait is short because it shares gremion-purge.service's TimeoutStartSec
+# (170 s) with the run itself, which stops at its own deadline (PURGE_DEADLINE_MS
+# in purge.ts, 110 s) and records a partial run: wait + one-shot start + deadline
+# + the record must fit, or systemd kills the run before it writes plt.job_run.
 #
 # exit 0 the run succeeded (or another run held its own lock and recorded a skip)
 #      1 the run failed: a customer database or rule errored (the plt.job_run
@@ -41,7 +45,7 @@ active_colour
 LOCK="${ROOT}/runtime/hostd.lock"
 mkdir -p "$(dirname "$LOCK")"
 exec 9>>"$LOCK" || die "cannot open the host lock ${LOCK}" "$GREMION_EXIT_USAGE"
-if ! flock -w "${PURGE_LOCK_WAIT:-120}" 9; then
+if ! flock -w "${PURGE_LOCK_WAIT:-20}" 9; then
     die "another host operation holds ${LOCK}; no purge this run" "$GREMION_EXIT_BLOCKED"
 fi
 

@@ -14,6 +14,8 @@ const result = (status: 'succeeded' | 'failed' | 'skipped') => ({
   categories: { 'RC-K1-PLUMB/event_consumption': 3 },
   errors: status === 'failed' ? [{ tenant: 'ab', rule: 'RC-K1-PLUMB/event_consumption', message: 'boom' }] : [],
   skipped: [],
+  batchLimitHits: [],
+  partial: null,
   tenantsScanned: 2,
   jobRunId: '0198a1b2-0000-7000-8000-000000000001',
   startedAt: new Date('2026-10-27T02:30:00Z'),
