@@ -51,6 +51,10 @@ umask 077
 . "$SCRIPT_DIR/../lib/customer-ops.sh"
 # shellcheck source=../lib/executor/db.sh
 . "$SCRIPT_DIR/../lib/executor/db.sh"
+# TRD-092: every host action on a customer's data is recorded (who, when, what,
+# why) in gremion_platform's oac.access_record BEFORE it runs, fail closed.
+# shellcheck source=../lib/access-log.sh
+. "$SCRIPT_DIR/../lib/access-log.sh"
 
 MODULE_SERVERS="board calendar content finance newsletter vault"
 KCADM_BIN="/opt/keycloak/bin/kcadm.sh"
@@ -345,6 +349,8 @@ cmd_request() {
     [[ "$actor" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] || die "the invoking login user '${actor}' is not a plain user name" "$GREMION_EXIT_USAGE"
     key="$(openssl rand -hex 16 | tr -d '\r\n')"
     key="${key:0:8}-${key:8:4}-4${key:13:3}-8${key:17:3}-${key:20:12}"
+    # TRD-092: recorded BEFORE it is queued; no record, no request.
+    access_record_or_die "$slug" break_glass_request "Anfrage ${kind} für ${slug} über den Host-Notzugang in die Provisionierungswarteschlange gestellt (Mandantendaten)" "$reason"
     # The args (a member list: up to 1 MiB, names and addresses) go on psql's STDIN as a
     # dollar-quoted literal inside the SQL, never as `-v args=...`: that is a `docker exec`
     # argv, capped at 128 KiB per argument (E2BIG) and readable by every local user in the
@@ -376,12 +382,24 @@ cmd_requests() {
     platform_sql "${su:-postgres}" "SELECT request_id, created_at, kind, customer_slug, origin, state, attempt, coalesce(outcome, '') FROM plt.provisioning_request_status WHERE (:'slug' = '' OR customer_slug = :'slug') ORDER BY created_at DESC LIMIT 50;" -v slug="$slug"
 }
 
+# host_access <verb> <slug> <reason|""> <what> -- the access record of a host
+# verb; the reason defaults to a line saying none was given (it is still
+# recorded, and the council administrator sees that no reason was stated).
+host_access() {
+    local verb="$1" slug="$2" reason="$3" what="$4"
+    [[ -n "$reason" ]] || reason="gremion-tenant ${verb} auf dem Host, ohne angegebene Begründung (--reason)"
+    [[ ${#reason} -ge 10 && ${#reason} -le 500 ]] || die "${verb}: --reason is 10 to 500 characters" "$GREMION_EXIT_USAGE"
+    access_record_or_die "$slug" "host_${verb}" "$what" "$reason"
+}
+
 cmd_suspend() {
     local slug="${1:-}"; shift || true
     need_slug "$slug"
-    while [[ $# -gt 0 ]]; do case "$1" in --operator) need_value "$@"; OPERATOR_ID="$2"; shift 2 ;; *) die "suspend: unknown argument: $1" "$GREMION_EXIT_USAGE" ;; esac; done
+    local reason=""
+    while [[ $# -gt 0 ]]; do case "$1" in --operator) need_value "$@"; OPERATOR_ID="$2"; shift 2 ;; --reason) need_value "$@"; reason="$2"; shift 2 ;; *) die "suspend: unknown argument: $1" "$GREMION_EXIT_USAGE" ;; esac; done
     need_operator
     active_colour
+    host_access suspend "$slug" "$reason" "Mandant ${slug} sperren (Realm und Anwendungszugang des Mandanten)"
     tc suspend "$slug" --operator "$OPERATOR_ID" || die "suspend of ${slug} failed in the container" "$GREMION_EXIT_ASSERT"
     # The tenant is already 503 with its realm disabled (fail closed). The host
     # step un-stamps the realm's sender before it deletes the principal, and every
@@ -395,9 +413,11 @@ cmd_suspend() {
 cmd_resume() {
     local slug="${1:-}"; shift || true
     need_slug "$slug"
-    while [[ $# -gt 0 ]]; do case "$1" in --operator) need_value "$@"; OPERATOR_ID="$2"; shift 2 ;; *) die "resume: unknown argument: $1" "$GREMION_EXIT_USAGE" ;; esac; done
+    local reason=""
+    while [[ $# -gt 0 ]]; do case "$1" in --operator) need_value "$@"; OPERATOR_ID="$2"; shift 2 ;; --reason) need_value "$@"; reason="$2"; shift 2 ;; *) die "resume: unknown argument: $1" "$GREMION_EXIT_USAGE" ;; esac; done
     need_operator
     active_colour
+    host_access resume "$slug" "$reason" "Mandant ${slug} wieder freigeben (Realm und Anwendungszugang des Mandanten)"
     mail_realm_smtp --realm "$slug" --tenant "$(token_of "$slug")" \
         || die "a fresh principal for ${slug} could not be issued" "$GREMION_EXIT_ASSERT"
     mail_sender_args || die "resume of ${slug}: MAIL_TRANSPORT could not be resolved" "$GREMION_EXIT_USAGE"
@@ -408,14 +428,15 @@ cmd_resume() {
 cmd_reconcile() {
     local slug="${1:-}"; shift || true
     need_slug "$slug"
-    local apply=no report
-    while [[ $# -gt 0 ]]; do case "$1" in --apply) apply=yes; shift ;; *) die "reconcile: unknown argument: $1" "$GREMION_EXIT_USAGE" ;; esac; done
+    local apply=no report reason=""
+    while [[ $# -gt 0 ]]; do case "$1" in --apply) apply=yes; shift ;; --reason) need_value "$@"; reason="$2"; shift 2 ;; *) die "reconcile: unknown argument: $1" "$GREMION_EXIT_USAGE" ;; esac; done
     active_colour
     mail_sender_args || die "reconcile of ${slug}: MAIL_TRANSPORT could not be resolved" "$GREMION_EXIT_USAGE"
     if [[ "$apply" == no ]]; then
         tc reconcile --verify-only "$slug" ${MAIL_SENDER_ARGS[@]+"${MAIL_SENDER_ARGS[@]}"}
         return
     fi
+    host_access reconcile "$slug" "$reason" "Mandant ${slug} abgleichen und Abweichungen beheben (reconcile --apply)"
     # The apply exits 0 (green) or 1 (a check still fails: the drift --apply is
     # for) and prints its report as ONE JSON line on stdout. A crash, a missing
     # or unparseable report, or any other exit fails loudly here (review C, r2)

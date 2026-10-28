@@ -49,6 +49,12 @@ if [ "${1:-}" = exec ]; then
             # the args are a dollar-quoted jsonb literal inside the SQL on STDIN ($g<hex>$...$g<hex>$::jsonb)
             printf '%s' "$sql" | sed -n 's/.*\$\(g[0-9a-f]*\)\$\(.*\)\$\1\$::jsonb.*/\2/p' > "$R/submitted-args"
             echo "0192f0c4-0000-7000-8000-000000000001" ;;
+        *oac.record_access*)
+            # TRD-092: the vendor-access record (infra/host/lib/access-log.sh)
+            [ -f "$R/access-refused" ] && { echo "ERROR:  record_access: role is neither the panel requester nor the executor" >&2; exit 3; }
+            order "psql access ${v[action]} ${v[slug]} actor=${v[actor]}"
+            printf '%s|%s|%s|%s|%s\n' "${v[slug]}" "${v[action]}" "${v[actor]}" "${v[what]}" "${v[why]}" >> "$R/access.log"
+            echo "0192f0c4-0000-7000-8000-0000000000ac" ;;
         *provisioning_request_status*) order "psql requests slug=${v[slug]}"; echo "0192f0c4-0000-7000-8000-000000000001|2026-10-05 12:00:00+00|create|alpha-rat|host|succeeded|0|ok" ;;
         *) echo "docker-shim: unexpected sql: ${sql}" >&2; exit 1 ;;
     esac

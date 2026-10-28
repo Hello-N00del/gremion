@@ -35,6 +35,8 @@ import postgres from 'postgres'
 import { handToReader } from './tenant-secret-file'
 import {
   bootstrapPlatform,
+  ACCESS_READER_ROLE,
+  ensureAccessReader,
   ensureExecutorRole,
   ensurePanelRequester,
   EXECUTOR_ROLE,
@@ -628,6 +630,16 @@ async function cmdInit(): Promise<void> {
     // TASK-043d: the host-side executor's role (no password: the state server's local socket only)
     const executor = await ensureExecutorRole({ kernelAdmin, openAdminOn })
     log(`init: executor role ${EXECUTOR_ROLE} ${executor.created ? 'created' : 'present'} (EXECUTE on the request functions only)`)
+    // TRD-092: the council-admin access-record view's role (EXECUTE on the read
+    // function only). Optional until the deployment env carries its password
+    // (UI_OAC_DB_PASSWORD): without it gremion-ui answers 503 on that view.
+    const oacPassword = process.env.UI_OAC_DB_PASSWORD
+    if (oacPassword) {
+      const oac = await ensureAccessReader({ kernelAdmin, openAdminOn, password: oacPassword })
+      log(`init: access-record reader ${ACCESS_READER_ROLE} ${oac.created ? 'created' : 'present'} (EXECUTE on oac.list_access_records only)`)
+    } else {
+      log('init: UI_OAC_DB_PASSWORD is unset: the access-record reader role is not (re)made; the council-admin view reports "nicht konfiguriert"')
+    }
     // TASK-077: the kernel API's SELECT-only role, which deploy step 7
     // (kernel-api-migrate) and the kernel-api service connect as; nothing else
     // creates it.

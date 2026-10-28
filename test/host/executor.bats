@@ -21,7 +21,7 @@ setup() {
     REL="${GREMION_ROOT}/current"
     mkdir -p "${REL}/infra/host/bin" "${REL}/infra/host/lib/executor/handlers" "${GREMION_ROOT}/lib"
     cp "${HOST_SRC}/lib/common.sh" "${REL}/infra/host/lib/"
-    cp "${HOST_SRC}/lib/customer-ops.sh" "${REL}/infra/host/lib/"
+    cp "${HOST_SRC}/lib/customer-ops.sh" "${HOST_SRC}/lib/access-log.sh" "${REL}/infra/host/lib/"
     cp "${HOST_SRC}/lib/executor/db.sh" "${HOST_SRC}/lib/executor/registry.sh" "${REL}/infra/host/lib/executor/"
     cp "${HOST_SRC}/lib/executor/handlers/"*.sh "${REL}/infra/host/lib/executor/handlers/"
     # the installed layout (bootstrap.sh executor)

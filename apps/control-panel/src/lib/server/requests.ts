@@ -6,6 +6,7 @@
 // host-side executor claims it, re-verifies the evidence on the trusted layer
 // and runs the create. The panel image holds neither docker nor gremion-tenant.
 import type postgres from 'postgres'
+import { accessWords } from './access-log'
 
 export interface NewCustomerInput {
   slug: string
@@ -166,11 +167,14 @@ export async function submitCreate(sql: postgres.Sql, input: NewCustomerInput, o
   if (!UUID.test(operatorId)) throw new SubmitRefused(403, 'Die Operator-Kennung ist keine UUID.')
   if (!UUID.test(key)) throw new SubmitRefused(400, 'Der Formularschlüssel fehlt oder ist ungültig. Bitte das Formular neu laden.')
   try {
+    // TRD-092: the access record and the request are ONE statement (no request without its record).
+    const w = accessWords('create', input.slug, false)
     const rows = await sql<{ id: string }[]>`
       SELECT plt.submit_provisioning_request(
                'create', ${input.slug}, ${sql.json(createArgs(input) as never)}, ${key}::uuid, ${operatorId}::uuid,
                ${evidence.acr}, ${evidence.authTime}::timestamptz, ${evidence.sessionAt}::timestamptz, ${evidence.token},
-               NULL, NULL)::text AS id`
+               NULL, NULL)::text AS id
+        FROM (SELECT oac.record_access(${input.slug}, ${w.action}, ${w.what}, ${w.why}, ${operatorId}, NULL)) AS access_record`
     return rows[0]!.id
   } catch (err) {
     throw submitRefusal(err)

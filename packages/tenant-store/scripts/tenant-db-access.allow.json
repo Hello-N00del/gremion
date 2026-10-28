@@ -479,6 +479,14 @@
       "adoptedBy": "TASK-043",
       "since": "2026-10-05",
       "reason": "TASK-043d-1 integration helper on the package's own scratch server (test/integration/run.mjs): pools AS the panel role, the executor's test twin and the platform owner, to prove the request queue's grants; openTenantDb cannot address the control plane's roles; stays allow-listed while the tests exist"
+    },
+    {
+      "path": "gremion-ui/src/lib/server/access-records-db.ts",
+      "calls": 1,
+      "imports": 1,
+      "adoptedBy": "TASK-192",
+      "since": "2026-10-28",
+      "reason": "TRD-092 / PRD-OPS-006: ONE pool on gremion_platform as the role gremion_ui_oac (EXECUTE on oac.list_access_records only, no table privilege) for the council administrator's read of the vendor-access record; never a tenant database; like control-db.ts it is a control-plane pool that the registry takes over"
     }
   ]
 }

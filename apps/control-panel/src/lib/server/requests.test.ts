@@ -157,6 +157,18 @@ describe('submitCreate (A3/A4 at unit level): ONE call of plt.submit_provisionin
     expect(c.values).toContain(EVIDENCE.token)
     expect((c.values.find((v) => (v as { json?: unknown })?.json) as { json: unknown }).json).toEqual(createArgs(GOOD))
   })
+  it('TRD-092: the same statement writes the vendor-access record (oac.record_access) with who, what and why', async () => {
+    const f = fakeSql([{ id: 'req-1' }])
+    await submitCreate(f.sql, GOOD, OP, KEY, EVIDENCE)
+    expect(f.calls).toHaveLength(1)
+    const c = f.calls[0]!
+    expect(c.text).toContain('oac.record_access(')
+    expect(c.values).toContain('panel_request')
+    expect(c.values.filter((v) => v === OP)).toHaveLength(2) // the request's operator and the record's actor
+    expect(c.values.some((v) => typeof v === 'string' && v.includes('Mandant anlegen für proof-z'))).toBe(true)
+    // the signed evidence token is in the request only, never in the record's words
+    expect(c.values.filter((v) => typeof v === 'string' && v.includes(EVIDENCE.token))).toHaveLength(1)
+  })
   it('a non-uuid operator or key never reaches the database', async () => {
     const f = fakeSql([{ id: 'x' }])
     await expect(submitCreate(f.sql, GOOD, 'not-a-uuid', KEY, EVIDENCE)).rejects.toBeInstanceOf(SubmitRefused)

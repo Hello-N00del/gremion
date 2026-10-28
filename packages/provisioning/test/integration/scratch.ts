@@ -8,7 +8,7 @@ import { randomBytes } from 'node:crypto'
 import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import postgres, { type Sql } from 'postgres'
-import { bootstrapPlatform, ensureExecutorRole, ensurePanelRequester, loadModuleJsons } from '../../src/index.ts'
+import { bootstrapPlatform, ensureAccessReader, ensureExecutorRole, ensurePanelRequester, loadModuleJsons } from '../../src/index.ts'
 
 export const REPO = resolve(fileURLToPath(new URL('../../../../', import.meta.url)))
 export const OWNER = 't043_platform'
@@ -54,6 +54,8 @@ export interface Roles {
   /** A pool AS the executor's test twin (same grants and marker, plus a password). */
   executor: Sql
   executorRole: string
+  /** A pool AS the council-admin read role (gremion-ui). */
+  reader: Sql
   close(): Promise<void>
 }
 
@@ -86,6 +88,10 @@ export async function setupRoles(tag: string): Promise<Roles> {
   await ensureExecutorRole({ kernelAdmin: admin, openAdminOn, role: executorRole })
   const execPassword = randomBytes(24).toString('base64url')
   await admin.unsafe(`ALTER ROLE ${executorRole} PASSWORD '${execPassword}'`)
+  const readerRole = `t043d_${tag}_oacr`
+  const readerPassword = randomBytes(24).toString('base64url')
+  await ensureAccessReader({ kernelAdmin: admin, openAdminOn, role: readerRole, password: readerPassword })
+  const reader = open('gremion_platform', 2, readerRole, readerPassword)
   const owner = open('gremion_platform', 3, OWNER, ownerPassword)
   const panel = open('gremion_platform', 2, panelRole, panelPassword)
   const panelControl = open(control, 1, panelRole, panelPassword)
@@ -101,8 +107,9 @@ export async function setupRoles(tag: string): Promise<Roles> {
     panelControl,
     executor,
     executorRole,
+    reader,
     async close() {
-      await Promise.all([owner, panel, panelControl, executor].map((p) => p.end({ timeout: 5 }).catch(() => {})))
+      await Promise.all([owner, panel, panelControl, executor, reader].map((p) => p.end({ timeout: 5 }).catch(() => {})))
       await admin.end({ timeout: 5 })
     },
   }

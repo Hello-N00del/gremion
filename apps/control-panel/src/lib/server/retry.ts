@@ -6,6 +6,7 @@
 // sake); anything queued, running or succeeded writes no row.
 import { randomUUID } from 'node:crypto'
 import type postgres from 'postgres'
+import { accessWords } from './access-log'
 import { describeRequest } from '../request-state'
 import type { Evidence } from './requests'
 import { SubmitRefused, submitRefusal } from './requests'
@@ -32,11 +33,13 @@ export async function retryRequest(sql: postgres.Sql, slug: string, operatorId: 
   if (inflight.length > 0) throw new SubmitRefused(409, 'Für diesen Mandanten läuft bereits eine Anfrage oder wartet in der Warteschlange.')
   const key = randomUUID()
   try {
+    const w = accessWords(r.kind, slug, true)
     const rows = await sql<{ id: string }[]>`
       SELECT plt.submit_provisioning_request(
                ${r.kind}, ${slug}, ${sql.json(r.args as never)}, ${key}::uuid, ${operatorId}::uuid,
                ${evidence.acr}, ${evidence.authTime}::timestamptz, ${evidence.sessionAt}::timestamptz, ${evidence.token},
-               NULL, NULL)::text AS id`
+               NULL, NULL)::text AS id
+        FROM (SELECT oac.record_access(${slug}, ${w.action}, ${w.what}, ${w.why}, ${operatorId}, NULL)) AS access_record`
     return rows[0]!.id
   } catch (err) {
     throw submitRefusal(err)

@@ -15,6 +15,9 @@ setup() {
     mkdir -p "${REL}/infra/host/bin" "${REL}/infra/host/lib/executor" "${REL}/docker/keycloak"
     cp "${HOST_SRC}/lib/customer-ops.sh" "${REL}/infra/host/lib/"
     cp "${HOST_SRC}/lib/executor/db.sh" "${REL}/infra/host/lib/executor/"
+    # TRD-092: the host verbs record the access first (lib/access-log.sh -> oac.record_access)
+    cp "${HOST_SRC}/lib/access-log.sh" "${REL}/infra/host/lib/"
+    export GREMION_EXECUTOR_PG_CONTAINER=t092-pg-fixture
     cp "${HOST_SRC}/bin/gremion-tenant" "${REL}/infra/host/bin/"
     cp "${HOST_SRC}/lib/common.sh" "${REL}/infra/host/lib/"
     cp "${KERNEL_ROOT}/docker/keycloak/realm-export.ops.json" "${REL}/docker/keycloak/"
@@ -65,6 +68,9 @@ teardown() {
 shim_docker() {
     shim docker '
 case " $* " in
+  *" exec "*" psql "*)
+    # oac.record_access (TRD-092): the record id
+    cat > /dev/null; echo "0192f0c4-0000-7000-8000-0000000000ac"; exit 0 ;;
   *" run "*" tenant-create "*)
     all="$*"
     # the bootstrap-provisioner scratch mount (TASK-043b F1), before the args go
