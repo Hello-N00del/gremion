@@ -6,6 +6,8 @@ import { makeFakeNc } from './fake-nc'
 vi.mock('$lib/server/env/service-env', () => ({
   serviceEnv: (n: string) => ({ NEXTCLOUD_URL: 'http://nc', NEXTCLOUD_ADMIN_USER: 'admin', NEXTCLOUD_ADMIN_PASSWORD: 'pw' } as Record<string, string>)[n],
 }))
+const privEnv = vi.hoisted(() => ({ env: {} as Record<string, string> }))
+vi.mock('$env/dynamic/private', () => privEnv)
 let current = 'A'
 vi.mock('$lib/server/tenant/context', () => ({
   getTenant: () => ({ id: current, slug: current.toLowerCase() }),
@@ -17,6 +19,7 @@ let nc: ReturnType<typeof makeFakeNc>
 beforeEach(() => {
   nc = makeFakeNc()
   current = 'A'
+  privEnv.env = {}
   vi.stubGlobal('fetch', vi.fn((u: string, i?: RequestInit) => nc.handler(String(u), i)))
 })
 afterEach(() => {
@@ -109,5 +112,36 @@ describe('vote integrity on the same route', () => {
     const p = await (await admin()).createPoll(dto('P'))
     const { createPollsClient } = await import('./polls-client')
     await expect(createPollsClient().vote(p.id, nc.polls.get(p.id)!.options[0].id)).rejects.toMatchObject({ pollsStatus: 401 })
+  })
+})
+
+describe('provenance: a forged tenant marker on a poll the module did not create is not trusted', () => {
+  // Any NC user can create a poll titled "[gt:A] ..." straight in the shared Nextcloud.
+  // Only polls owned by the module's NC admin singleton count for a tenant.
+  const forge = (id: number, title: string, owner = 'mallory') =>
+    nc.polls.set(id, { id, type: 'textPoll', title, description: '', anonymous: false, expire: 0, options: [{ id: 700 + id, text: 'ja' }], voters: new Map(), owner })
+
+  it('listPolls hides a marker-forged poll owned by a non-admin NC user', async () => {
+    await (await admin()).createPoll(dto('Echt'))
+    forge(900, '[gt:A] Urabstimmung')
+    expect((await (await client()).listPolls()).map((p) => p.configuration.title)).toEqual(['Echt'])
+  })
+
+  it('getPoll / getPollWithOptions / vote answer 404 for the forged poll and record nothing', async () => {
+    forge(901, '[gt:A] Urabstimmung')
+    const c = await client()
+    await expect(c.getPoll(901)).rejects.toMatchObject({ pollsStatus: 404 })
+    await expect(c.getPollWithOptions(901)).rejects.toMatchObject({ pollsStatus: 404 })
+    await expect(c.vote(901, 1701)).rejects.toMatchObject({ pollsStatus: 404 })
+    expect(nc.polls.get(901)!.voters.size).toBe(0)
+  })
+
+  it('a legacy unmarked poll is claimed only when it is also admin-owned', async () => {
+    privEnv.env.VOTES_LEGACY_POLL_TENANT_ID = 'A'
+    forge(902, 'Legacy fremd')
+    forge(903, 'Legacy echt', 'admin')
+    const { createPollsClient } = await import('./polls-client')
+    const titles = (await createPollsClient({ oidcBearer: 't' }).listPolls()).map((p) => p.configuration.title)
+    expect(titles).toEqual(['Legacy echt'])
   })
 })

@@ -10,6 +10,9 @@ export interface FakePoll {
   expire: number
   options: { id: number; text: string }[]
   voters: Map<string, Set<number>> // voter token -> option ids
+  /** NC user that created the poll (default: the admin singleton the module uses). */
+  owner?: string
+  maxVotesPerUser?: number
 }
 
 export function makeFakeNc() {
@@ -28,6 +31,7 @@ export function makeFakeNc() {
     return {
       id: p.id,
       type: p.type,
+      owner: { userId: p.owner ?? 'admin', displayName: p.owner ?? 'admin' },
       configuration: { title: p.title, description: p.description, allowComment: false, anonymous: p.anonymous, expire: p.expire },
       status: { expired: p.expire > 0 && p.expire * 1000 < Date.now(), countOptions: p.options.length },
       currentUserStatus: { userRole: 'voter', isLocked: false, countVotes: p.voters.get(who)?.size ?? 0 },
@@ -43,7 +47,9 @@ export function makeFakeNc() {
     let m: RegExpMatchArray | null
     if (method === 'GET' && path === '/polls') return json({ polls: [...polls.values()].map((p) => view(p, who)) })
     if (method === 'POST' && path === '/poll') {
-      const p: FakePoll = { id: nextPoll++, type: body.type, title: body.title, description: '', anonymous: false, expire: 0, options: [], voters: new Map() }
+      const basic = /^Basic (.+)$/.exec(who)
+      const owner = basic ? Buffer.from(basic[1]!, 'base64').toString().split(':')[0] : 'member'
+      const p: FakePoll = { id: nextPoll++, type: body.type, title: body.title, description: '', anonymous: false, expire: 0, options: [], voters: new Map(), owner }
       polls.set(p.id, p)
       return json({ poll: view(p, who) })
     }

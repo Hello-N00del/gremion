@@ -18,6 +18,8 @@ export interface NcPollOption {
 
 export interface NcPoll {
   id: number
+  /** The NC account the poll was created as (provenance: see scopePoll). */
+  owner?: { userId?: string; id?: string; displayName?: string }
   type: string
   configuration: {
     title: string
@@ -44,8 +46,12 @@ function ncBase(): string {
   return (process.env.NEXTCLOUD_URL ?? 'http://nextcloud').replace(/\/$/, '')
 }
 
+function adminUser(): string {
+  return process.env.NEXTCLOUD_ADMIN_USER ?? 'admin'
+}
+
 function authHeader(): string {
-  const user = process.env.NEXTCLOUD_ADMIN_USER ?? 'admin'
+  const user = adminUser()
   const pass = process.env.NEXTCLOUD_ADMIN_PASSWORD ?? ''
   return `Basic ${Buffer.from(`${user}:${pass}`).toString('base64')}`
 }
@@ -75,13 +81,13 @@ export const NextcloudPollsClient = {
   async listPolls(tenantId: string): Promise<NcPoll[]> {
     assertTenantId(tenantId)
     const { polls } = await ncFetch<{ polls: NcPoll[] }>('/polls')
-    return polls.flatMap((p) => scopePoll(p, tenantId, process.env.VOTES_LEGACY_POLL_TENANT_ID) ?? [])
+    return polls.flatMap((p) => scopePoll(p, tenantId, process.env.VOTES_LEGACY_POLL_TENANT_ID, adminUser()) ?? [])
   },
 
   /** Create a poll bound to `tenantId` (the marker is written here, server-side). */
   async createPoll(tenantId: string, dto: CreatePollDto): Promise<NcPoll> {
     const created = await createBound(tagTitle(tenantId, dto.title), dto)
-    return scopePoll(created, tenantId) ?? created
+    return scopePoll(created, tenantId, undefined, adminUser()) ?? created
   },
 }
 

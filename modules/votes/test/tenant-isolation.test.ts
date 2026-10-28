@@ -47,6 +47,19 @@ describe('leaf client: per-tenant creation binding + list filtering', () => {
     expect(await NextcloudPollsClient.listPolls(B)).toEqual([])
   })
 
+  it('a poll with a forged tenant marker created by a non-admin NC user is not listed (provenance)', async () => {
+    nc.polls.set(901, { id: 901, type: 'textPoll', title: `[gt:${A}] Urabstimmung`, description: '', anonymous: false, expire: 0, options: [], voters: new Map(), owner: 'mallory' })
+    await NextcloudPollsClient.createPoll(A, dto('Echt'))
+    expect((await NextcloudPollsClient.listPolls(A)).map((p) => p.configuration.title)).toEqual(['Echt'])
+  })
+
+  it('a legacy unmarked poll is claimed only when it is also admin-owned', async () => {
+    process.env.VOTES_LEGACY_POLL_TENANT_ID = A
+    nc.polls.set(902, { id: 902, type: 'textPoll', title: 'Legacy fremd', description: '', anonymous: false, expire: 0, options: [], voters: new Map(), owner: 'mallory' })
+    nc.polls.set(903, { id: 903, type: 'textPoll', title: 'Legacy echt', description: '', anonymous: false, expire: 0, options: [], voters: new Map(), owner: 'admin' })
+    expect((await NextcloudPollsClient.listPolls(A)).map((p) => p.id)).toEqual([903])
+  })
+
   it('refuses a missing / malformed tenant id (fail closed)', async () => {
     await expect(NextcloudPollsClient.listPolls('')).rejects.toThrow(/tenant/i)
     await expect(NextcloudPollsClient.createPoll('a b', dto('x'))).rejects.toThrow(/tenant/i)

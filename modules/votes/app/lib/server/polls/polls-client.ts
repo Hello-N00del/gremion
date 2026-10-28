@@ -26,6 +26,8 @@ export interface NcPollOption {
 
 export interface NcPoll {
   id: number
+  /** The NC account the poll was created as (provenance: see scopePoll). */
+  owner?: { userId?: string; id?: string; displayName?: string }
   type: string
   configuration: {
     title: string
@@ -72,8 +74,12 @@ function ncBase(): string {
   return (serviceEnv('NEXTCLOUD_URL') ?? 'http://nextcloud').replace(/\/$/, '')
 }
 
+function adminUser(): string {
+  return serviceEnv('NEXTCLOUD_ADMIN_USER') ?? 'admin'
+}
+
 function adminAuthHeader(): string {
-  const user = serviceEnv('NEXTCLOUD_ADMIN_USER') ?? 'admin'
+  const user = adminUser()
   const pass = serviceEnv('NEXTCLOUD_ADMIN_PASSWORD') ?? ''
   return `Basic ${Buffer.from(`${user}:${pass}`).toString('base64')}`
 }
@@ -125,7 +131,7 @@ export function createPollsClient(opts: { oidcBearer?: string; tenantId?: string
     async listPolls(): Promise<NcPoll[]> {
       const t = tenant()
       const { polls } = await ncFetch<{ polls: NcPoll[] }>('/polls')
-      return polls.flatMap((p) => scopePoll(p, t, legacy()) ?? [])
+      return polls.flatMap((p) => scopePoll(p, t, legacy(), adminUser()) ?? [])
     },
 
     /** The poll, only if it belongs to the calling tenant (else pollsStatus 404). */
@@ -139,7 +145,7 @@ export function createPollsClient(opts: { oidcBearer?: string; tenantId?: string
         if (e instanceof Error && /→\s*(403|404)\b/.test(e.message)) throw notFound()
         throw e
       }
-      return scopePoll(raw, t, legacy()) ?? Promise.reject(notFound())
+      return scopePoll(raw, t, legacy(), adminUser()) ?? Promise.reject(notFound())
     },
 
     async getPollWithOptions(id: number): Promise<NcPoll> {
@@ -219,7 +225,7 @@ export function createPollsClient(opts: { oidcBearer?: string; tenantId?: string
       // Return what Nextcloud stored; without an echo, overlay the applied
       // configuration so callers never see the stale POST defaults.
       const stored = configured ?? { ...poll, configuration: { ...poll.configuration, ...settings } }
-      return scopePoll(stored, tenant(), legacy()) ?? stored
+      return scopePoll(stored, tenant(), legacy(), adminUser()) ?? stored
     },
 
     /** Cast the acting user's vote. Integrity, in order: acting-user bearer (never

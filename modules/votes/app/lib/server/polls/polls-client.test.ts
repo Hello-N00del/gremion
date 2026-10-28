@@ -47,6 +47,7 @@ describe('NextcloudPollsClient', () => {
   const mockPoll = {
     id: 1,
     type: 'textPoll',
+    owner: { userId: 'admin' },
     configuration: { title: '[gt:tenant-a] Test Poll', description: '', allowComment: false, anonymous: false, expire: 0 },
     status: { expired: false, countOptions: 0 },
     currentUserStatus: { userRole: 'owner', isLocked: false, countVotes: 0 },

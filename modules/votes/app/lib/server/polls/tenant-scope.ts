@@ -49,12 +49,24 @@ export function readTitle(stored: string): { tenantId: string | null; title: str
   return m ? { tenantId: m[1] ?? null, title: stored.slice(m[0].length) } : { tenantId: null, title: stored }
 }
 
-/** Return the poll with its marker stripped if `tenantId` owns it, else null. */
-export function scopePoll<T extends { configuration: { title: string } }>(
+/** The NC user a poll was created as (`owner.userId`; `owner.id` on older Polls). */
+function pollOwner(poll: { owner?: { userId?: string; id?: string } | null }): string | null {
+  const o = poll.owner
+  return (typeof o?.userId === 'string' ? o.userId : typeof o?.id === 'string' ? o.id : null) || null
+}
+
+/** Return the poll with its marker stripped if `tenantId` owns it, else null.
+ *  PROVENANCE: the title marker is only a claim - any NC user can type
+ *  "[gt:<tenant>] ..." into a poll created straight in the shared Nextcloud. The
+ *  module creates every poll as the NC admin singleton (`adminUser`), so a poll
+ *  counts for a tenant (marked or legacy) only when it is owned by that account. */
+export function scopePoll<T extends { configuration: { title: string }; owner?: { userId?: string; id?: string } | null }>(
   poll: T,
   tenantId: string,
-  legacyTenantId?: string,
+  legacyTenantId: string | undefined,
+  adminUser: string,
 ): T | null {
+  if (pollOwner(poll) !== adminUser) return null
   const { tenantId: owner, title } = readTitle(poll.configuration.title)
   const effective = owner ?? (legacyTenantId && legacyTenantId === tenantId ? tenantId : null)
   if (effective !== tenantId) return null
