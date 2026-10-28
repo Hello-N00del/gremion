@@ -5,6 +5,7 @@
 import type { Sql } from '@gremion/db'
 import {
   assertPlatform,
+  disableModule,
   enableModule,
   ensurePlatformDatabase,
   lookupModuleVersion,
@@ -48,6 +49,12 @@ export function pgModules(opts: {
       if (!module) throw new ProvisioningError('MODULE_UNKNOWN', `module ${moduleId} is not in the catalogue`)
       const r = await enableModule(c.id, module, { kind: 'operator', id: operatorId }, { ...opts.lifecycle, platform: opts.platform, enableGate: gate })
       return { noop: r.noop, database: r.database }
+    },
+    async disable(c: CustomerRef, moduleId: string, operatorId: string) {
+      const module = byId.get(moduleId)
+      if (!module) throw new ProvisioningError('MODULE_UNKNOWN', `module ${moduleId} is not in the catalogue`)
+      const r = await disableModule(c.id, module, { kind: 'operator', id: operatorId }, { ...opts.lifecycle, platform: opts.platform, enableGate: undefined as never })
+      return { noop: r.noop, dropped: r.dropped, database: r.database, export: r.export }
     },
     async enabled(c: CustomerRef) {
       const rows = await opts.platform<{ module_key: string }[]>`

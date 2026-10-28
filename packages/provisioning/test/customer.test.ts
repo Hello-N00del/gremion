@@ -8,6 +8,7 @@ import { describe, expect, it } from 'vitest'
 import {
   createPhaseA,
   createPhaseB,
+  disableCustomerModule,
   enableCustomerModule,
   EnableRefused,
   EXECUTION_ORDER,
@@ -364,6 +365,43 @@ describe('TASK-044: enableCustomerModule (lane note D3, the one path after creat
     await expect(enableCustomerModule('musterstadt', 'publishing', { operatorId: 'root', dpia: DPIA }, d)).rejects.toMatchObject({ code: 'INVALID_INPUT' })
     w.control.get('musterstadt')!.status = 'suspended'
     await expect(enableCustomerModule('musterstadt', 'publishing', { operatorId: OPERATOR, dpia: DPIA }, d)).rejects.toMatchObject({ code: 'CUSTOMER_STATE' })
+    expect(w.mutations).toEqual([])
+  })
+})
+
+describe('TRD-044: disableCustomerModule', () => {
+  async function active() {
+    const w = world()
+    const d = deps(w)
+    await createAll(w, d, spec({ enable: ['calendar', 'votes'] }))
+    w.mutations.length = 0
+    return { w, d }
+  }
+
+  it('switches the module off (export + drop in the port), then shrinks the broker users; kernel stays', async () => {
+    const { w, d } = await active()
+    const r = await disableCustomerModule('musterstadt', 'calendar', { operatorId: OPERATOR }, d)
+    expect(r).toMatchObject({ moduleKey: 'calendar', noop: false, dropped: true, enabled: ['votes'], reloaded: true })
+    expect(r.export?.sha256).toMatch(/^[0-9a-f]{64}$/)
+    expect(w.mutations).toEqual(['pg:disable musterstadt/calendar', 'nats:ensure musterstadt=[kernel]'])
+  })
+
+  it('a repeat is a no-op that writes nothing', async () => {
+    const { w, d } = await active()
+    await disableCustomerModule('musterstadt', 'calendar', { operatorId: OPERATOR }, d)
+    w.mutations.length = 0
+    const r = await disableCustomerModule('musterstadt', 'calendar', { operatorId: OPERATOR }, d)
+    expect(r).toMatchObject({ noop: true, dropped: false, enabled: ['votes'], reloaded: false })
+    expect(w.mutations).toEqual([])
+  })
+
+  it('refuses an unknown customer or module, a suspended customer and a non-uuid operator before any write', async () => {
+    const { w, d } = await active()
+    await expect(disableCustomerModule('nobody', 'calendar', { operatorId: OPERATOR }, d)).rejects.toMatchObject({ code: 'NOT_FOUND' })
+    await expect(disableCustomerModule('musterstadt', 'nosuch', { operatorId: OPERATOR }, d)).rejects.toMatchObject({ code: 'MODULE_UNKNOWN' })
+    await expect(disableCustomerModule('musterstadt', 'calendar', { operatorId: 'root' }, d)).rejects.toMatchObject({ code: 'INVALID_INPUT' })
+    w.control.get('musterstadt')!.status = 'suspended'
+    await expect(disableCustomerModule('musterstadt', 'calendar', { operatorId: OPERATOR }, d)).rejects.toMatchObject({ code: 'CUSTOMER_STATE' })
     expect(w.mutations).toEqual([])
   })
 })

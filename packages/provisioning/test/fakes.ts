@@ -258,6 +258,13 @@ export function deps(w: World, catalogue = ['board', 'calendar', 'publishing', '
         m(`pg:enable ${c.slug}/${moduleId}`)
         return { noop: false, database: `t_x__${moduleId}` }
       },
+      async disable(c, moduleId) {
+        const mine = w.enabled.get(c.id)
+        if (!mine?.has(moduleId)) return { noop: true, dropped: false, database: null, export: null }
+        mine.delete(moduleId)
+        m(`pg:disable ${c.slug}/${moduleId}`)
+        return { noop: false, dropped: true, database: `t_x__${moduleId}`, export: { path: `/exports/${moduleId}.dump`, sha256: 'a'.repeat(64), bytes: 10 } }
+      },
       async enabled(c) {
         return [...(w.enabled.get(c.id)?.keys() ?? [])]
       },

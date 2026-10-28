@@ -8,6 +8,11 @@ WORKDIR /repo
 # the COPY below), so this does not change which pnpm version builds the app.
 RUN npm install -g corepack && corepack enable pnpm
 
+# TRD-044: the tenant-create one-shot's disable-module verb exports a module
+# database with pg_dump / pg_restore before it drops it (same major as the
+# PostgreSQL 18 servers; the kernel-api image takes the same package).
+RUN apk add --no-cache postgresql18-client
+
 # Install workspace deps (cache-friendly: package manifests first)
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY packages/db/package.json ./packages/db/
