@@ -139,6 +139,44 @@ describe('/api/content/posts/[id]', () => {
     expect(mockSetStatus).toHaveBeenCalledWith(PID, 'email', 'scheduled')
   })
 
+  describe('arming a schedule needs the same capability as the manual publish route', () => {
+    const at = '2026-07-01T10:00:00.000Z'
+    const author = { roles: ['member'], groups: ['author'], id: 'u1' }
+    beforeEach(() => {
+      mockComposeCapabilities.mockReturnValue({
+        'content.author': ['author'],
+        'content.publish': ['publisher'],
+        'content.publish.instagram': ['ig'],
+      })
+    })
+
+    it('403s an author without content.publish arming email', async () => {
+      await expect(
+        PATCH(makeEvent({ user: author, body: { channel: 'email', scheduled_at: at } })),
+      ).rejects.toMatchObject({ status: 403 })
+      expect(mockSetScheduledAt).not.toHaveBeenCalled()
+    })
+
+    it('403s a publisher without content.publish.instagram arming instagram', async () => {
+      const user = { roles: ['member'], groups: ['author', 'publisher'], id: 'u1' }
+      await expect(
+        PATCH(makeEvent({ user, body: { channel: 'instagram', scheduled_at: at } })),
+      ).rejects.toMatchObject({ status: 403 })
+      expect(mockSetScheduledAt).not.toHaveBeenCalled()
+    })
+
+    it('allows a publisher with the instagram capability', async () => {
+      const user = { roles: ['member'], groups: ['author', 'publisher', 'ig'], id: 'u1' }
+      const res = await PATCH(makeEvent({ user, body: { channel: 'instagram', scheduled_at: at } }))
+      expect(res.status).toBe(200)
+    })
+
+    it('still lets an author clear a schedule', async () => {
+      const res = await PATCH(makeEvent({ user: author, body: { channel: 'instagram', scheduled_at: null } }))
+      expect(res.status).toBe(200)
+    })
+  })
+
   it('PATCH clears a schedule (scheduled_at=null → status=draft)', async () => {
     mockIsInternalBearer.mockReturnValue(true)
     const res = await PATCH(makeEvent({ user: null, body: { channel: 'portal', scheduled_at: null } }))
