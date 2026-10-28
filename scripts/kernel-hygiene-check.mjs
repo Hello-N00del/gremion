@@ -1717,7 +1717,8 @@ check('n2 the migrations ledger lists every shipped file and calls none of them 
 // Each entry must exist on disk, so the list cannot outlive its file.
 // F1-FIX-02-K: 0059, the INV-1 chain anchor (the product numbers its own port
 // of the same fix separately).
-const KERNEL_ONLY_DATA_PLANE_FILES = ['0059_audit_log_chain_anchor.sql']
+// TRD-196: 0060, the per-module erasure report, is written here too (not ported).
+const KERNEL_ONLY_DATA_PLANE_FILES = ['0059_audit_log_chain_anchor.sql', '0060_erasure_report.sql']
 
 check('n3 the "absent from the kernel" arithmetic is the product chain minus what ships', () => {
   const wrong = []

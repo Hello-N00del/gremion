@@ -155,7 +155,7 @@ The architecture is a **modular monolith — extract on demand**, on the proven 
 
 **Carve-time residuals** are tracked, one by one, in [`KNOWN_ISSUES.md`](../KNOWN_ISSUES.md) — leftovers of the extraction, listed there until they are removed or generalised rather than promised against a date.
 
-**Boot smoke confirmed:** the kernel boots standalone — the chain applies clean against a real `postgres:18-alpine` (with seeds disabled, 29 governance migrations, measured before `0060` landed, plus 5 control migrations; `make fresh-init-proof` re-measures it), registry seams active, no module errors; the only non-green is the expected fresh-kernel "incomplete brand identity" 503 that the Setup wizard resolves.
+**Boot smoke confirmed:** the kernel boots standalone — the chain applies clean against a real `postgres:18-alpine` (with seeds disabled, an earlier count of the governance migrations, measured before `0060` landed, plus 5 control migrations; `make fresh-init-proof` re-measures it), registry seams active, no module errors; the only non-green is the expected fresh-kernel "incomplete brand identity" 503 that the Setup wizard resolves.
 
 ## What this repository does not contain
 
