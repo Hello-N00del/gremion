@@ -277,11 +277,16 @@ function ownSlug(e: RequestEnvelope, a: Record<string, unknown>): void {
   if (a.slug !== e.customerSlug) throw new Refused(`args.slug ${String(a.slug)} is not the request's slug ${e.customerSlug}`)
 }
 
-/** A catalogue module that this build ships: in the catalogue and not in modules/disabled.json. */
-function moduleOf(v: unknown, ctx: VerifyContext): string {
+/**
+ * A catalogue module. `shipped` (enable_module): also not in modules/disabled.json. Disabling a
+ * customer's module, or recording its DPIA decision, is exactly what is needed when a build STOPS
+ * shipping that module, so disable_module and record_dpia check the catalogue only (the platform
+ * row is what matters; nothing there needs the module's code loaded).
+ */
+function moduleOf(v: unknown, ctx: VerifyContext, shipped = true): string {
   if (typeof v !== 'string' || !MODULE_ID.test(v)) throw new Refused('module must be a module id (a-z, 0-9, dashes)')
   if (!ctx.catalogueIds.includes(v)) throw new Refused(`module ${v} is not in the catalogue`)
-  if (ctx.disabledIds.includes(v) && !DEFAULT_DENY.has(v)) throw new Refused(`module ${v} is disabled in this build (modules/disabled.json)`)
+  if (shipped && ctx.disabledIds.includes(v) && !DEFAULT_DENY.has(v)) throw new Refused(`module ${v} is disabled in this build (modules/disabled.json)`)
   return v
 }
 
@@ -300,7 +305,7 @@ function verifyDisableModule(e: RequestEnvelope, ctx: VerifyContext): DisableMod
   if (!isObject(e.args)) throw new Refused('disable_module args must be an object')
   onlyFields(e.args, MODULE_FIELDS, '')
   ownSlug(e, e.args)
-  return { slug: e.customerSlug, module: moduleOf(e.args.module, ctx) }
+  return { slug: e.customerSlug, module: moduleOf(e.args.module, ctx, false) }
 }
 
 function verifyRecordDpia(e: RequestEnvelope, ctx: VerifyContext): RecordDpiaArgs {
@@ -308,7 +313,7 @@ function verifyRecordDpia(e: RequestEnvelope, ctx: VerifyContext): RecordDpiaArg
   const a = e.args
   onlyFields(a, RECORD_DPIA_FIELDS, '')
   ownSlug(e, a)
-  const module = moduleOf(a.module, ctx)
+  const module = moduleOf(a.module, ctx, false)
   if (typeof a.requiresDpia !== 'boolean') throw new Refused('requiresDpia must be true or false')
   if (a.documentRef === null || a.documentRef === undefined || (typeof a.documentRef === 'string' && a.documentRef.trim() === '')) {
     throw new Refused('documentRef is required: the written decision (TOM-annex entry) must be named, whatever requiresDpia says')
