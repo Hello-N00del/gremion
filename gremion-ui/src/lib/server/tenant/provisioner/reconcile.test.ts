@@ -271,11 +271,50 @@ describe('reconcileRealm — each single drift fails EXACTLY that named check', 
       'the subflow itself not REQUIRED',
       () => GREEN_2FA_EXECS().map((e) => (e.id === 's2' ? { ...e, requirement: 'ALTERNATIVE' } : e)),
     ],
+    // Review finding (MEDIUM): the subflow must hold EXACTLY [OTP, deny-access].
+    // An allow-access (or any authenticator that needs no user) ALTERNATIVE
+    // between them lets a user without OTP through at loa2.
+    [
+      'an extra allow-access ALTERNATIVE between the OTP form and deny-access',
+      () => [
+        ...GREEN_2FA_EXECS().slice(0, 3),
+        { id: 'a2', providerId: 'allow-access-authenticator', requirement: 'ALTERNATIVE', level: 1, index: 1 },
+        { ...GREEN_2FA_EXECS()[3]!, index: 2 },
+      ],
+    ],
+    [
+      'an extra allow-access ALTERNATIVE after deny-access',
+      () => [...GREEN_2FA_EXECS(), { id: 'a2', providerId: 'allow-access-authenticator', requirement: 'ALTERNATIVE', level: 1, index: 2 }],
+    ],
+    [
+      'a nested flow inside the second-factor subflow',
+      () => [...GREEN_2FA_EXECS(), { id: 'n2', displayName: 'sneaky', authenticationFlow: true, requirement: 'ALTERNATIVE', level: 1, index: 2 }],
+    ],
+    [
+      'the OTP form and deny-access under a DIFFERENT subflow than the second-factor one',
+      () => [
+        GREEN_2FA_EXECS()[0]!,
+        GREEN_2FA_EXECS()[1]!,
+        { id: 'x2', displayName: 'decoy', authenticationFlow: true, requirement: 'REQUIRED', level: 0, index: 2 },
+        GREEN_2FA_EXECS()[2]!,
+        GREEN_2FA_EXECS()[3]!,
+      ],
+    ],
   ])('%s -> only stepup-2fa-otp-gate fails', async (_why, execs) => {
     const failed = await failedNames((r) => {
       r[`GET /admin/realms/${REALM}/authentication/flows/stepup-2fa/executions`] = execs()
     })
     expect(failed).toEqual(['stepup-2fa-otp-gate'])
+  })
+
+  it('a DISABLED extra execution in the second-factor subflow is inert and does not fail the gate', async () => {
+    const failed = await failedNames((r) => {
+      r[`GET /admin/realms/${REALM}/authentication/flows/stepup-2fa/executions`] = [
+        ...GREEN_2FA_EXECS(),
+        { id: 'a2', providerId: 'allow-access-authenticator', requirement: 'DISABLED', level: 1, index: 2 },
+      ]
+    })
+    expect(failed).toEqual([])
   })
 
   it.each([
