@@ -335,7 +335,7 @@ export interface AccessOwnerDeps {
  * pg_catalog and oac's own functions (oac.member_of), never one another role
  * owns and could redefine to run as oac_owner (r33f CRITICAL). Idempotent; run
  * by bootstrapPlatform after every migratePlatform. A superuser still bypasses
- * it (documented in 0013).
+ * it, and the database owner can drop the whole database (both documented in 0013).
  */
 export async function ensureAccessOwner(d: AccessOwnerDeps): Promise<{ created: boolean }> {
   const role = ACCESS_OWNER_ROLE

@@ -36,7 +36,7 @@
     {
       "chain": "platform",
       "file": "0013_oac_access_record.sql",
-      "sha256": "c5bdb7e5708740f7a5785094e0921367627f180286357b92d3e4dd1b59991c02",
+      "sha256": "889c39a6fc201feead497d559df152c7ae46ba6121321f003d05df7eb4aded77",
       "rules": [
         "revoke"
       ],

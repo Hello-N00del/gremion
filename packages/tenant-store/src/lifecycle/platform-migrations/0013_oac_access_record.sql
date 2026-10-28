@@ -26,7 +26,8 @@
 --    CREATEROLE) makes the role and transfers the ownership. The platform
 --    owner, the role the migrations and the operator tooling run as, therefore
 --    cannot DISABLE TRIGGER, ALTER the table, INSERT, DELETE or DROP anything
---    here. The SECURITY DEFINER functions run as oac_owner.
+--    in oac (it owns the database, though: see NOT covered below). The
+--    SECURITY DEFINER functions run as oac_owner.
 --  * Those functions call NOTHING another role can redefine: only pg_catalog
 --    and oac's own functions (the marker lookup is oac.member_of, a copy of
 --    plt.provisioning_member_of that oac_owner owns; the plt one belongs to the
@@ -49,6 +50,12 @@
 --    superuser. Superuser access to the state server is the host's docker
 --    group, i.e. the access this record exists to make visible, and is out of
 --    band here.
+--  * NOT covered either: the OWNER OF THE DATABASE gremion_platform (the
+--    platform owner, ensurePlatformDatabase) can DROP or RENAME the whole
+--    database, which takes this record with it, together with the request
+--    queue and everything else the platform holds. It cannot remove or alter a
+--    single row while the database exists. Losing the whole platform database
+--    is loud (the panel and the executor stop), not a silent edit.
 --
 -- WRITER: SECURITY DEFINER with a pinned search_path and no PUBLIC execute, as
 -- 0009/0010. The origin is derived from the caller's LOGIN role's marker

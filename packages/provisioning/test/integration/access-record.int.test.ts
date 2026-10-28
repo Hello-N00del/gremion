@@ -10,7 +10,7 @@
 //    27 d or above the 30 d cap is refused; only the executor may call it;
 //  - the reader function is tenant-scoped: customer A's rows never come back for B.
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { failure, open, setupRoles, submitArgs, type Roles } from './scratch.ts'
+import { failure, open, OWNER, setupRoles, submitArgs, type Roles } from './scratch.ts'
 
 let r: Roles
 /** A superuser pool ON gremion_platform: the documented bypass, used for fixtures and for reading the table. */
@@ -172,6 +172,15 @@ describe('trust boundary: the table owner is a NOLOGIN role', () => {
   // plt.provisioning_member_of, which the PLATFORM OWNER owns and may redefine;
   // its body then ran as oac_owner. Nothing the oac functions call may be
   // redefinable by another role, and oac_owner holds nothing outside oac.
+  // r33f MEDIUM: the boundary 0013 states -- the platform owner owns the
+  // DATABASE (it can drop the whole of it), never a row, trigger or function of oac.
+  it('the documented exception holds: the platform owner owns the database gremion_platform, not oac', async () => {
+    const [d] = await pa<{ owner: string }[]>`SELECT pg_get_userbyid(datdba) AS owner FROM pg_database WHERE datname = 'gremion_platform'`
+    expect(d!.owner).toBe(OWNER)
+    const [n] = await pa<{ owner: string }[]>`SELECT pg_get_userbyid(nspowner) AS owner FROM pg_namespace WHERE nspname = 'oac'`
+    expect(n!.owner).toBe('oac_owner')
+  })
+
   it('oac_owner holds no privilege and owns nothing outside schema oac', async () => {
     const rows = await pa<{ what: string }[]>`
       WITH o AS (SELECT 'oac_owner'::regrole::oid AS id, 'oac'::regnamespace::oid AS nsp)
