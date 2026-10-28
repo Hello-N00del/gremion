@@ -16,8 +16,6 @@ import { orgSchemaFromBlueprint } from '../governance/org-schema'
 
 const DIR = join(import.meta.dirname, '..', '..', '..', '..', '..', 'verticals', 'stura')
 const read = (file: string): unknown => JSON.parse(readFileSync(join(DIR, file), 'utf8'))
-// JSON has no `undefined`: compare what a JSON round-trip of the code copy keeps.
-const viaJson = <T>(v: T): T => JSON.parse(JSON.stringify(v)) as T
 
 describe('verticals/stura loads through the kernel loader', () => {
   it('id stura, all four files parse, the blueprint is internally consistent', () => {
@@ -94,5 +92,35 @@ describe('verticals/stura roles.json: the helper default (PRD-IDN-003)', () => {
   it('role keys are unique', () => {
     const keys = doc.roles.map((r) => r.key)
     expect(new Set(keys).size).toBe(keys.length)
+  })
+})
+
+describe('verticals/municipal is the municipal blueprint (data, not code)', () => {
+  const MDIR = join(import.meta.dirname, '..', '..', '..', '..', '..', 'verticals', 'municipal')
+  const mread = (file: string): unknown => JSON.parse(readFileSync(join(MDIR, file), 'utf8'))
+
+  it('loads through the kernel loader: id municipal, four top-level bodies, three Fraktionen', () => {
+    const v = loadVertical((f) => readFileSync(join(MDIR, f), 'utf8'), 'municipal')
+    expect(v.manifest.id).toBe('municipal')
+    expect(v.blueprint.orgUnits).toHaveLength(7)
+    expect(v.blueprint.orgUnits.filter((u) => u.parentKey === null)).toHaveLength(4)
+    expect(v.blueprint.caucuses?.caucuses).toHaveLength(3)
+    expect(v.blueprint.demoSeeder).toBe('municipal')
+  })
+
+  it('carries no person: no user in the data, no caucus member', () => {
+    const bp = mread('blueprint.json') as { users?: unknown; memberships?: unknown; caucuses: { caucuses: Array<{ members: unknown[] }> } }
+    expect(bp.users).toBeUndefined()
+    expect(bp.memberships).toBeUndefined()
+    for (const c of bp.caucuses.caucuses) expect(c.members).toEqual([])
+    expect(readFileSync(join(MDIR, 'blueprint.json'), 'utf8')).not.toMatch(/@|dev\.admin|councillor/)
+  })
+
+  it('carries no pointer into code', () => {
+    for (const f of ['vertical.json', 'blueprint.json', 'wording.de.json', 'roles.json']) {
+      const text = readFileSync(join(MDIR, f), 'utf8')
+      expect(text, f).not.toMatch(/blueprint_?ref/i)
+      expect(text, f).not.toMatch(/\b[A-Z][A-Z0-9_]*_BLUEPRINT\b/)
+    }
   })
 })

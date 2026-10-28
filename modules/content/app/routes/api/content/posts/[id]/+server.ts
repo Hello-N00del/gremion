@@ -13,7 +13,12 @@
 import { json, error } from '@sveltejs/kit'
 import type { RequestHandler } from './$types'
 import { isInternalBearerRequest } from '$lib/server/internal-fetch'
-import { requireContentRead, requireContentAuthor } from '$lib/server/content/route-auth'
+import {
+  requireContentRead,
+  requireContentAuthor,
+  requireContentPublish,
+  requireContentPublishInstagram,
+} from '$lib/server/content/route-auth'
 import { resolveContentBackendOr503 } from '$lib/server/content/backend/resolve'
 import { requireContentId } from '$lib/server/content/ids'
 import { sanitizeRichHtml } from '$lib/server/security/html-sanitize'
@@ -36,7 +41,8 @@ export const PATCH: RequestHandler = async (event) => {
   // Accept either a trusted internal Bearer request OR a content.author session
   // (mirrors news/[id] G-075). The Bearer path short-circuits the capability
   // check because the in-process producer holding the shared secret is trusted.
-  if (!isInternalBearerRequest(event.request)) {
+  const internal = isInternalBearerRequest(event.request)
+  if (!internal) {
     requireContentAuthor(event.locals.user)
   }
 
@@ -102,6 +108,14 @@ export const PATCH: RequestHandler = async (event) => {
       } else {
         if (typeof scheduled_at !== 'string' || Number.isNaN(Date.parse(scheduled_at)))
           throw error(400, 'scheduled_at must be an ISO timestamp or null')
+        // Arming a schedule is a deferred publish: the scheduler publishes the channel
+        // without any further capability check, so apply the same per-channel gates
+        // the manual publish route enforces (content.publish, plus the second
+        // content.publish.instagram gate). The trusted internal Bearer path is exempt.
+        if (!internal) {
+          requireContentPublish(event.locals.user)
+          if (ch === 'instagram') requireContentPublishInstagram(event.locals.user)
+        }
         await backend.setChannelScheduledAt(id, ch, scheduled_at)
         await backend.setChannelStatus(id, ch, 'scheduled')
       }

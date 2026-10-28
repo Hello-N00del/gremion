@@ -79,6 +79,11 @@ export function mobileRedirectUri(platformDomain: string): string {
   return `${labels.reverse().join('.')}.app:/oauthredirect`
 }
 
+/** Security sweep 2 (finding 6): the password policy every realm carries (the
+ *  template, a provisioned tenant realm and reconcile's password-policy check
+ *  all read this one string; realm-hardening.test.ts pins both templates to it). */
+export const REALM_PASSWORD_POLICY = 'length(12) and notUsername and notEmail and passwordHistory(3)'
+
 export type ProvisionerSecretClient = (typeof PROVISIONER_SECRET_CLIENTS)[number]
 
 /**

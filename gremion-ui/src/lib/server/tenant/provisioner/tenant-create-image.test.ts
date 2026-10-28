@@ -58,3 +58,25 @@ describe('the tenant-create image (G4)', () => {
     expect(copies.filter((c) => /^modules\/[^/]+\/package\.json$/.test(c))).toEqual([])
   })
 })
+
+// R6: the blueprint registry serves `<ID>_BLUEPRINT@1` from verticals/<id>/ at runtime
+// (existing tenants' STURA_BLUEPRINT@1, /api/setup/seed). The runtime stage (the last FROM)
+// must copy the directory from the builder and point GREMION_VERTICALS_DIR at it, or the
+// running image refuses every vertical ref as unknown.
+describe('the runtime image carries the vertical data (R6)', () => {
+  const stages = dockerfile.split(/^(?=FROM\s)/m)
+  const runtime = stages[stages.length - 1]!
+
+  it('the runtime stage is not the builder (the check is not vacuous)', () => {
+    expect(stages.length).toBeGreaterThan(1)
+    expect(runtime).not.toMatch(/\bAS\s+builder\b/i)
+  })
+
+  it('copies /repo/verticals from the builder into the runtime stage', () => {
+    expect(runtime).toMatch(/^COPY\s+--from=builder\s+\/repo\/verticals\s+\.\/verticals\/?\s*$/m)
+  })
+
+  it('points GREMION_VERTICALS_DIR at the copied directory', () => {
+    expect(runtime).toMatch(/^ENV\s+GREMION_VERTICALS_DIR=\/app\/verticals\s*$/m)
+  })
+})

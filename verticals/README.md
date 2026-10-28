@@ -5,13 +5,13 @@ A vertical is DATA: one directory per vertical holding
 | file | content |
 |---|---|
 | `vertical.json` | `{schema_version, id, name, blueprint, wording, roles}` (file names fixed) |
-| `blueprint.json` | the org-unit tree (`orgUnits`), the offices (`seats`), optional custom kinds (`orgSchema`) |
+| `blueprint.json` | the org-unit tree (`orgUnits`), the offices (`seats`), optional custom kinds (`orgSchema`), optional Fraktion structure (`caucuses`, no members) and demo set (`demoSeeder`). With its own `orgSchema` a vertical may have several top-level bodies, bounded per kind by `rootMin`/`rootMax`; without one, exactly one. |
 | `wording.de.json` | flat `terms` record merged into the tenant config (an operator's own term wins) |
 | `roles.json` | the roles a member list may name, the membership each becomes, their capability ids |
 
 The loader (`@gremion/member-import`, `loadVertical`) is id-generic and refuses a vertical that
 points back into code (`blueprintRef`). The open core ships the `stura` vertical (decided 2026-10-27)
-and a distribution may drop further directories here: the tenant-create image copies this directory
+and the `municipal` vertical (Gemeinderat, approved 2026-10-28); a distribution may drop further directories here: the tenant-create image copies this directory
 to `/repo/verticals` (override with `GREMION_VERTICALS_DIR`). `verticals/**` is the one place that
 may name a vertical (`packages/member-import/test/vertical-boundary.test.ts` holds that line). The
 test fixture vertical lives in `packages/member-import/test/fixtures/`.

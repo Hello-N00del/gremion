@@ -152,13 +152,18 @@ export function planSeed(
   catalog: ExistingCatalog = { kinds: [], seats: [] },
 ): SeedOp[] {
   const roots = existing.filter((u) => u.parentId === null)
-  if (roots.length > 1) throw new SeedRefused(`the customer already holds ${roots.length} top-level bodies; the seed adopts exactly one root`)
+  const blueprintRoots = bp.orgUnits.filter((u) => u.parentKey === null).length
+  if (roots.length > blueprintRoots) throw new SeedRefused(`the customer already holds ${roots.length} top-level bodies; the seed adopts at most ${blueprintRoots}`)
+  let adopted = false
   const ids = new Map<string, string>() // blueprint key -> existing unit id
   const ops: SeedOp[] = planKinds(bp, catalog.kinds)
   for (const u of ordered(bp)) {
     const wants = effectiveWants(u, modules)
     if (u.parentKey === null) {
-      const root = roots[0]
+      // The first top-level body adopts the customer's first root; any further one is matched
+      // by name among the existing roots (a re-run) and otherwise created.
+      const root = adopted ? roots.find((e) => labelKey(e.name) === labelKey(u.name)) : roots[0]
+      adopted = true
       if (!root) {
         ops.push({
           type: 'create',

@@ -106,10 +106,12 @@ evict_fanout() {
     for (( i = 0; i < n; i++ )); do
         container="$(jq -r ".[$i].container" "$file")"
         url="$(jq -r ".[$i].url" "$file")"
-        code="$(curl -sS -o /dev/null -w '%{http_code}' \
+        # LOW-5: the bearer secret (also the tenant-selection trust secret) reaches
+        # curl as a -K config on stdin, never on its argv (/proc/<pid>/cmdline).
+        code="$(printf 'header = "Authorization: Bearer %s"\n' "${INTERNAL_PUSH_SECRET}" \
+                | curl -sS -K - -o /dev/null -w '%{http_code}' \
                     --max-time "$EVICT_TIMEOUT" \
                     -X POST \
-                    -H "Authorization: Bearer ${INTERNAL_PUSH_SECRET}" \
                     -H 'Content-Type: application/json' \
                     --data '{"tenant":"*"}' \
                     "$url" 2>/dev/null || true)"

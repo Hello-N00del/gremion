@@ -29,6 +29,8 @@ export {
 } from '@gremion/tenant-store/lifecycle'
 export type { EnableRefusedCode, UnprovenEnablement } from '@gremion/tenant-store/lifecycle'
 export {
+  activateBySlug,
+  activateCustomer,
   assertAdmins,
   assertEnableLoaded,
   assertHost,

@@ -1,10 +1,10 @@
-# services/finance/Dockerfile
-# House pattern: build context is the REPO ROOT, NOT services/finance — the
+# modules/finance/Dockerfile
+# House pattern: build context is the REPO ROOT, NOT modules/finance — the
 # workspace dep (packages/ports), pnpm-lock.yaml and pnpm-workspace.yaml live
-# OUTSIDE this directory, so a services/finance-only context cannot resolve them.
+# OUTSIDE this directory, so a modules/finance-only context cannot resolve them.
 # Build with:
-#   docker build -f services/finance/Dockerfile -t gremion/finance-service:<tag> .
-# Mirrors services/content/Dockerfile. Lane E1 added @gremion/ports (+ nats): the
+#   docker build -f modules/finance/Dockerfile -t gremion/finance-service:<tag> .
+# Mirrors modules/content/Dockerfile. Lane E1 added @gremion/ports (+ nats): the
 # finance leaf is now a NATS consumer of the kernel org-unit mirror stream.
 FROM node:26-alpine AS builder
 WORKDIR /repo
@@ -18,21 +18,18 @@ RUN npm install -g corepack && corepack enable pnpm
 
 # Install workspace deps (cache-friendly: package manifests first).
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
-# #453: @gremion/ports lives in the `upstream/gremion` git submodule (the kernel
-# repo), not in this repo. Requires `git submodule update --init` on the host, and
-# the in-image path must match the host path or `--frozen-lockfile` rejects the
-# importer set. Rationale (no credential in-container for a git dependency):
-# gremion-ui/Dockerfile.
-COPY upstream/gremion/packages/ports/package.json ./upstream/gremion/packages/ports/
-COPY services/finance/package.json ./services/finance/
+# @gremion/ports is the in-tree workspace package packages/ports; the in-image
+# path must match the repo path or `--frozen-lockfile` rejects the importer set.
+COPY packages/ports/package.json ./packages/ports/
+COPY modules/finance/package.json ./modules/finance/
 RUN pnpm install --frozen-lockfile
 
 # Copy workspace package sources + the service sources.
-COPY upstream/gremion/packages/ports ./upstream/gremion/packages/ports/
-COPY services/finance ./services/finance/
+COPY packages/ports ./packages/ports/
+COPY modules/finance ./modules/finance/
 
-# Compile TypeScript → services/finance/dist
-WORKDIR /repo/services/finance
+# Compile TypeScript → modules/finance/dist
+WORKDIR /repo/modules/finance
 RUN pnpm build
 
 # pnpm deploy resolves workspace symlinks into a self-contained dir.
@@ -45,10 +42,10 @@ RUN pnpm --filter finance-service deploy --prod --legacy /deploy
 # is just the fully-built BUILDER stage (full monorepo node_modules incl. the
 # tsx devDependency, plus scripts/ and src/ — pnpm build already ran, but the
 # backfill script is run directly via tsx, not the compiled dist/). Build:
-#   docker build -f services/finance/Dockerfile --target backfill -t <tag> .
+#   docker build -f modules/finance/Dockerfile --target backfill -t <tag> .
 # Run (netcup-cutover.md Step 37b / finance-cutover.md step 3):
 #   docker run --rm --network <net> -e SRC=... -e TGT=... <tag> \
-#     sh -c 'cd /repo/services/finance && exec node_modules/.bin/tsx scripts/backfill.ts ...'
+#     sh -c 'cd /repo/modules/finance && exec node_modules/.bin/tsx scripts/backfill.ts ...'
 FROM builder AS backfill
 WORKDIR /repo
 
@@ -60,8 +57,8 @@ ENV PORT=8080
 
 COPY --from=builder /deploy/node_modules ./node_modules
 COPY --from=builder /deploy/package.json ./
-COPY --from=builder /repo/services/finance/dist ./dist
-COPY --from=builder /repo/services/finance/migrations ./migrations
+COPY --from=builder /repo/modules/finance/dist ./dist
+COPY --from=builder /repo/modules/finance/migrations ./migrations
 # R2-C3 B3 finding: xsd-validator.ts resolves the vendored EPC pain.001.001.09
 # XSD relative to ITS OWN file's directory at runtime
 # (dirname(fileURLToPath(import.meta.url)) + '__fixtures__/...'), and esbuild
@@ -72,7 +69,7 @@ COPY --from=builder /repo/services/finance/migrations ./migrations
 # the built dist/ + this Dockerfile). Verified missing via `docker run --rm
 # <tag> node -e "fs.existsSync('/app/dist/__fixtures__/...')"` -> false before
 # this line; true after.
-COPY --from=builder /repo/services/finance/src/bank/__fixtures__ ./dist/__fixtures__
+COPY --from=builder /repo/modules/finance/src/bank/__fixtures__ ./dist/__fixtures__
 
 # A-021: run as the image's built-in non-root `node` user (uid/gid 1000).
 USER node

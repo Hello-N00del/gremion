@@ -68,6 +68,7 @@ export const CARVE_LINT_TARGETS = [
   { name: 'lint-nats-nruns', kind: 'make', target: 'lint-nats-nruns' },
   // TRD-140/141: the generated TOM annex is current with its inputs.
   { name: 'lint-tom-annex', kind: 'make', target: 'lint-tom-annex' },
+  { name: 'lint-module-dockerfile-copy', kind: 'make', target: 'lint-module-dockerfile-copy' },
   { name: 'lint-cve-floors', kind: 'make', target: 'lint-cve-floors' },
   { name: 'lint-packages', kind: 'make', target: 'lint-packages' },
   // TASK-048 (TRD-350/066/354): every deployed image pinned by digest, no

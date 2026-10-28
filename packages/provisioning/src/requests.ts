@@ -34,8 +34,8 @@ export type RequestKind = (typeof REQUEST_KINDS)[number]
 /** Who ships the handler of each kind (the refusal names it). */
 export const KIND_OWNER: Readonly<Record<RequestKind, string>> = Object.freeze({
   create: 'TASK-043d-1',
-  suspend: 'TASK-043d-2',
-  resume: 'TASK-043d-2',
+  suspend: 'TRD-044',
+  resume: 'TRD-044',
   reconcile: 'TASK-043d-2',
   enable_module: 'TASK-043d-2',
   disable_module: 'TASK-043d-2',
@@ -46,7 +46,7 @@ export const KIND_OWNER: Readonly<Record<RequestKind, string>> = Object.freeze({
 })
 
 /** The kinds this release can run. */
-export const HANDLED_KINDS: ReadonlySet<RequestKind> = new Set<RequestKind>(['create', 'import_members', 'seed_vertical'])
+export const HANDLED_KINDS: ReadonlySet<RequestKind> = new Set<RequestKind>(['create', 'suspend', 'resume', 'import_members', 'seed_vertical'])
 
 export const isRequestKind = (k: unknown): k is RequestKind => typeof k === 'string' && (REQUEST_KINDS as readonly string[]).includes(k)
 
@@ -94,7 +94,16 @@ export interface SeedVerticalArgs {
   vertical: string
 }
 
-export type VerifiedRequestArgs = CreateRequestArgs | ImportMembersArgs | SeedVerticalArgs
+/**
+ * The normalised args of a `suspend` or `resume` request (TRD-044 / PRD-OPS-004):
+ * the customer and nothing else. What is suspended or resumed is the request's
+ * own customer; the data is never an argument (it is never touched).
+ */
+export interface LifecycleArgs {
+  slug: string
+}
+
+export type VerifiedRequestArgs = CreateRequestArgs | ImportMembersArgs | SeedVerticalArgs | LifecycleArgs
 
 export const IMPORT_LIST_MAX_BYTES = 1_048_576
 
@@ -118,6 +127,7 @@ export interface VerifyContext {
 const REASON_CODE = /^[a-z][a-z0-9_]{0,62}$/
 const IMPORT_FIELDS = new Set(['slug', 'phase', 'vertical', 'csv', 'expectSha256'])
 const SEED_FIELDS = new Set(['slug', 'vertical'])
+const LIFECYCLE_FIELDS = new Set(['slug'])
 const VERTICAL_ID = /^[a-z][a-z0-9-]{0,62}$/
 const SHA256 = /^[0-9a-f]{64}$/
 const CREATE_FIELDS = new Set(['slug', 'host', 'itAdmin', 'councilAdmin', 'bodyName', 'brand', 'enable', 'dpia'])
@@ -193,6 +203,13 @@ function verifySeedVertical(e: RequestEnvelope): SeedVerticalArgs {
   return { slug: e.customerSlug, vertical: verticalOf(e.args.vertical) }
 }
 
+function verifyLifecycle(e: RequestEnvelope): LifecycleArgs {
+  if (!isObject(e.args)) throw new Refused(`${e.kind} args must be an object`)
+  onlyFields(e.args, LIFECYCLE_FIELDS, '')
+  if (e.args.slug !== e.customerSlug) throw new Refused(`args.slug ${String(e.args.slug)} is not the request's slug ${e.customerSlug}`)
+  return { slug: e.customerSlug }
+}
+
 function verifyCreate(e: RequestEnvelope, ctx: VerifyContext): CreateRequestArgs {
   if (!isObject(e.args)) throw new Refused('create args must be an object')
   const a = e.args
@@ -249,6 +266,7 @@ export function verifyRequestArgs(e: RequestEnvelope, ctx: VerifyContext): Reque
   try {
     if (e.kind === 'import_members') return { verdict: 'ok', args: verifyImportMembers(e) }
     if (e.kind === 'seed_vertical') return { verdict: 'ok', args: verifySeedVertical(e) }
+    if (e.kind === 'suspend' || e.kind === 'resume') return { verdict: 'ok', args: verifyLifecycle(e) }
     return { verdict: 'ok', args: verifyCreate(e, ctx) }
   } catch (err) {
     if (err instanceof Refused || err instanceof ProvisioningError) return { verdict: 'refused', reason: err.message }

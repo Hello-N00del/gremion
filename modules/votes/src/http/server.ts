@@ -11,12 +11,13 @@
 // The leaf owns NO database — it is a stateless thin proxy over Helios + Nextcloud
 // Polls. The Helios ADMIN lifecycle stays on the kernel by design.
 //
-// KNOWN CONSTRAINT (K5#29 / S4#18, documented, NOT fixed here): Nextcloud Polls is
-// reached with ONE admin credential and /api/v1/votes lists every poll that
-// account can see, so the poll half of the list is tenant-BLIND. That is only
-// sound while one tenant shares the Nextcloud (the single-tenant test env).
-// Enabling a second tenant requires per-tenant scoping (a per-tenant NC user or
-// group, or a tenant marker applied at create time and filtered on read) FIRST.
+// TENANT ISOLATION (K5#29 / S4#18, CLOSED): Nextcloud Polls is one shared instance
+// reached with ONE admin credential, so each poll is bound to the calling tenant
+// (x-tenant-id) by a server-written marker on create (polls/tenant-scope.ts) and
+// the list is filtered by it; tenant A can neither see nor receive tenant B's polls.
+// This leaf exposes no by-id poll route; the by-id routes (read/options/vote) live in
+// the app's polls client, which enforces the same marker. Unmarked legacy polls
+// belong to no tenant unless VOTES_LEGACY_POLL_TENANT_ID claims them for one.
 // Request validation: malformed bodies answer 400, not 502. A non-UUID election id
 // degrades its own card (never Helios-fetched, never interpolated into a path).
 import http from 'node:http'
@@ -37,8 +38,8 @@ export interface HeliosPort {
 }
 /** The Nextcloud Polls surface the leaf drives (injectable for tests). */
 export interface PollsPort {
-  listPolls(): Promise<NcPoll[]>
-  createPoll(dto: CreatePollDto): Promise<NcPoll>
+  listPolls(tenantId: string): Promise<NcPoll[]>
+  createPoll(tenantId: string, dto: CreatePollDto): Promise<NcPoll>
 }
 
 export interface ServerOptions {
@@ -132,6 +133,7 @@ function parseCreatePoll(dto: Partial<CreatePollDto> | null): CreatePollDto {
 async function composeVotes(
   helios: HeliosPort,
   polls: PollsPort,
+  tenantId: string,
   electionUuids: string[],
 ): Promise<{ votes: VoteItem[]; degradedUuids: string[]; pollError: string | null }> {
   // A non-UUID id (K5#41 / S4#25) never reaches Helios: no fetch, no path
@@ -157,7 +159,7 @@ async function composeVotes(
   let pollItems: VoteItem[] = []
   let pollError: string | null = null
   try {
-    const ncPolls = await polls.listPolls()
+    const ncPolls = await polls.listPolls(tenantId)
     pollItems = ncPolls.map((p) => mapPollToVoteItem(p))
   } catch (e) {
     pollError = e instanceof Error ? e.message : 'Umfragen konnten nicht geladen werden'
@@ -201,12 +203,12 @@ export function createServer(opts: ServerOptions): http.Server {
       switch (path) {
         case '/api/v1/votes': {
           const body = await readJson<{ electionUuids?: unknown }>(req)
-          const result = await composeVotes(helios, polls, parseElectionUuids(body.electionUuids))
+          const result = await composeVotes(helios, polls, guard.tenant.id, parseElectionUuids(body.electionUuids))
           return sendJson(res, 200, result)
         }
         case '/api/v1/polls': {
           const dto = parseCreatePoll(await readJson<Partial<CreatePollDto>>(req))
-          await polls.createPoll(dto)
+          await polls.createPoll(guard.tenant.id, dto)
           return sendJson(res, 200, { success: true })
         }
         default:

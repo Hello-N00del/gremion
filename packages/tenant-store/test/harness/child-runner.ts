@@ -54,4 +54,4 @@ async function main() {
     await sql.end({ timeout: 5 })
   }
 }
-main()
+void main()

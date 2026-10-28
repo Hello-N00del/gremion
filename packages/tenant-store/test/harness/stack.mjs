@@ -53,7 +53,7 @@ export const POOLER_IMAGE = 'edoburu/pgbouncer@sha256:4c1ca296ef525f108f5d3552cc
 /** The image of the x-module-postgres anchor in the kernel compose file (TASK-019). */
 export function moduleImage(composeText = readFileSync(join(REPO, 'docker-compose.yml'), 'utf8')) {
   const lines = composeText.split('\n')
-  const start = lines.findIndex((l) => /^x-module-postgres:/.test(l))
+  const start = lines.findIndex((l) => l.startsWith('x-module-postgres:'))
   if (start < 0) throw new Error('docker-compose.yml has no x-module-postgres anchor')
   for (const l of lines.slice(start + 1)) {
     if (/^\S/.test(l)) break
@@ -205,14 +205,14 @@ function teardown() {
   // By explicit name only. Never `compose down`, never prune. A resource
   // that is already gone is fine; anything else left behind fails the run.
   const left = []
-  for (const [what, args] of [
+  for (const [what, args] of /** @type {[string, string[]][]} */ ([
     ['container', ['rm', '-f', '-v', names.pooler]],
     ['container', ['rm', '-f', '-v', names.container]],
     ['container', ['rm', '-f', '-v', names.moduleContainer]],
     ['volume', ['volume', 'rm', names.volume]],
     ['volume', ['volume', 'rm', names.moduleVolume]],
     ['network', ['network', 'rm', names.network]],
-  ]) {
+  ])) {
     const r = sh('docker', args, { allowFail: true })
     if (r.status !== 0 && !/no such/i.test(r.stderr ?? '')) left.push(`${what} ${args.at(-1)}: ${(r.stderr ?? '').trim()}`)
   }

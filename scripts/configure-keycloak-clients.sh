@@ -136,7 +136,7 @@ assign_realm_admin_to_sa() {
     # 1. Look up the client UUID
     local client_uuid
     client_uuid=$(curl -sf \
-        -H "Authorization: Bearer ${TOKEN}" \
+        -H @/dev/fd/3 3<<<"Authorization: Bearer ${TOKEN}" \
         "${KC_BASE}/admin/realms/${REALM}/clients?clientId=${client_id}" \
         | jq -r '.[0].id')
     [[ -z "$client_uuid" || "$client_uuid" == "null" ]] && error "Client '${client_id}' not found"
@@ -144,7 +144,7 @@ assign_realm_admin_to_sa() {
     # 2. Look up the service-account user behind this client
     local sa_user_id
     sa_user_id=$(curl -sf \
-        -H "Authorization: Bearer ${TOKEN}" \
+        -H @/dev/fd/3 3<<<"Authorization: Bearer ${TOKEN}" \
         "${KC_BASE}/admin/realms/${REALM}/clients/${client_uuid}/service-account-user" \
         | jq -r '.id')
     [[ -z "$sa_user_id" || "$sa_user_id" == "null" ]] && error "Service-account user for '${client_id}' not found (is serviceAccountsEnabled set?)"
@@ -152,7 +152,7 @@ assign_realm_admin_to_sa() {
     # 3. Look up the realm-management client UUID
     local rm_uuid
     rm_uuid=$(curl -sf \
-        -H "Authorization: Bearer ${TOKEN}" \
+        -H @/dev/fd/3 3<<<"Authorization: Bearer ${TOKEN}" \
         "${KC_BASE}/admin/realms/${REALM}/clients?clientId=realm-management" \
         | jq -r '.[0].id')
 
@@ -163,7 +163,7 @@ assign_realm_admin_to_sa() {
     local role role_json roles_json="" roles_array
     for role in $SA_ROLES; do
         role_json=$(curl -sf \
-            -H "Authorization: Bearer ${TOKEN}" \
+            -H @/dev/fd/3 3<<<"Authorization: Bearer ${TOKEN}" \
             "${KC_BASE}/admin/realms/${REALM}/clients/${rm_uuid}/roles/${role}") \
             || error "realm-management role '${role}' not found (KEYCLOAK_ADMIN_SA_ROLES)"
         roles_json="${roles_json}${role_json}"$'\n'
@@ -173,7 +173,7 @@ assign_realm_admin_to_sa() {
 
     # 5. Assign the roles (idempotent — Keycloak silently no-ops on duplicates)
     curl -sf -X POST \
-        -H "Authorization: Bearer ${TOKEN}" \
+        -H @/dev/fd/3 3<<<"Authorization: Bearer ${TOKEN}" \
         -H "Content-Type: application/json" \
         -d "$roles_array" \
         "$mappings_url" \
@@ -185,12 +185,12 @@ assign_realm_admin_to_sa() {
     case " ${SA_ROLES} " in
         *" realm-admin "*) : ;;
         *)
-            current=$(curl -sf -H "Authorization: Bearer ${TOKEN}" "$mappings_url") \
+            current=$(curl -sf -H @/dev/fd/3 3<<<"Authorization: Bearer ${TOKEN}" "$mappings_url") \
                 || error "Failed to read the role mappings of the '${client_id}' service account"
             stale=$(printf '%s' "$current" | jq -c '[.[] | select(.name == "realm-admin")]')
             if [[ "$stale" != "[]" ]]; then
                 curl -sf -X DELETE \
-                    -H "Authorization: Bearer ${TOKEN}" \
+                    -H @/dev/fd/3 3<<<"Authorization: Bearer ${TOKEN}" \
                     -H "Content-Type: application/json" \
                     -d "$stale" \
                     "$mappings_url" \
@@ -226,11 +226,11 @@ assign_realm_admin_to_sa() {
 _kc_api() {  # METHOD PATH [JSON_BODY] — PATH is relative to /admin/realms/${REALM}
     local method="$1" path="$2" body="${3:-}"
     if [[ -n "$body" ]]; then
-        curl -sf -X "$method" -H "Authorization: Bearer ${TOKEN}" \
+        curl -sf -X "$method" -H @/dev/fd/3 3<<<"Authorization: Bearer ${TOKEN}" \
             -H "Content-Type: application/json" --data "$body" \
             "${KC_BASE}/admin/realms/${REALM}${path}"
     else
-        curl -sf -X "$method" -H "Authorization: Bearer ${TOKEN}" \
+        curl -sf -X "$method" -H @/dev/fd/3 3<<<"Authorization: Bearer ${TOKEN}" \
             "${KC_BASE}/admin/realms/${REALM}${path}"
     fi
 }
@@ -246,8 +246,9 @@ _kc_setcfg() { # EXEC_ID ALIAS LEVEL MAXAGE
 # Prints absent | complete | partial for the browser-stepup flow, read from the
 # realm. COMPLETE = the forms flow holds both LoA subflows as CONDITIONAL, and
 # each holds its LoA condition (REQUIRED, with its level/max-age config attached)
-# and its authenticator (username/password in stepup-1fa, OTP in stepup-2fa),
-# both REQUIRED. Anything less is PARTIAL (a build that died halfway).
+# and its authenticator (username/password in stepup-1fa REQUIRED, the OTP form in
+# stepup-2fa in whatever requirement: _ensure_stepup_2fa_second_factor owns that
+# one). Anything less is PARTIAL (a build that died halfway).
 _stepup_flow_state() {
     local flows top sub subex want
     flows=$(_kc_api GET "/authentication/flows") || error "cannot list the realm's authentication flows"
@@ -267,7 +268,7 @@ _stepup_flow_state() {
                 ([.[] | select(.providerId == "conditional-level-of-authentication"
                                and .requirement == "REQUIRED"
                                and ((.authenticationConfig // "") != ""))] | length == 1)
-                and ([.[] | select(.providerId == $w and .requirement == "REQUIRED")] | length == 1)' >/dev/null 2>&1; then
+                and ([.[] | select(.providerId == $w and ($w == "auth-otp-form" or .requirement == "REQUIRED"))] | length == 1)' >/dev/null 2>&1; then
             echo partial; return 0
         fi
     done
@@ -291,6 +292,93 @@ _drop_partial_stepup_flow() {
     _kc_api DELETE "/authentication/flows/${flow_id}" >/dev/null \
         || error "cannot delete the partial browser-stepup flow"
 }
+
+# Security sweep 2 (finding 3). stepup-2fa must NOT hold a REQUIRED OTP form: for
+# a user with no OTP credential Keycloak then runs CONFIGURE_TOTP inside the
+# step-up and issues acr=loa2 once the user has enrolled, so whoever holds the
+# session (or only the password) enrolls their own authenticator and passes the
+# "fresh 2FA" gate. The OTP form sits in a REQUIRED subflow as an ALTERNATIVE,
+# followed by deny-access as the other ALTERNATIVE: a user with an OTP credential
+# is asked for it, a user without one is refused (no enrolment is offered).
+STEPUP_2FA_SUBFLOW="stepup-2fa second factor"
+STEPUP_2FA_SUBFLOW_ENC="stepup-2fa%20second%20factor"
+
+# stdin: the flattened stepup-2fa executions; exit 0 iff it has the hardened shape.
+_stepup_2fa_gate_ok() {
+    jq -e --arg sub "$STEPUP_2FA_SUBFLOW" '
+        ([.[] | select(.providerId == "auth-otp-form")]) as $o
+        | ([.[] | select(.providerId == "deny-access-authenticator")]) as $d
+        | ([.[] | select(.authenticationFlow == true and .displayName == $sub)]) as $s
+        | ($o | length) == 1 and ($d | length) == 1 and ($s | length) == 1
+        and $s[0].requirement == "REQUIRED"
+        and $o[0].requirement == "ALTERNATIVE" and $d[0].requirement == "ALTERNATIVE"
+        and ($o[0].level // 0) >= 1 and $o[0].level == $d[0].level
+        and ($o[0].index // 0) < ($d[0].index // 0)' >/dev/null 2>&1
+}
+
+# Idempotent and crash-safe: the replacement is built and enabled FIRST and the
+# legacy REQUIRED OTP form is deleted LAST, so a run that dies half way leaves a
+# flow that still demands a second factor. A stepup-2fa with no OTP form at all
+# is structural drift that the rebuild in configure_stepup_flow owns.
+_ensure_stepup_2fa_second_factor() {
+    local top sub_id legacy kids otp_id deny_id otp_req deny_req sub_req p id
+    top=$(_kc_api GET "/authentication/flows/stepup-2fa/executions") \
+        || error "cannot read the stepup-2fa executions"
+    if printf '%s' "$top" | _stepup_2fa_gate_ok; then
+        info "  stepup-2fa already OTP-or-deny."
+        return 0
+    fi
+    legacy=$(printf '%s' "$top" | jq -r '.[] | select(.providerId == "auth-otp-form" and (.level // 0) == 0) | .id')
+    sub_id=$(printf '%s' "$top" | jq -r --arg a "$STEPUP_2FA_SUBFLOW" '.[] | select(.authenticationFlow == true and .displayName == $a) | .id')
+    if [[ -z "$sub_id" && -z "$legacy" ]]; then
+        return 0
+    fi
+    if [[ -z "$sub_id" ]]; then
+        _kc_api POST "/authentication/flows/stepup-2fa/executions/flow" \
+            "{\"alias\":\"${STEPUP_2FA_SUBFLOW}\",\"type\":\"basic-flow\"}" >/dev/null \
+            || error "cannot add the '${STEPUP_2FA_SUBFLOW}' subflow"
+        top=$(_kc_api GET "/authentication/flows/stepup-2fa/executions") || error "cannot read the stepup-2fa executions"
+        sub_id=$(printf '%s' "$top" | jq -r --arg a "$STEPUP_2FA_SUBFLOW" '.[] | select(.authenticationFlow == true and .displayName == $a) | .id')
+        [[ -n "$sub_id" ]] || error "the '${STEPUP_2FA_SUBFLOW}' subflow is absent after it was created"
+    fi
+    kids=$(_kc_api GET "/authentication/flows/${STEPUP_2FA_SUBFLOW_ENC}/executions") \
+        || error "cannot read the '${STEPUP_2FA_SUBFLOW}' executions"
+    for p in auth-otp-form deny-access-authenticator; do
+        if ! printf '%s' "$kids" | jq -e --arg p "$p" 'any(.[]; .providerId == $p)' >/dev/null 2>&1; then
+            _kc_api POST "/authentication/flows/${STEPUP_2FA_SUBFLOW_ENC}/executions/execution" \
+                "{\"provider\":\"${p}\"}" >/dev/null || error "cannot add ${p} to '${STEPUP_2FA_SUBFLOW}'"
+            kids=""
+        fi
+    done
+    if [[ -z "$kids" ]]; then
+        kids=$(_kc_api GET "/authentication/flows/${STEPUP_2FA_SUBFLOW_ENC}/executions") \
+            || error "cannot read the '${STEPUP_2FA_SUBFLOW}' executions"
+    fi
+    otp_id=$(printf '%s' "$kids" | jq -r '.[] | select(.providerId == "auth-otp-form") | .id')
+    deny_id=$(printf '%s' "$kids" | jq -r '.[] | select(.providerId == "deny-access-authenticator") | .id')
+    [[ -n "$otp_id" && -n "$deny_id" ]] || error "'${STEPUP_2FA_SUBFLOW}' is incomplete after the build"
+    # OTP is tried first; deny-access only when no OTP alternative applied.
+    if [[ "$(printf '%s' "$kids" | jq -r '(.[] | select(.providerId == "auth-otp-form") | .index // 0) > (.[] | select(.providerId == "deny-access-authenticator") | .index // 0)')" == "true" ]]; then
+        _kc_api POST "/authentication/executions/${otp_id}/raise-priority" >/dev/null \
+            || error "cannot order OTP before deny-access"
+    fi
+    sub_req=$(printf '%s' "$top" | jq -r --arg a "$STEPUP_2FA_SUBFLOW" '.[] | select(.authenticationFlow == true and .displayName == $a) | .requirement')
+    otp_req=$(printf '%s' "$kids" | jq -r '.[] | select(.providerId == "auth-otp-form") | .requirement')
+    deny_req=$(printf '%s' "$kids" | jq -r '.[] | select(.providerId == "deny-access-authenticator") | .requirement')
+    [[ "$sub_req" == "REQUIRED" ]] || _kc_setreq "$sub_id" REQUIRED
+    [[ "$otp_req" == "ALTERNATIVE" ]] || _kc_setreq "$otp_id" ALTERNATIVE
+    [[ "$deny_req" == "ALTERNATIVE" ]] || _kc_setreq "$deny_id" ALTERNATIVE
+    for id in $legacy; do
+        _kc_api DELETE "/authentication/executions/${id}" >/dev/null || error "cannot remove the legacy REQUIRED OTP form"
+    done
+    _kc_api GET "/authentication/flows/stepup-2fa/executions" | _stepup_2fa_gate_ok \
+        || error "stepup-2fa is not OTP-or-deny after the repair (read back from the realm)"
+    success "  stepup-2fa is now OTP-or-deny: a user without a second factor is refused, never enrolled mid step-up."
+}
+
+# Security sweep 2 (finding 6): the same string as REALM_PASSWORD_POLICY in
+# gremion-ui/src/lib/server/tenant/provisioner/realm-doc.ts (pinned by a test).
+REALM_PASSWORD_POLICY="length(12) and notUsername and notEmail and passwordHistory(3)"
 
 configure_stepup_flow() {
     info "Configuring #164 LoA step-up authentication flow..."
@@ -351,14 +439,17 @@ configure_stepup_flow() {
         success "  browser-stepup flow built (1FA loa1 + 2FA loa2 / OTP)."
     fi
 
+    # 1b. Security sweep 2 (finding 3): stepup-2fa is OTP-or-deny, built or not.
+    _ensure_stepup_2fa_second_factor
+
     # 2. Realm otpPolicy + acr.loa.map + browserFlow. Minimal partial PUT (a full
     #    round-tripped realm rep 500s on KC 26); merge existing attributes so the
     #    realm's other attributes are preserved. Runs AFTER the flow exists.
     local attrs
     attrs=$(_kc_api GET "" | jq -c '(.attributes // {}) + {"acr.loa.map":"{\"loa1\":1,\"loa2\":2}"}')
-    _kc_api PUT "" "{\"realm\":\"${REALM}\",\"browserFlow\":\"browser-stepup\",\"otpPolicyType\":\"totp\",\"otpPolicyAlgorithm\":\"HmacSHA1\",\"otpPolicyDigits\":6,\"otpPolicyPeriod\":30,\"otpPolicyLookAheadWindow\":1,\"otpPolicyInitialCounter\":0,\"attributes\":${attrs}}" >/dev/null \
-        || error "Failed to set realm otpPolicy/acr.loa.map/browserFlow"
-    success "  Realm otpPolicy + acr.loa.map + browserFlow=browser-stepup set."
+    _kc_api PUT "" "{\"realm\":\"${REALM}\",\"browserFlow\":\"browser-stepup\",\"otpPolicyType\":\"totp\",\"otpPolicyAlgorithm\":\"HmacSHA1\",\"otpPolicyDigits\":6,\"otpPolicyPeriod\":30,\"otpPolicyLookAheadWindow\":1,\"otpPolicyInitialCounter\":0,\"passwordPolicy\":\"${REALM_PASSWORD_POLICY}\",\"revokeRefreshToken\":true,\"refreshTokenMaxReuse\":0,\"attributes\":${attrs}}" >/dev/null \
+        || error "Failed to set realm otpPolicy/acr.loa.map/browserFlow/passwordPolicy/refresh-token rotation"
+    success "  Realm otpPolicy + acr.loa.map + browserFlow=browser-stepup + passwordPolicy + refresh-token rotation set."
 
     # 3. Ensure the gremion-ui client emits the acr claim (access + id token).
     local client_uuid
@@ -372,6 +463,18 @@ configure_stepup_flow() {
             '{"name":"acr","protocol":"openid-connect","protocolMapper":"oidc-acr-mapper","config":{"id.token.claim":"true","access.token.claim":"true","introspection.token.claim":"true"}}' >/dev/null \
             || error "Failed to add acr mapper to gremion-ui"
         success "  acr mapper added to gremion-ui client."
+    fi
+    # 4. Security sweep 2 (finding 6): PKCE S256 on gremion-ui (Auth.js sends it).
+    if [[ -n "$client_uuid" ]]; then
+        local ui_client pkce_body
+        ui_client=$(_kc_api GET "/clients/${client_uuid}") || error "cannot read the gremion-ui client"
+        if [[ "$(printf '%s' "$ui_client" | jq -r '.attributes["pkce.code.challenge.method"] // ""')" == "S256" ]]; then
+            info "  gremion-ui already enforces PKCE S256."
+        else
+            pkce_body=$(printf '%s' "$ui_client" | jq -c '{id, clientId, attributes: ((.attributes // {}) + {"pkce.code.challenge.method": "S256"})}')
+            _kc_api PUT "/clients/${client_uuid}" "$pkce_body" >/dev/null                 || error "Failed to enforce PKCE S256 on gremion-ui"
+            success "  gremion-ui now enforces PKCE S256."
+        fi
     fi
     success "#164 step-up flow configured."
 }

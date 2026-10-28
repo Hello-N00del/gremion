@@ -10,6 +10,7 @@
 // Trigger contract: R29-F1-WAVE2/addendum.md ("D-4 trigger contract", KERNEL).
 import net from 'node:net'
 import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -96,10 +97,15 @@ async function get(route: Awaited<ReturnType<typeof loadRoute>>) {
   }
 }
 
+// A unix socket path is capped at ~108 bytes; a deep worktree under cwd overflows it,
+// so the sockets (and run dirs) live under os.tmpdir() with a short prefix.
 beforeAll(() => {
-  tmpRoot = mkdtempSync(join(process.cwd(), 'node_modules', '.tmp-f1-10-k-'))
+  tmpRoot = mkdtempSync(join(tmpdir(), 'gf-'))
 })
-afterAll(() => {
+afterAll(async () => {
+  // The route records a run's end in the background once hostd's socket closes;
+  // let that last write land before the directory goes, or it re-creates it.
+  await new Promise((resolve) => setTimeout(resolve, 300))
   rmSync(tmpRoot, { recursive: true, force: true })
 })
 

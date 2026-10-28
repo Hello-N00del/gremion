@@ -30,7 +30,7 @@
 
 import { execFileSync } from 'node:child_process'
 import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs'
-import { join, dirname, relative, sep } from 'node:path'
+import { join, dirname, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 // ── the pin ──────────────────────────────────────────────────────────────
@@ -417,7 +417,7 @@ export function checkNoSuppressionDirectives(files, allowlist = ALLOWED_FIRST_PA
   }
   const problems = []
   for (const { path, text } of files) {
-    const isTest = /\.test\.ts$/.test(path)
+    const isTest = path.endsWith('.test.ts')
     const nocheckReason = allowlist[path]
     const nocheckAllowed = typeof nocheckReason === 'string' && nocheckReason.trim() !== ''
     text.split('\n').forEach((line, i) => {

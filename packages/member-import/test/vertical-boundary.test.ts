@@ -39,7 +39,7 @@ const RETIRED_NAMES = new RegExp(['stura' + 'os', 'HS Harz', 'Hochschule Harz', 
 describe('vertical-literal boundary: only verticals/** may name a vertical', () => {
   it('scans real files (not vacuous): the import code and the stura data are both found', () => {
     expect(IMPORT_CODE.length).toBeGreaterThan(8)
-    expect(VERTICAL_DATA.map((f) => f.split('/').pop()).sort()).toEqual(['README.md', 'blueprint.json', 'roles.json', 'vertical.json', 'wording.de.json'])
+    expect(VERTICAL_DATA.map((f) => f.split('/').pop()).sort((a, b) => (a! < b! ? -1 : a! > b! ? 1 : 0))).toEqual(['README.md', 'blueprint.json', 'roles.json', 'vertical.json', 'wording.de.json'])
   })
 
   it('the import code names no vertical', () => {

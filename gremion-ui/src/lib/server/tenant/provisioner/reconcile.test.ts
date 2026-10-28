@@ -45,6 +45,24 @@ const FIXTURES = { ids: new Set([SEED_SUBJECT]), usernames: new Set(['dev.admin'
 const EXPECTED_REDIRECT = [`https://${HOST}/auth/callback/keycloak`]
 const EXPECTED_WEB_ORIGINS = [`https://${HOST}`]
 
+/** The Keycloak Admin API's flattened execution list for stepup-2fa in its
+ *  hardened shape (security sweep 2, finding 3): the LoA-2 condition, then ONE
+ *  REQUIRED subflow whose children are OTP (ALTERNATIVE) then deny (ALTERNATIVE).
+ *  There is no REQUIRED OTP form: it would enroll an attacker's authenticator
+ *  inside the step-up and still grant loa2. */
+const GREEN_2FA_EXECS = () => [
+  { id: 'c2', providerId: 'conditional-level-of-authentication', requirement: 'REQUIRED', level: 0, index: 0, authenticationConfig: 'cfg-2' },
+  { id: 's2', displayName: 'stepup-2fa second factor', authenticationFlow: true, requirement: 'REQUIRED', level: 0, index: 1 },
+  { id: 'o2', providerId: 'auth-otp-form', requirement: 'ALTERNATIVE', level: 1, index: 0 },
+  { id: 'd2', providerId: 'deny-access-authenticator', requirement: 'ALTERNATIVE', level: 1, index: 1 },
+]
+/** Security sweep 2 (finding 6): the realm-level hardening a green realm carries. */
+const GREEN_HARDENING = {
+  passwordPolicy: 'length(12) and notUsername and notEmail and passwordHistory(3)',
+  revokeRefreshToken: true,
+  refreshTokenMaxReuse: 0,
+}
+
 /** A GREEN live realm: every §4 contract element present + correct. Built as a
  *  route map keyed by `${method} ${path}` for a scriptable transport. */
 function greenRoutes(): Record<string, unknown> {
@@ -58,6 +76,7 @@ function greenRoutes(): Record<string, unknown> {
       otpPolicyAlgorithm: 'HmacSHA1',
       otpPolicyDigits: 6,
       otpPolicyPeriod: 30,
+      ...GREEN_HARDENING,
       // TASK-043 r4: the customer's own host (realm-doc.ts (2d))
       attributes: { 'acr.loa.map': '{"loa1":1,"loa2":2}', frontendUrl: `https://${HOST}/auth` },
       // TASK-043 R-E5b: stamped by the host with the realm's OWN principal
@@ -79,10 +98,7 @@ function greenRoutes(): Record<string, unknown> {
       { id: 'c1', providerId: 'conditional-level-of-authentication', authenticationConfig: 'cfg-1' },
       { id: 'p1', providerId: 'auth-username-password-form' },
     ],
-    [`GET /admin/realms/${REALM}/authentication/flows/stepup-2fa/executions`]: [
-      { id: 'c2', providerId: 'conditional-level-of-authentication', authenticationConfig: 'cfg-2' },
-      { id: 'o2', providerId: 'auth-otp-form' },
-    ],
+    [`GET /admin/realms/${REALM}/authentication/flows/stepup-2fa/executions`]: GREEN_2FA_EXECS(),
     'GET /admin/realms/verein/authentication/config/cfg-1': {
       alias: 'stepup-loa1',
       config: { 'loa-condition-level': '1', 'loa-max-age': '36000' },
@@ -97,6 +113,7 @@ function greenRoutes(): Record<string, unknown> {
         id: 'uuid-ui',
         clientId: 'gremion-ui',
         fullScopeAllowed: false,
+        attributes: { 'pkce.code.challenge.method': 'S256' },
         redirectUris: [...EXPECTED_REDIRECT],
         webOrigins: [...EXPECTED_WEB_ORIGINS],
       },
@@ -220,7 +237,80 @@ describe('reconcileRealm — each single drift fails EXACTLY that named check', 
     // A missing flow is a COMPOUND drift: the LoA configs live inside the flow,
     // so they cannot be verified when the flow is gone. Both are repaired by the
     // single §4-2 step-up rebuild — no OTHER (client/user/realm-attr) check fails.
-    expect(failed).toEqual(['stepup-flow', 'stepup-loa-config'])
+    expect(failed).toEqual(['stepup-flow', 'stepup-loa-config', 'stepup-2fa-otp-gate'])
+  })
+
+  // Security sweep 2, finding 3: a REQUIRED OTP form in stepup-2fa enrolls an
+  // attacker authenticator for a user with no OTP and still grants loa2.
+  it.each([
+    [
+      'the legacy REQUIRED OTP form straight in stepup-2fa',
+      () => [
+        { id: 'c2', providerId: 'conditional-level-of-authentication', requirement: 'REQUIRED', level: 0, index: 0, authenticationConfig: 'cfg-2' },
+        { id: 'o2', providerId: 'auth-otp-form', requirement: 'REQUIRED', level: 0, index: 1 },
+      ],
+    ],
+    [
+      'an OTP alternative with no deny-access sibling',
+      () => GREEN_2FA_EXECS().filter((e) => e.providerId !== 'deny-access-authenticator'),
+    ],
+    [
+      'the OTP form REQUIRED inside the subflow',
+      () => GREEN_2FA_EXECS().map((e) => (e.providerId === 'auth-otp-form' ? { ...e, requirement: 'REQUIRED' } : e)),
+    ],
+    [
+      'deny-access DISABLED',
+      () => GREEN_2FA_EXECS().map((e) => (e.providerId === 'deny-access-authenticator' ? { ...e, requirement: 'DISABLED' } : e)),
+    ],
+    [
+      'deny-access ordered before the OTP form',
+      () =>
+        GREEN_2FA_EXECS().map((e) =>
+          e.providerId === 'deny-access-authenticator' ? { ...e, index: 0 } : e.providerId === 'auth-otp-form' ? { ...e, index: 1 } : e,
+        ),
+    ],
+    [
+      'the subflow itself not REQUIRED',
+      () => GREEN_2FA_EXECS().map((e) => (e.id === 's2' ? { ...e, requirement: 'ALTERNATIVE' } : e)),
+    ],
+  ])('%s -> only stepup-2fa-otp-gate fails', async (_why, execs) => {
+    const failed = await failedNames((r) => {
+      r[`GET /admin/realms/${REALM}/authentication/flows/stepup-2fa/executions`] = execs()
+    })
+    expect(failed).toEqual(['stepup-2fa-otp-gate'])
+  })
+
+  it.each([
+    ['absent', undefined],
+    ['too short', 'length(8)'],
+    ['without history', 'length(12) and notUsername and notEmail'],
+  ])('a password policy that is %s -> only password-policy fails', async (_w, value) => {
+    const failed = await failedNames((r) => {
+      ;(r[`GET /admin/realms/${REALM}`] as any).passwordPolicy = value
+    })
+    expect(failed).toEqual(['password-policy'])
+  })
+
+  it.each([
+    ['revokeRefreshToken off', { revokeRefreshToken: false }],
+    ['revokeRefreshToken absent', { revokeRefreshToken: undefined }],
+    ['refreshTokenMaxReuse 2', { refreshTokenMaxReuse: 2 }],
+  ])('%s -> only refresh-token-rotation fails', async (_w, patch) => {
+    const failed = await failedNames((r) => {
+      Object.assign(r[`GET /admin/realms/${REALM}`] as object, patch)
+    })
+    expect(failed).toEqual(['refresh-token-rotation'])
+  })
+
+  it.each([
+    ['absent', undefined],
+    ['plain', 'plain'],
+    ['empty', ''],
+  ])('gremion-ui PKCE method %s -> only gremion-ui-pkce fails', async (_w, value) => {
+    const failed = await failedNames((r) => {
+      ;(r[`GET /admin/realms/${REALM}/clients?clientId=gremion-ui`] as any)[0].attributes = value === undefined ? {} : { 'pkce.code.challenge.method': value }
+    })
+    expect(failed).toEqual(['gremion-ui-pkce'])
   })
 
   it('wrong LoA maxAge on loa2 -> only stepup-loa-config fails', async () => {
@@ -497,6 +587,7 @@ describe('(FIX3-B) reconcileRealm — realm segment is encodeURIComponent-encode
         otpPolicyAlgorithm: 'HmacSHA1',
         otpPolicyDigits: 6,
         otpPolicyPeriod: 30,
+        ...GREEN_HARDENING,
         attributes: { 'acr.loa.map': '{"loa1":1,"loa2":2}' },
       },
       [`GET ${R}/authentication/flows`]: [{ alias: 'browser-stepup' }],
@@ -504,10 +595,7 @@ describe('(FIX3-B) reconcileRealm — realm segment is encodeURIComponent-encode
         { id: 'c1', providerId: 'conditional-level-of-authentication', authenticationConfig: 'cfg-1' },
         { id: 'p1', providerId: 'auth-username-password-form' },
       ],
-      [`GET ${R}/authentication/flows/stepup-2fa/executions`]: [
-        { id: 'c2', providerId: 'conditional-level-of-authentication', authenticationConfig: 'cfg-2' },
-        { id: 'o2', providerId: 'auth-otp-form' },
-      ],
+      [`GET ${R}/authentication/flows/stepup-2fa/executions`]: GREEN_2FA_EXECS(),
       [`GET ${R}/authentication/config/cfg-1`]: { config: { 'loa-condition-level': '1', 'loa-max-age': '36000' } },
       [`GET ${R}/authentication/config/cfg-2`]: { config: { 'loa-condition-level': '2', 'loa-max-age': '300' } },
       [`GET ${R}/clients?clientId=gremion-ui`]: [
@@ -515,6 +603,7 @@ describe('(FIX3-B) reconcileRealm — realm segment is encodeURIComponent-encode
           id: 'uuid-ui',
           clientId: 'gremion-ui',
           fullScopeAllowed: false,
+          attributes: { 'pkce.code.challenge.method': 'S256' },
           redirectUris: [`https://${HOST}/auth/callback/keycloak`],
           webOrigins: [`https://${HOST}`],
         },
@@ -647,6 +736,98 @@ describe('reconcileRealm — apply replays ONLY the failed checks (§4-2), nothi
     expect(grantPost).toBeDefined()
     expect(grantPost!.body).toEqual([{ id: 'role-1', name: 'realm-admin' }])
     expect(report.applied).toContain('gremion-admin-sa-roles')
+  })
+
+  it('security sweep 2 (finding 3): a legacy REQUIRED OTP form -> apply rebuilds stepup-2fa as OTP-or-deny and records it applied', async () => {
+    const routes = greenRoutes()
+    const F = `/admin/realms/${REALM}/authentication`
+    routes[`GET ${F}/flows/stepup-2fa/executions`] = [
+      { id: 'c2', providerId: 'conditional-level-of-authentication', requirement: 'REQUIRED', level: 0, index: 0, authenticationConfig: 'cfg-2' },
+      { id: 'o2', providerId: 'auth-otp-form', requirement: 'REQUIRED', level: 0, index: 1 },
+    ]
+    // a stateful Keycloak: the subflow appears once created, its children once added
+    let created = false
+    let childAdds = 0
+    const { transport: inner, calls } = scriptedTransport(routes)
+    const transport: KcTransport = async (method, path, body) => {
+      const r = await inner(method, path, body)
+      if (method === 'POST' && path === `${F}/flows/stepup-2fa/executions/flow`) created = true
+      if (method === 'POST' && path === `${F}/flows/stepup-2fa%20second%20factor/executions/execution`) childAdds++
+      if (method === 'GET' && path === `${F}/flows/stepup-2fa/executions` && created) {
+        return [
+          { id: 'c2', providerId: 'conditional-level-of-authentication', requirement: 'REQUIRED', level: 0, index: 0, authenticationConfig: 'cfg-2' },
+          { id: 's2', displayName: 'stepup-2fa second factor', authenticationFlow: true, requirement: 'DISABLED', level: 0, index: 1 },
+          { id: 'o2', providerId: 'auth-otp-form', requirement: 'REQUIRED', level: 0, index: 2 },
+        ]
+      }
+      if (method === 'GET' && path === `${F}/flows/stepup-2fa%20second%20factor/executions`) {
+        return [
+          ...(childAdds >= 1 ? [{ id: 'n-otp', providerId: 'auth-otp-form', requirement: 'DISABLED', level: 0, index: 0 }] : []),
+          ...(childAdds >= 2 ? [{ id: 'n-deny', providerId: 'deny-access-authenticator', requirement: 'DISABLED', level: 0, index: 1 }] : []),
+        ]
+      }
+      return r
+    }
+    const report = await reconcileRealm(transport, { ...opts, verifyOnly: false })
+    // the REQUIRED OTP execution is removed from stepup-2fa…
+    expect(calls).toContainEqual({ method: 'DELETE', path: `/admin/realms/${REALM}/authentication/executions/o2`, body: undefined })
+    // …a REQUIRED subflow is added, holding OTP then deny-access, both ALTERNATIVE
+    expect(calls.find((c) => c.method === 'POST' && c.path === `${F}/flows/stepup-2fa/executions/flow`)!.body).toEqual({
+      alias: 'stepup-2fa second factor',
+      type: 'basic-flow',
+    })
+    const adds = calls.filter((c) => c.method === 'POST' && c.path === `${F}/flows/stepup-2fa%20second%20factor/executions/execution`)
+    expect(adds.map((c) => (c.body as any).provider)).toEqual(['auth-otp-form', 'deny-access-authenticator'])
+    const reqs = calls
+      .filter((c) => c.method === 'PUT' && c.path === `${F}/flows/browser-stepup/executions`)
+      .map((c) => c.body)
+    expect(reqs).toEqual([
+      { id: 's2', requirement: 'REQUIRED' },
+      { id: 'n-otp', requirement: 'ALTERNATIVE' },
+      { id: 'n-deny', requirement: 'ALTERNATIVE' },
+    ])
+    expect(report.applied).toContain('stepup-2fa-otp-gate')
+  })
+
+  it('a missing password policy / refresh rotation -> apply issues ONE partial realm PUT with exactly those fields (no step-up replay)', async () => {
+    const routes = greenRoutes()
+    Object.assign(routes[`GET /admin/realms/${REALM}`] as object, {
+      passwordPolicy: undefined,
+      revokeRefreshToken: false,
+      refreshTokenMaxReuse: 3,
+    })
+    const { transport, calls } = scriptedTransport(routes)
+    const report = await reconcileRealm(transport, { ...opts, verifyOnly: false })
+    const puts = calls.filter((c) => c.method === 'PUT')
+    expect(puts).toEqual([
+      {
+        method: 'PUT',
+        path: `/admin/realms/${REALM}`,
+        body: {
+          realm: REALM,
+          passwordPolicy: 'length(12) and notUsername and notEmail and passwordHistory(3)',
+          revokeRefreshToken: true,
+          refreshTokenMaxReuse: 0,
+        },
+      },
+    ])
+    expect(report.applied).toEqual(expect.arrayContaining(['password-policy', 'refresh-token-rotation']))
+  })
+
+  it('a gremion-ui without PKCE -> apply PUTs only the attribute (merged) to the client and records it applied', async () => {
+    const routes = greenRoutes()
+    ;(routes[`GET /admin/realms/${REALM}/clients?clientId=gremion-ui`] as any)[0].attributes = { 'post.logout.redirect.uris': 'x' }
+    const { transport, calls } = scriptedTransport(routes)
+    const report = await reconcileRealm(transport, { ...opts, verifyOnly: false })
+    const puts = calls.filter((c) => c.method === 'PUT')
+    expect(puts).toEqual([
+      {
+        method: 'PUT',
+        path: `/admin/realms/${REALM}/clients/uuid-ui`,
+        body: { id: 'uuid-ui', clientId: 'gremion-ui', attributes: { 'post.logout.redirect.uris': 'x', 'pkce.code.challenge.method': 'S256' } },
+      },
+    ])
+    expect(report.applied).toContain('gremion-ui-pkce')
   })
 
   it('a non-mechanically-repairable drift (wildcard URI) is reported but NOT auto-repaired', async () => {

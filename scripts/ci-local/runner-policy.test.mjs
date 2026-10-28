@@ -379,7 +379,7 @@ test('the committed waivers.json covers exactly the findings on the real kernel 
   const entries = evaluateRepo('kernel', kernelRoot, waivers, todayIso()).filter((e) => e.path === '.github/workflows/deploy.yml')
   assert.equal(entries.length, 1)
   assert.equal(entries[0].waived, true, JSON.stringify(entries[0].findings))
-  assert.deepEqual(entries[0].waivedFindings.map((f) => f.id).sort(), [...waivers[0].covers].sort())
+  assert.deepEqual(entries[0].waivedFindings.map((f) => f.id).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)), [...waivers[0].covers].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)))
 })
 
 test('MEDIUM fix: repoRootExists is false for a nonexistent path and for a path that is a plain file, true for a real directory', () => {

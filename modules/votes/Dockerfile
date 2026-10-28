@@ -1,9 +1,9 @@
-# services/votes/Dockerfile
-# D-P1-1 house pattern: build context is the REPO ROOT, NOT services/votes —
+# modules/votes/Dockerfile
+# D-P1-1 house pattern: build context is the REPO ROOT, NOT modules/votes —
 # pnpm-lock.yaml and pnpm-workspace.yaml live OUTSIDE this directory, so a
-# services/votes-only context cannot resolve them. Build with:
-#   docker build -f services/votes/Dockerfile -t gremion/votes:<tag> .
-# Mirrors services/files/Dockerfile. The votes leaf is stateless (no PG/NATS,
+# modules/votes-only context cannot resolve them. Build with:
+#   docker build -f modules/votes/Dockerfile -t gremion/votes:<tag> .
+# Mirrors modules/files/Dockerfile. The votes leaf is stateless (no PG/NATS,
 # no migrations) and has no workspace deps — it bundles via esbuild.
 FROM node:26-alpine AS builder
 WORKDIR /repo
@@ -17,14 +17,14 @@ RUN npm install -g corepack && corepack enable pnpm
 
 # Install workspace deps (cache-friendly: package manifests first).
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
-COPY services/votes/package.json ./services/votes/
+COPY modules/votes/package.json ./modules/votes/
 RUN pnpm install --frozen-lockfile
 
 # Copy the service sources.
-COPY services/votes ./services/votes/
+COPY modules/votes ./modules/votes/
 
-# Compile + bundle TypeScript → services/votes/dist/index.js
-WORKDIR /repo/services/votes
+# Compile + bundle TypeScript → modules/votes/dist/index.js
+WORKDIR /repo/modules/votes
 RUN pnpm build
 
 # pnpm deploy resolves the prod dependency tree into a self-contained dir.
@@ -39,7 +39,7 @@ ENV PORT=8080
 
 COPY --from=builder /deploy/node_modules ./node_modules
 COPY --from=builder /deploy/package.json ./
-COPY --from=builder /repo/services/votes/dist ./dist
+COPY --from=builder /repo/modules/votes/dist ./dist
 
 # A-021: run as the image's built-in non-root `node` user (uid/gid 1000).
 USER node

@@ -16,9 +16,18 @@
 # principal, issued and stamped; tenant-create is not on the mail network,
 # TRD-045), then `record-step mail_principal_issued` (the container re-reads
 # the stamp over Keycloak), then container phase B (first administrators, the
-# --enable modules, active), then the router file, which the host writes (Q17:
-# a compose etc/edge mount is refused, hygiene j4). A failed step STOPS:
-# nothing after it runs, and a rerun resumes from the ledger.
+# --enable modules; the customer stays `provisioning`), then the router file,
+# which the host writes (Q17: a compose etc/edge mount is refused, hygiene j4),
+# then `tenant-create activate` (active LAST: a router failure never leaves an
+# active customer with no route). A failed step STOPS: nothing after it runs.
+#
+# A PARTIAL CREATE IS RE-RUN, NOT ROLLED BACK (create-harden H6). Every step is
+# idempotent, so the same request run again resumes and nothing is created
+# twice: phase A/B skip ledger-done steps and use ensure* adapters (realm,
+# database, broker account, first accounts); the mail step lists the principal
+# first and issues only when absent (gremion-vendor-mail G2); record-step reads
+# the stamp back and records once; write_router replaces the file atomically;
+# activate leaves an active customer alone.
 #
 # TRD-440: customer_create counts the running containers and every project's
 # `config --services` before and after, and fails if either moved -- a
@@ -109,11 +118,24 @@ release_tip() {
     printf '%s' "$sha"
 }
 
+#
+# create-harden H4 (HIGH-1): under the executor (GREMION_EXECUTOR_REQUEST_ID,
+# set by gremion-executor for the request it runs) the container carries the
+# label gremion.request=<id>. The container is the docker daemon's child, not
+# the compose client's: killing the client (a lost lease, a signal) leaves it
+# running, and the executor kills it by this label and confirms it gone.
 tc() {
     local envfile="${ROOT}/etc/env/app-${COLOUR}.env"
     [[ -f "$envfile" ]] || die "env file absent: ${envfile}" "$GREMION_EXIT_USAGE"
     local tip; tip="$(release_tip)"
+    local -a label=()
+    if [[ -n "${GREMION_EXECUTOR_REQUEST_ID:-}" ]]; then
+        [[ "$GREMION_EXECUTOR_REQUEST_ID" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] \
+            || die "GREMION_EXECUTOR_REQUEST_ID is not a request id: '${GREMION_EXECUTOR_REQUEST_ID}'" "$GREMION_EXIT_USAGE"
+        label=(--label "gremion.request=${GREMION_EXECUTOR_REQUEST_ID}")
+    fi
     ( cd "$RELEASE_DIR" && docker compose --env-file "$envfile" run --rm -T \
+        ${label[@]+"${label[@]}"} \
         -e "GREMION_RELEASE_TIP=${tip}" \
         -e TRAEFIK_CERT_RESOLVER -e EDGE_BIND_IP -e EDGE_BIND_IP6 -e TENANT_DNS_PREFLIGHT -e GREMION_SCRATCH_FIXTURES -e GREMION_PRODUCTION_STACK \
         "${TC_MOUNT[@]}" tenant-create "$@" )
@@ -291,10 +313,14 @@ customer_create() {
     TC_MOUNT=()
     mail_step "$slug" "$token"
     TC_MOUNT=("${mounts[@]}")
-    info "phase B (container): first administrators, modules, active"
-    tc phase-b "${flags[@]}" ${MAIL_SENDER_ARGS[@]+"${MAIL_SENDER_ARGS[@]}"} || die "phase B of ${slug} failed; a rerun resumes from the ledger" "$GREMION_EXIT_ASSERT"
+    info "phase B (container): first administrators, modules (the customer stays provisioning until its route exists)"
+    tc phase-b "${flags[@]}" --defer-activation ${MAIL_SENDER_ARGS[@]+"${MAIL_SENDER_ARGS[@]}"} || die "phase B of ${slug} failed; a rerun resumes from the ledger" "$GREMION_EXIT_ASSERT"
     TC_MOUNT=()
     write_router "$slug"
+    # H3: active LAST -- a router failure above leaves the customer provisioning
+    # (no route, not served), never active without one.
+    info "activate (container): the router is written, the customer goes active"
+    tc activate "$slug" || die "activating ${slug} failed; a rerun resumes from the ledger" "$GREMION_EXIT_ASSERT"
 
     after="$(container_fingerprint)"
     if [[ "$before" != "$after" ]]; then
@@ -302,4 +328,72 @@ customer_create() {
         exit "$GREMION_EXIT_ASSERT"
     fi
     ok "customer ${slug} created (TRD-440: container set unchanged)"
+}
+
+# ── suspend and resume (TRD-044, PRD-OPS-004; were gremion-tenant's cmd_*) ──
+# The executor's `suspend` / `resume` handlers call these; gremion-tenant's
+# break-glass verbs call them too. DATA IS UNTOUCHED: the container verbs only
+# flip the status, the realm and the broker users, and the host step only the
+# mail principal. The router file stays exactly as it is: a suspended customer's
+# route keeps resolving and the app serves its branded 503 on status `suspended`
+# (suspendCustomer sets the status FIRST). Each verb takes the TRD-440 fingerprint
+# before and after ITS OWN run and fails if it moved. The two runs may be weeks
+# apart (deploys, colour switches in between), so nothing is compared across them.
+
+# _lifecycle_args <verb> <slug> [--operator <uuid>] -- validates; sets OPERATOR_ID.
+_lifecycle_args() {
+    local verb="$1"; shift
+    local slug="${1:-}"; shift || true
+    need_slug "$slug"
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --operator) need_value "$@"; OPERATOR_ID="$2"; shift 2 ;;
+            *) die "${verb}: unknown argument: $1" "$GREMION_EXIT_USAGE" ;;
+        esac
+    done
+    need_operator
+}
+
+customer_suspend() {   # <slug> --operator <uuid>
+    local slug="${1:-}" before after
+    _lifecycle_args suspend "$@"
+    active_colour
+    before="$(container_fingerprint)"
+    tc suspend "$slug" --operator "$OPERATOR_ID" || die "suspend of ${slug} failed in the container" "$GREMION_EXIT_ASSERT"
+    # The tenant is already 503 with its realm disabled (fail closed). The host
+    # step un-stamps the realm's sender before it deletes the principal, and every
+    # step is re-runnable, so a failure here is recovered by the same verb (the
+    # container step above repeats harmlessly).
+    mail_realm_smtp --realm "$slug" --tenant "$(token_of "$slug")" --revoke \
+        || die "the principal of ${slug} could not be revoked; the customer is already suspended, rerun gremion-tenant suspend ${slug} to converge" "$GREMION_EXIT_ASSERT"
+    after="$(container_fingerprint)"
+    if [[ "$before" != "$after" ]]; then
+        bad "TRD-440: the container set moved during suspend (before: ${before}; after: ${after})"
+        exit "$GREMION_EXIT_ASSERT"
+    fi
+    ok "customer ${slug} suspended (TRD-440: container set unchanged, data untouched)"
+}
+
+customer_resume() {   # <slug> --operator <uuid>
+    local slug="${1:-}" before after
+    _lifecycle_args resume "$@"
+    active_colour
+    # an older release kept a per-suspend record here; it is never read any more
+    rm -f "${ROOT}/runtime/suspended/${slug}.fingerprint"
+    before="$(container_fingerprint)"
+    mail_realm_smtp --realm "$slug" --tenant "$(token_of "$slug")" \
+        || die "a fresh principal for ${slug} could not be issued" "$GREMION_EXIT_ASSERT"
+    mail_sender_args || die "resume of ${slug}: MAIL_TRANSPORT could not be resolved" "$GREMION_EXIT_USAGE"
+    if ! tc resume "$slug" --operator "$OPERATOR_ID" ${MAIL_SENDER_ARGS[@]+"${MAIL_SENDER_ARGS[@]}"}; then
+        # The customer is still suspended: do not leave it holding a live principal.
+        mail_realm_smtp --realm "$slug" --tenant "$(token_of "$slug")" --revoke \
+            || bad "the fresh principal of ${slug} could not be revoked again after the failed resume; trigger Mandant sperren to converge"
+        die "resume of ${slug} failed in the container" "$GREMION_EXIT_ASSERT"
+    fi
+    after="$(container_fingerprint)"
+    if [[ "$before" != "$after" ]]; then
+        bad "TRD-440: the container set moved during resume (before: ${before}; after: ${after})"
+        exit "$GREMION_EXIT_ASSERT"
+    fi
+    ok "customer ${slug} resumed (TRD-440: container set unchanged, data untouched)"
 }

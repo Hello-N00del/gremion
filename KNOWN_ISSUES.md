@@ -236,24 +236,30 @@ login page. This is a deployment-identity migration, not a text change, and it
 is deliberately out of scope for 0.1.0. A fresh install can set the realm
 `displayName` to its own institution and never sees the fallback.
 
-### The dev realm requires HTTPS (a B-01 consequence) — OPEN
+### The dev realm requires HTTPS (a B-01 consequence) — CLOSED (decision 2026-10-28)
 
 Deleting the boot import also deleted `KC_REALM_SSL_REQUIRED`, the only knob
 that ever set a realm's `sslRequired` from the environment; the dev override
 used it to drop the dev realm to `external` so plain-HTTP localhost login
-worked without per-developer CA trust. `buildTenantRealmDoc` pins
-`sslRequired: 'all'` on every realm it composes (#139/G-080, and correct for
-a tenant), while `scripts/dev-configure.sh` still writes
-`http://localhost:${KC_PORT}/auth/realms/${KEYCLOAK_REALM}` issuers. So a dev
-realm created by tenant-create refuses the very requests the dev tooling
-points at it.
+worked. `buildTenantRealmDoc` pins `sslRequired: 'all'` on every realm it
+composes (#139/G-080) and `reconcile.ts` enforces it (`ssl-required`).
 
-Until the tenant-create entrypoint offers a dev mode, the workaround is one
-Admin API delta per dev realm:
-`kcadm.sh update realms/<realm> -s sslRequired=external`. This is a
-plan-level consequence of B-01, not an implementation defect: it belongs to
-the units that own tenant-create and the zero-tenant boot, and it is recorded
-here so it is not rediscovered as a login bug.
+**Resolution: no dev-only switch, `'all'` stays pinned.** Dev realms are
+created on the server through the regular tooling (control panel, request
+queue, executor, tenant-create) and served over HTTPS behind Traefik, so a realm
+that requires HTTPS is correct there. A switch that lowers `sslRequired` would
+need a provable "dev only" gate, a reconcile exemption and a guard test for the
+prod path, and buys nothing once dev realms are server-side.
+
+**Note for anyone still running a plain-HTTP localhost realm.** Such a realm,
+created by a local tenant-create, refuses plain-HTTP requests. The one-off
+`kcadm.sh update realms/<realm> -s sslRequired=external` lowers it, but
+`reconcile` reverts it to `all` on its next run, so it is a per-session
+workaround, not a configuration.
+`scripts/dev-configure.sh` (`make dev-configure`) is only meaningful for that
+plain-HTTP localhost flow: it writes `http://localhost:${KC_PORT}/auth/realms/...`
+issuers into `gremion-ui/.env.local`. It is kept, not deleted, and is not the
+path for server-side dev realms.
 
 ### The old working name in code and data
 
@@ -567,3 +573,18 @@ Design** — do not close these as part of a design port:
   a self-contained chain cannot detect truncation of the tail. An external-anchor
   follow-up is deferred to a later phase. See [`docs/about-gremion.md`](./docs/about-gremion.md)
   (Governance charter & invariants).
+
+## Votes / Nextcloud Polls tenant separation — CLOSED (K5#29 / S4#18)
+
+Nextcloud is one shared instance (one user table, one OIDC mapping, one admin
+credential), so the platform provisions no per-tenant Nextcloud user or group to
+scope polls by. The votes module therefore binds each poll to its tenant with a
+server-written `[gt:<tenantId>] ` title marker (`modules/votes/src/polls/tenant-scope.ts`
+and its app twin) and enforces it on list, create, read, options and vote. Another
+tenant's poll answers exactly like a missing one. Residuals: (1) polls created
+before this change carry no marker and are invisible to every tenant until an operator
+sets `VOTES_LEGACY_POLL_TENANT_ID` to the one tenant that owns them; (2) the marker
+is visible to anyone who opens the poll in the Nextcloud UI itself, and Nextcloud
+admins can still see all polls - isolation holds inside the module, not inside
+Nextcloud; (3) a vote is attributed per Keycloak user, so a person who is a member
+of two tenants votes once per tenant-bound poll, not once globally.

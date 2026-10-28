@@ -621,7 +621,7 @@ export function guardsResultFileName(now, kernelShortSha, verticalShortSha) {
 export function listDockerfiles(repoRoot) {
   return walkFiles(repoRoot)
     .filter((f) => /(^|\/)Dockerfile(\..+)?$/.test(f))
-    .sort()
+    .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))
 }
 
 // ---------------------------------------------------------------------------

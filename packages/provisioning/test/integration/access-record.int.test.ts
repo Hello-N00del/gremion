@@ -51,14 +51,14 @@ async function asTableOwner<T>(fn: (tx: typeof pa) => Promise<T>): Promise<T> {
 
 describe('oac.record_access', () => {
   it('panel: records origin=panel with who, when, what, why', async () => {
-    const [{ id }] = await rec(r.panel, 'alpha-rat')
+    const { id } = (await rec(r.panel, 'alpha-rat'))[0]!
     const [row] = await pa<{ origin: string; actor: string; action: string; what: string; why: string; recent: boolean; slug: string }[]>`
       SELECT origin, actor, action, what, why, customer_slug AS slug, at > now() - interval '1 minute' AS recent FROM oac.access_record WHERE access_id = ${id}::uuid`
     expect(row).toEqual({ origin: 'panel', actor: OP, action: 'create_request', what: 'Mandant anlegen (Anfrage)', why: 'Operator-Anforderung im Control-Panel', slug: 'alpha-rat', recent: true })
   })
 
   it('host (executor): records origin=host with the login user', async () => {
-    const [{ id }] = await rec(r.executor, 'alpha-rat', { actor: 'deploy', action: 'break_glass', why: 'Panel nicht erreichbar, Mandant anlegen' })
+    const { id } = (await rec(r.executor, 'alpha-rat', { actor: 'deploy', action: 'break_glass', why: 'Panel nicht erreichbar, Mandant anlegen' }))[0]!
     const [row] = await pa<{ origin: string; actor: string }[]>`SELECT origin, actor FROM oac.access_record WHERE access_id = ${id}::uuid`
     expect(row).toEqual({ origin: 'host', actor: 'deploy' })
   })
@@ -122,14 +122,14 @@ describe('append-only', () => {
   })
 
   it('the table owner role itself cannot UPDATE, DELETE or TRUNCATE a row (check_violation)', async () => {
-    const [{ id }] = await rec(r.panel, 'beta-rat')
+    const { id } = (await rec(r.panel, 'beta-rat'))[0]!
     expect((await failure(asTableOwner((tx) => tx`UPDATE oac.access_record SET why = 'umgeschrieben und gefaelscht' WHERE access_id = ${id}::uuid`)))?.code).toBe('23514')
     expect((await failure(asTableOwner((tx) => tx`DELETE FROM oac.access_record WHERE access_id = ${id}::uuid`)))?.code).toBe('23514')
     expect((await failure(asTableOwner((tx) => tx.unsafe('TRUNCATE oac.access_record'))))?.code).toBe('23514')
   })
 
   it('a forged purge flag does not delete a young row', async () => {
-    const [{ id }] = await rec(r.panel, 'beta-rat')
+    const { id } = (await rec(r.panel, 'beta-rat'))[0]!
     const f = await failure(asTableOwner(async (tx) => {
       await tx`SELECT set_config('oac.purging', 'on', true)`
       await tx`DELETE FROM oac.access_record WHERE access_id = ${id}::uuid`
@@ -158,7 +158,7 @@ describe('trust boundary: the table owner is a NOLOGIN role', () => {
   })
 
   it('the platform owner cannot disable the triggers, insert, delete, or drop the schema', async () => {
-    const [{ id }] = await rec(r.panel, 'epsilon-rat')
+    const { id } = (await rec(r.panel, 'epsilon-rat'))[0]!
     expect((await failure(r.owner.unsafe('ALTER TABLE oac.access_record DISABLE TRIGGER access_record_no_delete_trg')))?.code).toBe('42501')
     expect((await failure(r.owner.unsafe('ALTER TABLE oac.access_record DISABLE TRIGGER USER')))?.code).toBe('42501')
     expect((await failure(r.owner`DELETE FROM oac.access_record WHERE access_id = ${id}::uuid`))?.code).toBe('42501')
@@ -186,7 +186,7 @@ describe('trust boundary: the table owner is a NOLOGIN role', () => {
   })
 
   it('a record through record_access carries the clock of the statement, not a caller value', async () => {
-    const [{ id }] = await rec(r.panel, 'theta-rat')
+    const { id } = (await rec(r.panel, 'theta-rat'))[0]!
     const [x] = await pa<{ recent: boolean }[]>`SELECT at > now() - interval '1 minute' AND at <= clock_timestamp() AS recent FROM oac.access_record WHERE access_id = ${id}::uuid`
     expect(x!.recent).toBe(true)
   })
@@ -194,20 +194,20 @@ describe('trust boundary: the table owner is a NOLOGIN role', () => {
 
 describe('oac.purge_access_records (RC-LOG-AUD: never shorter than the security window)', () => {
   it('keeps a row at the window start through day 26, removes it only past 27 d', async () => {
-    const [{ id: young }] = await rec(r.panel, 'gamma-rat')
-    const [{ id: edge }] = await rec(r.panel, 'gamma-rat')
-    const [{ id: old }] = await rec(r.panel, 'gamma-rat')
+    const { id: young } = (await rec(r.panel, 'gamma-rat'))[0]!
+    const { id: edge } = (await rec(r.panel, 'gamma-rat'))[0]!
+    const { id: old } = (await rec(r.panel, 'gamma-rat'))[0]!
     await backdate(young, 1)
     await backdate(edge, 26)
     await backdate(old, 28)
-    const [{ n }] = await r.executor<{ n: number }[]>`SELECT oac.purge_access_records(interval '27 days') AS n`
+    const { n } = (await r.executor<{ n: number }[]>`SELECT oac.purge_access_records(interval '27 days') AS n`)[0]!
     expect(n).toBeGreaterThanOrEqual(1)
     const left = (await pa<{ access_id: string }[]>`SELECT access_id::text FROM oac.access_record WHERE access_id IN (${young}::uuid, ${edge}::uuid, ${old}::uuid)`).map((x) => x.access_id)
     expect(left.sort()).toEqual([young, edge].sort())
   })
 
   it('a customer being erased does not touch its access records (no FK to the customer)', async () => {
-    const [{ id }] = await rec(r.panel, 'delta-rat')
+    const { id } = (await rec(r.panel, 'delta-rat'))[0]!
     await r.executor`SELECT oac.purge_access_records(interval '27 days')`
     expect((await pa`SELECT 1 FROM oac.access_record WHERE access_id = ${id}::uuid`).length).toBe(1)
   })

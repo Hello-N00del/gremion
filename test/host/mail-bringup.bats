@@ -553,6 +553,7 @@ EOF
                END { n=NR; while (n>0 && l[n]=="") n--; for (i=1;i<=n;i++) printf "%s\r\n", l[i] }' \
         | openssl dgst -sha256 -binary | openssl base64 -A)"
     shim curl "
+case \" \$* \" in *\" -K - \"*) cat >> \"${GREMION_ROOT}/curl.stdin\" ;; esac
 case \"\$*\" in
   *SEARCH*) echo '* SEARCH 7' ;;
   *UID=7*)  printf 'DKIM-Signature: v=1; a=rsa-sha256; d=example.org; s=g2026a; bh=${body_hash}; b=xx\r\nSubject: probe\r\n\r\n' ;;
@@ -561,6 +562,10 @@ exit 0"
     run "$BRINGUP" --assert 3
     [ "$status" -eq 0 ] || { echo "$output"; return 1; }
     [[ "$output" == *"3=ok"* ]]
+    # LOW-5: the roles IMAP password rides curl's stdin (-K -), never its argv.
+    assert_absent 'unit-test-roles-password' "$SHIM_LOG" \
+        'ROLES_IMAP_PASSWORD reached curl argv (host process list)'
+    grep -Fq 'user = "roles@example.org:unit-test-roles-password"' "${GREMION_ROOT}/curl.stdin"
 }
 
 # ---------------------------------------------------------------------------

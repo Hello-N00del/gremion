@@ -37,6 +37,8 @@ export const EXECUTOR_STEP_LABEL: Record<string, string> = {
   verify: 'Anfrage und Anmeldenachweis geprüft',
   dispatch: 'Bearbeiter gewählt',
   create: 'Einrichtung gestartet',
+  suspend: 'Sperren (Anmeldung, Broker, Mail-Absender)',
+  resume: 'Fortsetzen (Mail-Absender, Anmeldung, Broker)',
   'phase-a': 'Phase A (Realm, Kerndatenbank, Host)',
   mail: 'Mail-Absender',
   'record-step': 'Fortschritt im Ledger vermerkt',
@@ -79,6 +81,7 @@ const stepName = (s: string): string => EXECUTOR_STEP_LABEL[s] ?? s
 const STEP_TOKEN = /^[a-z][a-z0-9_-]{0,39}$/
 
 const NOT_REPLAYABLE = 'Nur eine Einrichtung („create“) lässt sich hier wiederholen.'
+const REDO_ACTION = 'Die Aktion „Mandant sperren“ bzw. „Mandant fortsetzen“ kann unten erneut ausgelöst werden; die Daten wurden nicht angetastet.'
 const FIX_FORM = 'Die Angaben der Anfrage selbst wurden abgelehnt. Bitte im Formular „Neuer Mandant“ korrigiert neu anfordern.'
 
 export function describeRequest(r: RequestStateInput): RequestDescription {
@@ -96,7 +99,7 @@ export function describeRequest(r: RequestStateInput): RequestDescription {
     ...extra,
   })
   /** Retryable when the kind is create; otherwise says why not. */
-  const retry = (): Partial<RequestDescription> => (isCreate ? { retryable: true } : { retryNote: NOT_REPLAYABLE })
+  const retry = (): Partial<RequestDescription> => (isCreate ? { retryable: true } : { retryNote: r.kind === 'suspend' || r.kind === 'resume' ? REDO_ACTION : NOT_REPLAYABLE })
   switch (r.state) {
     case 'queued':
       return d('queued', 'In der Warteschlange', 'Die Anfrage wartet darauf, dass der Ausführer sie übernimmt.', { active: true })
@@ -123,11 +126,11 @@ export function describeRequest(r: RequestStateInput): RequestDescription {
     }
     case 'refused': {
       const o = r.outcome ?? ''
-      if (/^no handler for /.test(o)) return d('refused', 'Abgelehnt', 'Für diese Art von Anfrage gibt es noch keinen Bearbeiter.', { code: 'no_handler', detail: o, retryNote: FIX_FORM })
+      if (o.startsWith('no handler for ')) return d('refused', 'Abgelehnt', 'Für diese Art von Anfrage gibt es noch keinen Bearbeiter.', { code: 'no_handler', detail: o, retryNote: FIX_FORM })
       const reason = o.replace(/^refused:\s*/, '').trim()
       const detail = reason === '' ? null : reason
       // the sign-in evidence (request-verify "evidence: ..." and a missing token): a fresh sign-in can fix it
-      if (/^evidence: /.test(reason) || /^a panel request without its signed evidence/.test(reason)) {
+      if (reason.startsWith('evidence: ') || reason.startsWith('a panel request without its signed evidence')) {
         return d('refused', 'Abgelehnt', 'Der Anmeldenachweis wurde nicht akzeptiert. Mit einer frischen Anmeldung kann die Anfrage erneut gestellt werden.', { ...retry(), code: 'refused_evidence', detail })
       }
       return d('refused', 'Abgelehnt', 'Die Anfrage wurde bei der Prüfung abgelehnt.', { code: 'refused', detail, retryNote: FIX_FORM })

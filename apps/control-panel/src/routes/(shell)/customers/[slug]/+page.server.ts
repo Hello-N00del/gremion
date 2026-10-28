@@ -5,10 +5,12 @@
 // new request with a new idempotency key, only after failed/refused.
 import { error, fail, redirect } from '@sveltejs/kit'
 import { env } from '$env/dynamic/private'
+import { lifecycleOffer, type LifecycleKind } from '$lib/lifecycle'
 import { describeRequest } from '$lib/request-state'
 import { evidenceFromRequest } from '$lib/server/auth'
 import { loadConfig } from '$lib/server/config'
 import { customerRequests, customerStatus, platformDb } from '$lib/server/customers'
+import { submitLifecycle } from '$lib/server/lifecycle'
 import { SubmitRefused } from '$lib/server/requests'
 import { retryRequest } from '$lib/server/retry'
 import type { Actions, PageServerLoad } from './$types'
@@ -30,10 +32,36 @@ export const load: PageServerLoad = async ({ params }) => {
   // reload while the newest request is active; with no request, while the setup is
   // (a terminal newest request ends the refresh even if the customer row still says provisioning)
   const refresh = latest ? latest.active : status?.status === 'provisioning'
-  return { slug: params.slug, status, requests, latest, refresh }
+  const offer = lifecycleOffer(status?.status ?? null, newest ? { kind: newest.kind, state: newest.state, outcome: newest.outcome, evidenceVerifiedAt: newest.evidenceVerifiedAt } : null)
+  return { slug: params.slug, status, requests, latest, refresh, offer }
 }
 
+// "Mandant sperren" / "Mandant fortsetzen": a suspend or resume REQUEST (TRD-044), only in the state that
+// offers it (409 otherwise), with the operator's signed sign-in as evidence.
+const lifecycleAction =
+  (kind: LifecycleKind) =>
+  async ({ params, request, locals }: { params: { slug: string }; request: Request; locals: App.Locals }) => {
+    if (!SLUG.test(params.slug) || params.slug.length > 30) error(404, 'no such customer')
+    const r = loadConfig(env)
+    if (!r.ok) error(503, 'the control panel is not configured')
+    if (!locals.operator) error(403, 'not signed in through the ops realm')
+    const p = platformDb(r.config)
+    if (!p) return fail(409, { lifecycleError: 'Keine Plattform-Datenbank konfiguriert: es kann keine Anfrage gestellt werden.' })
+    const evidence = await evidenceFromRequest(request, r.config)
+    if (!evidence) return fail(403, { lifecycleError: 'Die Anmeldung trägt keinen Nachweis (loa2). Bitte neu anmelden.' })
+    const status = await customerStatus(r.config, params.slug).catch(() => null)
+    try {
+      await submitLifecycle(p, kind, params.slug, status?.status ?? null, locals.operator.id, evidence)
+    } catch (err) {
+      if (err instanceof SubmitRefused) return fail(err.status, { lifecycleError: err.message })
+      throw err
+    }
+    redirect(303, `/customers/${params.slug}`)
+  }
+
 export const actions: Actions = {
+  suspend: lifecycleAction('suspend'),
+  resume: lifecycleAction('resume'),
   retry: async ({ params, request, locals }) => {
     if (!SLUG.test(params.slug) || params.slug.length > 30) error(404, 'no such customer')
     const r = loadConfig(env)

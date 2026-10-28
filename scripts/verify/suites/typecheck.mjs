@@ -18,6 +18,7 @@ import { REPO_ROOT } from '../lib/vitest.mjs'
 // The three TASK-032-owned build guards gremion-ui's own `check` script runs
 // before svelte-check. Called individually (not via `pnpm check`) so
 // svelte-check can be run separately with `--output machine`.
+/** @type {[string, string[]][]} */
 const UI_PRECHECKS = [
   ['scripts/check-tenant-env-guard.mjs', ['--enforce', '--root', 'src']],
   ['scripts/check-app-port-binding.mjs', []],

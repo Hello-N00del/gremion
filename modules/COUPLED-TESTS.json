@@ -1,4 +1,13 @@
 {
-  "comment": "Tests of the in-tree modules that read or import trees the kernel does not hold. Each is excluded from `pnpm --filter ./modules/<id> test` via `node scripts/check-module-source-scan.mjs --coupled-excludes <id>`, and is the scan's only allowance for a non-Dockerfile coupling — per finding: \"allows\" lists the exact targets (repo-relative paths; a directory covers what is under it; '.' is the repository root itself) the file may reach. The list fails on a missing reason or owner, a nonexistent path, or an entry the scan finds no coupling in (stale). Currently empty: the two StuRaOS-only tests it held (publishing deploy-drift, votes aggregator-parity) were removed from the kernel copy by R29-KHYG2-K (see modules/EXTRACTION-DELTA.json), so every module's unit `test` script collects all its files.",
-  "entries": []
+  "comment": "Tests of the in-tree modules that read or import trees the kernel does not hold. Each is excluded from `pnpm --filter ./modules/<id> test` via `node scripts/check-module-source-scan.mjs --coupled-excludes <id>`, and is the scan's only allowance for a non-Dockerfile coupling — per finding: \"allows\" lists the exact targets (repo-relative paths; a directory covers what is under it; '.' is the repository root itself) the file may reach. The list fails on a missing reason or owner, a nonexistent path, or an entry the scan finds no coupling in (stale). The one entry is the elections notice-keys test, which ties the host catalogue wording to the module's notice.ts. The two StuRaOS-only tests it once held (publishing deploy-drift, votes aggregator-parity) were removed from the kernel copy by R29-KHYG2-K (see modules/EXTRACTION-DELTA.json).",
+  "entries": [
+    {
+      "path": "modules/elections/test/notice-keys.test.ts",
+      "reason": "PRD-ELE-002: the elections.notice.* catalogue keys live in the host app's i18n catalogue (gremion-ui/src/lib/i18n/messages/{de,en}.json); the app half cannot import the module's src, so this test is the only tie between the catalogue wording and src/notice/notice.ts. It reads the two catalogue files by path, nothing else outside the module. Not excluded from the package run (the kernel tree carries gremion-ui); a standalone module checkout must supply the catalogue or exclude it via --coupled-excludes.",
+      "owner": "TASK-058",
+      "allows": [
+        "gremion-ui/src/lib/i18n/messages"
+      ]
+    }
+  ]
 }

@@ -274,7 +274,9 @@ export class KeycloakAdminClient {
   }
 
   async listUserRoles(id: string): Promise<readonly KcRole[]> {
-    return this.request<KcRole[]>('GET', `/users/${seg(id)}/role-mappings/realm`)
+    // /composite: EFFECTIVE realm roles (direct + composite + group-inherited), so
+    // the member-status rank check sees roles granted through groups/composites.
+    return this.request<KcRole[]>('GET', `/users/${seg(id)}/role-mappings/realm/composite`)
   }
 
   async assignRoles(userId: string, roles: readonly KcRole[]): Promise<void> {

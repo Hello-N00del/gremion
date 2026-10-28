@@ -654,6 +654,24 @@ lint-module-migration-names:
 	 echo "[module-migration-names] suite: $$collected of $$declared declared test(s) ran"
 	@node scripts/check-module-migration-names.mjs
 
+# Every COPY/ADD source in a modules/**/Dockerfile must exist in this repository: the nine
+# leaf Dockerfiles once COPYed StuRa-only services/<svc> and upstream/gremion/packages/ports
+# paths, so no leaf image built from a kernel-only checkout and nothing noticed.
+.PHONY: lint-module-dockerfile-copy
+lint-module-dockerfile-copy:
+	@echo "Checking module Dockerfile COPY sources exist..."
+	@declared=$$(grep -c '^test(' scripts/check-module-dockerfile-copy.test.mjs); \
+	 out=$$(node --test --test-reporter=tap scripts/check-module-dockerfile-copy.test.mjs 2>&1); \
+	 status=$$?; \
+	 [ "$$status" -eq 0 ] || { printf '%s\n' "$$out" >&2; exit "$$status"; }; \
+	 collected=$$(printf '%s\n' "$$out" | tr -d '\r' | sed -n 's/^1\.\.\([0-9][0-9]*\)$$/\1/p' | tail -n1); \
+	 if [ "$$declared" -lt 1 ] || [ "$$collected" != "$$declared" ]; then \
+	   echo "lint-module-dockerfile-copy: scripts/check-module-dockerfile-copy.test.mjs declares $$declared test(s) but node ran '$$collected'." >&2; \
+	   exit 1; \
+	 fi; \
+	 echo "[module-dockerfile-copy] suite: $$collected of $$declared declared test(s) ran"
+	@node scripts/check-module-dockerfile-copy.mjs
+
 # TASK-029 (TRD-344, grant G4): the migration register. Every *.sql is in
 # exactly one database chain of scripts/migrations/ranges.json or a declared
 # non-migration; each chain is padded, in numeric order, gap-free above its
@@ -744,7 +762,7 @@ lint-image-digests:
 	@node scripts/release/check-image-digests.mjs
 	@node scripts/release/check-image-digests.mjs --render
 
-lint: lint-sh lint-yaml lint-json lint-compose lint-compose-latest lint-pooled-stack lint-hygiene lint-tom-annex lint-cve-floors lint-nats-nruns lint-packages lint-port-back lint-postgres-major lint-extraction-source lint-unshipped-migrations lint-compliance lint-tenant-db-access lint-edge-host lint-module-scan lint-module-migration-names lint-migration-register lint-image-digests lint-synapse
+lint: lint-sh lint-yaml lint-json lint-compose lint-compose-latest lint-pooled-stack lint-hygiene lint-tom-annex lint-cve-floors lint-nats-nruns lint-packages lint-port-back lint-postgres-major lint-extraction-source lint-unshipped-migrations lint-compliance lint-tenant-db-access lint-edge-host lint-module-scan lint-module-migration-names lint-module-dockerfile-copy lint-migration-register lint-image-digests lint-synapse
 	@echo "All linters passed."
 
 # ── Local gate (TASK-045, TRD-444/341) ──────────────────────────────────────

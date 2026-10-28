@@ -28,7 +28,7 @@ describe('the request kinds', () => {
     expect([...REQUEST_KINDS].sort()).toEqual(
       ['create', 'disable_module', 'enable_module', 'import_isolation', 'import_members', 'reconcile', 'record_dpia', 'resume', 'seed_vertical', 'suspend'].sort(),
     )
-    expect([...HANDLED_KINDS]).toEqual(['create', 'import_members', 'seed_vertical'])
+    expect([...HANDLED_KINDS]).toEqual(['create', 'suspend', 'resume', 'import_members', 'seed_vertical'])
     expect(KIND_OWNER.import_members).toBe('TASK-031')
     expect(KIND_OWNER.seed_vertical).toBe('TASK-031')
     expect(KIND_OWNER.record_dpia).toBe('TASK-044')
@@ -38,7 +38,7 @@ describe('the request kinds', () => {
   it.each([
     ['record_dpia', 'no handler (TASK-044)'],
     ['import_isolation', 'no handler (TASK-044)'],
-    ['suspend', 'no handler (TASK-043d-2)'],
+    ['reconcile', 'no handler (TASK-043d-2)'],
   ])('%s is refused: %s', (kind, reason) => {
     expect(verify(env({ kind, args: {} }))).toEqual({ verdict: 'refused', reason })
   })
@@ -161,5 +161,21 @@ describe('seed_vertical args (TASK-031)', () => {
     expect(seed({ slug: 'other', vertical: 'demo' })).toMatchObject({ verdict: 'refused' })
     expect(seed({ slug: 'musterstadt', vertical: 'Demo!' })).toMatchObject({ verdict: 'refused' })
     expect(seed({ slug: 'musterstadt', vertical: 'demo', force: true })).toMatchObject({ verdict: 'refused' })
+  })
+})
+
+describe('suspend and resume args (TRD-044)', () => {
+  it.each(['suspend', 'resume'])('%s: the request customer only, nothing else', (kind) => {
+    const v = (args: unknown, slug = 'musterstadt') => verify(env({ kind, customerSlug: slug, args }))
+    expect(v({ slug: 'musterstadt' })).toEqual({ verdict: 'ok', args: { slug: 'musterstadt' } })
+    expect(v({ slug: 'other' })).toMatchObject({ verdict: 'refused', reason: expect.stringMatching(/not the request's slug/) })
+    expect(v({})).toMatchObject({ verdict: 'refused' })
+    expect(v(null)).toMatchObject({ verdict: 'refused', reason: expect.stringMatching(/must be an object/) })
+    expect(v([])).toMatchObject({ verdict: 'refused' })
+    expect(v({ slug: 'musterstadt', wipe: true })).toMatchObject({ verdict: 'refused', reason: expect.stringMatching(/unknown field wipe/) })
+  })
+  it('KIND_OWNER names TRD-044', () => {
+    expect(KIND_OWNER.suspend).toBe('TRD-044')
+    expect(KIND_OWNER.resume).toBe('TRD-044')
   })
 })

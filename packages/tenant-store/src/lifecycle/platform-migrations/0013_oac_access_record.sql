@@ -51,6 +51,8 @@
 -- ensurePanelRequester / ensureExecutorRole / ensureAccessReader
 -- (@gremion/provisioning pg.ts), as for the plt functions.
 
+SET LOCAL lock_timeout = '5s';
+
 CREATE SCHEMA IF NOT EXISTS oac;
 
 CREATE FUNCTION oac.refuse_update() RETURNS trigger

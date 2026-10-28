@@ -132,6 +132,51 @@
   let compSaving = $state(false)
   let compSaved = $state(false)
   let compErr = $state('')
+  // TRD-162: record of processing activities. `vvtOverrides` is the per-module
+  // admin override map (a one-time snapshot like compVals); inputs show the
+  // effective value and writing one creates/updates that module's override.
+  type VvtActivity = {
+    moduleId: string
+    activity: string
+    purpose: string
+    dataCategories: string[]
+    retention: string
+    overridden: boolean
+  }
+  type VvtOverride = { purpose?: string; data_categories?: string[]; retention?: string }
+  let vvtActivities = $state<VvtActivity[]>(untrack(() => (data.verarbeitungsverzeichnis?.activities ?? []) as VvtActivity[]))
+  let vvtDoc = $state(untrack(() => data.verarbeitungsverzeichnis?.document ?? ''))
+  let vvtOverrides = $state<Record<string, VvtOverride>>({
+    ...untrack(() => (data.config?.compliance?.processing_overrides ?? {}) as Record<string, VvtOverride>),
+  })
+  let vvtSaving = $state(false)
+  let vvtSaved = $state(false)
+  let vvtErr = $state('')
+  function vvtSet(id: string, patch: VvtOverride) {
+    vvtOverrides[id] = { ...vvtOverrides[id], ...patch }
+  }
+  async function saveVvt() {
+    vvtSaving = true
+    vvtSaved = false
+    vvtErr = ''
+    try {
+      const res = await fetch('/api/settings/verarbeitungsverzeichnis', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ overrides: vvtOverrides }),
+      })
+      const body = await res.json()
+      if (!res.ok) vvtErr = body.error ?? 'Fehler beim Speichern'
+      else {
+        vvtDoc = body.data.document
+        vvtActivities = body.data.activities
+        vvtSaved = true
+      }
+    } finally {
+      vvtSaving = false
+    }
+  }
+
   async function saveCompliance() {
     compSaving = true
     compSaved = false
@@ -291,6 +336,64 @@
             <pre class="whitespace-pre-wrap text-xs font-mono leading-relaxed text-ink/80 overflow-auto max-h-96">{compDoc}</pre>
           </div>
         </div>
+        {#if data.verarbeitungsverzeichnis}
+          <div class="space-y-4 mt-8">
+            <h3 class="text-sm font-semibold text-ink-muted uppercase tracking-wide">Verzeichnis von Verarbeitungstätigkeiten</h3>
+            <p class="text-sm text-ink-muted">
+              Vorbefüllt aus den aktivierten Modulen und bei jeder Änderung der Modulauswahl neu erzeugt. Eigene
+              Anpassungen bleiben erhalten.
+            </p>
+            {#each vvtActivities as a (a.moduleId)}
+              <div class="space-y-2 rounded-md border p-3">
+                <div class="text-sm font-medium">{a.activity}{a.overridden ? ' (angepasst)' : ''}</div>
+                <Label for={`vvt-purpose-${a.moduleId}`}>Zweck</Label>
+                <Input
+                  id={`vvt-purpose-${a.moduleId}`}
+                  value={vvtOverrides[a.moduleId]?.purpose ?? a.purpose}
+                  oninput={(e) => vvtSet(a.moduleId, { purpose: e.currentTarget.value })}
+                />
+                <Label for={`vvt-cats-${a.moduleId}`}>Datenkategorien (eine pro Zeile)</Label>
+                <textarea
+                  id={`vvt-cats-${a.moduleId}`}
+                  rows={3}
+                  class="w-full rounded-md border bg-paper px-3 py-2 text-sm focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-accent"
+                  value={(vvtOverrides[a.moduleId]?.data_categories ?? a.dataCategories).join('\n')}
+                  oninput={(e) =>
+                    vvtSet(a.moduleId, {
+                      data_categories: e.currentTarget.value.split('\n').map((x) => x.trim()).filter(Boolean),
+                    })}
+                ></textarea>
+                <Label for={`vvt-ret-${a.moduleId}`}>Löschfrist</Label>
+                <Input
+                  id={`vvt-ret-${a.moduleId}`}
+                  value={vvtOverrides[a.moduleId]?.retention ?? a.retention}
+                  oninput={(e) => vvtSet(a.moduleId, { retention: e.currentTarget.value })}
+                />
+                {#if vvtOverrides[a.moduleId]}
+                  <button
+                    type="button"
+                    class="text-xs text-accent hover:underline"
+                    onclick={() => {
+                      const { [a.moduleId]: _drop, ...rest } = vvtOverrides
+                      vvtOverrides = rest
+                    }}
+                  >
+                    Auf Vorgabe zurücksetzen
+                  </button>
+                {/if}
+              </div>
+            {/each}
+            {#if vvtErr}<p class="text-sm text-rust">{vvtErr}</p>{/if}
+            {#if vvtSaved}<p class="text-sm text-green-600">Gespeichert und Verzeichnis aktualisiert.</p>{/if}
+            <div class="flex items-center gap-3">
+              <Button onclick={saveVvt} disabled={vvtSaving}>{vvtSaving ? 'Speichern…' : 'Verzeichnis speichern'}</Button>
+              <a href="/settings/compliance/verzeichnis-print" target="_blank" rel="noopener" class="text-sm text-accent hover:underline">
+                Verzeichnis drucken →
+              </a>
+            </div>
+            <pre class="whitespace-pre-wrap text-xs font-mono leading-relaxed text-ink/80 overflow-auto max-h-96">{vvtDoc}</pre>
+          </div>
+        {/if}
       {:else if activeKey === 'sicherungen' && data.config}
         <TabBackups backups={data.config.backups} />
       {:else if activeKey === 'loeschfristen' && data.config}

@@ -6,6 +6,7 @@
 // gate's pre-flight refuses before any write.
 import { describe, expect, it } from 'vitest'
 import {
+  activateBySlug,
   createPhaseA,
   createPhaseB,
   enableCustomerModule,
@@ -241,6 +242,72 @@ describe('create (phases A, host, B)', () => {
   })
 })
 
+describe('create-harden H3: activation is the host last step', () => {
+  async function toPhaseB(w: ReturnType<typeof world>, d: ReturnType<typeof deps>, s: CreateSpec) {
+    const a = await createPhaseA(s, d)
+    hostStamp(w, a.customer)
+    await recordHostStep(s.slug, 'mail_principal_issued', s.operatorId, d)
+  }
+
+  it('a deferred phase B leaves the customer provisioning; activate then makes it active', async () => {
+    const w = world()
+    const d = deps(w)
+    const s = spec({ deferActivation: true })
+    await toPhaseB(w, d, s)
+    const b = await createPhaseB(s, d)
+    expect(b.activated).toBe(false)
+    expect(w.control.get('musterstadt')?.status).toBe('provisioning')
+    const r = await activateBySlug('musterstadt', d)
+    expect(r.activated).toBe(true)
+    expect(w.control.get('musterstadt')?.status).toBe('active')
+  })
+
+  it('activate on an already active customer is a no-op (already active)', async () => {
+    const w = world()
+    const d = deps(w)
+    await createAll(w, d)
+    const before = w.mutations.length
+    const r = await activateBySlug('musterstadt', d)
+    expect(r.activated).toBe(false)
+    expect(w.mutations.length).toBe(before)
+  })
+
+  it('activate with an incomplete ledger is refused and the customer stays provisioning', async () => {
+    const w = world()
+    const d = deps(w)
+    await createPhaseA(spec(), d)
+    await expect(activateBySlug('musterstadt', d)).rejects.toMatchObject({ code: 'STEP_OUT_OF_ORDER' })
+    expect(w.control.get('musterstadt')?.status).toBe('provisioning')
+  })
+
+  it('activate of an unknown customer is NOT_FOUND', async () => {
+    await expect(activateBySlug('nobody', deps(world()))).rejects.toMatchObject({ code: 'NOT_FOUND' })
+  })
+})
+
+describe('create-harden MED-2: a crash between registerTenant and addTenantDomain', () => {
+  it('a re-run binds the missing primary host and completes (the slug is not burned)', async () => {
+    const w = world()
+    const d = deps(w)
+    w.knobs.crashAfterRegister = true
+    await expect(createPhaseA(spec(), d)).rejects.toThrow(/crash between/)
+    expect(w.control.get('musterstadt')?.host).toBeNull()
+    const { b } = await createAll(w, d)
+    expect(w.control.get('musterstadt')?.host).toBe('rat.musterstadt.example')
+    expect(w.control.get('musterstadt')?.status).toBe('active')
+    expect(b.activated).toBe(true)
+    expect(w.mutations.filter((x) => x === 'control:bind-host musterstadt')).toHaveLength(1)
+  })
+
+  it('a row that already has its host is not re-bound', async () => {
+    const w = world()
+    const d = deps(w)
+    await createAll(w, d)
+    await createPhaseA(spec(), d)
+    expect(w.mutations.filter((x) => x.startsWith('control:bind-host'))).toHaveLength(0)
+  })
+})
+
 describe('TASK-044: the gate in create (lane note D2: pre-flight before any write)', () => {
   it('a module the request carries no DPIA decision for refuses NO_DPIA_DECISION before phase A writes anything', async () => {
     const w = world()
@@ -381,7 +448,8 @@ describe('suspend and resume (TDD 14, unit half)', () => {
     expect(w.realms.get('musterstadt')!.notBefore).toBeGreaterThan(0)
     w.mutations.length = 0
     expect((await suspendCustomer('musterstadt', d)).changed).toBe(false)
-    expect(w.mutations).toEqual([])
+    // the realm disable + logout-all is asserted again on every suspend: a rerun after a failed logout converges
+    expect(w.mutations).toEqual(['kc:enabled musterstadt=false'])
     // the second customer is untouched
     expect(w.control.get('zweitstadt')!.status).toBe('active')
     expect(w.realms.get('zweitstadt')!.enabled).toBe(true)

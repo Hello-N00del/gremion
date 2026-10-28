@@ -5,12 +5,12 @@ import { REPO_ROOT, RESERVED_LABELS, deps, isReservedHost, APEX } from './helper
 import { renderTenantRouter } from '../src/render.js'
 
 // Q3: the package takes isReservedHost as a PARAMETER and never imports
-// gremion-ui. The nine reserved names are pinned here as a fixture and
+// gremion-ui or tenancy-core (the owner since TASK-077 G6). The nine reserved names are pinned here as a fixture and
 // cross-checked, as TEXT, against the module that owns them and the operator's
 // RESERVED_HOSTS line, so a label added there and not here fails this suite.
 
 function uiLabels(): string[] {
-  const src = readFileSync(join(REPO_ROOT, 'gremion-ui', 'src', 'lib', 'server', 'tenant', 'reserved-hosts.ts'), 'utf8')
+  const src = readFileSync(join(REPO_ROOT, 'packages', 'tenancy-core', 'src', 'reserved-hosts.ts'), 'utf8')
   const m = /RESERVED_PLATFORM_LABELS[^=]*=\s*Object\.freeze\(\[([\s\S]*?)\]\)/.exec(src)
   expect(m, 'RESERVED_PLATFORM_LABELS literal found in reserved-hosts.ts').not.toBeNull()
   return [...m![1]!.matchAll(/'([^']+)'/g)].map((x) => x[1]!)
@@ -29,7 +29,7 @@ describe('reserved labels (Q3)', () => {
     expect(new Set(RESERVED_LABELS).size).toBe(8)
   })
 
-  it('equals gremion-ui RESERVED_PLATFORM_LABELS, in order', () => {
+  it('equals tenancy-core RESERVED_PLATFORM_LABELS (the owner), in order', () => {
     expect(uiLabels()).toEqual(RESERVED_LABELS)
   })
 
