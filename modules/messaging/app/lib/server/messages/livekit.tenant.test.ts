@@ -33,6 +33,10 @@ interface MintRecord {
   identity?: string
   grant?: Record<string, unknown>
 }
+const aliasMock = vi.hoisted(() => vi.fn())
+vi.mock('./matrix-client', () => ({
+  getMatrixClient: () => ({ getRoomIdByAlias: aliasMock }),
+}))
 const minted = vi.hoisted(() => [] as MintRecord[])
 
 vi.mock('livekit-server-sdk', () => ({
@@ -268,5 +272,21 @@ describe('handleSfuRequest — per-tenant validate + membership gate + namespace
       ),
     ).rejects.toThrow(/not a member/)
     expect(minted).toHaveLength(0)
+  })
+
+  it('ALIAS: the LiveKit room is derived from the RESOLVED room id the membership check ran on, not the alias text', async () => {
+    // The caller is a member of !mine, but names an alias whose localpart is the
+    // LiveKit room of someone else's call. The grant must pin the resolved id's room.
+    aliasMock.mockResolvedValue('!mine:muni.example.org')
+    stubFetch({ sub: '@user:muni.example.org', members: ['@user:muni.example.org'] })
+
+    await runWithTenant(MUNI_CTX, () =>
+      handleSfuRequest({
+        room: '#stura-room-victim:muni.example.org',
+        openid_token: { access_token: 'tok', token_type: 'Bearer' },
+      }),
+    )
+
+    expect(minted[0].grant).toMatchObject({ room: 't.muni.stura-room-mine' })
   })
 })
