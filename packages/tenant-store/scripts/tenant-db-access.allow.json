@@ -478,7 +478,7 @@
       "imports": 1,
       "adoptedBy": "TASK-091",
       "since": "2026-10-28",
-      "reason": "TRD-149/150/151 export verb: READ-ONLY repeatable-read pools, as the kernel/module server admin credential the tenant-create one-shot already holds, on the tenant's kernel and enabled module databases (openTenantDb addresses a runtime role, not the admin url); the SQL lives in @gremion/tenant-store/export; retires when tenant-create resolves targets through the package"
+      "reason": "TRD-149/150/151 export verb: the kernel/module server admin credential the tenant-create one-shot already holds, used ONLY on each server's maintenance database to assert the export reader (ensureExportReader, NOSUPERUSER + pg_read_all_data, fresh password, cleared after); the tenant's kernel and enabled module databases are then read in READ-ONLY repeatable-read pools AS that reader, never as the admin (openTenantDb addresses a runtime role, not these); the SQL lives in @gremion/tenant-store/export; retires when tenant-create resolves targets through the package"
     },
     {
       "path": "packages/provisioning/test/integration/scratch.ts",

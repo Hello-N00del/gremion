@@ -89,7 +89,7 @@ export async function exportVerb(verb: string, ctx: ExportVerbContext): Promise<
     for (const p of plan) byServer.set(p.adminUrl, [...(byServer.get(p.adminUrl) ?? []), p.db])
     const creds = new Map<string, { user: string; password: string }>()
     for (const [adminUrl, dbs] of byServer) {
-      const admin = postgres(adminUrl, { max: 1, onnotice: () => {}, connect_timeout: 15 }) as postgres.Sql
+      const admin = connect(adminUrl)
       admins.set(adminUrl, admin)
       creds.set(adminUrl, await ensureExportReader(admin as ExportModule['sql'] & object, { databases: dbs }))
     }
@@ -134,10 +134,9 @@ export async function exportVerb(verb: string, ctx: ExportVerbContext): Promise<
       process.exitCode = 1
     }
   } finally {
-    await Promise.all([platform, ...open].map((s) => s.end({ timeout: 5 }).catch(() => undefined)))
     for (const admin of admins.values()) {
       await retireExportReader(admin as ExportModule['sql'] & object).catch((err: unknown) => console.error(`export reader password not cleared: ${(err as Error).message}`))
-      await admin.end({ timeout: 5 }).catch(() => undefined)
     }
+    await Promise.all([platform, ...open].map((s) => s.end({ timeout: 5 }).catch(() => undefined)))
   }
 }
