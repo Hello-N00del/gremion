@@ -168,6 +168,70 @@ describe('trust boundary: the table owner is a NOLOGIN role', () => {
     expect((await pa`SELECT 1 FROM oac.access_record WHERE access_id = ${id}::uuid`).length).toBe(1)
   })
 
+  // r33f CRITICAL: the SECURITY DEFINER functions used to call
+  // plt.provisioning_member_of, which the PLATFORM OWNER owns and may redefine;
+  // its body then ran as oac_owner. Nothing the oac functions call may be
+  // redefinable by another role, and oac_owner holds nothing outside oac.
+  it('oac_owner holds no privilege and owns nothing outside schema oac', async () => {
+    const rows = await pa<{ what: string }[]>`
+      WITH o AS (SELECT 'oac_owner'::regrole::oid AS id, 'oac'::regnamespace::oid AS nsp)
+      SELECT 'schema ' || n.nspname AS what FROM pg_namespace n, o, aclexplode(n.nspacl) a WHERE a.grantee = o.id AND n.oid <> o.nsp
+      UNION ALL SELECT 'relation ' || c.oid::regclass::text FROM pg_class c, o, aclexplode(c.relacl) a WHERE a.grantee = o.id AND c.relnamespace <> o.nsp
+      UNION ALL SELECT 'function ' || p.oid::regprocedure::text FROM pg_proc p, o, aclexplode(p.proacl) a WHERE a.grantee = o.id AND p.pronamespace <> o.nsp
+      UNION ALL SELECT 'database ' || d.datname FROM pg_database d, o, aclexplode(d.datacl) a WHERE a.grantee = o.id
+      UNION ALL SELECT 'owned relation ' || c.oid::regclass::text FROM pg_class c, o WHERE c.relowner = o.id AND c.relnamespace NOT IN (o.nsp, 'pg_toast'::regnamespace)
+      UNION ALL SELECT 'owned function ' || p.oid::regprocedure::text FROM pg_proc p, o WHERE p.proowner = o.id AND p.pronamespace <> o.nsp
+      UNION ALL SELECT 'member of ' || pg_get_userbyid(m.roleid) FROM pg_auth_members m, o WHERE m.member = o.id`
+    expect(rows.map((x) => x.what)).toEqual([])
+  })
+
+  it('no oac SECURITY DEFINER function calls a function outside pg_catalog and oac', async () => {
+    const rows = await pa<{ fn: string; callee: string }[]>`
+      SELECT p.oid::regprocedure::text AS fn, d.refobjid::regprocedure::text AS callee
+        FROM pg_proc p JOIN pg_depend d ON d.classid = 'pg_proc'::regclass AND d.objid = p.oid AND d.refclassid = 'pg_proc'::regclass
+        JOIN pg_proc q ON q.oid = d.refobjid
+       WHERE p.pronamespace = 'oac'::regnamespace AND q.pronamespace NOT IN ('pg_catalog'::regnamespace, 'oac'::regnamespace)`
+    expect(rows).toEqual([])
+    const src = await pa<{ fn: string }[]>`
+      SELECT p.oid::regprocedure::text AS fn FROM pg_proc p
+       WHERE p.pronamespace = 'oac'::regnamespace AND p.prosrc ~ ${String.raw`\mplt\.`}`
+    expect(src).toEqual([])
+  })
+
+  it('the platform owner replacing plt.provisioning_member_of gains nothing: the triggers stay on, no table privilege', async () => {
+    const original = (await pa<{ def: string }[]>`SELECT pg_get_functiondef('plt.provisioning_member_of(text)'::regprocedure) AS def`)[0]!.def
+    const owner = (await r.owner<{ u: string }[]>`SELECT current_user AS u`)[0]!.u
+    try {
+      // The attack of the r33f finding: a VOLATILE plpgsql body that, if it ever
+      // runs as oac_owner, disables the triggers and hands the table over.
+      await r.owner.unsafe(`CREATE OR REPLACE FUNCTION plt.provisioning_member_of(p_marker text) RETURNS boolean
+        LANGUAGE plpgsql VOLATILE SET search_path = pg_catalog, pg_temp AS $body$
+        BEGIN
+          IF current_user = 'oac_owner' THEN
+            EXECUTE 'ALTER TABLE oac.access_record DISABLE TRIGGER USER';
+            EXECUTE format('GRANT ALL ON oac.access_record TO %I', '${owner}');
+          END IF;
+          RETURN EXISTS (SELECT 1 FROM pg_catalog.pg_auth_members m JOIN pg_catalog.pg_roles x ON x.oid = m.roleid
+                           JOIN pg_catalog.pg_roles u ON u.oid = m.member WHERE x.rolname = p_marker AND u.rolname = session_user);
+        END
+        $body$`)
+      await rec(r.panel, 'iota-rat')
+      await r.executor`SELECT oac.purge_access_records(interval '27 days')`
+      const trg = await pa<{ name: string; on: string }[]>`
+        SELECT tgname AS name, tgenabled::text AS on FROM pg_trigger WHERE tgrelid = 'oac.access_record'::regclass AND NOT tgisinternal ORDER BY tgname`
+      expect(trg).toHaveLength(4)
+      expect(trg.filter((t) => t.on !== 'O')).toEqual([])
+      const [p] = await pa<{ any: boolean }[]>`
+        SELECT has_table_privilege(${owner}, 'oac.access_record', 'SELECT, INSERT, UPDATE, DELETE, TRUNCATE') AS any`
+      expect(p!.any).toBe(false)
+      expect((await failure(r.owner`DELETE FROM oac.access_record WHERE customer_slug = 'iota-rat'`))?.code).toBe('42501')
+    } finally {
+      await pa.unsafe(original)
+      await pa.unsafe(`ALTER TABLE oac.access_record ENABLE TRIGGER USER`)
+      await pa.unsafe(`REVOKE ALL ON oac.access_record FROM ${owner}`)
+    }
+  })
+
   it('an INSERT that does not come through oac.record_access is refused, even as the table owner', async () => {
     const f = await failure(asTableOwner((tx) => tx.unsafe(
       "INSERT INTO oac.access_record (customer_slug, origin, actor, action, what, why, at) VALUES ('zeta-rat', 'host', 'deploy', 'x_y', 'abc', 'forged line here', now() - interval '30 days')")))

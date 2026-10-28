@@ -329,10 +329,13 @@ export interface AccessOwnerDeps {
 /**
  * Makes oac_owner (NOLOGIN, no members, nobody logs in as it) the owner of schema
  * oac, oac.access_record and every oac function (migration 0013 created them as
- * the platform owner, which has no CREATEROLE), and lets its SECURITY DEFINER
- * functions reach the marker lookup. After this the platform owner cannot DISABLE
- * TRIGGER, INSERT, DELETE or DROP in oac. Idempotent; run by bootstrapPlatform
- * after every migratePlatform. A superuser still bypasses it (documented in 0013).
+ * the platform owner, which has no CREATEROLE). After this the platform owner
+ * cannot DISABLE TRIGGER, INSERT, DELETE or DROP in oac. oac_owner holds NO
+ * privilege outside schema oac: its SECURITY DEFINER functions call only
+ * pg_catalog and oac's own functions (oac.member_of), never one another role
+ * owns and could redefine to run as oac_owner (r33f CRITICAL). Idempotent; run
+ * by bootstrapPlatform after every migratePlatform. A superuser still bypasses
+ * it (documented in 0013).
  */
 export async function ensureAccessOwner(d: AccessOwnerDeps): Promise<{ created: boolean }> {
   const role = ACCESS_OWNER_ROLE
@@ -348,9 +351,23 @@ export async function ensureAccessOwner(d: AccessOwnerDeps): Promise<{ created: 
     const fns = await sql<{ sig: string }[]>`SELECT p.oid::regprocedure::text AS sig FROM pg_proc p WHERE p.pronamespace = 'oac'::regnamespace`
     const q = await quoteIdent(sql, role)
     for (const f of fns) await sql.unsafe(`ALTER FUNCTION ${f.sig} OWNER TO ${q}`)
-    // record_access / purge_access_records ask plt.provisioning_member_of about the SESSION user
-    await execFmt(sql, 'GRANT USAGE ON SCHEMA %I TO %I', ['plt', role])
-    await sql.unsafe(`GRANT EXECUTE ON FUNCTION plt.provisioning_member_of(text) TO ${q}`)
+    // An earlier build granted oac_owner the plt marker lookup; take it back.
+    const [plt] = await sql<{ ok: boolean }[]>`SELECT to_regnamespace('plt') IS NOT NULL AS ok`
+    if (plt?.ok) {
+      await execFmt(sql, 'REVOKE ALL ON SCHEMA %I FROM %I', ['plt', role])
+      await execFmt(sql, 'REVOKE ALL ON ALL FUNCTIONS IN SCHEMA %I FROM %I', ['plt', role])
+    }
+    const outside = await sql<{ what: string }[]>`
+      WITH o AS (SELECT ${role}::regrole::oid AS id, 'oac'::regnamespace::oid AS nsp)
+      SELECT 'schema ' || n.nspname AS what FROM pg_namespace n, o, aclexplode(n.nspacl) a WHERE a.grantee = o.id AND n.oid <> o.nsp
+      UNION ALL SELECT 'relation ' || c.oid::regclass::text FROM pg_class c, o, aclexplode(c.relacl) a WHERE a.grantee = o.id AND c.relnamespace <> o.nsp
+      UNION ALL SELECT 'function ' || p.oid::regprocedure::text FROM pg_proc p, o, aclexplode(p.proacl) a WHERE a.grantee = o.id AND p.pronamespace <> o.nsp
+      UNION ALL SELECT 'database ' || d.datname FROM pg_database d, o, aclexplode(d.datacl) a WHERE a.grantee = o.id
+      UNION ALL SELECT 'owned relation ' || c.oid::regclass::text FROM pg_class c, o WHERE c.relowner = o.id AND c.relnamespace NOT IN (o.nsp, 'pg_toast'::regnamespace)
+      UNION ALL SELECT 'owned function ' || p.oid::regprocedure::text FROM pg_proc p, o WHERE p.proowner = o.id AND p.pronamespace <> o.nsp
+      UNION ALL SELECT 'member of ' || pg_get_userbyid(m.roleid) FROM pg_auth_members m, o WHERE m.member = o.id
+      UNION ALL SELECT 'oac function calling plt: ' || p.oid::regprocedure::text FROM pg_proc p, o WHERE p.pronamespace = o.nsp AND p.prosrc ~ ${String.raw`\mplt\.`}`
+    if (outside.length) throw new ProvisioningError('POSTCONDITION', `${role} reaches outside schema oac: ${outside.map((x) => x.what).join(', ')}`)
     const bad = await sql<{ what: string; owner: string }[]>`
       SELECT 'schema oac' AS what, pg_get_userbyid(nspowner) AS owner FROM pg_namespace WHERE nspname = 'oac' AND nspowner <> ${role}::regrole
       UNION ALL SELECT 'table oac.access_record', pg_get_userbyid(relowner) FROM pg_class WHERE oid = 'oac.access_record'::regclass AND relowner <> ${role}::regrole
