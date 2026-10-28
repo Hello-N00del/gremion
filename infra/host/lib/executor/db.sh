@@ -62,11 +62,17 @@ sql_jsonb_literal() {
 
 # platform_sql <role> <sql> [-v name=value ...] — tuples only, unaligned,
 # fields separated by '|'; any SQL error is a non-zero exit (ON_ERROR_STOP).
+# PLATFORM_SQL_TIMEOUT (seconds; gremion-executor sets it) bounds the call
+# with timeout(1) -- exit 124, never a hang (create-harden H4 MED-3: a wedged
+# docker exec must not stall the lease renewer). --foreground keeps it in
+# the caller's process group, so a kill of the group still reaches it.
 platform_sql() {
     local role="$1" sql="$2" c
     shift 2
     c="$(executor_pg_container)"
-    printf '%s\n' "$sql" | docker exec -i "$c" psql -X -U "$role" -d "$PLATFORM_DB" -tAq -v ON_ERROR_STOP=1 "$@" -f -
+    local -a bound=()
+    [[ -z "${PLATFORM_SQL_TIMEOUT:-}" ]] || bound=(timeout --foreground -k 5 "$PLATFORM_SQL_TIMEOUT")
+    printf '%s\n' "$sql" | ${bound[@]+"${bound[@]}"} docker exec -i "$c" psql -X -U "$role" -d "$PLATFORM_DB" -tAq -v ON_ERROR_STOP=1 "$@" -f -
 }
 
 # executor_sql <sql> [-v ...] — as the executor role.

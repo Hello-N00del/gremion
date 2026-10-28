@@ -59,6 +59,12 @@ ENV
 }
 
 teardown() {
+    # nothing of a test may outlive it: the fake containers, a hung step
+    local f
+    for f in "${GREMION_ROOT}/containers/"* "${GREMION_ROOT}/hang.pid"; do
+        [ -f "$f" ] || continue
+        if [[ "$f" == */hang.pid ]]; then kill -KILL "$(cat "$f")" 2>/dev/null || true; else kill -KILL "${f##*/}" 2>/dev/null || true; fi
+    done
     teardown_host_root
 }
 
@@ -112,7 +118,7 @@ outcome() { cat "${GREMION_ROOT}/outcome" 2>/dev/null || true; }
     run steps
     local want=("psql claim" "tc request-verify ${REQ}" "psql mark-verified" "tc phase-a alpha-rat"
                 "vendor-mail realm-smtp --realm alpha-rat --tenant alpha_rat" "tc record-step alpha-rat"
-                "tc phase-b alpha-rat" "tc render-router alpha-rat" "psql finish succeeded")
+                "tc phase-b alpha-rat" "tc render-router alpha-rat" "tc activate alpha-rat" "psql finish succeeded")
     [ "${#lines[@]}" -eq "${#want[@]}" ] || { echo "$output"; return 1; }
     local i
     for i in "${!want[@]}"; do [ "${lines[$i]}" = "${want[$i]}" ] || { echo "line $i: '${lines[$i]}' want '${want[$i]}'"; echo "$output"; return 1; }; done
@@ -124,10 +130,12 @@ outcome() { cat "${GREMION_ROOT}/outcome" 2>/dev/null || true; }
     assert_present '--body-name Stadtrat' "${GREMION_ROOT}/tc-argv.log"
     # ordered events for each step, the lease renewed at each
     run awk '{print $2}' "${GREMION_ROOT}/events.log"
-    # (`create` carries the handler's own lines before its first step)
-    [[ "$(uniq <<< "$output" | tr '\n' ' ')" == "claim verify create phase-a mail record-step phase-b router " ]] || { cat "${GREMION_ROOT}/events.log"; return 1; }
-    [ "$(grep -c "^renew ${REQ} h1.example$" "${GREMION_ROOT}/renews.log")" -eq 5 ]
-    [[ "$(outcome)" == "create alpha-rat: succeeded (last step router)" ]] || { outcome; return 1; }
+    # (H4 LOW-7: activate and the TRD-440 measurement before and after are
+    # steps of their own)
+    [[ "$(uniq <<< "$output" | tr '\n' ' ')" == "claim verify trd-440 phase-a mail record-step phase-b router activate trd-440 " ]] || { cat "${GREMION_ROOT}/events.log"; return 1; }
+    # 8 step markers + the real renewal before the handler starts (MED-3)
+    [ "$(grep -c "^renew ${REQ} h1.example$" "${GREMION_ROOT}/renews.log")" -eq 9 ]
+    [[ "$(outcome)" == "create alpha-rat: succeeded (last step trd-440)" ]] || { outcome; return 1; }
 }
 
 @test "the tenant config is the brand identity only, 0600, and gone after the run (no host path from the request)" {
@@ -173,7 +181,7 @@ outcome() { cat "${GREMION_ROOT}/outcome" 2>/dev/null || true; }
     [[ "$body" != *vendor_mail* ]] || { echo "customer_create still calls vendor_mail directly"; return 1; }
     [[ "$body" != *mail_principal_issued* ]] || { echo "the record-step moved into the seam"; return 1; }
     assert_present '^mail_step\(\) \{' "${HOST_SRC}/lib/customer-ops.sh"
-    assert_present 'mail_step\(\) \{ executor_step mail' "${HOST_SRC}/bin/gremion-executor"
+    assert_present '^[[:space:]]+executor_step mail$' "${HOST_SRC}/bin/gremion-executor"
 }
 
 @test "mail_step seam: an unknown MAIL_TRANSPORT fails create at the mail step, phase B does not run, no mail principal is issued" {
@@ -269,7 +277,8 @@ outcome() { cat "${GREMION_ROOT}/outcome" 2>/dev/null || true; }
     run "$EXEC" --once
     [ "$status" -eq 1 ] || { echo "status=$status $output"; return 1; }
     grep -q 'TRD-440: the container set moved' "${GREMION_ROOT}/events.log" || { cat "${GREMION_ROOT}/events.log"; return 1; }
-    [[ "$(outcome)" == *"failed in router"* ]]
+    # LOW-7: named for the measurement that failed, not the step before it
+    [[ "$(outcome)" == *"failed in trd-440"* ]] || { outcome; return 1; }
 }
 
 @test "no secret on any recorded argv, and no token: the executor never handles one" {
@@ -361,4 +370,246 @@ big_args() { # <file> <rows>: an import_members args file well over 128 KiB
     [ "$status" -eq 0 ] || { echo "$output"; return 1; }
     [ "$(cat "${GREMION_ROOT}/submitted-args")" = "$(jq -c . "$f")" ]
     ! grep -q 'Neil' "${GREMION_ROOT}/exec-argv.log"
+}
+
+# ---------------------------------------------------------------------------
+# create-harden H4 (a lost lease aborts the handler loudly) and H7 (the event
+# level follows the step's exit status, not only the text "FAIL").
+
+# MED-4: the hung step must have RUN (hang.pid), be DEAD, and NOT have run its
+# sleep to the end (hang-completed): a test that only waited the shim's
+# `sleep 60` out, or whose step never hung, proves nothing.
+handler_killed() {
+    [ -s "${GREMION_ROOT}/hang.pid" ] || { echo "the hung step never ran (no hang.pid)"; return 1; }
+    ! kill -0 "$(cat "${GREMION_ROOT}/hang.pid")" 2>/dev/null || { echo "the hung step survived"; return 1; }
+    [ ! -e "${GREMION_ROOT}/hang-completed" ] || { echo "the hung step ran to completion: nothing killed it"; return 1; }
+}
+# HIGH-1: the labelled container of the hung step ran, and is dead.
+container_killed() {
+    local f n=0
+    for f in "${GREMION_ROOT}/containers/"*; do
+        [ -f "$f" ] || continue
+        n=$((n + 1))
+        ! kill -0 "${f##*/}" 2>/dev/null || { echo "the request's container ${f##*/} survived"; cat "${GREMION_ROOT}/timeline.log"; return 1; }
+    done
+    [ "$n" -ge 1 ] || { echo "no labelled container ran"; return 1; }
+    [ ! -e "${GREMION_ROOT}/container-completed" ] || { echo "the container ran to completion"; return 1; }
+}
+# timeline_confirmed_before <line> <label> -- a `docker kill`, then a
+# `docker ps --filter label=...` that found nothing, both BEFORE <line>.
+timeline_confirmed_before() {
+    awk -v ev="$1" -v want="ps label=$2 -> none" '
+        /^kill ctr-/ { k = 1 }
+        $0 == want && k { c = 1 }
+        $0 == ev { print (c ? "ok" : "unconfirmed"); found = 1; exit }
+        END { if (!found) print "no " ev }' "${GREMION_ROOT}/timeline.log" | grep -qx ok \
+        || { echo "not killed-and-confirmed before '$1':"; cat "${GREMION_ROOT}/timeline.log"; return 1; }
+}
+# fake_container <label> -- a labelled container left behind (a crashed run)
+fake_container() {
+    mkdir -p "${GREMION_ROOT}/containers"
+    setsid bash -c 'printf "%s" "$2" > "$1/containers/$$"; exec sleep 60' _ "$GREMION_ROOT" "$1" < /dev/null > /dev/null 2>&1 3>&- &
+    local i
+    for ((i = 0; i < 50; i++)); do [ -n "$(ls "${GREMION_ROOT}/containers")" ] && return 0; sleep 0.1; done
+    return 1
+}
+wait_for() {   # <file> <tenths>
+    local i
+    for ((i = 0; i < $2; i++)); do [ -e "$1" ] && return 0; sleep 0.1; done
+    return 1
+}
+executor_procs() { pgrep -f "${GREMION_ROOT}/bin/gremion-executor" || true; }
+
+@test "H4: a definitively refused lease renewal aborts the handler (process group killed), records an error event, exits non-zero" {
+    touch "${GREMION_ROOT}/refuse-renew-when-hung" "${GREMION_ROOT}/hang-phase-a"
+    queue create
+    local t0=$SECONDS
+    GREMION_EXECUTOR_RENEW_SECONDS=1 run "$EXEC" --once
+    [ "$status" -ne 0 ] || { echo "$output"; return 1; }
+    (( SECONDS - t0 < 30 )) || { echo "took $((SECONDS - t0)) s: the hang was waited out, not killed"; return 1; }
+    grep -q '^error .*lease' "${GREMION_ROOT}/events.log" || { cat "${GREMION_ROOT}/events.log"; return 1; }
+    assert_present 'lease' "${GREMION_ROOT}/runtime/executor/audit.log"
+    handler_killed
+    run steps
+    [[ "$output" != *"tc phase-b"* && "$output" != *"render-router"* ]] || { echo "$output"; return 1; }
+    [[ "$output" != *"finish succeeded"* ]] || { echo "$output"; return 1; }
+}
+
+@test "H4: the background renewer detects a lease lost DURING a long step (no step marker needed)" {
+    touch "${GREMION_ROOT}/hang-phase-b" "${GREMION_ROOT}/refuse-renew-when-hung"
+    queue create
+    local t0=$SECONDS
+    GREMION_EXECUTOR_RENEW_SECONDS=1 run "$EXEC" --once
+    [ "$status" -ne 0 ] || { echo "$output"; return 1; }
+    (( SECONDS - t0 < 30 )) || { echo "took $((SECONDS - t0)) s: the hang was waited out, not killed"; return 1; }
+    handler_killed
+    grep -q '^error .*lease' "${GREMION_ROOT}/events.log" || { cat "${GREMION_ROOT}/events.log"; return 1; }
+}
+
+@test "H4: renewals that cannot reach the database past the local fence deadline abort the handler (self-fence before the lease can lapse)" {
+    touch "${GREMION_ROOT}/hang-phase-b" "${GREMION_ROOT}/renew-unreachable-when-hung"
+    queue create
+    local t0=$SECONDS
+    GREMION_EXECUTOR_RENEW_SECONDS=1 GREMION_EXECUTOR_FENCE_SECONDS=3 run "$EXEC" --once
+    [ "$status" -ne 0 ] || { echo "$output"; return 1; }
+    (( SECONDS - t0 < 30 )) || { echo "took $((SECONDS - t0)) s: the hang was waited out, not killed"; return 1; }
+    handler_killed
+    assert_present 'fence' "${GREMION_ROOT}/runtime/executor/audit.log"
+}
+
+@test "H4 MED-3: the lease is RENEWED (not assumed) before the handler starts; refused there, nothing runs" {
+    touch "${GREMION_ROOT}/renew-refused"
+    queue create
+    run "$EXEC" --once
+    [ "$status" -ne 0 ] || { echo "$output"; return 1; }
+    run steps
+    [[ "$output" != *"tc phase-a"* ]] || { echo "the handler ran on a refused lease: $output"; return 1; }
+    [[ "$output" != *"finish succeeded"* ]]
+    grep -q '^error .*lease' "${GREMION_ROOT}/events.log" || { cat "${GREMION_ROOT}/events.log"; return 1; }
+}
+
+@test "H4 MED-3: a renewal that never answers is timed out; the fence still fires (monotonic clock, timestamp before the call)" {
+    touch "${GREMION_ROOT}/hang-phase-b" "${GREMION_ROOT}/renew-hangs-when-hung"
+    queue create
+    local t0=$SECONDS
+    GREMION_EXECUTOR_RENEW_SECONDS=1 GREMION_EXECUTOR_FENCE_SECONDS=4 GREMION_EXECUTOR_SQL_TIMEOUT=2 run "$EXEC" --once
+    [ "$status" -ne 0 ] || { echo "$output"; return 1; }
+    (( SECONDS - t0 < 30 )) || { echo "took $((SECONDS - t0)) s"; return 1; }
+    handler_killed
+    assert_present 'fence' "${GREMION_ROOT}/runtime/executor/audit.log"
+    assert_present '/proc/uptime' "${HOST_SRC}/bin/gremion-executor"
+}
+
+@test "H4 HIGH-1: every tenant-create run carries the request's label (the container is findable after its client dies)" {
+    queue create
+    run "$EXEC" --once
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    [ "$(grep -c -- "--label gremion.request=${REQ} " "${GREMION_ROOT}/tc-argv.log")" -eq "$(wc -l < "${GREMION_ROOT}/tc-argv.log")" ] \
+        || { cat "${GREMION_ROOT}/tc-argv.log"; return 1; }
+    # the one-shot runs under an init (PID 1 that forwards TERM to node)
+    awk '/^  tenant-create:$/{f=1; next} f && /^  [a-z]/{exit} f' "${KERNEL_ROOT}/docker-compose.app.yml" | grep -qx '    init: true'
+}
+
+@test "H4 HIGH-1: a lost lease kills the request's CONTAINER too, and confirms it gone before the request is finished" {
+    touch "${GREMION_ROOT}/refuse-renew-when-hung" "${GREMION_ROOT}/hang-phase-a"
+    queue create
+    local t0=$SECONDS
+    GREMION_EXECUTOR_RENEW_SECONDS=1 run "$EXEC" --once
+    [ "$status" -ne 0 ] || { echo "$output"; return 1; }
+    (( SECONDS - t0 < 30 )) || { echo "took $((SECONDS - t0)) s"; return 1; }
+    handler_killed
+    container_killed
+    timeline_confirmed_before "finish failed" "$REQ"
+}
+
+@test "H4 HIGH-1: a container that cannot be confirmed gone: the request is NOT finished (no early retry), loud, non-zero" {
+    touch "${GREMION_ROOT}/refuse-renew-when-hung" "${GREMION_ROOT}/hang-phase-a" "${GREMION_ROOT}/container-unkillable"
+    queue create
+    local t0=$SECONDS
+    GREMION_EXECUTOR_RENEW_SECONDS=1 GREMION_EXECUTOR_CONTAINER_WAIT=2 run "$EXEC" --once
+    [ "$status" -ne 0 ] || { echo "$output"; return 1; }
+    (( SECONDS - t0 < 30 )) || { echo "took $((SECONDS - t0)) s"; return 1; }
+    [[ "$output" == *"still running"* ]] || { echo "$output"; return 1; }
+    run steps
+    [[ "$output" != *"psql finish"* ]] || { echo "finished although its container may still run: $output"; return 1; }
+    assert_present 'still running' "${GREMION_ROOT}/runtime/executor/audit.log"
+}
+
+@test "H4 HIGH-1: --loop kills and confirms gone every labelled container of this host BEFORE it re-queues its orphaned requests" {
+    command -v timeout >/dev/null 2>&1 || skip "timeout(1) is not installed"
+    fake_container "$REQ"
+    GREMION_EXECUTOR_POLL_SECONDS=1 run timeout 6 "$EXEC" --loop
+    container_killed
+    timeline_confirmed_before "requeue-own" '*'
+}
+
+# signal_parent <SIG> <want-status> -- the executor (--once, the REAL host lock)
+# gets <SIG> while phase B hangs: the handler group, the renewer and the
+# container are gone within a bound, the lock is free, the exit is non-zero.
+signal_parent() {
+    rm -f "${SHIM_DIR}/flock"
+    touch "${GREMION_ROOT}/hang-phase-b"
+    queue create
+    set -m
+    GREMION_EXECUTOR_RENEW_SECONDS=1 "$EXEC" --once > "${GREMION_ROOT}/exec.out" 2>&1 3>&- &
+    local pid=$! st=0 i
+    set +m
+    wait_for "${GREMION_ROOT}/hang.pid" 200 || { cat "${GREMION_ROOT}/exec.out"; kill -KILL "$pid"; return 1; }
+    kill "-$1" "$pid"
+    for ((i = 0; i < 300; i++)); do kill -0 "$pid" 2>/dev/null || break; sleep 0.1; done
+    wait "$pid" || st=$?
+    if [ "$2" != any ]; then
+        [ "$st" -eq "$2" ] || { echo "exit $st, want $2"; cat "${GREMION_ROOT}/exec.out"; return 1; }
+    fi
+    # the dead-man renewer (KILL case) works on its own; give it the bound
+    for ((i = 0; i < 300; i++)); do [ -z "$(executor_procs)" ] && break; sleep 0.1; done
+    [ -z "$(executor_procs)" ] || { echo "executor processes left:"; ps -o pid,pgid,args -p "$(executor_procs | paste -sd,)"; return 1; }
+    handler_killed
+    container_killed
+    flock -n "${GREMION_ROOT}/runtime/hostd.lock" true || { echo "runtime/hostd.lock is still held"; return 1; }
+}
+
+@test "H4 HIGH-2: TERM to the executor kills the handler group, the renewer and the container; the lock is free; exit 143" {
+    command -v flock >/dev/null && command -v setsid >/dev/null || skip "flock/setsid absent"
+    signal_parent TERM 143
+    assert_present 'signal' "${GREMION_ROOT}/runtime/executor/audit.log"
+}
+
+@test "H4 HIGH-2: Ctrl-C (INT) on --once reaches the handler again (its own process group): all gone, exit 130" {
+    command -v flock >/dev/null && command -v setsid >/dev/null || skip "flock/setsid absent"
+    signal_parent INT 130
+}
+
+@test "H4 HIGH-2: the executor KILLed (no trap runs): the renewer is a dead-man switch -- handler group and container killed, renewer gone, lock free" {
+    command -v flock >/dev/null && command -v setsid >/dev/null || skip "flock/setsid absent"
+    signal_parent KILL 137
+}
+
+@test "H4 HIGH-2: the executor KILLed while a renewal hangs: the renewer still fires (its calls are timed out)" {
+    command -v flock >/dev/null && command -v setsid >/dev/null || skip "flock/setsid absent"
+    touch "${GREMION_ROOT}/renew-hangs-when-hung"
+    GREMION_EXECUTOR_SQL_TIMEOUT=2 signal_parent KILL 137
+}
+
+@test "H4 LOW-7: an activate failure is reported as 'failed in activate', not router" {
+    touch "${GREMION_ROOT}/fail-activate"
+    queue create
+    run "$EXEC" --once
+    [ "$status" -eq 1 ] || { echo "status=$status $output"; return 1; }
+    [[ "$(outcome)" == *"failed in activate"* ]] || { outcome; return 1; }
+}
+
+@test "H4: a second --loop executor on the same host is refused (its requeue-own would re-queue the first one's running request)" {
+    command -v flock >/dev/null || skip "flock absent"
+    rm -f "${SHIM_DIR}/flock"
+    local lockf="${GREMION_ROOT}/runtime/executor/executor.lock"
+    mkdir -p "$(dirname "$lockf")"
+    exec 8>>"$lockf"
+    flock -n 8
+    run "$EXEC" --loop
+    exec 8>&-
+    [ "$status" -eq 3 ] || { echo "status=$status $output"; return 1; }
+    printf '%s\n' "$(steps)" > "${GREMION_ROOT}/steps.txt"
+    assert_absent 'requeue-own' "${GREMION_ROOT}/steps.txt" 'requeue-own ran under a second daemon'
+}
+
+@test "H4: the SQL grants the lapsed lease a grace before attempt + 1 and refuses to revive it" {
+    local f; f="$(ls "${KERNEL_ROOT}"/packages/tenant-store/src/lifecycle/platform-migrations/0011_*.sql)"
+    assert_present 'lease_until < now\(\) - interval' "$f"
+    assert_present 'lease_until >= now\(\)' "$f"
+}
+
+@test "H7: a step that exits non-zero without the text FAIL is recorded at level error" {
+    touch "${GREMION_ROOT}/fail-silent-phase-b"
+    queue create
+    run "$EXEC" --once
+    [ "$status" -eq 1 ] || { echo "status=$status $output"; return 1; }
+    grep -q '^error phase-b .*exited 3' "${GREMION_ROOT}/events.log" || { cat "${GREMION_ROOT}/events.log"; return 1; }
+}
+
+@test "H7: a clean run records no error event" {
+    queue create
+    run "$EXEC" --once
+    [ "$status" -eq 0 ]
+    assert_absent '^error ' "${GREMION_ROOT}/events.log" 'an error event on a clean run'
 }

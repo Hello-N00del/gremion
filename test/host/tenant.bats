@@ -27,6 +27,9 @@ setup() {
 #!/usr/bin/env bash
 printf 'vendor-mail %s\n' "$*" >> "$ORDER"
 [ -f "${GREMION_ROOT}/vendor-mail-fails" ] && exit 1
+# a ledger-like stub (the real launcher lists first and issues only when absent, G2): it
+# creates the principal on its first call and records that; created.log is append-only
+grep -qx principal "${GREMION_ROOT}/done.ledger" 2>/dev/null || { echo principal >> "${GREMION_ROOT}/created.log"; echo principal >> "${GREMION_ROOT}/done.ledger"; }
 exit 0
 STUB
     chmod +x "${REL}/infra/host/bin/gremion-vendor-mail"
@@ -75,6 +78,25 @@ case " $* " in
     printf "tc %s %s\n" "$verb" "$slug" >> "$ORDER"
     [ -f "$GREMION_ROOT/fail-$verb" ] && exit 1
     case "$verb" in
+      phase-a|phase-b)
+        # a stand-in for runPhase: done.ledger lists the steps already done; a step is
+        # created (appended to created.log, unconditionally) only when absent from it,
+        # and phase B / activate refuse to run out of order like the real ledger does
+        if [ "$verb" = phase-b ]; then
+          for r in realm database broker mail_principal_issued; do
+            grep -qx "$r" "$GREMION_ROOT/done.ledger" 2>/dev/null || { echo "STEP_OUT_OF_ORDER: $r not done" >&2; exit 1; }
+          done
+        fi
+        for r in $([ "$verb" = phase-a ] && echo "realm database broker" || echo accounts); do
+          grep -qx "$r" "$GREMION_ROOT/done.ledger" 2>/dev/null && continue
+          echo "$r" >> "$GREMION_ROOT/created.log"; echo "$r" >> "$GREMION_ROOT/done.ledger"
+        done
+        # phase B activates unless the host defers it to after the router (H3)
+        if [ "$verb" = phase-b ]; then case " $all " in *" --defer-activation "*) ;; *) touch "$GREMION_ROOT/active" ;; esac; fi ;;
+      record-step) grep -qx mail_principal_issued "$GREMION_ROOT/done.ledger" 2>/dev/null || echo mail_principal_issued >> "$GREMION_ROOT/done.ledger" ;;
+      activate)
+        grep -qx accounts "$GREMION_ROOT/done.ledger" 2>/dev/null || { echo "STEP_OUT_OF_ORDER: accounts not done" >&2; exit 1; }
+        touch "$GREMION_ROOT/active" ;;
       bootstrap-provisioner)
         # docker copies a name-only -e from its caller: the admin credential
         # must be in THIS process environment, and the one-shot writes the SA
@@ -155,7 +177,8 @@ create() {
     [ "${lines[2]}" = "tc record-step alpha-rat" ]
     [ "${lines[3]}" = "tc phase-b alpha-rat" ]
     [ "${lines[4]}" = "tc render-router alpha-rat" ]
-    [ "${#lines[@]}" -eq 5 ]
+    [ "${lines[5]}" = "tc activate alpha-rat" ]
+    [ "${#lines[@]}" -eq 6 ]
     grep -qF '    tenant-alpha-rat.kc:' "${GREMION_ROOT}/etc/edge/tenant-alpha-rat.yml"
     assert_recorded docker '--operator 8d6b9c7e-1f2a-4b3c-9d4e-5f6a7b8c9d0e'
     assert_recorded docker '--enable calendar,vault'
@@ -190,12 +213,45 @@ STUB
     [ "${lines[2]}" = "tc record-step alpha-rat" ]
     [ "${lines[3]}" = "tc phase-b alpha-rat" ]
     [ "${lines[4]}" = "tc render-router alpha-rat" ]
-    [ "${#lines[@]}" -eq 5 ]
+    [ "${lines[5]}" = "tc activate alpha-rat" ]
+    [ "${#lines[@]}" -eq 6 ]
     [[ "$output" != *"vendor-mail"* ]]
     # the descriptor rides record-step and phase B (the container reads no mail.env) -- and ONLY those
     [ "$(grep -c -- '--sender-json' "$SHIM_LOG")" -eq 2 ] || { cat "$SHIM_LOG"; return 1; }
     grep -E 'record-step.*--sender-json' "$SHIM_LOG" >/dev/null
     grep -E 'phase-b.*--sender-json' "$SHIM_LOG" >/dev/null
+}
+
+@test "H3: a router failure leaves the customer NOT active: activate runs only after the router is written" {
+    touch "${GREMION_ROOT}/fail-render-router"
+    create
+    [ "$status" -ne 0 ] || { echo "$output"; return 1; }
+    run steps
+    [[ "$output" == *"tc phase-b alpha-rat"* ]] || { steps; return 1; }
+    assert_absent 'tc activate' "$ORDER" "activate must not run when the router failed"
+    [ ! -e "${GREMION_ROOT}/active" ] || { echo "customer marked active without a route"; return 1; }
+    [ ! -e "${GREMION_ROOT}/etc/edge/tenant-alpha-rat.yml" ]
+}
+
+@test "H6: a create whose phase B failed re-runs to success and creates nothing twice" {
+    touch "${GREMION_ROOT}/fail-phase-b"
+    create
+    [ "$status" -eq 1 ] || { echo "status=$status $output"; return 1; }
+    [ ! -e "${GREMION_ROOT}/active" ]
+    rm -f "${GREMION_ROOT}/fail-phase-b"
+    create
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; steps; return 1; }
+    [ -e "${GREMION_ROOT}/active" ]
+    grep -qF '    tenant-alpha-rat.kc:' "${GREMION_ROOT}/etc/edge/tenant-alpha-rat.yml"
+    # the host re-ran the WHOLE sequence in order (phase B refuses to run otherwise)...
+    [ "$(grep -c '^tc phase-a ' "$ORDER")" -eq 2 ] && [ "$(grep -c '^tc phase-b ' "$ORDER")" -eq 2 ] || { steps; return 1; }
+    # ...and keycloak realm, kernel database, broker account, mail principal, first accounts exist once each
+    [ "$(sort "${GREMION_ROOT}/created.log" | uniq -c | awk '$1 != 1' | wc -l)" -eq 0 ] || { cat "${GREMION_ROOT}/created.log"; return 1; }
+    [ "$(sort "${GREMION_ROOT}/created.log" | tr '\n' ' ')" = "accounts broker database principal realm " ] || { cat "${GREMION_ROOT}/created.log"; return 1; }
+    # the router already in place is replaced, not duplicated, and no temp file is left
+    create
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
+    [ "$(find "${GREMION_ROOT}/etc/edge" -name '*tenant-alpha-rat*' | wc -l)" -eq 1 ]
 }
 
 @test "stalwart create: the container calls carry NO --sender-json (byte-identical to before)" {
