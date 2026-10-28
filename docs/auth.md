@@ -280,6 +280,15 @@ holding the OTP form (ALTERNATIVE) and `deny-access-authenticator`
 (ALTERNATIVE): a user with an OTP credential is asked for it, a user without one
 is refused. Template, tenant realms and the reconcile check
 `stepup-2fa-otp-gate` (which also repairs live realms) all enforce this shape.
+**Ops realm (operators).** The control panel and Grafana always sign in at loa2, so
+a new operator cannot enrol inside them. `gremion-tenant operator add` therefore
+prints the platform realm's account console URL
+(`https://<platform domain>/auth/realms/platform/account`): a plain (loa1) sign-in
+there runs UPDATE_PASSWORD and CONFIGURE_TOTP; only then does the panel sign-in
+(password + OTP) succeed. `test/host/fixtures/executor/kc-token-probe.mjs` proves
+both phases against a real Keycloak 26.6.1 (`enrolment` then `flow` in
+`kc2661-token-claims.json`).
+
 Residual: a user must enroll their OTP *outside* a step-up (imported members get
 only `UPDATE_PASSWORD`, TASK-031 D-5); an attacker holding only the password can
 still enroll through the account console before the legitimate user does, so

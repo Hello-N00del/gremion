@@ -6,9 +6,14 @@
     "acr_values": "loa2",
     "max_age": 3600
   },
+  "enrolment": [
+    "password",
+    "configure-totp",
+    "update-password"
+  ],
   "flow": [
     "password",
-    "configure-totp"
+    "otp"
   ],
   "idToken": {
     "alg": "RS256",
