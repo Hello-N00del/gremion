@@ -114,3 +114,16 @@ describe('describeRequest: final states', () => {
     for (const state of ['expired', 'dead']) expect(describeRequest({ ...base, kind: 'suspend', state }).retryable).toBe(false)
   })
 })
+
+describe('describeRequest: the module and reconcile kinds (TRD-044)', () => {
+  it.each(['enable_module', 'disable_module', 'record_dpia', 'reconcile'])('a failed %s is never retried as a copy: the page says to trigger the action again', (kind) => {
+    const d = describeRequest({ ...base, kind, state: 'failed', outcome: `${kind} proof-z: failed in ${kind} (exit 1); a new request resumes from the ledger` })
+    expect(d.retryable).toBe(false)
+    expect(d.retryNote).toMatch(/Bereich „Module“/)
+    expect(d.step).toBe(kind)
+  })
+  it('the running step is named in German', () => {
+    expect(describeRequest({ ...base, kind: 'reconcile', state: 'running', evidenceVerifiedAt: '2026-10-27T10:00:30Z', lastStep: 'reconcile' }).text).toMatch(/Abgleich/)
+    expect(describeRequest({ ...base, kind: 'disable_module', state: 'running', evidenceVerifiedAt: '2026-10-27T10:00:30Z', lastStep: 'disable_module' }).text).toMatch(/Modul deaktivieren/)
+  })
+})

@@ -171,10 +171,10 @@ describe('tenant-create phase-a env contract (TDD 19, G3)', () => {
 describe('tenant-create gate verbs (TASK-044)', () => {
   const OP = '8d6b9c7e-1f2a-4b3c-9d4e-5f6a7b8c9d0e'
 
-  it('--help lists enable-module, dpia-record, isolation-record, gate-status and regate', () => {
+  it('--help lists enable-module, disable-module, dpia-record, isolation-record, gate-status and regate', () => {
     const r = run(['--help'], {})
     expect(r.status, r.out).toBe(0)
-    for (const verb of ['enable-module', 'dpia-record', 'isolation-record', 'gate-status', 'regate']) expect(r.out).toContain(verb)
+    for (const verb of ['enable-module', 'disable-module', 'dpia-record', 'isolation-record', 'gate-status', 'regate']) expect(r.out).toContain(verb)
   }, 90_000)
 
   it('dpia-record without --document-ref is refused (exit 2) before any connection: the decision is written down whatever requires_dpia says', () => {
@@ -189,11 +189,20 @@ describe('tenant-create gate verbs (TASK-044)', () => {
       ['enable-module', 'musterstadt', 'votes', '--operator', 'root'],
       ['enable-module', 'musterstadt', '--operator', OP],
       ['regate', 'musterstadt', 'votes', '--operator', 'root'],
+      ['disable-module', 'musterstadt', 'votes', '--operator', 'root'],
+      ['disable-module', 'musterstadt', '--operator', OP],
     ]) {
       const r = run(args, CONTRACT)
       expect(r.status, `${args.join(' ')}\n${r.out}`).toBe(2)
     }
   }, 180_000)
+
+  it('disable-module refuses (exit 2, nothing touched) when TENANT_EXPORT_DIR is not a mounted volume: the dump must outlive the one-shot container', () => {
+    const r = run(['disable-module', 'musterstadt', 'votes', '--operator', OP], { ...CONTRACT, TENANT_EXPORT_DIR: '/var/lib/gremion/exports' })
+    expect(r.status, r.out).toBe(2)
+    expect(r.out).toMatch(/mounted volume/)
+    expect(r.out).not.toMatch(/ECONNREFUSED|ENOTFOUND|getaddrinfo|CONNECT_TIMEOUT/)
+  }, 90_000)
 
   it('isolation-record of a file that cannot be read, and gate-status without PLATFORM_DATABASE_URL, are named exit-2 failures', () => {
     const missing = run(['isolation-record', join(REPO, '.scratch', 'no-such-evidence.json')], CONTRACT)

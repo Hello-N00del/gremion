@@ -77,6 +77,107 @@
   </section>
 {/if}
 
+{#if data.moduleSection}
+  <section class="modules" aria-labelledby="mod-h">
+    <h2 id="mod-h">Module</h2>
+    {#if form?.moduleError}<p class="error" role="alert">{form.moduleError}</p>{/if}
+    {#if !data.moduleSection.canAct}
+      <p class="muted" role="status">Module können nur für einen aktiven Mandanten ohne laufende Anfrage geändert werden.</p>
+    {/if}
+
+    <h3>Aktive Module</h3>
+    {#if data.moduleSection.enabled.length === 0}
+      <p class="muted">Keine Module aktiv.</p>
+    {:else}
+      <ul class="mods">
+        {#each data.moduleSection.enabled as m (m.id)}
+          <li>
+            <span>{m.name} <code>{m.id}</code></span>
+            {#if data.moduleSection.canAct}
+              <form method="POST" action="?/disable_module" use:enhance>
+                <input type="hidden" name="module" value={m.id} />
+                <p class="muted">Deaktivieren: Die Moduldaten werden zuerst exportiert und geprüft, erst danach wird die Moduldatenbank entfernt.</p>
+                <button type="submit">Modul deaktivieren</button>
+              </form>
+              <details>
+                <summary>DPIA-Entscheidung festhalten</summary>
+                <form method="POST" action="?/record_dpia" use:enhance>
+                  <input type="hidden" name="module" value={m.id} />
+                  <label>
+                    DPIA für {m.id}
+                    <select name="dpia">
+                      <option value="" selected>bitte wählen</option>
+                      <option value="no">nicht erforderlich</option>
+                      <option value="yes">erforderlich</option>
+                    </select>
+                  </label>
+                  <label>
+                    Dokumentverweis (Pflicht)
+                    <input name="dpiaRef" autocomplete="off" maxlength="500" />
+                  </label>
+                  <button type="submit">Entscheidung festhalten</button>
+                </form>
+              </details>
+            {/if}
+          </li>
+        {/each}
+      </ul>
+    {/if}
+
+    <h3>Verfügbare Module</h3>
+    {#if data.moduleSection.available.length === 0}
+      <p class="muted">Keine weiteren Module verfügbar.</p>
+    {:else}
+      <ul class="mods">
+        {#each data.moduleSection.available as m (m.id)}
+          <li>
+            <span>{m.name} <code>{m.id}</code></span>
+            {#if m.denied}
+              <span class="muted">gesperrt: {m.denied}</span>
+            {:else if data.moduleSection.canAct}
+              <form method="POST" action="?/enable_module" use:enhance>
+                <input type="hidden" name="module" value={m.id} />
+                <label>
+                  DPIA für {m.id}
+                  <select name="dpia" required>
+                    <option value="" selected>bitte wählen</option>
+                    <option value="no">nicht erforderlich</option>
+                    <option value="yes">erforderlich</option>
+                  </select>
+                </label>
+                <label>
+                  Dokumentverweis (Pflicht, auch bei „nicht erforderlich“)
+                  <input name="dpiaRef" required autocomplete="off" maxlength="500" />
+                </label>
+                <button type="submit">Modul aktivieren</button>
+              </form>
+            {/if}
+          </li>
+        {/each}
+      </ul>
+    {/if}
+
+    {#if data.moduleSection.canAct}
+      <h3>Abgleich</h3>
+      <p class="muted">Prüft den Anmelde-Realm des Mandanten gegen den Sollzustand (Trockenlauf ändert nichts); „anwenden“ repariert Abweichungen.</p>
+      <form method="POST" action="?/reconcile" use:enhance class="inline">
+        <input type="hidden" name="apply" value="false" />
+        <button type="submit">Abgleich prüfen (Trockenlauf)</button>
+      </form>
+      <form method="POST" action="?/reconcile" use:enhance class="inline">
+        <input type="hidden" name="apply" value="true" />
+        <button type="submit">Abgleich anwenden</button>
+      </form>
+    {/if}
+
+    {#if data.reconcileEvents.length}
+      <h3>Ergebnis des letzten Abgleichs</h3>
+      <pre class="events">{#each data.reconcileEvents as e, i (i)}{e.level === 'error' ? '! ' : '  '}{e.message}
+{/each}</pre>
+    {/if}
+  </section>
+{/if}
+
 {#if data.requests.length}
   <h2>Anfragen</h2>
   <ul class="requests">
@@ -149,6 +250,36 @@
   .lifecycle {
     max-width: 36rem;
     margin-bottom: 1.5rem;
+  }
+  .modules {
+    max-width: 36rem;
+    margin-bottom: 1.5rem;
+  }
+  .modules h3 {
+    font-size: 1rem;
+    margin: 1rem 0 0.25rem;
+  }
+  .mods {
+    list-style: none;
+    padding: 0;
+  }
+  .mods li {
+    padding: 0.5rem 0;
+    border-bottom: 1px solid var(--line);
+  }
+  .mods label {
+    display: block;
+    margin: 0.25rem 0;
+  }
+  .inline {
+    display: inline-block;
+    margin-right: 0.5rem;
+  }
+  .events {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    border: 1px solid var(--line);
+    padding: 0.5rem;
   }
   .error {
     color: var(--bad);

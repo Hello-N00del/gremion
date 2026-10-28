@@ -62,7 +62,7 @@ import {
   type MailStampExpectation,
   type ProvisioningDeps,
 } from '@gremion/provisioning'
-import { assertPlatform, dropKernelDatabase, ensureKernelApiReader, KERNEL_API_READS, type LifecycleModule, type ModuleServer } from '@gremion/tenant-store/lifecycle'
+import { assertPlatform, dropKernelDatabase, ensureKernelApiReader, KERNEL_API_READS, pgDumpExporter, type LifecycleModule, type ModuleServer } from '@gremion/tenant-store/lifecycle'
 import { MODULE_MANIFESTS } from '../src/lib/modules/registry'
 import { dbNameForSlug, validateSlug } from '../src/lib/server/tenant/slug'
 import { normaliseHost } from '../src/lib/server/tenant/host'
@@ -492,10 +492,20 @@ async function liveDeps(opts: { configFile?: string; bodyName?: string; needEdge
               return reqFileEnv(`MODULE_APP_PASSWORD_${envId(serviceId(svc))}_FILE`)
             },
           },
-          exporter: {
-            dump: () => Promise.reject(new Error('tenant-create never disables a module (disable is not a create verb)')),
-            list: () => Promise.reject(new Error('tenant-create never disables a module')),
-          },
+          // TRD-044: the disable-module verb exports with pg_dump (the builder image carries the
+          // postgresql18 client) over the module server's admin URL; the password rides in PGPASSWORD.
+          exporter: pgDumpExporter({
+            pgDump: ['pg_dump'],
+            pgRestore: ['pg_restore'],
+            connection: (target) => {
+              const id = serviceId(target.service)
+              const u = new URL(directPostgresUrl(`MODULE_PG_ADMIN_${envId(id)}_FILE`, reqFileEnv(`MODULE_PG_ADMIN_${envId(id)}_FILE`)))
+              return {
+                args: ['--no-owner', '--host', u.hostname, '--port', u.port || '5432', '--username', decodeURIComponent(u.username), '--dbname', target.database],
+                ...(u.password ? { env: { PGPASSWORD: decodeURIComponent(u.password) } } : {}),
+              }
+            },
+          }),
           exportDir: env.exportDir,
           releaseRef: env.releaseRef,
           log,
@@ -1029,6 +1039,7 @@ async function main(): Promise<void> {
       throw new UsageError('provision is retired (TASK-043): a customer is created from the control panel ("Neuer Mandant"), which the host-side executor runs (phase-a, the host mail step, record-step, phase-b, the router; TASK-043d)')
     // TASK-044: the level-1 gate's verbs (tenant-provision-gate.ts)
     case 'enable-module':
+    case 'disable-module':
     case 'dpia-record':
     case 'isolation-record':
     case 'gate-status':
