@@ -69,4 +69,32 @@ describe('PATCH /api/settings smtp guard', () => {
     const res = await patch({ smtp: { host: '', configured: false } })
     expect(res.status).toBe(200)
   })
+
+  // LOW: the guard runs on the MERGED {...stored, ...patch}; a host-only or
+  // port-only PATCH cannot leave a bad stored counterpart in place.
+  it('400 for a port-only PATCH when the stored host is internal', async () => {
+    h.readConfig.mockReturnValue({ smtp: { host: 'localhost', port: 25 } })
+    const res = await patch({ smtp: { port: 587 } })
+    expect(res.status).toBe(400)
+    expect(h.writeConfig).not.toHaveBeenCalled()
+  })
+
+  it('400 for a host-only PATCH when the stored port is not an SMTP port', async () => {
+    h.readConfig.mockReturnValue({ smtp: { host: 'smtp.example.com', port: 5432 } })
+    const res = await patch({ smtp: { host: 'smtp.example.org' } })
+    expect(res.status).toBe(400)
+    expect(h.writeConfig).not.toHaveBeenCalled()
+  })
+
+  it('200 for a port-only PATCH over a good stored host', async () => {
+    h.readConfig.mockReturnValue({ smtp: { host: 'smtp.example.com', port: 25 } })
+    const res = await patch({ smtp: { port: 587 } })
+    expect(res.status).toBe(200)
+  })
+
+  it('unrelated smtp field PATCH is not blocked by a legacy stored value', async () => {
+    h.readConfig.mockReturnValue({ smtp: { host: 'localhost', port: 25 } })
+    const res = await patch({ smtp: { from_name: 'X' } })
+    expect(res.status).toBe(200)
+  })
 })

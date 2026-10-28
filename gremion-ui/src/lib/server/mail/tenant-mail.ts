@@ -21,6 +21,8 @@ import { readConfig } from '$lib/server/config'
 // nodemailer exports `Transporter` as a namespace (not a usable type alias), so
 // derive the transport type from createTransport's return type instead.
 type Transporter = ReturnType<typeof nodemailer.createTransport>
+import { isAllowedSmtpPort, resolveSmtpTarget } from '$lib/server/mail/smtp-target-guard'
+import { env } from '$env/dynamic/private'
 import { getTenant } from '$lib/server/tenant/context'
 import { resolveSecret } from '$lib/server/tenant/secrets'
 import { RESOLUTION_CACHE_TTL_MS } from '$lib/server/tenant/registry'
@@ -53,6 +55,32 @@ interface Entry {
 // secret-file read are the expensive parts worth caching across 60s ticks).
 const _cache = new Map<string, Entry>()
 
+type TransportOptions = Parameters<typeof nodemailer.createTransport>[0] & object
+
+function guardedTransport(host: string, port: number, base: TransportOptions): Transporter {
+  const facade = {
+    async sendMail(msg: unknown) {
+      if (!isAllowedSmtpPort(port, env.SMTP_TEST_ALLOW_PRIVATE === '1')) {
+        throw new Error('SMTP port not allowed')
+      }
+      const target = await resolveSmtpTarget(host)
+      if (!target.allowed) throw new Error(`SMTP host not allowed (${target.reason})`)
+      const t = nodemailer.createTransport({
+        ...base,
+        host: target.connectHost,
+        ...(target.servername ? { tls: { servername: target.servername } } : {}),
+      })
+      try {
+        return await t.sendMail(msg as never)
+      } finally {
+        t.close()
+      }
+    },
+    close() {},
+  }
+  return facade as unknown as Transporter
+}
+
 /**
  * Resolve the CURRENT ALS tenant's mail context. Fail-closed: called outside a
  * runWithTenant scope, getTenant() throws (the desired posture — no ambient
@@ -83,15 +111,23 @@ export function getTenantMailContext(): TenantMailContext {
   // misconfigured ref throws loudly rather than sending unauthenticated.
   const auth = svc?.passwordRef ? { user: svc.user, pass: resolveSecret(svc.passwordRef) } : undefined
 
-  const transport = nodemailer.createTransport({
-    host,
+  const baseOptions = {
     port,
     // O-5: implicit TLS only on 465; nodemailer auto-STARTTLSes on 587.
     secure: port === 465,
     auth,
     connectionTimeout: 10_000,
     greetingTimeout: 10_000,
-  })
+  }
+  // A registry override (svc.host) is written by the platform operator, not a
+  // tenant admin, so it is trusted and dialled directly. A CONFIG-derived host
+  // is tenant-admin-controlled (Settings -> E-Mail): vetting it only at save time
+  // leaves a DNS-rebinding window (nodemailer re-resolves on every send). So the
+  // cached "transport" for it is a facade that re-vets and dials the vetted
+  // address on EVERY send; nothing resolved is ever cached.
+  const transport: Transporter = svc?.host
+    ? nodemailer.createTransport({ host, ...baseOptions })
+    : guardedTransport(host, port, baseOptions)
 
   const ctx: TenantMailContext = { transport, from, configured: Boolean(cfg.configured) }
   _cache.set(tenant.id, { ctx, expiresAt: Date.now() + RESOLUTION_CACHE_TTL_MS })

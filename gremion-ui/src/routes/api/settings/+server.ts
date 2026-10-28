@@ -116,32 +116,37 @@ export const PATCH: RequestHandler = async ({ request, locals }) => {
     return json({ success: false, error: message }, { status: 422 })
   }
 
-  // MED-4: hold a stored SMTP host/port to the same guard as /api/setup/test-smtp
-  // (internal names, private/loopback ranges, non-SMTP ports) before it is persisted.
+  // MED-4: hold the SMTP host/port to the same guard as /api/setup/test-smtp
+  // (internal names, private/loopback ranges, non-SMTP ports). The guard runs on
+  // the MERGED stored+patch values whenever host or port is touched, so a
+  // host-only / port-only PATCH cannot keep a bad stored counterpart.
+  const config = readConfig()
   const smtp = parsed.data.smtp
-  if (smtp?.port !== undefined && !isAllowedSmtpPort(smtp.port, env.SMTP_TEST_ALLOW_PRIVATE === '1')) {
-    return json(
-      { success: false, error: 'SMTP-Port ist nicht zugelassen (erlaubt: 25, 465, 587, 2525)' },
-      { status: 400 },
-    )
-  }
-  if (smtp?.host) {
-    const target = await resolveSmtpTarget(smtp.host)
-    if (!target.allowed) {
+  if (smtp && (smtp.host !== undefined || smtp.port !== undefined)) {
+    const merged = { ...(config.smtp as { host?: string; port?: number } | undefined), ...smtp }
+    if (merged.port !== undefined && !isAllowedSmtpPort(merged.port, env.SMTP_TEST_ALLOW_PRIVATE === '1')) {
       return json(
-        {
-          success: false,
-          error:
-            target.reason === 'dns'
-              ? 'SMTP-Host konnte nicht aufgelöst werden'
-              : 'SMTP-Host ist keine erlaubte externe Adresse',
-        },
+        { success: false, error: 'SMTP-Port ist nicht zugelassen (erlaubt: 25, 465, 587, 2525)' },
         { status: 400 },
       )
     }
+    if (merged.host) {
+      const target = await resolveSmtpTarget(merged.host)
+      if (!target.allowed) {
+        return json(
+          {
+            success: false,
+            error:
+              target.reason === 'dns'
+                ? 'SMTP-Host konnte nicht aufgelöst werden'
+                : 'SMTP-Host ist keine erlaubte externe Adresse',
+          },
+          { status: 400 },
+        )
+      }
+    }
   }
 
-  const config = readConfig()
   const updated = writeConfig(parsed.data)
 
   // Audit any retention changes
