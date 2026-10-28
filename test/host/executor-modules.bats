@@ -38,6 +38,7 @@ tc() {
     if [ "$1" = reconcile ]; then
         if [ "${2:-}" = "--verify-only" ]; then
             echo '[tenant-create] reconcile realm "alpha-rat" - verify-only'
+            [ ! -f "${GREMION_ROOT}/verify-crash" ] || { echo 'Error: cannot connect to the database'; return 3; }
             [ ! -f "${GREMION_ROOT}/drift" ] || { echo 'FAIL smtp-server: repair: host'; return 1; }
             [ ! -f "${GREMION_ROOT}/still-drift" ] || { echo 'FAIL smtp-server: repair: host'; return 1; }
             return 0
@@ -232,6 +233,15 @@ COLOUR=blue
     [ "$status" -ne 0 ]
     [[ "$output" == *"FAIL smtp-server: repair: host"* && "$output" == *"drift"* ]]
     assert_absent 'reconcile alpha-rat$|rotate' "$ORDER" 'a dry run must not apply'
+}
+
+@test "reconcile dry-run: a crash of the verify (exit 3, not 1) is a failure of the verify, never reported as drift" {
+    jq -nc '{slug:"alpha-rat", apply:false}' > "${WORK}/args.json"
+    touch "${GREMION_ROOT}/verify-crash"
+    drive handle_reconcile
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"verify-only failed in the container (exit 3)"* ]] || { echo "$output"; return 1; }
+    [[ "$output" != *"drift found"* ]] || { echo "$output"; return 1; }
 }
 
 @test "reconcile apply: the repair, the host principal rotated when smtp-server is repair: host, then a verify-only that must be green" {
