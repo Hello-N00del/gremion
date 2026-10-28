@@ -201,7 +201,7 @@ Values are in seconds (days × 86400) and are bounded by server-side hard caps:
 Operator ceiling 30 d [D R29-I6], R29-RETENTION-30-K: no figure in this table exceeds
 it. The defaults and caps are those of the gremion-ui retention tiers
 (`gremion-ui/src/lib/retention-tiers.ts`, one registry that the config clamp, the
-settings API and the Settings tab all read): 29 d where the daily purge tick enforces
+settings API and the Settings tab all read): 29 d where a daily purge would enforce
 the window (29 d + 24 h = 30 d), 30 d for the tier without a purge consumer. A config
 stored with a higher value (the former 90 / 180 / 365 days) is clamped when it is read,
 and the clamp logs one warning per field. Only `LOG_ACCESS_RETENTION_SECONDS` is read

@@ -21,8 +21,9 @@ API, each in its own repository; each owns and documents its own retention.
 Cross-references:
 - Infrastructure-layer log retention (reverse proxy, Keycloak, container
   stdout): [`docs/log-retention-policy.md`](./log-retention-policy.md).
-- Auto-generated German-language Löschkonzept (per-tenant, served to data
-  subjects): [`gremion-ui/src/lib/server/loeschkonzept.ts`](../gremion-ui/src/lib/server/loeschkonzept.ts).
+- Auto-generated German-language Löschkonzept (per-tenant controller and
+  data-protection-officer details; the deletion periods themselves are the product's
+  fixed windows; served to data subjects): [`gremion-ui/src/lib/server/loeschkonzept.ts`](../gremion-ui/src/lib/server/loeschkonzept.ts).
 
 ---
 
@@ -40,10 +41,12 @@ in three layers:
    and follow the operator ceiling of 30 days for every log class
    [D R29-I6] (R29-RETENTION-30-K); the earlier BSI Mindeststandard 90/180-day
    and BayLDA tiers are superseded.
-2. **Scheduled purge jobs** that hard-delete rows older than the configured
-   window. The scheduler runs inside the SvelteKit server process so it picks
-   up live config changes without a redeploy, and runs once per **active**
-   tenant against that tenant's own data plane (see §2.1).
+2. **A scheduled host purge job** (`gremion-purge.timer` -> `tenant-create purge-run`) that
+   hard-deletes plumbing and operational rows older than their catalogue window, once per
+   customer kernel database, each against that tenant's own data plane. It runs on the host,
+   not in the SvelteKit server process, and reads no per-tenant config field: its windows
+   are literals tied by a test to `docs/compliance/retention-catalogue.md`. The
+   `audit_log` governance record is not purged by it (see §2.1).
 3. **Per-tenant crypto-shred on delete** — destroying a tenant voids every
    backup it ever wrote and drops its entire data plane, so deletion is
    complete and irreversible rather than a soft tombstone over live data
@@ -211,22 +214,26 @@ voids exactly one tenant's backups.
 ## 5. Löschkonzept reference
 
 The German-language Löschkonzept (deletion concept) required for data-subject
-requests is **generated on demand** from the live config so it can never drift
-from the retention windows the system actually enforces.
+requests is **generated on demand**. The controller, data-protection-officer and
+purpose fields come from the live per-tenant config; the **deletion periods are the
+product's fixed windows** (`RETENTION_DEFAULTS`, tied by tests to the log-store registry
+and to the catalogue), so a stored `config.retention.*` value, which nothing enforces,
+can never be printed as a period that is not applied.
 
 - **Generator:** `generateLoeschkonzept(config, asOf)` in
   [`gremion-ui/src/lib/server/loeschkonzept.ts`](../gremion-ui/src/lib/server/loeschkonzept.ts).
-- **Inputs:** the full per-tenant config (retention windows + the
-  `compliance.controller_*` / `compliance.dpo_*` / `compliance.purpose_description`
-  fields).
+- **Inputs:** the per-tenant `compliance.controller_*` / `compliance.dpo_*` /
+  `compliance.purpose_description` fields. The stored `retention` block is **not** read.
 - **Output:** a Markdown document covering: responsible party (`§1`),
   processing purpose + Art. 6 GDPR lawful basis (`§2`), retention table per
   data category (`§3`; the basis column names the operator ceiling, and a tier
   without a purge consumer carries the `RETENTION_CAVEATS` hint that it is
-  configuration, not an enforced deletion window), technical deletion
-  mechanisms (`§4` — IP pseudonymisation, Vector + logrotate, encrypted backups
-  with automatic cleanup, daily pseudonymisation-key rotation), and a
-  change-history pointer to the `audit_log` table (`§5`).
+  configuration, not an enforced deletion window; one further row states that the
+  `audit_log` table is a governance record (RC-GOV-CHAIN) that no timer deletes),
+  technical deletion mechanisms (`§4` — IP pseudonymisation, Vector + logrotate,
+  encrypted backups with automatic cleanup, daily pseudonymisation-key rotation, the
+  host job's daily deletion of operational rows), and the statement that the periods
+  are fixed and change only with a program version (`§5`).
 
 If a new retention category is added to `GremionConfig.retention`, the
 Löschkonzept template **must** be extended in the same change — otherwise the
@@ -246,8 +253,10 @@ RETENTION_CAPS = { access_logs_days: 29, app_logs_days: 29,
                    security_logs_days: 29, security_nopii_logs_days: 30 }
 ```
 
-Operator ceiling 30 d [D R29-I6]: the caps are 29 d where the daily purge tick
-enforces the window, 30 d for the no-PII tier (§2).
+Operator ceiling 30 d [D R29-I6]: the caps are 29 d where a daily purge would enforce
+the window (29 d + 24 h = 30 d), 30 d for the no-PII tier (§2). The caps bound what
+`writeConfig` stores; the settings API accepts no `retention` key (§2), so they guard a
+hand-edited config file, not a UI.
 
 Additional non-retention hard limits enforced in the same function:
 
