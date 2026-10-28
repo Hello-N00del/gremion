@@ -128,6 +128,19 @@ describe('HIGH-1: external identity removal is queued, never cancelled', () => {
     expect(res).toMatchObject({ status: 'skipped', reason: expect.stringMatching(/0 ops queued.*Keycloak account/) })
   })
 
+  it('R33f MED: the remove-ops the run itself created leave no raw subject id behind once the drain settled them', async () => {
+    await seed()
+    const sql = getDb()
+    await kernelErasureHook.erase({ tenantId: TENANT_A, subjectId: SUBJECT, db: sql })
+    const drain = async () => {
+      await sql`UPDATE provisioning_member_ops SET status = 'ok' WHERE user_keycloak_id = ${SUBJECT} AND subsystem = 'keycloak'`
+    }
+    const res = await createIdentityErasureHook({ drain }).erase({ tenantId: TENANT_A, subjectId: SUBJECT, db: sql })
+    // the settled op is gone, the still-queued one (the outbox of its removal) must stay
+    expect(await sql`SELECT subsystem FROM provisioning_member_ops WHERE user_keycloak_id = ${SUBJECT}`).toEqual([{ subsystem: 'matrix' }])
+    expect(res).toMatchObject({ status: 'skipped', reason: expect.stringMatching(/1 ops queued/) })
+  })
+
   it('a throwing drain leaves the ops queued and the step skipped (never failed-open to erased)', async () => {
     await seed()
     const sql = getDb()
