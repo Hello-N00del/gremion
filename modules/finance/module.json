@@ -5,7 +5,7 @@
   "runtime": {
     "version": "1.0.0",
     "database": { "postgresService": "finance-postgres", "migrations": "migrations" },
-    "export": { "kind": "pg_dump", "retentionProfile": "rp-fin-module-data" },
+    "export": { "kind": "pg_dump", "retentionProfile": "rp-fin-module-data", "withhold": ["finance.fints_config.password_encrypted"] },
     "timedJobs": [],
     "platformServer": null
   }

@@ -93,6 +93,7 @@ import { tlog } from '../src/lib/server/observability/tenant-log'
 import { deleteTenant, type DeleteDeps, type LeafShredExecutor } from '../src/lib/server/tenant/provisioner/lifecycle'
 import { requestVerb } from './tenant-provision-requests'
 import { GATE_USAGE, GATE_VERBS, refusalLine, runGateVerb } from './tenant-provision-gate'
+import { EXPORT_USAGE, EXPORT_VERBS, exportVerb } from './tenant-provision-export'
 import { IMPORT_USAGE, IMPORT_VERBS, importVerb } from './tenant-provision-import'
 import { PURGE_USAGE, PURGE_VERBS, purgeVerb } from './tenant-provision-purge'
 import { parseDpiaMap, scratchFixturesAllowed } from './tenant-provision-scratch'
@@ -993,7 +994,8 @@ const USAGE = `usage: tenant-create <verb> ...
   request-verify <request-id>   (TASK-043d: the executor's trusted-layer verdict, one JSON line)
 ${GATE_USAGE}
 ${IMPORT_USAGE}
-${PURGE_USAGE}`
+${PURGE_USAGE}
+${EXPORT_USAGE}`
 
 async function main(): Promise<void> {
   const verb = process.argv[2]
@@ -1081,6 +1083,21 @@ async function main(): Promise<void> {
         args: process.argv.slice(3),
         openPlatform: openPlatformPool,
         openKernelServer: () => kernelServer(directPostgresUrl('KERNEL_PG_ADMIN_FILE', reqFileEnv('KERNEL_PG_ADMIN_FILE'))),
+        usage: (m) => new UsageError(m),
+        log,
+      })
+    // TRD-149/150/151: the open-format tenant export + completeness check (tenant-provision-export.ts)
+    case 'export':
+    case 'export-verify':
+      if (!EXPORT_VERBS.has(verb)) throw new UsageError(`unknown verb ${verb}`)
+      return exportVerb(verb, {
+        catalogue: loadModules,
+        customerIdForSlug: async (s) => (await getTenantBySlug(s))?.id ?? null,
+        openPlatform: openPlatformPool,
+        kernelUrl: () => directPostgresUrl('KERNEL_PG_ADMIN_FILE', reqFileEnv('KERNEL_PG_ADMIN_FILE')),
+        moduleUrl: (id) => directPostgresUrl(`MODULE_PG_ADMIN_${envId(id)}_FILE`, reqFileEnv(`MODULE_PG_ADMIN_${envId(id)}_FILE`)),
+        reqFlag,
+        positional,
         usage: (m) => new UsageError(m),
         log,
       })

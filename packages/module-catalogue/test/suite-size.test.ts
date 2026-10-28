@@ -16,7 +16,7 @@ export const DECLARED: Record<string, number> = {
   'test/cli.test.ts': 6,
   'test/real-tree.test.ts': 7,
   'test/suite-size.test.ts': 3,
-  'test/validate.test.ts': 29,
+  'test/validate.test.ts': 31,
 }
 
 function collected(): Record<string, number> {

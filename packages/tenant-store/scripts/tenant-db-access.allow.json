@@ -473,6 +473,14 @@
       "reason": "TASK-043d-1 request-verify: ONE read-only pool on gremion_platform as its owner (the tenant-create one-shot's own credential) to read the claimed request and the loaded module versions; never a tenant database; the registry (TASK-077) takes it over with tenant-provision.ts's platform pool"
     },
     {
+      "path": "gremion-ui/scripts/tenant-provision-export.ts",
+      "calls": 1,
+      "imports": 1,
+      "adoptedBy": "TASK-091",
+      "since": "2026-10-28",
+      "reason": "TRD-149/150/151 export verb: the kernel/module server admin credential the tenant-create one-shot already holds, used ONLY on each server's maintenance database to assert the export reader (ensureExportReader, NOSUPERUSER + pg_read_all_data, fresh password, cleared after); the tenant's kernel and enabled module databases are then read in READ-ONLY repeatable-read pools AS that reader, never as the admin (openTenantDb addresses a runtime role, not these); the SQL lives in @gremion/tenant-store/export; retires when tenant-create resolves targets through the package"
+    },
+    {
       "path": "packages/provisioning/test/integration/scratch.ts",
       "calls": 1,
       "imports": 1,

@@ -28,6 +28,9 @@
     },
     "./dump": {
       "import": "./src/dump/index.ts"
+    },
+    "./export": {
+      "import": "./src/export/index.ts"
     }
   },
   "publishConfig": {
@@ -44,6 +47,10 @@
       "./dump": {
         "types": "./dist/dump/index.d.ts",
         "import": "./dist/dump/index.js"
+      },
+      "./export": {
+        "types": "./dist/export/index.d.ts",
+        "import": "./dist/export/index.js"
       }
     }
   },
