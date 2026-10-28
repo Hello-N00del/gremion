@@ -925,6 +925,19 @@ release_repo() {
     ! grep -q -- "slashed/:/export" "${GREMION_ROOT}/export-argv"
 }
 
+@test "export takes runtime/hostd.lock: busy host -> exit 3, nothing runs, the directory is not created (two exports race on the shared reader role)" {
+    command -v flock >/dev/null || skip "flock not installed"
+    exec 8>>"${GREMION_ROOT}/runtime/hostd.lock"
+    flock -n 8
+    run "$LAUNCHER" export alpha-rat "${GREMION_ROOT}/locked"
+    [ "$status" -eq 3 ] || { echo "$status $output"; return 1; }
+    [[ "$output" == *"busy"* ]]
+    [ ! -e "${GREMION_ROOT}/locked" ]
+    exec 8>&-
+    run steps
+    [ -z "$output" ]
+}
+
 @test "export: creates the directory 0700, runs export then a SEPARATE export-verify, bind-mounted, as the invoking user" {
     run "$LAUNCHER" export alpha-rat "${GREMION_ROOT}/out"
     [ "$status" -eq 0 ]

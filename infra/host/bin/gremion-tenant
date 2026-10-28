@@ -510,6 +510,8 @@ cmd_export() {
     real_parent="$(cd -P -- "$parent" && pwd)" || die "export: cannot resolve ${parent}" "$GREMION_EXIT_USAGE"
     [[ "$real_parent" == "$parent" ]] || die "export: a component of ${parent} is a symlink (it resolves to ${real_parent}); name the real path" "$GREMION_EXIT_USAGE"
     active_colour
+    # Two exports on one host race on the shared export-reader role (password, CONNECT grants): one at a time.
+    acquire_host_lock
     mkdir -p "$dir"
     chmod 700 "$dir"
     TC_MOUNT=(--user "$(id -u):$(id -g)" -v "${dir}:/export")
