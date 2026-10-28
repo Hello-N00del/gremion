@@ -138,3 +138,11 @@ describe('purgeCutoff', () => {
     for (const bad of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) expect(() => purgeCutoff(new Date(), bad)).toThrow(/window/)
   })
 })
+
+describe('platform migration 0012', () => {
+  it('bounds its locks with SET LOCAL lock_timeout: the runner applies each file in its own BEGIN/COMMIT, a session SET would outlive it', () => {
+    const sql = readFileSync(join(REPO, 'packages/tenant-store/src/lifecycle/platform-migrations/0012_plt_purge_run.sql'), 'utf8')
+    expect(sql).toMatch(/^SET LOCAL lock_timeout = '5s';$/m)
+    expect(sql).not.toMatch(/^SET lock_timeout/m)
+  })
+})
