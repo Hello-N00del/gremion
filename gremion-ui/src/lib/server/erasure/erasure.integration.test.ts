@@ -311,7 +311,7 @@ describe('the database itself refuses a dishonest "complete"', () => {
     const store = createPgReportStore(sql)
     const id = await store.begin({ tenantId: TENANT_A, subjectRef: subjectRef(TENANT_A, SUBJECT), requestedBy: 'a', startedAt: new Date(), moduleIds: ['x'] })
     await expect(store.finish(id, 'complete', new Date())).rejects.toThrow(/cannot be complete/)
-    await store.record(id, { moduleId: 'x', status: 'skipped', counts: {}, reason: 'no database connection' })
+    await store.record(id, { moduleId: 'x', status: 'skipped', counts: {}, reason: 'no database connection', residuals: [] })
     await expect(store.finish(id, 'complete', new Date())).rejects.toThrow(/cannot be complete/)
     await store.finish(id, 'incomplete', new Date())
     expect((await getErasureReport(sql, TENANT_A, id))?.status).toBe('incomplete')
@@ -321,13 +321,13 @@ describe('the database itself refuses a dishonest "complete"', () => {
     const sql = getDb()
     const store = createPgReportStore(sql)
     const id = await store.begin({ tenantId: TENANT_A, subjectRef: subjectRef(TENANT_A, SUBJECT), requestedBy: 'a', startedAt: new Date(), moduleIds: ['x'] })
-    await expect(store.record(id, { moduleId: 'x', status: 'skipped', counts: {}, reason: null })).rejects.toThrow()
+    await expect(store.record(id, { moduleId: 'x', status: 'skipped', counts: {}, reason: null, residuals: [] })).rejects.toThrow()
   })
 })
 
 describe('MED-1: the report tables are tamper-resistant at the database', () => {
   const ref = () => subjectRef(TENANT_A, SUBJECT)
-  const erased = (moduleId: string) => ({ moduleId, status: 'erased' as const, counts: {}, reason: null })
+  const erased = (moduleId: string) => ({ moduleId, status: 'erased' as const, counts: {}, reason: null, residuals: [] })
 
   it('persists the expected module set on the header', async () => {
     const sql = getDb()
@@ -417,7 +417,7 @@ describe('tenant isolation of reports', () => {
     const sql = getDb()
     const store = createPgReportStore(sql)
     const id = await store.begin({ tenantId: TENANT_A, subjectRef: subjectRef(TENANT_A, SUBJECT), requestedBy: 'a', startedAt: new Date(), moduleIds: ['kernel'] })
-    await store.record(id, { moduleId: 'kernel', status: 'erased', counts: { n: 1 }, reason: null })
+    await store.record(id, { moduleId: 'kernel', status: 'erased', counts: { n: 1 }, reason: null, residuals: [] })
     await store.finish(id, 'complete', new Date())
 
     expect(await getErasureReport(sql, TENANT_B, id)).toBeNull()

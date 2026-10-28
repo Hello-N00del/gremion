@@ -2,9 +2,10 @@
 // board + elections + files + messaging + publishing + votes. The DB-backed
 // hooks run against the real schema and the real report store; the hooks that
 // front an external system (Nextcloud, Synapse, the newsletter service, Keycloak)
-// are the real hooks wired to fakes of that system. All erased -> `complete`
-// (and the DB's own guard accepts it); one module that cannot reach its system
-// -> `incomplete`, never `complete`.
+// are the real hooks wired to fakes of that system. Every data module erased,
+// but the `identity` step (queued Keycloak/Matrix/Nextcloud group removals and
+// the Keycloak account, identity-hook.ts) is `skipped` -> `incomplete`; one
+// module that cannot reach its system -> failed/skipped, never `complete`.
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { getDb } from '$lib/server/db'
 import type { KernelErasureHook } from '$lib/server/modules/runtime-registry'
@@ -16,12 +17,15 @@ import { createMessagingErasureHook } from '$lib/server/messages/erasure'
 import { createPublishingErasureHook } from '$lib/server/newsletter/erasure'
 import { createVotesErasureHook } from '$lib/server/polls/erasure'
 import { kernelErasureHook } from './kernel-hook'
+import { createIdentityErasureHook } from './identity-hook'
 import { runErasure, type ErasureDeps } from './orchestrator'
 import { createPgReportStore, getErasureReport } from './report-store'
 
+process.env.AUTH_SECRET ??= 'integration-test-auth-secret'
+
 const TENANT = '01920000-0000-7000-8000-00000000aaaa'
 const SUBJECT = '0b5f0e9c-3a56-4f3a-9a7a-1d8f0a2b7caa'
-const MODULES = ['kernel', 'calendar', 'board', 'elections', 'files', 'messaging', 'publishing', 'votes']
+const MODULES = ['kernel', 'identity', 'calendar', 'board', 'elections', 'files', 'messaging', 'publishing', 'votes']
 
 function externalHooks(opts: { keycloakAccountGone?: boolean } = {}): KernelErasureHook[] {
   const gone = opts.keycloakAccountGone === true
@@ -46,7 +50,7 @@ function externalHooks(opts: { keycloakAccountGone?: boolean } = {}): KernelEras
 function deps(hooks: KernelErasureHook[]): ErasureDeps {
   const sql = getDb()
   const byId = new Map<string, KernelErasureHook>(
-    [kernelErasureHook, calendarErasureHook, boardErasureHook, electionsErasureHook, ...hooks].map((h) => [h.moduleId, h as KernelErasureHook]),
+    [kernelErasureHook, createIdentityErasureHook(), calendarErasureHook, boardErasureHook, electionsErasureHook, ...hooks].map((h) => [h.moduleId, h as KernelErasureHook]),
   )
   return {
     enabledModuleIds: () => MODULES,
@@ -59,9 +63,10 @@ function deps(hooks: KernelErasureHook[]): ErasureDeps {
 
 beforeEach(async () => {
   const sql = getDb()
-  await sql`TRUNCATE erasure_report, org_units, calendar_events, notification_read_marker, role_assignment_history CASCADE`
+  await sql`TRUNCATE erasure_report, provisioning_member_ops, governance_membership_record, org_units, calendar_events, notification_read_marker, role_assignment_history CASCADE`
   const [unit] = await sql<{ id: string }[]>`INSERT INTO org_units (name, kind) VALUES ('All-Gremium', 'committee') RETURNING id`
   await sql`INSERT INTO org_unit_members (org_unit_id, user_keycloak_id) VALUES (${unit.id}, ${SUBJECT})`
+  await sql`INSERT INTO provisioning_resources (org_unit_id, subsystem, external_id, status) VALUES (${unit.id}, 'keycloak', 'kc-g', 'ok')`
   await sql`INSERT INTO calendar_events (title, start_at, end_at, created_by) VALUES ('Sitzung', now(), now(), ${SUBJECT})`
   const [board] = await sql<{ id: string }[]>`INSERT INTO board (org_unit_id, name) VALUES (${unit.id}, 'B') RETURNING id`
   const [stack] = await sql<{ id: string }[]>`INSERT INTO stack (board_id, name) VALUES (${board.id}, 'S') RETURNING id`
@@ -70,13 +75,16 @@ beforeEach(async () => {
 })
 
 describe('erasure across every in-tree module', () => {
-  it('all eight modules erased -> complete, persisted per module, no personal data left in the kernel DB', async () => {
+  it('all eight data modules erased, identity removal still queued -> incomplete, no personal data left in the kernel DB', async () => {
     const report = await runErasure({ tenantId: TENANT, subjectId: SUBJECT, requestedBy: 'admin' }, deps(externalHooks()))
-    expect(report.modules.map((m) => [m.moduleId, m.status])).toEqual(MODULES.map((id) => [id, 'erased']))
-    expect(report.status).toBe('complete')
+    expect(report.modules.map((m) => [m.moduleId, m.status])).toEqual(
+      MODULES.map((id) => [id, id === 'identity' ? 'skipped' : 'erased']),
+    )
+    expect(report.modules[1].reason).toMatch(/external identity removal pending: 1 ops queued/)
+    expect(report.status).toBe('incomplete')
 
     const stored = await getErasureReport(getDb(), TENANT, report.id)
-    expect(stored?.status).toBe('complete')
+    expect(stored?.status).toBe('incomplete')
     expect(stored?.modules.map((m) => m.moduleId)).toEqual(MODULES)
 
     const sql = getDb()

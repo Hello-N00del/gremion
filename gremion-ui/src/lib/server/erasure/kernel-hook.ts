@@ -28,15 +28,16 @@
 //     org_unit_members (unelected, employee), notification_read_marker,
 //     scheduled_notifications, provisioning_member_ops already DONE (status 'ok').
 //   RC-BRD (board cards: operative, not a register record) -- PSEUDONYMISED:
-//     card.assignee_keycloak_id, card.created_by -> NULL (the card stays for the
-//     body, the person does not). The table is kernel-applied (0034), so this
-//     runs even when the board module is off.
+//     card.assignee_keycloak_id -> NULL, card.created_by -> 'erased' (the board
+//     module hook's markers; the card stays for the body, the person does not).
+//     The table is kernel-applied (0034), so this runs even when the board
+//     module or its hook is absent; the board hook then finds nothing left.
+//   committee_elections.created_by is the elections module hook's (nil uuid).
 //   Register records -- KEPT, reported as residuals (table, column, rows, reason):
 //     protocols.created_by, protocol_attendance.user_keycloak_id,
 //     protocol_action_items.assignee_keycloak_id (RC-GOV-PROT: the protocol
 //     record, action items included), resolution_challenges.raised_by/resolved_by
-//     (Beschluss register), committee_elections.created_by (election record),
-//     audit_log.user_id (hash chain), erasure_report.requested_by (the
+//     (Beschluss register), audit_log.user_id (hash chain), erasure_report.requested_by (the
 //     accountability of erasures this person requested). Their redaction is
 //     TRD-160's; a column is listed only while it still holds the subject.
 //   Erasure processing -- ENQUEUED, never cancelled:
@@ -70,11 +71,6 @@ export const KERNEL_RESIDUAL_COLUMNS: readonly Omit<ErasureResidual, 'rows'>[] =
   { table: 'protocol_action_items', column: 'assignee_keycloak_id', reason: PROTOCOL_RECORD },
   { table: 'resolution_challenges', column: 'raised_by', reason: REGISTER_RECORD },
   { table: 'resolution_challenges', column: 'resolved_by', reason: REGISTER_RECORD },
-  {
-    table: 'committee_elections',
-    column: 'created_by',
-    reason: "election record (record period): redaction is TRD-160's, not this seam's",
-  },
   { table: 'audit_log', column: 'user_id', reason: 'tamper-evident hash chain: redaction layer TRD-160' },
   {
     table: 'erasure_report',
@@ -151,7 +147,7 @@ export const kernelErasureHook: ModuleErasureHook<Sql> = {
 
       // RC-BRD: operative board data, not a register record.
       c.card_assignee = (await tx`UPDATE card SET assignee_keycloak_id = NULL WHERE assignee_keycloak_id = ${subjectId}`).count
-      c.card_created_by = (await tx`UPDATE card SET created_by = NULL WHERE created_by = ${subjectId}`).count
+      c.card_created_by = (await tx`UPDATE card SET created_by = ${ERASED_MARKER} WHERE created_by = ${subjectId}`).count
 
       // What stays, said out loud (MED-3): counted inside the same tx, after the writes.
       const left: ErasureResidual[] = []
