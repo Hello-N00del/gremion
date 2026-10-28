@@ -473,7 +473,7 @@ export async function bootstrapPlatform(deps: BootstrapDeps): Promise<BootstrapR
     await assertPlatform(platform)
     const m = await migratePlatform(platform, { releaseRef: deps.releaseRef, log })
     // TRD-092 MED-1: the platform owner (which just ran the migrations) must not own the access record
-    await ensureAccessOwner({ kernelAdmin: deps.kernelAdmin, openAdminOn: deps.openAdminOn })
+    await ensureAccessOwner({ kernelAdmin: deps.kernelAdmin, openAdminOn: (database) => deps.openAdminOn(database) })
     const catalogue = await loadCatalogueRows(platform, deps.catalogue)
     for (const u of catalogue.undecided) log(`catalogue: ${u.moduleKey} NOT loaded: ${u.reason}`)
     for (const r of catalogue.load) if (r.provisional) log(`catalogue: ${provisionalNote(r)}`)

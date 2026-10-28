@@ -36,13 +36,15 @@ const HOST = /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,6
 const EMAIL = /^[^\s@<>()[\]\\,;:"]{1,64}@(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/
 // Mirror of @gremion/provisioning printable-text.ts (the panel image has no such
 // dependency); requests.test.ts runs both over one corpus.
-export const PRINTABLE = /^(?:[^\u0000-\u001f\u007f-\u009f\u2028\u2029\u202a-\u202e\u2066-\u2069\ud800-\udfff]|[\ud800-\udbff][\udc00-\udfff])+$/
+export const PRINTABLE = new RegExp(
+  '^(?:[^\\u0000-\\u001f\\u007f-\\u009f\\u2028\\u2029\\u202a-\\u202e\\u2066-\\u2069\\ud800-\\udfff]|[\\ud800-\\udbff][\\udc00-\\udfff])+$',
+)
 const MODULE = /^[a-z][a-z0-9_]*$/
 /** Mirror of @gremion/provisioning's RESERVED_SLUGS (slug.ts); requests.test.ts pins the two equal. */
 export const RESERVED_SLUGS: ReadonlySet<string> = new Set([
   'platform', 'gremion', 'stura', 'keycloak', 'nextcloud', 'helios', 'postgres', 'control', 'template0', 'template1', 'public', 'cloud', 'matrix', 'elections', 'master',
 ])
-const NON_ASCII = /[^\u0000-\u007f]/
+const NON_ASCII = new RegExp('[^\\u0000-\\u007f]')
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
 
 /**

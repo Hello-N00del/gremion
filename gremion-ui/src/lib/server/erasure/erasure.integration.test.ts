@@ -321,7 +321,7 @@ describe('the database itself refuses a dishonest "complete"', () => {
     const sql = getDb()
     const store = createPgReportStore(sql)
     const id = await store.begin({ tenantId: TENANT_A, subjectRef: subjectRef(TENANT_A, SUBJECT), requestedBy: 'a', startedAt: new Date(), moduleIds: ['x'] })
-    await expect(store.record(id, { moduleId: 'x', status: 'skipped', counts: {}, reason: null, residuals: [] })).rejects.toThrow()
+    await expect(store.record(id, { moduleId: 'x', status: 'skipped', counts: {}, reason: null, residuals: [] })).rejects.toThrow(/check constraint/)
   })
 })
 
@@ -355,7 +355,7 @@ describe('MED-1: the report tables are tamper-resistant at the database', () => 
   it('a header cannot be inserted already finished', async () => {
     const sql = getDb()
     await expect(sql`INSERT INTO erasure_report (tenant_id, subject_ref, requested_by, status, finished_at, expected_modules)
-                     VALUES (${TENANT_A}, ${ref()}, 'a', 'complete', now(), '{}')`).rejects.toThrow()
+                     VALUES (${TENANT_A}, ${ref()}, 'a', 'complete', now(), '{}')`).rejects.toThrow(/must be inserted running/)
   })
 
   it('a finished report is append-only: no module insert/update/delete, no header update/delete', async () => {

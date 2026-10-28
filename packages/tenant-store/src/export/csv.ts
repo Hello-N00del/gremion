@@ -14,7 +14,7 @@ export function cell(v: unknown): string {
   if (v instanceof Uint8Array) return Buffer.from(v).toString('base64')
   if (typeof v === 'bigint') return v.toString()
   if (typeof v === 'object') return JSON.stringify(v, jsonReplacer)
-  return String(v)
+  return String(v as string | number | boolean)
 }
 
 export function jsonReplacer(_k: string, v: unknown): unknown {

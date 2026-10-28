@@ -55,7 +55,7 @@ describe('A2: plt.submit_provisioning_request refuses', () => {
     const f = await failure(submit(r.panel, a))
     quote(`panel ${what}`, f)
     expect(f?.code).toBe(sqlstate)
-    if (a.key) expect(await count(a.key)).toBe(0)
+    expect(a.key ? await count(a.key) : 0).toBe(0)
   })
 
   it('a non-uuid operator never reaches the function body: 22P02 at the parameter cast', async () => {

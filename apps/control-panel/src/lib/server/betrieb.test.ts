@@ -21,7 +21,7 @@ const json = (body: unknown, status = 200) => new Response(JSON.stringify(body),
 function fakeFetch(answers: Record<string, Sample[] | Error | number> = {}) {
   const urls: string[] = []
   const impl = async (input: string | URL | Request) => {
-    const url = new URL(String(input))
+    const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url)
     urls.push(url.toString())
     const expr = url.searchParams.get('query') ?? ''
     const a = answers[expr]

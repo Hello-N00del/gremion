@@ -139,7 +139,7 @@ const run = (outDir: string) =>
 /** Whether the planted function ran: its marker file inside the kernel scratch server's container. */
 function markerPresent(): boolean {
   const r = spawnSync('docker', ['exec', `t020-${stack().sha8}-pg`, 'test', '-e', MARKER])
-  if (r.status !== 0 && r.status !== 1) throw new Error(`docker exec failed: ${r.stderr}`)
+  if (r.status !== 0 && r.status !== 1) throw new Error(`docker exec failed: ${r.stderr.toString()}`)
   return r.status === 0
 }
 

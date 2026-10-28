@@ -40,7 +40,7 @@ export async function purgeVerb(verb: string, ctx: PurgeVerbContext): Promise<vo
   const platform = ctx.openPlatform()
   const server = ctx.openKernelServer()
   try {
-    const r = await (ctx.run ?? runPurge)({ platform, server, log: ctx.log })
+    const r = await (ctx.run ?? runPurge)({ platform, server, log: (m) => ctx.log(m) })
     for (const e of r.errors) ctx.log(`purge-run: ${e.tenant ?? 'platform'} ${e.rule}: ${e.message}`)
     process.stdout.write(
       `${JSON.stringify({

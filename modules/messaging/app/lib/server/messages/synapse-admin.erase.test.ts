@@ -23,7 +23,7 @@ describe('SynapseAdminClient.eraseUser', () => {
       calls.push({
         url: String(url),
         method: String(init.method),
-        body: init.body ? JSON.parse(String(init.body)) : undefined,
+        body: init.body ? JSON.parse(init.body as string) : undefined,
         auth: (init.headers as Record<string, string>).Authorization,
       })
       return new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })

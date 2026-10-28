@@ -211,7 +211,7 @@ describe('tenant-mail seam (SP-2 §2)', () => {
       guard.resolveSmtpTarget.mockResolvedValueOnce({ allowed: false, reason: 'blocked' })
       await runWithTenant(DEFAULT_CTX, async () => {
         await sendMailForTenant({ to: 'x@y.de', subject: 's', html: 'h' })
-        await expect(sendMailForTenant({ to: 'x@y.de', subject: 's', html: 'h' })).rejects.toThrow()
+        await expect(sendMailForTenant({ to: 'x@y.de', subject: 's', html: 'h' })).rejects.toThrow(/not allowed/i)
       })
       expect(guard.resolveSmtpTarget).toHaveBeenCalledTimes(2)
     })

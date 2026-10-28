@@ -194,24 +194,6 @@ async function throughHandle(
   }
 }
 
-/**
- * F1-FIX-03 round 2 (review MEDIUM): a rejected internal Bearer must leave a
- * server-side trace (method, path, hop trust, allow-list verdict, secret match)
- * and never the token itself.
- */
-function expectRejectionLogged(
-  warn: { mock: { calls: unknown[][] } },
-  ctx: { method: string; path: string; tenantSelectionTrusted: boolean; allowListed: boolean; secretMatches: boolean },
-): void {
-  const hits = warn.mock.calls.filter((c) => String(c[0]).includes('internal Bearer rejected'))
-  expect(hits).toHaveLength(1)
-  expect(hits[0][1]).toEqual(ctx)
-  expect(JSON.stringify(warn.mock.calls)).not.toContain(SECRET)
-}
-
-const POST_ID = '3f2b8a4e-9c1d-4e5f-8a7b-0c1d2e3f4a5b'
-
-
 const SESSION = {
   user: { id: 'u1', name: 'U', email: 'u@x', roles: ['member'] },
   expires: '2999-01-01T00:00:00.000Z',
@@ -231,8 +213,7 @@ describe('authGuard: an Authorization header never falls back to the cookie sess
         extra: { cookie: 'authjs.session-token=abc', origin: 'https://evil.example.org' },
       })
       expect(out.reached).toBe(false)
-      expect([401, 403]).toContain(out.status)
-      if (/^bearer /i.test(authz)) expect(out.status).toBe(401)
+      expect(/^bearer /i.test(authz) ? [401] : [401, 403]).toContain(out.status)
     },
   )
 

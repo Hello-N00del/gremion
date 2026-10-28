@@ -53,7 +53,7 @@ export function readTitle(stored: string): { tenantId: string | null; title: str
 export function scopePoll<T extends { configuration: { title: string } }>(
   poll: T,
   tenantId: string,
-  legacyTenantId?: string | undefined,
+  legacyTenantId?: string,
 ): T | null {
   const { tenantId: owner, title } = readTitle(poll.configuration.title)
   const effective = owner ?? (legacyTenantId && legacyTenantId === tenantId ? tenantId : null)

@@ -228,6 +228,7 @@ describe('GET /api/messages/rooms/[roomId]/media (signed URL hardening)', () => 
     const url = await signedUrl()
     url.searchParams.set('exp', String(Number(url.searchParams.get('exp')) + 1_000_000))
     await expectStatus(GET(getEvent(url)), 403)
+    expect(mockDownloadMedia).not.toHaveBeenCalled()
   })
 
   it('rejects the URL replayed against another room', async () => {
@@ -249,6 +250,7 @@ describe('GET /api/messages/rooms/[roomId]/media (signed URL hardening)', () => 
     const sig = createHmac('sha256', 'test-secret').update(mxc).digest('hex')
     const url = new URL(`http://localhost/api/messages/rooms/r/media?mxc=${encodeURIComponent(mxc)}&sig=${sig}`)
     await expectStatus(GET(getEvent(url)), 403)
+    expect(mockDownloadMedia).not.toHaveBeenCalled()
   })
 
   it('does not echo an active upstream content type: html/svg become octet-stream', async () => {

@@ -39,7 +39,7 @@ export function makeFakeNc() {
     const path = url.replace(/^.*\/api\/v1\.0/, '')
     const who = String((init.headers as Record<string, string> | undefined)?.Authorization ?? '')
     calls.push({ method, path, auth: who })
-    const body = init.body ? (JSON.parse(String(init.body)) as Record<string, any>) : {}
+    const body = init.body ? (JSON.parse(init.body as string) as Record<string, any>) : {}
     let m: RegExpMatchArray | null
     if (method === 'GET' && path === '/polls') return json({ polls: [...polls.values()].map((p) => view(p, who)) })
     if (method === 'POST' && path === '/poll') {
