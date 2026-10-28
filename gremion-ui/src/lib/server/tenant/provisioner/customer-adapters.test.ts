@@ -9,10 +9,11 @@
 //     exactly ONE primary tenant_domain row through addTenantDomain (the one
 //     path with the reserved-host / owner refusals);
 //   - status moves only along provisioning -> active, active <-> suspended.
-import { readFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const reg = vi.hoisted(() => ({
   addTenantDomain: vi.fn(async () => {}),
@@ -62,7 +63,9 @@ vi.mock('postgres', async (orig) => {
   }
 })
 
-const { customerAdapters, kernelServer, ensureKernelPostMigrationPrivileges } = await import('./customer-adapters')
+const { customerAdapters, kernelServer, ensureKernelPostMigrationPrivileges, reconcileKernelAudit } = await import('./customer-adapters')
+const { runWithTenant } = await import('$lib/server/tenant/context')
+const { runMigrations } = await import('$lib/server/db')
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '..', '..', '..')
 const BASE = JSON.parse(readFileSync(join(REPO, 'docker', 'keycloak', 'realm-export.base.json'), 'utf8')) as Record<string, unknown>
@@ -82,11 +85,11 @@ function kcFake(exists: boolean, held: string[][] = [[], ['realm-admin']]) {
   }
 }
 
-function adapters(kc: ReturnType<typeof kcFake>, adminKc?: { assignServiceAccountRealmRoles: ReturnType<typeof vi.fn> }) {
+function adapters(kc: ReturnType<typeof kcFake>, adminKc?: { assignServiceAccountRealmRoles: ReturnType<typeof vi.fn> }, tenantSecretsDir = '/secrets') {
   const written: string[] = []
   const a = customerAdapters({
     apexDomain: 'platform.example',
-    tenantSecretsDir: '/secrets',
+    tenantSecretsDir,
     runtimeDatabaseUrl: 'postgresql://gremion:x@pgbouncer:6432/gremion',
     kernelAdminUrl: 'postgresql://postgres:x@postgres:5432/postgres',
     configFile: '/nonexistent/config.json',
@@ -317,6 +320,85 @@ describe('ensureKernelPostMigrationPrivileges: purge grants, then the append-onl
     const logs: string[] = []
     await ensureKernelPostMigrationPrivileges(server, T, (m) => logs.push(m))
     expect(logs.join(' | ')).toContain('event_consumption')
+  })
+})
+
+// TASK-033-a r1 MED: the helper above is proven in isolation; this proves the REAL provisioning step
+// calls it. customerAdapters().kernel.migrate is what `gremion-tenant create` runs after the kernel
+// chain; if the REVOKE were unwired from it, every test above would stay green and a new customer's
+// app role would keep DELETE on the governance record.
+describe('customerAdapters.kernel.migrate: the append-only REVOKE is wired into the real step', () => {
+  let secretsDir: string
+  beforeEach(() => {
+    vi.clearAllMocks()
+    secretsDir = mkdtempSync(join(tmpdir(), 'gremion-adapters-'))
+    writeFileSync(join(secretsDir, `tenant_${C.slug}_db`), 'postgresql://k_app:pw@pgbouncer:6432/t_x__kernel\n')
+    vi.stubEnv('GREMION_DISABLE_SEEDS', 'true')
+    reg.getTenantById.mockResolvedValue({ id: C.id, slug: C.slug, status: 'provisioning' })
+  })
+  afterEach(() => {
+    vi.unstubAllEnvs()
+    rmSync(secretsDir, { recursive: true, force: true })
+  })
+
+  it('runs the kernel chain, THEN the purger grants, THEN the audit REVOKE, THEN reads the post-condition', async () => {
+    const order: string[] = []
+    vi.mocked(runWithTenant).mockImplementation(async (_ctx, fn) => (order.push('chain'), fn()))
+    vi.mocked(runMigrations).mockImplementation(async () => void order.push('runMigrations'))
+    lc.ensureKernelPurgeGrants.mockImplementation(async () => (order.push('grants'), { granted: [], absent: [] }))
+    lc.ensureKernelAuditAppendOnly.mockImplementation(async () => (order.push('append-only'), { revoked: ['audit_log', 'audit_log_chain_anchor'], absent: [] }))
+    lc.kernelAuditAppendOnlyProblems.mockImplementation(async () => (order.push('check'), []))
+    const { a } = adapters(kcFake(true), undefined, secretsDir)
+    await a.kernel.migrate(C)
+    expect(order).toEqual(['chain', 'runMigrations', 'grants', 'append-only', 'check'])
+    expect(lc.ensureKernelAuditAppendOnly).toHaveBeenCalledWith(expect.anything(), C.id)
+  })
+
+  it('a privilege still held after the REVOKE fails the migrate step itself (the customer is not marked provisioned)', async () => {
+    vi.mocked(runWithTenant).mockImplementation(async (_ctx, fn) => fn())
+    lc.ensureKernelPurgeGrants.mockResolvedValue({ granted: [], absent: [] })
+    lc.ensureKernelAuditAppendOnly.mockResolvedValue({ revoked: ['audit_log', 'audit_log_chain_anchor'], absent: [] })
+    lc.kernelAuditAppendOnlyProblems.mockResolvedValue(['audit_log: k_x_app still holds DELETE (the kernel audit record is append-only)'])
+    const { a } = adapters(kcFake(true), undefined, secretsDir)
+    await expect(a.kernel.migrate(C)).rejects.toThrow(/still holds DELETE/)
+  })
+
+  it('a failing chain never reaches the REVOKE (nothing to revoke from; the step fails on the chain)', async () => {
+    vi.mocked(runWithTenant).mockImplementation(async () => {
+      throw new Error('migration 0059 failed')
+    })
+    const { a } = adapters(kcFake(true), undefined, secretsDir)
+    await expect(a.kernel.migrate(C)).rejects.toThrow(/0059 failed/)
+    expect(lc.ensureKernelAuditAppendOnly).not.toHaveBeenCalled()
+  })
+})
+
+// TASK-033-a r1 MED: the reconcile verb's DB-level half. scripts/tenant-provision.ts reconcileOne
+// delegates to reconcileKernelAudit (reconcile-wiring.test.ts proves it does); here the helper is
+// proven to call the tenant-store read for verify and the tenant-store REVOKE for apply.
+describe('reconcileKernelAudit: the reconcile verb reads and re-asserts the audit privileges', () => {
+  beforeEach(() => vi.clearAllMocks())
+  const server = { marker: 'server' } as never
+  const T = '0192f1a2-3b4c-7d5e-8f60-718293a4b5c6'
+  const green = { realm: 'musterstadt', ok: true, checks: [{ name: 'ssl-required' as const, ok: true, detail: '' }], applied: [], repairHost: [] }
+
+  it('verify-only reads the effective privileges of THIS tenant and never revokes', async () => {
+    lc.kernelAuditAppendOnlyProblems.mockResolvedValue(['audit_log: k_x_app still holds DELETE (the kernel audit record is append-only)'])
+    const r = await reconcileKernelAudit(green, server, T, true)
+    expect(lc.kernelAuditAppendOnlyProblems).toHaveBeenCalledWith(server, T)
+    expect(lc.ensureKernelAuditAppendOnly).not.toHaveBeenCalled()
+    expect(r.ok).toBe(false)
+    expect(r.checks.at(-1)).toMatchObject({ name: 'audit-append-only', ok: false })
+  })
+
+  it('apply runs the tenant-store REVOKE for THIS tenant, re-reads, and the report turns green', async () => {
+    lc.kernelAuditAppendOnlyProblems.mockResolvedValueOnce(['audit_log: k_x_app still holds DELETE']).mockResolvedValue([])
+    lc.ensureKernelAuditAppendOnly.mockResolvedValue({ revoked: ['audit_log', 'audit_log_chain_anchor'], absent: [] })
+    const r = await reconcileKernelAudit(green, server, T, false)
+    expect(lc.ensureKernelAuditAppendOnly).toHaveBeenCalledWith(server, T)
+    expect(lc.kernelAuditAppendOnlyProblems).toHaveBeenCalledTimes(2)
+    expect(r.ok).toBe(true)
+    expect(r.applied).toContain('audit-append-only')
   })
 })
 

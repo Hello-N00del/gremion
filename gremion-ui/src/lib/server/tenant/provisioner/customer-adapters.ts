@@ -52,6 +52,7 @@ import { getDb } from '$lib/server/db'
 import { KcProvisionApi } from './kc-admin-api'
 import { assertBrandIdentityComplete, materializeConfig } from './materialize'
 import { ADMIN_CLIENT_ID, GREMION_ADMIN_SA_REALM_ROLES } from './pipeline'
+import { withKernelAuditCheck, type ReconcileReport } from './reconcile'
 import { buildTenantRealmDoc, issuerForTenant, kcInternalForTenant, PROVISIONER_SECRET_CLIENTS } from './realm-doc'
 
 /** The container path per-tenant secrets live at (D-SECMOUNT). */
@@ -125,6 +126,23 @@ export async function ensureKernelPostMigrationPrivileges(server: PurgeServer, t
   const problems = await kernelAuditAppendOnlyProblems(server, tenantId)
   if (problems.length) throw new Error(`kernel database ${dbName}: audit record is not append-only after the REVOKE: ${problems.join('; ')}`)
   log(`kernel database ${dbName}: audit record append-only (${a.revoked.join(', ')})`)
+}
+
+/**
+ * TASK-033-a: the reconcile verb's DB-level half. The realm report gains the `audit-append-only` check, read from
+ * (verify) and re-asserted in (apply) THIS tenant's kernel database through the same tenant-store functions the
+ * provisioning step uses. scripts/tenant-provision.ts reconcileOne is the only caller; reconcile-wiring.test.ts
+ * keeps it that way.
+ */
+export function reconcileKernelAudit(report: ReconcileReport, server: PurgeServer, tenantId: string, verifyOnly: boolean): Promise<ReconcileReport> {
+  return withKernelAuditCheck(
+    report,
+    {
+      problems: () => kernelAuditAppendOnlyProblems(server, tenantId),
+      repair: async () => void (await ensureKernelAuditAppendOnly(server, tenantId)),
+    },
+    verifyOnly,
+  )
 }
 
 /** The runtime DATABASE_URL goes through PgBouncer (the pooled stack: pgbouncer-<stack>:6432). */

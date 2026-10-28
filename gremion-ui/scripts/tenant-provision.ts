@@ -68,9 +68,7 @@ import {
   assertPlatform,
   dropKernelDatabase,
   ensureKernelApiReader,
-  ensureKernelAuditAppendOnly,
   KERNEL_API_READS,
-  kernelAuditAppendOnlyProblems,
   pgDumpExporter,
   type LifecycleModule,
   type ModuleServer,
@@ -91,13 +89,12 @@ import {
   type Tenant,
 } from '../src/lib/server/tenant/registry'
 import { KcProvisionApi, type KcTransport } from '../src/lib/server/tenant/provisioner/kc-admin-api'
-import { customerAdapters, kernelServer } from '../src/lib/server/tenant/provisioner/customer-adapters'
+import { customerAdapters, kernelServer, reconcileKernelAudit } from '../src/lib/server/tenant/provisioner/customer-adapters'
 import { fixtureIdentities } from '../src/lib/server/tenant/provisioner/fixture-identities'
 import {
   reconcileRealm,
   reconcileFleet,
   parseMailSenderJson,
-  withKernelAuditCheck,
   type ReconcileReport,
   type FleetReport,
 } from '../src/lib/server/tenant/provisioner/reconcile'
@@ -861,14 +858,7 @@ async function reconcileOne(tenant: Tenant, base: Record<string, unknown>, verif
   // kernel database, so it is one DB-level check appended to the realm report: verify reads, apply re-asserts.
   const server = kernelServer(directPostgresUrl('KERNEL_PG_ADMIN_FILE', reqFileEnv('KERNEL_PG_ADMIN_FILE')))
   try {
-    return await withKernelAuditCheck(
-      realm,
-      {
-        problems: () => kernelAuditAppendOnlyProblems(server, tenant.id),
-        repair: async () => void (await ensureKernelAuditAppendOnly(server, tenant.id)),
-      },
-      verifyOnly,
-    )
+    return await reconcileKernelAudit(realm, server, tenant.id, verifyOnly)
   } finally {
     await server.close()
   }
