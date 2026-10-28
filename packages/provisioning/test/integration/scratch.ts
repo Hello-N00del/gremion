@@ -64,6 +64,7 @@ export async function setupRoles(tag: string): Promise<Roles> {
   const ownerPassword = randomBytes(24).toString('base64url')
   await bootstrapPlatform({
     kernelAdmin: admin,
+    openAdminOn: (db) => open(db, 1),
     openPlatform: () => open('gremion_platform', 2, OWNER, ownerPassword),
     owner: OWNER,
     ownerPassword,

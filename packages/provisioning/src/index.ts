@@ -45,8 +45,9 @@ export type { CreateSpec, PhaseOutcome, ProvisioningStatus } from './customer.ts
 export { loadCatalogueRows, OWNING_CONTEXT_CODES, planCatalogueRows, PROVISIONAL_RETENTION_PROFILES, provisionalNote } from './catalogue-rows.ts'
 export type { CatalogueModule, CatalogueRowPlan, CatalogueRowsResult } from './catalogue-rows.ts'
 export { loadModuleJsons } from './module-tree.ts'
-export { bootstrapPlatform, pgModules, type PanelReaderDeps } from './pg.ts'
+export { bootstrapPlatform, ensureAccessOwner, pgModules, type AccessOwnerDeps, type PanelReaderDeps } from './pg.ts'
 export {
+  ACCESS_OWNER_ROLE,
   ACCESS_READER_ROLE,
   ensureAccessReader,
   ensureExecutorRole,

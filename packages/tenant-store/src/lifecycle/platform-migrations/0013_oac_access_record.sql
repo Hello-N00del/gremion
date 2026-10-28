@@ -16,10 +16,33 @@
 -- purged from the oldest entry only, by oac.purge_access_records, which refuses
 -- a window outside 27..30 d and a caller that is not the host executor.
 --
--- APPEND-ONLY: nobody holds a table privilege; UPDATE and TRUNCATE are refused
--- by trigger for every role including the owner; DELETE is refused unless the
--- purge function raised the transaction-local flag AND the row is older than the
--- window floor, so even a forged flag removes no young row.
+-- APPEND-ONLY, and what that rests on (the trust boundary, stated exactly):
+--  * Nobody holds a table privilege. The rows are written by oac.record_access
+--    alone and read by oac.list_access_records alone.
+--  * The schema, the table and every function of oac belong to the NOLOGIN role
+--    oac_owner, which nobody logs in as and which has no members.
+--    @gremion/provisioning's ensureAccessOwner (run by bootstrapPlatform right
+--    after this migration, as the server admin: the platform owner has no
+--    CREATEROLE) makes the role and transfers the ownership. The platform
+--    owner, the role the migrations and the operator tooling run as, therefore
+--    cannot DISABLE TRIGGER, ALTER the table, INSERT, DELETE or DROP anything
+--    here. The SECURITY DEFINER functions run as oac_owner.
+--  * UPDATE and TRUNCATE are refused by trigger for every role including
+--    oac_owner. DELETE is refused unless the purge function raised the
+--    transaction-local flag AND the row is older than the window floor, so even
+--    a forged flag removes no young row.
+--  * INSERT is refused unless oac.record_access raised its transaction-local
+--    flag (oac.writing); the BEFORE INSERT trigger then FORCES at to the server
+--    clock, so no insert can carry a backdated time. The origin and the actor
+--    are validated by the function and by CHECK constraints.
+--  * NOT covered: a PostgreSQL superuser (or any role allowed to SET
+--    session_replication_role) bypasses triggers, owns everything and can edit
+--    the catalogue; so can whoever holds the data directory. That is the same
+--    boundary every in-database audit log has; the guarantee is against the
+--    vendor's application roles and tooling, not against the database
+--    superuser. Superuser access to the state server is the host's docker
+--    group, i.e. the access this record exists to make visible, and is out of
+--    band here.
 --
 -- WRITER: SECURITY DEFINER with a pinned search_path and no PUBLIC execute, as
 -- 0009/0010. The origin is derived from the caller's LOGIN role's marker
@@ -81,6 +104,21 @@ BEGIN
 END
 $body$;
 
+-- Inserts come through oac.record_access only, and carry the server's clock.
+CREATE FUNCTION oac.access_record_guard_insert() RETURNS trigger
+  LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $body$
+BEGIN
+  IF coalesce(current_setting('oac.writing', true), '') <> 'on' THEN
+    RAISE EXCEPTION '%.% accepts rows from oac.record_access only', TG_TABLE_SCHEMA, TG_TABLE_NAME
+      USING ERRCODE = 'insufficient_privilege';
+  END IF;
+  NEW.at := clock_timestamp();
+  RETURN NEW;
+END
+$body$;
+
+CREATE TRIGGER access_record_guard_insert_trg BEFORE INSERT ON oac.access_record
+  FOR EACH ROW EXECUTE FUNCTION oac.access_record_guard_insert();
 CREATE TRIGGER access_record_no_update_trg BEFORE UPDATE ON oac.access_record
   FOR EACH ROW EXECUTE FUNCTION oac.refuse_update();
 CREATE TRIGGER access_record_no_delete_trg BEFORE DELETE ON oac.access_record
@@ -118,9 +156,12 @@ BEGIN
      OR (v_origin = 'host' AND p_actor !~ '^[a-z_][a-z0-9_-]{0,31}$') THEN
     RAISE EXCEPTION 'record_access: the actor is the operator uuid (panel) or the host login user (host)' USING ERRCODE = 'invalid_parameter_value';
   END IF;
+  -- The one door the insert trigger accepts; transaction-local, dropped again.
+  PERFORM set_config('oac.writing', 'on', true);
   INSERT INTO oac.access_record (customer_slug, origin, actor, action, what, why, request_id)
   VALUES (p_slug, v_origin, p_actor, p_action, p_what, p_why, p_request_id)
   RETURNING access_id INTO v_id;
+  PERFORM set_config('oac.writing', 'off', true);
   RETURN v_id;
 END
 $body$;
@@ -170,6 +211,7 @@ $body$;
 REVOKE ALL ON FUNCTION oac.refuse_update() FROM PUBLIC;
 REVOKE ALL ON FUNCTION oac.access_window() FROM PUBLIC;
 REVOKE ALL ON FUNCTION oac.access_record_no_delete() FROM PUBLIC;
+REVOKE ALL ON FUNCTION oac.access_record_guard_insert() FROM PUBLIC;
 REVOKE ALL ON FUNCTION oac.record_access(text, text, text, text, text, uuid) FROM PUBLIC;
 REVOKE ALL ON FUNCTION oac.list_access_records(text, integer, timestamptz) FROM PUBLIC;
 REVOKE ALL ON FUNCTION oac.purge_access_records(interval) FROM PUBLIC;

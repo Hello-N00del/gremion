@@ -614,6 +614,7 @@ async function cmdInit(): Promise<void> {
   try {
     const r = await bootstrapPlatform({
       kernelAdmin,
+      openAdminOn,
       openPlatform: () => postgres(platformUrl.toString(), { max: 2, onnotice: () => {}, connect_timeout: 15 }),
       owner: decodeURIComponent(platformUrl.username),
       ownerPassword: decodeURIComponent(platformUrl.password),
