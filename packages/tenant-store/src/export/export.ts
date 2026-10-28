@@ -21,13 +21,18 @@
 //            reason; so are Nextcloud files and Matrix history, which live
 //            outside Postgres and are not exported by this tool.
 // Every database is read in ONE repeatable-read, read-only transaction, so a
-// table pair is consistent. Output: directory 0700, files 0600, never into a
+// table pair is consistent, and never as a superuser (HIGH-1: tenant-defined
+// casts/functions would run with its rights): the caller connects as the
+// export reader (reader.ts), and every database is refused otherwise. Rows
+// are ordered by primary key (else ctid) and rendered by the driver from the
+// server's text output; no value is cast in SQL. Output: directory 0700, files 0600, never into a
 // directory that already has content.
 import { createHash } from 'node:crypto'
 import { chmodSync, closeSync, mkdirSync, openSync, readdirSync, writeFileSync, writeSync } from 'node:fs'
 import { join } from 'node:path'
 import type postgres from 'postgres'
 import { csvLine, jsonReplacer } from './csv.js'
+import { assertNotSuperuserCapable } from './reader.js'
 import { MANIFEST_FILE, MANIFEST_SCHEMA_VERSION, verifyExport, type ExportManifest, type ManifestFile, type VerifyResult } from './verify.js'
 
 type Sql = postgres.Sql<Record<string, never>>
@@ -97,11 +102,6 @@ const SLUG = /^[a-z0-9][a-z0-9-]{0,62}$/
 const LEDGER_TABLE = 'schema_migrations'
 const BATCH = 500
 
-function quote(id: string): string {
-  if (!IDENT.test(id)) throw new ExportError(`refusing identifier ${JSON.stringify(id)}`)
-  return `"${id}"`
-}
-
 function ensureEmptyPrivateDir(dir: string): void {
   mkdirSync(dir, { recursive: true, mode: 0o700 })
   chmodSync(dir, 0o700)
@@ -131,22 +131,42 @@ function openSink(path: string): Sink {
   }
 }
 
+/** A SQL identifier, quoted (any name the catalog returns; nothing is interpolated unquoted). */
+function quoteIdent(id: string): string {
+  return `"${id.replaceAll('"', '""')}"`
+}
+
 async function exportTable(tx: postgres.TransactionSql, scope: string, table: string, outDir: string): Promise<ManifestFile[]> {
+  // The table and its columns from pg_catalog (schema-qualified, no search_path).
+  const [rel] = await tx<{ oid: number }[]>`
+    SELECT c.oid::int AS oid FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+     WHERE n.nspname = 'public' AND c.relname = ${table} AND c.relkind IN ('r', 'p')`
+  if (!rel) throw new ExportError(`table public.${table} does not exist or has no columns`)
+  const cols = await tx<{ name: string; pk: number | null }[]>`
+    SELECT a.attname::text AS name, pg_catalog.array_position(i.indkey::int2[], a.attnum) AS pk
+      FROM pg_catalog.pg_attribute a
+      LEFT JOIN pg_catalog.pg_index i ON i.indrelid = a.attrelid AND i.indisprimary
+     WHERE a.attrelid = ${rel.oid} AND a.attnum > 0 AND NOT a.attisdropped
+     ORDER BY a.attnum`
+  if (cols.length === 0) throw new ExportError(`table public.${table} does not exist or has no columns`)
+  // Deterministic order WITHOUT casting or comparing any value through code the
+  // tenant could have defined (HIGH-1): the primary key (built-in btree
+  // opclasses only; defining one needs a superuser), else the physical row
+  // position, stable inside this repeatable-read snapshot.
+  const pk = cols.filter((c) => c.pk !== null).sort((a, b) => a.pk! - b.pk!)
+  const orderBy = pk.length > 0 ? pk.map((c) => quoteIdent(c.name)).join(', ') : 'ctid'
+  const header = cols.map((c) => c.name)
+  const select = `SELECT ${header.map(quoteIdent).join(', ')} FROM public.${quoteIdent(table)} ORDER BY ${orderBy}`
+
   mkdirSync(join(outDir, scope), { recursive: true, mode: 0o700 })
   const csv = openSink(join(outDir, scope, `${table}.csv`))
   const json = openSink(join(outDir, scope, `${table}.json`))
   let rows = 0
   try {
     json.write('[')
-    // Deterministic order: the primary key columns are not known here, so order by every column's text.
-    const cols = await tx.unsafe<{ column_name: string }[]>(
-      `SELECT column_name FROM information_schema.columns WHERE table_schema = 'public' AND table_name = $1 ORDER BY ordinal_position`,
-      [table],
-    )
-    if (cols.length === 0) throw new ExportError(`table public.${table} does not exist or has no columns`)
-    const header = cols.map((c) => c.column_name)
     csv.write(csvLine(header))
-    await tx.unsafe(`SELECT * FROM public.${quote(table)} ORDER BY ${header.map((c) => `"${c.replaceAll('"', '""')}"::text`).join(', ')}`).cursor(BATCH, (batch) => {
+    // Values are the driver's rendering of the server's text output; no SQL cast.
+    await tx.unsafe(select).cursor(BATCH, (batch) => {
       for (const row of batch) {
         csv.write(csvLine(header.map((c) => (row as Record<string, unknown>)[c])))
         json.write((rows === 0 ? '\n' : ',\n') + JSON.stringify(row, jsonReplacer))
@@ -169,10 +189,21 @@ async function exportTable(tx: postgres.TransactionSql, scope: string, table: st
 
 async function exportDatabase(sql: Sql, scope: string, tables: readonly string[] | 'all', outDir: string, excludedTables: ExportManifest['excluded_tables']): Promise<ManifestFile[]> {
   return sql.begin('isolation level repeatable read read only', async (tx) => {
+    // HIGH-1: never read a tenant database as a superuser, or as a role that
+    // can become one (tenant code can RESET ROLE to the session user).
+    const [who] = await tx<{ session: string; current: string }[]>`SELECT session_user::text AS session, current_user::text AS current`
+    for (const role of new Set([who!.session, who!.current])) {
+      try {
+        await assertNotSuperuserCapable(tx, role)
+      } catch (err) {
+        throw new ExportError(`${scope}: ${(err as Error).message}; connect as the export reader (ensureExportReader)`, { cause: err })
+      }
+    }
+    await tx.unsafe(`SET LOCAL search_path TO pg_catalog, pg_temp`)
     let list: readonly string[]
     if (tables === 'all') {
       const found = await tx<{ table_name: string }[]>`
-        SELECT table_name FROM information_schema.tables
+        SELECT table_name::text AS table_name FROM information_schema.tables
          WHERE table_schema = 'public' AND table_type = 'BASE TABLE' ORDER BY table_name`
       list = found.map((r) => r.table_name).filter((t) => {
         if (t === LEDGER_TABLE) {

@@ -16,7 +16,13 @@
 // (MODULE_PG_ADMIN_<ID>_FILE), read only for modules enabled for the tenant in
 // plt.module_database. Connections are direct (never the pooler), read-only
 // repeatable-read transactions.
-import { exportTenant, verifyExport, type ExportModule } from '@gremion/tenant-store/export'
+//
+// HIGH-1: the admin urls are used ONLY on each server's maintenance database,
+// to (re)assert the export reader (a NOSUPERUSER LOGIN role with
+// pg_read_all_data and a fresh password, ensureExportReader). Every tenant
+// database is then read AS that reader, never as the superuser, and its
+// password is cleared again when the run ends.
+import { ensureExportReader, exportTenant, retireExportReader, verifyExport, type ExportModule } from '@gremion/tenant-store/export'
 import { kernelDbName } from '@gremion/tenant-store/lifecycle'
 import { tenantModuleDbName } from '@gremion/tenant-store'
 import type { LifecycleModule } from '@gremion/tenant-store/lifecycle'
@@ -70,10 +76,30 @@ export async function exportVerb(verb: string, ctx: ExportVerbContext): Promise<
 
   const platform = ctx.openPlatform()
   const open: postgres.Sql[] = []
+  const admins = new Map<string, postgres.Sql>()
   const connect = (url: string) => {
     const s = postgres(url, { max: 1, onnotice: () => {}, connect_timeout: 15 }) as postgres.Sql
     open.push(s)
     return s
+  }
+  // One reader per server: the admin url's own (maintenance) database is where the role DDL runs.
+  const plan: { adminUrl: string; db: string; assign(sql: ExportModule['sql'] & object): void }[] = []
+  const openReaders = async () => {
+    const byServer = new Map<string, string[]>()
+    for (const p of plan) byServer.set(p.adminUrl, [...(byServer.get(p.adminUrl) ?? []), p.db])
+    const creds = new Map<string, { user: string; password: string }>()
+    for (const [adminUrl, dbs] of byServer) {
+      const admin = postgres(adminUrl, { max: 1, onnotice: () => {}, connect_timeout: 15 }) as postgres.Sql
+      admins.set(adminUrl, admin)
+      creds.set(adminUrl, await ensureExportReader(admin as ExportModule['sql'] & object, { databases: dbs }))
+    }
+    for (const p of plan) {
+      const c = creds.get(p.adminUrl)!
+      const u = new URL(withDb(p.adminUrl, p.db))
+      u.username = c.user
+      u.password = encodeURIComponent(c.password)
+      p.assign(connect(u.toString()) as ExportModule['sql'] & object)
+    }
   }
   try {
     const enabled = new Set(
@@ -89,11 +115,14 @@ export async function exportVerb(verb: string, ctx: ExportVerbContext): Promise<
       const base: ExportModule = { id: m.id, runtimeExport: rt.export ?? null, platformServer: rt.platformServer ?? null, enabled: isEnabled }
       if (rt.export && isEnabled && rt.database) {
         const svc = rt.database.postgresService.replace(/-postgres$/, '')
-        base.sql = connect(withDb(ctx.moduleUrl(svc), tenantModuleDbName(tenantId, m.id))) as ExportModule['sql']
+        plan.push({ adminUrl: ctx.moduleUrl(svc), db: tenantModuleDbName(tenantId, m.id), assign: (s) => (base.sql = s) })
       }
       return base
     })
-    const kernel = connect(withDb(ctx.kernelUrl(), kernelDbName(tenantId))) as ExportModule['sql'] & object
+    let kernel: (ExportModule['sql'] & object) | undefined
+    plan.push({ adminUrl: ctx.kernelUrl(), db: kernelDbName(tenantId), assign: (s) => (kernel = s) })
+    await openReaders()
+    if (!kernel) throw new Error('internal: no kernel connection')
     const { manifest, verify } = await exportTenant({ slug, outDir: out, kernel, modules })
     for (const p of verify.problems) console.error(`EXPORT INCOMPLETE ${p.code} ${p.path}: ${p.detail}`)
     ctx.log(
@@ -106,5 +135,9 @@ export async function exportVerb(verb: string, ctx: ExportVerbContext): Promise<
     }
   } finally {
     await Promise.all([platform, ...open].map((s) => s.end({ timeout: 5 }).catch(() => undefined)))
+    for (const admin of admins.values()) {
+      await retireExportReader(admin as ExportModule['sql'] & object).catch((err: unknown) => console.error(`export reader password not cleared: ${(err as Error).message}`))
+      await admin.end({ timeout: 5 }).catch(() => undefined)
+    }
   }
 }
