@@ -38,8 +38,8 @@ describe('blueprint.demoSeeder and blueprint.caucuses', () => {
     expect(v.blueprint.caucuses?.caucuses[0]?.key).toBe('fa')
   })
   it('stays strict: malformed demoSeeder, unknown caucus field, a caucus on an unknown council, a duplicate caucus key', () => {
-    expect(() => load({ ...base(), demoSeeder: 'Not A Key' })).toThrow()
-    expect(() => load({ ...base(), caucuses: { caucuses: [{ key: 'a', councilOrgUnitKey: 'assembly', name: 'A', members: [], surprise: 1 }] } })).toThrow()
+    expect(() => load({ ...base(), demoSeeder: 'Not A Key' })).toThrow(/demoSeeder/)
+    expect(() => load({ ...base(), caucuses: { caucuses: [{ key: 'a', councilOrgUnitKey: 'assembly', name: 'A', members: [], surprise: 1 }] } })).toThrow(/surprise|[Uu]nrecognized/)
     expect(() => load({ ...base(), caucuses: { caucuses: [{ key: 'a', councilOrgUnitKey: 'ghost', name: 'A', members: [] }] } })).toThrow(/unknown council/)
     const dup = { key: 'a', councilOrgUnitKey: 'assembly', name: 'A', members: [] }
     expect(() => load({ ...base(), caucuses: { caucuses: [dup, dup] } })).toThrow(/appears twice/)

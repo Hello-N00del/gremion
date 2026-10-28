@@ -38,7 +38,7 @@ export function findModuleDockerfiles(root) {
     }
   }
   if (existsSync(join(root, 'modules'))) walk('modules')
-  return out.sort()
+  return out.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))
 }
 
 function sourceExists(root, dockerfile, source) {
