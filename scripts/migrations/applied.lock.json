@@ -99,7 +99,7 @@
         "0057_fk_hot_filter_indexes.sql": "1dc2cdad096597e5710acbd24fe0d0bfebcadc8e094233f941f5799aa2d60cbc",
         "0058_public_reader_grants.sql": "b963388faef6afa033c0c3be29918bd9371986306d9c136b2a30bbd361d854be",
         "0059_audit_log_chain_anchor.sql": "1e344401669805cd84849101b1e5858f7ff29e7ea39f9e42b61990490bfb82cd",
-        "0060_erasure_report.sql": "03be8418681c3d0d76af023caf50efaf58ed1c1638b09bc0c60eb1861ceedbef",
+        "0060_erasure_report.sql": "4733add704982bcad3270ccb19de89cc711304c133af78f473f8710c8572aae5",
         "1200_content_news_posts.sql": "dabcd6a81e45b8dc6ac1dbfc4cbfb77286bc5471ee3eb18c2ae5bbacbc508707",
         "1201_news_posts_public_reader_columns.sql": "b3d0f74a26a63a560111ac9cdad9ba603f2e34b9d75b3bf2769c7dc103acd801"
       }

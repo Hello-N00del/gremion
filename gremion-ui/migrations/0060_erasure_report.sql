@@ -1,3 +1,4 @@
+-- gremion:phase expand
 -- 0060_erasure_report.sql
 -- TRD-196 / PRD-OPS-005: the per-module data-subject erasure report.
 -- Tenant-local (db-per-tenant), additive expand-only, all DDL IF NOT EXISTS. No
@@ -37,6 +38,8 @@
 --   DROP FUNCTION IF EXISTS erasure_report_header_guard();
 --   DROP TABLE IF EXISTS erasure_report_module;
 --   DROP TABLE IF EXISTS erasure_report;
+
+SET LOCAL lock_timeout = '5s';
 
 CREATE TABLE IF NOT EXISTS erasure_report (
   id           UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -84,7 +87,7 @@ CREATE TABLE IF NOT EXISTS erasure_report_module (
 --   * a module row is accepted only for an expected module of a RUNNING header;
 --   * a finished report is append-only: no UPDATE or DELETE of the header or
 --     of its module rows (TRUNCATE by an owner is out of scope of row triggers).
-CREATE OR REPLACE FUNCTION erasure_report_header_guard() RETURNS trigger AS $$
+CREATE FUNCTION erasure_report_header_guard() RETURNS trigger AS $$
 BEGIN
   IF TG_OP = 'DELETE' THEN
     IF OLD.status <> 'running' THEN
@@ -129,12 +132,11 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
-DROP TRIGGER IF EXISTS erasure_report_header_guard ON erasure_report;
 CREATE TRIGGER erasure_report_header_guard
   BEFORE INSERT OR UPDATE OR DELETE ON erasure_report
   FOR EACH ROW EXECUTE FUNCTION erasure_report_header_guard();
 
-CREATE OR REPLACE FUNCTION erasure_report_module_guard() RETURNS trigger AS $$
+CREATE FUNCTION erasure_report_module_guard() RETURNS trigger AS $$
 DECLARE
   rid    UUID := CASE WHEN TG_OP = 'DELETE' THEN OLD.report_id ELSE NEW.report_id END;
   parent erasure_report%ROWTYPE;
@@ -164,7 +166,6 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
-DROP TRIGGER IF EXISTS erasure_report_module_guard ON erasure_report_module;
 CREATE TRIGGER erasure_report_module_guard
   BEFORE INSERT OR UPDATE OR DELETE ON erasure_report_module
   FOR EACH ROW EXECUTE FUNCTION erasure_report_module_guard();
