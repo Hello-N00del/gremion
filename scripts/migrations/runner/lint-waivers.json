@@ -9,7 +9,7 @@
         "no-lock-timeout",
         "revoke"
       ],
-      "reason": "SECURITY DEFINER functions of the operator control plane: REVOKE ALL ON FUNCTION .. FROM PUBLIC on functions this same file creates is mandatory hardening (Postgres grants EXECUTE to PUBLIC by default) and only tightens an object no colour has seen; the file creates every table it touches (no lock on a live relation), so no lock_timeout is needed. Locked at 0009 before the lint covered the platform chain; its bytes cannot gain a SET."
+      "reason": "SECURITY DEFINER functions of the operator control plane: REVOKE ALL ON FUNCTION .. FROM PUBLIC on functions this same file creates is mandatory hardening (Postgres grants EXECUTE to PUBLIC by default) and only tightens an object no colour has seen; the file creates every table it touches (no lock on a live relation), so no lock_timeout is needed. Merged 2026-10-21 (034d75f4; phase header 2026-10-22, 333f1482) while the expand-contract suite, which has covered the platform chain since 886cdb6d (2026-09-29), was red on it. The file is locked and applied, so its bytes cannot gain a SET."
     },
     {
       "chain": "platform",
@@ -22,7 +22,7 @@
         "check-without-not-valid",
         "or-replace"
       ],
-      "reason": "Replaces the 0009 SECURITY DEFINER guard/queue functions (same signatures, privileges unchanged) and widens one CHECK on plt.provisioning_request (DROP+ADD of provisioning_request_args_check, only ever loosened for import_members) in the platform database, whose sole readers are the operator panel and host executor, deployed together from one release. The purge helper's REVOKE FROM PUBLIC is on a function this file creates. Locked at 0010 before the lint covered the platform chain; its bytes cannot gain a SET or NOT VALID."
+      "reason": "Replaces the 0009 SECURITY DEFINER guard/queue functions (same signatures, privileges unchanged) and widens one CHECK on plt.provisioning_request (DROP+ADD of provisioning_request_args_check, only ever loosened for import_members) in the platform database, whose sole readers are the operator panel and host executor, deployed together from one release. The purge helper's REVOKE FROM PUBLIC is on a function this file creates. Merged 2026-10-22 (68720eab) while the expand-contract suite, which has covered the platform chain since 886cdb6d (2026-09-29), was red on it. The file is locked and applied, so its bytes cannot gain a SET or NOT VALID."
     },
     {
       "chain": "platform",
