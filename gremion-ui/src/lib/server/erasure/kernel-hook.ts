@@ -3,19 +3,37 @@
 // always-on (non-toggleable) core and governance manifests, whose subject data
 // is exactly these tables.
 //
-//   deleted        org_unit_members, caucus_membership, role_assignments (their
-//                  scheduled_notifications go with them), notification_read_marker,
-//                  provisioning_member_ops rows already DONE (status 'ok')
-//   enqueued       one durable remove-op (provisioning_member_ops, migration 0037)
-//                  per provisioned subsystem of every unit the subject leaves, in
-//                  the SAME tx as the membership delete (as removeUserEverywhere
-//                  does): the reconcile worker drains them to remove the person
-//                  from the Keycloak/Matrix/Nextcloud groups. A still-pending or
-//                  failed op is NEVER deleted: that would cancel the external
-//                  removal while this step says "erased".
-//   pseudonymised  role_assignment_history.user_keycloak_id -> NULL (migration
-//                  0012: the office history stays, the person does not),
-//                  role_assignments.assigned_by_keycloak_id -> 'erased'
+// Per-table policy (docs/compliance/retention-catalogue.md):
+//
+//   RC-IDT-TENURE (tenures, governance memberships: record period, pseudonymised
+//   on request, TRD-160) -- KEPT AS A RECORD, the person removed:
+//     role_assignments        every row of the subject (active, grace, expired,
+//                             vacated) is first copied into role_assignment_history
+//                             with user_keycloak_id NULL, then the live row is
+//                             deleted (its scheduled_notifications cascade).
+//                             ended_reason: expired|grace -> 'expired',
+//                             active|vacated -> 'removed'; end_date: the term end,
+//                             capped at today for a still-running term, today when
+//                             open. A not-yet-started assignment is not a tenure
+//                             and is only deleted.
+//     role_assignment_history user_keycloak_id -> NULL (migration 0012).
+//     org_unit_members        an ELECTED row is copied into
+//     caucus_membership       governance_membership_record (migration 0060, no
+//                             subject column) and the live row deleted; a caucus
+//                             seat likewise. The live row cannot keep a pseudonym:
+//                             it drives the reconcile worker's add-only member sync.
+//     role_assignments.assigned_by_keycloak_id -> 'erased' (the act stays, the
+//                             actor does not).
+//   RC-IDT-HELPER / operative data -- DELETED:
+//     org_unit_members (unelected, employee), notification_read_marker,
+//     scheduled_notifications, provisioning_member_ops already DONE (status 'ok').
+//   Erasure processing -- ENQUEUED, never cancelled:
+//     provisioning_member_ops one durable remove-op (migration 0037) per
+//                             provisioned subsystem of every unit the subject
+//                             leaves, in the SAME tx as the membership delete (as
+//                             removeUserEverywhere does); the reconcile worker
+//                             drains them (Keycloak/Matrix/Nextcloud groups). A
+//                             pending or failed op is NEVER deleted.
 //
 // NOT touched, by design: audit_log (hash chain, TRD-160 redaction layer) and
 // the protocol/Beschluss register (open conflict, TRD section 2.4). The external
@@ -56,6 +74,32 @@ export const kernelErasureHook: ModuleErasureHook<Sql> = {
       // Only finished ops may go; pending/failed ones are the outbox of the external removal.
       c.provisioning_member_ops_done_purged = (
         await tx`DELETE FROM provisioning_member_ops WHERE user_keycloak_id = ${subjectId} AND status = 'ok'`
+      ).count
+
+      // HIGH-2 (RC-IDT-TENURE): the governance record survives, the person does not.
+      c.governance_membership_record = (
+        await tx`
+          INSERT INTO governance_membership_record
+            (source, org_unit_id, caucus_id, membership_type, voting, term_start, term_end, joined_at)
+          SELECT 'org_unit_members', org_unit_id, NULL, membership_type, voting, term_start, term_end, joined_at
+          FROM org_unit_members WHERE user_keycloak_id = ${subjectId} AND membership_type = 'elected'
+          UNION ALL
+          SELECT 'caucus_membership', council_org_unit_id, caucus_id, NULL, NULL, term_start, term_end, joined_at
+          FROM caucus_membership WHERE user_keycloak_id = ${subjectId}`
+      ).count
+      c.role_assignment_history_archived = (
+        await tx`
+          INSERT INTO role_assignment_history (role_id, user_keycloak_id, start_date, end_date, ended_reason)
+          SELECT role_id, NULL, s, e, r FROM (
+            SELECT role_id,
+                   COALESCE(start_date, created_at::date) AS s,
+                   CASE WHEN status IN ('active', 'grace')
+                        THEN LEAST(COALESCE(end_date, current_date), current_date)
+                        ELSE COALESCE(end_date, current_date) END AS e,
+                   CASE WHEN status IN ('expired', 'grace') THEN 'expired' ELSE 'removed' END AS r
+            FROM role_assignments WHERE user_keycloak_id = ${subjectId}
+          ) t
+          WHERE s <= e`
       ).count
 
       c.org_unit_members = (await tx`DELETE FROM org_unit_members WHERE user_keycloak_id = ${subjectId}`).count

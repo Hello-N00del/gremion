@@ -44,7 +44,7 @@ const pendingOps = (user: string) =>
 
 beforeEach(async () => {
   const sql = getDb()
-  await sql`TRUNCATE erasure_report, provisioning_member_ops, org_units, calendar_events, notification_read_marker, role_assignment_history CASCADE`
+  await sql`TRUNCATE erasure_report, provisioning_member_ops, governance_membership_record, org_units, calendar_events, notification_read_marker, role_assignment_history CASCADE`
 })
 
 describe('kernel erasure hook (real schema)', () => {
@@ -57,7 +57,8 @@ describe('kernel erasure hook (real schema)', () => {
     expect(await sql`SELECT 1 FROM org_unit_members WHERE user_keycloak_id = ${SUBJECT}`).toHaveLength(0)
     expect(await sql`SELECT 1 FROM role_assignments WHERE user_keycloak_id = ${SUBJECT}`).toHaveLength(0)
     expect(await sql`SELECT 1 FROM role_assignment_history WHERE user_keycloak_id = ${SUBJECT}`).toHaveLength(0)
-    expect(await sql`SELECT 1 FROM role_assignment_history WHERE user_keycloak_id IS NULL`).toHaveLength(1)
+    // the pre-existing history row pseudonymised + the live assignment archived (HIGH-2)
+    expect(await sql`SELECT 1 FROM role_assignment_history WHERE user_keycloak_id IS NULL`).toHaveLength(2)
     expect(await sql`SELECT 1 FROM role_assignments WHERE assigned_by_keycloak_id = ${SUBJECT}`).toHaveLength(0)
     // the other person's rows survive
     expect(await sql`SELECT 1 FROM org_unit_members WHERE user_keycloak_id = ${OTHER}`).toHaveLength(1)
@@ -131,6 +132,70 @@ describe('HIGH-1: external identity removal is queued, never cancelled', () => {
     const res = await createIdentityErasureHook({ drain: async () => { throw new Error('kc down') } })
       .erase({ tenantId: TENANT_A, subjectId: SUBJECT, db: sql })
     expect(res).toMatchObject({ status: 'skipped', reason: expect.stringMatching(/2 ops queued/) })
+  })
+})
+
+describe('HIGH-2: tenures and governance memberships are kept pseudonymised (RC-IDT-TENURE)', () => {
+  it('copies every live role_assignments row of the subject into role_assignment_history with no subject id', async () => {
+    const { unitId } = await seed()
+    const sql = getDb()
+    const [role] = await sql<{ id: string }[]>`SELECT id FROM committee_roles WHERE org_unit_id = ${unitId}`
+    await sql`INSERT INTO role_assignments (role_id, user_keycloak_id, start_date, end_date, status, assigned_by_keycloak_id) VALUES
+                (${role.id}, ${SUBJECT}, '2024-01-01', '2024-12-31', 'expired', ${OTHER}),
+                (${role.id}, ${SUBJECT}, '2023-01-01', NULL, 'vacated', ${OTHER}),
+                (${role.id}, ${SUBJECT}, '2025-01-01', '2025-12-31', 'grace', ${OTHER})`
+    const before = await sql`SELECT 1 FROM role_assignment_history`
+    const res = await kernelErasureHook.erase({ tenantId: TENANT_A, subjectId: SUBJECT, db: sql })
+    expect(res).toMatchObject({ status: 'erased', counts: { role_assignments: 4, role_assignment_history_archived: 4 } })
+    const hist = await sql<{ user_keycloak_id: string | null; start_date: string; ended_reason: string }[]>`
+      SELECT user_keycloak_id, to_char(start_date, 'YYYY-MM-DD') AS start_date, ended_reason
+      FROM role_assignment_history WHERE user_keycloak_id IS NULL ORDER BY start_date`
+    expect(hist.map((h) => [h.start_date, h.ended_reason])).toEqual([
+      ['2023-01-01', 'removed'],
+      ['2024-01-01', 'expired'],
+      ['2025-01-01', 'expired'], // the seeded history row (pseudonymised in place)
+      ['2025-01-01', 'expired'], // the grace assignment
+      ['2026-01-01', 'removed'], // the current assignment, ended by the erasure
+    ])
+    expect((await sql`SELECT 1 FROM role_assignment_history`).length).toBe(before.length + 4)
+  })
+
+  it('records an elected membership and a caucus seat pseudonymised; an unelected one is just deleted', async () => {
+    const { unitId } = await seed()
+    const sql = getDb()
+    await sql`UPDATE org_unit_members SET membership_type = 'elected', term_start = '2026-01-01', term_end = '2026-12-31'
+              WHERE user_keycloak_id = ${SUBJECT}`
+    const [helper] = await sql<{ id: string }[]>`INSERT INTO org_units (name, kind) VALUES ('AK', 'committee') RETURNING id`
+    await sql`INSERT INTO org_unit_members (org_unit_id, user_keycloak_id, membership_type) VALUES (${helper.id}, ${SUBJECT}, 'unelected')`
+    const [caucus] = await sql<{ id: string }[]>`INSERT INTO caucus (council_org_unit_id, name) VALUES (${unitId}, 'Liste A') RETURNING id`
+    await sql`INSERT INTO caucus_membership (caucus_id, council_org_unit_id, user_keycloak_id, term_start)
+              VALUES (${caucus.id}, ${unitId}, ${SUBJECT}, '2026-01-01')`
+
+    const res = await kernelErasureHook.erase({ tenantId: TENANT_A, subjectId: SUBJECT, db: sql })
+    expect(res).toMatchObject({ status: 'erased', counts: { org_unit_members: 2, caucus_membership: 1, governance_membership_record: 2 } })
+    // the live rows are gone (so the reconcile worker cannot re-add anyone) ...
+    expect(await sql`SELECT 1 FROM org_unit_members WHERE user_keycloak_id = ${SUBJECT}`).toHaveLength(0)
+    expect(await sql`SELECT 1 FROM caucus_membership WHERE user_keycloak_id = ${SUBJECT}`).toHaveLength(0)
+    // ... and the governance record survives without the person
+    const rec = await sql<{ source: string; org_unit_id: string; caucus_id: string | null; membership_type: string | null; term_end: string | null }[]>`
+      SELECT source, org_unit_id, caucus_id, membership_type, to_char(term_end, 'YYYY-MM-DD') AS term_end
+      FROM governance_membership_record ORDER BY source`
+    expect(rec).toEqual([
+      { source: 'caucus_membership', org_unit_id: unitId, caucus_id: caucus.id, membership_type: null, term_end: null },
+      { source: 'org_unit_members', org_unit_id: unitId, caucus_id: null, membership_type: 'elected', term_end: '2026-12-31' },
+    ])
+    const all = await sql`SELECT to_jsonb(r) AS j FROM governance_membership_record r`
+    expect(JSON.stringify(all)).not.toContain(SUBJECT)
+  })
+
+  it('is idempotent: a re-run records nothing twice', async () => {
+    await seed()
+    const sql = getDb()
+    await sql`UPDATE org_unit_members SET membership_type = 'elected' WHERE user_keycloak_id = ${SUBJECT}`
+    await kernelErasureHook.erase({ tenantId: TENANT_A, subjectId: SUBJECT, db: sql })
+    const again = await kernelErasureHook.erase({ tenantId: TENANT_A, subjectId: SUBJECT, db: sql })
+    expect(again).toMatchObject({ counts: { governance_membership_record: 0, role_assignment_history_archived: 0 } })
+    expect(await sql`SELECT 1 FROM governance_membership_record`).toHaveLength(1)
   })
 })
 

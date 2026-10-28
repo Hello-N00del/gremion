@@ -17,7 +17,16 @@
 -- sha256(tenant_id || ':' || subject_id), so the report cannot re-identify them
 -- (a requester who knows the id can recompute it to look the report up).
 --
+-- governance_membership_record (below) is where an erasure keeps a governance
+-- membership as a RECORD (RC-IDT-TENURE: "record period; pseudonymised on
+-- request"): an elected org_unit_members row or a caucus_membership row is
+-- copied here WITHOUT any subject column and the live row is deleted. The live
+-- row cannot stay with a nulled/pseudonym subject: org_unit_members drives the
+-- reconcile worker's add-only member sync (it would re-add the pseudonym to the
+-- Keycloak/Matrix/Nextcloud groups) and quorum/access reads.
+--
 -- Rollback (manual; there is no automated down):
+--   DROP TABLE IF EXISTS governance_membership_record;
 --   DROP TRIGGER IF EXISTS erasure_report_complete_guard ON erasure_report;
 --   DROP FUNCTION IF EXISTS erasure_report_complete_guard();
 --   DROP TABLE IF EXISTS erasure_report_module;
@@ -70,3 +79,26 @@ DROP TRIGGER IF EXISTS erasure_report_complete_guard ON erasure_report;
 CREATE TRIGGER erasure_report_complete_guard
   BEFORE INSERT OR UPDATE OF status ON erasure_report
   FOR EACH ROW EXECUTE FUNCTION erasure_report_complete_guard();
+
+-- A pseudonymised governance-membership record (written by the kernel erasure
+-- step only). No subject column by construction: the seat/term survives, the
+-- person does not. org_unit_id is the unit (org_unit_members) or the council
+-- (caucus_membership); the record goes with the unit, like role_assignment_history
+-- goes with its committee_roles row.
+CREATE TABLE IF NOT EXISTS governance_membership_record (
+  id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+  source          TEXT        NOT NULL CHECK (source IN ('org_unit_members', 'caucus_membership')),
+  org_unit_id     UUID        NOT NULL REFERENCES org_units(id) ON DELETE CASCADE,
+  caucus_id       UUID,
+  membership_type TEXT,
+  voting          BOOLEAN,
+  term_start      DATE,
+  term_end        DATE,
+  joined_at       TIMESTAMPTZ NOT NULL,
+  ended_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  ended_reason    TEXT        NOT NULL DEFAULT 'erased' CHECK (ended_reason = 'erased'),
+  CHECK ((source = 'caucus_membership') = (caucus_id IS NOT NULL))
+);
+
+CREATE INDEX IF NOT EXISTS governance_membership_record_unit_idx
+  ON governance_membership_record (org_unit_id);
