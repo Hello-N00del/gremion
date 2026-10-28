@@ -375,7 +375,7 @@ data-plane file against the control-plane chain, or the reverse.
 
 ## What is here, what is not
 
-**33 data-plane migrations ship in this repository**, and they apply in this
+**34 data-plane migrations ship in this repository**, and they apply in this
 order:
 
 | File | What it does |
@@ -413,6 +413,7 @@ order:
 | `0058_public_reader_grants.sql` | Closes the fresh-install grant hole for the anonymous portal: grants `gremion_public_reader` on the portal tables, and aborts rather than granting nothing. |
 | `0059_audit_log_chain_anchor.sql` | Keeps the INV-1 chain verifiable across the retention purge: `audit_log_chain_anchor` (the last purged `row_hash`), `audit_log_purge_before()` (removes a chain prefix and moves the anchor in one transaction), the verifier starting at the anchor, and the row id drawn under the chain lock. Rewrites no audit row; on a head purged before it, it aborts unless the operator acknowledges the exact hash (`gremion.audit_chain_adopt_head`). Kernel-only (written here, not ported). |
 | `0060_erasure_report.sql` | TRD-196 / PRD-OPS-005: the per-module data-subject erasure report (`erasure_report`, `erasure_report_module`, `governance_membership_record`); triggers refuse a `complete` report unless every expected module erased, and keep finished reports append-only. Kernel-only (written here, not ported). |
+| `0061_audit_log_actor_uuid_check.sql` | TASK-033-a: `CHECK (user_id ~ uuid OR user_id ~ '<token>-service') NOT VALID` on `audit_log`, so a new audit actor is a person's uuid or a component's service principal and never a name; existing rows and the chain are untouched. The append-only REVOKE is not here: `ensureKernelAuditAppendOnly` (tenant-store) applies it. |
 
 Plus **5 control-plane migrations** in
 [`../migrations-control/`](../migrations-control/): `001_tenant_registry.sql`,
@@ -432,7 +433,7 @@ imposes on a pre-existing database are in
 ### Migrations that exist in the product and not here
 
 The reference product chain has **58** data-plane files; 31 of them ship
-here (the 32nd and 33rd files here, `0059` and `0060`, are kernel-only), so **27 are absent**. Every one of them is module-owned or unshipped — finance
+here (the 32nd to 34th files here, `0059`, `0060` and `0061`, are kernel-only), so **27 are absent**. Every one of them is module-owned or unshipped — finance
 (`013`–`017`, `019`–`023`, `025`–`032`, `035`, `036`) and content (`044`–`047`)
 ship in their own repositories, and handover (`050`–`052`) ships in no release-1
 tree at all: `make lint-unshipped-migrations` fails any tree that carries one.

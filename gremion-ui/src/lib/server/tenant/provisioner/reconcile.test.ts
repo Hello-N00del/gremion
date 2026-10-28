@@ -2,7 +2,7 @@
 // transport, no network, no DB. A green realm passes every named check; each
 // single planted drift fails EXACTLY that named check; apply issues exactly the
 // repairing calls (§4-2 idempotent sequence) and nothing else.
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -10,6 +10,8 @@ import type { KcTransport } from './kc-admin-api'
 import {
   reconcileRealm,
   reconcileFleet,
+  withKernelAuditCheck,
+  KERNEL_DB_CHECK_NAMES,
   isRealmBearing,
   REALM_BEARING_STATUSES,
   RECONCILE_CHECK_NAMES,
@@ -60,6 +62,9 @@ const GREEN_2FA_EXECS = () => [
 const GREEN_HARDENING = {
   passwordPolicy: 'length(12) and notUsername and notEmail and passwordHistory(3)',
 }
+
+/** The access-token sub mapper (the shape the base template's gremion-ui client carries). */
+const SUB_MAPPER = { name: 'sub', protocolMapper: 'oidc-usermodel-property-mapper', config: { 'claim.name': 'sub', 'access.token.claim': 'true' } }
 
 /** A GREEN live realm: every §4 contract element present + correct. Built as a
  *  route map keyed by `${method} ${path}` for a scriptable transport. */
@@ -118,8 +123,12 @@ function greenRoutes(): Record<string, unknown> {
     ],
     'GET /admin/realms/verein/clients/uuid-ui/protocol-mappers/models': [
       { name: 'acr', protocolMapper: 'oidc-acr-mapper' },
-      { name: 'sub', protocolMapper: 'oidc-usermodel-property-mapper', config: { 'claim.name': 'sub' } },
+      SUB_MAPPER,
     ],
+    // TASK-033-a: gremion-mobile is the other Bearer client; its access token must carry sub too
+    [`GET /admin/realms/${REALM}/clients?clientId=gremion-mobile`]: [{ id: 'uuid-mobile', clientId: 'gremion-mobile' }],
+    'GET /admin/realms/verein/clients/uuid-mobile/protocol-mappers/models': [SUB_MAPPER],
+    'GET /admin/realms/verein/clients/uuid-mobile/default-client-scopes': [],
     // (D) #254: the gremion-ui realm-role scope-mappings (fullScopeAllowed:false needs
     // these or realm_access.roles silently empties). The base floor set.
     'GET /admin/realms/verein/clients/uuid-ui/scope-mappings/realm': [
@@ -360,20 +369,18 @@ describe('reconcileRealm — each single drift fails EXACTLY that named check', 
 
   it('missing acr mapper -> only gremion-ui-acr-mapper fails', async () => {
     const failed = await failedNames((r) => {
-      r['GET /admin/realms/verein/clients/uuid-ui/protocol-mappers/models'] = [
-        { name: 'sub', protocolMapper: 'oidc-usermodel-property-mapper', config: { 'claim.name': 'sub' } },
-      ]
+      r['GET /admin/realms/verein/clients/uuid-ui/protocol-mappers/models'] = [SUB_MAPPER]
     })
     expect(failed).toEqual(['gremion-ui-acr-mapper'])
   })
 
-  it('missing uid sub-mapper -> only gremion-ui-sub-mapper fails', async () => {
+  it('missing uid sub-mapper -> gremion-ui-sub-mapper fails, and so does the Bearer-clients check (the same drift, seen per client)', async () => {
     const failed = await failedNames((r) => {
       r['GET /admin/realms/verein/clients/uuid-ui/protocol-mappers/models'] = [
         { name: 'acr', protocolMapper: 'oidc-acr-mapper' },
       ]
     })
-    expect(failed).toEqual(['gremion-ui-sub-mapper'])
+    expect(failed).toEqual(['gremion-ui-sub-mapper', 'bearer-clients-sub'])
   })
 
   it('wildcard redirect URI -> only gremion-ui-redirect-uris fails', async () => {
@@ -543,6 +550,115 @@ describe('(TASK-043) smtp-server and the narrowed no-fixture-users', () => {
 // TASK-042 Q8 (RFC 9700 §2.1, exact redirect-URI matching): there is no
 // default-realm exception any more. Every realm, whatever its tenant's slug, is
 // held to the exact per-tenant URI set, so a localhost dev URI FAILS reconcile.
+// TASK-033-a / TRD-147: a session without `sub` is refused (hooks.server.ts sessionUserFromPayload),
+// so EVERY client whose tokens reach the Bearer branch must issue `sub`: gremion-ui and gremion-mobile
+// (the default JWT audiences). Keycloak 25+ issues it through the built-in `basic` client scope; a realm
+// imported from our template carries no `basic` scope, so the client needs a sub mapper of its own.
+describe('reconcileRealm — every Bearer client issues sub (TASK-033-a)', () => {
+  const MOBILE = `GET /admin/realms/${REALM}/clients?clientId=gremion-mobile`
+  const MOBILE_MAPPERS = 'GET /admin/realms/verein/clients/uuid-mobile/protocol-mappers/models'
+  const MOBILE_SCOPES = 'GET /admin/realms/verein/clients/uuid-mobile/default-client-scopes'
+  const verify = async (mutate: (r: Record<string, unknown>) => void) => {
+    const routes = greenRoutes()
+    mutate(routes)
+    const { transport, calls } = scriptedTransport(routes)
+    const report = await reconcileRealm(transport, { ...opts, verifyOnly: true })
+    return { report, calls, failed: report.checks.filter((c) => !c.ok) }
+  }
+
+  it('is part of the realm contract (the named, ordered check list)', () => {
+    expect(RECONCILE_CHECK_NAMES).toContain('bearer-clients-sub')
+  })
+
+  it('a mobile client with no sub mapper and no default scope that issues it -> only bearer-clients-sub fails, naming the client', async () => {
+    const { failed } = await verify((r) => {
+      r[MOBILE_MAPPERS] = []
+    })
+    expect(failed.map((c) => c.name)).toEqual(['bearer-clients-sub'])
+    expect(failed[0]!.detail).toContain('gremion-mobile')
+    expect(failed[0]!.detail).not.toContain('gremion-ui')
+  })
+
+  it('the built-in basic scope on the client satisfies it (Keycloak 25+ issues sub there)', async () => {
+    const { failed } = await verify((r) => {
+      r[MOBILE_MAPPERS] = []
+      r[MOBILE_SCOPES] = [{ id: 'scope-basic', name: 'basic' }]
+      r['GET /admin/realms/verein/client-scopes/scope-basic/protocol-mappers/models'] = [
+        { name: 'sub', protocolMapper: 'oidc-sub-mapper', config: { 'access.token.claim': 'true' } },
+      ]
+    })
+    expect(failed).toEqual([])
+  })
+
+  it('a default scope that carries no sub mapper does not count', async () => {
+    const { failed } = await verify((r) => {
+      r[MOBILE_MAPPERS] = []
+      r[MOBILE_SCOPES] = [{ id: 'scope-profile', name: 'profile' }]
+      r['GET /admin/realms/verein/client-scopes/scope-profile/protocol-mappers/models'] = [
+        { name: 'username', protocolMapper: 'oidc-usermodel-property-mapper', config: { 'claim.name': 'preferred_username', 'access.token.claim': 'true' } },
+      ]
+    })
+    expect(failed.map((c) => c.name)).toEqual(['bearer-clients-sub'])
+  })
+
+  it('a sub mapper that stays out of the ACCESS token does not count (Bearer tokens are access tokens)', async () => {
+    const { failed } = await verify((r) => {
+      r[MOBILE_MAPPERS] = [{ name: 'sub', protocolMapper: 'oidc-sub-mapper', config: { 'access.token.claim': 'false', 'id.token.claim': 'true' } }]
+    })
+    expect(failed.map((c) => c.name)).toEqual(['bearer-clients-sub'])
+  })
+
+  it('a client absent from the realm issues no tokens: nothing to check (gremion-ui absence has its own checks)', async () => {
+    const { failed } = await verify((r) => {
+      r[MOBILE] = []
+    })
+    expect(failed).toEqual([])
+  })
+
+  it('verify-only reports the drift and issues NO mutating call', async () => {
+    const { calls, report } = await verify((r) => {
+      r[MOBILE_MAPPERS] = []
+    })
+    expect(report.ok).toBe(false)
+    expect(calls.every((c) => c.method === 'GET')).toBe(true)
+  })
+
+  it('apply, realm WITHOUT a basic scope (our imported template): POSTs the sub mapper to the client and records it applied', async () => {
+    const routes = greenRoutes()
+    routes[MOBILE_MAPPERS] = []
+    routes[`GET /admin/realms/${REALM}/client-scopes`] = [{ id: 'scope-email', name: 'email' }]
+    const { transport, calls } = scriptedTransport(routes)
+    const report = await reconcileRealm(transport, { ...opts, verifyOnly: false })
+    const writes = calls.filter((c) => c.method !== 'GET')
+    expect(writes).toHaveLength(1)
+    expect(writes[0]).toMatchObject({ method: 'POST', path: `/admin/realms/${REALM}/clients/uuid-mobile/protocol-mappers/models` })
+    expect(writes[0]!.body).toMatchObject({
+      protocol: 'openid-connect',
+      protocolMapper: 'oidc-usermodel-property-mapper',
+      config: { 'claim.name': 'sub', 'user.attribute': 'id', 'access.token.claim': 'true' },
+    })
+    expect(report.applied).toContain('bearer-clients-sub')
+  })
+
+  it('apply, realm WITH a basic scope: attaches it as a default scope of the client instead of a private mapper', async () => {
+    const routes = greenRoutes()
+    routes[MOBILE_MAPPERS] = []
+    routes[`GET /admin/realms/${REALM}/client-scopes`] = [{ id: 'scope-basic', name: 'basic' }]
+    const { transport, calls } = scriptedTransport(routes)
+    const report = await reconcileRealm(transport, { ...opts, verifyOnly: false })
+    const writes = calls.filter((c) => c.method !== 'GET')
+    expect(writes).toEqual([{ method: 'PUT', path: `/admin/realms/${REALM}/clients/uuid-mobile/default-client-scopes/scope-basic`, body: undefined }])
+    expect(report.applied).toContain('bearer-clients-sub')
+  })
+
+  it('apply on a green realm issues no write for it', async () => {
+    const { transport, calls } = scriptedTransport(greenRoutes())
+    const report = await reconcileRealm(transport, { ...opts, verifyOnly: false })
+    expect(calls.every((c) => c.method === 'GET')).toBe(true)
+    expect(report.applied).not.toContain('bearer-clients-sub')
+  })
+})
+
 describe('(Q8) reconcileRealm — every realm is held to the exact per-tenant URI set', () => {
   const baseUi = (base.clients as any[]).find((c: any) => c.clientId === 'gremion-ui')
   const BASE_REDIRECT = [...baseUi.redirectUris]
@@ -973,5 +1089,70 @@ describe('(C) reconcileFleet — --all skips non-realm-bearing tenants and never
     const report = await reconcileFleet(fleet, async (tenant) => okReport(tenant.realmName))
     expect(report.rows.every((r) => r.outcome === 'reconciled')).toBe(true)
     expect(report.anyFailed).toBe(false)
+  })
+})
+
+// TASK-033-a: the kernel audit_log is a governance record, append-only for the app (RC-GOV-CHAIN).
+// The privilege lives in the customer's kernel database, not in the realm, so the verb adds ONE
+// DB-level check to the realm report through an injected port: verify reads it, apply re-asserts it.
+describe('withKernelAuditCheck: the audit-append-only check', () => {
+  const green: ReconcileReport = { realm: REALM, ok: true, checks: [{ name: 'ssl-required', ok: true, detail: '' }], applied: [], repairHost: [] }
+  const fakePort = (states: string[][]) => {
+    const seq = [...states]
+    const repair = vi.fn(async () => {})
+    return { problems: vi.fn(async () => (seq.length > 1 ? seq.shift()! : seq[0]!)), repair }
+  }
+
+  it('is a named check of its own, outside the realm contract list', () => {
+    expect([...KERNEL_DB_CHECK_NAMES]).toEqual(['audit-append-only'])
+    expect((RECONCILE_CHECK_NAMES as readonly string[]).includes('audit-append-only')).toBe(false)
+  })
+
+  it('a clean kernel database adds a passing check and keeps the report green', async () => {
+    const port = fakePort([[]])
+    const r = await withKernelAuditCheck(green, port, true)
+    expect(r.ok).toBe(true)
+    expect(r.checks.at(-1)).toEqual({ name: 'audit-append-only', ok: true, detail: '' })
+    expect(port.repair).not.toHaveBeenCalled()
+  })
+
+  it('verify-only reports the privilege still held and does NOT repair', async () => {
+    const port = fakePort([['audit_log: k_x_app still holds DELETE (the kernel audit record is append-only)']])
+    const r = await withKernelAuditCheck(green, port, true)
+    expect(r.ok).toBe(false)
+    expect(r.checks.at(-1)).toMatchObject({ name: 'audit-append-only', ok: false })
+    expect(r.checks.at(-1)!.detail).toContain('still holds DELETE')
+    expect(port.repair).not.toHaveBeenCalled()
+    expect(r.applied).toEqual([])
+  })
+
+  it('apply repairs it once, re-reads, and the report turns green with the repair listed', async () => {
+    const port = fakePort([['audit_log: k_x_app still holds DELETE'], []])
+    const r = await withKernelAuditCheck(green, port, false)
+    expect(port.repair).toHaveBeenCalledTimes(1)
+    expect(r.ok).toBe(true)
+    expect(r.applied).toContain('audit-append-only')
+    expect(r.checks.at(-1)).toMatchObject({ name: 'audit-append-only', ok: true })
+  })
+
+  it('apply that leaves the privilege in place stays RED (the post-condition is read, not assumed)', async () => {
+    const port = fakePort([['audit_log: k_x_app still holds DELETE']])
+    const r = await withKernelAuditCheck(green, port, false)
+    expect(port.repair).toHaveBeenCalledTimes(1)
+    expect(r.ok).toBe(false)
+    expect(r.checks.at(-1)).toMatchObject({ name: 'audit-append-only', ok: false })
+  })
+
+  it('a port that throws fails the check with the reason; it never crashes the report', async () => {
+    const port = { problems: vi.fn(async () => { throw new Error('connection refused') }), repair: vi.fn(async () => {}) }
+    const r = await withKernelAuditCheck(green, port, true)
+    expect(r.ok).toBe(false)
+    expect(r.checks.at(-1)!.detail).toContain('connection refused')
+  })
+
+  it('a realm report that already failed stays failed (the check never flips ok to true)', async () => {
+    const red: ReconcileReport = { ...green, ok: false, checks: [{ name: 'ssl-required', ok: false, detail: 'x' }] }
+    const r = await withKernelAuditCheck(red, fakePort([[]]), true)
+    expect(r.ok).toBe(false)
   })
 })

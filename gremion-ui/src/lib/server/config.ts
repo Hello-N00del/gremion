@@ -12,8 +12,8 @@ import { MODULE_MANIFESTS } from '$lib/modules/registry'
 // instance-theme imports nothing).
 import { legacyAccentToPalette } from '$lib/theme/instance-theme'
 // R29-RETENTION-30-K [D R29-I6]: log-retention defaults, caps and the clamp
-// live in one pure module so the settings API, the Settings tab and the purge
-// tick cannot drift from this file.
+// live in one pure module so the settings API, the Settings tab and the generated
+// Löschkonzept cannot drift from this file. No purge reads these fields (TASK-033-a).
 import {
   OPERATOR_CEILING_DAYS,
   RETENTION_CAPS,
@@ -115,7 +115,8 @@ export interface GremionConfig {
   backups: { retention_days: number; last_backup_at: string | null; encryption_key_path: string }
   retention: {
     // Defaults and hard caps: `$lib/retention-tiers` ([D R29-I6]: nothing is kept
-    // longer than 30 days; 29-day caps where the daily purge tick enforces).
+    // longer than 30 days; 29-day caps where a daily purge would enforce). Nothing
+    // deletes by these fields (TASK-033-a); audit_log is a governance record they do not govern.
     access_logs_days: number          // Tier 1 default 14, hard cap 29
     app_logs_days: number             // Tier 2 default 28, hard cap 29
     security_logs_days: number        // Tier 3 default 27, hard cap 29
@@ -540,8 +541,8 @@ function mergeStored(stored: StoredConfig): GremionConfig {
     legal: { ...DEFAULT_CONFIG.legal, ...stored.legal },
     backups: { ...DEFAULT_CONFIG.backups, ...stored.backups },
     // [D R29-I6]: clamp on READ as well as on write. A config persisted before
-    // the 30-day ceiling carries 90 / 180 / 365; the purge tick reads this block
-    // directly, so a stored 90 must not survive until somebody re-saves it.
+    // the 30-day ceiling carries 90 / 180 / 365; the Settings tab and the config API
+    // read this block directly, so a stored 90 must not survive until somebody re-saves it.
     retention: clampStoredRetention(stored.retention),
     compliance: { ...DEFAULT_CONFIG.compliance, ...stored.compliance },
   } as GremionConfig
@@ -552,9 +553,9 @@ const warnedRetentionClamps = new Set<string>()
 
 /**
  * Clamp the stored retention block on read and say so when that shortens a
- * stored value. The daily audit purge deletes every `audit_log` row older than
- * `security_logs_days`, so a stored 90 silently becoming 29 means ~61 days of
- * audit rows go on the next tick: the operator must see that in the logs.
+ * stored value, so the operator sees in the logs that the file no longer says
+ * what the product shows. The clamp deletes nothing: no purge reads these fields
+ * and `audit_log` is a governance record that no timer purges (TASK-033-a).
  *
  * Type-invalid stored values (string, NaN, null) never get here: the schema
  * rejects them first (`parseConfig` throws, `readConfig` warns and falls back).
@@ -565,13 +566,9 @@ function clampStoredRetention(storedRetention: StoredConfig['retention']): Gremi
     const stored = storedRetention?.[field]
     if (stored === undefined || stored === clamped[field] || warnedRetentionClamps.has(field)) continue
     warnedRetentionClamps.add(field)
-    const purge =
-      field === 'security_logs_days'
-        ? '; the daily audit_log purge deletes every row older than the clamped value'
-        : ''
     console.warn(
       `[config] retention.${field}: stored value ${stored} is outside the allowed range 1..${RETENTION_CAPS[field]} ` +
-        `(operator ceiling ${OPERATOR_CEILING_DAYS} days, R29-I6) and is clamped to ${clamped[field]}${purge}`,
+        `(operator ceiling ${OPERATOR_CEILING_DAYS} days, R29-I6) and is clamped to ${clamped[field]}`,
     )
   }
   return clamped

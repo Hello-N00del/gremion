@@ -18,11 +18,12 @@ import { join } from 'node:path'
 import type { TransactionSql } from 'postgres'
 import { getDb } from './db'
 import { writeAuditEntry, readAuditLog, verifyAuditChain } from './audit-db'
+import { actor } from './audit-test-actor'
 
 describe('G-103 audit-db integration', () => {
   beforeEach(async () => {
     const sql = getDb()
-    // Same isolation pattern as audit-retention.integration.test.ts — wipe
+    // Same isolation pattern as the other audit integration specs — wipe
     // the table at the start of each test so neighbouring suites' leaked
     // rows don't shift the assertions.
     await sql`TRUNCATE audit_log RESTART IDENTITY CASCADE`
@@ -31,7 +32,7 @@ describe('G-103 audit-db integration', () => {
   describe('writeAuditEntry → readAuditLog round-trip', () => {
     it('round-trips a complete audit entry (all fields populated)', async () => {
       await writeAuditEntry({
-        userId: 'user-roundtrip',
+        userId: actor('user-roundtrip'),
         field: 'org.name',
         oldValue: 'StuRa Beispieluni',
         newValue: 'StuRa Test',
@@ -39,7 +40,7 @@ describe('G-103 audit-db integration', () => {
       const rows = await readAuditLog('org.name')
       expect(rows).toHaveLength(1)
       expect(rows[0]).toMatchObject({
-        userId: 'user-roundtrip',
+        userId: actor('user-roundtrip'),
         field: 'org.name',
         oldValue: 'StuRa Beispieluni',
         newValue: 'StuRa Test',
@@ -56,7 +57,7 @@ describe('G-103 audit-db integration', () => {
       // initial-config write (no prior value) sets oldValue: null and
       // the row must persist with old_value IS NULL on read.
       await writeAuditEntry({
-        userId: 'user-null',
+        userId: actor('user-null'),
         field: 'org.initialSetup',
         oldValue: null,
         newValue: 'completed',
@@ -75,7 +76,7 @@ describe('G-103 audit-db integration', () => {
       // (a classic JSON round-trip failure mode).
       await sql`
         INSERT INTO audit_log (user_id, field, old_value, new_value)
-        VALUES ('user-direct-null', 'config.x', NULL, 'new')
+        VALUES (${actor('user-direct-null')}, 'config.x', NULL, 'new')
       `
       const rows = await readAuditLog('config.x')
       expect(rows[0].oldValue).toBeNull()
@@ -93,7 +94,7 @@ describe('G-103 audit-db integration', () => {
       // 60 should still see only 50 rows back.
       for (let i = 0; i < 60; i++) {
         await writeAuditEntry({
-          userId: `user-${i}`,
+          userId: actor(`user-${i}`),
           field: 'cap.test',
           oldValue: null,
           newValue: `v${i}`,
@@ -114,7 +115,7 @@ describe('G-103 audit-db integration', () => {
     it('explicit limit override caps the result set below the default', async () => {
       for (let i = 0; i < 10; i++) {
         await writeAuditEntry({
-          userId: `u-${i}`,
+          userId: actor(`u-${i}`),
           field: 'small.cap',
           oldValue: null,
           newValue: String(i),
@@ -128,11 +129,11 @@ describe('G-103 audit-db integration', () => {
       const sql = getDb()
       // Force a known ordering by inserting with explicit timestamps so
       // the test isn't flaky on rows that share now() to the millisecond.
-      await sql`INSERT INTO audit_log (created_at, user_id, field, old_value, new_value) VALUES (now() - INTERVAL '30 minutes', 'u-old',  'order.test', 'a', 'b')`
-      await sql`INSERT INTO audit_log (created_at, user_id, field, old_value, new_value) VALUES (now() - INTERVAL '10 minutes', 'u-mid',  'order.test', 'a', 'b')`
-      await sql`INSERT INTO audit_log (created_at, user_id, field, old_value, new_value) VALUES (now(),                          'u-new',  'order.test', 'a', 'b')`
+      await sql`INSERT INTO audit_log (created_at, user_id, field, old_value, new_value) VALUES (now() - INTERVAL '30 minutes', ${actor('u-old')},  'order.test', 'a', 'b')`
+      await sql`INSERT INTO audit_log (created_at, user_id, field, old_value, new_value) VALUES (now() - INTERVAL '10 minutes', ${actor('u-mid')},  'order.test', 'a', 'b')`
+      await sql`INSERT INTO audit_log (created_at, user_id, field, old_value, new_value) VALUES (now(),                          ${actor('u-new')},  'order.test', 'a', 'b')`
       const rows = await readAuditLog('order.test')
-      expect(rows.map((r) => r.userId)).toEqual(['u-new', 'u-mid', 'u-old'])
+      expect(rows.map((r) => r.userId)).toEqual([actor('u-new'), actor('u-mid'), actor('u-old')])
     })
   })
 
@@ -159,7 +160,7 @@ describe('G-103 audit-db integration', () => {
       for (let i = 0; i < 200; i++) {
         await sql`
           INSERT INTO audit_log (user_id, field, old_value, new_value)
-          VALUES (${'u' + i}, ${i % 5 === 0 ? 'idx.target' : 'idx.other'}, NULL, 'v')
+          VALUES (${actor('u' + i)}, ${i % 5 === 0 ? 'idx.target' : 'idx.other'}, NULL, 'v')
         `
       }
       await sql`ANALYZE audit_log`
@@ -209,8 +210,8 @@ describe('audit_log hash chain (INV-1)', () => {
   beforeEach(resetAuditChain)
 
   it('chains sequential entries and verifies intact', async () => {
-    await writeAuditEntry({ userId: 'u1', field: 'committee.create', oldValue: null, newValue: 'A' })
-    await writeAuditEntry({ userId: 'u2', field: 'committee.update', oldValue: 'A', newValue: 'B' })
+    await writeAuditEntry({ userId: actor('u1'), field: 'committee.create', oldValue: null, newValue: 'A' })
+    await writeAuditEntry({ userId: actor('u2'), field: 'committee.update', oldValue: 'A', newValue: 'B' })
 
     const sql = getDb()
     const rows = await sql<{ id: number; prev_hash: string | null; row_hash: string }[]>`
@@ -224,8 +225,8 @@ describe('audit_log hash chain (INV-1)', () => {
   })
 
   it('detects tampering when a row is mutated without re-hashing', async () => {
-    await writeAuditEntry({ userId: 'u1', field: 'x', oldValue: null, newValue: 'orig' })
-    await writeAuditEntry({ userId: 'u2', field: 'y', oldValue: null, newValue: 'second' })
+    await writeAuditEntry({ userId: actor('u1'), field: 'x', oldValue: null, newValue: 'orig' })
+    await writeAuditEntry({ userId: actor('u2'), field: 'y', oldValue: null, newValue: 'second' })
 
     const sql = getDb()
     await sql`UPDATE audit_log SET new_value = 'TAMPERED' WHERE id = 1`
@@ -234,9 +235,9 @@ describe('audit_log hash chain (INV-1)', () => {
   })
 
   it('detects a mid-chain row deletion (the successor linkage breaks)', async () => {
-    await writeAuditEntry({ userId: 'u1', field: 'a', oldValue: null, newValue: '1' })
-    await writeAuditEntry({ userId: 'u2', field: 'b', oldValue: null, newValue: '2' })
-    await writeAuditEntry({ userId: 'u3', field: 'c', oldValue: null, newValue: '3' })
+    await writeAuditEntry({ userId: actor('u1'), field: 'a', oldValue: null, newValue: '1' })
+    await writeAuditEntry({ userId: actor('u2'), field: 'b', oldValue: null, newValue: '2' })
+    await writeAuditEntry({ userId: actor('u3'), field: 'c', oldValue: null, newValue: '3' })
 
     const sql = getDb()
     // delete the MIDDLE row — row 3's prev_hash now points at a hash no surviving
@@ -252,9 +253,9 @@ describe('audit_log hash chain (INV-1)', () => {
     // chain. This test pins that documented gap (see migration 043's verifier
     // comment + the Phase-3 external-anchor follow-up). If a future change adds
     // truncation detection, update this expectation.
-    await writeAuditEntry({ userId: 'u1', field: 'a', oldValue: null, newValue: '1' })
-    await writeAuditEntry({ userId: 'u2', field: 'b', oldValue: null, newValue: '2' })
-    await writeAuditEntry({ userId: 'u3', field: 'c', oldValue: null, newValue: '3' })
+    await writeAuditEntry({ userId: actor('u1'), field: 'a', oldValue: null, newValue: '1' })
+    await writeAuditEntry({ userId: actor('u2'), field: 'b', oldValue: null, newValue: '2' })
+    await writeAuditEntry({ userId: actor('u3'), field: 'c', oldValue: null, newValue: '3' })
 
     const sql = getDb()
     await sql`DELETE FROM audit_log WHERE id = (SELECT max(id) FROM audit_log)`
@@ -278,10 +279,10 @@ describe('audit_log hash chain under concurrent writers (K1#2)', () => {
     const b = await sql.reserve()
     try {
       await a.unsafe('BEGIN')
-      await a`INSERT INTO audit_log (user_id, field, new_value) VALUES ('writer-a', 'race.a', '1')`
+      await a`INSERT INTO audit_log (user_id, field, new_value) VALUES (${actor('writer-a')}, 'race.a', '1')`
 
       // B draws its id now and then waits for A's transaction-scoped chain lock.
-      const bDone = b`INSERT INTO audit_log (user_id, field, new_value) VALUES ('writer-b', 'race.b', '2')`.then(() => 'b-committed')
+      const bDone = b`INSERT INTO audit_log (user_id, field, new_value) VALUES (${actor('writer-b')}, 'race.b', '2')`.then(() => 'b-committed')
       let waiting = 0
       for (let i = 0; i < 100 && waiting === 0; i++) {
         const [row] = await sql<{ n: number }[]>`
@@ -292,7 +293,7 @@ describe('audit_log hash chain under concurrent writers (K1#2)', () => {
       expect(waiting, 'writer B never queued behind the chain lock').toBe(1)
 
       // A writes again (a higher id than B's) and commits; then B proceeds.
-      await a`INSERT INTO audit_log (user_id, field, new_value) VALUES ('writer-a', 'race.a', '3')`
+      await a`INSERT INTO audit_log (user_id, field, new_value) VALUES (${actor('writer-a')}, 'race.a', '3')`
       await a.unsafe('COMMIT')
       expect(await bDone).toBe('b-committed')
     } finally {
@@ -334,7 +335,7 @@ describe('migration 0059 on a chain whose head was purged before it (H01 upgrade
   /** Three rows, the oldest removed the pre-0059 way: a plain DELETE, no anchor. */
   async function purgedHeadWithoutAnchor(tx: TransactionSql): Promise<{ headPrev: string; chain: string }> {
     for (const v of ['1', '2', '3']) {
-      await tx`INSERT INTO audit_log (user_id, field, new_value) VALUES ('u', 'upgrade.chain', ${v})`
+      await tx`INSERT INTO audit_log (user_id, field, new_value) VALUES (${actor('u')}, 'upgrade.chain', ${v})`
     }
     await tx`DELETE FROM audit_log WHERE id = (SELECT min(id) FROM audit_log)`
     await tx`DELETE FROM audit_log_chain_anchor`
@@ -385,7 +386,7 @@ describe('migration 0059 on a chain whose head was purged before it (H01 upgrade
     const text = readFileSync(MIGRATION, 'utf-8')
     await inRolledBackTx(async (tx) => {
       for (const v of ['1', '2']) {
-        await tx`INSERT INTO audit_log (user_id, field, new_value) VALUES ('u', 'upgrade.genesis', ${v})`
+        await tx`INSERT INTO audit_log (user_id, field, new_value) VALUES (${actor('u')}, 'upgrade.genesis', ${v})`
       }
       const before = await chainFingerprint(tx)
       await tx.unsafe(text)

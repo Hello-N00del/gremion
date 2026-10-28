@@ -68,6 +68,7 @@
     "postgres": "^3.4.4"
   },
   "devDependencies": {
+    "@gremion/retention": "workspace:*",
     "@types/node": "^26.6.0",
     "tsx": "^4.23.13",
     "typescript": "^5.4.5",

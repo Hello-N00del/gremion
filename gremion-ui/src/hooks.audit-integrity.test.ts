@@ -7,8 +7,8 @@ import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from 'vite
  * the audit_log hash chain per ACTIVE tenant inside that tenant's EXPLICIT
  * runWithTenant scope and logs LOUDLY (console.error) when a chain is broken.
  *
- * Structure mirrors hooks.audit-retention.test.ts (hooks.server.ts is heavy to
- * import, so every module-scoped dependency is stubbed): the tenant CONTEXT
+ * hooks.server.ts is heavy to import, so every module-scoped dependency is
+ * stubbed: the tenant CONTEXT
  * module is deliberately REAL so currentTenantId() recording proves the
  * explicit per-tenant ALS scope, and the registry lists TWO active tenants.
  *
@@ -54,13 +54,11 @@ vi.mock('$lib/server/governance/provisioning/worker', () => ({ startProvisioning
 vi.mock('$lib/server/jwt-verify', () => ({ verifyBearerJwt: vi.fn(async () => null) }))
 
 // Records the CURRENT tenant scope per verify — currentTenantId() throws
-// outside an ALS scope, which is exactly the fail-closed proof. purgeAuditLogsOlderThan
-// is stubbed inert (the retention tick's own behavior is pinned in
-// hooks.audit-retention.test.ts) — this file only exercises verifyAuditChain.
+// outside an ALS scope, which is exactly the fail-closed proof. (There is no audit_log
+// retention tick: audit_log is an append-only governance record, TASK-033-a.)
 vi.mock('$lib/server/audit-db', async () => {
   const { currentTenantId } = await import('$lib/server/tenant/context')
   return {
-    purgeAuditLogsOlderThan: vi.fn(async () => ({ purged: 0 })),
     verifyAuditChain: vi.fn(async () => {
       const scope = currentTenantId()
       verifyCalls.push({ scope })
@@ -110,7 +108,6 @@ let intervalCallFound: boolean
 // F1-FIX-03 / S1a#4: the one post-boot run.
 // NaN until beforeAll reads the real exports: every comparison on it fails.
 let bootRunDelay = Number.NaN
-let retentionBootDelay = Number.NaN
 let bootRun: (() => unknown) | undefined
 let bootRunUnrefd: boolean | undefined
 
@@ -127,7 +124,6 @@ beforeAll(async () => {
   tick = call?.[0] as () => unknown
   // Typed reads (round 2, review LOW): a renamed export is a compile error.
   bootRunDelay = mod.AUDIT_INTEGRITY_BOOT_DELAY_MS
-  retentionBootDelay = mod.AUDIT_RETENTION_BOOT_DELAY_MS
   const idx = setTimeoutSpy.mock.calls.findIndex((c) => c[1] === bootRunDelay)
   if (idx >= 0) {
     bootRun = setTimeoutSpy.mock.calls[idx][0] as () => unknown
@@ -167,9 +163,8 @@ describe('hooks.server audit-integrity interval (gremion#22 finding 1)', () => {
 
   // F1-FIX-03 / S1a#4: the 6 h interval has no initial run, so a process that
   // restarts more often than every 6 h never verifies the chain at all.
-  it('boot also schedules ONE unref-ed post-boot verify run, after the purge run, within 5 minutes (S1a#4)', () => {
-    expect(retentionBootDelay).toBeGreaterThan(0)
-    expect(bootRunDelay).toBeGreaterThan(retentionBootDelay)
+  it('boot also schedules ONE unref-ed post-boot verify run within 5 minutes (S1a#4)', () => {
+    expect(bootRunDelay).toBeGreaterThan(0)
     expect(bootRunDelay).toBeLessThanOrEqual(5 * 60 * 1000)
     expect(bootRun).toBeTypeOf('function')
     expect(bootRunUnrefd).toBe(true)

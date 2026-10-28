@@ -364,6 +364,23 @@ exact URIs, step-up flow) and, without `--verify-only`, replays repairable drift
 `--all` walks the whole fleet, skips non-realm-bearing rows
 (deleted/deleting/provisioning), and exits non-zero on any genuine failure.
 
+Besides the realm contract, each report carries one **kernel database** check,
+`audit-append-only` (TASK-033-a): the app and owner roles must hold no DELETE, UPDATE
+or TRUNCATE on `audit_log`, and no write on `audit_log_chain_anchor`. The kernel audit
+table is a governance record (RC-GOV-CHAIN) that no timer purges. `--verify-only` reads
+the effective privileges (`has_table_privilege`) and fails the report if one is held;
+without it the verb re-asserts the REVOKE and reads again. Provisioning applies the same
+REVOKE after the kernel chain (the migrate step fails when `audit_log` is missing or a
+privilege is still held). A customer provisioned before this check shows it RED until
+one `reconcile <slug>` (apply) has run.
+
+**Operator note, chain anchor:** with `INSERT` on `audit_log_chain_anchor` revoked from
+the app role, the migration-0059 *adopt* path (`gremion.audit_chain_adopt_head`, only
+needed for a database whose first rows were purged before 0059 existed) cannot write
+the anchor from the boot migration. Run the acknowledgement as the database superuser
+on that one customer, or apply 0059 before the first `reconcile` apply. No new database
+needs it: nothing purges the chain any more.
+
 ## Materialize config
 
 ```bash

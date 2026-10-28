@@ -84,18 +84,30 @@ describe('retention tiers [D R29-I6]', () => {
 })
 
 // A tier without a purge consumer must be presented as configuration, not as an
-// enforced deletion window. RETENTION_CAVEATS is null exactly for the tiers a
-// gremion-ui purge consumer reads.
+// enforced deletion window. No gremion-ui process reads or purges by a retention
+// setting (TASK-033-a), and the kernel audit_log is a governance record that no
+// timer purges (RC-GOV-CHAIN, operator decision 2026-10-28): every caveat is set.
 describe('RETENTION_CAVEATS: tiers without a purge consumer', () => {
   const hooks = read('../hooks.server.ts')
+  const registry = read('../../../packages/retention/src/registry.ts')
 
-  it.each(RETENTION_FIELDS)('%s: caveat is null exactly when hooks.server.ts reads the field', (f) => {
-    const consumed = new RegExp(`retention\\??\\.${f}\\b`).test(hooks)
-    expect(RETENTION_CAVEATS[f] === null).toBe(consumed)
+  it.each(RETENTION_FIELDS)('%s: no in-process purge reads the field (hooks.server.ts)', (f) => {
+    expect(hooks.includes(`retention.${f}`) || hooks.includes(`retention?.${f}`)).toBe(false)
   })
 
-  it('only security_logs_days is enforced today', () => {
-    expect(RETENTION_FIELDS.filter((f) => RETENTION_CAVEATS[f] === null)).toEqual(['security_logs_days'])
+  it('nothing schedules or defines an audit_log purge: it is an append-only governance record (RC-GOV-CHAIN)', () => {
+    // RED recipe: re-add `purgeAuditLogsOlderThan` or an `auditRetentionTick` to hooks.server.ts.
+    expect(hooks).not.toContain('purgeAuditLogsOlderThan')
+    expect(hooks).not.toContain('auditRetentionTick')
+    expect(hooks).not.toContain('AUDIT_RETENTION_BOOT_DELAY_MS')
+    expect(read('./server/audit-db.ts')).not.toContain('audit_log_purge_before')
+  })
+
+  it('no tier is enforced by the application: every caveat is set, and security_logs_days is the log-store window, not the audit table', () => {
+    expect(RETENTION_FIELDS.filter((f) => RETENTION_CAVEATS[f] === null)).toEqual([])
+    expect(RETENTION_CAVEATS.security_logs_days).toContain('Audit-Tabelle')
+    expect(RETENTION_CAVEATS.security_logs_days).toContain('RC-GOV-CHAIN')
+    expect(registry).toMatch(/RC-GOV-CHAIN/)
   })
 
   it.each(RETENTION_FIELDS.filter((f) => RETENTION_CAVEATS[f] !== null))('%s: the caveat is plain German with no plan ids', (f) => {
@@ -103,6 +115,26 @@ describe('RETENTION_CAVEATS: tiers without a purge consumer', () => {
     expect(caveat).toMatch(/^Konfigurationswert/)
     expect(caveat).toContain('nicht')
     expect(caveat).not.toMatch(/R\d\d-|TASK-|S2b/)
+  })
+})
+
+// The gremion-ui fixed windows and the registry that renders the log store's retention are separately
+// written numbers; this ties them. RED recipe: change a default in retention-tiers.ts or a class
+// regularDays in packages/retention/src/registry.ts alone. (security_nopii_logs_days has no class: G4.)
+describe('RETENTION_DEFAULTS equal the windows the registry enforces in the log store', () => {
+  it.each([
+    ['access_logs_days', 'access'],
+    ['app_logs_days', 'application'],
+    ['security_logs_days', 'security'],
+  ] as const)('%s equals enforcedDays(%s) of the packages/retention registry', async (field, cls) => {
+    const reg = await import('../../../packages/retention/src/registry.ts')
+    expect(RETENTION_DEFAULTS[field]).toBe(reg.enforcedDays(reg.logClass(cls)))
+  })
+
+  it('security_logs_days is NOT the audit_log table: the registry states audit_log is RC-GOV-CHAIN and the plt.job_run rule is the one database window', async () => {
+    const reg = await import('../../../packages/retention/src/registry.ts')
+    expect(reg.dbWindowDays(reg.logClass('application'))).toBe(29)
+    expect(read('../../../packages/retention/src/registry.ts')).toMatch(/audit_log table is NOT a class/)
   })
 })
 
@@ -222,7 +254,7 @@ describe('the compliance documents state the registry tiers', () => {
   const CPS_ROW: Record<(typeof RETENTION_FIELDS)[number], string> = {
     access_logs_days: '| Access logs |',
     app_logs_days: '| Application logs |',
-    security_logs_days: '| Security logs (`audit_log`) |',
+    security_logs_days: '| Security logs (log store) |',
     security_nopii_logs_days: '| Security logs without PII |',
   }
 
@@ -251,16 +283,20 @@ describe('no surface keeps a private copy of the old tiers', () => {
   const loesch = read('./server/loeschkonzept.ts')
   const hooks = read('../hooks.server.ts')
 
-  it('the settings API zod bounds come from RETENTION_CAPS', () => {
-    expect(settingsApi).toContain('RETENTION_CAPS')
+  it('the settings API has no retention bounds: the key is refused (Q6)', () => {
+    expect(settingsApi).not.toContain('RETENTION_CAPS')
+    expect(settingsApi).toContain("'retention' in body")
     expect(settingsApi).not.toMatch(/max\((30|90|180|365)\)/)
     expect(settingsApi).not.toMatch(/Max (30|90|180|365) Tage/)
     expect(settingsApi).not.toContain('BSI')
     expect(settingsApi).not.toContain('BayLDA')
   })
 
-  it('TabRetention.svelte takes its limits from RETENTION_CAPS and cites the operator decision, not BSI/BayLDA tiers', () => {
-    expect(tab).toContain('RETENTION_CAPS')
+  it('TabRetention.svelte is read-only, shows RETENTION_DEFAULTS and cites the operator decision, not BSI/BayLDA tiers', () => {
+    expect(tab).toContain('RETENTION_DEFAULTS')
+    expect(tab).not.toContain('<Input')
+    expect(tab).not.toContain('<Button')
+    expect(tab).not.toContain('fetch(')
     expect(tab).not.toMatch(/:\s*(90|180|365),/)
     expect(tab).not.toMatch(/Max\. (30|90|180|365) Tage/)
     expect(tab).not.toContain('BSI')
@@ -289,14 +325,8 @@ describe('no surface keeps a private copy of the old tiers', () => {
     expect(config).not.toMatch(/access_logs_days,\s*30\)/)
   })
 
-  it('the purge tick falls back to the registry default, never a literal 90', () => {
-    // A rename returns -1; slicing on it would silently test a near-end-of-file window.
-    const start = hooks.indexOf('const auditRetentionTick')
-    const end = hooks.indexOf('setInterval(auditRetentionTick')
-    expect(start, 'const auditRetentionTick not found in hooks.server.ts').toBeGreaterThanOrEqual(0)
-    expect(end, 'setInterval(auditRetentionTick not found in hooks.server.ts').toBeGreaterThan(start)
-    const tick = hooks.slice(start, end)
-    expect(tick).toContain('RETENTION_DEFAULTS.security_logs_days')
-    expect(tick).not.toMatch(/\?\?\s*90/)
+  it('hooks.server.ts keeps no private retention number and no purge fallback', () => {
+    expect(hooks).not.toContain('RETENTION_DEFAULTS')
+    expect(hooks.includes('?? 90') || hooks.includes('?? 180') || hooks.includes('?? 365')).toBe(false)
   })
 })

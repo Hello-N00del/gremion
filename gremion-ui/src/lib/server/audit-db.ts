@@ -61,34 +61,3 @@ export async function readAuditLog(field?: string, limit = 50): Promise<AuditRec
       `
   return rows
 }
-
-/**
- * G-024: hard-delete audit_log rows older than `days`. Driven by the 24-hour
- * retention scheduler booted from hooks.server.ts so the table doesn't grow
- * unbounded past the security-log retention window configured in
- * `config.retention.security_logs_days` (default 27 d, cap 29 d, so a row lives
- * at most 30 d: [D R29-I6], `$lib/retention-tiers`).
- *
- * H01 (F1-FIX-02): the purge runs in the database (migration 0059,
- * audit_log_purge_before) so the INV-1 chain survives it: under the chain lock
- * it removes the oldest PREFIX of the chain whose rows are all past the cutoff
- * and records the last removed row_hash as the chain's anchor in the same
- * transaction, which is where audit_log_verify_chain() then starts. A plain
- * DELETE removed the head and left the verifier reporting BROKEN forever.
- *
- * K1#36: `days` must be a whole number of days, at least 1. A smaller window
- * would erase the tamper-evident record, so it is refused before any SQL runs,
- * whatever the configuration says.
- *
- * Returns the number of rows actually removed.
- */
-export async function purgeAuditLogsOlderThan(days: number): Promise<{ purged: number }> {
-  if (!Number.isInteger(days) || days < 1) {
-    throw new RangeError(`purgeAuditLogsOlderThan: days must be a whole number of at least 1 (got ${days})`)
-  }
-  const sql = getDb()
-  const rows = await sql<{ purged: string }[]>`
-    SELECT audit_log_purge_before(now() - ${days}::int * INTERVAL '1 day')::text AS purged
-  `
-  return { purged: Number(rows[0]?.purged ?? 0) }
-}

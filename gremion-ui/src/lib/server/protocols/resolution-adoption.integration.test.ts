@@ -28,8 +28,9 @@ import {
   listResolutions,
   recordResolutionAdoptions,
 } from './protocol-db'
+import { actor } from '../audit-test-actor'
 
-const ADOPTER = 'admin-user-1'
+const ADOPTER = actor('admin-user-1')
 
 async function seedProtocolWithResolutions() {
   const unit = await createOrgUnit({

@@ -1,8 +1,6 @@
 import { json } from '@sveltejs/kit'
 import type { RequestHandler } from './$types'
 import { readConfig, writeConfig } from '$lib/server/config'
-import { writeAuditEntry } from '$lib/server/audit-db'
-import { OPERATOR_DECISION_DE, RETENTION_CAPS } from '$lib/retention-tiers'
 import { hasRole, Role } from '$lib/auth'
 import type { SessionUser } from '$lib/auth/types'
 import { z } from 'zod'
@@ -14,6 +12,11 @@ import { isAllowedSmtpPort, resolveSmtpTarget } from '$lib/server/mail/smtp-targ
 // exported from `$lib/server/config` — this schema is intentionally a
 // superset/refinement, and `writeConfig` re-validates against the baseline
 // as a defensive second gate.
+//
+// TASK-033-a (Q6): there is NO `retention` key. The log deletion windows are
+// fixed by the retention registry (packages/retention) and enforced by the host
+// purge and the log store's own configuration; an admin cannot lengthen them.
+// PATCH refuses the whole key with 400 before the schema runs.
 const settingsPatchSchema = z.strictObject({
   org: z
     .object({
@@ -54,15 +57,6 @@ const settingsPatchSchema = z.strictObject({
       encryption_key_path: z.string().optional(),
     })
     .optional(),
-  retention: z
-    .object({
-      // [D R29-I6]: bounds come from the one tier registry (`$lib/retention-tiers`).
-      access_logs_days: z.number().int().min(1).max(RETENTION_CAPS.access_logs_days).optional(),
-      app_logs_days: z.number().int().min(1).max(RETENTION_CAPS.app_logs_days).optional(),
-      security_logs_days: z.number().int().min(1).max(RETENTION_CAPS.security_logs_days).optional(),
-      security_nopii_logs_days: z.number().int().min(1).max(RETENTION_CAPS.security_nopii_logs_days).optional(),
-    })
-    .optional(),
   compliance: z
     .object({
       dpo_name: z.string().max(200).optional(),
@@ -97,23 +91,16 @@ export const PATCH: RequestHandler = async ({ request, locals }) => {
   }
 
   const body = await request.json()
+  if (body !== null && typeof body === 'object' && 'retention' in body) {
+    return json(
+      { success: false, error: 'Die Löschfristen für Protokolle sind fest vorgegeben und können nicht geändert werden.' },
+      { status: 400 },
+    )
+  }
   const parsed = settingsPatchSchema.safeParse(body)
   if (!parsed.success) {
     const issue = parsed.error.issues[0]
-    // [D R29-I6]: the cap message names the operator ceiling (no log class is
-    // kept longer than 30 days), not the earlier per-class tiers. Only an
-    // over-the-cap value gets it; 0 or a fraction keeps zod's own message.
-    const capMessage = (field: keyof typeof RETENTION_CAPS) =>
-      `Max ${RETENTION_CAPS[field]} Tage (Betreiber-Obergrenze 30 Tage für jede Protokollklasse, ${OPERATOR_DECISION_DE})`
-    const legalContext: Record<string, string> = {
-      'retention.access_logs_days': capMessage('access_logs_days'),
-      'retention.app_logs_days': capMessage('app_logs_days'),
-      'retention.security_logs_days': capMessage('security_logs_days'),
-      'retention.security_nopii_logs_days': capMessage('security_nopii_logs_days'),
-    }
-    const path = issue?.path.join('.') ?? ''
-    const message = (issue?.code === 'too_big' ? legalContext[path] : undefined) ?? issue?.message ?? 'Invalid input'
-    return json({ success: false, error: message }, { status: 422 })
+    return json({ success: false, error: issue?.message ?? 'Invalid input' }, { status: 422 })
   }
 
   // MED-4: hold the SMTP host/port to the same guard as /api/setup/test-smtp
@@ -148,22 +135,5 @@ export const PATCH: RequestHandler = async ({ request, locals }) => {
   }
 
   const updated = writeConfig(parsed.data)
-
-  // Audit any retention changes
-  if (parsed.data.retention) {
-    const userId = user.id ?? 'unknown'
-    for (const [field, newVal] of Object.entries(parsed.data.retention)) {
-      if (newVal !== undefined) {
-        const oldVal = String(config.retention[field as keyof typeof config.retention])
-        await writeAuditEntry({
-          userId,
-          field: `retention.${field}`,
-          oldValue: oldVal,
-          newValue: String(newVal),
-        })
-      }
-    }
-  }
-
   return json({ success: true, data: updated })
 }

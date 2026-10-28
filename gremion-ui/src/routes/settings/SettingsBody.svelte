@@ -397,7 +397,7 @@
       {:else if activeKey === 'sicherungen' && data.config}
         <TabBackups backups={data.config.backups} />
       {:else if activeKey === 'loeschfristen' && data.config}
-        <TabRetention retention={data.config.retention} />
+        <TabRetention />
       {:else if activeKey === 'gefahrenzone' && data.isITAdmin}
         <TabDangerZone />
       {/if}

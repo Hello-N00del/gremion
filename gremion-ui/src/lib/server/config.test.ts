@@ -343,8 +343,8 @@ describe('ConfigStore', () => {
     })
 
     // R29-RETENTION-30-K [D R29-I6]: every log class is kept at most 30 days.
-    // The daily purge tick adds up to 24 h, so the caps are 29 d for the tiers a
-    // tick enforces (cap + 24 h = 30 d). security_nopii_logs_days keeps cap 30
+    // A daily purge adds up to 24 h, so the caps are 29 d for the tiers a
+    // purge would enforce (cap + 24 h = 30 d). security_nopii_logs_days keeps cap 30
     // (an operator-set 30 must stay valid [R31-I4a]).
     it('returns the R29-I6 defaults when no retention config stored', async () => {
       const { readConfig } = await import('./config')
@@ -380,8 +380,8 @@ describe('ConfigStore', () => {
     })
 
     // A config persisted before R29-I6 carries 90 / 180 / 365. Those must not
-    // survive a READ: the purge tick reads the config and would otherwise keep
-    // rows 90 days. (writeConfig clamping alone never touches a stored file.)
+    // survive a READ: the Settings tab and the config API read the stored block and
+    // would otherwise show 90 days. (writeConfig clamping alone never touches a stored file.)
     it('clamps stored values above the caps on READ (a stored 90 cannot survive)', async () => {
       mockFs.existsSync.mockReturnValue(true)
       mockFs.readFileSync.mockReturnValue(
@@ -408,10 +408,10 @@ describe('ConfigStore', () => {
       expect(r.app_logs_days).toBe(7)
     })
 
-    // The purge tick reads security_logs_days straight from readConfig(). With the
+    // The Settings tab and the config API read security_logs_days straight from readConfig(). With the
     // REAL readConfig (no mock) a config that lacks the key, or the whole block,
-    // reads back the registry default, so the tick never sees undefined.
-    it('a config without security_logs_days reads back 27 (the value the purge tick uses)', async () => {
+    // reads back the registry default, so no reader sees undefined.
+    it('a config without security_logs_days reads back 27 (the registry default)', async () => {
       const { readConfig } = await import('./config')
       for (const stored of [{}, { retention: {} }, { retention: { app_logs_days: 7 } }]) {
         mockFs.existsSync.mockReturnValue(true)
@@ -425,13 +425,14 @@ describe('ConfigStore', () => {
       expect(parseConfig({ retention: { security_logs_days: 180 } }).retention.security_logs_days).toBe(29)
     })
 
-    // The read-time clamp shortens a stored value right before the daily audit
-    // purge deletes rows older than it. It must not do so silently.
+    // The read-time clamp shortens a stored value silently otherwise. Nothing purges by it (TASK-033-a:
+    // no timer reads these fields and audit_log is a governance record), so the warning must NOT
+    // claim a deletion that does not happen.
     describe('clamp warning (once per process and field)', () => {
       const retentionWarnings = (spy: { mock: { calls: unknown[][] } }) =>
         spy.mock.calls.map((c) => String(c[0])).filter((m) => m.includes('[config] retention.'))
 
-      it('warns with field, stored value, clamped value and the audit purge when security_logs_days is shortened', async () => {
+      it('warns with field, stored value and clamped value when security_logs_days is shortened, and claims no purge', async () => {
         const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
         mockFs.existsSync.mockReturnValue(true)
         mockFs.readFileSync.mockReturnValue(JSON.stringify({ retention: { security_logs_days: 90 } }))
@@ -442,7 +443,7 @@ describe('ConfigStore', () => {
         expect(msgs[0]).toContain('security_logs_days')
         expect(msgs[0]).toContain('stored value 90')
         expect(msgs[0]).toContain('clamped to 29')
-        expect(msgs[0]).toContain('audit_log')
+        expect(msgs[0]).not.toMatch(/purge|deletes|audit_log/i)
         expect(msgs[0]).toContain(`operator ceiling ${OPERATOR_CEILING_DAYS} days`)
       })
 

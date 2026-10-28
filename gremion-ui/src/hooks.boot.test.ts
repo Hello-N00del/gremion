@@ -94,7 +94,7 @@ vi.mock('$lib/server/jwt-verify', () => ({
   verifyBearerJwt: vi.fn(async () => null),
 }))
 vi.mock('$lib/server/audit-db', () => ({
-  purgeAuditLogsOlderThan: vi.fn(async () => ({ purged: 0 })),
+  verifyAuditChain: vi.fn(async () => ({ ok: true })),
 }))
 
 // P2.1a boot path: hooks.server.ts now control-migrates, registers the default

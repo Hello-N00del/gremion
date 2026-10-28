@@ -39,7 +39,7 @@ vi.mock('$lib/modules/registry', async (importOriginal) => {
   }
 })
 vi.mock('$lib/server/governance/provisioning/worker', () => ({ startProvisioningWorker: vi.fn() }))
-vi.mock('$lib/server/audit-db', () => ({ purgeAuditLogsOlderThan: vi.fn(async () => ({ purged: 0 })) }))
+vi.mock('$lib/server/audit-db', () => ({ verifyAuditChain: vi.fn(async () => ({ ok: true })) }))
 vi.mock('./auth', () => ({ handle: async ({ event, resolve }: { event: unknown; resolve: (e: unknown) => unknown }) => resolve(event) }))
 vi.mock('$lib/server/tenant/control-migrations', () => ({ runControlMigrations: vi.fn(async () => {}) }))
 vi.mock('$lib/server/tenant/registry', () => ({

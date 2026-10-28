@@ -9,6 +9,7 @@ import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
+import { DEFAULT_AUDIENCES } from '$lib/auth/audience'
 import { MODULE_MANIFESTS } from '$lib/modules/registry'
 import { buildTenantRealmDoc, mobileRedirectUri, PROVISIONER_SECRET_CLIENTS } from './realm-doc'
 
@@ -40,6 +41,20 @@ describe('PROVISIONER_SECRET_CLIENTS (Q11)', () => {
       .map((c) => c.clientId)
       .sort()
     expect([...PROVISIONER_SECRET_CLIENTS].sort()).toEqual(placeholders)
+  })
+})
+
+// TASK-033-a / TRD-147: a token without `sub` has no session. The template imports no `basic` client scope
+// (the 25+ source of sub), so every client whose tokens reach the Bearer branch carries its own access-token
+// sub mapper; reconcile check bearer-clients-sub holds live realms to the same.
+describe('every Bearer client of the base template issues sub in its access token', () => {
+  it.each([...DEFAULT_AUDIENCES])('%s carries an access-token sub mapper', (clientId) => {
+    const c = clients.find((x) => x.clientId === clientId)
+    expect(c, `${clientId} is a JWT audience but absent from the base realm`).toBeDefined()
+    const mappers = (c!.protocolMappers ?? []) as Array<{ protocolMapper?: string; config?: Record<string, string> }>
+    expect(
+      mappers.some((m) => (m.protocolMapper === 'oidc-sub-mapper' || m.config?.['claim.name'] === 'sub') && m.config?.['access.token.claim'] === 'true'),
+    ).toBe(true)
   })
 })
 

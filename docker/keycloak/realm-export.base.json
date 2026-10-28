@@ -241,7 +241,23 @@
       "attributes": {
         "pkce.code.challenge.method": "S256"
       },
-      "fullScopeAllowed": false
+      "fullScopeAllowed": false,
+      "protocolMappers": [
+        {
+          "name": "sub",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-property-mapper",
+          "consentRequired": false,
+          "config": {
+            "userinfo.token.claim": "false",
+            "user.attribute": "id",
+            "id.token.claim": "false",
+            "access.token.claim": "true",
+            "claim.name": "sub",
+            "jsonType.label": "String"
+          }
+        }
+      ]
     }
   ],
   "scopeMappings": [

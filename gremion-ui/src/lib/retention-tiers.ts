@@ -2,15 +2,20 @@
  * Log-retention tiers: the ONE place the numbers live (R29-RETENTION-30-K).
  *
  * Operator decision [D R29-I6] (2026-09-30): no log class is kept longer than
- * 30 days. The product's daily purge tick (`hooks.server.ts`) adds up to 24 h to
- * whatever window is configured, so a tier that the tick enforces is capped at
- * 29 days (29 d + 24 h = 30 d). Defaults follow the retention catalogue
- * (security/audit 27 d, application 28 d, access 14 d;
- * `docs/compliance/retention-catalogue.md`).
+ * 30 days. A daily purge adds up to 24 h to a window, so a tier a daily purge
+ * would enforce is capped at 29 days (29 d + 24 h = 30 d). Defaults follow the
+ * retention catalogue (security 27 d, application 28 d, access 14 d;
+ * `docs/compliance/retention-catalogue.md`) and equal what the registry renders
+ * into the log store's own retention (`packages/retention`; a test ties them).
+ *
+ * NOTHING in gremion-ui reads these values to delete anything (TASK-033-a): the
+ * four tiers are LOG-STORE windows, shown read-only. The kernel's hash-chained
+ * `audit_log` table is not one of them: it is a governance record (RC-GOV-CHAIN,
+ * operator decision 2026-10-28), no timer purges it, and the application role
+ * can only append to it (`AUDIT_LOG_RECORD_DE`).
  *
  * `security_nopii_logs_days` keeps cap 30: an operator-set value of 30 [R31-I4a]
- * must stay valid. Its purge consumer does not exist in this repo yet (named
- * residual; nothing reads the value), so the +24 h tick term does not apply to it.
+ * must stay valid. It has no registry class (catalogue gap G4).
  *
  * Pure and client-safe (no `$lib/server`, no fs): config.ts clamps through it,
  * the settings API builds its zod bounds from it, TabRetention.svelte imports
@@ -34,7 +39,7 @@ export const RETENTION_FIELDS: readonly RetentionField[] = [
 /** Operator ceiling [D R29-I6]: no log class outlives this many days. */
 export const OPERATOR_CEILING_DAYS = 30
 
-/** The purge tick runs daily, so a record can outlive its window by this much. */
+/** A daily purge lets a record outlive its window by this much (the cap leaves room for it). */
 export const PURGE_TICK_DAYS = 1
 
 export const RETENTION_DEFAULTS: Readonly<Record<RetentionField, number>> = {
@@ -55,10 +60,18 @@ export const RETENTION_CAPS: Readonly<Record<RetentionField, number>> = {
 export const OPERATOR_DECISION_DE = 'Betreiberentscheidung vom 30.09.2026'
 
 /**
+ * Reader-facing statement about the kernel's audit table (RC-GOV-CHAIN). The
+ * deletion concept, the settings tab and the compliance documents say this and
+ * nothing else about it: no deletion period, no timer.
+ */
+export const AUDIT_LOG_RECORD_DE =
+  'Die Audit-Tabelle der Anwendung (hash-verkettet) ist ein Governance-Datensatz (RC-GOV-CHAIN): ' +
+  'Sie wird von keinem Zeitgeber gelöscht, und die Anwendung darf Einträge nur anhängen, nicht ändern oder löschen.'
+
+/**
  * Reader-facing caveat per tier, or `null` when a gremion-ui purge consumer
- * enforces the window. Today only `security_logs_days` has one (the daily
- * `auditRetentionTick` in `hooks.server.ts`); the other three are configuration
- * until a consumer exists, and a guard in `retention-tiers.test.ts` ties `null`
+ * enforces the window. No tier has one (TASK-033-a): the application deletes
+ * nothing by these values, and a guard in `retention-tiers.test.ts` ties `null`
  * to what `hooks.server.ts` actually reads. Wording follows
  * `docs/log-retention-policy.md` (what bounds those logs today): the edge logs
  * are rotated by the infrastructure, independent of these values; the
@@ -72,7 +85,9 @@ export const RETENTION_CAVEATS: Readonly<Record<RetentionField, string | null>> 
   app_logs_days:
     'Konfigurationswert: Die Anwendung löscht nach diesem Wert derzeit nicht selbst. ' +
     'Die Container-Protokolle der Anwendung sind nur in ihrer Größe begrenzt, nicht zeitlich.',
-  security_logs_days: null,
+  security_logs_days:
+    'Konfigurationswert: Die Anwendung löscht nach diesem Wert nicht selbst; er ist das Fenster des Protokollspeichers. ' +
+    'Die Audit-Tabelle der Anwendung ist davon ausgenommen (RC-GOV-CHAIN): Sie wird von keinem Zeitgeber gelöscht.',
   security_nopii_logs_days:
     'Konfigurationswert: Die Anwendung löscht nach diesem Wert derzeit nicht selbst. ' +
     'Soweit solche Protokolle in der Infrastruktur (Traefik/Vector) anfallen, begrenzt deren ' +

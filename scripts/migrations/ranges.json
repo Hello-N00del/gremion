@@ -12,7 +12,7 @@
         "gremion-ui/migrations"
       ],
       "padWidth": 4,
-      "highWater": 60,
+      "highWater": 61,
       "legacyFloor": 58,
       "legacy": [
         "0001_governance_schema.sql",

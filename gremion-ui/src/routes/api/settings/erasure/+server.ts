@@ -43,11 +43,11 @@ export const POST: RequestHandler = async ({ request, locals }) => {
   }
 
   try {
-    const report = await startErasure({ subjectId, requestedBy: user.id ?? 'unknown' })
+    const report = await startErasure({ subjectId, requestedBy: user.id })
     try {
       // The audit chain is immutable: it gets the pseudonymous ref, never the subject id.
       await writeAuditEntry({
-        userId: user.id ?? 'unknown',
+        userId: user.id,
         field: 'erasure.run',
         oldValue: null,
         newValue: `report=${report.id} subject_ref=${report.subjectRef} status=${report.status}`,

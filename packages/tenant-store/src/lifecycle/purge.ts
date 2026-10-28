@@ -38,7 +38,9 @@
 // SELECT + DELETE on exactly the mapped tables from ensureKernelPurgeGrants
 // (the tenant init path, after the kernel chain created them): a table with no
 // rule (audit_log, the governance records) is out of reach by privilege, not
-// by the SQL text. A run that finds a grant missing records it and deletes
+// by the SQL text. audit_log is a governance record (RC-GOV-CHAIN): no rule
+// ever deletes from it, and ensureKernelAuditAppendOnly (audit-append-only.ts)
+// takes DELETE, UPDATE and TRUNCATE on it from the app and owner roles. A run that finds a grant missing records it and deletes
 // nothing there; it never grants.
 //   Defence in depth, per table and before any DELETE: the run refuses (records
 // an error, skips the table) when the table is not a plain table, has a child
@@ -140,8 +142,8 @@ export const PURGE_RULES: readonly PurgeRule[] = [
     table: 'plt.job_run',
     columns: ['finished_at'],
     startEvent: 'finished_at',
-    windowDays: 30,
-    note: 'job runs follow RC-LOG-APP: 30 d regular window, 30 d cap [D R29-I6]',
+    windowDays: 29,
+    note: 'job runs follow RC-LOG-APP: 30 d regular window, 30 d cap [D R29-I6]; the run is daily, so the window is cap - 1 tick = 29 d (registry dbWindowDays, derived by purge.test.ts)',
   },
 ]
 
@@ -157,9 +159,9 @@ export const PURGE_RESIDUAL: readonly { catalogueRow: string; partOf?: true; rea
   { catalogueRow: 'RC-K1-CACHE', reason: 'enforced as a TTL in the cache configuration (catalogue 1.4), not as rows' },
   { catalogueRow: 'RC-LOG-ACC', reason: 'edge/log-store retention (logrotate, Vector, log store), not database rows' },
   { catalogueRow: 'RC-LOG-APP', reason: 'log-store retention; the one database table that follows this window (plt.job_run) is a rule above' },
-  { catalogueRow: 'RC-LOG-SEC', reason: 'log-store retention; the kernel audit_log table is purged by the audit-retention tick in gremion-ui hooks.server.ts and its classification is open (catalogue 10, G6), so the hash-chained table is not touched here' },
+  { catalogueRow: 'RC-LOG-SEC', reason: 'log-store retention (Loki, rendered by @gremion/retention render). The kernel audit_log table is NOT a log-store row: it is a governance record (RC-GOV-CHAIN, operator decision 2026-10-28), no timer purges it, and the app role holds no DELETE, UPDATE or TRUNCATE on it (ensureKernelAuditAppendOnly)' },
   { catalogueRow: 'RC-LOG-FIN', reason: 'log-store retention, not database rows' },
-  { catalogueRow: 'RC-LOG-AUD', reason: 'operator-access log; no table in this repository, and it must outlive a customer erasure' },
+  { catalogueRow: 'RC-LOG-AUD', reason: 'operator-access log; its Loki stream is rendered by @gremion/retention, and the oac.access_record table has its own host unit (gremion-access-purge, the executor trust boundary); it must outlive a customer erasure' },
   { catalogueRow: 'RC-LOG-TRC', reason: 'trace-store retention, not database rows' },
   { catalogueRow: 'RC-NTF-NOTE', reason: 'the bell is an aggregated read model over other records; the only notification table here (notification_read_marker) is one row per user with no per-row start event; "grace" has no number' },
   { catalogueRow: 'RC-IDT-HELPER', reason: 'window is "grace" (no number in the catalogue)' },

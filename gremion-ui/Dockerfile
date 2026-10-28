@@ -35,6 +35,9 @@ COPY packages/tokens/package.json ./packages/tokens/
 # edge router render and the module catalogue -- devDependencies of
 # gremion-ui, so, like nats-auth, they live in this builder stage only.
 COPY packages/provisioning/package.json ./packages/provisioning/
+# TASK-033-a: tenant-store's purge test reads the retention catalogue through
+# @gremion/retention (a devDependency): the install needs the workspace member, nothing runs it.
+COPY packages/retention/package.json ./packages/retention/
 COPY packages/tenant-store/package.json ./packages/tenant-store/
 COPY packages/module-catalogue/package.json ./packages/module-catalogue/
 COPY packages/generated-clients/package.json ./packages/generated-clients/

@@ -14,7 +14,7 @@
 //   render-router <slug>                            the edge router document on STDOUT (Q17)
 //   suspend <slug> --operator <uuid>                status, realm, broker (the host then revokes the principal)
 //   resume <slug> --operator <uuid>                 stamp verified, realm, broker, status last
-//   reconcile [--verify-only] <slug>|--all          the realm contract incl. smtp-server (repair: host)
+//   reconcile [--verify-only] <slug>|--all          the realm contract incl. smtp-server (repair: host), plus the kernel audit-append-only check
 //   status <slug>                                   provisioning status JSON on STDOUT
 //   operator-add <email> [--no-mail]                an operator in the ops realm `platform` (Q5, Q23)
 //   delete <slug>                                   crypto-shred delete (kernel database by tenant id)
@@ -64,7 +64,15 @@ import {
   type MailStampExpectation,
   type ProvisioningDeps,
 } from '@gremion/provisioning'
-import { assertPlatform, dropKernelDatabase, ensureKernelApiReader, KERNEL_API_READS, pgDumpExporter, type LifecycleModule, type ModuleServer } from '@gremion/tenant-store/lifecycle'
+import {
+  assertPlatform,
+  dropKernelDatabase,
+  ensureKernelApiReader,
+  KERNEL_API_READS,
+  pgDumpExporter,
+  type LifecycleModule,
+  type ModuleServer,
+} from '@gremion/tenant-store/lifecycle'
 import { MODULE_MANIFESTS } from '../src/lib/modules/registry'
 import { dbNameForSlug, validateSlug } from '../src/lib/server/tenant/slug'
 import { normaliseHost } from '../src/lib/server/tenant/host'
@@ -81,7 +89,7 @@ import {
   type Tenant,
 } from '../src/lib/server/tenant/registry'
 import { KcProvisionApi, type KcTransport } from '../src/lib/server/tenant/provisioner/kc-admin-api'
-import { customerAdapters, kernelServer } from '../src/lib/server/tenant/provisioner/customer-adapters'
+import { customerAdapters, kernelServer, reconcileKernelAudit } from '../src/lib/server/tenant/provisioner/customer-adapters'
 import { fixtureIdentities } from '../src/lib/server/tenant/provisioner/fixture-identities'
 import {
   reconcileRealm,
@@ -845,6 +853,17 @@ function printReport(report: ReconcileReport): void {
   console.log(JSON.stringify(report))
 }
 async function reconcileOne(tenant: Tenant, base: Record<string, unknown>, verifyOnly: boolean): Promise<ReconcileReport> {
+  const realm = await reconcileRealmOnly(tenant, base, verifyOnly)
+  // TASK-033-a: the kernel audit record is append-only (RC-GOV-CHAIN). The privilege lives in the customer's
+  // kernel database, so it is one DB-level check appended to the realm report: verify reads, apply re-asserts.
+  const server = kernelServer(directPostgresUrl('KERNEL_PG_ADMIN_FILE', reqFileEnv('KERNEL_PG_ADMIN_FILE')))
+  try {
+    return await reconcileKernelAudit(realm, server, tenant.id, verifyOnly)
+  } finally {
+    await server.close()
+  }
+}
+async function reconcileRealmOnly(tenant: Tenant, base: Record<string, unknown>, verifyOnly: boolean): Promise<ReconcileReport> {
   return reconcileRealm(rawProvisionerTransport(), {
     realm: tenant.realmName,
     tenantHost: tenantHostFromIssuer(tenant.issuer),
