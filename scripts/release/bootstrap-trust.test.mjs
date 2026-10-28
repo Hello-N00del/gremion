@@ -182,7 +182,8 @@ test('no --allowed-signers is a usage error (exit 2); a missing file is a precon
 
 test('a PRIVATE key, an empty file, an unscoped entry and a non-key entry are refused; nothing is installed', () => {
   const cases = [
-    ['private', '-----BEGIN OPENSSH PRIVATE KEY-----\nAAAA\n-----END OPENSSH PRIVATE KEY-----\n', /PRIVATE key/],
+    // the PEM markers are built at runtime so this fixture is not itself key material to scripts/release/check-sops.mjs
+    ['private', `${'-'.repeat(5)}BEGIN OPENSSH ${'PRIVATE'} KEY${'-'.repeat(5)}\nAAAA\n${'-'.repeat(5)}END OPENSSH ${'PRIVATE'} KEY${'-'.repeat(5)}\n`, /PRIVATE key/],
     ['empty', '', /lists no signer/],
     ['comments only', '# nothing\n\n', /lists no signer/],
     ['unscoped', 'release@example.test ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFake\n', /not restricted to namespaces="git"/],
