@@ -328,6 +328,37 @@ describe('MED-1: the report tables are tamper-resistant at the database', () => 
   })
 })
 
+describe('MED-2: stale running reports are swept incomplete', () => {
+  it("marks this tenant's running reports older than the cut-off incomplete with a reason, nothing else", async () => {
+    const sql = getDb()
+    const store = createPgReportStore(sql)
+    const h = (tenantId: string, startedAt: Date) =>
+      store.begin({ tenantId, subjectRef: subjectRef(tenantId, SUBJECT), requestedBy: 'a', startedAt, moduleIds: ['kernel'] })
+    const old = new Date(Date.now() - 2 * 3600_000)
+    const stale = await h(TENANT_A, old)
+    const fresh = await h(TENANT_A, new Date())
+    const otherTenant = await h(TENANT_B, old)
+    const done = await h(TENANT_A, old)
+    await store.finish(done, 'incomplete', new Date())
+
+    const n = await store.sweepStale(TENANT_A, new Date(Date.now() - 3600_000), new Date())
+    expect(n).toBe(1)
+    const read = async (tenant: string, id: string) => (await getErasureReport(sql, tenant, id))!
+    expect(await read(TENANT_A, stale)).toMatchObject({ status: 'incomplete', finishReason: expect.stringMatching(/stale/) })
+    expect((await read(TENANT_A, fresh)).status).toBe('running')
+    expect((await read(TENANT_B, otherTenant)).status).toBe('running')
+    expect(await read(TENANT_A, done)).toMatchObject({ status: 'incomplete', finishReason: null })
+  })
+
+  it('finish persists the reason of an aborted run', async () => {
+    const sql = getDb()
+    const store = createPgReportStore(sql)
+    const id = await store.begin({ tenantId: TENANT_A, subjectRef: subjectRef(TENANT_A, SUBJECT), requestedBy: 'a', startedAt: new Date(), moduleIds: ['kernel'] })
+    await store.finish(id, 'incomplete', new Date(), 'run aborted: db down')
+    expect((await getErasureReport(sql, TENANT_A, id))?.finishReason).toBe('run aborted: db down')
+  })
+})
+
 describe('tenant isolation of reports', () => {
   it('tenant B cannot read or list tenant A reports', async () => {
     const sql = getDb()

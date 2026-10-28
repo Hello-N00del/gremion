@@ -31,6 +31,8 @@ export interface ErasureReport {
   readonly status: ErasureOverallStatus
   readonly startedAt: Date
   readonly finishedAt: Date | null
+  /** Why a run was finished `incomplete` by an error or the stale sweep; null otherwise. */
+  readonly finishReason: string | null
   readonly modules: readonly ModuleErasureOutcome[]
 }
 
@@ -43,8 +45,14 @@ export interface ErasureReportStore {
     moduleIds: readonly string[]
   }): Promise<string>
   record(reportId: string, outcome: ModuleErasureOutcome): Promise<void>
-  finish(reportId: string, status: 'complete' | 'incomplete', finishedAt: Date): Promise<void>
+  finish(reportId: string, status: 'complete' | 'incomplete', finishedAt: Date, reason?: string | null): Promise<void>
+  /** Finish every `running` report of the tenant started before `olderThan` as
+   *  `incomplete` (a crashed or killed run). Returns how many were swept. */
+  sweepStale(tenantId: string, olderThan: Date, finishedAt: Date): Promise<number>
 }
+
+/** A run still `running` after this long is dead (its process crashed or was killed). */
+export const STALE_RUN_MS = 60 * 60 * 1000
 
 export interface ErasureDeps {
   /** Ids of the modules enabled for the tenant, the kernel's own step first. */
@@ -110,6 +118,8 @@ async function eraseModule(
   }
 }
 
+const errText = (err: unknown) => (err instanceof Error ? err.message : String(err)).slice(0, 500)
+
 export async function runErasure(input: ErasureInput, deps: ErasureDeps): Promise<ErasureReport> {
   if (typeof input.subjectId !== 'string' || input.subjectId.trim() === '') {
     throw new Error('erasure requires a non-empty subject id')
@@ -117,6 +127,15 @@ export async function runErasure(input: ErasureInput, deps: ErasureDeps): Promis
   const moduleIds = [...new Set(deps.enabledModuleIds())]
   const ref = subjectRef(input.tenantId, input.subjectId)
   const startedAt = deps.now()
+
+  // MED-2: a run that died mid-way leaves a `running` header forever; close those
+  // first. Best effort: a sweep failure must not block a new erasure.
+  try {
+    await deps.store.sweepStale(input.tenantId, new Date(startedAt.getTime() - STALE_RUN_MS), startedAt)
+  } catch (err) {
+    console.error('[erasure] stale-run sweep failed:', errText(err))
+  }
+
   const id = await deps.store.begin({
     tenantId: input.tenantId,
     subjectRef: ref,
@@ -126,23 +145,41 @@ export async function runErasure(input: ErasureInput, deps: ErasureDeps): Promis
   })
 
   const modules: ModuleErasureOutcome[] = []
-  for (const moduleId of moduleIds) {
-    const outcome = await eraseModule(moduleId, input, deps)
-    await deps.store.record(id, outcome)
-    modules.push(outcome)
-  }
-
-  const status = overallErasureStatus(modules)
-  const finishedAt = deps.now()
-  await deps.store.finish(id, status, finishedAt)
-  return {
-    id,
-    tenantId: input.tenantId,
-    subjectRef: ref,
-    requestedBy: input.requestedBy,
-    status,
-    startedAt,
-    finishedAt,
-    modules,
+  let finished = false
+  let failure: unknown = null
+  try {
+    for (const moduleId of moduleIds) {
+      const outcome = await eraseModule(moduleId, input, deps)
+      await deps.store.record(id, outcome)
+      modules.push(outcome)
+    }
+    const status = overallErasureStatus(modules)
+    const finishedAt = deps.now()
+    await deps.store.finish(id, status, finishedAt, null)
+    finished = true
+    return {
+      id,
+      tenantId: input.tenantId,
+      subjectRef: ref,
+      requestedBy: input.requestedBy,
+      status,
+      startedAt,
+      finishedAt,
+      finishReason: null,
+      modules,
+    }
+  } catch (err) {
+    failure = err
+    throw err
+  } finally {
+    // A store error (record or finish) must never leave the header `running`:
+    // finish it `incomplete` with the reason, and let the original error propagate.
+    if (!finished) {
+      try {
+        await deps.store.finish(id, 'incomplete', deps.now(), `run aborted: ${errText(failure)}`)
+      } catch (err) {
+        console.error('[erasure] could not mark the aborted run incomplete:', errText(err))
+      }
+    }
   }
 }

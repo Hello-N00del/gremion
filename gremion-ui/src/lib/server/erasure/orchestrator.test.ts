@@ -21,12 +21,14 @@ const SUBJECT = 'kc-user-4711'
 function memoryStore(): ErasureReportStore & {
   headers: unknown[]
   outcomes: ModuleErasureOutcome[]
-  finished: { id: string; status: string }[]
+  finished: { id: string; status: string; reason?: string | null }[]
+  sweeps: { tenantId: string; olderThan: Date }[]
 } {
   const s = {
     headers: [] as unknown[],
     outcomes: [] as ModuleErasureOutcome[],
-    finished: [] as { id: string; status: string }[],
+    finished: [] as { id: string; status: string; reason?: string | null }[],
+    sweeps: [] as { tenantId: string; olderThan: Date }[],
     async begin(h: unknown) {
       s.headers.push(h)
       return 'report-1'
@@ -34,8 +36,12 @@ function memoryStore(): ErasureReportStore & {
     async record(_id: string, o: ModuleErasureOutcome) {
       s.outcomes.push(o)
     },
-    async finish(id: string, status: 'complete' | 'incomplete') {
-      s.finished.push({ id, status })
+    async finish(id: string, status: 'complete' | 'incomplete', _at: Date, reason?: string | null) {
+      s.finished.push(reason ? { id, status, reason } : { id, status })
+    },
+    async sweepStale(tenantId: string, olderThan: Date) {
+      s.sweeps.push({ tenantId, olderThan })
+      return 0
     },
   }
   return s
@@ -192,12 +198,49 @@ describe('runErasure', () => {
     expect(store.headers).toHaveLength(0)
   })
 
-  it('a store failure while recording an outcome propagates (no silent complete)', async () => {
+  it('a store failure while recording an outcome propagates AND the header is finished incomplete with a reason', async () => {
     const store = memoryStore()
     store.record = async () => {
       throw new Error('db down')
     }
     await expect(runErasure(input, deps(['kernel'], [hookOf('kernel')], { store }))).rejects.toThrow('db down')
-    expect(store.finished).toHaveLength(0)
+    expect(store.finished).toEqual([{ id: 'report-1', status: 'incomplete', reason: expect.stringMatching(/run aborted: db down/) }])
+  })
+
+  it('a refused "complete" finish is retried as incomplete with the reason, then propagates', async () => {
+    const store = memoryStore()
+    const finish = store.finish.bind(store)
+    store.finish = async (id, status, at, reason) => {
+      if (status === 'complete') throw new Error('cannot be complete')
+      return finish(id, status, at, reason)
+    }
+    await expect(runErasure(input, deps(['kernel'], [hookOf('kernel')], { store }))).rejects.toThrow('cannot be complete')
+    expect(store.finished).toEqual([{ id: 'report-1', status: 'incomplete', reason: expect.stringMatching(/cannot be complete/) }])
+  })
+
+  it('a second store failure while marking incomplete does not mask the original error', async () => {
+    const store = memoryStore()
+    store.record = async () => {
+      throw new Error('first')
+    }
+    store.finish = async () => {
+      throw new Error('second')
+    }
+    await expect(runErasure(input, deps(['kernel'], [hookOf('kernel')], { store }))).rejects.toThrow('first')
+  })
+
+  it('sweeps stale running reports (older than one hour) of the tenant before starting', async () => {
+    const store = memoryStore()
+    await runErasure(input, deps(['kernel'], [hookOf('kernel')], { store }))
+    expect(store.sweeps).toEqual([{ tenantId: TENANT, olderThan: new Date('2026-10-27T09:00:00Z') }])
+  })
+
+  it('a failing sweep does not stop the run', async () => {
+    const store = memoryStore()
+    store.sweepStale = async () => {
+      throw new Error('sweep down')
+    }
+    const report = await runErasure(input, deps(['kernel'], [hookOf('kernel')], { store }))
+    expect(report.status).toBe('complete')
   })
 })

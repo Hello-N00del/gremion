@@ -46,7 +46,10 @@ CREATE TABLE IF NOT EXISTS erasure_report (
   finished_at  TIMESTAMPTZ,
   -- The module ids the run was started for; `complete` needs exactly these.
   expected_modules TEXT[] NOT NULL DEFAULT '{}',
-  CHECK ((status = 'running') = (finished_at IS NULL))
+  -- Why a run ended `incomplete` by an error or the stale-run sweep (no subject id).
+  finish_reason TEXT,
+  CHECK ((status = 'running') = (finished_at IS NULL)),
+  CHECK (status <> 'complete' OR finish_reason IS NULL)
 );
 
 CREATE INDEX IF NOT EXISTS erasure_report_tenant_started_idx

@@ -14,6 +14,7 @@ interface HeaderRow {
   status: ErasureOverallStatus
   started_at: Date
   finished_at: Date | null
+  finish_reason: string | null
 }
 
 interface ModuleRow {
@@ -41,12 +42,20 @@ export function createPgReportStore(sql: Sql): ErasureReportStore {
           (SELECT count(*)::int FROM erasure_report_module WHERE report_id = ${reportId}),
           ${o.status}, ${sql.json({ ...o.counts })}, ${o.reason})`
     },
-    async finish(reportId, status, finishedAt) {
+    async finish(reportId, status, finishedAt, reason = null) {
       // The DB trigger refuses `complete` unless every expected module has an `erased`
       // row, and refuses any change once the header is finished (append-only).
       await sql`
-        UPDATE erasure_report SET status = ${status}, finished_at = ${finishedAt}
+        UPDATE erasure_report SET status = ${status}, finished_at = ${finishedAt}, finish_reason = ${reason}
         WHERE id = ${reportId}`
+    },
+    async sweepStale(tenantId, olderThan, finishedAt) {
+      const r = await sql`
+        UPDATE erasure_report
+        SET status = 'incomplete', finished_at = ${finishedAt},
+            finish_reason = 'stale: the run did not finish within one hour (process crashed or was stopped)'
+        WHERE tenant_id = ${tenantId} AND status = 'running' AND started_at < ${olderThan}`
+      return r.count
     },
   }
 }
@@ -60,6 +69,7 @@ function assemble(h: HeaderRow, mods: ModuleRow[]): ErasureReport {
     status: h.status,
     startedAt: h.started_at,
     finishedAt: h.finished_at,
+    finishReason: h.finish_reason,
     modules: mods
       .filter((m) => m.report_id === h.id)
       .map((m) => ({ moduleId: m.module_id, status: m.status, counts: m.counts, reason: m.reason })),
@@ -76,7 +86,7 @@ async function modulesOf(sql: Sql, ids: string[]): Promise<ModuleRow[]> {
 
 export async function getErasureReport(sql: Sql, tenantId: string, id: string): Promise<ErasureReport | null> {
   const rows = await sql<HeaderRow[]>`
-    SELECT id, tenant_id, subject_ref, requested_by, status, started_at, finished_at
+    SELECT id, tenant_id, subject_ref, requested_by, status, started_at, finished_at, finish_reason
     FROM erasure_report WHERE tenant_id = ${tenantId} AND id = ${id}`
   if (rows.length === 0) return null
   return assemble(rows[0], await modulesOf(sql, [rows[0].id]))
@@ -89,7 +99,7 @@ export async function listErasureReports(
 ): Promise<ErasureReport[]> {
   const limit = Math.min(Math.max(opts.limit ?? 50, 1), 200)
   const rows = await sql<HeaderRow[]>`
-    SELECT id, tenant_id, subject_ref, requested_by, status, started_at, finished_at
+    SELECT id, tenant_id, subject_ref, requested_by, status, started_at, finished_at, finish_reason
     FROM erasure_report
     WHERE tenant_id = ${tenantId}
       ${opts.subjectRef ? sql`AND subject_ref = ${opts.subjectRef}` : sql``}
