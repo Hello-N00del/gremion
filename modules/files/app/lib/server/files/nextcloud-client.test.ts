@@ -111,3 +111,35 @@ describe('NextcloudClient.provisionOidcUser', () => {
     })
   })
 })
+
+describe('NextcloudClient.deleteUser (TRD-196 erasure)', () => {
+  it('DELETEs the OCS v2 user endpoint and reports true', async () => {
+    const calls: Array<{ url: string; method: string }> = []
+    const c = clientWithFetch((async (url: string, init: RequestInit) => {
+      calls.push({ url: String(url), method: String(init.method) })
+      return new Response(JSON.stringify({ ocs: { meta: { statuscode: 200 } } }), { status: 200 })
+    }) as typeof fetch)
+    await expect(c.deleteUser('0b5f/user 1')).resolves.toBe(true)
+    expect(calls).toHaveLength(1)
+    expect(calls[0].method).toBe('DELETE')
+    expect(calls[0].url).toContain('/ocs/v2.php/cloud/users/0b5f%2Fuser%201')
+  })
+
+  it('treats a 404 (account already gone) as success: false, so a re-run is idempotent', async () => {
+    const c = clientWithFetch((async () => new Response('{}', { status: 404 })) as typeof fetch)
+    await expect(c.deleteUser('gone')).resolves.toBe(false)
+  })
+
+  it('propagates any other failure', async () => {
+    const c = clientWithFetch((async () => new Response('boom', { status: 500 })) as typeof fetch)
+    await expect(c.deleteUser('u')).rejects.toThrow(/500/)
+  })
+
+  it('never deletes the admin account or an empty id, and does not call Nextcloud', async () => {
+    const fetchSpy = vi.fn()
+    const c = clientWithFetch(fetchSpy as unknown as typeof fetch)
+    await expect(c.deleteUser('admin')).rejects.toThrow(/admin/)
+    await expect(c.deleteUser('  ')).rejects.toThrow(/empty/)
+    expect(fetchSpy).not.toHaveBeenCalled()
+  })
+})

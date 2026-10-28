@@ -389,6 +389,23 @@ export class NextcloudClient {
     })
   }
 
+  /** Delete a Nextcloud account and its personal files (OCS provisioning API;
+   *  TRD-196 erasure). Returns true when an account was deleted, false when there
+   *  was none (OCS v2 answers 404), so a re-run is idempotent. Refuses the admin
+   *  account and an empty id: a mis-resolved subject must never take the admin
+   *  out. Group-folder content is not owned by the account and stays. */
+  async deleteUser(userId: string): Promise<boolean> {
+    if (userId.trim() === '') throw new Error('deleteUser: empty user id')
+    if (userId === this.adminUser) throw new Error('deleteUser: refusing to delete the Nextcloud admin account')
+    try {
+      await this.request('DELETE', `/ocs/v2.php/cloud/users/${encodeURIComponent(userId)}?format=json`)
+      return true
+    } catch (err) {
+      if (err instanceof NextcloudResponseError && err.status === 404) return false
+      throw err
+    }
+  }
+
   async deleteGroupFolder(folderId: number): Promise<void> {
     await this.request('DELETE', `/index.php/apps/groupfolders/folders/${folderId}`)
   }
