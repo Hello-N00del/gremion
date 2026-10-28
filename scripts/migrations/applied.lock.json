@@ -99,6 +99,7 @@
         "0057_fk_hot_filter_indexes.sql": "1dc2cdad096597e5710acbd24fe0d0bfebcadc8e094233f941f5799aa2d60cbc",
         "0058_public_reader_grants.sql": "b963388faef6afa033c0c3be29918bd9371986306d9c136b2a30bbd361d854be",
         "0059_audit_log_chain_anchor.sql": "1e344401669805cd84849101b1e5858f7ff29e7ea39f9e42b61990490bfb82cd",
+        "0060_erasure_report.sql": "984d2ef720eb67e55015682de2a084f505a4a0b6101e1dea1118505a579767c2",
         "1200_content_news_posts.sql": "dabcd6a81e45b8dc6ac1dbfc4cbfb77286bc5471ee3eb18c2ae5bbacbc508707",
         "1201_news_posts_public_reader_columns.sql": "b3d0f74a26a63a560111ac9cdad9ba603f2e34b9d75b3bf2769c7dc103acd801"
       }
@@ -177,7 +178,10 @@
         "0007_plt_isolation_test_result.sql": "48fbcc82a3f9f3553ecd811b401613b6a3274c38f316d5cdd814c341634f1cb0",
         "0008_ops_dpia_decision.sql": "38f024036723f77869b1f7958514c350c2649348a3041d80056a7103df09f506",
         "0009_plt_provisioning_request.sql": "354ff8108189d593f604b1b2d526c9e38608326f3001e1e32c533b9f00d84398",
-        "0010_plt_request_payload.sql": "fef38e28886a8c08e24c3bbc70f707750a2a452b5c4f7d603f15fd1996b1e992"
+        "0010_plt_request_payload.sql": "fef38e28886a8c08e24c3bbc70f707750a2a452b5c4f7d603f15fd1996b1e992",
+        "0011_plt_lease_fence.sql": "907288c31417b64748c7804b22c506986b76f7223ff95de1bafcc0874095738a",
+        "0012_plt_purge_run.sql": "202379e02d64111efdd7e5910b56726e3477fb886d1c283b25701dd1569287d7",
+        "0013_oac_access_record.sql": "889c39a6fc201feead497d559df152c7ae46ba6121321f003d05df7eb4aded77"
       }
     }
   }

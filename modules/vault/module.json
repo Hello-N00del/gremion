@@ -5,7 +5,7 @@
   "runtime": {
     "version": "1.0.0",
     "database": { "postgresService": "vault-postgres", "migrations": "migrations" },
-    "export": { "kind": "pg_dump", "retentionProfile": "rp-pwd-module-data" },
+    "export": { "kind": "pg_dump", "retentionProfile": "rp-pwd-module-data", "withhold": ["public.vault_item.secret_ciphertext"] },
     "timedJobs": [],
     "platformServer": null
   }

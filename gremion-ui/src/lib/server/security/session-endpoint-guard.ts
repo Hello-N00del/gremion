@@ -1,4 +1,5 @@
 import type { Handle } from '@sveltejs/kit'
+import { requestPath } from '$lib/server/request-path'
 import { base } from '$app/paths'
 
 /**
@@ -13,7 +14,7 @@ import { base } from '$app/paths'
  * Must run BEFORE the Auth.js handle in the sequence.
  */
 export const sessionEndpointGuard: Handle = async ({ event, resolve }) => {
-  const path = event.url.pathname.replace(/\/+$/, '')
+  const path = requestPath(event).replace(/\/+$/, '')
   if (path === `${base}/auth/session`) {
     return new Response('Not Found', { status: 404 })
   }

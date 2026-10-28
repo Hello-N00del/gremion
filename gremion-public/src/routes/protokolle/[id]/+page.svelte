@@ -6,7 +6,7 @@
 </script>
 
 <svelte:head>
-  <title>{data.protocol.committee_name} · Protokoll {new Date(data.protocol.meeting_date).toLocaleDateString('de-DE')} — Studierendenrat</title>
+  <title>{data.protocol.committee_name} · Protokoll {new Date(data.protocol.meeting_date).toLocaleDateString('de-DE')} — {data.institutionName}</title>
 </svelte:head>
 
 <!-- Page header -->

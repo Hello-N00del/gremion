@@ -105,8 +105,11 @@ container, `<host>` the operator's panel host name:
    `etc/secrets/control-panel/client_secret` (0600). A rerun is a no-op; a realm
    that differs is refused, never overwritten.
 3. `gremion-tenant operator add <email> --no-mail --keycloak-container <kc>` --
-   prints `TEMPORARY-PASSWORD:` once; the operator changes it and enrols TOTP at
-   the first sign-in (Q23).
+   prints `TEMPORARY-PASSWORD:` once (Q23). The operator enrols FIRST at the
+   platform realm's account console, `https://<platform domain>/auth/realms/platform/account`:
+   that plain sign-in sets the new password and configures TOTP. Do not start at
+   the panel: it requires loa2 (password + TOTP) and the realm's step-up flow is
+   OTP-or-deny, so an operator without TOTP is refused there, never enrolled.
 4. `openssl rand -hex 32 > etc/secrets/control-panel/auth_secret` (0600); the env
    file from `compose/control-panel/standalone.env.tmpl`; then
    `docker compose -p gremion-panel -f compose/control-panel/standalone.yml --env-file <env> up -d`.

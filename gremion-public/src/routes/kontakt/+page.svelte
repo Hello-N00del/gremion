@@ -5,8 +5,8 @@
 </script>
 
 <svelte:head>
-  <title>Kontakt — Studierendenrat</title>
-  <meta name="description" content="Kontaktdaten, Impressum und Datenschutz des Studierendenrats." />
+  <title>Kontakt — {data.institutionName}</title>
+  <meta name="description" content="Kontaktdaten, Impressum und Datenschutz von {data.institutionName}." />
 </svelte:head>
 
 <!-- Page header -->
@@ -69,7 +69,7 @@
         <div>
           <dt class="font-mono text-[10px] tracking-wider text-ink-muted uppercase">Hinweis</dt>
           <dd class="mt-1 leading-relaxed text-ink-muted">
-            Diese Website ist ein öffentliches Informationsportal des Studierendenrats.
+            Diese Website ist ein öffentliches Informationsportal von {data.institutionName}.
           </dd>
         </div>
       </dl>

@@ -196,6 +196,58 @@ set excludes every tenant-key target path.
 
 ## Suspend / resume
 
+**In operation (TRD-044, PRD-OPS-004) this is the control panel.** On
+`/customers/<slug>` the page offers "Mandant sperren" for an active customer and
+"Mandant fortsetzen" for a suspended one (nothing while a request is queued or
+running; after a suspend that did not finish, both). Each button queues a
+`suspend` / `resume` request (args: the slug only) with the operator's signed
+loa2 sign-in as evidence, exactly like "Neuer Mandant"; the executor runs
+`handlers/suspend.sh` / `resume.sh`, which call `customer_suspend` /
+`customer_resume` in `infra/host/lib/customer-ops.sh`:
+
+- suspend: the container verb first (status, realm disabled, sessions out,
+  broker users evicted), then the mail principal revoked. The router file is not
+  touched: the route stays and the app serves the branded 503 for a suspended
+  customer. A failed revoke is finished `failed`; triggering "Mandant sperren"
+  again converges.
+- resume: a fresh mail principal first (never `--rotate`), then the container
+  verb (realm, broker users, status `active` last).
+- data is untouched: both verbs take the TRD-440 fingerprint (container count and
+  every project's services) before and after their own run and fail if it
+  moved. Nothing is compared across requests: a deploy between a suspend and
+  its resume is normal. A failed resume revokes the fresh mail principal again.
+
+**Modules and the realm check (TRD-044 remainder).** The same page has a
+"Module" section for an ACTIVE customer with no queued or running request: the
+enabled modules with "Modul deaktivieren", the available ones with "Modul
+aktivieren" plus the DPIA decision (an explicit erforderlich / nicht erforderlich
+and a document reference, as in "Neuer Mandant"; board and vault are shown
+blocked), a "DPIA-Entscheidung festhalten" form per enabled module and the
+"Abgleich" buttons. Each queues one request, handled by the executor:
+
+- `enable_module` {slug, module, dpia}: `tenant-create enable-module` (deny list,
+  loaded catalogue version, isolation pass on the release tip, the decision
+  recorded, enableModule through the gate, broker users). Repeatable.
+- `disable_module` {slug, module}: `tenant-create disable-module` (export and
+  verify the module database, only then drop it; broker users shrunk). It refuses,
+  nothing touched, unless `TENANT_EXPORT_DIR` is a mounted volume
+  (`$GREMION_ROOT/data/module-exports`, which must exist and be writable by the
+  container user). A failed export leaves the database; the same request again
+  resumes.
+- `record_dpia` {slug, module, requiresDpia, documentRef}: `tenant-create
+  dpia-record`, identical latest decision reused (no second row on a rerun).
+- `reconcile` {slug, apply}: the dry run is `tenant-create reconcile
+  --verify-only`; drift fails the request and the report is its event stream,
+  shown on the page as "Ergebnis des letzten Abgleichs". `apply` repairs, rotates
+  the host mail principal when smtp-server is `repair: host`, and must end green.
+
+A module must be in the catalogue and not in `modules/disabled.json`
+(request-verify). enable and disable assert the TRD-440 fingerprint like
+suspend/resume.
+
+The library commands below are what the container verbs run.
+
+
 ```bash
 pnpm -C gremion-ui exec tsx scripts/tenant-provision.ts suspend <slug>
 pnpm -C gremion-ui exec tsx scripts/tenant-provision.ts resume  <slug>
@@ -322,3 +374,24 @@ Reads the tenant's stored `config.json`, merges in the effective defaults, and
 writes the fully-merged config back atomically. A brand-identity guard refuses
 (loud, non-zero exit) a still-blank institution identity — no silent blank
 render.
+
+## Tenant export in open formats (TRD-149/150/151)
+
+```
+sudo gremion-tenant export <slug> <absolute-dir>
+```
+
+Writes `<dir>` (created 0700; refused when it already holds anything) with
+`kernel/<table>.csv|json` for the org units, roles, assignments (+ history),
+memberships, elections, caucuses, protocols with attendance, resolutions,
+action items and challenges and the audit log, `<module>/<table>.csv|json`
+for every enabled module whose `module.json` declares `runtime.export`, and
+`manifest.json` (schema version, tenant slug, `generated_at`, every file with
+sha256, bytes and row count, `modules` and `excluded_systems` /
+`excluded_tables` each with a reason: Nextcloud files and Matrix history are
+never exported by this verb). Files are 0600. A second container run then
+re-reads the directory: a missing, empty, altered or unlisted file prints
+`EXPORT INCOMPLETE <code> <path>` and the verb exits 1 -- treat the directory
+as unusable. `gremion-tenant` runs the check alone through the container's
+`export-verify <dir>`. This is an export for the customer, not a backup:
+restic (`gremion-backup`) remains the restore path.

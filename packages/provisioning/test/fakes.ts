@@ -50,7 +50,7 @@ export interface World {
   /** TASK-044: DPIA decisions per `${customerId}/${module}`, oldest first. */
   dpia: Map<string, { id: string; decision: DpiaSpec; operatorId: string }[]>
   /** Test knobs. */
-  knobs: { seedsOn: boolean; runnerShape: 'gremion-ui' | 'tenant-store'; dnsFails: boolean }
+  knobs: { seedsOn: boolean; runnerShape: 'gremion-ui' | 'tenant-store'; dnsFails: boolean; crashAfterRegister?: boolean }
   /**
    * Catalogue modules with NO plt.module_version row: what `init` leaves
    * undecided under Q20 (no retention profile declared and not in the
@@ -112,10 +112,22 @@ export function deps(w: World, catalogue = ['board', 'calendar', 'publishing', '
         return w.control.get(slug) ?? null
       },
       async registerProvisioning({ slug, host, realm }) {
-        const row: ControlRow = { id: uuidv7(), slug, status: 'provisioning', realm, host }
+        // MED-2: a crash between registerTenant and addTenantDomain leaves host null
+        const crash = w.knobs.crashAfterRegister
+        const row: ControlRow = { id: uuidv7(), slug, status: 'provisioning', realm, host: crash ? null : host }
         w.control.set(slug, row)
         m(`control:register ${slug}`)
+        if (crash) {
+          w.knobs.crashAfterRegister = false
+          throw new Error('crash between registerTenant and addTenantDomain')
+        }
         return row
+      },
+      async bindPrimaryHost(id, host) {
+        const row = [...w.control.values()].find((r) => r.id === id)
+        if (!row) throw new Error('no row')
+        row.host = host
+        m(`control:bind-host ${row.slug}`)
       },
       async setStatus(id, status) {
         const row = [...w.control.values()].find((r) => r.id === id)
@@ -257,6 +269,13 @@ export function deps(w: World, catalogue = ['board', 'calendar', 'publishing', '
         w.enabled.set(c.id, mine)
         m(`pg:enable ${c.slug}/${moduleId}`)
         return { noop: false, database: `t_x__${moduleId}` }
+      },
+      async disable(c, moduleId) {
+        const mine = w.enabled.get(c.id)
+        if (!mine?.has(moduleId)) return { noop: true, dropped: false, database: null, export: null }
+        mine.delete(moduleId)
+        m(`pg:disable ${c.slug}/${moduleId}`)
+        return { noop: false, dropped: true, database: `t_x__${moduleId}`, export: { path: `/exports/${moduleId}.dump`, sha256: 'a'.repeat(64), bytes: 10 } }
       },
       async enabled(c) {
         return [...(w.enabled.get(c.id)?.keys() ?? [])]

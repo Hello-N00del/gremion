@@ -3,7 +3,7 @@
 // these tests pin the resolution/throw behavior of caucusRowsFromBlueprint.
 import { describe, it, expect } from 'vitest'
 import { caucusRowsFromBlueprint } from './seed'
-import { STURA_BLUEPRINT } from './org-blueprint'
+import { STURA_BLUEPRINT } from './stura-fixture'
 import type { GremionBlueprint } from './org-blueprint'
 
 const orgUnitIdByKey = new Map([

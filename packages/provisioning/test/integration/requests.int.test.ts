@@ -55,7 +55,7 @@ describe('A2: plt.submit_provisioning_request refuses', () => {
     const f = await failure(submit(r.panel, a))
     quote(`panel ${what}`, f)
     expect(f?.code).toBe(sqlstate)
-    if (a.key) expect(await count(a.key)).toBe(0)
+    expect(a.key ? await count(a.key) : 0).toBe(0)
   })
 
   it('a non-uuid operator never reaches the function body: 22P02 at the parameter cast', async () => {
@@ -226,16 +226,58 @@ describe('TDD 5 / A6: claiming', () => {
     const id = ((await submit(r.panel, submitArgs({ slug: slug() }))) as unknown as [{ id: string }])[0].id
     expect((await claim(HOST)).map((x) => [x.request_id, x.attempt])).toEqual([[id, 0]])
     for (const want of [1, 2]) {
-      await r.owner`UPDATE plt.provisioning_request SET lease_until = now() - interval '1 second' WHERE request_id = ${id}::uuid`
+      await r.owner`UPDATE plt.provisioning_request SET lease_until = now() - interval '2 minutes' WHERE request_id = ${id}::uuid`
       // the claim first re-queues the expired one, then claims it again
       expect((await claim(HOST)).map((x) => [x.request_id, x.attempt])).toEqual([[id, want]])
     }
-    await r.owner`UPDATE plt.provisioning_request SET lease_until = now() - interval '1 second' WHERE request_id = ${id}::uuid`
+    await r.owner`UPDATE plt.provisioning_request SET lease_until = now() - interval '2 minutes' WHERE request_id = ${id}::uuid`
     expect(await claim(HOST)).toEqual([])
     const s = await state(id)
     console.log(`[A6] third expiry: ${s.state} attempt=${s.attempt} ${s.outcome}`)
     expect(s).toMatchObject({ state: 'dead', attempt: 3, token: false })
     expect(s.outcome).toMatch(/^dead: the lease expired on attempt 3 \(last claimed by h1\.example\)$/)
+  })
+
+  // H4 (create-harden): no two concurrent runs of one slug.
+  it('H4: a live lease blocks every other host from the slug; a renewed lease stays blocked', async () => {
+    await drain()
+    const s = slug()
+    const first = ((await submit(r.panel, submitArgs({ slug: s }))) as unknown as [{ id: string }])[0].id
+    await submit(r.panel, submitArgs({ slug: s }))
+    expect((await claim('host-a')).map((x) => x.request_id)).toEqual([first])
+    expect(await claim('host-b')).toEqual([])
+    await r.executor`SELECT plt.renew_provisioning_lease(${first}::uuid, 'host-a', 600)`
+    expect(await claim('host-b')).toEqual([])
+    expect(await state(first)).toMatchObject({ state: 'running', claimed_by: 'host-a', attempt: 0 })
+    await drainRunning([first])
+  })
+
+  it('H4: a lease that just lapsed is NOT requeued (grace): the previous holder is still fenced by its own deadline, nobody can start attempt + 1', async () => {
+    await drain()
+    const s = slug()
+    const id = ((await submit(r.panel, submitArgs({ slug: s }))) as unknown as [{ id: string }])[0].id
+    await submit(r.panel, submitArgs({ slug: s }))
+    expect((await claim('host-a')).map((x) => x.request_id)).toEqual([id])
+    await r.owner`UPDATE plt.provisioning_request SET lease_until = now() - interval '1 second' WHERE request_id = ${id}::uuid`
+    expect(await claim('host-b')).toEqual([])
+    expect(await state(id)).toMatchObject({ state: 'running', claimed_by: 'host-a', attempt: 0 })
+    await drainRunning([id])
+  })
+
+  it('H4: a lapsed lease cannot be revived by its holder; after the requeue the old holder is refused on every write', async () => {
+    await drain()
+    const id = ((await submit(r.panel, submitArgs({ slug: slug() }))) as unknown as [{ id: string }])[0].id
+    expect((await claim('host-a')).length).toBe(1)
+    await r.owner`UPDATE plt.provisioning_request SET lease_until = now() - interval '1 second' WHERE request_id = ${id}::uuid`
+    expect((await failure(r.executor`SELECT plt.renew_provisioning_lease(${id}::uuid, 'host-a', 600)`))?.code).toBe('P0002')
+    await r.owner`UPDATE plt.provisioning_request SET lease_until = now() - interval '2 minutes' WHERE request_id = ${id}::uuid`
+    expect((await claim('host-b')).map((x) => [x.request_id, x.attempt])).toEqual([[id, 1]])
+    for (const q of [
+      r.executor`SELECT plt.renew_provisioning_lease(${id}::uuid, 'host-a', 600)`,
+      r.executor`SELECT plt.record_provisioning_event(${id}::uuid, 'host-a', 'info', 'x', 'y')`,
+      r.executor`SELECT plt.finish_provisioning_request(${id}::uuid, 'host-a', 'succeeded', 'x')`,
+    ]) expect((await failure(q))?.code).toBe('P0002')
+    await drainRunning([id])
   })
 
   it('requeue_own: at executor start its own running requests go back at once (attempt + 1), another host\'s stay', async () => {

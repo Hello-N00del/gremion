@@ -67,6 +67,9 @@ export async function buildAuthConfig(event: RequestEvent): Promise<SvelteKitAut
         clientId: tenant.authClientId,
         clientSecret: resolveSecret(tenant.authClientSecretRef),
         issuer: tenant.issuer,
+        // PKCE S256 + state, explicit: the realm enforces pkce.code.challenge.method=S256
+        // on this client, so this must never silently fall back to a library default.
+        checks: ['pkce', 'state'],
         // authorization must be set explicitly — Auth.js calls discoveryRequest(issuer)
         // when authorization.url is absent, which hits localhost:8082 (unreachable in Docker).
         // Use the external URL here so the browser redirect goes to the public Keycloak.

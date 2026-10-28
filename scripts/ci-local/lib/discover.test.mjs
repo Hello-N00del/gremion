@@ -56,7 +56,7 @@ test('discoverTestFiles finds only the five named test-file shapes, honouring th
   const root = makeFixture()
   try {
     const found = discoverTestFiles(root)
-    assert.deepEqual(found.sort(), ['src/a.test.ts', 'test/unit.bats'])
+    assert.deepEqual(found.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)), ['src/a.test.ts', 'test/unit.bats'])
   } finally {
     rmSync(root, { recursive: true, force: true })
   }

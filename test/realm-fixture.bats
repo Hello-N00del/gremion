@@ -160,3 +160,38 @@ print(s[\"host\"])
     [[ "$output" == *"refusing"* ]]
     [[ "$output" == *"70000"* ]]
 }
+
+# Security sweep 2 (findings 3 and 6): the realm the CI stack actually imports
+# carries the OTP-or-deny step-up gate, the password policy, refresh-token
+# rotation and PKCE on gremion-ui. A fixture realm without them would let the
+# integration suite pass against a weaker realm than production runs.
+@test "the rendered realm carries the OTP-or-deny stepup-2fa, never a REQUIRED OTP form" {
+    run bash -c "python3 '$RENDER' --realm citest --apex ci.local | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+flows = {f[\"alias\"]: f for f in d[\"authenticationFlows\"]}
+f2 = flows[\"stepup-2fa\"][\"authenticationExecutions\"]
+assert not [e for e in f2 if e.get(\"authenticator\") == \"auth-otp-form\"]
+sub = [e for e in f2 if e.get(\"authenticatorFlow\")]
+assert len(sub) == 1 and sub[0][\"requirement\"] == \"REQUIRED\"
+kids = sorted(flows[sub[0][\"flowAlias\"]][\"authenticationExecutions\"], key=lambda e: e[\"priority\"])
+assert [(e[\"authenticator\"], e[\"requirement\"]) for e in kids] == [(\"auth-otp-form\", \"ALTERNATIVE\"), (\"deny-access-authenticator\", \"ALTERNATIVE\")]
+print(\"ok\")
+'"
+    [ "$status" -eq 0 ]
+    [ "$output" = "ok" ]
+}
+
+@test "the rendered realm carries the password policy and gremion-ui PKCE S256, and no refresh-token rotation" {
+    run bash -c "python3 '$RENDER' --realm citest --apex ci.local | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+assert d[\"passwordPolicy\"] == \"length(12) and notUsername and notEmail and passwordHistory(3)\"
+assert \"revokeRefreshToken\" not in d and \"refreshTokenMaxReuse\" not in d
+ui = [c for c in d[\"clients\"] if c[\"clientId\"] == \"gremion-ui\"][0]
+assert ui[\"attributes\"][\"pkce.code.challenge.method\"] == \"S256\"
+print(\"ok\")
+'"
+    [ "$status" -eq 0 ]
+    [ "$output" = "ok" ]
+}

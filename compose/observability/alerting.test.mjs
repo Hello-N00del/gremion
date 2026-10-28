@@ -10,11 +10,12 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { contactPointViolations, grafanaRuleViolations, NO_ABSENT, policyViolations, readText, readYaml, recordingRuleViolations, seconds } from './checks.mjs'
+import { contactPointViolations, grafanaRuleViolations, NO_ABSENT, policyViolations, quietHoursViolations, readText, readYaml, recordingRuleViolations, seconds } from './checks.mjs'
 
 const RULES = readYaml('compose/observability/prometheus/rules.yml')
 const GRAFANA = readYaml('compose/observability/grafana/provisioning/alerting/rules.yaml')
 const POLICY = readYaml('compose/observability/grafana/provisioning/alerting/policies.yaml')
+const TIMES = readYaml('compose/observability/grafana/provisioning/alerting/time-intervals.yaml')
 const copy = (o) => JSON.parse(JSON.stringify(o))
 const recs = (doc) => doc.groups.flatMap((g) => g.rules)
 
@@ -142,4 +143,65 @@ test('TDD 6: the rendered contact point sends resolve notices; RED with resolve 
   const render = readText('infra/host/ops/render-ops.sh')
   assert.equal((render.match(/disableResolveMessage: false/g) ?? []).length, 2)
   assert.ok(!/disableResolveMessage: true/.test(render))
+})
+
+// TRD-205: quiet hours. Non-CRITICAL alerts are muted outside the operator's active hours (one digest when the
+// window opens); CRITICAL alerts route first, with no time interval at all, and go out immediately.
+
+test('TRD-205: the critical route carries no mute / active interval; the non-critical route is active only in active-hours', () => {
+  assert.deepEqual(quietHoursViolations(POLICY, GRAFANA, TIMES), [])
+  const routes = POLICY.policies[0].routes
+  const crit = routes.find((r) => JSON.stringify(r.object_matchers) === '[["severity","=","critical"]]')
+  assert.ok(crit, 'no severity=critical route')
+  assert.equal(crit.receiver, 'platform')
+  assert.equal(crit.mute_time_intervals, undefined)
+  assert.equal(crit.active_time_intervals, undefined)
+  const rest = routes.find((r) => JSON.stringify(r.object_matchers) === '[["severity","!=","critical"]]')
+  assert.ok(rest, 'no severity!=critical route')
+  assert.deepEqual(rest.active_time_intervals, ['active-hours'])
+  assert.equal(rest.mute_time_intervals, undefined)
+  // the critical route is listed first: Grafana takes the first matching route
+  assert.equal(routes.indexOf(crit), 0)
+  // the root (default route) is never time-limited, so an unlabelled alert is not silently lost
+  assert.equal(POLICY.policies[0].active_time_intervals, undefined)
+  assert.equal(POLICY.policies[0].mute_time_intervals, undefined)
+})
+
+test('TRD-205: the non-critical route groups into ONE digest and flushes when the window opens', () => {
+  const rest = POLICY.policies[0].routes[1]
+  assert.deepEqual(rest.group_by, ['severity'])
+  assert.ok(seconds(rest.group_interval) > 0 && seconds(rest.group_interval) <= 300)
+})
+
+test('TRD-205 RED: a mute on the critical route, a missing non-critical route, an undefined interval, a missing default route each fail', () => {
+  const a = copy(POLICY)
+  a.policies[0].routes[0].mute_time_intervals = ['active-hours']
+  assert.match(quietHoursViolations(a, GRAFANA, TIMES).join('\n'), /critical route .* time interval/)
+  const b = copy(POLICY)
+  b.policies[0].routes.pop()
+  assert.match(quietHoursViolations(b, GRAFANA, TIMES).join('\n'), /no severity!=critical route/)
+  const c = copy(TIMES)
+  c.muteTimes[0].name = 'other'
+  assert.match(quietHoursViolations(POLICY, GRAFANA, c).join('\n'), /active-hours is not defined/)
+  const d = copy(POLICY)
+  d.policies[0].receiver = ''
+  assert.match(quietHoursViolations(d, GRAFANA, TIMES).join('\n'), /no default receiver/)
+})
+
+test('TRD-205: every Grafana rule carries severity critical or warning, so the routing is total', () => {
+  for (const r of recs(GRAFANA)) assert.match(String(r.labels?.severity), /^(critical|warning)$/, `${r.title}: severity label`)
+  const g = copy(GRAFANA)
+  delete recs(g)[0].labels.severity
+  assert.match(quietHoursViolations(POLICY, g, TIMES).join('\n'), /has no severity label/)
+})
+
+test('TRD-205: the committed default interval is the documented one and ops.env.tmpl names the operator keys', () => {
+  const t = TIMES.muteTimes[0].time_intervals[0]
+  assert.equal(t.location, 'Europe/Berlin')
+  assert.deepEqual(t.weekdays, ['monday:friday'])
+  assert.deepEqual(t.times, [{ start_time: '08:00', end_time: '20:00' }])
+  const tmpl = readText('infra/host/templates/env/ops.env.tmpl')
+  for (const k of ['OPS_ACTIVE_HOURS_TZ=Europe/Berlin', 'OPS_ACTIVE_HOURS_START=08:00', 'OPS_ACTIVE_HOURS_END=20:00', 'OPS_ACTIVE_HOURS_WEEKDAYS=monday:friday']) {
+    assert.ok(tmpl.split('\n').includes(k), k)
+  }
 })

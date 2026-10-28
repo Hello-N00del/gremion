@@ -13,6 +13,10 @@ import type { RequestHandler } from '@sveltejs/kit'
 import { hasRole, Role } from '$lib/auth'
 import type { SessionUser } from '$lib/auth/types'
 import { getMessagesBackend } from '$lib/server/messages/backend'
+import { resolveCalendarBackendOr503 } from '$lib/server/calendar/backend/resolve'
+import { canManageEvent, loadEventAuthzContext } from '$lib/server/calendar/event-authz'
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 interface MeetingRoomBody {
   eventId?: string
@@ -52,16 +56,39 @@ export const POST: RequestHandler = async (event) => {
     return json({ success: false, error: 'No Matrix credentials for user' }, { status: 403 })
   }
 
+  // The eventId is the only thing that picks the room, so it must be a real calendar
+  // event the caller takes part in (creator, member of one of its committees, or
+  // CouncilAdmin - the calendar's own canManageEvent). Anything else is a 404, so the
+  // admin bot never invites the caller into another committee's meeting room.
+  const calendar = resolveCalendarBackendOr503()
+  if (calendar instanceof Response) return calendar
+  // Calendar event ids are uuids: a malformed id is "no such event" without a lookup.
+  // Any OTHER lookup failure (calendar DB / leaf outage) is not "not found": it
+  // surfaces as 503 so an outage is distinguishable from a bad id.
+  if (!UUID_RE.test(eventId.trim())) {
+    return json({ success: false, error: 'Not found' }, { status: 404 })
+  }
+  let calEvent: Awaited<ReturnType<typeof calendar.getEvent>>
+  try {
+    calEvent = await calendar.getEvent(eventId.trim())
+  } catch (err) {
+    console.error('[api/video/meeting-room] calendar lookup failed', err)
+    return json({ success: false, error: 'Calendar unavailable' }, { status: 503 })
+  }
+  if (!calEvent || !canManageEvent(await loadEventAuthzContext(user), calEvent)) {
+    return json({ success: false, error: 'Not found' }, { status: 404 })
+  }
+
   // Stable per-meeting alias localpart → createRoom is idempotent by alias, so
   // re-clicking "Video-Link" for the same meeting reuses the same room rather
   // than minting a duplicate on the live homeserver.
-  const aliasLocalpart = 'meeting-' + eventId.toLowerCase().replace(/[^a-z0-9._-]/g, '-')
+  const aliasLocalpart = 'meeting-' + calEvent.id.toLowerCase().replace(/[^a-z0-9._-]/g, '-')
 
   const mc = backend.matrix()
   try {
     const roomId = await mc.createRoom(
       title ?? 'Besprechung',
-      `Videobesprechung – ${title ?? eventId}`,
+      `Videobesprechung – ${title ?? calEvent.id}`,
       aliasLocalpart
     )
     // Make the caller a member before the embedded call starts: admin invites,

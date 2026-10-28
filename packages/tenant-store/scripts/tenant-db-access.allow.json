@@ -42,11 +42,11 @@
     },
     {
       "path": "gremion-ui/src/lib/server/tenant/provisioner/customer-adapters.ts",
-      "calls": 3,
+      "calls": 4,
       "imports": 1,
       "adoptedBy": "TASK-077",
       "since": "2026-09-30",
-      "reason": "TASK-043 tenant-create adapters: the kernel server's POSTGRES_USER as the injected ModuleServer of ensureKernelDatabase, and a read-only post-condition read of the new kernel database's ledger and counts; no tenant data-plane pool (the kernel migration runs inside runWithTenant on the provisioning context)"
+      "reason": "TASK-043 tenant-create adapters: the kernel server's POSTGRES_USER as the injected ModuleServer of ensureKernelDatabase, a read-only post-condition read of the new kernel database's ledger and counts, and (TRD-144/145) PurgeServer.login: the purge run's own login AS a customer's k_<hex>_purger with a one-run password (max 1, search_path=pg_catalog), so no superuser session executes the purge DELETE; no tenant data-plane pool (the kernel migration runs inside runWithTenant on the provisioning context)"
     },
     {
       "path": "apps/control-panel/src/lib/server/customers.ts",
@@ -473,12 +473,28 @@
       "reason": "TASK-043d-1 request-verify: ONE read-only pool on gremion_platform as its owner (the tenant-create one-shot's own credential) to read the claimed request and the loaded module versions; never a tenant database; the registry (TASK-077) takes it over with tenant-provision.ts's platform pool"
     },
     {
+      "path": "gremion-ui/scripts/tenant-provision-export.ts",
+      "calls": 1,
+      "imports": 1,
+      "adoptedBy": "TASK-091",
+      "since": "2026-10-28",
+      "reason": "TRD-149/150/151 export verb: the kernel/module server admin credential the tenant-create one-shot already holds, used ONLY on each server's maintenance database to assert the export reader (ensureExportReader, NOSUPERUSER + pg_read_all_data, fresh password, cleared after); the tenant's kernel and enabled module databases are then read in READ-ONLY repeatable-read pools AS that reader, never as the admin (openTenantDb addresses a runtime role, not these); the SQL lives in @gremion/tenant-store/export; retires when tenant-create resolves targets through the package"
+    },
+    {
       "path": "packages/provisioning/test/integration/scratch.ts",
       "calls": 1,
       "imports": 1,
       "adoptedBy": "TASK-043",
       "since": "2026-10-05",
       "reason": "TASK-043d-1 integration helper on the package's own scratch server (test/integration/run.mjs): pools AS the panel role, the executor's test twin and the platform owner, to prove the request queue's grants; openTenantDb cannot address the control plane's roles; stays allow-listed while the tests exist"
+    },
+    {
+      "path": "gremion-ui/src/lib/server/access-records-db.ts",
+      "calls": 1,
+      "imports": 1,
+      "adoptedBy": "TASK-192",
+      "since": "2026-10-28",
+      "reason": "TRD-092 / PRD-OPS-006: ONE pool on gremion_platform as the role gremion_ui_oac (EXECUTE on oac.list_access_records only, no table privilege) for the council administrator's read of the vendor-access record; never a tenant database; like control-db.ts it is a control-plane pool that the registry takes over"
     }
   ]
 }

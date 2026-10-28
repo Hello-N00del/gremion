@@ -6,7 +6,7 @@
 // or the pilot host").
 //
 //   node scripts/ci-local/runner-policy.mjs --repo <path> [--repo <path> ...] [--waivers <path>]
-//   node scripts/ci-local/runner-policy.mjs --kernel <path> --vertical <path> [--waivers <path>]
+//   node scripts/ci-local/runner-policy.mjs --kernel <path> [--vertical <path>] [--waivers <path>]
 //   node --test scripts/ci-local/runner-policy.test.mjs
 //
 // TASK-012 §5 Q1: this guard is RED on today's kernel tree —

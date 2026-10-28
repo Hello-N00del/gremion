@@ -16,6 +16,9 @@
 #
 # Targets: keycloak | gremion | control
 #
+# Snapshot tags: read under $BACKUP_TAG (default gremion) OR $BACKUP_LEGACY_TAG
+# (default stura-os), so pre-rename snapshots remain listable and restorable.
+#
 # The restore process:
 #   1. [restic path] Restores snapshot to a temp dir
 #   2. Drops and recreates the target database
@@ -53,11 +56,17 @@ fi
 RESTIC_REPOSITORY="${RESTIC_REPOSITORY:-./backups/repo}"
 export RESTIC_REPOSITORY
 
+# Snapshots are read under the neutral tag AND the legacy one (repeated --tag is
+# restic OR semantics), so snapshots written before the rename stay restorable.
+BACKUP_TAG="${BACKUP_TAG:-gremion}"
+BACKUP_LEGACY_TAG="${BACKUP_LEGACY_TAG:-stura-os}"
+TAG_ARGS=(--tag "$BACKUP_TAG" --tag "$BACKUP_LEGACY_TAG")
+
 # ── Snapshot listing ──────────────────────────────────────────
 
 if [[ "${1:-}" == "--list-snapshots" ]]; then
     : "${RESTIC_PASSWORD:?RESTIC_PASSWORD (or RESTIC_PASSWORD_FILE) is not set}"
-    restic snapshots --tag stura-os
+    restic snapshots "${TAG_ARGS[@]}"
     exit 0
 fi
 
@@ -73,7 +82,7 @@ if [[ "${1:-}" == "--snapshot" ]]; then
     trap 'rm -rf "$RESTORE_TMP"' EXIT
 
     info "Restoring snapshot '${SNAPSHOT_ID}' to temp dir ${RESTORE_TMP}..."
-    restic restore "$SNAPSHOT_ID" --target "$RESTORE_TMP" --quiet
+    restic restore "$SNAPSHOT_ID" "${TAG_ARGS[@]}" --target "$RESTORE_TMP" --quiet
 
     # Dump files live under the DUMP_DIR path within the snapshot
     # e.g. /tmp/restore/backups/current/<db>.sql.gz — locate by name

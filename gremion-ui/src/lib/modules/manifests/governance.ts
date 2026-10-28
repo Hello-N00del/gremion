@@ -15,6 +15,13 @@ export const governanceManifest: ModuleManifest = {
     service: 'governance.* · Postgres-Schema',
     note: 'Gremien, Mitglieder, Protokolle, Beschlüsse und das öffentliche Portal.',
   },
+  processing: {
+    activity: 'Gremienverwaltung und Beschlussdokumentation',
+    purpose: 'Führung von Gremien, Mitgliedschaften, Protokollen und Beschlüssen sowie deren Veröffentlichung im Portal.',
+    dataCategories: ['Stammdaten (Name, Funktion, Amtszeit)', 'Kontaktdaten', 'Protokoll- und Beschlussinhalte', 'Abstimmungsergebnisse'],
+    dataSubjects: ['Gremienmitglieder', 'Teilnehmende von Sitzungen'],
+    retention: 'Protokolle und Beschlüsse gemäß Aufbewahrungsvorgaben des Trägers; Amtsdaten bis zum Ende der Aufbewahrungsfrist.',
+  },
   pages: [
     { segment: 'members', minRole: Role.Member },
     // v4: the whole GREMIEN section is guest-visible (council structure is

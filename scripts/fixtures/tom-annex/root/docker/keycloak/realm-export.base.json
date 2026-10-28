@@ -1,0 +1,19 @@
+{
+  "sslRequired": "external",
+  "bruteForceProtected": true,
+  "failureFactor": 5,
+  "maxFailureWaitSeconds": 900,
+  "accessTokenLifespan": 600,
+  "ssoSessionIdleTimeout": 1800,
+  "ssoSessionMaxLifespan": 43200,
+  "eventsEnabled": true,
+  "eventsExpiration": 2505600,
+  "adminEventsEnabled": true,
+  "otpPolicyType": "totp",
+  "otpPolicyDigits": 6,
+  "otpPolicyPeriod": 30,
+  "attributes": {
+    "acr.loa.map": "{\"loa1\":1,\"loa2\":2}",
+    "adminEventsExpiration": "2505600"
+  }
+}

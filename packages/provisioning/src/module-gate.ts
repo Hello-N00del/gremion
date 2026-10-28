@@ -133,6 +133,40 @@ export async function enableCustomerModule(slug: string, moduleId: string, opts:
   return { customer: c, moduleKey: m, noop: r.noop, database: r.database, enabled, reloaded: broker.reloaded }
 }
 
+export interface DisableCustomerModuleResult {
+  customer: CustomerRef
+  moduleKey: string
+  noop: boolean
+  dropped: boolean
+  database: string | null
+  export: { path: string; sha256: string; bytes: number } | null
+  /** Every module still enabled for the customer (the broker's list). */
+  enabled: string[]
+  reloaded: boolean
+}
+
+/**
+ * TRD-044: disable one module for an existing customer -- the catalogue id,
+ * the customer (active or provisioning), disableModule (switch off, export and
+ * verify, then drop), then the broker users for what is still enabled. Every
+ * step is repeatable: a module already disabled is a no-op that still converges
+ * the broker.
+ */
+export async function disableCustomerModule(slug: string, moduleId: string, opts: { operatorId: string }, deps: ProvisioningDeps): Promise<DisableCustomerModuleResult> {
+  const s = assertCustomerSlug(slug)
+  assertUuid(opts.operatorId, 'operator id')
+  if (!deps.modules.catalogueIds().includes(moduleId)) throw new ProvisioningError('MODULE_UNKNOWN', `module ${moduleId} is not in the catalogue`)
+  const row = await deps.control.getBySlug(s)
+  if (!row) throw new ProvisioningError('NOT_FOUND', `no customer ${s}`)
+  if (row.status !== 'active' && row.status !== 'provisioning') throw new ProvisioningError('CUSTOMER_STATE', `customer ${s} is ${row.status}; a module is disabled only for an active (or provisioning) customer`)
+  if (!row.host) throw new ProvisioningError('CUSTOMER_STATE', `customer ${s} has no primary host bound`)
+  const c = refOf(row, row.host)
+  const r = await deps.modules.disable(c, moduleId, opts.operatorId)
+  const enabled = (await deps.modules.enabled(c)).sort()
+  const broker = await deps.broker.ensure(c, enabled)
+  return { customer: c, moduleKey: moduleId, noop: r.noop, dropped: r.dropped, database: r.database, export: r.export, enabled, reloaded: broker.reloaded }
+}
+
 function refOf(row: ControlRow, host: string): CustomerRef {
   return { id: row.id, slug: row.slug, token: tokenFor(row.slug), realm: row.realm, host }
 }

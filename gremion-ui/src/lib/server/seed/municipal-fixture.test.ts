@@ -7,7 +7,8 @@
 // STURA_BLUEPRINT keeps validating against GREMION_ORG_SCHEMA unchanged.
 import { describe, it, expect } from 'vitest'
 import { parseBlueprintDocument } from './blueprint-schema'
-import { validateBlueprint, STURA_BLUEPRINT, type GremionBlueprint } from './org-blueprint'
+import { validateBlueprint, type GremionBlueprint } from './org-blueprint'
+import { STURA_BLUEPRINT } from './stura-fixture'
 import { GREMION_ORG_SCHEMA, orgSchemaFromBlueprint } from '../governance/org-schema'
 
 function municipalBlueprint(): GremionBlueprint {

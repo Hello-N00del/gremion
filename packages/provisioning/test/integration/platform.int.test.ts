@@ -138,6 +138,7 @@ describe('the platform on a fresh server', () => {
     const logs: string[] = []
     const r = await bootstrapPlatform({
       kernelAdmin: admin,
+      openAdminOn: (db) => open(db, 1),
       openPlatform: () => open('gremion_platform', 2, OWNER, OWNER_PW),
       owner: OWNER,
       ownerPassword: OWNER_PW,
@@ -186,6 +187,7 @@ describe('the platform on a fresh server', () => {
 
     const again = await bootstrapPlatform({
       kernelAdmin: admin,
+      openAdminOn: (db) => open(db, 1),
       openPlatform: () => open('gremion_platform', 2, OWNER, OWNER_PW),
       owner: OWNER,
       ownerPassword: OWNER_PW,
@@ -201,6 +203,7 @@ describe('the platform on a fresh server', () => {
     const logs: string[] = []
     const r = await bootstrapPlatform({
       kernelAdmin: admin,
+      openAdminOn: (db) => open(db, 1),
       openPlatform: () => open('gremion_platform', 2, OWNER, OWNER_PW),
       owner: OWNER,
       ownerPassword: OWNER_PW,

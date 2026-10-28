@@ -122,3 +122,24 @@ test('the Dockerfile bakes every script the image runs or documents, bootstrap.s
   const bs = readFileSync(join(SYN, 'bootstrap.sh'), 'utf8')
   assert.doesNotMatch(bs, /b"\$\{(SHARED_SECRET|NONCE|PASSWORD)\}"/, 'bootstrap.sh splices a secret into Python source')
 })
+
+test('alias_creation_rules allow only the admin bot and deny every other user', () => {
+  const r = render(baseEnv({ SYNAPSE_ADMIN_BOT_USER_ID: '@gremion-admin-bot:chat.example.org' }))
+  assert.equal(r.status, 0, r.stderr)
+  const rules = r.cfg.alias_creation_rules
+  assert.equal(rules.length, 2)
+  assert.deepEqual({ ...rules[0] }, { user_id: '@gremion-admin-bot:chat.example.org', alias: '*', room_id: '*', action: 'allow' })
+  assert.deepEqual({ ...rules[1] }, { user_id: '*', alias: '*', room_id: '*', action: 'deny' })
+})
+
+test('a missing, blank or malformed SYNAPSE_ADMIN_BOT_USER_ID is refused by name and nothing is rendered', () => {
+  for (const bad of [undefined, '', 'gremion-admin-bot', '@bot', '@bot:host name', '@*:chat.example.org']) {
+    const env = baseEnv()
+    delete env.SYNAPSE_ADMIN_BOT_USER_ID
+    if (bad !== undefined) env.SYNAPSE_ADMIN_BOT_USER_ID = bad
+    const r = render(env)
+    assert.notEqual(r.status, 0, `accepted ${JSON.stringify(bad)}`)
+    assert.match(r.stderr, /SYNAPSE_ADMIN_BOT_USER_ID/)
+    assert.equal(r.text, null)
+  }
+})

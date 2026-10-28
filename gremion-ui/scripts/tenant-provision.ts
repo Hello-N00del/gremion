@@ -10,6 +10,7 @@
 //   record-step <slug> mail_principal_issued --operator <uuid>
 //                                                   the host phase's ledger step (verifies the stamp over Keycloak)
 //   phase-b <slug> <create flags>                   first accounts, --enable modules, active
+//   activate <slug>                                  provisioning -> active (after the router)
 //   render-router <slug>                            the edge router document on STDOUT (Q17)
 //   suspend <slug> --operator <uuid>                status, realm, broker (the host then revokes the principal)
 //   resume <slug> --operator <uuid>                 stamp verified, realm, broker, status last
@@ -35,11 +36,14 @@ import postgres from 'postgres'
 import { handToReader } from './tenant-secret-file'
 import {
   bootstrapPlatform,
+  ACCESS_READER_ROLE,
+  ensureAccessReader,
   ensureExecutorRole,
   ensurePanelRequester,
   EXECUTOR_ROLE,
   PANEL_EXECUTES,
   PANEL_READS,
+  activateBySlug,
   createPhaseA,
   createPhaseB,
   loadModuleJsons,
@@ -60,7 +64,7 @@ import {
   type MailStampExpectation,
   type ProvisioningDeps,
 } from '@gremion/provisioning'
-import { assertPlatform, dropKernelDatabase, ensureKernelApiReader, KERNEL_API_READS, type LifecycleModule, type ModuleServer } from '@gremion/tenant-store/lifecycle'
+import { assertPlatform, dropKernelDatabase, ensureKernelApiReader, KERNEL_API_READS, pgDumpExporter, type LifecycleModule, type ModuleServer } from '@gremion/tenant-store/lifecycle'
 import { MODULE_MANIFESTS } from '../src/lib/modules/registry'
 import { dbNameForSlug, validateSlug } from '../src/lib/server/tenant/slug'
 import { normaliseHost } from '../src/lib/server/tenant/host'
@@ -87,11 +91,14 @@ import {
   type FleetReport,
 } from '../src/lib/server/tenant/provisioner/reconcile'
 import { materializeConfig, assertBrandIdentityComplete } from '../src/lib/server/tenant/provisioner/materialize'
+import { opsOperatorEnrolmentNotice } from '../src/lib/server/tenant/provisioner/ops-enrolment'
 import { tlog } from '../src/lib/server/observability/tenant-log'
 import { deleteTenant, type DeleteDeps, type LeafShredExecutor } from '../src/lib/server/tenant/provisioner/lifecycle'
 import { requestVerb } from './tenant-provision-requests'
 import { GATE_USAGE, GATE_VERBS, refusalLine, runGateVerb } from './tenant-provision-gate'
+import { EXPORT_USAGE, EXPORT_VERBS, exportVerb } from './tenant-provision-export'
 import { IMPORT_USAGE, IMPORT_VERBS, importVerb } from './tenant-provision-import'
+import { PURGE_USAGE, PURGE_VERBS, purgeVerb } from './tenant-provision-purge'
 import { parseDpiaMap, scratchFixturesAllowed } from './tenant-provision-scratch'
 
 const repoRoot = join(import.meta.dirname, '..', '..')
@@ -356,6 +363,8 @@ function createSpec(slug: string): CreateSpec & { configFile: string; bodyName: 
     admins,
     configFile: reqFlag('--config'),
     bodyName: flag('--body-name') ?? 'Rat',
+    // H3 (LOW-7): the CLI's phase B NEVER activates; `activate` is the host's last step. --defer-activation is accepted as a no-op.
+    deferActivation: true,
     ...dpiaFromFlag(),
   }
 }
@@ -386,7 +395,9 @@ function moduleServerFor(adminUrl: string): ModuleServer & { close(): Promise<vo
         max: 2,
         onnotice: () => {},
         connect_timeout: 15,
-        ...(options?.role ? { connection: { options: `-c role=${options.role}` } } : {}),
+        // as the owner (a migration) the session keeps the database's search_path; as the
+        // superuser itself (inspection) it is pinned, overriding the owner's ALTER DATABASE SET
+        connection: options?.role ? { options: `-c role=${options.role}` } : { search_path: 'pg_catalog' },
       })
       pools.push(sql)
       return sql
@@ -487,10 +498,20 @@ async function liveDeps(opts: { configFile?: string; bodyName?: string; needEdge
               return reqFileEnv(`MODULE_APP_PASSWORD_${envId(serviceId(svc))}_FILE`)
             },
           },
-          exporter: {
-            dump: () => Promise.reject(new Error('tenant-create never disables a module (disable is not a create verb)')),
-            list: () => Promise.reject(new Error('tenant-create never disables a module')),
-          },
+          // TRD-044: the disable-module verb exports with pg_dump (the builder image carries the
+          // postgresql18 client) over the module server's admin URL; the password rides in PGPASSWORD.
+          exporter: pgDumpExporter({
+            pgDump: ['pg_dump'],
+            pgRestore: ['pg_restore'],
+            connection: (target) => {
+              const id = serviceId(target.service)
+              const u = new URL(directPostgresUrl(`MODULE_PG_ADMIN_${envId(id)}_FILE`, reqFileEnv(`MODULE_PG_ADMIN_${envId(id)}_FILE`)))
+              return {
+                args: ['--no-owner', '--host', u.hostname, '--port', u.port || '5432', '--username', decodeURIComponent(u.username), '--dbname', target.database],
+                ...(u.password ? { env: { PGPASSWORD: decodeURIComponent(u.password) } } : {}),
+              }
+            },
+          }),
           exportDir: env.exportDir,
           releaseRef: env.releaseRef,
           log,
@@ -612,6 +633,7 @@ async function cmdInit(): Promise<void> {
   try {
     const r = await bootstrapPlatform({
       kernelAdmin,
+      openAdminOn,
       openPlatform: () => postgres(platformUrl.toString(), { max: 2, onnotice: () => {}, connect_timeout: 15 }),
       owner: decodeURIComponent(platformUrl.username),
       ownerPassword: decodeURIComponent(platformUrl.password),
@@ -628,6 +650,16 @@ async function cmdInit(): Promise<void> {
     // TASK-043d: the host-side executor's role (no password: the state server's local socket only)
     const executor = await ensureExecutorRole({ kernelAdmin, openAdminOn })
     log(`init: executor role ${EXECUTOR_ROLE} ${executor.created ? 'created' : 'present'} (EXECUTE on the request functions only)`)
+    // TRD-092: the council-admin access-record view's role (EXECUTE on the read
+    // function only). Optional until the deployment env carries its password
+    // (UI_OAC_DB_PASSWORD): without it gremion-ui answers 503 on that view.
+    const oacPassword = process.env.UI_OAC_DB_PASSWORD
+    if (oacPassword) {
+      const oac = await ensureAccessReader({ kernelAdmin, openAdminOn, password: oacPassword })
+      log(`init: access-record reader ${ACCESS_READER_ROLE} ${oac.created ? 'created' : 'present'} (EXECUTE on oac.list_access_records only)`)
+    } else {
+      log('init: UI_OAC_DB_PASSWORD is unset: the access-record reader role is not (re)made; the council-admin view reports "nicht konfiguriert"')
+    }
     // TASK-077: the kernel API's SELECT-only role, which deploy step 7
     // (kernel-api-migrate) and the kernel-api service connect as; nothing else
     // creates it.
@@ -660,6 +692,16 @@ async function cmdPhase(which: 'a' | 'b'): Promise<void> {
       log(`phase B ${slug}: ran [${r.run.ran.join(', ')}]; enabled [${r.enabled.join(', ')}]; broker ${r.reloaded ? 'reloaded' : 'unchanged'}; ${r.activated ? 'activated' : 'already active'}`)
       console.log(JSON.stringify({ phase: 'b', slug, enabled: r.enabled, reloaded: r.reloaded, activated: r.activated, ran: r.run.ran }))
     }
+  })
+}
+
+// create-harden H3: the host's last create step, after the router is written.
+async function cmdActivate(): Promise<void> {
+  const slug = slugArg('activate')
+  await withLive({}, async (deps) => {
+    const r = await activateBySlug(slug, deps)
+    log(`activate ${slug}: ${r.activated ? 'activated' : 'already active'}`)
+    console.log(JSON.stringify({ phase: 'activate', slug, activated: r.activated }))
   })
 }
 
@@ -787,7 +829,7 @@ async function cmdOperatorAdd(): Promise<void> {
   if (!user?.id) throw new Error(`operator ${email} is absent after create`)
   const role = await raw('GET', `/admin/realms/${OPS_REALM}/roles/operator`)
   await raw('POST', `/admin/realms/${OPS_REALM}/users/${user.id}/role-mappings/realm`, [role])
-  log(`operator ${email} created with a temporary password (Q23: no vendor mail on this host); it must be changed and TOTP configured at first sign-in`)
+  log(opsOperatorEnrolmentNotice(email, process.env.PLATFORM_DOMAIN))
   process.stdout.write(`TEMPORARY-PASSWORD: ${temporary}\n`)
 }
 
@@ -957,7 +999,8 @@ const USAGE = `usage: tenant-create <verb> ...
   init [--realm-only] [--panel-origin <origin>]
   phase-a <slug> --host <host> --config <file> --operator <uuid> --it-admin <email> --council-admin <email> [--enable a,b] [--body-name <name>]
   record-step <slug> mail_principal_issued --operator <uuid> [--sender-json <json>]
-  phase-b <slug> (the phase-a flags)
+  phase-b <slug> (the phase-a flags) [--defer-activation, a no-op: phase-b never activates]
+  activate <slug>
   render-router <slug>
   suspend <slug> --operator <uuid> | resume <slug> --operator <uuid>
   reconcile [--verify-only] <slug>|--all [--sender-json <json>]
@@ -966,7 +1009,9 @@ const USAGE = `usage: tenant-create <verb> ...
   delete <slug> | bootstrap-provisioner | materialize-config <slug> [--config <path>]
   request-verify <request-id>   (TASK-043d: the executor's trusted-layer verdict, one JSON line)
 ${GATE_USAGE}
-${IMPORT_USAGE}`
+${IMPORT_USAGE}
+${PURGE_USAGE}
+${EXPORT_USAGE}`
 
 async function main(): Promise<void> {
   const verb = process.argv[2]
@@ -985,6 +1030,8 @@ async function main(): Promise<void> {
       return cmdPhase('a')
     case 'phase-b':
       return cmdPhase('b')
+    case 'activate':
+      return cmdActivate()
     case 'record-step':
       return cmdRecordStep()
     case 'render-router':
@@ -1010,6 +1057,7 @@ async function main(): Promise<void> {
       throw new UsageError('provision is retired (TASK-043): a customer is created from the control panel ("Neuer Mandant"), which the host-side executor runs (phase-a, the host mail step, record-step, phase-b, the router; TASK-043d)')
     // TASK-044: the level-1 gate's verbs (tenant-provision-gate.ts)
     case 'enable-module':
+    case 'disable-module':
     case 'dpia-record':
     case 'isolation-record':
     case 'gate-status':
@@ -1039,6 +1087,31 @@ async function main(): Promise<void> {
         // renews the host executor's lease (record_stream reads the marker off stderr)
         heartbeat: () => process.stderr.write('@@executor-step import-apply\n'),
         flag,
+        reqFlag,
+        positional,
+        usage: (m) => new UsageError(m),
+        log,
+      })
+    // TRD-144/145: the scheduled purge (tenant-provision-purge.ts), run by the host's gremion-purge.timer
+    case 'purge-run':
+      if (!PURGE_VERBS.has(verb)) throw new UsageError(`unknown verb ${verb}`)
+      return purgeVerb(verb, {
+        args: process.argv.slice(3),
+        openPlatform: openPlatformPool,
+        openKernelServer: () => kernelServer(directPostgresUrl('KERNEL_PG_ADMIN_FILE', reqFileEnv('KERNEL_PG_ADMIN_FILE'))),
+        usage: (m) => new UsageError(m),
+        log,
+      })
+    // TRD-149/150/151: the open-format tenant export + completeness check (tenant-provision-export.ts)
+    case 'export':
+    case 'export-verify':
+      if (!EXPORT_VERBS.has(verb)) throw new UsageError(`unknown verb ${verb}`)
+      return exportVerb(verb, {
+        catalogue: loadModules,
+        customerIdForSlug: async (s) => (await getTenantBySlug(s))?.id ?? null,
+        openPlatform: openPlatformPool,
+        kernelUrl: () => directPostgresUrl('KERNEL_PG_ADMIN_FILE', reqFileEnv('KERNEL_PG_ADMIN_FILE')),
+        moduleUrl: (id) => directPostgresUrl(`MODULE_PG_ADMIN_${envId(id)}_FILE`, reqFileEnv(`MODULE_PG_ADMIN_${envId(id)}_FILE`)),
         reqFlag,
         positional,
         usage: (m) => new UsageError(m),

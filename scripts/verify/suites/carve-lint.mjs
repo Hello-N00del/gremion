@@ -39,6 +39,8 @@ export const CARVE_LINT_TARGETS = [
   { name: 'lint-yaml', kind: 'make', target: 'lint-yaml', tool: 'yamllint' },
   { name: 'lint-json', kind: 'make', target: 'lint-json', tool: 'python3' },
   { name: 'lint-compose', kind: 'make', target: 'lint-compose', tool: 'docker' },
+  // G-037: no floating :latest image in the compose render (needs docker + jq).
+  { name: 'lint-compose-latest', kind: 'make', target: 'lint-compose-latest', tool: 'docker' },
   // TASK-022 merged lint-edge-render after this list was written (the meta-test
   // caught it on main, R25). It renders the production composition: docker.
   { name: 'lint-edge-render', kind: 'make', target: 'lint-edge-render', tool: 'docker' },
@@ -64,6 +66,9 @@ export const CARVE_LINT_TARGETS = [
   { name: 'lint-hygiene', kind: 'make', target: 'lint-hygiene' },
   // TASK-079: the NATS N-run recorder suite (a stand-in target, no Docker).
   { name: 'lint-nats-nruns', kind: 'make', target: 'lint-nats-nruns' },
+  // TRD-140/141: the generated TOM annex is current with its inputs.
+  { name: 'lint-tom-annex', kind: 'make', target: 'lint-tom-annex' },
+  { name: 'lint-module-dockerfile-copy', kind: 'make', target: 'lint-module-dockerfile-copy' },
   { name: 'lint-cve-floors', kind: 'make', target: 'lint-cve-floors' },
   { name: 'lint-packages', kind: 'make', target: 'lint-packages' },
   // TASK-048 (TRD-350/066/354): every deployed image pinned by digest, no

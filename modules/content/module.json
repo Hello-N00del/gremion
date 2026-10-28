@@ -5,7 +5,7 @@
   "runtime": {
     "version": "1.0.0",
     "database": { "postgresService": "content-postgres", "migrations": "migrations" },
-    "export": { "kind": "pg_dump", "retentionProfile": "rp-pub-module-data" },
+    "export": { "kind": "pg_dump", "retentionProfile": "rp-pub-module-data", "withhold": ["content.send_tokens.token"] },
     "timedJobs": [
       { "id": "content-publish", "activeColourOnly": true },
       { "id": "content-instagram-publish", "activeColourOnly": true }

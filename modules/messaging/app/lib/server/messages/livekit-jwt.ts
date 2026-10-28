@@ -115,7 +115,10 @@ export async function handleSfuRequest(body: SfuRequest): Promise<SfuResponse> {
     throw new RoomMembershipError()
   }
 
-  const roomName = livekitRoomName(body.room)
+  // Derive the LiveKit room from the SAME resolved room id the membership check ran on.
+  // Building it from the alias text would let a member of room A name an alias whose
+  // localpart collides with room B's LiveKit room name and publish into B's call.
+  const roomName = roomNameFromMatrixId(matrixRoomId)
 
   const jwt = await mintToken({
     roomName,

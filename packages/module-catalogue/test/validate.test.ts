@@ -86,6 +86,28 @@ describe('validateModuleJson — one refusal per rule (fixtures/refusals/*.json)
     expect(validateModuleJson(m, { id: 'gamma', dir: GAMMA, compose }).join('\n')).toMatch(/gamma: runtime\.export is declared but runtime\.database is null/)
   })
 
+  it('MED-3: runtime.export.withhold takes schema.table or schema.table.column entries, nothing else', () => {
+    const m = good('alpha') as { runtime: { export: Record<string, unknown> } }
+    m.runtime.export.withhold = ['public.send_tokens', 'finance.fints_config.password_encrypted']
+    expect(validateModuleJson(m, { id: 'alpha', dir: ALPHA, compose }).join('\n')).not.toMatch(/withhold/)
+    for (const bad of [['token'], ['a.b.c.d'], ['Public.x'], ['public.x', 'public.x'], 'public.x', [1]]) {
+      m.runtime.export.withhold = bad
+      expect(validateModuleJson(m, { id: 'alpha', dir: ALPHA, compose }).join('\n'), JSON.stringify(bad)).toMatch(/alpha: runtime\.export\.withhold/)
+    }
+    m.runtime.export.withold = []
+    delete m.runtime.export.withhold
+    expect(validateModuleJson(m, { id: 'alpha', dir: ALPHA, compose }).join('\n')).toMatch(/runtime\.export\.withold is not an export field/)
+  })
+
+  it('MED-3: the real modules withhold their secrets from the open-format export', () => {
+    const root = fileURLToPath(new URL('../../../modules/', import.meta.url))
+    const withhold = (id: string) => (JSON.parse(readFileSync(join(root, id, 'module.json'), 'utf8')) as { runtime: { export: { withhold?: string[] } } }).runtime.export.withhold ?? []
+    expect(withhold('publishing')).toEqual(expect.arrayContaining(['public.unsubscribes.token', 'public.send_tokens.token']))
+    expect(withhold('content')).toEqual(expect.arrayContaining(['content.send_tokens.token']))
+    expect(withhold('vault')).toEqual(expect.arrayContaining(['public.vault_item.secret_ciphertext']))
+    expect(withhold('finance')).toEqual(expect.arrayContaining(['finance.fints_config.password_encrypted']))
+  })
+
   it('a runtime key left out is refused, never defaulted (each of the five)', () => {
     for (const key of ['version', 'database', 'export', 'timedJobs', 'platformServer']) {
       const m = good('gamma') as { runtime: Record<string, unknown> }

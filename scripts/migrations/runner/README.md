@@ -43,6 +43,20 @@ migration dirs but never `scripts/`. It is generated, never edited:
 checks it byte for byte against its rendering from the two files and names
 that command when it drifts.
 
+## Waivers (`lint-waivers.json`)
+
+The baseline maps only files locked before the header existed and is never
+edited. A file that is locked, carries its header, yet trips the expand lint
+(platform 0009 / 0010: SECURITY DEFINER functions, `REVOKE .. FROM PUBLIC`,
+`OR REPLACE`, no `lock_timeout`) gets a **waiver** instead: one entry per file
+naming the chain, file, its sha256 (must equal `applied.lock.json`), the rules
+waived (only `WAIVABLE_RULES` in `suite.mjs`) and a reason of at least 40
+characters. The suite fails on a waiver whose file is unlocked, edited, absent,
+in the baseline, or whose waived rule no longer fires (stale). Fix a new file
+while it is still unlocked rather than waiving it. A file another branch adds
+(e.g. platform 0011) adds its own waiver entry with its own sha256 in that
+branch.
+
 ## What each phase may contain (`lint.mjs`)
 
 A dependency-free, fail-closed allow-list (Q6, TRD-444). Anything it cannot

@@ -146,7 +146,7 @@ check('b1 every pnpm-workspace.yaml package glob resolves to a real directory', 
   const ws = read('pnpm-workspace.yaml')
   // The `packages:` block runs from that key to the next column-0 key.
   const lines = ws.split('\n')
-  const start = lines.findIndex((l) => /^packages:/.test(l))
+  const start = lines.findIndex((l) => l.startsWith('packages:'))
   if (start === -1) return 'no `packages:` key found'
   const rest = lines.slice(start + 1)
   const end = rest.findIndex((l) => /^\S/.test(l))
@@ -235,7 +235,7 @@ function k8sImageLines() {
 }
 
 check('e1 no k8s manifest floats on a :latest tag', () => {
-  const bad = k8sImageLines().filter((h) => /:latest$/.test(h.image))
+  const bad = k8sImageLines().filter((h) => h.image.endsWith(':latest'))
   return bad.length ? bad.map((h) => `${h.file}:${h.line} ${h.image}`).join(' | ') : null
 })
 
@@ -487,7 +487,7 @@ check('g4 no overlay RENDERS a placeholder image (the applyable-output post-cond
   for (const name of overlayNames) {
     const r = renderOverlay(name)
     if (r.error) continue // already reported by g2
-    for (const img of [...new Set(r.images)]) {
+    for (const img of new Set(r.images)) {
       const why = placeholderReason(img)
       if (why) problems.push(`${name}: ${img} — ${why}`)
     }
@@ -1230,7 +1230,7 @@ check('t3 the three message bundles agree and carry no dead key', () => {
     new Set(read(`${loginDir}/messages/${b}`).split('\n')
       .map((l) => /^([A-Za-z][A-Za-z0-9_.]*)=/.exec(l.trim()))
       .filter(Boolean).map((m) => m[1]))
-  const sets = bundles.map((b) => [b, keysOf(b)])
+  const sets = bundles.map((b) => /** @type {[string, Set<string>]} */ ([b, keysOf(b)]))
   const base = sets[0][1]
   if (base.size === 0) return 'the default bundle defines zero keys — the check would vacuously pass'
   const problems = []
@@ -1423,6 +1423,13 @@ const IMPORT_REALM_CARRIERS = new Set([
   'scripts/kernel-hygiene-check.mjs',    // this file
   'docker/keycloak/README.md',           // states the boot import is gone
   'docs/deployment.md',                  // same, as the B-01 note
+  // The kernel-api test harness starts REAL Keycloak containers in `start-dev`
+  // and feeds them realm files with --import-realm: that is how a throwaway
+  // test container gets its realms, not a deployment instruction (compose, k8s
+  // and the docs have no boot import, which is what the guards above assert).
+  'services/kernel-api/test/harness/keycloak/make-realms.mjs',
+  'services/kernel-api/test/harness/stack-proof.sh',
+  'services/kernel-api/test/keycloak/audience.int.test.ts',
 ])
 
 // The two operator-approved design specs that B0 tracks are the FROZEN record
@@ -1710,7 +1717,8 @@ check('n2 the migrations ledger lists every shipped file and calls none of them 
 // Each entry must exist on disk, so the list cannot outlive its file.
 // F1-FIX-02-K: 0059, the INV-1 chain anchor (the product numbers its own port
 // of the same fix separately).
-const KERNEL_ONLY_DATA_PLANE_FILES = ['0059_audit_log_chain_anchor.sql']
+// TRD-196: 0060, the per-module erasure report, is written here too (not ported).
+const KERNEL_ONLY_DATA_PLANE_FILES = ['0059_audit_log_chain_anchor.sql', '0060_erasure_report.sql']
 
 check('n3 the "absent from the kernel" arithmetic is the product chain minus what ships', () => {
   const wrong = []

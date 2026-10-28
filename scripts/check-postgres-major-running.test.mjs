@@ -73,7 +73,7 @@ const good = (over = {}) => [
 test('expectedServices reads the kernel and all six module servers off the committed compose', () => {
   const text = readFileSync(join(ROOT, 'docker-compose.yml'), 'utf8')
   const exp = expectedServices([text])
-  assert.deepEqual(exp.map((e) => e.service).sort(),
+  assert.deepEqual(exp.map((e) => e.service).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)),
     ['postgres', ...MODULE_POSTGRES_IDS.map((id) => `${id}-postgres`)].sort())
   assert.equal(exp.find((e) => e.service === 'postgres').label, 'kernel')
 })
@@ -191,7 +191,7 @@ test('a docker ps that fails throws instead of looking like zero containers', ()
 test('R1: expectedServices can be narrowed to the active profiles; the kernel is always expected', () => {
   const text = readFileSync(join(ROOT, 'docker-compose.yml'), 'utf8')
   assert.deepEqual(expectedServices([text], []).map((e) => e.service), ['postgres'])
-  assert.deepEqual(expectedServices([text], ['vault']).map((e) => e.service).sort(), ['postgres', 'vault-postgres'])
+  assert.deepEqual(expectedServices([text], ['vault']).map((e) => e.service).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)), ['postgres', 'vault-postgres'])
 })
 
 test('R1: an empty expected set is RED — a compose scan that found nothing proves nothing', () => {

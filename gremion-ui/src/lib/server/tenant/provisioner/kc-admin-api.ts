@@ -38,6 +38,64 @@ function statusFrom(err: unknown): number | null {
 /** The user attribute that records a first administrator's invite (send-once). */
 export const INVITE_MARK = 'gremion_invited_at'
 
+/** Security sweep 2 (finding 3). stepup-2fa must NOT hold a REQUIRED OTP form:
+ *  for a user with no OTP credential Keycloak then runs CONFIGURE_TOTP inside the
+ *  step-up and issues acr=loa2 once the user has enrolled, so whoever holds the
+ *  session (or the password) enrolls their own authenticator and passes the
+ *  "fresh 2FA" gate. The OTP form instead sits in this REQUIRED subflow as an
+ *  ALTERNATIVE, followed by deny-access as the other ALTERNATIVE: a user with an
+ *  OTP credential gets the OTP prompt; a user without one is denied (the OTP
+ *  alternative is skipped, no enrolment is offered). */
+export const STEPUP_2FA_SECOND_FACTOR = 'stepup-2fa second factor'
+
+/** One row of the Admin API's flattened `/authentication/flows/<alias>/executions`. */
+export interface FlowExecRep {
+  id?: string
+  providerId?: string
+  displayName?: string
+  requirement?: string
+  level?: number
+  index?: number
+  authenticationFlow?: boolean
+  authenticationConfig?: string
+}
+
+const isSecondFactorSubflow = (e: FlowExecRep): boolean =>
+  e.authenticationFlow === true && e.displayName === STEPUP_2FA_SECOND_FACTOR
+
+/** null when the flattened stepup-2fa execution list has the hardened shape,
+ *  else why not. Pure: reconcile's check and the repair share it. */
+export function stepup2faGateProblem(execs: readonly FlowExecRep[]): string | null {
+  const otps = execs.filter((e) => e.providerId === 'auth-otp-form')
+  if (otps.length !== 1) return `stepup-2fa carries ${otps.length} OTP forms (expected exactly 1)`
+  const otp = otps[0]!
+  const sub = execs.find(isSecondFactorSubflow)
+  if (!sub) return `the OTP form is not under the "${STEPUP_2FA_SECOND_FACTOR}" subflow (a REQUIRED OTP form enrolls a missing authenticator and then grants loa2)`
+  if (sub.requirement !== 'REQUIRED') return `the "${STEPUP_2FA_SECOND_FACTOR}" subflow is ${sub.requirement}, expected REQUIRED`
+  if (otp.requirement !== 'ALTERNATIVE') return `the OTP form is ${otp.requirement}, expected ALTERNATIVE (REQUIRED would enroll a missing authenticator and then grant loa2)`
+  const deny = execs.find((e) => e.providerId === 'deny-access-authenticator')
+  if (!deny) return 'no deny-access sibling: a user without OTP would not be refused'
+  if (deny.requirement !== 'ALTERNATIVE') return `deny-access is ${deny.requirement}, expected ALTERNATIVE`
+  if (deny.level !== otp.level || (otp.level ?? 0) < 1) return 'the OTP form and deny-access are not siblings inside the subflow'
+  if ((otp.index ?? 0) > (deny.index ?? 0)) return 'deny-access is ordered before the OTP form (a user with OTP would always be denied)'
+  // The subflow's rows are the ones after it in the flattened list, deeper than
+  // it. It must hold exactly [OTP, deny-access] (a DISABLED row is inert): any
+  // other enabled row (an allow-access ALTERNATIVE, a nested flow) can let a user
+  // without OTP through, and OTP/deny must be ITS direct children, not another
+  // subflow's.
+  const subLevel = sub.level ?? 0
+  const members: FlowExecRep[] = []
+  for (let i = execs.indexOf(sub) + 1; i < execs.length && (execs[i]!.level ?? 0) > subLevel; i++) members.push(execs[i]!)
+  if (!members.includes(otp) || !members.includes(deny) || otp.level !== subLevel + 1) {
+    return `the OTP form and deny-access are not the direct children of the "${STEPUP_2FA_SECOND_FACTOR}" subflow`
+  }
+  const extra = members.filter((e) => e !== otp && e !== deny && e.requirement !== 'DISABLED')
+  if (extra.length > 0) {
+    return `the "${STEPUP_2FA_SECOND_FACTOR}" subflow holds ${extra.map((e) => e.providerId ?? e.displayName ?? '?').join(', ')} besides the OTP form and deny-access (a user without OTP could pass)`
+  }
+  return null
+}
+
 export class KcProvisionApi {
   constructor(private readonly transport: KcTransport) {}
 
@@ -314,6 +372,56 @@ export class KcProvisionApi {
     }
   }
 
+  /**
+   * Security sweep 2 (finding 3): bring stepup-2fa to the OTP-or-deny shape (see
+   * STEPUP_2FA_SECOND_FACTOR). Idempotent and crash-safe: the replacement is
+   * built and enabled FIRST and the legacy REQUIRED OTP form is deleted LAST, so
+   * a run that dies half way leaves a flow that still demands a second factor,
+   * and a rerun resumes from what it finds. A stepup-2fa with no OTP form at all
+   * is structural drift that the step-up rebuild owns; this leaves it alone.
+   */
+  async ensureStepup2faSecondFactor(realm: string): Promise<void> {
+    const listing = `/authentication/flows/stepup-2fa/executions`
+    const top = (await this.realmGet<FlowExecRep[]>(realm, listing)) ?? []
+    if (stepup2faGateProblem(top) === null) return
+    const legacy = top.filter((e) => e.providerId === 'auth-otp-form' && (e.level ?? 0) === 0)
+    let sub = top.find(isSecondFactorSubflow)
+    if (!sub && legacy.length === 0) return
+    if (!sub) {
+      await this.realmReq(realm, 'POST', `${listing}/flow`, {
+        alias: STEPUP_2FA_SECOND_FACTOR,
+        type: 'basic-flow',
+      })
+      sub = ((await this.realmGet<FlowExecRep[]>(realm, listing)) ?? []).find(isSecondFactorSubflow)
+      if (!sub?.id) throw new Error(`ensureStepup2faSecondFactor: the "${STEPUP_2FA_SECOND_FACTOR}" subflow is absent from realm "${realm}" after create`)
+    }
+    const kidsPath = `/authentication/flows/${encodeURIComponent(STEPUP_2FA_SECOND_FACTOR)}/executions`
+    let kids = (await this.realmGet<FlowExecRep[]>(realm, kidsPath)) ?? []
+    let added = false
+    for (const provider of ['auth-otp-form', 'deny-access-authenticator']) {
+      if (!kids.some((k) => k.providerId === provider)) {
+        await this.realmReq(realm, 'POST', `${kidsPath}/execution`, { provider })
+        added = true
+      }
+    }
+    if (added) kids = (await this.realmGet<FlowExecRep[]>(realm, kidsPath)) ?? []
+    const otp = kids.find((k) => k.providerId === 'auth-otp-form')
+    const deny = kids.find((k) => k.providerId === 'deny-access-authenticator')
+    if (!sub.id || !otp?.id || !deny?.id) {
+      throw new Error(`ensureStepup2faSecondFactor: the "${STEPUP_2FA_SECOND_FACTOR}" subflow of realm "${realm}" is incomplete after the build`)
+    }
+    // OTP is tried first; deny-access only when no OTP alternative applied.
+    if ((otp.index ?? 0) > (deny.index ?? 0)) {
+      await this.realmReq(realm, 'POST', `/authentication/executions/${otp.id}/raise-priority`)
+    }
+    if (sub.requirement !== 'REQUIRED') await this.setReq(realm, sub.id, 'REQUIRED')
+    if (otp.requirement !== 'ALTERNATIVE') await this.setReq(realm, otp.id, 'ALTERNATIVE')
+    if (deny.requirement !== 'ALTERNATIVE') await this.setReq(realm, deny.id, 'ALTERNATIVE')
+    for (const e of legacy) {
+      if (e.id) await this.realmReq(realm, 'DELETE', `/authentication/executions/${e.id}`)
+    }
+  }
+
   // ── TASK-043: the customer lifecycle's realm operations ─────────────────────
 
   /** The non-secret smtpServer fields (Keycloak answers a set password as its
@@ -531,6 +639,12 @@ export class KcProvisionApi {
       if (c1) await this.setCfg(realm, c1, 'stepup-loa1', '1', '36000')
       if (c2) await this.setCfg(realm, c2, 'stepup-loa2', '2', '300')
     }
+
+    // 1b. Security sweep 2 (finding 3): the 2FA subflow must be OTP-or-deny. Also
+    //    runs for a freshly built flow, whose OTP form was created REQUIRED above,
+    //    and BEFORE the realm is pointed at the flow (step 2): a crash between the
+    //    two must never leave a live realm in the enrol-then-loa2 shape.
+    await this.ensureStepup2faSecondFactor(realm)
 
     // 2. Realm otpPolicy + acr.loa.map + browserFlow. Minimal partial PUT (a full
     //    round-tripped realm rep 500s on KC 26); merge existing attributes. Runs

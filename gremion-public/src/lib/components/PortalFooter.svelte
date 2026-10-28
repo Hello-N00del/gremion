@@ -11,7 +11,7 @@
   import { SOURCE_OFFER_LABEL, resolveSourceUrl } from '$lib/source-offer';
 
   let {
-    institutionName = 'Studierendenrat',
+    institutionName = 'Gremium',
     apexHref = null,
     apexLabel = null,
     sourceUrl = resolveSourceUrl(),
@@ -64,13 +64,13 @@
               {institutionName}
             </span>
             <span class="block font-mono text-[9.5px] tracking-[0.14em] text-ink-muted uppercase">
-              Studierendenschaft · Körperschaft öR
+              Öffentliches Portal
             </span>
           </span>
         </div>
         <p class="mt-4 max-w-sm text-[13px] leading-relaxed text-ink-muted">
-          Verfasste Studierendenschaft — gewählte Vertretung der Studierenden,
-          öffentlich rechenschaftspflichtig nach dem Hochschulgesetz.
+          Öffentliches Informationsportal — Protokolle, Beschlüsse und Gremien,
+          öffentlich dokumentiert und ohne Login einsehbar.
         </p>
       </div>
 

@@ -74,12 +74,19 @@ DC="docker compose -f docker-compose.yml -f docker-compose.prod.yml --profile pr
      -f - < docker/pgbouncer/pgbouncer-auth.sql
    ```
 
-4. Render the userlist (gitignored) and restrict it:
+   **Existing deployments:** the lookup now carries `AND NOT usesuper` (a
+   superuser's verifier is never returned). `CREATE OR REPLACE` is idempotent:
+   re-run the command above in every routed database once after upgrading,
+   otherwise the old definition keeps serving superuser hashes. Per-tenant kernel
+   databases get the new definition the next time `ensureKernelDatabase` runs.
+
+4. Render the userlist (mode 0600, never committed) and check it is in place:
 
    ```bash
-   sed "s/CHANGE_ME_pgbouncer_auth/<PGBOUNCER_AUTH_PASSWORD>/" \
-     docker/pgbouncer/userlist.txt.example > docker/pgbouncer/userlist.txt
-   chmod 600 docker/pgbouncer/userlist.txt
+   # dev / single checkout: renders from .env (make setup already does this)
+   bash scripts/render-pgbouncer-userlist.sh
+   # production hosts: gremion-render does the same (deploy step 4)
+   bash scripts/check-bind-sources.sh --all   # fails naming any missing bind source
    ```
 
 ## Deploy

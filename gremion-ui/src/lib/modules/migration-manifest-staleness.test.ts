@@ -19,6 +19,7 @@ function assertManifestFresh(dirName: string, expectedCount: number) {
     const want = createHash('sha256').update(readFileSync(join(dir, f))).digest('hex')
     expect(committed[f], `${dirName}/${f} hash is stale`).toBe(want)
   }
+  return files.length
 }
 
 /** Executable SQL only: the dropped seed's rationale comment survives above it. */
@@ -29,12 +30,12 @@ const executableOf = (abs: string) =>
     .join('\n')
 
 describe('committed migration manifests are not stale', () => {
-  it('migrations/manifest.json covers all 32 data-plane files', () => {
-    assertManifestFresh('migrations', 32)
+  it('migrations/manifest.json covers all 33 data-plane files', () => {
+    expect(assertManifestFresh('migrations', 33)).toBe(33)
   })
 
   it('migrations-control/manifest.json covers all 5 control files', () => {
-    assertManifestFresh('migrations-control', 5)
+    expect(assertManifestFresh('migrations-control', 5)).toBe(5)
   })
 
   it('control 004_tenant_domain.sql creates the tenant_domain table and its unique index', () => {

@@ -1,0 +1,46 @@
+{
+  "$comment": "Per-file, sha256-pinned waivers of expand-lint rules for LOCKED files the lint refuses (suite.mjs section 2c). Not the baseline: the baseline is write-once and maps only pre-header files. A waiver is voided by any byte change (the lock pins the file anyway), may name only WAIVABLE_RULES, and is stale-checked (a waived rule that no longer fires fails). A new file never gets one by default: fix the file while it is unlocked.",
+  "waivers": [
+    {
+      "chain": "platform",
+      "file": "0009_plt_provisioning_request.sql",
+      "sha256": "354ff8108189d593f604b1b2d526c9e38608326f3001e1e32c533b9f00d84398",
+      "rules": [
+        "no-lock-timeout",
+        "revoke"
+      ],
+      "reason": "SECURITY DEFINER functions of the operator control plane: REVOKE ALL ON FUNCTION .. FROM PUBLIC on functions this same file creates is mandatory hardening (Postgres grants EXECUTE to PUBLIC by default) and only tightens an object no colour has seen; the file creates every table it touches (no lock on a live relation), so no lock_timeout is needed. Merged 2026-10-21 (034d75f4; phase header 2026-10-22, 333f1482) while the expand-contract suite, which has covered the platform chain since 886cdb6d (2026-09-29), was red on it. The file is locked and applied, so its bytes cannot gain a SET."
+    },
+    {
+      "chain": "platform",
+      "file": "0010_plt_request_payload.sql",
+      "sha256": "fef38e28886a8c08e24c3bbc70f707750a2a452b5c4f7d603f15fd1996b1e992",
+      "rules": [
+        "no-lock-timeout",
+        "revoke",
+        "drop",
+        "check-without-not-valid",
+        "or-replace"
+      ],
+      "reason": "Replaces the 0009 SECURITY DEFINER guard/queue functions (same signatures, privileges unchanged) and widens one CHECK on plt.provisioning_request (DROP+ADD of provisioning_request_args_check, only ever loosened for import_members) in the platform database, whose sole readers are the operator panel and host executor, deployed together from one release. The purge helper's REVOKE FROM PUBLIC is on a function this file creates. Not lock-free: the DROP+ADD takes ACCESS EXCLUSIVE on the live plt.provisioning_request and the ADD validates every row, with no lock_timeout from the file or the runner (migratePlatform passes no ddlLockTimeoutMs); accepted because the table is a small queue whose only writers ship in the same release. Merged 2026-10-22 (68720eab) while the expand-contract suite, which has covered the platform chain since 886cdb6d (2026-09-29), was red on it. The file is locked and applied, so its bytes cannot gain a SET or NOT VALID."
+    },
+    {
+      "chain": "platform",
+      "file": "0011_plt_lease_fence.sql",
+      "sha256": "907288c31417b64748c7804b22c506986b76f7223ff95de1bafcc0874095738a",
+      "rules": [
+        "or-replace"
+      ],
+      "reason": "Replaces the SECURITY DEFINER lease functions plt.renew_provisioning_lease (last defined in 0009) and plt.claim_provisioning_request (0010) in place with unchanged signatures (create-harden H4: a lapsed lease cannot be renewed and is requeued only after a 60 s grace); CREATE OR REPLACE is the only way to change a function body while keeping the grants pg.ts issues. The file sets lock_timeout first."
+    },
+    {
+      "chain": "platform",
+      "file": "0013_oac_access_record.sql",
+      "sha256": "889c39a6fc201feead497d559df152c7ae46ba6121321f003d05df7eb4aded77",
+      "rules": [
+        "revoke"
+      ],
+      "reason": "SECURITY DEFINER functions of the access record: REVOKE ALL ON FUNCTION .. FROM PUBLIC on functions this same file creates is mandatory hardening (Postgres grants EXECUTE to PUBLIC by default) and only tightens objects no colour has seen. The file sets lock_timeout first and creates every relation it touches."
+    }
+  ]
+}

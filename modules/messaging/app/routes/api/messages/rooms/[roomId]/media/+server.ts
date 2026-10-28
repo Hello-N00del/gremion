@@ -1,8 +1,8 @@
 import { error, json } from '@sveltejs/kit'
 import type { RequestEvent, RequestHandler } from '@sveltejs/kit'
-import { createHmac } from 'crypto'
 import { getMessagesBackend } from '$lib/server/messages/backend'
 import type { SessionUser } from '$lib/auth'
+import { mediaUrl, verifyMedia } from '$lib/server/messages/media-url'
 
 const MAX_UPLOAD_BYTES = 20 * 1024 * 1024 // 20 MB
 const ALLOWED_MIME_PREFIXES = ['image/', 'video/', 'audio/', 'application/pdf', 'text/plain']
@@ -11,6 +11,15 @@ function requireAuth(event: RequestEvent): SessionUser {
   const user = event.locals.user as SessionUser | undefined
   if (!user) throw error(401, 'Unauthenticated')
   return user
+}
+
+// Upload and download are both room-scoped: the caller must be a member of the room.
+async function requireRoomMember(event: RequestEvent, roomId: string): Promise<void> {
+  const backend = getMessagesBackend()
+  const creds = await backend.resolveMatrixCreds(event)
+  if (!creds.userId || !(await backend.synapse().isRoomMember(roomId, creds.userId))) {
+    throw error(403, 'Not a member of this room')
+  }
 }
 
 async function getKeycloakJwt(event: RequestEvent): Promise<string> {
@@ -22,23 +31,17 @@ async function getKeycloakJwt(event: RequestEvent): Promise<string> {
   return accessToken
 }
 
-function getAuthSecret(): string {
-  const s = process.env.AUTH_SECRET
-  if (!s) throw new Error('AUTH_SECRET not set')
-  return s
-}
+// Content types that are safe to echo. Anything else (html, svg, xml, js, ...) is
+// served as an opaque download.
+const SAFE_DOWNLOAD_TYPES = new Set([
+  'image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/avif',
+  'video/mp4', 'video/webm', 'audio/mpeg', 'audio/ogg', 'audio/mp4', 'audio/webm', 'audio/wav',
+  'application/pdf', 'text/plain',
+])
 
-function signMxc(mxcUri: string): string {
-  return createHmac('sha256', getAuthSecret()).update(mxcUri).digest('hex')
-}
-
-function verifyMxc(mxcUri: string, sig: string): boolean {
-  const expected = signMxc(mxcUri)
-  // Constant-time comparison
-  if (expected.length !== sig.length) return false
-  let result = 0
-  for (let i = 0; i < expected.length; i++) result |= expected.charCodeAt(i) ^ sig.charCodeAt(i)
-  return result === 0
+function safeContentType(upstream: string | undefined): string {
+  const base = (upstream ?? '').split(';')[0]!.trim().toLowerCase()
+  return SAFE_DOWNLOAD_TYPES.has(base) ? base : 'application/octet-stream'
 }
 
 // Documented request shape: `multipart/form-data` with a single `file` field.
@@ -50,6 +53,7 @@ function verifyMxc(mxcUri: string, sig: string): boolean {
 // a raw body 500'd inside formData(); no shape satisfied both.)
 export const POST: RequestHandler = async (event) => {
   requireAuth(event)
+  await requireRoomMember(event, event.params.roomId ?? '')
 
   const contentLength = parseInt(event.request.headers.get('Content-Length') ?? '0', 10)
   if (contentLength > MAX_UPLOAD_BYTES) throw error(413, 'File too large (max 20 MB)')
@@ -83,9 +87,7 @@ export const POST: RequestHandler = async (event) => {
   const mxcUri = await mc.uploadMedia(matrixToken, await file.arrayBuffer(), file.type, file.name)
 
   // Sign the mxc URI — proxy URL prevents arbitrary SSRF
-  const sig = signMxc(mxcUri)
-  const roomId = event.params.roomId ?? ''
-  const proxyUrl = `/api/messages/rooms/${encodeURIComponent(roomId)}/media?mxc=${encodeURIComponent(mxcUri)}&sig=${sig}`
+  const proxyUrl = mediaUrl(event.params.roomId ?? '', mxcUri)
 
   return json({
     success: true,
@@ -98,17 +100,23 @@ export const GET: RequestHandler = async (event) => {
 
   const mxcUri = event.url.searchParams.get('mxc')
   const sig = event.url.searchParams.get('sig')
+  const exp = Number(event.url.searchParams.get('exp'))
+  const roomId = event.params.roomId ?? ''
 
   if (!mxcUri || !sig) throw error(400, 'Missing mxc or sig params')
-  if (!verifyMxc(mxcUri, sig)) throw error(403, 'Invalid media signature')
+  if (!verifyMedia(mxcUri, roomId, exp, sig)) throw error(403, 'Invalid or expired media signature')
 
-  const mc = getMessagesBackend().matrix()
-  const { data, contentType } = await mc.downloadMedia(mxcUri)
+  // The URL is a capability for ONE room: the caller must still be a member of it.
+  await requireRoomMember(event, roomId)
+  const backend = getMessagesBackend()
+
+  const { data, contentType } = await backend.matrix().downloadMedia(mxcUri)
 
   return new Response(data, {
     headers: {
-      'Content-Type': contentType,
-      'Content-Disposition': 'attachment'
+      'Content-Type': safeContentType(contentType),
+      'Content-Disposition': 'attachment',
+      'X-Content-Type-Options': 'nosniff',
     }
   })
 }

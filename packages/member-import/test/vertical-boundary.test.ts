@@ -33,10 +33,13 @@ const IMPORT_CODE = [
 ]
 const VERTICAL_DATA = filesUnder('verticals').filter((f) => f.startsWith('verticals/stura/'))
 
+// The retired product name, built at runtime so this guard does not itself carry the bare token.
+const RETIRED_NAMES = new RegExp(['stura' + 'os', 'HS Harz', 'Hochschule Harz', 'hs-harz\\.de', 'StuFis'].join('|'), 'i')
+
 describe('vertical-literal boundary: only verticals/** may name a vertical', () => {
   it('scans real files (not vacuous): the import code and the stura data are both found', () => {
     expect(IMPORT_CODE.length).toBeGreaterThan(8)
-    expect(VERTICAL_DATA.map((f) => f.split('/').pop()).sort()).toEqual(['README.md', 'blueprint.json', 'roles.json', 'vertical.json', 'wording.de.json'])
+    expect(VERTICAL_DATA.map((f) => f.split('/').pop()).sort((a, b) => (a! < b! ? -1 : a! > b! ? 1 : 0))).toEqual(['README.md', 'blueprint.json', 'roles.json', 'vertical.json', 'wording.de.json'])
   })
 
   it('the import code names no vertical', () => {
@@ -67,7 +70,7 @@ describe('vertical-literal boundary: only verticals/** may name a vertical', () 
   it('vertical data never carries the product name, an institution identity, a host or an address', () => {
     for (const f of VERTICAL_DATA) {
       const text = read(f)
-      expect(text, f).not.toMatch(/StuRaOS|sturaos|HS Harz|Hochschule Harz|hs-harz\.de|StuFis/i)
+      expect(text, f).not.toMatch(RETIRED_NAMES)
       expect(text, f).not.toMatch(/@[a-z0-9-]+\.[a-z]{2,}|https?:\/\/|\b\d{1,3}(\.\d{1,3}){3}\b/i)
     }
   })

@@ -19,9 +19,9 @@
 // sequence cannot mechanically repair (per-tenant exact URIs, fixture users,
 // fullScopeAllowed, the sub-mapper) are REPORTED but never auto-repaired — a
 // re-import is the operator's answer.
-import { KcProvisionApi, realmSeg, type KcTransport } from './kc-admin-api'
+import { KcProvisionApi, realmSeg, stepup2faGateProblem, type FlowExecRep, type KcTransport } from './kc-admin-api'
 import { ADMIN_CLIENT_ID, GREMION_ADMIN_SA_REALM_ROLES } from './pipeline'
-import { frontendUrlFor } from './realm-doc'
+import { frontendUrlFor, REALM_PASSWORD_POLICY } from './realm-doc'
 import type { TenantStatus } from '../registry'
 
 /** The exact, ordered set of named checks reconcile runs (the §4 contract). */
@@ -32,11 +32,14 @@ export const RECONCILE_CHECK_NAMES = [
   'acr-loa-map', // §4-1  realm attribute acr.loa.map == {"loa1":1,"loa2":2}
   'stepup-flow', // §4-1  browser-stepup flow + stepup-1fa/2fa subflows exist
   'stepup-loa-config', // §4-1  Condition-LoA configs (loa1/36000, loa2/300)
+  'stepup-2fa-otp-gate', // sweep 2 #3  stepup-2fa = REQUIRED subflow [OTP ALTERNATIVE, deny-access ALTERNATIVE]; never a REQUIRED OTP form (enrol-then-loa2)
+  'password-policy', // sweep 2 #6  realm passwordPolicy == REALM_PASSWORD_POLICY
   'gremion-ui-client', // §4-1  the gremion-ui client exists
   'gremion-ui-acr-mapper', // §4-1  acr protocol-mapper on gremion-ui
   'gremion-ui-sub-mapper', // §4-1  uid sub protocol-mapper on gremion-ui
   'gremion-ui-redirect-uris', // §4-4  exact per-tenant redirect URIs (#240)
   'gremion-ui-web-origins', // §4-4  exact per-tenant web-origins (#240)
+  'gremion-ui-pkce', // sweep 2 #6  pkce.code.challenge.method == S256 on gremion-ui
   'full-scope-allowed', // #254   fullScopeAllowed == false on gremion-ui
   'gremion-admin-sa-roles', // (A)   gremion-admin SA holds the realm-management role(s)
   'no-fixture-users', // #239   no seed-subject id and no template fixture username (TASK-043 Q10)
@@ -182,17 +185,14 @@ interface RealmRep {
   otpPolicyAlgorithm?: string
   otpPolicyDigits?: number
   otpPolicyPeriod?: number
+  passwordPolicy?: string
   attributes?: Record<string, unknown>
   smtpServer?: Record<string, unknown>
 }
 interface FlowRep {
   alias?: string
 }
-interface ExecRep {
-  id?: string
-  providerId?: string
-  authenticationConfig?: string
-}
+type ExecRep = FlowExecRep
 interface ConfigRep {
   alias?: string
   config?: Record<string, string>
@@ -201,6 +201,7 @@ interface ClientRep {
   id?: string
   clientId?: string
   fullScopeAllowed?: boolean
+  attributes?: Record<string, string>
   redirectUris?: string[]
   webOrigins?: string[]
 }
@@ -310,6 +311,7 @@ const STEPUP_REPAIRABLE: ReconcileCheckName[] = [
   'acr-loa-map',
   'stepup-flow',
   'stepup-loa-config',
+  'stepup-2fa-otp-gate',
   'gremion-ui-acr-mapper',
 ]
 
@@ -454,6 +456,23 @@ export async function reconcileRealm(transport: KcTransport, opts: ReconcileOpti
     }
   }
 
+  // ── sweep 2 #3: a user without OTP must not enroll one inside the step-up ─────
+  if (!stepupExists) {
+    fail('stepup-2fa-otp-gate', 'browser-stepup flow absent — the second-factor gate cannot be verified')
+  } else {
+    const problem = stepup2faGateProblem(e2)
+    if (problem === null) pass('stepup-2fa-otp-gate')
+    else fail('stepup-2fa-otp-gate', `${problem} (security sweep 2: a stolen session could enroll its own authenticator and pass the fresh-2FA gate)`)
+  }
+
+  // ── sweep 2 #6: password policy ───────────────────
+  if (realmRep.passwordPolicy === REALM_PASSWORD_POLICY) pass('password-policy')
+  else fail('password-policy', `passwordPolicy is ${JSON.stringify(realmRep.passwordPolicy)} (expected ${JSON.stringify(REALM_PASSWORD_POLICY)})`)
+  // Refresh-token rotation (revokeRefreshToken / refreshTokenMaxReuse) is
+  // deliberately NOT checked or set: gremion-ui refreshes concurrently (several
+  // locals.auth() consumers per request, parallel tabs), so rotation with no
+  // reuse logs users out. It needs a single-flight refresh first (docs/auth.md).
+
   // ── gremion-ui client: existence, mappers, exact URIs, fullScopeAllowed ────────
   const clients = (await get<ClientRep[]>('/clients?clientId=gremion-ui')) ?? []
   const ui = clients[0]
@@ -465,6 +484,7 @@ export async function reconcileRealm(transport: KcTransport, opts: ReconcileOpti
     fail('gremion-ui-sub-mapper', 'gremion-ui client absent — sub mapper cannot be verified')
     fail('gremion-ui-redirect-uris', 'gremion-ui client absent — redirect URIs cannot be verified')
     fail('gremion-ui-web-origins', 'gremion-ui client absent — web-origins cannot be verified')
+    fail('gremion-ui-pkce', 'gremion-ui client absent — PKCE cannot be verified')
     fail('full-scope-allowed', 'gremion-ui client absent — fullScopeAllowed cannot be verified')
   } else {
     pass('gremion-ui-client')
@@ -499,6 +519,14 @@ export async function reconcileRealm(transport: KcTransport, opts: ReconcileOpti
       fail(
         'gremion-ui-web-origins',
         `web-origins not the exact per-tenant set (#240). got=${JSON.stringify(ui.webOrigins)} expected=${JSON.stringify(expected.webOrigins)}`,
+      )
+    }
+    if (ui.attributes?.['pkce.code.challenge.method'] === 'S256') {
+      pass('gremion-ui-pkce')
+    } else {
+      fail(
+        'gremion-ui-pkce',
+        `pkce.code.challenge.method is ${JSON.stringify(ui.attributes?.['pkce.code.challenge.method'])} (expected "S256": an intercepted authorization code must be useless without the verifier)`,
       )
     }
     // #254 — fullScopeAllowed:false alone is NOT enough: WITHOUT explicit realm-role
@@ -619,6 +647,27 @@ export async function reconcileRealm(transport: KcTransport, opts: ReconcileOpti
     })
     if (failedNames.has('ssl-required')) applied.push('ssl-required')
     if (failedNames.has('frontend-url')) applied.push('frontend-url')
+  }
+
+  // Security sweep 2 #6: the password policy is one partial realm PUT (only this
+  // field; a full round-tripped rep 500s on KC 26).
+  if (failedNames.has('password-policy')) {
+    await transport('PUT', `/admin/realms/${realmSeg(realm)}`, {
+      realm,
+      passwordPolicy: REALM_PASSWORD_POLICY,
+    })
+    applied.push('password-policy')
+  }
+
+  // Security sweep 2 #6: PKCE S256 on gremion-ui, a partial client PUT that merges
+  // the live attributes (the post-logout URIs live there).
+  if (failedNames.has('gremion-ui-pkce') && ui?.id) {
+    await transport('PUT', `/admin/realms/${realmSeg(realm)}/clients/${ui.id}`, {
+      id: ui.id,
+      clientId: 'gremion-ui',
+      attributes: { ...ui.attributes, 'pkce.code.challenge.method': 'S256' },
+    })
+    applied.push('gremion-ui-pkce')
   }
 
   // (A) The gremion-admin SA realm-management grant is mechanically repairable: the

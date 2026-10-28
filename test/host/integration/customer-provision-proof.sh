@@ -988,7 +988,7 @@ phase_customer_suspend() {
     if data_fingerprint "$X" > "$OUT/ledger/fingerprint-before-suspend.txt"; then
         ok "customer-suspend: stored-data fingerprint of ${X} recorded before suspend ($(grep -c $'\t[0-9]*\t' "$OUT/ledger/fingerprint-before-suspend.txt" || true) table(s), $(sed -n 's/^realm-users\t//p' "$OUT/ledger/fingerprint-before-suspend.txt") realm user(s))"
     else rm -f "$OUT/ledger/fingerprint-before-suspend.txt"; bad "customer-suspend: the stored-data fingerprint of ${X} could not be taken"; return; fi
-    tenant suspend "$X" > "$OUT/ledger/suspend-x.log" 2>&1 || { tail -n 20 "$OUT/ledger/suspend-x.log" >&2; bad "customer-suspend: suspend failed"; return; }
+    tenant suspend "$X" --reason "customer-provision proof: suspend and resume round trip" > "$OUT/ledger/suspend-x.log" 2>&1 || { tail -n 20 "$OUT/ledger/suspend-x.log" >&2; bad "customer-suspend: suspend failed"; return; }
     if [[ "$(q control "SELECT status FROM tenant WHERE slug = '${X}'")" == suspended ]]; then ok "customer-suspend: status suspended"; else bad "customer-suspend: status"; fi
     if [[ "$(skc get "realms/$X" --fields enabled | jq -r .enabled)" == false ]]; then ok "customer-suspend: realm ${X} disabled (no sign-in, no token)"; else bad "customer-suspend: realm still enabled"; fi
     if [[ "$(edge_status "$(host_of "$X")")" == 503 ]]; then ok "customer-suspend: $(host_of "$X") answers 503 (no tenant content)"; else bad "customer-suspend: $(host_of "$X") answers $(edge_status "$(host_of "$X")")"; fi
@@ -1003,7 +1003,7 @@ phase_customer_suspend() {
     smtp="$(skc get "realms/$X" --fields 'smtpServer(*)' | jq -c '(.smtpServer // {}) | [.user, .from, .auth]')" || smtp=""
     if [[ -n "$smtp" ]] && jq -e '(.[0] // "") == "" and (.[1] // "") == "" and ((.[2] // "") | tostring) != "true"' <<< "$smtp" >/dev/null; then ok "customer-suspend: realm ${X} carries no authenticating sender (smtpServer user/from/auth: ${smtp})"
     else bad "customer-suspend: realm ${X} still carries a sender (smtpServer user/from/auth: ${smtp:-unreadable})"; fi
-    if tenant suspend "$X" > "$OUT/ledger/suspend-x-2.log" 2>&1; then
+    if tenant suspend "$X" --reason "customer-provision proof: suspend and resume round trip" > "$OUT/ledger/suspend-x-2.log" 2>&1; then
         if grep -q 'changed=no action=revoked' "$OUT/ledger/suspend-x-2.log" && n="$(principal_count "$XT")" && [[ "$n" == 0 ]] \
            && [[ "$(q control "SELECT status FROM tenant WHERE slug = '${X}'")" == suspended ]]; then ok "customer-suspend: a second suspend exits 0 and changes nothing (REALM-SMTP changed=no, no principal, still suspended)"
         else bad "customer-suspend: the second suspend exited 0 but did not converge to a no-op (see ledger/suspend-x-2.log)"; fi
@@ -1014,7 +1014,7 @@ phase_customer_suspend() {
 
 phase_customer_resume() {
     need_pooled
-    tenant resume "$X" > "$OUT/ledger/resume-x.log" 2>&1 || { tail -n 20 "$OUT/ledger/resume-x.log" >&2; bad "customer-resume: resume failed"; return; }
+    tenant resume "$X" --reason "customer-provision proof: suspend and resume round trip" > "$OUT/ledger/resume-x.log" 2>&1 || { tail -n 20 "$OUT/ledger/resume-x.log" >&2; bad "customer-resume: resume failed"; return; }
     # R30 A2 (PRD-OPS-004): taken right after resume, before any request reaches
     # the host; equal to the one customer-suspend took is the only pass.
     local fpv fprc=0

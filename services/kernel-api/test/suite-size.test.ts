@@ -38,7 +38,7 @@ export const NAMED: Record<'unit' | 'integration', Record<string, number>> = {
 }
 
 function collected(config: string): Record<string, number> {
-  const r = spawnSync('pnpm', ['exec', 'vitest', 'list', '--config', config, '--json'], {
+  const r = spawnSync('pnpm', ['exec', 'vitest', 'list', '--config', config, '--no-staticParse', '--json'], {
     cwd: PKG,
     encoding: 'utf8',
     shell: process.platform === 'win32',

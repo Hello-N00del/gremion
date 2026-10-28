@@ -33,6 +33,19 @@ export {
   PLATFORM_MIGRATIONS_DIR,
 } from './platform.js'
 export type { EnsurePlatformResult } from './platform.js'
+// TRD-144/145: the scheduled purge run and the rule table it executes (retention-catalogue.md).
+export {
+  deleteBatchSql,
+  ensureKernelPurgeGrants,
+  openPurgerSession,
+  PURGE_DEADLINE_MS,
+  PURGE_RESIDUAL,
+  PURGE_RULES,
+  purgeCutoff,
+  refusalOf,
+  runPurge,
+} from './purge.js'
+export type { PurgeBatchLimit, PurgeDeps, PurgeError, PurgeResult, PurgeRule, PurgeServer, PurgeSkip, PurgeTableShape } from './purge.js'
 export { scramSha256Verifier } from './scram.js'
 export type {
   Actor,

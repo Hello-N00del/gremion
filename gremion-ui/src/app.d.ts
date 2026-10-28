@@ -13,6 +13,8 @@ declare global {
       errId?: string
     }
     interface Locals {
+      /** Percent-decoded request path (request-path.ts), set once by requestPathHandle; every path check uses it. */
+      decodedPath?: string
       /** Authenticated user — set by authGuard in hooks.server.ts after session validation. */
       user: SessionUser | null
       /**

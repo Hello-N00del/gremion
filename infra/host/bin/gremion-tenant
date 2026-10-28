@@ -13,6 +13,14 @@ set -euo pipefail
 #   gremion-tenant operator add <email> --no-mail --keycloak-container <name>
 #   gremion-tenant request <kind> --args-file <0600 json> --operator <uuid> --reason <text>
 #   gremion-tenant requests [--slug <slug>]
+#   gremion-tenant export <slug> <dir>
+#
+# `export` (TRD-149/150/151): the tenant's data in open formats (CSV + JSON per
+# table, manifest.json listing what is included and what is excluded and why),
+# written by the tenant-create one-shot into <dir> (created 0700, files 0600,
+# refused when it already holds anything), then re-checked from disk by a
+# second container run; any missing, empty, altered or unlisted file exits 1
+# naming it. It is an export, NOT a backup: gremion-backup stays the restore path.
 #
 # `create` is DECOMMISSIONED (exit 2, nothing written): a customer is created
 # in the panel ("Neuer Mandant"); with the panel down, `request create` puts
@@ -51,6 +59,10 @@ umask 077
 . "$SCRIPT_DIR/../lib/customer-ops.sh"
 # shellcheck source=../lib/executor/db.sh
 . "$SCRIPT_DIR/../lib/executor/db.sh"
+# TRD-092: every host action on a customer's data is recorded (who, when, what,
+# why) in gremion_platform's oac.access_record BEFORE it runs, fail closed.
+# shellcheck source=../lib/access-log.sh
+. "$SCRIPT_DIR/../lib/access-log.sh"
 
 MODULE_SERVERS="board calendar content finance newsletter vault"
 KCADM_BIN="/opt/keycloak/bin/kcadm.sh"
@@ -68,6 +80,13 @@ usage: gremion-tenant <verb> [args...]
   operator add <email> --no-mail --keycloak-container <name>
   request <kind> --args-file <0600 json> --operator <uuid> --reason <text>
   requests [--slug <slug>]
+  suspend <slug> --operator <uuid> --reason <text>
+  resume <slug> --operator <uuid> --reason <text>
+  reconcile <slug> [--apply --reason <text>]   (--reason also accepted without --apply)
+  export <slug> <dir>
+Every verb that reaches a customer's data is recorded in the access record
+(oac.access_record) first; the actor is the login user (SUDO_USER, else id -un),
+self-asserted under a root shell.
 Customers are created and operated in the control panel (gremion-tenant
 panel prints the access line); the break-glass `request` puts the same
 request into the same queue the host-side executor runs (R31-I4).
@@ -323,7 +342,7 @@ cmd_init() {
 cmd_request() {
     local kind="${1:-}"; shift || true
     [[ "$kind" =~ $REQUEST_KINDS_RE ]] || die "request <kind>: one of create, suspend, resume, reconcile, enable_module, disable_module, import_members, seed_vertical, record_dpia, import_isolation" "$GREMION_EXIT_USAGE"
-    local file="" reason="" slug actor key id args_literal
+    local file="" reason="" slug actor key id args_literal reason_literal
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --args-file) need_value "$@"; file="$2"; shift 2 ;;
@@ -345,13 +364,17 @@ cmd_request() {
     [[ "$actor" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] || die "the invoking login user '${actor}' is not a plain user name" "$GREMION_EXIT_USAGE"
     key="$(openssl rand -hex 16 | tr -d '\r\n')"
     key="${key:0:8}-${key:8:4}-4${key:13:3}-8${key:17:3}-${key:20:12}"
+    # TRD-092: recorded BEFORE it is queued; no record, no request.
+    access_record_or_die "$slug" break_glass_request "Anfrage ${kind} für ${slug} über den Host-Notzugang in die Provisionierungswarteschlange gestellt (Mandantendaten)" "$reason"
     # The args (a member list: up to 1 MiB, names and addresses) go on psql's STDIN as a
     # dollar-quoted literal inside the SQL, never as `-v args=...`: that is a `docker exec`
     # argv, capped at 128 KiB per argument (E2BIG) and readable by every local user in the
     # process table (house review MED 1).
     args_literal="$(sql_jsonb_literal "$(jq -c . "$file")")" || die "could not quote the request args" "$GREMION_EXIT_ASSERT"
-    id="$(executor_sql "SELECT plt.submit_provisioning_request(:'kind', :'slug', ${args_literal}, :'key'::uuid, :'op'::uuid, NULL, NULL, NULL, NULL, :'reason', :'actor');" \
-            -v kind="$kind" -v slug="$slug" -v key="$key" -v op="$OPERATOR_ID" -v reason="$reason" -v actor="$actor")" \
+    # the operator's reason travels the same way (the access-log rule: WHY never as psql -v)
+    reason_literal="$(access_text_literal "$reason")" || die "could not quote the reason" "$GREMION_EXIT_ASSERT"
+    id="$(executor_sql "SELECT plt.submit_provisioning_request(:'kind', :'slug', ${args_literal}, :'key'::uuid, :'op'::uuid, NULL, NULL, NULL, NULL, ${reason_literal}, :'actor');" \
+            -v kind="$kind" -v slug="$slug" -v key="$key" -v op="$OPERATOR_ID" -v actor="$actor")" \
         || die "the break-glass request was refused by gremion_platform (see above); nothing was queued" "$GREMION_EXIT_ASSERT"
     id="${id%%$'\n'*}"
     id="${id%$'\r'}"
@@ -376,63 +399,84 @@ cmd_requests() {
     platform_sql "${su:-postgres}" "SELECT request_id, created_at, kind, customer_slug, origin, state, attempt, coalesce(outcome, '') FROM plt.provisioning_request_status WHERE (:'slug' = '' OR customer_slug = :'slug') ORDER BY created_at DESC LIMIT 50;" -v slug="$slug"
 }
 
-cmd_suspend() {
-    local slug="${1:-}"; shift || true
+# host_access <verb> <slug> <reason> <what> [optional] -- the access record of
+# a host verb, written BEFORE the access (fail closed). The reason is required
+# (10 to 500 characters), as for `request`; only the read-only verify pass of
+# reconcile passes "optional" and then records a stock line when none is given.
+host_access() {
+    local verb="$1" slug="$2" reason="$3" what="$4" optional="${5:-}"
+    if [[ -z "$reason" && "$optional" == optional ]]; then
+        reason="gremion-tenant ${verb} (nur lesend) auf dem Host, ohne angegebene Begründung"
+    fi
+    [[ ${#reason} -ge 10 && ${#reason} -le 500 ]] || die "${verb} needs --reason <10 to 500 characters>: why the customer's data is reached from the host (it is audited and shown to the council administrator)" "$GREMION_EXIT_USAGE"
+    access_record_or_die "$slug" "host_${verb}" "$what" "$reason"
+}
+
+# The break-glass verbs mutate the host like every other mutating verb: they take
+# runtime/hostd.lock, non-blocking (exit 3 when busy), unless gremion-hostd holds it.
+# (The executor does not come through here: its handlers call the library under its own lock.)
+acquire_host_lock() {
+    local lock="${ROOT}/runtime/hostd.lock"
+    [[ "${GREMION_HOST_LOCK_HELD:-}" = 1 ]] && return 0
+    command -v flock >/dev/null 2>&1 || die "flock is not installed (util-linux); refusing to run without the host lock" "$GREMION_EXIT_USAGE"
+    mkdir -p "$(dirname "$lock")" || die "cannot create $(dirname "$lock")" "$GREMION_EXIT_USAGE"
+    exec 9>>"$lock" || die "cannot open the host lock: ${lock}" "$GREMION_EXIT_USAGE"
+    flock -n 9 || die "busy: another host operation is running (lock ${lock}); retry when it has finished" 3
+}
+
+# lifecycle_with_reason <verb> <what> <slug> [args...] -- split --reason out of the
+# arguments (the library verbs, which the executor also calls, do not take it),
+# require it, hold the host lock, record the access (fail closed), THEN act.
+LIFECYCLE_REST=()
+lifecycle_with_reason() {
+    local verb="$1" what="$2" slug="${3:-}" reason=""
+    shift 3 || true
     need_slug "$slug"
-    while [[ $# -gt 0 ]]; do case "$1" in --operator) need_value "$@"; OPERATOR_ID="$2"; shift 2 ;; *) die "suspend: unknown argument: $1" "$GREMION_EXIT_USAGE" ;; esac; done
-    need_operator
-    active_colour
-    tc suspend "$slug" --operator "$OPERATOR_ID" || die "suspend of ${slug} failed in the container" "$GREMION_EXIT_ASSERT"
-    # The tenant is already 503 with its realm disabled (fail closed). The host
-    # step un-stamps the realm's sender before it deletes the principal, and every
-    # step is re-runnable, so a failure here is recovered by the same verb (the
-    # container step above repeats harmlessly).
-    mail_realm_smtp --realm "$slug" --tenant "$(token_of "$slug")" --revoke \
-        || die "the principal of ${slug} could not be revoked; the customer is already suspended, rerun gremion-tenant suspend ${slug} to converge" "$GREMION_EXIT_ASSERT"
-    ok "customer ${slug} suspended"
+    LIFECYCLE_REST=()
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --reason) need_value "$@"; reason="$2"; shift 2 ;;
+            *) LIFECYCLE_REST+=("$1"); shift ;;
+        esac
+    done
+    [[ -n "$reason" ]] || die "${verb} needs --reason <10 to 500 characters> (it is audited)" "$GREMION_EXIT_USAGE"
+    acquire_host_lock
+    host_access "$verb" "$slug" "$reason" "${what//@SLUG@/$slug}"
+}
+
+cmd_suspend() {
+    lifecycle_with_reason suspend "Mandant @SLUG@ sperren (Realm und Anwendungszugang des Mandanten)" "$@"
+    customer_suspend "${1:-}" ${LIFECYCLE_REST[@]+"${LIFECYCLE_REST[@]}"}
 }
 
 cmd_resume() {
-    local slug="${1:-}"; shift || true
-    need_slug "$slug"
-    while [[ $# -gt 0 ]]; do case "$1" in --operator) need_value "$@"; OPERATOR_ID="$2"; shift 2 ;; *) die "resume: unknown argument: $1" "$GREMION_EXIT_USAGE" ;; esac; done
-    need_operator
-    active_colour
-    mail_realm_smtp --realm "$slug" --tenant "$(token_of "$slug")" \
-        || die "a fresh principal for ${slug} could not be issued" "$GREMION_EXIT_ASSERT"
-    mail_sender_args || die "resume of ${slug}: MAIL_TRANSPORT could not be resolved" "$GREMION_EXIT_USAGE"
-    tc resume "$slug" --operator "$OPERATOR_ID" ${MAIL_SENDER_ARGS[@]+"${MAIL_SENDER_ARGS[@]}"} || die "resume of ${slug} failed in the container" "$GREMION_EXIT_ASSERT"
-    ok "customer ${slug} resumed"
+    lifecycle_with_reason resume "Mandant @SLUG@ wieder freigeben (Realm und Anwendungszugang des Mandanten)" "$@"
+    customer_resume "${1:-}" ${LIFECYCLE_REST[@]+"${LIFECYCLE_REST[@]}"}
 }
 
+# reconcile: the library verb (customer_reconcile, also run by the executor) does
+# the work; this wrapper splits --reason out, records the access first (fail
+# closed; --apply requires the reason and holds the host lock, the verify-only
+# pass is recorded with a stock reason when none is given), then delegates.
 cmd_reconcile() {
     local slug="${1:-}"; shift || true
     need_slug "$slug"
-    local apply=no report
-    while [[ $# -gt 0 ]]; do case "$1" in --apply) apply=yes; shift ;; *) die "reconcile: unknown argument: $1" "$GREMION_EXIT_USAGE" ;; esac; done
-    active_colour
-    mail_sender_args || die "reconcile of ${slug}: MAIL_TRANSPORT could not be resolved" "$GREMION_EXIT_USAGE"
+    local apply=no reason="" rest=()
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --apply) apply=yes; rest+=("$1"); shift ;;
+            --reason) need_value "$@"; reason="$2"; shift 2 ;;
+            *) rest+=("$1"); shift ;;
+        esac
+    done
     if [[ "$apply" == no ]]; then
-        tc reconcile --verify-only "$slug" ${MAIL_SENDER_ARGS[@]+"${MAIL_SENDER_ARGS[@]}"}
-        return
+        host_access reconcile_verify "$slug" "$reason" "Mandant ${slug} abgleichen, nur lesend (reconcile --verify-only)" optional
+    else
+        [[ -n "$reason" ]] || die "reconcile --apply needs --reason <10 to 500 characters> (it is audited)" "$GREMION_EXIT_USAGE"
+        acquire_host_lock
+        host_access reconcile "$slug" "$reason" "Mandant ${slug} abgleichen und Abweichungen beheben (reconcile --apply)"
     fi
-    # The apply exits 0 (green) or 1 (a check still fails: the drift --apply is
-    # for) and prints its report as ONE JSON line on stdout. A crash, a missing
-    # or unparseable report, or any other exit fails loudly here (review C, r2)
-    # instead of silently skipping the host rotation.
-    local out rc=0
-    out="$(tc reconcile "$slug" ${MAIL_SENDER_ARGS[@]+"${MAIL_SENDER_ARGS[@]}"})" || rc=$?
-    (( rc == 0 || rc == 1 )) || die "reconcile --apply of ${slug} failed in the container (exit ${rc})" "$GREMION_EXIT_ASSERT"
-    report="$(grep '^{' <<< "$out" | tail -n 1 || true)"
-    if [[ -z "$report" ]] || ! jq -e 'type == "object" and (.repairHost | type) == "array"' <<< "$report" >/dev/null 2>&1; then
-        die "reconcile --apply of ${slug} printed no parseable report (exit ${rc}); nothing was rotated" "$GREMION_EXIT_ASSERT"
-    fi
-    if jq -e '.repairHost | index("smtp-server")' <<< "$report" >/dev/null; then
-        info "smtp-server is repair: host -- rotating the principal of ${slug}"
-        mail_realm_smtp --realm "$slug" --tenant "$(token_of "$slug")" --rotate \
-            || die "the principal of ${slug} could not be rotated" "$GREMION_EXIT_ASSERT"
-    fi
-    tc reconcile --verify-only "$slug" ${MAIL_SENDER_ARGS[@]+"${MAIL_SENDER_ARGS[@]}"}
+    customer_reconcile "$slug" ${rest[@]+"${rest[@]}"}
 }
 
 cmd_status() {
@@ -440,6 +484,46 @@ cmd_status() {
     need_slug "$slug"
     active_colour
     tc status "$slug"
+}
+
+# export <slug> <dir> (TRD-149/150/151). <dir> must be absolute and either absent
+# or an empty directory; the container writes as the invoking user so the 0700
+# directory stays unreadable to anyone else, then a SECOND run reads it back.
+cmd_export() {
+    [[ $# -eq 2 ]] || { usage >&2; die "export needs exactly <slug> <dir>" "$GREMION_EXIT_USAGE"; }
+    local slug="$1" dir="$2" bad
+    need_slug "$slug"
+    [[ "$dir" == /* ]] || die "export: <dir> must be an absolute path" "$GREMION_EXIT_USAGE"
+    # A trailing slash would make the symlink test below follow the link (lstat of "link/" is the target).
+    while [[ "$dir" == */ ]]; do dir="${dir%/}"; done
+    [[ -n "$dir" ]] || die "export: <dir> must name a directory, not /" "$GREMION_EXIT_USAGE"
+    [[ "$dir" =~ ^/[A-Za-z0-9._/-]+$ && "$dir" != *..* ]] || die "export: <dir> may only contain A-Za-z0-9._/- and no '..' (it becomes a docker bind source)" "$GREMION_EXIT_USAGE"
+    [[ ! -L "$dir" ]] || die "export: <dir> is a symlink" "$GREMION_EXIT_USAGE"
+    if [[ -e "$dir" ]]; then
+        [[ -d "$dir" ]] || die "export: ${dir} exists and is not a directory" "$GREMION_EXIT_USAGE"
+        [[ -z "$(ls -A "$dir")" ]] || die "export: ${dir} is not empty; an export never overwrites or mixes with earlier files" "$GREMION_EXIT_USAGE"
+    else
+        [[ -d "$(dirname "$dir")" ]] || die "export: the parent of ${dir} does not exist" "$GREMION_EXIT_USAGE"
+    fi
+    # No symlink anywhere above <dir> either: the bind source and the mkdir
+    # below must be the path the operator named, not wherever a link points.
+    local parent real_parent
+    parent="$(dirname "$dir")"
+    real_parent="$(cd -P -- "$parent" && pwd)" || die "export: cannot resolve ${parent}" "$GREMION_EXIT_USAGE"
+    [[ "$real_parent" == "$parent" ]] || die "export: a component of ${parent} is a symlink (it resolves to ${real_parent}); name the real path" "$GREMION_EXIT_USAGE"
+    active_colour
+    # Two exports on one host race on the shared export-reader role (password, CONNECT grants): one at a time.
+    acquire_host_lock
+    mkdir -p "$dir"
+    chmod 700 "$dir"
+    TC_MOUNT=(--user "$(id -u):$(id -g)" -v "${dir}:/export")
+    host_access export "$slug" "" "Vollständiger Export aller Daten des Mandanten ${slug} in offenen Formaten (export)" optional
+    tc export "$slug" --out /export || die "export of ${slug} failed; ${dir} is INCOMPLETE and must not be used" "$GREMION_EXIT_ASSERT"
+    tc export-verify /export || die "completeness check of ${dir} failed (the files named above are missing, empty or altered); the export is INCOMPLETE" "$GREMION_EXIT_ASSERT"
+    TC_MOUNT=()
+    bad="$(find "$dir" -type f ! -perm 0600 -print -o -type d ! -perm 0700 -print | head -n 5)"
+    [[ -z "$bad" ]] || die "export: unexpected modes (want files 0600, directories 0700): ${bad}" "$GREMION_EXIT_ASSERT"
+    ok "export of ${slug} complete and verified: ${dir}/manifest.json"
 }
 
 # panel (Q12): the ssh -L line for the active colour's panel; nothing published.
@@ -551,6 +635,7 @@ main() {
         resume)    cmd_resume "$@" ;;
         reconcile) cmd_reconcile "$@" ;;
         status)    cmd_status "$@" ;;
+        export)    cmd_export "$@" ;;
         panel)     cmd_panel "$@" ;;
         operator)  cmd_operator "$@" ;;
         *) usage >&2; die "unknown verb: ${verb}" "$GREMION_EXIT_USAGE" ;;

@@ -36,6 +36,13 @@ export const ADVISORY_LOCKS = {
     objid: 2,
     purpose: 'outbox relay pass (@gremion/events), one holder per service database',
   },
+  // TRD-144/145: the scheduled purge run (lifecycle/purge.ts), a session-level lock on gremion_platform:
+  // a second concurrent run records a skipped plt.job_run row and deletes nothing.
+  purgeRun: {
+    classid: ADVISORY_LOCK_CLASS_ID,
+    objid: 3,
+    purpose: 'scheduled purge run (lifecycle/purge.ts), one holder on gremion_platform',
+  },
 } as const satisfies Record<string, AdvisoryLockKey>
 
 const INT4_MIN = -(2 ** 31)

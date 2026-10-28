@@ -41,6 +41,12 @@ export interface ControlPort {
    * eviction, one transaction). Only called when getBySlug found nothing.
    */
   registerProvisioning(input: { slug: string; host: string; realm: string }): Promise<ControlRow>
+  /**
+   * Binds the primary host (and the tenant's resource rows) of a row that has
+   * none: the repair of a registerProvisioning that died between the tenant
+   * insert and addTenantDomain. Idempotent.
+   */
+  bindPrimaryHost(id: string, host: string): Promise<void>
   /** Guarded status transition (suspend: active -> suspended; resume: suspended -> active; create: provisioning -> active). */
   setStatus(id: string, status: 'active' | 'suspended'): Promise<void>
 }
@@ -128,6 +134,11 @@ export interface ModulesPort {
   unloaded(ids: readonly string[]): Promise<string[]>
   /** enableModule with the given gate; returns whether it was a no-op. */
   enable(c: CustomerRef, moduleId: string, gate: import('@gremion/tenant-store/lifecycle').EnableGate, operatorId: string): Promise<{ noop: boolean; database: string | null }>
+  /**
+   * disableModule (TRD-424): the level-1 switch off, the module database
+   * exported and verified, then dropped. A repeat on a disabled module is a no-op.
+   */
+  disable(c: CustomerRef, moduleId: string, operatorId: string): Promise<{ noop: boolean; dropped: boolean; database: string | null; export: { path: string; sha256: string; bytes: number } | null }>
   /** Module keys with an `enabled` plt.module_enablement row for the customer. */
   enabled(c: CustomerRef): Promise<string[]>
 }

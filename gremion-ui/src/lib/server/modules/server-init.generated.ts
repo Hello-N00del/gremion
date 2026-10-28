@@ -8,8 +8,10 @@
 // runtime-registry.ts (boot hooks + tenant-evict hooks + provisioning
 // subsystem factories). No import.meta.glob (a static import list resolves
 // under bare tsx/Node, not just the Vite graph).
+import '../board/register.server'
 import '../calendar/register.server'
 import '../elections/register.server'
 import '../files/register.server'
 import '../messages/register.server'
 import '../newsletter/register.server'
+import '../polls/register.server'

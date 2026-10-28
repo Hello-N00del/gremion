@@ -15,6 +15,9 @@ setup() {
     mkdir -p "${REL}/infra/host/bin" "${REL}/infra/host/lib/executor" "${REL}/docker/keycloak"
     cp "${HOST_SRC}/lib/customer-ops.sh" "${REL}/infra/host/lib/"
     cp "${HOST_SRC}/lib/executor/db.sh" "${REL}/infra/host/lib/executor/"
+    # TRD-092: the host verbs record the access first (lib/access-log.sh -> oac.record_access)
+    cp "${HOST_SRC}/lib/access-log.sh" "${REL}/infra/host/lib/"
+    export GREMION_EXECUTOR_PG_CONTAINER=t092-pg-fixture
     cp "${HOST_SRC}/bin/gremion-tenant" "${REL}/infra/host/bin/"
     cp "${HOST_SRC}/lib/common.sh" "${REL}/infra/host/lib/"
     cp "${KERNEL_ROOT}/docker/keycloak/realm-export.ops.json" "${REL}/docker/keycloak/"
@@ -27,6 +30,9 @@ setup() {
 #!/usr/bin/env bash
 printf 'vendor-mail %s\n' "$*" >> "$ORDER"
 [ -f "${GREMION_ROOT}/vendor-mail-fails" ] && exit 1
+# a ledger-like stub (the real launcher lists first and issues only when absent, G2): it
+# creates the principal on its first call and records that; created.log is append-only
+grep -qx principal "${GREMION_ROOT}/done.ledger" 2>/dev/null || { echo principal >> "${GREMION_ROOT}/created.log"; echo principal >> "${GREMION_ROOT}/done.ledger"; }
 exit 0
 STUB
     chmod +x "${REL}/infra/host/bin/gremion-vendor-mail"
@@ -65,6 +71,9 @@ teardown() {
 shim_docker() {
     shim docker '
 case " $* " in
+  *" exec "*" psql "*)
+    # oac.record_access (TRD-092): the record id
+    cat > /dev/null; echo "0192f0c4-0000-7000-8000-0000000000ac"; exit 0 ;;
   *" run "*" tenant-create "*)
     all="$*"
     # the bootstrap-provisioner scratch mount (TASK-043b F1), before the args go
@@ -75,6 +84,25 @@ case " $* " in
     printf "tc %s %s\n" "$verb" "$slug" >> "$ORDER"
     [ -f "$GREMION_ROOT/fail-$verb" ] && exit 1
     case "$verb" in
+      phase-a|phase-b)
+        # a stand-in for runPhase: done.ledger lists the steps already done; a step is
+        # created (appended to created.log, unconditionally) only when absent from it,
+        # and phase B / activate refuse to run out of order like the real ledger does
+        if [ "$verb" = phase-b ]; then
+          for r in realm database broker mail_principal_issued; do
+            grep -qx "$r" "$GREMION_ROOT/done.ledger" 2>/dev/null || { echo "STEP_OUT_OF_ORDER: $r not done" >&2; exit 1; }
+          done
+        fi
+        for r in $([ "$verb" = phase-a ] && echo "realm database broker" || echo accounts); do
+          grep -qx "$r" "$GREMION_ROOT/done.ledger" 2>/dev/null && continue
+          echo "$r" >> "$GREMION_ROOT/created.log"; echo "$r" >> "$GREMION_ROOT/done.ledger"
+        done
+        # phase B activates unless the host defers it to after the router (H3)
+        if [ "$verb" = phase-b ]; then case " $all " in *" --defer-activation "*) ;; *) touch "$GREMION_ROOT/active" ;; esac; fi ;;
+      record-step) grep -qx mail_principal_issued "$GREMION_ROOT/done.ledger" 2>/dev/null || echo mail_principal_issued >> "$GREMION_ROOT/done.ledger" ;;
+      activate)
+        grep -qx accounts "$GREMION_ROOT/done.ledger" 2>/dev/null || { echo "STEP_OUT_OF_ORDER: accounts not done" >&2; exit 1; }
+        touch "$GREMION_ROOT/active" ;;
       bootstrap-provisioner)
         # docker copies a name-only -e from its caller: the admin credential
         # must be in THIS process environment, and the one-shot writes the SA
@@ -98,6 +126,11 @@ case " $* " in
         mkdir -p "$GREMION_ROOT/tenant-secrets"
         [ -s "$GREMION_ROOT/etc/secrets/control-panel/client_secret" ] || [ -f "$GREMION_ROOT/no-ops-secret" ] \
           || echo unit-ops-client-secret > "$GREMION_ROOT/tenant-secrets/platform_client_control-panel" ;;
+      export)
+        # the container writes into the bind source (the host dir behind -v <dir>:/export)
+        xd=""; for a in $all; do case "$a" in *:/export) xd="${a%:/export}" ;; esac; done
+        printf "%s\n" "$all" > "$GREMION_ROOT/export-argv"
+        if [ -n "$xd" ] && [ -f "$GREMION_ROOT/export-badmode" ]; then : > "$xd/manifest.json"; chmod 644 "$xd/manifest.json"; fi ;;
       reconcile)
         if [ -f "$GREMION_ROOT/smtp-drift" ] && [ "$2" != --verify-only ]; then echo "{\"repairHost\":[\"smtp-server\"]}"; else echo "{\"repairHost\":[]}"; fi ;;
     esac
@@ -155,7 +188,8 @@ create() {
     [ "${lines[2]}" = "tc record-step alpha-rat" ]
     [ "${lines[3]}" = "tc phase-b alpha-rat" ]
     [ "${lines[4]}" = "tc render-router alpha-rat" ]
-    [ "${#lines[@]}" -eq 5 ]
+    [ "${lines[5]}" = "tc activate alpha-rat" ]
+    [ "${#lines[@]}" -eq 6 ]
     grep -qF '    tenant-alpha-rat.kc:' "${GREMION_ROOT}/etc/edge/tenant-alpha-rat.yml"
     assert_recorded docker '--operator 8d6b9c7e-1f2a-4b3c-9d4e-5f6a7b8c9d0e'
     assert_recorded docker '--enable calendar,vault'
@@ -190,12 +224,45 @@ STUB
     [ "${lines[2]}" = "tc record-step alpha-rat" ]
     [ "${lines[3]}" = "tc phase-b alpha-rat" ]
     [ "${lines[4]}" = "tc render-router alpha-rat" ]
-    [ "${#lines[@]}" -eq 5 ]
+    [ "${lines[5]}" = "tc activate alpha-rat" ]
+    [ "${#lines[@]}" -eq 6 ]
     [[ "$output" != *"vendor-mail"* ]]
     # the descriptor rides record-step and phase B (the container reads no mail.env) -- and ONLY those
     [ "$(grep -c -- '--sender-json' "$SHIM_LOG")" -eq 2 ] || { cat "$SHIM_LOG"; return 1; }
     grep -E 'record-step.*--sender-json' "$SHIM_LOG" >/dev/null
     grep -E 'phase-b.*--sender-json' "$SHIM_LOG" >/dev/null
+}
+
+@test "H3: a router failure leaves the customer NOT active: activate runs only after the router is written" {
+    touch "${GREMION_ROOT}/fail-render-router"
+    create
+    [ "$status" -ne 0 ] || { echo "$output"; return 1; }
+    run steps
+    [[ "$output" == *"tc phase-b alpha-rat"* ]] || { steps; return 1; }
+    assert_absent 'tc activate' "$ORDER" "activate must not run when the router failed"
+    [ ! -e "${GREMION_ROOT}/active" ] || { echo "customer marked active without a route"; return 1; }
+    [ ! -e "${GREMION_ROOT}/etc/edge/tenant-alpha-rat.yml" ]
+}
+
+@test "H6: a create whose phase B failed re-runs to success and creates nothing twice" {
+    touch "${GREMION_ROOT}/fail-phase-b"
+    create
+    [ "$status" -eq 1 ] || { echo "status=$status $output"; return 1; }
+    [ ! -e "${GREMION_ROOT}/active" ]
+    rm -f "${GREMION_ROOT}/fail-phase-b"
+    create
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; steps; return 1; }
+    [ -e "${GREMION_ROOT}/active" ]
+    grep -qF '    tenant-alpha-rat.kc:' "${GREMION_ROOT}/etc/edge/tenant-alpha-rat.yml"
+    # the host re-ran the WHOLE sequence in order (phase B refuses to run otherwise)...
+    [ "$(grep -c '^tc phase-a ' "$ORDER")" -eq 2 ] && [ "$(grep -c '^tc phase-b ' "$ORDER")" -eq 2 ] || { steps; return 1; }
+    # ...and keycloak realm, kernel database, broker account, mail principal, first accounts exist once each
+    [ "$(sort "${GREMION_ROOT}/created.log" | uniq -c | awk '$1 != 1' | wc -l)" -eq 0 ] || { cat "${GREMION_ROOT}/created.log"; return 1; }
+    [ "$(sort "${GREMION_ROOT}/created.log" | tr '\n' ' ')" = "accounts broker database principal realm " ] || { cat "${GREMION_ROOT}/created.log"; return 1; }
+    # the router already in place is replaced, not duplicated, and no temp file is left
+    create
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
+    [ "$(find "${GREMION_ROOT}/etc/edge" -name '*tenant-alpha-rat*' | wc -l)" -eq 1 ]
 }
 
 @test "stalwart create: the container calls carry NO --sender-json (byte-identical to before)" {
@@ -217,9 +284,9 @@ STUB
 
 @test "relay suspend, resume and reconcile go through the front and hand the container the descriptor" {
     relay_front
-    run "$LAUNCHER" suspend alpha-rat --operator "$OP"
+    run "$LAUNCHER" suspend alpha-rat --operator "$OP" --reason "unit-test reason text"
     [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
-    run "$LAUNCHER" resume alpha-rat --operator "$OP"
+    run "$LAUNCHER" resume alpha-rat --operator "$OP" --reason "unit-test reason text"
     [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
     run "$LAUNCHER" reconcile alpha-rat
     [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
@@ -276,7 +343,7 @@ STUB
 }
 
 @test "suspend: the container first, then the principal revoked" {
-    run "$LAUNCHER" suspend alpha-rat --operator "$OP"
+    run "$LAUNCHER" suspend alpha-rat --operator "$OP" --reason "unit-test reason text"
     [ "$status" -eq 0 ] || { echo "$output"; return 1; }
     run steps
     [ "${lines[0]}" = "tc suspend alpha-rat" ]
@@ -284,16 +351,39 @@ STUB
 }
 
 @test "resume: a fresh principal first (never --rotate), then the container" {
-    run "$LAUNCHER" resume alpha-rat --operator "$OP"
+    run "$LAUNCHER" resume alpha-rat --operator "$OP" --reason "unit-test reason text"
     [ "$status" -eq 0 ] || { echo "$output"; return 1; }
     run steps
     [ "${lines[0]}" = "vendor-mail realm-smtp --realm alpha-rat --tenant alpha_rat" ]
     [ "${lines[1]}" = "tc resume alpha-rat" ]
 }
 
+@test "suspend and resume take runtime/hostd.lock: busy host -> exit 3, nothing runs (TRD-044)" {
+    command -v flock >/dev/null || skip "flock not installed"
+    exec 8>>"${GREMION_ROOT}/runtime/hostd.lock"
+    flock -n 8
+    run "$LAUNCHER" suspend alpha-rat --operator "$OP" --reason "unit-test reason text"
+    [ "$status" -eq 3 ] || { echo "$status $output"; return 1; }
+    [[ "$output" == *"busy"* ]]
+    run "$LAUNCHER" resume alpha-rat --operator "$OP" --reason "unit-test reason text"
+    [ "$status" -eq 3 ]
+    exec 8>&-
+    run steps
+    [ -z "$output" ]
+}
+
+@test "suspend and resume skip the lock when gremion-hostd already holds it" {
+    command -v flock >/dev/null || skip "flock not installed"
+    exec 8>>"${GREMION_ROOT}/runtime/hostd.lock"
+    flock -n 8
+    GREMION_HOST_LOCK_HELD=1 run "$LAUNCHER" suspend alpha-rat --operator "$OP" --reason "unit-test reason text"
+    exec 8>&-
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+}
+
 @test "a failed revoke fails suspend, and the failure names the rerun that converges (TASK-043c)" {
     touch "${GREMION_ROOT}/vendor-mail-fails"
-    run "$LAUNCHER" suspend alpha-rat --operator "$OP"
+    run "$LAUNCHER" suspend alpha-rat --operator "$OP" --reason "unit-test reason text"
     [ "$status" -eq 1 ]
     [[ "$output" == *"could not be revoked"* ]] || { echo "$output"; return 1; }
     [[ "$output" == *"rerun gremion-tenant suspend alpha-rat"* ]] || { echo "$output"; return 1; }
@@ -301,10 +391,10 @@ STUB
 
 @test "suspend rerun after a failed host step: the container step runs again harmlessly and the rerun exits 0 (TASK-043c)" {
     touch "${GREMION_ROOT}/vendor-mail-fails"
-    run "$LAUNCHER" suspend alpha-rat --operator "$OP"
+    run "$LAUNCHER" suspend alpha-rat --operator "$OP" --reason "unit-test reason text"
     [ "$status" -eq 1 ]
     rm -f "${GREMION_ROOT}/vendor-mail-fails"
-    run "$LAUNCHER" suspend alpha-rat --operator "$OP"
+    run "$LAUNCHER" suspend alpha-rat --operator "$OP" --reason "unit-test reason text"
     [ "$status" -eq 0 ] || { echo "$output"; return 1; }
     run steps
     [ "${lines[0]}" = "tc suspend alpha-rat" ]
@@ -316,11 +406,11 @@ STUB
 
 @test "resume after a half suspend (host step failed): a fresh issue, never --rotate, then the container (TASK-043c)" {
     touch "${GREMION_ROOT}/vendor-mail-fails"
-    run "$LAUNCHER" suspend alpha-rat --operator "$OP"
+    run "$LAUNCHER" suspend alpha-rat --operator "$OP" --reason "unit-test reason text"
     [ "$status" -eq 1 ]
     rm -f "${GREMION_ROOT}/vendor-mail-fails"
     : > "$ORDER"
-    run "$LAUNCHER" resume alpha-rat --operator "$OP"
+    run "$LAUNCHER" resume alpha-rat --operator "$OP" --reason "unit-test reason text"
     [ "$status" -eq 0 ] || { echo "$output"; return 1; }
     run steps
     [ "${lines[0]}" = "vendor-mail realm-smtp --realm alpha-rat --tenant alpha_rat" ]
@@ -329,11 +419,11 @@ STUB
 }
 
 @test "suspend and resume put no app password and no secret on an argv or in the output (TASK-043c)" {
-    run "$LAUNCHER" suspend alpha-rat --operator "$OP"
+    run "$LAUNCHER" suspend alpha-rat --operator "$OP" --reason "unit-test reason text"
     [ "$status" -eq 0 ]
     refute_state_secrets
     [[ "$output" != *"APP-PASSWORD"* ]]
-    run "$LAUNCHER" resume alpha-rat --operator "$OP"
+    run "$LAUNCHER" resume alpha-rat --operator "$OP" --reason "unit-test reason text"
     [ "$status" -eq 0 ]
     refute_state_secrets
     [[ "$output" != *"APP-PASSWORD"* ]]
@@ -342,7 +432,7 @@ STUB
 
 @test "reconcile --apply rotates on the host when smtp-server is repair: host, then re-verifies" {
     touch "${GREMION_ROOT}/smtp-drift"
-    run "$LAUNCHER" reconcile alpha-rat --apply
+    run "$LAUNCHER" reconcile alpha-rat --apply --reason "unit-test reason text"
     [ "$status" -eq 0 ] || { echo "$output"; steps; return 1; }
     run steps
     [ "${lines[0]}" = "tc reconcile alpha-rat" ]
@@ -361,7 +451,7 @@ STUB
 
 @test "reconcile --apply: a crashed apply (no report) fails loudly and never rotates (review C, r2)" {
     touch "${GREMION_ROOT}/smtp-drift" "${GREMION_ROOT}/fail-reconcile"
-    run "$LAUNCHER" reconcile alpha-rat --apply
+    run "$LAUNCHER" reconcile alpha-rat --apply --reason "unit-test reason text"
     [ "$status" -eq 1 ] || { echo "status=$status $output"; return 1; }
     [[ "$output" == *"no parseable report"* ]] || { echo "$output"; return 1; }
     run steps
@@ -371,12 +461,12 @@ STUB
 @test "usage: no operator, a bad slug, platform, and no active colour are exit 2" {
     run "$LAUNCHER" suspend alpha-rat
     [ "$status" -eq 2 ]
-    run "$LAUNCHER" suspend 1ab --operator "$OP"
+    run "$LAUNCHER" suspend 1ab --operator "$OP" --reason "unit-test reason text"
     [ "$status" -eq 2 ]
-    run "$LAUNCHER" suspend platform --operator "$OP"
+    run "$LAUNCHER" suspend platform --operator "$OP" --reason "unit-test reason text"
     [ "$status" -eq 2 ]
     rm -f "${GREMION_ROOT}/runtime/active-colour"
-    run "$LAUNCHER" suspend alpha-rat --operator "$OP"
+    run "$LAUNCHER" suspend alpha-rat --operator "$OP" --reason "unit-test reason text"
     [ "$status" -eq 2 ]
     run steps
     [ -z "$output" ]
@@ -711,7 +801,7 @@ release_repo() {
     run "$LAUNCHER" status alpha-rat
     [ "$status" -eq 0 ] || { echo "$output"; return 1; }
     assert_recorded docker '-e GREMION_RELEASE_TIP= -e TRAEFIK_CERT_RESOLVER'
-    run "$LAUNCHER" suspend alpha-rat --operator "$OP"
+    run "$LAUNCHER" suspend alpha-rat --operator "$OP" --reason "unit-test reason text"
     [ "$status" -eq 0 ] || { echo "$output"; return 1; }
     ! grep -E -- '-e GREMION_RELEASE_TIP=[0-9a-f]' "$SHIM_LOG" || { echo "a tip was derived from a tree that is no release checkout"; return 1; }
 }
@@ -754,4 +844,146 @@ release_repo() {
     assert_recorded docker '-e GREMION_SCRATCH_FIXTURES '
     assert_recorded docker '-e GREMION_PRODUCTION_STACK '
     ! grep -qF -- 'GREMION_SCRATCH_FIXTURES=' "$SHIM_LOG" || { echo "a value was inlined"; return 1; }
+}
+
+# ── TRD-149/150/151: gremion-tenant export <slug> <dir> ──────────────────────
+
+@test "export: arguments are validated before any container (exit 2, no tc call)" {
+    run "$LAUNCHER" export
+    [ "$status" -eq 2 ]
+    run "$LAUNCHER" export alpha-rat
+    [ "$status" -eq 2 ]
+    run "$LAUNCHER" export alpha-rat "${GREMION_ROOT}/o" extra
+    [ "$status" -eq 2 ]
+    run "$LAUNCHER" export 1ab "${GREMION_ROOT}/o"
+    [ "$status" -eq 2 ]
+    run "$LAUNCHER" export platform "${GREMION_ROOT}/o"
+    [ "$status" -eq 2 ]
+    run "$LAUNCHER" export alpha-rat relative/dir
+    [ "$status" -eq 2 ]
+    run "$LAUNCHER" export alpha-rat "${GREMION_ROOT}/a:b"
+    [ "$status" -eq 2 ]
+    run "$LAUNCHER" export alpha-rat "${GREMION_ROOT}/../escape"
+    [ "$status" -eq 2 ]
+    run "$LAUNCHER" export alpha-rat "${GREMION_ROOT}/no-parent/out"
+    [ "$status" -eq 2 ]
+    run steps
+    [ -z "$output" ]
+    [ ! -e "${GREMION_ROOT}/o" ]
+}
+
+@test "export: a non-empty directory, a file and a symlink are refused (exit 2), nothing is run or touched" {
+    mkdir "${GREMION_ROOT}/full"; echo keep > "${GREMION_ROOT}/full/old.csv"
+    run "$LAUNCHER" export alpha-rat "${GREMION_ROOT}/full"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"not empty"* ]]
+    [ "$(cat "${GREMION_ROOT}/full/old.csv")" = keep ]
+    : > "${GREMION_ROOT}/afile"
+    run "$LAUNCHER" export alpha-rat "${GREMION_ROOT}/afile"
+    [ "$status" -eq 2 ]
+    mkdir "${GREMION_ROOT}/real"; ln -s "${GREMION_ROOT}/real" "${GREMION_ROOT}/link"
+    run "$LAUNCHER" export alpha-rat "${GREMION_ROOT}/link"
+    [ "$status" -eq 2 ]
+    run steps
+    [ -z "$output" ]
+}
+
+@test "export: a symlink anywhere in the parent path is refused (exit 2), nothing is created behind it" {
+    mkdir "${GREMION_ROOT}/elsewhere"; ln -s "${GREMION_ROOT}/elsewhere" "${GREMION_ROOT}/plink"
+    run "$LAUNCHER" export alpha-rat "${GREMION_ROOT}/plink/out"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"symlink"* ]]
+    [ ! -e "${GREMION_ROOT}/elsewhere/out" ]
+    mkdir -p "${GREMION_ROOT}/elsewhere/deep"
+    run "$LAUNCHER" export alpha-rat "${GREMION_ROOT}/plink/deep/out"
+    [ "$status" -eq 2 ]
+    [ ! -e "${GREMION_ROOT}/elsewhere/deep/out" ]
+    run steps
+    [ -z "$output" ]
+}
+
+@test "export: a trailing slash does not hide a symlinked <dir> (exit 2), nothing is created or written behind it" {
+    mkdir "${GREMION_ROOT}/real"; ln -s "${GREMION_ROOT}/real" "${GREMION_ROOT}/link"
+    run "$LAUNCHER" export alpha-rat "${GREMION_ROOT}/link/"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"symlink"* ]]
+    run "$LAUNCHER" export alpha-rat "${GREMION_ROOT}/link//"
+    [ "$status" -eq 2 ]
+    [ -z "$(ls -A "${GREMION_ROOT}/real")" ]
+    [ "$(stat -c %a "${GREMION_ROOT}/real")" != 700 ]
+    run "$LAUNCHER" export alpha-rat //
+    [ "$status" -eq 2 ]
+    run steps
+    [ -z "$output" ]
+}
+
+@test "export: a plain <dir> with a trailing slash is accepted as the same directory" {
+    run "$LAUNCHER" export alpha-rat "${GREMION_ROOT}/slashed/"
+    [ "$status" -eq 0 ]
+    [ -d "${GREMION_ROOT}/slashed" ]
+    grep -q -- "${GREMION_ROOT}/slashed:/export" "${GREMION_ROOT}/export-argv"
+    ! grep -q -- "slashed/:/export" "${GREMION_ROOT}/export-argv"
+}
+
+@test "export takes runtime/hostd.lock: busy host -> exit 3, nothing runs, the directory is not created (two exports race on the shared reader role)" {
+    command -v flock >/dev/null || skip "flock not installed"
+    exec 8>>"${GREMION_ROOT}/runtime/hostd.lock"
+    flock -n 8
+    run "$LAUNCHER" export alpha-rat "${GREMION_ROOT}/locked"
+    [ "$status" -eq 3 ] || { echo "$status $output"; return 1; }
+    [[ "$output" == *"busy"* ]]
+    [ ! -e "${GREMION_ROOT}/locked" ]
+    exec 8>&-
+    run steps
+    [ -z "$output" ]
+}
+
+@test "export: creates the directory 0700, runs export then a SEPARATE export-verify, bind-mounted, as the invoking user" {
+    run "$LAUNCHER" export alpha-rat "${GREMION_ROOT}/out"
+    [ "$status" -eq 0 ]
+    [ "$(stat -c %a "${GREMION_ROOT}/out")" = 700 ]
+    run steps
+    [ "${lines[0]}" = "tc export alpha-rat" ]
+    [ "${lines[1]}" = "tc export-verify /export" ]
+    [ "${#lines[@]}" -eq 2 ]
+    grep -q -- "--out /export" "${GREMION_ROOT}/export-argv"
+    grep -q -- "--user $(id -u):$(id -g)" "${GREMION_ROOT}/export-argv"
+}
+
+@test "export: an empty existing directory is accepted and tightened to 0700" {
+    mkdir -m 755 "${GREMION_ROOT}/empty"
+    run "$LAUNCHER" export alpha-rat "${GREMION_ROOT}/empty"
+    [ "$status" -eq 0 ]
+    [ "$(stat -c %a "${GREMION_ROOT}/empty")" = 700 ]
+}
+
+@test "export: a failed export exits 1 and says the directory is incomplete; the check does not run" {
+    : > "${GREMION_ROOT}/fail-export"
+    run "$LAUNCHER" export alpha-rat "${GREMION_ROOT}/out"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *INCOMPLETE* ]]
+    run steps
+    [ "${#lines[@]}" -eq 1 ]
+}
+
+@test "export: a failed completeness check exits 1 and says the export is incomplete" {
+    : > "${GREMION_ROOT}/fail-export-verify"
+    run "$LAUNCHER" export alpha-rat "${GREMION_ROOT}/out"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *INCOMPLETE* ]]
+}
+
+@test "export: a file with a mode other than 0600 fails the export" {
+    : > "${GREMION_ROOT}/export-badmode"
+    run "$LAUNCHER" export alpha-rat "${GREMION_ROOT}/out"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"unexpected modes"* ]]
+}
+
+@test "export: no active colour is exit 2 and runs nothing" {
+    rm -f "${GREMION_ROOT}/runtime/active-colour"
+    run "$LAUNCHER" export alpha-rat "${GREMION_ROOT}/out"
+    [ "$status" -eq 2 ]
+    run steps
+    [ -z "$output" ]
 }

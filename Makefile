@@ -1,10 +1,10 @@
-.PHONY: up down build rebuild logs ps setup gen-realm dev-networks lint-pooled-stack \
+.PHONY: preflight up down build rebuild logs ps setup gen-realm dev-networks lint-pooled-stack \
         shell-kc shell-db \
         keycloak-configure dev-configure dev-ui fresh-start \
         update-legal update-legal-k8s \
         test test-unit test-host-docker test-integration test-all test-ports-nats test-ports-nats-nruns test-nats-auth test-events nats-init \
         lint lint-sh lint-yaml lint-json lint-compose \
-        lint-hygiene lint-cve-floors lint-nats-nruns lint-packages lint-port-back lint-postgres-major lint-extraction-source \
+        lint-hygiene lint-tom-annex lint-cve-floors lint-nats-nruns lint-packages lint-port-back lint-postgres-major lint-extraction-source \
         lint-unshipped-migrations lint-toolchain lint-compliance lint-tenant-db-access fresh-init-proof \
         verify \
         health validate-env
@@ -38,8 +38,14 @@ dev-networks:
 nats-init: dev-networks
 	$(DEV_APP) run --rm --no-deps --entrypoint pnpm tenant-create exec nats-auth init
 
+# Fail loudly if a compose bind-mount source is missing (compose would create
+# it as a directory). Generators: docker/keycloak/certs/gen-internal-ca.sh,
+# scripts/render-pgbouncer-userlist.sh -- both run by `make setup`.
+preflight:
+	@bash scripts/check-bind-sources.sh
+
 # Start all services: state first, then the blue app colour
-up: dev-networks nats-init
+up: preflight dev-networks nats-init
 	$(DEV_STATE) up -d
 	$(DEV_APP) up -d
 
@@ -54,7 +60,7 @@ build:
 	$(DEV_APP) build
 
 # Rebuild and restart (nats-init: fresh volumes need the accounts file first)
-rebuild: build dev-networks nats-init
+rebuild: preflight build dev-networks nats-init
 	$(DEV_STATE) up -d --force-recreate
 	$(DEV_APP) up -d --force-recreate
 
@@ -276,12 +282,16 @@ test-ports-nats-nruns:
 # anywhere. .bats files are deliberately NOT linted here: bats' own idioms
 # (`run`, single-quoted shim bodies) raise SC2016/SC2314 infos by design, and
 # one file-level decision beats a scattering of inline disables.
+# docker/vector/*.sh and docker/keycloak/certs/gen-internal-ca.sh are linted at
+# -S warning only: the vector test-*.sh harnesses carry style-level notes
+# (SC2001, SC2012, SC2016) that are not defects, so that gate is warnings+errors.
 # docker/legal/entrypoint.sh is added here because ci.yml linted it and the
 # Makefile did not; ci.yml now calls this target, and the unification must not
 # lose a file.
 lint-sh:
 	@echo "Linting shell scripts..."
 	@shellcheck -x scripts/*.sh ops/scripts/*.sh docker/postgres/init-databases.sh docker/legal/entrypoint.sh packages/ports/scripts/nats-test.sh packages/ports/scripts/nats-test-nruns.sh packages/nats-auth/scripts/proof.sh packages/nats-auth/scripts/image-check.sh packages/events/scripts/proof.sh packages/events/scripts/alert-proof.sh packages/events/scripts/image-check.sh
+	@shellcheck -x -S warning docker/vector/*.sh docker/keycloak/certs/gen-internal-ca.sh
 	@shellcheck -x -s sh gremion-ui/scripts/hooks/pre-commit
 	@shellcheck -x modules/messaging/synapse/*.sh modules/messaging/synapse/postgres-init/*.sh modules/messaging/synapse/test/*.sh
 	@for f in infra/host/bootstrap.sh infra/host/lib/*.sh infra/host/lib/executor/*.sh infra/host/lib/executor/handlers/*.sh infra/host/mail/*.sh infra/host/ops/*.sh test/host/integration/*.sh; do \
@@ -345,6 +355,23 @@ lint-pooled-stack:
 lint-hygiene:
 	@echo "Checking kernel hygiene..."
 	@node scripts/kernel-hygiene-check.mjs
+
+# TRD-140/141/142: the generated TOM annex (docs/compliance/tom-annex.md). The
+# suite runs first (its count asserted: `node --test` exits 0 on a file that
+# collects zero tests), then --check fails when a measure input changed and the
+# annex was not regenerated (node scripts/gen-tom-annex.mjs). Also run by
+# scripts/release/lint-release.sh, i.e. before a release reaches a council.
+.PHONY: lint-tom-annex
+lint-tom-annex:
+	@echo "Checking the TOM annex is current (TRD-141)..."
+	@declared=$$(grep -c '^test(' scripts/gen-tom-annex.test.mjs); \
+	 out=$$(node --test --test-reporter=tap scripts/gen-tom-annex.test.mjs 2>&1); status=$$?; \
+	 [ "$$status" -eq 0 ] || { printf '%s\n' "$$out" >&2; exit "$$status"; }; \
+	 collected=$$(printf '%s\n' "$$out" | tr -d '\r' | sed -n 's/^1\.\.\([0-9][0-9]*\)$$/\1/p' | tail -n1); \
+	 if [ "$$declared" -lt 1 ] || [ "$$collected" != "$$declared" ]; then \
+	   echo "lint-tom-annex: scripts/gen-tom-annex.test.mjs declares $$declared test(s) but node ran '$$collected'." >&2; exit 1; \
+	 fi
+	@node scripts/gen-tom-annex.mjs --check
 
 # CVE override floors: every advisory floor in pnpm-workspace.yaml is held at or
 # above its committed first-patched version, the lockfile has absorbed the
@@ -627,6 +654,24 @@ lint-module-migration-names:
 	 echo "[module-migration-names] suite: $$collected of $$declared declared test(s) ran"
 	@node scripts/check-module-migration-names.mjs
 
+# Every COPY/ADD source in a modules/**/Dockerfile must exist in this repository: the nine
+# leaf Dockerfiles once COPYed StuRa-only services/<svc> and upstream/gremion/packages/ports
+# paths, so no leaf image built from a kernel-only checkout and nothing noticed.
+.PHONY: lint-module-dockerfile-copy
+lint-module-dockerfile-copy:
+	@echo "Checking module Dockerfile COPY sources exist..."
+	@declared=$$(grep -c '^test(' scripts/check-module-dockerfile-copy.test.mjs); \
+	 out=$$(node --test --test-reporter=tap scripts/check-module-dockerfile-copy.test.mjs 2>&1); \
+	 status=$$?; \
+	 [ "$$status" -eq 0 ] || { printf '%s\n' "$$out" >&2; exit "$$status"; }; \
+	 collected=$$(printf '%s\n' "$$out" | tr -d '\r' | sed -n 's/^1\.\.\([0-9][0-9]*\)$$/\1/p' | tail -n1); \
+	 if [ "$$declared" -lt 1 ] || [ "$$collected" != "$$declared" ]; then \
+	   echo "lint-module-dockerfile-copy: scripts/check-module-dockerfile-copy.test.mjs declares $$declared test(s) but node ran '$$collected'." >&2; \
+	   exit 1; \
+	 fi; \
+	 echo "[module-dockerfile-copy] suite: $$collected of $$declared declared test(s) ran"
+	@node scripts/check-module-dockerfile-copy.mjs
+
 # TASK-029 (TRD-344, grant G4): the migration register. Every *.sql is in
 # exactly one database chain of scripts/migrations/ranges.json or a declared
 # non-migration; each chain is padded, in numeric order, gap-free above its
@@ -717,7 +762,7 @@ lint-image-digests:
 	@node scripts/release/check-image-digests.mjs
 	@node scripts/release/check-image-digests.mjs --render
 
-lint: lint-sh lint-yaml lint-json lint-compose lint-compose-latest lint-pooled-stack lint-hygiene lint-cve-floors lint-nats-nruns lint-packages lint-port-back lint-postgres-major lint-extraction-source lint-unshipped-migrations lint-compliance lint-tenant-db-access lint-edge-host lint-module-scan lint-module-migration-names lint-migration-register lint-image-digests lint-synapse
+lint: lint-sh lint-yaml lint-json lint-compose lint-compose-latest lint-pooled-stack lint-hygiene lint-tom-annex lint-cve-floors lint-nats-nruns lint-packages lint-port-back lint-postgres-major lint-extraction-source lint-unshipped-migrations lint-compliance lint-tenant-db-access lint-edge-host lint-module-scan lint-module-migration-names lint-module-dockerfile-copy lint-migration-register lint-image-digests lint-synapse
 	@echo "All linters passed."
 
 # ── Local gate (TASK-045, TRD-444/341) ──────────────────────────────────────

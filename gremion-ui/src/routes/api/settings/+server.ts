@@ -6,6 +6,8 @@ import { OPERATOR_DECISION_DE, RETENTION_CAPS } from '$lib/retention-tiers'
 import { hasRole, Role } from '$lib/auth'
 import type { SessionUser } from '$lib/auth/types'
 import { z } from 'zod'
+import { env } from '$env/dynamic/private'
+import { isAllowedSmtpPort, resolveSmtpTarget } from '$lib/server/mail/smtp-target-guard'
 
 // G-098: `.strict()` rejects unknown top-level keys (e.g. typos). Per-field
 // constraints below remain tighter than the baseline `configUpdateSchema`
@@ -114,7 +116,37 @@ export const PATCH: RequestHandler = async ({ request, locals }) => {
     return json({ success: false, error: message }, { status: 422 })
   }
 
+  // MED-4: hold the SMTP host/port to the same guard as /api/setup/test-smtp
+  // (internal names, private/loopback ranges, non-SMTP ports). The guard runs on
+  // the MERGED stored+patch values whenever host or port is touched, so a
+  // host-only / port-only PATCH cannot keep a bad stored counterpart.
   const config = readConfig()
+  const smtp = parsed.data.smtp
+  if (smtp && (smtp.host !== undefined || smtp.port !== undefined)) {
+    const merged = { ...(config.smtp as { host?: string; port?: number } | undefined), ...smtp }
+    if (merged.port !== undefined && !isAllowedSmtpPort(merged.port, env.SMTP_TEST_ALLOW_PRIVATE === '1')) {
+      return json(
+        { success: false, error: 'SMTP-Port ist nicht zugelassen (erlaubt: 25, 465, 587, 2525)' },
+        { status: 400 },
+      )
+    }
+    if (merged.host) {
+      const target = await resolveSmtpTarget(merged.host)
+      if (!target.allowed) {
+        return json(
+          {
+            success: false,
+            error:
+              target.reason === 'dns'
+                ? 'SMTP-Host konnte nicht aufgelöst werden'
+                : 'SMTP-Host ist keine erlaubte externe Adresse',
+          },
+          { status: 400 },
+        )
+      }
+    }
+  }
+
   const updated = writeConfig(parsed.data)
 
   // Audit any retention changes

@@ -311,6 +311,41 @@ export function policyViolations(policyDoc) {
   return out
 }
 
+/**
+ * TRD-205 quiet hours: CRITICAL routes first and is never time-limited; every
+ * other severity goes through a route that is active only in `active-hours`
+ * (Grafana mutes it outside); the root is the default route; every rule has a
+ * severity label so the matchers are total.
+ */
+export function quietHoursViolations(policyDoc, rulesDoc, timesDoc) {
+  const out = []
+  const root = policyDoc?.policies?.[0]
+  if (!root?.receiver) return ['policy: no default receiver on the root route']
+  if (root.active_time_intervals || root.mute_time_intervals) out.push('policy: the default route carries a time interval')
+  const routes = root.routes ?? []
+  const key = (r) => JSON.stringify(r.object_matchers ?? null)
+  const crit = routes.find((r) => key(r) === '[["severity","=","critical"]]')
+  const rest = routes.find((r) => key(r) === '[["severity","!=","critical"]]')
+  if (!crit) out.push('policy: no severity=critical route')
+  else {
+    if (crit.mute_time_intervals || crit.active_time_intervals) out.push('policy: the critical route carries a time interval (it must alert immediately)')
+    if (routes[0] !== crit) out.push('policy: the critical route is not first')
+  }
+  if (!rest) out.push('policy: no severity!=critical route')
+  else {
+    if (!(rest.active_time_intervals ?? []).includes('active-hours')) out.push('policy: the non-critical route is not limited to active-hours')
+    if (rest.mute_time_intervals) out.push('policy: the non-critical route uses mute_time_intervals (inverted meaning)')
+  }
+  const names = (timesDoc?.muteTimes ?? []).map((t) => t.name)
+  if (!names.includes('active-hours')) out.push('time intervals: active-hours is not defined')
+  for (const g of rulesDoc?.groups ?? []) {
+    for (const r of g.rules ?? []) {
+      if (!/^(critical|warning)$/.test(String(r.labels?.severity))) out.push(`rule ${r.title}: has no severity label critical|warning`)
+    }
+  }
+  return out
+}
+
 /** The contact point render-ops.sh writes: every integration sends resolves. */
 export function contactPointViolations(contactDoc) {
   const out = []
@@ -422,7 +457,9 @@ export function sourceReferenceScan(root = REPO_ROOT, roots = memberSourceRoots(
       const p = path.join(dir, name)
       const st = statSync(p)
       if (st.isDirectory()) walk(p)
-      else if (/\.(svelte|ts|js|mjs|html|json)$/.test(name)) {
+      // Test sources never ship, so they are not member-facing: a spec naming
+      // grafana as an OIDC client (azp) is not a link to it.
+      else if (/\.(svelte|ts|js|mjs|html|json)$/.test(name) && !/\.(test|spec)\.[a-z]+$/.test(name)) {
         files++
         const text = readFileSync(p, 'utf8')
         if (re.test(text)) hits.push(path.relative(root, p).replace(/\\/g, '/'))

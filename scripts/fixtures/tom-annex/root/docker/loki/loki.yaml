@@ -1,0 +1,9 @@
+limits_config:
+  retention_period: 14d
+  retention_stream:
+    - selector: '{class="access"}'
+      priority: 1
+      period: 14d
+    - selector: '{class="application"}'
+      priority: 1
+      period: 28d

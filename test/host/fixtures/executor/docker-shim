@@ -10,8 +10,16 @@
 #       render-router prints a router document; fail-<verb> fails it;
 #   docker ps -q / compose config --services   a stable fingerprint
 #       (extra-container + after: one more container).
+#   create-harden H4 (HIGH-1): a hanging one-shot (hang-<verb>) that carries
+#       `--label gremion.request=<id>` also starts a fake CONTAINER: a process
+#       in its own session (setsid), which a kill of the compose client's
+#       process group does not reach -- as the real container is not reached.
+#       `docker ps -q --filter label=gremion.request[=<id>]` lists the live
+#       ones, `docker kill <ids>` kills them (container-unkillable: it does
+#       not); both, and the finish / requeue-own, go to timeline.log in order.
 R="$GREMION_ROOT"
 order() { printf '%s\n' "$*" >> "$R/order.log"; }
+timeline() { printf '%s\n' "$*" >> "$R/timeline.log"; }
 
 if [ "${1:-}" = exec ]; then
     # what a local user would see in `ps`: the whole argv of every exec
@@ -37,27 +45,80 @@ if [ "${1:-}" = exec ]; then
         *claim_provisioning_request*)
             order "psql claim"
             if [ -s "$R/queue" ]; then head -n 1 "$R/queue"; sed -i 1d "$R/queue"; fi ;;
-        *requeue_own_requests*) order "psql requeue-own ${v[host]}"; echo 0 ;;
+        *requeue_own_requests*) order "psql requeue-own ${v[host]}"; timeline "requeue-own"; echo 0 ;;
         *mark_provisioning_request_verified*) order "psql mark-verified" ;;
-        *renew_provisioning_lease*) printf 'renew %s %s\n' "${v[id]}" "${v[host]}" >> "$R/renews.log" ;;
+        *renew_provisioning_lease*)
+            [ -f "$R/renew-refused" ] && { echo "ERROR:  request ${v[id]} is not running under ${v[host]}" >&2; exit 3; }
+            if [ -f "$R/hung" ]; then
+                [ -f "$R/refuse-renew-when-hung" ] && { echo "ERROR:  request not running" >&2; exit 3; }
+                [ -f "$R/renew-unreachable-when-hung" ] && { echo "psql: error: connection refused" >&2; exit 2; }
+                # a renewal that never answers (a wedged docker exec): only a timeout ends it
+                [ -f "$R/renew-hangs-when-hung" ] && exec sleep 60
+            fi
+            printf 'renew %s %s\n' "${v[id]}" "${v[host]}" >> "$R/renews.log" ;;
         *record_provisioning_event*) printf '%s %s %s\n' "${v[level]}" "${v[step]}" "${v[msg]}" >> "$R/events.log" ;;
-        *finish_provisioning_request*) order "psql finish ${v[state]}"; printf '%s\n' "${v[outcome]}" > "$R/outcome" ;;
+        *finish_provisioning_request*) order "psql finish ${v[state]}"; timeline "finish ${v[state]}"; printf '%s\n' "${v[outcome]}" > "$R/outcome" ;;
         *submit_provisioning_request*)
             [ -f "$R/submit-refused" ] && { echo "ERROR:  submit_provisioning_request: a break-glass request needs a reason" >&2; exit 3; }
             order "psql submit ${v[kind]} ${v[slug]} actor=${v[actor]} op=${v[op]}"
-            printf '%s\n' "${v[reason]}" > "$R/submitted-reason"
+            # the reason is a dollar-quoted literal inside the SQL on STDIN (never -v: the process table)
+            printf '%s\n' "$(printf '%s' "$sql" | sed -nE 's/.*NULL, NULL, NULL, NULL, \$(g[0-9a-f]+)\$(.*)\$\1\$, :.actor.*/\2/p')" > "$R/submitted-reason"
             # the args are a dollar-quoted jsonb literal inside the SQL on STDIN ($g<hex>$...$g<hex>$::jsonb)
             printf '%s' "$sql" | sed -n 's/.*\$\(g[0-9a-f]*\)\$\(.*\)\$\1\$::jsonb.*/\2/p' > "$R/submitted-args"
             echo "0192f0c4-0000-7000-8000-000000000001" ;;
+        *oac.purge_access_records*)
+            # TRD-092 MED-2: the scheduled purge (infra/host/ops/access-purge.sh)
+            [ -f "$R/purge-refused" ] && { echo "ERROR:  purge_access_records: the window is 27 to 30 days" >&2; exit 3; }
+            printf '%s\n' "$sql" | sed -nE "s/.*interval '([^']*)'.*/\1/p" > "$R/purge.log"
+            if [ -f "$R/purge-count" ]; then cat "$R/purge-count"; else echo 0; fi ;;
+        *oac.record_access*)
+            # TRD-092: the vendor-access record (infra/host/lib/access-log.sh)
+            [ -f "$R/access-refused" ] && { echo "ERROR:  record_access: role is neither the panel requester nor the executor" >&2; exit 3; }
+            # what and why are dollar-quoted literals in the SQL on stdin ($g<hex>$...$g<hex>$), never -v
+            what="$(printf '%s' "$sql" | sed -nE 's/^[^$]*\$(g[0-9a-f]+)\$(.*)\$\1\$, \$g.*/\2/p')"
+            why="$(printf '%s' "$sql" | sed -nE 's/.*, \$(g[0-9a-f]+)\$(.*)\$\1\$, :.actor.*/\2/p')"
+            order "psql access ${v[action]} ${v[slug]} actor=${v[actor]}"
+            printf '%s|%s|%s|%s|%s\n' "${v[slug]}" "${v[action]}" "${v[actor]}" "$what" "$why" >> "$R/access.log"
+            echo "0192f0c4-0000-7000-8000-0000000000ac" ;;
         *provisioning_request_status*) order "psql requests slug=${v[slug]}"; echo "0192f0c4-0000-7000-8000-000000000001|2026-10-05 12:00:00+00|create|alpha-rat|host|succeeded|0|ok" ;;
         *) echo "docker-shim: unexpected sql: ${sql}" >&2; exit 1 ;;
     esac
     exit 0
 fi
 
+# live_containers [label value] -- the fake containers still running
+live_containers() {
+    local f pid out=""
+    for f in "$R"/containers/*; do
+        [ -f "$f" ] || continue
+        pid="${f##*/}"
+        kill -0 "$pid" 2>/dev/null || continue
+        if [ -n "${1:-}" ] && [ "$(cat "$f")" != "$1" ]; then continue; fi
+        out+="ctr-${pid} "
+    done
+    printf '%s' "${out% }"
+}
+
+if [ "${1:-}" = kill ]; then
+    shift
+    timeline "kill $*"
+    [ -f "$R/container-unkillable" ] && exit 0
+    for c in "$@"; do kill -KILL "${c#ctr-}" 2>/dev/null; done
+    exit 0
+fi
+
 case " $* " in
+    *" ps "*"--filter label=gremion.request"*)
+        lbl=""
+        for a in "$@"; do case "$a" in label=gremion.request=*) lbl="${a#label=gremion.request=}" ;; esac; done
+        ids="$(live_containers "$lbl")"
+        timeline "ps label=${lbl:-*} -> ${ids:-none}"
+        [ -n "$ids" ] && tr ' ' '\n' <<< "$ids"
+        exit 0 ;;
     *" run "*" tenant-create "*)
         all="$*"
+        label=""; prev=""
+        for a in "$@"; do [ "$prev" = --label ] && label="${a#gremion.request=}"; prev="$a"; done
         # the read-only mounts the create passes (tenant config, DPIA decisions)
         for a in "$@"; do
             case "$a" in
@@ -75,6 +136,20 @@ case " $* " in
         verb="$1"; slug="${2:-}"
         order "tc ${verb} ${slug}"
         printf '%s\n' "$all" >> "$R/tc-argv.log"
+        if [ -f "$R/hang-${verb}" ]; then
+            if [ -n "$label" ]; then
+                mkdir -p "$R/containers"
+                # the container: its own session, no fd of the client
+                setsid bash -c 'printf "%s" "$2" > "$1/containers/$$"; sleep 60; touch "$1/container-completed"' _ "$R" "$label" \
+                    < /dev/null > /dev/null 2>&1 3>&- 8>&- 9>&- &
+                i=0; while [ "$i" -lt 50 ] && [ -z "$(live_containers "$label")" ]; do sleep 0.1; i=$((i + 1)); done
+            fi
+            touch "$R/hung"; echo $$ > "$R/hang.pid"
+            sleep 60
+            # reached only when nothing killed the hung step (MED-4)
+            touch "$R/hang-completed"
+        fi
+        [ -f "$R/fail-silent-${verb}" ] && exit 3
         [ -f "$R/fail-${verb}" ] && { echo "[tenant-create] FAILED: ${verb} (fixture)" >&2; exit 1; }
         case "$verb" in
             request-verify)

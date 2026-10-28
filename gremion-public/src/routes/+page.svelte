@@ -13,8 +13,8 @@
 </script>
 
 <svelte:head>
-  <title>Studierendenrat — Öffentliches Portal</title>
-  <meta name="description" content="Protokolle, Beschlüsse und Gremien des Studierendenrats — öffentlich dokumentiert, ohne Login einsehbar." />
+  <title>{data.institutionName} — Öffentliches Portal</title>
+  <meta name="description" content="Protokolle, Beschlüsse und Gremien von {data.institutionName} — öffentlich dokumentiert, ohne Login einsehbar." />
 </svelte:head>
 
 <!-- ── Hero ──────────────────────────────────────────────────────────────── -->
@@ -170,7 +170,7 @@
 
 <!-- ── Antrag (optional, no login) ────────────────────────────────────────── -->
 <!-- v5 Task 4.8 — public Antragsformular (prototype #antrag). No login: the form
-     is submitted to the StuRa inbox via mailto (no public write-back endpoint
+     is submitted to the contact inbox via mailto (no public write-back endpoint
      exists). Optional via PUBLIC_PORTAL_ANTRAG. -->
 {#if data.showAntrag}
   <section id="antrag" class="border-b border-border">
@@ -268,7 +268,7 @@
             ></textarea>
           </label>
           <div class="mt-5 flex flex-wrap items-center justify-between gap-3">
-            <p class="font-mono text-[11px] text-ink-muted">Wird per E-Mail an den StuRa übermittelt.</p>
+            <p class="font-mono text-[11px] text-ink-muted">Wird per E-Mail an das Gremium übermittelt.</p>
             <button
               type="submit"
               class="rounded-sm bg-ink px-5 py-2.5 text-[14px] font-medium text-paper transition-opacity hover:opacity-85"
@@ -293,7 +293,7 @@
       <div class="rounded-md border border-ink-subtle bg-paper p-5">
         <p class="font-mono text-[10px] tracking-widest text-ink-muted uppercase">Impressum</p>
         <p class="mt-3 text-[14px] leading-relaxed text-ink-2">
-          Verantwortlich: Vorsitz des Studierendenrats
+          Verantwortlich: siehe Impressum
         </p>
       </div>
       <div class="rounded-md border border-ink-subtle bg-paper p-5">

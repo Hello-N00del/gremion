@@ -1,5 +1,6 @@
 import { handle as authHandle } from './auth'
 import { sessionEndpointGuard } from '$lib/server/security/session-endpoint-guard'
+import { csrfOriginGuard } from '$lib/server/security/csrf-origin-guard'
 import { redirect, type Handle, type HandleFetch, type HandleServerError } from '@sveltejs/kit'
 import { sequence } from '@sveltejs/kit/hooks'
 import { building } from '$app/environment'
@@ -15,6 +16,7 @@ import { requireBrand } from '$lib/server/brand'
 import { instanceThemeStyleTag } from '$lib/theme/instance-theme'
 import { waitForDbReady, isTransientDbStartupError } from '$lib/server/db'
 import { isBootAndResolveExempt } from '$lib/server/boot-exempt'
+import { decodeRequestPath, requestPath } from '$lib/server/request-path'
 import { startProvisioningWorker } from '$lib/server/governance/provisioning/worker'
 import { verifyBearerJwt } from '$lib/server/jwt-verify'
 import { isInternalBearerRequest } from '$lib/server/internal-fetch'
@@ -497,7 +499,7 @@ function internalBearerRejected(ctx: InternalBearerRejection): Response {
 }
 
 export const authGuard: Handle = async ({ event, resolve }) => {
-  const path = event.url.pathname
+  const path = requestPath(event)
 
   // Default locals to a known shape before any branching. authGuard is the
   // single place that populates `user` and `accessToken`; downstream routes
@@ -575,7 +577,7 @@ export const authGuard: Handle = async ({ event, resolve }) => {
   // alternative to the Auth.js cookie session used by the web frontend.
   if (path.startsWith('/api/')) {
     const authHeader = event.request.headers.get('Authorization')
-    if (authHeader?.startsWith('Bearer ')) {
+    if (authHeader !== null && /^Bearer /i.test(authHeader)) {
       // F1-FIX-03 / H11: an internalFetch self-call. Honoured only when all of
       // these hold: the (method, path) is on the exact allow-list, the request
       // arrived on the internal hop (the resolver validated its
@@ -646,9 +648,29 @@ export const authGuard: Handle = async ({ event, resolve }) => {
         })
       }
     }
+    // An Authorization header that did not authenticate (garbage Bearer, a
+    // non-Bearer scheme, a bare "Bearer") must NEVER fall back to the cookie
+    // session: the CSRF origin guard exempts requests carrying Authorization, so
+    // honouring a cookie here would let a cross-site request ride it.
+    if (authHeader !== null) {
+      return new Response(
+        JSON.stringify({
+          error: 'Unauthenticated',
+          reason: internalBearerMismatch ? INTERNAL_BEARER_REJECTED_REASON : 'no_session',
+        }),
+        { status: 401, headers: { 'content-type': 'application/json' } }
+      )
+    }
   }
 
   const session = await event.locals.auth()
+  // Memoise for the rest of the request. Auth.js rebuilds the session from the
+  // ORIGINAL cookie header on every auth() call, so a second call (root layout
+  // load, +page.server loads, handleFetch sub-requests) after the access token
+  // expired would run a second refresh with the refresh token the first one
+  // already used. Harmless while refresh tokens are reusable; fatal the day
+  // rotation is switched on (see docs/auth.md, refresh-token rotation residual).
+  event.locals.auth = async () => session
 
   // All other routes require authentication
   // Also force re-login when the session has a token refresh error
@@ -672,7 +694,7 @@ export const authGuard: Handle = async ({ event, resolve }) => {
         { status: 401, headers: { 'content-type': 'application/json' } }
       )
     }
-    redirect(302, `/auth/login?callbackUrl=${encodeURIComponent(path)}`)
+    redirect(302, `/auth/login?callbackUrl=${encodeURIComponent(event.url.pathname)}`)
   }
 
   const user = session.user as SessionUser
@@ -704,7 +726,7 @@ export const authGuard: Handle = async ({ event, resolve }) => {
         { status: 401, headers: { 'content-type': 'application/json' } }
       )
     }
-    redirect(302, `/auth/login?callbackUrl=${encodeURIComponent(path)}`)
+    redirect(302, `/auth/login?callbackUrl=${encodeURIComponent(event.url.pathname)}`)
   }
   if (!assertIssMatch({ tokenIss: sessionTokenIss, tenantIssuer: event.locals.tenant.issuer })) {
     return tenantMismatchResponse(path)
@@ -719,7 +741,7 @@ export const authGuard: Handle = async ({ event, resolve }) => {
     // PAGE_ACCESS object, so tenant #1 behavior is byte-identical.
     const segment = path.split('/')[1] || 'dashboard'
     if (!canAccess(roles, segment, pageAccessForTenant(event.locals.tenant))) {
-      redirect(302, `/auth/login?error=forbidden&callbackUrl=${encodeURIComponent(path)}`)
+      redirect(302, `/auth/login?error=forbidden&callbackUrl=${encodeURIComponent(event.url.pathname)}`)
     }
   }
 
@@ -922,8 +944,20 @@ export const correlationHandle: Handle = ({ event, resolve }) => {
 // /api/internal/ call naming no tenant — see boot-exempt.ts) skips it; the
 // authGuard below is what answers such a request. A tenant-resolved request
 // goes through Auth.js exactly as before.
+/**
+ * Decode the request path ONCE (400 on a malformed escape) and expose it as
+ * event.locals.decodedPath; every later path check reads that value, never the
+ * raw event.url.pathname (which the router does not match on).
+ */
+export const requestPathHandle: Handle = ({ event, resolve }) => {
+  const decoded = decodeRequestPath(event.url.pathname)
+  if (decoded === null) return new Response('Bad Request', { status: 400 })
+  event.locals.decodedPath = decoded
+  return resolve(event)
+}
+
 export const authHandleUnlessExempt: Handle = ({ event, resolve }) =>
-  isBootAndResolveExempt(event.url.pathname) && !event.locals.tenant
+  isBootAndResolveExempt(requestPath(event)) && !event.locals.tenant
     ? resolve(event)
     : authHandle({ event, resolve })
 
@@ -936,6 +970,8 @@ export const authHandleUnlessExempt: Handle = ({ event, resolve }) =>
 export const handle = sequence(
   correlationHandle,
   cspGuard,
+  requestPathHandle,
+  csrfOriginGuard,
   tenantResolveHandle,
   tenantBrandStyleHandle,
   sessionEndpointGuard,

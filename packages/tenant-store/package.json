@@ -28,6 +28,9 @@
     },
     "./dump": {
       "import": "./src/dump/index.ts"
+    },
+    "./export": {
+      "import": "./src/export/index.ts"
     }
   },
   "publishConfig": {
@@ -44,6 +47,10 @@
       "./dump": {
         "types": "./dist/dump/index.d.ts",
         "import": "./dist/dump/index.js"
+      },
+      "./export": {
+        "types": "./dist/export/index.d.ts",
+        "import": "./dist/export/index.js"
       }
     }
   },
@@ -64,6 +71,6 @@
     "@types/node": "^26.6.0",
     "tsx": "^4.23.13",
     "typescript": "^5.4.5",
-    "vitest": "^4.1.11"
+    "vitest": "^5.0.1"
   }
 }

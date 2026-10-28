@@ -32,6 +32,8 @@ export const KERNEL_BLOCK_BASENAMES = [
   // F1-FIX-02-K: the first kernel-only data-plane file after the port-back
   // (the INV-1 chain anchor; claimed through scripts/migrations/register.mjs).
   '0059_audit_log_chain_anchor.sql',
+  // TRD-196: the per-module erasure report (claimed through register.mjs).
+  '0060_erasure_report.sql',
 ]
 
 /** Module-owned or unshipped numbers that must never appear in the kernel block. */
@@ -42,13 +44,13 @@ const FOREIGN_BASENAMES = [
 ]
 
 describe('kernel data-plane migration block', () => {
-  it('holds exactly the 32 kernel-block basenames', () => {
+  it('holds exactly the 33 kernel-block basenames', () => {
     const onDisk = readdirSync(MIGRATIONS_DIR).filter((f) => f.endsWith('.sql')).sort()
     expect(onDisk).toEqual([...KERNEL_BLOCK_BASENAMES].sort())
   })
 
-  it('is 32 files', () => {
-    expect(KERNEL_BLOCK_BASENAMES.length).toBe(32)
+  it('is 33 files', () => {
+    expect(KERNEL_BLOCK_BASENAMES.length).toBe(33)
   })
 
   it('carries no module-owned or unshipped file', () => {
@@ -86,7 +88,7 @@ export const PORTED_BASENAMES = [
  * through the TASK-029 register. They are neither pre-port-back nor ported, so
  * they must not move the pre-port-back high-water mark.
  */
-export const POST_PORT_BACK_BASENAMES = ['0059_audit_log_chain_anchor.sql']
+export const POST_PORT_BACK_BASENAMES = ['0059_audit_log_chain_anchor.sql', '0060_erasure_report.sql']
 const PRE_PORT_BACK_BASENAMES = KERNEL_BLOCK_BASENAMES.filter(
   (f) => !PORTED_BASENAMES.includes(f) && !POST_PORT_BACK_BASENAMES.includes(f),
 )

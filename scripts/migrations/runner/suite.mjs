@@ -24,6 +24,14 @@ import { chainFileNames } from '../pre-apply.mjs'
 import { BASELINE_FILE, baselineDigest, fileDir, PINNED_FILE, renderPinned } from './baseline.mjs'
 import { checkContract, createdRoutineNames, formatProblem, lintSql, RULES } from './lint.mjs'
 
+export const WAIVERS_FILE = 'lint-waivers.json'
+
+/**
+ * The only rules a waiver may name. Header, contract and parse failures are
+ * never waivable: a file that cannot be classified or parsed is not reviewed.
+ */
+export const WAIVABLE_RULES = [RULES.noLockTimeout, RULES.revoke, RULES.drop, RULES.orReplace, RULES.checkNotValid]
+
 const REPO_ROOT = join(import.meta.dirname, '..', '..', '..')
 
 /** The digest of the baseline written at the TASK-075 merge. Never edited. */
@@ -87,6 +95,7 @@ export function runExpandContractSuite({ root = REPO_ROOT, canaries, canariesPat
   let lock
   let runners
   let baseline
+  let waivers
   // Only the checked-in set is held to REQUIRED_CANARIES; a spec may inject its own.
   const fromFile = canaries === undefined
   try {
@@ -94,6 +103,13 @@ export function runExpandContractSuite({ root = REPO_ROOT, canaries, canariesPat
     lock = readJson(join(root, 'scripts', 'migrations', 'applied.lock.json'))
     runners = readJson(join(root, 'scripts', 'migrations', 'runner', 'chain-runners.json'))
     baseline = readJson(join(root, 'scripts', 'migrations', 'runner', BASELINE_FILE))
+    try {
+      waivers = readJson(join(root, 'scripts', 'migrations', 'runner', WAIVERS_FILE)).waivers
+    } catch (err) {
+      if (err.code !== 'ENOENT') throw err
+      waivers = []
+    }
+    if (!Array.isArray(waivers)) throw new Error(`${WAIVERS_FILE} has no waivers array`)
     canaries ??= loadCanaries(canariesPath)
     if (!Array.isArray(register.chains) || !register.chains.length) throw new Error('ranges.json declares no chain')
     if (!baseline || typeof baseline.chains !== 'object' || baseline.chains === null) throw new Error(`${BASELINE_FILE} has no chains map`)
@@ -170,6 +186,32 @@ export function runExpandContractSuite({ root = REPO_ROOT, canaries, canariesPat
     check(PINNED_FILE, have === want ? [] : [`${have === null ? 'is absent' : 'differs from'} its rendering from ${BASELINE_FILE} and applied.lock.json: run node scripts/migrations/runner/baseline.mjs --write-pinned`])
   }
 
+  // 2c. waivers: a locked, headered file the lint refuses for a stated, bounded
+  // reason. Pinned to the file's sha256 (the lock's), so an edit voids it.
+  const wproblems = []
+  const waiverFor = new Map()
+  for (const w of waivers) {
+    const id = `${w?.chain}/${w?.file}`
+    const chain = register.chains.find((c) => c.id === w?.chain)
+    const pinned = lock.chains?.[w?.chain]?.files?.[w?.file]
+    const bad = (m) => wproblems.push(`${id}: ${m}`)
+    if (!chain || typeof w.file !== 'string') {
+      bad('names a chain that is not in ranges.json, or no file')
+      continue
+    }
+    if (typeof w.reason !== 'string' || w.reason.trim().length < 40) bad('needs a reason of at least 40 characters')
+    if (!Array.isArray(w.rules) || w.rules.length === 0 || w.rules.some((r) => !WAIVABLE_RULES.includes(r))) bad(`rules must be a non-empty subset of ${WAIVABLE_RULES.join(', ')}`)
+    if (pinned === undefined) bad('is not in applied.lock.json: only a locked file can be waived (an unlocked one is still editable)')
+    else if (w.sha256 !== pinned) bad('sha256 is not the one applied.lock.json pins')
+    const dir = fileDir(root, chain, w.file)
+    if (dir === null) bad('is not on disk')
+    else if (pinned !== undefined && createHash('sha256').update(readFileSync(join(root, dir, w.file))).digest('hex') !== pinned) bad('bytes no longer hash to the lock (LOCKED_FILE_CHANGED)')
+    if (w.file in (baseline.chains[w.chain] ?? {})) bad('is in the baseline already: waive only files the baseline does not map')
+    if (waiverFor.has(id)) bad('is waived twice')
+    waiverFor.set(id, w)
+  }
+  check(WAIVERS_FILE, wproblems)
+
   // 3. canaries: the checked-in set keeps every required one, and each behaves
   if (fromFile) {
     const names = new Set(canaries.map((c) => c.name))
@@ -192,7 +234,13 @@ export function runExpandContractSuite({ root = REPO_ROOT, canaries, canariesPat
       const text = readFileSync(join(root, dir, file), 'utf8')
       if (!(file in mapped)) {
         linted++
-        const problems = lintFile({ root, relPath, text, priorRoutines: prior, chainClass: runners.chains[chain.id], excludeDirs })
+        let problems = lintFile({ root, relPath, text, priorRoutines: prior, chainClass: runners.chains[chain.id], excludeDirs })
+        const waiver = waiverFor.get(`${chain.id}/${file}`)
+        if (waiver) {
+          const kept = problems.filter((p) => !waiver.rules.includes(p.rule))
+          const stale = waiver.rules.filter((r) => !problems.some((p) => p.rule === r))
+          problems = [...kept, ...stale.map((r) => ({ statement: 0, rule: 'stale-waiver', message: `${WAIVERS_FILE} waives ${r} but the file no longer trips it: remove it from the waiver` }))]
+        }
         check(relPath, problems.map((p) => formatProblem(relPath, p).slice(relPath.length + 2)))
       }
       for (const n of createdRoutineNames(text)) prior.add(n)

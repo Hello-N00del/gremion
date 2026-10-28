@@ -14,7 +14,7 @@ import postgres from 'postgres'
 import { checkTenantHostDns, type EdgeAddresses } from '@gremion/edge-routers'
 import { ensureTenantAccount } from '@gremion/nats-auth'
 import type { AdminSpec, ControlRow, CustomerRef, KernelPostCondition, ProvisioningDeps, SmtpReadBack } from '@gremion/provisioning'
-import { ensureKernelDatabase, kernelDbName, kernelRoles, type ModuleServer } from '@gremion/tenant-store/lifecycle'
+import { ensureKernelDatabase, ensureKernelPurgeGrants, kernelDbName, kernelRoles, type PurgeServer } from '@gremion/tenant-store/lifecycle'
 import type { ModuleManifest } from '$lib/modules/types'
 import { runMigrations } from '$lib/server/db'
 import { createOrgUnit, type OrgUnit } from '$lib/server/governance/org-units-db'
@@ -109,8 +109,12 @@ function dbUrl(base: string, user: string, password: string, db: string, extraQu
   return `${a.scheme}://${encodeURIComponent(user)}:${encodeURIComponent(password)}@${a.hostPort}/${db}${q ? `?${q}` : ''}`
 }
 
-/** The kernel server behind KERNEL_PG_ADMIN (ModuleServer shape, for ensureKernelDatabase). */
-export function kernelServer(adminUrl: string): ModuleServer & { close(): Promise<void> } {
+/**
+ * The kernel server behind KERNEL_PG_ADMIN (ModuleServer shape, for
+ * ensureKernelDatabase; `login` for the purge run, which logs in AS each
+ * customer's purger role instead of SET ROLE inside this superuser's session).
+ */
+export function kernelServer(adminUrl: string): PurgeServer & { close(): Promise<void> } {
   const admin = postgres(adminUrl, { max: 2, onnotice: () => {}, connect_timeout: 15 })
   const pools: postgres.Sql[] = []
   return {
@@ -118,7 +122,19 @@ export function kernelServer(adminUrl: string): ModuleServer & { close(): Promis
     open(database) {
       const u = new URL(adminUrl)
       u.pathname = `/${database}`
-      const sql = postgres(u.toString(), { max: 2, onnotice: () => {}, connect_timeout: 15 })
+      // the superuser inside a CUSTOMER database: search_path as a startup parameter overrides the
+      // owner's ALTER DATABASE SET (a planted public.format would otherwise run as the superuser)
+      const sql = postgres(u.toString(), { max: 2, onnotice: () => {}, connect_timeout: 15, connection: { search_path: 'pg_catalog' } })
+      pools.push(sql)
+      return sql
+    },
+    login(database, user, password) {
+      const u = new URL(adminUrl)
+      u.username = encodeURIComponent(user)
+      u.password = encodeURIComponent(password)
+      u.pathname = `/${database}`
+      // search_path as a startup parameter overrides an ALTER DATABASE SET by the customer's owner
+      const sql = postgres(u.toString(), { max: 1, onnotice: () => {}, connect_timeout: 15, fetch_types: false, connection: { search_path: 'pg_catalog' } })
       pools.push(sql)
       return sql
     },
@@ -223,8 +239,7 @@ export function customerAdapters(o: CustomerAdapterOptions): Pick<ProvisioningDe
           brandRef: `config:${slug}`,
           // The registry's default, not a second literal (review r4 LOW): a
           // customer is made with GREMION_DISABLE_SEEDS, so no blueprint seeds
-          // it; the old --blueprint option is gone (residual for the seed/
-          // owner: blueprint-registry.ts:4 still names it).
+          // it; the default is the neutral KERNEL_BLUEPRINT@1 (no vertical in the kernel).
           blueprintRef: DEFAULT_BLUEPRINT_REF,
           connProfile: { perTenantMax: 4, prepare: true },
           backupKeyRef: containerRef(secretName.backupKey(slug)),
@@ -236,6 +251,11 @@ export function customerAdapters(o: CustomerAdapterOptions): Pick<ProvisioningDe
         await addTenantDomain(t.id, host, { isPrimary: true })
         for (const sub of ['db', 'realm', 'nextcloud', 'matrix'] as const) await ensureTenantResource(t.id, sub)
         return toRow(t)
+      },
+      async bindPrimaryHost(id, host) {
+        // the repair of a registration that died after registerTenant (MED-2); both calls re-runnable
+        await addTenantDomain(id, host, { isPrimary: true })
+        for (const sub of ['db', 'realm', 'nextcloud', 'matrix'] as const) await ensureTenantResource(id, sub)
       },
       async setStatus(id, status) {
         const t = await getTenantById(id)
@@ -354,6 +374,15 @@ export function customerAdapters(o: CustomerAdapterOptions): Pick<ProvisioningDe
         // its session role set to the OWNER (Q3), so every object is the owner's.
         const direct = dbUrl(o.kernelAdminUrl, decodeURIComponent(app.username), decodeURIComponent(app.password), kernelDbName(c.id), `options=${encodeURIComponent(`-c role=${owner}`)}`)
         await inProvisioningContext(c, () => runMigrations(), { dbUrl: direct })
+        // TRD-144/145: the purger's SELECT, DELETE on exactly the purge tables, now that the chain created them
+        // (provisioning time; the purge run never grants, it records a missing grant)
+        const server = kernelServer(o.kernelAdminUrl)
+        try {
+          const g = await ensureKernelPurgeGrants(server, c.id)
+          if (g.absent.length) log(`kernel database ${kernelDbName(c.id)}: purge tables not created by the kernel chain: ${g.absent.join(', ')}`)
+        } finally {
+          await server.close()
+        }
       },
       async postCondition(c): Promise<KernelPostCondition> {
         const u = new URL(o.kernelAdminUrl)
