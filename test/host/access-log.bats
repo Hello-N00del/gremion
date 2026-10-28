@@ -100,6 +100,16 @@ gt() { run "${REL}/infra/host/bin/gremion-tenant" "$@"; }
     grep -q '^alpha-rat|break_glass_request|deploy|.*create.*|panel down for the second night$' "${GREMION_ROOT}/access.log"
 }
 
+@test "break-glass request: the operator's reason travels on stdin inside the SQL, never on the docker exec argv" {
+    echo '{"slug":"alpha-rat","host":"rat.alpha.example"}' > "${GREMION_ROOT}/args.json"
+    chmod 600 "${GREMION_ROOT}/args.json"
+    gt request create --operator "$OP" --args-file "${GREMION_ROOT}/args.json" --reason "panel down for the second night"
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    assert_absent 'second night' "${GREMION_ROOT}/exec-argv.log" 'the reason is on the docker argv (process table)'
+    assert_absent 'reason=' "${GREMION_ROOT}/exec-argv.log" 'no reason= on argv'
+    [ "$(cat "${GREMION_ROOT}/submitted-reason")" = 'panel down for the second night' ]
+}
+
 @test "break-glass request: when the record cannot be written, nothing is queued (fail closed)" {
     echo '{"slug":"alpha-rat","host":"rat.alpha.example"}' > "${GREMION_ROOT}/args.json"
     chmod 600 "${GREMION_ROOT}/args.json"

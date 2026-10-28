@@ -61,7 +61,8 @@ if [ "${1:-}" = exec ]; then
         *submit_provisioning_request*)
             [ -f "$R/submit-refused" ] && { echo "ERROR:  submit_provisioning_request: a break-glass request needs a reason" >&2; exit 3; }
             order "psql submit ${v[kind]} ${v[slug]} actor=${v[actor]} op=${v[op]}"
-            printf '%s\n' "${v[reason]}" > "$R/submitted-reason"
+            # the reason is a dollar-quoted literal inside the SQL on STDIN (never -v: the process table)
+            printf '%s\n' "$(printf '%s' "$sql" | sed -nE 's/.*NULL, NULL, NULL, NULL, \$(g[0-9a-f]+)\$(.*)\$\1\$, :.actor.*/\2/p')" > "$R/submitted-reason"
             # the args are a dollar-quoted jsonb literal inside the SQL on STDIN ($g<hex>$...$g<hex>$::jsonb)
             printf '%s' "$sql" | sed -n 's/.*\$\(g[0-9a-f]*\)\$\(.*\)\$\1\$::jsonb.*/\2/p' > "$R/submitted-args"
             echo "0192f0c4-0000-7000-8000-000000000001" ;;
