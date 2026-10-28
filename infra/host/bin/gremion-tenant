@@ -13,6 +13,14 @@ set -euo pipefail
 #   gremion-tenant operator add <email> --no-mail --keycloak-container <name>
 #   gremion-tenant request <kind> --args-file <0600 json> --operator <uuid> --reason <text>
 #   gremion-tenant requests [--slug <slug>]
+#   gremion-tenant export <slug> <dir>
+#
+# `export` (TRD-149/150/151): the tenant's data in open formats (CSV + JSON per
+# table, manifest.json listing what is included and what is excluded and why),
+# written by the tenant-create one-shot into <dir> (created 0700, files 0600,
+# refused when it already holds anything), then re-checked from disk by a
+# second container run; any missing, empty, altered or unlisted file exits 1
+# naming it. It is an export, NOT a backup: gremion-backup stays the restore path.
 #
 # `create` is DECOMMISSIONED (exit 2, nothing written): a customer is created
 # in the panel ("Neuer Mandant"); with the panel down, `request create` puts
@@ -68,6 +76,7 @@ usage: gremion-tenant <verb> [args...]
   operator add <email> --no-mail --keycloak-container <name>
   request <kind> --args-file <0600 json> --operator <uuid> --reason <text>
   requests [--slug <slug>]
+  export <slug> <dir>
 Customers are created and operated in the control panel (gremion-tenant
 panel prints the access line); the break-glass `request` puts the same
 request into the same queue the host-side executor runs (R31-I4).
@@ -442,6 +451,34 @@ cmd_status() {
     tc status "$slug"
 }
 
+# export <slug> <dir> (TRD-149/150/151). <dir> must be absolute and either absent
+# or an empty directory; the container writes as the invoking user so the 0700
+# directory stays unreadable to anyone else, then a SECOND run reads it back.
+cmd_export() {
+    [[ $# -eq 2 ]] || { usage >&2; die "export needs exactly <slug> <dir>" "$GREMION_EXIT_USAGE"; }
+    local slug="$1" dir="$2" bad
+    need_slug "$slug"
+    [[ "$dir" == /* ]] || die "export: <dir> must be an absolute path" "$GREMION_EXIT_USAGE"
+    [[ "$dir" =~ ^/[A-Za-z0-9._/-]+$ && "$dir" != *..* ]] || die "export: <dir> may only contain A-Za-z0-9._/- and no '..' (it becomes a docker bind source)" "$GREMION_EXIT_USAGE"
+    [[ ! -L "$dir" ]] || die "export: <dir> is a symlink" "$GREMION_EXIT_USAGE"
+    if [[ -e "$dir" ]]; then
+        [[ -d "$dir" ]] || die "export: ${dir} exists and is not a directory" "$GREMION_EXIT_USAGE"
+        [[ -z "$(ls -A "$dir")" ]] || die "export: ${dir} is not empty; an export never overwrites or mixes with earlier files" "$GREMION_EXIT_USAGE"
+    else
+        [[ -d "$(dirname "$dir")" ]] || die "export: the parent of ${dir} does not exist" "$GREMION_EXIT_USAGE"
+    fi
+    active_colour
+    mkdir -p -m 700 "$dir"
+    chmod 700 "$dir"
+    TC_MOUNT=(--user "$(id -u):$(id -g)" -v "${dir}:/export")
+    tc export "$slug" --out /export || die "export of ${slug} failed; ${dir} is INCOMPLETE and must not be used" "$GREMION_EXIT_ASSERT"
+    tc export-verify /export || die "completeness check of ${dir} failed (the files named above are missing, empty or altered); the export is INCOMPLETE" "$GREMION_EXIT_ASSERT"
+    TC_MOUNT=()
+    bad="$(find "$dir" -type f ! -perm 0600 -print -o -type d ! -perm 0700 -print | head -n 5)"
+    [[ -z "$bad" ]] || die "export: unexpected modes (want files 0600, directories 0700): ${bad}" "$GREMION_EXIT_ASSERT"
+    ok "export of ${slug} complete and verified: ${dir}/manifest.json"
+}
+
 # panel (Q12): the ssh -L line for the active colour's panel; nothing published.
 cmd_panel() {
     active_colour
@@ -551,6 +588,7 @@ main() {
         resume)    cmd_resume "$@" ;;
         reconcile) cmd_reconcile "$@" ;;
         status)    cmd_status "$@" ;;
+        export)    cmd_export "$@" ;;
         panel)     cmd_panel "$@" ;;
         operator)  cmd_operator "$@" ;;
         *) usage >&2; die "unknown verb: ${verb}" "$GREMION_EXIT_USAGE" ;;

@@ -322,3 +322,24 @@ Reads the tenant's stored `config.json`, merges in the effective defaults, and
 writes the fully-merged config back atomically. A brand-identity guard refuses
 (loud, non-zero exit) a still-blank institution identity — no silent blank
 render.
+
+## Tenant export in open formats (TRD-149/150/151)
+
+```
+sudo gremion-tenant export <slug> <absolute-dir>
+```
+
+Writes `<dir>` (created 0700; refused when it already holds anything) with
+`kernel/<table>.csv|json` for the org units, roles, assignments (+ history),
+memberships, elections, caucuses, protocols with attendance, resolutions,
+action items and challenges and the audit log, `<module>/<table>.csv|json`
+for every enabled module whose `module.json` declares `runtime.export`, and
+`manifest.json` (schema version, tenant slug, `generated_at`, every file with
+sha256, bytes and row count, `modules` and `excluded_systems` /
+`excluded_tables` each with a reason: Nextcloud files and Matrix history are
+never exported by this verb). Files are 0600. A second container run then
+re-reads the directory: a missing, empty, altered or unlisted file prints
+`EXPORT INCOMPLETE <code> <path>` and the verb exits 1 -- treat the directory
+as unusable. `gremion-tenant` runs the check alone through the container's
+`export-verify <dir>`. This is an export for the customer, not a backup:
+restic (`gremion-backup`) remains the restore path.

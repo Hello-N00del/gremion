@@ -98,6 +98,11 @@ case " $* " in
         mkdir -p "$GREMION_ROOT/tenant-secrets"
         [ -s "$GREMION_ROOT/etc/secrets/control-panel/client_secret" ] || [ -f "$GREMION_ROOT/no-ops-secret" ] \
           || echo unit-ops-client-secret > "$GREMION_ROOT/tenant-secrets/platform_client_control-panel" ;;
+      export)
+        # the container writes into the bind source (the host dir behind -v <dir>:/export)
+        xd=""; for a in $all; do case "$a" in *:/export) xd="${a%:/export}" ;; esac; done
+        printf "%s\n" "$all" > "$GREMION_ROOT/export-argv"
+        if [ -n "$xd" ] && [ -f "$GREMION_ROOT/export-badmode" ]; then : > "$xd/manifest.json"; chmod 644 "$xd/manifest.json"; fi ;;
       reconcile)
         if [ -f "$GREMION_ROOT/smtp-drift" ] && [ "$2" != --verify-only ]; then echo "{\"repairHost\":[\"smtp-server\"]}"; else echo "{\"repairHost\":[]}"; fi ;;
     esac
@@ -754,4 +759,96 @@ release_repo() {
     assert_recorded docker '-e GREMION_SCRATCH_FIXTURES '
     assert_recorded docker '-e GREMION_PRODUCTION_STACK '
     ! grep -qF -- 'GREMION_SCRATCH_FIXTURES=' "$SHIM_LOG" || { echo "a value was inlined"; return 1; }
+}
+
+# ── TRD-149/150/151: gremion-tenant export <slug> <dir> ──────────────────────
+
+@test "export: arguments are validated before any container (exit 2, no tc call)" {
+    run "$LAUNCHER" export
+    [ "$status" -eq 2 ]
+    run "$LAUNCHER" export alpha-rat
+    [ "$status" -eq 2 ]
+    run "$LAUNCHER" export alpha-rat "${GREMION_ROOT}/o" extra
+    [ "$status" -eq 2 ]
+    run "$LAUNCHER" export 1ab "${GREMION_ROOT}/o"
+    [ "$status" -eq 2 ]
+    run "$LAUNCHER" export platform "${GREMION_ROOT}/o"
+    [ "$status" -eq 2 ]
+    run "$LAUNCHER" export alpha-rat relative/dir
+    [ "$status" -eq 2 ]
+    run "$LAUNCHER" export alpha-rat "${GREMION_ROOT}/a:b"
+    [ "$status" -eq 2 ]
+    run "$LAUNCHER" export alpha-rat "${GREMION_ROOT}/../escape"
+    [ "$status" -eq 2 ]
+    run "$LAUNCHER" export alpha-rat "${GREMION_ROOT}/no-parent/out"
+    [ "$status" -eq 2 ]
+    run steps
+    [ -z "$output" ]
+    [ ! -e "${GREMION_ROOT}/o" ]
+}
+
+@test "export: a non-empty directory, a file and a symlink are refused (exit 2), nothing is run or touched" {
+    mkdir "${GREMION_ROOT}/full"; echo keep > "${GREMION_ROOT}/full/old.csv"
+    run "$LAUNCHER" export alpha-rat "${GREMION_ROOT}/full"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"not empty"* ]]
+    [ "$(cat "${GREMION_ROOT}/full/old.csv")" = keep ]
+    : > "${GREMION_ROOT}/afile"
+    run "$LAUNCHER" export alpha-rat "${GREMION_ROOT}/afile"
+    [ "$status" -eq 2 ]
+    mkdir "${GREMION_ROOT}/real"; ln -s "${GREMION_ROOT}/real" "${GREMION_ROOT}/link"
+    run "$LAUNCHER" export alpha-rat "${GREMION_ROOT}/link"
+    [ "$status" -eq 2 ]
+    run steps
+    [ -z "$output" ]
+}
+
+@test "export: creates the directory 0700, runs export then a SEPARATE export-verify, bind-mounted, as the invoking user" {
+    run "$LAUNCHER" export alpha-rat "${GREMION_ROOT}/out"
+    [ "$status" -eq 0 ]
+    [ "$(stat -c %a "${GREMION_ROOT}/out")" = 700 ]
+    run steps
+    [ "${lines[0]}" = "tc export alpha-rat" ]
+    [ "${lines[1]}" = "tc export-verify /export" ]
+    [ "${#lines[@]}" -eq 2 ]
+    grep -q -- "--out /export" "${GREMION_ROOT}/export-argv"
+    grep -q -- "--user $(id -u):$(id -g)" "${GREMION_ROOT}/export-argv"
+}
+
+@test "export: an empty existing directory is accepted and tightened to 0700" {
+    mkdir -m 755 "${GREMION_ROOT}/empty"
+    run "$LAUNCHER" export alpha-rat "${GREMION_ROOT}/empty"
+    [ "$status" -eq 0 ]
+    [ "$(stat -c %a "${GREMION_ROOT}/empty")" = 700 ]
+}
+
+@test "export: a failed export exits 1 and says the directory is incomplete; the check does not run" {
+    : > "${GREMION_ROOT}/fail-export"
+    run "$LAUNCHER" export alpha-rat "${GREMION_ROOT}/out"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *INCOMPLETE* ]]
+    run steps
+    [ "${#lines[@]}" -eq 1 ]
+}
+
+@test "export: a failed completeness check exits 1 and says the export is incomplete" {
+    : > "${GREMION_ROOT}/fail-export-verify"
+    run "$LAUNCHER" export alpha-rat "${GREMION_ROOT}/out"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *INCOMPLETE* ]]
+}
+
+@test "export: a file with a mode other than 0600 fails the export" {
+    : > "${GREMION_ROOT}/export-badmode"
+    run "$LAUNCHER" export alpha-rat "${GREMION_ROOT}/out"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"unexpected modes"* ]]
+}
+
+@test "export: no active colour is exit 2 and runs nothing" {
+    rm -f "${GREMION_ROOT}/runtime/active-colour"
+    run "$LAUNCHER" export alpha-rat "${GREMION_ROOT}/out"
+    [ "$status" -eq 2 ]
+    run steps
+    [ -z "$output" ]
 }
