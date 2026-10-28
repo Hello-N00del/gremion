@@ -52,8 +52,8 @@ describe('expand-contract suite (TDD 3)', () => {
     const canaries = loadCanaries().length
     assert.equal(r.unparseable, false)
     assert.equal(r.failed, 0, r.detail)
-    // chain-runners.json + the baseline + its packaged copy + the required-canary set + each canary
-    assert.equal(r.collected, 4 + canaries)
+    // chain-runners.json + the baseline + its packaged copy + the waivers + the required-canary set + each canary
+    assert.equal(r.collected, 5 + canaries)
     assert.match(r.detail, /^linted 0 file\(s\) outside the baseline/)
   })
 
@@ -147,6 +147,46 @@ describe('expand-contract suite (TDD 3)', () => {
     assert.match(bad.detail, /db\/beta\/001_b\.sql: statement 0: manual-dump-marker-missing/)
     const good = run(fixture({ files: { 'db/beta/001_b.sql': HEADERED.replace('\n', '\n-- gremion:manual-dump runbook upgrade.md step 3\n') } }))
     assert.equal(good.failed, 0, good.detail)
+  })
+
+  // Waivers (lint-waivers.json): sha256-pinned, rule-bounded, stale-checked.
+  describe('lint waivers', () => {
+    const BAD = '-- gremion:phase expand\nCREATE TABLE c (id int);\nREVOKE ALL ON TABLE c FROM PUBLIC;\n'
+    const REASON = 'a reason that is long enough to be a real justification for the waiver'
+    function waived({ text = BAD, waiver = {}, locked = true } = {}) {
+      const f = fixture({ files: { 'db/alpha/002_c.sql': text } })
+      const lockPath = join(f.root, 'scripts', 'migrations', 'applied.lock.json')
+      if (locked) writeFileSync(lockPath, JSON.stringify({ chains: { alpha: { files: { '001_a.sql': sha(LEGACY), '002_c.sql': sha(text) } }, beta: { files: {} } } }))
+      const w = { chain: 'alpha', file: '002_c.sql', sha256: sha(text), rules: ['no-lock-timeout', 'revoke'], reason: REASON, ...waiver }
+      writeFileSync(join(f.root, 'scripts', 'migrations', 'runner', 'lint-waivers.json'), JSON.stringify({ waivers: [w] }))
+      return f
+    }
+    test('without a waiver the file fails; with a matching one it passes', () => {
+      const none = run(fixture({ files: { 'db/alpha/002_c.sql': BAD } }))
+      assert.match(none.detail, /002_c\.sql: statement \d+: revoke/)
+      assert.match(none.detail, /no-lock-timeout/)
+      const ok = run(waived())
+      assert.equal(ok.failed, 0, ok.detail)
+    })
+    test('a waiver does not cover other rules in the same file', () => {
+      const r = run(waived({ text: BAD + 'DROP TABLE c;\n' }))
+      assert.match(r.detail, /statement 3: drop/)
+    })
+    test('a stale waiver (rule no longer fires) fails', () => {
+      const r = run(waived({ waiver: { rules: ['no-lock-timeout', 'revoke', 'or-replace'] } }))
+      assert.match(r.detail, /waives or-replace but the file no longer trips it/)
+    })
+    test('an edited file voids the waiver', () => {
+      const f = waived()
+      writeFileSync(join(f.root, 'db', 'alpha', '002_c.sql'), BAD + '-- edited\n')
+      assert.match(run(f).detail, /no longer hash to the lock/)
+    })
+    test('an unlocked file, a wrong sha, a short reason and an unwaivable rule are each refused', () => {
+      assert.match(run(waived({ locked: false })).detail, /not in applied\.lock\.json: only a locked file/)
+      assert.match(run(waived({ waiver: { sha256: 'x' } })).detail, /sha256 is not the one applied\.lock\.json pins/)
+      assert.match(run(waived({ waiver: { reason: 'short' } })).detail, /reason of at least 40/)
+      assert.match(run(waived({ waiver: { rules: ['phase-header-missing'] } })).detail, /rules must be a non-empty subset/)
+    })
   })
 })
 

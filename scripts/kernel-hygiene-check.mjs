@@ -146,7 +146,7 @@ check('b1 every pnpm-workspace.yaml package glob resolves to a real directory', 
   const ws = read('pnpm-workspace.yaml')
   // The `packages:` block runs from that key to the next column-0 key.
   const lines = ws.split('\n')
-  const start = lines.findIndex((l) => /^packages:/.test(l))
+  const start = lines.findIndex((l) => l.startsWith('packages:'))
   if (start === -1) return 'no `packages:` key found'
   const rest = lines.slice(start + 1)
   const end = rest.findIndex((l) => /^\S/.test(l))
@@ -235,7 +235,7 @@ function k8sImageLines() {
 }
 
 check('e1 no k8s manifest floats on a :latest tag', () => {
-  const bad = k8sImageLines().filter((h) => /:latest$/.test(h.image))
+  const bad = k8sImageLines().filter((h) => h.image.endsWith(':latest'))
   return bad.length ? bad.map((h) => `${h.file}:${h.line} ${h.image}`).join(' | ') : null
 })
 
@@ -487,7 +487,7 @@ check('g4 no overlay RENDERS a placeholder image (the applyable-output post-cond
   for (const name of overlayNames) {
     const r = renderOverlay(name)
     if (r.error) continue // already reported by g2
-    for (const img of [...new Set(r.images)]) {
+    for (const img of new Set(r.images)) {
       const why = placeholderReason(img)
       if (why) problems.push(`${name}: ${img} — ${why}`)
     }
@@ -1230,7 +1230,7 @@ check('t3 the three message bundles agree and carry no dead key', () => {
     new Set(read(`${loginDir}/messages/${b}`).split('\n')
       .map((l) => /^([A-Za-z][A-Za-z0-9_.]*)=/.exec(l.trim()))
       .filter(Boolean).map((m) => m[1]))
-  const sets = bundles.map((b) => [b, keysOf(b)])
+  const sets = bundles.map((b) => /** @type {[string, Set<string>]} */ ([b, keysOf(b)]))
   const base = sets[0][1]
   if (base.size === 0) return 'the default bundle defines zero keys — the check would vacuously pass'
   const problems = []

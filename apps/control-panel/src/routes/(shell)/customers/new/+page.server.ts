@@ -58,10 +58,15 @@ export const actions: Actions = {
     const form = await request.formData()
     const enable = form.getAll('enable').filter((v): v is string => typeof v === 'string')
     const dpia: NewCustomerInput['dpia'] = {}
-    for (const id of enable) dpia[id] = { requiresDpia: textField(form, `dpia_${id}`) === 'yes', documentRef: textField(form, `dpiaRef_${id}`) }
+    // an explicit ja/nein per module: anything but yes/no stays null and is refused by validateNewCustomer
+    // answers for every offered module, ticked or not, so a failed submit re-renders them all
+    for (const id of new Set([...enable, ...s.modules.map((m) => m.id)])) {
+      const answer = textField(form, `dpia_${id}`)
+      dpia[id] = { requiresDpia: answer === 'yes' ? true : answer === 'no' ? false : null, documentRef: textField(form, `dpiaRef_${id}`) }
+    }
     const input: NewCustomerInput = {
       slug: textField(form, 'slug'),
-      host: textField(form, 'host').toLowerCase(),
+      host: textField(form, 'host'),
       itAdmin: textField(form, 'itAdmin'),
       councilAdmin: textField(form, 'councilAdmin'),
       bodyName: textField(form, 'bodyName'),
@@ -71,7 +76,7 @@ export const actions: Actions = {
       dpia,
     }
     const key = textField(form, 'key')
-    const errors = validateNewCustomer(input)
+    const errors = validateNewCustomer(input, undefined, s.modules.filter((m) => m.denied === null).map((m) => m.id))
     if (Object.keys(errors).length) return fail(400, { disabled: null, errors, values: input, key })
     // the signed sign-in, read server-side from the encrypted session; never sent to the browser
     const evidence = await evidenceFromRequest(request, r.config)

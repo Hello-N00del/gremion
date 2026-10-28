@@ -136,7 +136,7 @@ assign_realm_admin_to_sa() {
     # 1. Look up the client UUID
     local client_uuid
     client_uuid=$(curl -sf \
-        -H "Authorization: Bearer ${TOKEN}" \
+        -H @/dev/fd/3 3<<<"Authorization: Bearer ${TOKEN}" \
         "${KC_BASE}/admin/realms/${REALM}/clients?clientId=${client_id}" \
         | jq -r '.[0].id')
     [[ -z "$client_uuid" || "$client_uuid" == "null" ]] && error "Client '${client_id}' not found"
@@ -144,7 +144,7 @@ assign_realm_admin_to_sa() {
     # 2. Look up the service-account user behind this client
     local sa_user_id
     sa_user_id=$(curl -sf \
-        -H "Authorization: Bearer ${TOKEN}" \
+        -H @/dev/fd/3 3<<<"Authorization: Bearer ${TOKEN}" \
         "${KC_BASE}/admin/realms/${REALM}/clients/${client_uuid}/service-account-user" \
         | jq -r '.id')
     [[ -z "$sa_user_id" || "$sa_user_id" == "null" ]] && error "Service-account user for '${client_id}' not found (is serviceAccountsEnabled set?)"
@@ -152,7 +152,7 @@ assign_realm_admin_to_sa() {
     # 3. Look up the realm-management client UUID
     local rm_uuid
     rm_uuid=$(curl -sf \
-        -H "Authorization: Bearer ${TOKEN}" \
+        -H @/dev/fd/3 3<<<"Authorization: Bearer ${TOKEN}" \
         "${KC_BASE}/admin/realms/${REALM}/clients?clientId=realm-management" \
         | jq -r '.[0].id')
 
@@ -163,7 +163,7 @@ assign_realm_admin_to_sa() {
     local role role_json roles_json="" roles_array
     for role in $SA_ROLES; do
         role_json=$(curl -sf \
-            -H "Authorization: Bearer ${TOKEN}" \
+            -H @/dev/fd/3 3<<<"Authorization: Bearer ${TOKEN}" \
             "${KC_BASE}/admin/realms/${REALM}/clients/${rm_uuid}/roles/${role}") \
             || error "realm-management role '${role}' not found (KEYCLOAK_ADMIN_SA_ROLES)"
         roles_json="${roles_json}${role_json}"$'\n'
@@ -173,7 +173,7 @@ assign_realm_admin_to_sa() {
 
     # 5. Assign the roles (idempotent — Keycloak silently no-ops on duplicates)
     curl -sf -X POST \
-        -H "Authorization: Bearer ${TOKEN}" \
+        -H @/dev/fd/3 3<<<"Authorization: Bearer ${TOKEN}" \
         -H "Content-Type: application/json" \
         -d "$roles_array" \
         "$mappings_url" \
@@ -185,12 +185,12 @@ assign_realm_admin_to_sa() {
     case " ${SA_ROLES} " in
         *" realm-admin "*) : ;;
         *)
-            current=$(curl -sf -H "Authorization: Bearer ${TOKEN}" "$mappings_url") \
+            current=$(curl -sf -H @/dev/fd/3 3<<<"Authorization: Bearer ${TOKEN}" "$mappings_url") \
                 || error "Failed to read the role mappings of the '${client_id}' service account"
             stale=$(printf '%s' "$current" | jq -c '[.[] | select(.name == "realm-admin")]')
             if [[ "$stale" != "[]" ]]; then
                 curl -sf -X DELETE \
-                    -H "Authorization: Bearer ${TOKEN}" \
+                    -H @/dev/fd/3 3<<<"Authorization: Bearer ${TOKEN}" \
                     -H "Content-Type: application/json" \
                     -d "$stale" \
                     "$mappings_url" \
@@ -226,11 +226,11 @@ assign_realm_admin_to_sa() {
 _kc_api() {  # METHOD PATH [JSON_BODY] — PATH is relative to /admin/realms/${REALM}
     local method="$1" path="$2" body="${3:-}"
     if [[ -n "$body" ]]; then
-        curl -sf -X "$method" -H "Authorization: Bearer ${TOKEN}" \
+        curl -sf -X "$method" -H @/dev/fd/3 3<<<"Authorization: Bearer ${TOKEN}" \
             -H "Content-Type: application/json" --data "$body" \
             "${KC_BASE}/admin/realms/${REALM}${path}"
     else
-        curl -sf -X "$method" -H "Authorization: Bearer ${TOKEN}" \
+        curl -sf -X "$method" -H @/dev/fd/3 3<<<"Authorization: Bearer ${TOKEN}" \
             "${KC_BASE}/admin/realms/${REALM}${path}"
     fi
 }

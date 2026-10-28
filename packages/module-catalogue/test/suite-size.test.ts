@@ -20,7 +20,7 @@ export const DECLARED: Record<string, number> = {
 }
 
 function collected(): Record<string, number> {
-  const r = spawnSync('pnpm', ['exec', 'vitest', 'list', '--json'], { cwd: PKG, encoding: 'utf8', shell: process.platform === 'win32' })
+  const r = spawnSync('pnpm', ['exec', 'vitest', 'list', '--no-staticParse', '--json'], { cwd: PKG, encoding: 'utf8', shell: process.platform === 'win32' })
   expect(r.status, r.stderr).toBe(0)
   const out: Record<string, number> = {}
   for (const t of JSON.parse(r.stdout) as { file: string }[]) {

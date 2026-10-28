@@ -223,8 +223,7 @@ export function customerAdapters(o: CustomerAdapterOptions): Pick<ProvisioningDe
           brandRef: `config:${slug}`,
           // The registry's default, not a second literal (review r4 LOW): a
           // customer is made with GREMION_DISABLE_SEEDS, so no blueprint seeds
-          // it; the old --blueprint option is gone (residual for the seed/
-          // owner: blueprint-registry.ts:4 still names it).
+          // it; the default is the neutral KERNEL_BLUEPRINT@1 (no vertical in the kernel).
           blueprintRef: DEFAULT_BLUEPRINT_REF,
           connProfile: { perTenantMax: 4, prepare: true },
           backupKeyRef: containerRef(secretName.backupKey(slug)),
@@ -236,6 +235,11 @@ export function customerAdapters(o: CustomerAdapterOptions): Pick<ProvisioningDe
         await addTenantDomain(t.id, host, { isPrimary: true })
         for (const sub of ['db', 'realm', 'nextcloud', 'matrix'] as const) await ensureTenantResource(t.id, sub)
         return toRow(t)
+      },
+      async bindPrimaryHost(id, host) {
+        // the repair of a registration that died after registerTenant (MED-2); both calls re-runnable
+        await addTenantDomain(id, host, { isPrimary: true })
+        for (const sub of ['db', 'realm', 'nextcloud', 'matrix'] as const) await ensureTenantResource(id, sub)
       },
       async setStatus(id, status) {
         const t = await getTenantById(id)

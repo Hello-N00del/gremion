@@ -1,9 +1,9 @@
-# services/vault/Dockerfile
-# House pattern: the build context is the REPO ROOT, NOT services/vault — the
+# modules/vault/Dockerfile
+# House pattern: the build context is the REPO ROOT, NOT modules/vault — the
 # pnpm-lock.yaml and pnpm-workspace.yaml live OUTSIDE this directory, so a
-# services/vault-only context cannot resolve the workspace. Build with:
-#   docker build -f services/vault/Dockerfile -t gremion/vault:<tag> .
-# Mirrors services/board/Dockerfile. The vault leaf is self-contained (postgres +
+# modules/vault-only context cannot resolve the workspace. Build with:
+#   docker build -f modules/vault/Dockerfile -t gremion/vault:<tag> .
+# Mirrors modules/board/Dockerfile. The vault leaf is self-contained (postgres +
 # zod only — NO @gremion/ports), so no packages/* are copied.
 FROM node:26-alpine AS builder
 WORKDIR /repo
@@ -16,20 +16,18 @@ WORKDIR /repo
 RUN npm install -g corepack && corepack enable pnpm
 
 # Install workspace deps (cache-friendly: package manifests first).
-# .npmrc carries network-resilience settings (capped concurrency + long fetch
-# timeout) so the install survives a constrained uplink.
-COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
-COPY services/vault/package.json ./services/vault/
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY modules/vault/package.json ./modules/vault/
 # Retry to ride out corepack's pnpm bootstrap (its own 10s connect timeout, not
-# governed by .npmrc) + any registry hiccups on a constrained uplink. Fails hard
+# governed by pnpm config) + any registry hiccups on a constrained uplink. Fails hard
 # after 5 attempts (the `until` loop exits 1) so a broken install never ships.
 RUN i=0; until pnpm install --frozen-lockfile; do i=$((i+1)); [ $i -ge 5 ] && exit 1; echo "pnpm install failed, retry $i in 20s"; sleep 20; done
 
 # Copy the service sources.
-COPY services/vault ./services/vault/
+COPY modules/vault ./modules/vault/
 
-# Compile TypeScript → services/vault/dist
-WORKDIR /repo/services/vault
+# Compile TypeScript → modules/vault/dist
+WORKDIR /repo/modules/vault
 RUN pnpm build
 
 # pnpm deploy resolves the package into a self-contained dir.
@@ -44,8 +42,8 @@ ENV PORT=8080
 
 COPY --from=builder /deploy/node_modules ./node_modules
 COPY --from=builder /deploy/package.json ./
-COPY --from=builder /repo/services/vault/dist ./dist
-COPY --from=builder /repo/services/vault/migrations ./migrations
+COPY --from=builder /repo/modules/vault/dist ./dist
+COPY --from=builder /repo/modules/vault/migrations ./migrations
 
 # A-021: run as the image's built-in non-root `node` user (uid/gid 1000).
 USER node

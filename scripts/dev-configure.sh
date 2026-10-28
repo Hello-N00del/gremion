@@ -160,7 +160,7 @@ rm -f "$KC_PW_FILE"
 get_client_uuid() {
     local client_id="$1"
     curl -sf \
-        -H "Authorization: Bearer ${TOKEN}" \
+        -H @/dev/fd/3 3<<<"Authorization: Bearer ${TOKEN}" \
         "${KC_BASE}/admin/realms/${KC_REALM}/clients?clientId=${client_id}" \
         | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4
 }
@@ -178,7 +178,7 @@ ensure_client_uris() {
     # Fetch current redirect URIs and web origins as JSON arrays (one per line)
     local current_json
     current_json=$(curl -sf \
-        -H "Authorization: Bearer ${TOKEN}" \
+        -H @/dev/fd/3 3<<<"Authorization: Bearer ${TOKEN}" \
         "${KC_BASE}/admin/realms/${KC_REALM}/clients/${uuid}")
 
     local current_uris current_origins
@@ -224,7 +224,7 @@ ensure_client_uris() {
     local http_status
     http_status=$(curl -sf -o /dev/null -w "%{http_code}" \
         -X PUT "${KC_BASE}/admin/realms/${KC_REALM}/clients/${uuid}" \
-        -H "Authorization: Bearer ${TOKEN}" \
+        -H @/dev/fd/3 3<<<"Authorization: Bearer ${TOKEN}" \
         -H "Content-Type: application/json" \
         -d "{\"clientId\":\"${client_id}\",\"id\":\"${uuid}\",\"redirectUris\":${new_uris_json},\"webOrigins\":${new_origins_json}}")
 

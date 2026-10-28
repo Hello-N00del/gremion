@@ -9,7 +9,7 @@ load 'test_helper/host'
 
 PURGE="${HOST_SRC}/ops/purge.sh"
 UNIT_DIR="${HOST_SRC}/templates/systemd"
-MIGRATION="${KERNEL_ROOT}/packages/tenant-store/src/lifecycle/platform-migrations/0012_plt_purge_run.sql"
+PURGE_TS="${KERNEL_ROOT}/packages/tenant-store/src/lifecycle/purge.ts"
 
 setup() {
     setup_host_root
@@ -44,12 +44,12 @@ teardown() {
     [ "$status" -ne 0 ]
 }
 
-@test "the timer fires at the moment of the seeded purge_run cron, persistent, and starts the service" {
+@test "the timer fires at the moment of the PURGE_CRON of the purge run, persistent, and starts the service" {
     local t="${UNIT_DIR}/gremion-purge.timer"
     [ -f "$t" ]
-    # one schedule, stated once: the cron the platform migration seeds
+    # one schedule, stated once: PURGE_CRON in purge.ts
     local cron min hour
-    cron="$(sed -n "s/.*'purge_run', '\([^']*\)'.*/\1/p" "$MIGRATION")"
+    cron="$(sed -n "s/^export const PURGE_CRON = '\([^']*\)'.*/\1/p" "$PURGE_TS")"
     min="${cron%% *}"; hour="$(cut -d' ' -f2 <<< "$cron")"
     [[ "$cron" == "$min $hour * * *" ]]
     grep -q "^OnCalendar=\*-\*-\* $(printf '%02d:%02d' "$hour" "$min"):00 UTC$" "$t"

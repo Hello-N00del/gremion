@@ -1,38 +1,43 @@
 <script lang="ts">
-  import { invalidateAll } from '$app/navigation'
-  import { onMount } from 'svelte'
+  import { enhance } from '$app/forms'
   import { originLabel } from '$lib/request-format'
-  import type { PageData } from './$types'
+  import { LEDGER_STEP_LABEL as STEP_LABEL } from '$lib/request-state'
+  import type { ActionData, PageData } from './$types'
 
-  let { data }: { data: PageData } = $props()
+  let { data, form }: { data: PageData; form: ActionData } = $props()
 
-  const STEP_LABEL: Record<string, string> = {
-    realm_created: 'Anmelde-Realm angelegt',
-    database_created: 'Kerndatenbank angelegt und migriert',
-    domain_bound: 'Host gebunden (DNS geprüft)',
-    storage_prefix_reserved: 'Speicherbereich reserviert',
-    first_body_created: 'Erstes Gremium angelegt',
-    broker_account_created: 'Broker-Konto angelegt',
-    mail_principal_issued: 'Eigener Mail-Absender ausgestellt',
-    first_accounts_created: 'Erste Verwaltungskonten eingeladen',
-  }
   const STATUS_LABEL: Record<string, string> = { done: 'erledigt', pending: 'ausstehend', failed: 'fehlgeschlagen', absent: '—' }
-
-  // While the customer is still being set up, re-read the ledger every 5 s.
-  onMount(() => {
-    const t = setInterval(() => {
-      if (!data.status || data.status.status === 'provisioning') void invalidateAll()
-    }, 5000)
-    return () => clearInterval(t)
-  })
+  // No script polls: while a request or the setup is active the page reloads itself
+  // (meta refresh, allowed by the panel's CSP), and the link reloads on demand.
 </script>
 
-<svelte:head><title>{data.slug} · Gremion Betrieb</title></svelte:head>
+<svelte:head>
+  <title>{data.slug} · Gremion Betrieb</title>
+  {#if data.refresh}<meta http-equiv="refresh" content="5" />{/if}
+</svelte:head>
 
 <h1>{data.slug}</h1>
 
+{#if data.latest}
+  <section class="request {data.latest.phase}" aria-labelledby="req-h">
+    <h2 id="req-h">Anfrage: <span class="phase">{data.latest.label}</span></h2>
+    <p role="status">{data.latest.text}</p>
+    {#if data.latest.code}<p class="muted">Fehlerkennung: <code>{data.latest.code}</code></p>{/if}
+    {#if data.latest.detail}<p class="muted">Begründung (technisch): <code>{data.latest.detail}</code></p>{/if}
+    {#if data.latest.active}<p class="muted">Diese Seite lädt sich alle 5 Sekunden neu. <a href="/customers/{data.slug}">Jetzt aktualisieren</a></p>{/if}
+    {#if data.latest.retryable}
+      <form method="POST" action="?/retry" use:enhance>
+        {#if form?.retryError}<p class="error" role="alert">{form.retryError}</p>{/if}
+        <button type="submit">Erneut versuchen</button>
+      </form>
+    {:else if data.latest.retryNote}
+      <p class="muted">{data.latest.retryNote}</p>
+    {/if}
+  </section>
+{/if}
+
 {#if !data.status}
-  <p class="muted" role="status">Noch nicht registriert. Sobald der Ausführer die Anfrage übernimmt und Phase A beginnt, erscheint der Mandant hier.</p>
+  {#if !data.latest}<p class="muted" role="status">Noch keine Anfrage und kein Mandant mit diesem Kurznamen.</p>{/if}
 {:else}
   <dl>
     <dt>Status</dt><dd>{data.status.status}</dd>
@@ -97,6 +102,33 @@
   }
   .steps li.pending .state {
     color: var(--warn);
+  }
+  .request {
+    max-width: 36rem;
+    border: 1px solid var(--line);
+    border-left-width: 4px;
+    padding: 0.5rem 1rem;
+    margin-bottom: 1.5rem;
+  }
+  .request h2 {
+    font-size: 1.1rem;
+  }
+  .request.succeeded {
+    border-left-color: var(--ok);
+  }
+  .request.failed,
+  .request.refused,
+  .request.dead {
+    border-left-color: var(--bad);
+  }
+  .request.queued,
+  .request.verifying,
+  .request.running,
+  .request.expired {
+    border-left-color: var(--warn);
+  }
+  .error {
+    color: var(--bad);
   }
   .muted {
     color: var(--muted);

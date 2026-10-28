@@ -35,5 +35,18 @@ if [ $status -ne 0 ]; then
   echo "" >&2
   echo "[boundary-lint] commit blocked. Fix the violation, or for an INTENTIONAL contract break: CONTRACTS_ALLOW_BREAKING=1 git commit … (and bump info.version)." >&2
   echo "[boundary-lint] (--no-verify bypasses this hook; the periodic scheduled task + the unit-suite real-tree test will still catch it.)" >&2
+  exit $status
+fi
+
+# CVE-floor guard (scripts/check-cve-floors.mjs, `make lint-cve-floors`). Nothing
+# else runs it automatically (no CI), so it fires here whenever a dependency
+# manifest, the workspace overrides or the lockfile are staged. Pure node, no
+# install needed; fails closed like the boundary lint above.
+if git diff --cached --name-only | grep -Eq '(^|/)(package\.json|pnpm-workspace\.yaml|pnpm-lock\.yaml)$|^scripts/check-cve-floors'; then
+  if ! node "$ROOT/scripts/check-cve-floors.mjs"; then
+    echo "" >&2
+    echo "[cve-floors] commit blocked: an override fell below its committed CVE floor (or the guard could not run). Fix the override/lockfile, or bypass visibly with: git commit --no-verify." >&2
+    status=1
+  fi
 fi
 exit $status

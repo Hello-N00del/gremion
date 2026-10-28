@@ -73,6 +73,23 @@ describe('(i) no instance name is baked in as a fallback', () => {
   });
 });
 
+// ── (i2) product-vertical wording is not a kernel default ──────────────────
+//
+// "Studierendenrat" / "StuRa" is the StuRa VERTICAL's vocabulary
+// (verticals/stura). The kernel portal must default to neutral wording and
+// take the real name from PUBLIC_CONTACT_NAME. No allowlist.
+
+describe('(i2) no StuRa-vertical wording baked into kernel portal source', () => {
+  test.each(['Studierendenrat', 'Studierendenschaft', '\\bStuRa\\b'])(
+    'no non-test source carries %s',
+    (needle) => {
+      const re = new RegExp(needle);
+      const offenders = FILES.filter((f) => re.test(body(f))).map(rel);
+      expect(offenders, 'use institutionName (PUBLIC_CONTACT_NAME) or neutral wording').toEqual([]);
+    },
+  );
+});
+
 // ── (h) #haushalt prototype budget block ────────────────────────────────────
 //
 // v5 Task 4.8 shipped a public budget SECTION FRAME with no data behind it:

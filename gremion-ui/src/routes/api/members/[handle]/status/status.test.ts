@@ -1,10 +1,16 @@
 // @vitest-environment node
 import { it, expect, vi } from 'vitest'
 
-const kc = { updateUser: vi.fn(async () => {}) }
+const kc = {
+  updateUser: vi.fn(async () => {}),
+  getUser: vi.fn(async (_id: string) => ({ username: 'anna.berger' })),
+  listUserRoles: vi.fn(async (_id: string) => [{ id: 'r', name: 'member' }] as { id: string; name: string }[]),
+}
 vi.mock('$lib/server/keycloak-admin', () => ({ getKeycloakAdminClient: () => kc }))
 vi.mock('$lib/server/members/resolve-handle', () => ({
-  resolveHandle: vi.fn(async (h: string) => (h === 'anna.berger' ? 'uuid-anna' : null)),
+  resolveHandle: vi.fn(async (h: string) =>
+    h === 'anna.berger' ? 'uuid-anna' : h === 'it.boss' ? 'uuid-it' : h === 'service-account-gremion' ? 'uuid-sa' : h === 'me' ? 'u1' : null,
+  ),
 }))
 
 import { PATCH } from './+server'
@@ -54,4 +60,36 @@ it('400 when enabled is not a boolean', async () => {
   await expect(
     PATCH(eventFor(['council-admin'], { enabled: 'yes' }) as never),
   ).rejects.toMatchObject({ status: 400 })
+})
+
+it('403 when a council-admin targets an it-admin (rank), no update', async () => {
+  kc.updateUser.mockClear()
+  kc.getUser.mockResolvedValueOnce({ username: 'it.boss' })
+  kc.listUserRoles.mockResolvedValueOnce([{ id: 'r', name: 'it-admin' }])
+  await expect(
+    PATCH(eventFor(['council-admin'], { enabled: false }, 'it.boss') as never),
+  ).rejects.toMatchObject({ status: 403 })
+  expect(kc.updateUser).not.toHaveBeenCalled()
+})
+
+it('it-admin may target another it-admin', async () => {
+  kc.getUser.mockResolvedValueOnce({ username: 'it.boss' })
+  kc.listUserRoles.mockResolvedValueOnce([{ id: 'r', name: 'it-admin' }])
+  const res = await PATCH(eventFor(['it-admin'], { enabled: false }, 'it.boss') as never)
+  expect(res.status).toBe(200)
+})
+
+it('403 for service accounts', async () => {
+  kc.updateUser.mockClear()
+  kc.getUser.mockResolvedValueOnce({ username: 'service-account-gremion' })
+  await expect(
+    PATCH(eventFor(['it-admin'], { enabled: false }, 'service-account-gremion') as never),
+  ).rejects.toMatchObject({ status: 403 })
+  expect(kc.updateUser).not.toHaveBeenCalled()
+})
+
+it('403 on self-disable', async () => {
+  kc.updateUser.mockClear()
+  await expect(PATCH(eventFor(['it-admin'], { enabled: false }, 'me') as never)).rejects.toMatchObject({ status: 403 })
+  expect(kc.updateUser).not.toHaveBeenCalled()
 })

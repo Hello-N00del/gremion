@@ -44,7 +44,7 @@ export function createCustomerGate(o: CustomerGateOptions): CustomerGate & { clo
   // The ref of the customer being checked, from the request's own control row.
   const refs = new Map<string, string>()
   const store = createTenantStore({
-    resolveTarget: kernelTargetResolver({ refOf: (id) => refs.get(id), resolveSecret: o.resolveSecret }),
+    resolveTarget: kernelTargetResolver({ refOf: (id) => refs.get(id), resolveSecret: (ref) => o.resolveSecret(ref) }),
     maxPools: o.maxPools ?? 64,
     maxConnections: 2,
     ...(o.evictGraceMs !== undefined ? { evictGraceMs: o.evictGraceMs } : {}),

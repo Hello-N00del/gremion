@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { parseBlueprintDocument, type ParseBlueprintResult } from './blueprint-schema'
-import { STURA_BLUEPRINT } from './org-blueprint'
+import { STURA_BLUEPRINT } from './stura-fixture'
 
 // Narrows the union so the follow-up `errors` expect runs unconditionally
 // (vitest(no-conditional-expect)) instead of inside an `if (!r.ok)` guard.

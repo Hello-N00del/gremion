@@ -12,7 +12,7 @@ const mockConfig = {
   compliance: {
     dpo_name: 'Max Muster',
     dpo_email: 'dpo@example.org',
-    controller_name: 'StuRa Musteruni',
+    controller_name: 'Mustergremium',
     controller_address: 'Musterstraße 1, 12345 Musterstadt',
     purpose_description: 'Betrieb der studentischen Verwaltungsplattform',
   },
@@ -100,6 +100,6 @@ describe('generateLoeschkonzept', () => {
       compliance: { ...mockConfig.compliance, controller_name: '' },
     } as unknown as GremionConfig
     const doc = generateLoeschkonzept(configWithoutName)
-    expect(doc).toContain('StuRa')
+    expect(doc).toContain('Organisation')
   })
 })

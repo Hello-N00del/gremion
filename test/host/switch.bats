@@ -19,6 +19,8 @@ shim_edge() {
     local colour="$1"
     shim curl "$(cat <<EOF
 url=""
+# LOW-5: a bearer secret must arrive on stdin (curl -K -); record it apart from argv.
+case " \$* " in *" -K - "*) cat >> "\${SHIM_DIR}/curl.stdin" ;; esac
 for a in "\$@"; do case "\$a" in http*) url="\$a";; esac; done
 case "\$url" in
   */api/http/services/app@file)
@@ -165,8 +167,19 @@ EOF
     [ "$status" -eq 0 ]
     assert_recorded curl "http://gremion-ui-blue:3000/api/internal/evict"
     assert_recorded curl "http://content-service-blue:8080/api/internal/evict"
-    assert_recorded curl "Authorization: Bearer push-secret-for-tests"
     assert_recorded curl '{"tenant":"*"}'
+}
+
+@test "LOW-5: the evict bearer secret is on curl's stdin, never on its argv" {
+    shim_edge blue
+    cat > "${GREMION_ROOT}/runtime/evict-targets.json" <<'EOF'
+[{"container": "gremion-ui-blue", "url": "http://gremion-ui-blue:3000/api/internal/evict"}]
+EOF
+    run "$SWITCH" blue
+    [ "$status" -eq 0 ]
+    assert_absent 'push-secret-for-tests' "$SHIM_LOG" \
+        'INTERNAL_PUSH_SECRET reached curl argv (visible in the host process list)'
+    grep -Fq 'Authorization: Bearer push-secret-for-tests' "${SHIM_DIR}/curl.stdin"
 }
 
 @test "a target that does not answer 204 aborts the switch and writes no switch file" {

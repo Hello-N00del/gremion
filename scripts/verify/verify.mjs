@@ -172,7 +172,7 @@ const UNATTRIBUTED_SUITE_SKIP = '(suite: skip not attributable to a file)'
  * data at all, any skip is a violation.
  */
 function skipViolations(name, raw, skipsData) {
-  const byFile = { ...(raw.skipsByFile ?? {}) }
+  const byFile = { ...raw.skipsByFile }
   const attributed = Object.values(byFile).reduce((a, n) => a + (n > 0 ? n : 0), 0)
   const skipped = Number.isFinite(raw.skipped) ? raw.skipped : 0
   if (skipped > attributed) byFile[UNATTRIBUTED_SUITE_SKIP] = skipped - attributed

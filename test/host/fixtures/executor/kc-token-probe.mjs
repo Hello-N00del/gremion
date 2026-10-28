@@ -40,7 +40,7 @@ async function adminToken() {
 let token = null
 async function transport(method, path, body) {
   token ??= await adminToken()
-  const r = await fetch(`${KC}${path}`, { method, headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) })
+  const r = await fetch(`${KC}${path}`, { method, headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) })
   if (!r.ok) throw new Error(`Keycloak Admin API error: ${r.status} on ${method} ${path}: ${await r.text()}`)
   if (r.status === 204 || r.status === 201) return undefined
   const t = await r.text()

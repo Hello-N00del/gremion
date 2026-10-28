@@ -43,7 +43,7 @@ test('pooled-stack-proof.sh and setup.sh generate every :? secret of the app com
   const envEx = read('.env.example')
   for (const v of required.filter((x) => /PASSWORD|SECRET/.test(x))) {
     assert.ok(new RegExp(`^${v}=`, 'm').test(proof), `${v} not rendered by pooled-stack-proof.sh`)
-    const m = envEx.match(new RegExp(`^${v}=(CHANGE_ME\w+)`, 'm'))
+    const m = envEx.match(new RegExp(`^${v}=(CHANGE_ME\\w+)`, 'm'))
     if (m) assert.ok(setup.includes(m[1]), `${v} placeholder ${m[1]} not replaced by setup.sh`)
   }
 })

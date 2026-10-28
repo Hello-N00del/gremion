@@ -84,7 +84,7 @@
 
   <!-- ── Main header ─────────────────────────────────────────────────────── -->
   <PortalHeader
-    institutionName={data.institutionName ?? 'Studierendenrat'}
+    institutionName={data.institutionName ?? 'Gremium'}
     legislatureLabel={data.legislatureLabel}
     mainAppUrl={data.mainAppUrl}
     {navLinks}
@@ -101,7 +101,7 @@
 
   <!-- ── Footer ─────────────────────────────────────────────────────────── -->
   <PortalFooter
-    institutionName={data.institutionName ?? 'Studierendenrat'}
+    institutionName={data.institutionName ?? 'Gremium'}
     apexHref={data.apexUrl}
     apexLabel={data.apexColophon}
     sourceUrl={data.sourceUrl}

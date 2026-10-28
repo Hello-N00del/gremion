@@ -222,13 +222,12 @@ on every realm it composes
 HTTPS listener (`KC_HTTPS_*` + cert) is unchanged and still lives in
 `docker-compose.prod.yml`.
 
-> **Named residual.** The dev escape hatch went with it: a realm created by
-> tenant-create requires HTTPS on every request, while `scripts/dev-configure.sh`
-> still writes `http://localhost:${KC_PORT}/auth/realms/${KEYCLOAK_REALM}`
-> issuers. Local browser login over plain HTTP therefore needs either a
-> per-developer CA trust or a per-realm `sslRequired` delta
-> (`kcadm.sh update realms/<realm> -s sslRequired=external`) until the
-> tenant-create entrypoint offers a dev mode. Recorded in `KNOWN_ISSUES.md`.
+> **Closed (decision 2026-10-28).** There is no dev-only switch: dev realms are
+> created on the server through the regular tooling and served over HTTPS behind
+> Traefik, so `all` is correct. A plain-HTTP localhost realm (the
+> `scripts/dev-configure.sh` flow) needs a per-session
+> `kcadm.sh update realms/<realm> -s sslRequired=external`, which `reconcile`
+> reverts. Recorded in `KNOWN_ISSUES.md`.
 
 ### OIDC client secrets
 
@@ -322,11 +321,11 @@ takes Impressum/contact metadata for TMG §5 compliance:
 
 | Variable | Default | Notes |
 |----------|---------|-------|
-| `PUBLIC_CONTACT_NAME` | `Studierendenrat` | Responsible body name |
+| `PUBLIC_CONTACT_NAME` | (empty; portal shows "Gremium") | Responsible body name |
 | `PUBLIC_CONTACT_ADDRESS` | (empty) | Postal address |
 | `PUBLIC_CONTACT_EMAIL` | (empty) | Contact email |
 | `PUBLIC_CONTACT_PHONE` | (empty) | Contact phone |
-| `PUBLIC_IMPRINT_RESPONSIBLE` | `Vorsitz des StuRa` | Person/role responsible for content |
+| `PUBLIC_IMPRINT_RESPONSIBLE` | (empty) | Person/role responsible for content |
 | `PUBLIC_LEGISLATURE_LABEL` | (empty) | Optional legislature/term label |
 
 The compose file also derives `PUBLIC_MAIN_APP_URL=https://${DOMAIN}` and
@@ -350,6 +349,30 @@ from the environment.
 | Variable | Default | Notes |
 |----------|---------|-------|
 | `EMAIL_HOST_PASSWORD` | (empty) | SMTP relay password for the app shell's mailer (set on the prod host; never in the template) |
+
+### Platform mail transport (Keycloak realms)
+
+Realm mail (login, password reset, verify-email) is separate from the app
+mailer above. `buildTenantRealmDoc` reads these keys at tenant-create time from
+the host's `mail.env` (template `infra/host/templates/env/mail.env.tmpl`), via
+`mailTransportFromEnv` in
+`gremion-ui/src/lib/server/tenant/provisioner/realm-doc.ts`. Realm creation
+**fails closed**: a realm that opens email login or password reset without a
+working sender is refused (`assertSmtpConfiguredForEmailLogin`).
+
+| Variable | Default | Notes |
+|----------|---------|-------|
+| `MAIL_TRANSPORT` | (none) | `relay` or `stalwart`. No default; unset or unknown throws |
+| `PLATFORM_DOMAIN` | (none) | Sender domain for `stalwart`; the `relay` From domain when `RELAY_FROM_DOMAIN` is empty |
+| `RELAY_SMTP_HOST` | (none) | `relay` only. Required |
+| `RELAY_SMTP_PORT` | `587` | `relay` only. 465 = implicit TLS, any other port negotiates STARTTLS |
+| `RELAY_SMTP_USER` | (empty) | `relay` only. Empty = IP-allow-listed relay, no authentication |
+| `RELAY_SMTP_PASSWORD_REF` | (none) | Required when `RELAY_SMTP_USER` is set. A secret **reference**, never the password: `secret:<name>` (`<root>/etc/secrets/<name>`, mode 0600) or `file:<absolute path>` |
+| `RELAY_FROM_DOMAIN` | `PLATFORM_DOMAIN` | `relay` only. The From domain the relay DKIM-signs |
+
+An inline `RELAY_SMTP_PASSWORD` is **ignored**; the password is only ever read
+through its `_REF`. See
+[runbooks/email-smtp.md](runbooks/email-smtp.md#platform-mail-transport-relay-or-bundled-stalwart).
 
 ---
 

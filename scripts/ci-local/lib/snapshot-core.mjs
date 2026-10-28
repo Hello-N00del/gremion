@@ -251,9 +251,38 @@ export function unknownOnlyRows(onlyIds, manifest) {
     }))
 }
 
+export const NO_VERTICAL_REASON = 'skipped: no --vertical'
+
+/**
+ * SKIPPED rows for every (--only filtered) vertical suite, for a kernel-only
+ * run. SKIPPED is neither PASS nor FAIL: overallExit ignores it, but every
+ * output format shows it, so a skipped suite is never mistaken for a pass.
+ */
+export function skippedVerticalRows(manifest, onlyIds) {
+  const suites = manifest.vertical ?? []
+  const wanted = onlyIds && onlyIds.length > 0 ? new Set(onlyIds) : null
+  return suites
+    .filter((s) => !wanted || wanted.has(s.id))
+    .map((s) => ({
+      id: s.id,
+      repo: 'vertical',
+      category: s.category,
+      command: s.command ?? null,
+      cwd: s.cwd ?? null,
+      matchedFiles: [],
+      collected: 0,
+      passed: 0,
+      failed: 0,
+      skipped: 0,
+      status: 'SKIPPED',
+      exitCode: null,
+      reason: NO_VERTICAL_REASON,
+    }))
+}
+
 /** `<YYYY-MM-DD>-<ksha7>-<ssha7>` — the snapshot's base filename, no extension. */
-export function snapshotBaseName(date, kernelShortSha, sturaosShortSha) {
-  return `${date}-${kernelShortSha}-${sturaosShortSha}`
+export function snapshotBaseName(date, kernelShortSha, verticalShortSha) {
+  return `${date}-${kernelShortSha}-${verticalShortSha}`
 }
 
 /** Render the snapshot JSON body as the companion markdown table. */
@@ -262,7 +291,7 @@ export function renderMarkdown(snapshot) {
   lines.push(`# ci-local snapshot — ${snapshot.date}`)
   lines.push('')
   lines.push(`- kernel: \`${snapshot.kernel.branch}\` @ \`${snapshot.kernel.sha}\``)
-  lines.push(`- vertical: \`${snapshot.vertical.branch}\` @ \`${snapshot.vertical.sha}\``)
+  lines.push(snapshot.vertical ? `- vertical: \`${snapshot.vertical.branch}\` @ \`${snapshot.vertical.sha}\`` : `- vertical: ${NO_VERTICAL_REASON} (kernel-only run; vertical suites below are SKIPPED, not passed)`)
   lines.push(`- os: ${snapshot.os}`)
   lines.push(`- started: ${snapshot.startedAt}`)
   lines.push(`- finished: ${snapshot.finishedAt}`)

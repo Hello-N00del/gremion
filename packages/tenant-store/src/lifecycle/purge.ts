@@ -35,6 +35,9 @@ import { execFormatted } from './ddl.js'
 import { kernelRoles } from './kernel.js'
 import type { ModuleServer } from './types.js'
 
+/** The schedule of the platform purge_run definition (02:30 UTC daily); gremion-purge.timer fires the same moment. */
+export const PURGE_CRON = '30 2 * * *'
+
 export interface PurgeRule {
   /** `<catalogue row>/<table>`: the key of this category in the job_run detail. */
   readonly id: string
@@ -236,6 +239,12 @@ export async function runPurge(deps: PurgeDeps): Promise<PurgeResult> {
   const lock = ADVISORY_LOCKS.purgeRun
   let held = false
   try {
+    // the definition is upserted here, not seeded by a migration (the expand lint refuses an
+    // INSERT into an existing table); ON CONFLICT DO NOTHING keeps a disabled definition disabled
+    await conn`
+      INSERT INTO plt.scheduled_job (scope, job_kind, cron_expression, created_by_kind, updated_by_kind)
+      VALUES ('platform', 'purge_run', ${PURGE_CRON}, 'system', 'system')
+      ON CONFLICT DO NOTHING`
     const [job] = await conn<{ id: string }[]>`
       SELECT scheduled_job_id::text AS id FROM plt.scheduled_job
        WHERE job_kind = 'purge_run' AND customer_id IS NULL AND enabled`

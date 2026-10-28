@@ -17,7 +17,8 @@ import type { RequestHandler } from './$types'
  * P2.3 (#202): the seed runs in the REQUEST-scoped tenant context (resolved
  * from x-forwarded-host), so it feeds the CURRENT tenant ITS OWN blueprint —
  * resolved from the registry row's `blueprint_ref` — NOT a hardcoded StuRa one.
- * The default tenant carries `STURA_BLUEPRINT@1`, so it still seeds StuRa.
+ * An existing tenant carrying `STURA_BLUEPRINT@1` still seeds StuRa -- the registry serves it
+ * from verticals/stura data; the kernel default ref is the neutral `KERNEL_BLUEPRINT@1`.
  */
 export const POST: RequestHandler = async (event) => {
   const { request } = event

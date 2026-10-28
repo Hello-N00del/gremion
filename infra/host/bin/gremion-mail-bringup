@@ -457,13 +457,13 @@ upload-file = "${TMPDIR_BRINGUP}/probe.eml"
 EOF
     curl -sS -K "$TMPDIR_BRINGUP/probe.curl" >/dev/null || return 1
     while [ "$tries" -lt 15 ]; do
-        uid="$(curl -sS --url "imaps://${MAIL_HOSTNAME}:993/INBOX" \
-                 --user "roles@${PLATFORM_DOMAIN}:${ROLES_IMAP_PASSWORD}" \
+        uid="$(printf 'user = "roles@%s:%s"\n' "$PLATFORM_DOMAIN" "$ROLES_IMAP_PASSWORD" \
+               | curl -sS -K - --url "imaps://${MAIL_HOSTNAME}:993/INBOX" \
                  -X "SEARCH HEADER Message-ID \"<${id}>\"" 2>/dev/null \
                | awk '/SEARCH/ { print $NF }' | tail -n1)"
         if [ -n "${uid:-}" ] && [ "$uid" != "SEARCH" ]; then
-            msg="$(curl -sS --url "imaps://${MAIL_HOSTNAME}:993/INBOX;UID=${uid}" \
-                     --user "roles@${PLATFORM_DOMAIN}:${ROLES_IMAP_PASSWORD}" 2>/dev/null)"
+            msg="$(printf 'user = "roles@%s:%s"\n' "$PLATFORM_DOMAIN" "$ROLES_IMAP_PASSWORD" \
+                   | curl -sS -K - --url "imaps://${MAIL_HOSTNAME}:993/INBOX;UID=${uid}" 2>/dev/null)"
             [ -n "$msg" ] || return 1
             printf '%s' "$msg"
             return 0

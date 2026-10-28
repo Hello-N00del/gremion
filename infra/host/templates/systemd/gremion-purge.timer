@@ -2,8 +2,8 @@
 Description=Run the Gremion scheduled purge daily (TRD-144, TRD-145)
 
 [Timer]
-# 02:30 UTC: the same moment as the seeded plt.scheduled_job cron '30 2 * * *'
-# (platform migration 0012). One schedule, stated once; `daily` would fire at
+# 02:30 UTC: the same moment as PURGE_CRON '30 2 * * *' (purge.ts, upserted as the plt.scheduled_job definition)
+# (purge.ts). One schedule, stated once; `daily` would fire at
 # 00:00 in the host's local time and disagree with it.
 OnCalendar=*-*-* 02:30:00 UTC
 # A host that was down at 02:30 purges on the next boot; every rule is "older

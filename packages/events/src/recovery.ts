@@ -121,7 +121,7 @@ async function fetchStored(jsm: Streams, stream: string, seq: number): Promise<S
       if (code === JetStreamApiCodes.NoMessageFound || code === JetStreamApiCodes.StreamNotFound) return null
     }
     const e = err as { name?: unknown; message?: unknown }
-    throw new RecoveryError(`[events] could not read ${stream}#${seq}: ${String(e?.name ?? 'Error')}: ${String(e?.message ?? err)} (this is not "gone": fix the cause and retry)`, { cause: err })
+    throw new RecoveryError(`[events] could not read ${stream}#${seq}: ${typeof e?.name === 'string' ? e.name : 'Error'}: ${typeof e?.message === 'string' ? e.message : String(err)} (this is not "gone": fix the cause and retry)`, { cause: err })
   }
 }
 

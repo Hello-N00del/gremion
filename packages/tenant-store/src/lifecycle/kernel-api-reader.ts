@@ -121,7 +121,7 @@ export async function ensureKernelApiReader(d: KernelApiReaderDeps): Promise<{ c
       SELECT count(*)::int AS n FROM pg_auth_members m
         JOIN pg_roles r ON r.oid IN (m.member, m.roleid) WHERE r.rolname = ${d.role}`
     if ((links?.n ?? 0) > 0) throw new KernelApiReaderError('PRECONDITION', `role ${d.role} already exists and is a member of, or has members in, another role: it is not a kernel API reader; refusing to alter it (check KERNEL_API_DB_USER)`)
-    for (const db of [...new Set([d.controlDatabase, PLATFORM_DATABASE])]) {
+    for (const db of new Set([d.controlDatabase, PLATFORM_DATABASE])) {
       const sql = d.openAdminOn(db)
       try {
         const [o] = await sql<{ n: number }[]>`

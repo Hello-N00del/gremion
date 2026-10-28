@@ -255,17 +255,17 @@ test('main(): happy path writes <date>-<ksha7>-<ssha7>.json and .md, names both 
     assert.equal(code, 1) // the fixture's integration/e2e suites FAIL "no stack" by design
 
     const kernelSha = execFileSync('git', ['-C', kernel, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim().slice(0, 7)
-    const sturaosSha = execFileSync('git', ['-C', vertical, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim().slice(0, 7)
+    const verticalSha = execFileSync('git', ['-C', vertical, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim().slice(0, 7)
     const files = readdirSync(outDir)
     const jsonFile = files.find((f) => f.endsWith('.json'))
     const mdFile = files.find((f) => f.endsWith('.md'))
     assert.ok(jsonFile, 'expected a .json snapshot file')
     assert.ok(mdFile, 'expected a .md snapshot file')
-    assert.match(jsonFile, new RegExp(`^\\d{4}-\\d{2}-\\d{2}-${kernelSha}-${sturaosSha}\\.json$`))
+    assert.match(jsonFile, new RegExp(`^\\d{4}-\\d{2}-\\d{2}-${kernelSha}-${verticalSha}\\.json$`))
 
     const snapshot = JSON.parse(readFileSync(join(outDir, jsonFile), 'utf8'))
     assert.equal(snapshot.kernel.shortSha, kernelSha)
-    assert.equal(snapshot.vertical.shortSha, sturaosSha)
+    assert.equal(snapshot.vertical.shortSha, verticalSha)
     assert.equal(snapshot.kernel.branch, 'main')
     assert.equal(snapshot.suites.length, 10) // 5 categories x 2 repos, no orphans in this fixture
     assert.equal(snapshot.overallExit, 1)
@@ -366,4 +366,151 @@ test('TASK-012-FU review finding 3: every real kernel test file on this tree is 
   const discovered = discoverTestFiles(REPO_ROOT)
   const unclaimed = findUnclaimed(discovered, manifest.kernel)
   assert.deepEqual(unclaimed, [], `unclaimed kernel test file(s) — add or extend a suites.json entry to claim them:\n${unclaimed.join('\n')}`)
+})
+
+// ---------------------------------------------------------------------------
+// Kernel-only checkout: --vertical is optional.
+// ---------------------------------------------------------------------------
+
+/** Runs main() capturing console.log/error lines and the exit code. */
+function runMain(argv) {
+  const out = []
+  const origLog = console.log
+  const origErr = console.error
+  console.log = (...a) => out.push(a.join(' '))
+  console.error = (...a) => out.push(a.join(' '))
+  let code
+  try {
+    code = withCleanExitCode(() => main(argv))
+  } finally {
+    console.log = origLog
+    console.error = origErr
+  }
+  return { code, out: out.join('\n') }
+}
+
+function readSnapshot(outDir) {
+  const json = readdirSync(outDir).find((f) => f.endsWith('.json'))
+  return JSON.parse(readFileSync(join(outDir, json), 'utf8'))
+}
+
+test('main(): no --vertical -> kernel suites run, every vertical suite is reported SKIPPED (visible, never PASS), exit 0', () => {
+  const kernel = makeFixtureRepo()
+  const manifestDir = mkdtempSync(join(tmpdir(), 'ci-local-manifest-'))
+  const outDir = mkdtempSync(join(tmpdir(), 'ci-local-out-'))
+  try {
+    const manifestPath = writeFixtureManifest(manifestDir)
+    const { code, out } = runMain([
+      '--kernel', kernel, '--out', outDir, '--manifest', manifestPath,
+      '--only', 'kernel-unit,kernel-shell,kernel-guard,vertical-unit,vertical-e2e',
+    ])
+    assert.equal(code, 0, out)
+    const snap = readSnapshot(outDir)
+    const byId = Object.fromEntries(snap.suites.map((r) => [r.id, r]))
+    assert.equal(byId['kernel-unit'].status, 'PASS')
+    for (const id of ['vertical-unit', 'vertical-e2e']) {
+      assert.equal(byId[id].status, 'SKIPPED')
+      assert.equal(byId[id].repo, 'vertical')
+      assert.match(byId[id].reason, /skipped: no --vertical/)
+    }
+    assert.equal(snap.suites.filter((r) => r.status === 'PASS').length, 3, 'skipped rows must not count as passed')
+    assert.equal(snap.vertical, null)
+    assert.match(out, /skipped: no --vertical/)
+    assert.match(readFileSync(join(outDir, readdirSync(outDir).find((f) => f.endsWith('.md'))), 'utf8'), /SKIPPED/)
+  } finally {
+    rmSync(kernel, { recursive: true, force: true })
+    rmSync(manifestDir, { recursive: true, force: true })
+    rmSync(outDir, { recursive: true, force: true })
+  }
+})
+
+test('main(): no --vertical still exits 1 when a kernel suite fails', () => {
+  const kernel = makeFixtureRepo("import test from 'node:test'\ntest('bad', () => { throw new Error('x') })\n")
+  const manifestDir = mkdtempSync(join(tmpdir(), 'ci-local-manifest-'))
+  const outDir = mkdtempSync(join(tmpdir(), 'ci-local-out-'))
+  try {
+    const manifestPath = writeFixtureManifest(manifestDir)
+    const { code } = runMain(['--kernel', kernel, '--out', outDir, '--manifest', manifestPath, '--only', 'kernel-unit'])
+    assert.equal(code, 1)
+  } finally {
+    rmSync(kernel, { recursive: true, force: true })
+    rmSync(manifestDir, { recursive: true, force: true })
+    rmSync(outDir, { recursive: true, force: true })
+  }
+})
+
+test('main(): --vertical given -> vertical suites are evaluated and included (not skipped)', () => {
+  const kernel = makeFixtureRepo()
+  const vertical = makeFixtureRepo()
+  const manifestDir = mkdtempSync(join(tmpdir(), 'ci-local-manifest-'))
+  const outDir = mkdtempSync(join(tmpdir(), 'ci-local-out-'))
+  try {
+    const manifestPath = writeFixtureManifest(manifestDir)
+    const { code } = runMain([
+      '--kernel', kernel, '--vertical', vertical, '--out', outDir, '--manifest', manifestPath,
+      '--only', 'kernel-unit,vertical-unit',
+    ])
+    assert.equal(code, 0)
+    const snap = readSnapshot(outDir)
+    const byId = Object.fromEntries(snap.suites.map((r) => [r.id, r]))
+    assert.equal(byId['vertical-unit'].status, 'PASS')
+    assert.ok(snap.vertical.sha)
+  } finally {
+    rmSync(kernel, { recursive: true, force: true })
+    rmSync(vertical, { recursive: true, force: true })
+    rmSync(manifestDir, { recursive: true, force: true })
+    rmSync(outDir, { recursive: true, force: true })
+  }
+})
+
+test('main(): a --vertical path that does not exist is a loud error, not a silent skip', () => {
+  const kernel = makeFixtureRepo()
+  const manifestDir = mkdtempSync(join(tmpdir(), 'ci-local-manifest-'))
+  const outDir = mkdtempSync(join(tmpdir(), 'ci-local-out-'))
+  try {
+    const manifestPath = writeFixtureManifest(manifestDir)
+    const { code, out } = runMain([
+      '--kernel', kernel, '--vertical', '/nonexistent/vertical-checkout', '--out', outDir, '--manifest', manifestPath,
+    ])
+    assert.equal(code, 1)
+    assert.match(out, /--vertical path '\/nonexistent\/vertical-checkout' does not exist/)
+    assert.deepEqual(readdirSync(outDir), [])
+  } finally {
+    rmSync(kernel, { recursive: true, force: true })
+    rmSync(manifestDir, { recursive: true, force: true })
+    rmSync(outDir, { recursive: true, force: true })
+  }
+})
+
+test('main(): --list is a dry run — prints the plan (kernel suites + skipped vertical suites), runs nothing, needs no --out', () => {
+  const kernel = makeFixtureRepo()
+  const manifestDir = mkdtempSync(join(tmpdir(), 'ci-local-manifest-'))
+  try {
+    const manifestPath = writeFixtureManifest(manifestDir)
+    const { code, out } = runMain(['--kernel', kernel, '--list', '--manifest', manifestPath])
+    assert.equal(code, 0)
+    assert.match(out, /WOULD RUN .*kernel-unit/)
+    assert.match(out, /SKIPPED .*vertical-unit.*skipped: no --vertical/)
+    assert.doesNotMatch(out, /WOULD RUN .*vertical-unit/)
+  } finally {
+    rmSync(kernel, { recursive: true, force: true })
+    rmSync(manifestDir, { recursive: true, force: true })
+  }
+})
+
+test('main(): --list with --vertical lists vertical suites as WOULD RUN', () => {
+  const kernel = makeFixtureRepo()
+  const vertical = makeFixtureRepo()
+  const manifestDir = mkdtempSync(join(tmpdir(), 'ci-local-manifest-'))
+  try {
+    const manifestPath = writeFixtureManifest(manifestDir)
+    const { code, out } = runMain(['--kernel', kernel, '--vertical', vertical, '--list', '--manifest', manifestPath])
+    assert.equal(code, 0)
+    assert.match(out, /WOULD RUN .*vertical-unit/)
+    assert.doesNotMatch(out, /skipped: no --vertical/)
+  } finally {
+    rmSync(kernel, { recursive: true, force: true })
+    rmSync(vertical, { recursive: true, force: true })
+    rmSync(manifestDir, { recursive: true, force: true })
+  }
 })

@@ -178,7 +178,7 @@ describe('tenantResolveHandle — no exemption outside the list (static)', () =>
       .split('\n')
       .map((l) => l.trim())
       .find((l) => l && !l.startsWith('//'))
-    expect(firstStatement).toBe('if (isResolveExemptRequest(event.url.pathname, event.request.headers)) return resolve(event)')
+    expect(firstStatement).toBe('if (isResolveExemptRequest(requestPath(event), event.request.headers)) return resolve(event)')
   })
 
   it('hands the request on in exactly two places: the exemption and runWithTenant', () => {
@@ -187,7 +187,7 @@ describe('tenantResolveHandle — no exemption outside the list (static)', () =>
       return body.split('\n')[line].trim()
     })
     expect(calls).toEqual([
-      'if (isResolveExemptRequest(event.url.pathname, event.request.headers)) return resolve(event)',
+      'if (isResolveExemptRequest(requestPath(event), event.request.headers)) return resolve(event)',
       'return runWithTenant(ctx, () => resolve(event))',
     ])
   })

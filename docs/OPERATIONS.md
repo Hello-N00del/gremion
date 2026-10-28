@@ -115,7 +115,7 @@ RESTIC_CHECK_SUBSET=5% ./scripts/backup.sh
 **Optional** (defaults in parentheses):
 `BACKUP_DIR` (`./backups`), `RESTIC_REPOSITORY` (`$BACKUP_DIR/repo`),
 `BACKUP_LOCAL_RETENTION_DAYS` (`30`), `RCLONE_REMOTE` (`backup`),
-`RCLONE_BUCKET`, `RCLONE_REMOTE_PATH` (`stura-restic`),
+`RCLONE_BUCKET`, `RCLONE_REMOTE_PATH` (`gremion-restic`), `BACKUP_TAG` (`gremion`),
 `RESTIC_CHECK_SUBSET` (`10%`). The remote (Phase 4) is **skipped** when
 `RCLONE_BUCKET` is unset, so a local-only repo works out of the box. rclone
 credentials follow rclone's `RCLONE_CONFIG_<REMOTE>_<KEY>` convention
