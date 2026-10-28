@@ -86,6 +86,12 @@ export interface ExportModule {
   platformServer?: { postgresService: string; databases: readonly string[] } | null
   /** Whether the module is enabled for this tenant (it has a database for it). */
   enabled: boolean
+  /**
+   * plt.module_database.state when it is 'enabling' or 'disabling': the module's database may exist
+   * and hold rows, so it is neither exported nor honestly "not enabled". A module that declares an
+   * export and is in such a state fails the whole export (assertNoTransitionalModules).
+   */
+  transitional?: string
   /** Connection to the tenant's module database; required when runtimeExport and enabled. */
   sql?: Sql
 }
@@ -339,6 +345,16 @@ async function exportDatabase(
   }) as Promise<ManifestFile[]>
 }
 
+/** MED: a module with an export whose database is mid-enable or mid-disable would be missing from the files under a false reason; refuse, naming it. */
+export function assertNoTransitionalModules(modules: readonly Pick<ExportModule, 'id' | 'runtimeExport' | 'transitional'>[]): void {
+  const stuck = modules.filter((m) => m.runtimeExport && m.transitional)
+  if (stuck.length > 0) {
+    throw new ExportError(
+      `cannot export while a module's database is changing state: ${stuck.map((m) => `${m.id} (${m.transitional})`).join(', ')}; finish or recover that module's enable/disable first (its rows would be missing from the export)`,
+    )
+  }
+}
+
 export async function exportTenant(opts: ExportOptions): Promise<ExportResult> {
   if (!SLUG.test(opts.slug)) throw new ExportError(`not a tenant slug: ${JSON.stringify(opts.slug)}`)
   const ids = new Set<string>()
@@ -346,6 +362,7 @@ export async function exportTenant(opts: ExportOptions): Promise<ExportResult> {
     if (!IDENT.test(m.id) || m.id === 'kernel' || ids.has(m.id)) throw new ExportError(`module id ${JSON.stringify(m.id)} is invalid or duplicated`)
     ids.add(m.id)
   }
+  assertNoTransitionalModules(opts.modules)
   ensureEmptyPrivateDir(opts.outDir)
 
   const files: ManifestFile[] = []

@@ -22,7 +22,7 @@
 // pg_read_all_data and a fresh password, ensureExportReader). Every tenant
 // database is then read AS that reader, never as the superuser, and its
 // password is cleared again when the run ends.
-import { connectExportReader, ensureExportReader, exportTenant, retireExportReader, verifyExport, type ExportModule } from '@gremion/tenant-store/export'
+import { assertNoTransitionalModules, connectExportReader, ensureExportReader, exportTenant, retireExportReader, verifyExport, type ExportModule } from '@gremion/tenant-store/export'
 import { kernelDbName } from '@gremion/tenant-store/lifecycle'
 import { tenantModuleDbName } from '@gremion/tenant-store'
 import type { LifecycleModule } from '@gremion/tenant-store/lifecycle'
@@ -109,23 +109,27 @@ export async function exportVerb(verb: string, ctx: ExportVerbContext): Promise<
     }
   }
   try {
-    const enabled = new Set(
+    // Every module database row but the dropped ones: 'enabling' / 'disabling' may still hold rows (MED).
+    const states = new Map(
       (
-        await platform<{ module_key: string }[]>`
-          SELECT m.module_key FROM plt.module_database d JOIN plt.module m USING (module_id)
-           WHERE d.customer_id = ${tenantId} AND d.state = 'enabled'`
-      ).map((r) => r.module_key),
+        await platform<{ module_key: string; state: string }[]>`
+          SELECT m.module_key, d.state FROM plt.module_database d JOIN plt.module m USING (module_id)
+           WHERE d.customer_id = ${tenantId} AND d.state <> 'dropped'`
+      ).map((r) => [r.module_key, r.state] as const),
     )
     const modules: ExportModule[] = ctx.catalogue().map((m) => {
       const rt = m.moduleJson.runtime
-      const isEnabled = enabled.has(m.id)
+      const state = states.get(m.id)
+      const isEnabled = state === 'enabled'
       const base: ExportModule = { id: m.id, runtimeExport: rt.export ?? null, platformServer: rt.platformServer ?? null, enabled: isEnabled }
+      if (state === 'enabling' || state === 'disabling') base.transitional = state
       if (rt.export && isEnabled && rt.database) {
         const svc = rt.database.postgresService.replace(/-postgres$/, '')
         plan.push({ adminUrl: ctx.moduleUrl(svc), db: tenantModuleDbName(tenantId, m.id), assign: (s) => (base.sql = s) })
       }
       return base
     })
+    assertNoTransitionalModules(modules)
     let kernel: (ExportModule['sql'] & object) | undefined
     plan.push({ adminUrl: ctx.kernelUrl(), db: kernelDbName(tenantId), assign: (s) => (kernel = s) })
     await openReaders()

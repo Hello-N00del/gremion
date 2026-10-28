@@ -57,6 +57,27 @@ describe('export verbs', () => {
     expect(src.split('postgres(').length - 1).toBe(1)
   })
 
+  it('MED: a module database still enabling or disabling fails the export naming the module, before any reader is opened', async () => {
+    for (const state of ['enabling', 'disabling']) {
+      const base = ctx(['acme'], { '--out': '/x' })
+      const rows = [{ module_key: 'finance', state }]
+      const c: ExportVerbContext = {
+        ...base,
+        customerIdForSlug: async () => '11111111-1111-1111-1111-111111111111',
+        openPlatform: () => Object.assign(async () => rows, { end: async () => undefined }) as never,
+        catalogue: () =>
+          [{ id: 'finance', moduleJson: { runtime: { export: { kind: 'pg_dump', retentionProfile: 'rp-fin-module-data' }, database: { postgresService: 'finance-postgres' } } } }] as never,
+        kernelUrl: () => {
+          throw new Error('a connection was attempted')
+        },
+        moduleUrl: () => {
+          throw new Error('a connection was attempted')
+        },
+      }
+      await expect(exportVerb('export', c)).rejects.toThrow(new RegExp(`finance.*${state}`))
+    }
+  })
+
   it('export refuses a missing or malformed slug and a missing --out, before any connection', async () => {
     await expect(exportVerb('export', ctx([undefined], { '--out': '/x' }))).rejects.toThrow(/USAGE export requires a valid <slug>/)
     await expect(exportVerb('export', ctx(['Bad Slug'], { '--out': '/x' }))).rejects.toThrow(/USAGE/)

@@ -1,4 +1,4 @@
-export { ALWAYS_EXCLUDED_SYSTEMS, ExportError, exportTenant, KERNEL_EXCLUDED_TABLES, KERNEL_EXPORT_TABLES } from './export.js'
+export { ALWAYS_EXCLUDED_SYSTEMS, assertNoTransitionalModules, ExportError, exportTenant, KERNEL_EXCLUDED_TABLES, KERNEL_EXPORT_TABLES } from './export.js'
 export type { ExportModule, ExportOptions, ExportResult } from './export.js'
 export { assertNotSuperuserCapable, connectExportReader, ensureExportReader, EXPORT_READER_ROLE, ExportReaderError, retireExportReader } from './reader.js'
 export type { ExportReaderCredentials } from './reader.js'
