@@ -3,6 +3,7 @@ import type { RequestEvent, RequestHandler } from '@sveltejs/kit'
 import { z } from 'zod'
 import { getMessagesBackend, type MatrixClientPort } from '$lib/server/messages/backend'
 import type { SessionUser } from '$lib/auth'
+import { mediaUrl } from '$lib/server/messages/media-url'
 
 function requireAuth(event: RequestEvent): SessionUser {
   const user = event.locals.user as SessionUser | undefined
@@ -43,7 +44,7 @@ export const GET: RequestHandler = async (event) => {
   // Rewrite any mxc:// URLs to the proxy endpoint
   const rewritten = messages.map((m) => {
     if (m.url?.startsWith('mxc://')) {
-      return { ...m, url: `/api/messages/rooms/${encodeURIComponent(roomId)}/media?mxc=${encodeURIComponent(m.url)}` }
+      return { ...m, url: mediaUrl(roomId, m.url) }
     }
     return m
   })
