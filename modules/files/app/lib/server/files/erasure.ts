@@ -33,7 +33,12 @@ export function createFilesErasureHook(deps: FilesErasureDeps): ModuleErasureHoo
   return {
     moduleId: 'files',
     requiresConnection: false,
-    async erase({ subjectId }) {
+    async erase({ subjectId, subject }) {
+      // R33f HIGH: the Nextcloud behind this hook serves EVERY tenant and its account ids are
+      // the Keycloak ids of every realm. Act only on an id the orchestrator verified for this tenant.
+      if (!subject || subject.id !== subjectId) {
+        return { status: 'skipped', reason: 'the subject was not verified as a user of this tenant; the shared Nextcloud was not called' }
+      }
       if (deps.adminConfigured && !deps.adminConfigured()) {
         return {
           status: 'skipped',

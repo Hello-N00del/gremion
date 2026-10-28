@@ -4,10 +4,14 @@ import { hasRole, Role } from '$lib/auth'
 import type { SessionUser } from '$lib/auth/types'
 import { writeAuditEntry } from '$lib/server/audit-db'
 import { readErasureReports, startErasure } from '$lib/server/erasure/service'
+import { ErasureSubjectUnknownError } from '$lib/server/erasure/subject'
 import { evaluateStepUp } from '$lib/auth/step-up'
 import { ERASURE_REQUIRED_LOA, erasureStepUpFreshnessSeconds } from '$lib/server/erasure/step-up'
 
 const CONFIRM_PHRASE = 'LÖSCHEN'
+// A Keycloak user id. The Nextcloud account id is the same string (user_oidc --unique-uid=0),
+// so nothing else may reach an erasure; the tenant binding itself is subject.ts.
+const KEYCLOAK_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 // TRD-196 / PRD-OPS-005: start a data-subject erasure and list the per-module
 // reports. IT-admin only, plus a server-side confirmation phrase, plus (MED-4) a
@@ -47,7 +51,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
     return json({ success: false, error: `Bitte "${CONFIRM_PHRASE}" eingeben.` }, { status: 422 })
   }
   const subjectId = typeof rawSubject === 'string' ? rawSubject.trim() : ''
-  if (subjectId === '' || subjectId.length > 255) {
+  if (!KEYCLOAK_ID.test(subjectId)) {
     return json({ success: false, error: 'subjectId fehlt oder ist ungültig.' }, { status: 422 })
   }
 
@@ -66,6 +70,9 @@ export const POST: RequestHandler = async ({ request, locals }) => {
     }
     return json({ success: true, data: report })
   } catch (err) {
+    if (err instanceof ErasureSubjectUnknownError) {
+      return json({ success: false, error: 'Person ist in diesem Mandanten unbekannt.' }, { status: 404 })
+    }
     console.error('[settings/erasure] failed:', err instanceof Error ? err.message : err)
     return json({ success: false, error: 'Löschung fehlgeschlagen.' }, { status: 500 })
   }

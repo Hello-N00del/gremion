@@ -10,6 +10,7 @@ import type { KernelErasureHook } from '$lib/server/modules/runtime-registry'
 import { kernelErasureHook } from './kernel-hook'
 import { createIdentityErasureHook } from './identity-hook'
 import { runErasure, subjectRef, type ErasureDeps } from './orchestrator'
+import { tenantHoldsSubjectData } from './service'
 import { createPgReportStore, getErasureReport, listErasureReports } from './report-store'
 
 process.env.AUTH_SECRET ??= 'integration-test-auth-secret'
@@ -243,6 +244,7 @@ describe('MED-3: what the kernel step deliberately leaves is reported per column
         enabledModuleIds: () => ['kernel'],
         hookFor: (id) => hooks.get(id),
         connectionFor: () => sql,
+        resolveSubject: async (id) => ({ id, username: null, email: null }),
         store: createPgReportStore(sql),
         now: () => new Date(),
       },
@@ -270,6 +272,7 @@ describe('full run: kernel + calendar, one module connection removed', () => {
       enabledModuleIds: () => ['kernel', 'calendar'],
       hookFor: (id) => hooks.get(id),
       connectionFor: (id) => (noConnection.includes(id) ? null : sql),
+      resolveSubject: async (id) => ({ id, username: null, email: null }),
       store: createPgReportStore(sql),
       now: () => new Date(),
     }
@@ -302,6 +305,36 @@ describe('full run: kernel + calendar, one module connection removed', () => {
     const rows = await getDb()`SELECT to_jsonb(r) AS j FROM erasure_report r UNION ALL SELECT to_jsonb(m) FROM erasure_report_module m`
     expect(JSON.stringify(rows)).not.toContain(SUBJECT)
     expect(report.id).toBeTruthy()
+  })
+})
+
+describe('R33f HIGH: tenantHoldsSubjectData binds an id to THIS tenant by its own data', () => {
+  it('false for an id the tenant has never seen (a user of another tenant)', async () => {
+    await seed()
+    expect(await tenantHoldsSubjectData(getDb(), TENANT_A, '0b5f0e9c-3a56-4f3a-9a7a-1d8f0a2b7caa')).toBe(false)
+  })
+
+  it('true while the tenant holds a membership / role of the id', async () => {
+    await seed()
+    expect(await tenantHoldsSubjectData(getDb(), TENANT_A, SUBJECT)).toBe(true)
+  })
+
+  it('still true after the erasure removed every live row (this tenant own report proves it), but not for another tenant id', async () => {
+    await seed()
+    const sql = getDb()
+    await runErasure({ tenantId: TENANT_A, subjectId: SUBJECT, requestedBy: 'admin' }, {
+      enabledModuleIds: () => ['kernel'],
+      hookFor: () => kernelErasureHook,
+      connectionFor: () => sql,
+      resolveSubject: async (id) => ({ id, username: null, email: null }),
+      store: createPgReportStore(sql),
+      now: () => new Date(),
+    })
+    await sql`DELETE FROM provisioning_member_ops`
+    expect(await sql`SELECT 1 FROM org_unit_members WHERE user_keycloak_id = ${SUBJECT}`).toHaveLength(0)
+    expect(await tenantHoldsSubjectData(sql, TENANT_A, SUBJECT)).toBe(true)
+    // the report's pseudonym is tenant-bound: the same id under another tenant id has no evidence
+    expect(await tenantHoldsSubjectData(sql, TENANT_B, SUBJECT)).toBe(false)
   })
 })
 

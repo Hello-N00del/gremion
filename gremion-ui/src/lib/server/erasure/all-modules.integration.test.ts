@@ -57,6 +57,7 @@ function deps(hooks: KernelErasureHook[]): ErasureDeps {
     enabledModuleIds: () => MODULES,
     hookFor: (id) => byId.get(id),
     connectionFor: () => sql,
+    resolveSubject: async (id) => ({ id, username: 'jdoe', email: 'anna@example.org' }),
     store: createPgReportStore(sql),
     now: () => new Date(),
   }

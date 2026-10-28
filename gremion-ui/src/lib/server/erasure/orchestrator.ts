@@ -18,10 +18,12 @@ import {
   type ErasureHookResult,
   type ErasureOverallStatus,
   type ErasureResidual,
+  type ErasureSubject,
   type ModuleErasureOutcome,
 } from '@gremion/ports/erasure'
 import type { KernelErasureHook } from '$lib/server/modules/runtime-registry'
 import { isTransientDbStartupError } from '$lib/server/db'
+import { ErasureSubjectUnknownError } from './subject'
 
 export interface ErasureReport {
   readonly id: string
@@ -62,6 +64,12 @@ export interface ErasureDeps {
   hookFor(moduleId: string): KernelErasureHook | undefined
   /** The module's database connection, or null when it has none. */
   connectionFor(moduleId: string): Sql | null
+  /**
+   * Binds the subject to the CURRENT tenant (subject.ts). Null = the tenant does not
+   * know this id: the run is refused before any hook, report or write. Must throw (not
+   * answer null) when the identity provider cannot be asked.
+   */
+  resolveSubject(subjectId: string): Promise<ErasureSubject | null>
   store: ErasureReportStore
   now(): Date
 }
@@ -165,11 +173,12 @@ export function redactIdentifiers(text: string, identifiers: readonly (string | 
   return out
 }
 
-const identifiersOf = (input: ErasureInput) => [input.subjectId]
+const identifiersOf = (subject: ErasureSubject) => [subject.id, subject.username, subject.email]
 
 async function eraseModule(
   moduleId: string,
   input: ErasureInput,
+  subject: ErasureSubject,
   deps: ErasureDeps,
 ): Promise<ModuleErasureOutcome> {
   const hook = deps.hookFor(moduleId)
@@ -177,12 +186,12 @@ async function eraseModule(
   const db = deps.connectionFor(moduleId)
   if (db === null && hook.requiresConnection !== false) return skipped(moduleId, 'no database connection')
   try {
-    const result = await hook.erase({ tenantId: input.tenantId, subjectId: input.subjectId, db })
+    const result = await hook.erase({ tenantId: input.tenantId, subjectId: input.subjectId, subject, db })
     return fromHookResult(moduleId, result)
   } catch (err) {
     // The operator log keeps the message (redacted); the append-only report only the class.
     const message = err instanceof Error ? err.message : String(err)
-    console.error(`[erasure] ${moduleId} hook failed:`, redactIdentifiers(message, identifiersOf(input)).slice(0, 500))
+    console.error(`[erasure] ${moduleId} hook failed:`, redactIdentifiers(message, identifiersOf(subject)).slice(0, 500))
     const reason = safeFailureReason(err)
     if (isTransientDbStartupError(err)) return skipped(moduleId, `module database unreachable: ${reason}`)
     return { moduleId, status: 'failed', counts: {}, reason, residuals: [] }
@@ -196,6 +205,12 @@ export async function runErasure(input: ErasureInput, deps: ErasureDeps): Promis
   if (typeof input.subjectId !== 'string' || input.subjectId.trim() === '') {
     throw new Error('erasure requires a non-empty subject id')
   }
+  // R33f HIGH: bind the subject to THIS tenant before anything else. The files and votes
+  // hooks delete in a Nextcloud that serves every tenant, so an id the tenant does not
+  // know must stop here, not reach a hook.
+  const resolved = await deps.resolveSubject(input.subjectId)
+  if (resolved === null || resolved.id !== input.subjectId) throw new ErasureSubjectUnknownError()
+  const subject: ErasureSubject = { id: resolved.id, username: resolved.username, email: resolved.email }
   const moduleIds = [...new Set(await deps.enabledModuleIds())]
   const ref = subjectRef(input.tenantId, input.subjectId)
   const startedAt = deps.now()
@@ -221,7 +236,7 @@ export async function runErasure(input: ErasureInput, deps: ErasureDeps): Promis
   let failure: unknown = null
   try {
     for (const moduleId of moduleIds) {
-      const outcome = await eraseModule(moduleId, input, deps)
+      const outcome = await eraseModule(moduleId, input, subject, deps)
       await deps.store.record(id, outcome)
       modules.push(outcome)
     }
@@ -248,7 +263,7 @@ export async function runErasure(input: ErasureInput, deps: ErasureDeps): Promis
     // finish it `incomplete` with the reason, and let the original error propagate.
     if (!finished) {
       try {
-        await deps.store.finish(id, 'incomplete', deps.now(), `run aborted: ${errText(failure, identifiersOf(input))}`)
+        await deps.store.finish(id, 'incomplete', deps.now(), `run aborted: ${errText(failure, identifiersOf(subject))}`)
       } catch (err) {
         console.error('[erasure] could not mark the aborted run incomplete:', errText(err))
       }

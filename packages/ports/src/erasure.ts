@@ -16,10 +16,26 @@
 // (audit_log, Beschluss register); those are answered by TRD-160's redaction
 // layer, not by this seam.
 
+/**
+ * The subject, VERIFIED against the tenant before any hook runs: the id is a user of
+ * the tenant's identity realm, or the tenant's own data holds records of it (an
+ * account already removed from the realm). A hook that reaches a system shared by
+ * every tenant (one Nextcloud serves them all) acts only on a verified id.
+ */
+export interface ErasureSubject {
+  readonly id: string
+  /** The Keycloak username (= Matrix localpart); null when the realm no longer holds the account. */
+  readonly username: string | null
+  /** The e-mail address ('' when the account has none); null when the realm no longer holds the account. */
+  readonly email: string | null
+}
+
 /** What a hook is asked to erase. `subjectId` is the identity-provider user id. */
 export interface ErasureContext<Db = unknown> {
   readonly tenantId: string
   readonly subjectId: string
+  /** The verified identity of `subjectId`; always set by the kernel orchestrator. */
+  readonly subject?: ErasureSubject
   /**
    * The module's database connection, or null when the module has none (or the
    * kernel cannot reach it). A hook with `requiresConnection` (the default) is

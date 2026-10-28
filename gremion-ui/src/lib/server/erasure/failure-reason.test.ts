@@ -50,7 +50,7 @@ function deps(hooks: KernelErasureHook[], s: ErasureReportStore): ErasureDeps {
     resolveSubject: async (id) => ({ id, username: USERNAME, email: EMAIL }),
     store: s,
     now: () => new Date('2026-10-28T10:00:00Z'),
-  } as ErasureDeps
+  }
 }
 
 const run = (hooks: KernelErasureHook[], outcomes: ModuleErasureOutcome[]) =>

@@ -9,6 +9,9 @@ import { KERNEL_MODULE_ID, kernelErasureHook } from './kernel-hook'
 import { IDENTITY_MODULE_ID, createIdentityErasureHook } from './identity-hook'
 import { runErasure, subjectRef, type ErasureDeps, type ErasureReport } from './orchestrator'
 import { createPgReportStore, getErasureReport, listErasureReports } from './report-store'
+import { createSubjectResolver } from './subject'
+import type { Sql } from '@gremion/db'
+import { getKeycloakAdminClientForCurrentTenant } from '$lib/server/keycloak-admin'
 
 /**
  * The ENABLED module ids of the current tenant, the kernel's own step first and
@@ -74,6 +77,24 @@ const identityErasureHook = createIdentityErasureHook({
   },
 })
 
+/**
+ * True when the TENANT's own database holds data of the id: a membership, a role
+ * (history), a caucus seat, a queued remove-op, or an earlier erasure report of this
+ * tenant. Used for a subject the realm no longer holds (subject.ts, case 2).
+ */
+export async function tenantHoldsSubjectData(sql: Sql, tenantId: string, subjectId: string): Promise<boolean> {
+  const [row] = await sql<{ found: boolean }[]>`
+    SELECT (
+      EXISTS (SELECT 1 FROM org_unit_members WHERE user_keycloak_id = ${subjectId})
+      OR EXISTS (SELECT 1 FROM role_assignments WHERE user_keycloak_id = ${subjectId})
+      OR EXISTS (SELECT 1 FROM role_assignment_history WHERE user_keycloak_id = ${subjectId})
+      OR EXISTS (SELECT 1 FROM caucus_membership WHERE user_keycloak_id = ${subjectId})
+      OR EXISTS (SELECT 1 FROM provisioning_member_ops WHERE user_keycloak_id = ${subjectId})
+      OR EXISTS (SELECT 1 FROM erasure_report WHERE tenant_id = ${tenantId} AND subject_ref = ${subjectRef(tenantId, subjectId)})
+    ) AS found`
+  return row.found
+}
+
 export function defaultErasureDeps(): ErasureDeps {
   return {
     enabledModuleIds: async () => erasureModuleIds(readConfig().modules, await appliedMigrations()),
@@ -88,6 +109,10 @@ export function defaultErasureDeps(): ErasureDeps {
         return null
       }
     },
+    resolveSubject: createSubjectResolver({
+      getUser: (id) => getKeycloakAdminClientForCurrentTenant().getUser(id),
+      hasTenantEvidence: (id) => tenantHoldsSubjectData(getDb(), currentTenantId(), id),
+    }),
     store: createPgReportStore(getDb()),
     now: () => new Date(),
   }
