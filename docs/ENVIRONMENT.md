@@ -222,13 +222,12 @@ on every realm it composes
 HTTPS listener (`KC_HTTPS_*` + cert) is unchanged and still lives in
 `docker-compose.prod.yml`.
 
-> **Named residual.** The dev escape hatch went with it: a realm created by
-> tenant-create requires HTTPS on every request, while `scripts/dev-configure.sh`
-> still writes `http://localhost:${KC_PORT}/auth/realms/${KEYCLOAK_REALM}`
-> issuers. Local browser login over plain HTTP therefore needs either a
-> per-developer CA trust or a per-realm `sslRequired` delta
-> (`kcadm.sh update realms/<realm> -s sslRequired=external`) until the
-> tenant-create entrypoint offers a dev mode. Recorded in `KNOWN_ISSUES.md`.
+> **Closed (decision 2026-10-28).** There is no dev-only switch: dev realms are
+> created on the server through the regular tooling and served over HTTPS behind
+> Traefik, so `all` is correct. A plain-HTTP localhost realm (the
+> `scripts/dev-configure.sh` flow) needs a per-session
+> `kcadm.sh update realms/<realm> -s sslRequired=external`, which `reconcile`
+> reverts. Recorded in `KNOWN_ISSUES.md`.
 
 ### OIDC client secrets
 
