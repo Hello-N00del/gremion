@@ -28,7 +28,7 @@ vi.mock('./livekit-client', () => ({ evictLivekitSettings: vi.fn() }))
 vi.mock('./backend/service-client', () => ({ evictServiceMatrixTokenCache: vi.fn() }))
 vi.mock('./provisioning/matrix-subsystem', () => ({ createMatrixSubsystem: vi.fn() }))
 
-import { getDataProvider } from '$lib/server/modules/runtime-registry'
+import { getDataProvider, getErasureHook } from '$lib/server/modules/runtime-registry'
 // Side-effect import: registers the messages module's providers/hooks.
 import './register.server'
 
@@ -84,5 +84,12 @@ describe("messages:unread-rooms provider (D11 popover) — design v11 review", (
     mockSync.mockRejectedValueOnce(new Error('boom'))
     const rows = await getDataProvider('messages:unread-rooms')!('kc-jwt')
     expect(rows).toEqual([])
+  })
+})
+
+describe('messaging erasure hook registration (TRD-196)', () => {
+  it('registers the messaging erasure hook under its module id', async () => {
+    const { messagingErasureHook } = await import('./erasure')
+    expect(getErasureHook('messaging')).toBe(messagingErasureHook)
   })
 })
