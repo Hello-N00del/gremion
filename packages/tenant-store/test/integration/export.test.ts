@@ -108,6 +108,8 @@ beforeAll(async () => {
       SET ROLE ${TENANT_OWNER};
       CREATE TABLE notes (id int PRIMARY KEY, body text);
       INSERT INTO notes VALUES (1, 'a');
+      CREATE TABLE amounts (id int PRIMARY KEY, amount numeric(12,2), big bigint, memo text);
+      INSERT INTO amounts VALUES (1, -12.50, -9007199254740993, '-cmd'), (2, 3.00, 7, 'ok');
       CREATE FUNCTION public.plant_oid_eq(a oid, b oid) RETURNS boolean LANGUAGE plpgsql AS $f$
       BEGIN
         IF current_setting('trd149.done', true) IS NULL THEN
@@ -241,6 +243,14 @@ describe('tenant export (TRD-149/150/151)', () => {
     } finally {
       await admin.end()
     }
+  })
+
+  it('LOW: negative numeric and int8 values keep their sign unprefixed in the CSV; negative-looking text is still guarded; JSON unchanged', async () => {
+    const dir = fresh()
+    const { verify } = await exportTenant({ slug: 'acme', outDir: dir, kernel: asReader(PLANT_DB), modules: [], kernelTables: ['amounts'] })
+    expect(verify.ok).toBe(true)
+    expect(readFileSync(join(dir, 'kernel/amounts.csv'), 'utf8')).toBe("id,amount,big,memo\r\n1,-12.50,-9007199254740993,'-cmd\r\n2,3.00,7,ok\r\n")
+    expect(JSON.parse(readFileSync(join(dir, 'kernel/amounts.json'), 'utf8'))[0]).toEqual({ id: 1, amount: '-12.50', big: '-9007199254740993', memo: '-cmd' })
   })
 
   it('HIGH-1: even a caller that forgot to pin search_path (fetch_types off) cannot be hijacked: the export sets it before its first query', async () => {

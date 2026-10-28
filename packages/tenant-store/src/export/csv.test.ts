@@ -14,4 +14,9 @@ describe('csvLine', () => {
     expect(csvLine(['a=b', 'x-1', -5, 0n, null])).toBe('a=b,x-1,-5,0,\r\n')
     expect(CSV_FORMULA_GUARD).toMatch(/apostrophe/)
   })
+
+  it('LOW: a numeric or int8 column (the driver returns them as strings) is a value, not text: no apostrophe on -12.50, text beside it still guarded', () => {
+    expect(csvLine(['-12.50', '-9007199254740993', '-cmd'], [true, true, false])).toBe("-12.50,-9007199254740993,'-cmd\r\n")
+    expect(csvLine(['-12.50'])).toBe("'-12.50\r\n")
+  })
 })

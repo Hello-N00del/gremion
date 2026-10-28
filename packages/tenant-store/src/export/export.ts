@@ -41,7 +41,7 @@ import { createHash } from 'node:crypto'
 import { chmodSync, closeSync, mkdirSync, openSync, readdirSync, writeFileSync, writeSync } from 'node:fs'
 import { dirname, join, resolve, sep } from 'node:path'
 import type postgres from 'postgres'
-import { CSV_FORMULA_GUARD, csvLine, jsonReplacer } from './csv.js'
+import { CSV_FORMULA_GUARD, csvLine, jsonReplacer, NUMBER_AS_STRING_TYPES } from './csv.js'
 import { assertNotSuperuserCapable } from './reader.js'
 import { MANIFEST_FILE, MANIFEST_SCHEMA_VERSION, verifyExport, type ExportManifest, type ManifestFile, type VerifyResult } from './verify.js'
 
@@ -199,8 +199,8 @@ async function exportTable(tx: postgres.TransactionSql, scope: string, schema: s
     SELECT c.oid::int AS oid FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
      WHERE n.nspname = ${schema} AND c.relname = ${table} AND c.relkind IN ('r', 'p')`
   if (!rel) throw new ExportError(`table ${schema}.${table} does not exist or has no columns`)
-  const cols = await tx<{ name: string; pk: number | null }[]>`
-    SELECT a.attname::text AS name, pg_catalog.array_position(i.indkey::int2[], a.attnum) AS pk
+  const cols = await tx<{ name: string; typ: number; pk: number | null }[]>`
+    SELECT a.attname::text AS name, a.atttypid::int AS typ, pg_catalog.array_position(i.indkey::int2[], a.attnum) AS pk
       FROM pg_catalog.pg_attribute a
       LEFT JOIN pg_catalog.pg_index i ON i.indrelid = a.attrelid AND i.indisprimary
      WHERE a.attrelid = ${rel.oid} AND a.attnum > 0 AND NOT a.attisdropped
@@ -214,7 +214,9 @@ async function exportTable(tx: postgres.TransactionSql, scope: string, schema: s
   const orderBy = pk.length > 0 ? pk.map((c) => quoteIdent(c.name)).join(', ') : 'ctid'
   for (const w of withheldColumns) if (!cols.some((c) => c.name === w)) throw new ExportError(`module ${scope}: runtime.export.withhold names ${schema}.${table}.${w}, which does not exist; fix the declaration (a renamed secret column must not slip into the export)`)
   for (const c of cols) if (withheldColumns.has(c.name)) excludedColumns.push({ scope, schema, table, column: c.name, reason: WITHHELD })
-  const header = cols.map((c) => c.name).filter((c) => !withheldColumns.has(c))
+  const kept = cols.filter((c) => !withheldColumns.has(c.name))
+  const header = kept.map((c) => c.name)
+  const plain = kept.map((c) => NUMBER_AS_STRING_TYPES.has(c.typ))
   if (header.length === 0) throw new ExportError(`module ${scope}: every column of ${schema}.${table} is withheld; withhold the table instead`)
   const select = `SELECT ${header.map(quoteIdent).join(', ')} FROM ${quoteIdent(schema)}.${quoteIdent(table)} ORDER BY ${orderBy}`
 
@@ -232,7 +234,7 @@ async function exportTable(tx: postgres.TransactionSql, scope: string, schema: s
     // Values are the driver's rendering of the server's text output; no SQL cast.
     await tx.unsafe(select).cursor(BATCH, (batch) => {
       for (const row of batch) {
-        csv.write(csvLine(header.map((c) => (row as Record<string, unknown>)[c])))
+        csv.write(csvLine(header.map((c) => (row as Record<string, unknown>)[c]), plain))
         json.write((rows === 0 ? '\n' : ',\n') + JSON.stringify(row, jsonReplacer))
         rows++
       }
