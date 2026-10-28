@@ -3,7 +3,7 @@
 // TRD-196 / PRD-OPS-005 — the admin-only erasure API. Starting an erasure and
 // reading its per-module report are IT-admin only (the same gate as
 // settings/reset, the comparable destructive action: role check plus a
-// server-side confirmation phrase, no step-up per rows-plan.md S2.5).
+// server-side confirmation phrase) plus a fresh LoA 2 step-up on POST (MED-4).
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const h = vi.hoisted(() => ({
@@ -37,8 +37,10 @@ const REPORT = {
   ],
 }
 
-function locals(roles: string[] | null = ['it-admin']) {
-  return { auth: async () => (roles ? { user: { id: 'admin-1', roles } } : null) }
+const nowSec = () => Math.floor(Date.now() / 1000)
+
+function locals(roles: string[] | null = ['it-admin'], assurance = { loa: 2, authTime: nowSec() }) {
+  return { auth: async () => (roles ? { user: { id: 'admin-1', roles, ...assurance } } : null) }
 }
 
 async function post(body: unknown, l = locals()) {
@@ -89,6 +91,31 @@ describe('admin-only: non-admin gets 403 and nothing runs', () => {
     h.hasRole.mockReturnValue(false)
     expect((await one(RID, locals(['member']))).status).toBe(403)
     expect(h.readErasureReport).not.toHaveBeenCalled()
+  })
+})
+
+describe('MED-4: POST requires a FRESH LoA 2 step-up (like the vault reveal)', () => {
+  it('401 STEP_UP_REQUIRED for a password-only (LoA 1) admin session; nothing runs', async () => {
+    const res = await post({ subjectId: 'u1', confirm: 'LÖSCHEN' }, locals(['it-admin'], { loa: 1, authTime: nowSec() }))
+    expect(res.status).toBe(401)
+    expect(await res.json()).toEqual({ error: 'STEP_UP_REQUIRED', requiredLoa: 2 })
+    expect(h.startErasure).not.toHaveBeenCalled()
+  })
+
+  it('401 for a stale LoA 2 (older than the freshness window)', async () => {
+    const res = await post({ subjectId: 'u1', confirm: 'LÖSCHEN' }, locals(['it-admin'], { loa: 2, authTime: nowSec() - 3600 }))
+    expect(res.status).toBe(401)
+    expect(h.startErasure).not.toHaveBeenCalled()
+  })
+
+  it('a non-admin still gets 403 before the step-up check', async () => {
+    h.hasRole.mockReturnValue(false)
+    const res = await post({ subjectId: 'u1', confirm: 'LÖSCHEN' }, locals(['member'], { loa: 1, authTime: 0 }))
+    expect(res.status).toBe(403)
+  })
+
+  it('reading reports needs no step-up', async () => {
+    expect((await list('', locals(['it-admin'], { loa: 1, authTime: 0 }))).status).toBe(200)
   })
 })
 

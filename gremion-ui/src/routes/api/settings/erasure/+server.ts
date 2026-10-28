@@ -4,14 +4,18 @@ import { hasRole, Role } from '$lib/auth'
 import type { SessionUser } from '$lib/auth/types'
 import { writeAuditEntry } from '$lib/server/audit-db'
 import { readErasureReports, startErasure } from '$lib/server/erasure/service'
+import { evaluateStepUp } from '$lib/auth/step-up'
+import { ERASURE_REQUIRED_LOA, erasureStepUpFreshnessSeconds } from '$lib/server/erasure/step-up'
 
 const CONFIRM_PHRASE = 'LÖSCHEN'
 
 // TRD-196 / PRD-OPS-005: start a data-subject erasure and list the per-module
-// reports. IT-admin only, like settings/reset (the comparable destructive action:
-// role check plus a server-side confirmation phrase; no step-up per rows-plan.md
-// S2.5). The response carries each module's erased | skipped | failed outcome and
-// an overall status that is `complete` only when EVERY enabled module was erased.
+// reports. IT-admin only, plus a server-side confirmation phrase, plus (MED-4) a
+// FRESH LoA 2 step-up on POST, enforced exactly like the vault reveal: a 401
+// { error: 'STEP_UP_REQUIRED', requiredLoa } tells the client to run the
+// /auth/step-up flow and retry. Reading reports needs no step-up. The response
+// carries each module's erased | skipped | failed outcome and an overall status
+// that is `complete` only when EVERY covered module was erased.
 async function adminOrNull(locals: App.Locals): Promise<SessionUser | null> {
   const session = await locals.auth()
   const user = session?.user as SessionUser | undefined
@@ -23,6 +27,13 @@ const forbidden = () => json({ success: false, error: 'Forbidden' }, { status: 4
 export const POST: RequestHandler = async ({ request, locals }) => {
   const user = await adminOrNull(locals)
   if (!user) return forbidden()
+  const decision = evaluateStepUp({ loa: user.loa, authTime: user.authTime }, ERASURE_REQUIRED_LOA, {
+    nowMs: Date.now(),
+    freshnessSeconds: erasureStepUpFreshnessSeconds(),
+  })
+  if (!decision.ok) {
+    return json({ error: 'STEP_UP_REQUIRED', requiredLoa: decision.requiredLoa }, { status: 401 })
+  }
 
   let body: unknown = null
   try {
