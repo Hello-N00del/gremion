@@ -28,10 +28,28 @@ export interface ErasureContext<Db = unknown> {
   readonly db: Db | null
 }
 
+/**
+ * A subject-id column a hook DELIBERATELY left in place, with how many rows of
+ * the subject it still holds and why (e.g. a council record whose redaction is
+ * TRD-160's). Makes an `erased` honest about what "erased" did not cover. Never
+ * carries the subject id itself.
+ */
+export interface ErasureResidual {
+  readonly table: string
+  readonly column: string
+  /** Rows that still reference the subject after the hook ran. */
+  readonly rows: number
+  readonly reason: string
+}
+
 /** What a hook may report. A throw is reported `failed` (or `skipped` when the
  *  error is a connection error), never `erased`. */
 export type ErasureHookResult =
-  | { readonly status: 'erased'; readonly counts: Readonly<Record<string, number>> }
+  | {
+      readonly status: 'erased'
+      readonly counts: Readonly<Record<string, number>>
+      readonly residuals?: readonly ErasureResidual[]
+    }
   | { readonly status: 'skipped'; readonly reason: string }
 
 export interface ModuleErasureHook<Db = unknown> {
@@ -52,6 +70,8 @@ export interface ModuleErasureOutcome {
   readonly counts: Readonly<Record<string, number>>
   /** Why a module was skipped or failed; null when erased. */
   readonly reason: string | null
+  /** What an `erased` hook deliberately left (see ErasureResidual); [] otherwise. */
+  readonly residuals: readonly ErasureResidual[]
 }
 
 /** `complete` only when every enabled module is `erased`; otherwise `incomplete`. */

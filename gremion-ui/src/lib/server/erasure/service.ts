@@ -24,6 +24,46 @@ export function enabledModuleIds(modules: Record<string, boolean> = readConfig()
   return [...ids]
 }
 
+/**
+ * Kernel-applied migrations (migration-ownership.ts CROSS_CUTTING_MIGRATIONS)
+ * -> the module whose data table they create. Those tables exist (and may hold
+ * the subject) even while the module is OFF; service.test pins the key set.
+ */
+export const CROSS_CUTTING_MIGRATION_OWNER: Readonly<Record<string, string>> = {
+  '0003_calendar_schema.sql': 'calendar',
+  '0004_committee_elections.sql': 'elections',
+  '0034_deck_board.sql': 'board',
+}
+
+type ManifestLike = { id: string; toggleable: boolean; migrations?: readonly string[] }
+
+/**
+ * MED-3: the modules an erasure must cover = the ENABLED ones (enabledModuleIds)
+ * plus every toggleable module that is OFF now but still holds data, i.e. one of
+ * its migrations (own `migrations`, or a kernel-applied cross-cutting file it
+ * owns) is in schema_migrations. ON->OFF is RETAIN (module-migrations.ts): the
+ * tables and the subject's rows stay, so a disabled module is not "nothing to do".
+ */
+export function erasureModuleIds(
+  modules: Record<string, boolean>,
+  applied: ReadonlySet<string>,
+  manifests: readonly ManifestLike[] = MODULE_MANIFESTS,
+): string[] {
+  const ids = new Set(enabledModuleIds(modules))
+  for (const m of manifests) {
+    if (!m.toggleable || ids.has(m.id)) continue
+    const own = (m.migrations ?? []).map((b) => `${b}.sql`)
+    const cross = Object.entries(CROSS_CUTTING_MIGRATION_OWNER).filter(([, o]) => o === m.id).map(([f]) => f)
+    if ([...own, ...cross].some((f) => applied.has(f))) ids.add(m.id)
+  }
+  return [...ids]
+}
+
+async function appliedMigrations(): Promise<Set<string>> {
+  const rows = await getDb()<{ filename: string }[]>`SELECT filename FROM schema_migrations`
+  return new Set(rows.map((r) => r.filename))
+}
+
 // The identity step runs the reconcile worker's existing drain synchronously
 // (tenant-scoped by the request's ALS, unit-locked, idempotent); lazy so the
 // worker's cron import is not loaded by every importer of this service.
@@ -36,7 +76,7 @@ const identityErasureHook = createIdentityErasureHook({
 
 export function defaultErasureDeps(): ErasureDeps {
   return {
-    enabledModuleIds: () => enabledModuleIds(),
+    enabledModuleIds: async () => erasureModuleIds(readConfig().modules, await appliedMigrations()),
     hookFor: (id) =>
       id === KERNEL_MODULE_ID ? kernelErasureHook : id === IDENTITY_MODULE_ID ? identityErasureHook : getErasureHook(id),
     // In-process modules share the tenant pool; a module whose data lives in its own

@@ -17,6 +17,7 @@ import {
   overallErasureStatus,
   type ErasureHookResult,
   type ErasureOverallStatus,
+  type ErasureResidual,
   type ModuleErasureOutcome,
 } from '@gremion/ports/erasure'
 import type { KernelErasureHook } from '$lib/server/modules/runtime-registry'
@@ -55,8 +56,9 @@ export interface ErasureReportStore {
 export const STALE_RUN_MS = 60 * 60 * 1000
 
 export interface ErasureDeps {
-  /** Ids of the modules enabled for the tenant, the kernel's own step first. */
-  enabledModuleIds(): readonly string[]
+  /** Ids of the modules the run must cover (enabled, or still holding data because
+   *  their migrations are applied), the kernel's own step first. */
+  enabledModuleIds(): readonly string[] | Promise<readonly string[]>
   hookFor(moduleId: string): KernelErasureHook | undefined
   /** The module's database connection, or null when it has none. */
   connectionFor(moduleId: string): Sql | null
@@ -80,6 +82,7 @@ const skipped = (moduleId: string, reason: string): ModuleErasureOutcome => ({
   status: 'skipped',
   counts: {},
   reason,
+  residuals: [],
 })
 
 const isCountMap = (v: unknown): v is Record<string, number> =>
@@ -88,14 +91,38 @@ const isCountMap = (v: unknown): v is Record<string, number> =>
   !Array.isArray(v) &&
   Object.values(v).every((n) => typeof n === 'number' && Number.isInteger(n) && n >= 0)
 
+const nonEmpty = (v: unknown): v is string => typeof v === 'string' && v.trim() !== ''
+
+const isResidualList = (v: unknown): v is ErasureResidual[] =>
+  Array.isArray(v) &&
+  v.every(
+    (r) =>
+      typeof r === 'object' &&
+      r !== null &&
+      nonEmpty((r as ErasureResidual).table) &&
+      nonEmpty((r as ErasureResidual).column) &&
+      nonEmpty((r as ErasureResidual).reason) &&
+      Number.isInteger((r as ErasureResidual).rows) &&
+      (r as ErasureResidual).rows >= 0,
+  )
+
 function fromHookResult(moduleId: string, result: ErasureHookResult | undefined): ModuleErasureOutcome {
   if (result?.status === 'erased' && isCountMap(result.counts)) {
-    return { moduleId, status: 'erased', counts: { ...result.counts }, reason: null }
+    const residuals = result.residuals ?? []
+    if (isResidualList(residuals)) {
+      return {
+        moduleId,
+        status: 'erased',
+        counts: { ...result.counts },
+        reason: null,
+        residuals: residuals.map(({ table, column, rows, reason }) => ({ table, column, rows, reason })),
+      }
+    }
   }
   if (result?.status === 'skipped' && typeof result.reason === 'string' && result.reason !== '') {
     return skipped(moduleId, result.reason)
   }
-  return { moduleId, status: 'failed', counts: {}, reason: 'malformed erasure hook result' }
+  return { moduleId, status: 'failed', counts: {}, reason: 'malformed erasure hook result', residuals: [] }
 }
 
 async function eraseModule(
@@ -114,7 +141,7 @@ async function eraseModule(
     // The error text is stored in the report: keep it to the message (no subject id is ever in it).
     const message = err instanceof Error ? err.message : String(err)
     if (isTransientDbStartupError(err)) return skipped(moduleId, `module database unreachable: ${message}`)
-    return { moduleId, status: 'failed', counts: {}, reason: message }
+    return { moduleId, status: 'failed', counts: {}, reason: message, residuals: [] }
   }
 }
 
@@ -124,7 +151,7 @@ export async function runErasure(input: ErasureInput, deps: ErasureDeps): Promis
   if (typeof input.subjectId !== 'string' || input.subjectId.trim() === '') {
     throw new Error('erasure requires a non-empty subject id')
   }
-  const moduleIds = [...new Set(deps.enabledModuleIds())]
+  const moduleIds = [...new Set(await deps.enabledModuleIds())]
   const ref = subjectRef(input.tenantId, input.subjectId)
   const startedAt = deps.now()
 

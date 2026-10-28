@@ -64,6 +64,8 @@ CREATE TABLE IF NOT EXISTS erasure_report_module (
   status      TEXT        NOT NULL CHECK (status IN ('erased', 'skipped', 'failed')),
   counts      JSONB       NOT NULL DEFAULT '{}'::jsonb,
   reason      TEXT,
+  -- [{table, column, rows, reason}]: subject-id columns the hook deliberately left.
+  residuals   JSONB       NOT NULL DEFAULT '[]'::jsonb CHECK (jsonb_typeof(residuals) = 'array'),
   recorded_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   PRIMARY KEY (report_id, module_id),
   CHECK (status = 'erased' OR reason IS NOT NULL)

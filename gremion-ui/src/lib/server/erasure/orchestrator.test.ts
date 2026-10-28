@@ -169,6 +169,32 @@ describe('runErasure', () => {
     expect(report.status).toBe('incomplete')
   })
 
+  it('carries a hook\'s residuals (what it deliberately left) into the outcome; none -> []', async () => {
+    const residual = { table: 'protocols', column: 'created_by', rows: 2, reason: 'council record (TRD-160)' }
+    const h = hookOf('kernel', async () => ({ status: 'erased', counts: { n: 1 }, residuals: [residual] }))
+    const report = await runErasure(input, deps(['kernel', 'calendar'], [h, hookOf('calendar')]))
+    expect(report.modules[0].residuals).toEqual([residual])
+    expect(report.modules[1].residuals).toEqual([])
+    expect(report.status).toBe('complete')
+  })
+
+  it('a malformed residual list is failed, not erased', async () => {
+    const h = hookOf('kernel', (async () => ({
+      status: 'erased',
+      counts: {},
+      residuals: [{ table: 'protocols', rows: -1 }],
+    })) as unknown as KernelErasureHook['erase'])
+    const report = await runErasure(input, deps(['kernel'], [h]))
+    expect(report.modules[0].status).toBe('failed')
+  })
+
+  it('the enabled module list may be resolved asynchronously', async () => {
+    const d = deps([], [hookOf('kernel')])
+    d.enabledModuleIds = async () => ['kernel']
+    const report = await runErasure(input, d)
+    expect(report.modules.map((m) => m.moduleId)).toEqual(['kernel'])
+  })
+
   it('records an outcome for EVERY enabled module (none silently dropped) and persists each', async () => {
     const store = memoryStore()
     await runErasure(input, deps(['kernel', 'a', 'b', 'c'], [hookOf('kernel')], { store }))

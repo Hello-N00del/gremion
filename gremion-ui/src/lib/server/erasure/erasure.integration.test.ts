@@ -199,6 +199,57 @@ describe('HIGH-2: tenures and governance memberships are kept pseudonymised (RC-
   })
 })
 
+describe('MED-3: what the kernel step deliberately leaves is reported per column; board cards are pseudonymised', () => {
+  it('names each kept subject-id column with its row count and reason, and pseudonymises card assignee/creator', async () => {
+    const { unitId } = await seed()
+    const sql = getDb()
+    const [p] = await sql<{ id: string }[]>`
+      INSERT INTO protocols (committee_id, title, meeting_date, created_by) VALUES (${unitId}, 'Sitzung 1', '2026-10-01', ${SUBJECT}) RETURNING id`
+    await sql`INSERT INTO protocol_attendance (protocol_id, user_keycloak_id, status) VALUES (${p.id}, ${SUBJECT}, 'present'), (${p.id}, ${OTHER}, 'present')`
+    const [ai] = await sql<{ id: string }[]>`
+      INSERT INTO protocol_action_items (protocol_id, text, assignee_keycloak_id) VALUES (${p.id}, 'Raum buchen', ${SUBJECT}) RETURNING id`
+    const [b] = await sql<{ id: string }[]>`INSERT INTO board (org_unit_id, name) VALUES (${unitId}, 'Aufgaben') RETURNING id`
+    const [st] = await sql<{ id: string }[]>`INSERT INTO stack (board_id, name) VALUES (${b.id}, 'Offen') RETURNING id`
+    await sql`INSERT INTO card (stack_id, title, assignee_keycloak_id, created_by, protocol_action_item_id) VALUES
+                (${st.id}, 'Raum buchen', ${SUBJECT}, ${OTHER}, ${ai.id}), (${st.id}, 'Flyer', ${OTHER}, ${SUBJECT}, NULL)`
+
+    const res = await kernelErasureHook.erase({ tenantId: TENANT_A, subjectId: SUBJECT, db: sql })
+    expect(res).toMatchObject({ status: 'erased', counts: { card_assignee: 1, card_created_by: 1 } })
+    expect(await sql`SELECT 1 FROM card WHERE assignee_keycloak_id = ${SUBJECT} OR created_by = ${SUBJECT}`).toHaveLength(0)
+    expect(await sql`SELECT 1 FROM card WHERE assignee_keycloak_id = ${OTHER} OR created_by = ${OTHER}`).toHaveLength(2)
+
+    const residuals = (res as { residuals?: { table: string; column: string; rows: number; reason: string }[] }).residuals ?? []
+    const byCol = Object.fromEntries(residuals.map((r) => [`${r.table}.${r.column}`, r]))
+    expect(byCol['protocols.created_by']).toMatchObject({ rows: 1, reason: expect.stringMatching(/TRD-160/) })
+    expect(byCol['protocol_attendance.user_keycloak_id']).toMatchObject({ rows: 1 })
+    expect(byCol['protocol_action_items.assignee_keycloak_id']).toMatchObject({ rows: 1, reason: expect.stringMatching(/RC-GOV-PROT/) })
+    // a column holding nothing of the subject is not listed
+    expect(byCol['resolution_challenges.raised_by']).toBeUndefined()
+    // the kept register rows are really still there
+    expect(await sql`SELECT 1 FROM protocols WHERE created_by = ${SUBJECT}`).toHaveLength(1)
+    expect(JSON.stringify(residuals)).not.toContain(SUBJECT)
+  })
+
+  it('residuals are persisted with the module row of the report', async () => {
+    const { unitId } = await seed()
+    const sql = getDb()
+    await sql`INSERT INTO protocols (committee_id, title, meeting_date, created_by) VALUES (${unitId}, 'S', '2026-10-01', ${SUBJECT})`
+    const hooks = new Map<string, KernelErasureHook>([['kernel', kernelErasureHook]])
+    const report = await runErasure(
+      { tenantId: TENANT_A, subjectId: SUBJECT, requestedBy: 'admin' },
+      {
+        enabledModuleIds: () => ['kernel'],
+        hookFor: (id) => hooks.get(id),
+        connectionFor: () => sql,
+        store: createPgReportStore(sql),
+        now: () => new Date(),
+      },
+    )
+    const stored = await getErasureReport(sql, TENANT_A, report.id)
+    expect(stored?.modules[0].residuals).toContainEqual(expect.objectContaining({ table: 'protocols', column: 'created_by', rows: 1 }))
+  })
+})
+
 describe('full run: kernel + calendar, one module connection removed', () => {
   function deps(noConnection: string[]): ErasureDeps {
     const sql = getDb()

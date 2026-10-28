@@ -23,6 +23,7 @@ interface ModuleRow {
   status: ModuleErasureOutcome['status']
   counts: Record<string, number>
   reason: string | null
+  residuals: ModuleErasureOutcome['residuals']
 }
 
 export function createPgReportStore(sql: Sql): ErasureReportStore {
@@ -36,11 +37,12 @@ export function createPgReportStore(sql: Sql): ErasureReportStore {
     },
     async record(reportId, o) {
       await sql`
-        INSERT INTO erasure_report_module (report_id, module_id, position, status, counts, reason)
+        INSERT INTO erasure_report_module (report_id, module_id, position, status, counts, reason, residuals)
         VALUES (
           ${reportId}, ${o.moduleId},
           (SELECT count(*)::int FROM erasure_report_module WHERE report_id = ${reportId}),
-          ${o.status}, ${sql.json({ ...o.counts })}, ${o.reason})`
+          ${o.status}, ${sql.json({ ...o.counts })}, ${o.reason},
+          ${sql.json((o.residuals ?? []).map((r) => ({ ...r })))})`
     },
     async finish(reportId, status, finishedAt, reason = null) {
       // The DB trigger refuses `complete` unless every expected module has an `erased`
@@ -72,14 +74,20 @@ function assemble(h: HeaderRow, mods: ModuleRow[]): ErasureReport {
     finishReason: h.finish_reason,
     modules: mods
       .filter((m) => m.report_id === h.id)
-      .map((m) => ({ moduleId: m.module_id, status: m.status, counts: m.counts, reason: m.reason })),
+      .map((m) => ({
+        moduleId: m.module_id,
+        status: m.status,
+        counts: m.counts,
+        reason: m.reason,
+        residuals: m.residuals,
+      })),
   }
 }
 
 async function modulesOf(sql: Sql, ids: string[]): Promise<ModuleRow[]> {
   if (ids.length === 0) return []
   return sql<ModuleRow[]>`
-    SELECT report_id, module_id, status, counts, reason
+    SELECT report_id, module_id, status, counts, reason, residuals
     FROM erasure_report_module WHERE report_id IN ${sql(ids)}
     ORDER BY report_id, position`
 }

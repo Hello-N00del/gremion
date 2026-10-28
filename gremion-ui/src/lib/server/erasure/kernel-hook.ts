@@ -27,6 +27,18 @@
 //   RC-IDT-HELPER / operative data -- DELETED:
 //     org_unit_members (unelected, employee), notification_read_marker,
 //     scheduled_notifications, provisioning_member_ops already DONE (status 'ok').
+//   RC-BRD (board cards: operative, not a register record) -- PSEUDONYMISED:
+//     card.assignee_keycloak_id, card.created_by -> NULL (the card stays for the
+//     body, the person does not). The table is kernel-applied (0034), so this
+//     runs even when the board module is off.
+//   Register records -- KEPT, reported as residuals (table, column, rows, reason):
+//     protocols.created_by, protocol_attendance.user_keycloak_id,
+//     protocol_action_items.assignee_keycloak_id (RC-GOV-PROT: the protocol
+//     record, action items included), resolution_challenges.raised_by/resolved_by
+//     (Beschluss register), committee_elections.created_by (election record),
+//     audit_log.user_id (hash chain), erasure_report.requested_by (the
+//     accountability of erasures this person requested). Their redaction is
+//     TRD-160's; a column is listed only while it still holds the subject.
 //   Erasure processing -- ENQUEUED, never cancelled:
 //     provisioning_member_ops one durable remove-op (migration 0037) per
 //                             provisioned subsystem of every unit the subject
@@ -40,7 +52,7 @@
 // identities themselves are the separate `identity` step (identity-hook.ts),
 // which stays `skipped` while the queued remove-ops are pending.
 import type { Sql } from '@gremion/db'
-import type { ModuleErasureHook } from '@gremion/ports/erasure'
+import type { ErasureResidual, ModuleErasureHook } from '@gremion/ports/erasure'
 import type { PgTransaction } from '$lib/server/db/tx'
 import { enqueueMemberRemoveOps } from '$lib/server/governance/provisioning/member-ops'
 import type { Subsystem } from '$lib/server/governance/provisioning/types'
@@ -48,12 +60,35 @@ import type { Subsystem } from '$lib/server/governance/provisioning/types'
 export const KERNEL_MODULE_ID = 'kernel'
 export const ERASED_MARKER = 'erased'
 
+const PROTOCOL_RECORD = "council record (RC-GOV-PROT, record period): redaction is TRD-160's, not this seam's"
+const REGISTER_RECORD = "Beschluss register (record period): redaction is TRD-160's, not this seam's"
+
+/** Subject-id columns the kernel step deliberately leaves, and why. */
+export const KERNEL_RESIDUAL_COLUMNS: readonly Omit<ErasureResidual, 'rows'>[] = [
+  { table: 'protocols', column: 'created_by', reason: PROTOCOL_RECORD },
+  { table: 'protocol_attendance', column: 'user_keycloak_id', reason: PROTOCOL_RECORD },
+  { table: 'protocol_action_items', column: 'assignee_keycloak_id', reason: PROTOCOL_RECORD },
+  { table: 'resolution_challenges', column: 'raised_by', reason: REGISTER_RECORD },
+  { table: 'resolution_challenges', column: 'resolved_by', reason: REGISTER_RECORD },
+  {
+    table: 'committee_elections',
+    column: 'created_by',
+    reason: "election record (record period): redaction is TRD-160's, not this seam's",
+  },
+  { table: 'audit_log', column: 'user_id', reason: 'tamper-evident hash chain: redaction layer TRD-160' },
+  {
+    table: 'erasure_report',
+    column: 'requested_by',
+    reason: 'accountability record of erasures this person requested (record period)',
+  },
+]
+
 export const kernelErasureHook: ModuleErasureHook<Sql> = {
   moduleId: KERNEL_MODULE_ID,
   async erase({ db, subjectId }) {
     // The orchestrator never passes null to a connection-requiring hook; guard anyway.
     if (db === null) return { status: 'skipped', reason: 'no database connection' }
-    const counts = await db.begin(async (tx) => {
+    const { counts, residuals } = await db.begin(async (tx) => {
       const c: Record<string, number> = {}
 
       // HIGH-1: queue the external removals BEFORE the membership rows go, in this tx.
@@ -113,8 +148,20 @@ export const kernelErasureHook: ModuleErasureHook<Sql> = {
       c.role_assignment_history = (
         await tx`UPDATE role_assignment_history SET user_keycloak_id = NULL WHERE user_keycloak_id = ${subjectId}`
       ).count
-      return c
+
+      // RC-BRD: operative board data, not a register record.
+      c.card_assignee = (await tx`UPDATE card SET assignee_keycloak_id = NULL WHERE assignee_keycloak_id = ${subjectId}`).count
+      c.card_created_by = (await tx`UPDATE card SET created_by = NULL WHERE created_by = ${subjectId}`).count
+
+      // What stays, said out loud (MED-3): counted inside the same tx, after the writes.
+      const left: ErasureResidual[] = []
+      for (const col of KERNEL_RESIDUAL_COLUMNS) {
+        const [{ n }] = await tx<{ n: number }[]>`
+          SELECT count(*)::int AS n FROM ${tx(col.table)} WHERE ${tx(col.column)}::text = ${subjectId}`
+        if (n > 0) left.push({ ...col, rows: n })
+      }
+      return { counts: c, residuals: left }
     })
-    return { status: 'erased', counts }
+    return { status: 'erased', counts, residuals }
   },
 }
