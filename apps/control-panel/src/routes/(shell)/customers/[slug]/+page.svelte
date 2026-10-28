@@ -58,6 +58,25 @@
   {/if}
 {/if}
 
+{#if data.offer.suspend || data.offer.resume}
+  <section class="lifecycle" aria-labelledby="life-h">
+    <h2 id="life-h">Betrieb</h2>
+    {#if form?.lifecycleError}<p class="error" role="alert">{form.lifecycleError}</p>{/if}
+    {#if data.offer.suspend}
+      <form method="POST" action="?/suspend" use:enhance>
+        <p class="muted">Sperren: Anmeldung und Zugriff des Mandanten werden beendet, die Seite zeigt die Sperrmeldung. Die Daten bleiben unangetastet.</p>
+        <button type="submit">Mandant sperren</button>
+      </form>
+    {/if}
+    {#if data.offer.resume}
+      <form method="POST" action="?/resume" use:enhance>
+        <p class="muted">Fortsetzen: Der Mandant wird mit seinen unveränderten Daten wieder freigegeben.</p>
+        <button type="submit">Mandant fortsetzen</button>
+      </form>
+    {/if}
+  </section>
+{/if}
+
 {#if data.requests.length}
   <h2>Anfragen</h2>
   <ul class="requests">
@@ -126,6 +145,10 @@
   .request.running,
   .request.expired {
     border-left-color: var(--warn);
+  }
+  .lifecycle {
+    max-width: 36rem;
+    margin-bottom: 1.5rem;
   }
   .error {
     color: var(--bad);

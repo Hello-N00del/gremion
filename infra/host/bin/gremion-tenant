@@ -376,34 +376,21 @@ cmd_requests() {
     platform_sql "${su:-postgres}" "SELECT request_id, created_at, kind, customer_slug, origin, state, attempt, coalesce(outcome, '') FROM plt.provisioning_request_status WHERE (:'slug' = '' OR customer_slug = :'slug') ORDER BY created_at DESC LIMIT 50;" -v slug="$slug"
 }
 
-cmd_suspend() {
-    local slug="${1:-}"; shift || true
-    need_slug "$slug"
-    while [[ $# -gt 0 ]]; do case "$1" in --operator) need_value "$@"; OPERATOR_ID="$2"; shift 2 ;; *) die "suspend: unknown argument: $1" "$GREMION_EXIT_USAGE" ;; esac; done
-    need_operator
-    active_colour
-    tc suspend "$slug" --operator "$OPERATOR_ID" || die "suspend of ${slug} failed in the container" "$GREMION_EXIT_ASSERT"
-    # The tenant is already 503 with its realm disabled (fail closed). The host
-    # step un-stamps the realm's sender before it deletes the principal, and every
-    # step is re-runnable, so a failure here is recovered by the same verb (the
-    # container step above repeats harmlessly).
-    mail_realm_smtp --realm "$slug" --tenant "$(token_of "$slug")" --revoke \
-        || die "the principal of ${slug} could not be revoked; the customer is already suspended, rerun gremion-tenant suspend ${slug} to converge" "$GREMION_EXIT_ASSERT"
-    ok "customer ${slug} suspended"
+# The break-glass verbs mutate the host like every other mutating verb: they take
+# runtime/hostd.lock, non-blocking (exit 3 when busy), unless gremion-hostd holds it.
+# (The executor does not come through here: its handlers call the library under its own lock.)
+acquire_host_lock() {
+    local lock="${ROOT}/runtime/hostd.lock"
+    [[ "${GREMION_HOST_LOCK_HELD:-}" = 1 ]] && return 0
+    command -v flock >/dev/null 2>&1 || die "flock is not installed (util-linux); refusing to run without the host lock" "$GREMION_EXIT_USAGE"
+    mkdir -p "$(dirname "$lock")" || die "cannot create $(dirname "$lock")" "$GREMION_EXIT_USAGE"
+    exec 9>>"$lock" || die "cannot open the host lock: ${lock}" "$GREMION_EXIT_USAGE"
+    flock -n 9 || die "busy: another host operation is running (lock ${lock}); retry when it has finished" 3
 }
 
-cmd_resume() {
-    local slug="${1:-}"; shift || true
-    need_slug "$slug"
-    while [[ $# -gt 0 ]]; do case "$1" in --operator) need_value "$@"; OPERATOR_ID="$2"; shift 2 ;; *) die "resume: unknown argument: $1" "$GREMION_EXIT_USAGE" ;; esac; done
-    need_operator
-    active_colour
-    mail_realm_smtp --realm "$slug" --tenant "$(token_of "$slug")" \
-        || die "a fresh principal for ${slug} could not be issued" "$GREMION_EXIT_ASSERT"
-    mail_sender_args || die "resume of ${slug}: MAIL_TRANSPORT could not be resolved" "$GREMION_EXIT_USAGE"
-    tc resume "$slug" --operator "$OPERATOR_ID" ${MAIL_SENDER_ARGS[@]+"${MAIL_SENDER_ARGS[@]}"} || die "resume of ${slug} failed in the container" "$GREMION_EXIT_ASSERT"
-    ok "customer ${slug} resumed"
-}
+cmd_suspend() { acquire_host_lock; customer_suspend "$@"; }
+
+cmd_resume() { acquire_host_lock; customer_resume "$@"; }
 
 cmd_reconcile() {
     local slug="${1:-}"; shift || true

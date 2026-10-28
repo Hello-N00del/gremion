@@ -297,10 +297,10 @@ export async function suspendCustomer(slug: string, deps: ProvisioningDeps): Pro
     await deps.control.setStatus(c.id, 'suspended')
     changed = true
   }
-  if (await deps.realm.isEnabled(c.realm)) {
-    await deps.realm.setEnabled(c.realm, false)
-    changed = true
-  }
+  // Always asserted, never skipped on "already disabled": the disable and the logout-all are two calls
+  // (setRealmEnabled), and a rerun after a failed logout must still log every session out.
+  if (await deps.realm.isEnabled(c.realm)) changed = true
+  await deps.realm.setEnabled(c.realm, false)
   const r = await deps.broker.ensure(c, [])
   return { customer: c, changed: changed || r.reloaded }
 }

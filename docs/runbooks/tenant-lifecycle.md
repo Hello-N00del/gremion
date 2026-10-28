@@ -196,6 +196,30 @@ set excludes every tenant-key target path.
 
 ## Suspend / resume
 
+**In operation (TRD-044, PRD-OPS-004) this is the control panel.** On
+`/customers/<slug>` the page offers "Mandant sperren" for an active customer and
+"Mandant fortsetzen" for a suspended one (nothing while a request is queued or
+running; after a suspend that did not finish, both). Each button queues a
+`suspend` / `resume` request (args: the slug only) with the operator's signed
+loa2 sign-in as evidence, exactly like "Neuer Mandant"; the executor runs
+`handlers/suspend.sh` / `resume.sh`, which call `customer_suspend` /
+`customer_resume` in `infra/host/lib/customer-ops.sh`:
+
+- suspend: the container verb first (status, realm disabled, sessions out,
+  broker users evicted), then the mail principal revoked. The router file is not
+  touched: the route stays and the app serves the branded 503 for a suspended
+  customer. A failed revoke is finished `failed`; triggering "Mandant sperren"
+  again converges.
+- resume: a fresh mail principal first (never `--rotate`), then the container
+  verb (realm, broker users, status `active` last).
+- data is untouched: both verbs take the TRD-440 fingerprint (container count and
+  every project's services) before and after and fail if it moved; the suspend
+  keeps its value in `runtime/suspended/<slug>.fingerprint` and the resume must
+  end on the same one, then removes the file.
+
+The library commands below are what the container verbs run.
+
+
 ```bash
 pnpm -C gremion-ui exec tsx scripts/tenant-provision.ts suspend <slug>
 pnpm -C gremion-ui exec tsx scripts/tenant-provision.ts resume  <slug>

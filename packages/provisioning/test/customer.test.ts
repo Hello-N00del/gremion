@@ -448,7 +448,8 @@ describe('suspend and resume (TDD 14, unit half)', () => {
     expect(w.realms.get('musterstadt')!.notBefore).toBeGreaterThan(0)
     w.mutations.length = 0
     expect((await suspendCustomer('musterstadt', d)).changed).toBe(false)
-    expect(w.mutations).toEqual([])
+    // the realm disable + logout-all is asserted again on every suspend: a rerun after a failed logout converges
+    expect(w.mutations).toEqual(['kc:enabled musterstadt=false'])
     // the second customer is untouched
     expect(w.control.get('zweitstadt')!.status).toBe('active')
     expect(w.realms.get('zweitstadt')!.enabled).toBe(true)
