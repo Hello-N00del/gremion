@@ -134,6 +134,11 @@ export interface ModulesPort {
   unloaded(ids: readonly string[]): Promise<string[]>
   /** enableModule with the given gate; returns whether it was a no-op. */
   enable(c: CustomerRef, moduleId: string, gate: import('@gremion/tenant-store/lifecycle').EnableGate, operatorId: string): Promise<{ noop: boolean; database: string | null }>
+  /**
+   * disableModule (TRD-424): the level-1 switch off, the module database
+   * exported and verified, then dropped. A repeat on a disabled module is a no-op.
+   */
+  disable(c: CustomerRef, moduleId: string, operatorId: string): Promise<{ noop: boolean; dropped: boolean; database: string | null; export: { path: string; sha256: string; bytes: number } | null }>
   /** Module keys with an `enabled` plt.module_enablement row for the customer. */
   enabled(c: CustomerRef): Promise<string[]>
 }

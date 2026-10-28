@@ -7,6 +7,8 @@
 //
 //   enable-module <slug> <module> --operator <uuid> [--dpia-json <file>]
 //       one module for an existing customer through the level-1 gate
+//   disable-module <slug> <module> --operator <uuid>
+//       one module off for an existing customer: export + verify, then drop (TRD-424); repeatable
 //   dpia-record <slug> <module> --operator <uuid> --requires-dpia yes|no|not_applicable
 //               --reason-codes a,b --document-ref <TOM-annex entry>
 //       the dated, written DPIA-applicability decision (TRD-161, brief Q3)
@@ -23,9 +25,11 @@
 // H10-authenticated release tree. A refusal is an EnableRefused: exit 1 with
 // its code and reason on stderr (tenant-provision.ts's exit mapping).
 import { readFileSync } from 'node:fs'
+import { existsSync } from 'node:fs'
 import type postgres from 'postgres'
 import {
   attestedEnablements,
+  disableCustomerModule,
   enableCustomerModule,
   EnableRefused,
   recordDpiaDecision,
@@ -41,9 +45,10 @@ import { LifecycleError } from '@gremion/tenant-store/lifecycle'
 export { EnableRefused }
 
 /** The verbs this file answers (tenant-provision.ts's case lines). */
-export const GATE_VERBS: ReadonlySet<string> = new Set(['enable-module', 'dpia-record', 'isolation-record', 'gate-status', 'regate'])
+export const GATE_VERBS: ReadonlySet<string> = new Set(['enable-module', 'disable-module', 'dpia-record', 'isolation-record', 'gate-status', 'regate'])
 
 export const GATE_USAGE = `  enable-module <slug> <module> --operator <uuid> [--dpia-json <file>]
+  disable-module <slug> <module> --operator <uuid>
   dpia-record <slug> <module> --operator <uuid> --requires-dpia yes|no|not_applicable --reason-codes a,b --document-ref <ref>
   isolation-record <file> | gate-status [<slug>] | regate <slug> <module> --operator <uuid>`
 
@@ -134,6 +139,34 @@ async function cmdEnableModule(ctx: GateVerbContext): Promise<void> {
   })
 }
 
+/**
+ * disableModule drops the module database after exporting it; the export must
+ * outlive this one-shot container (docker compose run --rm). So the verb refuses,
+ * before anything is touched, unless TENANT_EXPORT_DIR is its own mount.
+ */
+export function exportDirIsMounted(dir: string, mountinfo = '/proc/self/mountinfo'): boolean {
+  if (!existsSync(mountinfo)) return false
+  const want = dir.replace(/\/+$/, '')
+  return readFileSync(mountinfo, 'utf-8')
+    .split('\n')
+    .some((l) => l.split(' ')[4] === want)
+}
+
+async function cmdDisableModule(ctx: GateVerbContext): Promise<void> {
+  const slug = arg(ctx, 0, 'slug', 'disable-module')
+  const moduleKey = arg(ctx, 1, 'module', 'disable-module')
+  const op = operatorId(ctx)
+  const dir = process.env.TENANT_EXPORT_DIR ?? ''
+  if (!dir || !exportDirIsMounted(dir)) {
+    throw ctx.usage(`disable-module needs TENANT_EXPORT_DIR (${dir || 'unset'}) to be a mounted volume that outlives this container: the module database is dropped after its export; nothing was touched`)
+  }
+  await ctx.withLive({}, async (deps) => {
+    const r = await disableCustomerModule(slug, moduleKey, { operatorId: op }, deps)
+    ctx.log(`disable-module ${slug} ${r.moduleKey} by operator ${op}: ${r.noop ? 'already disabled' : 'disabled'}${r.export ? `; export ${r.export.path} sha256 ${r.export.sha256} (${r.export.bytes} bytes)` : ''}; broker ${r.reloaded ? 'reloaded' : 'unchanged'}`)
+    console.log(JSON.stringify({ verb: 'disable-module', slug, module: r.moduleKey, noop: r.noop, dropped: r.dropped, database: r.database, export: r.export, enabled: r.enabled, operatorId: op }))
+  })
+}
+
 async function cmdDpiaRecord(ctx: GateVerbContext): Promise<void> {
   const slug = arg(ctx, 0, 'slug', 'dpia-record')
   const moduleKey = arg(ctx, 1, 'module', 'dpia-record')
@@ -144,9 +177,9 @@ async function cmdDpiaRecord(ctx: GateVerbContext): Promise<void> {
   const reasonCodes = ctx.reqFlag('--reason-codes').split(',').map((s) => s.trim()).filter(Boolean)
   const customerId = await requireCustomerId(ctx, slug)
   await withPlatform(ctx, async (platform) => {
-    const r = await recordDpiaDecision(platform, { customerId, moduleKey, requiresDpia, reasonCodes, documentRef, decidedBy: { kind: 'operator', id: op } }).catch((e: unknown) => asUsage(ctx, e))
-    ctx.log(`dpia-record ${slug} ${moduleKey} by operator ${op}: decision ${r.dpiaDecisionId} recorded`)
-    console.log(JSON.stringify({ verb: 'dpia-record', slug, module: moduleKey, dpiaDecisionId: r.dpiaDecisionId, requiresDpia, operatorId: op }))
+    const r = await recordDpiaDecision(platform, { customerId, moduleKey, requiresDpia, reasonCodes, documentRef, decidedBy: { kind: 'operator', id: op } }, { reuseIdentical: true }).catch((e: unknown) => asUsage(ctx, e))
+    ctx.log(`dpia-record ${slug} ${moduleKey} by operator ${op}: decision ${r.dpiaDecisionId} ${r.created ? 'recorded' : 'already recorded (identical, reused)'}`)
+    console.log(JSON.stringify({ verb: 'dpia-record', slug, module: moduleKey, dpiaDecisionId: r.dpiaDecisionId, created: r.created, requiresDpia, operatorId: op }))
   })
 }
 
@@ -193,6 +226,8 @@ export async function runGateVerb(verb: string, ctx: GateVerbContext): Promise<v
   switch (verb) {
     case 'enable-module':
       return cmdEnableModule(ctx)
+    case 'disable-module':
+      return cmdDisableModule(ctx)
     case 'dpia-record':
       return cmdDpiaRecord(ctx)
     case 'isolation-record':

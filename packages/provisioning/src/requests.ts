@@ -13,7 +13,7 @@
 // line (TASK-031 import_members/seed_vertical, TASK-044 record_dpia/
 // import_isolation, TASK-043d-2 the operate kinds).
 import { validateCreate } from './customer.ts'
-import { DEFAULT_DENY } from './operator-gate.ts'
+import { assertEnableList, DEFAULT_DENY } from './operator-gate.ts'
 import { ProvisioningError } from './errors.ts'
 import { isPrintableText } from './printable-text.ts'
 
@@ -36,17 +36,27 @@ export const KIND_OWNER: Readonly<Record<RequestKind, string>> = Object.freeze({
   create: 'TASK-043d-1',
   suspend: 'TRD-044',
   resume: 'TRD-044',
-  reconcile: 'TASK-043d-2',
-  enable_module: 'TASK-043d-2',
-  disable_module: 'TASK-043d-2',
+  reconcile: 'TRD-044',
+  enable_module: 'TRD-044',
+  disable_module: 'TRD-044',
   import_members: 'TASK-031',
   seed_vertical: 'TASK-031',
-  record_dpia: 'TASK-044',
+  record_dpia: 'TRD-044',
   import_isolation: 'TASK-044',
 })
 
 /** The kinds this release can run. */
-export const HANDLED_KINDS: ReadonlySet<RequestKind> = new Set<RequestKind>(['create', 'suspend', 'resume', 'import_members', 'seed_vertical'])
+export const HANDLED_KINDS: ReadonlySet<RequestKind> = new Set<RequestKind>([
+  'create',
+  'suspend',
+  'resume',
+  'reconcile',
+  'enable_module',
+  'disable_module',
+  'record_dpia',
+  'import_members',
+  'seed_vertical',
+])
 
 export const isRequestKind = (k: unknown): k is RequestKind => typeof k === 'string' && (REQUEST_KINDS as readonly string[]).includes(k)
 
@@ -103,7 +113,55 @@ export interface LifecycleArgs {
   slug: string
 }
 
-export type VerifiedRequestArgs = CreateRequestArgs | ImportMembersArgs | SeedVerticalArgs | LifecycleArgs
+/**
+ * `enable_module` (TRD-044): one catalogue module for the request's customer.
+ * `dpia` is the decision the request carries (the panel always sends one); null
+ * means "the one already recorded", which the container's gate demands.
+ */
+export interface EnableModuleArgs {
+  slug: string
+  module: string
+  dpia: DpiaDecision | null
+}
+
+/** `disable_module` (TRD-044): export first, then drop (tenant-store disableModule). */
+export interface DisableModuleArgs {
+  slug: string
+  module: string
+}
+
+/** `record_dpia` (TRD-044): the written applicability decision, recorded with reuse-identical semantics. */
+export interface RecordDpiaArgs {
+  slug: string
+  module: string
+  requiresDpia: 'yes' | 'no'
+  /** Always ['operator_decision'] from the panel (as the create form). */
+  reasonCodes: string[]
+  documentRef: string
+}
+
+/** `reconcile` (TRD-044): the realm contract check, `apply` false = dry run (verify-only). */
+export interface ReconcileArgs {
+  slug: string
+  apply: boolean
+}
+
+export type VerifiedRequestArgs =
+  | CreateRequestArgs
+  | ImportMembersArgs
+  | SeedVerticalArgs
+  | LifecycleArgs
+  | EnableModuleArgs
+  | DisableModuleArgs
+  | RecordDpiaArgs
+  | ReconcileArgs
+
+/** The modules a verified request will enable: the create's list or the enable_module's one (request-verify's loaded-version check). */
+export function modulesToEnable(args: VerifiedRequestArgs): string[] {
+  if ('enable' in args) return args.enable
+  if ('module' in args && 'dpia' in args) return [args.module]
+  return []
+}
 
 export const IMPORT_LIST_MAX_BYTES = 1_048_576
 
@@ -128,6 +186,11 @@ const REASON_CODE = /^[a-z][a-z0-9_]{0,62}$/
 const IMPORT_FIELDS = new Set(['slug', 'phase', 'vertical', 'csv', 'expectSha256'])
 const SEED_FIELDS = new Set(['slug', 'vertical'])
 const LIFECYCLE_FIELDS = new Set(['slug'])
+const ENABLE_FIELDS = new Set(['slug', 'module', 'dpia'])
+const MODULE_FIELDS = new Set(['slug', 'module'])
+const RECORD_DPIA_FIELDS = new Set(['slug', 'module', 'requiresDpia', 'documentRef'])
+const RECONCILE_FIELDS = new Set(['slug', 'apply'])
+const MODULE_ID = /^[a-z][a-z0-9-]{0,62}$/
 const VERTICAL_ID = /^[a-z][a-z0-9-]{0,62}$/
 const SHA256 = /^[0-9a-f]{64}$/
 const CREATE_FIELDS = new Set(['slug', 'host', 'itAdmin', 'councilAdmin', 'bodyName', 'brand', 'enable', 'dpia'])
@@ -210,6 +273,60 @@ function verifyLifecycle(e: RequestEnvelope): LifecycleArgs {
   return { slug: e.customerSlug }
 }
 
+function ownSlug(e: RequestEnvelope, a: Record<string, unknown>): void {
+  if (a.slug !== e.customerSlug) throw new Refused(`args.slug ${String(a.slug)} is not the request's slug ${e.customerSlug}`)
+}
+
+/** A catalogue module that this build ships: in the catalogue and not in modules/disabled.json. */
+function moduleOf(v: unknown, ctx: VerifyContext): string {
+  if (typeof v !== 'string' || !MODULE_ID.test(v)) throw new Refused('module must be a module id (a-z, 0-9, dashes)')
+  if (!ctx.catalogueIds.includes(v)) throw new Refused(`module ${v} is not in the catalogue`)
+  if (ctx.disabledIds.includes(v) && !DEFAULT_DENY.has(v)) throw new Refused(`module ${v} is disabled in this build (modules/disabled.json)`)
+  return v
+}
+
+function verifyEnableModule(e: RequestEnvelope, ctx: VerifyContext): EnableModuleArgs {
+  if (!isObject(e.args)) throw new Refused('enable_module args must be an object')
+  onlyFields(e.args, ENABLE_FIELDS, '')
+  ownSlug(e, e.args)
+  const module = moduleOf(e.args.module, ctx)
+  // the engine's own list rules (the deny set board/vault, the catalogue), as for a create
+  assertEnableList([module], ctx.catalogueIds)
+  const dpia = dpiaOf(e.args.dpia === undefined || e.args.dpia === null ? undefined : { [module]: e.args.dpia }, [module])[module] ?? null
+  return { slug: e.customerSlug, module, dpia }
+}
+
+function verifyDisableModule(e: RequestEnvelope, ctx: VerifyContext): DisableModuleArgs {
+  if (!isObject(e.args)) throw new Refused('disable_module args must be an object')
+  onlyFields(e.args, MODULE_FIELDS, '')
+  ownSlug(e, e.args)
+  return { slug: e.customerSlug, module: moduleOf(e.args.module, ctx) }
+}
+
+function verifyRecordDpia(e: RequestEnvelope, ctx: VerifyContext): RecordDpiaArgs {
+  if (!isObject(e.args)) throw new Refused('record_dpia args must be an object')
+  const a = e.args
+  onlyFields(a, RECORD_DPIA_FIELDS, '')
+  ownSlug(e, a)
+  const module = moduleOf(a.module, ctx)
+  if (typeof a.requiresDpia !== 'boolean') throw new Refused('requiresDpia must be true or false')
+  if (a.documentRef === null || a.documentRef === undefined || (typeof a.documentRef === 'string' && a.documentRef.trim() === '')) {
+    throw new Refused('documentRef is required: the written decision (TOM-annex entry) must be named, whatever requiresDpia says')
+  }
+  const documentRef = text(a.documentRef, 'documentRef', 500)
+  // it travels as an argv word of the container verb: it must never read as a flag
+  if (documentRef.startsWith('-')) throw new Refused('documentRef must not start with a dash')
+  return { slug: e.customerSlug, module, requiresDpia: a.requiresDpia ? 'yes' : 'no', reasonCodes: ['operator_decision'], documentRef }
+}
+
+function verifyReconcile(e: RequestEnvelope): ReconcileArgs {
+  if (!isObject(e.args)) throw new Refused('reconcile args must be an object')
+  onlyFields(e.args, RECONCILE_FIELDS, '')
+  ownSlug(e, e.args)
+  if (typeof e.args.apply !== 'boolean') throw new Refused('apply must be true or false')
+  return { slug: e.customerSlug, apply: e.args.apply }
+}
+
 function verifyCreate(e: RequestEnvelope, ctx: VerifyContext): CreateRequestArgs {
   if (!isObject(e.args)) throw new Refused('create args must be an object')
   const a = e.args
@@ -267,6 +384,10 @@ export function verifyRequestArgs(e: RequestEnvelope, ctx: VerifyContext): Reque
     if (e.kind === 'import_members') return { verdict: 'ok', args: verifyImportMembers(e) }
     if (e.kind === 'seed_vertical') return { verdict: 'ok', args: verifySeedVertical(e) }
     if (e.kind === 'suspend' || e.kind === 'resume') return { verdict: 'ok', args: verifyLifecycle(e) }
+    if (e.kind === 'enable_module') return { verdict: 'ok', args: verifyEnableModule(e, ctx) }
+    if (e.kind === 'disable_module') return { verdict: 'ok', args: verifyDisableModule(e, ctx) }
+    if (e.kind === 'record_dpia') return { verdict: 'ok', args: verifyRecordDpia(e, ctx) }
+    if (e.kind === 'reconcile') return { verdict: 'ok', args: verifyReconcile(e) }
     return { verdict: 'ok', args: verifyCreate(e, ctx) }
   } catch (err) {
     if (err instanceof Refused || err instanceof ProvisioningError) return { verdict: 'refused', reason: err.message }

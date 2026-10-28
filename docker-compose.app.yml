@@ -470,8 +470,9 @@ services:
       # through `bootstrap-provisioner`; never under /run/secrets/tenants, which
       # gremion-ui mounts (check-tenant-secrets-dir).
       TENANT_PROVISIONER_SECRET_FILE: /run/secrets/tenant-create/tenant_provisioner
-      # enableModule's export target; tenant-create never disables a module,
-      # so nothing is written here (the disable verb brings its volume).
+      # disableModule's export target (TRD-044): the dump is written here BEFORE
+      # the module database is dropped, so the disable-module verb refuses unless
+      # this path is a mount that outlives the one-shot (volume below).
       TENANT_EXPORT_DIR: /var/lib/gremion/exports
       # TASK-075: the release_ref every ledger row init (gremion_platform) and
       # phase B (module databases) apply records: this colour's release.
@@ -484,6 +485,7 @@ services:
       - tenant-config-data:/data
       # TASK-043 G3: the admin credentials above, read-only.
       - ${GREMION_ROOT:-/opt/gremion}/etc/secrets/tenant-create:/run/secrets/tenant-create:ro
+      - ${GREMION_ROOT:-/opt/gremion}/data/module-exports:/var/lib/gremion/exports
       # The ops realm `init` imports (Q5), read-only like the base realm below.
       # Never an etc/edge mount: the router file is written by the host (Q17, j4).
       - ./docker/keycloak/realm-export.ops.json:/repo/docker/keycloak/realm-export.ops.json:ro

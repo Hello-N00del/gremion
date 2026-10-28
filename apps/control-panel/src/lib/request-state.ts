@@ -38,6 +38,10 @@ export const EXECUTOR_STEP_LABEL: Record<string, string> = {
   dispatch: 'Bearbeiter gewählt',
   create: 'Einrichtung gestartet',
   suspend: 'Sperren (Anmeldung, Broker, Mail-Absender)',
+  enable_module: 'Modul aktivieren (Prüfung, Datenbank, Broker)',
+  disable_module: 'Modul deaktivieren (Export, dann Datenbank entfernen)',
+  record_dpia: 'DPIA-Entscheidung festhalten',
+  reconcile: 'Abgleich der Anmeldung (Realm-Vertrag)',
   resume: 'Fortsetzen (Mail-Absender, Anmeldung, Broker)',
   'phase-a': 'Phase A (Realm, Kerndatenbank, Host)',
   mail: 'Mail-Absender',
@@ -82,6 +86,9 @@ const STEP_TOKEN = /^[a-z][a-z0-9_-]{0,39}$/
 
 const NOT_REPLAYABLE = 'Nur eine Einrichtung („create“) lässt sich hier wiederholen.'
 const REDO_ACTION = 'Die Aktion „Mandant sperren“ bzw. „Mandant fortsetzen“ kann unten erneut ausgelöst werden; die Daten wurden nicht angetastet.'
+/** The kinds of the "Module" section (modules.ts); a failed one is triggered again from there. */
+const MODULE_KINDS = ['enable_module', 'disable_module', 'record_dpia', 'reconcile']
+const REDO_MODULE = 'Die Aktion kann im Bereich „Module“ unten erneut ausgelöst werden; sie setzt am bisherigen Stand fort und ist wiederholbar.'
 const FIX_FORM = 'Die Angaben der Anfrage selbst wurden abgelehnt. Bitte im Formular „Neuer Mandant“ korrigiert neu anfordern.'
 
 export function describeRequest(r: RequestStateInput): RequestDescription {
@@ -99,7 +106,7 @@ export function describeRequest(r: RequestStateInput): RequestDescription {
     ...extra,
   })
   /** Retryable when the kind is create; otherwise says why not. */
-  const retry = (): Partial<RequestDescription> => (isCreate ? { retryable: true } : { retryNote: r.kind === 'suspend' || r.kind === 'resume' ? REDO_ACTION : NOT_REPLAYABLE })
+  const retry = (): Partial<RequestDescription> => (isCreate ? { retryable: true } : { retryNote: r.kind === 'suspend' || r.kind === 'resume' ? REDO_ACTION : MODULE_KINDS.includes(r.kind) ? REDO_MODULE : NOT_REPLAYABLE })
   switch (r.state) {
     case 'queued':
       return d('queued', 'In der Warteschlange', 'Die Anfrage wartet darauf, dass der Ausführer sie übernimmt.', { active: true })

@@ -217,6 +217,34 @@ loa2 sign-in as evidence, exactly like "Neuer Mandant"; the executor runs
   moved. Nothing is compared across requests: a deploy between a suspend and
   its resume is normal. A failed resume revokes the fresh mail principal again.
 
+**Modules and the realm check (TRD-044 remainder).** The same page has a
+"Module" section for an ACTIVE customer with no queued or running request: the
+enabled modules with "Modul deaktivieren", the available ones with "Modul
+aktivieren" plus the DPIA decision (an explicit erforderlich / nicht erforderlich
+and a document reference, as in "Neuer Mandant"; board and vault are shown
+blocked), a "DPIA-Entscheidung festhalten" form per enabled module and the
+"Abgleich" buttons. Each queues one request, handled by the executor:
+
+- `enable_module` {slug, module, dpia}: `tenant-create enable-module` (deny list,
+  loaded catalogue version, isolation pass on the release tip, the decision
+  recorded, enableModule through the gate, broker users). Repeatable.
+- `disable_module` {slug, module}: `tenant-create disable-module` (export and
+  verify the module database, only then drop it; broker users shrunk). It refuses,
+  nothing touched, unless `TENANT_EXPORT_DIR` is a mounted volume
+  (`$GREMION_ROOT/data/module-exports`, which must exist and be writable by the
+  container user). A failed export leaves the database; the same request again
+  resumes.
+- `record_dpia` {slug, module, requiresDpia, documentRef}: `tenant-create
+  dpia-record`, identical latest decision reused (no second row on a rerun).
+- `reconcile` {slug, apply}: the dry run is `tenant-create reconcile
+  --verify-only`; drift fails the request and the report is its event stream,
+  shown on the page as "Ergebnis des letzten Abgleichs". `apply` repairs, rotates
+  the host mail principal when smtp-server is `repair: host`, and must end green.
+
+A module must be in the catalogue and not in `modules/disabled.json`
+(request-verify). enable and disable assert the TRD-440 fingerprint like
+suspend/resume.
+
 The library commands below are what the container verbs run.
 
 
