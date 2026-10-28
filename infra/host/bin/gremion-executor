@@ -59,10 +59,46 @@ LEASE_SECONDS=600
 # kills its handler's process group. The database re-queues a lapsed lease
 # only 60 s after lease_until (migration 0011), so the kill is complete before
 # attempt + 1 can be claimed.
+#
+# WHAT "THE KILL" COVERS (H4 HIGH-1/HIGH-2):
+#   - the handler's process group (TERM, 5 s, KILL, confirmed empty);
+#   - the request's CONTAINERS: a `docker compose run` container is a child of
+#     the docker daemon, not of the compose client, so killing the client does
+#     not stop it. Every tenant-create run of a request carries the label
+#     gremion.request=<id> (customer-ops.sh tc); the kill is `docker kill` by
+#     that label until `docker ps --filter label=...` comes back empty twice
+#     (CONTAINER_WAIT seconds at most, then a LOUD failure and the request is
+#     NOT finished -- a finished request is retryable at once);
+#   - the renewer, a DEAD-MAN SWITCH: it checks every second that this
+#     process lives and that its own fence deadline has not passed, and if
+#     either fails it kills the handler's group and the containers itself
+#     (this process may have been KILLed: no trap runs then). It needs no
+#     workdir; every database and docker call it makes is under timeout(1).
+#   - INT/TERM/HUP of this process: the trap kills all of the above, then
+#     exits 128+n (the request stays `running`: --loop re-queues it at start,
+#     after the same container sweep; otherwise it lapses after the grace).
+# Every clock is MONOTONIC (/proc/uptime): a wall-clock step cannot move the
+# fence. A renewal's timestamp is taken BEFORE the call (the lease the
+# database grants starts no earlier than that).
+#
+# THE TIMING BOUND (defaults): the fence fires at FENCE (480 s) after the last
+# successful renewal's start, seen by the supervisor within 0.2 s, by the
+# renewer within its tick + one timed-out call (SQL_TIMEOUT 30 s + 5 s);
+# the kill takes <= 10 s (group) + CONTAINER_WAIT (30 s) + docker call
+# timeouts. 480 + 35 + 10 + 30 + 20 < 600 (lease) + 60 (re-queue grace).
 RENEW_SECONDS="${GREMION_EXECUTOR_RENEW_SECONDS:-60}"
 FENCE_SECONDS="${GREMION_EXECUTOR_FENCE_SECONDS:-$((LEASE_SECONDS - LEASE_SECONDS / 5))}"
-[[ "$RENEW_SECONDS" =~ ^[1-9][0-9]*$ && "$FENCE_SECONDS" =~ ^[1-9][0-9]*$ ]] \
-    || die "GREMION_EXECUTOR_RENEW_SECONDS / _FENCE_SECONDS must be positive integers" "$GREMION_EXIT_USAGE"
+SQL_TIMEOUT="${GREMION_EXECUTOR_SQL_TIMEOUT:-30}"
+CONTAINER_WAIT="${GREMION_EXECUTOR_CONTAINER_WAIT:-30}"
+DOCKER_TIMEOUT=10
+CONTAINER_LABEL="gremion.request"
+for _v in "$RENEW_SECONDS" "$FENCE_SECONDS" "$SQL_TIMEOUT" "$CONTAINER_WAIT"; do
+    [[ "$_v" =~ ^[1-9][0-9]*$ ]] \
+        || die "GREMION_EXECUTOR_RENEW_SECONDS / _FENCE_SECONDS / _SQL_TIMEOUT / _CONTAINER_WAIT must be positive integers" "$GREMION_EXIT_USAGE"
+done
+unset _v
+# db.sh's platform_sql puts every psql `docker exec` under timeout(1) with it
+export PLATFORM_SQL_TIMEOUT="$SQL_TIMEOUT"
 POLL_SECONDS="${GREMION_EXECUTOR_POLL_SECONDS:-5}"
 HOST_ID_RE='^[a-z0-9][a-z0-9._-]{0,62}$'
 # The panel's SECRET_LINE rule (TASK-043 executor.ts), moved here with the
@@ -83,12 +119,27 @@ HOST_ID=""
 WORK_ROOT=""
 AUDIT_LOG=""
 CURRENT_WORK=""
+# the request this process runs now (the signal trap's view of it)
+RUN_ID=""
+RUN_HPID=""
+RUN_RPID=""
+# MONO: the monotonic clock in whole seconds (mono sets it; no fork)
+MONO=0
+CLAIM_MONO=0
 
 cleanup_work() {
     if [[ -n "$CURRENT_WORK" && -d "$CURRENT_WORK" ]]; then rm -rf -- "$CURRENT_WORK"; fi
     CURRENT_WORK=""
+    RUN_ID=""
+    unset GREMION_EXECUTOR_REQUEST_ID
 }
 trap cleanup_work EXIT
+
+mono() {
+    local up _idle
+    read -r up _idle < /proc/uptime || die "/proc/uptime is unreadable (the monotonic clock of the lease fence)" "$GREMION_EXIT_ASSERT"
+    MONO="${up%%.*}"
+}
 
 host_id() {
     local h="${GREMION_EXECUTOR_HOST:-}"
@@ -162,19 +213,36 @@ release_lock() { exec 9>&- 2>/dev/null || true; }
 
 # renew_lease <request-id> — 0 renewed, 1 REFUSED by the database (the request
 # is no longer ours: re-queued, finished, lapsed -- psql exit 3), 2 not
-# answered (database unreachable -- the fence deadline decides).
+# answered (database unreachable, or the call timed out -- the fence deadline
+# decides). Its stderr is captured, never written into the workdir (the
+# renewer must work when the workdir is gone).
 renew_lease() {
-    local rc=0
-    executor_sql "SELECT plt.renew_provisioning_lease(:'id'::uuid, :'host', ${LEASE_SECONDS});" -v id="$1" -v host="$HOST_ID" >/dev/null 2>>"${CURRENT_WORK}/renew.err" || rc=$?
+    local rc=0 err
+    err="$(executor_sql "SELECT plt.renew_provisioning_lease(:'id'::uuid, :'host', ${LEASE_SECONDS});" -v id="$1" -v host="$HOST_ID" 2>&1 >/dev/null)" || rc=$?
     (( rc == 0 )) && return 0
+    bad "lease renewal of request $1: exit ${rc}${err:+: ${err%%$'\n'*}}" 2>/dev/null || true
     (( rc == 3 )) && return 1
     return 2
 }
-mark_renewed() { printf '%s' "$EPOCHSECONDS" > "${CURRENT_WORK}/renewed.tmp" && mv -f -- "${CURRENT_WORK}/renewed.tmp" "${CURRENT_WORK}/renewed"; }
+# mark_renewed <mono> — the start time of the last successful renewal.
+mark_renewed() { printf '%s' "$1" > "${CURRENT_WORK}/renewed.tmp" && mv -f -- "${CURRENT_WORK}/renewed.tmp" "${CURRENT_WORK}/renewed"; }
+# try_renew <request-id> — renew_lease's 0/1/2, timestamped BEFORE the call
+# (MED-3), plus 4: renewed, but the local record could not be written (LOW-5:
+# never reported as a database refusal).
+try_renew() {
+    local t rr=0
+    mono; t="$MONO"
+    renew_lease "$1" || rr=$?
+    (( rr == 0 )) || return "$rr"
+    mark_renewed "$t" 2>/dev/null || return 4
+    return 0
+}
 # raise_abort <reason> — first reason wins; the supervisor kills the handler.
+# Best effort (the renewer calls it after this process may be gone).
 raise_abort() {
+    [[ -n "$CURRENT_WORK" && -d "$CURRENT_WORK" ]] || return 0
     [[ -e "${CURRENT_WORK}/abort" ]] && return 0
-    printf '%s' "$1" > "${CURRENT_WORK}/abort.tmp" && mv -f -- "${CURRENT_WORK}/abort.tmp" "${CURRENT_WORK}/abort"
+    { printf '%s' "$1" > "${CURRENT_WORK}/abort.tmp" && mv -f -- "${CURRENT_WORK}/abort.tmp" "${CURRENT_WORK}/abort"; } 2>/dev/null || true
 }
 
 # A step marker on STDERR (stdout of `tc render-router` is the router file).
@@ -185,10 +253,11 @@ executor_step() { printf '@@executor-step %s\n' "$1" >&2; }
 executor_wrap_steps() {
     eval "executor_orig_$(declare -f tc)"
     eval "executor_orig_$(declare -f mail_step)"
+    eval "executor_orig_$(declare -f container_fingerprint)"
     # shellcheck disable=SC2329  # redefined here, called by customer_create
     tc() {
         case "${1:-}" in
-            phase-a|phase-b|record-step) executor_step "$1" ;;
+            phase-a|phase-b|record-step|activate) executor_step "$1" ;;
             render-router) executor_step router ;;
         esac
         local rc=0 name="${1:-tc}"
@@ -206,6 +275,14 @@ executor_wrap_steps() {
         (( rc == 0 )) || printf '@@executor-step-failed mail %d\n' "$rc" >&2
         return "$rc"
     }
+    # LOW-7: the TRD-440 measurement (before phase A and after activate) is a
+    # step of its own -- a moved container set fails "in trd-440", not in the
+    # step before it.
+    # shellcheck disable=SC2329  # redefined here, called by customer_create
+    container_fingerprint() {
+        executor_step trd-440
+        executor_orig_container_fingerprint
+    }
 }
 
 # record_stream <request-id> <first step> <workdir> — every line an event; a
@@ -220,11 +297,13 @@ record_stream() {
             step="${line#@@executor-step }"
             printf '%s' "$step" > "${work}/step"
             local rr=0
-            renew_lease "$id" && mark_renewed || rr=$?
+            try_renew "$id" || rr=$?
             if (( rr == 1 )); then
                 raise_abort "lease lost: the database refused the renewal of request ${id} at step ${step}"
             elif (( rr == 2 )); then
-                bad "could not renew the lease of request ${id} (database unreachable; the fence deadline applies)"
+                bad "could not renew the lease of request ${id} (database unreachable or timed out; the fence deadline applies)"
+            elif (( rr == 4 )); then
+                bad "the lease of request ${id} was renewed, but the local renewal record could not be written (the fence counts from the previous one)"
             fi
             event "$id" info "$step" "step ${step} started"
             continue
@@ -256,33 +335,166 @@ kill_group() {
         kill -0 -- "-${g}" 2>/dev/null || return 0
         sleep 0.2
     done
-    bad "the handler's process group ${g} did not die"
+    bad "the process group ${g} did not die"
+    return 1
+}
+
+# docker_t <args...> — docker under timeout(1), in this process group
+# (--foreground: a kill of the group reaches it; a wedged daemon cannot stall
+# the kill path).
+docker_t() { timeout --foreground -k 5 "$DOCKER_TIMEOUT" docker "$@"; }
+
+# kill_request_containers <label filter> — `docker kill` every RUNNING
+# container carrying the label (gremion.request=<id>, or gremion.request for
+# all of this host's) until `docker ps` finds none TWICE in a row 0.5 s apart
+# (a start the dead client had already sent may still land). 0 confirmed
+# gone; 1 (LOUD) still running, or docker could not be asked, after
+# CONTAINER_WAIT seconds.
+kill_request_containers() {
+    local filter="label=$1" ids="" empty=0 deadline rc
+    mono; deadline=$((MONO + CONTAINER_WAIT))
+    while :; do
+        rc=0
+        ids="$(docker_t ps -q --filter "$filter" 2>/dev/null)" || rc=$?
+        ids="${ids//$'\n'/ }"
+        if (( rc == 0 )) && [[ -z "${ids// /}" ]]; then
+            empty=$((empty + 1))
+            (( empty >= 2 )) && return 0
+        else
+            empty=0
+            # shellcheck disable=SC2086  # one argument per container id
+            (( rc == 0 )) && { docker_t kill $ids >/dev/null 2>&1 || true; }
+        fi
+        mono
+        (( MONO < deadline )) || break
+        sleep 0.5
+    done
+    bad "the container(s) with ${filter} are still running (or docker could not be asked: exit ${rc}) after ${CONTAINER_WAIT} s: ${ids:-?}" 2>/dev/null || true
+    return 1
+}
+
+# stop_request <request-id> <handler pgid> [renewer pgid] — the whole kill:
+# the renewer's and the handler's process groups, then the request's
+# containers. 0 only when everything is confirmed gone.
+stop_request() {
+    local ok=0
+    if [[ -n "${3:-}" ]]; then kill_group "$3" || ok=1; fi
+    if [[ -n "${2:-}" ]]; then kill_group "$2" || ok=1; fi
+    kill_request_containers "${CONTAINER_LABEL}=$1" || ok=1
+    return "$ok"
+}
+
+# renewer <request-id> <handler pgid> <executor pid> <base mono> — the
+# background renewer AND dead-man switch (its own process group). Every
+# second: is the executor alive, has the fence deadline passed; every
+# RENEW_SECONDS: renew. A refusal, the fence, or the executor gone: it kills
+# the handler's group and the request's containers itself, then exits. It
+# never needs the workdir (the abort / renewed files are best effort), and it
+# ignores SIGPIPE (a dead terminal or journal pipe must not kill the switch).
+# It closes executor.lock (fd 8: a restarted daemon must get it) but KEEPS
+# hostd.lock (fd 9) until it exits: no deploy, and no restarted daemon's
+# sweep-and-re-queue, starts while a container of this request may run.
+renewer() {
+    local id="$1" hp="$2" parent="$3" last="$4" next f rr t why=""
+    trap '' PIPE
+    exec 8>&-
+    mono; next=$((MONO + RENEW_SECONDS))
+    while sleep 1; do
+        if ! kill -0 "$parent" 2>/dev/null; then
+            why="the executor (pid ${parent}) is gone"
+        else
+            # a step marker's renewal (record_stream) moves the base too
+            f=""
+            { read -r f < "${CURRENT_WORK}/renewed"; } 2>/dev/null || true
+            [[ "$f" =~ ^[0-9]+$ ]] && (( f > last )) && last="$f"
+            mono
+            if (( MONO - last >= FENCE_SECONDS )); then
+                why="lease fence: no successful renewal for ${FENCE_SECONDS} s (the lease is ${LEASE_SECONDS} s); aborting before it can lapse"
+                raise_abort "$why"
+            elif (( MONO >= next )); then
+                t="$MONO"; rr=0
+                renew_lease "$id" || rr=$?
+                if (( rr == 0 )); then
+                    last="$t"
+                    mark_renewed "$t" 2>/dev/null || true
+                elif (( rr == 1 )); then
+                    why="lease lost: the database refused the renewal of request ${id}"
+                    raise_abort "$why"
+                fi
+                mono; next=$((MONO + RENEW_SECONDS))
+                # the executor may have died during a long (timed-out) call
+                kill -0 "$parent" 2>/dev/null || why="${why:-the executor (pid ${parent}) is gone}"
+            fi
+        fi
+        [[ -z "$why" ]] && continue
+        audit "$id" "renewer: ${why}; killing the handler's process group and the request's containers" 2>/dev/null || true
+        if stop_request "$id" "$hp"; then
+            audit "$id" "renewer: the handler and the request's containers are gone" 2>/dev/null || true
+        else
+            audit "$id" "renewer: the handler or a container of the request is still running" 2>/dev/null || true
+        fi
+        exit 0
+    done
 }
 
 # supervise_handler <handler pid/pgid> <renewer pid/pgid> — wait for the
 # handler; abort it when a renewal was refused (abort file) or no renewal has
-# succeeded for FENCE_SECONDS. Sets rc (the handler's status; 143 aborted).
+# succeeded for FENCE_SECONDS (monotonic). Sets rc (the handler's status; 143
+# aborted) and STOPPED (0 when the handler's group and the request's
+# containers are confirmed gone).
+STOPPED=0
 supervise_handler() {
-    local hp="$1" rp="$2" last
+    local hp="$1" rp="$2" id="$3" last
     while kill -0 "$hp" 2>/dev/null; do
         if [[ -e "${CURRENT_WORK}/abort" ]]; then break; fi
-        last="$(cat "${CURRENT_WORK}/renewed" 2>/dev/null || printf '0')"
-        if (( EPOCHSECONDS - last >= FENCE_SECONDS )); then
+        last=0
+        { read -r last < "${CURRENT_WORK}/renewed"; } 2>/dev/null || true
+        [[ "$last" =~ ^[0-9]+$ ]] || last=0
+        mono
+        if (( MONO - last >= FENCE_SECONDS )); then
             raise_abort "lease fence: no successful renewal for ${FENCE_SECONDS} s (the lease is ${LEASE_SECONDS} s); aborting before it can lapse"
             break
         fi
         sleep 0.2
     done
-    kill_group "$rp"
+    STOPPED=0
     if [[ -e "${CURRENT_WORK}/abort" ]]; then
-        kill_group "$hp"
+        stop_request "$id" "$hp" "$rp" || STOPPED=1
         wait "$hp" 2>/dev/null
+        wait "$rp" 2>/dev/null
         rc=143
         return 0
     fi
     wait "$hp" 2>/dev/null
     rc="$(cat "${CURRENT_WORK}/rc" 2>/dev/null || printf '1')"
+    # the handler returned: nothing of it, and no container of the request,
+    # may be left (a straggler in the group, a container of a killed client)
+    stop_request "$id" "$hp" "$rp" || STOPPED=1
+    wait "$rp" 2>/dev/null
     return 0
+}
+
+# on_signal <name> <exit code> — INT/TERM/HUP of the executor (HIGH-2): the
+# handler runs in its own process group, so a Ctrl-C or a TERM to this
+# process alone would not reach it. Kill the renewer, the handler and the
+# request's containers, record it, exit non-zero. The request stays
+# `running` (not finished: --loop re-queues it at its next start, after the
+# same container sweep; otherwise it lapses and is re-queued after the grace).
+on_signal() {
+    trap '' INT TERM HUP
+    local sig="$1" code="$2" step
+    bad "gremion-executor: SIG${sig} received; stopping" 2>/dev/null || true
+    if [[ -n "$RUN_ID" ]]; then
+        audit "$RUN_ID" "signal SIG${sig}: killing the renewer, the handler's process group and the request's containers" 2>/dev/null || true
+        step="$(cat "${CURRENT_WORK}/step" 2>/dev/null || printf 'executor')"
+        if stop_request "$RUN_ID" "$RUN_HPID" "$RUN_RPID"; then
+            event "$RUN_ID" error "$step" "the executor stopped on SIG${sig}; the handler and the request's containers were terminated; the request is re-queued by this host's next start (or after its lease lapses)" 2>/dev/null || true
+        else
+            audit "$RUN_ID" "signal SIG${sig}: a process or container of the request is still running" 2>/dev/null || true
+            event "$RUN_ID" error "$step" "the executor stopped on SIG${sig}, but a process or container of the request is still running: investigate before it is retried" 2>/dev/null || true
+        fi
+    fi
+    exit "$code"
 }
 
 # run_request <id> <kind> <slug> <origin> <operator> <attempt> — one claimed
@@ -294,10 +506,17 @@ RUN_RESULT=1
 run_request() {
     local id="$1" kind="$2" slug="$3" origin="$4" operator="$5" attempt="$6"
     local out rc=0 line verdict reason handler step hpid rpid
+    local base rr
     RUN_RESULT=1
+    [[ "$id" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] \
+        || die "the claim returned a request id that is not a uuid: '${id}'" "$GREMION_EXIT_ASSERT"
     CURRENT_WORK="${WORK_ROOT}/${id}"
     mkdir -p "$CURRENT_WORK"
     chmod 700 "$CURRENT_WORK"
+    RUN_ID="$id"
+    # HIGH-1: every tenant-create container of this request carries the label
+    # gremion.request=<id> (customer-ops.sh tc), so it can be killed by it
+    export GREMION_EXECUTOR_REQUEST_ID="$id"
     event "$id" info claim "claimed by ${HOST_ID}: ${kind} ${slug} (origin ${origin}, attempt ${attempt})"
     active_colour
     # 1. the trusted layer's verdict; nothing runs before it
@@ -338,36 +557,72 @@ run_request() {
         return 0
     fi
     jq -c '.args' <<< "$line" > "${CURRENT_WORK}/args.json"
-    mark_renewed
+    # MED-3: a REAL renewal before the handler starts (timestamped before the
+    # call). Refused: the request is no longer ours, nothing runs (and no
+    # finish: the database would refuse it). Unreachable: the fence counts
+    # from the claim, and a passed deadline starts nothing.
+    rr=0
+    try_renew "$id" || rr=$?
+    case "$rr" in
+        0) ;;
+        1)
+            event "$id" error dispatch "lease lost: the database refused the renewal of request ${id} before the handler started; nothing ran" || true
+            bad "request ${id}: lease lost before the handler started; nothing ran"
+            cleanup_work
+            RUN_ID=""
+            return 0 ;;
+        *)
+            bad "could not renew the lease of request ${id} before the handler (exit ${rr}); the fence counts from the claim"
+            mark_renewed "$CLAIM_MONO" || die "cannot write the renewal record in ${CURRENT_WORK}" "$GREMION_EXIT_ASSERT" ;;
+    esac
+    base="$(cat "${CURRENT_WORK}/renewed")"
+    mono
+    if (( MONO - base >= FENCE_SECONDS )); then
+        event "$id" error dispatch "lease fence: no successful renewal for ${FENCE_SECONDS} s; the handler is not started" || true
+        bad "request ${id}: lease fence passed before the handler started; nothing ran"
+        cleanup_work
+        RUN_ID=""
+        return 0
+    fi
     rc=0
     set +e
-    # The handler runs in ITS OWN process group (job control on for the fork),
-    # so a lost lease can kill it and everything it started (H4).
+    # The handler and the renewer run in THEIR OWN process groups (job control
+    # on for the forks), so a lost lease can kill the handler and everything
+    # it started (H4); the trap on INT/TERM/HUP reaches them (HIGH-2).
     set -m
     {
+        exec 8>&-
         ( set -e; executor_wrap_steps; "$handler" "$id" "$slug" "$operator" "${CURRENT_WORK}/args.json" "$CURRENT_WORK" ) 2>&1 \
             | record_stream "$id" "$kind" "$CURRENT_WORK"
         printf '%s' "${PIPESTATUS[0]}" > "${CURRENT_WORK}/rc"
     } < /dev/null &
     hpid=$!
-    ( while sleep "$RENEW_SECONDS"; do
-          rr=0
-          renew_lease "$id" && mark_renewed || rr=$?
-          if (( rr == 1 )); then
-              raise_abort "lease lost: the database refused the renewal of request ${id}"
-              exit 0
-          fi
-      done ) < /dev/null &
+    RUN_HPID="$hpid"
+    renewer "$id" "$hpid" "$$" "$base" < /dev/null &
     rpid=$!
+    RUN_RPID="$rpid"
     set +m
-    supervise_handler "$hpid" "$rpid"
+    supervise_handler "$hpid" "$rpid" "$id"
+    RUN_HPID=""; RUN_RPID=""
     set -e
     step="$(cat "${CURRENT_WORK}/step" 2>/dev/null || printf '%s' "$kind")"
+    if (( STOPPED != 0 )); then
+        # HIGH-1: a process or container of the request may still run. NOT
+        # finished (a finished request is retryable at once); LOUD; the
+        # executor exits (systemd restarts --loop, whose start sweeps the
+        # request's containers again before it re-queues anything).
+        reason="$(cat "${CURRENT_WORK}/abort" 2>/dev/null || printf 'the handler returned %s' "$rc")"
+        audit "$id" "NOT finished: ${reason}; a process or container of the request is still running"
+        event "$id" error "$step" "${reason}; a process or container of the request is still running: the request is left running (not finished) until it is confirmed gone" || true
+        cleanup_work
+        die "request ${id}: ${reason}; a process or container of the request is still running -- not finished, investigate (docker ps --filter label=${CONTAINER_LABEL}=${id})" "$GREMION_EXIT_ASSERT"
+    fi
     if [[ -e "${CURRENT_WORK}/abort" ]]; then
         reason="$(cat "${CURRENT_WORK}/abort")"
         # LOUD: audit log (always), an error event (the database may refuse it
         # when the request is no longer ours), a non-zero exit, a failed finish
-        event "$id" error "$step" "${reason}; the handler's process group was terminated" || true
+        # -- only now that the handler and its containers are confirmed gone
+        event "$id" error "$step" "${reason}; the handler's process group and the request's containers were terminated" || true
         ( finish "$id" failed "${kind} ${slug}: aborted in ${step}: ${reason}" ) || true
         bad "request ${id}: ${reason}; handler aborted"
     elif (( rc == 0 )); then
@@ -378,6 +633,7 @@ run_request() {
         finish "$id" failed "${kind} ${slug}: failed in ${step} (exit ${rc}); a new request resumes from the ledger"
     fi
     cleanup_work
+    RUN_ID=""
     return 0
 }
 
@@ -394,6 +650,8 @@ one_cycle() {
         CYCLE_RESULT=3
         return 0
     fi
+    # the lease the claim grants starts no earlier than now (monotonic)
+    mono; CLAIM_MONO="$MONO"
     if ! row="$(executor_sql "SELECT request_id, kind, customer_slug, origin, operator_id, attempt FROM plt.claim_provisioning_request(:'host', ${LEASE_SECONDS});" -v host="$HOST_ID")"; then
         release_lock
         die "the claim failed (gremion_platform unreachable?)" "$GREMION_EXIT_ASSERT"
@@ -418,7 +676,13 @@ main() {
         -h|--help) usage; exit "$GREMION_EXIT_OK" ;;
         *) usage >&2; exit "$GREMION_EXIT_USAGE" ;;
     esac
-    need_cmd docker jq grep sed tr mktemp realpath
+    need_cmd docker jq grep sed tr mktemp realpath timeout
+    [[ -r /proc/uptime ]] || die "/proc/uptime is unreadable (the monotonic clock of the lease fence)" "$GREMION_EXIT_USAGE"
+    # HIGH-2: the handler runs in its own process group; a signal to this
+    # process must reach it, the renewer and the request's containers
+    trap 'on_signal INT 130' INT
+    trap 'on_signal TERM 143' TERM
+    trap 'on_signal HUP 129' HUP
     ROOT="$(gremion_root)"
     RELEASE_DIR="${GREMION_RELEASE_DIR:-${ROOT}/current}"
     HOST_ID="$(host_id)"
@@ -446,9 +710,23 @@ main() {
     command -v flock >/dev/null 2>&1 || die "flock is not installed (util-linux)" "$GREMION_EXIT_USAGE"
     exec 8>>"${WORK_ROOT}/executor.lock" || die "cannot open ${WORK_ROOT}/executor.lock" "$GREMION_EXIT_USAGE"
     flock -n 8 || die "another gremion-executor --loop already runs on ${HOST_ID}" "$GREMION_EXIT_BLOCKED"
+    # HIGH-1: an orphaned request's CONTAINER may still run (a crash, a KILL:
+    # the container is the docker daemon's child). Under the host lock (a
+    # --once run holds it; so does a dying predecessor's renewer until its own
+    # kill is done), kill every container of this host's requests and confirm
+    # them gone, THEN re-queue -- never a second run of a slug beside one
+    # still running.
+    until take_lock; do
+        info "runtime/hostd.lock is held (a deploy, a --once run, or a predecessor still stopping); waiting before the re-queue"
+        beat
+        sleep "$POLL_SECONDS"
+    done
+    kill_request_containers "$CONTAINER_LABEL" \
+        || { release_lock; die "a container of an orphaned request of ${HOST_ID} is still running (docker ps --filter label=${CONTAINER_LABEL}); nothing is re-queued" "$GREMION_EXIT_ASSERT"; }
     local n
     n="$(executor_sql "SELECT plt.requeue_own_requests(:'host');" -v host="$HOST_ID")" \
-        || die "could not re-queue this host's orphaned requests" "$GREMION_EXIT_ASSERT"
+        || { release_lock; die "could not re-queue this host's orphaned requests" "$GREMION_EXIT_ASSERT"; }
+    release_lock
     info "gremion-executor ${EXECUTOR_VERSION} on ${HOST_ID}: ${n:-0} orphaned request(s) re-queued; polling every ${POLL_SECONDS} s"
     while true; do
         one_cycle

@@ -118,11 +118,24 @@ release_tip() {
     printf '%s' "$sha"
 }
 
+#
+# create-harden H4 (HIGH-1): under the executor (GREMION_EXECUTOR_REQUEST_ID,
+# set by gremion-executor for the request it runs) the container carries the
+# label gremion.request=<id>. The container is the docker daemon's child, not
+# the compose client's: killing the client (a lost lease, a signal) leaves it
+# running, and the executor kills it by this label and confirms it gone.
 tc() {
     local envfile="${ROOT}/etc/env/app-${COLOUR}.env"
     [[ -f "$envfile" ]] || die "env file absent: ${envfile}" "$GREMION_EXIT_USAGE"
     local tip; tip="$(release_tip)"
+    local -a label=()
+    if [[ -n "${GREMION_EXECUTOR_REQUEST_ID:-}" ]]; then
+        [[ "$GREMION_EXECUTOR_REQUEST_ID" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] \
+            || die "GREMION_EXECUTOR_REQUEST_ID is not a request id: '${GREMION_EXECUTOR_REQUEST_ID}'" "$GREMION_EXIT_USAGE"
+        label=(--label "gremion.request=${GREMION_EXECUTOR_REQUEST_ID}")
+    fi
     ( cd "$RELEASE_DIR" && docker compose --env-file "$envfile" run --rm -T \
+        ${label[@]+"${label[@]}"} \
         -e "GREMION_RELEASE_TIP=${tip}" \
         -e TRAEFIK_CERT_RESOLVER -e EDGE_BIND_IP -e EDGE_BIND_IP6 -e TENANT_DNS_PREFLIGHT -e GREMION_SCRATCH_FIXTURES -e GREMION_PRODUCTION_STACK \
         "${TC_MOUNT[@]}" tenant-create "$@" )
