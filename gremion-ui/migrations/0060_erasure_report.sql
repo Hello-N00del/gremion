@@ -14,9 +14,12 @@
 -- every expected module has an `erased` row, and a finished report is
 -- append-only, see erasure_report_header_guard / erasure_report_module_guard.
 --
--- The erased person's identifier is NEVER stored: subject_ref is
--- sha256(tenant_id || ':' || subject_id), so the report cannot re-identify them
--- (a requester who knows the id can recompute it to look the report up).
+-- The erased person's identifier is not stored in clear: subject_ref is a
+-- PSEUDONYM, HMAC-SHA256 under a per-tenant key derived (HKDF, purpose label)
+-- from the deployment's AUTH_SECRET (orchestrator.ts subjectRef). It is NOT
+-- anonymous: the server holding the secret can recompute it for a known id (the
+-- lookup-by-subject relies on that), so the report is still personal data under
+-- GDPR; without the secret a guessed id cannot be confirmed against a stored ref.
 --
 -- governance_membership_record (below) is where an erasure keeps a governance
 -- membership as a RECORD (RC-IDT-TENURE: "record period; pseudonymised on

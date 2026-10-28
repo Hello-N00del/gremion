@@ -12,7 +12,9 @@ import { createIdentityErasureHook } from './identity-hook'
 import { runErasure, subjectRef, type ErasureDeps } from './orchestrator'
 import { createPgReportStore, getErasureReport, listErasureReports } from './report-store'
 
-const TENANT_A = '01920000-0000-7000-8000-00000000aaaa'
+process.env.AUTH_SECRET ??= 'integration-test-auth-secret'
+
+const TENANT_A ='01920000-0000-7000-8000-00000000aaaa'
 const TENANT_B = '01920000-0000-7000-8000-00000000bbbb'
 const SUBJECT = 'kc-subject-erasure-1'
 const OTHER = 'kc-other-person'

@@ -11,7 +11,7 @@
 // so the seam is unit-testable; deps.ts wires the real ones. The chained records
 // (audit_log, Beschluss register) are never touched here: TRD-160's redaction layer
 // owns them.
-import { createHash } from 'node:crypto'
+import { createHmac, hkdfSync } from 'node:crypto'
 import type { Sql } from '@gremion/db'
 import {
   overallErasureStatus,
@@ -26,7 +26,7 @@ import { isTransientDbStartupError } from '$lib/server/db'
 export interface ErasureReport {
   readonly id: string
   readonly tenantId: string
-  /** Pseudonymous, tenant-bound reference of the subject (never the raw id). */
+  /** Keyed, tenant-bound pseudonym of the subject (never the raw id; see subjectRef). */
   readonly subjectRef: string
   readonly requestedBy: string
   readonly status: ErasureOverallStatus
@@ -72,9 +72,23 @@ export interface ErasureInput {
   requestedBy: string
 }
 
-/** The audit-safe, tenant-bound reference stored instead of the subject id. */
-export function subjectRef(tenantId: string, subjectId: string): string {
-  return createHash('sha256').update(`${tenantId}:${subjectId}`).digest('hex')
+const SUBJECT_REF_INFO = 'gremion/erasure/subject-ref/v1'
+
+/**
+ * The tenant-bound PSEUDONYM stored instead of the subject id:
+ * HMAC-SHA256(key, subjectId) with key = HKDF-SHA256(AUTH_SECRET, salt = tenantId,
+ * info = 'gremion/erasure/subject-ref/v1'). No per-tenant secret exists in the
+ * kernel today, so the key is derived from the deployment's AUTH_SECRET with a
+ * purpose label (it never doubles as the session key). Unlike a bare hash, a
+ * party without the secret cannot confirm a guessed id against a stored ref; the
+ * server (which holds the secret) still can, which is what the lookup-by-subject
+ * needs. Rotating AUTH_SECRET makes earlier reports unfindable by subject id
+ * (they stay readable by report id). Throws when no secret is configured.
+ */
+export function subjectRef(tenantId: string, subjectId: string, secret = process.env.AUTH_SECRET): string {
+  if (!secret) throw new Error('AUTH_SECRET must be set to derive the erasure subject reference')
+  const key = Buffer.from(hkdfSync('sha256', secret, tenantId, SUBJECT_REF_INFO, 32))
+  return createHmac('sha256', key).update(subjectId).digest('hex')
 }
 
 const skipped = (moduleId: string, reason: string): ModuleErasureOutcome => ({

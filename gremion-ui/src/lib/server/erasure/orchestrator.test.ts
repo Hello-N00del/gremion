@@ -2,7 +2,10 @@
 //
 // TRD-196 / PRD-OPS-005 — the erasure orchestrator reports PER MODULE and never
 // publishes an aggregate "complete" that could conceal a skipped or failed module.
+import { createHash } from 'node:crypto'
 import { describe, expect, it, vi } from 'vitest'
+
+process.env.AUTH_SECRET ??= 'unit-test-auth-secret'
 import type { Sql } from '@gremion/db'
 import type { ModuleErasureOutcome } from '@gremion/ports/erasure'
 import { overallErasureStatus } from '@gremion/ports/erasure'
@@ -70,6 +73,29 @@ function deps(
 }
 
 const input = { tenantId: TENANT, subjectId: SUBJECT, requestedBy: 'admin-1' }
+
+describe('subjectRef (LOW): keyed, not a bare hash anyone can recompute', () => {
+  it('is an HMAC under a per-tenant key derived from AUTH_SECRET, not sha256(tenant:subject)', () => {
+    const bare = createHash('sha256').update(`${TENANT}:${SUBJECT}`).digest('hex')
+    expect(subjectRef(TENANT, SUBJECT, 's1')).toMatch(/^[0-9a-f]{64}$/)
+    expect(subjectRef(TENANT, SUBJECT, 's1')).not.toBe(bare)
+    expect(subjectRef(TENANT, SUBJECT, 's1')).toBe(subjectRef(TENANT, SUBJECT, 's1'))
+    expect(subjectRef(TENANT, SUBJECT, 's2')).not.toBe(subjectRef(TENANT, SUBJECT, 's1'))
+    expect(subjectRef('tenant-b', SUBJECT, 's1')).not.toBe(subjectRef(TENANT, SUBJECT, 's1'))
+  })
+
+  it('defaults to AUTH_SECRET and refuses to run without one', () => {
+    const saved = process.env.AUTH_SECRET
+    try {
+      process.env.AUTH_SECRET = 's1'
+      expect(subjectRef(TENANT, SUBJECT)).toBe(subjectRef(TENANT, SUBJECT, 's1'))
+      delete process.env.AUTH_SECRET
+      expect(() => subjectRef(TENANT, SUBJECT)).toThrow(/AUTH_SECRET/)
+    } finally {
+      process.env.AUTH_SECRET = saved
+    }
+  })
+})
 
 describe('overallErasureStatus', () => {
   it('is incomplete for no modules at all (an empty run proves nothing)', () => {
