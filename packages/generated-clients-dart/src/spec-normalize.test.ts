@@ -118,6 +118,87 @@ describe('normalizeFor31 — enum containing null', () => {
   })
 })
 
+describe('normalizeFor31 — oneOf/anyOf with a null branch', () => {
+  it('merges the 3.1 spelling [{type: "null"}, T] into T with null added to its type, whatever the branch order or keyword, keeping the other keys of T and of the parent', () => {
+    const { doc, report } = normalizeFor31(wrap({
+      a: { oneOf: [{ type: 'null' }, { type: 'string', format: 'date-time' }] },
+      b: { anyOf: [{ type: 'integer' }, { type: 'null' }], description: 'kept' },
+      d: { oneOf: [{ type: 'null' }, { type: ['string', 'integer'] }] },
+    }))
+    expect(props(doc)).toEqual({
+      a: { type: ['string', 'null'], format: 'date-time' },
+      b: { description: 'kept', type: ['integer', 'null'] },
+      d: { type: ['string', 'integer', 'null'] },
+    })
+    expect(report.oneOfNullMerged).toEqual([
+      '/components/schemas/A/properties/a',
+      '/components/schemas/A/properties/b',
+      '/components/schemas/A/properties/d',
+    ])
+  })
+
+  it('hoists a nullable inline OBJECT into a component named like the generator inline model, and points the property at it with [$ref, null] (type [object, null] would still generate a non-nullable field)', () => {
+    const obj = { type: 'object', required: ['k'], properties: { k: { type: 'string' } } }
+    const { doc, report } = normalizeFor31(wrap({ database: { description: 'kept', oneOf: [{ type: 'null' }, obj] }, time_zone: { anyOf: [obj, { type: 'null' }] } }))
+    expect(props(doc)).toEqual({
+      database: { description: 'kept', oneOf: [{ $ref: '#/components/schemas/ADatabase' }, { type: 'null' }] },
+      time_zone: { anyOf: [{ $ref: '#/components/schemas/ATimeZone' }, { type: 'null' }] },
+    })
+    const schemas = (doc as { components: { schemas: Record<string, unknown> } }).components.schemas
+    expect(schemas.ADatabase).toEqual(obj)
+    expect(schemas.ATimeZone).toEqual(obj)
+    expect(report.oneOfNullHoisted).toEqual(['/components/schemas/A/properties/database', '/components/schemas/A/properties/time_zone'])
+  })
+
+  it('refuses to hoist where it cannot name the object (not a schema property) or where the name is taken', () => {
+    const obj = { type: 'object', properties: { k: { type: 'string' } } }
+    const input = { openapi: '3.1.0', paths: { '/p': { get: { responses: { '200': { content: { 'application/json': { schema: { oneOf: [{ type: 'null' }, obj] } } } } } } } } }
+    expect(() => normalizeFor31(input)).toThrow(/can only be hoisted/)
+    expect(() => normalizeFor31({ openapi: '3.1.0', components: { schemas: { A: { type: 'object', properties: { b: { oneOf: [{ type: 'null' }, obj] } } }, AB: { type: 'string' } } } })).toThrow(/clash/)
+  })
+
+  it('infers string for a string enum branch with no type (the generator would otherwise make a Null model)', () => {
+    const { doc } = normalizeFor31(wrap({ e: { oneOf: [{ enum: ['x', 'y'] }, { type: 'null' }] } }))
+    expect(props(doc).e).toEqual({ type: ['string', 'null'], enum: ['x', 'y'] })
+  })
+
+  it('leaves a $ref branch, a composed branch and a three-branch form exactly as written (the generator reads those)', () => {
+    const input = wrap({
+      r: { anyOf: [{ $ref: '#/components/schemas/B' }, { type: 'null' }] },
+      m: { oneOf: [{ allOf: [{ $ref: '#/components/schemas/B' }] }, { type: 'null' }] },
+      t: { oneOf: [{ type: 'string' }, { type: 'integer' }, { type: 'null' }] },
+      p: { oneOf: [{ type: 'string' }, { type: 'integer' }] },
+    })
+    const { doc, report } = normalizeFor31(input)
+    expect(doc).toEqual(input)
+    expect(report.oneOfNullMerged).toEqual([])
+  })
+
+  it('fails closed where the merge would have to choose: an untyped non-enum branch, a sibling type, a conflicting key', () => {
+    expect(() => normalizeFor31(wrap({ a: { oneOf: [{ type: 'null' }, { format: 'uuid' }] } }))).toThrow(/without a "type"/)
+    expect(() => normalizeFor31(wrap({ a: { type: 'string', oneOf: [{ type: 'null' }, { type: 'string' }] } }))).toThrow(/sibling "type"/)
+    expect(() => normalizeFor31(wrap({ a: { format: 'uuid', oneOf: [{ type: 'null' }, { type: 'string', format: 'date' }] } }))).toThrow(/"format" differently/)
+  })
+})
+
+describe('normalizeFor31 — additionalProperties: false', () => {
+  it('drops a literal false (the generator mis-types a property that references a schema holding such an object) and keeps every other additionalProperties', () => {
+    const { doc, report } = normalizeFor31(wrap({
+      a: { type: 'object', additionalProperties: false, properties: { k: { type: 'string' } } },
+      b: { type: 'object', additionalProperties: true },
+      c: { type: 'object', additionalProperties: { type: 'string' } },
+      additionalProperties: { type: 'boolean' },
+    }))
+    expect(props(doc)).toEqual({
+      a: { type: 'object', properties: { k: { type: 'string' } } },
+      b: { type: 'object', additionalProperties: true },
+      c: { type: 'object', additionalProperties: { type: 'string' } },
+      additionalProperties: { type: 'boolean' },
+    })
+    expect(report.additionalPropertiesFalseDropped).toEqual(['/components/schemas/A/properties/a'])
+  })
+})
+
 describe('normalizeFor31 — scope', () => {
   it('is the identity on an OpenAPI 3.0 document (the generator reads nullable there)', () => {
     const input = { openapi: '3.0.3', s: { type: 'string', nullable: true } }
