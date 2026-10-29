@@ -491,14 +491,26 @@ async function signin(o) {
     if (![302, 303, 307].includes(first.status) || !into || !/^\/auth\/login$/.test(new URL(into, app.origin).pathname)) {
       throw new Error(`anonymous GET / answered ${first.status} ${into ?? ''}, not a redirect into /auth/login`)
     }
-    // ... whose script calls Auth.js: the CSRF token, then the sign-in POST.
+    // ... whose script calls Auth.js: the CSRF token, then the sign-in POST. gremion-ui runs Auth.js
+    // with its own CSRF check disabled (csrfOriginGuard checks Origin instead); Auth.js then serves no
+    // /auth/csrf at all (404), and the POST carries no token, only the Origin every browser sends (#50).
     const csrf = await b.request(`${app.origin}/auth/csrf`)
-    const token = JSON.parse(await csrf.text()).csrfToken
-    if (!token) throw new Error(`GET /auth/csrf answered ${csrf.status} with no csrfToken`)
+    const form = { callbackUrl: `${app.origin}/` }
+    if (csrf.status !== 404) {
+      const text = await csrf.text()
+      let token
+      try {
+        token = JSON.parse(text).csrfToken
+      } catch {
+        throw new Error(`GET /auth/csrf answered ${csrf.status} with a non-JSON body: ${text.slice(0, 80)}`)
+      }
+      if (!token) throw new Error(`GET /auth/csrf answered ${csrf.status} with no csrfToken`)
+      form.csrfToken = token
+    }
     const post = await b.request(`${app.origin}/auth/signin/keycloak`, {
       method: 'POST',
-      headers: { 'content-type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({ csrfToken: token, callbackUrl: `${app.origin}/` }),
+      headers: { 'content-type': 'application/x-www-form-urlencoded', origin: app.origin },
+      body: new URLSearchParams(form),
     })
     const loc = post.headers.get('location')
     if (post.status !== 302 || !loc) throw new Error(`POST /auth/signin/keycloak answered ${post.status}, not 302`)

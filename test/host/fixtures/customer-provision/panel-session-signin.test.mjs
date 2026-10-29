@@ -83,13 +83,20 @@ async function stub(req, res) {
     seen.dashboard += 1
     return page(res, `<html><head><title>${TITLE} – Gremion</title></head><body>dashboard</body></html>`)
   }
+  if (u.pathname === '/auth/csrf' && csrfDisabled) {
+    res.writeHead(404)
+    return res.end()
+  }
   if (u.pathname === '/auth/csrf') {
     res.writeHead(200, { 'content-type': 'application/json', 'set-cookie': 'authjs.csrf-token=t0k; Path=/' })
     return res.end(JSON.stringify({ csrfToken: 't0k' }))
   }
   if (u.pathname === '/auth/signin/keycloak' && req.method === 'POST') {
     const f = await body(req)
-    if (f.get('csrfToken') !== 't0k') return redirect(res, '/auth/error')
+    if (csrfDisabled) {
+      // gremion-ui's csrfOriginGuard: a same-origin Origin, and Auth.js wants no token
+      if (req.headers.origin !== `https://${HOST}` || f.has('csrfToken')) return redirect(res, '/auth/error')
+    } else if (f.get('csrfToken') !== 't0k') return redirect(res, '/auth/error')
     const az = new URL(`${REALM}/protocol/openid-connect/auth`)
     az.searchParams.set('client_id', 'gremion-ui')
     az.searchParams.set('response_type', 'code')
@@ -106,6 +113,8 @@ async function stub(req, res) {
 }
 
 let server
+// gremion-ui's real mode: Auth.js with its CSRF check disabled (no /auth/csrf; Origin is the check)
+let csrfDisabled = false
 let base
 let dir
 before(async () => {
@@ -160,6 +169,22 @@ describe('panel-session signin, realm on the app host (Q16)', () => {
     assert.equal(out.title, true)
     assert.deepEqual(out.kinds, ['password', 'otp'])
     assert.equal(out.authorize, `${REALM}/protocol/openid-connect/auth`)
+  })
+
+  it('signs in against an app whose Auth.js CSRF check is disabled (no /auth/csrf, Origin only), as gremion-ui runs (#50)', async () => {
+    csrfDisabled = true
+    seen.dashboard = 0
+    try {
+      const r = await run([
+        'signin', '--app', `https://${HOST}`, '--realm-url', REALM, '--user', USER,
+        '--password-file', join(dir, 'pw'), '--totp-secret-in', join(dir, 'totp'),
+        '--title', TITLE, '--resolve', `${HOST}=${base}`,
+      ])
+      assert.equal(r.code, 0, `signin failed: ${r.err} ${r.out}`)
+      assert.equal(seen.dashboard, 1, 'the dashboard was never served')
+    } finally {
+      csrfDisabled = false
+    }
   })
 
   it('the rehearsal form stops at the callback on the SAME host, never on a Keycloak redirect', async () => {
