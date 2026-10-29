@@ -19,6 +19,7 @@
 //   operator-add <email> [--no-mail]                an operator in the ops realm `platform` (Q5, Q23)
 //   delete <slug>                                   crypto-shred delete (kernel database by tenant id)
 //   bootstrap-provisioner                           the least-privilege Keycloak provisioner SA
+//   bootstrap-provisioner --adopt-realm <realm>     #48: the SA gets the realm-creator roles on a realm it did not create
 //   materialize-config <slug> [--config <path>]     bake the effective tenant config
 //   --help                                          usage (and proof that every adapter imports)
 //
@@ -88,7 +89,7 @@ import {
   configPathForTenant,
   type Tenant,
 } from '../src/lib/server/tenant/registry'
-import { KcProvisionApi, type KcTransport } from '../src/lib/server/tenant/provisioner/kc-admin-api'
+import { KcProvisionApi, masterAdminClientId, type KcTransport } from '../src/lib/server/tenant/provisioner/kc-admin-api'
 import { customerAdapters, kernelServer, reconcileKernelAudit } from '../src/lib/server/tenant/provisioner/customer-adapters'
 import { fixtureIdentities } from '../src/lib/server/tenant/provisioner/fixture-identities'
 import {
@@ -998,9 +999,24 @@ async function cmdDelete(): Promise<void> {
 }
 
 async function cmdBootstrapProvisioner(): Promise<void> {
+  const adopt = flag('--adopt-realm')
   const kc = adminKcOrUndefined()
-  if (!kc) throw new UsageError('bootstrap-provisioner needs KEYCLOAK_ADMIN and KEYCLOAK_ADMIN_PASSWORD')
+  if (!kc) throw new UsageError(`bootstrap-provisioner${adopt ? ' --adopt-realm' : ''} needs KEYCLOAK_ADMIN and KEYCLOAK_ADMIN_PASSWORD`)
   const clientId = process.env.TENANT_PROVISIONER_CLIENT_ID ?? 'tenant-provisioner'
+  if (adopt !== undefined) {
+    // #48: a realm the SA did not create (imported, or older than the SA). Only the
+    // creator-equivalent grant; the SA and its secret file are not touched. Never the
+    // ops realm: its operators stay out of reach of the tenant-create credential.
+    if (adopt === OPS_REALM) throw new UsageError(`--adopt-realm ${OPS_REALM}: refusing the ops realm (it is administered with the Keycloak admin credential only)`)
+    const r = await kc.adoptRealmForProvisioner(clientId, adopt)
+    log(
+      `bootstrap-provisioner --adopt-realm ${adopt}: SA "${clientId}" on master client "${masterAdminClientId(adopt)}": ` +
+        (r.granted.length ? `GRANTED [${r.granted.join(', ')}]` : 'nothing to grant') +
+        (r.alreadyHeld.length ? `; already held [${r.alreadyHeld.join(', ')}]` : '') +
+        `; now run reconcile --verify-only for the realm's tenant`,
+    )
+    return
+  }
   const { clientSecret, created } = await kc.createProvisionerServiceAccount('master', clientId, ['create-realm'])
   await writeSecretFile(PROVISIONER_SECRET_FILE, clientSecret)
   log(`bootstrap-provisioner: master-realm SA "${clientId}" ${created ? 'CREATED' : 'already present'} with ONLY [create-realm]; secret written to ${PROVISIONER_SECRET_FILE}`)
@@ -1033,7 +1049,7 @@ const USAGE = `usage: tenant-create <verb> ...
   reconcile [--verify-only] <slug>|--all [--sender-json <json>]
   status <slug>
   operator-add <email> [--no-mail]
-  delete <slug> | bootstrap-provisioner | materialize-config <slug> [--config <path>]
+  delete <slug> | bootstrap-provisioner [--adopt-realm <realm>] | materialize-config <slug> [--config <path>]
   request-verify <request-id>   (TASK-043d: the executor's trusted-layer verdict, one JSON line)
 ${GATE_USAGE}
 ${IMPORT_USAGE}

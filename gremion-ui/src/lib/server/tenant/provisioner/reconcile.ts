@@ -20,7 +20,16 @@
 // fullScopeAllowed, the gremion-ui sub-mapper) are REPORTED but never auto-repaired — a
 // re-import is the operator's answer. The one exception among the sub checks is
 // `bearer-clients-sub` (TASK-033-a): it adds the missing sub mapper / scope.
-import { KcProvisionApi, realmSeg, stepup2faGateProblem, type FlowExecRep, type KcTransport } from './kc-admin-api'
+import {
+  adminApiStatus,
+  KcProvisionApi,
+  masterAdminClientId,
+  REALM_CREATOR_ROLES,
+  realmSeg,
+  stepup2faGateProblem,
+  type FlowExecRep,
+  type KcTransport,
+} from './kc-admin-api'
 import { ADMIN_CLIENT_ID, GREMION_ADMIN_SA_REALM_ROLES } from './pipeline'
 import { frontendUrlFor, REALM_PASSWORD_POLICY } from './realm-doc'
 import type { TenantStatus } from '../registry'
@@ -447,8 +456,44 @@ const SUB_MAPPER_REP = {
   },
 }
 
-export async function reconcileRealm(transport: KcTransport, opts: ReconcileOptions): Promise<ReconcileReport> {
+/**
+ * #48: the provisioner SA got 403 on a realm. It holds only master `create-realm`,
+ * and Keycloak gives it admin on the realms it CREATED; a realm imported at first
+ * boot, or created before the SA existed, refuses it every Admin API call. The
+ * message names the missing grant and the one command that makes it.
+ */
+export class RealmNotAdoptedError extends Error {
+  constructor(
+    readonly realm: string,
+    readonly denied: string,
+    cause?: unknown,
+  ) {
+    super(
+      `realm "${realm}" was most likely not created by the provisioner service account, which holds only master create-realm (Keycloak gives it admin on the realms it created): ${denied}. ` +
+        `Missing grant: the realm-creator roles of master client "${masterAdminClientId(realm)}" (${REALM_CREATOR_ROLES.join(', ')}). ` +
+        `Grant them once with the Keycloak admin credential: tenant-create bootstrap-provisioner --adopt-realm ${realm} (KEYCLOAK_ADMIN and KEYCLOAK_ADMIN_PASSWORD set; docs/ops/runbook/upgrade.md), then rerun reconcile. ` +
+        `If --adopt-realm reports nothing to grant, the 403 has another cause (the original error is above).`,
+      { cause },
+    )
+    this.name = 'RealmNotAdoptedError'
+  }
+}
+
+/** The transport reconcile runs on: a 403 becomes RealmNotAdoptedError, everything else passes as it was. */
+function adoptionGuard(transport: KcTransport, realm: string): KcTransport {
+  return async (method, path, body) => {
+    try {
+      return await transport(method, path, body)
+    } catch (err) {
+      if (!(err instanceof RealmNotAdoptedError) && adminApiStatus(err) === 403) throw new RealmNotAdoptedError(realm, `403 on ${method} ${path} (${err instanceof Error ? err.message : String(err)})`, err)
+      throw err
+    }
+  }
+}
+
+export async function reconcileRealm(rawTransport: KcTransport, opts: ReconcileOptions): Promise<ReconcileReport> {
   const { realm, tenantHost, apexDomain, base, verifyOnly } = opts
+  const transport = adoptionGuard(rawTransport, realm)
   // (FIX3-B) Encode the realm name as a single path segment via the SHARED
   // realmSeg helper (same encoding KcProvisionApi applies) — defence-in-depth so
   // these GET/PUT paths can never break out of their segment even though the CLI
