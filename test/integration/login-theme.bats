@@ -124,6 +124,17 @@ else:
 '
 }
 
+# PKCE: the `gremion-ui` client enforces pkce.code.challenge.method=S256 (realm
+# template, reconcile's `gremion-ui-pkce` check). An authorization request with
+# NO code_challenge is not served the login page: Keycloak logs "PKCE enforced
+# Client without code challenge method" and answers 302 back to the client's
+# redirect_uri with error=invalid_request. That is the CORRECT behaviour of the
+# hardening, so the request must carry a challenge like a real Auth.js login
+# does (checks: ['pkce', 'state']). The value is the RFC 7636 appendix B test
+# vector: the page never sees the verifier, so any well-formed S256 challenge
+# (43 base64url chars) will do.
+PKCE_CHALLENGE="E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"
+
 authorize() {
     local uri="$1"
     shift
@@ -131,7 +142,9 @@ authorize() {
         --data-urlencode "client_id=${THEME_CLIENT_ID}" \
         --data-urlencode "redirect_uri=${uri}" \
         --data "response_type=code" \
-        --data "scope=openid"
+        --data "scope=openid" \
+        --data-urlencode "code_challenge=${PKCE_CHALLENGE}" \
+        --data "code_challenge_method=S256"
 }
 
 login_page() {
@@ -180,7 +193,8 @@ realm_effective_name() {
     code=$(authorize "$uri" -s -o /dev/null -w '%{http_code}')
     if [ "$code" != "200" ]; then
         echo "FAIL: the authorization endpoint answered ${code} for redirect_uri=${uri}." >&2
-        echo "      An unregistered redirect_uri answers 400 with an error page, which would make" >&2
+        echo "      An unregistered redirect_uri answers 400 with an error page, and a request the" >&2
+        echo "      client's PKCE enforcement rejects answers 302 with error=invalid_request; either would make" >&2
         echo "      every assertion below fail on an empty body instead of on the theme." >&2
         return 1
     fi
