@@ -23,6 +23,23 @@ describe('the vendor kind catalogue (Q8)', () => {
     expect(VERTICAL_UNIT_KINDS.map((k) => k.kindKey).sort()).toEqual(used)
   })
 
+  it("R22-7 / R22-15 parity: the vertical's role data agrees with the identity rule (voting=false <=> no gov.vote.cast / gov.quorum.count); the capability carry itself is TASK-081's", () => {
+    const roles = (JSON.parse(readFileSync(join(REPO, 'verticals', 'stura', 'roles.json'), 'utf8')) as { roles: { key: string; voting: boolean; capabilities: string[]; withheld: string[] }[] }).roles
+    const VOTE = ['gov.vote.cast', 'gov.quorum.count']
+    const helper = roles.find((r) => r.key === 'helper')
+    const member = roles.find((r) => r.key === 'member')
+    expect(helper, 'roles.json holds the helper role').toBeDefined()
+    expect(helper!.voting).toBe(false) // idt.membership: participation_kind non_voting_helper <=> voting = false (membership_voting_check)
+    for (const cap of VOTE) {
+      expect(helper!.withheld).toContain(cap)
+      expect(helper!.capabilities).not.toContain(cap)
+    }
+    expect(member!.voting).toBe(true)
+    for (const cap of VOTE) expect(member!.capabilities).toContain(cap)
+    // every role: a non-voting one holds neither capability
+    for (const r of roles.filter((x) => !x.voting)) for (const cap of VOTE) expect(r.capabilities, r.key).not.toContain(cap)
+  })
+
   it('every kind key satisfies org_unit_kind_kind_key_check, keys are unique, the initiative kind stays undecided (question 4)', () => {
     const keys = VENDOR_KINDS.map((k) => k.kindKey)
     expect(new Set(keys).size).toBe(keys.length)

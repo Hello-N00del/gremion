@@ -22,7 +22,7 @@ export const NAMED: Record<'unit' | 'integration' | 'live', Record<string, numbe
     'test/bodies/migrations.test.ts': 10,
     'test/bodies/cli.test.ts': 12,
     'test/bodies/http.test.ts': 13,
-    'test/bodies/kinds.test.ts': 5,
+    'test/bodies/kinds.test.ts': 6,
     'test/outbox/catalogue.test.ts': 5,
     'test/outbox/compose.test.ts': 4,
     'test/outbox/relay-host.test.ts': 6,
