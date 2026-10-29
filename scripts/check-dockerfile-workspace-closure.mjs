@@ -123,10 +123,14 @@ export function loadWorkspace(root, problems = []) {
     let json
     try {
       json = JSON.parse(readFileSync(file, 'utf8'))
-    } catch {
+    } catch (err) {
+      problems.push(`${dir}/package.json: not valid JSON -- ${err.message}`)
       continue
     }
-    if (typeof json.name !== 'string') continue
+    if (json === null || typeof json !== 'object' || typeof json.name !== 'string') {
+      problems.push(`${dir}/package.json: a workspace package's "name" must be a string -- it cannot be resolved as a closure member`)
+      continue
+    }
     const deps = new Map()
     for (const f of DEP_FIELDS)
       for (const [n, spec] of Object.entries(json[f] ?? {}))

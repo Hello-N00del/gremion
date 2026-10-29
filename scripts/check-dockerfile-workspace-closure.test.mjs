@@ -184,6 +184,24 @@ test('a pnpm-workspace.yaml glob that is neither a literal dir nor <dir>/* is a 
   )
 })
 
+test('a workspace package.json that is not valid JSON, or has no string name, is a problem', () => {
+  const df = FROM + 'COPY packages/a/package.json ./packages/a/\nCOPY packages/a ./packages/a/\n'
+  for (const [label, text, re] of [
+    ['invalid JSON', '{ "name": "@gremion/b", ', /^packages\/b\/package\.json: not valid JSON/],
+    ['no name', '{ "version": "1.0.0" }', /^packages\/b\/package\.json: .*"name" must be a string/],
+    ['non-string name', '{ "name": 7 }', /^packages\/b\/package\.json: .*"name" must be a string/],
+  ])
+    withTree({ ...W, 'packages/a/package.json': pkg('@gremion/a'), 'packages/b/package.json': text, 'services/svc/Dockerfile': df }, (root) => {
+      const r = checkWorkspaceClosure(root)
+      assert.equal(r.problems.length, 1, label)
+      assert.match(r.problems[0], re, label)
+    })
+  // A directory under a glob with no package.json at all is not a package and is fine.
+  withTree({ ...W, 'packages/a/package.json': pkg('@gremion/a'), 'packages/empty/README.md': 'x', 'services/svc/Dockerfile': df }, (root) =>
+    assert.deepEqual(checkWorkspaceClosure(root).problems, []),
+  )
+})
+
 test('a wholesale COPY of a parent directory (kernel-api COPY modules) makes no package a seed', () => {
   // b's manifest rides along with `COPY packages`, but nothing builds b: only a is a seed and a has no workspace deps.
   withTree(
