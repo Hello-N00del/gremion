@@ -484,6 +484,38 @@ resolve_ref_at() {
 GOOD_DIGEST_A=1111111111111111111111111111111111111111111111111111111111111111
 GOOD_DIGEST_B=2222222222222222222222222222222222222222222222222222222222222222
 
+# The password the credential tests plant. It lives in a file the script is
+# pointed at, never in an environment the script is started with.
+CUT_SECRET=dummy-password-for-the-test
+
+# cut_probe -- the line every recording stub runs: "probe <name> env=<n>
+# ppid=<n>", n being how many lines of the stub's own environment, and of the
+# environ its PARENT was exec'd with (/proc/$PPID/environ, which `unset` does
+# not touch), contain the test password. A grep on the exported variable alone
+# would pass for a script that merely unset it. "unreadable" if /proc is not
+# there, which the tests then refuse.
+cut_probe() {
+    # shellcheck disable=SC2016
+    local tmpl='printf "probe %s env=%s ppid=%s\n" "${0##*/}" "$(env | grep -c -- NEEDLE)" "$(if [ -r "/proc/$PPID/environ" ]; then tr "\0" "\n" < "/proc/$PPID/environ" | grep -c -- NEEDLE; else echo unreadable; fi)" >> "$ENV_LOG"'
+    printf '%s\n' "${tmpl//NEEDLE/$CUT_SECRET}"
+}
+
+require_proc() {
+    [ -r /proc/self/environ ] || skip "no /proc (the credential probe reads /proc/<pid>/environ; CI and the bats runner image have it)"
+}
+
+# assert_probes_clean -- every child that recorded a probe, bar sign-release.sh,
+# neither holds the password nor was started from an environ that did; the
+# named children did record one (a stub that never ran proves nothing).
+assert_probes_clean() {
+    local who leaked
+    for who in "$@"; do
+        grep -q "^probe ${who} " "$ENV_LOG" || { echo "no probe from ${who}:" >&2; cat "$ENV_LOG" >&2; return 1; }
+    done
+    leaked="$(grep '^probe ' "$ENV_LOG" | grep -v '^probe sign-release\.sh ' | grep -v ' env=0 ppid=0$' || true)"
+    [ -z "$leaked" ] || { echo "the password reached:" >&2; echo "$leaked" >&2; return 1; }
+}
+
 # A throwaway clone that holds a copy of the script at the path it expects, so
 # its repository root (derived from its own location) is the throwaway and the
 # dirty-tree check never looks at the real working tree. It has a bare origin
@@ -504,13 +536,15 @@ make_cut_repo() {
     git -C "$CUT_REPO" remote add origin "$CUT_ORIGIN"
     cp "$CUTTAG" "${CUT_REPO}/scripts/release/cut-dist-tag.sh"
     printf '{"chains":[{"files":{"001_a":"x","002_b":"y"}}]}\n' > "${CUT_REPO}/scripts/migrations/applied.lock.json"
-    printf '#!/usr/bin/env bash\nexit 0\n' > "${CUT_REPO}/scripts/release/lint-release.sh"
-    printf '#!/usr/bin/env bash\nexit 0\n' > "${CUT_REPO}/scripts/release/release-tag-check.sh"
+    printf '#!/usr/bin/env bash\n%s\nexit 0\n' "$(cut_probe)" > "${CUT_REPO}/scripts/release/lint-release.sh"
+    printf '#!/usr/bin/env bash\n%s\nexit 0\n' "$(cut_probe)" > "${CUT_REPO}/scripts/release/release-tag-check.sh"
     # What sign-release.sh sees of the environment is the whole point of the
-    # credential test: it is the one child that may hold the key and password.
-    # shellcheck disable=SC2016
-    printf '#!/usr/bin/env bash\nprintf "sign-release pw=%%s key=%%s args=%%s\\n" "${COSIGN_PASSWORD-unset}" "${COSIGN_KEY_PATH-unset}" "$*" >> "$ENV_LOG"\n' \
-        > "${CUT_REPO}/scripts/release/sign-release.sh"
+    # credential test: it is the one child that may hold the password.
+    {
+        # shellcheck disable=SC2016
+        printf '#!/usr/bin/env bash\nprintf "sign-release pw=%%s key=%%s args=%%s\\n" "${COSIGN_PASSWORD-unset}" "${COSIGN_KEY_PATH-unset}" "$*" >> "$ENV_LOG"\n'
+        cut_probe
+    } > "${CUT_REPO}/scripts/release/sign-release.sh"
     git -C "$CUT_REPO" add -A
     git -C "$CUT_REPO" commit -q -m 'seed'
     git -C "$CUT_REPO" push -q -u origin main
@@ -522,6 +556,13 @@ make_cut_repo() {
     : > "$ENV_LOG"
     ARTEFACT="${BATS_TEST_TMPDIR}/artefact"
     write_artefact
+    # The password source every test but the prompt one uses: a file. Nothing
+    # of it is exported but the path.
+    CUT_PW_FILE="${BATS_TEST_TMPDIR}/cosign-password"
+    printf '%s\n' "$CUT_SECRET" > "$CUT_PW_FILE"
+    chmod 600 "$CUT_PW_FILE"
+    unset COSIGN_PASSWORD
+    export COSIGN_PASSWORD_FILE="$CUT_PW_FILE"
     export CUT_ORIGIN CUT_REPO CUT FAKE_SHA DIST_MANIFEST ENV_LOG ARTEFACT
 }
 
@@ -549,6 +590,7 @@ shim_cut_tools() {
     # to refuse check-pins.
     # shellcheck disable=SC2016
     shim node 'printf "node COSIGN_PASSWORD=%s COSIGN_KEY_PATH=%s\n" "${COSIGN_PASSWORD-unset}" "${COSIGN_KEY_PATH-unset}" >> "$ENV_LOG"
+'"$(cut_probe)"'
 case "$*" in *check-pins.mjs*) exit "${CHECKPINS_RC:-0}" ;; esac'
 }
 
@@ -558,6 +600,7 @@ case "$*" in *check-pins.mjs*) exit "${CHECKPINS_RC:-0}" ;; esac'
 shim_cut_gh() {
     # shellcheck disable=SC2016
     shim gh 'printf "gh COSIGN_PASSWORD=%s COSIGN_KEY_PATH=%s\n" "${COSIGN_PASSWORD-unset}" "${COSIGN_KEY_PATH-unset}" >> "$ENV_LOG"
+'"$(cut_probe)"'
 case "$*" in
   "api "*"/artifacts"*) echo "release-pins-$FAKE_SHA" ;;
   "api "*"/actions/runs/"*)
@@ -829,14 +872,15 @@ run_cut() {
     refute_recorded gh ""
 }
 
-@test "cut-dist-tag.sh cuts the tag, lists every migration as new only for the first release, and hands the key to sign-release.sh alone" {
+@test "cut-dist-tag.sh cuts the tag, lists every migration as new only for the first release, and hands the key and password to sign-release.sh alone" {
+    require_proc
     make_cut_repo
     make_cut_signing_key
     shim_cut_tools
     shim_cut_gh
     # the key file is any readable file; the password is a recognisable dummy
+    # in COSIGN_PASSWORD_FILE (make_cut_repo)
     export COSIGN_KEY_PATH="$DIST_MANIFEST"
-    export COSIGN_PASSWORD=dummy-password-for-the-test
     run_cut 1.0.0 --run-id 42 --overlap true --dist-manifest "$DIST_MANIFEST" --first-release
     [ "$status" -eq 0 ] || { echo "$output" >&2; return 1; }
     # the tag is on origin, annotated, and carries the release.json of the first release
@@ -851,9 +895,10 @@ run_cut() {
     assert_recorded node "docker-compose.state-pins.yml --project state"
     assert_recorded make "verify"
     assert_recorded node "scripts/verify/check-record.mjs"
-    # sign-release.sh is the one child that gets the password, and it is handed
-    # the key by --key, not through the environment
-    grep -q "^sign-release pw=dummy-password-for-the-test key=unset args=--key ${COSIGN_KEY_PATH} ghcr.io/hello-n00del/gremion-legal@sha256:${GOOD_DIGEST_A} ghcr.io/hello-n00del/gremion-migrate@sha256:${GOOD_DIGEST_B} ghcr.io/hello-n00del/gremion-ui@sha256:${GOOD_DIGEST_A}\$" "$ENV_LOG" || {
+    # sign-release.sh is the one child that gets the password (the file's
+    # content, without its newline), and it is handed the key by --key, not
+    # through the environment
+    grep -q "^sign-release pw=${CUT_SECRET} key=unset args=--key ${COSIGN_KEY_PATH} ghcr.io/hello-n00del/gremion-legal@sha256:${GOOD_DIGEST_A} ghcr.io/hello-n00del/gremion-migrate@sha256:${GOOD_DIGEST_B} ghcr.io/hello-n00del/gremion-ui@sha256:${GOOD_DIGEST_A}\$" "$ENV_LOG" || {
         echo "sign-release did not get the key and password:" >&2; cat "$ENV_LOG" >&2; return 1
     }
     # gh, node (check-pins, check-record) and make verify ran without either
@@ -862,31 +907,117 @@ run_cut() {
     local leaked
     leaked="$(grep -E '^(gh|node) ' "$ENV_LOG" | grep -v 'COSIGN_PASSWORD=unset COSIGN_KEY_PATH=unset' || true)"
     [ -z "$leaked" ] || { echo "credentials reached:" >&2; echo "$leaked" >&2; return 1; }
+    # No other child, and no environ any of them was started from, ever held
+    # the password; sign-release.sh holds it and its parent (the signing
+    # subshell) was started from an environ that does not.
+    assert_probes_clean gh node lint-release.sh release-tag-check.sh
+    grep -qx 'probe sign-release.sh env=1 ppid=0' "$ENV_LOG" || {
+        echo "sign-release.sh did not hold the password, or its parent did:" >&2; cat "$ENV_LOG" >&2; return 1
+    }
 }
 
-@test "cut-dist-tag.sh runs make verify without COSIGN_KEY_PATH or COSIGN_PASSWORD in its environment" {
+@test "cut-dist-tag.sh runs make verify without COSIGN_KEY_PATH or the password in its environment or its parent's" {
+    require_proc
     make_cut_repo
     make_cut_signing_key
     shim_cut_tools
     shim_cut_gh
     # shellcheck disable=SC2016
-    shim make 'printf "make COSIGN_PASSWORD=%s COSIGN_KEY_PATH=%s\n" "${COSIGN_PASSWORD-unset}" "${COSIGN_KEY_PATH-unset}" >> "$ENV_LOG"'
+    shim make 'printf "make COSIGN_PASSWORD=%s COSIGN_KEY_PATH=%s\n" "${COSIGN_PASSWORD-unset}" "${COSIGN_KEY_PATH-unset}" >> "$ENV_LOG"
+'"$(cut_probe)"
     export COSIGN_KEY_PATH="$DIST_MANIFEST"
-    export COSIGN_PASSWORD=dummy-password-for-the-test
     run_cut 1.0.0 --run-id 42 --overlap true --dist-manifest "$DIST_MANIFEST" --first-release
     [ "$status" -eq 0 ] || { echo "$output" >&2; return 1; }
     grep -qx 'make COSIGN_PASSWORD=unset COSIGN_KEY_PATH=unset' "$ENV_LOG" || {
         echo "make verify saw the signing credentials:" >&2; cat "$ENV_LOG" >&2; return 1
     }
-    # a password that was never set stays unset for the signer too (cosign prompts)
-    : > "$ENV_LOG"
-    git -C "$CUT_REPO" checkout -q main
-    git -C "$CUT_REPO" tag -d dist-v1.0.0 > /dev/null
-    git -C "$CUT_ORIGIN" tag -d dist-v1.0.0 > /dev/null
-    unset COSIGN_PASSWORD
+    assert_probes_clean make
+}
+
+@test "cut-dist-tag.sh refuses to start with COSIGN_PASSWORD in its environment, even empty, before anything else" {
+    make_cut_repo
+    shim_cut_tools
+    shim_cut_gh
+    export COSIGN_KEY_PATH="$DIST_MANIFEST"
+    local value
+    for value in "$CUT_SECRET" ""; do
+        export COSIGN_PASSWORD="$value"
+        run_cut 1.0.0 --run-id 42 --overlap true --dist-manifest "$DIST_MANIFEST" --first-release
+        [ "$status" -eq 1 ] || { echo "COSIGN_PASSWORD='${value}': status ${status}: ${output}" >&2; return 1; }
+        [[ "$output" == *"cut-dist-tag: COSIGN_PASSWORD is in the environment"* ]]
+        # how to supply it instead
+        [[ "$output" == *"COSIGN_PASSWORD_FILE=<file>"* ]]
+        [[ "$output" == *"let cosign prompt"* ]]
+        # the password is never echoed back
+        [[ "$output" != *"$CUT_SECRET"* ]]
+    done
+    # ahead of usage errors too: the check is the first thing the script does
+    run_cut
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"COSIGN_PASSWORD is in the environment"* ]]
+    refute_recorded gh ""
+    assert_cut_changed_nothing
+}
+
+@test "cut-dist-tag.sh refuses a COSIGN_PASSWORD_FILE that is not a readable file, before any network call" {
+    make_cut_repo
+    shim_cut_tools
+    shim_cut_gh
+    export COSIGN_KEY_PATH="$DIST_MANIFEST"
+    export COSIGN_PASSWORD_FILE="${BATS_TEST_TMPDIR}/no-such-password"
     run_cut 1.0.0 --run-id 42 --overlap true --dist-manifest "$DIST_MANIFEST" --first-release
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"COSIGN_PASSWORD_FILE is not a readable file"* ]]
+    # a directory is no password file either
+    export COSIGN_PASSWORD_FILE="$BATS_TEST_TMPDIR"
+    run_cut 1.0.0 --run-id 42 --overlap true --dist-manifest "$DIST_MANIFEST" --first-release
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"COSIGN_PASSWORD_FILE is not a readable file"* ]]
+    refute_recorded gh ""
+    assert_cut_changed_nothing
+}
+
+@test "cut-dist-tag.sh refuses when there is neither a password file nor a terminal for cosign to prompt on" {
+    make_cut_repo
+    shim_cut_tools
+    shim_cut_gh
+    export COSIGN_KEY_PATH="$DIST_MANIFEST"
+    unset COSIGN_PASSWORD_FILE
+    run bash "$CUT" 1.0.0 --run-id 42 --overlap true --dist-manifest "$DIST_MANIFEST" --first-release < /dev/null
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"no password for the cosign key"* ]]
+    [[ "$output" == *"COSIGN_PASSWORD_FILE=<file>"* ]]
+    refute_recorded gh ""
+    assert_cut_changed_nothing
+}
+
+@test "cut-dist-tag.sh with no password file on a terminal leaves COSIGN_PASSWORD unset, so cosign prompts" {
+    require_proc
+    command -v script >/dev/null || skip "script (util-linux) is not installed"
+    make_cut_repo
+    make_cut_signing_key
+    shim_cut_tools
+    shim_cut_gh
+    export COSIGN_KEY_PATH="$DIST_MANIFEST"
+    unset COSIGN_PASSWORD_FILE
+    # a pty on stdin: the script runs as it would in the operator's terminal
+    run script -qec "bash '${CUT}' 1.0.0 --run-id 42 --overlap true --dist-manifest '${DIST_MANIFEST}' --first-release" /dev/null
     [ "$status" -eq 0 ] || { echo "$output" >&2; return 1; }
-    grep -q '^sign-release pw=unset ' "$ENV_LOG"
+    grep -q '^sign-release pw=unset ' "$ENV_LOG" || { cat "$ENV_LOG" >&2; return 1; }
+    grep -qx 'probe sign-release.sh env=0 ppid=0' "$ENV_LOG"
+}
+
+@test "the /proc probe of the credential tests sees a password that was merely unset" {
+    require_proc
+    ENV_LOG="${BATS_TEST_TMPDIR}/probe.log"
+    export ENV_LOG
+    : > "$ENV_LOG"
+    cut_probe > "${BATS_TEST_TMPDIR}/probe.sh"
+    # the outer shell is started with the secret, drops it from its own
+    # environment and runs the probe as a child: the child's environment is
+    # clean, the environ its parent was started with is not
+    COSIGN_PASSWORD="$CUT_SECRET" bash -c 'unset COSIGN_PASSWORD; bash "$0"; true' "${BATS_TEST_TMPDIR}/probe.sh"
+    grep -qx 'probe probe.sh env=0 ppid=1' "$ENV_LOG" || { cat "$ENV_LOG" >&2; return 1; }
 }
 
 @test "cut-dist-tag.sh cuts a release built from a v* tag's commit, and the next release lists only the new migrations" {

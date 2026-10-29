@@ -7,9 +7,13 @@
 # a key.
 #
 # USAGE
-#   COSIGN_KEY_PATH=<cosign.key> COSIGN_PASSWORD=... \
+#   COSIGN_KEY_PATH=<cosign.key> COSIGN_PASSWORD_FILE=<password file> \
 #     scripts/release/cut-dist-tag.sh <X.Y.Z> --run-id <release-images run id> \
 #       --overlap true|false --dist-manifest <gremion.dist.json> [--first-release]
+#
+#   The key's password comes from the file named by COSIGN_PASSWORD_FILE or,
+#   with that unset and a terminal on stdin, from cosign's own prompt. Never
+#   from COSIGN_PASSWORD: see CREDENTIALS.
 #
 #   --overlap        release.json's `overlap` has no default (spec B F.6): the
 #                    operator states whether the old colour can keep serving
@@ -37,9 +41,11 @@
 #   5. create the signed annotated tag dist-vX.Y.Z on the release commit,
 #      run release-tag-check.sh on it and push the tag.
 #
-# REFUSALS (nothing is changed unless noted): a bad version or a missing
-# argument; a missing gh, cosign, git, jq, node or make; COSIGN_KEY_PATH unset
-# or not a readable file; a dirty working tree; origin unreachable; a tag that
+# REFUSALS (nothing is changed unless noted): COSIGN_PASSWORD in the
+# environment; a bad version or a missing argument; a missing gh, cosign, git,
+# jq, node or make; COSIGN_KEY_PATH unset or not a readable file;
+# COSIGN_PASSWORD_FILE not a readable file, or unset with no terminal to
+# prompt on; a dirty working tree; origin unreachable; a tag that
 # already exists (locally or on origin); no previous dist tag without
 # --first-release, or one with it; a run of any other workflow, from a fork, or
 # that did not succeed; a built or dispatching commit that is neither on
@@ -49,9 +55,16 @@
 # and an `image:` that is a first-party `<name>@sha256:<64 hex>`, nothing else) or
 # that check-pins.mjs refuses for the built commit.
 #
-# CREDENTIALS. COSIGN_KEY_PATH and COSIGN_PASSWORD are taken off the
-# environment as soon as they are read: gh, git, node, make verify and the
-# lint run without them, and only sign-release.sh gets them back.
+# CREDENTIALS. gh, git, node, make verify and the lint run project code at the
+# built commit, so none of them may be able to read the key's password. An
+# `unset` is not enough for that: the environment this script was started with
+# stays readable at /proc/<pid>/environ by its descendants. So the password is
+# never in this script's environment at all, and the script refuses to start
+# when COSIGN_PASSWORD is. It comes from COSIGN_PASSWORD_FILE (a path is no
+# secret; the content is read inside the signing subshell and exported to
+# sign-release.sh alone) or, with that unset and a terminal on stdin, from
+# cosign's own prompt. COSIGN_KEY_PATH is a path too, handed over by --key
+# and taken off the environment once read.
 #
 # THE HOST-SIDE DEPLOY IS NOT DONE HERE. Handing a registry token to the host
 # is a manual operator step (docs/ops/runbook/upgrade.md); this script ends at
@@ -126,6 +139,12 @@ reviewed_commit() {
 }
 
 main() {
+    # Before anything else, usage errors included: a password that is in the
+    # environment this script was started with is already readable at
+    # /proc/<pid>/environ by everything it starts, and `unset` cannot undo that.
+    if [[ -v COSIGN_PASSWORD ]]; then
+        die "COSIGN_PASSWORD is in the environment, where every child of this script can read it (/proc/<pid>/environ). Unset it and put the password in a file (mode 0600, outside the repository): COSIGN_PASSWORD_FILE=<file>, or run on a terminal and let cosign prompt."
+    fi
     local version="" run_id="" overlap="" manifest="" first_release=0
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -151,15 +170,20 @@ main() {
     [[ -f "$COSIGN_KEY_PATH" && -r "$COSIGN_KEY_PATH" ]] || die "COSIGN_KEY_PATH is not a readable file: $COSIGN_KEY_PATH"
     [[ -f "$manifest" && -r "$manifest" ]] || die "--dist-manifest is not a readable file: $manifest"
 
-    # Only sign-release.sh needs the key and its password. Everything else this
-    # script starts (gh, git, node, make verify, the lint) is project code at
-    # the built commit, so neither stays in the environment it inherits.
-    local sign_key="$COSIGN_KEY_PATH" sign_password="" sign_password_set=0
-    if [[ -v COSIGN_PASSWORD ]]; then
-        sign_password="$COSIGN_PASSWORD"
-        sign_password_set=1
+    # The password's source is settled now, before any network call: a file
+    # that can be read, or a terminal for cosign to prompt on. Its content is
+    # read in the signing subshell (step 4) and nowhere else.
+    if [[ -n "${COSIGN_PASSWORD_FILE:-}" ]]; then
+        [[ -f "$COSIGN_PASSWORD_FILE" && -r "$COSIGN_PASSWORD_FILE" ]] || die "COSIGN_PASSWORD_FILE is not a readable file: $COSIGN_PASSWORD_FILE"
+    elif [[ ! -t 0 ]]; then
+        die "no password for the cosign key: set COSIGN_PASSWORD_FILE=<file>, or run on a terminal so cosign can prompt"
     fi
-    unset COSIGN_KEY_PATH COSIGN_PASSWORD
+
+    # Only sign-release.sh needs the key. Everything else this script starts
+    # (gh, git, node, make verify, the lint) is project code at the built
+    # commit, so neither path stays in the environment it inherits.
+    local sign_key="$COSIGN_KEY_PATH" sign_password_file="${COSIGN_PASSWORD_FILE:-}"
+    unset COSIGN_KEY_PATH COSIGN_PASSWORD_FILE
 
     local root status tag prev_tag
     root="$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel)" || die "not inside a git checkout"
@@ -264,9 +288,14 @@ main() {
     # 4. sign and attest every pinned digest, by digest only
     local -a refs_arr
     mapfile -t refs_arr <<< "$refs"
-    # The one place the key and its password come back, for this child only.
+    # The one place the password exists: read here, in this subshell, and
+    # exported to sign-release.sh alone. With no file COSIGN_PASSWORD stays
+    # unset and cosign prompts.
     (
-        if [[ "$sign_password_set" -eq 1 ]]; then export COSIGN_PASSWORD="$sign_password"; fi
+        if [[ -n "$sign_password_file" ]]; then
+            COSIGN_PASSWORD="$(<"$sign_password_file")" || exit 1
+            export COSIGN_PASSWORD
+        fi
         bash scripts/release/sign-release.sh --key "$sign_key" "${refs_arr[@]}"
     )
 
