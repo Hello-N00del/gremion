@@ -52,3 +52,35 @@ describe('export file names (MED-1)', () => {
     expect(long).not.toBe(fileStem('S'.repeat(63), 'T'.repeat(62) + 'U'))
   })
 })
+
+// Linux customer proof: KERNEL_EXPORT_TABLES still named committee_groups (dropped in 0010) and
+// committee_members (renamed to org_unit_members in 0010), so every export of a real customer failed
+// "table public.committee_groups does not exist". The list must name only tables the kernel chain
+// (gremion-ui/migrations, in file order) leaves in place.
+describe('KERNEL_EXPORT_TABLES matches the kernel migration chain', () => {
+  it('names only tables that exist after the last kernel migration', async () => {
+    const { readdirSync, readFileSync } = await import('node:fs')
+    const { KERNEL_EXPORT_TABLES, KERNEL_EXCLUDED_TABLES } = await import('./export.js')
+    const dir = join(__dirname, '..', '..', '..', '..', 'gremion-ui', 'migrations')
+    const tables = new Set<string>()
+    const ident = '"?([a-z_][a-z0-9_]*)"?'
+    for (const f of readdirSync(dir).filter((n) => /^\d{4}_.*\.sql$/.test(n)).sort()) {
+      const sql = readFileSync(join(dir, f), 'utf-8').replace(/--[^\n]*/g, '')
+      const re = new RegExp(
+        `CREATE TABLE (?:IF NOT EXISTS )?(?:public\.)?${ident}|ALTER TABLE (?:IF EXISTS )?(?:ONLY )?(?:public\.)?${ident} RENAME TO ${ident}|DROP TABLE (?:IF EXISTS )?((?:(?:public\.)?"?[a-z_][a-z0-9_]*"?\s*,\s*)*(?:public\.)?"?[a-z_][a-z0-9_]*"?)`,
+        'gi',
+      )
+      for (const m of sql.matchAll(re)) {
+        if (m[1]) tables.add(m[1].toLowerCase())
+        else if (m[2] && m[3]) {
+          tables.delete(m[2].toLowerCase())
+          tables.add(m[3].toLowerCase())
+        } else if (m[4]) for (const t of m[4].split(',')) tables.delete(t.trim().replace(/^public\./i, '').replace(/"/g, '').toLowerCase())
+      }
+    }
+    expect(tables.size, 'the migration scan found the kernel tables').toBeGreaterThan(10)
+    const missing = [...KERNEL_EXPORT_TABLES, ...KERNEL_EXCLUDED_TABLES.map((t) => t.table)].filter((t) => !tables.has(t))
+    expect(missing).toEqual([])
+    expect(KERNEL_EXPORT_TABLES).toContain('org_unit_members')
+  })
+})

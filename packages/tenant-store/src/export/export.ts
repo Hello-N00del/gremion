@@ -47,16 +47,17 @@ import { MANIFEST_FILE, MANIFEST_SCHEMA_VERSION, verifyExport, type ExportManife
 
 type Sql = postgres.Sql<Record<string, never>>
 
-/** Kernel core tables (gremion-ui/migrations): committees became org_units in 0010. */
+/** Kernel core tables (gremion-ui/migrations): committees became org_units in 0010, which also renamed
+ *  committee_members to org_unit_members and dropped committee_groups (the list kept both: every export
+ *  failed on a customer database, Linux customer proof). export.test.ts pins the list to the chain. */
 export const KERNEL_EXPORT_TABLES = [
   'org_units',
   'org_unit_kind',
   'sub_org_type',
-  'committee_groups',
   'committee_roles',
   'role_assignments',
   'role_assignment_history',
-  'committee_members',
+  'org_unit_members',
   'committee_elections',
   'caucus',
   'caucus_membership',
