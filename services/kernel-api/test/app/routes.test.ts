@@ -23,7 +23,7 @@ describe('routes (TDD 1)', () => {
     expect(r.problems).toEqual([])
     expect(r.ok).toBe(true)
     expect(getRouteTable(app).sort()).toEqual(ops.map((o) => routeKey(o.method, o.path)).sort())
-    expect(ops.map((o) => o.operationId).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))).toEqual(ALL_OPERATIONS)
+    expect(ops.map((o) => o.operationId!).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))).toEqual(ALL_OPERATIONS)
     await app.close()
   })
 
@@ -55,7 +55,7 @@ describe('route-table sweep: every spec route but getHealth is tenant-gated (C18
   const gated = ops.filter((o) => !TENANT_EXEMPT_OPERATIONS.has(o.operationId!))
 
   it('covers every tenant operation (not vacuous)', () => {
-    expect(gated.map((o) => o.operationId).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))).toEqual(ALL_OPERATIONS.filter((id) => id !== 'getHealth'))
+    expect(gated.map((o) => o.operationId!).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))).toEqual(ALL_OPERATIONS.filter((id) => id !== 'getHealth'))
   })
 
   it.each(gated.map((o) => [o.operationId!, o.method, o.path]))('%s: no proxy proof -> 403 before any read', async (_id, method, path) => {

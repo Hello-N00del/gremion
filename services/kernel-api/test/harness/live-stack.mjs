@@ -81,9 +81,9 @@ function up() {
     const ports = JSON.parse(sh('docker', ['inspect', '-f', '{{json .NetworkSettings.Ports}}', c]).stdout)
     for (const binds of Object.values(ports)) for (const b of binds ?? []) if (b.HostIp !== '127.0.0.1') throw new Error(`${c}: a port is published on ${b.HostIp}`)
   }
-  waitFor('postgres', () => sh('docker', ['exec', names.pg, 'pg_isready', '-h', '127.0.0.1', '-U', user, '-d', user], { allowFail: true }).status === 0, 90)
+  waitFor('database', () => sh('docker', ['exec', names.pg, 'pg_isready', '-h', '127.0.0.1', '-U', user, '-d', user], { allowFail: true }).status === 0, 90)
   spawnSync(process.execPath, ['-e', 'setTimeout(()=>{},2500)']) // the entrypoint restarts the server once after init
-  waitFor('postgres (stable)', () => sh('docker', ['exec', names.pg, 'psql', '-h', '127.0.0.1', '-U', user, '-d', user, '-c', 'SELECT 1'], { allowFail: true }).status === 0, 60)
+  waitFor('database, stable', () => sh('docker', ['exec', names.pg, 'psql', '-h', '127.0.0.1', '-U', user, '-d', user, '-c', 'SELECT 1'], { allowFail: true }).status === 0, 60)
   waitFor('nats', () => sh('docker', ['exec', names.nats, 'wget', '-qO-', 'http://127.0.0.1:8222/healthz?js-enabled-only=true'], { allowFail: true }).status === 0, 60)
   const port = publishedPort(names.pg, 5432)
   Object.assign(state, {
