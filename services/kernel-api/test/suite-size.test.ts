@@ -45,7 +45,7 @@ export const NAMED: Record<'unit' | 'integration' | 'authz', Record<string, numb
   // TASK-081: its own scratch stack (test/authz/stack.mjs, vitest.authz-int.config.ts)
   authz: {
     'test/authz/after-migrate.int.test.ts': 1,
-    'test/authz/grants.int.test.ts': 28,
+    'test/authz/grants.int.test.ts': 32,
     'test/authz/http.int.test.ts': 9,
     'test/authz/module-off.int.test.ts': 28,
     'test/authz/pdp.int.test.ts': 12,

@@ -37,6 +37,8 @@ const REQUIRED = [
   ['TRD-091 granter role', 'a mismatching client-supplied granterRole is 403'],
   ['TRD-090 step-up', 'refuses 401 insufficient_user_authentication'],
   ['TRD-113 inclusion', 'a body_admin granting a role it does not include'],
+  ['TRD-113 inclusion on revoke', 'an it_admin revoking a council_admin grant is 403'],
+  ['revoke-all authority first', 'a caller with no grant authority gets the same 403 for a person with no open grants'],
   ['cross-tenant', 'cannot grant into another tenant'],
   ['customer-wide authority', 'council_admin held in the verwaltung grants the FIRST body_admin'],
   ['customer-wide: other customer', 'the same role of ANOTHER customer is refused'],
