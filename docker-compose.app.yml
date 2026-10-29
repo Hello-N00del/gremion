@@ -578,9 +578,13 @@ services:
       # /run/secrets/tenants (read-only, like gremion-ui's mount).
       - ${TENANT_SECRETS_DIR:-./secrets/tenants}:/run/secrets/tenants:ro
       # TASK-080-a: ONLY this identity's seeds (subpath kernel-api, read-only), never another module's.
-      # DEPLOY ORDER: the subtree exists once `nats-auth ensure` has run with kernel-api in the
-      # module set (provisioning broker_account_created, TASK-043d hand-off G7); ensure every
-      # existing customer BEFORE the compose up that carries this mount.
+      # Docker refuses a missing subpath, and then the whole kernel API is down: `nats-auth init` and
+      # `nats-auth ensure` therefore ALWAYS create kernel-api/ (0700, owned by uid 1000 = this image's
+      # `node` user, handed over by tenant-create, which runs as root; seeds 0600, same owner). A volume
+      # that `init` ran on BEFORE this change needs `nats-auth init` re-run (idempotent, no network)
+      # before the compose up that carries this mount. The seed itself arrives with `ensure <t> --modules
+      # ...,kernel-api` (provisioning broker_account_created, TASK-043d hand-off G7); until then the relay
+      # logs 'no seed' and idt.outbox rows wait, while the API serves. Proof: test/bodies/image-proof.sh.
       - type: volume
         source: nats-secrets
         target: /run/secrets/nats/kernel-api

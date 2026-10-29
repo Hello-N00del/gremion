@@ -173,6 +173,7 @@ ENV
 phase_drive() {
   [ -f "$STATE" ] || { log "no stack: run 'up' first"; exit 1; }
   vitest_image drive
+  cat "$SDIR/evidence.log" >&2
 }
 
 phase_evidence() {

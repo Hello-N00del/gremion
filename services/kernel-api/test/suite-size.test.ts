@@ -14,7 +14,7 @@ const PKG = fileURLToPath(new URL('../', import.meta.url))
 /** The named tests per file, as of TASK-077 G8. Raise a floor when you add tests; never lower one. */
 export const NAMED: Record<'unit' | 'integration' | 'live', Record<string, number>> = {
   unit: {
-    'test/app/bundle-entry.test.ts': 1,
+    'test/app/bundle-entry.test.ts': 2,
     // TASK-080-a round 3: the image's builder stage copies every workspace package the service reaches
     'test/app/dockerfile.test.ts': 2,
     'test/app/gate-rotation.test.ts': 3,

@@ -8,8 +8,8 @@
 //   T080_IMAGE_MODE=drive     operator writes (host, the customer's app pool) -> the CONTAINER's relay publishes them;
 //                             post-conditions quoted: outbox states, IDT message count read from the broker
 // State: T080_IMAGE_STATE (written by image-proof.sh, results merged back into it).
-import { readFileSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { appendFileSync, readFileSync, writeFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
 import { adminConnectOptionsFor } from '@gremion/nats-auth'
 import { jetstreamManager } from '@nats-io/jetstream'
 import { connect as natsConnect } from '@nats-io/transport-node'
@@ -22,7 +22,9 @@ import { connect as pgConnect } from '../harness/scratch.ts'
 
 const statePath = process.env.T080_IMAGE_STATE!
 const st = JSON.parse(readFileSync(statePath, 'utf8')) as ReturnType<typeof stack> & Record<string, any>
-const log = (...a: unknown[]) => console.log('[image-proof]', ...a)
+// vitest buffers console output of a passing run: the quoted post-conditions go to a file image-proof.sh prints
+const log = (...a: unknown[]) => appendFileSync(join(dirname(statePath), 'evidence.log'), `[image-proof] ${a.join(' ')}
+`)
 const inNet = (u: string) => {
   const x = new URL(u)
   x.hostname = st.hosts.pg
@@ -63,11 +65,12 @@ it(`image proof ${process.env.T080_IMAGE_MODE}`, { timeout: 240_000 }, async () 
     const admin = connect(db, { max: 2 })
     const app = pgConnect(db, { user: `k_${hex}_app`, password: appPassword, max: 3 })
     try {
+      const run = uuidv7().slice(-6) // re-runnable: body and unit names are unique per customer
       const svc = createBodiesService({ authorizer: operatorAuthorizer })
       const ctx = { sql: app, customerId: id, actor: { kind: 'operator' as const, id: uuidv7() } }
-      const body = await svc.createBody(ctx, { kindKey: 'stura', name: 'Studierendenrat', shortName: 'StuRa' })
-      const unit = await svc.createOrgUnit(ctx, { bodyId: body.bodyId, kindKey: 'council', name: 'Plenum' })
-      const person = await svc.invitePerson(ctx, { email: 'zoe@example.org', displayName: 'Zoe Zero' })
+      const body = await svc.createBody(ctx, { kindKey: 'stura', name: `Studierendenrat ${run}`, shortName: 'StuRa' })
+      const unit = await svc.createOrgUnit(ctx, { bodyId: body.bodyId, kindKey: 'council', name: `Plenum ${run}` })
+      const person = await svc.invitePerson(ctx, { email: `zoe-${uuidv7()}@example.org`, displayName: 'Zoe Zero' })
       await svc.startMembership(ctx, { personId: person.personId, bodyId: body.bodyId, orgUnitId: unit.orgUnitId, participationKind: 'elected_member', voting: true, validFrom: '2026-04-01', source: 'admin' })
       const [total] = await admin<{ n: number }[]>`SELECT count(*)::int AS n FROM idt.outbox`
       log(`operator wrote body, org unit, person, membership: idt.outbox rows = ${total!.n}`)

@@ -10,7 +10,7 @@
   },
   "scripts": {
     "start": "node dist/index.js",
-    "build": "esbuild src/main.ts --bundle --platform=node --format=esm --target=node22 --outfile=dist/index.js --external:fastify --external:@fastify/multipart --external:ajv --external:ajv-formats --external:jose --external:postgres",
+    "build": "node esbuild.config.mjs",
     "test": "vitest run",
     "test:integration": "node test/harness/stack.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.json"
