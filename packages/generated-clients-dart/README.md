@@ -103,6 +103,8 @@ committed spec. Each was reproduced on the pinned image:
 | `type: T, nullable: true` | ignores `nullable`, so a required field becomes non-nullable and fails to decode `null` | `type: [T, "null"]` |
 | `nullable` + `default: null` | the STRING default `'null'`, sent on every request | the default is dropped |
 | `const: true` (typed or not) | `JsonObject?`, or a single-value EnumClass with wire name `'true'` that cannot decode a JSON `true` | the type only (`bool`) |
+| `oneOf`/`anyOf: [{type: "null"}, T]` | an invented `Null` model (`ModelNull`) whose file is never written, so the package does not analyse | a scalar `T`: `type: [T, "null"]`; an inline object `T`: hoisted to a component named `<Schema><Property>` (the generator's own inline name) and the property becomes `anyOf: [{$ref}, {type: "null"}]`, which generates `T?` |
+| `additionalProperties: false` on an inline object | every property referencing the enclosing schema deserializes with `result.x = v` instead of `result.x.replace(v)`, a type error | dropped (a client never enforces it) |
 
 A spelling it cannot map faithfully fails the run: `nullable` without a type,
 `nullable` next to `$ref`/`allOf`/`oneOf`/`anyOf`, `nullable` with an `enum`,
@@ -110,7 +112,7 @@ A spelling it cannot map faithfully fails the run: `nullable` without a type,
 decides what counts as a schema by its position, so a property named
 `default` and `responses.default` are still covered. Once the specs use the
 3.1 spelling, the rewrites do nothing. Current counts for kernel-governance:
-20 nullable, 5 `default: null`, 21 const.
+20 nullable, 5 `default: null`, 21 const; for kernel-core: 25 `oneOf`-null merged, 3 objects hoisted, 35 `additionalProperties: false` dropped.
 
 ## What `codegen:check` fails on
 
