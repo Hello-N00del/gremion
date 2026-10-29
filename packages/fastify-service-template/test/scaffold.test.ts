@@ -42,8 +42,8 @@ function scaffoldCase(name: string): { specPath: string; outDir: string } {
   return { specPath, outDir }
 }
 
-function cli(script: string, args: string[]) {
-  const r = spawnSync(process.execPath, [join(PACKAGE_DIR, 'src', 'cli', script), ...args], {
+function cli(script: string, args: string[], nodeArgs: string[] = []) {
+  const r = spawnSync(process.execPath, [...nodeArgs, join(PACKAGE_DIR, 'src', 'cli', script), ...args], {
     cwd: PACKAGE_DIR,
     env: { ...process.env, INIT_CWD: PACKAGE_DIR },
     encoding: 'utf8',
@@ -179,6 +179,44 @@ describe('routes:check CLI on scaffolded services', () => {
     const r = cli('routes-check.ts', ['--service', outDir])
     expect(r.status, r.out).toBe(0)
     expect(r.stdout).toMatch(/OK .*\(5 declared, 6 registered\)/)
+  })
+
+  // A preload that makes `require('typescript')` fail the way a given install would, so the
+  // compile hook's handling of each failure is observed rather than assumed.
+  function withTypescriptFailing(name: string, error: { message: string; code?: string }): string[] {
+    const preload = join(TMP, `${name}.cjs`)
+    mkdirSync(TMP, { recursive: true })
+    writeFileSync(
+      preload,
+      [
+        "const Module = require('node:module')",
+        'const resolve = Module._resolveFilename',
+        'Module._resolveFilename = function (request, ...rest) {',
+        `  if (request === 'typescript') throw Object.assign(new Error(${JSON.stringify(error.message)}), ${JSON.stringify({ code: error.code })})`,
+        '  return resolve.call(this, request, ...rest)',
+        '}',
+        '',
+      ].join('\n'),
+    )
+    return ['--require', preload]
+  }
+
+  it('a workspace without typescript falls back to Node type stripping and still checks the service', () => {
+    const { outDir } = scaffoldCase('check-no-typescript')
+    const r = cli('routes-check.ts', ['--service', outDir], withTypescriptFailing('no-typescript', { message: "Cannot find module 'typescript'", code: 'MODULE_NOT_FOUND' }))
+    expect(r.status, r.out).toBe(0)
+    expect(r.stdout).toMatch(/OK .*\(5 declared, 6 registered\)/)
+  })
+
+  it.each([
+    ['typescript is present but fails to load', { message: 'typescript install is corrupt' }, /typescript install is corrupt/],
+    ["typescript's own dependency is missing", { message: "Cannot find module 'typescript-helper'", code: 'MODULE_NOT_FOUND' }, /Cannot find module 'typescript-helper'/],
+  ])('%s: routes:check fails naming it, it does not silently downgrade to type stripping', (name, error, shown) => {
+    const { outDir } = scaffoldCase(`check-ts-broken-${name.length}`)
+    const r = cli('routes-check.ts', ['--service', outDir], withTypescriptFailing(`broken-${name.length}`, error))
+    expect(r.status, r.out).toBe(1)
+    expect(r.stderr).toMatch(/service failed to build/)
+    expect(r.stderr).toMatch(shown)
   })
 
   it('demo: an operation removed from the spec fails, naming it', () => {

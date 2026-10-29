@@ -40,7 +40,11 @@ function typescript(): typeof import('typescript') | null {
   if (ts === undefined) {
     try {
       ts = createRequire(import.meta.url)('typescript') as typeof import('typescript')
-    } catch {
+    } catch (e) {
+      // only "there is no typescript here" falls back to the stripper; a typescript that is
+      // present but fails to load (corrupt install, a missing dependency of its own) is an
+      // error the operator must see, not a silent downgrade to the syntax subset
+      if ((e as NodeJS.ErrnoException).code !== 'MODULE_NOT_FOUND' || !/Cannot find module 'typescript'/.test((e as Error).message)) throw e
       ts = null
     }
   }
