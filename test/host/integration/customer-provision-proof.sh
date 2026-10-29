@@ -456,7 +456,9 @@ perm_hint() {
     printf ' (permission denied on %s: on Linux this proof runs as root, like production -- sudo -E env "HOME=$HOME" "PATH=$PATH" bash test/host/integration/customer-provision-proof.sh ...)' "$1"
 }
 need_pooled() { # [no-operator]
-    [[ -n "$PSTACK" && -d "$PENV" && -f "$PENV/state.env" && -r "$PENV/state.env" ]] || die "set POOLED_STACK and POOLED_ENV_DIR (a running pooled stack's env files)$(perm_hint "$PENV")"
+    [[ -n "$PSTACK" && -d "$PENV" && -f "$PENV/state.env" ]] || die "set POOLED_STACK and POOLED_ENV_DIR (a running pooled stack's env files)$(perm_hint "$PENV")"
+    # the file is there: an unreadable one is its own failure, not a missing variable
+    [[ -r "$PENV/state.env" ]] || die "cannot read ${PENV}/state.env$(perm_hint "$PENV/state.env")"
     # customer-layout precedes the operator: `gremion-tenant init` (the ops
     # realm) and `operator add` (the user whose id PROOF_OPERATOR_ID is) both
     # run against the root it lays out.
