@@ -12,17 +12,19 @@ const NOW = () => Math.floor(Date.now() / 1000)
 const SECRET = 'publishing-module-secret-0123456789'
 let w: World
 let app: FastifyInstance
+let fw: ReturnType<typeof world>
 const claimsOf = new Map<string, Record<string, unknown>>()
 
 beforeAll(async () => {
-  w = await buildAuthzWorld('http', undefined, ['admin', 'alice', 'bob', 'ca'])
+  w = await buildAuthzWorld('http', undefined, ['admin', 'alice', 'bob', 'ca', 'zed', 'yan'])
   await seedGrant(w.db.admin, w.db.customerId, { bodyId: w.bodyA, personId: w.persons.admin!, key: 'body_admin' })
-  const fw = world()
+  fw = world()
   fw.tenants.set(w.db.customerId, tenantRow(w.db.customerId, 'http'))
   fw.domains.set(HOST, w.db.customerId)
   fw.enabled.set(w.db.customerId, ['publishing', 'votes', 'board', 'calendar', 'finance'].map((moduleKey) => ({ moduleKey, semver: '1.0.0' })))
   fw.moduleSecrets.set('publishing', SECRET)
   await seedGrant(w.db.admin, w.db.customerId, { bodyId: w.verwaltung, personId: w.persons.ca!, key: 'council_admin' })
+  claimsOf.set('tok-ghost', { sub: 'sub-nobody', acr: 'loa2', auth_time: NOW() - 20 })
   claimsOf.set('tok-ca', { sub: 'sub-ca', acr: 'loa2', auth_time: NOW() - 20 })
   claimsOf.set('tok-fresh', { sub: 'sub-admin', acr: 'loa2', auth_time: NOW() - 20 })
   claimsOf.set('tok-stale', { sub: 'sub-admin', acr: 'loa2', auth_time: NOW() - 4000 })
@@ -90,5 +92,52 @@ describe('authz over HTTP', () => {
     expect(wide.statusCode).toBe(200)
     const narrow = await app.inject({ method: 'GET', url: `/api/v1/authz/grants?bodyId=${w.bodyB}`, headers: edge(HOST, 'tok-fresh') })
     expect(narrow.statusCode).toBe(403)
+  })
+
+  it('listAuthzGrants: a token whose sub is not an active person is 403, not an error and not a list', async () => {
+    const r = await app.inject({ method: 'GET', url: `/api/v1/authz/grants?bodyId=${w.bodyA}`, headers: edge(HOST, 'tok-ghost') })
+    expect(r.statusCode).toBe(403)
+    expect(r.headers['content-type']).toMatch(/problem\+json/)
+    expect(r.json().grants).toBeUndefined()
+  })
+  it('revokeAllAuthzGrants: a customer-wide granter closes the grants of a person in another body; a body_admin of body A is 403 and changes 0 rows', async () => {
+    const yan = w.persons.yan!
+    const g = await seedGrant(w.db.admin, w.db.customerId, { bodyId: w.bodyB, personId: yan, key: 'member' })
+    const narrow = await post(`/api/v1/authz/persons/${yan}/revoke-all`, 'tok-fresh')
+    expect(narrow.statusCode).toBe(403)
+    expect((await w.db.admin`SELECT state FROM idt.authz_grant WHERE grant_id = ${g}::uuid`)[0]!.state).toBe('active')
+    const wide = await post(`/api/v1/authz/persons/${yan}/revoke-all`, 'tok-ca')
+    expect(wide.statusCode).toBe(200)
+    expect((wide.json().grants as Array<{ grantId: string; state: string }>).map((x) => [x.grantId, x.state])).toEqual([[g, 'revoked']])
+    expect((await w.db.admin`SELECT state FROM idt.authz_grant WHERE grant_id = ${g}::uuid`)[0]!.state).toBe('revoked')
+  })
+  it('M-OFF over HTTP: with the votes module off the decision is a positive 200 deny (module_not_enabled), no module is called, kernel decisions are unchanged; back on, the next request allows', async () => {
+    const zed = w.persons.zed!
+    await seedGrant(w.db.admin, w.db.customerId, { bodyId: w.bodyA, personId: zed, key: 'member' })
+    await seedGrant(w.db.admin, w.db.customerId, { bodyId: w.bodyA, personId: zed, key: 'idt.body.read', kind: 'capability' })
+    const headers = { host: 'kernel-api:3000', 'x-gremion-module': 'publishing', 'x-internal-auth': SECRET, 'x-tenant-id': w.db.customerId, 'content-type': 'application/json' }
+    const ask = async (capability: string) => {
+      const r = await app.inject({ method: 'POST', url: '/api/v1/authz/decisions', headers, payload: { subject: 'sub-zed', bodyId: w.bodyA, capability } })
+      expect(r.statusCode).toBe(200)
+      return r.json()
+    }
+    const all = fw.enabled.get(w.db.customerId)!
+    const calls: string[] = []
+    const realFetch = globalThis.fetch
+    globalThis.fetch = (async (...a: unknown[]) => {
+      calls.push(String(a[0]))
+      throw new Error('outbound call')
+    }) as never
+    try {
+      expect((await ask('gov.vote.cast')).allow).toBe(true)
+      fw.enabled.set(w.db.customerId, all.filter((m) => m.moduleKey !== 'votes'))
+      expect(await ask('gov.vote.cast')).toEqual({ allow: false, reason: 'module_not_enabled', grantIds: [] })
+      expect((await ask('idt.body.read')).allow).toBe(true)
+    } finally {
+      fw.enabled.set(w.db.customerId, all)
+      globalThis.fetch = realFetch
+    }
+    expect((await ask('gov.vote.cast')).allow).toBe(true)
+    expect(calls).toEqual([])
   })
 })
