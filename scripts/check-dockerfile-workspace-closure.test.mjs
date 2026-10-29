@@ -10,7 +10,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
 
-import { checkWorkspaceClosure, relation, findDockerfiles } from './check-dockerfile-workspace-closure.mjs'
+import { checkWorkspaceClosure, relation, findDockerfiles, KERNEL_ROOT } from './check-dockerfile-workspace-closure.mjs'
 
 function tree(files) {
   const root = mkdtempSync(join(tmpdir(), 'df-closure-'))
@@ -207,4 +207,13 @@ test('refuses to pass over zero workspace packages, zero Dockerfiles, or no work
   withTree({ ...W, 'packages/a/package.json': pkg('@gremion/a'), 'docker/Dockerfile': 'FROM alpine\nCOPY e.sh /e\n' }, (root) =>
     assert.match(checkWorkspaceClosure(root).problems[0], /no Dockerfile COPYs a workspace package manifest .*gone blind/),
   )
+})
+
+test('the real kernel tree: every workspace Dockerfile COPYs its whole @gremion/* closure', () => {
+  const r = checkWorkspaceClosure(KERNEL_ROOT)
+  assert.deepEqual(r.problems, [])
+  // The three images the 2026-10-29 defect (and its sibling) touched must be among the ones examined.
+  assert.ok(r.workspaceDockerfiles >= 3, `only ${r.workspaceDockerfiles} workspace Dockerfile(s) examined`)
+  const files = findDockerfiles(KERNEL_ROOT)
+  for (const f of ['services/kernel-api/Dockerfile', 'modules/board/Dockerfile', 'gremion-ui/Dockerfile']) assert.ok(files.includes(f), f)
 })
