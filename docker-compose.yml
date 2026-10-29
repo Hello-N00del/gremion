@@ -516,7 +516,11 @@ services:
       ACME_CA_SERVER: ${ACME_CA_SERVER}
       EDGE_V4_SUBNET: ${EDGE_V4_SUBNET}
       EDGE_V6_SUBNET: ${EDGE_V6_SUBNET}
-    # Render-at-start (spec B "Edge" §2): a plain `sed` of the four markers
+      # The stack whose containers this Traefik may read: rendered into the docker
+      # provider's constraint (Label(`org.gremion.stack`,`@STACK@`)). Without it two
+      # stacks on one Docker daemon load each other's routers (incident 2026-10-29).
+      STACK: ${STACK:?STACK required}
+    # Render-at-start (spec B "Edge" §2): a plain `sed` of the five markers
     # into /tmp, then the image's OWN entrypoint, so Traefik runs exactly as it
     # did before. `$$` escapes compose interpolation so the CONTAINER's shell
     # expands these, against the environment block above. Every refusal names
@@ -524,9 +528,10 @@ services:
     #   - a resolver with a blank contact registers an ACME account that can
     #     never be recovered, so ACME_EMAIL is required while
     #     TRAEFIK_CERT_RESOLVER is non-empty (and only then);
-    #   - an empty CA or subnet, a value carrying a sed or YAML metacharacter
-    #     (| & backslash or "), or a subnet wider than /8 (v4) or /16 (v6)
-    #     would render a different -- or a wide-open -- file than reviewed;
+    #   - an empty CA, subnet or STACK, a value carrying a sed or YAML
+    #     metacharacter (| & backslash, " or a backtick, which would end the
+    #     constraint's Label argument), or a subnet wider than /8 (v4) or
+    #     /16 (v6) would render a different -- or a wide-open -- file than reviewed;
     #   - a marker that survives the render means a sed expression is missing.
     entrypoint: ["/bin/sh", "-c"]
     command:
@@ -535,16 +540,17 @@ services:
         if [ -n "$${TRAEFIK_CERT_RESOLVER}" ] && [ -z "$${ACME_EMAIL}" ]; then
         echo "FATAL: TRAEFIK_CERT_RESOLVER=$${TRAEFIK_CERT_RESOLVER} means this host issues its own certificates, so ACME_EMAIL is required." >&2;
         exit 1; fi;
-        for v in "$${ACME_CA_SERVER}" "$${EDGE_V4_SUBNET}" "$${EDGE_V6_SUBNET}"; do
-        [ -n "$$v" ] || { echo "FATAL: ACME_CA_SERVER, EDGE_V4_SUBNET and EDGE_V6_SUBNET are required." >&2; exit 1; }; done;
-        case "$${ACME_EMAIL}$${ACME_CA_SERVER}$${EDGE_V4_SUBNET}$${EDGE_V6_SUBNET}" in
-        *'|'*|*'&'*|*'\'*|*'"'*) echo "FATAL: an edge value carries a sed or YAML metacharacter (| & backslash or double quote)." >&2; exit 1;; esac;
+        for v in "$${ACME_CA_SERVER}" "$${EDGE_V4_SUBNET}" "$${EDGE_V6_SUBNET}" "$${STACK}"; do
+        [ -n "$$v" ] || { echo "FATAL: ACME_CA_SERVER, EDGE_V4_SUBNET, EDGE_V6_SUBNET and STACK are required." >&2; exit 1; }; done;
+        case "$${ACME_EMAIL}$${ACME_CA_SERVER}$${EDGE_V4_SUBNET}$${EDGE_V6_SUBNET}$${STACK}" in
+        *'|'*|*'&'*|*'\'*|*'"'*|*'`'*) echo "FATAL: an edge value carries a sed or YAML metacharacter (| & backslash, double quote or backtick)." >&2; exit 1;; esac;
         case "$${EDGE_V4_SUBNET}" in */[0-7]) echo "FATAL: EDGE_V4_SUBNET is wider than /8 and would trust forwarded headers from much of the internet." >&2; exit 1;; esac;
         case "$${EDGE_V6_SUBNET}" in */[0-9]|*/1[0-5]) echo "FATAL: EDGE_V6_SUBNET is wider than /16 and would trust forwarded headers from much of the internet." >&2; exit 1;; esac;
         sed -e "s|@ACME_EMAIL@|$${ACME_EMAIL:-acme-unused@invalid}|g"
         -e "s|@ACME_CA_SERVER@|$${ACME_CA_SERVER}|g"
         -e "s|@EDGE_V4_SUBNET@|$${EDGE_V4_SUBNET}|g"
         -e "s|@EDGE_V6_SUBNET@|$${EDGE_V6_SUBNET}|g"
+        -e "s|@STACK@|$${STACK}|g"
         /etc/traefik/traefik.yml > /tmp/traefik.yml;
         if grep -q '@[A-Z][A-Z0-9_]*@' /tmp/traefik.yml; then
         echo "FATAL: a @MARKER@ survived the render of /tmp/traefik.yml." >&2; exit 1; fi;

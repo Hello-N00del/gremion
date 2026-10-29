@@ -162,12 +162,13 @@ test('the render (docker compose config): for two different STACK values every r
     for (const [name, s] of routed) assert.equal(labelMap(s.labels)['org.gremion.stack'], stack, `${stack}: ${name}`)
     const tr = render.services.traefik
     assert.equal(tr.environment?.STACK, stack, `${stack}: the traefik container is not told its stack`)
-    assert.match([].concat(tr.command).join(' '), /s\|@STACK@\|\$\{?STACK\}?\|g/, 'the traefik command must substitute @STACK@ from STACK')
+    assert.match([].concat(tr.command).join(' '), /s\|@STACK@\|\$\$\{STACK\}\|g/, 'the traefik command must substitute @STACK@ from STACK')
   }
 })
 
 test('the traefik command refuses an empty STACK and a STACK carrying a metacharacter (backtick included) before Traefik starts', () => {
   const cmd = [].concat(renderState().services.traefik.command).join(' ')
-  assert.match(cmd, /for v in [^;]*"\$\{?STACK\}?"/, 'the empty-value loop must name STACK')
-  assert.match(cmd, /case "[^"]*\$\{?STACK\}?[^"]*" in \*'\|'\*\|[^;]*\*'`'\*/, 'the metacharacter case must cover STACK and the backtick')
+  // `docker compose config` keeps the container-shell `$${VAR}` escaping, hence the doubled `$`.
+  assert.match(cmd, /for v in [^;]*"\$\$\{STACK\}"/, 'the empty-value loop must name STACK')
+  assert.match(cmd, /case "[^"]*\$\$\{STACK\}" in [^;]*\*'`'\*\)/, 'the metacharacter case must cover STACK and the backtick')
 })

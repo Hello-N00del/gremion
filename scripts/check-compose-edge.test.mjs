@@ -13,7 +13,7 @@
  *      the whole routing graph.
  *   2. STATIC FILE. docker/traefik/traefik.yml declares the four entrypoints,
  *      the ping block, the le-http resolver and the directory file provider,
- *      carries the four @MARKER@s the start-up render substitutes, and holds no
+ *      carries the five @MARKER@s the start-up render substitutes, and holds no
  *      host literal. dynamic/tls.yml (the Cloudflare Origin default
  *      certificate) is gone.
  *   3. SERVICE. One read-only mount of /etc/traefik/dynamic, the external
@@ -73,7 +73,7 @@ const test = (...args) => {
   if (IS_ENTRY) nodeTest(...args)
 }
 const TRAEFIK_YML = 'docker/traefik/traefik.yml'
-const MARKERS = ['@ACME_EMAIL@', '@ACME_CA_SERVER@', '@EDGE_V4_SUBNET@', '@EDGE_V6_SUBNET@']
+const MARKERS = ['@ACME_EMAIL@', '@ACME_CA_SERVER@', '@EDGE_V4_SUBNET@', '@EDGE_V6_SUBNET@', '@STACK@']
 
 // ── helpers over the render ────────────────────────────────────────────────
 
@@ -228,7 +228,7 @@ test('guard 2: the ping block, the API without dashboard, the le-http resolver a
   assert.deepEqual(doc.providers?.file, { directory: '/etc/traefik/dynamic', watch: true })
 })
 
-test('guard 2: the four markers sit where the render substitutes them, and no other marker exists', () => {
+test('guard 2: the five markers sit where the render substitutes them, and no other marker exists', () => {
   const doc = staticDoc()
   const acme = doc.certificatesResolvers?.['le-http']?.acme
   assert.equal(acme?.email, '@ACME_EMAIL@')
@@ -236,6 +236,8 @@ test('guard 2: the four markers sit where the render substitutes them, and no ot
   assert.deepEqual(doc.entryPoints?.websecure?.forwardedHeaders?.trustedIPs, ['127.0.0.1/32', '@EDGE_V4_SUBNET@', '@EDGE_V6_SUBNET@'])
   const found = [...new Set(staticText().match(/@[A-Z][A-Z0-9_]*@/g) ?? [])].sort()
   assert.deepEqual(found, [...MARKERS].sort())
+  // Incident 2026-10-29: the docker provider reads only its own stack's containers.
+  assert.equal(doc.providers?.docker?.constraints, 'Label(`org.gremion.stack`,`@STACK@`)')
 })
 
 test('guard 2: no host literal -- 127.0.0.1 or :8081 appears exactly twice (TRD-039)', () => {

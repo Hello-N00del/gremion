@@ -26,6 +26,9 @@ entryPoints:
 providers:
   docker:
     exposedByDefault: false
+    # Production constrains the provider to its own stack (docker/traefik/traefik.yml,
+    # incident 2026-10-29); the fixture does the same. STACK=edgeproto (edge-proto.sh).
+    constraints: "Label(`org.gremion.stack`,`edgeproto`)"
   file:
     directory: /etc/traefik/dynamic
     watch: true

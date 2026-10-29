@@ -38,7 +38,8 @@ export const STACK_MARKER = '@STACK@'
 export const CONSTRAINT = 'Label(`org.gremion.stack`,`@STACK@`)'
 
 // k8s manifests use IngressRoute CRDs (a different provider); node_modules and
-// build output never hold a deployed composition.
+// build output never hold a deployed composition. logLevel 'error': compose's own
+// `!override` / `!reset` tags are unknown to a plain YAML reader (a warning, not a failure).
 const SKIP_DIRS = new Set(['node_modules', '.git', 'dist', '.svelte-kit', 'coverage', 'k8s', '.worktrees'])
 const COMPOSE_NAME_RE = /(^|\/)docker-compose[^/]*\.ya?ml$/
 
@@ -86,7 +87,7 @@ export function isRouted(labels) {
 export function routedServices(text, file = '<text>') {
   let doc
   try {
-    doc = parse(text, { merge: true })
+    doc = parse(text, { merge: true, logLevel: 'error' })
   } catch (e) {
     throw new Error(`${file}: not parseable YAML (${e.message.split('\n')[0]})`)
   }
@@ -143,7 +144,7 @@ export function checkStackScope(root = KERNEL_ROOT) {
 
   const stateFile = join(root, 'docker-compose.yml')
   if (existsSync(stateFile)) {
-    const svc = parse(readFileSync(stateFile, 'utf8'), { merge: true })?.services?.traefik
+    const svc = parse(readFileSync(stateFile, 'utf8'), { merge: true, logLevel: 'error' })?.services?.traefik
     if (!svc) problems.push('docker-compose.yml: no traefik service')
     else {
       const cmd = [].concat(svc.command ?? []).join(' ')
