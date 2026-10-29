@@ -2,7 +2,9 @@
   "keycloak": "26.6.1",
   "request": {
     "acr_values": "loa2",
-    "max_age": 300
+    "max_age": 300,
+    "expiry_max_age_scaled": 5,
+    "expiry_session_age_at_least_seconds": 8
   },
   "flows": {
     "A_fresh_login": {
@@ -12,24 +14,24 @@
       ],
       "acr": "loa2",
       "id": {
-        "auth_time": 1793269823,
-        "iat": 1793269823
+        "auth_time": 1793271808,
+        "iat": 1793271808
       },
       "access": {
-        "auth_time": 1793269823,
-        "iat": 1793269823
+        "auth_time": 1793271808,
+        "iat": 1793271808
       }
     },
     "B_sso_reuse": {
       "kinds": [],
       "acr": "loa2",
       "id": {
-        "auth_time": 1793269823,
-        "iat": 1793269830
+        "auth_time": 1793271808,
+        "iat": 1793271815
       },
       "access": {
-        "auth_time": 1793269823,
-        "iat": 1793269830
+        "auth_time": 1793271808,
+        "iat": 1793271815
       }
     },
     "C_second_browser_login": {
@@ -39,12 +41,12 @@
       ],
       "acr": "loa2",
       "id": {
-        "auth_time": 1793269830,
-        "iat": 1793269830
+        "auth_time": 1793271815,
+        "iat": 1793271815
       },
       "access": {
-        "auth_time": 1793269830,
-        "iat": 1793269830
+        "auth_time": 1793271815,
+        "iat": 1793271815
       }
     },
     "D_prompt_login": {
@@ -54,12 +56,54 @@
       ],
       "acr": "loa2",
       "id": {
-        "auth_time": 1793269861,
-        "iat": 1793269861
+        "auth_time": 1793271841,
+        "iat": 1793271841
       },
       "access": {
-        "auth_time": 1793269861,
-        "iat": 1793269861
+        "auth_time": 1793271841,
+        "iat": 1793271841
+      }
+    },
+    "E0_expiry_fresh_login": {
+      "kinds": [
+        "password",
+        "otp"
+      ],
+      "acr": "loa2",
+      "id": {
+        "auth_time": 1793271871,
+        "iat": 1793271871
+      },
+      "access": {
+        "auth_time": 1793271871,
+        "iat": 1793271871
+      }
+    },
+    "E1_expiry_session_older_than_max_age": {
+      "kinds": [
+        "password",
+        "otp"
+      ],
+      "acr": "loa2",
+      "id": {
+        "auth_time": 1793271901,
+        "iat": 1793271901
+      },
+      "access": {
+        "auth_time": 1793271901,
+        "iat": 1793271901
+      }
+    },
+    "E2_after_reauth_sso_reuse": {
+      "kinds": [],
+      "acr": "loa2",
+      "id": {
+        "auth_time": 1793271901,
+        "iat": 1793271901
+      },
+      "access": {
+        "auth_time": 1793271901,
+        "iat": 1793271901
       }
     }
   },
@@ -67,6 +111,9 @@
     "auth_time_present_in_all": true,
     "sso_reuse_keeps_original": true,
     "second_login_advances": true,
-    "prompt_login_advances": true
+    "prompt_login_advances": true,
+    "expired_max_age_forces_reauth": true,
+    "expired_max_age_advances_auth_time": true,
+    "sso_after_reauth_keeps_new_value": true
   }
 }
