@@ -40,6 +40,21 @@ describe('runAuthzCli', () => {
     expect(t.err.filter((l) => l.startsWith('AUTHZ-FAILED'))).toHaveLength(2)
     expect(t.err[0]).toContain(A)
   })
+  it('the customer list failing (control database down) is a named AUTHZ-FAILED * line and exit 1, not a crash', async () => {
+    for (const verb of ['sync', 'sweep']) {
+      const t = io()
+      const code = await runAuthzCli(['authz', verb], t.io, deps({ listCustomerIds: async () => { throw new Error('control db down') } }))
+      expect(code, verb).toBe(1)
+      expect(t.err).toEqual([`AUTHZ-FAILED * ${verb}: control db down`])
+      expect(t.out).toEqual([])
+    }
+  })
+  it('--customer needs no list, so a broken list does not touch it', async () => {
+    const t = io()
+    const code = await runAuthzCli(['authz', 'sync', '--customer', A], t.io, deps({ listCustomerIds: async () => { throw new Error('control db down') }, lookup: async () => null }))
+    expect(code).toBe(1)
+    expect(t.err).toEqual([`AUTHZ-FAILED ${A} sync: no customer ${A} in the control registry`])
+  })
   it('--customer visits exactly that customer and does not list', async () => {
     const t = io()
     const list = vi.fn(async () => [A, B])

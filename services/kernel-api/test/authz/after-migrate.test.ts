@@ -52,6 +52,13 @@ describe('syncAfterMigrate', () => {
     expect(await syncAfterMigrate(['migrate'], 0, t.io, () => d)).toBe(1)
     expect(t.err.some((l) => l.startsWith('AUTHZ-FAILED'))).toBe(true)
   })
+  it('a customer list that cannot be read after a successful migrate is exit 1 with a named line, never a rejection', async () => {
+    const t = lines()
+    const { d } = deps()
+    const code = await syncAfterMigrate(['migrate'], 0, t.io, () => ({ ...d, listCustomerIds: async () => { throw new Error('control db down') } }))
+    expect(code).toBe(1)
+    expect(t.err).toEqual(['AUTHZ-FAILED * sync: control db down'])
+  })
   it('an environment that cannot wire the sync is a NAMED skip, not a failure of the migrate', async () => {
     const t = lines()
     expect(

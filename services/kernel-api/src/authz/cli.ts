@@ -44,7 +44,14 @@ export async function runAuthzCli(argv: readonly string[], io: AuthzCliIo, deps:
   if (rest.length === 2 && rest[0] === '--customer' && UUID.test(rest[1] ?? '')) only = rest[1]
   else if (rest.length !== 0) return usage(`unexpected arguments ${rest.join(' ')}`)
 
-  const ids = only ? [only] : await deps.listCustomerIds()
+  let ids: string[]
+  try {
+    ids = only ? [only] : await deps.listCustomerIds()
+  } catch (err) {
+    // the control registry could not be read: no customer was visited, which is a failure, named, not a crash
+    io.err(`AUTHZ-FAILED * ${verb}: ${(err as Error).message}`)
+    return 1
+  }
   let failed = 0
   for (const id of ids) {
     try {

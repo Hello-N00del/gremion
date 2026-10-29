@@ -42,10 +42,10 @@ export const NAMED: Record<'unit' | 'integration' | 'authz' | 'live', Record<str
     'test/keycloak/realm-audience.test.ts': 4,
     // TASK-081
     'test/authz/catalogue.test.ts': 9,
-    'test/authz/cli.test.ts': 4,
+    'test/authz/cli.test.ts': 6,
     'test/authz/sweep-interval.test.ts': 19,
     'test/authz/http.test.ts': 22,
-    'test/authz/after-migrate.test.ts': 6,
+    'test/authz/after-migrate.test.ts': 7,
     'test/authz/no-role-check.test.ts': 5,
     'test/authz/stepup.test.ts': 5,
     // TASK-081 G3: the PDP-backed WriteAuthorizer's table and its pre-database refusals
