@@ -55,7 +55,7 @@ interface Actor {
 async function personBySub(tx: Sql, claims: Record<string, unknown>): Promise<string> {
   const sub = claims.sub
   if (typeof sub !== 'string' || !sub) throw new GrantError('forbidden', 'the token carries no subject')
-  const rows = await tx<{ person_id: string }[]>`SELECT person_id::text FROM idt.person WHERE idp_subject = ${sub} AND state = 'active'`
+  const rows = await tx<{ person_id: string }[]>`SELECT person_id::text FROM idt.person WHERE idp_subject = ${sub} AND account_state = 'active'`
   const p = rows[0]
   if (!p) throw new GrantError('forbidden', 'the token subject is not an active person of this customer')
   return p.person_id
@@ -120,9 +120,9 @@ export async function issueGrant(sql: Sql, deps: GrantDeps, customerId: string, 
     }
     if (actor.kind === 'person' && actor.id === req.subjectPersonId) throw new GrantError('self_grant', 'a person never grants themselves')
     if (privileged) requireStepUp(granter, deps)
-    const person = await tx`SELECT 1 FROM idt.person WHERE person_id = ${req.subjectPersonId}::uuid AND state = 'active'`
+    const person = await tx`SELECT 1 FROM idt.person WHERE person_id = ${req.subjectPersonId}::uuid AND account_state = 'active'`
     if (person.length === 0) throw new GrantError('unknown_subject', 'no such person in this customer')
-    const body = await tx<{ body_kind: string }[]>`SELECT body_kind FROM idt.body WHERE body_id = ${req.bodyId}::uuid`
+    const body = await tx<{ kind_key: string }[]>`SELECT kind_key FROM idt.body WHERE body_id = ${req.bodyId}::uuid`
     if (body.length === 0) throw new GrantError('unknown_body', 'no such body in this customer')
     if (req.grantKind === 'capability') {
       const def = capabilityDef(req.key)!
@@ -131,7 +131,7 @@ export async function issueGrant(sql: Sql, deps: GrantDeps, customerId: string, 
       }
     } else {
       const scope = roleDef(req.key)!.scopeLevel
-      const inVerwaltung = body[0]!.body_kind === 'verwaltung'
+      const inVerwaltung = body[0]!.kind_key === 'verwaltung'
       if (scope === 'customer' && !inVerwaltung) throw new GrantError('role_scope', 'customer-level roles are granted in the verwaltung body only')
       if (scope === 'body' && inVerwaltung) throw new GrantError('role_scope', 'body-level roles are granted outside the verwaltung only')
     }

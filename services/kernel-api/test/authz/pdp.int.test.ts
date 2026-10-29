@@ -3,7 +3,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { decide, type DecideInput } from '../../src/authz/pdp.ts'
 import { uuidv7 } from './db.ts'
-import { buildWorld, makeRegistry, seedGrant, type World } from './world.ts'
+import { buildWorld, insertPerson, makeRegistry, seedGrant, type World } from './world.ts'
 
 let w: World
 let w2: World
@@ -68,8 +68,8 @@ describe('TRD-084 tenants', () => {
     const sub = 'sub-shared'
     const pa = uuidv7()
     const pb = uuidv7()
-    await w.db.admin`INSERT INTO idt.person (person_id, customer_id, idp_subject) VALUES (${pa}::uuid, ${w.db.customerId}::uuid, ${sub})`
-    await w2.db.admin`INSERT INTO idt.person (person_id, customer_id, idp_subject) VALUES (${pb}::uuid, ${w2.db.customerId}::uuid, ${sub})`
+    await insertPerson(w.db.admin, w.db.customerId, pa, sub)
+    await insertPerson(w2.db.admin, w2.db.customerId, pb, sub)
     await seedGrant(w.db.admin, w.db.customerId, { bodyId: w.bodyA, personId: pa, key: 'member' })
     const inA = await decide(w.db.app, reg.read, { customerId: w.db.customerId, subject: { sub }, bodyId: w.bodyA, capability: 'gov.vote.cast' })
     const inB = await decide(w2.db.app, reg2.read, { customerId: w2.db.customerId, subject: { sub }, bodyId: w2.bodyA, capability: 'gov.vote.cast' })
@@ -170,6 +170,6 @@ describe('module OFF (operator decision 2026-10-21)', () => {
 
 async function seedPerson(world: World, name: string): Promise<string> {
   const id = uuidv7()
-  await world.db.admin`INSERT INTO idt.person (person_id, customer_id, idp_subject) VALUES (${id}::uuid, ${world.db.customerId}::uuid, ${'sub-' + name})`
+  await insertPerson(world.db.admin, world.db.customerId, id, 'sub-' + name)
   return id
 }

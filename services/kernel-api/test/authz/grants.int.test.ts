@@ -6,7 +6,7 @@ import { issueGrant, listGrants, revokeAllForPerson, revokeGrant, type GrantDeps
 import { decide } from '../../src/authz/pdp.ts'
 import { sweepGrants } from '../../src/authz/sweep.ts'
 import { uuidv7 } from './db.ts'
-import { buildWorld, makeRegistry, seedGrant, type World } from './world.ts'
+import { buildWorld, insertPerson, makeRegistry, seedGrant, type World } from './world.ts'
 
 let w: World
 let w2: World
@@ -225,7 +225,7 @@ describe('PRD-IDN-002 revoke-all', () => {
     const ids: string[] = []
     for (let i = 0; i < 20; i++) {
       const p = uuidv7()
-      await w.db.admin`INSERT INTO idt.person (person_id, customer_id, idp_subject) VALUES (${p}::uuid, ${w.db.customerId}::uuid, ${'sub-bulk-' + i})`
+      await insertPerson(w.db.admin, w.db.customerId, p, 'sub-bulk-' + i)
       await seedGrant(w.db.admin, w.db.customerId, { bodyId: w.bodyA, personId: p, key: 'member' })
       ids.push(p)
     }

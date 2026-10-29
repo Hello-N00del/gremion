@@ -235,20 +235,38 @@ COMMENT ON COLUMN idt.outbox.test_run_id IS 'xref DB-OPS-TEST-RUN';
 COMMENT ON COLUMN idt.inbox.test_run_id IS 'xref DB-OPS-TEST-RUN';
 
 -- ===== TASK-081 test-only stand-ins for TASK-080's bodies tables (dropped once 080 merges, Q1) =====
--- Only the columns authz_grant's foreign keys and the PDP read. Not a deployable migration.
+-- Only the columns authz_grant's foreign keys, the PDP and the seeding helpers read, named and constrained as 080-a's real
+-- idt.person / idt.body (account_state, kind_key, the NOT NULL audit columns, one verwaltung per customer). Not a deployable migration.
 CREATE TABLE idt.person (
-  person_id    uuid        NOT NULL,
-  customer_id  uuid        NOT NULL,
-  idp_subject  text,
-  state        text        NOT NULL DEFAULT 'active',
-  CONSTRAINT person_pkey PRIMARY KEY (person_id)
+  person_id        uuid        NOT NULL,
+  customer_id      uuid        NOT NULL,
+  idp_subject      text,
+  display_name     text,
+  email            text,
+  account_state    text        NOT NULL DEFAULT 'invited',
+  pseudonym        text        NOT NULL,
+  activated_at     timestamptz,
+  created_by_kind  text        NOT NULL,
+  updated_by_kind  text        NOT NULL,
+  CONSTRAINT person_pkey PRIMARY KEY (person_id),
+  CONSTRAINT person_idp_subject_key UNIQUE (idp_subject),
+  CONSTRAINT person_pseudonym_key UNIQUE (pseudonym),
+  CONSTRAINT person_account_state_check CHECK (account_state IN ('invited', 'active', 'disabled', 'erased')),
+  CONSTRAINT person_state_times_check CHECK (account_state <> 'active' OR (activated_at IS NOT NULL AND idp_subject IS NOT NULL))
 );
 CREATE TABLE idt.body (
-  body_id      uuid        NOT NULL,
-  customer_id  uuid        NOT NULL,
-  body_kind    text        NOT NULL,
-  CONSTRAINT body_pkey PRIMARY KEY (body_id)
+  body_id          uuid        NOT NULL,
+  customer_id      uuid        NOT NULL,
+  kind_key         text        NOT NULL,
+  name             text        NOT NULL,
+  state            text        NOT NULL DEFAULT 'active',
+  created_by_kind  text        NOT NULL,
+  updated_by_kind  text        NOT NULL,
+  CONSTRAINT body_pkey PRIMARY KEY (body_id),
+  CONSTRAINT body_state_check CHECK (state IN ('active', 'archived'))
 );
+CREATE UNIQUE INDEX body_name_key ON idt.body (lower(name)) WHERE state = 'active';
+CREATE UNIQUE INDEX body_kind_key_key ON idt.body (kind_key) WHERE kind_key = 'verwaltung';
 CREATE TABLE idt.membership (
   membership_id uuid NOT NULL,
   customer_id   uuid NOT NULL,

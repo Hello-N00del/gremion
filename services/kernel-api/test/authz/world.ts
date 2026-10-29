@@ -26,6 +26,20 @@ export function makeRegistry(initial: string[]) {
   }
 }
 
+/** An active person with every NOT NULL column 080-a's idt.person has (the stand-in fixture mirrors them). */
+export async function insertPerson(admin: Sql, customerId: string, personId: string, sub: string): Promise<void> {
+  await admin`
+    INSERT INTO idt.person (person_id, customer_id, idp_subject, display_name, email, account_state, pseudonym, activated_at, created_by_kind, updated_by_kind)
+    VALUES (${personId}::uuid, ${customerId}::uuid, ${sub}, ${sub}, ${sub + '@example.test'}, 'active', ${'p-' + personId}, now(), 'system', 'system')`
+}
+
+/** A body of `kindKey` (one verwaltung per customer, as 080-a's unique index holds). */
+export async function insertBody(admin: Sql, customerId: string, bodyId: string, kindKey: string): Promise<void> {
+  await admin`
+    INSERT INTO idt.body (body_id, customer_id, kind_key, name, created_by_kind, updated_by_kind)
+    VALUES (${bodyId}::uuid, ${customerId}::uuid, ${kindKey}, ${kindKey + '-' + bodyId.slice(-8)}, 'system', 'system')`
+}
+
 export interface World {
   db: KernelDb
   bodyA: string
@@ -39,13 +53,11 @@ export async function buildWorld(name: string, enabled: string[] = ALL_MODULES, 
   const bodyA = uuidv7()
   const bodyB = uuidv7()
   const verwaltung = uuidv7()
-  for (const [id, kind] of [[bodyA, 'fachschaft'], [bodyB, 'fachschaft'], [verwaltung, 'verwaltung']] as const) {
-    await db.admin`INSERT INTO idt.body (body_id, customer_id, body_kind) VALUES (${id}::uuid, ${db.customerId}::uuid, ${kind})`
-  }
+  for (const [id, kind] of [[bodyA, 'fachschaftsrat'], [bodyB, 'fachschaftsrat'], [verwaltung, 'verwaltung']] as const) await insertBody(db.admin, db.customerId, id, kind)
   const persons: Record<string, string> = {}
   for (const p of people) {
     persons[p] = uuidv7()
-    await db.admin`INSERT INTO idt.person (person_id, customer_id, idp_subject) VALUES (${persons[p]!}::uuid, ${db.customerId}::uuid, ${'sub-' + p})`
+    await insertPerson(db.admin, db.customerId, persons[p]!, 'sub-' + p)
   }
   await syncAuthzCatalogue(db.app, { customerId: db.customerId, moduleIds, enabledModules: new Set(enabled) })
   return { db, bodyA, bodyB, verwaltung, persons }

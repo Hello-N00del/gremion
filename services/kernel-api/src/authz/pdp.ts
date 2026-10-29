@@ -68,11 +68,11 @@ async function decideChecked(_sql: Sql, enabledModules: EnabledModules, input: D
   return run(async (tx) => {
     const subjectRows =
       'sub' in input.subject
-        ? await tx<{ person_id: string }[]>`SELECT person_id::text FROM idt.person WHERE idp_subject = ${input.subject.sub} AND state = 'active'`
-        : await tx<{ person_id: string }[]>`SELECT person_id::text FROM idt.person WHERE person_id = ${input.subject.personId}::uuid AND state = 'active'`
+        ? await tx<{ person_id: string }[]>`SELECT person_id::text FROM idt.person WHERE idp_subject = ${input.subject.sub} AND account_state = 'active'`
+        : await tx<{ person_id: string }[]>`SELECT person_id::text FROM idt.person WHERE person_id = ${input.subject.personId}::uuid AND account_state = 'active'`
     const person = subjectRows[0]
     if (!person) return deny('subject_unknown')
-    const bodyRows = await tx<{ body_kind: string }[]>`SELECT body_kind FROM idt.body WHERE body_id = ${input.bodyId}::uuid`
+    const bodyRows = await tx<{ kind_key: string }[]>`SELECT kind_key FROM idt.body WHERE body_id = ${input.bodyId}::uuid`
     const body = bodyRows[0]
     if (!body) return deny('body_unknown')
     const cap = await tx<{ state: string }[]>`SELECT state FROM idt.capability WHERE capability_key = ${input.capability}`
@@ -95,7 +95,7 @@ async function decideChecked(_sql: Sql, enabledModules: EnabledModules, input: D
          AND (
                (g.grant_kind = 'capability' AND g.capability_key = ${input.capability})
             OR (g.grant_kind = 'role' AND r.role_key IS NOT NULL AND ${input.capability}::text = ANY (r.capability_keys)
-                AND (r.scope_level = 'body' OR ${body.body_kind}::text = 'verwaltung'))
+                AND (r.scope_level = 'body' OR ${body.kind_key}::text = 'verwaltung'))
          )
        ORDER BY g.grant_id`
     if (grants.length === 0) return deny('no_grant')
@@ -120,7 +120,7 @@ export async function customerWideGrantRoles(tx: Sql, personId: string): Promise
      WHERE g.subject_person_id = ${personId}::uuid
        AND g.grant_kind = 'role'
        AND r.scope_level = 'customer'
-       AND b.body_kind = 'verwaltung'
+       AND b.kind_key = 'verwaltung'
        AND 'idt.grant.manage' = ANY (r.capability_keys)
        AND g.state IN ('active', 'scheduled')
        AND g.valid_from <= now()

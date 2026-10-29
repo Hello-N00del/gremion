@@ -8,7 +8,7 @@ import { decide } from '../../src/authz/pdp.ts'
 import { sweepGrants } from '../../src/authz/sweep.ts'
 import { syncAuthzCatalogue } from '../../src/authz/sync.ts'
 import { buildKernelDb, uuidv7 } from './db.ts'
-import { ALL_MODULES, buildWorld, makeRegistry, moduleIds, seedGrant, type World } from './world.ts'
+import { ALL_MODULES, buildWorld, insertPerson, makeRegistry, moduleIds, seedGrant, type World } from './world.ts'
 
 let w: World
 let zero: World
@@ -28,7 +28,7 @@ const oneCapOf = new Map(CATALOGUE_MODULE_KEYS.map((m) => [m, moduleCaps.find((c
 
 async function person(world: World, name: string): Promise<string> {
   const id = uuidv7()
-  await world.db.admin`INSERT INTO idt.person (person_id, customer_id, idp_subject) VALUES (${id}::uuid, ${world.db.customerId}::uuid, ${'sub-' + name + '-' + id.slice(-6)})`
+  await insertPerson(world.db.admin, world.db.customerId, id, 'sub-' + name + '-' + id.slice(-6))
   return id
 }
 const ask = (world: World, enabled: { read: (c: string) => Promise<ReadonlySet<string>> }, personId: string, capability: string) =>
