@@ -107,6 +107,8 @@ CREATE INDEX wahlperiode_org_unit_id_body_id_idx ON idt.wahlperiode (org_unit_id
   WHERE org_unit_id IS NOT NULL;
 CREATE TRIGGER wahlperiode_no_delete_trg BEFORE DELETE ON idt.wahlperiode
   FOR EACH ROW EXECUTE FUNCTION idt.refuse_delete();
+CREATE TRIGGER wahlperiode_no_truncate_trg BEFORE TRUNCATE ON idt.wahlperiode
+  FOR EACH STATEMENT EXECUTE FUNCTION idt.refuse_truncate();
 CREATE TRIGGER wahlperiode_touch_trg BEFORE UPDATE ON idt.wahlperiode
   FOR EACH ROW EXECUTE FUNCTION idt.touch_row();
 ALTER TABLE idt.wahlperiode ENABLE ROW LEVEL SECURITY;
@@ -127,14 +129,14 @@ BEGIN
         JOIN idt.org_unit_kind AS k ON k.kind_key = b.kind_key AND k.level = b.kind_level
        WHERE b.body_id = NEW.body_id), false);
   ELSE
-    NEW.body_adopts_beschluesse := OLD.body_adopts_beschluesse;
-  END IF;
     -- body_adopts_beschluesse was derived from THIS body's kind at insert; a membership moved to another body would keep
     -- the first body's answer. A membership is ended and a new one started instead.
     IF NEW.body_id IS DISTINCT FROM OLD.body_id THEN
       RAISE EXCEPTION 'body_id of membership % is immutable', OLD.membership_id
         USING ERRCODE = 'check_violation';
     END IF;
+    NEW.body_adopts_beschluesse := OLD.body_adopts_beschluesse;
+  END IF;
   RETURN NEW;
 END
 $$;

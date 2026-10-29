@@ -69,9 +69,9 @@ describe('tenant-db and the relay after a db_conn_ref change', () => {
     const row = (ref: string): TenantRow => ({ ...w.state.row, dbConnRef: ref })
     await w.tenantDb.sqlFor(row('r1'))
     await w.tenantDb.sqlFor(row('r2'))
-    const peeked = await w.tenantDb.currentSqlFor(A_ID)
+    const peeked = await w.tenantDb.currentSqlFor!(A_ID)
     expect(await peeked!.begin(async (tx) => (tx as unknown as { user: string }).user)).toBe('u_r2')
     expect(w.state.made.map((m) => m.user)).toEqual(['u_r1', 'u_r2'])
-    expect(await w.tenantDb.currentSqlFor('0192f0c1-2b3c-7d4e-8f00-000000000000')).toBeUndefined() // no ref in hand for this customer
+    expect(await w.tenantDb.currentSqlFor!('0192f0c1-2b3c-7d4e-8f00-000000000000')).toBeUndefined() // no ref in hand for this customer
   })
 })

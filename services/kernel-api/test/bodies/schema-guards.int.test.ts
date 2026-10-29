@@ -121,3 +121,51 @@ describe('finding 6: membership.body_id is immutable, may_adopt_beschluesse free
     expect(await raises(admin().unsafe(`UPDATE idt.org_unit_kind SET may_adopt_beschluesse = 'yes' WHERE kind_key = 'stura'`))).toBeNull()
   })
 })
+
+describe('finding 7: inbox state/time pairs mirror the outbox, TRUNCATE is refused on the never-delete tables', () => {
+  const insertInbox = (id: string, state: string, processed: boolean, deadLettered: boolean) =>
+    admin().unsafe(`INSERT INTO idt.inbox (source, event_id, customer_id, event_type, tenantid, processing_state, processed_at, dead_lettered_at)
+      VALUES ('/gremion/gov', '${id}', '${C.id}', 'de.gremion.gov.motion.created.v1', '${C.id}', '${state}', ${processed ? 'now()' : 'NULL'}, ${deadLettered ? 'now()' : 'NULL'})`)
+
+  it('the three consistent combinations are accepted', async () => {
+    expect(await raises(insertInbox('ok-received', 'received', false, false))).toBeNull()
+    expect(await raises(insertInbox('ok-processed', 'processed', true, false))).toBeNull()
+    expect(await raises(insertInbox('ok-dead', 'dead_lettered', false, true))).toBeNull()
+  })
+
+  it.each([
+    ['received', false, true],
+    ['failed', false, true],
+    ['processed', true, true],
+    ['skipped_stale', true, true],
+    ['dead_lettered', true, true],
+  ] as const)('%s with processed_at=%s dead_lettered_at=%s is refused (23514 inbox_state_times_check)', async (state, processed, deadLettered) => {
+    const e = await raises(insertInbox(`bad-${state}`, state, processed, deadLettered))
+    expect(e?.code).toBe('23514')
+    expect(e?.message).toMatch(/inbox_state_times_check/)
+  })
+
+  it.each(['body', 'org_unit', 'seat', 'wahlperiode'])('TRUNCATE idt.%s is refused (rolled back either way, so the scratch data survives a missing guard)', async (table) => {
+    class Rollback extends Error {}
+    const e = await raises(
+      admin().begin(async (tx) => {
+        await tx.unsafe(`TRUNCATE idt.${table} CASCADE`)
+        throw new Rollback('truncate went through')
+      }),
+    )
+    expect(e, 'TRUNCATE must raise').not.toBeInstanceOf(Rollback)
+    expect(e?.code).toBe('23514')
+    expect(e?.message).toMatch(/^idt\.[a-z_]+ rows are never truncated$/)
+  })
+
+  it('TRUNCATE is not refused on a table that is not never-delete (the guard is per table)', async () => {
+    class Rollback extends Error {}
+    const e = await raises(
+      admin().begin(async (tx) => {
+        await tx.unsafe('TRUNCATE idt.preference')
+        throw new Rollback('rolled back on purpose')
+      }),
+    )
+    expect(e).toBeInstanceOf(Rollback)
+  })
+})
