@@ -947,11 +947,14 @@ phase_customer_create_check() {
     if [[ "$(q gremion_platform "SELECT count(DISTINCT step_kind) || '/' || count(*) FROM plt.provisioning_step WHERE customer_id = '${id}' AND status = 'done'")" == "8/8" ]]; then ok "customer-create: eight done ledger rows, one per kind (Q2)"; else bad "customer-create: the ledger is not eight done rows"; fi
     # R33 item 4: the post-condition behind handToReader -- every tenant secret
     # file is 0600 AND owned by the reader uid (a root:root file is EACCES to the readers).
-    local tsd="${PROOF_TENANT_SECRETS_DIR:-$ROOT/secrets/tenants}" tsf tsbad=0 tsn=0 want_uid="${TENANT_SECRETS_UID:-1000}"
+    # The directory the app env mounts (pooled-stack-proof renders TENANT_SECRETS_DIR into app-blue.env, under
+    # the scratch root), not the release tree's secrets/tenants, which holds only .gitkeep (#50 item 4).
+    local tsd="${PROOF_TENANT_SECRETS_DIR:-$(sed -n 's/^TENANT_SECRETS_DIR=//p' "$PENV/app-blue.env" 2>/dev/null | tr -d '"' | tail -n1)}" tsf tsbad=0 tsn=0 want_uid="${TENANT_SECRETS_UID:-1000}"
+    [[ -n "$tsd" ]] || tsd="$(croot)/secrets/tenants"
     while IFS= read -r tsf; do
         tsn=$(( tsn + 1 ))
         [[ "$(stat -c '%a %u' "$tsf")" == "600 ${want_uid}" ]] || { tsbad=1; info "secret ${tsf}: $(stat -c '%a %u' "$tsf"), want 600 ${want_uid}"; }
-    done < <(find "$tsd" -type f 2>/dev/null)
+    done < <(find "$tsd" -type f ! -name .gitkeep 2>/dev/null)
     if (( tsn > 0 && tsbad == 0 )); then ok "customer-create: ${tsn} tenant secret file(s) are mode 0600 and owned by uid ${want_uid}"; else bad "customer-create: tenant secret files under ${tsd}: ${tsn} found, ownership/mode wrong (want 600 ${want_uid})"; fi
     local acc; acc="$(accounts)"
     if grep -q '# kernel@' <<< "$acc" && grep -q '# calendar@' <<< "$acc" && ! grep -q '# votes@' <<< "$acc"; then
@@ -1067,7 +1070,7 @@ phase_customer_reconcile() {
     if tenant reconcile "$X" > "$OUT/ledger/reconcile-2.log" 2>&1; then bad "customer-reconcile: a platform@ sender passed"
     elif grep -q 'smtp-server' "$OUT/ledger/reconcile-2.log"; then ok "customer-reconcile: a platform@ sender fails smtp-server"
     else bad "customer-reconcile: the failure does not name smtp-server"; fi
-    if tenant reconcile "$X" --apply > "$OUT/ledger/reconcile-3.log" 2>&1; then ok "customer-reconcile: --apply repaired it by host rotation (Q7)"
+    if tenant reconcile "$X" --apply --reason "customer proof: repair the platform sender by host rotation" > "$OUT/ledger/reconcile-3.log" 2>&1; then ok "customer-reconcile: --apply repaired it by host rotation (Q7)"
     else tail -n 20 "$OUT/ledger/reconcile-3.log" >&2; bad "customer-reconcile: --apply did not repair"; fi
     # Against the laid-out root, as principal_count() runs the host tools: without
     # GREMION_ROOT it read /opt/gremion/etc/env/mail.env ("mail env file not found").
