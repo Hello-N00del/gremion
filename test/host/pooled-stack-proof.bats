@@ -406,7 +406,7 @@ skip_if_mail_api_port_taken() {
     linux_uname
     PATH="$LINUX_PATH" POOLED_CUSTOMER=1 run bash "$PROOF" render-env
     [ "$status" -ne 0 ]
-    [[ "$output" == *"FATAL: cannot detect the docker0 gateway"*"PROOF_HOST_GATEWAY_IP"* ]]
+    [[ "$output" == *"FATAL: cannot detect the docker0 gateway"*"shim: no such network"*"PROOF_HOST_GATEWAY_IP"* ]]   # docker's own stderr is in the message
 }
 
 @test "precreate_bind_dirs: the app's bind sources exist, owned by the invoking user, before any container" {

@@ -202,7 +202,7 @@ teardown_rm() {
 # etc/secrets/control-panel, etc/secrets/tenant-create and data/module-exports;
 # the edge file provider reads etc/edge).
 precreate_bind_dirs() {
-    mkdir -p "$SROOT/etc/edge" "$SROOT/secrets/tenants" "$SROOT/etc/secrets/control-panel"              "$SROOT/etc/secrets/tenant-create" "$SROOT/data/module-exports"
+    mkdir -p "$SROOT/etc/edge" "$SROOT/secrets/tenants" "$SROOT/etc/secrets/control-panel" "$SROOT/etc/secrets/tenant-create" "$SROOT/data/module-exports"
 }
 
 # host_gateway_ip -- the address host-gateway resolves to for a container, when
@@ -215,8 +215,12 @@ host_gateway_ip() {
     if [[ -z "$ip" ]]; then
         [[ "$(uname -s)" == Linux ]] || return 0
         if [[ "$(docker info --format '{{.OperatingSystem}}' 2>/dev/null || true)" == *"Docker Desktop"* ]]; then return 0; fi
-        ip="$(docker network inspect bridge -f '{{(index .IPAM.Config 0).Gateway}}' 2>/dev/null | tr -d '\r' || true)"
-        [[ -n "$ip" ]] || die "cannot detect the docker0 gateway (docker network inspect bridge); set PROOF_HOST_GATEWAY_IP"
+        local raw=""
+        # stderr is kept (2>&1): on failure it IS the reason, and the die names it
+        if raw="$(docker network inspect bridge -f '{{(index .IPAM.Config 0).Gateway}}' 2>&1)"; then
+            ip="$(tail -n1 <<< "$raw" | tr -d '\r')"
+        fi
+        [[ -n "$ip" ]] || die "cannot detect the docker0 gateway (docker network inspect bridge: $(head -n3 <<< "${raw:-no output}" | tr '\r\n' '  ')); set PROOF_HOST_GATEWAY_IP"
     fi
     [[ "$ip" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] || die "host-gateway address '${ip}' is not an IPv4 literal"
     [[ "$ip" == 127.0.0.1 ]] || printf '%s' "$ip"
