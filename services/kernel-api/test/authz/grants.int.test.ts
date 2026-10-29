@@ -453,3 +453,37 @@ describe('capability grants honour the role_scope rule of the body they are made
     expect(b.capability_key).toBe('brd.card.own')
   })
 })
+
+// The revoke side of the same scope rule (081 house review MED residual): a revoker closes a capability grant only
+// when a role it holds may grant that capability at the grant's body scope. Unscoped, an it_admin closed a verwaltung
+// grant of idt.structure.manage (carried by the body-level body_admin) that it could never have issued there.
+describe('capability revokes honour the role_scope rule of the grant body (081 residual)', () => {
+  const stateOf = async (id: string) => (await w.db.admin<{ state: string }[]>`SELECT state FROM idt.authz_grant WHERE grant_id = ${id}::uuid`)[0]!.state
+  const seedVerwaltungCap = async (key: string) => {
+    const p = uuidv7()
+    await insertPerson(w.db.admin, w.db.customerId, p, `sub-cap-victim-${uuidv7()}`)
+    return { p, id: await seedGrant(w.db.admin, w.db.customerId, { bodyId: w.verwaltung, personId: p, key, kind: 'capability' }) }
+  }
+
+  it('negative: an it_admin revoking a verwaltung idt.structure.manage / idt.membership.manage grant is 403, the grant stays active, no revoked event', async () => {
+    for (const key of ['idt.structure.manage', 'idt.membership.manage']) {
+      const { id } = await seedVerwaltungCap(key)
+      const e = await refused(revokeGrant(w.db.app, deps, w.db.customerId, claims('sub-itv'), id))
+      expect([e.code, e.status], key).toEqual(['granter_role_mismatch', 403])
+      expect(await stateOf(id), key).toBe('active')
+      expect((await events(w, id)).map((x) => x.event_type), key).not.toContain('de.gremion.idt.grant.revoked.v1')
+    }
+  })
+  it('negative: the same through revoke-all, nothing is closed', async () => {
+    const { p, id } = await seedVerwaltungCap('idt.structure.manage')
+    const e = await refused(revokeAllForPerson(w.db.app, deps, w.db.customerId, claims('sub-itv'), p))
+    expect([e.code, e.status]).toEqual(['granter_role_mismatch', 403])
+    expect(await stateOf(id)).toBe('active')
+  })
+  it('positive: a council_admin revokes the verwaltung capability grant; an it_admin still revokes a body capability in a body', async () => {
+    const { id } = await seedVerwaltungCap('idt.structure.manage')
+    expect((await revokeGrant(w.db.app, deps, w.db.customerId, claims('sub-carol'), id)).state).toBe('revoked')
+    const b = await issueGrant(w.db.app, deps, w.db.customerId, claims('sub-itv'), base({ grantKind: 'capability', key: 'brd.card.own', bodyId: w.bodyB, granterRole: 'it_admin', subjectPersonId: w.persons.bob! }))
+    expect((await revokeGrant(w.db.app, deps, w.db.customerId, claims('sub-itv'), b.grant_id)).state).toBe('revoked')
+  })
+})
