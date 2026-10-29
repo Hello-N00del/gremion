@@ -709,6 +709,28 @@ lint-ci-docker-filter:
 	 fi; \
 	 echo "[ci-docker-filter] suite: $$collected test(s) ran"
 
+# The verify legs in .github/workflows/ci.yml (`node scripts/verify/verify.mjs --only ...`) and the
+# verify-gate job that combines their records. Every required suite must be run by exactly one leg
+# (`unit` and `integration` by every one of their parts), every leg's record must be awaited by the gate,
+# and `--allow-missing` must stay on the pull-request path only. Without it a suite added to
+# required-suites.txt, or a part added to UNIT_PARTS, is red only on the push to main, after the merge.
+# The suite runs first and its collected count is asserted against its declared `test(` count: `node
+# --test` exits 0 on a file that collects nothing.
+.PHONY: lint-ci-verify-coverage
+lint-ci-verify-coverage:
+	@echo "Checking that ci.yml runs every required verify suite exactly once..."
+	@declared=$$(grep -c '^test(' scripts/check-ci-verify-coverage.test.mjs); \
+	 out=$$(node --test --test-reporter=tap scripts/check-ci-verify-coverage.test.mjs 2>&1); \
+	 status=$$?; \
+	 [ "$$status" -eq 0 ] || { printf '%s\n' "$$out" >&2; exit "$$status"; }; \
+	 collected=$$(printf '%s\n' "$$out" | tr -d '\r' | sed -n 's/^1\.\.\([0-9][0-9]*\)$$/\1/p' | tail -n1); \
+	 if [ "$$declared" -lt 1 ] || [ "$$collected" != "$$declared" ]; then \
+	   echo "lint-ci-verify-coverage: scripts/check-ci-verify-coverage.test.mjs declares $$declared test(s) but node ran '$$collected'." >&2; \
+	   exit 1; \
+	 fi; \
+	 echo "[ci-verify-coverage] suite: $$collected of $$declared declared test(s) ran"
+	@node scripts/check-ci-verify-coverage.mjs
+
 # Incident 2026-10-29: a Traefik whose docker provider is unconstrained reads the
 # labels of EVERY container on the daemon; two stacks on one host then collide on
 # identical router/middleware names and Traefik disables the routers that use
@@ -819,7 +841,7 @@ lint-image-digests:
 	@node scripts/release/check-image-digests.mjs
 	@node scripts/release/check-image-digests.mjs --render
 
-lint: lint-sh lint-yaml lint-json lint-compose lint-compose-latest lint-pooled-stack lint-hygiene lint-tom-annex lint-cve-floors lint-nats-nruns lint-packages lint-port-back lint-postgres-major lint-extraction-source lint-unshipped-migrations lint-compliance lint-tenant-db-access lint-edge-host lint-module-scan lint-module-migration-names lint-module-dockerfile-copy lint-dockerfile-workspace-closure lint-ci-docker-filter lint-traefik-stack-scope lint-migration-register lint-image-digests lint-synapse
+lint: lint-sh lint-yaml lint-json lint-compose lint-compose-latest lint-pooled-stack lint-hygiene lint-tom-annex lint-cve-floors lint-nats-nruns lint-packages lint-port-back lint-postgres-major lint-extraction-source lint-unshipped-migrations lint-compliance lint-tenant-db-access lint-edge-host lint-module-scan lint-module-migration-names lint-module-dockerfile-copy lint-dockerfile-workspace-closure lint-ci-docker-filter lint-traefik-stack-scope lint-migration-register lint-image-digests lint-synapse lint-ci-verify-coverage
 	@echo "All linters passed."
 
 # ── Local gate (TASK-045, TRD-444/341) ──────────────────────────────────────

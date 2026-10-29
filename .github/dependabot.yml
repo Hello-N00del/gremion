@@ -107,18 +107,22 @@ updates:
     open-pull-requests-limit: 5
     labels: [dependencies, docker]
 
-  # /gremion-public — split out from the multi-Dockerfile entry above so it
-  # can carry its own ignore rule. Node-major bumps to the /gremion-public
-  # base image are PINNED at the current major (node:26-alpine as of
-  # TASK-017, was node:22-alpine) because they need a full rebuild plus a
-  # boot smoke before merge: the schema-rename staleness bug fixed in PR #88
-  # was caught only because a rebuild forced the cached pre-rename DDL to
-  # flush.
+  # /gremion-public — split out from the multi-Dockerfile entry above, when it
+  # carried its own ignore rule, and kept as its own entry since. Node-major
+  # bumps to the /gremion-public base image used to be PINNED at the then-current
+  # major (node:26-alpine as of TASK-017, was node:22-alpine) because they need a
+  # full rebuild plus a boot smoke before merge: the schema-rename staleness bug
+  # fixed in PR #88 was caught only because a rebuild forced the cached
+  # pre-rename DDL to flush.
   #
-  # Lifting this pin is gated on gremion-public having a CI job that actually
-  # boots the built image and hits it — gremion-public.yml today runs check,
-  # unit tests and build, none of which would have caught #88. Patch and minor
-  # node bumps still flow through, as do non-node bumps.
+  # The pin is lifted: ci.yml's e2e-smoke job now builds this Dockerfile, boots the
+  # image and asserts GET /healthz answers 200 with the portal's liveness marker
+  # (status code and body, container still running), so a node-major bump pull
+  # request is gated by exactly the boot that check, unit tests and build never
+  # did. If that step is ever removed, restore the ignore:
+  #   ignore:
+  #     - dependency-name: "node"
+  #       update-types: ["version-update:semver-major"]
   # See: [[wiki/concepts/build-dockerfile-image-staleness-after-schema-rename]]
   - package-ecosystem: docker
     directory: /gremion-public
@@ -126,6 +130,3 @@ updates:
       interval: weekly
     open-pull-requests-limit: 5
     labels: [dependencies, docker]
-    ignore:
-      - dependency-name: "node"
-        update-types: ["version-update:semver-major"]

@@ -496,7 +496,7 @@ test('scanText records the digest a reference carries', () => {
 test('TDD-1: an undigested declaration is reported (compose, workflow, shell, Dockerfile, docker run)', () => {
   for (const [path, line] of [
     ['docker-compose.yml', `    image: ${POSTGRES_IMAGE_TAG}`],
-    ['.github/workflows/gremion-ui.yml', `        image: ${POSTGRES_IMAGE_TAG}`],
+    ['.github/workflows/ci.yml', `        image: ${POSTGRES_IMAGE_TAG}`],
     ['gremion-ui/scripts/fresh-init-proof.sh', `DEFAULT_IMAGE="${POSTGRES_IMAGE_TAG}"`],
     ['x.sh', `IMAGE="\${SOME_IMAGE:-${POSTGRES_IMAGE_TAG}}"`],
     ['x.bats', `  run docker run --rm ${POSTGRES_IMAGE_TAG} postgres --version`],

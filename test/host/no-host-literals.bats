@@ -416,10 +416,24 @@ host_shell_files() {
   [ "$status" -ne 0 ]
 }
 
-@test "ci.yml runs unit tests through make test-unit -- one home for the runner" {
-  grep -q 'run: make test-unit' "$KERNEL_ROOT/.github/workflows/ci.yml"
+# The unit tests used to run through `make test-unit` in a ci.yml job of their own. They now run
+# as verify's unit:bats part (the verify-unit-host leg), so the one home for the runner is that
+# part's glob list, and the property to keep is the same one: a new bats file is collected the
+# day it lands. So (a) ci.yml runs unit:bats through verify.mjs and lists no bats file itself,
+# and (b) the part's patterns are exactly the globs the Makefile's test-unit recipe hands bats.
+@test "ci.yml runs the bats suites through verify's unit:bats part -- one home for the runner" {
+  grep -qE 'run: node scripts/verify/verify\.mjs --only [^ ]*unit:bats' "$KERNEL_ROOT/.github/workflows/ci.yml"
   run grep -qE '^[[:space:]]+bats test/setup\.bats' "$KERNEL_ROOT/.github/workflows/ci.yml"
   [ "$status" -ne 0 ]
+  local part_globs make_globs
+  part_globs="$(grep -E '^[[:space:]]*bats: ' "$KERNEL_ROOT/scripts/verify/suites/unit.mjs" \
+                  | grep -oE "patterns: \[[^]]*\]" | grep -oE "'[^']+'" | tr -d "'" | sort)"
+  make_globs="$(recipe_body test-unit \
+                  | sed -n 's/^[[:space:]]*@\{0,1\}\$(BATS)[[:space:]]//p' \
+                  | tr ' \t' '\n' | grep -v '^$' | sort)"
+  [ -n "$part_globs" ]                    # the parser found the part's patterns
+  [ -n "$make_globs" ]                    # ... and the recipe's globs
+  [ "$part_globs" = "$make_globs" ]
 }
 
 # The directive regex captures only the FIRST whitespace-delimited field after
@@ -578,27 +592,20 @@ ci_job_block() {  # $1 = job id
     | grep -v '^[[:space:]]*#'
 }
 
-# test/host/deploy-workflow.bats asserts on deploy.yml's extracted shell blocks
-# (shellcheck) and on its YAML (yamllint), and `skip`s when the tool is absent.
-# Both of its skip messages say "CI installs it" -- which was true of the Lint
-# job, which runs no bats, and false of the job that actually runs the suite. A
-# guard that skips is a guard that passes, so this pins the install.
-#
-# Only yamllint is required. An install line for the shell linter is NOT (and
-# this comment does not start with its name, because a comment that does is
-# parsed as a malformed directive -- SC1072/SC1073 -- by the tool itself): the
-# ubuntu-24.04 runner image ships it as an apt package (actions/runner-images,
-# images/ubuntu/Ubuntu2404-Readme.md, "Installed apt packages", version
-# 0.9.0-1), so deploy-workflow.bats's shell-block assertion runs in this job
-# without one, and demanding one would be this task inventing a requirement
-# neither its brief nor its assignment carries. yamllint is not in that image
-# as an apt package and is the tool the assignment names.
-@test "the CI unit-test job installs what the host suites need to not skip" {
+# test/host/deploy-workflow.bats asserts on a workflow's extracted shell blocks (shellcheck) and on
+# its YAML (yamllint), and `skip`s when the tool is absent. Both of its skip messages say "CI
+# installs it" -- and a guard that skips is a guard that passes, so this pins the install in the
+# job that actually runs the bats suites (the verify-unit-host leg), not in the Lint job, which
+# runs no bats. verify counts a bats skip as a failed part, so a missing tool is red there too;
+# this keeps the reason readable. The shell linter is installed in the same job by the pinned,
+# checksummed recipe the Lint job uses (the apt package is older than the local gate's).
+@test "the CI verify-unit-host leg installs what the host suites need to not skip" {
   local block
-  block="$(ci_job_block unit-test)"
+  block="$(ci_job_block verify-unit-host)"
   [ -n "$block" ]
-  [[ "$block" == *"Run unit tests"* ]]   # vacuity: this really is that job
+  [[ "$block" == *"unit:bats"* ]]        # vacuity: this really is the job that runs the bats part
   [[ "$block" == *"yamllint"* ]]
   [[ "$block" == *"gettext-base"* ]]
-  [[ "$block" == *"bats"* ]]
+  [[ "$block" == *"npm install -g bats"* ]]
+  [[ "$block" == *"shellcheck-v0.11.0"* ]]
 }

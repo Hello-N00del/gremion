@@ -33,9 +33,9 @@ pack time.
 
 `pnpm --filter @gremion/ports test` runs the unit specs and — when
 `NATS_TEST_URL` is set — the JetStream integration proofs against a real
-server. `.github/workflows/ports.yml` runs both, and asserts a post-condition
-on the run (no file skipped, no test skipped, a minimum number of integration
-proofs actually executed) rather than trusting the exit code: the integration
+server. CI runs both (the unit part and `integration:nats` of `make verify`), and
+asserts a post-condition on the run (no file skipped, no test skipped, a minimum
+number of integration proofs actually executed) rather than trusting the exit code: the integration
 block is self-skipping by design, so a broken NATS step would otherwise turn
 the job green while proving nothing.
 

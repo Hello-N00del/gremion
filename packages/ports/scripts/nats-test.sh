@@ -53,8 +53,9 @@
 #
 # Guard-efficacy hook: NATS_TEST_CHECK_LOG=<file> runs ONLY the post-condition
 # against that file (no docker, no vitest) and exits 0/1. That is how the
-# assertion is proved to go RED on a synthetic log lacking the integration file,
-# and how .github/workflows/ports.yml applies the same rule to its own run.
+# assertion is proved to go RED on a synthetic log lacking the integration file.
+# CI no longer checks a log of its own with it: ci.yml's verify-integration-brokers
+# leg runs this whole script through verify's integration:nats part.
 
 set -euo pipefail
 
@@ -67,9 +68,8 @@ CONTAINER="${NATS_TEST_CONTAINER:-gremion-nats-test-$$-$(date +%s)}"
 # adding a proof needs no edit here, while removing one below the floor fails
 # the gate until the number is lowered on purpose.
 INTEGRATION_FILE="src/nats-broker.integration.test.ts"
-# ONE place. .github/workflows/ports.yml applies this same post-condition to
-# its own run through NATS_TEST_CHECK_LOG, so there is no second copy of the
-# number to go stale.
+# ONE place. verify's integration:nats part (suites/integration.mjs#judgeNatsTest)
+# reads the count this script prints rather than carrying a copy of the number.
 MIN_PROOFS="${NATS_TEST_MIN_PROOFS:-20}"
 # Repo root: this file is packages/ports/scripts/nats-test.sh
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"

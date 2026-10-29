@@ -8,6 +8,10 @@
 // repository and asserts the POST-CONDITION (what the step wrote to
 // $GITHUB_OUTPUT), never the exit code: the failure this closes exits 0.
 //
+// The same step also decides the health census (`census=`, read by the verify-census
+// job): the second half of the suite runs the real step against the same throwaway
+// repositories and asserts that output.
+//
 // The failure: under `set -o pipefail`, `echo "$changed" | grep -Eq ...` makes
 // grep exit on the first match; once the list is bigger than the pipe buffer
 // echo takes SIGPIPE, the pipeline returns 141, the `if` takes its else branch
@@ -26,10 +30,12 @@ import { fileURLToPath } from 'node:url'
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const CI_YML = readFileSync(join(ROOT, '.github/workflows/ci.yml'), 'utf8')
 
-// The CI Lint job has no setup-node and no pnpm install, so this suite may import
-// only node: built-ins (a `yaml` import is ERR_MODULE_NOT_FOUND there, and
-// docker-build needs lint, so the image matrix would never run). The pieces of
-// ci.yml it asserts on are therefore pulled out with a small text extractor that
+// This suite stays dependency-free on purpose: it imports only node: built-ins, so
+// it needs no install and can be proved to run with nothing but itself and ci.yml
+// in an empty directory (see the inCheckout note below). It guards the job that gates
+// the image matrix, and a guard that needs a working node_modules is one more way
+// for that job never to run. The pieces of ci.yml it asserts on are therefore pulled
+// out with a small text extractor that
 // understands exactly the shapes this workflow uses: block-scalar `run: |`,
 // folded `if: >-`, an inline `needs: [a, b]` and one-line `- { k: v, ... }`
 // matrix entries. A shape it does not understand yields undefined/empty and the
@@ -125,8 +131,13 @@ function parseMatrixInclude(lines) {
 
 const changesLines = jobLines(CI_YML, 'changes')
 const dockerBuildLines = jobLines(CI_YML, 'docker-build')
+const censusLines = jobLines(CI_YML, 'verify-census')
 
 const filterStep = { run: stepRun(changesLines, 'filter') }
+const verifyCensus = {
+  if: foldedScalar(censusLines, /^\s+if:\s*>-?\s*$/),
+  needs: parseInlineList(censusLines, /^\s+needs:\s*\[(.*)\]\s*$/),
+}
 const dockerBuild = {
   if: foldedScalar(dockerBuildLines, /^\s+if:\s*>-?\s*$/),
   needs: parseInlineList(dockerBuildLines, /^\s+needs:\s*\[(.*)\]\s*$/),
@@ -181,8 +192,9 @@ function runFilter(changedPaths, moves = []) {
     })
     const written = readFileSync(out, 'utf8')
     const m = written.match(/^docker=(true|false)$/m)
+    const c = written.match(/^census=(true|false)$/m)
     // r.error is set when bash itself could not be spawned (stderr is then null).
-    return { value: m ? m[1] : null, written, status: r.status, stderr: r.error?.message ?? r.stderr, stdout: r.stdout ?? '' }
+    return { value: m ? m[1] : null, census: c ? c[1] : null, written, status: r.status, stderr: r.error?.message ?? r.stderr, stdout: r.stdout ?? '' }
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
@@ -204,24 +216,27 @@ test('a docs-only change set reports docker=false', () => {
   assert.equal(r.value, 'false', r.written + r.stderr)
 })
 
-for (const path of [
-  'services/kernel-api/Dockerfile',
-  'packages/retention/src/index.ts',
-  'pnpm-lock.yaml',
-  '.github/workflows/ci.yml',
-  'docker/legal/Dockerfile',
-  'docker/fallback/index.html',
-  'docker/fallback/Dockerfile',
-  'verticals/vertical-x/blueprint.json',
-  'LICENSE',
-  'NOTICE',
-  'scripts/migrations/ranges.json',
-]) {
-  test(`a change to ${path} reports docker=true`, () => {
+// One test, a loop inside it: scripts/verify/suites/unit.mjs compares node's collected
+// count with the number of `test(` declarations, and a `test(` inside a loop declares 1
+// and collects N (judged unparseable). The message names the path that failed.
+test('a change to any docker build input reports docker=true', () => {
+  for (const path of [
+    'services/kernel-api/Dockerfile',
+    'packages/retention/src/index.ts',
+    'pnpm-lock.yaml',
+    '.github/workflows/ci.yml',
+    'docker/legal/Dockerfile',
+    'docker/fallback/index.html',
+    'docker/fallback/Dockerfile',
+    'verticals/vertical-x/blueprint.json',
+    'LICENSE',
+    'NOTICE',
+    'scripts/migrations/ranges.json',
+  ]) {
     const r = runFilter([path, 'docs/unrelated.md'])
-    assert.equal(r.value, 'true', r.written + r.stderr)
-  })
-}
+    assert.equal(r.value, 'true', `${path}: ${r.written}${r.stderr}`)
+  }
+})
 
 // The regression. The first sorted entry matches, and the list is far larger
 // than any pipe buffer (64 KiB on Linux), so a `echo | grep -q` pipeline under
@@ -284,26 +299,26 @@ test('the filter source never pipes a producer into a quiet grep', () => {
   assert.equal(pipesIntoQuietGrep(filterStep.run), false, 'a producer piped into a quiet grep dies of SIGPIPE under pipefail')
 })
 
-for (const spelling of [
-  'grep -q x',
-  'grep -Eq x',
-  'grep -qE x',
-  'grep -E -q x',
-  'grep -E "$pattern" -q',
-  'grep -i -E -q x',
-  'grep --quiet x',
-  'grep -E --silent x',
-]) {
-  test(`the quiet-grep detector flags: | ${spelling}`, () => {
-    assert.equal(pipesIntoQuietGrep(`printf '%s\\n' "$changed" | ${spelling}`), true)
-  })
-}
+test('the quiet-grep detector flags every quiet spelling', () => {
+  for (const spelling of [
+    'grep -q x',
+    'grep -Eq x',
+    'grep -qE x',
+    'grep -E -q x',
+    'grep -E "$pattern" -q',
+    'grep -i -E -q x',
+    'grep --quiet x',
+    'grep -E --silent x',
+  ]) {
+    assert.equal(pipesIntoQuietGrep(`printf '%s\\n' "$changed" | ${spelling}`), true, `| ${spelling}`)
+  }
+})
 
-for (const ok of ['grep -c x', 'grep -Ec "$pattern"', 'grep -E -c x', 'grep -e quux', 'grep --count x']) {
-  test(`the quiet-grep detector allows: | ${ok}`, () => {
-    assert.equal(pipesIntoQuietGrep(`printf '%s\\n' "$changed" | ${ok}`), false)
-  })
-}
+test('the quiet-grep detector allows the counting spellings', () => {
+  for (const ok of ['grep -c x', 'grep -Ec "$pattern"', 'grep -E -c x', 'grep -e quux', 'grep --count x']) {
+    assert.equal(pipesIntoQuietGrep(`printf '%s\\n' "$changed" | ${ok}`), false, `| ${ok}`)
+  }
+})
 
 test('the quiet-grep detector ignores whole-line comments', () => {
   assert.equal(pipesIntoQuietGrep('# echo "$x" | grep -q y\ngrep -c y file'), false)
@@ -346,4 +361,80 @@ test('the matrix builds the fallback and synapse images', () => {
   assert.equal(byName.fallback?.context, 'docker/fallback/')
   assert.equal(byName.synapse?.dockerfile, 'modules/messaging/synapse/Dockerfile')
   assert.equal(byName.synapse?.context, 'modules/messaging/synapse/')
+})
+
+// ── the health census output (`census=`, read by verify-census) ──────────────
+
+test('the filter step writes a census output next to docker, and the job exposes it', () => {
+  const r = runFilter(['docs/a.md'])
+  assert.equal(r.census, 'false', r.written + r.stderr)
+  assert.match(CI_YML, /^\s+census: \$\{\{ steps\.filter\.outputs\.census \}\}$/m, 'the changes job does not expose the census output')
+})
+
+test('a docs-only change set reports census=false', () => {
+  const r = runFilter(['docs/a.md', 'docs/b.md', 'README.md'])
+  assert.equal(r.census, 'false', r.written + r.stderr)
+})
+
+test('a change to any census input reports census=true', () => {
+  for (const path of [
+    'services/kernel-api/Dockerfile',
+    'docker/legal/Dockerfile',
+    'docker-compose.app.yml',
+    'docker-compose.state-pins.yml',
+    'infra/host/mail/docker-compose.yml',
+    'compose/observability/docker-compose.yml',
+    'infra/host/templates/env/state.env.tmpl',
+    'scripts/verify/census/census.mjs',
+    'scripts/verify/census/render.env',
+    'docker/nats/nats.conf',
+    '.github/workflows/ci.yml',
+    'modules/board/.dockerignore',
+  ]) {
+    const r = runFilter([path, 'docs/unrelated.md'])
+    assert.equal(r.census, 'true', `${path}: ${r.written}${r.stderr}`)
+  }
+})
+
+// The census reads compose files and Dockerfiles, not application source: an ordinary
+// source change builds the images (docker=true) but cannot move a healthcheck census.
+test('a change to application source alone reports docker=true and census=false', () => {
+  const r = runFilter(['packages/retention/src/index.ts', 'gremion-ui/src/routes/+page.svelte', 'pnpm-lock.yaml'])
+  assert.equal(r.value, 'true', r.written + r.stderr)
+  assert.equal(r.census, 'false', r.written + r.stderr)
+})
+
+// The SIGPIPE regression, for the census count: the first sorted entry is a census input and the
+// list is far larger than any pipe buffer.
+test('a very large change set whose first entry is a census input reports census=true', () => {
+  const paths = ['compose/x.yml']
+  for (let i = 0; i < 6000; i++) paths.push(`zdocs/section-${String(i).padStart(5, '0')}/a-fairly-long-document-name-to-fill-the-buffer.md`)
+  const r = runFilter(paths)
+  assert.equal(r.census, 'true', `${r.written}${r.stderr.slice(0, 500)}`)
+})
+
+test('a very large change set with no census input still reports census=false', () => {
+  const paths = []
+  for (let i = 0; i < 6000; i++) paths.push(`zdocs/section-${String(i).padStart(5, '0')}/a-fairly-long-document-name-to-fill-the-buffer.md`)
+  const r = runFilter(paths)
+  assert.equal(r.census, 'false', `${r.written}${r.stderr.slice(0, 500)}`)
+})
+
+test('moving a census input out of its tree reports census=true', () => {
+  const r = runFilter([], [['compose/observability/a.yml', 'docs/x/a.yml']])
+  assert.equal(r.census, 'true', r.written + r.stderr)
+})
+
+test('verify-census runs on pushes, and on a pull request only for a census input or a failed filter', () => {
+  const cond = String(verifyCensus.if)
+  assert.match(cond, /github\.event_name != 'pull_request'/)
+  assert.match(cond, /needs\.changes\.outputs\.census == 'true'/)
+  assert.match(cond, /needs\.changes\.result == 'failure'/)
+  // lint must still gate it, and a cancelled run must not start it.
+  assert.match(cond, /needs\.lint\.result == 'success'/)
+  assert.match(cond, /!cancelled\(\)/)
+})
+
+test('verify-census needs both lint and changes', () => {
+  assert.deepEqual([...(verifyCensus.needs ?? [])].sort(), ['changes', 'lint'])
 })
