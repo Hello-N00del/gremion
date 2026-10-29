@@ -309,13 +309,20 @@ COMMENT ON TABLE idt.org_unit_kind IS 'DB-IDT-ORGUNITKIND | K2 | rp-idt-customer
 CREATE FUNCTION idt.body_acyclic() RETURNS trigger
   LANGUAGE plpgsql AS $$
 BEGIN
-  IF NEW.parent_body_id IS NOT NULL AND EXISTS (
-       WITH RECURSIVE up (body_id, parent_body_id) AS (
-         SELECT b.body_id, b.parent_body_id FROM idt.body AS b WHERE b.body_id = NEW.parent_body_id
-         UNION
-         SELECT b.body_id, b.parent_body_id FROM idt.body AS b JOIN up ON b.body_id = up.parent_body_id)
-       SELECT 1 FROM up WHERE up.body_id = NEW.body_id) THEN
-    RAISE EXCEPTION 'body % would form a cycle', NEW.body_id USING ERRCODE = 'check_violation';
+  IF NEW.parent_body_id IS NOT NULL THEN
+    -- The walk below sees only COMMITTED rows plus this transaction's own: two transactions re-parenting A under B and
+    -- B under A each walk a tree without the other's change and both commit a cycle. One transaction-scoped lock per
+    -- database (advisory locks are per database, and a database is one customer's) makes the second walk wait for the
+    -- first commit and see it.
+    PERFORM pg_advisory_xact_lock(hashtextextended('idt.body.parent', 0));
+    IF EXISTS (
+         WITH RECURSIVE up (body_id, parent_body_id) AS (
+           SELECT b.body_id, b.parent_body_id FROM idt.body AS b WHERE b.body_id = NEW.parent_body_id
+           UNION
+           SELECT b.body_id, b.parent_body_id FROM idt.body AS b JOIN up ON b.body_id = up.parent_body_id)
+         SELECT 1 FROM up WHERE up.body_id = NEW.body_id) THEN
+      RAISE EXCEPTION 'body % would form a cycle', NEW.body_id USING ERRCODE = 'check_violation';
+    END IF;
   END IF;
   RETURN NEW;
 END
@@ -377,15 +384,19 @@ COMMENT ON COLUMN idt.body.customer_id IS 'xref DB-TNT-CUSTOMER';
 CREATE FUNCTION idt.org_unit_acyclic() RETURNS trigger
   LANGUAGE plpgsql AS $$
 BEGIN
-  IF NEW.parent_org_unit_id IS NOT NULL AND EXISTS (
-       WITH RECURSIVE up (org_unit_id, parent_org_unit_id) AS (
-         SELECT u.org_unit_id, u.parent_org_unit_id FROM idt.org_unit AS u
-          WHERE u.org_unit_id = NEW.parent_org_unit_id
-         UNION
-         SELECT u.org_unit_id, u.parent_org_unit_id FROM idt.org_unit AS u
-           JOIN up ON u.org_unit_id = up.parent_org_unit_id)
-       SELECT 1 FROM up WHERE up.org_unit_id = NEW.org_unit_id) THEN
-    RAISE EXCEPTION 'org unit % would form a cycle', NEW.org_unit_id USING ERRCODE = 'check_violation';
+  IF NEW.parent_org_unit_id IS NOT NULL THEN
+    -- serialises concurrent re-parenting, see idt.body_acyclic()
+    PERFORM pg_advisory_xact_lock(hashtextextended('idt.org_unit.parent', 0));
+    IF EXISTS (
+         WITH RECURSIVE up (org_unit_id, parent_org_unit_id) AS (
+           SELECT u.org_unit_id, u.parent_org_unit_id FROM idt.org_unit AS u
+            WHERE u.org_unit_id = NEW.parent_org_unit_id
+           UNION
+           SELECT u.org_unit_id, u.parent_org_unit_id FROM idt.org_unit AS u
+             JOIN up ON u.org_unit_id = up.parent_org_unit_id)
+         SELECT 1 FROM up WHERE up.org_unit_id = NEW.org_unit_id) THEN
+      RAISE EXCEPTION 'org unit % would form a cycle', NEW.org_unit_id USING ERRCODE = 'check_violation';
+    END IF;
   END IF;
   RETURN NEW;
 END
