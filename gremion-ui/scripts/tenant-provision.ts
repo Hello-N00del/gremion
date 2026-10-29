@@ -33,7 +33,7 @@ import { createHash, randomBytes } from 'node:crypto'
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import postgres from 'postgres'
-import { handToReader, writeReaderConfigFile } from './tenant-secret-file'
+import { handConfigToReader, handToReader, writeReaderConfigFile } from './tenant-secret-file'
 import {
   bootstrapPlatform,
   ACCESS_READER_ROLE,
@@ -232,6 +232,11 @@ const tenantSecretsDir = () => process.env.TENANT_SECRETS_DIR ?? join(repoRoot, 
 /** The tenant's config.json, atomically (tmp + rename in the same directory), owned by the reader (#49). */
 function writeConfigFile(path: string, text: string): void {
   writeReaderConfigFile(path, text)
+}
+
+/** A tenant config written before #49 (root:root) handed to the reader; ensure() calls it when the file exists. */
+function repairConfigOwner(path: string): void {
+  handConfigToReader(path)
 }
 
 /** A 0700 directory (the customer's storage prefix). */
@@ -471,6 +476,7 @@ async function liveDeps(opts: { configFile?: string; bodyName?: string; needEdge
       genSecret,
       writeSecretFile,
       writeConfigFile,
+      repairConfigOwner,
       makePrivateDir,
       kc,
       ...(adminKc ? { adminKc } : {}),
@@ -778,6 +784,7 @@ async function cmdStatus(): Promise<void> {
       genSecret,
       writeSecretFile,
       writeConfigFile,
+      repairConfigOwner,
       makePrivateDir,
       kc: new KcProvisionApi(async () => {
         throw new Error('status reads no Keycloak')
@@ -1005,9 +1012,12 @@ function cmdMaterializeConfig(): void {
   const rawStored: unknown = existsSync(path) ? (JSON.parse(readFileSync(path, 'utf-8')) as unknown) : {}
   const merged = materializeConfig(rawStored)
   assertBrandIdentityComplete(merged, v.slug)
-  mkdirSync(dirname(path), { recursive: true })
-  writeFileSync(`${path}.tmp`, JSON.stringify(merged, null, 2))
-  renameSync(`${path}.tmp`, path)
+  if (flag('--config')) {
+    // An operator-chosen path outside the tenant data root: written as before, no reader hand-over.
+    mkdirSync(dirname(path), { recursive: true })
+    writeFileSync(`${path}.tmp`, JSON.stringify(merged, null, 2))
+    renameSync(`${path}.tmp`, path)
+  } else writeReaderConfigFile(path, JSON.stringify(merged, null, 2))
   log(`materialize-config: wrote the effective config for "${v.slug}" to ${path}`)
 }
 
