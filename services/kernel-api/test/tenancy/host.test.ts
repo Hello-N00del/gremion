@@ -193,13 +193,16 @@ describe('boot (Q8)', () => {
     expect(() => readConfig(env, roots)).toThrow(ConfigError)
     expect(() => readConfig(env, roots)).toThrow(/TENANT_PROXY_SHARED_SECRET is not set/)
     expect(() => readConfig({ ...env, TENANT_PROXY_SHARED_SECRET: 'short' }, roots)).toThrow(/shorter than 24/)
-    let refusal: Error | undefined
+    // the refusal is captured, then asserted outside the catch: it must have happened, and it must not echo the (valid) platform URL still in the env
+    let refusal: unknown
     try {
       readConfig({ ...env, KERNEL_API_CONTROL_DB_URL: '' }, roots)
     } catch (err) {
-      refusal = err as Error
+      refusal = err
     }
-    expect(refusal?.message ?? '').not.toMatch(/postgres:\/\//)
+    expect(refusal, 'an empty control DB URL refuses the boot').toBeInstanceOf(ConfigError)
+    expect((refusal as Error).message).toMatch(/KERNEL_API_CONTROL_DB_URL is not set/)
+    expect((refusal as Error).message).not.toMatch(/postgres:\/\//)
   })
 
   it('a complete environment boots; module secrets are read per module, an empty one means not authorised', () => {
