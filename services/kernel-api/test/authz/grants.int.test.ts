@@ -390,3 +390,66 @@ describe('PRD-IDN-002 revoke-all authority comes first', () => {
     expect(await revokeAllForPerson(w.db.app, deps, w.db.customerId, claims('sub-carol'), empty)).toEqual([])
   })
 })
+
+// TRD-090 reaches the capability grants of the identity domain's writes: handing out
+// idt.person/structure/membership.manage as a CAPABILITY is as privileged as handing out the role that carries it.
+describe('TRD-090 step-up for the privileged identity capabilities (review HIGH)', () => {
+  // granter, body, role: who may grant that capability under the scope rule
+  const cases = [
+    { key: 'idt.structure.manage', sub: 'sub-admin', bodyId: () => w.bodyA, granterRole: 'body_admin' },
+    { key: 'idt.membership.manage', sub: 'sub-admin', bodyId: () => w.bodyA, granterRole: 'body_admin' },
+    { key: 'idt.person.manage', sub: 'sub-carol', bodyId: () => w.verwaltung, granterRole: 'council_admin' },
+  ]
+  const req = (c: (typeof cases)[number], subjectPersonId: string) => base({ grantKind: 'capability', key: c.key, bodyId: c.bodyId(), granterRole: c.granterRole, subjectPersonId })
+  for (const c of cases) {
+    it(`${c.key}: a stale auth_time is refused 401 insufficient_user_authentication with 0 rows; a fresh one is allowed`, async () => {
+      const before = await count(w)
+      for (const stale of [{ auth_time: NOW() - 900 }, { auth_time: undefined }, { acr: 'loa1' }]) {
+        const e = await refused(issueGrant(w.db.app, deps, w.db.customerId, claims(c.sub, stale), req(c, w.persons.bob!)))
+        expect([e.code, e.status]).toEqual(['insufficient_user_authentication', 401])
+      }
+      expect(await count(w)).toBe(before)
+      const g = await issueGrant(w.db.app, deps, w.db.customerId, claims(c.sub, { auth_time: NOW() - 60 }), req(c, w.persons.bob!))
+      expect(g.capability_key).toBe(c.key)
+      expect(await count(w)).toBe(before + 1)
+    })
+  }
+  it('revoking such a capability grant needs the step-up too', async () => {
+    const id = await seedGrant(w.db.admin, w.db.customerId, { bodyId: w.bodyA, personId: w.persons.alice!, key: 'idt.membership.manage', kind: 'capability' })
+    const e = await refused(revokeGrant(w.db.app, deps, w.db.customerId, claims('sub-admin', { auth_time: NOW() - 900 }), id))
+    expect([e.code, e.status]).toEqual(['insufficient_user_authentication', 401])
+    expect((await revokeGrant(w.db.app, deps, w.db.customerId, claims('sub-admin'), id)).state).toBe('revoked')
+  })
+})
+
+// A capability grant follows the SAME scope rule as a role grant (review MED): the verwaltung confers
+// customer-level authority, a body confers body-level authority, and a granter may confer only what a role
+// it is allowed to grant, at that scope, carries.
+describe('capability grants honour the role_scope rule of the body they are made in (review MED)', () => {
+  it('an it_admin (grants body roles only) cannot grant idt.structure.manage / idt.membership.manage in the verwaltung: 403, 0 rows', async () => {
+    const before = await count(w)
+    for (const key of ['idt.structure.manage', 'idt.membership.manage']) {
+      const e = await refused(issueGrant(w.db.app, deps, w.db.customerId, claims('sub-itv'), base({ grantKind: 'capability', key, bodyId: w.verwaltung, granterRole: 'it_admin', subjectPersonId: w.persons.bob! })))
+      expect([e.code, e.status], key).toEqual(['granter_role_mismatch', 403])
+    }
+    expect(await count(w)).toBe(before)
+  })
+  it('a body_admin held in the verwaltung cannot grant a body-level capability there either (body roles are not granted in the verwaltung)', async () => {
+    const before = await count(w)
+    const e = await refused(issueGrant(w.db.app, deps, w.db.customerId, claims('sub-admin'), base({ grantKind: 'capability', key: 'brd.card.own', bodyId: w.verwaltung, granterRole: 'body_admin', subjectPersonId: w.persons.bob! })))
+    expect([e.code, e.status]).toEqual(['granter_role_mismatch', 403])
+    expect(await count(w)).toBe(before)
+  })
+  it('a council_admin cannot grant a customer-level-only capability (idt.person.manage) in an ordinary body', async () => {
+    const before = await count(w)
+    const e = await refused(issueGrant(w.db.app, deps, w.db.customerId, claims('sub-carol'), base({ grantKind: 'capability', key: 'idt.person.manage', bodyId: w.bodyB, granterRole: 'council_admin', subjectPersonId: w.persons.bob! })))
+    expect([e.code, e.status]).toEqual(['granter_role_mismatch', 403])
+    expect(await count(w)).toBe(before)
+  })
+  it('legit grants still work: a council_admin grants idt.structure.manage in the verwaltung; an it_admin grants a body capability (brd.card.own) in a body', async () => {
+    const a = await issueGrant(w.db.app, deps, w.db.customerId, claims('sub-carol'), base({ grantKind: 'capability', key: 'idt.structure.manage', bodyId: w.verwaltung, granterRole: 'council_admin', subjectPersonId: w.persons.alice! }))
+    expect(a.capability_key).toBe('idt.structure.manage')
+    const b = await issueGrant(w.db.app, deps, w.db.customerId, claims('sub-itv'), base({ grantKind: 'capability', key: 'brd.card.own', bodyId: w.bodyB, granterRole: 'it_admin', subjectPersonId: w.persons.alice! }))
+    expect(b.capability_key).toBe('brd.card.own')
+  })
+})

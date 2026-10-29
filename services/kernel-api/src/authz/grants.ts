@@ -126,6 +126,12 @@ export async function issueGrant(sql: Sql, deps: GrantDeps, customerId: string, 
     if (body.length === 0) throw new GrantError('unknown_body', 'no such body in this customer')
     if (req.grantKind === 'capability') {
       const def = capabilityDef(req.key)!
+      // the role_scope rule below, for capabilities (a person granter only: an operator names no role): the capability
+      // must be carried by a role the granter may grant at THIS body's scope (the verwaltung confers customer-level authority)
+      const inVerwaltung = body[0]!.kind_key === 'verwaltung'
+      if (actor.kind === 'person' && !roleIncludes(req.granterRole!, 'capability', req.key, inVerwaltung ? 'customer' : 'body')) {
+        throw new GrantError('granter_role_mismatch', `the granter role may not grant capability ${req.key} in ${inVerwaltung ? 'the verwaltung' : 'this body'} (role scope)`)
+      }
       if (def.moduleKey !== null && !(await deps.enabledModules(customerId)).has(def.moduleKey)) {
         throw new GrantError('module_not_enabled', `module ${def.moduleKey} is not enabled for this customer`)
       }

@@ -41,6 +41,7 @@ export const NAMED: Record<'unit' | 'integration' | 'authz' | 'live', Record<str
     // G8 (static half): the audience mapper in the realm template
     'test/keycloak/realm-audience.test.ts': 4,
     // TASK-081
+    'test/authz/catalogue.test.ts': 9,
     'test/authz/cli.test.ts': 4,
     'test/authz/after-migrate.test.ts': 6,
     'test/authz/no-role-check.test.ts': 5,
@@ -67,7 +68,7 @@ export const NAMED: Record<'unit' | 'integration' | 'authz' | 'live', Record<str
   // TASK-081: its own scratch stack (test/authz/stack.mjs, vitest.authz-int.config.ts)
   authz: {
     'test/authz/after-migrate.int.test.ts': 1,
-    'test/authz/grants.int.test.ts': 32,
+    'test/authz/grants.int.test.ts': 42,
     'test/authz/http.int.test.ts': 9,
     'test/authz/module-off.int.test.ts': 28,
     'test/authz/pdp.int.test.ts': 12,

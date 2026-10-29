@@ -41,9 +41,9 @@ export const CAPABILITIES: readonly CapabilityDef[] = Object.freeze([
   cap('idt.grant.read', null),
   cap('idt.body.read', null),
   // the identity domain's writes (TASK-081 G3, src/authz/write-authorizer.ts): structure, membership and tenure, accounts
-  cap('idt.structure.manage', null),
-  cap('idt.membership.manage', null),
-  cap('idt.person.manage', null),
+  cap('idt.structure.manage', null, { privileged: true }),
+  cap('idt.membership.manage', null, { privileged: true }),
+  cap('idt.person.manage', null, { privileged: true }),
   cap('gov.nonpublic.read', 'votes'),
   cap('gov.agenda_item.propose', 'votes'),
   cap('gov.motion.propose', 'votes'),
@@ -95,12 +95,19 @@ export const roleDef = (key: string): RoleDef | undefined => ROLE_BY_KEY.get(key
 /**
  * TRD-113/TRD-091: does the role the granter acts under include the role or capability being granted?
  * The decision lives here with the role-to-capability sets; grants.ts never compares a role key.
+ *
+ * `scope` is the scope level of the body the grant is made in (customer = the verwaltung, body = any other).
+ * It narrows a CAPABILITY grant by the same rule that scopes a role grant (customer-level roles are granted in
+ * the verwaltung only, body-level roles outside it): the capability must be carried by a role the granter may
+ * grant AND that is grantable at that scope. Without it a granter who may confer body roles only (it_admin)
+ * could confer customer-level authority in the verwaltung as a bare capability.
  */
-export function roleIncludes(granterRole: string, grantKind: 'role' | 'capability', key: string): boolean {
+export function roleIncludes(granterRole: string, grantKind: 'role' | 'capability', key: string, scope?: 'body' | 'customer'): boolean {
   const g = ROLE_BY_KEY.get(granterRole)
   if (!g || g.grants === 'none') return false
   const grantable = ROLES.filter((r) => g.grants === 'all' || r.scopeLevel === 'body')
-  return grantKind === 'role' ? grantable.some((r) => r.key === key) : grantable.some((r) => r.capabilities.includes(key))
+  if (grantKind === 'role') return grantable.some((r) => r.key === key)
+  return grantable.some((r) => (scope === undefined || r.scopeLevel === scope) && r.capabilities.includes(key))
 }
 export const isPrivilegedRole = (key: string): boolean => ROLE_BY_KEY.get(key)?.privileged ?? false
 export const isPrivilegedCapability = (key: string): boolean => CAP_BY_KEY.get(key)?.privileged ?? false
