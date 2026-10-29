@@ -6,7 +6,7 @@
 import type { Sql } from '@gremion/db'
 import { createHostRejectionLog } from '@gremion/tenancy-core'
 import postgres from 'postgres'
-import { denyAll } from '../bodies/authz.ts'
+import { pdpWriteAuthorizer } from '../authz/write-authorizer.ts'
 import { platformRegistryStore } from '../registry/store.ts'
 import { loadDeclarations } from '../registry/declarations.ts'
 import { allowsEnvRefs, createSecretResolver } from '../tenancy/secrets.ts'
@@ -46,17 +46,19 @@ export function wireDeps(config: KernelApiConfig, o: { dirs: readonly string[]; 
   const gate = createCustomerGate({ dirs: o.dirs, ...(config.releaseRef ? { releaseRef: config.releaseRef } : {}), resolveSecret, log })
   const declarations = loadDeclarations(config.modulesRoot)
   const tenantDb = createTenantDb({ resolveSecret, log })
+  const registry = platformRegistryStore(platform)
   const deps: KernelApiDeps = {
     proxySecret: config.proxySecret,
     platformDomain: config.platformDomain,
     moduleSecrets: config.moduleSecrets,
     tenancy: controlTenancyStore(control),
-    registry: platformRegistryStore(platform),
+    registry,
     tokens: createTokenVerifier(),
     gate,
     declarations: { get: (key) => declarations.get(key) },
     tenantDb,
-    authorizer: denyAll,
+    // TASK-081 G3: a person's identity write is allowed only when the PDP says so; denied (403) otherwise
+    authorizer: pdpWriteAuthorizer(async (customerId) => new Set((await registry.listEnabled(customerId)).map((m) => m.moduleKey))),
     log,
     kernelDb: (tenant) => gate.db(tenant),
     hostRejection: createHostRejectionLog({ emit: (msg, fields) => log.warn(msg, { tenant: null, ...fields }) }),

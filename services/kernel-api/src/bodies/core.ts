@@ -58,7 +58,7 @@ export function makeCore(authorizer: WriteAuthorizer): Core {
     run: (ctx, fn) => inCustomerTx(ctx.sql, ctx.customerId, fn),
 
     async allow(ctx, operation, bodyId) {
-      if (!(await authorizer.authorize({ actor: ctx.actor, customerId: ctx.customerId, operation, bodyId }))) {
+      if (!(await authorizer.authorize({ actor: ctx.actor, customerId: ctx.customerId, operation, bodyId, sql: ctx.sql }))) {
         throw new BodiesError('FORBIDDEN', `${operation} is not permitted for this caller`)
       }
     },

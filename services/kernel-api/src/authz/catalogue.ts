@@ -8,7 +8,7 @@
 // <owning context>.<action> [A]. module_key resolves the owning module; kernel
 // capabilities (idt.*) belong to no module and decide without a module test.
 
-export const CATALOGUE_VERSION = '1.0.0'
+export const CATALOGUE_VERSION = '1.1.0'
 
 export interface CapabilityDef {
   key: string
@@ -40,6 +40,10 @@ export const CAPABILITIES: readonly CapabilityDef[] = Object.freeze([
   cap('idt.grant.manage', null, { privileged: true }),
   cap('idt.grant.read', null),
   cap('idt.body.read', null),
+  // the identity domain's writes (TASK-081 G3, src/authz/write-authorizer.ts): structure, membership and tenure, accounts
+  cap('idt.structure.manage', null),
+  cap('idt.membership.manage', null),
+  cap('idt.person.manage', null),
   cap('gov.nonpublic.read', 'votes'),
   cap('gov.agenda_item.propose', 'votes'),
   cap('gov.motion.propose', 'votes'),
@@ -73,9 +77,9 @@ export const ROLES: readonly RoleDef[] = Object.freeze([
   role('helper', 'Helfer:in', 'Helper', HELPER),
   role('chair', 'Vorsitz', 'Chair', ['gov.meeting.chair', 'gov.nonpublic.read']),
   role('protocol_taker', 'Protokollant:in', 'Protocol taker', ['gov.protocol.take', 'gov.nonpublic.read']),
-  role('body_admin', 'Gremienadmin', 'Body admin', ['idt.grant.manage', 'idt.grant.read', 'idt.body.read', 'brd.board.administer'], { privileged: true, grants: 'body' }),
-  role('council_admin', 'Rats-Admin', 'Council admin', ['idt.grant.manage', 'idt.grant.read', 'idt.body.read', 'cal.event.manage', 'brd.board.administer'], { privileged: true, scopeLevel: 'customer', grants: 'all' }),
-  role('it_admin', 'IT-Admin', 'IT admin', ['idt.grant.manage', 'idt.grant.read', 'idt.body.read'], { privileged: true, scopeLevel: 'customer', grants: 'body' }),
+  role('body_admin', 'Gremienadmin', 'Body admin', ['idt.grant.manage', 'idt.grant.read', 'idt.body.read', 'idt.structure.manage', 'idt.membership.manage', 'brd.board.administer'], { privileged: true, grants: 'body' }),
+  role('council_admin', 'Rats-Admin', 'Council admin', ['idt.grant.manage', 'idt.grant.read', 'idt.body.read', 'idt.structure.manage', 'idt.membership.manage', 'idt.person.manage', 'cal.event.manage', 'brd.board.administer'], { privileged: true, scopeLevel: 'customer', grants: 'all' }),
+  role('it_admin', 'IT-Admin', 'IT admin', ['idt.grant.manage', 'idt.grant.read', 'idt.body.read', 'idt.person.manage'], { privileged: true, scopeLevel: 'customer', grants: 'body' }),
   role('marketing', 'Oeffentlichkeitsarbeit', 'Marketing', ['newsletter.send']),
   role('finance', 'Finanzen', 'Finance', ['fin.expense.approve', 'fin.ledger.read'], { privileged: true, scopeLevel: 'customer' }),
   role('initiative_lead', 'Initiativenleitung', 'Initiative lead', ['brd.card.own', 'brd.card.be_assigned']),

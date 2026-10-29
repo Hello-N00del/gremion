@@ -43,6 +43,8 @@ export const NAMED: Record<'unit' | 'integration' | 'authz' | 'live', Record<str
     'test/authz/after-migrate.test.ts': 6,
     'test/authz/no-role-check.test.ts': 5,
     'test/authz/stepup.test.ts': 5,
+    // TASK-081 G3: the PDP-backed WriteAuthorizer's table and its pre-database refusals
+    'test/authz/write-authorizer.test.ts': 5,
     'test/authz/stepup-realm.test.ts': 2,
     'test/suite-size.test.ts': 5,
   },
@@ -66,6 +68,7 @@ export const NAMED: Record<'unit' | 'integration' | 'authz' | 'live', Record<str
     'test/authz/module-off.int.test.ts': 28,
     'test/authz/pdp.int.test.ts': 12,
     'test/authz/schema.int.test.ts': 8,
+    'test/authz/write-authorizer.int.test.ts': 12,
   },
   // TASK-080-a test/bodies/proof.sh: PostgreSQL 18 + the authenticated NATS (vitest.live.config.ts)
   live: {

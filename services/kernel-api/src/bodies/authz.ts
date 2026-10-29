@@ -1,12 +1,15 @@
 // services/kernel-api/src/bodies/authz.ts -- the WriteAuthorizer seam (Q4).
 //
-// Default deny: the shipped authorizer refuses every write that is not the
-// caller's own preference. TASK-081 binds decide() (the PDP) here; until then a
-// person token's write is 403 and the only writers are the operator surfaces
-// (the migrate hook, the `kernel-api bodies` verbs), which pass an actor of
+// Default deny: denyAll refuses every write that is not the caller's own
+// preference. The served app binds decide() (the PDP) here through
+// src/authz/write-authorizer.ts (TASK-081 G3): a person token's write is 403
+// unless a live grant carries the capability the operation needs. The operator
+// surfaces (the migrate hook, the `kernel-api bodies` verbs) pass an actor of
 // kind 'operator' / 'system' through operatorAuthorizer. There is NO allow-all
 // in src/: a test authorizer lives under test/ and is never bundled (the proof
 // greps dist for it).
+
+import type { Sql } from '@gremion/db'
 
 export type Actor =
   | { kind: 'person'; id: string }
@@ -20,6 +23,8 @@ export interface WriteRequest {
   operation: string
   /** The body the write is scoped to, when it has one (customer-level writes: null). */
   bodyId: string | null
+  /** The customer's app-role pool the write runs on: a PDP-backed authorizer decides over it, inside the customer's RLS context. */
+  sql: Sql
 }
 
 export interface WriteAuthorizer {
