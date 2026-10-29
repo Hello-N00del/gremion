@@ -426,15 +426,40 @@ export function refusalOf(rule: PurgeRule, t: PurgeTableShape): string | null {
   return null
 }
 
+/** The name lists of a shape row, each a real string array: anything else fails loudly, never misread. */
+export function readShape(row: Record<string, unknown> | undefined): PurgeTableShape | undefined {
+  if (!row) return undefined
+  const names = (key: string): string[] => {
+    const v = row[key]
+    if (!Array.isArray(v) || !v.every((x) => typeof x === 'string')) {
+      throw new TypeError(`purge table shape: ${key} is not a list of names (${JSON.stringify(v)})`)
+    }
+    return v
+  }
+  return {
+    kind: String(row.kind),
+    children: Number(row.children),
+    rls: row.rls === true,
+    granted: row.granted === true,
+    triggers: names('triggers'),
+    policies: names('policies'),
+    rules: names('rules'),
+    referencedBy: names('referencedBy'),
+  }
+}
+
+// The four name lists come back as json, not text[]: the purger's session reads without fetching array
+// types, so a text[] arrived as its literal ('{}', length 2) and refusalOf saw a policy on every table and
+// threw on .join (Linux customer proof, purge-run: "t.policies.join is not a function" on every rule).
 const SHAPE_SQL = `
   SELECT c.relkind::text AS kind,
          (SELECT count(*)::int FROM pg_catalog.pg_inherits i WHERE i.inhparent = c.oid) AS children,
          c.relrowsecurity AS rls,
          pg_catalog.has_table_privilege(c.oid, 'SELECT') AND pg_catalog.has_table_privilege(c.oid, 'DELETE') AS granted,
-         ARRAY(SELECT t.tgname::text FROM pg_catalog.pg_trigger t WHERE t.tgrelid = c.oid AND NOT t.tgisinternal ORDER BY 1) AS triggers,
-         ARRAY(SELECT p.polname::text FROM pg_catalog.pg_policy p WHERE p.polrelid = c.oid ORDER BY 1) AS policies,
-         ARRAY(SELECT r.rulename::text FROM pg_catalog.pg_rewrite r WHERE r.ev_class = c.oid AND r.rulename <> '_RETURN' ORDER BY 1) AS rules,
-         ARRAY(SELECT f.conname::text FROM pg_catalog.pg_constraint f WHERE f.confrelid = c.oid AND f.contype = 'f' ORDER BY 1) AS "referencedBy"
+         pg_catalog.to_json(ARRAY(SELECT t.tgname::text FROM pg_catalog.pg_trigger t WHERE t.tgrelid = c.oid AND NOT t.tgisinternal ORDER BY 1)) AS triggers,
+         pg_catalog.to_json(ARRAY(SELECT p.polname::text FROM pg_catalog.pg_policy p WHERE p.polrelid = c.oid ORDER BY 1)) AS policies,
+         pg_catalog.to_json(ARRAY(SELECT r.rulename::text FROM pg_catalog.pg_rewrite r WHERE r.ev_class = c.oid AND r.rulename <> '_RETURN' ORDER BY 1)) AS rules,
+         pg_catalog.to_json(ARRAY(SELECT f.conname::text FROM pg_catalog.pg_constraint f WHERE f.confrelid = c.oid AND f.contype = 'f' ORDER BY 1)) AS "referencedBy"
     FROM pg_catalog.pg_class c WHERE c.oid = pg_catalog.to_regclass($1)`
 
 /**
@@ -611,7 +636,7 @@ export async function runPurge(deps: PurgeDeps): Promise<PurgeResult> {
           for (const rule of kernelRules) {
             if (partial !== null) break
             try {
-              const shape = await pinned(kdb, clock, async (tx) => ((await tx.unsafe(SHAPE_SQL, [`public.${rule.table}`])) as unknown as PurgeTableShape[])[0])
+              const shape = readShape(await pinned(kdb, clock, async (tx) => ((await tx.unsafe(SHAPE_SQL, [`public.${rule.table}`])) as unknown as Record<string, unknown>[])[0]))
               if (!shape) {
                 skipped.push({ tenant: hex, rule: rule.id, reason: `table ${rule.table} is absent (the kernel chain has not created it)` })
                 continue
