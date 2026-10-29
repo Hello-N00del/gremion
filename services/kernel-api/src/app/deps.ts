@@ -78,6 +78,13 @@ export interface CustomerGate {
  */
 export interface TenantDb {
   sqlFor(tenant: TenantRow): Promise<Sql>
+  /**
+   * The pool of the db_conn_ref tenant-db currently holds for the customer,
+   * WITHOUT adopting or evicting anything (undefined: no ref in hand yet). For a
+   * long-lived caller whose control row may be stale (the event relay): handing
+   * sqlFor a stale row after a db_conn_ref change would evict the fresh pool.
+   */
+  currentSqlFor?(customerId: string): Promise<Sql | undefined>
 }
 
 export interface ModuleDeclarations {

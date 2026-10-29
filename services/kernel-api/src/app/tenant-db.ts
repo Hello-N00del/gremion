@@ -5,6 +5,11 @@
 //     environment;
 //   * a changed db_conn_ref is picked up on the very next call (the old pool is
 //     retired), and a pool the caller reports broken can be evicted (evict());
+//   * sqlFor(row) is for a caller holding a FRESH control row (one request). A
+//     caller that holds a row for a long time (the event relay) must not present
+//     it: after a db_conn_ref change its stale ref would evict the pool of the
+//     fresh one, and the two would evict each other on every pass. It asks
+//     currentSqlFor(customerId) instead, which never changes the ref in hand;
 //   * prepare off: the runtime url may sit behind PgBouncer in transaction mode.
 import type { DbProfile, Sql } from '@gremion/db'
 import { createTenantStore } from '@gremion/tenant-store'
@@ -47,6 +52,11 @@ export function createTenantDb(o: TenantDbOptions): TenantDb & { evict(customerI
       refs.set(id, tenant.dbConnRef)
       poolRef.set(id, tenant.dbConnRef)
       return store.openTenantDb(id, KERNEL_MODULE)
+    },
+    async currentSqlFor(customerId: string): Promise<Sql | undefined> {
+      // refs is only ever written by sqlFor(): a customer no request has presented yet has none in hand.
+      if (!refs.has(customerId)) return undefined
+      return store.openTenantDb(customerId, KERNEL_MODULE)
     },
     evict,
     close: () => store.close(),

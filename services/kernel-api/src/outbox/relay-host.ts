@@ -80,7 +80,11 @@ export function createRelayHost(o: RelayHostOptions): RelayHost {
     // The relay only ever opens transactions (`sql.begin`). tenant-store may END a pool it evicted (LRU overflow,
     // evictTenantDb); a relay that kept the handle it got at start would fail every pass on the ended pool until a
     // process restart. So every pass asks tenant-store for the CURRENT pool (a cached lookup, not a connection).
-    const sql = { begin: async (fn: never) => (await o.tenantDb.sqlFor(tenant)).begin(fn) } as unknown as Sql
+    // currentSqlFor, never sqlFor(tenant): `tenant` is the row this relay STARTED with. After a db_conn_ref change it is
+    // stale, and sqlFor would evict the fresh pool the HTTP path opened (and the HTTP path would evict it back) on every
+    // pass, until the next reconcile restarts this relay on the new row.
+    const poolNow = async (): Promise<Sql> => (await o.tenantDb.currentSqlFor?.(tenant.customerId)) ?? (await o.tenantDb.sqlFor(tenant))
+    const sql = { begin: async (fn: never) => (await poolNow()).begin(fn) } as unknown as Sql
     const handles: JetStreamHandle[] = []
     const relay = makeRelay({
       sql,
