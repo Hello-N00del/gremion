@@ -936,9 +936,18 @@ importers:
       '@gremion/db':
         specifier: workspace:*
         version: link:../../packages/db
+      '@gremion/events':
+        specifier: workspace:*
+        version: link:../../packages/events
       '@gremion/fastify-service-template':
         specifier: workspace:*
         version: link:../../packages/fastify-service-template
+      '@gremion/nats-auth':
+        specifier: workspace:*
+        version: link:../../packages/nats-auth
+      '@gremion/ports':
+        specifier: workspace:*
+        version: link:../../packages/ports
       '@gremion/tenancy-core':
         specifier: workspace:*
         version: link:../../packages/tenancy-core

@@ -18,7 +18,10 @@
   "dependencies": {
     "@fastify/multipart": "10.1.2",
     "@gremion/db": "workspace:*",
+    "@gremion/events": "workspace:*",
     "@gremion/fastify-service-template": "workspace:*",
+    "@gremion/nats-auth": "workspace:*",
+    "@gremion/ports": "workspace:*",
     "@gremion/tenancy-core": "workspace:*",
     "@gremion/tenant-store": "workspace:*",
     "ajv": "8.20.0",
