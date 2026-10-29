@@ -34,6 +34,7 @@
 #   SHIM_COMPOSE_CONFIG fail: `docker compose ... config` fails (names, counts)
 #   SHIM_PS           fail: every `docker ps` exits 1 with an engine error on
 #                     stderr (R29-MD-A: counts() must not read that as 0 containers)
+#   SHIM_PULL         fail: `docker compose ... pull` exits 1 (aux-up must stop, RED)
 #   SHIM_OS           what `docker info` reports as OperatingSystem (default Ubuntu;
 #                     "Docker Desktop" means host-gateway needs no extra publish)
 #   SHIM_BRIDGE_GW    the default bridge's gateway `docker network inspect bridge`
@@ -192,6 +193,12 @@ case "$1" in
                     exit 1
                 fi
                 echo '[]' ;;
+            pull)
+                if [[ "${SHIM_PULL:-}" == fail ]]; then
+                    echo "shim-pull-error: manifest for the pinned image not found" >&2
+                    exit 1
+                fi ;;
+            up) : ;;
             *) echo "shim: unhandled compose call: $*" >&2; exit 1 ;;
         esac ;;
     info)

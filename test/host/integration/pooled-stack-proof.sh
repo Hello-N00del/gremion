@@ -778,9 +778,19 @@ phase_app_wait() {
 # ── the non-council projects ───────────────────────────────────────────────
 phase_aux_up() {
     require_scratch aux-up
+    # --pull never below: every pinned image of both projects must already be
+    # local, and on a fresh Linux host they are not. A failed pull is loud.
+    local pp
+    for pp in ops mail; do
+        if ! compose "$pp" pull >"$OUT/ledger/${pp}-pull.log" 2>&1; then
+            tail -n 5 "$OUT/ledger/${pp}-pull.log" | tr -d '\r' >&2
+            bad "${pp}: compose pull failed (see ${OUT}/ledger/${pp}-pull.log); not starting a project with missing images"
+            return 0
+        fi
+    done
     compose ops up -d --pull never >/dev/null 2>"$OUT/ledger/ops-up.err" || { cat "$OUT/ledger/ops-up.err" >&2; bad "ops up failed"; }
     compose mail up -d --pull never >/dev/null 2>"$OUT/ledger/mail-up.err" || { cat "$OUT/ledger/mail-up.err" >&2; bad "mail up failed"; }
-    sleep 20
+    sleep "${POOLED_AUX_SETTLE:-20}"
     local p cid st
     for p in ops mail; do
         for cid in $(docker ps -aq --filter "label=com.docker.compose.project=${STACK}-$p"); do

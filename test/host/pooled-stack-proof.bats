@@ -478,6 +478,23 @@ skip_if_mail_api_port_taken() {
     [ -z "$output" ]
 }
 
+@test "aux-up: a failed compose pull is RED and neither project is started" {
+    export POOLED_AUX_SETTLE=0 SHIM_PULL=fail
+    run bash "$PROOF" aux-up
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"FAIL ops: compose pull failed"* ]]
+    [[ "$output" == *"shim-pull-error"* ]]
+    ! grep -qE 'compose .* up( |$)' "${SHIM_DIR}/calls.log"
+}
+
+@test "aux-up: pulls the ops and the mail project BEFORE bringing either up (positive control for the pull guard)" {
+    export POOLED_AUX_SETTLE=0
+    run bash "$PROOF" aux-up
+    [ "$status" -eq 0 ]
+    local log; log="$(grep -E 'compose .* (pull|up)( |$)' "${SHIM_DIR}/calls.log" | sed -E 's#.*/(ops|mail)\.env (pull|up).*#\1 \2#' | tr -d '\r')"
+    [ "$log" = "$(printf 'ops pull\nmail pull\nops up\nmail up')" ] || { echo "order was: $log" >&2; return 1; }
+}
+
 teardown() {
     [[ -z "${IN_REPO_OUT:-}" ]] || rm -rf "$IN_REPO_OUT"
     [[ -z "${IN_REPO_OTHER:-}" ]] || rm -rf "$IN_REPO_OTHER"
