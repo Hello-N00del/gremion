@@ -41,6 +41,9 @@ COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY services/kernel-api/package.json ./services/kernel-api/
 COPY packages/db/package.json ./packages/db/
 COPY packages/tenant-store/package.json ./packages/tenant-store/
+# tenant-store depends on @gremion/retention (TASK-033-a): pnpm resolves it from the workspace,
+# so `pnpm deploy` needs its manifest here and its source below.
+COPY packages/retention/package.json ./packages/retention/
 COPY packages/tenancy-core/package.json ./packages/tenancy-core/
 COPY packages/fastify-service-template/package.json ./packages/fastify-service-template/
 COPY packages/module-catalogue/package.json ./packages/module-catalogue/
@@ -49,6 +52,7 @@ RUN pnpm install --frozen-lockfile --filter @gremion/kernel-api...
 
 COPY packages/db ./packages/db/
 COPY packages/tenant-store ./packages/tenant-store/
+COPY packages/retention ./packages/retention/
 COPY packages/tenancy-core ./packages/tenancy-core/
 COPY packages/fastify-service-template ./packages/fastify-service-template/
 COPY packages/module-catalogue ./packages/module-catalogue/

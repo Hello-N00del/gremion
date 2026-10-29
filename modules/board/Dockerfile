@@ -4,7 +4,7 @@
 # modules/board-only context cannot resolve the workspace. Build with:
 #   docker build -f modules/board/Dockerfile -t gremion/board:<tag> .
 # Mirrors gremion-ui/Dockerfile. The board leaf bundles @gremion/tenant-store (per-tenant
-# board store) and its workspace deps @gremion/db + @gremion/module-catalogue (+ @gremion/generated-clients), so those
+# board store) and its workspace deps @gremion/db + @gremion/module-catalogue (+ @gremion/generated-clients, @gremion/retention), so those
 # packages are copied from the tree; NO @gremion/ports.
 FROM node:26-alpine AS builder
 WORKDIR /repo
@@ -22,6 +22,7 @@ COPY packages/db/package.json ./packages/db/
 COPY packages/generated-clients/package.json ./packages/generated-clients/
 COPY packages/module-catalogue/package.json ./packages/module-catalogue/
 COPY packages/tenant-store/package.json ./packages/tenant-store/
+COPY packages/retention/package.json ./packages/retention/
 COPY modules/board/package.json ./modules/board/
 RUN pnpm install --frozen-lockfile
 
@@ -30,6 +31,7 @@ COPY packages/db ./packages/db/
 COPY packages/generated-clients ./packages/generated-clients/
 COPY packages/module-catalogue ./packages/module-catalogue/
 COPY packages/tenant-store ./packages/tenant-store/
+COPY packages/retention ./packages/retention/
 COPY modules/board ./modules/board/
 
 # Compile TypeScript → modules/board/dist
