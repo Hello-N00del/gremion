@@ -31,6 +31,7 @@ import postgres from 'postgres'
 import { chainFileNames } from '../../../../scripts/migrations/pre-apply.mjs'
 import { directUrlFor, kernelDatabaseOf } from '../tenancy/target.ts'
 import { KERNEL_API_CHAIN, KERNEL_API_LEDGER } from './chain.ts'
+import { afterKernelRun, beforeKernelRun } from './idt-hooks.ts'
 
 export type MigrateErrorCode = 'INVALID_CUSTOMER' | 'UNKNOWN_CUSTOMER' | 'STATUS_SKIPPED' | 'WRONG_DATABASE' | 'NOT_CURRENT_AFTER_APPLY'
 
@@ -137,6 +138,8 @@ export async function migrateKernelDb(customerId: string, o: MigrateOptions & { 
     const owner = `k_${customerId.replaceAll('-', '')}_owner`
     const tools = o.tools ?? dumpTools(new URL(url), o.pgDumpContainer)
     const log = (l: string) => o.log(`[kernel-api migrate ${customerId}] ${l}`)
+    // TASK-080-a brief G4: the schema and btree_gist exist before the first file (the gist EXCLUDEs need them) ...
+    await beforeKernelRun(sql, { customerId, owner })
     const r = await runMigrations({
       sql,
       dirs: o.dirs,
@@ -165,6 +168,11 @@ export async function migrateKernelDb(customerId: string, o: MigrateOptions & { 
         ),
       },
     })
+    // ... and the binding, the customer setting and the vendor kinds exist after the last (all idempotent, all under the GUC).
+    const after = await afterKernelRun(sql, { customerId, owner })
+    if (after.bindingCreated || after.customerSettingCreated || after.kindsCreated > 0) {
+      log(`idt seeded: binding ${after.bindingCreated ? 'created' : 'present'}, customer_setting ${after.customerSettingCreated ? 'created' : 'present'}, ${after.kindsCreated} kind(s) added`)
+    }
     const status = await checkSchemaCurrent({ sql, dirs: o.dirs, ledger: KERNEL_API_LEDGER, releaseRef: o.releaseRef })
     if (status.state !== 'current' && status.state !== 'ahead') {
       throw new MigrateError('NOT_CURRENT_AFTER_APPLY', `customer ${customerId} is ${status.state} after the run (pending [${status.pending.join(', ')}], mismatched [${status.mismatched.join(', ')}])`)
