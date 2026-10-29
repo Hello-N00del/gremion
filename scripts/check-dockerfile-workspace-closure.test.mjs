@@ -128,13 +128,40 @@ test('devDependencies, optionalDependencies and peerDependencies are part of the
   }
 })
 
-test('a non-workspace spec, an unknown name and a $VAR source are not closure members', () => {
+test('a non-workspace spec and a $VAR source are not closure members', () => {
   withTree(
     {
       ...W,
-      'packages/a/package.json': pkg('@gremion/a', { '@gremion/b': '^1.0.0', 'left-pad': 'workspace:*' }),
+      'packages/a/package.json': pkg('@gremion/a', { '@gremion/b': '^1.0.0' }),
       'packages/b/package.json': pkg('@gremion/b'),
       'services/svc/Dockerfile': FROM + 'COPY packages/a/package.json ./packages/a/\nCOPY packages/a ./packages/a/\nCOPY ${X} ./x/\n',
+    },
+    (root) => assert.deepEqual(checkWorkspaceClosure(root).problems, []),
+  )
+})
+
+test('a workspace: spec that names no workspace package is a problem, not skipped', () => {
+  const df = FROM + 'COPY packages/a/package.json ./packages/a/\nCOPY packages/a ./packages/a/\n'
+  withTree(
+    {
+      ...W,
+      'packages/a/package.json': pkg('@gremion/a', { 'left-pad': 'workspace:*' }),
+      'services/svc/Dockerfile': df,
+    },
+    (root) => {
+      const r = checkWorkspaceClosure(root)
+      assert.equal(r.problems.length, 1)
+      assert.match(r.problems[0], /^packages\/a\/package\.json: @gremion\/a depends on "left-pad" via "workspace:\*" but no workspace package is named left-pad/)
+    },
+  )
+  // The alias form `workspace:<name>@<range>` and the path form `workspace:../c` resolve to real packages.
+  withTree(
+    {
+      ...W,
+      'packages/a/package.json': pkg('@gremion/a', { alias: 'workspace:@gremion/b@*', other: 'workspace:../c' }),
+      'packages/b/package.json': pkg('@gremion/b'),
+      'packages/c/package.json': pkg('@gremion/c'),
+      'services/svc/Dockerfile': FROM + MANIFESTS_ABC + 'COPY packages/a packages/b packages/c ./packages/\n',
     },
     (root) => assert.deepEqual(checkWorkspaceClosure(root).problems, []),
   )

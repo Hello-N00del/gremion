@@ -80,10 +80,27 @@ function workspaceGlobs(root) {
 }
 
 /**
- * Workspace packages by name: { name, dir (repo-relative posix), deps: Map<name, spec> }.
- * Only `workspace:` specs are kept as deps.
+ * Which workspace package a `workspace:` spec points at: the dependency key by default,
+ * the aliased name in `workspace:<name>@<range>`, or the package at the directory in
+ * `workspace:../<dir>`. Returns { name } or { dir } (an unresolved path).
  */
-export function loadWorkspace(root) {
+function workspaceTarget(key, spec, fromDir, byDir) {
+  const rest = spec.slice('workspace:'.length)
+  if (/^\.{1,2}(\/|$)/.test(rest)) {
+    const dir = posix.normalize(posix.join(fromDir, rest)).replace(/\/+$/, '')
+    return byDir.has(dir) ? { name: byDir.get(dir) } : { dir }
+  }
+  const alias = /^(@?[^@]+)@[^@]*$/.exec(rest)
+  return { name: alias ? alias[1] : key }
+}
+
+/**
+ * Workspace packages by name: { name, dir (repo-relative posix), deps: Map<name, spec>,
+ * targets: string[] }. Only `workspace:` specs are kept as deps; `targets` are the workspace
+ * package names they resolve to. A `workspace:` spec that resolves to no workspace package is
+ * pushed onto `problems` (when given) instead of being skipped.
+ */
+export function loadWorkspace(root, problems = []) {
   const byName = new Map()
   const dirs = new Set()
   for (const g of workspaceGlobs(root)) {
@@ -108,8 +125,20 @@ export function loadWorkspace(root) {
     for (const f of DEP_FIELDS)
       for (const [n, spec] of Object.entries(json[f] ?? {}))
         if (typeof spec === 'string' && spec.startsWith('workspace:')) deps.set(n, spec)
-    byName.set(json.name, { name: json.name, dir, deps })
+    byName.set(json.name, { name: json.name, dir, deps, targets: [] })
   }
+  const byDir = new Map([...byName.values()].map((p) => [p.dir, p.name]))
+  for (const p of byName.values())
+    for (const [key, spec] of p.deps) {
+      const t = workspaceTarget(key, spec, p.dir, byDir)
+      if (t.name !== undefined && byName.has(t.name)) p.targets.push(t.name)
+      else
+        problems.push(
+          `${p.dir}/package.json: ${p.name} depends on "${key}" via "${spec}" but no workspace package ${
+            t.name !== undefined ? `is named ${t.name}` : `lives at ${t.dir}`
+          } -- a dangling workspace: spec cannot install`,
+        )
+    }
   return byName
 }
 
@@ -140,7 +169,7 @@ export function relation(source, target) {
 /** @returns {{problems: string[], dockerfiles: number, workspaceDockerfiles: number, packages: number}} */
 export function checkWorkspaceClosure(root = KERNEL_ROOT) {
   const problems = []
-  const ws = loadWorkspace(root)
+  const ws = loadWorkspace(root, problems)
   const files = findDockerfiles(root)
   if (ws.size === 0) problems.push('no workspace package found via pnpm-workspace.yaml -- the guard has gone blind')
   if (files.length === 0) problems.push('no Dockerfile found in the repository -- the guard has gone blind')
@@ -163,8 +192,8 @@ export function checkWorkspaceClosure(root = KERNEL_ROOT) {
     const via = new Map(seeds.map((p) => [p.name, null]))
     const queue = seeds.map((p) => p.name)
     for (let q = 0; q < queue.length; q++) {
-      for (const dep of ws.get(queue[q]).deps.keys()) {
-        if (!ws.has(dep) || via.has(dep)) continue
+      for (const dep of ws.get(queue[q]).targets) {
+        if (via.has(dep)) continue
         via.set(dep, queue[q])
         queue.push(dep)
       }
