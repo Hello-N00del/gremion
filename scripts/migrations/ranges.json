@@ -172,10 +172,11 @@
       ],
       "manifestDirs": [
         "services/kernel-api/migrations/core",
-        "services/kernel-api/migrations/bodies"
+        "services/kernel-api/migrations/bodies",
+        "services/kernel-api/migrations/authz"
       ],
       "padWidth": 4,
-      "highWater": 3,
+      "highWater": 5,
       "legacyFloor": 0,
       "legacy": []
     },

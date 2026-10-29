@@ -93,9 +93,9 @@ describe('migrations/bodies: the shipped files', () => {
 })
 
 describe('the chain wiring', () => {
-  it('KERNEL_API_MIGRATION_DIRS = core + bodies, and every shipped file matches its manifest (TRD-353)', () => {
-    expect([...KERNEL_API_MIGRATION_DIRS]).toEqual(['migrations/core', 'migrations/bodies'])
-    expect(assertShippedMigrations(KERNEL_API_MIGRATION_DIRS.map((d) => join(SERVICE_ROOT, d)))).toBe(3)
+  it('KERNEL_API_MIGRATION_DIRS = core + bodies + authz (TASK-081 after 080-a), and every shipped file matches its manifest (TRD-353)', () => {
+    expect([...KERNEL_API_MIGRATION_DIRS]).toEqual(['migrations/core', 'migrations/bodies', 'migrations/authz'])
+    expect(assertShippedMigrations(KERNEL_API_MIGRATION_DIRS.map((d) => join(SERVICE_ROOT, d)))).toBe(5)
   })
 
   it('an edited bodies file refuses the boot (manifest hash)', () => {

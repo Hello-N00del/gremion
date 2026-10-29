@@ -66,6 +66,13 @@ const GREEN_HARDENING = {
 /** The access-token sub mapper (the shape the base template's gremion-ui client carries). */
 const SUB_MAPPER = { name: 'sub', protocolMapper: 'oidc-usermodel-property-mapper', config: { 'claim.name': 'sub', 'access.token.claim': 'true' } }
 
+/** The auth_time mapper exactly as the shipped base template's gremion-ui client carries it (TASK-081 step-up: no auth_time claim, no fresh step-up). */
+const AUTH_TIME_MAPPER = {
+  id: 'pm-auth-time',
+  ...(base.clients.find((c: { clientId: string }) => c.clientId === 'gremion-ui').protocolMappers.find((m: { name: string }) => m.name === 'auth_time') as { protocolMapper: string; config: Record<string, string> }),
+}
+const UI_MAPPERS = 'GET /admin/realms/verein/clients/uuid-ui/protocol-mappers/models'
+
 /** A GREEN live realm: every §4 contract element present + correct. Built as a
  *  route map keyed by `${method} ${path}` for a scriptable transport. */
 function greenRoutes(): Record<string, unknown> {
@@ -124,6 +131,7 @@ function greenRoutes(): Record<string, unknown> {
     'GET /admin/realms/verein/clients/uuid-ui/protocol-mappers/models': [
       { name: 'acr', protocolMapper: 'oidc-acr-mapper' },
       SUB_MAPPER,
+      AUTH_TIME_MAPPER,
     ],
     // TASK-033-a: gremion-mobile is the other Bearer client; its access token must carry sub too
     [`GET /admin/realms/${REALM}/clients?clientId=gremion-mobile`]: [{ id: 'uuid-mobile', clientId: 'gremion-mobile' }],
@@ -369,15 +377,39 @@ describe('reconcileRealm — each single drift fails EXACTLY that named check', 
 
   it('missing acr mapper -> only gremion-ui-acr-mapper fails', async () => {
     const failed = await failedNames((r) => {
-      r['GET /admin/realms/verein/clients/uuid-ui/protocol-mappers/models'] = [SUB_MAPPER]
+      r['GET /admin/realms/verein/clients/uuid-ui/protocol-mappers/models'] = [SUB_MAPPER, AUTH_TIME_MAPPER]
     })
     expect(failed).toEqual(['gremion-ui-acr-mapper'])
+  })
+
+  it('the shipped base template carries the auth_time mapper the check looks for (the fixture is not invented)', () => {
+    expect(AUTH_TIME_MAPPER.protocolMapper).toBe('oidc-usersessionmodel-note-mapper')
+    expect((AUTH_TIME_MAPPER as any).config).toMatchObject({ 'user.session.note': 'AUTH_TIME', 'claim.name': 'auth_time', 'access.token.claim': 'true' })
+  })
+
+  it('missing auth_time mapper (a realm created before it) -> only gremion-ui-auth-time-mapper fails', async () => {
+    const failed = await failedNames((r) => {
+      r[UI_MAPPERS] = [{ name: 'acr', protocolMapper: 'oidc-acr-mapper' }, SUB_MAPPER]
+    })
+    expect(failed).toEqual(['gremion-ui-auth-time-mapper'])
+  })
+
+  it.each([
+    ['the claim missing from the access token', { 'access.token.claim': 'false' }],
+    ['another session note', { 'user.session.note': 'SOMETHING_ELSE' }],
+    ['another claim name', { 'claim.name': 'authtime' }],
+  ])('an auth_time mapper with %s -> only gremion-ui-auth-time-mapper fails', async (_w, patch) => {
+    const failed = await failedNames((r) => {
+      r[UI_MAPPERS] = [{ name: 'acr', protocolMapper: 'oidc-acr-mapper' }, SUB_MAPPER, { ...AUTH_TIME_MAPPER, config: { ...(AUTH_TIME_MAPPER as any).config, ...patch } }]
+    })
+    expect(failed).toEqual(['gremion-ui-auth-time-mapper'])
   })
 
   it('missing uid sub-mapper -> gremion-ui-sub-mapper fails, and so does the Bearer-clients check (the same drift, seen per client)', async () => {
     const failed = await failedNames((r) => {
       r['GET /admin/realms/verein/clients/uuid-ui/protocol-mappers/models'] = [
         { name: 'acr', protocolMapper: 'oidc-acr-mapper' },
+        AUTH_TIME_MAPPER,
       ]
     })
     expect(failed).toEqual(['gremion-ui-sub-mapper', 'bearer-clients-sub'])
@@ -824,6 +856,42 @@ describe('reconcileRealm — apply replays ONLY the failed checks (§4-2), nothi
     expect(calls.some((c) => c.method === 'POST' && c.path.endsWith('/protocol-mappers/models'))).toBe(false)
     // after apply the report records the repair attempt for ssl-required
     expect(report.applied).toContain('ssl-required')
+  })
+
+  it('a missing auth_time mapper -> apply POSTs exactly the template mapper to gremion-ui, and nothing else', async () => {
+    const routes = greenRoutes()
+    routes[UI_MAPPERS] = [{ name: 'acr', protocolMapper: 'oidc-acr-mapper' }, SUB_MAPPER]
+    const { transport, calls } = scriptedTransport(routes)
+    const report = await reconcileRealm(transport, { ...opts, verifyOnly: false })
+    const writes = calls.filter((c) => c.method !== 'GET')
+    expect(writes).toHaveLength(1)
+    expect(writes[0]).toMatchObject({ method: 'POST', path: '/admin/realms/verein/clients/uuid-ui/protocol-mappers/models' })
+    expect(writes[0]!.body).toMatchObject({ name: 'auth_time', protocol: 'openid-connect', protocolMapper: 'oidc-usersessionmodel-note-mapper' })
+    expect((writes[0]!.body as any).config).toEqual((AUTH_TIME_MAPPER as any).config)
+    expect(report.applied).toEqual(['gremion-ui-auth-time-mapper'])
+  })
+
+  it('an auth_time mapper that exists but drifted -> apply PUTs it by id (a POST would 409), once', async () => {
+    const routes = greenRoutes()
+    routes[UI_MAPPERS] = [SUB_MAPPER, { name: 'acr', protocolMapper: 'oidc-acr-mapper' }, { ...AUTH_TIME_MAPPER, config: { ...(AUTH_TIME_MAPPER as any).config, 'access.token.claim': 'false' } }]
+    const { transport, calls } = scriptedTransport(routes)
+    const report = await reconcileRealm(transport, { ...opts, verifyOnly: false })
+    const writes = calls.filter((c) => c.method !== 'GET')
+    expect(writes).toHaveLength(1)
+    expect(writes[0]).toMatchObject({ method: 'PUT', path: '/admin/realms/verein/clients/uuid-ui/protocol-mappers/models/pm-auth-time' })
+    expect((writes[0]!.body as any).config['access.token.claim']).toBe('true')
+    expect((writes[0]!.body as any).id).toBe('pm-auth-time')
+    expect(report.applied).toEqual(['gremion-ui-auth-time-mapper'])
+  })
+
+  it('verify-only reports the missing auth_time mapper and writes nothing', async () => {
+    const routes = greenRoutes()
+    routes[UI_MAPPERS] = [{ name: 'acr', protocolMapper: 'oidc-acr-mapper' }, SUB_MAPPER]
+    const { transport, calls } = scriptedTransport(routes)
+    const report = await reconcileRealm(transport, { ...opts, verifyOnly: true })
+    expect(report.ok).toBe(false)
+    expect(report.checks.find((c) => c.name === 'gremion-ui-auth-time-mapper')?.detail).toMatch(/auth_time/)
+    expect(calls.every((c) => c.method === 'GET')).toBe(true)
   })
 
   it('a frontendUrl on the internal address -> apply issues ONE partial realm PUT that sets the customer host and keeps acr.loa.map', async () => {

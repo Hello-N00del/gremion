@@ -40,7 +40,7 @@ import type { KernelApiDeps, TenantRow } from '../app/deps.ts'
 import { setContext } from './context.ts'
 
 /** The operations a module caller may call (clause 1): exact operationIds, never a prefix. */
-export const MODULE_CALLER_OPERATIONS: ReadonlySet<string> = new Set(['getTenancySelf', 'listEnabledModules'])
+export const MODULE_CALLER_OPERATIONS: ReadonlySet<string> = new Set(['decideAuthz', 'getTenancySelf', 'listEnabledModules'])
 
 /** RFC 9562 UUIDv7, canonical lower case (the control registry's customer id). */
 const UUID_V7 = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/

@@ -14,10 +14,10 @@ import { appWith, reads, world } from '../harness/fakes.ts'
 const spec = loadSpec(SPEC_URL)
 const ops = listOperations(spec)
 // TASK-077 core + TASK-080-a bodies; TASK-081 appends its own here, sorted
-const ALL_OPERATIONS = ['createBody', 'getBodyTree', 'getCustomerSettings', 'getHealth', 'getOwnPreference', 'getPerson', 'getTenancySelf', 'invitePerson', 'listBodyMemberships', 'listBodySeats', 'listEnabledModules', 'listSeatTenures', 'putOwnPreference', 'startMembership']
+const ALL_OPERATIONS = ['createBody', 'decideAuthz', 'getBodyTree', 'getCustomerSettings', 'getHealth', 'getOwnPreference', 'getPerson', 'getTenancySelf', 'invitePerson', 'issueAuthzGrant', 'listAuthzGrants', 'listBodyMemberships', 'listBodySeats', 'listEnabledModules', 'listSeatTenures', 'putOwnPreference', 'revokeAllAuthzGrants', 'revokeAuthzGrant', 'startMembership']
 
 describe('routes (TDD 1)', () => {
-  it('the route table equals the spec: 14 operations, nothing else (routes:check)', async () => {
+  it('the route table equals the spec: 19 operations (14 core + bodies, 5 authz), nothing else (routes:check)', async () => {
     const app = buildApp()
     const r = await checkAppRoutes(app, spec)
     expect(r.problems).toEqual([])

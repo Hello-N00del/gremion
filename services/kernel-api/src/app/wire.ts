@@ -6,7 +6,7 @@
 import type { Sql } from '@gremion/db'
 import { createHostRejectionLog } from '@gremion/tenancy-core'
 import postgres from 'postgres'
-import { denyAll } from '../bodies/authz.ts'
+import { pdpWriteAuthorizer } from '../authz/write-authorizer.ts'
 import { platformRegistryStore } from '../registry/store.ts'
 import { loadDeclarations } from '../registry/declarations.ts'
 import { allowsEnvRefs, createSecretResolver } from '../tenancy/secrets.ts'
@@ -15,6 +15,7 @@ import { createTokenVerifier } from '../tenancy/tokens.ts'
 import type { KernelApiConfig } from './config.ts'
 import type { KernelApiDeps, Logger } from './deps.ts'
 import { createCustomerGate } from './gate.ts'
+import type { AuthzCliDeps } from '../authz/cli.ts'
 import { createTenantDb } from './tenant-db.ts'
 
 /** One JSON line per event on stdout/stderr (the house log shape: level, msg, ts, fields). */
@@ -31,6 +32,8 @@ export function jsonLogger(write: (line: string, level: string) => void = (l, le
 
 export interface Wired {
   deps: KernelApiDeps
+  /** The two reader pools (control registry, gremion_platform), for the authz verbs; closed by close(). */
+  pools: { control: Sql; platform: Sql }
   close(): Promise<void>
 }
 
@@ -43,24 +46,48 @@ export function wireDeps(config: KernelApiConfig, o: { dirs: readonly string[]; 
   const gate = createCustomerGate({ dirs: o.dirs, ...(config.releaseRef ? { releaseRef: config.releaseRef } : {}), resolveSecret, log })
   const declarations = loadDeclarations(config.modulesRoot)
   const tenantDb = createTenantDb({ resolveSecret, log })
+  const registry = platformRegistryStore(platform)
   const deps: KernelApiDeps = {
     proxySecret: config.proxySecret,
     platformDomain: config.platformDomain,
     moduleSecrets: config.moduleSecrets,
     tenancy: controlTenancyStore(control),
-    registry: platformRegistryStore(platform),
+    registry,
     tokens: createTokenVerifier(),
     gate,
     declarations: { get: (key) => declarations.get(key) },
     tenantDb,
-    authorizer: denyAll,
+    // TASK-081 G3: a person's identity write is allowed only when the PDP says so; denied (403) otherwise
+    authorizer: pdpWriteAuthorizer(async (customerId) => new Set((await registry.listEnabled(customerId)).map((m) => m.moduleKey))),
     log,
+    kernelDb: (tenant) => gate.db(tenant),
     hostRejection: createHostRejectionLog({ emit: (msg, fields) => log.warn(msg, { tenant: null, ...fields }) }),
   }
   return {
     deps,
+    pools: { control, platform },
     async close() {
       await Promise.allSettled([gate.close(), tenantDb.close(), control.end({ timeout: 5 }), platform.end({ timeout: 5 })])
     },
+  }
+}
+
+/** The `kernel-api authz` verbs' deps (and the in-process sweep's): the same pools and gate as serve, no extra connection. */
+export function authzCliDeps(w: Wired): AuthzCliDeps {
+  const { control, platform } = w.pools
+  return {
+    // TRD-082 exemption: like migrate, the verbs iterate every active customer
+    listCustomerIds: async () => (await control<{ id: string }[]>`SELECT t.id::text AS id FROM public.tenant t WHERE t.status = 'active' ORDER BY t.id`).map((r) => r.id),
+    lookup: (id) => w.deps.tenancy.lookupId(id),
+    db: (tenant) => w.deps.kernelDb!(tenant),
+    moduleIds: async () =>
+      new Map(
+        (
+          await platform<{ module_key: string; module_id: string }[]>`
+            SELECT m.module_key, m.module_id::text FROM plt.module m
+             WHERE EXISTS (SELECT 1 FROM plt.module_version v WHERE v.module_id = m.module_id)`
+        ).map((r) => [r.module_key, r.module_id] as const),
+      ),
+    enabledModules: async (customerId) => new Set((await w.deps.registry.listEnabled(customerId)).map((m) => m.moduleKey)),
   }
 }

@@ -40,7 +40,7 @@ export interface CustomerGateOptions {
   evictGraceMs?: number
 }
 
-export function createCustomerGate(o: CustomerGateOptions): CustomerGate & { close(): Promise<void> } {
+export function createCustomerGate(o: CustomerGateOptions): CustomerGate & { db(tenant: TenantRow): Promise<Sql>; close(): Promise<void> } {
   // The ref of the customer being checked, from the request's own control row.
   const refs = new Map<string, string>()
   const store = createTenantStore({
@@ -57,6 +57,14 @@ export function createCustomerGate(o: CustomerGateOptions): CustomerGate & { clo
     poolRef.delete(customerId)
     store.evictTenantDb(customerId, KERNEL_MODULE)
   }
+  /** Record the ref this request resolves from; a changed ref drops the pool resolved from the old one. */
+  const track = (tenant: TenantRow) => {
+    const id = tenant.customerId
+    const had = poolRef.get(id)
+    if (had !== undefined && had !== tenant.dbConnRef) evict(id) // a changed ref: resolve it afresh now
+    refs.set(id, tenant.dbConnRef)
+    poolRef.set(id, tenant.dbConnRef)
+  }
   const gate = schemaGate({
     dirs: o.dirs,
     ledger: KERNEL_API_LEDGER,
@@ -69,10 +77,7 @@ export function createCustomerGate(o: CustomerGateOptions): CustomerGate & { clo
   return {
     async check(tenant: TenantRow): Promise<GateVerdict> {
       const id = tenant.customerId
-      const had = poolRef.get(id)
-      if (had !== undefined && had !== tenant.dbConnRef) evict(id) // a changed ref: resolve it afresh now
-      refs.set(id, tenant.dbConnRef)
-      poolRef.set(id, tenant.dbConnRef)
+      track(tenant)
       const verdict = await gate.check(id)
       if (verdict.ok || verdict.reason !== 'unavailable') return verdict
       // Unavailable: the pool may hold a stale credential. Drop it and judge once on a fresh one.
@@ -80,6 +85,11 @@ export function createCustomerGate(o: CustomerGateOptions): CustomerGate & { clo
       refs.set(id, tenant.dbConnRef)
       poolRef.set(id, tenant.dbConnRef)
       return gate.check(id)
+    },
+    /** TASK-081: the customer's kernel database from the SAME bounded pool store the gate judges on. */
+    db(tenant: TenantRow): Promise<Sql> {
+      track(tenant)
+      return store.openTenantDb(tenant.customerId, KERNEL_MODULE)
     },
     close: () => store.close(),
   }

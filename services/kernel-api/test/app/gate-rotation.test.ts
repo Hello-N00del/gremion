@@ -70,6 +70,23 @@ describe('the customer gate and a rotated credential', () => {
     await gate.close()
   })
 
+  it('db() evicts the stale pool on a changed db_conn_ref exactly as check() does (a sweep must not hide the rotation)', async () => {
+    const env = { KERNEL_DB_A: urlWith('y1'), KERNEL_DB_A2: urlWith('y2') }
+    const h = harness(() => true)
+    const gate = gateOf(env, h)
+    await gate.db(tenantRow(A_ID, 'a', 'active', { dbConnRef: 'env:KERNEL_DB_A' }))
+    await gate.db(tenantRow(A_ID, 'a', 'active', { dbConnRef: 'env:KERNEL_DB_A' }))
+    expect(h.opened).toEqual(['y1']) // unchanged ref: one pool
+    await gate.db(tenantRow(A_ID, 'a', 'active', { dbConnRef: 'env:KERNEL_DB_A2' }))
+    expect(h.opened).toEqual(['y1', 'y2'])
+    await new Promise((r) => setTimeout(r, 25)) // evictGraceMs 0 ends the old pool on the next timer tick
+    expect(h.ended).toEqual(['y1'])
+    // and the very next gate check, with the new ref, does not reopen a third pool
+    expect(await gate.check(tenantRow(A_ID, 'a', 'active', { dbConnRef: 'env:KERNEL_DB_A2' }))).toEqual({ ok: true })
+    expect(h.opened).toEqual(['y1', 'y2'])
+    await gate.close()
+  })
+
   it('a database that is really unreachable stays 503 (one retry, no loop)', async () => {
     const h = harness(() => false)
     const gate = gateOf({ KERNEL_DB_A: urlWith('pw1') }, h)

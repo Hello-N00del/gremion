@@ -12,12 +12,12 @@ import { describe, expect, it } from 'vitest'
 const PKG = fileURLToPath(new URL('../', import.meta.url))
 
 /** The named tests per file, as of TASK-077 G8. Raise a floor when you add tests; never lower one. */
-export const NAMED: Record<'unit' | 'integration' | 'live', Record<string, number>> = {
+export const NAMED: Record<'unit' | 'integration' | 'authz' | 'live', Record<string, number>> = {
   unit: {
     'test/app/bundle-entry.test.ts': 2,
     // TASK-080-a round 3: the image's builder stage copies every workspace package the service reaches
     'test/app/dockerfile.test.ts': 2,
-    'test/app/gate-rotation.test.ts': 3,
+    'test/app/gate-rotation.test.ts': 4,
     'test/app/routes.test.ts': 11,
     // TASK-080-a house review: the relay and the HTTP path do not evict each other after a db_conn_ref change
     'test/app/tenant-db-relay.test.ts': 2,
@@ -40,7 +40,18 @@ export const NAMED: Record<'unit' | 'integration' | 'live', Record<string, numbe
     'test/tenancy/token-outage.test.ts': 12,
     // G8 (static half): the audience mapper in the realm template
     'test/keycloak/realm-audience.test.ts': 4,
-    'test/suite-size.test.ts': 4,
+    // TASK-081
+    'test/authz/catalogue.test.ts': 9,
+    'test/authz/cli.test.ts': 6,
+    'test/authz/sweep-interval.test.ts': 19,
+    'test/authz/http.test.ts': 22,
+    'test/authz/after-migrate.test.ts': 7,
+    'test/authz/no-role-check.test.ts': 5,
+    'test/authz/stepup.test.ts': 5,
+    // TASK-081 G3: the PDP-backed WriteAuthorizer's table and its pre-database refusals
+    'test/authz/write-authorizer.test.ts': 8,
+    'test/authz/stepup-realm.test.ts': 2,
+    'test/suite-size.test.ts': 5,
   },
   integration: {
     'test/app/kernel-api.int.test.ts': 17,
@@ -55,6 +66,16 @@ export const NAMED: Record<'unit' | 'integration' | 'live', Record<string, numbe
     'test/bodies/schema-guards.int.test.ts': 16,
     // G8 (live half): real Keycloak tokens carry / lack the audience
     'test/keycloak/audience.int.test.ts': 2,
+  },
+  // TASK-081: its own scratch stack (test/authz/stack.mjs, vitest.authz-int.config.ts)
+  authz: {
+    'test/authz/after-migrate.int.test.ts': 1,
+    'test/authz/grants.int.test.ts': 42,
+    'test/authz/http.int.test.ts': 9,
+    'test/authz/module-off.int.test.ts': 28,
+    'test/authz/pdp.int.test.ts': 12,
+    'test/authz/schema.int.test.ts': 8,
+    'test/authz/write-authorizer.int.test.ts': 12,
   },
   // TASK-080-a test/bodies/proof.sh: PostgreSQL 18 + the authenticated NATS (vitest.live.config.ts)
   live: {
@@ -95,6 +116,10 @@ describe('suite size (TDD 16)', () => {
     expect(() => assertFloor(collected('vitest.integration.config.ts'), NAMED.integration)).not.toThrow()
   }, 60_000)
 
+  it('the authz integration suite collects at least the named total', () => {
+    expect(() => assertFloor(collected('vitest.authz-int.config.ts'), NAMED.authz)).not.toThrow()
+  }, 60_000)
+
   it('the live suite (proof.sh) collects at least the named total', () => {
     expect(() => assertFloor(collected('vitest.live.config.ts'), NAMED.live)).not.toThrow()
   }, 60_000)
@@ -116,8 +141,8 @@ describe('suite size (TDD 16)', () => {
     }
     walk('src')
     walk('test')
-    expect(specs.length).toBeGreaterThanOrEqual(Object.keys(NAMED.unit).length + Object.keys(NAMED.integration).length + Object.keys(NAMED.live).length)
-    const named = new Set([...Object.keys(NAMED.unit), ...Object.keys(NAMED.integration), ...Object.keys(NAMED.live)])
+    expect(specs.length).toBeGreaterThanOrEqual(Object.keys(NAMED.unit).length + Object.keys(NAMED.integration).length + Object.keys(NAMED.authz).length + Object.keys(NAMED.live).length)
+    const named = new Set([...Object.keys(NAMED.unit), ...Object.keys(NAMED.integration), ...Object.keys(NAMED.authz), ...Object.keys(NAMED.live)])
     expect(specs.filter((f) => !named.has(f))).toEqual([])
     const marked = specs.filter((f) => /\b(?:it|test|describe)\s*\.\s*(?:skip|todo|only|skipIf|runIf)\b/.test(readFileSync(join(PKG, f), 'utf8')))
     expect(marked).toEqual([])

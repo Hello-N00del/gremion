@@ -113,6 +113,14 @@
       "reason": "TASK-077 migrate job: ONE direct (never pooled) connection per customer to t_<hex32>__kernel, asserted by assertTargetMatches and current_database(), on which tenant-store's runMigrations takes its session advisory lock; openTenantDb opens pooled runtime connections and cannot hold the lock"
     },
     {
+      "path": "services/kernel-api/test/authz/db.ts",
+      "calls": 1,
+      "imports": 1,
+      "adoptedBy": "TASK-081",
+      "since": "2026-10-22",
+      "reason": "TASK-081 scratch-server proof, not a tenant connection: the PDP/grant suites build one throwaway customer database on the named t081-<sha8> PostgreSQL 18 (127.0.0.1, this run's port only) and connect as superuser and as a NON-superuser app role so FORCE RLS binds; stays allow-listed while the test exists"
+    },
+    {
       "path": "services/kernel-api/test/harness/scratch.ts",
       "calls": 1,
       "imports": 1,

@@ -3,28 +3,57 @@
   "info": {
     "title": "Gremion kernel API: core (tenancy and the module registry)",
     "version": "1.1.0",
-    "description": "TASK-077 (L3-17; TRD-407 first half, TRD-082, TRD-353). The kernel API's one spec (Q5, Q11): dependants append their operations under their own tag (bodies: TASK-080, authz: TASK-081) and their handlers to src/handlers/index.ts, sorted by operationId. Every operation except getHealth is tenant-resolved: the WHOLE X-Forwarded-Host (equal to Host) selects the customer in the control registry, behind the proxy-trust header; or a module caller asserts the customer id with its own module secret. Every response body is checked against this document before it is sent (Q4): an undeclared field is a 500 response-contract-violation, never a silent drop.",
-    "license": { "name": "AGPL-3.0-only", "identifier": "AGPL-3.0-only" }
+    "description": "TASK-077 (L3-17; TRD-407 first half, TRD-082, TRD-353). The kernel API's one spec (Q5, Q11): dependants append their operations under their own tag (bodies: TASK-080-a, authz: TASK-081 - the policy decision point and the grant table) and their handlers to src/handlers/index.ts, sorted by operationId. Every operation except getHealth is tenant-resolved: the WHOLE X-Forwarded-Host (equal to Host) selects the customer in the control registry, behind the proxy-trust header; or a module caller asserts the customer id with its own module secret. Every response body is checked against this document before it is sent (Q4): an undeclared field is a 500 response-contract-violation, never a silent drop.",
+    "license": {
+      "name": "AGPL-3.0-only",
+      "identifier": "AGPL-3.0-only"
+    }
   },
   "tags": [
-    { "name": "platform", "description": "Unauthenticated liveness, no tenant." },
-    { "name": "tenancy", "description": "The customer this request resolved to (DB-TNT-CUSTOMER, DB-TNT-DOMAINBINDING, DB-TNT-REALMREF as the API contract; registry of record: the control tenant / tenant_domain tables, Q1)." },
-    { "name": "modules", "description": "The module registry: the customer's enabled modules and their runtime declarations (DB-PLT-MODULE-ENABLEMENT, DB-PLT-MODULE-VERSION)." },
-    { "name": "bodies", "description": "Bodies, org units, seats, memberships, tenures and the own preference (DB-IDT-*; TASK-080-a). Reads only: every write is the domain service's, behind the WriteAuthorizer (default deny); the only write over HTTP is the signed-in person's own preference." }
+    {
+      "name": "platform",
+      "description": "Unauthenticated liveness, no tenant."
+    },
+    {
+      "name": "tenancy",
+      "description": "The customer this request resolved to (DB-TNT-CUSTOMER, DB-TNT-DOMAINBINDING, DB-TNT-REALMREF as the API contract; registry of record: the control tenant / tenant_domain tables, Q1)."
+    },
+    {
+      "name": "modules",
+      "description": "The module registry: the customer's enabled modules and their runtime declarations (DB-PLT-MODULE-ENABLEMENT, DB-PLT-MODULE-VERSION)."
+    },
+    {
+      "name": "bodies",
+      "description": "Bodies, org units, seats, memberships, tenures and the own preference (DB-IDT-*; TASK-080-a). Reads only: every write is the domain service's, behind the WriteAuthorizer (default deny); the only write over HTTP is the signed-in person's own preference."
+    },
+    {
+      "name": "authz",
+      "description": "The one policy decision point over the (tenant, body) grant table and the grant administration (TASK-081; PRD-IDN-007, TRD-084, TRD-090, TRD-091, TRD-429)."
+    }
   ],
   "paths": {
     "/healthz": {
       "get": {
         "operationId": "getHealth",
         "summary": "Liveness of the kernel API process (no tenant, no database)",
-        "tags": ["platform"],
+        "tags": [
+          "platform"
+        ],
         "security": [],
         "responses": {
           "200": {
             "description": "The process is up.",
-            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Health" } } }
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Health"
+                }
+              }
+            }
           },
-          "500": { "$ref": "#/components/responses/InternalError" }
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
         }
       }
     },
@@ -32,22 +61,51 @@
       "get": {
         "operationId": "getTenancySelf",
         "summary": "The customer this request resolved to",
-        "tags": ["tenancy"],
-        "security": [{ "bearer": [] }, { "moduleCaller": [] }],
+        "tags": [
+          "tenancy"
+        ],
+        "security": [
+          {
+            "bearer": []
+          },
+          {
+            "moduleCaller": []
+          }
+        ],
         "parameters": [
-          { "$ref": "#/components/parameters/ForwardedHost" },
-          { "$ref": "#/components/parameters/ProxyTrust" }
+          {
+            "$ref": "#/components/parameters/ForwardedHost"
+          },
+          {
+            "$ref": "#/components/parameters/ProxyTrust"
+          }
         ],
         "responses": {
           "200": {
             "description": "The resolved customer.",
-            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/TenancySelf" } } }
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TenancySelf"
+                }
+              }
+            }
           },
-          "401": { "$ref": "#/components/responses/Unauthorized" },
-          "403": { "$ref": "#/components/responses/Forbidden" },
-          "404": { "$ref": "#/components/responses/NotFound" },
-          "500": { "$ref": "#/components/responses/InternalError" },
-          "503": { "$ref": "#/components/responses/Unavailable" }
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
         }
       }
     },
@@ -55,22 +113,51 @@
       "get": {
         "operationId": "listEnabledModules",
         "summary": "The resolved customer's enabled modules with their runtime declarations",
-        "tags": ["modules"],
-        "security": [{ "bearer": [] }, { "moduleCaller": [] }],
+        "tags": [
+          "modules"
+        ],
+        "security": [
+          {
+            "bearer": []
+          },
+          {
+            "moduleCaller": []
+          }
+        ],
         "parameters": [
-          { "$ref": "#/components/parameters/ForwardedHost" },
-          { "$ref": "#/components/parameters/ProxyTrust" }
+          {
+            "$ref": "#/components/parameters/ForwardedHost"
+          },
+          {
+            "$ref": "#/components/parameters/ProxyTrust"
+          }
         ],
         "responses": {
           "200": {
             "description": "Exactly the customer's modules in state enabled, each with the runtime block of the module.json version the customer enabled.",
-            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/EnabledModules" } } }
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EnabledModules"
+                }
+              }
+            }
           },
-          "401": { "$ref": "#/components/responses/Unauthorized" },
-          "403": { "$ref": "#/components/responses/Forbidden" },
-          "404": { "$ref": "#/components/responses/NotFound" },
-          "500": { "$ref": "#/components/responses/InternalError" },
-          "503": { "$ref": "#/components/responses/Unavailable" }
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
         }
       }
     },
@@ -732,6 +819,343 @@
           }
         }
       }
+    },
+    "/api/v1/authz/decisions": {
+      "post": {
+        "operationId": "decideAuthz",
+        "summary": "May this person do this in this body? The one decision point (module callers only)",
+        "tags": [
+          "authz"
+        ],
+        "security": [
+          {
+            "moduleCaller": []
+          }
+        ],
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AuthzDecisionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The decision: allow, or a deny with its reason. A positive deny is a 200 with allow false.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthzDecision"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/Unprocessable"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/authz/grants": {
+      "get": {
+        "operationId": "listAuthzGrants",
+        "summary": "The grants of one body of the resolved customer",
+        "tags": [
+          "authz"
+        ],
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ForwardedHost"
+          },
+          {
+            "$ref": "#/components/parameters/ProxyTrust"
+          },
+          {
+            "name": "bodyId",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "personId",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Only this customer grants (TRD-084).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GrantList"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/Unprocessable"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      },
+      "post": {
+        "operationId": "issueAuthzGrant",
+        "summary": "Issue a grant (a customer administrator inside their own tenant; TRD-091, TRD-090)",
+        "tags": [
+          "authz"
+        ],
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ForwardedHost"
+          },
+          {
+            "$ref": "#/components/parameters/ProxyTrust"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GrantIssueRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The issued grant.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Grant"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/Unprocessable"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/authz/grants/{grantId}/revoke": {
+      "post": {
+        "operationId": "revokeAuthzGrant",
+        "summary": "Revoke one open grant",
+        "tags": [
+          "authz"
+        ],
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ForwardedHost"
+          },
+          {
+            "$ref": "#/components/parameters/ProxyTrust"
+          },
+          {
+            "name": "grantId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The revoked grant.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Grant"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/Unprocessable"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/authz/persons/{personId}/revoke-all": {
+      "post": {
+        "operationId": "revokeAllAuthzGrants",
+        "summary": "Revoke every open grant of one person in one step-up window (PRD-IDN-002)",
+        "tags": [
+          "authz"
+        ],
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ForwardedHost"
+          },
+          {
+            "$ref": "#/components/parameters/ProxyTrust"
+          },
+          {
+            "name": "personId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The grants that were revoked.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GrantList"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/Unprocessable"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -755,71 +1179,130 @@
         "in": "header",
         "required": false,
         "description": "The customer's host, whole (Tenancy D1). Must equal Host. Absent on a module-caller request.",
-        "schema": { "type": "string", "maxLength": 260 }
+        "schema": {
+          "type": "string",
+          "maxLength": 260
+        }
       },
       "ProxyTrust": {
         "name": "x-proxy-trust",
         "in": "header",
         "required": false,
         "description": "The proxy shared secret (TENANT_PROXY_SHARED_SECRET). Absent on a module-caller request.",
-        "schema": { "type": "string", "maxLength": 512 }
+        "schema": {
+          "type": "string",
+          "maxLength": 512
+        }
       }
     },
     "headers": {
       "RetryAfter": {
         "description": "Seconds until the client should retry.",
-        "schema": { "type": "integer", "minimum": 1 }
+        "schema": {
+          "type": "integer",
+          "minimum": 1
+        }
       }
     },
     "responses": {
       "Unauthorized": {
         "description": "No, or an unacceptable, credential for the resolved customer.",
-        "content": { "application/problem+json": { "schema": { "$ref": "#/components/schemas/Problem" } } }
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
       },
       "Forbidden": {
         "description": "The request did not prove it came through the proxy, or a module caller may not call this operation for this customer.",
-        "content": { "application/problem+json": { "schema": { "$ref": "#/components/schemas/Problem" } } }
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
       },
       "NotFound": {
         "description": "No customer is served at this host (unparseable, reserved, unbound or not active). There is no default customer.",
-        "content": { "application/problem+json": { "schema": { "$ref": "#/components/schemas/Problem" } } }
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
       },
       "Unavailable": {
         "description": "The customer is suspended, its kernel database is behind its manifest, unreachable or skewed against this image, or the control registry is unreachable. Never cached.",
-        "headers": { "Retry-After": { "$ref": "#/components/headers/RetryAfter" } },
-        "content": { "application/problem+json": { "schema": { "$ref": "#/components/schemas/Problem" } } }
+        "headers": {
+          "Retry-After": {
+            "$ref": "#/components/headers/RetryAfter"
+          }
+        },
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
       },
       "InternalError": {
         "description": "An internal error, or a response that would have broken this document (response-contract-violation).",
-        "content": { "application/problem+json": { "schema": { "$ref": "#/components/schemas/Problem" } } }
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
       },
-    "BadRequest": {
-      "description": "The request did not match the operation's schema.",
-      "content": {
-        "application/problem+json": {
-          "schema": {
-            "$ref": "#/components/schemas/Problem"
+      "BadRequest": {
+        "description": "The request is malformed or did not match the operation's schema.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "Conflict": {
+        "description": "The write conflicts with the current state (a module not enabled, a grant already closed, an overlapping validity, a taken e-mail address, a stale row version).",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "Unprocessable": {
+        "description": "The request is well-formed but names something this customer does not have, or breaks a grant rule.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
           }
         }
       }
-    },
-    "Conflict": {
-      "description": "The write conflicts with the current state (an overlapping validity, a taken e-mail address, a stale row version).",
-      "content": {
-        "application/problem+json": {
-          "schema": {
-            "$ref": "#/components/schemas/Problem"
-          }
-        }
-      }
-    }
     },
     "schemas": {
       "Health": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["status"],
-        "properties": { "status": { "const": "ok" } }
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "status": {
+            "const": "ok"
+          }
+        }
       },
       "CustomerId": {
         "type": "string",
@@ -829,58 +1312,127 @@
       "TenancySelf": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["customerId", "slug", "realm"],
+        "required": [
+          "customerId",
+          "slug",
+          "realm"
+        ],
         "properties": {
-          "customerId": { "$ref": "#/components/schemas/CustomerId" },
-          "slug": { "type": "string", "pattern": "^[a-z0-9-]{1,30}$" },
-          "realm": { "type": "string", "minLength": 1, "maxLength": 255, "description": "DB-TNT-REALMREF: the customer's Keycloak realm." }
+          "customerId": {
+            "$ref": "#/components/schemas/CustomerId"
+          },
+          "slug": {
+            "type": "string",
+            "pattern": "^[a-z0-9-]{1,30}$"
+          },
+          "realm": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255,
+            "description": "DB-TNT-REALMREF: the customer's Keycloak realm."
+          }
         }
       },
       "EnabledModules": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["customerId", "modules"],
+        "required": [
+          "customerId",
+          "modules"
+        ],
         "properties": {
-          "customerId": { "$ref": "#/components/schemas/CustomerId" },
-          "modules": { "type": "array", "items": { "$ref": "#/components/schemas/EnabledModule" } }
+          "customerId": {
+            "$ref": "#/components/schemas/CustomerId"
+          },
+          "modules": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EnabledModule"
+            }
+          }
         }
       },
       "EnabledModule": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["moduleKey", "semver", "runtime"],
+        "required": [
+          "moduleKey",
+          "semver",
+          "runtime"
+        ],
         "properties": {
-          "moduleKey": { "type": "string", "pattern": "^[a-z][a-z_]{1,39}$" },
-          "semver": { "type": "string", "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]{1,40})?$" },
-          "runtime": { "$ref": "#/components/schemas/ModuleRuntime" }
+          "moduleKey": {
+            "type": "string",
+            "pattern": "^[a-z][a-z_]{1,39}$"
+          },
+          "semver": {
+            "type": "string",
+            "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]{1,40})?$"
+          },
+          "runtime": {
+            "$ref": "#/components/schemas/ModuleRuntime"
+          }
         }
       },
       "ModuleRuntime": {
         "type": "object",
         "description": "The runtime block of modules/<key>/module.json (spec D D.1.2), served only for the version the customer enabled.",
         "additionalProperties": false,
-        "required": ["version", "database", "export", "timedJobs", "platformServer"],
+        "required": [
+          "version",
+          "database",
+          "export",
+          "timedJobs",
+          "platformServer"
+        ],
         "properties": {
-          "version": { "type": "string" },
+          "version": {
+            "type": "string"
+          },
           "database": {
             "oneOf": [
-              { "type": "null" },
+              {
+                "type": "null"
+              },
               {
                 "type": "object",
                 "additionalProperties": false,
-                "required": ["postgresService", "migrations"],
-                "properties": { "postgresService": { "type": "string" }, "migrations": { "type": "string" } }
+                "required": [
+                  "postgresService",
+                  "migrations"
+                ],
+                "properties": {
+                  "postgresService": {
+                    "type": "string"
+                  },
+                  "migrations": {
+                    "type": "string"
+                  }
+                }
               }
             ]
           },
           "export": {
             "oneOf": [
-              { "type": "null" },
+              {
+                "type": "null"
+              },
               {
                 "type": "object",
                 "additionalProperties": false,
-                "required": ["kind", "retentionProfile"],
-                "properties": { "kind": { "const": "pg_dump" }, "retentionProfile": { "type": "string", "pattern": "^rp-[a-z]+-[a-z0-9-]+$" } }
+                "required": [
+                  "kind",
+                  "retentionProfile"
+                ],
+                "properties": {
+                  "kind": {
+                    "const": "pg_dump"
+                  },
+                  "retentionProfile": {
+                    "type": "string",
+                    "pattern": "^rp-[a-z]+-[a-z0-9-]+$"
+                  }
+                }
               }
             ]
           },
@@ -889,18 +1441,43 @@
             "items": {
               "type": "object",
               "additionalProperties": false,
-              "required": ["id", "activeColourOnly"],
-              "properties": { "id": { "type": "string" }, "activeColourOnly": { "type": "boolean" } }
+              "required": [
+                "id",
+                "activeColourOnly"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "activeColourOnly": {
+                  "type": "boolean"
+                }
+              }
             }
           },
           "platformServer": {
             "oneOf": [
-              { "type": "null" },
+              {
+                "type": "null"
+              },
               {
                 "type": "object",
                 "additionalProperties": false,
-                "required": ["postgresService", "databases"],
-                "properties": { "postgresService": { "type": "string" }, "databases": { "type": "array", "items": { "type": "string" } } }
+                "required": [
+                  "postgresService",
+                  "databases"
+                ],
+                "properties": {
+                  "postgresService": {
+                    "type": "string"
+                  },
+                  "databases": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                }
               }
             ]
           }
@@ -910,12 +1487,27 @@
         "type": "object",
         "description": "RFC 9457 problem details.",
         "additionalProperties": false,
-        "required": ["type", "title", "status"],
+        "required": [
+          "type",
+          "title",
+          "status"
+        ],
         "properties": {
-          "type": { "type": "string", "pattern": "^urn:gremion:problem:[a-z0-9-]+$" },
-          "title": { "type": "string" },
-          "status": { "type": "integer", "minimum": 400, "maximum": 599 },
-          "detail": { "type": "string" }
+          "type": {
+            "type": "string",
+            "pattern": "^urn:gremion:problem:[a-z0-9-]+$"
+          },
+          "title": {
+            "type": "string"
+          },
+          "status": {
+            "type": "integer",
+            "minimum": 400,
+            "maximum": 599
+          },
+          "detail": {
+            "type": "string"
+          }
         }
       },
       "Body": {
@@ -1786,6 +2378,244 @@
           },
           "timeZone": {
             "type": "string"
+          }
+        }
+      },
+      "AuthzDecisionRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "subject",
+          "bodyId",
+          "capability"
+        ],
+        "properties": {
+          "subject": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "bodyId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "capability": {
+            "type": "string",
+            "pattern": "^[a-z][a-z_]{1,39}\\.[a-z][a-z_.]{0,79}$"
+          },
+          "resource": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "kind",
+              "id"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "pattern": "^[a-z][a-z_]{0,39}$"
+              },
+              "id": {
+                "type": "string",
+                "format": "uuid"
+              }
+            }
+          }
+        }
+      },
+      "AuthzDecision": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "allow",
+          "reason",
+          "grantIds"
+        ],
+        "properties": {
+          "allow": {
+            "type": "boolean"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "grantIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        }
+      },
+      "GrantIssueRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "bodyId",
+          "subjectPersonId",
+          "grantKind",
+          "key",
+          "granterRole"
+        ],
+        "properties": {
+          "bodyId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "subjectPersonId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "grantKind": {
+            "enum": [
+              "role",
+              "capability"
+            ]
+          },
+          "key": {
+            "type": "string",
+            "maxLength": 120
+          },
+          "granterRole": {
+            "type": "string",
+            "maxLength": 40
+          },
+          "resource": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "kind",
+              "id"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "pattern": "^[a-z][a-z_]{0,39}$"
+              },
+              "id": {
+                "type": "string",
+                "format": "uuid"
+              }
+            }
+          },
+          "validFrom": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "validUntil": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          }
+        }
+      },
+      "Grant": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "grantId",
+          "bodyId",
+          "subjectPersonId",
+          "grantKind",
+          "key",
+          "validFrom",
+          "granterKind",
+          "source",
+          "state",
+          "rowVersion"
+        ],
+        "properties": {
+          "grantId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "bodyId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "subjectPersonId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "grantKind": {
+            "enum": [
+              "role",
+              "capability"
+            ]
+          },
+          "key": {
+            "type": "string"
+          },
+          "resourceKind": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "resourceId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "validFrom": {
+            "type": "string"
+          },
+          "validUntil": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "granterKind": {
+            "enum": [
+              "person",
+              "operator",
+              "system"
+            ]
+          },
+          "source": {
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "scheduled",
+              "active",
+              "expired",
+              "revoked"
+            ]
+          },
+          "revokedAt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "revokeReason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "rowVersion": {
+            "type": "integer"
+          }
+        }
+      },
+      "GrantList": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "grants"
+        ],
+        "properties": {
+          "grants": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Grant"
+            }
           }
         }
       }

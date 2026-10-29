@@ -112,11 +112,13 @@ export interface KernelApiDeps {
   declarations: ModuleDeclarations
   /** The customer's kernel database for the identity reads and the own-preference write. */
   tenantDb: TenantDb
-  /** Who may write through the HTTP API. Shipped: denyAll (Q4) until TASK-081 binds the PDP. */
+  /** Who may write through the HTTP API. The served app binds the PDP (pdpWriteAuthorizer, TASK-081); unwiredDeps() keeps denyAll. */
   authorizer: WriteAuthorizer
   log: Logger
   /** The bounded tenant.host.rejected emitter (TRD-076, G6). */
   hostRejection: HostRejectionLog
+  /** The resolved customer's kernel database (TASK-081 authz): tenant-store pool, role k_<hex>_app. Absent = authz routes answer 503. */
+  kernelDb?: (tenant: TenantRow) => Promise<Sql>
 }
 
 export class NotWiredError extends Error {

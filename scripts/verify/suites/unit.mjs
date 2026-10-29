@@ -305,6 +305,10 @@ export const UNIT_PARTS = {
   // TASK-077 (G4): the kernel API service (services/*, not packages/*). Its
   // database half is `test:integration` (one named scratch PostgreSQL 18), not a
   // unit part.
+  // TASK-081 (G5): the PDP client's unit suite (HTTP only; server-only boundary scan).
+  'authz-client': (root) => [
+    vitestSubcheck({ cwd: path.join(root, 'packages', 'authz-client'), testScript: 'test', root, label: '@gremion/authz-client vitest (test)' }),
+  ],
   'kernel-api': (root) => [
     vitestSubcheck({ cwd: path.join(root, 'services', 'kernel-api'), testScript: 'test', root, label: '@gremion/kernel-api vitest (test)' }),
   ],

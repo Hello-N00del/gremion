@@ -537,7 +537,30 @@
       "command": "pnpm run test:integration",
       "timeoutMs": 600000,
       "requiresStack": true,
-      "testGlobs": ["services/kernel-api/test/**/*.int.test.ts"]
+      "testGlobs": ["services/kernel-api/test/**/*.int.test.ts"],
+      "excludeGlobs": ["services/kernel-api/test/authz/**"]
+    },
+    {
+      "id": "kernel-kernel-api-authz-integration",
+      "repo": "kernel",
+      "category": "integration",
+      "cwd": "services/kernel-api",
+      "kind": "vitest",
+      "command": "pnpm run test:authz-int",
+      "timeoutMs": 600000,
+      "requiresStack": true,
+      "testGlobs": ["services/kernel-api/test/authz/**/*.int.test.ts"]
+    },
+    {
+      "id": "kernel-authz-client-unit",
+      "repo": "kernel",
+      "category": "unit",
+      "cwd": "packages/authz-client",
+      "kind": "vitest",
+      "command": "pnpm run test",
+      "timeoutMs": 600000,
+      "requiresStack": false,
+      "testGlobs": ["packages/authz-client/test/**/*.test.ts"]
     },
     {
       "id": "kernel-tenancy-core-unit",

@@ -7,7 +7,7 @@ import { peopleOps } from './people.ts'
 import { structureOps } from './structure.ts'
 
 export interface BodiesServiceOptions {
-  /** Default deny: pass denyAll (the shipped HTTP binding) or operatorAuthorizer (the operator verbs). */
+  /** Default deny: pass pdpWriteAuthorizer (the served HTTP binding) or operatorAuthorizer (the operator verbs). */
   authorizer: WriteAuthorizer
 }
 

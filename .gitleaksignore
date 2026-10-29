@@ -1,0 +1,4 @@
+# Migration checksum manifests (sha256 of the .sql file), not credentials: generic-api-key
+# fires on the 'authz' key name. Fingerprints, so any other finding still fails.
+53351d3f40abfbe934e63d3f226a597299273094:services/kernel-api/migrations/authz/manifest.json:generic-api-key:3
+53351d3f40abfbe934e63d3f226a597299273094:scripts/migrations/applied.lock.json:generic-api-key:33

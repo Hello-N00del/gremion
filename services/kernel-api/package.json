@@ -13,6 +13,7 @@
     "build": "node esbuild.config.mjs",
     "test": "vitest run",
     "test:integration": "node test/harness/stack.mjs",
+    "test:authz-int": "node test/authz/stack.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {

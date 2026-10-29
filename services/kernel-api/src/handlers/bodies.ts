@@ -12,7 +12,7 @@
 //   * none of these operations is on MODULE_CALLER_OPERATIONS, so a module
 //     caller is refused 403 by the tenancy hook before a handler runs;
 //   * no write exists over HTTP but the own preference: every other write is the
-//     domain service's, behind the WriteAuthorizer (denyAll until TASK-081).
+//     domain service's, behind the WriteAuthorizer (the PDP, TASK-081).
 import type { OperationHandler } from '@gremion/fastify-service-template'
 import { sendProblem } from '@gremion/fastify-service-template'
 import type { FastifyReply, FastifyRequest } from 'fastify'
