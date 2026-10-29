@@ -12,6 +12,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
+import { bindRefusesMissingHostDir } from './compose-edge.mjs'
 import {
   PLACEMENT,
   limitsViolations,
@@ -529,7 +530,7 @@ test('real renders: kernel-api-migrate is a profile-gated one-shot on the kernel
     assert.equal(mount.type, 'bind', `${colour}: dump dir must be a host bind, not ${mount.type}`)
     assert.equal(mount.source, dump, `${colour}: host and container path must be the same`)
     assert.ok(!mount.read_only, `${colour}: the dump dir must be writable`)
-    assert.equal(mount.bind?.create_host_path, false, `${colour}: a missing host dir must fail, not be created root-owned`)
+    assert.ok(bindRefusesMissingHostDir(mount), `${colour}: a missing host dir must fail, not be created root-owned (rendered bind: ${JSON.stringify(mount.bind)})`)
     const tmpTargets = (m.tmpfs ?? []).map((x) => String(x).split(':')[0]).concat((m.volumes ?? []).filter((v) => v.type === 'tmpfs').map((v) => v.target))
     assert.ok(!tmpTargets.includes(dump), `${colour}: dump dir is still a tmpfs`)
     assert.equal(m.read_only, true)
