@@ -37,3 +37,11 @@ setup() {
     sus="$(grep -n 'tenant suspend "$X"' <<< "$body" | head -1 | cut -d: -f1)"
     [ -n "$base" ] && [ -n "$sus" ] && [ "$base" -lt "$sus" ]
 }
+
+@test "the proof's own node fixtures pass (panel-session sign-in incl. gremion-ui's disabled Auth.js CSRF, #50)" {
+    command -v node >/dev/null || skip "node not on PATH"
+    mkdir -p "$REPO_ROOT/.scratch"
+    run node --test "$REPO_ROOT/test/host/fixtures/customer-provision/panel-session-signin.test.mjs" "$REPO_ROOT/test/host/fixtures/customer-provision/panel-session.test.mjs"
+    [ "$status" -eq 0 ] || { printf '%s\n' "$output" | tail -30; return 1; }
+    [[ "$output" =~ pass\ ([0-9]+) ]] && [ "${BASH_REMATCH[1]}" -ge 18 ]
+}
