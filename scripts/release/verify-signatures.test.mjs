@@ -147,7 +147,7 @@ exit 0`)
     // A PATH that still has bash/jq/git-shim/docker-shim but no cosign.
     const bin = join(h.tmp, `nocosign-${caseNo}`)
     mkdirSync(bin, { recursive: true })
-    for (const tool of ['jq', 'df', 'awk', 'sed', 'grep', 'tr', 'wc', 'date', 'mkdir', 'cat', 'cp', 'rm', 'dirname', 'mktemp', 'sort', 'uniq', 'head', 'cut', 'env', 'bash', 'mv', 'chmod', 'ln', 'readlink', 'basename', 'tail', 'printf']) {
+    for (const tool of ['jq', 'df', 'awk', 'sed', 'grep', 'tr', 'wc', 'date', 'mkdir', 'cat', 'cp', 'rm', 'dirname', 'mktemp', 'sort', 'uniq', 'head', 'cut', 'env', 'bash', 'mv', 'chmod', 'ln', 'readlink', 'basename', 'tail', 'printf', 'flock']) {
       const w = sh('bash', ['-c', `command -v ${tool}`]).stdout.trim()
       if (w) sh('ln', ['-s', w, join(bin, tool)])
     }
