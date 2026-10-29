@@ -477,3 +477,41 @@ toggles and the operator's account details. They belong to one deployment, not
 to the distribution, and they live in that operator's private runbook and in
 the host's own `etc/env/*.env`. `test/host/no-host-literals.bats` fails the
 build if any of them appears in this repository.
+
+## 9. Two stacks on one Docker daemon
+
+Several stacks (a proof stack, a second kernel unit, a consumer env) may share
+one Docker daemon **only because the edge Traefik is constrained to its own
+stack**. Its docker provider reads the whole daemon through the socket proxy;
+`docker/traefik/traefik.yml` therefore carries
+
+    constraints: "Label(`org.gremion.stack`,`@STACK@`)"
+
+(`@STACK@` is rendered from the traefik container's `STACK` at start-up, with
+the same empty/metacharacter refusal as the other markers) and **every
+container that carries a `traefik.*` label also carries
+`org.gremion.stack=${STACK}`**: the state tier's keycloak, legal, fallback and
+traefik containers, the app colours, the standalone control panel
+(`PANEL_STACK` = the `STACK` of the edge Traefik that routes it) and every
+fixture overlay that adds a router. Router and middleware names are unchanged
+and stay stack-local.
+
+Without the constraint, two stacks load each other's routers and middlewares;
+identical names (`hsts`, `kc-admin-allowlist`, `gremion-ui*`, `edge-*`) collide,
+Traefik drops the conflicting definitions and disables every router that uses
+them, and the **other stack answers 404** (incident 2026-10-29: a proof stack
+run beside a live stack took the live stack's routes down). The constraint is also the
+reason the routed containers of a different stack are invisible rather than
+merely unused.
+
+Rules for a host that runs more than one stack:
+
+- Two stacks never share a `STACK` value; the value is the isolation key.
+- A Traefik that predates this constraint (an unmirrored consumer tree) must not
+  run beside another stack until it has it.
+- Watch the live stack while anything else runs beside it (a health request in
+  the same monitor loop), not only the experiment.
+
+`make lint-traefik-stack-scope` (`scripts/check-traefik-stack-scope.mjs`) fails
+the build when a service with a `traefik.*` label lacks the label, or when
+`traefik.yml` lacks the constraint.
