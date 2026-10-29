@@ -59,6 +59,7 @@
 # mail server carries a self-signed certificate for mail.<PLATFORM_DOMAIN>
 # instead of the [acme] block, and Keycloak's truststore names it.
 #
+#
 # Every assertion reads a post-condition (docker inspect, docker stats, a TCP
 # connect, a database row), never an exit code alone. Zero containers, zero
 # probe targets, a failed positive control, an unclassified project or an
@@ -110,6 +111,15 @@ command -v jq >/dev/null || die "jq not on PATH"
 
 is_scratch() { [[ "$STACK" == t040-* ]]; }
 require_scratch() { is_scratch || die "phase '$1' brings resources up or down and runs only on a t040-* scratch stack (STACK=$STACK)"; }
+
+# precreate_bind_dirs -- every host directory a compose file bind-mounts, made
+# HERE by the invoking user. A missing bind source is created by the Docker
+# daemon, root-owned, before customer-layout can (docker-compose.app.yml mounts
+# etc/secrets/control-panel, etc/secrets/tenant-create and data/module-exports;
+# the edge file provider reads etc/edge).
+precreate_bind_dirs() {
+    mkdir -p "$SROOT/etc/edge" "$SROOT/secrets/tenants" "$SROOT/etc/secrets/control-panel"              "$SROOT/etc/secrets/tenant-create" "$SROOT/data/module-exports"
+}
 
 # compose <project-suffix> <args...> -- the host's own command shape:
 # `docker compose --env-file <project>.env <verb>` from the project's directory.
@@ -502,7 +512,8 @@ skip { next }
 
 phase_prepare() {
     require_scratch prepare
-    mkdir -p "$ENV_DIR" "$SROOT/etc/edge" "$SROOT/secrets/tenants" "$OUT/ledger"
+    mkdir -p "$ENV_DIR" "$SROOT" "$OUT/ledger"
+    precreate_bind_dirs
 
     # Subnets: a dedicated 10.231.0.0/16 and fd5a:231::/48, refused if taken.
     local taken
@@ -1167,6 +1178,8 @@ run_phase() {
     esac
 }
 
+# sourced (test/host/pooled-stack-proof.bats unit-tests the helpers): stop here
+[[ "${BASH_SOURCE[0]}" == "$0" ]] || return 0
 [[ $# -gt 0 ]] || set -- all
 PHASES="$*"   # recorded before the loop below shifts the arguments away
 info "STACK=${STACK} scope=${SCOPE} ledger=${OUT}/ledger"

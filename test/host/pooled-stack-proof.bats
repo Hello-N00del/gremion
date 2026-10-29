@@ -318,6 +318,32 @@ assert_env_files_resolve() {
     [ ! -f "${POOLED_OUT}/ledger/trd440-before.txt.part" ]
 }
 
+# ── Linux-vs-Docker-Desktop drift (r33g-proofsh) ─────────────────────────────
+# Defects a real Linux host hit: MAIL_TRANSPORT never rendered, host-gateway is
+# docker0 (not loopback), the ops binds collide with another ops stack, the
+# bind-mounted dirs were created root-owned by the daemon, teardown left a stale
+# scratch root, aux-up ran --pull never against images that were not local.
+
+@test "precreate_bind_dirs: the app's bind sources exist, owned by the invoking user, before any container" {
+    export SROOT="${BATS_TEST_TMPDIR}/sroot"
+    run bash -c 'set -euo pipefail; . "$1"; SROOT="$2"; precreate_bind_dirs' _ "$PROOF" "$SROOT"
+    [ "$status" -eq 0 ]
+    local d
+    for d in etc/secrets/control-panel etc/secrets/tenant-create data/module-exports etc/edge; do
+        [ -d "${SROOT}/${d}" ] || { echo "missing ${d}" >&2; return 1; }
+        [ -O "${SROOT}/${d}" ] || { echo "${d} not owned by the invoking user" >&2; return 1; }
+    done
+}
+
+@test "precreate_bind_dirs: every etc/secrets or data/ bind source docker-compose.app.yml names is pre-created" {
+    local want src
+    want="$(sed -n 's#.*GREMION_ROOT:-/opt/gremion}/\(etc/secrets/[a-z-]*\|data/[a-z-]*\)[:/].*#\1#p' "${REPO_ROOT}/docker-compose.app.yml" | tr -d '\r' | sort -u)"
+    [ -n "$want" ]
+    for src in $want; do
+        grep -qF "/${src}\"" "$PROOF" || { echo "prepare does not pre-create ${src}" >&2; return 1; }
+    done
+}
+
 teardown() {
     [[ -z "${IN_REPO_OUT:-}" ]] || rm -rf "$IN_REPO_OUT"
 }
