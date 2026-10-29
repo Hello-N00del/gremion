@@ -949,6 +949,28 @@ step_12c_soak() {
     fi
 }
 
+# One host operation at a time. deploy.yml's concurrency group used to keep two
+# deploys apart; the deploy is now started by hand on the host (or by
+# gremion-hostd), so it takes the lock gremion-hostd takes for its mutating
+# verbs, as gremion-backup and gremion-tenant do. gremion-hostd already holds it
+# for the deploy it starts and says so (GREMION_HOST_LOCK_HELD=1). Non-blocking:
+# a second deploy is `busy` (exit 3), never a queue. The lock belongs to the open
+# fd 9, which every child inherits, so it lasts as long as the run and no
+# longer: a crash or a kill releases it, there is no lock file to clean up.
+acquire_host_lock() {
+    local lock
+    if [[ "${GREMION_HOST_LOCK_HELD:-}" != 1 ]]; then
+        need_cmd flock
+        lock="$ROOT/runtime/hostd.lock"
+        exec 9>>"$lock" || die "cannot open the host lock: ${lock}" 2
+        flock -n 9 \
+            || die "busy: another host operation is running (lock ${lock}); retry when it has finished" 3
+    fi
+    # what this run starts (gremion-switch, gremion-verify, ...) must not queue behind it
+    GREMION_HOST_LOCK_HELD=1
+    export GREMION_HOST_LOCK_HELD
+}
+
 main() {
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -974,6 +996,7 @@ main() {
     ROOT="$(gremion_root)"
     [[ -d "$ROOT" ]] || die "gremion root absent: $ROOT" 2
     mkdir -p "$ROOT/runtime" "$ROOT/releases"
+    acquire_host_lock
     DEPLOY_LOG="$ROOT/runtime/deploy.log"
     load_env "$ROOT/etc/env/state.env"
 

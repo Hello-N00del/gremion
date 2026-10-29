@@ -1734,3 +1734,52 @@ exit 0
     [[ "$output" == *"docker-compose.state-pins.yml"*"symlink"* ]]
     [ "$(grep -c 'compose .* pull' "$SHIM_LOG")" -eq 0 ]
 }
+
+# ---------------------------------------------------------------------------
+# One deploy at a time (#47 residual). deploy.yml's concurrency group is gone and
+# the deploy is a manual operator step, so gremion-deploy takes the host lock
+# itself, exactly as gremion-backup and gremion-tenant do: non-blocking, busy
+# (exit 3) when held, and held by an fd, so it cannot outlive the process.
+# ---------------------------------------------------------------------------
+
+@test "gremion-deploy started while another host operation holds the lock is busy (exit 3), before the token is spent" {
+    stub_all
+    hold_host_lock 20
+    run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
+    [ "$status" -eq 3 ] || { echo "status ${status}: ${output}" >&2; return 1; }
+    [[ "$output" == *"busy: another host operation is running"* ]]
+    [[ "$output" == *"runtime/hostd.lock"* ]]
+    refute_recorded docker "login"
+    [ ! -d "${GREMION_ROOT}/releases/dist-v1.2.3" ]
+}
+
+@test "gremion-deploy started by gremion-hostd (lock already held by its parent) does not queue behind it" {
+    stub_all
+    hold_host_lock 20
+    GREMION_HOST_LOCK_HELD=1 run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
+    [[ "$output" != *"busy"* ]] || { echo "$output" >&2; return 1; }
+    assert_recorded docker "login ghcr.io"
+}
+
+@test "gremion-deploy holds the host lock while it runs, and a SIGKILL leaves no stale lock behind" {
+    command -v flock >/dev/null 2>&1 || skip "flock (util-linux) is not installed"
+    stub_all
+    local ready="${BATS_TEST_TMPDIR}/login-reached" lock="${GREMION_ROOT}/runtime/hostd.lock"
+    # docker login parks the deploy mid-run. The shim drops its inherited fd 9
+    # first, so the deploy process is the only holder and the kill is what ends it.
+    shim docker "exec 9>&-
+case \"\$1\" in login) echo \$\$ > '${ready}'; exec sleep 30 ;; esac
+exit 0"
+    printf 'TOKEN t\n' > "${BATS_TEST_TMPDIR}/token"
+    "$DEPLOY" dist-v1.2.3 < "${BATS_TEST_TMPDIR}/token" >/dev/null 2>&1 3>&- &
+    local pid=$! i
+    for i in $(seq 1 100); do [[ -s "$ready" ]] && break; sleep 0.1; done
+    [[ -s "$ready" ]] || { kill -9 "$pid" 2>/dev/null; echo "the deploy never reached docker login" >&2; return 1; }
+    # while it runs the lock is taken
+    if flock -n "$lock" true; then kill -9 "$pid" "$(cat "$ready")"; echo "the host lock was free during the deploy" >&2; return 1; fi
+    kill -9 "$pid"
+    wait "$pid" 2>/dev/null || true
+    kill "$(cat "$ready")" 2>/dev/null || true
+    # and once the process is gone, so is the lock: no pid file, no stale lock dir
+    flock -n "$lock" true
+}

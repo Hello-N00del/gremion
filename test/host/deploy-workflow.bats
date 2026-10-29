@@ -985,7 +985,6 @@ run_cut() {
         [[ "$output" == *"cut-dist-tag: COSIGN_PASSWORD is in the environment"* ]]
         # how to supply it instead
         [[ "$output" == *"COSIGN_PASSWORD_FILE=<file>"* ]]
-        [[ "$output" == *"let cosign prompt"* ]]
         # the password is never echoed back
         [[ "$output" != *"$CUT_SECRET"* ]]
     done
@@ -1023,26 +1022,82 @@ run_cut() {
     unset COSIGN_PASSWORD_FILE
     run bash "$CUT" 1.0.0 --run-id 42 --overlap true --dist-manifest "$DIST_MANIFEST" --first-release < /dev/null
     [ "$status" -eq 1 ]
-    [[ "$output" == *"no password for the cosign key"* ]]
+    [[ "$output" == *"COSIGN_PASSWORD_FILE is not set"* ]]
     [[ "$output" == *"COSIGN_PASSWORD_FILE=<file>"* ]]
     refute_recorded gh ""
     assert_cut_changed_nothing
 }
 
-@test "cut-dist-tag.sh with no password file on a terminal leaves COSIGN_PASSWORD unset, so cosign prompts" {
-    require_proc
+@test "cut-dist-tag.sh with no password file refuses on a terminal too: cosign's prompt would be hidden (#47 residual)" {
     command -v script >/dev/null || skip "script (util-linux) is not installed"
+    make_cut_repo
+    shim_cut_tools
+    shim_cut_gh
+    export COSIGN_KEY_PATH="$DIST_MANIFEST"
+    unset COSIGN_PASSWORD_FILE
+    # a pty on stdin: the script runs as it would in the operator's terminal.
+    # sign-release.sh captures cosign's stderr, where the prompt goes, and runs
+    # cosign once per image and step, so a prompt can never be answered there.
+    run script -qec "bash '${CUT}' 1.0.0 --run-id 42 --overlap true --dist-manifest '${DIST_MANIFEST}' --first-release" /dev/null
+    [ "$status" -eq 1 ] || { echo "status ${status}: ${output}" >&2; return 1; }
+    [[ "$output" == *"COSIGN_PASSWORD_FILE is not set"* ]]
+    refute_recorded gh ""
+    assert_cut_changed_nothing
+}
+
+@test "sign-release.sh refuses to start with COSIGN_PASSWORD unset, rather than hang on a cosign prompt it hides (#47 residual)" {
+    local t
+    for t in cosign docker jq node; do shim "$t"; done
+    run env -u COSIGN_PASSWORD bash "${PROJECT_ROOT}/scripts/release/sign-release.sh" \
+        --key "${BATS_TEST_TMPDIR}/no.key" "ghcr.io/hello-n00del/gremion-ui@sha256:${GOOD_DIGEST_A}"
+    [ "$status" -eq 1 ] || { echo "status ${status}: ${output}" >&2; return 1; }
+    [[ "$output" == *"sign-release: COSIGN_PASSWORD is not set"* ]]
+    refute_recorded cosign ""
+    refute_recorded docker ""
+}
+
+@test "cut-dist-tag.sh does not take a dist tag a failed run left in this clone for the previous release (#47 residual)" {
     make_cut_repo
     make_cut_signing_key
     shim_cut_tools
     shim_cut_gh
     export COSIGN_KEY_PATH="$DIST_MANIFEST"
-    unset COSIGN_PASSWORD_FILE
-    # a pty on stdin: the script runs as it would in the operator's terminal
-    run script -qec "bash '${CUT}' 1.0.0 --run-id 42 --overlap true --dist-manifest '${DIST_MANIFEST}' --first-release" /dev/null
+    # a run that tagged dist-v0.9.0 here and then failed before the push
+    git -C "$CUT_REPO" tag -a dist-v0.9.0 -m dist-v0.9.0
+    run_cut 1.0.0 --run-id 42 --overlap true --dist-manifest "$DIST_MANIFEST" --first-release
     [ "$status" -eq 0 ] || { echo "$output" >&2; return 1; }
-    grep -q '^sign-release pw=unset ' "$ENV_LOG" || { cat "$ENV_LOG" >&2; return 1; }
-    grep -qx 'probe sign-release.sh env=0 ppid=0 vars=0' "$ENV_LOG"
+    [ "$(git -C "$CUT_ORIGIN" show dist-v1.0.0:release.json | jq -c .migrations)" = '["001_a","002_b"]' ]
+}
+
+@test "cut-dist-tag.sh names a same-name tag a failed run left in this clone, and how to clear it (#47 residual)" {
+    make_cut_repo
+    shim_cut_tools
+    shim_cut_gh
+    export COSIGN_KEY_PATH="$DIST_MANIFEST"
+    git -C "$CUT_REPO" tag -a dist-v1.0.0 -m dist-v1.0.0
+    run_cut 1.0.0 --run-id 42 --overlap true --dist-manifest "$DIST_MANIFEST" --first-release
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"tag dist-v1.0.0 exists in this clone but not on origin"* ]]
+    [[ "$output" == *"git tag -d dist-v1.0.0"* ]]
+    refute_recorded gh ""
+}
+
+@test "cut-dist-tag.sh does not count a v* tag that exists only in this clone as provenance (#47 residual)" {
+    make_cut_repo
+    shim_cut_tools
+    shim_cut_gh
+    export COSIGN_KEY_PATH="$DIST_MANIFEST"
+    git -C "$CUT_REPO" checkout -q --detach "$FAKE_SHA"
+    git -C "$CUT_REPO" commit -q --allow-empty -m 'unreviewed, tagged locally only'
+    local side
+    side="$(git -C "$CUT_REPO" rev-parse HEAD)"
+    git -C "$CUT_REPO" tag -a v9.9.9 -m v9.9.9
+    git -C "$CUT_REPO" checkout -q main
+    printf '%s\n' "$side" > "${ARTEFACT}/release-sha.txt"
+    FAKE_SHA="$side" run_cut 1.2.3 --run-id 42 --overlap true --dist-manifest "$DIST_MANIFEST" --first-release
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"commit ${side} is neither on origin/main nor the commit of a v*/rc-v* tag"* ]]
+    assert_cut_changed_nothing
 }
 
 @test "the /proc probe of the credential tests sees a password that was merely unset" {

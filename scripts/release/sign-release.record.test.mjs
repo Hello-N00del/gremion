@@ -80,7 +80,8 @@ const PROBE_REF = 'registry.example.invalid/gremion-ui:tag'
 function sign(r) {
   const res = run('bash', [join(r, 'scripts/release/sign-release.sh'), '--key', keyFile, PROBE_REF], {
     cwd: r,
-    env: { ...process.env, PATH: `${bin}${delimiter}${process.env.PATH}` },
+    // set (empty: the probe key has no password): unset is refused before anything else (#47 residual)
+    env: { ...process.env, COSIGN_PASSWORD: '', PATH: `${bin}${delimiter}${process.env.PATH}` },
   })
   return { ...res, out: `${res.stdout}\n${res.stderr}` }
 }
