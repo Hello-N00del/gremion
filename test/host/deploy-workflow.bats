@@ -481,32 +481,114 @@ resolve_ref_at() {
 # cut-dist-tag.sh -- operator workstation only; stubs on PATH, never a key
 # ---------------------------------------------------------------------------
 
+GOOD_DIGEST_A=1111111111111111111111111111111111111111111111111111111111111111
+GOOD_DIGEST_B=2222222222222222222222222222222222222222222222222222222222222222
+
 # A throwaway clone that holds a copy of the script at the path it expects, so
 # its repository root (derived from its own location) is the throwaway and the
-# dirty-tree check never looks at the real working tree.
+# dirty-tree check never looks at the real working tree. It has a bare origin
+# (the script fetches tags and main from it and pushes the tag to it) and the
+# few files the script reads or runs at the built commit; the heavy ones
+# (lint, signing, the tag check) are recording stubs. FAKE_SHA is the seed
+# commit, which is main's tip on origin.
 make_cut_repo() {
+    CUT_ORIGIN="${BATS_TEST_TMPDIR}/cut-origin.git"
     CUT_REPO="${BATS_TEST_TMPDIR}/cut-repo"
-    mkdir -p "${CUT_REPO}/scripts/release"
+    git init -q --bare -b main "$CUT_ORIGIN"
+    mkdir -p "${CUT_REPO}/scripts/release" "${CUT_REPO}/scripts/migrations"
     git -C "$CUT_REPO" init -q -b main
     git -C "$CUT_REPO" config user.email 'plan@example.org'
     git -C "$CUT_REPO" config user.name 'plan'
     git -C "$CUT_REPO" config core.autocrlf false
+    git -C "$CUT_REPO" config commit.gpgsign false
+    git -C "$CUT_REPO" remote add origin "$CUT_ORIGIN"
     cp "$CUTTAG" "${CUT_REPO}/scripts/release/cut-dist-tag.sh"
+    printf '{"chains":[{"files":{"001_a":"x","002_b":"y"}}]}\n' > "${CUT_REPO}/scripts/migrations/applied.lock.json"
+    printf '#!/usr/bin/env bash\nexit 0\n' > "${CUT_REPO}/scripts/release/lint-release.sh"
+    printf '#!/usr/bin/env bash\nexit 0\n' > "${CUT_REPO}/scripts/release/release-tag-check.sh"
+    # What sign-release.sh sees of the environment is the whole point of the
+    # credential test: it is the one child that may hold the key and password.
+    # shellcheck disable=SC2016
+    printf '#!/usr/bin/env bash\nprintf "sign-release pw=%%s key=%%s args=%%s\\n" "${COSIGN_PASSWORD-unset}" "${COSIGN_KEY_PATH-unset}" "$*" >> "$ENV_LOG"\n' \
+        > "${CUT_REPO}/scripts/release/sign-release.sh"
     git -C "$CUT_REPO" add -A
     git -C "$CUT_REPO" commit -q -m 'seed'
+    git -C "$CUT_REPO" push -q -u origin main
+    FAKE_SHA="$(git -C "$CUT_REPO" rev-parse HEAD)"
     CUT="${CUT_REPO}/scripts/release/cut-dist-tag.sh"
     DIST_MANIFEST="${BATS_TEST_TMPDIR}/dist.json"
     printf '{}\n' > "$DIST_MANIFEST"
-    export CUT_REPO CUT DIST_MANIFEST
+    ENV_LOG="${BATS_TEST_TMPDIR}/env.log"
+    : > "$ENV_LOG"
+    ARTEFACT="${BATS_TEST_TMPDIR}/artefact"
+    write_artefact
+    export CUT_ORIGIN CUT_REPO CUT FAKE_SHA DIST_MANIFEST ENV_LOG ARTEFACT
 }
 
-# Every tool the script checks for, shimmed: the refusals under test happen
-# before any of them is used, and a stub that was called would be in the log.
+# The files the run's release-pins-<sha> artefact holds: both layers as
+# emit-pins.mjs writes them, and release-sha.txt. A test rewrites one to plant
+# a defect.
+write_artefact() {
+    mkdir -p "$ARTEFACT"
+    printf '# docker-compose.pins.yml: the release pins layer (app services), written by\n# scripts/release/emit-pins.mjs and judged by scripts/release/check-pins.mjs.\nservices:\n  gremion-ui:\n    build: !reset null\n    image: ghcr.io/hello-n00del/gremion-ui@sha256:%s\n  migrate:\n    build: !reset null\n    image: ghcr.io/hello-n00del/gremion-migrate@sha256:%s\n' \
+        "$GOOD_DIGEST_A" "$GOOD_DIGEST_B" > "${ARTEFACT}/docker-compose.pins.yml"
+    printf '# docker-compose.state-pins.yml: the release pins layer (state services), written by\n# scripts/release/emit-pins.mjs and judged by scripts/release/check-pins.mjs.\nservices:\n  legal:\n    build: !reset null\n    image: ghcr.io/hello-n00del/gremion-legal@sha256:%s\n' \
+        "$GOOD_DIGEST_A" > "${ARTEFACT}/docker-compose.state-pins.yml"
+    printf '%s\n' "$FAKE_SHA" > "${ARTEFACT}/release-sha.txt"
+}
+
+# Every tool the script checks for, shimmed (jq stays real: the script computes
+# release.json with it). The refusals under test happen before most of them
+# are used, and a stub that was called would be in the log.
 shim_cut_tools() {
     local t
-    for t in gh cosign jq node make; do
+    for t in gh cosign make; do
         shim "$t"
     done
+    # node is the check-pins / check-record calls: it records and can be told
+    # to refuse check-pins.
+    # shellcheck disable=SC2016
+    shim node 'printf "node COSIGN_PASSWORD=%s COSIGN_KEY_PATH=%s\n" "${COSIGN_PASSWORD-unset}" "${COSIGN_KEY_PATH-unset}" >> "$ENV_LOG"
+case "$*" in *check-pins.mjs*) exit "${CHECKPINS_RC:-0}" ;; esac'
+}
+
+# The four questions the script asks gh, answered from the environment of the
+# test: RUN_PATH / RUN_CONCLUSION / RUN_HEAD / RUN_HEAD_REPO describe the run,
+# FAKE_SHA the built commit, ARTEFACT the files "downloaded".
+shim_cut_gh() {
+    # shellcheck disable=SC2016
+    shim gh 'printf "gh COSIGN_PASSWORD=%s COSIGN_KEY_PATH=%s\n" "${COSIGN_PASSWORD-unset}" "${COSIGN_KEY_PATH-unset}" >> "$ENV_LOG"
+case "$*" in
+  "api "*"/artifacts"*) echo "release-pins-$FAKE_SHA" ;;
+  "api "*"/actions/runs/"*)
+    printf "%s\t%s\t%s\t%s\t%s\n" "${RUN_PATH:-.github/workflows/release-images.yml}" "${RUN_CONCLUSION:-success}" "${RUN_HEAD:-$FAKE_SHA}" "${RUN_HEAD_REPO:-o/r}" "o/r" ;;
+  "run download "*)
+    dest=""
+    while [ $# -gt 0 ]; do if [ "$1" = -D ]; then dest="$2"; fi; shift; done
+    mkdir -p "$dest"
+    cp -R "$ARTEFACT"/. "$dest"/ ;;
+esac'
+}
+
+# A signing key the throwaway repository can sign the tag with.
+make_cut_signing_key() {
+    command -v ssh-keygen >/dev/null || skip "ssh-keygen not installed"
+    ssh-keygen -q -t ed25519 -N '' -C plan -f "${BATS_TEST_TMPDIR}/tagkey" > /dev/null
+    git -C "$CUT_REPO" config user.signingkey "${BATS_TEST_TMPDIR}/tagkey"
+}
+
+# After a refusal nothing in the clone moved and nothing was signed.
+assert_cut_changed_nothing() {
+    [ "$(git -C "$CUT_REPO" rev-parse HEAD)" = "$FAKE_SHA" ]
+    [ "$(git -C "$CUT_REPO" branch --show-current)" = main ]
+    [ ! -e "${CUT_REPO}/release.json" ]
+    [ ! -e "${CUT_REPO}/docker-compose.pins.yml" ]
+    refute_recorded cosign ""
+    [ ! -s "$ENV_LOG" ] || ! grep -q '^sign-release' "$ENV_LOG"
+}
+
+run_cut() {
+    run bash "$CUT" "$@"
 }
 
 @test "cut-dist-tag.sh is shellcheck-clean, as is release-tag-check.sh" {
@@ -536,10 +618,10 @@ shim_cut_tools() {
     make_cut_repo
     shim_cut_tools
     export COSIGN_KEY_PATH="$DIST_MANIFEST"
-    run bash "$CUT" 1.2 --run-id 1 --overlap true --dist-manifest "$DIST_MANIFEST"
+    run_cut 1.2 --run-id 1 --overlap true --dist-manifest "$DIST_MANIFEST"
     [ "$status" -eq 2 ]
     [[ "$output" == *"not a version"* ]]
-    run bash "$CUT" 1.2.3 --overlap true --dist-manifest "$DIST_MANIFEST"
+    run_cut 1.2.3 --overlap true --dist-manifest "$DIST_MANIFEST"
     [ "$status" -eq 2 ]
     [[ "$output" == *"usage:"* ]]
 }
@@ -547,8 +629,9 @@ shim_cut_tools() {
 @test "cut-dist-tag.sh refuses when COSIGN_KEY_PATH is unset, before any network call" {
     make_cut_repo
     shim_cut_tools
+    shim_cut_gh
     unset COSIGN_KEY_PATH
-    run bash "$CUT" 1.2.3 --run-id 1 --overlap true --dist-manifest "$DIST_MANIFEST"
+    run_cut 1.2.3 --run-id 1 --overlap true --dist-manifest "$DIST_MANIFEST"
     [ "$status" -eq 1 ]
     [[ "$output" == *"COSIGN_KEY_PATH is not set"* ]]
     refute_recorded gh ""
@@ -557,8 +640,9 @@ shim_cut_tools() {
 @test "cut-dist-tag.sh refuses a COSIGN_KEY_PATH that is not a readable file" {
     make_cut_repo
     shim_cut_tools
+    shim_cut_gh
     export COSIGN_KEY_PATH="${BATS_TEST_TMPDIR}/no-such-key"
-    run bash "$CUT" 1.2.3 --run-id 1 --overlap true --dist-manifest "$DIST_MANIFEST"
+    run_cut 1.2.3 --run-id 1 --overlap true --dist-manifest "$DIST_MANIFEST"
     [ "$status" -eq 1 ]
     [[ "$output" == *"COSIGN_KEY_PATH is not a readable file"* ]]
     refute_recorded gh ""
@@ -567,9 +651,10 @@ shim_cut_tools() {
 @test "cut-dist-tag.sh refuses a dirty working tree, before any network call" {
     make_cut_repo
     shim_cut_tools
+    shim_cut_gh
     export COSIGN_KEY_PATH="$DIST_MANIFEST"
     printf 'stray\n' > "${CUT_REPO}/stray.txt"
-    run bash "$CUT" 1.2.3 --run-id 1 --overlap true --dist-manifest "$DIST_MANIFEST"
+    run_cut 1.2.3 --run-id 1 --overlap true --dist-manifest "$DIST_MANIFEST"
     [ "$status" -eq 1 ]
     [[ "$output" == *"working tree is not clean"* ]]
     refute_recorded gh ""
@@ -578,46 +663,80 @@ shim_cut_tools() {
 @test "cut-dist-tag.sh refuses a pins artefact holding an image that is not a digest, and changes nothing" {
     make_cut_repo
     shim_cut_tools
+    shim_cut_gh
     export COSIGN_KEY_PATH="$DIST_MANIFEST"
-    export FAKE_SHA=0123456789abcdef0123456789abcdef01234567
-    # gh answers the four questions the script asks, and "downloads" a layer
-    # that pins one image by tag.
-    shim gh '
-case "$*" in
-  "run view "*"--json conclusion"*) echo success ;;
-  "run view "*"--json headSha"*) echo "$FAKE_SHA" ;;
-  "api "*) echo "release-pins-$FAKE_SHA" ;;
-  "run download "*)
-    dest=""
-    while [ $# -gt 0 ]; do if [ "$1" = -D ]; then dest="$2"; fi; shift; done
-    mkdir -p "$dest"
-    printf "services:\n  gremion-ui:\n    build: !reset null\n    image: ghcr.io/hello-n00del/gremion-ui:latest\n" > "$dest/docker-compose.pins.yml"
-    printf "services:\n  legal:\n    build: !reset null\n    image: ghcr.io/hello-n00del/gremion-legal@sha256:0000000000000000000000000000000000000000000000000000000000000000\n" > "$dest/docker-compose.state-pins.yml"
-    printf "%s\n" "$FAKE_SHA" > "$dest/release-sha.txt"
-    ;;
-esac'
-    local before
-    before="$(git -C "$CUT_REPO" rev-parse HEAD)"
-    run bash "$CUT" 1.2.3 --run-id 42 --overlap false --dist-manifest "$DIST_MANIFEST"
+    sed -i 's#gremion-ui@sha256:[0-9a-f]*#gremion-ui:latest#' "${ARTEFACT}/docker-compose.pins.yml"
+    run_cut 1.2.3 --run-id 42 --overlap false --dist-manifest "$DIST_MANIFEST"
     [ "$status" -eq 1 ]
-    [[ "$output" == *"not a first-party digest reference"* ]]
+    [[ "$output" == *"not a first-party digest reference"* ]] || { echo "$output" >&2; return 1; }
     [[ "$output" == *"gremion-ui:latest"* ]]
-    # Nothing in the clone moved: no checkout, no pins copied, no release.json.
-    [ "$(git -C "$CUT_REPO" rev-parse HEAD)" = "$before" ]
-    [ ! -e "${CUT_REPO}/release.json" ]
-    [ ! -e "${CUT_REPO}/docker-compose.pins.yml" ]
-    refute_recorded cosign ""
+    assert_cut_changed_nothing
 }
 
 @test "cut-dist-tag.sh refuses a run that did not succeed" {
     make_cut_repo
     shim_cut_tools
+    shim_cut_gh
     export COSIGN_KEY_PATH="$DIST_MANIFEST"
-    shim gh 'case "$*" in "run view "*"--json conclusion"*) echo failure ;; esac'
-    run bash "$CUT" 1.2.3 --run-id 42 --overlap true --dist-manifest "$DIST_MANIFEST"
+    RUN_CONCLUSION=failure run_cut 1.2.3 --run-id 42 --overlap true --dist-manifest "$DIST_MANIFEST"
     [ "$status" -eq 1 ]
     [[ "$output" == *"did not succeed"* ]]
-    refute_recorded cosign ""
+    assert_cut_changed_nothing
+}
+
+@test "cut-dist-tag.sh refuses a run of another workflow and a run dispatched from a fork" {
+    make_cut_repo
+    shim_cut_tools
+    shim_cut_gh
+    export COSIGN_KEY_PATH="$DIST_MANIFEST"
+    RUN_PATH=.github/workflows/ci.yml run_cut 1.2.3 --run-id 42 --overlap true --dist-manifest "$DIST_MANIFEST"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"not of release-images.yml"* ]]
+    RUN_HEAD_REPO=someone/fork run_cut 1.2.3 --run-id 42 --overlap true --dist-manifest "$DIST_MANIFEST"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"dispatched from someone/fork"* ]]
+    assert_cut_changed_nothing
+}
+
+@test "cut-dist-tag.sh refuses a built or dispatching commit that is neither on origin/main nor a release tag" {
+    make_cut_repo
+    shim_cut_tools
+    shim_cut_gh
+    export COSIGN_KEY_PATH="$DIST_MANIFEST"
+    # a commit that only exists on an unmerged branch of origin
+    git -C "$CUT_REPO" checkout -q -b unmerged
+    git -C "$CUT_REPO" commit -q --allow-empty -m 'unreviewed'
+    local side
+    side="$(git -C "$CUT_REPO" rev-parse HEAD)"
+    git -C "$CUT_REPO" push -q origin unmerged
+    git -C "$CUT_REPO" checkout -q main
+    git -C "$CUT_REPO" branch -q -D unmerged
+    # the layer a run of that tree would carry, so only the provenance can refuse it
+    printf '%s\n' "$side" > "${ARTEFACT}/release-sha.txt"
+
+    FAKE_SHA="$side" run_cut 1.2.3 --run-id 42 --overlap true --dist-manifest "$DIST_MANIFEST"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"commit ${side} is neither on origin/main nor the commit of a v*/rc-v* tag"* ]]
+    assert_cut_changed_nothing
+
+    # built from main, but dispatched from the unmerged branch's copy of the workflow
+    printf '%s\n' "$FAKE_SHA" > "${ARTEFACT}/release-sha.txt"
+    RUN_HEAD="$side" run_cut 1.2.3 --run-id 42 --overlap true --dist-manifest "$DIST_MANIFEST"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"commit ${side} is neither on origin/main"* ]]
+    assert_cut_changed_nothing
+}
+
+@test "cut-dist-tag.sh refuses when origin cannot be fetched" {
+    make_cut_repo
+    shim_cut_tools
+    shim_cut_gh
+    export COSIGN_KEY_PATH="$DIST_MANIFEST"
+    git -C "$CUT_REPO" remote set-url origin "${BATS_TEST_TMPDIR}/no-such-origin.git"
+    run_cut 1.0.0 --run-id 42 --overlap true --dist-manifest "$DIST_MANIFEST"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"cannot fetch tags and main from origin"* ]]
+    refute_recorded gh ""
 }
 
 # ---------------------------------------------------------------------------

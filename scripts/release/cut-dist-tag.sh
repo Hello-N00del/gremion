@@ -18,7 +18,11 @@
 #                    sha256 becomes release.json's distManifestDigest.
 #
 # STEPS
-#   1. download the run's release-pins-<sha> artefact (the pins layers);
+#   0. fetch origin's tags and main (the tag check, the previous tag and the
+#      provenance check all read origin, not whatever this clone last saw);
+#   1. judge the run (release-images.yml of this repository, succeeded, built
+#      and dispatched from a commit that is on origin/main or a v* / rc-v* tag)
+#      and download its release-pins-<sha> artefact (the pins layers);
 #   2. check <sha> out detached, put the two pins layers and a release.json at
 #      the repository root, lint them (lint-release.sh) and commit them: the
 #      release commit;
@@ -30,9 +34,11 @@
 #
 # REFUSALS (nothing is changed unless noted): a bad version or a missing
 # argument; a missing gh, cosign, git, jq, node or make; COSIGN_KEY_PATH unset
-# or not a readable file; a dirty working tree; a tag that already exists; a
-# run that did not succeed; an artefact that is not exactly one
-# release-pins-<40 hex>; a pins layer holding any image that is not
+# or not a readable file; a dirty working tree; origin unreachable; a tag that
+# already exists (locally or on origin); a run of any other workflow, from a fork, or
+# that did not succeed; a built or dispatching commit that is neither on
+# origin/main nor the commit of a v* / rc-v* tag; an artefact that is not
+# exactly one release-pins-<40 hex>; a pins layer holding any image that is not
 # `@sha256:<64 hex>`.
 #
 # THE HOST-SIDE DEPLOY IS NOT DONE HERE. Handing a registry token to the host
@@ -51,6 +57,16 @@ usage() {
     exit 2
 }
 cleanup() { if [[ -n "$WORK" ]]; then rm -rf -- "$WORK"; fi; }
+
+# reviewed_commit <sha> -- is <sha> a commit that reached review: on origin/main
+# (as just fetched) or the commit of a v* / rc-v* tag? The release-images
+# workflow can be dispatched on any ref, so the run id alone proves nothing
+# about WHAT was built.
+reviewed_commit() {
+    local sha="$1"
+    if git merge-base --is-ancestor "$sha" refs/remotes/origin/main 2>/dev/null; then return 0; fi
+    [[ -n "$(git tag --points-at "$sha" 'v*' 'rc-v*')" ]]
+}
 
 main() {
     local version="" run_id="" overlap="" manifest=""
@@ -83,10 +99,14 @@ main() {
     # Captured first: inside [[ -z "$(...)" ]] a failing `git status` would read as clean.
     status="$(git -C "$root" status --porcelain)" || die "git status failed"
     [[ -z "$status" ]] || die "working tree is not clean -- the release commit must be exactly the built sha plus the pins"
-    if git -C "$root" rev-parse -q --verify "refs/tags/${tag}" >/dev/null; then
+    cd "$root"
+
+    # Origin is the record of what has been released, not this clone's tag
+    # list: a dist tag cut from another workstation is not here until fetched.
+    git fetch --quiet --tags origin '+refs/heads/main:refs/remotes/origin/main' || die "cannot fetch tags and main from origin"
+    if git rev-parse -q --verify "refs/tags/${tag}" >/dev/null; then
         die "tag ${tag} already exists"
     fi
-    cd "$root"
 
     WORK="$(mktemp -d)"
     trap cleanup EXIT
@@ -94,16 +114,32 @@ main() {
     # 1. the run's pins artefact. The sha is read off the artefact's own name,
     # not off the run's headSha: a workflow_dispatch builds `release_ref`,
     # which need not be the commit the workflow file was dispatched from.
-    local conclusion head_sha names sha
-    conclusion="$(gh run view "$run_id" --json conclusion --jq '.conclusion')" || die "gh cannot read run ${run_id}"
+    # The run id is operator input, so the run is judged before anything it
+    # names is trusted: which workflow, whose repository, how it ended. (Null
+    # fields print as "none" so a tab-separated read cannot shift.)
+    local run_info run_path conclusion head_sha head_repo run_repo names sha
+    run_info="$(gh api "repos/{owner}/{repo}/actions/runs/${run_id}" \
+        --jq '[.path // "none", .conclusion // "none", .head_sha // "none", .head_repository.full_name // "none", .repository.full_name // "none"] | @tsv')" \
+        || die "gh cannot read run ${run_id}"
+    IFS=$'\t' read -r run_path conclusion head_sha head_repo run_repo <<< "$run_info"
+    [[ "$run_path" =~ ^\.github/workflows/release-images\.yml(@.*)?$ ]] || die "run ${run_id} is a run of ${run_path}, not of release-images.yml"
+    [[ "$head_repo" == "$run_repo" ]] || die "run ${run_id} was dispatched from ${head_repo}, not from ${run_repo}"
     [[ "$conclusion" == success ]] || die "run ${run_id} did not succeed (conclusion: ${conclusion:-none})"
-    head_sha="$(gh run view "$run_id" --json headSha --jq '.headSha')" || die "gh cannot read run ${run_id}"
     names="$(gh api "repos/{owner}/{repo}/actions/runs/${run_id}/artifacts" --paginate --jq '.artifacts[].name | select(startswith("release-pins-"))')" \
         || die "gh cannot list the artefacts of run ${run_id}"
     [[ "$(printf '%s\n' "$names" | grep -c .)" -eq 1 ]] || die "run ${run_id} must carry exactly one release-pins-<sha> artefact, found: $(printf '%s' "$names" | tr '\n' ' ')"
     [[ "$names" =~ ^release-pins-[0-9a-f]{40}$ ]] || die "artefact name is not release-pins-<40 hex>: $names"
     sha="${names#release-pins-}"
     [[ "$sha" == "$head_sha" ]] || printf 'cut-dist-tag: note: the run was dispatched from %s but built %s (release_ref)\n' "$head_sha" "$sha" >&2
+
+    # Both the commit the workflow definition came from and the commit it built
+    # must have reached review: a run of an unmerged branch's copy of the
+    # workflow, or of an unmerged branch's tree, is not a release.
+    local c
+    for c in "$sha" "$head_sha"; do
+        git cat-file -e "${c}^{commit}" 2>/dev/null || git fetch --quiet origin "$c" || die "commit $c is not available locally or on origin"
+        reviewed_commit "$c" || die "commit $c is neither on origin/main nor the commit of a v*/rc-v* tag"
+    done
     gh run download "$run_id" -n "$names" -D "$WORK/pins" || die "cannot download ${names}"
 
     # The layers are judged before anything in the clone changes: every image
@@ -122,7 +158,6 @@ main() {
     [[ "$(tr -d '[:space:]' < "$WORK/pins/release-sha.txt")" == "$sha" ]] || die "release-sha.txt disagrees with the artefact name"
 
     # 2. the release commit
-    git cat-file -e "${sha}^{commit}" 2>/dev/null || git fetch --quiet origin "$sha" || die "commit $sha is not available locally or on origin"
     git checkout --quiet --detach "$sha"
     cp "$WORK/pins/docker-compose.pins.yml" "$WORK/pins/docker-compose.state-pins.yml" .
 
