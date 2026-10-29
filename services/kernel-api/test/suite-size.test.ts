@@ -20,6 +20,7 @@ export const NAMED: Record<'unit' | 'integration', Record<string, number>> = {
     'test/app/trd082.test.ts': 5,
     // TASK-080-a: the bodies migrations as shipped
     'test/bodies/migrations.test.ts': 10,
+    'test/outbox/catalogue.test.ts': 5,
     'test/conformance/conformance.test.ts': 14,
     'test/migrate/chain.test.ts': 9,
     'test/registry/registry.test.ts': 7,
@@ -34,6 +35,9 @@ export const NAMED: Record<'unit' | 'integration', Record<string, number>> = {
   },
   integration: {
     'test/app/kernel-api.int.test.ts': 17,
+    // TASK-080-a: the migrate hook and the identity domain service on the scratch PG18
+    'test/bodies/hooks.int.test.ts': 7,
+    'test/bodies/service.int.test.ts': 12,
     // G8 (live half): real Keycloak tokens carry / lack the audience
     'test/keycloak/audience.int.test.ts': 2,
   },
