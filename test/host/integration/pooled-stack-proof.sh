@@ -59,6 +59,14 @@
 # mail server carries a self-signed certificate for mail.<PLATFORM_DOMAIN>
 # instead of the [acme] block, and Keycloak's truststore names it.
 #
+# RUN AS ROOT ON LINUX (like production: gremion-tenant's require_root). The
+# containers write their secrets into the bind-mounted scratch root as their
+# own uid; a non-root invoker then cannot read, replace or remove them. Run it
+# the way the host does, keeping HOME and PATH (toolchain, docker config):
+#   sudo -E env "HOME=$HOME" "PATH=$PATH" bash test/host/integration/pooled-stack-proof.sh all
+# On Docker Desktop (Windows, macOS) the invoking user is enough. A permission
+# error on the scratch dirs prints this hint (perm_hint).
+#
 #
 # Every assertion reads a post-condition (docker inspect, docker stats, a TCP
 # connect, a database row), never an exit code alone. Zero containers, zero
@@ -111,6 +119,29 @@ command -v jq >/dev/null || die "jq not on PATH"
 
 is_scratch() { [[ "$STACK" == t040-* ]]; }
 require_scratch() { is_scratch || die "phase '$1' brings resources up or down and runs only on a t040-* scratch stack (STACK=$STACK)"; }
+
+# perm_hint [path...] -- prints the run-as-root hint when a permission problem
+# is plausibly the cause: Linux, not root, and a path (or, if it does not exist
+# yet, its nearest existing ancestor) that this user cannot both read and write.
+# Prints nothing otherwise, so it is safe to append to any die message.
+perm_hint() {
+    [[ "$(uname -s)" == Linux && "$(id -u)" != 0 ]] || return 0
+    local p
+    for p in "$@"; do
+        while [[ -n "$p" && ! -e "$p" && "$p" != / && "$p" != . ]]; do p="$(dirname "$p")"; done
+        [[ -e "$p" && ( ! -r "$p" || ! -w "$p" ) ]] || continue
+        # shellcheck disable=SC2016  # the $HOME / $PATH are LITERAL text of the command to copy
+        printf ' (permission denied on %s: on Linux this proof runs as root, like production -- sudo -E env "HOME=$HOME" "PATH=$PATH" bash test/host/integration/pooled-stack-proof.sh ...)' "$p"
+        return 0
+    done
+}
+# need_writable <dir>... -- each exists (made if absent) and is writable, or die with the hint.
+need_writable() {
+    local d
+    for d in "$@"; do
+        { mkdir -p "$d" 2>/dev/null && [[ -w "$d" ]]; } || die "cannot write ${d}$(perm_hint "$d")"
+    done
+}
 
 # precreate_bind_dirs -- every host directory a compose file bind-mounts, made
 # HERE by the invoking user. A missing bind source is created by the Docker
@@ -248,7 +279,7 @@ module_pg_keys() {
 # starts with it; on its own it is the render-env phase.
 phase_render_env() {
     require_scratch render-env
-    mkdir -p "$ENV_DIR" "$OUT"
+    need_writable "$ENV_DIR" "$OUT"
     locate_overlays
     local SROOT_H; SROOT_H="$(host_path "$SROOT")"
     local s="$OVL_SEP"
@@ -512,7 +543,7 @@ skip { next }
 
 phase_prepare() {
     require_scratch prepare
-    mkdir -p "$ENV_DIR" "$SROOT" "$OUT/ledger"
+    need_writable "$ENV_DIR" "$SROOT" "$OUT/ledger"
     precreate_bind_dirs
 
     # Subnets: a dedicated 10.231.0.0/16 and fd5a:231::/48, refused if taken.

@@ -324,6 +324,14 @@ assert_env_files_resolve() {
 # bind-mounted dirs were created root-owned by the daemon, teardown left a stale
 # scratch root, aux-up ran --pull never against images that were not local.
 
+# A `uname` that says Linux, in a directory that is put on PATH for the proof's
+# own run only (bats itself must keep the real uname): PATH="$LINUX_PATH".
+linux_uname() {
+    STUBS="${BATS_TEST_TMPDIR}/stubs"; mkdir -p "$STUBS"
+    printf '#!/usr/bin/env bash\necho Linux\n' > "${STUBS}/uname"; chmod +x "${STUBS}/uname"
+    LINUX_PATH="${STUBS}:${PATH}"
+}
+
 @test "precreate_bind_dirs: the app's bind sources exist, owned by the invoking user, before any container" {
     export SROOT="${BATS_TEST_TMPDIR}/sroot"
     run bash -c 'set -euo pipefail; . "$1"; SROOT="$2"; precreate_bind_dirs' _ "$PROOF" "$SROOT"
@@ -342,6 +350,21 @@ assert_env_files_resolve() {
     for src in $want; do
         grep -qF "/${src}\"" "$PROOF" || { echo "prepare does not pre-create ${src}" >&2; return 1; }
     done
+}
+
+@test "perm_hint: prints the run-as-root hint for a non-writable path as a non-root Linux user, nothing otherwise" {
+    linux_uname
+    printf '#!/usr/bin/env bash\necho 1000\n' > "${STUBS}/id"; chmod +x "${STUBS}/id"
+    local ro="${BATS_TEST_TMPDIR}/ro"; mkdir -p "$ro"; chmod 555 "$ro"
+    [ ! -w "$ro" ] || { chmod 755 "$ro"; skip "directory permissions are not enforced here"; }
+    PATH="$LINUX_PATH" run bash -c 'set -euo pipefail; . "$1"; perm_hint "$2/sub"' _ "$PROOF" "$ro"
+    chmod 755 "$ro"
+    [[ "$output" == *"runs as root, like production"* && "$output" == *"sudo -E"* ]]
+    PATH="$LINUX_PATH" run bash -c 'set -euo pipefail; . "$1"; perm_hint "$2"' _ "$PROOF" "$BATS_TEST_TMPDIR"      # writable: no hint
+    [ -z "$output" ]
+    printf '#!/usr/bin/env bash\necho 0\n' > "${STUBS}/id"                  # root: no hint
+    PATH="$LINUX_PATH" run bash -c 'set -euo pipefail; . "$1"; perm_hint "$2/sub"' _ "$PROOF" "$ro"
+    [ -z "$output" ]
 }
 
 teardown() {

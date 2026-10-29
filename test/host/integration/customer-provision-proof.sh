@@ -113,6 +113,13 @@
 #                    the callback carries a code and iss = the realm URL)
 #   rehearsal-down   everything rehearsal-up created, by name
 #
+# RUN AS ROOT ON LINUX (like production: gremion-tenant's require_root). The
+# containers write secrets into the bind-mounted scratch root as their own uid,
+# and gremion-tenant runs as root on a host. Keep HOME and PATH:
+#   sudo -E env "HOME=$HOME" "PATH=$PATH" bash test/host/integration/customer-provision-proof.sh <phase>...
+# On Docker Desktop the invoking user is enough. A permission error on the
+# pooled env dir prints this hint (perm_hint in need_pooled).
+#
 # Every assertion reads a post-condition (docker inspect, an HTTP status and
 # header, a database row, a Keycloak read-back), never an exit code alone.
 # Zero checks run is a FAILURE. Secrets live in 0600 files under ${OUT};
@@ -441,8 +448,15 @@ PENV="${POOLED_ENV_DIR:-}"
 X=proof-x                 # the customer under proof
 Y=proof-y                 # the second customer (unaffected by X's suspend)
 XT="${X//-/_}"
+# perm_hint <path> -- the run-as-root hint, only when a permission problem is
+# plausibly the cause (Linux, not root, path exists but is not readable/writable).
+perm_hint() {
+    [[ "$(uname -s)" == Linux && "$(id -u)" != 0 && -n "${1:-}" && -e "$1" && ( ! -r "$1" || ! -w "$1" ) ]] || return 0
+    # shellcheck disable=SC2016  # the $HOME / $PATH are LITERAL text of the command to copy
+    printf ' (permission denied on %s: on Linux this proof runs as root, like production -- sudo -E env "HOME=$HOME" "PATH=$PATH" bash test/host/integration/customer-provision-proof.sh ...)' "$1"
+}
 need_pooled() { # [no-operator]
-    [[ -n "$PSTACK" && -d "$PENV" && -f "$PENV/state.env" ]] || die "set POOLED_STACK and POOLED_ENV_DIR (a running pooled stack's env files)"
+    [[ -n "$PSTACK" && -d "$PENV" && -f "$PENV/state.env" && -r "$PENV/state.env" ]] || die "set POOLED_STACK and POOLED_ENV_DIR (a running pooled stack's env files)$(perm_hint "$PENV")"
     # customer-layout precedes the operator: `gremion-tenant init` (the ops
     # realm) and `operator add` (the user whose id PROOF_OPERATOR_ID is) both
     # run against the root it lays out.
