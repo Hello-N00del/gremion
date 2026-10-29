@@ -42,9 +42,11 @@ export const NAMED: Record<'unit' | 'integration' | 'live', Record<string, numbe
     'test/app/kernel-api.int.test.ts': 17,
     // TASK-080-a round 3: the idt migrate hook steps run under the migration advisory lock
     'test/migrate/lock.int.test.ts': 4,
+    // TASK-080-a round 3: TRD-082 for the domain service's own queries
+    'test/bodies/scope.int.test.ts': 2,
     // TASK-080-a: the migrate hook and the identity domain service on the scratch PG18
     'test/bodies/hooks.int.test.ts': 7,
-    'test/bodies/service.int.test.ts': 12,
+    'test/bodies/service.int.test.ts': 13,
     // G8 (live half): real Keycloak tokens carry / lack the audience
     'test/keycloak/audience.int.test.ts': 2,
   },

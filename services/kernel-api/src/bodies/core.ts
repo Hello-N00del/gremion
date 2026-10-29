@@ -49,8 +49,8 @@ export interface Core {
   run<T>(ctx: OpCtx, fn: (tx: Sql) => Promise<T>): Promise<T>
   allow(ctx: OpCtx, operation: string, bodyId: string | null): Promise<void>
   emit<K extends IdtEventKey>(tx: Sql, ctx: OpCtx, key: K, version: number, id: string, payload: IdtPayload<K>): Promise<void>
-  kindOf(tx: Sql, kindKey: string, level: 'body' | 'unit'): Promise<{ is_organ: boolean; can_hold_seats: boolean }>
-  activeBody(tx: Sql, bodyId: string): Promise<void>
+  kindOf(tx: Sql, customerId: string, kindKey: string, level: 'body' | 'unit'): Promise<{ is_organ: boolean; can_hold_seats: boolean }>
+  activeBody(tx: Sql, customerId: string, bodyId: string): Promise<void>
 }
 
 export function makeCore(authorizer: WriteAuthorizer): Core {
@@ -74,15 +74,15 @@ export function makeCore(authorizer: WriteAuthorizer): Core {
     },
 
     /** Q8: a kind the customer's catalogue does not hold (or retired, or of the other level) refuses. */
-    async kindOf(tx, kindKey, level) {
+    async kindOf(tx, customerId, kindKey, level) {
       const [k] = await tx<{ is_organ: boolean; can_hold_seats: boolean }[]>`
-        SELECT is_organ, can_hold_seats FROM idt.org_unit_kind WHERE kind_key = ${kindKey} AND level = ${level} AND state = 'active'`
+        SELECT is_organ, can_hold_seats FROM idt.org_unit_kind WHERE customer_id = ${customerId}::uuid AND kind_key = ${kindKey} AND level = ${level} AND state = 'active'`
       if (!k) throw new BodiesError('UNMAPPED_KIND', `kind ${JSON.stringify(kindKey)} is not an active ${level} kind of this customer's catalogue`)
       return k
     },
 
-    async activeBody(tx, bodyId) {
-      const [b] = await tx<{ state: string }[]>`SELECT state FROM idt.body WHERE body_id = ${bodyId}::uuid FOR SHARE`
+    async activeBody(tx, customerId, bodyId) {
+      const [b] = await tx<{ state: string }[]>`SELECT state FROM idt.body WHERE customer_id = ${customerId}::uuid AND body_id = ${bodyId}::uuid FOR SHARE`
       if (!b) throw new BodiesError('NOT_FOUND', `body ${bodyId}`)
       if (b.state !== 'active') throw new BodiesError('INVALID', `body ${bodyId} is archived`)
     },

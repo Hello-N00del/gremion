@@ -10,7 +10,7 @@ export function structureOps(c: Core) {
     createBody: (ctx: OpCtx, i: { kindKey: string; name: string; shortName?: string | null; parentBodyId?: string | null }): Promise<Written & { bodyId: string }> =>
       c.run(ctx, async (tx) => {
         await c.allow(ctx, 'body.create', i.parentBodyId ?? null)
-        await c.kindOf(tx, i.kindKey, 'body')
+        await c.kindOf(tx, ctx.customerId, i.kindKey, 'body')
         const a = by(ctx.actor)
         const r = one(
           await tx<{ body_id: string; row_version: number }[]>`
@@ -27,7 +27,7 @@ export function structureOps(c: Core) {
       c.run(ctx, async (tx) => {
         const b = one(
           await tx<{ kind_key: string; name: string; short_name: string | null; parent_body_id: string | null; state: string; row_version: number }[]>`
-            SELECT kind_key, name, short_name, parent_body_id, state, row_version::int AS row_version FROM idt.body WHERE body_id = ${bodyId}::uuid FOR UPDATE`,
+            SELECT kind_key, name, short_name, parent_body_id, state, row_version::int AS row_version FROM idt.body WHERE customer_id = ${ctx.customerId}::uuid AND body_id = ${bodyId}::uuid FOR UPDATE`,
           `body ${bodyId}`,
         )
         await c.allow(ctx, 'body.update', bodyId)
@@ -39,7 +39,7 @@ export function structureOps(c: Core) {
           await tx<{ row_version: number }[]>`
             UPDATE idt.body SET name = ${i.name ?? b.name}, short_name = ${i.shortName === undefined ? b.short_name : i.shortName}, parent_body_id = ${parent},
                    updated_by_kind = ${a.kind}, updated_by = ${a.id}
-             WHERE body_id = ${bodyId}::uuid RETURNING row_version::int AS row_version`,
+             WHERE customer_id = ${ctx.customerId}::uuid AND body_id = ${bodyId}::uuid RETURNING row_version::int AS row_version`,
           'body update',
         ).row_version
         await c.emit(tx, ctx, 'body.updated', v, bodyId, { body_id: bodyId, kind_key: b.kind_key, parent_body_id: parent })
@@ -48,15 +48,15 @@ export function structureOps(c: Core) {
 
     archiveBody: (ctx: OpCtx, bodyId: string): Promise<Written & { bodyId: string }> =>
       c.run(ctx, async (tx) => {
-        const b = one(await tx<{ state: string }[]>`SELECT state FROM idt.body WHERE body_id = ${bodyId}::uuid FOR UPDATE`, `body ${bodyId}`)
+        const b = one(await tx<{ state: string }[]>`SELECT state FROM idt.body WHERE customer_id = ${ctx.customerId}::uuid AND body_id = ${bodyId}::uuid FOR UPDATE`, `body ${bodyId}`)
         await c.allow(ctx, 'body.archive', bodyId)
         if (b.state === 'archived') throw new BodiesError('INVALID', `body ${bodyId} is already archived`)
         const open = one(
           await tx<{ n: number }[]>`
-            SELECT ((SELECT count(*) FROM idt.org_unit WHERE body_id = ${bodyId}::uuid AND state = 'active')
-                  + (SELECT count(*) FROM idt.seat WHERE body_id = ${bodyId}::uuid AND state = 'active')
-                  + (SELECT count(*) FROM idt.membership WHERE body_id = ${bodyId}::uuid AND valid_until IS NULL)
-                  + (SELECT count(*) FROM idt.tenure WHERE body_id = ${bodyId}::uuid AND ended_on IS NULL))::int AS n`,
+            SELECT ((SELECT count(*) FROM idt.org_unit WHERE customer_id = ${ctx.customerId}::uuid AND body_id = ${bodyId}::uuid AND state = 'active')
+                  + (SELECT count(*) FROM idt.seat WHERE customer_id = ${ctx.customerId}::uuid AND body_id = ${bodyId}::uuid AND state = 'active')
+                  + (SELECT count(*) FROM idt.membership WHERE customer_id = ${ctx.customerId}::uuid AND body_id = ${bodyId}::uuid AND valid_until IS NULL)
+                  + (SELECT count(*) FROM idt.tenure WHERE customer_id = ${ctx.customerId}::uuid AND body_id = ${bodyId}::uuid AND ended_on IS NULL))::int AS n`,
           'body usage',
         ).n
         if (open > 0) throw new BodiesError('CONFLICT', `body ${bodyId} still has ${open} active org unit(s), seat(s), open membership(s) or tenure(s)`)
@@ -64,7 +64,7 @@ export function structureOps(c: Core) {
         const r = one(
           await tx<{ row_version: number; archived_at: Date }[]>`
             UPDATE idt.body SET state = 'archived', archived_at = now(), updated_by_kind = ${a.kind}, updated_by = ${a.id}
-             WHERE body_id = ${bodyId}::uuid RETURNING row_version::int AS row_version, archived_at`,
+             WHERE customer_id = ${ctx.customerId}::uuid AND body_id = ${bodyId}::uuid RETURNING row_version::int AS row_version, archived_at`,
           'body archive',
         )
         await c.emit(tx, ctx, 'body.archived', r.row_version, bodyId, { body_id: bodyId, archived_at: r.archived_at.toISOString() })
@@ -75,8 +75,8 @@ export function structureOps(c: Core) {
     createOrgUnit: (ctx: OpCtx, i: { bodyId: string; kindKey: string; name: string; parentOrgUnitId?: string | null }): Promise<Written & { orgUnitId: string }> =>
       c.run(ctx, async (tx) => {
         await c.allow(ctx, 'orgunit.create', i.bodyId)
-        await c.activeBody(tx, i.bodyId)
-        const k = await c.kindOf(tx, i.kindKey, 'unit')
+        await c.activeBody(tx, ctx.customerId, i.bodyId)
+        const k = await c.kindOf(tx, ctx.customerId, i.kindKey, 'unit')
         const a = by(ctx.actor)
         const r = one(
           await tx<{ org_unit_id: string; row_version: number }[]>`
@@ -95,7 +95,7 @@ export function structureOps(c: Core) {
       c.run(ctx, async (tx) => {
         const u = one(
           await tx<{ body_id: string; kind_key: string; name: string; parent_org_unit_id: string | null; state: string; row_version: number }[]>`
-            SELECT body_id, kind_key, name, parent_org_unit_id, state, row_version::int AS row_version FROM idt.org_unit WHERE org_unit_id = ${orgUnitId}::uuid FOR UPDATE`,
+            SELECT body_id, kind_key, name, parent_org_unit_id, state, row_version::int AS row_version FROM idt.org_unit WHERE customer_id = ${ctx.customerId}::uuid AND org_unit_id = ${orgUnitId}::uuid FOR UPDATE`,
           `org unit ${orgUnitId}`,
         )
         await c.allow(ctx, 'orgunit.update', u.body_id)
@@ -106,7 +106,7 @@ export function structureOps(c: Core) {
         const v = one(
           await tx<{ row_version: number }[]>`
             UPDATE idt.org_unit SET name = ${i.name ?? u.name}, parent_org_unit_id = ${parent}, updated_by_kind = ${a.kind}, updated_by = ${a.id}
-             WHERE org_unit_id = ${orgUnitId}::uuid RETURNING row_version::int AS row_version`,
+             WHERE customer_id = ${ctx.customerId}::uuid AND org_unit_id = ${orgUnitId}::uuid RETURNING row_version::int AS row_version`,
           'org unit update',
         ).row_version
         await c.emit(tx, ctx, 'orgunit.updated', v, orgUnitId, { org_unit_id: orgUnitId, body_id: u.body_id, kind_key: u.kind_key })
@@ -115,14 +115,14 @@ export function structureOps(c: Core) {
 
     archiveOrgUnit: (ctx: OpCtx, orgUnitId: string): Promise<Written & { orgUnitId: string }> =>
       c.run(ctx, async (tx) => {
-        const u = one(await tx<{ body_id: string; state: string }[]>`SELECT body_id, state FROM idt.org_unit WHERE org_unit_id = ${orgUnitId}::uuid FOR UPDATE`, `org unit ${orgUnitId}`)
+        const u = one(await tx<{ body_id: string; state: string }[]>`SELECT body_id, state FROM idt.org_unit WHERE customer_id = ${ctx.customerId}::uuid AND org_unit_id = ${orgUnitId}::uuid FOR UPDATE`, `org unit ${orgUnitId}`)
         await c.allow(ctx, 'orgunit.archive', u.body_id)
         if (u.state === 'archived') throw new BodiesError('INVALID', `org unit ${orgUnitId} is already archived`)
         const open = one(
           await tx<{ n: number }[]>`
-            SELECT ((SELECT count(*) FROM idt.org_unit WHERE parent_org_unit_id = ${orgUnitId}::uuid AND state = 'active')
-                  + (SELECT count(*) FROM idt.seat WHERE org_unit_id = ${orgUnitId}::uuid AND state = 'active')
-                  + (SELECT count(*) FROM idt.membership WHERE org_unit_id = ${orgUnitId}::uuid AND valid_until IS NULL))::int AS n`,
+            SELECT ((SELECT count(*) FROM idt.org_unit WHERE customer_id = ${ctx.customerId}::uuid AND parent_org_unit_id = ${orgUnitId}::uuid AND state = 'active')
+                  + (SELECT count(*) FROM idt.seat WHERE customer_id = ${ctx.customerId}::uuid AND org_unit_id = ${orgUnitId}::uuid AND state = 'active')
+                  + (SELECT count(*) FROM idt.membership WHERE customer_id = ${ctx.customerId}::uuid AND org_unit_id = ${orgUnitId}::uuid AND valid_until IS NULL))::int AS n`,
           'org unit usage',
         ).n
         if (open > 0) throw new BodiesError('CONFLICT', `org unit ${orgUnitId} still has ${open} active child unit(s), seat(s) or open membership(s)`)
@@ -130,7 +130,7 @@ export function structureOps(c: Core) {
         const v = one(
           await tx<{ row_version: number }[]>`
             UPDATE idt.org_unit SET state = 'archived', archived_at = now(), updated_by_kind = ${a.kind}, updated_by = ${a.id}
-             WHERE org_unit_id = ${orgUnitId}::uuid RETURNING row_version::int AS row_version`,
+             WHERE customer_id = ${ctx.customerId}::uuid AND org_unit_id = ${orgUnitId}::uuid RETURNING row_version::int AS row_version`,
           'org unit archive',
         ).row_version
         await c.emit(tx, ctx, 'orgunit.archived', v, orgUnitId, { org_unit_id: orgUnitId, body_id: u.body_id })
@@ -154,12 +154,12 @@ export function structureOps(c: Core) {
     ): Promise<Written & { seatId: string }> =>
       c.run(ctx, async (tx) => {
         await c.allow(ctx, 'seat.create', i.bodyId)
-        await c.activeBody(tx, i.bodyId)
+        await c.activeBody(tx, ctx.customerId, i.bodyId)
         if (i.orgUnitId) {
           const unit = one(
             await tx<{ can_hold_seats: boolean; state: string }[]>`
-              SELECT k.can_hold_seats, u.state FROM idt.org_unit u JOIN idt.org_unit_kind k ON k.kind_key = u.kind_key AND k.level = u.kind_level
-               WHERE u.org_unit_id = ${i.orgUnitId}::uuid AND u.body_id = ${i.bodyId}::uuid`,
+              SELECT k.can_hold_seats, u.state FROM idt.org_unit u JOIN idt.org_unit_kind k ON k.customer_id = u.customer_id AND k.kind_key = u.kind_key AND k.level = u.kind_level
+               WHERE u.customer_id = ${ctx.customerId}::uuid AND u.org_unit_id = ${i.orgUnitId}::uuid AND u.body_id = ${i.bodyId}::uuid`,
             `org unit ${i.orgUnitId} of body ${i.bodyId}`,
           )
           if (unit.state !== 'active' || !unit.can_hold_seats) throw new BodiesError('INVALID', `org unit ${i.orgUnitId} cannot hold seats (archived, or its kind does not allow seats)`)
@@ -182,16 +182,16 @@ export function structureOps(c: Core) {
 
     retireSeat: (ctx: OpCtx, seatId: string): Promise<Written & { seatId: string }> =>
       c.run(ctx, async (tx) => {
-        const s = one(await tx<{ body_id: string; state: string }[]>`SELECT body_id, state FROM idt.seat WHERE seat_id = ${seatId}::uuid FOR UPDATE`, `seat ${seatId}`)
+        const s = one(await tx<{ body_id: string; state: string }[]>`SELECT body_id, state FROM idt.seat WHERE customer_id = ${ctx.customerId}::uuid AND seat_id = ${seatId}::uuid FOR UPDATE`, `seat ${seatId}`)
         await c.allow(ctx, 'seat.retire', s.body_id)
         if (s.state === 'retired') throw new BodiesError('INVALID', `seat ${seatId} is already retired`)
-        const open = one(await tx<{ n: number }[]>`SELECT count(*)::int AS n FROM idt.tenure WHERE seat_id = ${seatId}::uuid AND ended_on IS NULL`, 'seat usage').n
+        const open = one(await tx<{ n: number }[]>`SELECT count(*)::int AS n FROM idt.tenure WHERE customer_id = ${ctx.customerId}::uuid AND seat_id = ${seatId}::uuid AND ended_on IS NULL`, 'seat usage').n
         if (open > 0) throw new BodiesError('CONFLICT', `seat ${seatId} still has an open tenure`)
         const a = by(ctx.actor)
         const v = one(
           await tx<{ row_version: number }[]>`
             UPDATE idt.seat SET state = 'retired', retired_at = now(), updated_by_kind = ${a.kind}, updated_by = ${a.id}
-             WHERE seat_id = ${seatId}::uuid RETURNING row_version::int AS row_version`,
+             WHERE customer_id = ${ctx.customerId}::uuid AND seat_id = ${seatId}::uuid RETURNING row_version::int AS row_version`,
           'seat retire',
         ).row_version
         await c.emit(tx, ctx, 'seat.retired', v, seatId, { seat_id: seatId, body_id: s.body_id })
@@ -202,7 +202,7 @@ export function structureOps(c: Core) {
     createWahlperiode: (ctx: OpCtx, i: { bodyId: string; orgUnitId?: string | null; label: string; startsOn: string; endsOn: string }): Promise<Written & { wahlperiodeId: string }> =>
       c.run(ctx, async (tx) => {
         await c.allow(ctx, 'wahlperiode.create', i.bodyId)
-        await c.activeBody(tx, i.bodyId)
+        await c.activeBody(tx, ctx.customerId, i.bodyId)
         const a = by(ctx.actor)
         const r = one(
           await tx<{ wahlperiode_id: string; row_version: number }[]>`
@@ -219,14 +219,14 @@ export function structureOps(c: Core) {
 
     closeWahlperiode: (ctx: OpCtx, wahlperiodeId: string): Promise<Written & { wahlperiodeId: string }> =>
       c.run(ctx, async (tx) => {
-        const w = one(await tx<{ body_id: string; state: string }[]>`SELECT body_id, state FROM idt.wahlperiode WHERE wahlperiode_id = ${wahlperiodeId}::uuid FOR UPDATE`, `wahlperiode ${wahlperiodeId}`)
+        const w = one(await tx<{ body_id: string; state: string }[]>`SELECT body_id, state FROM idt.wahlperiode WHERE customer_id = ${ctx.customerId}::uuid AND wahlperiode_id = ${wahlperiodeId}::uuid FOR UPDATE`, `wahlperiode ${wahlperiodeId}`)
         await c.allow(ctx, 'wahlperiode.close', w.body_id)
         if (w.state === 'closed') throw new BodiesError('INVALID', `wahlperiode ${wahlperiodeId} is already closed`)
         const a = by(ctx.actor)
         const v = one(
           await tx<{ row_version: number }[]>`
             UPDATE idt.wahlperiode SET state = 'closed', updated_by_kind = ${a.kind}, updated_by = ${a.id}
-             WHERE wahlperiode_id = ${wahlperiodeId}::uuid RETURNING row_version::int AS row_version`,
+             WHERE customer_id = ${ctx.customerId}::uuid AND wahlperiode_id = ${wahlperiodeId}::uuid RETURNING row_version::int AS row_version`,
           'wahlperiode close',
         ).row_version
         await c.emit(tx, ctx, 'wahlperiode.closed', v, wahlperiodeId, { wahlperiode_id: wahlperiodeId, body_id: w.body_id })

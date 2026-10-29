@@ -154,6 +154,22 @@ describe('the identity domain service (one tx per operation, events in the same 
     expect(await admin`SELECT count(*)::int AS n FROM idt.outbox WHERE data->>'kind_key' = 'stupa'`).toEqual([{ n: 0 }])
   })
 
+  it('atomicity, the other direction: an enqueue that FAILS leaves no row behind (state committed without its event would be silent data the relay never publishes)', async () => {
+    const admin = w.adminPool(A)
+    await admin`CREATE OR REPLACE FUNCTION idt.t080_fail_enqueue() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'forced enqueue failure' USING ERRCODE = 'check_violation'; END $$`
+    await admin`CREATE TRIGGER t080_fail_outbox BEFORE INSERT ON idt.outbox FOR EACH ROW EXECUTE FUNCTION idt.t080_fail_enqueue()`
+    const before = await counts(A)
+    try {
+      await refuses(svc.createBody(ctxA, { kindKey: 'stupa', name: 'Ohne Ereignis' }), 'INVALID')
+      await refuses(svc.invitePerson(ctxA, { email: 'ohne-ereignis@example.org', displayName: 'Ohne Ereignis' }), 'INVALID')
+    } finally {
+      await admin`DROP TRIGGER t080_fail_outbox ON idt.outbox`
+      await admin`DROP FUNCTION idt.t080_fail_enqueue()`
+    }
+    expect(await counts(A)).toEqual(before)
+    expect(await admin`SELECT (SELECT count(*)::int FROM idt.body WHERE name = 'Ohne Ereignis') AS bodies, (SELECT count(*)::int FROM idt.person WHERE email = 'ohne-ereignis@example.org') AS persons`).toEqual([{ bodies: 0, persons: 0 }])
+  })
+
   it('guard 5: a non_voting_helper with voting=true is refused by the DATABASE (23514 membership_voting_check); a voting=false helper is accepted and distinct from elected_member', async () => {
     const h = await svc.invitePerson(ctxA, { email: 'helfer@example.org', displayName: 'Helfer Eins' })
     const e = await svc.startMembership(ctxA, { personId: h.personId, bodyId: ids.body!, participationKind: 'non_voting_helper', voting: true, validFrom: '2026-04-01', source: 'admin' }).then(() => null, (x: unknown) => x as BodiesError)

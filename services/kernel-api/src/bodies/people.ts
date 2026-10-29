@@ -9,8 +9,8 @@ export type MembershipSource = 'admin' | 'control_panel' | 'import' | 'provision
 export type TenureSource = 'election' | 'delegation' | 'appointment' | 'succession'
 
 export function peopleOps(c: Core) {
-  const personState = async (tx: Parameters<Parameters<Core['run']>[1]>[0], personId: string): Promise<string> =>
-    one(await tx<{ account_state: string }[]>`SELECT account_state FROM idt.person WHERE person_id = ${personId}::uuid FOR UPDATE`, `person ${personId}`).account_state
+  const personState = async (tx: Parameters<Parameters<Core['run']>[1]>[0], customerId: string, personId: string): Promise<string> =>
+    one(await tx<{ account_state: string }[]>`SELECT account_state FROM idt.person WHERE customer_id = ${customerId}::uuid AND person_id = ${personId}::uuid FOR UPDATE`, `person ${personId}`).account_state
 
   return {
     // -------------------------------------------------------------- persons
@@ -32,14 +32,14 @@ export function peopleOps(c: Core) {
 
     activatePerson: (ctx: OpCtx, personId: string, i: { idpSubject: string }): Promise<Written & { personId: string }> =>
       c.run(ctx, async (tx) => {
-        const state = await personState(tx, personId)
+        const state = await personState(tx, ctx.customerId, personId)
         await c.allow(ctx, 'person.activate', null)
         if (state !== 'invited') throw new BodiesError('INVALID', `person ${personId} is ${state}, only an invited person is activated`)
         const a = by(ctx.actor)
         const r = one(
           await tx<{ row_version: number; activated_at: Date }[]>`
             UPDATE idt.person SET account_state = 'active', idp_subject = ${i.idpSubject}, activated_at = now(), updated_by_kind = ${a.kind}, updated_by = ${a.id}
-             WHERE person_id = ${personId}::uuid RETURNING row_version::int AS row_version, activated_at`,
+             WHERE customer_id = ${ctx.customerId}::uuid AND person_id = ${personId}::uuid RETURNING row_version::int AS row_version, activated_at`,
           'person activate',
         )
         await c.emit(tx, ctx, 'person.activated', r.row_version, personId, { person_id: personId, activated_at: r.activated_at.toISOString() })
@@ -48,14 +48,14 @@ export function peopleOps(c: Core) {
 
     disablePerson: (ctx: OpCtx, personId: string): Promise<Written & { personId: string }> =>
       c.run(ctx, async (tx) => {
-        const state = await personState(tx, personId)
+        const state = await personState(tx, ctx.customerId, personId)
         await c.allow(ctx, 'person.disable', null)
         if (state !== 'active') throw new BodiesError('INVALID', `person ${personId} is ${state}, only an active person is disabled`)
         const a = by(ctx.actor)
         const r = one(
           await tx<{ row_version: number; disabled_at: Date }[]>`
             UPDATE idt.person SET account_state = 'disabled', disabled_at = now(), updated_by_kind = ${a.kind}, updated_by = ${a.id}
-             WHERE person_id = ${personId}::uuid RETURNING row_version::int AS row_version, disabled_at`,
+             WHERE customer_id = ${ctx.customerId}::uuid AND person_id = ${personId}::uuid RETURNING row_version::int AS row_version, disabled_at`,
           'person disable',
         )
         await c.emit(tx, ctx, 'person.disabled', r.row_version, personId, { person_id: personId, disabled_at: r.disabled_at.toISOString() })
@@ -64,14 +64,14 @@ export function peopleOps(c: Core) {
 
     enablePerson: (ctx: OpCtx, personId: string): Promise<Written & { personId: string }> =>
       c.run(ctx, async (tx) => {
-        const state = await personState(tx, personId)
+        const state = await personState(tx, ctx.customerId, personId)
         await c.allow(ctx, 'person.enable', null)
         if (state !== 'disabled') throw new BodiesError('INVALID', `person ${personId} is ${state}, only a disabled person is enabled`)
         const a = by(ctx.actor)
         const v = one(
           await tx<{ row_version: number }[]>`
             UPDATE idt.person SET account_state = 'active', disabled_at = NULL, updated_by_kind = ${a.kind}, updated_by = ${a.id}
-             WHERE person_id = ${personId}::uuid RETURNING row_version::int AS row_version`,
+             WHERE customer_id = ${ctx.customerId}::uuid AND person_id = ${personId}::uuid RETURNING row_version::int AS row_version`,
           'person enable',
         ).row_version
         await c.emit(tx, ctx, 'person.enabled', v, personId, { person_id: personId })
@@ -95,8 +95,8 @@ export function peopleOps(c: Core) {
     ): Promise<Written & { membershipId: string }> =>
       c.run(ctx, async (tx) => {
         await c.allow(ctx, 'membership.start', i.bodyId)
-        await c.activeBody(tx, i.bodyId)
-        const person = one(await tx<{ account_state: string }[]>`SELECT account_state FROM idt.person WHERE person_id = ${i.personId}::uuid`, `person ${i.personId}`)
+        await c.activeBody(tx, ctx.customerId, i.bodyId)
+        const person = one(await tx<{ account_state: string }[]>`SELECT account_state FROM idt.person WHERE customer_id = ${ctx.customerId}::uuid AND person_id = ${i.personId}::uuid`, `person ${i.personId}`)
         if (person.account_state === 'erased') throw new BodiesError('INVALID', `person ${i.personId} is erased`)
         const a = by(ctx.actor)
         // voting is NOT pre-checked for a non_voting_helper: membership_voting_check (23514) is the guard.
@@ -124,7 +124,7 @@ export function peopleOps(c: Core) {
         const m = one(
           await tx<{ body_id: string; voting: boolean; valid_from: string; valid_until: string | null; wahlperiode_id: string | null; row_version: number }[]>`
             SELECT body_id, voting, valid_from::text AS valid_from, valid_until::text AS valid_until, wahlperiode_id, row_version::int AS row_version
-              FROM idt.membership WHERE membership_id = ${membershipId}::uuid FOR UPDATE`,
+              FROM idt.membership WHERE customer_id = ${ctx.customerId}::uuid AND membership_id = ${membershipId}::uuid FOR UPDATE`,
           `membership ${membershipId}`,
         )
         await c.allow(ctx, 'membership.correct', m.body_id)
@@ -142,7 +142,7 @@ export function peopleOps(c: Core) {
           await tx<{ row_version: number }[]>`
             UPDATE idt.membership SET voting = ${next.voting}, valid_from = ${next.valid_from}::date, valid_until = ${next.valid_until}::date, wahlperiode_id = ${next.wahlperiode_id},
                    updated_by_kind = ${a.kind}, updated_by = ${a.id}
-             WHERE membership_id = ${membershipId}::uuid RETURNING row_version::int AS row_version`,
+             WHERE customer_id = ${ctx.customerId}::uuid AND membership_id = ${membershipId}::uuid RETURNING row_version::int AS row_version`,
           'membership correct',
         ).row_version
         await c.emit(tx, ctx, 'membership.corrected', v, membershipId, { membership_id: membershipId, changed, valid_from: next.valid_from, valid_until: next.valid_until, voting: next.voting })
@@ -153,7 +153,7 @@ export function peopleOps(c: Core) {
       c.run(ctx, async (tx) => {
         const m = one(
           await tx<{ body_id: string; person_id: string; valid_until: string | null }[]>`
-            SELECT body_id, person_id, valid_until::text AS valid_until FROM idt.membership WHERE membership_id = ${membershipId}::uuid FOR UPDATE`,
+            SELECT body_id, person_id, valid_until::text AS valid_until FROM idt.membership WHERE customer_id = ${ctx.customerId}::uuid AND membership_id = ${membershipId}::uuid FOR UPDATE`,
           `membership ${membershipId}`,
         )
         await c.allow(ctx, 'membership.end', m.body_id)
@@ -162,7 +162,7 @@ export function peopleOps(c: Core) {
         const v = one(
           await tx<{ row_version: number }[]>`
             UPDATE idt.membership SET valid_until = ${i.validUntil}::date, end_reason = ${i.endReason}, updated_by_kind = ${a.kind}, updated_by = ${a.id}
-             WHERE membership_id = ${membershipId}::uuid RETURNING row_version::int AS row_version`,
+             WHERE customer_id = ${ctx.customerId}::uuid AND membership_id = ${membershipId}::uuid RETURNING row_version::int AS row_version`,
           'membership end',
         ).row_version
         await c.emit(tx, ctx, 'membership.ended', v, membershipId, { membership_id: membershipId, body_id: m.body_id, person_id: m.person_id, valid_until: i.validUntil, end_reason: i.endReason })
@@ -184,7 +184,7 @@ export function peopleOps(c: Core) {
       c.run(ctx, async (tx) => {
         const s = one(
           await tx<{ body_id: string; holder_cardinality: string; seat_kind: string; state: string }[]>`
-            SELECT body_id, holder_cardinality, seat_kind, state FROM idt.seat WHERE seat_id = ${i.seatId}::uuid FOR UPDATE`,
+            SELECT body_id, holder_cardinality, seat_kind, state FROM idt.seat WHERE customer_id = ${ctx.customerId}::uuid AND seat_id = ${i.seatId}::uuid FOR UPDATE`,
           `seat ${i.seatId}`,
         )
         await c.allow(ctx, 'tenure.start', s.body_id)
@@ -194,12 +194,12 @@ export function peopleOps(c: Core) {
         if (i.succession) {
           const [prev] = await tx<{ tenure_id: string; body_id: string; person_id: string; ended_day: string }[]>`
             SELECT tenure_id, body_id, person_id, (${i.startsOn}::date - 1)::text AS ended_day FROM idt.tenure
-             WHERE seat_id = ${i.seatId}::uuid AND ended_on IS NULL FOR UPDATE`
+             WHERE customer_id = ${ctx.customerId}::uuid AND seat_id = ${i.seatId}::uuid AND ended_on IS NULL FOR UPDATE`
           if (prev) {
             const e = one(
               await tx<{ row_version: number }[]>`
                 UPDATE idt.tenure SET ended_on = ${prev.ended_day}::date, end_reason = 'succeeded', updated_by_kind = ${a.kind}, updated_by = ${a.id}
-                 WHERE tenure_id = ${prev.tenure_id}::uuid RETURNING row_version::int AS row_version`,
+                 WHERE customer_id = ${ctx.customerId}::uuid AND tenure_id = ${prev.tenure_id}::uuid RETURNING row_version::int AS row_version`,
               'tenure succeed',
             )
             await c.emit(tx, ctx, 'tenure.ended', e.row_version, prev.tenure_id, {
@@ -227,7 +227,7 @@ export function peopleOps(c: Core) {
         const t = one(
           await tx<{ body_id: string; starts_on: string; planned_end_on: string | null; ended_on: string | null; row_version: number; seat_kind: string }[]>`
             SELECT t.body_id, t.starts_on::text AS starts_on, t.planned_end_on::text AS planned_end_on, t.ended_on::text AS ended_on, t.row_version::int AS row_version, s.seat_kind
-              FROM idt.tenure t JOIN idt.seat s ON s.seat_id = t.seat_id WHERE t.tenure_id = ${tenureId}::uuid FOR UPDATE OF t`,
+              FROM idt.tenure t JOIN idt.seat s ON s.seat_id = t.seat_id AND s.customer_id = t.customer_id WHERE t.customer_id = ${ctx.customerId}::uuid AND t.tenure_id = ${tenureId}::uuid FOR UPDATE OF t`,
           `tenure ${tenureId}`,
         )
         await c.allow(ctx, 'tenure.correct', t.body_id)
@@ -240,7 +240,7 @@ export function peopleOps(c: Core) {
         const v = one(
           await tx<{ row_version: number }[]>`
             UPDATE idt.tenure SET starts_on = ${next.starts_on}::date, planned_end_on = ${next.planned_end_on}::date, ended_on = ${next.ended_on}::date, updated_by_kind = ${a.kind}, updated_by = ${a.id}
-             WHERE tenure_id = ${tenureId}::uuid RETURNING row_version::int AS row_version`,
+             WHERE customer_id = ${ctx.customerId}::uuid AND tenure_id = ${tenureId}::uuid RETURNING row_version::int AS row_version`,
           'tenure correct',
         ).row_version
         await c.emit(tx, ctx, 'tenure.corrected', v, tenureId, { tenure_id: tenureId, seat_kind: t.seat_kind, changed, starts_on: next.starts_on, ended_on: next.ended_on })
@@ -252,7 +252,7 @@ export function peopleOps(c: Core) {
         const t = one(
           await tx<{ body_id: string; seat_id: string; person_id: string; ended_on: string | null; seat_kind: string }[]>`
             SELECT t.body_id, t.seat_id, t.person_id, t.ended_on::text AS ended_on, s.seat_kind
-              FROM idt.tenure t JOIN idt.seat s ON s.seat_id = t.seat_id WHERE t.tenure_id = ${tenureId}::uuid FOR UPDATE OF t`,
+              FROM idt.tenure t JOIN idt.seat s ON s.seat_id = t.seat_id AND s.customer_id = t.customer_id WHERE t.customer_id = ${ctx.customerId}::uuid AND t.tenure_id = ${tenureId}::uuid FOR UPDATE OF t`,
           `tenure ${tenureId}`,
         )
         await c.allow(ctx, 'tenure.end', t.body_id)
@@ -261,7 +261,7 @@ export function peopleOps(c: Core) {
         const v = one(
           await tx<{ row_version: number }[]>`
             UPDATE idt.tenure SET ended_on = ${i.endedOn}::date, end_reason = ${i.endReason}, updated_by_kind = ${a.kind}, updated_by = ${a.id}
-             WHERE tenure_id = ${tenureId}::uuid RETURNING row_version::int AS row_version`,
+             WHERE customer_id = ${ctx.customerId}::uuid AND tenure_id = ${tenureId}::uuid RETURNING row_version::int AS row_version`,
           'tenure end',
         ).row_version
         await c.emit(tx, ctx, 'tenure.ended', v, tenureId, { tenure_id: tenureId, seat_id: t.seat_id, seat_kind: t.seat_kind, body_id: t.body_id, person_id: t.person_id, ended_on: i.endedOn, end_reason: i.endReason })

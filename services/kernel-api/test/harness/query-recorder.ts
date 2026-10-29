@@ -48,3 +48,22 @@ export function scopeProblems(records: readonly RecordedQuery[], customerIds: re
   for (const e of exemptions) if (!used.has(e.id)) problems.push(`stale exemption (no query matched it): ${e.id}`)
   return problems
 }
+
+/**
+ * A pool stand-in for the domain service (which only ever calls `sql.begin`): the transaction handle it hands out
+ * records every tagged-template query into `into`, then forwards to the REAL transaction. `.unsafe` (the events
+ * library's own enqueue) passes through unrecorded: that statement is @gremion/events', not the service's.
+ */
+export function recordingPool(into: RecordedQuery[], real: Sql): Sql {
+  const recordingTx = (tx: Sql): Sql =>
+    new Proxy(tx as unknown as (...a: unknown[]) => unknown, {
+      apply(target, thisArg, args: unknown[]) {
+        const strings = args[0] as TemplateStringsArray
+        if (Array.isArray(strings) && 'raw' in strings) {
+          into.push({ text: normalise(strings.map((s, i) => (i === 0 ? s : `$${i}${s}`)).join('')), params: args.slice(1) })
+        }
+        return Reflect.apply(target, thisArg, args)
+      },
+    }) as unknown as Sql
+  return { begin: (fn: (tx: Sql) => Promise<unknown>) => real.begin((tx) => fn(recordingTx(tx as unknown as Sql))) } as unknown as Sql
+}
