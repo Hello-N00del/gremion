@@ -13,6 +13,7 @@
 // Each can run alone as `verify --only integration:<part>`.
 import { randomBytes } from 'node:crypto'
 import path from 'node:path'
+import { stripVTControlCharacters } from 'node:util'
 import { combineParts } from '../lib/guard.mjs'
 import { headSha } from '../lib/git.mjs'
 import { run, spawnMissing, tail, toolAvailable } from '../lib/proc.mjs'
@@ -178,6 +179,20 @@ function vitestPart({ root }) {
 }
 
 /**
+ * A make target's stdout + stderr as the judges read it, with terminal colour
+ * stripped. Vitest (and anything built on tinyrainbow) colours its summary when
+ * CI is set even though stdout is a pipe, so on a CI runner the unit run prints
+ * "\x1b[2m      Tests \x1b[22m \x1b[32m171 passed\x1b[39m ..." and a line-anchored
+ * `^\s*Tests\s+N passed (N)` never matches: every part whose unit step goes
+ * through `pnpm test` read as "unparseable" on ubuntu-latest, though it ran.
+ * On a developer's terminal-less run (no CI) nothing is coloured, which is why
+ * this only ever showed on the runner.
+ */
+export function capturedText(res) {
+  return stripVTControlCharacters(`${res.stdout}\n${res.stderr}`)
+}
+
+/**
  * `make test-ports-nats` (packages/ports/scripts/nats-test.sh). Exit 0 is
  * not enough (round-1 MEDIUM: this was trusted on exit code alone while the
  * comment claimed a post-condition check): the script's own final OK line
@@ -186,7 +201,7 @@ function vitestPart({ root }) {
  */
 export function judgeNatsTest(res) {
   const label = 'make test-ports-nats'
-  const out = `${res.stdout}\n${res.stderr}`
+  const out = capturedText(res)
   const count = out.match(/^\[nats-test\] (\d+) passing tests from \S+ \(minimum \d+\)\s*$/m)
   const ok = /^\[nats-test\] OK -- the JetStream proofs ran against a real server\s*$/m.test(out)
   if (res.code !== 0) {
@@ -210,7 +225,7 @@ export const NATS_AUTH_MIN_PROOFS = 25
 
 export function judgeNatsAuthTest(res) {
   const label = 'make test-nats-auth'
-  const out = `${res.stdout}\n${res.stderr}`
+  const out = capturedText(res)
   // The unit run prints BEFORE the proof starts; the proof echoes its own
   // live-suite summary, which must not stand in for the unit one.
   const unit = out.split(/^\[nats-auth-proof\]/m)[0].match(/^\s*Tests\s+(\d+) passed \(\1\)\s*$/m)
@@ -251,7 +266,7 @@ export const EVENTS_ALERT_PHASES = ['alert-red', 'alert-fire', 'alert-hold', 'al
 
 export function judgeEventsTest(res) {
   const label = 'make test-events'
-  const out = `${res.stdout}\n${res.stderr}`
+  const out = capturedText(res)
   // The unit run prints BEFORE the proof starts; the proof echoes its own live-suite
   // summaries, which must not stand in for the unit one.
   const unit = out.split(/^\[events-proof\]/m)[0].match(/^\s*Tests\s+(\d+) passed \(\1\)\s*$/m)
@@ -289,7 +304,7 @@ export function judgeEventsTest(res) {
  */
 export function judgeFreshInit(res) {
   const label = 'make fresh-init-proof'
-  const out = `${res.stdout}\n${res.stderr}`
+  const out = capturedText(res)
   const oks = (out.match(/^\s+ok \S/gm) ?? []).length
   const fails = (out.match(/^FAIL \S/gm) ?? []).length
   const holds = /^\[fresh-init\] all post-conditions hold\s*$/m.test(out)
