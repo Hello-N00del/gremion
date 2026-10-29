@@ -332,6 +332,12 @@ linux_uname() {
     LINUX_PATH="${STUBS}:${PATH}"
 }
 
+@test "render-env: mail.env carries MAIL_TRANSPORT=stalwart (mandatory, no default; the proof runs its own Stalwart)" {
+    run bash "$PROOF" render-env
+    [ "$status" -eq 0 ]
+    grep -qxF 'MAIL_TRANSPORT=stalwart' "${POOLED_OUT}/env/mail.env"
+}
+
 @test "precreate_bind_dirs: the app's bind sources exist, owned by the invoking user, before any container" {
     export SROOT="${BATS_TEST_TMPDIR}/sroot"
     run bash -c 'set -euo pipefail; . "$1"; SROOT="$2"; precreate_bind_dirs' _ "$PROOF" "$SROOT"
