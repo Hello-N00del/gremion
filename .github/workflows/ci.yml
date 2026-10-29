@@ -37,6 +37,11 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           fetch-depth: 0  # gitleaks needs full history to diff base..head
+          # This job now runs `pnpm install` (lifecycle scripts of the whole dependency
+          # tree), so the checkout must not leave a token in .git/config for them to read.
+          # gitleaks-action needs none: it runs the local gitleaks binary over the
+          # checkout and calls the pull-request API with the GITHUB_TOKEN env below.
+          persist-credentials: false
 
       # This job used to run on the runner's own node with no install, so every
       # guard below was written to need nothing but node: built-ins. Two steps now
