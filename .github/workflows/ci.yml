@@ -833,9 +833,11 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       # What the old unit-test job installed, minus nothing: envsubst is needed by
-      # legal.bats' template rendering tests, yamllint by the workflow assertions in
-      # test/host/deploy-workflow.bats (which `skip`s when it is absent, and a guard
-      # that skips is a guard that passes), bats is an EXTERNAL prerequisite from npm
+      # legal.bats' template rendering tests, yamllint by the release-images.yml YAML
+      # assertion in test/host/deploy-workflow.bats (which `skip`s when it is absent, and
+      # a guard that skips is a guard that passes; that file now guards the keyless
+      # release pipeline: release-images.yml, cut-dist-tag.sh, release-tag-check.sh),
+      # bats is an EXTERNAL prerequisite from npm
       # (not vendored). jq and openssl are preinstalled on the runner image;
       # python3 too (test/configure-keycloak.bats validates JSON with it).
       - name: Install BATS and test dependencies

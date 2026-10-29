@@ -592,9 +592,9 @@ ci_job_block() {  # $1 = job id
     | grep -v '^[[:space:]]*#'
 }
 
-# test/host/deploy-workflow.bats asserts on a workflow's extracted shell blocks (shellcheck) and on
-# its YAML (yamllint), and `skip`s when the tool is absent. Both of its skip messages say "CI
-# installs it" -- and a guard that skips is a guard that passes, so this pins the install in the
+# test/host/deploy-workflow.bats guards the keyless release pipeline: it shellchecks cut-dist-tag.sh
+# and release-tag-check.sh and yamllints release-images.yml, and `skip`s when the tool is absent.
+# Both of its skip messages say "CI installs it" -- and a guard that skips is a guard that passes, so this pins the install in the
 # job that actually runs the bats suites (the verify-unit-host leg), not in the Lint job, which
 # runs no bats. verify counts a bats skip as a failed part, so a missing tool is red there too;
 # this keeps the reason readable. The shell linter is installed in the same job by the pinned,

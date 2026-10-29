@@ -75,7 +75,7 @@ grep -q 'noop ok' <<<"$out" || fail "noop did not run: $out"
 grep -qx 'EXIT 0' <<<"$out" || fail "no EXIT 0 line: $out"
 pass "noop over ssh, EXIT 0"
 
-echo "--- phase 2: deploy.yml's two-line request works end to end"
+echo "--- phase 2: the deploy client's two-line request (TOKEN, then the deploy verb) works end to end"
 rc=0
 out="$(printf 'TOKEN itest-token-0123456789\ndeploy dist-v1.0.0\n' | ssh_in)" || rc=$?
 [[ $rc -eq 0 ]] || fail "deploy request exited $rc: $out"
