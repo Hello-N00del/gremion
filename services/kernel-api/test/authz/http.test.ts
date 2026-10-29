@@ -48,6 +48,7 @@ describe('isAvailabilityError', () => {
     ['an AggregateError carrying ECONNREFUSED (node dual-stack connect)', Object.assign(new AggregateError([], 'connect failed'), { code: 'ECONNREFUSED' })],
     ['a wrapped cause', new Error('open failed', { cause: coded('ECONNREFUSED') })],
     ['a pool timeout by message', new Error('timed out acquiring a connection from the pool')],
+    ['an acquire timeout, first-alternative wording', new Error('acquiring a client timed out')],
   ])('%s is an availability failure', (_n, err) => {
     expect(isAvailabilityError(err)).toBe(true)
   })

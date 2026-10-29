@@ -38,7 +38,7 @@ const AVAILABILITY_CODES: ReadonlySet<string> = new Set([
   // PostgreSQL: admin_shutdown, crash_shutdown, cannot_connect_now, too_many_connections
   '57P01', '57P02', '57P03', '53300',
 ])
-const AVAILABILITY_MESSAGE = /(connect(ion)?|pool|acquirw*).{0,40}time(d)?[ -]?out|time(d)?[ -]?out.{0,40}(connect(ion)?|pool|acquir)/i
+const AVAILABILITY_MESSAGE = /(connect(ion)?|pool|acquir\w*).{0,40}time(d)?[ -]?out|time(d)?[ -]?out.{0,40}(connect(ion)?|pool|acquir)/i
 
 /**
  * Is this the customer's store being unreachable (503, retry later) rather than a fault in this process or a
