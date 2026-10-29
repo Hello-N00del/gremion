@@ -193,6 +193,53 @@ export function capturedText(res) {
 }
 
 /**
+ * The unit step's vitest summary ("Tests  170 passed | 1 skipped (171)"), read from the text
+ * printed BEFORE `marker`: the live proof that follows echoes a summary of its own, which must
+ * not stand in for the unit one. `null` when there is no summary line at all. `wellFormed` is
+ * false when a part is not one of failed/passed/skipped/todo or the parts do not add up to the
+ * total in parentheses: the shape is then not understood and the part stays untrusted.
+ */
+function unitSummary(out, marker) {
+  const m = out.split(marker)[0].match(/^[ \t]*Tests[ \t]+(.+?)[ \t]+\((\d+)\)[ \t]*$/m)
+  if (!m) return null
+  const n = { passed: 0, failed: 0, skipped: 0, todo: 0 }
+  let known = true
+  for (const part of m[1].split('|')) {
+    const c = part.trim().match(/^(\d+) (passed|failed|skipped|todo)$/)
+    if (c) n[c[2]] += Number(c[1])
+    else known = false
+  }
+  const total = Number(m[2])
+  return { ...n, total, line: m[0].trim(), wellFormed: known && n.passed + n.failed + n.skipped + n.todo === total }
+}
+
+/**
+ * Why a unit step that exited 0 is still not a pass, as a named failure -- or null when its
+ * summary is clean (all passed) or not understood (the caller then calls it unparseable). The
+ * unit step of an integration part runs wherever the part runs (an unprivileged CI runner
+ * among them), and a case that skips there is a case nobody ran: the part allows no skips.
+ */
+function unitFault(label, unit) {
+  if (!unit?.wellFormed) return null
+  const skipped = unit.skipped + unit.todo
+  const said = []
+  if (unit.failed > 0) said.push(`reported ${unit.failed} failed test(s) although the target exited 0`)
+  if (skipped > 0) said.push(`skipped ${skipped} test(s); an integration part allows no skips`)
+  if (said.length === 0) return null
+  return {
+    label,
+    collected: unit.total,
+    passed: unit.passed,
+    failed: unit.failed + skipped,
+    skipped: 0,
+    detail: `unit run inside ${label} ${said.join('; and ')}\nunit summary seen: "${unit.line}"`,
+  }
+}
+
+/** The unit summary is the all-passed shape and nothing else. */
+const cleanUnit = (unit) => unit !== null && unit.wellFormed && unit.passed === unit.total && unit.total > 0 && unit.failed + unit.skipped + unit.todo === 0
+
+/**
  * `make test-ports-nats` (packages/ports/scripts/nats-test.sh). Exit 0 is
  * not enough (round-1 MEDIUM: this was trusted on exit code alone while the
  * comment claimed a post-condition check): the script's own final OK line
@@ -228,24 +275,26 @@ export function judgeNatsAuthTest(res) {
   const out = capturedText(res)
   // The unit run prints BEFORE the proof starts; the proof echoes its own
   // live-suite summary, which must not stand in for the unit one.
-  const unit = out.split(/^\[nats-auth-proof\]/m)[0].match(/^\s*Tests\s+(\d+) passed \(\1\)\s*$/m)
+  const unit = unitSummary(out, /^\[nats-auth-proof\]/m)
   // The floor is proof.sh's own (25 live cases); a log claiming a lower one
   // did not run the proof this judge vouches for.
   const count = out.match(/^\[nats-auth-proof\] (\d+) passing \(minimum (\d+)\)\s*$/m)
   const floorOk = count !== null && Number(count[2]) >= NATS_AUTH_MIN_PROOFS && Number(count[1]) >= Number(count[2])
   const ok = /^\[nats-auth-proof\] OK -- the authenticated broker admits and refuses as specified\s*$/m.test(out)
   if (res.code !== 0) {
-    const n = Math.max(1, (unit ? Number(unit[1]) : 0) + (count ? Number(count[1]) : 0))
+    const n = Math.max(1, (cleanUnit(unit) ? unit.passed : 0) + (count ? Number(count[1]) : 0))
     return { label, collected: n, passed: 0, failed: n, skipped: 0, detail: tail(out) }
   }
-  if (!unit || !count || !ok || !floorOk) {
+  const fault = unitFault(label, unit)
+  if (fault) return fault
+  if (!cleanUnit(unit) || !count || !ok || !floorOk) {
     return {
       label,
       unparseable: true,
-      detail: `exit 0 but not all of the unit "Tests N passed (N)" summary, "[nats-auth-proof] N passing (minimum >= 25)" and "[nats-auth-proof] OK" lines -- untrusted\n${tail(out)}`,
+      detail: `exit 0 but not all of the unit "Tests N passed (N)" summary, "[nats-auth-proof] N passing (minimum >= 25)" and "[nats-auth-proof] OK" lines -- untrusted\nunit summary seen: ${unit ? `"${unit.line}"` : 'none'}\n${tail(out)}`,
     }
   }
-  const n = Number(unit[1]) + Number(count[1])
+  const n = unit.passed + Number(count[1])
   return { label, collected: n, passed: n, failed: 0, skipped: 0 }
 }
 
@@ -269,7 +318,7 @@ export function judgeEventsTest(res) {
   const out = capturedText(res)
   // The unit run prints BEFORE the proof starts; the proof echoes its own live-suite
   // summaries, which must not stand in for the unit one.
-  const unit = out.split(/^\[events-proof\]/m)[0].match(/^\s*Tests\s+(\d+) passed \(\1\)\s*$/m)
+  const unit = unitSummary(out, /^\[events-proof\]/m)
   const groups = new Map()
   for (const m of out.matchAll(/^\[events-proof\] (\d+) passing \(minimum (\d+)\)\s*\n\[events-proof\] group ([\w-]+) OK\s*$/gm)) {
     groups.set(m[3], { passing: Number(m[1]), minimum: Number(m[2]) })
@@ -283,17 +332,19 @@ export function judgeEventsTest(res) {
   const image = /^\[events-image\] OK\b/m.test(out)
   const live = [...groups.values()].reduce((a, r) => a + r.passing, 0)
   if (res.code !== 0) {
-    const n = Math.max(1, (unit ? Number(unit[1]) : 0) + live)
+    const n = Math.max(1, (cleanUnit(unit) ? unit.passed : 0) + live)
     return { label, collected: n, passed: 0, failed: n, skipped: 0, detail: tail(out) }
   }
-  if (!unit || !groupsOk || !alertsOk || !ok || !image) {
+  const fault = unitFault(label, unit)
+  if (fault) return fault
+  if (!cleanUnit(unit) || !groupsOk || !alertsOk || !ok || !image) {
     return {
       label,
       unparseable: true,
-      detail: `exit 0 but not all of the unit "Tests N passed (N)" summary, the four "[events-proof] N passing (minimum >= floor)" group pairs, the four alert phase OK lines (red, fire, hold, resolve), "[events-proof] OK" and "[events-image] OK" -- untrusted\n${tail(out)}`,
+      detail: `exit 0 but not all of the unit "Tests N passed (N)" summary, the four "[events-proof] N passing (minimum >= floor)" group pairs, the four alert phase OK lines (red, fire, hold, resolve), "[events-proof] OK" and "[events-image] OK" -- untrusted\nunit summary seen: ${unit ? `"${unit.line}"` : 'none'}\n${tail(out)}`,
     }
   }
-  const n = Number(unit[1]) + live
+  const n = unit.passed + live
   return { label, collected: n, passed: n, failed: 0, skipped: 0 }
 }
 

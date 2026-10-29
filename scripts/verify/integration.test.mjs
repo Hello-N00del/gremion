@@ -170,3 +170,89 @@ test('integrationVitestEnv points both URLs at the loopback test container and d
   assert.equal(env.PGPASSWORD, undefined)
   assert.equal(env.KEEP, 'k')
 })
+
+// CI run 3: `make test-nats-auth` ran its unit step as an unprivileged user, where one root-only case was
+// SKIPPED, vitest printed "Tests  170 passed | 1 skipped (171)" and the judge, which only knows
+// "Tests  N passed (N)", reported the whole part "unparseable". A summary that carries skipped or failed
+// tests is not unparseable, it is a named failure: an integration part allows no skips, and exit 0 with a
+// failed test is a lie to be called one. The summary line actually seen is in the detail either way.
+const withUnitSummary = (ok, from, to) => ok.replace(from, to)
+
+test('test-nats-auth: a unit step that SKIPPED a test is a named failure, not "unparseable"', () => {
+  const stdout = withUnitSummary(NATS_AUTH_OK, 'Tests  69 passed (69)', 'Tests  68 passed | 1 skipped (69)')
+  const p = judgeNatsAuthTest({ code: 0, stdout, stderr: '' })
+  assert.equal(p.unparseable ?? false, false, JSON.stringify(p))
+  assert.ok(p.failed >= 1, JSON.stringify(p))
+  assert.match(p.detail, /unit run inside make test-nats-auth skipped 1 test\(s\); an integration part allows no skips/)
+  assert.match(p.detail, /Tests {2}68 passed \| 1 skipped \(69\)/)
+})
+
+test('test-nats-auth: a unit step that reports a FAILED test yet exited 0 is a named failure', () => {
+  const stdout = withUnitSummary(NATS_AUTH_OK, 'Tests  69 passed (69)', 'Tests  1 failed | 68 passed (69)')
+  const p = judgeNatsAuthTest({ code: 0, stdout, stderr: '' })
+  assert.equal(p.unparseable ?? false, false, JSON.stringify(p))
+  assert.ok(p.failed >= 1, JSON.stringify(p))
+  assert.match(p.detail, /unit run inside make test-nats-auth reported 1 failed test\(s\) although the target exited 0/)
+  assert.match(p.detail, /Tests {2}1 failed \| 68 passed \(69\)/)
+})
+
+test('test-nats-auth: failed, skipped and todo tests are all named in one failure', () => {
+  const stdout = withUnitSummary(NATS_AUTH_OK, 'Tests  69 passed (69)', 'Tests  1 failed | 65 passed | 2 skipped | 1 todo (69)')
+  const p = judgeNatsAuthTest({ code: 0, stdout, stderr: '' })
+  assert.match(p.detail, /reported 1 failed test\(s\)/)
+  assert.match(p.detail, /skipped 3 test\(s\)/)
+  assert.equal(p.failed, 4)
+})
+
+test('test-nats-auth: a skipped test in the unit step is a failure even when the proof lines are missing', () => {
+  const stdout = withUnitSummary(NATS_AUTH_OK, 'Tests  69 passed (69)', 'Tests  68 passed | 1 skipped (69)').replace(/^\[nats-auth-proof\] OK.*\n/m, '')
+  const p = judgeNatsAuthTest({ code: 0, stdout, stderr: '' })
+  assert.match(p.detail ?? '', /skipped 1 test\(s\); an integration part allows no skips/)
+})
+
+test('test-nats-auth: an unrecognised summary shape stays untrusted, and the line seen is in the detail', () => {
+  const stdout = withUnitSummary(NATS_AUTH_OK, 'Tests  69 passed (69)', 'Tests  67 passed | 2 wobbly (69)')
+  const p = judgeNatsAuthTest({ code: 0, stdout, stderr: '' })
+  assert.equal(p.unparseable, true, JSON.stringify(p))
+  assert.match(p.detail, /unit summary seen: "Tests {2}67 passed \| 2 wobbly \(69\)"/)
+})
+
+test('test-nats-auth: a missing summary says so in the detail', () => {
+  const p = judgeNatsAuthTest({ code: 0, stdout: NATS_AUTH_OK.replace(/^\s+Tests {2}69 passed \(69\)\n/m, ''), stderr: '' })
+  assert.equal(p.unparseable, true, JSON.stringify(p))
+  assert.match(p.detail, /unit summary seen: none/)
+})
+
+test('test-nats-auth: the proof\'s own echoed summary is not mistaken for the unit one', () => {
+  const stdout = NATS_AUTH_OK.replace(/^\s+Tests {2}69 passed \(69\)\n/m, '').replace('Tests  25 passed (25)', 'Tests  24 passed | 1 skipped (25)')
+  const p = judgeNatsAuthTest({ code: 0, stdout, stderr: '' })
+  assert.equal(p.unparseable, true, JSON.stringify(p))
+  assert.match(p.detail, /unit summary seen: none/)
+})
+
+test('test-events: a unit step that SKIPPED a test is a named failure, not "unparseable"', () => {
+  const stdout = withUnitSummary(EVENTS_OK, 'Tests  83 passed (83)', 'Tests  82 passed | 1 skipped (83)')
+  const p = judgeEventsTest({ code: 0, stdout, stderr: '' })
+  assert.equal(p.unparseable ?? false, false, JSON.stringify(p))
+  assert.ok(p.failed >= 1, JSON.stringify(p))
+  assert.match(p.detail, /unit run inside make test-events skipped 1 test\(s\); an integration part allows no skips/)
+  assert.match(p.detail, /Tests {2}82 passed \| 1 skipped \(83\)/)
+})
+
+test('test-events: a unit step that reports a FAILED test yet exited 0 is a named failure', () => {
+  const stdout = withUnitSummary(EVENTS_OK, 'Tests  83 passed (83)', 'Tests  2 failed | 81 passed (83)')
+  const p = judgeEventsTest({ code: 0, stdout, stderr: '' })
+  assert.match(p.detail, /unit run inside make test-events reported 2 failed test\(s\) although the target exited 0/)
+})
+
+test('test-events: an unrecognised summary shape stays untrusted, with the line seen in the detail', () => {
+  const stdout = withUnitSummary(EVENTS_OK, 'Tests  83 passed (83)', 'Tests  81 passed | 2 wobbly (83)')
+  const p = judgeEventsTest({ code: 0, stdout, stderr: '' })
+  assert.equal(p.unparseable, true, JSON.stringify(p))
+  assert.match(p.detail, /unit summary seen: "Tests {2}81 passed \| 2 wobbly \(83\)"/)
+})
+
+test('test-events: a missing summary says so in the detail', () => {
+  const p = judgeEventsTest({ code: 0, stdout: EVENTS_OK.replace(/^\s+Tests {2}83 passed \(83\)\n/m, ''), stderr: '' })
+  assert.match(p.detail, /unit summary seen: none/)
+})

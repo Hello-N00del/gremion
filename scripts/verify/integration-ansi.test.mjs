@@ -57,3 +57,24 @@ test('test-events: colour does not hide a MISSING unit summary', () => {
   const p = judgeEventsTest({ code: 0, stdout: EVENTS_COLOURED.replace(coloured(83), ''), stderr: '' })
   assert.equal(p.unparseable, true, JSON.stringify(p))
 })
+
+// The same CI run printed its summary coloured AND with a skipped count: the judges must read that shape
+// too, and name the skip instead of calling the part unparseable.
+const colouredSkipped = (passed, skipped) =>
+  `${ESC}[2m      Tests ${ESC}[22m ${ESC}[1m${ESC}[32m${passed} passed${ESC}[39m${ESC}[22m${ESC}[2m | ${ESC}[22m${ESC}[33m${skipped} skipped${ESC}[39m${ESC}[90m (${passed + skipped})${ESC}[39m\n`
+
+test('test-nats-auth: a colour-wrapped summary with a skipped test is a named failure that shows the line seen', () => {
+  const p = judgeNatsAuthTest({ code: 0, stdout: NATS_AUTH_COLOURED.replace(coloured(171), colouredSkipped(170, 1)), stderr: '' })
+  assert.equal(p.unparseable ?? false, false, JSON.stringify(p))
+  assert.ok(p.failed >= 1, JSON.stringify(p))
+  assert.match(p.detail, /unit run inside make test-nats-auth skipped 1 test\(s\); an integration part allows no skips/)
+  assert.match(p.detail, /Tests\s+170 passed \| 1 skipped \(171\)/)
+  assert.doesNotMatch(p.detail, new RegExp(ESC))
+})
+
+test('test-events: a colour-wrapped summary with a skipped test is a named failure that shows the line seen', () => {
+  const p = judgeEventsTest({ code: 0, stdout: EVENTS_COLOURED.replace(coloured(83), colouredSkipped(82, 1)), stderr: '' })
+  assert.equal(p.unparseable ?? false, false, JSON.stringify(p))
+  assert.match(p.detail, /unit run inside make test-events skipped 1 test\(s\); an integration part allows no skips/)
+  assert.match(p.detail, /Tests\s+82 passed \| 1 skipped \(83\)/)
+})
