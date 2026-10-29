@@ -26,7 +26,9 @@ const REPO = resolve(SERVICE, '../..')
 const STATE_FILE = join(SERVICE, '.stack-state.json')
 
 export const sha8 = createHash('sha256').update(realpathSync(REPO)).digest('hex').slice(0, 8)
-export const names = { pg: `t077-${sha8}-pg`, pooler: `t077-${sha8}-pgb`, network: `t077-${sha8}-net` }
+// T077_NAME_PREFIX renames the stack (default t077) so a lane's run is recognisable and removable by name (as T081_NAME_PREFIX in test/authz/stack.mjs)
+const PREFIX = process.env.T077_NAME_PREFIX ?? 't077'
+export const names = { pg: `${PREFIX}-${sha8}-pg`, pooler: `${PREFIX}-${sha8}-pgb`, network: `${PREFIX}-${sha8}-net` }
 
 function sh(cmd, args, { allowFail = false } = {}) {
   const r = spawnSync(cmd, args, { encoding: 'utf8', windowsHide: true, env: { ...process.env, MSYS_NO_PATHCONV: '1' } })
