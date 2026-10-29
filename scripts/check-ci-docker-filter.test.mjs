@@ -149,23 +149,25 @@ function git(cwd, args, input) {
 
 // One commit made with `git fast-import` (no working-tree files: thousands of
 // paths in a second, and the same on Windows and Linux).
-function commit(cwd, ref, parent, paths) {
+function commit(cwd, ref, parent, paths, renames = []) {
   const msg = 'x'
   let s = `commit refs/heads/${ref}\ncommitter t <t@t> 1700000000 +0000\ndata ${msg.length}\n${msg}\n`
   if (parent) s += `from ${parent}\n`
   for (const p of paths) s += `M 100644 inline ${p}\ndata 1\nx\n`
+  for (const [from, to] of renames) s += `R ${from} ${to}\n`
   s += '\n'
-  git(cwd, ['fast-import', '--quiet'], s)
+  git(cwd, ['-c', 'core.protectNTFS=false', 'fast-import', '--quiet'], s)
   return git(cwd, ['rev-parse', ref])
 }
 
 // Run the real filter step; returns the value written for `docker`.
-function runFilter(changedPaths) {
+// `moves` is [[from, to], ...]: files that exist at the base and are renamed in the PR.
+function runFilter(changedPaths, moves = []) {
   const dir = mkdtempSync(join(tmpdir(), 'ci-docker-filter-'))
   try {
     git(dir, ['init', '--quiet', '-b', 'main'])
-    const base = commit(dir, 'main', null, ['README.md'])
-    const head = commit(dir, 'pr', base, changedPaths)
+    const base = commit(dir, 'main', null, ['README.md', ...moves.map(([from]) => from)])
+    const head = commit(dir, 'pr', base, changedPaths, moves)
     const out = join(dir, '.git', 'gh-output')
     writeFileSync(out, '')
     const script = join(dir, '.git', 'step.sh')
@@ -178,7 +180,7 @@ function runFilter(changedPaths) {
     })
     const written = readFileSync(out, 'utf8')
     const m = written.match(/^docker=(true|false)$/m)
-    return { value: m ? m[1] : null, written, status: r.status, stderr: r.stderr }
+    return { value: m ? m[1] : null, written, status: r.status, stderr: r.stderr, stdout: r.stdout }
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
@@ -236,6 +238,32 @@ test('a very large change set with no docker input still reports docker=false', 
   for (let i = 0; i < 6000; i++) paths.push(`zdocs/section-${String(i).padStart(5, '0')}/a-fairly-long-document-name-to-fill-the-buffer.md`)
   const r = runFilter(paths)
   assert.equal(r.value, 'false', `${r.written}${r.stderr.slice(0, 500)}`)
+})
+
+// With rename detection `git diff --name-only` prints only the DESTINATION of a
+// move, so taking a docker input out of a build tree looked like a docs change.
+test('moving a docker input out of its build tree reports docker=true', () => {
+  const r = runFilter([], [['packages/x/a.ts', 'docs/x/a.ts']])
+  assert.equal(r.value, 'true', r.written + r.stderr)
+})
+
+test('moving a file between two non-input trees still reports docker=false', () => {
+  const r = runFilter([], [['docs/x/a.md', 'notes/x/a.md']])
+  assert.equal(r.value, 'false', r.written + r.stderr)
+})
+
+// The runner interprets `::command::` at the start of a log line, and a PR
+// controls its file names: echoing them raw is workflow-command injection.
+test('the step never writes PR-controlled file names to the log', () => {
+  // A name that STARTS with `::` is the real exploit; Git for Windows refuses to
+  // store one, so it is only exercised where it can exist.
+  const names = ['docs/::error::injected.md', 'docs/::stop-commands::x.md']
+  if (process.platform !== 'win32') names.push('::error::top-level.md')
+  const r = runFilter(names)
+  assert.equal(r.value, 'false', r.written + r.stderr)
+  assert.doesNotMatch(r.stdout, /^::/m, 'a log line must not start with a workflow command')
+  for (const n of names) assert.ok(!r.stdout.includes(n), `the log must not echo ${n}`)
+  assert.match(r.stdout, new RegExp(`Changed files in this PR: ${names.length}\\b`), 'the count of changed files is still reported')
 })
 
 test('the filter source never pipes a producer into grep -q', () => {

@@ -574,9 +574,16 @@ jobs:
           # register, this workflow, the LICENSE/NOTICE files, and the
           # lockfile/workspace/root manifests every pnpm image copies first.
           pattern='(^|/)(Dockerfile|Containerfile)(\.[^/]*)?$|(^|/)\.dockerignore$|^(packages|services|modules|apps|gremion-ui|gremion-public|verticals|docker/legal|docker/fallback|scripts/migrations)/|^(pnpm-lock\.yaml|pnpm-workspace\.yaml|package\.json|LICENSE|NOTICE|\.github/workflows/ci\.yml)$'
-          changed=$(git diff --name-only "$BASE_SHA...$HEAD_SHA")
-          echo "Changed files in this PR:"
-          echo "$changed"
+          # --no-renames: with rename detection --name-only prints only the
+          # destination of a move, so `git mv packages/x docs/x` (a docker input
+          # leaving its build tree) would look like a docs-only change. With it
+          # a move lists both the old and the new path. quotePath=false keeps
+          # non-ASCII names literal so the pattern sees them as written.
+          changed=$(git -c core.quotePath=false diff --no-renames --name-only "$BASE_SHA...$HEAD_SHA")
+          # Print a count, never the names: they are PR-controlled and the
+          # Actions runner interprets `::command::` at the start of a log line
+          # (workflow-command injection through a crafted file name).
+          echo "Changed files in this PR: $(printf '%s\n' "$changed" | grep -c . || true)"
           # Count matches; do not feed a producer to a grep that quits early.
           # Under pipefail, a quiet grep exits at its first match, the writer
           # takes SIGPIPE once the list outgrows the 64 KiB pipe buffer (a few
