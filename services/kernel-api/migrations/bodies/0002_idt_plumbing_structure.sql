@@ -138,9 +138,10 @@ CREATE TABLE idt.inbox (
   CONSTRAINT inbox_attempt_count_check CHECK (attempt_count >= 0),
   CONSTRAINT inbox_last_error_code_check CHECK (char_length(last_error_code) BETWEEN 1 AND 64),
   CONSTRAINT inbox_state_times_check CHECK (
-        (processing_state IN ('received', 'failed') AND processed_at IS NULL)
-     OR (processing_state IN ('processed', 'skipped_stale', 'skipped_test') AND processed_at IS NOT NULL)
-     OR (processing_state = 'dead_lettered' AND dead_lettered_at IS NOT NULL))
+        (processing_state IN ('received', 'failed') AND processed_at IS NULL     AND dead_lettered_at IS NULL)
+     OR (processing_state IN ('processed', 'skipped_stale', 'skipped_test')
+                                                     AND processed_at IS NOT NULL AND dead_lettered_at IS NULL)
+     OR (processing_state = 'dead_lettered'          AND processed_at IS NULL     AND dead_lettered_at IS NOT NULL))
 );
 CREATE INDEX inbox_received_at_idx ON idt.inbox (received_at);
 CREATE INDEX inbox_retry_idx ON idt.inbox (received_at) WHERE processing_state IN ('received', 'failed');
@@ -245,12 +246,28 @@ BEGIN
 END
 $body$;
 
+-- idt.refuse_truncate(): the never-TRUNCATE twin of refuse_delete(), a BEFORE TRUNCATE statement trigger. A row
+-- trigger does not fire on TRUNCATE, so without it the never-delete tables could be emptied in one statement.
+CREATE FUNCTION idt.refuse_truncate() RETURNS trigger
+  LANGUAGE plpgsql AS $body$
+BEGIN
+  RAISE EXCEPTION '%.% rows are never truncated', TG_TABLE_SCHEMA, TG_TABLE_NAME
+    USING ERRCODE = 'check_violation';
+END
+$body$;
+
 -- DB-IDT-ORGUNITKIND
 CREATE FUNCTION idt.org_unit_kind_guard() RETURNS trigger
   LANGUAGE plpgsql AS $$
 BEGIN
   IF (NEW.kind_key, NEW.level, NEW.is_organ) IS DISTINCT FROM (OLD.kind_key, OLD.level, OLD.is_organ) THEN
     RAISE EXCEPTION 'kind_key, level and is_organ of kind % are immutable', OLD.kind_key
+      USING ERRCODE = 'check_violation';
+  END IF;
+  -- idt.membership.body_adopts_beschluesse is derived from this answer when the membership is inserted and never
+  -- recomputed, so an answer that changed after it was decided would leave stored rows describing a kind that no longer exists.
+  IF OLD.may_adopt_beschluesse <> 'undecided' AND NEW.may_adopt_beschluesse IS DISTINCT FROM OLD.may_adopt_beschluesse THEN
+    RAISE EXCEPTION 'may_adopt_beschluesse of kind % is already decided (%) and is never changed', OLD.kind_key, OLD.may_adopt_beschluesse
       USING ERRCODE = 'check_violation';
   END IF;
   RETURN NEW;
@@ -309,13 +326,20 @@ COMMENT ON TABLE idt.org_unit_kind IS 'DB-IDT-ORGUNITKIND | K2 | rp-idt-customer
 CREATE FUNCTION idt.body_acyclic() RETURNS trigger
   LANGUAGE plpgsql AS $$
 BEGIN
-  IF NEW.parent_body_id IS NOT NULL AND EXISTS (
-       WITH RECURSIVE up (body_id, parent_body_id) AS (
-         SELECT b.body_id, b.parent_body_id FROM idt.body AS b WHERE b.body_id = NEW.parent_body_id
-         UNION
-         SELECT b.body_id, b.parent_body_id FROM idt.body AS b JOIN up ON b.body_id = up.parent_body_id)
-       SELECT 1 FROM up WHERE up.body_id = NEW.body_id) THEN
-    RAISE EXCEPTION 'body % would form a cycle', NEW.body_id USING ERRCODE = 'check_violation';
+  IF NEW.parent_body_id IS NOT NULL THEN
+    -- The walk below sees only COMMITTED rows plus this transaction's own: two transactions re-parenting A under B and
+    -- B under A each walk a tree without the other's change and both commit a cycle. One transaction-scoped lock per
+    -- database (advisory locks are per database, and a database is one customer's) makes the second walk wait for the
+    -- first commit and see it.
+    PERFORM pg_advisory_xact_lock(hashtextextended('idt.body.parent', 0));
+    IF EXISTS (
+         WITH RECURSIVE up (body_id, parent_body_id) AS (
+           SELECT b.body_id, b.parent_body_id FROM idt.body AS b WHERE b.body_id = NEW.parent_body_id
+           UNION
+           SELECT b.body_id, b.parent_body_id FROM idt.body AS b JOIN up ON b.body_id = up.parent_body_id)
+         SELECT 1 FROM up WHERE up.body_id = NEW.body_id) THEN
+      RAISE EXCEPTION 'body % would form a cycle', NEW.body_id USING ERRCODE = 'check_violation';
+    END IF;
   END IF;
   RETURN NEW;
 END
@@ -363,6 +387,8 @@ CREATE TRIGGER body_acyclic_trg BEFORE INSERT OR UPDATE OF parent_body_id ON idt
   FOR EACH ROW EXECUTE FUNCTION idt.body_acyclic();
 CREATE TRIGGER body_no_delete_trg BEFORE DELETE ON idt.body
   FOR EACH ROW EXECUTE FUNCTION idt.refuse_delete();
+CREATE TRIGGER body_no_truncate_trg BEFORE TRUNCATE ON idt.body
+  FOR EACH STATEMENT EXECUTE FUNCTION idt.refuse_truncate();
 CREATE TRIGGER body_touch_trg BEFORE UPDATE ON idt.body
   FOR EACH ROW EXECUTE FUNCTION idt.touch_row();
 ALTER TABLE idt.body ENABLE ROW LEVEL SECURITY;
@@ -377,15 +403,19 @@ COMMENT ON COLUMN idt.body.customer_id IS 'xref DB-TNT-CUSTOMER';
 CREATE FUNCTION idt.org_unit_acyclic() RETURNS trigger
   LANGUAGE plpgsql AS $$
 BEGIN
-  IF NEW.parent_org_unit_id IS NOT NULL AND EXISTS (
-       WITH RECURSIVE up (org_unit_id, parent_org_unit_id) AS (
-         SELECT u.org_unit_id, u.parent_org_unit_id FROM idt.org_unit AS u
-          WHERE u.org_unit_id = NEW.parent_org_unit_id
-         UNION
-         SELECT u.org_unit_id, u.parent_org_unit_id FROM idt.org_unit AS u
-           JOIN up ON u.org_unit_id = up.parent_org_unit_id)
-       SELECT 1 FROM up WHERE up.org_unit_id = NEW.org_unit_id) THEN
-    RAISE EXCEPTION 'org unit % would form a cycle', NEW.org_unit_id USING ERRCODE = 'check_violation';
+  IF NEW.parent_org_unit_id IS NOT NULL THEN
+    -- serialises concurrent re-parenting, see idt.body_acyclic()
+    PERFORM pg_advisory_xact_lock(hashtextextended('idt.org_unit.parent', 0));
+    IF EXISTS (
+         WITH RECURSIVE up (org_unit_id, parent_org_unit_id) AS (
+           SELECT u.org_unit_id, u.parent_org_unit_id FROM idt.org_unit AS u
+            WHERE u.org_unit_id = NEW.parent_org_unit_id
+           UNION
+           SELECT u.org_unit_id, u.parent_org_unit_id FROM idt.org_unit AS u
+             JOIN up ON u.org_unit_id = up.parent_org_unit_id)
+         SELECT 1 FROM up WHERE up.org_unit_id = NEW.org_unit_id) THEN
+      RAISE EXCEPTION 'org unit % would form a cycle', NEW.org_unit_id USING ERRCODE = 'check_violation';
+    END IF;
   END IF;
   RETURN NEW;
 END
@@ -435,6 +465,8 @@ CREATE TRIGGER org_unit_acyclic_trg BEFORE INSERT OR UPDATE OF parent_org_unit_i
   FOR EACH ROW EXECUTE FUNCTION idt.org_unit_acyclic();
 CREATE TRIGGER org_unit_no_delete_trg BEFORE DELETE ON idt.org_unit
   FOR EACH ROW EXECUTE FUNCTION idt.refuse_delete();
+CREATE TRIGGER org_unit_no_truncate_trg BEFORE TRUNCATE ON idt.org_unit
+  FOR EACH STATEMENT EXECUTE FUNCTION idt.refuse_truncate();
 CREATE TRIGGER org_unit_touch_trg BEFORE UPDATE ON idt.org_unit
   FOR EACH ROW EXECUTE FUNCTION idt.touch_row();
 ALTER TABLE idt.org_unit ENABLE ROW LEVEL SECURITY;
@@ -494,6 +526,8 @@ CREATE INDEX seat_delegating_body_id_idx ON idt.seat (delegating_body_id) WHERE 
 CREATE INDEX seat_conferred_role_key_idx ON idt.seat (conferred_role_key) WHERE conferred_role_key IS NOT NULL;
 CREATE TRIGGER seat_no_delete_trg BEFORE DELETE ON idt.seat
   FOR EACH ROW EXECUTE FUNCTION idt.refuse_delete();
+CREATE TRIGGER seat_no_truncate_trg BEFORE TRUNCATE ON idt.seat
+  FOR EACH STATEMENT EXECUTE FUNCTION idt.refuse_truncate();
 CREATE TRIGGER seat_touch_trg BEFORE UPDATE ON idt.seat
   FOR EACH ROW EXECUTE FUNCTION idt.touch_row();
 ALTER TABLE idt.seat ENABLE ROW LEVEL SECURITY;

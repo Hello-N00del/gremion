@@ -2,13 +2,13 @@
 // factory (the real relay on a real broker is test/outbox/relay.int.test.ts).
 import type { RelayOptions } from '@gremion/events'
 import { describe, expect, it } from 'vitest'
-import type { GateVerdict, TenantRow } from '../../src/app/deps.ts'
+import type { GateVerdict, Logger, TenantRow } from '../../src/app/deps.ts'
 import { createRelayHost, type JetStreamHandle } from '../../src/outbox/relay-host.ts'
 import { A_ID, B_ID, tenantRow } from '../harness/fakes.ts'
 
 const C_ID = '0192f0c1-2b3c-7d4e-8f00-1122334455cc'
 
-function harness(tenants: TenantRow[], verdicts: Record<string, GateVerdict> = {}) {
+function harness(tenants: TenantRow[], verdicts: Record<string, GateVerdict> = {}, log: Logger = { info: () => {}, warn: () => {}, error: () => {} }) {
   const state = { tenants, verdicts, handles: new Map<string, { gen: number; ended: boolean }[]>(), started: [] as string[], stopped: [] as string[], opened: [] as string[], closed: [] as string[], failOpenFor: new Set<string>(), made: new Map<string, RelayOptions>() }
   const host = createRelayHost({
     tenancy: { listActive: async () => state.tenants.filter((t) => t.status === 'active') },
@@ -37,7 +37,7 @@ function harness(tenants: TenantRow[], verdicts: Record<string, GateVerdict> = {
       state.opened.push(t.slug)
       return { js: { publish: async () => ({ stream: 'IDT', seq: 1, duplicate: false }) } as never, close: async () => void state.closed.push(t.slug) }
     },
-    log: { info: () => {}, warn: () => {}, error: () => {} },
+    log,
     makeRelay: ((o: RelayOptions) => {
       const slug = /^gremion\.([^.]+)\./.exec((o.subjects as (r: { event_type: string }) => string)({ event_type: 'de.gremion.idt.membership.started.v1' }))![1]!
       const id = state.tenants.find((t) => t.slug === slug)!.customerId
@@ -130,5 +130,52 @@ describe('the per-customer relay host', () => {
     expect(seen).toEqual([1, 2, 2])
     expect(state.handles.get(A_ID)).toHaveLength(2)
     await host.stop()
+  })
+
+  it('logs once per transition: a warn for an active customer skipped because its database is not current (with the reason), an info naming why a relay stopped; nothing on repeated passes', async () => {
+    const lines: { level: string; msg: string; fields?: Record<string, unknown> }[] = []
+    const log: Logger = {
+      info: (msg, fields) => void lines.push({ level: 'info', msg, fields }),
+      warn: (msg, fields) => void lines.push({ level: 'warn', msg, fields }),
+      error: (msg, fields) => void lines.push({ level: 'error', msg, fields }),
+    }
+    const { host, state } = harness([tenantRow(A_ID, 'cust-a'), tenantRow(B_ID, 'cust-b')], { [B_ID]: { ok: false, reason: 'behind', retryAfterSeconds: 30 } }, log)
+    const skips = () => lines.filter((l) => l.level === 'warn' && l.fields?.customerId === B_ID)
+    for (let i = 0; i < 4; i++) await host.reconcile()
+    expect(skips(), 'one warn for B over four passes, not one per pass').toHaveLength(1)
+    expect(skips()[0]!.msg).toMatch(/skipped/)
+    expect(skips()[0]!.fields).toMatchObject({ customerId: B_ID, reason: 'behind' })
+    expect(lines.filter((l) => l.fields?.customerId === A_ID && l.level === 'warn')).toEqual([]) // A runs: nothing to warn about
+    // the reason changes: a new transition, logged once
+    state.verdicts[B_ID] = { ok: false, reason: 'diverged', retryAfterSeconds: 30 }
+    await host.reconcile()
+    await host.reconcile()
+    expect(skips().map((l) => l.fields!.reason)).toEqual(['behind', 'diverged'])
+    // B recovers and starts; later it relapses: logged again (the dedup is per transition, not forever)
+    state.verdicts[B_ID] = { ok: true }
+    await host.reconcile()
+    expect(host.running()).toEqual([A_ID, B_ID].sort())
+    state.verdicts[B_ID] = { ok: false, reason: 'unavailable', retryAfterSeconds: 30 }
+    await host.reconcile()
+    await host.reconcile()
+    expect(skips().map((l) => l.fields!.reason)).toEqual(['behind', 'diverged', 'unavailable'])
+    // the relay that was running stopped: one info naming the reason, and it says which gate verdict took the database out
+    const stops = lines.filter((l) => l.level === 'info' && /relay stopped/.test(l.msg) && l.fields?.customerId === B_ID)
+    expect(stops).toHaveLength(1)
+    expect(String(stops[0]!.fields!.reason)).toMatch(/unavailable/)
+    // a customer that leaves the active set is named as such; stop() says the supervisor stopped
+    state.tenants.splice(0, 1)
+    await host.reconcile()
+    await host.stop()
+    const stopsA = lines.filter((l) => l.level === 'info' && /relay stopped/.test(l.msg) && l.fields?.customerId === A_ID)
+    expect(stopsA).toHaveLength(1)
+    expect(String(stopsA[0]!.fields!.reason)).toMatch(/no longer active/)
+    // a ref rotation is named as such
+    const rot = harness([tenantRow(A_ID, 'cust-a')], {}, log)
+    await rot.host.reconcile()
+    rot.state.tenants[0] = tenantRow(A_ID, 'cust-a', 'active', { dbConnRef: 'file:/run/secrets/rotated' })
+    await rot.host.reconcile()
+    expect(lines.some((l) => l.level === 'info' && /relay stopped/.test(l.msg) && /db_conn_ref/.test(String(l.fields?.reason)))).toBe(true)
+    await rot.host.stop()
   })
 })

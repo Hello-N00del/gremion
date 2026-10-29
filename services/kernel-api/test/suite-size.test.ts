@@ -19,6 +19,8 @@ export const NAMED: Record<'unit' | 'integration' | 'authz' | 'live', Record<str
     'test/app/dockerfile.test.ts': 2,
     'test/app/gate-rotation.test.ts': 4,
     'test/app/routes.test.ts': 11,
+    // TASK-080-a house review: the relay and the HTTP path do not evict each other after a db_conn_ref change
+    'test/app/tenant-db-relay.test.ts': 2,
     'test/app/trd082.test.ts': 5,
     // TASK-080-a: the bodies migrations as shipped
     'test/bodies/migrations.test.ts': 10,
@@ -27,7 +29,7 @@ export const NAMED: Record<'unit' | 'integration' | 'authz' | 'live', Record<str
     'test/bodies/kinds.test.ts': 6,
     'test/outbox/catalogue.test.ts': 5,
     'test/outbox/compose.test.ts': 4,
-    'test/outbox/relay-host.test.ts': 6,
+    'test/outbox/relay-host.test.ts': 7,
     'test/conformance/conformance.test.ts': 14,
     'test/migrate/chain.test.ts': 9,
     'test/registry/registry.test.ts': 7,
@@ -56,7 +58,9 @@ export const NAMED: Record<'unit' | 'integration' | 'authz' | 'live', Record<str
     'test/bodies/scope.int.test.ts': 2,
     // TASK-080-a: the migrate hook and the identity domain service on the scratch PG18
     'test/bodies/hooks.int.test.ts': 7,
-    'test/bodies/service.int.test.ts': 13,
+    'test/bodies/service.int.test.ts': 14,
+    // TASK-080-a house review: database-level guards (acyclic race, immutable body_id, decided kinds, inbox pairs, TRUNCATE)
+    'test/bodies/schema-guards.int.test.ts': 16,
     // G8 (live half): real Keycloak tokens carry / lack the audience
     'test/keycloak/audience.int.test.ts': 2,
   },

@@ -14,6 +14,9 @@
 //   * a customer that stops being active / current, or whose db_conn_ref changed,
 //     loses / restarts its relay on the next reconcile; one customer's failure
 //     (a NATS outage, a refused pool) is logged and never stops the others;
+//   * every TRANSITION is logged once, never once per pass: a warn when an active
+//     customer is skipped because its database is not current (the gate's reason),
+//     an info naming why a relay stopped;
 //   * stop() halts every loop, then closes every NATS connection it opened.
 // The relay itself reconnects (createRelay re-opens a closed connection) and its
 // advisory lock makes a second kernel-api replica a no-op for that customer.
@@ -61,15 +64,18 @@ export interface RelayHost {
 
 export function createRelayHost(o: RelayHostOptions): RelayHost {
   const relays = new Map<string, Running>()
+  /** customerId -> the skip signature last logged (a gate reason / a gate error), cleared when the customer is wanted or inactive. */
+  const skipped = new Map<string, string>()
   const makeRelay = o.makeRelay ?? createRelay
   let timer: ReturnType<typeof setInterval> | undefined
   let stopped = false
   let inFlight: Promise<void> | undefined
 
-  async function halt(id: string): Promise<void> {
+  async function halt(id: string, reason: string): Promise<void> {
     const r = relays.get(id)
     if (!r) return
     relays.delete(id)
+    o.log.info('kernel-api: event relay stopped', { customerId: id, reason })
     await r.relay.stop().catch((err: unknown) => o.log.warn('kernel-api: relay stop failed', { customerId: id, err: (err as Error).message }))
     await Promise.allSettled(r.handles.map((h) => h.close()))
   }
@@ -114,17 +120,32 @@ export function createRelayHost(o: RelayHostOptions): RelayHost {
       return
     }
     const wanted = new Map<string, TenantRow>()
+    const activeIds = new Set<string>()
     for (const t of active) {
+      activeIds.add(t.customerId)
       try {
         const verdict = await o.gate.check(t)
-        if (verdict.ok || verdict.reason === 'ahead' || verdict.reason === 'current') wanted.set(t.customerId, t)
+        if (verdict.ok || verdict.reason === 'ahead' || verdict.reason === 'current') {
+          wanted.set(t.customerId, t)
+          skipped.delete(t.customerId)
+        } else if (skipped.get(t.customerId) !== verdict.reason) {
+          skipped.set(t.customerId, verdict.reason)
+          o.log.warn('kernel-api: event relay skipped, the customer database is not current', { customerId: t.customerId, reason: verdict.reason })
+        }
       } catch (err) {
-        o.log.warn('kernel-api: relay gate check failed', { customerId: t.customerId, err: (err as Error).message })
+        const sig = `gate check failed: ${(err as Error).message}`
+        if (skipped.get(t.customerId) !== sig) {
+          skipped.set(t.customerId, sig)
+          o.log.warn('kernel-api: relay gate check failed', { customerId: t.customerId, err: (err as Error).message })
+        }
       }
     }
+    for (const id of [...skipped.keys()]) if (!activeIds.has(id)) skipped.delete(id)
     for (const [id, r] of [...relays]) {
       const t = wanted.get(id)
-      if (!t || t.dbConnRef !== r.tenant.dbConnRef || t.slug !== r.tenant.slug) await halt(id)
+      if (!t) await halt(id, activeIds.has(id) ? `the customer database is not current (${skipped.get(id) ?? 'gate verdict'})` : 'the customer is no longer active')
+      else if (t.dbConnRef !== r.tenant.dbConnRef) await halt(id, 'db_conn_ref changed')
+      else if (t.slug !== r.tenant.slug) await halt(id, 'slug changed')
     }
     for (const [id, t] of wanted) {
       if (stopped) return
@@ -158,7 +179,7 @@ export function createRelayHost(o: RelayHostOptions): RelayHost {
       if (timer) clearInterval(timer)
       timer = undefined
       await inFlight?.catch(() => undefined)
-      await Promise.allSettled([...relays.keys()].map((id) => halt(id)))
+      await Promise.allSettled([...relays.keys()].map((id) => halt(id, 'the supervisor is stopping')))
     },
     running: () => [...relays.keys()].sort(),
   }

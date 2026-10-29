@@ -16,6 +16,7 @@ import { spawnSync } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { adminConnectOptionsFor, ensureTenantAccount, natsBrokerOps, natsConnectOptionsFor } from '@gremion/nats-auth'
+import { STREAMS } from '@gremion/ports/broker'
 import { jetstream, jetstreamManager } from '@nats-io/jetstream'
 import { connect } from '@nats-io/transport-node'
 import type { FastifyInstance } from 'fastify'
@@ -218,25 +219,58 @@ describe('M-OFF-1 .. M-OFF-3: a customer with ZERO modules enabled', () => {
 })
 
 describe('A5: the broker holds the kernel-api identity to the IDT stream', () => {
-  it('the kernel-api nkey publishes gremion.<t>.idt.> (control) and is refused gremion.<t>.org-unit.> and another tenant\'s idt subject', async () => {
-    const nc = await connect({ servers: natsUrl, ...natsConnectOptionsFor(SLUG, 'kernel-api', loc()), reconnect: false, timeout: 5_000 })
-    const js = jetstream(nc)
+  const adminOpts = () => ({ servers: natsUrl, ...adminConnectOptionsFor(SLUG, loc()), reconnect: false, timeout: 5_000 })
+  const messages = async (stream: string): Promise<number> => {
+    const nc = await connect(adminOpts())
     try {
-      expect((await js.publish(`gremion.${SLUG}.idt.body.created`, '{}', { timeout: 3_000, msgID: uuidv7() })).stream).toBe('IDT')
-      // a refused publish never gets a PubAck: it times out (or the server answers with a permission error)
-      await expect(js.publish(`gremion.${SLUG}.org-unit.upserted`, '{}', { timeout: 2_000 })).rejects.toBeDefined()
-      await expect(js.publish('gremion.someone-else.idt.body.created', '{}', { timeout: 2_000 })).rejects.toBeDefined()
+      return (await (await jetstreamManager(nc)).streams.info(stream)).state.messages
+    } finally {
+      await nc.close()
+    }
+  }
+  /** A publish as `module` and what the client got back: the PubAck's stream, or the rejection with its cause. */
+  const publishAs = async (module: string, subject: string): Promise<{ stream?: string; error?: { name: string; message: string; causeName?: string; causeMessage?: string } }> => {
+    const nc = await connect({ servers: natsUrl, ...natsConnectOptionsFor(SLUG, module, loc()), reconnect: false, timeout: 5_000 })
+    try {
+      return await jetstream(nc).publish(subject, '{}', { timeout: 2_000, msgID: uuidv7() }).then(
+        (ack) => ({ stream: ack.stream }),
+        (x: Error & { cause?: Error }) => ({ error: { name: x.name, message: x.message, causeName: x.cause?.name, causeMessage: x.cause?.message } }),
+      )
     } finally {
       await nc.close().catch(() => undefined)
     }
-    log('kernel-api nkey: idt publish ok; org-unit and other-tenant idt publishes refused by the broker')
-    // clean the control message off the count the earlier test pinned: it was published AFTER them
-    const admin2 = await connect({ servers: natsUrl, ...adminConnectOptionsFor(SLUG, loc()), reconnect: false, timeout: 5_000 })
+  }
+
+  it("the kernel-api nkey publishes gremion.<t>.idt.> (control) and is refused gremion.<t>.org-unit.> and another tenant's idt subject BY PERMISSION, with a stream that would have acked each", async () => {
+    // A stream that captures org-unit subjects, so a PERMITTED publish would be acked: without it a refusal could be "no responders" and prove nothing.
+    const adm = await connect(adminOpts())
     try {
-      expect((await (await jetstreamManager(admin2)).streams.info('IDT')).state.messages).toBe(5)
+      const jsm = await jetstreamManager(adm)
+      await jsm.streams.info('ORGUNIT').catch(() => jsm.streams.add({ name: 'ORGUNIT', subjects: [...STREAMS.ORGUNIT.subjects] }))
     } finally {
-      await admin2.close()
+      await adm.close()
     }
+    // positive control: the identity that owns the stream (flows.ts: kernel publishes ORGUNIT) IS acked on the very subject kernel-api is refused
+    const control = await publishAs('kernel', `gremion.${SLUG}.org-unit.upserted`)
+    expect(control, 'the stream-owning identity publishes the org-unit subject').toEqual({ stream: 'ORGUNIT' })
+    const before = { idt: await messages('IDT'), orgunit: await messages('ORGUNIT') }
+
+    expect(await publishAs('kernel-api', `gremion.${SLUG}.idt.body.created`)).toEqual({ stream: 'IDT' })
+    const orgUnit = await publishAs('kernel-api', `gremion.${SLUG}.org-unit.upserted`)
+    const otherTenant = await publishAs('kernel-api', 'gremion.someone-else.idt.body.created')
+    log('org-unit refusal:', JSON.stringify(orgUnit))
+    log('other-tenant refusal:', JSON.stringify(otherTenant))
+    // a PERMISSION refusal, not a timeout or "no responders": the broker's Permissions Violation for Publish, naming the subject
+    expect(orgUnit.stream).toBeUndefined()
+    expect(orgUnit.error?.causeName).toBe('PermissionViolationError')
+    expect(orgUnit.error?.message).toBe(`Permissions Violation for Publish to "gremion.${SLUG}.org-unit.upserted"`)
+    expect(otherTenant.stream).toBeUndefined()
+    expect(otherTenant.error?.causeName).toBe('PermissionViolationError')
+    expect(otherTenant.error?.message).toBe('Permissions Violation for Publish to "gremion.someone-else.idt.body.created"')
+    // post-conditions on the streams: only the permitted control landed
+    expect(await messages('IDT')).toBe(before.idt + 1)
+    expect(await messages('ORGUNIT')).toBe(before.orgunit)
+    log('kernel-api nkey: idt publish ok; org-unit and other-tenant idt publishes refused by the broker (permissions violation)')
   })
 })
 

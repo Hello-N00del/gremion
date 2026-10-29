@@ -29,8 +29,8 @@
       "legacy": [],
       "files": {
         "0001_idt_setup.sql": "5959761784f2363867c83a17281d13766d04bf5280b0f010754e6983c041602d",
-        "0002_idt_plumbing_structure.sql": "b9c9cd3286a3d90aced668a5ec0a4abc73ad6131819660943a9e49750dd19906",
-        "0003_idt_person_membership_tenure.sql": "6f1c24d1ff1f6d89494b5635ca310517a2575c5eb41d1e1e35181a08ede5f36e",
+        "0002_idt_plumbing_structure.sql": "4977bf81220f9532e14a4ef994d6461f636640b328b0c3cc00c6b3fcfe762c08",
+        "0003_idt_person_membership_tenure.sql": "fe59f3fafcddf8c11beb0753e6e2c341b0560a0805123f72e684bb57efb0fa14",
         "0004_idt_role_capability.sql": "11868ae67791dd23dc0bc9ca85eca6c3bdb268d2e2b632969203254eddb13a2e",
         "0005_idt_authz_grant.sql": "88f810ca616d709a8a1a596dbd81265a3efe9744b43670cc78e268bbfd9441de"
       }

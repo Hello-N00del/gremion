@@ -66,10 +66,10 @@ describe('migrations/bodies: the shipped files', () => {
     expect(lint(again, priorRoutines(F1)).problems.map((p) => p.rule)).toContain('function-or-view-not-new')
   })
 
-  it('the chain defines each routine once: refuse_delete, kind guard, acyclic x2, membership_derive (+ the prefix pair)', () => {
+  it('the chain defines each routine once: refuse_delete, refuse_truncate, kind guard, acyclic x2, membership_derive (+ the prefix pair)', () => {
     const names: string[] = []
     for (const f of [join(CORE, '0001_idt_setup.sql'), F1, F2]) names.push(...(createdRoutineNames(text(f)) as Set<string>))
-    expect(names.sort()).toEqual(['body_acyclic', 'current_customer_id', 'membership_derive', 'org_unit_acyclic', 'org_unit_kind_guard', 'refuse_delete', 'refuse_update', 'touch_row'].map((n) => `idt.${n}`).sort())
+    expect(names.sort()).toEqual(['body_acyclic', 'current_customer_id', 'membership_derive', 'org_unit_acyclic', 'org_unit_kind_guard', 'refuse_delete', 'refuse_truncate', 'refuse_update', 'touch_row'].map((n) => `idt.${n}`).sort())
   })
 
   it('skipped aggregates stay skipped (081, 130, 081, 084, 042): no role, capability, correction, grant, import, idp, branding table', () => {
