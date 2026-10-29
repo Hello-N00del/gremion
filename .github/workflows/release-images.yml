@@ -11,10 +11,13 @@ name: Release images
 # the host-side deploy are operator steps on the operator's workstation:
 #
 #   1. run this workflow (dispatch, or push an rc-v* / v* tag);
-#   2. scripts/release/cut-dist-tag.sh <X.Y.Z> --run-id <this run>, which
-#      downloads the release-pins artefact, commits the pins layers and
-#      release.json, runs verify, signs every pinned digest with the operator's
-#      key and pushes the annotated dist-vX.Y.Z tag;
+#   2. scripts/release/cut-dist-tag.sh <X.Y.Z> --run-id <this run>
+#      [--first-release, when no dist-v* tag exists yet], which downloads the
+#      release-pins artefact, commits the pins layers and release.json, runs
+#      verify, signs every pinned digest with the operator's key and pushes the
+#      annotated dist-vX.Y.Z tag. The key's password is supplied as
+#      COSIGN_PASSWORD_FILE=<file> (or typed at cosign's prompt), never as
+#      COSIGN_PASSWORD: the script refuses an inherited one;
 #   3. the host deploy, a manual operator step (docs/ops/runbook/upgrade.md).
 #
 # The pinned digests are what a host pulls, so the registry tag is incidental:
