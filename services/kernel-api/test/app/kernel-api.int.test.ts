@@ -131,8 +131,9 @@ describe('the kernel API on PG18 (scratch stack)', () => {
     expect(created).toHaveLength(1)
     expect(created[0]).toContain(`db=${kernelDatabaseOf(A.id)}`)
     expect(lines.findIndex((l) => l.startsWith('premigration-dump created'))).toBeLessThan(lines.findIndex((l) => /applied 0001_idt_setup\.sql/.test(l)))
-    expect(lines).toContain(`MIGRATE-RESULT customer=${A.id} applied=1 already=0`)
-    expect((await ledgerOf(A))!.map((r) => r.filename)).toEqual(['0001_idt_setup.sql'])
+    // the chain is core 0001 (077) + the two bodies files (080-a)
+    expect(lines).toContain(`MIGRATE-RESULT customer=${A.id} applied=3 already=0`)
+    expect((await ledgerOf(A))!.map((r) => r.filename)).toEqual(['0001_idt_setup.sql', '0002_idt_plumbing_structure.sql', '0003_idt_person_membership_tenure.sql'])
     const sql = connect(kernelDatabaseOf(A.id), { max: 1 })
     try {
       const [o] = await sql<{ schema_owner: string; fn_owner: string; server: number; legacy: string | null }[]>`
@@ -169,8 +170,8 @@ describe('the kernel API on PG18 (scratch stack)', () => {
   it('migrate (all): B migrated, A already current, deleting/deleted skipped; then B is served', async () => {
     const { code, lines } = await migrate([])
     expect(code, lines.join('\n')).toBe(0)
-    expect(lines).toContain(`MIGRATE-RESULT customer=${B.id} applied=1 already=0`)
-    expect(lines).toContain(`MIGRATE-RESULT customer=${A.id} applied=0 already=1 dump=none`)
+    expect(lines).toContain(`MIGRATE-RESULT customer=${B.id} applied=3 already=0`)
+    expect(lines).toContain(`MIGRATE-RESULT customer=${A.id} applied=0 already=3 dump=none`)
     expect(lines).toEqual(expect.arrayContaining([`MIGRATE-SKIPPED customer=${others[0]!.id} status=deleting`, `MIGRATE-SKIPPED customer=${others[1]!.id} status=deleted`]))
     expect((await app.inject({ url: '/api/v1/tenancy/self', headers: edge(B.host, await iss.mint('realm-b')) })).statusCode).toBe(200)
   })

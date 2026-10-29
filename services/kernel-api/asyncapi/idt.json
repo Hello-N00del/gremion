@@ -1,0 +1,1274 @@
+{
+  "asyncapi": "3.0.0",
+  "info": {
+    "title": "Gremion kernel API: identity events (IDT)",
+    "version": "1.0.0",
+    "description": "TASK-080-a. Events of the kernel API (bodies, org units, seats, wahlperioden, persons, memberships, tenures), written through enqueue(tx) into idt.outbox in the same transaction as the state change and relayed to the IDT stream. Subject: gremion.{tenantId}.idt.<aggregate>.<event>; CloudEvents type de.gremion.idt.<aggregate>.<event>.v1 (DOMAIN s.1). Payloads carry ids and minimal data only (TRD-154); aggregate_version is added to every payload by enqueue. Published ONLY by the nats-auth identity kernel-api. grant.*, branding.*, importjob.*, customersetting.*, person.profilechanged/erased, tenure.release-changed and wahlperiode.corrected are later tasks (081, 130, ops chain) and are not declared here."
+  },
+  "defaultContentType": "application/json",
+  "channels": {
+    "personInvited": {
+      "address": "gremion.{tenantId}.idt.person.invited",
+      "description": "de.gremion.idt.person.invited.v1",
+      "parameters": {
+        "tenantId": {
+          "description": "The customer's tenant token on the broker: its slug (the account nats-auth ensures)."
+        }
+      },
+      "messages": {
+        "personInvitedEvent": {
+          "$ref": "#/components/messages/PersonInvitedEvent"
+        }
+      }
+    },
+    "personActivated": {
+      "address": "gremion.{tenantId}.idt.person.activated",
+      "description": "de.gremion.idt.person.activated.v1",
+      "parameters": {
+        "tenantId": {
+          "description": "The customer's tenant token on the broker: its slug (the account nats-auth ensures)."
+        }
+      },
+      "messages": {
+        "personActivatedEvent": {
+          "$ref": "#/components/messages/PersonActivatedEvent"
+        }
+      }
+    },
+    "personDisabled": {
+      "address": "gremion.{tenantId}.idt.person.disabled",
+      "description": "de.gremion.idt.person.disabled.v1",
+      "parameters": {
+        "tenantId": {
+          "description": "The customer's tenant token on the broker: its slug (the account nats-auth ensures)."
+        }
+      },
+      "messages": {
+        "personDisabledEvent": {
+          "$ref": "#/components/messages/PersonDisabledEvent"
+        }
+      }
+    },
+    "personEnabled": {
+      "address": "gremion.{tenantId}.idt.person.enabled",
+      "description": "de.gremion.idt.person.enabled.v1",
+      "parameters": {
+        "tenantId": {
+          "description": "The customer's tenant token on the broker: its slug (the account nats-auth ensures)."
+        }
+      },
+      "messages": {
+        "personEnabledEvent": {
+          "$ref": "#/components/messages/PersonEnabledEvent"
+        }
+      }
+    },
+    "bodyCreated": {
+      "address": "gremion.{tenantId}.idt.body.created",
+      "description": "de.gremion.idt.body.created.v1",
+      "parameters": {
+        "tenantId": {
+          "description": "The customer's tenant token on the broker: its slug (the account nats-auth ensures)."
+        }
+      },
+      "messages": {
+        "bodyCreatedEvent": {
+          "$ref": "#/components/messages/BodyCreatedEvent"
+        }
+      }
+    },
+    "bodyUpdated": {
+      "address": "gremion.{tenantId}.idt.body.updated",
+      "description": "de.gremion.idt.body.updated.v1",
+      "parameters": {
+        "tenantId": {
+          "description": "The customer's tenant token on the broker: its slug (the account nats-auth ensures)."
+        }
+      },
+      "messages": {
+        "bodyUpdatedEvent": {
+          "$ref": "#/components/messages/BodyUpdatedEvent"
+        }
+      }
+    },
+    "bodyArchived": {
+      "address": "gremion.{tenantId}.idt.body.archived",
+      "description": "de.gremion.idt.body.archived.v1",
+      "parameters": {
+        "tenantId": {
+          "description": "The customer's tenant token on the broker: its slug (the account nats-auth ensures)."
+        }
+      },
+      "messages": {
+        "bodyArchivedEvent": {
+          "$ref": "#/components/messages/BodyArchivedEvent"
+        }
+      }
+    },
+    "orgunitCreated": {
+      "address": "gremion.{tenantId}.idt.orgunit.created",
+      "description": "de.gremion.idt.orgunit.created.v1",
+      "parameters": {
+        "tenantId": {
+          "description": "The customer's tenant token on the broker: its slug (the account nats-auth ensures)."
+        }
+      },
+      "messages": {
+        "orgunitCreatedEvent": {
+          "$ref": "#/components/messages/OrgunitCreatedEvent"
+        }
+      }
+    },
+    "orgunitUpdated": {
+      "address": "gremion.{tenantId}.idt.orgunit.updated",
+      "description": "de.gremion.idt.orgunit.updated.v1",
+      "parameters": {
+        "tenantId": {
+          "description": "The customer's tenant token on the broker: its slug (the account nats-auth ensures)."
+        }
+      },
+      "messages": {
+        "orgunitUpdatedEvent": {
+          "$ref": "#/components/messages/OrgunitUpdatedEvent"
+        }
+      }
+    },
+    "orgunitArchived": {
+      "address": "gremion.{tenantId}.idt.orgunit.archived",
+      "description": "de.gremion.idt.orgunit.archived.v1",
+      "parameters": {
+        "tenantId": {
+          "description": "The customer's tenant token on the broker: its slug (the account nats-auth ensures)."
+        }
+      },
+      "messages": {
+        "orgunitArchivedEvent": {
+          "$ref": "#/components/messages/OrgunitArchivedEvent"
+        }
+      }
+    },
+    "seatCreated": {
+      "address": "gremion.{tenantId}.idt.seat.created",
+      "description": "de.gremion.idt.seat.created.v1",
+      "parameters": {
+        "tenantId": {
+          "description": "The customer's tenant token on the broker: its slug (the account nats-auth ensures)."
+        }
+      },
+      "messages": {
+        "seatCreatedEvent": {
+          "$ref": "#/components/messages/SeatCreatedEvent"
+        }
+      }
+    },
+    "seatRetired": {
+      "address": "gremion.{tenantId}.idt.seat.retired",
+      "description": "de.gremion.idt.seat.retired.v1",
+      "parameters": {
+        "tenantId": {
+          "description": "The customer's tenant token on the broker: its slug (the account nats-auth ensures)."
+        }
+      },
+      "messages": {
+        "seatRetiredEvent": {
+          "$ref": "#/components/messages/SeatRetiredEvent"
+        }
+      }
+    },
+    "membershipStarted": {
+      "address": "gremion.{tenantId}.idt.membership.started",
+      "description": "de.gremion.idt.membership.started.v1",
+      "parameters": {
+        "tenantId": {
+          "description": "The customer's tenant token on the broker: its slug (the account nats-auth ensures)."
+        }
+      },
+      "messages": {
+        "membershipStartedEvent": {
+          "$ref": "#/components/messages/MembershipStartedEvent"
+        }
+      }
+    },
+    "membershipCorrected": {
+      "address": "gremion.{tenantId}.idt.membership.corrected",
+      "description": "de.gremion.idt.membership.corrected.v1",
+      "parameters": {
+        "tenantId": {
+          "description": "The customer's tenant token on the broker: its slug (the account nats-auth ensures)."
+        }
+      },
+      "messages": {
+        "membershipCorrectedEvent": {
+          "$ref": "#/components/messages/MembershipCorrectedEvent"
+        }
+      }
+    },
+    "membershipEnded": {
+      "address": "gremion.{tenantId}.idt.membership.ended",
+      "description": "de.gremion.idt.membership.ended.v1",
+      "parameters": {
+        "tenantId": {
+          "description": "The customer's tenant token on the broker: its slug (the account nats-auth ensures)."
+        }
+      },
+      "messages": {
+        "membershipEndedEvent": {
+          "$ref": "#/components/messages/MembershipEndedEvent"
+        }
+      }
+    },
+    "tenureStarted": {
+      "address": "gremion.{tenantId}.idt.tenure.started",
+      "description": "de.gremion.idt.tenure.started.v1",
+      "parameters": {
+        "tenantId": {
+          "description": "The customer's tenant token on the broker: its slug (the account nats-auth ensures)."
+        }
+      },
+      "messages": {
+        "tenureStartedEvent": {
+          "$ref": "#/components/messages/TenureStartedEvent"
+        }
+      }
+    },
+    "tenureCorrected": {
+      "address": "gremion.{tenantId}.idt.tenure.corrected",
+      "description": "de.gremion.idt.tenure.corrected.v1",
+      "parameters": {
+        "tenantId": {
+          "description": "The customer's tenant token on the broker: its slug (the account nats-auth ensures)."
+        }
+      },
+      "messages": {
+        "tenureCorrectedEvent": {
+          "$ref": "#/components/messages/TenureCorrectedEvent"
+        }
+      }
+    },
+    "tenureEnded": {
+      "address": "gremion.{tenantId}.idt.tenure.ended",
+      "description": "de.gremion.idt.tenure.ended.v1",
+      "parameters": {
+        "tenantId": {
+          "description": "The customer's tenant token on the broker: its slug (the account nats-auth ensures)."
+        }
+      },
+      "messages": {
+        "tenureEndedEvent": {
+          "$ref": "#/components/messages/TenureEndedEvent"
+        }
+      }
+    },
+    "wahlperiodeCreated": {
+      "address": "gremion.{tenantId}.idt.wahlperiode.created",
+      "description": "de.gremion.idt.wahlperiode.created.v1",
+      "parameters": {
+        "tenantId": {
+          "description": "The customer's tenant token on the broker: its slug (the account nats-auth ensures)."
+        }
+      },
+      "messages": {
+        "wahlperiodeCreatedEvent": {
+          "$ref": "#/components/messages/WahlperiodeCreatedEvent"
+        }
+      }
+    },
+    "wahlperiodeClosed": {
+      "address": "gremion.{tenantId}.idt.wahlperiode.closed",
+      "description": "de.gremion.idt.wahlperiode.closed.v1",
+      "parameters": {
+        "tenantId": {
+          "description": "The customer's tenant token on the broker: its slug (the account nats-auth ensures)."
+        }
+      },
+      "messages": {
+        "wahlperiodeClosedEvent": {
+          "$ref": "#/components/messages/WahlperiodeClosedEvent"
+        }
+      }
+    }
+  },
+  "operations": {
+    "publishPersonInvited": {
+      "action": "send",
+      "channel": {
+        "$ref": "#/channels/personInvited"
+      },
+      "summary": "The kernel API publishes person.invited."
+    },
+    "publishPersonActivated": {
+      "action": "send",
+      "channel": {
+        "$ref": "#/channels/personActivated"
+      },
+      "summary": "The kernel API publishes person.activated."
+    },
+    "publishPersonDisabled": {
+      "action": "send",
+      "channel": {
+        "$ref": "#/channels/personDisabled"
+      },
+      "summary": "The kernel API publishes person.disabled."
+    },
+    "publishPersonEnabled": {
+      "action": "send",
+      "channel": {
+        "$ref": "#/channels/personEnabled"
+      },
+      "summary": "The kernel API publishes person.enabled."
+    },
+    "publishBodyCreated": {
+      "action": "send",
+      "channel": {
+        "$ref": "#/channels/bodyCreated"
+      },
+      "summary": "The kernel API publishes body.created."
+    },
+    "publishBodyUpdated": {
+      "action": "send",
+      "channel": {
+        "$ref": "#/channels/bodyUpdated"
+      },
+      "summary": "The kernel API publishes body.updated."
+    },
+    "publishBodyArchived": {
+      "action": "send",
+      "channel": {
+        "$ref": "#/channels/bodyArchived"
+      },
+      "summary": "The kernel API publishes body.archived."
+    },
+    "publishOrgunitCreated": {
+      "action": "send",
+      "channel": {
+        "$ref": "#/channels/orgunitCreated"
+      },
+      "summary": "The kernel API publishes orgunit.created."
+    },
+    "publishOrgunitUpdated": {
+      "action": "send",
+      "channel": {
+        "$ref": "#/channels/orgunitUpdated"
+      },
+      "summary": "The kernel API publishes orgunit.updated."
+    },
+    "publishOrgunitArchived": {
+      "action": "send",
+      "channel": {
+        "$ref": "#/channels/orgunitArchived"
+      },
+      "summary": "The kernel API publishes orgunit.archived."
+    },
+    "publishSeatCreated": {
+      "action": "send",
+      "channel": {
+        "$ref": "#/channels/seatCreated"
+      },
+      "summary": "The kernel API publishes seat.created."
+    },
+    "publishSeatRetired": {
+      "action": "send",
+      "channel": {
+        "$ref": "#/channels/seatRetired"
+      },
+      "summary": "The kernel API publishes seat.retired."
+    },
+    "publishMembershipStarted": {
+      "action": "send",
+      "channel": {
+        "$ref": "#/channels/membershipStarted"
+      },
+      "summary": "The kernel API publishes membership.started."
+    },
+    "publishMembershipCorrected": {
+      "action": "send",
+      "channel": {
+        "$ref": "#/channels/membershipCorrected"
+      },
+      "summary": "The kernel API publishes membership.corrected."
+    },
+    "publishMembershipEnded": {
+      "action": "send",
+      "channel": {
+        "$ref": "#/channels/membershipEnded"
+      },
+      "summary": "The kernel API publishes membership.ended."
+    },
+    "publishTenureStarted": {
+      "action": "send",
+      "channel": {
+        "$ref": "#/channels/tenureStarted"
+      },
+      "summary": "The kernel API publishes tenure.started."
+    },
+    "publishTenureCorrected": {
+      "action": "send",
+      "channel": {
+        "$ref": "#/channels/tenureCorrected"
+      },
+      "summary": "The kernel API publishes tenure.corrected."
+    },
+    "publishTenureEnded": {
+      "action": "send",
+      "channel": {
+        "$ref": "#/channels/tenureEnded"
+      },
+      "summary": "The kernel API publishes tenure.ended."
+    },
+    "publishWahlperiodeCreated": {
+      "action": "send",
+      "channel": {
+        "$ref": "#/channels/wahlperiodeCreated"
+      },
+      "summary": "The kernel API publishes wahlperiode.created."
+    },
+    "publishWahlperiodeClosed": {
+      "action": "send",
+      "channel": {
+        "$ref": "#/channels/wahlperiodeClosed"
+      },
+      "summary": "The kernel API publishes wahlperiode.closed."
+    }
+  },
+  "components": {
+    "messages": {
+      "PersonInvitedEvent": {
+        "name": "de.gremion.idt.person.invited.v1",
+        "contentType": "application/json",
+        "payload": {
+          "$ref": "#/components/schemas/PersonInvitedPayload"
+        }
+      },
+      "PersonActivatedEvent": {
+        "name": "de.gremion.idt.person.activated.v1",
+        "contentType": "application/json",
+        "payload": {
+          "$ref": "#/components/schemas/PersonActivatedPayload"
+        }
+      },
+      "PersonDisabledEvent": {
+        "name": "de.gremion.idt.person.disabled.v1",
+        "contentType": "application/json",
+        "payload": {
+          "$ref": "#/components/schemas/PersonDisabledPayload"
+        }
+      },
+      "PersonEnabledEvent": {
+        "name": "de.gremion.idt.person.enabled.v1",
+        "contentType": "application/json",
+        "payload": {
+          "$ref": "#/components/schemas/PersonEnabledPayload"
+        }
+      },
+      "BodyCreatedEvent": {
+        "name": "de.gremion.idt.body.created.v1",
+        "contentType": "application/json",
+        "payload": {
+          "$ref": "#/components/schemas/BodyCreatedPayload"
+        }
+      },
+      "BodyUpdatedEvent": {
+        "name": "de.gremion.idt.body.updated.v1",
+        "contentType": "application/json",
+        "payload": {
+          "$ref": "#/components/schemas/BodyUpdatedPayload"
+        }
+      },
+      "BodyArchivedEvent": {
+        "name": "de.gremion.idt.body.archived.v1",
+        "contentType": "application/json",
+        "payload": {
+          "$ref": "#/components/schemas/BodyArchivedPayload"
+        }
+      },
+      "OrgunitCreatedEvent": {
+        "name": "de.gremion.idt.orgunit.created.v1",
+        "contentType": "application/json",
+        "payload": {
+          "$ref": "#/components/schemas/OrgunitCreatedPayload"
+        }
+      },
+      "OrgunitUpdatedEvent": {
+        "name": "de.gremion.idt.orgunit.updated.v1",
+        "contentType": "application/json",
+        "payload": {
+          "$ref": "#/components/schemas/OrgunitUpdatedPayload"
+        }
+      },
+      "OrgunitArchivedEvent": {
+        "name": "de.gremion.idt.orgunit.archived.v1",
+        "contentType": "application/json",
+        "payload": {
+          "$ref": "#/components/schemas/OrgunitArchivedPayload"
+        }
+      },
+      "SeatCreatedEvent": {
+        "name": "de.gremion.idt.seat.created.v1",
+        "contentType": "application/json",
+        "payload": {
+          "$ref": "#/components/schemas/SeatCreatedPayload"
+        }
+      },
+      "SeatRetiredEvent": {
+        "name": "de.gremion.idt.seat.retired.v1",
+        "contentType": "application/json",
+        "payload": {
+          "$ref": "#/components/schemas/SeatRetiredPayload"
+        }
+      },
+      "MembershipStartedEvent": {
+        "name": "de.gremion.idt.membership.started.v1",
+        "contentType": "application/json",
+        "payload": {
+          "$ref": "#/components/schemas/MembershipStartedPayload"
+        }
+      },
+      "MembershipCorrectedEvent": {
+        "name": "de.gremion.idt.membership.corrected.v1",
+        "contentType": "application/json",
+        "payload": {
+          "$ref": "#/components/schemas/MembershipCorrectedPayload"
+        }
+      },
+      "MembershipEndedEvent": {
+        "name": "de.gremion.idt.membership.ended.v1",
+        "contentType": "application/json",
+        "payload": {
+          "$ref": "#/components/schemas/MembershipEndedPayload"
+        }
+      },
+      "TenureStartedEvent": {
+        "name": "de.gremion.idt.tenure.started.v1",
+        "contentType": "application/json",
+        "payload": {
+          "$ref": "#/components/schemas/TenureStartedPayload"
+        }
+      },
+      "TenureCorrectedEvent": {
+        "name": "de.gremion.idt.tenure.corrected.v1",
+        "contentType": "application/json",
+        "payload": {
+          "$ref": "#/components/schemas/TenureCorrectedPayload"
+        }
+      },
+      "TenureEndedEvent": {
+        "name": "de.gremion.idt.tenure.ended.v1",
+        "contentType": "application/json",
+        "payload": {
+          "$ref": "#/components/schemas/TenureEndedPayload"
+        }
+      },
+      "WahlperiodeCreatedEvent": {
+        "name": "de.gremion.idt.wahlperiode.created.v1",
+        "contentType": "application/json",
+        "payload": {
+          "$ref": "#/components/schemas/WahlperiodeCreatedPayload"
+        }
+      },
+      "WahlperiodeClosedEvent": {
+        "name": "de.gremion.idt.wahlperiode.closed.v1",
+        "contentType": "application/json",
+        "payload": {
+          "$ref": "#/components/schemas/WahlperiodeClosedPayload"
+        }
+      }
+    },
+    "schemas": {
+      "PersonInvitedPayload": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "person_id",
+          "customer_id",
+          "aggregate_version"
+        ],
+        "properties": {
+          "person_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "customer_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "aggregate_version": {
+            "type": "integer",
+            "minimum": 1
+          }
+        }
+      },
+      "PersonActivatedPayload": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "person_id",
+          "activated_at",
+          "aggregate_version"
+        ],
+        "properties": {
+          "person_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "activated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "aggregate_version": {
+            "type": "integer",
+            "minimum": 1
+          }
+        }
+      },
+      "PersonDisabledPayload": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "person_id",
+          "disabled_at",
+          "aggregate_version"
+        ],
+        "properties": {
+          "person_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "disabled_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "aggregate_version": {
+            "type": "integer",
+            "minimum": 1
+          }
+        }
+      },
+      "PersonEnabledPayload": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "person_id",
+          "aggregate_version"
+        ],
+        "properties": {
+          "person_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "aggregate_version": {
+            "type": "integer",
+            "minimum": 1
+          }
+        }
+      },
+      "BodyCreatedPayload": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "body_id",
+          "kind_key",
+          "parent_body_id",
+          "aggregate_version"
+        ],
+        "properties": {
+          "body_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "kind_key": {
+            "type": "string"
+          },
+          "parent_body_id": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "format": "uuid"
+              }
+            ]
+          },
+          "aggregate_version": {
+            "type": "integer",
+            "minimum": 1
+          }
+        }
+      },
+      "BodyUpdatedPayload": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "body_id",
+          "kind_key",
+          "parent_body_id",
+          "aggregate_version"
+        ],
+        "properties": {
+          "body_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "kind_key": {
+            "type": "string"
+          },
+          "parent_body_id": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "format": "uuid"
+              }
+            ]
+          },
+          "aggregate_version": {
+            "type": "integer",
+            "minimum": 1
+          }
+        }
+      },
+      "BodyArchivedPayload": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "body_id",
+          "archived_at",
+          "aggregate_version"
+        ],
+        "properties": {
+          "body_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "archived_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "aggregate_version": {
+            "type": "integer",
+            "minimum": 1
+          }
+        }
+      },
+      "OrgunitCreatedPayload": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "org_unit_id",
+          "body_id",
+          "parent_org_unit_id",
+          "kind_key",
+          "is_organ",
+          "aggregate_version"
+        ],
+        "properties": {
+          "org_unit_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "body_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "parent_org_unit_id": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "format": "uuid"
+              }
+            ]
+          },
+          "kind_key": {
+            "type": "string"
+          },
+          "is_organ": {
+            "type": "boolean"
+          },
+          "aggregate_version": {
+            "type": "integer",
+            "minimum": 1
+          }
+        }
+      },
+      "OrgunitUpdatedPayload": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "org_unit_id",
+          "body_id",
+          "kind_key",
+          "aggregate_version"
+        ],
+        "properties": {
+          "org_unit_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "body_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "kind_key": {
+            "type": "string"
+          },
+          "aggregate_version": {
+            "type": "integer",
+            "minimum": 1
+          }
+        }
+      },
+      "OrgunitArchivedPayload": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "org_unit_id",
+          "body_id",
+          "aggregate_version"
+        ],
+        "properties": {
+          "org_unit_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "body_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "aggregate_version": {
+            "type": "integer",
+            "minimum": 1
+          }
+        }
+      },
+      "SeatCreatedPayload": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "seat_id",
+          "body_id",
+          "org_unit_id",
+          "seat_kind",
+          "fill_mode",
+          "voting",
+          "aggregate_version"
+        ],
+        "properties": {
+          "seat_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "body_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "org_unit_id": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "format": "uuid"
+              }
+            ]
+          },
+          "seat_kind": {
+            "type": "string"
+          },
+          "fill_mode": {
+            "type": "string"
+          },
+          "voting": {
+            "type": "boolean"
+          },
+          "aggregate_version": {
+            "type": "integer",
+            "minimum": 1
+          }
+        }
+      },
+      "SeatRetiredPayload": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "seat_id",
+          "body_id",
+          "aggregate_version"
+        ],
+        "properties": {
+          "seat_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "body_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "aggregate_version": {
+            "type": "integer",
+            "minimum": 1
+          }
+        }
+      },
+      "MembershipStartedPayload": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "membership_id",
+          "body_id",
+          "org_unit_id",
+          "person_id",
+          "participation_kind",
+          "voting",
+          "valid_from",
+          "aggregate_version"
+        ],
+        "properties": {
+          "membership_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "body_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "org_unit_id": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "format": "uuid"
+              }
+            ]
+          },
+          "person_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "participation_kind": {
+            "type": "string"
+          },
+          "voting": {
+            "type": "boolean"
+          },
+          "valid_from": {
+            "type": "string",
+            "format": "date"
+          },
+          "aggregate_version": {
+            "type": "integer",
+            "minimum": 1
+          }
+        }
+      },
+      "MembershipCorrectedPayload": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "membership_id",
+          "changed",
+          "valid_from",
+          "valid_until",
+          "voting",
+          "aggregate_version"
+        ],
+        "properties": {
+          "membership_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "changed": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "valid_from": {
+            "type": "string",
+            "format": "date"
+          },
+          "valid_until": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "format": "date"
+              }
+            ]
+          },
+          "voting": {
+            "type": "boolean"
+          },
+          "aggregate_version": {
+            "type": "integer",
+            "minimum": 1
+          }
+        }
+      },
+      "MembershipEndedPayload": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "membership_id",
+          "body_id",
+          "person_id",
+          "valid_until",
+          "end_reason",
+          "aggregate_version"
+        ],
+        "properties": {
+          "membership_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "body_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "person_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "valid_until": {
+            "type": "string",
+            "format": "date"
+          },
+          "end_reason": {
+            "type": "string"
+          },
+          "aggregate_version": {
+            "type": "integer",
+            "minimum": 1
+          }
+        }
+      },
+      "TenureStartedPayload": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "tenure_id",
+          "seat_id",
+          "seat_kind",
+          "body_id",
+          "person_id",
+          "starts_on",
+          "source",
+          "mandate_beschluss_ref",
+          "aggregate_version"
+        ],
+        "properties": {
+          "tenure_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "seat_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "seat_kind": {
+            "type": "string"
+          },
+          "body_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "person_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "starts_on": {
+            "type": "string",
+            "format": "date"
+          },
+          "source": {
+            "type": "string"
+          },
+          "mandate_beschluss_ref": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "format": "uuid"
+              }
+            ]
+          },
+          "aggregate_version": {
+            "type": "integer",
+            "minimum": 1
+          }
+        }
+      },
+      "TenureCorrectedPayload": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "tenure_id",
+          "seat_kind",
+          "changed",
+          "starts_on",
+          "ended_on",
+          "aggregate_version"
+        ],
+        "properties": {
+          "tenure_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "seat_kind": {
+            "type": "string"
+          },
+          "changed": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "starts_on": {
+            "type": "string",
+            "format": "date"
+          },
+          "ended_on": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "format": "date"
+              }
+            ]
+          },
+          "aggregate_version": {
+            "type": "integer",
+            "minimum": 1
+          }
+        }
+      },
+      "TenureEndedPayload": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "tenure_id",
+          "seat_id",
+          "seat_kind",
+          "body_id",
+          "person_id",
+          "ended_on",
+          "end_reason",
+          "aggregate_version"
+        ],
+        "properties": {
+          "tenure_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "seat_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "seat_kind": {
+            "type": "string"
+          },
+          "body_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "person_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "ended_on": {
+            "type": "string",
+            "format": "date"
+          },
+          "end_reason": {
+            "type": "string"
+          },
+          "aggregate_version": {
+            "type": "integer",
+            "minimum": 1
+          }
+        }
+      },
+      "WahlperiodeCreatedPayload": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "wahlperiode_id",
+          "body_id",
+          "org_unit_id",
+          "starts_on",
+          "ends_on",
+          "aggregate_version"
+        ],
+        "properties": {
+          "wahlperiode_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "body_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "org_unit_id": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "format": "uuid"
+              }
+            ]
+          },
+          "starts_on": {
+            "type": "string",
+            "format": "date"
+          },
+          "ends_on": {
+            "type": "string",
+            "format": "date"
+          },
+          "aggregate_version": {
+            "type": "integer",
+            "minimum": 1
+          }
+        }
+      },
+      "WahlperiodeClosedPayload": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "wahlperiode_id",
+          "body_id",
+          "aggregate_version"
+        ],
+        "properties": {
+          "wahlperiode_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "body_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "aggregate_version": {
+            "type": "integer",
+            "minimum": 1
+          }
+        }
+      }
+    }
+  }
+}

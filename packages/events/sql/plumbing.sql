@@ -138,9 +138,10 @@ CREATE TABLE {{ctx}}.inbox (
   CONSTRAINT inbox_attempt_count_check CHECK (attempt_count >= 0),
   CONSTRAINT inbox_last_error_code_check CHECK (char_length(last_error_code) BETWEEN 1 AND 64),
   CONSTRAINT inbox_state_times_check CHECK (
-        (processing_state IN ('received', 'failed') AND processed_at IS NULL)
-     OR (processing_state IN ('processed', 'skipped_stale', 'skipped_test') AND processed_at IS NOT NULL)
-     OR (processing_state = 'dead_lettered' AND dead_lettered_at IS NOT NULL))
+        (processing_state IN ('received', 'failed') AND processed_at IS NULL     AND dead_lettered_at IS NULL)
+     OR (processing_state IN ('processed', 'skipped_stale', 'skipped_test')
+                                                     AND processed_at IS NOT NULL AND dead_lettered_at IS NULL)
+     OR (processing_state = 'dead_lettered'          AND processed_at IS NULL     AND dead_lettered_at IS NOT NULL))
 );
 CREATE INDEX inbox_received_at_idx ON {{ctx}}.inbox (received_at);
 CREATE INDEX inbox_retry_idx ON {{ctx}}.inbox (received_at) WHERE processing_state IN ('received', 'failed');

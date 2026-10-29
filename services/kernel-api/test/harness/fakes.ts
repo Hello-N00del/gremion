@@ -5,6 +5,7 @@
 import type { FastifyInstance } from 'fastify'
 import { createHostRejectionLog, type HostRejectReason } from '@gremion/tenancy-core'
 import { buildApp } from '../../src/app/build.ts'
+import { denyAll } from '../../src/bodies/authz.ts'
 import type { GateVerdict, KernelApiDeps, TenantRow, TenantStatus } from '../../src/app/deps.ts'
 import type { ModuleRuntimeDecl } from '../../src/registry/declarations.ts'
 
@@ -99,6 +100,10 @@ export function fakeDeps(w: FakeWorld, over: Partial<KernelApiDeps> = {}): { dep
         const id = w.domains.get(host)
         return id ? (w.tenants.get(id) ?? null) : null
       },
+      async listActive() {
+        if (w.controlDown) throw new Error('connect ECONNREFUSED control')
+        return [...w.tenants.values()].filter((t) => t.status === 'active')
+      },
       async lookupId(id) {
         rec.idLookups.push(id)
         if (w.controlDown) throw new Error('connect ECONNREFUSED control')
@@ -129,6 +134,9 @@ export function fakeDeps(w: FakeWorld, over: Partial<KernelApiDeps> = {}): { dep
       },
     },
     declarations: { get: (k) => w.declarations.get(k) },
+    // the identity reads open the customer's database; a suite that serves them passes its own (test/bodies)
+    tenantDb: { sqlFor: async () => { throw new Error('tenantDb is not faked in this suite') } },
+    authorizer: denyAll,
     log: { info: log('info'), warn: log('warn'), error: log('error') },
     hostRejection: createHostRejectionLog({ emit: (msg, fields) => void rec.events.push({ msg, fields }), schedule: () => {} }),
     ...over,

@@ -17,4 +17,4 @@ export const KERNEL_API_CHAIN = 'kernel-api'
  * service root. Must equal ranges.json kernel-api manifestDirs (a test holds
  * them equal): TASK-080/081 add bodies/authz here AND there.
  */
-export const KERNEL_API_MIGRATION_DIRS: readonly string[] = Object.freeze(['migrations/core'])
+export const KERNEL_API_MIGRATION_DIRS: readonly string[] = Object.freeze(['migrations/core', 'migrations/bodies'])
