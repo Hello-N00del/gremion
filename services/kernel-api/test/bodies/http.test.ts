@@ -15,6 +15,8 @@ import { buildResponseContract, checkResponse } from '../../src/app/response-con
 import { A_HOST, A_ID, appWith, edge, world } from '../harness/fakes.ts'
 import { normalise, scopeProblems, type RecordedQuery } from '../harness/query-recorder.ts'
 
+const byCodeUnit = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0)
+
 const doc = inlineRefs(loadSpec(SPEC_URL))
 const contract = buildResponseContract(doc)
 const U = (n: number) => `0192f0c1-2b3c-7d4e-8f00-00000000${String(n).padStart(4, '0')}`
@@ -210,7 +212,7 @@ describe('the bodies operations (TASK-080-a step c)', () => {
 
   it('the HTTP writes of the bodies tag are the own preference and three person writes; everything else has no route', async () => {
     const writes = listOperations(doc).filter((o) => (o.operation as { tags?: string[] }).tags?.includes('bodies') && o.method !== 'GET')
-    expect(writes.map((o) => o.operationId).sort()).toEqual(['createBody', 'invitePerson', 'putOwnPreference', 'startMembership'])
+    expect(writes.map((o) => String(o.operationId)).sort(byCodeUnit)).toEqual(['createBody', 'invitePerson', 'putOwnPreference', 'startMembership'])
     const { app } = setup()
     for (const [method, url] of [['PUT', `/api/v1/bodies/${BODY}`], ['DELETE', `/api/v1/bodies/${BODY}`], ['DELETE', `/api/v1/persons/${PERSON}`], ['POST', `/api/v1/seats`]] as const) {
       const res = await app.inject({ method, url, headers: edge(A_HOST, 'token-a'), payload: {} })

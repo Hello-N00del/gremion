@@ -132,7 +132,7 @@ export function checkWorkflow(doc, { requiredSuites, unitParts, integrationParts
   for (const [name, where] of seen) {
     if (where.length > 1) problems.push(`"${name}" is run ${where.length} times (${where.join(', ')}) -- combine-records.mjs refuses a suite key present in two records`)
   }
-  for (const [whole, parts] of [['unit', unitParts], ['integration', integrationParts]]) {
+  for (const { whole, parts } of [{ whole: 'unit', parts: unitParts }, { whole: 'integration', parts: integrationParts }]) {
     if (seen.has(whole)) {
       const overlapping = parts.filter((p) => seen.has(`${whole}:${p}`))
       if (overlapping.length > 0) {

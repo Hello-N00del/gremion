@@ -44,7 +44,7 @@ describe('kernelTargetResolver (Q3)', () => {
 
   it('only the kernel module, and only a canonical UUIDv7 customer', () => {
     expect(() => resolve(A_ID, 'calendar')).toThrow(/only kernel databases/)
-    expect(() => kernelDatabaseOf('../x')).toThrow()
+    expect(() => kernelDatabaseOf('../x')).toThrow(/not a canonical lowercase UUIDv7/)
   })
 
   it('a url carrying a startup parameter (options=-c role=...) is refused (tenant-store assertTargetMatches)', () => {

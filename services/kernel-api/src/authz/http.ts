@@ -48,7 +48,7 @@ export function isAvailabilityError(err: unknown, depth = 0): boolean {
   if (typeof err !== 'object' || err === null || depth > 3) return false
   const e = err as { code?: unknown; message?: unknown; cause?: unknown; errors?: unknown }
   if (e instanceof KernelDbNotWiredError) return true
-  if (typeof e.code === 'string' && (AVAILABILITY_CODES.has(e.code) || /^08/.test(e.code))) return true
+  if (typeof e.code === 'string' && (AVAILABILITY_CODES.has(e.code) || e.code.startsWith('08'))) return true
   if (typeof e.message === 'string' && AVAILABILITY_MESSAGE.test(e.message)) return true
   if (isAvailabilityError(e.cause, depth + 1)) return true
   return Array.isArray(e.errors) && e.errors.some((x) => isAvailabilityError(x, depth + 1))

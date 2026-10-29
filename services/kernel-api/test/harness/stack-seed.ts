@@ -6,9 +6,9 @@
 //   T077_SEED_MODE=world   control, gremion_platform, reader, customers A and B
 //   T077_SEED_MODE=late     customer C ("provisioned after the migrate job")
 // State comes from T077_STATE (written by stack-proof.sh); results merge into it.
-import { readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { it } from 'vitest'
+import { expect, it } from 'vitest'
 import { buildWorld, connect, CONTROL_DB, createCustomer, enableModule, stack, type Customer, type ScratchWorld } from './scratch.ts'
 
 const statePath = process.env.T077_STATE!
@@ -56,6 +56,7 @@ it(`seed ${process.env.T077_SEED_MODE}`, { timeout: 180_000 }, async () => {
     throw new Error('T077_SEED_MODE must be world|late')
   }
   writeFileSync(statePath, JSON.stringify(st, null, 2))
+  expect(existsSync(statePath)).toBe(true)
   console.log(`[t077] seeded (${mode})`)
 
 })

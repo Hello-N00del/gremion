@@ -34,6 +34,7 @@ import { INTEGRATION_PARTS } from './suites/integration.mjs'
 import { UNIT_PARTS } from './suites/unit.mjs'
 
 const REPO_ROOT = path.join(import.meta.dirname, '..', '..')
+const byCodeUnit = (a, b) => (a < b ? -1 : a > b ? 1 : 0)
 const SHA_RE = /^[0-9a-f]{40}$/
 
 export class UsageError extends Error {}
@@ -53,6 +54,7 @@ function takeValue(argv, i, flag) {
 
 /** Any argument other than the three below is a usage error, never ignored. */
 export function parseArgs(argv) {
+  /** @type {{inDir: string|null, sha: string|null, out: string|null}} */
   const out = { inDir: null, sha: null, out: null }
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]
@@ -81,7 +83,7 @@ export function findJsonFiles(dir) {
     }
   }
   walk(dir)
-  return found.sort()
+  return found.sort(byCodeUnit)
 }
 
 function validateRecord(raw, file, sha) {

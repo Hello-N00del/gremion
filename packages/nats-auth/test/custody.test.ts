@@ -91,10 +91,9 @@ describe('seed custody (compose renders)', () => {
     expect(String(k.environment?.NATS_URL)).toBe('nats://nats-guardstack:4222')
     expect(k.environment?.NATS_SECRETS_DIR).toBe('/run/secrets/nats')
     const m = app.services['kernel-api-migrate']
-    if (m) {
-      expect(m.environment ?? {}).not.toHaveProperty('NATS_URL')
-      expect((m.volumes ?? []).some((v) => v.source === 'nats-secrets')).toBe(false)
-    }
+    // the one-shot may be absent from a render; when present it holds neither the broker URL nor the secrets volume
+    expect(m?.environment ?? {}).not.toHaveProperty('NATS_URL')
+    expect((m?.volumes ?? []).some((v) => v.source === 'nats-secrets')).toBe(false)
   })
 
   test('break: the whole seed volume (or a writable, or another module\'s subpath) mounted into kernel-api fails', () => {

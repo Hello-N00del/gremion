@@ -1,4 +1,4 @@
 {
-  "baseline": 39,
-  "note": "R25-KC: standalone oxlint --type-aware error count on unit/R25-dedup after merging main c2810a8 (main itself counts 96 there); only ever lowered. Train r29-12: F1-FIX-02-K also fixed runner.ts no-unsafe-finally (T5) and strip-outer-transaction.ts no-unused-expressions x2 (T6). Measured 70 on the merged train (73 on main minus 02-K's 3 fixes)."
+  "baseline": 0,
+  "note": "standalone oxlint --type-aware error count; only ever lowered. 2026-10-29 (CI consolidation): the tree had drifted to 77 while the gate was not run in CI, all 77 were fixed at the source (tests given real throw messages and unconditional assertions, ESC/NUL regexes marked intentional, sort comparators and typed template operands made explicit), so this is now a plain zero-error gate."
 }

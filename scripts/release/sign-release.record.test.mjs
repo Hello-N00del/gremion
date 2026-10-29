@@ -50,7 +50,7 @@ function repo() {
   chmodSync(join(r, 'scripts/release/sign-release.sh'), 0o755)
   cpSync(join(REPO_ROOT, 'scripts/verify'), join(r, 'scripts/verify'), {
     recursive: true,
-    filter: (src) => !/[\/]scripts[\/]verify[\/]out([\/]|$)/.test(src),
+    filter: (src) => !/[/]scripts[/]verify[/]out([/]|$)/.test(src),
   })
   git(r, 'init', '-q')
   git(r, 'add', '-A')

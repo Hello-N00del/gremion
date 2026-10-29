@@ -104,7 +104,7 @@ describe('kernel-api migrate: refusals before any database (Q10)', () => {
 
   it('setRoleHook refuses anything but a k_<hex32>_owner role name', () => {
     expect(() => setRoleHook('postgres')).toThrow(/refusing owner role/)
-    expect(() => setRoleHook('k_0192f0c12b3c7d4e8f001122334455aa_owner"; DROP')).toThrow()
+    expect(() => setRoleHook('k_0192f0c12b3c7d4e8f001122334455aa_owner"; DROP')).toThrow(/refusing owner role/)
     expect(typeof setRoleHook('k_0192f0c12b3c7d4e8f001122334455aa_owner')).toBe('function')
   })
 })

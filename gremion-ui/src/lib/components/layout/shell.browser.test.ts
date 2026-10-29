@@ -283,11 +283,13 @@ describe('(3) state per width, the toggle, the stored choice', () => {
   ] as const)('with nothing stored, %i px is %s (%i px column) and nothing is written', async (w, mode, colW) => {
     await mount({ width: w, height: 800 })
     expect(columnWidth()).toBe(colW)
+    /* oxlint-disable vitest/no-conditional-expect -- the branch is keyed on the case's own parameter, so exactly one arm always runs */
     if (mode === 'drawer') expect(visible(hamburger())).toBe(true)
     else {
       expect(visible(hamburger())).toBe(false)
       await vi.waitFor(() => expect(toggle().getAttribute('aria-expanded')).toBe(String(mode === 'expanded')))
     }
+    /* oxlint-enable vitest/no-conditional-expect */
     expect(localStorage.getItem(NAV_STORAGE_KEY)).toBeNull()
   })
 
@@ -501,10 +503,12 @@ describe('(7) target sizes', () => {
     await mount({ width: w, height: 900 })
     if (state === 'drawer') await openDrawerByKeyboard()
     const scope = state === 'drawer' ? dialog()! : navColumn()
+    /* oxlint-disable vitest/no-conditional-expect -- keyed on the case's own parameter (the rail state), not on a runtime outcome */
     if (state === 'rail') {
       await userEvent.click($('.nav-col .legal-btn')!)
       await vi.waitFor(() => expect(visible($('.nav-col .legal-list a')!)).toBe(true))
     }
+    /* oxlint-enable vitest/no-conditional-expect */
     const targets = $$('a[href], button', scope).filter(visible)
     expect(targets.length).toBeGreaterThan(LABELS.length)
     const small = targets
@@ -564,11 +568,13 @@ describe('(8) zoom, text size, density and text spacing', () => {
     ]
     expect(els.filter(shown).length).toBeGreaterThan(2)
     expect(overflowing(els)).toEqual([])
+    /* oxlint-disable vitest/no-conditional-expect -- keyed on the case's own parameter (the rail state), not on a runtime outcome */
     if (state === 'rail') {
       $<HTMLAnchorElement>('.nav-col a[href="/protokolle"]')!.focus()
       await vi.waitFor(() => expect($('.rail-tip')).toBeTruthy())
       expect(overflowing([$('.rail-tip')!])).toEqual([])
     }
+    /* oxlint-enable vitest/no-conditional-expect */
     expect(reflow().offenders).toEqual([])
   })
 })

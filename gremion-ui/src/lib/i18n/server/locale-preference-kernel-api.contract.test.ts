@@ -21,10 +21,14 @@ function fakeKernelApi() {
   let outage: number | 'network' | null = null
   const problem = (status: number, type: string) => new Response(JSON.stringify({ type, title: 'x', status }), { status, headers: { 'content-type': 'application/problem+json' } })
   const json = (body: unknown) => new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } })
+  const bodyText = (init: RequestInit): string => {
+    if (typeof init.body !== 'string') throw new TypeError('this fake kernel API accepts string bodies only')
+    return init.body
+  }
   const handler = async (input: URL | string | Request, init?: RequestInit): Promise<Response> => {
-    const url = new URL(String(input))
+    const url = new URL(input instanceof Request ? input.url : input)
     const headers = Object.fromEntries(Object.entries((init?.headers ?? {}) as Record<string, string>).map(([k, v]) => [k.toLowerCase(), v]))
-    calls.push({ method: init?.method ?? 'GET', path: url.pathname, headers, ...(init?.body ? { body: JSON.parse(String(init.body)) } : {}) })
+    calls.push({ method: init?.method ?? 'GET', path: url.pathname, headers, ...(init?.body ? { body: JSON.parse(bodyText(init)) } : {}) })
     if (outage === 'network') throw new TypeError('fetch failed')
     if (typeof outage === 'number') return problem(outage, 'urn:gremion:problem:customer-unavailable')
     if (headers['x-proxy-trust'] !== PROXY) return problem(403, 'urn:gremion:problem:forbidden')
@@ -37,7 +41,7 @@ function fakeKernelApi() {
     if (person === 'anon' || person === 'nobody') return problem(403, 'urn:gremion:problem:no-person')
     const key = `${customerId}::${person}`
     if (init?.method === 'PUT') {
-      const { locale } = JSON.parse(String(init.body)) as { locale: string }
+      const { locale } = JSON.parse(bodyText(init)) as { locale: string }
       if (!['de', 'en', 'follow_customer'].includes(locale)) return problem(400, 'urn:gremion:problem:validation-failed')
       const prev = rows.get(key)
       rows.set(key, { locale, rowVersion: (prev?.rowVersion ?? 0) + 1, updatedBy: person })

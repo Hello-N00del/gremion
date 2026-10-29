@@ -39,8 +39,9 @@ describe('the fixture service: schemaGate in front, openTenantDb behind, two ten
     // B is one file behind the manifest.
     await runMigrations({ sql: b, dir: copyFixture({ only: ['001_init.sql', '002_item_state.sql'] }), ...quiet })
     // the probe saw the setup's migrations (it is live), then starts empty
-    expect((await ddlLog(a)).length).toBeGreaterThan(0)
-    expect((await ddlLog(b)).length).toBeGreaterThan(0)
+    for (const [name, db] of [['A', a], ['B', b]] as const) {
+      if ((await ddlLog(db)).length === 0) throw new Error(`the probe on database ${name} saw none of the setup's migrations (it is not live)`)
+    }
     await a`TRUNCATE t020_probe.ddl_log`
     await b`TRUNCATE t020_probe.ddl_log`
     attemptsBefore = { a: await ddlAttempts(a), b: await ddlAttempts(b) }

@@ -63,7 +63,7 @@ function walkFiles(root, keep) {
 
 /** Every YAML file under <root> that can hold a compose composition, as repo-relative posix paths. */
 export function findComposeFiles(root) {
-  return walkFiles(root, (p) => COMPOSE_NAME_RE.test(p) || (/\.ya?ml$/.test(p) && /^compose\//.test(p)))
+  return walkFiles(root, (p) => COMPOSE_NAME_RE.test(p) || (/\.ya?ml$/.test(p) && p.startsWith('compose/')))
 }
 
 // A candidate found by CONTENT: a file named like neither of the compose conventions above can still

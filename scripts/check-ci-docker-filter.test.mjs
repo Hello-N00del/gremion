@@ -27,6 +27,7 @@ import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+const byCodeUnit = (a, b) => (a < b ? -1 : a > b ? 1 : 0)
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const CI_YML = readFileSync(join(ROOT, '.github/workflows/ci.yml'), 'utf8')
 
@@ -332,7 +333,7 @@ test('a failed `changes` job forces the image build instead of skipping it', () 
 })
 
 test('docker-build needs both lint and changes', () => {
-  assert.deepEqual([...dockerBuild.needs].sort(), ['changes', 'lint'])
+  assert.deepEqual([...dockerBuild.needs].sort(byCodeUnit), ['changes', 'lint'])
 })
 
 // The next test reads the repository (git ls-files, the Dockerfiles on disk). It
@@ -436,5 +437,5 @@ test('verify-census runs on pushes, and on a pull request only for a census inpu
 })
 
 test('verify-census needs both lint and changes', () => {
-  assert.deepEqual([...(verifyCensus.needs ?? [])].sort(), ['changes', 'lint'])
+  assert.deepEqual([...(verifyCensus.needs ?? [])].sort(byCodeUnit), ['changes', 'lint'])
 })

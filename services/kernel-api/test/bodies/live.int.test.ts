@@ -55,7 +55,6 @@ let natsUrl: string
 const log = (...a: unknown[]) => console.log('[bodies-proof]', ...a)
 const admin = () => w.adminPool(Z)
 const loc = () => ({ secretsDir: live().secretsDir })
-const lines: string[] = []
 
 beforeAll(async () => {
   if (!process.env.T080_LIVE) throw new Error('run through test/bodies/proof.sh')

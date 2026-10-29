@@ -24,7 +24,7 @@
  * @param {boolean} [input.unparseable] the suite's own report could not be
  *   parsed into counts at all (a missing COMPLETED line, a truncated JSON
  *   file, no TAP plan). Unparseable is a FAIL, never a fallback pass.
- * @param {number} input.collected total tests/checks the tool says it ran
+ * @param {number} [input.collected] total tests/checks the tool says it ran (0 when absent)
  *   (vitest numTotalTests, a TAP plan, svelte-check FILES, bats' `1..N`).
  * @param {number} [input.passed] tests reported as passed.
  * @param {number} [input.failed] tests reported as failed/errored.

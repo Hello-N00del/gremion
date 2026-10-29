@@ -29,7 +29,7 @@ describe('vertical loader', () => {
     expect(() => loadVertical(files({ 'blueprint.json': JSON.stringify(orphan) }))).toThrow(/unknown parent/)
     const extra = bp()
     extra.orgUnits[0].surprise = true
-    expect(() => loadVertical(files({ 'blueprint.json': JSON.stringify(extra) }))).toThrow()
+    expect(() => loadVertical(files({ 'blueprint.json': JSON.stringify(extra) }))).toThrow(/surprise/)
     const roles = JSON.parse(readFileSync(join(FIXTURE_DIR, 'roles.json'), 'utf8'))
     roles.roles[0].withheld = ['gov.vote.cast']
     expect(() => loadVertical(files({ 'roles.json': JSON.stringify(roles) }))).toThrow(/grants and withholds/)
@@ -57,10 +57,8 @@ describe('seed plan', () => {
   })
   it('D-8: with messaging and files OFF no unit wants a matrix room or a folder (no projection rows)', () => {
     const ops = planSeed(bp, [root], { messaging: false, files: false })
-    for (const o of ops) {
-      const w = o.type === 'adopt-root' ? o.patch : o.type === 'create' ? o.data : null
-      if (w) expect(subsystemsFor(w)).toEqual(['keycloak'])
-    }
+    const wants = ops.flatMap((o) => (o.type === 'adopt-root' ? [o.patch] : o.type === 'create' ? [o.data] : []))
+    expect(wants.map((w) => subsystemsFor(w))).toEqual(wants.map(() => ['keycloak']))
     expect(ops[0]).toMatchObject({ type: 'adopt-root', patch: { wantsMatrixRoom: false, wantsNextcloudFolder: false } })
   })
   it('D-8: messaging on, files off writes only the matrix flag', () => {

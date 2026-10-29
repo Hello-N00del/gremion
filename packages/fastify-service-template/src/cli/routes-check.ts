@@ -66,7 +66,7 @@ registerHooks({
     if (!module && loaded.format !== 'commonjs-typescript') return loaded
     const compiler = typescript()
     if (!compiler || loaded.source == null) return loaded
-    const { outputText } = compiler.transpileModule(loaded.source.toString(), {
+    const { outputText } = compiler.transpileModule(typeof loaded.source === 'string' ? loaded.source : new TextDecoder().decode(loaded.source), {
       fileName: fileURLToPath(url),
       compilerOptions: {
         target: compiler.ScriptTarget.ESNext,

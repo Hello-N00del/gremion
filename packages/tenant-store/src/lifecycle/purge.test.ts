@@ -42,14 +42,11 @@ describe('PURGE_RULES against the retention catalogue', () => {
     // RC-OPS-RUN says "with RC-LOG-APP": the window is that row's regular window
     const source = rule.windowFrom ? rowLine(rule.windowFrom) : line
     expect(source, `${rule.windowFrom ?? rule.catalogueRow} is a row of the catalogue`).toBeDefined()
-    if (rule.windowFrom) {
-      // a window that follows a LOG class row is derived by the registry's one rule (no second copy of the figure)
-      const logRow = parseLogRows(CATALOGUE.replace(/\r\n/g, '\n')).find((r) => r.row === rule.windowFrom)
-      expect(logRow, `${rule.windowFrom} states regular / cap days`).toBeDefined()
-      expect(rule.windowDays, `${rule.id}: min(regular ${logRow!.regularDays}, cap ${logRow!.capDays} - one daily tick)`).toBe(dbWindowDays(logRow!))
-    } else {
-      expect(windowDaysOf(source!)).toContain(rule.windowDays)
-    }
+    // a window that follows a LOG class row is derived by the registry's one rule (no second copy of the figure)
+    const logRow = rule.windowFrom ? parseLogRows(CATALOGUE.replace(/\r\n/g, '\n')).find((r) => r.row === rule.windowFrom) : undefined
+    expect(rule.windowFrom === undefined || logRow !== undefined, `${rule.windowFrom} states regular / cap days`).toBe(true)
+    expect(rule.windowDays, `${rule.id}: min(regular ${logRow?.regularDays}, cap ${logRow?.capDays} - one daily tick)`).toBe(logRow ? dbWindowDays(logRow) : rule.windowDays)
+    expect(logRow ? [rule.windowDays] : windowDaysOf(source!)).toContain(rule.windowDays)
     expect(Number.isInteger(rule.windowDays) && rule.windowDays > 0).toBe(true)
   })
 

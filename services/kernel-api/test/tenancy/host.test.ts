@@ -193,11 +193,13 @@ describe('boot (Q8)', () => {
     expect(() => readConfig(env, roots)).toThrow(ConfigError)
     expect(() => readConfig(env, roots)).toThrow(/TENANT_PROXY_SHARED_SECRET is not set/)
     expect(() => readConfig({ ...env, TENANT_PROXY_SHARED_SECRET: 'short' }, roots)).toThrow(/shorter than 24/)
+    let refusal: Error | undefined
     try {
       readConfig({ ...env, KERNEL_API_CONTROL_DB_URL: '' }, roots)
     } catch (err) {
-      expect((err as Error).message).not.toMatch(/postgres:\/\//)
+      refusal = err as Error
     }
+    expect(refusal?.message ?? '').not.toMatch(/postgres:\/\//)
   })
 
   it('a complete environment boots; module secrets are read per module, an empty one means not authorised', () => {
