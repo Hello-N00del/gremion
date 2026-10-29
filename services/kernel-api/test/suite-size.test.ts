@@ -15,6 +15,8 @@ const PKG = fileURLToPath(new URL('../', import.meta.url))
 export const NAMED: Record<'unit' | 'integration' | 'live', Record<string, number>> = {
   unit: {
     'test/app/bundle-entry.test.ts': 1,
+    // TASK-080-a round 3: the image's builder stage copies every workspace package the service reaches
+    'test/app/dockerfile.test.ts': 2,
     'test/app/gate-rotation.test.ts': 3,
     'test/app/routes.test.ts': 11,
     'test/app/trd082.test.ts': 5,
