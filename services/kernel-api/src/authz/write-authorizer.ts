@@ -17,7 +17,7 @@
 // grant table through the customer's RLS context, on the write's own transaction (WriteRequest.sql).
 import type { WriteAuthorizer, WriteRequest } from '../bodies/authz.ts'
 import { decideInTx, type EnabledModules } from './pdp.ts'
-import type { Sql } from './tx.ts'
+import { AuthzInputError, type Sql } from './tx.ts'
 
 /** Domain operation (the strings core.allow() is called with) -> the kernel capability it needs. */
 const WRITE_CAPABILITY: ReadonlyMap<string, string> = new Map([
@@ -65,8 +65,8 @@ export function pdpWriteAuthorizer(enabledModules: EnabledModules): WriteAuthori
         const d = await decideInTx(req.sql, enabledModules, { customerId: req.customerId, subject: { personId: req.actor.id }, bodyId, capability })
         return d.allow
       } catch (err) {
-        // assertUuid's refusal of a malformed id is a deny; a database failure is not ours to swallow
-        if (err instanceof TypeError) return false
+        // assertUuid's refusal of a malformed id is a deny; any other error (a driver fault, a TypeError from a bug) is not ours to swallow
+        if (err instanceof AuthzInputError) return false
         throw err
       }
     },

@@ -47,7 +47,7 @@ export const NAMED: Record<'unit' | 'integration' | 'authz' | 'live', Record<str
     'test/authz/no-role-check.test.ts': 5,
     'test/authz/stepup.test.ts': 5,
     // TASK-081 G3: the PDP-backed WriteAuthorizer's table and its pre-database refusals
-    'test/authz/write-authorizer.test.ts': 5,
+    'test/authz/write-authorizer.test.ts': 8,
     'test/authz/stepup-realm.test.ts': 2,
     'test/suite-size.test.ts': 5,
   },

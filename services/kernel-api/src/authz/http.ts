@@ -17,6 +17,7 @@ import type { GrantRow } from './events.ts'
 import { issueGrant, listGrants, mayReadGrants, revokeAllForPerson, revokeGrant, type Granter, type GrantDeps } from './grants.ts'
 import { decide, type EnabledModules } from './pdp.ts'
 import { STEPUP_MAX_AGE_SECONDS } from './stepup.ts'
+import { AuthzInputError } from './tx.ts'
 
 type Deps = Pick<KernelApiDeps, 'registry' | 'log'> & Partial<Pick<KernelApiDeps, 'kernelDb'>>
 
@@ -71,7 +72,7 @@ export function authzHandlers(deps: Deps): Record<'decideAuthz' | 'listAuthzGran
       return await fn()
     } catch (err) {
       if (err instanceof GrantError) return problem(reply, err.code, err.status, err.message)
-      if (err instanceof TypeError && err.message.startsWith('authz: ')) return problem(reply, 'bad-request', 400, err.message)
+      if (err instanceof AuthzInputError) return problem(reply, 'bad-request', 400, err.message)
       return unavailable(reply, err)
     }
   }

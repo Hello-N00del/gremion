@@ -13,7 +13,7 @@ import { wireDeps } from '../../src/app/wire.ts'
 import { KERNEL_API_MIGRATION_DIRS } from '../../src/migrate/chain.ts'
 import { capabilityDef, ROLES } from '../../src/authz/catalogue.ts'
 import { AUTHORIZED_WRITE_OPERATIONS, pdpWriteAuthorizer } from '../../src/authz/write-authorizer.ts'
-import type { Sql } from '../../src/authz/tx.ts'
+import { assertUuid, AuthzInputError, type Sql } from '../../src/authz/tx.ts'
 
 const BODIES = fileURLToPath(new URL('../../src/bodies/', import.meta.url))
 // callable (the authorizer now runs queries on a transaction handle), and any use of it is a read
@@ -47,6 +47,27 @@ describe('the PDP write authorizer (no database)', () => {
   it('an operation without a capability row is refused before any read, including prototype names', async () => {
     const a = pdpWriteAuthorizer(ENABLED)
     for (const operation of ['orgunit.delete', 'preference.put', 'constructor', '__proto__', '']) expect(await a.authorize(req({ operation })), operation).toBe(false)
+  })
+
+  it('assertUuid refuses with the dedicated AuthzInputError (still a TypeError for existing callers)', () => {
+    expect(() => assertUuid('nope', 'bodyId')).toThrow(AuthzInputError)
+    expect(() => assertUuid('nope', 'bodyId')).toThrow(TypeError)
+    expect(() => assertUuid(undefined, 'bodyId')).toThrow(/bodyId is not a uuid/)
+    expect(() => assertUuid('0192f0c1-2b3c-7d4e-8f00-000000000004', 'bodyId')).not.toThrow()
+  })
+
+  it('a malformed body id is a refusal (false), not a crash and not a read', async () => {
+    const a = pdpWriteAuthorizer(ENABLED)
+    for (const bodyId of ['nope', '', '0192f0c1']) expect(await a.authorize(req({ bodyId })), bodyId).toBe(false)
+  })
+
+  it('a TypeError that is not assertUuid refusal propagates (a bug or a driver fault is never a silent deny)', async () => {
+    const a = pdpWriteAuthorizer(ENABLED)
+    const boom = new TypeError('Cannot read properties of undefined')
+    const sql = new Proxy(() => undefined, { get: () => { throw boom }, apply: () => { throw boom } }) as unknown as Sql
+    await expect(a.authorize(req({ bodyId: '0192f0c1-2b3c-7d4e-8f00-000000000004', sql }))).rejects.toBe(boom)
+    // the customer-level path (bodyId null) reads the verwaltung first: same rule
+    await expect(a.authorize(req({ bodyId: null, sql }))).rejects.toBe(boom)
   })
 
   it('wireDeps binds it: the served authorizer asks the database for a person (denyAll would answer false without reading)', async () => {
