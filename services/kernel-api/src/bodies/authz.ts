@@ -1,6 +1,6 @@
 // services/kernel-api/src/bodies/authz.ts -- the WriteAuthorizer seam (Q4).
 //
-// Default deny: denyAll refuses every write that is not the caller's own
+// Default deny: denyAll (the unwired default) refuses every write that is not the caller's own
 // preference. The served app binds decide() (the PDP) here through
 // src/authz/write-authorizer.ts (TASK-081 G3): a person token's write is 403
 // unless a live grant carries the capability the operation needs. The operator
@@ -23,7 +23,7 @@ export interface WriteRequest {
   operation: string
   /** The body the write is scoped to, when it has one (customer-level writes: null). */
   bodyId: string | null
-  /** The customer's app-role pool the write runs on: a PDP-backed authorizer decides over it, inside the customer's RLS context. */
+  /** The write's OWN transaction (customer RLS context already set by the domain service): a PDP-backed authorizer decides on it, never on a second pooled connection. */
   sql: Sql
 }
 
@@ -31,7 +31,7 @@ export interface WriteAuthorizer {
   authorize(req: WriteRequest): Promise<boolean>
 }
 
-/** The shipped default: nobody writes through the API until the PDP is bound. */
+/** The unwired default (the served app binds the PDP, src/authz/write-authorizer.ts): nobody writes. */
 export const denyAll: WriteAuthorizer = { authorize: async () => false }
 
 /**

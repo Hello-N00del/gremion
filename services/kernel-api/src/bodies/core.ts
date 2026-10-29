@@ -47,7 +47,8 @@ export function expectVersion(actual: number, expected: number | undefined, what
 
 export interface Core {
   run<T>(ctx: OpCtx, fn: (tx: Sql) => Promise<T>): Promise<T>
-  allow(ctx: OpCtx, operation: string, bodyId: string | null): Promise<void>
+  /** Decided inside the write's own transaction `tx` (opened by run()), never on a second pooled connection. */
+  allow(ctx: OpCtx, tx: Sql, operation: string, bodyId: string | null): Promise<void>
   emit<K extends IdtEventKey>(tx: Sql, ctx: OpCtx, key: K, version: number, id: string, payload: IdtPayload<K>): Promise<void>
   kindOf(tx: Sql, customerId: string, kindKey: string, level: 'body' | 'unit'): Promise<{ is_organ: boolean; can_hold_seats: boolean }>
   activeBody(tx: Sql, customerId: string, bodyId: string): Promise<void>
@@ -57,8 +58,8 @@ export function makeCore(authorizer: WriteAuthorizer): Core {
   return {
     run: (ctx, fn) => inCustomerTx(ctx.sql, ctx.customerId, fn),
 
-    async allow(ctx, operation, bodyId) {
-      if (!(await authorizer.authorize({ actor: ctx.actor, customerId: ctx.customerId, operation, bodyId, sql: ctx.sql }))) {
+    async allow(ctx, tx, operation, bodyId) {
+      if (!(await authorizer.authorize({ actor: ctx.actor, customerId: ctx.customerId, operation, bodyId, sql: tx }))) {
         throw new BodiesError('FORBIDDEN', `${operation} is not permitted for this caller`)
       }
     },

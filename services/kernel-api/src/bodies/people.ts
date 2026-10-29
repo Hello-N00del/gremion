@@ -16,7 +16,7 @@ export function peopleOps(c: Core) {
     // -------------------------------------------------------------- persons
     invitePerson: (ctx: OpCtx, i: { email: string; displayName: string }): Promise<Written & { personId: string }> =>
       c.run(ctx, async (tx) => {
-        await c.allow(ctx, 'person.invite', null)
+        await c.allow(ctx, tx, 'person.invite', null)
         const a = by(ctx.actor)
         const pseudonym = `p_${randomBytes(12).toString('hex')}`
         const r = one(
@@ -33,7 +33,7 @@ export function peopleOps(c: Core) {
     activatePerson: (ctx: OpCtx, personId: string, i: { idpSubject: string }): Promise<Written & { personId: string }> =>
       c.run(ctx, async (tx) => {
         const state = await personState(tx, ctx.customerId, personId)
-        await c.allow(ctx, 'person.activate', null)
+        await c.allow(ctx, tx, 'person.activate', null)
         if (state !== 'invited') throw new BodiesError('INVALID', `person ${personId} is ${state}, only an invited person is activated`)
         const a = by(ctx.actor)
         const r = one(
@@ -49,7 +49,7 @@ export function peopleOps(c: Core) {
     disablePerson: (ctx: OpCtx, personId: string): Promise<Written & { personId: string }> =>
       c.run(ctx, async (tx) => {
         const state = await personState(tx, ctx.customerId, personId)
-        await c.allow(ctx, 'person.disable', null)
+        await c.allow(ctx, tx, 'person.disable', null)
         if (state !== 'active') throw new BodiesError('INVALID', `person ${personId} is ${state}, only an active person is disabled`)
         const a = by(ctx.actor)
         const r = one(
@@ -65,7 +65,7 @@ export function peopleOps(c: Core) {
     enablePerson: (ctx: OpCtx, personId: string): Promise<Written & { personId: string }> =>
       c.run(ctx, async (tx) => {
         const state = await personState(tx, ctx.customerId, personId)
-        await c.allow(ctx, 'person.enable', null)
+        await c.allow(ctx, tx, 'person.enable', null)
         if (state !== 'disabled') throw new BodiesError('INVALID', `person ${personId} is ${state}, only a disabled person is enabled`)
         const a = by(ctx.actor)
         const v = one(
@@ -94,7 +94,7 @@ export function peopleOps(c: Core) {
       },
     ): Promise<Written & { membershipId: string }> =>
       c.run(ctx, async (tx) => {
-        await c.allow(ctx, 'membership.start', i.bodyId)
+        await c.allow(ctx, tx, 'membership.start', i.bodyId)
         await c.activeBody(tx, ctx.customerId, i.bodyId)
         const person = one(await tx<{ account_state: string }[]>`SELECT account_state FROM idt.person WHERE customer_id = ${ctx.customerId}::uuid AND person_id = ${i.personId}::uuid`, `person ${i.personId}`)
         if (person.account_state === 'erased') throw new BodiesError('INVALID', `person ${i.personId} is erased`)
@@ -127,7 +127,7 @@ export function peopleOps(c: Core) {
               FROM idt.membership WHERE customer_id = ${ctx.customerId}::uuid AND membership_id = ${membershipId}::uuid FOR UPDATE`,
           `membership ${membershipId}`,
         )
-        await c.allow(ctx, 'membership.correct', m.body_id)
+        await c.allow(ctx, tx, 'membership.correct', m.body_id)
         expectVersion(m.row_version, i.expectedVersion, `membership ${membershipId}`)
         const next = {
           voting: i.voting ?? m.voting,
@@ -162,7 +162,7 @@ export function peopleOps(c: Core) {
               FROM idt.membership WHERE customer_id = ${ctx.customerId}::uuid AND membership_id = ${membershipId}::uuid FOR UPDATE`,
           `membership ${membershipId}`,
         )
-        await c.allow(ctx, 'membership.end', m.body_id)
+        await c.allow(ctx, tx, 'membership.end', m.body_id)
         if (m.end_reason !== null) throw new BodiesError('INVALID', `membership ${membershipId} is already ended`)
         if (m.extends_term) throw new BodiesError('INVALID', `membership ${membershipId} ends before ${i.validUntil}: ending a membership never extends it (correct it instead)`)
         const a = by(ctx.actor)
@@ -194,7 +194,7 @@ export function peopleOps(c: Core) {
             SELECT body_id, holder_cardinality, seat_kind, state FROM idt.seat WHERE customer_id = ${ctx.customerId}::uuid AND seat_id = ${i.seatId}::uuid FOR UPDATE`,
           `seat ${i.seatId}`,
         )
-        await c.allow(ctx, 'tenure.start', s.body_id)
+        await c.allow(ctx, tx, 'tenure.start', s.body_id)
         if (s.state !== 'active') throw new BodiesError('INVALID', `seat ${i.seatId} is retired`)
         const a = by(ctx.actor)
         const source: TenureSource = i.succession ? 'succession' : i.source
@@ -237,7 +237,7 @@ export function peopleOps(c: Core) {
               FROM idt.tenure t JOIN idt.seat s ON s.seat_id = t.seat_id AND s.customer_id = t.customer_id WHERE t.customer_id = ${ctx.customerId}::uuid AND t.tenure_id = ${tenureId}::uuid FOR UPDATE OF t`,
           `tenure ${tenureId}`,
         )
-        await c.allow(ctx, 'tenure.correct', t.body_id)
+        await c.allow(ctx, tx, 'tenure.correct', t.body_id)
         expectVersion(t.row_version, i.expectedVersion, `tenure ${tenureId}`)
         if (i.endedOn !== undefined && t.ended_on === null) throw new BodiesError('INVALID', `tenure ${tenureId} is open: end it with endTenure, a correction only moves an existing end`)
         const next = { starts_on: i.startsOn ?? t.starts_on, planned_end_on: i.plannedEndOn === undefined ? t.planned_end_on : i.plannedEndOn, ended_on: i.endedOn ?? t.ended_on }
@@ -262,7 +262,7 @@ export function peopleOps(c: Core) {
               FROM idt.tenure t JOIN idt.seat s ON s.seat_id = t.seat_id AND s.customer_id = t.customer_id WHERE t.customer_id = ${ctx.customerId}::uuid AND t.tenure_id = ${tenureId}::uuid FOR UPDATE OF t`,
           `tenure ${tenureId}`,
         )
-        await c.allow(ctx, 'tenure.end', t.body_id)
+        await c.allow(ctx, tx, 'tenure.end', t.body_id)
         if (t.ended_on !== null) throw new BodiesError('INVALID', `tenure ${tenureId} is already ended`)
         const a = by(ctx.actor)
         const v = one(

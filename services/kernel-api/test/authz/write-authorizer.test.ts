@@ -16,7 +16,8 @@ import { AUTHORIZED_WRITE_OPERATIONS, pdpWriteAuthorizer } from '../../src/authz
 import type { Sql } from '../../src/authz/tx.ts'
 
 const BODIES = fileURLToPath(new URL('../../src/bodies/', import.meta.url))
-const NO_DB = new Proxy({}, { get: () => { throw new Error('the authorizer read the database') } }) as unknown as Sql
+// callable (the authorizer now runs queries on a transaction handle), and any use of it is a read
+const NO_DB = new Proxy(() => undefined, { get: () => { throw new Error('the authorizer read the database') }, apply: () => { throw new Error('the authorizer read the database') } }) as unknown as Sql
 const ENABLED = async () => new Set<string>()
 const req = (over: Record<string, unknown>) => ({ actor: { kind: 'person' as const, id: '0192f0c1-2b3c-7d4e-8f00-000000000001' }, customerId: '0192f0c1-2b3c-7d4e-8f00-000000000002', operation: 'orgunit.create', bodyId: null, sql: NO_DB, ...over }) as never
 
@@ -24,7 +25,7 @@ describe('the PDP write authorizer (no database)', () => {
   it('names exactly the operations the domain service asks about (nothing unnamed, nothing stale)', () => {
     const asked = new Set<string>()
     for (const f of readdirSync(BODIES).filter((n) => n.endsWith('.ts'))) {
-      for (const m of readFileSync(join(BODIES, f), 'utf8').matchAll(/\.allow\(\s*ctx\s*,\s*'([a-z.]+)'/g)) asked.add(m[1]!)
+      for (const m of readFileSync(join(BODIES, f), 'utf8').matchAll(/\.allow\(\s*ctx\s*,\s*tx\s*,\s*'([a-z.]+)'/g)) asked.add(m[1]!)
     }
     expect(asked.size).toBeGreaterThanOrEqual(20)
     expect([...AUTHORIZED_WRITE_OPERATIONS].sort()).toEqual([...asked].sort())

@@ -9,7 +9,7 @@ export function structureOps(c: Core) {
     // ------------------------------------------------------------- bodies
     createBody: (ctx: OpCtx, i: { kindKey: string; name: string; shortName?: string | null; parentBodyId?: string | null }): Promise<Written & { bodyId: string }> =>
       c.run(ctx, async (tx) => {
-        await c.allow(ctx, 'body.create', i.parentBodyId ?? null)
+        await c.allow(ctx, tx, 'body.create', i.parentBodyId ?? null)
         await c.kindOf(tx, ctx.customerId, i.kindKey, 'body')
         const a = by(ctx.actor)
         const r = one(
@@ -30,7 +30,7 @@ export function structureOps(c: Core) {
             SELECT kind_key, name, short_name, parent_body_id, state, row_version::int AS row_version FROM idt.body WHERE customer_id = ${ctx.customerId}::uuid AND body_id = ${bodyId}::uuid FOR UPDATE`,
           `body ${bodyId}`,
         )
-        await c.allow(ctx, 'body.update', bodyId)
+        await c.allow(ctx, tx, 'body.update', bodyId)
         if (b.state !== 'active') throw new BodiesError('INVALID', `body ${bodyId} is archived`)
         expectVersion(b.row_version, i.expectedVersion, `body ${bodyId}`)
         const parent = i.parentBodyId === undefined ? b.parent_body_id : i.parentBodyId
@@ -49,7 +49,7 @@ export function structureOps(c: Core) {
     archiveBody: (ctx: OpCtx, bodyId: string): Promise<Written & { bodyId: string }> =>
       c.run(ctx, async (tx) => {
         const b = one(await tx<{ state: string }[]>`SELECT state FROM idt.body WHERE customer_id = ${ctx.customerId}::uuid AND body_id = ${bodyId}::uuid FOR UPDATE`, `body ${bodyId}`)
-        await c.allow(ctx, 'body.archive', bodyId)
+        await c.allow(ctx, tx, 'body.archive', bodyId)
         if (b.state === 'archived') throw new BodiesError('INVALID', `body ${bodyId} is already archived`)
         const open = one(
           await tx<{ n: number }[]>`
@@ -74,7 +74,7 @@ export function structureOps(c: Core) {
     // ----------------------------------------------------------- org units
     createOrgUnit: (ctx: OpCtx, i: { bodyId: string; kindKey: string; name: string; parentOrgUnitId?: string | null }): Promise<Written & { orgUnitId: string }> =>
       c.run(ctx, async (tx) => {
-        await c.allow(ctx, 'orgunit.create', i.bodyId)
+        await c.allow(ctx, tx, 'orgunit.create', i.bodyId)
         await c.activeBody(tx, ctx.customerId, i.bodyId)
         const k = await c.kindOf(tx, ctx.customerId, i.kindKey, 'unit')
         const a = by(ctx.actor)
@@ -98,7 +98,7 @@ export function structureOps(c: Core) {
             SELECT body_id, kind_key, name, parent_org_unit_id, state, row_version::int AS row_version FROM idt.org_unit WHERE customer_id = ${ctx.customerId}::uuid AND org_unit_id = ${orgUnitId}::uuid FOR UPDATE`,
           `org unit ${orgUnitId}`,
         )
-        await c.allow(ctx, 'orgunit.update', u.body_id)
+        await c.allow(ctx, tx, 'orgunit.update', u.body_id)
         if (u.state !== 'active') throw new BodiesError('INVALID', `org unit ${orgUnitId} is archived`)
         expectVersion(u.row_version, i.expectedVersion, `org unit ${orgUnitId}`)
         const parent = i.parentOrgUnitId === undefined ? u.parent_org_unit_id : i.parentOrgUnitId
@@ -116,7 +116,7 @@ export function structureOps(c: Core) {
     archiveOrgUnit: (ctx: OpCtx, orgUnitId: string): Promise<Written & { orgUnitId: string }> =>
       c.run(ctx, async (tx) => {
         const u = one(await tx<{ body_id: string; state: string }[]>`SELECT body_id, state FROM idt.org_unit WHERE customer_id = ${ctx.customerId}::uuid AND org_unit_id = ${orgUnitId}::uuid FOR UPDATE`, `org unit ${orgUnitId}`)
-        await c.allow(ctx, 'orgunit.archive', u.body_id)
+        await c.allow(ctx, tx, 'orgunit.archive', u.body_id)
         if (u.state === 'archived') throw new BodiesError('INVALID', `org unit ${orgUnitId} is already archived`)
         const open = one(
           await tx<{ n: number }[]>`
@@ -153,7 +153,7 @@ export function structureOps(c: Core) {
       },
     ): Promise<Written & { seatId: string }> =>
       c.run(ctx, async (tx) => {
-        await c.allow(ctx, 'seat.create', i.bodyId)
+        await c.allow(ctx, tx, 'seat.create', i.bodyId)
         await c.activeBody(tx, ctx.customerId, i.bodyId)
         if (i.orgUnitId) {
           const unit = one(
@@ -183,7 +183,7 @@ export function structureOps(c: Core) {
     retireSeat: (ctx: OpCtx, seatId: string): Promise<Written & { seatId: string }> =>
       c.run(ctx, async (tx) => {
         const s = one(await tx<{ body_id: string; state: string }[]>`SELECT body_id, state FROM idt.seat WHERE customer_id = ${ctx.customerId}::uuid AND seat_id = ${seatId}::uuid FOR UPDATE`, `seat ${seatId}`)
-        await c.allow(ctx, 'seat.retire', s.body_id)
+        await c.allow(ctx, tx, 'seat.retire', s.body_id)
         if (s.state === 'retired') throw new BodiesError('INVALID', `seat ${seatId} is already retired`)
         const open = one(await tx<{ n: number }[]>`SELECT count(*)::int AS n FROM idt.tenure WHERE customer_id = ${ctx.customerId}::uuid AND seat_id = ${seatId}::uuid AND ended_on IS NULL`, 'seat usage').n
         if (open > 0) throw new BodiesError('CONFLICT', `seat ${seatId} still has an open tenure`)
@@ -201,7 +201,7 @@ export function structureOps(c: Core) {
     // --------------------------------------------------------- wahlperioden
     createWahlperiode: (ctx: OpCtx, i: { bodyId: string; orgUnitId?: string | null; label: string; startsOn: string; endsOn: string }): Promise<Written & { wahlperiodeId: string }> =>
       c.run(ctx, async (tx) => {
-        await c.allow(ctx, 'wahlperiode.create', i.bodyId)
+        await c.allow(ctx, tx, 'wahlperiode.create', i.bodyId)
         await c.activeBody(tx, ctx.customerId, i.bodyId)
         const a = by(ctx.actor)
         const r = one(
@@ -220,7 +220,7 @@ export function structureOps(c: Core) {
     closeWahlperiode: (ctx: OpCtx, wahlperiodeId: string): Promise<Written & { wahlperiodeId: string }> =>
       c.run(ctx, async (tx) => {
         const w = one(await tx<{ body_id: string; state: string }[]>`SELECT body_id, state FROM idt.wahlperiode WHERE customer_id = ${ctx.customerId}::uuid AND wahlperiode_id = ${wahlperiodeId}::uuid FOR UPDATE`, `wahlperiode ${wahlperiodeId}`)
-        await c.allow(ctx, 'wahlperiode.close', w.body_id)
+        await c.allow(ctx, tx, 'wahlperiode.close', w.body_id)
         if (w.state === 'closed') throw new BodiesError('INVALID', `wahlperiode ${wahlperiodeId} is already closed`)
         const a = by(ctx.actor)
         const v = one(

@@ -61,6 +61,8 @@ export interface KernelDb {
   admin: Sql
   /** the non-superuser app role: RLS binds */
   app: Sql
+  /** a further pool under the same app role with its own connection cap (to prove behaviour at a small pool) */
+  appPool(max: number): Sql
   close(): Promise<void>
 }
 
@@ -98,6 +100,7 @@ export async function buildKernelDb(name: string, o: { withAuthz?: boolean } = {
     customerId,
     admin,
     app,
+    appPool: (max) => connect(dbName, { user: role, password, max }),
     async close() {
       await Promise.allSettled([app.end({ timeout: 5 }), admin.end({ timeout: 5 })])
     },

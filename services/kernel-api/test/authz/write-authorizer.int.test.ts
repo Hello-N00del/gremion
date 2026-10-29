@@ -106,6 +106,24 @@ describe('G3: default deny holds wherever the PDP says no, and a refusal writes 
   })
 })
 
+describe('G3: the decision runs inside the own transaction of the write (no second pooled connection)', () => {
+  it('more concurrent writes than the pool has connections all settle (a second pooled connection per write would wedge the pool)', async () => {
+    // an app pool of 2: every write holds one connection for its transaction, so a decision that checks out a
+    // SECOND connection from the same pool leaves N > 2 writers each waiting on a connection nobody frees
+    const pool = w.db.appPool(2)
+    try {
+      const ctx = { sql: pool, customerId: w.db.customerId, actor: { kind: 'person' as const, id: w.persons.alice! } }
+      const writes = Array.from({ length: 6 }, (_, i) => svc().createOrgUnit(ctx, { bodyId: w.bodyA, kindKey: 'council', name: `Rat Conc ${i}` }))
+      const settled = Promise.allSettled(writes).then((r) => r.map((x) => x.status))
+      const timeout = new Promise<string>((res) => setTimeout(() => res('TIMEOUT'), 15_000))
+      const out = await Promise.race([settled, timeout])
+      expect(out).toEqual(Array(6).fill('fulfilled'))
+    } finally {
+      await pool.end({ timeout: 2 }).catch(() => {})
+    }
+  }, 30_000)
+})
+
 describe('G3 over HTTP: a person token writes only with a grant', () => {
   const HOST = `t.${APEX}`
   let app: FastifyInstance

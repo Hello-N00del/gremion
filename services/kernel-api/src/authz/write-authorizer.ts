@@ -14,10 +14,10 @@
 //     (DOMAIN:408); a customer without one has nobody who may write;
 //   * a malformed body id is a refusal, not a crash.
 // The decision reads the module registry live per request (decide's own rule), the
-// grant table through the customer's RLS context (the request's own pool).
+// grant table through the customer's RLS context, on the write's own transaction (WriteRequest.sql).
 import type { WriteAuthorizer, WriteRequest } from '../bodies/authz.ts'
-import { decide, type EnabledModules } from './pdp.ts'
-import { inCustomerTx, type Sql } from './tx.ts'
+import { decideInTx, type EnabledModules } from './pdp.ts'
+import type { Sql } from './tx.ts'
 
 /** Domain operation (the strings core.allow() is called with) -> the kernel capability it needs. */
 const WRITE_CAPABILITY: ReadonlyMap<string, string> = new Map([
@@ -46,8 +46,10 @@ const WRITE_CAPABILITY: ReadonlyMap<string, string> = new Map([
 /** The operations the PDP can authorize (for the test that keeps this table and the domain service in step). */
 export const AUTHORIZED_WRITE_OPERATIONS: readonly string[] = Object.freeze([...WRITE_CAPABILITY.keys()])
 
-async function verwaltungBodyId(sql: Sql, customerId: string): Promise<string | null> {
-  const rows = await inCustomerTx(sql, customerId, (tx) => tx<{ body_id: string }[]>`SELECT body_id::text FROM idt.body WHERE kind_key = 'verwaltung' AND state = 'active'`)
+// runs on the write's own transaction (the customer's RLS context is already set), so the decision is taken in the
+// same snapshot as the write it guards and holds no second connection of the pool
+async function verwaltungBodyId(tx: Sql): Promise<string | null> {
+  const rows = await tx<{ body_id: string }[]>`SELECT body_id::text FROM idt.body WHERE kind_key = 'verwaltung' AND state = 'active'`
   return rows[0]?.body_id ?? null
 }
 
@@ -58,9 +60,9 @@ export function pdpWriteAuthorizer(enabledModules: EnabledModules): WriteAuthori
       const capability = WRITE_CAPABILITY.get(req.operation)
       if (capability === undefined) return false
       try {
-        const bodyId = req.bodyId ?? (await verwaltungBodyId(req.sql, req.customerId))
+        const bodyId = req.bodyId ?? (await verwaltungBodyId(req.sql))
         if (bodyId === null) return false
-        const d = await decide(req.sql, enabledModules, { customerId: req.customerId, subject: { personId: req.actor.id }, bodyId, capability })
+        const d = await decideInTx(req.sql, enabledModules, { customerId: req.customerId, subject: { personId: req.actor.id }, bodyId, capability })
         return d.allow
       } catch (err) {
         // assertUuid's refusal of a malformed id is a deny; a database failure is not ours to swallow
