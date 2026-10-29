@@ -516,3 +516,16 @@ teardown() {
     [[ -z "${IN_REPO_OUT:-}" ]] || rm -rf "$IN_REPO_OUT"
     [[ -z "${IN_REPO_OTHER:-}" ]] || rm -rf "$IN_REPO_OTHER"
 }
+
+# ── teardown (house review of r33g-proofsh) ──────────────────────────────────
+
+@test "teardown: a supported POOLED_OUT outside .scratch is left in place with an info line, not RED" {
+    mkdir -p "${POOLED_OUT}/root/etc"; echo keep > "${POOLED_OUT}/root/etc/keep"
+    run bash "$PROOF" teardown
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"leaving ${POOLED_OUT}/root in place"* ]]
+    [[ "$output" != *"FAIL"* ]]
+    [[ "$output" == *"[pooled-proof] GREEN"* ]]
+    grep -q 'phases \[teardown\] RED=0' "${POOLED_OUT}/ledger/run.log"
+    [ -f "${POOLED_OUT}/root/etc/keep" ]
+}

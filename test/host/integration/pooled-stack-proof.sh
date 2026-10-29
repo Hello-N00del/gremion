@@ -156,18 +156,44 @@ need_writable() {
 # removal): a mis-set POOLED_OUT must never delete outside the scratch area. A
 # path that does not exist is a no-op.
 scratch_rm() {
-    local p="$1" base real
+    local p="$1" comp="${2:-$STACK}" base real
     [[ -n "$p" ]] || { bad "scratch_rm: refusing an empty path"; return 1; }
     [[ -e "$p" || -L "$p" ]] || return 0
     if [[ -L "$p" ]]; then bad "scratch_rm: refusing ${p}: a symlink"; return 1; fi
     base="$(cd "$ROOT/.scratch" 2>/dev/null && pwd -P)" || { bad "scratch_rm: refusing ${p}: ${ROOT}/.scratch does not exist"; return 1; }
     real="$(cd "$p" 2>/dev/null && pwd -P)" || { bad "scratch_rm: refusing ${p}: not a directory"; return 1; }
-    if [[ "$real" != "$base"/* || "/${real#"$base"/}/" != *"/${STACK}/"* ]]; then
-        bad "scratch_rm: refusing ${p} (${real}): outside ${base}/**/${STACK}/"
+    if [[ "$real" != "$base"/* || "/${real#"$base"/}/" != *"/${comp}/"* ]]; then
+        bad "scratch_rm: refusing ${p} (${real}): outside ${base}/**/${comp}/"
         return 1
     fi
     rm -rf -- "$real" || { bad "scratch_rm: could not remove ${real}$(perm_hint "$real")"; return 1; }
     ok "scratch_rm: removed ${real}"
+}
+
+# scratch_in <path> [component] -- true when <path> resolves (symlinks and ..
+# followed) strictly under ${ROOT}/.scratch with <component> (default ${STACK})
+# as a whole path component: the same test scratch_rm refuses on, but silent and
+# with no RED, so a caller can tell "not ours to delete" from "ours, and failed".
+scratch_in() {
+    local p="$1" comp="${2:-$STACK}" base real
+    base="$(cd "$ROOT/.scratch" 2>/dev/null && pwd -P)" || return 1
+    real="$(cd "$p" 2>/dev/null && pwd -P)" || return 1
+    [[ "$real" == "$base"/* && "/${real#"$base"/}/" == *"/${comp}/"* ]]
+}
+
+# teardown_rm <path> [component] -- scratch_rm for teardown. A path that is not
+# in the scratch area (a supported POOLED_OUT elsewhere, e.g. under /tmp) is
+# left in place with an info line: it is the operator's to remove, and refusing
+# it is not a failed proof. Inside the scratch area every failure stays RED
+# (a symlink, an rm that fails) because that tree IS ours to remove.
+teardown_rm() {
+    local p="$1" comp="${2:-$STACK}"
+    [[ -e "$p" || -L "$p" ]] || return 0
+    if [[ ! -L "$p" ]] && ! scratch_in "$p" "$comp"; then
+        info "teardown: leaving ${p} in place: not under ${ROOT}/.scratch/**/${comp}/"
+        return 0
+    fi
+    scratch_rm "$p" "$comp"
 }
 
 # precreate_bind_dirs -- every host directory a compose file bind-mounts, made
@@ -1240,11 +1266,28 @@ phase_teardown() {
     docker volume ls -q --filter "name=^${STACK}" | xargs -r docker volume rm >/dev/null
     [[ -f "$OUT/.created-userlist" ]] && rm -f "$ROOT/docker/pgbouncer/userlist.txt" "$OUT/.created-userlist"
     [[ -f "$OUT/.created-ipcrypt" ]] && rm -f "$ROOT/secrets/ipcrypt_key.txt" "$OUT/.created-ipcrypt"
-    # The scratch GREMION_ROOT and the customer proof's own OUT for this STACK:
-    # a stale etc/secrets (tenant_provisioner) answers a fresh Keycloak with
-    # 401 invalid_client. The ledger under ${OUT}/ledger is kept.
-    scratch_rm "$SROOT" || true
-    scratch_rm "$ROOT/.scratch/customer-provision-proof/${STACK}" || true
+    # The scratch GREMION_ROOT: a stale etc/secrets (tenant_provisioner) answers
+    # a fresh Keycloak with 401 invalid_client. The ledger under ${OUT}/ledger is
+    # kept. A path outside ${ROOT}/.scratch (a POOLED_OUT elsewhere) is left in
+    # place with an info line, never RED (teardown_rm).
+    teardown_rm "$SROOT" || true
+    # The customer proof (customer-provision-proof.sh) lays its GREMION_ROOT out
+    # IN the pooled stack's own root (croot = the state.env GREMION_ROOT), so the
+    # stale tenant_provisioner secret it provokes lives in $SROOT, removed above.
+    # Its OWN OUT -- .scratch/customer-provision-proof/<its STACK> -- holds the
+    # panel phases' scratch root (root/) and every cookie, password and TOTP
+    # secret (secrets/); ledger/ is its evidence and is kept. Its STACK is
+    # PROOF_STACK when set, else t043-<sha8>: the same sha8 as this t040-<sha8>
+    # when both derive it from one HEAD. Both spellings, and this STACK's (an
+    # operator naming the customer proof's stack like the pooled one), are
+    # cleaned; a PROOF_OUT elsewhere is not found from here.
+    local cs cdir
+    for cs in "${PROOF_STACK:-}" "t043-${STACK#t040-}" "$STACK"; do
+        [[ -n "$cs" ]] || continue
+        cdir="$ROOT/.scratch/customer-provision-proof/${cs}"
+        teardown_rm "$cdir/root" "$cs" || true
+        teardown_rm "$cdir/secrets" "$cs" || true
+    done
     local left
     left="$(docker ps -aq --filter "name=^${STACK}" | grep -c . || true)$(docker network ls -q --filter "name=^${STACK}" | grep -c . || true)$(docker volume ls -q --filter "name=^${STACK}" | grep -c . || true)"
     if [[ "$left" == 000 ]]; then ok "teardown: no container, network or volume under ${STACK} remains"

@@ -201,12 +201,15 @@ case "$1" in
             up) : ;;
             *) echo "shim: unhandled compose call: $*" >&2; exit 1 ;;
         esac ;;
+    rm) : ;;   # teardown: `docker rm -f` of whatever ps listed
+    volume) : ;;   # teardown: `docker volume ls` lists nothing; nothing to remove
     info)
         # `docker info --format {{.OperatingSystem}}` (host_gateway_ip)
         echo "${SHIM_OS:-Ubuntu 24.04 LTS}" ;;
     network)
         # `docker network inspect bridge -f ...` (host_gateway_ip): SHIM_BRIDGE_GW is the docker0 gateway
-        if [[ "${2:-}" == inspect && "${3:-}" == bridge && -n "${SHIM_BRIDGE_GW:-}" ]]; then echo "$SHIM_BRIDGE_GW"
+        if [[ "${2:-}" == ls ]]; then :
+        elif [[ "${2:-}" == inspect && "${3:-}" == bridge && -n "${SHIM_BRIDGE_GW:-}" ]]; then echo "$SHIM_BRIDGE_GW"
         else echo "shim: no such network" >&2; exit 1; fi ;;
     *) echo "shim: unhandled docker call: $*" >&2; exit 1 ;;
 esac
