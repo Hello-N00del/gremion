@@ -373,3 +373,20 @@ describe('TRD-113 revoke honours the role-inclusion rule', () => {
     expect((await revokeGrant(w.db.app, deps, w.db.customerId, claims('sub-carol'), id)).state).toBe('revoked')
   })
 })
+
+// No existence oracle: the authority check runs before anything about the target is looked at.
+describe('PRD-IDN-002 revoke-all authority comes first', () => {
+  it('a caller with no grant authority gets the same 403 for a person with no open grants as for one with grants; an administrator gets []', async () => {
+    const empty = uuidv7()
+    await insertPerson(w.db.admin, w.db.customerId, empty, 'sub-no-grants')
+    const withGrants = uuidv7()
+    await insertPerson(w.db.admin, w.db.customerId, withGrants, 'sub-has-grants')
+    await seedGrant(w.db.admin, w.db.customerId, { bodyId: w.bodyA, personId: withGrants, key: 'member' })
+    const a = await refused(revokeAllForPerson(w.db.app, deps, w.db.customerId, claims('sub-impostor'), empty))
+    const b = await refused(revokeAllForPerson(w.db.app, deps, w.db.customerId, claims('sub-impostor'), withGrants))
+    expect([a.code, a.status]).toEqual(['forbidden', 403])
+    expect([b.code, b.status]).toEqual([a.code, a.status])
+    expect(await revokeAllForPerson(w.db.app, deps, w.db.customerId, claims('sub-admin'), empty)).toEqual([])
+    expect(await revokeAllForPerson(w.db.app, deps, w.db.customerId, claims('sub-carol'), empty)).toEqual([])
+  })
+})

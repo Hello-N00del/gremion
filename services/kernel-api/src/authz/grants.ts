@@ -212,18 +212,41 @@ export async function revokeGrant(sql: Sql, deps: GrantDeps, customerId: string,
   })
 }
 
+/**
+ * Does this person hold grant authority anywhere (a customer-level role in the verwaltung, or idt.grant.manage in a body where they hold a
+ * live role)? revokeAllForPerson asks this BEFORE it looks at the target, so a caller with no authority gets the same refusal whether or not
+ * the target has any open grant (no existence oracle).
+ */
+async function holdsAnyManageAuthority(tx: Sql, deps: GrantDeps, customerId: string, personId: string): Promise<boolean> {
+  if ((await customerWideGrantRoles(tx, personId)).length > 0) return true
+  const bodies = await tx<{ body_id: string }[]>`
+    SELECT DISTINCT body_id::text FROM idt.authz_grant
+     WHERE subject_person_id = ${personId}::uuid AND grant_kind = 'role' AND state IN ('active', 'scheduled') AND valid_from <= now() AND (valid_until IS NULL OR valid_until > now())`
+  for (const b of bodies) {
+    if ((await decideInTx(tx, deps.enabledModules, { customerId, subject: { personId }, bodyId: b.body_id, capability: 'idt.grant.manage' })).allow) return true
+  }
+  return false
+}
+
 /** PRD-IDN-002: revoke every open grant of a person in one step-up window; one revoked event per grant. */
 export async function revokeAllForPerson(sql: Sql, deps: GrantDeps, customerId: string, revoker: Granter, personId: string): Promise<GrantRow[]> {
   assertUuid(personId, 'personId')
   requireStepUp(revoker, deps)
   return inCustomerTx(sql, customerId, async (tx) => {
+    // authority first, before the target is read: no grant authority anywhere -> the same 403 for every target
+    let who: Actor
+    if (revoker.kind === 'operator') {
+      assertUuid(revoker.operatorId, 'operatorId')
+      who = { kind: 'operator', id: revoker.operatorId }
+    } else {
+      who = { kind: 'person', id: await personBySub(tx, revoker.claims) }
+      if (!(await holdsAnyManageAuthority(tx, deps, customerId, who.id))) throw new GrantError('forbidden', 'granting is not allowed for this person')
+    }
     const open = await tx<{ grant_id: string; body_id: string; role_key: string | null; capability_key: string | null }[]>`
       SELECT grant_id::text, body_id::text, role_key, capability_key FROM idt.authz_grant WHERE subject_person_id = ${personId}::uuid AND state IN ('scheduled', 'active') ORDER BY grant_id`
-    let who: Actor | null = null
-    for (const bodyId of new Set(open.map((o) => o.body_id))) who = await authoriseManager(tx, deps, customerId, revoker, bodyId)
+    for (const bodyId of new Set(open.map((o) => o.body_id))) await authoriseManager(tx, deps, customerId, revoker, bodyId)
     // TRD-113: one grant the revoker's roles do not include refuses the whole call (nothing is closed)
-    if (who) for (const o of open) await assertRevokeIncluded(tx, who, o.body_id, o)
-    who ??= revoker.kind === 'operator' ? { kind: 'operator', id: revoker.operatorId } : { kind: 'person', id: await personBySub(tx, revoker.claims) }
+    for (const o of open) await assertRevokeIncluded(tx, who, o.body_id, o)
     const rows = await closeRows(tx, open.map((o) => o.grant_id), who, 'manual')
     for (const r of rows) await emitGrantEvent(tx, 'revoked', r)
     return rows
