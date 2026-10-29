@@ -189,6 +189,7 @@ describe('the bodies operations (TASK-080-a step c)', () => {
     })
     const got = await get(app, '/api/v1/persons/me/preference')
     expect(got.statusCode).toBe(403)
+    expect(got.json().type).toBe('urn:gremion:problem:no-person') // distinct from a plain forbidden: the gremion-ui adapter reads it as "no record"
     const put = await get(app, '/api/v1/persons/me/preference', 'PUT', { locale: 'en' })
     expect(put.statusCode).toBe(403)
     expect(records.some((r) => r.text.startsWith('INSERT'))).toBe(false)

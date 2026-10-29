@@ -27,6 +27,10 @@ import { PROBLEM, RETRY_AFTER_REGISTRY } from '../tenancy/hook.ts'
 type Deps = Pick<KernelApiDeps, 'tenantDb' | 'log'>
 type WriteDeps = Deps & Pick<KernelApiDeps, 'authorizer'>
 
+/** 403 whose type says WHY: the token is valid but belongs to no active person of this customer (a client may treat it as "no record"). */
+export const NO_PERSON = 'urn:gremion:problem:no-person'
+const noPerson = (reply: FastifyReply) => sendProblem(reply, { type: NO_PERSON, title: 'Forbidden', status: 403, detail: 'The token belongs to no active person of this customer.' })
+
 const forbidden = (reply: FastifyReply, detail: string) => sendProblem(reply, { type: PROBLEM.forbidden, title: 'Forbidden', status: 403, detail })
 
 /** The verified subject of a signed-in user, or null (a module caller has none). */
@@ -79,7 +83,7 @@ export const getOwnPreference = (deps: Deps): OperationHandler => async (request
   const sub = subjectOf(request)
   if (sub === null) return forbidden(reply, 'The own preference belongs to a signed-in person.')
   const out = await onTenant(deps, request, reply, (ctx) => preferenceOps.getPreferenceBySubject(ctx, sub))
-  return out === null ? forbidden(reply, 'The token belongs to no active person of this customer.') : out
+  return out === null ? noPerson(reply) : out
 }
 
 export const putOwnPreference = (deps: Deps): OperationHandler => async (request, reply) => {
@@ -91,7 +95,7 @@ export const putOwnPreference = (deps: Deps): OperationHandler => async (request
     const sql = await deps.tenantDb.sqlFor(tenant)
     return await preferenceOps.upsertPreferenceBySubject({ sql, customerId: tenant.customerId }, sub, patch)
   } catch (err) {
-    if (err instanceof BodiesError && err.code === 'NOT_FOUND') return forbidden(reply, 'The token belongs to no active person of this customer.')
+    if (err instanceof BodiesError && err.code === 'NOT_FOUND') return noPerson(reply)
     if (err instanceof BodiesError && (err.code === 'INVALID' || err.code === 'CONFLICT')) {
       // a CHECK or the last_body_id foreign key refused the value: the caller's input, not an outage
       return sendProblem(reply, { type: 'urn:gremion:problem:validation-failed', title: 'Bad Request', status: 400, detail: 'The preference value is not accepted.' })
@@ -121,7 +125,7 @@ function personWrite<T extends { rowVersion: number }>(
     try {
       const sql = await deps.tenantDb.sqlFor(tenant)
       const personId = await bodiesReads.personIdOfSubject({ sql, customerId: tenant.customerId }, sub)
-      if (personId === null) return forbidden(reply, 'The token belongs to no active person of this customer.')
+      if (personId === null) return noPerson(reply)
       const svc = createBodiesService({ authorizer: deps.authorizer })
       const out = await run(svc, { sql, customerId: tenant.customerId, actor: { kind: 'person', id: personId } }, request)
       return reply.code(201).send({ id: idOf(out), rowVersion: out.rowVersion })
