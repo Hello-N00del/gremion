@@ -8,7 +8,7 @@ import { decide } from '../../src/authz/pdp.ts'
 import { sweepGrants } from '../../src/authz/sweep.ts'
 import { syncAuthzCatalogue } from '../../src/authz/sync.ts'
 import { buildKernelDb, uuidv7 } from './db.ts'
-import { ALL_MODULES, buildWorld, insertPerson, makeRegistry, moduleIds, seedGrant, type World } from './world.ts'
+import { ALL_MODULES, buildWorld, insertBody, insertPerson, makeRegistry, moduleIds, seedGrant, type World } from './world.ts'
 
 let w: World
 let zero: World
@@ -136,9 +136,23 @@ describe('M-OFF-3 a module absent from the build', () => {
       expect(rows).toEqual([])
       // every other capability is there: the absent module cost nothing else
       expect((await db.admin`SELECT count(*)::int AS n FROM idt.capability`)[0]!.n).toBe(CAPABILITIES.length - missing.length)
-      // a decision for the absent module's capability is a positive deny, not an error
-      const d = await decide(db.app, makeRegistry(['publishing']).read, { customerId: db.customerId, subject: { personId: uuidv7() }, bodyId: uuidv7(), capability: missing[0]! })
-      expect(d.allow).toBe(false)
+      // a decision for the absent module's capability is a positive deny with a NAMED reason, not an error. The person and the
+      // body are real and hold a live body_admin grant, so the deny cannot be subject_unknown / body_unknown / no_grant by accident:
+      // the control decision for a kernel capability the same grant carries is allow/granted.
+      const body = uuidv7()
+      await insertBody(db.admin, db.customerId, body, 'fachschaftsrat')
+      const who = uuidv7()
+      await insertPerson(db.admin, db.customerId, who, 'sub-moff3-' + who.slice(-6))
+      await seedGrant(db.admin, db.customerId, { bodyId: body, personId: who, key: 'body_admin' })
+      const ask3 = (reg: { read: (c: string) => Promise<ReadonlySet<string>> }, capability: string) => decide(db.app, reg.read, { customerId: db.customerId, subject: { personId: who }, bodyId: body, capability })
+      const control = await ask3(makeRegistry(ALL_MODULES), 'idt.grant.manage')
+      expect([control.allow, control.reason]).toEqual([true, 'granted'])
+      // module enabled in the registry but never written (absent from the build): capability_unavailable
+      const unavailable = await ask3(makeRegistry(ALL_MODULES), missing[0]!)
+      expect([unavailable.allow, unavailable.reason, unavailable.grantIds]).toEqual([false, 'capability_unavailable', []])
+      // module not enabled in the registry: the registry gate answers first
+      const off = await ask3(makeRegistry(['publishing']), missing[0]!)
+      expect([off.allow, off.reason]).toEqual([false, 'module_not_enabled'])
     } finally {
       await db.close()
     }
