@@ -2,7 +2,7 @@
 // wrote tenant secrets root 0:0 0600; gremion-ui reads them as uid 1000 (node)
 // and got EACCES on a Linux volume too. Files under the tenant secrets dir are
 // handed to the reader uid/gid (still 0600); everything else stays root-owned.
-import { existsSync, mkdtempSync, rmSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, linkSync, mkdirSync, mkdtempSync, rmSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
@@ -120,6 +120,16 @@ describe('writeReaderConfigFile / handConfigToReader', () => {
     expect(fnBody('cmdMaterializeConfig')).toMatch(/if \(!isTenantConfigPath\(path\)\)/)
     expect(fnBody('cmdMaterializeConfig')).toMatch(/else writeReaderConfigFile\(path, /)
     expect(src.match(/repairConfigOwner,/g)?.length).toBe(2)
+  })
+  it('refuses a slug "dir" that is a file or symlink, and an existing config that is not a single-link regular file', () => {
+    const r = rec()
+    writeFileSync(join(root, 'notadir'), 'x')
+    expect(() => writeReaderConfigFile(join(root, 'notadir', 'config.json'), '{}\n', { env, ...r })).toThrow(/not a real directory/)
+    mkdirSync(join(root, 'hl'), { recursive: true })
+    writeFileSync(join(root, 'hl', 'config.json'), '{}')
+    linkSync(join(root, 'hl', 'config.json'), join(root, 'hl', 'second'))
+    expect(() => handConfigToReader(join(root, 'hl', 'config.json'), { env, lchown: r.lchown })).toThrow(/single-link regular file/)
+    expect(r.calls).toEqual([])
   })
   it('isTenantConfigPath picks the reader writer only for <data root>/<slug>/config.json', () => {
     expect(isTenantConfigPath(path, env)).toBe(true)

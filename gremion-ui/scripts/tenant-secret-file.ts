@@ -6,7 +6,7 @@
 // uid:gid, still mode 0600. Files elsewhere (the provisioner credential) keep
 // their root ownership.
 import { randomBytes } from 'node:crypto'
-import { chownSync, closeSync, existsSync, fchownSync, lchownSync, mkdirSync, openSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { chownSync, closeSync, existsSync, fchownSync, lchownSync, lstatSync, mkdirSync, openSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, relative, resolve, isAbsolute } from 'node:path'
 
 export function readerIds(env: Record<string, string | undefined>): { uid: number; gid: number } {
@@ -66,6 +66,10 @@ function slugDirOf(path: string, env: Record<string, string | undefined>): strin
   if (rel === '' || rel.startsWith('..') || isAbsolute(rel) || rel.includes('/') || rel.includes('\\')) {
     throw new Error(`refusing to hand ${dir} to the config reader: not a direct child of the data root ${dataRootOf(env)}`)
   }
+  // The data root is reader-owned: a planted symlink at <slug> would make root write or chown through it.
+  if (existsSync(dir) && !lstatSync(dir).isDirectory()) {
+    throw new Error(`refusing to hand ${dir} to the config reader: not a real directory (symlink or file)`)
+  }
   return dir
 }
 
@@ -104,8 +108,8 @@ export function writeReaderConfigFile(path: string, text: string, deps: ReaderDe
     } catch (err) {
       fail(uid, gid, tmp, err)
     }
-    closeSync(fd)
     closed = true
+    closeSync(fd)
     renameSync(tmp, path)
     ok = true
   } finally {
@@ -119,6 +123,10 @@ export function writeReaderConfigFile(path: string, text: string, deps: ReaderDe
  *  (the ledger skips the step that calls ensure()); this is the in-step half of it. */
 export function handConfigToReader(path: string, deps: ReaderDeps = {}): boolean {
   if (!existsSync(path)) return false
+  const st = lstatSync(path)
+  if (!st.isFile() || st.nlink !== 1) {
+    throw new Error(`refusing to hand ${path} to the config reader: not a single-link regular file (symlink or hardlink)`)
+  }
   const env = deps.env ?? process.env
   const { uid, gid } = readerIds(env)
   for (const p of [slugDirOf(path, env), path]) {
