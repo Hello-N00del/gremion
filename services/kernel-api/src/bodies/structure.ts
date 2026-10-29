@@ -55,7 +55,7 @@ export function structureOps(c: Core) {
           await tx<{ n: number }[]>`
             SELECT ((SELECT count(*) FROM idt.org_unit WHERE customer_id = ${ctx.customerId}::uuid AND body_id = ${bodyId}::uuid AND state = 'active')
                   + (SELECT count(*) FROM idt.seat WHERE customer_id = ${ctx.customerId}::uuid AND body_id = ${bodyId}::uuid AND state = 'active')
-                  + (SELECT count(*) FROM idt.membership WHERE customer_id = ${ctx.customerId}::uuid AND body_id = ${bodyId}::uuid AND valid_until IS NULL)
+                  + (SELECT count(*) FROM idt.membership WHERE customer_id = ${ctx.customerId}::uuid AND body_id = ${bodyId}::uuid AND (valid_until IS NULL OR valid_until >= current_date))
                   + (SELECT count(*) FROM idt.tenure WHERE customer_id = ${ctx.customerId}::uuid AND body_id = ${bodyId}::uuid AND ended_on IS NULL))::int AS n`,
           'body usage',
         ).n
@@ -122,7 +122,7 @@ export function structureOps(c: Core) {
           await tx<{ n: number }[]>`
             SELECT ((SELECT count(*) FROM idt.org_unit WHERE customer_id = ${ctx.customerId}::uuid AND parent_org_unit_id = ${orgUnitId}::uuid AND state = 'active')
                   + (SELECT count(*) FROM idt.seat WHERE customer_id = ${ctx.customerId}::uuid AND org_unit_id = ${orgUnitId}::uuid AND state = 'active')
-                  + (SELECT count(*) FROM idt.membership WHERE customer_id = ${ctx.customerId}::uuid AND org_unit_id = ${orgUnitId}::uuid AND valid_until IS NULL))::int AS n`,
+                  + (SELECT count(*) FROM idt.membership WHERE customer_id = ${ctx.customerId}::uuid AND org_unit_id = ${orgUnitId}::uuid AND (valid_until IS NULL OR valid_until >= current_date)))::int AS n`,
           'org unit usage',
         ).n
         if (open > 0) throw new BodiesError('CONFLICT', `org unit ${orgUnitId} still has ${open} active child unit(s), seat(s) or open membership(s)`)

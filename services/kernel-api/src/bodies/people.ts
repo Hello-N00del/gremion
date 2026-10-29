@@ -149,15 +149,22 @@ export function peopleOps(c: Core) {
         return { membershipId, rowVersion: v }
       }),
 
+    /**
+     * Ends a membership. "Ended" means an end_reason was recorded, NOT that valid_until is set: a fixed-term membership
+     * (valid_until in the future, no end_reason) is still open and may be ended early, to an earlier-or-equal date.
+     * It can never be pushed further out here (that is a correction).
+     */
     endMembership: (ctx: OpCtx, membershipId: string, i: { validUntil: string; endReason: 'term_end' | 'resigned' | 'removed' | 'data_correction' }): Promise<Written & { membershipId: string }> =>
       c.run(ctx, async (tx) => {
         const m = one(
-          await tx<{ body_id: string; person_id: string; valid_until: string | null }[]>`
-            SELECT body_id, person_id, valid_until::text AS valid_until FROM idt.membership WHERE customer_id = ${ctx.customerId}::uuid AND membership_id = ${membershipId}::uuid FOR UPDATE`,
+          await tx<{ body_id: string; person_id: string; end_reason: string | null; extends_term: boolean }[]>`
+            SELECT body_id, person_id, end_reason, coalesce(${i.validUntil}::date > valid_until, false) AS extends_term
+              FROM idt.membership WHERE customer_id = ${ctx.customerId}::uuid AND membership_id = ${membershipId}::uuid FOR UPDATE`,
           `membership ${membershipId}`,
         )
         await c.allow(ctx, 'membership.end', m.body_id)
-        if (m.valid_until !== null) throw new BodiesError('INVALID', `membership ${membershipId} is already ended`)
+        if (m.end_reason !== null) throw new BodiesError('INVALID', `membership ${membershipId} is already ended`)
+        if (m.extends_term) throw new BodiesError('INVALID', `membership ${membershipId} ends before ${i.validUntil}: ending a membership never extends it (correct it instead)`)
         const a = by(ctx.actor)
         const v = one(
           await tx<{ row_version: number }[]>`

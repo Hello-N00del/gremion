@@ -250,6 +250,36 @@ describe('the identity domain service (one tx per operation, events in the same 
     expect((await counts(A)).bodies).toBe(1)
   })
 
+  it('a fixed-term membership (valid_until in the future, no end_reason) is OPEN: it can be ended early (earlier date + end_reason), never extended, and it blocks archiving until it has ended (house review 2)', async () => {
+    const body = await svc.createBody(ctxA, { kindKey: 'stura', name: 'Fachschaftsrat Befristet' })
+    const unit = await svc.createOrgUnit(ctxA, { bodyId: body.bodyId, kindKey: 'committee', name: 'Ausschuss Befristet' })
+    const p = await svc.invitePerson(ctxA, { email: 'befristet@example.org', displayName: 'Bea Befristet' })
+    await svc.activatePerson(ctxA, p.personId, { idpSubject: 'kc-sub-bea' })
+    const onBody = await svc.startMembership(ctxA, { personId: p.personId, bodyId: body.bodyId, participationKind: 'initiative_member', voting: false, validFrom: '2026-01-01', validUntil: '2099-12-31', source: 'admin' })
+    const onUnit = await svc.startMembership(ctxA, { personId: p.personId, bodyId: body.bodyId, orgUnitId: unit.orgUnitId, participationKind: 'initiative_member', voting: false, validFrom: '2026-01-01', validUntil: '2099-12-31', source: 'admin' })
+    // an unended fixed-term membership is open: neither the body nor the unit archives under it
+    await refuses(svc.archiveOrgUnit(ctxA, unit.orgUnitId), 'CONFLICT')
+    expect(await w.adminPool(A)`SELECT state FROM idt.org_unit WHERE org_unit_id = ${unit.orgUnitId}::uuid`).toEqual([{ state: 'active' }])
+    await refuses(svc.archiveBody(ctxA, body.bodyId), 'CONFLICT')
+    expect(await w.adminPool(A)`SELECT state FROM idt.body WHERE body_id = ${body.bodyId}::uuid`).toEqual([{ state: 'active' }])
+    // ending early may not push the end further out
+    await refuses(svc.endMembership(ctxA, onBody.membershipId, { validUntil: '2100-01-01', endReason: 'resigned' }), 'INVALID')
+    const e = await svc.endMembership(ctxA, onBody.membershipId, { validUntil: '2026-06-30', endReason: 'resigned' })
+    expect(e.rowVersion).toBe(2)
+    expect(await w.adminPool(A)`SELECT valid_until::text AS valid_until, end_reason FROM idt.membership WHERE membership_id = ${onBody.membershipId}::uuid`).toEqual([{ valid_until: '2026-06-30', end_reason: 'resigned' }])
+    // a membership that carries an end_reason is ended, whatever its date
+    await refuses(svc.endMembership(ctxA, onBody.membershipId, { validUntil: '2026-05-31', endReason: 'removed' }), 'INVALID')
+    const ev = await w.adminPool(A)<{ event_type: string; data: { valid_until?: string; end_reason?: string } }[]>`
+      SELECT event_type, data FROM idt.outbox WHERE aggregate_id = ${onBody.membershipId}::uuid ORDER BY aggregate_version`
+    expect(ev.map((x) => x.event_type)).toEqual(['de.gremion.idt.membership.started.v1', 'de.gremion.idt.membership.ended.v1'])
+    expect(ev[1]!.data).toMatchObject({ valid_until: '2026-06-30', end_reason: 'resigned' })
+    // once the last one has ended in the past, the unit and then the body archive
+    await svc.endMembership(ctxA, onUnit.membershipId, { validUntil: '2026-06-30', endReason: 'term_end' })
+    await svc.archiveOrgUnit(ctxA, unit.orgUnitId)
+    await svc.archiveBody(ctxA, body.bodyId)
+    expect(await w.adminPool(A)`SELECT state FROM idt.body WHERE body_id = ${body.bodyId}::uuid`).toEqual([{ state: 'archived' }])
+  })
+
   it('preference: found by the verified subject only; follow_customer resolves through customer_setting; an unknown subject is NOT_FOUND', async () => {
     const pctx = { sql: ctxA.sql, customerId: A.id }
     const first = await preferenceOps.getPreferenceBySubject(pctx, 'kc-sub-ada')
