@@ -683,6 +683,55 @@
           }
         }
       }
+    },
+    "/api/v1/customer/settings": {
+      "get": {
+        "operationId": "getCustomerSettings",
+        "summary": "The customer's settings that shape every person's UI",
+        "tags": [
+          "bodies"
+        ],
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ForwardedHost"
+          },
+          {
+            "$ref": "#/components/parameters/ProxyTrust"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "idt.customer_setting of the resolved customer: the default locale a person following the customer gets. A customer without a row (not yet migrated past the hook) answers the column defaults.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerSettings"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -1567,152 +1616,179 @@
           }
         }
       },
-    "CreateBody": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "kindKey",
-        "name"
-      ],
-      "properties": {
-        "kindKey": {
-          "type": "string",
-          "pattern": "^[a-z][a-z0-9_]{1,39}$"
-        },
-        "name": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 200
-        },
-        "shortName": {
-          "oneOf": [
-            {
-              "type": "null"
-            },
-            {
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 40
-            }
-          ]
-        },
-        "parentBodyId": {
-          "oneOf": [
-            {
-              "type": "null"
-            },
-            {
-              "type": "string",
-              "format": "uuid"
-            }
-          ]
+      "CreateBody": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "kindKey",
+          "name"
+        ],
+        "properties": {
+          "kindKey": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]{1,39}$"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "shortName": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 40
+              }
+            ]
+          },
+          "parentBodyId": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "format": "uuid"
+              }
+            ]
+          }
+        }
+      },
+      "StartMembership": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "personId",
+          "participationKind",
+          "voting",
+          "validFrom"
+        ],
+        "properties": {
+          "personId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "orgUnitId": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "format": "uuid"
+              }
+            ]
+          },
+          "participationKind": {
+            "enum": [
+              "elected_member",
+              "non_voting_helper",
+              "employee",
+              "initiative_member",
+              "initiative_lead"
+            ]
+          },
+          "voting": {
+            "type": "boolean"
+          },
+          "validFrom": {
+            "type": "string",
+            "format": "date"
+          },
+          "validUntil": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "format": "date"
+              }
+            ]
+          },
+          "wahlperiodeId": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "format": "uuid"
+              }
+            ]
+          }
+        }
+      },
+      "InvitePerson": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "email",
+          "displayName"
+        ],
+        "properties": {
+          "email": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 254
+          },
+          "displayName": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          }
+        }
+      },
+      "Written": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "rowVersion"
+        ],
+        "description": "The id and row version of the aggregate the write created.",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "rowVersion": {
+            "type": "integer",
+            "minimum": 1
+          }
+        }
+      },
+      "CustomerSettings": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "defaultLocale",
+          "formOfAddress",
+          "timeZone"
+        ],
+        "description": "DB-IDT-CUSTOMERSETTING.",
+        "properties": {
+          "defaultLocale": {
+            "enum": [
+              "de",
+              "en"
+            ]
+          },
+          "formOfAddress": {
+            "enum": [
+              "du",
+              "sie"
+            ]
+          },
+          "timeZone": {
+            "type": "string"
+          }
         }
       }
-    },
-    "StartMembership": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "personId",
-        "participationKind",
-        "voting",
-        "validFrom"
-      ],
-      "properties": {
-        "personId": {
-          "type": "string",
-          "format": "uuid"
-        },
-        "orgUnitId": {
-          "oneOf": [
-            {
-              "type": "null"
-            },
-            {
-              "type": "string",
-              "format": "uuid"
-            }
-          ]
-        },
-        "participationKind": {
-          "enum": [
-            "elected_member",
-            "non_voting_helper",
-            "employee",
-            "initiative_member",
-            "initiative_lead"
-          ]
-        },
-        "voting": {
-          "type": "boolean"
-        },
-        "validFrom": {
-          "type": "string",
-          "format": "date"
-        },
-        "validUntil": {
-          "oneOf": [
-            {
-              "type": "null"
-            },
-            {
-              "type": "string",
-              "format": "date"
-            }
-          ]
-        },
-        "wahlperiodeId": {
-          "oneOf": [
-            {
-              "type": "null"
-            },
-            {
-              "type": "string",
-              "format": "uuid"
-            }
-          ]
-        }
-      }
-    },
-    "InvitePerson": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "email",
-        "displayName"
-      ],
-      "properties": {
-        "email": {
-          "type": "string",
-          "minLength": 3,
-          "maxLength": 254
-        },
-        "displayName": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 200
-        }
-      }
-    },
-    "Written": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "id",
-        "rowVersion"
-      ],
-      "description": "The id and row version of the aggregate the write created.",
-      "properties": {
-        "id": {
-          "type": "string",
-          "format": "uuid"
-        },
-        "rowVersion": {
-          "type": "integer",
-          "minimum": 1
-        }
-      }
-    }
     }
   }
 }

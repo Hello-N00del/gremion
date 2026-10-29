@@ -5,7 +5,7 @@
 // direction.
 import type { HandlerTable } from '@gremion/fastify-service-template'
 import type { KernelApiDeps } from '../app/deps.ts'
-import { createBody, getBodyTree, getOwnPreference, getPerson, invitePerson, listBodyMemberships, listBodySeats, listSeatTenures, putOwnPreference, startMembership } from './bodies.ts'
+import { createBody, getBodyTree, getCustomerSettings, getOwnPreference, getPerson, invitePerson, listBodyMemberships, listBodySeats, listSeatTenures, putOwnPreference, startMembership } from './bodies.ts'
 import { getTenancySelf } from './getTenancySelf.ts'
 import { listEnabledModules } from './listEnabledModules.ts'
 
@@ -13,6 +13,7 @@ export function createHandlers(deps: KernelApiDeps): HandlerTable {
   return {
     createBody: createBody(deps),
     getBodyTree: getBodyTree(deps),
+    getCustomerSettings: getCustomerSettings(deps),
     getHealth: async () => ({ status: 'ok' }),
     getOwnPreference: getOwnPreference(deps),
     getPerson: getPerson(deps),

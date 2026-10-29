@@ -54,6 +54,8 @@ async function onTenant(deps: Deps, request: FastifyRequest, reply: FastifyReply
   }
 }
 
+export const getCustomerSettings = (deps: Deps): OperationHandler => (request, reply) => onTenant(deps, request, reply, (ctx) => bodiesReads.customerSettings(ctx))
+
 export const getBodyTree = (deps: Deps): OperationHandler => (request, reply) => onTenant(deps, request, reply, (ctx) => bodiesReads.tree(ctx))
 
 export const listBodySeats = (deps: Deps): OperationHandler => (request, reply) =>

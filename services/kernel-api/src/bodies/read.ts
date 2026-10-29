@@ -101,6 +101,14 @@ export const bodiesReads = {
       return p?.person_id ?? null
     }),
 
+  /** idt.customer_setting of the customer (the column defaults when the hook has not written the row yet). */
+  customerSettings: (ctx: ReadCtx) =>
+    inCustomerTx(ctx.sql, ctx.customerId, async (tx) => {
+      const [c] = await tx<{ default_locale: 'de' | 'en'; form_of_address: 'du' | 'sie'; time_zone: string }[]>`
+        SELECT default_locale, form_of_address, time_zone FROM idt.customer_setting WHERE customer_id = ${ctx.customerId}::uuid`
+      return { defaultLocale: c?.default_locale ?? 'de', formOfAddress: c?.form_of_address ?? 'du', timeZone: c?.time_zone ?? 'Europe/Berlin' }
+    }),
+
   /** The person's own record, found by the VERIFIED subject; `personId` must be that person's. Null otherwise (never says which). */
   ownPerson: (ctx: ReadCtx, personId: string, subject: string) =>
     inCustomerTx(ctx.sql, ctx.customerId, async (tx) => {

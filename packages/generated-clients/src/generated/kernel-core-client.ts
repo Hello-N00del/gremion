@@ -209,6 +209,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/customer/settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The customer's settings that shape every person's UI */
+        get: operations["getCustomerSettings"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -440,6 +457,14 @@ export interface components {
             /** Format: uuid */
             id: string;
             rowVersion: number;
+        };
+        /** @description DB-IDT-CUSTOMERSETTING. */
+        CustomerSettings: {
+            /** @enum {unknown} */
+            defaultLocale: "de" | "en";
+            /** @enum {unknown} */
+            formOfAddress: "du" | "sie";
+            timeZone: string;
         };
     };
     responses: {
@@ -941,6 +966,36 @@ export interface operations {
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["Unavailable"];
+        };
+    };
+    getCustomerSettings: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The customer's host, whole (Tenancy D1). Must equal Host. Absent on a module-caller request. */
+                "x-forwarded-host"?: components["parameters"]["ForwardedHost"];
+                /** @description The proxy shared secret (TENANT_PROXY_SHARED_SECRET). Absent on a module-caller request. */
+                "x-proxy-trust"?: components["parameters"]["ProxyTrust"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description idt.customer_setting of the resolved customer: the default locale a person following the customer gets. A customer without a row (not yet migrated past the hook) answers the column defaults. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CustomerSettings"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
             500: components["responses"]["InternalError"];
             503: components["responses"]["Unavailable"];
         };

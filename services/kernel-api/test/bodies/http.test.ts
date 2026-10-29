@@ -69,7 +69,7 @@ const rowsFor: Answer = (text, params) => {
   if (text.includes('FROM idt.preference')) {
     return [{ locale: 'follow_customer', display_density: 'standard', colour_scheme: 'system', last_body_id: null, row_version: 1, updated_by_kind: 'person', updated_by: PERSON }]
   }
-  if (text.includes('FROM idt.customer_setting')) return [{ default_locale: 'de' }]
+  if (text.includes('FROM idt.customer_setting')) return [{ default_locale: 'de', form_of_address: 'du', time_zone: 'Europe/Berlin' }]
   if (text.startsWith('INSERT INTO idt.preference')) return []
   return undefined
 }
@@ -141,6 +141,19 @@ describe('the bodies operations (TASK-080-a step c)', () => {
     const bad = await get(app, `/api/v1/bodies/${BODY}/memberships?asOf=yesterday`)
     expect(bad.statusCode).toBe(400)
     await app.close()
+  })
+
+  it('getCustomerSettings: 200, the default locale a following person gets (the column defaults when the row is missing); a module caller is 403', async () => {
+    const { app } = setup()
+    const res = await get(app, '/api/v1/customer/settings')
+    expect(res.statusCode).toBe(200)
+    expect(conforms('getCustomerSettings', res)).toEqual({ defaultLocale: 'de', formOfAddress: 'du', timeZone: 'Europe/Berlin' })
+    const none = setup((t, p) => (t.includes('FROM idt.customer_setting') ? [] : rowsFor(t, p)))
+    expect(conforms('getCustomerSettings', await get(none.app, '/api/v1/customer/settings'))).toEqual({ defaultLocale: 'de', formOfAddress: 'du', timeZone: 'Europe/Berlin' })
+    const mod = await get(app, '/api/v1/customer/settings', 'GET', undefined, { 'x-gremion-module': 'calendar', 'x-internal-auth': 'calendar-module-secret-0123456789', 'x-tenant-id': A_ID } as never)
+    expect(mod.statusCode).toBe(403)
+    await app.close()
+    await none.app.close()
   })
 
   it('getPerson: the signed-in person\'s own record is 200; another person\'s record is 403 (never 404)', async () => {
@@ -233,6 +246,7 @@ describe('the bodies operations (TASK-080-a step c)', () => {
     await get(app, `/api/v1/bodies/${BODY}/memberships`)
     await get(app, `/api/v1/seats/${SEAT}/tenures`)
     await get(app, `/api/v1/persons/${PERSON}`)
+    await get(app, '/api/v1/customer/settings')
     await get(app, '/api/v1/persons/me/preference')
     await get(app, '/api/v1/persons/me/preference', 'PUT', { locale: 'en' })
     expect(scopeProblems(records, [A_ID], [])).toEqual([])
@@ -247,7 +261,7 @@ describe('the bodies operations (TASK-080-a step c)', () => {
 
   it('every bodies operation of the spec was exercised (not vacuous)', () => {
     const mine = listOperations(doc).filter((o) => (o.operation as { tags?: string[] }).tags?.includes('bodies')).map((o) => o.operationId!).sort()
-    expect(mine).toEqual(['createBody', 'getBodyTree', 'getOwnPreference', 'getPerson', 'invitePerson', 'listBodyMemberships', 'listBodySeats', 'listSeatTenures', 'putOwnPreference', 'startMembership'])
+    expect(mine).toEqual(['createBody', 'getBodyTree', 'getCustomerSettings', 'getOwnPreference', 'getPerson', 'invitePerson', 'listBodyMemberships', 'listBodySeats', 'listSeatTenures', 'putOwnPreference', 'startMembership'])
     expect([...exercised].sort()).toEqual(mine)
   })
 })
