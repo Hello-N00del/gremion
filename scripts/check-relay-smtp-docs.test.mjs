@@ -19,15 +19,20 @@ test('the guard sees the relay keys (not vacuous)', () => {
   }
 })
 
-for (const file of ['.env.example', 'docs/ENVIRONMENT.md']) {
-  test(`${file} documents every mail-transport key the provisioner reads`, () => {
+// Two tests, a loop inside each: scripts/verify/suites/unit.mjs compares node's collected count with the
+// number of `test(` declarations, and a `test(` inside a loop declares 1 and collects N (judged
+// unparseable). The messages name the file that failed.
+test('.env.example and docs/ENVIRONMENT.md document every mail-transport key the provisioner reads', () => {
+  for (const file of ['.env.example', 'docs/ENVIRONMENT.md']) {
     const text = read(file)
     const missing = keys.filter((k) => !text.includes(k))
-    assert.deepEqual(missing, [])
-  })
-  test(`${file} says the relay password is a secret ref and an inline value is ignored`, () => {
+    assert.deepEqual(missing, [], `${file} does not document: ${missing.join(', ')}`)
+  }
+})
+test('.env.example and docs/ENVIRONMENT.md say the relay password is a secret ref and an inline value is ignored', () => {
+  for (const file of ['.env.example', 'docs/ENVIRONMENT.md']) {
     const text = read(file)
-    assert.match(text, /RELAY_SMTP_PASSWORD_REF/)
-    assert.match(text, /inline[\s\S]{0,60}ignored/i)
-  })
-}
+    assert.match(text, /RELAY_SMTP_PASSWORD_REF/, file)
+    assert.match(text, /inline[\s\S]{0,60}ignored/i, file)
+  }
+})

@@ -54,38 +54,47 @@ function suiteCommand(id) {
   return suite.command
 }
 
-for (const [id, args] of Object.entries(SUITES)) {
-  test(`${id}: declares ${KEY}=none when the ambient env declares nothing`, () => {
+// Each case is ONE test with the suite loop INSIDE it: scripts/verify/suites/unit.mjs compares node's collected count with the
+// number of `test(` declarations, and a `test(` inside a loop declares 1 and collects N (judged unparseable). A failure
+// names its suite in the assertion message.
+test(`every suite: declares ${KEY}=none when the ambient env declares nothing`, () => {
+  for (const [id, args] of Object.entries(SUITES)) {
     withFakePnpm((dir) => {
       delete process.env[KEY]
       const r = run(suiteCommand(id), dir, { timeoutMs: 60_000 })
-      assert.equal(r.exitCode, 0, r.output)
-      assert.match(r.output, new RegExp(`GPS=\\[none\\] ARGS=\\[${args}\\]`), r.output)
+      assert.equal(r.exitCode, 0, `${id}: ${r.output}`)
+      assert.match(r.output, new RegExp(`GPS=\\[none\\] ARGS=\\[${args}\\]`), `${id}: ${r.output}`)
     })
-  })
+  }
+})
 
-  test(`${id}: treats a blank ambient ${KEY} as undeclared`, () => {
+test(`every suite: treats a blank ambient ${KEY} as undeclared`, () => {
+  for (const id of Object.keys(SUITES)) {
     withFakePnpm((dir) => {
       process.env[KEY] = '  '
       const r = run(suiteCommand(id), dir, { timeoutMs: 60_000 })
-      assert.match(r.output, /GPS=\[none\]/, r.output)
+      assert.match(r.output, /GPS=\[none\]/, `${id}: ${r.output}`)
     })
-  })
+  }
+})
 
-  test(`${id}: keeps a production stack the ambient env declares (the guard then fails closed on loopback)`, () => {
+test(`every suite: keeps a production stack the ambient env declares (the guard then fails closed on loopback)`, () => {
+  for (const id of Object.keys(SUITES)) {
     withFakePnpm((dir) => {
       process.env[KEY] = 'gremion'
       const r = run(suiteCommand(id), dir, { timeoutMs: 60_000 })
-      assert.match(r.output, /GPS=\[gremion\]/, r.output)
+      assert.match(r.output, /GPS=\[gremion\]/, `${id}: ${r.output}`)
     })
-  })
+  }
+})
 
-  test(`${id}: a failing test run still fails the suite (the wrapper passes the exit code through)`, () => {
+test(`every suite: a failing test run still fails the suite (the wrapper passes the exit code through)`, () => {
+  for (const id of Object.keys(SUITES)) {
     withFakePnpm((dir) => {
       delete process.env[KEY]
       process.env.FAKE_PNPM_EXIT = '3'
       const r = run(suiteCommand(id), dir, { timeoutMs: 60_000 })
-      assert.equal(r.exitCode, 3, r.output)
+      assert.equal(r.exitCode, 3, `${id}: ${r.output}`)
     })
-  })
-}
+  }
+})

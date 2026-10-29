@@ -186,63 +186,80 @@ test('state purity: cloudflared present fails', () => {
 
 // ── 3. app shape, both colours (TRD-038) ───────────────────────────────────
 
-for (const colour of ['blue', 'green']) {
-  test(`app shape (${colour}): a missing colour alias fails`, () => {
+// Each case is ONE test with the colour loop INSIDE it: scripts/verify/suites/unit.mjs compares node's collected count with the
+// number of `test(` declarations, and a `test(` inside a loop declares 1 and collects N (judged unparseable).
+// A failure names its colour through the assertion message.
+test('app shape (both colours): a missing colour alias fails', () => {
+  for (const colour of ['blue', 'green']) {
     const r = appRender(colour)
     r.services['gremion-ui'].networks.state = { aliases: ['gremion-ui'] }
-    assert.match(appShapeViolations(r, colour, STACK).join('\n'), new RegExp(`gremion-ui: no gremion-ui-${colour} alias on ${STACK}_state`))
-  })
+    assert.match(appShapeViolations(r, colour, STACK).join('\n'), new RegExp(`gremion-ui: no gremion-ui-${colour} alias on ${STACK}_state`), colour)
+  }
+})
 
-  test(`app shape (${colour}): traefik.enable=true fails`, () => {
+test('app shape (both colours): traefik.enable=true fails', () => {
+  for (const colour of ['blue', 'green']) {
     const r = appRender(colour)
     r.services['gremion-public'].labels['traefik.enable'] = 'true'
-    assert.match(appShapeViolations(r, colour, STACK).join('\n'), /gremion-public: traefik\.enable is "true"/)
-  })
+    assert.match(appShapeViolations(r, colour, STACK).join('\n'), /gremion-public: traefik\.enable is "true"/, colour)
+  }
+})
 
-  test(`app shape (${colour}): no evict label on a long-running service fails`, () => {
+test('app shape (both colours): no evict label on a long-running service fails', () => {
+  for (const colour of ['blue', 'green']) {
     const r = appRender(colour)
     delete r.services['control-panel'].labels['gremion.evict']
-    assert.match(appShapeViolations(r, colour, STACK).join('\n'), /control-panel: long-running service without gremion\.evict=true/)
-  })
+    assert.match(appShapeViolations(r, colour, STACK).join('\n'), /control-panel: long-running service without gremion\.evict=true/, colour)
+  }
+})
 
-  test(`app shape (${colour}): evict label on a service with no evict route fails`, () => {
+test('app shape (both colours): evict label on a service with no evict route fails', () => {
+  for (const colour of ['blue', 'green']) {
     const r = appRender(colour)
     r.services['kernel-api'].labels['gremion.evict'] = 'true'
-    assert.match(appShapeViolations(r, colour, STACK).join('\n'), /kernel-api: carries gremion\.evict=true but is not a known evict implementer/)
-  })
+    assert.match(appShapeViolations(r, colour, STACK).join('\n'), /kernel-api: carries gremion\.evict=true but is not a known evict implementer/, colour)
+  }
+})
 
-  test(`app shape (${colour}): a non-external volume fails, top-level and on the service`, () => {
+test('app shape (both colours): a non-external volume fails, top-level and on the service', () => {
+  for (const colour of ['blue', 'green']) {
     const r = appRender(colour)
     r.volumes['config-data'] = { name: `${STACK}-app-${colour}_config-data` }
     const v = appShapeViolations(r, colour, STACK).join('\n')
-    assert.match(v, /volume config-data is not external/)
-    assert.match(v, /top-level volume config-data is not external/)
+    assert.match(v, /volume config-data is not external/, colour)
+    assert.match(v, /top-level volume config-data is not external/, colour)
     const a = appRender(colour)
     a.services['gremion-public'].volumes = [{ type: 'volume', target: '/cache' }]
-    assert.match(appShapeViolations(a, colour, STACK).join('\n'), /gremion-public: anonymous volume at \/cache/)
-  })
+    assert.match(appShapeViolations(a, colour, STACK).join('\n'), /gremion-public: anonymous volume at \/cache/, colour)
+  }
+})
 
-  test(`app shape (${colour}): depends_on postgres fails (a service this project does not contain)`, () => {
+test('app shape (both colours): depends_on postgres fails (a service this project does not contain)', () => {
+  for (const colour of ['blue', 'green']) {
     const r = appRender(colour)
     r.services['gremion-ui'].depends_on = { postgres: { condition: 'service_healthy' } }
-    assert.match(appShapeViolations(r, colour, STACK).join('\n'), /gremion-ui: depends_on postgres, which this project does not contain/)
-  })
+    assert.match(appShapeViolations(r, colour, STACK).join('\n'), /gremion-ui: depends_on postgres, which this project does not contain/, colour)
+  }
+})
 
-  test(`app shape (${colour}): migrate without its profile fails`, () => {
+test('app shape (both colours): migrate without its profile fails', () => {
+  for (const colour of ['blue', 'green']) {
     const r = appRender(colour)
     delete r.services.migrate.profiles
-    assert.match(appShapeViolations(r, colour, STACK).join('\n'), /migrate: one-shot not gated under profiles: \[migrate\]/)
+    assert.match(appShapeViolations(r, colour, STACK).join('\n'), /migrate: one-shot not gated under profiles: \[migrate\]/, colour)
     const t = appRender(colour)
     t.services['tenant-create'].restart = 'unless-stopped'
-    assert.match(appShapeViolations(t, colour, STACK).join('\n'), /tenant-create: one-shot restart is "unless-stopped"/)
-  })
+    assert.match(appShapeViolations(t, colour, STACK).join('\n'), /tenant-create: one-shot restart is "unless-stopped"/, colour)
+  }
+})
 
-  test(`app shape (${colour}): a wrong or missing COLOUR fails`, () => {
+test('app shape (both colours): a wrong or missing COLOUR fails', () => {
+  for (const colour of ['blue', 'green']) {
     const r = appRender(colour)
     r.services['gremion-ui'].environment.COLOUR = colour === 'blue' ? 'green' : 'blue'
-    assert.match(appShapeViolations(r, colour, STACK).join('\n'), new RegExp(`gremion-ui: environment\\.COLOUR is "(green|blue)", want ${colour}`))
-  })
-}
+    assert.match(appShapeViolations(r, colour, STACK).join('\n'), new RegExp(`gremion-ui: environment\\.COLOUR is "(green|blue)", want ${colour}`), colour)
+  }
+})
 
 test('app shape: a docker-provider router label on the app tier fails', () => {
   const r = appRender('blue')

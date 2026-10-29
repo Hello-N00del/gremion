@@ -46,16 +46,19 @@ test('test-nats-auth: exit 0 plus the unit summary and both proof lines passes, 
   assert.equal(p.failed, 0)
 })
 
-for (const [missing, drop] of [
-  ['the "N passing" line', /^\[nats-auth-proof\] \d+ passing.*\n/m],
-  ['the OK line', /^\[nats-auth-proof\] OK.*\n/m],
-  ['the unit summary', /^\s+Tests  69 passed \(69\)\n/m],
-]) {
-  test(`test-nats-auth: exit 0 without ${missing} is untrusted, never a pass`, () => {
+// One test, a loop inside it: scripts/verify/suites/unit.mjs compares node's collected count with the
+// number of `test(` declarations, and a `test(` inside a loop declares 1 and collects N (judged
+// unparseable). The message names the case that failed.
+test('test-nats-auth: exit 0 without a proof line is untrusted, never a pass', () => {
+  for (const [missing, drop] of [
+    ['the "N passing" line', /^\[nats-auth-proof\] \d+ passing.*\n/m],
+    ['the OK line', /^\[nats-auth-proof\] OK.*\n/m],
+    ['the unit summary', /^\s+Tests  69 passed \(69\)\n/m],
+  ]) {
     const p = judgeNatsAuthTest({ code: 0, stdout: NATS_AUTH_OK.replace(drop, ''), stderr: '' })
-    assert.equal(p.unparseable, true, JSON.stringify(p))
-  })
-}
+    assert.equal(p.unparseable, true, `without ${missing}: ${JSON.stringify(p)}`)
+  }
+})
 
 test('test-nats-auth: a proof run with its floor lowered below 25 is untrusted', () => {
   const p = judgeNatsAuthTest({ code: 0, stdout: NATS_AUTH_OK.replace('25 passing (minimum 25)', '3 passing (minimum 3)'), stderr: '' })
@@ -99,18 +102,19 @@ test('test-events: the unit summary, every group at its floor, the alert phases,
   assert.equal(p.failed, 0)
 })
 
-for (const [missing, drop] of [
-  ['the unit summary', /^\s+Tests  83 passed \(83\)\n/m],
-  ['the rebuild group', /^\[events-proof\] 2 passing \(minimum 2\)\n\[events-proof\] group rebuild OK\n/m],
-  ['an alert phase', /^\[events-proof\] group alert-hold OK\n/m],
-  ['the final OK line', /^\[events-proof\] OK\n/m],
-  ['the image line', /^\[events-image\] OK.*\n/m],
-]) {
-  test(`test-events: exit 0 without ${missing} is untrusted, never a pass`, () => {
+// One test, a loop inside it (see the test-nats-auth note above for why).
+test('test-events: exit 0 without a proof line is untrusted, never a pass', () => {
+  for (const [missing, drop] of [
+    ['the unit summary', /^\s+Tests  83 passed \(83\)\n/m],
+    ['the rebuild group', /^\[events-proof\] 2 passing \(minimum 2\)\n\[events-proof\] group rebuild OK\n/m],
+    ['an alert phase', /^\[events-proof\] group alert-hold OK\n/m],
+    ['the final OK line', /^\[events-proof\] OK\n/m],
+    ['the image line', /^\[events-image\] OK.*\n/m],
+  ]) {
     const p = judgeEventsTest({ code: 0, stdout: EVENTS_OK.replace(drop, ''), stderr: '' })
-    assert.equal(p.unparseable, true, JSON.stringify(p))
-  })
-}
+    assert.equal(p.unparseable, true, `without ${missing}: ${JSON.stringify(p)}`)
+  }
+})
 
 test('test-events: a group run with its floor lowered below the pinned one is untrusted', () => {
   const p = judgeEventsTest({ code: 0, stdout: EVENTS_OK.replace('6 passing (minimum 6)', '1 passing (minimum 1)'), stderr: '' })

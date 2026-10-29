@@ -55,13 +55,16 @@ describe('expand: refused forms name the statement and the rule', () => {
     ['SET search_path = pg_catalog;', RULES.notAllowed, 2],
     ['SELECT 1;', RULES.notAllowed, 2],
   ]
-  for (const [sql, rule, statement] of refused) {
-    test(`${sql} -> ${rule}`, () => {
+  // One test, a loop inside it: scripts/verify/suites/unit.mjs compares node's collected count with the
+  // number of `test(` declarations, and a `test(` inside a loop declares 1 and collects N (judged
+  // unparseable). The message names the statement that failed.
+  test('every refused form is reported with its statement number and rule', () => {
+    for (const [sql, rule, statement] of refused) {
       const r = lintSql(expand(`${sql}\n`))
-      assert.equal(r.phase, 'expand')
-      assert.deepEqual(r.problems.map((p) => [p.statement, p.rule]), [[statement, rule]], JSON.stringify(r.problems))
-    })
-  }
+      assert.equal(r.phase, 'expand', `${sql} -> ${rule}`)
+      assert.deepEqual(r.problems.map((p) => [p.statement, p.rule]), [[statement, rule]], `${sql} -> ${rule}: ${JSON.stringify(r.problems)}`)
+    }
+  })
 
   test('a function or view of a name an earlier file created is not new', () => {
     const prior = new Set(['f'])
