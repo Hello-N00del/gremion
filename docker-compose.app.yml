@@ -81,6 +81,7 @@ services:
     deploy: *limits-l
     labels:
       traefik.enable: "false"
+      org.gremion.stack: "${STACK:?STACK required}"
       # gremion-switch / gremion-deploy POST /api/internal/evict to every
       # labelled container and abort unless it answers 204. gremion-ui serves
       # that route (routes/api/internal/evict, Bearer INTERNAL_PUSH_SECRET,
@@ -216,6 +217,7 @@ services:
     deploy: *limits-m
     labels:
       traefik.enable: "false"
+      org.gremion.stack: "${STACK:?STACK required}"
       # NO gremion.evict label: gremion-public serves no /api/internal/evict
       # and caches no tenant, so the switch has nothing to evict here.
     environment:
@@ -281,6 +283,7 @@ services:
       - /tmp
     labels:
       traefik.enable: "false"
+      org.gremion.stack: "${STACK:?STACK required}"
       # gremion-switch POSTs its evict fan-out to every long-running app
       # container; the panel caches no tenant, so its /api/internal/evict
       # verifies the bearer and answers 204.
@@ -346,6 +349,7 @@ services:
     deploy: *limits-l
     labels:
       traefik.enable: "false"
+      org.gremion.stack: "${STACK:?STACK required}"
     environment:
       COLOUR: ${COLOUR:?COLOUR required}
       # Migrations run DIRECT on postgres, never through the transaction pooler.
@@ -411,6 +415,7 @@ services:
     deploy: *limits-m
     labels:
       traefik.enable: "false"
+      org.gremion.stack: "${STACK:?STACK required}"
     environment:
       COLOUR: ${COLOUR:?COLOUR required}
       DOMAIN: ${PLATFORM_DOMAIN:?PLATFORM_DOMAIN required}
@@ -536,6 +541,10 @@ services:
       - /tmp
     labels:
       traefik.enable: "false"
+      org.gremion.stack: "${STACK:?STACK required}"
+      # TASK-080-a: the host collector asks this container for its identity outbox gauges
+      # (`events metrics --ctx idt`), exactly like a module leaf (packages/events, TASK-079).
+      org.gremion.events-metrics: idt
       # NO gremion.evict label: gremion-switch POSTs /api/internal/evict to
       # every labelled container and requires a 204, and kernel-api serves only
       # the routes of openapi/kernel-core.json (the evict route is TASK-035's).
@@ -564,10 +573,30 @@ services:
       KERNEL_API_MODULE_SECRET_PUBLISHING: ${KERNEL_API_MODULE_SECRET_PUBLISHING:-}
       KERNEL_API_MODULE_SECRET_VAULT: ${KERNEL_API_MODULE_SECRET_VAULT:-}
       KERNEL_API_MODULE_SECRET_VOTES: ${KERNEL_API_MODULE_SECRET_VOTES:-}
+      # TASK-080-a: the identity event relay (one per active customer) publishes to the IDT
+      # stream as the nats-auth identity `kernel-api`, whose seeds are the kernel-api/ subtree
+      # of the nats-secrets volume below. No depends_on (the broker is in the state project);
+      # the relay connects lazily and retries itself.
+      NATS_URL: nats://nats-${STACK:?STACK required}:4222
+      NATS_SECRETS_DIR: /run/secrets/nats
     volumes:
       # Each customer's kernel database credential is a file: ref under
       # /run/secrets/tenants (read-only, like gremion-ui's mount).
       - ${TENANT_SECRETS_DIR:-./secrets/tenants}:/run/secrets/tenants:ro
+      # TASK-080-a: ONLY this identity's seeds (subpath kernel-api, read-only), never another module's.
+      # Docker refuses a missing subpath, and then the whole kernel API is down: `nats-auth init` and
+      # `nats-auth ensure` therefore ALWAYS create kernel-api/ (0700, owned by uid 1000 = this image's
+      # `node` user, handed over by tenant-create, which runs as root; seeds 0600, same owner). A volume
+      # that `init` ran on BEFORE this change needs `nats-auth init` re-run (idempotent, no network)
+      # before the compose up that carries this mount. The seed itself arrives with `ensure <t> --modules
+      # ...,kernel-api` (provisioning broker_account_created, TASK-043d hand-off G7); until then the relay
+      # logs 'no seed' and idt.outbox rows wait, while the API serves. Proof: test/bodies/image-proof.sh.
+      - type: volume
+        source: nats-secrets
+        target: /run/secrets/nats/kernel-api
+        read_only: true
+        volume:
+          subpath: kernel-api
     networks:
       app: {}
       state:
@@ -606,6 +635,7 @@ services:
       - /tmp
     labels:
       traefik.enable: "false"
+      org.gremion.stack: "${STACK:?STACK required}"
     environment:
       COLOUR: ${COLOUR:?COLOUR required}
       GREMION_RELEASE_REF: ${IMAGE_TAG:?IMAGE_TAG required}

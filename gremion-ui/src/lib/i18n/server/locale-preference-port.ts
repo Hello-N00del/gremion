@@ -15,6 +15,7 @@
 // nothing configures a port in the running app, personIdOf() returns null
 // (Q2) and the cookie decides.
 import type postgres from 'postgres'
+import { KernelApiLocalePreferencePort, type KernelApiLocaleConfig } from './locale-preference-kernel-api'
 import { PgLocalePreferencePort } from './locale-preference-pg'
 
 export type PersonLocale = 'de' | 'en' | 'follow_customer'
@@ -39,7 +40,7 @@ export interface LocalePreferencePort {
   getCustomerDefault(customerId: string): Promise<CustomerDefaultLocale>
 }
 
-export const LOCALE_PREFERENCE_BACKENDS = ['memory', 'pg'] as const
+export const LOCALE_PREFERENCE_BACKENDS = ['memory', 'pg', 'kernel-api'] as const
 export type LocalePreferenceBackendName = (typeof LOCALE_PREFERENCE_BACKENDS)[number]
 
 export type LocalePreferenceConfig =
@@ -49,6 +50,8 @@ export type LocalePreferenceConfig =
       customerDefaults?: Record<string, CustomerDefaultLocale>
     }
   | { backend: 'pg'; sql: postgres.Sql }
+  /** TASK-080-a G11: the kernel API owns idt; this asks it as the signed-in person. */
+  | ({ backend: 'kernel-api' } & KernelApiLocaleConfig)
 
 /** Keyed by `${customerId}::${personId}` — never by personId alone, so a
  *  lookup under the wrong customerId cannot see another customer's row
@@ -93,6 +96,8 @@ export function createLocalePreferencePort(config: LocalePreferenceConfig): Loca
       return new MemoryLocalePreferencePort(config.customerDefaults ?? {})
     case 'pg':
       return new PgLocalePreferencePort(config.sql)
+    case 'kernel-api':
+      return new KernelApiLocalePreferencePort(config)
     default: {
       const unknown: never = config
       throw new Error(`unknown LocalePreferencePort backend ${JSON.stringify(unknown)}`)

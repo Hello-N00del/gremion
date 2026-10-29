@@ -83,7 +83,9 @@ its tile, and a query without data says "Keine Daten" (never a 0).
 - **A host without the pooled stack** (`compose/control-panel/standalone.yml`,
   section 11, [D R29-I11]): routed by the host's existing edge Traefik on ONE
   operator-supplied host name (`PANEL_HOST`, env only), TLS by the named
-  resolver (`PANEL_CERT_RESOLVER`), gremion-ui's HSTS; `ORIGIN` is
+  resolver (`PANEL_CERT_RESOLVER`), gremion-ui's HSTS; the panel carries
+  `org.gremion.stack=${PANEL_STACK}` (that Traefik's `STACK`: its docker
+  provider loads only containers of its own stack); `ORIGIN` is
   `https://<PANEL_HOST>`. The ops realm's `control-panel` client must name
   that origin exactly: `gremion-tenant init --realm-only --panel-origin
   https://<PANEL_HOST>`. A loopback port (`127.0.0.1:${PANEL_PORT}`) stays for

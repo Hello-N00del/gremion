@@ -203,13 +203,18 @@ red.
   `ACME_CA_SERVER`, the `EDGE_*` keys, `TRAEFIK_API_PORT`,
   `INTERNALTEST_PORT`). CI is unaffected because it copies `.env.example`.
 - **Static configuration.** `docker/traefik/traefik.yml` holds no host value.
-  Its four markers `@ACME_EMAIL@`, `@ACME_CA_SERVER@`, `@EDGE_V4_SUBNET@` and
-  `@EDGE_V6_SUBNET@` are substituted from the container's environment into
+  Its five markers `@ACME_EMAIL@`, `@ACME_CA_SERVER@`, `@EDGE_V4_SUBNET@`,
+  `@EDGE_V6_SUBNET@` and `@STACK@` are substituted from the container's environment into
   `/tmp/traefik.yml` at start-up (Traefik itself performs no `${}` expansion
   and ignores CLI flags alongside `--configFile`). The container refuses to
   start, naming the reason, if `ACME_EMAIL` is empty while
-  `TRAEFIK_CERT_RESOLVER` is set, if the CA or a subnet is empty, or if a
+  `TRAEFIK_CERT_RESOLVER` is set, if the CA, a subnet or `STACK` is empty (or
+  a value carries `|`, `&`, a backslash, a double quote or a backtick), or if a
   marker survives the render.
+- **Stack scope.** The docker provider carries
+  `constraints: "Label(`org.gremion.stack`,`@STACK@`)"`: this Traefik loads
+  only containers labelled `org.gremion.stack=<its STACK>`. See
+  [Two stacks on one Docker daemon](ops/host-tooling.md#9-two-stacks-on-one-docker-daemon).
 - **ACME.** `ACME_EMAIL` is the account contact. `ACME_CA_SERVER` defaults to
   the production directory; point it at
   `https://acme-staging-v02.api.letsencrypt.org/directory` while rehearsing —

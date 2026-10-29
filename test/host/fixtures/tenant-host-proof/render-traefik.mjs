@@ -2,7 +2,7 @@
 //
 //   node test/host/fixtures/tenant-host-proof/render-traefik.mjs <out-dir>
 //
-// Env: T041_SHA8, T041_PROXY_SECRET, T041_PROOF_PORT (container side).
+// Env: T041_SHA8, T041_PROXY_SECRET, T041_PROOF_PORT (container side); T041_STACK (optional, the @STACK@ marker).
 //
 // STATIC: the production docker/traefik/traefik.yml, its @MARKERS@ substituted
 // the way the compose `traefik` command does, plus ONE plaintext entrypoint
@@ -41,6 +41,7 @@ const staticSrc = readFileSync(path.join(repo, 'docker', 'traefik', 'traefik.yml
   .replaceAll('@ACME_CA_SERVER@', 'https://acme.t041.test/directory')
   .replaceAll('@EDGE_V4_SUBNET@', '192.0.2.0/24')
   .replaceAll('@EDGE_V6_SUBNET@', '2001:db8::/32')
+  .replaceAll('@STACK@', process.env.T041_STACK ?? 't041-proof')
 if (/@[A-Z0-9_]+@/.test(staticSrc)) throw new Error('an @MARKER@ was left unrendered in traefik.yml')
 const cfg = parse(staticSrc)
 const trusted = cfg?.entryPoints?.websecure?.forwardedHeaders?.trustedIPs

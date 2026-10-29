@@ -83,6 +83,7 @@ services:
     # loaded from.
     labels:
       - "traefik.enable=true"
+      - "org.gremion.stack=${STACK:?STACK required}"
       - "traefik.http.routers.keycloak-dev.rule=Host(`localhost`) && (PathPrefix(`/auth/realms`) || PathPrefix(`/auth/resources`) || PathPrefix(`/auth/admin`) || PathPrefix(`/auth/js`))"
       - "traefik.http.routers.keycloak-dev.middlewares=dev-csp@file"
       - "traefik.http.services.keycloak-dev.loadbalancer.server.port=8080"

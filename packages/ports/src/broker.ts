@@ -412,6 +412,9 @@ export const STREAMS = {
   CONTENT: { name: 'CONTENT', subjects: [`${SUBJECT_ROOT}.*.content.>`] },
   CALENDAR: { name: 'CALENDAR', subjects: [`${SUBJECT_ROOT}.*.calendar.>`] },
   ORGUNIT: { name: 'ORGUNIT', subjects: [`${SUBJECT_ROOT}.*.org-unit.>`] },
+  // TASK-080-a: the kernel API's own identity events (bodies, org units, seats, memberships, tenures, persons).
+  // Published ONLY by the nats-auth identity `kernel-api`; the disjoint `idt` token keeps it clear of org-unit.
+  IDT: { name: 'IDT', subjects: [`${SUBJECT_ROOT}.*.idt.>`] },
 } satisfies Record<string, StreamDescriptor>
 
 /** The stream NatsBroker.connect() binds to when no stream name is passed.

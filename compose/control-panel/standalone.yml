@@ -17,6 +17,8 @@
 # (a request there must still carry Host: ${PANEL_HOST}). PANEL_NETWORK must be
 # shared by the edge Traefik (traefik.docker.network) and Keycloak's internal
 # endpoints (PANEL_OIDC_INTERNAL_BASE); the maintainer re-measures it.
+# PANEL_STACK is that Traefik's STACK: its docker provider only loads containers
+# labelled org.gremion.stack=<its STACK>, so the panel carries the same value.
 # Secrets are files mounted read-only; the root filesystem is read-only, every
 # capability dropped. It executes nothing (PANEL_EXECUTOR=none): "Neuer
 # Mandant" is disabled with its reason until TASK-038's re-init.
@@ -28,6 +30,7 @@ name: gremion-panel
 x-required-env:
   image-tag: "${IMAGE_TAG:?IMAGE_TAG required}"
   panel-network: "${PANEL_NETWORK:?PANEL_NETWORK required}"
+  panel-stack: "${PANEL_STACK:?PANEL_STACK required}"
   panel-host: "${PANEL_HOST:?PANEL_HOST required}"
   panel-entrypoint: "${PANEL_TRAEFIK_ENTRYPOINT:?PANEL_TRAEFIK_ENTRYPOINT required}"
   panel-resolver: "${PANEL_CERT_RESOLVER:?PANEL_CERT_RESOLVER required}"
@@ -49,6 +52,10 @@ services:
     labels:
       traefik.enable: "true"
       traefik.docker.network: "${PANEL_NETWORK:?PANEL_NETWORK required}"
+      # The stack of the edge Traefik that routes this panel (its STACK). That Traefik's docker
+      # provider is constrained to this label (docker/traefik/traefik.yml, incident
+      # 2026-10-29): a panel without it is invisible to its own edge (silent 404).
+      org.gremion.stack: "${PANEL_STACK:?PANEL_STACK required}"
       traefik.http.routers.gremion-panel.rule: "Host(`${PANEL_HOST:?PANEL_HOST required}`)"
       traefik.http.routers.gremion-panel.entrypoints: "${PANEL_TRAEFIK_ENTRYPOINT:?PANEL_TRAEFIK_ENTRYPOINT required}"
       traefik.http.routers.gremion-panel.tls: "true"

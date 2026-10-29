@@ -72,10 +72,12 @@ describe('compose/control-panel/standalone.yml (TDD 17b, R29-I11)', () => {
   })
 
   it('one Traefik router on PANEL_HOST only, TLS by the named resolver, HSTS equal to gremion-ui, ORIGIN https://<PANEL_HOST>', () => {
-    const svc = service(envFromTemplate({ IMAGE_TAG: 't', PANEL_NETWORK: 'fixture_net', PANEL_TRAEFIK_ENTRYPOINT: 'websecure', PANEL_CERT_RESOLVER: 'fixture-le' }))
+    const svc = service(envFromTemplate({ IMAGE_TAG: 't', PANEL_NETWORK: 'fixture_net', PANEL_STACK: 'fixture-stack', PANEL_TRAEFIK_ENTRYPOINT: 'websecure', PANEL_CERT_RESOLVER: 'fixture-le' }))
     const l = svc.labels as Record<string, string>
     expect(l['traefik.enable']).toBe('true')
     expect(l['traefik.docker.network']).toBe('fixture_net')
+    // The edge Traefik's docker provider is constrained to its own stack (incident 2026-10-29).
+    expect(l['org.gremion.stack']).toBe('fixture-stack')
     const routers = Object.keys(l).filter((k) => /^traefik\.http\.routers\.[^.]+\.rule$/.test(k))
     expect(routers).toEqual(['traefik.http.routers.gremion-panel.rule'])
     expect(l['traefik.http.routers.gremion-panel.rule']).toBe(`Host(\`${HOST}\`)`)
@@ -100,7 +102,7 @@ describe('compose/control-panel/standalone.yml (TDD 17b, R29-I11)', () => {
     }
   })
 
-  it.each(['IMAGE_TAG', 'PANEL_NETWORK', 'PANEL_HOST', 'PANEL_TRAEFIK_ENTRYPOINT', 'PANEL_CERT_RESOLVER'])('fails without %s (no default)', (key) => {
+  it.each(['IMAGE_TAG', 'PANEL_NETWORK', 'PANEL_STACK', 'PANEL_HOST', 'PANEL_TRAEFIK_ENTRYPOINT', 'PANEL_CERT_RESOLVER'])('fails without %s (no default)', (key) => {
     const r = render(envFromTemplate({ IMAGE_TAG: 'panel-test', PANEL_NETWORK: 'fixture_net', [key]: null }))
     expect(r.status).not.toBe(0)
     expect(r.stderr).toContain(key)

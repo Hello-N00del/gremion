@@ -290,6 +290,7 @@ phase_panel_start() {
     ( umask 077; cat > "$OUT/panel.env" ) <<EOF
 IMAGE_TAG=${STACK}
 PANEL_NETWORK=${NET}
+PANEL_STACK=${STACK}
 PANEL_HOST=${PANEL_HOST}
 PANEL_TRAEFIK_ENTRYPOINT=websecure
 PANEL_CERT_RESOLVER=proof-none
