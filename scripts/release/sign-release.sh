@@ -7,6 +7,11 @@
 # USAGE
 #   COSIGN_PASSWORD=… scripts/release/sign-release.sh --key <cosign.key> <repo>@sha256:<64 hex>...
 #
+# COSIGN_PASSWORD must be set (empty for a key without one): every cosign call
+# below captures stderr, where cosign would prompt, so an unset password is a
+# refusal, never a hang on a prompt nobody sees. cut-dist-tag.sh sets it from
+# COSIGN_PASSWORD_FILE for this process alone.
+#
 # For every image, by digest only:
 #   1. cosign sign   --key K --tlog-upload=false        (no public transparency log)
 #   2. syft (digest-pinned container) → CycloneDX 1.6 SBOM of that digest
@@ -66,6 +71,8 @@ main() {
     done
     [[ -n "$key" ]] || usage
     [[ ${#refs[@]} -ge 1 ]] || usage
+    [[ -v COSIGN_PASSWORD ]] \
+        || die "COSIGN_PASSWORD is not set: cosign would prompt for it where this script hides its output. Run it through cut-dist-tag.sh with COSIGN_PASSWORD_FILE=<file> (an empty COSIGN_PASSWORD for a key without a password)"
 
     command -v cosign >/dev/null 2>&1 || die "cosign not on PATH"
     command -v docker >/dev/null 2>&1 || die "docker not on PATH (syft runs as a pinned container)"

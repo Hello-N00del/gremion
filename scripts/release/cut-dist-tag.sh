@@ -11,9 +11,10 @@
 #     scripts/release/cut-dist-tag.sh <X.Y.Z> --run-id <release-images run id> \
 #       --overlap true|false --dist-manifest <gremion.dist.json> [--first-release]
 #
-#   The key's password comes from the file named by COSIGN_PASSWORD_FILE or,
-#   with that unset and a terminal on stdin, from cosign's own prompt. Never
-#   from COSIGN_PASSWORD: see CREDENTIALS.
+#   The key's password comes from the file named by COSIGN_PASSWORD_FILE, and
+#   only from there: never from COSIGN_PASSWORD (see CREDENTIALS), and never
+#   from a prompt. sign-release.sh runs cosign once per image and step with its
+#   stderr captured, so a cosign prompt could be neither seen nor answered.
 #
 #   --overlap        release.json's `overlap` has no default (spec B F.6): the
 #                    operator states whether the old colour can keep serving
@@ -27,8 +28,9 @@
 #                    migration as new. With it, an existing dist tag refuses.
 #
 # STEPS
-#   0. fetch origin's tags and main (the tag check, the previous tag and the
-#      provenance check all read origin, not whatever this clone last saw);
+#   0. fetch origin's tags and main, and list origin's tags (git ls-remote):
+#      the tag check, the previous tag and the provenance check read that
+#      list, not this clone's tags, which keep whatever a failed run left;
 #   1. judge the run (release-images.yml of this repository, succeeded, built
 #      and dispatched from a commit that is on origin/main or a v* / rc-v* tag)
 #      and download its release-pins-<sha> artefact (the pins layers);
@@ -45,9 +47,9 @@
 # REFUSALS (nothing is changed unless noted): COSIGN_PASSWORD in the
 # environment; a bad version or a missing argument; a missing gh, cosign, git,
 # jq, node or make; COSIGN_KEY_PATH unset or not a readable file;
-# COSIGN_PASSWORD_FILE not a readable file, or unset with no terminal to
-# prompt on; a dirty working tree; origin unreachable; a tag that
-# already exists (locally or on origin); no previous dist tag without
+# COSIGN_PASSWORD_FILE unset or not a readable file; a dirty working tree;
+# origin unreachable; a tag that already exists on origin, or only in this
+# clone (a failed run's leftover: delete it and rerun); no previous dist tag without
 # --first-release, or one with it; a run of any other workflow, from a fork, or
 # that did not succeed; a built or dispatching commit that is neither on
 # origin/main nor the commit of a v* / rc-v* tag; an artefact that is not
@@ -67,8 +69,7 @@
 #     `unset` leaves the environment the script was started with readable at
 #     /proc/<pid>/environ; the script refuses to start when COSIGN_PASSWORD is.
 #     It comes from COSIGN_PASSWORD_FILE (a path is no secret; the content is
-#     read inside the signing subshell and exported to the signer alone) or,
-#     with that unset and a terminal on stdin, from cosign's own prompt.
+#     read inside the signing subshell and exported to the signer alone).
 #   - COSIGN_KEY_PATH and COSIGN_PASSWORD_FILE are paths too: the first is
 #     handed over by --key, both are taken off the environment once read.
 #   - The signer is the sign-release.sh that sat next to this script at
@@ -142,14 +143,39 @@ layer_problem() {
     [[ "$state" == service && "$seen" != " " ]] || printf '%s: no services, or a service cut off after %s' "$file" "${svc:-the header}"
 }
 
+# ORIGIN_TAGS holds "<commit> <tag name>" per tag on origin, read once by
+# git ls-remote (annotated tags peeled to their commit). This clone's own tags
+# are not the record: a tag a failed run created and never pushed stays here
+# after any fetch, and must count neither as released nor as provenance.
+ORIGIN_TAGS=""
+read_origin_tags() {
+    local listing sha ref name
+    listing="$(git ls-remote --tags origin)" || return 1
+    ORIGIN_TAGS="$(
+        while read -r sha ref; do
+            [[ "$ref" == refs/tags/* ]] || continue
+            name="${ref#refs/tags/}"
+            if [[ "$name" == *'^{}' ]]; then printf '%s %s peeled\n' "$sha" "${name%'^{}'}"
+            else printf '%s %s direct\n' "$sha" "$name"; fi
+        done <<< "$listing" \
+        | sort -k2,2 -k3,3r | awk '$2 != last { print $1, $2; last = $2 }'
+    )"
+}
+
+# origin_tag_commit <name> -- the commit origin's tag <name> names, nothing if
+# origin has no such tag.
+origin_tag_commit() {
+    awk -v n="$1" '$2 == n { print $1; exit }' <<< "$ORIGIN_TAGS"
+}
+
 # reviewed_commit <sha> -- is <sha> a commit that reached review: on origin/main
-# (as just fetched) or the commit of a v* / rc-v* tag? The release-images
-# workflow can be dispatched on any ref, so the run id alone proves nothing
-# about WHAT was built.
+# (as just fetched) or the commit of one of origin's v* / rc-v* tags? The
+# release-images workflow can be dispatched on any ref, so the run id alone
+# proves nothing about WHAT was built.
 reviewed_commit() {
     local sha="$1"
     if git merge-base --is-ancestor "$sha" refs/remotes/origin/main 2>/dev/null; then return 0; fi
-    [[ -n "$(git tag --points-at "$sha" 'v*' 'rc-v*')" ]]
+    awk -v s="$sha" '$1 == s && ($2 ~ /^v/ || $2 ~ /^rc-v/) { found = 1 } END { exit !found }' <<< "$ORIGIN_TAGS"
 }
 
 main() {
@@ -157,7 +183,7 @@ main() {
     # environment this script was started with is already readable at
     # /proc/<pid>/environ by everything it starts, and `unset` cannot undo that.
     if [[ -v COSIGN_PASSWORD ]]; then
-        die "COSIGN_PASSWORD is in the environment, where every child of this script can read it (/proc/<pid>/environ). Unset it and put the password in a file (mode 0600, outside the repository): COSIGN_PASSWORD_FILE=<file>, or run on a terminal and let cosign prompt."
+        die "COSIGN_PASSWORD is in the environment, where every child of this script can read it (/proc/<pid>/environ). Unset it and put the password in a file (mode 0600, outside the repository): COSIGN_PASSWORD_FILE=<file>."
     fi
     local version="" run_id="" overlap="" manifest="" first_release=0
     while [[ $# -gt 0 ]]; do
@@ -185,18 +211,16 @@ main() {
     [[ -f "$manifest" && -r "$manifest" ]] || die "--dist-manifest is not a readable file: $manifest"
 
     # The password's source is settled now, before any network call: a file
-    # that can be read, or a terminal for cosign to prompt on. Its content is
-    # read in the signing subshell (step 4) and nowhere else.
-    if [[ -n "${COSIGN_PASSWORD_FILE:-}" ]]; then
-        [[ -f "$COSIGN_PASSWORD_FILE" && -r "$COSIGN_PASSWORD_FILE" ]] || die "COSIGN_PASSWORD_FILE is not a readable file: $COSIGN_PASSWORD_FILE"
-    elif [[ ! -t 0 ]]; then
-        die "no password for the cosign key: set COSIGN_PASSWORD_FILE=<file>, or run on a terminal so cosign can prompt"
-    fi
+    # that can be read. Its content is read in the signing subshell (step 4)
+    # and nowhere else. There is no prompt fallback, terminal or not: the
+    # signer captures cosign's stderr, so its prompt would hang unseen.
+    [[ -n "${COSIGN_PASSWORD_FILE:-}" ]] || die "COSIGN_PASSWORD_FILE is not set: put the cosign key's password in a file (mode 0600, outside the repository) and set COSIGN_PASSWORD_FILE=<file>. cosign cannot prompt here."
+    [[ -f "$COSIGN_PASSWORD_FILE" && -r "$COSIGN_PASSWORD_FILE" ]] || die "COSIGN_PASSWORD_FILE is not a readable file: $COSIGN_PASSWORD_FILE"
 
     # Only sign-release.sh needs the key. Everything else this script starts
     # (gh, git, node, make verify, the lint) is project code at the built
     # commit, so neither path stays in the environment it inherits.
-    local sign_key="$COSIGN_KEY_PATH" sign_password_file="${COSIGN_PASSWORD_FILE:-}"
+    local sign_key="$COSIGN_KEY_PATH" sign_password_file="$COSIGN_PASSWORD_FILE"
     unset COSIGN_KEY_PATH COSIGN_PASSWORD_FILE
 
     local root status tag prev_tag signer
@@ -210,10 +234,14 @@ main() {
     # Origin is the record of what has been released, not this clone's tag
     # list: a dist tag cut from another workstation is not here until fetched.
     git fetch --quiet --tags origin '+refs/heads/main:refs/remotes/origin/main' || die "cannot fetch tags and main from origin"
-    if git rev-parse -q --verify "refs/tags/${tag}" >/dev/null; then
-        die "tag ${tag} already exists"
+    read_origin_tags || die "cannot list origin's tags"
+    if [[ -n "$(origin_tag_commit "$tag")" ]]; then
+        die "tag ${tag} already exists on origin"
     fi
-    prev_tag="$(git tag --list 'dist-v*' --sort=-v:refname | head -n 1)"
+    if git rev-parse -q --verify "refs/tags/${tag}" >/dev/null; then
+        die "tag ${tag} exists in this clone but not on origin, most likely left by a failed run: check it is not a release (git show ${tag}), delete it (git tag -d ${tag}) and run again"
+    fi
+    prev_tag="$(awk '$2 ~ /^dist-v/ { print $2 }' <<< "$ORIGIN_TAGS" | sort -rV | head -n 1)"
     if [[ -z "$prev_tag" && "$first_release" -eq 0 ]]; then
         die "origin has no dist-v* tag: pass --first-release if ${tag} is the first, otherwise something is wrong with the fetch"
     fi
@@ -290,7 +318,8 @@ main() {
     cur="$(jq -c '[.chains[].files | keys[]] | unique' scripts/migrations/applied.lock.json)"
     prev='[]'
     if [[ -n "$prev_tag" ]]; then
-        prev="$(git show "${prev_tag}:scripts/migrations/applied.lock.json" | jq -c '[.chains[].files | keys[]] | unique')"
+        # by origin's commit for the tag, not by name: a local tag of that name need not agree
+        prev="$(git show "$(origin_tag_commit "$prev_tag"):scripts/migrations/applied.lock.json" | jq -c '[.chains[].files | keys[]] | unique')"
     fi
     migrations="$(jq -nc --argjson cur "$cur" --argjson prev "$prev" '$cur - $prev')"
     jq -n --arg tag "$tag" --argjson overlap "$overlap" --argjson migrations "$migrations" --arg digest "$digest" \
@@ -310,17 +339,14 @@ main() {
     local -a refs_arr
     mapfile -t refs_arr <<< "$refs"
     # The one place the password exists: read here, in this subshell, and
-    # exported to sign-release.sh alone. With no file COSIGN_PASSWORD stays
-    # unset and cosign prompts. The signer is the trusted copy made before the
+    # exported to sign-release.sh alone. The signer is the trusted copy made before the
     # checkout; it finds its repository from its own location, so it is pointed
     # at this clone by GIT_DIR / GIT_WORK_TREE instead.
     (
-        if [[ -n "$sign_password_file" ]]; then
-            pw="$(<"$sign_password_file")" || exit 1
-            # $(...) drops trailing newlines; a CRLF file also leaves the \r
-            COSIGN_PASSWORD="${pw%$'\r'}"
-            export COSIGN_PASSWORD
-        fi
+        pw="$(<"$sign_password_file")" || exit 1
+        # $(...) drops trailing newlines; a CRLF file also leaves the \r
+        COSIGN_PASSWORD="${pw%$'\r'}"
+        export COSIGN_PASSWORD
         GIT_DIR="$(git rev-parse --absolute-git-dir)" GIT_WORK_TREE="$root" bash "$signer" --key "$sign_key" "${refs_arr[@]}"
     )
 
