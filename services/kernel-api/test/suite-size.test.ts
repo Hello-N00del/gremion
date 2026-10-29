@@ -43,6 +43,7 @@ export const NAMED: Record<'unit' | 'integration' | 'authz' | 'live', Record<str
     // TASK-081
     'test/authz/catalogue.test.ts': 9,
     'test/authz/cli.test.ts': 4,
+    'test/authz/sweep-interval.test.ts': 19,
     'test/authz/http.test.ts': 22,
     'test/authz/after-migrate.test.ts': 6,
     'test/authz/no-role-check.test.ts': 5,

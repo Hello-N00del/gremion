@@ -26,6 +26,7 @@ import { readConfig } from './app/config.ts'
 import { authzCliDeps, jsonLogger, wireDeps } from './app/wire.ts'
 import { bootSync, syncAfterMigrate } from './authz/after-migrate.ts'
 import { runAuthzCli } from './authz/cli.ts'
+import { describeSweepInterval, parseSweepInterval } from './authz/sweep-interval.ts'
 import { assertShippedMigrations } from './migrate/boot-check.ts'
 import { KERNEL_API_MIGRATION_DIRS } from './migrate/chain.ts'
 import { runMigrateCli } from './migrate/cli.ts'
@@ -39,6 +40,8 @@ const SPEC = join(SERVICE_ROOT, 'openapi', 'kernel-core.json')
 
 async function serve(): Promise<void> {
   const log = jsonLogger()
+  // a malformed AUTHZ_SWEEP_INTERVAL_MS refuses the boot, before anything is wired or opened
+  const everyMs = parseSweepInterval(process.env.AUTHZ_SWEEP_INTERVAL_MS)
   const config = readConfig(process.env, { modulesRoot: join(KERNEL_ROOT, 'modules'), kernelRoot: KERNEL_ROOT })
   const files = assertShippedMigrations(DIRS)
   const wired = wireDeps(config, { dirs: DIRS, log })
@@ -64,9 +67,9 @@ async function serve(): Promise<void> {
   process.once('SIGTERM', () => void stop('SIGTERM'))
   process.once('SIGINT', () => void stop('SIGINT'))
   await app.listen({ host: config.host, port: config.port })
-  // the grant sweep (brief s.5.6): every AUTHZ_SWEEP_INTERVAL_MS (default 60 s, 0 = off, e.g. when the verb runs from cron); never overlaps itself
-  const everyMs = Number(process.env.AUTHZ_SWEEP_INTERVAL_MS ?? 60_000)
-  if (Number.isInteger(everyMs) && everyMs > 0) {
+  // the grant sweep (brief s.5.6): every AUTHZ_SWEEP_INTERVAL_MS (default 60 s, 0 = off, e.g. when the verb runs from cron; anything but a non-negative integer refuses the boot); never overlaps itself
+  log.info(describeSweepInterval(everyMs))
+  if (everyMs > 0) {
     const sweepDeps = authzCliDeps(wired)
     let running = false
     const timer = setInterval(() => {
