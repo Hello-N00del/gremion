@@ -65,11 +65,10 @@ function writeFixtureManifest(dir) {
   return p
 }
 
-const PASSING_TEST_MJS = `
-import test from 'node:test'
-test('one', () => {})
-test('two', () => {})
-`
+// Joined from an array, not a template literal: scripts/verify/suites/unit.mjs counts a
+// `test(` at the start of ANY line of this file as a declared test, and a template literal
+// with two of them made it declare 22 tests where node collects 20 (judged unparseable).
+const PASSING_TEST_MJS = ["import test from 'node:test'", "test('one', () => {})", "test('two', () => {})", ''].join('\n')
 
 function makeFixtureRepo(testFileContent = PASSING_TEST_MJS) {
   const root = mkdtempSync(join(tmpdir(), 'ci-local-snapshot-'))

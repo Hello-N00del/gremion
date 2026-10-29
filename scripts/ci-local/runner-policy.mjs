@@ -9,14 +9,16 @@
 //   node scripts/ci-local/runner-policy.mjs --kernel <path> [--vertical <path>] [--waivers <path>]
 //   node --test scripts/ci-local/runner-policy.test.mjs
 //
-// TASK-012 §5 Q1: this guard is RED on today's kernel tree —
-// .github/workflows/deploy.yml passes DEPLOY_SSH_KEY/DEPLOY_HOST/
-// DEPLOY_HOST_KEY to an Actions runner. Fixing deploy.yml is TASK-086's
-// deploy-path work and .github/** is TASK-018's file ownership, so this unit
-// applies the brief's default: a dated waiver naming only deploy.yml, owned
-// by TASK-086, expiring when TASK-038 lands. An unwaived hit, or an expired
-// waiver, still fails the guard — the waiver only mutes the ONE named file,
-// and only until its expiry.
+// The kernel tree is GREEN and scripts/ci-local/waivers.json is empty. It was
+// not always: TASK-012 §5 Q1 found .github/workflows/deploy.yml passing
+// DEPLOY_SSH_KEY/DEPLOY_HOST/DEPLOY_HOST_KEY to an Actions runner and waived
+// that one file, dated, until the deploy path was reworked. The keyless release
+// pipeline (.github/workflows/release-images.yml, scripts/release/
+// cut-dist-tag.sh) replaced deploy.yml, the file is gone, and the waiver was
+// deleted with it. The waiver MECHANISM below stays (and stays tested on
+// synthetic trees): an unwaived hit, or an expired waiver, fails the guard —
+// a waiver mutes only the ONE named file and finding ids, and only until its
+// expiry.
 
 import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'

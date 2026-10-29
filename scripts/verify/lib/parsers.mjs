@@ -110,6 +110,44 @@ export function parseBatsTap(text) {
 }
 
 /**
+ * Every failing test of a TAP stream (bats's and node's alike): each `not ok` line with the diagnostic
+ * lines under it, in order. A failure's detail used to be the last few hundred characters of the stream,
+ * which on a long run is a tail of `ok` lines (CI run 4: 1 of 1668 failed and no log line named it).
+ *
+ * The lines belonging to a `not ok` are those after it that are indented deeper than it (node's YAML
+ * block, a nested subtest) or start with `#` in column 0 (bats's `# (in test file ...)` and output
+ * lines), up to the next result line, the next subtest header or node's closing `# tests N` summary. Each
+ * block is cut at `maxBlockLines`, and the whole listing at `maxChars`, with a note of what was left out.
+ * `''` when there is no `not ok` line.
+ */
+export function tapFailureBlocks(text, { maxBlockLines = 40, maxChars = 8000 } = {}) {
+  const lines = text.split(/\r?\n/)
+  const blocks = []
+  for (let i = 0; i < lines.length; i++) {
+    const m = lines[i].match(/^(\s*)not ok \d+/)
+    if (!m) continue
+    const block = [lines[i]]
+    let j = i + 1
+    for (; j < lines.length; j++) {
+      const l = lines[j]
+      if (/^\s*(not )?ok \d+/.test(l) || /^\s*# Subtest:/.test(l) || /^# (tests|suites|pass|fail|cancelled|skipped|todo|duration_ms)\b/.test(l)) break
+      const deeper = l.length - l.trimStart().length > m[1].length
+      if (!deeper && !l.startsWith('#')) break
+      block.push(l)
+    }
+    i = j - 1
+    blocks.push(block.length > maxBlockLines + 1 ? [...block.slice(0, maxBlockLines + 1), `... (${block.length - maxBlockLines - 1} more line(s) of this failure not shown)`] : block)
+  }
+  let out = ''
+  for (let k = 0; k < blocks.length; k++) {
+    const next = blocks[k].join('\n')
+    if (out.length + next.length > maxChars && k > 0) return `${out}\n... (${blocks.length - k} more failing test(s) not shown)`
+    out += (k > 0 ? '\n' : '') + next
+  }
+  return out
+}
+
+/**
  * `vitest run --reporter=json --outputFile=<path>`'s top-level Jest-shaped
  * summary. `numPendingTests` covers `it.skip`, `numTodoTests` `it.todo`, but
  * NEITHER covers a test file that throws at collection time (a syntax error,

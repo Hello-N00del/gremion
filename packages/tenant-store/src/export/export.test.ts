@@ -67,7 +67,9 @@ describe('KERNEL_EXPORT_TABLES matches the kernel migration chain', () => {
     for (const f of readdirSync(dir).filter((n) => /^\d{4}_.*\.sql$/.test(n)).sort()) {
       const sql = readFileSync(join(dir, f), 'utf-8').replace(/--[^\n]*/g, '')
       const re = new RegExp(
-        `CREATE TABLE (?:IF NOT EXISTS )?(?:public\.)?${ident}|ALTER TABLE (?:IF EXISTS )?(?:ONLY )?(?:public\.)?${ident} RENAME TO ${ident}|DROP TABLE (?:IF EXISTS )?((?:(?:public\.)?"?[a-z_][a-z0-9_]*"?\s*,\s*)*(?:public\.)?"?[a-z_][a-z0-9_]*"?)`,
+        // A template literal swallows a lone backslash (`\.` is `.`, `\s` is
+        // `s`), so every regex escape here is doubled.
+        `CREATE TABLE (?:IF NOT EXISTS )?(?:public\\.)?${ident}|ALTER TABLE (?:IF EXISTS )?(?:ONLY )?(?:public\\.)?${ident} RENAME TO ${ident}|DROP TABLE (?:IF EXISTS )?((?:(?:public\\.)?"?[a-z_][a-z0-9_]*"?\\s*,\\s*)*(?:public\\.)?"?[a-z_][a-z0-9_]*"?)`,
         'gi',
       )
       for (const m of sql.matchAll(re)) {

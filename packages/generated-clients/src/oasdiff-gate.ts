@@ -48,6 +48,11 @@ function probeVersion(cmd: string, args: string[], env?: NodeJS.ProcessEnv): str
 
 interface RunOpts { env?: NodeJS.ProcessEnv }
 
+/** Checks whose level the gate pins instead of inheriting oasdiff's default
+ *  (one `<check id> <level>` per line, oasdiff's --severity-levels format). */
+const SEVERITY_FILE = 'severity-levels.txt'
+const SEVERITY_LEVELS = 'response-optional-property-removed err\n'
+
 function tryRun(cmd: string, args: string[], env?: NodeJS.ProcessEnv): { code: number; out: string } | null {
   const r = spawnSync(cmd, args, { encoding: 'utf8', env })
   if (r.error) return null
@@ -73,23 +78,34 @@ export function runOasdiffBreaking(oldSpec: string, newSpec: string, opts: RunOp
   try {
     writeFileSync(join(dir, 'old.json'), oldSpec)
     writeFileSync(join(dir, 'new.json'), newSpec)
+    writeFileSync(join(dir, SEVERITY_FILE), SEVERITY_LEVELS)
     // `--fail-on WARN`, not `ERR`: verified empirically (acceptance demo,
     // seeding a removed OPTIONAL response field with no bump) that oasdiff
-    // classifies "response-optional-property-removed" as WARN, not ERR — at
+    // does not classify "response-optional-property-removed" as ERR — at
     // `--fail-on ERR` a real removed field silently passed with no bump,
     // which is exactly the acceptance criterion this gate exists to catch
     // (brief §1: "remove ... without a major bump fails"). WARN still lets
     // pure additions through as non-breaking (verified against the T3
     // added-param fixture: unchanged at WARN), so the "add without a minor
     // bump fails" branch below is unaffected.
-    let r = tryRun('oasdiff', ['breaking', join(dir, 'old.json'), join(dir, 'new.json'), '--fail-on', 'WARN'], env)
+    //
+    // WARN alone is not enough, though: that check's DEFAULT level is a
+    // property of the oasdiff release, not of this gate. A local oasdiff built
+    // in September reports it as WARN; the pinned v1.32.1 image reports it as
+    // INFO, so under `--fail-on WARN` the CI runner (which has only the image)
+    // passed a removed optional field with no bump while the dev box failed it.
+    // The rule is therefore pinned here (SEVERITY_LEVELS) instead of inherited
+    // from whichever build answers.
+    let r = tryRun('oasdiff', ['breaking', join(dir, 'old.json'), join(dir, 'new.json'), '--fail-on', 'WARN',
+      '--severity-levels', join(dir, SEVERITY_FILE)], env)
     if (r) {
       const version = probeVersion('oasdiff', ['--version'], env)
       return { breaking: r.code !== 0, output: r.out, tool: `oasdiff (PATH, version ${version})` }
     }
     if (dockerDaemonAvailable(env)) {
       r = tryRun('docker', ['run', '--rm', '-v', `${dir}:/specs:ro`, OASDIFF_DOCKER_IMAGE,
-        'breaking', '/specs/old.json', '/specs/new.json', '--fail-on', 'WARN'], env)
+        'breaking', '/specs/old.json', '/specs/new.json', '--fail-on', 'WARN',
+        '--severity-levels', `/specs/${SEVERITY_FILE}`], env)
       if (r) {
         const version = probeVersion('docker', ['run', '--rm', OASDIFF_DOCKER_IMAGE, '--version'], env)
         return { breaking: r.code !== 0, output: r.out, tool: `${OASDIFF_DOCKER_IMAGE} (docker, version ${version})` }

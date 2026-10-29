@@ -183,7 +183,7 @@ specific and a reader who remembers it is owed the refutation.
   **green** on this tree and `PRODUCT_TOKEN_PENDING` in
   `scripts/kernel-hygiene-check.mjs` is **empty**. It opened with 29 carriers —
   `.env.example`, both compose files, the k8s configmap,
-  `.github/workflows/gremion-ui.yml`, `scripts/dev-configure.sh`,
+  `.github/workflows/gremion-ui.yml` (since folded into `ci.yml`), `scripts/dev-configure.sh`,
   `scripts/configure-keycloak-clients.sh`, both realm exports, the realm-secret
   substitution script, and the live-realm assertions in
   `test/integration/{health,oidc}.bats` — each held as one exact line at one
@@ -333,8 +333,8 @@ It is not renamed in 0.1.0 because it is a coupled set, not a string: the
 Traefik `Host(...)` rules and the compose `DOMAIN` must move together (hygiene
 check `j1` exists because of exactly that failure). The wildcard tenant legs
 and their regexp-escaped domain key are gone since TASK-041 (whole-host
-resolution), so that half of the set no longer exists. `.github/workflows/gremion-ui.yml` and
-`gremion-ui/vitest.integration.config.ts` already use `council.example`, so the
+resolution), so that half of the set no longer exists. `gremion-ui/vitest.integration.config.ts`
+already uses `council.example`, so the
 tree is not internally consistent either — a normalisation pass should do all
 of it at once, with hygiene check `j1` and `make lint-edge-host` watched.
 

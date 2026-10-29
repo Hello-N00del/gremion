@@ -156,7 +156,7 @@ refute_recorded() {
 #     ignored when the command is preceded by `!`). A negated grep anywhere but
 #     the LAST line of a test body therefore fails silently and the guard stays
 #     green. Measured: with `-o StrictHostKeyChecking=accept-new` substituted
-#     into a scratch copy of deploy.yml, the host-key test still reported ok.
+#     into a scratch copy of the since-retired deploy.yml, the host-key test still reported ok.
 #  2. An unanchored positive grep is satisfied by the COMMENT that explains the
 #     setting, so the guard survives the setting itself being changed. Same
 #     drill, same test: `grep -q StrictHostKeyChecking=yes` matched the comment

@@ -1430,6 +1430,7 @@ const IMPORT_REALM_CARRIERS = new Set([
   'services/kernel-api/test/harness/keycloak/make-realms.mjs',
   'services/kernel-api/test/harness/stack-proof.sh',
   'services/kernel-api/test/keycloak/audience.int.test.ts',
+  'services/kernel-api/test/keycloak/stepup-deny.int.test.ts',
 ])
 
 // The two operator-approved design specs that B0 tracks are the FROZEN record

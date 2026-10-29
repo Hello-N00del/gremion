@@ -66,11 +66,13 @@ export const NAMED: Record<'unit' | 'integration' | 'authz' | 'live', Record<str
     'test/bodies/schema-guards.int.test.ts': 16,
     // G8 (live half): real Keycloak tokens carry / lack the audience
     'test/keycloak/audience.int.test.ts': 2,
+    // 081 residual (r33-14 V7): a real Keycloak's step-up deny goes back to the app notice
+    'test/keycloak/stepup-deny.int.test.ts': 2,
   },
   // TASK-081: its own scratch stack (test/authz/stack.mjs, vitest.authz-int.config.ts)
   authz: {
     'test/authz/after-migrate.int.test.ts': 1,
-    'test/authz/grants.int.test.ts': 42,
+    'test/authz/grants.int.test.ts': 46,
     'test/authz/http.int.test.ts': 9,
     'test/authz/module-off.int.test.ts': 28,
     'test/authz/pdp.int.test.ts': 12,

@@ -22,7 +22,7 @@ describe('G8 realm template: gremion-kernel-api audience', () => {
     expect(kernelAudienceMappers(doc)).toHaveLength(1)
   })
 
-  it('it is access-token only (never the ID token) and uses the custom audience, not a client audience', () => {
+  it('is access-token only (never the ID token) and uses the custom audience, not a client audience', () => {
     const [m] = kernelAudienceMappers(doc)
     expect(m.config['access.token.claim']).toBe('true')
     expect(m.config['id.token.claim']).toBe('false')

@@ -5,11 +5,16 @@
 // RED because: the old gate (gremion-ui/scripts/contracts-gate.ts) is
 // staged-only and carries a CONTRACTS_ALLOW_BREAKING bypass; neither the
 // version-bump rule nor this port existed before this commit.
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { checkOpenApiCompat, classifyVersionBump, runOasdiffBreaking, stripCompatNoise } from './oasdiff-gate.js'
 import { REPO_ROOT } from './repo-root.js'
+
+// Every compat case shells out to oasdiff, and on a runner with no binary on PATH
+// that is `docker run` of the pinned image, whose first call also PULLS it: the
+// default 5 s is not a bound on the gate, only on the cold pull.
+vi.setConfig({ testTimeout: 60_000 })
 
 const FIXTURES = join(REPO_ROOT, 'contracts', 'fixtures', 'compat', 'openapi')
 const load = (name: string) => readFileSync(join(FIXTURES, name), 'utf8')

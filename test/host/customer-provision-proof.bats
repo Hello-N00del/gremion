@@ -24,6 +24,8 @@ setup() {
     grep -q 'find "$tsd" -type f ! -name .gitkeep' "$PROOF"
     # pooled-stack-proof is what renders that variable into app-<colour>.env
     grep -q '^TENANT_SECRETS_DIR=\${SROOT_H}/secrets/tenants' "$REPO_ROOT/test/host/integration/pooled-stack-proof.sh"
+    # Last on purpose: bats discards a `!`-negated status anywhere but the final
+    # statement (common.bats enforces this), so mid-body it asserted nothing.
     ! grep -q 'PROOF_TENANT_SECRETS_DIR:-$ROOT/secrets/tenants' "$PROOF"
 }
 

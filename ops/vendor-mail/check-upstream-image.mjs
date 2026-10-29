@@ -31,11 +31,6 @@ export const COMPOSE_IMAGE_LINE = 'image: ${STALWART_IMAGE:?STALWART_IMAGE requi
 
 export const EXCLUSIONS = [
   {
-    file: 'test/host/integration/pooled-stack-proof.sh',
-    line: 'STALWART_IMAGE=stalwartlabs/stalwart:v0.16.21',
-    why: 'the TASK-040 scratch proof boots v0.16.21 BY TAG against the v0.15 config: a note for TASK-048b / TASK-040-FU, not a production reference',
-  },
-  {
     file: 'test/host/fixtures/pooled-stack/mail.env',
     line: 'STALWART_IMAGE=docker.io/stalwartlabs/stalwart:fixture',
     why: 'the pooled-stack render fixture; `docker compose config` never pulls it',

@@ -24,15 +24,15 @@ describe('retention names no feature module', () => {
   for (const w of MODULE_WORDS) {
     it(`no source file of the package contains the module word "${w}" outside comments that only forbid it`, () => {
       for (const f of src) {
-        if (f.name.endsWith('registry.ts') || f.name.endsWith('loki.ts')) {
-          // these two carry a header comment that explains the rule in prose (no module id used as an identifier)
-          const code = f.text.split('\n').filter((l) => !l.trimStart().startsWith('//') && !l.trimStart().startsWith('#')).join('\n')
-          expect(code, f.name).not.toMatch(word(w))
-        } else {
-          const code = f.text.split('\n').filter((l) => !l.trimStart().startsWith('//') && !l.trimStart().startsWith('*') && !l.trimStart().startsWith('/*')).join('\n')
-          // the generator carries one reader-facing sample label in its tests only; src must be clean
-          expect(code, f.name).not.toMatch(word(w))
+        // registry.ts and loki.ts carry a header comment that explains the rule in prose (no module id used as an identifier)
+        const proseHeader = f.name.endsWith('registry.ts') || f.name.endsWith('loki.ts')
+        const isComment = (l: string): boolean => {
+          const t = l.trimStart()
+          return proseHeader ? t.startsWith('//') || t.startsWith('#') : t.startsWith('//') || t.startsWith('*') || t.startsWith('/*')
         }
+        // the generator carries one reader-facing sample label in its tests only; src must be clean
+        const code = f.text.split('\n').filter((l) => !isComment(l)).join('\n')
+        expect(code, f.name).not.toMatch(word(w))
       }
     })
   }

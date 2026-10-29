@@ -2,3 +2,15 @@
 # fires on the 'authz' key name. Fingerprints, so any other finding still fails.
 53351d3f40abfbe934e63d3f226a597299273094:services/kernel-api/migrations/authz/manifest.json:generic-api-key:3
 53351d3f40abfbe934e63d3f226a597299273094:scripts/migrations/applied.lock.json:generic-api-key:33
+
+# Directory-mode (`gitleaks dir`, what scripts/ci-local/guards.mjs runs) counterparts:
+# no commit prefix, file:rule:line. Same migration checksum manifests (sha256 of
+# each .sql file) -- generic-api-key fires on the 'authz'/'access' key names.
+# Line-pinned on purpose: any shift re-surfaces the finding (fail closed).
+services/kernel-api/migrations/authz/manifest.json:generic-api-key:3
+scripts/migrations/applied.lock.json:generic-api-key:35
+scripts/migrations/applied.lock.json:generic-api-key:189
+packages/tenant-store/src/lifecycle/platform-migrations/manifest.json:generic-api-key:14
+# docs/ops/module-source-parity.txt lists git commit SHAs (tag=/kernel= 40-hex), not credentials.
+docs/ops/module-source-parity.txt:generic-api-key:195
+docs/ops/module-source-parity.txt:generic-api-key:236

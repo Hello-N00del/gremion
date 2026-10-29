@@ -70,6 +70,21 @@ export function renderState({ envFile = FIXTURE, cwd = REPO_ROOT, env = {} } = {
 }
 
 /**
+ * Does a RENDERED bind mount refuse to create a missing host directory, i.e. was
+ * it declared `bind.create_host_path: false`? Compose does not render that
+ * declaration the same way across versions: a recent one prints
+ * `create_host_path: false`, an older one (the one on the GitHub runner) drops
+ * the false, because the field is omit-empty, and prints `bind: {}`. The
+ * default, true, is printed by both (`create_host_path: true`), so "absent or
+ * false" is the same fact in every version and `true` is the defect. A mount
+ * with no `bind` object at all is not a declaration this guard can vouch for,
+ * so it does not pass.
+ */
+export function bindRefusesMissingHostDir(mount) {
+  return mount?.type === 'bind' && typeof mount.bind === 'object' && mount.bind !== null && mount.bind.create_host_path !== true
+}
+
+/**
  * F1-FIX-11 (H21, S5#28): the Docker API proxy network contract, read out of a
  * RENDER. The proxy runs with CONTAINERS=1, so any container that can reach it
  * can read /containers/{id}/json -- every injected secret. The contract:

@@ -22,16 +22,19 @@ const DESELECTABLE = [
 ]
 const strip = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
 
-for (const [id, rel] of DESELECTABLE) {
-  const src = strip(readFileSync(join(ROOT, rel), 'utf8'))
-  test(`${id}: declares id, toggleable:true and non-empty routePrefixes`, () => {
+// One test, a loop inside it: scripts/verify/suites/unit.mjs compares node's collected count with the
+// number of `test(` declarations, and a `test(` inside a loop declares 1 and collects N (judged
+// unparseable). The messages name the manifest that failed.
+test('every deselectable module declares its id, toggleable:true and non-empty routePrefixes', () => {
+  for (const [id, rel] of DESELECTABLE) {
+    const src = strip(readFileSync(join(ROOT, rel), 'utf8'))
     assert.ok(src.includes(`id: '${id}'`), `${rel} must declare id '${id}'`)
     assert.match(src, /toggleable:\s*true/, `${rel} must be toggleable:true`)
     const m = src.match(/routePrefixes:\s*\[([^\]]*)\]/)
     assert.ok(m, `${rel} must declare routePrefixes`)
     assert.ok(/'\/[^']+'/.test(m[1]), `${rel} routePrefixes must not be empty`)
-  })
-}
+  }
+})
 
 test('newsletter prefixes do not cover kernel system mail (the leaf service callbacks stay outside the gate)', () => {
   const src = strip(readFileSync(join(ROOT, 'modules/publishing/app/lib/modules/manifests/newsletter.ts'), 'utf8'))

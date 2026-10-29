@@ -37,6 +37,27 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           fetch-depth: 0  # gitleaks needs full history to diff base..head
+          # This job now runs `pnpm install` (lifecycle scripts of the whole dependency
+          # tree), so the checkout must not leave a token in .git/config for them to read.
+          # gitleaks-action needs none: it runs the local gitleaks binary over the
+          # checkout and calls the pull-request API with the GITHUB_TOKEN env below.
+          persist-credentials: false
+
+      # This job used to run on the runner's own node with no install, so every
+      # guard below was written to need nothing but node: built-ins. Two steps now
+      # import the `yaml` package (the runner-policy arm and the verify-coverage
+      # guard read workflow YAML), hence the install. It does not widen what the
+      # other steps may rely on: they still run unchanged.
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413  # v6.1.0
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7.1.0
+        with:
+          node-version: 26
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
 
       # Pinned to the version the local gate runs (0.11.0); the apt package on
       # ubuntu-latest is 0.9.0, which raises SC2317/SC2015 notes 0.11 does not.
@@ -72,8 +93,8 @@ jobs:
       # Dockerfiles assemble /app/node_modules — goes through that path. A
       # publish-shaped `files` therefore silently empties the package inside
       # the shipped image. This is the cheap half of the guard (no install,
-      # no build); gremion-ui.yml runs the same script against a REAL deploy
-      # payload. Both halves live in one script so the rule has one home.
+      # no build); the verify-unit-ui job runs the same script against a REAL
+      # deploy payload. Both halves live in one script so the rule has one home.
       - name: Workspace packages must ship what their exports name
         run: node scripts/check-shipped-package-files.mjs --static
 
@@ -390,6 +411,27 @@ jobs:
           done
           echo "OK — checked ${#patches[@]} x-proxy-trust patch file(s)."
 
+      # TRD-364: no self-hosted runner, no signing/age/SSH material and no deploy
+      # secret in any workflow. This is the runner-policy arm of
+      # scripts/ci-local/guards.mjs, run alone the way suites.json's
+      # kernel-runner-policy-guard runs it, NOT `guards.mjs --kernel .`: the other
+      # arms of that entry point need things this job does not have (a gitleaks
+      # binary on PATH -- the gitleaks step above downloads its own, inside the
+      # action -- and a StuRaOS checkout for the vertical arms), and its secret-scan
+      # arm would scan the whole tree a second time. The suite runs first so a
+      # walker that returned [] cannot make the guard pass vacuously.
+      - name: Runner policy (TRD-364)
+        run: |
+          node --test --test-reporter=tap scripts/ci-local/runner-policy.test.mjs
+          node scripts/ci-local/runner-policy.mjs --kernel . --waivers scripts/ci-local/waivers.json
+
+      # The workflow guards itself: every required verify suite is run by some
+      # leg below, no suite by two, every leg that uploads a record is awaited by
+      # verify-gate, and --allow-missing exists only on the pull-request path.
+      # Delegates to the Makefile so a local `make lint` and CI cannot drift apart.
+      - name: Every required verify suite is run by exactly one leg
+        run: make lint-ci-verify-coverage
+
   # ──────────────────────────────────────────────────────────────────────────
   # Job 1b: DCO — the inbound=outbound guarantee, actually checked
   #
@@ -482,42 +524,543 @@ jobs:
           echo "OK — every commit is signed off."
 
   # ──────────────────────────────────────────────────────────────────────────
-  # Job 2: Unit tests — no Docker needed. BATS is an EXTERNAL prerequisite
-  # installed here from npm; it is not vendored into this repo.
+  # Job 2: Verify legs. `make verify` (scripts/verify/verify.mjs) is the merge
+  # gate: it runs every suite in scripts/verify/required-suites.txt and writes
+  # a record that scripts/verify/check-record.mjs judges. CI used to run its own
+  # partial copy of that gate (this file's unit-test job, plus gremion-ui.yml,
+  # gremion-public.yml, control-panel.yml and ports.yml) and the two drifted:
+  # whole suites ran locally and nowhere in CI. Now each leg below runs a slice
+  # of the SAME suites with `verify --only`, uploads its record, and
+  # `verify-gate` combines them (scripts/verify/combine-records.mjs) and judges
+  # the result with the SAME check-record.mjs the local gate uses.
+  #
+  # A leg's part list must not overlap another's, and together the legs must
+  # cover every required suite (`unit` and `integration` by every one of their
+  # parts). scripts/check-ci-verify-coverage.mjs (make lint-ci-verify-coverage,
+  # in the Lint job) fails the build when either stops being true, so adding a
+  # UNIT_PARTS key without a leg is red on the pull request that adds it.
+  #
+  # verify refuses a dirty tree. Everything a leg generates before it runs
+  # (the paraglide catalogue, the module overlay, `svelte-kit sync`) is
+  # gitignored, which is what keeps the record's "this exact commit" claim true.
   # ──────────────────────────────────────────────────────────────────────────
-  unit-test:
-    name: Unit Tests
+
+  # typecheck, migration-hash, boundary-lint, carve-lint. carve-lint is every
+  # `make lint-*` target (shellcheck, yamllint, docker for the compose renders, jq,
+  # python3), which is why the tools below are installed here.
+  verify-static:
+    name: "Verify: static suites"
     runs-on: ubuntu-latest
     needs: lint
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
 
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413  # v6.1.0
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7.1.0
+        with:
+          node-version: 26
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Same pinned, checksummed install as the Lint job: the apt package on
+      # ubuntu-latest is 0.9.0 and raises notes the local gate (0.11.0) does not.
+      - name: Install shellcheck
+        run: |
+          curl -fsSLo /tmp/sc.tar.xz https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.x86_64.tar.xz
+          echo "8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198  /tmp/sc.tar.xz" | sha256sum -c -
+          tar -xJf /tmp/sc.tar.xz -C /tmp
+          sudo install -m 0755 /tmp/shellcheck-v0.11.0/shellcheck /usr/local/bin/shellcheck
+          shellcheck --version
+
+      - name: Install yamllint
+        run: pip install yamllint
+
+      # kernel-hygiene check a9 ("the documented onboarding path works") runs
+      # `bats --version`; carve-lint runs that check through lint-hygiene.
+      - name: Install BATS
+        run: sudo npm install -g bats
+
+      # `pnpm check` runs these before svelte-check; the typecheck suite calls
+      # svelte-check on its own (to get machine output) and does not, so on a clean
+      # checkout it type-checks against a catalogue and a module overlay that do not
+      # exist yet (30 errors in gremion-ui, 6 in gremion-public, all "cannot find
+      # module ./paraglide/..." or "./$types"). Both outputs are gitignored.
+      - name: Generate the i18n catalogue and the module overlay
+        run: |
+          node src/lib/i18n/compile.js
+          node scripts/interim-module-overlay.mjs
+        working-directory: gremion-ui
+
+      - name: Generate the portal's i18n catalogue
+        run: node src/lib/i18n/compile.js
+        working-directory: gremion-public
+
+      - name: Run verify (typecheck, migration-hash, boundary-lint, carve-lint)
+        id: verify
+        run: node scripts/verify/verify.mjs --only typecheck,migration-hash,boundary-lint,carve-lint
+
+      # control-panel.yml's `pnpm run check`. The typecheck suite walks packages/*
+      # and services/*, and apps/control-panel is in neither, so its svelte-check
+      # ran in no verify suite. After verify (not before) so a failure here cannot
+      # keep the record from being written.
+      - name: Control panel svelte-check
+        if: ${{ !cancelled() && steps.verify.outcome != 'skipped' }}
+        run: pnpm run check
+        working-directory: apps/control-panel
+
+      # The record is the leg's whole product, so it is uploaded even when a suite
+      # failed (verify writes it either way) and a missing record is itself an
+      # error. `steps.verify.outcome` keeps that from firing when the leg never
+      # got as far as running verify (a failed install): that failure is reported
+      # by the step that failed, not buried under a second one.
+      - name: Upload verify record
+        if: ${{ always() && steps.verify.outcome != 'skipped' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: record-verify-static
+          path: scripts/verify/out/*.json
+          if-no-files-found: error
+          retention-days: 7
+
+  # render-guards and observability render the production compose projects
+  # (docker compose config); vendor-mail and expand-contract are node-only.
+  verify-render-ops:
+    name: "Verify: render and ops suites"
+    runs-on: ubuntu-latest
+    needs: lint
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413  # v6.1.0
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7.1.0
+        with:
+          node-version: 26
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run verify (render-guards, observability, vendor-mail, expand-contract)
+        id: verify
+        run: node scripts/verify/verify.mjs --only render-guards,observability,vendor-mail,expand-contract
+
+      # The record is the leg's whole product, so it is uploaded even when a suite
+      # failed (verify writes it either way) and a missing record is itself an
+      # error. `steps.verify.outcome` keeps that from firing when the leg never
+      # got as far as running verify (a failed install): that failure is reported
+      # by the step that failed, not buried under a second one.
+      - name: Upload verify record
+        if: ${{ always() && steps.verify.outcome != 'skipped' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: record-verify-render-ops
+          path: scripts/verify/out/*.json
+          if-no-files-found: error
+          retention-days: 7
+
+  # gremion-ui's vitest alone runs three to six minutes, so it has a leg to itself
+  # with the disabled-module lane that builds on it.
+  verify-unit-ui:
+    name: "Verify: gremion-ui units"
+    runs-on: ubuntu-latest
+    needs: lint
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413  # v6.1.0
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7.1.0
+        with:
+          node-version: 26
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Moved here from gremion-ui.yml. THE POST-CONDITION, not a model of it.
+      # `pnpm deploy --prod --legacy` is the exact command gremion-ui/Dockerfile
+      # uses to assemble the image's /app/node_modules, and it applies each
+      # workspace package's `files` allowlist while packing. A publish-shaped
+      # allowlist (`["dist", …]`, dist/ being gitignored and never built during a
+      # Docker build) copies @gremion/db and @gremion/ports into the image as
+      # empty shells whose exports still point at ./src/*.ts. That ships silently
+      # today because vite.config.ts marks both packages `ssr.noExternal`, so every
+      # import is inlined into build/ and the package is never resolved at runtime
+      # -- one dynamic import away from ERR_MODULE_NOT_FOUND on boot.
+      #
+      # ~4 s, and it covers BOTH packages: gremion-ui is the only app that
+      # depends on @gremion/ports as well as @gremion/db. The Lint job runs the
+      # same script in `--static` mode on every run. Before verify, because it
+      # writes only under $RUNNER_TEMP and keeps the tree clean.
+      - name: The deploy payload must contain what the packages export
+        run: |
+          set -euo pipefail
+          rm -rf "$RUNNER_TEMP/deploy-check"
+          pnpm --filter gremion-ui deploy --prod --legacy "$RUNNER_TEMP/deploy-check"
+          node scripts/check-shipped-package-files.mjs --deploy "$RUNNER_TEMP/deploy-check"
+
+      - name: Run verify (unit:ui, unit:module-lane)
+        id: verify
+        run: node scripts/verify/verify.mjs --only unit:ui,unit:module-lane
+
+      # The record is the leg's whole product, so it is uploaded even when a suite
+      # failed (verify writes it either way) and a missing record is itself an
+      # error. `steps.verify.outcome` keeps that from firing when the leg never
+      # got as far as running verify (a failed install): that failure is reported
+      # by the step that failed, not buried under a second one.
+      - name: Upload verify record
+        if: ${{ always() && steps.verify.outcome != 'skipped' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: record-verify-unit-ui
+          path: scripts/verify/out/*.json
+          if-no-files-found: error
+          retention-days: 7
+
+  # isolation and every packages/*, apps/control-panel and services/kernel-api unit
+  # part. This is where ports.yml's unit run and control-panel.yml's two vitest
+  # suites (the control panel and packages/provisioning) now live.
+  verify-unit-packages:
+    name: "Verify: package units"
+    runs-on: ubuntu-latest
+    needs: lint
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+          # unit:generated-clients' T9 contract gate diffs the spec against the
+          # base branch (contracts-check-core.mjs resolveBaseRef). A shallow
+          # merge-commit checkout has no origin/main, and the gate correctly
+          # fails closed on a missing base rather than passing on nothing.
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413  # v6.1.0
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7.1.0
+        with:
+          node-version: 26
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # The Dart pipeline integration test never pulls on its own: on a cold
+      # host it fails closed with "image not present locally", so a missing
+      # image cannot turn into a silently skipped proof. The runner is that
+      # cold host, so the pinned images are pulled here, explicitly.
+      - name: Pull the pinned Dart toolchain images for unit:generated-clients-dart
+        run: pnpm --filter @gremion/generated-clients-dart images:pull
+
+      # The control panel's vitest run needs the gitignored .svelte-kit/tsconfig.json
+      # that `svelte-kit sync` writes (control-panel.yml got it as a side effect of
+      # running `pnpm run check` first; gremion-ui's pretest:unit does the same).
+      - name: svelte-kit sync for the control panel
+        run: pnpm exec svelte-kit sync
+        working-directory: apps/control-panel
+
+      # ports.yml's server, for the one reason it needed one: unit:ports runs
+      # packages/ports/vitest.config.ts, which collects nats-broker*.integration.test.ts
+      # with no exclude, and those files self-skip unless NATS_TEST_URL is set. A skip
+      # there is allow-listed, but a proof that runs beats one that is excused: with a
+      # server the files run instead of skipping. JetStream needs
+      # the `-js` argument, which a `services:` entry cannot pass to an image, hence a
+      # step. Same digest-pinned image as docker-compose.yml's nats service; the real
+      # proof of NatsBroker stays integration:nats (verify-integration-brokers).
+      - name: Start NATS (JetStream) for the ports unit part
+        run: |
+          docker run -d --name nats-js -p 4222:4222 nats:2.12.15-alpine@sha256:b270f5e2428354c0335612694d7dd2fb588148e567a5757fdff325ef9c9332e6 -js
+          echo "Waiting for NATS to accept connections on :4222 ..."
+          for i in $(seq 1 30); do
+            if timeout 1 bash -c '</dev/tcp/127.0.0.1/4222' 2>/dev/null; then
+              echo "NATS ready after ${i}s"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "::error::NATS did not accept connections within 30 s"
+          docker logs nats-js || true
+          exit 1
+
+      - name: Run verify (isolation and the package unit parts)
+        id: verify
+        env:
+          NATS_TEST_URL: nats://localhost:4222
+        run: node scripts/verify/verify.mjs --only isolation,unit:public,unit:ports,unit:generated-clients,unit:fastify-service-template,unit:generated-clients-dart,unit:tenant-store,unit:module-catalogue,unit:tokens,unit:edge-routers,unit:nats-auth,unit:events,unit:provisioning,unit:member-import,unit:retention,unit:control-panel,unit:tenancy-core,unit:authz-client,unit:kernel-api
+
+      - name: Stop NATS
+        if: always()
+        run: docker rm -f nats-js || true
+
+      # The record is the leg's whole product, so it is uploaded even when a suite
+      # failed (verify writes it either way) and a missing record is itself an
+      # error. `steps.verify.outcome` keeps that from firing when the leg never
+      # got as far as running verify (a failed install): that failure is reported
+      # by the step that failed, not buried under a second one.
+      - name: Upload verify record
+        if: ${{ always() && steps.verify.outcome != 'skipped' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: record-verify-unit-packages
+          path: scripts/verify/out/*.json
+          if-no-files-found: error
+          retention-days: 7
+
+  # unit:modules, unit:node, unit:bats. This leg REPLACES the old unit-test job: the
+  # bats part globs test/*.bats and test/host/*.bats, the same set `make test-unit`
+  # collects, and test/host/no-host-literals.bats fails if ci.yml stops running it
+  # through verify or the part's patterns drift from the Makefile's.
+  verify-unit-host:
+    name: "Verify: module, script and host units"
+    runs-on: ubuntu-latest
+    needs: lint
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413  # v6.1.0
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7.1.0
+        with:
+          node-version: 26
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # What the old unit-test job installed, minus nothing: envsubst is needed by
+      # legal.bats' template rendering tests, yamllint by the release-images.yml YAML
+      # assertion in test/host/deploy-workflow.bats (which `skip`s when it is absent, and
+      # a guard that skips is a guard that passes; that file now guards the keyless
+      # release pipeline: release-images.yml, cut-dist-tag.sh, release-tag-check.sh),
+      # bats is an EXTERNAL prerequisite from npm
+      # (not vendored). jq and openssl are preinstalled on the runner image;
+      # python3 too (test/configure-keycloak.bats validates JSON with it).
       - name: Install BATS and test dependencies
         run: |
-          # Install envsubst (needed by legal.bats template rendering tests)
-          sudo apt-get install -y gettext-base
-          # yamllint is needed by test/host/deploy-workflow.bats, which runs in
-          # THIS job. That check says "CI installs it" and then `skip`s when the
-          # tool is absent -- true of the Lint job, which runs no bats, and
-          # false of this one until now. A guard that skips is a guard that
-          # passes, so the assertion about deploy.yml's YAML was never executed.
-          # The shell linter needs no line here (and this comment avoids
-          # opening with its name, which a shell parser reads as a malformed
-          # directive): the ubuntu-24.04 runner image ships it as an apt
-          # package -- actions/runner-images, images/ubuntu/Ubuntu2404-Readme.md,
-          # "Installed apt packages", version 0.9.0-1, the same version the
-          # Lint job's explicit install resolves to -- so deploy-workflow.bats's
-          # shell-block assertion runs here unaided.
+          sudo apt-get install -y gettext-base jq
           pip install yamllint
           sudo npm install -g bats
 
-      # Same reason as the Lint job's shell step: `make test-unit` globs
-      # test/*.bats and test/host/*.bats, so a new bats file is collected here
-      # the day it lands rather than the day someone remembers to extend a list
-      # in two places. test/host/no-host-literals.bats fails if this step stops
-      # delegating.
-      - name: Run unit tests
-        run: make test-unit
+      # Same pinned, checksummed install as the Lint job: the apt package on
+      # ubuntu-latest is 0.9.0 and raises notes the local gate (0.11.0) does not.
+      - name: Install shellcheck
+        run: |
+          curl -fsSLo /tmp/sc.tar.xz https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.x86_64.tar.xz
+          echo "8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198  /tmp/sc.tar.xz" | sha256sum -c -
+          tar -xJf /tmp/sc.tar.xz -C /tmp
+          sudo install -m 0755 /tmp/shellcheck-v0.11.0/shellcheck /usr/local/bin/shellcheck
+          shellcheck --version
+
+      # unit:node runs EVERY scripts/**/*.test.mjs, and a few of them drive real
+      # release tooling that the old CI never ran. Each is a pinned release asset
+      # checked against its sha256 before it is installed (the pins for cosign are
+      # the ones scripts/release/lib/tools.mjs#COSIGN asserts; assertCosign refuses
+      # any other binary). sops and age were not on the runner image; their hashes
+      # are the release's own checksums (sops) and the asset's own (age publishes
+      # none beside a transparency-log proof, so that one was computed at pin time).
+      - name: Install the release toolchain the node suites drive (cosign, sops, age, gitleaks)
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP"
+          curl -fsSLo cosign https://github.com/sigstore/cosign/releases/download/v2.6.5/cosign-linux-amd64
+          echo "c3b4f5410e608af03a5eb0aaac84a4313d8da131248e08ff1759ac70c79d1644  cosign" | sha256sum -c -
+          sudo install -m 0755 cosign /usr/local/bin/cosign
+          curl -fsSLo sops https://github.com/getsops/sops/releases/download/v3.13.3/sops-v3.13.3.linux.amd64
+          echo "e5bec3346a873ae91d871550f3e698c1aad962aff462a080e40f25fde17fef6b  sops" | sha256sum -c -
+          sudo install -m 0755 sops /usr/local/bin/sops
+          curl -fsSLo age.tar.gz https://github.com/FiloSottile/age/releases/download/v1.3.2/age-v1.3.2-linux-amd64.tar.gz
+          echo "cbe24006683f8eb669266162894b9a522a1af52f2665fbc63a4bb032ed26ac10  age.tar.gz" | sha256sum -c -
+          tar -xzf age.tar.gz
+          sudo install -m 0755 age/age age/age-keygen /usr/local/bin/
+          curl -fsSLo gitleaks.tar.gz https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz
+          echo "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  gitleaks.tar.gz" | sha256sum -c -
+          tar -xzf gitleaks.tar.gz gitleaks
+          sudo install -m 0755 gitleaks /usr/local/bin/gitleaks
+          cosign version | head -n 3
+          sops --version
+          age --version
+          gitleaks version
+
+      - name: Run verify (unit:modules, unit:node, unit:bats)
+        id: verify
+        run: node scripts/verify/verify.mjs --only unit:modules,unit:node,unit:bats
+
+      # The record is the leg's whole product, so it is uploaded even when a suite
+      # failed (verify writes it either way) and a missing record is itself an
+      # error. `steps.verify.outcome` keeps that from firing when the leg never
+      # got as far as running verify (a failed install): that failure is reported
+      # by the step that failed, not buried under a second one.
+      - name: Upload verify record
+        if: ${{ always() && steps.verify.outcome != 'skipped' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: record-verify-unit-host
+          path: scripts/verify/out/*.json
+          if-no-files-found: error
+          retention-days: 7
+
+  # integration:vitest (gremion-ui test:integration, with `pnpm migrate:test-fixture`,
+  # against a throwaway Postgres the suite starts itself) and integration:fresh-init
+  # (`make fresh-init-proof`). Both start their own containers by name; neither
+  # touches a service container, so none is declared here.
+  verify-integration-db:
+    name: "Verify: database integration"
+    runs-on: ubuntu-latest
+    needs: lint
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413  # v6.1.0
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7.1.0
+        with:
+          node-version: 26
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run verify (integration:vitest, integration:fresh-init)
+        id: verify
+        run: node scripts/verify/verify.mjs --only integration:vitest,integration:fresh-init
+
+      # The record is the leg's whole product, so it is uploaded even when a suite
+      # failed (verify writes it either way) and a missing record is itself an
+      # error. `steps.verify.outcome` keeps that from firing when the leg never
+      # got as far as running verify (a failed install): that failure is reported
+      # by the step that failed, not buried under a second one.
+      - name: Upload verify record
+        if: ${{ always() && steps.verify.outcome != 'skipped' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: record-verify-integration-db
+          path: scripts/verify/out/*.json
+          if-no-files-found: error
+          retention-days: 7
+
+  # integration:nats is ports.yml's NATS step plus its post-condition: `make
+  # test-ports-nats` starts its own JetStream container and asserts the integration
+  # file's passing-test floor (packages/ports/scripts/nats-test.sh), and verify
+  # judges the printed counts again. integration:nats-auth and integration:events
+  # are the authenticated-broker and event-relay proofs, each in scratch
+  # containers removed by name.
+  verify-integration-brokers:
+    name: "Verify: broker integration"
+    runs-on: ubuntu-latest
+    needs: lint
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413  # v6.1.0
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7.1.0
+        with:
+          node-version: 26
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run verify (integration:nats, integration:nats-auth, integration:events)
+        id: verify
+        run: node scripts/verify/verify.mjs --only integration:nats,integration:nats-auth,integration:events
+
+      # The record is the leg's whole product, so it is uploaded even when a suite
+      # failed (verify writes it either way) and a missing record is itself an
+      # error. `steps.verify.outcome` keeps that from firing when the leg never
+      # got as far as running verify (a failed install): that failure is reported
+      # by the step that failed, not buried under a second one.
+      - name: Upload verify record
+        if: ${{ always() && steps.verify.outcome != 'skipped' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: record-verify-integration-brokers
+          path: scripts/verify/out/*.json
+          if-no-files-found: error
+          retention-days: 7
+
+  # census renders the four production compose projects exactly as a host
+  # composes them and BUILDS every first-party image to read its HEALTHCHECK, so it
+  # is the slowest leg. On a pull request it runs only when something it reads
+  # changed (see the `census` output of the `changes` job); verify-gate then
+  # requires its absence to be exactly that, never an unexplained gap.
+  verify-census:
+    name: "Verify: health census"
+    runs-on: ubuntu-latest
+    needs: [lint, changes]
+    # Same shape as docker-build's condition, for the same reason: `changes` is
+    # skipped on push / workflow_dispatch, which would skip this job with it. Push
+    # and manual runs always census; a pull request does when a census input
+    # changed OR when the `changes` job itself failed (fail safe: run it).
+    if: >-
+      ${{ !cancelled()
+      && needs.lint.result == 'success'
+      && (github.event_name != 'pull_request'
+          || needs.changes.result == 'failure'
+          || needs.changes.outputs.census == 'true') }}
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413  # v6.1.0
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7.1.0
+        with:
+          node-version: 26
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run verify
+        id: verify
+        run: node scripts/verify/verify.mjs --only census
+
+      # The record is the leg's whole product, so it is uploaded even when a suite
+      # failed (verify writes it either way) and a missing record is itself an
+      # error. `steps.verify.outcome` keeps that from firing when the leg never
+      # got as far as running verify (a failed install): that failure is reported
+      # by the step that failed, not buried under a second one.
+      - name: Upload verify record
+        if: ${{ always() && steps.verify.outcome != 'skipped' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: record-verify-census
+          path: scripts/verify/out/*.json
+          if-no-files-found: error
+          retention-days: 7
 
   # ──────────────────────────────────────────────────────────────────────────
   # Job 3: Docker build validation.
@@ -542,8 +1085,8 @@ jobs:
   # the matrix entirely.
   # ──────────────────────────────────────────────────────────────────────────
 
-  # Decides whether a pull request can have changed any docker build input.
-  # A plain `git diff` over the PR range rather than a third-party paths-filter
+  # Decides whether a pull request can have changed any docker build input, and
+  # (second output) any input of the health census. A plain `git diff` over the PR range rather than a third-party paths-filter
   # action: nothing to pin, nothing to trust with the checkout. A path filter on
   # the `on:` trigger is not an option -- it would skip the whole workflow
   # (lint, tests) and leave the required checks pending. Push and manual runs
@@ -554,13 +1097,14 @@ jobs:
     if: github.event_name == 'pull_request'
     outputs:
       docker: ${{ steps.filter.outputs.docker }}
+      census: ${{ steps.filter.outputs.census }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           fetch-depth: 0  # three-dot diff needs the merge base
           persist-credentials: false
 
-      - name: Does this PR touch a docker build input?
+      - name: Does this PR touch a docker build input or a census input?
         id: filter
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
@@ -599,6 +1143,26 @@ jobs:
           else
             echo "docker=false" >> "$GITHUB_OUTPUT"
             echo "No docker build input changed: image builds skipped."
+          fi
+          # The health census (verify-census) renders every production compose
+          # project and builds the first-party images to read their HEALTHCHECKs:
+          # any Dockerfile or .dockerignore, any compose file, compose/ (the ops
+          # project), docker/ (the legal, fallback, vector, keycloak and nats
+          # contexts the renders build or mount), infra/host/ (the env templates
+          # that name each project's COMPOSE_FILE/COMPOSE_PROFILES, and the mail
+          # project), the census's own code and fixtures, the scripts/verify/lib/ runtime
+          # libraries it imports (proc, git, guard, envstub), verify.mjs (the driver every
+          # leg runs it through), and this workflow (it
+          # judges the result). Same counted-grep idiom as above, for the same
+          # reason.
+          census_pattern='(^|/)(Dockerfile|Containerfile)(\.[^/]*)?$|(^|/)\.dockerignore$|(^|/)docker-compose[^/]*\.ya?ml$|^(compose|docker|infra/host|scripts/verify/census|scripts/verify/lib)/|^scripts/verify/verify\.mjs$|^\.github/workflows/ci\.yml$'
+          census_matches=$(printf '%s\n' "$changed" | grep -Ec "$census_pattern" || [ "$?" -eq 1 ])
+          if [ "$census_matches" -gt 0 ]; then
+            echo "census=true" >> "$GITHUB_OUTPUT"
+            echo "A census input changed: the census will run."
+          else
+            echo "census=false" >> "$GITHUB_OUTPUT"
+            echo "No census input changed: the census is skipped."
           fi
 
   docker-build:
@@ -654,13 +1218,16 @@ jobs:
 
   # ──────────────────────────────────────────────────────────────────────────
   # Job 4: Integration tests — requires live Docker Compose stack
-  # Only runs on push to main/develop (not on every PR to save CI time)
+  # The Keycloak half: the live realm, its login theme and the OIDC discovery,
+  # read off the SERVED pages. It runs on pull requests too since the verify
+  # legs replaced the unit-test job it used to wait for: gating a pull request
+  # on the unit tests and then discovering a broken realm only after the merge
+  # was the same gap the docker-build job closed for images.
   # ──────────────────────────────────────────────────────────────────────────
   integration-test:
     name: Integration Tests
     runs-on: ubuntu-latest
-    needs: unit-test
-    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    needs: lint
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -895,3 +1462,335 @@ jobs:
       - name: Cleanup
         if: always()
         run: docker compose down -v
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # Job 5: End-to-end smoke. Not part of the verify record: it boots things.
+  #
+  # Folds the two checks gremion-ui.yml and gremion-public.yml ran that no
+  # verify suite covers. Their type checks and unit tests are verify's
+  # (typecheck, unit:ui, unit:public); the integration half of gremion-ui.yml is
+  # integration:vitest; its image build is the docker-build matrix.
+  # ──────────────────────────────────────────────────────────────────────────
+  e2e-smoke:
+    name: E2E smoke (gremion-ui, gremion-public)
+    runs-on: ubuntu-latest
+    needs: lint
+    timeout-minutes: 40
+    # G-099 smoke step needs a real Postgres because hooks.server.ts boot()
+    # invokes runMigrations() before the authGuard will serve traffic. With
+    # no Postgres, boot fails, the guard returns 503 forever, and every
+    # smoke assertion would fail with a meaningless "Service Unavailable".
+    services:
+      postgres:
+        image: postgres:18-alpine@sha256:77f585114c32fbca283dc835b0596f4e52b51b4c6662d7810b2f4084f60a1873
+        env:
+          POSTGRES_USER: gremion
+          POSTGRES_PASSWORD: gremion_test
+          POSTGRES_DB: gremion
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U gremion"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      AUTH_SECRET: test-secret-for-ci-32-chars-minimum
+      AUTH_KEYCLOAK_ID: gremion-ui
+      AUTH_KEYCLOAK_SECRET: test-secret
+      AUTH_KEYCLOAK_ISSUER: http://localhost/realms/gremion
+      CALDAV_URL: http://localhost/remote.php/dav
+      DATABASE_URL: postgres://gremion:gremion_test@localhost:5432/gremion
+      # ── Multi-tenant control plane (#285 / G-099) ──────────────────────────
+      # CONTROL_DATABASE_URL / TENANT_DATA_ROOT / GREMION_DISABLE_SEEDS /
+      # KEYCLOAK_ADMIN_CLIENT_SECRET are set at STEP level on the two steps that
+      # need them (the `pnpm migrate:test-fixture` seed step + the `pnpm preview`
+      # boot), not here at job level: a job-level CONTROL_DATABASE_URL would
+      # cache a control connection in anything else this job runs.
+      # Tell playwright.config.ts to stamp x-forwarded-host on every smoke request
+      # (see the "Run Playwright smoke suite" step). TASK-042: the kernel boots
+      # with ZERO tenants; the seed step creates the harness fixture tenant
+      # (createTestTenant, slug `fixture`) whose PRIMARY tenant_domain host is
+      # this one, so the resolver (TASK-041: the WHOLE host) selects it.
+      SMOKE_TENANT_HOST: fixture.test
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413  # v6.1.0
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7.1.0
+        with:
+          node-version: 26
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build gremion-ui
+        run: pnpm build
+        working-directory: gremion-ui
+
+      # #285 / G-099: stand up the control plane the resolver needs. Mirrors the
+      # integration:vitest part and its local twin
+      # scripts/verify/suites/integration.mjs: create the `control` DB and the
+      # gremion_public_reader role migration 058 requires, then
+      # `pnpm migrate:test-fixture` (control migrations -> createTestTenant
+      # `fixture` with its primary host fixture.test -> fleet-migrate its data
+      # plane inside runWithTenant). TASK-042: boot and `pnpm migrate` register
+      # NO tenant, so without this step every smoke request 404s. After it the
+      # resolver builds an ACTIVE TenantContext for SMOKE_TENANT_HOST, so the
+      # smoke `/` and `/finance` requests resolve a tenant.
+      # Runs AFTER `pnpm build` because prebuild generates the migration manifests
+      # (build-migration-manifest.mjs) that runMigrations() G-012-verifies.
+      - name: Create control database
+        run: |
+          psql "postgres://gremion:gremion_test@localhost:5432/postgres" -c 'CREATE DATABASE control'
+          psql "postgres://gremion:gremion_test@localhost:5432/gremion" \
+            -c "CREATE ROLE gremion_public_reader LOGIN PASSWORD '$(openssl rand -hex 16)'"
+
+      - name: Seed control plane + fixture tenant (G-099 resolver dependency)
+        run: pnpm migrate:test-fixture
+        working-directory: gremion-ui
+        env:
+          CONTROL_DATABASE_URL: postgres://gremion:gremion_test@localhost:5432/control
+          TENANT_DATA_ROOT: ${{ github.workspace }}/gremion-ui/tests/integration/fixtures/tenant-data
+          GREMION_DISABLE_SEEDS: 'true'
+          KEYCLOAK_ADMIN_CLIENT_SECRET: test-kc-admin-secret
+
+      - name: Install Playwright browsers
+        run: pnpm exec playwright install --with-deps chromium
+        working-directory: gremion-ui
+
+      # G-099: previously this step ran `playwright test --list`, which only
+      # parses spec files and exits without ever starting the SvelteKit
+      # server. A completely broken build (server crashes on boot, root
+      # page throws, login page blanks) shipped green. The replacement
+      # boots `pnpm preview`, waits for it to accept connections, then
+      # runs the `@smoke`-tagged subset of the e2e suite. Job duration
+      # going from ~3 s to ~30 s+ is the visible signal that the gate
+      # is actually executing.
+      - name: Start app for smoke tests
+        working-directory: gremion-ui
+        run: |
+          nohup pnpm preview --port 4173 > /tmp/preview.log 2>&1 &
+          echo $! > /tmp/preview.pid
+          # Wait up to 60 s for the server to ACCEPT a connection and emit ANY
+          # HTTP status line. #285 / G-099: the bare apex now 404s by design —
+          # the multi-tenant resolver (resolve.ts, sequence element 0) returns
+          # 404 for a request with no x-forwarded-host tenant subdomain. That is
+          # CORRECT behaviour, not a broken build, so the readiness probe must
+          # NOT require 2xx/3xx. We drop curl's -f (which would treat the 404 as
+          # failure and loop until the 60 s timeout) and instead require only a
+          # non-empty HTTP status code — i.e. the server bound the port and the
+          # request pipeline produced a response. A server that crashes on boot
+          # or never binds yields an empty body (connection refused) and the loop
+          # keeps the original G-099 intent of failing on a server that never
+          # comes up. The actual 2xx/3xx route assertions move to the @smoke
+          # suite below, which sends x-forwarded-host so routes resolve a tenant.
+          timeout 60 bash -c 'until [ -n "$(curl -s -o /dev/null -w "%{http_code}" http://localhost:4173/ 2>/dev/null)" ] && [ "000" != "$(curl -s -o /dev/null -w "%{http_code}" http://localhost:4173/ 2>/dev/null)" ]; do sleep 1; done'
+        env:
+          # `pnpm preview` boots the app, which runs runMigrations() + serves the
+          # resolver — so the boot needs the same control-plane env as the migrate
+          # step (set here, not job-level, to keep other steps clean).
+          # TENANT_DATA_ROOT holds the fixture tenant's /<slug>/config.json.
+          CONTROL_DATABASE_URL: postgres://gremion:gremion_test@localhost:5432/control
+          TENANT_DATA_ROOT: ${{ github.workspace }}/gremion-ui/tests/integration/fixtures/tenant-data
+          GREMION_DISABLE_SEEDS: 'true'
+          KEYCLOAK_ADMIN_CLIENT_SECRET: test-kc-admin-secret
+
+      - name: Run Playwright smoke suite
+        run: pnpm exec playwright test --grep '@smoke'
+        working-directory: gremion-ui
+        env:
+          PLAYWRIGHT_BASE_URL: http://localhost:4173
+          # #285 / G-099: playwright.config.ts reads SMOKE_TENANT_HOST and stamps
+          # it as x-forwarded-host on every request, so the resolver selects the
+          # seeded `fixture` tenant for `/` and `/finance` (302 -> /auth/login).
+          SMOKE_TENANT_HOST: ${{ env.SMOKE_TENANT_HOST }}
+
+      - name: Stop preview server
+        if: always()
+        run: |
+          if [ -f /tmp/preview.pid ]; then
+            kill "$(cat /tmp/preview.pid)" 2>/dev/null || true
+          fi
+          echo "=== preview.log (last 100 lines) ==="
+          tail -100 /tmp/preview.log || true
+
+      - name: Upload Playwright report
+        if: failure()
+        # Pin matches mobile.yml's existing actions/upload-artifact pin so
+        # both workflows stay on the same audited release.
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: playwright-report
+          path: gremion-ui/playwright-report/
+          retention-days: 7
+
+      # gremion-public. Its type check and unit tests are verify's (typecheck's
+      # svelte-check, unit:public); what no gate did was build the image and RUN
+      # it. dependabot.yml pinned the /gremion-public node major until a CI job
+      # booted the built image and hit it -- the schema-rename staleness bug fixed
+      # in PR #88 passed check, tests and build and was caught only because a
+      # rebuild flushed a cached layer. This is that job, so the pin is lifted.
+      - name: Build gremion-public
+        run: pnpm build
+        working-directory: gremion-public
+
+      - name: Build the gremion-public image
+        run: docker build -f gremion-public/Dockerfile -t gremion-ci/gremion-public:smoke .
+
+      # Post-conditions, not the exit code: `docker run -d` exits 0 for a container
+      # that dies a second later. The route is ${BASE_PATH}/healthz and the image
+      # is built with BASE_PATH empty (Dockerfile ARG), so /healthz; the handler
+      # touches no database (the probe must stay green while Postgres is away), but
+      # the container is started against the job's Postgres anyway so the boot is
+      # the one a deployment makes. A 200 alone would also be answered by an error
+      # page that happens to say 200, so the body is compared byte for byte too,
+      # and the container must still be running after the probe.
+      - name: Boot the gremion-public image and probe its health endpoint
+        env:
+          GREMION_PUBLIC_DB_URL: postgresql://gremion:gremion_test@127.0.0.1:5432/gremion
+        run: |
+          set -euo pipefail
+          docker run -d --name gremion-public-smoke --network host \
+            -e PORT=3100 -e ORIGIN=http://127.0.0.1:3100 -e GREMION_PUBLIC_DB_URL \
+            gremion-ci/gremion-public:smoke
+          code=000
+          for _ in $(seq 1 60); do
+            code=$(curl -s -o /tmp/gremion-public-healthz.body -w '%{http_code}' http://127.0.0.1:3100/healthz || true)
+            [ "$code" = "200" ] && break
+            sleep 1
+          done
+          if [ "$code" != "200" ]; then
+            echo "::error::GET /healthz answered HTTP $code, not 200"
+            exit 1
+          fi
+          body=$(cat /tmp/gremion-public-healthz.body)
+          want='{"ok":true,"app":"gremion-public"}'
+          if [ "$body" != "$want" ]; then
+            echo "::error::GET /healthz body is not the portal's liveness marker: $body"
+            exit 1
+          fi
+          running=$(docker inspect -f '{{.State.Running}}' gremion-public-smoke)
+          if [ "$running" != "true" ]; then
+            echo "::error::the gremion-public container is not running after the probe"
+            exit 1
+          fi
+          echo "OK -- /healthz answered 200 with the liveness marker from the built image."
+
+      - name: gremion-public container logs
+        if: failure()
+        run: docker logs gremion-public-smoke || true
+
+      - name: Remove the gremion-public container
+        if: always()
+        run: docker rm -f gremion-public-smoke || true
+
+  # ──────────────────────────────────────────────────────────────────────────
+  # Job 6: Verify gate. The one place the legs above become a verdict.
+  #
+  # Waits for every verify-* leg, merges their records into the record a single
+  # `make verify` would have written (combine-records.mjs: one `--only` record
+  # per leg, all for THIS commit, no suite twice) and hands it to the SAME
+  # check-record.mjs that scripts/release/sign-release.sh trusts. The merge
+  # block is therefore not a second implementation of "is this green": it is the
+  # local gate's judge, fed by parallel legs.
+  # ──────────────────────────────────────────────────────────────────────────
+  verify-gate:
+    name: Verify gate
+    runs-on: ubuntu-latest
+    needs:
+      - verify-static
+      - verify-render-ops
+      - verify-unit-ui
+      - verify-unit-packages
+      - verify-unit-host
+      - verify-integration-db
+      - verify-integration-brokers
+      - verify-census
+    # A skipped or failed leg must make this job RUN and fail, not be skipped with
+    # it: a skipped required check reads as passing in a branch ruleset.
+    if: ${{ !cancelled() }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      # node only: combine-records.mjs and check-record.mjs import nothing but
+      # node: built-ins and scripts/verify itself.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7.1.0
+        with:
+          node-version: 26
+
+      - name: Every verify leg must have succeeded
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          # Vacuity floor: a gate that iterates an empty `needs` passes anything.
+          total=$(jq 'length' <<<"$NEEDS_JSON")
+          if [ "$total" -lt 8 ]; then
+            echo "::error::verify-gate waits for only $total job(s); expected the eight verify legs"
+            exit 1
+          fi
+          rows=$(jq -r 'to_entries[] | [.key, .value.result] | @tsv' <<<"$NEEDS_JSON")
+          bad=0
+          while IFS=$'\t' read -r job result; do
+            if [ "$result" = "success" ]; then
+              echo "  ok      $job"
+            elif [ "$job" = "verify-census" ] && [ "$result" = "skipped" ] && [ "$EVENT_NAME" = "pull_request" ]; then
+              # Skipped only when the `changes` job found no census input in the
+              # diff (and lint passed). The record check below then allows exactly
+              # this one absence, and only on a pull request.
+              echo "  skipped $job (pull request; no census input changed)"
+            else
+              echo "::error::$job finished $result"
+              bad=1
+            fi
+          done <<<"$rows"
+          exit "$bad"
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
+        with:
+          pattern: record-*
+          merge-multiple: false
+          path: ${{ runner.temp }}/verify-records
+
+      - name: Combine the legs' records
+        env:
+          SHA: ${{ github.sha }}
+        run: node scripts/verify/combine-records.mjs --in-dir "$RUNNER_TEMP/verify-records" --sha "$SHA"
+
+      # The pull-request branch is keyed on BOTH the event and the census result:
+      # a push or a manual run must never be allowed to miss a suite, and a pull
+      # request whose census RAN is judged exactly like a push. --allow-missing
+      # permits an absence and nothing else: a census record that is present must
+      # still pass, and every other required suite must be there.
+      - name: Check the combined record
+        if: ${{ github.event_name != 'pull_request' || needs.verify-census.result == 'success' }}
+        env:
+          SHA: ${{ github.sha }}
+        run: node scripts/verify/check-record.mjs "$SHA"
+
+      - name: Check the combined record (pull request, census not required)
+        if: ${{ github.event_name == 'pull_request' && needs.verify-census.result == 'skipped' }}
+        env:
+          SHA: ${{ github.sha }}
+          EVENT_NAME: ${{ github.event_name }}
+          CENSUS_RESULT: ${{ needs.verify-census.result }}
+        run: |
+          set -euo pipefail
+          # The `if:` above is what selects this step; this re-asserts it from the
+          # environment so a copy of the step pasted into a push path fails closed.
+          if [ "$EVENT_NAME" != "pull_request" ] || [ "$CENSUS_RESULT" != "skipped" ]; then
+            echo "::error::--allow-missing is only for a pull request whose census was skipped (event $EVENT_NAME, census $CENSUS_RESULT)"
+            exit 1
+          fi
+          node scripts/verify/check-record.mjs "$SHA" --allow-missing census

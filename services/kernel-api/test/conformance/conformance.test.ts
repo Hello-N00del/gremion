@@ -46,7 +46,9 @@ describe('black-box conformance (Q13, P1)', () => {
     const { app } = appWith(w)
     const res = await app.inject({ url, headers })
     conforms('GET', url, res)
-    if (res.statusCode === 503) expect(Number(res.headers['retry-after'])).toBeGreaterThan(0)
+    // a 503 must say when to retry; every other status has nothing to assert here
+    const retryAfter = res.statusCode === 503 ? Number(res.headers['retry-after']) : Number.POSITIVE_INFINITY
+    expect(retryAfter).toBeGreaterThan(0)
     await app.close()
   })
 

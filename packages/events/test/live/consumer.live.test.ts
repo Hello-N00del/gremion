@@ -375,7 +375,11 @@ describe('TDD 11b two consumers dead-letter the same event', () => {
       const e = await dlqEntriesOf(eventId)
       return e.length >= 2 ? e : undefined
     }, 45_000)
-    expect(entries.map((e) => e.consumer).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))).toEqual(['poison-a', 'poison-b'])
+    // consumer is optional on a dead letter (a transport-kind entry names none); assert both are named,
+    // which also narrows the type for the comparator below.
+    const consumers = entries.map((e) => e.consumer)
+    expect(consumers, 'every dead letter names its consumer').not.toContain(undefined)
+    expect((consumers as string[]).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))).toEqual(['poison-a', 'poison-b'])
     const ids = new Set<string>()
     for (const e of entries) ids.add((await admin.jsm.streams.getMessage('DLQ', { seq: e.seq }))!.header.get(H.msgId))
     expect(ids.size, 'two distinct DLQ message ids').toBe(2)

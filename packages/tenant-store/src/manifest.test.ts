@@ -22,13 +22,17 @@ const F1 = 'CREATE TABLE a (id int);\n'
 const F2 = 'CREATE TABLE b (id int);\n'
 
 function codeOf(fn: () => unknown): string[] {
+  let thrown: unknown
+  let didThrow = false
   try {
     fn()
   } catch (e) {
-    expect(e).toBeInstanceOf(MigrationManifestError)
-    return (e as MigrationManifestError).problems.map((p) => `${p.code}:${p.file ?? ''}`)
+    thrown = e
+    didThrow = true
   }
-  throw new Error('expected a MigrationManifestError')
+  if (!didThrow) throw new Error('expected a MigrationManifestError')
+  expect(thrown).toBeInstanceOf(MigrationManifestError)
+  return (thrown as MigrationManifestError).problems.map((p) => `${p.code}:${p.file ?? ''}`)
 }
 
 describe('readVerifiedMigrations', () => {

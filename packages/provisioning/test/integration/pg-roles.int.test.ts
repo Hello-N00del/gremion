@@ -60,15 +60,17 @@ async function matrix(db: 'platform' | 'control'): Promise<Row[]> {
 
 describe('A1: the panel role (ensurePanelRequester)', () => {
   it('prints the privilege matrix: SELECT on the read set only, INSERT/UPDATE/DELETE/TRUNCATE false everywhere', async () => {
+    const platformMatrix: Awaited<ReturnType<typeof matrix>> = []
     for (const db of ['platform', 'control'] as const) {
       const m = await matrix(db)
+      if (db === 'platform') platformMatrix.push(...m)
       console.log(`[A1] panel role ${r.panelRole} on ${db}:\n${m.map((x) => `  ${x.rel.padEnd(40)} select=${x.sel} insert=${x.ins} update=${x.upd} delete=${x.del} truncate=${x.trunc}`).join('\n')}`)
       const reads = new Set<string>(db === 'platform' ? PANEL_READS.platform : PANEL_READS.control)
       expect(m.filter((x) => x.sel).map((x) => x.rel).sort()).toEqual([...reads].sort())
       expect(m.filter((x) => x.ins || x.upd || x.del || x.trunc)).toEqual([])
-      // the base table of the queue is NOT readable (the token lives there)
-      if (db === 'platform') expect(m.find((x) => x.rel === 'plt.provisioning_request')).toMatchObject({ sel: false })
     }
+    // the base table of the queue is NOT readable (the token lives there)
+    expect(platformMatrix.find((x) => x.rel === 'plt.provisioning_request')).toMatchObject({ sel: false })
   })
 
   it('EXECUTE on exactly one function: plt.submit_provisioning_request', async () => {

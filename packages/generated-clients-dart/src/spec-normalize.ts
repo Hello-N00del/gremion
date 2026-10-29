@@ -30,6 +30,32 @@
 //     expresses "may be null", so no enum member is needed for it. Where
 //     the type does NOT allow null, this is not a mapping this rewrite
 //     understands and it fails closed, same as an unmappable `nullable`.
+//  5. The 3.1 spelling of a nullable schema that is not a type array,
+//     `oneOf: [{type: "null"}, T]` (or `anyOf`), makes the generator invent a
+//     model named `Null` (renamed `ModelNull`, "reserved word") and reference a
+//     file it never writes, so the package does not analyse. For a two-branch
+//     form whose other branch is an inline schema:
+//       - a scalar or array T is merged into one schema with `null` added to its
+//         type: the same schema, spelled the way case 1 already produces;
+//       - an inline OBJECT T cannot be: `type: [object, "null"]` on a model still
+//         generates a non-nullable field, so a `null` from the server would throw in
+//         the client. The object is hoisted into a component named like the
+//         generator's own inline model (<Schema><Property>, so the Dart type name
+//         does not change) and the property becomes `anyOf: [{$ref}, {type: "null"}]`,
+//         the spelling that does generate `T?` (governance-http relies on it). Only
+//         components.schemas.<S>.properties.<p> can be hoisted and a name clash is
+//         refused.
+//     A `$ref` or composed branch, or more than two branches, is left as written
+//     (the generator reads those correctly); a merge that would have to pick
+//     between two different values fails closed.
+//  6. `additionalProperties: false` on an inline object (kernel-core has 35)
+//     makes the generator mis-type every property that REFERENCES a schema
+//     containing such an object: the deserializer assigns `result.runtime =
+//     valueDes` where built_value needs `result.runtime.replace(valueDes)`, a
+//     type error that fails the analyze gate. It is a server-side strictness
+//     keyword: a client never rejects what it did not ask for, so it is dropped
+//     from the generator input (a no-op for specs that do not use it, which keeps
+//     the committed governance packages byte-identical).
 //
 // Anything that cannot be mapped faithfully fails closed. The walk decides
 // what is a schema by POSITION, not by key name, so a property named
@@ -43,6 +69,9 @@ export interface NormalizeReport {
   defaultNullDropped: string[]
   constDropped: string[]
   enumNullDropped: string[]
+  oneOfNullMerged: string[]
+  oneOfNullHoisted: string[]
+  additionalPropertiesFalseDropped: string[]
 }
 
 /** Keys whose value holds data, not schemas: never walked. */
@@ -60,14 +89,24 @@ function pointerToken(k: string): string {
   return k.replace(/~/g, '~0').replace(/\//g, '~1')
 }
 
+/** Exactly `{type: "null"}`: a branch that says nothing but "null". */
+function isNullSchema(b: unknown): boolean {
+  if (!b || typeof b !== 'object' || Array.isArray(b)) return false
+  const keys = Object.keys(b)
+  return keys.length === 1 && keys[0] === 'type' && (b as { type: unknown }).type === 'null'
+}
+
 function allowsNull(type: unknown): boolean {
   return type === 'null' || (Array.isArray(type) && type.includes('null'))
 }
 
 export function normalizeFor31(input: unknown): { doc: unknown; report: NormalizeReport } {
-  const report: NormalizeReport = { nullable: [], nullableFalseDropped: [], defaultNullDropped: [], constDropped: [], enumNullDropped: [] }
+  const report: NormalizeReport = { nullable: [], nullableFalseDropped: [], defaultNullDropped: [], constDropped: [], enumNullDropped: [], oneOfNullMerged: [], oneOfNullHoisted: [], additionalPropertiesFalseDropped: [] }
   const version = (input as { openapi?: unknown } | null)?.openapi
   if (typeof version !== 'string' || !version.startsWith('3.1')) return { doc: input, report }
+
+  const hoisted: Array<[string, unknown]> = []
+  const taken = new Set<string>(Object.keys(((input as { components?: { schemas?: object } }).components?.schemas ?? {}) as object))
 
   const walkNameMap = (node: unknown, ptr: string): unknown => {
     if (!node || typeof node !== 'object' || Array.isArray(node)) return walkNode(node, ptr)
@@ -84,6 +123,10 @@ export function normalizeFor31(input: unknown): { doc: unknown; report: Normaliz
     const out: Record<string, unknown> = {}
     for (const [k, v] of Object.entries(src)) {
       if (k === 'nullable' && typeof v === 'boolean') continue
+      if (k === 'additionalProperties' && v === false) {
+        report.additionalPropertiesFalseDropped.push(at)
+        continue
+      }
       const child = `${ptr}/${pointerToken(k)}`
       out[k] = VALUE_KEYS.has(k) || k.startsWith('x-') ? v : NAME_MAPS.has(k) ? walkNameMap(v, child) : walkNode(v, child)
     }
@@ -98,6 +141,47 @@ export function normalizeFor31(input: unknown): { doc: unknown; report: Normaliz
       report.nullable.push(at)
     } else if (src.nullable === false) {
       report.nullableFalseDropped.push(at)
+    }
+
+    for (const kw of ['oneOf', 'anyOf'] as const) {
+      const branches = out[kw]
+      if (!Array.isArray(branches) || !branches.some(isNullSchema)) continue
+      const others = branches.filter((b) => !isNullSchema(b))
+      // Only the two-branch form with ONE inline schema is merged. A `$ref` or composed branch (the
+      // governance spec's `anyOf: [{$ref}, {type: null}]`) is left exactly as written: the generator reads
+      // that spelling correctly (its committed package analyses clean), so rewriting it would only churn
+      // that output; and a form with more branches is not one this rewrite understands.
+      if (branches.length !== 2 || others.length !== 1) continue
+      const other = others[0] as Record<string, unknown>
+      if (other === null || typeof other !== 'object' || COMBINATORS.some((c) => c in other)) continue
+      if ('type' in out) throw new Error(`${at}: "${kw}" with a null branch next to a sibling "type" cannot be merged faithfully`)
+      if (other.type === 'object') {
+        const at3 = /^[/]components[/]schemas[/]([^/]+)[/]properties[/]([^/]+)$/.exec(at)
+        if (!at3) throw new Error(`${at}: a nullable inline object can only be hoisted from components/schemas/<S>/properties/<p>; give it a name in the spec`)
+        const unpointer = (t: string) => t.replace(/~1/g, '/').replace(/~0/g, '~')
+        const pascal = (t: string) => t.split(/[^A-Za-z0-9]+/).filter(Boolean).map((w) => w[0].toUpperCase() + w.slice(1)).join('')
+        const name = unpointer(at3[1]) + pascal(unpointer(at3[2]))
+        if (taken.has(name)) throw new Error(`${at}: hoisting the nullable inline object as components/schemas/${name} would clash with a schema of that name`)
+        taken.add(name)
+        hoisted.push([name, other])
+        out[kw] = [{ $ref: `#/components/schemas/${name}` }, { type: 'null' }]
+        report.oneOfNullHoisted.push(at)
+        continue
+      }
+      let type = other.type
+      if (type === undefined && Array.isArray(other.enum) && other.enum.every((v) => typeof v === 'string')) type = 'string'
+      if (typeof type !== 'string' && !Array.isArray(type)) throw new Error(`${at}: "${kw}" of null and a schema without a "type" cannot be mapped to a nullable schema faithfully`)
+      const merged: Record<string, unknown> = {}
+      for (const [k, v] of Object.entries(out)) if (k !== kw) merged[k] = v
+      for (const [k, v] of Object.entries(other)) {
+        if (k === 'type') continue
+        if (k in merged && JSON.stringify(merged[k]) !== JSON.stringify(v)) throw new Error(`${at}: "${kw}" branch and its parent both set "${k}" differently; cannot merge faithfully`)
+        merged[k] = v
+      }
+      merged.type = Array.isArray(type) ? (type.includes('null') ? type : [...type, 'null']) : [type, 'null']
+      for (const k of Object.keys(out)) delete out[k]
+      Object.assign(out, merged)
+      report.oneOfNullMerged.push(at)
     }
 
     if ('default' in src && src.default === null) {
@@ -136,5 +220,11 @@ export function normalizeFor31(input: unknown): { doc: unknown; report: Normaliz
     return out
   }
 
-  return { doc: walkNode(input, ''), report }
+  const doc = walkNode(input, '') as { components?: { schemas?: Record<string, unknown> } }
+  if (hoisted.length) {
+    const schemas = doc.components?.schemas
+    if (!schemas) throw new Error('hoisting a nullable inline object needs components.schemas in the document')
+    for (const [name, schema] of hoisted) schemas[name] = schema
+  }
+  return { doc, report }
 }

@@ -15,6 +15,7 @@ import {
   parseNodeTapSummary,
   parseSvelteCheckMachine,
   parseVitestJsonFile,
+  tapFailureBlocks,
 } from './lib/parsers.mjs'
 
 test('parseNodeTapSummary reads the summary lines node --test always prints', () => {
@@ -165,4 +166,40 @@ test('parseSvelteCheckMachine reads a COMPLETED line and derives passed from fil
 test('parseSvelteCheckMachine returns null (not a passing guess) with no COMPLETED line -- the gate-ceba66c defect', () => {
   assert.equal(parseSvelteCheckMachine('some unrelated svelte-check output\n'), null)
   assert.equal(parseSvelteCheckMachine(''), null)
+})
+
+test('tapFailureBlocks is empty for a clean stream', () => {
+  assert.equal(tapFailureBlocks('1..2\nok 1 a\nok 2 b\n'), '')
+})
+
+test('tapFailureBlocks keeps a node YAML block (blank-looking lines included) and stops before the summary', () => {
+  const tap = [
+    'TAP version 13',
+    '# Subtest: red',
+    'not ok 1 - red',
+    '  ---',
+    '  error: |-',
+    '    Expected values to be strictly equal:',
+    '    ',
+    "    + 'left'",
+    '  ...',
+    '# Subtest: green',
+    'ok 2 - green',
+    '1..2',
+    '# tests 2',
+    '# fail 1',
+    '',
+  ].join('\n')
+  const out = tapFailureBlocks(tap)
+  assert.match(out, /^not ok 1 - red\n {2}---\n/)
+  assert.match(out, /\+ 'left'\n {2}\.\.\.$/)
+  assert.doesNotMatch(out, /Subtest|green|# tests|# fail/)
+})
+
+test('tapFailureBlocks notes what the caps left out', () => {
+  const many = Array.from({ length: 30 }, (_, i) => `not ok ${i + 1} failing ${i}\n# ${'x'.repeat(400)}`).join('\n')
+  const out = tapFailureBlocks(many, { maxChars: 2000 })
+  assert.match(out, /not ok 1 failing 0/)
+  assert.match(out, /\.\.\. \(\d+ more failing test\(s\) not shown\)$/)
+  assert.ok(out.length < 2200, String(out.length))
 })

@@ -51,6 +51,7 @@ import { extractDockerCopySources } from './check-module-source-scan.mjs'
 export const KERNEL_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 
 const DOCKERFILE_RE = /(^|\/)(([^/]*\.)?Dockerfile(\.[^/]+)?|Containerfile(\.[^/]+)?)$/
+const byCodeUnit = (a, b) => (a < b ? -1 : a > b ? 1 : 0)
 const SKIP_DIRS = new Set(['node_modules', 'dist', '.svelte-kit', 'coverage', '.git', '.worktrees', 'build'])
 const DEP_FIELDS = ['dependencies', 'devDependencies', 'optionalDependencies', 'peerDependencies']
 
@@ -124,7 +125,7 @@ export function loadWorkspace(root, problems = []) {
       )
     else dirs.add(g)
   }
-  for (const dir of [...dirs].sort()) {
+  for (const dir of [...dirs].sort(byCodeUnit)) {
     const file = join(root, dir, 'package.json')
     if (!existsSync(file)) continue
     let json

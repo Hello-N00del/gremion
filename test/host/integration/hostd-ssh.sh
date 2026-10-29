@@ -3,7 +3,7 @@
 # INTEGRATION (Docker on this box) — NOT part of `make test-unit`.
 #
 # Proves the restricted SSH transport against a running sshd: the deploy key
-# gets the agent and nothing else, the deploy.yml two-line request works
+# gets the agent and nothing else, the deploy client's two-line request works
 # end to end, and the forced command itself is watched RED — the `command=`
 # prefix is removed, a real shell is observed, and the line is restored.
 # Everything runs inside one container, so no key and no port touch this box.
@@ -75,7 +75,7 @@ grep -q 'noop ok' <<<"$out" || fail "noop did not run: $out"
 grep -qx 'EXIT 0' <<<"$out" || fail "no EXIT 0 line: $out"
 pass "noop over ssh, EXIT 0"
 
-echo "--- phase 2: deploy.yml's two-line request works end to end"
+echo "--- phase 2: the deploy client's two-line request (TOKEN, then the deploy verb) works end to end"
 rc=0
 out="$(printf 'TOKEN itest-token-0123456789\ndeploy dist-v1.0.0\n' | ssh_in)" || rc=$?
 [[ $rc -eq 0 ]] || fail "deploy request exited $rc: $out"

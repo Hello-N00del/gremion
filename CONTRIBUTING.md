@@ -77,7 +77,7 @@ By making a contribution to this project, I certify that:
 Gremion is built to be trusted civic infrastructure. A CLA that aggregates
 relicensing rights is the mechanism behind every open-source "rug-pull" (a later
 move to a proprietary or source-available license). By using a DCO with
-inbound = outbound AGPL-3.0-only, **no party — including the maintainers — can
+inbound = outbound AGPL-3.0-only, **no party, including the maintainers, can
 ever relicense your contribution away from the AGPL.** That guarantee is the
 point.
 
@@ -135,10 +135,10 @@ resolved against *this* worktree, and a linked worktree gets its own answer.
 Run the installer from inside the worktree you want covered.
 
 **The hook fails closed.** Every condition that stops the boundary lint from
-running — no repo root, a missing `gremion-ui/scripts/boundary-lint.ts`, a
-missing `gremion-ui/node_modules` (fresh clones, and any checkout where install
-has not run) —
-blocks the commit and prints what to do about it. It never skips silently: a
+running blocks the commit and prints what to do about it: no repo root, a
+missing `gremion-ui/scripts/boundary-lint.ts`, or a missing
+`gremion-ui/node_modules` (fresh clones, and any checkout where install has not
+run). It never skips silently: a
 hook that exits 0 when it cannot run is worse than no hook, because it looks
 installed. `git commit --no-verify` is the single, visible bypass.
 
@@ -157,9 +157,9 @@ repos with a remediation command that cannot be run from them — and installing
 into this repo's own hooks dir instead is no better, because git obeys the
 inherited value and would never run it (installed-looking, enforcing nothing:
 exactly the failure this guard exists to prevent). Give the repo its own hooks
-dir first — the installer prints the ready-to-paste
+dir first (the installer prints the ready-to-paste
 `git config --local core.hooksPath "<absolute hooks dir of this clone>"`
-command, with the **absolute** path filled in — then re-run the installer, or
+command, with the **absolute** path filled in), then re-run the installer, or
 unset the machine-wide value (`git config --global --unset core.hooksPath`).
 The value must be absolute: a relative one is re-resolved inside every linked
 worktree, where it names a path that is not a hooks directory at all.
@@ -181,9 +181,10 @@ A foreign hook whose shebang names a **non-shell interpreter** (`python3`,
 so prepending it would leave a file that is a syntax error for its own
 interpreter. The same refusal covers a hook that is **not UTF-8 text** (a
 compiled binary, or Latin-1 text whose `#!/bin/sh` line passes every other
-check) — reading it as UTF-8 and writing it back would replace every
-undecodable byte with `U+FFFD` — and a **symlinked** `pre-commit`, because
-writing through a symlink writes to its target, possibly outside the hooks dir.
+check), because reading it as UTF-8 and writing it back would replace every
+undecodable byte with `U+FFFD`. It also covers a **symlinked** `pre-commit`,
+because writing through a symlink writes to its target, possibly outside the
+hooks dir.
 In every case the installer exits non-zero, leaves the file byte-identical and
 prints the remedies (move it aside and chain it from the generated wrapper,
 point the repository at another hooks dir with

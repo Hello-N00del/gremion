@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
+import { fileURLToPath } from 'node:url'
 import { run } from './lib/run.mjs'
 import {
   gitleaksCommand,
@@ -581,6 +582,15 @@ test('runRunnerPolicyArm returns a FAIL arm (never throws) when --waivers names 
     rmSync(vertical, { recursive: true, force: true })
     rmSync(waiversDir, { recursive: true, force: true })
   }
+})
+
+test('runRunnerPolicyArm PASSes on the real kernel tree with the committed waivers.json, and nothing is waived: the list is empty', () => {
+  const kernelRoot = fileURLToPath(new URL('../../', import.meta.url))
+  const waiversPath = fileURLToPath(new URL('./waivers.json', import.meta.url))
+  assert.deepEqual(JSON.parse(readFileSync(waiversPath, 'utf8')), [])
+  const r = runRunnerPolicyArm(kernelRoot, undefined, waiversPath)
+  assert.equal(r.status, 'PASS', r.reason)
+  assert.deepEqual(r.waived, [], 'a PASS that leans on a waiver is not the PASS this test is about')
 })
 
 test('runRunnerPolicyArm PASSes when both repos are clean', () => {

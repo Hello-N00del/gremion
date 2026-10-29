@@ -2,11 +2,19 @@
      errors in the same self-contained auth shell as login/otp/reset instead of
      falling back to the parent keycloak.v2 theme. KC injects: message, client,
      skipLink, realm, locale. BRAND-driven via realm.displayName / realm.name. -->
+<#-- The step-up's OTP-or-deny subflow refuses a gremion-ui user without a second factor with
+     deny-access-authenticator, whose page Keycloak 26.6.1 renders itself (message key
+     "access-denied", HTTP 401): there is no redirect to the client and no setting for one. So the
+     page hands that user to the app's own notice. The path is relative because the realm is served
+     on the tenant host under /auth/realms, so /auth/step-up is the app. The refusal is unchanged:
+     no code is issued. Other clients keep the plain page. -->
+<#assign noSecondFactor = (client?? && client.clientId == "gremion-ui" && message?? && message.summary?has_content && message.summary == msg("access-denied"))>
 <!DOCTYPE html>
 <html lang="${(locale.currentLanguageTag)!'de'}">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <#if noSecondFactor><meta http-equiv="refresh" content="0;url=/auth/step-up?error=no-second-factor"></#if>
   <title>${msg("gremionErrorTitle")} · ${(realm.displayName)!'Gremion'}</title>
   <link rel="stylesheet" href="${url.resourcesPath}/css/gremion.v2.css">
 </head>
@@ -34,7 +42,9 @@
         </div>
       </#if>
 
-      <#if !skipLink?? && client?? && client.baseUrl?has_content>
+      <#if noSecondFactor>
+        <a class="auth-btn" href="/auth/step-up?error=no-second-factor">${msg("gremionBackToApp")} <span class="arr">→</span></a>
+      <#elseif !skipLink?? && client?? && client.baseUrl?has_content>
         <a class="auth-btn" href="${client.baseUrl}">${msg("gremionBackToApp")} <span class="arr">→</span></a>
       <#else>
         <a class="auth-back" href="${url.loginUrl!'/'}">← ${msg("gremionBackToApp")}</a>

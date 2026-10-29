@@ -59,6 +59,6 @@ describe('the IDT event catalogue', () => {
     expect(eventTypeOf('seat.created')).toBe('de.gremion.idt.seat.created.v1')
     expect(subjectOfType(U, eventTypeOf('tenure.ended'))).toBe(`gremion.${U}.idt.tenure.ended`)
     expect(() => subjectOfType(U, 'de.gremion.gov.motion.created.v1')).toThrow(/not an idt event type/)
-    expect(() => subjectOfType(U, 'de.gremion.idt.a.b.c.v1')).toThrow()
+    expect(() => subjectOfType(U, 'de.gremion.idt.a.b.c.v1')).toThrow(/not an idt event type/)
   })
 })

@@ -6,12 +6,6 @@
       "rule": "secret-path",
       "reason": "documentation of the k8s secret workflow under a secrets/ directory; carries no values",
       "blob": "382cd2817bd1f85eeb458a84964b05a4575f44a2"
-    },
-    {
-      "path": "test/host/deploy-workflow.bats",
-      "rule": "key-material",
-      "reason": "bats fixture for the deploy-channel block: a PEM header around the literal body 'not-a-key', exported into a shimmed ssh-add; no key material",
-      "blob": "df0d98be3b73e20fc123e854a61656591cfe3ec7"
     }
   ]
 }

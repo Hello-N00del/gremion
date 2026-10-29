@@ -18,7 +18,7 @@ them while a named pilot is running; rule 4 overrides all three.
 
 | Term | Meaning in this document |
 |---|---|
-| **Release** | One annotated `dist-vX.Y.Z` tag, deployed through `.github/workflows/deploy.yml` and `infra/host/bin/gremion-deploy`. |
+| **Release** | One annotated `dist-vX.Y.Z` tag, built by `.github/workflows/release-images.yml`, cut with `scripts/release/cut-dist-tag.sh` and deployed by `infra/host/bin/gremion-deploy`. |
 | **Feature release** | A release that changes what users can see or do, or how they work. Every release that is not a security fix is treated as a feature release. |
 | **Security fix** | A release whose only purpose is to close a security vulnerability. How a release that also carries feature changes is treated is an open point (see [Open points](#open-points)). |
 | **Semester break** | The lecture-free period between two semesters at the hosted council's institution. There are two per year. |
@@ -149,7 +149,7 @@ guessed:
 
 ## Related documents
 
-- `.github/workflows/deploy.yml` — the only path a release tag takes to a host.
+- `.github/workflows/release-images.yml` and `scripts/release/cut-dist-tag.sh` — the only path a release takes to a signed tag (keyless in CI; the host deploy is a manual operator step).
 - `infra/host/bin/gremion-deploy`, `gremion-switch`, `gremion-rollback` — the
   host half: blue/green colours, health wait, switch and rollback.
 - `docs/ops/host-tooling.md` — the host tooling, including the pre-release
