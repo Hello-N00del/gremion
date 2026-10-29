@@ -94,8 +94,8 @@ export function peopleOps(c: Core) {
       },
     ): Promise<Written & { membershipId: string }> =>
       c.run(ctx, async (tx) => {
-        await c.activeBody(tx, i.bodyId)
         await c.allow(ctx, 'membership.start', i.bodyId)
+        await c.activeBody(tx, i.bodyId)
         const person = one(await tx<{ account_state: string }[]>`SELECT account_state FROM idt.person WHERE person_id = ${i.personId}::uuid`, `person ${i.personId}`)
         if (person.account_state === 'erased') throw new BodiesError('INVALID', `person ${i.personId} is erased`)
         const a = by(ctx.actor)

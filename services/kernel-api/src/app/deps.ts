@@ -6,6 +6,7 @@
 // fail on USE, never at construction).
 import type { Sql } from '@gremion/db'
 import type { HostRejectionLog } from '@gremion/tenancy-core'
+import { denyAll, type WriteAuthorizer } from '../bodies/authz.ts'
 import type { ModuleRuntimeDecl } from '../registry/declarations.ts'
 
 /** Control tenant status vocabulary (migrations-control 001). */
@@ -104,6 +105,8 @@ export interface KernelApiDeps {
   declarations: ModuleDeclarations
   /** The customer's kernel database for the identity reads and the own-preference write. */
   tenantDb: TenantDb
+  /** Who may write through the HTTP API. Shipped: denyAll (Q4) until TASK-081 binds the PDP. */
+  authorizer: WriteAuthorizer
   log: Logger
   /** The bounded tenant.host.rejected emitter (TRD-076, G6). */
   hostRejection: HostRejectionLog
@@ -136,6 +139,7 @@ export function unwiredDeps(): KernelApiDeps {
     gate: { check: notWired('the schema gate') },
     declarations: { get: () => undefined },
     tenantDb: { sqlFor: notWired('the tenant database') },
+    authorizer: denyAll,
     log: silent,
     hostRejection,
   }

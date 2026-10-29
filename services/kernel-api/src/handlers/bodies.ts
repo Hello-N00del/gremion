@@ -18,12 +18,14 @@ import { sendProblem } from '@gremion/fastify-service-template'
 import type { FastifyReply, FastifyRequest } from 'fastify'
 import type { KernelApiDeps } from '../app/deps.ts'
 import { BodiesError } from '../bodies/errors.ts'
+import { createBodiesService } from '../bodies/service.ts'
 import { preferenceOps, type PreferencePatch } from '../bodies/preference.ts'
 import { bodiesReads, type ReadCtx } from '../bodies/read.ts'
 import { getContext } from '../tenancy/context.ts'
 import { PROBLEM, RETRY_AFTER_REGISTRY } from '../tenancy/hook.ts'
 
 type Deps = Pick<KernelApiDeps, 'tenantDb' | 'log'>
+type WriteDeps = Deps & Pick<KernelApiDeps, 'authorizer'>
 
 const forbidden = (reply: FastifyReply, detail: string) => sendProblem(reply, { type: PROBLEM.forbidden, title: 'Forbidden', status: 403, detail })
 
@@ -97,3 +99,56 @@ export const putOwnPreference = (deps: Deps): OperationHandler => async (request
     return sendProblem(reply, { type: PROBLEM.customerUnavailable, title: 'Service Unavailable', status: 503, detail: 'This customer is temporarily unavailable.' })
   }
 }
+
+// ---- person writes: asked of the WriteAuthorizer first (default deny, Q4) ----
+
+/**
+ * Runs a domain write as the signed-in PERSON (the actor is the active person the
+ * verified subject belongs to). The authorizer is consulted before anything is
+ * written; the shipped one denies, so these answer 403 until TASK-081 binds the PDP.
+ */
+function personWrite<T extends { rowVersion: number }>(
+  deps: WriteDeps,
+  idOf: (out: T) => string,
+  run: (svc: ReturnType<typeof createBodiesService>, ctx: { sql: ReadCtx['sql']; customerId: string; actor: { kind: 'person'; id: string } }, request: FastifyRequest) => Promise<T>,
+): OperationHandler {
+  return async (request, reply) => {
+    const sub = subjectOf(request)
+    if (sub === null) return forbidden(reply, 'A write belongs to a signed-in person.')
+    const { tenant } = getContext(request)
+    try {
+      const sql = await deps.tenantDb.sqlFor(tenant)
+      const personId = await bodiesReads.personIdOfSubject({ sql, customerId: tenant.customerId }, sub)
+      if (personId === null) return forbidden(reply, 'The token belongs to no active person of this customer.')
+      const svc = createBodiesService({ authorizer: deps.authorizer })
+      const out = await run(svc, { sql, customerId: tenant.customerId, actor: { kind: 'person', id: personId } }, request)
+      return reply.code(201).send({ id: idOf(out), rowVersion: out.rowVersion })
+    } catch (err) {
+      if (err instanceof BodiesError) {
+        if (err.code === 'FORBIDDEN') return forbidden(reply, 'This is not permitted for this caller.')
+        if (err.code === 'NOT_FOUND') return sendProblem(reply, { type: PROBLEM.notFound, title: 'Not Found', status: 404, detail: 'No such record for this customer.' })
+        if (err.code === 'CONFLICT') return sendProblem(reply, { type: 'urn:gremion:problem:conflict', title: 'Conflict', status: 409, detail: 'The write conflicts with the current state.' })
+        return sendProblem(reply, { type: 'urn:gremion:problem:validation-failed', title: 'Bad Request', status: 400, detail: 'The write is not accepted.' })
+      }
+      deps.log.error('kernel-api: identity write failed', { customerId: tenant.customerId, err: (err as Error).message })
+      reply.header('retry-after', String(RETRY_AFTER_REGISTRY)).header('cache-control', 'no-store')
+      return sendProblem(reply, { type: PROBLEM.customerUnavailable, title: 'Service Unavailable', status: 503, detail: 'This customer is temporarily unavailable.' })
+    }
+  }
+}
+
+export const createBody = (deps: WriteDeps): OperationHandler =>
+  personWrite(deps, (o: { bodyId: string; rowVersion: number }) => o.bodyId, (svc, ctx, request) => svc.createBody(ctx, request.body as { kindKey: string; name: string; shortName?: string | null; parentBodyId?: string | null }))
+
+export const invitePerson = (deps: WriteDeps): OperationHandler =>
+  personWrite(deps, (o: { personId: string; rowVersion: number }) => o.personId, (svc, ctx, request) => svc.invitePerson(ctx, request.body as { email: string; displayName: string }))
+
+export const startMembership = (deps: WriteDeps): OperationHandler =>
+  personWrite(
+    deps,
+    (o: { membershipId: string; rowVersion: number }) => o.membershipId,
+    (svc, ctx, request) => {
+      const b = request.body as { personId: string; orgUnitId?: string | null; participationKind: 'elected_member'; voting: boolean; validFrom: string; validUntil?: string | null; wahlperiodeId?: string | null }
+      return svc.startMembership(ctx, { ...b, bodyId: (request.params as { bodyId: string }).bodyId, source: 'admin' })
+    },
+  )

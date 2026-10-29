@@ -6,6 +6,7 @@
 import type { Sql } from '@gremion/db'
 import { createHostRejectionLog } from '@gremion/tenancy-core'
 import postgres from 'postgres'
+import { denyAll } from '../bodies/authz.ts'
 import { platformRegistryStore } from '../registry/store.ts'
 import { loadDeclarations } from '../registry/declarations.ts'
 import { allowsEnvRefs, createSecretResolver } from '../tenancy/secrets.ts'
@@ -52,6 +53,7 @@ export function wireDeps(config: KernelApiConfig, o: { dirs: readonly string[]; 
     gate,
     declarations: { get: (key) => declarations.get(key) },
     tenantDb,
+    authorizer: denyAll,
     log,
     hostRejection: createHostRejectionLog({ emit: (msg, fields) => log.warn(msg, { tenant: null, ...fields }) }),
   }

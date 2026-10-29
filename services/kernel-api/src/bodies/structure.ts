@@ -74,8 +74,8 @@ export function structureOps(c: Core) {
     // ----------------------------------------------------------- org units
     createOrgUnit: (ctx: OpCtx, i: { bodyId: string; kindKey: string; name: string; parentOrgUnitId?: string | null }): Promise<Written & { orgUnitId: string }> =>
       c.run(ctx, async (tx) => {
-        await c.activeBody(tx, i.bodyId)
         await c.allow(ctx, 'orgunit.create', i.bodyId)
+        await c.activeBody(tx, i.bodyId)
         const k = await c.kindOf(tx, i.kindKey, 'unit')
         const a = by(ctx.actor)
         const r = one(
@@ -153,8 +153,8 @@ export function structureOps(c: Core) {
       },
     ): Promise<Written & { seatId: string }> =>
       c.run(ctx, async (tx) => {
-        await c.activeBody(tx, i.bodyId)
         await c.allow(ctx, 'seat.create', i.bodyId)
+        await c.activeBody(tx, i.bodyId)
         if (i.orgUnitId) {
           const unit = one(
             await tx<{ can_hold_seats: boolean; state: string }[]>`
@@ -201,8 +201,8 @@ export function structureOps(c: Core) {
     // --------------------------------------------------------- wahlperioden
     createWahlperiode: (ctx: OpCtx, i: { bodyId: string; orgUnitId?: string | null; label: string; startsOn: string; endsOn: string }): Promise<Written & { wahlperiodeId: string }> =>
       c.run(ctx, async (tx) => {
-        await c.activeBody(tx, i.bodyId)
         await c.allow(ctx, 'wahlperiode.create', i.bodyId)
+        await c.activeBody(tx, i.bodyId)
         const a = by(ctx.actor)
         const r = one(
           await tx<{ wahlperiode_id: string; row_version: number }[]>`

@@ -93,6 +93,14 @@ export const bodiesReads = {
       }
     }),
 
+  /** The active person the VERIFIED subject belongs to, or null. */
+  personIdOfSubject: (ctx: ReadCtx, subject: string) =>
+    inCustomerTx(ctx.sql, ctx.customerId, async (tx) => {
+      const [p] = await tx<{ person_id: string }[]>`
+        SELECT person_id FROM idt.person WHERE customer_id = ${ctx.customerId}::uuid AND idp_subject = ${subject} AND account_state = 'active'`
+      return p?.person_id ?? null
+    }),
+
   /** The person's own record, found by the VERIFIED subject; `personId` must be that person's. Null otherwise (never says which). */
   ownPerson: (ctx: ReadCtx, personId: string, subject: string) =>
     inCustomerTx(ctx.sql, ctx.customerId, async (tx) => {

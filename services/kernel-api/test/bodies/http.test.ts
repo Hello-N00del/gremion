@@ -1,4 +1,4 @@
-// TASK-080-a step c: the seven `bodies` operations over the REAL app (tenancy
+// TASK-080-a step c: the `bodies` operations over the REAL app (tenancy
 // hook, response contract) with a scripted tenant database. What is held here:
 //   * every response conforms to openapi/kernel-core.json (status, media type, body);
 //   * personal data is served to the person themself only (own 200, other 403,
@@ -194,15 +194,36 @@ describe('the bodies operations (TASK-080-a step c)', () => {
     await app.close()
   })
 
-  it('no HTTP write exists in the bodies tag but the own preference (a person-token write to anything else has no route)', async () => {
+  it('the HTTP writes of the bodies tag are the own preference and three person writes; everything else has no route', async () => {
     const writes = listOperations(doc).filter((o) => (o.operation as { tags?: string[] }).tags?.includes('bodies') && o.method !== 'GET')
-    expect(writes.map((o) => o.operationId)).toEqual(['putOwnPreference'])
+    expect(writes.map((o) => o.operationId).sort()).toEqual(['createBody', 'invitePerson', 'putOwnPreference', 'startMembership'])
     const { app } = setup()
-    for (const [method, url] of [['POST', '/api/v1/bodies'], ['PUT', `/api/v1/bodies/${BODY}`], ['DELETE', `/api/v1/bodies/${BODY}`], ['POST', `/api/v1/persons`]] as const) {
+    for (const [method, url] of [['PUT', `/api/v1/bodies/${BODY}`], ['DELETE', `/api/v1/bodies/${BODY}`], ['DELETE', `/api/v1/persons/${PERSON}`], ['POST', `/api/v1/seats`]] as const) {
       const res = await app.inject({ method, url, headers: edge(A_HOST, 'token-a'), payload: {} })
       expect([404, 405], `${method} ${url}`).toContain(res.statusCode)
     }
     await app.close()
+  })
+
+  it('A3 / guard 6: under the shipped authorizer (deny all) a person-token write is 403 and NOTHING is written (no INSERT, no outbox row); a malformed body is 400 before that', async () => {
+    const { app, records } = setup()
+    const create = await get(app, '/api/v1/bodies', 'POST', { kindKey: 'stura', name: 'Studierendenrat' })
+    expect(create.statusCode).toBe(403)
+    conforms('createBody', create)
+    const invite = await get(app, '/api/v1/persons', 'POST', { email: 'x@example.org', displayName: 'X' })
+    expect(invite.statusCode).toBe(403)
+    conforms('invitePerson', invite)
+    const member = await get(app, `/api/v1/bodies/${BODY}/memberships`, 'POST', { personId: PERSON, participationKind: 'elected_member', voting: true, validFrom: '2026-04-01' })
+    expect(member.statusCode).toBe(403)
+    conforms('startMembership', member)
+    expect(records.filter((r) => /^(INSERT|UPDATE|DELETE)/.test(r.text))).toEqual([])
+    expect((await get(app, '/api/v1/bodies', 'POST', { kindKey: 'stura' })).statusCode).toBe(400) // name missing
+    expect((await get(app, '/api/v1/bodies', 'POST', { kindKey: 'stura', name: 'N', customerId: A_ID })).statusCode).toBe(400) // no way to name a customer
+    // a token with no active person is refused before the authorizer is even asked
+    const none = setup((t, p) => (t.includes('SELECT person_id FROM idt.person') ? [] : rowsFor(t, p)))
+    expect((await get(none.app, '/api/v1/bodies', 'POST', { kindKey: 'stura', name: 'N' })).statusCode).toBe(403)
+    await app.close()
+    await none.app.close()
   })
 
   it('TRD-082: every query carries the customer id, the body-scoped ones the body id; a seeded unscoped query is RED', async () => {
@@ -226,7 +247,7 @@ describe('the bodies operations (TASK-080-a step c)', () => {
 
   it('every bodies operation of the spec was exercised (not vacuous)', () => {
     const mine = listOperations(doc).filter((o) => (o.operation as { tags?: string[] }).tags?.includes('bodies')).map((o) => o.operationId!).sort()
-    expect(mine).toEqual(['getBodyTree', 'getOwnPreference', 'getPerson', 'listBodyMemberships', 'listBodySeats', 'listSeatTenures', 'putOwnPreference'])
+    expect(mine).toEqual(['createBody', 'getBodyTree', 'getOwnPreference', 'getPerson', 'invitePerson', 'listBodyMemberships', 'listBodySeats', 'listSeatTenures', 'putOwnPreference', 'startMembership'])
     expect([...exercised].sort()).toEqual(mine)
   })
 })

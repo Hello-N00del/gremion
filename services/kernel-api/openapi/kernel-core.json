@@ -249,6 +249,80 @@
             "$ref": "#/components/responses/Unavailable"
           }
         }
+      },
+      "post": {
+        "operationId": "startMembership",
+        "summary": "Starts a membership in a body",
+        "tags": [
+          "bodies"
+        ],
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "description": "A person's write: asked of the WriteAuthorizer first. The shipped authorizer is default deny (Q4), so this answers 403 until TASK-081 binds the PDP; nothing is written and no event is emitted on a refusal.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ForwardedHost"
+          },
+          {
+            "$ref": "#/components/parameters/ProxyTrust"
+          },
+          {
+            "name": "bodyId",
+            "in": "path",
+            "required": true,
+            "description": "A body of the resolved customer.",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StartMembership"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Written"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
       }
     },
     "/api/v1/seats/{seatId}/tenures": {
@@ -477,6 +551,138 @@
           }
         }
       }
+    },
+    "/api/v1/bodies": {
+      "post": {
+        "operationId": "createBody",
+        "summary": "Creates a body (a Gremium)",
+        "tags": [
+          "bodies"
+        ],
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "description": "A person's write: asked of the WriteAuthorizer first. The shipped authorizer is default deny (Q4), so this answers 403 until TASK-081 binds the PDP; nothing is written and no event is emitted on a refusal.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ForwardedHost"
+          },
+          {
+            "$ref": "#/components/parameters/ProxyTrust"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Written"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/persons": {
+      "post": {
+        "operationId": "invitePerson",
+        "summary": "Invites a person",
+        "tags": [
+          "bodies"
+        ],
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "description": "A person's write: asked of the WriteAuthorizer first. The shipped authorizer is default deny (Q4), so this answers 403 until TASK-081 binds the PDP; nothing is written and no event is emitted on a refusal.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ForwardedHost"
+          },
+          {
+            "$ref": "#/components/parameters/ProxyTrust"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InvitePerson"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Written"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -540,6 +746,16 @@
       },
     "BadRequest": {
       "description": "The request did not match the operation's schema.",
+      "content": {
+        "application/problem+json": {
+          "schema": {
+            "$ref": "#/components/schemas/Problem"
+          }
+        }
+      }
+    },
+    "Conflict": {
+      "description": "The write conflicts with the current state (an overlapping validity, a taken e-mail address, a stale row version).",
       "content": {
         "application/problem+json": {
           "schema": {
@@ -653,29 +869,720 @@
           "detail": { "type": "string" }
         }
       },
-    "Body": {
+      "Body": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "bodyId",
+          "kindKey",
+          "name",
+          "shortName",
+          "parentBodyId",
+          "state",
+          "archivedAt",
+          "rowVersion"
+        ],
+        "properties": {
+          "bodyId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "kindKey": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "shortName": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string"
+              }
+            ]
+          },
+          "parentBodyId": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "format": "uuid"
+              }
+            ]
+          },
+          "state": {
+            "enum": [
+              "active",
+              "archived"
+            ]
+          },
+          "archivedAt": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "format": "date-time"
+              }
+            ]
+          },
+          "rowVersion": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "description": "DB-IDT-BODY: a Gremium, the authorisation scope."
+      },
+      "OrgUnit": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "orgUnitId",
+          "bodyId",
+          "parentOrgUnitId",
+          "kindKey",
+          "name",
+          "isOrgan",
+          "state",
+          "rowVersion"
+        ],
+        "properties": {
+          "orgUnitId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "bodyId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "parentOrgUnitId": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "format": "uuid"
+              }
+            ]
+          },
+          "kindKey": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "isOrgan": {
+            "type": "boolean"
+          },
+          "state": {
+            "enum": [
+              "active",
+              "archived"
+            ]
+          },
+          "rowVersion": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "description": "DB-IDT-ORGUNIT: a unit of a body."
+      },
+      "BodyTree": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "bodies",
+          "orgUnits"
+        ],
+        "properties": {
+          "bodies": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Body"
+            }
+          },
+          "orgUnits": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OrgUnit"
+            }
+          }
+        },
+        "description": "Every body and org unit of the customer; the client builds the tree from parentBodyId / parentOrgUnitId."
+      },
+      "SeatHolder": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "tenureId",
+          "personId",
+          "startsOn",
+          "plannedEndOn"
+        ],
+        "properties": {
+          "tenureId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "personId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "startsOn": {
+            "type": "string",
+            "format": "date"
+          },
+          "plannedEndOn": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "format": "date"
+              }
+            ]
+          }
+        }
+      },
+      "Seat": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "seatId",
+          "bodyId",
+          "orgUnitId",
+          "title",
+          "seatKind",
+          "fillMode",
+          "holderCardinality",
+          "voting",
+          "state",
+          "holders"
+        ],
+        "properties": {
+          "seatId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "bodyId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "orgUnitId": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "format": "uuid"
+              }
+            ]
+          },
+          "title": {
+            "type": "string"
+          },
+          "seatKind": {
+            "enum": [
+              "voting_member",
+              "office",
+              "advisory"
+            ]
+          },
+          "fillMode": {
+            "enum": [
+              "direct_election",
+              "delegation",
+              "appointment"
+            ]
+          },
+          "holderCardinality": {
+            "enum": [
+              "single",
+              "multiple"
+            ]
+          },
+          "voting": {
+            "type": "boolean"
+          },
+          "state": {
+            "enum": [
+              "active",
+              "retired"
+            ]
+          },
+          "holders": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SeatHolder"
+            }
+          }
+        },
+        "description": "DB-IDT-SEAT with its holders today (open tenures that have started)."
+      },
+      "SeatList": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "bodyId",
+          "seats"
+        ],
+        "properties": {
+          "bodyId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "seats": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Seat"
+            }
+          }
+        }
+      },
+      "Tenure": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "tenureId",
+          "personId",
+          "wahlperiodeId",
+          "startsOn",
+          "plannedEndOn",
+          "endedOn",
+          "endReason",
+          "source"
+        ],
+        "properties": {
+          "tenureId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "personId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "wahlperiodeId": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "format": "uuid"
+              }
+            ]
+          },
+          "startsOn": {
+            "type": "string",
+            "format": "date"
+          },
+          "plannedEndOn": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "format": "date"
+              }
+            ]
+          },
+          "endedOn": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "format": "date"
+              }
+            ]
+          },
+          "endReason": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "enum": [
+                  "term_end",
+                  "resigned",
+                  "removed",
+                  "succeeded",
+                  "data_correction"
+                ]
+              }
+            ]
+          },
+          "source": {
+            "enum": [
+              "election",
+              "delegation",
+              "appointment",
+              "succession"
+            ]
+          }
+        },
+        "description": "DB-IDT-TENURE: one holding of a seat; the seat history is the list of these."
+      },
+      "SeatTenures": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "seatId",
+          "tenures"
+        ],
+        "properties": {
+          "seatId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "tenures": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Tenure"
+            }
+          }
+        }
+      },
+      "Membership": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "membershipId",
+          "personId",
+          "orgUnitId",
+          "participationKind",
+          "voting",
+          "validFrom",
+          "validUntil",
+          "wahlperiodeId",
+          "endReason",
+          "source"
+        ],
+        "properties": {
+          "membershipId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "personId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "orgUnitId": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "format": "uuid"
+              }
+            ]
+          },
+          "participationKind": {
+            "enum": [
+              "elected_member",
+              "non_voting_helper",
+              "employee",
+              "initiative_member",
+              "initiative_lead"
+            ]
+          },
+          "voting": {
+            "type": "boolean"
+          },
+          "validFrom": {
+            "type": "string",
+            "format": "date"
+          },
+          "validUntil": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "format": "date"
+              }
+            ]
+          },
+          "wahlperiodeId": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "format": "uuid"
+              }
+            ]
+          },
+          "endReason": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "enum": [
+                  "term_end",
+                  "resigned",
+                  "removed",
+                  "data_correction"
+                ]
+              }
+            ]
+          },
+          "source": {
+            "enum": [
+              "admin",
+              "control_panel",
+              "import",
+              "provisioning"
+            ]
+          }
+        },
+        "description": "DB-IDT-MEMBERSHIP. Carries the person by id only."
+      },
+      "MembershipList": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "bodyId",
+          "asOf",
+          "memberships"
+        ],
+        "properties": {
+          "bodyId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "asOf": {
+            "type": "string",
+            "format": "date"
+          },
+          "memberships": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Membership"
+            }
+          }
+        }
+      },
+      "Person": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "personId",
+          "displayName",
+          "email",
+          "accountState",
+          "pseudonym",
+          "invitedAt",
+          "activatedAt"
+        ],
+        "properties": {
+          "personId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "displayName": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string"
+              }
+            ]
+          },
+          "email": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string"
+              }
+            ]
+          },
+          "accountState": {
+            "enum": [
+              "invited",
+              "active",
+              "disabled",
+              "erased"
+            ]
+          },
+          "pseudonym": {
+            "type": "string"
+          },
+          "invitedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "activatedAt": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "format": "date-time"
+              }
+            ]
+          }
+        },
+        "description": "DB-IDT-PERSON. Personal data: served to the person themself only."
+      },
+      "Preference": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "personId",
+          "locale",
+          "displayDensity",
+          "colourScheme",
+          "lastBodyId",
+          "rowVersion",
+          "updatedByKind",
+          "updatedBy",
+          "effectiveLocale",
+          "stored"
+        ],
+        "properties": {
+          "personId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "locale": {
+            "enum": [
+              "de",
+              "en",
+              "follow_customer"
+            ]
+          },
+          "displayDensity": {
+            "enum": [
+              "standard",
+              "kompakt",
+              "gross"
+            ]
+          },
+          "colourScheme": {
+            "enum": [
+              "system",
+              "light",
+              "dark"
+            ]
+          },
+          "lastBodyId": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "format": "uuid"
+              }
+            ]
+          },
+          "rowVersion": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "updatedByKind": {
+            "enum": [
+              "person",
+              "system"
+            ]
+          },
+          "updatedBy": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "format": "uuid"
+              }
+            ]
+          },
+          "effectiveLocale": {
+            "enum": [
+              "de",
+              "en"
+            ]
+          },
+          "stored": {
+            "type": "boolean"
+          }
+        },
+        "description": "DB-IDT-PREFERENCE of the signed-in person; effectiveLocale resolves follow_customer through idt.customer_setting.default_locale. rowVersion 0 and stored false until the person first saves."
+      },
+      "PreferencePatch": {
+        "type": "object",
+        "additionalProperties": false,
+        "minProperties": 1,
+        "properties": {
+          "locale": {
+            "enum": [
+              "de",
+              "en",
+              "follow_customer"
+            ]
+          },
+          "displayDensity": {
+            "enum": [
+              "standard",
+              "kompakt",
+              "gross"
+            ]
+          },
+          "colourScheme": {
+            "enum": [
+              "system",
+              "light",
+              "dark"
+            ]
+          },
+          "lastBodyId": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "format": "uuid"
+              }
+            ]
+          }
+        }
+      },
+    "CreateBody": {
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "bodyId",
         "kindKey",
-        "name",
-        "shortName",
-        "parentBodyId",
-        "state",
-        "archivedAt",
-        "rowVersion"
+        "name"
       ],
       "properties": {
-        "bodyId": {
-          "type": "string",
-          "format": "uuid"
-        },
         "kindKey": {
-          "type": "string"
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]{1,39}$"
         },
         "name": {
-          "type": "string"
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
         },
         "shortName": {
           "oneOf": [
@@ -683,7 +1590,9 @@
               "type": "null"
             },
             {
-              "type": "string"
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 40
             }
           ]
         },
@@ -697,366 +1606,19 @@
               "format": "uuid"
             }
           ]
-        },
-        "state": {
-          "enum": [
-            "active",
-            "archived"
-          ]
-        },
-        "archivedAt": {
-          "oneOf": [
-            {
-              "type": "null"
-            },
-            {
-              "type": "string",
-              "format": "date-time"
-            }
-          ]
-        },
-        "rowVersion": {
-          "type": "integer",
-          "minimum": 1
-        }
-      },
-      "description": "DB-IDT-BODY: a Gremium, the authorisation scope."
-    },
-    "OrgUnit": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "orgUnitId",
-        "bodyId",
-        "parentOrgUnitId",
-        "kindKey",
-        "name",
-        "isOrgan",
-        "state",
-        "rowVersion"
-      ],
-      "properties": {
-        "orgUnitId": {
-          "type": "string",
-          "format": "uuid"
-        },
-        "bodyId": {
-          "type": "string",
-          "format": "uuid"
-        },
-        "parentOrgUnitId": {
-          "oneOf": [
-            {
-              "type": "null"
-            },
-            {
-              "type": "string",
-              "format": "uuid"
-            }
-          ]
-        },
-        "kindKey": {
-          "type": "string"
-        },
-        "name": {
-          "type": "string"
-        },
-        "isOrgan": {
-          "type": "boolean"
-        },
-        "state": {
-          "enum": [
-            "active",
-            "archived"
-          ]
-        },
-        "rowVersion": {
-          "type": "integer",
-          "minimum": 1
-        }
-      },
-      "description": "DB-IDT-ORGUNIT: a unit of a body."
-    },
-    "BodyTree": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "bodies",
-        "orgUnits"
-      ],
-      "properties": {
-        "bodies": {
-          "type": "array",
-          "items": {
-            "$ref": "#/components/schemas/Body"
-          }
-        },
-        "orgUnits": {
-          "type": "array",
-          "items": {
-            "$ref": "#/components/schemas/OrgUnit"
-          }
-        }
-      },
-      "description": "Every body and org unit of the customer; the client builds the tree from parentBodyId / parentOrgUnitId."
-    },
-    "SeatHolder": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "tenureId",
-        "personId",
-        "startsOn",
-        "plannedEndOn"
-      ],
-      "properties": {
-        "tenureId": {
-          "type": "string",
-          "format": "uuid"
-        },
-        "personId": {
-          "type": "string",
-          "format": "uuid"
-        },
-        "startsOn": {
-          "type": "string",
-          "format": "date"
-        },
-        "plannedEndOn": {
-          "oneOf": [
-            {
-              "type": "null"
-            },
-            {
-              "type": "string",
-              "format": "date"
-            }
-          ]
         }
       }
     },
-    "Seat": {
+    "StartMembership": {
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "seatId",
-        "bodyId",
-        "orgUnitId",
-        "title",
-        "seatKind",
-        "fillMode",
-        "holderCardinality",
-        "voting",
-        "state",
-        "holders"
-      ],
-      "properties": {
-        "seatId": {
-          "type": "string",
-          "format": "uuid"
-        },
-        "bodyId": {
-          "type": "string",
-          "format": "uuid"
-        },
-        "orgUnitId": {
-          "oneOf": [
-            {
-              "type": "null"
-            },
-            {
-              "type": "string",
-              "format": "uuid"
-            }
-          ]
-        },
-        "title": {
-          "type": "string"
-        },
-        "seatKind": {
-          "enum": [
-            "voting_member",
-            "office",
-            "advisory"
-          ]
-        },
-        "fillMode": {
-          "enum": [
-            "direct_election",
-            "delegation",
-            "appointment"
-          ]
-        },
-        "holderCardinality": {
-          "enum": [
-            "single",
-            "multiple"
-          ]
-        },
-        "voting": {
-          "type": "boolean"
-        },
-        "state": {
-          "enum": [
-            "active",
-            "retired"
-          ]
-        },
-        "holders": {
-          "type": "array",
-          "items": {
-            "$ref": "#/components/schemas/SeatHolder"
-          }
-        }
-      },
-      "description": "DB-IDT-SEAT with its holders today (open tenures that have started)."
-    },
-    "SeatList": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "bodyId",
-        "seats"
-      ],
-      "properties": {
-        "bodyId": {
-          "type": "string",
-          "format": "uuid"
-        },
-        "seats": {
-          "type": "array",
-          "items": {
-            "$ref": "#/components/schemas/Seat"
-          }
-        }
-      }
-    },
-    "Tenure": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "tenureId",
         "personId",
-        "wahlperiodeId",
-        "startsOn",
-        "plannedEndOn",
-        "endedOn",
-        "endReason",
-        "source"
-      ],
-      "properties": {
-        "tenureId": {
-          "type": "string",
-          "format": "uuid"
-        },
-        "personId": {
-          "type": "string",
-          "format": "uuid"
-        },
-        "wahlperiodeId": {
-          "oneOf": [
-            {
-              "type": "null"
-            },
-            {
-              "type": "string",
-              "format": "uuid"
-            }
-          ]
-        },
-        "startsOn": {
-          "type": "string",
-          "format": "date"
-        },
-        "plannedEndOn": {
-          "oneOf": [
-            {
-              "type": "null"
-            },
-            {
-              "type": "string",
-              "format": "date"
-            }
-          ]
-        },
-        "endedOn": {
-          "oneOf": [
-            {
-              "type": "null"
-            },
-            {
-              "type": "string",
-              "format": "date"
-            }
-          ]
-        },
-        "endReason": {
-          "oneOf": [
-            {
-              "type": "null"
-            },
-            {
-              "enum": [
-                "term_end",
-                "resigned",
-                "removed",
-                "succeeded",
-                "data_correction"
-              ]
-            }
-          ]
-        },
-        "source": {
-          "enum": [
-            "election",
-            "delegation",
-            "appointment",
-            "succession"
-          ]
-        }
-      },
-      "description": "DB-IDT-TENURE: one holding of a seat; the seat history is the list of these."
-    },
-    "SeatTenures": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "seatId",
-        "tenures"
-      ],
-      "properties": {
-        "seatId": {
-          "type": "string",
-          "format": "uuid"
-        },
-        "tenures": {
-          "type": "array",
-          "items": {
-            "$ref": "#/components/schemas/Tenure"
-          }
-        }
-      }
-    },
-    "Membership": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "membershipId",
-        "personId",
-        "orgUnitId",
         "participationKind",
         "voting",
-        "validFrom",
-        "validUntil",
-        "wahlperiodeId",
-        "endReason",
-        "source"
+        "validFrom"
       ],
       "properties": {
-        "membershipId": {
-          "type": "string",
-          "format": "uuid"
-        },
         "personId": {
           "type": "string",
           "format": "uuid"
@@ -1109,245 +1671,45 @@
               "format": "uuid"
             }
           ]
-        },
-        "endReason": {
-          "oneOf": [
-            {
-              "type": "null"
-            },
-            {
-              "enum": [
-                "term_end",
-                "resigned",
-                "removed",
-                "data_correction"
-              ]
-            }
-          ]
-        },
-        "source": {
-          "enum": [
-            "admin",
-            "control_panel",
-            "import",
-            "provisioning"
-          ]
-        }
-      },
-      "description": "DB-IDT-MEMBERSHIP. Carries the person by id only."
-    },
-    "MembershipList": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "bodyId",
-        "asOf",
-        "memberships"
-      ],
-      "properties": {
-        "bodyId": {
-          "type": "string",
-          "format": "uuid"
-        },
-        "asOf": {
-          "type": "string",
-          "format": "date"
-        },
-        "memberships": {
-          "type": "array",
-          "items": {
-            "$ref": "#/components/schemas/Membership"
-          }
         }
       }
     },
-    "Person": {
+    "InvitePerson": {
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "personId",
-        "displayName",
         "email",
-        "accountState",
-        "pseudonym",
-        "invitedAt",
-        "activatedAt"
+        "displayName"
       ],
       "properties": {
-        "personId": {
+        "email": {
           "type": "string",
-          "format": "uuid"
+          "minLength": 3,
+          "maxLength": 254
         },
         "displayName": {
-          "oneOf": [
-            {
-              "type": "null"
-            },
-            {
-              "type": "string"
-            }
-          ]
-        },
-        "email": {
-          "oneOf": [
-            {
-              "type": "null"
-            },
-            {
-              "type": "string"
-            }
-          ]
-        },
-        "accountState": {
-          "enum": [
-            "invited",
-            "active",
-            "disabled",
-            "erased"
-          ]
-        },
-        "pseudonym": {
-          "type": "string"
-        },
-        "invitedAt": {
           "type": "string",
-          "format": "date-time"
-        },
-        "activatedAt": {
-          "oneOf": [
-            {
-              "type": "null"
-            },
-            {
-              "type": "string",
-              "format": "date-time"
-            }
-          ]
+          "minLength": 1,
+          "maxLength": 200
         }
-      },
-      "description": "DB-IDT-PERSON. Personal data: served to the person themself only."
+      }
     },
-    "Preference": {
+    "Written": {
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "personId",
-        "locale",
-        "displayDensity",
-        "colourScheme",
-        "lastBodyId",
-        "rowVersion",
-        "updatedByKind",
-        "updatedBy",
-        "effectiveLocale",
-        "stored"
+        "id",
+        "rowVersion"
       ],
+      "description": "The id and row version of the aggregate the write created.",
       "properties": {
-        "personId": {
+        "id": {
           "type": "string",
           "format": "uuid"
-        },
-        "locale": {
-          "enum": [
-            "de",
-            "en",
-            "follow_customer"
-          ]
-        },
-        "displayDensity": {
-          "enum": [
-            "standard",
-            "kompakt",
-            "gross"
-          ]
-        },
-        "colourScheme": {
-          "enum": [
-            "system",
-            "light",
-            "dark"
-          ]
-        },
-        "lastBodyId": {
-          "oneOf": [
-            {
-              "type": "null"
-            },
-            {
-              "type": "string",
-              "format": "uuid"
-            }
-          ]
         },
         "rowVersion": {
           "type": "integer",
-          "minimum": 0
-        },
-        "updatedByKind": {
-          "enum": [
-            "person",
-            "system"
-          ]
-        },
-        "updatedBy": {
-          "oneOf": [
-            {
-              "type": "null"
-            },
-            {
-              "type": "string",
-              "format": "uuid"
-            }
-          ]
-        },
-        "effectiveLocale": {
-          "enum": [
-            "de",
-            "en"
-          ]
-        },
-        "stored": {
-          "type": "boolean"
-        }
-      },
-      "description": "DB-IDT-PREFERENCE of the signed-in person; effectiveLocale resolves follow_customer through idt.customer_setting.default_locale. rowVersion 0 and stored false until the person first saves."
-    },
-    "PreferencePatch": {
-      "type": "object",
-      "additionalProperties": false,
-      "minProperties": 1,
-      "properties": {
-        "locale": {
-          "enum": [
-            "de",
-            "en",
-            "follow_customer"
-          ]
-        },
-        "displayDensity": {
-          "enum": [
-            "standard",
-            "kompakt",
-            "gross"
-          ]
-        },
-        "colourScheme": {
-          "enum": [
-            "system",
-            "light",
-            "dark"
-          ]
-        },
-        "lastBodyId": {
-          "oneOf": [
-            {
-              "type": "null"
-            },
-            {
-              "type": "string",
-              "format": "uuid"
-            }
-          ]
+          "minimum": 1
         }
       }
     }

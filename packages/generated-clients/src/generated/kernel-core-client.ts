@@ -106,7 +106,11 @@ export interface paths {
         /** The memberships of a body valid on a day */
         get: operations["listBodyMemberships"];
         put?: never;
-        post?: never;
+        /**
+         * Starts a membership in a body
+         * @description A person's write: asked of the WriteAuthorizer first. The shipped authorizer is default deny (Q4), so this answers 403 until TASK-081 binds the PDP; nothing is written and no event is emitted on a refusal.
+         */
+        post: operations["startMembership"];
         delete?: never;
         options?: never;
         head?: never;
@@ -159,6 +163,46 @@ export interface paths {
         get: operations["getPerson"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/bodies": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Creates a body (a Gremium)
+         * @description A person's write: asked of the WriteAuthorizer first. The shipped authorizer is default deny (Q4), so this answers 403 until TASK-081 binds the PDP; nothing is written and no event is emitted on a refusal.
+         */
+        post: operations["createBody"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/persons": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Invites a person
+         * @description A person's write: asked of the WriteAuthorizer first. The shipped authorizer is default deny (Q4), so this answers 403 until TASK-081 binds the PDP; nothing is written and no event is emitted on a refusal.
+         */
+        post: operations["invitePerson"];
         delete?: never;
         options?: never;
         head?: never;
@@ -369,6 +413,34 @@ export interface components {
             colourScheme?: "system" | "light" | "dark";
             lastBodyId?: null | string;
         };
+        CreateBody: {
+            kindKey: string;
+            name: string;
+            shortName?: null | string;
+            parentBodyId?: null | string;
+        };
+        StartMembership: {
+            /** Format: uuid */
+            personId: string;
+            orgUnitId?: null | string;
+            /** @enum {unknown} */
+            participationKind: "elected_member" | "non_voting_helper" | "employee" | "initiative_member" | "initiative_lead";
+            voting: boolean;
+            /** Format: date */
+            validFrom: string;
+            validUntil?: null | string;
+            wahlperiodeId?: null | string;
+        };
+        InvitePerson: {
+            email: string;
+            displayName: string;
+        };
+        /** @description The id and row version of the aggregate the write created. */
+        Written: {
+            /** Format: uuid */
+            id: string;
+            rowVersion: number;
+        };
     };
     responses: {
         /** @description No, or an unacceptable, credential for the resolved customer. */
@@ -419,6 +491,15 @@ export interface components {
         };
         /** @description The request did not match the operation's schema. */
         BadRequest: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description The write conflicts with the current state (an overlapping validity, a taken e-mail address, a stale row version). */
+        Conflict: {
             headers: {
                 [name: string]: unknown;
             };
@@ -622,6 +703,45 @@ export interface operations {
             503: components["responses"]["Unavailable"];
         };
     };
+    startMembership: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The customer's host, whole (Tenancy D1). Must equal Host. Absent on a module-caller request. */
+                "x-forwarded-host"?: components["parameters"]["ForwardedHost"];
+                /** @description The proxy shared secret (TENANT_PROXY_SHARED_SECRET). Absent on a module-caller request. */
+                "x-proxy-trust"?: components["parameters"]["ProxyTrust"];
+            };
+            path: {
+                /** @description A body of the resolved customer. */
+                bodyId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StartMembership"];
+            };
+        };
+        responses: {
+            /** @description Created. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Written"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["Unavailable"];
+        };
+    };
     listSeatTenures: {
         parameters: {
             query?: never;
@@ -749,6 +869,78 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["Unavailable"];
+        };
+    };
+    createBody: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The customer's host, whole (Tenancy D1). Must equal Host. Absent on a module-caller request. */
+                "x-forwarded-host"?: components["parameters"]["ForwardedHost"];
+                /** @description The proxy shared secret (TENANT_PROXY_SHARED_SECRET). Absent on a module-caller request. */
+                "x-proxy-trust"?: components["parameters"]["ProxyTrust"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateBody"];
+            };
+        };
+        responses: {
+            /** @description Created. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Written"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["Unavailable"];
+        };
+    };
+    invitePerson: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The customer's host, whole (Tenancy D1). Must equal Host. Absent on a module-caller request. */
+                "x-forwarded-host"?: components["parameters"]["ForwardedHost"];
+                /** @description The proxy shared secret (TENANT_PROXY_SHARED_SECRET). Absent on a module-caller request. */
+                "x-proxy-trust"?: components["parameters"]["ProxyTrust"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["InvitePerson"];
+            };
+        };
+        responses: {
+            /** @description Created. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Written"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
             500: components["responses"]["InternalError"];
             503: components["responses"]["Unavailable"];
         };
