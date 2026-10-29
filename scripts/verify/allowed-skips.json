@@ -48,6 +48,12 @@
       "file": "packages/edge-routers/test/sync.test.ts",
       "reason": "TASK-034: one it.skipIf(!POSIX_MODE_BITS) case asserts the second sync run is a no-op including file modes, which NTFS cannot report; it runs on a POSIX host.",
       "maxCount": 1
+    },
+    {
+      "suite": "unit",
+      "file": "scripts/ci-local/tree-claim.test.mjs",
+      "reason": "one test is skipped unless CI_LOCAL_VERTICAL points at a checkout of a vertical, which a kernel-only runner does not have. The claim (every vertical test file is owned by a suite in scripts/ci-local/suites.json) is proven by `scripts/ci-local/snapshot.mjs --vertical <path>`, which runs the same census on every real reading against the vertical's own tree; the kernel half of the claim runs unskipped in this file.",
+      "maxCount": 1
     }
   ]
 }

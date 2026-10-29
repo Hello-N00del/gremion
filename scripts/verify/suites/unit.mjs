@@ -81,7 +81,10 @@ export function nodeTestParts({ cwd, files }) {
     if (res.code !== 0) {
       return { label, unparseable: true, detail: `node --test exited ${res.code ?? `on signal ${res.signal}`} with no failed test in its summary -- untrusted\n${tail(out)}` }
     }
-    return { label, ...summary }
+    // One process per file, so every skip node reports belongs to THIS file:
+    // attribute it, or lib/skips.mjs would judge it with a zero budget under an
+    // unattributed key and no allowed-skips.json entry could ever cover it.
+    return { label, ...summary, ...(summary.skipped > 0 ? { skipsByFile: { [file.split(path.sep).join('/')]: summary.skipped } } : {}) }
   })
 }
 

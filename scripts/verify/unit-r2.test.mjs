@@ -1,5 +1,7 @@
 // TASK-045 round 2: suites/unit.mjs sub-checks against real subprocesses.
 import assert from 'node:assert/strict'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
 import { combineParts, evaluateSuite } from './lib/guard.mjs'
@@ -26,6 +28,28 @@ test('nodeTestParts reports a file with zero declared tests as an EMPTY part, wh
   const verdict = evaluateSuite(combineParts(parts))
   assert.equal(verdict.status, 'fail')
   assert.match(verdict.reason, /collected 0 tests in: node --test node-zero\/zero\.test\.mjs/)
+})
+
+// A skip in a node --test file used to come back unattributed, so lib/skips.mjs
+// booked it under a key no allowed-skips.json entry can match: listing a file
+// there could never take effect for unit:node. One process runs per file, so the
+// skips are that file's own.
+test('nodeTestParts attributes the skips of a file to that file, so the per-file allow-list can match them', () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'node-skip-'))
+  try {
+    writeFileSync(
+      path.join(dir, 'one-skip.test.mjs'),
+      ["import test from 'node:test'", "test('runs', () => {})", "test('does not run here', { skip: 'fixture' }, () => {})", ''].join(String.fromCharCode(10)),
+    )
+    const parts = nodeTestParts({ cwd: dir, files: ['one-skip.test.mjs'] })
+    assert.equal(parts.length, 1)
+    assert.deepEqual(
+      { collected: parts[0].collected, skipped: parts[0].skipped, skipsByFile: parts[0].skipsByFile },
+      { collected: 2, skipped: 1, skipsByFile: { 'one-skip.test.mjs': 1 } },
+    )
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
 })
 
 test('nodeTestParts with no files at all is one empty part, never nothing', () => {
