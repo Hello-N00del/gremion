@@ -39,6 +39,7 @@ export const RECONCILE_CHECK_NAMES = [
   'gremion-ui-client', // §4-1  the gremion-ui client exists
   'gremion-ui-acr-mapper', // §4-1  acr protocol-mapper on gremion-ui
   'gremion-ui-sub-mapper', // §4-1  uid sub protocol-mapper on gremion-ui
+  'gremion-ui-auth-time-mapper', // TASK-081  auth_time claim (user-session note AUTH_TIME) on gremion-ui: no claim, no fresh step-up
   'bearer-clients-sub', // TASK-033-a  every client whose tokens reach the Bearer branch issues `sub` in its access token
   'gremion-ui-redirect-uris', // §4-4  exact per-tenant redirect URIs (#240)
   'gremion-ui-web-origins', // §4-4  exact per-tenant web-origins (#240)
@@ -220,6 +221,8 @@ interface ClientRep {
   webOrigins?: string[]
 }
 interface MapperRep {
+  id?: string
+  name?: string
   protocolMapper?: string
   config?: Record<string, string>
 }
@@ -398,6 +401,36 @@ function isAccessTokenSubMapper(m: MapperRep): boolean {
   return issuesSub && m.config?.['access.token.claim'] === 'true'
 }
 
+/**
+ * The auth_time mapper the base template's gremion-ui client carries (docker/keycloak/realm-export.base.json). Keycloak 26.6
+ * emits no auth_time without it, and TASK-081's step-up (TRD-090: acr loa2 AND auth_time within 300 s) then refuses every
+ * privileged grant. A realm created before the mapper existed never got it from the template; reconcile reports and repairs it.
+ */
+const AUTH_TIME_MAPPER_REP = {
+  name: 'auth_time',
+  protocol: 'openid-connect',
+  protocolMapper: 'oidc-usersessionmodel-note-mapper',
+  consentRequired: false,
+  config: {
+    'user.session.note': 'AUTH_TIME',
+    'claim.name': 'auth_time',
+    'jsonType.label': 'long',
+    'id.token.claim': 'true',
+    'access.token.claim': 'true',
+    'introspection.token.claim': 'true',
+  },
+}
+
+/** Is this mapper the auth_time one in the form step-up needs (the claim reaches the access token)? */
+function isAuthTimeMapper(m: MapperRep): boolean {
+  return (
+    m.protocolMapper === 'oidc-usersessionmodel-note-mapper' &&
+    m.config?.['user.session.note'] === 'AUTH_TIME' &&
+    m.config?.['claim.name'] === 'auth_time' &&
+    m.config?.['access.token.claim'] === 'true'
+  )
+}
+
 /** The mapper reconcile adds when a Bearer client has no sub: the one the base template's gremion-ui carries. */
 const SUB_MAPPER_REP = {
   name: 'sub',
@@ -527,6 +560,7 @@ export async function reconcileRealm(transport: KcTransport, opts: ReconcileOpti
     // (a missing client is itself a contract violation; verify exits 1).
     fail('gremion-ui-acr-mapper', 'gremion-ui client absent — acr mapper cannot be verified')
     fail('gremion-ui-sub-mapper', 'gremion-ui client absent — sub mapper cannot be verified')
+    fail('gremion-ui-auth-time-mapper', 'gremion-ui client absent — auth_time mapper cannot be verified')
     fail('gremion-ui-redirect-uris', 'gremion-ui client absent — redirect URIs cannot be verified')
     fail('gremion-ui-web-origins', 'gremion-ui client absent — web-origins cannot be verified')
     fail('gremion-ui-pkce', 'gremion-ui client absent — PKCE cannot be verified')
@@ -547,6 +581,11 @@ export async function reconcileRealm(transport: KcTransport, opts: ReconcileOpti
       pass('gremion-ui-sub-mapper')
     } else {
       fail('gremion-ui-sub-mapper', 'gremion-ui has no uid sub-mapper (oidc-usermodel-property-mapper -> sub)')
+    }
+    if (mappers.some(isAuthTimeMapper)) {
+      pass('gremion-ui-auth-time-mapper')
+    } else {
+      fail('gremion-ui-auth-time-mapper', 'gremion-ui has no auth_time mapper (oidc-usersessionmodel-note-mapper AUTH_TIME -> auth_time in the access token): a privileged grant cannot pass its fresh step-up (TASK-081)')
     }
 
     const expected = expectedUiUris(base, apexDomain, tenantHost)
@@ -755,6 +794,17 @@ export async function reconcileRealm(transport: KcTransport, opts: ReconcileOpti
       GREMION_ADMIN_SA_REALM_ROLES,
     )
     applied.push('gremion-admin-sa-roles')
+  }
+
+  // TASK-081: the auth_time mapper on gremion-ui. A drifted mapper of that name is updated in place (a second POST would
+  // 409 on the name); a missing one is added. The post-apply re-verify below reads the result.
+  if (failedNames.has('gremion-ui-auth-time-mapper') && ui?.id) {
+    const live = (await get<MapperRep[]>(`/clients/${ui.id}/protocol-mappers/models`)) ?? []
+    const existing = live.find((m) => m.name === 'auth_time' && m.id)
+    const path = `/admin/realms/${realmSeg(realm)}/clients/${ui.id}/protocol-mappers/models`
+    if (existing?.id) await transport('PUT', `${path}/${existing.id}`, { ...AUTH_TIME_MAPPER_REP, id: existing.id })
+    else await transport('POST', path, AUTH_TIME_MAPPER_REP)
+    applied.push('gremion-ui-auth-time-mapper')
   }
 
   // TASK-033-a: a Bearer client without `sub` gets it. The realm's own `basic` scope when it has one (Keycloak
