@@ -8,22 +8,44 @@ import path from 'node:path'
 
 export const ALLOWED_SKIPS_PATH = path.join(import.meta.dirname, '..', 'allowed-skips.json')
 
+/** The values process.platform takes; an entry's optional `platforms` may name only these. */
+export const KNOWN_PLATFORMS = ['aix', 'android', 'darwin', 'freebsd', 'linux', 'openbsd', 'sunos', 'win32']
+
 /**
- * @returns {{entries: Array<{suite: string, file: string, reason: string, maxCount: number}>}}
+ * An entry may carry `platforms` (process.platform values): its budget is then granted only
+ * on those platforms. A skip that only exists on one OS (NTFS has no mode bits, an unprivileged
+ * Windows host cannot symlink) must not stay spendable on the others, where it would hide a
+ * real skip. An entry without `platforms` is granted everywhere.
+ *
+ * @param {string} [file] allow-list to read; the repo's own unless a test points elsewhere.
+ * @returns {{entries: Array<{suite: string, file: string, reason: string, maxCount: number, platforms?: string[]}>}}
  */
-export function loadAllowedSkips() {
-  const text = readFileSync(ALLOWED_SKIPS_PATH, 'utf8')
+export function loadAllowedSkips(file = ALLOWED_SKIPS_PATH) {
+  const text = readFileSync(file, 'utf8')
   const data = JSON.parse(text)
   if (!Array.isArray(data.entries)) {
-    throw new Error(`${ALLOWED_SKIPS_PATH}: expected {entries: [...]}`)
+    throw new Error(`${file}: expected {entries: [...]}`)
   }
   for (const e of data.entries) {
     if (!e.suite || !e.file || !e.reason || typeof e.maxCount !== 'number') {
-      throw new Error(`${ALLOWED_SKIPS_PATH}: entry missing suite/file/reason/maxCount: ${JSON.stringify(e)}`)
+      throw new Error(`${file}: entry missing suite/file/reason/maxCount: ${JSON.stringify(e)}`)
+    }
+    if (e.platforms !== undefined) {
+      if (!Array.isArray(e.platforms) || e.platforms.length === 0) {
+        throw new Error(`${file}: platforms must be a non-empty array of process.platform values: ${JSON.stringify(e)}`)
+      }
+      for (const p of e.platforms) {
+        if (!KNOWN_PLATFORMS.includes(p)) {
+          throw new Error(`${file}: unknown platform "${String(p)}" (expected one of ${KNOWN_PLATFORMS.join(', ')}): ${JSON.stringify(e)}`)
+        }
+      }
     }
   }
   return data
 }
+
+/** Does this entry grant its budget on `platform`? */
+const appliesOnPlatform = (entry, platform) => entry.platforms === undefined || entry.platforms.includes(platform)
 
 /**
  * CI legs run PART suites ("unit:ports", "integration:vitest") but the
@@ -42,8 +64,8 @@ function entryAppliesToSuite(entrySuite, suiteName) {
  * Kept for suites that cannot yet attribute a skip to one file (see
  * checkSkipsByFile below for the per-file enforcement Q3 actually asks
  * for). */
-export function allowedSkipsForSuite(suiteName, data = loadAllowedSkips()) {
-  return data.entries.filter((e) => entryAppliesToSuite(e.suite, suiteName)).reduce((sum, e) => sum + e.maxCount, 0)
+export function allowedSkipsForSuite(suiteName, data = loadAllowedSkips(), platform = process.platform) {
+  return data.entries.filter((e) => entryAppliesToSuite(e.suite, suiteName) && appliesOnPlatform(e, platform)).reduce((sum, e) => sum + e.maxCount, 0)
 }
 
 /**
@@ -63,16 +85,18 @@ export function allowedSkipsForSuite(suiteName, data = loadAllowedSkips()) {
  *   node --test) should fold the remainder into a synthetic key that matches
  *   no allow-list entry, so it is judged with a zero budget rather than
  *   silently uncounted.
- * @param {{entries: Array<{suite: string, file: string, reason: string, maxCount: number}>}} [data]
+ * @param {{entries: Array<{suite: string, file: string, reason: string, maxCount: number, platforms?: string[]}>}} [data]
+ * @param {string} [platform] process.platform of the run being judged; only the entries that
+ *   apply there contribute a budget. Injected by tests, never guessed from a fixture.
  * @returns {string[]} one message per file that exceeded its own budget;
  *   empty when every observed skip is within its file's allowance.
  */
-export function checkSkipsByFile(suiteName, skipsByFile, data = loadAllowedSkips()) {
+export function checkSkipsByFile(suiteName, skipsByFile, data = loadAllowedSkips(), platform = process.platform) {
   const violations = []
   for (const [file, count] of Object.entries(skipsByFile)) {
     if (!(count > 0)) continue
     const allowed = data.entries
-      .filter((e) => entryAppliesToSuite(e.suite, suiteName) && e.file === file)
+      .filter((e) => entryAppliesToSuite(e.suite, suiteName) && e.file === file && appliesOnPlatform(e, platform))
       .reduce((sum, e) => sum + e.maxCount, 0)
     if (count > allowed) {
       violations.push(`${file}: ${count} skip(s), exceeds the allowed ${allowed} for this file (see scripts/verify/allowed-skips.json)`)

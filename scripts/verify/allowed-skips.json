@@ -1,5 +1,5 @@
 {
-  "$comment": "TASK-045 Q3 (recommended default, applied). A skip inside an otherwise-passing suite fails it unless named here with a reason and a maxCount (summed per suite by lib/skips.mjs#allowedSkipsForSuite). An all-skipped suite fails regardless of this file (lib/guard.mjs evaluateSuite rule 5). Adding an entry here is a real grant, not a formality -- name the exact file and why it cannot run in this suite.",
+  "$comment": "TASK-045 Q3 (recommended default, applied). A skip inside an otherwise-passing suite fails it unless named here with a reason and a maxCount (summed per suite by lib/skips.mjs#allowedSkipsForSuite). An all-skipped suite fails regardless of this file (lib/guard.mjs evaluateSuite rule 5). Adding an entry here is a real grant, not a formality -- name the exact file and why it cannot run in this suite. An entry with `platforms` (process.platform values) grants its budget only there: a skip that only exists on Windows must not stay spendable on the Linux runner, where it would hide a real one; an entry without it is granted everywhere.",
   "entries": [
     {
       "suite": "unit",
@@ -11,7 +11,8 @@
       "suite": "unit",
       "file": "gremion-ui/scripts/install-git-hooks.test.ts",
       "reason": "one it.skipIf(isWindows) case asserts a POSIX executable bit (0755); NTFS reports every file 0755 regardless, so the assertion cannot mean anything on a Windows unit run.",
-      "maxCount": 1
+      "maxCount": 1,
+      "platforms": ["win32"]
     },
     {
       "suite": "integration",
@@ -23,31 +24,36 @@
       "suite": "unit",
       "file": "packages/storage/src/local.test.ts",
       "reason": "one it.skipIf(!canSymlinkFiles) case exercises a symlinked-file refusal; creating a symlink on Windows needs Developer Mode or elevation, so this host cannot prove the case either way. Collected via gremion-ui's vite include ('../packages/storage/src/**/*.test.ts').",
-      "maxCount": 1
+      "maxCount": 1,
+      "platforms": ["win32"]
     },
     {
       "suite": "isolation",
       "file": "packages/storage/src/local.test.ts",
       "reason": "same it.skipIf(!canSymlinkFiles) case as the \"unit\" entry above, additionally collected here because the isolation suite runs @gremion/storage's own `test` script directly.",
-      "maxCount": 1
+      "maxCount": 1,
+      "platforms": ["win32"]
     },
     {
       "suite": "unit",
       "file": "gremion-ui/src/lib/server/boundary/contracts-gate-staged.test.ts",
       "reason": "one it.skipIf(process.platform === 'win32') case asserts the exact docker invocation used to pin the oasdiff image; the assertion is Windows-path-shape-specific and does not apply on this host.",
-      "maxCount": 1
+      "maxCount": 1,
+      "platforms": ["win32"]
     },
     {
       "suite": "unit",
       "file": "packages/edge-routers/test/emit.test.ts",
       "reason": "TASK-034: two it.skipIf(!POSIX_MODE_BITS) cases assert the emitted router file's exact 0644 mode (NTFS reports no POSIX mode bits, so 'unchanged' vs 'mode repaired' cannot be told apart on win32), and one it.skipIf(!CAN_SYMLINK) case plants a symlink at the target name (needs Developer Mode or elevation on Windows). All three run on a POSIX host.",
-      "maxCount": 3
+      "maxCount": 3,
+      "platforms": ["win32"]
     },
     {
       "suite": "unit",
       "file": "packages/edge-routers/test/sync.test.ts",
       "reason": "TASK-034: one it.skipIf(!POSIX_MODE_BITS) case asserts the second sync run is a no-op including file modes, which NTFS cannot report; it runs on a POSIX host.",
-      "maxCount": 1
+      "maxCount": 1,
+      "platforms": ["win32"]
     },
     {
       "suite": "unit",

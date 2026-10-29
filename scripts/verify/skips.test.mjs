@@ -3,6 +3,9 @@
 // (the old suite-wide sum) is kept only as a fallback and tested for its own
 // documented behavior, not as if it were the real rule.
 import assert from 'node:assert/strict'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
 import { test } from 'node:test'
 import { allowedSkipsForSuite, checkSkipsByFile, loadAllowedSkips } from './lib/skips.mjs'
 
@@ -118,4 +121,116 @@ test('the real allowed-skips.json grants kernel-api-dir.test.ts the one root-onl
   const v = checkSkipsByFile('unit', { [file]: 2 }, data)
   assert.equal(v.length, 1)
   assert.match(v[0], /2 skip\(s\), exceeds the allowed 1/)
+})
+
+// ── platform-scoped budgets ─────────────────────────────────────────────────
+// A budget granted for a skip that only exists on one OS must not be spendable on another: a
+// Windows-only skip granted platform-blind is also granted on the Linux runner, where a real skip
+// would hide behind it. `platforms` (process.platform values) scopes an entry; the platform is
+// injected here, never read from the host running the tests.
+const SCOPED = {
+  entries: [
+    { suite: 'unit', file: 'a.test.ts', reason: 'NTFS has no mode bits', maxCount: 2, platforms: ['win32'] },
+    { suite: 'unit', file: 'b.test.ts', reason: 'needs a live broker', maxCount: 3 },
+    { suite: 'unit', file: 'c.test.ts', reason: 'unscoped half', maxCount: 1 },
+    { suite: 'unit', file: 'c.test.ts', reason: 'scoped half', maxCount: 2, platforms: ['win32', 'darwin'] },
+  ],
+}
+
+test('an entry with `platforms` grants its budget only on a listed platform', () => {
+  assert.deepEqual(checkSkipsByFile('unit', { 'a.test.ts': 2 }, SCOPED, 'win32'), [])
+  const v = checkSkipsByFile('unit', { 'a.test.ts': 1 }, SCOPED, 'linux')
+  assert.equal(v.length, 1)
+  assert.match(v[0], /a\.test\.ts: 1 skip\(s\), exceeds the allowed 0/)
+})
+
+test('an entry without `platforms` is granted on every platform (today\'s behaviour)', () => {
+  for (const platform of ['win32', 'linux', 'darwin']) {
+    assert.deepEqual(checkSkipsByFile('unit', { 'b.test.ts': 3 }, SCOPED, platform), [], platform)
+  }
+})
+
+test('two entries for one file sum only the ones that apply on this platform', () => {
+  assert.deepEqual(checkSkipsByFile('unit', { 'c.test.ts': 3 }, SCOPED, 'darwin'), [])
+  assert.deepEqual(checkSkipsByFile('unit', { 'c.test.ts': 1 }, SCOPED, 'linux'), [])
+  const v = checkSkipsByFile('unit', { 'c.test.ts': 2 }, SCOPED, 'linux')
+  assert.equal(v.length, 1)
+  assert.match(v[0], /2 skip\(s\), exceeds the allowed 1/)
+})
+
+test('allowedSkipsForSuite counts only the entries that apply on the given platform', () => {
+  assert.equal(allowedSkipsForSuite('unit', SCOPED, 'win32'), 2 + 3 + 1 + 2)
+  assert.equal(allowedSkipsForSuite('unit', SCOPED, 'linux'), 3 + 1)
+  assert.equal(allowedSkipsForSuite('unit:ports', SCOPED, 'linux'), 3 + 1)
+})
+
+test('without an explicit platform the host\'s own is used', () => {
+  const here = checkSkipsByFile('unit', { 'a.test.ts': 2 }, SCOPED)
+  assert.equal(here.length, process.platform === 'win32' ? 0 : 1)
+  assert.equal(allowedSkipsForSuite('unit', SCOPED), allowedSkipsForSuite('unit', SCOPED, process.platform))
+})
+
+/** loadAllowedSkips on a one-off file holding `entries`. */
+function loadFrom(entries) {
+  const dir = mkdtempSync(path.join(tmpdir(), 'allowed-skips-'))
+  try {
+    const file = path.join(dir, 'allowed-skips.json')
+    writeFileSync(file, JSON.stringify({ entries }))
+    return loadAllowedSkips(file)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+}
+const entryWith = (platforms) => ({ suite: 'unit', file: 'a.test.ts', reason: 'r', maxCount: 1, platforms })
+
+test('loadAllowedSkips accepts known platform names', () => {
+  const data = loadFrom([entryWith(['win32']), entryWith(['linux', 'darwin'])])
+  assert.deepEqual(data.entries[0].platforms, ['win32'])
+})
+
+test('loadAllowedSkips refuses a platform name node never reports (a typo would grant nothing, silently)', () => {
+  assert.throws(() => loadFrom([entryWith(['windows'])]), /unknown platform "windows"/)
+  assert.throws(() => loadFrom([entryWith(['Win32'])]), /unknown platform "Win32"/)
+})
+
+test('loadAllowedSkips refuses `platforms` that is not a non-empty list of strings', () => {
+  assert.throws(() => loadFrom([entryWith('win32')]), /platforms must be a non-empty array/)
+  assert.throws(() => loadFrom([entryWith([])]), /platforms must be a non-empty array/)
+  assert.throws(() => loadFrom([entryWith([7])]), /unknown platform "7"/)
+})
+
+// The real list: every skip that only exists on Windows is scoped to it, so the Linux runner
+// grants it nothing; the cross-platform ones stay unscoped.
+const WINDOWS_ONLY = [
+  { suite: 'unit', file: 'packages/edge-routers/test/emit.test.ts' },
+  { suite: 'unit', file: 'packages/edge-routers/test/sync.test.ts' },
+  { suite: 'unit', file: 'gremion-ui/scripts/install-git-hooks.test.ts' },
+  { suite: 'unit', file: 'packages/storage/src/local.test.ts' },
+  { suite: 'isolation', file: 'packages/storage/src/local.test.ts' },
+  { suite: 'unit', file: 'gremion-ui/src/lib/server/boundary/contracts-gate-staged.test.ts' },
+]
+
+test('the real allowed-skips.json scopes every Windows-only skip to win32', () => {
+  const data = loadAllowedSkips()
+  for (const { suite, file } of WINDOWS_ONLY) {
+    const entry = data.entries.find((e) => e.suite === suite && e.file === file)
+    assert.ok(entry, `no entry for ${suite} ${file}`)
+    assert.deepEqual(entry.platforms, ['win32'], `${suite} ${file} must be scoped to win32`)
+    assert.deepEqual(checkSkipsByFile(suite, { [file]: entry.maxCount }, data, 'win32'), [], `${file} on win32`)
+    assert.equal(checkSkipsByFile(suite, { [file]: 1 }, data, 'linux').length, 1, `${file} must grant nothing on linux`)
+  }
+})
+
+test('the real allowed-skips.json leaves the cross-platform skips unscoped', () => {
+  const data = loadAllowedSkips()
+  for (const file of [
+    'packages/ports/src/nats-broker.integration.test.ts',
+    'gremion-ui/tests/integration/municipal-acceptance.integration.test.ts',
+    'scripts/ci-local/tree-claim.test.mjs',
+  ]) {
+    const entry = data.entries.find((e) => e.file === file)
+    assert.ok(entry, `no entry for ${file}`)
+    assert.equal(entry.platforms, undefined, `${file} skips on every platform and must stay unscoped`)
+    assert.deepEqual(checkSkipsByFile(entry.suite, { [file]: 1 }, data, 'linux'), [], file)
+  }
 })
