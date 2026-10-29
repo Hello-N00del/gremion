@@ -15,16 +15,23 @@ const read = (f: string) => JSON.parse(readFileSync(fileURLToPath(new URL(`../..
 
 describe('step-up clients emit auth_time (Keycloak 26.6.1 measurement)', () => {
   for (const [file, clientId] of [['realm-export.base.json', 'gremion-ui']] as const) {
-    it(`${file}: ${clientId} carries an auth_time session-note mapper into the id AND access token`, () => {
+    const mapperOf = () => {
       const client = read(file).clients.find((c) => c.clientId === clientId)
       expect(client, `${clientId} in ${file}`).toBeDefined()
       const m = (client!.protocolMappers ?? []).find((x) => x.config['claim.name'] === 'auth_time')
       expect(m, 'auth_time mapper').toBeDefined()
-      expect(m!.protocolMapper).toBe('oidc-usersessionmodel-note-mapper')
-      expect(m!.config['user.session.note']).toBe('AUTH_TIME')
-      expect(m!.config['jsonType.label']).toBe('long')
-      expect(m!.config['id.token.claim']).toBe('true')
-      expect(m!.config['access.token.claim']).toBe('true')
+      return m!
+    }
+    it(`${file}: ${clientId} carries an auth_time mapper that reads the session's AUTH_TIME note`, () => {
+      const m = mapperOf()
+      expect(m.protocolMapper).toBe('oidc-usersessionmodel-note-mapper')
+      expect(m.config['user.session.note']).toBe('AUTH_TIME')
+    })
+    it(`${file}: ${clientId}'s auth_time mapper emits a numeric claim into the id AND the access token`, () => {
+      const m = mapperOf()
+      expect(m.config['jsonType.label']).toBe('long')
+      expect(m.config['id.token.claim']).toBe('true')
+      expect(m.config['access.token.claim']).toBe('true')
     })
   }
 })
