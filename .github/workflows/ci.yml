@@ -740,6 +740,11 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
+          # unit:generated-clients' T9 contract gate diffs the spec against the
+          # base branch (contracts-check-core.mjs resolveBaseRef). A shallow
+          # merge-commit checkout has no origin/main, and the gate correctly
+          # fails closed on a missing base rather than passing on nothing.
+          fetch-depth: 0
 
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413  # v6.1.0
 
@@ -752,6 +757,13 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      # The Dart pipeline integration test never pulls on its own: on a cold
+      # host it fails closed with "image not present locally", so a missing
+      # image cannot turn into a silently skipped proof. The runner is that
+      # cold host, so the pinned images are pulled here, explicitly.
+      - name: Pull the pinned Dart toolchain images for unit:generated-clients-dart
+        run: pnpm --filter @gremion/generated-clients-dart images:pull
+
       # The control panel's vitest run needs the gitignored .svelte-kit/tsconfig.json
       # that `svelte-kit sync` writes (control-panel.yml got it as a side effect of
       # running `pnpm run check` first; gremion-ui's pretest:unit does the same).
@@ -761,10 +773,9 @@ jobs:
 
       # ports.yml's server, for the one reason it needed one: unit:ports runs
       # packages/ports/vitest.config.ts, which collects nats-broker*.integration.test.ts
-      # with no exclude, and those files self-skip unless NATS_TEST_URL is set. verify
-      # judges a skip against scripts/verify/allowed-skips.json by SUITE name, and the
-      # entries there are keyed `unit`, not `unit:ports`, so a part run that skips is a
-      # failed part. With a server the files run instead of skipping. JetStream needs
+      # with no exclude, and those files self-skip unless NATS_TEST_URL is set. A skip
+      # there is allow-listed, but a proof that runs beats one that is excused: with a
+      # server the files run instead of skipping. JetStream needs
       # the `-js` argument, which a `services:` entry cannot pass to an image, hence a
       # step. Same digest-pinned image as docker-compose.yml's nats service; the real
       # proof of NatsBroker stays integration:nats (verify-integration-brokers).
