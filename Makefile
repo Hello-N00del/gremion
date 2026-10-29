@@ -672,6 +672,26 @@ lint-module-dockerfile-copy:
 	 echo "[module-dockerfile-copy] suite: $$collected of $$declared declared test(s) ran"
 	@node scripts/check-module-dockerfile-copy.mjs
 
+# Every Dockerfile that builds a pnpm workspace package must COPY the whole @gremion/*
+# workspace: closure of it (manifest before the install, source after). 2026-10-29:
+# tenant-store gained @gremion/retention, the kernel-api and board images never COPYed it
+# and `pnpm deploy` failed inside the image build. lint-module-dockerfile-copy only asks
+# that each COPY source exists, and only under modules/.
+.PHONY: lint-dockerfile-workspace-closure
+lint-dockerfile-workspace-closure:
+	@echo "Checking Dockerfile @gremion/* workspace closure..."
+	@declared=$$(grep -c '^test(' scripts/check-dockerfile-workspace-closure.test.mjs); \
+	 out=$$(node --test --test-reporter=tap scripts/check-dockerfile-workspace-closure.test.mjs 2>&1); \
+	 status=$$?; \
+	 [ "$$status" -eq 0 ] || { printf '%s\n' "$$out" >&2; exit "$$status"; }; \
+	 collected=$$(printf '%s\n' "$$out" | tr -d '\r' | sed -n 's/^1\.\.\([0-9][0-9]*\)$$/\1/p' | tail -n1); \
+	 if [ "$$declared" -lt 1 ] || [ "$$collected" != "$$declared" ]; then \
+	   echo "lint-dockerfile-workspace-closure: scripts/check-dockerfile-workspace-closure.test.mjs declares $$declared test(s) but node ran '$$collected'." >&2; \
+	   exit 1; \
+	 fi; \
+	 echo "[dockerfile-workspace-closure] suite: $$collected of $$declared declared test(s) ran"
+	@node scripts/check-dockerfile-workspace-closure.mjs
+
 # TASK-029 (TRD-344, grant G4): the migration register. Every *.sql is in
 # exactly one database chain of scripts/migrations/ranges.json or a declared
 # non-migration; each chain is padded, in numeric order, gap-free above its
@@ -762,7 +782,7 @@ lint-image-digests:
 	@node scripts/release/check-image-digests.mjs
 	@node scripts/release/check-image-digests.mjs --render
 
-lint: lint-sh lint-yaml lint-json lint-compose lint-compose-latest lint-pooled-stack lint-hygiene lint-tom-annex lint-cve-floors lint-nats-nruns lint-packages lint-port-back lint-postgres-major lint-extraction-source lint-unshipped-migrations lint-compliance lint-tenant-db-access lint-edge-host lint-module-scan lint-module-migration-names lint-module-dockerfile-copy lint-migration-register lint-image-digests lint-synapse
+lint: lint-sh lint-yaml lint-json lint-compose lint-compose-latest lint-pooled-stack lint-hygiene lint-tom-annex lint-cve-floors lint-nats-nruns lint-packages lint-port-back lint-postgres-major lint-extraction-source lint-unshipped-migrations lint-compliance lint-tenant-db-access lint-edge-host lint-module-scan lint-module-migration-names lint-module-dockerfile-copy lint-dockerfile-workspace-closure lint-migration-register lint-image-digests lint-synapse
 	@echo "All linters passed."
 
 # ── Local gate (TASK-045, TRD-444/341) ──────────────────────────────────────
