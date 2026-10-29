@@ -373,13 +373,17 @@ test('evaluateRepo: a live waiver mutes ONLY the finding ids it covers — a new
   }
 })
 
-test('the committed waivers.json covers exactly the findings on the real kernel deploy.yml — no more, no fewer', () => {
+test('the committed waivers.json is empty and the real kernel tree has no finding — deploy.yml is gone, so is its waiver', () => {
   const waivers = loadWaivers(fileURLToPath(new URL('./waivers.json', import.meta.url)))
+  assert.deepEqual(waivers, [])
   const kernelRoot = fileURLToPath(new URL('../../', import.meta.url))
-  const entries = evaluateRepo('kernel', kernelRoot, waivers, todayIso()).filter((e) => e.path === '.github/workflows/deploy.yml')
-  assert.equal(entries.length, 1)
-  assert.equal(entries[0].waived, true, JSON.stringify(entries[0].findings))
-  assert.deepEqual(entries[0].waivedFindings.map((f) => f.id).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)), [...waivers[0].covers].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)))
+  // Not vacuous: the tree has workflows, the retired one is not among them, and
+  // its keyless replacement is.
+  const files = listWorkflowFiles(kernelRoot)
+  assert.ok(files.includes('.github/workflows/ci.yml'), files.join(', '))
+  assert.ok(files.includes('.github/workflows/release-images.yml'), files.join(', '))
+  assert.ok(!files.includes('.github/workflows/deploy.yml'), 'deploy.yml (the deploy-key workflow) must stay deleted')
+  assert.deepEqual(evaluateRepo('kernel', kernelRoot, waivers, todayIso()), [])
 })
 
 test('MEDIUM fix: repoRootExists is false for a nonexistent path and for a path that is a plain file, true for a real directory', () => {
@@ -493,44 +497,42 @@ test('HIGH fix: suites.json\'s kernel-runner-policy-guard command labels this re
   )
 })
 
-test('HIGH fix: main(), given suites.json\'s ACTUAL kernel-runner-policy-guard argv shape, exits 0 end-to-end against the real kernel tree — the committed waiver suppresses deploy.yml', () => {
+test('HIGH fix: main(), given the ACTUAL kernel-runner-policy-guard argv shape of suites.json, exits 0 end-to-end against the real kernel tree with the committed (empty) waivers — no waiver is doing the work', () => {
   const kernelRoot = fileURLToPath(new URL('../../', import.meta.url))
   const waiversPath = fileURLToPath(new URL('./waivers.json', import.meta.url))
   const before = process.exitCode
   process.exitCode = undefined
   try {
     main(['--kernel', kernelRoot, '--waivers', waiversPath])
-    assert.equal(process.exitCode, undefined, 'expected exit 0 (unset): the committed kernel waiver must suppress deploy.yml\'s known findings end-to-end')
+    assert.equal(process.exitCode, undefined, 'expected exit 0 (unset): the real kernel tree has zero runner-policy findings')
   } finally {
     process.exitCode = before
   }
 })
 
-test('regression guard: the OLD "--repo ." shape (this unit\'s prior bug) mislabels the kernel repo and fails even with the committed waiver live', () => {
-  const kernelRoot = fileURLToPath(new URL('../../', import.meta.url))
-  const waiversPath = fileURLToPath(new URL('./waivers.json', import.meta.url))
+test('regression guard: a bare --repo labels the repo by its own path, never "kernel", so a kernel-scoped waiver cannot reach it (documents why suites.json passes --kernel)', () => {
+  const root = makeRepo({ 'deploy.yml': 'env:\n  K: ${{ secrets.DEPLOY_SSH_KEY }}\n' })
+  const waiversDir = mkdtempSync(join(tmpdir(), 'ci-local-waivers-'))
+  const waiversPath = join(waiversDir, 'waivers.json')
+  writeFileSync(waiversPath, JSON.stringify([{ repo: 'kernel', file: 'deploy.yml', owner: 'TASK-086', expiresOn: '2099-01-01', covers: ['secret:DEPLOY_SSH_KEY'] }]))
   const before = process.exitCode
-  process.exitCode = undefined
   try {
-    // A bare --repo labels itself by its own path (here, kernelRoot), never
-    // "kernel" — so it can never match a waiver scoped to repo: "kernel".
-    main(['--repo', kernelRoot, '--waivers', waiversPath])
-    assert.equal(process.exitCode, 1, 'a bare --repo must NOT benefit from the kernel-scoped waiver (documents why --kernel is required)')
+    process.exitCode = undefined
+    main(['--kernel', root, '--waivers', waiversPath])
+    assert.equal(process.exitCode, undefined, 'the same tree under --kernel is covered by the kernel-scoped waiver')
+    process.exitCode = undefined
+    main(['--repo', root, '--waivers', waiversPath])
+    assert.equal(process.exitCode, 1, 'a bare --repo must NOT benefit from the kernel-scoped waiver')
   } finally {
     process.exitCode = before
+    rmSync(root, { recursive: true, force: true })
+    rmSync(waiversDir, { recursive: true, force: true })
   }
 })
 
-test('the committed scripts/ci-local/waivers.json waives exactly kernel/deploy.yml, owned by TASK-086, and is still a live (non-expired) waiver today', () => {
-  const waivers = loadWaivers(fileURLToPath(new URL('./waivers.json', import.meta.url)))
-  assert.equal(waivers.length, 1)
-  assert.equal(waivers[0].repo, 'kernel')
-  assert.equal(waivers[0].file, 'deploy.yml')
-  assert.equal(waivers[0].owner, 'TASK-086')
-  assert.ok(activeWaiver(waivers, 'kernel', 'deploy.yml', todayIso()), 'expected the committed waiver to still be live today')
-  assert.equal(
-    activeWaiver(waivers, 'vertical', 'deploy.yml', todayIso()),
-    undefined,
-    'the committed kernel waiver must not cover a vertical/deploy.yml',
-  )
+test('the committed scripts/ci-local/waivers.json is a bare empty array: the deploy.yml waiver was retired with deploy.yml', () => {
+  const raw = JSON.parse(readFileSync(fileURLToPath(new URL('./waivers.json', import.meta.url)), 'utf8'))
+  assert.ok(Array.isArray(raw), 'the loader wants a bare array, not an object')
+  assert.deepEqual(raw, [])
+  assert.deepEqual(loadWaivers(fileURLToPath(new URL('./waivers.json', import.meta.url))), [])
 })

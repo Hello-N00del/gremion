@@ -3,7 +3,7 @@
 # INTEGRATION (Docker on this box) — NOT part of `make test-unit`.
 #
 # Proves the restricted SSH transport against a running sshd: the deploy key
-# gets the agent and nothing else, the deploy.yml two-line request works
+# gets the agent and nothing else, the deploy client's two-line request works
 # end to end, and the forced command itself is watched RED — the `command=`
 # prefix is removed, a real shell is observed, and the line is restored.
 # Everything runs inside one container, so no key and no port touch this box.

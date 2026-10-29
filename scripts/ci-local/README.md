@@ -254,9 +254,10 @@ An expired waiver still fails the guard by design, so a forgotten waiver
 degrades to a normal RED rather than a silent pass. Waiver use is also
 reported in `guards.mjs`'s arm result (a `waived[]` array with `repo`,
 `path`, `owner` and `expiresOn`), so the dated JSON shows every waiver that
-was actually exercised, not just an empty `findings` array. See
-`waivers.json`'s own entry for why `deploy.yml` is waived today and who owns
-removing the waiver.
+was actually exercised, not just an empty `findings` array.
+`waivers.json` is empty today: the one waiver it ever held, for the kernel's
+`deploy.yml`, was retired with that workflow (replaced by the keyless
+`release-images.yml`).
 
 **Accepted heuristic limit:** `SENSITIVE_SECRET_NAME_RE` matches secret names
 only, on a fixed set of substrings (DEPLOY/SIGN(ING)/SSH/GPG/SOPS/COSIGN/
