@@ -165,9 +165,9 @@
       "category": "unit",
       "cwd": ".",
       "kind": "node-test",
-      "command": "node --test --test-reporter=tap \"scripts/*.test.mjs\" \"scripts/port-back/*.test.mjs\" \"scripts/ci-local/**/*.test.mjs\"",
+      "command": "node --test --test-reporter=tap \"scripts/*.test.mjs\" \"scripts/port-back/*.test.mjs\" \"scripts/env/*.test.mjs\" \"scripts/ci-local/**/*.test.mjs\"",
       "requiresStack": false,
-      "testGlobs": ["scripts/*.test.mjs", "scripts/port-back/*.test.mjs", "scripts/ci-local/**/*.test.mjs"]
+      "testGlobs": ["scripts/*.test.mjs", "scripts/port-back/*.test.mjs", "scripts/env/*.test.mjs", "scripts/ci-local/**/*.test.mjs"]
     },
     {
       "id": "kernel-cve-floor-guard",
@@ -666,6 +666,17 @@
       "excludeGlobs": ["packages/provisioning/test/integration/**"]
     },
     {
+      "id": "kernel-member-import-unit",
+      "repo": "kernel",
+      "category": "unit",
+      "cwd": "packages/member-import",
+      "kind": "vitest",
+      "command": "pnpm run test",
+      "timeoutMs": 600000,
+      "requiresStack": false,
+      "testGlobs": ["packages/member-import/test/**/*.test.ts"]
+    },
+    {
       "id": "kernel-provisioning-integration",
       "repo": "kernel",
       "category": "integration",
@@ -675,6 +686,17 @@
       "timeoutMs": 600000,
       "requiresStack": true,
       "testGlobs": ["packages/provisioning/test/integration/**/*.int.test.ts"]
+    },
+    {
+      "id": "kernel-retention-unit",
+      "repo": "kernel",
+      "category": "unit",
+      "cwd": "packages/retention",
+      "kind": "vitest",
+      "command": "pnpm run test",
+      "timeoutMs": 600000,
+      "requiresStack": false,
+      "testGlobs": ["packages/retention/test/**/*.test.ts"]
     },
     {
       "id": "kernel-tenant-store-unit",

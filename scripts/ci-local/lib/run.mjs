@@ -54,7 +54,7 @@ function cleanEnv() {
  * bug this exists for), which both `taskkill` and `kill(-pid)` report as an
  * error — that failure is expected and silently swallowed.
  */
-export function killProcessTree(pid, { platform = process.platform, killFn = process.kill, execFileFn = execFileSync } = {}) {
+export function killProcessTree(pid, { platform = process.platform, killFn = (p, s) => process.kill(p, s), execFileFn = execFileSync } = {}) {
   if (pid === undefined || pid === null) return
   try {
     if (platform === 'win32') {

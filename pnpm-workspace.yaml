@@ -113,9 +113,9 @@ overrides:
   # scripts/check-cve-floors.mjs can watch it. Bounded to 10.x: 11 would be a major.
   nodemailer: '>=10.0.9 <11'
   # GHSA-82fw-gwwq-j7x9 — vitest >=2.1.0 <4.1.11; the advisory lives in @vitest/mocker, which
-  # vitest pins exactly, so both are floored and both stay on the 4.x line.
-  vitest: '>=4.1.11 <5'
-  '@vitest/mocker': '>=4.1.11 <5'
+  # vitest pins exactly, so both are floored and both stay on the 5.x line (vitest 5.0.1 supersedes #25/#26).
+  vitest: '>=5.0.1 <6'
+  '@vitest/mocker': '>=5.0.1 <6'
   # GHSA-w5hq-g745-h8pq — uuid <11.1.1: missing buffer bounds check in v3/v5/v6 when
   # `buf` is provided. Arrives with the in-tree finance module (TASK-200) through
   # exceljs's `uuid: ^8.3.0`, so only an override moves it; 11.x keeps the CJS

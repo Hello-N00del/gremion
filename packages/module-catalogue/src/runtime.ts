@@ -40,6 +40,13 @@ export interface ExportDecl {
   kind: 'pg_dump'
   /** DB-OPS-RETENTION-PROFILE id, ^rp-[a-z]+-[a-z0-9-]+$. */
   retentionProfile: string
+  /**
+   * MED-3: what the open-format tenant export (TRD-149) leaves out, as
+   * schema.table (the whole table) or schema.table.column: tokens, ciphertexts,
+   * credentials. Recorded in the manifest under excluded_tables /
+   * excluded_columns. The pg_dump before a drop (TRD-424) is unaffected.
+   */
+  withhold?: string[]
 }
 
 export interface TimedJob {

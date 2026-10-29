@@ -17,6 +17,24 @@
 > (30 days) after the module is disabled, pending the DPO's answer (§7.15 RC-MOD-DATA, A-MOD).
 > RC-MOD-EXPORT records the six database modules' disable exports on the same window.
 
+> **Change note 2026-10-27 (TRD-144/145):** the scheduled purge run exists
+> (`packages/tenant-store/src/lifecycle/purge.ts`, `gremion-purge.timer`). It executes only
+> the rows that state a number of days AND whose table is in this repository: RC-K1-PLUMB
+> (7 d; `event_consumption`, `scheduled_notifications`) and RC-OPS-RUN (`plt.job_run`, with
+> RC-LOG-APP: 30 d regular and cap, so the daily run purges at 29 d, derived from this file by
+> `purge.test.ts` through `@gremion/retention`). Every other row stays unexecuted and is listed
+> with its reason in `PURGE_RESIDUAL`; `purge.test.ts` fails when a window there differs from this file.
+
+> **Change note 2026-10-28 (TASK-033-a, operator decision):** the kernel's hash-chained
+> `audit_log` table (with `audit_log_chain_anchor`) is a **governance record, RC-GOV-CHAIN
+> (K3)**, not a log class: **no timer deletes from it.** The earlier reading (K5, RC-LOG-AUD,
+> purged at 27 d by an in-process tick) is withdrawn; the tick is removed, `PURGE_RULES` has no
+> `audit_log` rule (a test fails if one appears), and the application and owner roles hold no
+> DELETE, UPDATE or TRUNCATE on the table (`ensureKernelAuditAppendOnly`, at provisioning and on
+> reconcile). RC-LOG-AUD remains the Loki stream of operator and vendor access logs (27 d / 30 d).
+> The Löschkonzept (in-app and generated) and `docs/log-retention-policy.md` say so. A person's
+> erasure request is answered by redaction (§8), not by deleting the chain.
+
 | | |
 |---|---|
 | Task | TASK-070 (plan key L7-14), provides CAP-RETENTION-CATALOGUE |
@@ -342,7 +360,7 @@ Profiles and start events are those of the schema's table comments (`<DB-id> | <
 | RC-GOV-MEET | Meetings, agendas, invitations, attendance, quorum checks, attachments, notice overrides (`rp-gov-meeting-record`) | meeting closed | Art. 5(1)(e), 6(1)(e); LHO and Finanzordnung where the meeting authorises spending; archive duty | **record period**, then the archive offer | [A-L1, A-L3] |
 | RC-GOV-PROT | Protocols, revisions, parts, approvals, action items, the release log (`rp-gov-protocol-record`) | meeting closed | as RC-GOV-MEET | **record period**, then the archive offer | [A-L1, A-L3] |
 | RC-GOV-RES | Resolutions, tallies, named votes, circular resolutions, recorded polls, register entries, electorates, numbering schemes, curing bases (`rp-gov-resolution-record`) | adoption, rejection or recording | as RC-GOV-MEET; Beschlüsse that authorise spending must outlive the vouchers they authorise | **record period**, then the archive offer | [A-L1, A-L3] |
-| RC-GOV-CHAIN | Register chain, field commitments, commitment keys, redactions (`rp-gov-register-chain`) | end of the record life of the entries it anchors | Art. 5(1)(e); integrity of the record (PRD-TRU-010) | **never deleted while any entry of the chain is retained**; erasure answered by redaction (§8); then the archive offer | settled |
+| RC-GOV-CHAIN | Register chain, field commitments, commitment keys, redactions (`rp-gov-register-chain`), and the kernel's hash-chained audit table `audit_log` with its anchor `audit_log_chain_anchor` (append-only for the application role; no timer deletes it) | end of the record life of the entries it anchors | Art. 5(1)(e); integrity of the record (PRD-TRU-010) | **never deleted while any entry of the chain is retained**; erasure answered by redaction (§8); then the archive offer | settled |
 | RC-GOV-PUB | Released public artefacts, public protocol and register views, public chain anchors (`rp-gov-public-record`, K6) | — | Art. 5(1)(e), 6(1)(e); publication purpose | **never deleted while published**; redaction only; removed on withdrawal or supersession | settled; DPO Q10 may narrow what is published |
 | RC-GOV-FINOV | Finance overlay on external references (`rp-gov-finance-overlay`, K4) | end of the budget year of the referenced finance record | LHO, Finanzordnung; HGB § 257 / AO § 147 class | **finance hold**, then back to RC-GOV-MEET | [A-L1, A-L2] |
 | RC-GOV-UNPL | Unplaced proposals, lapsed motions (`rp-gov-proposal-unplaced`, `rp-gov-motion-lapsed`) | meeting closed; withdrawal or deferral lapse | Art. 5(1)(e); purpose achieved | **grace** | [A-G] |
@@ -529,7 +547,7 @@ owner named.
 | G3 | The per-tenant retention config knows four tiers (access, app, security, security without personal data); it has no finance class, no audit/operator-access class and no trace class | `GremionConfig.retention` in `config.ts` | TRD-143's six classes are not yet configurable; L3-15 adds them |
 | G4 | The "security without personal data" tier (27 d, cap 30 d since R29-RETENTION-30-K; formerly 90 d, cap 365 d) is not a category of this catalogue | `config.ts`, generator row 4 | Data proven free of personal data is outside the Löschkonzept; anything else falls under RC-LOG-SEC. The former 365-day cap must not apply to entries that name a person |
 | G5 | **Closed by R28 + R29 (R29-RETENTION-30).** Formerly: the processed security log and the date-partitioned retention sink aged out after 31 days | `docker/vector/logrotate.conf` | Edge logrotate now keeps access and Traefik logs 14 d, the pseudonymised security log and `retained-*` 27 d (plus `prune-retained.sh`); the worst case across all rules is 29 d + 2 h 5 min (`test-edge-retention-bound.sh`), inside the 30-day cap [D R29-I6] |
-| G6 | The kernel's hash-chained `audit_log` table is purged every 24 h at the security window, while `docs/log-retention-policy.md` stated (until R29-RETENTION-30-K) that it is never auto-expired | `gremion-ui/src/hooks.server.ts` (audit-retention tick), `audit-db.ts` `purgeAuditLogsOlderThan` | The two statements contradicted each other; the policy now records the purge (window `security_logs_days`, 27 d default, 29 d cap) and leaves the classification open. Under this catalogue a governance record chain is K3 (RC-GOV-CHAIN), and an access/audit log is K5 (RC-LOG-AUD); L3-15 must still decide which the table is and align the code and the policy |
+| G6 | **Closed 2026-10-28 (operator decision, TASK-033-a).** Formerly: the kernel's hash-chained `audit_log` table was purged every 24 h at the security window while `docs/log-retention-policy.md` said it is never auto-expired | `gremion-ui/src/hooks.server.ts` (the removed audit-retention tick), `packages/tenant-store/src/lifecycle/audit-append-only.ts` | The table is a governance record, RC-GOV-CHAIN (K3): nothing purges it, the application role can only append, and the in-process tick, `purgeAuditLogsOlderThan` and the field-driven window are gone. The SQL function `audit_log_purge_before` (migration 0059) stays defined and has no caller |
 | G7 | Formerly the generator cited a single fixed legal basis per log tier (a Bavarian DPA recommendation, the BSI minimum standard) instead of the derivation; R29-RETENTION-30-K replaced those citations with the operator ceiling [D R29-I6] and a hint on the tiers no purge consumer enforces. The per-row derivation is still open | `loeschkonzept.ts` §3 | TRD-145 requires the derivation (category, basis, duty, window) per row; this catalogue supplies it |
 | G8 | No log store or trace store is configured in this repository yet; identity-provider events expire at 29 d (`eventsExpiration` and `attributes.adminEventsExpiration`: 2505600 s; formerly 7776000 = 90 d, with no admin-event expiry) | `docker/keycloak/realm-export.base.json` | 29 d sits inside the 30-day cap of RC-LOG-SEC [D R29-I6]; Keycloak event lines are off container stdout; the other log streams arrive with L1-20 and L3-15 |
 

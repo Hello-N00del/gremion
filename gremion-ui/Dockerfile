@@ -8,6 +8,11 @@ WORKDIR /repo
 # the COPY below), so this does not change which pnpm version builds the app.
 RUN npm install -g corepack && corepack enable pnpm
 
+# TRD-044: the tenant-create one-shot's disable-module verb exports a module
+# database with pg_dump / pg_restore before it drops it (same major as the
+# PostgreSQL 18 servers; the kernel-api image takes the same package).
+RUN apk add --no-cache postgresql18-client
+
 # Install workspace deps (cache-friendly: package manifests first)
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY packages/db/package.json ./packages/db/
@@ -30,12 +35,18 @@ COPY packages/tokens/package.json ./packages/tokens/
 # edge router render and the module catalogue -- devDependencies of
 # gremion-ui, so, like nats-auth, they live in this builder stage only.
 COPY packages/provisioning/package.json ./packages/provisioning/
+# TASK-033-a: tenant-store's purge test reads the retention catalogue through
+# @gremion/retention (a devDependency): the install needs the workspace member, nothing runs it.
+COPY packages/retention/package.json ./packages/retention/
 COPY packages/tenant-store/package.json ./packages/tenant-store/
 COPY packages/module-catalogue/package.json ./packages/module-catalogue/
 COPY packages/generated-clients/package.json ./packages/generated-clients/
 COPY packages/edge-routers/package.json ./packages/edge-routers/
 # TASK-077 G6: the tenancy primitives gremion-ui's tenant/ files re-export (bundled, ssr.noExternal).
 COPY packages/tenancy-core/package.json ./packages/tenancy-core/
+# TASK-031: @gremion/member-import (member list import + vertical loader) -- a gremion-ui DEVdependency like provisioning:
+# the tenant-create image runs the import verbs; `deploy --prod` leaves it out of the runner.
+COPY packages/member-import/package.json ./packages/member-import/
 COPY gremion-ui/package.json ./gremion-ui/
 RUN pnpm install --frozen-lockfile
 
@@ -59,6 +70,10 @@ COPY packages/module-catalogue ./packages/module-catalogue/
 COPY packages/generated-clients ./packages/generated-clients/
 COPY packages/edge-routers ./packages/edge-routers/
 COPY packages/tenancy-core ./packages/tenancy-core/
+COPY packages/member-import ./packages/member-import/
+# TASK-031: vertical data directories (verticals/<id>/{vertical,blueprint,wording.de,roles}.json) the seed-vertical and
+# import verbs read; the cwd of tenant-create is /repo/gremion-ui, so GREMION_VERTICALS_DIR defaults to ../verticals.
+COPY verticals ./verticals/
 # TASK-043 G4: the module catalogue tenant-create enables from -- every
 # module.json (loadCatalogue's one-entry-per-directory rule) and the migration
 # directory of each module that declares a database. No module source, no
@@ -118,6 +133,11 @@ COPY --from=builder /repo/gremion-ui/migrations ./migrations
 # image lacks /app/migrations-control and boot fails ENOENT — a deploy bug latent
 # until the first deploy since P2.1a.
 COPY --from=builder /repo/gremion-ui/migrations-control ./migrations-control
+# Vertical data (verticals/<id>/*.json): the blueprint registry serves `<ID>_BLUEPRINT@1` refs (the
+# /api/setup/seed route, existing tenants' STURA_BLUEPRINT@1) from it at runtime, read through
+# loadVertical. Without this COPY a vertical ref would be refused as unknown in the running image.
+COPY --from=builder /repo/verticals ./verticals
+ENV GREMION_VERTICALS_DIR=/app/verticals
 
 # AGPL §4/§5: a conveyed copy must be accompanied by the licence text. This
 # image IS a conveyed copy — without these two files the recipient of the image

@@ -32,9 +32,9 @@
 //     *.test.* the vitest include collects) with reason, owning task and the
 //     exact targets it may reach ("allows"); the same list feeds the per-package
 //     test runs as vitest --exclude (coupledExcludes);
-//   - DOCKERFILE_ALLOWLIST — each leaf Dockerfile may COPY exactly its own
-//     services/<svc> tree and upstream/gremion/packages/ports (the frozen StuRa
-//     build context), nothing else.
+//   - DOCKERFILE_ALLOWLIST — path -> { reason, sources }. Empty: every module leaf
+//     Dockerfile builds from the kernel tree alone (COPY modules/<id>, packages/*),
+//     so none needs an allowance; the mechanism stays for a future exception.
 // An allowance that excuses nothing is STALE and fails. The scan refuses zero files.
 //
 // Discovery (TDD 4): every directory under modules/ must be a workspace package
@@ -56,30 +56,8 @@ export const KERNEL_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 export const COUPLED_PATH = 'modules/COUPLED-TESTS.json'
 export const DISABLED_PATH = 'modules/disabled.json'
 
-const LEAF_DOCKERFILE_REASON =
-  'leaf image Dockerfile, copied byte-equal: its COPY sources (upstream/gremion/packages/ports, ' +
-  'services/<svc>) are the frozen StuRa build context, not an in-tree coupling. The in-tree image ' +
-  'build is owned by TASK-038/TASK-198, which rewrites the build context.'
-
-const SVC_OF = { board: 'board', calendar: 'calendar', content: 'content', files: 'files', finance: 'finance', messaging: 'messages', publishing: 'newsletter', vault: 'vault', votes: 'votes' }
-
-/** path -> { reason, sources }: the exact COPY sources each leaf Dockerfile may name. */
-export const DOCKERFILE_ALLOWLIST = Object.freeze(
-  Object.fromEntries(
-    Object.entries(SVC_OF).map(([id, svc]) => [
-      `modules/${id}/Dockerfile`,
-      {
-        reason: LEAF_DOCKERFILE_REASON,
-        sources: [
-          `services/${svc}`,
-          `services/${svc}/package.json`,
-          'upstream/gremion/packages/ports',
-          'upstream/gremion/packages/ports/package.json',
-        ],
-      },
-    ]),
-  ),
-)
+/** path -> { reason, sources }: the exact COPY sources a Dockerfile may name. Empty by design. */
+export const DOCKERFILE_ALLOWLIST = Object.freeze({})
 
 const SOURCE_RE = /\.(ts|tsx|mts|cts|js|jsx|mjs|cjs|svelte)$/
 const DOCKERFILE_RE = /(^|\/)(([^/]*\.)?Dockerfile(\.[^/]+)?|Containerfile(\.[^/]+)?)$/

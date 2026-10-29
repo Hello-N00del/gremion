@@ -101,3 +101,7 @@ docs/ops/release-1-waivers.md text eol=lf
 # rule above names a path from the repository root, so it does not reach them,
 # and `git check-attr eol` answered "unspecified" for the fixture copies.
 test/host/fixtures/release/*/docs/ops/*.md text eol=lf
+
+# TOM annex (TRD-141): the generator emits LF; golden fixtures and the committed annex must match byte for byte on Windows checkouts too.
+scripts/fixtures/tom-annex/** text eol=lf
+docs/compliance/tom-annex.md text eol=lf

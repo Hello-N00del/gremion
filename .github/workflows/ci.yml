@@ -38,8 +38,15 @@ jobs:
         with:
           fetch-depth: 0  # gitleaks needs full history to diff base..head
 
+      # Pinned to the version the local gate runs (0.11.0); the apt package on
+      # ubuntu-latest is 0.9.0, which raises SC2317/SC2015 notes 0.11 does not.
       - name: Install shellcheck
-        run: sudo apt-get install -y shellcheck
+        run: |
+          curl -fsSLo /tmp/sc.tar.xz https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.x86_64.tar.xz
+          echo "8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198  /tmp/sc.tar.xz" | sha256sum -c -
+          tar -xJf /tmp/sc.tar.xz -C /tmp
+          sudo install -m 0755 /tmp/shellcheck-v0.11.0/shellcheck /usr/local/bin/shellcheck
+          shellcheck --version
 
       - name: Install yamllint
         run: pip install yamllint
@@ -165,63 +172,14 @@ jobs:
       - name: Supply-chain :latest tag guard for compose (G-037)
         run: |
           set -euo pipefail
-          # Externally-pulled images in the production-merged compose render
-          # must be digest-pinned (image: name:tag@sha256:…). The kernel's own
-          # three images (gremion-ui, gremion-vector, gremion-fallback) may
-          # carry :latest — but ONLY because they are built here, and this step
-          # PROVES that rather than asserting it.
-          #
-          # The old exemption was `image: gremion/` with the comment "built from
-          # this repo and never pulled from a public registry". Both halves were
-          # wrong. `gremion/ui` is an unqualified name, so Docker resolves it to
-          # docker.io/gremion/ui — a Docker Hub namespace owned by an unrelated
-          # third party — and `docker compose pull` / `up --pull always` are
-          # exactly the commands a self-hoster runs. The images are now named
-          # under a namespace we control (ghcr.io/hello-n00del/gremion-*), and
-          # the exemption below is conditional on a `build:` section existing
-          # for that service in the rendered config.
+          # The guard lives in scripts/check-compose-latest-tags.sh so a local
+          # `make lint-compose-latest` and CI run the same code. It renders the
+          # state tier AND the app tier (gremion-ui / gremion-public moved into
+          # docker-compose.app.yml, TASK-040) and takes render-only values for
+          # compose's required variables from compose/ci.placeholder.env.
           cp .env.example .env
           mkdir -p legal && touch legal/legal.env
-          # --profile production is required: `traefik` lives in that profile,
-          # and `cloudflared` (no profile) depends on it. Without the flag the
-          # render fails with `undefined service "traefik"`.
-          compose=(docker compose -f docker-compose.yml -f docker-compose.prod.yml --profile production)
-          render=$("${compose[@]}" config)
-          json=$("${compose[@]}" config --format json)
-
-          # (1) Vacuity guard — a render that stopped containing our images
-          # would turn every check below into a silent pass.
-          first_party=$(echo "$json" | jq '[.services[] | select((.image // "") | startswith("ghcr.io/hello-n00del/gremion-"))] | length')
-          if [ "$first_party" -lt 5 ]; then
-            echo "ERROR: the render names only $first_party first-party image(s); expected at least 5 (ui, public, legal, vector, fallback)."
-            echo "Either an image was renamed away from ghcr.io/hello-n00del/gremion-*, or this guard is reading the wrong render."
-            exit 1
-          fi
-          echo "Render carries $first_party first-party image(s)."
-
-          # (2) The exemption's premise: every first-party image is BUILT here.
-          unbuilt=$(echo "$json" | jq -r '.services | to_entries[]
-            | select((.value.image // "") | startswith("ghcr.io/hello-n00del/gremion-"))
-            | select(.value.build == null)
-            | "\(.key): \(.value.image)"')
-          if [ -n "$unbuilt" ]; then
-            echo "ERROR: first-party image(s) with no build: section — they would be PULLED, so :latest is not safe:"
-            echo "$unbuilt"
-            exit 1
-          fi
-          echo "OK — every first-party image has a build: section."
-
-          # (3) The actual :latest check, exempting only the images just proven
-          # to be built from this repo.
-          if echo "$render" | grep -E '^[[:space:]]*image:[[:space:]]*[^[:space:]]+:latest($|[[:space:]])' \
-             | grep -vE 'image:[[:space:]]*ghcr\.io/hello-n00del/gremion-' > /tmp/latest-violators 2>/dev/null; then
-            echo "ERROR: :latest tags on externally-pulled images:"
-            cat /tmp/latest-violators
-            echo
-            echo "Pin to <tag>@sha256:<digest> — see G-037 / G-038."
-            exit 1
-          fi
-          echo "OK — no externally-pulled :latest images in compose."
+          bash scripts/check-compose-latest-tags.sh
 
       - name: SOPS / production-overlay plaintext-secret guard (G-028/G-029/G-030/G-031)
         run: |
@@ -625,8 +583,13 @@ jobs:
       - name: Pull Docker images
         run: docker compose pull postgres keycloak
 
+      # The state tier names its networks and volumes as externals (${STACK}_state
+      # etc.; bootstrap.sh creates them on a host). Create them for the .env's STACK
+      # first, or compose refuses to start postgres.
       - name: Start databases
-        run: docker compose up -d postgres
+        run: |
+          make dev-networks DEV_STACK="$(sed -n 's/^STACK=//p' .env | tail -n 1)"
+          docker compose up -d postgres
 
       - name: Wait for PostgreSQL to be healthy
         run: |

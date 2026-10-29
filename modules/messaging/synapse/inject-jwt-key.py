@@ -17,6 +17,7 @@ import os
 import sys
 import textwrap
 import urllib.error
+import urllib.parse
 import urllib.request
 
 
@@ -24,7 +25,13 @@ def fetch_pem(fetch_url):
     """The realm key as PEM, or None (with the reason on stderr)."""
     if not fetch_url:
         return None
+    # KEYCLOAK_FETCH_URL is operator config, but refuse anything that is not
+    # http(s) so a file:// (or other urllib scheme) can never be read.
+    if urllib.parse.urlsplit(fetch_url).scheme not in ("http", "https"):
+        sys.stderr.write("[gremion-synapse] realm key fetch refused: KEYCLOAK_FETCH_URL is not http(s)\n")
+        return None
     try:
+        # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected
         with urllib.request.urlopen(fetch_url, timeout=10) as r:
             realm_data = json.load(r)
     except (urllib.error.URLError, OSError, ValueError, http.client.HTTPException) as exc:

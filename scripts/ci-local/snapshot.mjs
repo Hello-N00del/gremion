@@ -2,11 +2,19 @@
 // Dated pass/fail snapshot of every test suite on both repositories' tips
 // (TASK-012 acceptance item 1, TRD-340).
 //
-//   node scripts/ci-local/snapshot.mjs --kernel <path> --vertical <path> --out <dir>
-//     [--only <suite-id,suite-id,...>] [--manifest <path>] [--stack-env <file>]
+//   node scripts/ci-local/snapshot.mjs --kernel <path> [--vertical <path>] --out <dir>
+//     [--list] [--only <suite-id,suite-id,...>] [--manifest <path>] [--stack-env <file>]
 //   node --test scripts/ci-local/snapshot.test.mjs
 //
-// --out is MANDATORY (§5 Q3 default: commit nothing to the kernel — the
+// --vertical is OPTIONAL. Without it (a kernel-only checkout) every vertical
+// suite is reported as a SKIPPED row, "skipped: no --vertical" — visible in
+// the console, the JSON and the markdown, never counted as PASS — and the
+// exit code reflects the kernel suites alone. A --vertical that is given but
+// does not exist is a loud error, never a silent fall-back to kernel-only.
+// --list is a dry run: it prints which suites WOULD RUN and which are
+// SKIPPED, runs nothing, and needs no --out and no clean tree.
+//
+// --out is MANDATORY (except with --list) (§5 Q3 default: commit nothing to the kernel — the
 // maintainer files snapshots in the vault ledger). --only lets a caller
 // stay under a 4-minute wall-clock budget by running a named subset instead
 // of every suite in suites.json — the FULL run across every suite of both
@@ -26,7 +34,7 @@ import { isDirty, headInfo, isGitRepo } from './lib/git.mjs'
 import { loadManifest, validateManifest, suitesFor } from './lib/manifest.mjs'
 import { discoverTestFiles } from './lib/discover.mjs'
 import { run } from './lib/run.mjs'
-import { evaluateSuite, findUnclaimed, unclaimedRows, unknownOnlyRows, overallExit, snapshotBaseName, renderMarkdown } from './lib/snapshot-core.mjs'
+import { evaluateSuite, findUnclaimed, unclaimedRows, unknownOnlyRows, skippedVerticalRows, NO_VERTICAL_REASON, overallExit, snapshotBaseName, renderMarkdown } from './lib/snapshot-core.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const DEFAULT_MANIFEST = join(HERE, 'suites.json')
@@ -77,15 +85,22 @@ export function evaluateRepo(repoLabel, repoPath, manifest, onlyIds, stackEnvFil
 
 export function main(argv = process.argv.slice(2)) {
   const kernelPath = argValue(argv, '--kernel')
-  const sturaosPath = argValue(argv, '--vertical')
+  const verticalPath = argValue(argv, '--vertical')
   const outDir = argValue(argv, '--out')
   const manifestPath = argValue(argv, '--manifest') ?? DEFAULT_MANIFEST
   const onlyRaw = argValue(argv, '--only')
   const onlyIds = onlyRaw ? onlyRaw.split(',').map((s) => s.trim()).filter(Boolean) : undefined
   const stackEnvFile = argValue(argv, '--stack-env') ?? undefined
 
-  if (!kernelPath || !sturaosPath || !outDir) {
-    console.error('snapshot: --kernel <path>, --vertical <path> and --out <dir> are all required')
+  const listOnly = argv.includes('--list')
+
+  if (!kernelPath || (!outDir && !listOnly)) {
+    console.error('snapshot: --kernel <path> and --out <dir> are required (--vertical <path> is optional; --list needs no --out)')
+    process.exitCode = 1
+    return
+  }
+  if (verticalPath && !existsSync(verticalPath)) {
+    console.error(`snapshot: --vertical path '${verticalPath}' does not exist`)
     process.exitCode = 1
     return
   }
@@ -99,9 +114,25 @@ export function main(argv = process.argv.slice(2)) {
     return
   }
 
+  if (listOnly) {
+    const plan = [
+      ...suitesFor(manifest, 'kernel', onlyIds).map((x) => ({ ...x, planned: 'WOULD RUN' })),
+      ...(verticalPath
+        ? suitesFor(manifest, 'vertical', onlyIds).map((x) => ({ ...x, planned: 'WOULD RUN' }))
+        : skippedVerticalRows(manifest, onlyIds).map((x) => ({ ...x, planned: 'SKIPPED' }))),
+    ]
+    for (const x of plan) {
+      const tail = x.planned === 'SKIPPED' ? x.reason : x.unrunnable ? `unrunnable: ${x.unrunnable}` : x.command
+      console.log(`${x.planned} [${x.repo}/${x.category}] ${x.id} — ${tail}`)
+    }
+    console.log(`snapshot --list: ${plan.filter((x) => x.planned === 'WOULD RUN').length} would run, ${plan.filter((x) => x.planned === 'SKIPPED').length} skipped (dry run, nothing executed)`)
+    process.exitCode = 0
+    return
+  }
+
   for (const [label, path] of [
     ['kernel', kernelPath],
-    ['vertical', sturaosPath],
+    ...(verticalPath ? [['vertical', verticalPath]] : []),
   ]) {
     if (!isGitRepo(path)) {
       console.error(`snapshot: ${label} path '${path}' is not a git repository`)
@@ -117,18 +148,20 @@ export function main(argv = process.argv.slice(2)) {
 
   const startedAt = new Date().toISOString()
   const kernelInfo = headInfo(kernelPath)
-  const sturaosInfo = headInfo(sturaosPath)
+  const verticalInfo = verticalPath ? headInfo(verticalPath) : null
 
   const kernelRows = evaluateRepo('kernel', kernelPath, manifest, onlyIds, stackEnvFile)
-  const sturaosRows = evaluateRepo('vertical', sturaosPath, manifest, onlyIds, stackEnvFile)
-  const suites = [...kernelRows, ...sturaosRows, ...unknownOnlyRows(onlyIds, manifest)]
+  const verticalRows = verticalPath
+    ? evaluateRepo('vertical', verticalPath, manifest, onlyIds, stackEnvFile)
+    : skippedVerticalRows(manifest, onlyIds)
+  const suites = [...kernelRows, ...verticalRows, ...unknownOnlyRows(onlyIds, manifest)]
   const finishedAt = new Date().toISOString()
 
   const date = startedAt.slice(0, 10)
   const snapshot = {
     date,
     kernel: kernelInfo,
-    vertical: sturaosInfo,
+    vertical: verticalInfo,
     os: `${process.platform} ${process.version}`,
     startedAt,
     finishedAt,
@@ -144,7 +177,7 @@ export function main(argv = process.argv.slice(2)) {
   // first-offer reading with a partial one that only its JSON `only` field
   // told apart. The suffix means a partial reading can never collide with,
   // or overwrite, a full one's filename.
-  const base = snapshotBaseName(date, kernelInfo.shortSha, sturaosInfo.shortSha) + (onlyIds ? '-partial' : '')
+  const base = snapshotBaseName(date, kernelInfo.shortSha, verticalInfo?.shortSha ?? 'novertical') + (onlyIds ? '-partial' : '')
   const jsonPath = join(outDir, `${base}.json`)
   const mdPath = join(outDir, `${base}.md`)
   writeFileSync(jsonPath, JSON.stringify(snapshot, null, 2))
@@ -153,10 +186,12 @@ export function main(argv = process.argv.slice(2)) {
   console.log(`snapshot: wrote ${jsonPath}`)
   console.log(`snapshot: wrote ${mdPath}`)
   const failed = suites.filter((s) => s.status === 'FAIL').length
-  console.log(`snapshot: ${suites.length} row(s), ${failed} FAIL — overall exit ${snapshot.overallExit}`)
+  const skipped = suites.filter((s) => s.status === 'SKIPPED').length
+  console.log(`snapshot: ${suites.length} row(s), ${failed} FAIL, ${skipped} SKIPPED — overall exit ${snapshot.overallExit}`)
   for (const row of suites) {
     if (row.status === 'FAIL') console.log(`  FAIL [${row.repo}/${row.category}] ${row.id} — ${row.reason ?? ''}`)
   }
+  if (skipped > 0) console.log(`  ${skipped} vertical suite(s) ${NO_VERTICAL_REASON} (kernel-only run; these were NOT run and are NOT counted as passed)`)
 
   process.exitCode = snapshot.overallExit
 }

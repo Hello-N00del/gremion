@@ -279,16 +279,20 @@ set_key() {
     grep -q '"loginWithEmailAllowed": true' "$realm"
     grep -q '"resetPasswordAllowed": true' "$realm"
     grep -q '"smtpServer"' "$realm"
-    grep -q '^PLATFORM_SMTP_PASSWORD=CHANGE_ME_GEN_' "${HOST_SRC}/templates/env/app.env.tmpl"
+    # M4 (PLAN-mail-transport): the app tier holds NO platform@ password; the
+    # fail-closed mail identity is now MAIL_TRANSPORT (an operator sentinel in
+    # mail.env, no default) and PLATFORM_DOMAIN here.
+    assert_absent '^PLATFORM_SMTP_PASSWORD=' "${HOST_SRC}/templates/env/app.env.tmpl" "the app tier holds platform@ again"
+    grep -q '^MAIL_TRANSPORT=CHANGE_ME_OPERATOR_' "${HOST_SRC}/templates/env/mail.env.tmpl"
     grep -q '^PLATFORM_DOMAIN=CHANGE_ME_OPERATOR_' "${HOST_SRC}/templates/env/app.env.tmpl"
     render_filled
     local f="${ENV_DIR}/app-blue.env" k mutation want
     run "$VALIDATE" --env-file "$f" --release "$RELEASE"
     [ "$status" -eq 0 ] || { echo "the filled app env must validate first: $output"; return 1; }
     local secret
-    secret="$(value_of "$f" PLATFORM_SMTP_PASSWORD)"
+    secret="$(value_of "$f" AUTH_SECRET)"
     [ -n "$secret" ]
-    for k in PLATFORM_SMTP_PASSWORD PLATFORM_DOMAIN; do
+    for k in PLATFORM_DOMAIN; do
         for mutation in absent empty blank sentinel; do
             cp "$f" "${f}.bak"
             case "$mutation" in
@@ -345,7 +349,8 @@ set_key() {
 #   - a dynamic `export "$k=$v"` (a hand-rolled read loop) -- except load_env's
 #     own line in lib/common.sh.
 # Allow-listed, by exact line: `. /etc/os-release` in bootstrap.sh (the OS's
-# identity file, not a gremion env file). Per-key readers (`sed -n
+# identity file, not a gremion env file) and gremion-mail sourcing its sibling
+# script gremion-vendor-mail (code, not an env file). Per-key readers (`sed -n
 # "s/^KEY=//p"`) are not whole-file readers and are out of this guard's scope.
 second_readers() {
     local -a files=()
@@ -361,7 +366,7 @@ second_readers() {
         | grep -vE '^[^:]+:[0-9]+:[[:space:]]*#' \
         | grep -vE '(source|\.)[[:space:]]+"?[^[:space:]";&|]*\.sh"?([[:space:];)]|$)' \
         | grep -vE '^[^:]*/lib/common\.sh:[0-9]+:[[:space:]]+export "\$\{key\}=\$\{value\}"$' \
-        | grep -vE '^[^:]*/bootstrap\.sh:[0-9]+:[[:space:]]+\. /etc/os-release$' \
+        | grep -vE '^[^:]*/bootstrap\.sh:[0-9]+:[[:space:]]+\. /etc/os-release$'         | grep -vE '^[^:]*/bin/gremion-mail:[0-9]+:[[:space:]]+\. "\$\{SCRIPT_DIR\}/gremion-vendor-mail"$' \
         || true
 }
 

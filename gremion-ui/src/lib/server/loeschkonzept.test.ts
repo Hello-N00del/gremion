@@ -12,7 +12,7 @@ const mockConfig = {
   compliance: {
     dpo_name: 'Max Muster',
     dpo_email: 'dpo@example.org',
-    controller_name: 'StuRa Musteruni',
+    controller_name: 'Mustergremium',
     controller_address: 'Musterstraße 1, 12345 Musterstadt',
     purpose_description: 'Betrieb der studentischen Verwaltungsplattform',
   },
@@ -27,6 +27,31 @@ describe('generateLoeschkonzept', () => {
     expect(doc).toContain('**27 Tage**')
     expect(doc).toContain('Max Muster')
     expect(doc).toContain('2026-05-04')
+  })
+
+  // The document states the FIXED windows (RETENTION_DEFAULTS), not config.retention.*, which nothing
+  // enforces. RED recipe: read `config.retention` again in loeschkonzept.ts (destructure it from config).
+  it('does not print a stored config.retention value (e.g. one saved before the windows were fixed)', async () => {
+    const { generateLoeschkonzept } = await import('./loeschkonzept')
+    const stale = {
+      ...mockConfig,
+      retention: { access_logs_days: 11, app_logs_days: 12, security_logs_days: 13, security_nopii_logs_days: 15 },
+    } as unknown as GremionConfig
+    const doc = generateLoeschkonzept(stale, new Date('2026-05-04'))
+    for (const n of [11, 12, 13, 15]) expect(doc).not.toContain(`**${n} Tage**`)
+    expect(doc).toContain('**27 Tage**')
+  })
+
+  it('states the audit table as a governance record that no timer deletes (RC-GOV-CHAIN), with no deletion period', async () => {
+    const { generateLoeschkonzept } = await import('./loeschkonzept')
+    const doc = generateLoeschkonzept(mockConfig, new Date('2026-05-04'))
+    const rows = doc.split('\n').filter((l) => l.startsWith('| Audit-Tabelle der Anwendung'))
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toContain('RC-GOV-CHAIN')
+    expect(rows[0]).toContain('keinem Zeitgeber')
+    expect(rows[0]).not.toMatch(/\d+ Tage/)
+    expect(doc).not.toContain('wird von der Anwendung täglich durchgesetzt')
+    expect(doc).not.toContain('Sicherheits-/Auditprotokolle')
   })
 
   // R29-RETENTION-30-K [D R29-I6]: the legal basis column names the operator
@@ -45,14 +70,14 @@ describe('generateLoeschkonzept', () => {
     expect(doc).not.toMatch(/\*\*(90|180|365) Tage\*\*/)
   })
 
-  // Only security_logs_days has a purge consumer in gremion-ui
-  // (auditRetentionTick). Every other tier row must say so instead of presenting
-  // the configured window as an enforced deletion period.
+  // No tier has a purge consumer in gremion-ui (the audit table is a governance record, and the
+  // log windows belong to the log store's own configuration). Every tier row must say so instead
+  // of presenting the configured window as a deletion period the application applies.
   describe('tiers without a purge consumer carry the caveat', () => {
     const ROW_LABEL: Record<RetentionField, string> = {
       access_logs_days: '| Zugriffsprotokolle',
       app_logs_days: '| Anwendungs-/Fehlerprotokolle',
-      security_logs_days: '| Sicherheits-/Auditprotokolle',
+      security_logs_days: '| Sicherheitsprotokolle (mit Personenbezug)',
       security_nopii_logs_days: '| Sicherheitsprotokolle (ohne Personenbezug)',
     }
 
@@ -67,9 +92,9 @@ describe('generateLoeschkonzept', () => {
       return rows[0]
     }
 
-    it('at least one tier is unenforced and one enforced (the guard is not vacuous)', () => {
-      expect(UNENFORCED.length).toBeGreaterThan(0)
-      expect(ENFORCED).toEqual(['security_logs_days'])
+    it('every tier is unenforced by the application (the guard is not vacuous)', () => {
+      expect(UNENFORCED).toEqual([...RETENTION_FIELDS])
+      expect(ENFORCED).toEqual([])
     })
 
     it.each(UNENFORCED)('%s: has no purge consumer, so its row carries the caveat', async (field) => {
@@ -100,6 +125,6 @@ describe('generateLoeschkonzept', () => {
       compliance: { ...mockConfig.compliance, controller_name: '' },
     } as unknown as GremionConfig
     const doc = generateLoeschkonzept(configWithoutName)
-    expect(doc).toContain('StuRa')
+    expect(doc).toContain('Organisation')
   })
 })

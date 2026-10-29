@@ -31,7 +31,7 @@ assertNonProductionDbUrl(process.env.DATABASE_URL ?? '', 'DATABASE_URL')
 
 const UI_ROOT = path.resolve(__dirname, '..', '..', '..')
 const MIGRATIONS = path.join(UI_ROOT, 'migrations')
-const CONTENT_1200 = path.resolve(UI_ROOT, '..', 'modules', 'content', 'migrations', '1200_content_news_posts.sql')
+const CONTENT_1200 = path.resolve(UI_ROOT, '..', 'modules', 'content', 'app', 'migrations', '1200_content_news_posts.sql')
 const READER = 'gremion_public_reader'
 const EXACT_READ_SET = ['org_units', 'protocols']
 const MUST_NOT_READ = ['calendar_events', 'event_recurrence', 'protocol_resolutions', 'resolution_challenges']

@@ -35,6 +35,9 @@ export const PLATFORM_DATABASE_NAME = /^[a-z][a-z0-9_]{0,62}$/
 const JOB_ID = /^[a-z][a-z0-9-]{0,62}$/
 const MIGRATIONS_DIR = /^[a-z][a-z0-9_-]{0,62}$/
 const RUNTIME_KEYS = ['version', 'database', 'export', 'timedJobs', 'platformServer'] as const
+const EXPORT_KEYS: readonly string[] = ['kind', 'retentionProfile', 'withhold']
+/** runtime.export.withhold entries (MED-3): schema.table or schema.table.column, plain identifiers. */
+export const WITHHOLD_ENTRY = /^[a-z_][a-z0-9_]{0,62}\.[a-z_][a-z0-9_]{0,62}(?:\.[a-z_][a-z0-9_]{0,62})?$/
 
 export interface ContractsRegistry {
   registry: RegistryEntry[]
@@ -155,6 +158,20 @@ export function validateModuleJson(json: unknown, ctx: ValidateContext): string[
     if (exp.kind !== 'pg_dump') p.push(`${where}: runtime.export.kind ${show(exp.kind)} must be "pg_dump"`)
     if (typeof exp.retentionProfile !== 'string' || !RETENTION_PROFILE.test(exp.retentionProfile)) {
       p.push(`${where}: runtime.export.retentionProfile ${show(exp.retentionProfile)} must match ${RETENTION_PROFILE.source} (DB-OPS-RETENTION-PROFILE)`)
+    }
+    for (const key of Object.keys(exp)) if (!EXPORT_KEYS.includes(key)) p.push(`${where}: runtime.export.${key} is not an export field (${EXPORT_KEYS.join(', ')})`)
+    // MED-3: secrets the open-format tenant export leaves out (schema.table or schema.table.column).
+    if ('withhold' in exp) {
+      if (!Array.isArray(exp.withhold)) {
+        p.push(`${where}: runtime.export.withhold must be a list of schema.table or schema.table.column`)
+      } else {
+        const seen = new Set<string>()
+        exp.withhold.forEach((w: unknown, i: number) => {
+          if (typeof w !== 'string' || !WITHHOLD_ENTRY.test(w)) p.push(`${where}: runtime.export.withhold[${i}] ${show(w)} must match ${WITHHOLD_ENTRY.source} (schema.table or schema.table.column)`)
+          else if (seen.has(w)) p.push(`${where}: runtime.export.withhold[${i}] ${show(w)} is declared twice`)
+          else seen.add(w)
+        })
+      }
     }
   }
 

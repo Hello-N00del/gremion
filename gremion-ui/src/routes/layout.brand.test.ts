@@ -17,7 +17,7 @@ describe('+layout.server.ts brand via requireBrand', () => {
     const { load } = await import('./+layout.server')
     // P2.2-auth A4: load() consults capabilitiesForTenant(locals.tenant) for the
     // nav filter — a config without a roles override keeps golden behavior.
-    const event = { depends: () => {}, locals: { tenant: { config: {} }, auth: async () => null, accessToken: null } } as never
+    const event = { url: new URL('http://localhost/'), depends: () => {}, locals: { tenant: { config: {} }, auth: async () => null, accessToken: null } } as never
     // load() is typed LayoutServerLoad whose return union includes `void`;
     // narrow to the runtime payload shape (same pattern as layout.server.test.ts).
     const data = (await load(event)) as { brand: { orgShort: string } }

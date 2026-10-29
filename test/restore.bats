@@ -182,3 +182,73 @@ bad_dump() {   # <path> -- an error halfway through the load
     [ "$status" -ne 0 ]
     [[ "$output" != *"Restore complete"* ]]
 }
+
+# ---------------------------------------------------------------------------
+# Snapshot tag: read the neutral tag AND the legacy one (existing snapshots)
+# ---------------------------------------------------------------------------
+
+# A restic shim over a repo holding ONE snapshot carrying $SNAP_TAG. Like real
+# restic, repeated --tag flags are OR'd: the snapshot is selected when any given
+# tag matches (or none is given).
+restic_shim() {
+    cat > "${TREE}/bin/restic" <<'SHIM'
+#!/usr/bin/env bash
+echo "restic $*" >> "$CALLS"
+tags=() ; args=() ; target=""
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --tag) tags+=("$2"); shift 2 ;;
+        --target) target="$2"; shift 2 ;;
+        *) args+=("$1"); shift ;;
+    esac
+done
+match=0
+if [[ ${#tags[@]} -eq 0 ]]; then match=1; fi
+for t in "${tags[@]}"; do [[ "$t" == "$SNAP_TAG" ]] && match=1; done
+case "${args[0]}" in
+    snapshots) [[ $match -eq 1 ]] && echo "abc123  snapshot-tagged-$SNAP_TAG" ; exit 0 ;;
+    restore)
+        [[ $match -eq 1 ]] || { echo "Fatal: no matching snapshot" >&2; exit 1; }
+        mkdir -p "${target}/backups/current"
+        printf 'x' | gzip > "${target}/backups/current/gremion.sql.gz"
+        exit 0 ;;
+esac
+SHIM
+    chmod +x "${TREE}/bin/restic"
+    export RESTIC_PASSWORD=fixture
+}
+
+@test "restore.sh --list-snapshots finds a snapshot written under the legacy tag" {
+    restore_tree; restic_shim
+    SNAP_TAG=stura-os run "${TREE}/scripts/restore.sh" --list-snapshots
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"abc123"* ]]
+}
+
+@test "restore.sh --list-snapshots finds a snapshot written under the neutral tag" {
+    restore_tree; restic_shim
+    SNAP_TAG=gremion run "${TREE}/scripts/restore.sh" --list-snapshots
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"abc123"* ]]
+}
+
+@test "restore.sh --snapshot latest restores a legacy-tagged snapshot" {
+    restore_tree; restic_shim
+    SNAP_TAG=stura-os run bash -c "echo no | '${TREE}/scripts/restore.sh' --snapshot latest gremion"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Found dump"* ]]
+}
+
+@test "restore.sh --snapshot latest restores a neutral-tagged snapshot" {
+    restore_tree; restic_shim
+    SNAP_TAG=gremion run bash -c "echo no | '${TREE}/scripts/restore.sh' --snapshot latest gremion"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"Found dump"* ]]
+}
+
+@test "restore.sh BACKUP_LEGACY_TAG is configurable" {
+    restore_tree; restic_shim
+    BACKUP_LEGACY_TAG=oldname SNAP_TAG=oldname run "${TREE}/scripts/restore.sh" --list-snapshots
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"abc123"* ]]
+}

@@ -9,8 +9,13 @@
 #                      functions only, no table privilege (ensureExecutorRole);
 #                      over TCP it cannot authenticate at all.
 # The host-privileged path (docker group) is the only one that reaches it.
-# SQL comes on stdin; every value is a psql variable (-v name=value, used as
-# :'name' in the SQL), never interpolated into the SQL text.
+# SQL comes on stdin; every SMALL value is a psql variable (-v name=value, used as
+# :'name' in the SQL), never interpolated into the SQL text. A value that can
+# be large or that names people (a request's args: a member list, up to 1 MiB)
+# is NEVER a -v: that is an argv of `docker exec` - one argument is capped at
+# 128 KiB (E2BIG, so the list cap would be unreachable) and every word of it
+# sits in the host's process table. It goes on STDIN inside the SQL, through
+# sql_jsonb_literal.
 #
 # Needs: common.sh, env_key (customer-ops.sh), ROOT.
 
@@ -39,13 +44,35 @@ executor_pg_container() {
     printf '%s' "$EXECUTOR_PG_CONTAINER"
 }
 
+# sql_jsonb_literal <json> — the JSON as a dollar-quoted jsonb SQL literal, for
+# the SQL that platform_sql pipes to psql's STDIN. Inside a dollar quote psql
+# does no variable interpolation and Postgres no escape processing, so any JSON
+# text is safe; the tag is random and refused if the JSON happens to contain it.
+sql_jsonb_literal() {
+    local json="$1" tag n
+    for n in 1 2 3; do
+        tag="g$(openssl rand -hex 8 | tr -d '\r\n')"
+        if [[ "$json" != *"\$${tag}\$"* ]]; then
+            printf '$%s$%s$%s$::jsonb' "$tag" "$json" "$tag"
+            return 0
+        fi
+    done
+    die "could not pick a dollar-quote tag absent from the JSON" "$GREMION_EXIT_ASSERT"
+}
+
 # platform_sql <role> <sql> [-v name=value ...] — tuples only, unaligned,
 # fields separated by '|'; any SQL error is a non-zero exit (ON_ERROR_STOP).
+# PLATFORM_SQL_TIMEOUT (seconds; gremion-executor sets it) bounds the call
+# with timeout(1) -- exit 124, never a hang (create-harden H4 MED-3: a wedged
+# docker exec must not stall the lease renewer). --foreground keeps it in
+# the caller's process group, so a kill of the group still reaches it.
 platform_sql() {
     local role="$1" sql="$2" c
     shift 2
     c="$(executor_pg_container)"
-    printf '%s\n' "$sql" | docker exec -i "$c" psql -X -U "$role" -d "$PLATFORM_DB" -tAq -v ON_ERROR_STOP=1 "$@" -f -
+    local -a bound=()
+    [[ -z "${PLATFORM_SQL_TIMEOUT:-}" ]] || bound=(timeout --foreground -k 5 "$PLATFORM_SQL_TIMEOUT")
+    printf '%s\n' "$sql" | ${bound[@]+"${bound[@]}"} docker exec -i "$c" psql -X -U "$role" -d "$PLATFORM_DB" -tAq -v ON_ERROR_STOP=1 "$@" -f -
 }
 
 # executor_sql <sql> [-v ...] — as the executor role.

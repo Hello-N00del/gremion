@@ -4,6 +4,7 @@ import type { RequestHandler } from './$types'
 import { hasRole, Role } from '$lib/auth'
 import type { SessionUser } from '$lib/auth/types'
 import { createPollsClient } from '$lib/server/polls/polls-client'
+import { pollAccessStatus } from '$lib/server/polls/tenant-scope'
 
 const voteSchema = z.object({
   optionId: z.number().int().min(1),
@@ -24,7 +25,14 @@ export const GET: RequestHandler = async ({ params, locals }) => {
   // Per-user client: NC must attribute currentUserStatus (hasVoted, lock
   // state) to the acting user, not the shared admin (#411).
   const client = createPollsClient({ oidcBearer: locals.accessToken ?? undefined })
-  const poll = await client.getPollWithOptions(id)
+  let poll
+  try {
+    poll = await client.getPollWithOptions(id)
+  } catch (e) {
+    const status = pollAccessStatus(e)
+    if (status) return json({ success: false, error: 'Poll unavailable' }, { status })
+    throw e
+  }
   return json({
     success: true,
     data: {
@@ -68,6 +76,13 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
   // Per-user client so the vote is cast AS the acting user (#411) — voting as
   // the shared admin locked the poll for every other user after the first vote.
   const client = createPollsClient({ oidcBearer: locals.accessToken })
-  await client.vote(id, parsed.data.optionId)
+  try {
+    await client.vote(id, parsed.data.optionId)
+  } catch (e) {
+    // 404 foreign/unknown poll or option, 409 closed / already voted, 401 no actor.
+    const status = pollAccessStatus(e)
+    if (status) return json({ success: false, error: 'Vote rejected' }, { status })
+    throw e
+  }
   return json({ success: true, data: { voted: true } })
 }

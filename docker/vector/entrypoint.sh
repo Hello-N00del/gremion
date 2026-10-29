@@ -3,7 +3,10 @@ set -e
 
 # Load ipcrypt key from file if IPCRYPT_KEY_FILE is set (Docker secret)
 if [ -n "${IPCRYPT_KEY_FILE:-}" ] && [ -f "$IPCRYPT_KEY_FILE" ]; then
-    export IPCRYPT_KEY=$(cat "$IPCRYPT_KEY_FILE")
+    # Assign then export: `export X=$(cmd)` masks cmd's exit status, so an
+    # unreadable secret file would start the processor with an empty key.
+    IPCRYPT_KEY=$(cat "$IPCRYPT_KEY_FILE")
+    export IPCRYPT_KEY
 fi
 
 # Start the ipcrypt log processor in the background

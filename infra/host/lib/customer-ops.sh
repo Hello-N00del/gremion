@@ -16,9 +16,18 @@
 # principal, issued and stamped; tenant-create is not on the mail network,
 # TRD-045), then `record-step mail_principal_issued` (the container re-reads
 # the stamp over Keycloak), then container phase B (first administrators, the
-# --enable modules, active), then the router file, which the host writes (Q17:
-# a compose etc/edge mount is refused, hygiene j4). A failed step STOPS:
-# nothing after it runs, and a rerun resumes from the ledger.
+# --enable modules; the customer stays `provisioning`), then the router file,
+# which the host writes (Q17: a compose etc/edge mount is refused, hygiene j4),
+# then `tenant-create activate` (active LAST: a router failure never leaves an
+# active customer with no route). A failed step STOPS: nothing after it runs.
+#
+# A PARTIAL CREATE IS RE-RUN, NOT ROLLED BACK (create-harden H6). Every step is
+# idempotent, so the same request run again resumes and nothing is created
+# twice: phase A/B skip ledger-done steps and use ensure* adapters (realm,
+# database, broker account, first accounts); the mail step lists the principal
+# first and issues only when absent (gremion-vendor-mail G2); record-step reads
+# the stamp back and records once; write_router replaces the file atomically;
+# activate leaves an active customer alone.
 #
 # TRD-440: customer_create counts the running containers and every project's
 # `config --services` before and after, and fails if either moved -- a
@@ -109,17 +118,51 @@ release_tip() {
     printf '%s' "$sha"
 }
 
+#
+# create-harden H4 (HIGH-1): under the executor (GREMION_EXECUTOR_REQUEST_ID,
+# set by gremion-executor for the request it runs) the container carries the
+# label gremion.request=<id>. The container is the docker daemon's child, not
+# the compose client's: killing the client (a lost lease, a signal) leaves it
+# running, and the executor kills it by this label and confirms it gone.
 tc() {
     local envfile="${ROOT}/etc/env/app-${COLOUR}.env"
     [[ -f "$envfile" ]] || die "env file absent: ${envfile}" "$GREMION_EXIT_USAGE"
     local tip; tip="$(release_tip)"
+    local -a label=()
+    if [[ -n "${GREMION_EXECUTOR_REQUEST_ID:-}" ]]; then
+        [[ "$GREMION_EXECUTOR_REQUEST_ID" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] \
+            || die "GREMION_EXECUTOR_REQUEST_ID is not a request id: '${GREMION_EXECUTOR_REQUEST_ID}'" "$GREMION_EXIT_USAGE"
+        label=(--label "gremion.request=${GREMION_EXECUTOR_REQUEST_ID}")
+    fi
     ( cd "$RELEASE_DIR" && docker compose --env-file "$envfile" run --rm -T \
+        ${label[@]+"${label[@]}"} \
         -e "GREMION_RELEASE_TIP=${tip}" \
         -e TRAEFIK_CERT_RESOLVER -e EDGE_BIND_IP -e EDGE_BIND_IP6 -e TENANT_DNS_PREFLIGHT -e GREMION_SCRATCH_FIXTURES -e GREMION_PRODUCTION_STACK \
         "${TC_MOUNT[@]}" tenant-create "$@" )
 }
 
 vendor_mail() { "${CUSTOMER_OPS_BIN}/gremion-vendor-mail" "$@"; }
+
+# The mail transport front (PLAN-mail-transport M2): ONE launcher decides, from
+# MAIL_TRANSPORT (relay | stalwart; no default), how a realm's sender is stamped.
+# Every realm-smtp call goes through mail_realm_smtp -- stalwart hands over to
+# gremion-vendor-mail untouched, relay stamps the shared relay sender.
+mail_front() { "${CUSTOMER_OPS_BIN}/gremion-mail" "$@"; }
+mail_realm_smtp() { mail_front realm-smtp "$@"; }
+# mail_sender_args -- sets MAIL_SENDER_ARGS to the container-side flag that tells
+# tenant-create which sender the host stamped (relay only; stalwart passes nothing,
+# so its container calls are byte-identical to before). Fails closed when the
+# transport cannot be resolved.
+MAIL_SENDER_ARGS=()
+mail_sender_args() {
+    local t j
+    MAIL_SENDER_ARGS=()
+    t="$(mail_front transport)" || return 1
+    if [[ "$t" == relay ]]; then
+        j="$(mail_front sender-json)" || return 1
+        MAIL_SENDER_ARGS=(--sender-json "$j")
+    fi
+}
 
 load_host_facts() {
     local state="${ROOT}/etc/env/state.env"
@@ -184,24 +227,35 @@ write_router() {   # <slug>
 # ── the mail step: the ONE seam between phase A and phase B ────────────────
 # mail_step <slug> <token> -- how a customer's mail identity is issued, chosen
 # at deploy time by MAIL_TRANSPORT (operator decision 2026-10-21: external SMTP
-# relay OR slim Stalwart). customer_create calls nothing else for mail, so the
-# mail-transport unit (PLAN-mail-transport M3) adds its `relay` arm HERE and
-# nowhere else. Today only `stalwart` exists, the behaviour this step always
-# had: the customer's own submission principal kc-<token>@ (vendor-mail
-# realm-smtp), then the ledger step mail_principal_issued. An unknown value
-# fails closed BEFORE any principal is issued, so phase B does not run.
+# relay OR slim Stalwart). customer_create calls nothing else for mail.
+#   stalwart  the customer's own submission principal kc-<token>@ (vendor-mail
+#             realm-smtp), then the ledger step mail_principal_issued -- the
+#             behaviour this step always had, byte for byte.
+#   relay     NO per-realm principal: the realm is stamped with the shared
+#             relay sender (gremion-mail realm-smtp), then the SAME ledger step
+#             mail_principal_issued records after the container reads the stamp
+#             back (8/8 stays 8/8; the step kind does not change).
+# An unresolved or unknown MAIL_TRANSPORT fails closed BEFORE any identity is
+# issued, so phase B does not run. MAIL_SENDER_ARGS carries the relay descriptor
+# on to the container calls that follow (record-step here, phase B after).
 mail_step() {
-    local slug="$1" token="$2"
-    case "${MAIL_TRANSPORT:-stalwart}" in
+    local slug="$1" token="$2" transport
+    transport="$(mail_front transport)"         || die "MAIL_TRANSPORT is unresolved or not a transport this release knows (relay, stalwart); the mail step of ${slug} did not run and phase B does not run" "$GREMION_EXIT_USAGE"
+    case "$transport" in
         stalwart)
+            MAIL_SENDER_ARGS=()
             info "host: the customer's own submission principal kc-${token}@"
-            vendor_mail realm-smtp --realm "$slug" --tenant "$token" \
-                || die "the mail step of ${slug} failed; phase B does not run (a rerun resumes here)" "$GREMION_EXIT_ASSERT"
-            tc record-step "$slug" mail_principal_issued --operator "$OPERATOR_ID" \
-                || die "record-step mail_principal_issued of ${slug} failed" "$GREMION_EXIT_ASSERT"
+            mail_realm_smtp --realm "$slug" --tenant "$token"                 || die "the mail step of ${slug} failed; phase B does not run (a rerun resumes here)" "$GREMION_EXIT_ASSERT"
+            tc record-step "$slug" mail_principal_issued --operator "$OPERATOR_ID"                 || die "record-step mail_principal_issued of ${slug} failed" "$GREMION_EXIT_ASSERT"
+            ;;
+        relay)
+            mail_sender_args || die "the relay sender of ${slug} could not be resolved; phase B does not run" "$GREMION_EXIT_ASSERT"
+            info "host: the shared relay sender (no per-customer principal)"
+            mail_realm_smtp --realm "$slug" --tenant "$token"                 || die "the mail step of ${slug} failed; phase B does not run (a rerun resumes here)" "$GREMION_EXIT_ASSERT"
+            tc record-step "$slug" mail_principal_issued --operator "$OPERATOR_ID" "${MAIL_SENDER_ARGS[@]}"                 || die "record-step mail_principal_issued of ${slug} failed" "$GREMION_EXIT_ASSERT"
             ;;
         *)
-            die "MAIL_TRANSPORT=${MAIL_TRANSPORT} is not a mail transport this release knows (stalwart); the mail step of ${slug} did not run and phase B does not run" "$GREMION_EXIT_USAGE"
+            die "MAIL_TRANSPORT resolved to ${transport}, which this release does not know (relay, stalwart); the mail step of ${slug} did not run" "$GREMION_EXIT_USAGE"
             ;;
     esac
 }
@@ -259,10 +313,14 @@ customer_create() {
     TC_MOUNT=()
     mail_step "$slug" "$token"
     TC_MOUNT=("${mounts[@]}")
-    info "phase B (container): first administrators, modules, active"
-    tc phase-b "${flags[@]}" || die "phase B of ${slug} failed; a rerun resumes from the ledger" "$GREMION_EXIT_ASSERT"
+    info "phase B (container): first administrators, modules (the customer stays provisioning until its route exists)"
+    tc phase-b "${flags[@]}" --defer-activation ${MAIL_SENDER_ARGS[@]+"${MAIL_SENDER_ARGS[@]}"} || die "phase B of ${slug} failed; a rerun resumes from the ledger" "$GREMION_EXIT_ASSERT"
     TC_MOUNT=()
     write_router "$slug"
+    # H3: active LAST -- a router failure above leaves the customer provisioning
+    # (no route, not served), never active without one.
+    info "activate (container): the router is written, the customer goes active"
+    tc activate "$slug" || die "activating ${slug} failed; a rerun resumes from the ledger" "$GREMION_EXIT_ASSERT"
 
     after="$(container_fingerprint)"
     if [[ "$before" != "$after" ]]; then
@@ -270,4 +328,192 @@ customer_create() {
         exit "$GREMION_EXIT_ASSERT"
     fi
     ok "customer ${slug} created (TRD-440: container set unchanged)"
+}
+
+# ── suspend and resume (TRD-044, PRD-OPS-004; were gremion-tenant's cmd_*) ──
+# The executor's `suspend` / `resume` handlers call these; gremion-tenant's
+# break-glass verbs call them too. DATA IS UNTOUCHED: the container verbs only
+# flip the status, the realm and the broker users, and the host step only the
+# mail principal. The router file stays exactly as it is: a suspended customer's
+# route keeps resolving and the app serves its branded 503 on status `suspended`
+# (suspendCustomer sets the status FIRST). Each verb takes the TRD-440 fingerprint
+# before and after ITS OWN run and fails if it moved. The two runs may be weeks
+# apart (deploys, colour switches in between), so nothing is compared across them.
+
+# _lifecycle_args <verb> <slug> [--operator <uuid>] -- validates; sets OPERATOR_ID.
+_lifecycle_args() {
+    local verb="$1"; shift
+    local slug="${1:-}"; shift || true
+    need_slug "$slug"
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --operator) need_value "$@"; OPERATOR_ID="$2"; shift 2 ;;
+            *) die "${verb}: unknown argument: $1" "$GREMION_EXIT_USAGE" ;;
+        esac
+    done
+    need_operator
+}
+
+customer_suspend() {   # <slug> --operator <uuid>
+    local slug="${1:-}" before after
+    _lifecycle_args suspend "$@"
+    active_colour
+    before="$(container_fingerprint)"
+    tc suspend "$slug" --operator "$OPERATOR_ID" || die "suspend of ${slug} failed in the container" "$GREMION_EXIT_ASSERT"
+    # The tenant is already 503 with its realm disabled (fail closed). The host
+    # step un-stamps the realm's sender before it deletes the principal, and every
+    # step is re-runnable, so a failure here is recovered by the same verb (the
+    # container step above repeats harmlessly).
+    mail_realm_smtp --realm "$slug" --tenant "$(token_of "$slug")" --revoke \
+        || die "the principal of ${slug} could not be revoked; the customer is already suspended, rerun gremion-tenant suspend ${slug} to converge" "$GREMION_EXIT_ASSERT"
+    after="$(container_fingerprint)"
+    if [[ "$before" != "$after" ]]; then
+        bad "TRD-440: the container set moved during suspend (before: ${before}; after: ${after})"
+        exit "$GREMION_EXIT_ASSERT"
+    fi
+    ok "customer ${slug} suspended (TRD-440: container set unchanged, data untouched)"
+}
+
+customer_resume() {   # <slug> --operator <uuid>
+    local slug="${1:-}" before after
+    _lifecycle_args resume "$@"
+    active_colour
+    # an older release kept a per-suspend record here; it is never read any more
+    rm -f "${ROOT}/runtime/suspended/${slug}.fingerprint"
+    before="$(container_fingerprint)"
+    # resolve the transport BEFORE issuing the principal: its failure then leaves nothing to revoke
+    mail_sender_args || die "resume of ${slug}: MAIL_TRANSPORT could not be resolved" "$GREMION_EXIT_USAGE"
+    mail_realm_smtp --realm "$slug" --tenant "$(token_of "$slug")" \
+        || die "a fresh principal for ${slug} could not be issued" "$GREMION_EXIT_ASSERT"
+    if ! tc resume "$slug" --operator "$OPERATOR_ID" ${MAIL_SENDER_ARGS[@]+"${MAIL_SENDER_ARGS[@]}"}; then
+        # The customer is still suspended: do not leave it holding a live principal.
+        mail_realm_smtp --realm "$slug" --tenant "$(token_of "$slug")" --revoke \
+            || bad "the fresh principal of ${slug} could not be revoked again after the failed resume; trigger Mandant sperren to converge"
+        die "resume of ${slug} failed in the container" "$GREMION_EXIT_ASSERT"
+    fi
+    after="$(container_fingerprint)"
+    if [[ "$before" != "$after" ]]; then
+        bad "TRD-440: the container set moved during resume (before: ${before}; after: ${after})"
+        exit "$GREMION_EXIT_ASSERT"
+    fi
+    ok "customer ${slug} resumed (TRD-440: container set unchanged, data untouched)"
+}
+
+# ── modules, DPIA decision and reconcile (TRD-044; reconcile was gremion-tenant's cmd_*) ──
+# The executor's enable_module / disable_module / record_dpia / reconcile handlers
+# call these. The container verbs hold the rules (the level-1 gate, the DPIA
+# decision, export-before-drop); the host adds the TRD-440 fingerprint around the
+# two that change a customer's module set (the container set must not move: the
+# stack is pooled, a module is data and a broker user, never a container).
+
+# _module_args <verb> <slug> <module> [--operator <uuid>] [--dpia-json <file>] -- sets OPERATOR_ID, MODULE_ID, DPIA_JSON.
+_module_args() {
+    local verb="$1"; shift
+    local slug="${1:-}"; shift || true
+    MODULE_ID="${1:-}"; shift || true
+    DPIA_JSON=""
+    need_slug "$slug"
+    [[ "$MODULE_ID" =~ ^[a-z][a-z0-9-]{0,62}$ ]] || die "${verb}: invalid module id '${MODULE_ID}'" "$GREMION_EXIT_USAGE"
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --operator) need_value "$@"; OPERATOR_ID="$2"; shift 2 ;;
+            --dpia-json) need_value "$@"; DPIA_JSON="$2"; shift 2 ;;
+            *) die "${verb}: unknown argument: $1" "$GREMION_EXIT_USAGE" ;;
+        esac
+    done
+    need_operator
+}
+
+# _assert_fingerprint <verb> <slug> <before> — the container set is what it was.
+_assert_fingerprint() {
+    local after; after="$(container_fingerprint)"
+    if [[ "$3" != "$after" ]]; then
+        bad "TRD-440: the container set moved during ${1} of ${2} (before: ${3}; after: ${after})"
+        exit "$GREMION_EXIT_ASSERT"
+    fi
+}
+
+customer_enable_module() {   # <slug> <module> --operator <uuid> [--dpia-json <file>]
+    local slug="${1:-}" before
+    _module_args enable_module "$@"
+    active_colour
+    before="$(container_fingerprint)"
+    local -a argv=(enable-module "$slug" "$MODULE_ID" --operator "$OPERATOR_ID")
+    # The container cannot read a host path: mount the decision read-only and hand it the
+    # container-side path, as customer_create does (a host path is ENOENT in the one-shot).
+    if [[ -n "$DPIA_JSON" ]]; then
+        [[ -f "$DPIA_JSON" ]] || die "enable_module: --dpia-json names no file" "$GREMION_EXIT_USAGE"
+        argv+=(--dpia-json /run/gremion/dpia.json)
+        TC_MOUNT=(-v "$(realpath "$DPIA_JSON"):/run/gremion/dpia.json:ro")
+    fi
+    tc "${argv[@]}" || { TC_MOUNT=(); die "enable of ${MODULE_ID} for ${slug} failed in the container" "$GREMION_EXIT_ASSERT"; }
+    TC_MOUNT=()
+    _assert_fingerprint enable_module "$slug" "$before"
+    ok "module ${MODULE_ID} enabled for ${slug} (TRD-440: container set unchanged)"
+}
+
+customer_disable_module() {   # <slug> <module> --operator <uuid>
+    local slug="${1:-}" before
+    _module_args disable_module "$@"
+    active_colour
+    before="$(container_fingerprint)"
+    tc disable-module "$slug" "$MODULE_ID" --operator "$OPERATOR_ID" || die "disable of ${MODULE_ID} for ${slug} failed in the container" "$GREMION_EXIT_ASSERT"
+    _assert_fingerprint disable_module "$slug" "$before"
+    ok "module ${MODULE_ID} disabled for ${slug} (exported before it was dropped; TRD-440: container set unchanged)"
+}
+
+customer_record_dpia() {   # <slug> <module> --operator <uuid> --requires-dpia yes|no --reason-codes a,b --document-ref <text>
+    local slug="${1:-}" requires="" codes="" ref=""
+    local -a rest=()
+    shift || true
+    local module="${1:-}"; shift || true
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --requires-dpia) need_value "$@"; requires="$2"; shift 2 ;;
+            --reason-codes) need_value "$@"; codes="$2"; shift 2 ;;
+            --document-ref) need_value "$@"; ref="$2"; shift 2 ;;
+            *) rest+=("$1"); shift ;;
+        esac
+    done
+    _module_args record_dpia "$slug" "$module" ${rest[@]+"${rest[@]}"}
+    [[ "$requires" == yes || "$requires" == no ]] || die "record_dpia: --requires-dpia is yes or no" "$GREMION_EXIT_USAGE"
+    [[ -n "$codes" && -n "$ref" ]] || die "record_dpia: --reason-codes and --document-ref are required" "$GREMION_EXIT_USAGE"
+    active_colour
+    tc dpia-record "$slug" "$MODULE_ID" --operator "$OPERATOR_ID" --requires-dpia "$requires" --reason-codes "$codes" --document-ref "$ref" \
+        || die "the DPIA decision for ${MODULE_ID} of ${slug} could not be recorded" "$GREMION_EXIT_ASSERT"
+    ok "DPIA decision for ${MODULE_ID} of ${slug} recorded (an identical latest one is reused)"
+}
+
+# customer_reconcile <slug> [--apply] — the realm contract. Without --apply: the
+# verify-only report (exit 1 on drift). With --apply: the container repair, then
+# the host rotation of the mail principal when the report says smtp-server is
+# `repair: host`, then a verify-only that must be green.
+customer_reconcile() {
+    local slug="${1:-}"; shift || true
+    need_slug "$slug"
+    local apply=no report
+    while [[ $# -gt 0 ]]; do case "$1" in --apply) apply=yes; shift ;; *) die "reconcile: unknown argument: $1" "$GREMION_EXIT_USAGE" ;; esac; done
+    active_colour
+    mail_sender_args || die "reconcile of ${slug}: MAIL_TRANSPORT could not be resolved" "$GREMION_EXIT_USAGE"
+    if [[ "$apply" == no ]]; then
+        tc reconcile --verify-only "$slug" ${MAIL_SENDER_ARGS[@]+"${MAIL_SENDER_ARGS[@]}"}
+        return
+    fi
+    # The apply exits 0 (green) or 1 (a check still fails: the drift --apply is
+    # for) and prints its report as ONE JSON line on stdout. A crash, a missing
+    # or unparseable report, or any other exit fails loudly here (review C, r2)
+    # instead of silently skipping the host rotation.
+    local out rc=0
+    out="$(tc reconcile "$slug" ${MAIL_SENDER_ARGS[@]+"${MAIL_SENDER_ARGS[@]}"})" || rc=$?
+    (( rc == 0 || rc == 1 )) || die "reconcile --apply of ${slug} failed in the container (exit ${rc})" "$GREMION_EXIT_ASSERT"
+    report="$(grep '^{' <<< "$out" | tail -n 1 || true)"
+    if [[ -z "$report" ]] || ! jq -e 'type == "object" and (.repairHost | type) == "array"' <<< "$report" >/dev/null 2>&1; then
+        die "reconcile --apply of ${slug} printed no parseable report (exit ${rc}); nothing was rotated" "$GREMION_EXIT_ASSERT"
+    fi
+    if jq -e '.repairHost | index("smtp-server")' <<< "$report" >/dev/null; then
+        info "smtp-server is repair: host -- rotating the principal of ${slug}"
+        mail_realm_smtp --realm "$slug" --tenant "$(token_of "$slug")" --rotate \
+            || die "the principal of ${slug} could not be rotated" "$GREMION_EXIT_ASSERT"
+    fi
+    tc reconcile --verify-only "$slug" ${MAIL_SENDER_ARGS[@]+"${MAIL_SENDER_ARGS[@]}"}
 }

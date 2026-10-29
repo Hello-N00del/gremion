@@ -49,6 +49,12 @@ export interface CreateSpec {
    * before any write.
    */
   dpia?: Readonly<Record<string, DpiaSpec>>
+  /**
+   * create-harden H3: phase B leaves the customer `provisioning`; the host
+   * marks it active (activateCustomer) only after it has written the router,
+   * so a router failure never leaves an active customer with no route.
+   */
+  deferActivation?: boolean
 }
 
 export function assertHost(host: string): string {
@@ -108,6 +114,11 @@ async function ensureControlRow(deps: ProvisioningDeps, slug: string, host: stri
     }
     if (existing.host !== null && existing.host !== host) {
       throw new ProvisioningError('CUSTOMER_STATE', `customer ${slug} is bound to ${existing.host}, not ${host}`)
+    }
+    if (existing.host === null) {
+      // a crash between the tenant insert and addTenantDomain: bind the host now, or domain_bound fails forever
+      await deps.control.bindPrimaryHost(existing.id, host)
+      return { row: { ...existing, host }, created: false }
     }
     return { row: existing, created: false }
   }
@@ -192,8 +203,27 @@ export async function recordHostStep(slug: string, kind: StepKind, operatorId: s
 }
 
 export async function assertSmtpStamped(c: CustomerRef, deps: ProvisioningDeps): Promise<void> {
-  const want = principalFor(c.token, deps.platformDomain)
   const got = await deps.realm.readSmtp(c.realm)
+  const sender = deps.mailSender ?? { mode: 'stalwart' as const }
+  if (sender.mode === 'relay') {
+    // PLAN-mail-transport: one shared relay credential, no per-realm principal.
+    // readSmtp reports a user only when a password is set, so an authenticating
+    // relay needs a user read back; an IP-allow-listed one (user '') needs none.
+    const problems: string[] = []
+    if ((got.user ?? '').startsWith('kc-') || (got.from ?? '').startsWith('kc-')) {
+      problems.push(`the realm carries the per-customer principal ${got.user ?? got.from} but MAIL_TRANSPORT is relay -- migration residue`)
+    } else if ((got.user ?? '') !== sender.user) {
+      problems.push(`user ${JSON.stringify(got.user)} (want ${JSON.stringify(sender.user === '' ? null : sender.user)})`)
+    }
+    if (got.from !== sender.fromAddress && !(got.from ?? '').startsWith('kc-')) problems.push(`from ${JSON.stringify(got.from)} (want ${sender.fromAddress})`)
+    if (got.host !== sender.host) problems.push(`host ${JSON.stringify(got.host)} (want ${sender.host})`)
+    if (got.port !== String(sender.port)) problems.push(`port ${JSON.stringify(got.port)} (want ${sender.port})`)
+    const wantStarttls = sender.port === 465 ? 'false' : 'true'
+    if (got.starttls !== wantStarttls) problems.push(`starttls ${JSON.stringify(got.starttls)} (want ${wantStarttls})`)
+    if (problems.length) throw new ProvisioningError('POSTCONDITION', `realm ${c.realm} is not stamped with the relay sender: ${problems.join('; ')}`)
+    return
+  }
+  const want = principalFor(c.token, deps.platformDomain)
   const problems: string[] = []
   if (got.user !== want) problems.push(`user ${JSON.stringify(got.user)} (want ${want})`)
   if (got.from !== want) problems.push(`from ${JSON.stringify(got.from)} (want ${want})`)
@@ -231,15 +261,26 @@ export async function createPhaseB(spec: CreateSpec, deps: ProvisioningDeps): Pr
   }
   const enabled = (await deps.modules.enabled(c)).sort()
   const broker = await deps.broker.ensure(c, enabled)
-  let activated = false
-  if (c.status === 'provisioning') {
-    const done = doneKinds(await deps.ledger.rows(c.id))
-    if (!isComplete(done)) throw new ProvisioningError('STEP_OUT_OF_ORDER', `customer ${v.slug} is not complete (missing ${EXECUTION_ORDER.filter((k) => !done.has(k)).join(', ')})`)
-    await deps.control.setStatus(c.id, 'active')
-    activated = true
-  }
+  const activated = spec.deferActivation ? false : (await activateCustomer(c, deps)).activated
   if (!(await deps.config.setupComplete(c))) await deps.config.markSetupComplete(c)
   return { customer: c, run, enabled, reloaded: broker.reloaded, activated }
+}
+
+/**
+ * The last create step (create-harden H3): `provisioning` -> `active`, once the
+ * ledger is complete. Re-runnable: an active customer is left as it is.
+ */
+export async function activateCustomer(c: CustomerRef & { status: ControlRow['status'] }, deps: ProvisioningDeps): Promise<{ customer: CustomerRef; activated: boolean }> {
+  if (c.status === 'active') return { customer: c, activated: false }
+  if (c.status !== 'provisioning') throw new ProvisioningError('CUSTOMER_STATE', `customer ${c.slug} is ${c.status}; only a provisioning customer is activated`)
+  const done = doneKinds(await deps.ledger.rows(c.id))
+  if (!isComplete(done)) throw new ProvisioningError('STEP_OUT_OF_ORDER', `customer ${c.slug} is not complete (missing ${EXECUTION_ORDER.filter((k) => !done.has(k)).join(', ')})`)
+  await deps.control.setStatus(c.id, 'active')
+  return { customer: c, activated: true }
+}
+
+export async function activateBySlug(slug: string, deps: ProvisioningDeps): Promise<{ customer: CustomerRef; activated: boolean }> {
+  return activateCustomer(await requireCustomer(deps, slug), deps)
 }
 
 /**
@@ -256,10 +297,10 @@ export async function suspendCustomer(slug: string, deps: ProvisioningDeps): Pro
     await deps.control.setStatus(c.id, 'suspended')
     changed = true
   }
-  if (await deps.realm.isEnabled(c.realm)) {
-    await deps.realm.setEnabled(c.realm, false)
-    changed = true
-  }
+  // Always asserted, never skipped on "already disabled": the disable and the logout-all are two calls
+  // (setRealmEnabled), and a rerun after a failed logout must still log every session out.
+  if (await deps.realm.isEnabled(c.realm)) changed = true
+  await deps.realm.setEnabled(c.realm, false)
   const r = await deps.broker.ensure(c, [])
   return { customer: c, changed: changed || r.reloaded }
 }

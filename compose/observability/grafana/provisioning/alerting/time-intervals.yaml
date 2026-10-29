@@ -1,0 +1,24 @@
+# compose/observability/grafana/provisioning/alerting/time-intervals.yaml --
+# the operator's active hours (TRD-205, quiet hours).
+#
+# This is the committed DEFAULT: Europe/Berlin, Monday to Friday, 08:00-20:00.
+# render-ops.sh overwrites this file in runtime/ops/grafana-provisioning from
+# ops.env (OPS_ACTIVE_HOURS_TZ / _START / _END / _WEEKDAYS).
+#
+# The interval describes when the operator IS reachable. policies.yaml uses it
+# as `active_time_intervals` on the non-critical route: Grafana mutes that
+# route's notifications OUTSIDE the interval, the alerts stay in their group,
+# and the first group flush after the window opens sends them as one digest.
+# (It is deliberately not a mute_time_intervals entry: that would mean the
+# opposite, "silent during these hours".)
+apiVersion: 1
+
+muteTimes:
+  - orgId: 1
+    name: active-hours
+    time_intervals:
+      - weekdays: ['monday:friday']
+        times:
+          - start_time: '08:00'
+            end_time: '20:00'
+        location: Europe/Berlin

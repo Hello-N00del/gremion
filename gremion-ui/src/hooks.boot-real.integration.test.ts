@@ -33,7 +33,7 @@ vi.mock('$lib/server/calendar/caldav-sync', () => ({ startCalDavSyncWorker: vi.f
 vi.mock('$lib/server/governance/provisioning/worker', () => ({ startProvisioningWorker: vi.fn() }))
 // Task 23: hooks.server.ts no longer boots a newsletter SQLite store or scheduler
 // (the leaf service owns them), so there are no newsletter modules to mock here.
-vi.mock('$lib/server/audit-db', () => ({ purgeAuditLogsOlderThan: vi.fn(async () => ({ purged: 0 })) }))
+vi.mock('$lib/server/audit-db', () => ({ verifyAuditChain: vi.fn(async () => ({ ok: true })) }))
 vi.mock('./auth', () => ({ handle: async ({ event, resolve }: { event: unknown; resolve: (e: unknown) => unknown }) => resolve(event) }))
 vi.mock('nodemailer', () => ({ default: { createTransport: vi.fn() } }))
 // NOTE: $lib/server/db, control-db, control-migrations, registry, context are

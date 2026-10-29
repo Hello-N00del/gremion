@@ -303,6 +303,11 @@ node scripts/ci-local/snapshot.mjs --kernel . --vertical "<vertical checkout>" \
   --out "<evidence dir>" --stack-env "<stack marker>"
 ```
 
+Without a vertical checkout, omit `--vertical`: the vertical suites are
+reported `SKIPPED` ("skipped: no --vertical"), never as passed, and the result
+is a kernel-only reading, not the full TRD-340 snapshot. See
+`scripts/ci-local/README.md`.
+
 19. **Close SSH to keys only.** Only after a key-based login as the deploy user
     succeeded from a second session; `harden-ssh` is not part of `all` on
     purpose.
@@ -418,6 +423,7 @@ in [run-record.md](run-record.md).
 - The ops project of step 15 is the observability stack of `compose/observability/` (TASK-039). Its Grafana signs in only through the `platform` realm's `grafana` client, whose secret must be in `etc/secrets/grafana/client_secret` (0600). `gremion-tenant init --realm-only --keycloak-container <kc>` writes it; the default pooled-stack `gremion-tenant init` does not (tenant-create creates the realm and Keycloak generates the secret; init prints a NOTE), so after that init the deploy user reads the secret once with kcadm into the file, block A of the Access section of `compose/observability/README.md`, re-runs `render-ops.sh` until it prints `grafana-sso=ready` and restarts Grafana. On a host whose ops realm predates TASK-039, `gremion-tenant init` refuses the changed realm template; the client is added once with block B of the same section, then block A. Writing the file from tenant-create is a named residual handed to TASK-043d (`docs/ops/host-tooling.md` keeps the three cases in one place). Collection is provisional [A] until the operator answers Q3/Q11: the host collector and a read-only view of Vector's volume, no route to a council network. The weekly footprint record (TRD-223) is `infra/host/ops/footprint.sh`, run by `gremion-footprint.timer` (installed by the `timers` stage); after the platform chain has reached migration 0005 start `gremion-footprint.service` once and read `runtime/footprint/<ISO-week>.json` and one `plt.job_run` row (a host below 0005 gets a visible exit 1, never a silent skip).
 - The pooled layout (TASK-040, [pooled-stack-layout.md](../pooled-stack-layout.md)) carries a deploy ordering hazard until TASK-034's 34b block lands: neither the apex nor `public.<domain>` has a websecure router, so the first deploy's public verification (step 14) and the post-condition's `/api/health` answer 404. No install is scheduled before 34b; TASK-038's waits carry it.
 - [A] Step 18's end-to-end suites run against the stack its `--stack-env` marker names; which stack that is for the rebuilt host is decided by TASK-038's first run.
+- The mail transport is a deploy-time choice and has NO default: set `MAIL_TRANSPORT` to `relay` or `stalwart` in `mail.env` AND `ops.env` (they must agree; `render-ops.sh` refuses a difference) before the first deploy. `relay` needs no mail project; see [email-smtp.md](../../runbooks/email-smtp.md#platform-mail-transport-relay-or-bundled-stalwart).
 - Mail bring-up is not part of this procedure: it is the go-live gate's item G4-MAIL (`gremion-mail-bringup`), see [go-live-gate.md](../go-live-gate.md).
 
 ## Changelog

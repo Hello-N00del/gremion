@@ -294,6 +294,46 @@ describe('KcProvisionApi.configureStepupFlow (ported §4-2, idempotent)', () => 
   })
 })
 
+describe('KcProvisionApi.configureStepupFlow: a fresh build is never live in the enrol-then-loa2 shape', () => {
+  it('converts the REQUIRED OTP form to OTP-or-deny BEFORE the realm is pointed at browser-stepup (a crash in between must not serve it)', async () => {
+    const F = '/admin/realms/verein/authentication'
+    const SUB = 'stepup-2fa%20second%20factor'
+    let created = false
+    let adds = 0
+    const calls: Array<{ method: string; path: string; body?: unknown }> = []
+    const legacy = [
+      { id: 'c2', providerId: 'conditional-level-of-authentication', requirement: 'REQUIRED', level: 0, index: 0 },
+      { id: 'o2', providerId: 'auth-otp-form', requirement: 'REQUIRED', level: 0, index: 1 },
+    ]
+    const transport: KcTransport = async (method, path, body) => {
+      calls.push({ method, path, body })
+      if (method === 'POST' && path === `${F}/flows/stepup-2fa/executions/flow`) created = true
+      if (method === 'POST' && path === `${F}/flows/${SUB}/executions/execution`) adds++
+      if (method === 'GET' && path === `${F}/flows`) return []
+      if (method === 'GET' && path === '/admin/realms/verein') return { realm: 'verein', attributes: {} }
+      if (method === 'GET' && path === `${F}/flows/stepup-2fa/executions`) {
+        return created
+          ? [...legacy, { id: 's2', displayName: 'stepup-2fa second factor', authenticationFlow: true, requirement: 'DISABLED', level: 0, index: 2 }]
+          : legacy
+      }
+      if (method === 'GET' && path === `${F}/flows/${SUB}/executions`) {
+        return [
+          ...(adds >= 1 ? [{ id: 'n1', providerId: 'auth-otp-form', requirement: 'DISABLED', level: 0, index: 0 }] : []),
+          ...(adds >= 2 ? [{ id: 'n2', providerId: 'deny-access-authenticator', requirement: 'DISABLED', level: 0, index: 1 }] : []),
+        ]
+      }
+      if (method === 'GET') return []
+      return undefined
+    }
+    await new KcProvisionApi(transport).configureStepupFlow('verein')
+    const bindAt = calls.findIndex((c) => c.method === 'PUT' && c.path === '/admin/realms/verein' && (c.body as { browserFlow?: string }).browserFlow === 'browser-stepup')
+    const legacyGoneAt = calls.findIndex((c) => c.method === 'DELETE' && c.path === `${F}/executions/o2`)
+    expect(bindAt).toBeGreaterThan(-1)
+    expect(legacyGoneAt).toBeGreaterThan(-1)
+    expect(legacyGoneAt).toBeLessThan(bindAt)
+  })
+})
+
 describe('updateRealmSmtp — the gremion#6 delta for an ALREADY-CREATED realm (never a re-import)', () => {
   it('PUTs the realm rep with only realm + smtpServer, on the realm-scoped path', async () => {
     const calls: Array<{ method: string; path: string; body?: unknown }> = []
@@ -316,5 +356,101 @@ describe('updateRealmSmtp — the gremion#6 delta for an ALREADY-CREATED realm (
     const api = new KcProvisionApi(async (_m, path) => { calls.push(path); return undefined })
     await api.updateRealmSmtp('a b', { host: 'mail.example.org' })
     expect(calls[0]).toBe('/admin/realms/a%20b')
+  })
+})
+
+// Security sweep 2, finding 3: stepup-2fa must be OTP-or-deny, never a REQUIRED
+// OTP form (Keycloak would enroll an authenticator inside the step-up, then
+// grant loa2 to whoever holds the session or the password).
+describe('KcProvisionApi.ensureStepup2faSecondFactor', () => {
+  const F = '/admin/realms/verein/authentication'
+  const SUB = 'stepup-2fa%20second%20factor'
+  const legacy = [
+    { id: 'c2', providerId: 'conditional-level-of-authentication', requirement: 'REQUIRED', level: 0, index: 0 },
+    { id: 'o2', providerId: 'auth-otp-form', requirement: 'REQUIRED', level: 0, index: 1 },
+  ]
+  const green = [
+    { id: 'c2', providerId: 'conditional-level-of-authentication', requirement: 'REQUIRED', level: 0, index: 0 },
+    { id: 's2', displayName: 'stepup-2fa second factor', authenticationFlow: true, requirement: 'REQUIRED', level: 0, index: 1 },
+    { id: 'o2', providerId: 'auth-otp-form', requirement: 'ALTERNATIVE', level: 1, index: 0 },
+    { id: 'd2', providerId: 'deny-access-authenticator', requirement: 'ALTERNATIVE', level: 1, index: 1 },
+  ]
+
+  it('is a no-op (reads only) on an already hardened flow', async () => {
+    const { transport, calls } = fakeTransport({ [`GET ${F}/flows/stepup-2fa/executions`]: green })
+    await new KcProvisionApi(transport).ensureStepup2faSecondFactor('verein')
+    expect(calls.every((c) => c.method === 'GET')).toBe(true)
+  })
+
+  it('does nothing when stepup-2fa has no OTP form at all (structural drift is the rebuild path)', async () => {
+    const { transport, calls } = fakeTransport({ [`GET ${F}/flows/stepup-2fa/executions`]: [] })
+    await new KcProvisionApi(transport).ensureStepup2faSecondFactor('verein')
+    expect(calls.every((c) => c.method === 'GET')).toBe(true)
+  })
+
+  it('converts the legacy REQUIRED OTP form, deleting it only AFTER the replacement is wired (a crash never leaves a flow with no second factor)', async () => {
+    let created = false
+    let adds = 0
+    const calls: Array<{ method: string; path: string; body?: unknown }> = []
+    const transport: KcTransport = async (method, path, body) => {
+      calls.push({ method, path, body })
+      if (method === 'POST' && path === `${F}/flows/stepup-2fa/executions/flow`) created = true
+      if (method === 'POST' && path === `${F}/flows/${SUB}/executions/execution`) adds++
+      if (method === 'GET' && path === `${F}/flows/stepup-2fa/executions`) {
+        return created
+          ? [...legacy, { id: 's2', displayName: 'stepup-2fa second factor', authenticationFlow: true, requirement: 'DISABLED', level: 0, index: 2 }]
+          : legacy
+      }
+      if (method === 'GET' && path === `${F}/flows/${SUB}/executions`) {
+        return [
+          ...(adds >= 1 ? [{ id: 'n1', providerId: 'auth-otp-form', requirement: 'DISABLED', level: 0, index: 0 }] : []),
+          ...(adds >= 2 ? [{ id: 'n2', providerId: 'deny-access-authenticator', requirement: 'DISABLED', level: 0, index: 1 }] : []),
+        ]
+      }
+      return undefined
+    }
+    await new KcProvisionApi(transport).ensureStepup2faSecondFactor('verein')
+    const writes = calls.filter((c) => c.method !== 'GET').map((c) => `${c.method} ${c.path.replace(F, '')} ${JSON.stringify(c.body ?? null)}`)
+    expect(writes).toEqual([
+      'POST /flows/stepup-2fa/executions/flow {"alias":"stepup-2fa second factor","type":"basic-flow"}',
+      `POST /flows/${SUB}/executions/execution {"provider":"auth-otp-form"}`,
+      `POST /flows/${SUB}/executions/execution {"provider":"deny-access-authenticator"}`,
+      'PUT /flows/browser-stepup/executions {"id":"s2","requirement":"REQUIRED"}',
+      'PUT /flows/browser-stepup/executions {"id":"n1","requirement":"ALTERNATIVE"}',
+      'PUT /flows/browser-stepup/executions {"id":"n2","requirement":"ALTERNATIVE"}',
+      'DELETE /executions/o2 null',
+    ])
+  })
+
+  it('resumes a run that died after creating the subflow (no second subflow, no duplicate children)', async () => {
+    const half = [
+      ...legacy,
+      { id: 's2', displayName: 'stepup-2fa second factor', authenticationFlow: true, requirement: 'DISABLED', level: 0, index: 2 },
+    ]
+    const { transport, calls } = fakeTransport({
+      [`GET ${F}/flows/stepup-2fa/executions`]: half,
+      [`GET ${F}/flows/${SUB}/executions`]: [
+        { id: 'n1', providerId: 'auth-otp-form', requirement: 'ALTERNATIVE', level: 0, index: 0 },
+        { id: 'n2', providerId: 'deny-access-authenticator', requirement: 'DISABLED', level: 0, index: 1 },
+      ],
+    })
+    await new KcProvisionApi(transport).ensureStepup2faSecondFactor('verein')
+    expect(calls.some((c) => c.method === 'POST')).toBe(false)
+    expect(calls.filter((c) => c.method === 'PUT').map((c) => c.body)).toEqual([
+      { id: 's2', requirement: 'REQUIRED' },
+      { id: 'n2', requirement: 'ALTERNATIVE' },
+    ])
+    expect(calls.filter((c) => c.method === 'DELETE').map((c) => c.path)).toEqual([`${F}/executions/o2`])
+  })
+
+  it('configureStepupFlow runs it on an EXISTING flow (the repair path of every live realm)', async () => {
+    const { transport, calls } = fakeTransport({
+      'GET /admin/realms/verein/authentication/flows': [{ alias: 'browser-stepup' }],
+      'GET /admin/realms/verein': { realm: 'verein', attributes: {} },
+      'GET /admin/realms/verein/clients?clientId=gremion-ui': [],
+      [`GET ${F}/flows/stepup-2fa/executions`]: green,
+    })
+    await new KcProvisionApi(transport).configureStepupFlow('verein')
+    expect(calls.some((c) => c.method === 'GET' && c.path === `${F}/flows/stepup-2fa/executions`)).toBe(true)
   })
 })

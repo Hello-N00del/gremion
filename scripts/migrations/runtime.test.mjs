@@ -89,10 +89,12 @@ test('6: the check runs once per run (same ctx), and again for a new run', async
 
 test('6: the kernel-data chain is the union of its dirs ordered by number (0058 before 1200)', () => {
   const names = chainFileNames('kernel-data', { root: REPO_ROOT })
-  // 31 legacy + F1-FIX-02-K's claimed 0059 + the content app block (1200, 1201)
-  assert.equal(names.length, 34)
-  assert.equal(names.at(-4), '0058_public_reader_grants.sql')
-  assert.equal(names.at(-3), '0059_audit_log_chain_anchor.sql')
+  // 31 legacy + F1-FIX-02-K's claimed 0059 + TRD-196's claimed 0060 + the content app block (1200, 1201)
+  assert.equal(names.length, 36)
+  assert.equal(names.at(-6), '0058_public_reader_grants.sql')
+  assert.equal(names.at(-5), '0059_audit_log_chain_anchor.sql')
+  assert.equal(names.at(-4), '0060_erasure_report.sql')
+  assert.equal(names.at(-3), '0061_audit_log_actor_uuid_check.sql')
   assert.deepEqual(names.slice(-2), ['1200_content_news_posts.sql', '1201_news_posts_public_reader_columns.sql'])
 })
 

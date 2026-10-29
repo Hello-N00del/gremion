@@ -6,6 +6,8 @@
 // wrapped in { ocs: { meta, data } } and require Accept: application/json. The
 // leaf reads NEXTCLOUD_URL + admin creds from its own env.
 
+import { assertTenantId, scopePoll, tagTitle } from './tenant-scope.js'
+
 const POLLS_BASE = '/ocs/v2.php/apps/polls/api/v1.0'
 
 export interface NcPollOption {
@@ -16,6 +18,8 @@ export interface NcPollOption {
 
 export interface NcPoll {
   id: number
+  /** The NC account the poll was created as (provenance: see scopePoll). */
+  owner?: { userId?: string; id?: string; displayName?: string }
   type: string
   configuration: {
     title: string
@@ -42,8 +46,12 @@ function ncBase(): string {
   return (process.env.NEXTCLOUD_URL ?? 'http://nextcloud').replace(/\/$/, '')
 }
 
+function adminUser(): string {
+  return process.env.NEXTCLOUD_ADMIN_USER ?? 'admin'
+}
+
 function authHeader(): string {
-  const user = process.env.NEXTCLOUD_ADMIN_USER ?? 'admin'
+  const user = adminUser()
   const pass = process.env.NEXTCLOUD_ADMIN_PASSWORD ?? ''
   return `Basic ${Buffer.from(`${user}:${pass}`).toString('base64')}`
 }
@@ -69,14 +77,26 @@ async function ncFetch<T>(
 }
 
 export const NextcloudPollsClient = {
-  listPolls: (): Promise<NcPoll[]> =>
-    ncFetch<{ polls: NcPoll[] }>('/polls').then((r) => r.polls),
+  /** Only the polls bound to `tenantId` (marker stripped from the titles). */
+  async listPolls(tenantId: string): Promise<NcPoll[]> {
+    assertTenantId(tenantId)
+    const { polls } = await ncFetch<{ polls: NcPoll[] }>('/polls')
+    return polls.flatMap((p) => scopePoll(p, tenantId, process.env.VOTES_LEGACY_POLL_TENANT_ID, adminUser()) ?? [])
+  },
 
-  async createPoll(dto: CreatePollDto): Promise<NcPoll> {
+  /** Create a poll bound to `tenantId` (the marker is written here, server-side). */
+  async createPoll(tenantId: string, dto: CreatePollDto): Promise<NcPoll> {
+    const created = await createBound(tagTitle(tenantId, dto.title), dto)
+    return scopePoll(created, tenantId, undefined, adminUser()) ?? created
+  },
+}
+
+async function createBound(storedTitle: string, dto: CreatePollDto): Promise<NcPoll> {
+  {
     // Step 1: create the poll (NC Polls v9 consumes only { type, title }).
     const { poll } = await ncFetch<{ poll: NcPoll }>('/poll', {
       method: 'POST',
-      body: JSON.stringify({ title: dto.title, type: dto.type }),
+      body: JSON.stringify({ title: storedTitle, type: dto.type }),
     })
 
     // Step 2: add every option in ONE atomic bulk write (addBulk takes a
@@ -102,12 +122,12 @@ export const NextcloudPollsClient = {
     // PUT /poll/{id} { pollConfiguration }. Without this an "Anonym" poll was
     // silently created NON-anonymous. Same rollback contract as the options write:
     // a poll whose privacy setting did not take must never be left behind.
-    const pollConfiguration: Partial<NcPoll['configuration']> = {}
+    // maxVotesPerUser 1: Nextcloud itself enforces one vote per member (the app's
+    // vote() check-then-act alone is racy), so the limit is always applied.
+    const pollConfiguration: Partial<NcPoll['configuration']> & { maxVotesPerUser: number } = { maxVotesPerUser: 1 }
     if (dto.anonymous) pollConfiguration.anonymous = true
     if (dto.description !== undefined) pollConfiguration.description = dto.description
     if (dto.expire !== undefined) pollConfiguration.expire = dto.expire
-    if (Object.keys(pollConfiguration).length === 0) return poll
-
     try {
       const updated = await ncFetch<{ poll?: NcPoll }>(`/poll/${poll.id}`, {
         method: 'PUT',
@@ -123,5 +143,5 @@ export const NextcloudPollsClient = {
       }
       throw e
     }
-  },
+  }
 }

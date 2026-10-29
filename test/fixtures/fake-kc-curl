@@ -11,6 +11,9 @@
 #   top-execs.json     GET /authentication/flows/browser-stepup/executions
 #   realm.json         GET /admin/realms/<realm>               (default {"attributes":{}})
 #   sa-mappings.json   GET .../role-mappings/clients/<rm>      (default [])
+#   two-fa.json        stepup-2fa's own executions (default: the legacy REQUIRED OTP form)
+#   kids.json          the "stepup-2fa second factor" subflow's executions (default [])
+#   ui-client.json     GET /clients/cid-ui (default: gremion-ui without attributes)
 #   granted.json       role names POSTed to the service account (appended)
 #   revoked.json       role names DELETEd from it (appended)
 # Knob: FAKE_KC_TOKEN_FAIL=1 makes the admin token request fail like `curl -f`.
@@ -64,19 +67,54 @@ case "$method $rel" in
     "DELETE /users/sa-user/role-mappings/clients/cid-rm")
         printf '%s\n' "$body" | jq -r '.[].name' >> "$KCSTATE/revoked.json"; ok '' ;;
     "GET /clients/cid-ui/protocol-mappers/models")   ok '[]' ;;
+    "GET /clients/cid-ui")                           file_or ui-client.json '{"id":"cid-ui","clientId":"gremion-ui","attributes":{"post.logout.redirect.uris":"x"}}' ;;
+    "PUT /clients/cid-ui")
+        printf '%s' "$body" > "$KCSTATE/ui-client.json"; ok '' ;;
     "GET /authentication/flows")                     file_or flows.json '[]' ;;
     "GET /authentication/flows/browser-stepup/executions") file_or top-execs.json '[]' ;;
     "GET /authentication/flows/stepup-1fa/executions")
         ok '[{"id":"c1","providerId":"conditional-level-of-authentication","requirement":"REQUIRED","authenticationConfig":"cfg1"},{"id":"p1","providerId":"auth-username-password-form","requirement":"REQUIRED"}]' ;;
     "GET /authentication/flows/stepup-2fa/executions")
-        ok '[{"id":"c2","providerId":"conditional-level-of-authentication","requirement":"REQUIRED","authenticationConfig":"cfg2"},{"id":"o2","providerId":"auth-otp-form","requirement":"REQUIRED"}]' ;;
+        # the Admin API flattens a flow's subflows into its listing (level 1 = inside one)
+        [ -f "$KCSTATE/two-fa.json" ] || printf '%s' '[{"id":"c2","providerId":"conditional-level-of-authentication","requirement":"REQUIRED","level":0,"index":0,"authenticationConfig":"cfg2"},{"id":"o2","providerId":"auth-otp-form","requirement":"REQUIRED","level":0,"index":1}]' > "$KCSTATE/two-fa.json"
+        [ -f "$KCSTATE/kids.json" ] || printf '[]' > "$KCSTATE/kids.json"
+        jq -c -s '.[0] + .[1]' "$KCSTATE/two-fa.json" "$KCSTATE/kids.json"; exit 0 ;;
+    "POST /authentication/flows/stepup-2fa/executions/flow")
+        [ -f "$KCSTATE/two-fa.json" ] || printf '%s' '[{"id":"c2","providerId":"conditional-level-of-authentication","requirement":"REQUIRED","level":0,"index":0,"authenticationConfig":"cfg2"},{"id":"o2","providerId":"auth-otp-form","requirement":"REQUIRED","level":0,"index":1}]' > "$KCSTATE/two-fa.json"
+        jq -c '. + [{"id":"s2","displayName":"stepup-2fa second factor","authenticationFlow":true,"requirement":"DISABLED","level":0,"index":2}]' "$KCSTATE/two-fa.json" > "$KCSTATE/two-fa.tmp" \
+            && mv "$KCSTATE/two-fa.tmp" "$KCSTATE/two-fa.json"
+        ok '' ;;
+    "GET /authentication/flows/stepup-2fa%20second%20factor/executions") file_or kids.json '[]' ;;
+    "POST /authentication/flows/stepup-2fa%20second%20factor/executions/execution")
+        [ -f "$KCSTATE/kids.json" ] || printf '[]' > "$KCSTATE/kids.json"
+        jq -c --arg p "$(printf '%s' "$body" | jq -r .provider)" \
+            '. + [{"id":("n-" + $p),"providerId":$p,"requirement":"DISABLED","level":1,"index":length}]' "$KCSTATE/kids.json" > "$KCSTATE/kids.tmp" \
+            && mv "$KCSTATE/kids.tmp" "$KCSTATE/kids.json"
+        ok '' ;;
+    "PUT /authentication/flows/browser-stepup/executions")
+        # setreq: update the requirement of the execution with that id wherever it lives
+        for f in two-fa.json kids.json; do
+            [ -f "$KCSTATE/$f" ] || continue
+            jq -c --argjson b "$body" 'map(if .id == $b.id then .requirement = $b.requirement else . end)' "$KCSTATE/$f" > "$KCSTATE/$f.tmp" \
+                && mv "$KCSTATE/$f.tmp" "$KCSTATE/$f"
+        done
+        ok '' ;;
+    "DELETE /authentication/executions/"*)
+        id="${rel##*/}"
+        for f in two-fa.json kids.json; do
+            [ -f "$KCSTATE/$f" ] || continue
+            jq -c --arg i "$id" 'map(select(.id != $i))' "$KCSTATE/$f" > "$KCSTATE/$f.tmp" && mv "$KCSTATE/$f.tmp" "$KCSTATE/$f"
+        done
+        ok '' ;;
     "POST /authentication/flows/browser/copy")
         # a fresh copy that the script then builds up is complete when it is done
         printf '%s' '[{"id":"flow-new","alias":"browser-stepup"}]' > "$KCSTATE/flows.json"
         printf '%s' '[{"id":"f1","displayName":"stepup-1fa","requirement":"CONDITIONAL"},{"id":"f2","displayName":"stepup-2fa","requirement":"CONDITIONAL"}]' > "$KCSTATE/top-execs.json"
+        rm -f "$KCSTATE/two-fa.json" "$KCSTATE/kids.json"
         ok '' ;;
     "DELETE /authentication/flows/"*)
-        printf '[]' > "$KCSTATE/flows.json"; printf '[]' > "$KCSTATE/top-execs.json"; ok '' ;;
+        printf '[]' > "$KCSTATE/flows.json"; printf '[]' > "$KCSTATE/top-execs.json"
+        rm -f "$KCSTATE/two-fa.json" "$KCSTATE/kids.json"; ok '' ;;
     "GET ")                                          file_or realm.json '{"attributes":{}}' ;;
     "PUT ")
         # a realm update that sets browserFlow is reflected by the next read

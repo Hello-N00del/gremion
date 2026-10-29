@@ -14,6 +14,50 @@ password resets, and protocol / resolution (Beschluss) and committee
 notifications. Mail is resolved per tenant through a single seam,
 `gremion-ui/src/lib/server/mail/tenant-mail.ts`.
 
+## Platform mail transport: relay or bundled Stalwart
+
+This section is about the mail the **platform** sends (Keycloak password
+resets of every realm, the operator realm, Grafana alert mail). It is
+independent of the per-tenant application mail above and of any feature module.
+
+One deploy-time switch, `MAIL_TRANSPORT` in `mail.env` and `ops.env`, with **no
+default** (an unset value is a named failure, never a silent guess):
+
+- `relay`: an external authenticated SMTP relay (the default keys in the
+  templates are the Google Workspace SMTP relay: STARTTLS on port 587, SMTP AUTH
+  with an app password). Every realm sends through the ONE relay credential,
+  as `system@` (operator realms), `no-reply@` (customer realms) and `alerts@`
+  (Grafana) of the platform domain; the relay must DKIM-sign that domain
+  (DMARC stays `p=reject`). **Accepted loss:** one shared credential means no
+  per-tenant sender isolation. No mail project runs, Prometheus has no `stalwart`
+  target and no mail probe target, and the `MailQueueOldest1h` alert is not
+  rendered. `gremion-mail-bringup --assert relay --external-to <mailbox>
+  [--results-file <headers>]` is the relay's go-live check: r1 the relay
+  answers, r2 STARTTLS is offered and the certificate is trusted for the relay
+  host, r3 an authenticated test message from `system@` is accepted (the
+  password rides a pipe into `curl -K -`, never an argv), r4 the delivered
+  message's headers show the relay DKIM-signed the platform domain with DMARC
+  pass (`check-received --relay`). The bundled-server asserts 1-6b are refused
+  by name in this mode; a skipped check is not a pass.
+- `stalwart`: the bundled Stalwart; each customer realm sends as its own
+  `kc-<token>@` principal (unchanged).
+
+Relay keys (`mail.env`; `ops.env` repeats the four non-secret ones and
+`render-ops.sh` requires `ALERT_SMTP_HOST/PORT/USER` to equal them):
+`RELAY_SMTP_HOST`, `RELAY_SMTP_PORT` (465 = implicit TLS), `RELAY_SMTP_USER`
+(empty = an IP-allow-listed relay without authentication),
+`RELAY_SMTP_PASSWORD_REF` and `RELAY_FROM_DOMAIN` (empty = the platform domain).
+
+**The password is never a value in an env file.** `RELAY_SMTP_PASSWORD_REF` is
+`secret:<name>` (= `<root>/etc/secrets/<name>`, mode 0600) or `file:<absolute
+path>`; it reaches kcadm on stdin and Grafana as a file, never an env value or an
+argv, and a file readable by "other" is refused.
+
+Switching mode on an initialised host is a procedure, not a hot toggle: set the
+keys, then re-stamp every realm through `gremion-mail realm-smtp` (customer
+realms: the host-side reconcile run, whose `smtp-server` check fails
+loudly while a realm still carries the other mode's stamp).
+
 ## Default: the Mailpit catcher (local dev / staging)
 
 Out of the box the stack does **not** relay mail to the internet. A `mailpit`

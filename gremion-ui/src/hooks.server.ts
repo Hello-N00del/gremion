@@ -1,5 +1,6 @@
 import { handle as authHandle } from './auth'
 import { sessionEndpointGuard } from '$lib/server/security/session-endpoint-guard'
+import { csrfOriginGuard } from '$lib/server/security/csrf-origin-guard'
 import { redirect, type Handle, type HandleFetch, type HandleServerError } from '@sveltejs/kit'
 import { sequence } from '@sveltejs/kit/hooks'
 import { building } from '$app/environment'
@@ -7,17 +8,17 @@ import { readOrMintCorrelationId, CORRELATION_HEADER } from '$lib/server/ports/t
 import { canAccess, pageAccessForTenant, Role } from '$lib/auth'
 import type { SessionUser } from '$lib/auth/types'
 import { acrToLoa } from '$lib/auth/step-up'
-import { readConfig } from '$lib/server/config'
-import { RETENTION_DEFAULTS } from '$lib/retention-tiers'
-import { moduleGateResponse, disabledModuleForPublicPath } from '$lib/server/module-gate'
+import { moduleGateResponse, disabledModuleForPublicPath, disabledModuleForPath } from '$lib/server/module-gate'
+import { moduleOffPageResponse } from '$lib/server/module-off-response'
 import { requireBrand } from '$lib/server/brand'
 import { instanceThemeStyleTag } from '$lib/theme/instance-theme'
 import { waitForDbReady, isTransientDbStartupError } from '$lib/server/db'
 import { isBootAndResolveExempt } from '$lib/server/boot-exempt'
+import { decodeRequestPath, requestPath } from '$lib/server/request-path'
 import { startProvisioningWorker } from '$lib/server/governance/provisioning/worker'
 import { verifyBearerJwt } from '$lib/server/jwt-verify'
 import { isInternalBearerRequest } from '$lib/server/internal-fetch'
-import { purgeAuditLogsOlderThan, verifyAuditChain } from '$lib/server/audit-db'
+import { verifyAuditChain } from '$lib/server/audit-db'
 import { generateErrId } from '$lib/server/err-id'
 import { assertIssMatch } from '$lib/server/tenant/iss-match'
 import { roleVocabularyForTenant } from '$lib/server/tenant/role-vocabulary'
@@ -99,12 +100,11 @@ export const bootRuntime = {
 }
 
 /**
- * F1-FIX-03 / S1a#4: delays of the one post-boot run of each audit tick. The
- * 24 h / 6 h intervals have no initial run, so a process restarted more often
- * than that (every deploy) never purged or verified. The integrity run is
- * scheduled after the retention run, so it normally checks the purged table.
+ * F1-FIX-03 / S1a#4: delay of the one post-boot run of the audit-integrity tick.
+ * The 6 h interval has no initial run, so a process restarted more often than
+ * that (every deploy) never verified. (There is no audit_log retention tick:
+ * TASK-033-a, audit_log is an append-only governance record.)
  */
-export const AUDIT_RETENTION_BOOT_DELAY_MS = 90_000
 export const AUDIT_INTEGRITY_BOOT_DELAY_MS = 150_000
 
 /**
@@ -230,35 +230,12 @@ export function boot(): Promise<void> {
         console.error('[boot] Provisioning worker failed to start:', err)
       }
 
-      // T3.3 (G-024): every 24 h, purge audit_log rows older than the configured
-      // security-log retention window (default 27 d, hard cap 29 d enforced by
-      // config.ts through `$lib/retention-tiers`, so a row lives at most 30 d:
-      // [D R29-I6]). .unref() so the interval doesn't keep the process alive
-      // during graceful shutdown / test teardown.
-      //
-      // P2.1b T4: the setInterval callback is a detached async boundary — the
-      // ambient ALS scope established during boot does NOT survive into it, so
-      // purgeAuditLogsOlderThan -> getDb() would throw "no tenant context"
-      // (fail-closed). forEachActiveTenant re-establishes an EXPLICIT
-      // runWithTenant scope per ACTIVE tenant, purging each tenant's audit_log
-      // with THAT tenant's configured retention window — with per-(worker,
-      // tenant) single-flight and per-tenant try/catch + structured log in the
-      // helper. readConfig() resolves the CURRENT tenant from the ALS scope.
-      const PURGE_INTERVAL_MS = 24 * 60 * 60 * 1000
-      const auditRetentionTick = () =>
-        forEachActiveTenant('audit-retention', async () => {
-          const cfg = readConfig()
-          // [D R29-I6] fallback = the tier registry default (27 d), never a literal 90.
-          const days = cfg.retention?.security_logs_days ?? RETENTION_DEFAULTS.security_logs_days
-          const { purged } = await purgeAuditLogsOlderThan(days)
-          if (purged > 0) console.info(`[audit-retention] purged ${purged} rows older than ${days}d`)
-        })
-      setInterval(auditRetentionTick, PURGE_INTERVAL_MS).unref()
-      // F1-FIX-03 / S1a#4: plus ONE run shortly after boot. The interval alone
-      // never fires in a process that restarts more often than every 24 h (every
-      // deploy), so retention would silently never run.
-      schedulePostBootRun('audit-retention', auditRetentionTick, AUDIT_RETENTION_BOOT_DELAY_MS)
-
+      // TASK-033-a: there is NO audit_log purge tick in this process, and none anywhere.
+      // audit_log is a governance record (RC-GOV-CHAIN, operator decision 2026-10-28):
+      // no timer deletes from it, and DELETE, UPDATE and TRUNCATE on it are revoked from
+      // the application role (tenant-store ensureKernelAuditAppendOnly), so a purge tick
+      // here would only fail every day with "permission denied". A guard in
+      // retention-tiers.test.ts fails if one returns.
       // gremion#22 finding 1 (governance integrity): the kernel carve lost the
       // periodic audit-chain-verification tick the full product wires from #320
       // (INV-1, tamper-evident record) — verifyAuditChain()/readAuditLog() in
@@ -266,8 +243,7 @@ export function boot(): Promise<void> {
       // re-verify the audit_log hash chain per ACTIVE tenant and log LOUDLY if it
       // is broken. The DB trigger (migration 043) makes tampering hard; this tick
       // makes it VISIBLE — an in-place edit or a mid-chain insert/delete surfaces
-      // here instead of lying dormant. Modelled exactly on the audit-retention
-      // tick above: the setInterval callback is a detached async boundary (the
+      // here instead of lying dormant. The setInterval callback is a detached async boundary (the
       // ambient ALS boot scope does NOT survive into it), so verifyAuditChain ->
       // getDb() would fail-closed with "no tenant context"; forEachActiveTenant
       // re-establishes an EXPLICIT runWithTenant scope per ACTIVE tenant (with
@@ -286,8 +262,8 @@ export function boot(): Promise<void> {
           }
         })
       setInterval(auditIntegrityTick, AUDIT_INTEGRITY_INTERVAL_MS).unref()
-      // F1-FIX-03 / S1a#4: plus ONE run after boot (scheduled after the
-      // retention run), for the same reason as above.
+      // F1-FIX-03 / S1a#4: plus ONE run after boot: the 6 h interval alone never
+      // fires in a process that restarts more often than that (every deploy).
       schedulePostBootRun('audit-integrity', auditIntegrityTick, AUDIT_INTEGRITY_BOOT_DELAY_MS)
 
       // (The Content Engine L2 per-minute content-publish drain is now a
@@ -344,11 +320,13 @@ if (!building) void boot()
  * to the previous Role-enum-values literal).
  */
 function sessionUserFromPayload(payload: Record<string, unknown>, vocabulary: readonly string[]): SessionUser | null {
-  // Keycloak 26+ may omit 'sub' from access tokens for public clients.
-  // Fall back to preferred_username or jti as the user identifier.
-  const id = (payload.sub as string | undefined)
-    || (payload.preferred_username as string | undefined)
-    || (payload.jti as string | undefined)
+  // TASK-033-a / TRD-147: a token WITHOUT `sub` has no session. The id is the audit
+  // actor (audit_log.user_id carries the 0061 CHECK: a uuid or a <token>-service
+  // principal), so an identifier invented from preferred_username or jti would make
+  // every audited write fail with 23514 and roll the audited act back; a username
+  // like 'x-service' would even pass as a service principal. The realm issues `sub`
+  // (the gremion-ui client's uid sub-mapper; reconcile check gremion-ui-sub-mapper).
+  const id = typeof payload.sub === 'string' ? payload.sub : ''
   if (!id) return null
   const realmRoles = (payload?.realm_access as { roles?: string[] })?.roles ?? []
   const roles = realmRoles.filter((r) => vocabulary.includes(r)) as Role[]
@@ -464,6 +442,32 @@ function isInternalBearerRoute(method: string, path: string): boolean {
   return INTERNAL_BEARER_ROUTES.some((r) => r.method === method && r.pattern.test(path))
 }
 
+/** The 401 body for a verified token or session that carries no `sub` (TRD-147). */
+function noSubjectResponse(): Response {
+  return new Response(JSON.stringify({ error: 'Unauthenticated', reason: 'no_subject' }), {
+    status: 401,
+    headers: { 'content-type': 'application/json' },
+  })
+}
+
+/** A claim as a short plain string for a log line (a claim is attacker-influenced text: bounded, never an object). */
+function claimForLog(v: unknown): string | undefined {
+  return typeof v === 'string' ? v.slice(0, 200) : undefined
+}
+
+/**
+ * r33f review: a refused no-`sub` token or session leaves a structured server-side trace so the
+ * operator can see WHICH client / realm to fix (the gremion-ui-sub-mapper is the usual cause).
+ * Tenant, azp (or client_id) and iss only: never the token, never other claims.
+ */
+function warnNoSubject(source: 'bearer' | 'session', tenant: { slug?: string } | undefined, claims: { azp?: unknown; client_id?: unknown; iss?: unknown }): void {
+  console.warn(`[authGuard] ${source} refused: no sub`, {
+    tenant: claimForLog(tenant?.slug),
+    azp: claimForLog(claims.azp) ?? claimForLog(claims.client_id),
+    iss: claimForLog(claims.iss),
+  })
+}
+
 /** The 401 reason for an internal Bearer the guard refused (never 'no_session'). */
 export const INTERNAL_BEARER_REJECTED_REASON = 'internal_bearer_not_allowed'
 
@@ -496,7 +500,7 @@ function internalBearerRejected(ctx: InternalBearerRejection): Response {
 }
 
 export const authGuard: Handle = async ({ event, resolve }) => {
-  const path = event.url.pathname
+  const path = requestPath(event)
 
   // Default locals to a known shape before any branching. authGuard is the
   // single place that populates `user` and `accessToken`; downstream routes
@@ -574,7 +578,7 @@ export const authGuard: Handle = async ({ event, resolve }) => {
   // alternative to the Auth.js cookie session used by the web frontend.
   if (path.startsWith('/api/')) {
     const authHeader = event.request.headers.get('Authorization')
-    if (authHeader?.startsWith('Bearer ')) {
+    if (authHeader !== null && /^Bearer /i.test(authHeader)) {
       // F1-FIX-03 / H11: an internalFetch self-call. Honoured only when all of
       // these hold: the (method, path) is on the exact allow-list, the request
       // arrived on the internal hop (the resolver validated its
@@ -608,7 +612,12 @@ export const authGuard: Handle = async ({ event, resolve }) => {
       const payload = await verifyBearerJwt(token, event.locals.tenant)
       if (payload) {
         const bearerUser = sessionUserFromPayload(payload, roleVocabularyForTenant(event.locals.tenant))
-        if (bearerUser) {
+        if (!bearerUser) {
+          // verified, but no `sub`: say so (not the generic 'no_session' of a garbage token) and trace it
+          warnNoSubject('bearer', event.locals.tenant, payload)
+          return noSubjectResponse()
+        }
+        {
           // iss-match backstop: the token verified against SOME realm's JWKS, but
           // it must be THIS host's tenant realm — else it is a cross-tenant replay.
           if (!bearerTenantMatches(event.locals.tenant, payload)) {
@@ -645,9 +654,29 @@ export const authGuard: Handle = async ({ event, resolve }) => {
         })
       }
     }
+    // An Authorization header that did not authenticate (garbage Bearer, a
+    // non-Bearer scheme, a bare "Bearer") must NEVER fall back to the cookie
+    // session: the CSRF origin guard exempts requests carrying Authorization, so
+    // honouring a cookie here would let a cross-site request ride it.
+    if (authHeader !== null) {
+      return new Response(
+        JSON.stringify({
+          error: 'Unauthenticated',
+          reason: internalBearerMismatch ? INTERNAL_BEARER_REJECTED_REASON : 'no_session',
+        }),
+        { status: 401, headers: { 'content-type': 'application/json' } }
+      )
+    }
   }
 
   const session = await event.locals.auth()
+  // Memoise for the rest of the request. Auth.js rebuilds the session from the
+  // ORIGINAL cookie header on every auth() call, so a second call (root layout
+  // load, +page.server loads, handleFetch sub-requests) after the access token
+  // expired would run a second refresh with the refresh token the first one
+  // already used. Harmless while refresh tokens are reusable; fatal the day
+  // rotation is switched on (see docs/auth.md, refresh-token rotation residual).
+  event.locals.auth = async () => session
 
   // All other routes require authentication
   // Also force re-login when the session has a token refresh error
@@ -671,10 +700,17 @@ export const authGuard: Handle = async ({ event, resolve }) => {
         { status: 401, headers: { 'content-type': 'application/json' } }
       )
     }
-    redirect(302, `/auth/login?callbackUrl=${encodeURIComponent(path)}`)
+    redirect(302, `/auth/login?callbackUrl=${encodeURIComponent(event.url.pathname)}`)
   }
 
   const user = session.user as SessionUser
+  // TASK-033-a / TRD-147: no `sub` (no id), no session. Same api/page split as the
+  // no-session branch above: a machine-readable 401 on /api, re-login for pages.
+  if (typeof user.id !== 'string' || user.id === '') {
+    warnNoSubject('session', event.locals.tenant, { iss: (session as unknown as { tokenIss?: string }).tokenIss })
+    if (path.startsWith('/api/')) return noSubjectResponse()
+    redirect(302, `/auth/login?callbackUrl=${encodeURIComponent(event.url.pathname)}`)
+  }
   event.locals.user = user
   // Lift the upstream access token off the session so downstream routes can
   // read it from locals without re-invoking locals.auth() (G-006).
@@ -703,7 +739,7 @@ export const authGuard: Handle = async ({ event, resolve }) => {
         { status: 401, headers: { 'content-type': 'application/json' } }
       )
     }
-    redirect(302, `/auth/login?callbackUrl=${encodeURIComponent(path)}`)
+    redirect(302, `/auth/login?callbackUrl=${encodeURIComponent(event.url.pathname)}`)
   }
   if (!assertIssMatch({ tokenIss: sessionTokenIss, tenantIssuer: event.locals.tenant.issuer })) {
     return tenantMismatchResponse(path)
@@ -718,7 +754,7 @@ export const authGuard: Handle = async ({ event, resolve }) => {
     // PAGE_ACCESS object, so tenant #1 behavior is byte-identical.
     const segment = path.split('/')[1] || 'dashboard'
     if (!canAccess(roles, segment, pageAccessForTenant(event.locals.tenant))) {
-      redirect(302, `/auth/login?error=forbidden&callbackUrl=${encodeURIComponent(path)}`)
+      redirect(302, `/auth/login?error=forbidden&callbackUrl=${encodeURIComponent(event.url.pathname)}`)
     }
   }
 
@@ -727,15 +763,19 @@ export const authGuard: Handle = async ({ event, resolve }) => {
   // above enforces the identical route-prefix 403; nav-hiding / migration-skip
   // is P0.2.
   //
-  // ONLY /api/* is gated HERE: a machine caller gets the bare route-prefix 403.
-  // A disabled-module PAGE deep link is handled in +layout.server.ts instead —
-  // throwing error() from THIS handle hook would render the bare static error
-  // template, NOT +error.svelte (SvelteKit only routes load/render throws to the
-  // error page). #290's styled "Modul nicht aktiv" surface therefore lives in
-  // the layout load (see +layout.server.ts).
+  // /api/* gets the bare machine-readable 403. A disabled-module PAGE deep link
+  // answers 403 with the styled in-shell "Modul nicht aktiv" page: the notice is
+  // a real route (routes/module-off/[id]) fetched in-process and returned with
+  // the 403 status, so the disabled module's own page/layout loads never run and
+  // the page renders INSIDE the root +layout.svelte. (A throw from the ROOT
+  // layout load cannot do this — SvelteKit renders the static error template
+  // when the root layout load fails.) See module-off-response.ts.
   if (path.startsWith('/api/')) {
     const moduleGate = moduleGateResponse(path)
     if (moduleGate) return moduleGate
+  } else {
+    const disabled = disabledModuleForPath(path)
+    if (disabled) return moduleOffPageResponse(event, disabled)
   }
 
   return resolve(event)
@@ -917,8 +957,20 @@ export const correlationHandle: Handle = ({ event, resolve }) => {
 // /api/internal/ call naming no tenant — see boot-exempt.ts) skips it; the
 // authGuard below is what answers such a request. A tenant-resolved request
 // goes through Auth.js exactly as before.
+/**
+ * Decode the request path ONCE (400 on a malformed escape) and expose it as
+ * event.locals.decodedPath; every later path check reads that value, never the
+ * raw event.url.pathname (which the router does not match on).
+ */
+export const requestPathHandle: Handle = ({ event, resolve }) => {
+  const decoded = decodeRequestPath(event.url.pathname)
+  if (decoded === null) return new Response('Bad Request', { status: 400 })
+  event.locals.decodedPath = decoded
+  return resolve(event)
+}
+
 export const authHandleUnlessExempt: Handle = ({ event, resolve }) =>
-  isBootAndResolveExempt(event.url.pathname) && !event.locals.tenant
+  isBootAndResolveExempt(requestPath(event)) && !event.locals.tenant
     ? resolve(event)
     : authHandle({ event, resolve })
 
@@ -931,6 +983,8 @@ export const authHandleUnlessExempt: Handle = ({ event, resolve }) =>
 export const handle = sequence(
   correlationHandle,
   cspGuard,
+  requestPathHandle,
+  csrfOriginGuard,
   tenantResolveHandle,
   tenantBrandStyleHandle,
   sessionEndpointGuard,

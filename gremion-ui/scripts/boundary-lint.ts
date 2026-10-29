@@ -255,7 +255,7 @@ const res = runBoundaryLint(inputs)
 
 // unusedAllow is only meaningful on a full-tree run (staged subsets legitimately
 // miss allow entries) — report it as a FAILURE in --all, ignore in --staged.
-const failures = [...res.violations.map((v) => `${v.file}:${v.line}  ${v.message}`)]
+const failures = res.violations.map((v) => `${v.file}:${v.line}  ${v.message}`)
 if (mode === '--all') failures.push(...res.unusedAllow.map((u) => `stale allowlist entry: ${u}`))
 if (mode === '--staged') failures.push(...gateStagedSpecs(repoRoot))
 

@@ -84,6 +84,16 @@ export function connect(db: string, opts: postgres.Options<{}> = {}) {
   return postgres(dbUrl(db), { max: 2, onnotice: () => {}, ...opts })
 }
 
+/** A LOGIN role's own DIRECT connection to `db` on the kernel scratch server (the purge run's purger login). */
+export function connectAs(db: string, user: string, password: string, opts: postgres.Options<{}> = {}) {
+  const override = TARGET_OPTIONS.filter((k) => k in opts)
+  if (override.length) throw new Error(`[t020] connectAs() refuses target overrides: ${override.join(', ')}`)
+  const u = new URL(dbUrl(db)) // host and port checked there; only the user differs
+  u.username = user
+  u.password = encodeURIComponent(password)
+  return postgres(u.toString(), { max: 1, onnotice: () => {}, connect_timeout: 5, ...opts })
+}
+
 /** TASK-021 G2: `db` on the module server `pgm`, as the harness superuser. */
 export function moduleDbUrl(db: string): string {
   const u = new URL(dbUrl(db))

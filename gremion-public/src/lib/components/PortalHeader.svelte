@@ -15,7 +15,7 @@
   }
 
   let {
-    institutionName = 'Studierendenrat',
+    institutionName = 'Gremium',
     legislatureLabel = null,
     mainAppUrl = null,
     navLinks = [],
@@ -128,7 +128,7 @@
           {institutionName}
         </span>
         <!-- No fallback: this used to default to a specific body type
-             ('Studierendenschaft'), which mislabels every other kind of
+             (a student body, say), which mislabels every other kind of
              institution deploying the kernel. Unset renders nothing. -->
         {#if legislatureLabel}
           <span

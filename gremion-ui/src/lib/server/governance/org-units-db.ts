@@ -218,6 +218,29 @@ export async function addOrgUnitMember(
   return rows[0]!
 }
 
+/**
+ * TASK-031 (the member import): insert a membership, or do NOTHING when the
+ * (org unit, user) pair already exists - an existing row's membership type,
+ * term and voting flag are never overwritten (addOrgUnitMember's upsert is for
+ * the UI paths that mean to change them). True when a row was inserted.
+ */
+export async function addOrgUnitMemberIfAbsent(data: AddOrgUnitMemberData): Promise<boolean>
+export async function addOrgUnitMemberIfAbsent(tx: PgTransaction, data: AddOrgUnitMemberData): Promise<boolean>
+export async function addOrgUnitMemberIfAbsent(
+  txOrData: PgTransaction | AddOrgUnitMemberData, maybeData?: AddOrgUnitMemberData
+): Promise<boolean> {
+  const { tx, data } = unpackTxArgs<AddOrgUnitMemberData>(txOrData, maybeData)
+  const rows = await getRunner(tx)<Array<{ id: string }>>`
+    INSERT INTO org_unit_members
+      (org_unit_id, user_keycloak_id, membership_type, term_start, term_end, voting)
+    VALUES
+      (${data.orgUnitId}, ${data.userKeycloakId}, ${data.membershipType},
+       ${data.termStart}, ${data.termEnd}, ${data.voting ?? true})
+    ON CONFLICT (org_unit_id, user_keycloak_id) DO NOTHING
+    RETURNING id`
+  return rows.length > 0
+}
+
 export async function removeOrgUnitMember(orgUnitId: string, userKeycloakId: string): Promise<void>
 export async function removeOrgUnitMember(tx: PgTransaction, orgUnitId: string, userKeycloakId: string): Promise<void>
 export async function removeOrgUnitMember(

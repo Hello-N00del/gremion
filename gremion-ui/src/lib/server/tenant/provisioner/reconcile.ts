@@ -17,12 +17,14 @@
 // localized sslRequired partial PUT, and the idempotent gremion-admin SA
 // realm-management grant (A — assignServiceAccountRealmRoles). Drifts the §4-2
 // sequence cannot mechanically repair (per-tenant exact URIs, fixture users,
-// fullScopeAllowed, the sub-mapper) are REPORTED but never auto-repaired — a
-// re-import is the operator's answer.
-import { KcProvisionApi, realmSeg, type KcTransport } from './kc-admin-api'
+// fullScopeAllowed, the gremion-ui sub-mapper) are REPORTED but never auto-repaired — a
+// re-import is the operator's answer. The one exception among the sub checks is
+// `bearer-clients-sub` (TASK-033-a): it adds the missing sub mapper / scope.
+import { KcProvisionApi, realmSeg, stepup2faGateProblem, type FlowExecRep, type KcTransport } from './kc-admin-api'
 import { ADMIN_CLIENT_ID, GREMION_ADMIN_SA_REALM_ROLES } from './pipeline'
-import { frontendUrlFor } from './realm-doc'
+import { frontendUrlFor, REALM_PASSWORD_POLICY } from './realm-doc'
 import type { TenantStatus } from '../registry'
+import { DEFAULT_AUDIENCES } from '../../../auth/audience'
 
 /** The exact, ordered set of named checks reconcile runs (the §4 contract). */
 export const RECONCILE_CHECK_NAMES = [
@@ -32,11 +34,15 @@ export const RECONCILE_CHECK_NAMES = [
   'acr-loa-map', // §4-1  realm attribute acr.loa.map == {"loa1":1,"loa2":2}
   'stepup-flow', // §4-1  browser-stepup flow + stepup-1fa/2fa subflows exist
   'stepup-loa-config', // §4-1  Condition-LoA configs (loa1/36000, loa2/300)
+  'stepup-2fa-otp-gate', // sweep 2 #3  stepup-2fa = REQUIRED subflow [OTP ALTERNATIVE, deny-access ALTERNATIVE]; never a REQUIRED OTP form (enrol-then-loa2)
+  'password-policy', // sweep 2 #6  realm passwordPolicy == REALM_PASSWORD_POLICY
   'gremion-ui-client', // §4-1  the gremion-ui client exists
   'gremion-ui-acr-mapper', // §4-1  acr protocol-mapper on gremion-ui
   'gremion-ui-sub-mapper', // §4-1  uid sub protocol-mapper on gremion-ui
+  'bearer-clients-sub', // TASK-033-a  every client whose tokens reach the Bearer branch issues `sub` in its access token
   'gremion-ui-redirect-uris', // §4-4  exact per-tenant redirect URIs (#240)
   'gremion-ui-web-origins', // §4-4  exact per-tenant web-origins (#240)
+  'gremion-ui-pkce', // sweep 2 #6  pkce.code.challenge.method == S256 on gremion-ui
   'full-scope-allowed', // #254   fullScopeAllowed == false on gremion-ui
   'gremion-admin-sa-roles', // (A)   gremion-admin SA holds the realm-management role(s)
   'no-fixture-users', // #239   no seed-subject id and no template fixture username (TASK-043 Q10)
@@ -52,6 +58,10 @@ export const HOST_REPAIRED_CHECKS: readonly ReconcileCheckName[] = ['smtp-server
 
 export type ReconcileCheckName = (typeof RECONCILE_CHECK_NAMES)[number]
 
+/** DB-level checks the verb appends to a realm report (withKernelAuditCheck); not part of the realm contract. */
+export const KERNEL_DB_CHECK_NAMES = ['audit-append-only'] as const
+export type KernelDbCheckName = (typeof KERNEL_DB_CHECK_NAMES)[number]
+
 /** A single named contract check result (machine-readable). */
 export interface NamedCheck {
   name: ReconcileCheckName
@@ -60,13 +70,20 @@ export interface NamedCheck {
   detail: string
 }
 
+/** A check of a report: a realm contract check, or the DB-level one withKernelAuditCheck appends. */
+export interface ReportCheck {
+  name: ReconcileCheckName | KernelDbCheckName
+  ok: boolean
+  detail: string
+}
+
 export interface ReconcileReport {
   realm: string
   /** True iff EVERY check passed (verify-only exits 1 when false). */
   ok: boolean
-  checks: NamedCheck[]
+  checks: ReportCheck[]
   /** In apply mode: the failed check names whose repair was replayed. */
-  applied: ReconcileCheckName[]
+  applied: (ReconcileCheckName | KernelDbCheckName)[]
   /** Failed checks whose repair is the host's (`repair: host`, HOST_REPAIRED_CHECKS). */
   repairHost: ReconcileCheckName[]
 }
@@ -167,7 +184,7 @@ export interface ReconcileOptions {
   verifyOnly: boolean
   /** TASK-043 R-E5b: the sender this realm must carry, kc-<token>@<platformDomain>
    *  through mail.<platformDomain>:587 STARTTLS (the realm's own principal). */
-  sender: { platformDomain: string; token: string }
+  sender: MailSender
   /** TASK-043 Q10: the identities that mark a FIXTURE user -- every seed-subject
    *  id parsed from the kernel chain's *_seed.sql files (pad-agnostic) and every
    *  template fixture username (fixture-identities.ts). */
@@ -182,17 +199,14 @@ interface RealmRep {
   otpPolicyAlgorithm?: string
   otpPolicyDigits?: number
   otpPolicyPeriod?: number
+  passwordPolicy?: string
   attributes?: Record<string, unknown>
   smtpServer?: Record<string, unknown>
 }
 interface FlowRep {
   alias?: string
 }
-interface ExecRep {
-  id?: string
-  providerId?: string
-  authenticationConfig?: string
-}
+type ExecRep = FlowExecRep
 interface ConfigRep {
   alias?: string
   config?: Record<string, string>
@@ -201,12 +215,17 @@ interface ClientRep {
   id?: string
   clientId?: string
   fullScopeAllowed?: boolean
+  attributes?: Record<string, string>
   redirectUris?: string[]
   webOrigins?: string[]
 }
 interface MapperRep {
   protocolMapper?: string
   config?: Record<string, string>
+}
+interface ScopeRep {
+  id?: string
+  name?: string
 }
 interface UserRep {
   id?: string
@@ -217,13 +236,52 @@ interface UserRep {
 /** A template sentinel the base realm carries (realm-export.base.json:12-20). */
 const SMTP_SENTINEL = /__SMTP_[A-Z0-9_]*__/
 
-/** TASK-043 R-E5b: the realm's smtpServer against its own principal. Pure. */
-export function smtpServerProblems(smtp: Record<string, unknown> | undefined, sender: { platformDomain: string; token: string }): string[] {
-  const want = `kc-${sender.token}@${sender.platformDomain}`
+/** PLAN-mail-transport M1: the sender a realm must carry, by deploy-time mail
+ *  transport. Host-owned: the host hands it to reconcile (`--sender-json`), the
+ *  container reads no mail.env. A descriptor without a `mode` is the stalwart
+ *  one (the shape every caller had before the relay existed). The relay
+ *  descriptor carries NO password (the host holds that secret). */
+export type MailSender =
+  | { mode?: 'stalwart'; platformDomain: string; token: string }
+  | { mode: 'relay'; platformDomain: string; host: string; port: number; fromAddress: string; user: string }
+
+/** The host's descriptor (`--sender-json`) -> a MailSender. Absent = stalwart. Pure; throws on anything off. */
+export function parseMailSenderJson(raw: string | undefined, platformDomain: string, token: string): MailSender {
+  if (raw === undefined || raw === '') return { mode: 'stalwart', platformDomain, token }
+  let j: unknown
+  try {
+    j = JSON.parse(raw)
+  } catch {
+    throw new Error('reconcile: --sender-json is not JSON (sender descriptor)')
+  }
+  if (typeof j !== 'object' || j === null || Array.isArray(j)) throw new Error('reconcile: --sender-json is not an object (sender descriptor)')
+  const o = j as Record<string, unknown>
+  if (o.mode === 'stalwart') return { mode: 'stalwart', platformDomain, token }
+  if (o.mode !== 'relay') throw new Error(`reconcile: --sender-json mode ${JSON.stringify(o.mode)} is neither relay nor stalwart`)
+  if ('password' in o) throw new Error('reconcile: --sender-json must not carry a password (the host holds the relay secret)')
+  const host = typeof o.host === 'string' ? o.host.trim() : ''
+  if (!host) throw new Error('reconcile: relay sender descriptor has no host')
+  const port = o.port
+  if (typeof port !== 'number' || !Number.isInteger(port) || port <= 0 || port > 65535) throw new Error('reconcile: relay sender descriptor has a bad port')
+  const fromAddress = typeof o.fromAddress === 'string' ? o.fromAddress.trim() : ''
+  if (!fromAddress) throw new Error('reconcile: relay sender descriptor has no fromAddress')
+  const user = typeof o.user === 'string' ? o.user.trim() : ''
+  return { mode: 'relay', platformDomain, host, port, fromAddress, user }
+}
+
+/** TASK-043 R-E5b / PLAN-mail-transport M1: the realm's smtpServer against the
+ *  sender its deploy-time mail transport requires. Pure. */
+export function smtpServerProblems(smtp: Record<string, unknown> | undefined, sender: MailSender): string[] {
   const s = smtp ?? {}
   const str = (k: string): string => (typeof s[k] === 'string' ? (s[k] as string) : '')
   const problems: string[] = []
   if (SMTP_SENTINEL.test(JSON.stringify(s))) problems.push('an unresolved __SMTP_*__ template sentinel')
+  if (sender.mode === 'relay') return relaySmtpProblems(s, sender, problems)
+  const want = `kc-${sender.token}@${sender.platformDomain}`
+  // A realm stamped for the relay while this host runs stalwart: named residue.
+  if (str('host') !== `mail.${sender.platformDomain}` && str('from').startsWith('no-reply@') && !str('user').startsWith('kc-')) {
+    problems.push(`the realm carries a relay stamp (host ${JSON.stringify(str('host'))}, from ${str('from')}) but MAIL_TRANSPORT is stalwart -- migration residue`)
+  }
   for (const k of ['user', 'from'] as const) {
     const v = str(k)
     if (v === want) continue
@@ -239,6 +297,29 @@ export function smtpServerProblems(smtp: Record<string, unknown> | undefined, se
   return problems.length ? [`expected ${want} via mail.${sender.platformDomain}:587 STARTTLS; ${problems.join('; ')}`] : []
 }
 
+function relaySmtpProblems(s: Record<string, unknown>, sender: Extract<MailSender, { mode: 'relay' }>, problems: string[]): string[] {
+  const str = (k: string): string => (typeof s[k] === 'string' ? (s[k] as string) : '')
+  const implicitTls = sender.port === 465
+  const authenticated = sender.user !== ''
+  const user = str('user')
+  if (/^kc-[a-z0-9_]+@/.test(user) || /^kc-[a-z0-9_]+@/.test(str('from'))) {
+    problems.push(`the realm still carries the per-customer principal ${user.startsWith('kc-') ? user : str('from')} but MAIL_TRANSPORT is relay -- migration residue`)
+  } else if (user.startsWith('platform@')) {
+    problems.push(`user is the retired shared sender ${user}`)
+  } else if (user !== sender.user) {
+    problems.push(`user is ${JSON.stringify(user)}`)
+  }
+  if (str('from') !== sender.fromAddress && !str('from').startsWith('kc-')) problems.push(`from is ${JSON.stringify(str('from'))}`)
+  if (str('host') !== sender.host) problems.push(`host is ${JSON.stringify(str('host'))}`)
+  if (str('port') !== String(sender.port)) problems.push(`port is ${JSON.stringify(str('port'))}`)
+  if (str('starttls') !== (implicitTls ? 'false' : 'true')) problems.push(`starttls is ${JSON.stringify(str('starttls'))}`)
+  if (implicitTls && str('ssl') !== 'true') problems.push(`ssl is ${JSON.stringify(str('ssl'))} (port 465 is implicit TLS)`)
+  if (str('auth') !== (authenticated ? 'true' : 'false')) problems.push(`auth is ${JSON.stringify(str('auth'))}`)
+  if (authenticated && str('password') === '') problems.push('no password is set')
+  const via = `${sender.host}:${sender.port} ${implicitTls ? 'implicit TLS' : 'STARTTLS'}`
+  return problems.length ? [`expected ${sender.fromAddress} via ${via}${authenticated ? ` as ${sender.user}` : ' (unauthenticated relay)'}; ${problems.join('; ')}`] : []
+}
+
 /** The expected acr.loa.map literal (matches the base + the §4-2 apply). */
 const ACR_LOA_MAP = '{"loa1":1,"loa2":2}'
 /** The repairable check family: those the §4-2 step-up sequence covers. */
@@ -248,6 +329,7 @@ const STEPUP_REPAIRABLE: ReconcileCheckName[] = [
   'acr-loa-map',
   'stepup-flow',
   'stepup-loa-config',
+  'stepup-2fa-otp-gate',
   'gremion-ui-acr-mapper',
 ]
 
@@ -303,6 +385,33 @@ function expectedUiScopeRoles(base: Record<string, unknown>): string[] {
   const scopeMappings = (base.scopeMappings as Array<{ client?: string; roles?: string[] }> | undefined) ?? []
   const ui = scopeMappings.find((sm) => sm.client === 'gremion-ui')
   return [...(ui?.roles ?? [])]
+}
+
+/** TASK-033-a: the clients whose access tokens reach hooks.server.ts's Bearer branch are the ones the
+ *  verifier accepts the audience of (DEFAULT_AUDIENCES are client ids: gremion-ui, gremion-mobile). */
+export const BEARER_CLIENT_IDS: readonly string[] = DEFAULT_AUDIENCES
+
+/** A mapper that puts `sub` into the ACCESS token (Bearer tokens are access tokens): Keycloak's own
+ *  oidc-sub-mapper (the built-in `basic` scope, 25+) or a property mapper writing claim `sub`. */
+function isAccessTokenSubMapper(m: MapperRep): boolean {
+  const issuesSub = m.protocolMapper === 'oidc-sub-mapper' || m.config?.['claim.name'] === 'sub'
+  return issuesSub && m.config?.['access.token.claim'] === 'true'
+}
+
+/** The mapper reconcile adds when a Bearer client has no sub: the one the base template's gremion-ui carries. */
+const SUB_MAPPER_REP = {
+  name: 'sub',
+  protocol: 'openid-connect',
+  protocolMapper: 'oidc-usermodel-property-mapper',
+  consentRequired: false,
+  config: {
+    'userinfo.token.claim': 'false',
+    'user.attribute': 'id',
+    'id.token.claim': 'false',
+    'access.token.claim': 'true',
+    'claim.name': 'sub',
+    'jsonType.label': 'String',
+  },
 }
 
 export async function reconcileRealm(transport: KcTransport, opts: ReconcileOptions): Promise<ReconcileReport> {
@@ -392,6 +501,23 @@ export async function reconcileRealm(transport: KcTransport, opts: ReconcileOpti
     }
   }
 
+  // ── sweep 2 #3: a user without OTP must not enroll one inside the step-up ─────
+  if (!stepupExists) {
+    fail('stepup-2fa-otp-gate', 'browser-stepup flow absent — the second-factor gate cannot be verified')
+  } else {
+    const problem = stepup2faGateProblem(e2)
+    if (problem === null) pass('stepup-2fa-otp-gate')
+    else fail('stepup-2fa-otp-gate', `${problem} (security sweep 2: a stolen session could enroll its own authenticator and pass the fresh-2FA gate)`)
+  }
+
+  // ── sweep 2 #6: password policy ───────────────────
+  if (realmRep.passwordPolicy === REALM_PASSWORD_POLICY) pass('password-policy')
+  else fail('password-policy', `passwordPolicy is ${JSON.stringify(realmRep.passwordPolicy)} (expected ${JSON.stringify(REALM_PASSWORD_POLICY)})`)
+  // Refresh-token rotation (revokeRefreshToken / refreshTokenMaxReuse) is
+  // deliberately NOT checked or set: gremion-ui refreshes concurrently (several
+  // locals.auth() consumers per request, parallel tabs), so rotation with no
+  // reuse logs users out. It needs a single-flight refresh first (docs/auth.md).
+
   // ── gremion-ui client: existence, mappers, exact URIs, fullScopeAllowed ────────
   const clients = (await get<ClientRep[]>('/clients?clientId=gremion-ui')) ?? []
   const ui = clients[0]
@@ -403,6 +529,7 @@ export async function reconcileRealm(transport: KcTransport, opts: ReconcileOpti
     fail('gremion-ui-sub-mapper', 'gremion-ui client absent — sub mapper cannot be verified')
     fail('gremion-ui-redirect-uris', 'gremion-ui client absent — redirect URIs cannot be verified')
     fail('gremion-ui-web-origins', 'gremion-ui client absent — web-origins cannot be verified')
+    fail('gremion-ui-pkce', 'gremion-ui client absent — PKCE cannot be verified')
     fail('full-scope-allowed', 'gremion-ui client absent — fullScopeAllowed cannot be verified')
   } else {
     pass('gremion-ui-client')
@@ -439,6 +566,14 @@ export async function reconcileRealm(transport: KcTransport, opts: ReconcileOpti
         `web-origins not the exact per-tenant set (#240). got=${JSON.stringify(ui.webOrigins)} expected=${JSON.stringify(expected.webOrigins)}`,
       )
     }
+    if (ui.attributes?.['pkce.code.challenge.method'] === 'S256') {
+      pass('gremion-ui-pkce')
+    } else {
+      fail(
+        'gremion-ui-pkce',
+        `pkce.code.challenge.method is ${JSON.stringify(ui.attributes?.['pkce.code.challenge.method'])} (expected "S256": an intercepted authorization code must be useless without the verifier)`,
+      )
+    }
     // #254 — fullScopeAllowed:false alone is NOT enough: WITHOUT explicit realm-role
     // scope-mappings the gremion-ui client silently emits NO realm_access.roles, which
     // is the exact #254 silent role-filtering break. So the check ALSO asserts the
@@ -460,6 +595,36 @@ export async function reconcileRealm(transport: KcTransport, opts: ReconcileOpti
         )
       }
     }
+  }
+
+  // ── TASK-033-a: every Bearer client issues `sub` ──────────────────────────────
+  // A token without `sub` has no session (sessionUserFromPayload), so a client whose access token lacks
+  // it locks its own users out. Read, per Bearer client, the client's own mappers and the mappers of its
+  // default client scopes (Keycloak 25+ issues `sub` through the built-in `basic` scope; a realm imported
+  // from our template has no such scope). A client absent from the realm issues no tokens.
+  const subMissing: Array<{ clientId: string; id: string }> = []
+  for (const clientId of BEARER_CLIENT_IDS) {
+    const c = ((await get<ClientRep[]>(`/clients?clientId=${encodeURIComponent(clientId)}`)) ?? [])[0]
+    if (!c?.id) continue
+    let issues = ((await get<MapperRep[]>(`/clients/${c.id}/protocol-mappers/models`)) ?? []).some(isAccessTokenSubMapper)
+    if (!issues) {
+      for (const scope of (await get<ScopeRep[]>(`/clients/${c.id}/default-client-scopes`)) ?? []) {
+        if (!scope.id) continue
+        const mappers = (await get<MapperRep[]>(`/client-scopes/${scope.id}/protocol-mappers/models`)) ?? []
+        if (mappers.some(isAccessTokenSubMapper)) {
+          issues = true
+          break
+        }
+      }
+    }
+    if (!issues) subMissing.push({ clientId, id: c.id })
+  }
+  if (subMissing.length === 0) pass('bearer-clients-sub')
+  else {
+    fail(
+      'bearer-clients-sub',
+      `no sub in the access token of client(s) ${subMissing.map((m) => m.clientId).join(', ')}: neither a sub mapper on the client nor a default client scope (basic) carrying one -- tokens without sub have no session (TRD-147)`,
+    )
   }
 
   // ── #239 / TASK-043 Q10: no FIXTURE user ─────────────────────────────────────
@@ -489,7 +654,13 @@ export async function reconcileRealm(transport: KcTransport, opts: ReconcileOpti
   // ── TASK-043 R-E5b: the realm's OWN sender ─────────────────────────────────
   const smtp = smtpServerProblems(realmRep.smtpServer, opts.sender)
   if (smtp.length === 0) pass('smtp-server')
-  else fail('smtp-server', `${smtp.join('; ')} (repair: host -- gremion-vendor-mail realm-smtp --realm ${realm} --tenant ${opts.sender.token} --rotate)`)
+  else {
+    const repair =
+      opts.sender.mode === 'relay'
+        ? `gremion-mail realm-smtp --realm ${realm} --tenant ${realm.replace(/-/g, '_')}`
+        : `gremion-vendor-mail realm-smtp --realm ${realm} --tenant ${opts.sender.token} --rotate`
+    fail('smtp-server', `${smtp.join('; ')} (repair: host -- ${repair})`)
+  }
 
   // ── TASK-043 r4: the realm's frontendUrl is the customer's own host ─────────
   // Keycloak has no --hostname: without it every link Keycloak mails is built
@@ -553,6 +724,27 @@ export async function reconcileRealm(transport: KcTransport, opts: ReconcileOpti
     if (failedNames.has('frontend-url')) applied.push('frontend-url')
   }
 
+  // Security sweep 2 #6: the password policy is one partial realm PUT (only this
+  // field; a full round-tripped rep 500s on KC 26).
+  if (failedNames.has('password-policy')) {
+    await transport('PUT', `/admin/realms/${realmSeg(realm)}`, {
+      realm,
+      passwordPolicy: REALM_PASSWORD_POLICY,
+    })
+    applied.push('password-policy')
+  }
+
+  // Security sweep 2 #6: PKCE S256 on gremion-ui, a partial client PUT that merges
+  // the live attributes (the post-logout URIs live there).
+  if (failedNames.has('gremion-ui-pkce') && ui?.id) {
+    await transport('PUT', `/admin/realms/${realmSeg(realm)}/clients/${ui.id}`, {
+      id: ui.id,
+      clientId: 'gremion-ui',
+      attributes: { ...ui.attributes, 'pkce.code.challenge.method': 'S256' },
+    })
+    applied.push('gremion-ui-pkce')
+  }
+
   // (A) The gremion-admin SA realm-management grant is mechanically repairable: the
   // ported assign_realm_admin_to_sa is idempotent (KC no-ops duplicate mappings),
   // so apply simply re-runs it when the role mapping has drifted away.
@@ -565,10 +757,69 @@ export async function reconcileRealm(transport: KcTransport, opts: ReconcileOpti
     applied.push('gremion-admin-sa-roles')
   }
 
+  // TASK-033-a: a Bearer client without `sub` gets it. The realm's own `basic` scope when it has one (Keycloak
+  // 25+ native), else the same sub mapper the base template puts on gremion-ui. The post-apply re-verify below
+  // reads the result; nothing here is assumed.
+  if (failedNames.has('bearer-clients-sub') && subMissing.length > 0) {
+    const scopes = (await get<ScopeRep[]>('/client-scopes')) ?? []
+    const basic = scopes.find((sc) => sc.name === 'basic' && sc.id)
+    for (const m of subMissing) {
+      if (basic?.id) {
+        await transport('PUT', `/admin/realms/${realmSeg(realm)}/clients/${m.id}/default-client-scopes/${basic.id}`)
+      } else {
+        await transport('POST', `/admin/realms/${realmSeg(realm)}/clients/${m.id}/protocol-mappers/models`, SUB_MAPPER_REP)
+      }
+    }
+    applied.push('bearer-clients-sub')
+  }
+
   // The remaining failures (exact URIs / fixture users / fullScopeAllowed / the
-  // sub-mapper) are NOT mechanically repaired by the §4-2 sequence — they stay
+  // gremion-ui sub-mapper) are NOT mechanically repaired by the §4-2 sequence — they stay
   // reported so the operator re-imports/re-stamps the realm. Re-verify so the
   // report reflects post-apply state.
   const after = await reconcileRealm(transport, { ...opts, verifyOnly: true })
   return { realm, ok: after.ok, checks: after.checks, applied, repairHost: after.repairHost }
+}
+
+// ── TASK-033-a: the kernel audit record is append-only ─────────────────────────
+/**
+ * The customer's kernel database, as reconcile sees it for ONE tenant: `problems`
+ * reads the effective privileges (tenant-store kernelAuditAppendOnlyProblems),
+ * `repair` re-asserts them (ensureKernelAuditAppendOnly). The verb supplies the
+ * live pair; this module stays pure over it.
+ */
+export interface KernelAuditPort {
+  problems(): Promise<string[]>
+  repair(): Promise<void>
+}
+
+/**
+ * Appends the `audit-append-only` check to a realm report. The kernel's audit_log is a
+ * governance record (RC-GOV-CHAIN): the app and owner roles must hold no DELETE, UPDATE or
+ * TRUNCATE on it. Verify only reads; apply repairs once and READS AGAIN (the post-condition is
+ * observed, not assumed). A port that throws fails the check with the reason. The check can turn
+ * a green report red, never a red one green.
+ */
+export async function withKernelAuditCheck(report: ReconcileReport, port: KernelAuditPort | null, verifyOnly: boolean): Promise<ReconcileReport> {
+  if (port === null) return report
+  const name: KernelDbCheckName = 'audit-append-only'
+  let problems: string[]
+  let repaired = false
+  try {
+    problems = await port.problems()
+    if (problems.length > 0 && !verifyOnly) {
+      await port.repair()
+      repaired = true
+      problems = await port.problems()
+    }
+  } catch (err) {
+    problems = [`cannot read or repair the kernel database privileges: ${err instanceof Error ? err.message : String(err)}`]
+  }
+  const check = { name, ok: problems.length === 0, detail: problems.join('; ') }
+  return {
+    ...report,
+    ok: report.ok && check.ok,
+    checks: [...report.checks, check],
+    applied: repaired && check.ok ? [...report.applied, name] : report.applied,
+  }
 }

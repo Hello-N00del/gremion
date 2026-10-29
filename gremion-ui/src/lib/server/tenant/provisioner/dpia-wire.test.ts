@@ -31,6 +31,8 @@ describe('panel -> request-verify -> --dpia-json -> library: one DPIA wire forma
     const v = verify(form())
     expect(v.verdict).toBe('ok')
     if (v.verdict !== 'ok') return
+    // a create request carries the DPIA map; the import / seed kinds do not (the union is narrowed here)
+    if (!('dpia' in v.args)) throw new Error('a create request must carry dpia')
     // exactly what create.sh writes to the --dpia-json file: `jq -c .dpia`
     const parsed = parseDpiaMap(JSON.stringify(v.args.dpia))
     expect(Object.keys(parsed).sort()).toEqual(['calendar', 'votes'])

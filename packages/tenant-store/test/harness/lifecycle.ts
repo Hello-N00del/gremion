@@ -103,7 +103,8 @@ export function moduleServer(): ModuleServer & { opened: string[]; close(): Prom
     opened,
     open(database, options) {
       opened.push(database)
-      const sql = connectModule(database, { max: 2, ...(options?.role ? { role: options.role } : {}) })
+      // as the superuser itself the session pins search_path (as tenant-provision.ts moduleServerFor does)
+      const sql = connectModule(database, { max: 2, ...(options?.role ? { role: options.role } : { connection: { search_path: 'pg_catalog' } }) })
       pools.push(sql)
       return sql
     },

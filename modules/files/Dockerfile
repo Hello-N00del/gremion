@@ -1,9 +1,9 @@
-# services/files/Dockerfile
-# D-P1-1 house pattern: build context is the REPO ROOT, NOT services/files —
+# modules/files/Dockerfile
+# D-P1-1 house pattern: build context is the REPO ROOT, NOT modules/files —
 # pnpm-lock.yaml and pnpm-workspace.yaml live OUTSIDE this directory, so a
-# services/files-only context cannot resolve them. Build with:
-#   docker build -f services/files/Dockerfile -t gremion/files:<tag> .
-# Mirrors services/content/Dockerfile. The files leaf is stateless (no PG/NATS,
+# modules/files-only context cannot resolve them. Build with:
+#   docker build -f modules/files/Dockerfile -t gremion/files:<tag> .
+# Mirrors modules/content/Dockerfile. The files leaf is stateless (no PG/NATS,
 # no migrations) and has no workspace deps — it bundles @xmldom/xmldom via esbuild.
 FROM node:26-alpine AS builder
 WORKDIR /repo
@@ -17,14 +17,14 @@ RUN npm install -g corepack && corepack enable pnpm
 
 # Install workspace deps (cache-friendly: package manifests first).
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
-COPY services/files/package.json ./services/files/
+COPY modules/files/package.json ./modules/files/
 RUN pnpm install --frozen-lockfile
 
 # Copy the service sources.
-COPY services/files ./services/files/
+COPY modules/files ./modules/files/
 
-# Compile + bundle TypeScript → services/files/dist/index.js
-WORKDIR /repo/services/files
+# Compile + bundle TypeScript → modules/files/dist/index.js
+WORKDIR /repo/modules/files
 RUN pnpm build
 
 # pnpm deploy resolves the prod dependency tree into a self-contained dir.
@@ -39,7 +39,7 @@ ENV PORT=8080
 
 COPY --from=builder /deploy/node_modules ./node_modules
 COPY --from=builder /deploy/package.json ./
-COPY --from=builder /repo/services/files/dist ./dist
+COPY --from=builder /repo/modules/files/dist ./dist
 
 # A-021: run as the image's built-in non-root `node` user (uid/gid 1000).
 USER node

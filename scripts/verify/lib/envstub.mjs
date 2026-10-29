@@ -28,7 +28,7 @@ export function stubEnvFilesIfAbsent(cwd) {
   if (status.code !== 0 || status.stdout.trim().length > 0) {
     throw new Error(
       'refusing to stub .env/legal/legal.env: git status is non-empty (or failed) for a path that should be gitignored -- ' +
-        `something unexpected is tracked there:\n${status.stdout}${status.stderr}`,
+        `something unexpected is tracked there:\n${String(status.stdout)}${String(status.stderr)}`,
     )
   }
 }

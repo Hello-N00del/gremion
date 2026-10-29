@@ -1,11 +1,9 @@
 import { describe, test, expect, vi } from 'vitest'
 import { render } from '@testing-library/svelte'
-import type { NavItem } from '$lib/components/layout/nav-schema'
 
-// R33c UX-1 guard: a disabled module's page deep link (403 'module-disabled:<id>') must render the styled
-// German "Modul nicht aktiv" surface INSIDE the app shell (rail visible, link back to the home page) and must
-// never show the raw code string. Revert guard: in +error.svelte drop the `{#if moduleOff && shell && shell.user}`
-// AppShell branch (or in ModuleOffNotice.svelte print the id) and this goes RED.
+// R33c UX-1 guard (component level): a client-side navigation to a disabled module (403 'module-disabled:<id>')
+// renders the styled German "Modul nicht aktiv" surface and never the raw code string. The shell comes from
+// +layout.svelte; the full-page-load path is answered by the authGuard hook (pinned in hooks.module-gate.test.ts and lib/server/module-off-response.test.ts).
 const h = vi.hoisted(() => ({
   state: { status: 403, error: null as unknown, url: new URL('http://localhost/files'), data: {} as Record<string, unknown> },
 }))
@@ -26,18 +24,9 @@ if (typeof window !== 'undefined' && !window.matchMedia) {
 
 import ErrorPage from './+error.svelte'
 
-const nav: NavItem[] = [{ kind: 'item', href: '/', label: 'Home', icon: 'home' }]
-const shell = (roles: string[]) => ({
-  nav,
-  brand: null,
-  sourceUrl: undefined,
-  modules: { files: false, messages: true },
-  user: { name: 'Mia Meier', roles, groups: [] },
-})
-
 function mount(roles: string[]) {
   h.state.status = 403
-  h.state.error = { message: 'module-disabled:files', shell: shell(roles) }
+  h.state.error = { message: 'module-disabled:files' }
   h.state.data = { session: { user: { name: 'Mia Meier', roles } } }
   return render(ErrorPage)
 }
@@ -50,7 +39,6 @@ describe('module-disabled 403 surface', () => {
     expect(text).toContain("Das Modul Dateien")
     expect(text).not.toContain('module-disabled')
     expect(container.querySelector('[data-testid="module-off"]')).toBeTruthy()
-    expect(container.querySelector('nav')).toBeTruthy()
     // The kernel has no /dashboard route: its home is '/'. The notice's own escape link must point there.
     const noticeHrefs = Array.from(container.querySelectorAll('[data-testid="module-off"] a')).map((a) => a.getAttribute('href'))
     expect(noticeHrefs).toContain('/')

@@ -7,9 +7,10 @@
 // municipal-fixture.test.ts:137).
 import { describe, it, expect } from 'vitest'
 import { parseBlueprintDocument } from './blueprint-schema'
-import { validateBlueprint, STURA_BLUEPRINT } from './org-blueprint'
+import { validateBlueprint } from './org-blueprint'
+import { STURA_BLUEPRINT } from './stura-fixture'
 import { GREMION_ORG_SCHEMA, orgSchemaFromBlueprint } from '../governance/org-schema'
-import { MUNICIPAL_BLUEPRINT } from './municipal-blueprint'
+import { MUNICIPAL_BLUEPRINT } from './municipal-fixture'
 
 describe('MUNICIPAL_BLUEPRINT seedable artifact (P2.3 #202 T2)', () => {
   it('passes BOTH validation layers via parseBlueprintDocument', () => {

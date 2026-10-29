@@ -164,7 +164,7 @@ describe('validateBlueprint — caucus integrity (in-memory mirror of the D-CD c
   })
 })
 
-import { STURA_BLUEPRINT } from './org-blueprint'
+import { STURA_BLUEPRINT } from './stura-fixture'
 
 describe('STURA_BLUEPRINT', () => {
   it('is internally valid', () => {

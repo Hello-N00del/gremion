@@ -112,7 +112,7 @@ Not a draft contract — the checklist the eventual AVV is measured against.
 | Deployment integrity | Digest-pinned images, push-based deploy from CI over SSH, no standing registry credential on the host, no builds on the production host |
 | Availability | **Single host, no high availability, no failover.** State this plainly in the AVV; do not imply resilience the setup does not have |
 | Backup and restore | Deferred by decision until there is data worth protecting; the gate is *the first real name entered*, and one proven restore is required at that gate. **Open at time of writing.** |
-| Mail-path hardening | Self-hosted stack on its own data volume and network, submission ports restricted, SMTP AUTH required for every submission including the platform's own, SPF/DKIM/DMARC/MTA-STS |
+| Mail-path hardening | `stalwart` transport: self-hosted stack on its own data volume and network, submission ports restricted, SMTP AUTH required for every submission including the platform's own, SPF/DKIM/DMARC/MTA-STS. `relay` transport: authenticated submission to the relay over STARTTLS or implicit TLS, the relay password held only as a 0600 secret file (never in an env value), SPF/DKIM/DMARC checked on a delivered test message |
 | Physical security | netcup's data centre; the operator inherits it and must reference netcup's own TOMs |
 
 ## 5. Sub-processors (Unterauftragsverarbeiter)
@@ -122,7 +122,7 @@ Not a draft contract — the checklist the eventual AVV is measured against.
 | **netcup GmbH** (Germany) | Server hosting, physical infrastructure | Sub-processor. AVV offered by netcup; **not concluded — `TBD` before the first real council** |
 | **INWX** (Germany) | Registrar and authoritative DNS | Infrastructure supplier. Processes the operator's own domain-contact data and DNS query metadata, not tenant content. No API credential exists, by decision |
 | **Let's Encrypt / ISRG** (US) | Certificate issuance | Not a processor of tenant content. Note that every tenant hostname becomes public in Certificate Transparency logs, which discloses that a given council uses the platform — disclose this at onboarding |
-| **Mail relay** | — | **None, by decision.** Outbound mail leaves the platform's own host directly; there is no relay provider and therefore no mail sub-processor |
+| **Mail relay** | Outbound platform mail (Keycloak, alert and system mail) when the deploy-time mail transport is `MAIL_TRANSPORT=relay` | **Depends on the transport, chosen per deployment.** `stalwart` (slim self-hosted server): none, outbound mail leaves the platform's own host directly and there is no mail sub-processor. `relay`: the relay provider (Google Workspace SMTP relay) is a **sub-processor for platform mail** and must be listed, covered by an AVV and **flagged to the DPO before the first deployment that uses it**; it sees the sender, recipient and content of platform mail (login, password-reset and alert messages) and signs it with its own DKIM. It is not a processor of tenant content: mail sent for a tenant uses the tenant's own SMTP profile. **Open: DPO decision and AVV not concluded.** |
 | **Tenant's own SMTP provider** | Sending on behalf of a council | The *tenant's* processor, contracted by the tenant. Councils keep their own mail; the platform never gives a tenant a mailbox and receives no tenant mail |
 | **Offsite backup target** | Off-site copies | **`TBD`.** Whatever is chosen becomes a sub-processor and must be listed and covered by an AVV before the first real council's data exists |
 | **GitHub (Microsoft)** | Source, container registry, CI, deploy trigger | Not intended to process council personal data. Operational rule: **no council personal data in issues, logs or CI artefacts** |
@@ -137,6 +137,7 @@ offsite target is chosen, and if it is in the EU) and mail — resides on one se
 Germany. Points to verify rather than assume:
 
 - Certificate Transparency publication (US-operated logs) exposes hostnames, not content.
+- With `MAIL_TRANSPORT=relay`, platform mail (not tenant content) passes through the relay provider's infrastructure. Whether that is a third-country transfer depends on the provider's processing location and the AVV; the DPO decides before that transport is used.
 - If the offsite backup target is not in the EU/EEA, that decision creates a transfer and
   needs Art. 44 ff. cover; prefer an EU target and close the question.
 - Deliverability programmes (Microsoft SNDS, Google Postmaster Tools) are planned for the
@@ -199,14 +200,14 @@ Enforced in code and clamped so a careless configuration change cannot lengthen 
 |---|---|---|---|
 | Access logs | 14 d | 29 d | Operator ceiling 30 d [D R29-I6]; Art. 5(1)(e) |
 | Application logs | 28 d | 29 d | as above; Art. 6(1)(f) |
-| Security logs (`audit_log`) | 27 d | 29 d | as above; purged daily, so a row lives at most 30 d |
+| Security logs (log store) | 27 d | 29 d | as above; the window of the log store, not of the `audit_log` table (a governance record, RC-GOV-CHAIN, deleted by no timer) |
 | Security logs without PII | 27 d | 30 d | as above, PII-free exception |
 | Newsletter send tokens | expiry at 7 d, bulk sweep at 90 d | — | Art. 5(1)(e) |
 | Backup retention | floor of 7 d | — | availability |
 
 Operator ceiling 30 d [D R29-I6]: no figure in this table exceeds it. Of the four log
-tiers only the `audit_log` window has a purge consumer in the application; the other
-three are configuration until TASK-033 adds theirs. Edge and identity-provider logs
+tiers has a purge consumer in the application (TASK-033-a): they are configuration and the
+windows of the log store. The `audit_log` table is a governance record, kept and append-only. Edge and identity-provider logs
 are bounded independently (`docs/log-retention-policy.md`).
 
 A German-language **Löschkonzept** is generated on demand from the live configuration, so

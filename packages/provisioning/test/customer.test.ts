@@ -6,8 +6,10 @@
 // gate's pre-flight refuses before any write.
 import { describe, expect, it } from 'vitest'
 import {
+  activateBySlug,
   createPhaseA,
   createPhaseB,
+  disableCustomerModule,
   enableCustomerModule,
   EnableRefused,
   EXECUTION_ORDER,
@@ -241,6 +243,72 @@ describe('create (phases A, host, B)', () => {
   })
 })
 
+describe('create-harden H3: activation is the host last step', () => {
+  async function toPhaseB(w: ReturnType<typeof world>, d: ReturnType<typeof deps>, s: CreateSpec) {
+    const a = await createPhaseA(s, d)
+    hostStamp(w, a.customer)
+    await recordHostStep(s.slug, 'mail_principal_issued', s.operatorId, d)
+  }
+
+  it('a deferred phase B leaves the customer provisioning; activate then makes it active', async () => {
+    const w = world()
+    const d = deps(w)
+    const s = spec({ deferActivation: true })
+    await toPhaseB(w, d, s)
+    const b = await createPhaseB(s, d)
+    expect(b.activated).toBe(false)
+    expect(w.control.get('musterstadt')?.status).toBe('provisioning')
+    const r = await activateBySlug('musterstadt', d)
+    expect(r.activated).toBe(true)
+    expect(w.control.get('musterstadt')?.status).toBe('active')
+  })
+
+  it('activate on an already active customer is a no-op (already active)', async () => {
+    const w = world()
+    const d = deps(w)
+    await createAll(w, d)
+    const before = w.mutations.length
+    const r = await activateBySlug('musterstadt', d)
+    expect(r.activated).toBe(false)
+    expect(w.mutations.length).toBe(before)
+  })
+
+  it('activate with an incomplete ledger is refused and the customer stays provisioning', async () => {
+    const w = world()
+    const d = deps(w)
+    await createPhaseA(spec(), d)
+    await expect(activateBySlug('musterstadt', d)).rejects.toMatchObject({ code: 'STEP_OUT_OF_ORDER' })
+    expect(w.control.get('musterstadt')?.status).toBe('provisioning')
+  })
+
+  it('activate of an unknown customer is NOT_FOUND', async () => {
+    await expect(activateBySlug('nobody', deps(world()))).rejects.toMatchObject({ code: 'NOT_FOUND' })
+  })
+})
+
+describe('create-harden MED-2: a crash between registerTenant and addTenantDomain', () => {
+  it('a re-run binds the missing primary host and completes (the slug is not burned)', async () => {
+    const w = world()
+    const d = deps(w)
+    w.knobs.crashAfterRegister = true
+    await expect(createPhaseA(spec(), d)).rejects.toThrow(/crash between/)
+    expect(w.control.get('musterstadt')?.host).toBeNull()
+    const { b } = await createAll(w, d)
+    expect(w.control.get('musterstadt')?.host).toBe('rat.musterstadt.example')
+    expect(w.control.get('musterstadt')?.status).toBe('active')
+    expect(b.activated).toBe(true)
+    expect(w.mutations.filter((x) => x === 'control:bind-host musterstadt')).toHaveLength(1)
+  })
+
+  it('a row that already has its host is not re-bound', async () => {
+    const w = world()
+    const d = deps(w)
+    await createAll(w, d)
+    await createPhaseA(spec(), d)
+    expect(w.mutations.filter((x) => x.startsWith('control:bind-host'))).toHaveLength(0)
+  })
+})
+
 describe('TASK-044: the gate in create (lane note D2: pre-flight before any write)', () => {
   it('a module the request carries no DPIA decision for refuses NO_DPIA_DECISION before phase A writes anything', async () => {
     const w = world()
@@ -368,6 +436,43 @@ describe('TASK-044: enableCustomerModule (lane note D3, the one path after creat
   })
 })
 
+describe('TRD-044: disableCustomerModule', () => {
+  async function active() {
+    const w = world()
+    const d = deps(w)
+    await createAll(w, d, spec({ enable: ['calendar', 'votes'] }))
+    w.mutations.length = 0
+    return { w, d }
+  }
+
+  it('switches the module off (export + drop in the port), then shrinks the broker users; kernel stays', async () => {
+    const { w, d } = await active()
+    const r = await disableCustomerModule('musterstadt', 'calendar', { operatorId: OPERATOR }, d)
+    expect(r).toMatchObject({ moduleKey: 'calendar', noop: false, dropped: true, enabled: ['votes'], reloaded: true })
+    expect(r.export?.sha256).toMatch(/^[0-9a-f]{64}$/)
+    expect(w.mutations).toEqual(['pg:disable musterstadt/calendar', 'nats:ensure musterstadt=[kernel]'])
+  })
+
+  it('a repeat is a no-op that writes nothing', async () => {
+    const { w, d } = await active()
+    await disableCustomerModule('musterstadt', 'calendar', { operatorId: OPERATOR }, d)
+    w.mutations.length = 0
+    const r = await disableCustomerModule('musterstadt', 'calendar', { operatorId: OPERATOR }, d)
+    expect(r).toMatchObject({ noop: true, dropped: false, enabled: ['votes'], reloaded: false })
+    expect(w.mutations).toEqual([])
+  })
+
+  it('refuses an unknown customer or module, a suspended customer and a non-uuid operator before any write', async () => {
+    const { w, d } = await active()
+    await expect(disableCustomerModule('nobody', 'calendar', { operatorId: OPERATOR }, d)).rejects.toMatchObject({ code: 'NOT_FOUND' })
+    await expect(disableCustomerModule('musterstadt', 'nosuch', { operatorId: OPERATOR }, d)).rejects.toMatchObject({ code: 'MODULE_UNKNOWN' })
+    await expect(disableCustomerModule('musterstadt', 'calendar', { operatorId: 'root' }, d)).rejects.toMatchObject({ code: 'INVALID_INPUT' })
+    w.control.get('musterstadt')!.status = 'suspended'
+    await expect(disableCustomerModule('musterstadt', 'calendar', { operatorId: OPERATOR }, d)).rejects.toMatchObject({ code: 'CUSTOMER_STATE' })
+    expect(w.mutations).toEqual([])
+  })
+})
+
 describe('suspend and resume (TDD 14, unit half)', () => {
   it('suspend: status first, then realm disabled, then module users evicted (kernel stays); a second suspend changes nothing', async () => {
     const w = world()
@@ -381,7 +486,8 @@ describe('suspend and resume (TDD 14, unit half)', () => {
     expect(w.realms.get('musterstadt')!.notBefore).toBeGreaterThan(0)
     w.mutations.length = 0
     expect((await suspendCustomer('musterstadt', d)).changed).toBe(false)
-    expect(w.mutations).toEqual([])
+    // the realm disable + logout-all is asserted again on every suspend: a rerun after a failed logout converges
+    expect(w.mutations).toEqual(['kc:enabled musterstadt=false'])
     // the second customer is untouched
     expect(w.control.get('zweitstadt')!.status).toBe('active')
     expect(w.realms.get('zweitstadt')!.enabled).toBe(true)

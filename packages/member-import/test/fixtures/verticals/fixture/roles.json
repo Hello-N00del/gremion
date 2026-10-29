@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "roles": [
+    { "key": "member", "importable": true, "membership_type": "elected", "voting": true, "capabilities": ["gov.vote.cast", "gov.quorum.count"], "withheld": [] },
+    { "key": "helper", "importable": true, "membership_type": "unelected", "voting": false,
+      "capabilities": ["gov.nonpublic.read", "gov.agenda_item.propose", "gov.motion.propose", "brd.card.own", "brd.card.be_assigned"],
+      "withheld": ["gov.vote.cast", "gov.quorum.count", "gov.office.hold", "gov.portfolio.hold"] },
+    { "key": "officer", "importable": false, "membership_type": "elected", "voting": true, "capabilities": ["gov.office.hold"], "withheld": [] }
+  ]
+}

@@ -163,6 +163,47 @@ describe('ensureInvitedUser (FLOW-IDN-002, Q9)', () => {
     expect(calls.filter((c) => c.path.includes('execute-actions-email'))).toHaveLength(1)
   })
 
+  // TASK-031 D-5 (operator 2026-10-22): an imported member is asked for a new
+  // password ONLY; the TOTP is enrolled at the first step-up. The parameter is
+  // additive: every other caller keeps the administrator pair above.
+  it('D-5: requiredActions UPDATE_PASSWORD only reaches both the create and the execute-actions mail; names land on create', async () => {
+    let createdUser = false
+    const u1 = userStore('u-1')
+    const { transport, calls } = transportWith({
+      [USERS]: () => (createdUser ? [{ id: 'u-1', email: EMAIL }] : []),
+      [`POST ${R}/users`]: () => {
+        createdUser = true
+        return undefined
+      },
+      [`GET ${R}/roles/member`]: { id: 'r-9', name: 'member' },
+      [`GET ${R}/users/profile`]: DEFAULT_PROFILE,
+      [`GET ${R}/users/u-1`]: u1.get,
+      [`PUT ${R}/users/u-1`]: u1.put,
+    })
+    const r = await new KcProvisionApi(transport).ensureInvitedUser('musterstadt', {
+      email: EMAIL,
+      realmRole: 'member',
+      requiredActions: ['UPDATE_PASSWORD'],
+      firstName: 'Anna Maria',
+      lastName: 'Berger',
+    })
+    expect(r).toEqual({ id: 'u-1', created: true, invited: true })
+    const create = calls.find((c) => c.method === 'POST' && c.path === `${R}/users`)!
+    expect(create.body).toMatchObject({ requiredActions: ['UPDATE_PASSWORD'], firstName: 'Anna Maria', lastName: 'Berger' })
+    expect(calls.find((c) => c.path.startsWith(`${R}/users/u-1/execute-actions-email`))!.body).toEqual(['UPDATE_PASSWORD'])
+  })
+
+  it('skipIfHasCredential: an existing user with a credential and no mark is linked, never mailed', async () => {
+    const { transport, calls } = transportWith({
+      [USERS]: [{ id: 'u-1', email: EMAIL }],
+      [`GET ${R}/roles/member`]: { id: 'r-9', name: 'member' },
+      [`GET ${R}/users/u-1/credentials`]: [{ id: 'c-1', type: 'password' }],
+    })
+    const r = await new KcProvisionApi(transport).ensureInvitedUser('musterstadt', { email: EMAIL, realmRole: 'member', skipIfHasCredential: true })
+    expect(r).toEqual({ id: 'u-1', created: false, invited: false })
+    expect(calls.some((c) => c.path.includes('execute-actions-email'))).toBe(false)
+  })
+
   it('a missing realm role is a loud failure, not a user without a role', async () => {
     const { transport } = transportWith({ [USERS]: [{ id: 'u-1', email: EMAIL }] })
     await expect(new KcProvisionApi(transport).ensureInvitedUser('musterstadt', { email: EMAIL, realmRole: 'it-admin' })).rejects.toThrow(/realm role "it-admin" not found/)
@@ -197,5 +238,52 @@ describe('setRealmEnabled / isRealmEnabled / getRealmSmtp (suspend, resume, R-E5
     const s = await api.getRealmSmtp('musterstadt')
     expect(s).toEqual({ host: 'mail.platform.example', port: '587', user: 'kc-musterstadt@platform.example', from: 'kc-musterstadt@platform.example', starttls: 'true', passwordSet: true })
     expect(JSON.stringify(s)).not.toContain('*****')
+  })
+})
+
+// TASK-031 fix round (house review MED 3): the errors of the import path land
+// in the append-only request events and the audit log, so they never name the
+// member's address.
+describe('ensureInvitedUser errors never carry the address (member import)', () => {
+  const rejection = async (routes: Record<string, unknown>): Promise<string> => {
+    const { transport } = transportWith(routes)
+    const err = await new KcProvisionApi(transport)
+      .ensureInvitedUser('musterstadt', { email: EMAIL, realmRole: null, requiredActions: ['UPDATE_PASSWORD'] })
+      .then(() => null, (e: unknown) => e)
+    expect(err).toBeInstanceOf(Error)
+    return (err as Error).message
+  }
+
+  it('a 409 on create followed by an empty find (absent after create)', async () => {
+    const msg = await rejection({
+      [USERS]: [],
+      [`POST ${R}/users`]: () => {
+        throw new Error('Keycloak Admin API error: 409 on POST /admin/realms/musterstadt/users: {"errorMessage":"User exists with same email"}')
+      },
+    })
+    expect(msg).toMatch(/absent from realm "musterstadt"/)
+    expect(msg).not.toContain(EMAIL)
+    expect(msg).not.toMatch(/@/)
+  })
+
+  it('a user that vanished after the invite', async () => {
+    const msg = await rejection({
+      [USERS]: [{ id: 'u-1', email: EMAIL }],
+      [`GET ${R}/users/profile`]: { ...DEFAULT_PROFILE, attributes: [...DEFAULT_PROFILE.attributes, { name: 'gremion_invited_at' }] },
+    })
+    expect(msg).toMatch(/vanished from realm "musterstadt"/)
+    expect(msg).not.toMatch(/@/)
+  })
+
+  it('a mark that did not persist', async () => {
+    const u1 = userStore('u-1', { dropUndeclared: true })
+    const msg = await rejection({
+      [USERS]: [{ id: 'u-1', email: EMAIL }],
+      [`GET ${R}/users/profile`]: { ...DEFAULT_PROFILE, attributes: [...DEFAULT_PROFILE.attributes, { name: 'gremion_invited_at' }] },
+      [`GET ${R}/users/u-1`]: u1.get,
+      [`PUT ${R}/users/u-1`]: u1.put,
+    })
+    expect(msg).toMatch(/did not persist/)
+    expect(msg).not.toMatch(/@/)
   })
 })

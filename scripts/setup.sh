@@ -98,6 +98,8 @@ else
     _sed "s/CHANGE_ME_panel_db/$(gen)/"        .env
     # TASK-077: the kernel API's read-only role (KERNEL_API_DB_PASSWORD).
     _sed "s/CHANGE_ME_kernel_api_db/$(gen)/"   .env
+    # TRD-092: the access-record reader role (UI_OAC_DB_PASSWORD).
+    _sed "s/CHANGE_ME_ui_oac_db/$(gen)/"       .env
 
     # gremion_public_reader read-only DB password. Appears twice in .env.example
     # (PUBLIC_DB_PASSWORD and GREMION_PUBLIC_DB_URL) and both must match, so we
@@ -175,6 +177,20 @@ chmod +x docker/postgres/init-databases.sh
 # these, but generating them up front is harmless and keeps prod ready.
 info "Ensuring internal TLS certificates (G-080)..."
 bash docker/keycloak/certs/gen-internal-ca.sh
+
+# ── PgBouncer auth_user credential ──────────────────────────
+# docker-compose.prod.yml bind-mounts docker/pgbouncer/userlist.txt (gitignored
+# credential, 0600). Render it from the PGBOUNCER_AUTH_PASSWORD just seeded in
+# .env so a prod-overlay `up` on a dev machine never finds a missing source.
+info "Rendering the PgBouncer userlist..."
+bash scripts/render-pgbouncer-userlist.sh
+
+# ── Bind-mount source preflight ────────────────────────────
+# Every bind source the compose files name must exist before the first `up`
+# (compose would otherwise create it as a directory). --all also covers the
+# prod overlay.
+info "Checking compose bind-mount sources..."
+bash scripts/check-bind-sources.sh --all
 
 # ── Build & start ──────────────────────────────────────────
 # Two compose projects since TASK-040 (the pooled stack): the STATE project

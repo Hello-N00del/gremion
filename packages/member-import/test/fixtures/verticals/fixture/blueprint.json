@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "orgUnits": [
+    { "key": "assembly", "name": "Assembly", "description": "The root body", "kind": "council", "parentKey": null, "visibility": "all_members", "wantsMatrixRoom": true, "wantsNextcloudFolder": true, "childTerm": "Teams" },
+    { "key": "board", "name": "Executive", "description": null, "kind": "committee", "parentKey": "assembly", "visibility": "all_members", "wantsMatrixRoom": true, "wantsNextcloudFolder": false },
+    { "key": "ops", "name": "Operations", "description": null, "kind": "group", "parentKey": "board", "visibility": "committee_only", "wantsMatrixRoom": false, "wantsNextcloudFolder": true, "kindLabel": "Crew" }
+  ],
+  "seats": [
+    { "key": "chair", "orgUnitKey": "board", "name": "Chair", "electionMethod": "poll", "isElected": true }
+  ]
+}

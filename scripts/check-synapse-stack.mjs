@@ -60,6 +60,7 @@ export const MATRIX_ENV = (domain) => ({
   SYNAPSE_KEYCLOAK_FETCH_URL: null,
   SYNAPSE_OIDC_CLIENT_SECRET: null,
   SYNAPSE_REGISTRATION_SHARED_SECRET: null,
+  SYNAPSE_ADMIN_BOT_USER_ID: `@gremion-admin-bot:${domain}`,
   BOOTSTRAP_MODE: null,
   SYNAPSE_KC_MAX: null,
 })

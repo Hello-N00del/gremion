@@ -1,9 +1,9 @@
-# services/messages/Dockerfile
-# D-P1-1 house pattern: build context is the REPO ROOT, NOT services/messages —
+# modules/messaging/Dockerfile
+# D-P1-1 house pattern: build context is the REPO ROOT, NOT modules/messaging —
 # pnpm-lock.yaml and pnpm-workspace.yaml live OUTSIDE this directory, so a
-# services/messages-only context cannot resolve them. Build with:
-#   docker build -f services/messages/Dockerfile -t gremion/messages:<tag> .
-# Mirrors services/files/Dockerfile. The messages leaf is stateless (no PG/NATS,
+# modules/messaging-only context cannot resolve them. Build with:
+#   docker build -f modules/messaging/Dockerfile -t gremion/messages:<tag> .
+# Mirrors modules/files/Dockerfile. The messages leaf is stateless (no PG/NATS,
 # no migrations) and has no workspace deps — it bundles via esbuild (node builtins
 # + global fetch only).
 FROM node:26-alpine AS builder
@@ -18,14 +18,14 @@ RUN npm install -g corepack && corepack enable pnpm
 
 # Install workspace deps (cache-friendly: package manifests first).
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
-COPY services/messages/package.json ./services/messages/
+COPY modules/messaging/package.json ./modules/messaging/
 RUN pnpm install --frozen-lockfile
 
 # Copy the service sources.
-COPY services/messages ./services/messages/
+COPY modules/messaging ./modules/messaging/
 
-# Compile + bundle TypeScript → services/messages/dist/index.js
-WORKDIR /repo/services/messages
+# Compile + bundle TypeScript → modules/messaging/dist/index.js
+WORKDIR /repo/modules/messaging
 RUN pnpm build
 
 # pnpm deploy resolves the prod dependency tree into a self-contained dir.
@@ -40,7 +40,7 @@ ENV PORT=8080
 
 COPY --from=builder /deploy/node_modules ./node_modules
 COPY --from=builder /deploy/package.json ./
-COPY --from=builder /repo/services/messages/dist ./dist
+COPY --from=builder /repo/modules/messaging/dist ./dist
 
 # A-021: run as the image's built-in non-root `node` user (uid/gid 1000).
 USER node

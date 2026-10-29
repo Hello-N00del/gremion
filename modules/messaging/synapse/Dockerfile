@@ -3,7 +3,7 @@
 #
 # Upstream pinned by tag AND index digest (TRD-350, TRD-425; Q3: 1.160,
 # verified on PostgreSQL 18 by the scratch proof). A bump moves both together.
-FROM matrixdotorg/synapse:v1.162.0@sha256:6b84a7bbac36f080b2d2e51e0289cf1b08b349598ea44a558df38d558f2c2311
+FROM matrixdotorg/synapse:v1.163.0@sha256:e98ab72138d90fa8b8876c6421fe78a9fdb181c0d7cc690ad740e5173e0c65e6
 
 # No apt layer: the render shim substitutes its named variables in Python
 # (the image's own), so gettext-base/envsubst is not installed. The synapse

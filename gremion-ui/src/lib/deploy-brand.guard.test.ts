@@ -104,3 +104,25 @@ describe('institution-identity guard — deploy surfaces and the whole tracked t
     })
   }
 })
+
+/**
+ * Kernel product-default guard. The StuRa vertical's vocabulary lives in
+ * `verticals/stura`; kernel deploy defaults and server/UI fallbacks must be
+ * neutral. Scoped to named files (not all of gremion-ui/src, whose demo
+ * seeders legitimately model a StuRa) so it stays hard zero-tolerance.
+ */
+describe('kernel product defaults carry no StuRa-vertical wording', () => {
+  const FILES = [
+    'docker-compose.app.yml',
+    '.env.example',
+    'legal/legal.env.example',
+    'gremion-ui/src/lib/server/loeschkonzept.ts',
+    'gremion-ui/src/routes/settings/SettingsBody.svelte',
+  ]
+  for (const rel of FILES) {
+    it(`${rel} has no Studierendenrat / StuRa literal`, () => {
+      const text = readFileSync(resolve(REPO_ROOT, rel), 'utf8')
+      expect(text).not.toMatch(/Studierendenrat|\bStuRa\b/)
+    })
+  }
+})

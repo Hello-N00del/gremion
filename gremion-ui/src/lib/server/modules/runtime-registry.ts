@@ -28,6 +28,8 @@
 // it between unit tests.
 import type { KeycloakAdminClient } from '$lib/server/keycloak-admin'
 import type { ProvisioningSubsystem, Subsystem } from '$lib/server/governance/provisioning/types'
+import type { ModuleErasureHook } from '@gremion/ports/erasure'
+import type { Sql } from '@gremion/db'
 
 // ── 1. Server-init (boot) hooks ─────────────────────────────────────────────
 /** A boot-time side-effect a module runs once at server cold start. May be async. */
@@ -585,8 +587,32 @@ export function getModuleSecondLocusStrategy(strategyId: string): SecondLocusStr
   return _secondLocusStrategies.get(strategyId)
 }
 
+// ── 10. Erasure hooks ────────────────────────────────────────────────────────
+// TRD-196 / PRD-OPS-005: a module that holds personal data registers ONE erasure
+// hook (contract: @gremion/ports/erasure). The kernel erasure orchestrator
+// ($lib/server/erasure/orchestrator) calls the hook of every ENABLED module and
+// records the outcome per module. A module with no hook is reported `skipped`
+// ("no erasure hook registered"), never `erased`. A repeat registration under the
+// same module id replaces the prior hook (a module re-import is a no-op).
+
+/** The kernel binds the hook's connection type to the tenant pool type. */
+export type KernelErasureHook = ModuleErasureHook<Sql>
+
+const _erasureHooks = new Map<string, KernelErasureHook>()
+
+/** Register a module's erasure hook under its module id. */
+export function registerErasureHook(hook: KernelErasureHook): void {
+  _erasureHooks.set(hook.moduleId, hook)
+}
+
+/** The erasure hook registered for `moduleId`, or undefined (module has none). */
+export function getErasureHook(moduleId: string): KernelErasureHook | undefined {
+  return _erasureHooks.get(moduleId)
+}
+
 /** Test-only: clear all registries so a unit test starts from empty. */
 export function _resetRuntimeRegistryForTests(): void {
+  _erasureHooks.clear()
   _serverInitHooks.length = 0
   _tenantEvictHooks.length = 0
   _provisioningFactories.clear()

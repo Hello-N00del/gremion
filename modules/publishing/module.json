@@ -5,7 +5,7 @@
   "runtime": {
     "version": "1.0.0",
     "database": { "postgresService": "newsletter-postgres", "migrations": "migrations" },
-    "export": { "kind": "pg_dump", "retentionProfile": "rp-nws-module-data" },
+    "export": { "kind": "pg_dump", "retentionProfile": "rp-nws-module-data", "withhold": ["public.unsubscribes.token", "public.send_tokens.token"] },
     "timedJobs": [],
     "platformServer": null
   }

@@ -46,7 +46,6 @@ describe('realm-export.base.json — the gremion#6 smtpServer block', () => {
 import { MODULE_MANIFESTS } from '$lib/modules/registry'
 import {
   buildTenantRealmDoc,
-  platformSmtpFromEnv,
   smtpServerBlock,
   assertNoTemplateSentinels,
   PROVISIONER_SECRET_CLIENTS,
@@ -71,23 +70,6 @@ const build = (over: Partial<Parameters<typeof buildTenantRealmDoc>[0]> = {}) =>
     slug: 't2', realmName: 'verein', tenantHost: `t2.${TEST_APEX}`,
     apexDomain: TEST_APEX, clientSecrets, smtp, ...over,
   } as never)
-
-describe('platformSmtpFromEnv — the platform sender is derived, never configured twice', () => {
-  it('derives host/user/from from PLATFORM_DOMAIN and takes PLATFORM_SMTP_PASSWORD', () => {
-    expect(platformSmtpFromEnv({ PLATFORM_DOMAIN: 'example.org', PLATFORM_SMTP_PASSWORD: 'pw' })).toEqual({
-      host: 'mail.example.org', port: 587,
-      from: 'no-reply@example.org', user: 'platform@example.org', password: 'pw',
-    })
-  })
-  it('refuses an unset PLATFORM_SMTP_PASSWORD by name', () => {
-    expect(() => platformSmtpFromEnv({ PLATFORM_DOMAIN: 'example.org' }))
-      .toThrow(/PLATFORM_SMTP_PASSWORD is unset/)
-  })
-  it('refuses an unset PLATFORM_DOMAIN by name', () => {
-    expect(() => platformSmtpFromEnv({ PLATFORM_SMTP_PASSWORD: 'pw' }))
-      .toThrow(/PLATFORM_DOMAIN is unset/)
-  })
-})
 
 describe('smtpServerBlock — TLS is required on every transport (spec A §I, gremion#6)', () => {
   it('587 negotiates STARTTLS and never implicit TLS', () => {

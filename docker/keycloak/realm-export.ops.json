@@ -347,10 +347,35 @@
           "userSetupAllowed": false
         },
         {
+          "authenticatorFlow": true,
+          "requirement": "REQUIRED",
+          "priority": 10,
+          "autheticatorFlow": true,
+          "flowAlias": "stepup-2fa second factor",
+          "userSetupAllowed": false
+        }
+      ]
+    },
+    {
+      "alias": "stepup-2fa second factor",
+      "description": "OTP if the user already has one, otherwise deny. Never a REQUIRED OTP form: Keycloak would run CONFIGURE_TOTP inside the step-up and then grant loa2 to whoever holds the session.",
+      "providerId": "basic-flow",
+      "topLevel": false,
+      "builtIn": false,
+      "authenticationExecutions": [
+        {
           "authenticator": "auth-otp-form",
           "authenticatorFlow": false,
-          "requirement": "REQUIRED",
-          "priority": 0,
+          "requirement": "ALTERNATIVE",
+          "priority": 10,
+          "autheticatorFlow": false,
+          "userSetupAllowed": false
+        },
+        {
+          "authenticator": "deny-access-authenticator",
+          "authenticatorFlow": false,
+          "requirement": "ALTERNATIVE",
+          "priority": 20,
           "autheticatorFlow": false,
           "userSetupAllowed": false
         }
@@ -373,5 +398,6 @@
       }
     }
   ],
+  "passwordPolicy": "length(12) and notUsername and notEmail and passwordHistory(3)",
   "browserFlow": "browser-stepup"
 }

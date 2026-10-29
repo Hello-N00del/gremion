@@ -1,0 +1,14 @@
+[Unit]
+Description=Run the Gremion access-record purge daily (TRD-092 / RC-LOG-AUD)
+
+[Timer]
+# Daily, 03:41 UTC (off the hour, clear of the weekly footprint at Monday
+# 03:00). The purge is idempotent and keeps every row inside
+# the 27-day window, so a late or doubled run changes nothing.
+OnCalendar=*-*-* 03:41:00 UTC
+# A host that was down at 03:41 purges on the next boot.
+Persistent=true
+Unit=gremion-access-purge.service
+
+[Install]
+WantedBy=timers.target

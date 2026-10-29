@@ -2,7 +2,7 @@
 // transport, no network, no DB. A green realm passes every named check; each
 // single planted drift fails EXACTLY that named check; apply issues exactly the
 // repairing calls (§4-2 idempotent sequence) and nothing else.
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -10,6 +10,8 @@ import type { KcTransport } from './kc-admin-api'
 import {
   reconcileRealm,
   reconcileFleet,
+  withKernelAuditCheck,
+  KERNEL_DB_CHECK_NAMES,
   isRealmBearing,
   REALM_BEARING_STATUSES,
   RECONCILE_CHECK_NAMES,
@@ -45,6 +47,25 @@ const FIXTURES = { ids: new Set([SEED_SUBJECT]), usernames: new Set(['dev.admin'
 const EXPECTED_REDIRECT = [`https://${HOST}/auth/callback/keycloak`]
 const EXPECTED_WEB_ORIGINS = [`https://${HOST}`]
 
+/** The Keycloak Admin API's flattened execution list for stepup-2fa in its
+ *  hardened shape (security sweep 2, finding 3): the LoA-2 condition, then ONE
+ *  REQUIRED subflow whose children are OTP (ALTERNATIVE) then deny (ALTERNATIVE).
+ *  There is no REQUIRED OTP form: it would enroll an attacker's authenticator
+ *  inside the step-up and still grant loa2. */
+const GREEN_2FA_EXECS = () => [
+  { id: 'c2', providerId: 'conditional-level-of-authentication', requirement: 'REQUIRED', level: 0, index: 0, authenticationConfig: 'cfg-2' },
+  { id: 's2', displayName: 'stepup-2fa second factor', authenticationFlow: true, requirement: 'REQUIRED', level: 0, index: 1 },
+  { id: 'o2', providerId: 'auth-otp-form', requirement: 'ALTERNATIVE', level: 1, index: 0 },
+  { id: 'd2', providerId: 'deny-access-authenticator', requirement: 'ALTERNATIVE', level: 1, index: 1 },
+]
+/** Security sweep 2 (finding 6): the realm-level hardening a green realm carries. */
+const GREEN_HARDENING = {
+  passwordPolicy: 'length(12) and notUsername and notEmail and passwordHistory(3)',
+}
+
+/** The access-token sub mapper (the shape the base template's gremion-ui client carries). */
+const SUB_MAPPER = { name: 'sub', protocolMapper: 'oidc-usermodel-property-mapper', config: { 'claim.name': 'sub', 'access.token.claim': 'true' } }
+
 /** A GREEN live realm: every §4 contract element present + correct. Built as a
  *  route map keyed by `${method} ${path}` for a scriptable transport. */
 function greenRoutes(): Record<string, unknown> {
@@ -58,6 +79,7 @@ function greenRoutes(): Record<string, unknown> {
       otpPolicyAlgorithm: 'HmacSHA1',
       otpPolicyDigits: 6,
       otpPolicyPeriod: 30,
+      ...GREEN_HARDENING,
       // TASK-043 r4: the customer's own host (realm-doc.ts (2d))
       attributes: { 'acr.loa.map': '{"loa1":1,"loa2":2}', frontendUrl: `https://${HOST}/auth` },
       // TASK-043 R-E5b: stamped by the host with the realm's OWN principal
@@ -79,10 +101,7 @@ function greenRoutes(): Record<string, unknown> {
       { id: 'c1', providerId: 'conditional-level-of-authentication', authenticationConfig: 'cfg-1' },
       { id: 'p1', providerId: 'auth-username-password-form' },
     ],
-    [`GET /admin/realms/${REALM}/authentication/flows/stepup-2fa/executions`]: [
-      { id: 'c2', providerId: 'conditional-level-of-authentication', authenticationConfig: 'cfg-2' },
-      { id: 'o2', providerId: 'auth-otp-form' },
-    ],
+    [`GET /admin/realms/${REALM}/authentication/flows/stepup-2fa/executions`]: GREEN_2FA_EXECS(),
     'GET /admin/realms/verein/authentication/config/cfg-1': {
       alias: 'stepup-loa1',
       config: { 'loa-condition-level': '1', 'loa-max-age': '36000' },
@@ -97,14 +116,19 @@ function greenRoutes(): Record<string, unknown> {
         id: 'uuid-ui',
         clientId: 'gremion-ui',
         fullScopeAllowed: false,
+        attributes: { 'pkce.code.challenge.method': 'S256' },
         redirectUris: [...EXPECTED_REDIRECT],
         webOrigins: [...EXPECTED_WEB_ORIGINS],
       },
     ],
     'GET /admin/realms/verein/clients/uuid-ui/protocol-mappers/models': [
       { name: 'acr', protocolMapper: 'oidc-acr-mapper' },
-      { name: 'sub', protocolMapper: 'oidc-usermodel-property-mapper', config: { 'claim.name': 'sub' } },
+      SUB_MAPPER,
     ],
+    // TASK-033-a: gremion-mobile is the other Bearer client; its access token must carry sub too
+    [`GET /admin/realms/${REALM}/clients?clientId=gremion-mobile`]: [{ id: 'uuid-mobile', clientId: 'gremion-mobile' }],
+    'GET /admin/realms/verein/clients/uuid-mobile/protocol-mappers/models': [SUB_MAPPER],
+    'GET /admin/realms/verein/clients/uuid-mobile/default-client-scopes': [],
     // (D) #254: the gremion-ui realm-role scope-mappings (fullScopeAllowed:false needs
     // these or realm_access.roles silently empties). The base floor set.
     'GET /admin/realms/verein/clients/uuid-ui/scope-mappings/realm': [
@@ -220,7 +244,120 @@ describe('reconcileRealm — each single drift fails EXACTLY that named check', 
     // A missing flow is a COMPOUND drift: the LoA configs live inside the flow,
     // so they cannot be verified when the flow is gone. Both are repaired by the
     // single §4-2 step-up rebuild — no OTHER (client/user/realm-attr) check fails.
-    expect(failed).toEqual(['stepup-flow', 'stepup-loa-config'])
+    expect(failed).toEqual(['stepup-flow', 'stepup-loa-config', 'stepup-2fa-otp-gate'])
+  })
+
+  // Security sweep 2, finding 3: a REQUIRED OTP form in stepup-2fa enrolls an
+  // attacker authenticator for a user with no OTP and still grants loa2.
+  it.each([
+    [
+      'the legacy REQUIRED OTP form straight in stepup-2fa',
+      () => [
+        { id: 'c2', providerId: 'conditional-level-of-authentication', requirement: 'REQUIRED', level: 0, index: 0, authenticationConfig: 'cfg-2' },
+        { id: 'o2', providerId: 'auth-otp-form', requirement: 'REQUIRED', level: 0, index: 1 },
+      ],
+    ],
+    [
+      'an OTP alternative with no deny-access sibling',
+      () => GREEN_2FA_EXECS().filter((e) => e.providerId !== 'deny-access-authenticator'),
+    ],
+    [
+      'the OTP form REQUIRED inside the subflow',
+      () => GREEN_2FA_EXECS().map((e) => (e.providerId === 'auth-otp-form' ? { ...e, requirement: 'REQUIRED' } : e)),
+    ],
+    [
+      'deny-access DISABLED',
+      () => GREEN_2FA_EXECS().map((e) => (e.providerId === 'deny-access-authenticator' ? { ...e, requirement: 'DISABLED' } : e)),
+    ],
+    [
+      'deny-access ordered before the OTP form',
+      () =>
+        GREEN_2FA_EXECS().map((e) =>
+          e.providerId === 'deny-access-authenticator' ? { ...e, index: 0 } : e.providerId === 'auth-otp-form' ? { ...e, index: 1 } : e,
+        ),
+    ],
+    [
+      'the subflow itself not REQUIRED',
+      () => GREEN_2FA_EXECS().map((e) => (e.id === 's2' ? { ...e, requirement: 'ALTERNATIVE' } : e)),
+    ],
+    // Review finding (MEDIUM): the subflow must hold EXACTLY [OTP, deny-access].
+    // An allow-access (or any authenticator that needs no user) ALTERNATIVE
+    // between them lets a user without OTP through at loa2.
+    [
+      'an extra allow-access ALTERNATIVE between the OTP form and deny-access',
+      () => [
+        ...GREEN_2FA_EXECS().slice(0, 3),
+        { id: 'a2', providerId: 'allow-access-authenticator', requirement: 'ALTERNATIVE', level: 1, index: 1 },
+        { ...GREEN_2FA_EXECS()[3]!, index: 2 },
+      ],
+    ],
+    [
+      'an extra allow-access ALTERNATIVE after deny-access',
+      () => [...GREEN_2FA_EXECS(), { id: 'a2', providerId: 'allow-access-authenticator', requirement: 'ALTERNATIVE', level: 1, index: 2 }],
+    ],
+    [
+      'a nested flow inside the second-factor subflow',
+      () => [...GREEN_2FA_EXECS(), { id: 'n2', displayName: 'sneaky', authenticationFlow: true, requirement: 'ALTERNATIVE', level: 1, index: 2 }],
+    ],
+    [
+      'the OTP form and deny-access under a DIFFERENT subflow than the second-factor one',
+      () => [
+        GREEN_2FA_EXECS()[0]!,
+        GREEN_2FA_EXECS()[1]!,
+        { id: 'x2', displayName: 'decoy', authenticationFlow: true, requirement: 'REQUIRED', level: 0, index: 2 },
+        GREEN_2FA_EXECS()[2]!,
+        GREEN_2FA_EXECS()[3]!,
+      ],
+    ],
+  ])('%s -> only stepup-2fa-otp-gate fails', async (_why, execs) => {
+    const failed = await failedNames((r) => {
+      r[`GET /admin/realms/${REALM}/authentication/flows/stepup-2fa/executions`] = execs()
+    })
+    expect(failed).toEqual(['stepup-2fa-otp-gate'])
+  })
+
+  it('a DISABLED extra execution in the second-factor subflow is inert and does not fail the gate', async () => {
+    const failed = await failedNames((r) => {
+      r[`GET /admin/realms/${REALM}/authentication/flows/stepup-2fa/executions`] = [
+        ...GREEN_2FA_EXECS(),
+        { id: 'a2', providerId: 'allow-access-authenticator', requirement: 'DISABLED', level: 1, index: 2 },
+      ]
+    })
+    expect(failed).toEqual([])
+  })
+
+  it.each([
+    ['absent', undefined],
+    ['too short', 'length(8)'],
+    ['without history', 'length(12) and notUsername and notEmail'],
+  ])('a password policy that is %s -> only password-policy fails', async (_w, value) => {
+    const failed = await failedNames((r) => {
+      ;(r[`GET /admin/realms/${REALM}`] as any).passwordPolicy = value
+    })
+    expect(failed).toEqual(['password-policy'])
+  })
+
+  it.each([
+    ['revokeRefreshToken on', { revokeRefreshToken: true, refreshTokenMaxReuse: 0 }],
+    ['revokeRefreshToken off', { revokeRefreshToken: false }],
+    ['revokeRefreshToken absent', { revokeRefreshToken: undefined }],
+    ['refreshTokenMaxReuse 2', { refreshTokenMaxReuse: 2 }],
+  ])('%s -> no check fails: refresh-token rotation is deliberately NOT reconciled (docs/auth.md residual)', async (_w, patch) => {
+    const failed = await failedNames((r) => {
+      Object.assign(r[`GET /admin/realms/${REALM}`] as object, patch)
+    })
+    expect(failed).toEqual([])
+  })
+
+  it.each([
+    ['absent', undefined],
+    ['plain', 'plain'],
+    ['empty', ''],
+  ])('gremion-ui PKCE method %s -> only gremion-ui-pkce fails', async (_w, value) => {
+    const failed = await failedNames((r) => {
+      ;(r[`GET /admin/realms/${REALM}/clients?clientId=gremion-ui`] as any)[0].attributes = value === undefined ? {} : { 'pkce.code.challenge.method': value }
+    })
+    expect(failed).toEqual(['gremion-ui-pkce'])
   })
 
   it('wrong LoA maxAge on loa2 -> only stepup-loa-config fails', async () => {
@@ -232,20 +369,18 @@ describe('reconcileRealm — each single drift fails EXACTLY that named check', 
 
   it('missing acr mapper -> only gremion-ui-acr-mapper fails', async () => {
     const failed = await failedNames((r) => {
-      r['GET /admin/realms/verein/clients/uuid-ui/protocol-mappers/models'] = [
-        { name: 'sub', protocolMapper: 'oidc-usermodel-property-mapper', config: { 'claim.name': 'sub' } },
-      ]
+      r['GET /admin/realms/verein/clients/uuid-ui/protocol-mappers/models'] = [SUB_MAPPER]
     })
     expect(failed).toEqual(['gremion-ui-acr-mapper'])
   })
 
-  it('missing uid sub-mapper -> only gremion-ui-sub-mapper fails', async () => {
+  it('missing uid sub-mapper -> gremion-ui-sub-mapper fails, and so does the Bearer-clients check (the same drift, seen per client)', async () => {
     const failed = await failedNames((r) => {
       r['GET /admin/realms/verein/clients/uuid-ui/protocol-mappers/models'] = [
         { name: 'acr', protocolMapper: 'oidc-acr-mapper' },
       ]
     })
-    expect(failed).toEqual(['gremion-ui-sub-mapper'])
+    expect(failed).toEqual(['gremion-ui-sub-mapper', 'bearer-clients-sub'])
   })
 
   it('wildcard redirect URI -> only gremion-ui-redirect-uris fails', async () => {
@@ -415,6 +550,115 @@ describe('(TASK-043) smtp-server and the narrowed no-fixture-users', () => {
 // TASK-042 Q8 (RFC 9700 §2.1, exact redirect-URI matching): there is no
 // default-realm exception any more. Every realm, whatever its tenant's slug, is
 // held to the exact per-tenant URI set, so a localhost dev URI FAILS reconcile.
+// TASK-033-a / TRD-147: a session without `sub` is refused (hooks.server.ts sessionUserFromPayload),
+// so EVERY client whose tokens reach the Bearer branch must issue `sub`: gremion-ui and gremion-mobile
+// (the default JWT audiences). Keycloak 25+ issues it through the built-in `basic` client scope; a realm
+// imported from our template carries no `basic` scope, so the client needs a sub mapper of its own.
+describe('reconcileRealm — every Bearer client issues sub (TASK-033-a)', () => {
+  const MOBILE = `GET /admin/realms/${REALM}/clients?clientId=gremion-mobile`
+  const MOBILE_MAPPERS = 'GET /admin/realms/verein/clients/uuid-mobile/protocol-mappers/models'
+  const MOBILE_SCOPES = 'GET /admin/realms/verein/clients/uuid-mobile/default-client-scopes'
+  const verify = async (mutate: (r: Record<string, unknown>) => void) => {
+    const routes = greenRoutes()
+    mutate(routes)
+    const { transport, calls } = scriptedTransport(routes)
+    const report = await reconcileRealm(transport, { ...opts, verifyOnly: true })
+    return { report, calls, failed: report.checks.filter((c) => !c.ok) }
+  }
+
+  it('is part of the realm contract (the named, ordered check list)', () => {
+    expect(RECONCILE_CHECK_NAMES).toContain('bearer-clients-sub')
+  })
+
+  it('a mobile client with no sub mapper and no default scope that issues it -> only bearer-clients-sub fails, naming the client', async () => {
+    const { failed } = await verify((r) => {
+      r[MOBILE_MAPPERS] = []
+    })
+    expect(failed.map((c) => c.name)).toEqual(['bearer-clients-sub'])
+    expect(failed[0]!.detail).toContain('gremion-mobile')
+    expect(failed[0]!.detail).not.toContain('gremion-ui')
+  })
+
+  it('the built-in basic scope on the client satisfies it (Keycloak 25+ issues sub there)', async () => {
+    const { failed } = await verify((r) => {
+      r[MOBILE_MAPPERS] = []
+      r[MOBILE_SCOPES] = [{ id: 'scope-basic', name: 'basic' }]
+      r['GET /admin/realms/verein/client-scopes/scope-basic/protocol-mappers/models'] = [
+        { name: 'sub', protocolMapper: 'oidc-sub-mapper', config: { 'access.token.claim': 'true' } },
+      ]
+    })
+    expect(failed).toEqual([])
+  })
+
+  it('a default scope that carries no sub mapper does not count', async () => {
+    const { failed } = await verify((r) => {
+      r[MOBILE_MAPPERS] = []
+      r[MOBILE_SCOPES] = [{ id: 'scope-profile', name: 'profile' }]
+      r['GET /admin/realms/verein/client-scopes/scope-profile/protocol-mappers/models'] = [
+        { name: 'username', protocolMapper: 'oidc-usermodel-property-mapper', config: { 'claim.name': 'preferred_username', 'access.token.claim': 'true' } },
+      ]
+    })
+    expect(failed.map((c) => c.name)).toEqual(['bearer-clients-sub'])
+  })
+
+  it('a sub mapper that stays out of the ACCESS token does not count (Bearer tokens are access tokens)', async () => {
+    const { failed } = await verify((r) => {
+      r[MOBILE_MAPPERS] = [{ name: 'sub', protocolMapper: 'oidc-sub-mapper', config: { 'access.token.claim': 'false', 'id.token.claim': 'true' } }]
+    })
+    expect(failed.map((c) => c.name)).toEqual(['bearer-clients-sub'])
+  })
+
+  it('a client absent from the realm issues no tokens: nothing to check (gremion-ui absence has its own checks)', async () => {
+    const { failed } = await verify((r) => {
+      r[MOBILE] = []
+    })
+    expect(failed).toEqual([])
+  })
+
+  it('verify-only reports the drift and issues NO mutating call', async () => {
+    const { calls, report } = await verify((r) => {
+      r[MOBILE_MAPPERS] = []
+    })
+    expect(report.ok).toBe(false)
+    expect(calls.every((c) => c.method === 'GET')).toBe(true)
+  })
+
+  it('apply, realm WITHOUT a basic scope (our imported template): POSTs the sub mapper to the client and records it applied', async () => {
+    const routes = greenRoutes()
+    routes[MOBILE_MAPPERS] = []
+    routes[`GET /admin/realms/${REALM}/client-scopes`] = [{ id: 'scope-email', name: 'email' }]
+    const { transport, calls } = scriptedTransport(routes)
+    const report = await reconcileRealm(transport, { ...opts, verifyOnly: false })
+    const writes = calls.filter((c) => c.method !== 'GET')
+    expect(writes).toHaveLength(1)
+    expect(writes[0]).toMatchObject({ method: 'POST', path: `/admin/realms/${REALM}/clients/uuid-mobile/protocol-mappers/models` })
+    expect(writes[0]!.body).toMatchObject({
+      protocol: 'openid-connect',
+      protocolMapper: 'oidc-usermodel-property-mapper',
+      config: { 'claim.name': 'sub', 'user.attribute': 'id', 'access.token.claim': 'true' },
+    })
+    expect(report.applied).toContain('bearer-clients-sub')
+  })
+
+  it('apply, realm WITH a basic scope: attaches it as a default scope of the client instead of a private mapper', async () => {
+    const routes = greenRoutes()
+    routes[MOBILE_MAPPERS] = []
+    routes[`GET /admin/realms/${REALM}/client-scopes`] = [{ id: 'scope-basic', name: 'basic' }]
+    const { transport, calls } = scriptedTransport(routes)
+    const report = await reconcileRealm(transport, { ...opts, verifyOnly: false })
+    const writes = calls.filter((c) => c.method !== 'GET')
+    expect(writes).toEqual([{ method: 'PUT', path: `/admin/realms/${REALM}/clients/uuid-mobile/default-client-scopes/scope-basic`, body: undefined }])
+    expect(report.applied).toContain('bearer-clients-sub')
+  })
+
+  it('apply on a green realm issues no write for it', async () => {
+    const { transport, calls } = scriptedTransport(greenRoutes())
+    const report = await reconcileRealm(transport, { ...opts, verifyOnly: false })
+    expect(calls.every((c) => c.method === 'GET')).toBe(true)
+    expect(report.applied).not.toContain('bearer-clients-sub')
+  })
+})
+
 describe('(Q8) reconcileRealm — every realm is held to the exact per-tenant URI set', () => {
   const baseUi = (base.clients as any[]).find((c: any) => c.clientId === 'gremion-ui')
   const BASE_REDIRECT = [...baseUi.redirectUris]
@@ -497,6 +741,7 @@ describe('(FIX3-B) reconcileRealm — realm segment is encodeURIComponent-encode
         otpPolicyAlgorithm: 'HmacSHA1',
         otpPolicyDigits: 6,
         otpPolicyPeriod: 30,
+        ...GREEN_HARDENING,
         attributes: { 'acr.loa.map': '{"loa1":1,"loa2":2}' },
       },
       [`GET ${R}/authentication/flows`]: [{ alias: 'browser-stepup' }],
@@ -504,10 +749,7 @@ describe('(FIX3-B) reconcileRealm — realm segment is encodeURIComponent-encode
         { id: 'c1', providerId: 'conditional-level-of-authentication', authenticationConfig: 'cfg-1' },
         { id: 'p1', providerId: 'auth-username-password-form' },
       ],
-      [`GET ${R}/authentication/flows/stepup-2fa/executions`]: [
-        { id: 'c2', providerId: 'conditional-level-of-authentication', authenticationConfig: 'cfg-2' },
-        { id: 'o2', providerId: 'auth-otp-form' },
-      ],
+      [`GET ${R}/authentication/flows/stepup-2fa/executions`]: GREEN_2FA_EXECS(),
       [`GET ${R}/authentication/config/cfg-1`]: { config: { 'loa-condition-level': '1', 'loa-max-age': '36000' } },
       [`GET ${R}/authentication/config/cfg-2`]: { config: { 'loa-condition-level': '2', 'loa-max-age': '300' } },
       [`GET ${R}/clients?clientId=gremion-ui`]: [
@@ -515,6 +757,7 @@ describe('(FIX3-B) reconcileRealm — realm segment is encodeURIComponent-encode
           id: 'uuid-ui',
           clientId: 'gremion-ui',
           fullScopeAllowed: false,
+          attributes: { 'pkce.code.challenge.method': 'S256' },
           redirectUris: [`https://${HOST}/auth/callback/keycloak`],
           webOrigins: [`https://${HOST}`],
         },
@@ -649,6 +892,96 @@ describe('reconcileRealm — apply replays ONLY the failed checks (§4-2), nothi
     expect(report.applied).toContain('gremion-admin-sa-roles')
   })
 
+  it('security sweep 2 (finding 3): a legacy REQUIRED OTP form -> apply rebuilds stepup-2fa as OTP-or-deny and records it applied', async () => {
+    const routes = greenRoutes()
+    const F = `/admin/realms/${REALM}/authentication`
+    routes[`GET ${F}/flows/stepup-2fa/executions`] = [
+      { id: 'c2', providerId: 'conditional-level-of-authentication', requirement: 'REQUIRED', level: 0, index: 0, authenticationConfig: 'cfg-2' },
+      { id: 'o2', providerId: 'auth-otp-form', requirement: 'REQUIRED', level: 0, index: 1 },
+    ]
+    // a stateful Keycloak: the subflow appears once created, its children once added
+    let created = false
+    let childAdds = 0
+    const { transport: inner, calls } = scriptedTransport(routes)
+    const transport: KcTransport = async (method, path, body) => {
+      const r = await inner(method, path, body)
+      if (method === 'POST' && path === `${F}/flows/stepup-2fa/executions/flow`) created = true
+      if (method === 'POST' && path === `${F}/flows/stepup-2fa%20second%20factor/executions/execution`) childAdds++
+      if (method === 'GET' && path === `${F}/flows/stepup-2fa/executions` && created) {
+        return [
+          { id: 'c2', providerId: 'conditional-level-of-authentication', requirement: 'REQUIRED', level: 0, index: 0, authenticationConfig: 'cfg-2' },
+          { id: 's2', displayName: 'stepup-2fa second factor', authenticationFlow: true, requirement: 'DISABLED', level: 0, index: 1 },
+          { id: 'o2', providerId: 'auth-otp-form', requirement: 'REQUIRED', level: 0, index: 2 },
+        ]
+      }
+      if (method === 'GET' && path === `${F}/flows/stepup-2fa%20second%20factor/executions`) {
+        return [
+          ...(childAdds >= 1 ? [{ id: 'n-otp', providerId: 'auth-otp-form', requirement: 'DISABLED', level: 0, index: 0 }] : []),
+          ...(childAdds >= 2 ? [{ id: 'n-deny', providerId: 'deny-access-authenticator', requirement: 'DISABLED', level: 0, index: 1 }] : []),
+        ]
+      }
+      return r
+    }
+    const report = await reconcileRealm(transport, { ...opts, verifyOnly: false })
+    // the REQUIRED OTP execution is removed from stepup-2fa…
+    expect(calls).toContainEqual({ method: 'DELETE', path: `/admin/realms/${REALM}/authentication/executions/o2`, body: undefined })
+    // …a REQUIRED subflow is added, holding OTP then deny-access, both ALTERNATIVE
+    expect(calls.find((c) => c.method === 'POST' && c.path === `${F}/flows/stepup-2fa/executions/flow`)!.body).toEqual({
+      alias: 'stepup-2fa second factor',
+      type: 'basic-flow',
+    })
+    const adds = calls.filter((c) => c.method === 'POST' && c.path === `${F}/flows/stepup-2fa%20second%20factor/executions/execution`)
+    expect(adds.map((c) => (c.body as any).provider)).toEqual(['auth-otp-form', 'deny-access-authenticator'])
+    const reqs = calls
+      .filter((c) => c.method === 'PUT' && c.path === `${F}/flows/browser-stepup/executions`)
+      .map((c) => c.body)
+    expect(reqs).toEqual([
+      { id: 's2', requirement: 'REQUIRED' },
+      { id: 'n-otp', requirement: 'ALTERNATIVE' },
+      { id: 'n-deny', requirement: 'ALTERNATIVE' },
+    ])
+    expect(report.applied).toContain('stepup-2fa-otp-gate')
+  })
+
+  it('a missing password policy -> apply issues ONE partial realm PUT with exactly that field (no step-up replay, no refresh-token fields)', async () => {
+    const routes = greenRoutes()
+    Object.assign(routes[`GET /admin/realms/${REALM}`] as object, {
+      passwordPolicy: undefined,
+      revokeRefreshToken: false,
+      refreshTokenMaxReuse: 3,
+    })
+    const { transport, calls } = scriptedTransport(routes)
+    const report = await reconcileRealm(transport, { ...opts, verifyOnly: false })
+    const puts = calls.filter((c) => c.method === 'PUT')
+    expect(puts).toEqual([
+      {
+        method: 'PUT',
+        path: `/admin/realms/${REALM}`,
+        body: {
+          realm: REALM,
+          passwordPolicy: 'length(12) and notUsername and notEmail and passwordHistory(3)',
+        },
+      },
+    ])
+    expect(report.applied).toEqual(['password-policy'])
+  })
+
+  it('a gremion-ui without PKCE -> apply PUTs only the attribute (merged) to the client and records it applied', async () => {
+    const routes = greenRoutes()
+    ;(routes[`GET /admin/realms/${REALM}/clients?clientId=gremion-ui`] as any)[0].attributes = { 'post.logout.redirect.uris': 'x' }
+    const { transport, calls } = scriptedTransport(routes)
+    const report = await reconcileRealm(transport, { ...opts, verifyOnly: false })
+    const puts = calls.filter((c) => c.method === 'PUT')
+    expect(puts).toEqual([
+      {
+        method: 'PUT',
+        path: `/admin/realms/${REALM}/clients/uuid-ui`,
+        body: { id: 'uuid-ui', clientId: 'gremion-ui', attributes: { 'post.logout.redirect.uris': 'x', 'pkce.code.challenge.method': 'S256' } },
+      },
+    ])
+    expect(report.applied).toContain('gremion-ui-pkce')
+  })
+
   it('a non-mechanically-repairable drift (wildcard URI) is reported but NOT auto-repaired', async () => {
     const routes = greenRoutes()
     ;(routes[`GET /admin/realms/${REALM}/clients?clientId=gremion-ui`] as any)[0].redirectUris = [`https://${HOST}/*`]
@@ -756,5 +1089,70 @@ describe('(C) reconcileFleet — --all skips non-realm-bearing tenants and never
     const report = await reconcileFleet(fleet, async (tenant) => okReport(tenant.realmName))
     expect(report.rows.every((r) => r.outcome === 'reconciled')).toBe(true)
     expect(report.anyFailed).toBe(false)
+  })
+})
+
+// TASK-033-a: the kernel audit_log is a governance record, append-only for the app (RC-GOV-CHAIN).
+// The privilege lives in the customer's kernel database, not in the realm, so the verb adds ONE
+// DB-level check to the realm report through an injected port: verify reads it, apply re-asserts it.
+describe('withKernelAuditCheck: the audit-append-only check', () => {
+  const green: ReconcileReport = { realm: REALM, ok: true, checks: [{ name: 'ssl-required', ok: true, detail: '' }], applied: [], repairHost: [] }
+  const fakePort = (states: string[][]) => {
+    const seq = [...states]
+    const repair = vi.fn(async () => {})
+    return { problems: vi.fn(async () => (seq.length > 1 ? seq.shift()! : seq[0]!)), repair }
+  }
+
+  it('is a named check of its own, outside the realm contract list', () => {
+    expect([...KERNEL_DB_CHECK_NAMES]).toEqual(['audit-append-only'])
+    expect((RECONCILE_CHECK_NAMES as readonly string[]).includes('audit-append-only')).toBe(false)
+  })
+
+  it('a clean kernel database adds a passing check and keeps the report green', async () => {
+    const port = fakePort([[]])
+    const r = await withKernelAuditCheck(green, port, true)
+    expect(r.ok).toBe(true)
+    expect(r.checks.at(-1)).toEqual({ name: 'audit-append-only', ok: true, detail: '' })
+    expect(port.repair).not.toHaveBeenCalled()
+  })
+
+  it('verify-only reports the privilege still held and does NOT repair', async () => {
+    const port = fakePort([['audit_log: k_x_app still holds DELETE (the kernel audit record is append-only)']])
+    const r = await withKernelAuditCheck(green, port, true)
+    expect(r.ok).toBe(false)
+    expect(r.checks.at(-1)).toMatchObject({ name: 'audit-append-only', ok: false })
+    expect(r.checks.at(-1)!.detail).toContain('still holds DELETE')
+    expect(port.repair).not.toHaveBeenCalled()
+    expect(r.applied).toEqual([])
+  })
+
+  it('apply repairs it once, re-reads, and the report turns green with the repair listed', async () => {
+    const port = fakePort([['audit_log: k_x_app still holds DELETE'], []])
+    const r = await withKernelAuditCheck(green, port, false)
+    expect(port.repair).toHaveBeenCalledTimes(1)
+    expect(r.ok).toBe(true)
+    expect(r.applied).toContain('audit-append-only')
+    expect(r.checks.at(-1)).toMatchObject({ name: 'audit-append-only', ok: true })
+  })
+
+  it('apply that leaves the privilege in place stays RED (the post-condition is read, not assumed)', async () => {
+    const port = fakePort([['audit_log: k_x_app still holds DELETE']])
+    const r = await withKernelAuditCheck(green, port, false)
+    expect(port.repair).toHaveBeenCalledTimes(1)
+    expect(r.ok).toBe(false)
+    expect(r.checks.at(-1)).toMatchObject({ name: 'audit-append-only', ok: false })
+  })
+
+  it('a port that throws fails the check with the reason; it never crashes the report', async () => {
+    const port = { problems: vi.fn(async () => { throw new Error('connection refused') }), repair: vi.fn(async () => {}) }
+    const r = await withKernelAuditCheck(green, port, true)
+    expect(r.ok).toBe(false)
+    expect(r.checks.at(-1)!.detail).toContain('connection refused')
+  })
+
+  it('a realm report that already failed stays failed (the check never flips ok to true)', async () => {
+    const red: ReconcileReport = { ...green, ok: false, checks: [{ name: 'ssl-required', ok: false, detail: 'x' }] }
+    const r = await withKernelAuditCheck(red, fakePort([[]]), true)
+    expect(r.ok).toBe(false)
   })
 })

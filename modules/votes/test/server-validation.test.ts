@@ -55,7 +55,7 @@ describe('votes leaf HTTP validation', () => {
     async listPolls(): Promise<NcPoll[]> {
       return []
     },
-    async createPoll(dto: CreatePollDto): Promise<NcPoll> {
+    async createPoll(_tenantId: string, dto: CreatePollDto): Promise<NcPoll> {
       created.push(dto)
       return {} as NcPoll
     },

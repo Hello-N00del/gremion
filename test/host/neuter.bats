@@ -218,6 +218,72 @@ EOF
     grep -q '^ALERT_SMTP_USER=alerts@example.org$' "${GREMION_ROOT}/etc/env/ops.env"
 }
 
+@test "gremion-neuter blanks the relay credential and empties its secret file (mail-transport review 1)" {
+    # In relay mode the vendor's mail credential is the Workspace app password
+    # behind RELAY_SMTP_PASSWORD_REF. The ref is blanked in every env file (no
+    # render or realm-smtp can read it any more), the secret FILE it named is
+    # emptied (a restored copy must not hold the live password), and the user
+    # is blanked with it so the neutered config stays coherent: user + empty
+    # ref would be refused by gremion-mail, user + ref both empty is the
+    # unauthenticated hand-over to the null sink.
+    shim_docker_empty
+    mkdir -p "${GREMION_ROOT}/etc/secrets/mail"
+    printf '%s\n' live-relay-app-password >"${GREMION_ROOT}/etc/secrets/mail/relay-password"
+    chmod 600 "${GREMION_ROOT}/etc/secrets/mail/relay-password"
+    # render-ops copies the relay (= alert) password into the ops secret dir
+    mkdir -p "${GREMION_ROOT}/etc/secrets/ops"
+    printf 'live-relay-app-password\n' >"${GREMION_ROOT}/etc/secrets/ops/smtp-password"
+    chmod 600 "${GREMION_ROOT}/etc/secrets/ops/smtp-password"
+    cat >"${GREMION_ROOT}/etc/env/mail.env" <<'EOF2'
+STACK=stg
+MAIL_TRANSPORT=relay
+RELAY_SMTP_HOST=smtp-relay.example.net
+RELAY_SMTP_PORT=587
+RELAY_SMTP_USER=relay-user@example.org
+RELAY_SMTP_PASSWORD_REF=secret:mail/relay-password
+EOF2
+    cat >"${GREMION_ROOT}/etc/env/ops.env" <<'EOF2'
+STACK=stg
+RELAY_SMTP_HOST=smtp-relay.example.net
+RELAY_SMTP_USER=relay-user@example.org
+RELAY_SMTP_PASSWORD_REF=secret:mail/relay-password
+EOF2
+    chmod 600 "${GREMION_ROOT}/etc/env/ops.env" "${GREMION_ROOT}/etc/env/mail.env"
+    run "$NEUTER" --stack stg
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
+    local f k
+    for f in mail.env ops.env; do
+        for k in RELAY_SMTP_PASSWORD_REF RELAY_SMTP_USER; do
+            grep -q "^${k}=$" "${GREMION_ROOT}/etc/env/${f}" || { echo "${f} ${k} survived"; return 1; }
+        done
+        grep -q '^RELAY_SMTP_HOST=null-sink$' "${GREMION_ROOT}/etc/env/${f}" || { echo "${f} RELAY_SMTP_HOST not sunk"; return 1; }
+    done
+    # post-condition on the secret file itself: present or not, it holds no password
+    [ ! -s "${GREMION_ROOT}/etc/secrets/mail/relay-password" ] || { echo "relay password file still has content"; return 1; }
+    ! grep -rq live-relay-app-password "${GREMION_ROOT}/etc"
+}
+
+@test "gremion-neuter leaves a relay password file outside etc/secrets alone and says so" {
+    shim_docker_empty
+    local outside="${GREMION_ROOT}/elsewhere-relay-pw"
+    printf '%s
+' operator-owned >"$outside"
+    chmod 600 "$outside"
+    cat >"${GREMION_ROOT}/etc/env/mail.env" <<EOF2
+STACK=stg
+MAIL_TRANSPORT=relay
+RELAY_SMTP_HOST=smtp-relay.example.net
+RELAY_SMTP_USER=relay-user@example.org
+RELAY_SMTP_PASSWORD_REF=file:${outside}
+EOF2
+    chmod 600 "${GREMION_ROOT}/etc/env/mail.env"
+    run "$NEUTER" --stack stg
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
+    grep -q '^RELAY_SMTP_PASSWORD_REF=$' "${GREMION_ROOT}/etc/env/mail.env"
+    [ -s "$outside" ]
+    [[ "$output" == *"outside ${GREMION_ROOT}/etc/secrets"* ]]
+}
+
 @test "gremion-neuter finds keycloak by its compose labels and logs in at /auth (TASK-015)" {
     shim_docker_empty
     run "$NEUTER" --stack stg

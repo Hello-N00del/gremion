@@ -37,9 +37,14 @@ NEUTER_HOST_KEYS_RE='(^|_)(SMTP_HOST|EMAIL_HOST|SMTP_SERVER)$'
 NEUTER_PORT_KEYS_RE='(^|_)(SMTP_PORT|EMAIL_PORT)$'
 # TASK-015: the vendor mail credentials (system@, alerts@, roles@, the Stalwart admin
 # and API key) are live secrets of the production sender and are blanked too.
+# MAIL_TRANSPORT=relay: RELAY_SMTP_PASSWORD_REF names the file holding the
+# Workspace app password (blanked here, the file itself by neuter_relay_secrets)
+# and RELAY_SMTP_USER goes with it, so the neutered config is user-less and
+# ref-less (the unauthenticated hand-over to the sink) rather than a user whose
+# ref is empty, which gremion-mail refuses.
 # Named exactly: a looser `.*_PASSWORD|STALWART_.*` would also blank
 # STALWART_IMAGE, the digest pin the restored mail project starts from.
-NEUTER_TOKEN_KEYS_RE='^(INSTAGRAM_.+|.+_PUBLISH_TOKEN|.+_ACCESS_TOKEN|.+_WEBHOOK_URL|EMAIL_HOST_PASSWORD|SMTP_PASSWORD|PLATFORM_SMTP_PASSWORD|VENDOR_SMTP_PASSWORD|ALERT_SMTP_PASSWORD|ROLES_IMAP_PASSWORD|STALWART_(ADMIN_PASSWORD|API_KEY))$'
+NEUTER_TOKEN_KEYS_RE='^(INSTAGRAM_.+|.+_PUBLISH_TOKEN|.+_ACCESS_TOKEN|.+_WEBHOOK_URL|EMAIL_HOST_PASSWORD|SMTP_PASSWORD|PLATFORM_SMTP_PASSWORD|VENDOR_SMTP_PASSWORD|ALERT_SMTP_PASSWORD|ROLES_IMAP_PASSWORD|RELAY_SMTP_(USER|PASSWORD|PASSWORD_REF)|STALWART_(ADMIN_PASSWORD|API_KEY))$'
 
 ENV_FILES_SEEN=0
 ENV_FILES_CHANGED=0
@@ -190,6 +195,45 @@ rewrite_env_stream() {
             printf '%s\n' "$line"
         fi
     done
+}
+
+# The relay password lives in a FILE named by RELAY_SMTP_PASSWORD_REF, and the
+# env rewrite blanks the ref - so this must run BEFORE it, while the ref can
+# still be read. secret:<name> is <root>/etc/secrets/<name>; file:<abs> is
+# emptied only when it lies under <root>/etc/secrets (a path elsewhere belongs
+# to the operator: named, not touched). An emptied file fails closed in
+# gremion-mail (absent or empty), which is the point.
+RELAY_SECRETS_EMPTIED=0
+relay_warn() { printf 'WARN %s\n' "$*" >&2; }
+neuter_relay_secrets() {
+    local f ref path secrets="${ROOT}/etc/secrets"
+    for f in "${ROOT}"/etc/env/*.env; do
+        [[ -f "$f" ]] || continue
+        ref="$(sed -n 's/^RELAY_SMTP_PASSWORD_REF=//p' "$f" | tail -n 1 | tr -d '\r')"
+        [[ -n "$ref" ]] || continue
+        case "$ref" in
+            secret:*) path="${secrets}/${ref#secret:}" ;;
+            file:*)   path="${ref#file:}" ;;
+            *) relay_warn "$(basename "$f"): RELAY_SMTP_PASSWORD_REF is neither secret:<name> nor file:<path>; blanked, no file to empty"; continue ;;
+        esac
+        if [[ "$path" == *..* || "$path" != "${secrets}/"* ]]; then
+            relay_warn "relay password file ${path} is outside ${secrets} (or contains ..): not touched, empty or remove it yourself"
+            continue
+        fi
+        [[ -e "$path" ]] || continue
+        : >"$path"
+        [[ ! -s "$path" ]] || die "could not empty the relay password file ${path}" 1
+        RELAY_SECRETS_EMPTIED=$((RELAY_SECRETS_EMPTIED + 1))
+    done
+    # render-ops copies the alert SMTP password (in relay mode: the relay app
+    # password) into etc/secrets/ops/smtp-password; a restored copy must not
+    # keep it at rest either. Re-rendering ops after the neuter rewrites it.
+    if [[ -s "${secrets}/ops/smtp-password" ]]; then
+        : >"${secrets}/ops/smtp-password"
+        [[ ! -s "${secrets}/ops/smtp-password" ]] || die "could not empty ${secrets}/ops/smtp-password" 1
+        RELAY_SECRETS_EMPTIED=$((RELAY_SECRETS_EMPTIED + 1))
+    fi
+    ok "relay password files emptied: ${RELAY_SECRETS_EMPTIED}"
 }
 
 neuter_env_files() {
@@ -562,6 +606,7 @@ main() {
     need_cmd docker sha256sum mktemp sed grep awk sort
     assert_mail_project_down
     assert_release_tree
+    neuter_relay_secrets
     neuter_env_files
     ensure_null_sink
     recreate_affected

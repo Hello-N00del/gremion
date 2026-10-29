@@ -18,6 +18,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { getDb } from '../db'
 import { createOrgUnit } from './org-units-db'
 import { createProtocol, addResolution } from '../protocols/protocol-db'
+import { actor } from '../audit-test-actor'
 
 // Failure injection seam for test (3): wrap the REAL writeAuditEntry so the
 // audit row IS inserted on the caller's tx, then throw — a post-INSERT failure
@@ -105,7 +106,7 @@ describe('resolution-challenges same-tx INV-1 audit coupling', () => {
     await expect(
       fileChallenge({
         resolutionId: resolution.id,
-        raisedBy: 'member-1',
+        raisedBy: actor('member-1'),
         grounds: 'Verstoß gegen §7 der Geschäftsordnung',
       }),
     ).rejects.toMatchObject({ name: 'ResolutionNotAdoptedError' })
@@ -131,7 +132,7 @@ describe('resolution-challenges same-tx INV-1 audit coupling', () => {
       await expect(
         fileChallenge({
           resolutionId: resolution.id,
-          raisedBy: 'member-1',
+          raisedBy: actor('member-1'),
           grounds: 'Verstoß gegen §7 der Geschäftsordnung',
         }),
       ).rejects.toMatchObject({ name: 'ResolutionNotAdoptedError' })
@@ -147,7 +148,7 @@ describe('resolution-challenges same-tx INV-1 audit coupling', () => {
 
     const challenge = await fileChallenge({
       resolutionId: resolution.id,
-      raisedBy: 'member-1',
+      raisedBy: actor('member-1'),
       grounds: 'Verstoß gegen §7 der Geschäftsordnung',
     })
     expect(challenge.status).toBe('open')
@@ -155,7 +156,7 @@ describe('resolution-challenges same-tx INV-1 audit coupling', () => {
 
     const audits = await auditRows('resolution_challenge.raised')
     expect(audits).toHaveLength(1)
-    expect(audits[0].user_id).toBe('member-1')
+    expect(audits[0].user_id).toBe(actor('member-1'))
     const payload = JSON.parse(audits[0].new_value)
     expect(payload).toMatchObject({ challengeId: challenge.id, resolutionId: resolution.id })
   })
@@ -163,11 +164,11 @@ describe('resolution-challenges same-tx INV-1 audit coupling', () => {
   it('(1b) a second open challenge by the same user is refused (duplicate-open) and leaves no extra audit row', async () => {
     const resolution = await seedResolution()
     await fileChallenge({
-      resolutionId: resolution.id, raisedBy: 'member-1', grounds: 'Erster Einspruch',
+      resolutionId: resolution.id, raisedBy: actor('member-1'), grounds: 'Erster Einspruch',
     })
     await expect(
       fileChallenge({
-        resolutionId: resolution.id, raisedBy: 'member-1', grounds: 'Zweiter Einspruch',
+        resolutionId: resolution.id, raisedBy: actor('member-1'), grounds: 'Zweiter Einspruch',
       }),
     ).rejects.toMatchObject({ name: 'DuplicateOpenChallengeError' })
 
@@ -180,23 +181,23 @@ describe('resolution-challenges same-tx INV-1 audit coupling', () => {
   it("(2) deciding commits a 'resolution_challenge.decided' audit row — and NEVER touches protocol_resolutions.result", async () => {
     const resolution = await seedResolution()
     const challenge = await fileChallenge({
-      resolutionId: resolution.id, raisedBy: 'member-1', grounds: 'Verstoß gegen §7',
+      resolutionId: resolution.id, raisedBy: actor('member-1'), grounds: 'Verstoß gegen §7',
     })
 
     const decided = await decideChallenge({
       challengeId: challenge.id,
       resolutionId: resolution.id,
-      resolvedBy: 'admin-1',
+      resolvedBy: actor('admin-1'),
       status: 'upheld',
       decisionNote: 'Frist war tatsächlich verletzt',
     })
     expect(decided.status).toBe('upheld')
-    expect(decided.resolved_by).toBe('admin-1')
+    expect(decided.resolved_by).toBe(actor('admin-1'))
     expect(decided.decision_note).toBe('Frist war tatsächlich verletzt')
 
     const audits = await auditRows('resolution_challenge.decided')
     expect(audits).toHaveLength(1)
-    expect(audits[0].user_id).toBe('admin-1')
+    expect(audits[0].user_id).toBe(actor('admin-1'))
     expect(audits[0].old_value).toBe('open')
     const payload = JSON.parse(audits[0].new_value)
     expect(payload).toMatchObject({
@@ -220,7 +221,7 @@ describe('resolution-challenges same-tx INV-1 audit coupling', () => {
 
     await expect(
       fileChallenge({
-        resolutionId: resolution.id, raisedBy: 'member-1', grounds: 'Verstoß gegen §7',
+        resolutionId: resolution.id, raisedBy: actor('member-1'), grounds: 'Verstoß gegen §7',
       }),
     ).rejects.toThrow('injected post-INSERT failure')
 
@@ -233,7 +234,7 @@ describe('resolution-challenges same-tx INV-1 audit coupling', () => {
   it('(3b) an injected post-INSERT failure inside the DISPOSITION tx rolls back both the status flip and the audit row', async () => {
     const resolution = await seedResolution()
     const challenge = await fileChallenge({
-      resolutionId: resolution.id, raisedBy: 'member-1', grounds: 'Verstoß gegen §7',
+      resolutionId: resolution.id, raisedBy: actor('member-1'), grounds: 'Verstoß gegen §7',
     })
     failpoint.afterAuditInsert = true
 
@@ -241,7 +242,7 @@ describe('resolution-challenges same-tx INV-1 audit coupling', () => {
       decideChallenge({
         challengeId: challenge.id,
         resolutionId: resolution.id,
-        resolvedBy: 'admin-1',
+        resolvedBy: actor('admin-1'),
         status: 'dismissed',
         decisionNote: null,
       }),

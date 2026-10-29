@@ -133,7 +133,7 @@ describe('votes leaf HTTP server — ACL sits in front of the router + aggregati
     async listPolls(): Promise<NcPoll[]> {
       return [poll(7)]
     },
-    async createPoll(dto: CreatePollDto): Promise<NcPoll> {
+    async createPoll(_tenantId: string, dto: CreatePollDto): Promise<NcPoll> {
       createdPolls.push(dto)
       return poll(99)
     },

@@ -296,6 +296,19 @@ teardown() {
     [ "$output" = "0" ]
 }
 
+@test "M3 relay mode: the bundled mail server is not brought up (exit 2 naming the transport, nothing rendered, no docker call); stalwart and an unset key behave as before" {
+    printf 'MAIL_TRANSPORT=relay
+' >> "${GREMION_ROOT}/etc/env/mail.env"
+    run "$BRINGUP" --render-config
+    [ "$status" -eq 2 ] || { echo "$output"; return 1; }
+    [[ "$output" == *"MAIL_TRANSPORT=relay"* ]]
+    [ ! -e "${GREMION_ROOT}/etc/mail/config.toml" ]
+    sed -i 's/^MAIL_TRANSPORT=.*/MAIL_TRANSPORT=stalwart/' "${GREMION_ROOT}/etc/env/mail.env"
+    run "$BRINGUP" --render-config
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    [ -s "${GREMION_ROOT}/etc/mail/config.toml" ]
+}
+
 @test "--render-config substitutes the derived mail hostname" {
     run "$BRINGUP" --render-config
     [ "$status" -eq 0 ]
@@ -540,6 +553,7 @@ EOF
                END { n=NR; while (n>0 && l[n]=="") n--; for (i=1;i<=n;i++) printf "%s\r\n", l[i] }' \
         | openssl dgst -sha256 -binary | openssl base64 -A)"
     shim curl "
+case \" \$* \" in *\" -K - \"*) cat >> \"${GREMION_ROOT}/curl.stdin\" ;; esac
 case \"\$*\" in
   *SEARCH*) echo '* SEARCH 7' ;;
   *UID=7*)  printf 'DKIM-Signature: v=1; a=rsa-sha256; d=example.org; s=g2026a; bh=${body_hash}; b=xx\r\nSubject: probe\r\n\r\n' ;;
@@ -548,6 +562,10 @@ exit 0"
     run "$BRINGUP" --assert 3
     [ "$status" -eq 0 ] || { echo "$output"; return 1; }
     [[ "$output" == *"3=ok"* ]]
+    # LOW-5: the roles IMAP password rides curl's stdin (-K -), never its argv.
+    assert_absent 'unit-test-roles-password' "$SHIM_LOG" \
+        'ROLES_IMAP_PASSWORD reached curl argv (host process list)'
+    grep -Fq 'user = "roles@example.org:unit-test-roles-password"' "${GREMION_ROOT}/curl.stdin"
 }
 
 # ---------------------------------------------------------------------------
@@ -1403,4 +1421,214 @@ exit 0'
         || { echo "no max-size: max-file alone never rotates"; return 1; }
     grep -q 'max-file: "\${MAIL_LOG_RETENTION_DAYS}"' "$MAIL_COMPOSE" \
         || { echo "no max-file bound"; return 1; }
+}
+
+# ---------------------------------------------------------------------------
+# M6 (PLAN-mail-transport): the relay branch of --assert. With
+# MAIL_TRANSPORT=relay the bundled-server asserts (1-6b) do not apply and are
+# NOT silently skipped: asking for one is a named refusal, and --assert all/relay
+# runs the relay's own four checks, printing the skipped ones with the reason.
+#   r1 relay reachable   r2 STARTTLS offered + certificate trusted for the host
+#   r3 an authenticated test message accepted   r4 the delivered headers show the
+#   relay DKIM-signed the platform domain (check-received --relay)
+# The decision logic is unit-tested here with canned `openssl s_client` output
+# and a recording curl; the live run is the operator's (M5 step list).
+# ---------------------------------------------------------------------------
+
+MAIL_FRONT="${PROJECT_ROOT}/infra/host/bin/gremion-mail"
+RELAY_PW='unit-relay-bringup-secret'
+RELAY_FIXTURES="${PROJECT_ROOT}/ops/vendor-mail/__fixtures__/received"
+
+OPENSSL_OK='CONNECTED(00000003)
+depth=1 C = US, O = Example Trust, CN = Example Issuing CA
+verify return:1
+---
+Certificate chain
+ 0 s:CN = relay.example.net
+---
+SSL handshake has read 4021 bytes and written 460 bytes
+Verification: OK
+---
+Verify return code: 0 (ok)
+---'
+
+# write_relay_bringup_env <port> <user>
+write_relay_bringup_env() {
+    printf 'MAIL_TRANSPORT=relay\nRELAY_SMTP_HOST=relay.example.net\nRELAY_SMTP_PORT=%s\nRELAY_SMTP_USER=%s\nRELAY_SMTP_PASSWORD_REF=secret:mail/relay-password\n' \
+        "${1:-587}" "${2-relay-user@example.org}" >> "${GREMION_ROOT}/etc/env/mail.env"
+    mkdir -p "${GREMION_ROOT}/etc/secrets/mail"
+    printf '%s\n' "$RELAY_PW" > "${GREMION_ROOT}/etc/secrets/mail/relay-password"
+    chmod 600 "${GREMION_ROOT}/etc/secrets/mail/relay-password"
+    export MAIL_BIN="$MAIL_FRONT"
+}
+
+# shim_relay_net <openssl output> <openssl rc> <curl rc> [curl stderr]
+# openssl answers the canned s_client text; curl records its argv in the shim log
+# and its stdin (the -K - config) in $GREMION_ROOT/curl-stdin.
+shim_relay_net() {
+    printf '%s\n' "$1" > "${GREMION_ROOT}/openssl-out"
+    shim openssl 'cat "'"${GREMION_ROOT}"'/openssl-out"; exit '"${2:-0}"
+    shim curl 'cat > "'"${GREMION_ROOT}"'/curl-stdin"; [ -z "'"${4:-}"'" ] || echo "'"${4:-}"'" >&2; exit '"${3:-0}"
+}
+
+@test "M6 relay r1+r2: reachable, STARTTLS offered and the certificate trusted for the relay host is ok; openssl is told the host, the port and smtp STARTTLS" {
+    write_relay_bringup_env 587
+    shim_relay_net "$OPENSSL_OK" 0 0
+    run "$BRINGUP" --assert r2
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
+    assert_recorded openssl 's_client -connect relay.example.net:587 -starttls smtp'
+    assert_recorded openssl '-verify_hostname relay.example.net'
+    [[ "$output" == *"transport=relay"* && "$output" == *"r2=ok"* ]]
+}
+
+@test "M6 relay r1: a refused or unresolvable relay is FAIL (exit 1) naming host:port, and r2 does not pass on that output either" {
+    write_relay_bringup_env 587
+    shim_relay_net 'connect:errno=111
+140234:error:8000006F:system library:BIO_connect:Connection refused' 1 0
+    run "$BRINGUP" --assert r1
+    [ "$status" -eq 1 ] || { echo "status=$status $output"; return 1; }
+    [[ "$output" == *"relay.example.net:587"* && "$output" == *"r1=FAIL"* ]]
+    run "$BRINGUP" --assert r2
+    [ "$status" -eq 1 ] || { echo "status=$status $output"; return 1; }
+    [[ "$output" == *"r2=FAIL"* ]]
+}
+
+@test "M6 relay r2: a relay that does not offer STARTTLS is FAIL naming STARTTLS (never a plaintext pass)" {
+    write_relay_bringup_env 587
+    shim_relay_net "CONNECTED(00000003)
+didn't find starttls in server response, try anyway...
+4011:error:0A00010B:SSL routines:wrong version number" 1 0
+    run "$BRINGUP" --assert r2
+    [ "$status" -eq 1 ] || { echo "status=$status $output"; return 1; }
+    [[ "$output" == *"STARTTLS"* && "$output" == *"r2=FAIL"* ]]
+}
+
+@test "M6 relay r2: an untrusted or wrong-host certificate is FAIL and prints openssl's verify reason" {
+    write_relay_bringup_env 587
+    shim_relay_net "CONNECTED(00000003)
+Verify return code: 62 (Hostname mismatch, certificate is not valid for 'relay.example.net'.)" 0 0
+    run "$BRINGUP" --assert r2
+    [ "$status" -eq 1 ] || { echo "status=$status $output"; return 1; }
+    [[ "$output" == *"Hostname mismatch"* ]]
+}
+
+@test "M6 relay r2: port 465 is implicit TLS (no -starttls)" {
+    write_relay_bringup_env 465
+    shim_relay_net "$OPENSSL_OK" 0 0
+    run "$BRINGUP" --assert r2
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
+    assert_recorded openssl 's_client -connect relay.example.net:465'
+    refute_recorded openssl '-starttls'
+}
+
+@test "M6 relay r3: the authenticated test message goes through curl -K - with the config on stdin; the password is never on an argv or in the output" {
+    write_relay_bringup_env 587
+    shim_relay_net "$OPENSSL_OK" 0 0
+    run "$BRINGUP" --assert r3 --external-to probe@example.net
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
+    assert_recorded curl '-K -'
+    ! grep -qF -- "$RELAY_PW" "$SHIM_LOG" || { echo "the relay password is on a recorded argv"; cat "$SHIM_LOG"; return 1; }
+    [[ "$output" != *"$RELAY_PW"* ]] || { echo "the relay password was printed"; return 1; }
+    # the positive: the config curl read DID carry the credential and the addresses
+    grep -qF -- "user = \"relay-user@example.org:${RELAY_PW}\"" "${GREMION_ROOT}/curl-stdin"
+    grep -qF -- 'mail-from = "system@example.org"' "${GREMION_ROOT}/curl-stdin"
+    grep -qF -- 'mail-rcpt = "probe@example.net"' "${GREMION_ROOT}/curl-stdin"
+    [[ "$output" == *"r3=ok"* ]]
+}
+
+@test "M6 relay r3: a refused login (curl 67) is FAIL naming the login; r3 without --external-to is a usage error and sends nothing" {
+    write_relay_bringup_env 587
+    shim_relay_net "$OPENSSL_OK" 0 67 'curl: (67) Access denied: 535'
+    run "$BRINGUP" --assert r3 --external-to probe@example.net
+    [ "$status" -eq 1 ] || { echo "status=$status $output"; return 1; }
+    [[ "$output" == *"login"* && "$output" == *"r3=FAIL"* ]]
+    : > "$SHIM_LOG"
+    run "$BRINGUP" --assert r3
+    [ "$status" -eq 2 ] || { echo "status=$status $output"; return 1; }
+    [[ "$output" == *"--external-to"* ]]
+    refute_recorded curl ''
+}
+
+@test "M6 relay r3: an IP-allow-listed relay (no user) sends without a user line" {
+    write_relay_bringup_env 587 ''
+    shim_relay_net "$OPENSSL_OK" 0 0
+    run "$BRINGUP" --assert r3 --external-to probe@example.net
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
+    ! grep -q '^user =' "${GREMION_ROOT}/curl-stdin" || { cat "${GREMION_ROOT}/curl-stdin"; return 1; }
+}
+
+@test "M6 relay r4: without a results file it is BLOCKED (exit 3) and asks for the delivered headers; with one it runs check-received --relay and a proven file is ok" {
+    write_relay_bringup_env 587
+    shim_relay_net "$OPENSSL_OK" 0 0
+    run "$BRINGUP" --assert r4
+    [ "$status" -eq 3 ] || { echo "status=$status $output"; return 1; }
+    [[ "$output" == *"r4=BLOCKED"* ]]
+    cp "${RELAY_FIXTURES}/relay-good.eml" "${GREMION_ROOT}/headers.eml"
+    RECEIVER_AUTHSERV_ID=mx.example.net RECEIVER_DOMAIN=example.net run "$BRINGUP" --assert r4 --results-file "${GREMION_ROOT}/headers.eml"
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
+    [[ "$output" == *"r4=ok"* ]]
+}
+
+@test "M6 relay r4: headers where the relay signed ITS OWN domain, not the platform domain, are FAIL" {
+    write_relay_bringup_env 587
+    shim_relay_net "$OPENSSL_OK" 0 0
+    cp "${RELAY_FIXTURES}/relay-foreign-dkim.eml" "${GREMION_ROOT}/headers.eml"
+    RECEIVER_AUTHSERV_ID=mx.example.net RECEIVER_DOMAIN=example.net run "$BRINGUP" --assert r4 --results-file "${GREMION_ROOT}/headers.eml"
+    [ "$status" -eq 1 ] || { echo "status=$status $output"; return 1; }
+    [[ "$output" == *"r4=FAIL"* ]]
+}
+
+@test "M6 relay --assert all: runs r1-r4, prints the skipped bundled-server asserts WITH the reason, and a skipped check is not a pass" {
+    write_relay_bringup_env 587
+    shim_relay_net "$OPENSSL_OK" 0 0
+    cp "${RELAY_FIXTURES}/relay-good.eml" "${GREMION_ROOT}/headers.eml"
+    RECEIVER_AUTHSERV_ID=mx.example.net RECEIVER_DOMAIN=example.net run "$BRINGUP" --assert all \
+        --external-to probe@example.net --results-file "${GREMION_ROOT}/headers.eml"
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
+    [[ "$output" == *"MAIL-BRINGUP: transport=relay r1=ok r2=ok r3=ok r4=ok"* ]] || { echo "$output"; return 1; }
+    [[ "$output" == *"SKIPPED"*"MAIL_TRANSPORT=relay"*"1 2 3 4 5 6a 6b"* ]] || { echo "$output"; return 1; }
+    [[ "$output" == *"RELAY-GATE: GO"* ]]
+    [[ "$output" != *"MX-PUBLICATION"* ]]
+    # one blocked check keeps the gate on HOLD with exit 3
+    run "$BRINGUP" --assert all --external-to probe@example.net
+    [ "$status" -eq 3 ] || { echo "status=$status $output"; return 1; }
+    [[ "$output" == *"r4=BLOCKED"* && "$output" == *"RELAY-GATE: HOLD"* ]]
+}
+
+@test "M6 relay: a bundled-server assert (1-6b) is a named refusal (exit 2), not a skip-as-pass, and touches no network tool" {
+    write_relay_bringup_env 587
+    shim_relay_net "$OPENSSL_OK" 0 0
+    local a
+    for a in 1 2 3 4 5 6a 6b; do
+        run "$BRINGUP" --assert "$a"
+        [ "$status" -eq 2 ] || { echo "assert $a: status=$status $output"; return 1; }
+        # the refusal's OWN words: the generic usage text also names MAIL_TRANSPORT=relay and r1
+        [[ "$output" == *"a skipped check is not a pass"* && "$output" != *"unknown assert"* ]] || { echo "assert $a: $output"; return 1; }
+    done
+    refute_recorded openssl ''
+    refute_recorded curl ''
+}
+
+@test "M6 relay: no --assert (or an empty one) is parse_args' named 'nothing to do' (exit 2), never an empty 'unknown assert: '" {
+    write_relay_bringup_env 587
+    run "$BRINGUP"
+    [ "$status" -eq 2 ] || { echo "status=$status $output"; return 1; }
+    [[ "$output" == *"nothing to do"* && "$output" != *"unknown assert"* ]] || { echo "$output"; return 1; }
+    run "$BRINGUP" --assert ""
+    [ "$status" -eq 2 ] || { echo "empty: status=$status $output"; return 1; }
+    [[ "$output" == *"nothing to do"* && "$output" != *"unknown assert"* ]]
+}
+
+@test "M6 stalwart mode is untouched: the relay asserts do not exist there (exit 2, unknown assert)" {
+    printf 'MAIL_TRANSPORT=stalwart\n' >> "${GREMION_ROOT}/etc/env/mail.env"
+    run "$BRINGUP" --assert r1
+    [ "$status" -eq 2 ] || { echo "status=$status $output"; return 1; }
+    [[ "$output" == *"unknown assert"* ]]
+}
+
+@test "M6 relay mode: --render-config and --check-binds are still refused with the reason even next to a relay assert" {
+    write_relay_bringup_env 587
+    run "$BRINGUP" --check-binds --assert r1
+    [ "$status" -eq 2 ] || { echo "status=$status $output"; return 1; }
+    [[ "$output" == *"MAIL_TRANSPORT=relay"* ]]
 }

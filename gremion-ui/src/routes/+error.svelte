@@ -5,12 +5,12 @@
   import { resolveBrand } from '$lib/brand'
   import { PLUGGABLE_MODULES } from '$lib/instance-status'
   import { t } from '$lib/i18n'
-  import AppShell from '$lib/components/layout/AppShell.svelte'
   import ModuleOffNotice from '$lib/components/ModuleOffNotice.svelte'
   import { onMount } from 'svelte'
   import { initTheme } from '$lib/stores/theme'
-  // A throw from the root layout load renders this page WITHOUT +layout.svelte, so
-  // the global CSS + self-hosted fonts must be pulled in here too (else: unstyled).
+  // Keep the global CSS + self-hosted fonts imported here too: the bundler dedupes them, and the page stays styled if it is
+  // ever rendered outside +layout.svelte (an error from the ROOT layout load falls back to the static error template instead).
+  // The disabled-module notice does NOT rely on this: hooks.server.ts serves it inside the root layout.
   import '../app.css'
   import '@fontsource/archivo-narrow/400.css'
   import '@fontsource/archivo-narrow/500.css'
@@ -25,10 +25,10 @@
   // Tenant brand (v4 re-audit slice 10) — from the layout payload, default-backed.
   const brand = $derived(resolveBrand(page.data.brand))
 
-  // #290 (HANDOVER-v8 Part D): a disabled-module PAGE deep link is thrown as
-  // error(403, 'module-disabled:<id>') by hooks.server.ts. Render the honest
-  // "Modul nicht aktiv" surface (not a generic 403) naming the module + offering
-  // "Module verwalten" (it-admin only — the systemstatus route is it-admin-gated).
+  // A client-side navigation to a disabled module's page gets a JSON 403 'module-disabled:<id>' from
+  // hooks.server.ts (module-off-response.ts); SvelteKit renders this page inside the already-loaded root
+  // layout, so the shell is there. A full page load never gets here: it is answered with routes/module-off/[id].
+  // Render the honest "Modul nicht aktiv" surface (not a generic 403) naming the module.
   const moduleOff = $derived.by(() => {
     const msg = page.error?.message ?? ''
     if (page.status !== 403 || !msg.startsWith('module-disabled')) return null
@@ -64,12 +64,6 @@
     return page.error?.message ?? $t('error.detail.unknown')
   })
 
-  // Module-off 403 body carries the shell data (see +layout.server.ts): re-compose the app
-  // shell around the notice so nav stays visible.
-  const shell = $derived((page.error as App.Error | null)?.shell ?? null)
-  const shellRoles = $derived((shell?.user?.roles ?? []) as import('$lib/auth').Role[])
-  const shellAdmin = $derived(shellRoles.includes('it-admin' as never))
-
   const heading = $derived(
     moduleOff
       ? 'Modul nicht aktiv'
@@ -85,22 +79,7 @@
 
 <PageTitle title={moduleOff ? 'Modul nicht aktiv' : `${page.status}`} />
 
-{#snippet moduleNotice()}
-  <ModuleOffNotice moduleId={moduleOff?.id ?? ''} isItAdmin={shellAdmin || isItAdmin} />
-{/snippet}
-
-{#if moduleOff && shell && shell.user}
-  <AppShell
-    nav={shell.nav}
-    activeHref={page.url.pathname}
-    roles={shellRoles}
-    userName={shell.user.name}
-    groups={shell.user.groups}
-    brand={shell.brand as never}
-    sourceUrl={shell.sourceUrl}
-    children={moduleNotice}
-  />
-{:else if moduleOff}
+{#if moduleOff}
   <ModuleOffNotice moduleId={moduleOff.id} isItAdmin={isItAdmin} />
 {:else}
 <div class="error-page">

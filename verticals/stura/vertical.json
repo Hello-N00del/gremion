@@ -1,0 +1,1 @@
+{ "schema_version": 1, "id": "stura", "name": "Studierendenrat", "blueprint": "blueprint.json", "wording": "wording.de.json", "roles": "roles.json" }

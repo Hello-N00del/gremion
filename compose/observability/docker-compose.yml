@@ -113,7 +113,7 @@ services:
       GF_SMTP_PASSWORD__FILE: /run/secrets/ops/smtp-password
       GF_SMTP_FROM_ADDRESS: "${ALERT_EMAIL_FROM:?ALERT_EMAIL_FROM required}"
       GF_SMTP_FROM_NAME: "Gremion operations"
-      GF_SMTP_STARTTLS_POLICY: MandatoryStartTLS
+      GF_SMTP_STARTTLS_POLICY: "${ALERT_SMTP_STARTTLS_POLICY:-MandatoryStartTLS}"
       # Grafana's own request log is the operator-access record (RC-LOG-AUD):
       # written to a file Alloy ships to Loki as class=audit, rotated daily
       # and kept 7 days on disk.

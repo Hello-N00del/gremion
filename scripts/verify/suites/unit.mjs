@@ -281,6 +281,16 @@ export const UNIT_PARTS = {
   provisioning: (root) => [
     vitestSubcheck({ cwd: path.join(root, 'packages', 'provisioning'), testScript: 'test', root, label: '@gremion/provisioning vitest (test)' }),
   ],
+  // TASK-031: member list import + vertical loader (SvelteKit-free, ports faked).
+  'member-import': (root) => [
+    vitestSubcheck({ cwd: path.join(root, 'packages', 'member-import'), testScript: 'test', root, label: '@gremion/member-import vitest (test)' }),
+  ],
+  // TASK-033-a: the log retention registry, the rendered Loki config, the catalogue
+  // parser, the actor scan and the generated Loeschkonzept. DB-free; the purge run
+  // itself is packages/tenant-store.
+  retention: (root) => [
+    vitestSubcheck({ cwd: path.join(root, 'packages', 'retention'), testScript: 'test', root, label: '@gremion/retention vitest (test)' }),
+  ],
   // TASK-043 (G7): the ops control panel -- the TRD-048 gate through the real
   // hook, the config contract, "Neuer Mandant" and the standalone compose render.
   'control-panel': (root) => [

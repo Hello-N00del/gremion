@@ -59,11 +59,13 @@ export const NAMED: Record<'unit' | 'integration', Record<string, number>> = {
     'test/integration/kernel-api-reader.test.ts': 6,
     // TASK-044: TDD 1, 2, 3, 5, 9 and the A3 re-gate on the scratch stack
     'test/integration/lifecycle-enable-gate.test.ts': 20,
+    // TASK-033-a: audit_log append-only for the app and owner (real chain DDL, hardened admin path)
+    'test/integration/audit-append-only.test.ts': 6,
   },
 }
 
 function collected(config: string): Record<string, number> {
-  const r = spawnSync('pnpm', ['exec', 'vitest', 'list', '--config', config, '--json'], {
+  const r = spawnSync('pnpm', ['exec', 'vitest', 'list', '--config', config, '--no-staticParse', '--json'], {
     cwd: PKG,
     encoding: 'utf8',
     env: { ...process.env, T020_COLLECT_ONLY: '1' },

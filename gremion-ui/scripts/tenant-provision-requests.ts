@@ -23,7 +23,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createRemoteJWKSet } from 'jose'
 import postgres from 'postgres'
-import { verifyEnableLoaded, verifyRequestArgs, type RequestVerdict } from '@gremion/provisioning'
+import { modulesToEnable, verifyEnableLoaded, verifyRequestArgs, type RequestVerdict } from '@gremion/provisioning'
 import { lookupModuleVersion, type LifecycleModule } from '@gremion/tenant-store/lifecycle'
 import type { KcTransport } from '../src/lib/server/tenant/provisioner/kc-admin-api'
 import { verifyRequestEvidence } from '../src/lib/server/tenant/provisioner/request-verify'
@@ -114,7 +114,8 @@ async function requestVerify(ctx: RequestVerbContext): Promise<void> {
     )
     if (verdict.verdict === 'refused') return refuse(verdict.reason)
     const byId = new Map(catalogue.map((m) => [m.id, m]))
-    const notLoaded = await verifyEnableLoaded(verdict.args.enable, async (ids) => {
+    // a create and an enable_module enable modules; every other kind carries no module to load
+    const notLoaded = await verifyEnableLoaded(modulesToEnable(verdict.args), async (ids) => {
       const missing: string[] = []
       for (const m of ids) {
         const mod = byId.get(m)

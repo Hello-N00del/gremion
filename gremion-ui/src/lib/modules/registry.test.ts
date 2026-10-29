@@ -80,6 +80,7 @@ describe('MODULE_MANIFESTS — barrel source order (P3-WP2)', () => {
 const KERNEL_PAGE_ACCESS: Record<string, Role> = {
   // core
   dashboard: Role.Guest,
+  'module-off': Role.Guest,
   settings: Role.Member,
   systemstatus: Role.ITAdmin,
   // governance
@@ -109,6 +110,8 @@ describe('registry — composePageAccess (golden)', () => {
 })
 
 describe('registry — moduleRoutePrefixes (golden vs hooks.server.ts)', () => {
+  // R33 F5 (b2b9cb70, operator ruling Q3 2026-10-21): files, messages and newsletter became deselectable at runtime and
+  // at creation, so their prefixes are gated (they were always-on and carried none).
   it('exposes exactly the toggleable modules route prefixes, in registration order (the kernel manifests add none)', () => {
     expect(moduleRoutePrefixes()).toEqual([
       { prefix: '/elections', moduleId: 'elections' },
@@ -116,8 +119,15 @@ describe('registry — moduleRoutePrefixes (golden vs hooks.server.ts)', () => {
       { prefix: '/votes', moduleId: 'votes' },
       { prefix: '/polls', moduleId: 'votes' },
       { prefix: '/api/polls', moduleId: 'votes' },
+      { prefix: '/newsletter', moduleId: 'newsletter' },
+      { prefix: '/api/newsletter', moduleId: 'newsletter' },
       { prefix: '/calendar', moduleId: 'calendar' },
       { prefix: '/api/calendar', moduleId: 'calendar' },
+      { prefix: '/files', moduleId: 'files' },
+      { prefix: '/api/files', moduleId: 'files' },
+      { prefix: '/messages', moduleId: 'messages' },
+      { prefix: '/api/messages', moduleId: 'messages' },
+      { prefix: '/api/video', moduleId: 'messages' },
       { prefix: '/tasks', moduleId: 'board' },
       { prefix: '/api/board', moduleId: 'board' },
     ])

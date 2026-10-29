@@ -30,11 +30,19 @@ const PUBLIC_MODULE_PATHS: readonly { prefix: string; moduleId: string }[] = Obj
   { prefix: '/element-call', moduleId: 'messages' },
 ])
 
+/**
+ * Gate-only hardening on top of the decoded path: an encoded slash (%2F) is not
+ * decoded by the router, but folding it to '/' here can only make a prefix gate
+ * stricter, so `/api/finance%2Fx` can never slip past a disabled `/api/finance`.
+ */
+const foldEncodedSlash = (pathname: string): string => pathname.replace(/%2f/gi, '/')
+
 /** The disabled module owning a PUBLIC path (null when none / enabled). */
 export function disabledModuleForPublicPath(
   pathname: string,
   config: GremionConfig = readConfig(),
 ): string | null {
+  pathname = foldEncodedSlash(pathname)
   for (const { prefix, moduleId } of PUBLIC_MODULE_PATHS) {
     if ((pathname === prefix || pathname.startsWith(prefix + '/')) && !config.modules[moduleId]) return moduleId
   }
@@ -53,6 +61,7 @@ export function disabledModuleForPath(
   pathname: string,
   config: GremionConfig = readConfig(),
 ): string | null {
+  pathname = foldEncodedSlash(pathname)
   if (MODULE_GATE_EXEMPT.some((p) => pathname === p)) return null
   for (const { prefix, moduleId } of moduleRoutePrefixes()) {
     // WP3-modules-dynamic: config.modules is now Record<string, boolean>, so the

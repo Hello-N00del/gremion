@@ -630,7 +630,7 @@ test('runAllArms: overall exit is non-zero when even one arm fails, and every ar
       'check-overrides-drift': { exitCode: 0, output: '# tests 2\nok', timedOut: false, spawnError: null },
       'check-no-known-secrets': { exitCode: 0, output: '# tests 2\nok', timedOut: false, spawnError: null },
     })
-    const { arms, overallExit } = runAllArms({ kernelPath: kernel, sturaosPath: vertical, waiversPath: undefined, runFn })
+    const { arms, overallExit } = runAllArms({ kernelPath: kernel, verticalPath: vertical, waiversPath: undefined, runFn })
     assert.equal(overallExit, 1)
     assert.equal(arms.length, 8) // 2 gitleaks + 2 known-secrets + known-secrets-vertical-native + cve-floor + overrides-drift + runner-policy
     const cve = arms.find((a) => a.arm === 'cve-floor')
@@ -687,7 +687,7 @@ test('main(): --out is no longer required to get a dated JSON result — omittin
     const body = JSON.parse(readFileSync(join(outDir, files[0]), 'utf8'))
     assert.ok(body.timestamp)
     assert.equal(body.kernelSha.length, 7)
-    assert.equal(body.sturaosSha.length, 7)
+    assert.equal(body.verticalSha.length, 7)
     assert.equal(body.overallExit, 1)
   } finally {
     if (before === undefined) delete process.env.CI_LOCAL_GUARDS_OUT
@@ -767,5 +767,113 @@ test('FU-H1: runGitleaksArm (diff-scoped) FAILs closed on a coverage gap — git
     assert.equal(r.gitleaksScanned, 1)
   } finally {
     rmSync(root, { recursive: true, force: true })
+  }
+})
+
+// ---------------------------------------------------------------------------
+// Kernel-only checkout: --vertical is optional; vertical arms are skipped
+// visibly, the kernel arms still run and still gate.
+// ---------------------------------------------------------------------------
+
+test('runAllArms with no verticalPath: kernel arms run, every vertical arm is SKIPPED (not PASS), exit 0 when kernel arms pass', () => {
+  const kernel = makeSecretRepo()
+  mkdirSync(join(kernel, '.github', 'workflows'), { recursive: true })
+  try {
+    const runFn = fakeRun({
+      gitleaks: { exitCode: 0, output: 'no leaks found', timedOut: false, spawnError: null },
+      'check-cve-floors': { exitCode: 0, output: '# tests 2\nok', timedOut: false, spawnError: null },
+    })
+    const { arms, overallExit } = runAllArms({ kernelPath: kernel, verticalPath: undefined, waiversPath: undefined, runFn })
+    const scanner = arms.find((a) => a.arm === 'secret-scan' && a.repo === 'kernel')
+    assert.equal(overallExit, scanner.status === 'FAIL' ? 1 : 0, JSON.stringify(arms))
+    assert.ok(arms.filter((a) => a.status === 'FAIL').every((a) => a === scanner), 'only the environmental scanner arm may fail')
+    const skipped = arms.filter((a) => a.status === 'SKIPPED')
+    assert.deepEqual(
+      skipped.map((a) => a.arm).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)),
+      ['known-secrets', 'known-secrets-vertical-native', 'overrides-drift', 'secret-scan'],
+    )
+    for (const a of skipped) {
+      assert.equal(a.repo, 'vertical')
+      assert.match(a.reason, /skipped: no --vertical/)
+    }
+    const kernelArms = arms.filter((a) => a.status === 'PASS').map((a) => `${a.arm}:${a.repo}`)
+    assert.ok(kernelArms.includes('known-secrets:kernel'))
+    assert.ok(kernelArms.includes('cve-floor:kernel'))
+    assert.ok(kernelArms.includes('runner-policy:kernel'))
+  } finally {
+    rmSync(kernel, { recursive: true, force: true })
+  }
+})
+
+test('runAllArms with no verticalPath still exits 1 when a kernel arm fails', () => {
+  const kernel = makeSecretRepo()
+  mkdirSync(join(kernel, '.github', 'workflows'), { recursive: true })
+  try {
+    const runFn = fakeRun({
+      gitleaks: { exitCode: 0, output: 'no leaks found', timedOut: false, spawnError: null },
+      'check-cve-floors': { exitCode: 1, output: 'FLOOR BROKEN', timedOut: false, spawnError: null },
+    })
+    const { overallExit } = runAllArms({ kernelPath: kernel, verticalPath: undefined, waiversPath: undefined, runFn })
+    assert.equal(overallExit, 1)
+  } finally {
+    rmSync(kernel, { recursive: true, force: true })
+  }
+})
+
+test('runRunnerPolicyArm with no verticalPath evaluates the kernel only and reports repo "kernel"', () => {
+  const kernel = makeWorkflowRepo({ 'ci.yml': 'runs-on: ubuntu-latest\n' })
+  try {
+    const r = runRunnerPolicyArm(kernel, undefined, undefined)
+    assert.equal(r.arm, 'runner-policy')
+    assert.equal(r.repo, 'kernel')
+    assert.notEqual(r.status, 'SKIPPED')
+  } finally {
+    rmSync(kernel, { recursive: true, force: true })
+  }
+})
+
+test('main(): no --vertical -> runs, records SKIPPED vertical arms in the dated JSON (verticalSha null), prints the skip line', () => {
+  const kernel = makeSecretRepo()
+  const outDir = mkdtempSync(join(tmpdir(), 'ci-local-guards-kernel-only-'))
+  const lines = []
+  const origLog = console.log
+  console.log = (...a) => lines.push(a.join(' '))
+  try {
+    withCleanExitCode(() => main(['--kernel', kernel, '--out', outDir, '--waivers', 'does-not-exist.json']))
+  } finally {
+    console.log = origLog
+  }
+  try {
+    assert.match(lines.join('\n'), /\[SKIPPED\] .*\(vertical\).*skipped: no --vertical/)
+    const files = readdirSync(outDir)
+    assert.equal(files.length, 1)
+    const body = JSON.parse(readFileSync(join(outDir, files[0]), 'utf8'))
+    assert.equal(body.verticalPath, null)
+    assert.ok(body.arms.some((a) => a.status === 'SKIPPED'))
+  } finally {
+    rmSync(kernel, { recursive: true, force: true })
+    rmSync(outDir, { recursive: true, force: true })
+  }
+})
+
+test('main(): a --vertical path that does not exist is a loud error (exit 1, nothing written)', () => {
+  const kernel = makeSecretRepo()
+  const outDir = mkdtempSync(join(tmpdir(), 'ci-local-guards-badvertical-'))
+  const errs = []
+  const origErr = console.error
+  console.error = (...a) => errs.push(a.join(' '))
+  let code
+  try {
+    code = withCleanExitCode(() => main(['--kernel', kernel, '--vertical', '/nonexistent/vertical-checkout', '--out', outDir]))
+  } finally {
+    console.error = origErr
+  }
+  try {
+    assert.equal(code, 1)
+    assert.match(errs.join('\n'), /--vertical path '\/nonexistent\/vertical-checkout' does not exist/)
+    assert.deepEqual(readdirSync(outDir), [])
+  } finally {
+    rmSync(kernel, { recursive: true, force: true })
+    rmSync(outDir, { recursive: true, force: true })
   }
 })

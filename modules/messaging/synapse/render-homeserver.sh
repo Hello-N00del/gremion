@@ -104,6 +104,12 @@ case "$SYNAPSE_DB_PORT" in
   *[!0-9]*) die "SYNAPSE_DB_PORT must be a plain integer" ;;
 esac
 export SYNAPSE_SERVER_NAME MATRIX_PUBLIC_URL SYNAPSE_DB_PASSWORD SYNAPSE_KEYCLOAK_ISSUER_URL
+# The admin bot is the only account allowed to create room aliases (alias_creation_rules).
+# Required: an empty or malformed id would render a rule that locks the bot out or allows everyone.
+[[ -n "${SYNAPSE_ADMIN_BOT_USER_ID:-}" ]] || die "SYNAPSE_ADMIN_BOT_USER_ID is empty or unset -- refusing to render"
+[[ "$SYNAPSE_ADMIN_BOT_USER_ID" =~ ^@[A-Za-z0-9._=/+-]+:[A-Za-z0-9.-]+(:[0-9]+)?$ ]] \
+  || die "SYNAPSE_ADMIN_BOT_USER_ID must look like @localpart:server"
+export SYNAPSE_ADMIN_BOT_USER_ID
 export SYNAPSE_REGISTRATION_SHARED_SECRET="${SYNAPSE_REGISTRATION_SHARED_SECRET:-}"
 
 # Env-gated security knobs. The template has no ${VAR:-default}
@@ -144,7 +150,7 @@ SYNAPSE_DB_NAME SYNAPSE_DB_HOST SYNAPSE_DB_PORT SYNAPSE_REGISTRATION_SHARED_SECR
 SYNAPSE_KEYCLOAK_ISSUER_URL SYNAPSE_IDP_NAME SYNAPSE_OIDC_CLIENT_SECRET
 SYNAPSE_PASSWORD_AUTH SYNAPSE_RC_LOGIN_ADDRESS_PER_SECOND SYNAPSE_RC_LOGIN_ADDRESS_BURST
 SYNAPSE_RC_LOGIN_ACCOUNT_PER_SECOND SYNAPSE_RC_LOGIN_ACCOUNT_BURST
-SYNAPSE_RC_MESSAGE_PER_SECOND SYNAPSE_RC_MESSAGE_BURST"
+SYNAPSE_RC_MESSAGE_PER_SECOND SYNAPSE_RC_MESSAGE_BURST SYNAPSE_ADMIN_BOT_USER_ID"
 export BOOTSTRAP_MODE="${BOOTSTRAP_MODE:-0}"
 
 # Every substituted value lands inside YAML double quotes (or bare): a

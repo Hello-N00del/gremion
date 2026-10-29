@@ -74,7 +74,7 @@ usage() {
 usage: gremion-vendor-mail <subcommand> [args...]
   principals issue|revoke|list --tenant <token> [--rotate]
   check-identities | check-upstream-image | check-deliverability-record [--require]
-  check-received --file <headers file> --receiver <name> | --authserv-id <id>
+  check-received --file <headers file> --receiver <name> | --authserv-id <id> [--relay]
   check-secret-separation --host
   check-principals --host [--no-allowances]
   realm-smtp            (the operator realm `master` -> system@<PLATFORM_DOMAIN>)
@@ -487,7 +487,13 @@ run_node() {
         check-received)
             # Untrusted input: it gets the three non-secret values it needs as
             # arguments, and no secret-bearing file.
-            args+=(--domain "$PLATFORM_DOMAIN" --bind-ip "$MAIL_BIND_IP" --bind-ip6 "$MAIL_BIND_IP6") ;;
+            if [[ " $* " == *" --relay "* ]]; then
+                # MAIL_TRANSPORT=relay (M6): the proof is the relay's DKIM for
+                # the From domain, there is no bundled server bind address.
+                args+=(--domain "${RELAY_FROM_DOMAIN:-$PLATFORM_DOMAIN}")
+            else
+                args+=(--domain "$PLATFORM_DOMAIN" --bind-ip "$MAIL_BIND_IP" --bind-ip6 "$MAIL_BIND_IP6")
+            fi ;;
         check-upstream-image|check-deliverability-record)
             mounts+=(-v "${RELEASE_DIR}/infra/host/mail:/release/infra/host/mail:ro"
                      -v "${RELEASE_DIR}/infra/host/templates/env:/release/infra/host/templates/env:ro") ;;
@@ -551,4 +557,6 @@ main() {
     esac
 }
 
-main "$@"
+# Sourceable: gremion-mail (the transport dispatcher, PLAN-mail-transport M2) reuses
+# the kcadm helpers above for its relay arm; only a direct run starts main.
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then main "$@"; fi

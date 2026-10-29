@@ -11,6 +11,13 @@ export const coreManifest: ModuleManifest = {
     service: 'Dashboard · Einstellungen · Systemstatus',
     note: 'Die Grundflächen jeder Instanz. Nicht abwählbar.',
   },
+  processing: {
+    activity: 'Betrieb der Plattform (Anmeldung, Einstellungen, Protokollierung)',
+    purpose: 'Authentifizierung, Berechtigungsverwaltung, Betriebssicherheit und Nachvollziehbarkeit von Änderungen.',
+    dataCategories: ['Kontodaten (Name, E-Mail, Rollen)', 'Zugriffs- und Sicherheitsprotokolle (pseudonymisiert)', 'Auditprotokoll'],
+    dataSubjects: ['Nutzende der Plattform'],
+    retention: 'Protokolle gemäß Löschkonzept (höchstens 30 Tage); Kontodaten bis zum Ende der Mitgliedschaft.',
+  },
   // Platform-wide Keycloak group literals owned by the always-on core, not by any
   // toggleable feature module. PLATFORM_GROUPS ($lib/auth/capabilities) sources
   // admin/it-admin from here so the auth slice has no feature-module dependency.
@@ -20,6 +27,9 @@ export const coreManifest: ModuleManifest = {
   groups: { admin: 'admin', itAdmin: 'it-admin' },
   pages: [
     { segment: 'dashboard', minRole: Role.Guest },
+    // The "Modul nicht aktiv" notice a disabled module's page request is answered with (hooks.server.ts ->
+    // module-off-response.ts). Static, discloses nothing about the module beyond its display name.
+    { segment: 'module-off', minRole: Role.Guest },
     // #167: /settings is reachable by every signed-in member (Konto sections);
     // the Verwaltung/System sections are gated INSIDE the page by isITAdmin and
     // each /api/settings* endpoint keeps its own it-admin gate. hooks.server.ts

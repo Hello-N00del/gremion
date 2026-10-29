@@ -5,7 +5,8 @@
 // key must stay present (empty). Popping it crash-looped Synapse instead of
 // degrading, and the probe then reported a dead listener, not the missing arm.
 import assert from 'node:assert/strict'
-import { spawnSync } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
+import { createServer } from 'node:http'
 import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { test } from 'node:test'
@@ -36,10 +37,35 @@ function run(url = '') {
   return { status: r.status, stderr: r.stderr, cfg: r.status === 0 ? JSON.parse(r.stdout) : null }
 }
 
-test('with the realm key, jwt_config.secret carries it as PEM and stays enabled', () => {
-  const f = join(scratchDir(), 'realm.json')
-  writeFileSync(f, JSON.stringify({ realm: 'r', public_key: 'A'.repeat(100) }))
-  const r = run(`file://${f}`)
+// fetch_pem accepts http(s) only (a file:// URL is refused on purpose), so the
+// realm document is served from a loopback http server. The child is async
+// (spawnSync would block the event loop that answers it) and bypasses any
+// ambient HTTP proxy for the loopback fetch.
+async function runServed(body) {
+  requireTools(['python3'])
+  const server = createServer((_req, res) => {
+    res.setHeader('content-type', 'application/json')
+    res.end(JSON.stringify(body))
+  })
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
+  try {
+    const url = `http://127.0.0.1:${server.address().port}/realm`
+    const env = { ...process.env, NO_PROXY: '127.0.0.1', no_proxy: '127.0.0.1' }
+    return await new Promise((resolve) => {
+      const child = spawn('python3', ['-c', RUN, INJECT, url], { env })
+      let stdout = ''
+      let stderr = ''
+      child.stdout.on('data', (d) => (stdout += d))
+      child.stderr.on('data', (d) => (stderr += d))
+      child.on('close', (status) => resolve({ status, stderr, cfg: status === 0 ? JSON.parse(stdout) : null }))
+    })
+  } finally {
+    server.close()
+  }
+}
+
+test('with the realm key, jwt_config.secret carries it as PEM and stays enabled', async () => {
+  const r = await runServed({ realm: 'r', public_key: 'A'.repeat(100) })
   assert.equal(r.status, 0, r.stderr)
   assert.equal(r.cfg.jwt_config.enabled, true)
   assert.match(r.cfg.jwt_config.secret, /^-----BEGIN PUBLIC KEY-----\nA{64}\nA{36}\n-----END PUBLIC KEY-----\n$/)
@@ -53,13 +79,21 @@ test('without a key, JWT login is disabled in a shape Synapse still loads (secre
   assert.match(r.stderr, /jwt_config disabled/)
 })
 
-test('an unreachable realm or a document without public_key disables JWT login, never crashes', () => {
+test('an unreachable realm or a document without public_key disables JWT login, never crashes', async () => {
   const f = join(scratchDir(), 'realm.json')
   writeFileSync(f, JSON.stringify(['not', 'a', 'realm']))
-  for (const url of ['http://192.0.2.1:9/realm', `file://${f}`, 'file:///nonexistent/realm.json']) {
-    const r = run(url)
-    assert.equal(r.status, 0, `${url}: ${r.stderr}`)
-    assert.equal(r.cfg.jwt_config.enabled, false, url)
-    assert.equal(r.cfg.jwt_config.secret, '', url)
+  const results = [
+    ['http://192.0.2.1:9/realm', run('http://192.0.2.1:9/realm')],
+    ['a non-object document', await runServed(['not', 'a', 'realm'])],
+    ['a document without public_key', await runServed({ realm: 'r' })],
+    // file:// is refused outright, even for a readable realm document
+    [`file://${f}`, run(`file://${f}`)],
+    ['file:///nonexistent/realm.json', run('file:///nonexistent/realm.json')],
+  ]
+  for (const [what, r] of results) {
+    assert.equal(r.status, 0, `${what}: ${r.stderr}`)
+    assert.equal(r.cfg.jwt_config.enabled, false, what)
+    assert.equal(r.cfg.jwt_config.secret, '', what)
   }
+  assert.match(results[3][1].stderr, /not http\(s\)/)
 })

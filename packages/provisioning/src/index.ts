@@ -14,8 +14,8 @@ export type { RunPhaseOptions, RunPhaseResult, StepFns } from './machine.ts'
 export { assertEnableList, DEFAULT_DENY, DENY_REASONS } from './operator-gate.ts'
 // TASK-044: the library verbs over the level-1 gate, and the tenant-store
 // names TASK-043d's executor codes against (lane note S3 contract).
-export { assertDpiaSpec, enableCustomerModule, enableOne, pgGate, preflightGate } from './module-gate.ts'
-export type { EnableCustomerModuleResult } from './module-gate.ts'
+export { assertDpiaSpec, disableCustomerModule, enableCustomerModule, enableOne, pgGate, preflightGate } from './module-gate.ts'
+export type { DisableCustomerModuleResult, EnableCustomerModuleResult } from './module-gate.ts'
 export {
   assertEnabledModulesProven,
   attestedEnablements,
@@ -29,6 +29,8 @@ export {
 } from '@gremion/tenant-store/lifecycle'
 export type { EnableRefusedCode, UnprovenEnablement } from '@gremion/tenant-store/lifecycle'
 export {
+  activateBySlug,
+  activateCustomer,
   assertAdmins,
   assertEnableLoaded,
   assertHost,
@@ -45,11 +47,18 @@ export type { CreateSpec, PhaseOutcome, ProvisioningStatus } from './customer.ts
 export { loadCatalogueRows, OWNING_CONTEXT_CODES, planCatalogueRows, PROVISIONAL_RETENTION_PROFILES, provisionalNote } from './catalogue-rows.ts'
 export type { CatalogueModule, CatalogueRowPlan, CatalogueRowsResult } from './catalogue-rows.ts'
 export { loadModuleJsons } from './module-tree.ts'
-export { bootstrapPlatform, pgModules, type PanelReaderDeps } from './pg.ts'
+export { bootstrapPlatform, ensureAccessOwner, pgModules, type AccessOwnerDeps, type PanelReaderDeps } from './pg.ts'
 export {
+  ACCESS_OWNER_ROLE,
+  ACCESS_READER_ROLE,
+  ensureAccessReader,
   ensureExecutorRole,
   ensurePanelRequester,
   EXECUTOR_EXECUTES,
+  EXECUTOR_OAC_EXECUTES,
+  PANEL_OAC_EXECUTES,
+  READER_OAC_EXECUTES,
+  type AccessReaderDeps,
   EXECUTOR_MARKER,
   EXECUTOR_ROLE,
   PANEL_EXECUTES,
@@ -57,8 +66,8 @@ export {
   PANEL_REQUESTER_MARKER,
   type ExecutorRoleDeps,
 } from './pg.ts'
-export { HANDLED_KINDS, isRequestKind, KIND_OWNER, REQUEST_KINDS, verifyEnableLoaded, verifyRequestArgs } from './requests.ts'
-export type { CreateRequestArgs, DpiaDecision, RequestEnvelope, RequestKind, RequestVerdict, VerifyContext } from './requests.ts'
+export { HANDLED_KINDS, IMPORT_LIST_MAX_BYTES, isRequestKind, KIND_OWNER, modulesToEnable, REQUEST_KINDS, verifyEnableLoaded, verifyRequestArgs } from './requests.ts'
+export type { CreateRequestArgs, DisableModuleArgs, DpiaDecision, EnableModuleArgs, LifecycleArgs, ReconcileArgs, RecordDpiaArgs, ImportMembersArgs, RequestEnvelope, RequestKind, RequestVerdict, SeedVerticalArgs, VerifiedRequestArgs, VerifyContext } from './requests.ts'
 export { renderCustomerRouter } from './router.ts'
 export type { CustomerRouterInput } from './router.ts'
 export type { BootstrapDeps, BootstrapResult } from './pg.ts'
@@ -76,6 +85,7 @@ export type {
   GatePort,
   KernelDbPort,
   KernelPostCondition,
+  MailStampExpectation,
   ModulesPort,
   ProvisioningDeps,
   RealmPort,

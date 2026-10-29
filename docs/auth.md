@@ -271,6 +271,46 @@ How it is sourced and enforced:
   (rather than trusting the token alone) keeps the freshness window honest even
   when Keycloak omits a usable timestamp.
 
+**The realm flow is OTP-or-deny.** `stepup-2fa` must never hold a REQUIRED OTP
+form: for a user with no OTP credential Keycloak would run CONFIGURE_TOTP inside
+the step-up and then issue `loa2`, so whoever holds the session (or only the
+password) could enroll their own authenticator and pass the fresh-2FA gate. The
+flow is the LoA-2 condition plus a REQUIRED subflow `stepup-2fa second factor`
+holding the OTP form (ALTERNATIVE) and `deny-access-authenticator`
+(ALTERNATIVE): a user with an OTP credential is asked for it, a user without one
+is refused. Template, tenant realms and the reconcile check
+`stepup-2fa-otp-gate` (which also repairs live realms) all enforce this shape.
+**Ops realm (operators).** The control panel and Grafana always sign in at loa2, so
+a new operator cannot enrol inside them. `gremion-tenant operator add` therefore
+prints the platform realm's account console URL
+(`https://<platform domain>/auth/realms/platform/account`): a plain (loa1) sign-in
+there runs UPDATE_PASSWORD and CONFIGURE_TOTP; only then does the panel sign-in
+(password + OTP) succeed. `test/host/fixtures/executor/kc-token-probe.mjs` proves
+both phases against a real Keycloak 26.6.1 (`enrolment` then `flow` in
+`kc2661-token-claims.json`).
+
+Residual: a user must enroll their OTP *outside* a step-up (imported members get
+only `UPDATE_PASSWORD`, TASK-031 D-5); an attacker holding only the password can
+still enroll through the account console before the legitimate user does, so
+mandatory first-login enrollment for members remains a product decision.
+
+The realm also carries `passwordPolicy` (`length(12) and notUsername and
+notEmail and passwordHistory(3)`) and PKCE S256 on `gremion-ui` (Auth.js sends
+`checks: ['pkce', 'state']`); reconcile checks `password-policy` and
+`gremion-ui-pkce` and repairs drift on live realms.
+
+**Residual: refresh-token rotation is NOT enabled.** `revokeRefreshToken` /
+`refreshTokenMaxReuse` stay at the Keycloak defaults in every template and
+reconcile neither checks nor sets them (a test pins this). Rotation with
+`refreshTokenMaxReuse 0` accepts a refresh token exactly once, and gremion-ui
+can present the same one twice: Auth.js rebuilds the session from the original
+cookie on every `auth()` call and two tabs refresh in parallel. `authGuard` now
+memoises `locals.auth()` per request, which removes the in-request double
+refresh; before rotation can ship the refresh also needs to be single-flight
+across concurrent requests (or `refreshTokenMaxReuse 1` as a stopgap), with a
+test that two concurrent refreshes with the same token both end in a good
+session.
+
 The kernel ships the LoA primitive and threads `loa` / `authTime` onto every
 session. The concrete protected actions that *call* `evaluateStepUp` are owned by
 the surfaces that need them (governance and feature modules); a fresh kernel with

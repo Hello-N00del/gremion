@@ -1,0 +1,19 @@
+[Unit]
+Description=Gremion access-record purge (TRD-092: rows older than the 27-day security window)
+Documentation=file://${GREMION_ROOT}/current/infra/host/ops/README.md
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+User=${DEPLOY_USER}
+Group=${DEPLOY_USER}
+# access-purge.sh calls oac.purge_access_records through `docker exec` into the
+# state Postgres, as the executor role over its local socket.
+SupplementaryGroups=docker
+Environment=GREMION_ROOT=${GREMION_ROOT}
+ExecStart=${GREMION_ROOT}/current/infra/host/ops/access-purge.sh
+# A stuck call dies inside the 4-minute rule instead of hanging the unit.
+TimeoutStartSec=170
+ProtectSystem=full
+NoNewPrivileges=true

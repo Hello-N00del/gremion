@@ -3,6 +3,7 @@ import type { LayoutServerLoad } from './$types'
 import { hasRole, Role } from '$lib/auth'
 import type { SessionUser } from '$lib/auth/types'
 import { generateLoeschkonzept } from '$lib/server/loeschkonzept'
+import { buildProcessingActivities, generateVerarbeitungsverzeichnis } from '$lib/server/verarbeitungsverzeichnis'
 import { getDataProvider } from '$lib/server/modules/runtime-registry'
 import { getKeycloakAdminClient } from '$lib/server/keycloak-admin'
 import type { TenantContext } from '$lib/server/tenant/context'
@@ -68,6 +69,11 @@ export const load: LayoutServerLoad = async ({ locals, fetch }) => {
     // Only it-admins have `config`, and only they ever see this section, so the
     // preview is generated only for them (members get null).
     loeschkonzept: isITAdmin && config ? generateLoeschkonzept(config) : null,
+    // TRD-162: record of processing activities, same it-admin-only rule.
+    verarbeitungsverzeichnis:
+      isITAdmin && config
+        ? { document: generateVerarbeitungsverzeichnis(config), activities: buildProcessingActivities(config) }
+        : null,
     // Minimal user projection for the settings profile card (no tokens).
     user: { name: user.name, email: user.email, groups: user.groups },
     accountUrl: keycloakAccountUrl(locals.tenant),

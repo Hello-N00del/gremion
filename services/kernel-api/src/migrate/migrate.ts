@@ -157,7 +157,7 @@ export async function migrateKernelDb(customerId: string, o: MigrateOptions & { 
               release: o.releaseRef,
               exporter: tools.exporter,
               pgDumpMajor: () => tools.pgDumpMajor(),
-              audit: o.audit,
+              audit: (line) => o.audit(line),
               ...(o.dumpFs ? { fs: o.dumpFs } : {}),
             },
           }),

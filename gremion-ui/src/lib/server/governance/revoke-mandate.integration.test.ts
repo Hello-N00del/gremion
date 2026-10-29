@@ -25,6 +25,7 @@ import {
   revokeMandate, UnarchivableAssignmentError,
   type RoleAssignment,
 } from './governance-db'
+import { actor } from '../audit-test-actor'
 
 // Failure injection for the rollback proof: passthrough to the REAL
 // writeAuditEntry (so the audit INSERT genuinely executes on the tx), then
@@ -41,7 +42,7 @@ vi.mock('$lib/server/audit-db', async (importOriginal) => {
   }
 })
 
-const ACTOR = 'council-admin-1'
+const ACTOR = actor('council-admin-1')
 const HOLDER = 'holder-kc-1'
 
 async function seedAssignment(): Promise<RoleAssignment> {

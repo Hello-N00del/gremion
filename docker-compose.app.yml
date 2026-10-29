@@ -122,7 +122,15 @@ services:
       # router pins, cross-checked against that same Host. PROTOCOL_HEADER
       # forces https from Traefik's x-forwarded-proto.
       PROTOCOL_HEADER:          x-forwarded-proto
-      KEYCLOAK_ADMIN_URL:       https://keycloak:8443/auth
+      # Per-IP rate limits (rate-limit.ts, client-ip.ts) read the client
+      # address from adapter-node's getClientAddress(). Traefik is the single
+      # proxy hop and appends the real peer to X-Forwarded-For (its entrypoint
+      # trusts forwarded headers from the edge subnets only), so depth 1.
+      # Without these the address is Traefik's own IP: one bucket for all.
+      # Guarded by scripts/check-app-client-ip.test.mjs.
+      ADDRESS_HEADER:           x-forwarded-for
+      XFF_DEPTH:                "1"
+      KEYCLOAK_ADMIN_URL:      https://keycloak:8443/auth
       KEYCLOAK_ADMIN_CLIENT_SECRET: ${KEYCLOAK_ADMIN_CLIENT_SECRET}
       CONFIG_PATH:              /app/config/config.json
       # Data plane through PgBouncer; the control plane stays DIRECT on
@@ -132,6 +140,10 @@ services:
       # URL read from inside the container names the stack it targets.
       DATABASE_URL:             postgresql://${GREMION_DB_USER:-gremion}:${GREMION_DB_PASSWORD}@pgbouncer-${STACK:?STACK required}:6432/${GREMION_DB_NAME:-gremion}
       CONTROL_DATABASE_URL:     postgresql://${CONTROL_DB_USER:-control}:${CONTROL_DB_PASSWORD}@postgres-${STACK:?STACK required}:5432/${CONTROL_DB_NAME:-control}
+      # TRD-092: the council-admin access-record view. gremion_ui_oac (EXECUTE on
+      # oac.list_access_records only), DIRECT to gremion_platform like the other
+      # platform roles; without it the view answers 503 "nicht konfiguriert".
+      PLATFORM_ACCESS_DATABASE_URL: postgresql://gremion_ui_oac:${UI_OAC_DB_PASSWORD:?UI_OAC_DB_PASSWORD required}@postgres-${STACK:?STACK required}:5432/gremion_platform
       SEED_TOKEN:               ${SEED_TOKEN:-}
       SEED_USER_PASSWORD:       ${SEED_USER_PASSWORD:-}
       # Keep dev *_seed.sql migrations out of every deployment.
@@ -210,11 +222,11 @@ services:
       COLOUR: ${COLOUR:?COLOUR required}
       ORIGIN:                      https://public.${PLATFORM_DOMAIN:?PLATFORM_DOMAIN required}
       GREMION_PUBLIC_DB_URL:       postgresql://gremion_public_reader:${PUBLIC_DB_PASSWORD}@postgres-${STACK:?STACK required}:5432/${GREMION_DB_NAME:-gremion}
-      PUBLIC_CONTACT_NAME:         ${PUBLIC_CONTACT_NAME:-Studierendenrat}
+      PUBLIC_CONTACT_NAME:         ${PUBLIC_CONTACT_NAME:-}
       PUBLIC_CONTACT_ADDRESS:      ${PUBLIC_CONTACT_ADDRESS:-}
       PUBLIC_CONTACT_EMAIL:        ${PUBLIC_CONTACT_EMAIL:-}
       PUBLIC_CONTACT_PHONE:        ${PUBLIC_CONTACT_PHONE:-}
-      PUBLIC_IMPRINT_RESPONSIBLE:  ${PUBLIC_IMPRINT_RESPONSIBLE:-Vorsitz des StuRa}
+      PUBLIC_IMPRINT_RESPONSIBLE:  ${PUBLIC_IMPRINT_RESPONSIBLE:-}
       PUBLIC_MAIN_APP_URL:         https://${PLATFORM_DOMAIN:?PLATFORM_DOMAIN required}
       PUBLIC_SOURCE_URL:           ${PUBLIC_SOURCE_URL:-}
       PUBLIC_LEGISLATURE_LABEL:    ${PUBLIC_LEGISLATURE_LABEL:-}
@@ -388,6 +400,12 @@ services:
     # ERR_MODULE_NOT_FOUND on the extensionless '../src/lib/modules/registry'.
     working_dir: /repo/gremion-ui
     entrypoint: ["pnpm", "exec", "tsx", "scripts/tenant-provision.mjs"]
+    # create-harden H4 (HIGH-1): an init as PID 1. pnpm/node as PID 1 ignore
+    # SIGTERM (no default action for PID 1), so a `docker stop` waited out its
+    # grace; under tini the TERM reaches node. The executor's kill of a
+    # request's container is `docker kill` (KILL) by its gremion.request label
+    # either way; this makes a plain stop/TERM honest too.
+    init: true
     restart: "no"
     logging: *logging
     deploy: *limits-m
@@ -426,6 +444,9 @@ services:
       # deploy step 7 (kernel-api-migrate) and kernel-api connect as it.
       KERNEL_API_DB_USER: ${KERNEL_API_DB_USER:-gremion_kernel_api}
       KERNEL_API_DB_PASSWORD: ${KERNEL_API_DB_PASSWORD:?KERNEL_API_DB_PASSWORD required}
+      # TRD-092: `init` makes the access-record reader gremion_ui_oac
+      # (ensureAccessReader) with this password; gremion-ui connects as it.
+      UI_OAC_DB_PASSWORD: ${UI_OAC_DB_PASSWORD:?UI_OAC_DB_PASSWORD required}
       # The servers' POSTGRES_USERs (CREATEDB/CREATEROLE for ensureKernelDatabase
       # and enableModule) and each module's app-role password: files written by
       # `gremion-tenant init` into etc/secrets/tenant-create (0600), mounted
@@ -449,8 +470,9 @@ services:
       # through `bootstrap-provisioner`; never under /run/secrets/tenants, which
       # gremion-ui mounts (check-tenant-secrets-dir).
       TENANT_PROVISIONER_SECRET_FILE: /run/secrets/tenant-create/tenant_provisioner
-      # enableModule's export target; tenant-create never disables a module,
-      # so nothing is written here (the disable verb brings its volume).
+      # disableModule's export target (TRD-044): the dump is written here BEFORE
+      # the module database is dropped, so the disable-module verb refuses unless
+      # this path is a mount that outlives the one-shot (volume below).
       TENANT_EXPORT_DIR: /var/lib/gremion/exports
       # TASK-075: the release_ref every ledger row init (gremion_platform) and
       # phase B (module databases) apply records: this colour's release.
@@ -463,6 +485,7 @@ services:
       - tenant-config-data:/data
       # TASK-043 G3: the admin credentials above, read-only.
       - ${GREMION_ROOT:-/opt/gremion}/etc/secrets/tenant-create:/run/secrets/tenant-create:ro
+      - ${GREMION_ROOT:-/opt/gremion}/data/module-exports:/var/lib/gremion/exports
       # The ops realm `init` imports (Q5), read-only like the base realm below.
       # Never an etc/edge mount: the router file is written by the host (Q17, j4).
       - ./docker/keycloak/realm-export.ops.json:/repo/docker/keycloak/realm-export.ops.json:ro

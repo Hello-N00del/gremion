@@ -30,8 +30,10 @@ LANGUAGE sql
 SECURITY DEFINER
 SET search_path = pg_catalog
 AS $$
-  SELECT usename, passwd FROM pg_catalog.pg_shadow WHERE usename = uname
+  SELECT usename, passwd FROM pg_catalog.pg_shadow WHERE usename = uname AND NOT usesuper
 $$;
+-- AND NOT usesuper (LOW-7): the lookup never returns a superuser's verifier, so a
+-- compromised pgbouncer_auth / pooled client cannot fetch the postgres hash.
 
 -- Lock the lookup down to the auth user only.
 REVOKE ALL ON FUNCTION pgbouncer.get_auth(text) FROM PUBLIC;

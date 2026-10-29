@@ -4,7 +4,7 @@
 // hooks.server.ts never imports the events/newsletter consumer. Loaded for its
 // side effects by the generated server-init barrel; runServerInitHooks() invokes
 // this at cold start.
-import { registerServerInitHook } from '$lib/server/modules/runtime-registry'
+import { registerErasureHook, registerServerInitHook } from '$lib/server/modules/runtime-registry'
 import { makeLogTracer, noopTracer } from '$lib/server/ports/tracer'
 import { platformEnv } from '$lib/server/env/platform-env'
 import {
@@ -12,6 +12,7 @@ import {
   NEWSLETTER_AUDIT_WORKER,
 } from '$lib/server/events/newsletter-audit-consumer'
 import { superviseWorker, markWorkerOff } from '$lib/server/events/consumer-state'
+import { publishingErasureHook } from './erasure'
 
 // T15 (P1 / D-P1-7): newsletter-event → audit_log consumer. Env-gated on
 // NATS_URL — absent → consumer stays off (staging-safe). Non-fatal: a consumer
@@ -38,3 +39,7 @@ registerServerInitHook(async () => {
     start: () => startNewsletterAuditConsumer(natsUrl, auditTracer),
   })
 })
+
+// TRD-196: the publishing module's data-subject erasure step (newsletter list
+// memberships, reached through the newsletter backend port).
+registerErasureHook(publishingErasureHook)

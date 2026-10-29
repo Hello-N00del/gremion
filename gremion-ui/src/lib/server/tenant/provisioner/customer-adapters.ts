@@ -14,7 +14,15 @@ import postgres from 'postgres'
 import { checkTenantHostDns, type EdgeAddresses } from '@gremion/edge-routers'
 import { ensureTenantAccount } from '@gremion/nats-auth'
 import type { AdminSpec, ControlRow, CustomerRef, KernelPostCondition, ProvisioningDeps, SmtpReadBack } from '@gremion/provisioning'
-import { ensureKernelDatabase, kernelDbName, kernelRoles, type ModuleServer } from '@gremion/tenant-store/lifecycle'
+import {
+  ensureKernelAuditAppendOnly,
+  ensureKernelDatabase,
+  ensureKernelPurgeGrants,
+  kernelAuditAppendOnlyProblems,
+  kernelDbName,
+  kernelRoles,
+  type PurgeServer,
+} from '@gremion/tenant-store/lifecycle'
 import type { ModuleManifest } from '$lib/modules/types'
 import { runMigrations } from '$lib/server/db'
 import { createOrgUnit, type OrgUnit } from '$lib/server/governance/org-units-db'
@@ -44,6 +52,7 @@ import { getDb } from '$lib/server/db'
 import { KcProvisionApi } from './kc-admin-api'
 import { assertBrandIdentityComplete, materializeConfig } from './materialize'
 import { ADMIN_CLIENT_ID, GREMION_ADMIN_SA_REALM_ROLES } from './pipeline'
+import { withKernelAuditCheck, type ReconcileReport } from './reconcile'
 import { buildTenantRealmDoc, issuerForTenant, kcInternalForTenant, PROVISIONER_SECRET_CLIENTS } from './realm-doc'
 
 /** The container path per-tenant secrets live at (D-SECMOUNT). */
@@ -97,6 +106,50 @@ function authorityOf(url: string, what: string): { scheme: string; hostPort: str
   return { scheme: m[1]!, hostPort: m[2]!, query: m[3] ?? '' }
 }
 
+/**
+ * What the admin sets on a customer's kernel database once the kernel chain created its tables
+ * (provisioning time; reconcile re-asserts the second half):
+ *   1. the purger's SELECT, DELETE on exactly the purge tables (PURGE_RULES);
+ *   2. TASK-033-a: audit_log is a governance record (RC-GOV-CHAIN), append-only for the app and the
+ *      owner, and the chain anchor read-only. No timer purges it.
+ * The second is a hard requirement of a provisioned customer: a missing audit_log or a privilege that
+ * is still held after the REVOKE fails the step instead of leaving the record deletable.
+ */
+export async function ensureKernelPostMigrationPrivileges(server: PurgeServer, tenantId: string, log: (line: string) => void): Promise<void> {
+  const dbName = kernelDbName(tenantId)
+  const g = await ensureKernelPurgeGrants(server, tenantId)
+  if (g.absent.length) log(`kernel database ${dbName}: purge tables not created by the kernel chain: ${g.absent.join(', ')}`)
+  const a = await ensureKernelAuditAppendOnly(server, tenantId)
+  if (a.absent.length) {
+    throw new Error(`kernel database ${dbName}: ${a.absent.join(', ')} not created by the kernel chain: the audit record cannot be made append-only`)
+  }
+  const problems = await kernelAuditAppendOnlyProblems(server, tenantId)
+  if (problems.length) throw new Error(`kernel database ${dbName}: audit record is not append-only after the REVOKE: ${problems.join('; ')}`)
+  log(`kernel database ${dbName}: audit record append-only (${a.revoked.join(', ')})`)
+}
+
+/**
+ * TASK-033-a: the reconcile verb's DB-level half. The realm report gains the `audit-append-only` check, read from
+ * (verify) and re-asserted in (apply) THIS tenant's kernel database through the same tenant-store functions the
+ * provisioning step uses. scripts/tenant-provision.ts reconcileOne is the only caller; reconcile-wiring.test.ts
+ * keeps it that way.
+ */
+export function reconcileKernelAudit(report: ReconcileReport, server: PurgeServer, tenantId: string, verifyOnly: boolean): Promise<ReconcileReport> {
+  return withKernelAuditCheck(
+    report,
+    {
+      // requirePresent: reconcile runs after the kernel chain, so an absent audit table is a problem (as it is fatal at provisioning)
+      problems: () => kernelAuditAppendOnlyProblems(server, tenantId, { requirePresent: true }),
+      repair: async () => {
+        const { absent } = await ensureKernelAuditAppendOnly(server, tenantId)
+        // never discard `absent`: a table the REVOKE could not reach is a failed repair, not a clean one
+        if (absent.length) throw new Error(`${absent.join(', ')} not created by the kernel chain: the audit record cannot be made append-only`)
+      },
+    },
+    verifyOnly,
+  )
+}
+
 /** The runtime DATABASE_URL goes through PgBouncer (the pooled stack: pgbouncer-<stack>:6432). */
 function isPooled(runtimeDatabaseUrl: string): boolean {
   const hostPort = authorityOf(runtimeDatabaseUrl, 'DATABASE_URL').hostPort
@@ -109,8 +162,12 @@ function dbUrl(base: string, user: string, password: string, db: string, extraQu
   return `${a.scheme}://${encodeURIComponent(user)}:${encodeURIComponent(password)}@${a.hostPort}/${db}${q ? `?${q}` : ''}`
 }
 
-/** The kernel server behind KERNEL_PG_ADMIN (ModuleServer shape, for ensureKernelDatabase). */
-export function kernelServer(adminUrl: string): ModuleServer & { close(): Promise<void> } {
+/**
+ * The kernel server behind KERNEL_PG_ADMIN (ModuleServer shape, for
+ * ensureKernelDatabase; `login` for the purge run, which logs in AS each
+ * customer's purger role instead of SET ROLE inside this superuser's session).
+ */
+export function kernelServer(adminUrl: string): PurgeServer & { close(): Promise<void> } {
   const admin = postgres(adminUrl, { max: 2, onnotice: () => {}, connect_timeout: 15 })
   const pools: postgres.Sql[] = []
   return {
@@ -118,7 +175,19 @@ export function kernelServer(adminUrl: string): ModuleServer & { close(): Promis
     open(database) {
       const u = new URL(adminUrl)
       u.pathname = `/${database}`
-      const sql = postgres(u.toString(), { max: 2, onnotice: () => {}, connect_timeout: 15 })
+      // the superuser inside a CUSTOMER database: search_path as a startup parameter overrides the
+      // owner's ALTER DATABASE SET (a planted public.format would otherwise run as the superuser)
+      const sql = postgres(u.toString(), { max: 2, onnotice: () => {}, connect_timeout: 15, connection: { search_path: 'pg_catalog' } })
+      pools.push(sql)
+      return sql
+    },
+    login(database, user, password) {
+      const u = new URL(adminUrl)
+      u.username = encodeURIComponent(user)
+      u.password = encodeURIComponent(password)
+      u.pathname = `/${database}`
+      // search_path as a startup parameter overrides an ALTER DATABASE SET by the customer's owner
+      const sql = postgres(u.toString(), { max: 1, onnotice: () => {}, connect_timeout: 15, fetch_types: false, connection: { search_path: 'pg_catalog' } })
       pools.push(sql)
       return sql
     },
@@ -134,7 +203,7 @@ async function tenantOf(c: CustomerRef): Promise<Tenant> {
   return t
 }
 
-async function inProvisioningContext<T>(c: CustomerRef, fn: () => Promise<T>, opts: { dbUrl?: string } = {}): Promise<T> {
+export async function inProvisioningContext<T>(c: CustomerRef, fn: () => Promise<T>, opts: { dbUrl?: string } = {}): Promise<T> {
   const tenant = await tenantOf(c)
   // Pools are keyed by tenant id: drop any pool opened for another url first,
   // and drop this one after, so the owner-role migration pool never serves
@@ -223,8 +292,7 @@ export function customerAdapters(o: CustomerAdapterOptions): Pick<ProvisioningDe
           brandRef: `config:${slug}`,
           // The registry's default, not a second literal (review r4 LOW): a
           // customer is made with GREMION_DISABLE_SEEDS, so no blueprint seeds
-          // it; the old --blueprint option is gone (residual for the seed/
-          // owner: blueprint-registry.ts:4 still names it).
+          // it; the default is the neutral KERNEL_BLUEPRINT@1 (no vertical in the kernel).
           blueprintRef: DEFAULT_BLUEPRINT_REF,
           connProfile: { perTenantMax: 4, prepare: true },
           backupKeyRef: containerRef(secretName.backupKey(slug)),
@@ -236,6 +304,11 @@ export function customerAdapters(o: CustomerAdapterOptions): Pick<ProvisioningDe
         await addTenantDomain(t.id, host, { isPrimary: true })
         for (const sub of ['db', 'realm', 'nextcloud', 'matrix'] as const) await ensureTenantResource(t.id, sub)
         return toRow(t)
+      },
+      async bindPrimaryHost(id, host) {
+        // the repair of a registration that died after registerTenant (MED-2); both calls re-runnable
+        await addTenantDomain(id, host, { isPrimary: true })
+        for (const sub of ['db', 'realm', 'nextcloud', 'matrix'] as const) await ensureTenantResource(id, sub)
       },
       async setStatus(id, status) {
         const t = await getTenantById(id)
@@ -354,6 +427,14 @@ export function customerAdapters(o: CustomerAdapterOptions): Pick<ProvisioningDe
         // its session role set to the OWNER (Q3), so every object is the owner's.
         const direct = dbUrl(o.kernelAdminUrl, decodeURIComponent(app.username), decodeURIComponent(app.password), kernelDbName(c.id), `options=${encodeURIComponent(`-c role=${owner}`)}`)
         await inProvisioningContext(c, () => runMigrations(), { dbUrl: direct })
+        // TRD-144/145 + TASK-033-a: the purger's SELECT, DELETE on exactly the purge tables, and audit_log made
+        // append-only, now that the chain created them (provisioning time; the purge run never grants)
+        const server = kernelServer(o.kernelAdminUrl)
+        try {
+          await ensureKernelPostMigrationPrivileges(server, c.id, log)
+        } finally {
+          await server.close()
+        }
       },
       async postCondition(c): Promise<KernelPostCondition> {
         const u = new URL(o.kernelAdminUrl)

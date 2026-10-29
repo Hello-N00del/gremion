@@ -16,11 +16,11 @@ export const DECLARED: Record<string, number> = {
   'test/cli.test.ts': 6,
   'test/real-tree.test.ts': 7,
   'test/suite-size.test.ts': 3,
-  'test/validate.test.ts': 29,
+  'test/validate.test.ts': 31,
 }
 
 function collected(): Record<string, number> {
-  const r = spawnSync('pnpm', ['exec', 'vitest', 'list', '--json'], { cwd: PKG, encoding: 'utf8', shell: process.platform === 'win32' })
+  const r = spawnSync('pnpm', ['exec', 'vitest', 'list', '--no-staticParse', '--json'], { cwd: PKG, encoding: 'utf8', shell: process.platform === 'win32' })
   expect(r.status, r.stderr).toBe(0)
   const out: Record<string, number> = {}
   for (const t of JSON.parse(r.stdout) as { file: string }[]) {

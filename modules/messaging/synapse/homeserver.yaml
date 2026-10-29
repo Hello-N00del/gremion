@@ -137,6 +137,19 @@ experimental_features:
   msc4222_enabled: true
   msc4140_enabled: true
 
+# Only the admin bot may create room aliases (createRoom room_alias_name and
+# PUT /directory/room): the meeting-room flow trusts an alias to name the room the
+# bot made, so members must not be able to squat one. First match wins.
+alias_creation_rules:
+  - user_id: "${SYNAPSE_ADMIN_BOT_USER_ID}"
+    alias: "*"
+    room_id: "*"
+    action: allow
+  - user_id: "*"
+    alias: "*"
+    room_id: "*"
+    action: deny
+
 # Maximum delay for MSC4140 delayed events (MatrixRTC uses 24h for call membership)
 max_event_delay_duration: 24h
 

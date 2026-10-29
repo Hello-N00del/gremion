@@ -261,6 +261,12 @@ export async function upsertAttendance(
 
 // ─── Resolutions ─────────────────────────────────────────────────────────────
 
+export async function getResolutionById(id: string): Promise<ProtocolResolution | null> {
+  const sql = getDb()
+  const rows = await sql<ProtocolResolution[]>`SELECT * FROM protocol_resolutions WHERE id = ${id}`
+  return rows[0] ?? null
+}
+
 export async function listResolutions(protocolId: string): Promise<ProtocolResolution[]> {
   const sql = getDb()
   return sql<ProtocolResolution[]>`

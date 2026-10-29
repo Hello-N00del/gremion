@@ -89,9 +89,8 @@ let dependedKeys: string[] = [];
 
 const eventStub = (roles: Role[] | null, groups: string[] = []) =>
   ({
-    // A real LayoutServerLoadEvent always carries `url`; the load reads
-    // event.url.pathname for the #290 disabled-module page gate. '/' is not a
-    // module route → disabledModuleForPath returns null → no throw.
+    // A real LayoutServerLoadEvent always carries `url`. The disabled-module page gate no longer lives in this
+    // load (hooks.server.ts answers those requests before any route resolves), so the stub only mirrors the shape.
     url: new URL('http://localhost/'),
     depends: (...keys: string[]) => {
       dependedKeys.push(...keys);
@@ -166,6 +165,26 @@ describe('+layout.server load — role-aware nav filtering', () => {
     dependedKeys = [];
     await load(eventStub([Role.Member], ['mitglied']));
     expect(dependedKeys).toContain('app:unread');
+  });
+
+  test('reads event.url.pathname so SvelteKit re-runs the root load on every client-side navigation (url dependency)', async () => {
+    // SvelteKit only re-runs a server load on navigation when it touched `event.url` (uses.url). The disabled-module
+    // gate that used to read url.pathname here moved to hooks.server.ts; without a deliberate read the root load
+    // stops refreshing nav, counts, instanceState and session on navigation, and a client-side nav to a module page
+    // without its own server load never sends __data.json, so it never reaches the hook gate (no notice).
+    const accessed: string[] = [];
+    const base = new URL('http://localhost/');
+    const trackedUrl = new Proxy(base, {
+      get(target, prop) {
+        accessed.push(String(prop));
+        const v = Reflect.get(target, prop, target);
+        return typeof v === 'function' ? v.bind(target) : v;
+      },
+    });
+    const ev = eventStub([Role.Member], ['mitglied']) as unknown as { url: URL };
+    ev.url = trackedUrl;
+    await load(ev as unknown as Parameters<typeof load>[0]);
+    expect(accessed).toContain('pathname');
   });
 });
 

@@ -6,8 +6,8 @@
 </script>
 
 <svelte:head>
-  <title>Protokolle — Studierendenrat</title>
-  <meta name="description" content="Veröffentlichte Protokolle der Ausschüsse des Studierendenrats." />
+  <title>Protokolle — {data.institutionName}</title>
+  <meta name="description" content="Veröffentlichte Protokolle der Ausschüsse von {data.institutionName}." />
 </svelte:head>
 
 <!-- Page header -->
