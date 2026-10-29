@@ -6,16 +6,16 @@
 
 ## What Gremion is
 
-**Gremion** is an open, self-hostable **digital-governance kernel** for councils, student parliaments (*Studierendenräte*), associations, and similar deliberative bodies. It provides the substrate every mandated governance body needs — identity, multi-tenancy, an org/committee model, protocols & resolutions with a hash-chained audit trail, and a quorum-aware decision engine — plus a **module SDK** that optional features plug into without the kernel ever depending on them.
+**Gremion** is an open, self-hostable **digital-governance kernel** for councils, student parliaments (*Studierendenräte*), associations, and similar deliberative bodies. It provides the substrate every mandated governance body needs: identity, multi-tenancy, an org/committee model, protocols & resolutions with a hash-chained audit trail, and a quorum-aware decision engine. On top of that sits a **module SDK** that optional features plug into without the kernel ever depending on them.
 
 Gremion's defensible, novel core is the **binding-decision + checked-resource-commitment layer**. Civic-tech platforms such as Decidim, CONSUL, and Pol.is implement only the *consultative* half and push the binding decision and the money *outside* the software. Gremion is the inverse: the binding decision and the checked commitment of resources are first-class *in* the software.
 
 ## What it achieves
 
-- **Generalizes one vertical into a reusable substrate.** Gremion lifts the governance ontology that sat implicitly in the StuRaOS schema — bodies, mandates, resolutions, four-eyes finance, audit — into a universal model, so any mandated governance body can be stood up from one codebase rather than forking a German student-council application.
+- **Generalizes one vertical into a reusable substrate.** Gremion lifts the governance ontology that sat implicitly in the StuRaOS schema (bodies, mandates, resolutions, four-eyes finance, audit) into a universal model, so any mandated governance body can be stood up from one codebase rather than forking a German student-council application.
 - **Keeps tamper-evidence non-deselectable.** The governance invariants (hash-chained audit, quorum/threshold enforcement, tenant isolation) live in the kernel as hooks behind no feature flag. No deployment toggle can forge, hide, or delegitimize a governance act.
 - **Boots standalone.** The kernel **builds and boots with no closed module present** — the whole of it is usable, and grantable, on its own.
-- **Sustainability without a relicensing risk.** The core is and stays AGPL-3.0-only. Optional hosting and support are how the work is funded — the same model as Decidim — and no funding arrangement can relicense the core (see [`../CONTRIBUTING.md`](../CONTRIBUTING.md)).
+- **Sustainability without a relicensing risk.** The core is and stays AGPL-3.0-only. Optional hosting and support fund the work, the same model as Decidim, and no funding arrangement can relicense the core (see [`../CONTRIBUTING.md`](../CONTRIBUTING.md)).
 
 ## Who it is for / where to use it
 
@@ -43,7 +43,7 @@ Gremion is a **distributed modular monolith** organized in three layers. The bou
 
 Made a lint, the line maintains itself. The classification test for any piece of code:
 
-> If the system cannot **boot** or **authorize** without it — or if turning it off could **forge, hide, or delegitimize** a governance act — it is **kernel**. Anything a deployment could run without is a **module**.
+> If the system cannot **boot** or **authorize** without it, or if turning it off could **forge, hide, or delegitimize** a governance act, it is **kernel**. Anything a deployment could run without is a **module**.
 
 | Layer | What | License | Deselectable? |
 |-------|------|---------|---------------|
@@ -67,7 +67,7 @@ The kernel ships in-tree:
 - **Shared packages** — `@gremion/db` (pure, zero feature references) and `@gremion/ports` (`BrokerPort` over NATS/JetStream, `TracerPort`, anti-corruption callbacks, transactional outbox + saga).
 - **Config / brand** and the **admin shell**.
 
-**Manifests actually shipped:** exactly two. `coreManifest` (id `core`, `toggleable: false`; the minimal kernel shell — dashboard, settings, systemstatus) and `governanceManifest` (id `governance`, `toggleable: false`, because *the Gremion kernel is a governance product* — members, committees, portal, protokolle, beschlüsse). `index.generated.ts` is codegen-built and byte-pinned by `registry.test.ts`; no finance/voting/content/calendar/files/messaging manifest is present.
+**Manifests actually shipped:** exactly two. `coreManifest` (id `core`, `toggleable: false`; the minimal kernel shell: dashboard, settings, systemstatus) and `governanceManifest` (id `governance`, `toggleable: false`, because *the Gremion kernel is a governance product*: members, committees, portal, protokolle, beschlüsse). `index.generated.ts` is codegen-built and byte-pinned by `registry.test.ts`; no finance/voting/content/calendar/files/messaging manifest is present.
 
 **Governance-only stack (7 services):** `postgres`, `keycloak`, `gremion-ui`, `gremion-public`, `legal`, `vector`, `mailpit` — plus `traefik` and `docker-socket-proxy` under the `production` profile, and `pgbouncer` / `cloudflared` / `fallback` from `docker-compose.prod.yml`. Traefik's `x-forwarded-host` resolver is load-bearing for tenancy. The full StuRaOS product was 19 services.
 
@@ -90,7 +90,7 @@ The honest spine is **4 fixed invariants + 3 strategy slots** (an adversarial st
 2. **Resource-commitment guard** — ex-ante four-eyes / M-of-N / parent-grant / ex-post sanction.
 3. **Mandate accountability** — constituency-revocable / purpose-bound / appointed.
 
-The **meta-model is 7 primitives** — Body, Mandate, Franchise, Decision-Rule, Resolution, Resource-Commitment Guard, and Accountability+Contestability — each a generalization of an existing StuRaOS table, so adoption needs no schema rip-out.
+The **meta-model is 7 primitives**: Body, Mandate, Franchise, Decision-Rule, Resolution, Resource-Commitment Guard, and Accountability+Contestability. Each is a generalization of an existing StuRaOS table, so adoption needs no schema rip-out.
 
 **Implementation notes.** The INV-5 quorum gate enforces **at adoption** (protocol publish), not at draft resolution-write — gating drafts returned 422 to the live UI. The decision rule is fixed at creation (a PATCH cannot change the required majority). The audit chain is hash-chained with an advisory-lock-serialized `BEFORE INSERT` trigger and a `verifyAuditChain` check; a known residual is that a self-contained chain cannot detect **tail truncation** (mid-chain edits *are* detected), deferred to a Phase-3 external-anchor follow-up.
 
@@ -114,9 +114,9 @@ See the [module playbook](./playbooks/add-a-module.md) and the [service-extracti
 
 Gremion is **AGPL-3.0-only, permanent** — it will never be relicensed under a non-free or source-available license. A BSL/SSPL/FSL rug-pull would mean trust death and grant disqualification.
 
-Contributions are accepted **inbound = outbound** under AGPL-3.0-only via a **Developer Certificate of Origin** sign-off (`git commit -s`). There is **no CLA and no FLA**, so no party — including the maintainers — can ever relicense a contribution away from the AGPL.
+Contributions are accepted **inbound = outbound** under AGPL-3.0-only via a **Developer Certificate of Origin** sign-off (`git commit -s`). There is **no CLA and no FLA**, so no party, including the maintainers, can ever relicense a contribution away from the AGPL.
 
-Most modules are themselves AGPL-3.0-only, so for them this question does not arise. For the four that stay closed — finance, content, vault, handover — the load-bearing mechanic is the **process boundary, not a CLA.** The FSF treats anything linked in-process with an AGPL program — plugins *and* UI routes compiled into the app — as one combined work that must also be AGPL, and §13 triggers source-disclosure once the modified program is served over a network. Therefore a closed module **cannot be "just in-app routes"** on the kernel; to stay closed it must be a **full separate service** (its own API *and* its own UI) the kernel composes over HTTP ("mere aggregation"). Closed code never enters public git history by construction — separate repositories, never a shared monorepo with an `ee/` directory.
+Most modules are themselves AGPL-3.0-only, so for them this question does not arise. For the four that stay closed (finance, content, vault, handover), the load-bearing mechanic is the **process boundary, not a CLA.** The FSF treats anything linked in-process with an AGPL program (plugins *and* UI routes compiled into the app) as one combined work that must also be AGPL, and §13 triggers source-disclosure once the modified program is served over a network. Therefore a closed module **cannot be "just in-app routes"** on the kernel; to stay closed it must be a **full separate service** (its own API *and* its own UI) the kernel composes over HTTP ("mere aggregation"). Closed code never enters public git history by construction — separate repositories, never a shared monorepo with an `ee/` directory.
 
 For the full text and rationale, see [`../README.md`](../README.md) and [`../CONTRIBUTING.md`](../CONTRIBUTING.md).
 
@@ -132,7 +132,7 @@ Gremion is the open core of a product family. Modules and verticals live in **se
 
 **Modules are one repository per module, and they are not uniformly closed.** Public, AGPL-3.0-only: the elections, newsletter, calendar, files, messages, board and users modules. That licence covers the module code only; the upstream systems those modules wrap (the Helios overlay, Nextcloud, the Matrix homeserver, LiveKit) keep their own licences, which are recorded in [the licence register](compliance/licence-register.md). Closed: finance, content, vault, handover. Do not read "module layer" as "proprietary layer" — most of it is AGPL. The split out of the single holding repository is in progress, so today the modules are carried in a private holding repository and consumed over git rather than as published packages; `@gremion/db` and `@gremion/ports` begin publishing to npm at 0.1.0.
 
-**History.** This repository starts from a single root commit. It is a **fresh extraction** — only the ratified core subset, with a secret/PII sweep of that subset — not a re-publish of the private product repository, whose history stays private.
+**History.** This repository starts from a single root commit. It is a **fresh extraction** of only the ratified core subset, with a secret/PII sweep of that subset, not a re-publish of the private product repository, whose history stays private.
 
 ## Microservice roadmap
 
@@ -145,13 +145,13 @@ The architecture is a **modular monolith — extract on demand**, on the proven 
 
 **Open-core prerequisites (the hinge, both executed):** invert the `org-units-db → finance/tx` reverse-import, and make the registry auto-discovery so the kernel never hardcodes a module's manifest.
 
-**Module shape.** A module that stays closed cannot be "just in-app routes" on the kernel — see [Licensing & contribution](#licensing--contribution) — so the four closed modules are full separate services with their own API *and* their own UI, composed over HTTP. The AGPL modules are under no such constraint.
+**Module shape.** A module that stays closed cannot be "just in-app routes" on the kernel (see [Licensing & contribution](#licensing--contribution)), so the four closed modules are full separate services with their own API *and* their own UI, composed over HTTP. The AGPL modules are under no such constraint.
 
 ## Relationship to StuRaOS and status
 
 **Gremion is the framework; StuRaOS is its first reference deployment ("branch").** StuRaOS is where the governance ontology was first implemented; Gremion generalizes it into a domain-neutral substrate. Post-carve, StuRaOS stays the full integrated product / StuRa demo, and the German finance vocabulary (KV/HV, *Finanzordnung*) is demoted to a vertical plugin, not core.
 
-**Runtime maturity — honestly stated:** Gremion is design- and code-mature but runtime-immature — "the seam is drawn precisely on both sides and never cut." Code-completeness on-branch is roughly 70% to v1; load-bearing-in-production is roughly 28–30% after the newsletter cutover.
+**Runtime maturity, honestly stated:** Gremion is design- and code-mature but runtime-immature: "the seam is drawn precisely on both sides and never cut." Code-completeness on-branch is roughly 70% to v1; load-bearing-in-production is roughly 28–30% after the newsletter cutover.
 
 **Carve-time residuals** are tracked, one by one, in [`KNOWN_ISSUES.md`](../KNOWN_ISSUES.md) — leftovers of the extraction, listed there until they are removed or generalised rather than promised against a date.
 
@@ -161,7 +161,7 @@ The architecture is a **modular monolith — extract on demand**, on the proven 
 
 Stated plainly, because a reader would otherwise assume otherwise:
 
-- **Not the product's full schema.** 34 data-plane migrations ship here: 31 of the 58 in the product plus the kernel-only `0059`, `0060` and `0061`, so **27 are absent**. All of them belong to feature modules that are not part of the kernel and ship in their own repositories — finance (`013`–`017`, `019`–`023`, `025`–`032`, `035`, `036`) and content (`044`–`047`) — or to handover (`050`–`052`), which ships in no release-1 tree at all. No governance-side migration of the product is absent here any more: the 2026-09-15 port-back brought `003`, `034`, `049` and `053`–`058` in, provenance in [`ops/migration-portback-2026-09-15.md`](./ops/migration-portback-2026-09-15.md). The filename gaps are inherited from the larger chain and are not corruption; what is here and what is not is named in [`../gremion-ui/migrations/README.md`](../gremion-ui/migrations/README.md).
-- **Not the full governance feature set.** The contestability / recall **schema** is here (`055`, `056`); its application half — routes, services, UI — and the second-locus model are implemented in the product and are **not** in this kernel, even though the charter above describes accountability and contestability as a meta-model primitive.
+- **Not the product's full schema.** 34 data-plane migrations ship here: 31 of the 58 in the product plus the kernel-only `0059`, `0060` and `0061`, so **27 are absent**. All of them belong to feature modules that are not part of the kernel and ship in their own repositories, namely finance (`013`–`017`, `019`–`023`, `025`–`032`, `035`, `036`) and content (`044`–`047`), or to handover (`050`–`052`), which ships in no release-1 tree at all. No governance-side migration of the product is absent here any more: the 2026-09-15 port-back brought `003`, `034`, `049` and `053`–`058` in, provenance in [`ops/migration-portback-2026-09-15.md`](./ops/migration-portback-2026-09-15.md). The filename gaps are inherited from the larger chain and are not corruption; what is here and what is not is named in [`../gremion-ui/migrations/README.md`](../gremion-ui/migrations/README.md).
+- **Not the full governance feature set.** The contestability / recall **schema** is here (`055`, `056`); its application half (routes, services, UI) and the second-locus model are implemented in the product and are **not** in this kernel, even though the charter above describes accountability and contestability as a meta-model primitive.
 - **The runtime-registry contract is not frozen.** `lib/server/modules/runtime-registry.ts` and the manifest shape are the module SDK's seam, and they may still change without a deprecation window. Pin a SHA.
 - **`gremion-ui` and `gremion-public` are a non-normative reference shell.** They are the shell the kernel was extracted with, not a ratified UI contract. A deployment is free to replace them; nothing in the kernel's guarantees depends on their markup.
