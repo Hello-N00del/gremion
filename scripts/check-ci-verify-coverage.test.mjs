@@ -215,6 +215,15 @@ test('a workflow-level `defaults.run.shell: bash {0}` is reported', () => {
   assert.match(p, /the workflow sets defaults\.run\.shell: bash \{0\}, which drops -e/)
 })
 
+test('a template that passes -e and then turns it off again (`bash -e +e {0}`) is reported', () => {
+  assert.match(joined(stepShell('bash -e +e {0}')), /Combine the legs' records\): `shell: bash -e \+e \{0\}` drops -e/)
+})
+
+test('a template that turns errexit off by option cluster or by name (+ex, +o errexit) is reported', () => {
+  assert.match(joined(stepShell('bash -e +ex {0}')), /`shell: bash -e \+ex \{0\}` drops -e/)
+  assert.match(joined(stepShell('bash -eo pipefail +o errexit {0}')), /`shell: bash -eo pipefail \+o errexit \{0\}` drops -e/)
+})
+
 test('a `shell:` that keeps -e (bash, sh, or a template passing -e) is not reported', () => {
   assert.deepEqual(problemsOf(stepShell('bash')), [])
   assert.deepEqual(problemsOf(stepShell('sh')), [])

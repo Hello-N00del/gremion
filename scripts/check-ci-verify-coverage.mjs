@@ -34,6 +34,11 @@
 // A scan that found almost nothing would pass every rule above, so it refuses to
 // pass below a floor of verify invocations (the vacuity floor).
 //
+// SCOPE. This guard catches the ACCIDENTAL softening of the gate, in review, in the
+// common forms enumerated above. It is not a sandbox against a maintainer who edits
+// ci.yml and this guard together, and shell has unbounded ways to drop a status that
+// no list of patterns closes. Review of .github/workflows/** remains the control.
+//
 // Run:  node scripts/check-ci-verify-coverage.mjs [--ci <path to ci.yml>]
 // Test: node --test scripts/check-ci-verify-coverage.test.mjs
 
@@ -90,9 +95,11 @@ const VERDICT_IN_CONDITION = new RegExp(String.raw`(?:^|[\s;&|({])(?:if|elif|whi
 const VERDICT_NEGATED = new RegExp(String.raw`(?:^|[\s;&|({])!\s+[^;\n|\]]*?${VERDICT_CMD}`)
 
 // A `shell:` keeps errexit when it is unset, bash or sh (GitHub runs both with -e), or a
-// template that passes -e / -o errexit. `bash {0}` is the documented way to turn fail-fast OFF.
+// template that passes -e / -o errexit and does not turn it off again. `bash {0}` is the documented way to turn fail-fast OFF.
 const ERREXIT_SHELL = /^(?:bash|sh)$|^(?:ba)?sh\s(?:.*\s)?-(?:[A-Za-z]*e[A-Za-z]*|o\s+errexit)\s(?:.*\s)?\{0\}$/
-const keepsErrexit = (shell) => shell === undefined || shell === null || (typeof shell === 'string' && ERREXIT_SHELL.test(shell.trim()))
+// ...and passes no `+<flags containing e>` / `+o errexit` after it: `bash -e +e {0}` carries a -e and runs without errexit.
+const ERREXIT_OFF = /(?:^|\s)(?:\+[A-Za-z]*e[A-Za-z]*|\+o\s+errexit)(?=\s|$)/
+const keepsErrexit = (shell) => shell === undefined || shell === null || (typeof shell === 'string' && ERREXIT_SHELL.test(shell.trim()) && !ERREXIT_OFF.test(shell))
 
 // The only `if` the gate job and its strict check-record step may carry (after the
 // `${{ }}` wrapper and whitespace are normalized away). Anything narrower can skip
