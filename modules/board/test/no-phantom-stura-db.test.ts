@@ -119,7 +119,7 @@ describe('board leaf — no phantom kernel-DB coupling', () => {
   })
 
   it('Dockerfile copies packages/db exactly when @gremion/tenant-store depends on @gremion/db', () => {
-    const copies = dockerfile.split(/\r?\n/).some((l) => /^COPY packages\/db /.test(l.trim()))
+    const copies = dockerfile.split(/\r?\n/).some((l) => l.trim().startsWith('COPY packages/db '))
     expect(copies).toBe(Boolean(tenantStorePkg.dependencies?.['@gremion/db']))
   })
 
