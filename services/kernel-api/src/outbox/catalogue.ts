@@ -53,11 +53,14 @@ export type IdtPayload<K extends IdtEventKey> = { -readonly [F in keyof (typeof 
 export const IDT_SOURCE = '/gremion/idt'
 export const eventTypeOf = (key: IdtEventKey): string => `de.gremion.idt.${key}.v1`
 
-/** gremion.<customer>.idt.<aggregate>.<event> from the CloudEvents type de.gremion.idt.<aggregate>.<event>.v1. */
-export function subjectOfType(customerId: string, eventType: string): string {
+/**
+ * gremion.<tenant>.idt.<aggregate>.<event> from the CloudEvents type de.gremion.idt.<aggregate>.<event>.v1.
+ * <tenant> is the customer's NATS tenant token: its slug, the name the broker account is ensured under.
+ */
+export function subjectOfType(tenantToken: string, eventType: string): string {
   const m = /^de\.gremion\.idt\.([a-z]+)\.([a-z]+)\.v1$/.exec(eventType)
   if (!m) throw new Error(`not an idt event type: ${JSON.stringify(eventType)}`)
-  return `gremion.${customerId}.idt.${m[1]}.${m[2]}`
+  return `gremion.${tenantToken}.idt.${m[1]}.${m[2]}`
 }
 
 const pascal = (s: string): string => s.charAt(0).toUpperCase() + s.slice(1)
@@ -97,7 +100,7 @@ export function renderAsyncApi(): Record<string, unknown> {
     channels[ch] = {
       address: `gremion.{tenantId}.idt.${spec.aggregate}.${spec.event}`,
       description: type,
-      parameters: { tenantId: { description: 'Customer UUID.' } },
+      parameters: { tenantId: { description: "The customer's tenant token on the broker: its slug (the account nats-auth ensures)." } },
       messages: { [`${ch}Event`]: { $ref: `#/components/messages/${msg}` } },
     }
     operations[`publish${pascal(ch)}`] = {

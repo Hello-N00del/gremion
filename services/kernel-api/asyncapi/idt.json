@@ -12,7 +12,7 @@
       "description": "de.gremion.idt.person.invited.v1",
       "parameters": {
         "tenantId": {
-          "description": "Customer UUID."
+          "description": "The customer's tenant token on the broker: its slug (the account nats-auth ensures)."
         }
       },
       "messages": {
@@ -26,7 +26,7 @@
       "description": "de.gremion.idt.person.activated.v1",
       "parameters": {
         "tenantId": {
-          "description": "Customer UUID."
+          "description": "The customer's tenant token on the broker: its slug (the account nats-auth ensures)."
         }
       },
       "messages": {
@@ -40,7 +40,7 @@
       "description": "de.gremion.idt.person.disabled.v1",
       "parameters": {
         "tenantId": {
-          "description": "Customer UUID."
+          "description": "The customer's tenant token on the broker: its slug (the account nats-auth ensures)."
         }
       },
       "messages": {
@@ -54,7 +54,7 @@
       "description": "de.gremion.idt.person.enabled.v1",
       "parameters": {
         "tenantId": {
-          "description": "Customer UUID."
+          "description": "The customer's tenant token on the broker: its slug (the account nats-auth ensures)."
         }
       },
       "messages": {
@@ -68,7 +68,7 @@
       "description": "de.gremion.idt.body.created.v1",
       "parameters": {
         "tenantId": {
-          "description": "Customer UUID."
+          "description": "The customer's tenant token on the broker: its slug (the account nats-auth ensures)."
         }
       },
       "messages": {
@@ -82,7 +82,7 @@
       "description": "de.gremion.idt.body.updated.v1",
       "parameters": {
         "tenantId": {
-          "description": "Customer UUID."
+          "description": "The customer's tenant token on the broker: its slug (the account nats-auth ensures)."
         }
       },
       "messages": {
@@ -96,7 +96,7 @@
       "description": "de.gremion.idt.body.archived.v1",
       "parameters": {
         "tenantId": {
-          "description": "Customer UUID."
+          "description": "The customer's tenant token on the broker: its slug (the account nats-auth ensures)."
         }
       },
       "messages": {
@@ -110,7 +110,7 @@
       "description": "de.gremion.idt.orgunit.created.v1",
       "parameters": {
         "tenantId": {
-          "description": "Customer UUID."
+          "description": "The customer's tenant token on the broker: its slug (the account nats-auth ensures)."
         }
       },
       "messages": {
@@ -124,7 +124,7 @@
       "description": "de.gremion.idt.orgunit.updated.v1",
       "parameters": {
         "tenantId": {
-          "description": "Customer UUID."
+          "description": "The customer's tenant token on the broker: its slug (the account nats-auth ensures)."
         }
       },
       "messages": {
@@ -138,7 +138,7 @@
       "description": "de.gremion.idt.orgunit.archived.v1",
       "parameters": {
         "tenantId": {
-          "description": "Customer UUID."
+          "description": "The customer's tenant token on the broker: its slug (the account nats-auth ensures)."
         }
       },
       "messages": {
@@ -152,7 +152,7 @@
       "description": "de.gremion.idt.seat.created.v1",
       "parameters": {
         "tenantId": {
-          "description": "Customer UUID."
+          "description": "The customer's tenant token on the broker: its slug (the account nats-auth ensures)."
         }
       },
       "messages": {
@@ -166,7 +166,7 @@
       "description": "de.gremion.idt.seat.retired.v1",
       "parameters": {
         "tenantId": {
-          "description": "Customer UUID."
+          "description": "The customer's tenant token on the broker: its slug (the account nats-auth ensures)."
         }
       },
       "messages": {
@@ -180,7 +180,7 @@
       "description": "de.gremion.idt.membership.started.v1",
       "parameters": {
         "tenantId": {
-          "description": "Customer UUID."
+          "description": "The customer's tenant token on the broker: its slug (the account nats-auth ensures)."
         }
       },
       "messages": {
@@ -194,7 +194,7 @@
       "description": "de.gremion.idt.membership.corrected.v1",
       "parameters": {
         "tenantId": {
-          "description": "Customer UUID."
+          "description": "The customer's tenant token on the broker: its slug (the account nats-auth ensures)."
         }
       },
       "messages": {
@@ -208,7 +208,7 @@
       "description": "de.gremion.idt.membership.ended.v1",
       "parameters": {
         "tenantId": {
-          "description": "Customer UUID."
+          "description": "The customer's tenant token on the broker: its slug (the account nats-auth ensures)."
         }
       },
       "messages": {
@@ -222,7 +222,7 @@
       "description": "de.gremion.idt.tenure.started.v1",
       "parameters": {
         "tenantId": {
-          "description": "Customer UUID."
+          "description": "The customer's tenant token on the broker: its slug (the account nats-auth ensures)."
         }
       },
       "messages": {
@@ -236,7 +236,7 @@
       "description": "de.gremion.idt.tenure.corrected.v1",
       "parameters": {
         "tenantId": {
-          "description": "Customer UUID."
+          "description": "The customer's tenant token on the broker: its slug (the account nats-auth ensures)."
         }
       },
       "messages": {
@@ -250,7 +250,7 @@
       "description": "de.gremion.idt.tenure.ended.v1",
       "parameters": {
         "tenantId": {
-          "description": "Customer UUID."
+          "description": "The customer's tenant token on the broker: its slug (the account nats-auth ensures)."
         }
       },
       "messages": {
@@ -264,7 +264,7 @@
       "description": "de.gremion.idt.wahlperiode.created.v1",
       "parameters": {
         "tenantId": {
-          "description": "Customer UUID."
+          "description": "The customer's tenant token on the broker: its slug (the account nats-auth ensures)."
         }
       },
       "messages": {
@@ -278,7 +278,7 @@
       "description": "de.gremion.idt.wahlperiode.closed.v1",
       "parameters": {
         "tenantId": {
-          "description": "Customer UUID."
+          "description": "The customer's tenant token on the broker: its slug (the account nats-auth ensures)."
         }
       },
       "messages": {

@@ -4,6 +4,7 @@ import { readdirSync, statSync } from 'node:fs'
 import path from 'node:path'
 import { describe, expect, test } from 'vitest'
 import { STREAMS } from '@gremion/ports/broker'
+import { subjectMatches } from '../../ports/src/subject-match.ts'
 import { FLOWS, NO_BROKER, NO_STREAM, OWNER_TO_MODULE, SYSTEM_STREAMS, type MatrixInput, matrixViolations, loadRegistryAddresses } from '../src/flows.ts'
 import { TENANT_JETSTREAM_LIMITS } from '../src/render.ts'
 import { modulePermissions } from '../src/permissions.ts'
@@ -148,6 +149,19 @@ describe('flow matrix (TDD 1)', () => {
     expect(kernelApi.some((a) => a.includes('org-unit'))).toBe(false)
     const kernel = modulePermissions('0192f0c12b3c7d4e8f001122334455aa', 'kernel').publish.allow
     expect(kernel.some((a) => a.includes('.idt.'))).toBe(false)
+  })
+
+  test('TASK-080-a permission tests by subject: the kernel-api nkey cannot publish gremion.<t>.org-unit.>, the kernel nkey cannot publish gremion.<t>.idt.>, each can publish its own stream', () => {
+    const t = '0192f0c12b3c7d4e8f001122334455aa'
+    const can = (module: string, subject: string) => modulePermissions(t, module).publish.allow.some((p) => subjectMatches(p, subject))
+    for (const e of ['upserted', 'deleted', 'anything.else']) expect(can('kernel-api', `gremion.${t}.org-unit.${e}`), `kernel-api -> org-unit.${e}`).toBe(false)
+    for (const s of ['person.invited', 'body.created', 'membership.ended', 'tenure.started', 'seat.retired']) {
+      expect(can('kernel-api', `gremion.${t}.idt.${s}`), `kernel-api -> idt.${s}`).toBe(true)
+      expect(can('kernel', `gremion.${t}.idt.${s}`), `kernel -> idt.${s}`).toBe(false)
+    }
+    expect(can('kernel', `gremion.${t}.org-unit.upserted`)).toBe(true)
+    // and never another tenant's IDT subject
+    expect(can('kernel-api', 'gremion.some-other-tenant.idt.body.created')).toBe(false)
   })
 
   test('TASK-080-a guard: STREAMS.IDT removed -> the matrix is RED (unknown stream + the idt registry addresses under no stream)', () => {

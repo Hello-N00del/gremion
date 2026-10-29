@@ -16,6 +16,8 @@ export interface RecordedQuery {
 export const PINNED_EXEMPTIONS: ReadonlyArray<{ id: string; pattern: RegExp }> = [
   { id: '1: tenant_domain WHERE host = $1', pattern: /FROM public\.tenant_domain d JOIN public\.tenant t ON t\.id = d\.tenant_id WHERE d\.host = \$1$/ },
   { id: "3: the migrate job's tenant iteration", pattern: /^SELECT t\.id::text AS id, t\.status FROM public\.tenant t ORDER BY t\.id$/ },
+  // TASK-080-a: the event relay iterates the active customers (one relay each), like the migrate job
+  { id: "4: the relay's active-tenant iteration", pattern: /FROM public\.tenant t WHERE t\.status = 'active' ORDER BY t\.id$/ },
 ]
 
 export const normalise = (text: string) => text.replace(/\s+/g, ' ').trim()

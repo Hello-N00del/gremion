@@ -536,6 +536,9 @@ services:
       - /tmp
     labels:
       traefik.enable: "false"
+      # TASK-080-a: the host collector asks this container for its identity outbox gauges
+      # (`events metrics --ctx idt`), exactly like a module leaf (packages/events, TASK-079).
+      org.gremion.events-metrics: idt
       # NO gremion.evict label: gremion-switch POSTs /api/internal/evict to
       # every labelled container and requires a 204, and kernel-api serves only
       # the routes of openapi/kernel-core.json (the evict route is TASK-035's).
@@ -564,10 +567,26 @@ services:
       KERNEL_API_MODULE_SECRET_PUBLISHING: ${KERNEL_API_MODULE_SECRET_PUBLISHING:-}
       KERNEL_API_MODULE_SECRET_VAULT: ${KERNEL_API_MODULE_SECRET_VAULT:-}
       KERNEL_API_MODULE_SECRET_VOTES: ${KERNEL_API_MODULE_SECRET_VOTES:-}
+      # TASK-080-a: the identity event relay (one per active customer) publishes to the IDT
+      # stream as the nats-auth identity `kernel-api`, whose seeds are the kernel-api/ subtree
+      # of the nats-secrets volume below. No depends_on (the broker is in the state project);
+      # the relay connects lazily and retries itself.
+      NATS_URL: nats://nats-${STACK:?STACK required}:4222
+      NATS_SECRETS_DIR: /run/secrets/nats
     volumes:
       # Each customer's kernel database credential is a file: ref under
       # /run/secrets/tenants (read-only, like gremion-ui's mount).
       - ${TENANT_SECRETS_DIR:-./secrets/tenants}:/run/secrets/tenants:ro
+      # TASK-080-a: ONLY this identity's seeds (subpath kernel-api, read-only), never another module's.
+      # DEPLOY ORDER: the subtree exists once `nats-auth ensure` has run with kernel-api in the
+      # module set (provisioning broker_account_created, TASK-043d hand-off G7); ensure every
+      # existing customer BEFORE the compose up that carries this mount.
+      - type: volume
+        source: nats-secrets
+        target: /run/secrets/nats/kernel-api
+        read_only: true
+        volume:
+          subpath: kernel-api
     networks:
       app: {}
       state:

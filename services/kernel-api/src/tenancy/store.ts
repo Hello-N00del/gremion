@@ -39,6 +39,12 @@ export function controlTenancyStore(control: Sql): TenancyStore {
       if (rows.length > 1) throw new Error('tenant_domain answered more than one row for one host (its primary key is broken)')
       return rows[0] ? hydrate(rows[0]) : null
     },
+    async listActive() {
+      const rows = await control<Row[]>`
+        SELECT t.id::text AS id, t.slug, t.status, t.realm_name, t.issuer, t.kc_internal, t.db_conn_ref
+          FROM public.tenant t WHERE t.status = 'active' ORDER BY t.id`
+      return rows.map(hydrate)
+    },
     async lookupId(customerId) {
       const rows = await control<Row[]>`
         SELECT t.id::text AS id, t.slug, t.status, t.realm_name, t.issuer, t.kc_internal, t.db_conn_ref

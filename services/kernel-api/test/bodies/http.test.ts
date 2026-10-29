@@ -195,7 +195,7 @@ describe('the bodies operations (TASK-080-a step c)', () => {
   })
 
   it('no HTTP write exists in the bodies tag but the own preference (a person-token write to anything else has no route)', async () => {
-    const writes = listOperations(doc).filter((o) => o.operation.tags?.includes('bodies') && o.method !== 'GET')
+    const writes = listOperations(doc).filter((o) => (o.operation as { tags?: string[] }).tags?.includes('bodies') && o.method !== 'GET')
     expect(writes.map((o) => o.operationId)).toEqual(['putOwnPreference'])
     const { app } = setup()
     for (const [method, url] of [['POST', '/api/v1/bodies'], ['PUT', `/api/v1/bodies/${BODY}`], ['DELETE', `/api/v1/bodies/${BODY}`], ['POST', `/api/v1/persons`]] as const) {
@@ -225,7 +225,7 @@ describe('the bodies operations (TASK-080-a step c)', () => {
   })
 
   it('every bodies operation of the spec was exercised (not vacuous)', () => {
-    const mine = listOperations(doc).filter((o) => o.operation.tags?.includes('bodies')).map((o) => o.operationId!).sort()
+    const mine = listOperations(doc).filter((o) => (o.operation as { tags?: string[] }).tags?.includes('bodies')).map((o) => o.operationId!).sort()
     expect(mine).toEqual(['getBodyTree', 'getOwnPreference', 'getPerson', 'listBodyMemberships', 'listBodySeats', 'listSeatTenures', 'putOwnPreference'])
     expect([...exercised].sort()).toEqual(mine)
   })

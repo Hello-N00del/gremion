@@ -29,6 +29,12 @@ export interface TenancyStore {
   lookupHost(host: string): Promise<TenantRow | null>
   /** A module caller's asserted customer, by id (customer-scoped). */
   lookupId(customerId: string): Promise<TenantRow | null>
+  /**
+   * Every `active` customer (TRD-082 pinned exemption 4: the event relay's tenant
+   * iteration, like the migrate job's): the relay supervisor starts one relay per
+   * customer whose database the gate calls current.
+   */
+  listActive(): Promise<TenantRow[]>
 }
 
 export interface EnabledModuleRow {
@@ -124,7 +130,7 @@ export function unwiredDeps(): KernelApiDeps {
     proxySecret: undefined,
     platformDomain: undefined,
     moduleSecrets: new Map(),
-    tenancy: { lookupHost: notWired('the control registry'), lookupId: notWired('the control registry') },
+    tenancy: { lookupHost: notWired('the control registry'), lookupId: notWired('the control registry'), listActive: notWired('the control registry') },
     registry: { listEnabled: notWired('the module registry'), isEnabled: notWired('the module registry') },
     tokens: { verify: notWired('token verification') },
     gate: { check: notWired('the schema gate') },

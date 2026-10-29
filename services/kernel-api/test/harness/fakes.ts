@@ -99,6 +99,10 @@ export function fakeDeps(w: FakeWorld, over: Partial<KernelApiDeps> = {}): { dep
         const id = w.domains.get(host)
         return id ? (w.tenants.get(id) ?? null) : null
       },
+      async listActive() {
+        if (w.controlDown) throw new Error('connect ECONNREFUSED control')
+        return [...w.tenants.values()].filter((t) => t.status === 'active')
+      },
       async lookupId(id) {
         rec.idLookups.push(id)
         if (w.controlDown) throw new Error('connect ECONNREFUSED control')
