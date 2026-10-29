@@ -200,9 +200,13 @@ async function assertRevokeIncluded(tx: Sql, actor: Actor, bodyId: string, g: { 
   let scope: 'body' | 'customer' | undefined
   if (kind === 'capability') {
     const body = await tx<{ kind_key: string }[]>`SELECT kind_key FROM idt.body WHERE body_id = ${bodyId}::uuid`
-    scope = body[0]?.kind_key === 'verwaltung' ? 'customer' : 'body'
+    if (body.length === 0) throw new GrantError('unknown_body', 'no such body in this customer')
+    scope = body[0]!.kind_key === 'verwaltung' ? 'customer' : 'body'
   }
-  if (!roles.some((r) => roleIncludes(r, kind, key, scope))) throw new GrantError('granter_role_mismatch', `no role the revoker holds includes ${kind} ${key}${scope ? ` at ${scope} scope` : ''}`)
+  // A role that grants everything closes any capability unscoped: an operator or system source can leave a verwaltung
+  // capability no customer-scope role carries, and it must not survive a council_admin's revoke (or block revoke-all).
+  const includes = (r: string) => roleIncludes(r, kind, key, roleDef(r)?.grants === 'all' ? undefined : scope)
+  if (!roles.some(includes)) throw new GrantError('granter_role_mismatch', `no role the revoker holds includes ${kind} ${key}${scope ? ` at ${scope} scope` : ''}`)
 }
 
 export async function revokeGrant(sql: Sql, deps: GrantDeps, customerId: string, revoker: Granter, grantId: string): Promise<GrantRow> {

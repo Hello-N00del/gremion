@@ -26,7 +26,7 @@ let base = ''
 
 function docker(args: string[], allowFail = false): string {
   const r = spawnSync('docker', args, { encoding: 'utf8', env: { ...process.env, MSYS_NO_PATHCONV: '1' } })
-  if (r.status !== 0 && !allowFail) throw new Error(`docker ${args[0]}: ${(r.stderr || '').slice(-400)}`)
+  if (r.status !== 0 && !allowFail) throw new Error(`docker ${args[0]} (status ${r.status}): ${r.error?.message ?? ''} ${(r.stderr || '').slice(-400)}`)
   return (r.stdout || '').trim()
 }
 

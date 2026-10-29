@@ -2,10 +2,10 @@ import type { PageServerLoad } from './$types'
 
 export const load: PageServerLoad = async ({ url, locals }) => {
   const raw = url.searchParams.get('returnTo') ?? '/'
-  // Open-redirect guard: same rule as the login page's getSafeCallbackUrl().
-  // Accept any same-origin absolute path; reject protocol-relative URLs like
-  // //evil.com and any value that does not start with a leading slash.
-  const returnTo = raw.startsWith('/') && !raw.startsWith('//') ? raw : '/'
+  // Open-redirect guard. returnTo is the notice's "Zurück" link href, so the leading-slash rule is
+  // not enough: the URL parser reads `/\evil.com` (and tab variants) as //evil.com. Accept only a
+  // value that resolves on this origin, and hand back its path.
+  const returnTo = sameOriginPath(raw, url.origin)
   // OTP-or-deny: the realm's step-up flow refuses a user who has no second factor (it never
   // enrols one inside the step-up), and the gremion login theme's error page sends that refusal
   // here as ?error=no-second-factor. The page then shows the notice instead of bouncing into
@@ -16,4 +16,14 @@ export const load: PageServerLoad = async ({ url, locals }) => {
   const base = (locals.tenant?.authExternalBase ?? '').replace(/\/$/, '')
   const accountUrl = base ? `${base}/account` : null
   return { returnTo, secondFactorMissing, accountUrl }
+}
+
+function sameOriginPath(raw: string, origin: string): string {
+  if (!raw.startsWith('/') || raw.startsWith('//') || /[\\\x00-\x1f]/.test(raw)) return '/'
+  try {
+    const u = new URL(raw, origin)
+    return u.origin === origin ? `${u.pathname}${u.search}${u.hash}` : '/'
+  } catch {
+    return '/'
+  }
 }

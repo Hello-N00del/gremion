@@ -486,4 +486,12 @@ describe('capability revokes honour the role_scope rule of the grant body (081 r
     const b = await issueGrant(w.db.app, deps, w.db.customerId, claims('sub-itv'), base({ grantKind: 'capability', key: 'brd.card.own', bodyId: w.bodyB, granterRole: 'it_admin', subjectPersonId: w.persons.bob! }))
     expect((await revokeGrant(w.db.app, deps, w.db.customerId, claims('sub-itv'), b.grant_id)).state).toBe('revoked')
   })
+  // review advisory: an operator or a system source can leave a verwaltung capability that no customer-scope role carries
+  // (brd.card.own). A role that grants everything (council_admin) must still close it, or one such grant blocks offboarding.
+  it('positive: a council_admin revokes an out-of-scope verwaltung capability grant, singly and through revoke-all', async () => {
+    const one = await seedVerwaltungCap('brd.card.own')
+    expect((await revokeGrant(w.db.app, deps, w.db.customerId, claims('sub-carol'), one.id)).state).toBe('revoked')
+    const all = await seedVerwaltungCap('brd.card.own')
+    expect((await revokeAllForPerson(w.db.app, deps, w.db.customerId, claims('sub-carol'), all.p)).map((r) => r.grant_id)).toEqual([all.id])
+  })
 })

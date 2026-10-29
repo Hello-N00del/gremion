@@ -64,5 +64,12 @@ describe('step-up load', () => {
   test('keeps the open-redirect guard on returnTo', async () => {
     expect((await run('?returnTo=//evil.com')).returnTo).toBe('/')
     expect((await run('?returnTo=/finance')).returnTo).toBe('/finance')
+    expect((await run('?returnTo=/finance%3Fx%3D1%23a')).returnTo).toBe('/finance?x=1#a')
+  })
+
+  test('returnTo is a link on the notice: backslash and control-character variants that resolve off-site fall back to /', async () => {
+    for (const evil of ['/%5Cevil.com', '/%5C%09/evil.com', '/%09/evil.com', 'https://evil.com', '%5C%5Cevil.com']) {
+      expect((await run(`?error=no-second-factor&returnTo=${evil}`)).returnTo, evil).toBe('/')
+    }
   })
 })
