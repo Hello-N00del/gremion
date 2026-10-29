@@ -143,6 +143,26 @@ need_writable() {
     done
 }
 
+# scratch_rm <path> -- removes a scratch tree, and ONLY one: the path must
+# resolve (symlinks and .. followed) to somewhere strictly under ${ROOT}/.scratch
+# with ${STACK} as a whole path component. Anything else is refused (bad(), no
+# removal): a mis-set POOLED_OUT must never delete outside the scratch area. A
+# path that does not exist is a no-op.
+scratch_rm() {
+    local p="$1" base real
+    [[ -n "$p" ]] || { bad "scratch_rm: refusing an empty path"; return 1; }
+    [[ -e "$p" || -L "$p" ]] || return 0
+    if [[ -L "$p" ]]; then bad "scratch_rm: refusing ${p}: a symlink"; return 1; fi
+    base="$(cd "$ROOT/.scratch" 2>/dev/null && pwd -P)" || { bad "scratch_rm: refusing ${p}: ${ROOT}/.scratch does not exist"; return 1; }
+    real="$(cd "$p" 2>/dev/null && pwd -P)" || { bad "scratch_rm: refusing ${p}: not a directory"; return 1; }
+    if [[ "$real" != "$base"/* || "/${real#"$base"/}/" != *"/${STACK}/"* ]]; then
+        bad "scratch_rm: refusing ${p} (${real}): outside ${base}/**/${STACK}/"
+        return 1
+    fi
+    rm -rf -- "$real" || { bad "scratch_rm: could not remove ${real}$(perm_hint "$real")"; return 1; }
+    ok "scratch_rm: removed ${real}"
+}
+
 # precreate_bind_dirs -- every host directory a compose file bind-mounts, made
 # HERE by the invoking user. A missing bind source is created by the Docker
 # daemon, root-owned, before customer-layout can (docker-compose.app.yml mounts
@@ -1178,6 +1198,11 @@ phase_teardown() {
     docker volume ls -q --filter "name=^${STACK}" | xargs -r docker volume rm >/dev/null
     [[ -f "$OUT/.created-userlist" ]] && rm -f "$ROOT/docker/pgbouncer/userlist.txt" "$OUT/.created-userlist"
     [[ -f "$OUT/.created-ipcrypt" ]] && rm -f "$ROOT/secrets/ipcrypt_key.txt" "$OUT/.created-ipcrypt"
+    # The scratch GREMION_ROOT and the customer proof's own OUT for this STACK:
+    # a stale etc/secrets (tenant_provisioner) answers a fresh Keycloak with
+    # 401 invalid_client. The ledger under ${OUT}/ledger is kept.
+    scratch_rm "$SROOT" || true
+    scratch_rm "$ROOT/.scratch/customer-provision-proof/${STACK}" || true
     local left
     left="$(docker ps -aq --filter "name=^${STACK}" | grep -c . || true)$(docker network ls -q --filter "name=^${STACK}" | grep -c . || true)$(docker volume ls -q --filter "name=^${STACK}" | grep -c . || true)"
     if [[ "$left" == 000 ]]; then ok "teardown: no container, network or volume under ${STACK} remains"

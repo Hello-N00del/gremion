@@ -358,6 +358,57 @@ linux_uname() {
     done
 }
 
+@test "scratch_rm: removes a tree under .scratch/**/<STACK>/ and nothing else" {
+    local s="t040-shim-rm-$$"
+    IN_REPO_OUT="${REPO_ROOT}/.scratch/pooled-stack-proof/${s}"
+    local t="${IN_REPO_OUT}/root"
+    mkdir -p "$t/etc/secrets/tenant-create"; echo s > "$t/etc/secrets/tenant-create/secret"
+    run bash -c 'set -euo pipefail; . "$1"; STACK="$3"; scratch_rm "$2"; echo "RED=$RED"' _ "$PROOF" "$t" "$s"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"RED=0"* ]]
+    [ ! -e "$t" ]
+}
+
+@test "scratch_rm: a path outside .scratch is REFUSED -- left in place, RED, nothing deleted" {
+    local t="${BATS_TEST_TMPDIR}/t040-shim/root"
+    mkdir -p "$t"; echo keep > "$t/keep"
+    run bash -c 'set -uo pipefail; . "$1"; STACK=t040-shim; rc=0; scratch_rm "$2" || rc=$?; echo "rc=$rc RED=$RED"' _ "$PROOF" "$t"
+    [[ "$output" == *"refusing"*"outside"* ]]
+    [[ "$output" == *"rc=1 RED=1"* ]]
+    [ -f "$t/keep" ]
+}
+
+@test "scratch_rm: .. traversal, the empty string and a .scratch path without the STACK component are all refused" {
+    local s="t040-shim-tr-$$"
+    IN_REPO_OUT="${REPO_ROOT}/.scratch/pooled-stack-proof/${s}"
+    IN_REPO_OTHER="${REPO_ROOT}/.scratch/other-$$"
+    mkdir -p "$IN_REPO_OUT" "$IN_REPO_OTHER"
+    local trav="${IN_REPO_OUT}/../../../.."   # climbs out of .scratch
+    run bash -c 'set -uo pipefail; . "$1"; STACK="$2"
+        r=0; scratch_rm "$3" || r=$?; echo "trav=$r"
+        r=0; scratch_rm "" || r=$?; echo "empty=$r"; r=0; scratch_rm "$4" || r=$?; echo "nostack=$r"' \
+        _ "$PROOF" "$s" "$trav" "$IN_REPO_OTHER"
+    [[ "$output" == *"trav=1"* && "$output" == *"empty=1"* && "$output" == *"nostack=1"* ]]
+    [ -d "$IN_REPO_OTHER" ]
+    [ -d "$IN_REPO_OUT" ]
+}
+
+@test "scratch_rm: a symlink under .scratch pointing outside is refused and its target survives" {
+    local s="t040-shim-ln-$$"
+    IN_REPO_OUT="${REPO_ROOT}/.scratch/pooled-stack-proof/${s}"
+    mkdir -p "$IN_REPO_OUT"
+    local victim="${BATS_TEST_TMPDIR}/victim"; mkdir -p "$victim"; echo keep > "$victim/keep"
+    ln -s "$victim" "${IN_REPO_OUT}/link" 2>/dev/null && [ -L "${IN_REPO_OUT}/link" ] || skip "no real symlinks here"
+    run bash -c 'set -uo pipefail; . "$1"; STACK="$2"; r=0; scratch_rm "$3" || r=$?; echo "link=$r"' _ "$PROOF" "$s" "${IN_REPO_OUT}/link"
+    [[ "$output" == *"link=1"* ]]
+    [ -f "$victim/keep" ]
+}
+
+@test "scratch_rm: a path that does not exist is a no-op, not a failure" {
+    run bash -c 'set -uo pipefail; . "$1"; STACK=t040-shim; rc=0; scratch_rm "$2" || rc=$?; echo "rc=$rc RED=$RED"' _ "$PROOF" "${REPO_ROOT}/.scratch/pooled-stack-proof/t040-shim-never/root"
+    [[ "$output" == *"rc=0 RED=0"* ]]
+}
+
 @test "perm_hint: prints the run-as-root hint for a non-writable path as a non-root Linux user, nothing otherwise" {
     linux_uname
     printf '#!/usr/bin/env bash\necho 1000\n' > "${STUBS}/id"; chmod +x "${STUBS}/id"
@@ -375,4 +426,5 @@ linux_uname() {
 
 teardown() {
     [[ -z "${IN_REPO_OUT:-}" ]] || rm -rf "$IN_REPO_OUT"
+    [[ -z "${IN_REPO_OTHER:-}" ]] || rm -rf "$IN_REPO_OTHER"
 }
