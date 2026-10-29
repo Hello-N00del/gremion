@@ -77,3 +77,31 @@ test('the real allowed-skips.json accounts for the Windows-only skips this host 
     assert.ok(entry.maxCount >= 1, `entry for ${file} (suite ${suite}) has maxCount < 1`)
   }
 })
+
+// CI legs run part suites ("unit:ports", "integration:vitest"); the allow-list
+// is keyed by whole suite names. A part must inherit its parent's grants.
+test('a part suite "<suite>:<part>" resolves to its parent suite entries', () => {
+  assert.equal(allowedSkipsForSuite('unit:ports', DATA), 21)
+  assert.equal(allowedSkipsForSuite('integration:vitest', DATA), 1)
+  assert.deepEqual(checkSkipsByFile('unit:ports', { 'gremion-ui/scripts/install-git-hooks.test.ts': 1 }, DATA), [])
+})
+
+test('a part suite still enforces the per-file budget of the parent entries', () => {
+  const v = checkSkipsByFile('unit:node', { 'gremion-ui/scripts/install-git-hooks.test.ts': 2, 'unlisted.test.ts': 1 }, DATA)
+  assert.equal(v.length, 2)
+  assert.match(v[0], /exceeds the allowed 1/)
+  assert.match(v[1], /exceeds the allowed 0/)
+})
+
+test('a part suite does not inherit a DIFFERENT suite\'s entries, nor does a bare suite inherit a part\'s', () => {
+  assert.equal(allowedSkipsForSuite('isolation:x', DATA), 0)
+  assert.equal(allowedSkipsForSuite('unit:ports', { entries: [{ suite: 'unit:node', file: 'f', reason: 'r', maxCount: 4 }] }), 0)
+  assert.equal(allowedSkipsForSuite('unit', { entries: [{ suite: 'unit:node', file: 'f', reason: 'r', maxCount: 4 }] }), 0)
+})
+
+test('an entry naming the exact part suite matches that part', () => {
+  const data = { entries: [{ suite: 'unit:node', file: 'f.test.mjs', reason: 'r', maxCount: 2 }] }
+  assert.equal(allowedSkipsForSuite('unit:node', data), 2)
+  assert.deepEqual(checkSkipsByFile('unit:node', { 'f.test.mjs': 2 }, data), [])
+  assert.equal(checkSkipsByFile('unit:node', { 'f.test.mjs': 3 }, data).length, 1)
+})

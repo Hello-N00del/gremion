@@ -25,12 +25,25 @@ export function loadAllowedSkips() {
   return data
 }
 
+/**
+ * CI legs run PART suites ("unit:ports", "integration:vitest") but the
+ * allow-list is keyed by the whole suite ("unit", "integration"), so a part
+ * name is judged against its parent suite's entries as well as any entry
+ * naming the exact part. Without this a skip the list grants for "unit" got a
+ * zero budget the moment the same file ran under "unit:<part>".
+ */
+function entryAppliesToSuite(entrySuite, suiteName) {
+  if (entrySuite === suiteName) return true
+  const i = suiteName.indexOf(':')
+  return i > 0 && entrySuite === suiteName.slice(0, i)
+}
+
 /** Total allowed-skip budget for one suite name, summed across its entries.
  * Kept for suites that cannot yet attribute a skip to one file (see
  * checkSkipsByFile below for the per-file enforcement Q3 actually asks
  * for). */
 export function allowedSkipsForSuite(suiteName, data = loadAllowedSkips()) {
-  return data.entries.filter((e) => e.suite === suiteName).reduce((sum, e) => sum + e.maxCount, 0)
+  return data.entries.filter((e) => entryAppliesToSuite(e.suite, suiteName)).reduce((sum, e) => sum + e.maxCount, 0)
 }
 
 /**
@@ -59,7 +72,7 @@ export function checkSkipsByFile(suiteName, skipsByFile, data = loadAllowedSkips
   for (const [file, count] of Object.entries(skipsByFile)) {
     if (!(count > 0)) continue
     const allowed = data.entries
-      .filter((e) => e.suite === suiteName && e.file === file)
+      .filter((e) => entryAppliesToSuite(e.suite, suiteName) && e.file === file)
       .reduce((sum, e) => sum + e.maxCount, 0)
     if (count > allowed) {
       violations.push(`${file}: ${count} skip(s), exceeds the allowed ${allowed} for this file (see scripts/verify/allowed-skips.json)`)
