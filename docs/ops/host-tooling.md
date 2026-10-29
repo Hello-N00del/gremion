@@ -502,7 +502,9 @@ Traefik drops the conflicting definitions and disables every router that uses
 them, and the **other stack answers 404** (incident 2026-10-29: a proof stack
 run beside a live stack took the live stack's routes down). The constraint is also the
 reason the routed containers of a different stack are invisible rather than
-merely unused.
+merely unused. `org.gremion.stack` prevents accidental collisions between
+cooperating stacks; it is self-asserted, not a security boundary, so an untrusted
+workload needs a separate Docker daemon or host.
 
 Rules for a host that runs more than one stack:
 
