@@ -40,6 +40,7 @@
 #   SHIM_BRIDGE_GW    the default bridge's gateway `docker network inspect bridge`
 #                     reports (unset: the inspect fails)
 #   SHIM_COMPOSE_LS   fail: `docker compose ls` exits 1 (counts()' compose-ls reading)
+#   SHIM_BUILD        fail: `docker compose ... build` exits 1 (the build phase must die)
 set -u
 S="${SHIM_STACK:?SHIM_STACK required}"
 D="${SHIM_DIR:?SHIM_DIR required}"
@@ -174,6 +175,7 @@ case "$1" in
         shift; envf=""
         [[ "${1:-}" == --env-file ]] && { envf="$2"; shift 2; }
         proj="$(basename "${envf:-none.env}" .env)"
+        while [[ "${1:-}" == --profile ]]; do shift 2; done   # the build phase's --profile '*'
         case "${1:-}" in
             config)
                 if [[ "${SHIM_COMPOSE_CONFIG:-}" == fail ]]; then
@@ -199,6 +201,11 @@ case "$1" in
                     exit 1
                 fi ;;
             up) : ;;
+            build)
+                if [[ "${SHIM_BUILD:-}" == fail ]]; then
+                    echo "shim-build-error: failed to solve: process did not complete successfully" >&2
+                    exit 1
+                fi ;;
             *) echo "shim: unhandled compose call: $*" >&2; exit 1 ;;
         esac ;;
     rm) : ;;   # teardown: `docker rm -f` of whatever ps listed

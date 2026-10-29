@@ -43,7 +43,11 @@
 # POOLED_STACK + POOLED_ENV_DIR; customer-layout lays its GREMION_ROOT out
 # like a host's) or a host after TASK-038's re-init (PROOF_GREMION_ROOT=/opt/gremion,
 # POOLED_STACK=<stack>, POOLED_ENV_DIR=/opt/gremion/etc/env). The operator id
-# of every mutating verb is PROOF_OPERATOR_ID (a platform-realm user id).
+# of every mutating verb is the proof operator customer-init creates in the
+# CURRENT ops realm (#50 item 6), or PROOF_OPERATOR_ID (a platform-realm user
+# id, checked there by customer-init). On a scratch stack the run is pinned to
+# the sha pooled-stack-proof.sh prepared it at (PROOF_HEAD_SHA): STACK is
+# t043-<that sha8>, and every customer phase refuses once HEAD has moved.
 #   customer-layout  scratch only: etc/env, runtime/active-colour, etc/edge
 #   customer-before  TRD-440 baseline (running containers, every project's
 #                    config --services), pg_database lists, no gremion_platform
@@ -134,7 +138,20 @@ docker() { MSYS_NO_PATHCONV=1 command docker "$@"; }
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 host_path() { if command -v cygpath >/dev/null 2>&1; then cygpath -m "$1"; else printf '%s' "$1"; fi; }
 ROOT_H="$(host_path "$ROOT")"
+head_now() { git -C "$ROOT_H" rev-parse HEAD 2>/dev/null | tr -d '\r' || true; }
+PSTACK="${POOLED_STACK:-}"
+PENV="${POOLED_ENV_DIR:-}"
+# #50: a customer run is about the sha its pooled stack was prepared at
+# (pooled-stack-proof.sh render-env writes PROOF_HEAD_SHA into state.env). Its
+# name derives from THAT sha, never from a HEAD moved mid-run (which renamed
+# the ledger), and need_pooled refuses a moved HEAD (whose tip the gate
+# fixtures do not carry: ISOLATION_STALE_TIP). A host's env files carry no pin.
+PIN_SHA=""
+if [[ -n "$PENV" && -r "$PENV/state.env" ]]; then
+    PIN_SHA="$(sed -n 's/^PROOF_HEAD_SHA=//p' "$PENV/state.env" | tr -d '"\r' | tail -n1)"
+fi
 if [[ -n "${PROOF_STACK:-}" ]]; then STACK="$PROOF_STACK"
+elif [[ -n "$PIN_SHA" ]]; then STACK="t043-${PIN_SHA:0:8}"
 else STACK="t043-$(git -C "$ROOT_H" rev-parse --short=8 HEAD)"; fi
 OUT="${PROOF_OUT:-${ROOT}/.scratch/customer-provision-proof/${STACK}}"
 SROOT="${OUT}/root"                       # the scratch GREMION_ROOT
@@ -444,9 +461,7 @@ phase_panel_down() {
 }
 
 # ── customer (section 1), against a RUNNING pooled stack ───────────────────
-PSTACK="${POOLED_STACK:-}"
-PENV="${POOLED_ENV_DIR:-}"
-X=proof-x                 # the customer under proof
+X=proof-x                # the customer under proof
 Y=proof-y                 # the second customer (unaffected by X's suspend)
 XT="${X//-/_}"
 # perm_hint <path> -- the run-as-root hint, only when a permission problem is
@@ -460,12 +475,66 @@ need_pooled() { # [no-operator]
     [[ -n "$PSTACK" && -d "$PENV" && -f "$PENV/state.env" ]] || die "set POOLED_STACK and POOLED_ENV_DIR (a running pooled stack's env files)$(perm_hint "$PENV")"
     # the file is there: an unreadable one is its own failure, not a missing variable
     [[ -r "$PENV/state.env" ]] || die "cannot read ${PENV}/state.env$(perm_hint "$PENV/state.env")"
-    # customer-layout precedes the operator: `gremion-tenant init` (the ops
-    # realm) and `operator add` (the user whose id PROOF_OPERATOR_ID is) both
-    # run against the root it lays out.
+    if [[ -n "$PIN_SHA" ]]; then
+        local now; now="$(head_now)"
+        [[ "$now" == "$PIN_SHA" ]] \
+            || die "HEAD moved: the pooled stack ${PSTACK} was prepared at ${PIN_SHA:0:12}, HEAD is now ${now:-unreadable}. Check ${PIN_SHA:0:12} out again to go on (the gate fixtures, the images and the ledger ${STACK} are that sha's)"
+    fi
+    # customer-layout, customer-before and customer-init precede the operator:
+    # customer-init creates it (ensure_operator) in the ops realm `gremion-tenant
+    # init` makes, against the root customer-layout lays out.
     [[ "${1:-}" == no-operator ]] && return 0
-    [[ "${PROOF_OPERATOR_ID:-}" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$ ]] \
-        || die "set PROOF_OPERATOR_ID (a platform-realm user id, lowercase uuid)"
+    if [[ -z "${PROOF_OPERATOR_ID:-}" && -s "$OUT/secrets/operator-id" ]]; then
+        PROOF_OPERATOR_ID="$(tr -d '\r\n' < "$OUT/secrets/operator-id")"
+    fi
+    [[ "${PROOF_OPERATOR_ID:-}" =~ $UUID_RE ]] \
+        || die "no operator: run customer-init (it creates the proof operator in the current ops realm), or set PROOF_OPERATOR_ID (a platform-realm user id, lowercase uuid)"
+}
+UUID_RE='^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'
+# ensure_operator -- #50 item 6: the operator of every mutating verb is a user of
+# the CURRENT ops realm (request-verify re-reads it: exists, enabled, holds the
+# operator role). A hand-set id from an earlier stack was refused at
+# executor-once. PROOF_OPERATOR_ID, when set, must exist in this realm (and is
+# required on a host); otherwise, on a scratch pooled stack only, the proof's
+# own operator is looked up by email or created (kcadm
+# in the state Keycloak, no password: nobody signs in as it), given the role,
+# and its id kept in ${OUT}/secrets/operator-id, which pooled teardown removes
+# with the stack. Returns 1 after bad() when it cannot.
+ensure_operator() {
+    local email uid out err="$OUT/.kcadm.err"
+    mkdir -p "$OUT"
+    if [[ -n "${PROOF_OPERATOR_ID:-}" ]]; then
+        if skc get "users/${PROOF_OPERATOR_ID}" -r platform --fields id >/dev/null 2>"$err"; then
+            rm -f "$err"; ok "customer-init: PROOF_OPERATOR_ID ${PROOF_OPERATOR_ID} is a user of the current ops realm"; return 0
+        fi
+        # only Keycloak's not-found is "stale"; an outage or a refused login is said as it is
+        if grep -qi 'not found' "$err"; then
+            bad "customer-init: PROOF_OPERATOR_ID ${PROOF_OPERATOR_ID} does not exist in the current ops realm (an id from an earlier stack?): unset it and customer-init creates the proof operator (scratch stacks only)"
+        else bad "customer-init: kcadm could not look PROOF_OPERATOR_ID ${PROOF_OPERATOR_ID} up: $(head -n 3 "$err" | tr -d '\r' | tr '\n' ' ')"; fi
+        rm -f "$err"; return 1
+    fi
+    # A host's ops realm is the operators' own: the proof adds no user there.
+    [[ -n "$(scratch_stack)" ]] || { bad "customer-init: on a host set PROOF_OPERATOR_ID (an existing operator); the proof creates its operator on a scratch pooled stack only"; return 1; }
+    skc get realms/platform --fields realm >/dev/null 2>"$err" \
+        || { bad "customer-init: kcadm cannot read the ops realm platform after init: $(head -n 3 "$err" | tr -d '\r' | tr '\n' ' ')"; rm -f "$err"; return 1; }
+    email="proof-operator@$(penv PLATFORM_DOMAIN)"
+    # a failed lookup is its own failure, never "no such user" (which would create)
+    out="$(skc get users -r platform -q "email=${email}" -q exact=true --fields id 2>"$err")" \
+        || { bad "customer-init: kcadm could not look the proof operator ${email} up: $(head -n 3 "$err" | tr -d '\r' | tr '\n' ' ')"; rm -f "$err"; return 1; }
+    uid="$(jq -r '.[0].id // ""' <<< "$out" | tr -d '\r')"
+    if [[ -z "$uid" ]]; then
+        skc create users -r platform -s "username=${email}" -s "email=${email}" -s enabled=true -s emailVerified=true >/dev/null 2>"$err" \
+            || { bad "customer-init: kcadm could not create the proof operator ${email}: $(head -n 3 "$err" | tr -d '\r' | tr '\n' ' ')"; rm -f "$err"; return 1; }
+        out="$(skc get users -r platform -q "email=${email}" -q exact=true --fields id 2>"$err")" || out='[]'
+        uid="$(jq -r '.[0].id // ""' <<< "$out" | tr -d '\r')"
+    fi
+    rm -f "$err"
+    [[ "$uid" =~ $UUID_RE ]] || { bad "customer-init: the proof operator ${email} has no id after create (${uid:-none})"; return 1; }
+    skc add-roles -r platform --uid "$uid" --rolename operator >/dev/null \
+        || { bad "customer-init: kcadm could not grant the operator role to ${email}"; return 1; }
+    printf '%s\n' "$uid" | secret_file operator-id
+    PROOF_OPERATOR_ID="$uid"
+    ok "customer-init: the proof operator ${email} (${uid}) holds the operator role in the current ops realm"
 }
 penv() { sed -n "s/^$1=//p" "$PENV/state.env" | tr -d '"\r' | tail -n1; }
 croot() { if [[ -n "${PROOF_GREMION_ROOT:-}" ]]; then printf '%s' "$PROOF_GREMION_ROOT"; else penv GREMION_ROOT; fi; }
@@ -485,7 +554,7 @@ skc() { # kcadm in the state keycloak (the admin password by a name-only -e)
 }
 tenant() { # gremion-tenant against the laid-out root, as the operator
     MSYS_NO_PATHCONV=1 GREMION_ROOT="$(host_path "$(croot)")" GREMION_RELEASE_DIR="$ROOT_H" \
-        GREMION_OPERATOR_ID="$PROOF_OPERATOR_ID" TENANT_DNS_PREFLIGHT="${PROOF_DNS_PREFLIGHT:-off}" \
+        GREMION_OPERATOR_ID="${PROOF_OPERATOR_ID:-}" TENANT_DNS_PREFLIGHT="${PROOF_DNS_PREFLIGHT:-off}" \
         GREMION_SCRATCH_FIXTURES="$(scratch_stack)" GREMION_PRODUCTION_STACK=none \
         bash "$ROOT/infra/host/bin/gremion-tenant" "$@"
 }
@@ -497,7 +566,7 @@ tenant() { # gremion-tenant against the laid-out root, as the operator
 # verifies and runs it like any panel request).
 executor() { # gremion-executor against the laid-out root, as tenant() runs the host tool
     MSYS_NO_PATHCONV=1 GREMION_ROOT="$(host_path "$(croot)")" GREMION_RELEASE_DIR="$ROOT_H" \
-        GREMION_OPERATOR_ID="$PROOF_OPERATOR_ID" TENANT_DNS_PREFLIGHT="${PROOF_DNS_PREFLIGHT:-off}" \
+        GREMION_OPERATOR_ID="${PROOF_OPERATOR_ID:-}" TENANT_DNS_PREFLIGHT="${PROOF_DNS_PREFLIGHT:-off}" \
         GREMION_SCRATCH_FIXTURES="$(scratch_stack)" GREMION_PRODUCTION_STACK=none \
         bash "$ROOT/infra/host/bin/gremion-executor" "$@"
 }
@@ -811,7 +880,7 @@ phase_customer_layout() {
 }
 
 phase_customer_before() {
-    need_pooled
+    need_pooled no-operator
     mkdir -p "$OUT/ledger"
     trd440 > "$OUT/ledger/trd440-before.txt"
     [[ "$(sed -n 's/^running=//p' "$OUT/ledger/trd440-before.txt")" -gt 0 ]] || die "no container runs: this is not a running pooled stack"
@@ -828,16 +897,18 @@ phase_customer_before() {
 # `gremion-tenant init`: the platform catalogue rows (plt.module_version, plt.module)
 # and the ops realm. seed_gate_fixtures and the level-1 gate need them; before
 # TASK-044's fix no phase ran it. Skipped when the catalogue is already loaded.
+# Then, on every run, the operator of the realm that is there NOW (#50 item 6).
 phase_customer_init() {
-    need_pooled
+    need_pooled no-operator
     mkdir -p "$OUT/ledger"
     if [[ -n "$(q postgres "SELECT 1 FROM pg_database WHERE datname = 'gremion_platform'")" ]]         && [[ "$(q gremion_platform "SELECT count(*) FROM plt.module_version")" -ge 1 ]]; then
         ok "customer-init: gremion_platform already carries the module catalogue (a rerun): init not repeated"
-        return
+    else
+        tenant init --panel-origin "https://${PANEL_HOST}" > "$OUT/ledger/init.log" 2>&1         || { tail -n 25 "$OUT/ledger/init.log" >&2; bad "customer-init: gremion-tenant init failed"; return; }
+        if [[ "$(q gremion_platform "SELECT count(*) FROM plt.module_version")" -ge 1 ]]; then ok "customer-init: gremion-tenant init loaded the catalogue (plt.module_version rows present)"
+        else bad "customer-init: init exited 0 but plt.module_version is empty"; return; fi
     fi
-    tenant init --panel-origin "https://${PANEL_HOST}" > "$OUT/ledger/init.log" 2>&1         || { tail -n 25 "$OUT/ledger/init.log" >&2; bad "customer-init: gremion-tenant init failed"; return; }
-    if [[ "$(q gremion_platform "SELECT count(*) FROM plt.module_version")" -ge 1 ]]; then ok "customer-init: gremion-tenant init loaded the catalogue (plt.module_version rows present)"
-    else bad "customer-init: init exited 0 but plt.module_version is empty"; fi
+    ensure_operator || return 0
 }
 
 phase_customer_create_refuse() {
@@ -1304,11 +1375,17 @@ run_phase() {
     esac
 }
 
-[[ $# -gt 0 ]] || die "usage: customer-provision-proof.sh <phase>... (see the header)"
-PHASES="$*"
-info "STACK=${STACK} ledger=${OUT}/ledger"
-for ph in "$@"; do run_phase "$ph"; done
-printf '%s phases [%s] checks=%s RED=%s\n' "$(now)" "$PHASES" "$CHECKS" "$RED" | ledger run.log
-(( CHECKS > 0 )) || { echo "[customer-proof] RED: zero checks ran" >&2; exit 1; }
-if (( RED )); then echo "[customer-proof] RED" >&2; exit 1; fi
-echo "[customer-proof] GREEN (${CHECKS} checks)"
+main() {
+    [[ $# -gt 0 ]] || die "usage: customer-provision-proof.sh <phase>... (see the header)"
+    PHASES="$*"
+    info "STACK=${STACK} ledger=${OUT}/ledger"
+    local ph
+    for ph in "$@"; do run_phase "$ph"; done
+    printf '%s phases [%s] checks=%s RED=%s\n' "$(now)" "$PHASES" "$CHECKS" "$RED" | ledger run.log
+    (( CHECKS > 0 )) || { echo "[customer-proof] RED: zero checks ran" >&2; exit 1; }
+    if (( RED )); then echo "[customer-proof] RED" >&2; exit 1; fi
+    echo "[customer-proof] GREEN (${CHECKS} checks)"
+}
+# sourced (test/host/customer-provision-proof.bats unit-tests the helpers): stop here
+[[ "${BASH_SOURCE[0]}" == "$0" ]] || return 0
+main "$@"

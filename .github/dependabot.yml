@@ -7,8 +7,8 @@
 # pins are reproducible but stagnant — security patches in upstream Actions
 # never land.
 #
-# Current limits: github-actions 5, npm 10, docker 5 (both blocks). Nothing is
-# paused. Schedule cadence is weekly across the board to avoid PR-bombing
+# Current limits: github-actions 5, docker 5 (both blocks). Nothing is
+# paused. There is no npm entry; see the RETIRED note under updates. Schedule cadence is weekly across the board to avoid PR-bombing
 # reviewers; development-only dependencies are grouped into one PR per
 # ecosystem, while runtime dependencies still get individual PRs so their
 # changelogs can be evaluated case by case.
@@ -43,31 +43,18 @@ updates:
     open-pull-requests-limit: 5
     labels: [dependencies, ci]
 
-  # Root pnpm workspace — the authoritative lockfile in workspace mode, and
-  # the only npm entry there should be (see the header).
-  - package-ecosystem: npm
-    directory: /
-    schedule:
-      interval: weekly
-    open-pull-requests-limit: 10
-    labels: [dependencies, root]
-    groups:
-      dev-dependencies:
-        dependency-type: development
-        # Bundle only safe bumps. Major framework jumps (vite, vitest,
-        # typescript, tailwindcss, svelte-check, jsdom, @types/node,
-        # @sveltejs/vite-plugin-svelte) must land as individual PRs so
-        # their changelogs can be reviewed case-by-case. See closed #43
-        # for why a single dev-deps mega-bundle is unmaintainable.
-        update-types: [patch, minor]
-    ignore:
-      # TypeScript 7 (native compiler) is not adoptable yet; see closed #12.
-      # svelte-check 4.7 needs TS 6 installed beside TS 7 plus --tsgo, and
-      # TS 7 ships no classic JS compiler API (packages/tenant-store's
-      # source-scan test uses ts.createSourceFile). Remove this ignore when
-      # the TS 7 migration is planned.
-      - dependency-name: "typescript"
-        update-types: ["version-update:semver-major"]
+  # RETIRED (2026-10-29): the root npm entry. Dependabot's npm updater runs
+  # Node v24.22.1 only and has no option to pick another version. This repo
+  # requires Node 26 everywhere (TASK-017, D R19-D34: engines.node ">=26 <27",
+  # engineStrict in pnpm-workspace.yaml, enforced by scripts/check-toolchain.mjs),
+  # so every npm update job ended in tool_version_not_supported and opened no
+  # PRs (runs 40953188266, 40957003855). Operator decision: keep Node 26 and
+  # retire the job rather than widen engines.node. npm/pnpm bumps are done by
+  # hand, batched; `pnpm outdated -r` and `pnpm audit` list what is due.
+  # Restore the entry (weekly, limit 10, labels [dependencies, root], the
+  # dev-dependencies patch/minor group, and the typescript semver-major ignore
+  # from #55 until a TS 7 migration is planned) once the updater supports
+  # Node 26: the job log line "supported-versions" names what it runs.
 
   # Docker images — every Dockerfile in docker/, modules/ and the gremion-ui
   # one, plus both bats runners.
