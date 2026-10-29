@@ -28,7 +28,9 @@
       "legacyFloor": 0,
       "legacy": [],
       "files": {
-        "0001_idt_setup.sql": "5959761784f2363867c83a17281d13766d04bf5280b0f010754e6983c041602d"
+        "0001_idt_setup.sql": "5959761784f2363867c83a17281d13766d04bf5280b0f010754e6983c041602d",
+        "0002_idt_plumbing_structure.sql": "b9c9cd3286a3d90aced668a5ec0a4abc73ad6131819660943a9e49750dd19906",
+        "0003_idt_person_membership_tenure.sql": "6f1c24d1ff1f6d89494b5635ca310517a2575c5eb41d1e1e35181a08ede5f36e"
       }
     },
     "kernel-data": {
