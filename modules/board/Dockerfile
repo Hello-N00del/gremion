@@ -4,8 +4,10 @@
 # modules/board-only context cannot resolve the workspace. Build with:
 #   docker build -f modules/board/Dockerfile -t gremion/board:<tag> .
 # Mirrors gremion-ui/Dockerfile. The board leaf bundles @gremion/tenant-store (per-tenant
-# board store) and its workspace deps @gremion/db + @gremion/module-catalogue (+ @gremion/generated-clients, @gremion/retention), so those
-# packages are copied from the tree; NO @gremion/ports.
+# board store). The tenant store's own workspace dependencies (the kernel database package,
+# module-catalogue, generated-clients, retention) arrive transitively, and `pnpm install
+# --frozen-lockfile` needs every one of them in the tree, so they are copied here; the leaf
+# itself depends on none of them directly (test/no-phantom-stura-db.test.ts). NO @gremion/ports.
 FROM node:26-alpine AS builder
 WORKDIR /repo
 
