@@ -176,6 +176,23 @@ async function closeRows(tx: Sql, ids: string[], revoker: Actor | null, reason: 
   )
 }
 
+/**
+ * TRD-113 on the revoke side: a person revokes a grant only when a role they verifiably hold (live, in the
+ * grant's body, or a customer-level role held in the verwaltung) includes what the grant carries, the same
+ * rule issueGrant applies with the named granterRole. Operators are exempt (control-panel authority).
+ */
+async function assertRevokeIncluded(tx: Sql, actor: Actor, bodyId: string, g: { role_key: string | null; capability_key: string | null }): Promise<void> {
+  if (actor.kind !== 'person') return
+  const held = await tx<{ role_key: string }[]>`
+    SELECT DISTINCT g.role_key FROM idt.authz_grant g
+     WHERE g.subject_person_id = ${actor.id}::uuid AND g.body_id = ${bodyId}::uuid AND g.grant_kind = 'role'
+       AND g.state IN ('active', 'scheduled') AND g.valid_from <= now() AND (g.valid_until IS NULL OR g.valid_until > now())`
+  const roles = [...new Set([...held.map((h) => h.role_key), ...(await customerWideGrantRoles(tx, actor.id))])]
+  const kind = g.role_key ? 'role' : 'capability'
+  const key = (g.role_key ?? g.capability_key)!
+  if (!roles.some((r) => roleIncludes(r, kind, key))) throw new GrantError('granter_role_mismatch', `no role the revoker holds includes ${kind} ${key}`)
+}
+
 export async function revokeGrant(sql: Sql, deps: GrantDeps, customerId: string, revoker: Granter, grantId: string): Promise<GrantRow> {
   assertUuid(grantId, 'grantId')
   return inCustomerTx(sql, customerId, async (tx) => {
@@ -184,6 +201,7 @@ export async function revokeGrant(sql: Sql, deps: GrantDeps, customerId: string,
     const g = cur[0]
     if (!g) throw new GrantError('not_open', 'no such grant in this customer')
     const who = await authoriseManager(tx, deps, customerId, revoker, g.body_id)
+    await assertRevokeIncluded(tx, who, g.body_id, g)
     const privileged = g.role_key ? isPrivilegedRole(g.role_key) : g.capability_key ? isPrivilegedCapability(g.capability_key) : false
     if (privileged) requireStepUp(revoker, deps)
     const rows = await closeRows(tx, [grantId], who, 'manual')
@@ -199,10 +217,12 @@ export async function revokeAllForPerson(sql: Sql, deps: GrantDeps, customerId: 
   assertUuid(personId, 'personId')
   requireStepUp(revoker, deps)
   return inCustomerTx(sql, customerId, async (tx) => {
-    const open = await tx<{ grant_id: string; body_id: string }[]>`
-      SELECT grant_id::text, body_id::text FROM idt.authz_grant WHERE subject_person_id = ${personId}::uuid AND state IN ('scheduled', 'active') ORDER BY grant_id`
+    const open = await tx<{ grant_id: string; body_id: string; role_key: string | null; capability_key: string | null }[]>`
+      SELECT grant_id::text, body_id::text, role_key, capability_key FROM idt.authz_grant WHERE subject_person_id = ${personId}::uuid AND state IN ('scheduled', 'active') ORDER BY grant_id`
     let who: Actor | null = null
     for (const bodyId of new Set(open.map((o) => o.body_id))) who = await authoriseManager(tx, deps, customerId, revoker, bodyId)
+    // TRD-113: one grant the revoker's roles do not include refuses the whole call (nothing is closed)
+    if (who) for (const o of open) await assertRevokeIncluded(tx, who, o.body_id, o)
     who ??= revoker.kind === 'operator' ? { kind: 'operator', id: revoker.operatorId } : { kind: 'person', id: await personBySub(tx, revoker.claims) }
     const rows = await closeRows(tx, open.map((o) => o.grant_id), who, 'manual')
     for (const r of rows) await emitGrantEvent(tx, 'revoked', r)

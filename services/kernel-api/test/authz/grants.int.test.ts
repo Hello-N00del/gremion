@@ -341,3 +341,35 @@ describe('customer-level granter authority across bodies of one customer', () =>
     expect(await count(w)).toBe(before)
   })
 })
+
+// TRD-113 on the revoke side: a revoker may close only grants of roles its own role includes, the
+// same rule as granting. Without it an it_admin (grants: body roles only) strips every council_admin.
+describe('TRD-113 revoke honours the role-inclusion rule', () => {
+  const seedCouncilAdmin = async (sub: string) => {
+    const p = uuidv7()
+    await insertPerson(w.db.admin, w.db.customerId, p, sub)
+    const id = await seedGrant(w.db.admin, w.db.customerId, { bodyId: w.verwaltung, personId: p, key: 'council_admin' })
+    return { p, id }
+  }
+  const stateOf = async (id: string) => (await w.db.admin<{ state: string }[]>`SELECT state FROM idt.authz_grant WHERE grant_id = ${id}::uuid`)[0]!.state
+
+  it('negative: an it_admin revoking a council_admin grant is 403 granter_role_mismatch, the grant stays active, no revoked event', async () => {
+    const { id } = await seedCouncilAdmin('sub-ca-victim-1')
+    const e = await refused(revokeGrant(w.db.app, deps, w.db.customerId, claims('sub-itv'), id))
+    expect([e.code, e.status]).toEqual(['granter_role_mismatch', 403])
+    expect(await stateOf(id)).toBe('active')
+    expect((await events(w, id)).map((x) => x.event_type)).not.toContain('de.gremion.idt.grant.revoked.v1')
+  })
+  it('negative: the same through revoke-all (an it_admin cannot strip a person holding council_admin), nothing is closed', async () => {
+    const { p, id } = await seedCouncilAdmin('sub-ca-victim-2')
+    const e = await refused(revokeAllForPerson(w.db.app, deps, w.db.customerId, claims('sub-itv'), p))
+    expect([e.code, e.status]).toEqual(['granter_role_mismatch', 403])
+    expect(await stateOf(id)).toBe('active')
+  })
+  it('positive: an it_admin still revokes a body role (member) in any body; a council_admin revokes a council_admin', async () => {
+    const m = await issueGrant(w.db.app, deps, w.db.customerId, claims('sub-carol'), { bodyId: w.bodyB, subjectPersonId: w.persons.bob!, grantKind: 'role', key: 'member', granterRole: 'council_admin' })
+    expect((await revokeGrant(w.db.app, deps, w.db.customerId, claims('sub-itv'), m.grant_id)).state).toBe('revoked')
+    const { id } = await seedCouncilAdmin('sub-ca-victim-3')
+    expect((await revokeGrant(w.db.app, deps, w.db.customerId, claims('sub-carol'), id)).state).toBe('revoked')
+  })
+})
