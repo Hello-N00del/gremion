@@ -23,6 +23,28 @@ const pkg = JSON.parse(fs.readFileSync(path.join(SERVICE_ROOT, 'package.json'), 
   devDependencies?: Record<string, string>
 }
 const dockerfile = fs.readFileSync(path.join(SERVICE_ROOT, 'Dockerfile'), 'utf-8')
+// Read through the leaf's own workspace link (node_modules/@gremion/tenant-store), the way the
+// leaf itself resolves it, not by a path literal that climbs out of modules/board/ (which
+// check-module-source-scan forbids).
+const tenantStorePkg = JSON.parse(
+  fs.readFileSync(path.join(SERVICE_ROOT, 'node_modules', '@gremion', 'tenant-store', 'package.json'), 'utf-8'),
+) as { dependencies?: Record<string, string> }
+
+/**
+ * The only Dockerfile lines allowed to name the kernel DB package: the two COPY lines that
+ * bring the tenant store's TRANSITIVE workspace dependency into the build tree (`pnpm install
+ * --frozen-lockfile` fails without it). Anything else naming it (a comment, a --filter, a
+ * RUN build step, a second COPY form) is a direct coupling.
+ */
+export const DB_COPY_LINE = /^COPY packages\/db(\/package\.json)? \.\/packages\/db\/$/
+
+/** Dockerfile lines that name @gremion/db or packages/db other than the transitive COPY lines. */
+export function directDbCouplings(dockerfileText: string): string[] {
+  return dockerfileText
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter((l) => (l.includes('@gremion/db') || /packages\/db(\/|\s|$)/.test(l)) && !DB_COPY_LINE.test(l))
+}
 
 /** The only workspace package the leaf may depend on (TRD-426: the one way into a tenant database). */
 export const ALLOWED_WORKSPACE_DEPS: readonly string[] = ['@gremion/tenant-store']
@@ -60,6 +82,25 @@ describe('forbiddenWorkspaceDeps (self-test)', () => {
   })
 })
 
+describe('directDbCouplings (self-test)', () => {
+  it('accepts exactly the two transitive COPY lines', () => {
+    expect(directDbCouplings('COPY packages/db/package.json ./packages/db/\nCOPY packages/db ./packages/db/\n')).toEqual([])
+  })
+  it('refuses a comment, a --filter, a build step and differently shaped COPYs', () => {
+    expect(
+      directDbCouplings(
+        [
+          '# the leaf bundles @gremion/db',
+          'RUN pnpm --filter @gremion/db build',
+          'RUN cd packages/db && pnpm build',
+          'COPY packages/db ./somewhere-else/',
+          'COPY --from=builder /repo/packages/db ./packages/db/',
+        ].join('\n'),
+      ),
+    ).toHaveLength(5)
+  })
+})
+
 describe('board leaf — no phantom kernel-DB coupling', () => {
   it('package.json declares no direct @gremion/db dependency', () => {
     expect(Object.keys(allDeps)).not.toContain('@gremion/db')
@@ -73,9 +114,13 @@ describe('board leaf — no phantom kernel-DB coupling', () => {
     expect(pkg.dependencies?.['@gremion/tenant-store']).toBe('workspace:*')
   })
 
-  it('Dockerfile references @gremion/db / packages/db nowhere', () => {
-    expect(dockerfile).not.toContain('@gremion/db')
-    expect(dockerfile).not.toMatch(/packages\/db/)
+  it("Dockerfile names @gremion/db / packages/db only on the COPY lines for the tenant store's transitive dependency", () => {
+    expect(directDbCouplings(dockerfile)).toEqual([])
+  })
+
+  it('Dockerfile copies packages/db exactly when @gremion/tenant-store depends on @gremion/db', () => {
+    const copies = dockerfile.split(/\r?\n/).some((l) => l.trim().startsWith('COPY packages/db '))
+    expect(copies).toBe(Boolean(tenantStorePkg.dependencies?.['@gremion/db']))
   })
 
   it('no source file hardcodes a `stura_`-prefixed (live kernel) database name', () => {

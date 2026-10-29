@@ -105,6 +105,11 @@ function deploy(images, opts = {}) {
     copyFileSync(opts.treePub, join(tree, 'etc', 'cosign.pub'))
   }
   if (opts.hostPub !== null) copyFileSync(opts.hostPub ?? hostKey.pub, join(root, 'etc', 'cosign.pub'))
+  // H10: step 2 authenticates the release tag against the host's etc/allowed_signers
+  // before it reads the tree. The git shim below answers verify-tag with success, so
+  // the placeholder is never parsed (same convention as test/host/deploy.bats); tag
+  // authentication itself is proved there with real git and real throwaway keys.
+  writeFileSync(join(root, 'etc', 'allowed_signers'), 'release@example.test namespaces="git" ssh-ed25519 placeholder-not-a-key\n')
   if (opts.thirdParty) writeFileSync(join(root, 'etc', 'third-party-images'), opts.thirdParty.join('\n') + '\n')
   writeFileSync(
     join(root, 'etc/env/state.env'),

@@ -67,8 +67,12 @@ test('a tag reference elsewhere in the tree is RED; the named exclusions pass wh
 
 test('a stale exclusion (its line gone) is RED', () => {
   const files = Object.fromEntries(EXCLUSIONS.map((e) => [e.file, `x\n${exLine(e)}\n`]))
-  files[EXCLUSIONS[0].file] = 'STALWART_IMAGE=stalwartlabs/stalwart:v0.16.22\n'
-  assert.match(treeViolations([], files).join('\n'), /stale exclusion: test\/host\/integration\/pooled-stack-proof\.sh no longer carries/)
+  // the first line-scoped exclusion (not a whole-file one), whichever that is today
+  const e = EXCLUSIONS.find((x) => x.line !== null)
+  assert.ok(e, 'no line-scoped exclusion left to prove the stale path on')
+  files[e.file] = 'STALWART_IMAGE=stalwartlabs/stalwart:v0.16.22\n'
+  const escaped = e.file.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')
+  assert.match(treeViolations([], files).join('\n'), new RegExp(`stale exclusion: ${escaped} no longer carries`))
 })
 
 test("TASK-048's digest-lint tests are one whole-file exclusion: any seeded ref there passes, and it is stale once the file has none (fix round 2)", () => {

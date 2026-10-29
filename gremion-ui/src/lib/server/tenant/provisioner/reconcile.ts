@@ -639,7 +639,7 @@ export async function reconcileRealm(transport: KcTransport, opts: ReconcileOpti
   // ── TASK-033-a: every Bearer client issues `sub` ──────────────────────────────
   // A token without `sub` has no session (sessionUserFromPayload), so a client whose access token lacks
   // it locks its own users out. Read, per Bearer client, the client's own mappers and the mappers of its
-  // default client scopes (Keycloak 25+ issues `sub` through the built-in `basic` scope; a realm imported
+  // default client scopes (Keycloak 25+ issues `sub` through the built-in `basic` scope; a realm built
   // from our template has no such scope). A client absent from the realm issues no tokens.
   const subMissing: Array<{ clientId: string; id: string }> = []
   for (const clientId of BEARER_CLIENT_IDS) {

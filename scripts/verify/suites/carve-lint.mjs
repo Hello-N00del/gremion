@@ -78,6 +78,14 @@ export const CARVE_LINT_TARGETS = [
   // messaging-postgres and matrix): docker. The scratch proof (synapse-proof)
   // is deliberately NOT here.
   { name: 'lint-synapse', kind: 'make', target: 'lint-synapse', tool: 'docker' },
+  // Three `make lint` targets merged to main (2026-10-29) without a row here, which left carve-lint.test.mjs
+  // red on main until the rows below. Node-only, no external tool.
+  { name: 'lint-dockerfile-workspace-closure', kind: 'make', target: 'lint-dockerfile-workspace-closure' },
+  { name: 'lint-ci-docker-filter', kind: 'make', target: 'lint-ci-docker-filter' },
+  { name: 'lint-traefik-stack-scope', kind: 'make', target: 'lint-traefik-stack-scope' },
+  // The CI verify legs cover every required suite once, and the gate cannot be
+  // softened (scripts/check-ci-verify-coverage.mjs reads .github/workflows/ci.yml).
+  { name: 'lint-ci-verify-coverage', kind: 'make', target: 'lint-ci-verify-coverage' },
   {
     name: 'lockfile-frozen',
     kind: 'cmd',

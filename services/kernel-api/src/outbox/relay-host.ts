@@ -140,8 +140,10 @@ export function createRelayHost(o: RelayHostOptions): RelayHost {
         }
       }
     }
-    for (const id of [...skipped.keys()]) if (!activeIds.has(id)) skipped.delete(id)
-    for (const [id, r] of [...relays]) {
+    for (const id of skipped.keys()) if (!activeIds.has(id)) skipped.delete(id)
+    // Live iteration is safe: reconcileOnce is serialised (inFlight), additions happen only in
+    // the loop below, and a Map skips an entry deleted (by halt) before it is reached.
+    for (const [id, r] of relays) {
       const t = wanted.get(id)
       if (!t) await halt(id, activeIds.has(id) ? `the customer database is not current (${skipped.get(id) ?? 'gate verdict'})` : 'the customer is no longer active')
       else if (t.dbConnRef !== r.tenant.dbConnRef) await halt(id, 'db_conn_ref changed')

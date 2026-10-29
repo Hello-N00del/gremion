@@ -250,7 +250,7 @@ restarting containers cannot make a missing file appear.
 ## 5. The deploy channel
 
 ```
-deploy.yml (workflow_dispatch, environment production)
+the operator's deploy client (a manual step; the deploy.yml workflow that did this was retired)
     │  ssh, forced command, key-only, no pty
     ▼
 gremion-hostd --ssh          allow-list + argument validation
@@ -304,7 +304,7 @@ always ends with an `EXIT <code>` trailer:
 ```
 
 **The agent's `EXIT` trailer, not the ssh exit status, is the verdict:**
-`deploy.yml` reads the last `EXIT <code>` line, fails the run on any non-zero
+the deploy client reads the last `EXIT <code>` line, fails the run on any non-zero
 code, and fails the run when the response carries no `EXIT` trailer at all —
 a connection dropped just after a success line must never read as a green
 deploy. A zero trailer together with a non-zero ssh status also fails.
@@ -315,19 +315,23 @@ disk. `gremion-deploy` runs `docker login ghcr.io -u x-access-token
 that no `auths` entry survives in either Docker config. The host therefore
 holds no standing registry credential between deploys.
 
-`deploy.yml` itself is dispatch-only, read-only on the repository token,
-single-flight per target, and runs in a GitHub environment that requires a
-reviewer. Before it opens SSH it proves the tag is annotated, matches
+`deploy.yml` is retired (TRD-364: no CI runner holds a deploy credential);
+`.github/workflows/release-images.yml` builds and pins the images keylessly and
+`scripts/release/cut-dist-tag.sh` signs and tags on the operator workstation.
+Before a tag is pushed, `scripts/release/release-tag-check.sh` proves it is
+annotated, matches
 `dist-vX.Y.Z`, and carries a `release.json` naming that same tag with an
 explicit boolean `overlap`, an array of `migrations` and a `sha256:` manifest
 digest, plus a `docker-compose.pins.yml`, at its tree root. (`gremion-deploy`
 itself also requires the state layer `docker-compose.state-pins.yml` at its
-step 2; `deploy.yml` checks only the app layer, a dormant residual.)
+step 2; `release-tag-check.sh` checks only the app layer, a dormant residual.)
 
 ### What the operator must create before the first dispatch
 
-`deploy.yml` cannot run until these exist. None of them is in this repository,
-and none of them can be created by the tooling:
+These belong to the retired `deploy.yml` (items 1 to 3 are now dead and the
+operator removes them; item 4 is still how a deploy client reaches the host).
+None of them is in this repository, and none of them can be created by the
+tooling:
 
 1. **Actions enabled on the repository.** They are administratively disabled
    on all Gremion repositories by operator directive over usage cost:

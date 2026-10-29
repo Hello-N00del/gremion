@@ -1,0 +1,330 @@
+name: Release images
+
+# Builds every first-party image of a release, pushes it to ghcr.io and emits
+# the pins layers that name the pushed digests. It replaces deploy.yml, which
+# handed a deploy key to an Actions runner (TRD-364).
+#
+# KEYLESS. The only credential here is GITHUB_TOKEN, minted for the run and
+# expiring with it: `packages: write` pushes the images and nothing else. There
+# is no signing key, no deploy key, no `environment:` and no remote shell to a
+# host. Signing and
+# the host-side deploy are operator steps on the operator's workstation:
+#
+#   1. run this workflow (dispatch, or push an rc-v* / v* tag);
+#   2. scripts/release/cut-dist-tag.sh <X.Y.Z> --run-id <this run>
+#      [--first-release, when no dist-v* tag exists yet], which downloads the
+#      release-pins artefact, commits the pins layers and release.json, runs
+#      verify, signs every pinned digest with the operator's key and pushes the
+#      annotated dist-vX.Y.Z tag. The key's password is supplied as
+#      COSIGN_PASSWORD_FILE=<file> (or typed at cosign's prompt), never as
+#      COSIGN_PASSWORD: the script refuses an inherited one;
+#   3. the host deploy, a manual operator step (docs/ops/runbook/upgrade.md).
+#
+# The pinned digests are what a host pulls, so the registry tag is incidental:
+# every image is pushed once under :<commit> so ghcr.io has a name to show, and
+# the release is the digest, never the tag.
+#
+# ONE COMMIT PER RELEASE. `release_ref` may be a branch, and a branch moves:
+# resolve-ref turns it into a 40-hex sha exactly once, and every build leg and
+# the pins job check out that sha, never the ref. Each leg writes the sha it
+# built into its pin record and the pins job refuses unless they all agree.
+#
+# THE SHARED BUILD CACHE IS WRITTEN FROM PROTECTED COMMITS ONLY. A dispatch
+# can name any ref; a cache that any ref may write is a cache a throwaway
+# branch can poison for the next release. resolve-ref marks the commit as
+# cache-writing only when it is the tip of main or the commit of a v* / rc-v*
+# tag; every other commit reads the cache and writes none.
+#
+# No workflow expression is expanded inside a `run:` body: each one is bound
+# to an env key, so a crafted dispatch input can never become shell.
+# test/host/deploy-workflow.bats enforces that mechanically, and
+# scripts/release/release-images.test.mjs diffs the matrix below against the
+# service sets emit-pins.mjs derives and against ci.yml's docker-build matrix.
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_ref:
+        description: 'Branch, tag or commit to build and push'
+        required: false
+        type: string
+        default: main
+  push:
+    tags:
+      - 'rc-v*'
+      - 'v*'
+
+# `contents: read` reads the checkout; `packages: write` is what lets the job
+# token push to ghcr.io. Nothing else is granted, here or per job.
+permissions:
+  contents: read
+  packages: write
+
+# One release build per ref, never cancelled: a cancelled run would leave some
+# images pushed and the rest not, and the pins record would never exist.
+concurrency:
+  group: release-images-${{ inputs.release_ref || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  resolve-ref:
+    name: Resolve the release ref
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      sha: ${{ steps.resolve.outputs.sha }}
+      cache_write: ${{ steps.resolve.outputs.cache_write }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          ref: ${{ inputs.release_ref || github.sha }}
+          persist-credentials: false
+
+      # The ref is read here and nowhere else. ls-remote asks origin which
+      # commits main and the release tags are at (an annotated tag also lists
+      # its peeled commit as <tag>^{}), so no history is fetched.
+      - name: Resolve the ref to one commit
+        id: resolve
+        run: |
+          set -euo pipefail
+
+          sha="$(git rev-parse HEAD)"
+          if ! printf '%s' "$sha" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "release-images: the release ref did not resolve to a 40-hex commit (got '${sha}')" >&2
+            exit 1
+          fi
+
+          refs="$(git ls-remote origin refs/heads/main 'refs/tags/v*' 'refs/tags/rc-v*')"
+          cache_write=false
+          if printf '%s\n' "$refs" | awk -v sha="$sha" '
+            $2 == "refs/heads/main" || $2 ~ /^refs\/tags\/(rc-)?v/ { if ($1 == sha) found = 1 }
+            END { exit !found }'; then
+            cache_write=true
+          fi
+
+          echo "release-images: building ${sha} (shared build cache written: ${cache_write})"
+          {
+            echo "sha=${sha}"
+            echo "cache_write=${cache_write}"
+          } >> "$GITHUB_OUTPUT"
+
+  build-and-push:
+    name: Build and push ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    needs: resolve-ref
+    timeout-minutes: 60
+    strategy:
+      # Every image is part of the release: let the others finish so one run
+      # reports every failure instead of the first.
+      fail-fast: false
+      matrix:
+        # `services` are the pins keys (the compose service names that
+        # emit-pins.mjs derives from `build:`); two services that share an
+        # image share one build and one digest. dockerfile/context/target are
+        # what the compose `build:` block says.
+        include:
+          - { name: legal, image: ghcr.io/hello-n00del/gremion-legal, services: legal, dockerfile: docker/legal/Dockerfile, context: docker/legal }
+          - { name: vector, image: ghcr.io/hello-n00del/gremion-vector, services: vector, dockerfile: docker/vector/Dockerfile, context: docker/vector }
+          - { name: synapse, image: ghcr.io/hello-n00del/gremion-synapse, services: matrix, dockerfile: modules/messaging/synapse/Dockerfile, context: modules/messaging/synapse }
+          - { name: fallback, image: ghcr.io/hello-n00del/gremion-fallback, services: fallback, dockerfile: docker/fallback/Dockerfile, context: docker/fallback }
+          - { name: gremion-ui, image: ghcr.io/hello-n00del/gremion-ui, services: gremion-ui, dockerfile: gremion-ui/Dockerfile, context: . }
+          - { name: gremion-public, image: ghcr.io/hello-n00del/gremion-public, services: gremion-public, dockerfile: gremion-public/Dockerfile, context: . }
+          - { name: control-panel, image: ghcr.io/hello-n00del/gremion-control-panel, services: control-panel, dockerfile: apps/control-panel/Dockerfile, context: . }
+          - { name: migrate, image: ghcr.io/hello-n00del/gremion-migrate, services: migrate tenant-create, dockerfile: gremion-ui/Dockerfile, context: ., target: builder }
+          - { name: kernel-api, image: ghcr.io/hello-n00del/gremion-kernel-api, services: kernel-api kernel-api-migrate, dockerfile: services/kernel-api/Dockerfile, context: . }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          ref: ${{ needs.resolve-ref.outputs.sha }}
+          persist-credentials: false
+
+      - name: Name the commit being built
+        env:
+          EXPECTED_SHA: ${{ needs.resolve-ref.outputs.sha }}
+        run: |
+          set -euo pipefail
+          head="$(git rev-parse HEAD)"
+          if [ "$head" != "$EXPECTED_SHA" ]; then
+            echo "release-images: checked out ${head}, the release is ${EXPECTED_SHA}" >&2
+            exit 1
+          fi
+          echo "RELEASE_SHA=${head}" >> "$GITHUB_ENV"
+
+      # The docker CLI on the runner is the whole toolchain: no third-party
+      # login or buildx action sits between GITHUB_TOKEN and the registry. The
+      # token goes in on stdin, never on a command line.
+      - name: Log in to ghcr.io
+        env:
+          REGISTRY_USER: ${{ github.actor }}
+          REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$REGISTRY_TOKEN" | docker login ghcr.io -u "$REGISTRY_USER" --password-stdin
+
+      # The docker-container driver is what supports the registry cache
+      # exporter; the default docker driver does not.
+      - name: Create the buildx builder
+        run: docker buildx create --use --name release-builder --driver docker-container
+
+      - name: Build and push ${{ matrix.name }}
+        env:
+          IMAGE: ${{ matrix.image }}
+          SERVICES: ${{ matrix.services }}
+          DOCKERFILE: ${{ matrix.dockerfile }}
+          CONTEXT: ${{ matrix.context }}
+          TARGET: ${{ matrix.target }}
+          NAME: ${{ matrix.name }}
+          CACHE_WRITE: ${{ needs.resolve-ref.outputs.cache_write }}
+        run: |
+          set -euo pipefail
+
+          meta="${RUNNER_TEMP}/metadata-${NAME}.json"
+          args=(--file "$DOCKERFILE" --tag "${IMAGE}:${RELEASE_SHA}")
+          if [ -n "$TARGET" ]; then
+            args+=(--target "$TARGET")
+          fi
+          # Every commit reads the shared cache; only a protected one (main's
+          # tip, a release tag's commit: resolve-ref decides) writes it.
+          cache=(--cache-from "type=registry,ref=${IMAGE}:buildcache")
+          if [ "$CACHE_WRITE" = true ]; then
+            cache+=(--cache-to "type=registry,ref=${IMAGE}:buildcache,mode=max")
+          fi
+
+          # --provenance=false / --sbom=false: buildx would otherwise push an
+          # image index carrying unsigned in-toto attestations, and the digest
+          # below would name that index. The operator signs and attests the
+          # image itself with their own key (sign-release.sh), and the host
+          # verifies that signature against one plain manifest digest.
+          docker buildx build "${args[@]}" "${cache[@]}" \
+            --provenance=false --sbom=false \
+            --metadata-file "$meta" \
+            --push \
+            "$CONTEXT"
+
+          # The post-condition is the digest the registry now holds, not the
+          # exit code of the build: a build that pushed nothing would exit 0.
+          digest="$(jq -r '."containerimage.digest" // empty' "$meta")"
+          if ! printf '%s' "$digest" | grep -Eq '^sha256:[0-9a-f]{64}$'; then
+            echo "release-images: ${NAME}: build produced no sha256 digest (got '${digest}')" >&2
+            exit 1
+          fi
+          docker buildx imagetools inspect "${IMAGE}@${digest}" > /dev/null
+
+          # The record names the commit this leg built; the pins job refuses
+          # unless every leg names the one it resolved.
+          pins="${RUNNER_TEMP}/pin-${NAME}.txt"
+          printf '# release-sha=%s\n' "$RELEASE_SHA" > "$pins"
+          for svc in $SERVICES; do
+            printf '%s=%s@%s\n' "$svc" "$IMAGE" "$digest" >> "$pins"
+          done
+          cat "$pins"
+
+      - name: Upload the pin record
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: pin-${{ matrix.name }}
+          path: ${{ runner.temp }}/pin-${{ matrix.name }}.txt
+          if-no-files-found: error
+
+      # The runner is ephemeral, but a logout is cheap and a leftover
+      # credential file is exactly what this workflow exists not to leave.
+      - name: Log out of ghcr.io
+        if: always()
+        run: docker logout ghcr.io
+
+  emit-release-pins:
+    name: Emit the release pins layers
+    runs-on: ubuntu-latest
+    needs: [resolve-ref, build-and-push]
+    # Reads the checkout and the run's own artefacts; pushes nothing.
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          ref: ${{ needs.resolve-ref.outputs.sha }}
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7.1.0
+        with:
+          node-version: 26
+
+      - name: Name the commit being released
+        id: sha
+        env:
+          EXPECTED_SHA: ${{ needs.resolve-ref.outputs.sha }}
+        run: |
+          set -euo pipefail
+          head="$(git rev-parse HEAD)"
+          if [ "$head" != "$EXPECTED_SHA" ]; then
+            echo "release-images: checked out ${head}, the release is ${EXPECTED_SHA}" >&2
+            exit 1
+          fi
+          echo "sha=${head}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
+        with:
+          pattern: pin-*
+          path: ${{ runner.temp }}/pins
+          merge-multiple: true
+
+      # emit-pins.mjs takes ONE record for the whole release and partitions it
+      # by the service sets it derives from `build:`: it refuses a missing
+      # service, an extra one and a duplicate, so a matrix leg that did not
+      # report stops the release here rather than shipping a short layer.
+      - name: Emit the app and state pins layers
+        env:
+          RELEASE_SHA: ${{ steps.sha.outputs.sha }}
+        run: |
+          set -euo pipefail
+
+          out="${RUNNER_TEMP}/release-pins"
+          mkdir -p "$out"
+
+          # Every leg names the commit it built in its record. One that names
+          # another (or none) built a different tree than the one this job
+          # checked out, so no layer is emitted.
+          shopt -s nullglob
+          records=("${RUNNER_TEMP}"/pins/pin-*.txt)
+          shopt -u nullglob
+          if [ "${#records[@]}" -eq 0 ]; then
+            echo "release-images: no pin record was downloaded" >&2
+            exit 1
+          fi
+          for record in "${records[@]}"; do
+            recorded="$(sed -n 's/^# release-sha=//p' "$record")"
+            if [ "$recorded" != "$RELEASE_SHA" ]; then
+              echo "release-images: ${record##*/} records '${recorded}', the release is ${RELEASE_SHA}" >&2
+              exit 1
+            fi
+          done
+
+          grep -hv '^#' "${records[@]}" | sort > "${out}/pins-all.txt"
+          printf '%s\n' "$RELEASE_SHA" > "${out}/release-sha.txt"
+
+          node scripts/release/emit-pins.mjs --project app --in "${out}/pins-all.txt" --out "${out}/docker-compose.pins.yml"
+          node scripts/release/emit-pins.mjs --project state --in "${out}/pins-all.txt" --out "${out}/docker-compose.state-pins.yml"
+
+      - name: Judge the layers
+        run: |
+          set -euo pipefail
+
+          out="${RUNNER_TEMP}/release-pins"
+          node scripts/release/check-pins.mjs "${out}/docker-compose.pins.yml" --project app
+          node scripts/release/check-pins.mjs "${out}/docker-compose.state-pins.yml" --project state
+          # The raw arm over the checkout, then the render arm over the
+          # layers just emitted: every rendered image by digest, no build kept,
+          # state purity intact.
+          node scripts/release/check-image-digests.mjs
+          node scripts/release/check-image-digests.mjs --render \
+            --render-pins "docker-compose.pins.yml=${out}/docker-compose.pins.yml" \
+            --render-pins "docker-compose.state-pins.yml=${out}/docker-compose.state-pins.yml"
+
+      - name: Upload the release pins
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: release-pins-${{ steps.sha.outputs.sha }}
+          path: ${{ runner.temp }}/release-pins/
+          if-no-files-found: error

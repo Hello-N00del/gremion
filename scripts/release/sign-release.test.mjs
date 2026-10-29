@@ -47,8 +47,14 @@ function repo({ record = 'green', withRecord = true } = {}) {
     mkdirSync(join(r, 'scripts/verify'), { recursive: true })
     writeFileSync(
       join(r, 'scripts/verify/check-record.mjs'),
+      // Mirrors the real check-record.mjs argv contract (sha POSITIONAL, any
+      // other flag a usage error, exit 1): a stub that accepted anything let
+      // `--commit <sha>` pass here while the real parser rejected it.
+      // sign-release.record.test.mjs runs the REAL check-record.mjs as well.
       `import { appendFileSync } from 'node:fs'\n` +
-        `appendFileSync(${JSON.stringify(join(h.tmp, `record-${n}.log`))}, process.argv.slice(2).join(' ') + '\\n')\n` +
+        `const argv = process.argv.slice(2)\n` +
+        `appendFileSync(${JSON.stringify(join(h.tmp, `record-${n}.log`))}, argv.join(' ') + '\\n')\n` +
+        `if (argv.length !== 1 || !/^[0-9a-f]{40}$/.test(argv[0])) { console.error('usage error: want exactly [sha]'); process.exit(1) }\n` +
         `process.exit(${record === 'green' ? 0 : 1})\n`,
     )
   }
@@ -88,7 +94,7 @@ test('a green record for HEAD: signs and attests by digest, no tlog line, verifi
   assert.match(res.out, /^ATTESTED .* cyclonedx 1\.6 components=\d+$/m)
   // check-record was asked about HEAD, exactly.
   const head = git(r, 'rev-parse', 'HEAD').stdout.trim()
-  assert.equal(readFileSync(join(h.tmp, `record-${n}.log`), 'utf8').trim(), `--commit ${head}`)
+  assert.equal(readFileSync(join(h.tmp, `record-${n}.log`), 'utf8').trim(), head)
   // Post-conditions in the registry, with the key — and not with another key.
   assert.ok(verifies(ref, key.pub), 'signature does not verify with the release key')
   assert.ok(!verifies(ref, stranger.pub), 'signature verifies with a stranger key')

@@ -430,7 +430,7 @@ describe('kernelServer: every admin open of a customer database pins search_path
   it('open() sends search_path=pg_catalog as a startup parameter (it overrides the owner\'s ALTER DATABASE SET)', async () => {
     const server = kernelServer('postgresql://postgres:x@postgres:5432/postgres')
     try {
-      server.open('t_0192f1a23b4c7d5e8f60718293a4b5c6__kernel')
+      await server.open('t_0192f1a23b4c7d5e8f60718293a4b5c6__kernel')
       const call = pg.calls.find((c) => c.url.endsWith('/t_0192f1a23b4c7d5e8f60718293a4b5c6__kernel'))
       expect(call?.opts.connection).toMatchObject({ search_path: 'pg_catalog' })
     } finally {

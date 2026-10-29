@@ -54,23 +54,24 @@ describe('F1 protocols without the files module', () => {
   })
 
   const XSS = '<p>ok</p><img src="x" onerror="alert(1)"><a href="javascript:alert(2)">l</a><svg onload="alert(3)"></svg><script>x()</script>'
-  const expectClean = (html: string) => {
-    expect(html).toContain('<p>ok</p>')
-    expect(html).not.toMatch(/<script|onerror|onload|javascript:|<svg/i)
-  }
+  const HOSTILE = /<script|onerror|onload|javascript:|<svg/i
 
   it('PATCH bodyHtml strips script, onerror and javascript: URLs before it is stored', async () => {
     h.getProtocol.mockResolvedValue({ id: ID, status: 'draft' })
     h.updateProtocol.mockResolvedValue({ id: ID })
     await PATCH({ locals: { user }, params: { id: ID }, request: { json: async () => ({ bodyHtml: XSS }) } } as never)
-    expectClean((h.updateProtocol.mock.calls[0][1] as { bodyHtml: string }).bodyHtml)
+    const stored = (h.updateProtocol.mock.calls[0][1] as { bodyHtml: string }).bodyHtml
+    expect(stored).toContain('<p>ok</p>')
+    expect(stored).not.toMatch(HOSTILE)
   })
 
   it('GET returns a sanitized body_html even when a legacy row stored hostile markup', async () => {
     h.getProtocol.mockResolvedValue({ id: ID, status: 'draft', committee_id: 'c', body_html: XSS, nextcloud_draft_path: null })
     h.lists.forEach((m) => m.mockResolvedValue([]))
     const res = await GET({ locals: { user: { id: 'u1', roles: ['council-admin'] } }, params: { id: ID } } as never)
-    expectClean((await res.json()).protocol.body_html)
+    const served = (await res.json()).protocol.body_html
+    expect(served).toContain('<p>ok</p>')
+    expect(served).not.toMatch(HOSTILE)
   })
 
   it('GET hasDraftDocument: true only with draft path AND files port', async () => {

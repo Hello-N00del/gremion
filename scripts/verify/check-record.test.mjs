@@ -7,7 +7,7 @@ import { cpSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
-import { checkRecord } from './check-record.mjs'
+import { checkRecord, parseArgs, UsageError } from './check-record.mjs'
 
 const REQUIRED = ['typecheck', 'unit', 'integration', 'migration-hash', 'carve-lint']
 
@@ -111,4 +111,84 @@ test('the CLI entrypoint actually runs (and exits non-zero) from a checkout path
   } finally {
     rmSync(scratchRoot, { recursive: true, force: true })
   }
+})
+
+// --allow-missing: absence only. ci.yml uses it on pull_request when the
+// census leg was skipped; sign-release.sh calls check-record without it and
+// must keep failing on any missing suite.
+test('--allow-missing: a named suite that is absent from the record is excused, and the result names it', () => {
+  const suites = allGreenSuites()
+  delete suites['carve-lint']
+  const record = { sha: 'deadbeef', partial: false, suites }
+  const r = checkRecord('deadbeef', { readRecordFn: () => record, requiredSuites: REQUIRED, allowMissing: ['carve-lint'] })
+  assert.equal(r.ok, true)
+  assert.deepEqual(r.allowedMissing, ['carve-lint'])
+})
+
+test('--allow-missing: a named suite that IS present but failing still fails the record', () => {
+  const suites = allGreenSuites()
+  suites['carve-lint'] = { status: 'fail', reason: 'one finding' }
+  const record = { sha: 'deadbeef', partial: false, suites }
+  const r = checkRecord('deadbeef', { readRecordFn: () => record, requiredSuites: REQUIRED, allowMissing: ['carve-lint'] })
+  assert.equal(r.ok, false)
+  assert.match(r.reason, /carve-lint \(fail: one finding\)/)
+})
+
+test('--allow-missing: a present, passing named suite is not reported as allowed-missing', () => {
+  const record = { sha: 'deadbeef', partial: false, suites: allGreenSuites() }
+  const r = checkRecord('deadbeef', { readRecordFn: () => record, requiredSuites: REQUIRED, allowMissing: ['carve-lint'] })
+  assert.equal(r.ok, true)
+  assert.equal(r.allowedMissing, undefined)
+})
+
+test('--allow-missing excuses only the named suite: another missing one still fails', () => {
+  const suites = allGreenSuites()
+  delete suites['carve-lint']
+  delete suites.unit
+  const record = { sha: 'deadbeef', partial: false, suites }
+  const r = checkRecord('deadbeef', { readRecordFn: () => record, requiredSuites: REQUIRED, allowMissing: ['carve-lint'] })
+  assert.equal(r.ok, false)
+  assert.match(r.reason, /missing required suite\(s\): unit$/)
+})
+
+test('without the flag a missing suite still fails (the strict, sign-release.sh behaviour)', () => {
+  const suites = allGreenSuites()
+  delete suites['carve-lint']
+  const record = { sha: 'deadbeef', partial: false, suites }
+  const r = checkRecord('deadbeef', { readRecordFn: () => record, requiredSuites: REQUIRED })
+  assert.equal(r.ok, false)
+  assert.match(r.reason, /missing required suite\(s\): carve-lint/)
+})
+
+test('--allow-missing never lets a partial record through', () => {
+  const record = { sha: 'deadbeef', partial: true, only: 'unit', suites: { unit: { status: 'pass' } } }
+  const r = checkRecord('deadbeef', { readRecordFn: () => record, requiredSuites: REQUIRED, allowMissing: ['carve-lint'] })
+  assert.equal(r.ok, false)
+  assert.match(r.reason, /partial/)
+})
+
+test('parseArgs: sha and flag in either order, comma list and = form, duplicates collapsed', () => {
+  assert.deepEqual(parseArgs(['abc', '--allow-missing', 'unit,carve-lint'], REQUIRED), { sha: 'abc', allowMissing: ['unit', 'carve-lint'] })
+  assert.deepEqual(parseArgs(['--allow-missing=unit', 'abc', '--allow-missing', 'unit'], REQUIRED), { sha: 'abc', allowMissing: ['unit'] })
+  assert.deepEqual(parseArgs([], REQUIRED), { sha: null, allowMissing: [] })
+})
+
+test('parseArgs: an unknown suite, an unknown flag, a missing value or a second sha is a usage error', () => {
+  assert.throws(() => parseArgs(['--allow-missing', 'nope'], REQUIRED), (e) => e instanceof UsageError && /not required: nope/.test(e.message))
+  assert.throws(() => parseArgs(['--allow-missing'], REQUIRED), UsageError)
+  assert.throws(() => parseArgs(['--allow-missing', '--other'], REQUIRED), UsageError)
+  assert.throws(() => parseArgs(['--skip', 'unit'], REQUIRED), UsageError)
+  assert.throws(() => parseArgs(['a', 'b'], REQUIRED), UsageError)
+})
+
+test('the CLI exits 1 with a usage error for an unknown --allow-missing name, before looking at any record', () => {
+  const res = spawnSync(process.execPath, [path.join(import.meta.dirname, 'check-record.mjs'), 'deadbeef', '--allow-missing', 'not-a-suite'], { encoding: 'utf8' })
+  assert.equal(res.status, 1)
+  assert.match(res.stderr, /usage error.*not required: not-a-suite/)
+})
+
+test('the CLI without the flag is unchanged: a missing record still names where it looked', () => {
+  const res = spawnSync(process.execPath, [path.join(import.meta.dirname, 'check-record.mjs'), 'deadbeef-no-such'], { encoding: 'utf8' })
+  assert.equal(res.status, 1)
+  assert.match(res.stderr, /\[check-record\] FAIL: no result record for deadbeef-no-such/)
 })

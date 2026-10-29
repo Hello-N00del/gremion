@@ -12,9 +12,10 @@
 #
 # Based on the vault's session-2026-09-15-spec-b-d/plan/tooling/
 # Dockerfile.bats-py (brief S4), which added only python3. yamllint is added
-# here too: without it, test/host/deploy-workflow.bats's own
-# `command -v yamllint >/dev/null || skip "yamllint not installed (CI
-# installs it)"` self-skips one test every run through this image (found by
+# here too: without it, test/host/deploy-workflow.bats's own (the
+# release-images.yml YAML test) `command -v yamllint >/dev/null || skip
+# "yamllint not installed (CI installs it)"` self-skips one test every run
+# through this image (found by
 # actually running the suite through it -- 813 collected, 1 skipped, before
 # this line existed). CI installs yamllint separately and so never sees that
 # skip; the guard is only genuinely fail-closed here if this image doesn't

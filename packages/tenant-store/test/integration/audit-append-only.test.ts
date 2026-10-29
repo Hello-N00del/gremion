@@ -246,7 +246,7 @@ describe('ensureKernelAuditAppendOnly (TASK-033-a: audit_log is a governance rec
   })
 
   it('refuses a tenant id that is not a uuid (the identifiers are derived, never spliced)', async () => {
-    await expect(ensureKernelAuditAppendOnly(server, "x'; DROP ROLE y; --")).rejects.toThrow()
-    await expect(kernelAuditAppendOnlyProblems(server, 'nope')).rejects.toThrow()
+    await expect(ensureKernelAuditAppendOnly(server, "x'; DROP ROLE y; --")).rejects.toThrow(/not a canonical lowercase UUIDv7/)
+    await expect(kernelAuditAppendOnlyProblems(server, 'nope')).rejects.toThrow(/not a canonical lowercase UUIDv7/)
   })
 })

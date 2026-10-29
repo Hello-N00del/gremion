@@ -22,9 +22,11 @@ setup() {
 @test "the tenant-secret ownership check reads the app env's TENANT_SECRETS_DIR and skips .gitkeep" {
     grep -qF "s/^TENANT_SECRETS_DIR=//p' \"\$PENV/app-blue.env\"" "$PROOF"
     grep -q 'find "$tsd" -type f ! -name .gitkeep' "$PROOF"
-    ! grep -q 'PROOF_TENANT_SECRETS_DIR:-$ROOT/secrets/tenants' "$PROOF"
     # pooled-stack-proof is what renders that variable into app-<colour>.env
     grep -q '^TENANT_SECRETS_DIR=\${SROOT_H}/secrets/tenants' "$REPO_ROOT/test/host/integration/pooled-stack-proof.sh"
+    # Last on purpose: bats discards a `!`-negated status anywhere but the final
+    # statement (common.bats enforces this), so mid-body it asserted nothing.
+    ! grep -q 'PROOF_TENANT_SECRETS_DIR:-$ROOT/secrets/tenants' "$PROOF"
 }
 
 @test "a fresh tenant's warm-up is waited for: create-check and the suspend baseline use edge_served_wait (#50)" {

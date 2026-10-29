@@ -127,7 +127,7 @@ describe('waitForDbReady — backoff ladder, cap and budget', () => {
     })
     await expect(
       waitForDbReady({ attempts: 5, ping, sleep: async (ms) => void waits.push(ms), random: () => 0 }),
-    ).rejects.toThrow()
+    ).rejects.toThrow(/database not ready after 5 attempts/)
     warn.mockRestore()
     expect(waits).toEqual([250, 500, 1000, 2000])
   })
@@ -138,7 +138,7 @@ describe('waitForDbReady — backoff ladder, cap and budget', () => {
     const ping = vi.fn(async () => {
       throw refused()
     })
-    await expect(waitForDbReady({ attempts: 9, ping, sleep: async () => {}, random: () => 0.5 })).rejects.toThrow()
+    await expect(waitForDbReady({ attempts: 9, ping, sleep: async () => {}, random: () => 0.5 })).rejects.toThrow(/database not ready after 9 attempts/)
     warn.mockRestore()
     expect(lines[0]).toMatch(/^\[boot\] database not ready \(attempt 1\/9\): .*ECONNREFUSED.*; backoff=500ms wait=375ms$/)
     expect(lines[7]).toMatch(/\(attempt 8\/9\).*; backoff=30000ms \(capped\) wait=22500ms$/)

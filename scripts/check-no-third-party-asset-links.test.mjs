@@ -47,12 +47,15 @@ test('an empty input has nothing to flag (not a vacuous pass — no <link> at al
   assert.deepEqual(findThirdPartyAssetLinks(''), [])
 })
 
-for (const app of ['gremion-ui', 'gremion-public']) {
-  test(`${app}/src/app.html carries no third-party asset <link> (real file, post-fix)`, () => {
+// One test, a loop inside it: scripts/verify/suites/unit.mjs compares node's collected count with the
+// number of `test(` declarations, and a `test(` inside a loop declares 1 and collects N (judged
+// unparseable). The message names the file that failed.
+test('gremion-ui and gremion-public src/app.html carry no third-party asset <link> (real files, post-fix)', () => {
+  for (const app of ['gremion-ui', 'gremion-public']) {
     const file = join(ROOT, app, 'src/app.html')
     assert.deepEqual(checkFile(file), [], `expected no problems in ${file}`)
-  })
-}
+  }
+})
 
 // ── CLI entry-point (isMain) proof ──────────────────────────────────────────
 // review finding (TASK-007 r1, MEDIUM): the old guard compared

@@ -43,7 +43,7 @@
 # dependency for `pnpm deploy`, which is how both runtime Dockerfiles build
 # /app/node_modules. A dist-only allowlist put empty packages in the shipped
 # images — see scripts/check-shipped-package-files.mjs, which is run by ci.yml
-# on every run and against a real deploy payload by gremion-ui.yml.
+# on every run and against a real deploy payload by ci.yml's verify-unit-ui job.
 
 name: Release (npm)
 
@@ -134,10 +134,10 @@ jobs:
       # files self-skip unless NATS_TEST_URL is set. This step sets no NATS
       # service and does not run packages/ports/scripts/nats-test.sh, so the
       # JetStream proofs DO NOT execute here and the tarball is signed off
-      # without them. .github/workflows/ports.yml is the job that runs them with
-      # a real server and asserts a post-condition on the run (no file skipped,
-      # no test skipped, a minimum number of integration proofs executed) — a
-      # publish should follow a green ports.yml on the same commit, not this
+      # without them. ci.yml's verify-integration-brokers job is the job that runs
+      # them with a real server and asserts a post-condition on the run (no file
+      # skipped, no test skipped, a minimum number of integration proofs executed)
+      # — a publish should follow a green verify gate on the same commit, not this
       # step alone.
       - name: Test (unit only — see the note above)
         if: matrix.has_tests

@@ -1,6 +1,6 @@
 {
   // Emit config for `npm publish`. tsconfig.json is the NO-EMIT typecheck gate
-  // (ports.yml runs `tsc --noEmit` against it); this one produces dist/.
+  // (verify's typecheck suite runs `tsc --noEmit` against it); this one produces dist/.
   //
   // Three things this file gets deliberately right, because getting any of
   // them wrong is silent:

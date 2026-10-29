@@ -33,6 +33,8 @@ const inNet = (u: string) => {
 }
 const save = () => writeFileSync(statePath, JSON.stringify(st, null, 2))
 
+// One proof script, one phase per T080_IMAGE_MODE; every phase asserts unconditionally within its own mode and an unknown mode throws.
+/* oxlint-disable vitest/no-conditional-expect */
 it(`image proof ${process.env.T080_IMAGE_MODE}`, { timeout: 240_000 }, async () => {
   const mode = process.env.T080_IMAGE_MODE
   if (mode === 'world') {
@@ -107,3 +109,4 @@ it(`image proof ${process.env.T080_IMAGE_MODE}`, { timeout: 240_000 }, async () 
   }
   save()
 })
+/* oxlint-enable vitest/no-conditional-expect */

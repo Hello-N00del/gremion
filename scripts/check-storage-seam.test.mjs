@@ -260,3 +260,29 @@ test('RED — a stale allowlist entry (matches no write) and an entry with no re
     rmSync(tree, { recursive: true, force: true })
   }
 })
+
+test('RED — an entry covers s1 only when it names guards: [s1]; the pin counts every covered finding', () => {
+  const tree = emptyTree()
+  const S1 = 'export function getStorage() {\n  return 1\n}\n'
+  seed(tree, 'modules/leaf/src/storage/index.ts', S1)
+  seed(tree, 'modules/other/src/storage/index.ts', S1)
+  const entry = { path: 'modules/leaf/src/storage/index.ts', sites: 1, reason: 'fixture reason long enough', residual: 'fixture residual long enough' }
+  try {
+    // no `guards`: the entry is s3-only, so the s1 finding stays a finding AND the entry is stale
+    const plain = scan({ root: tree, allowlist: [entry] })
+    assert.deepEqual(guards(plain).sort(), [
+      's1 modules/leaf/src/storage/index.ts:1',
+      's1 modules/other/src/storage/index.ts:1',
+    ])
+    assert.match(plain.problems.join('\n'), /modules\/leaf\/src\/storage\/index\.ts is stale/)
+    // naming s1 allowlists exactly that file; the sibling storage/ directory still fails
+    const named = scan({ root: tree, allowlist: [{ ...entry, guards: ['s1'] }] })
+    assert.deepEqual(named.problems, [])
+    assert.deepEqual(guards(named), ['s1 modules/other/src/storage/index.ts:1'])
+    // a wrong pin is a problem, and a guard that does not exist is refused
+    assert.match(scan({ root: tree, allowlist: [{ ...entry, guards: ['s1'], sites: 2 }] }).problems.join('\n'), /pins 2 write site\(s\) but the file has 1/)
+    assert.match(scan({ root: tree, allowlist: [{ ...entry, guards: ['s9'] }] }).problems.join('\n'), /names guards that do not exist/)
+  } finally {
+    rmSync(tree, { recursive: true, force: true })
+  }
+})

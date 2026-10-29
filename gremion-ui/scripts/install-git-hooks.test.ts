@@ -44,6 +44,20 @@ const versionedHook = join(scriptsDir, 'hooks/pre-commit')
 const installerCli = join(scriptsDir, 'install-git-hooks.mjs')
 const isWindows = process.platform === 'win32'
 
+/**
+ * Case tables for the platform-split twins below (a Windows junction case
+ * beside a POSIX symlink case, and so on): `it.each(onWindows)` registers the
+ * case on Windows only, `it.each(onPosix)` everywhere else. These used to be
+ * `it.runIf(isWindows)` / `it.skipIf(isWindows)` pairs, which leave one SKIPPED
+ * test behind on EVERY host: a skip that is not a missing proof, since its twin
+ * ran. The verify gate budgets skips per file (allowed-skips.json), so those
+ * standing skips failed the Linux CI leg and the Windows run alike. Not
+ * registering the inapplicable twin leaves nothing to skip, and each platform
+ * still runs exactly the cases that mean something there.
+ */
+const onWindows = isWindows ? [null] : []
+const onPosix = isWindows ? [] : [null]
+
 /** A foreign hook of the shape that makes appending fatal: it ends in `exit 0`,
  *  so anything appended after it is unreachable. husky's classic shim and most
  *  hand-written hooks look like this. */
@@ -1060,11 +1074,11 @@ describe('hooks that are not UTF-8 text', () => {
 })
 
 describe('a symlinked pre-commit', () => {
-  // Split by platform BEFORE the test body (vitest runIf/skipIf) instead of
+  // Split by platform BEFORE the test body (onWindows/onPosix) instead of
   // branching around the trailing expect (vitest(no-conditional-expect)):
   // Windows uses a directory junction (no real target file to re-hash);
   // POSIX uses a real symlink target whose bytes must survive untouched.
-  it.runIf(isWindows)('is refused, not written through (Windows junction)', () => {
+  it.each(onWindows)('is refused, not written through (Windows junction)', () => {
     // Writing through a symlink writes to its TARGET — which can be outside the
     // hooks dir entirely. The installer would then report installing a hook at
     // a path whose bytes live somewhere else, and `existsSync` follows links,
@@ -1080,7 +1094,7 @@ describe('a symlinked pre-commit', () => {
     expect(lstatSync(link).isSymbolicLink(), 'the link itself must survive untouched').toBe(true)
   })
 
-  it.skipIf(isWindows)('is refused, not written through (POSIX symlink)', () => {
+  it.each(onPosix)('is refused, not written through (POSIX symlink)', () => {
     const dir = tempDir('kmirror-symlink-')
     const link = join(dir, 'pre-commit')
     const store = tempDir('kmirror-linktarget-')
@@ -1136,8 +1150,8 @@ describe('the hook is written atomically', () => {
 
   // A failed chmod is only reachable as a fatal error on POSIX (Windows'
   // chmod is close to a no-op there); the working-hook-preserved check is
-  // therefore platform-gated. Split via runIf/skipIf (vitest idiom) rather
-  // than branching around the expect (vitest(no-conditional-expect)).
+  // therefore platform-gated. Split by platform (onWindows/onPosix) rather than branching
+  // around the expect (vitest(no-conditional-expect)).
   function installWithFailingChmod() {
     const dir = tempDir('kmirror-atomic-fail-')
     const hookPath = join(dir, 'pre-commit')
@@ -1161,7 +1175,7 @@ describe('the hook is written atomically', () => {
     return { dir, hookPath }
   }
 
-  it.skipIf(isWindows)('leaves the previous hook intact when the install fails (POSIX)', () => {
+  it.each(onPosix)('leaves the previous hook intact when the install fails (POSIX)', () => {
     const { dir, hookPath } = installWithFailingChmod()
     expect(
       readFileSync(hookPath, 'utf8'),
@@ -1172,7 +1186,7 @@ describe('the hook is written atomically', () => {
     ])
   })
 
-  it.runIf(isWindows)('leaves no stray temp file when the install fails (Windows)', () => {
+  it.each(onWindows)('leaves no stray temp file when the install fails (Windows)', () => {
     const { dir } = installWithFailingChmod()
     expect(readdirSync(dir), 'no temp file may be left behind by a failed install').toEqual([
       'pre-commit',

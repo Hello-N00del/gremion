@@ -44,11 +44,12 @@
 // nats-topology.test.ts's header warns must never load under that run (it pulls
 // the `nats` library, which must not load under jsdom).
 //
-// CI runner: .github/workflows/ports.yml. Before that workflow existed this
-// file was collected by NOTHING in this repo (audit #434 finding 1) — gremion-ui's
-// run excludes it by glob, and no workflow so much as path-filtered on
-// `packages/ports/**`. ports.yml starts the JetStream container below and exports
-// NATS_TEST_URL, so the proofs RUN instead of skipping. It is the kernel's
+// CI runner: ci.yml's verify-integration-brokers leg (verify's integration:nats
+// part, `make test-ports-nats`). Before a CI job ran it this file was collected by
+// NOTHING in this repo (audit #434 finding 1) — gremion-ui's run excludes it by
+// glob, and no workflow so much as path-filtered on `packages/ports/**`. That
+// part starts the JetStream container below and exports NATS_TEST_URL, so the
+// proofs RUN instead of skipping. It is the kernel's
 // only real-server proof of NatsBroker: this repo has no services/* leaves, so
 // the leaf integration matrix that covers NatsBroker elsewhere does not cover
 // the copy that lives HERE.

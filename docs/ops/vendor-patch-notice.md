@@ -24,7 +24,7 @@ PRD-DEP-003 and TRD-106 name five systems. This table shows where each one
 actually lives and what version is pinned, measured in this repository on
 2026-09-25. A notice has to name the version a council actually runs, so the
 **source of truth for the version is the release being shipped** (its
-`docker-compose.pins.yml`, which `deploy.yml` requires at the tag's tree
+`docker-compose.pins.yml`, which `release-tag-check.sh` requires at the tag's tree
 root), not this table. The release workflow that is to write that file is
 specified but not yet in this repository; see `docs/deployment-architecture.md`.
 

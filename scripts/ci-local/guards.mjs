@@ -140,6 +140,7 @@ export function gitleaksCommand(base, reportPath) {
  * them and fails closed on a genuine gap rather than assuming a match.
  */
 export function parseGitleaksCommitsScanned(output) {
+  // oxlint-disable-next-line no-control-regex -- strips ANSI colour escapes, which start with ESC
   const plain = String(output ?? '').replace(/\x1b\[[0-9;]*m/g, '')
   const m = plain.match(/(\d+)\s+commits? scanned/i)
   return m ? Number(m[1]) : null
@@ -227,6 +228,7 @@ function readGitleaksReport(reportPath) {
  * below never matched — proven with the real binary (see gitleaksCommand).
  */
 function hasFatalLog(output) {
+  // oxlint-disable-next-line no-control-regex -- strips ANSI colour escapes, which start with ESC
   const plain = (output ?? '').replace(/\x1b\[[0-9;]*m/g, '')
   return /(^|[\s[])(FTL|ERR)([\s\]:]|$)/m.test(plain)
 }

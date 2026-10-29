@@ -40,7 +40,7 @@ import { existsSync, readFileSync, readdirSync, realpathSync, mkdtempSync, write
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import { FIXTURE, REPO_ROOT, parseYamlSubset, readEnvFile, renderState, socketIsolationViolations } from './compose-edge.mjs'
+import { FIXTURE, REPO_ROOT, bindRefusesMissingHostDir, parseYamlSubset, readEnvFile, renderState, socketIsolationViolations } from './compose-edge.mjs'
 
 // The brief's contract: this file exports renderState. TASK-034 should import
 // ./compose-edge.mjs directly -- importing a test file is what the entry guard
@@ -274,7 +274,7 @@ test('guard 3: exactly one mount targets /etc/traefik/dynamic, read-only, from $
   assert.equal(mounts[0].read_only, true)
   assert.equal(mounts[0].source, `${fixtureEnv().GREMION_ROOT}/etc/edge`)
   // A missing router directory must refuse `up`, not become an empty dir.
-  assert.equal(mounts[0].bind?.create_host_path, false, 'a missing ${GREMION_ROOT}/etc/edge would be created empty')
+  assert.ok(bindRefusesMissingHostDir(mounts[0]), `a missing \${GREMION_ROOT}/etc/edge would be created empty (rendered bind: ${JSON.stringify(mounts[0].bind)})`)
 })
 
 test('guard 3: ACME state lives only in the external ${STACK}_traefik_acme volume, mounted at /letsencrypt', () => {

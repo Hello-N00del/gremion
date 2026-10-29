@@ -125,7 +125,7 @@ export function generateDartPackage(repoRoot: string, s: DartSurface, tools: Pip
     mkdirSync(join(work, 'in'))
     mkdirSync(join(work, 'out'))
     const { doc, report } = normalizeFor31(parsed)
-    log(`[${s.name}] generator input (src/spec-normalize.ts): ${report.nullable.length} nullable -> type array, ${report.nullableFalseDropped.length} nullable:false dropped, ${report.defaultNullDropped.length} default:null dropped, ${report.constDropped.length} scalar const dropped, ${report.enumNullDropped.length} enum null dropped`)
+    log(`[${s.name}] generator input (src/spec-normalize.ts): ${report.nullable.length} nullable -> type array, ${report.nullableFalseDropped.length} nullable:false dropped, ${report.defaultNullDropped.length} default:null dropped, ${report.constDropped.length} scalar const dropped, ${report.enumNullDropped.length} enum null dropped, ${report.oneOfNullMerged.length} oneOf/anyOf-null merged, ${report.oneOfNullHoisted.length} nullable object hoisted, ${report.additionalPropertiesFalseDropped.length} additionalProperties:false dropped`)
     writeFileSync(join(work, 'in', 'spec.json'), `${JSON.stringify(doc, null, 2)}\n`)
     writeFileSync(join(work, 'out', '.openapi-generator-ignore'), GENERATOR_IGNORE)
 

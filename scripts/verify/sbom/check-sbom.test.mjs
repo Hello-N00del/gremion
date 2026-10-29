@@ -16,6 +16,7 @@ import { readFileSync, writeFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+import { FLOORS } from '../../check-cve-floors.mjs'
 import { Harness, REPO_ROOT } from '../../release/lib/harness.mjs'
 import { assertCosign } from '../../release/lib/tools.mjs'
 import {
@@ -91,7 +92,10 @@ test('an SBOM with no components fails', () => {
 test('a component below a check-cve-floors floor fails (the table is imported, not copied)', () => {
   assert.deepEqual(codes(floorProblems(bom([npm('undici', '7.0.0')]))), ['below-floor'])
   assert.deepEqual(codes(floorProblems(bom([npm('@sveltejs/kit', '2.70.1')]))), ['below-floor'])
-  assert.deepEqual(floorProblems(bom([npm('undici', '7.29.0'), npm('@sveltejs/kit', '2.70.2')])), [])
+  // Exactly AT each floor passes. The floor is read from the imported table, not
+  // typed here, so a floor bump (undici 7.29.0 -> 7.29.1) cannot turn this red.
+  const at = (name) => FLOORS.find((f) => f.name === name).floor
+  assert.deepEqual(floorProblems(bom([npm('undici', at('undici')), npm('@sveltejs/kit', at('@sveltejs/kit'))])), [])
   assert.deepEqual(floorProblems(bom([npm('left-pad', '0.0.1')])), [])
 })
 

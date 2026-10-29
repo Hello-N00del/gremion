@@ -128,7 +128,7 @@ describe('stored failure reasons never carry the subject identity', () => {
     const ok: KernelErasureHook = { moduleId: 'calendar', erase: async () => ({ status: 'erased', counts: {} }) }
     await expect(
       runWithTenant(CTX, () => runErasure({ tenantId: 'tid-reason', subjectId: SUBJECT, requestedBy: 'admin' }, deps([ok], s))),
-    ).rejects.toThrow()
+    ).rejects.toThrow(/insert failed/)
     expect(finished[0].reason).toMatch(/run aborted/)
     expect(leaks(finished[0].reason ?? '')).toEqual([])
   })

@@ -108,9 +108,8 @@ describe('transport classification (allowlist)', () => {
     vi.useFakeTimers()
     const db = fakeDb(1)
     const p = relayWith(db, async () => { throw named('TimeoutError') }, { probe: () => new Promise(() => {}) }).runOnce()
-    const assertion = expect(p).rejects.toBeDefined()
-    await vi.advanceTimersByTimeAsync(5_000)
-    await assertion
+    // the rejection handler is attached before the timers advance, so the bounded probe's rejection is never unhandled
+    await Promise.all([expect(p).rejects.toBeDefined(), vi.advanceTimersByTimeAsync(5_000)])
     vi.useRealTimers()
     expect(db.updates).toEqual([])
   })

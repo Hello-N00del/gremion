@@ -13,6 +13,7 @@
 // Each can run alone as `verify --only integration:<part>`.
 import { randomBytes } from 'node:crypto'
 import path from 'node:path'
+import { stripVTControlCharacters } from 'node:util'
 import { combineParts } from '../lib/guard.mjs'
 import { headSha } from '../lib/git.mjs'
 import { run, spawnMissing, tail, toolAvailable } from '../lib/proc.mjs'
@@ -34,7 +35,32 @@ function randomTestPassword() {
   return randomBytes(24).toString('base64url')
 }
 
-function startTestDb({ sha8, pid }) {
+// The official postgres image starts TWO servers on a first run: a
+// temporary one for initdb's scripts (docker-entrypoint.sh starts it with
+// `-c listen_addresses=''`, so it answers on the unix socket ONLY), then
+// stops it and execs the real one. Every psql this suite runs therefore goes
+// over TCP to 127.0.0.1 inside the container, which only the real server
+// answers: a socket probe can pass against the temporary server moments
+// before it shuts down, and the next socket command then dies with "server
+// closed the connection unexpectedly" (CI run 4, CREATE DATABASE control).
+export const PSQL_HOST = '127.0.0.1'
+
+// The throwaway server must answer this many probes in a row to count as ready.
+export const READY_PROBES = 2
+
+/** argv for the readiness probe: a `SELECT 1` over TCP. */
+export function psqlProbeArgs(name) {
+  return ['exec', '-e', 'PGPASSWORD', name, 'psql', '-h', PSQL_HOST, '-U', 'gremion_test', '-d', 'postgres', '-tAc', 'SELECT 1']
+}
+
+/** argv for every other psql this suite runs against the throwaway server: over TCP too. */
+export function psqlExecArgs(name, database, args, { interactive = false } = {}) {
+  return ['exec', ...(interactive ? ['-i'] : []), '-e', 'PGPASSWORD', name, 'psql', '-h', PSQL_HOST, '-v', 'ON_ERROR_STOP=1', '-U', 'gremion_test', '-d', database, ...args]
+}
+
+// `exec`, `sleep` and `now` are seams for the unit test (a scripted docker and a
+// fake clock); the defaults are the real ones.
+export function startTestDb({ sha8, pid, exec = run, sleep = sleepMs, now = Date.now }) {
   // Brief S9: unique per run, and identifiable by the commit under test
   // (verify.mjs refuses a dirty tree, so HEAD is the tree being tested).
   const name = `verify-${sha8}-${pid}-db`
@@ -49,7 +75,7 @@ function startTestDb({ sha8, pid }) {
   // `GRANT CONNECT ON DATABASE gremion` (058's header names it as a known,
   // un-fixed defect in a hash-pinned file). The safety convention (db name
   // OR user name contains "test") is satisfied by POSTGRES_USER alone.
-  const runRes = run(
+  const runRes = exec(
     'docker',
     ['run', '-d', '--name', name, '-e', 'POSTGRES_USER=gremion_test', '-e', 'POSTGRES_PASSWORD', '-e', 'POSTGRES_DB=gremion', '-p', '127.0.0.1::5432', 'postgres:18-alpine'],
     { env },
@@ -57,23 +83,23 @@ function startTestDb({ sha8, pid }) {
   if (runRes.code !== 0) {
     return { ok: false, name, detail: `docker run failed: ${String(runRes.stderr || runRes.stdout)}` }
   }
-  // The official postgres image starts TWO servers on a first run: a
-  // temporary, unix-socket-only one for initdb's scripts, then the real one.
-  // `pg_isready` can see the temporary one moments before it shuts down; a
-  // real `SELECT 1`, retried, rides out the restart gap.
-  const deadline = Date.now() + 60_000
+  // A real `SELECT 1` over TCP, retried, rides out the restart gap; it must
+  // succeed READY_PROBES times in a row, so one lucky answer is not enough.
+  const deadline = now() + 60_000
   let port = null
-  while (Date.now() < deadline) {
-    const probe = run('docker', ['exec', '-e', 'PGPASSWORD', name, 'psql', '-U', 'gremion_test', '-d', 'postgres', '-tAc', 'SELECT 1'], { env })
-    if (probe.code === 0 && probe.stdout.trim() === '1') {
-      const portRes = run('docker', ['port', name, '5432/tcp'])
+  let streak = 0
+  while (now() < deadline) {
+    const probe = exec('docker', psqlProbeArgs(name), { env })
+    streak = probe.code === 0 && probe.stdout.trim() === '1' ? streak + 1 : 0
+    if (streak >= READY_PROBES) {
+      const portRes = exec('docker', ['port', name, '5432/tcp'])
       const m = portRes.stdout.match(/:(\d+)\s*$/m)
       if (m) {
         port = Number(m[1])
         break
       }
     }
-    sleepMs(300)
+    sleep(300)
   }
   if (port === null) {
     return { ok: false, name, detail: `${name} never became ready within 60s` }
@@ -94,7 +120,7 @@ function stopTestDb(name) {
 }
 
 function psqlAsTestUser(db, database, args, opts = {}) {
-  return run('docker', ['exec', ...(opts.input ? ['-i'] : []), '-e', 'PGPASSWORD', db.name, 'psql', '-v', 'ON_ERROR_STOP=1', '-U', 'gremion_test', '-d', database, ...args], {
+  return run('docker', psqlExecArgs(db.name, database, args, { interactive: Boolean(opts.input) }), {
     env: db.env,
     ...opts,
   })
@@ -178,6 +204,67 @@ function vitestPart({ root }) {
 }
 
 /**
+ * A make target's stdout + stderr as the judges read it, with terminal colour
+ * stripped. Vitest (and anything built on tinyrainbow) colours its summary when
+ * CI is set even though stdout is a pipe, so on a CI runner the unit run prints
+ * "\x1b[2m      Tests \x1b[22m \x1b[32m171 passed\x1b[39m ..." and a line-anchored
+ * `^\s*Tests\s+N passed (N)` never matches: every part whose unit step goes
+ * through `pnpm test` read as "unparseable" on ubuntu-latest, though it ran.
+ * On a developer's terminal-less run (no CI) nothing is coloured, which is why
+ * this only ever showed on the runner.
+ */
+export function capturedText(res) {
+  return stripVTControlCharacters(`${res.stdout}\n${res.stderr}`)
+}
+
+/**
+ * The unit step's vitest summary ("Tests  170 passed | 1 skipped (171)"), read from the text
+ * printed BEFORE `marker`: the live proof that follows echoes a summary of its own, which must
+ * not stand in for the unit one. `null` when there is no summary line at all. `wellFormed` is
+ * false when a part is not one of failed/passed/skipped/todo or the parts do not add up to the
+ * total in parentheses: the shape is then not understood and the part stays untrusted.
+ */
+function unitSummary(out, marker) {
+  const m = out.split(marker)[0].match(/^[ \t]*Tests[ \t]+(.+?)[ \t]+\((\d+)\)[ \t]*$/m)
+  if (!m) return null
+  const n = { passed: 0, failed: 0, skipped: 0, todo: 0 }
+  let known = true
+  for (const part of m[1].split('|')) {
+    const c = part.trim().match(/^(\d+) (passed|failed|skipped|todo)$/)
+    if (c) n[c[2]] += Number(c[1])
+    else known = false
+  }
+  const total = Number(m[2])
+  return { ...n, total, line: m[0].trim(), wellFormed: known && n.passed + n.failed + n.skipped + n.todo === total }
+}
+
+/**
+ * Why a unit step that exited 0 is still not a pass, as a named failure -- or null when its
+ * summary is clean (all passed) or not understood (the caller then calls it unparseable). The
+ * unit step of an integration part runs wherever the part runs (an unprivileged CI runner
+ * among them), and a case that skips there is a case nobody ran: the part allows no skips.
+ */
+function unitFault(label, unit) {
+  if (!unit?.wellFormed) return null
+  const skipped = unit.skipped + unit.todo
+  const said = []
+  if (unit.failed > 0) said.push(`reported ${unit.failed} failed test(s) although the target exited 0`)
+  if (skipped > 0) said.push(`skipped ${skipped} test(s); an integration part allows no skips`)
+  if (said.length === 0) return null
+  return {
+    label,
+    collected: unit.total,
+    passed: unit.passed,
+    failed: unit.failed + skipped,
+    skipped: 0,
+    detail: `unit run inside ${label} ${said.join('; and ')}\nunit summary seen: "${unit.line}"`,
+  }
+}
+
+/** The unit summary is the all-passed shape and nothing else. */
+const cleanUnit = (unit) => unit !== null && unit.wellFormed && unit.passed === unit.total && unit.total > 0 && unit.failed + unit.skipped + unit.todo === 0
+
+/**
  * `make test-ports-nats` (packages/ports/scripts/nats-test.sh). Exit 0 is
  * not enough (round-1 MEDIUM: this was trusted on exit code alone while the
  * comment claimed a post-condition check): the script's own final OK line
@@ -186,7 +273,7 @@ function vitestPart({ root }) {
  */
 export function judgeNatsTest(res) {
   const label = 'make test-ports-nats'
-  const out = `${res.stdout}\n${res.stderr}`
+  const out = capturedText(res)
   const count = out.match(/^\[nats-test\] (\d+) passing tests from \S+ \(minimum \d+\)\s*$/m)
   const ok = /^\[nats-test\] OK -- the JetStream proofs ran against a real server\s*$/m.test(out)
   if (res.code !== 0) {
@@ -210,27 +297,29 @@ export const NATS_AUTH_MIN_PROOFS = 25
 
 export function judgeNatsAuthTest(res) {
   const label = 'make test-nats-auth'
-  const out = `${res.stdout}\n${res.stderr}`
+  const out = capturedText(res)
   // The unit run prints BEFORE the proof starts; the proof echoes its own
   // live-suite summary, which must not stand in for the unit one.
-  const unit = out.split(/^\[nats-auth-proof\]/m)[0].match(/^\s*Tests\s+(\d+) passed \(\1\)\s*$/m)
+  const unit = unitSummary(out, /^\[nats-auth-proof\]/m)
   // The floor is proof.sh's own (25 live cases); a log claiming a lower one
   // did not run the proof this judge vouches for.
   const count = out.match(/^\[nats-auth-proof\] (\d+) passing \(minimum (\d+)\)\s*$/m)
   const floorOk = count !== null && Number(count[2]) >= NATS_AUTH_MIN_PROOFS && Number(count[1]) >= Number(count[2])
   const ok = /^\[nats-auth-proof\] OK -- the authenticated broker admits and refuses as specified\s*$/m.test(out)
   if (res.code !== 0) {
-    const n = Math.max(1, (unit ? Number(unit[1]) : 0) + (count ? Number(count[1]) : 0))
+    const n = Math.max(1, (cleanUnit(unit) ? unit.passed : 0) + (count ? Number(count[1]) : 0))
     return { label, collected: n, passed: 0, failed: n, skipped: 0, detail: tail(out) }
   }
-  if (!unit || !count || !ok || !floorOk) {
+  const fault = unitFault(label, unit)
+  if (fault) return fault
+  if (!cleanUnit(unit) || !count || !ok || !floorOk) {
     return {
       label,
       unparseable: true,
-      detail: `exit 0 but not all of the unit "Tests N passed (N)" summary, "[nats-auth-proof] N passing (minimum >= 25)" and "[nats-auth-proof] OK" lines -- untrusted\n${tail(out)}`,
+      detail: `exit 0 but not all of the unit "Tests N passed (N)" summary, "[nats-auth-proof] N passing (minimum >= 25)" and "[nats-auth-proof] OK" lines -- untrusted\nunit summary seen: ${unit ? `"${unit.line}"` : 'none'}\n${tail(out)}`,
     }
   }
-  const n = Number(unit[1]) + Number(count[1])
+  const n = unit.passed + Number(count[1])
   return { label, collected: n, passed: n, failed: 0, skipped: 0 }
 }
 
@@ -251,10 +340,10 @@ export const EVENTS_ALERT_PHASES = ['alert-red', 'alert-fire', 'alert-hold', 'al
 
 export function judgeEventsTest(res) {
   const label = 'make test-events'
-  const out = `${res.stdout}\n${res.stderr}`
+  const out = capturedText(res)
   // The unit run prints BEFORE the proof starts; the proof echoes its own live-suite
   // summaries, which must not stand in for the unit one.
-  const unit = out.split(/^\[events-proof\]/m)[0].match(/^\s*Tests\s+(\d+) passed \(\1\)\s*$/m)
+  const unit = unitSummary(out, /^\[events-proof\]/m)
   const groups = new Map()
   for (const m of out.matchAll(/^\[events-proof\] (\d+) passing \(minimum (\d+)\)\s*\n\[events-proof\] group ([\w-]+) OK\s*$/gm)) {
     groups.set(m[3], { passing: Number(m[1]), minimum: Number(m[2]) })
@@ -268,17 +357,19 @@ export function judgeEventsTest(res) {
   const image = /^\[events-image\] OK\b/m.test(out)
   const live = [...groups.values()].reduce((a, r) => a + r.passing, 0)
   if (res.code !== 0) {
-    const n = Math.max(1, (unit ? Number(unit[1]) : 0) + live)
+    const n = Math.max(1, (cleanUnit(unit) ? unit.passed : 0) + live)
     return { label, collected: n, passed: 0, failed: n, skipped: 0, detail: tail(out) }
   }
-  if (!unit || !groupsOk || !alertsOk || !ok || !image) {
+  const fault = unitFault(label, unit)
+  if (fault) return fault
+  if (!cleanUnit(unit) || !groupsOk || !alertsOk || !ok || !image) {
     return {
       label,
       unparseable: true,
-      detail: `exit 0 but not all of the unit "Tests N passed (N)" summary, the four "[events-proof] N passing (minimum >= floor)" group pairs, the four alert phase OK lines (red, fire, hold, resolve), "[events-proof] OK" and "[events-image] OK" -- untrusted\n${tail(out)}`,
+      detail: `exit 0 but not all of the unit "Tests N passed (N)" summary, the four "[events-proof] N passing (minimum >= floor)" group pairs, the four alert phase OK lines (red, fire, hold, resolve), "[events-proof] OK" and "[events-image] OK" -- untrusted\nunit summary seen: ${unit ? `"${unit.line}"` : 'none'}\n${tail(out)}`,
     }
   }
-  const n = Number(unit[1]) + live
+  const n = unit.passed + live
   return { label, collected: n, passed: n, failed: 0, skipped: 0 }
 }
 
@@ -289,7 +380,7 @@ export function judgeEventsTest(res) {
  */
 export function judgeFreshInit(res) {
   const label = 'make fresh-init-proof'
-  const out = `${res.stdout}\n${res.stderr}`
+  const out = capturedText(res)
   const oks = (out.match(/^\s+ok \S/gm) ?? []).length
   const fails = (out.match(/^FAIL \S/gm) ?? []).length
   const holds = /^\[fresh-init\] all post-conditions hold\s*$/m.test(out)

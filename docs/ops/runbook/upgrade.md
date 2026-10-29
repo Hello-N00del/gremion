@@ -23,7 +23,7 @@ follows the program, and each divergence is a Known gap below.
 Every bash step assumes this preamble:
 
 ```bash
-export TAG=dist-vX.Y.Z                       # the release being deployed
+export TAG=dist-vX.Y.Z                       # the release being deployed (cut by scripts/release/cut-dist-tag.sh)
 export REL="/opt/gremion/releases/${TAG}"
 export GREMION_SOURCE_URL="<the release source repository>"
 export PATH="/opt/gremion/bin:$PATH"

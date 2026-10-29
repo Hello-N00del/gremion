@@ -587,11 +587,13 @@ describe('an unresolved exempt request with no route (TASK-023)', () => {
       expect(reached).toBe(false)
       expect(res.status).toBe(404)
       expect(await res.text()).toBe('Not Found')
+      /* oxlint-disable vitest/no-conditional-expect -- keyed on the case's own parameter (whether the boot already ran) */
       if (!booted) {
         await vi.waitFor(() => expect(pending.resolve).toBeTypeOf('function'))
         pending.resolve?.()
         await inflight
       }
+      /* oxlint-enable vitest/no-conditional-expect */
     })
   }
 })
@@ -859,6 +861,7 @@ describe('authGuard publicPaths segment-boundary matching (netcup T03)', () => {
 
       // ... and the request must have reached the auth path. API routes answer
       // with a machine-readable 401; page routes redirect to the login screen.
+      /* oxlint-disable vitest/no-conditional-expect -- keyed on the case's own input (the attack path), and each arm asserts the outcome kind first */
       if (attack.startsWith('/api/')) {
         expect(outcome.kind).toBe('returned')
         const res = outcome.value as Response
@@ -871,6 +874,7 @@ describe('authGuard publicPaths segment-boundary matching (netcup T03)', () => {
         expect(red.status).toBe(302)
         expect(red.location).toBe(`/auth/login?callbackUrl=${encodeURIComponent(attack)}`)
       }
+      /* oxlint-enable vitest/no-conditional-expect */
     })
   }
 

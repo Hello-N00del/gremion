@@ -42,8 +42,8 @@ function scaffoldCase(name: string): { specPath: string; outDir: string } {
   return { specPath, outDir }
 }
 
-function cli(script: string, args: string[]) {
-  const r = spawnSync(process.execPath, [join(PACKAGE_DIR, 'src', 'cli', script), ...args], {
+function cli(script: string, args: string[], nodeArgs: string[] = []) {
+  const r = spawnSync(process.execPath, [...nodeArgs, join(PACKAGE_DIR, 'src', 'cli', script), ...args], {
     cwd: PACKAGE_DIR,
     env: { ...process.env, INIT_CWD: PACKAGE_DIR },
     encoding: 'utf8',
@@ -156,6 +156,77 @@ describe('routes:check CLI on scaffolded services', () => {
     const r = cli('routes-check.ts', ['--service', outDir])
     expect(r.status, r.out).toBe(1)
     expect(r.stderr).toMatch(/extra route: GET \/extra is registered but not declared in the spec/)
+  })
+
+  // The services under services/ import workspace packages as SOURCE, and those use what tsc/esbuild
+  // accept but Node's type STRIPPER refuses (enums, constructor parameter properties) and spell
+  // relative imports by their OUTPUT name (`./x.js` for `./x.ts`). routes:check must boot such a
+  // service as written; it used to die with ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX the moment
+  // services/kernel-api grew its first parameter property, failing the package script.
+  it('boots a service whose source needs more than type erasure (enum, parameter property, tsc-style .js import)', () => {
+    const { outDir } = scaffoldCase('check-needs-compile')
+    writeFileSync(
+      join(outDir, 'src', 'marker.ts'),
+      ["export enum Colour {", "  Red = 'red',", "}", "", "export class Marker {", "  constructor(readonly colour: Colour) {}", "}", ""].join('\n'),
+    )
+    const index = join(outDir, 'src', 'index.ts')
+    const source = readFileSync(index, 'utf8').replace(
+      '  return createService({ spec: SPEC_URL, handlers, config })\n',
+      '  void new Marker(Colour.Red)\n  return createService({ spec: SPEC_URL, handlers, config })\n',
+    )
+    expect(source).toContain('new Marker(Colour.Red)')
+    writeFileSync(index, `import { Colour, Marker } from './marker.js'\n${source}`)
+    const r = cli('routes-check.ts', ['--service', outDir])
+    expect(r.status, r.out).toBe(0)
+    expect(r.stdout).toMatch(/OK .*\(5 declared, 6 registered\)/)
+  })
+
+  // A preload that makes `require('typescript')` fail the way a given install would, so the
+  // compile hook's handling of each failure is observed rather than assumed.
+  function withTypescriptFailing(name: string, error: { message: string; code?: string }): string[] {
+    const preload = join(TMP, `${name}.cjs`)
+    mkdirSync(TMP, { recursive: true })
+    writeFileSync(
+      preload,
+      [
+        "const Module = require('node:module')",
+        'const resolve = Module._resolveFilename',
+        'Module._resolveFilename = function (request, ...rest) {',
+        `  if (request === 'typescript') throw Object.assign(new Error(${JSON.stringify(error.message)}), ${JSON.stringify({ code: error.code })})`,
+        '  return resolve.call(this, request, ...rest)',
+        '}',
+        '',
+      ].join('\n'),
+    )
+    return ['--require', preload]
+  }
+
+  it('a workspace without typescript falls back to Node type stripping and still checks the service', () => {
+    const { outDir } = scaffoldCase('check-no-typescript')
+    const r = cli('routes-check.ts', ['--service', outDir], withTypescriptFailing('no-typescript', { message: "Cannot find module 'typescript'", code: 'MODULE_NOT_FOUND' }))
+    expect(r.status, r.out).toBe(0)
+    expect(r.stdout).toMatch(/OK .*\(5 declared, 6 registered\)/)
+  })
+
+  it.each([
+    ['typescript is present but fails to load', { message: 'typescript install is corrupt' }, /typescript install is corrupt/],
+    ["typescript's own dependency is missing", { message: "Cannot find module 'typescript-helper'", code: 'MODULE_NOT_FOUND' }, /Cannot find module 'typescript-helper'/],
+  ])('%s: routes:check fails naming it, it does not silently downgrade to type stripping', (name, error, shown) => {
+    const { outDir } = scaffoldCase(`check-ts-broken-${name.length}`)
+    const r = cli('routes-check.ts', ['--service', outDir], withTypescriptFailing(`broken-${name.length}`, error))
+    expect(r.status, r.out).toBe(1)
+    expect(r.stderr).toMatch(/service failed to build/)
+    expect(r.stderr).toMatch(shown)
+  })
+
+  it('an import of a file that exists neither as .js nor as .ts reports the specifier as written', () => {
+    const { outDir } = scaffoldCase('check-double-miss')
+    const index = join(outDir, 'src', 'index.ts')
+    writeFileSync(index, `import './nowhere.js'\n${readFileSync(index, 'utf8')}`)
+    const r = cli('routes-check.ts', ['--service', outDir])
+    expect(r.status, r.out).toBe(1)
+    expect(r.stderr).toMatch(/service failed to build: .*nowhere\.js/)
+    expect(r.stderr).not.toMatch(/nowhere\.ts/)
   })
 
   it('demo: an operation removed from the spec fails, naming it', () => {
