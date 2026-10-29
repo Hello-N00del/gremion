@@ -1255,7 +1255,9 @@ phase_cold_state() {
     fi
 }
 
+TEARDOWN_STARTED=0   # set by phase_teardown; the EXIT trap in main checks it
 phase_teardown() {
+    TEARDOWN_STARTED=1
     require_scratch teardown
     local p
     for p in app-blue app-green state ops mail; do
@@ -1320,26 +1322,39 @@ run_phase() {
     esac
 }
 
-# sourced (test/host/pooled-stack-proof.bats unit-tests the helpers): stop here
+# The phases 'all' runs, in order. teardown is NOT in the list: main runs it
+# explicitly as the last phase BEFORE the verdict, so a failing teardown (a
+# scratch_rm that cannot remove the root, resources left behind) makes the run
+# RED. The EXIT trap below only covers an aborted run.
+ALL_PHASES=(prepare names state-up state-wait "app-up blue" "app-wait blue" aux-up limits rss isolation probes tenant-before tenant tenant-after "app-up green" "app-wait green" switch cold-state limits)
+
+main() {
+    [[ $# -gt 0 ]] || set -- all
+    PHASES="$*"   # recorded before the loop below shifts the arguments away
+    info "STACK=${STACK} scope=${SCOPE} ledger=${OUT}/ledger"
+    local ph
+    if [[ "$1" == all ]]; then
+        require_scratch all
+        # Only for a run that dies before its own teardown phase: phase_teardown
+        # sets TEARDOWN_STARTED, so a completed (or failed) teardown never runs twice.
+        trap '[[ "$TEARDOWN_STARTED" == 1 ]] || phase_teardown || true' EXIT
+        for ph in "${ALL_PHASES[@]}"; do
+            # shellcheck disable=SC2086
+            run_phase $ph
+        done
+        run_phase teardown
+    else
+        while [[ $# -gt 0 ]]; do
+            case "$1" in
+                app-up|app-wait) run_phase "$1" "${2:?colour}"; shift 2 ;;
+                *) run_phase "$1"; shift ;;
+            esac
+        done
+    fi
+    printf '%s phases [%s] RED=%s\n' "$(now)" "$PHASES" "$RED" | ledger run.log
+    if (( RED )); then echo "[pooled-proof] RED" >&2; exit 1; fi
+    echo "[pooled-proof] GREEN"
+}
+# sourced (test/host/pooled-stack-proof.bats unit-tests the helpers and main): stop here
 [[ "${BASH_SOURCE[0]}" == "$0" ]] || return 0
-[[ $# -gt 0 ]] || set -- all
-PHASES="$*"   # recorded before the loop below shifts the arguments away
-info "STACK=${STACK} scope=${SCOPE} ledger=${OUT}/ledger"
-if [[ "$1" == all ]]; then
-    require_scratch all
-    trap 'phase_teardown || true' EXIT
-    for ph in prepare names state-up state-wait "app-up blue" "app-wait blue" aux-up limits rss isolation probes tenant-before tenant tenant-after "app-up green" "app-wait green" switch cold-state limits; do
-        # shellcheck disable=SC2086
-        run_phase $ph
-    done
-else
-    while [[ $# -gt 0 ]]; do
-        case "$1" in
-            app-up|app-wait) run_phase "$1" "${2:?colour}"; shift 2 ;;
-            *) run_phase "$1"; shift ;;
-        esac
-    done
-fi
-printf '%s phases [%s] RED=%s\n' "$(now)" "$PHASES" "$RED" | ledger run.log
-if (( RED )); then echo "[pooled-proof] RED" >&2; exit 1; fi
-echo "[pooled-proof] GREEN"
+main "$@"

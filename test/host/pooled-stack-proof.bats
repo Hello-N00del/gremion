@@ -548,6 +548,48 @@ skip_if_mail_api_port_taken() {
     [ ! -e "${POOLED_OUT}/root" ]
 }
 
+# 'all' runs teardown as its last phase BEFORE the verdict (house review MEDIUM 3):
+# from the EXIT trap alone it ran after "GREEN" was printed and run.log written,
+# so a teardown failure was invisible and the exit stayed 0. ALL_PHASES is
+# emptied so only the teardown (and the verdict) are exercised.
+all_in_repo() {
+    local sfx="shim-all-$$"
+    export POOLED_STACK="t040-${sfx}" SHIM_STACK="t040-${sfx}"
+    export POOLED_OUT="${REPO_ROOT}/.scratch/pooled-stack-proof/t040-${sfx}"
+    IN_REPO_OUT="$POOLED_OUT"
+    mkdir -p "${POOLED_OUT}/ledger" "${POOLED_OUT}/root/etc"
+}
+
+@test "all: positive control -- teardown runs once, before the verdict, and the run is GREEN" {
+    all_in_repo
+    run bash -c 'set -euo pipefail; . "$1"; ALL_PHASES=(); main all' _ "$PROOF"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"[pooled-proof] GREEN"* ]]
+    [ "$(grep -c 'teardown: no container, network or volume' <<< "$output")" -eq 1 ]
+    grep -q 'phases \[all\] RED=0' "${POOLED_OUT}/ledger/run.log"
+    [ ! -e "${POOLED_OUT}/root" ]
+}
+
+@test "all: a scratch_rm that fails in teardown makes the run RED (verdict, run.log and exit), teardown not repeated by the trap" {
+    all_in_repo
+    run bash -c 'set -euo pipefail; . "$1"; ALL_PHASES=(); scratch_rm() { bad "forced scratch_rm failure"; return 1; }; main all' _ "$PROOF"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"FAIL forced scratch_rm failure"* ]]
+    [[ "$output" == *"[pooled-proof] RED"* ]]
+    [[ "$output" != *"[pooled-proof] GREEN"* ]]
+    grep -q 'phases \[all\] RED=1' "${POOLED_OUT}/ledger/run.log"
+    [ "$(grep -c 'teardown: no container, network or volume' <<< "$output")" -eq 1 ]
+}
+
+@test "all: a run that aborts before its teardown phase is still torn down once, by the EXIT trap" {
+    all_in_repo
+    run bash -c 'set -euo pipefail; . "$1"; ALL_PHASES=("no-such-phase"); main all' _ "$PROOF"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"FATAL: unknown phase 'no-such-phase'"* ]]
+    [ "$(grep -c 'teardown: no container, network or volume' <<< "$output")" -eq 1 ]
+    [ ! -e "${POOLED_OUT}/root" ]
+}
+
 teardown() {
     [[ -z "${IN_REPO_OUT:-}" ]] || rm -rf "$IN_REPO_OUT"
     [[ -z "${IN_REPO_OTHER:-}" ]] || rm -rf "$IN_REPO_OTHER"
