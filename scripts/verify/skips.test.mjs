@@ -109,18 +109,18 @@ test('an entry naming the exact part suite matches that part', () => {
   assert.equal(checkSkipsByFile('unit:node', { 'f.test.mjs': 3 }, data).length, 1)
 })
 
-// The skip budget is per file, not per platform: a file whose Windows run skipped more cases than its
-// Linux run was granted the Windows count, and the Linux runner then carried skips it never needed
-// (any two of them could hide a real regression). packages/nats-auth's kernel-api-dir.test.ts used to
-// skip its two POSIX-mode cases on Windows only; it now registers them from a table that is empty
-// there, so its one remaining skip (the root-only run) is the whole budget on every host.
-test('the real allowed-skips.json grants kernel-api-dir.test.ts the one root-only skip and no Windows-sized slack', () => {
+// packages/nats-auth's kernel-api-dir.test.ts registers its two POSIX-mode cases and its root-only case from
+// case tables (test.each) that are empty where they cannot run, so it leaves no skipped twin on any host and
+// is granted nothing: a skip there is a regression (CI run 3 read one as an "unparseable" integration part).
+test('the real allowed-skips.json grants kernel-api-dir.test.ts no skip on any platform', () => {
   const data = loadAllowedSkips()
   const file = 'packages/nats-auth/test/kernel-api-dir.test.ts'
-  assert.deepEqual(checkSkipsByFile('unit', { [file]: 1 }, data), [])
-  const v = checkSkipsByFile('unit', { [file]: 2 }, data)
-  assert.equal(v.length, 1)
-  assert.match(v[0], /2 skip\(s\), exceeds the allowed 1/)
+  assert.equal(data.entries.some((e) => e.file === file), false, 'kernel-api-dir.test.ts must not have an allow-list entry')
+  for (const platform of ['win32', 'linux']) {
+    const v = checkSkipsByFile('unit', { [file]: 1 }, data, platform)
+    assert.equal(v.length, 1, platform)
+    assert.match(v[0], /1 skip\(s\), exceeds the allowed 0/)
+  }
 })
 
 // ── platform-scoped budgets ─────────────────────────────────────────────────
