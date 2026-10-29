@@ -185,6 +185,26 @@ test('the traefik service may pass STACK through as a list item `STACK` or a nul
   }
 })
 
+test('a YAML file the compose finder does not pick up but that carries a traefik.enable / traefik.http. label is flagged', () => {
+  const t = tree({
+    'docker/traefik/traefik.yml': GOOD_TRAEFIK_YML,
+    'docker-compose.yml': GOOD_STATE,
+    'docker-compose.prod.yml': LABELLED_LEGAL,
+    'deploy/stack.yaml': 'services:\n  x:\n    labels:\n      - "traefik.enable=true"\n',
+    'ops/overlay.yml': 'services:\n  y:\n    labels:\n      traefik.http.routers.y.rule: "Host(`y`)"\n',
+    'k8s/ingress.yml': 'metadata:\n  annotations:\n    traefik.enable: "true"\n',
+    'ops/unrelated.yml': 'name: nothing here\n',
+  })
+  try {
+    const r = checkStackScope(t.root)
+    assert.equal(r.problems.length, 2, r.problems.join('\n'))
+    assert.match(r.problems.join('\n'), /deploy\/stack\.yaml: .*traefik/)
+    assert.match(r.problems.join('\n'), /ops\/overlay\.yml: .*traefik/)
+  } finally {
+    t.cleanup()
+  }
+})
+
 test('labelMap and isRouted read both label forms', () => {
   assert.deepEqual(labelMap(['a=b=c', 'x']), { a: 'b=c', x: '' })
   assert.deepEqual(labelMap({ a: true, b: null }), { a: 'true', b: '' })

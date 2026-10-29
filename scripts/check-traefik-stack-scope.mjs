@@ -66,6 +66,16 @@ export function findComposeFiles(root) {
   return walkFiles(root, (p) => COMPOSE_NAME_RE.test(p) || (/\.ya?ml$/.test(p) && /^compose\//.test(p)))
 }
 
+// A candidate found by CONTENT: a file named like neither of the compose conventions above can still
+// be passed to `docker compose -f`; a traefik.enable / traefik.http. label inside it is the tell.
+const TRAEFIK_LABEL_RE = /traefik\.(enable|http\.)/
+
+/** YAML files outside the skipped dirs that carry a traefik.enable / traefik.http. label but are not in <known>. */
+export function findUnscannedTraefikYaml(root, known) {
+  const seen = new Set(known)
+  return walkFiles(root, (p) => /\.ya?ml$/.test(p) && !seen.has(p)).filter((p) => TRAEFIK_LABEL_RE.test(readFileSync(join(root, p), 'utf8')))
+}
+
 /** Labels of one service as a plain {key: string} map, from the list or the map form. */
 export function labelMap(labels) {
   const out = {}
@@ -142,6 +152,12 @@ export function checkStackScope(root = KERNEL_ROOT) {
     }
   }
   if (files.length > 0 && routed.length === 0) problems.push('no routed service found in any compose file -- the guard has gone blind')
+
+  for (const p of findUnscannedTraefikYaml(root, files))
+    problems.push(
+      `${p}: carries a traefik.enable / traefik.http. label but is not a compose file the guard scans ` +
+        `(name it docker-compose*.yml or put it under compose/) -- its services escape the ${STACK_LABEL} check`,
+    )
 
   const yml = join(root, 'docker/traefik/traefik.yml')
   if (!existsSync(yml)) problems.push('docker/traefik/traefik.yml is missing')
