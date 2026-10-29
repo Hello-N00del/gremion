@@ -829,6 +829,91 @@ run_cut() {
     refute_recorded gh ""
 }
 
+@test "cut-dist-tag.sh cuts the tag, lists every migration as new only for the first release, and hands the key to sign-release.sh alone" {
+    make_cut_repo
+    make_cut_signing_key
+    shim_cut_tools
+    shim_cut_gh
+    # the key file is any readable file; the password is a recognisable dummy
+    export COSIGN_KEY_PATH="$DIST_MANIFEST"
+    export COSIGN_PASSWORD=dummy-password-for-the-test
+    run_cut 1.0.0 --run-id 42 --overlap true --dist-manifest "$DIST_MANIFEST" --first-release
+    [ "$status" -eq 0 ] || { echo "$output" >&2; return 1; }
+    # the tag is on origin, annotated, and carries the release.json of the first release
+    git -C "$CUT_ORIGIN" rev-parse -q --verify refs/tags/dist-v1.0.0 > /dev/null
+    [ "$(git -C "$CUT_ORIGIN" cat-file -t refs/tags/dist-v1.0.0)" = tag ]
+    [ "$(git -C "$CUT_ORIGIN" show dist-v1.0.0:release.json | jq -c .migrations)" = '["001_a","002_b"]' ]
+    git -C "$CUT_ORIGIN" show dist-v1.0.0:docker-compose.pins.yml | grep -q "gremion-ui@sha256:${GOOD_DIGEST_A}"
+    git -C "$CUT_ORIGIN" show dist-v1.0.0:docker-compose.state-pins.yml | grep -q "gremion-legal@sha256:${GOOD_DIGEST_A}"
+    # check-pins judged both layers before they were committed
+    assert_recorded node "check-pins.mjs"
+    assert_recorded node "docker-compose.pins.yml --project app"
+    assert_recorded node "docker-compose.state-pins.yml --project state"
+    assert_recorded make "verify"
+    assert_recorded node "scripts/verify/check-record.mjs"
+    # sign-release.sh is the one child that gets the password, and it is handed
+    # the key by --key, not through the environment
+    grep -q "^sign-release pw=dummy-password-for-the-test key=unset args=--key ${COSIGN_KEY_PATH} ghcr.io/hello-n00del/gremion-legal@sha256:${GOOD_DIGEST_A} ghcr.io/hello-n00del/gremion-migrate@sha256:${GOOD_DIGEST_B} ghcr.io/hello-n00del/gremion-ui@sha256:${GOOD_DIGEST_A}\$" "$ENV_LOG" || {
+        echo "sign-release did not get the key and password:" >&2; cat "$ENV_LOG" >&2; return 1
+    }
+    # gh, node (check-pins, check-record) and make verify ran without either
+    [ "$(grep -c '^gh ' "$ENV_LOG")" -ge 3 ]
+    [ "$(grep -c '^node ' "$ENV_LOG")" -ge 3 ]
+    local leaked
+    leaked="$(grep -E '^(gh|node) ' "$ENV_LOG" | grep -v 'COSIGN_PASSWORD=unset COSIGN_KEY_PATH=unset' || true)"
+    [ -z "$leaked" ] || { echo "credentials reached:" >&2; echo "$leaked" >&2; return 1; }
+}
+
+@test "cut-dist-tag.sh runs make verify without COSIGN_KEY_PATH or COSIGN_PASSWORD in its environment" {
+    make_cut_repo
+    make_cut_signing_key
+    shim_cut_tools
+    shim_cut_gh
+    # shellcheck disable=SC2016
+    shim make 'printf "make COSIGN_PASSWORD=%s COSIGN_KEY_PATH=%s\n" "${COSIGN_PASSWORD-unset}" "${COSIGN_KEY_PATH-unset}" >> "$ENV_LOG"'
+    export COSIGN_KEY_PATH="$DIST_MANIFEST"
+    export COSIGN_PASSWORD=dummy-password-for-the-test
+    run_cut 1.0.0 --run-id 42 --overlap true --dist-manifest "$DIST_MANIFEST" --first-release
+    [ "$status" -eq 0 ] || { echo "$output" >&2; return 1; }
+    grep -qx 'make COSIGN_PASSWORD=unset COSIGN_KEY_PATH=unset' "$ENV_LOG" || {
+        echo "make verify saw the signing credentials:" >&2; cat "$ENV_LOG" >&2; return 1
+    }
+    # a password that was never set stays unset for the signer too (cosign prompts)
+    : > "$ENV_LOG"
+    git -C "$CUT_REPO" checkout -q main
+    git -C "$CUT_REPO" tag -d dist-v1.0.0 > /dev/null
+    git -C "$CUT_ORIGIN" tag -d dist-v1.0.0 > /dev/null
+    unset COSIGN_PASSWORD
+    run_cut 1.0.0 --run-id 42 --overlap true --dist-manifest "$DIST_MANIFEST" --first-release
+    [ "$status" -eq 0 ] || { echo "$output" >&2; return 1; }
+    grep -q '^sign-release pw=unset ' "$ENV_LOG"
+}
+
+@test "cut-dist-tag.sh cuts a release built from a v* tag's commit, and the next release lists only the new migrations" {
+    make_cut_repo
+    make_cut_signing_key
+    shim_cut_tools
+    shim_cut_gh
+    export COSIGN_KEY_PATH="$DIST_MANIFEST"
+    # first release
+    run_cut 1.0.0 --run-id 42 --overlap true --dist-manifest "$DIST_MANIFEST" --first-release
+    [ "$status" -eq 0 ] || { echo "$output" >&2; return 1; }
+    # a second release: a commit that is on no branch of origin, but is a release tag's commit
+    git -C "$CUT_REPO" checkout -q --detach "$FAKE_SHA"
+    printf '{"chains":[{"files":{"001_a":"x","002_b":"y","003_c":"z"}}]}\n' > "${CUT_REPO}/scripts/migrations/applied.lock.json"
+    git -C "$CUT_REPO" commit -q -am 'a later commit'
+    local built
+    built="$(git -C "$CUT_REPO" rev-parse HEAD)"
+    git -C "$CUT_REPO" tag -a v1.0.1 -m v1.0.1
+    git -C "$CUT_REPO" push -q origin v1.0.1
+    git -C "$CUT_REPO" checkout -q main
+    # the artefact of the run that built it
+    printf '%s\n' "$built" > "${ARTEFACT}/release-sha.txt"
+    FAKE_SHA="$built" run_cut 1.0.1 --run-id 43 --overlap false --dist-manifest "$DIST_MANIFEST"
+    [ "$status" -eq 0 ] || { echo "$output" >&2; return 1; }
+    [ "$(git -C "$CUT_ORIGIN" show dist-v1.0.1:release.json | jq -c .migrations)" = '["003_c"]' ]
+}
+
 # ---------------------------------------------------------------------------
 # docs/ops/host-tooling.md
 # ---------------------------------------------------------------------------

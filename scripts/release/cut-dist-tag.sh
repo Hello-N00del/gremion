@@ -49,6 +49,10 @@
 # and an `image:` that is a first-party `<name>@sha256:<64 hex>`, nothing else) or
 # that check-pins.mjs refuses for the built commit.
 #
+# CREDENTIALS. COSIGN_KEY_PATH and COSIGN_PASSWORD are taken off the
+# environment as soon as they are read: gh, git, node, make verify and the
+# lint run without them, and only sign-release.sh gets them back.
+#
 # THE HOST-SIDE DEPLOY IS NOT DONE HERE. Handing a registry token to the host
 # is a manual operator step (docs/ops/runbook/upgrade.md); this script ends at
 # the pushed tag.
@@ -146,6 +150,16 @@ main() {
     [[ -n "${COSIGN_KEY_PATH:-}" ]] || die "COSIGN_KEY_PATH is not set (the cosign key lives in the operator vault)"
     [[ -f "$COSIGN_KEY_PATH" && -r "$COSIGN_KEY_PATH" ]] || die "COSIGN_KEY_PATH is not a readable file: $COSIGN_KEY_PATH"
     [[ -f "$manifest" && -r "$manifest" ]] || die "--dist-manifest is not a readable file: $manifest"
+
+    # Only sign-release.sh needs the key and its password. Everything else this
+    # script starts (gh, git, node, make verify, the lint) is project code at
+    # the built commit, so neither stays in the environment it inherits.
+    local sign_key="$COSIGN_KEY_PATH" sign_password="" sign_password_set=0
+    if [[ -v COSIGN_PASSWORD ]]; then
+        sign_password="$COSIGN_PASSWORD"
+        sign_password_set=1
+    fi
+    unset COSIGN_KEY_PATH COSIGN_PASSWORD
 
     local root status tag prev_tag
     root="$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel)" || die "not inside a git checkout"
@@ -250,7 +264,11 @@ main() {
     # 4. sign and attest every pinned digest, by digest only
     local -a refs_arr
     mapfile -t refs_arr <<< "$refs"
-    bash scripts/release/sign-release.sh --key "$COSIGN_KEY_PATH" "${refs_arr[@]}"
+    # The one place the key and its password come back, for this child only.
+    (
+        if [[ "$sign_password_set" -eq 1 ]]; then export COSIGN_PASSWORD="$sign_password"; fi
+        bash scripts/release/sign-release.sh --key "$sign_key" "${refs_arr[@]}"
+    )
 
     # 5. the annotated, signed tag
     git -c gpg.format=ssh tag -s -a "$tag" -m "$tag"
