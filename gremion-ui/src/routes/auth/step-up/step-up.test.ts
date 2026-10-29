@@ -72,4 +72,11 @@ describe('step-up load', () => {
       expect((await run(`?error=no-second-factor&returnTo=${evil}`)).returnTo, evil).toBe('/')
     }
   })
+
+  test('the guard checks the normalised path it returns: dot segments that collapse to a protocol-relative path fall back to /', async () => {
+    for (const evil of ['/.//evil.com', '/%2e//evil.com', '/..//evil.com', '/a/..//evil.com']) {
+      expect((await run(`?returnTo=${evil}`)).returnTo, evil).toBe('/')
+    }
+    expect((await run('?returnTo=/a/../finance')).returnTo).toBe('/finance')
+  })
 })

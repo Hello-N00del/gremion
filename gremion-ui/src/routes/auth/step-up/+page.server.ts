@@ -27,7 +27,10 @@ function sameOriginPath(raw: string, origin: string): string {
   if (!raw.startsWith('/') || raw.startsWith('//') || raw.includes('\\') || hasControlChar(raw)) return '/'
   try {
     const u = new URL(raw, origin)
-    return u.origin === origin ? `${u.pathname}${u.search}${u.hash}` : '/'
+    const path = `${u.pathname}${u.search}${u.hash}`
+    // Check what is returned, not only the input: dot-segment removal can turn a single-slash
+    // input into a protocol-relative path.
+    return u.origin === origin && !path.startsWith('//') ? path : '/'
   } catch {
     return '/'
   }
