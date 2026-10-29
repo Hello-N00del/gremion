@@ -157,6 +157,165 @@ test('`set +e` in the gate is reported', () => {
   assert.match(p, /verify-gate step \d+ \(Every verify leg must have succeeded\): `set \+e` swallows a failing exit status/)
 })
 
+// ── `set +e` in every spelling that turns errexit off ───────────────────────
+const GATE_SET = '          set -euo pipefail\n          # Vacuity floor'
+const gateSet = (spelling) => plant(GATE_SET, `          ${spelling}\n          # Vacuity floor`)
+
+test('`set +ex` in the gate is reported (errexit off, xtrace on)', () => {
+  assert.match(joined(gateSet('set +ex')), /Every verify leg must have succeeded\): `set \+ex` swallows a failing exit status/)
+})
+
+test('`set +eu` in the gate is reported', () => {
+  assert.match(joined(gateSet('set +eu')), /`set \+eu` swallows a failing exit status/)
+})
+
+test('`set +euo pipefail` in the gate is reported', () => {
+  assert.match(joined(gateSet('set +euo pipefail')), /`set \+euo pipefail` swallows a failing exit status/)
+})
+
+test('`set +o errexit` in the gate is reported', () => {
+  assert.match(joined(gateSet('set +o errexit')), /`set \+o errexit` swallows a failing exit status/)
+})
+
+test('`set +x` and `set +u` do not turn errexit off and are not reported', () => {
+  assert.deepEqual(problemsOf(gateSet('set +x')), [])
+  assert.deepEqual(problemsOf(gateSet('set +u')), [])
+})
+
+// ── a `shell:` that drops -e (GitHub's `bash {0}` is the documented fail-fast opt-out) ──
+const COMBINE_NAME = "      - name: Combine the legs' records\n"
+const CENSUS_JOB_NAME = '    name: "Verify: render and ops suites"\n'
+const stepShell = (shell) => plant(COMBINE_NAME, `${COMBINE_NAME}        shell: ${shell}\n`)
+
+test('a step-level `shell: bash {0}` in the gate is reported', () => {
+  assert.match(joined(stepShell('bash {0}')), /Combine the legs' records\): `shell: bash \{0\}` drops -e/)
+})
+
+test('a step-level `shell: pwsh` in the gate is reported', () => {
+  assert.match(joined(stepShell('pwsh')), /`shell: pwsh` drops -e/)
+})
+
+test('a step-level `shell: python` in a leg is reported', () => {
+  const p = joined(plant('        run: node scripts/verify/verify.mjs --only census', '        shell: python\n        run: node scripts/verify/verify.mjs --only census'))
+  assert.match(p, /verify-census step \d+ \(Run verify\): `shell: python` drops -e/)
+})
+
+test('a job-level `defaults.run.shell: bash {0}` on a record-producing leg is reported', () => {
+  const p = joined(plant(CENSUS_JOB_NAME, `${CENSUS_JOB_NAME}    defaults:\n      run:\n        shell: bash {0}\n`))
+  assert.match(p, /verify-render-ops sets defaults\.run\.shell: bash \{0\}, which drops -e/)
+})
+
+test('a job-level `defaults.run.shell` on the gate is reported', () => {
+  const p = joined(plant('    name: Verify gate\n', '    name: Verify gate\n    defaults:\n      run:\n        shell: bash {0}\n'))
+  assert.match(p, /verify-gate sets defaults\.run\.shell: bash \{0\}, which drops -e/)
+})
+
+test('a workflow-level `defaults.run.shell: bash {0}` is reported', () => {
+  const p = joined(plant('\njobs:\n', '\ndefaults:\n  run:\n    shell: bash {0}\n\njobs:\n'))
+  assert.match(p, /the workflow sets defaults\.run\.shell: bash \{0\}, which drops -e/)
+})
+
+test('a `shell:` that keeps -e (bash, sh, or a template passing -e) is not reported', () => {
+  assert.deepEqual(problemsOf(stepShell('bash')), [])
+  assert.deepEqual(problemsOf(stepShell('sh')), [])
+  assert.deepEqual(problemsOf(stepShell('bash --noprofile --norc -eo pipefail {0}')), [])
+  assert.deepEqual(problemsOf(stepShell('bash -e {0}')), [])
+})
+
+// ── a verdict command followed by `||`, in a condition, or negated ──────────
+const COMBINE_RUN = 'run: node scripts/verify/combine-records.mjs --in-dir "$RUNNER_TEMP/verify-records" --sha "$SHA"'
+const COMBINE_CMD = COMBINE_RUN.slice('run: '.length)
+const combineBlock = (...lines) => plant(COMBINE_RUN, `run: |\n${lines.map((l) => `          ${l}`).join('\n')}`)
+
+test('a leg\'s verify call followed by `|| echo` is reported', () => {
+  const p = joined(plant('run: node scripts/verify/verify.mjs --only census', 'run: node scripts/verify/verify.mjs --only census || echo "census failed"'))
+  assert.match(p, /verify-census step \d+ \(.*\): `node scripts\/verify\/verify\.mjs --only census \|\| echo "census failed"` swallows a failing exit status/)
+})
+
+test('a verify call followed by `&& echo ok || echo bad` is reported', () => {
+  const p = joined(plant('run: node scripts/verify/verify.mjs --only census', 'run: node scripts/verify/verify.mjs --only census && echo ok || echo bad'))
+  assert.match(p, /swallows a failing exit status/)
+})
+
+test('a verify call piped through tee and then `||` is reported', () => {
+  const p = joined(plant('run: node scripts/verify/verify.mjs --only census', 'run: node scripts/verify/verify.mjs --only census | tee census.log || echo bad'))
+  assert.match(p, /swallows a failing exit status/)
+})
+
+test('the gate\'s combine call followed by `|| exit 0` is reported', () => {
+  assert.match(joined(combineBlock(`${COMBINE_CMD} || exit 0`)), /combine-records\.mjs .* \|\| exit 0` swallows a failing exit status/)
+})
+
+test('a `||` on a backslash-continued verify call is reported (the line is judged whole)', () => {
+  const p = joined(combineBlock(`${COMBINE_CMD} \\`, '  || echo failed'))
+  assert.match(p, /swallows a failing exit status/)
+})
+
+test('the strict check-record call followed by `|| echo` is reported', () => {
+  const p = joined(plant(STRICT_RUN, 'run: node scripts/verify/check-record.mjs "$SHA" || echo "not green"\n'))
+  assert.match(p, /check-record\.mjs "\$SHA" \|\| echo "not green"` swallows a failing exit status/)
+})
+
+test('`|| true` inside backticks is reported', () => {
+  assert.match(joined(combineBlock('x=`git rev-parse HEAD || true`', COMBINE_CMD)), /x=`git rev-parse HEAD \|\| true`` swallows a failing exit status/)
+})
+
+test('`|| true` inside `$( )` is reported', () => {
+  assert.match(joined(combineBlock('x=$(git rev-parse HEAD || true)', COMBINE_CMD)), /x=\$\(git rev-parse HEAD \|\| true\)` swallows a failing exit status/)
+})
+
+test('a verdict call inside `$( )` followed by `|| true` is reported', () => {
+  assert.match(joined(combineBlock(`x=$(${COMBINE_CMD} || true)`)), /swallows a failing exit status/)
+})
+
+test('`if ! <combine-records>; then` is reported', () => {
+  const p = joined(combineBlock(`if ! ${COMBINE_CMD}; then`, '  exit 0', 'fi'))
+  assert.match(p, /`if ! node scripts\/verify\/combine-records\.mjs .*; then` tests a verdict command in a condition/)
+})
+
+test('`if <verify>; then` is reported', () => {
+  const p = joined(plant('run: node scripts/verify/verify.mjs --only census', 'run: |\n          if node scripts/verify/verify.mjs --only census; then echo ok; fi'))
+  assert.match(p, /tests a verdict command in a condition/)
+})
+
+test('a bare negated `! <check-record>` is reported', () => {
+  const p = joined(plant(STRICT_RUN, 'run: |\n          ! node scripts/verify/check-record.mjs "$SHA"\n'))
+  assert.match(p, /`! node scripts\/verify\/check-record\.mjs "\$SHA"` tests a verdict command in a condition/)
+})
+
+test('an `if [ ... ]` test that merely precedes a verdict call on its own line is not reported', () => {
+  assert.deepEqual(problemsOf(combineBlock('if [ -z "$SHA" ]; then exit 1; fi', COMBINE_CMD)), [])
+})
+
+// ── the gate step that checks every leg's result keeps a non-narrowing `if` ──
+const LEGS_NAME = '      - name: Every verify leg must have succeeded\n'
+const legsIf = (cond) => plant(LEGS_NAME, `${LEGS_NAME}        if: ${cond}\n`)
+
+test('an `if` narrowed onto the every-leg-succeeded step is reported (a skipped step checks nothing)', () => {
+  const p = joined(legsIf("${{ github.event_name != 'pull_request' }}"))
+  assert.match(p, /Every verify leg must have succeeded\) has `if: github\.event_name != 'pull_request'`; the step that checks every leg's result must have no `if`/)
+})
+
+test('`if: false` on the every-leg-succeeded step is reported', () => {
+  assert.match(joined(legsIf('false')), /has `if: false`; the step that checks every leg's result/)
+})
+
+test('a renamed every-leg-succeeded step keeps its `if` pinned (it is found by toJSON(needs), not by name)', () => {
+  const renamed = plant(LEGS_NAME, "      - name: Look at the legs\n        if: ${{ false }}\n")
+  assert.match(joined(renamed), /Look at the legs\) has `if: false`/)
+})
+
+test('a gate with no step reading toJSON(needs) is reported', () => {
+  const p = joined(plant('NEEDS_JSON: ${{ toJSON(needs) }}', "NEEDS_JSON: '{}'"))
+  assert.match(p, /verify-gate has no step that reads toJSON\(needs\)/)
+})
+
+test('an every-leg-succeeded step with no `if`, always() or !cancelled() is accepted', () => {
+  assert.deepEqual(problemsOf(CI), [])
+  assert.deepEqual(problemsOf(legsIf('${{ always() }}')), [])
+  assert.deepEqual(problemsOf(legsIf('${{ !cancelled() }}')), [])
+})
+
 test('a docker diagnostic or cleanup with `|| true` is tolerated, but not when it carries the verify call', () => {
   assert.deepEqual(problemsOf(CI), [])
   const p = joined(plant('run: docker rm -f nats-js || true', 'run: docker rm -f nats-js; node scripts/verify/verify.mjs --only census || true'))

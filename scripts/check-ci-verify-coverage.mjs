@@ -22,11 +22,14 @@
 //   4. A way past the strict check. `--allow-missing` exists for one case (a pull
 //      request that touched no census input skips that leg) and must never be
 //      reachable from a push; `continue-on-error` turns any red job into a green
-//      one; `|| true` / `|| :` / `set +e` in a leg or the gate swallow a red exit
-//      status the same way; the strict check-record call must stay the plain,
-//      flagless one sign-release.sh also relies on; and the `if` of the gate job
-//      and of that call are pinned, because a narrowed one makes the gate SKIP,
-//      and a skipped required check reads as passing in a branch ruleset.
+//      one; `|| true` / `|| :` / `set +e` (any spelling), a `||` after a verdict
+//      command, a verdict command used as an `if` / `!` condition, and a `shell:`
+//      without -e (`bash {0}`) in a leg or the gate swallow a red exit status the
+//      same way; the strict check-record call must stay the plain, flagless one
+//      sign-release.sh also relies on; and the `if` of the gate job, of the step
+//      that checks every leg's result and of the strict call are pinned, because a
+//      narrowed one makes the gate SKIP, and a skipped required check reads as
+//      passing in a branch ruleset.
 //
 // A scan that found almost nothing would pass every rule above, so it refuses to
 // pass below a floor of verify invocations (the vacuity floor).
@@ -72,15 +75,51 @@ const NOT_PULL_REQUEST = /github\.event_name\s*!=\s*'pull_request'/
 // A shell line that swallows a failing exit status. Comment lines are skipped by the
 // caller. `docker logs|rm ... || true` (a diagnostic or cleanup that must not mask the
 // real failure) is the one tolerated shape, and only as a whole line of its own.
-const SWALLOWS_STATUS = /\|\|\s*(?:true|:|exit\s+0)\s*(?:$|[;&|)#])|\bset\s+\+(?:e|o\s+errexit)\b/
+// `|| true` ends at a separator, at the `)` closing a `$( )` or at the backtick closing a
+// backtick substitution; `set +e` is any option cluster that turns errexit off (`+ex`,
+// `+euo pipefail`), not only a lone `e`.
+const SWALLOWS_STATUS = /\|\|\s*(?:true|:|exit\s+0)\s*(?:$|[;&|)`#])|\bset\s+\+[a-z]*e[a-z]*\b|\bset\s+\+o\s+errexit\b/
 const BENIGN_CLEANUP = /^\s*docker\s+(?:logs|rm)\b[^;&|]*\|\|\s*true\s*$/
+
+// The commands whose exit status IS the verdict. Whatever follows one with `||` runs only
+// when it failed (and usually turns that into success), and a condition (`if cmd`,
+// `if ! cmd`, `! cmd`) is exempt from `set -e`, so none of these may touch them.
+const VERDICT_CMD = String.raw`\b(?:verify|check-record|combine-records)\.mjs\b`
+const VERDICT_THEN_OR = new RegExp(String.raw`${VERDICT_CMD}(?:[^;|\n]|\|(?!\|))*\|\|`)
+const VERDICT_IN_CONDITION = new RegExp(String.raw`(?:^|[\s;&|({])(?:if|elif|while|until)\s+[^;\n]*?${VERDICT_CMD}`)
+const VERDICT_NEGATED = new RegExp(String.raw`(?:^|[\s;&|({])!\s+[^;\n|\]]*?${VERDICT_CMD}`)
+
+// A `shell:` keeps errexit when it is unset, bash or sh (GitHub runs both with -e), or a
+// template that passes -e / -o errexit. `bash {0}` is the documented way to turn fail-fast OFF.
+const ERREXIT_SHELL = /^(?:bash|sh)$|^(?:ba)?sh\s(?:.*\s)?-(?:[A-Za-z]*e[A-Za-z]*|o\s+errexit)\s(?:.*\s)?\{0\}$/
+const keepsErrexit = (shell) => shell === undefined || shell === null || (typeof shell === 'string' && ERREXIT_SHELL.test(shell.trim()))
 
 // The only `if` the gate job and its strict check-record step may carry (after the
 // `${{ }}` wrapper and whitespace are normalized away). Anything narrower can skip
 // them; anything missing on the job skips it when a leg fails.
 const GATE_JOB_IFS = new Set(['!cancelled()', 'always()'])
+// The step that judges every leg's `result` (found by its `toJSON(needs)`, not by its name)
+// may carry no `if` that can skip it; these are the only ones that do not narrow it.
+const LEGS_STEP_IFS = new Set(['', 'success()', '!cancelled()', 'always()'])
 const STRICT_STEP_IF = "github.event_name != 'pull_request' || needs.verify-census.result == 'success'"
 const normalizeIf = (v) => text(v === undefined || v === null ? '' : String(v)).replace(/^\s*\$\{\{|\}\}\s*$/g, '').replace(/\s+/g, ' ').trim()
+
+/** The logical lines of a `run` script: backslash continuations joined, comments dropped. */
+function logicalLines(run) {
+  const out = []
+  let acc = ''
+  for (const raw of text(run).split('\n')) {
+    const line = acc + raw
+    if (/\\\s*$/.test(line)) {
+      acc = line.replace(/\\\s*$/, ' ')
+      continue
+    }
+    acc = ''
+    if (!/^\s*#/.test(line)) out.push(line)
+  }
+  if (acc && !/^\s*#/.test(acc)) out.push(acc)
+  return out
+}
 
 /** Every step of every job, with where it lives. */
 function* eachStep(doc) {
@@ -196,9 +235,29 @@ export function checkWorkflow(doc, { requiredSuites, unitParts, integrationParts
   const verdictJobs = new Set([...uploaders, ...invocations.map((i) => i.jobId), ...(gate ? ['verify-gate'] : [])])
   for (const { label, jobId, step } of eachStep(doc)) {
     if (!verdictJobs.has(jobId)) continue
-    for (const line of text(step.run).split('\n')) {
-      if (/^\s*#/.test(line) || BENIGN_CLEANUP.test(line)) continue
-      if (SWALLOWS_STATUS.test(line)) problems.push(`${label}: \`${line.trim()}\` swallows a failing exit status -- a red step would read as green`)
+    for (const line of logicalLines(step.run)) {
+      if (BENIGN_CLEANUP.test(line)) continue
+      if (SWALLOWS_STATUS.test(line) || VERDICT_THEN_OR.test(line)) {
+        problems.push(`${label}: \`${line.trim()}\` swallows a failing exit status -- a red step would read as green`)
+      } else if (VERDICT_IN_CONDITION.test(line) || VERDICT_NEGATED.test(line)) {
+        problems.push(`${label}: \`${line.trim()}\` tests a verdict command in a condition, where \`set -e\` does not apply -- a red step would read as green`)
+      }
+    }
+    if (!keepsErrexit(step.shell)) problems.push(`${label}: \`shell: ${step.shell}\` drops -e (only bash, sh or a template with -e keeps it) -- a failing command would not fail the step`)
+  }
+  for (const jobId of verdictJobs) {
+    const shell = doc.jobs[jobId]?.defaults?.run?.shell
+    if (!keepsErrexit(shell)) problems.push(`${jobId} sets defaults.run.shell: ${shell}, which drops -e -- a failing command would not fail its steps`)
+  }
+  if (!keepsErrexit(doc.defaults?.run?.shell)) {
+    problems.push(`the workflow sets defaults.run.shell: ${doc.defaults.run.shell}, which drops -e -- a failing command would not fail its steps`)
+  }
+  // The step that checks every leg's result is found by what it reads, so a rename cannot hide it.
+  const legSteps = [...eachStep(doc)].filter(({ jobId, step }) => jobId === 'verify-gate' && /toJSON\(\s*needs\s*\)/.test(JSON.stringify([step.env, step.run])))
+  if (gate && legSteps.length === 0) problems.push('verify-gate has no step that reads toJSON(needs) -- nothing checks that every leg succeeded')
+  for (const { label, step } of legSteps) {
+    if (!LEGS_STEP_IFS.has(normalizeIf(step.if))) {
+      problems.push(`${label} has \`if: ${normalizeIf(step.if)}\`; the step that checks every leg's result must have no \`if\` (or only success(), !cancelled(), always()), because a narrowed one skips the check`)
     }
   }
   if (gate && !GATE_JOB_IFS.has(normalizeIf(gate.if))) {
