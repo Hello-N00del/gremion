@@ -26,6 +26,8 @@ export interface HookTarget {
   customerId: string
   /** The customer's owner role, k_<hex32>_owner. */
   owner: string
+  /** lock_timeout of the hook's own DDL / writes (the migrate job's KERNEL_API_MIGRATE_DDL_LOCK_TIMEOUT_MS): a stuck lock fails fast. Default 5 s. */
+  lockTimeoutMs?: number
 }
 
 export class HookError extends Error {
@@ -34,6 +36,12 @@ export class HookError extends Error {
 
 /** idt.database_binding.tenant_token: t_<hex32> satisfies its CHECK (^[a-z][a-z0-9_]{2,39}$) and names no host. */
 export const tenantTokenOf = (customerId: string): string => `t_${customerId.replaceAll('-', '')}`
+
+const lockTimeout = (t: HookTarget): string => {
+  const ms = t.lockTimeoutMs ?? 5_000
+  if (!Number.isInteger(ms) || ms < 0) throw new HookError(`lockTimeoutMs ${String(ms)} is not a whole number of milliseconds`)
+  return `SET LOCAL lock_timeout = '${ms}ms'`
+}
 
 function assertTarget(t: HookTarget): void {
   if (!OWNER_ROLE.test(t.owner)) throw new HookError(`refusing owner role ${JSON.stringify(t.owner)}`)
@@ -44,6 +52,7 @@ export async function beforeKernelRun(sql: Sql, t: HookTarget): Promise<void> {
   assertTarget(t)
   // SET LOCAL ROLE needs a transaction; the extension is created by the owner (a database owner may create a trusted extension).
   await sql.begin(async (tx) => {
+    await tx.unsafe(lockTimeout(t))
     await tx.unsafe(`SET LOCAL ROLE "${t.owner}"`)
     await tx`CREATE SCHEMA IF NOT EXISTS idt`
     await tx`CREATE EXTENSION IF NOT EXISTS btree_gist WITH SCHEMA idt`
@@ -59,6 +68,7 @@ export interface AfterRunResult {
 export async function afterKernelRun(sql: Sql, t: HookTarget): Promise<AfterRunResult> {
   assertTarget(t)
   return (await sql.begin(async (tx) => {
+    await tx.unsafe(lockTimeout(t))
     await tx.unsafe(`SET LOCAL ROLE "${t.owner}"`)
     await tx`SELECT set_config('gremion.customer_id', ${t.customerId}, true)`
 

@@ -28,7 +28,7 @@ export interface BodiesWorld {
   dumps: string
   migrate(args: string[]): Promise<{ code: number; lines: string[] }>
   /** A customer migrated through the real command. */
-  customer(slug: string, host: string): Promise<Customer>
+  customer(slug: string, host: string, o?: { realm?: string; issuer?: string; kcInternal?: string }): Promise<Customer>
   /** The customer's app-role pool on its kernel database (prepare off, like the service). */
   appPool(c: Customer): Sql
   /** The customer's OWNER-role-less superuser view of its database (admin), for post-condition reads that bypass RLS. */
@@ -63,8 +63,8 @@ export async function buildBodiesWorld(tag: string): Promise<BodiesWorld> {
     world,
     dumps,
     migrate,
-    async customer(slug, host) {
-      const c = await createCustomer(world, slug, host)
+    async customer(slug, host, o = {}) {
+      const c = await createCustomer(world, slug, host, o)
       const r = await migrate(['--customer', c.id])
       if (r.code !== 0) throw new Error(`migrate ${slug} failed: ${r.lines.join('\n')}`)
       return c

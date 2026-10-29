@@ -139,7 +139,7 @@ export async function migrateKernelDb(customerId: string, o: MigrateOptions & { 
     const tools = o.tools ?? dumpTools(new URL(url), o.pgDumpContainer)
     const log = (l: string) => o.log(`[kernel-api migrate ${customerId}] ${l}`)
     // TASK-080-a brief G4: the schema and btree_gist exist before the first file (the gist EXCLUDEs need them) ...
-    await beforeKernelRun(sql, { customerId, owner })
+    await beforeKernelRun(sql, { customerId, owner, lockTimeoutMs: o.ddlLockTimeoutMs ?? DEFAULT_DDL_LOCK_TIMEOUT_MS })
     const r = await runMigrations({
       sql,
       dirs: o.dirs,
@@ -169,7 +169,7 @@ export async function migrateKernelDb(customerId: string, o: MigrateOptions & { 
       },
     })
     // ... and the binding, the customer setting and the vendor kinds exist after the last (all idempotent, all under the GUC).
-    const after = await afterKernelRun(sql, { customerId, owner })
+    const after = await afterKernelRun(sql, { customerId, owner, lockTimeoutMs: o.ddlLockTimeoutMs ?? DEFAULT_DDL_LOCK_TIMEOUT_MS })
     if (after.bindingCreated || after.customerSettingCreated || after.kindsCreated > 0) {
       log(`idt seeded: binding ${after.bindingCreated ? 'created' : 'present'}, customer_setting ${after.customerSettingCreated ? 'created' : 'present'}, ${after.kindsCreated} kind(s) added`)
     }

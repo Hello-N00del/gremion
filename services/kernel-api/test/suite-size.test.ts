@@ -12,7 +12,7 @@ import { describe, expect, it } from 'vitest'
 const PKG = fileURLToPath(new URL('../', import.meta.url))
 
 /** The named tests per file, as of TASK-077 G8. Raise a floor when you add tests; never lower one. */
-export const NAMED: Record<'unit' | 'integration', Record<string, number>> = {
+export const NAMED: Record<'unit' | 'integration' | 'live', Record<string, number>> = {
   unit: {
     'test/app/bundle-entry.test.ts': 1,
     'test/app/gate-rotation.test.ts': 3,
@@ -45,6 +45,10 @@ export const NAMED: Record<'unit' | 'integration', Record<string, number>> = {
     'test/bodies/service.int.test.ts': 12,
     // G8 (live half): real Keycloak tokens carry / lack the audience
     'test/keycloak/audience.int.test.ts': 2,
+  },
+  // TASK-080-a test/bodies/proof.sh: PostgreSQL 18 + the authenticated NATS (vitest.live.config.ts)
+  live: {
+    'test/bodies/live.int.test.ts': 15,
   },
 }
 
@@ -81,6 +85,10 @@ describe('suite size (TDD 16)', () => {
     expect(() => assertFloor(collected('vitest.integration.config.ts'), NAMED.integration)).not.toThrow()
   }, 60_000)
 
+  it('the live suite (proof.sh) collects at least the named total', () => {
+    expect(() => assertFloor(collected('vitest.live.config.ts'), NAMED.live)).not.toThrow()
+  }, 60_000)
+
   it('zero collected tests is a failure, and so is one missing test', () => {
     expect(() => assertFloor({}, { 'a.test.ts': 1 })).toThrow(/zero tests collected/)
     expect(() => assertFloor({ 'a.test.ts': 1 }, { 'a.test.ts': 2 })).toThrow(/a\.test\.ts: 1 < 2/)
@@ -98,8 +106,8 @@ describe('suite size (TDD 16)', () => {
     }
     walk('src')
     walk('test')
-    expect(specs.length).toBeGreaterThanOrEqual(Object.keys(NAMED.unit).length + Object.keys(NAMED.integration).length)
-    const named = new Set([...Object.keys(NAMED.unit), ...Object.keys(NAMED.integration)])
+    expect(specs.length).toBeGreaterThanOrEqual(Object.keys(NAMED.unit).length + Object.keys(NAMED.integration).length + Object.keys(NAMED.live).length)
+    const named = new Set([...Object.keys(NAMED.unit), ...Object.keys(NAMED.integration), ...Object.keys(NAMED.live)])
     expect(specs.filter((f) => !named.has(f))).toEqual([])
     const marked = specs.filter((f) => /\b(?:it|test|describe)\s*\.\s*(?:skip|todo|only|skipIf|runIf)\b/.test(readFileSync(join(PKG, f), 'utf8')))
     expect(marked).toEqual([])

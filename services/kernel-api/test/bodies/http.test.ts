@@ -81,7 +81,7 @@ function setup(answer: Answer = rowsFor) {
   return { app, records }
 }
 
-async function get(app: ReturnType<typeof setup>['app'], url: string, method: 'GET' | 'PUT' = 'GET', payload?: unknown, headers = edge(A_HOST, 'token-a')) {
+async function get(app: ReturnType<typeof setup>['app'], url: string, method: 'GET' | 'PUT' | 'POST' = 'GET', payload?: unknown, headers = edge(A_HOST, 'token-a')) {
   const res = await app.inject({ method, url, headers, ...(payload !== undefined ? { payload: payload as object } : {}) })
   const op = res.headers['x-op']
   void op
