@@ -185,7 +185,8 @@ async function closeRows(tx: Sql, ids: string[], revoker: Actor | null, reason: 
 /**
  * TRD-113 on the revoke side: a person revokes a grant only when a role they verifiably hold (live, in the
  * grant's body, or a customer-level role held in the verwaltung) includes what the grant carries, the same
- * rule issueGrant applies with the named granterRole. Operators are exempt (control-panel authority).
+ * rule issueGrant applies with the named granterRole. A capability grant is checked at the grant body's scope
+ * (the verwaltung confers customer-level authority), as issueGrant does. Operators are exempt (control-panel authority).
  */
 async function assertRevokeIncluded(tx: Sql, actor: Actor, bodyId: string, g: { role_key: string | null; capability_key: string | null }): Promise<void> {
   if (actor.kind !== 'person') return
@@ -196,7 +197,16 @@ async function assertRevokeIncluded(tx: Sql, actor: Actor, bodyId: string, g: { 
   const roles = [...new Set([...held.map((h) => h.role_key), ...(await customerWideGrantRoles(tx, actor.id))])]
   const kind = g.role_key ? 'role' : 'capability'
   const key = (g.role_key ?? g.capability_key)!
-  if (!roles.some((r) => roleIncludes(r, kind, key))) throw new GrantError('granter_role_mismatch', `no role the revoker holds includes ${kind} ${key}`)
+  let scope: 'body' | 'customer' | undefined
+  if (kind === 'capability') {
+    const body = await tx<{ kind_key: string }[]>`SELECT kind_key FROM idt.body WHERE body_id = ${bodyId}::uuid`
+    if (body.length === 0) throw new GrantError('unknown_body', 'no such body in this customer')
+    scope = body[0]!.kind_key === 'verwaltung' ? 'customer' : 'body'
+  }
+  // A role that grants everything closes any capability unscoped: an operator or system source can leave a verwaltung
+  // capability no customer-scope role carries, and it must not survive a council_admin's revoke (or block revoke-all).
+  const includes = (r: string) => roleIncludes(r, kind, key, roleDef(r)?.grants === 'all' ? undefined : scope)
+  if (!roles.some(includes)) throw new GrantError('granter_role_mismatch', `no role the revoker holds includes ${kind} ${key}${scope ? ` at ${scope} scope` : ''}`)
 }
 
 export async function revokeGrant(sql: Sql, deps: GrantDeps, customerId: string, revoker: Granter, grantId: string): Promise<GrantRow> {
