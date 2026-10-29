@@ -9,13 +9,27 @@ import { A_ID, B_ID, tenantRow } from '../harness/fakes.ts'
 const C_ID = '0192f0c1-2b3c-7d4e-8f00-1122334455cc'
 
 function harness(tenants: TenantRow[], verdicts: Record<string, GateVerdict> = {}) {
-  const state = { tenants, verdicts, started: [] as string[], stopped: [] as string[], opened: [] as string[], closed: [] as string[], failOpenFor: new Set<string>(), made: new Map<string, RelayOptions>() }
+  const state = { tenants, verdicts, handles: new Map<string, { gen: number; ended: boolean }[]>(), started: [] as string[], stopped: [] as string[], opened: [] as string[], closed: [] as string[], failOpenFor: new Set<string>(), made: new Map<string, RelayOptions>() }
   const host = createRelayHost({
     tenancy: { listActive: async () => state.tenants.filter((t) => t.status === 'active') },
     tenantDb: {
       sqlFor: async (t) => {
         if (state.failOpenFor.has(t.customerId)) throw new Error('pool refused')
-        return { who: t.customerId } as never
+        const list = state.handles.get(t.customerId) ?? []
+        state.handles.set(t.customerId, list)
+        // tenant-store hands out the live pool; an ended one is replaced by a fresh pool on the next ask
+        let h = list[list.length - 1]
+        if (!h || h.ended) {
+          h = { gen: list.length + 1, ended: false }
+          list.push(h)
+        }
+        const mine = h
+        return {
+          begin: async (fn: (tx: unknown) => Promise<unknown>) => {
+            if (mine.ended) throw new Error('write CONNECTION_ENDED')
+            return fn({ gen: mine.gen })
+          },
+        } as never
       },
     },
     gate: { check: async (t) => state.verdicts[t.customerId] ?? { ok: true } },
@@ -25,7 +39,8 @@ function harness(tenants: TenantRow[], verdicts: Record<string, GateVerdict> = {
     },
     log: { info: () => {}, warn: () => {}, error: () => {} },
     makeRelay: ((o: RelayOptions) => {
-      const id = (o.sql as unknown as { who: string }).who
+      const slug = /^gremion\.([^.]+)\./.exec((o.subjects as (r: { event_type: string }) => string)({ event_type: 'de.gremion.idt.membership.started.v1' }))![1]!
+      const id = state.tenants.find((t) => t.slug === slug)!.customerId
       state.made.set(id, o)
       return { runOnce: async () => ({ locked: true, published: 0, failed: 0, deadLettered: 0 }), start: () => void state.started.push(id), stop: async () => void state.stopped.push(id) }
     }) as never,
@@ -100,5 +115,20 @@ describe('the per-customer relay host', () => {
     await host.stop()
     expect(state.stopped).toEqual([A_ID])
     expect(host.running()).toEqual([])
+  })
+
+  it('a pool tenant-store ended (LRU eviction) is not kept: every pass asks for the current pool, so publishing resumes on a fresh one', async () => {
+    const { host, state } = harness([tenantRow(A_ID, 'cust-a')])
+    await host.reconcile()
+    const o = state.made.get(A_ID)!
+    const seen: number[] = []
+    const pass = () => o.sql.begin(async (tx) => void seen.push((tx as unknown as { gen: number }).gen))
+    await pass()
+    state.handles.get(A_ID)![0]!.ended = true // the eviction ended pool 1
+    await pass() // the very next pass must reach pool 2, not fail on the ended pool 1
+    await pass()
+    expect(seen).toEqual([1, 2, 2])
+    expect(state.handles.get(A_ID)).toHaveLength(2)
+    await host.stop()
   })
 })

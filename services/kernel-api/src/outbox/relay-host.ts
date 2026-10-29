@@ -17,6 +17,7 @@
 //   * stop() halts every loop, then closes every NATS connection it opened.
 // The relay itself reconnects (createRelay re-opens a closed connection) and its
 // advisory lock makes a second kernel-api replica a no-op for that customer.
+import type { Sql } from '@gremion/db'
 import { createRelay, type Publisher, type Relay } from '@gremion/events'
 import type { CustomerGate, Logger, TenancyStore, TenantDb, TenantRow } from '../app/deps.ts'
 import { subjectOfType } from './catalogue.ts'
@@ -74,7 +75,12 @@ export function createRelayHost(o: RelayHostOptions): RelayHost {
   }
 
   async function begin(tenant: TenantRow): Promise<void> {
-    const sql = await o.tenantDb.sqlFor(tenant)
+    // Resolve once now: a customer whose pool is refused does not get a relay at all.
+    await o.tenantDb.sqlFor(tenant)
+    // The relay only ever opens transactions (`sql.begin`). tenant-store may END a pool it evicted (LRU overflow,
+    // evictTenantDb); a relay that kept the handle it got at start would fail every pass on the ended pool until a
+    // process restart. So every pass asks tenant-store for the CURRENT pool (a cached lookup, not a connection).
+    const sql = { begin: async (fn: never) => (await o.tenantDb.sqlFor(tenant)).begin(fn) } as unknown as Sql
     const handles: JetStreamHandle[] = []
     const relay = makeRelay({
       sql,
