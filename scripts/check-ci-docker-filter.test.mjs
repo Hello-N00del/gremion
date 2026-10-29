@@ -389,6 +389,7 @@ test('a change to any census input reports census=true', () => {
     'scripts/verify/census/census.mjs',
     'scripts/verify/census/render.env',
     'scripts/verify/lib/proc.mjs',
+    'scripts/verify/verify.mjs',
     'docker/nats/nats.conf',
     '.github/workflows/ci.yml',
     'modules/board/.dockerignore',
