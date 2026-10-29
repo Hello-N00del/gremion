@@ -25,7 +25,7 @@ export const NAMED: Record<'unit' | 'integration' | 'live', Record<string, numbe
     'test/bodies/kinds.test.ts': 5,
     'test/outbox/catalogue.test.ts': 5,
     'test/outbox/compose.test.ts': 4,
-    'test/outbox/relay-host.test.ts': 5,
+    'test/outbox/relay-host.test.ts': 6,
     'test/conformance/conformance.test.ts': 14,
     'test/migrate/chain.test.ts': 9,
     'test/registry/registry.test.ts': 7,
@@ -40,6 +40,8 @@ export const NAMED: Record<'unit' | 'integration' | 'live', Record<string, numbe
   },
   integration: {
     'test/app/kernel-api.int.test.ts': 17,
+    // TASK-080-a round 3: the idt migrate hook steps run under the migration advisory lock
+    'test/migrate/lock.int.test.ts': 4,
     // TASK-080-a: the migrate hook and the identity domain service on the scratch PG18
     'test/bodies/hooks.int.test.ts': 7,
     'test/bodies/service.int.test.ts': 12,

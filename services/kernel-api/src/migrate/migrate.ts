@@ -32,6 +32,7 @@ import { chainFileNames } from '../../../../scripts/migrations/pre-apply.mjs'
 import { directUrlFor, kernelDatabaseOf } from '../tenancy/target.ts'
 import { KERNEL_API_CHAIN, KERNEL_API_LEDGER } from './chain.ts'
 import { afterKernelRun, beforeKernelRun } from './idt-hooks.ts'
+import { withMigrationLock } from './lock.ts'
 
 export type MigrateErrorCode = 'INVALID_CUSTOMER' | 'UNKNOWN_CUSTOMER' | 'STATUS_SKIPPED' | 'WRONG_DATABASE' | 'NOT_CURRENT_AFTER_APPLY'
 
@@ -138,8 +139,17 @@ export async function migrateKernelDb(customerId: string, o: MigrateOptions & { 
     const owner = `k_${customerId.replaceAll('-', '')}_owner`
     const tools = o.tools ?? dumpTools(new URL(url), o.pgDumpContainer)
     const log = (l: string) => o.log(`[kernel-api migrate ${customerId}] ${l}`)
-    // TASK-080-a brief G4: the schema and btree_gist exist before the first file (the gist EXCLUDEs need them) ...
-    await beforeKernelRun(sql, { customerId, owner, lockTimeoutMs: o.ddlLockTimeoutMs ?? DEFAULT_DDL_LOCK_TIMEOUT_MS })
+    const hookTarget = { customerId, owner, lockTimeoutMs: o.ddlLockTimeoutMs ?? DEFAULT_DDL_LOCK_TIMEOUT_MS }
+    // TASK-080-a brief G4: the schema and btree_gist exist before the first file (the gist EXCLUDEs need them).
+    // It runs as a preApply step, i.e. UNDER the runner's migration lock and after the dump (a second concurrent
+    // run waits for that lock, so two runs never race CREATE SCHEMA / CREATE EXTENSION IF NOT EXISTS). Idempotent;
+    // once per run (the first file is the one that needs it).
+    let beforeDone = false
+    const beforeHook = async () => {
+      if (beforeDone) return
+      await beforeKernelRun(sql, hookTarget)
+      beforeDone = true
+    }
     const r = await runMigrations({
       sql,
       dirs: o.dirs,
@@ -165,11 +175,13 @@ export async function migrateKernelDb(customerId: string, o: MigrateOptions & { 
             },
           }),
           setRoleHook(owner),
+          beforeHook,
         ),
       },
     })
     // ... and the binding, the customer setting and the vendor kinds exist after the last (all idempotent, all under the GUC).
-    const after = await afterKernelRun(sql, { customerId, owner, lockTimeoutMs: o.ddlLockTimeoutMs ?? DEFAULT_DDL_LOCK_TIMEOUT_MS })
+    // The runner has released its lock by now and has no post hook: take the same lock for this step.
+    const after = await withMigrationLock(sql, { timeoutMs: o.lockWaitTimeoutMs ?? DEFAULT_LOCK_WAIT_TIMEOUT_MS }, () => afterKernelRun(sql, hookTarget))
     if (after.bindingCreated || after.customerSettingCreated || after.kindsCreated > 0) {
       log(`idt seeded: binding ${after.bindingCreated ? 'created' : 'present'}, customer_setting ${after.customerSettingCreated ? 'created' : 'present'}, ${after.kindsCreated} kind(s) added`)
     }
