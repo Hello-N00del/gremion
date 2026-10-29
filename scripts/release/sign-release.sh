@@ -18,8 +18,9 @@
 # REFUSALS (nothing is signed):
 #   - the working tree is not clean, or scripts/verify/check-record.mjs is
 #     absent (TASK-045 not merged: fail closed), or it does not report a green
-#     record for HEAD. Contract assumed here: `node scripts/verify/check-record.mjs
-#     --commit <sha>` exits 0 iff a green check record exists for <sha>.
+#     record for HEAD. Contract: `node scripts/verify/check-record.mjs <sha>`
+#     (the sha is POSITIONAL; its strict parser rejects any `--commit` flag)
+#     exits 0 iff a complete, green check record exists for <sha>.
 #   - the key path resolves inside this repository (a key there is one
 #     `git add -f` away from a commit), or does not exist.
 #   - a reference that is not <repo>@sha256:<64 hex> (a tag is mutable; a
@@ -82,7 +83,7 @@ main() {
     record="$root/scripts/verify/check-record.mjs"
     [[ -f "$record" ]] \
         || die "scripts/verify/check-record.mjs absent (TASK-045) — refusing to sign without a check record"
-    node "$record" --commit "$head" >&2 \
+    node "$record" "$head" >&2 \
         || die "no green check record for HEAD ${head} — refusing to sign"
 
     [[ -f "$key" ]] || die "key not found: $key"
