@@ -512,10 +512,6 @@ skip_if_mail_api_port_taken() {
     [ "$log" = "$(printf 'ops pull\nmail pull\nops up\nmail up')" ] || { echo "order was: $log" >&2; return 1; }
 }
 
-teardown() {
-    [[ -z "${IN_REPO_OUT:-}" ]] || rm -rf "$IN_REPO_OUT"
-    [[ -z "${IN_REPO_OTHER:-}" ]] || rm -rf "$IN_REPO_OTHER"
-}
 
 # ── teardown (house review of r33g-proofsh) ──────────────────────────────────
 
@@ -528,4 +524,34 @@ teardown() {
     [[ "$output" == *"[pooled-proof] GREEN"* ]]
     grep -q 'phases \[teardown\] RED=0' "${POOLED_OUT}/ledger/run.log"
     [ -f "${POOLED_OUT}/root/etc/keep" ]
+}
+
+@test "teardown: the customer proof's root/ and secrets/ go (for t043-<sha8>, PROOF_STACK and the pooled STACK), its ledger/ stays" {
+    local sfx="shim-cp-$$" c
+    export POOLED_STACK="t040-${sfx}" SHIM_STACK="t040-${sfx}"
+    export POOLED_OUT="${REPO_ROOT}/.scratch/pooled-stack-proof/t040-${sfx}"
+    IN_REPO_OUT="$POOLED_OUT"
+    CP_DIR="${REPO_ROOT}/.scratch/customer-provision-proof"
+    CP_CLEAN=("t043-${sfx}" "t040-${sfx}" "t043-custom-${sfx}")
+    mkdir -p "${POOLED_OUT}/ledger" "${POOLED_OUT}/root/etc/secrets/tenant-create"
+    for c in "${CP_CLEAN[@]}"; do
+        mkdir -p "${CP_DIR}/${c}/root/etc" "${CP_DIR}/${c}/secrets" "${CP_DIR}/${c}/ledger"
+        echo s > "${CP_DIR}/${c}/secrets/operator-totp"; echo e > "${CP_DIR}/${c}/ledger/evidence"
+    done
+    PROOF_STACK="t043-custom-${sfx}" run bash "$PROOF" teardown
+    [ "$status" -eq 0 ]
+    for c in "${CP_CLEAN[@]}"; do
+        [ ! -e "${CP_DIR}/${c}/root" ] || { echo "${c}/root survived" >&2; return 1; }
+        [ ! -e "${CP_DIR}/${c}/secrets" ] || { echo "${c}/secrets survived" >&2; return 1; }
+        [ -f "${CP_DIR}/${c}/ledger/evidence" ] || { echo "${c}/ledger was deleted" >&2; return 1; }
+    done
+    [ ! -e "${POOLED_OUT}/root" ]
+}
+
+teardown() {
+    [[ -z "${IN_REPO_OUT:-}" ]] || rm -rf "$IN_REPO_OUT"
+    [[ -z "${IN_REPO_OTHER:-}" ]] || rm -rf "$IN_REPO_OTHER"
+    # only the directories this test made under the shared customer-provision-proof dir
+    local c
+    for c in ${CP_CLEAN[@]+"${CP_CLEAN[@]}"}; do [[ -z "${CP_DIR:-}" || -z "$c" ]] || rm -rf "${CP_DIR}/${c}"; done
 }
