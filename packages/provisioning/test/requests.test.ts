@@ -194,9 +194,10 @@ describe('enable_module / disable_module / record_dpia / reconcile args (TRD-044
 
   it.each(['enable_module', 'disable_module'])('%s: the module must be in the catalogue, not in disabled.json, and enable not on the deny list', (kind) => {
     expect(v(kind, { slug: 'musterstadt', module: 'nosuchmodule' })).toMatchObject({ verdict: 'refused', reason: expect.stringMatching(/not in the catalogue/) })
-    // only an enable is refused for a module on the deny list; a disable of one is not asserted here
+    // an enable is refused for a module in disabled.json; a disable is not (a build that stops shipping a module must still be able to disable it for a customer)
     const refusedAsDisabled = { verdict: 'refused', reason: expect.stringMatching(/finance is disabled in this build \(modules\/disabled\.json\)/) }
-    expect(v(kind, { slug: 'musterstadt', module: 'finance' })).toMatchObject(kind === 'enable_module' ? refusedAsDisabled : {})
+    const acceptedAsDisabling = { verdict: 'ok', args: { slug: 'musterstadt', module: 'finance' } }
+    expect(v(kind, { slug: 'musterstadt', module: 'finance' })).toMatchObject(kind === 'enable_module' ? refusedAsDisabled : acceptedAsDisabling)
     expect(v(kind, { slug: 'musterstadt', module: 'Votes' })).toMatchObject({ verdict: 'refused' })
     expect(v(kind, { slug: 'musterstadt' })).toMatchObject({ verdict: 'refused', reason: expect.stringMatching(/module/) })
     expect(v(kind, { slug: 'other', module: 'votes' })).toMatchObject({ verdict: 'refused', reason: expect.stringMatching(/not the request's slug/) })
