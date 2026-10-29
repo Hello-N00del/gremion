@@ -264,6 +264,12 @@ CREATE TABLE idt.org_unit_kind (
   label_de             text          NOT NULL,
   label_en             text          NOT NULL,
   is_organ             boolean       NOT NULL DEFAULT false,
+  -- idt.membership.body_adopts_beschluesse is derived from this answer when the membership is inserted and never
+  -- recomputed, so an answer that changed after it was decided would leave stored rows describing a kind that no longer exists.
+  IF OLD.may_adopt_beschluesse <> 'undecided' AND NEW.may_adopt_beschluesse IS DISTINCT FROM OLD.may_adopt_beschluesse THEN
+    RAISE EXCEPTION 'may_adopt_beschluesse of kind % is already decided (%) and is never changed', OLD.kind_key, OLD.may_adopt_beschluesse
+      USING ERRCODE = 'check_violation';
+  END IF;
   can_hold_seats       boolean       NOT NULL DEFAULT false,
   may_adopt_beschluesse text         NOT NULL DEFAULT 'undecided',
   allowed_parent_kinds text[]        NOT NULL DEFAULT '{}',

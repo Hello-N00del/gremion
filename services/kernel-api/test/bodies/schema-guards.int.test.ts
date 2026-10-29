@@ -86,3 +86,38 @@ describe('finding 5: re-parenting is serialised, two concurrent transactions can
     expect(await raises(admin().unsafe(`UPDATE idt.body SET parent_body_id = '${a}' WHERE body_id = '${b}'`))).toMatchObject({ code: '23514' })
   })
 })
+
+describe('finding 6: membership.body_id is immutable, may_adopt_beschluesse freezes once decided', () => {
+  it('moving a membership to another body is refused (its derived body_adopts_beschluesse would no longer describe its body)', async () => {
+    const one = await newBody('Mitgliedschaft Eins')
+    const two = await newBody('Mitgliedschaft Zwei')
+    const [p] = await admin()<{ id: string }[]>`
+      INSERT INTO idt.person (customer_id, display_name, email, pseudonym, created_by_kind, updated_by_kind) VALUES (${C.id}::uuid, 'Mia Mitglied', 'mia@example.org', 'p_guard_mia', 'system', 'system') RETURNING person_id::text AS id`
+    const [m] = await admin()<{ id: string }[]>`
+      INSERT INTO idt.membership (customer_id, body_id, person_id, participation_kind, voting, valid_from, source, created_by_kind, updated_by_kind)
+      VALUES (${C.id}::uuid, ${one}::uuid, ${p!.id}::uuid, 'elected_member', true, '2026-04-01', 'admin', 'system', 'system') RETURNING membership_id::text AS id`
+    const e = await raises(admin()`UPDATE idt.membership SET body_id = ${two}::uuid WHERE membership_id = ${m!.id}::uuid`)
+    expect(e?.code).toBe('23514')
+    expect(e?.message).toMatch(/body_id .*immutable/)
+    expect(await admin()`SELECT body_id::text FROM idt.membership WHERE membership_id = ${m!.id}::uuid`).toEqual([{ body_id: one }])
+    // every other column still changes, and re-stating the same body is not a move
+    expect(await raises(admin()`UPDATE idt.membership SET voting = false WHERE membership_id = ${m!.id}::uuid`)).toBeNull()
+    expect(await raises(admin()`UPDATE idt.membership SET body_id = ${one}::uuid WHERE membership_id = ${m!.id}::uuid`)).toBeNull()
+  })
+
+  it('a kind that is still undecided may be decided once; a decided kind never changes its answer', async () => {
+    await admin().unsafe(`INSERT INTO idt.org_unit_kind (kind_key, customer_id, level, label_de, label_en, origin, created_by_kind, updated_by_kind)
+      VALUES ('guard_kind', '${C.id}', 'unit', 'Waechter', 'Guard', 'customer_defined', 'system', 'system')`)
+    expect(await raises(admin().unsafe(`UPDATE idt.org_unit_kind SET label_en = 'Guard 2' WHERE kind_key = 'guard_kind'`))).toBeNull()
+    expect(await raises(admin().unsafe(`UPDATE idt.org_unit_kind SET may_adopt_beschluesse = 'yes' WHERE kind_key = 'guard_kind'`))).toBeNull() // undecided -> decided
+    for (const to of ['no', 'undecided']) {
+      const e = await raises(admin().unsafe(`UPDATE idt.org_unit_kind SET may_adopt_beschluesse = '${to}' WHERE kind_key = 'guard_kind'`))
+      expect(e?.code, to).toBe('23514')
+      expect(e?.message).toMatch(/may_adopt_beschluesse .*decided/)
+    }
+    expect(await admin()`SELECT may_adopt_beschluesse FROM idt.org_unit_kind WHERE kind_key = 'guard_kind'`).toEqual([{ may_adopt_beschluesse: 'yes' }])
+    // a vendor kind seeded as decided is frozen the same way; re-stating the same answer is not a change
+    expect(await raises(admin().unsafe(`UPDATE idt.org_unit_kind SET may_adopt_beschluesse = 'no' WHERE kind_key = 'stura'`))).toMatchObject({ code: '23514' })
+    expect(await raises(admin().unsafe(`UPDATE idt.org_unit_kind SET may_adopt_beschluesse = 'yes' WHERE kind_key = 'stura'`))).toBeNull()
+  })
+})

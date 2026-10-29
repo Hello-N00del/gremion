@@ -129,6 +129,12 @@ BEGIN
   ELSE
     NEW.body_adopts_beschluesse := OLD.body_adopts_beschluesse;
   END IF;
+    -- body_adopts_beschluesse was derived from THIS body's kind at insert; a membership moved to another body would keep
+    -- the first body's answer. A membership is ended and a new one started instead.
+    IF NEW.body_id IS DISTINCT FROM OLD.body_id THEN
+      RAISE EXCEPTION 'body_id of membership % is immutable', OLD.membership_id
+        USING ERRCODE = 'check_violation';
+    END IF;
   RETURN NEW;
 END
 $$;
