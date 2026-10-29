@@ -81,6 +81,7 @@ services:
     deploy: *limits-l
     labels:
       traefik.enable: "false"
+      org.gremion.stack: "${STACK:?STACK required}"
       # gremion-switch / gremion-deploy POST /api/internal/evict to every
       # labelled container and abort unless it answers 204. gremion-ui serves
       # that route (routes/api/internal/evict, Bearer INTERNAL_PUSH_SECRET,
@@ -216,6 +217,7 @@ services:
     deploy: *limits-m
     labels:
       traefik.enable: "false"
+      org.gremion.stack: "${STACK:?STACK required}"
       # NO gremion.evict label: gremion-public serves no /api/internal/evict
       # and caches no tenant, so the switch has nothing to evict here.
     environment:
@@ -281,6 +283,7 @@ services:
       - /tmp
     labels:
       traefik.enable: "false"
+      org.gremion.stack: "${STACK:?STACK required}"
       # gremion-switch POSTs its evict fan-out to every long-running app
       # container; the panel caches no tenant, so its /api/internal/evict
       # verifies the bearer and answers 204.
@@ -346,6 +349,7 @@ services:
     deploy: *limits-l
     labels:
       traefik.enable: "false"
+      org.gremion.stack: "${STACK:?STACK required}"
     environment:
       COLOUR: ${COLOUR:?COLOUR required}
       # Migrations run DIRECT on postgres, never through the transaction pooler.
@@ -411,6 +415,7 @@ services:
     deploy: *limits-m
     labels:
       traefik.enable: "false"
+      org.gremion.stack: "${STACK:?STACK required}"
     environment:
       COLOUR: ${COLOUR:?COLOUR required}
       DOMAIN: ${PLATFORM_DOMAIN:?PLATFORM_DOMAIN required}
@@ -536,6 +541,7 @@ services:
       - /tmp
     labels:
       traefik.enable: "false"
+      org.gremion.stack: "${STACK:?STACK required}"
       # NO gremion.evict label: gremion-switch POSTs /api/internal/evict to
       # every labelled container and requires a 204, and kernel-api serves only
       # the routes of openapi/kernel-core.json (the evict route is TASK-035's).
@@ -606,6 +612,7 @@ services:
       - /tmp
     labels:
       traefik.enable: "false"
+      org.gremion.stack: "${STACK:?STACK required}"
     environment:
       COLOUR: ${COLOUR:?COLOUR required}
       GREMION_RELEASE_REF: ${IMAGE_TAG:?IMAGE_TAG required}

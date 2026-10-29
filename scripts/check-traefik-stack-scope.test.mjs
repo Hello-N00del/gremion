@@ -62,19 +62,36 @@ test('refuses a map-form service that declares only traefik.http.* (no traefik.e
   }
 })
 
-test('passes labelled services (both label forms) and unlabelled traefik.enable=false services', () => {
+test('passes labelled services (both label forms), and an unlabelled traefik.enable=false service in a test/ fixture', () => {
   const t = tree({
     'docker/traefik/traefik.yml': GOOD_TRAEFIK_YML,
     'docker-compose.yml': GOOD_STATE,
     'docker-compose.prod.yml': 'services:\n  legal:\n    labels:\n      - "traefik.enable=true"\n      - "org.gremion.stack=${STACK:?STACK required}"\n',
     'compose/control-panel/standalone.yml':
       'services:\n  panel:\n    labels:\n      traefik.enable: "true"\n      org.gremion.stack: "${PANEL_STACK:?PANEL_STACK required}"\n',
-    'docker-compose.app.yml': 'services:\n  ui:\n    labels:\n      traefik.enable: "false"\n',
+    'test/host/fixtures/z/docker-compose.app.yml': 'services:\n  ui:\n    labels:\n      traefik.enable: "false"\n',
   })
   try {
     const r = checkStackScope(t.root)
     assert.deepEqual(r.problems, [])
     assert.equal(r.routed.length, 2)
+  } finally {
+    t.cleanup()
+  }
+})
+
+test('outside test/ fixtures a traefik.enable=false service needs the label too; inside test/ it does not', () => {
+  const t = tree({
+    'docker/traefik/traefik.yml': GOOD_TRAEFIK_YML,
+    'docker-compose.yml': GOOD_STATE,
+    'docker-compose.prod.yml': LABELLED_LEGAL,
+    'docker-compose.app.yml': 'services:\n  ui:\n    labels:\n      traefik.enable: "false"\n',
+    'test/host/fixtures/y/docker-compose.app.yml': 'services:\n  ui:\n    labels:\n      traefik.enable: "false"\n',
+  })
+  try {
+    const r = checkStackScope(t.root)
+    assert.equal(r.problems.length, 1)
+    assert.match(r.problems[0], /^docker-compose\.app\.yml: service 'ui'/)
   } finally {
     t.cleanup()
   }

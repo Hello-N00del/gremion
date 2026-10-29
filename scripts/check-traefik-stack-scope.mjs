@@ -16,7 +16,8 @@
 //   2. EVERY service, in every compose file of the repository, that opts in to
 //      Traefik (traefik.enable=true) or declares a router/service/middleware
 //      (traefik.http.* / traefik.tcp.* / traefik.udp.*) carries the label
-//      `org.gremion.stack` with a non-empty value. A routed container without it
+//      `org.gremion.stack` with a non-empty value; outside test/ fixtures so does
+//      every service with any other traefik.* label (the app colours' enable=false). A routed container without it
 //      is invisible to its own Traefik (a silent 404); a label-less Traefik
 //      config is visible to every other stack's.
 //
@@ -82,7 +83,7 @@ export function isRouted(labels) {
 
 /**
  * @param {string} text a compose file
- * @returns {{service: string, labels: Record<string,string>}[]} the routed services
+ * @returns {{service: string, labels: Record<string,string>, routed: boolean}[]} every service carrying a traefik.* label
  */
 export function routedServices(text, file = '<text>') {
   let doc
@@ -94,7 +95,8 @@ export function routedServices(text, file = '<text>') {
   const out = []
   for (const [service, def] of Object.entries(doc?.services ?? {})) {
     const labels = labelMap(def?.labels)
-    if (isRouted(labels)) out.push({ service, labels })
+    const traefikLabelled = Object.keys(labels).some((k) => k.startsWith('traefik.'))
+    if (traefikLabelled) out.push({ service, labels, routed: isRouted(labels) })
   }
   return out
 }
@@ -120,9 +122,12 @@ export function checkStackScope(root = KERNEL_ROOT) {
       problems.push(e.message)
       continue
     }
-    for (const { service, labels } of services) {
-      routed.push({ file: f, service })
-      if (!labels[STACK_LABEL])
+    // A traefik.enable=false service declares no router, so a fixture under test/ may leave it
+    // unlabelled; the real compositions label EVERY container that carries a traefik.* label.
+    const strict = !f.startsWith('test/')
+    for (const { service, labels, routed: isR } of services) {
+      if (isR) routed.push({ file: f, service })
+      if ((isR || strict) && !labels[STACK_LABEL])
         problems.push(
           `${f}: service '${service}' carries Traefik labels but no ${STACK_LABEL} label -- ` +
             `a stack-constrained Traefik never sees it (silent 404), and an unconstrained one lets two stacks collide`,
