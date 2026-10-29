@@ -2,35 +2,34 @@
   "keycloak": "26.6.1",
   "request": {
     "acr_values": "loa2",
-    "max_age": 300,
-    "basicScopeAdded": false
+    "max_age": 300
   },
   "flows": {
     "A_fresh_login": {
       "kinds": [
         "password",
-        "configure-totp"
+        "otp"
       ],
       "acr": "loa2",
       "id": {
-        "auth_time": 1792689128,
-        "iat": 1792689128
+        "auth_time": 1793269823,
+        "iat": 1793269823
       },
       "access": {
-        "auth_time": 1792689128,
-        "iat": 1792689128
+        "auth_time": 1793269823,
+        "iat": 1793269823
       }
     },
     "B_sso_reuse": {
       "kinds": [],
       "acr": "loa2",
       "id": {
-        "auth_time": 1792689128,
-        "iat": 1792689135
+        "auth_time": 1793269823,
+        "iat": 1793269830
       },
       "access": {
-        "auth_time": 1792689128,
-        "iat": 1792689135
+        "auth_time": 1793269823,
+        "iat": 1793269830
       }
     },
     "C_second_browser_login": {
@@ -40,12 +39,12 @@
       ],
       "acr": "loa2",
       "id": {
-        "auth_time": 1792689151,
-        "iat": 1792689151
+        "auth_time": 1793269830,
+        "iat": 1793269830
       },
       "access": {
-        "auth_time": 1792689151,
-        "iat": 1792689151
+        "auth_time": 1793269830,
+        "iat": 1793269830
       }
     },
     "D_prompt_login": {
@@ -55,12 +54,12 @@
       ],
       "acr": "loa2",
       "id": {
-        "auth_time": 1792689181,
-        "iat": 1792689181
+        "auth_time": 1793269861,
+        "iat": 1793269861
       },
       "access": {
-        "auth_time": 1792689181,
-        "iat": 1792689181
+        "auth_time": 1793269861,
+        "iat": 1793269861
       }
     }
   },

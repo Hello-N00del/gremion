@@ -5,7 +5,7 @@
 //
 // Four authorization-code flows against the ops realm's step-up flow (the same realm and flow
 // kc-token-probe.mjs uses), PKCE, one operator with TOTP:
-//   A  fresh login in browser 1 (password + CONFIGURE_TOTP)   -> auth_time t1
+//   A  fresh login in browser 1 (password + OTP)                -> auth_time t1
 //   B  SSO reuse in browser 1, max_age set, no prompt           -> auth_time must stay t1 (not "now")
 //   C  fresh login in browser 2 (password + OTP), >= 7 s later  -> auth_time t2 > t1
 //   D  browser 1, prompt=login                                  -> auth_time t3 > t1
@@ -136,10 +136,15 @@ async function main() {
   await kc.createRealm(doc)
   const email = 'probe.operator@platform.example'
   const pw = randomBytes(18).toString('base64url')
+  const otpSecret = randomBytes(10).toString('hex').toUpperCase()
   await transport('POST', '/admin/realms/platform/users', {
     username: email, email, enabled: true, emailVerified: true, firstName: 'Probe', lastName: 'Operator',
-    requiredActions: ['CONFIGURE_TOTP'], credentials: [{ type: 'password', value: pw, temporary: false }],
+    // main's step-up flow ("stepup-2fa second factor") asks for OTP only if the user already HAS one and
+    // denies otherwise (CONFIGURE_TOTP inside the step-up would grant loa2 to a bare session), so the
+    // probe operator is seeded with a TOTP credential up front instead of enrolling during flow A.
+    credentials: [{ type: 'password', value: pw, temporary: false }, { type: 'otp', secretData: JSON.stringify({ value: otpSecret }), credentialData: JSON.stringify({ subType: 'totp', digits: 6, period: 30, algorithm: 'HmacSHA1', counter: 0 }) }],
   })
+  state.totpSecret = otpSecret
   const mk = () => new Browser(new Map(), { stopHosts: ['127.0.0.1'] })
   const b1 = mk()
   const A = await flow(b1, secret, email, pw)
