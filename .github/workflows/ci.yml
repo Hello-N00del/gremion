@@ -115,6 +115,12 @@ jobs:
       - name: Dockerfiles COPY the whole @gremion/* workspace closure
         run: make lint-dockerfile-workspace-closure
 
+      # The pull-request docker path filter and the image matrix: runs the real
+      # `changes` step against a synthetic repo (including a change list past the
+      # pipe buffer) and asserts every tracked Dockerfile is built or excused.
+      - name: Docker path filter and image matrix hold
+        run: make lint-ci-docker-filter
+
       - name: Validate Docker Compose config
         run: |
           # Provide stubs so docker compose config can resolve all references
@@ -518,9 +524,12 @@ jobs:
   #
   # Every first-party image that builds from this repository, build only: no
   # login, no push, no secrets. All build contexts are the repository root
-  # except legal's (an nginx base plus three COPYs). vector's build clones and
-  # compiles ipcrypt2 and is not worth a per-commit gate; synapse and the two
-  # test-runner images are not shipped product images.
+  # except legal's, fallback's and synapse's, which are their own directories
+  # (a pinned nginx or synapse base plus a few COPYs). The one image left out
+  # is vector, whose build clones and compiles ipcrypt2 and is not worth a
+  # per-commit gate; the two test-runner images (scripts/verify/bats-runner,
+  # test/host/runner) are not shipped. scripts/check-ci-docker-filter.test.mjs
+  # fails if a tracked Dockerfile is in neither the matrix nor that list.
   #
   # Why this runs on pull requests (2026-10-29): it used to be push-only
   # ("PR-time docker builds duplicate work that is recovered the moment the PR
@@ -560,14 +569,24 @@ jobs:
           set -euo pipefail
           # Any Dockerfile/Containerfile or .dockerignore anywhere, plus every
           # tree and root file a Dockerfile COPYs from: the workspace packages,
-          # services, modules, apps, both SvelteKit apps, the legal image, the
-          # kernel-api's migration register, this workflow, and the lockfile/workspace/root
-          # manifests every pnpm image copies first.
-          pattern='(^|/)(Dockerfile|Containerfile)(\.[^/]*)?$|(^|/)\.dockerignore$|^(packages|services|modules|apps|gremion-ui|gremion-public|docker/legal|scripts/migrations)/|^(pnpm-lock\.yaml|pnpm-workspace\.yaml|package\.json|\.github/workflows/ci\.yml)$'
+          # services, modules, apps, both SvelteKit apps, the legal and fallback
+          # images, the vertical data directories, the kernel-api's migration
+          # register, this workflow, the LICENSE/NOTICE files, and the
+          # lockfile/workspace/root manifests every pnpm image copies first.
+          pattern='(^|/)(Dockerfile|Containerfile)(\.[^/]*)?$|(^|/)\.dockerignore$|^(packages|services|modules|apps|gremion-ui|gremion-public|verticals|docker/legal|docker/fallback|scripts/migrations)/|^(pnpm-lock\.yaml|pnpm-workspace\.yaml|package\.json|LICENSE|NOTICE|\.github/workflows/ci\.yml)$'
           changed=$(git diff --name-only "$BASE_SHA...$HEAD_SHA")
           echo "Changed files in this PR:"
           echo "$changed"
-          if echo "$changed" | grep -Eq "$pattern"; then
+          # Count matches; do not feed a producer to a grep that quits early.
+          # Under pipefail, a quiet grep exits at its first match, the writer
+          # takes SIGPIPE once the list outgrows the 64 KiB pipe buffer (a few
+          # thousand paths: a carve, a mass rename), the pipeline returns 141,
+          # the if takes its else branch and the step would report
+          # docker=false with nothing red. grep -c reads all of its input.
+          # Exit 1 only means "no match"; any other grep failure fails the
+          # step (and a failed step builds everything, see docker-build).
+          matches=$(printf '%s\n' "$changed" | grep -Ec "$pattern" || [ "$?" -eq 1 ])
+          if [ "$matches" -gt 0 ]; then
             echo "docker=true" >> "$GITHUB_OUTPUT"
             echo "A docker build input changed: image builds will run."
           else
@@ -581,17 +600,20 @@ jobs:
     needs: [lint, changes]
     # `changes` is skipped on push / workflow_dispatch, and a job that needs a
     # skipped job is skipped itself unless it opts out with always(). So the
-    # condition is explicit: the !cancelled() + result checks keep a failed
-    # lint (or a failed `changes`) blocking the build, and the event clause
-    # picks who runs -- pushes and manual runs always, pull requests only when
-    # a docker input changed. This is the line that used to read
+    # condition is explicit: the !cancelled() + lint check keep a failed lint
+    # blocking the build, and the event clause picks who runs -- pushes and
+    # manual runs always, pull requests when a docker input changed OR when the
+    # `changes` job itself failed (an unreachable base sha, a fetch error): a
+    # broken filter fails safe and builds everything rather than skipping the
+    # builds. This is the line that used to read
     # `github.event_name == 'push' || github.event_name == 'workflow_dispatch'`,
     # which made the job skipped on every pull request.
     if: >-
       ${{ !cancelled()
       && needs.lint.result == 'success'
-      && (needs.changes.result == 'success' || needs.changes.result == 'skipped')
-      && (github.event_name != 'pull_request' || needs.changes.outputs.docker == 'true') }}
+      && (github.event_name != 'pull_request'
+          || needs.changes.result == 'failure'
+          || needs.changes.outputs.docker == 'true') }}
     # Build only. Read-only token; no registry login anywhere in this job.
     permissions:
       contents: read
@@ -613,6 +635,8 @@ jobs:
           - { name: publishing, dockerfile: modules/publishing/Dockerfile, context: . }
           - { name: vault, dockerfile: modules/vault/Dockerfile, context: . }
           - { name: votes, dockerfile: modules/votes/Dockerfile, context: . }
+          - { name: fallback, dockerfile: docker/fallback/Dockerfile, context: docker/fallback/ }
+          - { name: synapse, dockerfile: modules/messaging/synapse/Dockerfile, context: modules/messaging/synapse/ }
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:

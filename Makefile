@@ -692,6 +692,23 @@ lint-dockerfile-workspace-closure:
 	 echo "[dockerfile-workspace-closure] suite: $$collected of $$declared declared test(s) ran"
 	@node scripts/check-dockerfile-workspace-closure.mjs
 
+# The pull-request docker path filter (ci.yml `changes` job) and the image matrix it
+# gates. Runs the REAL filter step against a throwaway git repository, including a
+# change list far past the pipe buffer: under pipefail a quiet grep on a piped list
+# reported docker=false (rc 141) on large PRs and the image builds were skipped silently.
+.PHONY: lint-ci-docker-filter
+lint-ci-docker-filter:
+	@echo "Checking the CI docker path filter and image matrix..."
+	@out=$$(node --test --test-reporter=tap scripts/check-ci-docker-filter.test.mjs 2>&1); \
+	 status=$$?; \
+	 [ "$$status" -eq 0 ] || { printf '%s\n' "$$out" >&2; exit "$$status"; }; \
+	 collected=$$(printf '%s\n' "$$out" | tr -d '\r' | sed -n 's/^1\.\.\([0-9][0-9]*\)$$/\1/p' | tail -n1); \
+	 if [ "$${collected:-0}" -lt 1 ]; then \
+	   echo "lint-ci-docker-filter: node collected '$${collected:-0}' test(s)." >&2; \
+	   exit 1; \
+	 fi; \
+	 echo "[ci-docker-filter] suite: $$collected test(s) ran"
+
 # TASK-029 (TRD-344, grant G4): the migration register. Every *.sql is in
 # exactly one database chain of scripts/migrations/ranges.json or a declared
 # non-migration; each chain is padded, in numeric order, gap-free above its
@@ -782,7 +799,7 @@ lint-image-digests:
 	@node scripts/release/check-image-digests.mjs
 	@node scripts/release/check-image-digests.mjs --render
 
-lint: lint-sh lint-yaml lint-json lint-compose lint-compose-latest lint-pooled-stack lint-hygiene lint-tom-annex lint-cve-floors lint-nats-nruns lint-packages lint-port-back lint-postgres-major lint-extraction-source lint-unshipped-migrations lint-compliance lint-tenant-db-access lint-edge-host lint-module-scan lint-module-migration-names lint-module-dockerfile-copy lint-dockerfile-workspace-closure lint-migration-register lint-image-digests lint-synapse
+lint: lint-sh lint-yaml lint-json lint-compose lint-compose-latest lint-pooled-stack lint-hygiene lint-tom-annex lint-cve-floors lint-nats-nruns lint-packages lint-port-back lint-postgres-major lint-extraction-source lint-unshipped-migrations lint-compliance lint-tenant-db-access lint-edge-host lint-module-scan lint-module-migration-names lint-module-dockerfile-copy lint-dockerfile-workspace-closure lint-ci-docker-filter lint-migration-register lint-image-digests lint-synapse
 	@echo "All linters passed."
 
 # ── Local gate (TASK-045, TRD-444/341) ──────────────────────────────────────
