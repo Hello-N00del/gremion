@@ -1145,10 +1145,11 @@ jobs:
           # project), docker/ (the legal, fallback, vector, keycloak and nats
           # contexts the renders build or mount), infra/host/ (the env templates
           # that name each project's COMPOSE_FILE/COMPOSE_PROFILES, and the mail
-          # project), the census's own code and fixtures, and this workflow (it
+          # project), the census's own code and fixtures, the scripts/verify/lib/ runtime
+          # libraries it imports (proc, git, guard, envstub), and this workflow (it
           # judges the result). Same counted-grep idiom as above, for the same
           # reason.
-          census_pattern='(^|/)(Dockerfile|Containerfile)(\.[^/]*)?$|(^|/)\.dockerignore$|(^|/)docker-compose[^/]*\.ya?ml$|^(compose|docker|infra/host|scripts/verify/census)/|^\.github/workflows/ci\.yml$'
+          census_pattern='(^|/)(Dockerfile|Containerfile)(\.[^/]*)?$|(^|/)\.dockerignore$|(^|/)docker-compose[^/]*\.ya?ml$|^(compose|docker|infra/host|scripts/verify/census|scripts/verify/lib)/|^\.github/workflows/ci\.yml$'
           census_matches=$(printf '%s\n' "$changed" | grep -Ec "$census_pattern" || [ "$?" -eq 1 ])
           if [ "$census_matches" -gt 0 ]; then
             echo "census=true" >> "$GITHUB_OUTPUT"

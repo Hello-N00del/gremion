@@ -388,6 +388,7 @@ test('a change to any census input reports census=true', () => {
     'infra/host/templates/env/state.env.tmpl',
     'scripts/verify/census/census.mjs',
     'scripts/verify/census/render.env',
+    'scripts/verify/lib/proc.mjs',
     'docker/nats/nats.conf',
     '.github/workflows/ci.yml',
     'modules/board/.dockerignore',
