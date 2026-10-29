@@ -18,6 +18,8 @@ export const NAMED: Record<'unit' | 'integration', Record<string, number>> = {
     'test/app/gate-rotation.test.ts': 3,
     'test/app/routes.test.ts': 11,
     'test/app/trd082.test.ts': 5,
+    // TASK-080-a: the bodies migrations as shipped
+    'test/bodies/migrations.test.ts': 10,
     'test/conformance/conformance.test.ts': 14,
     'test/migrate/chain.test.ts': 9,
     'test/registry/registry.test.ts': 7,

@@ -8,7 +8,6 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { checkPlumbingMigration, checkPlumbingText, plumbingSql, PlumbingDriftError } from '@gremion/events'
 import { describe, expect, it } from 'vitest'
-// @ts-expect-error -- plain .mjs of the migration runner
 import { createdRoutineNames, lintSql } from '../../../../scripts/migrations/runner/lint.mjs'
 import { assertShippedMigrations } from '../../src/migrate/boot-check.ts'
 import { KERNEL_API_MIGRATION_DIRS } from '../../src/migrate/chain.ts'
