@@ -22,13 +22,116 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from 'no
 import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { parse } from 'yaml'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
-const WORKFLOW = parse(readFileSync(join(ROOT, '.github/workflows/ci.yml'), 'utf8'))
+const CI_YML = readFileSync(join(ROOT, '.github/workflows/ci.yml'), 'utf8')
 
-const filterStep = WORKFLOW.jobs.changes.steps.find((s) => s.id === 'filter')
-const dockerBuild = WORKFLOW.jobs['docker-build']
+// The CI Lint job has no setup-node and no pnpm install, so this suite may import
+// only node: built-ins (a `yaml` import is ERR_MODULE_NOT_FOUND there, and
+// docker-build needs lint, so the image matrix would never run). The pieces of
+// ci.yml it asserts on are therefore pulled out with a small text extractor that
+// understands exactly the shapes this workflow uses: block-scalar `run: |`,
+// folded `if: >-`, an inline `needs: [a, b]` and one-line `- { k: v, ... }`
+// matrix entries. A shape it does not understand yields undefined/empty and the
+// assertions below fail loudly rather than pass vacuously.
+const indentOf = (l) => l.match(/^ */)[0].length
+const isBlank = (l) => l.trim() === ''
+
+// Lines of one top-level job (`  name:` under `jobs:`).
+function jobLines(text, job) {
+  const lines = text.split(/\r?\n/)
+  const start = lines.findIndex((l) => l.trimEnd() === `  ${job}:`)
+  if (start < 0) return []
+  let end = lines.length
+  for (let i = start + 1; i < lines.length; i++) {
+    const l = lines[i]
+    if (isBlank(l)) continue
+    const ind = indentOf(l)
+    if (ind < 2 || (ind === 2 && !l.trimStart().startsWith('#'))) {
+      end = i
+      break
+    }
+  }
+  return lines.slice(start, end)
+}
+
+// The body of the block scalar whose key is on lines[i]: every following line
+// that is blank or indented deeper than the key.
+function blockBody(lines, i) {
+  const keyIndent = indentOf(lines[i])
+  const body = []
+  for (let j = i + 1; j < lines.length; j++) {
+    if (!isBlank(lines[j]) && indentOf(lines[j]) <= keyIndent) break
+    body.push(lines[j])
+  }
+  while (body.length && isBlank(body[body.length - 1])) body.pop()
+  return body
+}
+
+function literalScalar(lines, keyRe) {
+  const i = lines.findIndex((l) => keyRe.test(l))
+  if (i < 0) return undefined
+  const body = blockBody(lines, i)
+  const strip = Math.min(...body.filter((l) => !isBlank(l)).map(indentOf))
+  return body.map((l) => l.slice(strip)).join('\n') + '\n'
+}
+
+function foldedScalar(lines, keyRe) {
+  const i = lines.findIndex((l) => keyRe.test(l))
+  if (i < 0) return undefined
+  return blockBody(lines, i)
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .join(' ')
+}
+
+// The `run:` block of the step whose `id:` is stepId inside the given job lines.
+function stepRun(lines, stepId) {
+  const idAt = lines.findIndex((l) => new RegExp(`^\\s+id:\\s*${stepId}\\s*$`).test(l))
+  if (idAt < 0) return undefined
+  const dashIndent = indentOf(lines[idAt]) - 2
+  const isDash = (l) => indentOf(l) === dashIndent && l.trimStart().startsWith('- ')
+  let s = idAt
+  while (s > 0 && !isDash(lines[s])) s--
+  let e = idAt + 1
+  while (e < lines.length && !isDash(lines[e])) e++
+  return literalScalar(lines.slice(s, e), /^\s+run:\s*\|\s*$/)
+}
+
+function parseInlineList(lines, keyRe) {
+  const m = lines.map((l) => l.match(keyRe)).find(Boolean)
+  return m ? m[1].split(',').map((x) => x.trim()).filter(Boolean) : undefined
+}
+
+function parseMatrixInclude(lines) {
+  const at = lines.findIndex((l) => /^\s+include:\s*$/.test(l))
+  if (at < 0) return []
+  const out = []
+  for (let i = at + 1; i < lines.length; i++) {
+    const m = lines[i].match(/^\s+-\s*\{(.*)\}\s*$/)
+    if (!m) {
+      if (isBlank(lines[i])) continue
+      break
+    }
+    const entry = {}
+    for (const kv of m[1].split(',')) {
+      const k = kv.indexOf(':')
+      entry[kv.slice(0, k).trim()] = kv.slice(k + 1).trim()
+    }
+    out.push(entry)
+  }
+  return out
+}
+
+const changesLines = jobLines(CI_YML, 'changes')
+const dockerBuildLines = jobLines(CI_YML, 'docker-build')
+
+const filterStep = { run: stepRun(changesLines, 'filter') }
+const dockerBuild = {
+  if: foldedScalar(dockerBuildLines, /^\s+if:\s*>-?\s*$/),
+  needs: parseInlineList(dockerBuildLines, /^\s+needs:\s*\[(.*)\]\s*$/),
+  strategy: { matrix: { include: parseMatrixInclude(dockerBuildLines) } },
+}
 
 // Dockerfiles that are deliberately not in the image matrix, each with the
 // reason. Anything else that is a tracked Dockerfile must be built.
@@ -81,8 +184,14 @@ function runFilter(changedPaths) {
   }
 }
 
-test('the filter step is found and runs under bash with pipefail on', () => {
-  assert.ok(filterStep, 'changes job has a step with id: filter')
+test('the extractor found the pieces of ci.yml the suite asserts on', () => {
+  assert.ok(filterStep.run && filterStep.run.length > 200, 'changes job has a step with id: filter and a run block')
+  assert.ok(dockerBuild.if, 'docker-build has a folded if:')
+  assert.ok(dockerBuild.needs, 'docker-build has an inline needs: list')
+  assert.ok(dockerBuild.strategy.matrix.include.length >= 10, 'docker-build matrix has its include entries')
+})
+
+test('the filter step runs under bash with pipefail on', () => {
   assert.match(filterStep.run, /set -euo pipefail/)
 })
 
@@ -144,7 +253,16 @@ test('docker-build needs both lint and changes', () => {
   assert.deepEqual([...dockerBuild.needs].sort(), ['changes', 'lint'])
 })
 
-test('every tracked Dockerfile is in the image matrix or has a stated reason not to be', () => {
+// The next test reads the repository (git ls-files, the Dockerfiles on disk). It
+// is skipped, visibly, only when this file runs outside a checkout -- which is how
+// the dependency-free property is proved (the test and ci.yml alone in an empty
+// directory); in CI the checkout is a git work tree and the test always runs.
+const inCheckout = (() => {
+  const r = spawnSync('git', ['rev-parse', '--show-toplevel'], { cwd: ROOT, encoding: 'utf8' })
+  return r.status === 0 && existsSync(join(ROOT, 'Makefile'))
+})()
+
+test('every tracked Dockerfile is in the image matrix or has a stated reason not to be', { skip: !inCheckout && 'not inside a repository checkout' }, () => {
   const tracked = git(ROOT, ['ls-files'])
     .split('\n')
     .filter((p) => /(^|\/)(Dockerfile|Containerfile)(\.[^/]*)?$/.test(p))
