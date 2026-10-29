@@ -122,6 +122,11 @@ services:
       - ./docker/keycloak/certs:/opt/keycloak/certs:ro
     labels:
       - "traefik.enable=true"
+      # Incident 2026-10-29: the edge Traefik's docker provider is constrained to this label
+      # (docker/traefik/traefik.yml), so two stacks on one Docker daemon never load each
+      # other's routers and middlewares. Every routed container carries it
+      # (scripts/check-traefik-stack-scope.mjs).
+      - "org.gremion.stack=${STACK:?STACK required}"
       # keycloak is on ${STACK}_edge AND ${STACK}_state: Traefik must reach it
       # on the edge network, the only one traefik itself is attached to.
       - "traefik.docker.network=${STACK:?STACK required}_edge"
@@ -169,6 +174,7 @@ services:
   legal:
     labels:
       - "traefik.enable=true"
+      - "org.gremion.stack=${STACK:?STACK required}"
       - "traefik.docker.network=${STACK:?STACK required}_edge"
       # /legal is now served by gremion-ui — the v4 config-driven legal pages
       # (config.legal.*_html, edited via Settings → Rechtliches). The static
@@ -198,6 +204,7 @@ services:
   traefik:
     labels:
       - "traefik.enable=true"
+      - "org.gremion.stack=${STACK:?STACK required}"
       - "traefik.docker.network=${STACK:?STACK required}_edge"
       - "traefik.http.routers.edge-labels.rule=Host(`edge-labels.invalid`)"
       - "traefik.http.routers.edge-labels.entrypoints=ping"
@@ -291,6 +298,7 @@ services:
       - edge
     labels:
       - "traefik.enable=true"
+      - "org.gremion.stack=${STACK:?STACK required}"
       - "traefik.docker.network=${STACK:?STACK required}_edge"
       # TASK-041: Host-literal on the apex. A customer host keeps the starting
       # page only through a router that chains gremion-ui-starting (the errors

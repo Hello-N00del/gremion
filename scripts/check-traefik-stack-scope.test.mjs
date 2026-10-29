@@ -1,0 +1,255 @@
+#!/usr/bin/env node
+// node --test suite for the Traefik stack-scope guard (incident 2026-10-29).
+//
+// Fixture trees prove the guard refuses the exact defect it exists for (a routed
+// container with no org.gremion.stack label, a docker provider with no
+// constraint); the real-tree tests then hold the repository to it, and name the
+// routed services that MUST be seen so a parser that dropped a file cannot pass
+// vacuously. The render tests read the deployed topology (`docker compose
+// config`) for two different STACK values.
+
+import { test } from 'node:test'
+import assert from 'node:assert/strict'
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join, dirname } from 'node:path'
+
+import { checkStackScope, labelMap, isRouted, CONSTRAINT, KERNEL_ROOT } from './check-traefik-stack-scope.mjs'
+import { renderState } from './compose-edge.mjs'
+
+const GOOD_TRAEFIK_YML = `providers:\n  docker:\n    endpoint: "tcp://docker-socket-proxy:2375"\n    exposedByDefault: false\n    constraints: "${CONSTRAINT}"\n`
+const GOOD_STATE = 'services:\n  traefik:\n    environment:\n      STACK: ${STACK:?STACK required}\n    command:\n      - >-\n        sed -e "s|@STACK@|x|g" a > b\n'
+const LABELLED_LEGAL = 'services:\n  legal:\n    labels:\n      - "traefik.enable=true"\n      - "org.gremion.stack=s"\n'
+
+function tree(files) {
+  const root = mkdtempSync(join(tmpdir(), 'tr-stack-'))
+  for (const [rel, text] of Object.entries(files)) {
+    mkdirSync(dirname(join(root, rel)), { recursive: true })
+    writeFileSync(join(root, rel), text)
+  }
+  return { root, cleanup: () => rmSync(root, { recursive: true, force: true }) }
+}
+
+test('refuses a routed service (list labels, traefik.enable=true) with no org.gremion.stack label', () => {
+  const t = tree({
+    'docker/traefik/traefik.yml': GOOD_TRAEFIK_YML,
+    'docker-compose.yml': GOOD_STATE,
+    'docker-compose.prod.yml': 'services:\n  legal:\n    labels:\n      - "traefik.enable=true"\n      - "traefik.http.services.legal.loadbalancer.server.port=8080"\n',
+  })
+  try {
+    const r = checkStackScope(t.root)
+    assert.equal(r.problems.length, 1)
+    assert.match(r.problems[0], /docker-compose\.prod\.yml: service 'legal' .*no org\.gremion\.stack label/)
+  } finally {
+    t.cleanup()
+  }
+})
+
+test('refuses a map-form service that declares only traefik.http.* (no traefik.enable) and one with an empty label value', () => {
+  const t = tree({
+    'docker/traefik/traefik.yml': GOOD_TRAEFIK_YML,
+    'docker-compose.yml': GOOD_STATE,
+    'test/host/fixtures/x/docker-compose.prod.yml':
+      'services:\n  a:\n    labels:\n      traefik.http.routers.a.rule: "Host(`a`)"\n  b:\n    labels:\n      traefik.enable: "true"\n      org.gremion.stack: ""\n',
+  })
+  try {
+    const r = checkStackScope(t.root)
+    assert.equal(r.problems.length, 2)
+    assert.match(r.problems[0], /service 'a'/)
+    assert.match(r.problems[1], /service 'b'/)
+  } finally {
+    t.cleanup()
+  }
+})
+
+test('passes labelled services (both label forms), and an unlabelled traefik.enable=false service in a test/ fixture', () => {
+  const t = tree({
+    'docker/traefik/traefik.yml': GOOD_TRAEFIK_YML,
+    'docker-compose.yml': GOOD_STATE,
+    'docker-compose.prod.yml': 'services:\n  legal:\n    labels:\n      - "traefik.enable=true"\n      - "org.gremion.stack=${STACK:?STACK required}"\n',
+    'compose/control-panel/standalone.yml':
+      'services:\n  panel:\n    labels:\n      traefik.enable: "true"\n      org.gremion.stack: "${PANEL_STACK:?PANEL_STACK required}"\n',
+    'test/host/fixtures/z/docker-compose.app.yml': 'services:\n  ui:\n    labels:\n      traefik.enable: "false"\n',
+  })
+  try {
+    const r = checkStackScope(t.root)
+    assert.deepEqual(r.problems, [])
+    assert.equal(r.routed.length, 2)
+  } finally {
+    t.cleanup()
+  }
+})
+
+test('outside test/ fixtures a traefik.enable=false service needs the label too; inside test/ it does not', () => {
+  const t = tree({
+    'docker/traefik/traefik.yml': GOOD_TRAEFIK_YML,
+    'docker-compose.yml': GOOD_STATE,
+    'docker-compose.prod.yml': LABELLED_LEGAL,
+    'docker-compose.app.yml': 'services:\n  ui:\n    labels:\n      traefik.enable: "false"\n',
+    'test/host/fixtures/y/docker-compose.app.yml': 'services:\n  ui:\n    labels:\n      traefik.enable: "false"\n',
+  })
+  try {
+    const r = checkStackScope(t.root)
+    assert.equal(r.problems.length, 1)
+    assert.match(r.problems[0], /^docker-compose\.app\.yml: service 'ui'/)
+  } finally {
+    t.cleanup()
+  }
+})
+
+test('refuses a traefik.yml whose docker provider has no constraint, or the wrong one', () => {
+  for (const yml of [
+    'providers:\n  docker:\n    exposedByDefault: false\n',
+    'providers:\n  docker:\n    constraints: "Label(`org.gremion.stack`,`fixed`)"\n',
+  ]) {
+    const t = tree({ 'docker/traefik/traefik.yml': yml, 'docker-compose.yml': GOOD_STATE, 'docker-compose.prod.yml': LABELLED_LEGAL })
+    try {
+      const r = checkStackScope(t.root)
+      assert.equal(r.problems.length, 1)
+      assert.match(r.problems[0], /providers\.docker\.constraints/)
+    } finally {
+      t.cleanup()
+    }
+  }
+})
+
+test('refuses a state composition whose traefik service has no STACK source or no @STACK@ sed expression', () => {
+  const t = tree({
+    'docker/traefik/traefik.yml': GOOD_TRAEFIK_YML,
+    'docker-compose.yml': 'services:\n  traefik:\n    environment:\n      ACME_EMAIL: x\n    command:\n      - sed -e "s|@ACME_EMAIL@|x|g" a > b\n',
+    'docker-compose.prod.yml': LABELLED_LEGAL,
+  })
+  try {
+    const r = checkStackScope(t.root)
+    assert.equal(r.problems.length, 2)
+    assert.match(r.problems.join('\n'), /does not pass STACK/)
+    assert.match(r.problems.join('\n'), /no sed expression for @STACK@/)
+  } finally {
+    t.cleanup()
+  }
+})
+
+test('refuses to pass over zero compose files or zero routed services', () => {
+  const none = tree({ 'docker/traefik/traefik.yml': GOOD_TRAEFIK_YML })
+  const unrouted = tree({ 'docker/traefik/traefik.yml': GOOD_TRAEFIK_YML, 'docker-compose.yml': GOOD_STATE })
+  try {
+    assert.match(checkStackScope(none.root).problems.join('\n'), /no compose file found/)
+    assert.match(checkStackScope(unrouted.root).problems.join('\n'), /no routed service found/)
+  } finally {
+    none.cleanup()
+    unrouted.cleanup()
+  }
+})
+
+test('an unparseable traefik.yml or state docker-compose.yml is a problem, not a throw; the other checks still run', () => {
+  const t = tree({
+    'docker/traefik/traefik.yml': 'providers: [unclosed\n',
+    'docker-compose.yml': 'services: [unclosed\n',
+    'docker-compose.prod.yml': 'services:\n  legal:\n    labels:\n      - "traefik.enable=true"\n',
+  })
+  try {
+    const r = checkStackScope(t.root)
+    const all = r.problems.join('\n')
+    assert.match(all, /docker\/traefik\/traefik\.yml: not parseable YAML/)
+    assert.match(all, /(^|\n)docker-compose\.yml: not parseable YAML/)
+    assert.match(all, /docker-compose\.prod\.yml: service 'legal'/)
+  } finally {
+    t.cleanup()
+  }
+})
+
+test('a missing state docker-compose.yml is a problem', () => {
+  const t = tree({ 'docker/traefik/traefik.yml': GOOD_TRAEFIK_YML, 'docker-compose.prod.yml': LABELLED_LEGAL })
+  try {
+    assert.match(checkStackScope(t.root).problems.join('\n'), /docker-compose\.yml is missing/)
+  } finally {
+    t.cleanup()
+  }
+})
+
+test('the traefik service may pass STACK through as a list item `STACK` or a null-valued map key', () => {
+  const body = (env) => `services:\n  traefik:\n    environment:\n${env}    command:\n      - >-\n        sed -e "s|@STACK@|x|g" a > b\n`
+  for (const env of ['      - STACK\n', '      STACK:\n']) {
+    const t = tree({ 'docker/traefik/traefik.yml': GOOD_TRAEFIK_YML, 'docker-compose.yml': body(env), 'docker-compose.prod.yml': LABELLED_LEGAL })
+    try {
+      assert.deepEqual(checkStackScope(t.root).problems, [], env)
+    } finally {
+      t.cleanup()
+    }
+  }
+  const t = tree({ 'docker/traefik/traefik.yml': GOOD_TRAEFIK_YML, 'docker-compose.yml': body('      - STACKED=1\n'), 'docker-compose.prod.yml': LABELLED_LEGAL })
+  try {
+    assert.match(checkStackScope(t.root).problems.join('\n'), /does not pass STACK/)
+  } finally {
+    t.cleanup()
+  }
+})
+
+test('a YAML file the compose finder does not pick up but that carries a traefik.enable / traefik.http. label is flagged', () => {
+  const t = tree({
+    'docker/traefik/traefik.yml': GOOD_TRAEFIK_YML,
+    'docker-compose.yml': GOOD_STATE,
+    'docker-compose.prod.yml': LABELLED_LEGAL,
+    'deploy/stack.yaml': 'services:\n  x:\n    labels:\n      - "traefik.enable=true"\n',
+    'ops/overlay.yml': 'services:\n  y:\n    labels:\n      traefik.http.routers.y.rule: "Host(`y`)"\n',
+    'k8s/ingress.yml': 'metadata:\n  annotations:\n    traefik.enable: "true"\n',
+    'ops/unrelated.yml': 'name: nothing here\n',
+  })
+  try {
+    const r = checkStackScope(t.root)
+    assert.equal(r.problems.length, 2, r.problems.join('\n'))
+    assert.match(r.problems.join('\n'), /deploy\/stack\.yaml: .*traefik/)
+    assert.match(r.problems.join('\n'), /ops\/overlay\.yml: .*traefik/)
+  } finally {
+    t.cleanup()
+  }
+})
+
+test('labelMap and isRouted read both label forms', () => {
+  assert.deepEqual(labelMap(['a=b=c', 'x']), { a: 'b=c', x: '' })
+  assert.deepEqual(labelMap({ a: true, b: null }), { a: 'true', b: '' })
+  assert.equal(isRouted({ 'traefik.enable': 'true' }), true)
+  assert.equal(isRouted({ 'traefik.enable': 'false' }), false)
+  assert.equal(isRouted({ 'traefik.http.middlewares.m.headers.x': '1' }), true)
+  assert.equal(isRouted({ 'org.gremion.postgres': 'kernel' }), false)
+})
+
+test('the repository: every routed service in every compose file carries org.gremion.stack, and the docker provider is constrained', () => {
+  const r = checkStackScope(KERNEL_ROOT)
+  assert.deepEqual(r.problems, [])
+})
+
+test('the repository: the guard SEES the services that matter (a parser that drops a file cannot pass vacuously)', () => {
+  const r = checkStackScope(KERNEL_ROOT)
+  const seen = new Set(r.routed.map((x) => `${x.file}#${x.service}`))
+  for (const want of [
+    'docker-compose.prod.yml#keycloak',
+    'docker-compose.prod.yml#legal',
+    'docker-compose.prod.yml#traefik',
+    'docker-compose.prod.yml#fallback',
+    'compose/control-panel/standalone.yml#control-panel',
+    'docker-compose.override.yml#keycloak',
+    'test/host/fixtures/edge-proto/docker-compose.yml#traefik',
+  ]) {
+    assert.ok(seen.has(want), `routed service ${want} was not collected; saw ${[...seen].join(', ')}`)
+  }
+})
+
+test('the render (docker compose config): for two different STACK values every routed service carries exactly that STACK', () => {
+  for (const stack of ['guardstack', 'otherstack']) {
+    const render = renderState({ env: { STACK: stack } })
+    const routed = Object.entries(render.services ?? {}).filter(([, s]) => isRouted(labelMap(s.labels)))
+    assert.ok(routed.length >= 4, `only ${routed.length} routed services in the ${stack} render`)
+    for (const [name, s] of routed) assert.equal(labelMap(s.labels)['org.gremion.stack'], stack, `${stack}: ${name}`)
+    const tr = render.services.traefik
+    assert.equal(tr.environment?.STACK, stack, `${stack}: the traefik container is not told its stack`)
+    assert.match([].concat(tr.command).join(' '), /s\|@STACK@\|\$\$\{STACK\}\|g/, 'the traefik command must substitute @STACK@ from STACK')
+  }
+})
+
+test('the traefik command refuses an empty STACK and a STACK carrying a metacharacter (backtick included) before Traefik starts', () => {
+  const cmd = [].concat(renderState().services.traefik.command).join(' ')
+  // `docker compose config` keeps the container-shell `$${VAR}` escaping, hence the doubled `$`.
+  assert.match(cmd, /for v in [^;]*"\$\$\{STACK\}"/, 'the empty-value loop must name STACK')
+  assert.match(cmd, /case "[^"]*\$\$\{STACK\}" in [^;]*\*'`'\*\)/, 'the metacharacter case must cover STACK and the backtick')
+})
