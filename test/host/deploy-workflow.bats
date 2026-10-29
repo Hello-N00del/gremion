@@ -674,6 +674,52 @@ run_cut() {
     assert_cut_changed_nothing
 }
 
+@test "cut-dist-tag.sh refuses a pins layer that is anything but the services emit-pins writes, and changes nothing" {
+    # Each of these has only valid image: lines, which is all the old check read.
+    local app case_name
+    make_cut_repo
+    app="${ARTEFACT}/docker-compose.pins.yml"
+    shim_cut_tools
+    shim_cut_gh
+    export COSIGN_KEY_PATH="$DIST_MANIFEST"
+    cp "$app" "${BATS_TEST_TMPDIR}/pristine.yml"
+    for case_name in extra-key-after-image extra-key-before-image extra-top-level-key duplicate-service \
+                     trailing-comment no-services image-first quoted-image; do
+        write_artefact
+        case "$case_name" in
+            extra-key-after-image) sed -i 's#^\(    image: .*gremion-ui@.*\)$#\1\n    privileged: true#' "$app" ;;
+            extra-key-before-image) sed -i 's#^\(    build: !reset null\)$#\1\n    command: [sh, -c, evil]#' "$app" ;;
+            extra-top-level-key) printf 'volumes:\n  evil: {}\n' >> "$app" ;;
+            duplicate-service) printf '  gremion-ui:\n    build: !reset null\n    image: ghcr.io/hello-n00del/gremion-ui@sha256:%s\n' "$GOOD_DIGEST_A" >> "$app" ;;
+            trailing-comment) sed -i 's|^\(    image: .*gremion-ui@.*\)$|\1 # pinned|' "$app" ;;
+            no-services) printf '# header only\nservices:\n' > "$app" ;;
+            image-first) sed -i '/^    build: !reset null$/d' "$app" ;;
+            quoted-image) sed -i 's#^    image: \(.*gremion-ui@.*\)$#    image: "\1"#' "$app" ;;
+        esac
+        if cmp -s "$app" "${BATS_TEST_TMPDIR}/pristine.yml"; then
+            echo "${case_name}: the mutation did not change the layer" >&2
+            return 1
+        fi
+        run_cut 1.2.3 --run-id 42 --overlap false --dist-manifest "$DIST_MANIFEST" --first-release
+        [ "$status" -eq 1 ] || { echo "${case_name}: accepted (status ${status}): ${output}" >&2; return 1; }
+        [[ "$output" == *"cut-dist-tag: "* ]] || { echo "${case_name}: no refusal message: ${output}" >&2; return 1; }
+        assert_cut_changed_nothing
+    done
+}
+
+@test "cut-dist-tag.sh refuses a layer check-pins refuses for the built commit (a service added or dropped)" {
+    make_cut_repo
+    shim_cut_tools
+    shim_cut_gh
+    export COSIGN_KEY_PATH="$DIST_MANIFEST"
+    CHECKPINS_RC=1 run_cut 1.2.3 --run-id 42 --overlap false --dist-manifest "$DIST_MANIFEST" --first-release
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"refused by check-pins"* ]]
+    assert_recorded node "scripts/release/check-pins.mjs"
+    [ ! -e "${CUT_REPO}/release.json" ]
+    refute_recorded cosign ""
+}
+
 @test "cut-dist-tag.sh refuses a run that did not succeed" {
     make_cut_repo
     shim_cut_tools
@@ -697,6 +743,9 @@ run_cut() {
     [ "$status" -eq 1 ]
     [[ "$output" == *"dispatched from someone/fork"* ]]
     assert_cut_changed_nothing
+    # the branch-qualified spelling of the real workflow is accepted past this check
+    RUN_PATH=".github/workflows/release-images.yml@refs/heads/main" CHECKPINS_RC=1 run_cut 1.2.3 --run-id 42 --overlap true --dist-manifest "$DIST_MANIFEST" --first-release
+    [[ "$output" == *"refused by check-pins"* ]]
 }
 
 @test "cut-dist-tag.sh refuses a built or dispatching commit that is neither on origin/main nor a release tag" {

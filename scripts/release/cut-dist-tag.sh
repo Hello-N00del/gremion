@@ -44,8 +44,10 @@
 # --first-release, or one with it; a run of any other workflow, from a fork, or
 # that did not succeed; a built or dispatching commit that is neither on
 # origin/main nor the commit of a v* / rc-v* tag; an artefact that is not
-# exactly one release-pins-<40 hex>; a pins layer holding any image that is not
-# `@sha256:<64 hex>`.
+# exactly one release-pins-<40 hex>; a pins layer that is not EXACTLY what
+# emit-pins.mjs writes (a services: map, each service a `build: !reset null`
+# and an `image:` that is a first-party `<name>@sha256:<64 hex>`, nothing else) or
+# that check-pins.mjs refuses for the built commit.
 #
 # THE HOST-SIDE DEPLOY IS NOT DONE HERE. Handing a registry token to the host
 # is a manual operator step (docs/ops/runbook/upgrade.md); this script ends at
@@ -63,6 +65,51 @@ usage() {
     exit 2
 }
 cleanup() { if [[ -n "$WORK" ]]; then rm -rf -- "$WORK"; fi; }
+
+# layer_problem <file> -- prints the first reason a pins layer is not exactly
+# the shape emit-pins.mjs writes, nothing when it is. The layer comes out of a
+# CI run, so it is parsed line by line, not trusted: a `volumes:`, `command:` or
+# `privileged:` key under a service would otherwise ride into the release
+# commit that gets signed.
+layer_problem() {
+    local file="$1" line ref state=top n=0 svc="" seen=" "
+    local service_re='^  ([A-Za-z0-9][A-Za-z0-9_.-]*):$'
+    local image_re='^    image: (.*)$'
+    local ref_re='^ghcr\.io/hello-n00del/[a-z0-9._-]+@sha256:[0-9a-f]{64}$'
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        n=$((n + 1))
+        # full-line comments only (emit-pins.mjs writes a two-line header)
+        if [[ "$line" == '#'* ]]; then continue; fi
+        case "$state" in
+            top)
+                [[ "$line" == 'services:' ]] || { printf '%s:%d: expected "services:", got: %s' "$file" "$n" "$line"; return; }
+                state=service ;;
+            service)
+                if [[ ! "$line" =~ $service_re ]]; then
+                    printf '%s:%d: expected a service name at two-space indent, got: %s' "$file" "$n" "$line"; return
+                fi
+                svc="${BASH_REMATCH[1]}"
+                if [[ "$seen" == *" $svc "* ]]; then printf '%s:%d: service %s is pinned twice' "$file" "$n" "$svc"; return; fi
+                seen+="$svc "
+                state=build ;;
+            build)
+                [[ "$line" == '    build: !reset null' ]] || { printf '%s:%d: service %s: expected "build: !reset null", got: %s' "$file" "$n" "$svc" "$line"; return; }
+                state=image ;;
+            image)
+                if [[ ! "$line" =~ $image_re ]]; then
+                    printf '%s:%d: service %s: expected an image: line, got: %s' "$file" "$n" "$svc" "$line"; return
+                fi
+                ref="${BASH_REMATCH[1]}"
+                if [[ ! "$ref" =~ $ref_re ]]; then
+                    printf 'not a first-party digest reference: %s' "$ref"; return
+                fi
+                state=service ;;
+        esac
+    done < "$file"
+    # `service` is the resting state: top means no services: key, build/image a
+    # service cut off half way, and an empty seen-list a layer pinning nothing.
+    [[ "$state" == service && "$seen" != " " ]] || printf '%s: no services, or a service cut off after %s' "$file" "${svc:-the header}"
+}
 
 # reviewed_commit <sha> -- is <sha> a commit that reached review: on origin/main
 # (as just fetched) or the commit of a v* / rc-v* tag? The release-images
@@ -156,23 +203,27 @@ main() {
     done
     gh run download "$run_id" -n "$names" -D "$WORK/pins" || die "cannot download ${names}"
 
-    # The layers are judged before anything in the clone changes: every image
-    # of both must be a first-party digest reference.
-    local layer refs=""
+    # The layers are judged before anything in the clone changes: the whole of
+    # both must be the shape emit-pins.mjs writes, every image a first-party
+    # digest reference.
+    local layer problem refs=""
     for layer in docker-compose.pins.yml docker-compose.state-pins.yml; do
         [[ -f "$WORK/pins/$layer" ]] || die "the artefact has no $layer"
-        refs+="$(sed -n 's/^[[:space:]]*image:[[:space:]]*//p' "$WORK/pins/$layer")"$'\n'
+        problem="$(layer_problem "$WORK/pins/$layer")"
+        [[ -z "$problem" ]] || die "$problem"
+        refs+="$(sed -n 's/^    image: //p' "$WORK/pins/$layer")"$'\n'
     done
     refs="$(printf '%s' "$refs" | sed '/^$/d' | sort -u)"
     [[ -n "$refs" ]] || die "the pins layers pin no images"
-    local ref
-    while IFS= read -r ref; do
-        [[ "$ref" =~ ^ghcr\.io/hello-n00del/[a-z0-9._-]+@sha256:[0-9a-f]{64}$ ]] || die "not a first-party digest reference: $ref"
-    done <<< "$refs"
     [[ "$(tr -d '[:space:]' < "$WORK/pins/release-sha.txt")" == "$sha" ]] || die "release-sha.txt disagrees with the artefact name"
 
     # 2. the release commit
     git checkout --quiet --detach "$sha"
+    # The expected service set is derived from the built commit's own compose
+    # files, so a layer that adds or drops a service is refused before it is
+    # committed.
+    node scripts/release/check-pins.mjs "$WORK/pins/docker-compose.pins.yml" --project app || die "the app pins layer is refused by check-pins"
+    node scripts/release/check-pins.mjs "$WORK/pins/docker-compose.state-pins.yml" --project state || die "the state pins layer is refused by check-pins"
     cp "$WORK/pins/docker-compose.pins.yml" "$WORK/pins/docker-compose.state-pins.yml" .
 
     local digest cur prev migrations
