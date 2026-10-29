@@ -33,7 +33,7 @@ import { createHash, randomBytes } from 'node:crypto'
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import postgres from 'postgres'
-import { handToReader } from './tenant-secret-file'
+import { handToReader, writeReaderConfigFile } from './tenant-secret-file'
 import {
   bootstrapPlatform,
   ACCESS_READER_ROLE,
@@ -229,12 +229,9 @@ function writeSecretFile(hostPath: string, value: string): Promise<void> {
 }
 const tenantSecretsDir = () => process.env.TENANT_SECRETS_DIR ?? join(repoRoot, 'secrets', 'tenants')
 
-/** The tenant's config.json, atomically (tmp + rename in the same directory). */
+/** The tenant's config.json, atomically (tmp + rename in the same directory), owned by the reader (#49). */
 function writeConfigFile(path: string, text: string): void {
-  mkdirSync(dirname(path), { recursive: true })
-  const tmp = `${path}.tmp-${process.pid}`
-  writeFileSync(tmp, text, { mode: 0o640 })
-  renameSync(tmp, path)
+  writeReaderConfigFile(path, text)
 }
 
 /** A 0700 directory (the customer's storage prefix). */

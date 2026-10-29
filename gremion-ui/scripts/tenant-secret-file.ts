@@ -5,8 +5,8 @@
 // named volume), so a file under the tenant secrets dir is handed to the reader
 // uid:gid, still mode 0600. Files elsewhere (the provisioner credential) keep
 // their root ownership.
-import { chownSync } from 'node:fs'
-import { relative, resolve, isAbsolute } from 'node:path'
+import { chownSync, mkdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { dirname, relative, resolve, isAbsolute } from 'node:path'
 
 export function readerIds(env: Record<string, string | undefined>): { uid: number; gid: number } {
   const one = (name: string): number => {
@@ -33,4 +33,34 @@ export function handToReader(
     // every reader container (EACCES at runtime, long after the create "passed").
     throw new Error(`chown ${uid}:${gid} ${hostPath} failed (${err instanceof Error ? err.message : String(err)}); the reader container would get EACCES`)
   }
+}
+
+type ReaderDeps = {
+  chown?: (path: string, uid: number, gid: number) => void
+  env?: Record<string, string | undefined>
+  pid?: number
+}
+
+// #49: the tenant's config.json and its per-slug directory under the data root.
+// tenant-create (root) made both root:root, the file 0640, and gremion-ui (uid
+// 1000) got EACCES on config.json: an incomplete brand identity, a failed
+// readiness, and a new customer answering 503. The file is written as a tmp,
+// handed to the reader BEFORE the rename (it never appears root-owned), and the
+// slug directory is handed over too. Mode stays 0640.
+export function writeReaderConfigFile(path: string, text: string, deps: ReaderDeps = {}): void {
+  const { uid, gid } = readerIds(deps.env ?? process.env)
+  const chown = deps.chown ?? chownSync
+  const dir = dirname(path)
+  mkdirSync(dir, { recursive: true })
+  const tmp = `${path}.tmp-${deps.pid ?? process.pid}`
+  writeFileSync(tmp, text, { mode: 0o640 })
+  for (const p of [tmp, dir]) {
+    try {
+      chown(p, uid, gid)
+    } catch (err) {
+      rmSync(tmp, { force: true })
+      throw new Error(`chown ${uid}:${gid} ${p} failed (${err instanceof Error ? err.message : String(err)}); gremion-ui would get EACCES on the tenant config`)
+    }
+  }
+  renameSync(tmp, path)
 }
