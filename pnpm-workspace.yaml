@@ -130,3 +130,12 @@ overrides:
   # > vite > postcss > source-map-js); the postcss floor above does not lift it, because
   # postcss 8.5.23 still accepts source-map-js 1.2.1. Scoped selector, bounded to 1.x.
   source-map-js@<1.2.2: '>=1.2.2 <2'
+  # GHSA-587h-7wmj-h5pm (HIGH) - vite >=8.3.0 <=8.3.2, first patched 8.3.3. It reaches the
+  # PRODUCTION tree through apps/control-panel > @auth/sveltekit > @sveltejs/kit > vite, so
+  # `pnpm audit --prod` (.github/workflows/dependency-audit.yml) reports it. The three app
+  # manifests declare vite directly and move to ^8.3.3 with this floor. Bounded to 8.x.
+  vite: '>=8.3.3 <9'
+  # GHSA-mrhx-c7xc-m3w5 (HIGH) - zod <4.6.6, first patched 4.6.6. A direct dependency of
+  # gremion-ui, packages/generated-clients, packages/member-import and five modules (^4.4.3 /
+  # ^4.6.5), all resolving one lock entry; the floor lifts every one of them. Bounded to 4.x.
+  zod: '>=4.6.6 <5'
