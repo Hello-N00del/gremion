@@ -29,6 +29,11 @@ const REQUIRED = [
   ['M-OFF-2 (sweep)', 'M-OFF-2: disabling publishing revokes the live grant'],
   ['M-OFF-3', 'M-OFF-3: a module absent from the registry'],
   ['M-OFF-4', 'M-OFF-4: enable -> disable -> enable does not resurrect'],
+  ['M-OFF-2/4 per module: board', 'board (brd.card.own): the NEXT decision denies'],
+  ['M-OFF-2/4 per module: calendar', 'calendar (cal.event.manage): the NEXT decision denies'],
+  ['M-OFF-1 every module capability', 'M-OFF-1: finance / fin.expense.approve decides deny with module_not_enabled'],
+  ['M-OFF-3 absent module', 'sync with no registry row for a module succeeds'],
+  ['M-OFF over HTTP, no module call', 'M-OFF over HTTP: with the votes module off'],
   ['TRD-091 granter role', 'a mismatching client-supplied granterRole is 403'],
   ['TRD-090 step-up', 'refuses 401 insufficient_user_authentication'],
   ['TRD-113 inclusion', 'a body_admin granting a role it does not include'],
@@ -77,6 +82,6 @@ for (const [label, frag] of REQUIRED) {
   console.log(`[prove-authz] PASS  ${label}: ${hit.title}`)
 }
 
-const left = sh('docker', ['ps', '-a', '--format', '{{.Names}}', '--filter', 'name=t081-']).stdout.trim()
+const left = sh('docker', ['ps', '-a', '--format', '{{.Names}}', '--filter', `name=${process.env.T081_NAME_PREFIX ?? 't081'}-`]).stdout.trim()
 if (left) fail(`scratch containers left behind: ${left.replace(/\s+/g, ' ')}`)
 console.log(`[prove-authz] OK ${passed.length} tests passed (floor ${floor}), ${REQUIRED.length} required proofs present, 0 scratch containers left, report ${report}`)

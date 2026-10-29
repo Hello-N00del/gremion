@@ -46,7 +46,8 @@ export const NAMED: Record<'unit' | 'integration' | 'authz', Record<string, numb
   authz: {
     'test/authz/after-migrate.int.test.ts': 1,
     'test/authz/grants.int.test.ts': 28,
-    'test/authz/http.int.test.ts': 5,
+    'test/authz/http.int.test.ts': 9,
+    'test/authz/module-off.int.test.ts': 28,
     'test/authz/pdp.int.test.ts': 12,
     'test/authz/schema.int.test.ts': 8,
   },
