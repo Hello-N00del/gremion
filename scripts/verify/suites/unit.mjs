@@ -21,7 +21,7 @@ import { createRequire } from 'node:module'
 import path from 'node:path'
 import { headSha } from '../lib/git.mjs'
 import { combineParts } from '../lib/guard.mjs'
-import { countDeclaredNodeTests, parseBatsTap, parseNodeTapSummary } from '../lib/parsers.mjs'
+import { countDeclaredNodeTests, parseBatsTap, parseNodeTapSummary, tapFailureBlocks } from '../lib/parsers.mjs'
 import { run, tail, toolAvailable } from '../lib/proc.mjs'
 import { REPO_ROOT, runVitestJson } from '../lib/vitest.mjs'
 
@@ -32,6 +32,14 @@ export function vitestSubcheck({ cwd, testScript = 'test:unit', root = REPO_ROOT
   // script is what verify runs too. `extraArgs` reach vitest through the
   // script (the modules part's --coupled-excludes arguments).
   return runVitestJson({ label, cwd, cmd: 'pnpm', args: ['run', testScript, ...extraArgs], root })
+}
+
+// A failing TAP run's detail: the failing tests first (every `not ok` with its diagnostics), then the
+// tail of the output. The tail alone is what a long run ends with -- passing tests and warnings -- and
+// named nothing (CI run 4: bats "1 of 1668 failed").
+function failureDetail(out, tailChars) {
+  const failures = tapFailureBlocks(out)
+  return failures ? `failing tests:\n${failures}\n--- tail of the output ---\n${tail(out, tailChars)}` : tail(out, tailChars)
 }
 
 // Runs node --test PER FILE, one process per file, exactly like the
@@ -69,7 +77,7 @@ export function nodeTestParts({ cwd, files }) {
       }
     }
     if (summary.failed > 0) {
-      return { label, ...summary, detail: tail(out) }
+      return { label, ...summary, detail: failureDetail(out, 500) }
     }
     if (summary.collected !== declared) {
       return {
@@ -167,7 +175,7 @@ function batsPartWindows({ label, cwd, patterns }) {
 // `failed > 0` already explains a non-zero exit; a non-zero exit with no
 // reported failure is not explained by anything the parser saw, so it is
 // untrusted, not clean.
-function judgeBats(label, res, what) {
+export function judgeBats(label, res, what) {
   const out = res.stdout + res.stderr
   const parsed = parseBatsTap(out)
   if (!parsed) {
@@ -176,7 +184,7 @@ function judgeBats(label, res, what) {
   if (res.code !== 0 && parsed.failed === 0) {
     return { label, unparseable: true, detail: `${what} exited ${res.code ?? `on signal ${res.signal}`} but its TAP output reported no failures -- untrusted\n${tail(out)}` }
   }
-  return { label, ...parsed, detail: parsed.failed > 0 ? tail(out, 1500) : '' }
+  return { label, ...parsed, detail: parsed.failed > 0 ? failureDetail(out, 1500) : '' }
 }
 
 function batsPart({ cwd, patterns }) {
