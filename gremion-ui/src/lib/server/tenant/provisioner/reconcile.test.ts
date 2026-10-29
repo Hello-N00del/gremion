@@ -69,7 +69,7 @@ const SUB_MAPPER = { name: 'sub', protocolMapper: 'oidc-usermodel-property-mappe
 /** The auth_time mapper exactly as the shipped base template's gremion-ui client carries it (TASK-081 step-up: no auth_time claim, no fresh step-up). */
 const AUTH_TIME_MAPPER = {
   id: 'pm-auth-time',
-  ...(base.clients.find((c: { clientId: string }) => c.clientId === 'gremion-ui').protocolMappers.find((m: { name: string }) => m.name === 'auth_time') as object),
+  ...(base.clients.find((c: { clientId: string }) => c.clientId === 'gremion-ui').protocolMappers.find((m: { name: string }) => m.name === 'auth_time') as { protocolMapper: string; config: Record<string, string> }),
 }
 const UI_MAPPERS = 'GET /admin/realms/verein/clients/uuid-ui/protocol-mappers/models'
 
