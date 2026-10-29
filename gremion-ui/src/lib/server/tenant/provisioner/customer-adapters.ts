@@ -84,6 +84,9 @@ export interface CustomerAdapterOptions {
   /** Writes the tenant's config.json atomically (the CLI's writer: this module
    *  holds no write-capable fs call, check-storage-seam s3). */
   writeConfigFile(path: string, text: string): void
+  /** #49: hands an EXISTING tenant config (and its slug dir) to the reader; the CLI's. Required: an
+   *  unwired repair would silently leave a root-owned config behind. */
+  repairConfigOwner(path: string): void
   /** Creates a 0700 directory; the CLI's (same reason). */
   makePrivateDir(dir: string): void
   kc: KcProvisionApi
@@ -324,7 +327,12 @@ export function customerAdapters(o: CustomerAdapterOptions): Pick<ProvisioningDe
     config: {
       async ensure(c) {
         const path = configPathForTenant(c.slug)
-        if (existsSync(path)) return false
+        if (existsSync(path)) {
+          // A config written before #49 is root:root and unreadable to gremion-ui: hand it over whenever this
+          // step runs again (a retried database_created). A finished create skips the step: materialize-config.
+          o.repairConfigOwner(path)
+          return false
+        }
         const merged = materializeConfig(JSON.parse(readFileSync(o.configFile, 'utf-8')) as unknown)
         assertBrandIdentityComplete(merged, c.slug)
         o.writeConfigFile(path, `${JSON.stringify({ ...merged, setup_complete: false }, null, 2)}\n`)
