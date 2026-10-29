@@ -10,6 +10,7 @@ import { build } from 'esbuild'
 
 const EXTERNAL = ['fastify', '@fastify/multipart', 'ajv', 'ajv-formats', 'jose', 'postgres']
 
+/** @param {string} [outfile]  @returns {import('esbuild').BuildOptions} */
 export const buildOptions = (outfile = 'dist/index.js') => ({
   entryPoints: ['src/main.ts'],
   bundle: true,
