@@ -4,8 +4,10 @@ import { readdirSync, statSync } from 'node:fs'
 import path from 'node:path'
 import { describe, expect, test } from 'vitest'
 import { STREAMS } from '@gremion/ports/broker'
+import { subjectMatches } from '../../ports/src/subject-match.ts'
 import { FLOWS, NO_BROKER, NO_STREAM, OWNER_TO_MODULE, SYSTEM_STREAMS, type MatrixInput, matrixViolations, loadRegistryAddresses } from '../src/flows.ts'
 import { TENANT_JETSTREAM_LIMITS } from '../src/render.ts'
+import { modulePermissions } from '../src/permissions.ts'
 
 const REPO = path.resolve(import.meta.dirname, '../../..')
 
@@ -126,15 +128,55 @@ describe('flow matrix (TDD 1)', () => {
   test('the per-tenant stream limit leaves headroom: flow + system streams <= max_streams - 1 (TASK-080/084 add more)', () => {
     const max = Number(/max_streams: (\d+)/.exec(TENANT_JETSTREAM_LIMITS)![1])
     const used = Object.keys(STREAMS).length + Object.keys(SYSTEM_STREAMS).length
-    expect(used).toBe(5)
+    expect(used).toBe(6) // NEWSLETTER CONTENT CALENDAR ORGUNIT IDT + DLQ
     expect(used).toBeLessThanOrEqual(max - 1)
+  })
+
+  test('TASK-080-a headroom: IDT makes 6 of 8; TASK-084 adds GOV (7 of 8) and nothing else fits after it', () => {
+    const max = Number(/max_streams: (\d+)/.exec(TENANT_JETSTREAM_LIMITS)![1])
+    const used = Object.keys(STREAMS).length + Object.keys(SYSTEM_STREAMS).length
+    expect(max).toBe(8)
+    expect(used + 1).toBeLessThanOrEqual(max - 1) // GOV
+    expect(used + 2).toBeGreaterThan(max - 1) // a further stream is a render-limit decision, not a quiet edit
+  })
+
+  test('TASK-080-a: the kernel API is its own NATS identity and the only IDT publisher; the kernel cannot publish gremion.<t>.idt.>', () => {
+    expect(FLOWS['kernel-api']).toEqual({ publishes: ['IDT'], consumes: [] })
+    expect(OWNER_TO_MODULE.idt).toBe('kernel-api')
+    expect(FLOWS.kernel!.publishes).not.toContain('IDT')
+    const kernelApi = modulePermissions('0192f0c12b3c7d4e8f001122334455aa', 'kernel-api').publish.allow
+    expect(kernelApi).toContain('gremion.0192f0c12b3c7d4e8f001122334455aa.idt.>')
+    expect(kernelApi.some((a) => a.includes('org-unit'))).toBe(false)
+    const kernel = modulePermissions('0192f0c12b3c7d4e8f001122334455aa', 'kernel').publish.allow
+    expect(kernel.some((a) => a.includes('.idt.'))).toBe(false)
+  })
+
+  test('TASK-080-a permission tests by subject: the kernel-api nkey cannot publish gremion.<t>.org-unit.>, the kernel nkey cannot publish gremion.<t>.idt.>, each can publish its own stream', () => {
+    const t = '0192f0c12b3c7d4e8f001122334455aa'
+    const can = (module: string, subject: string) => modulePermissions(t, module).publish.allow.some((p) => subjectMatches(p, subject))
+    for (const e of ['upserted', 'deleted', 'anything.else']) expect(can('kernel-api', `gremion.${t}.org-unit.${e}`), `kernel-api -> org-unit.${e}`).toBe(false)
+    for (const s of ['person.invited', 'body.created', 'membership.ended', 'tenure.started', 'seat.retired']) {
+      expect(can('kernel-api', `gremion.${t}.idt.${s}`), `kernel-api -> idt.${s}`).toBe(true)
+      expect(can('kernel', `gremion.${t}.idt.${s}`), `kernel -> idt.${s}`).toBe(false)
+    }
+    expect(can('kernel', `gremion.${t}.org-unit.upserted`)).toBe(true)
+    // and never another tenant's IDT subject
+    expect(can('kernel-api', 'gremion.some-other-tenant.idt.body.created')).toBe(false)
+  })
+
+  test('TASK-080-a guard: STREAMS.IDT removed -> the matrix is RED (unknown stream + the idt registry addresses under no stream)', () => {
+    const input = realInput()
+    delete (input.streams as Record<string, unknown>).IDT
+    const v = matrixViolations(input).join('\n')
+    expect(v).toMatch(/flow kernel-api names unknown stream IDT/)
+    expect(v).toMatch(/gremion\.\{tenantId\}\.idt\..*not under any stream kernel-api publishes/)
   })
 
   test('the provisioning no-stream entry is re-dated to TASK-080 (TASK-079 Q12)', () => {
     expect(NO_STREAM.entries.find((e) => e.segment === 'provisioning')?.until).toBe('TASK-080')
   })
 
-  test('FLOWS covers the four NATS callers and the kernel', () => {
-    expect(Object.keys(FLOWS).sort()).toEqual(['calendar', 'content', 'finance', 'kernel', 'publishing'])
+  test('FLOWS covers the four NATS callers, the kernel and the kernel API', () => {
+    expect(Object.keys(FLOWS).sort()).toEqual(['calendar', 'content', 'finance', 'kernel', 'kernel-api', 'publishing'])
   })
 })
