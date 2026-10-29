@@ -624,6 +624,7 @@ run_cut() {
     run_cut 1.2.3 --overlap true --dist-manifest "$DIST_MANIFEST"
     [ "$status" -eq 2 ]
     [[ "$output" == *"usage:"* ]]
+    [[ "$output" == *"[--first-release]"* ]]
 }
 
 @test "cut-dist-tag.sh refuses when COSIGN_KEY_PATH is unset, before any network call" {
@@ -666,7 +667,7 @@ run_cut() {
     shim_cut_gh
     export COSIGN_KEY_PATH="$DIST_MANIFEST"
     sed -i 's#gremion-ui@sha256:[0-9a-f]*#gremion-ui:latest#' "${ARTEFACT}/docker-compose.pins.yml"
-    run_cut 1.2.3 --run-id 42 --overlap false --dist-manifest "$DIST_MANIFEST"
+    run_cut 1.2.3 --run-id 42 --overlap false --dist-manifest "$DIST_MANIFEST" --first-release
     [ "$status" -eq 1 ]
     [[ "$output" == *"not a first-party digest reference"* ]] || { echo "$output" >&2; return 1; }
     [[ "$output" == *"gremion-ui:latest"* ]]
@@ -678,7 +679,7 @@ run_cut() {
     shim_cut_tools
     shim_cut_gh
     export COSIGN_KEY_PATH="$DIST_MANIFEST"
-    RUN_CONCLUSION=failure run_cut 1.2.3 --run-id 42 --overlap true --dist-manifest "$DIST_MANIFEST"
+    RUN_CONCLUSION=failure run_cut 1.2.3 --run-id 42 --overlap true --dist-manifest "$DIST_MANIFEST" --first-release
     [ "$status" -eq 1 ]
     [[ "$output" == *"did not succeed"* ]]
     assert_cut_changed_nothing
@@ -689,10 +690,10 @@ run_cut() {
     shim_cut_tools
     shim_cut_gh
     export COSIGN_KEY_PATH="$DIST_MANIFEST"
-    RUN_PATH=.github/workflows/ci.yml run_cut 1.2.3 --run-id 42 --overlap true --dist-manifest "$DIST_MANIFEST"
+    RUN_PATH=.github/workflows/ci.yml run_cut 1.2.3 --run-id 42 --overlap true --dist-manifest "$DIST_MANIFEST" --first-release
     [ "$status" -eq 1 ]
     [[ "$output" == *"not of release-images.yml"* ]]
-    RUN_HEAD_REPO=someone/fork run_cut 1.2.3 --run-id 42 --overlap true --dist-manifest "$DIST_MANIFEST"
+    RUN_HEAD_REPO=someone/fork run_cut 1.2.3 --run-id 42 --overlap true --dist-manifest "$DIST_MANIFEST" --first-release
     [ "$status" -eq 1 ]
     [[ "$output" == *"dispatched from someone/fork"* ]]
     assert_cut_changed_nothing
@@ -714,16 +715,56 @@ run_cut() {
     # the layer a run of that tree would carry, so only the provenance can refuse it
     printf '%s\n' "$side" > "${ARTEFACT}/release-sha.txt"
 
-    FAKE_SHA="$side" run_cut 1.2.3 --run-id 42 --overlap true --dist-manifest "$DIST_MANIFEST"
+    FAKE_SHA="$side" run_cut 1.2.3 --run-id 42 --overlap true --dist-manifest "$DIST_MANIFEST" --first-release
     [ "$status" -eq 1 ]
     [[ "$output" == *"commit ${side} is neither on origin/main nor the commit of a v*/rc-v* tag"* ]]
     assert_cut_changed_nothing
 
     # built from main, but dispatched from the unmerged branch's copy of the workflow
     printf '%s\n' "$FAKE_SHA" > "${ARTEFACT}/release-sha.txt"
-    RUN_HEAD="$side" run_cut 1.2.3 --run-id 42 --overlap true --dist-manifest "$DIST_MANIFEST"
+    RUN_HEAD="$side" run_cut 1.2.3 --run-id 42 --overlap true --dist-manifest "$DIST_MANIFEST" --first-release
     [ "$status" -eq 1 ]
     [[ "$output" == *"commit ${side} is neither on origin/main"* ]]
+    assert_cut_changed_nothing
+}
+
+@test "cut-dist-tag.sh refuses a tag that exists on origin only, and fetches tags before choosing the previous one" {
+    make_cut_repo
+    shim_cut_tools
+    shim_cut_gh
+    export COSIGN_KEY_PATH="$DIST_MANIFEST"
+    # dist-v1.0.0 was cut from another workstation: origin has it, this clone does not
+    local other="${BATS_TEST_TMPDIR}/other-clone"
+    git clone -q "$CUT_ORIGIN" "$other"
+    git -C "$other" config user.email 'plan@example.org'
+    git -C "$other" config user.name 'plan'
+    git -C "$other" tag -a dist-v1.0.0 -m dist-v1.0.0
+    git -C "$other" push -q origin dist-v1.0.0
+    if git -C "$CUT_REPO" rev-parse -q --verify refs/tags/dist-v1.0.0 > /dev/null; then
+        echo "the clone already has dist-v1.0.0; the test would prove nothing" >&2
+        return 1
+    fi
+
+    run_cut 1.0.0 --run-id 42 --overlap true --dist-manifest "$DIST_MANIFEST"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"tag dist-v1.0.0 already exists"* ]]
+
+    # ... and with --first-release the previous tag is found, so the claim is refused
+    run_cut 1.0.1 --run-id 42 --overlap true --dist-manifest "$DIST_MANIFEST" --first-release
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"--first-release, but dist-v1.0.0 already exists"* ]]
+    assert_cut_changed_nothing
+}
+
+@test "cut-dist-tag.sh refuses a first release that does not say it is the first" {
+    make_cut_repo
+    shim_cut_tools
+    shim_cut_gh
+    export COSIGN_KEY_PATH="$DIST_MANIFEST"
+    run_cut 1.0.0 --run-id 42 --overlap true --dist-manifest "$DIST_MANIFEST"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"origin has no dist-v* tag: pass --first-release"* ]]
+    refute_recorded gh ""
     assert_cut_changed_nothing
 }
 
@@ -733,7 +774,7 @@ run_cut() {
     shim_cut_gh
     export COSIGN_KEY_PATH="$DIST_MANIFEST"
     git -C "$CUT_REPO" remote set-url origin "${BATS_TEST_TMPDIR}/no-such-origin.git"
-    run_cut 1.0.0 --run-id 42 --overlap true --dist-manifest "$DIST_MANIFEST"
+    run_cut 1.0.0 --run-id 42 --overlap true --dist-manifest "$DIST_MANIFEST" --first-release
     [ "$status" -eq 1 ]
     [[ "$output" == *"cannot fetch tags and main from origin"* ]]
     refute_recorded gh ""

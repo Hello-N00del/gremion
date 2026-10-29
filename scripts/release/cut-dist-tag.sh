@@ -9,13 +9,18 @@
 # USAGE
 #   COSIGN_KEY_PATH=<cosign.key> COSIGN_PASSWORD=... \
 #     scripts/release/cut-dist-tag.sh <X.Y.Z> --run-id <release-images run id> \
-#       --overlap true|false --dist-manifest <gremion.dist.json>
+#       --overlap true|false --dist-manifest <gremion.dist.json> [--first-release]
 #
 #   --overlap        release.json's `overlap` has no default (spec B F.6): the
 #                    operator states whether the old colour can keep serving
 #                    against the migrated schema.
 #   --dist-manifest  the assembler manifest this release was cut from; its
 #                    sha256 becomes release.json's distManifestDigest.
+#   --first-release  this is the first dist-v* tag. Without it the script
+#                    refuses when origin has no earlier dist tag, because
+#                    release.json's `migrations` is the set the previous tag
+#                    did not have: a missing tag would silently list every
+#                    migration as new. With it, an existing dist tag refuses.
 #
 # STEPS
 #   0. fetch origin's tags and main (the tag check, the previous tag and the
@@ -35,7 +40,8 @@
 # REFUSALS (nothing is changed unless noted): a bad version or a missing
 # argument; a missing gh, cosign, git, jq, node or make; COSIGN_KEY_PATH unset
 # or not a readable file; a dirty working tree; origin unreachable; a tag that
-# already exists (locally or on origin); a run of any other workflow, from a fork, or
+# already exists (locally or on origin); no previous dist tag without
+# --first-release, or one with it; a run of any other workflow, from a fork, or
 # that did not succeed; a built or dispatching commit that is neither on
 # origin/main nor the commit of a v* / rc-v* tag; an artefact that is not
 # exactly one release-pins-<40 hex>; a pins layer holding any image that is not
@@ -53,7 +59,7 @@ WORK=""
 
 die() { printf 'cut-dist-tag: %s\n' "$1" >&2; exit "${2:-1}"; }
 usage() {
-    printf 'usage: cut-dist-tag.sh <X.Y.Z> --run-id <id> --overlap true|false --dist-manifest <file>\n' >&2
+    printf 'usage: cut-dist-tag.sh <X.Y.Z> --run-id <id> --overlap true|false --dist-manifest <file> [--first-release]\n' >&2
     exit 2
 }
 cleanup() { if [[ -n "$WORK" ]]; then rm -rf -- "$WORK"; fi; }
@@ -69,12 +75,13 @@ reviewed_commit() {
 }
 
 main() {
-    local version="" run_id="" overlap="" manifest=""
+    local version="" run_id="" overlap="" manifest="" first_release=0
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --run-id) [[ $# -ge 2 ]] || usage; run_id="$2"; shift 2 ;;
             --overlap) [[ $# -ge 2 ]] || usage; overlap="$2"; shift 2 ;;
             --dist-manifest) [[ $# -ge 2 ]] || usage; manifest="$2"; shift 2 ;;
+            --first-release) first_release=1; shift ;;
             -h|--help) usage ;;
             -*) usage ;;
             *) [[ -z "$version" ]] || usage; version="$1"; shift ;;
@@ -93,7 +100,7 @@ main() {
     [[ -f "$COSIGN_KEY_PATH" && -r "$COSIGN_KEY_PATH" ]] || die "COSIGN_KEY_PATH is not a readable file: $COSIGN_KEY_PATH"
     [[ -f "$manifest" && -r "$manifest" ]] || die "--dist-manifest is not a readable file: $manifest"
 
-    local root status tag
+    local root status tag prev_tag
     root="$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel)" || die "not inside a git checkout"
     tag="dist-v${version}"
     # Captured first: inside [[ -z "$(...)" ]] a failing `git status` would read as clean.
@@ -106,6 +113,13 @@ main() {
     git fetch --quiet --tags origin '+refs/heads/main:refs/remotes/origin/main' || die "cannot fetch tags and main from origin"
     if git rev-parse -q --verify "refs/tags/${tag}" >/dev/null; then
         die "tag ${tag} already exists"
+    fi
+    prev_tag="$(git tag --list 'dist-v*' --sort=-v:refname | head -n 1)"
+    if [[ -z "$prev_tag" && "$first_release" -eq 0 ]]; then
+        die "origin has no dist-v* tag: pass --first-release if ${tag} is the first, otherwise something is wrong with the fetch"
+    fi
+    if [[ -n "$prev_tag" && "$first_release" -eq 1 ]]; then
+        die "--first-release, but ${prev_tag} already exists"
     fi
 
     WORK="$(mktemp -d)"
@@ -161,10 +175,9 @@ main() {
     git checkout --quiet --detach "$sha"
     cp "$WORK/pins/docker-compose.pins.yml" "$WORK/pins/docker-compose.state-pins.yml" .
 
-    local digest cur prev prev_tag migrations
+    local digest cur prev migrations
     digest="sha256:$(sha256sum "$manifest" | cut -d' ' -f1)"
     cur="$(jq -c '[.chains[].files | keys[]] | unique' scripts/migrations/applied.lock.json)"
-    prev_tag="$(git tag --list 'dist-v*' --sort=-v:refname | head -n 1)"
     prev='[]'
     if [[ -n "$prev_tag" ]]; then
         prev="$(git show "${prev_tag}:scripts/migrations/applied.lock.json" | jq -c '[.chains[].files | keys[]] | unique')"
