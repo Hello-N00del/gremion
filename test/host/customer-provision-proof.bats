@@ -26,3 +26,14 @@ setup() {
     # pooled-stack-proof is what renders that variable into app-<colour>.env
     grep -q '^TENANT_SECRETS_DIR=\${SROOT_H}/secrets/tenants' "$REPO_ROOT/test/host/integration/pooled-stack-proof.sh"
 }
+
+@test "a fresh tenant's warm-up is waited for: create-check and the suspend baseline use edge_served_wait (#50)" {
+    grep -q '^edge_served_wait() {' "$PROOF"
+    grep -q 'if edge_served_wait "$(host_of "$X")"; then ok "customer-create:' "$PROOF"
+    # the suspend phase proves Y is served BEFORE it suspends X, so "Y was affected" means affected by the suspend
+    local body; body="$(sed -n '/^phase_customer_suspend() {/,/^}/p' "$PROOF")"
+    local base sus
+    base="$(grep -n 'edge_served_wait "$(host_of "$Y")"' <<< "$body" | head -1 | cut -d: -f1)"
+    sus="$(grep -n 'tenant suspend "$X"' <<< "$body" | head -1 | cut -d: -f1)"
+    [ -n "$base" ] && [ -n "$sus" ] && [ "$base" -lt "$sus" ]
+}
