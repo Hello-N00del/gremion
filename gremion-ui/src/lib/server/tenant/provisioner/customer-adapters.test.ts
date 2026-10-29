@@ -101,6 +101,7 @@ function adapters(kc: ReturnType<typeof kcFake>, adminKc?: { assignServiceAccoun
     genSecret: () => 'unit-generated',
     writeSecretFile: async (p) => void written.push(p),
     writeConfigFile: () => {},
+    repairConfigOwner: () => {},
     makePrivateDir: () => {},
     kc: kc as never,
     ...(adminKc ? { adminKc: adminKc as never } : {}),

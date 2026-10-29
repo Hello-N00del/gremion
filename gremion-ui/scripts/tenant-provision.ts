@@ -33,7 +33,7 @@ import { createHash, randomBytes } from 'node:crypto'
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import postgres from 'postgres'
-import { handConfigToReader, handToReader, writeReaderConfigFile } from './tenant-secret-file'
+import { handConfigToReader, handToReader, isTenantConfigPath, writeReaderConfigFile } from './tenant-secret-file'
 import {
   bootstrapPlatform,
   ACCESS_READER_ROLE,
@@ -234,7 +234,8 @@ function writeConfigFile(path: string, text: string): void {
   writeReaderConfigFile(path, text)
 }
 
-/** A tenant config written before #49 (root:root) handed to the reader; ensure() calls it when the file exists. */
+/** A tenant config written before #49 (root:root) handed to the reader when ensure() runs and finds it.
+ *  A tenant whose create already finished skips that step: its remedy is `materialize-config <slug>`. */
 function repairConfigOwner(path: string): void {
   handConfigToReader(path)
 }
@@ -1012,8 +1013,8 @@ function cmdMaterializeConfig(): void {
   const rawStored: unknown = existsSync(path) ? (JSON.parse(readFileSync(path, 'utf-8')) as unknown) : {}
   const merged = materializeConfig(rawStored)
   assertBrandIdentityComplete(merged, v.slug)
-  if (flag('--config')) {
-    // An operator-chosen path outside the tenant data root: written as before, no reader hand-over.
+  if (!isTenantConfigPath(path)) {
+    // An operator-chosen --config path outside the tenant data root: written as before, no reader hand-over.
     mkdirSync(dirname(path), { recursive: true })
     writeFileSync(`${path}.tmp`, JSON.stringify(merged, null, 2))
     renameSync(`${path}.tmp`, path)

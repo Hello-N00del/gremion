@@ -70,7 +70,17 @@ function slugDirOf(path: string, env: Record<string, string | undefined>): strin
 }
 
 function fail(uid: number, gid: number, p: string, err: unknown): never {
-  throw new Error(`chown ${uid}:${gid} ${p} failed (${err instanceof Error ? err.message : String(err)}); gremion-ui would get EACCES on the tenant config`)
+  throw new Error(`chown ${uid}:${gid} ${p} failed (${err instanceof Error ? err.message : String(err)}); gremion-ui would get EACCES on the tenant config`, { cause: err })
+}
+
+/** True when `path` is <data root>/<slug>/config.json-shaped (its dir a direct child of TENANT_DATA_ROOT). */
+export function isTenantConfigPath(path: string, env: Record<string, string | undefined> = process.env): boolean {
+  try {
+    slugDirOf(path, env)
+    return true
+  } catch {
+    return false
+  }
 }
 
 export function writeReaderConfigFile(path: string, text: string, deps: ReaderDeps = {}): void {
@@ -86,6 +96,7 @@ export function writeReaderConfigFile(path: string, text: string, deps: ReaderDe
   const tmp = `${path}.tmp-${deps.suffix ?? randomBytes(8).toString('hex')}`
   const fd = openSync(tmp, 'wx', 0o640)
   let ok = false
+  let closed = false
   try {
     writeFileSync(fd, text)
     try {
@@ -93,15 +104,19 @@ export function writeReaderConfigFile(path: string, text: string, deps: ReaderDe
     } catch (err) {
       fail(uid, gid, tmp, err)
     }
+    closeSync(fd)
+    closed = true
+    renameSync(tmp, path)
     ok = true
   } finally {
-    closeSync(fd)
+    if (!closed) closeSync(fd)
     if (!ok) rmSync(tmp, { force: true })
   }
-  renameSync(tmp, path)
 }
 
-/** An existing tenant config (written before #49) handed to the reader; a missing one is left alone. */
+/** An existing tenant config (written before #49) handed to the reader; a missing one is left alone.
+ *  For a tenant whose create already finished, the operator remedy is `materialize-config <slug>`
+ *  (the ledger skips the step that calls ensure()); this is the in-step half of it. */
 export function handConfigToReader(path: string, deps: ReaderDeps = {}): boolean {
   if (!existsSync(path)) return false
   const env = deps.env ?? process.env

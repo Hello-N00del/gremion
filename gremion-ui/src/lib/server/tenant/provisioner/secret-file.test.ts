@@ -6,7 +6,7 @@ import { existsSync, mkdtempSync, rmSync, readFileSync, writeFileSync } from 'no
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
-import { handConfigToReader, handToReader, readerIds, writeReaderConfigFile } from '../../../../../scripts/tenant-secret-file'
+import { handConfigToReader, handToReader, isTenantConfigPath, readerIds, writeReaderConfigFile } from '../../../../../scripts/tenant-secret-file'
 
 describe('handToReader', () => {
   const dir = mkdtempSync(join(tmpdir(), 'secret-file-'))
@@ -117,8 +117,14 @@ describe('writeReaderConfigFile / handConfigToReader', () => {
     expect(fnBody('writeConfigFile')).not.toMatch(/writeFileSync/)
     expect(fnBody('repairConfigOwner')).toMatch(/handConfigToReader\(path\)/)
     // materialize-config: the default (tenant data root) path goes through the reader writer
+    expect(fnBody('cmdMaterializeConfig')).toMatch(/if \(!isTenantConfigPath\(path\)\)/)
     expect(fnBody('cmdMaterializeConfig')).toMatch(/else writeReaderConfigFile\(path, /)
     expect(src.match(/repairConfigOwner,/g)?.length).toBe(2)
+  })
+  it('isTenantConfigPath picks the reader writer only for <data root>/<slug>/config.json', () => {
+    expect(isTenantConfigPath(path, env)).toBe(true)
+    expect(isTenantConfigPath(join(root, 'config.json'), env)).toBe(false)
+    expect(isTenantConfigPath(join(tmpdir(), 'elsewhere', 'config.json'), env)).toBe(false)
   })
   afterAll(() => rmSync(root, { recursive: true, force: true }))
 })
