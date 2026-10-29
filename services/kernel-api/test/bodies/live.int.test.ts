@@ -7,7 +7,7 @@
 //     files container and none of the above needs one (census below);
 //   * psql post-conditions (row counts, the gist EXCLUDE, outbox states, the
 //     JetStream message count) are QUOTED in the test output;
-//   * A3: person-token writes are 403 under the shipped authorizer, an allow-all
+//   * A3: person-token writes are 403 under the PDP authorizer, an allow-all
 //     test double (test/ only) is the RED reference, and no test double is in dist;
 //   * A5: the kernel-api nkey publishes IDT and nothing else.
 // Nextcloud-down: N/A. Nextcloud is not on this path (no file, no folder, no
@@ -304,7 +304,7 @@ describe('A3: the HTTP API on the live database', () => {
     expect((await app.inject({ url: `/api/v1/bodies/${ids.body}/memberships?asOf=2026-01-01`, headers: edge(zoe) })).json().memberships).toHaveLength(0)
   })
 
-  it('guard 6: a person-token write is 403 under the shipped authorizer and writes NOTHING; an allow-all TEST double (the RED reference) lets the same request create a body', async () => {
+  it('guard 6: a person-token write is 403 under the PDP authorizer and writes NOTHING; an allow-all TEST double (the RED reference) lets the same request create a body', async () => {
     const zoe = await iss.mint('realm-z', { sub: 'kc-zoe' })
     const before = (await admin()`SELECT (SELECT count(*)::int FROM idt.body) AS b, (SELECT count(*)::int FROM idt.outbox) AS o`)[0]
     const denied = await app.inject({ method: 'POST', url: '/api/v1/bodies', headers: edge(zoe), payload: { kindKey: 'stupa', name: 'Parlament' } })
@@ -312,7 +312,7 @@ describe('A3: the HTTP API on the live database', () => {
     expect(denied.json()).toMatchObject({ type: 'urn:gremion:problem:forbidden' })
     expect((await app.inject({ method: 'POST', url: '/api/v1/persons', headers: edge(zoe), payload: { email: 'q@example.org', displayName: 'Q' } })).statusCode).toBe(403)
     expect(await admin()`SELECT (SELECT count(*)::int FROM idt.body) AS b, (SELECT count(*)::int FROM idt.outbox) AS o`).toEqual([before])
-    log('person-token POST /api/v1/bodies under the shipped authorizer: 403, rows unchanged', JSON.stringify(before))
+    log('person-token POST /api/v1/bodies under the PDP authorizer: 403, rows unchanged', JSON.stringify(before))
 
     const allowAll: WriteAuthorizer = { authorize: async () => true } // TEST DOUBLE: lives in test/, never in src/ nor dist/
     const open = buildApp({}, { ...wired.deps, authorizer: allowAll })
@@ -326,9 +326,10 @@ describe('A3: the HTTP API on the live database', () => {
     const dist = join(KERNEL_ROOT, 'services', 'kernel-api', 'dist', 'index.js')
     expect(existsSync(dist), 'run proof.sh test (it builds the bundle)').toBe(true)
     const text = readFileSync(dist, 'utf8')
-    expect(text).toContain('denyAll') // the shipped authorizer is in the bundle ...
+    expect(text).toContain('pdpWriteAuthorizer') // the PDP-backed authorizer (TASK-081) is in the bundle ...
+    expect(text).toContain('idt.structure.manage') // ... with its operation -> capability table
     expect(text).not.toMatch(/allowAll|authorize:\s*(async\s*)?\(\)\s*=>\s*(true|!0)|authorize:\s*async\s*\(\)\s*=>\s*Promise\.resolve\(true\)/) // ... an allow-all is not
-    log('grep dist/index.js for an allow-all authorizer: none; denyAll present')
+    log('grep dist/index.js for an allow-all authorizer: none; pdpWriteAuthorizer present')
   })
 
   it('M-OFF-2 at the bundle: dist/index.js names no module package or modules/ import of the substrate', () => {
