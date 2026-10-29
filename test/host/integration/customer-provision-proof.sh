@@ -601,6 +601,14 @@ edge_served() { # <host>
         *) return 1 ;;
     esac
 }
+# edge_served_wait <host> [seconds] -- edge_served, retried while a fresh tenant warms up. gremion-ui
+# readies a new tenant LAZILY (D-READY: the first request starts its re-migration and answers 503 until
+# it is done), so a one-shot probe of a tenant nobody has requested yet reads a warm-up as "not served"
+# (#50: proof-y "affected" by x's suspend, x "not served" right after create). Default 60 s, 2 s steps.
+edge_served_wait() {
+    local end=$(( SECONDS + ${2:-60} ))
+    until edge_served "$1"; do (( SECONDS < end )) || return 1; sleep 2; done
+}
 # gremion-vendor-mail principals list for a token, as tenant() runs the host
 # tools (review C MEDIUM, r2): prints the CLI's own KC-PRINCIPALS count and
 # returns 0 ONLY when the list exited 0 and printed that summary line -- a
@@ -947,11 +955,14 @@ phase_customer_create_check() {
     if [[ "$(q gremion_platform "SELECT count(DISTINCT step_kind) || '/' || count(*) FROM plt.provisioning_step WHERE customer_id = '${id}' AND status = 'done'")" == "8/8" ]]; then ok "customer-create: eight done ledger rows, one per kind (Q2)"; else bad "customer-create: the ledger is not eight done rows"; fi
     # R33 item 4: the post-condition behind handToReader -- every tenant secret
     # file is 0600 AND owned by the reader uid (a root:root file is EACCES to the readers).
-    local tsd="${PROOF_TENANT_SECRETS_DIR:-$ROOT/secrets/tenants}" tsf tsbad=0 tsn=0 want_uid="${TENANT_SECRETS_UID:-1000}"
+    # The directory the app env mounts (pooled-stack-proof renders TENANT_SECRETS_DIR into app-blue.env, under
+    # the scratch root), not the release tree's secrets/tenants, which holds only .gitkeep (#50 item 4).
+    local tsd="${PROOF_TENANT_SECRETS_DIR:-$(sed -n 's/^TENANT_SECRETS_DIR=//p' "$PENV/app-blue.env" 2>/dev/null | tr -d '"' | tail -n1)}" tsf tsbad=0 tsn=0 want_uid="${TENANT_SECRETS_UID:-1000}"
+    [[ -n "$tsd" ]] || tsd="$(croot)/secrets/tenants"
     while IFS= read -r tsf; do
         tsn=$(( tsn + 1 ))
         [[ "$(stat -c '%a %u' "$tsf")" == "600 ${want_uid}" ]] || { tsbad=1; info "secret ${tsf}: $(stat -c '%a %u' "$tsf"), want 600 ${want_uid}"; }
-    done < <(find "$tsd" -type f 2>/dev/null)
+    done < <(find "$tsd" -type f ! -name .gitkeep 2>/dev/null)
     if (( tsn > 0 && tsbad == 0 )); then ok "customer-create: ${tsn} tenant secret file(s) are mode 0600 and owned by uid ${want_uid}"; else bad "customer-create: tenant secret files under ${tsd}: ${tsn} found, ownership/mode wrong (want 600 ${want_uid})"; fi
     local acc; acc="$(accounts)"
     if grep -q '# kernel@' <<< "$acc" && grep -q '# calendar@' <<< "$acc" && ! grep -q '# votes@' <<< "$acc"; then
@@ -967,7 +978,7 @@ phase_customer_create_check() {
     local rs
     if rs="$(routers_enabled "$X" "$Y")"; then ok "customer-create: Traefik reports tenant-${X}, tenant-${X}.kc, tenant-${Y} and tenant-${Y}.kc enabled with no error"
     else bad "customer-create: Traefik routers are not enabled: ${rs}"; fi
-    if edge_served "$(host_of "$X")"; then ok "customer-create: $(host_of "$X") is served by gremion-ui through the edge (${EDGE_SHAPE})"
+    if edge_served_wait "$(host_of "$X")"; then ok "customer-create: $(host_of "$X") is served by gremion-ui through the edge (${EDGE_SHAPE})"
     else bad "customer-create: $(host_of "$X") is not served (${EDGE_SHAPE}; want 302/303 into /auth/login or 200 with gremion-ui's CSP)"; fi
 }
 
@@ -1005,6 +1016,9 @@ phase_customer_suspend() {
     if data_fingerprint "$X" > "$OUT/ledger/fingerprint-before-suspend.txt"; then
         ok "customer-suspend: stored-data fingerprint of ${X} recorded before suspend ($(grep -c $'\t[0-9]*\t' "$OUT/ledger/fingerprint-before-suspend.txt" || true) table(s), $(sed -n 's/^realm-users\t//p' "$OUT/ledger/fingerprint-before-suspend.txt") realm user(s))"
     else rm -f "$OUT/ledger/fingerprint-before-suspend.txt"; bad "customer-suspend: the stored-data fingerprint of ${X} could not be taken"; return; fi
+    # The baseline for "Y is untouched": Y served BEFORE X is suspended (it may still be warming up).
+    if edge_served_wait "$(host_of "$Y")"; then ok "customer-suspend: ${Y} is served before ${X} is suspended (${EDGE_SHAPE})"
+    else bad "customer-suspend: ${Y} is not served even before the suspend (${EDGE_SHAPE}); the untouched check below would prove nothing"; fi
     tenant suspend "$X" --reason "customer-provision proof: suspend and resume round trip" > "$OUT/ledger/suspend-x.log" 2>&1 || { tail -n 20 "$OUT/ledger/suspend-x.log" >&2; bad "customer-suspend: suspend failed"; return; }
     if [[ "$(q control "SELECT status FROM tenant WHERE slug = '${X}'")" == suspended ]]; then ok "customer-suspend: status suspended"; else bad "customer-suspend: status"; fi
     if [[ "$(skc get "realms/$X" --fields enabled | jq -r .enabled)" == false ]]; then ok "customer-suspend: realm ${X} disabled (no sign-in, no token)"; else bad "customer-suspend: realm still enabled"; fi
@@ -1067,7 +1081,7 @@ phase_customer_reconcile() {
     if tenant reconcile "$X" > "$OUT/ledger/reconcile-2.log" 2>&1; then bad "customer-reconcile: a platform@ sender passed"
     elif grep -q 'smtp-server' "$OUT/ledger/reconcile-2.log"; then ok "customer-reconcile: a platform@ sender fails smtp-server"
     else bad "customer-reconcile: the failure does not name smtp-server"; fi
-    if tenant reconcile "$X" --apply > "$OUT/ledger/reconcile-3.log" 2>&1; then ok "customer-reconcile: --apply repaired it by host rotation (Q7)"
+    if tenant reconcile "$X" --apply --reason "customer proof: repair the platform sender by host rotation" > "$OUT/ledger/reconcile-3.log" 2>&1; then ok "customer-reconcile: --apply repaired it by host rotation (Q7)"
     else tail -n 20 "$OUT/ledger/reconcile-3.log" >&2; bad "customer-reconcile: --apply did not repair"; fi
     # Against the laid-out root, as principal_count() runs the host tools: without
     # GREMION_ROOT it read /opt/gremion/etc/env/mail.env ("mail env file not found").

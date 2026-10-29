@@ -5,8 +5,9 @@
 // named volume), so a file under the tenant secrets dir is handed to the reader
 // uid:gid, still mode 0600. Files elsewhere (the provisioner credential) keep
 // their root ownership.
-import { chownSync } from 'node:fs'
-import { relative, resolve, isAbsolute } from 'node:path'
+import { randomBytes } from 'node:crypto'
+import { chownSync, closeSync, existsSync, fchownSync, lchownSync, lstatSync, mkdirSync, openSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { dirname, relative, resolve, isAbsolute } from 'node:path'
 
 export function readerIds(env: Record<string, string | undefined>): { uid: number; gid: number } {
   const one = (name: string): number => {
@@ -33,4 +34,107 @@ export function handToReader(
     // every reader container (EACCES at runtime, long after the create "passed").
     throw new Error(`chown ${uid}:${gid} ${hostPath} failed (${err instanceof Error ? err.message : String(err)}); the reader container would get EACCES`)
   }
+}
+
+type ReaderDeps = {
+  /** chown of the open tmp file (by descriptor: never follows a planted symlink). */
+  fchown?: (fd: number, uid: number, gid: number) => void
+  /** chown of the slug dir and of an existing config (never follows a symlink). */
+  lchown?: (path: string, uid: number, gid: number) => void
+  env?: Record<string, string | undefined>
+  /** The tmp name suffix; random by default. */
+  suffix?: string
+}
+
+// #49: the tenant's config.json and its per-slug directory under the data root.
+// tenant-create (root) made both root:root, the file 0640, and gremion-ui (uid
+// 1000) got EACCES on config.json: an incomplete brand identity, a failed
+// readiness, and a new customer answering 503. Both go to the reader uid:gid
+// (TENANT_SECRETS_UID/GID, the secrets' reader contract), mode stays 0640.
+//
+// The slug dir belongs to the reader afterwards (gremion-ui writes its own
+// tmp+rename there), so root never writes a predictable name into it: the tmp is
+// created exclusively (O_EXCL, random suffix) and handed over by descriptor, and
+// the dir and an existing file are chowned without following symlinks.
+function dataRootOf(env: Record<string, string | undefined>): string {
+  return resolve((env.TENANT_DATA_ROOT ?? '/data').replace(/\/+$/, '') || '/')
+}
+
+function slugDirOf(path: string, env: Record<string, string | undefined>): string {
+  const dir = dirname(resolve(path))
+  const rel = relative(dataRootOf(env), dir)
+  if (rel === '' || rel.startsWith('..') || isAbsolute(rel) || rel.includes('/') || rel.includes('\\')) {
+    throw new Error(`refusing to hand ${dir} to the config reader: not a direct child of the data root ${dataRootOf(env)}`)
+  }
+  // The data root is reader-owned: a planted symlink at <slug> would make root write or chown through it.
+  if (existsSync(dir) && !lstatSync(dir).isDirectory()) {
+    throw new Error(`refusing to hand ${dir} to the config reader: not a real directory (symlink or file)`)
+  }
+  return dir
+}
+
+function fail(uid: number, gid: number, p: string, err: unknown): never {
+  throw new Error(`chown ${uid}:${gid} ${p} failed (${err instanceof Error ? err.message : String(err)}); gremion-ui would get EACCES on the tenant config`, { cause: err })
+}
+
+/** True when `path` is <data root>/<slug>/config.json-shaped (its dir a direct child of TENANT_DATA_ROOT). */
+export function isTenantConfigPath(path: string, env: Record<string, string | undefined> = process.env): boolean {
+  try {
+    slugDirOf(path, env)
+    return true
+  } catch {
+    return false
+  }
+}
+
+export function writeReaderConfigFile(path: string, text: string, deps: ReaderDeps = {}): void {
+  const env = deps.env ?? process.env
+  const { uid, gid } = readerIds(env)
+  const dir = slugDirOf(path, env)
+  mkdirSync(dir, { recursive: true })
+  try {
+    ;(deps.lchown ?? lchownSync)(dir, uid, gid)
+  } catch (err) {
+    fail(uid, gid, dir, err)
+  }
+  const tmp = `${path}.tmp-${deps.suffix ?? randomBytes(8).toString('hex')}`
+  const fd = openSync(tmp, 'wx', 0o640)
+  let ok = false
+  let closed = false
+  try {
+    writeFileSync(fd, text)
+    try {
+      ;(deps.fchown ?? fchownSync)(fd, uid, gid)
+    } catch (err) {
+      fail(uid, gid, tmp, err)
+    }
+    closed = true
+    closeSync(fd)
+    renameSync(tmp, path)
+    ok = true
+  } finally {
+    if (!closed) closeSync(fd)
+    if (!ok) rmSync(tmp, { force: true })
+  }
+}
+
+/** An existing tenant config (written before #49) handed to the reader; a missing one is left alone.
+ *  For a tenant whose create already finished, the operator remedy is `materialize-config <slug>`
+ *  (the ledger skips the step that calls ensure()); this is the in-step half of it. */
+export function handConfigToReader(path: string, deps: ReaderDeps = {}): boolean {
+  if (!existsSync(path)) return false
+  const st = lstatSync(path)
+  if (!st.isFile() || st.nlink !== 1) {
+    throw new Error(`refusing to hand ${path} to the config reader: not a single-link regular file (symlink or hardlink)`)
+  }
+  const env = deps.env ?? process.env
+  const { uid, gid } = readerIds(env)
+  for (const p of [slugDirOf(path, env), path]) {
+    try {
+      ;(deps.lchown ?? lchownSync)(p, uid, gid)
+    } catch (err) {
+      fail(uid, gid, p, err)
+    }
+  }
+  return true
 }

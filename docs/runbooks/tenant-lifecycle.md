@@ -392,6 +392,13 @@ writes the fully-merged config back atomically. A brand-identity guard refuses
 (loud, non-zero exit) a still-blank institution identity — no silent blank
 render.
 
+The file and its `<data root>/<slug>` directory are written as the config reader
+(`TENANT_SECRETS_UID`/`GID`, default 1000), not root (#49). This is also the repair for a
+customer created before that fix, whose `config.json` is `root:root 0640`: gremion-ui gets
+`EACCES`, readiness fails and the customer host answers 503. A tenant-create re-run does NOT
+repair it (its ledger skips the finished step); run `materialize-config <slug>` once, then check
+`stat -c '%u:%g %a' <data root>/<slug>/config.json` shows `1000:1000 640`.
+
 ## Tenant export in open formats (TRD-149/150/151)
 
 ```

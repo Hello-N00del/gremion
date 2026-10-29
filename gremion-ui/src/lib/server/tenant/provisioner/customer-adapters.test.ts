@@ -101,6 +101,7 @@ function adapters(kc: ReturnType<typeof kcFake>, adminKc?: { assignServiceAccoun
     genSecret: () => 'unit-generated',
     writeSecretFile: async (p) => void written.push(p),
     writeConfigFile: () => {},
+    repairConfigOwner: () => {},
     makePrivateDir: () => {},
     kc: kc as never,
     ...(adminKc ? { adminKc: adminKc as never } : {}),
@@ -434,6 +435,32 @@ describe('kernelServer: every admin open of a customer database pins search_path
       expect(call?.opts.connection).toMatchObject({ search_path: 'pg_catalog' })
     } finally {
       await server.close()
+    }
+  })
+})
+
+// #49: a tenant created before the fix has a root:root config.json that gremion-ui cannot read; a
+// re-run of tenant-create must hand it to the reader instead of reporting "already there" and leaving it.
+describe('customerAdapters.config.ensure: an existing config is handed to the reader (#49)', () => {
+  it('calls repairConfigOwner on an existing config and does not rewrite it', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cfg49-'))
+    const existing = join(dir, 'config.json')
+    writeFileSync(existing, '{"product":"x"}\n')
+    const repaired: string[] = []
+    const writes: string[] = []
+    const a = customerAdapters({
+      apexDomain: 'platform.example', tenantSecretsDir: '/secrets', runtimeDatabaseUrl: 'postgresql://gremion:x@pgbouncer:6432/gremion',
+      kernelAdminUrl: 'postgresql://postgres:x@postgres:5432/postgres', configFile: '/nonexistent/config.json', bodyName: 'Rat', edge: null,
+      storageRoot: null, manifests: [], loadBaseRealm: () => ({}), genSecret: () => 'g', writeSecretFile: async () => {},
+      writeConfigFile: (p) => void writes.push(p), repairConfigOwner: (p) => void repaired.push(p), makePrivateDir: () => {}, kc: {} as never,
+    })
+    reg.configPathForTenant.mockReturnValueOnce(existing)
+    try {
+      await expect(a.config.ensure(C)).resolves.toBe(false)
+      expect(repaired).toEqual([existing])
+      expect(writes).toEqual([])
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
     }
   })
 })

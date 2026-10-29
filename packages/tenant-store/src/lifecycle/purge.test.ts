@@ -193,3 +193,30 @@ describe('platform migration 0012', () => {
     expect(sql).not.toMatch(/^SET lock_timeout/m)
   })
 })
+
+// Linux customer proof: the purger's session read text[] columns as their literal ('{}'), so
+// refusalOf saw a "policy" on every table and threw ".join is not a function" on every rule.
+describe('readShape', () => {
+  const row = { kind: 'r', children: 0, rls: false, granted: true, triggers: [], policies: [], rules: [], referencedBy: [] }
+  it('passes real name lists through, and an empty one is no refusal reason', async () => {
+    const { readShape, refusalOf } = await import('./purge.js')
+    const s = readShape(row)!
+    expect(s.policies).toEqual([])
+    expect(refusalOf({ id: 'x', table: 't', scope: 'kernel' } as never, s)).toBeNull()
+  })
+  it('refuses a list that arrives as a Postgres array literal, never misreading it as a policy', async () => {
+    const { readShape } = await import('./purge.js')
+    expect(() => readShape({ ...row, policies: '{}' })).toThrow(/policies is not a list of names/)
+    expect(() => readShape({ ...row, triggers: [1] })).toThrow(/triggers is not a list of names/)
+  })
+  it('an absent row stays absent (the table does not exist)', async () => {
+    const { readShape } = await import('./purge.js')
+    expect(readShape(undefined)).toBeUndefined()
+  })
+  it('the shape SQL returns every name list as json (no array-type fetching needed)', async () => {
+    const src = (await import('node:fs')).readFileSync(new URL('./purge.ts', import.meta.url), 'utf-8')
+    const sql = src.slice(src.indexOf('const SHAPE_SQL = `'), src.indexOf('FROM pg_catalog.pg_class c WHERE'))
+    expect(sql.match(/pg_catalog\.to_json\(ARRAY\(/g)?.length).toBe(4)
+    expect(sql).not.toMatch(/^\s+ARRAY\(/m)
+  })
+})
