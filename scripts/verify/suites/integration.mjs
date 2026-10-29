@@ -35,7 +35,32 @@ function randomTestPassword() {
   return randomBytes(24).toString('base64url')
 }
 
-function startTestDb({ sha8, pid }) {
+// The official postgres image starts TWO servers on a first run: a
+// temporary one for initdb's scripts (docker-entrypoint.sh starts it with
+// `-c listen_addresses=''`, so it answers on the unix socket ONLY), then
+// stops it and execs the real one. Every psql this suite runs therefore goes
+// over TCP to 127.0.0.1 inside the container, which only the real server
+// answers: a socket probe can pass against the temporary server moments
+// before it shuts down, and the next socket command then dies with "server
+// closed the connection unexpectedly" (CI run 4, CREATE DATABASE control).
+export const PSQL_HOST = '127.0.0.1'
+
+// The throwaway server must answer this many probes in a row to count as ready.
+export const READY_PROBES = 2
+
+/** argv for the readiness probe: a `SELECT 1` over TCP. */
+export function psqlProbeArgs(name) {
+  return ['exec', '-e', 'PGPASSWORD', name, 'psql', '-h', PSQL_HOST, '-U', 'gremion_test', '-d', 'postgres', '-tAc', 'SELECT 1']
+}
+
+/** argv for every other psql this suite runs against the throwaway server: over TCP too. */
+export function psqlExecArgs(name, database, args, { interactive = false } = {}) {
+  return ['exec', ...(interactive ? ['-i'] : []), '-e', 'PGPASSWORD', name, 'psql', '-h', PSQL_HOST, '-v', 'ON_ERROR_STOP=1', '-U', 'gremion_test', '-d', database, ...args]
+}
+
+// `exec`, `sleep` and `now` are seams for the unit test (a scripted docker and a
+// fake clock); the defaults are the real ones.
+export function startTestDb({ sha8, pid, exec = run, sleep = sleepMs, now = Date.now }) {
   // Brief S9: unique per run, and identifiable by the commit under test
   // (verify.mjs refuses a dirty tree, so HEAD is the tree being tested).
   const name = `verify-${sha8}-${pid}-db`
@@ -50,7 +75,7 @@ function startTestDb({ sha8, pid }) {
   // `GRANT CONNECT ON DATABASE gremion` (058's header names it as a known,
   // un-fixed defect in a hash-pinned file). The safety convention (db name
   // OR user name contains "test") is satisfied by POSTGRES_USER alone.
-  const runRes = run(
+  const runRes = exec(
     'docker',
     ['run', '-d', '--name', name, '-e', 'POSTGRES_USER=gremion_test', '-e', 'POSTGRES_PASSWORD', '-e', 'POSTGRES_DB=gremion', '-p', '127.0.0.1::5432', 'postgres:18-alpine'],
     { env },
@@ -58,23 +83,23 @@ function startTestDb({ sha8, pid }) {
   if (runRes.code !== 0) {
     return { ok: false, name, detail: `docker run failed: ${String(runRes.stderr || runRes.stdout)}` }
   }
-  // The official postgres image starts TWO servers on a first run: a
-  // temporary, unix-socket-only one for initdb's scripts, then the real one.
-  // `pg_isready` can see the temporary one moments before it shuts down; a
-  // real `SELECT 1`, retried, rides out the restart gap.
-  const deadline = Date.now() + 60_000
+  // A real `SELECT 1` over TCP, retried, rides out the restart gap; it must
+  // succeed READY_PROBES times in a row, so one lucky answer is not enough.
+  const deadline = now() + 60_000
   let port = null
-  while (Date.now() < deadline) {
-    const probe = run('docker', ['exec', '-e', 'PGPASSWORD', name, 'psql', '-U', 'gremion_test', '-d', 'postgres', '-tAc', 'SELECT 1'], { env })
-    if (probe.code === 0 && probe.stdout.trim() === '1') {
-      const portRes = run('docker', ['port', name, '5432/tcp'])
+  let streak = 0
+  while (now() < deadline) {
+    const probe = exec('docker', psqlProbeArgs(name), { env })
+    streak = probe.code === 0 && probe.stdout.trim() === '1' ? streak + 1 : 0
+    if (streak >= READY_PROBES) {
+      const portRes = exec('docker', ['port', name, '5432/tcp'])
       const m = portRes.stdout.match(/:(\d+)\s*$/m)
       if (m) {
         port = Number(m[1])
         break
       }
     }
-    sleepMs(300)
+    sleep(300)
   }
   if (port === null) {
     return { ok: false, name, detail: `${name} never became ready within 60s` }
@@ -95,7 +120,7 @@ function stopTestDb(name) {
 }
 
 function psqlAsTestUser(db, database, args, opts = {}) {
-  return run('docker', ['exec', ...(opts.input ? ['-i'] : []), '-e', 'PGPASSWORD', db.name, 'psql', '-v', 'ON_ERROR_STOP=1', '-U', 'gremion_test', '-d', database, ...args], {
+  return run('docker', psqlExecArgs(db.name, database, args, { interactive: Boolean(opts.input) }), {
     env: db.env,
     ...opts,
   })

@@ -2,8 +2,9 @@
 // judged by exit code AND the target's own printed post-condition, and their
 // counts come from what the target says it proved, not a fixed 1.
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
-import { INTEGRATION_PARTS, integrationVitestEnv, judgeEventsTest, judgeFreshInit, judgeNatsAuthTest, judgeNatsTest } from './suites/integration.mjs'
+import { INTEGRATION_PARTS, integrationVitestEnv, judgeEventsTest, judgeFreshInit, judgeNatsAuthTest, judgeNatsTest, psqlExecArgs, psqlProbeArgs, startTestDb } from './suites/integration.mjs'
 
 const NATS_OK =
   '[nats-test] running the ports suite against nats://127.0.0.1:4222\n' +
@@ -255,4 +256,69 @@ test('test-events: an unrecognised summary shape stays untrusted, with the line 
 test('test-events: a missing summary says so in the detail', () => {
   const p = judgeEventsTest({ code: 0, stdout: EVENTS_OK.replace(/^\s+Tests {2}83 passed \(83\)\n/m, ''), stderr: '' })
   assert.match(p.detail, /unit summary seen: none/)
+})
+
+// CI run 4: `CREATE DATABASE control` died with "connection to server on socket
+// /var/run/postgresql/.s.PGSQL.5432 failed: server closed the connection unexpectedly". The official postgres
+// image first runs a temporary initdb server with listen_addresses='' (unix socket ONLY) and then stops it;
+// the readiness probe, a `docker exec psql` over the socket, can pass against it moments before it goes. Only
+// the real server answers TCP, so the probe and every later psql go to 127.0.0.1 inside the container.
+//
+// A scripted docker: `phases` is the server's life as seen by successive readiness probes -- 'temp' (the
+// temporary server: answers the socket, refuses TCP), 'gap' (nothing answers) and 'real' (answers both).
+// The clock is virtual and advanced only by the fake sleep.
+function fakeDocker(phases) {
+  const calls = []
+  let t = 0
+  let probes = 0
+  const exec = (cmd, args) => {
+    calls.push(args)
+    if (args[0] === 'run') return { code: 0, stdout: 'cid\n', stderr: '' }
+    if (args[0] === 'port') return { code: 0, stdout: '127.0.0.1:49153\n', stderr: '' }
+    const phase = phases[Math.min(probes++, phases.length - 1)]
+    const overTcp = args.includes('-h')
+    const answers = phase === 'real' || (phase === 'temp' && !overTcp)
+    return answers ? { code: 0, stdout: ' 1\n', stderr: '' } : { code: 2, stdout: '', stderr: 'psql: error: connection failed' }
+  }
+  return { calls, exec, sleep: (ms) => (t += ms), now: () => t, probes: () => probes }
+}
+
+test('startTestDb is not ready while only the temporary initdb server (unix socket only) answers', () => {
+  const d = fakeDocker(['temp', 'temp', 'temp', 'gap', 'gap', 'real', 'real'])
+  const db = startTestDb({ sha8: 'abcd1234', pid: 1, exec: d.exec, sleep: d.sleep, now: d.now })
+  assert.equal(db.ok, true, JSON.stringify(db))
+  assert.equal(db.port, 49153)
+  assert.ok(d.probes() >= 7, `declared ready after ${d.probes()} probes, before the real server answered`)
+})
+
+test('startTestDb needs consecutive successes: an answer followed by a failure restarts the count', () => {
+  const d = fakeDocker(['real', 'gap', 'real', 'real'])
+  const db = startTestDb({ sha8: 'abcd1234', pid: 1, exec: d.exec, sleep: d.sleep, now: d.now })
+  assert.equal(db.ok, true, JSON.stringify(db))
+  assert.equal(d.probes(), 4)
+})
+
+test('startTestDb gives up with a named failure when only the temporary server ever answers', () => {
+  const d = fakeDocker(['temp'])
+  const db = startTestDb({ sha8: 'abcd1234', pid: 1, exec: d.exec, sleep: d.sleep, now: d.now })
+  assert.equal(db.ok, false)
+  assert.match(db.detail, /never became ready within 60s/)
+})
+
+test('every psql argv runs over TCP to loopback, never the default unix socket', () => {
+  const probe = psqlProbeArgs('c')
+  const other = psqlExecArgs('c', 'postgres', ['-c', 'CREATE DATABASE control'])
+  const stdin = psqlExecArgs('c', 'gremion', [], { interactive: true })
+  for (const argv of [probe, other, stdin]) {
+    const i = argv.indexOf('-h')
+    assert.ok(i > argv.indexOf('psql'), `no -h after psql in ${argv.join(' ')}`)
+    assert.equal(argv[i + 1], '127.0.0.1')
+  }
+  assert.ok(stdin.indexOf('-i') > 0 && stdin.indexOf('-i') < stdin.indexOf('c'), 'docker exec -i comes before the container name')
+  assert.ok(!other.includes('-i'))
+})
+
+test('the suite builds psql argv in exactly one place (a hand-written socket psql cannot creep back in)', () => {
+  const src = readFileSync(new URL('./suites/integration.mjs', import.meta.url), 'utf8')
+  assert.equal(src.match(/'psql'/g)?.length, 2, "a third `'psql'` argv is outside psqlProbeArgs / psqlExecArgs")
 })
