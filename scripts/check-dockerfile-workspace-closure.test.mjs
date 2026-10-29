@@ -167,6 +167,23 @@ test('a workspace: spec that names no workspace package is a problem, not skippe
   )
 })
 
+test('a pnpm-workspace.yaml glob that is neither a literal dir nor <dir>/* is a problem; ! negations are ignored', () => {
+  const base = {
+    'packages/a/package.json': pkg('@gremion/a'),
+    'services/svc/Dockerfile': FROM + 'COPY packages/a/package.json ./packages/a/\nCOPY packages/a ./packages/a/\n',
+    'package.json': '{}',
+  }
+  for (const glob of ['packages/**', 'packages/a*', 'pack*/a', 'packages/{a,b}', 'packages/*/sub', '**'])
+    withTree({ ...base, 'pnpm-workspace.yaml': `packages:\n  - 'packages/*'\n  - '${glob}'\n` }, (root) => {
+      const r = checkWorkspaceClosure(root)
+      assert.equal(r.problems.length, 1, glob)
+      assert.ok(r.problems[0].startsWith(`pnpm-workspace.yaml: unsupported packages glob '${glob}'`), glob)
+    })
+  withTree({ ...base, 'pnpm-workspace.yaml': "packages:\n  - 'packages/*'\n  - '!**/test/**'\n  - \"!packages/zzz\"\n" }, (root) =>
+    assert.deepEqual(checkWorkspaceClosure(root).problems, []),
+  )
+})
+
 test('a wholesale COPY of a parent directory (kernel-api COPY modules) makes no package a seed', () => {
   // b's manifest rides along with `COPY packages`, but nothing builds b: only a is a seed and a has no workspace deps.
   withTree(

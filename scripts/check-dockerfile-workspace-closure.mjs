@@ -103,13 +103,19 @@ function workspaceTarget(key, spec, fromDir, byDir) {
 export function loadWorkspace(root, problems = []) {
   const byName = new Map()
   const dirs = new Set()
-  for (const g of workspaceGlobs(root)) {
-    if (g.endsWith('/*')) {
+  for (const raw of workspaceGlobs(root)) {
+    if (raw.startsWith('!')) continue // a negation only removes packages; the closure over-approximates without it
+    const g = raw.replace(/^(\.\/)+/, '')
+    if (/^[^*?[\]{}!]+\/\*$/.test(g)) {
       const parent = g.slice(0, -2)
       if (!existsSync(join(root, parent))) continue
       for (const e of readdirSync(join(root, parent), { withFileTypes: true }))
         if (e.isDirectory()) dirs.add(posix.join(parent, e.name))
-    } else dirs.add(g)
+    } else if (/[*?[\]{}!]/.test(g))
+      problems.push(
+        `pnpm-workspace.yaml: unsupported packages glob '${raw}' -- only a literal directory or <dir>/* is understood, so the workspace package set would be wrong`,
+      )
+    else dirs.add(g)
   }
   for (const dir of [...dirs].sort()) {
     const file = join(root, dir, 'package.json')
