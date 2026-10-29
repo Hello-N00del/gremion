@@ -9,7 +9,12 @@
 # Phases, in order (each is its own call so no single step outlives a
 # supervisor's time box; state lives in the ledger directory):
 #   prepare      env files, scratch root, externals, the proof overlays
-#                (render-env: the env files and overlays alone, no engine)
+#                (render-env: the env files and overlays alone, no engine).
+#                It pins HEAD: every later phase but teardown refuses once
+#                HEAD has moved (head_guard, #50)
+#   build        every image of the state project and of the app project
+#                (--profile '*': gremion-migrate is profile-gated) as
+#                :${STACK}; state-up and app-up refuse without it
 #   names        every rendered name is under ${STACK}; state-up refuses without it
 #   state-up     the state project (production profile)
 #   state-wait   postgres + keycloak healthy, pgbouncer auth staged; records
@@ -92,11 +97,23 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 host_path() { if command -v cygpath >/dev/null 2>&1; then cygpath -m "$1"; else printf '%s' "$1"; fi; }
 ROOT_H="$(host_path "$ROOT")"
 # git only when the stack name is derived (the shim tests and the live host
-# name it, and a bats container cannot read a Windows worktree's .git file).
+# name it, and a bats container cannot read a Windows worktree's .git file);
+# otherwise only render-env (the pin) and head_guard (a pinned run) read it.
+head_now() { git -C "$ROOT_H" rev-parse HEAD 2>/dev/null | tr -d '\r' || true; }
 if [[ -n "${POOLED_STACK:-}" ]]; then STACK="$POOLED_STACK"
-else STACK="t040-$(git -C "$ROOT_H" rev-parse --short=8 HEAD)"; fi
+else
+    HEAD_SHA="$(head_now)"
+    [[ "$HEAD_SHA" =~ ^[0-9a-f]{40}$ ]] || { printf 'FATAL: cannot read HEAD of %s: set POOLED_STACK\n' "$ROOT_H" >&2; exit 2; }
+    STACK="t040-${HEAD_SHA:0:8}"
+fi
 SCOPE="${POOLED_SCOPE:-stack}"
-IMAGE_TAG_PROOF="${POOLED_IMAGE_TAG:-t040-proof}"
+# #50: the images are this stack's own (t040-<sha8>), built by the build
+# phase. A fixed tag silently reused an earlier sha's images. POOLED_IMAGE_TAG
+# names prebuilt images instead (state-up/app-up then trust it).
+IMAGE_TAG_PROOF="${POOLED_IMAGE_TAG:-$STACK}"
+# #50: the HEAD a derived-name run was prepared at ("<STACK> <sha40>"). A moved
+# HEAD derives ANOTHER t040-<sha8>; this pin is how a later call sees that.
+PIN_FILE="${POOLED_PIN_DIR:-${ROOT}/.scratch/pooled-stack-proof}/head"
 OUT_REL=".scratch/pooled-stack-proof/${STACK}"
 OUT="${POOLED_OUT:-${ROOT}/${OUT_REL}}"
 ENV_DIR="${POOLED_ENV_DIR:-${OUT}/env}"
@@ -385,6 +402,16 @@ phase_render_env() {
     [[ "${POOLED_CUSTOMER:-0}" == 1 ]] && profiles="production,calendar,vault"
     local mod_keys
     mod_keys="$(module_pg_keys)" || exit $?
+    local head; head="$(head_now)"
+    # #50: an unpinned scratch run is the drift the pin exists to stop, so an
+    # unreadable HEAD is fatal; POOLED_NO_HEAD_PIN=1 is the explicit opt-out
+    # (the bats runner, whose container cannot read a Windows worktree's .git).
+    if [[ ! "$head" =~ ^[0-9a-f]{40}$ ]]; then
+        [[ "${POOLED_NO_HEAD_PIN:-0}" == 1 ]] || die "cannot read HEAD of ${ROOT_H}: the run cannot be pinned (POOLED_NO_HEAD_PIN=1 runs it unpinned)"
+        info "POOLED_NO_HEAD_PIN=1: this run is NOT pinned to a commit; a moved HEAD will not be refused"
+        head=""
+    fi
+    rm -f "$OUT/.build-ok"   # a build belongs to the render (and the sha) it was made for
 
     cat > "$ENV_DIR/state.env" <<EOF
 COMPOSE_PROJECT_NAME=${STACK}-state
@@ -420,7 +447,13 @@ CONTROL_DB_PASSWORD=${pw_ctl}
 PUBLIC_DB_PASSWORD=${pw_pub}
 PGBOUNCER_AUTH_PASSWORD=${pw_bnc}
 TENANT_PROXY_SHARED_SECRET=${sec_proxy}
+# #50: the HEAD this run is about (head_guard; customer-provision-proof.sh
+# names its own stack after it and refuses a moved HEAD the same way)
+PROOF_HEAD_SHA=${head}
 EOF
+    if [[ -z "${POOLED_STACK:-}" ]]; then
+        mkdir -p "${PIN_FILE%/*}"; printf '%s %s\n' "$STACK" "$head" > "$PIN_FILE"
+    fi
     local c v4 v6 n=2
     for c in blue green; do
         v4="10.231.${n}.0/24"; v6="fd5a:231:${n}::/64"; n=$(( n + 1 ))
@@ -688,6 +721,59 @@ phase_prepare() {
     printf '%s prepared %s\n' "$(now)" "$STACK" | ledger run.log
 }
 
+# head_guard -- FATAL once HEAD is not the commit the run was prepared at.
+# A moved HEAD renamed the customer ledger (t043-<sha8>), staled the gate's
+# isolation rows (ISOLATION_STALE_TIP) and ran this sha's code against the
+# other sha's images (#50). Two pins: state.env's PROOF_HEAD_SHA (any stack
+# name) and, for a derived name, PIN_FILE (a moved HEAD derives another name,
+# whose env dir does not exist). No pin (the live host's env files): no guard.
+head_guard() {
+    local pstack="" pinned="" now
+    if [[ -z "${POOLED_STACK:-}" && -s "$PIN_FILE" ]]; then
+        read -r pstack pinned < "$PIN_FILE" || true
+        [[ "$pstack" == "$STACK" ]] \
+            || die "HEAD moved since prepare: ${pstack} was prepared at ${pinned:0:12}, HEAD is now ${HEAD_SHA:0:12}. Check ${pinned:0:12} out again to go on, or tear it down (POOLED_STACK=${pstack} ... teardown)"
+    fi
+    pinned="$(pinned_sha)"
+    [[ -n "$pinned" ]] || return 0
+    now="$(head_now)"
+    [[ "$now" == "$pinned" ]] \
+        || die "HEAD moved: ${STACK} was prepared at ${pinned:0:12}, HEAD is now ${now:-unreadable}. Check ${pinned:0:12} out again to go on, or tear it down and prepare afresh"
+}
+
+# need_build -- state-up and app-up start only images the build phase built
+# at this tag (#50: the proof never built, so an earlier sha's survived).
+# The record is "<tag> <pinned sha>": a named POOLED_STACK's tag carries no sha,
+# so the sha is what tells an earlier commit's build from this one's.
+need_build() {
+    [[ -z "${POOLED_IMAGE_TAG:-}" ]] || return 0
+    [[ "$(cat "$OUT/.build-ok" 2>/dev/null)" == "$(build_record)" ]] \
+        || die "no build of :${IMAGE_TAG_PROOF} at the pinned commit recorded: run the build phase first (or name prebuilt images with POOLED_IMAGE_TAG)"
+}
+build_record() { local sha; sha="$(pinned_sha)"; printf '%s%s' "$IMAGE_TAG_PROOF" "${sha:+ ${sha}}"; }
+pinned_sha() { if [[ -r "$ENV_DIR/state.env" ]]; then sed -n 's/^PROOF_HEAD_SHA=//p' "$ENV_DIR/state.env" | tr -d '"\r' | tail -n1; fi; }
+
+# Every image the stack starts, at this sha, under :${IMAGE_TAG_PROOF}. The
+# state project builds its rendered profiles (what state-up starts); the app
+# project every profile: migrate, tenant-create and kernel-api-migrate are
+# profile-gated and a plain `compose build` skipped gremion-migrate (#50).
+# app-green runs the same images and tag.
+phase_build() {
+    require_scratch build
+    [[ -s "$ENV_DIR/state.env" && -s "$ENV_DIR/app-blue.env" ]] || die "run prepare first: build reads the rendered env files"
+    mkdir -p "$OUT/ledger"
+    rm -f "$OUT/.build-ok"
+    local p
+    local -a prof
+    for p in state app-blue; do
+        prof=(); if [[ "$p" == app-blue ]]; then prof=(--profile '*'); fi
+        compose "$p" ${prof[@]+"${prof[@]}"} build > "$OUT/ledger/build-$p.log" 2>&1 \
+            || { tail -n 20 "$OUT/ledger/build-$p.log" >&2; die "compose build of ${STACK}-${p} failed (ledger/build-${p}.log)"; }
+    done
+    printf '%s\n' "$(build_record)" > "$OUT/.build-ok"
+    ok "build: the state images and every app image (all profiles, gremion-migrate included) built as :${IMAGE_TAG_PROOF}"
+}
+
 # Names on `config` BEFORE any `up`: every rendered network and volume is
 # under ${STACK}, and every project is ${STACK}-<suffix>.
 phase_names() {
@@ -709,6 +795,7 @@ phase_names() {
 phase_state_up() {
     require_scratch state-up
     [[ -f "$OUT/.names-ok" ]] || die "run the names phase first: no up before every rendered name is asserted"
+    need_build
     # TASK-024 (Q12): nats-auth init BEFORE the first state up -- the SYS
     # reload seed and a SYS-only accounts file, so nats boots with no
     # anonymous user. Idempotent, no network (--no-deps).
@@ -752,6 +839,7 @@ EOF
 # ── app colours ────────────────────────────────────────────────────────────
 phase_app_up() {
     require_scratch app-up
+    need_build
     local c="$1"
     compose "app-$c" run --rm --pull never migrate > "$OUT/ledger/migrate-$c.log" 2>&1 \
         || { tail -20 "$OUT/ledger/migrate-$c.log" >&2; die "migrate failed on app-$c"; }
@@ -1287,13 +1375,21 @@ phase_teardown() {
     # when both derive it from one HEAD. Both spellings, and this STACK's (an
     # operator naming the customer proof's stack like the pooled one), are
     # cleaned; a PROOF_OUT elsewhere is not found from here.
-    local cs cdir
-    for cs in "${PROOF_STACK:-}" "t043-${STACK#t040-}" "$STACK"; do
+    # Since #50 the customer proof names its stack after state.env's
+    # PROOF_HEAD_SHA, so that spelling (t043-<pinned sha8>) is cleaned too.
+    local cs cdir pin8=""
+    if [[ -r "$ENV_DIR/state.env" ]]; then pin8="$(sed -n 's/^PROOF_HEAD_SHA=//p' "$ENV_DIR/state.env" | tr -d '"\r' | tail -n1)"; pin8="${pin8:0:8}"; fi
+    for cs in "${PROOF_STACK:-}" "t043-${STACK#t040-}" "${pin8:+t043-${pin8}}" "$STACK"; do
         [[ -n "$cs" ]] || continue
         cdir="$ROOT/.scratch/customer-provision-proof/${cs}"
         teardown_rm "$cdir/root" "$cs" || true
         teardown_rm "$cdir/secrets" "$cs" || true
     done
+    # the derived-name pin goes with the stack it names (also when a moved
+    # HEAD's teardown names that stack by POOLED_STACK)
+    local pstack=""
+    if [[ -s "$PIN_FILE" ]]; then read -r pstack _ < "$PIN_FILE" || true; fi
+    if [[ "$pstack" == "$STACK" ]]; then rm -f "$PIN_FILE"; fi
     local left
     left="$(docker ps -aq --filter "name=^${STACK}" | grep -c . || true)$(docker network ls -q --filter "name=^${STACK}" | grep -c . || true)$(docker volume ls -q --filter "name=^${STACK}" | grep -c . || true)"
     if [[ "$left" == 000 ]]; then ok "teardown: no container, network or volume under ${STACK} remains"
@@ -1301,8 +1397,10 @@ phase_teardown() {
 }
 
 run_phase() {
+    case "$1" in prepare|render-env|teardown) ;; *) head_guard ;; esac
     case "$1" in
         prepare) phase_prepare ;;
+        build) phase_build ;;
         render-env) phase_render_env ;;
         names) phase_names ;;
         state-up) phase_state_up ;;
@@ -1330,7 +1428,7 @@ run_phase() {
 # explicitly as the last phase BEFORE the verdict, so a failing teardown (a
 # scratch_rm that cannot remove the root, resources left behind) makes the run
 # RED. The EXIT trap below only covers an aborted run.
-ALL_PHASES=(prepare names state-up state-wait "app-up blue" "app-wait blue" aux-up limits rss isolation probes tenant-before tenant tenant-after "app-up green" "app-wait green" switch cold-state limits)
+ALL_PHASES=(prepare build names state-up state-wait "app-up blue" "app-wait blue" aux-up limits rss isolation probes tenant-before tenant tenant-after "app-up green" "app-wait green" switch cold-state limits)
 
 main() {
     [[ $# -gt 0 ]] || set -- all

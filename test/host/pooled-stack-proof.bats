@@ -31,6 +31,9 @@ setup() {
     export POOLED_COLD_HOLD=0
     export POOLED_COLD_BUDGET=3
     export POOLED_POLL=1
+    # the bats runner's container cannot read a Windows worktree's .git: an
+    # unreadable HEAD runs unpinned here (fake_git tests unset it)
+    export POOLED_NO_HEAD_PIN=1
     unset SHIM_ALIAS_STATE SHIM_READY SHIM_READY_DOWN SHIM_REGISTER SHIM_PS SHIM_COMPOSE_LS
 }
 
@@ -588,6 +591,196 @@ all_in_repo() {
     [[ "$output" == *"FATAL: unknown phase 'no-such-phase'"* ]]
     [ "$(grep -c 'teardown: no container, network or volume' <<< "$output")" -eq 1 ]
     [ ! -e "${POOLED_OUT}/root" ]
+}
+
+# ── #50: the images are this sha's and the proof builds them; HEAD is pinned ──
+# A fixed t040-proof tag and no build silently reused an earlier sha's images;
+# a plain `compose build` skipped the profile-gated gremion-migrate; a HEAD
+# moved mid-run renamed the ledger and staled the gate evidence.
+
+# fake_git <sha40>: a git on PATH whose HEAD is <sha40> (move_head changes it).
+fake_git() {
+    export FAKE_GIT_HEAD="${BATS_TEST_TMPDIR}/fake-head"
+    cat > "${BATS_TEST_TMPDIR}/bin/git" <<'EOF'
+#!/usr/bin/env bash
+short=0 head=0
+for a in "$@"; do case "$a" in --short=8) short=1 ;; HEAD) head=1 ;; esac; done
+(( head )) || { echo "fake git: unhandled: $*" >&2; exit 1; }
+h="$(cat "$FAKE_GIT_HEAD")"; (( short )) && h="${h:0:8}"
+echo "$h"
+EOF
+    chmod +x "${BATS_TEST_TMPDIR}/bin/git"
+    printf '%s\n' "$1" > "$FAKE_GIT_HEAD"
+    unset POOLED_NO_HEAD_PIN
+}
+move_head() { printf '%s\n' "$1" > "$FAKE_GIT_HEAD"; }
+SHA_A=aaaaaaaa11111111111111111111111111111111
+SHA_B=bbbbbbbb22222222222222222222222222222222
+
+@test "render-env: the default image tag is the stack's own (sha-scoped), never a fixed t040-proof (#50 item 1)" {
+    run bash "$PROOF" render-env
+    [ "$status" -eq 0 ]
+    local f
+    for f in state app-blue app-green; do
+        grep -qx 'IMAGE_TAG=t040-shim' "${POOLED_OUT}/env/${f}.env" || { grep '^IMAGE_TAG=' "${POOLED_OUT}/env/${f}.env" >&2; return 1; }
+    done
+    ! grep -q 't040-proof' "$PROOF"
+}
+
+@test "render-env: POOLED_IMAGE_TAG still names prebuilt images (positive control for the default)" {
+    POOLED_IMAGE_TAG=prebuilt-x run bash "$PROOF" render-env
+    [ "$status" -eq 0 ]
+    grep -qx 'IMAGE_TAG=prebuilt-x' "${POOLED_OUT}/env/app-blue.env"
+}
+
+@test "build: the app project is built with --profile '*' (gremion-migrate is profile-gated), the state project too (#50 items 1, 2)" {
+    fake_git "$SHA_A"
+    run bash "$PROOF" render-env build
+    [ "$status" -eq 0 ] || { echo "$output" >&2; return 1; }
+    grep -qE 'app-blue\.env --profile \* build( |$)' "${SHIM_DIR}/calls.log"
+    grep -qE 'state\.env build( |$)' "${SHIM_DIR}/calls.log"
+    [[ "$output" == *"ok   build: "*":t040-shim"* ]]
+    # the record names the tag AND the pinned commit
+    [ "$(cat "${POOLED_OUT}/.build-ok")" = "t040-shim ${SHA_A}" ]
+}
+
+@test "build: a failed compose build is a FATAL naming the project, and no build is recorded" {
+    export SHIM_BUILD=fail
+    run bash "$PROOF" render-env build
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"FATAL: compose build of t040-shim-"*"failed"* ]]
+    [[ "$output" == *"shim-build-error"* ]]
+    [ ! -e "${POOLED_OUT}/.build-ok" ]
+}
+
+@test "state-up and app-up refuse to start images the build phase did not build at this tag" {
+    : > "${POOLED_OUT}/.names-ok"
+    run bash "$PROOF" app-up blue
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"FATAL: no build of :t040-shim at the pinned commit recorded: run the build phase first"* ]]
+    run bash "$PROOF" state-up
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"run the build phase first"* ]]
+    # a build of ANOTHER tag does not count
+    echo t040-other > "${POOLED_OUT}/.build-ok"
+    run bash "$PROOF" app-up blue
+    [[ "$output" == *"run the build phase first"* ]]
+    ! grep -qE 'compose .* (run|up)( |$)' "${SHIM_DIR}/calls.log" 2>/dev/null
+}
+
+@test "app-up: an explicit POOLED_IMAGE_TAG (prebuilt images) is not held to the build record" {
+    POOLED_IMAGE_TAG=prebuilt-x run bash "$PROOF" app-up blue
+    # it went on to migrate (positive), and was not stopped by the build record
+    grep -qE 'app-blue\.env run --rm --pull never migrate' "${SHIM_DIR}/calls.log"
+    [[ "$output" != *"run the build phase first"* ]]
+}
+
+@test "a build of an earlier commit under the same (named-stack) tag is refused; a new render forgets the old build" {
+    fake_git "$SHA_A"
+    run bash "$PROOF" render-env build
+    [ "$status" -eq 0 ]
+    local rec; rec="$(cat "${POOLED_OUT}/.build-ok")"
+    move_head "$SHA_B"
+    run bash "$PROOF" render-env
+    [ "$status" -eq 0 ]
+    [ ! -e "${POOLED_OUT}/.build-ok" ]
+    # A's own build record put back (as a render that forgot to clear it would
+    # leave it): the same tag, but not this commit's build
+    printf '%s
+' "$rec" > "${POOLED_OUT}/.build-ok"
+    run bash "$PROOF" app-up blue
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"no build of :t040-shim at the pinned commit recorded"* ]]
+}
+
+@test "render-env: an unreadable HEAD is a FATAL (the run could not be pinned); POOLED_NO_HEAD_PIN=1 runs it unpinned, loudly" {
+    printf '#!/usr/bin/env bash\necho "fatal: not a git repository" >&2; exit 128\n' > "${BATS_TEST_TMPDIR}/bin/git"
+    chmod +x "${BATS_TEST_TMPDIR}/bin/git"
+    POOLED_NO_HEAD_PIN=0 run bash "$PROOF" render-env
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"FATAL: cannot read HEAD of "*"the run cannot be pinned"* ]]
+    run bash "$PROOF" render-env
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"POOLED_NO_HEAD_PIN=1: this run is NOT pinned"* ]]
+}
+
+@test "all: build runs right after prepare, before anything is brought up" {
+    run bash -c 'set -euo pipefail; . "$1"; printf "%s\n" "${ALL_PHASES[@]}"' _ "$PROOF"
+    [ "$status" -eq 0 ]
+    [ "$(sed -n 1p <<< "$output")" = prepare ]
+    [ "$(sed -n 2p <<< "$output")" = build ]
+}
+
+@test "render-env records the HEAD the run starts at (PROOF_HEAD_SHA in state.env, #50)" {
+    fake_git "$SHA_A"
+    run bash "$PROOF" render-env
+    [ "$status" -eq 0 ]
+    grep -qx "PROOF_HEAD_SHA=${SHA_A}" "${POOLED_OUT}/env/state.env"
+}
+
+@test "a phase after HEAD moved since prepare is a FATAL naming both shas, and does nothing" {
+    fake_git "$SHA_A"
+    run bash "$PROOF" render-env
+    [ "$status" -eq 0 ]
+    move_head "$SHA_B"
+    run bash "$PROOF" names
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"FATAL: HEAD moved"*"${SHA_A:0:12}"*"${SHA_B:0:12}"* ]]
+    [ ! -e "${POOLED_OUT}/.names-ok" ]
+}
+
+@test "an unmoved HEAD passes the pin (positive control for the HEAD guard)" {
+    fake_git "$SHA_A"
+    run bash "$PROOF" render-env names
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"HEAD moved"* ]]
+    [ -f "${POOLED_OUT}/.names-ok" ]
+}
+
+@test "teardown is not refused after a HEAD move (the scratch stack must still go)" {
+    fake_git "$SHA_A"
+    run bash "$PROOF" render-env
+    [ "$status" -eq 0 ]
+    move_head "$SHA_B"
+    run bash "$PROOF" teardown
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"HEAD moved"* ]]
+}
+
+@test "derived stack name: a phase after a HEAD move is refused by the prepare pin, never run as a new t040-<sha8>" {
+    unset POOLED_STACK POOLED_OUT
+    export POOLED_PIN_DIR="${BATS_TEST_TMPDIR}/pin"
+    local a8; a8="$(printf '%08x' "$$")"
+    local sha="${a8}11111111111111111111111111111111"
+    export SHIM_STACK="t040-${a8}"
+    IN_REPO_OUT="${REPO_ROOT}/.scratch/pooled-stack-proof/t040-${a8}"
+    IN_REPO_OTHER="${REPO_ROOT}/.scratch/pooled-stack-proof/t040-${SHA_B:0:8}"
+    fake_git "$sha"
+    run bash "$PROOF" render-env
+    [ "$status" -eq 0 ] || { echo "$output" >&2; return 1; }
+    [ "$(cat "${POOLED_PIN_DIR}/head")" = "t040-${a8} ${sha}" ]
+    move_head "$SHA_B"
+    run bash "$PROOF" names
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"FATAL: HEAD moved"*"t040-${a8}"*"${SHA_B:0:12}"* ]]
+    [ ! -e "$IN_REPO_OTHER" ]
+}
+
+@test "teardown: the customer proof's stack named after the pinned sha (t043-<PROOF_HEAD_SHA 8>) loses root/ and secrets/ too" {
+    local sfx="shim-pin-$$" p8; p8="$(printf '%08x' "$(( $$ + 7 ))")"
+    export POOLED_STACK="t040-${sfx}" SHIM_STACK="t040-${sfx}"
+    export POOLED_OUT="${REPO_ROOT}/.scratch/pooled-stack-proof/t040-${sfx}"
+    IN_REPO_OUT="$POOLED_OUT"
+    CP_DIR="${REPO_ROOT}/.scratch/customer-provision-proof"
+    CP_CLEAN=("t043-${p8}")
+    mkdir -p "${POOLED_OUT}/env" "${CP_DIR}/t043-${p8}/root" "${CP_DIR}/t043-${p8}/secrets" "${CP_DIR}/t043-${p8}/ledger"
+    printf 'PROOF_HEAD_SHA=%s11111111111111111111111111111111\n' "$p8" > "${POOLED_OUT}/env/state.env"
+    echo e > "${CP_DIR}/t043-${p8}/ledger/evidence"
+    run bash "$PROOF" teardown
+    [ "$status" -eq 0 ]
+    [ -f "${CP_DIR}/t043-${p8}/ledger/evidence" ]
+    [ ! -e "${CP_DIR}/t043-${p8}/root" ]
+    [ ! -e "${CP_DIR}/t043-${p8}/secrets" ]
 }
 
 teardown() {
