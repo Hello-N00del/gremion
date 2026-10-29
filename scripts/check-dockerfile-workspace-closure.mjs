@@ -27,6 +27,13 @@
 //   manifest  a source equal to, an ancestor of, or a glob matching <dir>/package.json
 //   source    a source equal to, an ancestor of, or a glob matching <dir>, or a path
 //             strictly inside <dir> that is not its package.json (COPY packages/x/bin ...)
+// Position: when the Dockerfile has a `RUN ... pnpm install`, the manifest of every closure
+// member must be covered by a COPY in the stage that runs the FIRST such install and ABOVE that
+// RUN (a COPY after it, or in another stage, never reaches the install). A Dockerfile with no
+// install line keeps the position-free rule.
+// The workspace itself is validated, not guessed: a `workspace:` spec naming no workspace
+// package, a pnpm-workspace.yaml glob other than a literal dir or <dir>/* (`!` negations are
+// skipped), and a workspace package.json that is not JSON or has no string name are problems.
 // `COPY --from=<stage>`, URLs, heredocs and sources built from $VARIABLES are not paths
 // in the build context and are skipped. Workspace packages come from pnpm-workspace.yaml.
 // The guard refuses to pass when it finds zero workspace packages, zero Dockerfiles, or
@@ -176,6 +183,26 @@ export function relation(source, target) {
   return go(0, 0)
 }
 
+// `pnpm install` / `pnpm i`, optionally behind `corepack` and a few valued global flags.
+const PNPM_INSTALL_RE = /\bpnpm\s+(?:(?:--?(?:filter|F|dir|C|prefix)\s+\S+|--?[\w-]+(?:=\S+)?)\s+)*(?:install|i)(?=\s|$|[;&|])/
+
+/**
+ * The first `RUN ... pnpm install` of a Dockerfile: { line, stageStart } (1-based: the line the
+ * instruction starts on, and the line of the FROM that opens its stage, 0 before any FROM), or null.
+ */
+export function firstInstall(text) {
+  const lines = text.split('\n')
+  let stageStart = 0
+  for (let i = 0; i < lines.length; i++) {
+    const start = i
+    let line = lines[i]
+    while (/\\\s*$/.test(line) && i + 1 < lines.length) line = line.replace(/\\\s*$/, ' ') + lines[++i]
+    if (/^\s*FROM\s/i.test(line)) stageStart = start + 1
+    else if (/^\s*RUN\s/i.test(line) && PNPM_INSTALL_RE.test(line)) return { line: start + 1, stageStart }
+  }
+  return null
+}
+
 /** @returns {{problems: string[], dockerfiles: number, workspaceDockerfiles: number, packages: number}} */
 export function checkWorkspaceClosure(root = KERNEL_ROOT) {
   const problems = []
@@ -185,10 +212,15 @@ export function checkWorkspaceClosure(root = KERNEL_ROOT) {
   if (files.length === 0) problems.push('no Dockerfile found in the repository -- the guard has gone blind')
   let workspaceDockerfiles = 0
   for (const f of ws.size === 0 ? [] : files) {
-    const sources = extractDockerCopySources(readFileSync(join(root, f), 'utf8'))
-      .map((c) => c.source)
-      .filter((s) => !s.includes('$'))
+    const text = readFileSync(join(root, f), 'utf8')
+    const copies = extractDockerCopySources(text).filter((c) => !c.source.includes('$'))
+    const sources = copies.map((c) => c.source)
+    const install = firstInstall(text)
     const manifest = (dir) => sources.some((s) => relation(s, `${dir}/package.json`) === 'covers')
+    // With an install in the Dockerfile, the manifest has to be in the installing stage and above the RUN.
+    const manifestBeforeInstall = (dir) =>
+      install === null ||
+      copies.some((c) => c.line > install.stageStart && c.line < install.line && relation(c.source, `${dir}/package.json`) === 'covers')
     const code = (dir) =>
       sources.some((s) => {
         const r = relation(s, dir)
@@ -217,6 +249,11 @@ export function checkWorkspaceClosure(root = KERNEL_ROOT) {
         problems.push(
           `${f}: ${name} (${p.dir}) is in the @gremion/* workspace closure (${chain.join(' -> ')}) but its ${what} is never COPYed` +
             ` -- add COPY ${what === 'manifest' ? `${p.dir}/package.json before the install` : `${p.dir} after it`}`,
+        )
+      if (!missing.includes('manifest') && !manifestBeforeInstall(p.dir))
+        problems.push(
+          `${f}: ${name} (${p.dir}) is in the @gremion/* workspace closure (${chain.join(' -> ')}) but its manifest is not COPYed before the first \`pnpm install\` (line ${install.line})` +
+            ` -- a COPY that lands after it, or in another stage, cannot reach the install; add COPY ${p.dir}/package.json above that RUN`,
         )
     }
   }

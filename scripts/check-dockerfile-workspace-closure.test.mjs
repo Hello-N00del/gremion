@@ -202,6 +202,52 @@ test('a workspace package.json that is not valid JSON, or has no string name, is
   )
 })
 
+test('position-aware: a manifest only covered AFTER the first pnpm install is a problem (the manifest line removed, a later wholesale COPY remains)', () => {
+  const full = FROM + MANIFESTS_ABC + 'RUN pnpm install\nCOPY packages/a packages/b packages/c ./packages/\n'
+  withTree(chain(full), (root) => assert.deepEqual(checkWorkspaceClosure(root).problems, []))
+  // Only c's manifest line is removed: `COPY packages/c` below still covers packages/c/package.json by ancestry.
+  const noCManifest = FROM + MANIFESTS_AB + 'RUN pnpm install\nCOPY packages/a packages/b packages/c ./packages/\n'
+  withTree(chain(noCManifest), (root) => {
+    const r = checkWorkspaceClosure(root)
+    assert.equal(r.problems.length, 1)
+    assert.match(
+      r.problems[0],
+      /^services\/svc\/Dockerfile: @gremion\/c \(packages\/c\) .*\(@gremion\/b -> @gremion\/c\) but its manifest is not COPYed before the first `pnpm install` \(line 5\)/,
+    )
+  })
+  // A seed's own manifest COPYed after the install is the same defect.
+  const lateSeed = FROM + 'COPY packages/b/package.json packages/c/package.json ./\nRUN pnpm install\nCOPY packages/a/package.json ./packages/a/\nCOPY packages ./packages/\n'
+  withTree(chain(lateSeed), (root) => {
+    const r = checkWorkspaceClosure(root)
+    assert.equal(r.problems.length, 1)
+    assert.match(r.problems[0], /@gremion\/a .* manifest is not COPYed before the first `pnpm install`/)
+  })
+})
+
+test('position-aware: only the stage that runs the first install counts, a continued RUN with flags is still the install', () => {
+  // Manifests copied in a different stage than the install do not exist in the installing stage.
+  const otherStage =
+    'FROM node:26-alpine AS deps\n' + MANIFESTS_ABC + 'FROM node:26-alpine AS build\nRUN --mount=type=cache,target=/s \\n  corepack pnpm install --frozen-lockfile\nCOPY packages ./packages/\n'
+  withTree(chain(otherStage), (root) => {
+    const r = checkWorkspaceClosure(root)
+    assert.equal(r.problems.length, 3, r.problems.join('\n'))
+    assert.ok(r.problems.every((p) => /manifest is not COPYed before the first `pnpm install` \(line 6\)/.test(p)))
+  })
+  // A second install in a later stage is not the first one.
+  const twoStages =
+    'FROM node:26-alpine AS build\n' + MANIFESTS_ABC + 'RUN pnpm install\nCOPY packages ./packages/\nFROM node:26-alpine\nRUN pnpm install --prod\n'
+  withTree(chain(twoStages), (root) => assert.deepEqual(checkWorkspaceClosure(root).problems, []))
+})
+
+test('position-aware: a stage with no install line falls back to the position-free rule', () => {
+  withTree(chain(FROM + 'COPY packages/a/package.json packages/b/package.json ./\nCOPY packages ./packages/\n'), (root) =>
+    assert.deepEqual(checkWorkspaceClosure(root).problems, []),
+  )
+  // `npm install -g pnpm` and `pnpm run install-hooks` are not the workspace install.
+  const noInstall = FROM + 'RUN npm install -g pnpm@10 && pnpm run install-hooks\n' + MANIFESTS_AB + 'COPY packages ./packages/\n'
+  withTree(chain(noInstall), (root) => assert.deepEqual(checkWorkspaceClosure(root).problems, []))
+})
+
 test('a wholesale COPY of a parent directory (kernel-api COPY modules) makes no package a seed', () => {
   // b's manifest rides along with `COPY packages`, but nothing builds b: only a is a seed and a has no workspace deps.
   withTree(
