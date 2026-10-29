@@ -219,6 +219,16 @@ describe('routes:check CLI on scaffolded services', () => {
     expect(r.stderr).toMatch(shown)
   })
 
+  it('an import of a file that exists neither as .js nor as .ts reports the specifier as written', () => {
+    const { outDir } = scaffoldCase('check-double-miss')
+    const index = join(outDir, 'src', 'index.ts')
+    writeFileSync(index, `import './nowhere.js'\n${readFileSync(index, 'utf8')}`)
+    const r = cli('routes-check.ts', ['--service', outDir])
+    expect(r.status, r.out).toBe(1)
+    expect(r.stderr).toMatch(/service failed to build: .*nowhere\.js/)
+    expect(r.stderr).not.toMatch(/nowhere\.ts/)
+  })
+
   it('demo: an operation removed from the spec fails, naming it', () => {
     const { specPath, outDir } = scaffoldCase('check-removed')
     const spec = JSON.parse(readFileSync(specPath, 'utf8'))

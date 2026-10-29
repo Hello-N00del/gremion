@@ -59,7 +59,13 @@ registerHooks({
     } catch (e) {
       // tsc's convention: a relative import names the OUTPUT file (`./x.js`) of the source `./x.ts`.
       if ((e as NodeJS.ErrnoException).code === 'ERR_MODULE_NOT_FOUND' && /^\.\.?\/.*\.js$/.test(specifier)) {
-        return nextResolve(specifier.replace(/\.js$/, '.ts'), context)
+        try {
+          return nextResolve(specifier.replace(/\.js$/, '.ts'), context)
+        } catch (retry) {
+          // neither file exists: report the specifier as the source wrote it, not our rewrite of it
+          if ((retry as NodeJS.ErrnoException).code === 'ERR_MODULE_NOT_FOUND') throw e
+          throw retry
+        }
       }
       throw e
     }
