@@ -107,6 +107,35 @@ export function matrixProblems({ releaseYml, ciYml, composeTexts, wanted }) {
   return problems
 }
 
+/**
+ * Every way the release can end up built from more than one commit, as strings
+ * (empty = sound). `release_ref` may be a branch and a branch moves: it is resolved to a
+ * sha ONCE, by resolve-ref, and every other job builds that sha.
+ */
+export function refProblems(releaseYml) {
+  const problems = []
+  const wf = parse(releaseYml)
+  const jobs = wf?.jobs ?? {}
+  const resolve = jobs['resolve-ref']
+  if (!resolve) return ['release-images.yml: no resolve-ref job']
+  const SHA = '${{ needs.resolve-ref.outputs.sha }}'
+  if (resolve.outputs?.sha !== '${{ steps.resolve.outputs.sha }}') problems.push('resolve-ref does not output the resolved sha')
+  const checkoutsOf = (job) => (job.steps ?? []).filter((st) => String(st.uses ?? '').startsWith('actions/checkout@'))
+  if (checkoutsOf(resolve).length !== 1) problems.push('resolve-ref must check out exactly once, to read the ref')
+  for (const [name, job] of Object.entries(jobs)) {
+    if (name === 'resolve-ref') continue
+    const needs = [job.needs ?? []].flat()
+    if (!needs.includes('resolve-ref')) problems.push(`${name}: does not need resolve-ref`)
+    const checkouts = checkoutsOf(job)
+    if (checkouts.length === 0) problems.push(`${name}: no checkout step (the agreement below would be vacuous)`)
+    for (const st of checkouts) if (st.with?.ref !== SHA) problems.push(`${name}: checks out '${st.with?.ref}', not the resolved sha`)
+    // the ref input is read by resolve-ref alone
+    if (JSON.stringify(job).includes('release_ref')) problems.push(`${name}: reads release_ref itself instead of the resolved sha`)
+  }
+
+  return problems
+}
+
 const real = () => ({
   releaseYml: read('.github/workflows/release-images.yml'),
   ciYml: read('.github/workflows/ci.yml'),
@@ -161,4 +190,27 @@ test('release-images.yml: an empty matrix or an empty docker-build matrix is a f
   const input = real()
   assert.match(matrixProblems({ ...input, releaseYml: 'jobs: {}\n' }).join('\n'), /has no matrix\.include/)
   assert.match(matrixProblems({ ...input, ciYml: 'jobs: {}\n' }).join('\n'), /docker-build has no matrix\.include/)
+})
+
+
+test('release-images.yml: one job resolves the ref and every other job builds that sha', () => {
+  assert.deepEqual(refProblems(real().releaseYml), [])
+})
+
+test('release-images.yml: a job that reads release_ref itself, or a pins job that skips resolve-ref, is caught', () => {
+  const { releaseYml } = real()
+  const resolved = '${{ needs.resolve-ref.outputs.sha }}'
+  assert.ok(releaseYml.includes(resolved), 'the sound file names the resolved sha')
+  // a build leg that re-resolves the (movable) ref
+  const reref = releaseYml.replace(`ref: ${resolved}`, 'ref: ${{ inputs.release_ref || github.sha }}')
+  assert.notEqual(reref, releaseYml, 'the mutation must change the file')
+  const found = refProblems(reref).join('\n')
+  assert.match(found, /build-and-push: checks out '\$\{\{ inputs\.release_ref \|\| github\.sha \}\}', not the resolved sha/)
+  assert.match(found, /build-and-push: reads release_ref itself/)
+  // the pins job drops its dependency on resolve-ref
+  const noNeed = releaseYml.replace('needs: [resolve-ref, build-and-push]', 'needs: build-and-push')
+  assert.notEqual(noNeed, releaseYml, 'the mutation must change the file')
+  assert.match(refProblems(noNeed).join('\n'), /emit-release-pins: does not need resolve-ref/)
+  // no resolve-ref job at all
+  assert.match(refProblems('jobs: {}\n').join('\n'), /no resolve-ref job/)
 })

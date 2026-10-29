@@ -72,6 +72,20 @@ run_bodies() {
     ' "$1"
 }
 
+# step_body <workflow> <step name> -- the `run:` body of the one step with that
+# exact `- name:`, dedented, so a test can EXECUTE the shell the workflow runs
+# (a workflow that is only grepped is a workflow nobody has ever run).
+step_body() {
+    awk -v want="      - name: $2" '
+        function indent(s) { match(s, /^ */); return RLENGTH }
+        inbody && NF && indent($0) <= 8 { inbody = 0 }
+        inbody { print substr($0, 11); next }
+        $0 == want { instep = 1; next }
+        instep && /^      - / { instep = 0 }
+        instep && /^        run: \|$/ { inbody = 1 }
+    ' "$1"
+}
+
 # assert_present <ere> <file> <why> / assert_absent <ere> <file> <why> live in
 # test_helper/host.bash: a negated grep silently passes when it is not the last
 # statement of a test, and an unanchored positive grep is satisfied by the
@@ -170,7 +184,7 @@ run_bodies() {
     [ "$total" -ge 15 ]
     while IFS= read -r line; do
         printf '%s' "$line" \
-            | grep -qE '^[[:space:]]*(- )?(group|name|ref|path|pattern|REGISTRY_USER|REGISTRY_TOKEN|IMAGE|SERVICES|DOCKERFILE|CONTEXT|TARGET|NAME|RELEASE_SHA):[[:space:]]' \
+            | grep -qE '^[[:space:]]*(- )?(group|name|ref|path|pattern|sha|REGISTRY_USER|REGISTRY_TOKEN|IMAGE|SERVICES|DOCKERFILE|CONTEXT|TARGET|NAME|RELEASE_SHA|EXPECTED_SHA):[[:space:]]' \
             || { echo "unbound expression: ${line}" >&2; bad=1; }
     done < <(grep -F '${{' "$WORKFLOW")
     [ "$bad" -eq 0 ]
@@ -227,6 +241,118 @@ run_bodies() {
         echo "the matrix builds:" >&2; printf '%s\n' "$matrix" >&2
         return 1
     }
+}
+
+# A throwaway origin with commits on main (M1, M2), on a feature branch (F1)
+# and under a release tag (T1, T2); the shas land in M1 M2 F1 T1 T2.
+make_ref_origin() {
+    REF_ORIGIN="${BATS_TEST_TMPDIR}/ref-origin.git"
+    local w="${BATS_TEST_TMPDIR}/ref-seed"
+    git init -q --bare -b main "$REF_ORIGIN"
+    git init -q -b main "$w"
+    git -C "$w" config user.email 'plan@example.org'
+    git -C "$w" config user.name 'plan'
+    git -C "$w" config commit.gpgsign false
+    git -C "$w" config tag.gpgsign false
+    git -C "$w" remote add origin "$REF_ORIGIN"
+    git -C "$w" commit -q --allow-empty -m m1
+    M1="$(git -C "$w" rev-parse HEAD)"
+    git -C "$w" commit -q --allow-empty -m m2
+    M2="$(git -C "$w" rev-parse HEAD)"
+    git -C "$w" checkout -q -b feature
+    git -C "$w" commit -q --allow-empty -m f1
+    F1="$(git -C "$w" rev-parse HEAD)"
+    git -C "$w" checkout -q -b relA "$M1"
+    git -C "$w" commit -q --allow-empty -m t1
+    T1="$(git -C "$w" rev-parse HEAD)"
+    git -C "$w" tag -a v1.0.0 -m v1.0.0
+    git -C "$w" checkout -q -b relB "$M1"
+    git -C "$w" commit -q --allow-empty -m t2
+    T2="$(git -C "$w" rev-parse HEAD)"
+    git -C "$w" tag rc-v2.0.0
+    git -C "$w" push -q origin main feature relA relB v1.0.0 rc-v2.0.0
+    # the tag-only commits must be reachable by their tag alone
+    git --git-dir="$REF_ORIGIN" branch -q -D relA relB
+    export REF_ORIGIN M1 M2 F1 T1 T2
+}
+
+# resolve_ref_at <sha> -- run the workflow's own "Resolve the ref" shell in a
+# fresh clone of the origin with <sha> checked out, as checkout@ leaves it.
+resolve_ref_at() {
+    local sha="$1" clone="${BATS_TEST_TMPDIR}/ref-clone-${1:0:8}"
+    git clone -q "$REF_ORIGIN" "$clone"
+    git -C "$clone" -c advice.detachedHead=false checkout -q --detach "$sha"
+    GITHUB_OUTPUT="${BATS_TEST_TMPDIR}/gh-output-${sha:0:8}"
+    : > "$GITHUB_OUTPUT"
+    export GITHUB_OUTPUT
+    step_body "$WORKFLOW" 'Resolve the ref to one commit' > "${BATS_TEST_TMPDIR}/resolve.sh"
+    (cd "$clone" && bash "${BATS_TEST_TMPDIR}/resolve.sh" > /dev/null)
+}
+
+@test "release-images.yml resolve-ref pins the ref to one 40-hex commit" {
+    make_ref_origin
+    # The body really was extracted: a vacuous extractor would "pass" below.
+    [ "$(step_body "$WORKFLOW" 'Resolve the ref to one commit' | wc -l)" -ge 5 ]
+    local sha
+    for sha in "$M2" "$M1" "$F1" "$T1"; do
+        resolve_ref_at "$sha"
+        grep -qx "sha=${sha}" "$GITHUB_OUTPUT"
+    done
+}
+
+@test "release-images.yml resolve-ref refuses a checkout that is not a commit" {
+    make_ref_origin
+    local clone="${BATS_TEST_TMPDIR}/ref-empty"
+    mkdir -p "$clone"
+    git -C "$clone" init -q -b main
+    git -C "$clone" remote add origin "$REF_ORIGIN"
+    GITHUB_OUTPUT="${BATS_TEST_TMPDIR}/gh-output-empty"
+    : > "$GITHUB_OUTPUT"
+    export GITHUB_OUTPUT
+    step_body "$WORKFLOW" 'Resolve the ref to one commit' > "${BATS_TEST_TMPDIR}/resolve.sh"
+    # no commit in this repository: `git rev-parse HEAD` cannot name a sha
+    run bash -c "cd '$clone' && bash '${BATS_TEST_TMPDIR}/resolve.sh'"
+    [ "$status" -ne 0 ]
+    [ ! -s "$GITHUB_OUTPUT" ]
+}
+
+@test "release-images.yml the pins job refuses a pin record that names another commit, or none" {
+    local tmp="${BATS_TEST_TMPDIR}/emit" sha=0123456789abcdef0123456789abcdef01234567
+    local other=fedcba9876543210fedcba9876543210fedcba98
+    # Only the part of the step before the first node call: the sha agreement.
+    local body
+    body="$(step_body "$WORKFLOW" 'Emit the app and state pins layers' | sed '/emit-pins\.mjs/,$d')"
+    [ "$(printf '%s\n' "$body" | wc -l)" -ge 10 ]
+    mkdir -p "${tmp}/pins"
+    printf '# release-sha=%s\nlegal=ghcr.io/hello-n00del/gremion-legal@sha256:%064d\n' "$sha" 1 > "${tmp}/pins/pin-legal.txt"
+    printf '# release-sha=%s\nvector=ghcr.io/hello-n00del/gremion-vector@sha256:%064d\n' "$sha" 2 > "${tmp}/pins/pin-vector.txt"
+
+    RUNNER_TEMP="$tmp" RELEASE_SHA="$sha" run bash -c "$body"
+    [ "$status" -eq 0 ]
+    # the record that survives is clean: no comment line reaches emit-pins
+    [ "$(cat "${tmp}/release-pins/release-sha.txt")" = "$sha" ]
+    [ "$(wc -l < "${tmp}/release-pins/pins-all.txt")" -eq 2 ]
+    assert_absent '^#' "${tmp}/release-pins/pins-all.txt" 'a comment line reaches emit-pins'
+
+    # a leg that built another commit
+    printf '# release-sha=%s\nvector=ghcr.io/hello-n00del/gremion-vector@sha256:%064d\n' "$other" 2 > "${tmp}/pins/pin-vector.txt"
+    rm -rf "${tmp}/release-pins"
+    RUNNER_TEMP="$tmp" RELEASE_SHA="$sha" run bash -c "$body"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"pin-vector.txt records '${other}', the release is ${sha}"* ]]
+    [ ! -e "${tmp}/release-pins/pins-all.txt" ]
+
+    # a leg that recorded no commit at all
+    printf 'vector=ghcr.io/hello-n00del/gremion-vector@sha256:%064d\n' 2 > "${tmp}/pins/pin-vector.txt"
+    RUNNER_TEMP="$tmp" RELEASE_SHA="$sha" run bash -c "$body"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"pin-vector.txt records '', the release is ${sha}"* ]]
+
+    # no records downloaded at all is a failure, not an empty pass
+    rm -f "${tmp}"/pins/pin-*.txt
+    RUNNER_TEMP="$tmp" RELEASE_SHA="$sha" run bash -c "$body"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"no pin record was downloaded"* ]]
 }
 
 # ---------------------------------------------------------------------------

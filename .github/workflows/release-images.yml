@@ -21,6 +21,11 @@ name: Release images
 # every image is pushed once under :<commit> so ghcr.io has a name to show, and
 # the release is the digest, never the tag.
 #
+# ONE COMMIT PER RELEASE. `release_ref` may be a branch, and a branch moves:
+# resolve-ref turns it into a 40-hex sha exactly once, and every build leg and
+# the pins job check out that sha, never the ref. Each leg writes the sha it
+# built into its pin record and the pins job refuses unless they all agree.
+#
 # No workflow expression is expanded inside a `run:` body: each one is bound
 # to an env key, so a crafted dispatch input can never become shell.
 # test/host/deploy-workflow.bats enforces that mechanically, and
@@ -53,9 +58,39 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  resolve-ref:
+    name: Resolve the release ref
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      sha: ${{ steps.resolve.outputs.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          ref: ${{ inputs.release_ref || github.sha }}
+          persist-credentials: false
+
+      # The ref is read here and nowhere else.
+      - name: Resolve the ref to one commit
+        id: resolve
+        run: |
+          set -euo pipefail
+
+          sha="$(git rev-parse HEAD)"
+          if ! printf '%s' "$sha" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "release-images: the release ref did not resolve to a 40-hex commit (got '${sha}')" >&2
+            exit 1
+          fi
+
+          echo "release-images: building ${sha}"
+          echo "sha=${sha}" >> "$GITHUB_OUTPUT"
+
   build-and-push:
     name: Build and push ${{ matrix.name }}
     runs-on: ubuntu-latest
+    needs: resolve-ref
     timeout-minutes: 60
     strategy:
       # Every image is part of the release: let the others finish so one run
@@ -79,11 +114,20 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
-          ref: ${{ inputs.release_ref || github.sha }}
+          ref: ${{ needs.resolve-ref.outputs.sha }}
           persist-credentials: false
 
       - name: Name the commit being built
-        run: echo "RELEASE_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+        env:
+          EXPECTED_SHA: ${{ needs.resolve-ref.outputs.sha }}
+        run: |
+          set -euo pipefail
+          head="$(git rev-parse HEAD)"
+          if [ "$head" != "$EXPECTED_SHA" ]; then
+            echo "release-images: checked out ${head}, the release is ${EXPECTED_SHA}" >&2
+            exit 1
+          fi
+          echo "RELEASE_SHA=${head}" >> "$GITHUB_ENV"
 
       # The docker CLI on the runner is the whole toolchain: no third-party
       # login or buildx action sits between GITHUB_TOKEN and the registry. The
@@ -140,8 +184,10 @@ jobs:
           fi
           docker buildx imagetools inspect "${IMAGE}@${digest}" > /dev/null
 
+          # The record names the commit this leg built; the pins job refuses
+          # unless every leg names the one it resolved.
           pins="${RUNNER_TEMP}/pin-${NAME}.txt"
-          : > "$pins"
+          printf '# release-sha=%s\n' "$RELEASE_SHA" > "$pins"
           for svc in $SERVICES; do
             printf '%s=%s@%s\n' "$svc" "$IMAGE" "$digest" >> "$pins"
           done
@@ -163,14 +209,14 @@ jobs:
   emit-release-pins:
     name: Emit the release pins layers
     runs-on: ubuntu-latest
-    needs: build-and-push
+    needs: [resolve-ref, build-and-push]
     # Reads the checkout and the run's own artefacts; pushes nothing.
     permissions:
       contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
-          ref: ${{ inputs.release_ref || github.sha }}
+          ref: ${{ needs.resolve-ref.outputs.sha }}
           persist-credentials: false
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7.1.0
@@ -179,7 +225,16 @@ jobs:
 
       - name: Name the commit being released
         id: sha
-        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+        env:
+          EXPECTED_SHA: ${{ needs.resolve-ref.outputs.sha }}
+        run: |
+          set -euo pipefail
+          head="$(git rev-parse HEAD)"
+          if [ "$head" != "$EXPECTED_SHA" ]; then
+            echo "release-images: checked out ${head}, the release is ${EXPECTED_SHA}" >&2
+            exit 1
+          fi
+          echo "sha=${head}" >> "$GITHUB_OUTPUT"
 
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
         with:
@@ -199,7 +254,26 @@ jobs:
 
           out="${RUNNER_TEMP}/release-pins"
           mkdir -p "$out"
-          cat "${RUNNER_TEMP}"/pins/pin-*.txt | sort > "${out}/pins-all.txt"
+
+          # Every leg names the commit it built in its record. One that names
+          # another (or none) built a different tree than the one this job
+          # checked out, so no layer is emitted.
+          shopt -s nullglob
+          records=("${RUNNER_TEMP}"/pins/pin-*.txt)
+          shopt -u nullglob
+          if [ "${#records[@]}" -eq 0 ]; then
+            echo "release-images: no pin record was downloaded" >&2
+            exit 1
+          fi
+          for record in "${records[@]}"; do
+            recorded="$(sed -n 's/^# release-sha=//p' "$record")"
+            if [ "$recorded" != "$RELEASE_SHA" ]; then
+              echo "release-images: ${record##*/} records '${recorded}', the release is ${RELEASE_SHA}" >&2
+              exit 1
+            fi
+          done
+
+          grep -hv '^#' "${records[@]}" | sort > "${out}/pins-all.txt"
           printf '%s\n' "$RELEASE_SHA" > "${out}/release-sha.txt"
 
           node scripts/release/emit-pins.mjs --project app --in "${out}/pins-all.txt" --out "${out}/docker-compose.pins.yml"
