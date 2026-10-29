@@ -26,7 +26,7 @@ let base = ''
 
 function docker(args: string[], allowFail = false): string {
   const r = spawnSync('docker', args, { encoding: 'utf8', env: { ...process.env, MSYS_NO_PATHCONV: '1' } })
-  if (r.status !== 0 && !allowFail) throw new Error(`docker ${args[0]} (status ${r.status}): ${r.error?.message ?? ''} ${(r.stderr || '').slice(-400)}`)
+  if (r.status !== 0 && !allowFail) throw new Error(`docker ${args[0]} (status ${String(r.status)}): ${r.error?.message ?? ''} ${(r.stderr || '').slice(-400)}`)
   return (r.stdout || '').trim()
 }
 
@@ -72,7 +72,7 @@ async function stepUpWithoutOtp(clientId: string, redirectUri: string): Promise<
   let url: string | null = `${base}/realms/${REALM}/protocol/openid-connect/auth?${new URLSearchParams({
     client_id: clientId, response_type: 'code', scope: 'openid', redirect_uri: redirectUri, acr_values: 'loa2', max_age: '300',
     state: randomBytes(8).toString('hex'), code_challenge: createHash('sha256').update(verifier).digest('base64url'), code_challenge_method: 'S256',
-  })}`
+  }).toString()}`
   let res = await browse(url, {}, jar)
   for (let round = 0; round < 6; round++) {
     const location = res.headers.get('location')

@@ -18,8 +18,13 @@ export const load: PageServerLoad = async ({ url, locals }) => {
   return { returnTo, secondFactorMissing, accountUrl }
 }
 
+function hasControlChar(s: string): boolean {
+  for (let i = 0; i < s.length; i++) if (s.charCodeAt(i) < 0x20) return true
+  return false
+}
+
 function sameOriginPath(raw: string, origin: string): string {
-  if (!raw.startsWith('/') || raw.startsWith('//') || /[\\\x00-\x1f]/.test(raw)) return '/'
+  if (!raw.startsWith('/') || raw.startsWith('//') || raw.includes('\\') || hasControlChar(raw)) return '/'
   try {
     const u = new URL(raw, origin)
     return u.origin === origin ? `${u.pathname}${u.search}${u.hash}` : '/'
