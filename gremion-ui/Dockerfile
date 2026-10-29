@@ -36,7 +36,8 @@ COPY packages/tokens/package.json ./packages/tokens/
 # gremion-ui, so, like nats-auth, they live in this builder stage only.
 COPY packages/provisioning/package.json ./packages/provisioning/
 # TASK-033-a: tenant-store's purge test reads the retention catalogue through
-# @gremion/retention (a devDependency): the install needs the workspace member, nothing runs it.
+# @gremion/retention (a devDependency): the install needs the workspace member; its source is COPYed
+# below too, because check-dockerfile-workspace-closure wants every closure member whole.
 COPY packages/retention/package.json ./packages/retention/
 COPY packages/tenant-store/package.json ./packages/tenant-store/
 COPY packages/module-catalogue/package.json ./packages/module-catalogue/
@@ -66,6 +67,7 @@ COPY packages/storage ./packages/storage/
 COPY packages/tokens ./packages/tokens/
 COPY packages/provisioning ./packages/provisioning/
 COPY packages/tenant-store ./packages/tenant-store/
+COPY packages/retention ./packages/retention/
 COPY packages/module-catalogue ./packages/module-catalogue/
 COPY packages/generated-clients ./packages/generated-clients/
 COPY packages/edge-routers ./packages/edge-routers/
