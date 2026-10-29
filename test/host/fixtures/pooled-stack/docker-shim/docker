@@ -34,6 +34,11 @@
 #   SHIM_COMPOSE_CONFIG fail: `docker compose ... config` fails (names, counts)
 #   SHIM_PS           fail: every `docker ps` exits 1 with an engine error on
 #                     stderr (R29-MD-A: counts() must not read that as 0 containers)
+#   SHIM_PULL         fail: `docker compose ... pull` exits 1 (aux-up must stop, RED)
+#   SHIM_OS           what `docker info` reports as OperatingSystem (default Ubuntu;
+#                     "Docker Desktop" means host-gateway needs no extra publish)
+#   SHIM_BRIDGE_GW    the default bridge's gateway `docker network inspect bridge`
+#                     reports (unset: the inspect fails)
 #   SHIM_COMPOSE_LS   fail: `docker compose ls` exits 1 (counts()' compose-ls reading)
 set -u
 S="${SHIM_STACK:?SHIM_STACK required}"
@@ -188,7 +193,23 @@ case "$1" in
                     exit 1
                 fi
                 echo '[]' ;;
+            pull)
+                if [[ "${SHIM_PULL:-}" == fail ]]; then
+                    echo "shim-pull-error: manifest for the pinned image not found" >&2
+                    exit 1
+                fi ;;
+            up) : ;;
             *) echo "shim: unhandled compose call: $*" >&2; exit 1 ;;
         esac ;;
+    rm) : ;;   # teardown: `docker rm -f` of whatever ps listed
+    volume) : ;;   # teardown: `docker volume ls` lists nothing; nothing to remove
+    info)
+        # `docker info --format {{.OperatingSystem}}` (host_gateway_ip)
+        echo "${SHIM_OS:-Ubuntu 24.04 LTS}" ;;
+    network)
+        # `docker network inspect bridge -f ...` (host_gateway_ip): SHIM_BRIDGE_GW is the docker0 gateway
+        if [[ "${2:-}" == ls ]]; then :
+        elif [[ "${2:-}" == inspect && "${3:-}" == bridge && -n "${SHIM_BRIDGE_GW:-}" ]]; then echo "$SHIM_BRIDGE_GW"
+        else echo "shim: no such network" >&2; exit 1; fi ;;
     *) echo "shim: unhandled docker call: $*" >&2; exit 1 ;;
 esac

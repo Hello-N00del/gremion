@@ -59,6 +59,22 @@
 # mail server carries a self-signed certificate for mail.<PLATFORM_DOMAIN>
 # instead of the [acme] block, and Keycloak's truststore names it.
 #
+# RUN AS ROOT ON LINUX (like production: gremion-tenant's require_root). The
+# containers write their secrets into the bind-mounted scratch root as their
+# own uid; a non-root invoker then cannot read, replace or remove them. Run it
+# the way the host does, keeping HOME and PATH (toolchain, docker config):
+#   sudo -E env "HOME=$HOME" "PATH=$PATH" bash test/host/integration/pooled-stack-proof.sh all
+# On Docker Desktop (Windows, macOS) the invoking user is enough. A permission
+# error on the scratch dirs prints this hint (perm_hint).
+#
+# LINUX HOST DEFAULTS (POOLED_CUSTOMER=1, Docker Engine): host-gateway is the
+# docker0 address, not host loopback, so the state Keycloak cannot reach a mail
+# server bound to 127.0.0.1:587. render-env then also publishes 587 on the
+# host-gateway address (detected from the default bridge; PROOF_HOST_GATEWAY_IP
+# overrides it; Docker Desktop is left alone, 127.0.0.1 works there).
+# PROOF_OPS_BIND_IP moves the proof ops project's OPS_BIND_IP and
+# OPS_INGEST_BIND_IP off 127.0.0.1 when another ops stack holds 3000/4317.
+#
 # Every assertion reads a post-condition (docker inspect, docker stats, a TCP
 # connect, a database row), never an exit code alone. Zero containers, zero
 # probe targets, a failed positive control, an unclassified project or an
@@ -110,6 +126,105 @@ command -v jq >/dev/null || die "jq not on PATH"
 
 is_scratch() { [[ "$STACK" == t040-* ]]; }
 require_scratch() { is_scratch || die "phase '$1' brings resources up or down and runs only on a t040-* scratch stack (STACK=$STACK)"; }
+
+# perm_hint [path...] -- prints the run-as-root hint when a permission problem
+# is plausibly the cause: Linux, not root, and a path (or, if it does not exist
+# yet, its nearest existing ancestor) that this user cannot both read and write.
+# Prints nothing otherwise, so it is safe to append to any die message.
+perm_hint() {
+    [[ "$(uname -s)" == Linux && "$(id -u)" != 0 ]] || return 0
+    local p
+    for p in "$@"; do
+        while [[ -n "$p" && ! -e "$p" && "$p" != / && "$p" != . ]]; do p="$(dirname "$p")"; done
+        [[ -e "$p" && ( ! -r "$p" || ! -w "$p" ) ]] || continue
+        # shellcheck disable=SC2016  # the $HOME / $PATH are LITERAL text of the command to copy
+        printf ' (permission denied on %s: on Linux this proof runs as root, like production -- sudo -E env "HOME=$HOME" "PATH=$PATH" bash test/host/integration/pooled-stack-proof.sh ...)' "$p"
+        return 0
+    done
+}
+# need_writable <dir>... -- each exists (made if absent) and is writable, or die with the hint.
+need_writable() {
+    local d
+    for d in "$@"; do
+        { mkdir -p "$d" 2>/dev/null && [[ -w "$d" ]]; } || die "cannot write ${d}$(perm_hint "$d")"
+    done
+}
+
+# scratch_rm <path> -- removes a scratch tree, and ONLY one: the path must
+# resolve (symlinks and .. followed) to somewhere strictly under ${ROOT}/.scratch
+# with ${STACK} as a whole path component. Anything else is refused (bad(), no
+# removal): a mis-set POOLED_OUT must never delete outside the scratch area. A
+# path that does not exist is a no-op.
+scratch_rm() {
+    local p="$1" comp="${2:-$STACK}" base real
+    [[ -n "$p" ]] || { bad "scratch_rm: refusing an empty path"; return 1; }
+    [[ -e "$p" || -L "$p" ]] || return 0
+    if [[ -L "$p" ]]; then bad "scratch_rm: refusing ${p}: a symlink"; return 1; fi
+    base="$(cd "$ROOT/.scratch" 2>/dev/null && pwd -P)" || { bad "scratch_rm: refusing ${p}: ${ROOT}/.scratch does not exist"; return 1; }
+    real="$(cd "$p" 2>/dev/null && pwd -P)" || { bad "scratch_rm: refusing ${p}: not a directory"; return 1; }
+    if [[ "$real" != "$base"/* || "/${real#"$base"/}/" != *"/${comp}/"* ]]; then
+        bad "scratch_rm: refusing ${p} (${real}): outside ${base}/**/${comp}/"
+        return 1
+    fi
+    rm -rf -- "$real" || { bad "scratch_rm: could not remove ${real}$(perm_hint "$real")"; return 1; }
+    ok "scratch_rm: removed ${real}"
+}
+
+# scratch_in <path> [component] -- true when <path> resolves (symlinks and ..
+# followed) strictly under ${ROOT}/.scratch with <component> (default ${STACK})
+# as a whole path component: the same test scratch_rm refuses on, but silent and
+# with no RED, so a caller can tell "not ours to delete" from "ours, and failed".
+scratch_in() {
+    local p="$1" comp="${2:-$STACK}" base real
+    base="$(cd "$ROOT/.scratch" 2>/dev/null && pwd -P)" || return 1
+    real="$(cd "$p" 2>/dev/null && pwd -P)" || return 1
+    [[ "$real" == "$base"/* && "/${real#"$base"/}/" == *"/${comp}/"* ]]
+}
+
+# teardown_rm <path> [component] -- scratch_rm for teardown. A path that is not
+# in the scratch area (a supported POOLED_OUT elsewhere, e.g. under /tmp) is
+# left in place with an info line: it is the operator's to remove, and refusing
+# it is not a failed proof. Inside the scratch area every failure stays RED
+# (a symlink, an rm that fails) because that tree IS ours to remove.
+teardown_rm() {
+    local p="$1" comp="${2:-$STACK}"
+    [[ -e "$p" || -L "$p" ]] || return 0
+    if [[ ! -L "$p" ]] && ! scratch_in "$p" "$comp"; then
+        info "teardown: leaving ${p} in place: not under ${ROOT}/.scratch/**/${comp}/"
+        return 0
+    fi
+    scratch_rm "$p" "$comp"
+}
+
+# precreate_bind_dirs -- every host directory a compose file bind-mounts, made
+# HERE by the invoking user. A missing bind source is created by the Docker
+# daemon, root-owned, before customer-layout can (docker-compose.app.yml mounts
+# etc/secrets/control-panel, etc/secrets/tenant-create and data/module-exports;
+# the edge file provider reads etc/edge).
+precreate_bind_dirs() {
+    mkdir -p "$SROOT/etc/edge" "$SROOT/secrets/tenants" "$SROOT/etc/secrets/control-panel" "$SROOT/etc/secrets/tenant-create" "$SROOT/data/module-exports"
+}
+
+# host_gateway_ip -- the address host-gateway resolves to for a container, when
+# it is NOT host loopback (Docker Engine on Linux: the default bridge's gateway).
+# PROOF_HOST_GATEWAY_IP wins. Docker Desktop and non-Linux hosts print nothing
+# (127.0.0.1 reaches the host there). Detection failing on Linux is a die, never
+# a silent skip: the Keycloak -> mail leg would fail much later.
+host_gateway_ip() {
+    local ip="${PROOF_HOST_GATEWAY_IP:-}"
+    if [[ -z "$ip" ]]; then
+        [[ "$(uname -s)" == Linux ]] || return 0
+        if [[ "$(docker info --format '{{.OperatingSystem}}' 2>/dev/null || true)" == *"Docker Desktop"* ]]; then return 0; fi
+        local raw=""
+        # stderr is kept (2>&1): on failure it IS the reason, and the die names it
+        if raw="$(docker network inspect bridge -f '{{(index .IPAM.Config 0).Gateway}}' 2>&1)"; then
+            ip="$(tail -n1 <<< "$raw" | tr -d '\r')"
+        fi
+        [[ -n "$ip" ]] || die "cannot detect the docker0 gateway (docker network inspect bridge: $(head -n3 <<< "${raw:-no output}" | tr '\r\n' '  ')); set PROOF_HOST_GATEWAY_IP"
+    fi
+    [[ "$ip" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] || die "host-gateway address '${ip}' is not an IPv4 literal"
+    [[ "$ip" == 127.0.0.1 ]] || printf '%s' "$ip"
+}
 
 # compose <project-suffix> <args...> -- the host's own command shape:
 # `docker compose --env-file <project>.env <verb>` from the project's directory.
@@ -238,10 +353,15 @@ module_pg_keys() {
 # starts with it; on its own it is the render-env phase.
 phase_render_env() {
     require_scratch render-env
-    mkdir -p "$ENV_DIR" "$OUT"
+    need_writable "$ENV_DIR" "$OUT"
     locate_overlays
     local SROOT_H; SROOT_H="$(host_path "$SROOT")"
     local s="$OVL_SEP"
+    local ops_bind="${PROOF_OPS_BIND_IP:-127.0.0.1}"
+    [[ "$ops_bind" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] || die "PROOF_OPS_BIND_IP '${ops_bind}' is not an IPv4 literal"
+    # Linux Docker Engine: host-gateway is docker0, not loopback (see the header).
+    local gw_ip=""
+    if [[ "${POOLED_CUSTOMER:-0}" == 1 ]]; then gw_ip="$(host_gateway_ip)" || exit $?; fi
 
     local pw_pg pw_kcdb pw_kc pw_gr pw_ctl pw_pub pw_bnc sec_proxy sec_auth sec_push
     pw_pg="$(gen)"; pw_kcdb="$(gen)"; pw_kc="$(gen)"; pw_gr="$(gen)"; pw_ctl="$(gen)"; pw_pub="$(gen)"
@@ -345,8 +465,8 @@ COMPOSE_PROFILES=production
 OPS_V4_SUBNET=10.231.8.0/24
 OPS_V6_SUBNET=fd5a:231:8::/64
 GREMION_ROOT_DIR=${SROOT_H}
-OPS_BIND_IP=127.0.0.1
-OPS_INGEST_BIND_IP=127.0.0.1
+OPS_BIND_IP=${ops_bind}
+OPS_INGEST_BIND_IP=${ops_bind}
 OPS_UID=65534
 OPS_GID=65534
 PROM_RETENTION_TIME=1d
@@ -378,6 +498,7 @@ PLATFORM_DOMAIN=proof.example.org
 ACME_EMAIL=acme@proof.example.org
 MAIL_BIND_IP=127.0.0.1
 MAIL_BIND_IP6=::1
+MAIL_TRANSPORT=stalwart
 EDGE_BIND_IP=127.0.0.1
 EDGE_BIND_IP6=::1
 MAIL_V4_SUBNET=10.231.9.0/24
@@ -455,6 +576,9 @@ EOF
         printf 'services:\n  stalwart:\n    ports: !override\n'
         printf '      - "127.0.0.1:${STALWART_API_PORT}:8080"\n'
         [[ "${POOLED_CUSTOMER:-0}" == 1 ]] && printf '      - "127.0.0.1:587:587"\n'
+        # host-gateway on Linux is docker0, not loopback: publish 587 there too
+        # (the state Keycloak reaches mail.<domain>:587 through it).
+        [[ -z "$gw_ip" ]] || printf '      - "%s:587:587"\n' "$gw_ip"
         printf '    volumes:\n      - ${GREMION_ROOT}/etc/mail/tls:/opt/stalwart/etc/tls:ro\n'
     } > "$OUT/mail.proof.yml"
     ok "render-env ${STACK}: env files in ${ENV_DIR}, overlays in ${OUT}"
@@ -502,7 +626,8 @@ skip { next }
 
 phase_prepare() {
     require_scratch prepare
-    mkdir -p "$ENV_DIR" "$SROOT/etc/edge" "$SROOT/secrets/tenants" "$OUT/ledger"
+    need_writable "$ENV_DIR" "$SROOT" "$OUT/ledger"
+    precreate_bind_dirs
 
     # Subnets: a dedicated 10.231.0.0/16 and fd5a:231::/48, refused if taken.
     local taken
@@ -687,9 +812,19 @@ phase_app_wait() {
 # ── the non-council projects ───────────────────────────────────────────────
 phase_aux_up() {
     require_scratch aux-up
+    # --pull never below: every pinned image of both projects must already be
+    # local, and on a fresh Linux host they are not. A failed pull is loud.
+    local pp
+    for pp in ops mail; do
+        if ! compose "$pp" pull >"$OUT/ledger/${pp}-pull.log" 2>&1; then
+            tail -n 5 "$OUT/ledger/${pp}-pull.log" | tr -d '\r' >&2
+            bad "${pp}: compose pull failed (see ${OUT}/ledger/${pp}-pull.log); not starting a project with missing images"
+            return 0
+        fi
+    done
     compose ops up -d --pull never >/dev/null 2>"$OUT/ledger/ops-up.err" || { cat "$OUT/ledger/ops-up.err" >&2; bad "ops up failed"; }
     compose mail up -d --pull never >/dev/null 2>"$OUT/ledger/mail-up.err" || { cat "$OUT/ledger/mail-up.err" >&2; bad "mail up failed"; }
-    sleep 20
+    sleep "${POOLED_AUX_SETTLE:-20}"
     local p cid st
     for p in ops mail; do
         for cid in $(docker ps -aq --filter "label=com.docker.compose.project=${STACK}-$p"); do
@@ -1124,7 +1259,9 @@ phase_cold_state() {
     fi
 }
 
+TEARDOWN_STARTED=0   # set by phase_teardown; the EXIT trap in main checks it
 phase_teardown() {
+    TEARDOWN_STARTED=1
     require_scratch teardown
     local p
     for p in app-blue app-green state ops mail; do
@@ -1135,6 +1272,28 @@ phase_teardown() {
     docker volume ls -q --filter "name=^${STACK}" | xargs -r docker volume rm >/dev/null
     [[ -f "$OUT/.created-userlist" ]] && rm -f "$ROOT/docker/pgbouncer/userlist.txt" "$OUT/.created-userlist"
     [[ -f "$OUT/.created-ipcrypt" ]] && rm -f "$ROOT/secrets/ipcrypt_key.txt" "$OUT/.created-ipcrypt"
+    # The scratch GREMION_ROOT: a stale etc/secrets (tenant_provisioner) answers
+    # a fresh Keycloak with 401 invalid_client. The ledger under ${OUT}/ledger is
+    # kept. A path outside ${ROOT}/.scratch (a POOLED_OUT elsewhere) is left in
+    # place with an info line, never RED (teardown_rm).
+    teardown_rm "$SROOT" || true
+    # The customer proof (customer-provision-proof.sh) lays its GREMION_ROOT out
+    # IN the pooled stack's own root (croot = the state.env GREMION_ROOT), so the
+    # stale tenant_provisioner secret it provokes lives in $SROOT, removed above.
+    # Its OWN OUT -- .scratch/customer-provision-proof/<its STACK> -- holds the
+    # panel phases' scratch root (root/) and every cookie, password and TOTP
+    # secret (secrets/); ledger/ is its evidence and is kept. Its STACK is
+    # PROOF_STACK when set, else t043-<sha8>: the same sha8 as this t040-<sha8>
+    # when both derive it from one HEAD. Both spellings, and this STACK's (an
+    # operator naming the customer proof's stack like the pooled one), are
+    # cleaned; a PROOF_OUT elsewhere is not found from here.
+    local cs cdir
+    for cs in "${PROOF_STACK:-}" "t043-${STACK#t040-}" "$STACK"; do
+        [[ -n "$cs" ]] || continue
+        cdir="$ROOT/.scratch/customer-provision-proof/${cs}"
+        teardown_rm "$cdir/root" "$cs" || true
+        teardown_rm "$cdir/secrets" "$cs" || true
+    done
     local left
     left="$(docker ps -aq --filter "name=^${STACK}" | grep -c . || true)$(docker network ls -q --filter "name=^${STACK}" | grep -c . || true)$(docker volume ls -q --filter "name=^${STACK}" | grep -c . || true)"
     if [[ "$left" == 000 ]]; then ok "teardown: no container, network or volume under ${STACK} remains"
@@ -1167,24 +1326,39 @@ run_phase() {
     esac
 }
 
-[[ $# -gt 0 ]] || set -- all
-PHASES="$*"   # recorded before the loop below shifts the arguments away
-info "STACK=${STACK} scope=${SCOPE} ledger=${OUT}/ledger"
-if [[ "$1" == all ]]; then
-    require_scratch all
-    trap 'phase_teardown || true' EXIT
-    for ph in prepare names state-up state-wait "app-up blue" "app-wait blue" aux-up limits rss isolation probes tenant-before tenant tenant-after "app-up green" "app-wait green" switch cold-state limits; do
-        # shellcheck disable=SC2086
-        run_phase $ph
-    done
-else
-    while [[ $# -gt 0 ]]; do
-        case "$1" in
-            app-up|app-wait) run_phase "$1" "${2:?colour}"; shift 2 ;;
-            *) run_phase "$1"; shift ;;
-        esac
-    done
-fi
-printf '%s phases [%s] RED=%s\n' "$(now)" "$PHASES" "$RED" | ledger run.log
-if (( RED )); then echo "[pooled-proof] RED" >&2; exit 1; fi
-echo "[pooled-proof] GREEN"
+# The phases 'all' runs, in order. teardown is NOT in the list: main runs it
+# explicitly as the last phase BEFORE the verdict, so a failing teardown (a
+# scratch_rm that cannot remove the root, resources left behind) makes the run
+# RED. The EXIT trap below only covers an aborted run.
+ALL_PHASES=(prepare names state-up state-wait "app-up blue" "app-wait blue" aux-up limits rss isolation probes tenant-before tenant tenant-after "app-up green" "app-wait green" switch cold-state limits)
+
+main() {
+    [[ $# -gt 0 ]] || set -- all
+    PHASES="$*"   # recorded before the loop below shifts the arguments away
+    info "STACK=${STACK} scope=${SCOPE} ledger=${OUT}/ledger"
+    local ph
+    if [[ "$1" == all ]]; then
+        require_scratch all
+        # Only for a run that dies before its own teardown phase: phase_teardown
+        # sets TEARDOWN_STARTED, so a completed (or failed) teardown never runs twice.
+        trap '[[ "$TEARDOWN_STARTED" == 1 ]] || phase_teardown || true' EXIT
+        for ph in "${ALL_PHASES[@]}"; do
+            # shellcheck disable=SC2086
+            run_phase $ph
+        done
+        run_phase teardown
+    else
+        while [[ $# -gt 0 ]]; do
+            case "$1" in
+                app-up|app-wait) run_phase "$1" "${2:?colour}"; shift 2 ;;
+                *) run_phase "$1"; shift ;;
+            esac
+        done
+    fi
+    printf '%s phases [%s] RED=%s\n' "$(now)" "$PHASES" "$RED" | ledger run.log
+    if (( RED )); then echo "[pooled-proof] RED" >&2; exit 1; fi
+    echo "[pooled-proof] GREEN"
+}
+# sourced (test/host/pooled-stack-proof.bats unit-tests the helpers and main): stop here
+[[ "${BASH_SOURCE[0]}" == "$0" ]] || return 0
+main "$@"

@@ -318,6 +318,282 @@ assert_env_files_resolve() {
     [ ! -f "${POOLED_OUT}/ledger/trd440-before.txt.part" ]
 }
 
+# ── Linux-vs-Docker-Desktop drift (r33g-proofsh) ─────────────────────────────
+# Defects a real Linux host hit: MAIL_TRANSPORT never rendered, host-gateway is
+# docker0 (not loopback), the ops binds collide with another ops stack, the
+# bind-mounted dirs were created root-owned by the daemon, teardown left a stale
+# scratch root, aux-up ran --pull never against images that were not local.
+
+# A `uname` that says Linux, in a directory that is put on PATH for the proof's
+# own run only (bats itself must keep the real uname): PATH="$LINUX_PATH".
+linux_uname() {
+    STUBS="${BATS_TEST_TMPDIR}/stubs"; mkdir -p "$STUBS"
+    printf '#!/usr/bin/env bash\necho Linux\n' > "${STUBS}/uname"; chmod +x "${STUBS}/uname"
+    LINUX_PATH="${STUBS}:${PATH}"
+}
+
+skip_if_mail_api_port_taken() {
+    if (exec 3<>/dev/tcp/127.0.0.1/8086) 2>/dev/null; then skip "127.0.0.1:8086 is taken on this box"; fi
+}
+
+@test "render-env: mail.env carries MAIL_TRANSPORT=stalwart (mandatory, no default; the proof runs its own Stalwart)" {
+    run bash "$PROOF" render-env
+    [ "$status" -eq 0 ]
+    grep -qxF 'MAIL_TRANSPORT=stalwart' "${POOLED_OUT}/env/mail.env"
+}
+
+@test "render-env: OPS_BIND_IP and OPS_INGEST_BIND_IP default to 127.0.0.1" {
+    run bash "$PROOF" render-env
+    [ "$status" -eq 0 ]
+    grep -qxF 'OPS_BIND_IP=127.0.0.1' "${POOLED_OUT}/env/ops.env"
+    grep -qxF 'OPS_INGEST_BIND_IP=127.0.0.1' "${POOLED_OUT}/env/ops.env"
+}
+
+@test "render-env: PROOF_OPS_BIND_IP moves both ops binds; a non-IPv4 value is a FATAL" {
+    PROOF_OPS_BIND_IP=127.0.0.7 run bash "$PROOF" render-env
+    [ "$status" -eq 0 ]
+    grep -qxF 'OPS_BIND_IP=127.0.0.7' "${POOLED_OUT}/env/ops.env"
+    grep -qxF 'OPS_INGEST_BIND_IP=127.0.0.7' "${POOLED_OUT}/env/ops.env"
+    PROOF_OPS_BIND_IP='0.0.0.0; rm -rf /' run bash "$PROOF" render-env
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"FATAL: PROOF_OPS_BIND_IP"* ]]
+}
+
+@test "render-env: without POOLED_CUSTOMER the mail overlay publishes no 587 at all" {
+    PROOF_HOST_GATEWAY_IP=172.17.0.1 run bash "$PROOF" render-env
+    [ "$status" -eq 0 ]
+    ! grep -q ':587:587' "${POOLED_OUT}/mail.proof.yml"
+}
+
+@test "render-env: POOLED_CUSTOMER with PROOF_HOST_GATEWAY_IP publishes 587 on loopback AND on the gateway" {
+    skip_if_mail_api_port_taken
+    POOLED_CUSTOMER=1 PROOF_HOST_GATEWAY_IP=172.17.0.1 run bash "$PROOF" render-env
+    [ "$status" -eq 0 ]
+    grep -qF '"127.0.0.1:587:587"' "${POOLED_OUT}/mail.proof.yml"
+    grep -qF '"172.17.0.1:587:587"' "${POOLED_OUT}/mail.proof.yml"
+}
+
+@test "render-env: PROOF_HOST_GATEWAY_IP=127.0.0.1 adds no second 587 line; a non-IPv4 override is a FATAL" {
+    skip_if_mail_api_port_taken
+    POOLED_CUSTOMER=1 PROOF_HOST_GATEWAY_IP=127.0.0.1 run bash "$PROOF" render-env
+    [ "$status" -eq 0 ]
+    [ "$(grep -c ':587:587' "${POOLED_OUT}/mail.proof.yml")" -eq 1 ]
+    POOLED_CUSTOMER=1 PROOF_HOST_GATEWAY_IP='host.docker.internal' run bash "$PROOF" render-env
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"FATAL: host-gateway address"* ]]
+}
+
+@test "render-env: on Linux the gateway is detected from the default bridge" {
+    skip_if_mail_api_port_taken
+    linux_uname
+    export SHIM_BRIDGE_GW=172.17.0.1
+    PATH="$LINUX_PATH" POOLED_CUSTOMER=1 run bash "$PROOF" render-env
+    [ "$status" -eq 0 ]
+    grep -qF '"172.17.0.1:587:587"' "${POOLED_OUT}/mail.proof.yml"
+}
+
+@test "render-env: Docker Desktop adds no gateway line even under a Linux uname (127.0.0.1 works there)" {
+    skip_if_mail_api_port_taken
+    linux_uname
+    export SHIM_BRIDGE_GW=172.17.0.1 SHIM_OS="Docker Desktop"
+    PATH="$LINUX_PATH" POOLED_CUSTOMER=1 run bash "$PROOF" render-env
+    [ "$status" -eq 0 ]
+    [ "$(grep -c ':587:587' "${POOLED_OUT}/mail.proof.yml")" -eq 1 ]
+}
+
+@test "render-env: Linux with a bridge that cannot be inspected is a FATAL naming the override, never a silent skip" {
+    skip_if_mail_api_port_taken
+    linux_uname
+    PATH="$LINUX_PATH" POOLED_CUSTOMER=1 run bash "$PROOF" render-env
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"FATAL: cannot detect the docker0 gateway"*"shim: no such network"*"PROOF_HOST_GATEWAY_IP"* ]]   # docker's own stderr is in the message
+}
+
+@test "precreate_bind_dirs: the app's bind sources exist, owned by the invoking user, before any container" {
+    export SROOT="${BATS_TEST_TMPDIR}/sroot"
+    run bash -c 'set -euo pipefail; . "$1"; SROOT="$2"; precreate_bind_dirs' _ "$PROOF" "$SROOT"
+    [ "$status" -eq 0 ]
+    local d
+    for d in etc/secrets/control-panel etc/secrets/tenant-create data/module-exports etc/edge; do
+        [ -d "${SROOT}/${d}" ] || { echo "missing ${d}" >&2; return 1; }
+        [ -O "${SROOT}/${d}" ] || { echo "${d} not owned by the invoking user" >&2; return 1; }
+    done
+}
+
+@test "precreate_bind_dirs: every etc/secrets or data/ bind source docker-compose.app.yml names is pre-created" {
+    local want src
+    want="$(sed -n 's#.*GREMION_ROOT:-/opt/gremion}/\(etc/secrets/[a-z-]*\|data/[a-z-]*\)[:/].*#\1#p' "${REPO_ROOT}/docker-compose.app.yml" | tr -d '\r' | sort -u)"
+    [ -n "$want" ]
+    for src in $want; do
+        grep -qF "/${src}\"" "$PROOF" || { echo "prepare does not pre-create ${src}" >&2; return 1; }
+    done
+}
+
+@test "scratch_rm: removes a tree under .scratch/**/<STACK>/ and nothing else" {
+    local s="t040-shim-rm-$$"
+    IN_REPO_OUT="${REPO_ROOT}/.scratch/pooled-stack-proof/${s}"
+    local t="${IN_REPO_OUT}/root"
+    mkdir -p "$t/etc/secrets/tenant-create"; echo s > "$t/etc/secrets/tenant-create/secret"
+    run bash -c 'set -euo pipefail; . "$1"; STACK="$3"; scratch_rm "$2"; echo "RED=$RED"' _ "$PROOF" "$t" "$s"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"RED=0"* ]]
+    [ ! -e "$t" ]
+}
+
+@test "scratch_rm: a path outside .scratch is REFUSED -- left in place, RED, nothing deleted" {
+    local t="${BATS_TEST_TMPDIR}/t040-shim/root"
+    mkdir -p "$t"; echo keep > "$t/keep"
+    run bash -c 'set -uo pipefail; . "$1"; STACK=t040-shim; rc=0; scratch_rm "$2" || rc=$?; echo "rc=$rc RED=$RED"' _ "$PROOF" "$t"
+    [[ "$output" == *"refusing"*"outside"* ]]
+    [[ "$output" == *"rc=1 RED=1"* ]]
+    [ -f "$t/keep" ]
+}
+
+@test "scratch_rm: .. traversal, the empty string and a .scratch path without the STACK component are all refused" {
+    local s="t040-shim-tr-$$"
+    IN_REPO_OUT="${REPO_ROOT}/.scratch/pooled-stack-proof/${s}"
+    IN_REPO_OTHER="${REPO_ROOT}/.scratch/other-$$"
+    mkdir -p "$IN_REPO_OUT" "$IN_REPO_OTHER"
+    local trav="${IN_REPO_OUT}/../../../.."   # climbs out of .scratch
+    run bash -c 'set -uo pipefail; . "$1"; STACK="$2"
+        r=0; scratch_rm "$3" || r=$?; echo "trav=$r"
+        r=0; scratch_rm "" || r=$?; echo "empty=$r"; r=0; scratch_rm "$4" || r=$?; echo "nostack=$r"' \
+        _ "$PROOF" "$s" "$trav" "$IN_REPO_OTHER"
+    [[ "$output" == *"trav=1"* && "$output" == *"empty=1"* && "$output" == *"nostack=1"* ]]
+    [ -d "$IN_REPO_OTHER" ]
+    [ -d "$IN_REPO_OUT" ]
+}
+
+@test "scratch_rm: a symlink under .scratch pointing outside is refused and its target survives" {
+    local s="t040-shim-ln-$$"
+    IN_REPO_OUT="${REPO_ROOT}/.scratch/pooled-stack-proof/${s}"
+    mkdir -p "$IN_REPO_OUT"
+    local victim="${BATS_TEST_TMPDIR}/victim"; mkdir -p "$victim"; echo keep > "$victim/keep"
+    ln -s "$victim" "${IN_REPO_OUT}/link" 2>/dev/null && [ -L "${IN_REPO_OUT}/link" ] || skip "no real symlinks here"
+    run bash -c 'set -uo pipefail; . "$1"; STACK="$2"; r=0; scratch_rm "$3" || r=$?; echo "link=$r"' _ "$PROOF" "$s" "${IN_REPO_OUT}/link"
+    [[ "$output" == *"link=1"* ]]
+    [ -f "$victim/keep" ]
+}
+
+@test "scratch_rm: a path that does not exist is a no-op, not a failure" {
+    run bash -c 'set -uo pipefail; . "$1"; STACK=t040-shim; rc=0; scratch_rm "$2" || rc=$?; echo "rc=$rc RED=$RED"' _ "$PROOF" "${REPO_ROOT}/.scratch/pooled-stack-proof/t040-shim-never/root"
+    [[ "$output" == *"rc=0 RED=0"* ]]
+}
+
+@test "perm_hint: prints the run-as-root hint for a non-writable path as a non-root Linux user, nothing otherwise" {
+    linux_uname
+    printf '#!/usr/bin/env bash\necho 1000\n' > "${STUBS}/id"; chmod +x "${STUBS}/id"
+    local ro="${BATS_TEST_TMPDIR}/ro"; mkdir -p "$ro"; chmod 555 "$ro"
+    [ ! -w "$ro" ] || { chmod 755 "$ro"; skip "directory permissions are not enforced here"; }
+    PATH="$LINUX_PATH" run bash -c 'set -euo pipefail; . "$1"; perm_hint "$2/sub"' _ "$PROOF" "$ro"
+    chmod 755 "$ro"
+    [[ "$output" == *"runs as root, like production"* && "$output" == *"sudo -E"* ]]
+    PATH="$LINUX_PATH" run bash -c 'set -euo pipefail; . "$1"; perm_hint "$2"' _ "$PROOF" "$BATS_TEST_TMPDIR"      # writable: no hint
+    [ -z "$output" ]
+    printf '#!/usr/bin/env bash\necho 0\n' > "${STUBS}/id"                  # root: no hint
+    PATH="$LINUX_PATH" run bash -c 'set -euo pipefail; . "$1"; perm_hint "$2/sub"' _ "$PROOF" "$ro"
+    [ -z "$output" ]
+}
+
+@test "aux-up: a failed compose pull is RED and neither project is started" {
+    export POOLED_AUX_SETTLE=0 SHIM_PULL=fail
+    run bash "$PROOF" aux-up
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"FAIL ops: compose pull failed"* ]]
+    [[ "$output" == *"shim-pull-error"* ]]
+    ! grep -qE 'compose .* up( |$)' "${SHIM_DIR}/calls.log"
+}
+
+@test "aux-up: pulls the ops and the mail project BEFORE bringing either up (positive control for the pull guard)" {
+    export POOLED_AUX_SETTLE=0
+    run bash "$PROOF" aux-up
+    [ "$status" -eq 0 ]
+    local log; log="$(grep -E 'compose .* (pull|up)( |$)' "${SHIM_DIR}/calls.log" | sed -E 's#.*/(ops|mail)\.env (pull|up).*#\1 \2#' | tr -d '\r')"
+    [ "$log" = "$(printf 'ops pull\nmail pull\nops up\nmail up')" ] || { echo "order was: $log" >&2; return 1; }
+}
+
+
+# ── teardown (house review of r33g-proofsh) ──────────────────────────────────
+
+@test "teardown: a supported POOLED_OUT outside .scratch is left in place with an info line, not RED" {
+    mkdir -p "${POOLED_OUT}/root/etc"; echo keep > "${POOLED_OUT}/root/etc/keep"
+    run bash "$PROOF" teardown
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"leaving ${POOLED_OUT}/root in place"* ]]
+    [[ "$output" != *"FAIL"* ]]
+    [[ "$output" == *"[pooled-proof] GREEN"* ]]
+    grep -q 'phases \[teardown\] RED=0' "${POOLED_OUT}/ledger/run.log"
+    [ -f "${POOLED_OUT}/root/etc/keep" ]
+}
+
+@test "teardown: the customer proof's root/ and secrets/ go (for t043-<sha8>, PROOF_STACK and the pooled STACK), its ledger/ stays" {
+    local sfx="shim-cp-$$" c
+    export POOLED_STACK="t040-${sfx}" SHIM_STACK="t040-${sfx}"
+    export POOLED_OUT="${REPO_ROOT}/.scratch/pooled-stack-proof/t040-${sfx}"
+    IN_REPO_OUT="$POOLED_OUT"
+    CP_DIR="${REPO_ROOT}/.scratch/customer-provision-proof"
+    CP_CLEAN=("t043-${sfx}" "t040-${sfx}" "t043-custom-${sfx}")
+    mkdir -p "${POOLED_OUT}/ledger" "${POOLED_OUT}/root/etc/secrets/tenant-create"
+    for c in "${CP_CLEAN[@]}"; do
+        mkdir -p "${CP_DIR}/${c}/root/etc" "${CP_DIR}/${c}/secrets" "${CP_DIR}/${c}/ledger"
+        echo s > "${CP_DIR}/${c}/secrets/operator-totp"; echo e > "${CP_DIR}/${c}/ledger/evidence"
+    done
+    PROOF_STACK="t043-custom-${sfx}" run bash "$PROOF" teardown
+    [ "$status" -eq 0 ]
+    for c in "${CP_CLEAN[@]}"; do
+        [ ! -e "${CP_DIR}/${c}/root" ] || { echo "${c}/root survived" >&2; return 1; }
+        [ ! -e "${CP_DIR}/${c}/secrets" ] || { echo "${c}/secrets survived" >&2; return 1; }
+        [ -f "${CP_DIR}/${c}/ledger/evidence" ] || { echo "${c}/ledger was deleted" >&2; return 1; }
+    done
+    [ ! -e "${POOLED_OUT}/root" ]
+}
+
+# 'all' runs teardown as its last phase BEFORE the verdict (house review MEDIUM 3):
+# from the EXIT trap alone it ran after "GREEN" was printed and run.log written,
+# so a teardown failure was invisible and the exit stayed 0. ALL_PHASES is
+# emptied so only the teardown (and the verdict) are exercised.
+all_in_repo() {
+    local sfx="shim-all-$$"
+    export POOLED_STACK="t040-${sfx}" SHIM_STACK="t040-${sfx}"
+    export POOLED_OUT="${REPO_ROOT}/.scratch/pooled-stack-proof/t040-${sfx}"
+    IN_REPO_OUT="$POOLED_OUT"
+    mkdir -p "${POOLED_OUT}/ledger" "${POOLED_OUT}/root/etc"
+}
+
+@test "all: positive control -- teardown runs once, before the verdict, and the run is GREEN" {
+    all_in_repo
+    run bash -c 'set -euo pipefail; . "$1"; ALL_PHASES=(); main all' _ "$PROOF"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"[pooled-proof] GREEN"* ]]
+    [ "$(grep -c 'teardown: no container, network or volume' <<< "$output")" -eq 1 ]
+    grep -q 'phases \[all\] RED=0' "${POOLED_OUT}/ledger/run.log"
+    [ ! -e "${POOLED_OUT}/root" ]
+}
+
+@test "all: a scratch_rm that fails in teardown makes the run RED (verdict, run.log and exit), teardown not repeated by the trap" {
+    all_in_repo
+    run bash -c 'set -euo pipefail; . "$1"; ALL_PHASES=(); scratch_rm() { bad "forced scratch_rm failure"; return 1; }; main all' _ "$PROOF"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"FAIL forced scratch_rm failure"* ]]
+    [[ "$output" == *"[pooled-proof] RED"* ]]
+    [[ "$output" != *"[pooled-proof] GREEN"* ]]
+    grep -q 'phases \[all\] RED=1' "${POOLED_OUT}/ledger/run.log"
+    [ "$(grep -c 'teardown: no container, network or volume' <<< "$output")" -eq 1 ]
+}
+
+@test "all: a run that aborts before its teardown phase is still torn down once, by the EXIT trap" {
+    all_in_repo
+    run bash -c 'set -euo pipefail; . "$1"; ALL_PHASES=("no-such-phase"); main all' _ "$PROOF"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"FATAL: unknown phase 'no-such-phase'"* ]]
+    [ "$(grep -c 'teardown: no container, network or volume' <<< "$output")" -eq 1 ]
+    [ ! -e "${POOLED_OUT}/root" ]
+}
+
 teardown() {
     [[ -z "${IN_REPO_OUT:-}" ]] || rm -rf "$IN_REPO_OUT"
+    [[ -z "${IN_REPO_OTHER:-}" ]] || rm -rf "$IN_REPO_OTHER"
+    # only the directories this test made under the shared customer-provision-proof dir
+    local c
+    for c in ${CP_CLEAN[@]+"${CP_CLEAN[@]}"}; do [[ -z "${CP_DIR:-}" || -z "$c" ]] || rm -rf "${CP_DIR}/${c}"; done
 }
