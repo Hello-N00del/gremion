@@ -10,6 +10,15 @@ const A = '11111111-1111-4111-8111-111111111111'
 const B = '22222222-2222-4222-8222-222222222222'
 const saved = { ...process.env }
 
+/** Case tables for the two mount-table cases below, which are host-exclusive
+ *  twins: it.runIf/it.skipIf would leave the inapplicable one behind as a
+ *  standing SKIP on every host, which the verify gate budgets per file
+ *  (allowed-skips.json) and which marks no proof as missing, since the twin
+ *  ran. `it.each` over an empty table registers nothing, so nothing is skipped. */
+const hasMountTable = existsSync('/proc/self/mountinfo')
+const withMountTable = hasMountTable ? [null] : []
+const withoutMountTable = hasMountTable ? [] : [null]
+
 afterEach(() => {
   resetStorageForTest()
   for (const k of ['STORAGE_BACKEND', 'RECEIPT_STORAGE_DIR', 'VITEST']) {
@@ -49,9 +58,9 @@ describe('storage config adapter', () => {
 
   // Host-dependent behaviour: whether /proc/self/mountinfo exists decides
   // which of the two outcomes is correct, so it is expressed as two
-  // runIf/skipIf-guarded tests (vitest idiom) rather than an in-test
-  // if/else around the expect calls.
-  it.runIf(existsSync('/proc/self/mountinfo'))(
+  // host-guarded tests (withMountTable/withoutMountTable) rather than an in-test if/else around the
+  // expect calls.
+  it.each(withMountTable)(
     'STORAGE_BACKEND=local reads RECEIPT_STORAGE_DIR and refuses it when it is not a mount point',
     () => {
       process.env.STORAGE_BACKEND = 'local'
@@ -61,7 +70,7 @@ describe('storage config adapter', () => {
     },
   )
 
-  it.skipIf(existsSync('/proc/self/mountinfo'))(
+  it.each(withoutMountTable)(
     'STORAGE_BACKEND=local with no mount table on this host: the check is skipped and says so',
     () => {
       process.env.STORAGE_BACKEND = 'local'
