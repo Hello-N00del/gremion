@@ -71,7 +71,7 @@ export function authzHandlers(deps: Deps): Record<'decideAuthz' | 'listAuthzGran
       return await fn()
     } catch (err) {
       if (err instanceof GrantError) return problem(reply, err.code, err.status, err.message)
-      if (err instanceof TypeError && /^authz: /.test(err.message)) return problem(reply, 'bad-request', 400, err.message)
+      if (err instanceof TypeError && err.message.startsWith('authz: ')) return problem(reply, 'bad-request', 400, err.message)
       return unavailable(reply, err)
     }
   }

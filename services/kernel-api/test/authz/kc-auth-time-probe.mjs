@@ -51,7 +51,9 @@ async function transport(method, path, body) {
     if (!r.ok) throw new Error(`admin token: ${r.status}`)
     adminTok = (await r.json()).access_token
   }
-  const r = await fetch(`${KC}${path}`, { method, headers: { authorization: `Bearer ${adminTok}`, 'content-type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) })
+  const init = { method, headers: { authorization: `Bearer ${adminTok}`, 'content-type': 'application/json' } }
+  if (body !== undefined) init.body = JSON.stringify(body)
+  const r = await fetch(`${KC}${path}`, init)
   if (!r.ok) throw new Error(`Keycloak Admin API error: ${r.status} on ${method} ${path}: ${await r.text()}`)
   if (r.status === 204 || r.status === 201) return undefined
   const t = await r.text()

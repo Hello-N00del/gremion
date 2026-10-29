@@ -57,7 +57,7 @@ describe('authz-client boundary', () => {
   })
   it('depends on no other Gremion package (HTTP only)', () => {
     const pkg = JSON.parse(readFileSync(join(PKG, 'package.json'), 'utf8')) as Record<string, Record<string, string> | undefined>
-    const deps = Object.keys({ ...(pkg.dependencies ?? {}), ...(pkg.peerDependencies ?? {}) })
+    const deps = Object.keys({ ...pkg.dependencies, ...pkg.peerDependencies })
     expect(deps.filter((d) => d.startsWith('@gremion/'))).toEqual([])
     for (const f of walk(join(PKG, 'src'))) expect(readFileSync(f, 'utf8')).not.toMatch(/from ['"]@gremion\//)
   })
