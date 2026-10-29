@@ -16,7 +16,7 @@ const SERVICE = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 const REPO = resolve(SERVICE, '../..')
 const STATE_FILE = join(SERVICE, '.t081-state.json')
 export const sha8 = createHash('sha256').update(realpathSync(REPO)).digest('hex').slice(0, 8)
-export const names = { pg: `t081-${sha8}-pg` }
+export const names = { pg: `${process.env.T081_NAME_PREFIX ?? 't081'}-${sha8}-pg` }
 
 function sh(cmd, args, { allowFail = false } = {}) {
   const r = spawnSync(cmd, args, { encoding: 'utf8', windowsHide: true, env: { ...process.env, MSYS_NO_PATHCONV: '1' } })
