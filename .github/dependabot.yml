@@ -60,6 +60,14 @@ updates:
         # their changelogs can be reviewed case-by-case. See closed #43
         # for why a single dev-deps mega-bundle is unmaintainable.
         update-types: [patch, minor]
+    ignore:
+      # TypeScript 7 (native compiler) is not adoptable yet; see closed #12.
+      # svelte-check 4.7 needs TS 6 installed beside TS 7 plus --tsgo, and
+      # TS 7 ships no classic JS compiler API (packages/tenant-store's
+      # source-scan test uses ts.createSourceFile). Remove this ignore when
+      # the TS 7 migration is planned.
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major"]
 
   # Docker images — every Dockerfile in docker/, modules/ and the gremion-ui
   # one, plus both bats runners.
