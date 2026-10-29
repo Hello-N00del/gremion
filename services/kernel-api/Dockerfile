@@ -40,6 +40,12 @@ RUN npm install -g corepack && corepack enable pnpm
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY services/kernel-api/package.json ./services/kernel-api/
 COPY packages/db/package.json ./packages/db/
+# TASK-080-a: the identity event relay (events) and the NATS seed store / connect options (nats-auth, ports).
+COPY packages/events/package.json ./packages/events/
+COPY packages/nats-auth/package.json ./packages/nats-auth/
+COPY packages/ports/package.json ./packages/ports/
+# tenant-store's devDependency: `pnpm deploy --legacy` resolves it although nothing bundles it.
+COPY packages/retention/package.json ./packages/retention/
 COPY packages/tenant-store/package.json ./packages/tenant-store/
 # tenant-store depends on @gremion/retention (TASK-033-a): pnpm resolves it from the workspace,
 # so `pnpm deploy` needs its manifest here and its source below.
@@ -51,6 +57,10 @@ COPY packages/generated-clients/package.json ./packages/generated-clients/
 RUN pnpm install --frozen-lockfile --filter @gremion/kernel-api...
 
 COPY packages/db ./packages/db/
+COPY packages/events ./packages/events/
+COPY packages/nats-auth ./packages/nats-auth/
+COPY packages/ports ./packages/ports/
+COPY packages/retention ./packages/retention/
 COPY packages/tenant-store ./packages/tenant-store/
 COPY packages/retention ./packages/retention/
 COPY packages/tenancy-core ./packages/tenancy-core/

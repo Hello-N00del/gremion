@@ -49,6 +49,13 @@
       "file": "services/kernel-api/openapi/kernel-core.json",
       "status": "active",
       "owner": "idt"
+    },
+    {
+      "name": "kernel-api-idt-events",
+      "type": "asyncapi",
+      "file": "services/kernel-api/asyncapi/idt.json",
+      "status": "active",
+      "owner": "idt"
     }
   ]
 }

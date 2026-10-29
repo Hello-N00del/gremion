@@ -171,10 +171,11 @@
         "services/kernel-api/migrations/core"
       ],
       "manifestDirs": [
-        "services/kernel-api/migrations/core"
+        "services/kernel-api/migrations/core",
+        "services/kernel-api/migrations/bodies"
       ],
       "padWidth": 4,
-      "highWater": 1,
+      "highWater": 3,
       "legacyFloor": 0,
       "legacy": []
     },

@@ -10,7 +10,7 @@
   },
   "scripts": {
     "start": "node dist/index.js",
-    "build": "esbuild src/main.ts --bundle --platform=node --format=esm --target=node22 --outfile=dist/index.js --external:fastify --external:@fastify/multipart --external:ajv --external:ajv-formats --external:jose --external:postgres",
+    "build": "node esbuild.config.mjs",
     "test": "vitest run",
     "test:integration": "node test/harness/stack.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.json"
@@ -18,9 +18,14 @@
   "dependencies": {
     "@fastify/multipart": "10.1.2",
     "@gremion/db": "workspace:*",
+    "@gremion/events": "workspace:*",
     "@gremion/fastify-service-template": "workspace:*",
+    "@gremion/nats-auth": "workspace:*",
+    "@gremion/ports": "workspace:*",
     "@gremion/tenancy-core": "workspace:*",
     "@gremion/tenant-store": "workspace:*",
+    "@nats-io/jetstream": "^3.4.0",
+    "@nats-io/transport-node": "^3.4.0",
     "ajv": "8.20.0",
     "ajv-formats": "3.0.1",
     "fastify": "5.12.6",

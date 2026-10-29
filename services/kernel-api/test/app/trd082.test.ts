@@ -25,6 +25,7 @@ describe('TRD-082 query scoping (TDD 11)', () => {
         const id = HOSTS[q.params[0] as string]
         return id ? [ROWS[id]] : []
       }
+      if (q.text.includes("status = 'active' ORDER BY t.id")) return Object.values(ROWS).filter((r) => r.status === 'active')
       if (q.text.includes('ORDER BY t.id')) return Object.values(ROWS).map((r) => ({ id: r.id, status: r.status }))
       return ROWS[q.params[0] as string] ? [ROWS[q.params[0] as string]] : []
     })
@@ -40,6 +41,9 @@ describe('TRD-082 query scoping (TDD 11)', () => {
     const caller = { host: 'kernel-api:3000', 'x-gremion-module': 'calendar', 'x-internal-auth': 'calendar-module-secret-0123456789', 'x-tenant-id': A_ID }
     expect((await app.inject({ url: '/api/v1/tenancy/self', headers: caller })).statusCode).toBe(200)
     await app.close()
+
+    // the relay supervisor: iterates the active customers (exemption 4, TASK-080-a)
+    expect((await controlTenancyStore(control).listActive()).length).toBeGreaterThan(0)
 
     // the migrate job: iterates every customer (exemption 3), then reads each by id
     const result = await migrateAllCustomers({
@@ -69,6 +73,7 @@ describe('TRD-082 query scoping (TDD 11)', () => {
       { text: 'SELECT m.module_key FROM plt.module m', params: [] },
       { text: 'SELECT t.id::text AS id, t.slug, t.status, t.realm_name, t.issuer, t.kc_internal, t.db_conn_ref FROM public.tenant_domain d JOIN public.tenant t ON t.id = d.tenant_id WHERE d.host = $1', params: [A_HOST] },
       { text: 'SELECT t.id::text AS id, t.status FROM public.tenant t ORDER BY t.id', params: [] },
+      { text: "SELECT t.id::text AS id, t.slug, t.status, t.realm_name, t.issuer, t.kc_internal, t.db_conn_ref FROM public.tenant t WHERE t.status = 'active' ORDER BY t.id", params: [] },
     ]
     expect(scopeProblems(rec, [A_ID])).toEqual(['unscoped query (no customer id among its parameters): SELECT m.module_key FROM plt.module m'])
   })
@@ -82,7 +87,7 @@ describe('TRD-082 query scoping (TDD 11)', () => {
     expect(scopeProblems(rec, [A_ID], [])).toEqual([expect.stringMatching(/^unscoped query/)])
   })
 
-  it('exemption 2 (077-a catalogue upserts) is void: the pinned list holds exactly 1 and 3 (R10)', () => {
-    expect(PINNED_EXEMPTIONS.map((e) => e.id.split(':')[0])).toEqual(['1', '3'])
+  it('exemption 2 (077-a catalogue upserts) is void: the pinned list holds exactly 1, 3 and 4 (R10; 4 = the relay iteration, TASK-080-a)', () => {
+    expect(PINNED_EXEMPTIONS.map((e) => e.id.split(':')[0])).toEqual(['1', '3', '4'])
   })
 })
