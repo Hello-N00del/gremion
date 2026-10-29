@@ -26,6 +26,12 @@ name: Release images
 # the pins job check out that sha, never the ref. Each leg writes the sha it
 # built into its pin record and the pins job refuses unless they all agree.
 #
+# THE SHARED BUILD CACHE IS WRITTEN FROM PROTECTED COMMITS ONLY. A dispatch
+# can name any ref; a cache that any ref may write is a cache a throwaway
+# branch can poison for the next release. resolve-ref marks the commit as
+# cache-writing only when it is the tip of main or the commit of a v* / rc-v*
+# tag; every other commit reads the cache and writes none.
+#
 # No workflow expression is expanded inside a `run:` body: each one is bound
 # to an env key, so a crafted dispatch input can never become shell.
 # test/host/deploy-workflow.bats enforces that mechanically, and
@@ -66,13 +72,16 @@ jobs:
       contents: read
     outputs:
       sha: ${{ steps.resolve.outputs.sha }}
+      cache_write: ${{ steps.resolve.outputs.cache_write }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           ref: ${{ inputs.release_ref || github.sha }}
           persist-credentials: false
 
-      # The ref is read here and nowhere else.
+      # The ref is read here and nowhere else. ls-remote asks origin which
+      # commits main and the release tags are at (an annotated tag also lists
+      # its peeled commit as <tag>^{}), so no history is fetched.
       - name: Resolve the ref to one commit
         id: resolve
         run: |
@@ -84,8 +93,19 @@ jobs:
             exit 1
           fi
 
-          echo "release-images: building ${sha}"
-          echo "sha=${sha}" >> "$GITHUB_OUTPUT"
+          refs="$(git ls-remote origin refs/heads/main 'refs/tags/v*' 'refs/tags/rc-v*')"
+          cache_write=false
+          if printf '%s\n' "$refs" | awk -v sha="$sha" '
+            $2 == "refs/heads/main" || $2 ~ /^refs\/tags\/(rc-)?v/ { if ($1 == sha) found = 1 }
+            END { exit !found }'; then
+            cache_write=true
+          fi
+
+          echo "release-images: building ${sha} (shared build cache written: ${cache_write})"
+          {
+            echo "sha=${sha}"
+            echo "cache_write=${cache_write}"
+          } >> "$GITHUB_OUTPUT"
 
   build-and-push:
     name: Build and push ${{ matrix.name }}
@@ -153,6 +173,7 @@ jobs:
           CONTEXT: ${{ matrix.context }}
           TARGET: ${{ matrix.target }}
           NAME: ${{ matrix.name }}
+          CACHE_WRITE: ${{ needs.resolve-ref.outputs.cache_write }}
         run: |
           set -euo pipefail
 
@@ -161,16 +182,20 @@ jobs:
           if [ -n "$TARGET" ]; then
             args+=(--target "$TARGET")
           fi
+          # Every commit reads the shared cache; only a protected one (main's
+          # tip, a release tag's commit: resolve-ref decides) writes it.
+          cache=(--cache-from "type=registry,ref=${IMAGE}:buildcache")
+          if [ "$CACHE_WRITE" = true ]; then
+            cache+=(--cache-to "type=registry,ref=${IMAGE}:buildcache,mode=max")
+          fi
 
           # --provenance=false / --sbom=false: buildx would otherwise push an
           # image index carrying unsigned in-toto attestations, and the digest
           # below would name that index. The operator signs and attests the
           # image itself with their own key (sign-release.sh), and the host
           # verifies that signature against one plain manifest digest.
-          docker buildx build "${args[@]}" \
+          docker buildx build "${args[@]}" "${cache[@]}" \
             --provenance=false --sbom=false \
-            --cache-from "type=registry,ref=${IMAGE}:buildcache" \
-            --cache-to "type=registry,ref=${IMAGE}:buildcache,mode=max" \
             --metadata-file "$meta" \
             --push \
             "$CONTEXT"

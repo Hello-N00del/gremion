@@ -184,7 +184,7 @@ step_body() {
     [ "$total" -ge 15 ]
     while IFS= read -r line; do
         printf '%s' "$line" \
-            | grep -qE '^[[:space:]]*(- )?(group|name|ref|path|pattern|sha|REGISTRY_USER|REGISTRY_TOKEN|IMAGE|SERVICES|DOCKERFILE|CONTEXT|TARGET|NAME|RELEASE_SHA|EXPECTED_SHA):[[:space:]]' \
+            | grep -qE '^[[:space:]]*(- )?(group|name|ref|path|pattern|sha|cache_write|REGISTRY_USER|REGISTRY_TOKEN|IMAGE|SERVICES|DOCKERFILE|CONTEXT|TARGET|NAME|RELEASE_SHA|EXPECTED_SHA|CACHE_WRITE):[[:space:]]' \
             || { echo "unbound expression: ${line}" >&2; bad=1; }
     done < <(grep -F '${{' "$WORKFLOW")
     [ "$bad" -eq 0 ]
@@ -243,8 +243,9 @@ step_body() {
     }
 }
 
-# A throwaway origin with commits on main (M1, M2), on a feature branch (F1)
-# and under a release tag (T1, T2); the shas land in M1 M2 F1 T1 T2.
+# A throwaway origin with: main (tip M2, an older commit M1), a feature branch
+# ahead of main (F1), an annotated v1.0.0 tag and a lightweight rc-v2.0.0 tag on
+# two commits that are on no branch (T1, T2). The shas land in M1 M2 F1 T1 T2.
 make_ref_origin() {
     REF_ORIGIN="${BATS_TEST_TMPDIR}/ref-origin.git"
     local w="${BATS_TEST_TMPDIR}/ref-seed"
@@ -289,15 +290,29 @@ resolve_ref_at() {
     (cd "$clone" && bash "${BATS_TEST_TMPDIR}/resolve.sh" > /dev/null)
 }
 
-@test "release-images.yml resolve-ref pins the ref to one 40-hex commit" {
+@test "release-images.yml resolve-ref pins the ref to one 40-hex commit and lets only main's tip or a release tag write the build cache" {
     make_ref_origin
     # The body really was extracted: a vacuous extractor would "pass" below.
-    [ "$(step_body "$WORKFLOW" 'Resolve the ref to one commit' | wc -l)" -ge 5 ]
-    local sha
-    for sha in "$M2" "$M1" "$F1" "$T1"; do
-        resolve_ref_at "$sha"
-        grep -qx "sha=${sha}" "$GITHUB_OUTPUT"
-    done
+    [ "$(step_body "$WORKFLOW" 'Resolve the ref to one commit' | wc -l)" -ge 10 ]
+
+    resolve_ref_at "$M2"
+    grep -qx "sha=${M2}" "$GITHUB_OUTPUT"
+    grep -qx 'cache_write=true' "$GITHUB_OUTPUT"
+
+    # an annotated tag: ls-remote lists the tag object, the commit is the peeled line
+    resolve_ref_at "$T1"
+    grep -qx "sha=${T1}" "$GITHUB_OUTPUT"
+    grep -qx 'cache_write=true' "$GITHUB_OUTPUT"
+
+    resolve_ref_at "$T2"
+    grep -qx 'cache_write=true' "$GITHUB_OUTPUT"
+
+    # a feature branch's commit, and a commit main has since moved past, read the cache only
+    resolve_ref_at "$F1"
+    grep -qx "sha=${F1}" "$GITHUB_OUTPUT"
+    grep -qx 'cache_write=false' "$GITHUB_OUTPUT"
+    resolve_ref_at "$M1"
+    grep -qx 'cache_write=false' "$GITHUB_OUTPUT"
 }
 
 @test "release-images.yml resolve-ref refuses a checkout that is not a commit" {
@@ -314,6 +329,16 @@ resolve_ref_at() {
     run bash -c "cd '$clone' && bash '${BATS_TEST_TMPDIR}/resolve.sh'"
     [ "$status" -ne 0 ]
     [ ! -s "$GITHUB_OUTPUT" ]
+}
+
+@test "release-images.yml only the cache write is conditional, and only on CACHE_WRITE" {
+    # Every commit reads the shared cache.
+    assert_present '--cache-from "type=registry,ref=\$\{IMAGE\}:buildcache"' "$WORKFLOW" 'no registry cache import'
+    # The export sits directly under `if [ "$CACHE_WRITE" = true ]`, and nowhere else.
+    [ "$(grep -c -- '--cache-to' "$WORKFLOW")" -eq 1 ]
+    run grep -B1 -- '--cache-to' "$WORKFLOW"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *'if [ "$CACHE_WRITE" = true ]; then'* ]]
 }
 
 @test "release-images.yml the pins job refuses a pin record that names another commit, or none" {

@@ -108,8 +108,9 @@ export function matrixProblems({ releaseYml, ciYml, composeTexts, wanted }) {
 }
 
 /**
- * Every way the release can end up built from more than one commit, as strings
- * (empty = sound). `release_ref` may be a branch and a branch moves: it is resolved to a
+ * Every way the release can end up built from more than one commit, or its
+ * shared build cache written from an unprotected one, as strings (empty =
+ * sound). `release_ref` may be a branch and a branch moves: it is resolved to a
  * sha ONCE, by resolve-ref, and every other job builds that sha.
  */
 export function refProblems(releaseYml) {
@@ -120,6 +121,7 @@ export function refProblems(releaseYml) {
   if (!resolve) return ['release-images.yml: no resolve-ref job']
   const SHA = '${{ needs.resolve-ref.outputs.sha }}'
   if (resolve.outputs?.sha !== '${{ steps.resolve.outputs.sha }}') problems.push('resolve-ref does not output the resolved sha')
+  if (resolve.outputs?.cache_write !== '${{ steps.resolve.outputs.cache_write }}') problems.push('resolve-ref does not output cache_write')
   const checkoutsOf = (job) => (job.steps ?? []).filter((st) => String(st.uses ?? '').startsWith('actions/checkout@'))
   if (checkoutsOf(resolve).length !== 1) problems.push('resolve-ref must check out exactly once, to read the ref')
   for (const [name, job] of Object.entries(jobs)) {
@@ -133,6 +135,18 @@ export function refProblems(releaseYml) {
     if (JSON.stringify(job).includes('release_ref')) problems.push(`${name}: reads release_ref itself instead of the resolved sha`)
   }
 
+  // the shared build cache: every build reads it, and only CACHE_WRITE=true exports to it
+  const build = jobs['build-and-push']
+  const buildStep = (build?.steps ?? []).find((st) => /docker buildx build/.test(st.run ?? ''))
+  if (!buildStep) return [...problems, 'build-and-push: no docker buildx build step']
+  if (buildStep.env?.CACHE_WRITE !== '${{ needs.resolve-ref.outputs.cache_write }}') problems.push('the build step does not bind CACHE_WRITE to resolve-ref.outputs.cache_write')
+  const lines = buildStep.run.split('\n')
+  const exports = lines.map((l, i) => [l, i]).filter(([l]) => l.includes('--cache-to'))
+  if (exports.length === 0) problems.push('the build step never exports the build cache')
+  for (const [, i] of exports) {
+    if (!/^\s*if \[ "\$CACHE_WRITE" = true \]; then$/.test(lines[i - 1] ?? '')) problems.push(`--cache-to is not directly under 'if [ "$CACHE_WRITE" = true ]' (line ${i + 1} of the build step)`)
+  }
+  if (!buildStep.run.includes('--cache-from')) problems.push('the build step does not read the build cache')
   return problems
 }
 
@@ -193,11 +207,11 @@ test('release-images.yml: an empty matrix or an empty docker-build matrix is a f
 })
 
 
-test('release-images.yml: one job resolves the ref and every other job builds that sha', () => {
+test('release-images.yml: one job resolves the ref and every other job builds that sha; the shared cache is written from protected commits only', () => {
   assert.deepEqual(refProblems(real().releaseYml), [])
 })
 
-test('release-images.yml: a job that reads release_ref itself, or a pins job that skips resolve-ref, is caught', () => {
+test('release-images.yml: a job that reads release_ref itself, or a cache export outside CACHE_WRITE, is caught', () => {
   const { releaseYml } = real()
   const resolved = '${{ needs.resolve-ref.outputs.sha }}'
   assert.ok(releaseYml.includes(resolved), 'the sound file names the resolved sha')
@@ -211,6 +225,10 @@ test('release-images.yml: a job that reads release_ref itself, or a pins job tha
   const noNeed = releaseYml.replace('needs: [resolve-ref, build-and-push]', 'needs: build-and-push')
   assert.notEqual(noNeed, releaseYml, 'the mutation must change the file')
   assert.match(refProblems(noNeed).join('\n'), /emit-release-pins: does not need resolve-ref/)
+  // the cache export loses its guard
+  const unguarded = releaseYml.replace('if [ "$CACHE_WRITE" = true ]; then\n            cache+=', 'if true; then\n            cache+=')
+  assert.notEqual(unguarded, releaseYml, 'the mutation must change the file')
+  assert.match(refProblems(unguarded).join('\n'), /--cache-to is not directly under/)
   // no resolve-ref job at all
   assert.match(refProblems('jobs: {}\n').join('\n'), /no resolve-ref job/)
 })
