@@ -44,19 +44,26 @@ export const CONSTRAINT = 'Label(`org.gremion.stack`,`@STACK@`)'
 const SKIP_DIRS = new Set(['node_modules', '.git', 'dist', '.svelte-kit', 'coverage', 'k8s', '.worktrees'])
 const COMPOSE_NAME_RE = /(^|\/)docker-compose[^/]*\.ya?ml$/
 
-/** Every YAML file under <root> that can hold a compose composition, as repo-relative posix paths. */
-export function findComposeFiles(root) {
+const byPath = (a, b) => (a < b ? -1 : a > b ? 1 : 0)
+
+/** Every file under <root> (outside the skipped dirs) accepted by <keep>, as repo-relative posix paths. */
+function walkFiles(root, keep) {
   const out = []
   const walk = (rel) => {
     for (const e of readdirSync(join(root, rel), { withFileTypes: true })) {
       const p = rel ? posix.join(rel, e.name) : e.name
       if (e.isDirectory()) {
         if (!SKIP_DIRS.has(e.name)) walk(p)
-      } else if (COMPOSE_NAME_RE.test(p) || (/\.ya?ml$/.test(p) && /^compose\//.test(p))) out.push(p)
+      } else if (keep(p)) out.push(p)
     }
   }
   walk('')
-  return out.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))
+  return out.sort(byPath)
+}
+
+/** Every YAML file under <root> that can hold a compose composition, as repo-relative posix paths. */
+export function findComposeFiles(root) {
+  return walkFiles(root, (p) => COMPOSE_NAME_RE.test(p) || (/\.ya?ml$/.test(p) && /^compose\//.test(p)))
 }
 
 /** Labels of one service as a plain {key: string} map, from the list or the map form. */
@@ -139,8 +146,13 @@ export function checkStackScope(root = KERNEL_ROOT) {
   const yml = join(root, 'docker/traefik/traefik.yml')
   if (!existsSync(yml)) problems.push('docker/traefik/traefik.yml is missing')
   else {
-    const c = dockerConstraint(readFileSync(yml, 'utf8'))
-    if (c !== CONSTRAINT)
+    let c
+    try {
+      c = dockerConstraint(readFileSync(yml, 'utf8'))
+    } catch (e) {
+      problems.push(`docker/traefik/traefik.yml: not parseable YAML (${e.message.split('\n')[0]})`)
+    }
+    if (c !== undefined && c !== CONSTRAINT)
       problems.push(
         `docker/traefik/traefik.yml: providers.docker.constraints is ${c ? JSON.stringify(c) : 'absent'}, want ${JSON.stringify(CONSTRAINT)} -- ` +
           `without it this Traefik loads the routers and middlewares of every stack on the Docker daemon`,
@@ -148,13 +160,24 @@ export function checkStackScope(root = KERNEL_ROOT) {
   }
 
   const stateFile = join(root, 'docker-compose.yml')
-  if (existsSync(stateFile)) {
-    const svc = parse(readFileSync(stateFile, 'utf8'), { merge: true, logLevel: 'error' })?.services?.traefik
-    if (!svc) problems.push('docker-compose.yml: no traefik service')
-    else {
+  if (!existsSync(stateFile)) problems.push('docker-compose.yml is missing -- the traefik service that renders @STACK@ cannot be checked')
+  else {
+    let svc
+    let parsed = true
+    try {
+      svc = parse(readFileSync(stateFile, 'utf8'), { merge: true, logLevel: 'error' })?.services?.traefik
+    } catch (e) {
+      parsed = false
+      problems.push(`docker-compose.yml: not parseable YAML (${e.message.split('\n')[0]})`)
+    }
+    if (parsed && !svc) problems.push('docker-compose.yml: no traefik service')
+    else if (parsed) {
       const cmd = [].concat(svc.command ?? []).join(' ')
       const env = svc.environment ?? {}
-      const stackEnv = Array.isArray(env) ? env.find((e) => String(e).startsWith('STACK=')) : env.STACK
+      // `STACK=x`, the bare passthrough `STACK` (list form) and `STACK:` with a null value (map form) all hand the variable on.
+      const stackEnv = Array.isArray(env)
+        ? env.some((e) => String(e) === 'STACK' || String(e).startsWith('STACK='))
+        : Object.hasOwn(env, 'STACK')
       if (!stackEnv) problems.push('docker-compose.yml: the traefik service does not pass STACK into its environment (the @STACK@ render has no source)')
       if (!cmd.includes(`s|${STACK_MARKER}|`)) problems.push(`docker-compose.yml: the traefik command has no sed expression for ${STACK_MARKER}`)
     }

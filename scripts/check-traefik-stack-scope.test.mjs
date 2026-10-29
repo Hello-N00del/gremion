@@ -141,6 +141,50 @@ test('refuses to pass over zero compose files or zero routed services', () => {
   }
 })
 
+test('an unparseable traefik.yml or state docker-compose.yml is a problem, not a throw; the other checks still run', () => {
+  const t = tree({
+    'docker/traefik/traefik.yml': 'providers: [unclosed\n',
+    'docker-compose.yml': 'services: [unclosed\n',
+    'docker-compose.prod.yml': 'services:\n  legal:\n    labels:\n      - "traefik.enable=true"\n',
+  })
+  try {
+    const r = checkStackScope(t.root)
+    const all = r.problems.join('\n')
+    assert.match(all, /docker\/traefik\/traefik\.yml: not parseable YAML/)
+    assert.match(all, /(^|\n)docker-compose\.yml: not parseable YAML/)
+    assert.match(all, /docker-compose\.prod\.yml: service 'legal'/)
+  } finally {
+    t.cleanup()
+  }
+})
+
+test('a missing state docker-compose.yml is a problem', () => {
+  const t = tree({ 'docker/traefik/traefik.yml': GOOD_TRAEFIK_YML, 'docker-compose.prod.yml': LABELLED_LEGAL })
+  try {
+    assert.match(checkStackScope(t.root).problems.join('\n'), /docker-compose\.yml is missing/)
+  } finally {
+    t.cleanup()
+  }
+})
+
+test('the traefik service may pass STACK through as a list item `STACK` or a null-valued map key', () => {
+  const body = (env) => `services:\n  traefik:\n    environment:\n${env}    command:\n      - >-\n        sed -e "s|@STACK@|x|g" a > b\n`
+  for (const env of ['      - STACK\n', '      STACK:\n']) {
+    const t = tree({ 'docker/traefik/traefik.yml': GOOD_TRAEFIK_YML, 'docker-compose.yml': body(env), 'docker-compose.prod.yml': LABELLED_LEGAL })
+    try {
+      assert.deepEqual(checkStackScope(t.root).problems, [], env)
+    } finally {
+      t.cleanup()
+    }
+  }
+  const t = tree({ 'docker/traefik/traefik.yml': GOOD_TRAEFIK_YML, 'docker-compose.yml': body('      - STACKED=1\n'), 'docker-compose.prod.yml': LABELLED_LEGAL })
+  try {
+    assert.match(checkStackScope(t.root).problems.join('\n'), /does not pass STACK/)
+  } finally {
+    t.cleanup()
+  }
+})
+
 test('labelMap and isRouted read both label forms', () => {
   assert.deepEqual(labelMap(['a=b=c', 'x']), { a: 'b=c', x: '' })
   assert.deepEqual(labelMap({ a: true, b: null }), { a: 'true', b: '' })
