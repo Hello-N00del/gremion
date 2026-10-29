@@ -13,15 +13,17 @@ import { appWith, reads, world } from '../harness/fakes.ts'
 
 const spec = loadSpec(SPEC_URL)
 const ops = listOperations(spec)
+// TASK-077 core + TASK-080-a bodies; TASK-081 appends its own here, sorted
+const ALL_OPERATIONS = ['createBody', 'decideAuthz', 'getBodyTree', 'getCustomerSettings', 'getHealth', 'getOwnPreference', 'getPerson', 'getTenancySelf', 'invitePerson', 'issueAuthzGrant', 'listAuthzGrants', 'listBodyMemberships', 'listBodySeats', 'listEnabledModules', 'listSeatTenures', 'putOwnPreference', 'revokeAllAuthzGrants', 'revokeAuthzGrant', 'startMembership']
 
 describe('routes (TDD 1)', () => {
-  it('the route table equals the spec: 8 operations (3 core + 5 authz, TASK-081), nothing else (routes:check)', async () => {
+  it('the route table equals the spec: 19 operations (14 core + bodies, 5 authz), nothing else (routes:check)', async () => {
     const app = buildApp()
     const r = await checkAppRoutes(app, spec)
     expect(r.problems).toEqual([])
     expect(r.ok).toBe(true)
     expect(getRouteTable(app).sort()).toEqual(ops.map((o) => routeKey(o.method, o.path)).sort())
-    expect(ops.map((o) => o.operationId!).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))).toEqual(['decideAuthz', 'getHealth', 'getTenancySelf', 'issueAuthzGrant', 'listAuthzGrants', 'listEnabledModules', 'revokeAllAuthzGrants', 'revokeAuthzGrant'])
+    expect(ops.map((o) => o.operationId!).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))).toEqual(ALL_OPERATIONS)
     await app.close()
   })
 
@@ -52,8 +54,8 @@ describe('routes (TDD 1)', () => {
 describe('route-table sweep: every spec route but getHealth is tenant-gated (C18)', () => {
   const gated = ops.filter((o) => !TENANT_EXEMPT_OPERATIONS.has(o.operationId!))
 
-  it('covers at least the two tenant operations (not vacuous)', () => {
-    expect(gated.map((o) => o.operationId!).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))).toEqual(['decideAuthz', 'getTenancySelf', 'issueAuthzGrant', 'listAuthzGrants', 'listEnabledModules', 'revokeAllAuthzGrants', 'revokeAuthzGrant'])
+  it('covers every tenant operation (not vacuous)', () => {
+    expect(gated.map((o) => o.operationId!).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))).toEqual(ALL_OPERATIONS.filter((id) => id !== 'getHealth'))
   })
 
   it.each(gated.map((o) => [o.operationId!, o.method, o.path]))('%s: no proxy proof -> 403 before any read', async (_id, method, path) => {

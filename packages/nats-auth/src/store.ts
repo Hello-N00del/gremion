@@ -14,7 +14,7 @@
 // would silently cut the module's live connection). Directories are 0700,
 // seeds 0600. Only tenant-create mounts this volume.
 import { randomBytes } from 'node:crypto'
-import { chmodSync, closeSync, existsSync, fsyncSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeSync } from 'node:fs'
+import { chmodSync, chownSync, closeSync, existsSync, fsyncSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeSync } from 'node:fs'
 import path from 'node:path'
 import { createUser, fromSeed } from '@nats-io/nkeys'
 import { assertModuleId, assertTenantId } from './permissions.ts'
@@ -24,6 +24,25 @@ export const SYS_DIR = '_sys'
 export const SYS_RELOAD_FILE = 'reload.nk'
 const TENANT_FILE_RE = /^tenant_([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)\.nk$/
 const TMP_RE = /\.tmp-\d+-[0-9a-f]+$/
+
+/**
+ * Identities whose seeds are read by a container of their own (not by tenant-create), and the uid/gid that
+ * container runs as. tenant-create runs as root and writes the volume; for these identities the owner
+ * directory and its seed files are handed to the image's user (mode unchanged: 0700 dir, 0600 seeds), so
+ * the container reads exactly its own subtree and nobody else's. Only kernel-api today: the kernel API
+ * mounts the volume's kernel-api/ subpath read-only (docker-compose.app.yml) and runs as `node`, uid/gid
+ * 1000 of the official node image (services/kernel-api/Dockerfile `USER node`; test: kernel-api-dir.test.ts).
+ */
+export const IMAGE_OWNERS: Readonly<Record<string, Readonly<{ uid: number; gid: number }>>> = Object.freeze({
+  'kernel-api': Object.freeze({ uid: 1000, gid: 1000 }),
+})
+
+export interface SeedStoreOptions {
+  /** Test seam: the ownership change (default fs.chownSync). */
+  chown?: (file: string, uid: number, gid: number) => void
+  /** Test seam: only root can hand a file to another uid (default: process.getuid() === 0; false where there is no uid). */
+  isRoot?: () => boolean
+}
 
 export interface Seed {
   /** The seed bytes (never logged, never rendered). */
@@ -54,7 +73,33 @@ function writeFileSyncSafe(file: string, text: string): void {
 }
 
 export class SeedStore {
-  constructor(readonly root: string) {}
+  private readonly chownFn: (file: string, uid: number, gid: number) => void
+  private readonly isRoot: () => boolean
+
+  constructor(
+    readonly root: string,
+    opts: SeedStoreOptions = {},
+  ) {
+    this.chownFn = opts.chown ?? chownSync
+    this.isRoot = opts.isRoot ?? (() => process.getuid?.() === 0)
+  }
+
+  /** Hands a path of an image-owned identity to the image's uid/gid (root only); a failure fails the run, never leaves a root-owned seed unreadable to its container. */
+  private handOver(owner: string, file: string): void {
+    const id = IMAGE_OWNERS[owner]
+    if (!id || !this.isRoot()) return
+    try {
+      this.chownFn(file, id.uid, id.gid)
+    } catch (err) {
+      fail(`cannot hand ${rel(this.root, file)} (the ${owner} identity) to uid ${id.uid}:${id.gid}, the user its container runs as -- it could not read its own seed`, err)
+    }
+  }
+
+  /** Creates an identity's owner directory (0700) without a seed in it: the subpath a container mounts must exist before the container is created. */
+  ensureOwnerDir(owner: string): void {
+    assertModuleId(owner)
+    this.dir(owner)
+  }
 
   private dir(sub: string): string {
     const d = path.join(this.root, sub)
@@ -64,6 +109,7 @@ export class SeedStore {
     } catch (err) {
       fail(`cannot create the seed directory ${d}`, err)
     }
+    this.handOver(sub, d)
     return d
   }
 
@@ -86,7 +132,7 @@ export class SeedStore {
     }
   }
 
-  private write(dir: string, name: string): Seed {
+  private write(owner: string, dir: string, name: string): Seed {
     const kp = createUser()
     const seed = kp.getSeed()
     const final = path.join(dir, name)
@@ -105,6 +151,7 @@ export class SeedStore {
       rmSync(tmp, { force: true })
       fail(`cannot write seed ${rel(this.root, final)} under ${this.root}`, err)
     }
+    this.handOver(owner, final)
     return { seed, publicKey: kp.getPublicKey(), created: true }
   }
 
@@ -120,9 +167,10 @@ export class SeedStore {
     if (existsSync(f)) {
       const s = this.read(f)
       if ((statSync(f).mode & 0o777) !== 0o600) chmodSync(f, 0o600)
+      this.handOver(sub, f)
       return s
     }
-    return this.write(d, name)
+    return this.write(sub, d, name)
   }
 
   /**

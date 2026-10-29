@@ -26,7 +26,7 @@ export function makeRegistry(initial: string[]) {
   }
 }
 
-/** An active person with every NOT NULL column 080-a's idt.person has (the stand-in fixture mirrors them). */
+/** An active person with every NOT NULL column 080-a's idt.person has. */
 export async function insertPerson(admin: Sql, customerId: string, personId: string, sub: string): Promise<void> {
   await admin`
     INSERT INTO idt.person (person_id, customer_id, idp_subject, display_name, email, account_state, pseudonym, activated_at, created_by_kind, updated_by_kind)

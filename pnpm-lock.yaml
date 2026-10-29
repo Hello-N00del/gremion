@@ -954,12 +954,24 @@ importers:
       '@gremion/fastify-service-template':
         specifier: workspace:*
         version: link:../../packages/fastify-service-template
+      '@gremion/nats-auth':
+        specifier: workspace:*
+        version: link:../../packages/nats-auth
+      '@gremion/ports':
+        specifier: workspace:*
+        version: link:../../packages/ports
       '@gremion/tenancy-core':
         specifier: workspace:*
         version: link:../../packages/tenancy-core
       '@gremion/tenant-store':
         specifier: workspace:*
         version: link:../../packages/tenant-store
+      '@nats-io/jetstream':
+        specifier: ^3.4.0
+        version: 3.4.0
+      '@nats-io/transport-node':
+        specifier: ^3.4.0
+        version: 3.4.0
       ajv:
         specifier: 8.20.0
         version: 8.20.0

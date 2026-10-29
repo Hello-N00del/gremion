@@ -1,12 +1,16 @@
-// The authz suites' kernel database on test/authz/stack.mjs's PG18: core 0001,
-// the TASK-080 stand-in fixture (plumbingSql('idt') + stand-ins), then the
-// authz migrations, under a NON-superuser app role so FORCE RLS binds.
+// The authz suites' kernel database on test/authz/stack.mjs's PG18: the shipped
+// kernel-api chain as `kernel-api migrate` applies it (core, bodies = TASK-080-a's
+// real tables, authz), preceded by the migrate hook's schema + btree_gist step and
+// followed by the vendor kind catalogue, under a NON-superuser app role so FORCE
+// RLS binds.
 import { randomBytes } from 'node:crypto'
-import { readFileSync } from 'node:fs'
+import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { Sql } from '@gremion/db'
 import postgres from 'postgres'
+import { VENDOR_KINDS } from '../../src/bodies/kinds.ts'
+import { KERNEL_API_MIGRATION_DIRS } from '../../src/migrate/chain.ts'
 
 export const SERVICE_ROOT = fileURLToPath(new URL('../../', import.meta.url))
 
@@ -42,7 +46,15 @@ export function uuidv7(): string {
   return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`
 }
 
-export const AUTHZ_FILES = ['migrations/authz/0002_idt_role_capability.sql', 'migrations/authz/0003_idt_authz_grant.sql']
+/** The shipped chain files in apply order (the dirs' order, then the number), the authz dir's own files marked. */
+export function chainFiles(o: { withAuthz?: boolean } = {}): string[] {
+  return KERNEL_API_MIGRATION_DIRS.filter((d) => o.withAuthz !== false || d !== 'migrations/authz').flatMap((d) =>
+    readdirSync(join(SERVICE_ROOT, d))
+      .filter((f) => f.endsWith('.sql'))
+      .sort()
+      .map((f) => join(SERVICE_ROOT, d, f)),
+  )
+}
 
 export interface KernelDb {
   customerId: string
@@ -61,15 +73,19 @@ export async function buildKernelDb(name: string, o: { withAuthz?: boolean } = {
   await root.unsafe(`CREATE DATABASE ${dbName}`)
   await root.end({ timeout: 5 })
   const admin = connect(dbName)
-  const files = [
-    join(SERVICE_ROOT, 'migrations/core/0001_idt_setup.sql'),
-    join(SERVICE_ROOT, 'test/authz/fixtures/idt-080.ddl'),
-    ...(o.withAuthz === false ? [] : AUTHZ_FILES.map((f) => join(SERVICE_ROOT, f))),
-  ]
-  for (const f of files) await admin.unsafe(readFileSync(f, 'utf8'))
+  // the migrate hook's beforeRun (idt-hooks.ts): the gist EXCLUDEs of membership / tenure need btree_gist in schema idt
+  await admin.unsafe('CREATE SCHEMA IF NOT EXISTS idt')
+  await admin.unsafe('CREATE EXTENSION IF NOT EXISTS btree_gist WITH SCHEMA idt')
+  for (const f of chainFiles(o)) await admin.unsafe(readFileSync(f, 'utf8'))
   const customerId = uuidv7()
   const token = 't' + customerId.replaceAll('-', '').slice(0, 12)
   await admin`INSERT INTO idt.database_binding (customer_id, tenant_token, context_code) VALUES (${customerId}::uuid, ${token}, 'idt')`
+  // the migrate hook's afterRun vendor kinds (the org_unit_kind rows idt.body's foreign key needs); the owner here is the superuser, which bypasses RLS
+  for (const k of VENDOR_KINDS) {
+    await admin`
+      INSERT INTO idt.org_unit_kind (kind_key, customer_id, level, label_de, label_en, is_organ, can_hold_seats, may_adopt_beschluesse, allowed_parent_kinds, origin, created_by_kind, updated_by_kind)
+      VALUES (${k.kindKey}, ${customerId}::uuid, ${k.level}, ${k.labelDe}, ${k.labelEn}, ${k.isOrgan}, ${k.canHoldSeats}, ${k.mayAdoptBeschluesse}, ${[...k.allowedParentKinds]}::text[], 'vendor_default', 'system', 'system')`
+  }
   const role = `t081_app_${name}`
   const password = randomBytes(16).toString('base64url')
   await admin.unsafe(`DROP ROLE IF EXISTS ${role}`).catch(() => undefined)

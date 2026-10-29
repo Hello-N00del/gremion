@@ -6,6 +6,7 @@
 // fail on USE, never at construction).
 import type { Sql } from '@gremion/db'
 import type { HostRejectionLog } from '@gremion/tenancy-core'
+import { denyAll, type WriteAuthorizer } from '../bodies/authz.ts'
 import type { ModuleRuntimeDecl } from '../registry/declarations.ts'
 
 /** Control tenant status vocabulary (migrations-control 001). */
@@ -29,6 +30,12 @@ export interface TenancyStore {
   lookupHost(host: string): Promise<TenantRow | null>
   /** A module caller's asserted customer, by id (customer-scoped). */
   lookupId(customerId: string): Promise<TenantRow | null>
+  /**
+   * Every `active` customer (TRD-082 pinned exemption 4: the event relay's tenant
+   * iteration, like the migrate job's): the relay supervisor starts one relay per
+   * customer whose database the gate calls current.
+   */
+  listActive(): Promise<TenantRow[]>
 }
 
 export interface EnabledModuleRow {
@@ -63,6 +70,23 @@ export interface CustomerGate {
   check(tenant: TenantRow): Promise<GateVerdict>
 }
 
+/**
+ * The customer's own kernel database, as the app-role pool the identity domain
+ * runs on (TASK-080-a). The pool is the customer's alone (tenant-store, the
+ * target resolved from the request's own control row, never the environment);
+ * a failure to open it answers 503 for that customer only.
+ */
+export interface TenantDb {
+  sqlFor(tenant: TenantRow): Promise<Sql>
+  /**
+   * The pool of the db_conn_ref tenant-db currently holds for the customer,
+   * WITHOUT adopting or evicting anything (undefined: no ref in hand yet). For a
+   * long-lived caller whose control row may be stale (the event relay): handing
+   * sqlFor a stale row after a db_conn_ref change would evict the fresh pool.
+   */
+  currentSqlFor?(customerId: string): Promise<Sql | undefined>
+}
+
 export interface ModuleDeclarations {
   /** The runtime block of modules/<key>/module.json this image carries, or undefined. */
   get(moduleKey: string): ModuleRuntimeDecl | undefined
@@ -86,6 +110,10 @@ export interface KernelApiDeps {
   tokens: TokenVerifier
   gate: CustomerGate
   declarations: ModuleDeclarations
+  /** The customer's kernel database for the identity reads and the own-preference write. */
+  tenantDb: TenantDb
+  /** Who may write through the HTTP API. Shipped: denyAll (Q4) until TASK-081 binds the PDP. */
+  authorizer: WriteAuthorizer
   log: Logger
   /** The bounded tenant.host.rejected emitter (TRD-076, G6). */
   hostRejection: HostRejectionLog
@@ -114,11 +142,13 @@ export function unwiredDeps(): KernelApiDeps {
     proxySecret: undefined,
     platformDomain: undefined,
     moduleSecrets: new Map(),
-    tenancy: { lookupHost: notWired('the control registry'), lookupId: notWired('the control registry') },
+    tenancy: { lookupHost: notWired('the control registry'), lookupId: notWired('the control registry'), listActive: notWired('the control registry') },
     registry: { listEnabled: notWired('the module registry'), isEnabled: notWired('the module registry') },
     tokens: { verify: notWired('token verification') },
     gate: { check: notWired('the schema gate') },
     declarations: { get: () => undefined },
+    tenantDb: { sqlFor: notWired('the tenant database') },
+    authorizer: denyAll,
     log: silent,
     hostRejection,
   }

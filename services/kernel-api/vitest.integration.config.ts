@@ -6,8 +6,9 @@ import { defineConfig } from 'vitest/config'
 export default defineConfig({
   test: {
     include: ['test/**/*.int.test.ts'],
-    // TASK-081's own scratch stack (test/authz/stack.mjs, vitest.authz-int.config.ts) runs these
-    exclude: ['test/authz/**', '**/node_modules/**'],
+    // test/bodies/live.int.test.ts needs the broker: test/bodies/proof.sh runs it with vitest.live.config.ts;
+    // TASK-081's own scratch stack (test/authz/stack.mjs, vitest.authz-int.config.ts) runs test/authz
+    exclude: ['test/bodies/live.int.test.ts', 'test/authz/**', '**/node_modules/**'],
     environment: 'node',
     fileParallelism: false,
     testTimeout: 60_000,

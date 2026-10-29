@@ -141,3 +141,32 @@ describe('STREAMS topology — every domain subject lands ONLY in its own stream
     }
   })
 })
+
+// TASK-080-a: the IDT stream (identity: the kernel API's own events) is one more disjoint filter.
+describe('STREAMS topology - IDT (TASK-080-a)', () => {
+  /** Which stream filters (every descriptor of STREAMS) receive `subject`. */
+  async function landingStreams(subject: string): Promise<string[]> {
+    const broker = new InMemoryBroker()
+    const hits: string[] = []
+    for (const s of Object.values(STREAMS)) broker.subscribe(s.subjects[0], async () => void hits.push(s.name))
+    await broker.publish(subject, makeEnvelope({ eventType: 'routing-probe', tenantId: TENANT, correlationId: null, payload: {} }))
+    return hits
+  }
+
+  it('IDT descriptor carries its own name + domain subjects', () => {
+    expect(STREAMS.IDT).toEqual({ name: 'IDT', subjects: ['gremion.*.idt.>'] })
+  })
+
+  it('an idt subject lands ONLY in the IDT filter, and no other domain subject lands in it', async () => {
+    expect(await landingStreams(`gremion.${TENANT}.idt.person.invited`)).toEqual(['IDT'])
+    expect(await landingStreams(`gremion.${TENANT}.idt.membership.started`)).toEqual(['IDT'])
+    const foreign = [
+      ...NEWSLETTER_EVENTS.map((e) => newsletterSubject(TENANT, e)),
+      ...CONTENT_EVENTS.map((e) => contentSubject(TENANT, e)),
+      ...CALENDAR_EVENTS.map((e) => calendarSubject(TENANT, e)),
+      ...ORGUNIT_EVENTS.map((e) => orgUnitSubject(TENANT, e)),
+    ]
+    for (const subject of foreign) expect(await landingStreams(subject)).not.toContain('IDT')
+  })
+})
+

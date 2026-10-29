@@ -6,6 +6,7 @@
 import type { Sql } from '@gremion/db'
 import { createHostRejectionLog } from '@gremion/tenancy-core'
 import postgres from 'postgres'
+import { denyAll } from '../bodies/authz.ts'
 import { platformRegistryStore } from '../registry/store.ts'
 import { loadDeclarations } from '../registry/declarations.ts'
 import { allowsEnvRefs, createSecretResolver } from '../tenancy/secrets.ts'
@@ -15,6 +16,7 @@ import type { KernelApiConfig } from './config.ts'
 import type { KernelApiDeps, Logger } from './deps.ts'
 import { createCustomerGate } from './gate.ts'
 import type { AuthzCliDeps } from '../authz/cli.ts'
+import { createTenantDb } from './tenant-db.ts'
 
 /** One JSON line per event on stdout/stderr (the house log shape: level, msg, ts, fields). */
 export function jsonLogger(write: (line: string, level: string) => void = (l, level) => (level === 'info' ? console.log(l) : console.error(l))): Logger {
@@ -43,6 +45,7 @@ export function wireDeps(config: KernelApiConfig, o: { dirs: readonly string[]; 
   const resolveSecret = createSecretResolver({ env: o.env ?? process.env, allowEnvRefs: allowsEnvRefs(o.env ?? process.env) })
   const gate = createCustomerGate({ dirs: o.dirs, ...(config.releaseRef ? { releaseRef: config.releaseRef } : {}), resolveSecret, log })
   const declarations = loadDeclarations(config.modulesRoot)
+  const tenantDb = createTenantDb({ resolveSecret, log })
   const deps: KernelApiDeps = {
     proxySecret: config.proxySecret,
     platformDomain: config.platformDomain,
@@ -52,6 +55,8 @@ export function wireDeps(config: KernelApiConfig, o: { dirs: readonly string[]; 
     tokens: createTokenVerifier(),
     gate,
     declarations: { get: (key) => declarations.get(key) },
+    tenantDb,
+    authorizer: denyAll,
     log,
     kernelDb: (tenant) => gate.db(tenant),
     hostRejection: createHostRejectionLog({ emit: (msg, fields) => log.warn(msg, { tenant: null, ...fields }) }),
@@ -60,7 +65,7 @@ export function wireDeps(config: KernelApiConfig, o: { dirs: readonly string[]; 
     deps,
     pools: { control, platform },
     async close() {
-      await Promise.allSettled([gate.close(), control.end({ timeout: 5 }), platform.end({ timeout: 5 })])
+      await Promise.allSettled([gate.close(), tenantDb.close(), control.end({ timeout: 5 }), platform.end({ timeout: 5 })])
     },
   }
 }

@@ -59,7 +59,7 @@ export async function startIssuers(names: string[]): Promise<Issuers> {
       const jwt = new SignJWT({ aud: ['gremion-kernel-api', 'account'], azp: 'gremion-ui', ...claims })
         .setProtectedHeader({ alg: opts.alg ?? 'RS256', kid: opts.kid ?? realm.jwk.kid! })
         .setIssuer((claims.iss as string | undefined) ?? realm.issuer)
-        .setSubject('person-1')
+        .setSubject((claims.sub as string | undefined) ?? 'person-1')
         .setIssuedAt(now)
         .setExpirationTime(opts.exp ?? now + 300)
       if (opts.nbf !== undefined) jwt.setNotBefore(opts.nbf)

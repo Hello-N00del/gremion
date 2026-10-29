@@ -89,6 +89,14 @@
       "reason": "TASK-077 kernel API: the two READ pools of the control plane (the control registry's tenant / tenant_domain and gremion_platform's plt.module tables) as the SELECT-only ensureKernelApiReader role, never a tenant database; the customers' own kernel databases are opened only through tenant-store (createTenantStore in gate.ts); the registry tables move with the tnt.* relocation (TASK-192)"
     },
     {
+      "path": "services/kernel-api/src/bodies/cli.ts",
+      "calls": 1,
+      "imports": 1,
+      "adoptedBy": "TASK-192",
+      "since": "2026-10-29",
+      "reason": "TASK-080-a `kernel-api bodies`: the control-registry READ pool that resolves the one customer named by --customer (one SELECT by id); the customer's own kernel database is opened only through tenant-store (createTenantDb in app/tenant-db.ts)"
+    },
+    {
       "path": "services/kernel-api/src/migrate/cli.ts",
       "calls": 1,
       "imports": 1,

@@ -24,6 +24,13 @@ export interface KernelApiConfig {
   kernelRoot: string
   host: string
   port: number
+  /**
+   * NATS_URL: the broker the identity event relay publishes to (TASK-080-a). Unset: the relay is OFF
+   * (one WARN at boot; idt.outbox rows wait, nothing is lost) -- a deploy without a broker still serves.
+   */
+  natsUrl: string | undefined
+  /** NATS_SECRETS_DIR: the nats-auth seed volume (default /run/secrets/nats). */
+  natsSecretsDir: string | undefined
 }
 
 export class ConfigError extends Error {
@@ -84,5 +91,7 @@ export function readConfig(env: Env, defaults: { modulesRoot: string; kernelRoot
     kernelRoot: env.KERNEL_API_KERNEL_ROOT?.trim() || defaults.kernelRoot,
     host: env.HOST ?? '0.0.0.0',
     port,
+    natsUrl: env.NATS_URL?.trim() || undefined,
+    natsSecretsDir: env.NATS_SECRETS_DIR?.trim() || undefined,
   }
 }

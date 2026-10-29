@@ -30,7 +30,7 @@ import { DEFAULT_ACCOUNTS_DIR, secretsDirOf } from './connect.ts'
 import { FLOWS, KERNEL, NO_BROKER, SYSTEM_STREAMS } from './flows.ts'
 import { accountFor, assertTenantId } from './permissions.ts'
 import { renderServerConfig, type ServerState } from './render.ts'
-import { ADMIN_DIR, SeedStore } from './store.ts'
+import { ADMIN_DIR, IMAGE_OWNERS, SeedStore } from './store.ts'
 
 export interface BrokerOps {
   /** Ask the running server to re-read its config. */
@@ -134,6 +134,9 @@ export async function initAccounts(opts: { secretsDir?: string; accountsDir?: st
   const release = store.lock()
   try {
     const sys = store.ensureSysReload()
+    // A container that mounts an identity's subpath needs it to exist before the container is created (even
+    // before the first customer): create the owner directories of the image-owned identities (kernel-api).
+    for (const owner of Object.keys(IMAGE_OWNERS)) store.ensureOwnerDir(owner)
     const file = path.join(accountsDirOf(opts), ACCOUNTS_FILE)
     const bytes = renderServerConfig(stateFromStore(store))
     const wrote = readOr(file, undefined) !== bytes
@@ -165,6 +168,8 @@ export async function ensureTenantAccount(
 
   const release = store.lock()
   try {
+    // The subpath a container mounts exists on every stack, whatever this tenant's module set (see initAccounts).
+    for (const owner of Object.keys(IMAGE_OWNERS)) store.ensureOwnerDir(owner)
     // Additive first: new seeds cannot hurt a live identity.
     const createdUsers: string[] = []
     if ((await store.ensureSeed(ADMIN_DIR, tenant)).created) createdUsers.push('admin')

@@ -40,6 +40,9 @@ export const FLOWS: Readonly<Record<string, ModuleFlow>> = Object.freeze({
   content: { publishes: ['CONTENT'], consumes: [] },
   calendar: { publishes: ['CALENDAR'], consumes: [] },
   finance: { publishes: [], consumes: ['ORGUNIT'] },
+  // TASK-080-a: the kernel API (services/kernel-api) is a NATS user of its own, the one IDT publisher
+  // (bodies, org units, seats, memberships, tenures, persons). `nats-auth ensure --modules` must list it.
+  'kernel-api': { publishes: ['IDT'], consumes: [] },
 })
 
 /** System streams a tenant account holds BESIDE the flow streams (TASK-079 Q2, G5). They are not
@@ -71,6 +74,7 @@ export const NO_BROKER = Object.freeze({
 export const OWNER_TO_MODULE: Readonly<Record<string, string>> = Object.freeze({
   cal: 'calendar',
   pub: 'content',
+  idt: 'kernel-api',
 })
 
 export interface NoStreamEntry {

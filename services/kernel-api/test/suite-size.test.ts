@@ -12,12 +12,22 @@ import { describe, expect, it } from 'vitest'
 const PKG = fileURLToPath(new URL('../', import.meta.url))
 
 /** The named tests per file, as of TASK-077 G8. Raise a floor when you add tests; never lower one. */
-export const NAMED: Record<'unit' | 'integration' | 'authz', Record<string, number>> = {
+export const NAMED: Record<'unit' | 'integration' | 'authz' | 'live', Record<string, number>> = {
   unit: {
-    'test/app/bundle-entry.test.ts': 1,
+    'test/app/bundle-entry.test.ts': 2,
+    // TASK-080-a round 3: the image's builder stage copies every workspace package the service reaches
+    'test/app/dockerfile.test.ts': 2,
     'test/app/gate-rotation.test.ts': 4,
     'test/app/routes.test.ts': 11,
     'test/app/trd082.test.ts': 5,
+    // TASK-080-a: the bodies migrations as shipped
+    'test/bodies/migrations.test.ts': 10,
+    'test/bodies/cli.test.ts': 12,
+    'test/bodies/http.test.ts': 13,
+    'test/bodies/kinds.test.ts': 6,
+    'test/outbox/catalogue.test.ts': 5,
+    'test/outbox/compose.test.ts': 4,
+    'test/outbox/relay-host.test.ts': 6,
     'test/conformance/conformance.test.ts': 14,
     'test/migrate/chain.test.ts': 9,
     'test/registry/registry.test.ts': 7,
@@ -30,7 +40,6 @@ export const NAMED: Record<'unit' | 'integration' | 'authz', Record<string, numb
     'test/keycloak/realm-audience.test.ts': 4,
     // TASK-081
     'test/authz/cli.test.ts': 4,
-    'test/authz/fixture.test.ts': 2,
     'test/authz/after-migrate.test.ts': 6,
     'test/authz/no-role-check.test.ts': 5,
     'test/authz/stepup.test.ts': 5,
@@ -39,6 +48,13 @@ export const NAMED: Record<'unit' | 'integration' | 'authz', Record<string, numb
   },
   integration: {
     'test/app/kernel-api.int.test.ts': 17,
+    // TASK-080-a round 3: the idt migrate hook steps run under the migration advisory lock
+    'test/migrate/lock.int.test.ts': 4,
+    // TASK-080-a round 3: TRD-082 for the domain service's own queries
+    'test/bodies/scope.int.test.ts': 2,
+    // TASK-080-a: the migrate hook and the identity domain service on the scratch PG18
+    'test/bodies/hooks.int.test.ts': 7,
+    'test/bodies/service.int.test.ts': 13,
     // G8 (live half): real Keycloak tokens carry / lack the audience
     'test/keycloak/audience.int.test.ts': 2,
   },
@@ -50,6 +66,10 @@ export const NAMED: Record<'unit' | 'integration' | 'authz', Record<string, numb
     'test/authz/module-off.int.test.ts': 28,
     'test/authz/pdp.int.test.ts': 12,
     'test/authz/schema.int.test.ts': 8,
+  },
+  // TASK-080-a test/bodies/proof.sh: PostgreSQL 18 + the authenticated NATS (vitest.live.config.ts)
+  live: {
+    'test/bodies/live.int.test.ts': 15,
   },
 }
 
@@ -90,6 +110,10 @@ describe('suite size (TDD 16)', () => {
     expect(() => assertFloor(collected('vitest.authz-int.config.ts'), NAMED.authz)).not.toThrow()
   }, 60_000)
 
+  it('the live suite (proof.sh) collects at least the named total', () => {
+    expect(() => assertFloor(collected('vitest.live.config.ts'), NAMED.live)).not.toThrow()
+  }, 60_000)
+
   it('zero collected tests is a failure, and so is one missing test', () => {
     expect(() => assertFloor({}, { 'a.test.ts': 1 })).toThrow(/zero tests collected/)
     expect(() => assertFloor({ 'a.test.ts': 1 }, { 'a.test.ts': 2 })).toThrow(/a\.test\.ts: 1 < 2/)
@@ -107,8 +131,8 @@ describe('suite size (TDD 16)', () => {
     }
     walk('src')
     walk('test')
-    expect(specs.length).toBeGreaterThanOrEqual(Object.keys(NAMED.unit).length + Object.keys(NAMED.integration).length + Object.keys(NAMED.authz).length)
-    const named = new Set([...Object.keys(NAMED.unit), ...Object.keys(NAMED.integration), ...Object.keys(NAMED.authz)])
+    expect(specs.length).toBeGreaterThanOrEqual(Object.keys(NAMED.unit).length + Object.keys(NAMED.integration).length + Object.keys(NAMED.authz).length + Object.keys(NAMED.live).length)
+    const named = new Set([...Object.keys(NAMED.unit), ...Object.keys(NAMED.integration), ...Object.keys(NAMED.authz), ...Object.keys(NAMED.live)])
     expect(specs.filter((f) => !named.has(f))).toEqual([])
     const marked = specs.filter((f) => /\b(?:it|test|describe)\s*\.\s*(?:skip|todo|only|skipIf|runIf)\b/.test(readFileSync(join(PKG, f), 'utf8')))
     expect(marked).toEqual([])

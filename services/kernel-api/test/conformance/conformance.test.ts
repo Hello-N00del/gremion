@@ -70,7 +70,10 @@ describe('black-box conformance (Q13, P1)', () => {
   })
 
   it('the suite is not vacuous: every spec operation was exercised', () => {
-    expect(new Set(opByPath.values())).toEqual(new Set(['decideAuthz', 'getHealth', 'getTenancySelf', 'issueAuthzGrant', 'listAuthzGrants', 'listEnabledModules', 'revokeAllAuthzGrants', 'revokeAuthzGrant']))
+    // the bodies operations (TASK-080-a) are exercised in test/bodies/http.test.ts, the authz ones in test/authz/http.int.test.ts
+    expect(new Set(opByPath.values())).toEqual(
+      new Set(['createBody', 'decideAuthz', 'getBodyTree', 'getCustomerSettings', 'getHealth', 'getOwnPreference', 'getPerson', 'getTenancySelf', 'invitePerson', 'issueAuthzGrant', 'listAuthzGrants', 'listBodyMemberships', 'listBodySeats', 'listEnabledModules', 'listSeatTenures', 'putOwnPreference', 'revokeAllAuthzGrants', 'revokeAuthzGrant', 'startMembership']),
+    )
     expect(cases.length).toBeGreaterThanOrEqual(8)
   })
 })

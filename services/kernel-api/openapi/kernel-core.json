@@ -3,28 +3,57 @@
   "info": {
     "title": "Gremion kernel API: core (tenancy and the module registry)",
     "version": "1.1.0",
-    "description": "TASK-077 (L3-17; TRD-407 first half, TRD-082, TRD-353). The kernel API's one spec (Q5, Q11): dependants append their operations under their own tag (bodies: TASK-080, authz: TASK-081 - the policy decision point and the grant table) and their handlers to src/handlers/index.ts, sorted by operationId. Every operation except getHealth is tenant-resolved: the WHOLE X-Forwarded-Host (equal to Host) selects the customer in the control registry, behind the proxy-trust header; or a module caller asserts the customer id with its own module secret. Every response body is checked against this document before it is sent (Q4): an undeclared field is a 500 response-contract-violation, never a silent drop.",
-    "license": { "name": "AGPL-3.0-only", "identifier": "AGPL-3.0-only" }
+    "description": "TASK-077 (L3-17; TRD-407 first half, TRD-082, TRD-353). The kernel API's one spec (Q5, Q11): dependants append their operations under their own tag (bodies: TASK-080-a, authz: TASK-081 - the policy decision point and the grant table) and their handlers to src/handlers/index.ts, sorted by operationId. Every operation except getHealth is tenant-resolved: the WHOLE X-Forwarded-Host (equal to Host) selects the customer in the control registry, behind the proxy-trust header; or a module caller asserts the customer id with its own module secret. Every response body is checked against this document before it is sent (Q4): an undeclared field is a 500 response-contract-violation, never a silent drop.",
+    "license": {
+      "name": "AGPL-3.0-only",
+      "identifier": "AGPL-3.0-only"
+    }
   },
   "tags": [
-    { "name": "platform", "description": "Unauthenticated liveness, no tenant." },
-    { "name": "tenancy", "description": "The customer this request resolved to (DB-TNT-CUSTOMER, DB-TNT-DOMAINBINDING, DB-TNT-REALMREF as the API contract; registry of record: the control tenant / tenant_domain tables, Q1)." },
-    { "name": "modules", "description": "The module registry: the customer's enabled modules and their runtime declarations (DB-PLT-MODULE-ENABLEMENT, DB-PLT-MODULE-VERSION)." },
-    { "name": "authz", "description": "The one policy decision point over the (tenant, body) grant table and the grant administration (TASK-081; PRD-IDN-007, TRD-084, TRD-090, TRD-091, TRD-429)." }
+    {
+      "name": "platform",
+      "description": "Unauthenticated liveness, no tenant."
+    },
+    {
+      "name": "tenancy",
+      "description": "The customer this request resolved to (DB-TNT-CUSTOMER, DB-TNT-DOMAINBINDING, DB-TNT-REALMREF as the API contract; registry of record: the control tenant / tenant_domain tables, Q1)."
+    },
+    {
+      "name": "modules",
+      "description": "The module registry: the customer's enabled modules and their runtime declarations (DB-PLT-MODULE-ENABLEMENT, DB-PLT-MODULE-VERSION)."
+    },
+    {
+      "name": "bodies",
+      "description": "Bodies, org units, seats, memberships, tenures and the own preference (DB-IDT-*; TASK-080-a). Reads only: every write is the domain service's, behind the WriteAuthorizer (default deny); the only write over HTTP is the signed-in person's own preference."
+    },
+    {
+      "name": "authz",
+      "description": "The one policy decision point over the (tenant, body) grant table and the grant administration (TASK-081; PRD-IDN-007, TRD-084, TRD-090, TRD-091, TRD-429)."
+    }
   ],
   "paths": {
     "/healthz": {
       "get": {
         "operationId": "getHealth",
         "summary": "Liveness of the kernel API process (no tenant, no database)",
-        "tags": ["platform"],
+        "tags": [
+          "platform"
+        ],
         "security": [],
         "responses": {
           "200": {
             "description": "The process is up.",
-            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Health" } } }
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Health"
+                }
+              }
+            }
           },
-          "500": { "$ref": "#/components/responses/InternalError" }
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          }
         }
       }
     },
@@ -32,22 +61,51 @@
       "get": {
         "operationId": "getTenancySelf",
         "summary": "The customer this request resolved to",
-        "tags": ["tenancy"],
-        "security": [{ "bearer": [] }, { "moduleCaller": [] }],
+        "tags": [
+          "tenancy"
+        ],
+        "security": [
+          {
+            "bearer": []
+          },
+          {
+            "moduleCaller": []
+          }
+        ],
         "parameters": [
-          { "$ref": "#/components/parameters/ForwardedHost" },
-          { "$ref": "#/components/parameters/ProxyTrust" }
+          {
+            "$ref": "#/components/parameters/ForwardedHost"
+          },
+          {
+            "$ref": "#/components/parameters/ProxyTrust"
+          }
         ],
         "responses": {
           "200": {
             "description": "The resolved customer.",
-            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/TenancySelf" } } }
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TenancySelf"
+                }
+              }
+            }
           },
-          "401": { "$ref": "#/components/responses/Unauthorized" },
-          "403": { "$ref": "#/components/responses/Forbidden" },
-          "404": { "$ref": "#/components/responses/NotFound" },
-          "500": { "$ref": "#/components/responses/InternalError" },
-          "503": { "$ref": "#/components/responses/Unavailable" }
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
         }
       }
     },
@@ -55,37 +113,1049 @@
       "get": {
         "operationId": "listEnabledModules",
         "summary": "The resolved customer's enabled modules with their runtime declarations",
-        "tags": ["modules"],
-        "security": [{ "bearer": [] }, { "moduleCaller": [] }],
+        "tags": [
+          "modules"
+        ],
+        "security": [
+          {
+            "bearer": []
+          },
+          {
+            "moduleCaller": []
+          }
+        ],
         "parameters": [
-          { "$ref": "#/components/parameters/ForwardedHost" },
-          { "$ref": "#/components/parameters/ProxyTrust" }
+          {
+            "$ref": "#/components/parameters/ForwardedHost"
+          },
+          {
+            "$ref": "#/components/parameters/ProxyTrust"
+          }
         ],
         "responses": {
           "200": {
             "description": "Exactly the customer's modules in state enabled, each with the runtime block of the module.json version the customer enabled.",
-            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/EnabledModules" } } }
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EnabledModules"
+                }
+              }
+            }
           },
-          "401": { "$ref": "#/components/responses/Unauthorized" },
-          "403": { "$ref": "#/components/responses/Forbidden" },
-          "404": { "$ref": "#/components/responses/NotFound" },
-          "500": { "$ref": "#/components/responses/InternalError" },
-          "503": { "$ref": "#/components/responses/Unavailable" }
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/bodies/tree": {
+      "get": {
+        "operationId": "getBodyTree",
+        "summary": "Every body and org unit of the customer",
+        "tags": [
+          "bodies"
+        ],
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ForwardedHost"
+          },
+          {
+            "$ref": "#/components/parameters/ProxyTrust"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Every body and org unit of the customer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BodyTree"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/bodies/{bodyId}/seats": {
+      "get": {
+        "operationId": "listBodySeats",
+        "summary": "The seats of a body with their current holders",
+        "tags": [
+          "bodies"
+        ],
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ForwardedHost"
+          },
+          {
+            "$ref": "#/components/parameters/ProxyTrust"
+          },
+          {
+            "name": "bodyId",
+            "in": "path",
+            "required": true,
+            "description": "A body of the resolved customer.",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The seats of a body with their current holders",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SeatList"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/bodies/{bodyId}/memberships": {
+      "get": {
+        "operationId": "listBodyMemberships",
+        "summary": "The memberships of a body valid on a day",
+        "tags": [
+          "bodies"
+        ],
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ForwardedHost"
+          },
+          {
+            "$ref": "#/components/parameters/ProxyTrust"
+          },
+          {
+            "name": "bodyId",
+            "in": "path",
+            "required": true,
+            "description": "A body of the resolved customer.",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "asOf",
+            "in": "query",
+            "required": false,
+            "description": "The day (default: today, UTC).",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The memberships of a body valid on a day",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MembershipList"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      },
+      "post": {
+        "operationId": "startMembership",
+        "summary": "Starts a membership in a body",
+        "tags": [
+          "bodies"
+        ],
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "description": "A person's write: asked of the WriteAuthorizer first. The shipped authorizer is default deny (Q4), so this answers 403 until TASK-081 binds the PDP; nothing is written and no event is emitted on a refusal.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ForwardedHost"
+          },
+          {
+            "$ref": "#/components/parameters/ProxyTrust"
+          },
+          {
+            "name": "bodyId",
+            "in": "path",
+            "required": true,
+            "description": "A body of the resolved customer.",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StartMembership"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Written"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/seats/{seatId}/tenures": {
+      "get": {
+        "operationId": "listSeatTenures",
+        "summary": "The history of a seat: every tenure, newest first",
+        "tags": [
+          "bodies"
+        ],
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ForwardedHost"
+          },
+          {
+            "$ref": "#/components/parameters/ProxyTrust"
+          },
+          {
+            "name": "seatId",
+            "in": "path",
+            "required": true,
+            "description": "A seat of the resolved customer.",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The history of a seat: every tenure, newest first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SeatTenures"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/persons/me/preference": {
+      "get": {
+        "operationId": "getOwnPreference",
+        "summary": "The signed-in person's own preference",
+        "tags": [
+          "bodies"
+        ],
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ForwardedHost"
+          },
+          {
+            "$ref": "#/components/parameters/ProxyTrust"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The preference of the person whose verified subject the token carries. 403 for a module caller and for a subject that belongs to no active person.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Preference"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      },
+      "put": {
+        "operationId": "putOwnPreference",
+        "summary": "Saves the signed-in person's own preference",
+        "tags": [
+          "bodies"
+        ],
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ForwardedHost"
+          },
+          {
+            "$ref": "#/components/parameters/ProxyTrust"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The saved preference.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Preference"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PreferencePatch"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/persons/{personId}": {
+      "get": {
+        "operationId": "getPerson",
+        "summary": "A person (their own record only)",
+        "tags": [
+          "bodies"
+        ],
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ForwardedHost"
+          },
+          {
+            "$ref": "#/components/parameters/ProxyTrust"
+          },
+          {
+            "name": "personId",
+            "in": "path",
+            "required": true,
+            "description": "A person of the resolved customer.",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The person's own record. Another person's record is 403 until the PDP (TASK-081) answers the read.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Person"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/bodies": {
+      "post": {
+        "operationId": "createBody",
+        "summary": "Creates a body (a Gremium)",
+        "tags": [
+          "bodies"
+        ],
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "description": "A person's write: asked of the WriteAuthorizer first. The shipped authorizer is default deny (Q4), so this answers 403 until TASK-081 binds the PDP; nothing is written and no event is emitted on a refusal.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ForwardedHost"
+          },
+          {
+            "$ref": "#/components/parameters/ProxyTrust"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Written"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/persons": {
+      "post": {
+        "operationId": "invitePerson",
+        "summary": "Invites a person",
+        "tags": [
+          "bodies"
+        ],
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "description": "A person's write: asked of the WriteAuthorizer first. The shipped authorizer is default deny (Q4), so this answers 403 until TASK-081 binds the PDP; nothing is written and no event is emitted on a refusal.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ForwardedHost"
+          },
+          {
+            "$ref": "#/components/parameters/ProxyTrust"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InvitePerson"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Written"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/customer/settings": {
+      "get": {
+        "operationId": "getCustomerSettings",
+        "summary": "The customer's settings that shape every person's UI",
+        "tags": [
+          "bodies"
+        ],
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ForwardedHost"
+          },
+          {
+            "$ref": "#/components/parameters/ProxyTrust"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "idt.customer_setting of the resolved customer: the default locale a person following the customer gets. A customer without a row (not yet migrated past the hook) answers the column defaults.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerSettings"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
         }
       }
     },
     "/api/v1/authz/decisions": {
-      "post": { "operationId": "decideAuthz", "summary": "May this person do this in this body? The one decision point (module callers only)", "tags": ["authz"], "security": [{ "moduleCaller": [] }], "parameters": [], "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AuthzDecisionRequest" } } } }, "responses": { "200": { "description": "The decision: allow, or a deny with its reason. A positive deny is a 200 with allow false.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/AuthzDecision" } } } }, "400": { "$ref": "#/components/responses/BadRequest" }, "409": { "$ref": "#/components/responses/Conflict" }, "422": { "$ref": "#/components/responses/Unprocessable" }, "401": { "$ref": "#/components/responses/Unauthorized" }, "403": { "$ref": "#/components/responses/Forbidden" }, "404": { "$ref": "#/components/responses/NotFound" }, "500": { "$ref": "#/components/responses/InternalError" }, "503": { "$ref": "#/components/responses/Unavailable" } } }
+      "post": {
+        "operationId": "decideAuthz",
+        "summary": "May this person do this in this body? The one decision point (module callers only)",
+        "tags": [
+          "authz"
+        ],
+        "security": [
+          {
+            "moduleCaller": []
+          }
+        ],
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AuthzDecisionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The decision: allow, or a deny with its reason. A positive deny is a 200 with allow false.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthzDecision"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/Unprocessable"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
     },
     "/api/v1/authz/grants": {
-      "get": { "operationId": "listAuthzGrants", "summary": "The grants of one body of the resolved customer", "tags": ["authz"], "security": [{ "bearer": [] }], "parameters": [{ "$ref": "#/components/parameters/ForwardedHost" }, { "$ref": "#/components/parameters/ProxyTrust" }, { "name": "bodyId", "in": "query", "required": true, "schema": { "type": "string", "format": "uuid" } }, { "name": "personId", "in": "query", "required": false, "schema": { "type": "string", "format": "uuid" } }], "responses": { "200": { "description": "Only this customer grants (TRD-084).", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/GrantList" } } } }, "400": { "$ref": "#/components/responses/BadRequest" }, "409": { "$ref": "#/components/responses/Conflict" }, "422": { "$ref": "#/components/responses/Unprocessable" }, "401": { "$ref": "#/components/responses/Unauthorized" }, "403": { "$ref": "#/components/responses/Forbidden" }, "404": { "$ref": "#/components/responses/NotFound" }, "500": { "$ref": "#/components/responses/InternalError" }, "503": { "$ref": "#/components/responses/Unavailable" } } },
-      "post": { "operationId": "issueAuthzGrant", "summary": "Issue a grant (a customer administrator inside their own tenant; TRD-091, TRD-090)", "tags": ["authz"], "security": [{ "bearer": [] }], "parameters": [{ "$ref": "#/components/parameters/ForwardedHost" }, { "$ref": "#/components/parameters/ProxyTrust" }], "requestBody": { "required": true, "content": { "application/json": { "schema": { "$ref": "#/components/schemas/GrantIssueRequest" } } } }, "responses": { "201": { "description": "The issued grant.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Grant" } } } }, "400": { "$ref": "#/components/responses/BadRequest" }, "409": { "$ref": "#/components/responses/Conflict" }, "422": { "$ref": "#/components/responses/Unprocessable" }, "401": { "$ref": "#/components/responses/Unauthorized" }, "403": { "$ref": "#/components/responses/Forbidden" }, "404": { "$ref": "#/components/responses/NotFound" }, "500": { "$ref": "#/components/responses/InternalError" }, "503": { "$ref": "#/components/responses/Unavailable" } } }
+      "get": {
+        "operationId": "listAuthzGrants",
+        "summary": "The grants of one body of the resolved customer",
+        "tags": [
+          "authz"
+        ],
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ForwardedHost"
+          },
+          {
+            "$ref": "#/components/parameters/ProxyTrust"
+          },
+          {
+            "name": "bodyId",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "personId",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Only this customer grants (TRD-084).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GrantList"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/Unprocessable"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      },
+      "post": {
+        "operationId": "issueAuthzGrant",
+        "summary": "Issue a grant (a customer administrator inside their own tenant; TRD-091, TRD-090)",
+        "tags": [
+          "authz"
+        ],
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ForwardedHost"
+          },
+          {
+            "$ref": "#/components/parameters/ProxyTrust"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GrantIssueRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The issued grant.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Grant"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/Unprocessable"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
     },
     "/api/v1/authz/grants/{grantId}/revoke": {
-      "post": { "operationId": "revokeAuthzGrant", "summary": "Revoke one open grant", "tags": ["authz"], "security": [{ "bearer": [] }], "parameters": [{ "$ref": "#/components/parameters/ForwardedHost" }, { "$ref": "#/components/parameters/ProxyTrust" }, { "name": "grantId", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }], "responses": { "200": { "description": "The revoked grant.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Grant" } } } }, "400": { "$ref": "#/components/responses/BadRequest" }, "409": { "$ref": "#/components/responses/Conflict" }, "422": { "$ref": "#/components/responses/Unprocessable" }, "401": { "$ref": "#/components/responses/Unauthorized" }, "403": { "$ref": "#/components/responses/Forbidden" }, "404": { "$ref": "#/components/responses/NotFound" }, "500": { "$ref": "#/components/responses/InternalError" }, "503": { "$ref": "#/components/responses/Unavailable" } } }
+      "post": {
+        "operationId": "revokeAuthzGrant",
+        "summary": "Revoke one open grant",
+        "tags": [
+          "authz"
+        ],
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ForwardedHost"
+          },
+          {
+            "$ref": "#/components/parameters/ProxyTrust"
+          },
+          {
+            "name": "grantId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The revoked grant.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Grant"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/Unprocessable"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
     },
     "/api/v1/authz/persons/{personId}/revoke-all": {
-      "post": { "operationId": "revokeAllAuthzGrants", "summary": "Revoke every open grant of one person in one step-up window (PRD-IDN-002)", "tags": ["authz"], "security": [{ "bearer": [] }], "parameters": [{ "$ref": "#/components/parameters/ForwardedHost" }, { "$ref": "#/components/parameters/ProxyTrust" }, { "name": "personId", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }], "responses": { "200": { "description": "The grants that were revoked.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/GrantList" } } } }, "400": { "$ref": "#/components/responses/BadRequest" }, "409": { "$ref": "#/components/responses/Conflict" }, "422": { "$ref": "#/components/responses/Unprocessable" }, "401": { "$ref": "#/components/responses/Unauthorized" }, "403": { "$ref": "#/components/responses/Forbidden" }, "404": { "$ref": "#/components/responses/NotFound" }, "500": { "$ref": "#/components/responses/InternalError" }, "503": { "$ref": "#/components/responses/Unavailable" } } }
+      "post": {
+        "operationId": "revokeAllAuthzGrants",
+        "summary": "Revoke every open grant of one person in one step-up window (PRD-IDN-002)",
+        "tags": [
+          "authz"
+        ],
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ForwardedHost"
+          },
+          {
+            "$ref": "#/components/parameters/ProxyTrust"
+          },
+          {
+            "name": "personId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The grants that were revoked.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GrantList"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "422": {
+            "$ref": "#/components/responses/Unprocessable"
+          },
+          "500": {
+            "$ref": "#/components/responses/InternalError"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -109,54 +1179,130 @@
         "in": "header",
         "required": false,
         "description": "The customer's host, whole (Tenancy D1). Must equal Host. Absent on a module-caller request.",
-        "schema": { "type": "string", "maxLength": 260 }
+        "schema": {
+          "type": "string",
+          "maxLength": 260
+        }
       },
       "ProxyTrust": {
         "name": "x-proxy-trust",
         "in": "header",
         "required": false,
         "description": "The proxy shared secret (TENANT_PROXY_SHARED_SECRET). Absent on a module-caller request.",
-        "schema": { "type": "string", "maxLength": 512 }
+        "schema": {
+          "type": "string",
+          "maxLength": 512
+        }
       }
     },
     "headers": {
       "RetryAfter": {
         "description": "Seconds until the client should retry.",
-        "schema": { "type": "integer", "minimum": 1 }
+        "schema": {
+          "type": "integer",
+          "minimum": 1
+        }
       }
     },
     "responses": {
       "Unauthorized": {
         "description": "No, or an unacceptable, credential for the resolved customer.",
-        "content": { "application/problem+json": { "schema": { "$ref": "#/components/schemas/Problem" } } }
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
       },
       "Forbidden": {
         "description": "The request did not prove it came through the proxy, or a module caller may not call this operation for this customer.",
-        "content": { "application/problem+json": { "schema": { "$ref": "#/components/schemas/Problem" } } }
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
       },
       "NotFound": {
         "description": "No customer is served at this host (unparseable, reserved, unbound or not active). There is no default customer.",
-        "content": { "application/problem+json": { "schema": { "$ref": "#/components/schemas/Problem" } } }
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
       },
       "Unavailable": {
         "description": "The customer is suspended, its kernel database is behind its manifest, unreachable or skewed against this image, or the control registry is unreachable. Never cached.",
-        "headers": { "Retry-After": { "$ref": "#/components/headers/RetryAfter" } },
-        "content": { "application/problem+json": { "schema": { "$ref": "#/components/schemas/Problem" } } }
+        "headers": {
+          "Retry-After": {
+            "$ref": "#/components/headers/RetryAfter"
+          }
+        },
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
       },
       "InternalError": {
         "description": "An internal error, or a response that would have broken this document (response-contract-violation).",
-        "content": { "application/problem+json": { "schema": { "$ref": "#/components/schemas/Problem" } } }
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
       },
-      "BadRequest": { "description": "The request is malformed.", "content": { "application/problem+json": { "schema": { "$ref": "#/components/schemas/Problem" } } } },
-      "Conflict": { "description": "The request conflicts with the current state (module not enabled, grant already closed).", "content": { "application/problem+json": { "schema": { "$ref": "#/components/schemas/Problem" } } } },
-      "Unprocessable": { "description": "The request is well-formed but names something this customer does not have, or breaks a grant rule.", "content": { "application/problem+json": { "schema": { "$ref": "#/components/schemas/Problem" } } } }
+      "BadRequest": {
+        "description": "The request is malformed or did not match the operation's schema.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "Conflict": {
+        "description": "The write conflicts with the current state (a module not enabled, a grant already closed, an overlapping validity, a taken e-mail address, a stale row version).",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      },
+      "Unprocessable": {
+        "description": "The request is well-formed but names something this customer does not have, or breaks a grant rule.",
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        }
+      }
     },
     "schemas": {
       "Health": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["status"],
-        "properties": { "status": { "const": "ok" } }
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "status": {
+            "const": "ok"
+          }
+        }
       },
       "CustomerId": {
         "type": "string",
@@ -166,58 +1312,127 @@
       "TenancySelf": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["customerId", "slug", "realm"],
+        "required": [
+          "customerId",
+          "slug",
+          "realm"
+        ],
         "properties": {
-          "customerId": { "$ref": "#/components/schemas/CustomerId" },
-          "slug": { "type": "string", "pattern": "^[a-z0-9-]{1,30}$" },
-          "realm": { "type": "string", "minLength": 1, "maxLength": 255, "description": "DB-TNT-REALMREF: the customer's Keycloak realm." }
+          "customerId": {
+            "$ref": "#/components/schemas/CustomerId"
+          },
+          "slug": {
+            "type": "string",
+            "pattern": "^[a-z0-9-]{1,30}$"
+          },
+          "realm": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255,
+            "description": "DB-TNT-REALMREF: the customer's Keycloak realm."
+          }
         }
       },
       "EnabledModules": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["customerId", "modules"],
+        "required": [
+          "customerId",
+          "modules"
+        ],
         "properties": {
-          "customerId": { "$ref": "#/components/schemas/CustomerId" },
-          "modules": { "type": "array", "items": { "$ref": "#/components/schemas/EnabledModule" } }
+          "customerId": {
+            "$ref": "#/components/schemas/CustomerId"
+          },
+          "modules": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EnabledModule"
+            }
+          }
         }
       },
       "EnabledModule": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["moduleKey", "semver", "runtime"],
+        "required": [
+          "moduleKey",
+          "semver",
+          "runtime"
+        ],
         "properties": {
-          "moduleKey": { "type": "string", "pattern": "^[a-z][a-z_]{1,39}$" },
-          "semver": { "type": "string", "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]{1,40})?$" },
-          "runtime": { "$ref": "#/components/schemas/ModuleRuntime" }
+          "moduleKey": {
+            "type": "string",
+            "pattern": "^[a-z][a-z_]{1,39}$"
+          },
+          "semver": {
+            "type": "string",
+            "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]{1,40})?$"
+          },
+          "runtime": {
+            "$ref": "#/components/schemas/ModuleRuntime"
+          }
         }
       },
       "ModuleRuntime": {
         "type": "object",
         "description": "The runtime block of modules/<key>/module.json (spec D D.1.2), served only for the version the customer enabled.",
         "additionalProperties": false,
-        "required": ["version", "database", "export", "timedJobs", "platformServer"],
+        "required": [
+          "version",
+          "database",
+          "export",
+          "timedJobs",
+          "platformServer"
+        ],
         "properties": {
-          "version": { "type": "string" },
+          "version": {
+            "type": "string"
+          },
           "database": {
             "oneOf": [
-              { "type": "null" },
+              {
+                "type": "null"
+              },
               {
                 "type": "object",
                 "additionalProperties": false,
-                "required": ["postgresService", "migrations"],
-                "properties": { "postgresService": { "type": "string" }, "migrations": { "type": "string" } }
+                "required": [
+                  "postgresService",
+                  "migrations"
+                ],
+                "properties": {
+                  "postgresService": {
+                    "type": "string"
+                  },
+                  "migrations": {
+                    "type": "string"
+                  }
+                }
               }
             ]
           },
           "export": {
             "oneOf": [
-              { "type": "null" },
+              {
+                "type": "null"
+              },
               {
                 "type": "object",
                 "additionalProperties": false,
-                "required": ["kind", "retentionProfile"],
-                "properties": { "kind": { "const": "pg_dump" }, "retentionProfile": { "type": "string", "pattern": "^rp-[a-z]+-[a-z0-9-]+$" } }
+                "required": [
+                  "kind",
+                  "retentionProfile"
+                ],
+                "properties": {
+                  "kind": {
+                    "const": "pg_dump"
+                  },
+                  "retentionProfile": {
+                    "type": "string",
+                    "pattern": "^rp-[a-z]+-[a-z0-9-]+$"
+                  }
+                }
               }
             ]
           },
@@ -226,38 +1441,1182 @@
             "items": {
               "type": "object",
               "additionalProperties": false,
-              "required": ["id", "activeColourOnly"],
-              "properties": { "id": { "type": "string" }, "activeColourOnly": { "type": "boolean" } }
+              "required": [
+                "id",
+                "activeColourOnly"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "activeColourOnly": {
+                  "type": "boolean"
+                }
+              }
             }
           },
           "platformServer": {
             "oneOf": [
-              { "type": "null" },
+              {
+                "type": "null"
+              },
               {
                 "type": "object",
                 "additionalProperties": false,
-                "required": ["postgresService", "databases"],
-                "properties": { "postgresService": { "type": "string" }, "databases": { "type": "array", "items": { "type": "string" } } }
+                "required": [
+                  "postgresService",
+                  "databases"
+                ],
+                "properties": {
+                  "postgresService": {
+                    "type": "string"
+                  },
+                  "databases": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                }
               }
             ]
           }
         }
       },
-      "AuthzDecisionRequest": { "type": "object", "additionalProperties": false, "required": ["subject", "bodyId", "capability"], "properties": { "subject": { "type": "string", "minLength": 1, "maxLength": 200 }, "bodyId": { "type": "string", "format": "uuid" }, "capability": { "type": "string", "pattern": "^[a-z][a-z_]{1,39}\\.[a-z][a-z_.]{0,79}$" }, "resource": { "type": "object", "additionalProperties": false, "required": ["kind", "id"], "properties": { "kind": { "type": "string", "pattern": "^[a-z][a-z_]{0,39}$" }, "id": { "type": "string", "format": "uuid" } } } } },
-      "AuthzDecision": { "type": "object", "additionalProperties": false, "required": ["allow", "reason", "grantIds"], "properties": { "allow": { "type": "boolean" }, "reason": { "type": "string" }, "grantIds": { "type": "array", "items": { "type": "string", "format": "uuid" } } } },
-      "GrantIssueRequest": { "type": "object", "additionalProperties": false, "required": ["bodyId", "subjectPersonId", "grantKind", "key", "granterRole"], "properties": { "bodyId": { "type": "string", "format": "uuid" }, "subjectPersonId": { "type": "string", "format": "uuid" }, "grantKind": { "enum": ["role", "capability"] }, "key": { "type": "string", "maxLength": 120 }, "granterRole": { "type": "string", "maxLength": 40 }, "resource": { "type": "object", "additionalProperties": false, "required": ["kind", "id"], "properties": { "kind": { "type": "string", "pattern": "^[a-z][a-z_]{0,39}$" }, "id": { "type": "string", "format": "uuid" } } }, "validFrom": { "type": "string", "format": "date-time" }, "validUntil": { "type": ["string", "null"], "format": "date-time" } } },
-      "Grant": { "type": "object", "additionalProperties": false, "required": ["grantId", "bodyId", "subjectPersonId", "grantKind", "key", "validFrom", "granterKind", "source", "state", "rowVersion"], "properties": { "grantId": { "type": "string", "format": "uuid" }, "bodyId": { "type": "string", "format": "uuid" }, "subjectPersonId": { "type": "string", "format": "uuid" }, "grantKind": { "enum": ["role", "capability"] }, "key": { "type": "string" }, "resourceKind": { "type": ["string", "null"] }, "resourceId": { "type": ["string", "null"] }, "validFrom": { "type": "string" }, "validUntil": { "type": ["string", "null"] }, "granterKind": { "enum": ["person", "operator", "system"] }, "source": { "type": "string" }, "state": { "enum": ["scheduled", "active", "expired", "revoked"] }, "revokedAt": { "type": ["string", "null"] }, "revokeReason": { "type": ["string", "null"] }, "rowVersion": { "type": "integer" } } },
-      "GrantList": { "type": "object", "additionalProperties": false, "required": ["grants"], "properties": { "grants": { "type": "array", "items": { "$ref": "#/components/schemas/Grant" } } } },
       "Problem": {
         "type": "object",
         "description": "RFC 9457 problem details.",
         "additionalProperties": false,
-        "required": ["type", "title", "status"],
+        "required": [
+          "type",
+          "title",
+          "status"
+        ],
         "properties": {
-          "type": { "type": "string", "pattern": "^urn:gremion:problem:[a-z0-9-]+$" },
-          "title": { "type": "string" },
-          "status": { "type": "integer", "minimum": 400, "maximum": 599 },
-          "detail": { "type": "string" }
+          "type": {
+            "type": "string",
+            "pattern": "^urn:gremion:problem:[a-z0-9-]+$"
+          },
+          "title": {
+            "type": "string"
+          },
+          "status": {
+            "type": "integer",
+            "minimum": 400,
+            "maximum": 599
+          },
+          "detail": {
+            "type": "string"
+          }
+        }
+      },
+      "Body": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "bodyId",
+          "kindKey",
+          "name",
+          "shortName",
+          "parentBodyId",
+          "state",
+          "archivedAt",
+          "rowVersion"
+        ],
+        "properties": {
+          "bodyId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "kindKey": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "shortName": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string"
+              }
+            ]
+          },
+          "parentBodyId": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "format": "uuid"
+              }
+            ]
+          },
+          "state": {
+            "enum": [
+              "active",
+              "archived"
+            ]
+          },
+          "archivedAt": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "format": "date-time"
+              }
+            ]
+          },
+          "rowVersion": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "description": "DB-IDT-BODY: a Gremium, the authorisation scope."
+      },
+      "OrgUnit": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "orgUnitId",
+          "bodyId",
+          "parentOrgUnitId",
+          "kindKey",
+          "name",
+          "isOrgan",
+          "state",
+          "rowVersion"
+        ],
+        "properties": {
+          "orgUnitId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "bodyId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "parentOrgUnitId": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "format": "uuid"
+              }
+            ]
+          },
+          "kindKey": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "isOrgan": {
+            "type": "boolean"
+          },
+          "state": {
+            "enum": [
+              "active",
+              "archived"
+            ]
+          },
+          "rowVersion": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "description": "DB-IDT-ORGUNIT: a unit of a body."
+      },
+      "BodyTree": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "bodies",
+          "orgUnits"
+        ],
+        "properties": {
+          "bodies": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Body"
+            }
+          },
+          "orgUnits": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OrgUnit"
+            }
+          }
+        },
+        "description": "Every body and org unit of the customer; the client builds the tree from parentBodyId / parentOrgUnitId."
+      },
+      "SeatHolder": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "tenureId",
+          "personId",
+          "startsOn",
+          "plannedEndOn"
+        ],
+        "properties": {
+          "tenureId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "personId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "startsOn": {
+            "type": "string",
+            "format": "date"
+          },
+          "plannedEndOn": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "format": "date"
+              }
+            ]
+          }
+        }
+      },
+      "Seat": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "seatId",
+          "bodyId",
+          "orgUnitId",
+          "title",
+          "seatKind",
+          "fillMode",
+          "holderCardinality",
+          "voting",
+          "state",
+          "holders"
+        ],
+        "properties": {
+          "seatId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "bodyId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "orgUnitId": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "format": "uuid"
+              }
+            ]
+          },
+          "title": {
+            "type": "string"
+          },
+          "seatKind": {
+            "enum": [
+              "voting_member",
+              "office",
+              "advisory"
+            ]
+          },
+          "fillMode": {
+            "enum": [
+              "direct_election",
+              "delegation",
+              "appointment"
+            ]
+          },
+          "holderCardinality": {
+            "enum": [
+              "single",
+              "multiple"
+            ]
+          },
+          "voting": {
+            "type": "boolean"
+          },
+          "state": {
+            "enum": [
+              "active",
+              "retired"
+            ]
+          },
+          "holders": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SeatHolder"
+            }
+          }
+        },
+        "description": "DB-IDT-SEAT with its holders today (open tenures that have started)."
+      },
+      "SeatList": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "bodyId",
+          "seats"
+        ],
+        "properties": {
+          "bodyId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "seats": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Seat"
+            }
+          }
+        }
+      },
+      "Tenure": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "tenureId",
+          "personId",
+          "wahlperiodeId",
+          "startsOn",
+          "plannedEndOn",
+          "endedOn",
+          "endReason",
+          "source"
+        ],
+        "properties": {
+          "tenureId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "personId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "wahlperiodeId": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "format": "uuid"
+              }
+            ]
+          },
+          "startsOn": {
+            "type": "string",
+            "format": "date"
+          },
+          "plannedEndOn": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "format": "date"
+              }
+            ]
+          },
+          "endedOn": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "format": "date"
+              }
+            ]
+          },
+          "endReason": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "enum": [
+                  "term_end",
+                  "resigned",
+                  "removed",
+                  "succeeded",
+                  "data_correction"
+                ]
+              }
+            ]
+          },
+          "source": {
+            "enum": [
+              "election",
+              "delegation",
+              "appointment",
+              "succession"
+            ]
+          }
+        },
+        "description": "DB-IDT-TENURE: one holding of a seat; the seat history is the list of these."
+      },
+      "SeatTenures": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "seatId",
+          "tenures"
+        ],
+        "properties": {
+          "seatId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "tenures": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Tenure"
+            }
+          }
+        }
+      },
+      "Membership": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "membershipId",
+          "personId",
+          "orgUnitId",
+          "participationKind",
+          "voting",
+          "validFrom",
+          "validUntil",
+          "wahlperiodeId",
+          "endReason",
+          "source"
+        ],
+        "properties": {
+          "membershipId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "personId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "orgUnitId": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "format": "uuid"
+              }
+            ]
+          },
+          "participationKind": {
+            "enum": [
+              "elected_member",
+              "non_voting_helper",
+              "employee",
+              "initiative_member",
+              "initiative_lead"
+            ]
+          },
+          "voting": {
+            "type": "boolean"
+          },
+          "validFrom": {
+            "type": "string",
+            "format": "date"
+          },
+          "validUntil": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "format": "date"
+              }
+            ]
+          },
+          "wahlperiodeId": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "format": "uuid"
+              }
+            ]
+          },
+          "endReason": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "enum": [
+                  "term_end",
+                  "resigned",
+                  "removed",
+                  "data_correction"
+                ]
+              }
+            ]
+          },
+          "source": {
+            "enum": [
+              "admin",
+              "control_panel",
+              "import",
+              "provisioning"
+            ]
+          }
+        },
+        "description": "DB-IDT-MEMBERSHIP. Carries the person by id only."
+      },
+      "MembershipList": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "bodyId",
+          "asOf",
+          "memberships"
+        ],
+        "properties": {
+          "bodyId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "asOf": {
+            "type": "string",
+            "format": "date"
+          },
+          "memberships": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Membership"
+            }
+          }
+        }
+      },
+      "Person": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "personId",
+          "displayName",
+          "email",
+          "accountState",
+          "pseudonym",
+          "invitedAt",
+          "activatedAt"
+        ],
+        "properties": {
+          "personId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "displayName": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string"
+              }
+            ]
+          },
+          "email": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string"
+              }
+            ]
+          },
+          "accountState": {
+            "enum": [
+              "invited",
+              "active",
+              "disabled",
+              "erased"
+            ]
+          },
+          "pseudonym": {
+            "type": "string"
+          },
+          "invitedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "activatedAt": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "format": "date-time"
+              }
+            ]
+          }
+        },
+        "description": "DB-IDT-PERSON. Personal data: served to the person themself only."
+      },
+      "Preference": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "personId",
+          "locale",
+          "displayDensity",
+          "colourScheme",
+          "lastBodyId",
+          "rowVersion",
+          "updatedByKind",
+          "updatedBy",
+          "effectiveLocale",
+          "stored"
+        ],
+        "properties": {
+          "personId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "locale": {
+            "enum": [
+              "de",
+              "en",
+              "follow_customer"
+            ]
+          },
+          "displayDensity": {
+            "enum": [
+              "standard",
+              "kompakt",
+              "gross"
+            ]
+          },
+          "colourScheme": {
+            "enum": [
+              "system",
+              "light",
+              "dark"
+            ]
+          },
+          "lastBodyId": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "format": "uuid"
+              }
+            ]
+          },
+          "rowVersion": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "updatedByKind": {
+            "enum": [
+              "person",
+              "system"
+            ]
+          },
+          "updatedBy": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "format": "uuid"
+              }
+            ]
+          },
+          "effectiveLocale": {
+            "enum": [
+              "de",
+              "en"
+            ]
+          },
+          "stored": {
+            "type": "boolean"
+          }
+        },
+        "description": "DB-IDT-PREFERENCE of the signed-in person; effectiveLocale resolves follow_customer through idt.customer_setting.default_locale. rowVersion 0 and stored false until the person first saves."
+      },
+      "PreferencePatch": {
+        "type": "object",
+        "additionalProperties": false,
+        "minProperties": 1,
+        "properties": {
+          "locale": {
+            "enum": [
+              "de",
+              "en",
+              "follow_customer"
+            ]
+          },
+          "displayDensity": {
+            "enum": [
+              "standard",
+              "kompakt",
+              "gross"
+            ]
+          },
+          "colourScheme": {
+            "enum": [
+              "system",
+              "light",
+              "dark"
+            ]
+          },
+          "lastBodyId": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "format": "uuid"
+              }
+            ]
+          }
+        }
+      },
+      "CreateBody": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "kindKey",
+          "name"
+        ],
+        "properties": {
+          "kindKey": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]{1,39}$"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "shortName": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 40
+              }
+            ]
+          },
+          "parentBodyId": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "format": "uuid"
+              }
+            ]
+          }
+        }
+      },
+      "StartMembership": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "personId",
+          "participationKind",
+          "voting",
+          "validFrom"
+        ],
+        "properties": {
+          "personId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "orgUnitId": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "format": "uuid"
+              }
+            ]
+          },
+          "participationKind": {
+            "enum": [
+              "elected_member",
+              "non_voting_helper",
+              "employee",
+              "initiative_member",
+              "initiative_lead"
+            ]
+          },
+          "voting": {
+            "type": "boolean"
+          },
+          "validFrom": {
+            "type": "string",
+            "format": "date"
+          },
+          "validUntil": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "format": "date"
+              }
+            ]
+          },
+          "wahlperiodeId": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "format": "uuid"
+              }
+            ]
+          }
+        }
+      },
+      "InvitePerson": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "email",
+          "displayName"
+        ],
+        "properties": {
+          "email": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 254
+          },
+          "displayName": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          }
+        }
+      },
+      "Written": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "rowVersion"
+        ],
+        "description": "The id and row version of the aggregate the write created.",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "rowVersion": {
+            "type": "integer",
+            "minimum": 1
+          }
+        }
+      },
+      "CustomerSettings": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "defaultLocale",
+          "formOfAddress",
+          "timeZone"
+        ],
+        "description": "DB-IDT-CUSTOMERSETTING.",
+        "properties": {
+          "defaultLocale": {
+            "enum": [
+              "de",
+              "en"
+            ]
+          },
+          "formOfAddress": {
+            "enum": [
+              "du",
+              "sie"
+            ]
+          },
+          "timeZone": {
+            "type": "string"
+          }
+        }
+      },
+      "AuthzDecisionRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "subject",
+          "bodyId",
+          "capability"
+        ],
+        "properties": {
+          "subject": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "bodyId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "capability": {
+            "type": "string",
+            "pattern": "^[a-z][a-z_]{1,39}\\.[a-z][a-z_.]{0,79}$"
+          },
+          "resource": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "kind",
+              "id"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "pattern": "^[a-z][a-z_]{0,39}$"
+              },
+              "id": {
+                "type": "string",
+                "format": "uuid"
+              }
+            }
+          }
+        }
+      },
+      "AuthzDecision": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "allow",
+          "reason",
+          "grantIds"
+        ],
+        "properties": {
+          "allow": {
+            "type": "boolean"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "grantIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        }
+      },
+      "GrantIssueRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "bodyId",
+          "subjectPersonId",
+          "grantKind",
+          "key",
+          "granterRole"
+        ],
+        "properties": {
+          "bodyId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "subjectPersonId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "grantKind": {
+            "enum": [
+              "role",
+              "capability"
+            ]
+          },
+          "key": {
+            "type": "string",
+            "maxLength": 120
+          },
+          "granterRole": {
+            "type": "string",
+            "maxLength": 40
+          },
+          "resource": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "kind",
+              "id"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "pattern": "^[a-z][a-z_]{0,39}$"
+              },
+              "id": {
+                "type": "string",
+                "format": "uuid"
+              }
+            }
+          },
+          "validFrom": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "validUntil": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          }
+        }
+      },
+      "Grant": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "grantId",
+          "bodyId",
+          "subjectPersonId",
+          "grantKind",
+          "key",
+          "validFrom",
+          "granterKind",
+          "source",
+          "state",
+          "rowVersion"
+        ],
+        "properties": {
+          "grantId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "bodyId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "subjectPersonId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "grantKind": {
+            "enum": [
+              "role",
+              "capability"
+            ]
+          },
+          "key": {
+            "type": "string"
+          },
+          "resourceKind": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "resourceId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "validFrom": {
+            "type": "string"
+          },
+          "validUntil": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "granterKind": {
+            "enum": [
+              "person",
+              "operator",
+              "system"
+            ]
+          },
+          "source": {
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "scheduled",
+              "active",
+              "expired",
+              "revoked"
+            ]
+          },
+          "revokedAt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "revokeReason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "rowVersion": {
+            "type": "integer"
+          }
+        }
+      },
+      "GrantList": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "grants"
+        ],
+        "properties": {
+          "grants": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Grant"
+            }
+          }
         }
       }
     }
