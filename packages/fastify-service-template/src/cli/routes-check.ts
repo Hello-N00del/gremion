@@ -9,7 +9,7 @@
 // package.json carries a gremion.fastifyService descriptor (the scaffold
 // writes it). --self-check adds the template's own fixture service.
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
-import { registerHooks } from 'node:module'
+import { createRequire, registerHooks } from 'node:module'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { parseArgs } from 'node:util'
@@ -24,10 +24,58 @@ import { listOperations, loadSpec, type OpenApiDocument } from '../spec.ts'
 // service directory pnpm has not linked, e.g. a fresh scaffold).
 // (`.ts` when run from source, `.js` when run from the built dist/.)
 const SELF = new URL(import.meta.url.endsWith('.ts') ? '../index.ts' : '../index.js', import.meta.url).href
+
+// A service is checked by importing its real entry point, and that import pulls in
+// the workspace packages it depends on as SOURCE (`exports` -> src/*.ts). Node's
+// default loader only ERASES types, and refuses the syntax that needs code (enums,
+// namespaces, constructor parameter properties): `ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX`.
+// The services and several of those packages use that syntax freely, because
+// esbuild/tsc/vite build them, and Node 26 has no transform mode (the
+// --experimental-transform-types flag is gone). So the load hook below compiles
+// TypeScript with the `typescript` package when the workspace has it, which loads
+// the service as written rather than as the subset the stripper can read. Without
+// `typescript` (a published copy of this package) nothing changes: Node strips.
+let ts: typeof import('typescript') | null | undefined
+function typescript(): typeof import('typescript') | null {
+  if (ts === undefined) {
+    try {
+      ts = createRequire(import.meta.url)('typescript') as typeof import('typescript')
+    } catch {
+      ts = null
+    }
+  }
+  return ts
+}
+
 registerHooks({
   resolve(specifier, context, nextResolve) {
     if (specifier === TEMPLATE_PACKAGE) return { url: SELF, shortCircuit: true }
-    return nextResolve(specifier, context)
+    try {
+      return nextResolve(specifier, context)
+    } catch (e) {
+      // tsc's convention: a relative import names the OUTPUT file (`./x.js`) of the source `./x.ts`.
+      if ((e as NodeJS.ErrnoException).code === 'ERR_MODULE_NOT_FOUND' && /^\.\.?\/.*\.js$/.test(specifier)) {
+        return nextResolve(specifier.replace(/\.js$/, '.ts'), context)
+      }
+      throw e
+    }
+  },
+  load(url, context, nextLoad) {
+    const loaded = nextLoad(url, context)
+    const module = loaded.format === 'module-typescript'
+    if (!module && loaded.format !== 'commonjs-typescript') return loaded
+    const compiler = typescript()
+    if (!compiler || loaded.source == null) return loaded
+    const { outputText } = compiler.transpileModule(loaded.source.toString(), {
+      fileName: fileURLToPath(url),
+      compilerOptions: {
+        target: compiler.ScriptTarget.ESNext,
+        module: module ? compiler.ModuleKind.ESNext : compiler.ModuleKind.CommonJS,
+        verbatimModuleSyntax: module,
+        sourceMap: false,
+      },
+    })
+    return { ...loaded, format: module ? 'module' : 'commonjs', source: outputText }
   },
 })
 

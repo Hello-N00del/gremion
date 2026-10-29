@@ -158,6 +158,29 @@ describe('routes:check CLI on scaffolded services', () => {
     expect(r.stderr).toMatch(/extra route: GET \/extra is registered but not declared in the spec/)
   })
 
+  // The services under services/ import workspace packages as SOURCE, and those use what tsc/esbuild
+  // accept but Node's type STRIPPER refuses (enums, constructor parameter properties) and spell
+  // relative imports by their OUTPUT name (`./x.js` for `./x.ts`). routes:check must boot such a
+  // service as written; it used to die with ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX the moment
+  // services/kernel-api grew its first parameter property, failing the package script.
+  it('boots a service whose source needs more than type erasure (enum, parameter property, tsc-style .js import)', () => {
+    const { outDir } = scaffoldCase('check-needs-compile')
+    writeFileSync(
+      join(outDir, 'src', 'marker.ts'),
+      ["export enum Colour {", "  Red = 'red',", "}", "", "export class Marker {", "  constructor(readonly colour: Colour) {}", "}", ""].join('\n'),
+    )
+    const index = join(outDir, 'src', 'index.ts')
+    const source = readFileSync(index, 'utf8').replace(
+      '  return createService({ spec: SPEC_URL, handlers, config })\n',
+      '  void new Marker(Colour.Red)\n  return createService({ spec: SPEC_URL, handlers, config })\n',
+    )
+    expect(source).toContain('new Marker(Colour.Red)')
+    writeFileSync(index, `import { Colour, Marker } from './marker.js'\n${source}`)
+    const r = cli('routes-check.ts', ['--service', outDir])
+    expect(r.status, r.out).toBe(0)
+    expect(r.stdout).toMatch(/OK .*\(5 declared, 6 registered\)/)
+  })
+
   it('demo: an operation removed from the spec fails, naming it', () => {
     const { specPath, outDir } = scaffoldCase('check-removed')
     const spec = JSON.parse(readFileSync(specPath, 'utf8'))
