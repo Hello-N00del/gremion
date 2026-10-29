@@ -52,8 +52,8 @@
     {
       "suite": "unit",
       "file": "packages/nats-auth/test/kernel-api-dir.test.ts",
-      "reason": "one test.runIf(process.getuid() === 0) case ('REAL root run (the image)') chowns real files to uid 1000, which only root can do; a CI runner and a developer box run the unit suite as an ordinary user, so it cannot run in this suite. The same ownership contract is proven two other ways: the sibling cases drive SeedStore with an injected isRoot/chown (which paths are handed to 1000:1000, which are not, that a failed chown fails the run), and services/kernel-api/test/bodies/image-proof.sh reads the real owner of kernel-api/ and its seeds with `ls -ln` inside the deployed container after the tenant-create image (root) wrote them. On a Windows run the file additionally skips its two NO_POSIX_MODES cases (NTFS keeps no 0700/0600 mode bits), which do run on Linux; hence maxCount 3 on a Windows host and 1 on a Linux runner.",
-      "maxCount": 3
+      "reason": "one test.runIf(process.getuid() === 0) case ('REAL root run (the image)') chowns real files to uid 1000, which only root can do; a CI runner and a developer box run the unit suite as an ordinary user, so it cannot run in this suite. The same ownership contract is proven two other ways: the sibling cases drive SeedStore with an injected isRoot/chown (which paths are handed to 1000:1000, which are not, that a failed chown fails the run), and services/kernel-api/test/bodies/image-proof.sh reads the real owner of kernel-api/ and its seeds with `ls -ln` inside the deployed container after the tenant-create image (root) wrote them. The file's two POSIX-mode cases (0700/0600) are registered through a case table (test.each(withPosixModes)) that is empty on Windows, where NTFS keeps no mode bits, so they leave no skipped twin behind: the budget is the same single skip on a Windows host and on a Linux runner.",
+      "maxCount": 1
     },
     {
       "suite": "unit",

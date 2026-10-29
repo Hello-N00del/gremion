@@ -25,6 +25,12 @@ beforeEach(() => {
 })
 afterEach(() => rmSync(root, { recursive: true, force: true }))
 
+// Case table for the two POSIX-mode cases: `test.each(withPosixModes)` registers the case where the host
+// keeps mode bits and registers nothing on Windows (NO_POSIX_MODES). Gating them with skipIf left a SKIPPED
+// twin behind on Windows only, which made allowed-skips.json size this file's budget for Windows (3) and so
+// hand the Linux runner two skips it never needs; not registering the case leaves nothing to skip.
+const withPosixModes = NO_POSIX_MODES ? [] : [null]
+
 const broker: BrokerOps = { reload: async () => {}, ensureStreams: async () => {}, assertRevoked: async () => {} }
 const mode = (p: string) => statSync(p).mode & 0o777
 
@@ -35,7 +41,7 @@ describe('the kernel-api/ subpath exists on every stack', () => {
     expect(statSync(path.join(secretsDir, 'kernel-api')).isDirectory()).toBe(true)
   })
 
-  test.skipIf(NO_POSIX_MODES)('the directory is 0700 (no module reads another identity seeds)', async () => {
+  test.each(withPosixModes)('the directory is 0700 (no module reads another identity seeds)', async () => {
     await initAccounts({ secretsDir, accountsDir })
     expect(mode(path.join(secretsDir, 'kernel-api'))).toBe(0o700)
   })
@@ -85,7 +91,7 @@ describe('the kernel-api identity belongs to the image uid, no other identity do
     expect(calls.some(([p, uid]) => p === 'kernel-api/tenant_alpha.nk' && uid === 1000)).toBe(true)
   })
 
-  test.skipIf(NO_POSIX_MODES)('mode stays 0700 / 0600 under the hand-over (only the OWNER changes, never the mode)', async () => {
+  test.each(withPosixModes)('mode stays 0700 / 0600 under the hand-over (only the OWNER changes, never the mode)', async () => {
     const store = new SeedStore(secretsDir, { isRoot: () => true, chown: () => {} })
     await store.ensureSeed('kernel-api', 'alpha')
     expect(mode(path.join(secretsDir, 'kernel-api'))).toBe(0o700)
