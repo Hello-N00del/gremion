@@ -143,7 +143,8 @@ const NOT_BUILT = {
 
 function git(cwd, args, input) {
   const r = spawnSync('git', args, { cwd, encoding: 'utf8', input, maxBuffer: 1 << 28 })
-  assert.equal(r.status, 0, `git ${args.join(' ')} failed: ${r.stderr}`)
+  // A spawn failure (no git, bad cwd) leaves status null and stderr null: say why.
+  assert.equal(r.status, 0, `git ${args.join(' ')} failed: ${r.error?.message ?? r.stderr}`)
   return r.stdout.trim()
 }
 
@@ -180,7 +181,8 @@ function runFilter(changedPaths, moves = []) {
     })
     const written = readFileSync(out, 'utf8')
     const m = written.match(/^docker=(true|false)$/m)
-    return { value: m ? m[1] : null, written, status: r.status, stderr: r.stderr, stdout: r.stdout }
+    // r.error is set when bash itself could not be spawned (stderr is then null).
+    return { value: m ? m[1] : null, written, status: r.status, stderr: r.error?.message ?? r.stderr, stdout: r.stdout ?? '' }
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
@@ -266,8 +268,45 @@ test('the step never writes PR-controlled file names to the log', () => {
   assert.match(r.stdout, new RegExp(`Changed files in this PR: ${names.length}\\b`), 'the count of changed files is still reported')
 })
 
-test('the filter source never pipes a producer into grep -q', () => {
-  assert.doesNotMatch(filterStep.run, /\|\s*grep\s+-[A-Za-z]*q/, 'a producer piped into grep -q dies of SIGPIPE under pipefail')
+// A producer piped into a grep that quits at its first match: `-q` alone, a
+// cluster that contains q (`-Eq`), q as its own flag after others (`-E -q`), or
+// the long forms. Whole-line comments are not code and are dropped first.
+const QUIET_GREP_PIPE = /\|\s*grep\b[^|\n]*\s(-[A-Za-z]*q[A-Za-z]*|--quiet|--silent)\b/
+const pipesIntoQuietGrep = (src) =>
+  QUIET_GREP_PIPE.test(
+    src
+      .split('\n')
+      .filter((l) => !/^\s*#/.test(l))
+      .join('\n'),
+  )
+
+test('the filter source never pipes a producer into a quiet grep', () => {
+  assert.equal(pipesIntoQuietGrep(filterStep.run), false, 'a producer piped into a quiet grep dies of SIGPIPE under pipefail')
+})
+
+for (const spelling of [
+  'grep -q x',
+  'grep -Eq x',
+  'grep -qE x',
+  'grep -E -q x',
+  'grep -E "$pattern" -q',
+  'grep -i -E -q x',
+  'grep --quiet x',
+  'grep -E --silent x',
+]) {
+  test(`the quiet-grep detector flags: | ${spelling}`, () => {
+    assert.equal(pipesIntoQuietGrep(`printf '%s\\n' "$changed" | ${spelling}`), true)
+  })
+}
+
+for (const ok of ['grep -c x', 'grep -Ec "$pattern"', 'grep -E -c x', 'grep -e quux', 'grep --count x']) {
+  test(`the quiet-grep detector allows: | ${ok}`, () => {
+    assert.equal(pipesIntoQuietGrep(`printf '%s\\n' "$changed" | ${ok}`), false)
+  })
+}
+
+test('the quiet-grep detector ignores whole-line comments', () => {
+  assert.equal(pipesIntoQuietGrep('# echo "$x" | grep -q y\ngrep -c y file'), false)
 })
 
 test('a failed `changes` job forces the image build instead of skipping it', () => {
