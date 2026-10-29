@@ -37,7 +37,8 @@
 #      release commit;
 #   3. make verify, then check-record.mjs (strict, no flags) on that commit;
 #   4. sign and attest every pinned digest with the key at COSIGN_KEY_PATH
-#      (sign-release.sh);
+#      (the sign-release.sh that sat next to this script at start-up, not the
+#      built commit's copy);
 #   5. create the signed annotated tag dist-vX.Y.Z on the release commit,
 #      run release-tag-check.sh on it and push the tag.
 #
@@ -55,16 +56,29 @@
 # and an `image:` that is a first-party `<name>@sha256:<64 hex>`, nothing else) or
 # that check-pins.mjs refuses for the built commit.
 #
-# CREDENTIALS. gh, git, node, make verify and the lint run project code at the
-# built commit, so none of them may be able to read the key's password. An
-# `unset` is not enough for that: the environment this script was started with
-# stays readable at /proc/<pid>/environ by its descendants. So the password is
-# never in this script's environment at all, and the script refuses to start
-# when COSIGN_PASSWORD is. It comes from COSIGN_PASSWORD_FILE (a path is no
-# secret; the content is read inside the signing subshell and exported to
-# sign-release.sh alone) or, with that unset and a terminal on stdin, from
-# cosign's own prompt. COSIGN_KEY_PATH is a path too, handed over by --key
-# and taken off the environment once read.
+# CREDENTIALS. What is and is not protected, plainly. gh, git, node, make
+# verify and the lint run project code at the built commit. The control that
+# keeps unreviewed code out of this session is the provenance check (step 1: a
+# release-images.yml run of this repository, built and dispatched from a commit
+# on origin/main or a v* / rc-v* tag), nothing below it. What the handling
+# below does is narrower: it keeps the secrets out of those children's
+# ENVIRONMENTS.
+#   - The password is never in this script's environment at all, because an
+#     `unset` leaves the environment the script was started with readable at
+#     /proc/<pid>/environ; the script refuses to start when COSIGN_PASSWORD is.
+#     It comes from COSIGN_PASSWORD_FILE (a path is no secret; the content is
+#     read inside the signing subshell and exported to the signer alone) or,
+#     with that unset and a terminal on stdin, from cosign's own prompt.
+#   - COSIGN_KEY_PATH and COSIGN_PASSWORD_FILE are paths too: the first is
+#     handed over by --key, both are taken off the environment once read.
+#   - The signer is the sign-release.sh that sat next to this script at
+#     start-up, copied (mode 0500) into this script's private temp directory
+#     before the detached checkout; the built commit's own copy never runs.
+# What it does NOT do: stop code running as the same user during `make verify`
+# from reaching key material on disk (the key file, the password file, and the
+# /proc entries of the signer while it runs). The workstation must be trusted.
+# The follow-up is to run `make verify` in an isolated container or as a
+# separate user.
 #
 # THE HOST-SIDE DEPLOY IS NOT DONE HERE. Handing a registry token to the host
 # is a manual operator step (docs/ops/runbook/upgrade.md); this script ends at
@@ -185,7 +199,7 @@ main() {
     local sign_key="$COSIGN_KEY_PATH" sign_password_file="${COSIGN_PASSWORD_FILE:-}"
     unset COSIGN_KEY_PATH COSIGN_PASSWORD_FILE
 
-    local root status tag prev_tag
+    local root status tag prev_tag signer
     root="$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel)" || die "not inside a git checkout"
     tag="dist-v${version}"
     # Captured first: inside [[ -z "$(...)" ]] a failing `git status` would read as clean.
@@ -209,6 +223,13 @@ main() {
 
     WORK="$(mktemp -d)"
     trap cleanup EXIT
+    # The signer is the copy that sits next to this script NOW, taken before the
+    # detached checkout below replaces the tree with the built commit's: that
+    # commit's own sign-release.sh is not what holds the key. (WORK is mode 0700
+    # and goes with the trap.)
+    signer="$WORK/sign-release.sh"
+    cp -- "$SCRIPT_DIR/sign-release.sh" "$signer" || die "cannot copy sign-release.sh from ${SCRIPT_DIR}"
+    chmod 0500 -- "$signer"
 
     # 1. the run's pins artefact. The sha is read off the artefact's own name,
     # not off the run's headSha: a workflow_dispatch builds `release_ref`,
@@ -290,13 +311,17 @@ main() {
     mapfile -t refs_arr <<< "$refs"
     # The one place the password exists: read here, in this subshell, and
     # exported to sign-release.sh alone. With no file COSIGN_PASSWORD stays
-    # unset and cosign prompts.
+    # unset and cosign prompts. The signer is the trusted copy made before the
+    # checkout; it finds its repository from its own location, so it is pointed
+    # at this clone by GIT_DIR / GIT_WORK_TREE instead.
     (
         if [[ -n "$sign_password_file" ]]; then
-            COSIGN_PASSWORD="$(<"$sign_password_file")" || exit 1
+            pw="$(<"$sign_password_file")" || exit 1
+            # $(...) drops trailing newlines; a CRLF file also leaves the \r
+            COSIGN_PASSWORD="${pw%$'\r'}"
             export COSIGN_PASSWORD
         fi
-        bash scripts/release/sign-release.sh --key "$sign_key" "${refs_arr[@]}"
+        GIT_DIR="$(git rev-parse --absolute-git-dir)" GIT_WORK_TREE="$root" bash "$signer" --key "$sign_key" "${refs_arr[@]}"
     )
 
     # 5. the annotated, signed tag
