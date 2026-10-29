@@ -23,8 +23,11 @@ const pkg = JSON.parse(fs.readFileSync(path.join(SERVICE_ROOT, 'package.json'), 
   devDependencies?: Record<string, string>
 }
 const dockerfile = fs.readFileSync(path.join(SERVICE_ROOT, 'Dockerfile'), 'utf-8')
+// Read through the leaf's own workspace link (node_modules/@gremion/tenant-store), the way the
+// leaf itself resolves it, not by a path literal that climbs out of modules/board/ (which
+// check-module-source-scan forbids).
 const tenantStorePkg = JSON.parse(
-  fs.readFileSync(path.join(SERVICE_ROOT, '..', '..', 'packages', 'tenant-store', 'package.json'), 'utf-8'),
+  fs.readFileSync(path.join(SERVICE_ROOT, 'node_modules', '@gremion', 'tenant-store', 'package.json'), 'utf-8'),
 ) as { dependencies?: Record<string, string> }
 
 /**
