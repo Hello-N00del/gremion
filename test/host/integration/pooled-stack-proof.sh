@@ -72,6 +72,8 @@
 # server bound to 127.0.0.1:587. render-env then also publishes 587 on the
 # host-gateway address (detected from the default bridge; PROOF_HOST_GATEWAY_IP
 # overrides it; Docker Desktop is left alone, 127.0.0.1 works there).
+# PROOF_OPS_BIND_IP moves the proof ops project's OPS_BIND_IP and
+# OPS_INGEST_BIND_IP off 127.0.0.1 when another ops stack holds 3000/4317.
 #
 # Every assertion reads a post-condition (docker inspect, docker stats, a TCP
 # connect, a database row), never an exit code alone. Zero containers, zero
@@ -325,6 +327,8 @@ phase_render_env() {
     locate_overlays
     local SROOT_H; SROOT_H="$(host_path "$SROOT")"
     local s="$OVL_SEP"
+    local ops_bind="${PROOF_OPS_BIND_IP:-127.0.0.1}"
+    [[ "$ops_bind" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] || die "PROOF_OPS_BIND_IP '${ops_bind}' is not an IPv4 literal"
     # Linux Docker Engine: host-gateway is docker0, not loopback (see the header).
     local gw_ip=""
     if [[ "${POOLED_CUSTOMER:-0}" == 1 ]]; then gw_ip="$(host_gateway_ip)" || exit $?; fi
@@ -431,8 +435,8 @@ COMPOSE_PROFILES=production
 OPS_V4_SUBNET=10.231.8.0/24
 OPS_V6_SUBNET=fd5a:231:8::/64
 GREMION_ROOT_DIR=${SROOT_H}
-OPS_BIND_IP=127.0.0.1
-OPS_INGEST_BIND_IP=127.0.0.1
+OPS_BIND_IP=${ops_bind}
+OPS_INGEST_BIND_IP=${ops_bind}
 OPS_UID=65534
 OPS_GID=65534
 PROM_RETENTION_TIME=1d

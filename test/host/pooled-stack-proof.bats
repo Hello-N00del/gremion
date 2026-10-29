@@ -342,6 +342,23 @@ skip_if_mail_api_port_taken() {
     grep -qxF 'MAIL_TRANSPORT=stalwart' "${POOLED_OUT}/env/mail.env"
 }
 
+@test "render-env: OPS_BIND_IP and OPS_INGEST_BIND_IP default to 127.0.0.1" {
+    run bash "$PROOF" render-env
+    [ "$status" -eq 0 ]
+    grep -qxF 'OPS_BIND_IP=127.0.0.1' "${POOLED_OUT}/env/ops.env"
+    grep -qxF 'OPS_INGEST_BIND_IP=127.0.0.1' "${POOLED_OUT}/env/ops.env"
+}
+
+@test "render-env: PROOF_OPS_BIND_IP moves both ops binds; a non-IPv4 value is a FATAL" {
+    PROOF_OPS_BIND_IP=127.0.0.7 run bash "$PROOF" render-env
+    [ "$status" -eq 0 ]
+    grep -qxF 'OPS_BIND_IP=127.0.0.7' "${POOLED_OUT}/env/ops.env"
+    grep -qxF 'OPS_INGEST_BIND_IP=127.0.0.7' "${POOLED_OUT}/env/ops.env"
+    PROOF_OPS_BIND_IP='0.0.0.0; rm -rf /' run bash "$PROOF" render-env
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"FATAL: PROOF_OPS_BIND_IP"* ]]
+}
+
 @test "render-env: without POOLED_CUSTOMER the mail overlay publishes no 587 at all" {
     PROOF_HOST_GATEWAY_IP=172.17.0.1 run bash "$PROOF" render-env
     [ "$status" -eq 0 ]
