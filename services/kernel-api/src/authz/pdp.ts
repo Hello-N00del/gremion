@@ -76,7 +76,10 @@ async function decideChecked(_sql: Sql, enabledModules: EnabledModules, input: D
     const body = bodyRows[0]
     if (!body) return deny('body_unknown')
     const cap = await tx<{ state: string }[]>`SELECT state FROM idt.capability WHERE capability_key = ${input.capability}`
-    if (cap[0]?.state !== 'available') return deny('capability_unavailable')
+    // a capability the catalogue never wrote (module absent from the build, M-OFF-3) is unavailable. The row's own
+    // 'module_disabled' marker is the sweep's bookkeeping, not a gate: the live registry read above is the only module gate
+    // (C6, no cache), so a re-enabled module decides on its very next request instead of waiting for the next sweep.
+    if (!cap[0]) return deny('capability_unavailable')
     const resKind = input.resource?.kind ?? null
     const resId = input.resource?.id ?? null
     const grants = await tx<{ grant_id: string }[]>`
