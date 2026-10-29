@@ -1,6 +1,6 @@
 # Upgrade: one release onto a running installation
 
-- Version: 6.0.0
+- Version: 6.1.0
 - Status: provisional (see Known gaps)
 - Wall-clock budget: one working day, from step 1 to the asserted post-condition (PRD-PLAT-005)
 - Implements: TRD-200 (upgrade), TRD-206 (the pre-migration dump, R18-4), TRD-189 (blue/green as the deploy path)
@@ -186,6 +186,37 @@ if grep -Fxq "$TAG" /opt/gremion/runtime/current-tag; then
 fi
 ```
 
+6. **Adopt each realm the provisioner did not create (existing installs, once
+   per realm; kernel #48).** The provisioner service account
+   (`tenant-provisioner`) holds only master `create-realm`, and Keycloak gives
+   it admin on the realms it created. A realm imported at first boot, or
+   created before the account existed, answers it 403, so reconcile can neither
+   verify nor repair it (the step-up gate, the password policy, PKCE, the
+   bearer `sub` mapper, the audit REVOKE). `gremion-tenant reconcile <slug>`
+   then fails with `was not created by the provisioner service account` and
+   names the realm. For each realm it names, grant the account the roles
+   Keycloak gives a realm's creator, exactly: the 17 roles of
+   `AdminRoles.ALL_REALM_ROLES` on the master client `<realm>-realm`, never
+   `impersonation`, `view-system` or master `admin`
+   (`REALM_CREATOR_ROLES` in
+   `gremion-ui/src/lib/server/tenant/provisioner/kc-admin-api.ts`). The step
+   uses the Keycloak admin credential (from `state.env`, through name-only
+   `-e`, never an argv), touches only master, leaves the provisioner's secret
+   file alone, and refuses `master`. A rerun grants nothing and says so.
+   Skip this step when reconcile passes for every customer.
+
+```bash
+realm="<the realm reconcile named>"
+colour="$(cat /opt/gremion/runtime/active-colour)"
+cd /opt/gremion/current
+KEYCLOAK_ADMIN="$KEYCLOAK_ADMIN" KEYCLOAK_ADMIN_PASSWORD="$KEYCLOAK_ADMIN_PASSWORD" \
+  docker compose --env-file "/opt/gremion/etc/env/app-${colour}.env" run --rm -T \
+  -e KEYCLOAK_ADMIN -e KEYCLOAK_ADMIN_PASSWORD tenant-create bootstrap-provisioner --adopt-realm "$realm"
+# [tenant-create] bootstrap-provisioner --adopt-realm <realm>: ... GRANTED [create-client, ...] (a rerun: nothing to grant)
+gremion-tenant reconcile "<slug>"                                        # the realm is reachable: checks, no 403
+gremion-tenant reconcile "<slug>" --apply --reason "adopted realm (#48)"  # repairs the drift verify reported
+```
+
 ## Post-condition
 
 The new release serves, the deploy logged fourteen good lines (steps 1-12,
@@ -249,6 +280,7 @@ live, a deploy of any other tag stops at its step 5 and prints both commands.
 
 ## Changelog
 
+- 6.1.0 (2026-10-29): kernel #48. Step 6 (existing installs, once per realm): a realm the provisioner service account did not create (imported at first boot, or older than the account) is adopted with `tenant-create bootstrap-provisioner --adopt-realm <realm>`, which grants the account exactly the realm-creator roles on master `<realm>-realm`; reconcile names the step when it meets such a realm. Minor: a conditional step added, no post-condition changed.
 - 6.0.0 (2026-10-03): TASK-075. `gremion-deploy` step 5 is `gremion-migration-dump` preflight (no longer `gremion-snapshot`): it dumps the kernel and control databases a release migrates and deletes that dump, logged, at step 12b (`switched`), after step 11 passed and step 12 recorded the release; a failed deletion exits 1 with `DUMP-NOT-DELETED` before the soak (12c). The post-condition counts fourteen step lines. Step 3 now dumps by hand only the other databases a release migrates (module databases, `gremion_platform`); step 5 leaves the deploy's own dump to the program; the failure path restores the kernel or control database from it (restore, then a logged discard). Known gap (b) describes what landed. Major: a step changed.
 - 5.0.0 (2026-10-03): H10 (F1 sweep K6#19, TASK-048b relay). Step 1 verifies the release tag with `git verify-tag` against the host anchor `/opt/gremion/etc/allowed_signers` before anything in the clone is read (`gremion-deploy` STEP 2 repeats the check, and also refuses a tag whose signature is not an ssh signature). Major: a step changed.
 - 4.0.0 (2026-09-30): TASK-048b. Step 2 first moves a `state.env` rendered before the pins layer split onto `docker-compose.state-pins.yml` by editing its `COMPOSE_FILE` line only (never `gremion-init-secrets --force`, which rotates every live secret); `gremion-deploy` STEP 2 refuses the old layering and names this step. Major: a step changed.

@@ -6,8 +6,9 @@ import { describe, it, expect, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import type { KcTransport } from './kc-admin-api'
+import { REALM_CREATOR_ROLES, type KcTransport } from './kc-admin-api'
 import {
+  RealmNotAdoptedError,
   reconcileRealm,
   reconcileFleet,
   withKernelAuditCheck,
@@ -1059,6 +1060,65 @@ describe('reconcileRealm — apply replays ONLY the failed checks (§4-2), nothi
     // no realm/flow/client mutation issued for a URI drift
     expect(calls.every((c) => c.method === 'GET')).toBe(true)
     expect(report.applied).not.toContain('gremion-ui-redirect-uris')
+  })
+})
+
+// ── #48: a realm the provisioner SA did not create ──────────────────────────
+describe('(#48) reconcileRealm on a realm the provisioner SA did not create', () => {
+  // Keycloak's answer to a create-realm-only SA on a realm it did not create (an
+  // imported realm, or one that predates the SA), in the CLI transport's format.
+  const deniedFrom = (denyAfter: (method: string, path: string) => boolean, routes = greenRoutes()) => {
+    const calls: Array<{ method: string; path: string }> = []
+    const transport: KcTransport = async (method, path) => {
+      calls.push({ method, path })
+      if (denyAfter(method, path)) throw new Error(`Keycloak Admin API error: 403 on ${method} ${path}: {"error":"HTTP 403 Forbidden"}`)
+      return routes[`${method} ${path}`]
+    }
+    return { transport, calls }
+  }
+
+  it('the first read 403s -> an actionable error naming the missing master <realm>-realm grant and the adopt command, not a bare 403', async () => {
+    const { transport } = deniedFrom(() => true)
+    const err = await reconcileRealm(transport, { ...opts, verifyOnly: true }).then(
+      () => null,
+      (e: unknown) => e,
+    )
+    expect(err).toBeInstanceOf(RealmNotAdoptedError)
+    const msg = (err as Error).message
+    expect(msg).toContain('"verein-realm"')
+    expect(msg).toContain('bootstrap-provisioner --adopt-realm verein')
+    expect(msg).toContain('create-realm')
+    for (const role of REALM_CREATOR_ROLES) expect(msg).toContain(role)
+    expect(msg).toContain('403 on GET /admin/realms/verein')
+  })
+
+  it('a 403 later in apply (a partial grant) is the same actionable error', async () => {
+    const routes = greenRoutes()
+    ;(routes['GET /admin/realms/verein'] as Record<string, unknown>).sslRequired = 'external'
+    const { transport } = deniedFrom((method) => method === 'PUT', routes)
+    await expect(reconcileRealm(transport, { ...opts, verifyOnly: false })).rejects.toThrow(/bootstrap-provisioner --adopt-realm verein/)
+  })
+
+  it('any other Admin API failure is left as it was (a 500 is not an adoption problem)', async () => {
+    const transport: KcTransport = async (method, path) => {
+      throw new Error(`Keycloak Admin API error: 500 on ${method} ${path}: boom`)
+    }
+    const err = await reconcileRealm(transport, { ...opts, verifyOnly: true }).then(
+      () => null,
+      (e: unknown) => e,
+    )
+    expect(err).not.toBeInstanceOf(RealmNotAdoptedError)
+    expect((err as Error).message).toMatch(/^Keycloak Admin API error: 500/)
+  })
+
+  it('reconcile --all records the actionable message on the error row', async () => {
+    const { transport } = deniedFrom(() => true)
+    const fleet = await reconcileFleet([{ slug: 'verein', status: 'active' as TenantStatus, realmName: REALM }], (t) =>
+      reconcileRealm(transport, { ...opts, realm: t.realmName, verifyOnly: true }),
+    )
+    expect(fleet.anyFailed).toBe(true)
+    expect(fleet.rows[0]!.outcome).toBe('error')
+    expect(fleet.rows[0]!.error).toContain('bootstrap-provisioner --adopt-realm verein')
   })
 })
 

@@ -1,6 +1,6 @@
 # Install: the from-zero bring-up
 
-- Version: 4.1.0
+- Version: 4.1.1
 - Wall-clock budget: one working day, from the start of step 1 to the asserted post-condition (PRD-PLAT-005)
 - Implements: TRD-200 (install), TRD-042 (the from-zero rebuild, R15-2), FLOW-OPS-002
 - First run: TASK-038, the pilot re-initialisation
@@ -415,6 +415,8 @@ in [run-record.md](run-record.md).
 
 ## Known gaps
 
+- Realms the provisioner did not create (kernel #48): every customer realm made by step 17 is created by the provisioner service account, which Keycloak then lets administer it. A realm that Keycloak imported at first boot, or one restored from before the account existed, answers that account 403, and `gremion-tenant reconcile` names it. Adopt each such realm once with `tenant-create bootstrap-provisioner --adopt-realm <realm>`, as in step 6 of [upgrade.md](upgrade.md).
+
 - `bash infra/host/bootstrap.sh timers` (`stage_timers`, also run by `all`) does `systemctl enable --now gremion-backup.timer`, while R15-1 wants the job installed and disabled; step 21 therefore disables it again. Owner: TASK-040 (`infra/**`), which merged with `stage_timers` unchanged, so the change is still open. `test/host/runbook.bats` fails the day `stage_timers` stops enabling the timer, so step 21 and this entry change in the same commit.
 - `gremion-deploy` step 3 refuses without `runtime/last-backup.json`, and `gremion-backup` refuses without a reachable off-site remote (`RCLONE_REMOTE`), while the pilot keeps off-site copies off as the north star (R13-4). Step 13 therefore needs a remote for that one run. PENDING TASK-089 (`scripts/backup/`) decides the pilot's verification path.
 - `docker-compose.yml` declares the log pipeline's `ipcrypt_key` secret as `./secrets/ipcrypt_key.txt` in the release tree, while `gremion-render` generates the key once in `etc/secrets/ipcrypt_key.txt` under the host root and nothing in `infra/host` puts it into a release tree; step 12 links it by hand. Every later release tree the state project is started from needs the same link first. Owner: the host tooling of TASK-040 (`infra/**`, `docker-compose*.yml`), merged with this divergence, so it needs a follow-up task. `test/host/runbook.bats` stops asking for the link the day `gremion-render` writes the key into the release tree.
@@ -428,6 +430,7 @@ in [run-record.md](run-record.md).
 
 ## Changelog
 
+- 4.1.1 (2026-10-29): kernel #48. Known gaps names the adopt step (upgrade.md step 6) for a realm the provisioner service account did not create. Patch: no step or post-condition changed.
 - 4.1.0 (2026-10-03): TASK-039. Step 15 starts the observability stack from `compose/observability/` (Grafana-managed alerting, no separate alert router), the project table and step 8 name its directory, and the Known gap on the old ops project is replaced by the Grafana sign-in note. Minor: a step changed, no post-condition did.
 - 4.0.0 (2026-10-03): H10 (F1 sweep K6#19, TASK-048b relay). Step 3 authenticates the release tag against the release signer's `allowed_signers` before step 4 runs code from the tree; step 10 installs that same file as the host's anchor `etc/allowed_signers` (`bootstrap.sh --allowed-signers PATH signers`, `root:root` 0644 like `etc/cosign.pub`), and the post-condition reads both anchors' owner and mode. `gremion-deploy` refuses a tag that is unsigned, signed by an unlisted key or not an ssh signature. Major: a step changed.
 - 3.0.0 (2026-09-30): R29-MAIN-DEFECTS (R29-MD-A). The post-condition's sign-in observation passes the Keycloak admin password to kcadm as `KC_CLI_PASSWORD` by name (no `--password` on any command line), uses `--server` with Keycloak's `/auth` relative path (the URL without it answered 404) and removes kcadm's cached token afterwards. Major: a post-condition changed (Q9).

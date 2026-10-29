@@ -1,6 +1,6 @@
 // P2.1c (T10) — KC Admin-API helper unit tests (mocked transport, no network).
 import { describe, it, expect } from 'vitest'
-import { KcProvisionApi, type KcTransport } from './kc-admin-api'
+import { KcProvisionApi, REALM_CREATOR_ROLES, type KcTransport } from './kc-admin-api'
 import { smtpServerBlock } from './realm-doc'
 
 /** A scriptable transport: maps `${method} ${path}` to a response body. */
@@ -101,6 +101,114 @@ describe('KcProvisionApi.createProvisionerServiceAccount (bootstrap §7.2 least-
     await expect(
       new KcProvisionApi(transport).createProvisionerServiceAccount('master', 'tenant-provisioner', ['create-realm']),
     ).rejects.toThrow(/secret/)
+  })
+})
+
+describe('(#48) KcProvisionApi.adoptRealmForProvisioner (bootstrap-provisioner --adopt-realm)', () => {
+  // Keycloak 26.6.1 RealmsAdminResource.grantPermissionsToRealmCreator grants the
+  // creator AdminRoles.ALL_REALM_ROLES on the master "<realm>-realm" client.
+  const KC_26_6_1_ALL_REALM_ROLES = [
+    'create-client', 'view-realm', 'view-users', 'view-clients', 'view-events', 'view-identity-providers', 'view-authorization',
+    'manage-realm', 'manage-users', 'manage-clients', 'manage-events', 'manage-identity-providers', 'manage-authorization',
+    'query-users', 'query-clients', 'query-realms', 'query-groups',
+  ]
+  const M = '/admin/realms/master'
+  const routes = (held: string[]): Record<string, unknown> => {
+    const r: Record<string, unknown> = {
+      [`GET ${M}/clients?clientId=tenant-provisioner`]: [{ id: 'cli-uuid', clientId: 'tenant-provisioner' }],
+      [`GET ${M}/clients/cli-uuid/service-account-user`]: { id: 'sa-user' },
+      [`GET ${M}/clients?clientId=imported-realm`]: [{ id: 'mgmt-uuid', clientId: 'imported-realm' }],
+      [`GET ${M}/users/sa-user/role-mappings/clients/mgmt-uuid`]: held.map((name) => ({ id: `r-${name}`, name })),
+    }
+    // the management client also carries roles a creator is NOT given
+    for (const name of [...KC_26_6_1_ALL_REALM_ROLES, 'impersonation', 'view-system']) r[`GET ${M}/clients/mgmt-uuid/roles/${name}`] = { id: `r-${name}`, name }
+    return r
+  }
+  const grants = (calls: Array<{ method: string; path: string; body?: unknown }>) =>
+    calls.filter((c) => c.method !== 'GET')
+  // Keycloak's mapping endpoint: a POST adds to what the next GET returns (unless `dropOnPost`).
+  const fakeTransport = (r: Record<string, unknown>, dropOnPost = false) => {
+    const calls: Array<{ method: string; path: string; body?: unknown }> = []
+    const mapping = `${M}/users/sa-user/role-mappings/clients/mgmt-uuid`
+    const transport: KcTransport = async (method, path, body) => {
+      calls.push({ method, path, body })
+      if (method === 'POST' && path === mapping && !dropOnPost) r[`GET ${mapping}`] = [...((r[`GET ${mapping}`] as unknown[]) ?? []), ...(body as unknown[])]
+      return r[`${method} ${path}`]
+    }
+    return { transport, calls }
+  }
+
+  it('fails loudly when the read-back after the grant still lacks a role', async () => {
+    const { transport } = fakeTransport(routes([]), true)
+    await expect(new KcProvisionApi(transport).adoptRealmForProvisioner('tenant-provisioner', 'imported')).rejects.toThrow(/still lacks/)
+  })
+
+  it('REALM_CREATOR_ROLES is exactly the set Keycloak grants a realm creator (no impersonation, no view-system, no admin)', () => {
+    expect([...REALM_CREATOR_ROLES].sort()).toEqual([...KC_26_6_1_ALL_REALM_ROLES].sort())
+  })
+
+  it('grants exactly the creator roles on master "<realm>-realm" to the SA user, in one POST', async () => {
+    const { transport, calls } = fakeTransport(routes([]))
+    const res = await new KcProvisionApi(transport).adoptRealmForProvisioner('tenant-provisioner', 'imported')
+    const writes = grants(calls)
+    expect(writes).toHaveLength(1)
+    expect(writes[0]!.method).toBe('POST')
+    expect(writes[0]!.path).toBe(`${M}/users/sa-user/role-mappings/clients/mgmt-uuid`)
+    const names = (writes[0]!.body as Array<{ name: string }>).map((r) => r.name).sort()
+    expect(names).toEqual([...KC_26_6_1_ALL_REALM_ROLES].sort())
+    expect(res).toEqual({ granted: [...REALM_CREATOR_ROLES], alreadyHeld: [] })
+    // every call stays in the master realm: nothing is read or written in the adopted realm itself
+    expect(calls.every((c) => c.path.startsWith(`${M}/`))).toBe(true)
+  })
+
+  it('is idempotent: a second run on a fully adopted realm writes nothing', async () => {
+    const { transport, calls } = fakeTransport(routes([...KC_26_6_1_ALL_REALM_ROLES]))
+    const res = await new KcProvisionApi(transport).adoptRealmForProvisioner('tenant-provisioner', 'imported')
+    expect(grants(calls)).toEqual([])
+    expect(res.granted).toEqual([])
+    expect([...res.alreadyHeld].sort()).toEqual([...KC_26_6_1_ALL_REALM_ROLES].sort())
+  })
+
+  it('a partial earlier grant: only the missing roles are posted', async () => {
+    const { transport, calls } = fakeTransport(routes(['view-realm', 'manage-realm']))
+    const res = await new KcProvisionApi(transport).adoptRealmForProvisioner('tenant-provisioner', 'imported')
+    const posted = (grants(calls)[0]!.body as Array<{ name: string }>).map((r) => r.name)
+    expect(posted).not.toContain('view-realm')
+    expect(posted).not.toContain('manage-realm')
+    expect(posted).toHaveLength(KC_26_6_1_ALL_REALM_ROLES.length - 2)
+    expect(res.alreadyHeld).toEqual(['view-realm', 'manage-realm'])
+  })
+
+  it('refuses the master realm (its "master-realm" client is the whole Keycloak) before any call', async () => {
+    const { transport, calls } = fakeTransport(routes([]))
+    await expect(new KcProvisionApi(transport).adoptRealmForProvisioner('tenant-provisioner', 'master')).rejects.toThrow(/master/)
+    expect(calls).toEqual([])
+  })
+
+  it('refuses a realm name that is not a plain realm name, before any call', async () => {
+    const { transport, calls } = fakeTransport(routes([]))
+    for (const bad of ['', 'a/b', '../x', 'x&clientId=y', 'Imported ', '-x']) {
+      await expect(new KcProvisionApi(transport).adoptRealmForProvisioner('tenant-provisioner', bad)).rejects.toThrow(/realm name/)
+    }
+    expect(calls).toEqual([])
+  })
+
+  it('names the fix when the SA is absent (bootstrap-provisioner first) or the realm has no master management client', async () => {
+    const noSa = fakeTransport({ ...routes([]), [`GET ${M}/clients?clientId=tenant-provisioner`]: [] })
+    await expect(new KcProvisionApi(noSa.transport).adoptRealmForProvisioner('tenant-provisioner', 'imported')).rejects.toThrow(/bootstrap-provisioner/)
+    expect(grants(noSa.calls)).toEqual([])
+    const noRealm = fakeTransport({ ...routes([]), [`GET ${M}/clients?clientId=imported-realm`]: [] })
+    await expect(new KcProvisionApi(noRealm.transport).adoptRealmForProvisioner('tenant-provisioner', 'imported')).rejects.toThrow(/imported-realm/)
+    expect(grants(noRealm.calls)).toEqual([])
+  })
+
+  it('ignores a search hit whose clientId is not an exact match (Keycloak clientId search is not exact)', async () => {
+    const { transport, calls } = fakeTransport({
+      ...routes([]),
+      [`GET ${M}/clients?clientId=imported-realm`]: [{ id: 'other', clientId: 'imported-realm-x' }],
+    })
+    await expect(new KcProvisionApi(transport).adoptRealmForProvisioner('tenant-provisioner', 'imported')).rejects.toThrow(/imported-realm/)
+    expect(grants(calls)).toEqual([])
   })
 })
 

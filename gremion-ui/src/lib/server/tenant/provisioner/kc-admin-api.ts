@@ -35,6 +35,48 @@ function statusFrom(err: unknown): number | null {
   return m ? Number(m[1]) : null
 }
 
+/** The Keycloak Admin API status a transport error carries (the CLI transport's
+ *  `Keycloak Admin API error: <status> on ...`), else null. */
+export function adminApiStatus(err: unknown): number | null {
+  const m = /Keycloak Admin API error: (\d{3})\b/.exec(err instanceof Error ? err.message : String(err))
+  return m ? Number(m[1]) : null
+}
+
+/**
+ * #48: the master `<realm>-realm` client roles Keycloak grants the account that
+ * CREATES a realm. Keycloak 26.6.1 `RealmsAdminResource.grantPermissionsToRealmCreator`
+ * grants `AdminRoles.ALL_REALM_ROLES` on `realm.getMasterAdminClient()` (the master
+ * client `<realm>` + `AdminRoles.APP_SUFFIX` "-realm"), unless the caller already
+ * holds master `admin`. The management client also carries `impersonation` and
+ * `view-system`; a creator gets neither, and neither do we. Re-check this list
+ * against `AdminRoles.ALL_REALM_ROLES` when the Keycloak pin moves.
+ */
+export const REALM_CREATOR_ROLES: readonly string[] = [
+  'create-client',
+  'view-realm',
+  'view-users',
+  'view-clients',
+  'view-events',
+  'view-identity-providers',
+  'view-authorization',
+  'manage-realm',
+  'manage-users',
+  'manage-clients',
+  'manage-events',
+  'manage-identity-providers',
+  'manage-authorization',
+  'query-users',
+  'query-clients',
+  'query-realms',
+  'query-groups',
+]
+
+/** The master client that holds a realm's admin roles (Keycloak's master admin client for it). */
+export const masterAdminClientId = (realm: string): string => `${realm}-realm`
+
+/** A realm name `--adopt-realm` accepts: what tenant realms are named (lowercase, digits, `-`, `_`). */
+const ADOPTABLE_REALM_RE = /^[a-z0-9][a-z0-9_-]{0,62}$/
+
 /** The user attribute that records a first administrator's invite (send-once). */
 export const INVITE_MARK = 'gremion_invited_at'
 
@@ -320,6 +362,49 @@ export class KcProvisionApi {
       throw new Error(`createProvisionerServiceAccount: no client secret returned for "${clientId}" in realm "${realm}"`)
     }
     return { clientSecret: secret.value, created }
+  }
+
+  /**
+   * #48 `bootstrap-provisioner --adopt-realm <realm>`: give the provisioner SA the
+   * rights Keycloak would have given it had it created `realm` (an imported realm,
+   * or one that predates the SA, answers it 403 otherwise). Runs once, as the
+   * Keycloak admin (like the SA seed), entirely in the master realm: the SA user's
+   * client-role mapping on master `<realm>-realm`, exactly REALM_CREATOR_ROLES.
+   * Idempotent: the roles already held are read first and only the missing ones
+   * are posted, so a rerun writes nothing. Refuses `master` (its management
+   * client would be the whole Keycloak) and any name that is not a realm name.
+   */
+  async adoptRealmForProvisioner(saClientId: string, realm: string): Promise<{ granted: string[]; alreadyHeld: string[] }> {
+    if (!ADOPTABLE_REALM_RE.test(realm)) throw new Error(`adopt-realm: ${JSON.stringify(realm)} is not a realm name (${ADOPTABLE_REALM_RE.source})`)
+    if (realm === 'master') throw new Error('adopt-realm: refusing the master realm (its master-realm client is admin over all of Keycloak)')
+    const exact = async (clientId: string): Promise<string | undefined> => {
+      const hits = (await this.realmGet<Array<{ id?: string; clientId?: string }>>('master', `/clients?clientId=${encodeURIComponent(clientId)}`)) ?? []
+      return hits.find((c) => c.clientId === clientId)?.id
+    }
+    const saUuid = await exact(saClientId)
+    if (!saUuid) throw new Error(`adopt-realm: master has no client "${saClientId}": run bootstrap-provisioner first`)
+    const saUser = await this.realmGet<{ id?: string }>('master', `/clients/${saUuid}/service-account-user`)
+    if (!saUser?.id) throw new Error(`adopt-realm: client "${saClientId}" has no service-account user (is serviceAccountsEnabled set?)`)
+    const mgmtId = masterAdminClientId(realm)
+    const mgmtUuid = await exact(mgmtId)
+    if (!mgmtUuid) throw new Error(`adopt-realm: master has no client "${mgmtId}": no realm "${realm}" on this Keycloak`)
+    const mappingPath = `/users/${saUser.id}/role-mappings/clients/${mgmtUuid}`
+    const held = new Set(((await this.realmGet<Array<{ name?: string }>>('master', mappingPath)) ?? []).map((r) => r.name))
+    const alreadyHeld = REALM_CREATOR_ROLES.filter((r) => held.has(r))
+    const granted = REALM_CREATOR_ROLES.filter((r) => !held.has(r))
+    if (granted.length === 0) return { granted, alreadyHeld }
+    const reps: Array<Record<string, unknown>> = []
+    for (const name of granted) {
+      const rep = await this.realmGet<Record<string, unknown> | undefined>('master', `/clients/${mgmtUuid}/roles/${encodeURIComponent(name)}`)
+      if (rep?.name !== name) throw new Error(`adopt-realm: client "${mgmtId}" has no role "${name}": refusing a partial grant`)
+      reps.push(rep)
+    }
+    await this.realmReq('master', 'POST', mappingPath, reps)
+    // the post-condition, read back: every creator role is now mapped
+    const after = new Set(((await this.realmGet<Array<{ name?: string }>>('master', mappingPath)) ?? []).map((r) => r.name))
+    const missing = REALM_CREATOR_ROLES.filter((r) => !after.has(r))
+    if (missing.length) throw new Error(`adopt-realm: after the grant, master client "${mgmtId}" still lacks [${missing.join(', ')}] for "${saClientId}"`)
+    return { granted, alreadyHeld }
   }
 
   private setReq(realm: string, execId: string, requirement: string): Promise<unknown> {

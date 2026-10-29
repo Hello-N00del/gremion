@@ -71,6 +71,22 @@ to `etc/secrets/tenant-create/tenant_provisioner` (0600). The one-shot reads it
 from there as `TENANT_PROVISIONER_SECRET_FILE`, through the read-only
 `etc/secrets/tenant-create` mount that no other service has (TASK-043b F1).
 
+### A realm the service account did not create (#48)
+
+```bash
+pnpm -C gremion-ui exec tsx scripts/tenant-provision.ts bootstrap-provisioner --adopt-realm <realm>
+```
+
+Keycloak gives a `create-realm` account admin only on the realms it created. A
+realm imported at first boot, or created before the SA, answers it 403, and
+`reconcile` fails naming this command. `--adopt-realm` (admin credentials, once
+per realm) maps onto the SA exactly the master `<realm>-realm` client roles
+Keycloak grants a realm's creator (`REALM_CREATOR_ROLES`: Keycloak's
+`AdminRoles.ALL_REALM_ROLES`, no `impersonation`, no `view-system`), only those
+still missing; it touches only master, never the SA's secret, and refuses
+`master`. On a pooled host: step 6 of
+[docs/ops/runbook/upgrade.md](../ops/runbook/upgrade.md).
+
 > The `pnpm -C gremion-ui check` guard fails the build if the provisioner
 > credential resolves *inside* `TENANT_SECRETS_DIR`. Keep that directory a
 > dedicated leaf holding only per-tenant secret files.
