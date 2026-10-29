@@ -332,10 +332,64 @@ linux_uname() {
     LINUX_PATH="${STUBS}:${PATH}"
 }
 
+skip_if_mail_api_port_taken() {
+    if (exec 3<>/dev/tcp/127.0.0.1/8086) 2>/dev/null; then skip "127.0.0.1:8086 is taken on this box"; fi
+}
+
 @test "render-env: mail.env carries MAIL_TRANSPORT=stalwart (mandatory, no default; the proof runs its own Stalwart)" {
     run bash "$PROOF" render-env
     [ "$status" -eq 0 ]
     grep -qxF 'MAIL_TRANSPORT=stalwart' "${POOLED_OUT}/env/mail.env"
+}
+
+@test "render-env: without POOLED_CUSTOMER the mail overlay publishes no 587 at all" {
+    PROOF_HOST_GATEWAY_IP=172.17.0.1 run bash "$PROOF" render-env
+    [ "$status" -eq 0 ]
+    ! grep -q ':587:587' "${POOLED_OUT}/mail.proof.yml"
+}
+
+@test "render-env: POOLED_CUSTOMER with PROOF_HOST_GATEWAY_IP publishes 587 on loopback AND on the gateway" {
+    skip_if_mail_api_port_taken
+    POOLED_CUSTOMER=1 PROOF_HOST_GATEWAY_IP=172.17.0.1 run bash "$PROOF" render-env
+    [ "$status" -eq 0 ]
+    grep -qF '"127.0.0.1:587:587"' "${POOLED_OUT}/mail.proof.yml"
+    grep -qF '"172.17.0.1:587:587"' "${POOLED_OUT}/mail.proof.yml"
+}
+
+@test "render-env: PROOF_HOST_GATEWAY_IP=127.0.0.1 adds no second 587 line; a non-IPv4 override is a FATAL" {
+    skip_if_mail_api_port_taken
+    POOLED_CUSTOMER=1 PROOF_HOST_GATEWAY_IP=127.0.0.1 run bash "$PROOF" render-env
+    [ "$status" -eq 0 ]
+    [ "$(grep -c ':587:587' "${POOLED_OUT}/mail.proof.yml")" -eq 1 ]
+    POOLED_CUSTOMER=1 PROOF_HOST_GATEWAY_IP='host.docker.internal' run bash "$PROOF" render-env
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"FATAL: host-gateway address"* ]]
+}
+
+@test "render-env: on Linux the gateway is detected from the default bridge" {
+    skip_if_mail_api_port_taken
+    linux_uname
+    export SHIM_BRIDGE_GW=172.17.0.1
+    PATH="$LINUX_PATH" POOLED_CUSTOMER=1 run bash "$PROOF" render-env
+    [ "$status" -eq 0 ]
+    grep -qF '"172.17.0.1:587:587"' "${POOLED_OUT}/mail.proof.yml"
+}
+
+@test "render-env: Docker Desktop adds no gateway line even under a Linux uname (127.0.0.1 works there)" {
+    skip_if_mail_api_port_taken
+    linux_uname
+    export SHIM_BRIDGE_GW=172.17.0.1 SHIM_OS="Docker Desktop"
+    PATH="$LINUX_PATH" POOLED_CUSTOMER=1 run bash "$PROOF" render-env
+    [ "$status" -eq 0 ]
+    [ "$(grep -c ':587:587' "${POOLED_OUT}/mail.proof.yml")" -eq 1 ]
+}
+
+@test "render-env: Linux with a bridge that cannot be inspected is a FATAL naming the override, never a silent skip" {
+    skip_if_mail_api_port_taken
+    linux_uname
+    PATH="$LINUX_PATH" POOLED_CUSTOMER=1 run bash "$PROOF" render-env
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"FATAL: cannot detect the docker0 gateway"*"PROOF_HOST_GATEWAY_IP"* ]]
 }
 
 @test "precreate_bind_dirs: the app's bind sources exist, owned by the invoking user, before any container" {

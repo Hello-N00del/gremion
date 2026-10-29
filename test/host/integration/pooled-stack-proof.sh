@@ -67,6 +67,11 @@
 # On Docker Desktop (Windows, macOS) the invoking user is enough. A permission
 # error on the scratch dirs prints this hint (perm_hint).
 #
+# LINUX HOST DEFAULTS (POOLED_CUSTOMER=1, Docker Engine): host-gateway is the
+# docker0 address, not host loopback, so the state Keycloak cannot reach a mail
+# server bound to 127.0.0.1:587. render-env then also publishes 587 on the
+# host-gateway address (detected from the default bridge; PROOF_HOST_GATEWAY_IP
+# overrides it; Docker Desktop is left alone, 127.0.0.1 works there).
 #
 # Every assertion reads a post-condition (docker inspect, docker stats, a TCP
 # connect, a database row), never an exit code alone. Zero containers, zero
@@ -170,6 +175,23 @@ scratch_rm() {
 # the edge file provider reads etc/edge).
 precreate_bind_dirs() {
     mkdir -p "$SROOT/etc/edge" "$SROOT/secrets/tenants" "$SROOT/etc/secrets/control-panel"              "$SROOT/etc/secrets/tenant-create" "$SROOT/data/module-exports"
+}
+
+# host_gateway_ip -- the address host-gateway resolves to for a container, when
+# it is NOT host loopback (Docker Engine on Linux: the default bridge's gateway).
+# PROOF_HOST_GATEWAY_IP wins. Docker Desktop and non-Linux hosts print nothing
+# (127.0.0.1 reaches the host there). Detection failing on Linux is a die, never
+# a silent skip: the Keycloak -> mail leg would fail much later.
+host_gateway_ip() {
+    local ip="${PROOF_HOST_GATEWAY_IP:-}"
+    if [[ -z "$ip" ]]; then
+        [[ "$(uname -s)" == Linux ]] || return 0
+        if [[ "$(docker info --format '{{.OperatingSystem}}' 2>/dev/null || true)" == *"Docker Desktop"* ]]; then return 0; fi
+        ip="$(docker network inspect bridge -f '{{(index .IPAM.Config 0).Gateway}}' 2>/dev/null | tr -d '\r' || true)"
+        [[ -n "$ip" ]] || die "cannot detect the docker0 gateway (docker network inspect bridge); set PROOF_HOST_GATEWAY_IP"
+    fi
+    [[ "$ip" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] || die "host-gateway address '${ip}' is not an IPv4 literal"
+    [[ "$ip" == 127.0.0.1 ]] || printf '%s' "$ip"
 }
 
 # compose <project-suffix> <args...> -- the host's own command shape:
@@ -303,6 +325,9 @@ phase_render_env() {
     locate_overlays
     local SROOT_H; SROOT_H="$(host_path "$SROOT")"
     local s="$OVL_SEP"
+    # Linux Docker Engine: host-gateway is docker0, not loopback (see the header).
+    local gw_ip=""
+    if [[ "${POOLED_CUSTOMER:-0}" == 1 ]]; then gw_ip="$(host_gateway_ip)" || exit $?; fi
 
     local pw_pg pw_kcdb pw_kc pw_gr pw_ctl pw_pub pw_bnc sec_proxy sec_auth sec_push
     pw_pg="$(gen)"; pw_kcdb="$(gen)"; pw_kc="$(gen)"; pw_gr="$(gen)"; pw_ctl="$(gen)"; pw_pub="$(gen)"
@@ -517,6 +542,9 @@ EOF
         printf 'services:\n  stalwart:\n    ports: !override\n'
         printf '      - "127.0.0.1:${STALWART_API_PORT}:8080"\n'
         [[ "${POOLED_CUSTOMER:-0}" == 1 ]] && printf '      - "127.0.0.1:587:587"\n'
+        # host-gateway on Linux is docker0, not loopback: publish 587 there too
+        # (the state Keycloak reaches mail.<domain>:587 through it).
+        [[ -z "$gw_ip" ]] || printf '      - "%s:587:587"\n' "$gw_ip"
         printf '    volumes:\n      - ${GREMION_ROOT}/etc/mail/tls:/opt/stalwart/etc/tls:ro\n'
     } > "$OUT/mail.proof.yml"
     ok "render-env ${STACK}: env files in ${ENV_DIR}, overlays in ${OUT}"
