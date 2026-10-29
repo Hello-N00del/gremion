@@ -139,6 +139,60 @@ test('continue-on-error on a step is reported', () => {
   assert.match(p, /Combine the legs' records\) sets continue-on-error/)
 })
 
+test('`|| true` on a leg\'s verify call is reported (a red suite would read as green)', () => {
+  const p = joined(plant('run: node scripts/verify/verify.mjs --only census', 'run: node scripts/verify/verify.mjs --only census || true'))
+  assert.match(p, /verify-census step \d+ \(.*\): `node scripts\/verify\/verify\.mjs --only census \|\| true` swallows a failing exit status/)
+})
+
+test('`|| :` in the gate is reported', () => {
+  // A block scalar: a plain `... || :` at end of line is not valid YAML (the colon reads as a mapping).
+  const combine = 'run: node scripts/verify/combine-records.mjs --in-dir "$RUNNER_TEMP/verify-records" --sha "$SHA"'
+  const p = joined(plant(combine, `run: |
+          ${combine.slice(5)} || :`))
+  assert.match(p, /verify-gate step \d+ \(Combine the legs' records\): `.*\|\| :` swallows a failing exit status/)
+})
+
+test('`set +e` in the gate is reported', () => {
+  const p = joined(plant('          set -euo pipefail\n          # Vacuity floor', '          set +e\n          # Vacuity floor'))
+  assert.match(p, /verify-gate step \d+ \(Every verify leg must have succeeded\): `set \+e` swallows a failing exit status/)
+})
+
+test('a docker diagnostic or cleanup with `|| true` is tolerated, but not when it carries the verify call', () => {
+  assert.deepEqual(problemsOf(CI), [])
+  const p = joined(plant('run: docker rm -f nats-js || true', 'run: docker rm -f nats-js; node scripts/verify/verify.mjs --only census || true'))
+  assert.match(p, /swallows a failing exit status/)
+})
+
+test('a verify-gate job `if` narrowed beyond !cancelled() is reported (a skipped required check reads as passing)', () => {
+  const p = joined(plant('    if: ${{ !cancelled() }}\n    timeout-minutes: 15\n', "    if: ${{ !cancelled() && needs.verify-static.result == 'success' }}\n    timeout-minutes: 15\n"))
+  assert.match(p, /verify-gate has `if: !cancelled\(\) && needs\.verify-static\.result == 'success'`; it must be `!cancelled\(\)`/)
+})
+
+test('a verify-gate job with no `if` is reported (a failed leg would skip it)', () => {
+  const p = joined(plant('    if: ${{ !cancelled() }}\n    timeout-minutes: 15\n', '    timeout-minutes: 15\n'))
+  assert.match(p, /verify-gate has `if: \(none\)`/)
+})
+
+test('a weakening clause ANDed onto the strict check-record step\'s `if` is reported', () => {
+  const p = joined(
+    plant(
+      "        if: ${{ github.event_name != 'pull_request' || needs.verify-census.result == 'success' }}\n",
+      "        if: ${{ (github.event_name != 'pull_request' || needs.verify-census.result == 'success') && github.actor != 'renovate[bot]' }}\n",
+    ),
+  )
+  assert.match(p, /the strict check-record\.mjs call has `if: .*renovate\[bot\]'`; it must be exactly/)
+})
+
+test('a weakening clause ORed into the strict check-record step\'s `if` is reported', () => {
+  const p = joined(
+    plant(
+      "        if: ${{ github.event_name != 'pull_request' || needs.verify-census.result == 'success' }}\n",
+      "        if: ${{ github.event_name != 'pull_request' || needs.verify-census.result == 'success' || github.event_name == 'workflow_call' && false }}\n",
+    ),
+  )
+  assert.match(p, /the strict check-record\.mjs call has `if: .*workflow_call.*`; it must be exactly/)
+})
+
 test('a missing verify-gate job is reported', () => {
   const p = joined(plant('  verify-gate:\n', '  verify-gate-renamed:\n'))
   assert.match(p, /there is no verify-gate job/)

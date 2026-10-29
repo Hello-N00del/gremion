@@ -22,8 +22,11 @@
 //   4. A way past the strict check. `--allow-missing` exists for one case (a pull
 //      request that touched no census input skips that leg) and must never be
 //      reachable from a push; `continue-on-error` turns any red job into a green
-//      one; and the strict check-record call must stay the plain, flagless one
-//      sign-release.sh also relies on.
+//      one; `|| true` / `|| :` / `set +e` in a leg or the gate swallow a red exit
+//      status the same way; the strict check-record call must stay the plain,
+//      flagless one sign-release.sh also relies on; and the `if` of the gate job
+//      and of that call are pinned, because a narrowed one makes the gate SKIP,
+//      and a skipped required check reads as passing in a branch ruleset.
 //
 // A scan that found almost nothing would pass every rule above, so it refuses to
 // pass below a floor of verify invocations (the vacuity floor).
@@ -65,6 +68,19 @@ const text = (v) => (typeof v === 'string' ? v : '')
 const VERIFY_ONLY = /--only(?:=|\s+)([^\s"';|&]+)/g
 const PULL_REQUEST_ONLY = /github\.event_name\s*==\s*'pull_request'/
 const NOT_PULL_REQUEST = /github\.event_name\s*!=\s*'pull_request'/
+
+// A shell line that swallows a failing exit status. Comment lines are skipped by the
+// caller. `docker logs|rm ... || true` (a diagnostic or cleanup that must not mask the
+// real failure) is the one tolerated shape, and only as a whole line of its own.
+const SWALLOWS_STATUS = /\|\|\s*(?:true|:|exit\s+0)\s*(?:$|[;&|)#])|\bset\s+\+(?:e|o\s+errexit)\b/
+const BENIGN_CLEANUP = /^\s*docker\s+(?:logs|rm)\b[^;&|]*\|\|\s*true\s*$/
+
+// The only `if` the gate job and its strict check-record step may carry (after the
+// `${{ }}` wrapper and whitespace are normalized away). Anything narrower can skip
+// them; anything missing on the job skips it when a leg fails.
+const GATE_JOB_IFS = new Set(['!cancelled()', 'always()'])
+const STRICT_STEP_IF = "github.event_name != 'pull_request' || needs.verify-census.result == 'success'"
+const normalizeIf = (v) => text(v === undefined || v === null ? '' : String(v)).replace(/^\s*\$\{\{|\}\}\s*$/g, '').replace(/\s+/g, ' ').trim()
 
 /** Every step of every job, with where it lives. */
 function* eachStep(doc) {
@@ -176,6 +192,19 @@ export function checkWorkflow(doc, { requiredSuites, unitParts, integrationParts
     }
   }
 
+  // Jobs whose steps decide the verdict: every leg that produces a record, and the gate.
+  const verdictJobs = new Set([...uploaders, ...invocations.map((i) => i.jobId), ...(gate ? ['verify-gate'] : [])])
+  for (const { label, jobId, step } of eachStep(doc)) {
+    if (!verdictJobs.has(jobId)) continue
+    for (const line of text(step.run).split('\n')) {
+      if (/^\s*#/.test(line) || BENIGN_CLEANUP.test(line)) continue
+      if (SWALLOWS_STATUS.test(line)) problems.push(`${label}: \`${line.trim()}\` swallows a failing exit status -- a red step would read as green`)
+    }
+  }
+  if (gate && !GATE_JOB_IFS.has(normalizeIf(gate.if))) {
+    problems.push(`verify-gate has \`if: ${normalizeIf(gate.if) || '(none)'}\`; it must be \`!cancelled()\` so a failed or skipped leg makes the gate run and fail instead of skipping it (a skipped required check reads as passing)`)
+  }
+
   // ── --allow-missing only on the pull-request path; the strict call is flagless ──
   let strictCalls = 0
   for (const { label, jobId, step } of eachStep(doc)) {
@@ -198,6 +227,9 @@ export function checkWorkflow(doc, { requiredSuites, unitParts, integrationParts
           problems.push(`${label}: the strict check-record.mjs call has an \`if\` that does not run it on pushes and manual runs`)
         }
         if (/allow-missing/i.test(cond)) problems.push(`${label}: the strict check-record.mjs call is conditioned on --allow-missing`)
+        if (cond && normalizeIf(cond) !== STRICT_STEP_IF) {
+          problems.push(`${label}: the strict check-record.mjs call has \`if: ${normalizeIf(cond)}\`; it must be exactly \`${STRICT_STEP_IF}\` -- any other clause can skip the check`)
+        }
       } else if (!PULL_REQUEST_ONLY.test(text(step.if))) {
         problems.push(`${label}: a flagged check-record.mjs call must be pull-request-only`)
       }
