@@ -45,8 +45,9 @@ describe('PURGE_RULES against the retention catalogue', () => {
     // a window that follows a LOG class row is derived by the registry's one rule (no second copy of the figure)
     const logRow = rule.windowFrom ? parseLogRows(CATALOGUE.replace(/\r\n/g, '\n')).find((r) => r.row === rule.windowFrom) : undefined
     expect(rule.windowFrom === undefined || logRow !== undefined, `${rule.windowFrom} states regular / cap days`).toBe(true)
-    expect(rule.windowDays, `${rule.id}: min(regular ${logRow?.regularDays}, cap ${logRow?.capDays} - one daily tick)`).toBe(logRow ? dbWindowDays(logRow) : rule.windowDays)
-    expect(logRow ? [rule.windowDays] : windowDaysOf(source!)).toContain(rule.windowDays)
+    // one expectation for both arms, so neither compares the window with itself: the registry-derived window, or the figures the catalogue row states
+    const stated = logRow ? [dbWindowDays(logRow)] : windowDaysOf(source!)
+    expect(stated, `${rule.id}: ${logRow ? `min(regular ${logRow.regularDays}, cap ${logRow.capDays} - one daily tick)` : 'the days the catalogue row states'}`).toContain(rule.windowDays)
     expect(Number.isInteger(rule.windowDays) && rule.windowDays > 0).toBe(true)
   })
 
