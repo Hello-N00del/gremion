@@ -303,6 +303,9 @@ phase_prepare() {
     local token smtp kcpw
     token="$(gen)$(gen)"; smtp="$(gen)"; kcpw="$(gen)"
     printf '%s' "$kcpw" > "$OUT/kc-admin-password"
+    # MAIL_TRANSPORT has no default (render-ops.sh refuses an unset one). The proof's sink is
+    # Mailpit on a Stalwart-shaped submission host with the ALERT_SMTP_* keys below; the relay
+    # transport would demand the RELAY_SMTP_* keys and strip the Stalwart rules.
     cat > "$ENV_FILE" <<EOF
 STACK=${STACK}
 COMPOSE_PROJECT_NAME=${OPS}
@@ -318,6 +321,7 @@ PROM_RETENTION_TIME=1d
 PLATFORM_DOMAIN=example.org
 EDGE_BIND_IP=203.0.113.10
 ALERT_WEBHOOK_URL=CHANGE_ME_OPERATOR_alert_webhook_url
+MAIL_TRANSPORT=stalwart
 ALERT_EMAIL_TO=ops@proof.invalid
 ALERT_EMAIL_FROM=alerts@proof.invalid
 ALERT_SMTP_HOST=mailpit
@@ -423,11 +427,16 @@ phase_up() {
         nets="$(docker inspect --format '{{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}' "$(container_of "$svc")")"
         [[ "$nets" == "${OPS}_ops " ]] && ok "$svc is on ${OPS}_ops only" || bad "$svc networks: $nets"
     done
-    local mounts
+    local mounts binds
     # Image mounts (the busybox probe) are skipped: their source is the image's
     # own read-only layer, not a host path.
     mounts="$(docker inspect --format '{{range .Mounts}}{{if ne .Type "image"}}{{.Source}}|{{.Destination}}|{{.RW}};{{end}}{{end}}' "$(container_of alloy)")"
-    [[ "$mounts" != *"|/rootfs|"* && "$mounts" != *"/var/lib/docker"* && "$mounts" != *"docker.sock"* ]] \
+    # "No Docker data root" is about what the host hands the container: a BIND mount of
+    # /var/lib/docker (or below it). A named volume's source is, on every Linux daemon, a directory
+    # under /var/lib/docker/volumes -- Vector's volume below is one -- so the data-root test reads
+    # bind sources only.
+    binds="$(docker inspect --format '{{range .Mounts}}{{if eq .Type "bind"}}{{.Source}};{{end}}{{end}}' "$(container_of alloy)")"
+    [[ "$mounts" != *"|/rootfs|"* && "$binds" != *"/var/lib/docker"* && "$mounts" != *"docker.sock"* ]] \
         && [[ "$mounts" == *"|/host/proc|false;"* && "$mounts" == *"|/host/sys|false;"* && "$mounts" == *"|/vector-logs|false;"* ]] \
         && ok "alloy: /proc, /sys, Vector's volume read-only; no /, no Docker data root, no socket" || bad "alloy mounts: $mounts"
     curl -fsS "http://127.0.0.1:${GRAFANA_PORT}/api/health" | grep -q '"database": *"ok"' \
