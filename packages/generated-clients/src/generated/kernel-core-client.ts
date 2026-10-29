@@ -62,6 +62,109 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/bodies/tree": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Every body and org unit of the customer */
+        get: operations["getBodyTree"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/bodies/{bodyId}/seats": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The seats of a body with their current holders */
+        get: operations["listBodySeats"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/bodies/{bodyId}/memberships": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The memberships of a body valid on a day */
+        get: operations["listBodyMemberships"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/seats/{seatId}/tenures": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The history of a seat: every tenure, newest first */
+        get: operations["listSeatTenures"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/persons/me/preference": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The signed-in person's own preference */
+        get: operations["getOwnPreference"];
+        /** Saves the signed-in person's own preference */
+        put: operations["putOwnPreference"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/persons/{personId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** A person (their own record only) */
+        get: operations["getPerson"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -115,6 +218,157 @@ export interface components {
             status: number;
             detail?: string;
         };
+        /** @description DB-IDT-BODY: a Gremium, the authorisation scope. */
+        Body: {
+            /** Format: uuid */
+            bodyId: string;
+            kindKey: string;
+            name: string;
+            shortName: null | string;
+            parentBodyId: null | string;
+            /** @enum {unknown} */
+            state: "active" | "archived";
+            archivedAt: null | string;
+            rowVersion: number;
+        };
+        /** @description DB-IDT-ORGUNIT: a unit of a body. */
+        OrgUnit: {
+            /** Format: uuid */
+            orgUnitId: string;
+            /** Format: uuid */
+            bodyId: string;
+            parentOrgUnitId: null | string;
+            kindKey: string;
+            name: string;
+            isOrgan: boolean;
+            /** @enum {unknown} */
+            state: "active" | "archived";
+            rowVersion: number;
+        };
+        /** @description Every body and org unit of the customer; the client builds the tree from parentBodyId / parentOrgUnitId. */
+        BodyTree: {
+            bodies: components["schemas"]["Body"][];
+            orgUnits: components["schemas"]["OrgUnit"][];
+        };
+        SeatHolder: {
+            /** Format: uuid */
+            tenureId: string;
+            /** Format: uuid */
+            personId: string;
+            /** Format: date */
+            startsOn: string;
+            plannedEndOn: null | string;
+        };
+        /** @description DB-IDT-SEAT with its holders today (open tenures that have started). */
+        Seat: {
+            /** Format: uuid */
+            seatId: string;
+            /** Format: uuid */
+            bodyId: string;
+            orgUnitId: null | string;
+            title: string;
+            /** @enum {unknown} */
+            seatKind: "voting_member" | "office" | "advisory";
+            /** @enum {unknown} */
+            fillMode: "direct_election" | "delegation" | "appointment";
+            /** @enum {unknown} */
+            holderCardinality: "single" | "multiple";
+            voting: boolean;
+            /** @enum {unknown} */
+            state: "active" | "retired";
+            holders: components["schemas"]["SeatHolder"][];
+        };
+        SeatList: {
+            /** Format: uuid */
+            bodyId: string;
+            seats: components["schemas"]["Seat"][];
+        };
+        /** @description DB-IDT-TENURE: one holding of a seat; the seat history is the list of these. */
+        Tenure: {
+            /** Format: uuid */
+            tenureId: string;
+            /** Format: uuid */
+            personId: string;
+            wahlperiodeId: null | string;
+            /** Format: date */
+            startsOn: string;
+            plannedEndOn: null | string;
+            endedOn: null | string;
+            endReason: null | ("term_end" | "resigned" | "removed" | "succeeded" | "data_correction");
+            /** @enum {unknown} */
+            source: "election" | "delegation" | "appointment" | "succession";
+        };
+        SeatTenures: {
+            /** Format: uuid */
+            seatId: string;
+            tenures: components["schemas"]["Tenure"][];
+        };
+        /** @description DB-IDT-MEMBERSHIP. Carries the person by id only. */
+        Membership: {
+            /** Format: uuid */
+            membershipId: string;
+            /** Format: uuid */
+            personId: string;
+            orgUnitId: null | string;
+            /** @enum {unknown} */
+            participationKind: "elected_member" | "non_voting_helper" | "employee" | "initiative_member" | "initiative_lead";
+            voting: boolean;
+            /** Format: date */
+            validFrom: string;
+            validUntil: null | string;
+            wahlperiodeId: null | string;
+            endReason: null | ("term_end" | "resigned" | "removed" | "data_correction");
+            /** @enum {unknown} */
+            source: "admin" | "control_panel" | "import" | "provisioning";
+        };
+        MembershipList: {
+            /** Format: uuid */
+            bodyId: string;
+            /** Format: date */
+            asOf: string;
+            memberships: components["schemas"]["Membership"][];
+        };
+        /** @description DB-IDT-PERSON. Personal data: served to the person themself only. */
+        Person: {
+            /** Format: uuid */
+            personId: string;
+            displayName: null | string;
+            email: null | string;
+            /** @enum {unknown} */
+            accountState: "invited" | "active" | "disabled" | "erased";
+            pseudonym: string;
+            /** Format: date-time */
+            invitedAt: string;
+            activatedAt: null | string;
+        };
+        /** @description DB-IDT-PREFERENCE of the signed-in person; effectiveLocale resolves follow_customer through idt.customer_setting.default_locale. rowVersion 0 and stored false until the person first saves. */
+        Preference: {
+            /** Format: uuid */
+            personId: string;
+            /** @enum {unknown} */
+            locale: "de" | "en" | "follow_customer";
+            /** @enum {unknown} */
+            displayDensity: "standard" | "kompakt" | "gross";
+            /** @enum {unknown} */
+            colourScheme: "system" | "light" | "dark";
+            lastBodyId: null | string;
+            rowVersion: number;
+            /** @enum {unknown} */
+            updatedByKind: "person" | "system";
+            updatedBy: null | string;
+            /** @enum {unknown} */
+            effectiveLocale: "de" | "en";
+            stored: boolean;
+        };
+        PreferencePatch: {
+            /** @enum {unknown} */
+            locale?: "de" | "en" | "follow_customer";
+            /** @enum {unknown} */
+            displayDensity?: "standard" | "kompakt" | "gross";
+            /** @enum {unknown} */
+            colourScheme?: "system" | "light" | "dark";
+            lastBodyId?: null | string;
+        };
     };
     responses: {
         /** @description No, or an unacceptable, credential for the resolved customer. */
@@ -156,6 +410,15 @@ export interface components {
         };
         /** @description An internal error, or a response that would have broken this document (response-contract-violation). */
         InternalError: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/problem+json": components["schemas"]["Problem"];
+            };
+        };
+        /** @description The request did not match the operation's schema. */
+        BadRequest: {
             headers: {
                 [name: string]: unknown;
             };
@@ -251,6 +514,236 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["EnabledModules"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["Unavailable"];
+        };
+    };
+    getBodyTree: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The customer's host, whole (Tenancy D1). Must equal Host. Absent on a module-caller request. */
+                "x-forwarded-host"?: components["parameters"]["ForwardedHost"];
+                /** @description The proxy shared secret (TENANT_PROXY_SHARED_SECRET). Absent on a module-caller request. */
+                "x-proxy-trust"?: components["parameters"]["ProxyTrust"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every body and org unit of the customer */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BodyTree"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["Unavailable"];
+        };
+    };
+    listBodySeats: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The customer's host, whole (Tenancy D1). Must equal Host. Absent on a module-caller request. */
+                "x-forwarded-host"?: components["parameters"]["ForwardedHost"];
+                /** @description The proxy shared secret (TENANT_PROXY_SHARED_SECRET). Absent on a module-caller request. */
+                "x-proxy-trust"?: components["parameters"]["ProxyTrust"];
+            };
+            path: {
+                /** @description A body of the resolved customer. */
+                bodyId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The seats of a body with their current holders */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SeatList"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["Unavailable"];
+        };
+    };
+    listBodyMemberships: {
+        parameters: {
+            query?: {
+                /** @description The day (default: today, UTC). */
+                asOf?: string;
+            };
+            header?: {
+                /** @description The customer's host, whole (Tenancy D1). Must equal Host. Absent on a module-caller request. */
+                "x-forwarded-host"?: components["parameters"]["ForwardedHost"];
+                /** @description The proxy shared secret (TENANT_PROXY_SHARED_SECRET). Absent on a module-caller request. */
+                "x-proxy-trust"?: components["parameters"]["ProxyTrust"];
+            };
+            path: {
+                /** @description A body of the resolved customer. */
+                bodyId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The memberships of a body valid on a day */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MembershipList"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["Unavailable"];
+        };
+    };
+    listSeatTenures: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The customer's host, whole (Tenancy D1). Must equal Host. Absent on a module-caller request. */
+                "x-forwarded-host"?: components["parameters"]["ForwardedHost"];
+                /** @description The proxy shared secret (TENANT_PROXY_SHARED_SECRET). Absent on a module-caller request. */
+                "x-proxy-trust"?: components["parameters"]["ProxyTrust"];
+            };
+            path: {
+                /** @description A seat of the resolved customer. */
+                seatId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The history of a seat: every tenure, newest first */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SeatTenures"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["Unavailable"];
+        };
+    };
+    getOwnPreference: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The customer's host, whole (Tenancy D1). Must equal Host. Absent on a module-caller request. */
+                "x-forwarded-host"?: components["parameters"]["ForwardedHost"];
+                /** @description The proxy shared secret (TENANT_PROXY_SHARED_SECRET). Absent on a module-caller request. */
+                "x-proxy-trust"?: components["parameters"]["ProxyTrust"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The preference of the person whose verified subject the token carries. 403 for a module caller and for a subject that belongs to no active person. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Preference"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["Unavailable"];
+        };
+    };
+    putOwnPreference: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The customer's host, whole (Tenancy D1). Must equal Host. Absent on a module-caller request. */
+                "x-forwarded-host"?: components["parameters"]["ForwardedHost"];
+                /** @description The proxy shared secret (TENANT_PROXY_SHARED_SECRET). Absent on a module-caller request. */
+                "x-proxy-trust"?: components["parameters"]["ProxyTrust"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PreferencePatch"];
+            };
+        };
+        responses: {
+            /** @description The saved preference. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Preference"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["Unavailable"];
+        };
+    };
+    getPerson: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The customer's host, whole (Tenancy D1). Must equal Host. Absent on a module-caller request. */
+                "x-forwarded-host"?: components["parameters"]["ForwardedHost"];
+                /** @description The proxy shared secret (TENANT_PROXY_SHARED_SECRET). Absent on a module-caller request. */
+                "x-proxy-trust"?: components["parameters"]["ProxyTrust"];
+            };
+            path: {
+                /** @description A person of the resolved customer. */
+                personId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The person's own record. Another person's record is 403 until the PDP (TASK-081) answers the read. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Person"];
                 };
             };
             401: components["responses"]["Unauthorized"];

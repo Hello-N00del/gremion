@@ -43,13 +43,13 @@ interface PrefRow {
 }
 
 /** Null when the subject belongs to no active person of this customer. */
-export async function readPreference(tx: Sql, subject: string): Promise<PreferenceView | null> {
-  const [p] = await tx<{ person_id: string }[]>`SELECT person_id FROM idt.person WHERE idp_subject = ${subject} AND account_state = 'active'`
+export async function readPreference(tx: Sql, customerId: string, subject: string): Promise<PreferenceView | null> {
+  const [p] = await tx<{ person_id: string }[]>`SELECT person_id FROM idt.person WHERE customer_id = ${customerId}::uuid AND idp_subject = ${subject} AND account_state = 'active'`
   if (!p) return null
   const [pref] = await tx<PrefRow[]>`
     SELECT locale, display_density, colour_scheme, last_body_id, row_version::int AS row_version, updated_by_kind, updated_by
-      FROM idt.preference WHERE person_id = ${p.person_id}::uuid`
-  const [cs] = await tx<{ default_locale: 'de' | 'en' }[]>`SELECT default_locale FROM idt.customer_setting`
+      FROM idt.preference WHERE customer_id = ${customerId}::uuid AND person_id = ${p.person_id}::uuid`
+  const [cs] = await tx<{ default_locale: 'de' | 'en' }[]>`SELECT default_locale FROM idt.customer_setting WHERE customer_id = ${customerId}::uuid`
   const customerDefault = cs?.default_locale ?? 'de'
   const locale = pref?.locale ?? 'follow_customer'
   return {
@@ -72,14 +72,14 @@ export interface PreferenceCtx {
 }
 
 export const preferenceOps = {
-  getPreferenceBySubject: (ctx: PreferenceCtx, subject: string): Promise<PreferenceView | null> => inCustomerTx(ctx.sql, ctx.customerId, (tx) => readPreference(tx, subject)),
+  getPreferenceBySubject: (ctx: PreferenceCtx, subject: string): Promise<PreferenceView | null> => inCustomerTx(ctx.sql, ctx.customerId, (tx) => readPreference(tx, ctx.customerId, subject)),
 
   upsertPreferenceBySubject: (ctx: PreferenceCtx, subject: string, patch: PreferencePatch): Promise<PreferenceView> =>
     inCustomerTx(ctx.sql, ctx.customerId, async (tx) => {
-      const [p] = await tx<{ person_id: string }[]>`SELECT person_id FROM idt.person WHERE idp_subject = ${subject} AND account_state = 'active'`
+      const [p] = await tx<{ person_id: string }[]>`SELECT person_id FROM idt.person WHERE customer_id = ${ctx.customerId}::uuid AND idp_subject = ${subject} AND account_state = 'active'`
       const person = one(p ? [p] : [], 'no active person for this subject')
       const [cur] = await tx<{ locale: string; display_density: string; colour_scheme: string; last_body_id: string | null }[]>`
-        SELECT locale, display_density, colour_scheme, last_body_id FROM idt.preference WHERE person_id = ${person.person_id}::uuid FOR UPDATE`
+        SELECT locale, display_density, colour_scheme, last_body_id FROM idt.preference WHERE customer_id = ${ctx.customerId}::uuid AND person_id = ${person.person_id}::uuid FOR UPDATE`
       const locale = patch.locale ?? cur?.locale ?? 'follow_customer'
       const density = patch.displayDensity ?? cur?.display_density ?? 'standard'
       const scheme = patch.colourScheme ?? cur?.colour_scheme ?? 'system'
@@ -90,7 +90,7 @@ export const preferenceOps = {
         ON CONFLICT (person_id) DO UPDATE
            SET locale = EXCLUDED.locale, display_density = EXCLUDED.display_density, colour_scheme = EXCLUDED.colour_scheme, last_body_id = EXCLUDED.last_body_id,
                updated_by_kind = 'person', updated_by = EXCLUDED.updated_by`
-      const out = await readPreference(tx, subject)
+      const out = await readPreference(tx, ctx.customerId, subject)
       if (!out) throw new BodiesError('NOT_FOUND', 'preference')
       return out
     }),

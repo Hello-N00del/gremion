@@ -4,6 +4,7 @@
 // tests wire fakes or a scratch stack, and routes:check boots with
 // unwiredDeps() (C18: construct without a database, a secret or a network;
 // fail on USE, never at construction).
+import type { Sql } from '@gremion/db'
 import type { HostRejectionLog } from '@gremion/tenancy-core'
 import type { ModuleRuntimeDecl } from '../registry/declarations.ts'
 
@@ -62,6 +63,16 @@ export interface CustomerGate {
   check(tenant: TenantRow): Promise<GateVerdict>
 }
 
+/**
+ * The customer's own kernel database, as the app-role pool the identity domain
+ * runs on (TASK-080-a). The pool is the customer's alone (tenant-store, the
+ * target resolved from the request's own control row, never the environment);
+ * a failure to open it answers 503 for that customer only.
+ */
+export interface TenantDb {
+  sqlFor(tenant: TenantRow): Promise<Sql>
+}
+
 export interface ModuleDeclarations {
   /** The runtime block of modules/<key>/module.json this image carries, or undefined. */
   get(moduleKey: string): ModuleRuntimeDecl | undefined
@@ -85,6 +96,8 @@ export interface KernelApiDeps {
   tokens: TokenVerifier
   gate: CustomerGate
   declarations: ModuleDeclarations
+  /** The customer's kernel database for the identity reads and the own-preference write. */
+  tenantDb: TenantDb
   log: Logger
   /** The bounded tenant.host.rejected emitter (TRD-076, G6). */
   hostRejection: HostRejectionLog
@@ -116,6 +129,7 @@ export function unwiredDeps(): KernelApiDeps {
     tokens: { verify: notWired('token verification') },
     gate: { check: notWired('the schema gate') },
     declarations: { get: () => undefined },
+    tenantDb: { sqlFor: notWired('the tenant database') },
     log: silent,
     hostRejection,
   }

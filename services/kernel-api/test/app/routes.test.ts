@@ -13,15 +13,17 @@ import { appWith, reads, world } from '../harness/fakes.ts'
 
 const spec = loadSpec(SPEC_URL)
 const ops = listOperations(spec)
+// TASK-077 core + TASK-080-a bodies; TASK-081 appends its own here, sorted
+const ALL_OPERATIONS = ['getBodyTree', 'getHealth', 'getOwnPreference', 'getPerson', 'getTenancySelf', 'listBodyMemberships', 'listBodySeats', 'listEnabledModules', 'listSeatTenures', 'putOwnPreference']
 
 describe('routes (TDD 1)', () => {
-  it('the route table equals the spec: 3 operations, nothing else (routes:check)', async () => {
+  it('the route table equals the spec: 10 operations, nothing else (routes:check)', async () => {
     const app = buildApp()
     const r = await checkAppRoutes(app, spec)
     expect(r.problems).toEqual([])
     expect(r.ok).toBe(true)
     expect(getRouteTable(app).sort()).toEqual(ops.map((o) => routeKey(o.method, o.path)).sort())
-    expect(ops.map((o) => o.operationId).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))).toEqual(['getHealth', 'getTenancySelf', 'listEnabledModules'])
+    expect(ops.map((o) => o.operationId).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))).toEqual(ALL_OPERATIONS)
     await app.close()
   })
 
@@ -52,8 +54,8 @@ describe('routes (TDD 1)', () => {
 describe('route-table sweep: every spec route but getHealth is tenant-gated (C18)', () => {
   const gated = ops.filter((o) => !TENANT_EXEMPT_OPERATIONS.has(o.operationId!))
 
-  it('covers at least the two tenant operations (not vacuous)', () => {
-    expect(gated.map((o) => o.operationId).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))).toEqual(['getTenancySelf', 'listEnabledModules'])
+  it('covers every tenant operation (not vacuous)', () => {
+    expect(gated.map((o) => o.operationId).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))).toEqual(ALL_OPERATIONS.filter((id) => id !== 'getHealth'))
   })
 
   it.each(gated.map((o) => [o.operationId!, o.method, o.path]))('%s: no proxy proof -> 403 before any read', async (_id, method, path) => {

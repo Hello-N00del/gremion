@@ -129,6 +129,8 @@ export function fakeDeps(w: FakeWorld, over: Partial<KernelApiDeps> = {}): { dep
       },
     },
     declarations: { get: (k) => w.declarations.get(k) },
+    // the identity reads open the customer's database; a suite that serves them passes its own (test/bodies)
+    tenantDb: { sqlFor: async () => { throw new Error('tenantDb is not faked in this suite') } },
     log: { info: log('info'), warn: log('warn'), error: log('error') },
     hostRejection: createHostRejectionLog({ emit: (msg, fields) => void rec.events.push({ msg, fields }), schedule: () => {} }),
     ...over,
