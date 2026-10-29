@@ -179,6 +179,9 @@ EOF
     cat > "$PROTO_ROOT/edge-proto.env" <<EOF
 COMPOSE_PROJECT_NAME=${EDGEPROTO_PROJECT}
 EDGEPROTO_PROJECT=${EDGEPROTO_PROJECT}
+# org.gremion.stack on the fixture traefik; must equal the literal constraint in
+# test/host/fixtures/edge-proto/traefik.yml (state.env carries the same value).
+STACK=edgeproto
 COMPOSE_FILE=docker-compose.yml
 EDGE_BIND_IP=127.0.0.1
 EDGE_HTTP_PORT=8090

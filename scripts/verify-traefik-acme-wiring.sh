@@ -39,9 +39,9 @@
 #            conditional ACME_EMAIL guard refuses (resolver set, no email) and
 #            admits (no resolver, no email) -- both sides measured.
 #
-#   CLAIM 5  All FOUR markers survive nowhere: the committed file carries
+#   CLAIM 5  All FIVE markers survive nowhere: the committed file carries
 #            exactly @ACME_EMAIL@ @ACME_CA_SERVER@ @EDGE_V4_SUBNET@
-#            @EDGE_V6_SUBNET@, and the rendered command substitutes each with
+#            @EDGE_V6_SUBNET@ @STACK@, and the rendered command substitutes each with
 #            the environment's value. Non-vacuous by construction: the same
 #            check is run once per marker with that marker's `-e` expression
 #            cut out of the command, and must go RED every time.
@@ -404,6 +404,7 @@ else
     PROOF_CA="https://127.0.0.1:1/directory"
     PROOF_V4="10.99.4.0/24"
     PROOF_V6="fd5a:94::/64"
+    PROOF_STACK="claim4stack"
     # /letsencrypt is the external ACME volume on the real stack. Traefik does
     # NOT create it: without it the resolver is dropped ("unable to get ACME
     # account") and no certificate is ever requested -- reproduce it here.
@@ -435,6 +436,7 @@ YAML
         -e "ACME_CA_SERVER=${PROOF_CA}" \
         -e "EDGE_V4_SUBNET=${PROOF_V4}" \
         -e "EDGE_V6_SUBNET=${PROOF_V6}" \
+        -e "STACK=${PROOF_STACK}" \
         -v "$(host_path "$PWD")/docker/traefik/traefik.yml:/etc/traefik/traefik.yml:ro" \
         -v "${WORK_HOST}/dynamic:/etc/traefik/dynamic:ro" \
         -v "${WORK_HOST}/letsencrypt:/letsencrypt" \
@@ -500,6 +502,7 @@ YAML
         -e "ACME_CA_SERVER=${PROOF_CA}" \
         -e "EDGE_V4_SUBNET=${PROOF_V4}" \
         -e "EDGE_V6_SUBNET=${PROOF_V6}" \
+        -e "STACK=${PROOF_STACK}" \
         -v "$(host_path "$PWD")/docker/traefik/traefik.yml:/etc/traefik/traefik.yml:ro" \
         --entrypoint /bin/sh \
         "$IMAGE" -c "$TRAEFIK_CMD" 2>&1 || true)"
@@ -516,6 +519,7 @@ YAML
         -e "ACME_CA_SERVER=${PROOF_CA}" \
         -e "EDGE_V4_SUBNET=${PROOF_V4}" \
         -e "EDGE_V6_SUBNET=${PROOF_V6}" \
+        -e "STACK=${PROOF_STACK}" \
         -v "$(host_path "$PWD")/docker/traefik/traefik.yml:/etc/traefik/traefik.yml:ro" \
         -v "${WORK_HOST}/letsencrypt:/letsencrypt" \
         --entrypoint /bin/sh \
@@ -534,22 +538,23 @@ fi
 echo ""
 
 # ------------------------------------------------------------
-# CLAIM 5 — all four markers, and the proof that the check can fail.
+# CLAIM 5 — all five markers, and the proof that the check can fail.
 # ------------------------------------------------------------
-echo "CLAIM 5 — the four markers are exactly the ones the rendered command substitutes"
-MARKERS=(ACME_EMAIL ACME_CA_SERVER EDGE_V4_SUBNET EDGE_V6_SUBNET)
+echo "CLAIM 5 — the five markers are exactly the ones the rendered command substitutes"
+MARKERS=(ACME_EMAIL ACME_CA_SERVER EDGE_V4_SUBNET EDGE_V6_SUBNET STACK)
 declare -A PROBE=(
     [ACME_EMAIL]="claim5@example.org"
     [ACME_CA_SERVER]="https://ca.claim5.example.org/dir"
     [EDGE_V4_SUBNET]="10.99.5.0/24"
     [EDGE_V6_SUBNET]="fd5a:95::/64"
+    [STACK]="claim5stack"
 )
 
 in_file="$({ grep -oE '@[A-Z][A-Z0-9_]*@' docker/traefik/traefik.yml || true; } | sort -u | tr '\n' ' ')"
 want="$(printf '@%s@\n' "${MARKERS[@]}" | sort -u | tr '\n' ' ')"
 echo "        markers in docker/traefik/traefik.yml: ${in_file:-<none>}"
 if [[ "$in_file" == "$want" ]]; then
-    pass "the committed file carries exactly the four markers"
+    pass "the committed file carries exactly the five markers"
 else
     fail "the committed file's markers are '${in_file}', expected '${want}'"
 fi
@@ -567,6 +572,7 @@ render_only() {
         -e "ACME_CA_SERVER=${PROBE[ACME_CA_SERVER]}" \
         -e "EDGE_V4_SUBNET=${PROBE[EDGE_V4_SUBNET]}" \
         -e "EDGE_V6_SUBNET=${PROBE[EDGE_V6_SUBNET]}" \
+        -e "STACK=${PROBE[STACK]}" \
         -v "$(host_path "$PWD")/docker/traefik/traefik.yml:/etc/traefik/traefik.yml:ro" \
         --entrypoint /bin/sh \
         "$IMAGE" -c "${cmd/"$RENDER_TAIL"/cat /tmp/traefik.yml}" 2>&1 || true
@@ -589,9 +595,9 @@ if [[ -z "$TRAEFIK_CMD" ]]; then
 else
     rendered="$(render_only "$TRAEFIK_CMD")"
     if all_substituted "$rendered"; then
-        pass "the rendered command substitutes all four markers with the environment's values"
+        pass "the rendered command substitutes all five markers with the environment's values"
     else
-        fail "the rendered command does not substitute all four markers; its render follows"
+        fail "the rendered command does not substitute all five markers; its render follows"
         { grep -E '@[A-Z]|FATAL|email:|caServer:|/24|/64|NO-EXEC' <<<"$rendered" || true; } | sed 's/^/        /' >&2
     fi
 

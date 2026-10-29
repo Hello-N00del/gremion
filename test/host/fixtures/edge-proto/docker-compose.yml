@@ -58,6 +58,9 @@ services:
         aliases: ["traefik"]
     labels:
       traefik.enable: "true"
+      # The fixture Traefik (traefik.yml beside this file) is constrained to its own stack
+      # exactly as production is (incident 2026-10-29).
+      org.gremion.stack: "${STACK:?STACK required}"
       traefik.http.services.traefik.loadbalancer.server.port: "8080"
       # traefik.enable=true (needed so the docker provider reads the middleware
       # labels below) with NO router label makes Traefik GENERATE a default

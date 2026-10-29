@@ -31,7 +31,7 @@
 #   3. This file performs NO `${VAR}` expansion, and with `--configFile`
 #      Traefik IGNORES CLI flags and TRAEFIK_* environment variables. Every
 #      host-specific value is therefore a marker -- @ACME_EMAIL@,
-#      @ACME_CA_SERVER@, @EDGE_V4_SUBNET@, @EDGE_V6_SUBNET@ -- substituted from
+#      @ACME_CA_SERVER@, @EDGE_V4_SUBNET@, @EDGE_V6_SUBNET@, @STACK@ -- substituted from
 #      the container's environment into /tmp/traefik.yml at start-up by the
 #      `traefik` service's command in docker-compose.yml. That is also what
 #      keeps an operator's mailbox and address plan out of this public repo
@@ -124,6 +124,15 @@ providers:
     # proxy. The proxy exposes only the GET endpoints this provider needs.
     endpoint: "tcp://docker-socket-proxy:2375"
     exposedByDefault: false
+    # THIS stack's containers only (incident 2026-10-29). The socket proxy shows the
+    # WHOLE Docker daemon, so without a constraint a second stack on the daemon (a
+    # proof stack, a second kernel unit, the StuRaOS env) is read as well: identical
+    # router and middleware names (hsts, kc-admin-allowlist, gremion-ui*, edge-*)
+    # collide, Traefik drops the conflicting definitions and disables every router
+    # that uses them -- the other stack answers 404. Every routed container carries
+    # org.gremion.stack=${STACK} (scripts/check-traefik-stack-scope.mjs holds both
+    # halves); @STACK@ is rendered from the traefik service's STACK at start-up.
+    constraints: "Label(`org.gremion.stack`,`@STACK@`)"
     # No provider-wide network (TASK-040 G1): every docker-routed service
     # names traefik.docker.network=${STACK}_edge on its own labels, the one
     # network traefik shares with it.
