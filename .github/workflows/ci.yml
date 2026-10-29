@@ -107,6 +107,20 @@ jobs:
       - name: Marketing copy matches the licence register and elections scope
         run: make lint-compliance
 
+      # Every Dockerfile that builds a pnpm workspace package must COPY the whole
+      # @gremion/* closure of it. Static twin of the Docker Image Builds job: this
+      # fails in seconds on any PR, the image build proves it for real when a
+      # docker input changed. Delegates to the Makefile so a local `make lint`
+      # and CI cannot drift apart.
+      - name: Dockerfiles COPY the whole @gremion/* workspace closure
+        run: make lint-dockerfile-workspace-closure
+
+      # The pull-request docker path filter and the image matrix: runs the real
+      # `changes` step against a synthetic repo (including a change list past the
+      # pipe buffer) and asserts every tracked Dockerfile is built or excused.
+      - name: Docker path filter and image matrix hold
+        run: make lint-ci-docker-filter
+
       - name: Validate Docker Compose config
         run: |
           # Provide stubs so docker compose config can resolve all references
@@ -507,26 +521,136 @@ jobs:
 
   # ──────────────────────────────────────────────────────────────────────────
   # Job 3: Docker build validation.
-  # Only the legal image is built here. It is the one first-party image whose
-  # build is cheap (an nginx base plus three COPYs) — gremion-ui's is covered by
-  # gremion-ui.yml's own docker job, and vector's build clones and compiles
-  # ipcrypt2, which is not worth a per-commit gate.
-  # Runs in parallel with unit-test (both depend on lint only).
+  #
+  # Every first-party image that builds from this repository, build only: no
+  # login, no push, no secrets. All build contexts are the repository root
+  # except legal's, fallback's and synapse's, which are their own directories
+  # (a pinned nginx or synapse base plus a few COPYs). The one image left out
+  # is vector, whose build clones and compiles ipcrypt2 and is not worth a
+  # per-commit gate; the two test-runner images (scripts/verify/bats-runner,
+  # test/host/runner) are not shipped. scripts/check-ci-docker-filter.test.mjs
+  # fails if a tracked Dockerfile is in neither the matrix nor that list.
+  #
+  # Why this runs on pull requests (2026-10-29): it used to be push-only
+  # ("PR-time docker builds duplicate work that is recovered the moment the PR
+  # merges"), and the only image it built was legal. TASK-033-a made
+  # packages/tenant-store depend on @gremion/retention; the kernel-api and
+  # board Dockerfiles never COPYed packages/retention, `pnpm deploy` failed
+  # inside the image build, and PR #41 merged green to main with the break in
+  # it -- nothing on the PR path ever built those images. The cost objection is
+  # answered by the `changes` job below: a PR that touches no image input skips
+  # the matrix entirely.
   # ──────────────────────────────────────────────────────────────────────────
+
+  # Decides whether a pull request can have changed any docker build input.
+  # A plain `git diff` over the PR range rather than a third-party paths-filter
+  # action: nothing to pin, nothing to trust with the checkout. A path filter on
+  # the `on:` trigger is not an option -- it would skip the whole workflow
+  # (lint, tests) and leave the required checks pending. Push and manual runs
+  # do not need it: the docker-build job runs unconditionally for them.
+  changes:
+    name: Docker inputs changed
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    outputs:
+      docker: ${{ steps.filter.outputs.docker }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          fetch-depth: 0  # three-dot diff needs the merge base
+          persist-credentials: false
+
+      - name: Does this PR touch a docker build input?
+        id: filter
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          # Any Dockerfile/Containerfile or .dockerignore anywhere, plus every
+          # tree and root file a Dockerfile COPYs from: the workspace packages,
+          # services, modules, apps, both SvelteKit apps, the legal and fallback
+          # images, the vertical data directories, the kernel-api's migration
+          # register, this workflow, the LICENSE/NOTICE files, and the
+          # lockfile/workspace/root manifests every pnpm image copies first.
+          pattern='(^|/)(Dockerfile|Containerfile)(\.[^/]*)?$|(^|/)\.dockerignore$|^(packages|services|modules|apps|gremion-ui|gremion-public|verticals|docker/legal|docker/fallback|scripts/migrations)/|^(pnpm-lock\.yaml|pnpm-workspace\.yaml|package\.json|LICENSE|NOTICE|\.github/workflows/ci\.yml)$'
+          # --no-renames: with rename detection --name-only prints only the
+          # destination of a move, so `git mv packages/x docs/x` (a docker input
+          # leaving its build tree) would look like a docs-only change. With it
+          # a move lists both the old and the new path. quotePath=false keeps
+          # non-ASCII names literal so the pattern sees them as written.
+          changed=$(git -c core.quotePath=false diff --no-renames --name-only "$BASE_SHA...$HEAD_SHA")
+          # Print a count, never the names: they are PR-controlled and the
+          # Actions runner interprets `::command::` at the start of a log line
+          # (workflow-command injection through a crafted file name).
+          echo "Changed files in this PR: $(printf '%s\n' "$changed" | grep -c . || true)"
+          # Count matches; do not feed a producer to a grep that quits early.
+          # Under pipefail, a quiet grep exits at its first match, the writer
+          # takes SIGPIPE once the list outgrows the 64 KiB pipe buffer (a few
+          # thousand paths: a carve, a mass rename), the pipeline returns 141,
+          # the if takes its else branch and the step would report
+          # docker=false with nothing red. grep -c reads all of its input.
+          # Exit 1 only means "no match"; any other grep failure fails the
+          # step (and a failed step builds everything, see docker-build).
+          matches=$(printf '%s\n' "$changed" | grep -Ec "$pattern" || [ "$?" -eq 1 ])
+          if [ "$matches" -gt 0 ]; then
+            echo "docker=true" >> "$GITHUB_OUTPUT"
+            echo "A docker build input changed: image builds will run."
+          else
+            echo "docker=false" >> "$GITHUB_OUTPUT"
+            echo "No docker build input changed: image builds skipped."
+          fi
+
   docker-build:
     name: Docker Image Builds
     runs-on: ubuntu-latest
-    needs: lint
-    # Master/develop pushes only — PR-time docker builds duplicate work that
-    # is recovered the moment the PR merges. Saves ~3–5 min of runner time
-    # per PR commit. The `integration-test` job below already follows the
-    # same `push`-only pattern.
-    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    needs: [lint, changes]
+    # `changes` is skipped on push / workflow_dispatch, and a job that needs a
+    # skipped job is skipped itself unless it opts out with always(). So the
+    # condition is explicit: the !cancelled() + lint check keep a failed lint
+    # blocking the build, and the event clause picks who runs -- pushes and
+    # manual runs always, pull requests when a docker input changed OR when the
+    # `changes` job itself failed (an unreachable base sha, a fetch error): a
+    # broken filter fails safe and builds everything rather than skipping the
+    # builds. This is the line that used to read
+    # `github.event_name == 'push' || github.event_name == 'workflow_dispatch'`,
+    # which made the job skipped on every pull request.
+    if: >-
+      ${{ !cancelled()
+      && needs.lint.result == 'success'
+      && (github.event_name != 'pull_request'
+          || needs.changes.result == 'failure'
+          || needs.changes.outputs.docker == 'true') }}
+    # Build only. Read-only token; no registry login anywhere in this job.
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: legal, dockerfile: docker/legal/Dockerfile, context: docker/legal/ }
+          - { name: kernel-api, dockerfile: services/kernel-api/Dockerfile, context: . }
+          - { name: control-panel, dockerfile: apps/control-panel/Dockerfile, context: . }
+          - { name: gremion-ui, dockerfile: gremion-ui/Dockerfile, context: . }
+          - { name: gremion-public, dockerfile: gremion-public/Dockerfile, context: . }
+          - { name: board, dockerfile: modules/board/Dockerfile, context: . }
+          - { name: calendar, dockerfile: modules/calendar/Dockerfile, context: . }
+          - { name: content, dockerfile: modules/content/Dockerfile, context: . }
+          - { name: files, dockerfile: modules/files/Dockerfile, context: . }
+          - { name: finance, dockerfile: modules/finance/Dockerfile, context: . }
+          - { name: messaging, dockerfile: modules/messaging/Dockerfile, context: . }
+          - { name: publishing, dockerfile: modules/publishing/Dockerfile, context: . }
+          - { name: vault, dockerfile: modules/vault/Dockerfile, context: . }
+          - { name: votes, dockerfile: modules/votes/Dockerfile, context: . }
+          - { name: fallback, dockerfile: docker/fallback/Dockerfile, context: docker/fallback/ }
+          - { name: synapse, dockerfile: modules/messaging/synapse/Dockerfile, context: modules/messaging/synapse/ }
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
 
-      - name: Build Legal image
-        run: docker build -t ghcr.io/hello-n00del/gremion-legal:ci docker/legal/
+      - name: Build ${{ matrix.name }} image
+        run: docker build -f ${{ matrix.dockerfile }} -t gremion-ci/${{ matrix.name }}:ci ${{ matrix.context }}
 
   # ──────────────────────────────────────────────────────────────────────────
   # Job 4: Integration tests — requires live Docker Compose stack
