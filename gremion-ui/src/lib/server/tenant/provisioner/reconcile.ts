@@ -458,8 +458,8 @@ const SUB_MAPPER_REP = {
 
 /**
  * #48: the provisioner SA got 403 on a realm. It holds only master `create-realm`,
- * and Keycloak gives it admin on the realms it CREATED; a realm imported at first
- * boot, or created before the SA existed, refuses it every Admin API call. The
+ * and Keycloak gives it admin on the realms it CREATED; a realm created before the
+ * SA existed, or by another admin, refuses it every Admin API call. The
  * message names the missing grant and the one command that makes it.
  */
 export class RealmNotAdoptedError extends Error {

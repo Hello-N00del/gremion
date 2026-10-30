@@ -78,7 +78,7 @@ pnpm -C gremion-ui exec tsx scripts/tenant-provision.ts bootstrap-provisioner --
 ```
 
 Keycloak gives a `create-realm` account admin only on the realms it created. A
-realm imported at first boot, or created before the SA, answers it 403, and
+realm created before the SA, or by another admin, answers it 403, and
 `reconcile` fails naming this command. `--adopt-realm` (admin credentials, once
 per realm) maps onto the SA exactly the master `<realm>-realm` client roles
 Keycloak grants a realm's creator (`REALM_CREATOR_ROLES`: Keycloak's
