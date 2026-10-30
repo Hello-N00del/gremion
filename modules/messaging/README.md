@@ -1,3 +1,5 @@
+**English** | [Deutsch](./README.de.md)
+
 # messaging
 
 Chat rooms and video calls. The kernel app serves the pages and API; the leaf is a thin,

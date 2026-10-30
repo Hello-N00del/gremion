@@ -1,3 +1,5 @@
+**English** | [Deutsch](./README.de.md)
+
 # Gremion
 
 **Gremion** is an open, self-hostable **digital-governance kernel** for councils, student parliaments (*Studierendenräte*), associations, and similar deliberative bodies. It provides the substrate every such body needs: identity, multi-tenancy, an org/committee model, protocols & resolutions with a hash-chained audit trail, and a quorum-aware decision engine. On top of that sits a **module SDK** that optional features plug into without the kernel ever depending on them.

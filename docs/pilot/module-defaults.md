@@ -1,3 +1,5 @@
+**English** | [Deutsch](./module-defaults.de.md)
+
 # Pilot module defaults: what the repo states, what is measured, what is handed over
 
 > **Status: product documentation for the pilot (TASK-058, part A).** It states the

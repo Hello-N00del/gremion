@@ -1595,8 +1595,11 @@ const HOST_LITERALS = [
 //   disclosure obligation, no address, no hostname, no credential. Same entry,
 //   same reason, as test/host/no-host-literals.bats. The check below fails if
 //   the occurrence goes away and this entry stays.
+// registrar | docs/compliance/controller-processor-split.de.md
+//   Its German translation (kept in step by scripts/check-doc-translations.mjs).
 const HOST_LITERAL_EXEMPT = new Set([
   'registrar|docs/compliance/controller-processor-split.md',
+  'registrar|docs/compliance/controller-processor-split.de.md',
 ])
 
 check('k1 no spec-A host literal in a tracked kernel document', () => {
@@ -1614,17 +1617,17 @@ check('k1 no spec-A host literal in a tracked kernel document', () => {
     // Dead-pattern self-proof: a pattern that stopped matching its own sample
     // would otherwise report the tree clean.
     if (!re.test(lit.sample)) return `pattern ${lit.name} no longer matches its own sample`
-    let exemptHit = false
+    const exemptHit = new Set() // per entry: two files may share a pattern
     for (const rel of files) {
       const lines = readFileSync(join(ROOT, rel), 'utf8').split('\n')
       for (let i = 0; i < lines.length; i++) {
         if (!re.test(lines[i])) continue
-        if (HOST_LITERAL_EXEMPT.has(`${lit.name}|${rel}`)) { exemptHit = true; continue }
+        if (HOST_LITERAL_EXEMPT.has(`${lit.name}|${rel}`)) { exemptHit.add(`${lit.name}|${rel}`); continue }
         offenders.push(`${lit.name} ${rel}:${i + 1}`)
       }
     }
     for (const entry of HOST_LITERAL_EXEMPT) {
-      if (entry.split('|')[0] === lit.name && !exemptHit) spent.push(entry)
+      if (entry.split('|')[0] === lit.name && !exemptHit.has(entry)) spent.push(entry)
     }
   }
   if (spent.length) return `exemption(s) spent — the occurrence is gone, delete: ${spent.join(', ')}`

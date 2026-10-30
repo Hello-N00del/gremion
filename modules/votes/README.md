@@ -1,3 +1,5 @@
+**English** | [Deutsch](./README.de.md)
+
 # votes
 
 Open polls and the combined `/votes` list ("Abstimmungen & Wahlen"): the list merges the

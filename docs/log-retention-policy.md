@@ -1,3 +1,5 @@
+**English** | [Deutsch](./log-retention-policy.de.md)
+
 # Log Retention Policy
 
 **Scope:** All services in the Gremion governance kernel

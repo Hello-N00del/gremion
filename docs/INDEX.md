@@ -17,6 +17,23 @@ repositories — one per module — and carry their own docs.
 | [../KNOWN_ISSUES.md](../KNOWN_ISSUES.md) | Everyone | The honest residuals list: carve leftovers, design deltas, naming debt, open invariant limitations |
 | [TRADEMARK.md](./TRADEMARK.md) | Everyone | The project name, the pending filing, and what the licence does and does not let you do with the name |
 
+## German versions (Deutsch)
+
+The documents that operators, councils and their data-protection officers read have a German
+sibling next to them (`X.md` and `X.de.md`), with a language switcher at the top of both:
+[README](../README.de.md), [about-gremion](./about-gremion.de.md), [modules](./modules.de.md),
+[compliance](./compliance.de.md), [log-retention-policy](./log-retention-policy.de.md),
+[controller-processor-split](./compliance/controller-processor-split.de.md),
+[elections-scope](./compliance/elections-scope.de.md),
+[pilot/module-defaults](./pilot/module-defaults.de.md) and the README of each module under
+`modules/`. [compliance/tom-annex.md](./compliance/tom-annex.md) is German only.
+
+The English file is the source. `scripts/check-doc-translations.mjs` (tests:
+`scripts/check-doc-translations.test.mjs`) records the hash of the English text in the first
+line of each German file and fails once the English file changes without the German one
+following. Update the German text, then re-record the hash with
+`node scripts/check-doc-translations.mjs --stamp <file>.de.md`.
+
 ## Architecture & security
 
 | Document | Purpose |

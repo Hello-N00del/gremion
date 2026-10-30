@@ -1,3 +1,5 @@
+**English** | [Deutsch](./elections-scope.de.md)
+
 # Elections module: sanctioned scope and wording rules
 
 > **Status: standing rule (TASK-005).** Last reviewed: **2026-09-25**.

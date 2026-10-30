@@ -1,3 +1,5 @@
+**English** | [Deutsch](./README.de.md)
+
 # elections
 
 Optional committee elections run on a Helios ballot server: create an election for a

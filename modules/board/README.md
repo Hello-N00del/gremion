@@ -1,3 +1,5 @@
+**English** | [Deutsch](./README.de.md)
+
 # board
 
 Task board for organisational units: boards hold stacks, stacks hold cards, and a card's
