@@ -16,8 +16,9 @@ name: Release images
 #      release-pins artefact, commits the pins layers and release.json, runs
 #      verify, signs every pinned digest with the operator's key and pushes the
 #      annotated dist-vX.Y.Z tag. The key's password is supplied as
-#      COSIGN_PASSWORD_FILE=<file> (or typed at cosign's prompt), never as
-#      COSIGN_PASSWORD: the script refuses an inherited one;
+#      COSIGN_PASSWORD_FILE=<file> and nowhere else: there is no prompt (the
+#      signing step hides cosign's output, so a prompt would hang unseen), and
+#      the script refuses an inherited COSIGN_PASSWORD;
 #   3. the host deploy, a manual operator step (docs/ops/runbook/upgrade.md).
 #
 # The pinned digests are what a host pulls, so the registry tag is incidental:
