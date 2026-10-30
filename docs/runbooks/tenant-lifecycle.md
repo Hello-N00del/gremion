@@ -344,14 +344,19 @@ recoverable backup:
    missing file is a no-op.
 3. **Drop the data-plane DB + role** — `DROP DATABASE IF EXISTS "t_<slug>" WITH
    (FORCE)` + `DROP ROLE IF EXISTS` (idempotent).
-4. **Module leaf-shred (optional)** — if a feature module registered a leaf store,
-   the delete drops the tenant's leaf data through that module-supplied
-   dependency. A module that registered such a hook propagates real failures
-   (aborting the delete before the tombstone is written, leaving the row at
-   `deleting` for a retry); a module that did not contributes nothing and the
-   delete proceeds.
+4. **Newsletter leaf shred (when `NEWSLETTER_PG_URL` is set)** — on the
+   newsletter leaf's Postgres server, `DROP DATABASE IF EXISTS "newsletter_<slug>"
+   WITH (FORCE)` (FORCE ends the connections the running leaf still holds), then
+   the tenant's row is deleted from `tenant_catalog` **in `newsletter_control`**
+   (a missing control database is a no-op). The slug is validated against the
+   kernel grammar before it is used in an identifier. A real failure aborts the
+   delete before the tombstone is written, leaving the row at `deleting` for a
+   retry; with the variable unset the step is skipped and the delete log says so.
 5. **Delete the realm** — `DELETE /admin/realms/<realm>` (a 404 is tolerated —
    idempotent).
+   **Calendar leaf shred (when `CALENDAR_PG_URL` is set)** — the same two
+   operations against `calendar_<slug>` and `calendar_control`, same failure
+   contract.
 6. **Tombstone** — `status='deleted'` + evict the runtime. The slug is now a
    permanent tombstone: **identifier reuse is forbidden** (§7.8) — `provision
    <slug>` of a deleted/deleting slug is refused, and re-running `delete` on a

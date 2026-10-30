@@ -110,6 +110,15 @@ toggled OFF on a fresh, isolated DB boots cleanly. It collects
 `tests/integration/**/*.integration.test.ts` and is **not** a CI lane — run it
 against an isolated stack per `tests/integration/README.md`.
 
+A second separate lane, **leaf shred** (`pnpm test:leaf-shred`,
+`vitest.leaf-shred.config.ts`), proves the tenant-delete newsletter and calendar
+leaf executors against a real Postgres: the tenant database is dropped while a
+pooled connection to it is held open, and the catalog row is deleted in
+`<prefix>control`. It needs `LEAF_SHRED_TEST_PG_URL` (a throwaway server, loopback,
+not port 5432) and `GREMION_PRODUCTION_STACK=none`; the file refuses anything else
+before it connects. CI runs it inside the `integration:vitest` verify part, on the
+same throwaway server as `pnpm test:integration`.
+
 ### E2E — `pnpm test:e2e`
 
 Playwright (`playwright test`). `pnpm test:all` runs the unit suite then
