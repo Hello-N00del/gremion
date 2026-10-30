@@ -136,12 +136,9 @@ framing_ok() {
     [ "$output" = "0" ]
 }
 
-@test "test-process-logs.sh passes with the real ipcrypt binary (skips where only the image has it)" {
-    command -v ipcrypt >/dev/null 2>&1 || skip "ipcrypt is compiled into the vector image only"
-    run bash "$VEC/test-process-logs.sh"
-    [ "$status" -eq 0 ]
-    [[ "$output" == *"PASS: processed log is one physical line per event"* ]]
-}
+# The real-ipcrypt path is not tested here: ipcrypt exists only inside the vector
+# image, and a skip on the CI runner is an unaccounted skip. docker/vector/
+# test-process-logs.sh covers it when run in that image.
 
 @test "guard efficacy: process-logs.sh with jq -c removed fails the framing assertion" {
     local mut="${BATS_TEST_TMPDIR}/process-logs.mut.sh"
