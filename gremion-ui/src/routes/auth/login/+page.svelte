@@ -5,19 +5,14 @@
   import { t } from '$lib/i18n'
   import PageTitle from '$lib/components/PageTitle.svelte'
   import { LEGAL_HREFS } from '$lib/legal-links'
+  import { sameOriginPath } from '$lib/safe-redirect'
 
   // CONFORMANCE §1 / HANDOVER P1: the real login form is the Keycloak login
   // THEME (docker/keycloak/themes/gremion/login/). This SvelteKit page is no
   // longer an interstitial card — it just bounces straight to Keycloak, except
   // for two terminal notices that must NOT auto-redirect.
-  function getSafeCallbackUrl(): string {
-    const raw = page.url.searchParams.get('callbackUrl') ?? '/'
-    // Open-redirect guard: only same-origin absolute paths, never protocol-relative.
-    if (raw.startsWith('/') && !raw.startsWith('//')) return raw
-    return '/'
-  }
-
-  const callbackUrl = getSafeCallbackUrl()
+  // Open-redirect guard: only a same-origin path after URL normalisation (shared helper).
+  const callbackUrl = sameOriginPath(page.url.searchParams.get('callbackUrl'))
   // ?error=forbidden — the access guard bounced an authenticated user off a
   // page their role can't reach. Re-logging-in won't help, so show a notice
   // instead of looping them back through Keycloak.
