@@ -18,6 +18,16 @@ export interface LeafDeps {
   livekit: LivekitConfig
 }
 
+/** Secrets the leaf cannot run without. An empty LIVEKIT_API_SECRET would sign
+ *  LiveKit tokens with ''; an empty SYNAPSE_ADMIN_TOKEN turns every admin op
+ *  into an unauthenticated call. index.ts refuses to boot while any is empty. */
+export const REQUIRED_LEAF_SECRETS = ['LIVEKIT_API_SECRET', 'SYNAPSE_ADMIN_TOKEN'] as const
+
+/** The required secrets that are unset or blank in `env`. */
+export function missingLeafSecrets(env: Record<string, string | undefined>): string[] {
+  return REQUIRED_LEAF_SECRETS.filter((name) => (env[name] ?? '').trim() === '')
+}
+
 /** Build the leaf's forwarding clients from the leaf's OWN env. */
 export function buildEnvDeps(): LeafDeps {
   const baseUrl = matrixBaseUrl()
