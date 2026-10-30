@@ -3,11 +3,20 @@
 // LiveKit proxy. Boots ONLY the HTTP server (no PG, no NATS, no scheduler: the
 // leaf owns no state). Graceful shutdown (SIGTERM/SIGINT) closes the server.
 import { createServer } from './http/server.js'
+import { missingLeafSecrets } from './http/deps.js'
 
 const PORT = Number.parseInt(process.env.PORT ?? '8080', 10)
 const SHUTDOWN_TIMEOUT_MS = 10_000
 
 function main(): void {
+  // Fail closed at boot instead of minting LiveKit tokens with an empty secret
+  // or calling Synapse admin with an empty bearer.
+  const missing = missingLeafSecrets(process.env)
+  if (missing.length > 0) {
+    console.error(`[messages] refusing to boot: ${missing.join(', ')} unset or empty`)
+    process.exit(1)
+  }
+
   const secret = process.env.INTERNAL_MESSAGES_SECRET
   if (!secret) {
     console.warn('[messages] INTERNAL_MESSAGES_SECRET is unset — all guarded routes will 403')

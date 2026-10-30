@@ -84,6 +84,17 @@ export interface MatrixLeafClient {
   joinRoom(userToken: string, roomIdOrAlias: string): Promise<void>
 }
 
+/** A non-2xx Synapse response, carrying the Matrix errcode so dispatch can hand
+ *  the kernel a structured token-invalidation signal (M_UNKNOWN_TOKEN).
+ *  `userToken` is true only when the rejected bearer was a per-request USER
+ *  token (never the admin token, never a tokenless login). */
+export class MatrixHttpError extends Error {
+  constructor(message: string, readonly status: number, readonly errcode?: string, readonly userToken = false) {
+    super(message)
+    this.name = 'MatrixHttpError'
+  }
+}
+
 export function createMatrixClient(opts: MatrixClientOptions): MatrixLeafClient {
   const baseUrl = opts.baseUrl.replace(/\/$/, '')
   const adminToken = opts.adminToken ?? ''
@@ -98,8 +109,8 @@ export function createMatrixClient(opts: MatrixClientOptions): MatrixLeafClient 
       body: body !== undefined ? JSON.stringify(body) : undefined,
     })
     if (!res.ok) {
-      const err = (await res.json().catch(() => ({}))) as { error?: string }
-      throw new Error(`Matrix ${method} ${path} → ${res.status}: ${err.error ?? ''}`)
+      const err = (await res.json().catch(() => ({}))) as { error?: string; errcode?: string }
+      throw new MatrixHttpError(`Matrix ${method} ${path} → ${res.status}: ${err.error ?? ''}`, res.status, err.errcode, token !== '')
     }
     if (res.status === 204) return null
     return res.json()
@@ -244,7 +255,10 @@ export function createMatrixClient(opts: MatrixClientOptions): MatrixLeafClient 
       headers: { Authorization: `Bearer ${userToken}`, 'Content-Type': mimeType },
       body: data,
     })
-    if (!res.ok) throw new Error(`Media upload failed: ${res.status}`)
+    if (!res.ok) {
+      const err = (await res.json().catch(() => ({}))) as { errcode?: string }
+      throw new MatrixHttpError(`Media upload failed: ${res.status}`, res.status, err.errcode, true)
+    }
     return ((await res.json()) as { content_uri: string }).content_uri
   }
 
