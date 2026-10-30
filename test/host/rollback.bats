@@ -198,6 +198,8 @@ stub_switch() {
     run "$ROLLBACK"
     [ "$status" -eq 2 ]
     [[ "$output" == *"class (b) rollback needs the registry token on stdin"* ]]
+    # the other source gremion-deploy accepts is named too
+    [[ "$output" == *"GREMION_REGISTRY_TOKEN_FILE"* ]]
 }
 
 @test "a switch that does not take effect fails the rollback" {

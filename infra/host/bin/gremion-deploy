@@ -10,6 +10,15 @@
 # and `docker logout` runs in an EXIT trap on every path, after which a guard
 # asserts that no `auths` entry survives (N12).
 #
+# The token can instead live in one file on the host: with
+# GREMION_REGISTRY_TOKEN_FILE=<absolute path> (environment or state.env) the
+# file is the only source and stdin is not read (on a host: etc/registry-token
+# under the gremion root). The file must be a regular
+# file (not a link) owned by the user running this program, mode 600 or 400,
+# holding exactly one token; anything else is refused with exit 2 before step 1
+# and the message never shows the content. See docs/ops/host-tooling.md,
+# "The registry token on the host".
+#
 # TWO READINGS OF THE SPEC, RESOLVED HERE
 #   1. §F.4.1 pulls first, §F.4.3 demands the free-space assert abort "before
 #      pulling". The only order that satisfies both is login → checkout → space
@@ -54,7 +63,8 @@ REGISTRY_HOST="${REGISTRY_HOST:-ghcr.io}"
 usage() {
     cat >&2 <<'EOF'
 usage: gremion-deploy <dist-vX.Y.Z> [--soak-minutes N] [--no-switch]
-       the GHCR token is read from stdin line 1, as "TOKEN <value>" or bare.
+       the GHCR token is read from stdin line 1, as "TOKEN <value>" or bare,
+       or, when GREMION_REGISTRY_TOKEN_FILE names a 0600 file, from that file.
 EOF
     exit 2
 }
@@ -137,6 +147,36 @@ read_token_from_stdin() {
     esac
     [[ -n "$line" ]] || die "no registry token on stdin" 2
     printf '%s' "$line"
+}
+
+# read_token_from_file <path> - the registry token out of the one file the
+# operator named in GREMION_REGISTRY_TOKEN_FILE. The file is a standing
+# credential, so every doubt ends the run (exit 2, before step 1, nothing
+# pulled): a relative path, a missing file, a symbolic link, a file that is
+# not a regular one, a file the running user does not own, a file anyone but
+# its owner can reach, an empty file, a file that is not exactly one token.
+# A message names the path and the mode, NEVER the content. The value leaves
+# this function on stdout only (the caller captures it); it is not put in an
+# argument, a variable name, a log line or a second file.
+read_token_from_file() { # <path>
+    local f="$1" var=GREMION_REGISTRY_TOKEN_FILE owner me mode raw
+    [[ "$f" == /* ]] || die "$var must be an absolute path" 2
+    [[ ! -L "$f" ]] || die "registry token file $f is a symbolic link; $var must name the file itself" 2
+    [[ -e "$f" ]] || die "registry token file absent: $f ($var)" 2
+    [[ -f "$f" ]] || die "registry token file $f is not a regular file ($var)" 2
+    owner="$(stat -c '%u' -- "$f")" || die "cannot stat the registry token file $f ($var)" 2
+    me="$(id -u)"
+    [[ "$owner" == "$me" ]] \
+        || die "registry token file $f is not owned by the user running gremion-deploy (uid $me, file owner uid $owner) ($var)" 2
+    mode="$(stat -c '%a' -- "$f")" || die "cannot stat the registry token file $f ($var)" 2
+    (( (8#$mode & 8#077) == 0 )) \
+        || die "registry token file $f is readable by group or others (mode $mode; it must be 600 or 400) ($var)" 2
+    [[ -r "$f" ]] || die "registry token file $f is not readable by the user running gremion-deploy ($var)" 2
+    raw="$(tr -d '\r' < "$f")" || die "cannot read the registry token file $f ($var)" 2
+    [[ -n "${raw//[[:space:]]/}" ]] || die "registry token file is empty: $f ($var)" 2
+    [[ "$raw" =~ ^[A-Za-z0-9_.:-]{8,512}$ ]] \
+        || die "registry token file $f is not a single token (one line of 8 to 512 characters from A-Z a-z 0-9 _ . : -; content not shown) ($var)" 2
+    printf '%s' "$raw"
 }
 
 bin_path() { # <name> → the installed sibling program, else PATH
@@ -990,15 +1030,24 @@ main() {
 
     need_cmd docker jq git df awk
 
-    local token
-    token="$(read_token_from_stdin)"
-
     ROOT="$(gremion_root)"
     [[ -d "$ROOT" ]] || die "gremion root absent: $ROOT" 2
     mkdir -p "$ROOT/runtime" "$ROOT/releases"
     acquire_host_lock
     DEPLOY_LOG="$ROOT/runtime/deploy.log"
     load_env "$ROOT/etc/env/state.env"
+
+    # The token is read after state.env, which may name GREMION_REGISTRY_TOKEN_FILE,
+    # and still before step 1: a refused token file ends the run (exit 2) with
+    # nothing pulled and nothing changed. With the variable set the file is the
+    # ONLY source and stdin is not read; unset or empty, stdin is.
+    local token
+    if [[ -n "${GREMION_REGISTRY_TOKEN_FILE:-}" ]]; then
+        token="$(read_token_from_file "$GREMION_REGISTRY_TOKEN_FILE")"
+        info "registry token: read from GREMION_REGISTRY_TOKEN_FILE (stdin not read)"
+    else
+        token="$(read_token_from_stdin)"
+    fi
 
     SOAK_MINUTES="${SOAK_MINUTES:-30}"
     [[ -z "$SOAK_MINUTES_OPT" ]] || SOAK_MINUTES="$SOAK_MINUTES_OPT"
