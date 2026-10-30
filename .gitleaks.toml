@@ -70,9 +70,9 @@ regexes = [
   #   t024-shim-migrate                    nats-auth image-check test image tag
   '''^(?:newsletter-secret-32-bytes-of-padxx|cal-secret-5678|vault-secret-5678|r29bk-isolation-secret|oidcTESTsecret02|t024-shim-migrate)$''',
   # Counting-pattern fixtures: the sequential hex ramp (finance fints crypto test
-  # key), the repeating 0123456789abcdef OTLP token (host ops tests) and the
+  # key, and its 16-byte half as the log-pipeline IPCRYPT_KEY in test/process-logs.bats), the repeating 0123456789abcdef OTLP token (host ops tests) and the
   # sequential-digit UUID subject id (erasure test). Exact values.
-  '''^00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff$''',
+  '''^00112233445566778899aabbccddeeff(?:00112233445566778899aabbccddeeff)?$''',
   '''^(?:0123456789abcdef){4}$''',
   '''^7c1d2e3f-4a5b-4c6d-8e7f-9a0b1c2d3e4f$''',
   # Synthetic HS512 JWT in the customer-provision panel-session fixture: its
