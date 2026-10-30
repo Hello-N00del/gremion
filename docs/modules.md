@@ -58,9 +58,9 @@ Three separate switches exist; each module README says which of them applies.
 1. **Build.** `modules/disabled.json` removes a module from the default build and deploy.
    `gremion-ui/scripts/interim-module-overlay.mjs` copies each enabled module's `app/` half
    onto `gremion-ui/src/` and refuses a disabled module in build mode.
-2. **Per customer.** A customer is created with an explicit module list
-   (`gremion-tenant create <slug> ... --enable a,b`; naming none enables none), and modules
-   can be enabled or disabled afterwards through the panel requests described in
+2. **Per customer.** A customer is created by a provisioning request from the control
+   panel, and modules are enabled or disabled for it through the `enable_module` and
+   `disable_module` requests described in
    [runbooks/tenant-lifecycle.md](./runbooks/tenant-lifecycle.md). A module that is in
    `modules/disabled.json` cannot be enabled that way.
 3. **Per instance setting.** `config.modules.<manifest id> = false` makes the module's routes
