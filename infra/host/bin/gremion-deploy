@@ -12,7 +12,8 @@
 #
 # The token can instead live in one file on the host: with
 # GREMION_REGISTRY_TOKEN_FILE=<absolute path> (environment or state.env) the
-# file is the only source and stdin is not read. The file must be a regular
+# file is the only source and stdin is not read (on a host: etc/registry-token
+# under the gremion root). The file must be a regular
 # file (not a link) owned by the user running this program, mode 600 or 400,
 # holding exactly one token; anything else is refused with exit 2 before step 1
 # and the message never shows the content. See docs/ops/host-tooling.md,
