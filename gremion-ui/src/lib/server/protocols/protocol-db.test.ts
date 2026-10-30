@@ -21,6 +21,10 @@ vi.mock('../db', () => ({ getDb: () => mockSql }))
 import {
   createProtocol,
   updateProtocol,
+  deleteProtocol,
+  updateResolution,
+  deleteResolution,
+  ResolutionPublishedError,
   setProtocolStatus,
   nextGlobalNr,
   assignGlobalNrs,
@@ -137,6 +141,18 @@ describe('assignGlobalNrs (#235 defect 2 — sequential/atomic numbering)', () =
     // 2 resolutions => 2 COUNT(*) + 2 UPDATE = 4 queries, all on mockSql (the tx).
     expect(mockSql).toHaveBeenCalledTimes(4)
   })
+
+  it('writes global_nr with allowPublished=true (runs inside the publish tx and on republish)', async () => {
+    statefulCounter()
+    await assignGlobalNrs('comm-1', 2026, ['r1', 'r2'], mockSql as never)
+    const updates = mockSql.mock.calls.filter((c) =>
+      (c[0] as TemplateStringsArray).join('?').includes('UPDATE protocol_resolutions'),
+    )
+    expect(updates).toHaveLength(2)
+    // The publish-lock bypass is a bound boolean param; it must be `true` here, or
+    // the lock would refuse the numbering write on a protocol that is (being) published.
+    for (const call of updates) expect(call).toContain(true)
+  })
 })
 
 describe('updateProtocol (#235 defect 4 — pdf_nextcloud_path column)', () => {
@@ -163,5 +179,128 @@ describe('updateProtocol (#235 defect 4 — pdf_nextcloud_path column)', () => {
     expect(txSql.mock.calls[0]).toContain(true)
     const sqlText = (txSql.mock.calls[0][0] as TemplateStringsArray).join('?')
     expect(sqlText).toContain("status != 'published'")
+  })
+})
+
+// ─── Atomic publish lock (#433 / #454) ───────────────────────────────────────
+//
+// The route's read-then-write check (loadEditableResolution) leaves a window in
+// which a publish can commit between the SELECT and the write. The lock must
+// therefore ride IN the write statement. A mocked sql cannot evaluate a WHERE
+// clause, so this stand-in derives the match from what the statement ACTUALLY
+// emits: it only refuses a published parent when the emitted SQL carries the
+// `status != 'published'` predicate AND the bound allowPublished flag is not
+// true. A statement without the predicate therefore writes (and the test
+// fails), instead of a canned [] answer hiding the missing guard.
+describe('atomic publish lock (#433, #454)', () => {
+  type Row = { id: string }
+
+  function standIn(parentStatus: 'draft' | 'submitted' | 'published') {
+    return vi.fn((strings?: TemplateStringsArray, ...values: unknown[]) => {
+      // vitest calls the value returned from a beforeEach as teardown (see above).
+      if (!strings) return Promise.resolve([])
+      const text = strings.join('?')
+      const guarded = text.includes("status != 'published'")
+      const bypass = values.includes(true)
+      const refused = guarded && !bypass && parentStatus === 'published'
+      const wantsRows = text.includes('RETURNING')
+      return Promise.resolve(refused || !wantsRows ? [] : ([{ id: 'x1' }] as Row[]))
+    })
+  }
+
+  beforeEach(() => mockSql.mockReset())
+
+  describe('updateResolution', () => {
+    it('rejects with ResolutionPublishedError when the parent protocol is published', async () => {
+      const tx = standIn('published')
+      await expect(updateResolution('r1', { text: 'edited' }, { tx: tx as never }))
+        .rejects.toBeInstanceOf(ResolutionPublishedError)
+    })
+
+    it('embeds the lock in the emitted statement (EXISTS on the parent, not a prior SELECT)', async () => {
+      const tx = standIn('draft')
+      await updateResolution('r1', { text: 'edited' }, { tx: tx as never })
+      expect(tx).toHaveBeenCalledOnce()
+      const text = (tx.mock.calls[0][0] as TemplateStringsArray).join('?')
+      expect(text).toContain("status != 'published'")
+      expect(text).toContain('EXISTS')
+    })
+
+    it('still writes while the parent is a draft', async () => {
+      const tx = standIn('draft')
+      await expect(updateResolution('r1', { text: 'edited' }, { tx: tx as never })).resolves.toMatchObject({ id: 'x1' })
+    })
+
+    it('allowPublished=true bypasses the lock (publish tx / republish numbering)', async () => {
+      const tx = standIn('published')
+      await expect(updateResolution('r1', { globalNr: 'B-2026-001' }, { tx: tx as never, allowPublished: true }))
+        .resolves.toMatchObject({ id: 'x1' })
+    })
+
+    it('runs on the passed tx, not on getDb()', async () => {
+      const tx = standIn('draft')
+      await updateResolution('r1', { text: 'edited' }, { tx: tx as never })
+      expect(tx).toHaveBeenCalledOnce()
+      expect(mockSql).not.toHaveBeenCalled()
+    })
+
+    it('a published resolution survives the attempt: the edit is refused, not applied', async () => {
+      mockSql.mockImplementation(standIn('published'))
+      await expect(updateResolution('r1', { text: 'tampered' })).rejects.toBeInstanceOf(ResolutionPublishedError)
+    })
+  })
+
+  describe('deleteResolution', () => {
+    it('rejects with ResolutionPublishedError when the parent protocol is published', async () => {
+      mockSql.mockImplementation(standIn('published'))
+      await expect(deleteResolution('r1')).rejects.toBeInstanceOf(ResolutionPublishedError)
+    })
+
+    it('embeds the lock in the emitted DELETE', async () => {
+      mockSql.mockImplementation(standIn('draft'))
+      await deleteResolution('r1')
+      const text = (mockSql.mock.calls[0][0] as TemplateStringsArray).join('?')
+      expect(text).toContain('DELETE FROM protocol_resolutions')
+      expect(text).toContain("status != 'published'")
+      expect(text).toContain('RETURNING')
+    })
+
+    it('deletes while the parent is a draft', async () => {
+      mockSql.mockImplementation(standIn('draft'))
+      await expect(deleteResolution('r1')).resolves.toBeUndefined()
+    })
+
+    it('allowPublished=true bypasses the lock', async () => {
+      const tx = standIn('published')
+      await expect(deleteResolution('r1', { tx: tx as never, allowPublished: true })).resolves.toBeUndefined()
+      expect(tx).toHaveBeenCalledOnce()
+    })
+  })
+
+  describe('deleteProtocol', () => {
+    it('refuses to delete a published protocol', async () => {
+      mockSql.mockImplementation(standIn('published'))
+      await expect(deleteProtocol('p1')).rejects.toThrow('Protocol p1 not found or is published')
+    })
+
+    it('carries the guard and RETURNING id in the emitted DELETE', async () => {
+      mockSql.mockImplementation(standIn('draft'))
+      await deleteProtocol('p1')
+      const text = (mockSql.mock.calls[0][0] as TemplateStringsArray).join('?')
+      expect(text).toContain("status != 'published'")
+      expect(text).toContain('RETURNING')
+    })
+
+    it('deletes a draft protocol (rollback of a just-created draft)', async () => {
+      mockSql.mockImplementation(standIn('draft'))
+      await expect(deleteProtocol('p1')).resolves.toBeUndefined()
+    })
+
+    it('allowPublished=true bypasses the guard, on the passed tx', async () => {
+      const tx = standIn('published')
+      await expect(deleteProtocol('p1', { tx: tx as never, allowPublished: true })).resolves.toBeUndefined()
+      expect(tx).toHaveBeenCalledOnce()
+      expect(mockSql).not.toHaveBeenCalled()
+    })
   })
 })

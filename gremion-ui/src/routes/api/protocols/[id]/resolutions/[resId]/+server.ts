@@ -2,7 +2,7 @@ import { error, json } from '@sveltejs/kit'
 import type { RequestEvent } from '@sveltejs/kit'
 import { hasRole, Role } from '$lib/auth'
 import type { SessionUser } from '$lib/auth'
-import { updateResolution, deleteResolution } from '$lib/server/protocols/protocol-db'
+import { updateResolution, deleteResolution, ResolutionPublishedError } from '$lib/server/protocols/protocol-db'
 import type { AdoptionMode, RequiredMajority } from '$lib/server/protocols/protocol-db'
 import { requireUuidParams } from '$lib/server/protocols/route-ids'
 import { getDb } from '$lib/server/db'
@@ -15,6 +15,8 @@ function requireAdmin(event: RequestEvent): SessionUser {
   if (!hasRole(user.roles, Role.CouncilAdmin)) throw error(403, 'Nur Admins')
   return user
 }
+
+const ADOPTED_LOCKED_MESSAGE = 'Angenommene Beschlüsse sind nicht bearbeitbar (Einspruch statt Änderung)'
 
 interface EditableResolutionRow {
   protocol_id: string
@@ -47,9 +49,25 @@ async function loadEditableResolution(event: RequestEvent): Promise<EditableReso
     WHERE r.id = ${event.params.resId!}`
   if (!current || current.protocol_id !== event.params.id) throw error(404, 'Beschluss nicht gefunden')
   if (current.protocol_status === 'published' || current.decided_at != null) {
-    throw error(403, 'Angenommene Beschlüsse sind nicht bearbeitbar (Einspruch statt Änderung)')
+    throw error(403, ADOPTED_LOCKED_MESSAGE)
   }
   return current
+}
+
+/**
+ * Run a resolution write and map the db layer's publish-lock refusal to the SAME
+ * 403 loadEditableResolution answers. The early check above is a read; a publish
+ * can commit between it and the write. The lock inside the write statement
+ * (protocol-db.ts) is what actually closes that window, and this is how it
+ * surfaces: a 403, never a 500 and never a silent edit of an adopted row.
+ */
+async function refusePublished<T>(write: () => Promise<T>): Promise<T> {
+  try {
+    return await write()
+  } catch (err) {
+    if (err instanceof ResolutionPublishedError) throw error(403, ADOPTED_LOCKED_MESSAGE)
+    throw err
+  }
 }
 
 export async function PATCH(event: RequestEvent) {
@@ -80,11 +98,11 @@ export async function PATCH(event: RequestEvent) {
     // un-withdraw, send a fresh declared_result — the mirror of the tally branch's
     // "edit the tallies to recompute" un-withdraw path.
     if (body.result === 'withdrawn') {
-      const resolution = await updateResolution(event.params.resId!, {
+      const resolution = await refusePublished(() => updateResolution(event.params.resId!, {
         text: body.text,
         result: 'withdrawn',
         requiredMajority,
-      })
+      }))
       return json({ resolution })
     }
     const declaredResult = body.declared_result ?? body.declaredResult
@@ -100,12 +118,12 @@ export async function PATCH(event: RequestEvent) {
     if (providedVotes !== 0 && providedVotes !== 3) {
       throw error(400, 'Informative Stimmzahlen entweder vollständig (Ja/Nein/Enthaltung) oder gar nicht angeben')
     }
-    const resolution = await updateResolution(event.params.resId!, {
+    const resolution = await refusePublished(() => updateResolution(event.params.resId!, {
       text: body.text,
       ...(providedVotes === 3 ? { votesYes, votesNo, votesAbstain } : {}),
       ...(declaredResult !== undefined ? { result: declaredResult } : {}),
       requiredMajority,
-    })
+    }))
     return json({ resolution })
   }
 
@@ -146,14 +164,14 @@ export async function PATCH(event: RequestEvent) {
     throw err
   })
 
-  const resolution = await updateResolution(event.params.resId!, {
+  const resolution = await refusePublished(() => updateResolution(event.params.resId!, {
     text: body.text,
     votesYes,
     votesNo,
     votesAbstain,
     result: decision.result,
     requiredMajority,
-  })
+  }))
   return json({ resolution })
 }
 
@@ -161,6 +179,6 @@ export async function DELETE(event: RequestEvent) {
   requireAdmin(event)
   requireUuidParams(event, 'id', 'resId')
   await loadEditableResolution(event)
-  await deleteResolution(event.params.resId!)
+  await refusePublished(() => deleteResolution(event.params.resId!))
   return new Response(null, { status: 204 })
 }
