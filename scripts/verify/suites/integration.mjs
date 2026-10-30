@@ -429,12 +429,56 @@ function makePart(target, judge, root) {
   return judge(res)
 }
 
+/**
+ * The live Keycloak step-up deny proof (services/kernel-api/test/keycloak/stepup-deny.int.test.ts, config
+ * vitest.stepup.config.ts): a REAL Keycloak is loaded with the realm template and the gremion login theme, and
+ * a user WITHOUT a second factor who asks gremion-ui for acr loa2 is refused (401, no code, no authenticator
+ * set-up offered) and sent to the app's own notice. The file starts its own container, so no stack is
+ * needed here.
+ *
+ * vitest exits 0 for a run that collected no file at all and for cases that skipped, so the part pins what
+ * a green exit does not say: the file was among the files vitest ran, both of its cases passed, none skipped.
+ */
+export const KEYCLOAK_STEPUP_FILE = 'services/kernel-api/test/keycloak/stepup-deny.int.test.ts'
+export const KEYCLOAK_STEPUP_CASES = 2
+
+/** @param {{toolMissing?: unknown, unparseable?: boolean, collected?: number, passed?: number, failed?: number, skipped?: number, collectedFiles?: string[], detail?: string}} part a runVitestJson part */
+export function judgeKeycloakStepup(part) {
+  if (part.toolMissing || part.unparseable) return part
+  const problems = []
+  const files = part.collectedFiles ?? []
+  if (!files.includes(KEYCLOAK_STEPUP_FILE)) {
+    problems.push(`${KEYCLOAK_STEPUP_FILE} was not among the files vitest reported running (saw: ${files.join(', ') || '(none)'})`)
+  }
+  if ((part.skipped ?? 0) > 0) {
+    problems.push(`skipped ${part.skipped} case(s); a live Keycloak proof allows no skips (a skipped case is a case nobody ran)`)
+  }
+  // A case that really failed is already in `failed`; a short pass count is only news when nothing failed.
+  const realFailures = part.failed ?? 0
+  if (realFailures === 0 && (part.passed ?? 0) < KEYCLOAK_STEPUP_CASES) {
+    problems.push(`only ${part.passed ?? 0} of the ${KEYCLOAK_STEPUP_CASES} live cases passed`)
+  }
+  if (problems.length === 0) return part
+  const detail = [part.detail, ...problems].filter(Boolean).join('\n')
+  // The record already says failed when a case failed; add the synthetic failure only for a green-but-wrong run.
+  if (realFailures > 0) return { ...part, detail }
+  return { ...part, collected: (part.collected ?? 0) + 1, failed: 1, detail }
+}
+
+function keycloakStepupPart({ root }) {
+  const label = 'kernel-api keycloak step-up deny (live)'
+  if (!toolAvailable('docker')) return { label, toolMissing: 'docker' }
+  const cwd = path.join(root, 'services', 'kernel-api')
+  return judgeKeycloakStepup(runVitestJson({ label, cwd, cmd: 'pnpm', args: ['exec', 'vitest', 'run', '--config', 'vitest.stepup.config.ts'], root }))
+}
+
 export const INTEGRATION_PARTS = {
   vitest: (root) => vitestPart({ root }),
   'fresh-init': (root) => makePart('fresh-init-proof', judgeFreshInit, root),
   nats: (root) => makePart('test-ports-nats', judgeNatsTest, root),
   'nats-auth': (root) => makePart('test-nats-auth', judgeNatsAuthTest, root),
   events: (root) => makePart('test-events', judgeEventsTest, root),
+  'keycloak-stepup': (root) => keycloakStepupPart({ root }),
 }
 
 export function runIntegrationSuite({ root = REPO_ROOT, only } = {}) {
