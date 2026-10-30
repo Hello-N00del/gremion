@@ -928,7 +928,10 @@ jobs:
   # three start their own containers by name; none touches a service container, so
   # none is declared here. The keycloak-stepup part runs in this leg and no other
   # (scripts/check-ci-verify-coverage.mjs), and it fails on a skipped case or a
-  # file vitest did not collect.
+  # file vitest did not collect. It is not in integration-test (the job that starts
+  # the compose Keycloak): the test brings its own Keycloak and never touches that
+  # one, and integration-test runs no verify.mjs, so the leg guard and the verify
+  # record could not see a suite placed there.
   verify-integration-db:
     name: "Verify: database integration"
     runs-on: ubuntu-latest
