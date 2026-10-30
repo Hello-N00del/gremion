@@ -49,7 +49,9 @@
 # jq, node or make; COSIGN_KEY_PATH unset or not a readable file;
 # COSIGN_PASSWORD_FILE unset or not a readable file; a dirty working tree;
 # origin unreachable; a tag that already exists on origin, or only in this
-# clone (a failed run's leftover: delete it and rerun); no previous dist tag without
+# clone (a failed run's leftover). The refusal names the tag, where it exists
+# and the exact git commands to inspect and to remove it; nothing is deleted
+# for you; no previous dist tag without
 # --first-release, or one with it; a run of any other workflow, from a fork, or
 # that did not succeed; a built or dispatching commit that is neither on
 # origin/main nor the commit of a v* / rc-v* tag; an artefact that is not
@@ -236,10 +238,13 @@ main() {
     git fetch --quiet --tags origin '+refs/heads/main:refs/remotes/origin/main' || die "cannot fetch tags and main from origin"
     read_origin_tags || die "cannot list origin's tags"
     if [[ -n "$(origin_tag_commit "$tag")" ]]; then
-        die "tag ${tag} already exists on origin"
+        # The fetch above put origin's tag into this clone too, so both places
+        # hold it. Nothing here deletes a tag on origin: a release tag is the
+        # record of a release. Removing a leftover is the operator's call.
+        die "tag ${tag} already exists on origin (and, fetched just now, in this clone). Inspect it: git ls-remote --tags origin refs/tags/${tag} and git show ${tag}. If it is a release, cut the next version. If it is a leftover of a cut that pushed it and then failed, and no host ever deployed it, remove it yourself with: git push origin :refs/tags/${tag} and git tag -d ${tag}; then run again"
     fi
     if git rev-parse -q --verify "refs/tags/${tag}" >/dev/null; then
-        die "tag ${tag} exists in this clone but not on origin, most likely left by a failed run: check it is not a release (git show ${tag}), delete it (git tag -d ${tag}) and run again"
+        die "tag ${tag} exists in this clone but not on origin, most likely left by a failed run: check it is not a release (git show ${tag}) and that origin really lacks it (git ls-remote --tags origin refs/tags/${tag} prints nothing), delete it (git tag -d ${tag}) and run again"
     fi
     prev_tag="$(awk '$2 ~ /^dist-v/ { print $2 }' <<< "$ORIGIN_TAGS" | sort -rV | head -n 1)"
     if [[ -z "$prev_tag" && "$first_release" -eq 0 ]]; then
