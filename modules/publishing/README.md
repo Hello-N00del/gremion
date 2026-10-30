@@ -1,3 +1,5 @@
+**English** | [Deutsch](./README.de.md)
+
 # publishing
 
 Newsletter: mailing lists and members, newsletter drafts with recipients (lists or kernel

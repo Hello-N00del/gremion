@@ -1,3 +1,5 @@
+**English** | [Deutsch](./README.de.md)
+
 # vault
 
 Secrets store for organisational units: items with metadata, secrets encrypted at rest

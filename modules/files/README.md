@@ -1,3 +1,5 @@
+**English** | [Deutsch](./README.de.md)
+
 # files
 
 Document browser over Nextcloud: list, download, upload (including chunked upload), create

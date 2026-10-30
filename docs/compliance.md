@@ -1,3 +1,5 @@
+**English** | [Deutsch](./compliance.de.md)
+
 # Compliance — Retention, Deletion & Tenant Crypto-Shred Contract
 
 Source of truth for how the Gremion governance kernel honours **GDPR Art. 5(1)(e)**

@@ -1,3 +1,5 @@
+**English** | [Deutsch](./README.de.md)
+
 # calendar
 
 Events and event types with recurrence, per-committee calendar settings, a public flag for

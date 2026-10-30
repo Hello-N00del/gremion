@@ -1,3 +1,5 @@
+**English** | [Deutsch](./modules.de.md)
+
 # Supported modules
 
 This page lists the modules that live under [`modules/`](../modules) in this tree, what each

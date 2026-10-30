@@ -1,3 +1,5 @@
+**English** | [Deutsch](./controller-processor-split.de.md)
+
 # Controller / processor split (Verantwortlicher / Auftragsverarbeiter)
 
 > **Status: DRAFT — intended split, not an executed agreement.**

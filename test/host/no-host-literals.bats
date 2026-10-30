@@ -116,8 +116,12 @@ HOST_LITERAL_ESCAPED_NAMES=(edge-ipv4-prefix host-inventory-name host-fqdn)
 #   address, no hostname, no credential. The kernel is the repository that
 #   publishes it. Reviewed 2026-09-09; test 7 fails if the occurrence goes
 #   away and this entry stays.
+# registrar | docs/compliance/controller-processor-split.de.md
+#   The German translation of the same table (scripts/check-doc-translations.mjs
+#   keeps it in step with the English file). Same disclosure, same reason.
 HOST_LITERAL_EXEMPTIONS=(
   'registrar|docs/compliance/controller-processor-split.md'
+  'registrar|docs/compliance/controller-processor-split.de.md'
 )
 
 literal_exempt() {  # $1 = pattern name, $2 = repo-relative path

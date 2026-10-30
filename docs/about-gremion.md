@@ -1,3 +1,5 @@
+**English** | [Deutsch](./about-gremion.de.md)
+
 # About Gremion
 
 > **Status:** Public, AGPL-3.0-only, version 0.1.0. No stable release line has been cut: fixes land on `main` and consumers pin a SHA. This document is the kernel's own source of truth for what Gremion is and how it is governed; the rest of `docs/` is partly inherited from the StuRaOS reference deployment and is still being revised (see [INDEX.md](./INDEX.md)).
