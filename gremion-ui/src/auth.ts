@@ -112,7 +112,7 @@ function retryAfterMs(header: string | null): number {
   return Math.min(ms, CAP_MS)
 }
 
-function withinRefreshGrace(token: { accessTokenExpires?: unknown }): boolean {
+function withinRefreshGrace(token: Record<string, unknown>): boolean {
   return Date.now() < ((token.accessTokenExpires as number | undefined) ?? 0) + REFRESH_GRACE_MS
 }
 
