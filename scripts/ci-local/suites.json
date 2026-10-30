@@ -70,6 +70,18 @@
       "testGlobs": ["gremion-ui/tests/integration/**/*.integration.test.ts"]
     },
     {
+      "//": "Tenant delete's leaf shred executors (newsletter, calendar) against a real Postgres; own lane config, node environment, no shared integration setup. LEAF_SHRED_TEST_PG_URL is a throwaway server, loopback, non-5432 (the file's guard refuses anything else), which --stack-env supplies.",
+      "id": "kernel-ui-vitest-leaf-shred",
+      "repo": "kernel",
+      "category": "integration",
+      "cwd": "gremion-ui",
+      "kind": "vitest",
+      "command": "node -e \"const e=process.env,k='GREMION_PRODUCTION_STACK';if(!(e[k]||'').trim())e[k]='none';process.exit(require('node:child_process').spawnSync('pnpm run test:leaf-shred',{stdio:'inherit',shell:true}).status??1)\"",
+      "timeoutMs": 600000,
+      "requiresStack": true,
+      "testGlobs": ["gremion-ui/tests/leaf-shred/**/*.pg.test.ts"]
+    },
+    {
       "id": "kernel-ui-playwright",
       "repo": "kernel",
       "category": "e2e",

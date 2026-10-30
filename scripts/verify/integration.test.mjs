@@ -4,7 +4,7 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
-import { INTEGRATION_PARTS, integrationVitestEnv, judgeEventsTest, judgeFreshInit, judgeNatsAuthTest, judgeNatsTest, psqlExecArgs, psqlProbeArgs, startTestDb } from './suites/integration.mjs'
+import { INTEGRATION_PARTS, integrationVitestEnv, judgeEventsTest, leafShredVitestEnv, judgeFreshInit, judgeNatsAuthTest, judgeNatsTest, psqlExecArgs, psqlProbeArgs, startTestDb } from './suites/integration.mjs'
 
 const NATS_OK =
   '[nats-test] running the ports suite against nats://127.0.0.1:4222\n' +
@@ -168,6 +168,17 @@ test('integrationVitestEnv points both URLs at the loopback test container and d
   assert.equal(env.DATABASE_URL, 'postgres://gremion_test:fake-pw-0000@127.0.0.1:54321/gremion')
   assert.equal(env.CONTROL_DATABASE_URL, 'postgres://gremion_test:fake-pw-0000@127.0.0.1:54321/control')
   assert.equal(env.POSTGRES_PASSWORD, undefined)
+  assert.equal(env.PGPASSWORD, undefined)
+  assert.equal(env.KEEP, 'k')
+})
+
+// The leaf-shred lane (gremion-ui `test:leaf-shred`, tenant delete) runs on the same throwaway
+// container as the integration lane: the env adds only LEAF_SHRED_TEST_PG_URL, a loopback url with the
+// run's own password and port, and keeps the production-stack declaration the lane's guard needs.
+test('leafShredVitestEnv points LEAF_SHRED_TEST_PG_URL at the loopback test container, over the integration env', () => {
+  const env = leafShredVitestEnv({ baseEnv: { GREMION_PRODUCTION_STACK: 'gremion', PGPASSWORD: 'y', KEEP: 'k' }, db: DB, uiDir: '/ui' })
+  assert.equal(env.LEAF_SHRED_TEST_PG_URL, 'postgres://gremion_test:fake-pw-0000@127.0.0.1:54321/postgres')
+  assert.equal(env.GREMION_PRODUCTION_STACK, 'none')
   assert.equal(env.PGPASSWORD, undefined)
   assert.equal(env.KEEP, 'k')
 })

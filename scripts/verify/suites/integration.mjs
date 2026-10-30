@@ -157,6 +157,21 @@ export function integrationVitestEnv({ baseEnv, db, uiDir }) {
   return env
 }
 
+/**
+ * The environment gremion-ui's `test:leaf-shred` runs with: the integration
+ * environment plus LEAF_SHRED_TEST_PG_URL, the admin url of the same throwaway
+ * container (loopback, ephemeral port, user `gremion_test`). The lane creates and
+ * drops only `newsletter_test_*` / `calendar_test_*` databases on it, and its
+ * own guard (assertNonProductionDbUrl) re-checks the url before connecting.
+ * Exported for the unit test (scripts/verify/integration.test.mjs).
+ */
+export function leafShredVitestEnv({ baseEnv, db, uiDir }) {
+  return {
+    ...integrationVitestEnv({ baseEnv, db, uiDir }),
+    LEAF_SHRED_TEST_PG_URL: `postgres://gremion_test:${db.password}@127.0.0.1:${db.port}/postgres`,
+  }
+}
+
 function vitestPart({ root }) {
   const label = 'gremion-ui vitest (test:integration)'
   if (!toolAvailable('docker')) return { label, toolMissing: 'docker' }
@@ -197,7 +212,20 @@ function vitestPart({ root }) {
     if (migrate.code !== 0) {
       return { label, unparseable: true, detail: `pnpm migrate:test-fixture failed: ${tail(migrate.stdout + migrate.stderr)}` }
     }
-    return runVitestJson({ label, cwd: uiDir, cmd: 'pnpm', args: ['run', 'test:integration'], env, root })
+    const integration = runVitestJson({ label, cwd: uiDir, cmd: 'pnpm', args: ['run', 'test:integration'], env, root })
+    // The leaf-shred executors' real-Postgres proof (tenant delete), on the same
+    // throwaway server: its own lane config, never the kernel database.
+    const leafShred = runVitestJson({
+      label: 'gremion-ui vitest (test:leaf-shred)',
+      cwd: uiDir,
+      cmd: 'pnpm',
+      args: ['run', 'test:leaf-shred'],
+      env: leafShredVitestEnv({ baseEnv: process.env, db, uiDir }),
+      root,
+    })
+    // Two sub-checks of this one part: each is judged on its own in combineParts
+    // (a lane that collected nothing cannot hide inside the other's count).
+    return [integration, leafShred]
   } finally {
     stopTestDb(db.name)
   }
@@ -414,5 +442,6 @@ export function runIntegrationSuite({ root = REPO_ROOT, only } = {}) {
   for (const n of names) {
     if (!INTEGRATION_PARTS[n]) throw new Error(`unknown integration part: ${n} (known: ${Object.keys(INTEGRATION_PARTS).join(', ')})`)
   }
-  return combineParts(names.map((n) => INTEGRATION_PARTS[n](root)))
+  // A part is one sub-check, or an array of them (the vitest part runs two lanes).
+  return combineParts(names.flatMap((n) => [INTEGRATION_PARTS[n](root)].flat()))
 }

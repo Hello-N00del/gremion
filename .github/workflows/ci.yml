@@ -921,7 +921,8 @@ jobs:
           retention-days: 7
 
   # integration:vitest (gremion-ui test:integration, with `pnpm migrate:test-fixture`,
-  # against a throwaway Postgres the suite starts itself) and integration:fresh-init
+  # against a throwaway Postgres the suite starts itself, followed on that same
+  # server by gremion-ui test:leaf-shred, the tenant-delete leaf shred proof) and integration:fresh-init
   # (`make fresh-init-proof`). Both start their own containers by name; neither
   # touches a service container, so none is declared here.
   verify-integration-db:
