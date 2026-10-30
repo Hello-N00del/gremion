@@ -232,3 +232,38 @@ test('release-images.yml: a job that reads release_ref itself, or a cache export
   // no resolve-ref job at all
   assert.match(refProblems('jobs: {}\n').join('\n'), /no resolve-ref job/)
 })
+
+// The key password has ONE supported source: COSIGN_PASSWORD_FILE (cut-dist-tag.sh
+// refuses to start without it, sign-release.sh refuses COSIGN_PASSWORD unset).
+// There is no cosign prompt: the signing step captures cosign's stderr, so a
+// prompt would hang unseen. A header or a doc that offers "typed at cosign's
+// prompt" sends the operator into exactly that hang (kernel #62 follow-up).
+const PROMPT_CLAIM = /(?:typed|entered|supplied|given)\s+(?:at|in|into|to)\s+cosign(?:'s)?\s+prompt/i
+
+/** Lines of `text` that offer a typed-at-the-prompt password source. */
+function promptClaims(text) {
+  return text.split('\n').flatMap((line, i) => (PROMPT_CLAIM.test(line) ? [`${i + 1}: ${line.trim()}`] : []))
+}
+
+test('release-images.yml and the release docs offer COSIGN_PASSWORD_FILE only, never a typed cosign prompt', () => {
+  const files = [
+    '.github/workflows/release-images.yml',
+    'scripts/release/README.md',
+    'scripts/release/cut-dist-tag.sh',
+    'scripts/release/sign-release.sh',
+    'docs/ops/release-signing.md',
+    'docs/ops/release-cadence.md',
+    'docs/ops/runbook/upgrade.md',
+    'docs/ops/runbook/install.md',
+  ]
+  const found = files.flatMap((f) => promptClaims(read(f)).map((l) => `${f}:${l}`))
+  assert.deepEqual(found, [], 'a doc offers a cosign password prompt that the scripts do not support')
+  const yml = read('.github/workflows/release-images.yml')
+  assert.match(yml, /COSIGN_PASSWORD_FILE=<file>/, 'the workflow header names the supported password source')
+})
+
+test('the prompt-claim guard catches the stale line that kernel #62 left in the workflow header', () => {
+  const stale = "#      COSIGN_PASSWORD_FILE=<file> (or typed at cosign's prompt), never as"
+  assert.equal(promptClaims(stale).length, 1)
+  assert.equal(promptClaims('there is no prompt fallback, because sign-release.sh captures stderr').length, 0)
+})
