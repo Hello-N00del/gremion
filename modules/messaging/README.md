@@ -71,7 +71,7 @@ Kernel app and leaf:
 | `MATRIX_URL` | Internal homeserver URL; the leaf warns and falls back to `http://matrix:8008` when unset. |
 | `MATRIX_PUBLIC_URL` | Browser-facing homeserver URL. |
 | `SYNAPSE_SERVER_NAME`, `SYNAPSE_ADMIN_TOKEN`, `SYNAPSE_ADMIN_BOT_USER_ID` | Homeserver name, admin access token, id of the room-administration bot. |
-| `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET` | Credentials for LiveKit join tokens. |
+| `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET` | Credentials for LiveKit join tokens. Required secret: the leaf refuses to boot when `LIVEKIT_API_SECRET` or `SYNAPSE_ADMIN_TOKEN` is unset or blank. |
 | `ELEMENT_CALL_INTERNAL_URL`, `PUBLIC_ELEMENT_CALL_URL` | Element Call, internal and browser-facing. |
 | `INTERNAL_PUSH_SECRET`, `GOOGLE_SERVICE_ACCOUNT_JSON` | Push endpoint secret; Firebase Cloud Messaging service account. |
 | `AUTH_SECRET`, `PUBLIC_BASE_URL`, `PORT` | Session secret, public base URL, leaf listen port. |
