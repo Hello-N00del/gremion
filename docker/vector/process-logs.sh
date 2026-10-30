@@ -57,8 +57,20 @@ tail -F "$RAW_LOG" | while IFS= read -r line; do
     # otherwise be persisted verbatim into security.log. Strip everything from
     # the first '?' onward (replacing it with '?<redacted>' so the presence of a
     # query is still visible) before writing. The path itself is retained.
+    #
+    # -c (compact) is LOAD-BEARING, not cosmetic. jq pretty-prints by default,
+    # one object across ~18 physical lines. Every consumer of this file is
+    # line-oriented: Vector's `file` source (one line == one event), the
+    # logrotate config and grep-based audit tooling. Without -c, Vector turns
+    # each brace and field into its own event, `parse_json!(.message)` aborts
+    # with "EOF while parsing an object at line 1 column 1", and because the
+    # remap transform defaults to drop_on_error=false the unparsed envelopes
+    # pass through to the retained log as line FRAGMENTS. Retention then
+    # evaluates .RequestReceivedAt on those fragments, finds null, falls back
+    # to now() and keeps everything for ever. This file's contract is NDJSON;
+    # test/process-logs.bats guards it.
     echo "$line" \
-        | jq --arg pip "$pseudo_ip" --arg epoch "$KEY_EPOCH" \
+        | jq -c --arg pip "$pseudo_ip" --arg epoch "$KEY_EPOCH" \
              '.ClientHost = $pip
               | .key_epoch = ($epoch | tonumber)
               | if (.RequestPath | type) == "string" and (.RequestPath | test("[?]"))
