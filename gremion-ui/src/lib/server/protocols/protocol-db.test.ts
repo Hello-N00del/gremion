@@ -25,6 +25,7 @@ import {
   updateResolution,
   deleteResolution,
   ResolutionPublishedError,
+  ResolutionNotFoundError,
   setProtocolStatus,
   nextGlobalNr,
   assignGlobalNrs,
@@ -195,11 +196,17 @@ describe('updateProtocol (#235 defect 4 — pdf_nextcloud_path column)', () => {
 describe('atomic publish lock (#433, #454)', () => {
   type Row = { id: string }
 
-  function standIn(parentStatus: 'draft' | 'submitted' | 'published') {
+  function standIn(parentStatus: 'draft' | 'submitted' | 'published', opts: { rowExists?: boolean } = {}) {
+    const rowExists = opts.rowExists ?? true
     return vi.fn((strings?: TemplateStringsArray, ...values: unknown[]) => {
       // vitest calls the value returned from a beforeEach as teardown (see above).
       if (!strings) return Promise.resolve([])
       const text = strings.join('?')
+      // The follow-up read that tells "locked" from "gone" after a zero-row write.
+      if (text.includes('SELECT id FROM protocol_resolutions')) {
+        return Promise.resolve(rowExists ? ([{ id: 'x1' }] as Row[]) : [])
+      }
+      if (!rowExists) return Promise.resolve([])
       const guarded = text.includes("status != 'published'")
       const bypass = values.includes(true)
       const refused = guarded && !bypass && parentStatus === 'published'
@@ -224,6 +231,24 @@ describe('atomic publish lock (#433, #454)', () => {
       const text = (tx.mock.calls[0][0] as TemplateStringsArray).join('?')
       expect(text).toContain("status != 'published'")
       expect(text).toContain('EXISTS')
+    })
+
+    it('locks the parent row and the adopted stamp inside the statement (FOR SHARE, decided_at IS NULL)', async () => {
+      // The EXISTS sub-SELECT alone reads the statement snapshot and misses a publish
+      // that commits while this statement waits; FOR SHARE makes it wait for the
+      // publish and re-read, decided_at IS NULL is re-checked on the target row.
+      // Proven against real Postgres in protocol-publish-lock.integration.test.ts.
+      const tx = standIn('draft')
+      await updateResolution('r1', { text: 'edited' }, { tx: tx as never })
+      const text = (tx.mock.calls[0][0] as TemplateStringsArray).join('?')
+      expect(text).toMatch(/FOR SHARE/)
+      expect(text).toContain('decided_at IS NULL')
+    })
+
+    it('a row that no longer exists is ResolutionNotFoundError, not a publish refusal', async () => {
+      const tx = standIn('draft', { rowExists: false })
+      await expect(updateResolution('r1', { text: 'edited' }, { tx: tx as never }))
+        .rejects.toBeInstanceOf(ResolutionNotFoundError)
     })
 
     it('still writes while the parent is a draft', async () => {
@@ -263,6 +288,19 @@ describe('atomic publish lock (#433, #454)', () => {
       expect(text).toContain('DELETE FROM protocol_resolutions')
       expect(text).toContain("status != 'published'")
       expect(text).toContain('RETURNING')
+    })
+
+    it('locks the parent row and the adopted stamp inside the DELETE (FOR SHARE, decided_at IS NULL)', async () => {
+      mockSql.mockImplementation(standIn('draft'))
+      await deleteResolution('r1')
+      const text = (mockSql.mock.calls[0][0] as TemplateStringsArray).join('?')
+      expect(text).toMatch(/FOR SHARE/)
+      expect(text).toContain('decided_at IS NULL')
+    })
+
+    it('a row that no longer exists is ResolutionNotFoundError, not a publish refusal', async () => {
+      mockSql.mockImplementation(standIn('draft', { rowExists: false }))
+      await expect(deleteResolution('r1')).rejects.toBeInstanceOf(ResolutionNotFoundError)
     })
 
     it('deletes while the parent is a draft', async () => {

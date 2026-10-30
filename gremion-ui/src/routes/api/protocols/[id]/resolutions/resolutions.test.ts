@@ -26,7 +26,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 const {
-  mockGetProtocol, mockAddResolution, mockUpdateResolution, mockDeleteResolution, ResolutionPublishedError,
+  mockGetProtocol, mockAddResolution, mockUpdateResolution, mockDeleteResolution, ResolutionPublishedError, ResolutionNotFoundError,
 } = vi.hoisted(() => ({
   mockGetProtocol: vi.fn(),
   mockAddResolution: vi.fn(),
@@ -41,6 +41,12 @@ const {
       this.name = 'ResolutionPublishedError'
     }
   },
+  ResolutionNotFoundError: class ResolutionNotFoundError extends Error {
+    constructor(public readonly resolutionId: string) {
+      super(`Resolution ${resolutionId} not found`)
+      this.name = 'ResolutionNotFoundError'
+    }
+  },
 }))
 vi.mock('$lib/server/protocols/protocol-db', () => ({
   getProtocol: mockGetProtocol,
@@ -48,6 +54,7 @@ vi.mock('$lib/server/protocols/protocol-db', () => ({
   updateResolution: mockUpdateResolution,
   deleteResolution: mockDeleteResolution,
   ResolutionPublishedError,
+  ResolutionNotFoundError,
 }))
 
 // decideResolution runs REAL; only its quorum lookup is stubbed (quorate by
@@ -524,6 +531,18 @@ describe('resolution PATCH/DELETE — publish committed between the check and th
     mockDeleteResolution.mockRejectedValueOnce(new ResolutionPublishedError('r1'))
     await expect(DELETE(makePatchEvent(undefined)))
       .rejects.toMatchObject({ status: 403, body: { message: lockedText } })
+  })
+
+  it('PATCH: the row vanished between the check and the write → 404, not 403', async () => {
+    mockSql.mockResolvedValue([draftRow])
+    mockUpdateResolution.mockRejectedValueOnce(new ResolutionNotFoundError('r1'))
+    await expect(PATCH(makePatchEvent({ text: 'X' }))).rejects.toMatchObject({ status: 404 })
+  })
+
+  it('DELETE: the row vanished between the check and the write → 404, not 403', async () => {
+    mockSql.mockResolvedValue([draftRow])
+    mockDeleteResolution.mockRejectedValueOnce(new ResolutionNotFoundError('r1'))
+    await expect(DELETE(makePatchEvent(undefined))).rejects.toMatchObject({ status: 404 })
   })
 
   it('an unrelated write failure is NOT mapped to 403', async () => {

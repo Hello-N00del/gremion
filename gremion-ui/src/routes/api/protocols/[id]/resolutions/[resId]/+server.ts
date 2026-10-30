@@ -2,7 +2,9 @@ import { error, json } from '@sveltejs/kit'
 import type { RequestEvent } from '@sveltejs/kit'
 import { hasRole, Role } from '$lib/auth'
 import type { SessionUser } from '$lib/auth'
-import { updateResolution, deleteResolution, ResolutionPublishedError } from '$lib/server/protocols/protocol-db'
+import {
+  updateResolution, deleteResolution, ResolutionPublishedError, ResolutionNotFoundError,
+} from '$lib/server/protocols/protocol-db'
 import type { AdoptionMode, RequiredMajority } from '$lib/server/protocols/protocol-db'
 import { requireUuidParams } from '$lib/server/protocols/route-ids'
 import { getDb } from '$lib/server/db'
@@ -16,6 +18,7 @@ function requireAdmin(event: RequestEvent): SessionUser {
   return user
 }
 
+const NOT_FOUND_MESSAGE = 'Beschluss nicht gefunden'
 const ADOPTED_LOCKED_MESSAGE = 'Angenommene Beschlüsse sind nicht bearbeitbar (Einspruch statt Änderung)'
 
 interface EditableResolutionRow {
@@ -47,7 +50,7 @@ async function loadEditableResolution(event: RequestEvent): Promise<EditableReso
     FROM protocol_resolutions r
     JOIN protocols p ON p.id = r.protocol_id
     WHERE r.id = ${event.params.resId!}`
-  if (!current || current.protocol_id !== event.params.id) throw error(404, 'Beschluss nicht gefunden')
+  if (!current || current.protocol_id !== event.params.id) throw error(404, NOT_FOUND_MESSAGE)
   if (current.protocol_status === 'published' || current.decided_at != null) {
     throw error(403, ADOPTED_LOCKED_MESSAGE)
   }
@@ -55,17 +58,19 @@ async function loadEditableResolution(event: RequestEvent): Promise<EditableReso
 }
 
 /**
- * Run a resolution write and map the db layer's publish-lock refusal to the SAME
- * 403 loadEditableResolution answers. The early check above is a read; a publish
- * can commit between it and the write. The lock inside the write statement
- * (protocol-db.ts) is what actually closes that window, and this is how it
- * surfaces: a 403, never a 500 and never a silent edit of an adopted row.
+ * Run a resolution write and map the db layer's refusals to the SAME answers
+ * loadEditableResolution gives. The early check above is a read; a publish (or
+ * another admin's delete) can land between it and the write. The lock inside the
+ * write statement (protocol-db.ts) is what actually closes that window, and this
+ * is how it surfaces: 403 for a locked row, 404 for a vanished one, never a 500
+ * and never a silent edit of an adopted row.
  */
 async function refusePublished<T>(write: () => Promise<T>): Promise<T> {
   try {
     return await write()
   } catch (err) {
     if (err instanceof ResolutionPublishedError) throw error(403, ADOPTED_LOCKED_MESSAGE)
+    if (err instanceof ResolutionNotFoundError) throw error(404, NOT_FOUND_MESSAGE)
     throw err
   }
 }
