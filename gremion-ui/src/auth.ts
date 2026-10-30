@@ -4,6 +4,7 @@ import type { RequestEvent } from '@sveltejs/kit'
 import { Role, type SessionUser } from '$lib/auth/types'
 import { safeDecodeAccessToken } from '$lib/auth/decode'
 import { acrToLoa, LOA } from '$lib/auth/step-up'
+import { authRedirect } from '$lib/safe-redirect'
 import { env } from '$env/dynamic/private'
 import { resolveSecret } from '$lib/server/tenant/secrets'
 import { getTenant, getTenantOrNull, type TenantContext } from '$lib/server/tenant/context'
@@ -84,7 +85,9 @@ export async function buildAuthConfig(event: RequestEvent): Promise<SvelteKitAut
     // every session read, so maxAge is a backstop (sliding); the 12 h absolute
     // (ssoSessionMaxLifespan 43200 s) and 30 min idle are enforced by Keycloak.
     session: { strategy: 'jwt', maxAge: 43200 },
-    callbacks: { jwt: jwtCallback, session: sessionCallback },
+    // redirect: the callbackUrl travels in a cookie and the query, so the server re-checks it
+    // with the shared same-origin guard instead of the library's prefix test.
+    callbacks: { jwt: jwtCallback, session: sessionCallback, redirect: authRedirect },
     pages: { signIn: '/auth/login' },
   }
 }

@@ -48,6 +48,19 @@
 #   KC_BASE_URL           — Keycloak base (default http://localhost:8080/auth)
 #   BACKUP_DIR            — backup root (default ./backups)
 #   TENANT_BACKUP_RETENTION_DAYS — retention (default 30; config.backups.retention_days)
+#   TENANT_BACKUP_KEEP_GENERATIONS — newest generations that retention never
+#                           prunes, however old they are (default 2, minimum 1)
+#
+# GENERATIONS. Every run builds a complete, dated generation in a staging dir
+# (.partial-<gen>) and publishes it with ONE rename to
+# <OUT_DIR>/<YYYYmmdd-HHMMSS-pid>/ only after every artifact exists and is
+# non-trivial. A run that fails anywhere leaves NO new directory and does not
+# touch any earlier generation. (It used to run `pg_dump | openssl > <artifact>`,
+# which opens -- truncates -- the artifact BEFORE the dump starts: a failing
+# pg_dump destroyed last night's good copy and left an encrypted empty file in
+# its place.) Retention prunes generations older than the window but always keeps
+# the newest TENANT_BACKUP_KEEP_GENERATIONS, so a stopped cron can never age out
+# the last good backup. `.last-backup` names the newest published generation.
 # ============================================================
 
 set -euo pipefail
@@ -83,7 +96,12 @@ KC_BASE_URL="${KC_BASE_URL:-http://localhost:8080/auth}"
 BACKUP_DIR="${BACKUP_DIR:-./backups}"
 TENANT_SECRETS_DIR="${TENANT_SECRETS_DIR:-./secrets/tenants}"
 RETENTION_DAYS="${TENANT_BACKUP_RETENTION_DAYS:-30}"
+KEEP_GENERATIONS="${TENANT_BACKUP_KEEP_GENERATIONS:-2}"
+[[ "$RETENTION_DAYS" =~ ^[0-9]+$ ]] || { echo "[tenant-backup] ERROR: TENANT_BACKUP_RETENTION_DAYS must be a whole number" >&2; exit 2; }
+[[ "$KEEP_GENERATIONS" =~ ^[0-9]+$ && "$KEEP_GENERATIONS" -ge 1 ]] || { echo "[tenant-backup] ERROR: TENANT_BACKUP_KEEP_GENERATIONS must be a whole number >= 1" >&2; exit 2; }
 DATE=$(date +%Y%m%d-%H%M%S)
+# pid suffix: two runs in the same second must not share a generation
+GEN="${DATE}-$$"
 
 # ── (1) Read the registry row for <slug> (psql against the control DB) ────────
 # Single tab-separated row: realm_name, status, residency_zone, backup_key_ref.
@@ -116,6 +134,9 @@ case "$backup_key_ref" in
     ;;
   env:*)
     key_var="${backup_key_ref#env:}"
+    # the ref comes from the registry: only a plain variable name may reach the
+    # indirect expansion below
+    [[ "$key_var" =~ ^[A-Z_][A-Z0-9_]*$ ]] || error "backup_key_ref names an invalid env var: '${key_var}'"
     BACKUP_KEY="${!key_var:-}"
     [[ -n "$BACKUP_KEY" ]] || error "backup key env var ${key_var} is unset"
     info "backup key: env:${key_var} (operator root secret)"
@@ -131,21 +152,45 @@ esac
 # every customer -- never by the slug. There is no default tenant (TASK-042).
 db_name="t_${tenant_id//-/}__kernel"
 
-OUT_DIR="${BACKUP_DIR%/}/tenants/${residency_zone:-eu}/${slug}"
+# residency_zone is registry data and becomes a path segment: a plain label only
+# (a value like ../../x would write the encrypted backup outside ./backups).
+zone="${residency_zone:-eu}"
+[[ "$zone" =~ ^[a-z0-9-]{1,30}$ ]] || error "registry residency_zone is not a plain label: '${zone}'"
+
+OUT_DIR="${BACKUP_DIR%/}/tenants/${zone}/${slug}"
+STAGE="${OUT_DIR}/.partial-${GEN}"
+FINAL="${OUT_DIR}/${GEN}"
 mkdir -p "$OUT_DIR"
-info "writing to ${OUT_DIR}/ (residency_zone=${residency_zone:-eu}, retention=${RETENTION_DAYS}d)"
+# A failed run removes its staging dir and nothing else.
+trap 'rm -rf -- "$STAGE"' EXIT
+( umask 077; mkdir "$STAGE" )
+info "writing generation ${GEN} to ${FINAL}/ (staged in ${STAGE##*/}; residency_zone=${zone}, retention=${RETENTION_DAYS}d, keep>=${KEEP_GENERATIONS})"
 
 # ── openssl encrypt helper (stdin -> <out>; key on fd 3, never argv/env-leak) ─
+# <out> is always inside the staging dir, so opening (truncating) it can never
+# destroy an earlier generation.
 encrypt_to() {
     local out="$1"
     openssl enc -aes-256-cbc -pbkdf2 -salt -pass fd:3 3<<<"$BACKUP_KEY" > "$out"
+}
+
+# An encrypted EMPTY input is still 32 bytes (16 salt header + one padding
+# block). Anything that small came from a producer that wrote nothing.
+MIN_ARTIFACT_BYTES=32
+assert_artifact() {
+    local f="$1" size
+    [[ -f "$f" ]] || error "expected artifact is missing: ${f##*/}"
+    size=$(wc -c < "$f")
+    [[ "$size" -gt "$MIN_ARTIFACT_BYTES" ]] \
+        || error "artifact ${f##*/} is empty (${size} bytes) -- its producer wrote nothing; not publishing this run"
 }
 
 # ── (2) DB dump: pg_dump -Fc through the running postgres, encrypted ──────────
 info "Dumping ${db_name} (pg_dump -Fc) -> ${slug}.dump.age ..."
 docker compose exec -T postgres \
     pg_dump -Fc -U "$POSTGRES_USER" "$db_name" \
-    | encrypt_to "${OUT_DIR}/${slug}.dump.age"
+    | encrypt_to "${STAGE}/${slug}.dump.age"
+assert_artifact "${STAGE}/${slug}.dump.age"
 
 # ── (3) Realm export: Admin API partial-export, encrypted ─────────────────────
 # This box is the SHARED live staging host — the KC admin password must NEVER
@@ -187,13 +232,32 @@ curl -fsS -X POST \
     "${KC_BASE_URL}/admin/realms/${realm_seg}/partial-export?exportClients=true&exportGroupsAndRoles=true" \
     -H @/dev/fd/3 3<<<"Authorization: Bearer ${kc_token}" \
     -H 'Content-Type: application/json' \
-    | encrypt_to "${OUT_DIR}/realm.json.age"
+    | encrypt_to "${STAGE}/realm.json.age"
+assert_artifact "${STAGE}/realm.json.age"
 
-# ── (4) Retention: prune this tenant's bundles older than RETENTION_DAYS ──────
-# Each run writes into the slug dir; the dated marker keeps the run auditable.
-echo "$DATE" > "${OUT_DIR}/.last-backup"
-find "${BACKUP_DIR%/}/tenants" -maxdepth 3 -name '*.age' -type f \
-    -mtime "+${RETENTION_DAYS}" -path "*/${slug}/*" -delete 2>/dev/null || true
+# ── (4) Publish the generation: ONE rename, only after every artifact is good ─
+mv -- "$STAGE" "$FINAL"
+# The dated marker keeps the run auditable; written via a temp file + rename so
+# a crash cannot leave a torn marker.
+echo "$GEN" > "${OUT_DIR}/.last-backup.tmp" && mv -f -- "${OUT_DIR}/.last-backup.tmp" "${OUT_DIR}/.last-backup"
 
-success "tenant '${slug}' backup complete -> ${OUT_DIR} (run ${DATE})"
+# ── (5) Retention: prune OLD generations, never the newest KEEP_GENERATIONS ───
+# Generation dirs are named YYYYmmdd-HHMMSS-pid, so a reverse name sort is
+# newest-first. Only runs that got this far (i.e. succeeded) prune, and the
+# newest generations are exempt however old they are.
+kept=0
+while IFS= read -r gen_dir; do
+    [[ -n "$gen_dir" ]] || continue
+    kept=$(( kept + 1 ))
+    [[ "$kept" -gt "$KEEP_GENERATIONS" ]] || continue
+    if [[ -n "$(find "$gen_dir" -maxdepth 0 -mtime "+${RETENTION_DAYS}" 2>/dev/null)" ]]; then
+        info "pruning generation ${gen_dir##*/} (older than ${RETENTION_DAYS}d)"
+        rm -rf -- "$gen_dir"
+    fi
+done < <(find "$OUT_DIR" -mindepth 1 -maxdepth 1 -type d -name '[0-9]*-[0-9]*-[0-9]*' | LC_ALL=C sort -r)
+# Flat artifacts written by the pre-generation version of this script: they are
+# superseded by the generation published above, so the age rule applies as before.
+find "$OUT_DIR" -maxdepth 1 -name '*.age' -type f -mtime "+${RETENTION_DAYS}" -delete 2>/dev/null || true
+
+success "tenant '${slug}' backup complete -> ${FINAL} (run ${GEN})"
 info "artifacts: ${slug}.dump.age, realm.json.age"

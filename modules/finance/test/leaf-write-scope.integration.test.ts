@@ -56,7 +56,7 @@ const headers = (a: Actor, json = true): Record<string, string> => ({
   'x-finance-is-auditor': String(!!a.isAuditor),
   'x-finance-is-superuser': String(!!a.isSuperuser),
   ...(a.orgUnits && a.orgUnits.length > 0 ? { 'x-finance-scoped-org-units': a.orgUnits.join(',') } : {}),
-  ...(a.groups && a.groups.length > 0 ? { 'x-finance-groups': a.groups.join(',') } : {}),
+  ...(a.groups && a.groups.length > 0 ? { 'x-finance-groups-json': Buffer.from(JSON.stringify(a.groups), 'utf8').toString('base64url') } : {}),
 })
 
 describe('finance leaf -- write scope on sub-org sagas and bank-account ops (H15, K4#34)', () => {

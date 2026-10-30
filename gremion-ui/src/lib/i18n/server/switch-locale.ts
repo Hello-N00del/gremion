@@ -15,6 +15,7 @@
 // person, and logged. It is never swallowed into a success.
 import { fail, redirect } from '@sveltejs/kit'
 import { LOCALE_COOKIE, asSupportedLocale } from '../locale'
+import { sameOriginPath } from '../../safe-redirect'
 import type { LocalePreferencePort } from './locale-preference-port'
 
 /** One year. The choice is long-lived; the person row outlives it anyway. */
@@ -34,46 +35,6 @@ export interface SwitchLocaleEvent {
   url: URL
   cookies: { set(name: string, value: string, opts: { path: string } & Record<string, unknown>): void }
   locals: unknown
-}
-
-// C0 controls and DEL. WHATWG URL parsing strips tab/CR/LF, so '/\t/evil.example'
-// would resolve to '//evil.example'; CR/LF would also make redirect() throw.
-// eslint-disable-next-line no-control-regex
-const CONTROL_CHARS = /[\u0000-\u001f\u007f]/
-
-/**
- * A fixed origin to resolve against: nothing about the request (Host, proxy
- * headers) can influence what counts as "the same origin". `.invalid` never
- * resolves (RFC 2606).
- */
-const RESOLVE_BASE = new URL('https://redirect-target.invalid/')
-
-/**
- * Same-origin path only. The raw value must be a single-slash absolute path
- * with no backslash or control character. It is then resolved with the URL
- * parser against a fixed base and accepted only when the origin is unchanged
- * AND the resolved path still starts with a single '/'. R26-26: dot segments
- * ('/.//evil.example', '/%2e//evil.example', '/a/..//evil.example') pass the
- * raw checks and collapse to the path '//evil.example' during parsing, which
- * as a Location header is protocol-relative and leaves the site. The
- * returned value is the parser's own serialisation, never the raw input.
- */
-function safeTarget(value: FormDataEntryValue | null): string {
-  if (typeof value !== 'string') return DEFAULT_TARGET
-  if (!value.startsWith('/') || value.startsWith('//') || value.includes('\\') || CONTROL_CHARS.test(value)) {
-    return DEFAULT_TARGET
-  }
-  let target: URL
-  try {
-    target = new URL(value, RESOLVE_BASE)
-  } catch {
-    return DEFAULT_TARGET
-  }
-  if (target.origin !== RESOLVE_BASE.origin) return DEFAULT_TARGET
-  if (!target.pathname.startsWith('/') || target.pathname.startsWith('//') || target.pathname.includes('\\')) {
-    return DEFAULT_TARGET
-  }
-  return target.pathname + target.search + target.hash
 }
 
 export async function switchLocale(event: SwitchLocaleEvent, deps: SwitchLocaleDeps) {
@@ -102,5 +63,5 @@ export async function switchLocale(event: SwitchLocaleEvent, deps: SwitchLocaleD
     }
   }
 
-  redirect(303, safeTarget(form.get('redirectTo')))
+  redirect(303, sameOriginPath(form.get('redirectTo'), DEFAULT_TARGET))
 }

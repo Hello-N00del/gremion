@@ -28,6 +28,7 @@ repositories — one per module — and carry their own docs.
 | [compliance/controller-processor-split.md](./compliance/controller-processor-split.md) | DRAFT: how GDPR controller / processor roles are intended to fall for a self-hosted install and for a hosted control plane |
 | [security/test-smtp-guard.md](./security/test-smtp-guard.md) | The outbound target guard on `/api/setup/test-smtp`: canonical-bytes address predicate, resolve-once, the `SMTP_TEST_ALLOW_PRIVATE` range opt-in and its carve-outs, DNS classification — and the named residuals |
 | [pilot/poll-usage/README.md](./pilot/poll-usage/README.md) | The two open-poll forms of the pilot, the no-anonymity and no-eligibility wording rule, and how poll usage is measured from go-live |
+| [modules.md](./modules.md) | The modules under `modules/`: purpose, support status, external services needed, and a link to each module's README |
 | [pilot/module-defaults.md](./pilot/module-defaults.md) | The intended pilot module set (votes only), the repository checks behind it, what is not claimed for the running system (044-b), and the hand-offs |
 
 ## Develop

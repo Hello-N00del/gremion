@@ -275,7 +275,10 @@ answers `busy` with `EXIT 3` instead of racing the first on the colours, the
 migrations or the staged backup tree. `noop` and `verify` are read-only and are
 never blocked. The program inherits the lock (and `GREMION_HOST_LOCK_HELD=1`),
 so `gremion-backup`, which the systemd timer starts directly and which takes the
-same lock itself, does not wait on its own parent. A deploy requested while the
+same lock itself, does not wait on its own parent. `gremion-deploy`,
+`gremion-rollback` and `gremion-tenant`, started directly at the host rather than
+through `gremion-hostd`, take the same lock the same way and answer `busy`
+(`EXIT 3`) when it is held. A deploy requested while the
 nightly backup runs is therefore answered `busy`; retry it when the backup has
 finished.
 
@@ -312,8 +315,10 @@ deploy. A zero trailer together with a non-zero ssh status also fails.
 The registry token is passed on stdin, never as an argument and never to
 disk. `gremion-deploy` runs `docker login ghcr.io -u x-access-token
 --password-stdin`, logs out in a trap on every exit path, and then asserts
-that no `auths` entry survives in either Docker config. The host therefore
-holds no standing registry credential between deploys.
+that no `auths` entry survives in either Docker config. With the token on
+stdin the host holds no standing registry credential between deploys; the
+alternative, a token file on the host, is described in "The registry token on
+the host" below. Either way no `auths` entry survives a deploy.
 
 `deploy.yml` is retired (TRD-364: no CI runner holds a deploy credential);
 `.github/workflows/release-images.yml` builds and pins the images keylessly and
@@ -403,6 +408,115 @@ A tag cut before this check existed is unsigned and is refused, also on a
 before deploying it again. A new host gets the anchor from the install runbook
 (step 10, `bootstrap.sh signers`); `gremion-deploy` refuses its first deploy
 without it.
+
+### The registry token on the host
+
+`gremion-deploy` needs exactly one GitHub credential: a token that lets
+`docker login ghcr.io` pull the release images (step 1; step 3 proves it with
+`docker manifest inspect` over every pinned reference). Nothing else on the host
+needs one:
+
+- The release-pins artefact (`release-pins-<sha>`) is downloaded by
+  `scripts/release/cut-dist-tag.sh` on the operator workstation, with the
+  operator's own `gh` login, and reaches the host inside the signed tag's tree
+  (`docker-compose.pins.yml`, `docker-compose.state-pins.yml`, `release.json`).
+  The host therefore needs no `actions:read`, and no scope that reads Actions.
+- The release tree is cloned from `GREMION_SOURCE_URL`, anonymously, while that
+  repository is public. A private source repository would need a read
+  credential for the clone; this procedure does not provide one.
+
+**Open decision: public packages or a pull token.** Whether the GHCR packages
+are made public or the host pulls with a token is not decided. This section is
+written for the pull token and stays correct either way. If the packages become
+public, no credential is needed to pull, but `gremion-deploy` still requires a
+token today and always logs in, so making the login optional would be a change
+to the program first. Until that is decided, a pull token is required.
+
+**Which token.** Read-only on the release packages, nothing more: the scope
+`read:packages`, and no `repo`, `write:packages`, `delete:packages` or
+`workflow` scope.
+
+- At the time of writing, GitHub's container registry accepts a personal access
+  token (classic) for `docker login` and does not accept a fine-grained token or
+  a GitHub App installation token. Check GitHub's current documentation for the
+  container registry before creating the credential. If that has changed, prefer
+  a fine-grained token or an app installation token with the permission
+  `packages: read`, restricted to the release repository.
+- A classic token cannot be restricted to one repository, so the limit comes
+  from the identity that owns it: a dedicated machine account that has been given
+  the Read role on the release packages (each package's settings, "Manage
+  access") and holds nothing else. Never the token of a person's own account.
+- It has an expiry, at most 90 days. A token without an expiry is not issued.
+  Put the rotation date in the operator calendar two weeks before the expiry.
+
+**Where it lives.** One file, `/opt/gremion/etc/registry-token`, holding the
+token on a single line and nothing else, owned by the deploy user `gremion`,
+mode 0600 (0400 is accepted), inside `etc/` (0700), like every other secret of
+this host. `gremion-deploy` runs as `gremion`: a root-owned file would be
+unreadable to it, and the program refuses a file its own user does not own.
+The token is never put in an `.env` file, in any file of a repository, in a
+shell history, in an environment variable or on a command line.
+
+**How it is enabled.** The path, not the token, is named by
+`GREMION_REGISTRY_TOKEN_FILE=/opt/gremion/etc/registry-token` in
+`/opt/gremion/etc/env/state.env`; `gremion-deploy` reads that file from the
+environment too. Set, the file is the **only** source and stdin is not read;
+unset or empty, the token is read from stdin as before.
+
+**How `gremion-deploy` treats the file.** It fails closed with exit 2, at the
+start of the run, before step 1 (nothing is pulled and nothing is changed), and
+the message names the variable, the path and a mode, never the content. It
+refuses: a path that is not absolute; a missing file; a symbolic link; anything
+that is not a regular file; a file owned by another user; a file that group or
+others can read (any mode bit in `077`); an empty file; and a file that is not
+exactly one token (one line of 8 to 512 characters from `A-Z a-z 0-9 _ . : -`).
+The token reaches `docker login` on its stdin only, and the existing guard
+still asserts that no `auths` entry survives the logout.
+
+**How it gets to the host.** Over SSH, on stdin, never as an argument. The value
+is typed at a prompt, so it is in no history; `printf` is a shell builtin, so it
+is on no command line; the remote command carries no secret, and it creates the
+file private (`umask 077`) under a temporary name and moves it into place:
+
+```bash
+# operator workstation
+read -rs GHCR_TOKEN
+printf '%s\n' "$GHCR_TOKEN" | ssh root@<host> \
+  'umask 077 && cat > /opt/gremion/etc/registry-token.new && chown gremion:gremion /opt/gremion/etc/registry-token.new && mv /opt/gremion/etc/registry-token.new /opt/gremion/etc/registry-token'
+unset GHCR_TOKEN
+# host, once: name the file in state.env (the path only; tee -a keeps the owner and the mode)
+printf 'GREMION_REGISTRY_TOKEN_FILE=/opt/gremion/etc/registry-token\n' | sudo -u gremion tee -a /opt/gremion/etc/env/state.env >/dev/null
+stat -c '%U:%G %a %n' /opt/gremion/etc/registry-token      # gremion:gremion 600
+```
+
+A copy with `scp` of a token file that is mode 0600 on the workstation works as
+well, provided the file is then chowned to `gremion` and its mode checked with
+the `stat` above; the stdin form leaves no copy behind on the workstation.
+
+**Rotation.** Create the new token, install it with the commands above (the
+`mv` replaces the file in one step), then prove it from the host with a login
+into a throwaway Docker config, so that nothing lands in the deploy user's own
+`~/.docker`, and a manifest read of one pinned image of the running release:
+
+```bash
+sudo -u gremion bash -c 'export DOCKER_CONFIG="$(mktemp -d)"; trap "rm -rf \"$DOCKER_CONFIG\"" EXIT
+  docker login ghcr.io -u x-access-token --password-stdin < /opt/gremion/etc/registry-token >/dev/null &&
+  docker manifest inspect ghcr.io/hello-n00del/gremion-ui@sha256:<64 hex of the running release> >/dev/null && echo pull-ok'
+```
+
+Revoke the old token at GitHub only after `pull-ok`. A token that leaked, or a
+host that may have been read by someone else, is revoked at once and replaced.
+An expired or revoked token surfaces as a failed login at step 1 or a failed
+manifest read at step 3 of the next deploy, before any colour is stopped.
+
+**Through `gremion-hostd`.** The `deploy` verb of section 5 still requires a
+`TOKEN` line and forwards it to `gremion-deploy` on stdin; with
+`GREMION_REGISTRY_TOKEN_FILE` set that stdin is not read and the file wins. A
+`deploy` that needs no `TOKEN` line when the file is configured is not built
+yet, so the deploy channel keeps sending one. The `rollback` verb forwards no
+token at all: a class (b) rollback started through the channel (it redeploys the
+previous tag) can only pull when the file is configured, and a deploy started by
+hand on the host needs no stdin either.
 
 ### The Settings "Backup jetzt erstellen" button (F1-FIX-10-K, D-4)
 

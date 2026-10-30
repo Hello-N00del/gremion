@@ -143,7 +143,13 @@ that tenant's own backup key (registry `backup_key_ref`) and written under its
 ```bash
 ./scripts/tenant-backup.sh acme
 # artifacts: <slug>.dump.age (pg_dump -Fc), realm.json.age (KC partial-export)
+# layout:    backups/tenants/<zone>/<slug>/<YYYYmmdd-HHMMSS-pid>/  (one generation per run)
 ```
+
+Each run is published atomically as its own dated generation (a failed run leaves
+earlier generations untouched); `.last-backup` names the newest. Retention
+(`TENANT_BACKUP_RETENTION_DAYS`) never prunes the newest
+`TENANT_BACKUP_KEEP_GENERATIONS` (default 2).
 
 Encryption is `openssl enc -aes-256-cbc -pbkdf2`; the realm is exported via the
 Keycloak Admin API `partial-export` endpoint. Because each tenant's key is
