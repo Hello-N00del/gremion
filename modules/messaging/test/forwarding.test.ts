@@ -420,4 +420,35 @@ describe('leaf op forwarding (dispatchOp) — contract-identical envelopes', () 
     expect(r.status).toBe(502)
     expect((r.body as { success: boolean }).success).toBe(false)
   })
+
+  // Token-invalidation signal: Synapse M_UNKNOWN_TOKEN must reach the kernel as a
+  // structured `errcode` so it can evict the dead cached Matrix token.
+  it('a Synapse 401 M_UNKNOWN_TOKEN on a user-token op carries errcode in the envelope (status stays 502)', async () => {
+    route([{ match: (u) => u.includes('joined_rooms'), res: () => jr({ errcode: 'M_UNKNOWN_TOKEN', error: 'Unrecognised access token.' }, 401) }])
+    const r = await run('messages.rooms', { userToken: 'dead-token' })
+    expect(r.status).toBe(502)
+    expect((r.body as { errcode?: string }).errcode).toBe('M_UNKNOWN_TOKEN')
+  })
+
+  it('media upload: a Synapse 401 M_UNKNOWN_TOKEN carries errcode in the envelope', async () => {
+    route([{ match: (u) => u.includes('/media/v3/upload'), res: () => jr({ errcode: 'M_UNKNOWN_TOKEN', error: 'Unrecognised access token.' }, 401) }])
+    const r = await run('messages.media.upload', { userToken: 'dead', data: 'AAAA', mimeType: 'image/png', filename: 'a.png' })
+    expect(r.status).toBe(502)
+    expect((r.body as { errcode?: string }).errcode).toBe('M_UNKNOWN_TOKEN')
+  })
+
+  // The next two pin the narrowing: they pass before the eviction work too (no
+  // errcode is ever emitted then) and must stay green after it.
+  it('an admin-token 401 (media download) is NOT mapped to M_UNKNOWN_TOKEN', async () => {
+    route([{ match: (u) => u.includes('/media/download'), res: () => jr({ errcode: 'M_UNKNOWN_TOKEN', error: 'bad admin' }, 401) }])
+    const r = await run('messages.media.download', { mxcUri: 'mxc://example.org/abc' })
+    expect(r.status).toBe(502)
+    expect((r.body as { errcode?: string }).errcode).toBeUndefined()
+  })
+
+  it('a tokenless login 401 (bad Keycloak JWT) is NOT mapped to M_UNKNOWN_TOKEN', async () => {
+    route([{ match: (u) => u.includes('/_matrix/client/v3/login'), res: () => jr({ error: 'nope' }, 401) }])
+    const r = await run('auth.matrix-token', { keycloakJwt: 'kc.jwt' })
+    expect((r.body as { errcode?: string }).errcode).toBeUndefined()
+  })
 })
