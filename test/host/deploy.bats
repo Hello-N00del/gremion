@@ -268,6 +268,195 @@ stub_all() { stub_git; stub_docker; stub_siblings; }
     [ "$status" -ne 0 ]
 }
 
+# ---------------------------------------------------------------------------
+# D2. the registry token from a file (GREMION_REGISTRY_TOKEN_FILE)
+#
+# The token can also live in ONE file on the host instead of arriving on stdin.
+# The file is a credential, so the program fails closed: a path that is not
+# absolute, a missing file, a symlink, a non-regular file, a file another user
+# owns, a file anyone but its owner can read, an empty file and a file that is
+# not one token each end the run with exit 2 BEFORE step 1, so nothing is
+# pulled and nothing is changed. No message carries the file's content, and the
+# value reaches `docker login` on stdin only.
+# ---------------------------------------------------------------------------
+
+# make_token_file [mode] [content] -- a token file owned by the running user,
+# named by GREMION_REGISTRY_TOKEN_FILE. Skips where the file system does not
+# keep POSIX modes (Git Bash on NTFS): the bats runner image and CI keep them.
+make_token_file() {
+    local mode="${1:-600}" content="${2:-file-token-for-test}"
+    TOKEN_FILE="${BATS_TEST_TMPDIR}/registry-token"
+    printf '%s\n' "$content" > "$TOKEN_FILE"
+    chmod "$mode" "$TOKEN_FILE"
+    [ "$(stat -c '%a' "$TOKEN_FILE")" = "$mode" ] || skip "this file system does not keep POSIX modes"
+    export TOKEN_FILE GREMION_REGISTRY_TOKEN_FILE="$TOKEN_FILE"
+}
+
+# capture_login_stdin -- the docker shim writes what `docker login` reads on
+# stdin to $LOGIN_STDIN, so a test can prove WHICH value reached the login.
+capture_login_stdin() {
+    LOGIN_STDIN="${BATS_TEST_TMPDIR}/login-stdin"
+    export LOGIN_STDIN
+    sed -i 's|login)    cat >/dev/null;|login)    cat > "$LOGIN_STDIN";|' "${SHIM_DIR}/docker"
+    grep -qF 'cat > "$LOGIN_STDIN"' "${SHIM_DIR}/docker"
+}
+
+# assert_token_file_refused <message fragment> -- exit 2, the reason named, the
+# file's content never printed, and nothing started.
+assert_token_file_refused() {
+    [ "$status" -eq 2 ] || { echo "status ${status}: ${output}" >&2; return 1; }
+    [[ "$output" == *"$1"* ]] || { echo "no '$1' in: ${output}" >&2; return 1; }
+    [[ "$output" == *"GREMION_REGISTRY_TOKEN_FILE"* ]]
+    [[ "$output" != *"file-token-for-test"* ]]
+    refute_recorded docker "login"
+    [ ! -e "${GREMION_ROOT}/releases/dist-v1.2.3" ]
+}
+
+@test "a token file is read instead of stdin and reaches docker login on stdin only" {
+    stub_all; capture_login_stdin
+    make_token_file 600
+    run bash -c "printf 'TOKEN stdin-token-ignored\n' | '$DEPLOY' dist-v1.2.3"
+    [ "$status" -eq 0 ]
+    assert_recorded docker "login ghcr.io -u x-access-token --password-stdin"
+    assert_recorded docker "logout ghcr.io"
+    [ "$(cat "$LOGIN_STDIN")" = "file-token-for-test" ]
+    refute_recorded docker "file-token-for-test"
+    [[ "$output" != *"file-token-for-test"* ]]
+    [[ "$output" != *"stdin-token-ignored"* ]]
+}
+
+@test "a token file needs no stdin at all" {
+    stub_all; capture_login_stdin
+    make_token_file 600
+    run bash -c "'$DEPLOY' dist-v1.2.3 </dev/null"
+    [ "$status" -eq 0 ]
+    [ "$(cat "$LOGIN_STDIN")" = "file-token-for-test" ]
+}
+
+@test "a read-only token file (0400) is accepted" {
+    stub_all; capture_login_stdin
+    make_token_file 400
+    run bash -c "'$DEPLOY' dist-v1.2.3 </dev/null"
+    [ "$status" -eq 0 ]
+    [ "$(cat "$LOGIN_STDIN")" = "file-token-for-test" ]
+}
+
+@test "the token file path can come from state.env" {
+    stub_all; capture_login_stdin
+    make_token_file 600
+    unset GREMION_REGISTRY_TOKEN_FILE
+    printf 'GREMION_REGISTRY_TOKEN_FILE=%s\n' "$TOKEN_FILE" >> "${GREMION_ROOT}/etc/env/state.env"
+    run bash -c "'$DEPLOY' dist-v1.2.3 </dev/null"
+    [ "$status" -eq 0 ]
+    [ "$(cat "$LOGIN_STDIN")" = "file-token-for-test" ]
+}
+
+@test "a token read from a file is never copied under the host root" {
+    stub_all
+    make_token_file 600
+    run bash -c "'$DEPLOY' dist-v1.2.3 </dev/null"
+    [ "$status" -eq 0 ]
+    run grep -rl 'file-token-for-test' "$GREMION_ROOT"
+    [ "$status" -ne 0 ]
+}
+
+@test "an empty GREMION_REGISTRY_TOKEN_FILE is no token file: stdin is read" {
+    stub_all; capture_login_stdin
+    export GREMION_REGISTRY_TOKEN_FILE=""
+    run bash -c "printf 'TOKEN stdin-token-used\n' | '$DEPLOY' dist-v1.2.3"
+    [ "$status" -eq 0 ]
+    [ "$(cat "$LOGIN_STDIN")" = "stdin-token-used" ]
+}
+
+@test "a token file that does not exist is refused" {
+    stub_all
+    export GREMION_REGISTRY_TOKEN_FILE="${BATS_TEST_TMPDIR}/no-such-token"
+    run bash -c "'$DEPLOY' dist-v1.2.3 </dev/null"
+    assert_token_file_refused "registry token file absent"
+}
+
+@test "a token file path that is not absolute is refused" {
+    stub_all
+    make_token_file 600
+    export GREMION_REGISTRY_TOKEN_FILE="registry-token"
+    run bash -c "cd '$BATS_TEST_TMPDIR' && '$DEPLOY' dist-v1.2.3 </dev/null"
+    assert_token_file_refused "must be an absolute path"
+}
+
+@test "a world-readable token file is refused" {
+    stub_all
+    make_token_file 644
+    run bash -c "'$DEPLOY' dist-v1.2.3 </dev/null"
+    assert_token_file_refused "readable by group or others"
+    [[ "$output" == *"644"* ]]
+}
+
+@test "a group-readable token file is refused" {
+    stub_all
+    make_token_file 640
+    run bash -c "'$DEPLOY' dist-v1.2.3 </dev/null"
+    assert_token_file_refused "readable by group or others"
+}
+
+@test "an empty token file is refused" {
+    stub_all
+    make_token_file 600
+    : > "$TOKEN_FILE"
+    run bash -c "'$DEPLOY' dist-v1.2.3 </dev/null"
+    assert_token_file_refused "registry token file is empty"
+}
+
+@test "a token file that is not exactly one token is refused, and not echoed" {
+    stub_all
+    make_token_file 600 "file-token-for-test"
+    printf 'a second line\n' >> "$TOKEN_FILE"
+    run bash -c "'$DEPLOY' dist-v1.2.3 </dev/null"
+    assert_token_file_refused "is not a single token"
+    [[ "$output" != *"a second line"* ]]
+}
+
+@test "a token file with a space in it is refused, and not echoed" {
+    stub_all
+    make_token_file 600 "file-token-for-test with-a-space"
+    run bash -c "'$DEPLOY' dist-v1.2.3 </dev/null"
+    assert_token_file_refused "is not a single token"
+    [[ "$output" != *"with-a-space"* ]]
+}
+
+@test "a token file that is a symbolic link is refused" {
+    stub_all
+    make_token_file 600
+    ln -s "$TOKEN_FILE" "${BATS_TEST_TMPDIR}/link-to-token"
+    export GREMION_REGISTRY_TOKEN_FILE="${BATS_TEST_TMPDIR}/link-to-token"
+    run bash -c "'$DEPLOY' dist-v1.2.3 </dev/null"
+    assert_token_file_refused "symbolic link"
+}
+
+@test "a token file that is a directory is refused" {
+    stub_all
+    mkdir -m 700 "${BATS_TEST_TMPDIR}/token-dir"
+    export GREMION_REGISTRY_TOKEN_FILE="${BATS_TEST_TMPDIR}/token-dir"
+    run bash -c "'$DEPLOY' dist-v1.2.3 </dev/null"
+    assert_token_file_refused "not a regular file"
+}
+
+@test "a token file another user owns is refused" {
+    [ "$(id -u)" -eq 0 ] || skip "needs root to hand the file to another user"
+    stub_all
+    make_token_file 600
+    chown 12345 "$TOKEN_FILE"
+    run bash -c "'$DEPLOY' dist-v1.2.3 </dev/null"
+    assert_token_file_refused "not owned by"
+}
+
+@test "a refused token file does not fall back to stdin" {
+    stub_all
+    make_token_file 644
+    run bash -c "printf 'TOKEN stdin-token-ignored\n' | '$DEPLOY' dist-v1.2.3"
+    assert_token_file_refused "readable by group or others"
+    refute_recorded docker "stdin-token-ignored"
+}
+
 @test "a surviving auths entry fails the deploy with exit 1" {
     stub_all
     export DOCKER_CONFIG="${BATS_TEST_TMPDIR}/dockercfg"
