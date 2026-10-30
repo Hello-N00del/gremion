@@ -19,7 +19,7 @@
 // the round-4 signal could not survive.
 
 import { describe, it, expect, beforeEach } from 'vitest'
-import type { SqlRunner } from '$lib/server/db/tx'
+import type { Sql } from 'postgres'
 import {
   drainOutbox,
   ORG_UNIT_RELAY_INTERVAL_MS,
@@ -51,7 +51,7 @@ interface FakeRow {
  * nothing else — which is the point: the fixed signal needs no third query.
  */
 function fakeSql(rows: FakeRow[]): {
-  sql: SqlRunner
+  sql: Sql
   statements: string[]
   failBegin?: boolean
 } {
@@ -59,7 +59,8 @@ function fakeSql(rows: FakeRow[]): {
   const tag = (strings: TemplateStringsArray, ...values: unknown[]): Promise<unknown[]> => {
     const text = strings.join(' ? ')
     statements.push(text.replace(/\s+/g, ' ').trim().slice(0, 60))
-    if (text.includes('SELECT') && text.includes('FROM org_unit_event_outbox')) {
+    // The DUE query only: the given-up check (`SELECT aggregate_id`) is a different statement.
+    if (text.includes('SELECT id, event_id') && text.includes('FROM org_unit_event_outbox')) {
       return Promise.resolve(
         rows.filter((r) => r.status !== 'ok' && r.nextAttemptAt <= clock) as unknown[],
       )
@@ -82,11 +83,11 @@ function fakeSql(rows: FakeRow[]): {
     return Promise.resolve([])
   }
   ;(tag as unknown as { begin: unknown }).begin = async (
-    cb: (tx: SqlRunner) => Promise<void>,
+    cb: (tx: Sql) => Promise<void>,
   ): Promise<void> => {
-    await cb(tag as unknown as SqlRunner)
+    await cb(tag as unknown as Sql)
   }
-  return { sql: tag as unknown as SqlRunner, statements }
+  return { sql: tag as unknown as Sql, statements }
 }
 
 const row = (id: string): FakeRow => ({ id, nextAttemptAt: 0, status: 'pending' })
@@ -181,7 +182,7 @@ describe('drainOutbox → the NOT DRAINING signal, through the real seam', () =>
     const sql = (() => {
       const tag = (): Promise<unknown[]> => Promise.resolve([])
       ;(tag as unknown as { begin: unknown }).begin = (): Promise<void> => Promise.reject(boom)
-      return tag as unknown as SqlRunner
+      return tag as unknown as Sql
     })()
 
     for (let i = 0; i < 12 && errors.length === 0; i += 1) {

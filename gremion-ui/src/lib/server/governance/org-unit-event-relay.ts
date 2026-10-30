@@ -13,12 +13,13 @@
 //                 consumer's per-aggregate ordering guard is driven by DML order.
 
 import { orgUnitSubject, type BrokerPort, type EventEnvelope } from '@gremion/ports/broker'
-import type { SqlRunner } from '$lib/server/db/tx'
+import type { Sql } from 'postgres'
 import { drainOutbox, type OrgUnitOutboxRow } from './org-unit-event-outbox'
 
-/** Run one relay pass for a tenant: drain due outbox rows, publish, mark ok/failed. */
+/** Run one relay pass for a tenant: drain due outbox rows, publish, mark ok/failed.
+ *  Takes the tenant POOL (`Sql`): the drain opens its own transaction. */
 export async function runOrgUnitRelayPass(
-  sql: SqlRunner,
+  sql: Sql,
   tenantId: string,
   broker: BrokerPort,
   opts: { limit?: number } = {},

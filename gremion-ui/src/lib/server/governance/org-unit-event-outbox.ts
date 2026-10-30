@@ -1,9 +1,11 @@
 // src/lib/server/governance/org-unit-event-outbox.ts
 //
 // The transactional outbox for kernel org-unit change events.
-//  - enqueueOrgUnitEvent() is called INSIDE the same runner (tx or pool) that wrote
-//    org_units, at the governance/org-units-db.ts choke point, so the outbox row
-//    co-commits with the DML (never a phantom publish, never a missed publish).
+//  - enqueueOrgUnitEvent() is called on the same runner (tx or pool) that wrote
+//    org_units, at the governance/org-units-db.ts choke point. With a caller-supplied
+//    tx the outbox row co-commits with the DML (never a phantom publish, never a
+//    missed publish). Without one (the pool overloads) the DML and the INSERT are two
+//    autocommit statements, so callers that need the guarantee must pass a tx.
 //  - It is a pure NO-OP when NATS_URL is unset - the choke point then behaves
 //    exactly as without an outbox (no INSERT, the table stays empty).
 //  - drainOutbox() drains due rows (pending, or failed with elapsed backoff) via a
@@ -14,6 +16,7 @@
 // module (the finance org-unit mirror) is enabled. The stream's retention bounds
 // the backlog when nothing consumes it.
 
+import type { Sql } from 'postgres'
 import type { SqlRunner } from '$lib/server/db/tx'
 import { platformEnv } from '$lib/server/env/platform-env'
 import type { OrgUnitEvent } from '@gremion/ports/broker'
@@ -115,7 +118,9 @@ export async function markOutboxFailed(sql: SqlRunner, id: string, error: string
  * for the batch. Returns per-pass ok/failed counts.
  */
 export async function drainOutbox(
-  sql: SqlRunner,
+  // A pool, not a SqlRunner: the drain opens its own transaction, and a
+  // TransactionSql has no `begin`.
+  sql: Sql,
   tenantId: string,
   publishFn: (row: OrgUnitOutboxRow) => Promise<void>,
   limit = 100,
@@ -124,19 +129,31 @@ export async function drainOutbox(
   let ok = 0
   let failed = 0
   try {
-    await (
-      sql as unknown as { begin: (cb: (tx: SqlRunner) => Promise<void>) => Promise<void> }
-    ).begin(async (tx) => {
+    await sql.begin(async (tx) => {
       const rows = await fetchDueRows(tx, limit)
       for (const row of rows) {
+        // Only a PUBLISH failure is a row failure. A failing mark has already
+        // aborted this transaction, so the fallback below would only add
+        // "current transaction is aborted" on top of the real error.
         try {
           await publishFn(row)
-          await markOutboxOk(tx, row.id)
-          ok++
         } catch (err) {
-          await markOutboxFailed(tx, row.id, err instanceof Error ? err.message : String(err))
+          const publishMessage = err instanceof Error ? err.message : String(err)
+          try {
+            await markOutboxFailed(tx, row.id, publishMessage)
+          } catch (markErr) {
+            const markMessage = markErr instanceof Error ? markErr.message : String(markErr)
+            throw new Error(
+              `[org-unit-outbox] could not record a publish failure for row ${row.id}: ${markMessage} ` +
+                `(publish error: ${publishMessage})`,
+              { cause: markErr },
+            )
+          }
           failed++
+          continue
         }
+        await markOutboxOk(tx, row.id)
+        ok++
       }
     })
   } catch (err) {
@@ -150,7 +167,73 @@ export async function drainOutbox(
     throw err
   }
   recordDrainOutcome(tenantId, { ok, failed }, signal)
+  await reportAbandonedRows(sql, tenantId, signal)
   return { ok, failed }
+}
+
+// -- "the outbox has given up on rows" ---------------------------------------
+//
+// fetchDueRows stops fetching a failed row once its first failure is older than
+// GIVE_UP_AFTER_SECONDS, and nothing else marks such a row (the status CHECK has
+// no terminal value, and the table is not touched by this unit's migration). Left
+// at that, giving up is invisible: the not-draining clock below lives in memory and
+// only arms on a FAILED pass, so after a redeploy - the normal fix for a stream that
+// rejected the subject - every pass reports {0, 0} and nothing ever names the rows
+// that were dropped; the same silence follows once any newer row publishes.
+//
+// So the drain asks, cheaply, whether any row has been given up on, and names the
+// tenant and the units when so. It is bounded: one indexed (status, ...) scan with
+// LIMIT, at most once per ABANDONED_CHECK_INTERVAL_MS per tenant, and immediately
+// on the first pass after a boot (so a restart cannot forget a diverged mirror).
+// It is NOT a count(*): the sample is capped.
+
+/** Minimum gap between two given-up checks FOR THE SAME TENANT (first pass: immediate). */
+export const ABANDONED_CHECK_INTERVAL_MS = 60 * 60 * 1000
+
+/** How many aggregate ids the given-up line names (one more row is fetched to say "or more"). */
+const ABANDONED_SAMPLE = 10
+
+const abandonedCheckedAt = new Map<string, number>()
+
+async function reportAbandonedRows(
+  sql: Sql,
+  tenantId: string,
+  deps: NotDrainingSignalDeps,
+): Promise<void> {
+  const now = deps.now ?? (() => Date.now())
+  const error = deps.error ?? ((m: string) => console.error(m))
+  const t = now()
+  const last = abandonedCheckedAt.get(tenantId)
+  if (last !== undefined && t - last < ABANDONED_CHECK_INTERVAL_MS) return
+  // Stamp BEFORE the query: a failing check must not turn into a query per tick.
+  abandonedCheckedAt.set(tenantId, t)
+  try {
+    const rows = await sql<{ aggregate_id: string }[]>`
+      SELECT aggregate_id
+      FROM org_unit_event_outbox
+      WHERE status = 'failed'
+        AND first_failed_at IS NOT NULL
+        AND now() - first_failed_at >= make_interval(secs => ${GIVE_UP_AFTER_SECONDS})
+      ORDER BY occurred_at, id
+      LIMIT ${ABANDONED_SAMPLE + 1}`
+    if (rows.length === 0) return
+    const shown = rows.slice(0, ABANDONED_SAMPLE).map((r) => r.aggregate_id)
+    const more = rows.length > ABANDONED_SAMPLE ? ' (and more)' : ''
+    error(
+      `[org-unit-outbox] GAVE UP on org-unit events for tenant ${tenantId}: rows older than ` +
+        `${GIVE_UP_AFTER_SECONDS / 3600}h of failed publishing are no longer retried, so that tenant's ` +
+        `finance org_unit_mirror is permanently behind for these org units: ${shown.join(', ')}${more}. ` +
+        'Fix the cause shown in the rows\' last_error, then set status = \'pending\' and ' +
+        'first_failed_at = NULL on those rows in org_unit_event_outbox to re-queue them. ' +
+        `(re-checked at most every ${ABANDONED_CHECK_INTERVAL_MS / 60_000} min per tenant and on every boot)`,
+    )
+  } catch (err) {
+    // The check is diagnostics: it must never fail a drain that otherwise succeeded.
+    error(
+      `[org-unit-outbox] could not check tenant ${tenantId} for given-up rows: ` +
+        (err instanceof Error ? err.message : String(err)),
+    )
+  }
 }
 
 // -- "the outbox is not draining" ---------------------------------------------
@@ -195,11 +278,10 @@ export async function drainOutbox(
 // bounded - the first failed pass after the restart re-arms the clock, and the
 // line follows one window (15s) later.
 //
-// It also means a tenant whose rows have all aged out past GIVE_UP_AFTER_SECONDS
-// keeps saying it is not draining (throttled to one line per 5 minutes) until
-// something publishes for it. Going quiet about a mirror that is permanently
-// behind is the worse of the two, but it is a real difference and it is named
-// here rather than hidden.
+// Rows that aged out past GIVE_UP_AFTER_SECONDS are no longer fetched, so they
+// produce no failed pass and this clock cannot see them (after a restart it never
+// arms for them at all). They are covered by the separate given-up check above,
+// which names them on the first pass after a boot and then once per hour.
 
 /**
  * Passes at the relay's cadence that define the window below. Kept as the
@@ -312,4 +394,5 @@ export function recordDrainOutcome(
 /** Reset the not-draining signal - for tests only. */
 export function _resetNotDrainingSignalForTests(): void {
   signals.clear()
+  abandonedCheckedAt.clear()
 }

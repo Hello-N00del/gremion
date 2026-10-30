@@ -12,8 +12,9 @@
 // here. The ONE side effect these writes carry is the org-unit EVENT outbox row
 // (org_unit_event_outbox, see ./org-unit-event-outbox): createOrgUnit /
 // updateOrgUnit / deleteOrgUnit enqueue it on the SAME runner as the org_units
-// DML, so it co-commits with the write (a rollback drops both) and it is a no-op
-// when NATS_URL is unset. The relay (./register.server) publishes it so the
+// DML. With a caller-supplied tx it co-commits with the write (a rollback drops
+// both); the pool overloads run the two as separate autocommit statements, so a
+// caller that needs the guarantee passes a tx. It is a no-op when NATS_URL is unset. The relay (./register.server) publishes it so the
 // finance org_unit_mirror stays in sync.
 import { getDb } from '../db'
 import { getRunner as genericGetRunner, unpackTxArgs, type PgTransaction } from '$lib/server/db/tx'

@@ -40,7 +40,12 @@ function fakeTx() {
     const q = strings.join(' ')
     calls.push({ q, args })
     if (q.includes('INSERT INTO org_units') || q.includes('UPDATE org_units')) return Promise.resolve([ORG_ROW])
-    if (q.includes('DELETE FROM org_units')) return Promise.resolve([{ id: ORG_ROW.id }])
+    // postgres-js resolves a DELETE WITHOUT `RETURNING` to an empty row array, so the
+    // fake must too: otherwise dropping RETURNING id from the choke point would go
+    // unnoticed here while silently stopping every 'deleted' tombstone in production.
+    if (q.includes('DELETE FROM org_units')) {
+      return Promise.resolve(q.includes('RETURNING id') ? [{ id: ORG_ROW.id }] : [])
+    }
     return Promise.resolve([])
   }) as unknown as { (...a: unknown[]): Promise<unknown[]>; json: (x: unknown) => unknown; calls: Call[] }
   fn.json = (x: unknown) => x // identity so the captured payload arg IS the object
@@ -99,6 +104,9 @@ describe('org-units choke point — enqueues the mirror-resync event (NATS_URL s
     expect(outbox[0]!.args[0]).toBe('deleted')
     expect(outbox[0]!.args[1]).toBe('ou-1')
     expect(outbox[0]!.args[2]).toEqual({ id: 'ou-1' })
+    // The tombstone is gated on the DELETE's RETURNING id (a bare DELETE reports no rows).
+    const del = tx.calls.find((c) => c.q.includes('DELETE FROM org_units'))
+    expect(del?.q).toContain('RETURNING id')
   })
 })
 

@@ -16,6 +16,7 @@ const h = vi.hoisted(() => ({
   markWorkerOff: vi.fn(),
   forEachActiveTenant: vi.fn(),
   connect: vi.fn(),
+  runPass: vi.fn(),
 }))
 
 vi.mock('$lib/server/modules/runtime-registry', () => ({
@@ -30,6 +31,7 @@ vi.mock('$lib/server/events/consumer-state', () => ({
 }))
 vi.mock('$lib/server/tenant/worker-fleet', () => ({ forEachActiveTenant: h.forEachActiveTenant }))
 vi.mock('@gremion/ports/nats', () => ({ NatsBroker: { connect: h.connect } }))
+vi.mock('./org-unit-event-relay', () => ({ runOrgUnitRelayPass: h.runPass }))
 
 const { ORG_UNIT_RELAY_WORKER } = await import('./register.server')
 
@@ -45,6 +47,7 @@ beforeEach(() => {
   h.markWorkerOff.mockReset()
   h.forEachActiveTenant.mockReset()
   h.connect.mockReset()
+  h.runPass.mockReset()
   vi.spyOn(console, 'info').mockImplementation(() => {})
 })
 
@@ -89,6 +92,25 @@ describe('org-unit relay boot hook', () => {
     expect(h.forEachActiveTenant).toHaveBeenCalledTimes(1)
     expect(h.forEachActiveTenant.mock.calls[0]![0]).toBe('org-unit-relay')
     expect(broker.close).not.toHaveBeenCalled()
+  })
+
+  it('the per-tenant callback drains the pool and id of the tenant it is given, through the connected broker', async () => {
+    vi.useFakeTimers()
+    h.natsUrl = 'nats://nats.example.org:4222'
+    const broker = { ensureStream: vi.fn().mockResolvedValue(undefined), close: vi.fn() }
+    h.connect.mockResolvedValue(broker)
+    h.runPass.mockResolvedValue({ ok: 0, failed: 0 })
+    await runHook()
+    const { start } = h.superviseWorker.mock.calls[0]![0] as { start: () => Promise<void> }
+    await start()
+    await vi.advanceTimersByTimeAsync(5_000)
+
+    const perTenant = h.forEachActiveTenant.mock.calls[0]![1] as (ctx: { id: string; db: unknown }) => unknown
+    const db = { tag: 'tenant-a-pool' }
+    await perTenant({ id: 'tenant-a', db })
+
+    expect(h.runPass).toHaveBeenCalledTimes(1)
+    expect(h.runPass).toHaveBeenCalledWith(db, 'tenant-a', broker)
   })
 
   it('start() closes the broker and rethrows when ensureStream fails, so retries do not stack connections', async () => {
