@@ -79,4 +79,10 @@ describe('step-up load', () => {
     }
     expect((await run('?returnTo=/a/../finance')).returnTo).toBe('/finance')
   })
+
+  test('encoded slashes in the path (decoded once by the query parser) fall back to /', async () => {
+    for (const evil of ['/%252f/evil.com', '/%252F/evil.com', '/%255c/evil.com', '/a/%252f%252fevil.com']) {
+      expect((await run(`?returnTo=${evil}`)).returnTo, evil).toBe('/')
+    }
+  })
 })
