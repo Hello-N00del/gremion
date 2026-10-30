@@ -118,11 +118,12 @@ test('keycloak-stepup: both live cases passing with the file collected is a pass
 
 // One test, a loop inside it (see the test-nats-auth note above for why).
 test('keycloak-stepup: a green run that did not collect the file, ran fewer cases or skipped one is a failure, never a pass', () => {
-  for (const [what, over, expected] of [
-    ['the file was not collected', { collectedFiles: [] }, /was not among the files vitest reported running/],
-    ['only one case ran', { collected: 1, passed: 1 }, /only 1 of the 2 live cases passed/],
-    ['a case skipped', { skipped: 1, passed: 1 }, /skipped 1 case\(s\); a live Keycloak proof allows no skips/],
-  ]) {
+  const cases = [
+    { what: 'the file was not collected', over: { collectedFiles: [] }, expected: /was not among the files vitest reported running/ },
+    { what: 'only one case ran', over: { collected: 1, passed: 1 }, expected: /only 1 of the 2 live cases passed/ },
+    { what: 'a case skipped', over: { skipped: 1, passed: 1 }, expected: /skipped 1 case\(s\); a live Keycloak proof allows no skips/ },
+  ]
+  for (const { what, over, expected } of cases) {
     const p = judgeKeycloakStepup(stepupPart(over))
     assert.ok(p.failed >= 1, `${what}: ${JSON.stringify(p)}`)
     assert.match(p.detail, expected, what)
