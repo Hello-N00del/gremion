@@ -149,20 +149,41 @@ function stepUp(root) {
   }];
 }
 
+// CSP keywords that CSP syntax requires to be single-quoted.
+const CSP_KEYWORDS = new Set(['self', 'none', 'unsafe-inline', 'unsafe-eval', 'strict-dynamic']);
+
+// The page policy is owned by SvelteKit: `kit.csp.directives` in svelte.config.js. In
+// mode 'auto' SvelteKit adds a per-response nonce to script-src, so the annex states that
+// and nothing about 'unsafe-inline' for script-src unless the config lists it.
+function pagePolicy(root) {
+  const rel = 'gremion-ui/svelte.config.js';
+  const text = read(root, rel);
+  const csp = must(rel, 'kit.csp { mode, directives }', text.match(/\bcsp:\s*\{\s*mode:\s*'([a-z]+)',\s*directives:\s*\{([\s\S]*?)\}\s*\}/));
+  const mode = csp[1];
+  const directives = [...csp[2].matchAll(/'([a-z-]+)':\s*\[([^\]]*)\]/g)].map((m) => {
+    const sources = [...m[2].matchAll(/'([^']+)'/g)].map((s) => (CSP_KEYWORDS.has(s[1]) ? `'${s[1]}'` : s[1]));
+    if (m[1] === 'script-src' && mode === 'auto') sources.push("'nonce-<pro Antwort>'");
+    return { name: m[1], value: [m[1], ...sources].join(' ') };
+  });
+  if (directives.length === 0) throw new SourceError(`${rel}: kit.csp has no directives`);
+  return directives.map(({ name, value }) => ({
+    id: `HDR-CSP-${name.toUpperCase()}`, group: 'Transport und Browserschutz',
+    measure: `Content-Security-Policy: ${name}`, value, source: rel, locator: 'kit.csp',
+  }));
+}
+
 function securityHeaders(root) {
   const rel = 'gremion-ui/src/hooks.server.ts';
   const text = read(root, rel);
-  const block = must(rel, 'CSP_HEADER_VALUE = [ ... ].join', text.match(/CSP_HEADER_VALUE\s*=\s*\[([\s\S]*?)\]\.join/));
-  const code = block[1].split('\n').filter((l) => !l.trim().startsWith('//')).join('\n');
-  const directives = [...code.matchAll(/"([^"]+)"/g)].map((m) => m[1]);
-  if (directives.length === 0) throw new SourceError(`${rel}: CSP_HEADER_VALUE has no directives`);
-  const facts = directives.map((d) => {
-    const name = d.split(' ')[0];
-    return {
-      id: `HDR-CSP-${name.toUpperCase()}`, group: 'Transport und Browserschutz',
-      measure: `Content-Security-Policy: ${name}`, value: d, source: rel, locator: 'CSP_HEADER_VALUE',
-    };
-  });
+  // frame-ancestors is header-only (a <meta> CSP ignores it), so it is not in kit.csp.
+  const fa = must(rel, 'export const CSP_HEADER_VALUE = "frame-ancestors ..."', text.match(/export const CSP_HEADER_VALUE\s*=\s*"(frame-ancestors [^"]+)"/));
+  const facts = [
+    ...pagePolicy(root),
+    {
+      id: 'HDR-CSP-FRAME-ANCESTORS', group: 'Transport und Browserschutz',
+      measure: 'Content-Security-Policy: frame-ancestors', value: fa[1], source: rel, locator: 'CSP_HEADER_VALUE',
+    },
+  ];
   for (const h of ['X-Content-Type-Options', 'Referrer-Policy']) {
     const m = must(rel, `headers.set('${h}', ...)`, text.match(new RegExp(`headers\\.set\\('${h}',\\s*'([^']+)'\\)`)));
     facts.push({
@@ -170,6 +191,11 @@ function securityHeaders(root) {
       value: m[1], source: rel, locator: 'cspGuard',
     });
   }
+  const cc = must(rel, "headers.set('Cache-Control', ...)", text.match(/headers\.set\('Cache-Control',\s*'([^']+)'\)/));
+  facts.push({
+    id: 'HDR-CACHE-CONTROL', group: 'Transport und Browserschutz', measure: 'Header Cache-Control (HTML-Seiten)',
+    value: cc[1], source: rel, locator: 'cspGuard',
+  });
   return facts;
 }
 

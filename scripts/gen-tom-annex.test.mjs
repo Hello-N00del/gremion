@@ -87,6 +87,30 @@ test('a missing source value is an error, never an invented measure', () => {
   assert.equal(existsSync(join(root, ANNEX)), false);
 });
 
+test('the CSP measures state the nonce-based page policy, not the proxied-HTML baseline', () => {
+  const root = freshRoot();
+  assert.equal(run(root, '--date', '2026-10-27').status, 0);
+  const text = readFileSync(join(root, ANNEX), 'utf8');
+  const script = text.split('\n').find((l) => l.startsWith('| HDR-CSP-SCRIPT-SRC |'));
+  assert.ok(script, 'no script-src row');
+  assert.match(script, /script-src 'self' 'nonce-/);
+  assert.doesNotMatch(script, /unsafe-inline/);
+  assert.match(script, /`gremion-ui\/svelte\.config\.js`/);
+  // frame-ancestors is a header-only directive set in hooks.server.ts, not in kit.csp
+  const frame = text.split('\n').find((l) => l.startsWith('| HDR-CSP-FRAME-ANCESTORS |'));
+  assert.match(frame, /`gremion-ui\/src\/hooks\.server\.ts`/);
+  assert.match(text, /\| HDR-CACHE-CONTROL \| .* \| no-store \|/);
+});
+
+test('a source without a kit.csp block is an error, never a policy invented from the baseline', () => {
+  const root = freshRoot();
+  writeFileSync(join(root, 'gremion-ui/svelte.config.js'), 'export default { kit: {} }\n');
+  const r = run(root, '--date', '2026-10-27');
+  assert.equal(r.status, 2);
+  assert.match(r.stderr, /svelte\.config\.js/);
+  assert.equal(existsSync(join(root, ANNEX)), false);
+});
+
 test('every measure row cites a source file that exists', () => {
   const root = freshRoot();
   run(root, '--date', '2026-10-27');
