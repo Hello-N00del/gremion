@@ -18,7 +18,9 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 const REALM_FILE = fileURLToPath(new URL('../../../../docker/keycloak/realm-export.base.json', import.meta.url))
 const THEME_DIR = fileURLToPath(new URL('../../../../docker/keycloak/themes/gremion', import.meta.url))
 const IMAGE = 'quay.io/keycloak/keycloak:26.6.1'
-const NAME = 't081d-kc'
+// A per-run name: the file runs from `test:integration` and from the verify part keycloak-stepup, and two
+// runs on one Docker host must not tear down each other's Keycloak.
+const NAME = `t081d-kc-${String(process.pid)}-${randomBytes(3).toString('hex')}`
 const REALM = 't081d'
 const NOTICE = '/auth/step-up?error=no-second-factor'
 const tmp = mkdtempSync(join(tmpdir(), 't081d-'))

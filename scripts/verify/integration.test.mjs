@@ -133,6 +133,14 @@ test('keycloak-stepup: a green run that did not collect the file, ran fewer case
   }
 })
 
+// A real failing case is already a failure in the record: the judge must not count it a second time.
+test('keycloak-stepup: a real case failure is reported once, with no synthetic extra case or failure', () => {
+  const p = judgeKeycloakStepup(stepupPart({ passed: 1, failed: 1 }))
+  assert.equal(p.collected, 2, JSON.stringify(p))
+  assert.equal(p.failed, 1, JSON.stringify(p))
+  assert.doesNotMatch(p.detail, /live cases passed/, 'the failure is not also reported as a short pass count')
+})
+
 test('keycloak-stepup: a missing docker or an unparseable report passes through untouched (never turned into a pass)', () => {
   assert.equal(judgeKeycloakStepup({ label: 'x', toolMissing: 'docker' }).toolMissing, 'docker')
   assert.equal(judgeKeycloakStepup(stepupPart({ unparseable: true })).unparseable, true)

@@ -425,16 +425,16 @@ export function judgeKeycloakStepup(part) {
   if ((part.skipped ?? 0) > 0) {
     problems.push(`skipped ${part.skipped} case(s); a live Keycloak proof allows no skips (a skipped case is a case nobody ran)`)
   }
-  if ((part.passed ?? 0) < KEYCLOAK_STEPUP_CASES) {
+  // A case that really failed is already in `failed`; a short pass count is only news when nothing failed.
+  const realFailures = part.failed ?? 0
+  if (realFailures === 0 && (part.passed ?? 0) < KEYCLOAK_STEPUP_CASES) {
     problems.push(`only ${part.passed ?? 0} of the ${KEYCLOAK_STEPUP_CASES} live cases passed`)
   }
   if (problems.length === 0) return part
-  return {
-    ...part,
-    collected: (part.collected ?? 0) + 1,
-    failed: (part.failed ?? 0) + 1,
-    detail: [part.detail, ...problems].filter(Boolean).join('\n'),
-  }
+  const detail = [part.detail, ...problems].filter(Boolean).join('\n')
+  // The record already says failed when a case failed; add the synthetic failure only for a green-but-wrong run.
+  if (realFailures > 0) return { ...part, detail }
+  return { ...part, collected: (part.collected ?? 0) + 1, failed: 1, detail }
 }
 
 function keycloakStepupPart({ root }) {
