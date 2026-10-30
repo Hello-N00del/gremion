@@ -64,11 +64,26 @@ export interface DeleteRegistry {
 /** T21 (§8.7) — the leaf newsletter-PG shred surface called during tenant delete.
  *  Drops the per-tenant newsletter DB and removes the catalog row from the leaf
  *  control DB. Both operations are idempotent (IF EXISTS / no-op on missing row),
- *  so a re-run after a partial delete is safe. */
+ *  so a re-run after a partial delete is safe. The live executor is
+ *  leaf-shred.ts (makeNewsletterLeafShredExecutor). */
 export interface LeafShredExecutor {
-  /** Idempotent: DROP DATABASE newsletter_<slug> IF EXISTS on the leaf PG. */
+  /** Idempotent: DROP DATABASE IF EXISTS newsletter_<slug> WITH (FORCE) on the leaf PG
+   *  (FORCE: the running leaf holds a pooled connection to it). */
   dropNewsletterDb(slug: string): Promise<void>
-  /** Idempotent: DELETE FROM tenant_catalog WHERE tenant_id = <tenantId>. */
+  /** Idempotent: DELETE FROM tenant_catalog WHERE tenant_id = <tenantId>, in the leaf's
+   *  newsletter_control database (not the admin database). */
+  deleteCatalogRow(tenantId: string): Promise<void>
+}
+
+/** The calendar leaf shred surface called during tenant delete: the same shape and
+ *  contract as LeafShredExecutor for the calendar_<slug> database and the catalog
+ *  row in calendar_control. A distinct interface so the two leaves are wired (and
+ *  can be absent) independently. The live executor is leaf-shred.ts
+ *  (makeCalendarLeafShredExecutor). */
+export interface CalendarLeafShredExecutor {
+  /** Idempotent: DROP DATABASE IF EXISTS calendar_<slug> WITH (FORCE) on the leaf PG. */
+  dropCalendarDb(slug: string): Promise<void>
+  /** Idempotent: DELETE FROM tenant_catalog WHERE tenant_id = <tenantId>, in calendar_control. */
   deleteCatalogRow(tenantId: string): Promise<void>
 }
 
@@ -89,6 +104,10 @@ export interface DeleteDeps {
    *  throw means a genuine failure that must ABORT the delete before the tombstone
    *  is written, leaving the tenant in 'deleting' and the delete retryable. */
   leaf?: LeafShredExecutor
+  /** Optional: if the calendar leaf PG is provisioned, shred its per-tenant DB + catalog
+   *  row, AFTER the realm delete (step 4b). Same missing-dep-is-a-no-op /
+   *  real-throw-aborts-before-the-tombstone contract as `leaf`. */
+  calendar?: CalendarLeafShredExecutor
 }
 
 export interface DeleteResult {
@@ -147,8 +166,8 @@ function shredTargets(tenant: Tenant, tenantSecretsDir: string): string[] {
 
 /**
  * Crypto-shred-on-delete (§8.7). See the file header for the full contract.
- * Order: status->deleting → KEY SHRED (first) → DB drop → realm delete → NC/Matrix
- * marked for manual teardown → tombstone status='deleted' + evict runtime.
+ * Order: status->deleting → KEY SHRED (first) → DB drop → newsletter leaf shred →
+ * realm delete → calendar leaf shred → NC/Matrix marked for manual teardown → tombstone status='deleted' + evict runtime.
  * Idempotent + resumable; a tombstoned slug is a terminal-safe no-op (§7.8 —
  * the slug is never reusable). TASK-042: every tenant is deletable, a slug
  * spelled `default` included (TRD-042 [D R15-2]: there is no bootstrap tenant).
@@ -200,6 +219,15 @@ export async function deleteTenant(slugInput: string, deps: DeleteDeps): Promise
 
   // (4) delete the realm (idempotent: 404 tolerated).
   await deps.kc.deleteRealm(tenant.realmName)
+
+  // (4b) calendar leaf shred: drop the calendar_<slug> DB on the calendar leaf PG +
+  // delete the tenant_catalog row in calendar_control. Same contract as step (3b):
+  // a missing `deps.calendar` is skipped cleanly; a real throw aborts the delete
+  // before the tombstone (the tenant stays 'deleting', re-runnable).
+  if (deps.calendar) {
+    await deps.calendar.dropCalendarDb(slug)
+    await deps.calendar.deleteCatalogRow(tenantId)
+  }
 
   // (5) NC/Matrix are silo satellites the operator script cannot reach — flag them
   // for MANUAL teardown in the ledger (the runbook documents the residual).

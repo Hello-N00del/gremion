@@ -102,7 +102,11 @@ import {
 import { materializeConfig, assertBrandIdentityComplete } from '../src/lib/server/tenant/provisioner/materialize'
 import { opsOperatorEnrolmentNotice } from '../src/lib/server/tenant/provisioner/ops-enrolment'
 import { tlog } from '../src/lib/server/observability/tenant-log'
-import { deleteTenant, type DeleteDeps, type LeafShredExecutor } from '../src/lib/server/tenant/provisioner/lifecycle'
+import { deleteTenant, type CalendarLeafShredExecutor, type DeleteDeps, type LeafShredExecutor } from '../src/lib/server/tenant/provisioner/lifecycle'
+import {
+  makeNewsletterLeafShredExecutor,
+  makeCalendarLeafShredExecutor,
+} from '../src/lib/server/tenant/provisioner/leaf-shred'
 import { requestVerb } from './tenant-provision-requests'
 import { GATE_USAGE, GATE_VERBS, refusalLine, runGateVerb } from './tenant-provision-gate'
 import { EXPORT_USAGE, EXPORT_VERBS, exportVerb } from './tenant-provision-export'
@@ -915,27 +919,19 @@ async function cmdReconcile(): Promise<void> {
 }
 
 // ── delete, bootstrap-provisioner, materialize-config ───────────────────────
+// The newsletter and calendar leaf shred executors live in
+// provisioner/leaf-shred.ts (WITH (FORCE) drop, catalog row deleted in
+// <prefix>control). A leaf whose admin url is not set is skipped, never a failure.
 function makeLeafShredExecutor(): LeafShredExecutor | null {
   const leafUrl = process.env.NEWSLETTER_PG_URL
   if (!leafUrl) return null
-  const leafSql = postgres(leafUrl, { max: 1, idle_timeout: 5, connect_timeout: 10 })
-  return {
-    async dropNewsletterDb(slug: string): Promise<void> {
-      try {
-        await leafSql.unsafe(`DROP DATABASE IF EXISTS "newsletter_${slug}"`)
-      } catch (err) {
-        await leafSql.end({ timeout: 5 }).catch(() => undefined)
-        throw err
-      }
-    },
-    async deleteCatalogRow(tenantId: string): Promise<void> {
-      try {
-        await leafSql`DELETE FROM tenant_catalog WHERE tenant_id = ${tenantId}::uuid`
-      } finally {
-        await leafSql.end({ timeout: 5 })
-      }
-    },
-  }
+  return makeNewsletterLeafShredExecutor({ adminUrl: leafUrl })
+}
+
+function makeCalendarLeafShred(): CalendarLeafShredExecutor | null {
+  const leafUrl = process.env.CALENDAR_PG_URL
+  if (!leafUrl) return null
+  return makeCalendarLeafShredExecutor({ adminUrl: leafUrl })
 }
 
 async function cmdDelete(): Promise<void> {
@@ -973,6 +969,13 @@ async function cmdDelete(): Promise<void> {
     }
   }
   const leaf = makeLeafShredExecutor()
+  if (!leaf) {
+    log('NEWSLETTER_PG_URL not set -- newsletter leaf shred skipped (newsletter_<slug> and its catalog row are not removed from the leaf PG)')
+  }
+  const calendarLeaf = makeCalendarLeafShred()
+  if (!calendarLeaf) {
+    log('CALENDAR_PG_URL not set -- calendar leaf shred skipped (calendar_<slug> and its catalog row are not removed from the leaf PG)')
+  }
   const kernelDb: { dropped: boolean | null } = { dropped: null }
   const deps: DeleteDeps = {
     shredSecretFiles: (paths) => {
@@ -988,6 +991,7 @@ async function cmdDelete(): Promise<void> {
     registry: { getTenantBySlug, updateTenantStatus, markTenantResourceFailed, evictTenantRuntime },
     tenantSecretsDir: tenantSecretsDir(),
     ...(leaf ? { leaf } : {}),
+    ...(calendarLeaf ? { calendar: calendarLeaf } : {}),
   }
   try {
     const result = await deleteTenant(slug, deps)

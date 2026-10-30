@@ -5,7 +5,7 @@
 // slug is never re-provisionable), every-tenant-equal deletion (TASK-042), and the T21
 // leaf-shred step (drop newsletter_<slug> + delete catalog row on the leaf PG).
 import { describe, it, expect, vi } from 'vitest'
-import { deleteTenant, type DeleteDeps, type LeafShredExecutor } from './lifecycle'
+import { deleteTenant, type CalendarLeafShredExecutor, type DeleteDeps, type LeafShredExecutor } from './lifecycle'
 import type { Tenant } from '$lib/server/tenant/registry'
 
 function tenant(over: Partial<Tenant> = {}): Tenant {
@@ -299,6 +299,88 @@ describe('deleteTenant — leaf shred step (T21, §8.7)', () => {
     const h = harness()
     // Explicitly ensure no `leaf` property
     expect('leaf' in h.deps).toBe(false)
+    await expect(deleteTenant('t2', h.deps)).resolves.toMatchObject({ slug: 't2', shredded: true })
+    expect(h.row!.status).toBe('deleted')
+  })
+})
+
+// ── calendar leaf shred (step 4b) ─────────────────────────────────────────────
+
+describe('deleteTenant — calendar leaf shred step (4b)', () => {
+  function calendarHarness(opts: { dropFailsOnce?: boolean; catalogFailsOnce?: boolean } = {}) {
+    const h = harness()
+    let dropCalls = 0
+    let catalogCalls = 0
+    const calendar: CalendarLeafShredExecutor = {
+      dropCalendarDb: vi.fn(async (slug: string) => {
+        dropCalls++
+        if (opts.dropFailsOnce && dropCalls === 1) throw new Error('boom: calendar drop failed')
+        h.order.push(`calendar-drop:calendar_${slug}`)
+      }),
+      deleteCatalogRow: vi.fn(async (tenantId: string) => {
+        catalogCalls++
+        if (opts.catalogFailsOnce && catalogCalls === 1) throw new Error('boom: calendar catalog failed')
+        h.order.push(`calendar-catalog-delete:${tenantId}`)
+      }),
+    }
+    h.deps.calendar = calendar
+    return Object.assign(h, { calendar })
+  }
+
+  it('drops the calendar database, then deletes its catalog row, with the slug and tenant id', async () => {
+    const h = calendarHarness()
+    await deleteTenant('t2', h.deps)
+    expect(h.calendar.dropCalendarDb).toHaveBeenCalledWith('t2')
+    expect(h.calendar.deleteCatalogRow).toHaveBeenCalledWith('id-t2')
+    expect(h.order.indexOf('calendar-drop:calendar_t2')).toBeLessThan(h.order.indexOf('calendar-catalog-delete:id-t2'))
+  })
+
+  it('runs AFTER the realm delete and BEFORE the tombstone', async () => {
+    const h = calendarHarness()
+    await deleteTenant('t2', h.deps)
+    const realm = h.order.indexOf('realm-delete')
+    const drop = h.order.indexOf('calendar-drop:calendar_t2')
+    const catalog = h.order.indexOf('calendar-catalog-delete:id-t2')
+    const tombstone = h.order.indexOf('status:deleted')
+    expect(realm).toBeGreaterThanOrEqual(0)
+    expect(drop).toBeGreaterThan(realm)
+    expect(catalog).toBeLessThan(tombstone)
+  })
+
+  it('runs after the newsletter leaf step when both are configured', async () => {
+    const h = calendarHarness()
+    h.deps.leaf = {
+      dropNewsletterDb: vi.fn(async (slug: string) => void h.order.push(`leaf-drop:newsletter_${slug}`)),
+      deleteCatalogRow: vi.fn(async (tenantId: string) => void h.order.push(`leaf-catalog-delete:${tenantId}`)),
+    }
+    await deleteTenant('t2', h.deps)
+    expect(h.order.indexOf('leaf-catalog-delete:id-t2')).toBeLessThan(h.order.indexOf('calendar-drop:calendar_t2'))
+  })
+
+  it('a calendar drop failure ABORTS the delete: no tombstone, and a re-run completes', async () => {
+    const h = calendarHarness({ dropFailsOnce: true })
+    await expect(deleteTenant('t2', h.deps)).rejects.toThrow(/calendar drop failed/)
+    expect(h.row!.status).toBe('deleting')
+    expect(h.order).not.toContain('status:deleted')
+    expect(h.order.filter((s) => s.startsWith('mark-manual:'))).toEqual([])
+    await deleteTenant('t2', h.deps)
+    expect(h.row!.status).toBe('deleted')
+    expect(h.calendar.dropCalendarDb).toHaveBeenCalledTimes(2)
+  })
+
+  it('a calendar catalog failure ABORTS the delete: no tombstone, and a re-run completes', async () => {
+    const h = calendarHarness({ catalogFailsOnce: true })
+    await expect(deleteTenant('t2', h.deps)).rejects.toThrow(/calendar catalog failed/)
+    expect(h.row!.status).toBe('deleting')
+    expect(h.order).not.toContain('status:deleted')
+    await deleteTenant('t2', h.deps)
+    expect(h.row!.status).toBe('deleted')
+    expect(h.calendar.deleteCatalogRow).toHaveBeenCalledTimes(2)
+  })
+
+  it('an unconfigured calendar leaf (deps.calendar absent) is skipped cleanly', async () => {
+    const h = harness()
+    expect('calendar' in h.deps).toBe(false)
     await expect(deleteTenant('t2', h.deps)).resolves.toMatchObject({ slug: 't2', shredded: true })
     expect(h.row!.status).toBe('deleted')
   })

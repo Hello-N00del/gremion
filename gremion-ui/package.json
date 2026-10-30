@@ -20,6 +20,8 @@
     "pretest:integration": "node scripts/interim-module-overlay.mjs",
     "test:integration": "vitest run --config vitest.integration.config.ts",
     "test:deselection": "vitest run --config vitest.deselection.config.ts",
+    "pretest:leaf-shred": "svelte-kit sync",
+    "test:leaf-shred": "vitest run --config vitest.leaf-shred.config.ts",
     "test:e2e": "playwright test",
     "test:all": "vitest run --project unit && playwright test",
     "coverage": "vitest run --project unit --coverage",
