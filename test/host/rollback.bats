@@ -335,14 +335,22 @@ stub_switch() {
     assert_absent '^gremion-switch ' "$SHIM_LOG" 'the switch ran without the host lock'
 }
 
-@test "a rollback releases the host lock when it ends" {
+@test "a rollback holds the host lock while it runs and releases it when it ends" {
     rm -f "${SHIM_DIR}/flock"   # the real flock or none: the setup's shim must not answer the check below
     command -v flock >/dev/null 2>&1 || skip "flock (util-linux) is not installed"
-    stub_docker_colour_up blue; stub_switch
+    stub_docker_colour_up blue
     printf 'dist-v1.0.0\n' > "${GREMION_ROOT}/runtime/colour-blue-tag"
+    # the switch runs mid-rollback: it tries the lock from a fresh process and
+    # records whether it could take it (it must NOT be able to, while the
+    # rollback holds it)
+    shim gremion-switch 'printf "%s\n" "$1" > "$GREMION_ROOT/runtime/active-colour"
+        if flock -n "$GREMION_ROOT/runtime/hostd.lock" true; then echo free; else echo held; fi > "$GREMION_ROOT/lock-during"
+        exit 0'
     unset GREMION_HOST_LOCK_HELD
     run "$ROLLBACK"
     [ "$status" -eq 0 ]
+    [ "$(cat "${GREMION_ROOT}/lock-during")" = "held" ]
+    # and once it has ended nothing keeps the lock
     run flock -n "${GREMION_ROOT}/runtime/hostd.lock" true
     [ "$status" -eq 0 ]
 }

@@ -49,7 +49,9 @@
 # jq, node or make; COSIGN_KEY_PATH unset or not a readable file;
 # COSIGN_PASSWORD_FILE unset or not a readable file; a dirty working tree;
 # origin unreachable; a tag that already exists on origin, or only in this
-# clone (a failed run's leftover). The refusal names the tag, where it exists
+# clone (a failed run's leftover), or in both with different targets (the
+# fetch of origin's tags refuses to overwrite a clone tag, for any tag name,
+# not only the one being cut). The refusal names the tag, where it exists
 # and the exact git commands to inspect and to remove it; nothing is deleted
 # for you; no previous dist tag without
 # --first-release, or one with it; a run of any other workflow, from a fork, or
@@ -145,6 +147,36 @@ layer_problem() {
     [[ "$state" == service && "$seen" != " " ]] || printf '%s: no services, or a service cut off after %s' "$file" "${svc:-the header}"
 }
 
+# clobbering_tags -- the names of tags that are in this clone AND on origin but
+# name different objects. `git fetch --tags` refuses to overwrite a local tag,
+# fails as a whole and (under --quiet) prints nothing, so those names are found
+# here, by comparing what origin lists with what this clone has.
+clobbering_tags() {
+    local listing sha ref name here
+    listing="$(git ls-remote --tags origin)" || return 0
+    while read -r sha ref; do
+        [[ "$ref" == refs/tags/* && "$ref" != *'^{}' ]] || continue
+        name="${ref#refs/tags/}"
+        here="$(git rev-parse -q --verify "refs/tags/${name}" 2>/dev/null)" || continue
+        if [[ "$here" != "$sha" ]]; then printf '%s\n' "$name"; fi
+    done <<< "$listing"
+}
+
+# fetch_failed <git's output> -- the fetch of origin's tags and main failed.
+# The usual cause is a tag of this clone that differs from origin's tag of the
+# same name: say which, where, and how to look at it and clear it. Nothing is
+# deleted for the operator: origin's tag is the record, this clone's the suspect.
+fetch_failed() {
+    local names name msg=""
+    names="$(clobbering_tags)"
+    while IFS= read -r name; do
+        [[ -n "$name" ]] || continue
+        msg+="tag ${name} exists in this clone AND on origin, and the two are different tags; git fetch will not overwrite a local tag. Inspect this clone's: git show ${name}; inspect origin's: git ls-remote --tags origin refs/tags/${name}. Origin's is the record. If this clone's is a leftover of a failed run, remove it yourself with: git tag -d ${name}; then run again. "
+    done <<< "$names"
+    if [[ -n "$msg" ]]; then die "fetching origin's tags was refused. ${msg%' '}"; fi
+    die "cannot fetch tags and main from origin: ${1:-git fetch printed nothing}"
+}
+
 # ORIGIN_TAGS holds "<commit> <tag name>" per tag on origin, read once by
 # git ls-remote (annotated tags peeled to their commit). This clone's own tags
 # are not the record: a tag a failed run created and never pushed stays here
@@ -235,7 +267,8 @@ main() {
 
     # Origin is the record of what has been released, not this clone's tag
     # list: a dist tag cut from another workstation is not here until fetched.
-    git fetch --quiet --tags origin '+refs/heads/main:refs/remotes/origin/main' || die "cannot fetch tags and main from origin"
+    local fetch_out
+    fetch_out="$(git fetch --tags origin '+refs/heads/main:refs/remotes/origin/main' 2>&1)" || fetch_failed "$fetch_out"
     read_origin_tags || die "cannot list origin's tags"
     if [[ -n "$(origin_tag_commit "$tag")" ]]; then
         # The fetch above put origin's tag into this clone too, so both places
