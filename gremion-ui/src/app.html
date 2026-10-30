@@ -21,7 +21,14 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <!-- #177: fonts are self-hosted via @fontsource (imported in routes/+layout.svelte).
          No third-party Google Fonts request (GDPR) and nothing for the CSP to block. -->
-    <script>
+    <!-- This is the app's only hand-written inline script. Under the nonce-based CSP
+         (svelte.config.js kit.csp) SvelteKit does NOT auto-nonce template scripts, so it
+         must carry the per-response nonce explicitly or the theme, colour-blind and
+         navigation bootstrap is blocked (a flash of the wrong theme). The nonce placeholder
+         in the attribute is replaced with the same nonce SvelteKit stamps on its own scripts
+         and lists in the CSP header. Any further inline script added to a template needs it
+         too. -->
+    <script nonce="%sveltekit.nonce%">
       try {
         // B8 (design-review 2026-07 T5): preferences live under namespaced
         // gremion.* keys; the legacy stura-* keys are read ONCE as a fallback

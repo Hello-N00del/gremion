@@ -386,7 +386,9 @@ describe('security headers on every response, early returns included (S1a#17)', 
           headers: { 'content-type': 'text/html; charset=utf-8', 'referrer-policy': 'no-referrer' },
         }),
     })
-    expect(o.headers.get('content-security-policy')).toBe(mod.CSP_HEADER_VALUE)
+    // An early-return document never passes through kit.csp, so it gets the full baseline.
+    expect(o.headers.get('content-security-policy')).toBe(mod.NON_PAGE_CSP_HEADER_VALUE)
+    expect(o.headers.get('cache-control')).toBe('no-store')
     expect(o.headers.get('referrer-policy')).toBe('no-referrer')
     expect(o.headers.get('x-content-type-options')).toBe('nosniff')
   })

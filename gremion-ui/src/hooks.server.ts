@@ -791,35 +791,51 @@ export const authGuard: Handle = async ({ event, resolve }) => {
  * (third-party-frame-based clickjacking, base-tag hijack, form-action
  * exfiltration).
  *
- * Compromises documented for the next tightening pass:
- *   - 'unsafe-inline' on script-src is required for SvelteKit hydration
- *     (the framework injects inline <script>__sveltekit_xxx.data = …</script>
- *     into the SSR'd HTML). Closing it requires nonce/hash-based CSP, which in
- *     SvelteKit 2 is owned by `svelte.config.js kit.csp` ({mode:'auto'}) — that
- *     path emits its OWN CSP (header/meta) with a per-response nonce auto-stamped
- *     on the framework's inline scripts. Because the policy here is set MANUALLY
- *     in cspGuard, simply deleting 'unsafe-inline' from THIS header (without the
- *     kit.csp nonce machinery) would break hydration on every page, and running
- *     both a manual header AND kit.csp produces two conflicting policies. The
- *     migration (move all directives into kit.csp + drop this manual script/style
- *     source) therefore must land together with a full build + hydration smoke
- *     test, which a build-less worktree cannot verify — #259-3 keeps it DEFERRED
- *     rather than ship a CSP that bricks the app. Tracked alongside #259.
- *   - 'unsafe-inline' on style-src: same root cause AND additionally load-bearing
- *     at runtime — Svelte scoped styles and Tailwind utility classes emit inline
- *     <style>/style="" rules that nonces do not cover, so this source stays even
- *     after the script-src nonce migration.
- *   - https:/wss: on connect-src: gremion-ui talks to env-configured Matrix,
- *     Helios, Nextcloud, LiveKit endpoints. An explicit-allowlist would
- *     require importing the runtime config from this hook — feasible but
- *     adds a config-change → hook-rebuild dependency. Kept broad here;
- *     the auth-cookie + same-origin policy on those endpoints provides
- *     the actual access gate.
+ * The script, style and resource policy for the app's own pages is nonce-based and
+ * owned by SvelteKit through `svelte.config.js kit.csp` ({mode:'auto'}): SvelteKit
+ * stamps a per-response nonce on every inline <script> it injects and emits the
+ * matching `script-src 'self' 'nonce-...'` policy (an HTTP header on server-rendered
+ * pages, a <meta> tag on prerendered ones). 'unsafe-inline' is therefore absent from
+ * script-src on app pages, so the CSP contains an injected inline script. See
+ * svelte.config.js for the per-directive rationale (why style-src keeps
+ * 'unsafe-inline', why connect-src stays broad).
  *
- * The header is only attached to `text/html` responses; JSON API replies
- * are unaffected (CSP only applies when the body is parsed as a document).
+ * cspGuard covers the two cases kit.csp does not:
+ *
+ *   (a) SvelteKit page renders, which ALREADY carry the kit.csp header. cspGuard only
+ *       APPENDS `frame-ancestors 'self'` as a SECOND policy. frame-ancestors lives
+ *       here, not in kit.csp, because a <meta> CSP ignores it (a prerendered page
+ *       would silently lose anti-framing); a response header covers every render
+ *       mode. Append, never set: overwriting SvelteKit's header would drop the script
+ *       nonce and break hydration. A policy carrying ONLY frame-ancestors has no
+ *       default-src to fall back to, so it restricts nothing else and cannot
+ *       intersect-block the nonced hydration script.
+ *
+ *   (b) text/html responses that are NOT SvelteKit page renders and so never get a
+ *       kit.csp header: the proxied Element Call SPA index, and every early-return
+ *       document (tenant 404/429/503, authGuard 401/403/503, the module gate). For
+ *       these cspGuard is the only CSP layer and SETS the full baseline policy
+ *       (NON_PAGE_CSP_HEADER_VALUE). 'unsafe-inline' on script-src is retained ONLY
+ *       there: Element Call is a trusted, self-hosted SPA whose own bundle uses
+ *       inline scripts, and a proxied third-party document cannot be nonced from
+ *       here.
+ *
+ * 'self' (not 'none') for frame-ancestors: the video-call UI embeds the proxied
+ * Element Call SPA in a same-origin <iframe> at /element-call/*. 'none' forbids ANY
+ * framing, even same-origin, and renders that iframe as a blocked frame. 'self'
+ * blocks cross-origin framing (the actual clickjacking vector) while allowing the
+ * same-origin embed.
+ *
+ * The CSP is only attached to `text/html` responses; JSON API replies are
+ * unaffected (CSP only applies when the body is parsed as a document).
  */
-export const CSP_HEADER_VALUE = [
+export const CSP_HEADER_VALUE = "frame-ancestors 'self'"
+
+/**
+ * Standalone CSP for text/html that is not a SvelteKit page render (see (b) above).
+ * The full policy as it shipped before the page policy moved into kit.csp.
+ */
+export const NON_PAGE_CSP_HEADER_VALUE = [
   "default-src 'self'",
   "script-src 'self' 'unsafe-inline'",
   "style-src 'self' 'unsafe-inline'",
@@ -827,13 +843,6 @@ export const CSP_HEADER_VALUE = [
   "font-src 'self' data:",
   "connect-src 'self' https: wss:",
   "frame-src 'self'",
-  // 'self' (not 'none'): the video-call UI embeds the proxied Element Call SPA in
-  // a same-origin <iframe> at /element-call/*. Because that document is served by
-  // gremion-ui, it inherits this CSP — and 'none' forbids ANY framing, even
-  // same-origin, so the iframe rendered as a blocked/broken frame (the browser
-  // fetched the doc but never executed it). 'self' permits same-origin embedding
-  // while still blocking cross-origin framing, which is the actual clickjacking
-  // vector this directive defends against.
   "frame-ancestors 'self'",
   "base-uri 'self'",
   "form-action 'self'",
@@ -881,8 +890,8 @@ function withWritableHeaders(response: Response): Response {
  *
  * nosniff goes on every response: MIME sniffing matters most on the non-HTML
  * ones (attachments, file downloads, JSON). Referrer-Policy is the browser
- * default, set only when the handler did not choose one. The CSP stays scoped
- * to text/html (see CSP_HEADER_VALUE).
+ * default, set only when the handler did not choose one. The CSP and
+ * Cache-Control: no-store stay scoped to text/html (see CSP_HEADER_VALUE).
  */
 export const cspGuard: Handle = async ({ event, resolve }) => {
   const response = withWritableHeaders(await resolve(event))
@@ -893,7 +902,20 @@ export const cspGuard: Handle = async ({ event, resolve }) => {
   }
   const contentType = response.headers.get('content-type') ?? ''
   if (contentType.startsWith('text/html')) {
-    response.headers.set('Content-Security-Policy', CSP_HEADER_VALUE)
+    // Every rendered document carries authenticated content (sidebar, identity,
+    // data). Without no-store the browser restores it from bfcache or the disk
+    // cache after logout and shows it to whoever holds the device, even though the
+    // session is dead. Static assets and JSON APIs are not text/html, so their
+    // caching is untouched.
+    response.headers.set('Cache-Control', 'no-store')
+    if (response.headers.has('content-security-policy')) {
+      // (a) SvelteKit page: kit.csp already set the nonce policy. Add
+      // frame-ancestors as a second policy WITHOUT clobbering the nonce.
+      response.headers.append('Content-Security-Policy', CSP_HEADER_VALUE)
+    } else {
+      // (b) Not a page render: kit.csp never ran, so this is the only CSP layer.
+      response.headers.set('Content-Security-Policy', NON_PAGE_CSP_HEADER_VALUE)
+    }
   }
   return response
 }
