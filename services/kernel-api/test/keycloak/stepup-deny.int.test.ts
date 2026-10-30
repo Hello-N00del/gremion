@@ -18,7 +18,13 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 const REALM_FILE = fileURLToPath(new URL('../../../../docker/keycloak/realm-export.base.json', import.meta.url))
 const THEME_DIR = fileURLToPath(new URL('../../../../docker/keycloak/themes/gremion', import.meta.url))
 const IMAGE = 'quay.io/keycloak/keycloak:26.6.1'
-const NAME = 't081d-kc'
+// A per-run name: the file runs from `test:integration` and from the verify part keycloak-stepup, and two
+// runs on one Docker host must not tear down each other's Keycloak.
+const NAME = `t081d-kc-${String(process.pid)}-${randomBytes(3).toString('hex')}`
+// Every container this file creates carries the label, so a run killed before afterAll (CI cancel, Ctrl-C,
+// OOM) leaves something a later run can find: the per-run NAME alone never matches again.
+const LABEL = 't081d-stepup'
+const STALE_MS = 60 * 60 * 1000
 const REALM = 't081d'
 const NOTICE = '/auth/step-up?error=no-second-factor'
 const tmp = mkdtempSync(join(tmpdir(), 't081d-'))
@@ -28,6 +34,17 @@ function docker(args: string[], allowFail = false): string {
   const r = spawnSync('docker', args, { encoding: 'utf8', env: { ...process.env, MSYS_NO_PATHCONV: '1' } })
   if (r.status !== 0 && !allowFail) throw new Error(`docker ${args[0]} (status ${String(r.status)}): ${r.error?.message ?? ''} ${(r.stderr || '').slice(-400)}`)
   return (r.stdout || '').trim()
+}
+
+/** Remove labelled containers older than STALE_MS: leftovers of killed runs. A concurrent run's container is young, so it stays. */
+function sweepStale(): void {
+  const ids = docker(['ps', '-aq', '--filter', `label=${LABEL}`], true).split(/\r?\n/).filter(Boolean)
+  if (ids.length === 0) return
+  for (const line of docker(['inspect', '-f', '{{.Id}} {{.Created}}', ...ids], true).split(/\r?\n/)) {
+    const [id, created] = line.split(' ')
+    const at = Date.parse(created ?? '')
+    if (id && Number.isFinite(at) && Date.now() - at > STALE_MS) docker(['rm', '-f', '-v', id], true)
+  }
 }
 
 /** The template with placeholders filled and a password-only user (test copy only; the repo file is untouched). */
@@ -95,8 +112,8 @@ beforeAll(async () => {
   const dir = join(tmp, 'import')
   mkdirSync(dir)
   writeFileSync(join(dir, `${REALM}.json`), JSON.stringify(realm()))
-  docker(['rm', '-f', '-v', NAME], true)
-  docker(['create', '--name', NAME, '-p', '127.0.0.1::8080', '-e', 'KC_BOOTSTRAP_ADMIN_USERNAME=a', '-e', 'KC_BOOTSTRAP_ADMIN_PASSWORD=a', IMAGE, 'start-dev', '--import-realm'])
+  sweepStale()
+  docker(['create', '--name', NAME, '--label', LABEL, '-p', '127.0.0.1::8080', '-e', 'KC_BOOTSTRAP_ADMIN_USERNAME=a', '-e', 'KC_BOOTSTRAP_ADMIN_PASSWORD=a', IMAGE, 'start-dev', '--import-realm'])
   docker(['cp', dir, `${NAME}:/opt/keycloak/data/import`])
   docker(['cp', THEME_DIR, `${NAME}:/opt/keycloak/themes/gremion`])
   docker(['start', NAME])

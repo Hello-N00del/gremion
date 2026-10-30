@@ -12,7 +12,8 @@ import { NAV_STORAGE_KEY, NAV_CLASS_RAIL as RAIL, NAV_CLASS_EXPANDED as EXPANDED
 const APP_HTML = readFileSync(resolve(process.cwd(), 'src', 'app.html'), 'utf8')
 
 function prePaintScript(): string {
-  const scripts = [...APP_HTML.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1])
+  // Nonce-tolerant: under the nonce-based CSP the tag is <script nonce="%sveltekit.nonce%">.
+  const scripts = [...APP_HTML.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/g)].map((m) => m[1])
   const script = scripts.find((s) => s.includes('localStorage'))
   if (!script) throw new Error('no pre-paint <script> in app.html')
   return script

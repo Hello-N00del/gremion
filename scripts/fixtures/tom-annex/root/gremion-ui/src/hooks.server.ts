@@ -1,10 +1,13 @@
-export const CSP_HEADER_VALUE = [
+export const CSP_HEADER_VALUE = "frame-ancestors 'self'"
+export const NON_PAGE_CSP_HEADER_VALUE = [
   "default-src 'self'",
-  // a comment with a "quoted" word
+  "script-src 'self' 'unsafe-inline'",
   "frame-ancestors 'self'",
-  "object-src 'none'",
 ].join('; ')
 export const cspGuard = async () => {
   response.headers.set('X-Content-Type-Options', 'nosniff')
   response.headers.set('Referrer-Policy', 'strict-origin-when-cross-origin')
+  if (html) {
+    response.headers.set('Cache-Control', 'no-store')
+  }
 }

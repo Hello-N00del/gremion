@@ -113,7 +113,7 @@ export const gate: Handle = async ({ event, resolve }) => {
 }
 
 // [D R29-I11] The Content-Security-Policy gremion-ui sends (its cspGuard,
-// hooks.server.ts CSP_HEADER_VALUE), verbatim: hooks.test.ts compares the two.
+// hooks.server.ts NON_PAGE_CSP_HEADER_VALUE baseline), verbatim: hooks.test.ts compares the two.
 // The panel needs a subset of what it allows; "equal" is the operator's rule.
 export const PANEL_CSP = [
   "default-src 'self'",
