@@ -1145,30 +1145,93 @@ describe('cspGuard (G-011b)', () => {
     migrationsImpl = async () => {}
   })
 
-  it('CSP_HEADER_VALUE contains the headline directives', async () => {
+  it('CSP_HEADER_VALUE is the header-only frame-ancestors directive', async () => {
     const mod = await import('./hooks.server')
     const v = mod.CSP_HEADER_VALUE
+    // The script/style/resource directives live in svelte.config.js kit.csp (nonce-based).
+    // The app-page addition carries ONLY frame-ancestors: 'self' (not 'none') so the
+    // same-origin Element Call iframe can render while cross-origin framing stays blocked.
+    expect(v).toBe("frame-ancestors 'self'")
+    // The nonce migration's point: no 'unsafe-inline' script source, and no script-src or
+    // default-src in the appended policy (a second policy intersects with the first, and
+    // either directive here could block the nonced hydration script kit.csp allows).
+    expect(v).not.toContain('unsafe-inline')
+    expect(v).not.toContain('script-src')
+    expect(v).not.toContain('default-src')
+  })
+
+  it('NON_PAGE_CSP_HEADER_VALUE keeps the full baseline for proxied HTML', async () => {
+    const mod = await import('./hooks.server')
+    const v = mod.NON_PAGE_CSP_HEADER_VALUE
+    // The proxied Element Call document never passes through kit.csp, so cspGuard is its
+    // only CSP layer and it keeps the full policy (a trusted, proxied third-party document
+    // that cannot be nonced from here).
     expect(v).toContain("default-src 'self'")
-    // 'self' (not 'none') so the same-origin Element Call iframe can render;
-    // cross-origin framing (clickjacking) stays blocked.
+    expect(v).toContain("script-src 'self' 'unsafe-inline'")
     expect(v).toContain("frame-ancestors 'self'")
     expect(v).toContain("object-src 'none'")
     expect(v).toContain("base-uri 'self'")
     expect(v).toContain("form-action 'self'")
-    expect(v).toContain("script-src 'self' 'unsafe-inline'")
   })
 
-  it('attaches the CSP header to text/html responses', async () => {
+  it('sets nosniff + Referrer-Policy on EVERY response, including non-html', async () => {
     const mod = await import('./hooks.server')
+    for (const [label, contentType] of [
+      ['json api', 'application/json'],
+      ['attachment', 'application/octet-stream'],
+      ['html page', 'text/html; charset=utf-8'],
+    ] as const) {
+      const inner = new Response('x', { status: 200, headers: { 'content-type': contentType } })
+      const out = (await mod.cspGuard({
+        event: makeFakeEvent('/api/files/1') as never,
+        resolve: async () => inner,
+      } as never)) as Response
+      expect(out.headers.get('X-Content-Type-Options'), label).toBe('nosniff')
+      expect(out.headers.get('Referrer-Policy'), label).toBe('strict-origin-when-cross-origin')
+    }
+  })
+
+  it('appends only frame-ancestors to a SvelteKit page (existing kit.csp nonce policy)', async () => {
+    // On SSR pages SvelteKit has already set the nonce-based CSP header before cspGuard
+    // runs. cspGuard must add frame-ancestors as a SECOND policy and leave the nonce
+    // policy intact: overwriting it would strip the script nonce and break hydration.
+    const mod = await import('./hooks.server')
+    const kitPolicy = "default-src 'self'; script-src 'self' 'nonce-abc123'; style-src 'self' 'unsafe-inline'"
     const inner = new Response('<html>x</html>', {
       status: 200,
-      headers: { 'content-type': 'text/html; charset=utf-8' },
+      headers: {
+        'content-type': 'text/html; charset=utf-8',
+        'content-security-policy': kitPolicy,
+      },
     })
     const out = (await mod.cspGuard({
       event: makeFakeEvent('/dashboard') as never,
       resolve: async () => inner,
     } as never)) as Response
-    expect(out.headers.get('Content-Security-Policy')).toBe(mod.CSP_HEADER_VALUE)
+    const combined = out.headers.get('Content-Security-Policy') ?? ''
+    expect(combined).toContain("script-src 'self' 'nonce-abc123'")
+    expect(combined).toContain("frame-ancestors 'self'")
+    expect(combined).not.toContain("script-src 'self' 'unsafe-inline'")
+    // A page render carries authenticated content: no-store keeps the browser from
+    // restoring it from bfcache or the disk cache after logout.
+    expect(out.headers.get('Cache-Control')).toBe('no-store')
+  })
+
+  it('sets the baseline CSP on non-page text/html with no kit.csp header (Element Call proxy)', async () => {
+    // The Element Call endpoint returns proxied text/html with NO CSP header (kit.csp only
+    // runs for page renders). cspGuard must give it the full baseline policy.
+    const mod = await import('./hooks.server')
+    const inner = new Response('<html>element-call</html>', {
+      status: 200,
+      headers: { 'content-type': 'text/html; charset=utf-8' },
+    })
+    const out = (await mod.cspGuard({
+      event: makeFakeEvent('/element-call/index.html') as never,
+      resolve: async () => inner,
+    } as never)) as Response
+    expect(out.headers.get('Content-Security-Policy')).toBe(mod.NON_PAGE_CSP_HEADER_VALUE)
+    // The proxied HTML is text/html too, so it also gets no-store.
+    expect(out.headers.get('Cache-Control')).toBe('no-store')
   })
 
   it('leaves application/json responses unchanged', async () => {
@@ -1182,6 +1245,8 @@ describe('cspGuard (G-011b)', () => {
       resolve: async () => inner,
     } as never)) as Response
     expect(out.headers.get('Content-Security-Policy')).toBeNull()
+    // JSON APIs are not text/html: no no-store is forced onto them.
+    expect(out.headers.get('Cache-Control')).toBeNull()
   })
 
   it('leaves responses with no content-type header unchanged', async () => {
@@ -1196,6 +1261,7 @@ describe('cspGuard (G-011b)', () => {
       resolve: async () => inner,
     } as never)) as Response
     expect(out.headers.get('Content-Security-Policy')).toBeNull()
+    expect(out.headers.get('Cache-Control')).toBeNull()
   })
 })
 
