@@ -243,8 +243,11 @@ decrypt_artefact() {                       # <artefact> <key-file>
     esac
 }
 
+# Each run is a dated generation directory (YYYYmmdd-HHMMSS-pid), so a reverse
+# sort picks the newest one.
 art="$(find /opt/gremion/backups/tenants -type f \
-           -name "${GATE_SCRATCH_SLUG}.dump.age" | head -n 1)"
+           -path '*/[0-9]*-[0-9]*-[0-9]*/*' \
+           -name "${GATE_SCRATCH_SLUG}.dump.age" | LC_ALL=C sort -r | head -n 1)"
 [ -n "$art" ] || { echo 'G7 FAIL no export artefact for the scratch tenant'; exit 1; }
 own_key="/opt/gremion/etc/secrets/tenants/${GATE_SCRATCH_SLUG}.backup-key"
 other_key="$(find /opt/gremion/etc/secrets/tenants -name '*.backup-key' \

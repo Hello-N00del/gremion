@@ -1,6 +1,6 @@
 # Install: the from-zero bring-up
 
-- Version: 4.1.1
+- Version: 4.2.0
 - Wall-clock budget: one working day, from the start of step 1 to the asserted post-condition (PRD-PLAT-005)
 - Implements: TRD-200 (install), TRD-042 (the from-zero rebuild, R15-2), FLOW-OPS-002
 - First run: TASK-038, the pilot re-initialisation
@@ -44,7 +44,9 @@ export PATH="/opt/gremion/bin:$PATH"
 - The administrator holds, on their own machine: the provider panel login, the
   registrar login, an SSH key the rebuilt server will accept for root, a
   registry token with read access to the release images (typed at a prompt,
-  never written to disk), the deploy key's public half, the release-signing
+  never written to disk, or installed once as the host's token file, see
+  [host-tooling.md](../host-tooling.md), "The registry token on the host"), the
+  deploy key's public half, the release-signing
   public key for `bootstrap.sh trust`, and the release signer's `allowed_signers`
   file (ssh public keys only, `namespaces="git"`; how to make it:
   [host-tooling.md](../host-tooling.md), "Authenticating the release tree"),
@@ -235,12 +237,27 @@ jq -e '.ok == true' /opt/gremion/runtime/last-backup.json
 ```
 
 14. **First deploy.** Twelve steps, each logged to `runtime/deploy.log`; the
-    program logs out of the registry on every exit path.
+    program logs out of the registry on every exit path. The token goes to the
+    program on standard input, typed at a prompt. Where the host's token file is
+    installed (`/opt/gremion/etc/registry-token`, named by
+    `GREMION_REGISTRY_TOKEN_FILE` in `state.env`; host-tooling.md, "The registry
+    token on the host"), the program reads it from there and stdin is not read.
+    A token file that is missing, not owned by `gremion`, readable by group or
+    others, empty or not one token stops the run at once with exit 2, before
+    step 1 and with nothing pulled.
 
 ```bash
 read -rs GHCR_TOKEN
 printf 'TOKEN %s\n' "$GHCR_TOKEN" | sudo -u gremion /opt/gremion/bin/gremion-deploy "$TAG"
 unset GHCR_TOKEN
+```
+
+   With the token file installed instead:
+
+```bash
+stat -c '%U:%G %a %n' /opt/gremion/etc/registry-token                                                    # gremion:gremion 600
+grep -c '^GREMION_REGISTRY_TOKEN_FILE=/opt/gremion/etc/registry-token$' /opt/gremion/etc/env/state.env   # 1
+sudo -u gremion /opt/gremion/bin/gremion-deploy "$TAG" </dev/null
 ```
 
 15. **Start the ops project.** The operator-only observability stack
@@ -430,6 +447,7 @@ in [run-record.md](run-record.md).
 
 ## Changelog
 
+- 4.2.0 (2026-10-30): kernel #47 decision (a). Step 14 (and the registry-token precondition) names the optional host token file `etc/registry-token` that `gremion-deploy` reads when `GREMION_REGISTRY_TOKEN_FILE` is set, with the commands that observe it; the prompt stays the default. Minor: an alternative added to a step, no post-condition changed.
 - 4.1.1 (2026-10-29): kernel #48. Known gaps names the adopt step (upgrade.md step 6) for a realm the provisioner service account did not create. Patch: no step or post-condition changed.
 - 4.1.0 (2026-10-03): TASK-039. Step 15 starts the observability stack from `compose/observability/` (Grafana-managed alerting, no separate alert router), the project table and step 8 name its directory, and the Known gap on the old ops project is replaced by the Grafana sign-in note. Minor: a step changed, no post-condition did.
 - 4.0.0 (2026-10-03): H10 (F1 sweep K6#19, TASK-048b relay). Step 3 authenticates the release tag against the release signer's `allowed_signers` before step 4 runs code from the tree; step 10 installs that same file as the host's anchor `etc/allowed_signers` (`bootstrap.sh --allowed-signers PATH signers`, `root:root` 0644 like `etc/cosign.pub`), and the post-condition reads both anchors' owner and mode. `gremion-deploy` refuses a tag that is unsigned, signed by an unlisted key or not an ssh signature. Major: a step changed.

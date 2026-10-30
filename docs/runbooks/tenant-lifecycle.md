@@ -153,11 +153,21 @@ artifacts each encrypted under that key, under the tenant's residency zone:
 
 | Artifact | Source |
 |---|---|
-| `<slug>.dump.age` | `pg_dump -Fc` of the tenant governance DB (`t_<slug>`; `gremion` for `default`), through the running postgres |
+| `<slug>.dump.age` | `pg_dump -Fc` of the tenant's kernel DB (`t_<tenant id hex>__kernel`), through the running postgres |
 | `realm.json.age` | Keycloak Admin API `partial-export` of the tenant's realm |
 
-Output: `backups/tenants/<residency_zone>/<slug>/`, run timestamp in
-`.last-backup`. Retention = `TENANT_BACKUP_RETENTION_DAYS` (default 30).
+Output: one dated **generation** per run,
+`backups/tenants/<residency_zone>/<slug>/<YYYYmmdd-HHMMSS-pid>/`, holding both
+artifacts. `.last-backup` names the newest published generation.
+
+A run stages everything in `.partial-<generation>` and publishes it with a single
+rename, only after every artifact exists and is non-empty. A run that fails
+anywhere (pg_dump error, empty dump, Keycloak unreachable) leaves no new
+generation and never touches an earlier one. Retention prunes generations older
+than `TENANT_BACKUP_RETENTION_DAYS` (default 30) but always keeps the newest
+`TENANT_BACKUP_KEEP_GENERATIONS` (default 2, minimum 1), so a stopped schedule
+cannot age out the last good backup. To restore, use the newest generation
+directory (the one `.last-backup` names).
 
 Decisions baked in:
 
