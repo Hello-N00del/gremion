@@ -921,9 +921,14 @@ jobs:
           retention-days: 7
 
   # integration:vitest (gremion-ui test:integration, with `pnpm migrate:test-fixture`,
-  # against a throwaway Postgres the suite starts itself) and integration:fresh-init
-  # (`make fresh-init-proof`). Both start their own containers by name; neither
-  # touches a service container, so none is declared here.
+  # against a throwaway Postgres the suite starts itself), integration:fresh-init
+  # (`make fresh-init-proof`) and integration:keycloak-stepup (a REAL Keycloak with
+  # the realm template and login theme: a user without a second factor who asks
+  # gremion-ui for acr loa2 is refused, never offered authenticator set-up). All
+  # three start their own containers by name; none touches a service container, so
+  # none is declared here. The keycloak-stepup part runs in this leg and no other
+  # (scripts/check-ci-verify-coverage.mjs), and it fails on a skipped case or a
+  # file vitest did not collect.
   verify-integration-db:
     name: "Verify: database integration"
     runs-on: ubuntu-latest
@@ -945,9 +950,9 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Run verify (integration:vitest, integration:fresh-init)
+      - name: Run verify (integration:vitest, integration:fresh-init, integration:keycloak-stepup)
         id: verify
-        run: node scripts/verify/verify.mjs --only integration:vitest,integration:fresh-init
+        run: node scripts/verify/verify.mjs --only integration:vitest,integration:fresh-init,integration:keycloak-stepup
 
       # The record is the leg's whole product, so it is uploaded even when a suite
       # failed (verify writes it either way) and a missing record is itself an

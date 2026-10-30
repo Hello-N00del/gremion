@@ -4,7 +4,19 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
-import { INTEGRATION_PARTS, integrationVitestEnv, judgeEventsTest, judgeFreshInit, judgeNatsAuthTest, judgeNatsTest, psqlExecArgs, psqlProbeArgs, startTestDb } from './suites/integration.mjs'
+import {
+  INTEGRATION_PARTS,
+  integrationVitestEnv,
+  judgeEventsTest,
+  judgeFreshInit,
+  judgeKeycloakStepup,
+  judgeNatsAuthTest,
+  judgeNatsTest,
+  KEYCLOAK_STEPUP_FILE,
+  psqlExecArgs,
+  psqlProbeArgs,
+  startTestDb,
+} from './suites/integration.mjs'
 
 const NATS_OK =
   '[nats-test] running the ports suite against nats://127.0.0.1:4222\n' +
@@ -73,7 +85,53 @@ test('test-nats-auth: a non-zero exit is a failure', () => {
 
 test('the nats-auth part is registered beside nats', () => {
   assert.equal(typeof INTEGRATION_PARTS['nats-auth'], 'function')
-  assert.deepEqual(Object.keys(INTEGRATION_PARTS).slice(-3), ['nats', 'nats-auth', 'events'])
+  assert.deepEqual(Object.keys(INTEGRATION_PARTS).slice(-4, -1), ['nats', 'nats-auth', 'events'])
+})
+
+// The live Keycloak step-up deny proof (kernel-api test/keycloak/stepup-deny.int.test.ts) as a verify part:
+// a user WITHOUT a second factor who asks gremion-ui for acr loa2 is refused, never offered authenticator
+// set-up. It starts its own Keycloak container, so it runs wherever the part runs. A vitest run that
+// collected zero files or skipped its cases exits 0, so the part pins the file, the case count and no skips.
+const stepupPart = (over = {}) => ({
+  label: 'kernel-api keycloak step-up deny (live)',
+  toolMissing: null,
+  unparseable: false,
+  collected: 2,
+  passed: 2,
+  failed: 0,
+  skipped: 0,
+  skipsByFile: {},
+  collectedFiles: [KEYCLOAK_STEPUP_FILE],
+  detail: '',
+  ...over,
+})
+
+test('the keycloak-stepup part is registered', () => {
+  assert.equal(typeof INTEGRATION_PARTS['keycloak-stepup'], 'function')
+})
+
+test('keycloak-stepup: both live cases passing with the file collected is a pass', () => {
+  const p = judgeKeycloakStepup(stepupPart())
+  assert.equal(p.failed, 0, JSON.stringify(p))
+  assert.equal(p.passed, 2)
+})
+
+// One test, a loop inside it (see the test-nats-auth note above for why).
+test('keycloak-stepup: a green run that did not collect the file, ran fewer cases or skipped one is a failure, never a pass', () => {
+  for (const [what, over, expected] of [
+    ['the file was not collected', { collectedFiles: [] }, /was not among the files vitest reported running/],
+    ['only one case ran', { collected: 1, passed: 1 }, /only 1 of the 2 live cases passed/],
+    ['a case skipped', { skipped: 1, passed: 1 }, /skipped 1 case\(s\); a live Keycloak proof allows no skips/],
+  ]) {
+    const p = judgeKeycloakStepup(stepupPart(over))
+    assert.ok(p.failed >= 1, `${what}: ${JSON.stringify(p)}`)
+    assert.match(p.detail, expected, what)
+  }
+})
+
+test('keycloak-stepup: a missing docker or an unparseable report passes through untouched (never turned into a pass)', () => {
+  assert.equal(judgeKeycloakStepup({ label: 'x', toolMissing: 'docker' }).toolMissing, 'docker')
+  assert.equal(judgeKeycloakStepup(stepupPart({ unparseable: true })).unparseable, true)
 })
 
 // TASK-079: make test-events -- the unit suite, four live groups, three alert phases, the image check.
