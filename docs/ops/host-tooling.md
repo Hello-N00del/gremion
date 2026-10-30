@@ -275,7 +275,10 @@ answers `busy` with `EXIT 3` instead of racing the first on the colours, the
 migrations or the staged backup tree. `noop` and `verify` are read-only and are
 never blocked. The program inherits the lock (and `GREMION_HOST_LOCK_HELD=1`),
 so `gremion-backup`, which the systemd timer starts directly and which takes the
-same lock itself, does not wait on its own parent. A deploy requested while the
+same lock itself, does not wait on its own parent. `gremion-deploy`,
+`gremion-rollback` and `gremion-tenant`, started directly at the host rather than
+through `gremion-hostd`, take the same lock the same way and answer `busy`
+(`EXIT 3`) when it is held. A deploy requested while the
 nightly backup runs is therefore answered `busy`; retry it when the backup has
 finished.
 
