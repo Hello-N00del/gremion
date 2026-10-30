@@ -23,6 +23,7 @@ const mocks = vi.hoisted(() => ({
   removeCaldavSyncEntry: vi.fn().mockResolvedValue(undefined),
   recordCaldavSyncFailure: vi.fn().mockResolvedValue(undefined),
   markCaldavSynced: vi.fn().mockResolvedValue(undefined),
+  markCaldavUnsynced: vi.fn().mockResolvedValue(undefined),
   getEvent: vi.fn(),
 }))
 
@@ -248,6 +249,58 @@ describe('drainCaldavQueue', () => {
       expect(pusher.pushDelete).toHaveBeenCalledWith('uid-np2@stura')
       expect(mocks.removeCaldavSyncEntry).toHaveBeenCalledWith(fakeSql, 'np2')
       expect(result).toEqual({ succeeded: 1, failed: 0 })
+    })
+
+    // After the retract the copy is gone, so the row must stop looking synced:
+    // otherwise migration 004 re-queues it on every leaf first contact.
+    it('clears caldav_synced_at AFTER the retract DELETE succeeded', async () => {
+      mocks.listPendingCaldavSync.mockResolvedValueOnce([
+        makeEntry({ id: 'np4', operation: 'update', eventId: 'e-np4', caldavUid: 'uid-np4@stura' }),
+      ])
+      mocks.getEvent.mockResolvedValueOnce(makeEvent('e-np4', 'uid-np4@stura', false))
+      const order: string[] = []
+      const pusher = makePusher({
+        pushDelete: vi.fn().mockImplementation(async () => {
+          order.push('pushDelete')
+        }),
+      })
+      mocks.markCaldavUnsynced.mockImplementationOnce(async () => {
+        order.push('markCaldavUnsynced')
+      })
+
+      await drainCaldavQueue(fakeSql, pusher)
+
+      expect(mocks.markCaldavUnsynced).toHaveBeenCalledWith(fakeSql, 'e-np4')
+      expect(order).toEqual(['pushDelete', 'markCaldavUnsynced'])
+    })
+
+    it('does NOT clear caldav_synced_at when the retract DELETE fails (the copy may still exist)', async () => {
+      mocks.listPendingCaldavSync.mockResolvedValueOnce([
+        makeEntry({ id: 'np5', operation: 'update', eventId: 'e-np5', caldavUid: 'uid-np5@stura' }),
+      ])
+      mocks.getEvent.mockResolvedValueOnce(makeEvent('e-np5', 'uid-np5@stura', false))
+      const pusher = makePusher({
+        pushDelete: vi.fn().mockRejectedValueOnce(new Error('DELETE 500')),
+      })
+
+      const result = await drainCaldavQueue(fakeSql, pusher)
+
+      expect(mocks.markCaldavUnsynced).not.toHaveBeenCalled()
+      expect(result).toEqual({ succeeded: 0, failed: 1 })
+    })
+
+    it('a non-public create touches neither the pusher nor caldav_synced_at', async () => {
+      mocks.listPendingCaldavSync.mockResolvedValueOnce([
+        makeEntry({ id: 'np6', operation: 'create', eventId: 'e-np6', caldavUid: 'uid-np6@stura' }),
+      ])
+      mocks.getEvent.mockResolvedValueOnce(makeEvent('e-np6', 'uid-np6@stura', false))
+      const pusher = makePusher()
+
+      await drainCaldavQueue(fakeSql, pusher)
+
+      expect(pusher.pushDelete).not.toHaveBeenCalled()
+      expect(mocks.markCaldavUnsynced).not.toHaveBeenCalled()
+      expect(mocks.markCaldavSynced).not.toHaveBeenCalled()
     })
 
     it('fails closed: an event whose isPublic is missing is treated as non-public', async () => {

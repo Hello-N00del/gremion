@@ -38,6 +38,7 @@ export { getCommitteeCalendarSettings, upsertCommitteeCalendarSettings } from '.
 export type { DbCalDavQueueEntry, CaldavOperation } from './caldav-queue.js'
 export {
   markCaldavSynced,
+  markCaldavUnsynced,
   listPendingCaldavSync,
   removeCaldavSyncEntry,
   recordCaldavSyncFailure,

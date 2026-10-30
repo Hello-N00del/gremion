@@ -19,6 +19,7 @@ import {
   removeCaldavSyncEntry,
   recordCaldavSyncFailure,
   markCaldavSynced,
+  markCaldavUnsynced,
   getEvent,
   type DbCalDavQueueEntry,
 } from '../store/index.js'
@@ -86,10 +87,13 @@ async function processEntry(
   // non-public. A non-public create is a no-op (the row is retired by the
   // caller). A non-public UPDATE means the event may have been public earlier
   // and already sit in the calendar, so it is RETRACTED (DELETE is idempotent:
-  // 404/410 is success) rather than refreshed.
+  // 404/410 is success) rather than refreshed. Once the copy is gone the event
+  // no longer counts as synced (caldav_synced_at is cleared), so migration 004's
+  // cleanup never re-queues it.
   if (event.isPublic !== true) {
     if (entry.operation === 'update') {
       await pusher.pushDelete(entry.caldavUid)
+      await markCaldavUnsynced(sql, event.id)
     }
     return
   }

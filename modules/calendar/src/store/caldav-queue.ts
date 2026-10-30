@@ -53,6 +53,15 @@ export async function markCaldavSynced(sql: Sql, eventId: string): Promise<void>
   await sql`UPDATE calendar_events SET caldav_synced_at = now() WHERE id = ${eventId}`
 }
 
+/**
+ * D-2: the CalDAV copy of an unpublished event was just removed, so the row must
+ * stop looking synced. Otherwise it stays "synced" forever and migration 004
+ * re-queues a cleanup for it on every first contact.
+ */
+export async function markCaldavUnsynced(sql: Sql, eventId: string): Promise<void> {
+  await sql`UPDATE calendar_events SET caldav_synced_at = NULL WHERE id = ${eventId}`
+}
+
 export async function listPendingCaldavSync(
   sql: Sql,
   maxAttempts = 3,
