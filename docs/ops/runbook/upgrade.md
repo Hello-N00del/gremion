@@ -1,6 +1,6 @@
 # Upgrade: one release onto a running installation
 
-- Version: 6.1.0
+- Version: 6.2.0
 - Status: provisional (see Known gaps)
 - Wall-clock budget: one working day, from step 1 to the asserted post-condition (PRD-PLAT-005)
 - Implements: TRD-200 (upgrade), TRD-206 (the pre-migration dump, R18-4), TRD-189 (blue/green as the deploy path)
@@ -57,8 +57,11 @@ host="$(grep -vE '^[[:space:]]*(#|$)' /opt/gremion/etc/tenant-hosts.txt | head -
 - The running installation's kernel database was created at or after the
   migration renumber of the register (TASK-029): nothing in the kernel data plane
   refuses a ledger that still records the old three-digit names (see Known gaps).
-- The administrator holds a registry read token, typed at a prompt, never
-  written to disk.
+- The administrator holds a registry read token, typed at a prompt and never
+  written to disk, or installed once as the host's token file
+  (`/opt/gremion/etc/registry-token`, named by `GREMION_REGISTRY_TOKEN_FILE` in
+  `state.env`; [host-tooling.md](../host-tooling.md), "The registry token on the
+  host"). A token near its expiry is replaced before the upgrade, not during it.
 - No other deploy, rollback or switch is running on the host; the agent's log,
   `logs/hostd.log`, names the last call it served.
 
@@ -152,12 +155,24 @@ stat -c '%a %U' "$dump" && logger -t premigration-dump "taken ${dump} before ${T
 
 4. **Deploy.** The token goes to the program on standard input; the program logs
    out of the registry on every exit path and asserts that no credential
-   survives.
+   survives. Where the host's token file is installed, the program reads the
+   token from it instead and stdin is not read; a token file that is missing,
+   not owned by `gremion`, readable by group or others, empty or not one token
+   stops the run at once with exit 2, before step 1 of the deploy, with nothing
+   pulled and no colour touched.
 
 ```bash
 read -rs GHCR_TOKEN
 printf 'TOKEN %s\n' "$GHCR_TOKEN" | sudo -u gremion /opt/gremion/bin/gremion-deploy "$TAG"
 unset GHCR_TOKEN
+```
+
+   With the token file installed instead:
+
+```bash
+stat -c '%U:%G %a %n' /opt/gremion/etc/registry-token                                                    # gremion:gremion 600
+grep -c '^GREMION_REGISTRY_TOKEN_FILE=/opt/gremion/etc/registry-token$' /opt/gremion/etc/env/state.env   # 1
+sudo -u gremion /opt/gremion/bin/gremion-deploy "$TAG" </dev/null
 ```
 
 5. **Delete the dumps once the switch has succeeded, and log each.** The switch
@@ -280,9 +295,11 @@ live, a deploy of any other tag stops at its step 5 and prints both commands.
 - (d) TRD-344 and TRD-353: the migration register (`scripts/migrations/ranges.json`, `scripts/migrations/applied.lock.json`) is enforced by `scripts/migrations/register.mjs check` in `make lint`, not on the host, so step 1 compares the two releases' locks with `jq`. A running release older than the register has no lock to compare; its upgrade compares the two releases' `migrations` arrays by hand instead. At boot the kernel data plane checks every migration file against its manifest (the file half of TRD-353), but its ledger has no sha256 column, so the applied-row half, `verifyApplied` (`scripts/migrations/verify-applied.mjs`), runs in no service yet (`scripts/migrations/README.md`, Known limits).
 - (e) The register renumbered the kernel chain from three to four digits. The kernel data plane compares its ledger by name only and refuses no ledger that still records the old names: on a kernel database created before the renumber it treats every migration as pending and stops at the first `already exists` error without naming the cause. Such a database is re-initialised, not upgraded; step 1's ledger count observes it.
 - (c) TRD-189: a release with `overlap: false` makes the deploy's step 6 stop the old colour before the migration, so that release has downtime, where TRD-189 asks for a zero-downtime switch. The idle-colour test against live council data with its records marked as test data and removed afterwards (TRD-179) is not done by `gremion-deploy`, whose step 9 checks health and the verification contract only.
+- (f) Kernel #47: whether the GHCR packages are public or the host pulls with a token is not decided; this procedure is written for the token. `gremion-deploy` logs in whatever the answer, and the `deploy` verb of `gremion-hostd` still takes a `TOKEN` line even where the token file is configured ([host-tooling.md](../host-tooling.md), "The registry token on the host").
 
 ## Changelog
 
+- 6.2.0 (2026-10-30): kernel #47 decision (a). Step 4 (and the registry-token precondition) names the optional host token file `etc/registry-token` that `gremion-deploy` reads when `GREMION_REGISTRY_TOKEN_FILE` is set, with the commands that observe it; the prompt stays the default. Minor: an alternative added to a step, no post-condition changed.
 - 6.1.0 (2026-10-29): kernel #48. Step 6 (existing installs, once per realm): a realm the provisioner service account did not create (older than the account, or made by another admin) is adopted with `tenant-create bootstrap-provisioner --adopt-realm <realm>`, which grants the account exactly the realm-creator roles on master `<realm>-realm`; reconcile names the step when it meets such a realm. Minor: a conditional step added, no post-condition changed.
 - 6.0.0 (2026-10-03): TASK-075. `gremion-deploy` step 5 is `gremion-migration-dump` preflight (no longer `gremion-snapshot`): it dumps the kernel and control databases a release migrates and deletes that dump, logged, at step 12b (`switched`), after step 11 passed and step 12 recorded the release; a failed deletion exits 1 with `DUMP-NOT-DELETED` before the soak (12c). The post-condition counts fourteen step lines. Step 3 now dumps by hand only the other databases a release migrates (module databases, `gremion_platform`); step 5 leaves the deploy's own dump to the program; the failure path restores the kernel or control database from it (restore, then a logged discard). Known gap (b) describes what landed. Major: a step changed.
 - 5.0.0 (2026-10-03): H10 (F1 sweep K6#19, TASK-048b relay). Step 1 verifies the release tag with `git verify-tag` against the host anchor `/opt/gremion/etc/allowed_signers` before anything in the clone is read (`gremion-deploy` STEP 2 repeats the check, and also refuses a tag whose signature is not an ssh signature). Major: a step changed.

@@ -11,10 +11,10 @@
 
 | | |
 |---|---|
-| Version | 1 |
-| Stand | 2026-10-27 |
-| Eingabe-Digest | c58de9cf437fac3f72ed3ac2227ae755878a89088c8c9ba330f21ad56e980aba |
-| Massnahmen | 51 |
+| Version | 2 |
+| Stand | 2026-10-30 |
+| Eingabe-Digest | 6af09b2b47c53a04eb1ef746596013986f5fdb4d593dc682eba170175d48f088 |
+| Massnahmen | 52 |
 
 Der Digest ist SHA-256 ueber die Liste (Id, Wert, Quelle, Fundstelle) aller Massnahmen unten.
 
@@ -48,17 +48,18 @@ Der Digest ist SHA-256 ueber die Liste (Id, Wert, Quelle, Fundstelle) aller Mass
 
 | Id | Massnahme | Wert | Quelle |
 |---|---|---|---|
-| HDR-CSP-BASE-URI | Content-Security-Policy: base-uri | base-uri 'self' | `gremion-ui/src/hooks.server.ts` |
-| HDR-CSP-CONNECT-SRC | Content-Security-Policy: connect-src | connect-src 'self' https: wss: | `gremion-ui/src/hooks.server.ts` |
-| HDR-CSP-DEFAULT-SRC | Content-Security-Policy: default-src | default-src 'self' | `gremion-ui/src/hooks.server.ts` |
-| HDR-CSP-FONT-SRC | Content-Security-Policy: font-src | font-src 'self' data: | `gremion-ui/src/hooks.server.ts` |
-| HDR-CSP-FORM-ACTION | Content-Security-Policy: form-action | form-action 'self' | `gremion-ui/src/hooks.server.ts` |
+| HDR-CACHE-CONTROL | Header Cache-Control (HTML-Seiten) | no-store | `gremion-ui/src/hooks.server.ts` |
+| HDR-CSP-BASE-URI | Content-Security-Policy: base-uri | base-uri 'self' | `gremion-ui/svelte.config.js` |
+| HDR-CSP-CONNECT-SRC | Content-Security-Policy: connect-src | connect-src 'self' https: wss: | `gremion-ui/svelte.config.js` |
+| HDR-CSP-DEFAULT-SRC | Content-Security-Policy: default-src | default-src 'self' | `gremion-ui/svelte.config.js` |
+| HDR-CSP-FONT-SRC | Content-Security-Policy: font-src | font-src 'self' data: | `gremion-ui/svelte.config.js` |
+| HDR-CSP-FORM-ACTION | Content-Security-Policy: form-action | form-action 'self' | `gremion-ui/svelte.config.js` |
 | HDR-CSP-FRAME-ANCESTORS | Content-Security-Policy: frame-ancestors | frame-ancestors 'self' | `gremion-ui/src/hooks.server.ts` |
-| HDR-CSP-FRAME-SRC | Content-Security-Policy: frame-src | frame-src 'self' | `gremion-ui/src/hooks.server.ts` |
-| HDR-CSP-IMG-SRC | Content-Security-Policy: img-src | img-src 'self' data: blob: https: | `gremion-ui/src/hooks.server.ts` |
-| HDR-CSP-OBJECT-SRC | Content-Security-Policy: object-src | object-src 'none' | `gremion-ui/src/hooks.server.ts` |
-| HDR-CSP-SCRIPT-SRC | Content-Security-Policy: script-src | script-src 'self' 'unsafe-inline' | `gremion-ui/src/hooks.server.ts` |
-| HDR-CSP-STYLE-SRC | Content-Security-Policy: style-src | style-src 'self' 'unsafe-inline' | `gremion-ui/src/hooks.server.ts` |
+| HDR-CSP-FRAME-SRC | Content-Security-Policy: frame-src | frame-src 'self' | `gremion-ui/svelte.config.js` |
+| HDR-CSP-IMG-SRC | Content-Security-Policy: img-src | img-src 'self' data: blob: https: | `gremion-ui/svelte.config.js` |
+| HDR-CSP-OBJECT-SRC | Content-Security-Policy: object-src | object-src 'none' | `gremion-ui/svelte.config.js` |
+| HDR-CSP-SCRIPT-SRC | Content-Security-Policy: script-src | script-src 'self' 'nonce-<pro Antwort>' | `gremion-ui/svelte.config.js` |
+| HDR-CSP-STYLE-SRC | Content-Security-Policy: style-src | style-src 'self' 'unsafe-inline' | `gremion-ui/svelte.config.js` |
 | HDR-REFERRER-POLICY | Header Referrer-Policy | strict-origin-when-cross-origin | `gremion-ui/src/hooks.server.ts` |
 | HDR-X-CONTENT-TYPE-OPTIONS | Header X-Content-Type-Options | nosniff | `gremion-ui/src/hooks.server.ts` |
 
@@ -119,17 +120,18 @@ Der Digest ist SHA-256 ueber die Liste (Id, Wert, Quelle, Fundstelle) aller Mass
 | AUTH-WAIT | maxFailureWaitSeconds |
 | BAK-CRYPT | RESTIC_PASSWORD |
 | BAK-LOCAL | BACKUP_LOCAL_RETENTION_DAYS |
-| HDR-CSP-BASE-URI | CSP_HEADER_VALUE |
-| HDR-CSP-CONNECT-SRC | CSP_HEADER_VALUE |
-| HDR-CSP-DEFAULT-SRC | CSP_HEADER_VALUE |
-| HDR-CSP-FONT-SRC | CSP_HEADER_VALUE |
-| HDR-CSP-FORM-ACTION | CSP_HEADER_VALUE |
+| HDR-CACHE-CONTROL | cspGuard |
+| HDR-CSP-BASE-URI | kit.csp |
+| HDR-CSP-CONNECT-SRC | kit.csp |
+| HDR-CSP-DEFAULT-SRC | kit.csp |
+| HDR-CSP-FONT-SRC | kit.csp |
+| HDR-CSP-FORM-ACTION | kit.csp |
 | HDR-CSP-FRAME-ANCESTORS | CSP_HEADER_VALUE |
-| HDR-CSP-FRAME-SRC | CSP_HEADER_VALUE |
-| HDR-CSP-IMG-SRC | CSP_HEADER_VALUE |
-| HDR-CSP-OBJECT-SRC | CSP_HEADER_VALUE |
-| HDR-CSP-SCRIPT-SRC | CSP_HEADER_VALUE |
-| HDR-CSP-STYLE-SRC | CSP_HEADER_VALUE |
+| HDR-CSP-FRAME-SRC | kit.csp |
+| HDR-CSP-IMG-SRC | kit.csp |
+| HDR-CSP-OBJECT-SRC | kit.csp |
+| HDR-CSP-SCRIPT-SRC | kit.csp |
+| HDR-CSP-STYLE-SRC | kit.csp |
 | HDR-REFERRER-POLICY | cspGuard |
 | HDR-X-CONTENT-TYPE-OPTIONS | cspGuard |
 | LOG-KC-ADMIN | adminEventsEnabled |
@@ -162,3 +164,4 @@ Der Digest ist SHA-256 ueber die Liste (Id, Wert, Quelle, Fundstelle) aller Mass
 | Version | Datum | Digest | Geaenderte Massnahmen |
 |---|---|---|---|
 | 1 | 2026-10-27 | c58de9cf437fac3f72ed3ac2227ae755878a89088c8c9ba330f21ad56e980aba | erste Fassung |
+| 2 | 2026-10-30 | 6af09b2b47c53a04eb1ef746596013986f5fdb4d593dc682eba170175d48f088 | HDR-CACHE-CONTROL, HDR-CSP-SCRIPT-SRC |

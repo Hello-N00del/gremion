@@ -12,6 +12,7 @@
 import { randomUUID } from 'node:crypto'
 import type { Operation } from '../operations.js'
 import type { LeafDeps } from './deps.js'
+import { MatrixHttpError } from '../matrix/matrix-client.js'
 import { mintLivekitToken } from '../livekit/livekit-client.js'
 
 export interface DispatchResult {
@@ -31,12 +32,29 @@ function isObj(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null
 }
 
+/** A refusal decided by the leaf itself (bad input, missing config), mapped to
+ *  its own status instead of the generic 502 upstream-failure envelope. */
+class DispatchError extends Error {
+  constructor(readonly status: number, message: string) {
+    super(message)
+    this.name = 'DispatchError'
+  }
+}
+
 export async function dispatchOp(op: Operation, body: Record<string, unknown>, deps: LeafDeps): Promise<DispatchResult> {
   try {
     return { status: 200, body: await route(op, body, deps) }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    return { status: 502, body: { success: false, error: message } }
+    const status = err instanceof DispatchError ? err.status : 502
+    // Synapse's token-invalidation signal travels as a structured field (status
+    // stays 502) so the kernel evicts its cached token without parsing prose.
+    // A 401 without errcode is treated the same: Synapse rejected the bearer.
+    // Only a per-request USER token counts: an admin-token 401 (media download)
+    // or a tokenless login 401 (bad Keycloak JWT) is not a dead user token.
+    const dead =
+      err instanceof MatrixHttpError && err.userToken && (err.errcode === 'M_UNKNOWN_TOKEN' || err.status === 401)
+    return { status, body: dead ? { success: false, errcode: 'M_UNKNOWN_TOKEN', error: message } : { success: false, error: message } }
   }
 }
 
@@ -84,14 +102,24 @@ async function route(op: Operation, body: Record<string, unknown>, deps: LeafDep
     }
 
     // ── video.* ───────────────────────────────────────────────────────────────
-    case 'video.token':
+    case 'video.token': {
+      // Never mint a token that is not pinned to a room and an identity, nor one
+      // signed with an empty secret (boot refuses an empty secret too; this is
+      // the per-request backstop).
+      const roomName = str(body.roomName)
+      const identity = str(body.identity)
+      if (roomName.trim() === '' || identity.trim() === '') {
+        throw new DispatchError(400, 'roomName and identity are required')
+      }
+      if (livekit.apiSecret.trim() === '') throw new DispatchError(503, 'LiveKit is not configured')
       return {
-        token: mintLivekitToken(livekit, str(body.roomName), {
-          identity: str(body.identity),
+        token: mintLivekitToken(livekit, roomName, {
+          identity,
           displayName: str(body.displayName),
           canPublish: body.canPublish === true,
         }),
       }
+    }
 
     case 'video.meeting-room':
       return meetingRoom(body, deps)

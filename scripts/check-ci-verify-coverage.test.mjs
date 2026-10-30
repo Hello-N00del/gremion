@@ -81,6 +81,22 @@ test('a suite run by two legs is reported, naming both', () => {
   assert.match(p, /"isolation" is run 2 times \(verify-unit-packages, verify-integration-db\)/)
 })
 
+// The live Keycloak step-up deny proof is its own integration part, run by exactly one leg.
+test('the keycloak step-up part is run by exactly one leg, and that leg is the database integration one', () => {
+  const where = verifyInvocations(parseWorkflow(CI)).filter((i) => i.names.includes('integration:keycloak-stepup')).map((i) => i.jobId)
+  assert.deepEqual(where, ['verify-integration-db'])
+})
+
+test('the keycloak step-up part dropped from its leg is reported by name', () => {
+  const p = joined(plant(',integration:keycloak-stepup', ''))
+  assert.match(p, /required suite "integration" is not covered: no leg runs integration:keycloak-stepup/)
+})
+
+test('the keycloak step-up part listed in a second leg is reported, naming both', () => {
+  const p = joined(plant('--only integration:nats,integration:nats-auth,integration:events', '--only integration:nats,integration:nats-auth,integration:events,integration:keycloak-stepup'))
+  assert.match(p, /"integration:keycloak-stepup" is run 2 times \(verify-integration-db, verify-integration-brokers\)/)
+})
+
 test('a name that is no suite and no part is reported (a typo would be "dropped from the registry" only at run time)', () => {
   const p = joined(plant('--only unit:ui,unit:module-lane', '--only unit:ui,unit:module-laen'))
   assert.match(p, /names "unit:module-laen"/)
