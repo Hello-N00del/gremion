@@ -471,17 +471,38 @@ function scopeFromHeaders(req: http.IncomingMessage): ScopeContext {
 
 /** Reconstruct the full WRITE actor from the ACL headers: the read scope
  *  (scopeFromHeaders) PLUS the actor identity (x-finance-user-id) and Keycloak group
- *  memberships (x-finance-groups, comma-joined). The write ops (createExpense + the
+ *  memberships (x-finance-groups-json, base64url of a JSON array). The write ops (createExpense + the
  *  Vier-Augen approval family) need the identity for created_by / signer eligibility
  *  and the groups for per-stage required_group checks. Absent headers → fail-closed
  *  ('' user, no groups) on top of the deny scope. */
 function actorFromHeaders(req: http.IncomingMessage): ActorContext {
-  const groups = header(req, 'x-finance-groups')
   return {
     ...scopeFromHeaders(req),
     userId: header(req, 'x-finance-user-id') ?? '',
-    groups: groups ? groups.split(',').filter((s) => s.length > 0) : [],
+    groups: groupsFromHeader(header(req, 'x-finance-groups-json')),
   }
+}
+
+/** Decode the actor's Keycloak groups from x-finance-groups-json =
+ *  base64url(JSON.stringify(groups)). A comma-joined list is ambiguous: a group NAME
+ *  containing ',' would split into extra entries and could smuggle a signer group into
+ *  the per-stage eligibility check, so the old x-finance-groups header is no longer
+ *  read (and must not be read again). Absent, undecodable or non-array values are the
+ *  fail-closed empty set (logged); non-string and empty entries are dropped. */
+function groupsFromHeader(value: string | undefined): string[] {
+  if (value === undefined || value.length === 0) return []
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(Buffer.from(value, 'base64url').toString('utf8'))
+  } catch {
+    console.error('[finance] x-finance-groups-json is not base64url JSON; treating the actor as having no groups')
+    return []
+  }
+  if (!Array.isArray(parsed)) {
+    console.error('[finance] x-finance-groups-json is not a JSON array; treating the actor as having no groups')
+    return []
+  }
+  return parsed.filter((g): g is string => typeof g === 'string' && g.length > 0)
 }
 
 /** The forwarded step-up proof the ACL client resolves from the actor's LoA and sends
@@ -1462,7 +1483,7 @@ async function assertCentralOrConfigAdmin(sql: Sql, actor: ActorContext): Promis
 // getFinanzordnungProfile / getSignerConfig: plain leaf-local singleton reads (no
 // scope/org-unit dimension — the internal shared secret + tenant headers already
 // gate every leaf call). updateSignerConfig is admin/it-admin-gated: the ACL
-// forwards x-finance-groups (buildHeaders, always present when the ACL client is
+// forwards x-finance-groups-json (buildHeaders, always present when the ACL client is
 // constructed with an actor), and the leaf RE-CHECKS membership here as
 // defense-in-depth, mirroring the native +page.server.ts gateWrite check — the
 // internal shared secret alone does not carry the caller's Keycloak roles.

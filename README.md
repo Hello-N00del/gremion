@@ -54,6 +54,7 @@ pnpm -C gremion-ui build     # adapter-node production build
 
 - **[docs/about-gremion.md](./docs/about-gremion.md)** — the full overview: what Gremion achieves, who it's for, the open-core three-layer architecture, the governance charter & invariants, the module SDK, licensing & contribution, the repo/product family, and the microservice roadmap.
 - **[docs/INDEX.md](./docs/INDEX.md)** — the documentation index: architecture & security, development, operations & deployment, the module-SDK playbooks, and the decision records. These docs were rewritten to the governance kernel when it was extracted from the larger product tree; remaining carve residuals are tracked in [`KNOWN_ISSUES.md`](./KNOWN_ISSUES.md).
+- **[docs/modules.md](./docs/modules.md)** — the modules under `modules/`: purpose, support status (supported, disabled by default, manifest only), external services each one needs, and a link to each module's own README.
 - **[KNOWN_ISSUES.md](./KNOWN_ISSUES.md)** — the honest residuals list: carve-time leftovers, design deltas, naming debt carried into 0.1.0, and the open governance-invariant limitation (audit-chain tail truncation).
 - **[SECURITY.md](./SECURITY.md)** — supported versions and how to report a vulnerability privately.
 - **[CODE_OF_CONDUCT.md](./CODE_OF_CONDUCT.md)** — Contributor Covenant 2.1 and the enforcement contact.

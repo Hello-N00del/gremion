@@ -184,7 +184,11 @@ describe('switchLocale form action (TASK-062 TDD 5)', () => {
     ['/././/evil.example'],
     ['/.//evil.example'],
     ['/%2e//evil.example'],
-    ['/..//evil.example']
+    ['/..//evil.example'],
+    ['/%2f/evil.example'],
+    ['/%2F/evil.example'],
+    ['/%5c/evil.example'],
+    ['/a/%2f%2fevil.example']
   ])('a redirectTo %j that collapses to a protocol-relative path falls back to the settings page', async (redirectTo) => {
     const outcome = await run(switchLocale(makeEvent({ locale: 'de', redirectTo }).event, deps(vi.fn() as never, null)))
     expect(outcome).toMatchObject({ status: 303, location: '/settings/darstellung' })

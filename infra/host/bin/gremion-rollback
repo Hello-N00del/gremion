@@ -181,7 +181,7 @@ rollback_class_b() { # <colour> <target tag>
     # shell option stays on for everything else in this function.
     "$prog" "$2" --no-switch --soak-minutes "${SOAK_MINUTES_OPT:-0}" || rc=$?
     if [[ "$rc" -eq 2 ]]; then
-        die "class (b) rollback needs the registry token on stdin: printf 'TOKEN <value>\\n' | gremion-rollback --to-tag $2" 2
+        die "class (b) rollback needs the registry token on stdin: printf 'TOKEN <value>\\n' | gremion-rollback --to-tag $2 (or a GREMION_REGISTRY_TOKEN_FILE that gremion-deploy accepts; see its message above)" 2
     fi
     [[ "$rc" -eq 0 ]] || exit "$rc"
     prog="$(bin_path gremion-switch)"
