@@ -7,14 +7,18 @@
 // writes carry a second overload with `tx` as the leading parameter,
 // matching the finance reference repo (finance-unit-db.ts).
 //
-// P0.3a: the atomic outbox enqueue (org_unit INSERT + provisioning_resources
+// P0.3a: the atomic provisioning enqueue (org_unit INSERT + provisioning_resources
 // 'pending' rows in one BEGIN/COMMIT) lives at the three creator ROUTES, not
-// here. Both overloads of createOrgUnit are side-effect-free bare INSERTs so
-// that all callers — including seed.ts and integration tests — see identical
-// semantics regardless of whether they supply a tx.
+// here. The ONE side effect these writes carry is the org-unit EVENT outbox row
+// (org_unit_event_outbox, see ./org-unit-event-outbox): createOrgUnit /
+// updateOrgUnit / deleteOrgUnit enqueue it on the SAME runner as the org_units
+// DML, so it co-commits with the write (a rollback drops both) and it is a no-op
+// when NATS_URL is unset. The relay (./register.server) publishes it so the
+// finance org_unit_mirror stays in sync.
 import { getDb } from '../db'
 import { getRunner as genericGetRunner, unpackTxArgs, type PgTransaction } from '$lib/server/db/tx'
 import { loadOrgSchema, type OrgSchema } from './org-schema'
+import { enqueueOrgUnitEvent } from './org-unit-event-outbox'
 
 /** Governance-pool-defaulting runner (was reverse-imported from finance, P0.1).
  *  getDb is passed as a factory to preserve the lazy `tx ?? pool()` short-circuit. */
@@ -96,9 +100,9 @@ export async function createOrgUnit(
   txOrData: PgTransaction | CreateOrgUnitInput, maybeData?: CreateOrgUnitInput
 ): Promise<OrgUnit> {
   const { tx, data } = unpackTxArgs<CreateOrgUnitInput>(txOrData, maybeData)
-  // Both overloads: bare INSERT only. Atomicity (INSERT + enqueueResources in one
-  // BEGIN/COMMIT) is the responsibility of each creator route, not this DB helper.
-  // This keeps seed.ts and integration-test callers side-effect-free.
+  // Both overloads: INSERT (+ the co-committed event outbox row). Atomicity of
+  // INSERT + enqueueResources in one BEGIN/COMMIT is the responsibility of each
+  // creator route, not this DB helper.
   const sql = getRunner(tx)
   const rows = await sql<OrgUnit[]>`
     INSERT INTO org_units
@@ -108,7 +112,14 @@ export async function createOrgUnit(
        ${data.visibility}, ${data.wantsMatrixRoom}, ${data.wantsNextcloudFolder}, ${data.childTerm ?? null},
        ${data.kindLabel ?? null}, ${data.authority ?? 'deciding'})
     RETURNING *`
-  return rows[0]!
+  const created = rows[0]!
+  // Co-commit the mirror-resync event on the SAME runner (no-op without NATS_URL).
+  await enqueueOrgUnitEvent(sql, {
+    eventType: 'upserted',
+    aggregateId: created.id,
+    payload: { id: created.id, name: created.name, kind: created.kind, parent_id: created.parent_id },
+  })
+  return created
 }
 
 export interface UpdateOrgUnitPatch {
@@ -145,7 +156,17 @@ export async function updateOrgUnit(
       visibility = COALESCE(${data.visibility ?? null}, visibility)
     WHERE id = ${id}
     RETURNING *`
-  return rows[0] ?? null
+  const updated = rows[0] ?? null
+  // Co-commit the mirror-resync event with the fresh snapshot, only when a row
+  // matched (no-op without NATS_URL).
+  if (updated !== null) {
+    await enqueueOrgUnitEvent(sql, {
+      eventType: 'upserted',
+      aggregateId: updated.id,
+      payload: { id: updated.id, name: updated.name, kind: updated.kind, parent_id: updated.parent_id },
+    })
+  }
+  return updated
 }
 
 /** FLOW-MSG-001 (TASK-009 lane B): flips one subsystem's `wants_*` flag. Always called
@@ -172,7 +193,12 @@ export async function deleteOrgUnit(
   const tx = typeof txOrId === 'function' ? (txOrId as PgTransaction) : undefined
   const id = typeof txOrId === 'function' ? (maybeId as string) : (txOrId as string)
   const sql = getRunner(tx)
-  await sql`DELETE FROM org_units WHERE id = ${id}`
+  const deleted = await sql<{ id: string }[]>`DELETE FROM org_units WHERE id = ${id} RETURNING id`
+  // Co-commit the tombstone event, only when a row was actually deleted (no-op
+  // without NATS_URL).
+  if (deleted.length > 0) {
+    await enqueueOrgUnitEvent(sql, { eventType: 'deleted', aggregateId: id, payload: { id } })
+  }
 }
 
 export async function listOrgUnitMembers(orgUnitId: string): Promise<readonly OrgUnitMember[]> {
