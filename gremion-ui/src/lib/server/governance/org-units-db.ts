@@ -7,18 +7,37 @@
 // writes carry a second overload with `tx` as the leading parameter,
 // matching the finance reference repo (finance-unit-db.ts).
 //
-// P0.3a: the atomic outbox enqueue (org_unit INSERT + provisioning_resources
+// P0.3a: the atomic provisioning enqueue (org_unit INSERT + provisioning_resources
 // 'pending' rows in one BEGIN/COMMIT) lives at the three creator ROUTES, not
-// here. Both overloads of createOrgUnit are side-effect-free bare INSERTs so
-// that all callers — including seed.ts and integration tests — see identical
-// semantics regardless of whether they supply a tx.
+// here. The ONE side effect these writes carry is the org-unit EVENT outbox row
+// (org_unit_event_outbox, see ./org-unit-event-outbox): createOrgUnit /
+// updateOrgUnit / deleteOrgUnit enqueue it on the SAME runner as the org_units
+// DML, so the two always commit or roll back together. With a caller-supplied tx
+// that is the caller's transaction; the pool overloads open their own (see
+// withWriteTx), so a failed enqueue never leaves a committed write with no event.
+// It is a no-op when NATS_URL is unset. The relay (./register.server) publishes it
+// so the finance org_unit_mirror stays in sync.
 import { getDb } from '../db'
-import { getRunner as genericGetRunner, unpackTxArgs, type PgTransaction } from '$lib/server/db/tx'
+import { getRunner as genericGetRunner, unpackTxArgs, type PgTransaction, type SqlRunner } from '$lib/server/db/tx'
 import { loadOrgSchema, type OrgSchema } from './org-schema'
+import { enqueueOrgUnitEvent, type OrgUnitEventInput } from './org-unit-event-outbox'
 
 /** Governance-pool-defaulting runner (was reverse-imported from finance, P0.1).
  *  getDb is passed as a factory to preserve the lazy `tx ?? pool()` short-circuit. */
 const getRunner = (tx: PgTransaction | undefined) => genericGetRunner(tx, getDb)
+
+/** Run an org_units write together with its event outbox row. With a caller tx the
+ *  body runs on it (co-commits with the caller's other work). Without one the pool
+ *  overloads must not run the DML and the enqueue as two autocommit statements - a
+ *  failed enqueue would leave a committed change and no outbox row for anything
+ *  downstream to detect - so the body runs on a transaction of its own. */
+async function withWriteTx<T>(
+  tx: PgTransaction | undefined,
+  body: (sql: SqlRunner) => Promise<T>
+): Promise<T> {
+  if (tx) return body(tx)
+  return (await getDb().begin((own) => body(own))) as T
+}
 
 /** Tenant kind key — per-tenant catalog, no longer a closed union (P2.2). */
 export type OrgUnitKind = string
@@ -73,6 +92,15 @@ export async function getChildOrgUnits(parentId: string): Promise<readonly OrgUn
   return getDb()<OrgUnit[]>`SELECT * FROM org_units WHERE parent_id = ${parentId} ORDER BY name`
 }
 
+/** The 'upserted' event for an org_units row: the snapshot the finance mirror needs. */
+function upsertedEvent(u: Pick<OrgUnit, 'id' | 'name' | 'kind' | 'parent_id'>): OrgUnitEventInput {
+  return {
+    eventType: 'upserted',
+    aggregateId: u.id,
+    payload: { id: u.id, name: u.name, kind: u.kind, parent_id: u.parent_id },
+  }
+}
+
 export interface CreateOrgUnitInput {
   name: string
   description: string | null
@@ -96,19 +124,23 @@ export async function createOrgUnit(
   txOrData: PgTransaction | CreateOrgUnitInput, maybeData?: CreateOrgUnitInput
 ): Promise<OrgUnit> {
   const { tx, data } = unpackTxArgs<CreateOrgUnitInput>(txOrData, maybeData)
-  // Both overloads: bare INSERT only. Atomicity (INSERT + enqueueResources in one
-  // BEGIN/COMMIT) is the responsibility of each creator route, not this DB helper.
-  // This keeps seed.ts and integration-test callers side-effect-free.
-  const sql = getRunner(tx)
-  const rows = await sql<OrgUnit[]>`
-    INSERT INTO org_units
-      (name, description, parent_id, kind, visibility, wants_matrix_room, wants_nextcloud_folder, child_term, kind_label, authority)
-    VALUES
-      (${data.name}, ${data.description}, ${data.parentId}, ${data.kind},
-       ${data.visibility}, ${data.wantsMatrixRoom}, ${data.wantsNextcloudFolder}, ${data.childTerm ?? null},
-       ${data.kindLabel ?? null}, ${data.authority ?? 'deciding'})
-    RETURNING *`
-  return rows[0]!
+  // Both overloads: INSERT (+ the co-committed event outbox row). Atomicity of
+  // INSERT + enqueueResources in one BEGIN/COMMIT is the responsibility of each
+  // creator route, not this DB helper.
+  return withWriteTx(tx, async (sql) => {
+    const rows = await sql<OrgUnit[]>`
+      INSERT INTO org_units
+        (name, description, parent_id, kind, visibility, wants_matrix_room, wants_nextcloud_folder, child_term, kind_label, authority)
+      VALUES
+        (${data.name}, ${data.description}, ${data.parentId}, ${data.kind},
+         ${data.visibility}, ${data.wantsMatrixRoom}, ${data.wantsNextcloudFolder}, ${data.childTerm ?? null},
+         ${data.kindLabel ?? null}, ${data.authority ?? 'deciding'})
+      RETURNING *`
+    const created = rows[0]!
+    // Same runner as the INSERT: the mirror-resync event co-commits (no-op without NATS_URL).
+    await enqueueOrgUnitEvent(sql, upsertedEvent(created))
+    return created
+  })
 }
 
 export interface UpdateOrgUnitPatch {
@@ -136,16 +168,20 @@ export async function updateOrgUnit(
     id = txOrId as string
     data = idOrData as UpdateOrgUnitPatch
   }
-  const sql = getRunner(tx)
-  const rows = await sql<OrgUnit[]>`
-    UPDATE org_units SET
-      name = COALESCE(${data.name ?? null}, name),
-      description = ${data.description !== undefined ? data.description : sql`description`},
-      child_term = ${data.childTerm !== undefined ? data.childTerm : sql`child_term`},
-      visibility = COALESCE(${data.visibility ?? null}, visibility)
-    WHERE id = ${id}
-    RETURNING *`
-  return rows[0] ?? null
+  return withWriteTx(tx, async (sql) => {
+    const rows = await sql<OrgUnit[]>`
+      UPDATE org_units SET
+        name = COALESCE(${data.name ?? null}, name),
+        description = ${data.description !== undefined ? data.description : sql`description`},
+        child_term = ${data.childTerm !== undefined ? data.childTerm : sql`child_term`},
+        visibility = COALESCE(${data.visibility ?? null}, visibility)
+      WHERE id = ${id}
+      RETURNING *`
+    const updated = rows[0] ?? null
+    // The fresh snapshot, only when a row matched (no-op without NATS_URL).
+    if (updated !== null) await enqueueOrgUnitEvent(sql, upsertedEvent(updated))
+    return updated
+  })
 }
 
 /** FLOW-MSG-001 (TASK-009 lane B): flips one subsystem's `wants_*` flag. Always called
@@ -171,8 +207,13 @@ export async function deleteOrgUnit(
 ): Promise<void> {
   const tx = typeof txOrId === 'function' ? (txOrId as PgTransaction) : undefined
   const id = typeof txOrId === 'function' ? (maybeId as string) : (txOrId as string)
-  const sql = getRunner(tx)
-  await sql`DELETE FROM org_units WHERE id = ${id}`
+  await withWriteTx(tx, async (sql) => {
+    const deleted = await sql<{ id: string }[]>`DELETE FROM org_units WHERE id = ${id} RETURNING id`
+    // The tombstone, only when a row was actually deleted (no-op without NATS_URL).
+    if (deleted.length > 0) {
+      await enqueueOrgUnitEvent(sql, { eventType: 'deleted', aggregateId: id, payload: { id } })
+    }
+  })
 }
 
 export async function listOrgUnitMembers(orgUnitId: string): Promise<readonly OrgUnitMember[]> {

@@ -364,9 +364,10 @@ export function calendarSubject(tenantId: string, event: CalendarEvent): string 
 export type OrgUnitEvent = 'upserted' | 'deleted'
 
 /** Subject grammar for the org-unit mirror domain: gremion.{tenantId}.org-unit.{event}.
- *  THE single place the org-unit wire subject is built. Neither end is in this
- *  repo yet: the relay that publishes these and the finance-side consumer both
- *  live in the module repo. The `org-unit` domain token keeps it DISJOINT from
+ *  THE single place the org-unit wire subject is built. The producer is the
+ *  org-unit event relay in gremion-ui (src/lib/server/governance/, fed by the
+ *  org_unit_event_outbox); the consumer is modules/finance (org-unit-consumer).
+ *  The `org-unit` domain token keeps it DISJOINT from
  *  the 5-token provisioning grammar (gremion.<t>.provisioning.org-unit.<event>) and
  *  from newsletter/content/calendar (proved by nats-topology.test.ts). */
 export function orgUnitSubject(tenantId: string, event: OrgUnitEvent): string {
