@@ -9,8 +9,20 @@ const kc = {
   updateGroup: vi.fn(),
   deleteGroup: vi.fn(),
 }
+// The route branches on `instanceof KcAdminError`, so the mocked module must
+// export a class of its own; the test throws instances of that same class.
+const { KcAdminError } = vi.hoisted(() => {
+  class KcAdminError extends Error {
+    constructor(readonly status: number, body: string) {
+      super(`Keycloak Admin API error: ${status} ${body}`)
+      this.name = 'KcAdminError'
+    }
+  }
+  return { KcAdminError }
+})
 vi.mock('$lib/server/keycloak-admin', () => ({
   getKeycloakAdminClient: () => kc,
+  KcAdminError,
 }))
 vi.mock('$lib/auth', () => ({
   hasRole: vi.fn(() => true),
@@ -74,6 +86,28 @@ describe('api/groups/[id] id validation', () => {
     const del = await DELETE({ params: { id: UUID }, locals })
     expect(del.status).toBe(200)
     expect(kc.deleteGroup).toHaveBeenCalledWith(UUID)
+  })
+
+  it('GET: kc.getGroup rejecting KcAdminError(404) answers 404 Gruppe nicht gefunden', async () => {
+    kc.getGroup.mockRejectedValueOnce(new KcAdminError(404, 'x'))
+    // @ts-expect-error partial event
+    const res = await GET({ params: { id: UUID }, locals })
+    expect(res.status).toBe(404)
+    expect(await res.json()).toEqual({ success: false, error: 'Gruppe nicht gefunden' })
+  })
+
+  it('GET: a KcAdminError(500) whose body mentions 404 is rethrown, not turned into a 404', async () => {
+    const upstream = new KcAdminError(500, '{"error":"upstream /groups/404 failed"}')
+    kc.getGroup.mockRejectedValueOnce(upstream)
+    // @ts-expect-error partial event
+    await expect(GET({ params: { id: UUID }, locals })).rejects.toBe(upstream)
+  })
+
+  it('GET: the old "Group not found" string no longer maps to a 404 (status is the only signal)', async () => {
+    const plain = new Error('Group not found')
+    kc.getGroup.mockRejectedValueOnce(plain)
+    // @ts-expect-error partial event
+    await expect(GET({ params: { id: UUID }, locals })).rejects.toBe(plain)
   })
 
   it('the role check still runs first: a non-admin gets 403, not a 404 oracle', async () => {

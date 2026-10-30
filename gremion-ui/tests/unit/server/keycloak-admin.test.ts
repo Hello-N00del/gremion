@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest'
 import { setupServer } from 'msw/node'
 import { http, HttpResponse } from 'msw'
-import { KeycloakAdminClient } from '$lib/server/keycloak-admin'
+import { KeycloakAdminClient, KcAdminError } from '$lib/server/keycloak-admin'
 
 const BASE = 'http://kc-test:8080'
 const REALM = 'test-realm'
@@ -149,6 +149,18 @@ describe('KeycloakAdminClient', () => {
   it('request — throws on 4xx', async () => {
     const client = makeClient()
     await expect(client.getUser('bad-id')).rejects.toThrow('User not found')
+  })
+
+  it('request — a 500 whose body mentions 404 is not reported as "User not found"', async () => {
+    server.use(
+      http.get(`${BASE}/admin/realms/${REALM}/users/some-id`, () =>
+        HttpResponse.json({ error: 'upstream /users/404 failed' }, { status: 500 }),
+      ),
+    )
+    const client = makeClient()
+    const err = await client.getUser('some-id').catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(KcAdminError)
+    expect((err as KcAdminError).status).toBe(500)
   })
 
   it('request — throws on network failure', async () => {
