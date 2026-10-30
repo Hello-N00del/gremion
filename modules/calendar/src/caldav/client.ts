@@ -74,9 +74,82 @@ export function vtimezone(): string {
   ].join('\r\n')
 }
 
-function formatIcsDateTime(d: Date, allDay: boolean): string {
-  if (allDay) return d.toISOString().slice(0, 10).replace(/-/g, '')
+// F1-FIX-08 (S1c#13): RFC 5545 forbids a UTC 'Z' value on a TZID property.
+// Timed DTSTART/DTEND/EXDATE are written as Europe/Berlin wall time with TZID
+// (the VTIMEZONE above), which also keeps a recurring series at the same
+// local time across DST. DTSTAMP and a timed RRULE UNTIL stay UTC ('Z').
+const berlinWall = new Intl.DateTimeFormat('en-US', {
+  timeZone: 'Europe/Berlin',
+  hourCycle: 'h23',
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+  hour: '2-digit',
+  minute: '2-digit',
+  second: '2-digit',
+})
+
+function berlinParts(d: Date): Record<string, number> {
+  const p: Record<string, number> = {}
+  for (const part of berlinWall.formatToParts(d)) if (part.type !== 'literal') p[part.type] = Number(part.value)
+  return p
+}
+
+function formatBerlinLocal(d: Date): string {
+  const p: Record<string, string> = {}
+  for (const part of berlinWall.formatToParts(d)) p[part.type] = part.value
+  return `${p.year}${p.month}${p.day}T${p.hour}${p.minute}${p.second}`
+}
+
+function formatUtc(d: Date): string {
   return d.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '')
+}
+
+function formatDate(d: Date): string {
+  return d.toISOString().slice(0, 10).replace(/-/g, '')
+}
+
+function formatIcsDateTime(d: Date, allDay: boolean): string {
+  return allDay ? formatDate(d) : formatBerlinLocal(d)
+}
+
+// event_recurrence.until / exceptions are DATE columns. postgres.js returns them
+// as UTC midnight (node-postgres under TZ=Europe/Berlin as Berlin midnight);
+// either way they name a Europe/Berlin civil day, never an instant. Mirrors the
+// in-process app half (modules/calendar/app recurrence-expand.ts); the leaf is
+// standalone and cannot import it.
+const DAY_MS = 86_400_000
+
+/** Berlin civil day (days since epoch) of a recurrence DATE value. */
+function recurrenceDateDay(value: Date | string): number {
+  const p = berlinParts(new Date(value))
+  return Date.UTC(p.year!, p.month! - 1, p.day!) / DAY_MS
+}
+
+function civilDayYmd(civilDay: number): string {
+  return new Date(civilDay * DAY_MS).toISOString().slice(0, 10).replace(/-/g, '')
+}
+
+/** Last second of the until's Berlin civil day, as an instant (the UTC UNTIL). */
+function endOfUntilDay(value: Date | string): Date {
+  const naive = (recurrenceDateDay(value) + 1) * DAY_MS // next Berlin midnight, as if UTC
+  const offsetAt = (t: number) => {
+    const p = berlinParts(new Date(t))
+    return Date.UTC(p.year!, p.month! - 1, p.day!, p.hour!, p.minute!, p.second!) - t
+  }
+  let t = naive - offsetAt(naive)
+  t = naive - offsetAt(t) // second pass fixes the DST edge
+  return new Date(t - 1000)
+}
+
+/**
+ * All-day DTEND is EXCLUSIVE (RFC 5545 3.6.1): the day after the last day.
+ * Stored ends are inclusive (holidays: 23:59:59Z) or already exclusive (next
+ * day 00:00Z); both map to the same exclusive date.
+ */
+function allDayExclusiveEnd(start: Date, end: Date): string {
+  const lastDay = new Date(Math.max(end.getTime() - 1, start.getTime()))
+  return formatDate(new Date(Date.UTC(lastDay.getUTCFullYear(), lastDay.getUTCMonth(), lastDay.getUTCDate() + 1)))
 }
 
 function escapeText(s: string): string {
@@ -88,12 +161,16 @@ function escapeText(s: string): string {
     .replace(/\r\n|\r|\n/g, '\\n')
 }
 
-function buildRRule(r: DbRecurrence): string {
+function buildRRule(r: DbRecurrence, allDay: boolean): string {
   const parts: string[] = [`FREQ=${r.frequency.toUpperCase()}`]
   if (r.interval && r.interval > 1) parts.push(`INTERVAL=${r.interval}`)
   if (r.count) parts.push(`COUNT=${r.count}`)
-  if (r.until)
-    parts.push(`UNTIL=${formatIcsDateTime(r.until, false).replace(/Z$/, '') + 'Z'}`)
+  // UNTIL takes the DTSTART value type: DATE for all-day, UTC for TZID times.
+  // r.until is an inclusive civil day: the timed form is the last second of
+  // that Berlin day, so the meeting on the end date stays in the series.
+  if (r.until) {
+    parts.push(`UNTIL=${allDay ? civilDayYmd(recurrenceDateDay(r.until)) : formatUtc(endOfUntilDay(r.until))}`)
+  }
   if (r.byday && r.byday.length > 0) {
     // K4#21: defence in depth behind the API schema - a raw string here would
     // be CRLF / property injection into the ICS body.
@@ -106,14 +183,16 @@ function buildRRule(r: DbRecurrence): string {
 }
 
 export function buildIcs(event: IcsEvent): string {
-  const dtstamp = formatIcsDateTime(new Date(), false)
+  const dtstamp = formatUtc(new Date())
   const dtstart = formatIcsDateTime(event.dtstart, event.allDay)
-  const dtend = formatIcsDateTime(event.dtend, event.allDay)
+  const dtend = event.allDay
+    ? allDayExclusiveEnd(event.dtstart, event.dtend)
+    : formatIcsDateTime(event.dtend, false)
 
   const lines: string[] = [
     'BEGIN:VCALENDAR',
     'VERSION:2.0',
-    'PRODID:-//StuRaOS//StuRaOS Calendar//DE',
+    'PRODID:-//Gremion//Gremion Calendar//DE',
     'CALSCALE:GREGORIAN',
     'METHOD:PUBLISH',
     vtimezone(),
@@ -134,10 +213,16 @@ export function buildIcs(event: IcsEvent): string {
     lines.push(foldLine('LOCATION:' + escapeText(event.location)))
 
   if (event.recurrence) {
-    lines.push(foldLine('RRULE:' + buildRRule(event.recurrence)))
+    lines.push(foldLine('RRULE:' + buildRRule(event.recurrence, event.allDay)))
     if (event.recurrence.exceptions && event.recurrence.exceptions.length > 0) {
+      // exceptions are DATE values (civil days): a timed EXDATE is that day at
+      // DTSTART's Berlin wall time, so it matches the instance it removes.
+      const wallTime = formatBerlinLocal(event.dtstart).slice(9)
       const exdates = event.recurrence.exceptions
-        .map((d) => formatIcsDateTime(d, event.allDay))
+        .map((d) => {
+          const ymd = civilDayYmd(recurrenceDateDay(d))
+          return event.allDay ? ymd : `${ymd}T${wallTime}`
+        })
         .join(',')
       lines.push(
         foldLine(

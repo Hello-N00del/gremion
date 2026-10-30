@@ -122,6 +122,132 @@ describe('buildIcs', () => {
   })
 })
 
+// F1-FIX-08 (S1c#13), leaf twin of the in-process caldav-client tests: a TZID
+// property never carries a UTC 'Z' value (RFC 5545 3.3.5), timed values are
+// Europe/Berlin wall time, all-day DTEND is exclusive, and recurrence
+// until/exceptions (DATE columns) name Berlin civil days.
+describe('buildIcs - RFC 5545 wall times and civil-day recurrence (F1-FIX-08)', () => {
+  const unfold = (ics: string) => ics.replace(/\r\n /g, '')
+  const lineOf = (ics: string, prop: string) =>
+    unfold(ics).split('BEGIN:VEVENT')[1]!.split('\r\n').find((l) => l.startsWith(prop))
+  const base = { description: null, location: null }
+
+  it('timed values are Europe/Berlin wall time with TZID and no Z (winter and summer)', () => {
+    const winter = buildIcs({
+      ...base, uid: 'w', summary: 'x', allDay: false,
+      dtstart: new Date('2026-01-05T17:00:00Z'), dtend: new Date('2026-06-15T13:30:00Z'),
+    })
+    expect(lineOf(winter, 'DTSTART')).toBe('DTSTART;TZID=Europe/Berlin:20260105T180000')
+    expect(lineOf(winter, 'DTEND')).toBe('DTEND;TZID=Europe/Berlin:20260615T153000')
+
+    const summer = buildIcs({
+      ...base, uid: 's', summary: 'x', allDay: false,
+      dtstart: new Date('2026-05-01T10:00:00Z'), dtend: new Date('2026-05-01T11:00:00Z'),
+    })
+    expect(lineOf(summer, 'DTSTART')).toBe('DTSTART;TZID=Europe/Berlin:20260501T120000')
+  })
+
+  it('DTSTAMP stays UTC with Z', () => {
+    const ics = buildIcs({
+      ...base, uid: 'z', summary: 'x', allDay: false,
+      dtstart: new Date('2026-01-05T17:00:00Z'), dtend: new Date('2026-01-05T18:00:00Z'),
+    })
+    expect(lineOf(ics, 'DTSTAMP')).toMatch(/^DTSTAMP:\d{8}T\d{6}Z$/)
+  })
+
+  it('a weekly series keeps the same local wall time across the DST change', () => {
+    // 18:00 Berlin before (CET, 17:00Z) and after (CEST, 16:00Z) the 2026-03-29 switch:
+    // both instances render as T180000, and the series DTSTART carries the wall time.
+    const before = buildIcs({
+      ...base, uid: 'dst-a', summary: 'x', allDay: false,
+      dtstart: new Date('2026-03-23T17:00:00Z'), dtend: new Date('2026-03-23T18:00:00Z'),
+    })
+    const after = buildIcs({
+      ...base, uid: 'dst-b', summary: 'x', allDay: false,
+      dtstart: new Date('2026-03-30T16:00:00Z'), dtend: new Date('2026-03-30T17:00:00Z'),
+    })
+    expect(lineOf(before, 'DTSTART')).toBe('DTSTART;TZID=Europe/Berlin:20260323T180000')
+    expect(lineOf(after, 'DTSTART')).toBe('DTSTART;TZID=Europe/Berlin:20260330T180000')
+  })
+
+  it('all-day DTEND is exclusive (inclusive stored end and already-exclusive stored end)', () => {
+    const inclusive = buildIcs({
+      ...base, uid: 'h', summary: 'Feiertag', allDay: true,
+      dtstart: new Date('2026-10-03T00:00:00Z'), dtend: new Date('2026-10-03T23:59:59Z'),
+    })
+    expect(lineOf(inclusive, 'DTEND')).toBe('DTEND;VALUE=DATE:20261004')
+    const exclusive = buildIcs({
+      ...base, uid: 'h2', summary: 'Feiertag', allDay: true,
+      dtstart: new Date('2026-10-03T00:00:00Z'), dtend: new Date('2026-10-04T00:00:00Z'),
+    })
+    expect(lineOf(exclusive, 'DTEND')).toBe('DTEND;VALUE=DATE:20261004')
+  })
+
+  it('timed EXDATE is the exception day at the DTSTART wall time; timed UNTIL is the last second of the day in UTC', () => {
+    const ics = buildIcs({
+      ...base, uid: 'r', summary: 'x', allDay: false,
+      dtstart: new Date('2026-01-05T17:00:00Z'), dtend: new Date('2026-01-05T18:00:00Z'),
+      recurrence: {
+        frequency: 'weekly', interval: 1, count: null,
+        until: new Date('2026-03-30T16:00:00Z'), exceptions: [new Date('2026-01-12T17:00:00Z')],
+        byday: ['MO'],
+      },
+    })
+    expect(lineOf(ics, 'EXDATE')).toBe('EXDATE;TZID=Europe/Berlin:20260112T180000')
+    // 2026-03-30 is CEST: the Berlin day ends 21:59:59Z.
+    expect(lineOf(ics, 'RRULE')).toBe('RRULE:FREQ=WEEKLY;UNTIL=20260330T215959Z;BYDAY=MO')
+  })
+
+  it('DATE-shaped until / exceptions (UTC midnight from the DATE column) name the Berlin civil day', () => {
+    const ics = buildIcs({
+      ...base, uid: 'd', summary: 'x', allDay: false,
+      dtstart: new Date('2026-01-05T17:00:00Z'), dtend: new Date('2026-01-05T18:00:00Z'),
+      recurrence: {
+        frequency: 'weekly', interval: 1, count: null, byday: null,
+        until: new Date('2026-01-19'), exceptions: [new Date('2026-01-12')],
+      },
+    })
+    // The 18:00 meeting on 2026-01-19 stays in: UNTIL is 22:59:59Z that day (CET).
+    expect(lineOf(ics, 'RRULE')).toBe('RRULE:FREQ=WEEKLY;UNTIL=20260119T225959Z')
+    expect(lineOf(ics, 'EXDATE')).toBe('EXDATE;TZID=Europe/Berlin:20260112T180000')
+  })
+
+  it('Berlin-midnight until resolves to the same civil day as the UTC-midnight form', () => {
+    const rec = (until: Date) => ({
+      frequency: 'weekly' as const, interval: 1, count: null, byday: null, exceptions: null, until,
+    })
+    const args = {
+      ...base, uid: 'm', summary: 'x', allDay: false,
+      dtstart: new Date('2026-01-05T17:00:00Z'), dtend: new Date('2026-01-05T18:00:00Z'),
+    }
+    const utcMidnight = buildIcs({ ...args, recurrence: rec(new Date('2026-01-19T00:00:00Z')) })
+    const berlinMidnight = buildIcs({ ...args, recurrence: rec(new Date('2026-01-18T23:00:00Z')) })
+    expect(lineOf(utcMidnight, 'RRULE')).toBe('RRULE:FREQ=WEEKLY;UNTIL=20260119T225959Z')
+    expect(lineOf(berlinMidnight, 'RRULE')).toBe('RRULE:FREQ=WEEKLY;UNTIL=20260119T225959Z')
+  })
+
+  it('all-day series: UNTIL and EXDATE are the civil date (also from Berlin midnight)', () => {
+    const ics = buildIcs({
+      ...base, uid: 'a', summary: 'x', allDay: true,
+      dtstart: new Date('2026-01-05T00:00:00Z'), dtend: new Date('2026-01-05T23:59:59Z'),
+      recurrence: {
+        frequency: 'weekly', interval: 1, count: null, byday: null,
+        until: new Date('2026-01-18T23:00:00Z'), exceptions: [new Date('2026-01-11T23:00:00Z')],
+      },
+    })
+    expect(lineOf(ics, 'RRULE')).toBe('RRULE:FREQ=WEEKLY;UNTIL=20260119')
+    expect(lineOf(ics, 'EXDATE')).toBe('EXDATE;VALUE=DATE:20260112')
+  })
+
+  it('PRODID carries the product name, not a deployment name', () => {
+    const ics = buildIcs({
+      ...base, uid: 'p', summary: 'x', allDay: false,
+      dtstart: new Date('2026-01-05T17:00:00Z'), dtend: new Date('2026-01-05T18:00:00Z'),
+    })
+    expect(ics).toContain('PRODID:-//Gremion//Gremion Calendar//DE')
+  })
+})
+
 describe('vtimezone', () => {
   it('emits a static Europe/Berlin VTIMEZONE block', () => {
     const vtz = vtimezone()
