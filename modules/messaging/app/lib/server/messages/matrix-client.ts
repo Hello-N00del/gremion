@@ -21,6 +21,22 @@ const matrixTokenCache = new Map<string, CachedMatrixToken>()
 // all firing a /login request simultaneously (thundering herd on server restart).
 const matrixTokenInflight = new Map<string, Promise<string>>()
 
+/** Synapse rejected this user token (admin logout, device deletion, expiry):
+ *  401, or errcode M_UNKNOWN_TOKEN. */
+function isDeadTokenResponse(status: number, errcode: unknown): boolean {
+  return status === 401 || errcode === 'M_UNKNOWN_TOKEN'
+}
+
+/** Evict every cached Matrix token equal to `token`, so the next request
+ *  re-exchanges instead of failing until the 1 h TTL. Admin/bot tokens never
+ *  appear in the cache, so passing one is a harmless no-op. */
+export function evictMatrixToken(token: string): void {
+  if (!token) return
+  for (const [key, entry] of matrixTokenCache) {
+    if (entry.matrixToken === token) matrixTokenCache.delete(key)
+  }
+}
+
 /** Decode a JWT payload without verifying the signature (server-side only). */
 function decodeJwtPayload(jwt: string): Record<string, unknown> {
   try {
@@ -83,8 +99,9 @@ class MatrixClient {
       body: body !== undefined ? JSON.stringify(body) : undefined
     })
     if (!res.ok) {
-      const err = await res.json().catch(() => ({}))
-      throw new Error(`Matrix ${method} ${path} → ${res.status}: ${(err as { error?: string }).error ?? ''}`)
+      const err = (await res.json().catch(() => ({}))) as { error?: string; errcode?: string }
+      if (token && isDeadTokenResponse(res.status, err.errcode)) evictMatrixToken(token)
+      throw new Error(`Matrix ${method} ${path} → ${res.status}: ${err.error ?? ''}`)
     }
     if (res.status === 204) return null
     return res.json()
@@ -401,7 +418,10 @@ class MatrixClient {
         body: data
       }
     )
-    if (!res.ok) throw new Error(`Media upload failed: ${res.status}`)
+    if (!res.ok) {
+      if (isDeadTokenResponse(res.status, undefined)) evictMatrixToken(userToken)
+      throw new Error(`Media upload failed: ${res.status}`)
+    }
     const json = await res.json()
     return (json as { content_uri: string }).content_uri
   }

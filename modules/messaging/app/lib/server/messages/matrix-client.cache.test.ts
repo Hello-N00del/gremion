@@ -77,3 +77,64 @@ describe('MatrixClient token cache tenant isolation', () => {
     })
   })
 })
+
+describe('MatrixClient evicts a token Synapse has invalidated', () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  function stub(failStatus: number, failBody: unknown) {
+    let n = 0
+    const f = vi.fn(async (url: string) => {
+      if (String(url).includes('/login')) {
+        return new Response(JSON.stringify({ access_token: `mx-${++n}` }), { status: 200 })
+      }
+      return new Response(JSON.stringify(failBody), { status: failStatus })
+    })
+    vi.stubGlobal('fetch', f)
+    return f
+  }
+  const loginCalls = (f: ReturnType<typeof vi.fn>) =>
+    f.mock.calls.filter((c) => String(c[0]).includes('/login')).length
+
+  it.each([
+    [401, { errcode: 'M_UNKNOWN_TOKEN', error: 'Unrecognised access token.' }],
+    [401, {}],
+    [403, { errcode: 'M_UNKNOWN_TOKEN', error: 'x' }],
+  ])('status %i %j on a user-token call evicts; next getMatrixToken re-exchanges', async (status, body) => {
+    const f = stub(status, body)
+    const { getMatrixClient, __resetMatrixCachesForTests } = await import('./matrix-client')
+    __resetMatrixCachesForTests()
+    activeTenant = 'a'
+    const jwt = jwtWithSub('evict-me')
+    const c = getMatrixClient()
+    const tok = await c.getMatrixToken(jwt)
+    await expect(c.getJoinedRooms(tok)).rejects.toThrow(/joined_rooms/)
+    expect(await c.getMatrixToken(jwt)).toBe('mx-2')
+    expect(loginCalls(f)).toBe(2)
+  })
+
+  it('media upload 401 evicts the user token', async () => {
+    const f = stub(401, { errcode: 'M_UNKNOWN_TOKEN', error: 'Unrecognised access token.' })
+    const { getMatrixClient, __resetMatrixCachesForTests } = await import('./matrix-client')
+    __resetMatrixCachesForTests()
+    activeTenant = 'a'
+    const jwt = jwtWithSub('evict-upload')
+    const c = getMatrixClient()
+    const tok = await c.getMatrixToken(jwt)
+    await expect(c.uploadMedia(tok, new ArrayBuffer(4), 'image/png', 'a.png')).rejects.toThrow(/Media upload failed/)
+    expect(await c.getMatrixToken(jwt)).toBe('mx-2')
+    expect(loginCalls(f)).toBe(2)
+  })
+
+  it('an unrelated failure (500) does not evict', async () => {
+    const f = stub(500, { error: 'boom' })
+    const { getMatrixClient, __resetMatrixCachesForTests } = await import('./matrix-client')
+    __resetMatrixCachesForTests()
+    activeTenant = 'a'
+    const jwt = jwtWithSub('keep-me')
+    const c = getMatrixClient()
+    const tok = await c.getMatrixToken(jwt)
+    await expect(c.getJoinedRooms(tok)).rejects.toThrow(/→ 500/)
+    expect(await c.getMatrixToken(jwt)).toBe('mx-1')
+    expect(loginCalls(f)).toBe(1)
+  })
+})
