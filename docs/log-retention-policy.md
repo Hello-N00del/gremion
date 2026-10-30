@@ -142,6 +142,13 @@ writing anything to the processed log. If pseudonymisation fails, the line is
 **dropped** — a raw IP is never persisted. The key epoch (`IPCRYPT_KEY_EPOCH`) is
 stamped on each record so a future key rotation is auditable.
 
+**NDJSON by contract:** the processed log holds one compact JSON object per physical
+line (`jq -c`). Vector's `file` source, logrotate and grep-based audit tooling are all
+line-oriented; a pretty-printed record would reach the retention filter as line
+fragments with no `RequestReceivedAt` and never be pruned. `test/process-logs.bats`
+asserts the framing under verify (with a stub `ipcrypt`), and
+`docker/vector/test-process-logs.sh` asserts it with the real binary.
+
 **Query-string redaction:** Traefik logs the full request path including the query
 string. `process-logs.sh` strips everything from the first `?` onward (replacing it
 with `?<redacted>`) so OIDC authorization codes, Keycloak `session_code` values,

@@ -56,7 +56,7 @@ const headers = (a: Actor): Record<string, string> => ({
   'x-finance-user-id': a.userId,
   'x-finance-is-auditor': 'false',
   'x-finance-is-superuser': String(!!a.isSuperuser),
-  ...(a.groups ? { 'x-finance-groups': a.groups.join(',') } : {}),
+  ...(a.groups ? { 'x-finance-groups-json': Buffer.from(JSON.stringify(a.groups), 'utf8').toString('base64url') } : {}),
 })
 
 describe('finance leaf -- one open approval and one live payment_order per approvable (H20)', () => {

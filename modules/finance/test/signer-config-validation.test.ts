@@ -28,7 +28,7 @@ const fakeStore = async () => fakeSql({ signer_stages: [], decision_authority_ti
 function fakeReq(body: unknown, groups = 'admin'): http.IncomingMessage {
   const raw = Buffer.from(JSON.stringify(body), 'utf8')
   return {
-    headers: { 'x-finance-groups': groups },
+    headers: { 'x-finance-groups-json': Buffer.from(JSON.stringify(groups.split(',')), 'utf8').toString('base64url') },
     [Symbol.asyncIterator]: async function* () {
       yield raw
     },
