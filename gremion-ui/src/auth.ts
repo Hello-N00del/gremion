@@ -92,6 +92,30 @@ export async function buildAuthConfig(event: RequestEvent): Promise<SvelteKitAut
   }
 }
 
+/** A transient refresh failure keeps the expired access token for this long (ms). */
+const REFRESH_GRACE_MS = 60_000
+/** 429 back-off: Retry-After as delta-seconds or HTTP-date; default 5 s when
+ *  missing/unparseable/non-positive; capped at 60 s (the refresh grace). */
+function retryAfterMs(header: string | null): number {
+  const DEFAULT_MS = 5_000
+  const CAP_MS = 60_000
+  let ms = DEFAULT_MS
+  const v = header?.trim()
+  if (v) {
+    if (/^\d+$/.test(v)) ms = Number(v) * 1000
+    else {
+      const t = Date.parse(v)
+      if (Number.isFinite(t)) ms = t - Date.now()
+    }
+  }
+  if (!(ms > 0)) ms = DEFAULT_MS
+  return Math.min(ms, CAP_MS)
+}
+
+function withinRefreshGrace(token: { accessTokenExpires?: unknown }): boolean {
+  return Date.now() < ((token.accessTokenExpires as number | undefined) ?? 0) + REFRESH_GRACE_MS
+}
+
 const jwtCallback: NonNullable<NonNullable<SvelteKitAuthConfig['callbacks']>['jwt']> =
   async ({ token, account, profile }) => {
       // First login — store tokens and roles
@@ -184,10 +208,18 @@ const jwtCallback: NonNullable<NonNullable<SvelteKitAuthConfig['callbacks']>['jw
         return { ...token, error: 'RefreshTokenMissing' }
       }
 
+      // 429 back-off: Keycloak asked us to wait; do not hammer it while the
+      // grace window still holds the (expired) access token usable.
+      if (Date.now() < ((token.refreshRetryAt as number | undefined) ?? 0) && withinRefreshGrace(token)) {
+        return token
+      }
+
+      let tenantId = 'unknown'
       try {
         // ALS tenant — set by tenantResolveHandle for this request. The refresh
         // must hit the SAME realm's token endpoint and use the same UI client.
         const tenant = getTenant()
+        tenantId = tenant.id
         const refreshBase = tenant.kcInternal.replace(/\/$/, '')
         const response = await fetch(
           `${refreshBase}/protocol/openid-connect/token`,
@@ -204,13 +236,34 @@ const jwtCallback: NonNullable<NonNullable<SvelteKitAuthConfig['callbacks']>['jw
         )
 
         if (!response.ok) {
-          return { ...token, error: 'RefreshTokenExpired' }
+          // Log status + Keycloak's OAuth `error` only (never tokens/secrets).
+          let oauthError = 'n/a'
+          try {
+            const body = JSON.parse(await response.text()) as { error?: unknown }
+            if (typeof body?.error === 'string') oauthError = body.error.slice(0, 64)
+          } catch { /* non-JSON body */ }
+          console.warn(`[auth] token refresh rejected tenant=${tenantId} status=${String(response.status).slice(0, 64)} error=${oauthError}`)
+          // 5xx = Keycloak unavailable, not a dead session: retry on the next
+          // request while the access token is within the grace window.
+          // 429 = rate limited, also transient (honour Retry-After).
+          // Trade-off: during grace the session carries an EXPIRED bearer, so
+          // leaf calls may 401 for up to REFRESH_GRACE_MS. Forcing a re-login
+          // on every Keycloak 503 is the worse alternative.
+          const transient = response.status >= 500 || response.status === 429
+          if (transient && withinRefreshGrace(token)) {
+            if (response.status === 429) {
+              return { ...token, refreshRetryAt: Date.now() + retryAfterMs(response.headers.get('Retry-After')) }
+            }
+            return token
+          }
+          return { ...token, error: transient ? 'RefreshTokenFailed' : 'RefreshTokenExpired' }
         }
 
         const tokens = await response.json() as {
           access_token: string
           expires_in: number
           refresh_token?: string
+          id_token?: string
         }
 
         // P2.2-auth A3: same threading on refresh — the tenant is already in
@@ -227,6 +280,12 @@ const jwtCallback: NonNullable<NonNullable<SvelteKitAuthConfig['callbacks']>['jw
           accessToken: tokens.access_token,
           accessTokenExpires: Date.now() + tokens.expires_in * 1000,
           refreshToken: tokens.refresh_token ?? token.refreshToken,
+          // Keep the ID token fresh across refreshes: logout passes
+          // token.idToken as the RP-initiated-logout id_token_hint, and a stale
+          // hint can make Keycloak skip terminating the SSO session. Keycloak
+          // returns a new id_token on the refresh grant when the openid scope
+          // is present; fall back to the prior hint if this response omits it.
+          idToken: tokens.id_token ?? (token.idToken as string | undefined),
           roles: filterValidRoles(decoded.realmRoles, decoded.vocabulary),
           groups: decoded.groups.length ? decoded.groups : (token.groups as string[] | undefined) ?? [],
           // Keep the canonical real-UUID id fresh across refreshes. Only the
@@ -244,7 +303,11 @@ const jwtCallback: NonNullable<NonNullable<SvelteKitAuthConfig['callbacks']>['jw
           tokenIss: decoded.iss ?? (token.tokenIss as string | undefined),
           error: undefined
         }
-      } catch {
+      } catch (err) {
+        const e = err as { name?: string; message?: string }
+        console.warn(`[auth] token refresh failed tenant=${tenantId} exception=${e?.name ?? 'Error'}: ${String(e?.message ?? '').slice(0, 200)}`)
+        // Network error: transient while within grace, else force re-login.
+        if (withinRefreshGrace(token)) return token
         return { ...token, error: 'RefreshTokenFailed' }
       }
     }
