@@ -403,8 +403,8 @@ function makePart(target, judge, root) {
 
 /**
  * The live Keycloak step-up deny proof (services/kernel-api/test/keycloak/stepup-deny.int.test.ts, config
- * vitest.stepup.config.ts): a REAL Keycloak imports the realm template with the gremion login theme, and a
- * user WITHOUT a second factor who asks gremion-ui for acr loa2 is refused (401, no code, no authenticator
+ * vitest.stepup.config.ts): a REAL Keycloak is loaded with the realm template and the gremion login theme, and
+ * a user WITHOUT a second factor who asks gremion-ui for acr loa2 is refused (401, no code, no authenticator
  * set-up offered) and sent to the app's own notice. The file starts its own container, so no stack is
  * needed here.
  *
