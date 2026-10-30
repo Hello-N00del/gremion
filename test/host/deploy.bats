@@ -457,6 +457,27 @@ assert_token_file_refused() {
     refute_recorded docker "stdin-token-ignored"
 }
 
+@test "the token file is documented where the operator reads it, under the name the program reads" {
+    local doc="${PROJECT_ROOT}/docs/ops/host-tooling.md" f
+    grep -qF 'GREMION_REGISTRY_TOKEN_FILE' "$DEPLOY"
+    grep -qF '### The registry token on the host' "$doc"
+    grep -qF 'GREMION_REGISTRY_TOKEN_FILE=/opt/gremion/etc/registry-token' "$doc"
+    # the one thing left undecided is stated, not silently assumed
+    grep -qF 'Open decision: public packages or a pull token' "$doc"
+    # scope and handling: read-only scope, an expiry, stdin transfer, no argv
+    grep -qF 'read:packages' "$doc"
+    grep -qF 'at most 90 days' "$doc"
+    grep -qF 'never as an argument' "$doc"
+    for f in install upgrade; do
+        grep -qF 'GREMION_REGISTRY_TOKEN_FILE' "${PROJECT_ROOT}/docs/ops/runbook/${f}.md" \
+            || { echo "${f}.md does not name GREMION_REGISTRY_TOKEN_FILE" >&2; return 1; }
+    done
+    # no document hands the token to docker as an argument
+    run grep -rnE 'docker login[^|]*( -p |--password[ =])' "$doc" \
+        "${PROJECT_ROOT}/docs/ops/runbook/install.md" "${PROJECT_ROOT}/docs/ops/runbook/upgrade.md"
+    [ "$status" -ne 0 ]
+}
+
 @test "a surviving auths entry fails the deploy with exit 1" {
     stub_all
     export DOCKER_CONFIG="${BATS_TEST_TMPDIR}/dockercfg"
