@@ -85,7 +85,10 @@ test('test-nats-auth: a non-zero exit is a failure', () => {
 
 test('the nats-auth part is registered beside nats', () => {
   assert.equal(typeof INTEGRATION_PARTS['nats-auth'], 'function')
-  assert.deepEqual(Object.keys(INTEGRATION_PARTS).slice(-4, -1), ['nats', 'nats-auth', 'events'])
+  const keys = Object.keys(INTEGRATION_PARTS)
+  const at = keys.indexOf('nats')
+  assert.notEqual(at, -1)
+  assert.deepEqual(keys.slice(at, at + 3), ['nats', 'nats-auth', 'events'])
 })
 
 // The live Keycloak step-up deny proof (kernel-api test/keycloak/stepup-deny.int.test.ts) as a verify part:
