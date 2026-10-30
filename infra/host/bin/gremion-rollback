@@ -29,6 +29,11 @@
 #     three commands: status, restore (--accept-loss-since), discard (--reason).
 # There is no restic class=snapshot any more; docs/ops/host-tooling.md.
 #
+# HOST LOCK. One host operation at a time: started directly, this program takes
+# runtime/hostd.lock (non-blocking flock) before it reads or changes anything,
+# and refuses with `busy`, exit 3, when another operation holds it. Started by
+# gremion-hostd, which already holds the lock, it does not take it again.
+#
 # EXIT CODES  0 ok · 1 assertion failed · 2 usage/precondition · 3 blocked
 set -euo pipefail
 
@@ -185,6 +190,32 @@ rollback_class_b() { # <colour> <target tag>
     ok "redeployed ${2} into ${1} and switched (class b)"
 }
 
+# One host operation at a time. gremion-hostd takes runtime/hostd.lock for its
+# mutating verbs and says so (GREMION_HOST_LOCK_HELD=1); a rollback started
+# directly, by an operator at the host, takes the same lock itself, exactly as
+# gremion-deploy, gremion-backup and gremion-tenant do. Without it, this program
+# would flip the colours, rewrite runtime/current-tag and previous-tag and
+# restart the executor beside a deploy or a backup that is running. Non-blocking
+# and fail-closed: a held lock is `busy` (exit 3), a missing flock or an
+# unopenable lock file is exit 2, and nothing has been touched either way.
+# The lock belongs to the open fd 9, which every child inherits (the redeploy of
+# a class (b) rollback is told it is held and does not queue behind its parent),
+# so it lasts as long as this run and no longer: any exit, a crash or a kill
+# releases it, and there is no lock file to clean up.
+acquire_host_lock() {
+    local lock
+    if [[ "${GREMION_HOST_LOCK_HELD:-}" != 1 ]]; then
+        need_cmd flock
+        lock="$ROOT/runtime/hostd.lock"
+        mkdir -p "$ROOT/runtime" || die "cannot create $ROOT/runtime" 2
+        exec 9>>"$lock" || die "cannot open the host lock: ${lock}" 2
+        flock -n 9 \
+            || die "busy: another host operation is running (lock ${lock}); retry when it has finished" 3
+    fi
+    GREMION_HOST_LOCK_HELD=1
+    export GREMION_HOST_LOCK_HELD
+}
+
 main() {
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -203,6 +234,7 @@ main() {
     need_cmd docker jq
     ROOT="$(gremion_root)"
     [[ -d "$ROOT" ]] || die "gremion root absent: $ROOT" 2
+    acquire_host_lock
     load_env "$ROOT/etc/env/state.env"
 
     local active other from_tag to_tag class
