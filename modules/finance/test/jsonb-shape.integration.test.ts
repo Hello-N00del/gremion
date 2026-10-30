@@ -70,7 +70,7 @@ const HEADERS = {
   'x-tenant-id': TENANT.id,
   'x-tenant-slug': TENANT.slug,
   'x-finance-user-id': 'dev.admin',
-  'x-finance-groups': 'admin',
+  'x-finance-groups-json': Buffer.from(JSON.stringify(['admin']), 'utf8').toString('base64url'),
   'content-type': 'application/json',
 }
 const SUPER: ActorContext = { isAuditor: false, isSuperuser: true, scopedOrgUnitIds: [], userId: 'dev.admin', groups: ['admin'] }

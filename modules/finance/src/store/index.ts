@@ -674,7 +674,7 @@ export interface ScopeContext {
 
 /** The full write actor the leaf reconstructs from the ACL headers — the read
  *  scope (ScopeContext) PLUS the actor's identity (x-finance-user-id) and Keycloak
- *  group memberships (x-finance-groups). The write ops (createExpense + the Vier-
+ *  group memberships (x-finance-groups-json). The write ops (createExpense + the Vier-
  *  Augen approval family) need the identity for created_by / signer eligibility and
  *  the groups for per-stage required_group checks; the read ops need only the scope.
  *  Mirror of the FinanceActor fields the native services read (contracts/services.ts). */
