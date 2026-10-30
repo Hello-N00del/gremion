@@ -40,8 +40,7 @@ describe('svelte.config.js kit.csp', () => {
     expect(directives['script-src']).toEqual(['self'])
   })
 
-  test("default-src comes first (the running-system checks anchor on `default-src 'self'; `)", () => {
-    expect(Object.keys(directives)[0]).toBe('default-src')
+  test("default-src is 'self' (the running-system checks anchor on `default-src 'self'; `)", () => {
     expect(directives['default-src']).toEqual(['self'])
   })
 

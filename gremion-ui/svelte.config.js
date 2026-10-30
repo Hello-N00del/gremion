@@ -30,8 +30,8 @@ const config = {
     //   - frame-ancestors is NOT set here. A <meta> CSP ignores it, so a prerendered page would
     //     silently lose anti-framing. hooks.server.ts cspGuard sets it as a response header
     //     instead, which covers every render mode.
-    //   - Keep default-src FIRST: directives are emitted in this order, and the running-system
-    //     header checks anchor on `default-src 'self'; `.
+    //   - The running-system header checks anchor on `default-src 'self'; `. SvelteKit chooses
+    //     the emission order itself (it puts default-src first); re-check after a SvelteKit upgrade.
     csp: {
       mode: 'auto',
       directives: {
