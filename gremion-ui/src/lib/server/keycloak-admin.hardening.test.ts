@@ -10,8 +10,9 @@ const REALM = 'r1'
 const PREFIX = `${BASE}/admin/realms/${REALM}`
 const EVIL = '../clients/x/client-secret'
 const ENC = encodeURIComponent(EVIL) // ..%2Fclients%2Fx%2Fclient-secret
-/** AbortSignal.timeout() rejects with "The operation was aborted due to timeout". */
-const TIMED_OUT = /timeout|aborted/i
+/** A hung call rejects with the named "Keycloak <METHOD> <path> timed out after <n>ms"
+ *  (cause: AbortSignal.timeout()'s "The operation was aborted due to timeout"). */
+const TIMED_OUT = /timed out|timeout|aborted/i
 
 interface Call {
   url: string

@@ -124,6 +124,21 @@ export function evictServiceMatrixTokenCache(tenantId: string): void {
   }
 }
 
+/** Evict every cached service-mode Matrix token equal to `token`. */
+function evictServiceMatrixToken(token: string): void {
+  if (!token) return
+  for (const [key, entry] of serviceMatrixTokenCache) {
+    if (entry.matrixToken === token) serviceMatrixTokenCache.delete(key)
+  }
+}
+
+/** The per-request user Matrix token a leaf call body carries, if any. */
+function userTokenOf(body: unknown): string {
+  const b = body as { userToken?: unknown; join?: { userToken?: unknown } } | null | undefined
+  const t = b?.userToken ?? b?.join?.userToken
+  return typeof t === 'string' ? t : ''
+}
+
 /** Test-only: clear the service-mode Matrix token cache + in-flight map. */
 export function __resetServiceMatrixTokenCacheForTests(): void {
   serviceMatrixTokenCache.clear()
@@ -391,6 +406,12 @@ export class ServiceMessagesClient implements MessagesBackendPort {
           `[messages-service-client] leaf op ${op} (POST ${path}) returned ${res.status}:`,
           msg.slice(0, 500),
         )
+        // Synapse invalidated the user token the leaf call carried (the leaf
+        // flags it with a structured errcode): drop it so the next request
+        // re-exchanges instead of failing until the 1 h TTL.
+        let errcode: unknown
+        try { errcode = (JSON.parse(msg) as { errcode?: unknown }).errcode } catch { /* non-JSON */ }
+        if (errcode === 'M_UNKNOWN_TOKEN') evictServiceMatrixToken(userTokenOf(body))
         throw new MessagesServiceError(res.status, msg.slice(0, 200))
       }
       return (await res.json()) as T

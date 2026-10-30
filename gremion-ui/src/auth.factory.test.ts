@@ -1,5 +1,6 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import type { RequestEvent } from '@sveltejs/kit'
+import { runWithTenant, type TenantContext } from '$lib/server/tenant/context'
 
 const envMock: Record<string, string> = {}
 vi.mock('$env/dynamic/private', () => ({ env: envMock }))
@@ -102,5 +103,67 @@ describe('CR2 — jwt+session callbacks capture the access-token issuer', () => 
       token: { tokenIss: ISS, accessTokenExpires: 0 }, account: null, profile: {},
     } as never)
     expect((out as { tokenIss?: string }).tokenIss).toBe(ISS)
+  })
+})
+
+// The logout action passes token.idToken as the RP-initiated-logout
+// id_token_hint. The refresh branch must return the FRESH id_token from the
+// token-endpoint response, not the stale one it carried in, or the hint goes
+// stale after the first refresh and the SSO session may survive logout. This
+// drives the real fetch/refresh branch (refreshToken present, access token
+// already elapsed), not the missing-refreshToken short-circuit.
+describe('token-refresh success path pins the fresh id_token', () => {
+  beforeEach(() => { envMock.AUTH_SECRET = 'test-secret' })
+  afterEach(() => { vi.unstubAllGlobals() })
+
+  /** Minimal TenantContext slice the refresh branch reads (kcInternal,
+   *  authClientId/SecretRef) plus config.roles for the vocabulary seam. */
+  function refreshTenant(): TenantContext {
+    return {
+      id: 'tenant-a',
+      slug: 'tenant-a',
+      issuer: 'https://kc.example.org/realms/tenant-a',
+      kcInternal: 'http://keycloak:8080/auth/realms/tenant-a',
+      authExternalBase: 'https://kc.example.org/realms/tenant-a',
+      authClientId: 'gremion-ui',
+      authClientSecretRef: 'ui-a',
+      config: {},
+    } as unknown as TenantContext
+  }
+
+  /** Unsigned, structurally-valid JWT (decodeJwt never verifies signatures). */
+  function jwt(payload: Record<string, unknown>): string {
+    const b64 = (obj: unknown): string => Buffer.from(JSON.stringify(obj), 'utf-8').toString('base64url')
+    return `${b64({ alg: 'RS256', typ: 'JWT' })}.${b64({
+      iat: Math.floor(Date.now() / 1000), exp: Math.floor(Date.now() / 1000) + 300, ...payload,
+    })}.signature-not-verified`
+  }
+
+  async function refreshWith(responseBody: Record<string, unknown>) {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => responseBody }))
+    const { __jwtCallbackForTests } = await import('./auth')
+    return (await runWithTenant(refreshTenant(), () =>
+      __jwtCallbackForTests({
+        token: { idToken: 'stale-id-token', accessTokenExpires: 0, refreshToken: 'rt' },
+        account: null,
+        profile: {},
+      } as never),
+    )) as { error?: string; idToken?: string }
+  }
+
+  it('refresh branch: returned token.idToken is the response id_token, not the stale one', async () => {
+    const FRESH_ID_TOKEN = 'fresh-id-token-from-keycloak'
+    const newAccess = jwt({ realm_access: { roles: ['member'] }, sub: 'kc-uuid', groups: [] })
+    const out = await refreshWith({ access_token: newAccess, expires_in: 300, id_token: FRESH_ID_TOKEN })
+    expect(out.error).toBeUndefined()
+    expect(out.idToken).toBe(FRESH_ID_TOKEN)
+    expect(out.idToken).not.toBe('stale-id-token')
+  })
+
+  it('refresh branch: a response without id_token keeps the prior one', async () => {
+    const newAccess = jwt({ realm_access: { roles: ['member'] }, sub: 'kc-uuid', groups: [] })
+    const out = await refreshWith({ access_token: newAccess, expires_in: 300 })
+    expect(out.error).toBeUndefined()
+    expect(out.idToken).toBe('stale-id-token')
   })
 })

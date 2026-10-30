@@ -324,13 +324,16 @@ describe('host names (hostAllowed)', () => {
 })
 
 // [D R29-I11]: security headers equal to gremion-ui's. The in-app half is
-// gremion-ui's Content-Security-Policy on every text/html response (cspGuard);
-// the edge half (HSTS) is the panel router's middleware in standalone.yml.
+// gremion-ui's full baseline Content-Security-Policy; the edge half (HSTS) is
+// the panel router's middleware in standalone.yml. gremion-ui's own pages now
+// take a nonce-based script-src from kit.csp and its full baseline lives on as
+// NON_PAGE_CSP_HEADER_VALUE (non-page responses); the panel has no nonces yet,
+// so it must stay equal to that baseline.
 describe('security headers (R29-I11)', () => {
   function gremionUiCsp(): string {
     const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'gremion-ui', 'src', 'hooks.server.ts'), 'utf8')
-    const block = /export const CSP_HEADER_VALUE = \[([\s\S]*?)\]\.join\('; '\)/.exec(src)
-    if (!block) throw new Error("gremion-ui's CSP_HEADER_VALUE is no longer an array joined by '; ': re-derive this test")
+    const block = /export const NON_PAGE_CSP_HEADER_VALUE = \[([\s\S]*?)\]\.join\('; '\)/.exec(src)
+    if (!block) throw new Error("gremion-ui's NON_PAGE_CSP_HEADER_VALUE is no longer an array joined by '; ': re-derive this test")
     return [...block[1]!.matchAll(/^\s*"([^"]+)",?\s*$/gm)].map((m) => m[1]).join('; ')
   }
 

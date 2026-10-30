@@ -83,9 +83,65 @@ interface TokenCache {
  */
 function seg(id: string): string {
   if (typeof id !== 'string' || id === '' || id === '.' || id === '..') {
-    throw new Error('Invalid Keycloak id')
+    throw new KcInvalidIdError()
   }
   return encodeURIComponent(id)
+}
+
+/**
+ * A non-2xx answer from the Keycloak admin API. `status` is the HTTP status, so
+ * callers branch on it (`err instanceof KcAdminError && err.status === 404`)
+ * instead of searching the message, which echoes the response body. The message
+ * text is unchanged ("Keycloak Admin API error: <status> <body>"): other clients
+ * in the repo parse that text.
+ */
+export class KcAdminError extends Error {
+  readonly status: number
+
+  constructor(status: number, body: string) {
+    super(`Keycloak Admin API error: ${status} ${body}`)
+    this.name = 'KcAdminError'
+    this.status = status
+  }
+}
+
+/** An id that cannot be a single admin-path segment (empty, `.`, `..`, not a string). */
+export class KcInvalidIdError extends Error {
+  constructor() {
+    super('Invalid Keycloak id')
+    this.name = 'KcInvalidIdError'
+  }
+}
+
+/**
+ * fetch() with the per-request budget, naming the call when it times out so a
+ * hung Keycloak request is attributable ("Keycloak GET /groups/<id> timed out
+ * after 15000ms"). The query string is dropped from the name. Every other
+ * failure is rethrown unchanged.
+ */
+async function kcFetch(timeoutMs: number, url: string, init: RequestInit): Promise<Response> {
+  try {
+    return await fetch(url, { ...init, signal: AbortSignal.timeout(timeoutMs) })
+  } catch (err) {
+    if (err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError')) {
+      const method = init.method ?? 'GET'
+      let path = url
+      try {
+        path = new URL(url).pathname
+      } catch {
+        path = url.split('?')[0] ?? url
+      }
+      // Admin calls are named by the path under the realm, not the realm prefix.
+      const adminMarker = '/admin/realms/'
+      const at = path.indexOf(adminMarker)
+      if (at !== -1) {
+        const rest = path.slice(at + adminMarker.length)
+        path = rest.slice(rest.indexOf('/') === -1 ? rest.length : rest.indexOf('/'))
+      }
+      throw new Error(`Keycloak ${method} ${path} timed out after ${timeoutMs}ms`, { cause: err })
+    }
+    throw err
+  }
 }
 
 export class KeycloakAdminClient {
@@ -153,7 +209,8 @@ export class KeycloakAdminClient {
   }
 
   private async fetchToken(): Promise<string> {
-    const res = await fetch(
+    const res = await kcFetch(
+      this.timeoutMs,
       `${this.adminUrl}/realms/${this.realm}/protocol/openid-connect/token`,
       {
         method: 'POST',
@@ -162,8 +219,7 @@ export class KeycloakAdminClient {
           grant_type: 'client_credentials',
           client_id: this.clientId,
           client_secret: this.clientSecret
-        }).toString(),
-        signal: AbortSignal.timeout(this.timeoutMs)
+        }).toString()
       }
     )
 
@@ -182,19 +238,18 @@ export class KeycloakAdminClient {
 
   private async request<T>(method: string, path: string, body?: unknown): Promise<T> {
     const token = await this.getToken()
-    const res = await fetch(`${this.adminUrl}/admin/realms/${this.realm}${path}`, {
+    const res = await kcFetch(this.timeoutMs, `${this.adminUrl}/admin/realms/${this.realm}${path}`, {
       method,
       headers: {
         Authorization: `Bearer ${token}`,
         'Content-Type': 'application/json'
       },
-      body: body !== undefined ? JSON.stringify(body) : undefined,
-      signal: AbortSignal.timeout(this.timeoutMs)
+      body: body !== undefined ? JSON.stringify(body) : undefined
     })
 
     if (!res.ok) {
       const text = await res.text()
-      throw new Error(`Keycloak Admin API error: ${res.status} ${text}`)
+      throw new KcAdminError(res.status, text)
     }
 
     // 204 No Content — return empty
@@ -207,16 +262,15 @@ export class KeycloakAdminClient {
    *  already encoded by the caller. */
   private async postCreate(path: string, body: unknown, what: string): Promise<string> {
     const token = await this.getToken()
-    const res = await fetch(`${this.adminUrl}/admin/realms/${this.realm}${path}`, {
+    const res = await kcFetch(this.timeoutMs, `${this.adminUrl}/admin/realms/${this.realm}${path}`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(this.timeoutMs)
+      body: JSON.stringify(body)
     })
 
     if (!res.ok) {
       const text = await res.text()
-      throw new Error(`Keycloak Admin API error: ${res.status} ${text}`)
+      throw new KcAdminError(res.status, text)
     }
 
     const location = res.headers.get('Location') ?? ''
@@ -243,8 +297,9 @@ export class KeycloakAdminClient {
     try {
       return await this.request<KcUser>('GET', `/users/${seg(id)}`)
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err)
-      if (msg.includes('404')) throw new Error('User not found')
+      // Status, not message text: a 500 whose body mentions "404" is not a miss.
+      // The Error('User not found') sentinel is what the erasure paths match.
+      if (err instanceof KcAdminError && err.status === 404) throw new Error('User not found')
       throw err
     }
   }
@@ -302,13 +357,8 @@ export class KeycloakAdminClient {
   }
 
   async getGroup(id: string): Promise<KcGroup> {
-    try {
-      return await this.request<KcGroup>('GET', `/groups/${seg(id)}`)
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err)
-      if (msg.includes('404')) throw new Error('Group not found')
-      throw err
-    }
+    // A missing group surfaces as KcAdminError(status 404); callers branch on it.
+    return this.request<KcGroup>('GET', `/groups/${seg(id)}`)
   }
 
   async createGroup(name: string): Promise<string> {

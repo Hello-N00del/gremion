@@ -3,7 +3,7 @@ import { z } from 'zod'
 import type { RequestHandler } from './$types'
 import { hasRole, Role } from '$lib/auth'
 import type { SessionUser } from '$lib/auth/types'
-import { getKeycloakAdminClient } from '$lib/server/keycloak-admin'
+import { getKeycloakAdminClient, KcAdminError } from '$lib/server/keycloak-admin'
 import { parseJsonBody } from '$lib/server/parse-json-body'
 import { isUuid } from '../../../../params/uuid'
 
@@ -30,10 +30,7 @@ export const GET: RequestHandler = async ({ params, locals }) => {
     const group = await kc.getGroup(params.id)
     return json({ success: true, data: group })
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err)
-    if (msg === 'Group not found') {
-      return json({ success: false, error: 'Gruppe nicht gefunden' }, { status: 404 })
-    }
+    if (err instanceof KcAdminError && err.status === 404) return notFound()
     throw err
   }
 }

@@ -8,6 +8,32 @@ import { writeAuditEntry } from '$lib/server/audit-db'
 // keep their bare single-arg signatures. Mirrors the org-units-db.ts pattern.
 const getRunner = (tx: PgTransaction | undefined) => genericGetRunner(tx, getDb)
 
+/**
+ * Thrown by updateResolution / deleteResolution when the write matched no row
+ * although the resolution exists: it is locked, i.e. its parent protocol is
+ * published or the resolution is already adopted (decided_at stamped). The
+ * routes map it to a 403 so a publish that commits between the route's early
+ * check and the write is refused instead of surfacing as a 500.
+ */
+export class ResolutionPublishedError extends Error {
+  constructor(public readonly resolutionId: string) {
+    super(`Beschluss ${resolutionId} gehört zu einem veröffentlichten Protokoll und ist nicht änderbar`)
+    this.name = 'ResolutionPublishedError'
+  }
+}
+
+/**
+ * Thrown by updateResolution / deleteResolution when the write matched no row
+ * because the resolution does not exist (any more), e.g. another admin deleted
+ * it between the route's check and the write. The routes map it to a 404.
+ */
+export class ResolutionNotFoundError extends Error {
+  constructor(public readonly resolutionId: string) {
+    super(`Beschluss ${resolutionId} nicht gefunden`)
+    this.name = 'ResolutionNotFoundError'
+  }
+}
+
 // ─── Types ───────────────────────────────────────────────────────────────────
 
 export type ProtocolStatus = 'draft' | 'submitted' | 'published'
@@ -205,9 +231,25 @@ export async function updateProtocol(id: string, input: {
   return rows[0]
 }
 
-export async function deleteProtocol(id: string): Promise<void> {
-  const sql = getDb()
-  await sql`DELETE FROM protocols WHERE id = ${id}`
+/**
+ * Delete a protocol. The published-guard rides in the statement (same shape as
+ * updateProtocol), so a publish committing right before the delete cannot lose
+ * an adopted, audit-chained protocol. Zero rows (unknown id OR published) throws
+ * the same text updateProtocol uses. The only in-tree caller rolls back a
+ * just-created draft, for which the guard is harmless.
+ */
+export async function deleteProtocol(
+  id: string,
+  opts?: { tx?: PgTransaction; allowPublished?: boolean },
+): Promise<void> {
+  const sql = getRunner(opts?.tx)
+  const allowPublished = opts?.allowPublished ?? false
+  const rows = await sql<{ id: string }[]>`
+    DELETE FROM protocols
+    WHERE id = ${id} AND (${allowPublished} OR status != 'published')
+    RETURNING id
+  `
+  if (!rows[0]) throw new Error(`Protocol ${id} not found or is published`)
 }
 
 export async function setProtocolStatus(
@@ -317,8 +359,30 @@ export async function updateResolution(id: string, input: Partial<{
   // handler pins them to the stored row, [resId]/+server.ts).
   adoptionMode: AdoptionMode
   decisionRuleParams: Record<string, unknown>
-}>, opts?: { tx?: PgTransaction }): Promise<ProtocolResolution> {
+}>, opts?: {
+  tx?: PgTransaction
+  // The publish lock (below) is dropped when set. ONLY the publish flow's own
+  // global_nr numbering passes it (assignGlobalNrs: it runs inside the publish
+  // tx and again on republish); every edit path keeps the lock.
+  allowPublished?: boolean
+}): Promise<ProtocolResolution> {
   const sql = getRunner(opts?.tx)
+  // Publish lock (#433). The lock is part of the UPDATE itself, not a prior SELECT:
+  // a route-level check-then-write leaves a window in which a publish can commit
+  // between the two statements. Two predicates close it, and BOTH are needed:
+  //  - `decided_at IS NULL` is a column of the target row. When this statement
+  //    blocked behind an open publish tx, Postgres (Read Committed) re-checks the
+  //    WHERE clause against the newest version of the target row after the
+  //    publish commits, and sees the decided_at the publish stamped.
+  //  - the parent-status EXISTS carries FOR SHARE. Without it the sub-SELECT reads
+  //    the statement's ORIGINAL snapshot (the re-check only refreshes the target
+  //    row), still sees 'submitted' and lets the edit through. FOR SHARE conflicts
+  //    with the row lock the publish's UPDATE of the protocol holds, so this
+  //    statement waits for the publish and then re-reads the committed status.
+  //    (Lock order is protocols then protocol_resolutions, the same as the publish
+  //    tx, so the two cannot deadlock.)
+  // Proven against a real database in protocol-publish-lock.integration.test.ts.
+  const allowPublished = opts?.allowPublished ?? false
   const rows = await sql<ProtocolResolution[]>`
     UPDATE protocol_resolutions SET
       text              = COALESCE(${input.text ?? null}, text),
@@ -331,14 +395,55 @@ export async function updateResolution(id: string, input: Partial<{
       decision_rule_params = COALESCE(${input.decisionRuleParams != null ? (sql.json(input.decisionRuleParams as never) as never) : null}, decision_rule_params),
       global_nr         = COALESCE(${input.globalNr ?? null}, global_nr)
     WHERE id = ${id}
+      AND (${allowPublished} OR (
+        decided_at IS NULL
+        AND EXISTS (
+          SELECT 1 FROM protocols p
+          WHERE p.id = protocol_resolutions.protocol_id AND p.status != 'published'
+          FOR SHARE OF p
+        )
+      ))
     RETURNING *
   `
+  if (!rows[0]) return throwForZeroRows(sql, id)
   return rows[0]
 }
 
-export async function deleteResolution(id: string): Promise<void> {
-  const sql = getDb()
-  await sql`DELETE FROM protocol_resolutions WHERE id = ${id}`
+/**
+ * A write matched no row. Tell "locked" (403) apart from "gone" (404) with a
+ * follow-up read, so a resolution deleted concurrently is not reported as adopted.
+ */
+async function throwForZeroRows(sql: ReturnType<typeof getRunner>, id: string): Promise<never> {
+  const [row] = await sql<{ id: string }[]>`SELECT id FROM protocol_resolutions WHERE id = ${id}`
+  throw row ? new ResolutionPublishedError(id) : new ResolutionNotFoundError(id)
+}
+
+/**
+ * Delete a resolution under the same in-statement publish lock as
+ * updateResolution (see the comment there for why both predicates are needed).
+ * Zero rows throws ResolutionPublishedError when the resolution is locked and
+ * ResolutionNotFoundError when it does not exist.
+ */
+export async function deleteResolution(
+  id: string,
+  opts?: { tx?: PgTransaction; allowPublished?: boolean },
+): Promise<void> {
+  const sql = getRunner(opts?.tx)
+  const allowPublished = opts?.allowPublished ?? false
+  const rows = await sql<{ id: string }[]>`
+    DELETE FROM protocol_resolutions
+    WHERE id = ${id}
+      AND (${allowPublished} OR (
+        decided_at IS NULL
+        AND EXISTS (
+          SELECT 1 FROM protocols p
+          WHERE p.id = protocol_resolutions.protocol_id AND p.status != 'published'
+          FOR SHARE OF p
+        )
+      ))
+    RETURNING id
+  `
+  if (!rows[0]) await throwForZeroRows(sql, id)
 }
 
 export async function nextGlobalNr(
@@ -379,7 +484,10 @@ export async function assignGlobalNrs(
   const assigned: string[] = []
   for (const resId of resolutionIds) {
     const globalNr = await nextGlobalNr(committeeId, year, { tx })
-    await updateResolution(resId, { globalNr }, { tx })
+    // allowPublished: this runs inside the publish tx (row still 'submitted', but
+    // the lock must not depend on that ordering) and on republish of an already
+    // published protocol; it is the one legitimate writer past the publish lock.
+    await updateResolution(resId, { globalNr }, { tx, allowPublished: true })
     assigned.push(globalNr)
   }
   return assigned
