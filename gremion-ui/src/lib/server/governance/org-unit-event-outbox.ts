@@ -1,11 +1,11 @@
 // src/lib/server/governance/org-unit-event-outbox.ts
 //
 // The transactional outbox for kernel org-unit change events.
-//  - enqueueOrgUnitEvent() is called on the same runner (tx or pool) that wrote
+//  - enqueueOrgUnitEvent() is called on the same runner that wrote
 //    org_units, at the governance/org-units-db.ts choke point. With a caller-supplied
 //    tx the outbox row co-commits with the DML (never a phantom publish, never a
-//    missed publish). Without one (the pool overloads) the DML and the INSERT are two
-//    autocommit statements, so callers that need the guarantee must pass a tx.
+//    missed publish). Without one, the choke point opens its own pool transaction and
+//    runs the DML and this INSERT on it, so the guarantee holds on every path.
 //  - It is a pure NO-OP when NATS_URL is unset - the choke point then behaves
 //    exactly as without an outbox (no INSERT, the table stays empty).
 //  - drainOutbox() drains due rows (pending, or failed with elapsed backoff) via a
@@ -27,12 +27,22 @@ export const GIVE_UP_AFTER_SECONDS = 24 * 60 * 60
 /** The org-unit snapshot the leaf mirror needs (payload of an 'upserted' event). A
  *  'deleted' event carries only { id }. Keys are snake_case to match the leaf
  *  consumer's parseOrgUnitOp (id / name / kind / parent_id). */
-export interface OrgUnitSnapshot {
+export type OrgUnitSnapshot = {
   id: string
   name: string
   kind: string
   parent_id: string | null
 }
+
+/** One event to enqueue. The payload shape follows the type: a full snapshot for
+ *  'upserted', the id alone for 'deleted'. */
+export type OrgUnitEventInput = {
+  aggregateId: string
+  correlationId?: string | null
+} & (
+  | { eventType: 'upserted'; payload: OrgUnitSnapshot }
+  | { eventType: 'deleted'; payload: { id: string } }
+)
 
 export interface OrgUnitOutboxRow {
   id: string
@@ -57,19 +67,20 @@ export interface OrgUnitOutboxRow {
  */
 export async function enqueueOrgUnitEvent(
   sql: SqlRunner,
-  args: {
-    eventType: OrgUnitEvent
-    aggregateId: string
-    payload: Record<string, unknown>
-    correlationId?: string | null
-  },
+  args: OrgUnitEventInput,
 ): Promise<void> {
   if (!platformEnv('NATS_URL')) return
+  // occurred_at is the INSERT's own clock reading (clock_timestamp), not the
+  // column default now(): inside a transaction now() is the transaction START, so a
+  // transaction that began first but took the row lock second would stamp an OLDER
+  // time on the NEWER snapshot and the consumer (which keeps only the latest
+  // occurred_at per unit) would drop it. This INSERT runs after the DML, with the
+  // org_units row lock held, so the reading is monotonic per aggregate.
   await sql`
-    INSERT INTO org_unit_event_outbox (event_type, aggregate_id, payload, correlation_id)
+    INSERT INTO org_unit_event_outbox (event_type, aggregate_id, payload, correlation_id, occurred_at)
     VALUES (
       ${args.eventType}, ${args.aggregateId},
-      ${sql.json(args.payload as Parameters<typeof sql.json>[0])}, ${args.correlationId ?? null}
+      ${sql.json(args.payload)}, ${args.correlationId ?? null}, clock_timestamp()
     )`
 }
 

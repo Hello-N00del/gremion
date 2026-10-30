@@ -42,7 +42,9 @@ registerServerInitHook(async () => {
       try {
         await broker.ensureStream(STREAMS.ORGUNIT.name, STREAMS.ORGUNIT.subjects)
       } catch (err) {
-        await broker.close().catch(() => {})
+        await broker.close().catch((closeErr: unknown) => {
+          console.error('[org-unit-relay] closing the broker after a failed ensureStream failed:', closeErr)
+        })
         throw err
       }
       // Drain cadence - the mirror is eventually consistent; a few seconds of lag

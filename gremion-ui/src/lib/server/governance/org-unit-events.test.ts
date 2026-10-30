@@ -82,6 +82,11 @@ describe('org-units choke point — enqueues the mirror-resync event (NATS_URL s
     expect(outbox[0]!.args[1]).toBe('ou-1')
     expect(outbox[0]!.args[2]).toEqual({ id: 'ou-1', name: 'Referat Finanzen', kind: 'committee', parent_id: 'ou-parent' })
     expect(outbox[0]!.args[3]).toBeNull()
+    // occurred_at is the INSERT's own clock reading, not the transaction start: the
+    // consumer drops an event older than its mirror row, so two edits of one unit
+    // must order by when they enqueued (after the row lock), never by when their
+    // transactions began.
+    expect(outbox[0]!.q).toContain('clock_timestamp()')
     // co-commit: the org_units write and the outbox write are on the SAME runner (tx),
     // so a rollback of that tx drops BOTH.
     expect(tx.calls.some((c) => c.q.includes('INSERT INTO org_units'))).toBe(true)
@@ -137,6 +142,10 @@ describe('org-units choke point — NO-OP when NATS_URL is unset (staging defaul
 })
 
 describe('org-units choke point — a delete that matched no row does not enqueue', () => {
+  afterEach(() => {
+    delete process.env.NATS_URL
+  })
+
   it('deleteOrgUnit enqueues nothing when the id was absent (RETURNING [])', async () => {
     process.env.NATS_URL = 'nats://localhost:4222'
     // A fake tx whose DELETE returns no row (id not found).
@@ -149,6 +158,5 @@ describe('org-units choke point — a delete that matched no row does not enqueu
     tx.calls = calls
     await deleteOrgUnit(tx as never, 'missing')
     expect(calls.filter((c) => c.q.includes('INSERT INTO org_unit_event_outbox'))).toHaveLength(0)
-    delete process.env.NATS_URL
   })
 })
