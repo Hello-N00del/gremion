@@ -26,18 +26,35 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 const {
-  mockGetProtocol, mockAddResolution, mockUpdateResolution, mockDeleteResolution,
+  mockGetProtocol, mockAddResolution, mockUpdateResolution, mockDeleteResolution, ResolutionPublishedError, ResolutionNotFoundError,
 } = vi.hoisted(() => ({
   mockGetProtocol: vi.fn(),
   mockAddResolution: vi.fn(),
   mockUpdateResolution: vi.fn(),
   mockDeleteResolution: vi.fn(),
+  // Same shape as the real class in protocol-db.ts; the route maps it to a 403
+  // with an instanceof check, so the mock factory must export the SAME class the
+  // tests throw.
+  ResolutionPublishedError: class ResolutionPublishedError extends Error {
+    constructor(public readonly resolutionId: string) {
+      super(`Resolution ${resolutionId} belongs to a published protocol`)
+      this.name = 'ResolutionPublishedError'
+    }
+  },
+  ResolutionNotFoundError: class ResolutionNotFoundError extends Error {
+    constructor(public readonly resolutionId: string) {
+      super(`Resolution ${resolutionId} not found`)
+      this.name = 'ResolutionNotFoundError'
+    }
+  },
 }))
 vi.mock('$lib/server/protocols/protocol-db', () => ({
   getProtocol: mockGetProtocol,
   addResolution: mockAddResolution,
   updateResolution: mockUpdateResolution,
   deleteResolution: mockDeleteResolution,
+  ResolutionPublishedError,
+  ResolutionNotFoundError,
 }))
 
 // decideResolution runs REAL; only its quorum lookup is stubbed (quorate by
@@ -475,5 +492,62 @@ describe('resolution PATCH/DELETE — adopted rows and foreign protocols are ref
     const res = await DELETE(makePatchEvent(undefined))
     expect(res.status).toBe(204)
     expect(mockDeleteResolution).toHaveBeenCalledWith(RID)
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Publish race (#433): loadEditableResolution reads, THEN the write runs. A
+// publish committing in between passes the early check, so the lock in the
+// write statement is what refuses it; the db layer reports that as
+// ResolutionPublishedError and the route must answer 403 (same text as the
+// early check), never a 500.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('resolution PATCH/DELETE — publish committed between the check and the write → 403', () => {
+  const draftRow = { ...storedTallyRow, protocol_status: 'draft', decided_at: null }
+  const lockedText = 'Angenommene Beschlüsse sind nicht bearbeitbar (Einspruch statt Änderung)'
+
+  it('tally PATCH: the write is refused by the lock → 403 with the same text as the early check', async () => {
+    mockSql.mockResolvedValue([draftRow])
+    mockUpdateResolution.mockRejectedValueOnce(new ResolutionPublishedError('r1'))
+    await expect(PATCH(makePatchEvent({ votesYes: 3, votesNo: 0, votesAbstain: 0 })))
+      .rejects.toMatchObject({ status: 403, body: { message: lockedText } })
+  })
+
+  it('acclamation PATCH (declared_result): → 403', async () => {
+    mockSql.mockResolvedValue([{ ...storedAcclamationRow, protocol_status: 'draft', decided_at: null }])
+    mockUpdateResolution.mockRejectedValueOnce(new ResolutionPublishedError('r1'))
+    await expect(PATCH(makePatchEvent({ declared_result: 'passed' }))).rejects.toMatchObject({ status: 403 })
+  })
+
+  it('acclamation PATCH (withdrawn): → 403', async () => {
+    mockSql.mockResolvedValue([{ ...storedAcclamationRow, protocol_status: 'draft', decided_at: null }])
+    mockUpdateResolution.mockRejectedValueOnce(new ResolutionPublishedError('r1'))
+    await expect(PATCH(makePatchEvent({ result: 'withdrawn' }))).rejects.toMatchObject({ status: 403 })
+  })
+
+  it('DELETE: the delete is refused by the lock → 403 with the same text', async () => {
+    mockSql.mockResolvedValue([draftRow])
+    mockDeleteResolution.mockRejectedValueOnce(new ResolutionPublishedError('r1'))
+    await expect(DELETE(makePatchEvent(undefined)))
+      .rejects.toMatchObject({ status: 403, body: { message: lockedText } })
+  })
+
+  it('PATCH: the row vanished between the check and the write → 404, not 403', async () => {
+    mockSql.mockResolvedValue([draftRow])
+    mockUpdateResolution.mockRejectedValueOnce(new ResolutionNotFoundError('r1'))
+    await expect(PATCH(makePatchEvent({ text: 'X' }))).rejects.toMatchObject({ status: 404 })
+  })
+
+  it('DELETE: the row vanished between the check and the write → 404, not 403', async () => {
+    mockSql.mockResolvedValue([draftRow])
+    mockDeleteResolution.mockRejectedValueOnce(new ResolutionNotFoundError('r1'))
+    await expect(DELETE(makePatchEvent(undefined))).rejects.toMatchObject({ status: 404 })
+  })
+
+  it('an unrelated write failure is NOT mapped to 403', async () => {
+    mockSql.mockResolvedValue([draftRow])
+    mockUpdateResolution.mockRejectedValueOnce(new Error('connection reset'))
+    await expect(PATCH(makePatchEvent({ text: 'X' }))).rejects.toThrow('connection reset')
   })
 })
