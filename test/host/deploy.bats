@@ -441,10 +441,20 @@ assert_token_file_refused() {
 }
 
 @test "a token file another user owns is refused" {
-    [ "$(id -u)" -eq 0 ] || skip "needs root to hand the file to another user"
     stub_all
     make_token_file 600
-    chown 12345 "$TOKEN_FILE"
+    if [ "$(id -u)" -eq 0 ]; then
+        chown 12345 "$TOKEN_FILE"
+    else
+        # Without root the file cannot be handed to another user, so a stat shim
+        # reports a foreign owner uid for the token file only (no skip on CI).
+        local real_stat
+        real_stat="$(command -v stat)"
+        shim stat "
+if [ \"\$1\" = -c ] && [ \"\$2\" = %u ] && [ \"\$4\" = '$TOKEN_FILE' ]; then echo 12345; exit 0; fi
+exec '$real_stat' \"\$@\""
+        [ "$(stat -c %u -- "$TOKEN_FILE")" = 12345 ]
+    fi
     run bash -c "'$DEPLOY' dist-v1.2.3 </dev/null"
     assert_token_file_refused "not owned by"
 }
