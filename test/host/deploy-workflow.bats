@@ -1079,6 +1079,91 @@ run_cut() {
     [ "$status" -eq 1 ]
     [[ "$output" == *"tag dist-v1.0.0 exists in this clone but not on origin"* ]]
     [[ "$output" == *"git tag -d dist-v1.0.0"* ]]
+    # kernel #62 follow-up: where it exists, how to inspect it, how to confirm origin lacks it
+    [[ "$output" == *"git show dist-v1.0.0"* ]]
+    [[ "$output" == *"git ls-remote --tags origin refs/tags/dist-v1.0.0"* ]]
+    refute_recorded gh ""
+}
+
+@test "cut-dist-tag.sh names a same-name tag that is already on origin, where it is, and the exact commands to inspect and remove it (kernel #62 follow-up)" {
+    make_cut_repo
+    shim_cut_tools
+    shim_cut_gh
+    export COSIGN_KEY_PATH="$DIST_MANIFEST"
+    # the leftover is on origin: a cut that pushed its tag and then failed, or a release
+    local other="${BATS_TEST_TMPDIR}/other-clone"
+    git clone -q "$CUT_ORIGIN" "$other"
+    git -C "$other" config user.email 'plan@example.org'
+    git -C "$other" config user.name 'plan'
+    git -C "$other" tag -a dist-v1.0.0 -m dist-v1.0.0
+    git -C "$other" push -q origin dist-v1.0.0
+    run_cut 1.0.0 --run-id 42 --overlap true --dist-manifest "$DIST_MANIFEST" --first-release
+    [ "$status" -eq 1 ]
+    # which tag, and where it exists
+    [[ "$output" == *"tag dist-v1.0.0 already exists on origin"* ]]
+    # the exact command to inspect it, on origin and in the clone the fetch just filled
+    [[ "$output" == *"git ls-remote --tags origin refs/tags/dist-v1.0.0"* ]]
+    [[ "$output" == *"git show dist-v1.0.0"* ]]
+    # the exact commands to remove it, said to be the operator's call and never run here
+    [[ "$output" == *"git push origin :refs/tags/dist-v1.0.0"* ]]
+    [[ "$output" == *"git tag -d dist-v1.0.0"* ]]
+    # and nothing was touched: the tag is still on origin
+    git -C "$CUT_ORIGIN" rev-parse -q --verify refs/tags/dist-v1.0.0 > /dev/null
+    refute_recorded gh ""
+}
+
+@test "cut-dist-tag.sh names a tag that is in this clone AND on origin with different targets, instead of dying on the fetch (kernel #62 follow-up)" {
+    make_cut_repo
+    shim_cut_tools
+    shim_cut_gh
+    export COSIGN_KEY_PATH="$DIST_MANIFEST"
+    # origin holds one dist-v1.0.0 ...
+    local other="${BATS_TEST_TMPDIR}/other-clone"
+    git clone -q "$CUT_ORIGIN" "$other"
+    git -C "$other" config user.email 'plan@example.org'
+    git -C "$other" config user.name 'plan'
+    git -C "$other" tag -a dist-v1.0.0 -m 'the one on origin'
+    git -C "$other" push -q origin dist-v1.0.0
+    # ... and this clone a different one of the same name (git fetch --tags
+    # refuses to overwrite it, and says nothing under --quiet)
+    git -C "$CUT_REPO" tag -a dist-v1.0.0 -m 'a different one, local only'
+    run_cut 1.0.0 --run-id 42 --overlap true --dist-manifest "$DIST_MANIFEST" --first-release
+    [ "$status" -eq 1 ]
+    [[ "$output" != *"cannot fetch tags and main from origin"* ]]
+    # which tag, and where it exists
+    [[ "$output" == *"dist-v1.0.0"* ]]
+    [[ "$output" == *"in this clone"* ]]
+    [[ "$output" == *"on origin"* ]]
+    [[ "$output" == *"different"* ]]
+    # the exact commands to inspect each side, and to remove the local one
+    [[ "$output" == *"git show dist-v1.0.0"* ]]
+    [[ "$output" == *"git ls-remote --tags origin refs/tags/dist-v1.0.0"* ]]
+    [[ "$output" == *"git tag -d dist-v1.0.0"* ]]
+    # nothing was deleted for the operator
+    git -C "$CUT_REPO" rev-parse -q --verify refs/tags/dist-v1.0.0 > /dev/null
+    git -C "$CUT_ORIGIN" rev-parse -q --verify refs/tags/dist-v1.0.0 > /dev/null
+    refute_recorded gh ""
+}
+
+@test "cut-dist-tag.sh names ANY clone-only tag that differs from origin's same-name tag, not only the one being cut (kernel #62 follow-up)" {
+    make_cut_repo
+    shim_cut_tools
+    shim_cut_gh
+    export COSIGN_KEY_PATH="$DIST_MANIFEST"
+    local other="${BATS_TEST_TMPDIR}/other-clone"
+    git clone -q "$CUT_ORIGIN" "$other"
+    git -C "$other" config user.email 'plan@example.org'
+    git -C "$other" config user.name 'plan'
+    git -C "$other" tag -a rc-v0.9.0 -m 'origin copy'
+    git -C "$other" push -q origin rc-v0.9.0
+    git -C "$CUT_REPO" tag -a rc-v0.9.0 -m 'local copy'
+    run_cut 1.0.0 --run-id 42 --overlap true --dist-manifest "$DIST_MANIFEST" --first-release
+    [ "$status" -eq 1 ]
+    [[ "$output" != *"cannot fetch tags and main from origin"* ]]
+    [[ "$output" == *"rc-v0.9.0"* ]]
+    [[ "$output" == *"git show rc-v0.9.0"* ]]
+    [[ "$output" == *"git ls-remote --tags origin refs/tags/rc-v0.9.0"* ]]
+    [[ "$output" == *"git tag -d rc-v0.9.0"* ]]
     refute_recorded gh ""
 }
 
