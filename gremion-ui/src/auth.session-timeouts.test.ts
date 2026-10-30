@@ -22,4 +22,17 @@ describe('session timeout defaults (V3.3.2 L2 / AAL2)', () => {
     } } } as never)
     expect(cfg.session).toMatchObject({ strategy: 'jwt', maxAge: 43200 })
   })
+  it('the Auth.js redirect callback is the shared same-origin guard', async () => {
+    const { buildAuthConfig } = await import('./auth')
+    const cfg = await buildAuthConfig({ locals: { tenant: {
+      id: 'a', realmName: 'a', issuer: 'https://kc/realms/a', kcInternal: 'http://kc/realms/a',
+      authExternalBase: 'https://kc/realms/a', authClientId: 'gremion-ui', authClientSecretRef: 'r', audiences: [],
+    } } } as never)
+    const redirect = cfg.callbacks?.redirect
+    expect(redirect).toBeTypeOf('function')
+    const baseUrl = 'https://app.test'
+    expect(await redirect!({ url: '/finance', baseUrl })).toBe('https://app.test/finance')
+    expect(await redirect!({ url: '/.//evil.example', baseUrl })).toBe('https://app.test/')
+    expect(await redirect!({ url: 'https://evil.example/', baseUrl })).toBe('https://app.test')
+  })
 })
