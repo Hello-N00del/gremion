@@ -27,10 +27,46 @@ test('@smoke root URL returns a usable response', async ({ page }) => {
 })
 
 test('@smoke login route serves the Keycloak-redirect interstitial', async ({ page }) => {
+  // The app uses a nonce-based CSP (svelte.config.js kit.csp) with 'unsafe-inline' dropped
+  // from script-src. If SvelteKit's hydration/data scripts OR the app.html bootstrap script
+  // (nonce="%sveltekit.nonce%") ever lose their nonce, the browser refuses to execute them
+  // and hydration dies silently. Collect any securitypolicyviolation the login page fires
+  // (the init script runs before page scripts) plus CSP console errors, and fail if a SCRIPT
+  // source was blocked. Unit tests cannot see this: it needs a built app in a real browser.
+  const scriptCspViolations: string[] = []
+  await page.addInitScript(() => {
+    document.addEventListener('securitypolicyviolation', (e) => {
+      const w = window as unknown as { __cspViolations?: string[] }
+      ;(w.__cspViolations ??= []).push(`${e.violatedDirective} :: ${e.blockedURI}`)
+    })
+  })
+  page.on('console', (msg) => {
+    const t = msg.text()
+    if (/content security policy/i.test(t) && /script/i.test(t)) scriptCspViolations.push(t)
+  })
+
   const response = await page.goto('/auth/login')
   expect(response).not.toBeNull()
   const status = response!.status()
   expect(status, `GET /auth/login unexpected status ${status}`).toBeLessThan(500)
+
+  // The page's onMount signIn('keycloak') can navigate away before this runs, so the
+  // DOM-side collector is best-effort: guard against a navigated or error context making
+  // evaluate throw. The console listener above is the robust net, since CSP violations log
+  // synchronously during load, before any bounce.
+  let scriptEventViolations: string[] = []
+  try {
+    const fromEvents = await page.evaluate(
+      () => (window as unknown as { __cspViolations?: string[] }).__cspViolations ?? [],
+    )
+    scriptEventViolations = fromEvents.filter((v) => /script-src/i.test(v))
+  } catch {
+    /* navigated away (Keycloak bounce): rely on the console-captured violations */
+  }
+  expect(
+    [...scriptCspViolations, ...scriptEventViolations],
+    'nonce CSP must not block any script on the login page (hydration regression)',
+  ).toEqual([])
   // v6 (CONFORMANCE §1): /auth/login is no longer an interstitial card with a
   // literal product-name heading — it bounces straight to the Keycloak login theme
   // (see +page.svelte: onMount → signIn('keycloak')). Assert the SSR response
