@@ -56,7 +56,7 @@
     {
       "chain": "platform",
       "file": "0015_plt_module_karenz.sql",
-      "sha256": "1d202f7ff8c9b57c4554ebcdb16675083ffaeb01f76b5c80b672b32aee0fa106",
+      "sha256": "f1d40c85d269a51631efa37bb313e315a9fe7fb384e8f38067a2592146ec0d73",
       "rules": [
         "drop",
         "revoke"

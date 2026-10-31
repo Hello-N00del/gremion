@@ -19,10 +19,10 @@
 --  * The councils reach this through TWO SECURITY DEFINER functions, as the login
 --    role gremion_ui_modules (a direct member of the marker role
 --    plt_council_requester; the EXECUTE grants are init's, ensureCouncilRequester).
---    It holds no table privilege. plt.council_karenz_list returns NO actor column,
---    no export path and no checksum: the role is shared by every council, so it
---    could ask for any customer id, and the person who switched is recorded only in
---    the audit log. plt.council_karenz_report appends an event and sets the two
+--    It holds no table privilege. Trust model: the councils share this one role, and
+--    the executor and the calling app scope every call by customer. The list
+--    returns NO actor column, no export path and no checksum; the person who
+--    switched is recorded only in the audit log. plt.council_karenz_report appends an event and sets the two
 --    tenant-side marks (tenant_done, restored). Reports are ADVISORY: nothing
 --    destructive on the platform side ever reads a council report to decide to
 --    delete; the platform job uses final_at and the blocked state only.
@@ -155,6 +155,8 @@ $body$;
 --                 sets tenant_done_at once and, when the platform side is already
 --                 done, closes the row (finalized);
 --   restored    : only from restoring; closes the row (restored_at).
+-- A mark is a completion claim, so it is accepted only on an info-level report: a
+-- failed pass reports its error as a plain event (no mark) and the row stays open.
 -- A refused mark rolls the event back with it.
 CREATE FUNCTION plt.council_karenz_report(
   p_customer_id uuid, p_karenz_id uuid, p_step text, p_level text, p_message text, p_mark text) RETURNS void
@@ -180,6 +182,9 @@ BEGIN
   END IF;
   IF p_mark IS NOT NULL AND p_mark NOT IN ('tenant_done', 'restored') THEN
     RAISE EXCEPTION 'council_karenz_report: the mark is tenant_done or restored' USING ERRCODE = 'invalid_parameter_value';
+  END IF;
+  IF p_mark IS NOT NULL AND p_level = 'error' THEN
+    RAISE EXCEPTION 'council_karenz_report: a completion mark needs an info-level report, not an error' USING ERRCODE = 'invalid_parameter_value';
   END IF;
   -- the row of THIS customer only; locked so a mark and the platform job serialise
   SELECT * INTO v_row FROM plt.module_karenz k

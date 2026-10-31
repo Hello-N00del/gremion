@@ -365,6 +365,32 @@ describe('plt.council_karenz_report', () => {
     expect((await failure(report(council, rest.customer, restId, 'restore', 'info', 'm', 'restored')))?.code).toBe('22023')
   })
 
+  it('a completion mark on an error-level report is refused (22023) and closes nothing, with or without the platform side done', async () => {
+    const lone = dueSeed()
+    const loneId = await insertKarenz(lone)
+    expect((await failure(report(council, lone.customer, loneId, 'final', 'error', 'tenant pass failed', 'tenant_done')))?.code).toBe('22023')
+    expect(await events(loneId), 'a refused mark leaves no event behind').toBe(0)
+    expect(await row(loneId)).toMatchObject({ state: 'open', has_tenant_done: false })
+
+    const both = dueSeed({ state: 'finalizing', platformDone: '-1 hour', finalMode: 'live' })
+    const bothId = await insertKarenz(both)
+    expect((await failure(report(council, both.customer, bothId, 'final', 'error', 'tenant pass failed', 'tenant_done')))?.code).toBe('22023')
+    expect(await row(bothId)).toMatchObject({ state: 'finalizing', has_tenant_done: false, has_platform_done: true })
+
+    const rest = seed({ state: 'restoring', restoreRequested: '-1 hour' })
+    const restId = await insertKarenz(rest)
+    expect((await failure(report(council, rest.customer, restId, 'restore', 'error', 'restore failed', 'restored')))?.code).toBe('22023')
+    expect(await row(restId)).toMatchObject({ state: 'restoring', has_restored_at: false })
+    expect(await events(restId)).toBe(0)
+
+    // the failure itself is still reportable, as an event without a mark ...
+    await report(council, lone.customer, loneId, 'final', 'error', 'tenant pass failed')
+    expect(await lastEvent(loneId)).toEqual({ level: 'error', step: 'final', message: 'tenant pass failed' })
+    // ... and the retry that succeeds closes the row
+    await report(council, lone.customer, loneId, 'final', 'info', 'tenant side done', 'tenant_done')
+    expect(await row(loneId)).toMatchObject({ has_tenant_done: true })
+  })
+
   it('an unknown mark is 22023', async () => {
     const s = seed()
     const id = await insertKarenz(s)
@@ -413,7 +439,7 @@ describe('plt.council_karenz_report', () => {
     const snap = async () =>
       (await pa<Record<string, unknown>[]>`SELECT final_mode, final_at, export_path, export_sha256, export_deleted_at, platform_done_at FROM plt.module_karenz WHERE karenz_id = ${id}::uuid`)[0]
     const before = await snap()
-    await report(council, s.customer, id, 'final', 'error', 'something failed', 'tenant_done')
+    await report(council, s.customer, id, 'final', 'info', 'tenant side done', 'tenant_done')
     expect(await snap()).toEqual(before)
   })
 })
