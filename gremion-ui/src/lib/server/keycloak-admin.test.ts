@@ -58,7 +58,7 @@ describe('KeycloakAdminClient.listRealmRoleMembers', () => {
 
   async function clientWithFetch(roleUsers: Array<ReturnType<typeof user>>) {
     const urls: string[] = []
-    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+    const fetchMock = vi.fn(async (input: string | URL) => {
       const url = String(input)
       if (url.includes('/protocol/openid-connect/token')) return tokenOk()
       urls.push(url)
@@ -113,7 +113,7 @@ describe('KeycloakAdminClient.listRealmRoleMembers', () => {
   })
 
   it('a non-2xx answer rejects with the Keycloak status', async () => {
-    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) =>
+    vi.stubGlobal('fetch', vi.fn(async (input: string | URL) =>
       String(input).includes('/protocol/openid-connect/token') ? tokenOk() : new Response('boom', { status: 500 })))
     const { KeycloakAdminClient } = await import('./keycloak-admin')
     const client = new KeycloakAdminClient('http://kc.test/auth', 'realm-x', 'cid', 'sec')
