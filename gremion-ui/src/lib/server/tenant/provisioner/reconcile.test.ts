@@ -73,6 +73,8 @@ const AUTH_TIME_MAPPER = {
   ...(base.clients.find((c: { clientId: string }) => c.clientId === 'gremion-ui').protocolMappers.find((m: { name: string }) => m.name === 'auth_time') as { protocolMapper: string; config: Record<string, string> }),
 }
 const UI_MAPPERS = 'GET /admin/realms/verein/clients/uuid-ui/protocol-mappers/models'
+const VORSTAND_ROLE_GET = 'GET /admin/realms/verein/roles/vorstand'
+const UI_SCOPE_MAPPINGS = 'GET /admin/realms/verein/clients/uuid-ui/scope-mappings/realm'
 
 /** A GREEN live realm: every §4 contract element present + correct. Built as a
  *  route map keyed by `${method} ${path}` for a scriptable transport. */
@@ -145,7 +147,10 @@ function greenRoutes(): Record<string, unknown> {
       { name: 'member' },
       { name: 'council-admin' },
       { name: 'it-admin' },
+      { name: 'vorstand' },
     ],
+    // Karenz phase 1 (Task 7): the standard realm role `vorstand` exists in the realm
+    [VORSTAND_ROLE_GET]: { id: 'role-vorstand', name: 'vorstand', description: 'Vorstand' },
     // realm users — service accounts only (#239)
     [`GET /admin/realms/${REALM}/users?max=2000`]: [
       { username: 'service-account-gremion-admin', serviceAccountClientId: 'gremion-admin' },
@@ -467,7 +472,9 @@ describe('reconcileRealm — each single drift fails EXACTLY that named check', 
       // check must catch this.
       r['GET /admin/realms/verein/clients/uuid-ui/scope-mappings/realm'] = []
     })
-    expect(failed).toEqual(['full-scope-allowed'])
+    // Karenz phase 1 (Task 7): the empty mapping also drops the vorstand scope mapping, which the
+    // separate vorstand-role check reports on its own.
+    expect(failed).toEqual(['full-scope-allowed', 'vorstand-role'])
   })
 
   it('(D) #254: a partial scope-mapping (missing one base role) -> full-scope-allowed fails naming it', async () => {
@@ -476,6 +483,7 @@ describe('reconcileRealm — each single drift fails EXACTLY that named check', 
       { name: 'guest' },
       { name: 'member' },
       { name: 'council-admin' },
+      { name: 'vorstand' },
       // it-admin dropped
     ]
     const { transport } = scriptedTransport(routes)
@@ -483,6 +491,57 @@ describe('reconcileRealm — each single drift fails EXACTLY that named check', 
     const fsa = report.checks.find((c) => c.name === 'full-scope-allowed')!
     expect(fsa.ok).toBe(false)
     expect(fsa.detail).toMatch(/it-admin/)
+  })
+
+  // Karenz phase 1 (Task 7): the `vorstand` realm role must exist AND sit in the gremion-ui scope mappings
+  // (fullScopeAllowed is false, so a role absent from the mappings never reaches a token).
+  it('vorstand-role fails when the realm role is absent (and the scope mapping is the only thing left)', async () => {
+    const routes = greenRoutes()
+    delete routes[VORSTAND_ROLE_GET]
+    const { transport } = scriptedTransport(routes)
+    const report = await reconcileRealm(transport, { ...opts, verifyOnly: true })
+    const failed = report.checks.filter((c) => !c.ok)
+    expect(failed.map((c) => c.name)).toEqual(['vorstand-role'])
+    expect(failed[0]!.detail).toMatch(/vorstand/)
+    expect(failed[0]!.detail).toMatch(/absent|missing|not exist/i)
+  })
+
+  it('vorstand-role fails when a live 404 on the role GET is thrown by the transport', async () => {
+    const routes = greenRoutes()
+    delete routes[VORSTAND_ROLE_GET]
+    const { transport: inner } = scriptedTransport(routes)
+    const transport: KcTransport = async (method, path, body) => {
+      if (method === 'GET' && path === '/admin/realms/verein/roles/vorstand') {
+        throw new Error('Keycloak Admin API error: 404 on GET /admin/realms/verein/roles/vorstand: {"error":"Could not find role"}')
+      }
+      return inner(method, path, body)
+    }
+    const report = await reconcileRealm(transport, { ...opts, verifyOnly: true })
+    expect(report.checks.filter((c) => !c.ok).map((c) => c.name)).toEqual(['vorstand-role'])
+  })
+
+  it('vorstand-role fails when only the scope mapping is missing (and full-scope-allowed names it too)', async () => {
+    const routes = greenRoutes()
+    routes[UI_SCOPE_MAPPINGS] = [{ name: 'guest' }, { name: 'member' }, { name: 'council-admin' }, { name: 'it-admin' }]
+    const { transport } = scriptedTransport(routes)
+    const report = await reconcileRealm(transport, { ...opts, verifyOnly: true })
+    const failed = report.checks.filter((c) => !c.ok)
+    expect(failed.map((c) => c.name).sort()).toEqual(['full-scope-allowed', 'vorstand-role'])
+    expect(failed.find((c) => c.name === 'vorstand-role')!.detail).toMatch(/scope/i)
+  })
+
+  it('vorstand-role passes when both the role and the scope mapping exist', async () => {
+    const { transport } = scriptedTransport(greenRoutes())
+    const report = await reconcileRealm(transport, { ...opts, verifyOnly: true })
+    expect(report.checks.find((c) => c.name === 'vorstand-role')).toEqual({ name: 'vorstand-role', ok: true, detail: '' })
+  })
+
+  it('vorstand-role fails (as does every gremion-ui dependent check) when the gremion-ui client is absent', async () => {
+    const routes = greenRoutes()
+    routes[`GET /admin/realms/${REALM}/clients?clientId=gremion-ui`] = []
+    const { transport } = scriptedTransport(routes)
+    const report = await reconcileRealm(transport, { ...opts, verifyOnly: true })
+    expect(report.checks.find((c) => c.name === 'vorstand-role')?.ok).toBe(false)
   })
 
   it('planted dev.admin user -> only no-fixture-users fails (names the user)', async () => {
@@ -804,7 +863,9 @@ describe('(FIX3-B) reconcileRealm — realm segment is encodeURIComponent-encode
         { name: 'member' },
         { name: 'council-admin' },
         { name: 'it-admin' },
+        { name: 'vorstand' },
       ],
+      [`GET ${R}/roles/vorstand`]: { id: 'role-vorstand', name: 'vorstand' },
       [`GET ${R}/users?max=2000`]: [
         { username: 'service-account-gremion-admin', serviceAccountClientId: 'gremion-admin' },
       ],
@@ -870,6 +931,87 @@ describe('reconcileRealm — apply replays ONLY the failed checks (§4-2), nothi
     expect(writes[0]!.body).toMatchObject({ name: 'auth_time', protocol: 'openid-connect', protocolMapper: 'oidc-usersessionmodel-note-mapper' })
     expect((writes[0]!.body as any).config).toEqual((AUTH_TIME_MAPPER as any).config)
     expect(report.applied).toEqual(['gremion-ui-auth-time-mapper'])
+  })
+
+  describe('vorstand-role apply (Karenz phase 1, Task 7)', () => {
+    const ROLES_PATH = '/admin/realms/verein/roles'
+    const MAPPINGS_PATH = '/admin/realms/verein/clients/uuid-ui/scope-mappings/realm'
+    const BASE_MAPPINGS = [{ name: 'guest' }, { name: 'member' }, { name: 'council-admin' }, { name: 'it-admin' }]
+
+    /** A transport whose Keycloak state reacts to the repair writes, so the post-apply re-verify reads the result. */
+    function statefulTransport(routes: Record<string, unknown>, opts2: { conflictOnCreate?: boolean } = {}) {
+      const calls: Array<{ method: string; path: string; body?: unknown }> = []
+      const transport: KcTransport = async (method, path, body) => {
+        calls.push({ method, path, body })
+        if (method === 'POST' && path === ROLES_PATH) {
+          routes[VORSTAND_ROLE_GET] = { id: 'role-vorstand', name: 'vorstand', description: 'Vorstand' }
+          if (opts2.conflictOnCreate) throw new Error(`Keycloak Admin API error: 409 on POST ${path}: {"errorMessage":"Role with name vorstand already exists"}`)
+          return undefined
+        }
+        if (method === 'POST' && path === MAPPINGS_PATH) {
+          routes[UI_SCOPE_MAPPINGS] = [...(routes[UI_SCOPE_MAPPINGS] as unknown[]), ...(body as unknown[])]
+          return undefined
+        }
+        const key = `${method} ${path}`
+        return key in routes ? routes[key] : undefined
+      }
+      return { transport, calls, routes }
+    }
+
+    it('role and mapping both missing -> apply creates the role, then adds the scope mapping, and nothing else', async () => {
+      const routes = greenRoutes()
+      delete routes[VORSTAND_ROLE_GET]
+      routes[UI_SCOPE_MAPPINGS] = [...BASE_MAPPINGS]
+      const { transport, calls } = statefulTransport(routes)
+      const report = await reconcileRealm(transport, { ...opts, verifyOnly: false })
+      const writes = calls.filter((c) => c.method !== 'GET')
+      expect(writes).toHaveLength(2)
+      expect(writes[0]).toMatchObject({ method: 'POST', path: ROLES_PATH })
+      expect(writes[0]!.body).toMatchObject({ name: 'vorstand', description: 'Vorstand' })
+      expect(writes[1]).toMatchObject({ method: 'POST', path: MAPPINGS_PATH })
+      expect(writes[1]!.body).toEqual([expect.objectContaining({ id: 'role-vorstand', name: 'vorstand' })])
+      expect(report.applied).toEqual(['vorstand-role'])
+      // the post-apply re-verify reads the result (full-scope-allowed passes again because the mapping landed)
+      expect(report.ok).toBe(true)
+    })
+
+    it('a 409 on the role create is not an error: the mapping is still added', async () => {
+      const routes = greenRoutes()
+      delete routes[VORSTAND_ROLE_GET]
+      routes[UI_SCOPE_MAPPINGS] = [...BASE_MAPPINGS]
+      const { transport, calls } = statefulTransport(routes, { conflictOnCreate: true })
+      const report = await reconcileRealm(transport, { ...opts, verifyOnly: false })
+      const writes = calls.filter((c) => c.method !== 'GET')
+      expect(writes.map((w) => `${w.method} ${w.path}`)).toEqual([`POST ${ROLES_PATH}`, `POST ${MAPPINGS_PATH}`])
+      expect(report.applied).toEqual(['vorstand-role'])
+      expect(report.ok).toBe(true)
+    })
+
+    it('a create error other than 409 propagates (a half repair is not reported as applied)', async () => {
+      const routes = greenRoutes()
+      delete routes[VORSTAND_ROLE_GET]
+      const calls: string[] = []
+      const { transport: inner } = scriptedTransport(routes)
+      const transport: KcTransport = async (method, path, body) => {
+        calls.push(`${method} ${path}`)
+        if (method === 'POST' && path === ROLES_PATH) throw new Error('Keycloak Admin API error: 500 on POST ' + path)
+        return inner(method, path, body)
+      }
+      await expect(reconcileRealm(transport, { ...opts, verifyOnly: false })).rejects.toThrow(/500/)
+      expect(calls.some((c) => c.includes('scope-mappings') && c.startsWith('POST'))).toBe(false)
+    })
+
+    it('only the scope mapping missing -> apply does NOT create the role, it adds the mapping for the existing role', async () => {
+      const routes = greenRoutes()
+      routes[UI_SCOPE_MAPPINGS] = [...BASE_MAPPINGS]
+      const { transport, calls } = statefulTransport(routes)
+      const report = await reconcileRealm(transport, { ...opts, verifyOnly: false })
+      const writes = calls.filter((c) => c.method !== 'GET')
+      expect(writes.map((w) => `${w.method} ${w.path}`)).toEqual([`POST ${MAPPINGS_PATH}`])
+      expect(writes[0]!.body).toEqual([expect.objectContaining({ id: 'role-vorstand', name: 'vorstand' })])
+      expect(report.applied).toEqual(['vorstand-role'])
+      expect(report.ok).toBe(true)
+    })
   })
 
   it('an auth_time mapper that exists but drifted -> apply PUTs it by id (a POST would 409), once', async () => {

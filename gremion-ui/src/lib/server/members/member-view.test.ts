@@ -34,10 +34,31 @@ it('projects a friendly, leak-free Member', async () => {
   expect(m.id).toBe('anna.berger') // opaque handle, NOT the UUID
   expect(m.name).toBe('Anna Berger')
   expect(m.enabled).toBe(true)
-  expect(m.roles).toContain('Vorstand') // council-admin → Vorstand (design string)
+  // Karenz phase 1 (Task 7): the Vorstand chip comes from the `vorstand` realm role; council-admin shows the
+  // labels.ts name ("Gremienverwaltung") and no longer reads as Vorstand.
+  expect(m.roles).toContain('Gremienverwaltung')
+  expect(m.roles).not.toContain('Vorstand')
   expect(m.roles).toContain('Mitglied')
   expect(m.scopes).toContain('Belege freigeben') // ref-finanzen-hv → friendly scope
   expect(m.memberships[0]).toMatchObject({ gremium_or_referat_name: 'Vorstand', role: 'Gewählt' })
+})
+
+it('a user with realm role vorstand gets the role chip "Vorstand"; a user with only council-admin does not', async () => {
+  const original = kc.listUserRoles
+  try {
+    kc.listUserRoles = vi.fn(async () => [{ name: 'vorstand' }, { name: 'member' }])
+    const vorstand = await memberView(annaKc as never)
+    expect(vorstand.roles).toContain('Vorstand')
+    expect(vorstand.roles).not.toContain('Gremienverwaltung')
+    expect(JSON.stringify(vorstand)).not.toContain('vorstand')
+
+    kc.listUserRoles = vi.fn(async () => [{ name: 'council-admin' }])
+    const adminOnly = await memberView(annaKc as never)
+    expect(adminOnly.roles).not.toContain('Vorstand')
+    expect(adminOnly.roles).toContain('Gremienverwaltung')
+  } finally {
+    kc.listUserRoles = original
+  }
 })
 
 it('never leaks UUID / raw group id / realm key / SSO', async () => {

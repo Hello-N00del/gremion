@@ -19,7 +19,8 @@
 // sequence cannot mechanically repair (per-tenant exact URIs, fixture users,
 // fullScopeAllowed, the gremion-ui sub-mapper) are REPORTED but never auto-repaired — a
 // re-import is the operator's answer. The one exception among the sub checks is
-// `bearer-clients-sub` (TASK-033-a): it adds the missing sub mapper / scope.
+// `bearer-clients-sub` (TASK-033-a): it adds the missing sub mapper / scope. `vorstand-role`
+// (Karenz phase 1) is repaired too: apply creates the realm role and its gremion-ui scope mapping.
 import {
   adminApiStatus,
   KcProvisionApi,
@@ -58,6 +59,7 @@ export const RECONCILE_CHECK_NAMES = [
   'no-fixture-users', // #239   no seed-subject id and no template fixture username (TASK-043 Q10)
   'smtp-server', // TASK-043 R-E5b: the realm sends as its OWN kc-<token>@ principal, no sentinel
   'frontend-url', // TASK-043 r4: attributes.frontendUrl == https://<tenant host>/auth (mailed links, iss)
+  'vorstand-role', // Karenz phase 1: the standard realm role `vorstand` exists AND sits in the gremion-ui scope mappings (fullScopeAllowed is false, so a role absent there never reaches a token)
 ] as const
 
 /** Failed checks only the HOST can repair (TASK-043 Q7): the realm's sender is
@@ -239,6 +241,15 @@ interface ScopeRep {
   id?: string
   name?: string
 }
+interface RoleRep {
+  id?: string
+  name?: string
+  description?: string
+}
+
+/** The standard Vorstand realm role (Karenz phase 1): added to the realm template, repaired here on realms that predate it. */
+const VORSTAND_ROLE = 'vorstand'
+const VORSTAND_ROLE_DESCRIPTION = 'Vorstand'
 interface UserRep {
   id?: string
   username?: string
@@ -610,6 +621,7 @@ export async function reconcileRealm(rawTransport: KcTransport, opts: ReconcileO
     fail('gremion-ui-web-origins', 'gremion-ui client absent — web-origins cannot be verified')
     fail('gremion-ui-pkce', 'gremion-ui client absent — PKCE cannot be verified')
     fail('full-scope-allowed', 'gremion-ui client absent — fullScopeAllowed cannot be verified')
+    fail('vorstand-role', 'gremion-ui client absent — the vorstand scope mapping cannot be verified')
   } else {
     pass('gremion-ui-client')
     const mappers = (await get<MapperRep[]>(`/clients/${ui.id}/protocol-mappers/models`)) ?? []
@@ -679,6 +691,28 @@ export async function reconcileRealm(rawTransport: KcTransport, opts: ReconcileO
         )
       }
     }
+  }
+
+  // ── Karenz phase 1: the standard `vorstand` realm role ────────────────────────
+  // Two halves: the role exists in the realm, and it sits in the gremion-ui client's realm-role scope
+  // mappings (fullScopeAllowed is false, so a role absent from the mappings never reaches a token). Realms
+  // created before the role was added to the template have neither. Reported per half in `detail`, repaired
+  // by apply. A 404 on the role GET is "absent", never an error.
+  let vorstandRole: RoleRep | undefined
+  let vorstandMapped = false
+  if (ui?.id) {
+    try {
+      vorstandRole = (await get<RoleRep | undefined>(`/roles/${encodeURIComponent(VORSTAND_ROLE)}`)) ?? undefined
+    } catch (err) {
+      if (adminApiStatus(err) !== 404) throw err
+    }
+    const mappedRoles = (await get<RoleRep[]>(`/clients/${ui.id}/scope-mappings/realm`)) ?? []
+    vorstandMapped = mappedRoles.some((r) => r.name === VORSTAND_ROLE)
+    const problems: string[] = []
+    if (!vorstandRole?.name) problems.push(`the realm role "${VORSTAND_ROLE}" is absent`)
+    if (!vorstandMapped) problems.push(`the gremion-ui client scope mappings do not list "${VORSTAND_ROLE}" (fullScopeAllowed is false: the role would never reach a token)`)
+    if (problems.length === 0) pass('vorstand-role')
+    else fail('vorstand-role', problems.join('; '))
   }
 
   // ── TASK-033-a: every Bearer client issues `sub` ──────────────────────────────
@@ -850,6 +884,26 @@ export async function reconcileRealm(rawTransport: KcTransport, opts: ReconcileO
     if (existing?.id) await transport('PUT', `${path}/${existing.id}`, { ...AUTH_TIME_MAPPER_REP, id: existing.id })
     else await transport('POST', path, AUTH_TIME_MAPPER_REP)
     applied.push('gremion-ui-auth-time-mapper')
+  }
+
+  // Karenz phase 1: create the `vorstand` realm role when it is absent (a 409 means another writer won the race
+  // and is fine; any other error propagates so a half repair is never reported as applied), then add it to the
+  // gremion-ui realm-role scope mappings when it is not there. Both steps are idempotent. The post-apply
+  // re-verify below reads the result.
+  if (failedNames.has('vorstand-role') && ui?.id) {
+    if (!vorstandRole?.name) {
+      try {
+        await transport('POST', `/admin/realms/${realmSeg(realm)}/roles`, { name: VORSTAND_ROLE, description: VORSTAND_ROLE_DESCRIPTION })
+      } catch (err) {
+        if (adminApiStatus(err) !== 409) throw err
+      }
+    }
+    if (!vorstandMapped) {
+      const role = vorstandRole?.id ? vorstandRole : await get<RoleRep | undefined>(`/roles/${encodeURIComponent(VORSTAND_ROLE)}`)
+      if (!role?.id) throw new Error(`reconcile: the realm role "${VORSTAND_ROLE}" cannot be read back after create in realm "${realm}"`)
+      await transport('POST', `/admin/realms/${realmSeg(realm)}/clients/${ui.id}/scope-mappings/realm`, [role])
+    }
+    applied.push('vorstand-role')
   }
 
   // TASK-033-a: a Bearer client without `sub` gets it. The realm's own `basic` scope when it has one (Keycloak
