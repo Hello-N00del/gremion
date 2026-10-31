@@ -214,6 +214,20 @@ describe('the delete refusal names the Karenz', () => {
     expect(src).not.toContain('disable them first')
     expect(src).toContain('liveModuleDatabasesRefusal(')
   })
+
+  it('main() routes both karenz verbs to karenzVerb with the context it needs (the CLI cannot say "unknown verb")', () => {
+    const src = readFileSync(join(process.cwd(), 'scripts', 'tenant-provision.ts'), 'utf8')
+    const main = src.slice(src.indexOf('async function main()'))
+    const arm = main.match(/case 'karenz-run':\s*case 'karenz-status':[\s\S]*?(?=\n    (?:case |default:))/)
+    expect(arm, 'a case arm for karenz-run and karenz-status in main()').not.toBeNull()
+    const body = arm![0]
+    expect(body).toContain('KARENZ_VERBS.has(verb)')
+    expect(body).toContain('return karenzVerb(verb')
+    expect(body).toContain('withLive')
+    expect(body).toContain('openPlatform: openPlatformPool')
+    expect(body).toContain('customerIdForSlug')
+    expect(body).toContain('process.argv.slice(3)')
+  })
 })
 
 describe('export of a customer whose module database is blocked', () => {

@@ -1162,6 +1162,18 @@ async function main(): Promise<void> {
         usage: (m) => new UsageError(m),
         log,
       })
+    // module Karenz day 30 + the operator's view of it (tenant-provision-karenz.ts), run by the host's timer
+    case 'karenz-run':
+    case 'karenz-status':
+      if (!KARENZ_VERBS.has(verb)) throw new UsageError(`unknown verb ${verb}`)
+      return karenzVerb(verb, {
+        args: process.argv.slice(3),
+        withLive,
+        openPlatform: openPlatformPool,
+        customerIdForSlug: async (s) => (await getTenantBySlug(s))?.id ?? null,
+        usage: (m) => new UsageError(m),
+        log,
+      })
     // TRD-149/150/151: the open-format tenant export + completeness check (tenant-provision-export.ts)
     case 'export':
     case 'export-verify':
