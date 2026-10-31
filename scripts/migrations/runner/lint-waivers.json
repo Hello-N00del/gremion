@@ -52,6 +52,16 @@
         "revoke"
       ],
       "reason": "Adds the council request origin to plt.provisioning_request: the old origin and evidence CHECKs cannot be widened without DROP CONSTRAINT and re-ADD (each re-added NOT VALID and validated in the same file, so no unvalidated constraint remains), the immutability guard body must gain the actor_kind column (CREATE OR REPLACE keeps the grants pg.ts issues), and REVOKE ALL FROM PUBLIC hardens the SECURITY DEFINER functions this same file creates. Same shape as the waivers of 0009, 0010 and 0013. The file sets lock_timeout first; the table is a small queue whose only writers ship in the same release."
+    },
+    {
+      "chain": "platform",
+      "file": "0015_plt_module_karenz.sql",
+      "sha256": "1d202f7ff8c9b57c4554ebcdb16675083ffaeb01f76b5c80b672b32aee0fa106",
+      "rules": [
+        "drop",
+        "revoke"
+      ],
+      "reason": "Adds the blocked module database state: the old module_database_state_check cannot be widened without DROP CONSTRAINT and re-ADD (re-added NOT VALID and validated in the same file, so no unvalidated constraint remains), and REVOKE ALL ON FUNCTION .. FROM PUBLIC hardens the two SECURITY DEFINER council functions this same file creates (Postgres grants EXECUTE to PUBLIC by default). Same shape as the waivers of 0013 and 0014. The file sets lock_timeout first; module_database is a small control-plane table and the two new tables are created empty."
     }
   ]
 }
