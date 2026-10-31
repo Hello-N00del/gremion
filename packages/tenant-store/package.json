@@ -57,6 +57,7 @@
   "scripts": {
     "test": "vitest run",
     "test:integration": "node test/harness/stack.mjs",
+    "test:t084": "node test/harness/t084-stack.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "check:access": "node scripts/check-tenant-db-access.mjs",
     "build": "tsc -p tsconfig.build.json",
