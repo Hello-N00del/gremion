@@ -65,7 +65,7 @@ export interface GateVerbContext {
   /** The customer id of a slug from the control registry, or null. */
   customerIdForSlug(slug: string): Promise<string | null>
   /** Tests only: whether TENANT_EXPORT_DIR is its own mount (default: exportDirIsMounted over /proc/self/mountinfo). */
-  exportDirMounted?(dir: string): boolean
+  exportDirMounted?: (dir: string) => boolean
   flag(name: string): string | undefined
   reqFlag(name: string): string
   positional(index?: number): string | undefined
