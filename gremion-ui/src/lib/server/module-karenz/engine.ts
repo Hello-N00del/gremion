@@ -18,7 +18,9 @@
 //               More than an hour in this state is an error event of its own.
 //   finalizing  (set by the platform job, so the mode is live) every participant's finalize(live) and
 //               the 'tenant_done' mark, but ONLY once the retained copies exist (step `retained` done,
-//               no failed `publish:*` step): without them the pass refuses and says so.
+//               no failed `publish:*` step): without them the pass refuses and says so. The retained
+//               and publish stages are retried first, on every pass: the platform job flips the row at
+//               final_at without reading this ledger, so a stage still failing then must recover here.
 //
 // Failure handling: a failing step is recorded failed, reported once as an error event (again after 6
 // hours, at once when the text changes), and the NEXT step still runs. The platform sees the error
@@ -33,7 +35,7 @@ import type { Sql } from '@gremion/db'
 import { writeAuditEntry, type AuditEntry } from '$lib/server/audit-db'
 import { safeFailureReason } from '$lib/server/erasure/orchestrator'
 import { CouncilNotConfigured } from '$lib/server/module-switch/council-db'
-import { listSwitches } from '$lib/server/module-switch/store'
+import { listSwitches, type SwitchRow } from '$lib/server/module-switch/store'
 import type { TenantContext } from '$lib/server/tenant/context'
 import { KarenzPartialError, karenzParticipantsFor, type KarenzContext, type KarenzParticipant } from './participants'
 import { listKarenz, reportKarenz, type KarenzReport, type KarenzRowView } from './platform'
@@ -71,6 +73,8 @@ export const STEP = {
   noticeT23: 'notice:t23',
   noticeT29: 'notice:t29',
   publish: (sinkId: string, recordId: string) => `publish:${sinkId}:${recordId}`,
+  /** Building the publish list itself failed (a sink lookup, not one publication). */
+  publishList: 'publish:list',
   /** The completion step of a restore: reports the `restored` mark. */
   restore: 'restore',
   restoreStuck: 'restore:stuck',
@@ -125,7 +129,7 @@ export interface KarenzPassDeps {
   store: KarenzStepStore
   writeAudit: (entry: AuditEntry) => Promise<void>
   /** The user id that switched the module off (from module_switch_request), or null when there is none (an operator-origin switch-off). */
-  startedActor: (tenant: TenantContext, catalogueId: string) => Promise<string | null>
+  startedActor: (tenant: TenantContext, catalogueId: string, switchedOffAt: Date) => Promise<string | null>
   /** True when the tenant holds local evidence of a live Karenz (used only when the council pool is not configured). */
   hasLocalEvidence: (tenant: TenantContext) => Promise<boolean>
   now: () => Date
@@ -138,17 +142,44 @@ export interface KarenzPassResult {
   failed: number
 }
 
-async function defaultStartedActor(tenant: TenantContext, catalogueId: string): Promise<string | null> {
-  // newest first: the newest APPLIED disable of this module is the switch-off the live row belongs to
-  const rows = await listSwitches(tenant.db, 200)
-  return rows.find((r) => r.moduleId === catalogueId && r.action === 'disable' && r.state === 'applied')?.actorUserId ?? null
+/** The request states a tenant switch request can be in while its platform row already exists (the reconciler marks it applied later). */
+const ACTOR_REQUEST_STATES: ReadonlySet<string> = new Set(['queued', 'succeeded', 'applying', 'applied'])
+/** A council disable is submitted before the platform row exists (the council round, then retries). */
+const ACTOR_LEAD_MS = 6 * HOUR
+/** The tenant and the platform database are on one host, but their clocks are read separately. */
+const ACTOR_CLOCK_SLACK_MS = 5 * 60_000
+
+/**
+ * The person who switched the module off, for the audit entry of THIS row: the newest request of the
+ * module (any action, any state that can still be live) submitted no later than the platform row, and
+ * only when that request is a disable made shortly before the row. So a pass that runs before the
+ * reconciler has marked the request applied still finds it, and an operator-origin disable (which has
+ * no request of its own) is not credited to an older council disable, or to one that a switch-on has
+ * since undone. null: no council person (the audit entry names the service).
+ */
+export function pickStartedActor(rows: readonly SwitchRow[], catalogueId: string, switchedOffAt: Date): string | null {
+  const at = switchedOffAt.getTime()
+  const newest = rows
+    .filter((r) => r.moduleId === catalogueId && ACTOR_REQUEST_STATES.has(r.state) && r.submittedAt.getTime() <= at + ACTOR_CLOCK_SLACK_MS)
+    .toSorted((a, b) => b.submittedAt.getTime() - a.submittedAt.getTime())[0]
+  if (!newest || newest.action !== 'disable') return null
+  if (at - newest.submittedAt.getTime() > ACTOR_LEAD_MS) return null
+  return newest.actorUserId
 }
 
-async function defaultHasLocalEvidence(tenant: TenantContext): Promise<boolean> {
+async function defaultStartedActor(tenant: TenantContext, catalogueId: string, switchedOffAt: Date): Promise<string | null> {
+  return pickStartedActor(await listSwitches(tenant.db, 200), catalogueId, switchedOffAt)
+}
+
+/** Exported for the test: `now` is the clock. */
+export async function defaultHasLocalEvidence(tenant: TenantContext, nowDate: Date = new Date()): Promise<boolean> {
   try {
-    const open = await tenant.db<{ one: number }[]>`SELECT 1 AS one FROM module_karenz_step WHERE state IN ('pending', 'failed') LIMIT 1`
-    if (open.length > 0) return true
-    const now = Date.now()
+    // A pending or failed step counts only while a Karenz could still be live: a step that failed and
+    // was never closed (a notice failure, then a restore) must not keep the error line up for ever.
+    const open = await tenant.db<{ updated_at: Date }[]>`
+      SELECT updated_at FROM module_karenz_step WHERE state IN ('pending', 'failed') ORDER BY updated_at DESC LIMIT 1`
+    if (open[0] && nowDate.getTime() - open[0].updated_at.getTime() < KARENZ_WINDOW_MS) return true
+    const now = nowDate.getTime()
     const newest = new Map<string, { action: string; at: number }>()
     for (const r of await listSwitches(tenant.db, 200)) {
       if (r.state !== 'applied' || newest.has(r.moduleId)) continue
@@ -275,13 +306,52 @@ async function report(env: RowEnv, e: KarenzReport): Promise<void> {
   await env.d.reportKarenz(env.tenant.id, env.row.karenzId, e)
 }
 
+/**
+ * The retained copies (Task 10) and their publication (Task 11), each through the ledger: a step that
+ * is done is skipped, one that failed is run again. Called on an open row AND on a finalizing one: the
+ * platform job moves a row to finalizing at final_at without looking at this ledger (the report channel
+ * is advisory), so a stage that was still failing on day 30 must keep being retried there, or the
+ * finalize guard would refuse for ever.
+ */
+async function runRetentionStages(env: RowEnv): Promise<void> {
+  const { tenant, d, row, ctx } = env
+  const stages = d.stages()
+  if (stages.retained) {
+    const retained = stages.retained
+    await runStep(env, STEP.retained, () => retained(ctx))
+  }
+  if (stages.publish) {
+    let publishSteps: Array<{ step: string; run: () => Promise<void> }> = []
+    let listed = false
+    try {
+      publishSteps = await stages.publish(ctx)
+      listed = true
+    } catch (err) {
+      // the list itself could not be built: recorded under a step of its own so it is visible and retried
+      const prev = await d.store.getStep(tenant.db, row.karenzId, STEP.publishList)
+      logFailure(env, STEP.publishList, err)
+      await recordFailure(env, STEP.publishList, describeFailure(err), prev)
+    }
+    if (listed) {
+      // a list that builds again clears an earlier failure of the list: nothing else ever would, and the
+      // finalize guard refuses on any failed publish:* step
+      const prev = await d.store.getStep(tenant.db, row.karenzId, STEP.publishList)
+      if (prev?.state === 'failed') {
+        await d.store.markStep(tenant.db, row.karenzId, STEP.publishList, { state: 'done' })
+        await safeReport(env, { step: STEP.publishList, level: 'info', message: `recovered after ${prev.attempts} attempt(s)` })
+      }
+    }
+    for (const p of publishSteps) await runStep(env, p.step, p.run)
+  }
+}
+
 async function processOpen(env: RowEnv): Promise<void> {
   const { tenant, d, row, ctx } = env
   const stages = d.stages()
   const participants = d.participantsFor(row.catalogueId)
 
   await runStep(env, STEP.started, async () => {
-    const actor = await d.startedActor(tenant, row.catalogueId)
+    const actor = await d.startedActor(tenant, row.catalogueId, row.switchedOffAt)
     // The actor is audit-only: it is never put in a mail, a report or a response.
     await d.writeAudit({
       userId: actor ?? KARENZ_SERVICE_USER,
@@ -295,22 +365,7 @@ async function processOpen(env: RowEnv): Promise<void> {
     const notice = stages.noticeSwitchoff
     await runStep(env, STEP.noticeSwitchoff, async () => report(env, { step: STEP.noticeSwitchoff, level: 'info', message: (await notice(ctx)) || 'done' }), { reportsItself: true })
   }
-  if (stages.retained) {
-    const retained = stages.retained
-    await runStep(env, STEP.retained, () => retained(ctx))
-  }
-  if (stages.publish) {
-    let publishSteps: Array<{ step: string; run: () => Promise<void> }> = []
-    try {
-      publishSteps = await stages.publish(ctx)
-    } catch (err) {
-      // the list itself could not be built: recorded under a step of its own so it is visible and retried
-      const prev = await d.store.getStep(tenant.db, row.karenzId, 'publish:list')
-      logFailure(env, 'publish:list', err)
-      await recordFailure(env, 'publish:list', describeFailure(err), prev)
-    }
-    for (const p of publishSteps) await runStep(env, p.step, p.run)
-  }
+  await runRetentionStages(env)
   for (const p of participants) {
     await runStep(env, STEP.participant(p.catalogueId, 'switchoff'), () => p.switchOff(ctx))
   }
@@ -387,6 +442,9 @@ async function processRestoring(env: RowEnv): Promise<void> {
 async function processFinalizing(env: RowEnv): Promise<void> {
   const { tenant, d, row, ctx } = env
   const participants = d.participantsFor(row.catalogueId)
+  // The retained copies and their publication are retried here as well: the platform job flips the row
+  // at final_at whatever this ledger says, and the guard below only reads the ledger.
+  await runRetentionStages(env)
   const steps = await d.store.listSteps(tenant.db, row.karenzId)
   const prev = steps.find((s) => s.step === STEP.final) ?? null
 
@@ -396,15 +454,18 @@ async function processFinalizing(env: RowEnv): Promise<void> {
       ? 'finalize refused: the row is finalizing but its deletion mode is not live'
       : !steps.some((s) => s.step === STEP.retained && s.state === 'done')
         ? 'finalize refused: the retained copies are not recorded as done (step retained)'
-        : steps.some((s) => s.step.startsWith('publish:') && s.state === 'failed')
-          ? 'finalize refused: a publish step of the retained copies has failed'
-          : null
+        : steps.some((s) => s.step === STEP.publishList && s.state === 'failed')
+          ? 'finalize refused: the list of publish steps for the retained copies could not be built'
+          : steps.some((s) => s.step.startsWith('publish:') && s.state === 'failed')
+            ? 'finalize refused: a publish step of the retained copies has failed'
+            : null
   if (refusal !== null) {
     console.error(`[module-karenz] ${tenant.slug}: Karenz ${row.karenzId} (${row.catalogueId}): ${refusal}`)
     await recordFailure(env, STEP.final, refusal, prev)
     return
   }
 
+  // The counts of THIS pass only: a participant finished in an earlier pass adds nothing (the line is advisory).
   const deleted: string[] = []
   for (const p of participants) {
     await runStep(env, STEP.participant(p.catalogueId, 'final'), async () => {
@@ -418,7 +479,14 @@ async function processFinalizing(env: RowEnv): Promise<void> {
     await runStep(
       env,
       STEP.final,
-      () => report(env, { step: STEP.final, level: 'info', message: `tenant side done${deleted.length > 0 ? `: deleted ${deleted.join(', ')}` : ''}`, mark: 'tenant_done' }),
+      () =>
+        report(env, {
+          step: STEP.final,
+          level: 'info',
+          // a module with no registered participant has nothing to delete here: say that, so a participant that failed to load shows in the event log
+          message: `tenant side done${participants.length === 0 ? `: no participant registered for ${row.catalogueId}` : deleted.length > 0 ? `: deleted ${deleted.join(', ')}` : ''}`,
+          mark: 'tenant_done',
+        }),
       { reportsItself: true },
     )
   }

@@ -5,14 +5,18 @@
 // pin is the ORDER and the ONCE: a step that is done is never run again, a failing step never stops the
 // next one, and nothing destructive runs unless the platform row says live AND the retained copies exist.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { Sql } from '@gremion/db'
 import type { TenantContext } from '$lib/server/tenant/context'
 import { CouncilNotConfigured } from '$lib/server/module-switch/council-db'
+import type { SwitchRow } from '$lib/server/module-switch/store'
 import type { ItemState, KarenzItem, KarenzItemRow, StepPatch, StepRow } from './store'
 import { KarenzPartialError, type KarenzContext, type KarenzParticipant } from './participants'
 import type { KarenzRowView, KarenzState } from './platform'
 import {
   _clearKarenzStagesForTests,
   _resetKarenzPassForTests,
+  defaultHasLocalEvidence,
+  pickStartedActor,
   registerKarenzStages,
   runKarenzPass,
   STEP,
@@ -766,6 +770,196 @@ describe('the final day: the dry run and the real thing', () => {
     await pass()
     expect(a.calls.filter((c) => c === 'finalize:live')).toHaveLength(2)
     expect(rg.reports.filter((r) => r.mark)).toHaveLength(1)
+  })
+})
+
+describe('the retained and publish stages after the platform job moved the row on (review round 1)', () => {
+  /** What karenz-run does at final_at in live mode: the open row becomes finalizing, whatever the tenant ledger says. */
+  const platformFlips = () => {
+    rg.advance(30 * DAY)
+    rg.rows[0]!.state = 'finalizing'
+    rg.rows[0]!.finalMode = 'live'
+  }
+
+  it('a retained stage that failed while the row was open is retried on the finalizing row, and the finalize then runs with no hand-written ledger entry', async () => {
+    rg.rows = [row()]
+    const a = part(rg, 'votes', { deleted: { polls: 1 } })
+    let nextcloudUp = false
+    const retained = vi.fn(async () => {
+      if (!nextcloudUp) throw new Error('nextcloud 503')
+    })
+    registerKarenzStages({ retained })
+    await pass()
+    expect(stepOf(K1, STEP.retained)?.state).toBe('failed')
+
+    platformFlips()
+    const refused = await pass() // still down: retried, still refused
+    expect(retained).toHaveBeenCalledTimes(2)
+    expect(a.calls.filter((c) => c.startsWith('finalize'))).toEqual([])
+    expect(refused.failed).toBeGreaterThan(0)
+
+    nextcloudUp = true
+    rg.advance(5 * MIN)
+    await pass()
+    expect(retained).toHaveBeenCalledTimes(3)
+    expect(stepOf(K1, STEP.retained)?.state).toBe('done')
+    expect(a.calls.filter((c) => c.startsWith('finalize'))).toEqual(['finalize:live'])
+    expect(rg.reports.filter((r) => r.mark)).toEqual([expect.objectContaining({ mark: 'tenant_done', step: STEP.final })])
+    expect(rg.rows[0]!.tenantDoneAt).not.toBeNull()
+  })
+
+  it('a publish step that failed while the row was open is retried on the finalizing row too', async () => {
+    rg.rows = [row()]
+    const a = part(rg, 'votes')
+    let up = false
+    const ran: string[] = []
+    registerKarenzStages({
+      retained: async () => {},
+      publish: async () => [
+        {
+          step: STEP.publish('files', 'rec1'),
+          run: async () => {
+            ran.push('rec1')
+            if (!up) throw new Error('nextcloud 503')
+          },
+        },
+      ],
+    })
+    await pass()
+    expect(stepOf(K1, STEP.publish('files', 'rec1'))?.state).toBe('failed')
+    platformFlips()
+    await pass()
+    expect(a.calls.filter((c) => c.startsWith('finalize'))).toEqual([])
+    up = true
+    rg.advance(5 * MIN)
+    await pass()
+    expect(ran).toEqual(['rec1', 'rec1', 'rec1'])
+    expect(a.calls.filter((c) => c.startsWith('finalize'))).toEqual(['finalize:live'])
+  })
+
+  it('a publish LIST that could not be built once does not block the final deletion for good: the next list that builds clears it, with an info event', async () => {
+    rg.rows = [row()]
+    const a = part(rg, 'votes')
+    let listUp = false
+    registerKarenzStages({
+      retained: async () => {},
+      publish: async () => {
+        if (!listUp) throw new Error('sink lookup 503')
+        return [{ step: STEP.publish('files', 'rec1'), run: async () => {} }]
+      },
+    })
+    await pass()
+    expect(stepOf(K1, 'publish:list')?.state).toBe('failed')
+    expect(errorsOf('publish:list')).toHaveLength(1)
+
+    listUp = true
+    rg.advance(5 * MIN)
+    await pass()
+    expect(stepOf(K1, 'publish:list')?.state).toBe('done')
+    expect(rg.reports.filter((r) => r.step === 'publish:list' && r.level === 'info')).toHaveLength(1)
+
+    platformFlips()
+    await pass()
+    expect(a.calls.filter((c) => c.startsWith('finalize'))).toEqual(['finalize:live'])
+    expect(rg.rows[0]!.tenantDoneAt).not.toBeNull()
+  })
+
+  it('a list that cannot be built on the finalizing row refuses the finalize and says so in the refusal text', async () => {
+    rg.rows = [row({ state: 'finalizing', finalMode: 'live', switchedOffAt: new Date(T0.getTime() - 31 * DAY), finalAt: new Date(T0.getTime() - DAY) })]
+    const a = part(rg, 'votes')
+    registerKarenzStages({
+      retained: async () => {},
+      publish: async () => {
+        throw new Error('sink lookup 503')
+      },
+    })
+    await pass()
+    expect(a.calls.filter((c) => c.startsWith('finalize'))).toEqual([])
+    expect(errorsOf(STEP.final)[0]!.message).toMatch(/list/i)
+  })
+
+  it('a finalize for a module with no registered participant says so in the tenant_done line (nothing was deleted by this pass)', async () => {
+    rg.rows = [row({ state: 'finalizing', finalMode: 'live', switchedOffAt: new Date(T0.getTime() - 31 * DAY), finalAt: new Date(T0.getTime() - DAY) })]
+    await rg.store.markStep(null, K1, STEP.retained, { state: 'done' })
+    await pass()
+    const marks = rg.reports.filter((r) => r.mark)
+    expect(marks).toHaveLength(1)
+    expect(marks[0]!.message).toMatch(/no participant registered for votes/)
+  })
+})
+
+describe('who is credited with the switch-off (review round 1)', () => {
+  const sw = (over: Partial<SwitchRow>): SwitchRow => ({
+    requestId: 'r',
+    moduleId: 'votes',
+    action: 'disable',
+    actorUserId: ACTOR,
+    submittedAt: new Date(T0.getTime() - MIN),
+    state: 'applied',
+    outcome: null,
+    configError: null,
+    appliedAt: null,
+    finishedAt: null,
+    notifiedAt: null,
+    claimedAt: null,
+    ...over,
+  })
+
+  it('a tenant request that is still succeeded or applying when the pass looks is the actor already (the platform row exists before the reconciler marks it applied)', () => {
+    for (const state of ['queued', 'succeeded', 'applying', 'applied'] as const) {
+      expect(pickStartedActor([sw({ state })], 'votes', T0), state).toBe(ACTOR)
+    }
+  })
+
+  it('a failed, refused, expired or dead request is nobody\'s switch-off', () => {
+    for (const state of ['failed', 'refused', 'expired', 'dead'] as const) {
+      expect(pickStartedActor([sw({ state })], 'votes', T0), state).toBeNull()
+    }
+  })
+
+  it('an operator-origin disable after a council disable and a council enable is not credited to the older actor', () => {
+    const rows = [
+      sw({ requestId: 'enable', action: 'enable', actorUserId: 'someone-else', submittedAt: new Date(T0.getTime() - 2 * HOUR) }),
+      sw({ requestId: 'old-disable', submittedAt: new Date(T0.getTime() - 3 * DAY) }),
+    ]
+    expect(pickStartedActor(rows, 'votes', T0)).toBeNull()
+  })
+
+  it('an operator-origin disable long after an old council disable (no request of its own) is not credited to it', () => {
+    expect(pickStartedActor([sw({ submittedAt: new Date(T0.getTime() - 3 * DAY) })], 'votes', T0)).toBeNull()
+  })
+
+  it('a request submitted after the platform row (a later switch-on or switch-off) is not this row\'s', () => {
+    expect(pickStartedActor([sw({ action: 'enable', actorUserId: 'later', submittedAt: new Date(T0.getTime() + HOUR) }), sw({})], 'votes', T0)).toBe(ACTOR)
+    expect(pickStartedActor([sw({ actorUserId: 'later', submittedAt: new Date(T0.getTime() + HOUR) })], 'votes', T0)).toBeNull()
+  })
+
+  it('only this module\'s requests count', () => {
+    expect(pickStartedActor([sw({ moduleId: 'elections' })], 'votes', T0)).toBeNull()
+  })
+})
+
+describe('is there local evidence of a live Karenz (review round 1)', () => {
+  const dbWith = (stepUpdatedAt: Date | null) => {
+    const q = ((strings: TemplateStringsArray) => {
+      const text = strings.join('?')
+      if (text.includes('module_karenz_step')) return Promise.resolve(stepUpdatedAt ? [{ updated_at: stepUpdatedAt }] : [])
+      return Promise.resolve([])
+    }) as unknown as Sql
+    ;(q as unknown as { unsafe: (s: string) => string }).unsafe = (s) => s
+    return { db: q } as unknown as TenantContext
+  }
+
+  it('a pending or failed step of a recent Karenz is evidence', async () => {
+    expect(await defaultHasLocalEvidence(dbWith(new Date(T0.getTime() - 3 * DAY)), T0)).toBe(true)
+  })
+
+  it('a failed step left behind by a Karenz that ended long ago is not (it would keep the error line up for ever)', async () => {
+    expect(await defaultHasLocalEvidence(dbWith(new Date(T0.getTime() - 40 * DAY)), T0)).toBe(false)
+  })
+
+  it('no step and no recent disable: no evidence', async () => {
+    expect(await defaultHasLocalEvidence(dbWith(null), T0)).toBe(false)
   })
 })
 

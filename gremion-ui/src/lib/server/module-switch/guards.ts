@@ -21,7 +21,8 @@ const guards = new Map<string, SwitchOffGuard[]>()
 /** Register a guard for a catalogue id. Several guards per id are allowed and asked in registration order. */
 export function registerSwitchOffGuard(catalogueId: string, guard: SwitchOffGuard): void {
   const list = guards.get(catalogueId) ?? []
-  list.push(guard)
+  // a module loaded twice registers the same function twice: asked once
+  if (!list.includes(guard)) list.push(guard)
   guards.set(catalogueId, list)
 }
 
@@ -30,7 +31,10 @@ export async function switchOffBlockedReason(tenant: TenantContext, catalogueId:
   for (const guard of guards.get(catalogueId) ?? []) {
     try {
       const reason = await guard(tenant)
-      if (reason !== null) return reason
+      if (reason === null) continue
+      // null is the only "nothing objects"; anything but a reason text (undefined from a forgotten return) is a broken guard
+      if (typeof reason !== 'string' || reason === '') throw new Error(`the guard answered ${reason === '' ? 'an empty reason' : typeof reason}, not null or a reason text`)
+      return reason
     } catch (err) {
       console.error(`[module-switch] the switch-off guard of ${catalogueId} failed for ${tenant.slug}; the switch-off is refused (fail closed):`, err instanceof Error ? err.message : err)
       return GUARD_FAILED_REASON

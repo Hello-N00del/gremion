@@ -42,6 +42,33 @@
 # exit 0 wrote the file · 2 missing runtime directory or tool
 set -euo pipefail
 
+# The Karenz query, built in one place. `--print-karenz-sql on|off` renders it
+# and exits before anything else runs (no docker, no runtime directory), so a
+# test can execute the exact text against a real platform database: a
+# substring check on a shimmed `docker exec` cannot tell a query that parses
+# from one that does not. `on` adds the overdue arm (KARENZ_FINAL_DELETION=on).
+karenz_query_sql() {
+    local overdue_sql="" sql
+    if [[ "${1:-off}" == "on" ]]; then
+        overdue_sql=" UNION SELECT 'overdue', l.customer_id::text, l.module_key, 1 FROM live l WHERE l.state IN ('open','finalizing') AND l.final_at + interval '6 hours' < now()"
+    fi
+    sql="WITH live AS (SELECT k.karenz_id, k.customer_id, m.module_key, k.state, k.switched_off_at, k.final_at, k.restore_requested_at FROM plt.module_karenz k JOIN plt.module m ON m.module_id = k.module_id WHERE k.state IN ('open','restoring','finalizing')), \
+newest AS (SELECT DISTINCT ON (e.karenz_id, e.step) e.karenz_id, e.level FROM plt.module_karenz_event e WHERE e.karenz_id IN (SELECT karenz_id FROM live) ORDER BY e.karenz_id, e.step, e.at DESC, e.event_id DESC) \
+SELECT 'live', '', '', count(*) FROM live \
+UNION SELECT 'failed', l.customer_id::text, l.module_key, 1 FROM live l WHERE EXISTS (SELECT 1 FROM newest n WHERE n.karenz_id = l.karenz_id AND n.level = 'error') \
+UNION SELECT 'stale', l.customer_id::text, l.module_key, 1 FROM live l WHERE (l.state = 'open' AND ( \
+(l.switched_off_at < now() - interval '1 hour' AND NOT EXISTS (SELECT 1 FROM plt.module_karenz_event e WHERE e.karenz_id = l.karenz_id AND e.step = 'notice:switchoff')) \
+OR (l.final_at - interval '7 days' + interval '2 hours' < now() AND NOT EXISTS (SELECT 1 FROM plt.module_karenz_event e WHERE e.karenz_id = l.karenz_id AND e.step = 'notice:t23')) \
+OR (l.final_at - interval '1 day' + interval '2 hours' < now() AND NOT EXISTS (SELECT 1 FROM plt.module_karenz_event e WHERE e.karenz_id = l.karenz_id AND e.step = 'notice:t29')))) \
+OR (l.state = 'restoring' AND l.restore_requested_at < now() - interval '1 hour')${overdue_sql} \
+ORDER BY 1, 2, 3"
+    printf '%s\n' "$sql"
+}
+if [[ "${1:-}" == "--print-karenz-sql" ]]; then
+    karenz_query_sql "${2:-off}"
+    exit 0
+fi
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=../lib/common.sh
 . "$SCRIPT_DIR/../lib/common.sh"
@@ -317,24 +344,13 @@ karenz_final_deletion_on() {
 # Each row is validated (kind, uuid, module key, count); an unreadable database,
 # a missing relation or garbage emits NOTHING -- absent, never 0 -- and a note.
 emit_module_karenz() {
-    local cid rows errf first_err="" sql overdue_sql="" kind customer module n extra
+    local cid rows errf first_err="" sql mode=off kind customer module n extra
     local uuid_re='^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
     local live="" failed="" stale="" overdue=""
     cid="$(state_container postgres)"
     [[ -n "$cid" ]] || { note "no ${STATE_PROJECT_NAME} postgres container -- gremion_module_karenz_live absent"; return 0; }
-    if karenz_final_deletion_on; then
-        overdue_sql=" UNION SELECT 'overdue', l.customer_id::text, l.module_key, 1 FROM live l WHERE l.state IN ('open','finalizing') AND l.final_at + interval '6 hours' < now()"
-    fi
-    sql="WITH live AS (SELECT k.karenz_id, k.customer_id, m.module_key, k.state, k.switched_off_at, k.final_at, k.restore_requested_at FROM plt.module_karenz k JOIN plt.module m ON m.module_id = k.module_id WHERE k.state IN ('open','restoring','finalizing')), \
-newest AS (SELECT DISTINCT ON (e.karenz_id, e.step) e.karenz_id, e.level FROM plt.module_karenz_event e WHERE e.karenz_id IN (SELECT karenz_id FROM live) ORDER BY e.karenz_id, e.step, e.at DESC, e.event_id DESC) \
-SELECT 'live', '', '', count(*) FROM live \
-UNION SELECT 'failed', l.customer_id::text, l.module_key, 1 FROM live l WHERE EXISTS (SELECT 1 FROM newest n WHERE n.karenz_id = l.karenz_id AND n.level = 'error') \
-UNION SELECT 'stale', l.customer_id::text, l.module_key, 1 FROM live l WHERE (l.state = 'open' AND ( \
-(l.switched_off_at < now() - interval '1 hour' AND NOT EXISTS (SELECT 1 FROM plt.module_karenz_event e WHERE e.karenz_id = l.karenz_id AND e.step = 'notice:switchoff')) \
-OR (l.final_at - interval '7 days' + interval '2 hours' < now() AND NOT EXISTS (SELECT 1 FROM plt.module_karenz_event e WHERE e.karenz_id = l.karenz_id AND e.step = 'notice:t23')) \
-OR (l.final_at - interval '1 day' + interval '2 hours' < now() AND NOT EXISTS (SELECT 1 FROM plt.module_karenz_event e WHERE e.karenz_id = l.karenz_id AND e.step = 'notice:t29'))) \
-OR (l.state = 'restoring' AND l.restore_requested_at < now() - interval '1 hour')${overdue_sql} \
-ORDER BY 1, 2, 3"
+    if karenz_final_deletion_on; then mode=on; fi
+    sql="$(karenz_query_sql "$mode")"
     errf="$(mktemp)"
     rows="$(docker exec "$cid" psql -U postgres -d gremion_platform -X -tAF'|' -c "$sql" 2>"$errf" || true)"
     first_err="$(head -n 1 "$errf" 2>/dev/null || true)"

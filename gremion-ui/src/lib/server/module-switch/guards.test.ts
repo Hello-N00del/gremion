@@ -5,7 +5,7 @@
 // first non-null reason wins, and a guard that throws blocks (fail closed).
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { TenantContext } from '$lib/server/tenant/context'
-import { _clearSwitchOffGuardsForTests, registerSwitchOffGuard, switchOffBlockedReason } from './guards'
+import { _clearSwitchOffGuardsForTests, GUARD_FAILED_REASON, registerSwitchOffGuard, switchOffBlockedReason } from './guards'
 
 const tenant = { id: '11111111-1111-4111-8111-111111111111', slug: 'rat-a' } as unknown as TenantContext
 
@@ -59,6 +59,25 @@ describe('switchOffBlockedReason', () => {
     })
     expect(await switchOffBlockedReason(tenant, 'elections')).toBe(sync)
     expect(err).toHaveBeenCalledTimes(2)
+  })
+
+  it('registering the same guard twice (a module loaded twice) asks it once', async () => {
+    const g = vi.fn(async () => null)
+    registerSwitchOffGuard('elections', g)
+    registerSwitchOffGuard('elections', g)
+    await switchOffBlockedReason(tenant, 'elections')
+    expect(g).toHaveBeenCalledTimes(1)
+  })
+
+  it('a guard that answers neither null nor a reason text (undefined, an empty string) blocks like a failed one, never returns undefined as the reason', async () => {
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {})
+    registerSwitchOffGuard('elections', (async () => undefined) as never)
+    const forgot = await switchOffBlockedReason(tenant, 'elections')
+    expect(forgot).toBe(GUARD_FAILED_REASON)
+    expect(err).toHaveBeenCalledTimes(1)
+    _clearSwitchOffGuardsForTests()
+    registerSwitchOffGuard('elections', (async () => '') as never)
+    expect(await switchOffBlockedReason(tenant, 'elections')).toBe(GUARD_FAILED_REASON)
   })
 
   it('a guard registered after a throwing one is still asked only when the earlier ones passed', async () => {

@@ -882,6 +882,23 @@ prom() { cat "$GREMION_ROOT/runtime/textfile/gremion.prom"; }
     refute_recorded docker "module_karenz_step"
 }
 
+@test "metrics-textfile renders a Karenz query whose parentheses balance, with the deletion switch off and on (a shimmed docker exec cannot tell a query that parses from one that does not; the real-database run is packages/tenant-store/test/integration/ops-karenz-query.test.ts)" {
+    local mode sql opens closes
+    for mode in off on; do
+        sql="$("$METRICS" --print-karenz-sql "$mode")"
+        [[ "$sql" == "WITH live AS ("* ]] || { echo "$mode: $sql"; return 1; }
+        [[ "$sql" == *"ORDER BY 1, 2, 3" ]] || { echo "$mode: $sql"; return 1; }
+        opens="$(printf '%s' "$sql" | tr -cd '(' | wc -c)"
+        closes="$(printf '%s' "$sql" | tr -cd ')' | wc -c)"
+        [ "$opens" -eq "$closes" ] || { echo "$mode: $opens '(' against $closes ')'"; return 1; }
+    done
+    # the overdue arm is only in the rendering for 'on'
+    sql="$("$METRICS" --print-karenz-sql off)"
+    [[ "$sql" != *"'overdue'"* ]]
+    sql="$("$METRICS" --print-karenz-sql on)"
+    [[ "$sql" == *"'overdue'"* ]]
+}
+
 @test "metrics-textfile survives a failing state-container lookup: the postgres, job-run and broker signals are absent, the file is still written (TASK-039-FU round 2, ops-lib state_container)" {
     shim_docker_world
     shim_timer enabled
