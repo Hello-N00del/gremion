@@ -34,6 +34,8 @@ beforeAll(async () => {
   pa = open('gremion_platform', 2)
   await r.admin.unsafe(`DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '${MARKER}') THEN CREATE ROLE ${MARKER} NOLOGIN; END IF; END $$`)
   await r.admin.unsafe(`DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '${councilRole}') THEN CREATE ROLE ${councilRole} LOGIN NOINHERIT PASSWORD '${councilPassword}'; END IF; END $$`)
+  // a kept server (vitest watch) already has the role with the previous run's password
+  await r.admin.unsafe(`ALTER ROLE ${councilRole} PASSWORD '${councilPassword}'`)
   await r.admin.unsafe(`GRANT ${MARKER} TO ${councilRole} WITH INHERIT FALSE, SET FALSE`)
   await r.admin.unsafe(`GRANT CONNECT ON DATABASE gremion_platform TO ${councilRole}`)
   await pa.unsafe(`GRANT USAGE ON SCHEMA plt TO ${councilRole}`)
@@ -155,7 +157,8 @@ describe('plt.submit_council_module_request', () => {
   ])('refuses: %s', async (_what, over, sqlstate) => {
     const a = councilArgs(over())
     expect((await failure(submitCouncil(council, a)))?.code).toBe(sqlstate)
-    if (a.key) expect((await pa`SELECT 1 FROM plt.provisioning_request WHERE idempotency_key = ${a.key}::uuid`).length).toBe(0)
+    // nothing was queued for that slug (by slug, so the case without an idempotency key is checked too)
+    expect((await pa`SELECT 1 FROM plt.provisioning_request WHERE customer_slug = ${a.slug}`).length).toBe(0)
   })
 
   it('a second submit for the same slug while one is queued fails 55006; after the first is finished it succeeds', async () => {
@@ -185,7 +188,7 @@ describe('plt.submit_council_module_request', () => {
     expect(again.id).toBe(first.id)
     expect((await pa`SELECT 1 FROM plt.provisioning_request WHERE idempotency_key = ${a.key}::uuid`).length).toBe(1)
     expect((await failure(submitCouncil(council, { ...a, args: { slug: a.slug, module: 'calendar', dpia: null } })))?.code).toBe('23505')
-    // the same key for another slug is another request
+    // the same key for another slug is refused too (a key names one request)
     expect((await failure(submitCouncil(council, { ...a, slug: slug() })))?.code).toBe('23505')
   })
 })
@@ -213,12 +216,23 @@ describe('the council envelope', () => {
     const base = (o: string, actor: string, acr: string | null, reason: string | null) =>
       pa.unsafe(`INSERT INTO plt.provisioning_request (kind, customer_slug, args, idempotency_key, origin, operator_id, actor_kind, evidence_acr, evidence_auth_time, evidence_session_at, reason)
                  VALUES ('enable_module', 'cnl-direct-2', '{}', '${crypto.randomUUID()}', '${o}', '${PERSON}', '${actor}', ${acr ? `'${acr}'` : 'NULL'}, ${acr ? 'now()' : 'NULL'}, ${acr ? 'now()' : 'NULL'}, ${reason ? `'${reason}'` : 'NULL'})`)
-    expect((await failure(base('council', 'operator', 'loa2', null)))?.code).toBe('23514')
-    expect((await failure(base('panel', 'person', 'loa2', null)))?.code).toBe('23514')
-    expect((await failure(base('council', 'person', 'loa1', null)))?.code).toBe('23514')
-    expect((await failure(base('council', 'person', 'loa2', 'a break-glass reason')))?.code).toBe('23514')
-    expect((await failure(base('council', 'person', null, null)))?.code).toBe('23514')
-    expect((await failure(base('elsewhere', 'person', 'loa2', null)))?.code).toBe('23514')
+    // positive control: the fixture itself is a valid council row, so the refusals below are about their one changed field
+    expect(await failure(base('council', 'person', 'loa2', null))).toBeNull()
+    // Postgres checks CHECK constraints in name order; the constraint that fires is named in the message
+    const negatives: [string, string, string | null, string | null, RegExp][] = [
+      ['council', 'operator', 'loa2', null, /provisioning_request_actor_origin_check/],
+      ['panel', 'person', 'loa2', null, /provisioning_request_actor_origin_check/],
+      ['council', 'person', 'loa1', null, /provisioning_request_evidence_check/],
+      ['council', 'person', 'loa2', 'a break-glass reason', /provisioning_request_evidence_check/],
+      ['council', 'person', null, null, /provisioning_request_evidence_check/],
+      // an unknown origin fails the evidence check first (name order) and the origin check as well
+      ['elsewhere', 'operator', 'loa2', null, /provisioning_request_(evidence|origin)_check/],
+    ]
+    for (const [o, actor, acr, reason, constraint] of negatives) {
+      const f = await failure(base(o, actor, acr, reason))
+      expect(f?.code, `${o}/${actor}/${acr}/${reason}`).toBe('23514')
+      expect(f?.message, `${o}/${actor}/${acr}/${reason}`).toMatch(constraint)
+    }
   })
 
   it('every constraint 0014 adds is validated (pg_constraint.convalidated is true)', async () => {
@@ -235,9 +249,14 @@ describe('the council envelope', () => {
     expect(rows.filter((x) => !x.convalidated)).toEqual([])
   })
 
-  it('existing rows keep actor_kind operator', async () => {
-    const [x] = await pa<{ bad: number }[]>`SELECT count(*)::int AS bad FROM plt.provisioning_request WHERE origin <> 'council' AND actor_kind <> 'operator'`
-    expect(x!.bad).toBe(0)
+  it('a panel request is stored with actor_kind operator, and operator is the column default for every older row', async () => {
+    const s = slug()
+    const [{ id }] = (await submit(r.panel, submitArgs({ slug: s, args: { slug: s } }))) as unknown as [{ id: string }]
+    expect((await row(id)).actor_kind).toBe('operator')
+    const [d] = await pa<{ def: string }[]>`
+      SELECT pg_get_expr(a.adbin, a.adrelid) AS def FROM pg_attrdef a JOIN pg_attribute c ON c.attrelid = a.adrelid AND c.attnum = a.adnum
+       WHERE a.adrelid = 'plt.provisioning_request'::regclass AND c.attname = 'actor_kind'`
+    expect(d!.def).toMatch(/'operator'/)
   })
 })
 
@@ -249,15 +268,16 @@ describe('plt.council_module_requests', () => {
     const [{ id: idA }] = (await submitCouncil(council, mine)) as unknown as [{ id: string }]
     await finish(idA)
     const [{ id: idA2 }] = (await submitCouncil(council, councilArgs({ slug: a, args: { slug: a, module: 'calendar', dpia: null } }))) as unknown as [{ id: string }]
-    // a panel row of the same slug and a council row of another slug must not show up
-    await finish(idA2)
+    // idA2 stays queued with its evidence token set: the token is in the table but must not be returned.
+    // A panel row of the same slug and a council row of another slug must not show up either.
+    expect((await pa`SELECT 1 FROM plt.provisioning_request WHERE request_id = ${idA2}::uuid AND evidence_token IS NOT NULL`).length).toBe(1)
     await submit(r.panel, submitArgs({ slug: a, args: { slug: a } }))
     await submitCouncil(council, councilArgs({ slug: b }))
     const rows = await council<Record<string, unknown>[]>`SELECT * FROM plt.council_module_requests(${a}, 20)`
     expect(rows.map((x) => x.request_id)).toEqual([idA2, idA])
     expect(Object.keys(rows[0]!).sort()).toEqual(['actor', 'created_at', 'finished_at', 'kind', 'module', 'outcome', 'request_id', 'state'])
-    expect(rows[0]).toMatchObject({ kind: 'enable_module', module: 'calendar', state: 'succeeded', actor: PERSON })
-    expect(rows[1]).toMatchObject({ module: 'votes' })
+    expect(rows[0]).toMatchObject({ kind: 'enable_module', module: 'calendar', state: 'queued', actor: PERSON })
+    expect(rows[1]).toMatchObject({ module: 'votes', state: 'succeeded' })
     expect(JSON.stringify(rows)).not.toContain('ccccc')
   })
 

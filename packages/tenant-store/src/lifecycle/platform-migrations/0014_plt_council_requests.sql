@@ -21,8 +21,14 @@
 --    (never the evidence token) and the catalogue-wide state through
 --    plt.council_module_state.
 --  * One request per customer slug in flight (queued or running), serialised by
---    an advisory lock on the slug: the second admin, or a double click, gets
---    SQLSTATE 55006 (object_in_use), which gremion-ui shows as HTTP 409.
+--    an advisory lock on the slug: the second admin, or a double click with a new
+--    idempotency key, gets SQLSTATE 55006 (object_in_use), which gremion-ui shows
+--    as HTTP 409 (the same key replays the first request id). The rule binds
+--    COUNCIL submits: they see requests of every origin in flight, but
+--    plt.submit_provisioning_request takes no such lock, and the executor's
+--    per-slug lock serialises execution. The lock is the one-bigint form, a
+--    keyspace apart from the two-int4 keys of advisory-locks.ts, and is keyed by
+--    the slug so it needs no registry row.
 --
 -- SQLSTATEs the callers map: 42501 wrong role, 22023 bad input, 28000 sign-in not
 -- loa2 or outside the last hour, 55006 another request of the slug is in flight,
