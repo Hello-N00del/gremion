@@ -479,6 +479,10 @@ services:
       # the module database is dropped, so the disable-module verb refuses unless
       # this path is a mount that outlives the one-shot (volume below).
       TENANT_EXPORT_DIR: /var/lib/gremion/exports
+      # Module Karenz: the day-30 deletion switch, read ONLY by this one-shot's
+      # `karenz-run` verb. `off` (the shipped value) is a dry run that reports
+      # what it would delete; gremion-ui reads the recorded mode from the row.
+      KARENZ_FINAL_DELETION: ${KARENZ_FINAL_DELETION:-off}
       # TASK-075: the release_ref every ledger row init (gremion_platform) and
       # phase B (module databases) apply records: this colour's release.
       GREMION_RELEASE_REF: ${IMAGE_TAG:?IMAGE_TAG required}

@@ -170,8 +170,8 @@ export const PURGE_RESIDUAL: readonly { catalogueRow: string; partOf?: true; rea
   { catalogueRow: 'RC-TNT-DOM', reason: 'window is "grace" (no number in the catalogue)' },
   { catalogueRow: 'RC-OPS-RUN', partOf: true, reason: 'provisioning steps (plt.provisioning_step) are append-only by trigger and runbook evidence has an "audit window" without a number; only job runs are mapped' },
   { catalogueRow: 'RC-OPS-EXP', reason: 'window is "on event" (delivered, or the 30-day bound); export requests and manifests are not in this repository' },
-  { catalogueRow: 'RC-MOD-EXPORT', reason: 'the module-disable pg_dump is a FILE (30-day grace), and K4 finance exports are kept to their hold: a file purge is a separate mechanism from a row purge' },
-  { catalogueRow: 'RC-MOD-DATA', reason: 'provisional window ([D R29-I24], [A-MOD]) for modules without a database; no table is mapped in this repository' },
+  { catalogueRow: 'RC-MOD-EXPORT', reason: 'the module-switch-off pg_dump is a FILE (30-day grace), deleted with the blocked database by the Karenz job `karenz-run`, not by this row purge; K4 finance exports follow their RC-FIN-* class hold' },
+  { catalogueRow: 'RC-MOD-DATA', reason: '30-day grace after a module switch-off (DSB answer 2026-10-30), executed by the Karenz job `karenz-run`, not by this row purge; no table is mapped in this repository' },
   { catalogueRow: 'RC-FIN-BOOKS', reason: 'K4 statutory finance hold in the finance module repository; not purged by a timer here' },
   { catalogueRow: 'RC-FIN-VOUCH', reason: 'K4 statutory finance hold in the finance module repository; not purged by a timer here' },
 ]

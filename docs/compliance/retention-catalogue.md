@@ -16,6 +16,16 @@
 > profiles `rp-<ctx>-module-data` so a customer can enable them; their window is the grace
 > (30 days) after the module is disabled, pending the DPO's answer (§7.15 RC-MOD-DATA, A-MOD).
 > RC-MOD-EXPORT records the six database modules' disable exports on the same window.
+>
+> **Change note 2026-10-30 (module Karenz, DSB answer question 14):** the DSB accepted the
+> 30-day grace in full. RC-MOD-EXPORT and RC-MOD-DATA are re-dated from it (no longer
+> provisional; A-MOD is resolved and A-G confirms the module grace only, the audit window
+> stays open): a switch-off blocks the module database, takes the export, writes sealed
+> read-only copies for the categories with their own row, and the Karenz job (`karenz-run`)
+> deletes the rest on day 30. RC-MSG-ROOM and §9 record the operator's round-2 reading for
+> chat rooms (archived at once, deleted after the Karenz unless meeting-linked), which differs
+> from the DSB question text ("sofort") and goes to the DSB with part 2. The job's destructive
+> steps run only when `KARENZ_FINAL_DELETION=on`; it ships `off` (a dry run).
 
 > **Change note 2026-10-27 (TRD-144/145):** the scheduled purge run exists
 > (`packages/tenant-store/src/lifecycle/purge.ts`, `gremion-purge.timer`). It executes only
@@ -219,7 +229,7 @@ wait (TASK-016 acceptance).
 | Q9 — erasure against approved minutes, finance-relevant names | §8 | Redaction layer, finance names legible for the hold [A-L5] |
 | Q11 — newsletter consent evidence | RC-NWS-* | §7.11 values [A-D11] |
 | Legal question 17 (in part DPO question 7) — archive offer duty | Every K3 and K6 row at the end of its period | The offer step is modelled (§8.4) but its applicability is open [A-L3] |
-| Module default profiles (put to the DPO by the operator, 2026-10-01) | RC-MOD-EXPORT, RC-MOD-DATA (§7.15) | Grace (30 days) after a module is disabled; the five database-less modules' ids are provisional [D R29-I24, A-MOD] |
+| Module default profiles (put to the DPO by the operator, 2026-10-01; answered 2026-10-30, question 14, accepted in full) | RC-MOD-EXPORT, RC-MOD-DATA (§7.15) | Grace (30 days) from the verified switch-off, derived from the DSB answer [D 2026-10-30 DSB Q14, A-MOD resolved]; the deletion step runs only when `KARENZ_FINAL_DELETION=on` |
 
 **Re-dating procedure.** When a written answer arrives: (1) the affected rows are
 re-derived here, with the answer's date and reference in the row; (2) the reading date at
@@ -400,7 +410,7 @@ their deletion rules are the file store operator's and are out of this catalogue
 
 | Row | Category (profile) | Start event | Basis | Window | Reading |
 |---|---|---|---|---|---|
-| RC-MSG-ROOM | Chat rooms (`rp-msg-room`) | hard delete by an ITAdmin; module disabled for the customer; body archived (+ grace, [A], see §9) | Art. 5(1)(e), 17 | **on event**. Archiving a room by an admin starts **no** period (§9) | [D R23-4, D R23-5]; the body-archived trigger [A] (§9) |
+| RC-MSG-ROOM | Chat rooms (`rp-msg-room`) | hard delete by an ITAdmin; module switched off for the customer; body archived (+ grace, [A], see §9) | Art. 5(1)(e), 17 | **on event**; for a module switch-off: archived at once, deleted after the 30-day Karenz unless meeting-linked (RC-MSG-LINK) [D 2026-10-30 operator round 2; the DSB text of question 14 said "sofort", to be put to the DSB with part 2]. Archiving a room by an admin starts **no** period (§9) | [D R23-4, D R23-5]; the body-archived trigger [A] (§9) |
 | RC-MSG-LINK | Call links (`rp-msg-calllink`) | the owning meeting's window ends | Art. 5(1)(e) | with the meeting | settled |
 | RC-MSG-POLL | Chat poll usage (`rp-msg-pollusage`) | verdict recorded | Art. 5(1)(e) | **grace** | [A-G] |
 
@@ -480,8 +490,8 @@ answer arrives; only the windows below are re-dated (§3).
 
 | Row | Category (profile) | Start event | Basis | Window | Reading |
 |---|---|---|---|---|---|
-| RC-MOD-EXPORT | The (customer, module) `pg_dump` taken before a module database is dropped (TRD-424): board `rp-brd-module-data`, calendar `rp-cal-module-data`, content `rp-pub-module-data`, finance `rp-fin-module-data`, publishing `rp-nws-module-data`, vault `rp-pwd-module-data` | export verified (the module is disabled for the customer) | Art. 5(1)(e); a mistaken disable can be reversed from the export | **grace** (30 days), then the export is deleted; where the export holds K4 finance records, their RC-FIN-* hold prevails and the export is kept until it ends | [A-G, A-MOD] |
-| RC-MOD-DATA | Module data the platform still holds for a module **without its own database** when that module is disabled for a customer: elections `rp-ele-module-data`, files `rp-fil-module-data`, handover `rp-hnd-module-data`, messaging `rp-msg-module-data`, votes `rp-gov-module-data` | module disabled for the customer | Art. 5(1)(e), 17 | **provisional: grace** (30 days), then deleted. Categories with their own row keep it: election results and recorded votes (RC-ELE, RC-GOV-RES, RC-GOV-SECRET), handover tracks (RC-HND-TRACK, 2 years), chat rooms (RC-MSG-ROOM, on event); file contents stay in the council's own file store (§7.6) | [D R29-I24] provisional, [A-MOD]; re-dated on the DPO's answer |
+| RC-MOD-EXPORT | The (customer, module) `pg_dump` taken before a module database is dropped (TRD-424): board `rp-brd-module-data`, calendar `rp-cal-module-data`, content `rp-pub-module-data`, finance `rp-fin-module-data`, publishing `rp-nws-module-data`, vault `rp-pwd-module-data` | export verified (the module is switched off for the customer) | Art. 5(1)(e); the export is a backup of the blocked database during the Karenz | **grace (30 days)** from the verified export at switch-off, then the export is deleted with the blocked database; where the export holds K4 finance records the RC-FIN-* hold prevails and finance is extracted by class (RC-FIN-BOOKS 10 y, RC-FIN-VOUCH 8 y, RC-FIN-CORR 6 y; phase 3), the dump itself is not kept for the hold | [D 2026-10-30 DSB Q14]; [A-G] module grace confirmed |
+| RC-MOD-DATA | Module data the platform still holds for a module **without its own database** when that module is disabled for a customer: elections `rp-ele-module-data`, files `rp-fil-module-data`, handover `rp-hnd-module-data`, messaging `rp-msg-module-data`, votes `rp-gov-module-data` | module switched off for the customer | Art. 5(1)(e), 17 | **grace (30 days)**, then deleted by the Karenz job; kept regardless: sealed read-only copies written at switch-off for categories with their own row (RC-ELE results, RC-GOV-RES, RC-GOV-SECRET, RC-HND-TRACK 2 years, finance by class); chat rooms follow RC-MSG-ROOM; file contents stay in the council's file store (§7.6) | [D R29-I24] profile ids; window [D 2026-10-30 DSB Q14], [A-MOD] resolved |
 
 ---
 
@@ -519,14 +529,19 @@ Decided on 2026-09-24 [D R23-4, D R23-5], and required in the Löschkonzept:
 
 - CouncilAdmin and ITAdmin create, rename and **archive** rooms. Archiving is the normal
   path and cannot be undone; members stay joined, history is kept, the room becomes
-  read-only and moves to the web list's archive. **Archiving starts no deletion period.**
+  read-only and moves to the web list's archive. **Archiving by an admin starts no deletion period.**
 - **Hard delete** (purge and block) is the erasure path: ITAdmin only, behind a confirm
   dialog, with an audit entry.
 - The Löschkonzept names two states for a room: active or archived, where archiving by an
   admin starts no deletion period, and hard-deleted (the act that executes erasure). An
-  archived room's history is otherwise kept until the module is disabled for the customer
-  or the customer is erased; that this indefinite keeping satisfies Art. 5(1)(e) is [A] and
-  goes to the operator and DPO with the other [A-G] readings.
+  archived room's history is otherwise kept until the customer is erased; that this
+  indefinite keeping satisfies Art. 5(1)(e) is [A] and goes to the operator and DPO with
+  the other [A-G] readings.
+- **When the messaging module is switched off for the customer** (Karenz, 2026-10-30): every
+  room is archived at once (read-only, restorable), and the rooms are deleted after the
+  30-day Karenz, except rooms linked to a meeting (RC-MSG-LINK). A switch-on within the 30
+  days unarchives them. This is the operator's round-2 decision [D 2026-10-30]; the DSB text
+  of question 14 said "sofort" (immediately), so the difference goes to the DSB with part 2.
 - **Open, not overridden:** the `msg.room` table comment names 'body archived + grace
   period' as a trigger. R23-4/R23-5 decide room archiving by an admin, not what happens
   when the owning body is archived. The messaging schema owner decides whether that
@@ -563,13 +578,13 @@ owner named.
 | A-L3 | Whether an archive offer duty applies, and which archive is competent | DPO question 7 (in part); legal question 17 |
 | A-L4 | Challenge periods and term-based defaults (1 month, 1 year, 2 years) | Each customer's Satzung, Geschäftsordnung and Wahlordnung |
 | A-L5 | The redaction reading of Art. 17 against the record chain | DPO question 9 |
-| A-G | The grace (30 days) and audit window (3 years) values | Operator and DPO confirmation (op_hours of TASK-070) |
+| A-G | The grace (30 days) and audit window (3 years) values. The module grace (30 days) is confirmed by the DSB answer of 2026-10-30, question 14; the audit window stays open | Operator and DPO confirmation (op_hours of TASK-070) for the audit window |
 | A-D4 | No catalogue row changes for DPIA reasons | DPO question 4 |
 | A-D6 | The pilot's no-backup posture is compatible with Art. 32(1)(b)(c) when the council adopts it knowingly | DPO question 6 |
 | A-F1 | The finance log needs only the security window | Head-of-finance answers (TASK-073) |
 | A-D8 | Superseded by [D R29-I6]: 30 days for every log class, pseudonymised logs included (formerly the documented tier 14/30, 30/90, 90/180) | DPO question 8 |
 | A-D11 | Newsletter consent evidence kept for the audit window | DPO question 11 |
-| A-MOD | The five database-less modules' default profiles (RC-MOD-DATA) run on the grace window after a module is disabled; ids provisional under [D R29-I24] | The DPO's written answer, which the operator forwards; then §3's re-dating procedure |
+| A-MOD | **Resolved 2026-10-30.** The default profiles of RC-MOD-DATA and RC-MOD-EXPORT run on the 30-day grace after a module is switched off (profile ids from [D R29-I24] stay) | The DSB's written answer of 2026-10-30, question 14, accepted in full; §3 re-dated |
 | A | Unlabelled [A] rows (trace, cache TTL, plumbing, working sessions, drafts, import rows, unread notifications, contact forms, verification-artefact deletion) | Operator confirmation; re-dated with the rest |
 
 ---
