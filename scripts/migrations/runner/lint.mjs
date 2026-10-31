@@ -220,6 +220,7 @@ export const RULES = {
   alterColumnType: 'alter-column-type',
   setNotNull: 'set-not-null',
   alterColumn: 'alter-column',
+  setExpression: 'set-expression',
   notNullNoDefault: 'not-null-without-default',
   volatileDefault: 'volatile-default',
   uuidv7Default: 'uuidv7-default',
@@ -382,6 +383,9 @@ function checkAlterAction(toks, state) {
     if (isWord(toks[i], 'TYPE') || (isWord(toks[i], 'SET') && isWord(toks[i + 1], 'DATA'))) return RULES.alterColumnType
     if (isWord(toks[i], 'SET') && isWord(toks[i + 1], 'NOT') && isWord(toks[i + 2], 'NULL')) return RULES.setNotNull
     if (isWord(toks[i], 'DROP')) return RULES.drop
+    // TASK-084-a: SET EXPRESSION (generated column) has its own, narrowly waivable rule; the
+    // catch-all below also covers SET DEFAULT, SET STATISTICS, SET STORAGE and stays unwaivable.
+    if (isWord(toks[i], 'SET') && isWord(toks[i + 1], 'EXPRESSION')) return RULES.setExpression
     return RULES.alterColumn
   }
   return RULES.notAllowed

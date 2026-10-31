@@ -11,5 +11,6 @@
   "0010_plt_request_payload.sql": "fef38e28886a8c08e24c3bbc70f707750a2a452b5c4f7d603f15fd1996b1e992",
   "0011_plt_lease_fence.sql": "907288c31417b64748c7804b22c506986b76f7223ff95de1bafcc0874095738a",
   "0012_plt_purge_run.sql": "202379e02d64111efdd7e5910b56726e3477fb886d1c283b25701dd1569287d7",
-  "0013_oac_access_record.sql": "889c39a6fc201feead497d559df152c7ae46ba6121321f003d05df7eb4aded77"
+  "0013_oac_access_record.sql": "889c39a6fc201feead497d559df152c7ae46ba6121321f003d05df7eb4aded77",
+  "0014_plt_provisioning_step_governance.sql": "ab913164907e3aa3151999a41a09b10ba412ff2751398a578df2900a153e656d"
 }

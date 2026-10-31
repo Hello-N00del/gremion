@@ -181,6 +181,14 @@ describe('expand-contract suite (TDD 3)', () => {
       writeFileSync(join(f.root, 'db', 'alpha', '002_c.sql'), BAD + '-- edited\n')
       assert.match(run(f).detail, /no longer hash to the lock/)
     })
+    test('set-expression is waivable; alter-column, truncate and mixed lists are not', () => {
+      const SE = "-- gremion:phase expand\nSET LOCAL lock_timeout = '5s';\nALTER TABLE a ALTER COLUMN id SET EXPRESSION AS (1);\n"
+      const ok = run(waived({ text: SE, waiver: { rules: ['set-expression'] } }))
+      assert.equal(ok.failed, 0, ok.detail)
+      assert.match(run(waived({ text: SE, waiver: { rules: ['alter-column'] } })).detail, /rules must be a non-empty subset/)
+      assert.match(run(waived({ text: SE, waiver: { rules: ['truncate'] } })).detail, /rules must be a non-empty subset/)
+      assert.match(run(waived({ text: SE, waiver: { rules: ['set-expression', 'alter-column'] } })).detail, /rules must be a non-empty subset/)
+    })
     test('an unlocked file, a wrong sha, a short reason and an unwaivable rule are each refused', () => {
       assert.match(run(waived({ locked: false })).detail, /not in applied\.lock\.json: only a locked file/)
       assert.match(run(waived({ waiver: { sha256: 'x' } })).detail, /sha256 is not the one applied\.lock\.json pins/)

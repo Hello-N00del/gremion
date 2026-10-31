@@ -30,7 +30,7 @@ export const WAIVERS_FILE = 'lint-waivers.json'
  * The only rules a waiver may name. Header, contract and parse failures are
  * never waivable: a file that cannot be classified or parsed is not reviewed.
  */
-export const WAIVABLE_RULES = [RULES.noLockTimeout, RULES.revoke, RULES.drop, RULES.orReplace, RULES.checkNotValid]
+export const WAIVABLE_RULES = [RULES.noLockTimeout, RULES.revoke, RULES.drop, RULES.orReplace, RULES.checkNotValid, RULES.setExpression]
 
 const REPO_ROOT = join(import.meta.dirname, '..', '..', '..')
 
@@ -54,6 +54,7 @@ export const REQUIRED_CANARIES = [
   'expand-uuidv7-default',
   'contract-without-contract-after',
   'expand-same-file-table',
+  'expand-set-expression-existing-table',
 ]
 
 const readJson = (p) => JSON.parse(readFileSync(p, 'utf8'))
