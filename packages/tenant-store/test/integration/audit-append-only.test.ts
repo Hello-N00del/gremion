@@ -48,6 +48,8 @@ const AUDIT_CHAIN_FILES = [
   '0043_audit_log_hash_chain.sql',
   '0059_audit_log_chain_anchor.sql',
   '0061_audit_log_actor_uuid_check.sql',
+  // Karenz phase 2: the sealed retained_record table is append-only too (no other chain file is needed to create it)
+  '0064_module_karenz.sql',
 ]
 
 describe('ensureKernelAuditAppendOnly (TASK-033-a: audit_log is a governance record)', () => {
@@ -75,7 +77,9 @@ describe('ensureKernelAuditAppendOnly (TASK-033-a: audit_log is a governance rec
           CREATE TABLE public.audit_log (id bigserial PRIMARY KEY, user_id text NOT NULL, created_at timestamptz NOT NULL DEFAULT now());
           CREATE TABLE public.audit_log_chain_anchor (singleton boolean PRIMARY KEY DEFAULT true CHECK (singleton), anchor_hash text NOT NULL);
           INSERT INTO public.audit_log (user_id) VALUES ('0192f3e0-1a2b-7c3d-8e4f-0123456789ab'), ('0192f3e0-1a2b-7c3d-8e4f-0123456789ac');
-          INSERT INTO public.audit_log_chain_anchor (anchor_hash) VALUES (repeat('a', 64));`)
+          INSERT INTO public.audit_log_chain_anchor (anchor_hash) VALUES (repeat('a', 64));
+          CREATE TABLE public.retained_record (id bigserial PRIMARY KEY, note text NOT NULL DEFAULT 'sealed');
+          INSERT INTO public.retained_record (note) VALUES ('a'), ('b');`)
       })
     } finally {
       await d.end({ timeout: 5 })
@@ -101,6 +105,9 @@ describe('ensureKernelAuditAppendOnly (TASK-033-a: audit_log is a governance rec
     expect(problems).toMatch(/audit_log: .*UPDATE/)
     expect(problems).toMatch(/audit_log: .*TRUNCATE/)
     expect(problems).toMatch(/audit_log_chain_anchor: .*INSERT/)
+    expect(problems).toMatch(/retained_record: .*UPDATE/)
+    expect(problems).toMatch(/retained_record: .*DELETE/)
+    expect(problems).toMatch(/retained_record: .*TRUNCATE/)
     const a = as(T, app)
     const del = await a`DELETE FROM public.audit_log WHERE id = (SELECT min(id) FROM public.audit_log) RETURNING id`
     expect(del.length).toBe(1)
@@ -110,7 +117,7 @@ describe('ensureKernelAuditAppendOnly (TASK-033-a: audit_log is a governance rec
     const T = uuidv7()
     await seed(T)
     const { app, owner } = kernelRoles(T)
-    expect(await ensureKernelAuditAppendOnly(server, T)).toEqual({ revoked: ['audit_log', 'audit_log_chain_anchor'], absent: [] })
+    expect(await ensureKernelAuditAppendOnly(server, T)).toEqual({ revoked: ['audit_log', 'audit_log_chain_anchor', 'retained_record'], absent: [] })
     expect(await kernelAuditAppendOnlyProblems(server, T)).toEqual([])
 
     const a = as(T, app)
@@ -131,6 +138,12 @@ describe('ensureKernelAuditAppendOnly (TASK-033-a: audit_log is a governance rec
     expect(await code(a`INSERT INTO public.audit_log_chain_anchor (singleton, anchor_hash) VALUES (false, repeat('c', 64))`)).toBe('42501')
     expect(await code(a`DELETE FROM public.audit_log_chain_anchor`)).toBe('42501')
     expect(await code(a`SELECT anchor_hash FROM public.audit_log_chain_anchor`), 'select anchor').toBe('ok')
+    // Karenz phase 2 (0064): a sealed retained copy is written once and read; it is never rewritten or removed by the app
+    expect(await code(a`UPDATE public.retained_record SET note = 'x'`)).toBe('42501')
+    expect(await code(a`DELETE FROM public.retained_record`)).toBe('42501')
+    expect(await code(a`TRUNCATE public.retained_record`)).toBe('42501')
+    expect(await code(a`INSERT INTO public.retained_record (note) VALUES ('c')`)).toBe('ok')
+    expect(await code(a`SELECT count(*)::int AS n FROM public.retained_record`), 'select retained_record').toBe('ok')
 
     // the app session's SET ROLE owner (the migrations' own session role) is not a way round
     const session = await a.reserve()
@@ -149,7 +162,7 @@ describe('ensureKernelAuditAppendOnly (TASK-033-a: audit_log is a governance rec
     expect(viaOwner).toBe('42501')
   })
 
-  it('on the REAL chain DDL (0009, 0040, 0043, 0059, 0061): the app still appends through the hash-chain trigger, the chain verifies, DELETE / UPDATE / TRUNCATE are 42501, the actor CHECK holds', async () => {
+  it('on the REAL chain DDL (0009, 0040, 0043, 0059, 0061, 0064): the app still appends through the hash-chain trigger, the chain verifies, DELETE / UPDATE / TRUNCATE are 42501, the actor CHECK holds', async () => {
     const T = uuidv7()
     await seed(T, { tables: false })
     const { owner, app } = kernelRoles(T)
@@ -165,7 +178,7 @@ describe('ensureKernelAuditAppendOnly (TASK-033-a: audit_log is a governance rec
     } finally {
       await d.end({ timeout: 5 })
     }
-    expect(await ensureKernelAuditAppendOnly(server, T)).toEqual({ revoked: ['audit_log', 'audit_log_chain_anchor'], absent: [] })
+    expect(await ensureKernelAuditAppendOnly(server, T)).toEqual({ revoked: ['audit_log', 'audit_log_chain_anchor', 'retained_record'], absent: [] })
     expect(await kernelAuditAppendOnlyProblems(server, T)).toEqual([])
 
     // the app's own session: the default search_path (the chain trigger calls digest() unqualified)
@@ -192,24 +205,38 @@ describe('ensureKernelAuditAppendOnly (TASK-033-a: audit_log is a governance rec
     expect(await code(a`INSERT INTO public.audit_log (user_id, field, new_value) VALUES ('erika@example.org', 'f', 'v')`)).toBe('23514')
     expect(await code(a`INSERT INTO public.audit_log (user_id, field, new_value) VALUES ('Calendar-service', 'f', 'v')`)).toBe('23514')
     expect((await a`SELECT public.audit_log_verify_chain() AS broken`)[0]!.broken).toBeNull()
+
+    // 0064 (the REAL retained_record): the app seals a copy once and reads it, and can neither rewrite nor remove it
+    const [key] = await a<{ key_id: string }[]>`INSERT INTO public.karenz_data_key (wrapped, kek_version) VALUES (${Buffer.from('w')}, 1) RETURNING key_id`
+    const seal = () => a`
+      INSERT INTO public.retained_record (karenz_id, catalogue_id, retention_class, extractor_id, line_count, plaintext_sha256, key_id, nonce, ciphertext)
+      VALUES ('0192f3e0-1a2b-7c3d-8e4f-0123456789ab', 'votes', 'RC-VOTE', 'votes.polls', 1, ${'a'.repeat(64)}, ${key!.key_id}, ${Buffer.alloc(12)}, ${Buffer.from('c')})`
+    expect(await code(seal())).toBe('ok')
+    expect(await code(a`SELECT id FROM public.retained_record`)).toBe('ok')
+    expect(await code(a`UPDATE public.retained_record SET line_count = 2`)).toBe('42501')
+    expect(await code(a`DELETE FROM public.retained_record`)).toBe('42501')
+    expect(await code(a`TRUNCATE public.retained_record`)).toBe('42501')
+    // the key table is not append-only: a retired key is stamped by an UPDATE
+    expect(await code(a`UPDATE public.karenz_data_key SET retired_at = now()`)).toBe('ok')
   })
 
   it('is idempotent, and a customer whose chain has not created the tables yet is reported absent (no throw)', async () => {
     const T = uuidv7()
     await seed(T)
     await ensureKernelAuditAppendOnly(server, T)
-    expect(await ensureKernelAuditAppendOnly(server, T)).toEqual({ revoked: ['audit_log', 'audit_log_chain_anchor'], absent: [] })
+    expect(await ensureKernelAuditAppendOnly(server, T)).toEqual({ revoked: ['audit_log', 'audit_log_chain_anchor', 'retained_record'], absent: [] })
     expect(await kernelAuditAppendOnlyProblems(server, T)).toEqual([])
     const E = uuidv7()
     await seed(E, { tables: false })
-    expect(await ensureKernelAuditAppendOnly(server, E)).toEqual({ revoked: [], absent: ['audit_log', 'audit_log_chain_anchor'] })
+    expect(await ensureKernelAuditAppendOnly(server, E)).toEqual({ revoked: [], absent: ['audit_log', 'audit_log_chain_anchor', 'retained_record'] })
     // nothing to check on an absent table is not a problem
     expect(await kernelAuditAppendOnlyProblems(server, E)).toEqual([])
     // reconcile asks requirePresent: the same absent tables are then PROBLEMS, one per table
     const required = await kernelAuditAppendOnlyProblems(server, E, { requirePresent: true })
-    expect(required).toHaveLength(2)
+    expect(required).toHaveLength(3)
     expect(required.join(' | ')).toMatch(/audit_log: table is absent/)
     expect(required.join(' | ')).toMatch(/audit_log_chain_anchor: table is absent/)
+    expect(required.join(' | ')).toMatch(/retained_record: table is absent/)
   })
 
   it('CRIT: a tenant ALTER DATABASE SET search_path + planted public.format / current_database cannot escalate through the call (startup pin and bare server)', async () => {

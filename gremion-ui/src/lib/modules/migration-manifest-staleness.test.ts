@@ -30,8 +30,8 @@ const executableOf = (abs: string) =>
     .join('\n')
 
 describe('committed migration manifests are not stale', () => {
-  it('migrations/manifest.json covers all 36 data-plane files', () => {
-    expect(assertManifestFresh('migrations', 36)).toBe(36)
+  it('migrations/manifest.json covers all 37 data-plane files', () => {
+    expect(assertManifestFresh('migrations', 37)).toBe(37)
   })
 
   it('migrations-control/manifest.json covers all 5 control files', () => {
