@@ -80,12 +80,17 @@ DC="docker compose -f docker-compose.yml -f docker-compose.prod.yml --profile pr
    otherwise the old definition keeps serving superuser hashes. Per-tenant kernel
    databases get the new definition the next time `ensureKernelDatabase` runs.
 
-4. Render the userlist (mode 0600, never committed) and check it is in place:
+4. Render the userlist (never committed) and check it is in place. The
+   PgBouncer container reads the bind-mounted file as uid/gid 70, so on a Linux
+   host the file must be readable by gid 70 and by nobody else: mode 0640,
+   group 70. `gremion-render` sets both; do not fix the mode by hand. (Docker
+   Desktop ignores bind-mount modes, so a pass there says nothing about this.)
 
    ```bash
    # dev / single checkout: renders from .env (make setup already does this)
    bash scripts/render-pgbouncer-userlist.sh
-   # production hosts: gremion-render does the same (deploy step 4)
+   # production hosts: gremion-render does the same, mode 0640 group 70 (deploy step 4)
+   stat -c '%a %g %n' docker/pgbouncer/userlist.txt   # 640 70 on a host render
    bash scripts/check-bind-sources.sh --all   # fails naming any missing bind source
    ```
 

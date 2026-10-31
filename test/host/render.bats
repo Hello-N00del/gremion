@@ -174,6 +174,81 @@ teardown() {
     ! grep -q 'CHANGE_ME_' "${RELEASE}/docker/pgbouncer/userlist.txt"
 }
 
+# Issue #83. PgBouncer runs as uid/gid 70 in its container and bind-mounts the
+# userlist read-only; a 0600 file owned by the deploy user is unreadable to it
+# on a Linux host (Docker Desktop ignores bind-mount modes, so nothing else
+# saw it). The render must leave the file group-readable by gid 70 and closed
+# to every other user. These run on a real Linux filesystem (the bats runner
+# image, as root); on NTFS the mode assertions are skipped visibly, as in
+# assert_mode_600.
+userlist_mode_and_group_checkable() {
+    fs_carries_modes "${RELEASE}/docker/pgbouncer" && return 0
+    echo "# SKIPPED userlist mode/group assertions: this filesystem cannot hold POSIX modes (NTFS); proven on Linux" >&3
+    return 1
+}
+
+@test "the rendered userlist is mode 0640 with group 70 and nothing for other users" {
+    run "$RENDER" --release "$RELEASE"
+    [ "$status" -eq 0 ]
+    [ -f "${RELEASE}/docker/pgbouncer/userlist.txt" ]
+    if userlist_mode_and_group_checkable; then
+        [ "$(stat -c %a "${RELEASE}/docker/pgbouncer/userlist.txt")" = 640 ]
+        [ "$(stat -c %g "${RELEASE}/docker/pgbouncer/userlist.txt")" = 70 ]
+    fi
+}
+
+@test "the rendered userlist is not readable, writable or executable by other users" {
+    run "$RENDER" --release "$RELEASE"
+    [ "$status" -eq 0 ]
+    [ -f "${RELEASE}/docker/pgbouncer/userlist.txt" ]
+    if userlist_mode_and_group_checkable; then
+        mode="$(stat -c %a "${RELEASE}/docker/pgbouncer/userlist.txt")"
+        [ "${mode: -1}" = 0 ]
+    fi
+}
+
+@test "a re-render over an existing 0600 userlist still ends 0640 with group 70" {
+    printf 'stale\n' > "${RELEASE}/docker/pgbouncer/userlist.txt"
+    chmod 0600 "${RELEASE}/docker/pgbouncer/userlist.txt"
+    run "$RENDER" --release "$RELEASE"
+    [ "$status" -eq 0 ]
+    grep -q '^"pgbouncer_auth" "test-secret-pgbouncer"$' "${RELEASE}/docker/pgbouncer/userlist.txt"
+    if userlist_mode_and_group_checkable; then
+        [ "$(stat -c %a "${RELEASE}/docker/pgbouncer/userlist.txt")" = 640 ]
+        [ "$(stat -c %g "${RELEASE}/docker/pgbouncer/userlist.txt")" = 70 ]
+    fi
+}
+
+@test "GREMION_PGBOUNCER_GID overrides the group the userlist is handed to" {
+    GREMION_PGBOUNCER_GID=4242 run "$RENDER" --release "$RELEASE"
+    [ "$status" -eq 0 ]
+    if userlist_mode_and_group_checkable; then
+        [ "$(stat -c %g "${RELEASE}/docker/pgbouncer/userlist.txt")" = 4242 ]
+    fi
+}
+
+@test "when the deploy user cannot chgrp itself, the userlist group is set through sudo -n" {
+    userlist_mode_and_group_checkable || return 0
+    shim chgrp 'exit 1'
+    # Runs the REAL chgrp: the shim directory is dropped from PATH first.
+    shim sudo '[ "$1" = "-n" ] && shift; PATH="${PATH#"${SHIM_DIR}":}"; exec "$@"'
+    run "$RENDER" --release "$RELEASE"
+    [ "$status" -eq 0 ]
+    assert_recorded sudo "-n chgrp 70 ${RELEASE}/docker/pgbouncer/userlist.txt"
+    [ "$(stat -c %g "${RELEASE}/docker/pgbouncer/userlist.txt")" = 70 ]
+    [ "$(stat -c %a "${RELEASE}/docker/pgbouncer/userlist.txt")" = 640 ]
+}
+
+@test "a userlist whose group cannot be set fails the render and leaves no userlist" {
+    userlist_mode_and_group_checkable || return 0
+    shim chgrp 'exit 1'
+    shim sudo 'exit 1'
+    run "$RENDER" --release "$RELEASE"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"cannot hand"*"userlist.txt"*"group 70"* ]]
+    [ ! -e "${RELEASE}/docker/pgbouncer/userlist.txt" ]
+}
+
 @test "a state.env still carrying a CHANGE_ME_ sentinel is refused" {
     sed -i 's/^PGBOUNCER_AUTH_PASSWORD=.*/PGBOUNCER_AUTH_PASSWORD=CHANGE_ME_GEN_password_pgbouncer/' \
         "${GREMION_ROOT}/etc/env/state.env"

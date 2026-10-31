@@ -200,7 +200,11 @@ gremion-dns-check --domain "$PLATFORM_DOMAIN" \
     certificate, and the first deploy's own render (its step 4, as the deploy
     user) dies on that directory. The render runs as the deploy user, because it
     keeps the Keycloak CA in `etc/secrets/keycloak` for every later release,
-    and it ends with a `RENDER:` line. The log pipeline's `ipcrypt_key` secret
+    and it ends with a `RENDER:` line. It writes the pgbouncer `userlist.txt`
+    mode 0640 and hands it to group 70, the gid the PgBouncer container reads
+    it as (`GREMION_PGBOUNCER_GID` names another gid); it sets the group with
+    `chgrp`, or `sudo -n chgrp` for the deploy user, and fails the render when
+    neither works, so no hand-made chmod or chgrp is needed. The log pipeline's `ipcrypt_key` secret
     is read from the release tree's `secrets/ipcrypt_key.txt`, while the render
     keeps that key in `etc/secrets/ipcrypt_key.txt`; a hard link made as the
     deploy user puts the same key into the tree (one inode, so an in-place key
@@ -216,6 +220,7 @@ gremion-dns-check --domain "$PLATFORM_DOMAIN" \
 ```bash
 sudo -u gremion /opt/gremion/bin/gremion-render --release "$REL"
 stat -c '%U %F %n' "$REL/docker/pgbouncer/userlist.txt" "$REL/docker/keycloak/certs/keycloak.crt"   # gremion regular file, both
+stat -c '%a %g %n' "$REL/docker/pgbouncer/userlist.txt"                                              # 640 70: PgBouncer (gid 70) reads it, other users cannot
 sudo -u gremion ln /opt/gremion/etc/secrets/ipcrypt_key.txt "$REL/secrets/ipcrypt_key.txt"
 stat -c '%i %U %n' /opt/gremion/etc/secrets/ipcrypt_key.txt "$REL/secrets/ipcrypt_key.txt"         # one inode, gremion, both
 cd "$REL"

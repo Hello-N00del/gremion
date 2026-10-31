@@ -42,6 +42,9 @@ RENDER_ALLOWED_VARS=(
     ELEMENT_CALL_LIVEKIT_URL
 )
 
+# The gid the PgBouncer image runs as (edoburu/pgbouncer: postgres, 70).
+PGBOUNCER_GID="${GREMION_PGBOUNCER_GID:-70}"
+
 KC_ARTEFACTS=(internal-ca.crt internal-ca.pem internal-ca.key keycloak.crt keycloak.key)
 
 usage() {
@@ -75,6 +78,29 @@ assert_rendered() {
     ok "rendered $p"
 }
 
+# hand_to_container_group <file> <gid>
+# Sets the file's group to the numeric gid a container reads it as. The render
+# runs as the deploy user, who may not own that gid, so chgrp is tried directly
+# first and then through `sudo -n` (the deploy user has passwordless sudo, see
+# bootstrap.sh). A failure removes the file and fails the render: an
+# unreadable userlist left in place is exactly the defect this guards, and a
+# render that "succeeded" with it would be worse than none.
+# On a filesystem that carries no POSIX modes (Git Bash on NTFS) a group means
+# nothing, so the step is skipped there, as every other mode check is.
+hand_to_container_group() {
+    local path="$1" gid="$2"
+    if ! fs_carries_modes "$(dirname "$path")"; then
+        info "filesystem carries no POSIX modes: not setting group ${gid} on ${path}"
+        return 0
+    fi
+    if chgrp "$gid" "$path" 2>/dev/null; then return 0; fi
+    if command -v sudo >/dev/null 2>&1 && sudo -n chgrp "$gid" "$path" 2>/dev/null; then
+        return 0
+    fi
+    rm -f -- "$path"
+    die "cannot hand ${path} to group ${gid}: neither chgrp nor sudo -n chgrp succeeded (the container reads this file as gid ${gid}; set GREMION_PGBOUNCER_GID if the image runs as another gid)"
+}
+
 # 1. pgbouncer's auth_user credential. Every other role is resolved through
 #    auth_query against Postgres' SCRAM verifier, so this one line is the whole
 #    file (docker/pgbouncer/userlist.txt.example says so in the kernel tree).
@@ -88,7 +114,15 @@ render_pgbouncer_userlist() {
         die "missing env key PGBOUNCER_AUTH_PASSWORD" 2
     fi
     out="${dir}/userlist.txt"
-    printf '"pgbouncer_auth" "%s"\n' "$PGBOUNCER_AUTH_PASSWORD" | atomic_write "$out" 0600
+    # The PgBouncer container runs as uid/gid 70 and bind-mounts this file
+    # read-only, so a 0600 file owned by the deploy user is unreadable to it on
+    # a Linux host (issue #83; Docker Desktop ignores bind-mount modes, which is
+    # why no proof caught it). The file is therefore 0640 and handed to the
+    # PgBouncer gid: the deploy user keeps read/write, PgBouncer reads, other
+    # users get nothing. This is the group-read-bit precedent of
+    # docker/keycloak/certs/gen-internal-ca.sh, narrowed to one gid.
+    printf '"pgbouncer_auth" "%s"\n' "$PGBOUNCER_AUTH_PASSWORD" | atomic_write "$out" 0640
+    hand_to_container_group "$out" "$PGBOUNCER_GID"
     assert_rendered "$out"
     if ! grep -q '^"pgbouncer_auth" "' "$out"; then
         die "userlist.txt does not carry the pgbouncer_auth entry: $out"
