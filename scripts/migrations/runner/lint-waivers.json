@@ -41,6 +41,17 @@
         "revoke"
       ],
       "reason": "SECURITY DEFINER functions of the access record: REVOKE ALL ON FUNCTION .. FROM PUBLIC on functions this same file creates is mandatory hardening (Postgres grants EXECUTE to PUBLIC by default) and only tightens objects no colour has seen. The file sets lock_timeout first and creates every relation it touches."
+    },
+    {
+      "chain": "platform",
+      "file": "0014_plt_council_requests.sql",
+      "sha256": "c4961e32ce466a34851326f5e95f3667b9edbbfcece422019e057b3626ff36c4",
+      "rules": [
+        "drop",
+        "or-replace",
+        "revoke"
+      ],
+      "reason": "Adds the council request origin to plt.provisioning_request: the old origin and evidence CHECKs cannot be widened without DROP CONSTRAINT and re-ADD (each re-added NOT VALID and validated in the same file, so no unvalidated constraint remains), the immutability guard body must gain the actor_kind column (CREATE OR REPLACE keeps the grants pg.ts issues), and REVOKE ALL FROM PUBLIC hardens the SECURITY DEFINER functions this same file creates. Same shape as the waivers of 0009, 0010 and 0013. The file sets lock_timeout first; the table is a small queue whose only writers ship in the same release."
     }
   ]
 }
