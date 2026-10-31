@@ -38,7 +38,9 @@ import { handConfigToReader, handToReader, isTenantConfigPath, writeReaderConfig
 import {
   bootstrapPlatform,
   ACCESS_READER_ROLE,
+  COUNCIL_REQUESTER_ROLE,
   ensureAccessReader,
+  ensureCouncilRequester,
   ensureExecutorRole,
   ensurePanelRequester,
   EXECUTOR_ROLE,
@@ -672,6 +674,17 @@ async function cmdInit(): Promise<void> {
       log(`init: access-record reader ${ACCESS_READER_ROLE} ${oac.created ? 'created' : 'present'} (EXECUTE on oac.list_access_records only)`)
     } else {
       log('init: UI_OAC_DB_PASSWORD is unset: the access-record reader role is not (re)made; the council-admin view reports "nicht konfiguriert"')
+    }
+    // Module self-service: the council module-switch role (EXECUTE on the three
+    // council request functions only). Optional until the deployment env carries
+    // its password (UI_MODULES_DB_PASSWORD): without it gremion-ui reports the
+    // modules section as "nicht konfiguriert".
+    const modulesPassword = process.env.UI_MODULES_DB_PASSWORD
+    if (modulesPassword) {
+      const council = await ensureCouncilRequester({ kernelAdmin, openAdminOn, password: modulesPassword })
+      log(`init: council requester ${COUNCIL_REQUESTER_ROLE} ${council.created ? 'created' : 'present'} (EXECUTE on the council module request functions only)`)
+    } else {
+      log('init: UI_MODULES_DB_PASSWORD is unset: the council requester role is not (re)made; self-service module switching is off ("nicht konfiguriert")')
     }
     // TASK-077: the kernel API's SELECT-only role, which deploy step 7
     // (kernel-api-migrate) and the kernel-api service connect as; nothing else

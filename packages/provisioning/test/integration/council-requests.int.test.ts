@@ -13,6 +13,15 @@
 // three functions): ensureCouncilRequester is Task 2.
 import { randomBytes } from 'node:crypto'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import {
+  COUNCIL_EXECUTES,
+  COUNCIL_REQUESTER_MARKER,
+  ensureCouncilRequester,
+  EXECUTOR_MARKER,
+  EXECUTOR_ROLE,
+  PANEL_REQUESTER_MARKER,
+  type CouncilRequesterDeps,
+} from '../../src/index.ts'
 import { failure, open, setupRoles, submit, submitArgs, type Roles } from './scratch.ts'
 
 const MARKER = 'plt_council_requester'
@@ -373,5 +382,111 @@ describe('the council functions are locked down', () => {
       SELECT count(*)::int AS n FROM pg_class c WHERE c.relnamespace = 'plt'::regnamespace AND c.relkind IN ('r', 'v')
          AND has_table_privilege(${councilRole}, c.oid, 'SELECT, INSERT, UPDATE, DELETE')`
     expect(x!.n).toBe(0)
+  })
+})
+
+// Task 2: ensureCouncilRequester (the role gremion-ui connects with) made exactly as
+// `gremion-tenant init` makes it, on a role name of its own so the hand-made twin above
+// stays untouched.
+describe('ensureCouncilRequester (gremion_ui_modules)', () => {
+  const role = 't043d_council_mod'
+  const run = (over: Partial<CouncilRequesterDeps> = {}) =>
+    ensureCouncilRequester({
+      kernelAdmin: r.admin,
+      openAdminOn: (db: string) => open(db, 1),
+      role,
+      password: randomBytes(24).toString('base64url'),
+      ...over,
+    })
+  const memberships = async () =>
+    (
+      await r.admin<{ r: string }[]>`
+        SELECT g.rolname AS r FROM pg_auth_members m JOIN pg_roles g ON g.oid = m.roleid JOIN pg_roles u ON u.oid = m.member
+         WHERE u.rolname = ${role} ORDER BY 1`
+    ).map((x) => x.r)
+
+  it('creates a LOGIN NOINHERIT role that is a member of plt_council_requester only', async () => {
+    expect((await run()).created).toBe(true)
+    const [a] = await r.admin<{ login: boolean; inherit: boolean; su: boolean; db: boolean; cr: boolean; bypass: boolean }[]>`
+      SELECT rolcanlogin AS login, rolinherit AS inherit, rolsuper AS su, rolcreatedb AS db, rolcreaterole AS cr, rolbypassrls AS bypass
+        FROM pg_roles WHERE rolname = ${role}`
+    expect(a).toEqual({ login: true, inherit: false, su: false, db: false, cr: false, bypass: false })
+    expect(await memberships()).toEqual([COUNCIL_REQUESTER_MARKER])
+  })
+
+  it('holds EXECUTE on exactly COUNCIL_EXECUTES and no table privilege in plt, oac or ops', async () => {
+    await run()
+    const fns = await pa<{ sig: string }[]>`
+      SELECT p.oid::regprocedure::text AS sig FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+       WHERE n.nspname IN ('plt', 'oac', 'ops') AND p.prorettype <> 'trigger'::regtype AND has_function_privilege(${role}, p.oid, 'EXECUTE')
+       ORDER BY 1`
+    const want = await pa<{ sig: string }[]>`SELECT to_regprocedure(s)::text AS sig FROM unnest(${[...COUNCIL_EXECUTES]}::text[]) AS s ORDER BY 1`
+    expect(want.every((w) => w.sig)).toBe(true)
+    expect(fns.map((f) => f.sig)).toEqual(want.map((w) => w.sig))
+    const [t] = await pa<{ n: number }[]>`
+      SELECT count(*)::int AS n FROM pg_class c JOIN pg_namespace s ON s.oid = c.relnamespace
+       WHERE s.nspname IN ('plt', 'oac', 'ops') AND c.relkind IN ('r', 'v', 'm', 'p', 'f')
+         AND has_table_privilege(${role}, c.oid, 'SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER')`
+    expect(t!.n).toBe(0)
+  })
+
+  it('cannot SELECT plt.provisioning_request nor execute plt.claim_provisioning_request', async () => {
+    const password = randomBytes(24).toString('base64url')
+    await run({ password })
+    const as = open('gremion_platform', 1, role, password)
+    try {
+      expect((await failure(as`SELECT count(*) FROM plt.provisioning_request`))?.code).toBe('42501')
+      expect((await failure(as`SELECT * FROM plt.claim_provisioning_request('x', 1)`))?.code).toBe('42501')
+    } finally {
+      await as.end({ timeout: 5 })
+    }
+  })
+
+  it('a second call is idempotent (created false) and rotates the password', async () => {
+    const first = randomBytes(24).toString('base64url')
+    const second = randomBytes(24).toString('base64url')
+    await run({ password: first })
+    expect((await run({ password: second })).created).toBe(false)
+    const old = open('gremion_platform', 1, role, first)
+    const fresh = open('gremion_platform', 1, role, second)
+    try {
+      expect((await failure(old`SELECT 1`))?.code).toBe('28P01')
+      expect(await failure(fresh`SELECT 1`)).toBeNull()
+    } finally {
+      await old.end({ timeout: 5 })
+      await fresh.end({ timeout: 5 })
+    }
+    expect(await memberships()).toEqual([COUNCIL_REQUESTER_MARKER])
+  })
+
+  it('a password under 16 chars is refused', async () => {
+    await expect(run({ password: 'x'.repeat(15) })).rejects.toMatchObject({ code: 'INVALID_INPUT' })
+  })
+
+  it('the role may not be named like another marker or the executor', async () => {
+    for (const bad of [EXECUTOR_ROLE, PANEL_REQUESTER_MARKER, EXECUTOR_MARKER, COUNCIL_REQUESTER_MARKER, 'Not A Plain Ident']) {
+      await expect(run({ role: bad }), bad).rejects.toMatchObject({ code: 'INVALID_INPUT' })
+    }
+  })
+
+  it('a stray EXECUTE on another plt function is a POSTCONDITION failure on the next run', async () => {
+    await run()
+    await pa.unsafe(`GRANT EXECUTE ON FUNCTION plt.executor_beat(text, text) TO ${role}`)
+    try {
+      await expect(run()).rejects.toMatchObject({ code: 'POSTCONDITION' })
+    } finally {
+      await pa.unsafe(`REVOKE ALL ON FUNCTION plt.executor_beat(text, text) FROM ${role}`)
+    }
+    expect((await run()).created).toBe(false)
+  })
+
+  it('a membership in the executor marker is a POSTCONDITION failure', async () => {
+    await run()
+    await r.admin.unsafe(`GRANT plt_executor TO ${role} WITH INHERIT FALSE, SET FALSE`)
+    try {
+      await expect(run()).rejects.toMatchObject({ code: 'POSTCONDITION' })
+    } finally {
+      await r.admin.unsafe(`REVOKE plt_executor FROM ${role}`)
+    }
   })
 })
