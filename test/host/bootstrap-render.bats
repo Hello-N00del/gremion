@@ -308,6 +308,23 @@ teardown() {
     [[ "$output" == *"WantedBy=timers.target"* ]]
 }
 
+@test "bootstrap renders and enables gremion-karenz.timer, and render_unit renders the hourly pair" {
+    grep -qF 'render_unit gremion-karenz.service /etc/systemd/system/gremion-karenz.service' "$BOOTSTRAP"
+    grep -qF 'render_unit gremion-karenz.timer /etc/systemd/system/gremion-karenz.timer' "$BOOTSTRAP"
+    grep -qF 'systemctl enable --now gremion-karenz.timer' "$BOOTSTRAP"
+    grep -qF 'gremion-karenz.timer (hourly' "$BOOTSTRAP"
+    run render_unit gremion-karenz.service "${GREMION_ROOT}/k.service"
+    [ "$status" -eq 0 ]
+    run cat "${GREMION_ROOT}/k.service"
+    [[ "$output" == *"ExecStart=${GREMION_ROOT}/current/infra/host/ops/karenz.sh"* ]]
+    [[ "$output" == *"TimeoutStartSec=170"* ]]
+    run render_unit gremion-karenz.timer "${GREMION_ROOT}/k.timer"
+    [ "$status" -eq 0 ]
+    run cat "${GREMION_ROOT}/k.timer"
+    [[ "$output" == *"OnCalendar=*-*-* *:17:00 UTC"* ]]
+    [[ "$output" == *"Persistent=true"* ]]
+}
+
 @test "render_unit renders the reboot-gate verify unit after docker" {
     run render_unit gremion-verify.service "${GREMION_ROOT}/v.service"
     [ "$status" -eq 0 ]

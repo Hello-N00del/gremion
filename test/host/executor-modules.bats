@@ -185,6 +185,16 @@ COLOUR=blue
     assert_absent 'render-router|mail|suspend' "$ORDER" 'disable touches the module only'
 }
 
+@test "disable_module reports the database as blocked until the Karenz ends, not dropped" {
+    jq -nc '{slug:"alpha-rat", module:"votes"}' > "${WORK}/args.json"
+    drive handle_disable_module
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    [[ "$output" == *"disabled for alpha-rat (exported, database blocked until the Karenz ends"* ]]
+    [[ "$output" != *"before it was dropped"* ]]
+    assert_absent 'only then dropped' "${SRC}/executor/handlers/disable_module.sh" 'the handler header no longer promises an immediate drop'
+    assert_absent 'before it was dropped' "${SRC}/customer-ops.sh" 'the success line no longer promises an immediate drop'
+}
+
 @test "disable_module: a failing verb (no export volume, export failed) fails the request; drift fails it (TRD-440)" {
     jq -nc '{slug:"alpha-rat", module:"votes"}' > "${WORK}/args.json"
     touch "${GREMION_ROOT}/fail-disable-module"

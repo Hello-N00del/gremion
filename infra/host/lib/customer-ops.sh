@@ -473,7 +473,7 @@ customer_disable_module() {   # <slug> <module> --operator <uuid> [--actor-kind 
     if [[ "$ACTOR_KIND_GIVEN" == yes ]]; then argv+=(--actor-kind "$ACTOR_KIND"); fi
     tc "${argv[@]}" || die "disable of ${MODULE_ID} for ${slug} failed in the container" "$GREMION_EXIT_ASSERT"
     _assert_fingerprint disable_module "$slug" "$before"
-    ok "module ${MODULE_ID} disabled for ${slug} (exported before it was dropped; TRD-440: container set unchanged)"
+    ok "module ${MODULE_ID} disabled for ${slug} (exported, database blocked until the Karenz ends; TRD-440: container set unchanged)"
 }
 
 customer_record_dpia() {   # <slug> <module> --operator <uuid> --requires-dpia yes|no --reason-codes a,b --document-ref <text>
