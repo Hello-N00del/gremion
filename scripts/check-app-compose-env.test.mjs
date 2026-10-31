@@ -73,11 +73,18 @@ function serviceBlockWithoutComments(file, name) {
   return (next < 0 ? rest : rest.slice(0, next)).split(/\r?\n/).filter((l) => !/^\s*#/.test(l)).join('\n')
 }
 
-for (const file of ['docker-compose.app.yml', 'docker-compose.app.dev.yml']) {
-  test(`gremion-ui environment of ${file} carries no AUTH_KEYCLOAK_ISSUER / AUTH_KEYCLOAK_BASE (#87)`, () => {
-    const block = serviceBlockWithoutComments(file, 'gremion-ui')
-    assert.match(block, /environment:/, 'the guard sees the gremion-ui environment block')
-    assert.doesNotMatch(block, /AUTH_KEYCLOAK_ISSUER/)
-    assert.doesNotMatch(block, /AUTH_KEYCLOAK_BASE/)
-  })
+// One test() per compose file, written out: the verify suite counts test() calls in the source.
+function assertNoIssuerKeys(file) {
+  const block = serviceBlockWithoutComments(file, 'gremion-ui')
+  assert.match(block, /environment:/, 'the guard sees the gremion-ui environment block')
+  assert.doesNotMatch(block, /AUTH_KEYCLOAK_ISSUER/)
+  assert.doesNotMatch(block, /AUTH_KEYCLOAK_BASE/)
 }
+
+test('gremion-ui environment of docker-compose.app.yml carries no AUTH_KEYCLOAK_ISSUER / AUTH_KEYCLOAK_BASE (#87)', () => {
+  assertNoIssuerKeys('docker-compose.app.yml')
+})
+
+test('gremion-ui environment of docker-compose.app.dev.yml carries no AUTH_KEYCLOAK_ISSUER / AUTH_KEYCLOAK_BASE (#87)', () => {
+  assertNoIssuerKeys('docker-compose.app.dev.yml')
+})
