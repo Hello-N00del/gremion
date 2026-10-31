@@ -426,11 +426,16 @@ export async function ensureAccessReader(d: AccessReaderDeps): Promise<{ created
 export const COUNCIL_REQUESTER_MARKER = 'plt_council_requester'
 /** gremion-ui's own LOGIN role for it (PLATFORM_MODULES_DATABASE_URL). */
 export const COUNCIL_REQUESTER_ROLE = 'gremion_ui_modules'
-/** The three functions of migration 0014; the role may EXECUTE exactly these among plt's. */
+/**
+ * The three functions of migration 0014 and the two of 0015 (the Karenz list and
+ * report); the role may EXECUTE exactly these among plt's.
+ */
 export const COUNCIL_EXECUTES = [
   'plt.submit_council_module_request(text, text, jsonb, uuid, uuid, text, timestamptz, text)',
   'plt.council_module_requests(text, integer)',
   'plt.council_module_state(uuid)',
+  'plt.council_karenz_list(uuid, integer)',
+  'plt.council_karenz_report(uuid, uuid, text, text, text, text)',
 ] as const
 
 export interface CouncilRequesterDeps {
