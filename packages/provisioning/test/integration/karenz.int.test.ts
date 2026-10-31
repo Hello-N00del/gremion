@@ -248,13 +248,13 @@ describe('plt.council_karenz_list', () => {
 
     // the window is a parameter: 14 days sees the recent restore, not the old finalize
     const ids = async (days: number) =>
-      new Set((await list(council, customer, days)).map((x) => `${x.karenz_id}`))
+      new Set((await list(council, customer, days)).map((x) => x.karenz_id as string))
     expect(await ids(14)).toEqual(new Set([live, restoring, finalizing, restoredRecent]))
     expect(await ids(0)).toEqual(new Set([live, restoring, finalizing]))
     expect(await ids(1)).toEqual(new Set([live, restoring, finalizing]))
     expect(await ids(60)).toEqual(new Set([live, restoring, finalizing, restoredRecent, finalizedOld]))
 
-    const byId = new Map((await list(council, customer, 60)).map((x) => [`${x.karenz_id}`, x]))
+    const byId = new Map((await list(council, customer, 60)).map((x) => [x.karenz_id as string, x]))
     expect(byId.get(live)).toMatchObject({ state: 'open', module_key: modules[0]!.module_key, final_mode: null })
     expect(byId.get(finalizing)).toMatchObject({ state: 'finalizing', final_mode: 'live', module_key: modules[2]!.module_key })
     expect(byId.get(restoring)!.restore_requested_at).toBeInstanceOf(Date)

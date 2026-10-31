@@ -226,7 +226,7 @@ describe('drainRoleBackfill', () => {
     expect(assigned.some((a) => a.userId === 'fresh')).toBe(true)
   })
 
-  it('it refuses to run when the realm has no vorstand role (failed = pending count, logs the reconcile hint)', async () => {
+  it('refuses to run when the realm has no vorstand role (failed = pending count, logs the reconcile hint)', async () => {
     const db = fakeDb([{ user_keycloak_id: 'u-1' }, { user_keycloak_id: 'u-2' }])
     const { kc, assigned } = fakeKc({ roles: [{ id: 'r', name: 'council-admin' }] })
     const { log, errors } = fakeLog()

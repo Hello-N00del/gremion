@@ -5,6 +5,8 @@ vi.mock('$env/dynamic/private', () => ({ env: envMock }))
 vi.mock('$lib/server/tenant/secrets', () => ({ resolveSecret: (ref: string) => `secret-for-${ref}` }))
 
 type TenantKc = { id: string; realmName: string; kcAdminUrl: string; kcClientId: string; kcClientSecretRef: string }
+/** The request URL as a string, whatever form fetch() was given it in. */
+const urlOf = (input: string | URL | Request): string => (typeof input === 'string' ? input : input instanceof URL ? input.href : input.url)
 const tenantA: TenantKc = { id: 'a', realmName: 'tenant-a', kcAdminUrl: 'http://keycloak:8080/auth', kcClientId: 'gremion-admin', kcClientSecretRef: 'kc-a' }
 const tenantB: TenantKc = { id: 'b', realmName: 'tenant-b', kcAdminUrl: 'http://keycloak:8080/auth', kcClientId: 'gremion-admin', kcClientSecretRef: 'kc-b' }
 
@@ -59,7 +61,7 @@ describe('KeycloakAdminClient.listRealmRoleMembers', () => {
   async function clientWithFetch(roleUsers: Array<ReturnType<typeof user>>) {
     const urls: string[] = []
     const fetchMock = vi.fn(async (input: string | URL | Request) => {
-      const url = String(input)
+      const url = urlOf(input)
       if (url.includes('/protocol/openid-connect/token')) return tokenOk()
       urls.push(url)
       const u = new URL(url)
@@ -114,7 +116,7 @@ describe('KeycloakAdminClient.listRealmRoleMembers', () => {
 
   it('a non-2xx answer rejects with the Keycloak status', async () => {
     vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request) =>
-      String(input).includes('/protocol/openid-connect/token') ? tokenOk() : new Response('boom', { status: 500 })))
+      urlOf(input).includes('/protocol/openid-connect/token') ? tokenOk() : new Response('boom', { status: 500 })))
     const { KeycloakAdminClient } = await import('./keycloak-admin')
     const client = new KeycloakAdminClient('http://kc.test/auth', 'realm-x', 'cid', 'sec')
     await expect(client.listRealmRoleMembers('vorstand')).rejects.toMatchObject({ status: 500 })
