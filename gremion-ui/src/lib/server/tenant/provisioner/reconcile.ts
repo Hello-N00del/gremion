@@ -72,6 +72,16 @@ export type ReconcileCheckName = (typeof RECONCILE_CHECK_NAMES)[number]
 export const KERNEL_DB_CHECK_NAMES = ['audit-append-only'] as const
 export type KernelDbCheckName = (typeof KERNEL_DB_CHECK_NAMES)[number]
 
+/** Re-ensure checks (kernel issues #88, #89): create-time provisioning that a later release extends is
+ *  never re-applied to customers created earlier, so each is a check that reads the post-condition and an
+ *  idempotent repair that `--apply` runs (reconcile-reensure.ts). Entries of their own, not part of the realm
+ *  contract list above. */
+export const REENSURE_CHECK_NAMES = [
+  'purger-connect', // #89  the purger role holds CONNECT on the customer's kernel database (the purge run logs in as it)
+  'kernel-api-nats-seed', // #88  the kernel-api NATS seed of the customer exists and the broker serves its account
+] as const
+export type ReensureCheckName = (typeof REENSURE_CHECK_NAMES)[number]
+
 /** A single named contract check result (machine-readable). */
 export interface NamedCheck {
   name: ReconcileCheckName
@@ -82,7 +92,7 @@ export interface NamedCheck {
 
 /** A check of a report: a realm contract check, or the DB-level one withKernelAuditCheck appends. */
 export interface ReportCheck {
-  name: ReconcileCheckName | KernelDbCheckName
+  name: ReconcileCheckName | KernelDbCheckName | ReensureCheckName
   ok: boolean
   detail: string
 }
@@ -93,7 +103,7 @@ export interface ReconcileReport {
   ok: boolean
   checks: ReportCheck[]
   /** In apply mode: the failed check names whose repair was replayed. */
-  applied: (ReconcileCheckName | KernelDbCheckName)[]
+  applied: (ReconcileCheckName | KernelDbCheckName | ReensureCheckName)[]
   /** Failed checks whose repair is the host's (`repair: host`, HOST_REPAIRED_CHECKS). */
   repairHost: ReconcileCheckName[]
 }
