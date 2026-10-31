@@ -322,7 +322,7 @@ describe('plt.council_karenz_report', () => {
     expect(await events(earlyId), 'a refused mark leaves no event behind').toBe(0)
     expect((await row(earlyId)).has_tenant_done).toBe(false)
 
-    const due = dueSeed()
+    const due = dueSeed({ finalMode: 'live' })
     const dueId = await insertKarenz(due)
     await report(council, due.customer, dueId, 'final', 'info', 'tenant side done', 'tenant_done')
     expect(await row(dueId)).toMatchObject({ state: 'open', has_tenant_done: true, has_platform_done: false })
@@ -337,6 +337,35 @@ describe('plt.council_karenz_report', () => {
     await report(council, due.customer, dueId, 'final', 'info', 'again', 'tenant_done')
     const [t2] = await pa<{ t: Date }[]>`SELECT tenant_done_at AS t FROM plt.module_karenz WHERE karenz_id = ${dueId}::uuid`
     expect(t2!.t.getTime()).toBe(t1!.t.getTime())
+  })
+
+  it('mark tenant_done is refused (22023) while final_mode is null or dry: a dry run deletes nothing, so no tenant side can be complete; the event rolls back with it', async () => {
+    for (const finalMode of [null, 'dry'] as const) {
+      for (const state of ['open', 'finalizing'] as const) {
+        const s = dueSeed({ state, finalMode })
+        const id = await insertKarenz(s)
+        const f = await failure(report(council, s.customer, id, 'final', 'info', 'tenant side done', 'tenant_done'))
+        expect(f?.code, `${state}/${finalMode}`).toBe('22023')
+        expect(f?.message, `${state}/${finalMode}`).toContain('final_mode')
+        expect(await events(id), `${state}/${finalMode}: a refused mark leaves no event behind`).toBe(0)
+        expect((await row(id)).has_tenant_done, `${state}/${finalMode}`).toBe(false)
+        // the same row still takes a plain event (the dry-run line the tenant side reports every 24 h)
+        await report(council, s.customer, id, 'final:dry', 'info', 'deletion off: would delete: nothing')
+        expect(await events(id)).toBe(1)
+      }
+    }
+  })
+
+  it('0016 keeps the grants of the two council functions: EXECUTE for the council role, none for PUBLIC', async () => {
+    const rows = await pa<{ proname: string; public_exec: boolean }[]>`
+      SELECT p.proname, coalesce((SELECT bool_or(a.grantee = 0) FROM aclexplode(p.proacl) a WHERE a.privilege_type = 'EXECUTE'), false) AS public_exec
+        FROM pg_proc p WHERE p.pronamespace = 'plt'::regnamespace AND p.proname IN ('council_karenz_list', 'council_karenz_report') ORDER BY 1`
+    expect(rows).toEqual([
+      { proname: 'council_karenz_list', public_exec: false },
+      { proname: 'council_karenz_report', public_exec: false },
+    ])
+    const [priv] = await pa<{ ok: boolean }[]>`SELECT has_function_privilege(${councilRole}, ${REPORT}, 'EXECUTE') AS ok`
+    expect(priv!.ok).toBe(true)
   })
 
   it('mark tenant_done is refused for a restoring, restored or finalized row', async () => {
@@ -366,7 +395,7 @@ describe('plt.council_karenz_report', () => {
   })
 
   it('a completion mark on an error-level report is refused (22023) and closes nothing, with or without the platform side done', async () => {
-    const lone = dueSeed()
+    const lone = dueSeed({ finalMode: 'live' })
     const loneId = await insertKarenz(lone)
     expect((await failure(report(council, lone.customer, loneId, 'final', 'error', 'tenant pass failed', 'tenant_done')))?.code).toBe('22023')
     expect(await events(loneId), 'a refused mark leaves no event behind').toBe(0)
