@@ -9,8 +9,8 @@ import { assertModuleId, assertTenantId, tenantModuleDbName } from '../names.js'
 /** A (tenant, module) database: t_<tenant uuid as 32 hex>__<module id>. */
 export const TENANT_MODULE_DB = /^t_[0-9a-f]{32}__[a-z][a-z0-9]*(?:_[a-z0-9]+)*$/
 
-/** Module ids the lifecycle refuses: `kernel` names the customer's kernel database, never a module's. */
-export const RESERVED_MODULE_IDS: ReadonlySet<string> = new Set(['kernel'])
+/** Module ids the lifecycle refuses: `kernel` and `governance` name the customer's kernel and governance databases, never a module's. */
+export const RESERVED_MODULE_IDS: ReadonlySet<string> = new Set(['kernel', 'governance'])
 
 /** The legacy and platform databases the lifecycle never opens (test 12). */
 export const NEVER_OPENED: ReadonlySet<string> = new Set(['control', 'gremion', 'keycloak', 'postgres', 'template0', 'template1'])

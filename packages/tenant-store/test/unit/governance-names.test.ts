@@ -7,7 +7,7 @@ import {
   governanceDbName,
   governanceRoles,
 } from '../../src/lifecycle/governance.js'
-import { LifecycleError } from '../../src/lifecycle/guards.js'
+import { assertLifecycleModuleId, LifecycleError } from '../../src/lifecycle/guards.js'
 
 const ID = '01927f00-0000-7000-8000-000000000001'
 const HEX = '01927f00000070008000000000000001'
@@ -50,6 +50,17 @@ describe('governance names', () => {
       expect(err).toBeInstanceOf(LifecycleError)
       expect((err as LifecycleError).code).toBe('INVALID_INPUT')
     }
+  })
+
+  it('governance is a reserved module id: assertLifecycleModuleId refuses it with INVALID_INPUT', () => {
+    let err: unknown
+    try {
+      assertLifecycleModuleId('governance')
+    } catch (e) {
+      err = e
+    }
+    expect(err).toBeInstanceOf(LifecycleError)
+    expect((err as LifecycleError).code).toBe('INVALID_INPUT')
   })
 
   it('GOVERNANCE_GROUP_ROLES is frozen with keys app and purger', () => {

@@ -22,8 +22,16 @@ export type { InspectionReport, InspectRegistry, InspectServer, ServerReport } f
 export { dropKernelDatabase, ensureKernelDatabase, ensureKernelRoles, KERNEL_MODULE, kernelDbName, kernelRoles } from './kernel.js'
 export type { EnsureKernelResult, KernelRoles } from './kernel.js'
 // TASK-084-a: the customer's governance database on the governance server (names and roles).
-export { GOVERNANCE_GROUP_ROLES, GOVERNANCE_LEDGER, GOVERNANCE_MODULE, governanceDbName, governanceRoles } from './governance.js'
-export type { GovernanceRoles } from './governance.js'
+export {
+  dropGovernanceDatabase,
+  ensureGovernanceDatabase,
+  GOVERNANCE_GROUP_ROLES,
+  GOVERNANCE_LEDGER,
+  GOVERNANCE_MODULE,
+  governanceDbName,
+  governanceRoles,
+} from './governance.js'
+export type { EnsureGovernanceResult, GovernanceRoles } from './governance.js'
 // TASK-077 (C13): the kernel API's SELECT-only role on control + gremion_platform.
 export { ensureKernelApiReader, KERNEL_API_READS, KernelApiReaderError, kernelApiReaderPrivilegeProblems } from './kernel-api-reader.js'
 export type { KernelApiReaderDeps, KernelApiReaderErrorCode } from './kernel-api-reader.js'
