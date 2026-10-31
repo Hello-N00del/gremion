@@ -1681,7 +1681,7 @@
     },
     {
       "path": "modules/elections/app/lib/modules/manifests/elections.ts",
-      "reason": "TASK-205b (TASK-058 Q10): the StuRa manifest owned /elections, /polls and /votes; after the split elections owns /elections only, the merged rail entry moves to the votes manifest; TASK-205: comment names the kernel migration with its 4-digit padded name (the register lint refuses a pad-3 kernel-data name outside its allow-list)",
+      "reason": "TASK-205b (TASK-058 Q10): the StuRa manifest owned /elections, /polls and /votes; after the split elections owns /elections only, the merged rail entry moves to the votes manifest; TASK-205: comment names the kernel migration with its 4-digit padded name (the register lint refuses a pad-3 kernel-data name outside its allow-list); Karenz t10: status.label, the phrase the council module switch asks the admin to type",
       "owner": "TASK-205",
       "blob": "0e64db6c1b66e91dd7630dcd9d788eee20438192"
     },
@@ -1711,7 +1711,7 @@
     },
     {
       "path": "modules/votes/app/lib/modules/manifests/votes.ts",
-      "reason": "added by TASK-205b (TASK-058 Q10): the votes manifest split out of the elections manifest - owns /votes, /polls and the merged rail entry",
+      "reason": "added by TASK-205b (TASK-058 Q10): the votes manifest split out of the elections manifest - owns /votes, /polls and the merged rail entry; Karenz t10: status.label, the phrase the council module switch asks the admin to type",
       "owner": "TASK-205",
       "blob": "7de4c1d85609dbcc45007fa7b81c5afc551e4858"
     },
@@ -1777,7 +1777,7 @@
     },
     {
       "path": "modules/calendar/app/lib/modules/manifests/calendar.ts",
-      "reason": "TASK-205: comment names the kernel migration with its 4-digit padded name (the register lint refuses a pad-3 kernel-data name outside its allow-list)",
+      "reason": "TASK-205: comment names the kernel migration with its 4-digit padded name (the register lint refuses a pad-3 kernel-data name outside its allow-list); Karenz t10: status.label, the phrase the council module switch asks the admin to type",
       "owner": "TASK-205",
       "blob": "5b7e30f3f515fa9dc6af84345f4a55d285020d22"
     },

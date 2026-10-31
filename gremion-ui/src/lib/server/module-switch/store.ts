@@ -33,7 +33,7 @@ export interface SwitchRow {
   claimedAt: Date | null
 }
 
-/** What a caller supplies on insert; everything else takes the table default. */
+/** What a caller supplies on insert; everything else (submitted_at included, unless given) takes the table default. */
 export type NewSwitch = Pick<SwitchRow, 'requestId' | 'moduleId' | 'action' | 'actorUserId'> & Partial<Pick<SwitchRow, 'submittedAt' | 'state'>>
 
 /** Columns updateSwitch may set (the primary key, module, action and actor never change). */
@@ -77,9 +77,18 @@ function toRow(r: DbRow): SwitchRow {
 const COLUMNS = `request_id, module_id, action, actor_user_id, submitted_at, state, outcome, config_error, applied_at, finished_at, notified_at, claimed_at`
 
 export async function insertSwitch(db: Sql, row: NewSwitch): Promise<void> {
+  const state = row.state ?? 'queued'
+  if (row.submittedAt === undefined) {
+    // No time given: leave the column out so the table default (the DB clock, the one the lease
+    // arithmetic uses) applies. Blue and green instances never order rows by their own app clocks.
+    await db`
+      INSERT INTO module_switch_request (request_id, module_id, action, actor_user_id, state)
+      VALUES (${row.requestId}, ${row.moduleId}, ${row.action}, ${row.actorUserId}, ${state})`
+    return
+  }
   await db`
     INSERT INTO module_switch_request (request_id, module_id, action, actor_user_id, submitted_at, state)
-    VALUES (${row.requestId}, ${row.moduleId}, ${row.action}, ${row.actorUserId}, ${row.submittedAt ?? new Date()}, ${row.state ?? 'queued'})`
+    VALUES (${row.requestId}, ${row.moduleId}, ${row.action}, ${row.actorUserId}, ${row.submittedAt}, ${state})`
 }
 
 /** Newest first. `limit` is clamped to 1..200. */
@@ -114,22 +123,41 @@ const PATCH_COLUMNS: Record<keyof SwitchPatch, string> = {
 /**
  * Set the named columns. An unset key is left alone; a key set to `null` clears
  * the column. NOT for the racing transitions: use claimTransition for those.
+ *
+ * Resolves true when the row exists (and was written), false when no row has
+ * this request id. A caller that records a terminal outcome MUST check it: a
+ * false means the outcome was lost, and it has to be logged or the row adopted
+ * first, never dropped.
  */
-export async function updateSwitch(db: Sql, requestId: string, patch: SwitchPatch): Promise<void> {
+export async function updateSwitch(db: Sql, requestId: string, patch: SwitchPatch): Promise<boolean> {
   const keys = (Object.keys(patch) as (keyof SwitchPatch)[]).filter((k) => k in PATCH_COLUMNS && patch[k] !== undefined)
-  if (keys.length === 0) return
+  if (keys.length === 0) {
+    const found = await db<{ request_id: string }[]>`SELECT request_id FROM module_switch_request WHERE request_id = ${requestId}`
+    return found.length === 1
+  }
   const values: Record<string, unknown> = {}
   for (const k of keys) values[PATCH_COLUMNS[k]] = patch[k]
   // postgres.js builds `SET "col" = $n, ...` from the object; the column names come from PATCH_COLUMNS only.
-  await db`UPDATE module_switch_request SET ${db(values as Record<string, never>, ...Object.keys(values))} WHERE request_id = ${requestId}`
+  const written = await db<{ request_id: string }[]>`
+    UPDATE module_switch_request SET ${db(values as Record<string, never>, ...Object.keys(values))}
+     WHERE request_id = ${requestId}
+    RETURNING request_id`
+  return written.length === 1
 }
 
 /**
- * Atomically move a row to `to` when it is in one of the `from` states, or when
- * it is `applying` with an expired lease (a pass that died mid-apply). Returns
- * the row after the move, or null when another instance holds it (or the row is
- * in none of the states). One UPDATE ... WHERE ... RETURNING, so two concurrent
- * callers cannot both win.
+ * Atomically move a row to `to` when it is in one of the `from` states, or, for
+ * a claim INTO `applying` only, when it is `applying` with an expired (or
+ * missing) lease: a pass that died mid-apply is retried. A call for any other
+ * edge never takes over a half-applied row; name 'applying' in `from` to do
+ * that on purpose. Returns the row after the move, or null when another
+ * instance holds it (or the row is in none of the states). One UPDATE ...
+ * WHERE ... RETURNING, so two concurrent callers cannot both win.
+ *
+ * Only ACQUIRING the lease is atomic. A holder that outlives the lease and then
+ * writes its result through updateSwitch can overwrite the newer holder's; the
+ * 120 s default is far above one apply pass, and a lease token is the follow-up
+ * if a pass ever gets close to it.
  */
 export async function claimTransition(
   db: Sql,
@@ -139,12 +167,14 @@ export async function claimTransition(
   opts: { leaseS?: number } = {},
 ): Promise<SwitchRow | null> {
   const lease = opts.leaseS ?? DEFAULT_LEASE_S
+  const reclaimExpired = to === 'applying'
   const rows = await db<DbRow[]>`
     UPDATE module_switch_request
        SET state = ${to}, claimed_at = now()
      WHERE request_id = ${requestId}
        AND (state = ANY(${[...from]}::text[])
-            OR (state = 'applying' AND claimed_at < now() - make_interval(secs => ${lease}::double precision)))
+            OR (${reclaimExpired}::boolean AND state = 'applying'
+                AND (claimed_at IS NULL OR claimed_at < now() - make_interval(secs => ${lease}::double precision))))
     RETURNING ${db.unsafe(COLUMNS)}`
   return rows[0] ? toRow(rows[0]) : null
 }

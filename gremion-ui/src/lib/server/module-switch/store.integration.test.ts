@@ -57,6 +57,22 @@ describe('insertSwitch / listSwitches', () => {
     await expect(updateSwitch(db, r.requestId, { state: 'exploded' as never })).rejects.toMatchObject({ code: '23514' })
   })
 
+  it('takes submitted_at from the table default (the DB clock) unless the caller supplies one', async () => {
+    const db = getDb()
+    await db`ALTER TABLE module_switch_request ALTER COLUMN submitted_at SET DEFAULT '2001-02-03T04:05:06Z'`
+    try {
+      const a = row()
+      const b = row({ submittedAt: new Date('2010-01-01T00:00:00Z') })
+      await insertSwitch(db, a)
+      await insertSwitch(db, b)
+      const byId = new Map((await listSwitches(db, 10)).map((x) => [x.requestId, x]))
+      expect(byId.get(a.requestId)!.submittedAt.toISOString()).toBe('2001-02-03T04:05:06.000Z')
+      expect(byId.get(b.requestId)!.submittedAt.toISOString()).toBe('2010-01-01T00:00:00.000Z')
+    } finally {
+      await db`ALTER TABLE module_switch_request ALTER COLUMN submitted_at SET DEFAULT now()`
+    }
+  })
+
   it('a second insert with the same request id is a primary key violation, not a silent overwrite', async () => {
     const db = getDb()
     const r = row()
@@ -98,8 +114,17 @@ describe('updateSwitch', () => {
     const db = getDb()
     const r = row()
     await insertSwitch(db, r)
-    await updateSwitch(db, r.requestId, {})
+    expect(await updateSwitch(db, r.requestId, {})).toBe(true)
     expect((await listSwitches(db, 1))[0]!.state).toBe('queued')
+  })
+
+  it('reports whether a row was written: true for a known id, false for an unknown one (a lost outcome is never silent)', async () => {
+    const db = getDb()
+    const r = row()
+    await insertSwitch(db, r)
+    expect(await updateSwitch(db, r.requestId, { state: 'failed' })).toBe(true)
+    expect(await updateSwitch(db, randomUUID(), { state: 'failed' })).toBe(false)
+    expect(await updateSwitch(db, randomUUID(), {})).toBe(false)
   })
 })
 
@@ -131,6 +156,32 @@ describe('claimTransition', () => {
     await getDb()`UPDATE module_switch_request SET claimed_at = now() - interval '10 minutes' WHERE request_id = ${r.requestId}`
     const again = await claimTransition(db, r.requestId, ['succeeded'], 'applying')
     expect(again).toMatchObject({ requestId: r.requestId, state: 'applying' })
+  })
+
+  it('an expired applying lease is taken over only by a claim into applying, never by an unrelated edge', async () => {
+    const db = getDb()
+    const r = row()
+    await insertSwitch(db, r)
+    await updateSwitch(db, r.requestId, { state: 'succeeded' })
+    await claimTransition(db, r.requestId, ['succeeded'], 'applying')
+    await getDb()`UPDATE module_switch_request SET claimed_at = now() - interval '10 minutes' WHERE request_id = ${r.requestId}`
+    // a call for another edge must not move the half-applied row, whatever the target
+    expect(await claimTransition(db, r.requestId, ['queued'], 'expired')).toBeNull()
+    expect(await claimTransition(db, r.requestId, ['queued', 'succeeded'], 'failed')).toBeNull()
+    expect((await listSwitches(db, 1))[0]!.state).toBe('applying')
+    // the re-claim into applying, and an explicit applying source, still work
+    expect(await claimTransition(db, r.requestId, ['succeeded'], 'applying')).not.toBeNull()
+    await getDb()`UPDATE module_switch_request SET claimed_at = now() - interval '10 minutes' WHERE request_id = ${r.requestId}`
+    expect(await claimTransition(db, r.requestId, ['applying'], 'dead')).toMatchObject({ state: 'dead' })
+  })
+
+  it('an applying row without a lease (claimed_at NULL) is treated as expired, not stuck forever', async () => {
+    const db = getDb()
+    const r = row()
+    await insertSwitch(db, r)
+    await updateSwitch(db, r.requestId, { state: 'applying' })
+    expect((await listSwitches(db, 1))[0]!.claimedAt).toBeNull()
+    expect(await claimTransition(db, r.requestId, ['succeeded'], 'applying')).toMatchObject({ state: 'applying' })
   })
 
   it('honours a custom lease', async () => {
