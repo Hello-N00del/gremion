@@ -12,8 +12,9 @@
 //                                        leaf never migrates (B21); enableModule does
 //   gate unavailable -> classify:     SELECT 1 on the tenant pool
 //     SQLSTATE 3D000 (no database)    -> 404 tenant_not_provisioned (never cached: the
-//                                        gate caches no failed check; no database is
-//                                        created, no shared database is fallen back to)
+//     SQLSTATE 42501 at connect       -> 404 tenant_not_provisioned  gate caches no failed check; no
+//       (module switched off: the        database is created, no shared database is fallen back to)
+//       Karenz blocked CONNECT)
 //     anything else                   -> 503 tenant_unavailable (Retry-After)
 //
 // The gate and the store are injected (built once, in src/app.ts); this file
@@ -61,6 +62,16 @@ export const CONNECTION_LOST: ReadonlySet<string> = new Set([
   'EPIPE',
 ])
 
+/**
+ * The SQLSTATEs of a tenant database that cannot be connected to because the module is off: it is gone
+ * (3D000, dropped) or blocked (42501, the module Karenz revoked CONNECT from the app role). Only meaningful
+ * for a failure of the CONNECTION (or of `SELECT 1`), never for a query that needs a table privilege.
+ */
+export function isTenantDatabaseOff(err: unknown): boolean {
+  const code = sqlState(err)
+  return code === '3D000' || code === '42501'
+}
+
 export function isRefusal(value: unknown): value is Refusal {
   return typeof value === 'object' && value !== null && 'status' in value && 'code' in value
 }
@@ -93,7 +104,7 @@ export function createBoardTenantDb({
       await sql`SELECT 1`
       return unavailable(retryAfterSeconds)
     } catch (err) {
-      return sqlState(err) === '3D000' ? NOT_PROVISIONED : unavailable(retryAfterSeconds)
+      return isTenantDatabaseOff(err) ? NOT_PROVISIONED : unavailable(retryAfterSeconds)
     }
   }
 

@@ -22,6 +22,7 @@
 import { rmSync } from 'node:fs'
 import type { Sql } from '@gremion/db'
 import { tenantModuleDbName } from '../names.js'
+import { blockModuleDatabase } from './block.js'
 import { execFormatted } from './ddl.js'
 import { assertActor } from './enable.js'
 import { exportDatabase } from './export.js'
@@ -35,6 +36,8 @@ import {
 } from './guards.js'
 import { assertPlatform, casModuleDatabaseState, lookupModuleId, openKarenz, readLiveKarenz, readModuleDatabase } from './platform.js'
 import type { Actor, DisableResult, LifecycleDeps, LifecycleModule } from './types.js'
+
+export { blockModuleDatabase } from './block.js'
 
 async function databaseExists(admin: Sql, dbName: string): Promise<boolean> {
   const rows = await admin`SELECT 1 FROM pg_database WHERE datname = ${dbName}`
@@ -55,36 +58,6 @@ async function disableEnablement(platform: Sql, customerId: string, moduleId: st
 export async function dropTenantModuleDatabase(admin: Sql, dbName: string, tenantId: string, moduleId: string): Promise<void> {
   assertTenantModuleTarget(dbName, tenantId, moduleId)
   await execFormatted(admin, 'DROP DATABASE IF EXISTS %I WITH (FORCE)', [dbName])
-}
-
-const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
-
-/**
- * The Karenz block: the module's app role loses CONNECT on the (tenant, module)
- * database and its sessions are terminated; the database, its data and the owner
- * role stay. Proven, not assumed: the function then asserts that the app role
- * cannot connect (has_database_privilege) and that no session of it is left, and
- * throws otherwise. Idempotent. The target is re-asserted at the call.
- */
-export async function blockModuleDatabase(admin: Sql, dbName: string, tenantId: string, moduleId: string, app: string): Promise<void> {
-  assertTenantModuleTarget(dbName, tenantId, moduleId)
-  if (app !== moduleRoles(moduleId).app) throw new LifecycleError('TARGET_REFUSED', `refusing to block ${dbName} for ${JSON.stringify(app)}: ${moduleId}'s app role is ${moduleRoles(moduleId).app}`)
-  await execFormatted(admin, 'REVOKE CONNECT ON DATABASE %I FROM %I', [dbName, app])
-  // a database that PUBLIC could still connect to would let the app role in through PUBLIC
-  await execFormatted(admin, 'REVOKE CONNECT, TEMPORARY ON DATABASE %I FROM PUBLIC', [dbName])
-  let sessions = -1
-  for (let attempt = 0; attempt < 50; attempt++) {
-    await admin`
-      SELECT pg_terminate_backend(pid) FROM pg_stat_activity
-       WHERE datname = ${dbName} AND usename = ${app} AND pid <> pg_backend_pid()`
-    const [left] = await admin<{ n: number }[]>`SELECT count(*)::int AS n FROM pg_stat_activity WHERE datname = ${dbName} AND usename = ${app}`
-    sessions = left?.n ?? -1
-    if (sessions === 0) break
-    await sleep(100)
-  }
-  const [priv] = await admin<{ can: boolean }[]>`SELECT has_database_privilege(${app}, ${dbName}, 'CONNECT') AS can`
-  if (priv?.can !== false) throw new LifecycleError('CONCURRENT_STATE', `${app} can still connect to ${dbName} after the block`)
-  if (sessions !== 0) throw new LifecycleError('CONCURRENT_STATE', `${app} still has sessions on ${dbName} after the block`)
 }
 
 export async function disableModule(tenantId: string, module: LifecycleModule, actor: Actor, deps: LifecycleDeps): Promise<DisableResult> {
@@ -135,8 +108,16 @@ export async function disableModule(tenantId: string, module: LifecycleModule, a
   if (row.dbName !== dbName) throw new LifecycleError('TARGET_REFUSED', `plt.module_database names ${row.dbName} for (${tenantId}, ${moduleId}), expected ${dbName}`)
 
   if (row.state === 'blocked') {
-    // Already blocked: the Karenz keeps its clock. Only the switch is re-asserted, and a blocked
-    // database that somehow has no clock gets one (it would otherwise never be finalized).
+    // Already blocked: the Karenz keeps its clock. The switch and the block are re-asserted (blocking is
+    // idempotent and proves the post-condition, so blocked:true is never reported over a database the app
+    // role can still reach: a restore that failed half way, a grant made by hand), and a blocked database
+    // that somehow has no clock gets one (it would otherwise never be finalized).
+    const server = deps.server(database.postgresService)
+    if (await databaseExists(server.admin, dbName)) {
+      await blockModuleDatabase(server.admin, dbName, tenantId, moduleId, moduleRoles(moduleId).app)
+    } else {
+      log(`${dbName} is recorded as blocked but the server has no such database: nothing to block (the day-30 job records it as dropped)`)
+    }
     const karenz = await deps.platform.begin(async (tx) => {
       await disableEnablement(tx as unknown as Sql, tenantId, pltModuleId, actor)
       return openKarenz(tx as unknown as Sql, { customerId: tenantId, moduleId: pltModuleId, actor, exportPath: row.exportPath, exportSha256: row.exportSha256 })
@@ -156,7 +137,9 @@ export async function disableModule(tenantId: string, module: LifecycleModule, a
   if (!(await databaseExists(server.admin, dbName))) {
     const again = await readModuleDatabase(deps.platform, tenantId, pltModuleId)
     if (again?.exportedAt) {
-      // a drop of an earlier (pre-Karenz) disable happened, the 'dropped' write did not: finish it
+      // a drop of an earlier (pre-Karenz) disable happened, the 'dropped' write did not: finish it. Since the
+      // Karenz this code never drops, so the row is a leftover of the release before it: say so in the log.
+      log(`${dbName} is gone and its export ${again.exportPath ?? '(unrecorded)'} (sha256 ${again.exportSha256 ?? 'none'}) was recorded by an earlier switch-off: finishing that switch-off, no Karenz row is opened for it`)
       await casModuleDatabaseState(deps.platform, key, ['disabling'], 'dropped')
       return { tenantId, moduleId, database: dbName, dropped: true, blocked: false, karenz: null, export: null, noop: false }
     }

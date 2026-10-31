@@ -215,16 +215,18 @@ export interface LiveKarenzRow {
   karenzId: string
   state: LiveKarenzState
   finalAt: Date
+  /** Set once the tenant side has deleted its external items: from then on the module cannot be restored. */
+  tenantDoneAt: Date | null
 }
 
 /** The live (open, restoring or finalizing) Karenz row of (customer, module), if any. */
 export async function readLiveKarenz(sql: Sql, customerId: string, moduleId: string): Promise<LiveKarenzRow | null> {
-  const rows = await sql<{ karenz_id: string; state: LiveKarenzState; final_at: Date }[]>`
-    SELECT karenz_id::text, state, final_at
+  const rows = await sql<{ karenz_id: string; state: LiveKarenzState; final_at: Date; tenant_done_at: Date | null }[]>`
+    SELECT karenz_id::text, state, final_at, tenant_done_at
       FROM plt.module_karenz
      WHERE customer_id = ${customerId} AND module_id = ${moduleId} AND state IN ('open', 'restoring', 'finalizing')`
   const r = rows[0]
-  return r ? { karenzId: r.karenz_id, state: r.state, finalAt: r.final_at } : null
+  return r ? { karenzId: r.karenz_id, state: r.state, finalAt: r.final_at, tenantDoneAt: r.tenant_done_at } : null
 }
 
 /**

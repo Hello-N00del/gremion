@@ -43,20 +43,20 @@ export interface FinalizeDeps {
   /** A connection to gremion_platform AS its owner. */
   platform: Sql
   /** The server behind a compose service name (runtime.database.postgresService). */
-  server(service: string): ModuleServer
+  server: (service: string) => ModuleServer
   catalogue: readonly LifecycleModule[]
   exportDir: string
   /** false: a dry run. Mode is recorded on each due row, nothing is dropped or deleted. */
   finalDeletion: boolean
   /** Wall-clock budget; checked before each row (default 110000). */
   deadlineMs?: number
-  now?(): Date
+  now?: () => Date
   /** A future date keeps the export (a retention hold, phase 3); the row records export_kept_until. */
-  exportHold?(tenantId: string, moduleId: string): Promise<Date | null> | Date | null
+  exportHold?: (tenantId: string, moduleId: string) => Promise<Date | null> | Date | null
   /** Modules (catalogue ids) whose database may not be dropped before retained_ok_at is set. */
   retentionRequired?: ReadonlySet<string>
-  log?(line: string): void
-  hooks?: { afterStep?(step: FinalizeStep): void | Promise<void> }
+  log?: (line: string) => void
+  hooks?: { afterStep?: (step: FinalizeStep) => void | Promise<void> }
 }
 
 export interface FinalizeResult {
@@ -68,7 +68,7 @@ export interface FinalizeResult {
   kept: number
   dryRun: boolean
   errors: { karenzId: string; moduleKey: string; message: string }[]
-  /** Dumps under <exportDir>/<tenant>/<module>/ that no Karenz row and no module_database row references. Listed every run, never deleted. */
+  /** Dumps under <exportDir>/<tenant>/<module>/ that no Karenz row and no module_database row references (strays of a failed attempt). Listed every run, never deleted. */
   orphanedExports: string[]
 }
 
@@ -101,7 +101,11 @@ function describeError(err: unknown): string {
   return err instanceof Error ? err.message : String(err)
 }
 
-/** Dumps in the export tree that no row references (exports of disables from before the Karenz, strays of a failed attempt). */
+/**
+ * Dumps in the export tree that no row references: a file written by an attempt that failed before it was
+ * recorded. Exports of disables from before the Karenz stay referenced by plt.module_database.export_path
+ * and are therefore not listed.
+ */
 async function findOrphanedExports(platform: Sql, exportDir: string): Promise<string[]> {
   if (!existsSync(exportDir)) return []
   const known = new Set<string>()

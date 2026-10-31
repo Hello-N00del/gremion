@@ -128,12 +128,13 @@ describe('the module Karenz on the scratch stack', () => {
   }
 
   /** A copy of the lcfix module with one more migration (the release moved on while the module was off). */
-  const moduleWithExtraMigration = (): LifecycleModule => {
+  const moduleWithExtraMigration = (
+    sql = '-- lifecycle fixture module lcfix, 003 (added while the module was off)\nCREATE TABLE extra (extra_id uuid PRIMARY KEY DEFAULT uuidv7(), note text NOT NULL);\n',
+  ): LifecycleModule => {
     mkdirSync(EXPORT_ROOT, { recursive: true })
     const dir = mkdtempSync(join(EXPORT_ROOT, 'karenz-mod-'))
     scratchModules.push(dir)
     cpSync(LCFIX_DIR, dir, { recursive: true })
-    const sql = '-- lifecycle fixture module lcfix, 003 (added while the module was off)\nCREATE TABLE extra (extra_id uuid PRIMARY KEY DEFAULT uuidv7(), note text NOT NULL);\n'
     writeFileSync(join(dir, 'migrations', '003_extra.sql'), sql)
     const manifestPath = join(dir, 'migrations', 'manifest.json')
     const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as Record<string, string>
@@ -379,6 +380,74 @@ describe('the module Karenz on the scratch stack', () => {
       expect(rows.map((r) => r.state)).toEqual(['restored', 'open'])
       expect(rows[1]).toMatchObject({ full: true })
       expect(rows[1]!.final_at.getTime()).toBeGreaterThan(rows[0]!.final_at.getTime())
+    })
+  })
+
+  describe('a restore never leaves a blocked database reachable', () => {
+    it('enable is refused once the tenant side reported tenant_done (its items are deleted): nothing is unblocked, the row stays open', async () => {
+      const X = uuidv7()
+      const db = tenantModuleDbName(X, 'lcfix')
+      await enableWithRow(X)
+      const off = await disableModule(X, lcfixModule(), OPERATOR, lifecycleDeps(platform, server))
+      await backdate(off.karenz!.karenzId)
+      // day 30 passed, the platform pass failed on this row (it stays open), the tenant pass finished
+      await platform`UPDATE plt.module_karenz SET final_mode = 'live', tenant_done_at = now() WHERE karenz_id = ${off.karenz!.karenzId}`
+
+      await expect(enableModule(X, lcfixModule(), OPERATOR, lifecycleDeps(platform, server))).rejects.toMatchObject({ code: 'KARENZ_FINALIZING' })
+      expect(await appConnectCode(db)).toBe('42501')
+      expect(await moduleDatabase(X)).toMatchObject({ state: 'blocked' })
+      expect(await enablement(X)).toBe('disabled')
+      expect((await karenz(X))[0]!.state).toBe('open')
+    })
+
+    it('a failing migration during the restore leaves the database blocked and the row open', async () => {
+      const X = uuidv7()
+      const db = tenantModuleDbName(X, 'lcfix')
+      await enableWithRow(X)
+      await disableModule(X, lcfixModule(), OPERATOR, lifecycleDeps(platform, server))
+
+      await expect(
+        enableModule(X, moduleWithExtraMigration('-- 003 fails' + String.fromCharCode(10) + 'SELECT 1 / 0;' + String.fromCharCode(10)), OPERATOR, lifecycleDeps(platform, server)),
+      ).rejects.toThrow(/division by zero/)
+      expect(await appConnectCode(db)).toBe('42501')
+      expect(await moduleDatabase(X)).toMatchObject({ state: 'blocked' })
+      expect(await enablement(X)).toBe('disabled')
+      expect((await karenz(X))[0]!.state).toBe('open')
+    })
+
+    it('the day-30 job claiming the row while the restore is in flight re-blocks the database the restore had opened', async () => {
+      const X = uuidv7()
+      const db = tenantModuleDbName(X, 'lcfix')
+      await enableWithRow(X)
+      const off = await disableModule(X, lcfixModule(), OPERATOR, lifecycleDeps(platform, server))
+
+      const deps = lifecycleDeps(platform, server)
+      await expect(
+        enableModule(X, lcfixModule(), OPERATOR, {
+          ...deps,
+          hooks: {
+            afterStep: async (step) => {
+              if (step === 'unblocked') await platform`UPDATE plt.module_karenz SET state = 'finalizing' WHERE karenz_id = ${off.karenz!.karenzId}`
+            },
+          },
+        }),
+      ).rejects.toMatchObject({ code: 'KARENZ_FINALIZING' })
+      expect(await appConnectCode(db)).toBe('42501')
+      expect(await moduleDatabase(X)).toMatchObject({ state: 'blocked' })
+      expect(await enablement(X)).toBe('disabled')
+    })
+
+    it('disable of an already blocked module re-asserts the block: a CONNECT granted back by hand is revoked again', async () => {
+      const X = uuidv7()
+      const db = tenantModuleDbName(X, 'lcfix')
+      await enableWithRow(X)
+      await disableModule(X, lcfixModule(), OPERATOR, lifecycleDeps(platform, server))
+      await server.admin.unsafe(`GRANT CONNECT ON DATABASE "${db}" TO m_lcfix_app`)
+      expect(await appConnectCode(db)).toBeUndefined() // control: the stray grant works
+
+      const again = await disableModule(X, lcfixModule(), OPERATOR, lifecycleDeps(platform, server))
+      expect(again).toMatchObject({ blocked: true, noop: true })
+      expect(await appConnectCode(db)).toBe('42501')
     })
   })
 

@@ -27,6 +27,7 @@ import { join } from 'node:path'
 import type { Sql } from '@gremion/db'
 import { tenantModuleDbName } from '../names.js'
 import { hasControlChar, runMigrations } from '../runner.js'
+import { blockModuleDatabase, lockDownDatabase, unblockModuleDatabase } from './block.js'
 import { execFormatted, sqlState } from './ddl.js'
 import {
   assertLifecycleModuleId,
@@ -41,6 +42,8 @@ import { PINNED_BASELINE } from '../phase-baseline.js'
 import { assertPlatform, casModuleDatabaseState, lookupModuleVersion, readLiveKarenz, readModuleDatabase } from './platform.js'
 import { scramSha256Verifier } from './scram.js'
 import type { Actor, EnableResult, GateResult, LifecycleDeps, LifecycleModule, ModuleServer } from './types.js'
+
+export { lockDownDatabase, unblockModuleDatabase } from './block.js'
 
 export function assertActor(actor: Actor): void {
   if (!actor || (actor.kind !== 'person' && actor.kind !== 'operator')) throw new LifecycleError('INVALID_INPUT', 'actor.kind must be person or operator')
@@ -93,19 +96,6 @@ async function ensureDatabase(admin: Sql, dbName: string, owner: string): Promis
     throw new LifecycleError('DATABASE_FOREIGN_OWNER', `${dbName} exists but is owned by ${current ?? 'nobody'}, not ${owner}: refusing to adopt a database the lifecycle did not create`)
   }
   return created
-}
-
-/** Nothing but m_<id>_app (and the owner) may connect: PUBLIC loses CONNECT and TEMPORARY. */
-export async function lockDownDatabase(admin: Sql, dbName: string, app: string): Promise<void> {
-  await execFormatted(admin, 'REVOKE CONNECT, TEMPORARY ON DATABASE %I FROM PUBLIC', [dbName])
-  await execFormatted(admin, 'GRANT CONNECT ON DATABASE %I TO %I', [dbName, app])
-}
-
-/** The inverse of the Karenz block: the app role may connect again (PUBLIC stays locked out). */
-export async function unblockModuleDatabase(admin: Sql, dbName: string, tenantId: string, moduleId: string, app: string): Promise<void> {
-  assertTenantModuleTarget(dbName, tenantId, moduleId)
-  if (app !== moduleRoles(moduleId).app) throw new LifecycleError('TARGET_REFUSED', `refusing to unblock ${dbName} for ${JSON.stringify(app)}: ${moduleId}'s app role is ${moduleRoles(moduleId).app}`)
-  await lockDownDatabase(admin, dbName, app)
 }
 
 /** DML for the app role on everything the owner has created, and by default on what it creates next. */
@@ -178,6 +168,11 @@ export async function enableModule(tenantId: string, module: LifecycleModule, ac
   if (liveKarenz?.state === 'finalizing') {
     throw new LifecycleError('KARENZ_FINALIZING', `(${tenantId}, ${moduleId}) is being deleted by the Karenz job (Karenz ${liveKarenz.karenzId}); switch it on again once the job has finished`)
   }
+  // The tenant side deleted its external items (tenant_done_at) while the platform side has not finished: that
+  // cannot be undone, so the module is past restoring even though the row is still 'open'.
+  if (liveKarenz?.tenantDoneAt) {
+    throw new LifecycleError('KARENZ_FINALIZING', `(${tenantId}, ${moduleId}) has had its external items deleted by the Karenz job (Karenz ${liveKarenz.karenzId}); it cannot be restored, switch it on again once the job has finished`)
+  }
 
   // 3. the gate, before anything is written
   const gate = await deps.enableGate(tenantId, moduleId)
@@ -189,6 +184,19 @@ export async function enableModule(tenantId: string, module: LifecycleModule, ac
     deps.hooks?.afterStep?.(step, { tenantId, moduleId, database: db })
 
   let dbName: string | null = null
+  let restoring = false
+  // set once a restore has given the app role CONNECT back; cleared by nothing: the commit below ends the need
+  let reblock: (() => Promise<void>) | null = null
+  const failRestore = async (err: unknown): Promise<never> => {
+    if (reblock) {
+      try {
+        await reblock()
+      } catch (blockErr) {
+        log(`could not re-block ${dbName} after a failed restore: ${(blockErr as Error).message}`)
+      }
+    }
+    throw err
+  }
   let created = false
   let applied: string[] = []
   if (database) {
@@ -229,8 +237,7 @@ export async function enableModule(tenantId: string, module: LifecycleModule, ac
         if (current !== owner) {
           throw new LifecycleError('DATABASE_FOREIGN_OWNER', `${dbName} is owned by ${current}, not ${owner}: refusing to unblock a database the lifecycle did not create`)
         }
-        await unblockModuleDatabase(server.admin, dbName, tenantId, moduleId, app)
-        await hook('unblocked', dbName)
+        restoring = true
       } else {
         await hook('enabling', dbName)
         // 5. roles
@@ -264,7 +271,22 @@ export async function enableModule(tenantId: string, module: LifecycleModule, ac
       } finally {
         await owned.end({ timeout: 5 })
       }
-      await hook('migrated', dbName)
+      if (restoring) {
+        // CONNECT comes back last: the migrations ran as the owner and need none of it, so a restore that
+        // fails before this point leaves the database blocked. From here to the commit, a failure re-blocks.
+        await unblockModuleDatabase(server.admin, dbName, tenantId, moduleId, app)
+        reblock = () => blockModuleDatabase(server.admin, dbName as string, tenantId, moduleId, app)
+        try {
+          await hook('unblocked', dbName)
+        } catch (err) {
+          await failRestore(err)
+        }
+      }
+      try {
+        await hook('migrated', dbName)
+      } catch (err) {
+        await failRestore(err)
+      }
     }
   }
 
@@ -273,11 +295,14 @@ export async function enableModule(tenantId: string, module: LifecycleModule, ac
   await deps.platform.begin(async (tx) => {
     // the Karenz row first, locked: the day-30 job takes the same row (FOR UPDATE SKIP LOCKED) in its own
     // transaction, so a restore and the job cannot both win
-    const [k] = await tx<{ karenz_id: string; state: string }[]>`
-      SELECT karenz_id::text, state FROM plt.module_karenz
+    const [k] = await tx<{ karenz_id: string; state: string; tenant_done_at: Date | null }[]>`
+      SELECT karenz_id::text, state, tenant_done_at FROM plt.module_karenz
        WHERE customer_id = ${tenantId} AND module_id = ${mv.moduleId} AND state IN ('open', 'restoring', 'finalizing') FOR UPDATE`
     if (k?.state === 'finalizing') {
       throw new LifecycleError('KARENZ_FINALIZING', `(${tenantId}, ${moduleId}) went into the Karenz job's final deletion while it was being enabled`)
+    }
+    if (k?.tenant_done_at) {
+      throw new LifecycleError('KARENZ_FINALIZING', `(${tenantId}, ${moduleId}) had its external items deleted by the Karenz job while it was being enabled`)
     }
     if (dbName !== null) {
       const [st] = await tx<{ state: string }[]>`
@@ -313,7 +338,8 @@ export async function enableModule(tenantId: string, module: LifecycleModule, ac
          WHERE karenz_id = ${k.karenz_id}`
       restored = true
     }
-  })
+  }).catch(failRestore)
+  reblock = null // committed: the module is enabled, nothing may block it again
   await hook('enabled', dbName)
   log(`enabled (${tenantId}, ${moduleId})${dbName ? ` on ${dbName}${created ? ' (created)' : ''}, ${applied.length} migration(s) applied` : ' (no database)'}${restored ? ', restored inside its Karenz' : ''}`)
   return { tenantId, moduleId, database: dbName, created, applied, noop: false, restored }
