@@ -511,6 +511,14 @@
       "adoptedBy": "TASK-192",
       "since": "2026-10-28",
       "reason": "TRD-092 / PRD-OPS-006: ONE pool on gremion_platform as the role gremion_ui_oac (EXECUTE on oac.list_access_records only, no table privilege) for the council administrator's read of the vendor-access record; never a tenant database; like control-db.ts it is a control-plane pool that the registry takes over"
+    },
+    {
+      "path": "gremion-ui/src/lib/server/module-switch/council-db.ts",
+      "calls": 1,
+      "imports": 1,
+      "adoptedBy": "TASK-044",
+      "since": "2026-10-31",
+      "reason": "ONE pool on gremion_platform as gremion_ui_modules: EXECUTE on the three council request functions only; control-plane pool like access-records-db.ts, never a tenant database"
     }
   ]
 }

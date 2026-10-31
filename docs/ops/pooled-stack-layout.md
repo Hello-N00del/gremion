@@ -38,6 +38,7 @@ exit-2 failure, never a default:
 | `GREMION_DISABLE_SEEDS` | `"true"` | the kernel migration tenant-create runs must never apply a `*_seed.sql` |
 | `PANEL_DB_USER` / `PANEL_DB_PASSWORD` | `gremion_panel` and a generated secret (`app.env`) | `init` makes the control panel's READ-ONLY role (`ensurePanelRequester`: LOGIN, SELECT on the panel read set, EXECUTE on `plt.submit_provisioning_request` only); the `control-panel` block connects as it, never as a database owner |
 | `UI_OAC_DB_PASSWORD` | a generated secret (`app.env`, `state.env`) | TRD-092: `init` makes `gremion_ui_oac` (`ensureAccessReader`: LOGIN NOINHERIT, EXECUTE on `oac.list_access_records` only); `gremion-ui` connects as it via `PLATFORM_ACCESS_DATABASE_URL`, direct to `gremion_platform` |
+| `UI_MODULES_DB_PASSWORD` | a generated secret (`app.env`, `state.env`), OPTIONAL in compose | `init` makes `gremion_ui_modules` (`ensureCouncilRequester`: LOGIN NOINHERIT, EXECUTE on the three council request functions only, no table privilege) when the variable is non-empty; `gremion-ui` connects as it via `PLATFORM_MODULES_DATABASE_URL`, direct to `gremion_platform`. Unset or empty: the URL is empty and the settings section reports the module switch as not configured |
 
 `gremion-tenant init` writes the `etc/secrets/tenant-create` files (0600) from
 `state.env`; the compose file mounts that directory read-only into
