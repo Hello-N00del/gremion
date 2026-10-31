@@ -164,12 +164,16 @@ echo "$BIND_OUT" | grep -q 'T041-BIND .* host=a.t041.test' || { echo "$BIND_OUT"
 
 # ── gremion-ui at the tested commit ───────────────────────────────────────────
 step "app"
+# AUTH_KEYCLOAK_ISSUER is passed EMPTY on purpose (#87): that is what an
+# env-file or compose pass-through hands the container on a host install, and
+# the per-tenant issuer must still win (a stray default once shadowed it and
+# every auth page answered 500).
 docker create --name "$APP" --network "$NET" --network-alias gremion-ui \
     -e DATABASE_URL="postgresql://gremion:$UI_PW@postgres:5432/gremion" \
     -e CONTROL_DATABASE_URL="postgresql://control:$CTL_PW@postgres:5432/control" \
     -e T041_A_DATABASE_URL="postgresql://gremion:$UI_PW@postgres:5432/t041a" \
     -e AUTH_SECRET="$AUTH_SEC" -e AUTH_KEYCLOAK_ID=gremion-ui -e AUTH_KEYCLOAK_SECRET="$KC_SEC" \
-    -e AUTH_KEYCLOAK_ISSUER=http://t041.test/auth/realms/gremion \
+    -e AUTH_KEYCLOAK_ISSUER= \
     -e AUTH_KEYCLOAK_INTERNAL=http://keycloak:8080/auth/realms/gremion \
     -e AUTH_TRUST_HOST=1 -e PUBLIC_BASE_URL=http://t041.test \
     -e INTERNAL_PUSH_SECRET="$PUSH_SEC" -e INTERNAL_BASE_URL=http://gremion-ui:3000 \
