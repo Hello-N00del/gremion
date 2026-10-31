@@ -18,14 +18,19 @@
 > RC-MOD-EXPORT records the six database modules' disable exports on the same window.
 >
 > **Change note 2026-10-30 (module Karenz, DSB answer question 14):** the DSB accepted the
-> 30-day grace in full. RC-MOD-EXPORT and RC-MOD-DATA are re-dated from it (no longer
-> provisional; A-MOD is resolved and A-G confirms the module grace only, the audit window
-> stays open): a switch-off blocks the module database, takes the export, writes sealed
-> read-only copies for the categories with their own row, and the Karenz job (`karenz-run`)
-> deletes the rest on day 30. RC-MSG-ROOM and §9 record the operator's round-2 reading for
-> chat rooms (archived at once, deleted after the Karenz unless meeting-linked), which differs
-> from the DSB question text ("sofort") and goes to the DSB with part 2. The job's destructive
-> steps run only when `KARENZ_FINAL_DELETION=on`; it ships `off` (a dry run).
+> 30-day grace in full, in its quick answer of 2026-10-30 as relayed by the operator (the
+> full written catalogue follows; the reading date below is therefore unchanged).
+> RC-MOD-EXPORT and RC-MOD-DATA are re-dated from it (no longer provisional; A-MOD is
+> resolved and A-G confirms the module grace only, the audit window stays open): a
+> switch-off blocks the module database, takes the export, writes sealed read-only copies
+> for the categories with their own row, and the Karenz job (`karenz-run`) deletes the rest
+> on day 30. This is the target behaviour: the mechanism (the blocked database, the
+> `karenz-run` job) ships in the module Karenz tasks that follow this re-dating, and until it
+> lands the deletion step does not exist. RC-MSG-ROOM and §9 record the operator's round-2
+> reading for chat rooms (archived at once, deleted after the Karenz unless meeting-linked),
+> which differs from the DSB question text ("sofort") and goes to the DSB with part 2. The
+> job's destructive steps run only when `KARENZ_FINAL_DELETION=on`; it ships `off` (a dry
+> run), and it is turned on only after the phase-3 finance extraction is verified.
 
 > **Change note 2026-10-27 (TRD-144/145):** the scheduled purge run exists
 > (`packages/tenant-store/src/lifecycle/purge.ts`, `gremion-purge.timer`). It executes only
@@ -490,8 +495,8 @@ answer arrives; only the windows below are re-dated (§3).
 
 | Row | Category (profile) | Start event | Basis | Window | Reading |
 |---|---|---|---|---|---|
-| RC-MOD-EXPORT | The (customer, module) `pg_dump` taken before a module database is dropped (TRD-424): board `rp-brd-module-data`, calendar `rp-cal-module-data`, content `rp-pub-module-data`, finance `rp-fin-module-data`, publishing `rp-nws-module-data`, vault `rp-pwd-module-data` | export verified (the module is switched off for the customer) | Art. 5(1)(e); the export is a backup of the blocked database during the Karenz | **grace (30 days)** from the verified export at switch-off, then the export is deleted with the blocked database; where the export holds K4 finance records the RC-FIN-* hold prevails and finance is extracted by class (RC-FIN-BOOKS 10 y, RC-FIN-VOUCH 8 y, RC-FIN-CORR 6 y; phase 3), the dump itself is not kept for the hold | [D 2026-10-30 DSB Q14]; [A-G] module grace confirmed |
-| RC-MOD-DATA | Module data the platform still holds for a module **without its own database** when that module is disabled for a customer: elections `rp-ele-module-data`, files `rp-fil-module-data`, handover `rp-hnd-module-data`, messaging `rp-msg-module-data`, votes `rp-gov-module-data` | module switched off for the customer | Art. 5(1)(e), 17 | **grace (30 days)**, then deleted by the Karenz job; kept regardless: sealed read-only copies written at switch-off for categories with their own row (RC-ELE results, RC-GOV-RES, RC-GOV-SECRET, RC-HND-TRACK 2 years, finance by class); chat rooms follow RC-MSG-ROOM; file contents stay in the council's file store (§7.6) | [D R29-I24] profile ids; window [D 2026-10-30 DSB Q14], [A-MOD] resolved |
+| RC-MOD-EXPORT | The (customer, module) `pg_dump` taken before a module database is dropped (TRD-424): board `rp-brd-module-data`, calendar `rp-cal-module-data`, content `rp-pub-module-data`, finance `rp-fin-module-data`, publishing `rp-nws-module-data`, vault `rp-pwd-module-data` | export verified (the module is switched off for the customer) | Art. 5(1)(e); the export is a backup of the blocked database during the Karenz | **grace (30 days)** from the verified export at switch-off, then the export is deleted with the blocked database; where the export holds K4 finance records the RC-FIN-* hold prevails: finance is extracted by class (RC-FIN-BOOKS 10 y, RC-FIN-VOUCH 8 y, RC-FIN-CORR 6 y; phase 3) and the dump itself is not kept for the hold, but the finance dump is deleted only once that extraction is verified; until then the export is kept until its hold ends | [D 2026-10-30 DSB Q14]; [A-G] module grace confirmed |
+| RC-MOD-DATA | Module data the platform still holds for a module **without its own database** when that module is disabled for a customer: elections `rp-ele-module-data`, files `rp-fil-module-data`, handover `rp-hnd-module-data`, messaging `rp-msg-module-data`, votes `rp-gov-module-data` | module switched off for the customer | Art. 5(1)(e), 17 | **grace (30 days)**, then deleted by the Karenz job; kept regardless: sealed read-only copies written at switch-off for categories with their own row (RC-ELE results, RC-GOV-RES, RC-GOV-SECRET, RC-HND-TRACK 2 years); finance is a database module and follows RC-MOD-EXPORT; chat rooms follow RC-MSG-ROOM; file contents stay in the council's file store (§7.6) | [D R29-I24] profile ids; window [D 2026-10-30 DSB Q14], [A-MOD] resolved |
 
 ---
 
@@ -534,9 +539,9 @@ Decided on 2026-09-24 [D R23-4, D R23-5], and required in the Löschkonzept:
   dialog, with an audit entry.
 - The Löschkonzept names two states for a room: active or archived, where archiving by an
   admin starts no deletion period, and hard-deleted (the act that executes erasure). An
-  archived room's history is otherwise kept until the customer is erased; that this
-  indefinite keeping satisfies Art. 5(1)(e) is [A] and goes to the operator and DPO with
-  the other [A-G] readings.
+  archived room's history is otherwise kept until the module is switched off (Karenz below)
+  or the customer is erased; that this indefinite keeping satisfies Art. 5(1)(e) is [A] and
+  goes to the operator and DPO with the other [A-G] readings.
 - **When the messaging module is switched off for the customer** (Karenz, 2026-10-30): every
   room is archived at once (read-only, restorable), and the rooms are deleted after the
   30-day Karenz, except rooms linked to a meeting (RC-MSG-LINK). A switch-on within the 30
@@ -584,7 +589,7 @@ owner named.
 | A-F1 | The finance log needs only the security window | Head-of-finance answers (TASK-073) |
 | A-D8 | Superseded by [D R29-I6]: 30 days for every log class, pseudonymised logs included (formerly the documented tier 14/30, 30/90, 90/180) | DPO question 8 |
 | A-D11 | Newsletter consent evidence kept for the audit window | DPO question 11 |
-| A-MOD | **Resolved 2026-10-30.** The default profiles of RC-MOD-DATA and RC-MOD-EXPORT run on the 30-day grace after a module is switched off (profile ids from [D R29-I24] stay) | The DSB's written answer of 2026-10-30, question 14, accepted in full; §3 re-dated |
+| A-MOD | **Resolved 2026-10-30.** The default profiles of RC-MOD-DATA and RC-MOD-EXPORT run on the 30-day grace after a module is switched off (profile ids from [D R29-I24] stay) | The DSB's quick answer of 2026-10-30, question 14 (relayed by the operator; the full written catalogue follows), accepted in full; §3 re-dated. The reading date at the top stays 2026-09-25 until a written answer arrives (§3 step 2) |
 | A | Unlabelled [A] rows (trace, cache TTL, plumbing, working sessions, drafts, import rows, unread notifications, contact forms, verification-artefact deletion) | Operator confirmation; re-dated with the rest |
 
 ---

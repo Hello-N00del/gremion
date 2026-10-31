@@ -41,6 +41,8 @@ test('RC-MOD-EXPORT says the export is taken at switch-off, kept 30 days and del
   assert.match(line, /RC-FIN-VOUCH 8 y/)
   assert.match(line, /RC-FIN-CORR 6 y/)
   assert.match(line, /phase 3/)
+  // until the per-class extraction exists and is verified, the finance dump keeps its hold
+  assert.match(line, /extraction is verified/)
 })
 
 test('RC-MOD-DATA names the sealed read-only copies written at switch-off and the classes kept regardless', () => {
@@ -51,6 +53,8 @@ test('RC-MOD-DATA names the sealed read-only copies written at switch-off and th
   assert.match(line, /RC-GOV-SECRET/)
   assert.match(line, /RC-HND-TRACK 2 years/)
   assert.match(line, /file contents stay in the council's file store/)
+  // finance is a database module: it belongs to RC-MOD-EXPORT, not to this row
+  assert.doesNotMatch(line, /finance by class/)
 })
 
 test('RC-MSG-ROOM says archived at switch-off, deleted on day 30, meeting-linked rooms excepted (RC-MSG-LINK), and names the operator decision as differing from the DSB question text ("sofort") for part 2', () => {
@@ -72,6 +76,8 @@ test('section 9 no longer says archiving by an admin starts no period for the mo
   assert.doesNotMatch(s9, /kept until the module is disabled for the customer/)
   assert.match(s9, /module is switched off/i)
   assert.match(s9, /30-day Karenz/)
+  // the archived-room bullet must not promise "until the customer is erased" without the Karenz exit.
+  assert.match(s9, /kept until the module is switched off \(Karenz below\)\s+or the customer is erased/)
 })
 
 test('A-MOD is marked resolved by the DSB answer and A-G confirms the module grace only (the audit window stays open)', () => {
@@ -81,6 +87,10 @@ test('A-MOD is marked resolved by the DSB answer and A-G confirms the module gra
   assert.match(aMod, /resolved/i)
   assert.match(aMod, /DSB/)
   assert.match(aMod, /question 14/)
+  // The 2026-10-30 input is the DSB's quick answer relayed by the operator; the full written
+  // catalogue is still to come, so the row must not call it a written answer.
+  assert.match(aMod, /quick answer/i)
+  assert.doesNotMatch(aMod, /DSB's written answer/i)
   const aG = s11.split('\n').find((l) => l.startsWith('| A-G '))
   assert.ok(aG, 'A-G row missing')
   assert.match(aG, /module grace/i)
@@ -99,6 +109,7 @@ test('section 3 row "Module default profiles" is re-dated', () => {
 test('app.env.tmpl and docker-compose.app.yml (service tenant-create only) ship KARENZ_FINAL_DELETION defaulting to off', () => {
   const env = read('infra/host/templates/env/app.env.tmpl')
   assert.match(env, /^KARENZ_FINAL_DELETION=off$/m)
+  assert.match(env, /finance extraction .*verified/i, 'the env template names the phase-3 finance extraction as a precondition for on')
 
   const compose = read('docker-compose.app.yml')
   const occurrences = compose.match(/KARENZ_FINAL_DELETION/g) ?? []
@@ -113,18 +124,25 @@ test('app.env.tmpl and docker-compose.app.yml (service tenant-create only) ship 
   const block = next < 0 ? rest : rest.slice(0, next)
   assert.match(block, /^\s+KARENZ_FINAL_DELETION: \$\{KARENZ_FINAL_DELETION:-off\}$/m, 'the entry sits in tenant-create')
   // gremion-ui reads the mode from the row, never from its own environment.
-  const ui = compose.slice(compose.search(/^  gremion-ui:/m))
-  const uiBlock = ui.slice(0, ui.slice(1).search(/^  [a-z][\w-]*:/m) + 1)
+  const uiStart = compose.search(/^  gremion-ui:/m)
+  assert.ok(uiStart >= 0, 'gremion-ui service not found')
+  const ui = compose.slice(uiStart + 1)
+  const uiEnd = ui.search(/^  [a-z][\w-]*:|^# =/m)
+  const uiBlock = uiEnd < 0 ? ui : ui.slice(0, uiEnd)
+  assert.ok(uiBlock.length > 200, 'gremion-ui block is not empty')
   assert.doesNotMatch(uiBlock, /KARENZ_FINAL_DELETION/, 'gremion-ui must not carry the switch')
 })
 
-test('the render env fixtures that carry the app env keys also carry KARENZ_FINAL_DELETION=off', () => {
-  for (const f of [
+test('every env fixture that carries the app env keys also carries KARENZ_FINAL_DELETION=off', () => {
+  const fixtures = [
     'test/host/fixtures/pooled-stack/app-blue.env',
     'test/host/fixtures/pooled-stack/app-green.env',
     'scripts/verify/census/render.env',
     'scripts/release/fixtures/render/render.env',
-  ]) {
+    'ops/vendor-mail/__fixtures__/env/app-blue.env',
+    'ops/vendor-mail/__fixtures__/env/app-green.env',
+  ]
+  for (const f of fixtures) {
     assert.match(read(f), /^KARENZ_FINAL_DELETION=off$/m, `${f} lacks KARENZ_FINAL_DELETION=off`)
   }
 })
