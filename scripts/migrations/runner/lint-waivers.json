@@ -51,6 +51,15 @@
         "set-expression"
       ],
       "reason": "Widens the append-only provisioning ledger from eight to nine step kinds: DROP and re-ADD of provisioning_step_step_kind_check (NOT VALID, then VALIDATE) and SET EXPRESSION on the generated step_order. The table holds a handful of rows per customer, no colour reads step_order, existing values and the step_order index are kept, and the rewrite fires no row trigger. The file sets lock_timeout first."
+    },
+    {
+      "chain": "governance",
+      "file": "0001_gov_setup.sql",
+      "sha256": "23e7c5e8c5b0a5a7658f6e70db6605c71ce9e2f9b68e53d7366d5ffac4f8a17b",
+      "rules": [
+        "revoke"
+      ],
+      "reason": "REVOKE EXECUTE ON FUNCTION gov.remove_test_run(uuid) FROM PUBLIC on a function this same file creates: mandatory hardening (PostgreSQL grants EXECUTE to PUBLIC by default), applied only to a database created in the same provisioning step. The file sets lock_timeout first and creates every relation it touches."
     }
   ]
 }

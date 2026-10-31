@@ -4,7 +4,7 @@
 //
 // One run checks, and counts as collected:
 //   1. chain-runners.json covers scripts/migrations/ranges.json exactly, every
-//      chain with a known class (tenant-store | legacy-boot | unadopted);
+//      chain with a known class (tenant-store | legacy-boot | unadopted | fresh-only);
 //   2. expand-contract-baseline.json is the one written at the merge: its
 //      digest equals BASELINE_DIGEST, every entry is a locked file (applied.
 //      lock.json) whose bytes still hash to the lock (LOCKED_FILE_CHANGED);
@@ -37,7 +37,7 @@ const REPO_ROOT = join(import.meta.dirname, '..', '..', '..')
 /** The digest of the baseline written at the TASK-075 merge. Never edited. */
 export const BASELINE_DIGEST = '11464e9ccab82f662db062c0be334aabf15e71c7c7465cae035b0682e6779341'
 
-export const CLASSES = ['tenant-store', 'legacy-boot', 'unadopted']
+export const CLASSES = ['tenant-store', 'legacy-boot', 'unadopted', 'fresh-only']
 
 /**
  * The canaries fixtures/canaries.json must keep (by name). A canary deleted to

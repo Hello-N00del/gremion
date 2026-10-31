@@ -186,8 +186,11 @@
       "dirs": [
         "services/governance/migrations"
       ],
+      "manifestDirs": [
+        "services/governance/migrations"
+      ],
       "padWidth": 4,
-      "highWater": 0,
+      "highWater": 1,
       "legacyFloor": 0,
       "legacy": []
     },

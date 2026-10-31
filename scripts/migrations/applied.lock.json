@@ -22,7 +22,9 @@
     "governance": {
       "legacyFloor": 0,
       "legacy": [],
-      "files": {}
+      "files": {
+        "0001_gov_setup.sql": "23e7c5e8c5b0a5a7658f6e70db6605c71ce9e2f9b68e53d7366d5ffac4f8a17b"
+      }
     },
     "kernel-api": {
       "legacyFloor": 0,

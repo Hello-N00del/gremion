@@ -323,6 +323,11 @@ export const UNIT_PARTS = {
   'kernel-api': (root) => [
     vitestSubcheck({ cwd: path.join(root, 'services', 'kernel-api'), testScript: 'test', root, label: '@gremion/kernel-api vitest (test)' }),
   ],
+  // TASK-084-a: the governance chain's first migration (plumbing prefix, lint, chain class); its database half is
+  // packages/tenant-store test:t084.
+  governance: (root) => [
+    vitestSubcheck({ cwd: path.join(root, 'services', 'governance'), testScript: 'test', root, label: '@gremion/governance vitest (test)' }),
+  ],
   // TASK-205a: one vitest part per modules/<id> package with a test script. Zero such modules is itself a
   // failing part (an empty module set must not read as a pass). Brief §6.12: each run carries
   // `check-module-source-scan.mjs --coupled-excludes <id>` (a test modules/COUPLED-TESTS.json allows to reach

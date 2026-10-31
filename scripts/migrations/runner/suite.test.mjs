@@ -149,6 +149,15 @@ describe('expand-contract suite (TDD 3)', () => {
     assert.equal(good.failed, 0, good.detail)
   })
 
+  test('a fresh-only chain needs no manual-dump marker on a new file; an unknown class is still refused', () => {
+    const f = fixture({ runners: { alpha: 'tenant-store', beta: 'fresh-only' }, files: { 'db/beta/001_b.sql': HEADERED } })
+    const good = run(f)
+    assert.equal(good.failed, 0, good.detail)
+    const bad = run(fixture({ runners: { alpha: 'tenant-store', beta: 'fresh-onlyy' }, files: { 'db/beta/001_b.sql': HEADERED } }))
+    assert.ok(bad.failed > 0, bad.detail)
+    assert.match(bad.detail, /fresh-onlyy/)
+  })
+
   // Waivers (lint-waivers.json): sha256-pinned, rule-bounded, stale-checked.
   describe('lint waivers', () => {
     const BAD = '-- gremion:phase expand\nCREATE TABLE c (id int);\nREVOKE ALL ON TABLE c FROM PUBLIC;\n'
