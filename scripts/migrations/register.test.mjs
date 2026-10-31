@@ -280,12 +280,14 @@ test('real tree: kernel-data holds the 31 legacy files (floor 58), the F1-FIX-02
   assert.equal(k.legacy.length, 31)
   assert.equal(k.legacyFloor, 58)
   // F1-FIX-02-K: 0059 claimed through `claim` (highWater 58 -> 59), locked by `freeze`.
-  assert.equal(k.highWater, 61)
+  // derived (like the platform test below): a later claim adds nothing here, never a rewrite of a number
+  assert.ok(k.highWater >= 61, `kernel-data highWater ${k.highWater} fell below the 0061 claim`)
   assert.ok(!k.legacy.includes('0059_audit_log_chain_anchor.sql'))
   assert.ok(s.lock.chains['kernel-data'].files['0059_audit_log_chain_anchor.sql'], '0059 is not in the lock')
   const files = s.files.filter((f) => k.dirs.some((d) => f.path.startsWith(`${d}/`)))
   assert.ok(s.lock.chains['kernel-data'].files['0060_erasure_report.sql'], '0060 is not in the lock')
-  assert.equal(files.length, 36)
+  // every claimed number above the legacy floor has a file (no gap), plus the content app block (1200, 1201)
+  assert.equal(files.length, k.legacy.length + (k.highWater - k.legacyFloor) + 2)
   assert.equal(s.slugs.slugs.length, 29)
 })
 
