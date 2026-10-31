@@ -197,7 +197,7 @@ All configuration lives in `.env`. See [`.env.example`](../.env.example) for the
 | `KEYCLOAK_ADMIN` / `KEYCLOAK_ADMIN_PASSWORD` | Keycloak bootstrap admin |
 | `KEYCLOAK_ADMIN_CLIENT_SECRET` | `gremion-admin` service-account secret (admin REST) |
 | `AUTH_SECRET` | Auth.js session-cookie signing key |
-| `AUTH_KEYCLOAK_ID` / `AUTH_KEYCLOAK_SECRET` / `AUTH_KEYCLOAK_ISSUER` | gremion-ui ↔ Keycloak OIDC |
+| `AUTH_KEYCLOAK_ID` / `AUTH_KEYCLOAK_SECRET` | gremion-ui ↔ Keycloak OIDC (the issuer comes from the tenant row, not env) |
 | `GREMION_DB_USER` / `GREMION_DB_PASSWORD` / `GREMION_DB_NAME` | App (governance) database |
 | `CONTROL_DB_USER` / `CONTROL_DB_PASSWORD` / `CONTROL_DB_NAME` | Tenancy control-plane database |
 | `PUBLIC_DB_PASSWORD` / `GREMION_PUBLIC_DB_URL` | Read-only role used by `gremion-public` |

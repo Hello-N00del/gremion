@@ -29,9 +29,8 @@ services:
     environment:
       ORIGIN: "http://localhost:3001"
       PUBLIC_BASE_URL: "http://localhost:3001"
-      # Keycloak 26 hostname v2: iss = KC_HOSTNAME/realms/{realm}.
-      AUTH_KEYCLOAK_ISSUER: "http://localhost:8082/auth/realms/gremion"
-      AUTH_KEYCLOAK_BASE: "http://localhost:8082/auth/realms/gremion"
+      # The issuer (Keycloak 26 hostname v2: iss = KC_HOSTNAME/realms/{realm})
+      # comes from the tenant row, not from env; gremion-ui reads no issuer key.
       # G-080: dev keeps plain http (dev realm = sslRequired:external).
       AUTH_KEYCLOAK_INTERNAL: "http://keycloak:8080/auth/realms/gremion"
       KEYCLOAK_ADMIN_URL: "http://keycloak:8080/auth"

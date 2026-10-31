@@ -495,7 +495,7 @@ environment (see [`.env.example`](../.env.example)):
 | `AUTH_SECRET` | SvelteKitAuth cookie/session encryption secret. |
 | `AUTH_KEYCLOAK_ID` | OIDC client id for the app shell (`gremion-ui`). |
 | `AUTH_KEYCLOAK_SECRET` | OIDC client secret (set after the realm is created by tenant-create). |
-| `AUTH_KEYCLOAK_ISSUER` | Issuer URL, e.g. `http://keycloak:8080/auth/realms/<realm>`. |
+| `AUTH_KEYCLOAK_ISSUER` | Not read by gremion-ui: the issuer comes from the tenant row. Only the dev realm-consistency check reads it from `.env`. |
 | `KEYCLOAK_ISSUER_URL` | Issuer used by the server-side JWKS / Bearer verification. |
 | `KEYCLOAK_ADMIN_CLIENT_SECRET` | Service-account secret for `gremion-ui` → Keycloak admin API calls. |
 | `KC_ADMIN_ALLOWLIST_CIDRS` | CIDR allowlist for the Keycloak admin console / Admin REST API. |

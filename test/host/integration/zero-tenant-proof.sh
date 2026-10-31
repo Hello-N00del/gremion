@@ -184,7 +184,9 @@ phase_up() {
     local issuer_env=()
     if [ "${PROOF_WITH_ISSUER:-0}" = "1" ]; then
         # RED-matrix run of the pre-change base only (see header).
-        issuer_env=(-e "AUTH_KEYCLOAK_ISSUER=http://$APEX/auth/realms/gremion"
+        # The key is passed EMPTY (#87), the shape a host install hands the
+        # container, so this opt-in run does not mask that path.
+        issuer_env=(-e "AUTH_KEYCLOAK_ISSUER="
             -e "AUTH_KEYCLOAK_INTERNAL=http://keycloak:8080/auth/realms/gremion"
             -e CONFIG_PATH=/data/default-config/config.json)
     fi
