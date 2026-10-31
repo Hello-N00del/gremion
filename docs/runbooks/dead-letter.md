@@ -80,6 +80,14 @@ event id is the `event_id` of the outbox row (the alert's label names the contex
 All three gauges (`gremion_outbox_dead_lettered`, `gremion_inbox_dead_lettered`, `gremion_inbox_stalled`)
 return to 0 when nothing is left dead-lettered.
 
+A relay that can never succeed does not dead-letter anything: it burns no attempt, so those gauges stay 0 and
+only the log says so. The fourth gauge, `gremion_outbox_oldest_pending_seconds{ctx}`, is the age of the oldest
+row still waiting for the relay (0 when none). A value that keeps growing past a few minutes means the relay of
+that service cannot publish. The usual cause on the kernel API (`ctx` `idt`) is a customer without its
+`kernel-api` NATS seed (the log line names `no seed kernel-api/tenant_<slug>.nk`): run
+`gremion-tenant reconcile <slug> --apply`, which re-ensures the seed from the customer's current module set
+(see `docs/ops/runbook/upgrade.md`).
+
 ## 4. Rebuild after JetStream was lost
 
 The outbox outlives the stream (TRD-422). If the broker's volume was lost or a stream was deleted, recreate
@@ -91,8 +99,9 @@ docker compose --env-file /opt/gremion/etc/env/app-blue.env run --rm --no-deps -
 docker compose --env-file /opt/gremion/etc/env/app-blue.env exec <service> pnpm exec events outbox-replay --ctx <ctx> --customer <customer> --tenant <slug> --identity <identity> --subjects <subjects-file>
 ```
 
-`<modules>` is the tenant's real enabled module list (`ensure` is declarative: an incomplete list removes the
-omitted modules' keys). `<identity>` is the NATS identity the service publishes as (`kernel` for the kernel's
+`<modules>` is the tenant's real enabled module list plus `kernel-api` (`ensure` is declarative: an incomplete
+list removes the omitted modules' keys, and the kernel API's key with them; `gremion-tenant reconcile <slug>
+--apply` does this with the registry's list and needs no hand-written one). `<identity>` is the NATS identity the service publishes as (`kernel` for the kernel's
 services, the module's name otherwise). `<subjects-file>` is the service's event-type to subject map (shipped
 with the service). Add `--since <ISO date>` to re-publish only what was published after that instant. The replay needs
 the `published` rows to still exist: the purge keeps them at least as long as the stream's retention plus its

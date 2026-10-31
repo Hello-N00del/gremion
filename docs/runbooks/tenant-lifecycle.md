@@ -400,6 +400,24 @@ REVOKE after the kernel chain (the migrate step fails when `audit_log` is missin
 privilege is still held). A customer provisioned before this check shows it RED until
 one `reconcile <slug>` (apply) has run.
 
+Two more checks re-apply provisioning that a later release added and that customers
+created earlier never received (kernel issues #88 and #89; the root cause is the same:
+create-time provisioning is not re-run on an upgrade). Each is read by a plain
+`reconcile` (RED when the customer is behind) and repaired, idempotently, by
+`reconcile <slug>` without `--verify-only`; a second apply changes nothing:
+
+| Check | What must hold | What apply does |
+|---|---|---|
+| `purger-connect` | the customer's `k_<hex>_purger` role holds `CONNECT` on its kernel database (the scheduled purge logs in as it; without the grant the purge fails with `permission denied for database`) | `GRANT CONNECT` to the purger (exactly `CONNECT`), then reads it back. It never creates a role: a customer without one has no kernel database provisioned |
+| `kernel-api-nats-seed` | the NATS seed `kernel-api/tenant_<slug>.nk` exists and the broker serves the customer's account (the kernel API event relay publishes as that identity) | the same `nats-auth` ensure the lifecycle verbs use, over the customer's **current** module set read from the registry (`plt.module_enablement`) plus the `kernel-api` identity, then the account reload; a hand-written module list is never needed |
+
+A suspended customer is ensured with the empty module set (suspension evicts the
+modules; reconcile does not restore them) and keeps the `kernel-api` identity like the
+kernel. A customer that is neither active nor suspended has no `kernel-api-nats-seed`
+check. Every later `ensure` of a customer account (create, enable, disable, suspend,
+resume) carries `kernel-api` as well, so the seed is not removed again. An upgrade runs
+`reconcile --apply` for every customer (`docs/ops/runbook/upgrade.md`).
+
 **Operator note, chain anchor:** with `INSERT` on `audit_log_chain_anchor` revoked from
 the app role, the migration-0059 *adopt* path (`gremion.audit_chain_adopt_head`, only
 needed for a database whose first rows were purged before 0059 existed) cannot write

@@ -128,12 +128,13 @@ describe('main', () => {
 
   test('metrics prints OpenMetrics text from the service database', async () => {
     const d = deps()
-    const sql = { begin: async (fn: (tx: unknown) => unknown) => fn({ unsafe: async (q: string) => (q.includes('set_config') ? [{ c: 'x' }] : [{ o: '1', d: '0', s: '2' }]) }) }
+    const sql = { begin: async (fn: (tx: unknown) => unknown) => fn({ unsafe: async (q: string) => (q.includes('set_config') ? [{ c: 'x' }] : [{ o: '1', d: '0', s: '2', a: '125.5' }]) }) }
     d.openDb.mockResolvedValue({ sql, close: async () => {} })
     expect(await main(['metrics', '--ctx', 'fin', '--customer', '019f2f0a-0000-7000-8000-0000000000aa', '--consumer', 'finance'], d)).toBe(0)
     const text = d.out.mock.calls.map((c) => c[0]).join('')
     expect(text).toContain('gremion_outbox_dead_lettered{ctx="fin"} 1')
     expect(text).toContain('gremion_inbox_stalled{ctx="fin",consumer="finance"} 2')
+    expect(text).toContain('gremion_outbox_oldest_pending_seconds{ctx="fin"} 126') // rounded up: a pending row is never "0 seconds old"
     expect(d.openDb).toHaveBeenCalledWith('019f2f0a-0000-7000-8000-0000000000aa', 'fin')
   })
 

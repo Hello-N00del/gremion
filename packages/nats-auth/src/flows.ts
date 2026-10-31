@@ -45,6 +45,13 @@ export const FLOWS: Readonly<Record<string, ModuleFlow>> = Object.freeze({
   'kernel-api': { publishes: ['IDT'], consumes: [] },
 })
 
+/** Identities of PLATFORM services, not catalogue modules: no tenant can enable or disable them, so no registry
+ *  row lists them, yet every customer account must hold them (kernel issue #88: the relay of services/kernel-api
+ *  needs its seed for every active customer). `withPlatformIdentities` (ensure.ts) adds them to the module set a
+ *  caller read from the registry; without that, `ensureTenantAccount` removes their seeds again as "no longer in
+ *  the set". The kernel is the same kind of identity but `usersFor` adds it on its own. */
+export const PLATFORM_IDENTITIES: readonly string[] = Object.freeze(['kernel-api'])
+
 /** System streams a tenant account holds BESIDE the flow streams (TASK-079 Q2, G5). They are not
  *  in FLOWS and not in the ports STREAMS topology: no module owns or consumes them.
  *  DLQ: the tenant's dead-letter stream. Consumers publish their poison messages to

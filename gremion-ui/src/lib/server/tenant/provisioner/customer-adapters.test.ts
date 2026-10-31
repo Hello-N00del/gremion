@@ -36,7 +36,7 @@ vi.mock('$lib/server/governance/org-units-db', () => ({ createOrgUnit: vi.fn() }
 vi.mock('$lib/server/governance/provisioning/orchestrator', () => ({ provisionOrgUnit: vi.fn() }))
 vi.mock('$lib/server/governance/provisioning/subsystems/keycloak', () => ({ createKeycloakSubsystem: vi.fn() }))
 vi.mock('$lib/server/tenant/context', () => ({ runWithTenant: vi.fn(), getTenant: vi.fn() }))
-vi.mock('@gremion/nats-auth', () => ({ ensureTenantAccount: vi.fn() }))
+vi.mock('@gremion/nats-auth', async (orig) => ({ ...(await orig<Record<string, unknown>>()), ensureTenantAccount: vi.fn() }))
 const lc = vi.hoisted(() => ({
   ensureKernelDatabase: vi.fn(),
   ensureKernelPurgeGrants: vi.fn(),
@@ -462,5 +462,21 @@ describe('customerAdapters.config.ensure: an existing config is handed to the re
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
+  })
+})
+
+// Kernel issue #88: ensureTenantAccount is declarative -- a module set without kernel-api deletes the seed the
+// kernel API relay reads. Every broker.ensure (create phase B, enable, disable, suspend, resume) therefore
+// carries the platform identities beside the registry's module set.
+describe('customerAdapters.broker.ensure: the kernel-api identity rides with every module set (#88)', () => {
+  it('passes the module set plus kernel-api, sorted, to nats-auth; the empty (suspended) set keeps kernel-api', async () => {
+    const { ensureTenantAccount } = await import('@gremion/nats-auth')
+    const ensure = vi.mocked(ensureTenantAccount)
+    ensure.mockClear()
+    const { a } = adapters(kcFake(true))
+    await a.broker.ensure(C, ['finance', 'calendar'])
+    expect(ensure).toHaveBeenLastCalledWith({ tenant: 'musterstadt', modules: ['calendar', 'finance', 'kernel-api'] })
+    await a.broker.ensure(C, [])
+    expect(ensure).toHaveBeenLastCalledWith({ tenant: 'musterstadt', modules: ['kernel-api'] })
   })
 })

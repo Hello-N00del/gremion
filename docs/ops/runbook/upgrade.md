@@ -1,6 +1,6 @@
 # Upgrade: one release onto a running installation
 
-- Version: 6.2.0
+- Version: 7.0.0
 - Status: provisional (see Known gaps)
 - Wall-clock budget: one working day, from step 1 to the asserted post-condition (PRD-PLAT-005)
 - Implements: TRD-200 (upgrade), TRD-206 (the pre-migration dump, R18-4), TRD-189 (blue/green as the deploy path)
@@ -235,10 +235,34 @@ KEYCLOAK_ADMIN="$KEYCLOAK_ADMIN" KEYCLOAK_ADMIN_PASSWORD="$KEYCLOAK_ADMIN_PASSWO
    request): its checks run, without the 403, and apply repairs the drift they
    report.
 
+7. **Reconcile every customer (every upgrade; kernel #88, #89).** A release can
+   extend what creating a customer provisions, and the deploy migrates databases
+   but does not re-run customer creation, so a customer created by an earlier
+   release lacks the extension until reconcile re-applies it. Two such pieces
+   exist today: the purger role's `CONNECT` on the customer's kernel database
+   (without it the scheduled purge fails for that customer with `permission
+   denied for database`) and the customer's NATS seed for the kernel API
+   (`kernel-api/tenant_<slug>.nk`; without it the kernel API's event relay fails
+   every pass for that customer, forever, while its health check stays green).
+   `reconcile --apply` re-ensures both, idempotently, from the registry's current
+   state (the customer's real module set, never a list typed by hand), and the
+   report names them as the checks `purger-connect` and `kernel-api-nats-seed`.
+   Run it for every customer after the switch (the control panel's reconcile
+   request does the same), and again whenever a later release names a new check.
+   A customer that is suspended is ensured without its modules (reconcile does
+   not resume it); a repair that does not take leaves its check RED and the
+   command exits non-zero.
+
+```bash
+slug="<the customer's slug>"
+gremion-tenant reconcile "$slug" --apply --reason "upgrade to ${TAG}: re-ensure what customer creation added since"
+# [tenant-create] reconcile realm "<realm>" ... ok  purger-connect ... ok  kernel-api-nats-seed ... applied repairs: purger-connect, kernel-api-nats-seed (a rerun: no repairs)
+```
+
 ## Post-condition
 
 The new release serves, the deploy logged fourteen good lines (steps 1-12,
-12b, 12c) and no failed one,
+12b, 12c) and no failed one, every customer's reconcile report is green,
 the serving release keeps every migration the previous one locked, and no dump
 is left on the host:
 
@@ -252,6 +276,8 @@ tail -n 14 /opt/gremion/runtime/deploy.log | grep -cE ' STEP [0-9]+[a-z]? [a-z-]
 jq -r '.ts, .ok, (.failures | length)' /opt/gremion/runtime/last-verify.json        # now, true, 0
 curl -s -o /dev/null -w '%{http_code}\n' "https://${host}/api/health"               # 200
 find /opt/gremion/backups -maxdepth 1 -name 'pre-migration-*' | wc -l               # 0
+slug="<each customer's slug, in turn>"
+gremion-tenant reconcile "$slug" | grep '^{' | jq -r '.checks[] | select(.ok | not) | .name'     # no output: every check ok
 journalctl -t premigration-dump --since today                                       # one taken/created line per dump, one deleted line per file (step 3 and gremion-migration-dump)
 for f in /root/.docker/config.json /home/gremion/.docker/config.json; do
   [ -f "$f" ] && jq -e '(.auths // {}) | length == 0' "$f"                          # no registry credential left
@@ -299,6 +325,7 @@ live, a deploy of any other tag stops at its step 5 and prints both commands.
 
 ## Changelog
 
+- 7.0.0 (2026-10-31): kernel #88, #89. New step 7: `gremion-tenant reconcile <slug> --apply` for every customer after the switch, which re-ensures what customer creation added since the customer was made (the purger `CONNECT` on its kernel database, the kernel API NATS seed) and reports it as the checks `purger-connect` and `kernel-api-nats-seed`. The post-condition reads every customer's reconcile report. Major: a step added and the post-condition changed.
 - 6.2.0 (2026-10-30): kernel #47 decision (a). Step 4 (and the registry-token precondition) names the optional host token file `etc/registry-token` that `gremion-deploy` reads when `GREMION_REGISTRY_TOKEN_FILE` is set, with the commands that observe it; the prompt stays the default. Minor: an alternative added to a step, no post-condition changed.
 - 6.1.0 (2026-10-29): kernel #48. Step 6 (existing installs, once per realm): a realm the provisioner service account did not create (older than the account, or made by another admin) is adopted with `tenant-create bootstrap-provisioner --adopt-realm <realm>`, which grants the account exactly the realm-creator roles on master `<realm>-realm`; reconcile names the step when it meets such a realm. Minor: a conditional step added, no post-condition changed.
 - 6.0.0 (2026-10-03): TASK-075. `gremion-deploy` step 5 is `gremion-migration-dump` preflight (no longer `gremion-snapshot`): it dumps the kernel and control databases a release migrates and deletes that dump, logged, at step 12b (`switched`), after step 11 passed and step 12 recorded the release; a failed deletion exits 1 with `DUMP-NOT-DELETED` before the soak (12c). The post-condition counts fourteen step lines. Step 3 now dumps by hand only the other databases a release migrates (module databases, `gremion_platform`); step 5 leaves the deploy's own dump to the program; the failure path restores the kernel or control database from it (restore, then a logged discard). Known gap (b) describes what landed. Major: a step changed.
