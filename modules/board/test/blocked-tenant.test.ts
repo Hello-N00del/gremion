@@ -6,7 +6,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { SchemaGate, TenantStore } from '@gremion/tenant-store'
 import { buildApiRoutes } from '../src/http/routes.ts'
-import { createBoardTenantDb, NOT_PROVISIONED } from '../src/store/tenant-db.ts'
+import { createBoardTenantDb, NOT_PROVISIONED, type Refusal } from '../src/store/tenant-db.ts'
 import type { Sql, TenantRef } from '../src/store/index.ts'
 
 const TENANT: TenantRef = { id: '11111111-1111-4111-8111-111111111111', slug: 'a' }
@@ -32,7 +32,7 @@ describe('route: 42501 at query time', () => {
   const route = buildApiRoutes(async () => { throw new Error('unused') }).find((r) => r.method === 'GET' && r.path === '/api/v1/boards')!
   const ORG = '22222222-2222-4222-8222-222222222222'
 
-  async function run(sqlFor: () => Sql): Promise<{ status: number; body: unknown }> {
+  async function run(sqlFor: () => Sql | Refusal | Promise<Sql | Refusal>): Promise<{ status: number; body: unknown }> {
     const routes = buildApiRoutes(async () => sqlFor())
     const r = routes.find((x) => x.method === 'GET' && x.path === '/api/v1/boards')!
     let status = 0
@@ -56,6 +56,21 @@ describe('route: 42501 at query time', () => {
   it('answers 404 tenant_not_provisioned when the connection itself is refused', async () => {
     const sql = ((first: unknown) => (isTemplate(first) ? Promise.reject(pgError('42501')) : {})) as unknown as Sql
     expect(await run(() => sql)).toEqual({ status: 404, body: { success: false, error: 'tenant_not_provisioned' } })
+  })
+
+  it('answers 404 (not 500) when the schema gate itself now classifies the blocked database as not provisioned', async () => {
+    // The first store() call hands out a pool whose query hits the revoked CONNECT (42501); by the time the
+    // route re-checks the connection, the gate has seen the same 42501 at connect and answers with the refusal.
+    const failing = ((first: unknown) => (isTemplate(first) ? Promise.reject(pgError('42501')) : {})) as unknown as Sql
+    let calls = 0
+    expect(await run(() => (++calls === 1 ? failing : NOT_PROVISIONED))).toEqual({ status: 404, body: { success: false, error: 'tenant_not_provisioned' } })
+  })
+
+  it('stays a 500 when the re-check is refused for another reason than a missing database (503 from the gate)', async () => {
+    const failing = ((first: unknown) => (isTemplate(first) ? Promise.reject(pgError('42501')) : {})) as unknown as Sql
+    let calls = 0
+    const gateBehind: Refusal = { status: 503, code: 'schema_not_current', retryAfter: 30 }
+    expect(await run(() => (++calls === 1 ? failing : gateBehind))).toEqual({ status: 500, body: { success: false, error: 'internal error' } })
   })
 
   it('stays a 500 when only a table privilege is missing (the connection works)', async () => {

@@ -437,6 +437,49 @@ describe('the module Karenz on the scratch stack', () => {
       expect(await enablement(X)).toBe('disabled')
     })
 
+    it('a failed re-block after a failed restore is not swallowed: the error carries both failures and says the app role can still connect', async () => {
+      const X = uuidv7()
+      const db = tenantModuleDbName(X, 'lcfix')
+      const grp = `grp_${randomBytes(6).toString('hex')}`
+      await enableWithRow(X)
+      await disableModule(X, lcfixModule(), OPERATOR, lifecycleDeps(platform, server))
+
+      const deps = lifecycleDeps(platform, server)
+      try {
+        const failure = await enableModule(X, lcfixModule(), OPERATOR, {
+          ...deps,
+          hooks: {
+            afterStep: async (step) => {
+              if (step !== 'unblocked') return
+              // CONNECT through a group role: the re-block revokes it from the app role only, so its own proof fails
+              await server.admin.unsafe(`CREATE ROLE ${grp} NOLOGIN`)
+              await server.admin.unsafe(`GRANT CONNECT ON DATABASE "${db}" TO ${grp}`)
+              await server.admin.unsafe(`GRANT ${grp} TO m_lcfix_app WITH INHERIT TRUE`)
+              throw new Error('hook failed after the unblock')
+            },
+          },
+        }).then(
+          () => null,
+          (err: unknown) => err as Error & { code?: string; cause?: unknown },
+        )
+        expect(failure).not.toBeNull()
+        expect(failure).toMatchObject({ code: 'CONCURRENT_STATE' })
+        expect(failure!.message).toMatch(/hook failed after the unblock/)
+        expect(failure!.message).toMatch(/re-block/)
+        expect(failure!.message).toMatch(/can still connect/)
+        expect(failure!.cause).toBeInstanceOf(AggregateError)
+        expect((failure!.cause as AggregateError).errors).toHaveLength(2)
+        // the platform still reads blocked/disabled: the error is what tells the caller the database is reachable
+        expect(await appConnectCode(db)).toBeUndefined()
+        expect(await moduleDatabase(X)).toMatchObject({ state: 'blocked' })
+        expect(await enablement(X)).toBe('disabled')
+      } finally {
+        await server.admin.unsafe(`REVOKE ${grp} FROM m_lcfix_app`).catch(() => {})
+        await server.admin.unsafe(`REVOKE CONNECT ON DATABASE "${db}" FROM ${grp}`).catch(() => {})
+        await server.admin.unsafe(`DROP ROLE IF EXISTS ${grp}`).catch(() => {})
+      }
+    })
+
     it('disable of an already blocked module re-asserts the block: a CONNECT granted back by hand is revoked again', async () => {
       const X = uuidv7()
       const db = tenantModuleDbName(X, 'lcfix')

@@ -192,7 +192,16 @@ export async function enableModule(tenantId: string, module: LifecycleModule, ac
       try {
         await reblock()
       } catch (blockErr) {
-        log(`could not re-block ${dbName} after a failed restore: ${(blockErr as Error).message}`)
+        // Not swallowed: the platform still reads blocked/disabled while the app role can connect again, so the
+        // caller's error is the only signal. It carries both failures.
+        const first = err instanceof Error ? err.message : String(err)
+        const second = blockErr instanceof Error ? blockErr.message : String(blockErr)
+        log(`could not re-block ${dbName} after a failed restore: ${second}`)
+        throw new LifecycleError(
+          'CONCURRENT_STATE',
+          `the restore of (${tenantId}, ${moduleId}) failed (${first}) AND the re-block of ${dbName} failed (${second}): the app role can still connect; run disableModule again to re-assert the block`,
+          { cause: new AggregateError([err, blockErr], 'restore and re-block both failed') },
+        )
       }
     }
     throw err

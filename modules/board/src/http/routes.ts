@@ -197,7 +197,8 @@ export function buildApiRoutes(store: StoreFn): Route[] {
   const connectionRefused = async (tenant: TenantRef): Promise<boolean> => {
     try {
       const r = await store(tenant)
-      if (isRefusal(r)) return false
+      // the schema gate saw the same refused connect and already answered "not provisioned": that IS the 404
+      if (isRefusal(r)) return r.code === NOT_PROVISIONED.code
       await r`SELECT 1`
       return false
     } catch (err) {
@@ -230,6 +231,8 @@ export function buildApiRoutes(store: StoreFn): Route[] {
         } else if (code === '3D000') {
           sendRefusal(extended.res, NOT_PROVISIONED)
         } else if (code === '42501' && (await connectionRefused(extended.tenant))) {
+          // a 404 is invisible to 5xx alerting: say so, so a stray revoke on an enabled module can be told from a switch-off
+          console.warn('[board:api] the tenant database refused the connection (42501): answering tenant_not_provisioned', extended.tenant.id)
           sendRefusal(extended.res, NOT_PROVISIONED)
         } else if (code !== undefined && CONNECTION_LOST.has(code)) {
           sendRefusal(extended.res, await reclassify(extended.tenant))
