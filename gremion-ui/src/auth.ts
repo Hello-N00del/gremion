@@ -41,10 +41,22 @@ function currentRoleVocabulary(): readonly string[] | undefined {
 }
 
 // Keycloak 25+ reports iss without the --http-relative-path prefix.
-// AUTH_KEYCLOAK_ISSUER  = what Keycloak stamps in the iss claim (used for validation).
-// AUTH_KEYCLOAK_BASE    = base URL for OIDC endpoint construction (includes /auth path).
-//                         Falls back to AUTH_KEYCLOAK_ISSUER for older Keycloak versions.
-// AUTH_KEYCLOAK_INTERNAL = Docker-internal URL for server-to-server calls.
+// The issuer, the external endpoint base and the internal (Docker) base all come
+// from the resolved tenant (tenant.issuer / authExternalBase / kcInternal), never
+// from process env: AUTH_KEYCLOAK_ISSUER and AUTH_KEYCLOAK_BASE are not read.
+
+/**
+ * The Keycloak() factory files a caller-supplied `issuer` under `provider.options`
+ * and leaves the provider's top-level `issuer` unset. Auth.js's setEnvDefaults then
+ * runs `provider.issuer ??= env.AUTH_KEYCLOAK_ISSUER`, and assertConfig reads
+ * `provider.issuer ?? provider.options?.issuer`, so an env value (even the empty
+ * string) shadows the tenant issuer and every page behind auth answers 500
+ * (issue #87). Setting `issuer` at the top level makes the `??=` a no-op: the
+ * per-tenant issuer is the only source, whatever the process env carries.
+ */
+function withTopLevelIssuer<P extends object>(issuer: string, provider: P): P & { issuer: string } {
+  return { ...provider, issuer }
+}
 
 /**
  * Per-request Auth.js config. @auth/sveltekit@1.11.2 re-runs this factory on
@@ -64,7 +76,7 @@ export async function buildAuthConfig(event: RequestEvent): Promise<SvelteKitAut
     secret: authSecret,
     trustHost: true,
     providers: [
-      Keycloak({
+      withTopLevelIssuer(tenant.issuer, Keycloak({
         clientId: tenant.authClientId,
         clientSecret: resolveSecret(tenant.authClientSecretRef),
         issuer: tenant.issuer,
@@ -79,7 +91,7 @@ export async function buildAuthConfig(event: RequestEvent): Promise<SvelteKitAut
         token: `${internalBase}/protocol/openid-connect/token`,
         userinfo: `${internalBase}/protocol/openid-connect/userinfo`,
         jwks_endpoint: `${internalBase}/protocol/openid-connect/certs`,
-      }),
+      })),
     ],
     // ASVS 4.0.3 V3.3.2 / NIST SP 800-63B AAL2. Auth.js re-issues the cookie on
     // every session read, so maxAge is a backstop (sliding); the 12 h absolute
