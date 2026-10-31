@@ -87,7 +87,7 @@ export interface RequestRow {
   id: string
   kind: string
   state: string
-  origin: 'panel' | 'host'
+  origin: 'panel' | 'host' | 'council'
   /** Break-glass requests (origin=host) carry the operator's reason and the host login user. */
   reason: string | null
   hostActor: string | null
@@ -103,7 +103,7 @@ export async function customerRequests(c: PanelConfig, slug: string): Promise<Re
   const p = platformDb(c)
   if (!p) return []
   const rows = await p<
-    { request_id: string; kind: string; state: string; origin: 'panel' | 'host'; reason: string | null; host_actor: string | null; outcome: string | null; created_at: Date; evidence_verified_at: Date | null; last_step: string | null }[]
+    { request_id: string; kind: string; state: string; origin: 'panel' | 'host' | 'council'; reason: string | null; host_actor: string | null; outcome: string | null; created_at: Date; evidence_verified_at: Date | null; last_step: string | null }[]
   >`SELECT s.request_id::text, s.kind, s.state, s.origin, s.reason, s.host_actor, s.outcome, s.created_at, s.evidence_verified_at,
            (SELECT e.step FROM plt.provisioning_request_event e
              WHERE e.request_id = s.request_id
