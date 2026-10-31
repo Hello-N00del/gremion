@@ -100,6 +100,8 @@ else
     _sed "s/CHANGE_ME_kernel_api_db/$(gen)/"   .env
     # TRD-092: the access-record reader role (UI_OAC_DB_PASSWORD).
     _sed "s/CHANGE_ME_ui_oac_db/$(gen)/"       .env
+    # Council module self-service role (UI_MODULES_DB_PASSWORD).
+    _sed "s/CHANGE_ME_ui_modules_db/$(gen)/"   .env
 
     # gremion_public_reader read-only DB password. Appears twice in .env.example
     # (PUBLIC_DB_PASSWORD and GREMION_PUBLIC_DB_URL) and both must match, so we
