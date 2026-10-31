@@ -7,6 +7,9 @@
   import { untrack } from 'svelte'
 
   // Tab bodies lifted in as section panels (logic unchanged):
+  // Keep TabModules first: imported after the other tabs, the vitest SSR render of this file loses its
+  // virtual style module (CssSyntaxError on the script text) on this toolchain.
+  import TabModules from './tabs/TabModules.svelte'
   import TabGeneral from './tabs/TabGeneral.svelte'
   import TabServices from './tabs/TabServices.svelte'
   import TabEmail from './tabs/TabEmail.svelte'
@@ -15,7 +18,6 @@
   import TabBackups from './tabs/TabBackups.svelte'
   import TabAccessibility from './tabs/TabAccessibility.svelte'
   import TabDangerZone from './tabs/TabDangerZone.svelte'
-  import TabModules from './tabs/TabModules.svelte'
   // Datenschutz inline form (lifted from compliance/+page.svelte)
   import { Button } from '$lib/components/ui/button'
   import { Input } from '$lib/components/ui/input'
