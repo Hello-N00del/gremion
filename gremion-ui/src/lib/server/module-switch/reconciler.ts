@@ -109,6 +109,28 @@ export function _resetModuleSwitchReconcilerForTests(): void {
   processState.migrateOwed.clear()
 }
 
+/**
+ * Karenz phase 2 (Task 8): work that must be finished BEFORE an enabled module comes back, run for
+ * `action === 'enable'` after the platform request succeeded and before config.modules is written (the
+ * erasure replay of Task 12 is the first user). The event has no outcome and no time: the request has
+ * not been applied yet. A hook that rejects leaves the request `applying` with the error in
+ * config_error, config.modules untouched, and the next pass retries it; hooks after the failing one
+ * are not run. A hook must be idempotent.
+ */
+export type PreApplyHook = (e: Omit<ModuleSwitchEvent, 'outcome' | 'at'>) => Promise<void>
+
+const preApplyHooks: PreApplyHook[] = []
+
+/** Register a pre-apply hook; called in registration order. */
+export function registerPreApplyHook(h: PreApplyHook): void {
+  preApplyHooks.push(h)
+}
+
+/** Test-only: drop every registered pre-apply hook. */
+export function _clearPreApplyHooksForTests(): void {
+  preApplyHooks.length = 0
+}
+
 /** The production council port: the three functions of the gremion_ui_modules role, nothing else. */
 function defaultCouncil(): CouncilPort {
   const platform = async () => (await import('./council-db')).getCouncilDb()
@@ -334,6 +356,19 @@ async function apply(
 
   const enable = row.action === 'enable'
   try {
+    if (enable && preApplyHooks.length > 0) {
+      const pre: Omit<ModuleSwitchEvent, 'outcome' | 'at'> = {
+        requestId: row.requestId,
+        tenantId: tenant.id,
+        slug: tenant.slug,
+        moduleId: row.moduleId,
+        manifestId,
+        action: row.action,
+        actorUserId: row.actorUserId,
+        detail: p.outcome?.trim() || null,
+      }
+      for (const hook of preApplyHooks) await hook(pre)
+    }
     // An explicit, identical value needs no write (and no write permission on config.json).
     if ((d.readConfig(tenant).modules ?? {})[manifestId] !== enable) {
       d.writeConfig({ modules: { [manifestId]: enable } }, tenant)

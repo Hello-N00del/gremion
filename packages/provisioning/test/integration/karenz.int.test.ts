@@ -473,6 +473,42 @@ describe('plt.council_karenz_report', () => {
   })
 })
 
+describe('switch off, on, off again, with no manual SQL', () => {
+  it('a restoring row is a live row and blocks a second switch-off until the tenant pass reports restored; then a fresh 30 days starts', async () => {
+    const first = seed({ state: 'restoring', restoreRequested: '-1 hour', switchedOff: '-2 days', finalAt: '28 days' })
+    const firstId = await insertKarenz(first)
+
+    // the switch-off that races a pending restore: the live-row key refuses it (the lifecycle maps this to KARENZ_RESTORE_PENDING)
+    const second = seed({ customer: first.customer, module: first.module })
+    const refused = await failure(insertKarenz(second))
+    expect(refused?.code).toBe('23505')
+    expect(refused?.message).toContain('module_karenz_live_key')
+
+    // what the per-tenant pass does when every restore step is done: one info report with the mark, through the council door
+    await report(council, first.customer, firstId, 'restore', 'info', 'every restore step done', 'restored')
+    expect(await row(firstId)).toMatchObject({ state: 'restored', has_restored_at: true })
+
+    // now the module can be switched off again: a NEW row with its own clock, the restored one stays as history
+    const secondId = await insertKarenz(second)
+    expect(secondId).not.toBe(firstId)
+    const rows = await pa<{ state: string }[]>`
+      SELECT state FROM plt.module_karenz WHERE customer_id = ${first.customer}::uuid AND module_id = ${first.module}::uuid ORDER BY switched_off_at, karenz_id`
+    expect(rows.map((x) => x.state)).toEqual(['restored', 'open'])
+    // and the council sees both: the open one live, the restored one inside the closed window
+    const listed = await list(council, first.customer, 14)
+    expect(listed.map((x) => x.state).toSorted()).toEqual(['open', 'restored'])
+  })
+
+  it('a restoring row that never gets its mark stays live and listed (the signal the host collector and the tenant pass raise)', async () => {
+    const s = seed({ state: 'restoring', restoreRequested: '-3 hours', switchedOff: '-2 days', finalAt: '28 days' })
+    const id = await insertKarenz(s)
+    const listed = await list(council, s.customer, 0)
+    expect(listed).toHaveLength(1)
+    expect(listed[0]).toMatchObject({ karenz_id: id, state: 'restoring' })
+    expect(listed[0]!.restore_requested_at).toBeInstanceOf(Date)
+  })
+})
+
 describe('migration 0015 constraints', () => {
   it('every constraint 0015 adds or re-adds is validated (pg_constraint.convalidated is true)', async () => {
     const rows = await pa<{ rel: string; conname: string; convalidated: boolean }[]>`

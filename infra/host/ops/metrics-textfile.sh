@@ -301,8 +301,12 @@ karenz_final_deletion_on() {
 #                                              or a reminder (notice:t23 at
 #                                              final_at - 7 d, notice:t29 at
 #                                              final_at - 1 d) more than 2 h due
-#                                              with no event: the tenant pass is
-#                                              not running
+#                                              with no event, or a RESTORING row
+#                                              1 h after the switch-on (the
+#                                              tenant pass has not reported
+#                                              restored, so the module cannot be
+#                                              switched off again): the tenant
+#                                              pass is not running
 #   gremion_module_karenz_overdue{customer,module} 1
 #                                              a row still open or finalizing 6 h
 #                                              past final_at; queried and emitted
@@ -321,14 +325,15 @@ emit_module_karenz() {
     if karenz_final_deletion_on; then
         overdue_sql=" UNION SELECT 'overdue', l.customer_id::text, l.module_key, 1 FROM live l WHERE l.state IN ('open','finalizing') AND l.final_at + interval '6 hours' < now()"
     fi
-    sql="WITH live AS (SELECT k.karenz_id, k.customer_id, m.module_key, k.state, k.switched_off_at, k.final_at FROM plt.module_karenz k JOIN plt.module m ON m.module_id = k.module_id WHERE k.state IN ('open','restoring','finalizing')), \
+    sql="WITH live AS (SELECT k.karenz_id, k.customer_id, m.module_key, k.state, k.switched_off_at, k.final_at, k.restore_requested_at FROM plt.module_karenz k JOIN plt.module m ON m.module_id = k.module_id WHERE k.state IN ('open','restoring','finalizing')), \
 newest AS (SELECT DISTINCT ON (e.karenz_id, e.step) e.karenz_id, e.level FROM plt.module_karenz_event e WHERE e.karenz_id IN (SELECT karenz_id FROM live) ORDER BY e.karenz_id, e.step, e.at DESC, e.event_id DESC) \
 SELECT 'live', '', '', count(*) FROM live \
 UNION SELECT 'failed', l.customer_id::text, l.module_key, 1 FROM live l WHERE EXISTS (SELECT 1 FROM newest n WHERE n.karenz_id = l.karenz_id AND n.level = 'error') \
-UNION SELECT 'stale', l.customer_id::text, l.module_key, 1 FROM live l WHERE l.state = 'open' AND ( \
+UNION SELECT 'stale', l.customer_id::text, l.module_key, 1 FROM live l WHERE (l.state = 'open' AND ( \
 (l.switched_off_at < now() - interval '1 hour' AND NOT EXISTS (SELECT 1 FROM plt.module_karenz_event e WHERE e.karenz_id = l.karenz_id AND e.step = 'notice:switchoff')) \
 OR (l.final_at - interval '7 days' + interval '2 hours' < now() AND NOT EXISTS (SELECT 1 FROM plt.module_karenz_event e WHERE e.karenz_id = l.karenz_id AND e.step = 'notice:t23')) \
-OR (l.final_at - interval '1 day' + interval '2 hours' < now() AND NOT EXISTS (SELECT 1 FROM plt.module_karenz_event e WHERE e.karenz_id = l.karenz_id AND e.step = 'notice:t29')))${overdue_sql} \
+OR (l.final_at - interval '1 day' + interval '2 hours' < now() AND NOT EXISTS (SELECT 1 FROM plt.module_karenz_event e WHERE e.karenz_id = l.karenz_id AND e.step = 'notice:t29'))) \
+OR (l.state = 'restoring' AND l.restore_requested_at < now() - interval '1 hour')${overdue_sql} \
 ORDER BY 1, 2, 3"
     errf="$(mktemp)"
     rows="$(docker exec "$cid" psql -U postgres -d gremion_platform -X -tAF'|' -c "$sql" 2>"$errf" || true)"
@@ -359,7 +364,7 @@ ORDER BY 1, 2, 3"
         printf '%s' "$failed"
     fi
     if [[ -n "$stale" ]]; then
-        printf '# HELP gremion_module_karenz_stale 1 for an open Karenz whose switch-off notice or a day-23 or day-29 reminder is overdue: the tenant pass is not running.\n'
+        printf '# HELP gremion_module_karenz_stale 1 for an open Karenz whose switch-off notice or a day-23 or day-29 reminder is overdue, or a restoring Karenz that has waited over an hour for its restored report: the tenant pass is not running.\n'
         printf '# TYPE gremion_module_karenz_stale gauge\n'
         printf '%s' "$stale"
     fi

@@ -867,6 +867,21 @@ prom() { cat "$GREMION_ROOT/runtime/textfile/gremion.prom"; }
     grep -q '^gremion_module_karenz_stale[{]' "$GREMION_ROOT/runtime/textfile/gremion.prom"
 }
 
+@test "metrics-textfile counts a restoring row as stale once it has waited an hour for the tenant pass to report restored (platform columns only)" {
+    shim_docker_world
+    shim_timer enabled
+    STACK=staging run "$METRICS"
+    [ "$status" -eq 0 ]
+    # the live set carries the switch-on time, and the restoring arm is its own condition next to the open one
+    assert_recorded docker "k.restore_requested_at"
+    assert_recorded docker "l.state = 'restoring' AND l.restore_requested_at < now() - interval '1 hour'"
+    assert_recorded docker "l.state = 'open' AND ("
+    # still platform columns and events only
+    refute_recorded docker "audit_log"
+    refute_recorded docker "module_switch_request"
+    refute_recorded docker "module_karenz_step"
+}
+
 @test "metrics-textfile survives a failing state-container lookup: the postgres, job-run and broker signals are absent, the file is still written (TASK-039-FU round 2, ops-lib state_container)" {
     shim_docker_world
     shim_timer enabled
