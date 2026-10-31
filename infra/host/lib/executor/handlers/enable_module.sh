@@ -21,7 +21,8 @@ handle_enable_module() {
     [[ -f "$args" ]] || die "enable_module ${id}: no verified args" "$GREMION_EXIT_ASSERT"
     jq -e --arg s "$slug" '.slug == $s' "$args" >/dev/null \
         || die "enable_module ${id}: the verified args name another customer than ${slug}" "$GREMION_EXIT_ASSERT"
-    module="$(jq -r '.module' "$args")"
+    module="$(jq -er '.module | strings' "$args")" \
+        || die "enable_module ${id}: the verified args carry no module" "$GREMION_EXIT_ASSERT"
     local -a argv=("$slug" "$module" --operator "$operator")
     # The verified actor kind: `person` for a council admin's request (the
     # verdict's args carry actorKind), absent or `operator` for every panel and

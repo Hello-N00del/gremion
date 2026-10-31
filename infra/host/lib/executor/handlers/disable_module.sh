@@ -19,11 +19,13 @@ handle_disable_module() {
     [[ -f "$args" ]] || die "disable_module ${id}: no verified args" "$GREMION_EXIT_ASSERT"
     jq -e --arg s "$slug" '.slug == $s' "$args" >/dev/null \
         || die "disable_module ${id}: the verified args name another customer than ${slug}" "$GREMION_EXIT_ASSERT"
-    local actor_kind
+    local module actor_kind
+    module="$(jq -er '.module | strings' "$args")" \
+        || die "disable_module ${id}: the verified args carry no module" "$GREMION_EXIT_ASSERT"
     actor_kind="$(jq -r '.actorKind // "operator"' "$args")"
     [[ "$actor_kind" =~ ^(operator|person)$ ]] \
         || die "disable_module ${id}: the verified args carry an unknown actor kind" "$GREMION_EXIT_ASSERT"
-    local -a argv=("$slug" "$(jq -r '.module' "$args")" --operator "$operator")
+    local -a argv=("$slug" "$module" --operator "$operator")
     if [[ "$actor_kind" == person ]]; then argv+=(--actor-kind person); fi
     customer_disable_module "${argv[@]}"
 }

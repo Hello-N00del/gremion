@@ -270,6 +270,42 @@ COLOUR=blue
     [ "${lines[0]}" = "tc disable-module alpha-rat votes --operator ${OPERATOR}" ]
 }
 
+@test "disable_module: an actorKind in the verified args that is neither operator nor person fails before the verb runs" {
+    jq -nc '{slug:"alpha-rat", module:"votes", actorKind:"system"}' > "${WORK}/args.json"
+    drive handle_disable_module
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"actor kind"* ]] || { echo "$output"; return 1; }
+    [ ! -s "$ORDER" ]
+}
+
+@test "disable_module: verified args without a module fail before the verb runs" {
+    jq -nc '{slug:"alpha-rat"}' > "${WORK}/args.json"
+    drive handle_disable_module
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"no module"* ]] || { echo "$output"; return 1; }
+    [ ! -s "$ORDER" ]
+}
+
+@test "enable_module: verified args without a module fail before the verb runs" {
+    jq -nc '{slug:"alpha-rat", dpia:null}' > "${WORK}/args.json"
+    drive handle_enable_module
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"no module"* ]] || { echo "$output"; return 1; }
+    [ ! -s "$ORDER" ]
+}
+
+@test "record_dpia refuses --actor-kind (the dpia-record verb has no actor kind), nothing runs" {
+    run bash -c '
+        set -euo pipefail
+        . "$1/common.sh"; . "$1/customer-ops.sh"
+        . "$2/stubs.sh"
+        ( set -e; customer_record_dpia alpha-rat votes --operator "$3" --actor-kind person --requires-dpia no --reason-codes operator_decision --document-ref TOM-9 ) 2>&1
+    ' _ "$SRC" "$GREMION_ROOT" "$OPERATOR"
+    [ "$status" -ne 0 ] || { echo "$output"; return 1; }
+    [[ "$output" == *"record_dpia: unknown argument: --actor-kind"* ]] || { echo "$output"; return 1; }
+    [ ! -s "$ORDER" ]
+}
+
 @test "through the real tc() the actor kind reaches the container argv" {
     jq -nc '{slug:"alpha-rat", module:"votes", dpia:null, actorKind:"person"}' > "${WORK}/args.json"
     drive_real_tc handle_enable_module
@@ -282,7 +318,8 @@ COLOUR=blue
         set -euo pipefail
         . "$1/common.sh"; . "$1/customer-ops.sh"; . "$1/executor/registry.sh"
         for k in create suspend resume reconcile record_dpia import_members seed_vertical; do
-            [ "$(handler_for "$k")" != handle_enable_module ] && [ "$(handler_for "$k")" != handle_disable_module ]
+            h="$(handler_for "$k")" || { echo "unregistered kind: $k"; exit 1; }
+            [[ "$h" != handle_enable_module && "$h" != handle_disable_module ]] || { echo "$k -> $h"; exit 1; }
         done
     ' _ "$SRC"
     [ "$status" -eq 0 ] || { echo "$output"; return 1; }

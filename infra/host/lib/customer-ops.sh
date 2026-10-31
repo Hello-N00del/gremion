@@ -490,6 +490,10 @@ customer_record_dpia() {   # <slug> <module> --operator <uuid> --requires-dpia y
         esac
     done
     _module_args record_dpia "$slug" "$module" ${rest[@]+"${rest[@]}"}
+    # _module_args is shared with the enable/disable verbs; dpia-record carries no
+    # actor kind, so accepting the flag here would drop it and record the decision
+    # as an operator's. Refuse it, as before the flag existed.
+    [[ "$ACTOR_KIND_GIVEN" == no ]] || die "record_dpia: unknown argument: --actor-kind" "$GREMION_EXIT_USAGE"
     [[ "$requires" == yes || "$requires" == no ]] || die "record_dpia: --requires-dpia is yes or no" "$GREMION_EXIT_USAGE"
     [[ -n "$codes" && -n "$ref" ]] || die "record_dpia: --reason-codes and --document-ref are required" "$GREMION_EXIT_USAGE"
     active_colour
