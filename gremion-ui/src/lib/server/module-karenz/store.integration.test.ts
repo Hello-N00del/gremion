@@ -89,6 +89,18 @@ describe('markStep / getStep / listSteps', () => {
     expect((await listSteps(db, k)).map((s) => s.step)).toEqual(['a-step', 'b-step'])
   })
 
+  it('a failed step always says why: markStep refuses a failed mark without an error, and so does the table', async () => {
+    const db = getDb()
+    const k = randomUUID()
+    await expect(markStep(db, k, 's', { state: 'failed' } as never)).rejects.toThrow(/failed step records why/)
+    await expect(markStep(db, k, 's', { state: 'failed', error: '  ' })).rejects.toThrow(/failed step records why/)
+    expect(await getStep(db, k, 's')).toBeNull()
+    // the CHECK holds for a writer that bypasses markStep
+    expect(await code(db`INSERT INTO module_karenz_step (karenz_id, step, state) VALUES (${k}, 's', 'failed')`)).toBe('23514')
+    expect(await code(db`INSERT INTO module_karenz_step (karenz_id, step, state, last_error) VALUES (${k}, 's', 'failed', 'x')`)).toBe('ok')
+    expect(await code(markStep(db, k, 's', { state: 'done' }))).toBe('ok')
+  })
+
   it('a bad state violates the CHECK', async () => {
     const db = getDb()
     expect(await code(markStep(db, randomUUID(), 's', { state: 'exploded' as never }))).toBe('23514')
@@ -185,6 +197,15 @@ describe('recordNotice / noticesSent', () => {
     await recordNotice(db, { karenzId: k, kind: 't29', userId: 'u1', state: 'sent' })
     await recordNotice(db, { karenzId: k, kind: 't29', userId: 'u1', state: 'failed', error: 'late' })
     expect([...(await noticesSent(db, k, 't29'))]).toEqual(['u1'])
+  })
+
+  it('a failed notice always says why: recordNotice refuses a failed notice without an error, and so does the table', async () => {
+    const db = getDb()
+    const k = randomUUID()
+    await expect(recordNotice(db, { karenzId: k, kind: 'switchoff', userId: 'u', state: 'failed' } as never)).rejects.toThrow(/failed notice records why/)
+    expect(await noticesSent(db, k, 'switchoff')).toEqual(new Set())
+    expect(await code(db`INSERT INTO module_karenz_notice (karenz_id, kind, user_id, state) VALUES (${k}, 'switchoff', 'u', 'failed')`)).toBe('23514')
+    expect(await code(db`INSERT INTO module_karenz_notice (karenz_id, kind, user_id, state, last_error) VALUES (${k}, 'switchoff', 'u', 'failed', 'x')`)).toBe('ok')
   })
 
   it('a bad kind or state violates the CHECK', async () => {

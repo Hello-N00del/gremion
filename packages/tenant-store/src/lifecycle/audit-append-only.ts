@@ -112,14 +112,14 @@ export async function kernelAuditAppendOnlyProblems(
         const qualified = `public.${t.table}`
         const [present] = await tx<{ ok: boolean }[]>`SELECT pg_catalog.to_regclass(${qualified}::pg_catalog.text) IS NOT NULL AS ok`
         if (!present?.ok) {
-          if (opts.requirePresent) problems.push(`${t.table}: table is absent (the kernel chain has not created it, so the audit record cannot be append-only)`)
+          if (opts.requirePresent) problems.push(`${t.table}: table is absent (the kernel chain has not created it, so ${t.table} cannot be append-only)`)
           continue
         }
         for (const role of [app, owner]) {
           for (const priv of t.revoke) {
             const [held] = await tx<{ held: boolean }[]>`
               SELECT pg_catalog.has_table_privilege(${role}::pg_catalog.text, ${qualified}::pg_catalog.text, ${priv}::pg_catalog.text) AS held`
-            if (held?.held) problems.push(`${t.table}: ${role} still holds ${priv} (the kernel audit record is append-only)`)
+            if (held?.held) problems.push(`${t.table}: ${role} still holds ${priv} (${t.table} is append-only for the application)`)
           }
         }
       }

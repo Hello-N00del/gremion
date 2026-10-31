@@ -35,5 +35,5 @@
   "0061_audit_log_actor_uuid_check.sql": "fc4f1b7a75dfc4279ceb225eb2654de0b3e55d20bb63a42204f09ca02ed6b441",
   "0062_vorstand_role_backfill.sql": "b39e30467179c5ef369727fae7c2d1cfba8defe60eec5f5c144704bc3e3f3ed1",
   "0063_module_switch_request.sql": "d293b6a55af4f8f046c9d95c3b744d143f1f0e8df79e2e58f82d483392e65b82",
-  "0064_module_karenz.sql": "4119c866be99e234f5cf58b10fd4820d8bc3855968fe5f70fbb3df64a388719a"
+  "0064_module_karenz.sql": "65f153eb9781f685ec95372d48a03a3b4b1e743b8861a3fcb757469d617757a4"
 }

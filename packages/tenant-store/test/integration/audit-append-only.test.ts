@@ -108,6 +108,10 @@ describe('ensureKernelAuditAppendOnly (TASK-033-a: audit_log is a governance rec
     expect(problems).toMatch(/retained_record: .*UPDATE/)
     expect(problems).toMatch(/retained_record: .*DELETE/)
     expect(problems).toMatch(/retained_record: .*TRUNCATE/)
+    // every message names its own table, not "the audit record" for all of them
+    expect(problems).toMatch(/retained_record: \S+ still holds UPDATE \(retained_record is append-only/)
+    expect(problems).toMatch(/audit_log_chain_anchor: \S+ still holds INSERT \(audit_log_chain_anchor is append-only/)
+    expect(problems).not.toMatch(/the kernel audit record/)
     const a = as(T, app)
     const del = await a`DELETE FROM public.audit_log WHERE id = (SELECT min(id) FROM public.audit_log) RETURNING id`
     expect(del.length).toBe(1)
@@ -216,8 +220,32 @@ describe('ensureKernelAuditAppendOnly (TASK-033-a: audit_log is a governance rec
     expect(await code(a`UPDATE public.retained_record SET line_count = 2`)).toBe('42501')
     expect(await code(a`DELETE FROM public.retained_record`)).toBe('42501')
     expect(await code(a`TRUNCATE public.retained_record`)).toBe('42501')
-    // the key table is not append-only: a retired key is stamped by an UPDATE
+    // the key table is not append-only, but a key row is not free either: the wrapped key of
+    // every sealed copy lives in it, so one stray UPDATE of `wrapped` would make every copy
+    // sealed under that key unreadable for good. The row guard (0064) refuses it for the app.
+    const wrappedOf = async () => Buffer.from((await a<{ wrapped: Buffer }[]>`SELECT wrapped FROM public.karenz_data_key WHERE key_id = ${key!.key_id}`)[0]!.wrapped).toString()
+    expect(await code(a`UPDATE public.karenz_data_key SET wrapped = ${Buffer.from('overwritten')}`), 'overwrite wrapped').toBe('42501')
+    expect(await code(a`UPDATE public.karenz_data_key SET wrapped = ${Buffer.from('overwritten')}, kek_version = kek_version + 1`), 'overwrite wrapped with a version bump').toBe('42501')
+    expect(await code(a`UPDATE public.karenz_data_key SET kek_version = 7`), 'bump the version alone').toBe('42501')
+    expect(await code(a`UPDATE public.karenz_data_key SET key_id = gen_random_uuid()`), 'rename the key').toBe('42501')
+    expect(await code(a`DELETE FROM public.karenz_data_key`), 'delete the key').toBe('42501')
+    expect(await wrappedOf()).toBe('w')
+    // the one way to replace `wrapped` is the re-wrap function: compare-and-swap on the version it read
+    const rewrap = async (expected: number, wrapped: string) =>
+      (await a<{ ok: boolean }[]>`SELECT public.karenz_rewrap_data_key(${key!.key_id}, ${expected}, ${Buffer.from(wrapped)}) AS ok`)[0]!.ok
+    expect(await rewrap(9, 'stale'), 'a stale expected version changes nothing').toBe(false)
+    expect(await wrappedOf()).toBe('w')
+    expect(await rewrap(1, 'w2')).toBe(true)
+    expect(await wrappedOf()).toBe('w2')
+    expect((await a<{ v: number }[]>`SELECT kek_version AS v FROM public.karenz_data_key WHERE key_id = ${key!.key_id}`)[0]!.v).toBe(2)
+    expect(await code(a`SELECT public.karenz_rewrap_data_key(${key!.key_id}, 2, ${Buffer.alloc(0)})`), 'an empty wrapped key is refused').toBe('22023')
+    // the flag the function sets is scoped to its own statement: a bare UPDATE after it is refused again
+    expect(await code(a`UPDATE public.karenz_data_key SET wrapped = ${Buffer.from('again')}`)).toBe('42501')
+    // a retired key is stamped by an UPDATE, once, and stays retired
     expect(await code(a`UPDATE public.karenz_data_key SET retired_at = now()`)).toBe('ok')
+    expect(await code(a`UPDATE public.karenz_data_key SET retired_at = NULL`), 'un-retire').toBe('42501')
+    // a retired key can still be re-wrapped (an AUTH_SECRET rotation covers every key a copy uses)
+    expect(await rewrap(2, 'w3')).toBe(true)
   })
 
   it('is idempotent, and a customer whose chain has not created the tables yet is reported absent (no throw)', async () => {
@@ -237,6 +265,8 @@ describe('ensureKernelAuditAppendOnly (TASK-033-a: audit_log is a governance rec
     expect(required.join(' | ')).toMatch(/audit_log: table is absent/)
     expect(required.join(' | ')).toMatch(/audit_log_chain_anchor: table is absent/)
     expect(required.join(' | ')).toMatch(/retained_record: table is absent/)
+    expect(required.join(' | ')).toMatch(/so retained_record cannot be append-only/)
+    expect(required.join(' | ')).not.toMatch(/audit record cannot/)
   })
 
   it('CRIT: a tenant ALTER DATABASE SET search_path + planted public.format / current_database cannot escalate through the call (startup pin and bare server)', async () => {

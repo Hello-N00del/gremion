@@ -30,13 +30,20 @@ export interface StepRow {
   updatedAt: Date
 }
 
-export interface StepPatch {
-  state: StepState
-  /** Recorded in last_error; omitted or undefined clears it (a step that is done has no error). */
-  error?: string
-  /** True stamps last_reported_at (the result was posted to the platform); false/omitted leaves it alone. */
-  reported?: boolean
-}
+export type StepPatch =
+  | {
+      state: Exclude<StepState, 'failed'>
+      /** Recorded in last_error; omitted or undefined clears it (a step that is done has no error). */
+      error?: string
+      /** True stamps last_reported_at (the result was posted to the platform); false/omitted leaves it alone. */
+      reported?: boolean
+    }
+  | {
+      /** A failed step always says why (the settings page and the ops alert read the text), so `error` is required. */
+      state: 'failed'
+      error: string
+      reported?: boolean
+    }
 
 /** What a participant records about one external thing. */
 export interface KarenzItem {
@@ -60,13 +67,10 @@ export interface KarenzItemRow {
   updatedAt: Date
 }
 
-export interface NoticeInput {
-  karenzId: string
-  kind: NoticeKind
-  userId: string
-  state: NoticeState
-  error?: string
-}
+export type NoticeInput =
+  | { karenzId: string; kind: NoticeKind; userId: string; state: 'sent'; error?: string }
+  /** A failed notice always says why (the settings page lists it), so `error` is required. */
+  | { karenzId: string; kind: NoticeKind; userId: string; state: 'failed'; error: string }
 
 interface StepDb {
   karenz_id: string
@@ -144,6 +148,7 @@ export async function listSteps(db: Sql, karenzId: string): Promise<StepRow[]> {
  * `last_reported_at` moves only when `reported` is true. Returns the row after the write.
  */
 export async function markStep(db: Sql, karenzId: string, step: string, patch: StepPatch): Promise<StepRow> {
+  if (patch.state === 'failed' && !patch.error?.trim()) throw new RangeError('markStep: a failed step records why it failed (error is required)')
   const reported = patch.reported === true
   const rows = await db<StepDb[]>`
     INSERT INTO module_karenz_step (karenz_id, step, state, attempts, last_error, last_reported_at, done_at)
@@ -186,7 +191,7 @@ export async function upsertItem(db: Sql, item: KarenzItem): Promise<KarenzItemR
   return toItem(rows[0]!)
 }
 
-/** The items of one karenz row (optionally of one kind), in the order they were first recorded. */
+/** The items of one karenz row (optionally of one kind), ordered by kind and then by external id (not by when they were recorded). */
 export async function listItems(db: Sql, karenzId: string, kind?: string): Promise<KarenzItemRow[]> {
   const rows =
     kind === undefined
@@ -221,6 +226,7 @@ export async function setItemState(db: Sql, itemId: string, state: ItemState, de
  * make a delivered notice look undelivered.
  */
 export async function recordNotice(db: Sql, n: NoticeInput): Promise<void> {
+  if (n.state === 'failed' && !n.error?.trim()) throw new RangeError('recordNotice: a failed notice records why it failed (error is required)')
   await db`
     INSERT INTO module_karenz_notice (karenz_id, kind, user_id, state, attempts, sent_at, last_error)
     VALUES (${n.karenzId}, ${n.kind}, ${n.userId}, ${n.state}, 1,
