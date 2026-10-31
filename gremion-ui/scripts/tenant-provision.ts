@@ -31,8 +31,8 @@
 // one-time secrets); every log line goes to STDERR. EXIT: 0 ok, 1 a failure,
 // 2 usage or a precondition (a missing environment variable is always named).
 import { createHash, randomBytes } from 'node:crypto'
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import postgres from 'postgres'
 import { handConfigToReader, handToReader, isTenantConfigPath, writeReaderConfigFile } from './tenant-secret-file'
 import {
@@ -187,6 +187,8 @@ function releaseTip(): string | null {
 function assertCreateEnv(catalogue: readonly LifecycleModule[], opts: { needEdge: boolean }): void {
   directPostgresUrl('PLATFORM_DATABASE_URL', reqEnv('PLATFORM_DATABASE_URL'))
   directPostgresUrl('KERNEL_PG_ADMIN_FILE', reqFileEnv('KERNEL_PG_ADMIN_FILE'))
+  directPostgresUrl('GOVERNANCE_PG_ADMIN_FILE', reqFileEnv('GOVERNANCE_PG_ADMIN_FILE'))
+  governanceSecretsDir()
   for (const id of modulePostgresIds(catalogue)) {
     directPostgresUrl(`MODULE_PG_ADMIN_${envId(id)}_FILE`, reqFileEnv(`MODULE_PG_ADMIN_${envId(id)}_FILE`))
     reqFileEnv(`MODULE_APP_PASSWORD_${envId(id)}_FILE`)
@@ -229,6 +231,49 @@ function writeSecretFile(hostPath: string, value: string): Promise<void> {
   return Promise.resolve()
 }
 const tenantSecretsDir = () => process.env.TENANT_SECRETS_DIR ?? join(repoRoot, 'secrets', 'tenants')
+
+/** True when `a` and `b` are the same directory or one contains the other (path math only). */
+function pathsOverlap(a: string, b: string): boolean {
+  const inside = (parent: string, child: string) => {
+    const rel = relative(resolve(parent), resolve(child))
+    return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel))
+  }
+  return inside(a, b) || inside(b, a)
+}
+
+/**
+ * TASK-084-a: the directory of the per-customer governance credential files
+ * (GOVERNANCE_SECRETS_DIR, the container path of the rw mount): it must exist
+ * (the host creates it, gremion-tenant), and it must not be, contain or sit
+ * inside TENANT_SECRETS_DIR, whose read-only mounts on gremion-ui, migrate and
+ * control-panel would otherwise expose every governance credential. Exit 2,
+ * both variables named, before any connection. The uid hand-over to the
+ * governance image is 084-b (GOVERNANCE_SECRETS_UID, DV4).
+ */
+function governanceSecretsDir(): string {
+  const dir = reqEnv('GOVERNANCE_SECRETS_DIR')
+  if (!existsSync(dir) || !statSync(dir).isDirectory()) throw new UsageError(`GOVERNANCE_SECRETS_DIR names ${dir}, which is not an existing directory (gremion-tenant creates it)`)
+  if (pathsOverlap(dir, tenantSecretsDir())) {
+    throw new UsageError(`GOVERNANCE_SECRETS_DIR (${dir}) and TENANT_SECRETS_DIR (${tenantSecretsDir()}) must be separate directories: neither may equal or contain the other`)
+  }
+  return dir
+}
+
+/** A governance credential file: 0600, atomic (tmp + rename), written into the existing directory (never created here). */
+function writeGovernanceSecretFile(hostPath: string, value: string): Promise<void> {
+  const tmp = `${hostPath}.tmp-${process.pid}`
+  writeFileSync(tmp, value, { encoding: 'utf-8', mode: 0o600 })
+  renameSync(tmp, hostPath)
+  try {
+    chmodSync(hostPath, 0o600)
+  } catch (err) {
+    log(`WARNING: chmod 0600 ${hostPath} failed (${err instanceof Error ? err.message : String(err)})`)
+  }
+  return Promise.resolve()
+}
+
+/** services/governance/migrations as shipped in the image (the Dockerfile copies it beside the app). */
+const governanceMigrationsDir = () => join(repoRoot, 'services', 'governance', 'migrations')
 
 /** The tenant's config.json, atomically (tmp + rename in the same directory), owned by the reader (#49). */
 function writeConfigFile(path: string, text: string): void {
@@ -434,6 +479,8 @@ function resolveLiveEnv(needEdge: boolean) {
     apexDomain: apexDomain(),
     runtimeDatabaseUrl: reqEnv('DATABASE_URL'),
     kernelAdminUrl: directPostgresUrl('KERNEL_PG_ADMIN_FILE', reqFileEnv('KERNEL_PG_ADMIN_FILE')),
+    governanceAdminUrl: directPostgresUrl('GOVERNANCE_PG_ADMIN_FILE', reqFileEnv('GOVERNANCE_PG_ADMIN_FILE')),
+    governanceSecretsDir: governanceSecretsDir(),
     exportDir: reqEnv('TENANT_EXPORT_DIR'),
     releaseRef: releaseRef(),
     edge: needEdge ? edgeAddresses() : null,
@@ -469,6 +516,11 @@ async function liveDeps(opts: { configFile?: string; bodyName?: string; needEdge
       tenantSecretsDir: tenantSecretsDir(),
       runtimeDatabaseUrl: env.runtimeDatabaseUrl,
       kernelAdminUrl: env.kernelAdminUrl,
+      governanceAdminUrl: env.governanceAdminUrl,
+      governanceSecretsDir: env.governanceSecretsDir,
+      governanceMigrationsDir: governanceMigrationsDir(),
+      releaseRef: env.releaseRef,
+      writeGovernanceSecretFile,
       configFile: opts.configFile ?? '/nonexistent',
       bodyName: opts.bodyName ?? 'Rat',
       edge: env.edge,
@@ -777,6 +829,11 @@ async function cmdStatus(): Promise<void> {
       tenantSecretsDir: tenantSecretsDir(),
       runtimeDatabaseUrl: reqEnv('DATABASE_URL'),
       kernelAdminUrl: 'postgres://unused@127.0.0.1/unused',
+      governanceAdminUrl: 'postgres://unused@127.0.0.1/unused',
+      governanceSecretsDir: '/nonexistent',
+      governanceMigrationsDir: '/nonexistent',
+      releaseRef: 'unused',
+      writeGovernanceSecretFile,
       configFile: '/nonexistent',
       bodyName: 'Rat',
       edge: null,
