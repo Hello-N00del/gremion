@@ -15,6 +15,14 @@
 //      module_enablement 'enabled' with the gate references, enabled_by/_at
 // Every step is idempotent, so a crash anywhere resumes by calling it again;
 // a second enable of an enabled module writes nothing.
+// Module Karenz (2026-10-30): a module database that a switch-off BLOCKED (state
+// 'blocked', the 30 days not over) comes back instead of being created again: no
+// CREATE DATABASE and no role DDL, the app role regains CONNECT, the migrations
+// run as the owner (the release may have moved on), and the same platform
+// transaction that turns the switch on moves the live plt.module_karenz row to
+// 'restoring'. While the day-30 job is finalizing the row (KARENZ_FINALIZING)
+// nothing is changed at all; after day 30 the state is 'dropped' and an enable
+// is a fresh start.
 import { join } from 'node:path'
 import type { Sql } from '@gremion/db'
 import { tenantModuleDbName } from '../names.js'
@@ -30,7 +38,7 @@ import {
 } from './guards.js'
 import { pinnedPhaseFor } from '../phase.js'
 import { PINNED_BASELINE } from '../phase-baseline.js'
-import { assertPlatform, casModuleDatabaseState, lookupModuleVersion, readModuleDatabase } from './platform.js'
+import { assertPlatform, casModuleDatabaseState, lookupModuleVersion, readLiveKarenz, readModuleDatabase } from './platform.js'
 import { scramSha256Verifier } from './scram.js'
 import type { Actor, EnableResult, GateResult, LifecycleDeps, LifecycleModule, ModuleServer } from './types.js'
 
@@ -91,6 +99,13 @@ async function ensureDatabase(admin: Sql, dbName: string, owner: string): Promis
 export async function lockDownDatabase(admin: Sql, dbName: string, app: string): Promise<void> {
   await execFormatted(admin, 'REVOKE CONNECT, TEMPORARY ON DATABASE %I FROM PUBLIC', [dbName])
   await execFormatted(admin, 'GRANT CONNECT ON DATABASE %I TO %I', [dbName, app])
+}
+
+/** The inverse of the Karenz block: the app role may connect again (PUBLIC stays locked out). */
+export async function unblockModuleDatabase(admin: Sql, dbName: string, tenantId: string, moduleId: string, app: string): Promise<void> {
+  assertTenantModuleTarget(dbName, tenantId, moduleId)
+  if (app !== moduleRoles(moduleId).app) throw new LifecycleError('TARGET_REFUSED', `refusing to unblock ${dbName} for ${JSON.stringify(app)}: ${moduleId}'s app role is ${moduleRoles(moduleId).app}`)
+  await lockDownDatabase(admin, dbName, app)
 }
 
 /** DML for the app role on everything the owner has created, and by default on what it creates next. */
@@ -157,6 +172,13 @@ export async function enableModule(tenantId: string, module: LifecycleModule, ac
   const mv = await lookupModuleVersion(deps.platform, moduleId, runtime.version)
   if (!mv) throw new LifecycleError('MODULE_VERSION_UNKNOWN', `plt.module_version has no (${moduleId}, ${runtime.version}); the registry (TASK-077) loads it before an enable`)
 
+  // The day-30 job owns the module while its Karenz row is finalizing: nothing is half restored, the
+  // switch-on waits until the job has finished and is then a fresh start (Review Focus 1).
+  const liveKarenz = await readLiveKarenz(deps.platform, tenantId, mv.moduleId)
+  if (liveKarenz?.state === 'finalizing') {
+    throw new LifecycleError('KARENZ_FINALIZING', `(${tenantId}, ${moduleId}) is being deleted by the Karenz job (Karenz ${liveKarenz.karenzId}); switch it on again once the job has finished`)
+  }
+
   // 3. the gate, before anything is written
   const gate = await deps.enableGate(tenantId, moduleId)
   if (!gate) throw new LifecycleError('GATE_REFUSED', `the enable gate refused (${tenantId}, ${moduleId}): no isolation-test or DPIA reference`)
@@ -192,23 +214,39 @@ export async function enableModule(tenantId: string, module: LifecycleModule, ac
         SELECT state FROM plt.module_enablement WHERE customer_id = ${tenantId} AND module_id = ${mv.moduleId}`
       if (en?.state === 'enabled') {
         log(`(${tenantId}, ${moduleId}) is already enabled: nothing to do`)
-        return { tenantId, moduleId, database: dbName, created: false, applied: [], noop: true }
+        return { tenantId, moduleId, database: dbName, created: false, applied: [], noop: true, restored: false }
       }
     } else {
-      await hook('enabling', dbName)
-      // 5. roles
-      const { owner, app } = await ensureModuleRoles(server.admin, moduleId, await deps.secrets.appPassword(moduleId))
-      await hook('roles', dbName)
-      // 6. the database
-      created = await ensureDatabase(server.admin, dbName, owner)
-      await lockDownDatabase(server.admin, dbName, app)
-      await hook('created', dbName)
+      let owner: string
+      let app: string
+      if (row.state === 'blocked') {
+        // the Karenz restore: the database is still there, owned by m_<id>, with its data
+        ;({ owner, app } = moduleRoles(moduleId))
+        const current = await databaseOwner(server.admin, dbName)
+        if (current === null) {
+          throw new LifecycleError('DATABASE_MISSING', `plt.module_database says ${dbName} is blocked but the server has no such database`)
+        }
+        if (current !== owner) {
+          throw new LifecycleError('DATABASE_FOREIGN_OWNER', `${dbName} is owned by ${current}, not ${owner}: refusing to unblock a database the lifecycle did not create`)
+        }
+        await unblockModuleDatabase(server.admin, dbName, tenantId, moduleId, app)
+        await hook('unblocked', dbName)
+      } else {
+        await hook('enabling', dbName)
+        // 5. roles
+        ;({ owner, app } = await ensureModuleRoles(server.admin, moduleId, await deps.secrets.appPassword(moduleId)))
+        await hook('roles', dbName)
+        // 6. the database
+        created = await ensureDatabase(server.admin, dbName, owner)
+        await lockDownDatabase(server.admin, dbName, app)
+        await hook('created', dbName)
+      }
       // 7. migrations as the owner
       const owned = await openAsOwner(server, dbName, owner)
       try {
         // TASK-075 G1b: a database this call created has nothing to lose, so
-        // no pre-migration dump; an existing one (upgrade, resumed enable)
-        // runs under deps.upgradeHooks (the dump hook).
+        // no pre-migration dump; an existing one (upgrade, resumed enable, a
+        // Karenz restore) runs under deps.upgradeHooks (the dump hook).
         // Default: the baseline this package ships (never a kernel checkout's
         // scripts/, which the tenant-create image does not carry).
         const phaseFor = deps.phaseFor ? deps.phaseFor(moduleId) : pinnedPhaseFor(`module-${moduleId}`, PINNED_BASELINE)
@@ -230,12 +268,21 @@ export async function enableModule(tenantId: string, module: LifecycleModule, ac
     }
   }
 
-  // 8. one platform transaction: the database row and the level-1 switch
+  // 8. one platform transaction: the database row, the level-1 switch and the Karenz row
+  let restored = false
   await deps.platform.begin(async (tx) => {
+    // the Karenz row first, locked: the day-30 job takes the same row (FOR UPDATE SKIP LOCKED) in its own
+    // transaction, so a restore and the job cannot both win
+    const [k] = await tx<{ karenz_id: string; state: string }[]>`
+      SELECT karenz_id::text, state FROM plt.module_karenz
+       WHERE customer_id = ${tenantId} AND module_id = ${mv.moduleId} AND state IN ('open', 'restoring', 'finalizing') FOR UPDATE`
+    if (k?.state === 'finalizing') {
+      throw new LifecycleError('KARENZ_FINALIZING', `(${tenantId}, ${moduleId}) went into the Karenz job's final deletion while it was being enabled`)
+    }
     if (dbName !== null) {
       const [st] = await tx<{ state: string }[]>`
         SELECT state FROM plt.module_database WHERE customer_id = ${tenantId} AND module_id = ${mv.moduleId} FOR UPDATE`
-      if (st?.state === 'enabling') {
+      if (st?.state === 'enabling' || st?.state === 'blocked') {
         await tx`UPDATE plt.module_database SET state = 'enabled', dropped_at = NULL WHERE customer_id = ${tenantId} AND module_id = ${mv.moduleId}`
       } else if (st?.state !== 'enabled') {
         throw new LifecycleError('CONCURRENT_STATE', `${dbName} moved to ${String(st?.state)} while it was being enabled`)
@@ -259,8 +306,15 @@ export async function enableModule(tenantId: string, module: LifecycleModule, ac
         enabled_at = EXCLUDED.enabled_at,
         updated_by_kind = EXCLUDED.updated_by_kind,
         updated_by = EXCLUDED.updated_by`
+    if (k) {
+      await tx`
+        UPDATE plt.module_karenz
+           SET state = 'restoring', restore_requested_at = coalesce(restore_requested_at, now())
+         WHERE karenz_id = ${k.karenz_id}`
+      restored = true
+    }
   })
   await hook('enabled', dbName)
-  log(`enabled (${tenantId}, ${moduleId})${dbName ? ` on ${dbName}${created ? ' (created)' : ''}, ${applied.length} migration(s) applied` : ' (no database)'}`)
-  return { tenantId, moduleId, database: dbName, created, applied, noop: false }
+  log(`enabled (${tenantId}, ${moduleId})${dbName ? ` on ${dbName}${created ? ' (created)' : ''}, ${applied.length} migration(s) applied` : ' (no database)'}${restored ? ', restored inside its Karenz' : ''}`)
+  return { tenantId, moduleId, database: dbName, created, applied, noop: false, restored }
 }
