@@ -48,7 +48,8 @@ function currentRoleVocabulary(): readonly string[] | undefined {
 /**
  * The Keycloak() factory files a caller-supplied `issuer` under `provider.options`
  * and leaves the provider's top-level `issuer` unset. Auth.js's setEnvDefaults then
- * runs `provider.issuer ??= env.AUTH_KEYCLOAK_ISSUER`, and assertConfig reads
+ * defaults the top-level issuer from the process env's Keycloak issuer key
+ * (nullish-assign, so even an empty string sticks), and assertConfig reads
  * `provider.issuer ?? provider.options?.issuer`, so an env value (even the empty
  * string) shadows the tenant issuer and every page behind auth answers 500
  * (issue #87). Setting `issuer` at the top level makes the `??=` a no-op: the
