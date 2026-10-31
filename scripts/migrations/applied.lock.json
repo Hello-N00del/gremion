@@ -188,7 +188,8 @@
         "0011_plt_lease_fence.sql": "907288c31417b64748c7804b22c506986b76f7223ff95de1bafcc0874095738a",
         "0012_plt_purge_run.sql": "202379e02d64111efdd7e5910b56726e3477fb886d1c283b25701dd1569287d7",
         "0013_oac_access_record.sql": "889c39a6fc201feead497d559df152c7ae46ba6121321f003d05df7eb4aded77",
-        "0014_plt_council_requests.sql": "535222ac20bdb8ed08aa76f4ca572deb59e875442f1373697726c9029b7bd82b"
+        "0014_plt_council_requests.sql": "535222ac20bdb8ed08aa76f4ca572deb59e875442f1373697726c9029b7bd82b",
+        "0015_plt_module_karenz.sql": "1d202f7ff8c9b57c4554ebcdb16675083ffaeb01f76b5c80b672b32aee0fa106"
       }
     }
   }
