@@ -5,6 +5,8 @@ export const electionsManifest: ModuleManifest = {
   id: 'elections',
   order: 30,
   toggleable: true,
+  // Display name: the Systemstatus catalog and the council module switch (its confirmation phrase) read it.
+  status: { label: 'Wahlen' },
   // GUARD (R33 F6): gremion-ui/src/lib/modules/migration-ownership.ts crossCuttingViolations() fails if any manifest claims this file;
   // gremion-ui/scripts/fresh-init-proof.sh --module-off elections proves the OFF fresh init in a real Postgres.
   // DELIBERATELY no `migrations` key (#371 review): committee_elections
