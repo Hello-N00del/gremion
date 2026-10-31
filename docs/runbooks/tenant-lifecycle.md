@@ -378,6 +378,85 @@ These leave no copy encrypted under the shredded key, so they are a separate
 data-erasure-completion step the crypto-shred does not cover. Track them off the
 failed ledger rows until done.
 
+## Module self-service by the council
+
+A council admin switches a feature module **on** from Settings > Module. The switch is a
+provisioning request of a third origin, `council` (next to `panel` and `host`), that goes
+through the same queue and the same host executor as every other request, without operator
+approval and with the actor recorded as a person (`actor_kind = person`), not as an
+operator. It writes no `oac.access_record`: that record is vendor and operator access.
+
+**Scope in phase 1: enable only.** The database accepts `enable_module` and `disable_module`
+for the council origin, but the application refuses a council `disable_module` with
+`DISABLE_NOT_YET` (HTTP 422 from `POST /api/settings/modules`, nothing queued; the executor
+refuses the same request if one ever reaches it). One constant, `COUNCIL_DISABLE_ALLOWED`
+in `@gremion/provisioning`, carries this. Today's `disableModule` exports and then drops the
+module database at once; a council must not reach that before the 30-day grace period of
+phase 2 exists. Switching a module off stays an operator action in the control panel.
+
+**Switchable set.** Catalogue ids that own a toggleable manifest and are not denied:
+`calendar`, `elections`, `votes`. Every other id is refused with `MODULE_NOT_SWITCHABLE`
+(`files`, `messaging`, `publishing` and `handover` are held back; `board` and `vault` are
+`MODULE_DENIED` by name; a module in `modules/disabled.json` is `MODULE_NOT_SHIPPED`). The
+refusal comes before anything is queued and again from the executor's `request-verify`.
+
+**Who may switch.** The realm role `council-admin` (`it-admin` includes it through the role
+hierarchy). The `vorstand` role does not confer this right.
+
+**Step-up.** Every switch needs a fresh LoA 2 sign-in (`STEPUP_FRESHNESS_SECONDS`, default
+300 s). A stale session gets `401 STEP_UP_REQUIRED` and the settings page runs the step-up
+flow.
+
+**How the request is submitted.** gremion-ui connects to `gremion_platform` as the
+least-privilege role `gremion_ui_modules` (LOGIN, member of `plt_council_requester`, EXECUTE
+on the three council request functions, no table privilege) through
+`PLATFORM_MODULES_DATABASE_URL`, and calls `plt.submit_council_module_request`. The request
+carries the admin's signed id and access token. One request per customer slug runs at a
+time: a second submit while one is queued or running gets `409 IN_FLIGHT`.
+
+**`UI_MODULES_DB_PASSWORD` is the optional off switch.** When it is unset or empty, `init`
+does not create the role, compose renders an empty `PLATFORM_MODULES_DATABASE_URL`, and the
+settings section answers "nicht konfiguriert" (HTTP 503 `NOT_CONFIGURED`). Do not turn this
+variable into a required one. To switch the feature on, set it, run `init` and recreate the
+app containers.
+
+**What the executor verifies** (`request-verify`, fail closed, in this order): the kind and
+args (only `enable_module` in phase 1; no token is read for a refused kind); the module is
+council-switchable; the customer exists in the registry; the signed token pair against that
+customer's own Keycloak realm only (issuer and keys of that realm, client `gremion-ui`,
+role `council-admin` or `it-admin`, `acr` `loa2`, sign-in within the 3600 s evidence
+window), so a pair signed by council A can never carry a request for the customer of
+council B; and finally the admin read back from the realm now (exists, enabled, still
+holds the role). Then the unchanged `enable_module` handler runs with `--actor-kind person`.
+Every existing enable gate still applies: deny list by name, `modules/disabled.json`, a
+loaded `plt.module_version`, the isolation pass and a written DPIA decision with a document
+reference. The admin may carry the DPIA decision with the request (reason code
+`council_decision`, `decided_by_kind = person`); without one, the recorded decision is used;
+with neither, the enable is refused (`DPIA_REQUIRED` in the settings page,
+`NO_DPIA_DECISION` from the gate).
+
+**What changes in the customer.** The request finishing is not the end: a reconciler in
+gremion-ui reads the finished request and writes `config.modules`. Where a platform
+enablement row exists, it is the source of truth for "is a module on". A module without a
+row (every module of a customer that predates the switch) is *unmanaged* and keeps following
+`config.modules`, which defaults every toggleable module to on.
+
+**Reading a failed switch.** The settings section shows the failure text of the newest
+switch of each module. The states of the tenant-side record are `queued`, `succeeded`,
+`applying`, `applied` and the failures `failed`, `refused`, `expired` and `dead`. The
+control panel's request list for the customer shows the origin as "Gremium".
+
+| Symptom | Reading |
+|---|---|
+| `refused`, reason starting `evidence:` | The token pair did not verify against the customer's realm (wrong realm, wrong client, no `loa2`, sign-in too old). The executor log has `request-verify <id>: refused: <reason>`. |
+| `refused`, `council admin ... no longer holds council-admin` or `is disabled` | The admin lost the role or the account between submit and claim. |
+| `refused`, `MODULE_NOT_SWITCHABLE` or a gate code | The module is outside the set or a gate said no; the text carries the code. |
+| `expired` | No executor claimed the request within 30 minutes. Check that the host executor is running, then submit again. |
+| `failed` or `dead` | The `enable_module` handler failed; read the request's events in the control panel. |
+| stays `applying`, with an error text | The platform enablement succeeded but `config.json` could not be written (a customer created before the `TENANT_SECRETS_UID` fix has it `root:root 0640`). Run `materialize-config <slug>` as described below; the reconciler retries on its own and nothing reads as switched until the write works. |
+
+A failed or refused switch never changes `config.modules`.
+
 ## Reconcile (drift guard)
 
 ```bash
@@ -399,6 +478,12 @@ without it the verb re-asserts the REVOKE and reads again. Provisioning applies 
 REVOKE after the kernel chain (the migrate step fails when `audit_log` is missing or a
 privilege is still held). A customer provisioned before this check shows it RED until
 one `reconcile <slug>` (apply) has run.
+
+Karenz phase 1 adds one realm check, `vorstand-role`: the standard realm role `vorstand`
+must exist AND be listed in the `gremion-ui` client's realm-role scope mappings
+(`fullScopeAllowed` is false, so a role missing there never reaches a token). A realm created
+before the role was added to the realm template shows it RED until one `reconcile <slug>`
+(apply) has created the role and the mapping; both steps are idempotent.
 
 **Operator note, chain anchor:** with `INSERT` on `audit_log_chain_anchor` revoked from
 the app role, the migration-0059 *adopt* path (`gremion.audit_chain_adopt_head`, only

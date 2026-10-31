@@ -24,34 +24,52 @@ Enum: [`gremion-ui/src/lib/auth/types.ts`](../gremion-ui/src/lib/auth/types.ts).
 Hierarchy + `hasRole` / `canAccess`:
 [`gremion-ui/src/lib/auth/index.ts`](../gremion-ui/src/lib/auth/index.ts).
 
-There are **4** roles, forming a strict containment chain — `ITAdmin` contains
-every other role and `Guest` contains only itself.
+There are **7** roles. Four of them form a containment chain (`ITAdmin` contains
+`CouncilAdmin`, `Finance`, `Member` and `Guest`); `Vorstand` and `Auditor` stand beside it.
 
 | Role | String value | Intent |
 |------|--------------|--------|
 | `Guest` | `guest` | Signed in but no further claims. Sees the dashboard plus the guest-visible governance surfaces (committees, protokolle, beschluesse). Default fallback when an access token carries no recognised realm role. |
 | `Member` | `member` | Regular member. Adds the members directory. |
-| `CouncilAdmin` | `council-admin` | Elected council admin (Vorstand). Adds the council portal (`/portal`). |
+| `Finance` | `finance` | Gates the finance module's write surfaces. Confers itself, `Member` and `Guest`. |
+| `Vorstand` | `vorstand` | The standard Vorstand role of every council, assigned per person (Karenz phase 1). A recipient role next to `council-admin`, not a rung of the admin ladder: it confers itself plus member-level page access and deliberately NOT `council-admin`, so it cannot switch modules or reach the admin pages. Nothing implies it: a `council-admin` is a Vorstand only when the realm role is assigned. Phase 2 sends the module notices to the admins and the Vorstand. |
+| `CouncilAdmin` | `council-admin` | Council administration (shown as "Gremienverwaltung", no longer as "Vorstand"). Adds the council portal (`/portal`) and may switch feature modules on in Settings > Module ([runbooks/tenant-lifecycle.md](./runbooks/tenant-lifecycle.md), "Module self-service by the council"). |
 | `ITAdmin` | `it-admin` | Highest privilege. Adds `/systemstatus` and the admin sections of `/settings`; transitively contains everything below. |
+| `Auditor` | `auditor` | Standalone finance read-only role. Confers itself and `Guest`; its finance see-all is read at the finance access seam, not through the page-role hierarchy. |
 
 `ROLE_HIERARCHY` in `gremion-ui/src/lib/auth/index.ts`:
 
 ```
-ITAdmin       → [ITAdmin, CouncilAdmin, Member, Guest]
-CouncilAdmin  → [CouncilAdmin, Member, Guest]
-Member        → [Member, Guest]
-Guest         → [Guest]
+ITAdmin       -> [ITAdmin, CouncilAdmin, Finance, Member, Guest]
+CouncilAdmin  -> [CouncilAdmin, Finance, Member, Guest]
+Finance       -> [Finance, Member, Guest]
+Vorstand      -> [Vorstand, Member, Guest]
+Member        -> [Member, Guest]
+Guest         -> [Guest]
+Auditor       -> [Auditor, Guest]
 ```
 
 `hasRole(userRoles, required)` returns true iff any of `userRoles` expands to a
-set containing `required`. So `ITAdmin` passes every check; `Member` passes
-`Member` and `Guest` but not `CouncilAdmin`.
+set containing `required`. So `ITAdmin` passes every page check; `Member` passes
+`Member` and `Guest` but not `CouncilAdmin`; `Vorstand` passes `Member` and
+`Guest` but not `CouncilAdmin`.
+
+**The `vorstand` realm role.** It is a Keycloak realm role like `council-admin`. It is in
+the realm template (`docker/keycloak/realm-export.base.json`) and in the `gremion-ui`
+client's realm-role scope mappings; a realm created before the role existed gets both from
+the reconcile check `vorstand-role` (`gremion-tenant reconcile <slug>`, see
+[runbooks/tenant-lifecycle.md](./runbooks/tenant-lifecycle.md)). Existing councils get the
+role assigned to the members of their former "Vorstand" committee by a migration-queued
+backfill (`role_backfill`, applied by the boot worker; a deleted, disabled or mail-less user
+is counted and reported, never an abort). Councils whose committee has another name get the
+role but nobody assigned; they assign it in the member admin. `listRoleHolders` returns the
+holders of the notice roles (`council-admin` and `vorstand`, de-duplicated) for the phase 2 mails.
 
 The string values (`guest`, `member`, …) are the exact realm-role names expected
 from Keycloak. `sessionUserFromPayload`
 ([`gremion-ui/src/hooks.server.ts`](../gremion-ui/src/hooks.server.ts)) filters
 `realm_access.roles` through the resolved tenant's role vocabulary (the default
-tenant resolves to the four `Role` enum values); any realm role not in the
+tenant resolves to the `Role` enum values); any realm role not in the
 vocabulary is dropped silently, and a user left with no recognised role defaults
 to `[Guest]`.
 
@@ -383,7 +401,7 @@ any feature module:
 
   | Constant | Group string | Meaning |
   |----------|--------------|---------|
-  | `PLATFORM_GROUPS.admin` | `admin` | Council admin (Vorstand) — broad administrative scope. |
+  | `PLATFORM_GROUPS.admin` | `admin` | Council admin — broad administrative scope. |
   | `PLATFORM_GROUPS.itAdmin` | `it-admin` | IT admin — highest privilege. |
 
 - `capabilitiesForTenant(ctx)` is the tenant-aware accessor (the default tenant
