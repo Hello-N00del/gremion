@@ -406,17 +406,28 @@ customer_resume() {   # <slug> --operator <uuid>
 # two that change a customer's module set (the container set must not move: the
 # stack is pooled, a module is data and a broker user, never a container).
 
-# _module_args <verb> <slug> <module> [--operator <uuid>] [--dpia-json <file>] -- sets OPERATOR_ID, MODULE_ID, DPIA_JSON.
+# _module_args <verb> <slug> <module> [--operator <uuid>] [--actor-kind operator|person] [--dpia-json <file>]
+#   -- sets OPERATOR_ID, MODULE_ID, DPIA_JSON, ACTOR_KIND. --actor-kind says who
+#   --operator names: an operator (the default, every panel and break-glass
+#   path) or a person (a council admin's request, verified by request-verify).
+#   ACTOR_KIND_GIVEN is "yes" only when the flag was passed, so a request that
+#   never carried one keeps its argv byte-identical to before.
 _module_args() {
     local verb="$1"; shift
     local slug="${1:-}"; shift || true
     MODULE_ID="${1:-}"; shift || true
     DPIA_JSON=""
+    ACTOR_KIND="operator"
+    ACTOR_KIND_GIVEN="no"
     need_slug "$slug"
     [[ "$MODULE_ID" =~ ^[a-z][a-z0-9-]{0,62}$ ]] || die "${verb}: invalid module id '${MODULE_ID}'" "$GREMION_EXIT_USAGE"
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --operator) need_value "$@"; OPERATOR_ID="$2"; shift 2 ;;
+            --actor-kind)
+                need_value "$@"
+                [[ "$2" =~ ^(operator|person)$ ]] || die "${verb}: --actor-kind must be operator or person, not '${2}'" "$GREMION_EXIT_USAGE"
+                ACTOR_KIND="$2"; ACTOR_KIND_GIVEN="yes"; shift 2 ;;
             --dpia-json) need_value "$@"; DPIA_JSON="$2"; shift 2 ;;
             *) die "${verb}: unknown argument: $1" "$GREMION_EXIT_USAGE" ;;
         esac
@@ -433,12 +444,13 @@ _assert_fingerprint() {
     fi
 }
 
-customer_enable_module() {   # <slug> <module> --operator <uuid> [--dpia-json <file>]
+customer_enable_module() {   # <slug> <module> --operator <uuid> [--actor-kind operator|person] [--dpia-json <file>]
     local slug="${1:-}" before
     _module_args enable_module "$@"
     active_colour
     before="$(container_fingerprint)"
     local -a argv=(enable-module "$slug" "$MODULE_ID" --operator "$OPERATOR_ID")
+    if [[ "$ACTOR_KIND_GIVEN" == yes ]]; then argv+=(--actor-kind "$ACTOR_KIND"); fi
     # The container cannot read a host path: mount the decision read-only and hand it the
     # container-side path, as customer_create does (a host path is ENOENT in the one-shot).
     if [[ -n "$DPIA_JSON" ]]; then
@@ -452,12 +464,14 @@ customer_enable_module() {   # <slug> <module> --operator <uuid> [--dpia-json <f
     ok "module ${MODULE_ID} enabled for ${slug} (TRD-440: container set unchanged)"
 }
 
-customer_disable_module() {   # <slug> <module> --operator <uuid>
+customer_disable_module() {   # <slug> <module> --operator <uuid> [--actor-kind operator|person]
     local slug="${1:-}" before
     _module_args disable_module "$@"
     active_colour
     before="$(container_fingerprint)"
-    tc disable-module "$slug" "$MODULE_ID" --operator "$OPERATOR_ID" || die "disable of ${MODULE_ID} for ${slug} failed in the container" "$GREMION_EXIT_ASSERT"
+    local -a argv=(disable-module "$slug" "$MODULE_ID" --operator "$OPERATOR_ID")
+    if [[ "$ACTOR_KIND_GIVEN" == yes ]]; then argv+=(--actor-kind "$ACTOR_KIND"); fi
+    tc "${argv[@]}" || die "disable of ${MODULE_ID} for ${slug} failed in the container" "$GREMION_EXIT_ASSERT"
     _assert_fingerprint disable_module "$slug" "$before"
     ok "module ${MODULE_ID} disabled for ${slug} (exported before it was dropped; TRD-440: container set unchanged)"
 }
