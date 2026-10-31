@@ -23,7 +23,7 @@ import type { Sql } from '@gremion/db'
 import { tenantModuleDbName } from '../names.js'
 import { dropTenantModuleDatabase } from './disable.js'
 import { assertKarenzExportPath, assertTenantModuleTarget, LifecycleError } from './guards.js'
-import { casModuleDatabaseState, readModuleDatabase } from './platform.js'
+import { casModuleDatabaseState, readModuleDatabase, type KarenzState } from './platform.js'
 import type { LifecycleModule, ModuleServer } from './types.js'
 
 export { assertKarenzExportPath } from './guards.js'
@@ -77,7 +77,7 @@ interface DueRow {
   customer_id: string
   module_id: string
   module_key: string
-  state: string
+  state: KarenzState
   export_path: string | null
   export_sha256: string | null
   export_deleted_at: Date | null
@@ -160,7 +160,12 @@ export async function finalizeDueKarenz(deps: FinalizeDeps): Promise<FinalizeRes
                 AND (k.export_kept_until IS NULL OR k.export_kept_until <= ${now})))
      ORDER BY k.final_at, k.karenz_id`
   result.due = rows.length
-  result.orphanedExports = await findOrphanedExports(deps.platform, deps.exportDir)
+  // Informational only: a tree that cannot be walked must never stop the destructive per-row pass below.
+  try {
+    result.orphanedExports = await findOrphanedExports(deps.platform, deps.exportDir)
+  } catch (err) {
+    log(`the orphaned-export scan failed and is skipped for this run: ${describeError(err)}`)
+  }
 
   if (!deps.finalDeletion) {
     for (const r of rows) log(`dry run: would finalize ${r.module_key} of ${r.customer_id} (Karenz ${r.karenz_id}, state ${r.state})`)

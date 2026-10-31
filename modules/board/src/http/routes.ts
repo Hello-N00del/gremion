@@ -38,7 +38,7 @@
 import type http from 'node:http'
 import { z } from 'zod'
 import type { Sql, TenantRef } from '../store/index.js'
-import { CONNECTION_LOST, isRefusal, isTenantDatabaseOff, NOT_PROVISIONED, sqlState, unavailable, type Refusal } from '../store/tenant-db.js'
+import { CONNECTION_LOST, isRefusal, isTenantDatabaseOff, NOT_PROVISIONED, sqlState, unavailable, warnIfConnectRefused, type Refusal } from '../store/tenant-db.js'
 import type { Route, RouteContext } from './router.js'
 import {
   listBoardsForOrgUnits,
@@ -189,6 +189,7 @@ export function buildApiRoutes(store: StoreFn): Route[] {
       await r`SELECT 1`
       return unavailable()
     } catch (err) {
+      warnIfConnectRefused(err, tenant.id)
       return isTenantDatabaseOff(err) ? NOT_PROVISIONED : unavailable()
     }
   }

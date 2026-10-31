@@ -72,6 +72,17 @@ export function isTenantDatabaseOff(err: unknown): boolean {
   return code === '3D000' || code === '42501'
 }
 
+/**
+ * Classifying a refused connect as "not provisioned" (404) hides it from 5xx alerting. A dropped database
+ * (3D000) is an ordinary switched-off module; a refused CONNECT (42501) is the Karenz block, but it is also
+ * what a stray revoke on an ENABLED module looks like, so that one is logged with the tenant.
+ */
+export function warnIfConnectRefused(err: unknown, tenantId: string): void {
+  if (sqlState(err) === '42501') {
+    console.warn('[board:api] the tenant database refused the connection (42501): answering tenant_not_provisioned', tenantId)
+  }
+}
+
 export function isRefusal(value: unknown): value is Refusal {
   return typeof value === 'object' && value !== null && 'status' in value && 'code' in value
 }
@@ -104,6 +115,7 @@ export function createBoardTenantDb({
       await sql`SELECT 1`
       return unavailable(retryAfterSeconds)
     } catch (err) {
+      warnIfConnectRefused(err, tenantId)
       return isTenantDatabaseOff(err) ? NOT_PROVISIONED : unavailable(retryAfterSeconds)
     }
   }

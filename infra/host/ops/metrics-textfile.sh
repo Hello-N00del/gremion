@@ -262,13 +262,18 @@ emit_job_last_run() {
 # says KARENZ_FINAL_DELETION=on, the exact string (as finalDeletionEnabled in
 # the platform job: ON, true, 1 and empty are off). Any unreadable piece (no
 # active colour, no env file) is off: the overdue gauge is then simply not
-# emitted, which is the safe reading while the switch ships off.
+# emitted, which is the safe reading while the switch ships off. It is said in a
+# note, so that a host where the switch is on but the file cannot be read does
+# not look the same as one where it is off.
 karenz_final_deletion_on() {
     local c="" f v
     [[ -f "$RUNTIME/active-colour" ]] && c="$(tr -d '[:space:]' < "$RUNTIME/active-colour" 2>/dev/null || true)"
-    case "$c" in blue|green) ;; *) return 1 ;; esac
+    case "$c" in
+        blue|green) ;;
+        *) note "no readable active colour -- the module Karenz overdue gauge is not emitted"; return 1 ;;
+    esac
     f="$ROOT/etc/env/app-${c}.env"
-    [[ -f "$f" ]] || return 1
+    [[ -f "$f" ]] || { note "no app env file for the active colour -- the module Karenz overdue gauge is not emitted"; return 1; }
     v="$(sed -n 's/^KARENZ_FINAL_DELETION=//p' "$f" 2>/dev/null | tail -n 1 || true)"
     v="${v%$'\r'}"
     if [[ "$v" == \"*\" || "$v" == \'*\' ]]; then v="${v:1:${#v}-2}"; fi

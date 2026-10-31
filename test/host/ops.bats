@@ -781,9 +781,16 @@ prom() { cat "$GREMION_ROOT/runtime/textfile/gremion.prom"; }
     # no colour, no env file: off
     STACK=staging run "$METRICS"
     [ "$status" -eq 0 ]
+    [[ "$output" == *"no readable active colour -- the module Karenz overdue gauge is not emitted"* ]] || { echo "$output"; return 1; }
     run grep -c 'gremion_module_karenz_overdue' "$prom"
     [ "$output" = "0" ]
     refute_recorded docker "overdue"
+    # a colour without its env file is said too
+    echo blue > "$GREMION_ROOT/runtime/active-colour"
+    rm -f "$GREMION_ROOT/etc/env/app-blue.env"
+    STACK=staging run "$METRICS"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"no app env file for the active colour -- the module Karenz overdue gauge is not emitted"* ]] || { echo "$output"; return 1; }
     # off, ON, true, 1 and empty are all off (the platform job reads the exact string on)
     echo blue > "$GREMION_ROOT/runtime/active-colour"
     local v

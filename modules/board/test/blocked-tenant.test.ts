@@ -26,6 +26,19 @@ describe('classify: a blocked database is not provisioned', () => {
     expect(await createBoardTenantDb({ store: storeThatFails('3D000'), gate }).classify(TENANT.id)).toEqual(NOT_PROVISIONED)
     expect((await createBoardTenantDb({ store: storeThatFails('53300'), gate }).classify(TENANT.id)).status).toBe(503)
   })
+  it('logs a refused connect (42501) at warn level naming the tenant, so a stray revoke on an enabled module is not silent; a dropped database (3D000) is not logged', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      await createBoardTenantDb({ store: storeThatFails('3D000'), gate }).classify(TENANT.id)
+      expect(warn).not.toHaveBeenCalled()
+      await createBoardTenantDb({ store: storeThatFails('42501'), gate }).classify(TENANT.id)
+      expect(warn).toHaveBeenCalledTimes(1)
+      expect(warn.mock.calls[0]!.join(' ')).toContain(TENANT.id)
+      expect(warn.mock.calls[0]!.join(' ')).toContain('42501')
+    } finally {
+      warn.mockRestore()
+    }
+  })
 })
 
 describe('route: 42501 at query time', () => {
@@ -64,6 +77,19 @@ describe('route: 42501 at query time', () => {
     const failing = ((first: unknown) => (isTemplate(first) ? Promise.reject(pgError('42501')) : {})) as unknown as Sql
     let calls = 0
     expect(await run(() => (++calls === 1 ? failing : NOT_PROVISIONED))).toEqual({ status: 404, body: { success: false, error: 'tenant_not_provisioned' } })
+  })
+
+  it('after a lost connection, a re-check that meets the refused connect (42501) answers 404 and logs it', async () => {
+    const lost = ((first: unknown) => (isTemplate(first) ? Promise.reject(pgError('ECONNRESET')) : {})) as unknown as Sql
+    const refused = ((first: unknown) => (isTemplate(first) ? Promise.reject(pgError('42501')) : {})) as unknown as Sql
+    let calls = 0
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      expect(await run(() => (++calls === 1 ? lost : refused))).toEqual({ status: 404, body: { success: false, error: 'tenant_not_provisioned' } })
+      expect(warn.mock.calls.map((c) => c.join(' ')).join('\n')).toContain(TENANT.id)
+    } finally {
+      warn.mockRestore()
+    }
   })
 
   it('stays a 500 when the re-check is refused for another reason than a missing database (503 from the gate)', async () => {
