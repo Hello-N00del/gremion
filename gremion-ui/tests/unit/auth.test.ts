@@ -52,6 +52,30 @@ describe('Role vocabulary — Finance and Auditor (TASK-205a)', () => {
   })
 })
 
+// Karenz phase 1, Task 7: `vorstand` is a standard realm role next to the admin role. Phase 1 gives it
+// member-level page access plus the role itself; it does NOT imply council-admin (equal-to-admin rights
+// are an operator decision, plan Open Decision 1).
+describe('Role vocabulary - Vorstand (Karenz phase 1)', () => {
+  it('the enum carries vorstand with its realm-role string', () => {
+    expect(Role.Vorstand).toBe('vorstand')
+  })
+
+  it('hasRole([Vorstand], Member) is true; hasRole([Vorstand], CouncilAdmin) is false', () => {
+    expect(hasRole([Role.Vorstand], Role.Member)).toBe(true)
+    expect(hasRole([Role.Vorstand], Role.Guest)).toBe(true)
+    expect(hasRole([Role.Vorstand], Role.Vorstand)).toBe(true)
+    expect(hasRole([Role.Vorstand], Role.CouncilAdmin)).toBe(false)
+    expect(hasRole([Role.Vorstand], Role.ITAdmin)).toBe(false)
+    expect(hasRole([Role.Vorstand], Role.Finance)).toBe(false)
+  })
+
+  it('no other role implies vorstand (it is a recipient role, not a rung of the admin ladder)', () => {
+    for (const r of [Role.ITAdmin, Role.CouncilAdmin, Role.Finance, Role.Member, Role.Guest, Role.Auditor]) {
+      expect(hasRole([r], Role.Vorstand), String(r)).toBe(false)
+    }
+  })
+})
+
 describe('canAccess (legacy smoke tests)', () => {
   it('guest cannot access members', () => {
     expect(canAccess([Role.Guest], 'members')).toBe(false)
@@ -108,12 +132,14 @@ describe('canAccess — exhaustive PAGE_ACCESS coverage (G-065)', () => {
   // guest < member < finance < council-admin < it-admin; Auditor is a standalone read-only role that no
   // page requires (TASK-205a re-applied Finance and Auditor with the finance vocabulary).
   const POSITIVE_ROLES_FOR: Record<Role, Role[]> = {
-    [Role.Guest]: [Role.Guest, Role.Member, Role.Finance, Role.CouncilAdmin, Role.ITAdmin],
-    [Role.Member]: [Role.Member, Role.Finance, Role.CouncilAdmin, Role.ITAdmin],
+    [Role.Guest]: [Role.Guest, Role.Member, Role.Vorstand, Role.Finance, Role.CouncilAdmin, Role.ITAdmin],
+    [Role.Member]: [Role.Member, Role.Vorstand, Role.Finance, Role.CouncilAdmin, Role.ITAdmin],
     [Role.Finance]: [Role.Finance, Role.CouncilAdmin, Role.ITAdmin],
     [Role.CouncilAdmin]: [Role.CouncilAdmin, Role.ITAdmin],
     [Role.ITAdmin]: [Role.ITAdmin],
     [Role.Auditor]: [Role.Auditor],
+    // Vorstand is a recipient role: no page requires it (phase 1), so no page produces cases from this row.
+    [Role.Vorstand]: [Role.Vorstand],
   }
 
   // Per required role: role states that MUST be denied (negative matrix).
@@ -121,10 +147,11 @@ describe('canAccess — exhaustive PAGE_ACCESS coverage (G-065)', () => {
   const NEGATIVE_ROLES_FOR: Record<Role, Role[][]> = {
     [Role.Guest]: [[]],
     [Role.Member]: [[], [Role.Guest], [Role.Auditor]],
-    [Role.Finance]: [[], [Role.Guest], [Role.Member], [Role.Auditor]],
-    [Role.CouncilAdmin]: [[], [Role.Guest], [Role.Member], [Role.Finance]],
-    [Role.ITAdmin]: [[], [Role.Guest], [Role.Member], [Role.Finance], [Role.CouncilAdmin]],
+    [Role.Finance]: [[], [Role.Guest], [Role.Member], [Role.Auditor], [Role.Vorstand]],
+    [Role.CouncilAdmin]: [[], [Role.Guest], [Role.Member], [Role.Finance], [Role.Vorstand]],
+    [Role.ITAdmin]: [[], [Role.Guest], [Role.Member], [Role.Finance], [Role.CouncilAdmin], [Role.Vorstand]],
     [Role.Auditor]: [[], [Role.Guest], [Role.Member]],
+    [Role.Vorstand]: [[], [Role.Guest], [Role.Member]],
   }
 
   // Build the parametrised test cases at collection time.

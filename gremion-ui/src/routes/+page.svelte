@@ -7,6 +7,7 @@
   import { moduleHref } from '$lib/modules/registry'
   import { resolveBrand } from '$lib/brand'
   import { termFor } from '$lib/terms'
+  import { ROLE_LABELS } from '$lib/auth/labels'
   import { INSTANCE_STATE_META, instanceReady, type InstanceState } from '$lib/instance-status'
   import ConvergenceBanner from '$lib/components/dashboard/ConvergenceBanner.svelte'
   import UnplacedGuestCard from '$lib/components/dashboard/UnplacedGuestCard.svelte'
@@ -31,7 +32,8 @@
   // Singular falls back to the tenant's plural term (consistent vocab), then the
   // literal; tenant #1 (no terms) stays "Gremium".
   let gremiumSingular = $derived(termFor(terms, 'gremienSingular', termFor(terms, 'gremien', 'Gremium')))
-  let councilAdmin = $derived(termFor(terms, 'councilAdmin', 'Vorstand'))
+  // Karenz phase 1: Vorstand is its own role now; the council-admin default is its role label.
+  let councilAdmin = $derived(termFor(terms, 'councilAdmin', ROLE_LABELS['council-admin']))
 
   // #290 (HANDOVER-v8 Part D): module enablement (from the layout payload). A
   // finance-OFF tenant must not show finance KPIs/CTAs. Absent → ON (tenant #1).

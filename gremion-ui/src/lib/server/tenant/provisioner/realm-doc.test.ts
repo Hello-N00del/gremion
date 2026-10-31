@@ -140,6 +140,22 @@ describe('buildTenantRealmDoc (§4 realm contract)', () => {
     expect(new Set(rm).size).toBe(rm.length)
   })
 
+  // Karenz phase 1 (Task 7): vorstand is a standard realm role. fullScopeAllowed is false on gremion-ui, so a
+  // role absent from the client's scope mappings never reaches a token.
+  it('the composed realm carries the realm role vorstand and the gremion-ui scope mapping lists it', () => {
+    const doc = build(cfgOff)
+    const realmRoles = (doc.roles as { realm: Array<{ name: string; description?: string }> }).realm
+    expect(realmRoles.map((r) => r.name)).toContain('vorstand')
+    expect(realmRoles.find((r) => r.name === 'vorstand')?.description).toBe('Vorstand')
+    const sm = (doc.scopeMappings as Array<{ client: string; roles: string[] }>).find((s) => s.client === 'gremion-ui')
+    expect(sm?.roles).toContain('vorstand')
+    // the original four stay
+    for (const r of ['guest', 'member', 'council-admin', 'it-admin']) {
+      expect(realmRoles.map((x) => x.name)).toContain(r)
+      expect(sm?.roles).toContain(r)
+    }
+  })
+
   it('a base without the gremion-admin service-account user gets one carrying realm-admin (TASK-043b F3)', () => {
     const bare = { ...JSON.parse(JSON.stringify(base)), users: [] }
     const doc = buildTenantRealmDoc({
