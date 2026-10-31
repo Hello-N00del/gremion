@@ -38,10 +38,16 @@ export interface AppendOnlyTable {
   readonly revoke: readonly ('INSERT' | 'UPDATE' | 'DELETE' | 'TRUNCATE')[]
 }
 
-/** audit_log and its chain anchor (gremion-ui migrations 0009, 0043, 0059). SELECT and INSERT on audit_log stay. */
+/**
+ * audit_log and its chain anchor (gremion-ui migrations 0009, 0043, 0059), and the sealed
+ * retained copies of a module switch-off (0064): written once, read many times, never
+ * rewritten or removed by the application. SELECT and INSERT on audit_log and on
+ * retained_record stay.
+ */
 export const APPEND_ONLY_TABLES: readonly AppendOnlyTable[] = [
   { table: 'audit_log', revoke: ['DELETE', 'UPDATE', 'TRUNCATE'] },
   { table: 'audit_log_chain_anchor', revoke: ['INSERT', 'UPDATE', 'DELETE', 'TRUNCATE'] },
+  { table: 'retained_record', revoke: ['UPDATE', 'DELETE', 'TRUNCATE'] },
 ]
 
 const PLAIN = /^[a-z_]+$/
