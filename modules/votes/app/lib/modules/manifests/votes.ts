@@ -17,6 +17,8 @@ export const votesManifest: ModuleManifest = {
   id: 'votes',
   order: 31,
   toggleable: true,
+  // Display name: the Systemstatus catalog and the council module switch (its confirmation phrase) read it.
+  status: { label: 'Abstimmungen' },
   pages: [
     { segment: 'polls', minRole: Role.Member },
     { segment: 'votes', minRole: Role.Member },
