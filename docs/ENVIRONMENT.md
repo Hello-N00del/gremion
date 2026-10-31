@@ -261,7 +261,7 @@ The SvelteKit / Auth.js admin shell that hosts the governance domain.
 | `AUTH_SECRET` | (empty; set by `setup.sh`) | Auth.js signing secret (`openssl rand -hex 32`) |
 | `AUTH_KEYCLOAK_ID` | `gremion-ui` | OIDC client id |
 | `AUTH_KEYCLOAK_SECRET` | (empty) | OIDC client secret — set after the realm is created by tenant-create |
-| `AUTH_KEYCLOAK_ISSUER` | `http://keycloak:8080/auth/realms/<realm>` | Public issuer used by the browser-facing OIDC flow |
+| `AUTH_KEYCLOAK_ISSUER` | `http://keycloak:8080/auth/realms/<realm>` | Dev tooling only (the realm-consistency check reads it). gremion-ui does not read it and the app compose does not pass it: the issuer comes from the tenant row |
 | `PUBLIC_BASE_URL` | `http://localhost:3000` | Public base URL of the app shell |
 
 The compose file also sets server-only OIDC values that are **not** read from

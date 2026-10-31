@@ -58,3 +58,33 @@ test('kernel-api-migrate does not reference POSTGRES_PASSWORD (the direct url ca
   assert.doesNotMatch(block, /POSTGRES_PASSWORD/)
   assert.match(block, /GREMION_KERNEL_PG_DIRECT_URL: postgresql:\/\/postgres-\$\{STACK:\?STACK required\}:5432\/postgres/)
 })
+
+// Issue #87: the gremion-ui service must not carry AUTH_KEYCLOAK_ISSUER / AUTH_KEYCLOAK_BASE.
+// gremion-ui no longer reads them (the issuer, the external base and the internal base
+// come from the resolved tenant). A compose `${AUTH_KEYCLOAK_ISSUER:-}` pass-through puts
+// the EMPTY STRING into the container on a host install, where Auth.js's env default
+// shadowed the per-tenant issuer and every page behind auth returned 500.
+function serviceBlockWithoutComments(file, name) {
+  const text = read(file)
+  const start = text.search(new RegExp(`^  ${name}:`, 'm'))
+  assert.ok(start >= 0, `${name} not found in ${file}`)
+  const rest = text.slice(start + 1)
+  const next = rest.search(/^  [a-z][\w-]*:|^# =/m)
+  return (next < 0 ? rest : rest.slice(0, next)).split(/\r?\n/).filter((l) => !/^\s*#/.test(l)).join('\n')
+}
+
+// One test() per compose file, written out: the verify suite counts test() calls in the source.
+function assertNoIssuerKeys(file) {
+  const block = serviceBlockWithoutComments(file, 'gremion-ui')
+  assert.match(block, /environment:/, 'the guard sees the gremion-ui environment block')
+  assert.doesNotMatch(block, /AUTH_KEYCLOAK_ISSUER/)
+  assert.doesNotMatch(block, /AUTH_KEYCLOAK_BASE/)
+}
+
+test('gremion-ui environment of docker-compose.app.yml carries no AUTH_KEYCLOAK_ISSUER / AUTH_KEYCLOAK_BASE (#87)', () => {
+  assertNoIssuerKeys('docker-compose.app.yml')
+})
+
+test('gremion-ui environment of docker-compose.app.dev.yml carries no AUTH_KEYCLOAK_ISSUER / AUTH_KEYCLOAK_BASE (#87)', () => {
+  assertNoIssuerKeys('docker-compose.app.dev.yml')
+})

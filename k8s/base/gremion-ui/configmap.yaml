@@ -34,8 +34,8 @@ data:
   # for the control plane even if one is added for the data plane.
   CONTROL_DATABASE_URL: "postgresql://control:__CONTROL_DB_PASSWORD__@postgres:5432/control"
 
-  # Auth
-  AUTH_KEYCLOAK_ISSUER: "https://stura.example.com/auth/realms/gremion"
+  # Auth. The issuer comes from the tenant row; gremion-ui reads no
+  # AUTH_KEYCLOAK_ISSUER (#87).
   # P2.1c T1 (#202): Docker-internal/in-cluster issuer URL for server-to-server
   # OIDC (token/userinfo/jwks/refresh). Previously unset under k8s, so those
   # calls fell back to the PUBLIC issuer and left the cluster. Same http

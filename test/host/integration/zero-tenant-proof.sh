@@ -183,7 +183,10 @@ phase_up() {
     step "app ($APP_IMG, restart unless-stopped, compose healthcheck)"
     local issuer_env=()
     if [ "${PROOF_WITH_ISSUER:-0}" = "1" ]; then
-        # RED-matrix run of the pre-change base only (see header).
+        # RED-matrix run of the pre-change base only (see header). That base
+        # predates TASK-042 and still reads the key, so it gets a real value
+        # here; the green proof never sets it, which is the host-install shape
+        # (#87).
         issuer_env=(-e "AUTH_KEYCLOAK_ISSUER=http://$APEX/auth/realms/gremion"
             -e "AUTH_KEYCLOAK_INTERNAL=http://keycloak:8080/auth/realms/gremion"
             -e CONFIG_PATH=/data/default-config/config.json)

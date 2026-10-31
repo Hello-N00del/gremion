@@ -1506,7 +1506,6 @@ jobs:
       AUTH_SECRET: test-secret-for-ci-32-chars-minimum
       AUTH_KEYCLOAK_ID: gremion-ui
       AUTH_KEYCLOAK_SECRET: test-secret
-      AUTH_KEYCLOAK_ISSUER: http://localhost/realms/gremion
       CALDAV_URL: http://localhost/remote.php/dav
       DATABASE_URL: postgres://gremion:gremion_test@localhost:5432/gremion
       # ── Multi-tenant control plane (#285 / G-099) ──────────────────────────
