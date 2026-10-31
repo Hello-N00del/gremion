@@ -206,8 +206,9 @@ describe('0001_gov_setup.sql on a fresh governance database', () => {
     }
     const left = await owner.begin(async (tx) => {
       await tx`SELECT set_config('gremion.customer_id', ${X}, true)`
-      return tx`SELECT count(*)::text AS n FROM gov.meeting`
+      const rows = await tx<{ n: string }[]>`SELECT count(*)::text AS n FROM gov.meeting`
+      return Number(rows[0]?.n)
     })
-    expect(Number((left as { n: string }[])[0]?.n)).toBe(0)
+    expect(left).toBe(0)
   })
 })

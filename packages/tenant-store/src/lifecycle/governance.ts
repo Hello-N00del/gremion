@@ -13,8 +13,9 @@
 // CONNECT on a governance database goes only to that customer's three roles.
 import type { Sql } from '@gremion/db'
 import { assertTenantId, tenantModuleDbName } from '../names.js'
+import { hasControlChar, runMigrations } from '../runner.js'
 import { execFormatted, sqlState } from './ddl.js'
-import { lockDownDatabase } from './enable.js'
+import { lockDownDatabase, openAsOwner } from './enable.js'
 import { LifecycleError, NEVER_OPENED } from './guards.js'
 import { asAdminIn } from './kernel.js'
 import { scramSha256Verifier } from './scram.js'
@@ -252,4 +253,126 @@ export async function dropGovernanceDatabase(server: ModuleServer, tenantId: str
     if ((await readRole(server.admin, role)) !== null) await execFormatted(server.admin, 'DROP ROLE %I', [role])
   }
   return { dbName, dropped: owner !== null }
+}
+
+export interface MigrateGovernanceOptions {
+  /** The governance migrations directory (services/governance/migrations, holding manifest.json). */
+  dir: string
+  /** The release this run ships (ledger release_ref, 1-64 printable characters). */
+  releaseRef: string
+  log?: (line: string) => void
+}
+
+/**
+ * Applies the governance chain to the customer's governance database AS the
+ * customer's owner role (DV1: the server admin pool opened with startup role
+ * g_<hex32>_owner, the enableModule pattern). Every object is therefore owned
+ * by the owner, the app role is not a member of it, and the migration ledger
+ * (GOVERNANCE_LEDGER) is writable only by the owner. Idempotent: a second run
+ * applies nothing.
+ */
+export async function migrateGovernanceDatabase(
+  server: ModuleServer,
+  tenantId: string,
+  opts: MigrateGovernanceOptions,
+): Promise<{ applied: string[]; alreadyApplied: number }> {
+  const dbName = governanceDbName(tenantId)
+  const roles = governanceRoles(tenantId)
+  const ref = opts?.releaseRef
+  if (typeof ref !== 'string' || ref.length < 1 || ref.length > 64 || hasControlChar(ref)) {
+    throw new LifecycleError('INVALID_INPUT', 'releaseRef (the release this run ships) must be 1-64 printable characters')
+  }
+  const sql = await openAsOwner(server, dbName, roles.owner)
+  try {
+    const r = await runMigrations({ sql, dir: opts.dir, ledger: GOVERNANCE_LEDGER, releaseRef: ref, ...(opts.log ? { log: opts.log } : {}) })
+    return { applied: r.applied, alreadyApplied: r.alreadyApplied }
+  } finally {
+    await sql.end({ timeout: 5 })
+  }
+}
+
+/** gov.database_binding.tenant_token CHECK (SCHEMA 0.6). */
+const TENANT_TOKEN = /^[a-z][a-z0-9_]{2,39}$/
+
+/**
+ * Binds the database to its customer: one row in gov.database_binding
+ * (singleton). A row that already exists (this customer's, or ANOTHER's) is
+ * left alone: `inserted` is false and governancePostCondition reports whose
+ * row it is.
+ */
+export async function bindGovernanceDatabase(server: ModuleServer, tenant: { id: string; token: string }): Promise<{ inserted: boolean }> {
+  const dbName = governanceDbName(tenant?.id)
+  const roles = governanceRoles(tenant.id)
+  if (typeof tenant.token !== 'string' || !TENANT_TOKEN.test(tenant.token)) {
+    throw new LifecycleError('INVALID_INPUT', `tenant token ${JSON.stringify(tenant.token)} does not match ${TENANT_TOKEN.source}`)
+  }
+  const sql = await openAsOwner(server, dbName, roles.owner)
+  try {
+    const r = await sql`
+      INSERT INTO gov.database_binding (customer_id, tenant_token, context_code)
+      VALUES (${tenant.id}, ${tenant.token}, 'gov')
+      ON CONFLICT (singleton) DO NOTHING`
+    return { inserted: r.count > 0 }
+  } finally {
+    await sql.end({ timeout: 5 })
+  }
+}
+
+export interface GovernanceDbState {
+  binding: { customerId: string; tenantToken: string; contextCode: string } | null
+  ledger: { filename: string; sha256: string }[]
+  /** Tables of schema gov with a customer_id column (database_binding excepted) that lack ENABLE + FORCE row level security. */
+  unforcedRlsTables: string[]
+  /** Sorted roles holding CONNECT on the database; 'PUBLIC' for grantee 0. */
+  connectGrantees: string[]
+  currentDatabase: string
+}
+
+/**
+ * Reads the post-condition of the governance step FROM THE DATABASE, never from
+ * a runner's return value: the binding row, the ledger, the row level security
+ * flags, the CONNECT list and where the pool really is. Runs as the server
+ * admin with every name pg_catalog-qualified (the owner may plant objects).
+ */
+export async function governancePostCondition(server: ModuleServer, tenantId: string): Promise<GovernanceDbState> {
+  const dbName = governanceDbName(tenantId)
+  const grants = await server.admin<{ grantee: string }[]>`
+    SELECT CASE WHEN x.grantee = 0 THEN 'PUBLIC' ELSE g.rolname END AS grantee
+      FROM pg_catalog.pg_database d
+     CROSS JOIN LATERAL pg_catalog.aclexplode(d.datacl) x
+      LEFT JOIN pg_catalog.pg_roles g ON g.oid = x.grantee
+     WHERE d.datname = ${dbName} AND x.privilege_type = 'CONNECT'`
+  const connectGrantees = [...new Set(grants.map((x) => x.grantee))].sort()
+  const db = await server.open(dbName)
+  try {
+    return await asAdminIn(db, async (tx) => {
+      const [who] = await tx<{ db: string }[]>`SELECT pg_catalog.current_database() AS db`
+      // an unmigrated database reports "no binding, empty ledger" (the step then fails naming it), it does not throw
+      const [have] = await tx<{ binding: boolean; ledger: boolean }[]>`
+        SELECT pg_catalog.to_regclass('gov.database_binding') IS NOT NULL AS binding, pg_catalog.to_regclass('gov.schema_migration') IS NOT NULL AS ledger`
+      const binding = have?.binding
+        ? await tx<{ customer_id: string; tenant_token: string; context_code: string }[]>`
+            SELECT customer_id::pg_catalog.text AS customer_id, tenant_token, context_code FROM gov.database_binding`
+        : []
+      const ledger = have?.ledger ? await tx<{ filename: string; sha256: string }[]>`SELECT filename, sha256 FROM gov.schema_migration ORDER BY filename` : []
+      const unforced = await tx<{ relname: string }[]>`
+        SELECT c.relname::pg_catalog.text AS relname
+          FROM pg_catalog.pg_class c
+          JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace AND n.nspname = 'gov'
+          JOIN pg_catalog.pg_attribute at ON at.attrelid = c.oid AND at.attname = 'customer_id' AND NOT at.attisdropped
+         WHERE c.relkind = 'r' AND c.relname <> 'database_binding'
+           AND NOT (c.relrowsecurity AND c.relforcerowsecurity)
+         ORDER BY 1`
+      const b = binding[0]
+      return {
+        binding: b ? { customerId: b.customer_id, tenantToken: b.tenant_token, contextCode: b.context_code } : null,
+        ledger: ledger.map((r) => ({ filename: r.filename, sha256: r.sha256 })),
+        unforcedRlsTables: unforced.map((r) => r.relname),
+        connectGrantees,
+        currentDatabase: who?.db ?? '',
+      }
+    })
+  } finally {
+    await db.end({ timeout: 5 })
+  }
 }
