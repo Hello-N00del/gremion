@@ -372,7 +372,10 @@ describe('the module Karenz on the scratch stack', () => {
       // enabling again while the restore is pending is a no-op, not an error
       expect(await enableModule(X, lcfixModule(), OPERATOR, lifecycleDeps(platform, server))).toMatchObject({ noop: true })
 
-      // the pass finishes the restore (Task 8 reports it through the council function); here the row is closed directly
+      // The pass finishes the restore by reporting the `restored` mark through plt.council_karenz_report; the
+      // council role does not exist in this harness, so the row is closed directly here. The real mark and the
+      // off, on, off sequence without any manual UPDATE are proven in packages/provisioning
+      // test/integration/karenz.int.test.ts ("switch off, on, off again, with no manual SQL").
       await platform`UPDATE plt.module_karenz SET state = 'restored', restored_at = now() WHERE karenz_id = ${id}`
       const second = await disableModule(X, lcfixModule(), OPERATOR, lifecycleDeps(platform, server))
       expect(second.karenz!.karenzId).not.toBe(id)

@@ -62,6 +62,15 @@
         "revoke"
       ],
       "reason": "Adds the blocked module database state: the old module_database_state_check cannot be widened without DROP CONSTRAINT and re-ADD (re-added NOT VALID and validated in the same file, so no unvalidated constraint remains), and REVOKE ALL ON FUNCTION .. FROM PUBLIC hardens the two SECURITY DEFINER council functions this same file creates (Postgres grants EXECUTE to PUBLIC by default). Same shape as the waivers of 0013 and 0014. The file sets lock_timeout first; module_database is a small control-plane table and the two new tables are created empty."
+    },
+    {
+      "chain": "platform",
+      "file": "0016_plt_karenz_report_mode.sql",
+      "sha256": "d9dbce484ac90a21fae9d4cbbf9aab2e031e08045f60102517775f724abd6624",
+      "rules": [
+        "or-replace"
+      ],
+      "reason": "Replaces the body of plt.council_karenz_report (created by 0015) to add one refusal: the tenant_done mark needs final_mode live. CREATE OR REPLACE keeps the owner and the ACL (EXECUTE for the council marker role, none for PUBLIC), so no grant is repeated, and the signature and return type are unchanged. Same shape as the waiver of 0014. The file sets lock_timeout first and touches no table definition."
     }
   ]
 }

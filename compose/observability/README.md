@@ -173,8 +173,8 @@ reads `plt.module_karenz` and `plt.module_karenz_event` and emits
 `gremion_module_karenz_live` (live rows, always, 0 when there are none),
 `gremion_module_karenz_failed{customer,module}` (a step whose newest event is an
 error), `gremion_module_karenz_stale{customer,module}` (no switch-off notice
-after 1 h, or a day-23 / day-29 reminder more than 2 h late: the tenant pass is
-not running) and, only while `KARENZ_FINAL_DELETION=on`,
+after 1 h, a day-23 / day-29 reminder more than 2 h late, or a restoring row that
+has waited over 1 h for its restored report: the tenant pass is not running) and, only while `KARENZ_FINAL_DELETION=on`,
 `gremion_module_karenz_overdue{customer,module}` (a row more than 6 h past
 `final_at`). An unreadable table drops `gremion_module_karenz_live`, and the
 `absent()` arm then fires, so a blind collector never reads as healthy.
