@@ -8,6 +8,7 @@ import { afterAll, describe, expect, it } from 'vitest'
 import { checkCatalogue, loadCatalogue } from '../src/catalogue.ts'
 import { COMPOSE_POSTGRES_LABEL, readCompose } from '../src/compose.ts'
 import {
+  buildCatalogueOps,
   deriveBackupServices,
   deriveColourGatedJobs,
   KERNEL_PLATFORM_DATABASES,
@@ -181,6 +182,42 @@ describe('platformDatabases(service) — a closed list', () => {
 
   it('compose.ts reads the same label runtime.ts names', () => {
     expect(COMPOSE_POSTGRES_LABEL).toBe(POSTGRES_LABEL)
+  })
+
+  // TASK-084-a: a dedicated service server (org.gremion.postgres=service:<id>), not a module's
+  const svcServer = (name: string, label: string | null, env: Record<string, string> = { POSTGRES_USER: 'governance', POSTGRES_DB: 'postgres' }) =>
+    [name, { name, postgresLabel: label, env }] as const
+  const withGovernance = (label: string | null = 'service:governance') => ({ services: new Map([...compose.services, svcServer('governance-postgres', label)]) })
+
+  it('platformDatabases accepts service:governance and returns exactly the server built-ins for governance-postgres (POSTGRES_DB: postgres)', () => {
+    expect(platformDatabases('governance-postgres', { compose: withGovernance(), catalogue: cat })).toEqual(['postgres', 'template0', 'template1'])
+  })
+
+  it('platformDatabases still throws for a label that is neither kernel, module:<id> nor service:<id>', () => {
+    for (const bad of ['sidecar:governance', 'service:', 'Service:governance', 'service:Governance']) {
+      expect(() => platformDatabases('governance-postgres', { compose: withGovernance(bad), catalogue: cat })).toThrow(/neither kernel, module:<id> nor service:<id>/)
+    }
+  })
+
+  it('deriveBackupServices(modules) with one argument is unchanged', () => {
+    expect(deriveBackupServices(cat)).toEqual(['postgres', 'alpha-postgres', 'beta-postgres', 'gamma-postgres'])
+  })
+
+  it('deriveBackupServices(modules, { compose }) lists a service server after the module servers, in compose order', () => {
+    const c = { services: new Map([...compose.services, svcServer('zeta-postgres', 'service:zeta', {}), svcServer('governance-postgres', 'service:governance')]) }
+    expect(deriveBackupServices(cat, { compose: c })).toEqual(['postgres', 'alpha-postgres', 'beta-postgres', 'gamma-postgres', 'zeta-postgres', 'governance-postgres'])
+  })
+
+  it('a service label with an uppercase or empty id is ignored, never listed', () => {
+    for (const bad of ['service:Governance', 'service:', 'service:1x', 'module:governance']) {
+      expect(deriveBackupServices(cat, { compose: withGovernance(bad) })).not.toContain('governance-postgres')
+    }
+  })
+
+  it('buildCatalogueOps carries the service server and its closed database list', () => {
+    const ops = buildCatalogueOps(cat, withGovernance())
+    expect(ops.backupPostgresServices.at(-1)).toBe('governance-postgres')
+    expect(ops.platformDatabases['governance-postgres']).toEqual(['postgres', 'template0', 'template1'])
   })
 
   it('an unknown or unlabelled service throws', () => {

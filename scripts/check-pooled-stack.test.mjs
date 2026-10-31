@@ -15,6 +15,7 @@ import assert from 'node:assert/strict'
 import { bindRefusesMissingHostDir } from './compose-edge.mjs'
 import {
   PLACEMENT,
+  SERVICE_POSTGRES_IDS,
   limitsViolations,
   statePurityViolations,
   appShapeViolations,
@@ -109,6 +110,12 @@ test('the synthetic good renders are clean under every rule (the RED cases below
 })
 
 // ── 1. limits (TRD-177) ────────────────────────────────────────────────────
+
+test('TASK-084-a: governance-postgres is a council-store on the state network only', () => {
+  assert.deepEqual([...SERVICE_POSTGRES_IDS], ['governance'])
+  assert.deepEqual(PLACEMENT.state['governance-postgres'], { class: 'council-store', networks: ['state'] })
+  assert.equal(PLACEMENT.app['governance-postgres'], undefined)
+})
 
 test('limits: a service without limits fails, by name, for memory and cpus', () => {
   const r = stateRender()

@@ -80,6 +80,8 @@ export const EVICT_IMPLEMENTERS = {
 }
 export const ONE_SHOTS = { migrate: 'migrate', 'tenant-create': 'tenant-create', 'kernel-api-migrate': 'kernel-api-migrate' }
 export const MODULE_POSTGRES_IDS = ['board', 'calendar', 'content', 'finance', 'newsletter', 'vault', 'messaging']
+/** TASK-084-a: dedicated service servers (governance-postgres), state-tier stores like the module servers. */
+export const SERVICE_POSTGRES_IDS = ['governance']
 /** The leaf services app.env.tmpl names (content-service ... vault-service). */
 export const LEAF_SERVICES = ['content', 'finance', 'files', 'votes', 'messages', 'newsletter', 'calendar', 'board', 'vault'].map(
   (l) => `${l}-service`,
@@ -101,6 +103,7 @@ export const PLACEMENT = {
   state: {
     postgres: store,
     ...Object.fromEntries(MODULE_POSTGRES_IDS.map((id) => [`${id}-postgres`, store])),
+    ...Object.fromEntries(SERVICE_POSTGRES_IDS.map((id) => [`${id}-postgres`, store])),
     pgbouncer: store,
     // TASK-024: the NATS broker is state-tier data (JetStream store) reached
     // only over ${STACK}_state by name, like the databases.
