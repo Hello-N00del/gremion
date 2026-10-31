@@ -1,0 +1,15 @@
+[Unit]
+Description=Run the Gremion module Karenz finalization hourly
+
+[Timer]
+# Hourly at minute 17 UTC: a Karenz row is due at its own final_at (switch-off
+# plus 30 days), so the day-30 job runs within an hour of that moment. The odd
+# minute keeps it clear of the :00 and :30 jobs (backup, purge, metrics).
+OnCalendar=*-*-* *:17:00 UTC
+# A host that was down at :17 runs on the next boot; the finalize rule only
+# acts on rows already due, so a late run does exactly what the missed one would.
+Persistent=true
+Unit=gremion-karenz.service
+
+[Install]
+WantedBy=timers.target

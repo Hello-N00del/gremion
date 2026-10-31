@@ -85,6 +85,7 @@ Stages:
                + gremion-footprint.timer (weekly, TRD-223)
                + gremion-purge.timer (daily, TRD-144/145)
                + gremion-access-purge.timer (daily, TRD-092)
+               + gremion-karenz.timer (hourly, module Karenz finalization)
   harden-ssh   key-only SSH   (RUN LAST, gated, not part of 'all')
   trust        pinned cosign + the release public key       (not part of 'all')
   signers      the release-tag signers file (allowed_signers) (not part of 'all')
@@ -1050,6 +1051,22 @@ stage_timers() {
     [[ -n "$pg_next" && "$pg_next" != "n/a" ]] \
         || die "gremion-purge.timer is enabled but has no next elapse"
     ok "gremion-purge.timer next elapse: ${pg_next}"
+
+    # Module switch-off Karenz: the hourly finalization run (karenz.sh, the
+    # `karenz-run` verb). Same two-argument render_unit. Like the purge, the
+    # service is NOT started here: it needs the platform chain at 0015 and an
+    # active colour, so a first run belongs after the first deploy (systemctl
+    # start gremion-karenz.service; with KARENZ_FINAL_DELETION=off it is a dry
+    # run that prints what it would delete).
+    render_unit gremion-karenz.service /etc/systemd/system/gremion-karenz.service
+    render_unit gremion-karenz.timer /etc/systemd/system/gremion-karenz.timer
+    systemctl daemon-reload
+    systemctl enable --now gremion-karenz.timer
+    local kz_next
+    kz_next="$(systemctl show gremion-karenz.timer -p NextElapseUSecRealtime --value)"
+    [[ -n "$kz_next" && "$kz_next" != "n/a" ]] \
+        || die "gremion-karenz.timer is enabled but has no next elapse"
+    ok "gremion-karenz.timer next elapse: ${kz_next}"
 }
 
 # ──────────────────────────────────────────────────────────────────────────
