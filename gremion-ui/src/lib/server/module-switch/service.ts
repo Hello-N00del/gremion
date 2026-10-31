@@ -128,7 +128,11 @@ function mapPlatformError(err: unknown): SwitchResult {
   const code = (err as { code?: unknown } | null)?.code
   if (code === '55006') return fail(409, 'IN_FLIGHT', 'Für diesen Mandanten läuft bereits eine Anfrage. Bitte warten, bis sie abgeschlossen ist.')
   if (code === '28000') return fail(401, 'STEP_UP_REQUIRED', 'Bitte erneut anmelden und die Zwei-Faktor-Prüfung wiederholen.')
-  if (code === '22023') return fail(422, 'INVALID', 'Die Anfrage wurde von der Plattform als ungültig abgelehnt.')
+  if (code === '22023') {
+    // The UI-side checks mirror the platform's, so this means the two have drifted: log the reason (never shown).
+    console.warn('[module-switch] platform rejected the input:', err instanceof Error ? err.message : err)
+    return fail(422, 'INVALID', 'Die Anfrage wurde von der Plattform als ungültig abgelehnt.')
+  }
   // The detail (hosts, SQL text) goes to the log, never to the browser.
   console.error('[module-switch] platform submit failed:', code ?? '', err instanceof Error ? err.message : err)
   return fail(503, 'PLATFORM_ERROR', 'Die Anfrage konnte nicht an die Plattform übergeben werden. Bitte später erneut versuchen.')
@@ -236,7 +240,8 @@ export async function submitModuleSwitch(ctx: SwitchContext, input: SwitchInput,
       newValue: `module=${moduleId} action=${action} request=${requestId}`,
     })
   } catch (err) {
-    console.error(`[module-switch] audit write failed for request ${requestId}:`, err instanceof Error ? err.message : err)
+    // The platform-side request row (it carries the acting person) is the fallback record of this switch.
+    console.error(`[module-switch] tenant audit write failed for request ${requestId}; the platform request row is the fallback record:`, err instanceof Error ? err.message : err)
   }
   return { ok: true, requestId }
 }

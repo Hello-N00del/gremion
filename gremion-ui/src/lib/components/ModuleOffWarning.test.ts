@@ -34,6 +34,21 @@ const confirmButton = () => screen.queryByRole('button', { name: 'Modul ausschal
 const typeInto = async (value: string) => fireEvent.input(screen.getByLabelText(/Namen des Moduls/), { target: { value } })
 
 describe('ModuleOffWarning.svelte', () => {
+  it('the cancel button is disabled while the confirm request is in flight', () => {
+    const preview = {
+      moduleId: 'votes',
+      moduleLabel: 'Abstimmungen',
+      confirmPhrase: 'Abstimmungen',
+      deletes: [],
+      retained: [],
+      graceDays: 30,
+      finalDeletionAt: null,
+      recoverable: true,
+    }
+    render(ModuleOffWarning, { props: { preview, busy: true, error: null, onconfirm: () => {}, oncancel: () => {} } })
+    expect((screen.getByRole('button', { name: 'Abbrechen' }) as HTMLButtonElement).disabled).toBe(true)
+  })
+
   it('with graceDays 30 renders the module label, every deletes item and the grace sentence', () => {
     const { container } = render(ModuleOffWarning, { props: props(preview()) })
     const text = container.textContent ?? ''

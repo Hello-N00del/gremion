@@ -37,7 +37,16 @@
   // The switch-off warning (phase 2 reaches it; phase 1 renders the control inert).
   let warning = $state<{ preview: ModuleDeletionPreview; busy: boolean; error: string | null } | null>(null)
 
+  // The last refresh failed after a good one: the list on screen may be out of date.
+  let stale = $state(false)
+
   const pending = $derived(overview?.modules.some((m) => m.pending.length > 0) ?? false)
+
+  function refreshFailed(why: unknown): void {
+    if (overview === null) load = 'error'
+    else stale = true
+    console.warn('[settings/modules] refresh failed:', why)
+  }
 
   async function refresh(): Promise<void> {
     try {
@@ -48,14 +57,16 @@
         return
       }
       if (!res.ok || !body?.success) {
-        // A poll that fails keeps the last good list; only the first load turns into an error.
-        if (overview === null) load = 'error'
+        // A poll that fails keeps the last good list (flagged as possibly out of date); only the first
+        // load turns into an error.
+        refreshFailed(res.status)
         return
       }
       overview = body.data as ModuleOverview
       load = 'ready'
-    } catch {
-      if (overview === null) load = 'error'
+      stale = false
+    } catch (err) {
+      refreshFailed(err instanceof Error ? err.message : err)
     }
   }
 
@@ -151,15 +162,17 @@
 
   async function confirmDisable(typed: string) {
     if (!warning) return
-    const { moduleId } = warning.preview
-    warning = { ...warning, busy: true, error: null }
+    const current = warning
+    const { moduleId } = current.preview
+    warning = { ...current, busy: true, error: null }
     const r = await send({ moduleId, action: 'disable', confirm: typed })
     if (r.ok) {
       warning = null
       await refresh()
     } else if (r.code === 'STEP_UP_REQUIRED') {
       navigate(STEP_UP)
-    } else {
+    } else if (warning && warning.preview.moduleId === moduleId) {
+      // Re-check after the await: the warning may have been closed meanwhile; never rebuild it from null.
       warning = { ...warning, busy: false, error: r.text }
     }
   }
@@ -180,7 +193,10 @@
     </p>
   {:else}
     {#if overview.problem}
-      <p class="text-sm text-ink-muted">{overview.problem}</p>
+      <p role="status" class="text-sm text-ink-muted">{overview.problem}</p>
+    {/if}
+    {#if stale}
+      <p role="status" class="text-sm text-ink-muted">{$t('settings.modules.stale')}</p>
     {/if}
 
     <ul class="space-y-3" aria-label={$t('settings.modules.list')}>
@@ -218,7 +234,7 @@
           </div>
 
           {#if request}
-            <ModuleSwitchNotice moduleLabel={m.label} action={request.action} state={request.state} />
+            <ModuleSwitchNotice moduleLabel={m.label} action={request.action} state={request.state} outcome={m.lastFailure} />
           {:else if m.lastFailure}
             <ModuleSwitchNotice moduleLabel={m.label} action="enable" state="failed" outcome={m.lastFailure} />
           {/if}

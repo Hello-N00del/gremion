@@ -191,6 +191,70 @@ describe('TabModules.svelte', () => {
     expect(calls.find((c) => c.method === 'POST')!.body).toEqual({ moduleId: 'votes', action: 'disable', confirm: 'Abstimmungen' })
   })
 
+  it('an applying request that carries a config error shows that error, not only the running notice', async () => {
+    fetchDouble([
+      ok(
+        overview([
+          item({ pending: [{ requestId: 'r1', action: 'enable', state: 'applying' }], lastFailure: 'config.json not writable' }),
+        ]),
+      ),
+    ])
+    render(TabModules, { props: { pollMs: 10_000 } })
+    expect(await screen.findByText('Anfrage wird ausgeführt')).toBeTruthy()
+    const alert = await screen.findByRole('alert')
+    expect(alert.textContent).toContain('config.json not writable')
+  })
+
+  it('a failed refresh after the first load says the list may be out of date, and clears on the next good one', async () => {
+    const good = ok(overview([item({ pending: [{ requestId: 'r1', action: 'enable', state: 'queued' }] })]))
+    const { calls } = fetchDouble([good, () => reply(500, { success: false }), good])
+    render(TabModules, { props: { pollMs: 15 } })
+    expect(await screen.findByText('Anfrage wird ausgeführt')).toBeTruthy()
+    expect(await screen.findByText(/nicht aktualisiert werden/)).toBeTruthy()
+    await waitFor(() => expect(screen.queryByText(/nicht aktualisiert werden/)).toBeNull())
+    expect(getCount(calls)).toBeGreaterThanOrEqual(3)
+  })
+
+  it('cancelling the switch-off warning while the disable request is in flight does not crash the tab when it fails', async () => {
+    const preview = {
+      moduleId: 'votes',
+      moduleLabel: 'Abstimmungen',
+      confirmPhrase: 'Abstimmungen',
+      deletes: [{ key: 'all', label: 'Abstimmungen-Daten', count: null, unit: '' }],
+      retained: [],
+      graceDays: 30,
+      finalDeletionAt: null,
+      recoverable: true,
+    }
+    let release: (r: Response) => void = () => {}
+    const slowPost = new Promise<Response>((r) => (release = r))
+    let n = 0
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_url: string, init?: RequestInit) => {
+        if (init?.method === 'POST') return slowPost
+        return n++ === 0 ? ok(overview([item({ enabled: true })], { disableAvailable: true })) : n === 2 ? ok(preview) : ok(overview([item({ enabled: true })], { disableAvailable: true }))
+      }),
+    )
+    render(TabModules, { props: { pollMs: 10_000 } })
+    await fireEvent.click(await screen.findByRole('button', { name: 'Ausschalten' }))
+    await screen.findByRole('alertdialog')
+    await fireEvent.input(screen.getByLabelText(/Namen des Moduls/), { target: { value: 'Abstimmungen' } })
+    await fireEvent.click(screen.getByRole('button', { name: 'Modul ausschalten' }))
+    // while the request is out the dialog cannot be closed from under it
+    const cancel = screen.getByRole('button', { name: 'Abbrechen' }) as HTMLButtonElement
+    expect(cancel.disabled).toBe(true)
+    // jsdom still runs the handler of a disabled button on a synthetic click: this is the race itself
+    // (the dialog closed while the request is out), so the late refusal must not rebuild a closed dialog
+    await fireEvent.click(cancel)
+    release(reply(409, { success: false, code: 'IN_FLIGHT', error: 'Für diesen Mandanten läuft bereits eine Anfrage.' }))
+    await new Promise((r) => setTimeout(r, 50))
+    // the tab is still alive and renders the list
+    expect(screen.getByTestId('tab-modules')).toBeTruthy()
+    expect(screen.getByText('Abstimmungen')).toBeTruthy()
+    expect(screen.queryByRole('alertdialog')).toBeNull()
+  })
+
   it('a denied module is listed with its reason and offers no switch', async () => {
     fetchDouble([ok(overview([item({ moduleId: 'board', label: 'Gremium', denied: 'it is not tenant-isolated yet' })]))])
     render(TabModules, { props: { pollMs: 10_000 } })

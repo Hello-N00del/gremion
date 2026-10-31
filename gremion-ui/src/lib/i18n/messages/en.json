@@ -151,6 +151,7 @@
   "settings.modules.intro": "Switch feature modules on for your body here. Every change is sent to the platform as a request and carried out without any further approval by the operator.",
   "settings.modules.loading": "Loading modules …",
   "settings.modules.loadError": "The modules could not be loaded.",
+  "settings.modules.stale": "The status could not be refreshed. What you see may be out of date.",
   "settings.modules.notConfigured": "Module switches are not configured.",
   "settings.modules.list": "Modules",
   "settings.modules.state.on": "Switched on",

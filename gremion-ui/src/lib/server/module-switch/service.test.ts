@@ -330,7 +330,11 @@ describe('the platform submit', () => {
     platform.submit = async () => {
       throw Object.assign(new Error('invalid customer slug'), { code: '22023' })
     }
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     expect(await submitModuleSwitch(ctx(), { moduleId: 'votes', action: 'enable', dpia }, deps())).toMatchObject({ ok: false, status: 422, code: 'INVALID' })
+    // a 22023 means the UI-side checks and the platform have drifted: the platform's reason is logged
+    expect(warn.mock.calls.flat().join(' ')).toContain('invalid customer slug')
+    warn.mockRestore()
     platform.submit = async () => {
       throw Object.assign(new Error('connection to postgres-blue at 10.0.0.5 refused'), { code: 'ECONNREFUSED' })
     }

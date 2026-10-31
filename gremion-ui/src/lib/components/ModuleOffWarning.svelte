@@ -94,7 +94,7 @@
     {/if}
 
     <div class="flex justify-end gap-2">
-      <Button variant="outline" onclick={oncancel}>{$t('settings.modules.warn.cancel')}</Button>
+      <Button variant="outline" disabled={busy} onclick={oncancel}>{$t('settings.modules.warn.cancel')}</Button>
       <Button variant="destructive" disabled={busy || !matches} onclick={() => onconfirm(typed)}>
         {$t('settings.modules.warn.confirm')}
       </Button>

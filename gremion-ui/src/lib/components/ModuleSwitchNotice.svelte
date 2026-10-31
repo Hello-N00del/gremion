@@ -30,9 +30,14 @@
     <p class="mt-1">{outcome ?? $t('settings.modules.notice.failedNoReason')}</p>
   </div>
 {:else if running}
-  <p role="status" class="rounded-md border border-border bg-surface-2 px-3 py-2 text-sm text-ink-muted">
-    {$t('settings.modules.notice.running')}
-  </p>
+  <div class="space-y-1 rounded-md border border-border bg-surface-2 px-3 py-2 text-sm">
+    <p role="status" class="text-ink-muted">{$t('settings.modules.notice.running')}</p>
+    <!-- A request that is still applying can carry an error (for example the platform accepted it but the
+         host could not write the config): that text must not stay hidden behind the neutral line. -->
+    {#if outcome}
+      <p role="alert" class="font-medium text-rust-ink">{outcome}</p>
+    {/if}
+  </div>
 {:else}
   <div role="status" class="rounded-md border border-green-500/40 bg-green-50 px-3 py-2 text-sm text-green-800">
     <p>{fillText($t(action === 'enable' ? 'settings.modules.notice.on' : 'settings.modules.notice.off'), { module: moduleLabel })}</p>

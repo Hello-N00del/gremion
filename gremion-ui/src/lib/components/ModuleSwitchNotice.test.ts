@@ -13,6 +13,12 @@ describe('ModuleSwitchNotice.svelte', () => {
     expect(screen.queryByRole('alert')).toBeNull()
   })
 
+  it('an applying request with an error text shows that text in role=alert next to the running line', () => {
+    render(ModuleSwitchNotice, { props: { ...base, state: 'applying', outcome: 'config.json not writable' } })
+    expect(screen.getByRole('status').textContent).toContain('Anfrage wird ausgeführt')
+    expect(screen.getByRole('alert').textContent).toContain('config.json not writable')
+  })
+
   it('applied enable: "Modul Abstimmungen ist eingeschaltet" in role=status', () => {
     render(ModuleSwitchNotice, { props: { ...base, state: 'applied' } })
     expect(screen.getByRole('status').textContent).toContain('Modul Abstimmungen ist eingeschaltet')

@@ -151,6 +151,7 @@
   "settings.modules.intro": "Hier schalten Sie Funktionsmodule für Ihr Gremium ein. Jede Änderung wird als Anfrage an die Plattform gestellt und ohne weitere Freigabe des Betreibers ausgeführt.",
   "settings.modules.loading": "Module werden geladen …",
   "settings.modules.loadError": "Die Module konnten nicht geladen werden.",
+  "settings.modules.stale": "Der Stand konnte nicht aktualisiert werden. Die Anzeige kann veraltet sein.",
   "settings.modules.notConfigured": "Modulschalter nicht konfiguriert.",
   "settings.modules.list": "Module",
   "settings.modules.state.on": "Eingeschaltet",
