@@ -21,7 +21,7 @@ const relayStamp = (w: ReturnType<typeof world>, realm: string, over: Partial<Re
 }
 
 describe('relay mode: the mail step records mail_principal_issued from the relay stamp', () => {
-  it('a relay-stamped realm passes the post-condition and the ledger completes 8/8 with no principal anywhere', async () => {
+  it('a relay-stamped realm passes the post-condition and the ledger completes 9/9 with no principal anywhere', async () => {
     const w = world()
     const d = { ...deps(w, ['calendar']), mailSender: RELAY }
     const a = await createPhaseA(spec(), d)
@@ -29,7 +29,7 @@ describe('relay mode: the mail step records mail_principal_issued from the relay
     await recordHostStep('musterstadt', 'mail_principal_issued', OPERATOR, d)
     await createPhaseB(spec(), d)
     const done = (await d.ledger.rows(a.customer.id)).filter((r) => r.status === 'done')
-    expect(done).toHaveLength(8)
+    expect(done).toHaveLength(9)
     expect(done.map((r) => r.kind)).toContain('mail_principal_issued')
     // the realm sends as the relay sender, never as kc-<token>@
     expect(w.realms.get(a.customer.realm)!.smtp.user).not.toMatch(/^kc-/)

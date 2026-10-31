@@ -1,6 +1,7 @@
-// packages/provisioning/src/steps.ts — the eight provisioning step kinds of
+// packages/provisioning/src/steps.ts — the nine provisioning step kinds of
 // plt.provisioning_step (SCHEMA DB-PLT-PROVISIONING-STEP verbatim, plus two
-// appended kinds: Q2's named deviation) and the ONE order they execute in.
+// appended kinds: Q2's named deviation, and governance_database_created:
+// TASK-084-a, O-15 answered as two steps) and the ONE order they execute in.
 //
 // step_order is the column SCHEMA generates from the kind; it is NOT the
 // execution order. The broker account (7) and the mail principal (8) must
@@ -19,6 +20,7 @@ export const STEP_ORDER = Object.freeze({
   first_accounts_created: 6,
   broker_account_created: 7,
   mail_principal_issued: 8,
+  governance_database_created: 9,
 } as const)
 
 export type StepKind = keyof typeof STEP_ORDER
@@ -27,6 +29,7 @@ export type StepStatus = 'pending' | 'done' | 'failed'
 export const EXECUTION_ORDER: readonly StepKind[] = Object.freeze([
   'realm_created',
   'database_created',
+  'governance_database_created',
   'domain_bound',
   'storage_prefix_reserved',
   'first_body_created',
@@ -46,6 +49,7 @@ export const PHASES: Readonly<Record<Phase, readonly StepKind[]>> = Object.freez
   a: Object.freeze([
     'realm_created',
     'database_created',
+    'governance_database_created',
     'domain_bound',
     'storage_prefix_reserved',
     'first_body_created',
@@ -61,7 +65,7 @@ export function isStepKind(value: unknown): value is StepKind {
   return typeof value === 'string' && Object.hasOwn(STEP_ORDER, value)
 }
 
-/** "completed" = every one of the eight kinds has a done row (Q2). */
+/** "completed" = every one of the nine kinds has a done row (Q2, TASK-084-a). */
 export function isComplete(done: ReadonlySet<StepKind>): boolean {
   return EXECUTION_ORDER.every((k) => done.has(k))
 }

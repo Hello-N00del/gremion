@@ -54,6 +54,99 @@ async function refusal(p: Promise<unknown>): Promise<EnableRefused> {
   throw new Error('expected an EnableRefused')
 }
 
+describe('governance_database_created (TASK-084-a)', () => {
+  const gov = (w: ReturnType<typeof world>) => w.mutations.filter((m) => m.startsWith('governance:'))
+
+  it('phase A runs governance after the kernel database and before the domain', async () => {
+    const w = world()
+    const a = await createPhaseA(spec(), deps(w))
+    const id = a.customer.id
+    const at = (m: string) => w.mutations.indexOf(m)
+    expect(at(`pg:migrate-kernel ${id}`)).toBeGreaterThan(-1)
+    expect(at(`pg:migrate-kernel ${id}`)).toBeLessThan(at(`governance:ensure ${id}`))
+    expect(at(`governance:ensure ${id}`)).toBeLessThan(at(`governance:migrate ${id}`))
+    expect(at(`governance:migrate ${id}`)).toBeLessThan(at(`governance:bind ${id}`))
+    const domain = w.mutations.findIndex((m, i) => i > at(`governance:bind ${id}`) && m.startsWith('ledger:domain_bound'))
+    expect(domain).toBeGreaterThan(at(`governance:bind ${id}`))
+  })
+
+  it('a kill after database_created resumes at governance_database_created', async () => {
+    const w = world()
+    const d = deps(w)
+    d.hooks = {
+      afterStep: (k) => {
+        if (k === 'database_created') throw new Error('killed')
+      },
+    }
+    await expect(createPhaseA(spec(), d)).rejects.toThrow('killed')
+    expect(gov(w)).toEqual([])
+    const d2 = deps(w)
+    const again = await createPhaseA(spec(), { ...d2, ledger: d.ledger })
+    expect(again.run.skipped).toEqual(expect.arrayContaining(['realm_created', 'database_created']))
+    expect(again.run.ran[0]).toBe('governance_database_created')
+  })
+
+  it('a rerun over a complete customer makes zero mutating calls in the governance adapter', async () => {
+    const w = world()
+    const d = deps(w)
+    await createAll(w, d)
+    const snapshot = w.mutations.length
+    const id = [...w.governance.keys()][0]!
+    const rows = (await d.ledger.rows(id)).length
+    await createPhaseA(spec(), d)
+    await createPhaseB(spec(), d)
+    expect(w.mutations.slice(snapshot).filter((m) => m.startsWith('governance:'))).toEqual([])
+    expect((await d.ledger.rows(id)).length).toBe(rows)
+  })
+
+  it('a customer with the eight earlier kinds done gets only kind 9 from one new create', async () => {
+    const w = world()
+    const d = deps(w)
+    await createAll(w, d)
+    const id = [...w.governance.keys()][0]!
+    // the customer as it was before this unit: its governance database and its ninth ledger row never existed
+    const before = (await d.ledger.rows(id)).filter((r) => r.kind !== 'governance_database_created')
+    const d2 = deps(w)
+    for (const r of before) await d2.ledger.append(id, r.kind, r.status, r.operatorId ?? null)
+    w.governance.delete(id)
+    w.mutations.length = 0
+    const a = await createPhaseA(spec(), d2)
+    expect(a.run.ran).toEqual(['governance_database_created'])
+    expect(a.run.skipped).toHaveLength(6)
+    expect(gov(w)).toEqual([`governance:ensure ${id}`, `governance:migrate ${id}`, `governance:bind ${id}`])
+    const after = (await d2.ledger.rows(id)).filter((r) => r.kind !== 'governance_database_created')
+    expect(after.map((r) => `${r.kind}=${r.status}`)).toEqual(before.map((r) => `${r.kind}=${r.status}`))
+  })
+
+  it('a binding of another customer fails the step naming the condition', async () => {
+    const w = world()
+    const other = '01927f00-0000-7000-8000-0000000000ff'
+    w.knobs.governanceBindsTo = other
+    const d = deps(w)
+    const err = (await createPhaseA(spec(), d).catch((e) => e)) as ProvisioningError
+    expect(err).toBeInstanceOf(ProvisioningError)
+    expect(err.code).toBe('POSTCONDITION')
+    expect(err.message).toContain('database_binding')
+    expect(err.message).toContain(other)
+    const id = [...w.governance.keys()][0]!
+    const rows = await d.ledger.rows(id)
+    expect(rows.filter((r) => r.kind === 'governance_database_created').map((r) => r.status)).toEqual(expect.arrayContaining(['failed']))
+    expect(rows.some((r) => r.kind === 'governance_database_created' && r.status === 'done')).toBe(false)
+  })
+
+  it.each([
+    ['an unmigrated ledger', { ledger: [] }, 'ledger'],
+    ['a shipped file with a different sha256', { ledger: [{ filename: '0001_gov_setup.sql', sha256: 'b'.repeat(64) }] }, 'sha256'],
+    ['an unforced table', { unforcedRlsTables: ['meeting'] }, 'row level security'],
+    ['a PUBLIC CONNECT', { connectGrantees: ['PUBLIC', 'x'] }, 'PUBLIC'],
+    ['the wrong current database', { currentDatabase: 'postgres' }, 'database'],
+  ] as const)('each post-condition arm fails alone: %s', async (_label, over, stem) => {
+    const w = world()
+    w.knobs.governancePc = over as never
+    await expect(createPhaseA(spec(), deps(w))).rejects.toMatchObject({ code: 'POSTCONDITION', message: expect.stringContaining(stem) })
+  })
+})
+
 describe('create (phases A, host, B)', () => {
   it('provisions every resource, in EXECUTION_ORDER, and ends active with setup complete', async () => {
     const w = world()
@@ -61,7 +154,7 @@ describe('create (phases A, host, B)', () => {
     const { a, b } = await createAll(w, d)
     const c = a.customer
     expect(c.token).toBe('musterstadt')
-    expect(a.run.ran).toEqual(EXECUTION_ORDER.slice(0, 6))
+    expect(a.run.ran).toEqual(EXECUTION_ORDER.slice(0, 7))
     expect(b.run.ran).toEqual(['first_accounts_created'])
     const done = w.mutations.filter((x) => x.startsWith('ledger:') && x.endsWith('=done')).map((x) => x.slice(7, -5))
     expect(done).toEqual(EXECUTION_ORDER)
@@ -156,13 +249,13 @@ describe('create (phases A, host, B)', () => {
   })
 
   // G6 (operator decision 2026-10-21: feature modules are deselectable, the kernel works without them)
-  it('G6 module OFF: a create with enable [] reaches active with the ledger complete (8/8) and touches no module at all', async () => {
+  it('G6 module OFF: a create with enable [] reaches active with the ledger complete (9/9) and touches no module at all', async () => {
     const w = world()
     const d = deps(w)
     const { b } = await createAll(w, d, spec({ enable: [], dpia: {} }))
     const done = w.mutations.filter((x) => x.startsWith('ledger:') && x.endsWith('=done')).map((x) => x.slice(7, -5))
     expect(done).toEqual(EXECUTION_ORDER)
-    expect(done).toHaveLength(8)
+    expect(done).toHaveLength(9)
     expect(w.control.get('musterstadt')?.status).toBe('active')
     expect(b.activated).toBe(true)
     expect(b.enabled).toEqual([])
@@ -170,11 +263,11 @@ describe('create (phases A, host, B)', () => {
     expect(w.broker.get('musterstadt')).toEqual(['kernel'])
   })
 
-  it('G6 module subset: votes and calendar only are enabled, nothing else, and the ledger is still 8/8; board is refused BY NAME with no write', async () => {
+  it('G6 module subset: votes and calendar only are enabled, nothing else, and the ledger is still 9/9; board is refused BY NAME with no write', async () => {
     const w = world()
     const { b } = await createAll(w, deps(w), spec({ enable: ['votes', 'calendar'] }))
     expect(b.enabled).toEqual(['calendar', 'votes'])
-    expect(w.mutations.filter((x) => x.startsWith('ledger:') && x.endsWith('=done'))).toHaveLength(8)
+    expect(w.mutations.filter((x) => x.startsWith('ledger:') && x.endsWith('=done'))).toHaveLength(9)
     const w2 = world()
     const before = w2.mutations.length
     await expect(createPhaseA(spec({ enable: ['board'] }), deps(w2))).rejects.toMatchObject({ code: 'MODULE_DENIED', message: expect.stringContaining('board') })

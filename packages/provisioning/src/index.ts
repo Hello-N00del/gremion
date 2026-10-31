@@ -83,6 +83,8 @@ export type {
   DpiaSpec,
   FirstBodyPort,
   GatePort,
+  GovernanceDbPort,
+  GovernancePostCondition,
   KernelDbPort,
   KernelPostCondition,
   MailStampExpectation,
