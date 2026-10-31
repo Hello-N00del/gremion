@@ -43,7 +43,7 @@ export async function notifyModuleSwitchListeners(e: ModuleSwitchEvent): Promise
     try {
       await l(e)
     } catch (err) {
-      console.error(`[module-switch] listener failed for request ${e.requestId} (${e.action} ${e.moduleId} ${e.outcome}):`, err instanceof Error ? err.message : err)
+      console.error(`[module-switch] listener failed for request ${e.requestId} (${e.action} ${e.moduleId} ${e.outcome}):`, err)
     }
   }
 }

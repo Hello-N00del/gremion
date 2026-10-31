@@ -31,18 +31,19 @@ const R2 = '33333333-3333-4333-8333-333333333332'
 const R3 = '33333333-3333-4333-8333-333333333333'
 const T0 = Date.parse('2026-10-31T10:00:00Z')
 const tenant = { id: TENANT_ID, slug: 'rat-a', db: { tenantDb: true } } as unknown as TenantContext
+const freshState = (): ReconcilerState => ({ aligned: new Set(), sweptAt: new Map(), alignRetryAt: new Map(), migrateOwed: new Set() })
 
 /** In-memory module_switch_request with the claim semantics of store.ts (atomic steps, DB-clock lease). */
 class FakeStore implements ReconcilerStore {
   rows = new Map<string, SwitchRow>()
   clock = T0
-  async insertSwitch(_db: unknown, row: { requestId: string; moduleId: string; action: 'enable' | 'disable'; actorUserId: string; state?: SwitchState }) {
+  async insertSwitch(_db: unknown, row: { requestId: string; moduleId: string; action: 'enable' | 'disable'; actorUserId: string; state?: SwitchState; submittedAt?: Date }) {
     this.rows.set(row.requestId, {
       requestId: row.requestId,
       moduleId: row.moduleId,
       action: row.action,
       actorUserId: row.actorUserId,
-      submittedAt: new Date(this.clock),
+      submittedAt: row.submittedAt ?? new Date(this.clock),
       state: row.state ?? 'queued',
       outcome: null,
       configError: null,
@@ -57,7 +58,11 @@ class FakeStore implements ReconcilerStore {
   }
   async pendingSwitches() {
     await Promise.resolve()
-    return [...this.rows.values()].filter((r) => ['queued', 'succeeded', 'applying'].includes(r.state)).map((r) => ({ ...r }))
+    // oldest submission first, like store.ts (ORDER BY submitted_at ASC)
+    return [...this.rows.values()]
+      .filter((r) => ['queued', 'succeeded', 'applying'].includes(r.state))
+      .toSorted((a, b) => a.submittedAt.getTime() - b.submittedAt.getTime())
+      .map((r) => ({ ...r }))
   }
   async updateSwitch(_db: unknown, requestId: string, patch: Partial<SwitchRow>) {
     const r = this.rows.get(requestId)
@@ -155,7 +160,7 @@ function rig(): Rig {
       return r.platform.state
     },
   }
-  const state: ReconcilerState = { aligned: new Set(), swept: new Set(), alignRetryAt: new Map() }
+  const state: ReconcilerState = freshState()
   r.deps = () => ({
     council: () => council,
     store,
@@ -357,6 +362,36 @@ describe('adoption', () => {
     expect(r.events).toEqual([])
   })
 
+  it('a request that appears on the platform after the first sweep (a failed tenant-side insert while the process runs) is adopted and applied by a later pass, with no other row pending', async () => {
+    const deps = r.deps()
+    await runModuleSwitchPass(tenant, deps) // the first sweep: nothing there yet
+    expect(r.store.rows.size).toBe(0)
+    r.platform.requests = [req(R1)] // the platform accepted it; the tenant-side insert failed
+    r.store.clock += 10_000
+    const soon = await runModuleSwitchPass(tenant, deps)
+    expect(soon.adopted).toBe(0) // inside the sweep interval: still no platform call
+    r.store.clock += 5 * 60_000
+    const later = await runModuleSwitchPass(tenant, deps)
+    expect(later).toEqual({ applied: 1, failed: 0, adopted: 1 })
+    expect(r.store.rows.get(R1)!.state).toBe('applied')
+    expect(r.writes).toEqual([{ votes: true }])
+    expect(r.events.map((e) => e.requestId)).toEqual([R1])
+  })
+
+  it('adopted requests keep the platform creation time, so they are applied oldest first and the newest request wins', async () => {
+    // The platform lists newest first. An enable, then a later disable of the same module.
+    r.platform.requests = [
+      req(R2, { kind: 'disable_module', created_at: new Date(T0 + 60_000), finished_at: new Date(T0 + 61_000) }),
+      req(R1, { created_at: new Date(T0), finished_at: new Date(T0 + 1000) }),
+    ]
+    const out = await runModuleSwitchPass(tenant, r.deps())
+    expect(out).toEqual({ applied: 2, failed: 0, adopted: 2 })
+    expect(r.store.rows.get(R1)!.submittedAt).toEqual(new Date(T0))
+    expect(r.store.rows.get(R2)!.submittedAt).toEqual(new Date(T0 + 60_000))
+    expect(r.writes).toEqual([{ votes: true }, { votes: false }])
+    expect(r.config.modules.votes).toBe(false)
+  })
+
   it('a request without a module is adopted as refused too', async () => {
     r.platform.requests = [req(R1, { module: null })]
     await runModuleSwitchPass(tenant, r.deps())
@@ -389,7 +424,7 @@ describe('listeners', () => {
     await runModuleSwitchPass(tenant, deps)
     await runModuleSwitchPass(tenant, deps)
     // a restarted process: fresh per-process state, same tenant table
-    const restarted: Partial<ReconcilerDeps> = { ...r.deps(), state: { aligned: new Set(), swept: new Set(), alignRetryAt: new Map() } }
+    const restarted: Partial<ReconcilerDeps> = { ...r.deps(), state: freshState() }
     await runModuleSwitchPass(tenant, restarted)
     expect(seen).toEqual([R1])
     expect(r.writes).toEqual([{ votes: true }])
@@ -398,7 +433,7 @@ describe('listeners', () => {
   it('two reconciler instances running a pass concurrently on one db apply a succeeded request once and call each listener once', async () => {
     r.store.seed({ requestId: R1 })
     r.platform.requests = [req(R1)]
-    const second: Partial<ReconcilerDeps> = { ...r.deps(), state: { aligned: new Set(), swept: new Set(), alignRetryAt: new Map() } }
+    const second: Partial<ReconcilerDeps> = { ...r.deps(), state: freshState() }
     const results = await Promise.all([runModuleSwitchPass(tenant, r.deps()), runModuleSwitchPass(tenant, second)])
     expect(results.map((x) => x.applied).toSorted((a, b) => a - b)).toEqual([0, 1])
     expect(r.writes).toEqual([{ votes: true }])
@@ -409,7 +444,7 @@ describe('listeners', () => {
   it('two reconcilers racing on a refused request notify once', async () => {
     r.store.seed({ requestId: R1 })
     r.platform.requests = [req(R1, { state: 'refused', outcome: 'GATE' })]
-    const second: Partial<ReconcilerDeps> = { ...r.deps(), state: { aligned: new Set(), swept: new Set(), alignRetryAt: new Map() } }
+    const second: Partial<ReconcilerDeps> = { ...r.deps(), state: freshState() }
     await Promise.all([runModuleSwitchPass(tenant, r.deps()), runModuleSwitchPass(tenant, second)])
     expect(r.events).toHaveLength(1)
     expect(r.store.rows.get(R1)!.state).toBe('refused')
@@ -448,14 +483,27 @@ describe('the notification claim', () => {
 })
 
 describe('platform calls and the first pass', () => {
-  it('with no pending rows the pass makes no platform call after the one-time alignment read', async () => {
+  it('with no pending rows the pass makes no platform call between the periodic adopting reads (after the one-time alignment read)', async () => {
     const deps = r.deps()
     await runModuleSwitchPass(tenant, deps)
     expect(r.calls.state).toBe(1)
     r.calls = { requests: 0, state: 0 }
+    r.store.clock += 10_000
     const out = await runModuleSwitchPass(tenant, deps)
     expect(out).toEqual({ applied: 0, failed: 0, adopted: 0 })
     expect(r.calls).toEqual({ requests: 0, state: 0 })
+    // the next adopting read is due after the sweep interval
+    r.store.clock += 5 * 60_000
+    await runModuleSwitchPass(tenant, deps)
+    expect(r.calls).toEqual({ requests: 1, state: 0 })
+  })
+
+  it('a lost terminal outcome write (updateSwitch returns false) is logged, not dropped silently', async () => {
+    r.store.seed({ requestId: R1 })
+    r.platform.requests = [req(R1, { state: 'refused', outcome: 'GATE' })]
+    vi.spyOn(r.store, 'updateSwitch').mockResolvedValue(false)
+    await runModuleSwitchPass(tenant, r.deps())
+    expect(vi.mocked(console.error).mock.calls.flat().join(' ')).toContain(R1)
   })
 
   it('the first pass per tenant aligns config.modules to the platform state only for modules that have a platform row, leaves unmanaged modules untouched, and runs once per process, not on every pass', async () => {
@@ -503,6 +551,27 @@ describe('platform calls and the first pass', () => {
     r.store.clock += 120_000
     await runModuleSwitchPass(tenant, deps)
     expect(r.writes).toEqual([{ calendar: true }])
+  })
+
+  it('a failed migration catch-up after alignment is retried after the backoff (the config diff is gone by then), then not again', async () => {
+    r.platform.state = CATALOGUE.map((k) => (k === 'calendar' ? st(k, 'enabled', true) : st(k)))
+    r.config.modules = { calendar: false }
+    r.migrateResult = { ok: false, error: 'db down' }
+    const deps = r.deps()
+    await runModuleSwitchPass(tenant, deps)
+    expect(r.writes).toEqual([{ calendar: true }])
+    expect(r.migrated).toEqual(['rat-a'])
+    r.store.clock += 1_000
+    await runModuleSwitchPass(tenant, deps)
+    expect(r.migrated).toEqual(['rat-a']) // inside the backoff
+    r.store.clock += 120_000
+    r.migrateResult = { ok: true }
+    await runModuleSwitchPass(tenant, deps)
+    expect(r.migrated).toEqual(['rat-a', 'rat-a']) // retried although the config already matches
+    expect(r.writes).toEqual([{ calendar: true }]) // no second config write
+    r.store.clock += 120_000
+    await runModuleSwitchPass(tenant, deps)
+    expect(r.migrated).toHaveLength(2) // done: aligned
   })
 
   it('a pending row triggers the platform read on every pass until it is final', async () => {

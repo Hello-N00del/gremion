@@ -24,14 +24,19 @@ import { notifyModuleSwitchListeners, type ModuleSwitchEvent } from './listeners
 import * as realStore from './store'
 import type { SwitchRow } from './store'
 
-/** How often register.server.ts runs a pass per active tenant. Without a pending row a pass makes no platform call. */
+/** How often register.server.ts runs a pass per active tenant. Without a pending row a pass makes a platform call only every SWEEP_INTERVAL_MS. */
 export const MODULE_SWITCH_INTERVAL_MS = 10_000
 
 /** plt.council_module_requests allows 1..100. */
 const REQUEST_LIMIT = 100
 /** How many tenant-side rows are compared against the platform list when adopting (the table is tiny). */
 const KNOWN_LIMIT = 200
-/** After a failed alignment write the next attempt waits this long (the pass itself keeps running). */
+/**
+ * With nothing pending the platform list is still read this often per tenant: a request whose tenant-side
+ * insert failed while the process runs has no row to make it pending, and only this read adopts it.
+ */
+const SWEEP_INTERVAL_MS = 5 * 60_000
+/** After a failed alignment (the write or its migration catch-up) the next attempt waits this long (the pass itself keeps running). */
 const ALIGN_RETRY_MS = 60_000
 /** The stored outcome text is capped; the executor text can be long. */
 const OUTCOME_MAX = 500
@@ -75,10 +80,12 @@ export interface ReconcilerStore {
 export interface ReconcilerState {
   /** Tenants whose config.modules was aligned to the platform state. */
   aligned: Set<string>
-  /** Tenants whose request list was read at least once (the first read also adopts unknown requests). */
-  swept: Set<string>
+  /** Tenant id -> clock time of the last platform request-list read (every read also adopts unknown requests). */
+  sweptAt: Map<string, number>
   /** Tenant id -> clock time before which a failed alignment is not retried. */
   alignRetryAt: Map<string, number>
+  /** Tenants whose alignment turned a module on but whose migration catch-up has not succeeded yet. */
+  migrateOwed: Set<string>
 }
 
 export interface ReconcilerDeps {
@@ -92,13 +99,14 @@ export interface ReconcilerDeps {
   now: () => number
 }
 
-const processState: ReconcilerState = { aligned: new Set(), swept: new Set(), alignRetryAt: new Map() }
+const processState: ReconcilerState = { aligned: new Set(), sweptAt: new Map(), alignRetryAt: new Map(), migrateOwed: new Set() }
 
 /** Test-only: forget what this process remembers. */
 export function _resetModuleSwitchReconcilerForTests(): void {
   processState.aligned.clear()
-  processState.swept.clear()
+  processState.sweptAt.clear()
   processState.alignRetryAt.clear()
+  processState.migrateOwed.clear()
 }
 
 /** The production council port: the three functions of the gremion_ui_modules role, nothing else. */
@@ -173,10 +181,17 @@ async function alignOnce(tenant: TenantContext, d: ReconcilerDeps, council: Coun
     if (Object.keys(diff).length > 0) {
       d.writeConfig({ modules: diff }, tenant)
       console.info(`[module-switch] ${tenant.slug}: config.modules aligned to the platform state: ${JSON.stringify(diff)}`)
-      if (Object.values(diff).some(Boolean)) {
-        const m = await d.migrate({ id: tenant.id, slug: tenant.slug })
-        if (!m.ok) console.error(`[module-switch] ${tenant.slug}: module migration catch-up after alignment failed:`, m.error ?? '')
+      if (Object.values(diff).some(Boolean)) d.state.migrateOwed.add(tenant.id)
+    }
+    // Owed until it succeeds: the config diff is gone on a retry, so the debt is remembered separately.
+    if (d.state.migrateOwed.has(tenant.id)) {
+      const m = await d.migrate({ id: tenant.id, slug: tenant.slug })
+      if (!m.ok) {
+        d.state.alignRetryAt.set(tenant.id, d.now() + ALIGN_RETRY_MS)
+        console.error(`[module-switch] ${tenant.slug}: module migration catch-up after alignment failed (retried later):`, m.error ?? '')
+        return
       }
+      d.state.migrateOwed.delete(tenant.id)
     }
     d.state.aligned.add(tenant.id)
   } catch (err) {
@@ -200,6 +215,8 @@ async function adopt(tenant: TenantContext, d: ReconcilerDeps, requests: readonl
         action,
         actorUserId: p.actor ?? 'unknown',
         state: ok ? 'queued' : 'refused',
+        // The platform's creation time, so rows are applied oldest first (the DB default would stamp the adoption time).
+        submittedAt: p.created_at,
       })
     } catch (err) {
       if ((err as { code?: unknown } | null)?.code === '23505') continue // another reconciler adopted it first
@@ -212,7 +229,8 @@ async function adopt(tenant: TenantContext, d: ReconcilerDeps, requests: readonl
     } else {
       // Never reachable through the service (it refuses non-switchable ids first). Recorded, never applied.
       console.warn(`[module-switch] ${tenant.slug}: adopted request ${p.request_id} for non-switchable module ${p.module ?? '(none)'} as refused`)
-      await d.store.updateSwitch(tenant.db, p.request_id, { outcome: NOT_SWITCHABLE_TEXT, finishedAt: p.finished_at ?? new Date(d.now()) })
+      const written = await d.store.updateSwitch(tenant.db, p.request_id, { outcome: NOT_SWITCHABLE_TEXT, finishedAt: p.finished_at ?? new Date(d.now()) })
+      if (!written) console.error(`[module-switch] ${tenant.slug}: the outcome of adopted request ${p.request_id} was lost (its record vanished)`)
     }
   }
   return adopted
@@ -247,12 +265,13 @@ export async function runModuleSwitchPass(tenant: TenantContext, deps: Partial<R
   await alignOnce(tenant, d, council)
 
   let pending = await d.store.pendingSwitches(db)
-  const firstRead = !d.state.swept.has(tenant.id)
-  // Cadence: nothing pending means no platform call, except the one read per process that also adopts.
-  if (pending.length === 0 && !firstRead) return out
+  const lastSweep = d.state.sweptAt.get(tenant.id)
+  const sweepDue = lastSweep === undefined || d.now() - lastSweep >= SWEEP_INTERVAL_MS
+  // Cadence: nothing pending means no platform call, except the read at boot and then every SWEEP_INTERVAL_MS, which also adopts.
+  if (pending.length === 0 && !sweepDue) return out
 
   const requests = await council.requests(tenant.slug, REQUEST_LIMIT)
-  d.state.swept.add(tenant.id)
+  d.state.sweptAt.set(tenant.id, d.now())
   out.adopted = await adopt(tenant, d, requests)
   if (out.adopted > 0) pending = await d.store.pendingSwitches(db)
 
@@ -288,7 +307,8 @@ async function finishFailed(
   const db = tenant.db
   const finishedAt = p.finished_at ?? new Date(d.now())
   // The text first (idempotent: both reconcilers write the same), then the atomic move decides who goes on.
-  await d.store.updateSwitch(db, row.requestId, { outcome, finishedAt })
+  const stored = await d.store.updateSwitch(db, row.requestId, { outcome, finishedAt })
+  if (!stored) console.error(`[module-switch] ${tenant.slug}: the outcome of request ${row.requestId} was lost (its record vanished)`)
   const claimed = await d.store.claimTransition(db, row.requestId, ['queued', 'succeeded'], state)
   if (!claimed) return // another reconciler holds it
   out.failed++
@@ -326,7 +346,8 @@ async function apply(
     // Stay `applying` with the error visible; the lease expires and the next pass retries. Never "switched".
     const message = clip(errText(err))
     console.error(`[module-switch] ${tenant.slug}: applying request ${row.requestId} (${row.action} ${row.moduleId}) failed, retried after the lease:`, message)
-    await d.store.updateSwitch(db, row.requestId, { configError: message })
+    const recorded = await d.store.updateSwitch(db, row.requestId, { configError: message })
+    if (!recorded) console.error(`[module-switch] ${tenant.slug}: the error of request ${row.requestId} could not be recorded (its record vanished)`)
     out.failed++
     return
   }
