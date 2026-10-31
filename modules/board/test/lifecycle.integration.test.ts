@@ -76,7 +76,16 @@ const boardModule: LifecycleModule = {
 }
 
 /** Test-only allow fixture for the level-1 gate (TASK-044 implements the real one). */
-const allowGate: EnableGate = () => ({ isolationTestResultId: randomUUID(), dpiaDecisionId: randomUUID() })
+const allowGate: EnableGate = async (_tenantId, moduleKey) => {
+  // the enablement's isolation reference is a foreign key (every new row is checked): mint a real passing row
+  const [r] = await platform<{ id: string }[]>`
+    INSERT INTO plt.isolation_test_result (module_id, test_kind, passed, run_at, evidence_ref, release_tip_sha)
+    SELECT module_id, 'cross_customer', true, now(), 'scratch-fixture:board-lifecycle', ${'a'.repeat(40)}
+      FROM plt.module WHERE module_key = ${moduleKey}
+    RETURNING isolation_test_result_id::text AS id`
+  if (!r) throw new Error(`[lifecycle] no plt.module row for ${moduleKey}`)
+  return { isolationTestResultId: r.id, dpiaDecisionId: randomUUID() }
+}
 
 let admin: ScratchSql
 let platform: ScratchSql
@@ -203,9 +212,12 @@ describe('board leaf on the real lifecycle (A8)', () => {
       const t0 = Date.now()
       expect((await call('GET', `/api/v1/boards?orgUnitId=${orgUnitId}`)).status).toBe(200)
       const disabled = await disableModule(TENANT_A.id, boardModule, OPERATOR, deps)
-      expect(disabled).toMatchObject({ database: dbA, dropped: true, noop: false })
+      // module Karenz: a switch-off blocks the database for 30 days instead of dropping it
+      expect(disabled).toMatchObject({ database: dbA, dropped: false, blocked: true, noop: false })
       expect(disabled.export?.bytes).toBeGreaterThan(0)
-      expect(await databaseNames(admin)).not.toContain(dbA)
+      expect(await databaseNames(admin)).toContain(dbA)
+      const [canConnect] = await admin<{ can: boolean }[]>`SELECT has_database_privilege(${APP_ROLE}, ${dbA}, 'CONNECT') AS can`
+      expect(canConnect?.can).toBe(false)
 
       const results: { route: string; status: number; body: unknown }[] = []
       const firstAt = Date.now()

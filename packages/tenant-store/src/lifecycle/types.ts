@@ -53,7 +53,7 @@ export interface Exporter {
   list(file: string): Promise<string>
 }
 
-export type LifecycleStep = 'enabling' | 'roles' | 'created' | 'migrated' | 'enabled' | 'disabling' | 'exported' | 'dropped'
+export type LifecycleStep = 'enabling' | 'roles' | 'created' | 'unblocked' | 'migrated' | 'enabled' | 'disabling' | 'exported' | 'blocked' | 'dropped'
 
 export interface LifecycleDeps {
   /** A connection to gremion_platform (asserted by name before anything else). */
@@ -102,13 +102,20 @@ export interface EnableResult {
   applied: string[]
   /** true when the module was already enabled and nothing was written. */
   noop: boolean
+  /** true when a blocked module database (or a database-less module) came back inside its 30-day Karenz. */
+  restored: boolean
 }
 
 export interface DisableResult {
   tenantId: string
   moduleId: string
   database: string | null
+  /** false since the Karenz: a switch-off blocks the database, the day-30 job drops it (finalizeDueKarenz). */
   dropped: boolean
+  /** true when the module database is kept alive but unreachable for the app role. */
+  blocked: boolean
+  /** The live Karenz row of this switch-off (also on a repeat); null for a no-op that opened none. */
+  karenz: { karenzId: string; finalAt: Date } | null
   export: { path: string; sha256: string; bytes: number } | null
   noop: boolean
 }

@@ -602,3 +602,39 @@ groups:
         annotations:
           summary: "The tenant's dead-letter stream holds an entry (docs/runbooks/dead-letter.md); it is kept for 7 days"
           component: "{{ $labels.component }}"
+      - uid: gremion-module-karenz
+        title: ModuleKarenzFailedOrOverdue
+        condition: B
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: prometheus
+            model:
+              refId: A
+              expr: gremion:cond:module_karenz
+              instant: true
+              range: false
+          - refId: B
+            datasourceUid: __expr__
+            relativeTimeRange:
+              from: 0
+              to: 0
+            model:
+              refId: B
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0]
+        noDataState: Alerting
+        execErrState: Alerting
+        for: 5m
+        isPaused: false
+        labels:
+          severity: critical
+        annotations:
+          summary: "A module switch-off Karenz step failed, a notice or reminder is overdue, or a row is past its final day (docs/runbooks/tenant-lifecycle.md)"
+          component: "{{ $labels.component }}"
