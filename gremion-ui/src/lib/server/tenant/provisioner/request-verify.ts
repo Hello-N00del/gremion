@@ -56,8 +56,14 @@ export interface EvidenceCheck {
   jwks: JWTVerifyGetKey
   /** The exact public issuer of the ops realm. */
   issuer: string
-  /** The control panel's client id. */
+  /** The control panel's client id (a council request: gremion-ui). */
   clientId: string
+  /**
+   * The realm role the access token must carry (any of them when a list): default OPERATOR_ROLE.
+   * Karenz phase 1: a council request names council-admin / it-admin and the council's own realm
+   * and client; every other check below is the same code path.
+   */
+  requiredRole?: string | readonly string[]
   /** plt.provisioning_request.operator_id */
   operatorId: string
   /** plt.provisioning_request.created_at (the server clock at submit) */
@@ -108,7 +114,10 @@ export async function verifyRequestEvidence(c: EvidenceCheck): Promise<EvidenceR
     if (typeof id.sid !== 'string' || id.sid !== at.sid) throw new Error('the two tokens come from different sessions (sid)')
     if (id.sub !== c.operatorId) throw new Error(`the ID token's sub ${String(id.sub)} is not the request's operator ${c.operatorId}`)
     const roles = (at.realm_access as { roles?: unknown } | undefined)?.roles
-    if (!Array.isArray(roles) || !roles.includes(OPERATOR_ROLE)) throw new Error('the access token carries no operator role of the ops realm')
+    const required = c.requiredRole === undefined ? [OPERATOR_ROLE] : typeof c.requiredRole === 'string' ? [c.requiredRole] : [...c.requiredRole]
+    if (!Array.isArray(roles) || !required.some((r) => roles.includes(r))) {
+      throw new Error(c.requiredRole === undefined ? 'the access token carries no operator role of the ops realm' : `the access token carries none of the realm roles ${required.join(', ')}`)
+    }
     const timeClaim = typeof id.auth_time === 'number' ? 'auth_time' : 'iat'
     const authTime = timeClaim === 'auth_time' ? (id.auth_time as number) : id.iat
     if (typeof authTime !== 'number' || !Number.isFinite(authTime)) throw new Error('the ID token carries neither auth_time nor iat')

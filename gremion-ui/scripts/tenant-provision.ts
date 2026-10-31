@@ -864,6 +864,11 @@ async function cmdOperatorAdd(): Promise<void> {
 function tenantHostFromIssuer(issuer: string): string {
   return new URL(issuer).host
 }
+/** A council request is verified against its customer's own realm: the realm and the public host from the registry (null: no such customer). */
+async function customerRealmForSlug(slug: string): Promise<{ realm: string; host: string } | null> {
+  const tenant = await getTenantBySlug(slug)
+  return tenant ? { realm: tenant.realmName, host: tenantHostFromIssuer(tenant.issuer) } : null
+}
 function printReport(report: ReconcileReport): void {
   console.error(`\n[tenant-create] reconcile realm "${report.realm}" — ${report.ok ? 'PASS' : 'FAIL'}`)
   for (const c of report.checks) console.error(`  ${c.ok ? 'ok  ' : 'FAIL'}  ${c.name}${c.ok ? '' : `  — ${c.detail}`}`)
@@ -1108,7 +1113,7 @@ async function main(): Promise<void> {
     case 'materialize-config':
       return cmdMaterializeConfig()
     case 'request-verify':
-      return requestVerb(verb, { args: process.argv.slice(3), reqEnv, directPostgresUrl, loadModules, modulesDir: MODULES_DIR, kcInternalBase, provisionerTransport: rawProvisionerTransport, usage: (m) => new UsageError(m), log })
+      return requestVerb(verb, { args: process.argv.slice(3), reqEnv, directPostgresUrl, loadModules, modulesDir: MODULES_DIR, kcInternalBase, provisionerTransport: rawProvisionerTransport, customerRealmForSlug, usage: (m) => new UsageError(m), log })
     case 'provision':
       throw new UsageError('provision is retired (TASK-043): a customer is created from the control panel ("Neuer Mandant"), which the host-side executor runs (phase-a, the host mail step, record-step, phase-b, the router; TASK-043d)')
     // TASK-044: the level-1 gate's verbs (tenant-provision-gate.ts)

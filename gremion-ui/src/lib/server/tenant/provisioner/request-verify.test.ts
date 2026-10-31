@@ -109,3 +109,35 @@ describe('verifyRequestEvidence', () => {
     expect(e.length).toBeLessThanOrEqual(8192)
   })
 })
+
+// Karenz phase 1, Task 5: the same code path verifies a council admin's pair of
+// ANOTHER realm and client when the check names the role it requires.
+describe('verifyRequestEvidence: requiredRole', () => {
+  const COUNCIL_ISS = 'https://rat.example/auth/realms/musterstadt'
+  const councilCheck = async (roles: string[], requiredRole: string | readonly string[] | undefined) => {
+    const p = await pair({ id: { iss: COUNCIL_ISS, aud: 'gremion-ui', azp: 'gremion-ui' }, at: { iss: COUNCIL_ISS, aud: 'gremion-ui', azp: 'gremion-ui', realm_access: { roles } } })
+    return verifyRequestEvidence(check(encodeEvidence(p), { issuer: COUNCIL_ISS, clientId: 'gremion-ui', ...(requiredRole === undefined ? {} : { requiredRole }) }))
+  }
+
+  it('accepts a pair whose access token carries the required role', async () => {
+    expect(await councilCheck(['council-admin'], 'council-admin')).toMatchObject({ ok: true, sub: OPERATOR })
+  })
+
+  it('refuses a pair that lacks the required role, naming it', async () => {
+    const r = await councilCheck(['operator', 'member'], 'council-admin')
+    expect(r.ok).toBe(false)
+    expect(r.ok ? '' : r.reason).toMatch(/council-admin/)
+  })
+
+  it('a list of roles is any-of', async () => {
+    expect(await councilCheck(['it-admin'], ['council-admin', 'it-admin'])).toMatchObject({ ok: true })
+    expect((await councilCheck(['member'], ['council-admin', 'it-admin'])).ok).toBe(false)
+  })
+
+  it('without requiredRole the default stays the operator role (the panel path)', async () => {
+    expect((await councilCheck(['council-admin'], undefined)).ok).toBe(false)
+    expect(await councilCheck(['operator'], undefined)).toMatchObject({ ok: true })
+    const r = await verifyRequestEvidence(check(encodeEvidence(await pair({ at: { realm_access: { roles: ['default-roles-platform'] } } }))))
+    expect(r.ok ? '' : r.reason).toBe('the access token carries no operator role of the ops realm')
+  })
+})
