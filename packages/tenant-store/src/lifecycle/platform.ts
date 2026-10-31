@@ -163,22 +163,23 @@ export async function lookupModuleId(sql: Sql, moduleKey: string): Promise<strin
   return rows[0]?.module_id ?? null
 }
 
-export type ModuleDatabaseState = 'enabling' | 'enabled' | 'disabling' | 'dropped'
+export type ModuleDatabaseState = 'enabling' | 'enabled' | 'disabling' | 'blocked' | 'dropped'
 
 export interface ModuleDatabaseRow {
   dbName: string
   state: ModuleDatabaseState
+  exportPath: string | null
   exportSha256: string | null
   exportedAt: Date | null
 }
 
 export async function readModuleDatabase(sql: Sql, customerId: string, moduleId: string): Promise<ModuleDatabaseRow | null> {
-  const rows = await sql<{ db_name: string; state: ModuleDatabaseState; export_sha256: string | null; exported_at: Date | null }[]>`
-    SELECT db_name, state, export_sha256, exported_at
+  const rows = await sql<{ db_name: string; state: ModuleDatabaseState; export_path: string | null; export_sha256: string | null; exported_at: Date | null }[]>`
+    SELECT db_name, state, export_path, export_sha256, exported_at
       FROM plt.module_database
      WHERE customer_id = ${customerId} AND module_id = ${moduleId}`
   const r = rows[0]
-  return r ? { dbName: r.db_name, state: r.state, exportSha256: r.export_sha256, exportedAt: r.exported_at } : null
+  return r ? { dbName: r.db_name, state: r.state, exportPath: r.export_path, exportSha256: r.export_sha256, exportedAt: r.exported_at } : null
 }
 
 /** Compare-and-set of plt.module_database.state; false when the row was not in `from`. */
@@ -199,4 +200,51 @@ export async function casModuleDatabaseState(
      WHERE customer_id = ${key.customerId} AND module_id = ${key.moduleId} AND state = ANY(${[...from]}::text[])
      RETURNING 1`
   return rows.length === 1
+}
+
+/** Length of the grace after a module switch-off (DSB answer of 2026-10-30, catalogue RC-MOD-EXPORT). */
+export const KARENZ_DAYS = 30
+
+/** plt.module_karenz.state (platform migration 0015). */
+export type KarenzState = 'open' | 'restoring' | 'restored' | 'finalizing' | 'finalized'
+
+/** The states of the one live row per (customer, module): the partial unique index module_karenz_live_key. */
+export type LiveKarenzState = 'open' | 'restoring' | 'finalizing'
+
+export interface LiveKarenzRow {
+  karenzId: string
+  state: LiveKarenzState
+  finalAt: Date
+  /** Set once the tenant side has deleted its external items: from then on the module cannot be restored. */
+  tenantDoneAt: Date | null
+}
+
+/** The live (open, restoring or finalizing) Karenz row of (customer, module), if any. */
+export async function readLiveKarenz(sql: Sql, customerId: string, moduleId: string): Promise<LiveKarenzRow | null> {
+  const rows = await sql<{ karenz_id: string; state: LiveKarenzState; final_at: Date; tenant_done_at: Date | null }[]>`
+    SELECT karenz_id::text, state, final_at, tenant_done_at
+      FROM plt.module_karenz
+     WHERE customer_id = ${customerId} AND module_id = ${moduleId} AND state IN ('open', 'restoring', 'finalizing')`
+  const r = rows[0]
+  return r ? { karenzId: r.karenz_id, state: r.state, finalAt: r.final_at, tenantDoneAt: r.tenant_done_at } : null
+}
+
+/**
+ * Starts the 30 days of one switch-off: final_at = switched_off_at + KARENZ_DAYS
+ * (both from the transaction's now()), the export of THIS switch-off copied onto
+ * the row. At most one live row exists per pair (the partial unique index), so a
+ * repeat returns the row that is already there and starts no new 30 days. Call it
+ * inside the transaction that turns the module off.
+ */
+export async function openKarenz(
+  sql: Sql,
+  a: { customerId: string; moduleId: string; actor: { kind: 'person' | 'operator'; id: string }; exportPath: string | null; exportSha256: string | null },
+): Promise<{ karenzId: string; finalAt: Date }> {
+  await sql`
+    INSERT INTO plt.module_karenz (customer_id, module_id, final_at, actor_kind, actor_id, export_path, export_sha256)
+    VALUES (${a.customerId}, ${a.moduleId}, now() + pg_catalog.make_interval(days => ${KARENZ_DAYS}::integer), ${a.actor.kind}, ${a.actor.id}, ${a.exportPath}, ${a.exportSha256})
+    ON CONFLICT (customer_id, module_id) WHERE state IN ('open', 'restoring', 'finalizing') DO NOTHING`
+  const live = await readLiveKarenz(sql, a.customerId, a.moduleId)
+  if (!live) throw new LifecycleError('CONCURRENT_STATE', `no live Karenz row for (${a.customerId}, ${a.moduleId}) after opening one`)
+  return { karenzId: live.karenzId, finalAt: live.finalAt }
 }

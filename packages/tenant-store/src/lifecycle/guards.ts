@@ -4,6 +4,7 @@
 // creates, connects to or drops a database. Every identifier the lifecycle
 // puts into DDL comes from here (validated) and is then quoted by the SERVER
 // (format('%I')), never concatenated into SQL text.
+import { isAbsolute, relative, resolve, sep } from 'node:path'
 import { assertModuleId, assertTenantId, tenantModuleDbName } from '../names.js'
 
 /** A (tenant, module) database: t_<tenant uuid as 32 hex>__<module id>. */
@@ -28,6 +29,9 @@ export type LifecycleErrorCode =
   | 'TARGET_REFUSED'
   | 'EXPORT_FAILED'
   | 'EXPORT_UNVERIFIED'
+  | 'KARENZ_FINALIZING'
+  | 'KARENZ_RESTORE_PENDING'
+  | 'EXPORT_MISSING'
 
 export class LifecycleError extends Error {
   override name = 'LifecycleError'
@@ -82,6 +86,25 @@ export function assertTenantModuleTarget(dbName: string, tenantId: string, modul
   }
   if (dbName !== expected) throw new LifecycleError('TARGET_REFUSED', `refusing ${dbName}: (${tenantId}, ${moduleId}) owns ${expected}`)
   return dbName
+}
+
+/**
+ * The one place a Karenz row's export may live: a `*.dump` directly under
+ * <exportDir>/<tenant>/<module>/ (exportDatabase writes exactly there). The
+ * day-30 job re-checks the path it reads from the platform row before it opens,
+ * hashes or deletes anything, so a row can never point it at another file.
+ */
+export function assertKarenzExportPath(path: string, exportDir: string, tenantId: string, moduleId: string): string {
+  assertLifecycleTenantId(tenantId)
+  assertLifecycleModuleId(moduleId)
+  if (typeof path !== 'string' || path === '' || typeof exportDir !== 'string' || exportDir === '') {
+    throw new LifecycleError('TARGET_REFUSED', `refusing export path ${JSON.stringify(path)}: not a path`)
+  }
+  const rel = relative(resolve(exportDir, tenantId, moduleId), resolve(path))
+  if (rel === '' || rel.startsWith('..') || isAbsolute(rel) || rel.includes(sep) || !rel.endsWith('.dump')) {
+    throw new LifecycleError('TARGET_REFUSED', `refusing export path ${JSON.stringify(path)}: not a dump directly under <exportDir>/${tenantId}/${moduleId}/`)
+  }
+  return path
 }
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/

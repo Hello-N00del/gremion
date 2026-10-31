@@ -38,7 +38,7 @@
 import type http from 'node:http'
 import { z } from 'zod'
 import type { Sql, TenantRef } from '../store/index.js'
-import { CONNECTION_LOST, isRefusal, NOT_PROVISIONED, sqlState, unavailable, type Refusal } from '../store/tenant-db.js'
+import { CONNECTION_LOST, isRefusal, isTenantDatabaseOff, NOT_PROVISIONED, sqlState, unavailable, type Refusal } from '../store/tenant-db.js'
 import type { Route, RouteContext } from './router.js'
 import {
   listBoardsForOrgUnits,
@@ -189,7 +189,19 @@ export function buildApiRoutes(store: StoreFn): Route[] {
       await r`SELECT 1`
       return unavailable()
     } catch (err) {
-      return sqlState(err) === '3D000' ? NOT_PROVISIONED : unavailable()
+      return isTenantDatabaseOff(err) ? NOT_PROVISIONED : unavailable()
+    }
+  }
+
+  /** A 42501 from a query: true only when the connection itself is refused (a blocked database), not a missing table grant. */
+  const connectionRefused = async (tenant: TenantRef): Promise<boolean> => {
+    try {
+      const r = await store(tenant)
+      if (isRefusal(r)) return false
+      await r`SELECT 1`
+      return false
+    } catch (err) {
+      return isTenantDatabaseOff(err)
     }
   }
 
@@ -216,6 +228,8 @@ export function buildApiRoutes(store: StoreFn): Route[] {
         } else if (err instanceof Error && err.message === 'board has no stacks') {
           sendError(extended.res, 409, err.message)
         } else if (code === '3D000') {
+          sendRefusal(extended.res, NOT_PROVISIONED)
+        } else if (code === '42501' && (await connectionRefused(extended.tenant))) {
           sendRefusal(extended.res, NOT_PROVISIONED)
         } else if (code !== undefined && CONNECTION_LOST.has(code)) {
           sendRefusal(extended.res, await reclassify(extended.tenant))

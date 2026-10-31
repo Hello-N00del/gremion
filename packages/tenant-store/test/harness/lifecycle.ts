@@ -161,6 +161,10 @@ export async function resetModuleServer(admin: Sql, platform: Sql): Promise<void
   }
   await platform`DELETE FROM plt.module_database`
   await platform`DELETE FROM plt.module_enablement`
+  // Task 3: the Karenz rows of the specs (an event pins its row, the events are append-only)
+  await platform`
+    DELETE FROM plt.module_karenz k
+     WHERE NOT EXISTS (SELECT 1 FROM plt.module_karenz_event e WHERE e.karenz_id = k.karenz_id)`
 }
 
 export async function databasesOn(admin: Sql): Promise<string[]> {
