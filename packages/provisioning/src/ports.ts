@@ -130,6 +130,19 @@ export interface BrokerPort {
   ensure(c: CustomerRef, modules: readonly string[]): Promise<{ accountRef: string; reloaded: boolean; createdUsers: string[]; removedUsers: string[] }>
 }
 
+/** What ModulesPort.disable reports. */
+export interface DisableModuleResult {
+  noop: boolean
+  /** false since the Karenz: nothing is dropped before day 30. */
+  dropped: boolean
+  /** true when the module database is kept alive but unreachable for the app role. */
+  blocked: boolean
+  /** The day the Karenz ends (the platform's final_at); null when no Karenz row exists for this call. */
+  finalAt: Date | null
+  database: string | null
+  export: { path: string; sha256: string; bytes: number } | null
+}
+
 export interface ModulesPort {
   /** Catalogue ids (loadCatalogue). */
   catalogueIds(): readonly string[]
@@ -142,10 +155,18 @@ export interface ModulesPort {
   /** enableModule with the given gate; returns whether it was a no-op. */
   enable(c: CustomerRef, moduleId: string, gate: import('@gremion/tenant-store/lifecycle').EnableGate, operatorId: string, actorKind?: ActorKind): Promise<{ noop: boolean; database: string | null }>
   /**
-   * disableModule (TRD-424): the level-1 switch off, the module database
-   * exported and verified, then dropped. A repeat on a disabled module is a no-op.
+   * disableModule (TRD-424, module Karenz 2026-10-30): the level-1 switch off, the module database
+   * exported and verified, then BLOCKED (kept alive, unreachable for the app role) until the 30-day
+   * Karenz ends; `dropped` is false. `finalAt` is the day the Karenz ends (null when no clock was
+   * opened: a repeat on a module that was never on). A repeat on a disabled module is a no-op.
    */
-  disable(c: CustomerRef, moduleId: string, operatorId: string, actorKind?: ActorKind): Promise<{ noop: boolean; dropped: boolean; database: string | null; export: { path: string; sha256: string; bytes: number } | null }>
+  disable(c: CustomerRef, moduleId: string, operatorId: string, actorKind?: ActorKind): Promise<DisableModuleResult>
+  /**
+   * Day 30 of every Karenz row that is due (finalizeDueKarenz): the platform side, idempotent. With
+   * `finalDeletion` false it is a dry run that only records the mode and counts what is due.
+   * Optional: only the real adapter has it (the fakes of the create/enable suites do not).
+   */
+  finalizeDue?(opts: { finalDeletion: boolean; deadlineMs: number }): Promise<import('@gremion/tenant-store/lifecycle').FinalizeResult>
   /** Module keys with an `enabled` plt.module_enablement row for the customer. */
   enabled(c: CustomerRef): Promise<string[]>
 }

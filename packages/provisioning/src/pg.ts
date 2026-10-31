@@ -8,6 +8,7 @@ import {
   disableModule,
   enableModule,
   ensurePlatformDatabase,
+  finalizeDueKarenz,
   lookupModuleVersion,
   migratePlatform,
   type EnableGate,
@@ -54,7 +55,18 @@ export function pgModules(opts: {
       const module = byId.get(moduleId)
       if (!module) throw new ProvisioningError('MODULE_UNKNOWN', `module ${moduleId} is not in the catalogue`)
       const r = await disableModule(c.id, module, { kind: actorKind ?? 'operator', id: operatorId }, { ...opts.lifecycle, platform: opts.platform, enableGate: undefined as never })
-      return { noop: r.noop, dropped: r.dropped, database: r.database, export: r.export }
+      return { noop: r.noop, dropped: r.dropped, blocked: r.blocked, finalAt: r.karenz?.finalAt ?? null, database: r.database, export: r.export }
+    },
+    async finalizeDue(o: { finalDeletion: boolean; deadlineMs: number }) {
+      return finalizeDueKarenz({
+        platform: opts.platform,
+        server: opts.lifecycle.server,
+        catalogue: opts.catalogue,
+        exportDir: opts.lifecycle.exportDir,
+        finalDeletion: o.finalDeletion,
+        deadlineMs: o.deadlineMs,
+        ...(opts.lifecycle.log ? { log: opts.lifecycle.log } : {}),
+      })
     },
     async enabled(c: CustomerRef) {
       const rows = await opts.platform<{ module_key: string }[]>`
