@@ -15,6 +15,7 @@
   import TabBackups from './tabs/TabBackups.svelte'
   import TabAccessibility from './tabs/TabAccessibility.svelte'
   import TabDangerZone from './tabs/TabDangerZone.svelte'
+  import TabModules from './tabs/TabModules.svelte'
   // Datenschutz inline form (lifted from compliance/+page.svelte)
   import { Button } from '$lib/components/ui/button'
   import { Input } from '$lib/components/ui/input'
@@ -29,6 +30,7 @@
     | 'profil'
     | 'darstellung'
     | 'organisation'
+    | 'module'
     | 'dienste'
     | 'email'
     | 'rechtliches'
@@ -50,6 +52,8 @@
     { key: 'profil', label: 'Profil', icon: 'badge', group: 'Konto', show: true },
     { key: 'darstellung', label: 'Darstellung & Barrierefreiheit', icon: 'eye', group: 'Konto', show: true },
     { key: 'organisation', label: 'Organisation', icon: 'settings', group: 'Verwaltung', show: data.isITAdmin },
+    // Karenz phase 1: council-admin (isAdmin; an it-admin is one too) switches feature modules on.
+    { key: 'module', label: 'Module', icon: 'settings', group: 'Verwaltung', show: data.isAdmin },
     { key: 'dienste', label: 'Dienste & Portal', icon: 'settings', group: 'Verwaltung', show: data.isITAdmin },
     { key: 'email', label: 'E-Mail', icon: 'send', group: 'Verwaltung', show: data.isITAdmin },
     { key: 'rechtliches', label: 'Rechtliches', icon: 'file', group: 'Verwaltung', show: data.isITAdmin },
@@ -92,6 +96,7 @@
     profil: 'Ihr Konto, Anmeldung über Keycloak (SSO).',
     darstellung: 'Sprache, Schriftgröße, Farbsehen und Bewegung.',
     organisation: 'Name und Logo der Studierendenschaft.',
+    module: 'Funktionsmodule für Ihr Gremium einschalten.',
     dienste: 'Öffentliches Portal.',
     email: 'Postausgang für Benachrichtigungen.',
     rechtliches: 'Pflichttexte des öffentlichen Portals.',
@@ -274,6 +279,8 @@
         <TabAccessibility />
       {:else if activeKey === 'organisation' && data.config}
         <TabGeneral org={data.config.org} />
+      {:else if activeKey === 'module' && data.isAdmin}
+        <TabModules />
       {:else if activeKey === 'dienste' && data.config}
         <TabServices org={data.config.org} />
       {:else if activeKey === 'email' && data.config}
