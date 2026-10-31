@@ -89,11 +89,11 @@ teardown() {
 # Conditions (recording rules) -- Grafana alerts on them
 # ---------------------------------------------------------------------------
 
-@test "rules.yml records exactly the sixteen conditions (twelve TASK-039 and the four TASK-079 dead-letter ones)" {
+@test "rules.yml records exactly the seventeen conditions (twelve TASK-039, the four TASK-079 dead-letter ones and the module Karenz one)" {
     [ -f "$RULES" ]
     run awk '/^[[:space:]]*#/ {next} /^[[:space:]]+- record:/ {print $3}' "$RULES"
     [ "$status" -eq 0 ]
-    [ "$(echo "$output" | sort | tr '\n' ' ')" = "gremion:cond:backup_failed gremion:cond:broker_consumer_stalled gremion:cond:cert_expiry gremion:cond:container_unhealthy gremion:cond:dead_letter_queue gremion:cond:disk_above_70 gremion:cond:edge_port80 gremion:cond:inbox_dead_lettered gremion:cond:inbox_stalled gremion:cond:mail_queue gremion:cond:memory_pressure gremion:cond:outbox_dead_lettered gremion:cond:postgres_connections gremion:cond:signal_absent gremion:cond:storage_above_70 gremion:cond:third_party_unreachable " ]
+    [ "$(echo "$output" | sort | tr '\n' ' ')" = "gremion:cond:backup_failed gremion:cond:broker_consumer_stalled gremion:cond:cert_expiry gremion:cond:container_unhealthy gremion:cond:dead_letter_queue gremion:cond:disk_above_70 gremion:cond:edge_port80 gremion:cond:inbox_dead_lettered gremion:cond:inbox_stalled gremion:cond:mail_queue gremion:cond:memory_pressure gremion:cond:module_karenz gremion:cond:outbox_dead_lettered gremion:cond:postgres_connections gremion:cond:signal_absent gremion:cond:storage_above_70 gremion:cond:third_party_unreachable " ]
 }
 
 @test "every condition but third_party_unreachable and the four dead-letter ones is fail-closed on a blind collector" {
@@ -101,7 +101,9 @@ teardown() {
     # contract in prose, and a guard that counts its own documentation lies.
     run awk '/^[[:space:]]*#/ {next} /^[[:space:]]+- record:/{name=$3} /absent\(/{print name}' "$RULES"
     [ "$status" -eq 0 ]
-    [ "$(echo "$output" | sort -u | wc -l)" -eq 11 ]
+    [ "$(echo "$output" | sort -u | wc -l)" -eq 12 ]
+    # the module Karenz condition is fail-closed: an unreadable platform table must not read as healthy
+    [[ "$output" == *"module_karenz"* ]]
     [[ "$output" != *"third_party_unreachable"* ]]
     # TASK-079: a host without an events service has no gauge; an absent() arm there would fire for ever.
     [[ "$output" != *"outbox_dead_lettered"* && "$output" != *"inbox_dead_lettered"* && "$output" != *"inbox_stalled"* && "$output" != *"dead_letter_queue"* ]]
@@ -594,6 +596,15 @@ case "$*" in
     [ -f "$GREMION_ROOT/jobrun-garbage" ] && { printf "<html>\n|||\nfootprint_measurement||exploded|123\nfootprint_measurement||succeeded|notanumber\nfootprint_measurement||succeeded|0\nbackup_nightly|not-a-uuid|failed|1791000400\nfootprint_measurement|succeeded|1791000000\n"; exit 0; }
     # one row per DEFINITION (kind|customer|status|epoch): two customers of one kind are two rows
     printf "footprint_measurement||succeeded|1791000000\npurge_run||failed|1791000300\nbackup_nightly|0192f0c1-0000-7000-8000-00000000000a|failed|1791000400\nbackup_nightly|0192f0c1-0000-7000-8000-00000000000b|succeeded|1791000500\n" ;;
+  "exec abc123 psql"*"plt.module_karenz"*)
+    # module Karenz gauges: kind|customer|module|n, dispatch on the SQL text; the overdue branch is
+    # in the SQL only while the deletion switch is on, so the answer carries its row only then
+    [ -f "$GREMION_ROOT/karenz-down" ] && { echo "psql: error: connection refused" >&2; exit 2; }
+    [ -f "$GREMION_ROOT/karenz-missing" ] && { echo "ERROR:  relation \"plt.module_karenz\" does not exist" >&2; exit 1; }
+    [ -f "$GREMION_ROOT/karenz-garbage" ] && { printf "<html>\n|||\nlive|x|y|z\nlive|||notanumber\nfailed|not-a-uuid|votes|1\nbogus|0192f0c1-0000-7000-8000-00000000000a|votes|1\n"; exit 0; }
+    [ -f "$GREMION_ROOT/karenz-empty" ] && { printf "live|||0\n"; exit 0; }
+    printf "live|||3\nfailed|0192f0c1-0000-7000-8000-00000000000a|votes|1\nstale|0192f0c1-0000-7000-8000-00000000000b|elections|1\n"
+    case "$*" in *overdue*) printf "overdue|0192f0c1-0000-7000-8000-00000000000a|messaging|1\n" ;; esac ;;
   "exec abc123 psql"*)                     echo "42|100" ;;
   "exec nats99 wget"*)
     [ -f "$GREMION_ROOT/jsz-broken" ] && { echo "<html>"; exit 0; }
@@ -739,6 +750,114 @@ prom() { cat "$GREMION_ROOT/runtime/textfile/gremion.prom"; }
     [ "$output" = "0" ]
     # the rest of the file is still written
     grep -q '^gremion_postgres_connections_used 42$' "$GREMION_ROOT/runtime/textfile/gremion.prom"
+}
+
+@test "metrics-textfile emits gremion_module_karenz_failed for a failed row and the live count; a clean row emits nothing (module Karenz)" {
+    shim_docker_world
+    shim_timer enabled
+    STACK=staging run "$METRICS"
+    [ "$status" -eq 0 ]
+    local prom="$GREMION_ROOT/runtime/textfile/gremion.prom"
+    grep -q '^gremion_module_karenz_live 3$' "$prom"
+    grep -q '^gremion_module_karenz_failed{customer="0192f0c1-0000-7000-8000-00000000000a",module="votes"} 1$' "$prom"
+    # the stale row is its own family; no failed sample for it and none for a row the answer does not name
+    grep -q '^gremion_module_karenz_stale{customer="0192f0c1-0000-7000-8000-00000000000b",module="elections"} 1$' "$prom"
+    run grep -c '^gremion_module_karenz_failed{' "$prom"
+    [ "$output" = "1" ]
+    # one HELP/TYPE per family, read in the platform database through the state postgres
+    run grep -c '^# TYPE gremion_module_karenz_live gauge$' "$prom"
+    [ "$output" = "1" ]
+    assert_recorded docker "exec abc123 psql -U postgres -d gremion_platform"
+    # the failed gauge is the NEWEST event per (row, step), level error, live rows only
+    assert_recorded docker "DISTINCT ON (e.karenz_id, e.step)"
+    assert_recorded docker "e.at DESC, e.event_id DESC"
+    assert_recorded docker "state IN ('open','restoring','finalizing')"
+}
+
+@test "metrics-textfile emits overdue only while KARENZ_FINAL_DELETION is exactly on in the active colour's env file" {
+    shim_docker_world
+    shim_timer enabled
+    local prom="$GREMION_ROOT/runtime/textfile/gremion.prom"
+    # no colour, no env file: off
+    STACK=staging run "$METRICS"
+    [ "$status" -eq 0 ]
+    run grep -c 'gremion_module_karenz_overdue' "$prom"
+    [ "$output" = "0" ]
+    refute_recorded docker "overdue"
+    # off, ON, true, 1 and empty are all off (the platform job reads the exact string on)
+    echo blue > "$GREMION_ROOT/runtime/active-colour"
+    local v
+    for v in off ON true 1 ""; do
+        printf 'KARENZ_FINAL_DELETION=%s\n' "$v" > "$GREMION_ROOT/etc/env/app-blue.env"
+        STACK=staging run "$METRICS"
+        [ "$status" -eq 0 ]
+        run grep -c 'gremion_module_karenz_overdue' "$prom"
+        [ "$output" = "0" ] || { echo "value '$v' emitted overdue"; return 1; }
+    done
+    # the other colour's file is not the active one
+    printf 'KARENZ_FINAL_DELETION=on\n' > "$GREMION_ROOT/etc/env/app-green.env"
+    printf 'KARENZ_FINAL_DELETION=off\n' > "$GREMION_ROOT/etc/env/app-blue.env"
+    STACK=staging run "$METRICS"
+    run grep -c 'gremion_module_karenz_overdue' "$prom"
+    [ "$output" = "0" ]
+    # on in the active colour: the overdue family appears, with its own HELP/TYPE
+    printf 'KARENZ_FINAL_DELETION=on\n' > "$GREMION_ROOT/etc/env/app-blue.env"
+    STACK=staging run "$METRICS"
+    [ "$status" -eq 0 ]
+    grep -q '^gremion_module_karenz_overdue{customer="0192f0c1-0000-7000-8000-00000000000a",module="messaging"} 1$' "$prom"
+    run grep -c '^# TYPE gremion_module_karenz_overdue gauge$' "$prom"
+    [ "$output" = "1" ]
+    assert_recorded docker "final_at + interval '6 hours' < now()"
+}
+
+@test "metrics-textfile emits gremion_module_karenz_live 0 with no rows and leaves every Karenz gauge ABSENT when the table is unreadable or the rows are garbage" {
+    shim_docker_world
+    shim_timer enabled
+    local prom="$GREMION_ROOT/runtime/textfile/gremion.prom"
+    touch "$GREMION_ROOT/karenz-empty"
+    STACK=staging run "$METRICS"
+    [ "$status" -eq 0 ]
+    grep -q '^gremion_module_karenz_live 0$' "$prom"
+    run grep -cE '^gremion_module_karenz_(failed|stale|overdue)[{]' "$prom"
+    [ "$output" = "0" ]
+    rm -f "$GREMION_ROOT/karenz-empty"; touch "$GREMION_ROOT/karenz-down"
+    STACK=staging run "$METRICS"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"connection refused"* ]] || { echo "$output"; return 1; }
+    run grep -c 'gremion_module_karenz' "$prom"
+    [ "$output" = "0" ]
+    rm -f "$GREMION_ROOT/karenz-down"; touch "$GREMION_ROOT/karenz-missing"
+    STACK=staging run "$METRICS"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *'relation "plt.module_karenz" does not exist'* ]] || { echo "$output"; return 1; }
+    run grep -c 'gremion_module_karenz' "$prom"
+    [ "$output" = "0" ]
+    rm -f "$GREMION_ROOT/karenz-missing"; touch "$GREMION_ROOT/karenz-garbage"
+    STACK=staging run "$METRICS"
+    [ "$status" -eq 0 ]
+    run grep -c 'gremion_module_karenz' "$prom"
+    [ "$output" = "0" ]
+    # the rest of the file is still written
+    grep -q '^gremion_postgres_connections_used 42$' "$prom"
+}
+
+@test "metrics-textfile computes stale from platform columns and events only, whatever the deletion switch says (notice:switchoff after 1 h, notice:t23 and notice:t29 2 h late)" {
+    shim_docker_world
+    shim_timer enabled
+    STACK=staging run "$METRICS"
+    [ "$status" -eq 0 ]
+    assert_recorded docker "notice:switchoff"
+    assert_recorded docker "notice:t23"
+    assert_recorded docker "notice:t29"
+    assert_recorded docker "switched_off_at < now() - interval '1 hour'"
+    assert_recorded docker "final_at - interval '7 days' + interval '2 hours' < now()"
+    assert_recorded docker "final_at - interval '1 day' + interval '2 hours' < now()"
+    # a stale row is only an OPEN row, read from the two platform tables
+    assert_recorded docker "plt.module_karenz_event"
+    refute_recorded docker "audit_log"
+    refute_recorded docker "module_switch_request"
+    # the stale family is there with the deletion switch off (the fixture has no env file)
+    grep -q '^gremion_module_karenz_stale[{]' "$GREMION_ROOT/runtime/textfile/gremion.prom"
 }
 
 @test "metrics-textfile survives a failing state-container lookup: the postgres, job-run and broker signals are absent, the file is still written (TASK-039-FU round 2, ops-lib state_container)" {

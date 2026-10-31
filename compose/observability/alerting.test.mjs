@@ -19,8 +19,8 @@ const TIMES = readYaml('compose/observability/grafana/provisioning/alerting/time
 const copy = (o) => JSON.parse(JSON.stringify(o))
 const recs = (doc) => doc.groups.flatMap((g) => g.rules)
 
-test('rules.yml: sixteen gremion:cond:* conditions, each fail-closed (absent()) but the documented ones (third_party, the four TASK-079 dead-letter conditions)', () => {
-  assert.equal(recs(RULES).length, 16)
+test('rules.yml: seventeen gremion:cond:* conditions, each fail-closed (absent()) but the documented ones (third_party, the four TASK-079 dead-letter conditions)', () => {
+  assert.equal(recs(RULES).length, 17)
   assert.deepEqual(recordingRuleViolations(RULES), [])
 })
 
@@ -58,7 +58,7 @@ test('Grafana: one rule per condition, threshold > 0 on the prometheus datasourc
   const titles = recs(GRAFANA).map((r) => r.title).sort()
   assert.deepEqual(titles, [
     'BackupFailedOrOverdue', 'BrokerConsumerStalled', 'CertExpiresUnder20d', 'ContainerUnhealthy2m', 'DeadLetterQueueNotEmpty', 'DiskAbove70',
-    'EdgePort80Down', 'InboxDeadLettered', 'InboxStalled', 'MailQueueOldest1h', 'MemoryPressure', 'OutboxDeadLettered', 'PostgresConnections80pct',
+    'EdgePort80Down', 'InboxDeadLettered', 'InboxStalled', 'MailQueueOldest1h', 'MemoryPressure', 'ModuleKarenzFailedOrOverdue', 'OutboxDeadLettered', 'PostgresConnections80pct',
     'SignalAbsent', 'StorageComponentAbove70pct', 'ThirdPartyUnreachable',
   ])
 })
@@ -80,6 +80,38 @@ test('TASK-079: each dead-letter path has its OWN Grafana rule on its OWN condit
     assert.ok(seconds(rule.for) > 0, `${title}: no pending period`)
     assert.ok(readme.includes(`| \`${title}\` |`), `${title}: not in the README rule table`)
   }
+})
+
+test('module Karenz: the condition reads the failed, stale and overdue gauges and carries an absent(gremion_module_karenz_live) arm (it is NOT a NO_ABSENT exemption)', () => {
+  const rec = recs(RULES).find((r) => r.record === 'gremion:cond:module_karenz')
+  assert.ok(rec, 'no gremion:cond:module_karenz recording rule')
+  const expr = String(rec.expr)
+  for (const g of ['gremion_module_karenz_failed', 'gremion_module_karenz_stale', 'gremion_module_karenz_overdue']) assert.ok(expr.includes(g), `${g} is not read`)
+  assert.match(expr, /absent\(gremion_module_karenz_live\)/)
+  assert.match(expr, /"component", "module-karenz"/)
+  assert.ok(!NO_ABSENT.has('gremion:cond:module_karenz'), 'module_karenz must not be a NO_ABSENT exemption')
+  assert.deepEqual(recordingRuleViolations(RULES), [])
+  // RED: without its absent() arm the checker names the condition
+  const r = copy(RULES)
+  const x = recs(r).find((y) => y.record === 'gremion:cond:module_karenz')
+  x.expr = String(x.expr).replace(/absent\(gremion_module_karenz_live\)/, 'vector(1)')
+  assert.match(recordingRuleViolations(r).join('\n'), /gremion:cond:module_karenz has no absent\(\) arm/)
+})
+
+test('module Karenz: the Grafana rule alerts on cond > 0 grouped by alertname and component, critical, with a pending period and a README row', () => {
+  const rule = recs(GRAFANA).find((r) => r.title === 'ModuleKarenzFailedOrOverdue')
+  assert.ok(rule, 'no Grafana rule ModuleKarenzFailedOrOverdue')
+  assert.equal(rule.data.find((d) => d.refId === 'A').model.expr, 'gremion:cond:module_karenz')
+  const b = rule.data.find((d) => d.refId === 'B').model.conditions[0].evaluator
+  assert.equal(b.type, 'gt')
+  assert.deepEqual(b.params, [0])
+  assert.equal(rule.noDataState, 'Alerting')
+  assert.equal(rule.execErrState, 'Alerting')
+  assert.equal(rule.labels.severity, 'critical')
+  assert.equal(rule.annotations.component, '{{ $labels.component }}')
+  assert.ok(seconds(rule.for) > 0, 'no pending period')
+  assert.ok(readText('compose/observability/README.md').includes('| `ModuleKarenzFailedOrOverdue` |'), 'not in the README rule table')
+  assert.deepEqual(POLICY.policies[0].group_by, ['alertname', 'component'])
 })
 
 test('Grafana RED: a rule on no condition, a condition with no rule, NoData=OK, a threshold other than > 0 each fail', () => {
@@ -107,7 +139,7 @@ test('a Grafana annotation template is written plainly: alerting provisioning is
     .filter((l) => !l.trimStart().startsWith('#'))
     .join('\n')
   assert.ok(!/\$\$/.test(body), 'a $$ outside a comment')
-  assert.equal((body.match(/\{\{ \$labels\.component \}\}/g) ?? []).length, 16)
+  assert.equal((body.match(/\{\{ \$labels\.component \}\}/g) ?? []).length, 17)
 })
 
 test('TDD 6: the policy groups by [alertname, component], waits 30s, re-groups at 5m, never repeats an open condition (8760h)', () => {
