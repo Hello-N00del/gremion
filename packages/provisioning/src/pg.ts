@@ -16,7 +16,7 @@ import {
 } from '@gremion/tenant-store/lifecycle'
 import { loadCatalogueRows, provisionalNote, type CatalogueModule, type CatalogueRowsResult } from './catalogue-rows.ts'
 import { ProvisioningError } from './errors.ts'
-import type { CustomerRef, ModulesPort } from './ports.ts'
+import type { ActorKind, CustomerRef, ModulesPort } from './ports.ts'
 
 /**
  * The modules port over @gremion/tenant-store's enableModule. `lifecycle`
@@ -44,16 +44,16 @@ export function pgModules(opts: {
       }
       return missing
     },
-    async enable(c: CustomerRef, moduleId: string, gate: EnableGate, operatorId: string) {
+    async enable(c: CustomerRef, moduleId: string, gate: EnableGate, operatorId: string, actorKind?: ActorKind) {
       const module = byId.get(moduleId)
       if (!module) throw new ProvisioningError('MODULE_UNKNOWN', `module ${moduleId} is not in the catalogue`)
-      const r = await enableModule(c.id, module, { kind: 'operator', id: operatorId }, { ...opts.lifecycle, platform: opts.platform, enableGate: gate })
+      const r = await enableModule(c.id, module, { kind: actorKind ?? 'operator', id: operatorId }, { ...opts.lifecycle, platform: opts.platform, enableGate: gate })
       return { noop: r.noop, database: r.database }
     },
-    async disable(c: CustomerRef, moduleId: string, operatorId: string) {
+    async disable(c: CustomerRef, moduleId: string, operatorId: string, actorKind?: ActorKind) {
       const module = byId.get(moduleId)
       if (!module) throw new ProvisioningError('MODULE_UNKNOWN', `module ${moduleId} is not in the catalogue`)
-      const r = await disableModule(c.id, module, { kind: 'operator', id: operatorId }, { ...opts.lifecycle, platform: opts.platform, enableGate: undefined as never })
+      const r = await disableModule(c.id, module, { kind: actorKind ?? 'operator', id: operatorId }, { ...opts.lifecycle, platform: opts.platform, enableGate: undefined as never })
       return { noop: r.noop, dropped: r.dropped, database: r.database, export: r.export }
     },
     async enabled(c: CustomerRef) {
