@@ -108,6 +108,7 @@ import { deleteTenant, type DeleteDeps, type LeafShredExecutor } from '../src/li
 import { requestVerb } from './tenant-provision-requests'
 import { GATE_USAGE, GATE_VERBS, refusalLine, runGateVerb } from './tenant-provision-gate'
 import { EXPORT_USAGE, EXPORT_VERBS, exportVerb } from './tenant-provision-export'
+import { KARENZ_USAGE, KARENZ_VERBS, karenzVerb, liveModuleDatabases, liveModuleDatabasesRefusal } from './tenant-provision-karenz'
 import { IMPORT_USAGE, IMPORT_VERBS, importVerb } from './tenant-provision-import'
 import { PURGE_USAGE, PURGE_VERBS, purgeVerb } from './tenant-provision-purge'
 import { parseDpiaMap, scratchFixturesAllowed } from './tenant-provision-scratch'
@@ -976,12 +977,9 @@ async function cmdDelete(): Promise<void> {
       if (!platformUrl) throw new UsageError('delete needs PLATFORM_DATABASE_URL to prove the customer has no enabled module database left')
       const platform = postgres(directPostgresUrl('PLATFORM_DATABASE_URL', platformUrl), { max: 1, onnotice: () => {}, connect_timeout: 15 })
       try {
-        const live = await platform<{ module_key: string }[]>`
-          SELECT m.module_key FROM plt.module_database d JOIN plt.module m USING (module_id)
-           WHERE d.customer_id = ${tenant.id} AND d.state <> 'dropped' ORDER BY 1`
-        if (live.length) {
-          throw new UsageError(`${slug} has module(s) ${live.map((r) => r.module_key).join(', ')} enabled with their own databases; delete does not drop module databases yet -- disable them first (TASK-044/077), then rerun delete`)
-        }
+        // Not-dropped module databases include the BLOCKED ones of a switch-off inside its 30-day Karenz.
+        const live = await liveModuleDatabases(platform, tenant.id)
+        if (live.length) throw new UsageError(liveModuleDatabasesRefusal(slug, live))
       } finally {
         await platform.end({ timeout: 5 })
       }
@@ -1072,7 +1070,8 @@ const USAGE = `usage: tenant-create <verb> ...
 ${GATE_USAGE}
 ${IMPORT_USAGE}
 ${PURGE_USAGE}
-${EXPORT_USAGE}`
+${EXPORT_USAGE}
+${KARENZ_USAGE}`
 
 async function main(): Promise<void> {
   const verb = process.argv[2]

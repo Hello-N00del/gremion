@@ -8,7 +8,8 @@
 //   enable-module <slug> <module> --operator <uuid> [--actor-kind operator|person] [--dpia-json <file>]
 //       one module for an existing customer through the level-1 gate
 //   disable-module <slug> <module> --operator <uuid> [--actor-kind operator|person]
-//       one module off for an existing customer: export + verify, then drop (TRD-424); repeatable
+//       one module off for an existing customer: export + verify, then BLOCK the database for the
+//       30-day Karenz (module Karenz 2026-10-30; nothing is dropped, the day-30 job `karenz-run` drops it); repeatable
 //       --actor-kind person (default operator): --operator names a council admin, not an
 //       ops-realm operator (a verified council request; Karenz phase 1)
 //   dpia-record <slug> <module> --operator <uuid> --requires-dpia yes|no|not_applicable
@@ -154,8 +155,8 @@ async function cmdEnableModule(ctx: GateVerbContext): Promise<void> {
 }
 
 /**
- * disableModule drops the module database after exporting it; the export must
- * outlive this one-shot container (docker compose run --rm). So the verb refuses,
+ * disableModule exports the module database and blocks it; the export is the 30-day backup and
+ * must outlive this one-shot container (docker compose run --rm). So the verb refuses,
  * before anything is touched, unless TENANT_EXPORT_DIR is its own mount.
  */
 export function exportDirIsMounted(dir: string, mountinfo = '/proc/self/mountinfo'): boolean {
@@ -173,12 +174,13 @@ async function cmdDisableModule(ctx: GateVerbContext): Promise<void> {
   const kind = actorKind(ctx)
   const dir = process.env.TENANT_EXPORT_DIR ?? ''
   if (!dir || !(ctx.exportDirMounted ?? exportDirIsMounted)(dir)) {
-    throw ctx.usage(`disable-module needs TENANT_EXPORT_DIR (${dir || 'unset'}) to be a mounted volume that outlives this container: the module database is dropped after its export; nothing was touched`)
+    throw ctx.usage(`disable-module needs TENANT_EXPORT_DIR (${dir || 'unset'}) to be a mounted volume that outlives this container: the module database is blocked after its export and the export is its 30-day backup; nothing was touched`)
   }
   await ctx.withLive({}, async (deps) => {
     const r = await disableCustomerModule(slug, moduleKey, { operatorId: op, actorKind: kind }, deps)
-    ctx.log(`disable-module ${slug} ${r.moduleKey} by ${kind} ${op}: ${r.noop ? 'already disabled' : 'disabled'}${r.export ? `; export ${r.export.path} sha256 ${r.export.sha256} (${r.export.bytes} bytes)` : ''}; broker ${r.reloaded ? 'reloaded' : 'unchanged'}`)
-    console.log(JSON.stringify({ verb: 'disable-module', slug, module: r.moduleKey, noop: r.noop, dropped: r.dropped, database: r.database, export: r.export, enabled: r.enabled, operatorId: op, actorKind: kind }))
+    const until = r.blocked && r.finalAt ? `; blocked until ${r.finalAt.toISOString().slice(0, 10)}` : ''
+    ctx.log(`disable-module ${slug} ${r.moduleKey} by ${kind} ${op}: ${r.noop ? 'already disabled' : 'disabled'}${until}${r.export ? `; export ${r.export.path} sha256 ${r.export.sha256} (${r.export.bytes} bytes)` : ''}; broker ${r.reloaded ? 'reloaded' : 'unchanged'}`)
+    console.log(JSON.stringify({ verb: 'disable-module', slug, module: r.moduleKey, noop: r.noop, dropped: r.dropped, blocked: r.blocked, finalAt: r.finalAt ?? null, database: r.database, export: r.export, enabled: r.enabled, operatorId: op, actorKind: kind }))
   })
 }
 

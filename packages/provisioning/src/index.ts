@@ -86,6 +86,7 @@ export type {
   CustomerRef,
   CustomerStatus,
   DomainPort,
+  DisableModuleResult,
   DpiaSpec,
   FirstBodyPort,
   GatePort,
