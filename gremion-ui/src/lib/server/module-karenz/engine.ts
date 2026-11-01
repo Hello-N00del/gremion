@@ -39,6 +39,7 @@ import { listSwitches, type SwitchRow } from '$lib/server/module-switch/store'
 import type { TenantContext } from '$lib/server/tenant/context'
 import { KarenzPartialError, karenzParticipantsFor, type KarenzContext, type KarenzParticipant } from './participants'
 import { listKarenz, reportKarenz, type KarenzReport, type KarenzRowView } from './platform'
+import { createNoticeStages } from './notices'
 import * as realStore from './store'
 import type { ItemState, KarenzItem, KarenzItemRow, StepPatch, StepRow } from './store'
 
@@ -109,16 +110,29 @@ export interface KarenzStages {
   publish?: (ctx: KarenzContext) => Promise<Array<{ step: string; run: () => Promise<void> }>>
 }
 
-let registeredStages: KarenzStages = {}
+/** Task 9: the info mail and the reminders are the engine's own, so they are there without any registration. */
+const defaultStages = (): KarenzStages => createNoticeStages()
+
+let registeredStages: KarenzStages = defaultStages()
 
 /** Register (merge) the stages of Tasks 9 to 11. A second registration of the same stage replaces it. */
 export function registerKarenzStages(s: KarenzStages): void {
   registeredStages = { ...registeredStages, ...s }
 }
 
-/** Test-only: drop every registered stage. */
+/** Test-only: drop every registered stage, the default notices included. */
 export function _clearKarenzStagesForTests(): void {
   registeredStages = {}
+}
+
+/** Test-only: back to the stages a fresh process has. */
+export function _resetKarenzStagesToDefaultsForTests(): void {
+  registeredStages = defaultStages()
+}
+
+/** Test-only: what is registered right now. */
+export function _registeredStagesForTests(): KarenzStages {
+  return registeredStages
 }
 
 export interface KarenzPassDeps {
@@ -372,6 +386,19 @@ async function processOpen(env: RowEnv): Promise<void> {
 
   const now = d.now().getTime()
   if (now >= row.finalAt.getTime()) {
+    // A reminder that was never sent is not sent now ("deleted tomorrow" after the deletion would be false),
+    // but it is not silent either: an error event of its own step, so the failed gauge and the log see it.
+    if (stages.reminder) {
+      for (const [kind, step] of [
+        ['t23', STEP.noticeT23],
+        ['t29', STEP.noticeT29],
+      ] as const) {
+        const prev = await d.store.getStep(tenant.db, row.karenzId, step)
+        if (prev?.state === 'done' || prev?.state === 'skipped') continue
+        env.counters.steps++
+        await recordFailure(env, step, `the ${kind} reminder was not sent before the final day`, prev)
+      }
+    }
     if (row.finalMode === 'dry') await dryRunFinal(env, participants)
     // finalMode null: the platform job has not looked at the row yet; 'live': it is about to move the row to finalizing. Either way, wait.
     return
