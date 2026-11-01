@@ -28,10 +28,19 @@ vi.mock('$lib/server/tenant/context', () => ({
 
 const getOrgUnit = vi.fn()
 const listOrgUnits = vi.fn()
-vi.mock('$lib/server/governance/org-units-db', () => ({ getOrgUnit, listOrgUnits }))
+const setSubsystemWanted = vi.fn()
+vi.mock('$lib/server/governance/org-units-db', () => ({ getOrgUnit, listOrgUnits, setSubsystemWanted }))
 
 const getResource = vi.fn()
-vi.mock('$lib/server/governance/provisioning/ledger', () => ({ getResource }))
+const enqueueResources = vi.fn()
+const markResourceOk = vi.fn()
+vi.mock('$lib/server/governance/provisioning/ledger', () => ({ getResource, enqueueResources, markResourceOk }))
+
+// Karenz (Task 15): unarchiveRoom re-attaches the ledger in one transaction.
+const TX = { tag: 'tx' }
+vi.mock('$lib/server/db', () => ({
+  getDb: () => ({ begin: async (fn: (tx: unknown) => Promise<unknown>) => fn(TX) }),
+}))
 
 const attachSubsystem = vi.fn()
 const releaseSubsystem = vi.fn()
@@ -237,42 +246,45 @@ describe('room-admin', () => {
       })
     }
 
-    it('T10: marker, power levels, alias RESOLVE (matches), alias delete + archive alias + canonical_alias — in that order', async () => {
+    it('T10: prior marker read, power levels read, marker (with prior), power levels write, alias RESOLVE (matches), alias delete + archive alias + canonical_alias - in that order', async () => {
       getOrgUnit.mockResolvedValue(UNIT)
       getResource.mockResolvedValue({ status: 'ok', external_id: '!r:matrix.test' })
       fetchMock
-        .mockResolvedValueOnce(new Response('{}', { status: 200 })) // 1. marker PUT
+        .mockResolvedValueOnce(new Response('{}', { status: 404 })) // 1. existing archive marker GET (none)
         .mockResolvedValueOnce(new Response(JSON.stringify({ users: { '@bot:matrix.test': 100 } }), { status: 200 })) // 2. power_levels GET
-        .mockResolvedValueOnce(new Response('{}', { status: 200 })) // 3. power_levels PUT
-        .mockResolvedValueOnce(new Response(JSON.stringify({ room_id: '!r:matrix.test' }), { status: 200 })) // 4. alias resolve GET (matches this room)
-        .mockResolvedValueOnce(new Response('{}', { status: 200 })) // 5. alias DELETE
-        .mockResolvedValueOnce(new Response('{}', { status: 200 })) // 6. archive alias PUT
-        .mockResolvedValueOnce(new Response('{}', { status: 200 })) // 7. canonical_alias state PUT
+        .mockResolvedValueOnce(new Response('{}', { status: 200 })) // 3. marker PUT
+        .mockResolvedValueOnce(new Response('{}', { status: 200 })) // 4. power_levels PUT
+        .mockResolvedValueOnce(new Response(JSON.stringify({ room_id: '!r:matrix.test' }), { status: 200 })) // 5. alias resolve GET (matches this room)
+        .mockResolvedValueOnce(new Response('{}', { status: 200 })) // 6. alias DELETE
+        .mockResolvedValueOnce(new Response('{}', { status: 200 })) // 7. archive alias PUT
+        .mockResolvedValueOnce(new Response('{}', { status: 200 })) // 8. canonical_alias state PUT
       mockReleaseInvokesTeardown('ok')
 
       const { archiveRoom } = await import('./room-admin')
       const roomId = await archiveRoom('u1', { userId: 'admin-1' })
 
       expect(roomId).toBe('!r:matrix.test')
-      expect(fetchMock).toHaveBeenCalledTimes(7)
+      expect(fetchMock).toHaveBeenCalledTimes(8)
       const urls = fetchMock.mock.calls.map((c) => c[0] as string)
       const methods = fetchMock.mock.calls.map((c) => (c[1] as RequestInit).method)
       expect(urls[0]).toContain('/state/org.gremion.room.archived/')
-      expect(methods[0]).toBe('PUT')
+      expect(methods[0]).toBe('GET')
       expect(urls[1]).toContain('/state/m.room.power_levels/')
       expect(methods[1]).toBe('GET')
-      expect(urls[2]).toContain('/state/m.room.power_levels/')
+      expect(urls[2]).toContain('/state/org.gremion.room.archived/')
       expect(methods[2]).toBe('PUT')
-      expect(urls[3]).toContain('/directory/room/')
-      expect(methods[3]).toBeUndefined() // getRoomIdByAlias omits `method` — fetch defaults to GET
+      expect(urls[3]).toContain('/state/m.room.power_levels/')
+      expect(methods[3]).toBe('PUT')
       expect(urls[4]).toContain('/directory/room/')
-      expect(methods[4]).toBe('DELETE')
+      expect(methods[4]).toBeUndefined() // getRoomIdByAlias omits `method` - fetch defaults to GET
       expect(urls[5]).toContain('/directory/room/')
-      expect(methods[5]).toBe('PUT')
-      expect(urls[6]).toContain('/state/m.room.canonical_alias/')
+      expect(methods[5]).toBe('DELETE')
+      expect(urls[6]).toContain('/directory/room/')
       expect(methods[6]).toBe('PUT')
+      expect(urls[7]).toContain('/state/m.room.canonical_alias/')
+      expect(methods[7]).toBe('PUT')
 
-      const powerLevelsBody = JSON.parse((fetchMock.mock.calls[2][1] as RequestInit).body as string)
+      const powerLevelsBody = JSON.parse((fetchMock.mock.calls[3][1] as RequestInit).body as string)
       expect(powerLevelsBody.events_default).toBe(100)
       expect(powerLevelsBody.invite).toBe(100)
       expect(powerLevelsBody.state_default).toBe(100)
@@ -281,12 +293,12 @@ describe('room-admin', () => {
 
       // DEFECT 1: the archive alias is set as m.room.canonical_alias (not
       // just a bare directory alias), and it is the SAME alias value that
-      // was just put in the directory — not independently recomputed
+      // was just put in the directory - not independently recomputed
       // (freshArchiveAlias() embeds a timestamp; calling it twice would mint
       // two different aliases and point canonical_alias at one the
       // directory PUT never created).
-      const archiveAliasUrl = decodeURIComponent(urls[5]!.split('/directory/room/')[1]!)
-      const canonicalBody = JSON.parse((fetchMock.mock.calls[6][1] as RequestInit).body as string)
+      const archiveAliasUrl = decodeURIComponent(urls[6]!.split('/directory/room/')[1]!)
+      const canonicalBody = JSON.parse((fetchMock.mock.calls[7][1] as RequestInit).body as string)
       expect(canonicalBody).toEqual({ alias: archiveAliasUrl })
 
       expect(writeAuditEntry).toHaveBeenCalledWith(
@@ -294,13 +306,66 @@ describe('room-admin', () => {
       )
     })
 
+    it('Karenz T15: archive stores the prior power levels (the values it overwrites) in the marker', async () => {
+      getOrgUnit.mockResolvedValue(UNIT)
+      getResource.mockResolvedValue({ status: 'ok', external_id: '!r:matrix.test' })
+      const prior = {
+        events_default: 0, invite: 0, state_default: 50,
+        events: { 'm.call.member': 0, 'org.matrix.msc3401.call.member': 0 },
+      }
+      fetchMock
+        .mockResolvedValueOnce(new Response('{}', { status: 404 })) // existing marker: none
+        .mockResolvedValueOnce(new Response(JSON.stringify({
+          ...prior, events: { ...prior.events, 'm.room.name': 50 }, users: { '@bot:matrix.test': 100 },
+        }), { status: 200 })) // power_levels GET
+        .mockImplementation(async () => new Response('{}', { status: 200 }))
+      mockReleaseInvokesTeardown('ok')
+
+      const { archiveRoom } = await import('./room-admin')
+      await archiveRoom('u1', { userId: 'admin-1' })
+
+      const markerPut = fetchMock.mock.calls.find((c) =>
+        (c[0] as string).includes('/state/org.gremion.room.archived/') && (c[1] as RequestInit).method === 'PUT')!
+      const markerBody = JSON.parse((markerPut[1] as RequestInit).body as string)
+      expect(markerBody.org_unit_id).toBe('u1')
+      expect(markerBody.prior).toEqual(prior) // only the four call-member types of `events`, never m.room.name
+      expect(markerBody.prior.events['m.room.name']).toBeUndefined()
+    })
+
+    it('Karenz T15: a retry after a partial archive keeps the FIRST prior (the room is already read-only then)', async () => {
+      getOrgUnit.mockResolvedValue(UNIT)
+      getResource.mockResolvedValue({ status: 'ok', external_id: '!r:matrix.test' })
+      const firstPrior = { events_default: 0, invite: 0, state_default: 50, events: { 'm.call.member': 0 } }
+      routeMatrix(
+        { '!r:matrix.test': { marker: { org_unit_id: 'u1', archived_at: '2026-09-01T00:00:00Z', prior: firstPrior } } },
+        (url) => {
+          if (url.includes('/state/m.room.power_levels/')) {
+            // the room is ALREADY read-only from the first, interrupted attempt
+            return new Response(JSON.stringify({ events_default: 100, invite: 100, state_default: 100, events: { 'm.call.member': 100 } }), { status: 200 })
+          }
+          return undefined
+        },
+      )
+      mockReleaseInvokesTeardown('ok')
+
+      const { archiveRoom } = await import('./room-admin')
+      await archiveRoom('u1', { userId: 'admin-1' })
+
+      const markerPut = fetchMock.mock.calls.find((c) =>
+        (c[0] as string).includes('/state/org.gremion.room.archived/') && (c[1] as RequestInit).method === 'PUT')!
+      const markerBody = JSON.parse((markerPut[1] as RequestInit).body as string)
+      expect(markerBody.prior).toEqual(firstPrior)
+      expect(markerBody.archived_at).toBe('2026-09-01T00:00:00Z')
+    })
+
     it('MEDIUM fix (round-1 deferred, r1-kernel-nav-roomsB2): a canonical alias that resolves to a DIFFERENT room is never deleted', async () => {
       const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
       getOrgUnit.mockResolvedValue(UNIT)
       getResource.mockResolvedValue({ status: 'ok', external_id: '!r:matrix.test' })
       fetchMock
-        .mockResolvedValueOnce(new Response('{}', { status: 200 })) // marker PUT
+        .mockResolvedValueOnce(new Response('{}', { status: 404 })) // existing marker GET (none)
         .mockResolvedValueOnce(new Response(JSON.stringify({}), { status: 200 })) // power_levels GET
+        .mockResolvedValueOnce(new Response('{}', { status: 200 })) // marker PUT
         .mockResolvedValueOnce(new Response('{}', { status: 200 })) // power_levels PUT
         // The alias now resolves to SOME OTHER room (rename collision) —
         // deleting it would take down that other unit's live canonical alias.
@@ -312,8 +377,8 @@ describe('room-admin', () => {
       const { archiveRoom } = await import('./room-admin')
       await archiveRoom('u1', { userId: 'admin-1' })
 
-      // Exactly 6 calls: no DELETE call was ever issued for the mismatched alias.
-      expect(fetchMock).toHaveBeenCalledTimes(6)
+      // Exactly 7 calls: no DELETE call was ever issued for the mismatched alias.
+      expect(fetchMock).toHaveBeenCalledTimes(7)
       const methods = fetchMock.mock.calls.map((c) => (c[1] as RequestInit).method)
       expect(methods).not.toContain('DELETE')
       expect(errSpy).toHaveBeenCalledWith(
@@ -331,40 +396,202 @@ describe('room-admin', () => {
       const { archiveRoom } = await import('./room-admin')
       await expect(archiveRoom('u1', { userId: 'admin-1' })).rejects.toThrow('db detach failed')
       const callsAfterFailure = fetchMock.mock.calls.length
-      expect(callsAfterFailure).toBe(6) // teardown ran fully before the DB step failed
+      expect(callsAfterFailure).toBe(7) // teardown ran fully before the DB step failed
 
       // Retry: ledger row is still 'ok' (DB detach never committed), so a second
       // archiveRoom call re-finds the same active room and redoes the same idempotent ops.
       mockReleaseInvokesTeardown('ok')
       const roomId = await archiveRoom('u1', { userId: 'admin-1' })
       expect(roomId).toBe('!r:matrix.test')
-      expect(fetchMock).toHaveBeenCalledTimes(callsAfterFailure + 6)
+      expect(fetchMock).toHaveBeenCalledTimes(callsAfterFailure + 7)
     })
 
     it('T11: an M_FORBIDDEN power-levels read calls makeRoomAdmin once, then retries — and canonical_alias inherits that same admin grant', async () => {
       getOrgUnit.mockResolvedValue(UNIT)
       getResource.mockResolvedValue({ status: 'ok', external_id: '!r:matrix.test' })
       fetchMock
-        .mockResolvedValueOnce(new Response('{}', { status: 200 })) // 1. marker PUT
+        .mockResolvedValueOnce(new Response('{}', { status: 404 })) // 1. existing marker GET (none)
         .mockResolvedValueOnce(new Response(JSON.stringify({ errcode: 'M_FORBIDDEN', error: 'not admin' }), { status: 403 })) // 2. power_levels GET -> forbidden
         .mockResolvedValueOnce(new Response('{}', { status: 200 })) // 3. make_room_admin POST
         .mockResolvedValueOnce(new Response(JSON.stringify({}), { status: 200 })) // 4. power_levels GET retry -> ok
-        .mockResolvedValueOnce(new Response('{}', { status: 200 })) // 5. power_levels PUT
-        .mockResolvedValueOnce(new Response('{}', { status: 200 })) // 6. alias resolve GET (default {} body -> mismatch, delete skipped)
-        .mockResolvedValueOnce(new Response('{}', { status: 200 })) // 7. archive alias PUT
-        .mockResolvedValueOnce(new Response('{}', { status: 200 })) // 8. canonical_alias state PUT — no SECOND make_room_admin call
+        .mockResolvedValueOnce(new Response('{}', { status: 200 })) // 5. marker PUT
+        .mockResolvedValueOnce(new Response('{}', { status: 200 })) // 6. power_levels PUT
+        .mockResolvedValueOnce(new Response('{}', { status: 200 })) // 7. alias resolve GET (default {} body -> mismatch, delete skipped)
+        .mockResolvedValueOnce(new Response('{}', { status: 200 })) // 8. archive alias PUT
+        .mockResolvedValueOnce(new Response('{}', { status: 200 })) // 9. canonical_alias state PUT - no SECOND make_room_admin call
       mockReleaseInvokesTeardown('ok')
 
       const { archiveRoom } = await import('./room-admin')
       await archiveRoom('u1', { userId: 'admin-1' })
 
-      expect(fetchMock).toHaveBeenCalledTimes(8)
+      expect(fetchMock).toHaveBeenCalledTimes(9)
       const [makeAdminUrl, makeAdminInit] = fetchMock.mock.calls[2] as [string, RequestInit]
       expect(makeAdminUrl).toContain('/make_room_admin')
       expect(JSON.parse(makeAdminInit.body as string)).toEqual({ user_id: '@bot:matrix.test' })
       const makeAdminCalls = fetchMock.mock.calls.filter((c) => (c[0] as string).includes('/make_room_admin'))
       expect(makeAdminCalls).toHaveLength(1) // canonical_alias PUT never needed its own forbidden-retry
-      expect((fetchMock.mock.calls[7]![0] as string)).toContain('/state/m.room.canonical_alias/')
+      expect((fetchMock.mock.calls[8]![0] as string)).toContain('/state/m.room.canonical_alias/')
+    })
+  })
+
+  describe('unarchiveRoom (Karenz restore)', () => {
+    const ROOM = '!r:matrix.test'
+    const ARCHIVE_ALIAS = '#stura-archiv-vorstand-202609010000:matrix.test'
+    const CANON = '#stura-vorstand:matrix.test'
+    const CALL_TYPES = [
+      'org.matrix.msc4143.rtc.member', 'org.matrix.msc3401.call.member', 'm.call.member', 'io.element.call.encryption_keys',
+    ]
+    const ok = (body: unknown) => new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } })
+
+    // A faithful in-memory room: state events by type, directory aliases by name.
+    function archivedRoom(opts: { prior?: unknown; aliasHolder?: string } = {}) {
+      const state = new Map<string, unknown>()
+      state.set('m.room.create', { room_version: '10' })
+      state.set('org.gremion.room.archived', { org_unit_id: 'u1', archived_at: '2026-09-01T00:00:00Z', ...(opts.prior ? { prior: opts.prior } : {}) })
+      state.set('m.room.power_levels', {
+        events_default: 100, invite: 100, state_default: 100,
+        events: { ...Object.fromEntries(CALL_TYPES.map((t) => [t, 100])), 'm.room.name': 50 },
+        users: { [BOT]: 100 },
+      })
+      state.set('m.room.canonical_alias', { alias: ARCHIVE_ALIAS })
+      const aliases = new Map<string, string>([[ARCHIVE_ALIAS, ROOM]])
+      if (opts.aliasHolder) aliases.set(CANON, opts.aliasHolder)
+      fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+        const method = init?.method ?? 'GET'
+        const st = /\/rooms\/[^/]+\/state\/([^/]+)\//.exec(url)
+        if (st) {
+          const type = decodeURIComponent(st[1]!)
+          if (method === 'PUT') { state.set(type, JSON.parse(init!.body as string)); return ok({}) }
+          if (!state.has(type)) return new Response('{"errcode":"M_NOT_FOUND"}', { status: 404 })
+          return ok(url.includes('format=event') ? { sender: BOT, content: state.get(type) } : state.get(type))
+        }
+        const dir = /\/directory\/room\/([^?]+)/.exec(url)
+        if (dir) {
+          const alias = decodeURIComponent(dir[1]!)
+          if (method === 'PUT') { aliases.set(alias, JSON.parse(init!.body as string).room_id); return ok({}) }
+          if (method === 'DELETE') { aliases.delete(alias); return ok({}) }
+          return aliases.has(alias) ? ok({ room_id: aliases.get(alias) }) : new Response('{"errcode":"M_NOT_FOUND"}', { status: 404 })
+        }
+        return ok({})
+      })
+      return { state, aliases }
+    }
+
+    it('restores the prior power levels exactly, puts the canonical alias back, re-attaches the ledger and the room is no longer archived', async () => {
+      getOrgUnit.mockResolvedValue(UNIT)
+      getResource.mockResolvedValue(null) // released at the switch-off
+      const prior = { events_default: 0, invite: 0, state_default: 50, events: { 'm.call.member': 0 } }
+      const room = archivedRoom({ prior })
+
+      const { unarchiveRoom, getRoomArchiveMarker } = await import('./room-admin')
+      await unarchiveRoom('u1', ROOM, { userId: 'karenz-service' })
+
+      const pl = room.state.get('m.room.power_levels') as { events_default: number; invite: number; state_default: number; events: Record<string, number>; users: Record<string, number> }
+      expect(pl.events_default).toBe(0)
+      expect(pl.invite).toBe(0)
+      expect(pl.state_default).toBe(50)
+      expect(pl.events['m.call.member']).toBe(0)
+      // the other call types were not in the room before the archive: gone again, not set to a made-up value
+      expect(pl.events['org.matrix.msc3401.call.member']).toBeUndefined()
+      expect(pl.events['m.room.name']).toBe(50) // untouched
+      expect(pl.users).toEqual({ [BOT]: 100 })
+
+      expect(room.aliases.get(CANON)).toBe(ROOM)
+      expect(room.aliases.has(ARCHIVE_ALIAS)).toBe(false)
+      expect(room.state.get('m.room.canonical_alias')).toEqual({ alias: CANON })
+
+      expect(enqueueResources).toHaveBeenCalledWith(TX, 'u1', ['matrix'])
+      expect(setSubsystemWanted).toHaveBeenCalledWith(TX, 'u1', 'matrix', true)
+      expect(markResourceOk).toHaveBeenCalledWith('u1', 'matrix', ROOM)
+
+      // the marker is overwritten (a state event cannot be deleted); the room then reads as active
+      const marker = room.state.get('org.gremion.room.archived') as Record<string, unknown>
+      expect(typeof marker.unarchived_at).toBe('string')
+      expect(marker.org_unit_id).toBeUndefined()
+      await expect(getRoomArchiveMarker(ROOM)).resolves.toBeNull()
+      expect(writeAuditEntry).toHaveBeenCalledWith(
+        expect.objectContaining({ field: 'messages.room.unarchive', newValue: `u1:${ROOM}:ok` })
+      )
+    })
+
+    it('a marker written before the prior was stored falls back to the createRoom defaults (0 for the call-member events)', async () => {
+      getOrgUnit.mockResolvedValue(UNIT)
+      getResource.mockResolvedValue(null)
+      const room = archivedRoom()
+
+      const { unarchiveRoom } = await import('./room-admin')
+      await unarchiveRoom('u1', ROOM, { userId: 'karenz-service' })
+
+      const pl = room.state.get('m.room.power_levels') as { events_default: number; invite: number; state_default: number; events: Record<string, number> }
+      expect([pl.events_default, pl.invite, pl.state_default]).toEqual([0, 0, 50])
+      for (const t of CALL_TYPES) expect(pl.events[t]).toBe(0)
+    })
+
+    it('the ledger is re-attached BEFORE the marker is overwritten, so an interrupted restore is retried', async () => {
+      getOrgUnit.mockResolvedValue(UNIT)
+      getResource.mockResolvedValue(null)
+      const room = archivedRoom()
+      markResourceOk.mockRejectedValueOnce(new Error('db down'))
+
+      const { unarchiveRoom, getRoomArchiveMarker } = await import('./room-admin')
+      await expect(unarchiveRoom('u1', ROOM, { userId: 'karenz-service' })).rejects.toThrow('db down')
+      expect((await getRoomArchiveMarker(ROOM))?.org_unit_id).toBe('u1') // still archived: the retry will do it all again
+      expect(writeAuditEntry).toHaveBeenCalledWith(
+        expect.objectContaining({ field: 'messages.room.unarchive', newValue: `u1:${ROOM}:failed` })
+      )
+
+      await unarchiveRoom('u1', ROOM, { userId: 'karenz-service' }) // idempotent second run
+      expect(room.aliases.get(CANON)).toBe(ROOM)
+      await expect(getRoomArchiveMarker(ROOM)).resolves.toBeNull()
+    })
+
+    it('an already active room (no marker, ledger row ok for this room) is a no-op', async () => {
+      getOrgUnit.mockResolvedValue(UNIT)
+      getResource.mockResolvedValue({ status: 'ok', external_id: ROOM })
+      routeMatrix({}) // no marker anywhere
+
+      const { unarchiveRoom } = await import('./room-admin')
+      await unarchiveRoom('u1', ROOM, { userId: 'karenz-service' })
+
+      const writes = fetchMock.mock.calls.filter((c) => ['PUT', 'DELETE', 'POST'].includes((c[1] as RequestInit)?.method ?? ''))
+      expect(writes).toHaveLength(0)
+      expect(markResourceOk).not.toHaveBeenCalled()
+    })
+
+    it('a room that is neither archived for this unit nor its active room is a RoomNotFoundError', async () => {
+      getOrgUnit.mockResolvedValue(UNIT)
+      getResource.mockResolvedValue(null)
+      routeMatrix({ [ROOM]: { marker: { org_unit_id: 'someone-else', archived_at: '2026-09-01T00:00:00Z' } } })
+
+      const { unarchiveRoom, RoomNotFoundError } = await import('./room-admin')
+      await expect(unarchiveRoom('u1', ROOM, { userId: 'karenz-service' })).rejects.toThrow(RoomNotFoundError)
+    })
+
+    it('a canonical alias held by ANOTHER room is a RoomConflictError and nothing is re-attached', async () => {
+      getOrgUnit.mockResolvedValue(UNIT)
+      getResource.mockResolvedValue(null)
+      const room = archivedRoom({ aliasHolder: '!other:matrix.test' })
+
+      const { unarchiveRoom, RoomConflictError } = await import('./room-admin')
+      await expect(unarchiveRoom('u1', ROOM, { userId: 'karenz-service' })).rejects.toThrow(RoomConflictError)
+      expect(room.aliases.get(CANON)).toBe('!other:matrix.test') // never taken over
+      expect(markResourceOk).not.toHaveBeenCalled()
+    })
+
+    it('a ledger row that is already ok for a DIFFERENT room is a RoomConflictError', async () => {
+      getOrgUnit.mockResolvedValue(UNIT)
+      getResource.mockResolvedValue({ status: 'ok', external_id: '!fresh:matrix.test' })
+      archivedRoom()
+
+      const { unarchiveRoom, RoomConflictError } = await import('./room-admin')
+      await expect(unarchiveRoom('u1', ROOM, { userId: 'karenz-service' })).rejects.toThrow(RoomConflictError)
+      expect(markResourceOk).not.toHaveBeenCalled()
+    })
+
+    it('getRoomArchiveMarker returns null for marker content without org_unit_id (an unarchived room)', async () => {
+      routeMatrix({ [ROOM]: { marker: { unarchived_at: '2026-09-10T00:00:00Z' } } })
+      const { getRoomArchiveMarker } = await import('./room-admin')
+      await expect(getRoomArchiveMarker(ROOM)).resolves.toBeNull()
     })
   })
 
