@@ -39,6 +39,7 @@ import { listSwitches, type SwitchRow } from '$lib/server/module-switch/store'
 import type { TenantContext } from '$lib/server/tenant/context'
 import { KarenzPartialError, karenzParticipantsFor, type KarenzContext, type KarenzParticipant } from './participants'
 import { listKarenz, reportKarenz, type KarenzReport, type KarenzRowView } from './platform'
+import { writeRetainedCopies } from './retained/write'
 import * as realStore from './store'
 import type { ItemState, KarenzItem, KarenzItemRow, StepPatch, StepRow } from './store'
 
@@ -115,6 +116,14 @@ let registeredStages: KarenzStages = {}
 export function registerKarenzStages(s: KarenzStages): void {
   registeredStages = { ...registeredStages, ...s }
 }
+
+// Task 10: the `retained` stage is the sealed-copy writer. It lives here (not in a module) because
+// every module's extractors register into retained/extractors.ts and the writer runs for all of them.
+registerKarenzStages({
+  retained: async (ctx) => {
+    await writeRetainedCopies(ctx)
+  },
+})
 
 /** Test-only: drop every registered stage. */
 export function _clearKarenzStagesForTests(): void {
