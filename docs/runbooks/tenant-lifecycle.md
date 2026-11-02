@@ -387,6 +387,8 @@ pnpm -C gremion-ui exec tsx scripts/tenant-provision.ts reconcile [--verify-only
 
 Re-checks each tenant's realm against the base realm contract (identity, issuer,
 exact URIs, step-up flow) and, without `--verify-only`, replays repairable drift.
+With `--verify-only` (the host verb `gremion-tenant reconcile <slug>` without `--apply`) it only
+reports drift and changes nothing.
 `--all` walks the whole fleet, skips non-realm-bearing rows
 (deleted/deleting/provisioning), and exits non-zero on any genuine failure.
 
@@ -403,8 +405,10 @@ one `reconcile <slug>` (apply) has run.
 Two more checks re-apply provisioning that a later release added and that customers
 created earlier never received (kernel issues #88 and #89; the root cause is the same:
 create-time provisioning is not re-run on an upgrade). Each is read by a plain
-`reconcile` (RED when the customer is behind) and repaired, idempotently, by
-`reconcile <slug>` without `--verify-only`; a second apply changes nothing:
+reconcile (`gremion-tenant reconcile <slug>` without `--apply`, or the library verb with
+`--verify-only`), which **only reports drift and changes nothing** (RED when the customer is
+behind). Only `gremion-tenant reconcile <slug> --apply --reason <text>` (the library verb
+without `--verify-only`) repairs, idempotently; a second apply changes nothing:
 
 | Check | What must hold | What apply does |
 |---|---|---|
