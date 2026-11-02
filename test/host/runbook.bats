@@ -1460,3 +1460,32 @@ private_dumps_with_075_pending() {               # <dir>
     [[ "$output" == *"delete this entry from test/host/runbook.bats"* ]]
     [[ "$output" == *"scripts/backup/|TASK-089"* ]]
 }
+
+# Kernel #83. PgBouncer belongs to the STATE project, which gremion-deploy pulls
+# but never recreates, so a running PgBouncer keeps the unreadable userlist of
+# the release it was created from. upgrade.md must therefore (a) recreate that
+# one container from the new tree and (b) observe, in the container and by a
+# routed login, that it reads the userlist.
+check_upgrade_recreates_pgbouncer() {            # <runbook dir>
+    local steps post
+    steps="$(unit_text "$1" upgrade | section_body '## Steps' | bash_blocks)"
+    post="$(postcondition_blocks "$1" upgrade)"
+    grep -qE 'up -d --force-recreate --no-deps pgbouncer' <<<"$steps" \
+        || { echo "upgrade.md Steps never recreate pgbouncer from the new release (up -d --force-recreate --no-deps pgbouncer)" >&2; return 1; }
+    grep -qE 'exec -T pgbouncer head -c1 /etc/pgbouncer/userlist\.txt' <<<"$post" \
+        || { echo "upgrade.md Post-condition does not read the userlist inside the pgbouncer container" >&2; return 1; }
+    grep -qE 'psql .*-p 6432 ' <<<"$post" \
+        || { echo "upgrade.md Post-condition has no login routed through PgBouncer (psql -p 6432)" >&2; return 1; }
+}
+
+@test "upgrade.md recreates pgbouncer from the new release and observes the userlist in the container (#83)" {
+    local d pat; d="$(real_dir)"
+    check_upgrade_recreates_pgbouncer "$d"
+    # watched RED: each of the three lines removed from a copy breaks the check
+    for pat in 'force-recreate --no-deps pgbouncer' 'exec -T pgbouncer head -c1' '-p 6432'; do
+        rm -rf "${d}-no"; cp -r "$d" "${d}-no"
+        grep -vF -- "$pat" "$d/upgrade.md" > "${d}-no/upgrade.md"
+        run check_upgrade_recreates_pgbouncer "${d}-no"
+        [ "$status" -ne 0 ]
+    done
+}

@@ -244,12 +244,40 @@ KEYCLOAK_ADMIN="$KEYCLOAK_ADMIN" KEYCLOAK_ADMIN_PASSWORD="$KEYCLOAK_ADMIN_PASSWO
    request): its checks run, without the 403, and apply repairs the drift they
    report.
 
+7. **Recreate PgBouncer from the new release (installations first brought up
+   before kernel #83, once).** PgBouncer belongs to the state project, and the
+   deploy only pulls that project's images (its step 3): nothing in the twelve
+   steps recreates a state container. A running PgBouncer therefore keeps the
+   `userlist.txt` it was started with. On an installation that predates #83 that
+   is the file of the release tree it was created from, mode 0600 owned by the
+   deploy user, which the container's uid 70 cannot open; the new file the
+   deploy's step 4 rendered (0640, group 70) is in the NEW tree and is never
+   seen by the running container, and a restart of the container re-mounts the
+   same file. Every login routed through PgBouncer then fails with `password
+   authentication failed for user "pgbouncer_auth"`, and the first customer
+   create stops in its first phase. Recreate the container from the new tree,
+   after the deploy has recorded the release (`current` names it). Only
+   `pgbouncer` is recreated (`--no-deps`; no other state container is touched);
+   the app's database connections through it reset and reconnect, a matter of
+   seconds. The step is idempotent: run it when in doubt, skip it only on an
+   installation whose first `up` of the state project already ran with a
+   release that renders the userlist 0640 group 70 (an install by install.md
+   5.0.0 or later). The post-condition's last two lines observe the result.
+
+```bash
+cd /opt/gremion/current
+stat -c '%a %g %n' docker/pgbouncer/userlist.txt                       # 640 70: the file the deploy rendered
+docker compose --env-file /opt/gremion/etc/env/state.env up -d --force-recreate --no-deps pgbouncer
+docker compose --env-file /opt/gremion/etc/env/state.env ps pgbouncer  # running, then healthy within about a minute
+```
+
 ## Post-condition
 
 The new release serves, the deploy logged fourteen good lines (steps 1-12,
 12b, 12c) and no failed one,
-the serving release keeps every migration the previous one locked, and no dump
-is left on the host:
+the serving release keeps every migration the previous one locked, no dump
+is left on the host, and PgBouncer reads the userlist the release rendered
+(observed in the container, as its own user, and by a login routed through it):
 
 ```bash
 grep -Fx "$TAG" /opt/gremion/runtime/current-tag
@@ -261,6 +289,10 @@ tail -n 14 /opt/gremion/runtime/deploy.log | grep -cE ' STEP [0-9]+[a-z]? [a-z-]
 jq -r '.ts, .ok, (.failures | length)' /opt/gremion/runtime/last-verify.json        # now, true, 0
 curl -s -o /dev/null -w '%{http_code}\n' "https://${host}/api/health"               # 200
 find /opt/gremion/backups -maxdepth 1 -name 'pre-migration-*' | wc -l               # 0
+cd /opt/gremion/current
+docker compose --env-file /opt/gremion/etc/env/state.env exec -T pgbouncer head -c1 /etc/pgbouncer/userlist.txt   # ": PgBouncer's own user (uid 70) reads the file; "Permission denied" means step 7 is owed
+PGPASSWORD="$PGBOUNCER_AUTH_PASSWORD" docker compose --env-file /opt/gremion/etc/env/state.env exec -T -e PGPASSWORD postgres \
+  psql -h pgbouncer -p 6432 -U pgbouncer_auth -d postgres -Atc 'SELECT current_user'                             # pgbouncer_auth: a login routed through PgBouncer succeeds
 journalctl -t premigration-dump --since today                                       # one taken/created line per dump, one deleted line per file (step 3 and gremion-migration-dump)
 for f in /root/.docker/config.json /home/gremion/.docker/config.json; do
   [ -f "$f" ] && jq -e '(.auths // {}) | length == 0' "$f"                          # no registry credential left
@@ -308,7 +340,7 @@ live, a deploy of any other tag stops at its step 5 and prints both commands.
 
 ## Changelog
 
-- 6.3.0 (2026-11-02): kernel #83. A precondition: the deploy user is in a group with gid 70 (PgBouncer's gid), because the deploy's render step now writes the pgbouncer userlist 0640 group 70 as the deploy user; an older host runs `bootstrap.sh user` once and restarts `gremion-hostd`. Minor: a precondition changed, no step or post-condition did.
+- 6.3.0 (2026-11-02): kernel #83. A precondition: the deploy user is in a group with gid 70 (PgBouncer's gid), because the deploy's render step now writes the pgbouncer userlist 0640 group 70 as the deploy user; an older host runs `bootstrap.sh user` once and restarts `gremion-hostd`. Step 7 (existing installs, once): the deploy pulls but never recreates the state project, so a running PgBouncer keeps the unreadable 0600 userlist of the release it was created from; `up -d --force-recreate --no-deps pgbouncer` from the new tree replaces it. The post-condition observes, in the container, that PgBouncer's own user reads the userlist and that a login routed through PgBouncer succeeds. Minor: a conditional step and post-condition observations added, no existing step changed.
 - 6.2.0 (2026-10-30): kernel #47 decision (a). Step 4 (and the registry-token precondition) names the optional host token file `etc/registry-token` that `gremion-deploy` reads when `GREMION_REGISTRY_TOKEN_FILE` is set, with the commands that observe it; the prompt stays the default. Minor: an alternative added to a step, no post-condition changed.
 - 6.1.0 (2026-10-29): kernel #48. Step 6 (existing installs, once per realm): a realm the provisioner service account did not create (older than the account, or made by another admin) is adopted with `tenant-create bootstrap-provisioner --adopt-realm <realm>`, which grants the account exactly the realm-creator roles on master `<realm>-realm`; reconcile names the step when it meets such a realm. Minor: a conditional step added, no post-condition changed.
 - 6.0.0 (2026-10-03): TASK-075. `gremion-deploy` step 5 is `gremion-migration-dump` preflight (no longer `gremion-snapshot`): it dumps the kernel and control databases a release migrates and deletes that dump, logged, at step 12b (`switched`), after step 11 passed and step 12 recorded the release; a failed deletion exits 1 with `DUMP-NOT-DELETED` before the soak (12c). The post-condition counts fourteen step lines. Step 3 now dumps by hand only the other databases a release migrates (module databases, `gremion_platform`); step 5 leaves the deploy's own dump to the program; the failure path restores the kernel or control database from it (restore, then a logged discard). Known gap (b) describes what landed. Major: a step changed.
