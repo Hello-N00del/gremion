@@ -562,6 +562,27 @@ check_render_first() {
     return "$bad"
 }
 
+# kernel #84: docker-compose.yml gives the state project's legal service
+# `env_file: legal/legal.env` in the release tree, which compose resolves for
+# every verb. gremion-render writes it from the host's etc/legal.env, and that
+# file is created and filled in a step of its own, before the first state `up`.
+check_legal_env_first() {
+    local steps up init edit
+    steps="$(unit_text "$1" install | section_body '## Steps' | bash_blocks | grep -v '^[[:space:]]*#' || true)"
+    up="$(grep -nE -- "$STATE_UP_RE" <<<"$steps" | head -n 1 | cut -d: -f1)"
+    if [ -z "$up" ]; then
+        echo "install.md never starts the state project" >&2; return 1
+    fi
+    init="$(grep -nE -- 'sudo -u gremion [^;|&]*gremion-render --release [^;|&]*--init-legal-env' <<<"$steps" | head -n 1 | cut -d: -f1)"
+    if [ -z "$init" ] || [ "$init" -gt "$up" ]; then
+        echo "install.md never creates the host legal env (gremion-render --init-legal-env) before the state project's first up" >&2; return 1
+    fi
+    edit="$(grep -nF -- '/opt/gremion/etc/legal.env' <<<"$steps" | head -n 1 | cut -d: -f1)"
+    if [ -z "$edit" ] || [ "$edit" -gt "$up" ]; then
+        echo "install.md never has the operator fill /opt/gremion/etc/legal.env before the state project's first up" >&2; return 1
+    fi
+}
+
 # gremion-deploy logs in under the HOME of the user that runs it, so a procedure
 # that runs it observes that user's registry config as well as root's.
 check_registry_creds() {
@@ -1215,6 +1236,21 @@ run_dump_step() {                                # <scratch root>
     grep -vF 'secrets/ipcrypt_key.txt' "$d/install.md" > "$d/install.tmp" && mv "$d/install.tmp" "$d/install.md"
     run check_render_first "$d"
     [ "$status" -ne 0 ]; [[ "$output" == *"without secrets/ipcrypt_key.txt in the release tree"* ]]
+}
+
+@test "install creates and fills the host legal env before the state project's first up (kernel #84)" {
+    local d bad
+    d="$(real_dir)"; check_legal_env_first "$d"
+    # No creation step at all.
+    bad="${BATS_TEST_TMPDIR}/no-legal-init"; cp -R "$d" "$bad"
+    grep -vF -- '--init-legal-env' "$d/install.md" > "$bad/install.md"
+    run check_legal_env_first "$bad"
+    [ "$status" -ne 0 ]; [[ "$output" == *"never creates the host legal env"* ]]
+    # Created, but the operator is never told to fill it.
+    bad="${BATS_TEST_TMPDIR}/no-legal-fill"; cp -R "$d" "$bad"
+    grep -vF -- '/opt/gremion/etc/legal.env' "$d/install.md" > "$bad/install.md"
+    run check_legal_env_first "$bad"
+    [ "$status" -ne 0 ]; [[ "$output" == *"never has the operator fill /opt/gremion/etc/legal.env"* ]]
 }
 
 @test "every variable a post-condition reads is assigned there or in the preamble" {
