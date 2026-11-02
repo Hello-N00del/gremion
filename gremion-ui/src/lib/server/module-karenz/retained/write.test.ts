@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { TenantContext } from '$lib/server/tenant/context'
 import { KarenzPartialError, type KarenzContext } from '../participants'
 import type { KarenzRowView } from '../platform'
-import { _resetKarenzPassForTests, runKarenzPass, STEP } from '../engine'
+import { _resetKarenzPassForTests, _resetKarenzStagesToDefaultsForTests, registerKarenzStages, runKarenzPass, STEP } from '../engine'
 import { openLines, sealLines } from './crypto'
 import {
   _clearRetentionRegistriesForTests,
@@ -292,9 +292,16 @@ describe('writeRetainedCopies', () => {
 })
 
 describe('the engine writes the copies in its retained step', () => {
+  beforeEach(() => {
+    // These passes are about the retained step only: switch the default notice stages off (they
+    // would call the role lookup and the mail relay, which have their own tests in notices.test.ts).
+    _resetKarenzStagesToDefaultsForTests()
+    registerKarenzStages({ noticeSwitchoff: undefined, reminder: undefined })
+  })
   afterEach(() => {
     vi.unstubAllEnvs()
     _resetKarenzPassForTests()
+    _resetKarenzStagesToDefaultsForTests()
   })
 
   async function pass(t: ReturnType<typeof fakeTenantDb>, over: Partial<KarenzRowView> = {}) {
