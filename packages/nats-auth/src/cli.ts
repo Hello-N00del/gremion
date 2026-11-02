@@ -2,20 +2,24 @@
 //
 //   nats-auth init                                 SYS reload seed + accounts file (no network)
 //   nats-auth ensure <tenant> --modules a,b,c     ensureTenantAccount (NATS_URL)
-//   nats-auth ensure <tenant> --suspend           the empty set: only kernel + admin remain
+//   nats-auth ensure <tenant> --suspend           the empty module set: only kernel, kernel-api + admin remain
 //   nats-auth render                               print the accounts file the seeds render
+//
+// The platform identities (kernel-api) are added to every set, as `reconcile --apply` does (kernel issue #88): ensure
+// is declarative, so a hand-typed list that left kernel-api out would delete the seed the kernel API's event relay
+// publishes with. Naming it in --modules stays legal (same set).
 //
 // NATS_SECRETS_DIR (default /run/secrets/nats), NATS_ACCOUNTS_DIR (default
 // /etc/nats/accounts). Run in the tenant-create container (Q11, Q12). Never
 // prints a seed.
-import { ensureTenantAccount, initAccounts, stateFromStore } from './ensure.ts'
+import { ensureTenantAccount, initAccounts, stateFromStore, withPlatformIdentities, type EnsureOptions } from './ensure.ts'
 import { renderServerConfig } from './render.ts'
 import { SeedStore } from './store.ts'
 import { secretsDirOf } from './connect.ts'
 
 const USAGE = 'usage: nats-auth init | nats-auth ensure <tenant> (--modules a,b,c | --suspend) | nats-auth render'
 
-export async function main(argv: string[]): Promise<number> {
+export async function main(argv: string[], opts: EnsureOptions = {}): Promise<number> {
   const [cmd, ...rest] = argv
   switch (cmd) {
     case 'init': {
@@ -42,7 +46,7 @@ export async function main(argv: string[]): Promise<number> {
         console.error(USAGE)
         return 2
       }
-      const r = await ensureTenantAccount({ tenant, modules })
+      const r = await ensureTenantAccount({ tenant, modules: withPlatformIdentities(modules) }, opts)
       console.log(JSON.stringify(r))
       return 0
     }
