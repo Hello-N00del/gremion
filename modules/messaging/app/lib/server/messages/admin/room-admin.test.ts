@@ -541,7 +541,7 @@ describe('room-admin', () => {
 
       expect(enqueueResources).toHaveBeenCalledWith(TX, 'u1', ['matrix'])
       expect(setSubsystemWanted).toHaveBeenCalledWith(TX, 'u1', 'matrix', true)
-      expect(markResourceOk).toHaveBeenCalledWith('u1', 'matrix', ROOM)
+      expect(markResourceOk).toHaveBeenCalledWith('u1', 'matrix', ROOM, TX)
 
       // the marker is overwritten (a state event cannot be deleted); the room then reads as active
       const marker = room.state.get('org.gremion.room.archived') as Record<string, unknown>
@@ -564,6 +564,9 @@ describe('room-admin', () => {
       const pl = room.state.get('m.room.power_levels') as { events_default: number; invite: number; state_default: number; events: Record<string, number> }
       expect([pl.events_default, pl.invite, pl.state_default]).toEqual([0, 0, 50])
       for (const t of CALL_TYPES) expect(pl.events[t]).toBe(0)
+      expect(writeAuditEntry).toHaveBeenCalledWith(
+        expect.objectContaining({ field: 'messages.room.unarchive', newValue: `u1:${ROOM}:ok-defaults` })
+      )
     })
 
     it('the ledger is re-attached BEFORE the marker is overwritten, so an interrupted restore is retried', async () => {
@@ -599,7 +602,7 @@ describe('room-admin', () => {
       })
 
       const { unarchiveRoom } = await import('./room-admin')
-      await expect(unarchiveRoom('u1', ROOM, { userId: 'karenz-service' })).rejects.toThrow()
+      await expect(unarchiveRoom('u1', ROOM, { userId: 'karenz-service' })).rejects.toThrow('500')
       await unarchiveRoom('u1', ROOM, { userId: 'karenz-service' })
 
       expect(room.aliases.has(ARCHIVE_ALIAS)).toBe(false) // not left behind, pointing at an active room
@@ -634,7 +637,7 @@ describe('room-admin', () => {
       routeMatrix({ [ROOM]: {} })
 
       const { unarchiveRoom } = await import('./room-admin')
-      await expect(unarchiveRoom('u1', ROOM, { userId: 'karenz-service' })).resolves.toEqual({ aliasRestored: true })
+      await expect(unarchiveRoom('u1', ROOM, { userId: 'karenz-service' })).resolves.toEqual({ aliasRestored: true, priorGuessed: false })
       expect(markResourceOk).not.toHaveBeenCalled()
       expect(fetchMock.mock.calls.filter((c) => ((c[1] as RequestInit | undefined)?.method ?? 'GET') !== 'GET')).toHaveLength(0)
     })
@@ -650,7 +653,7 @@ describe('room-admin', () => {
 
       expect(room.aliases.get(CANON)).toBe('!other:matrix.test') // never taken over
       expect((room.state.get('m.room.power_levels') as { events_default: number }).events_default).toBe(0)
-      expect(markResourceOk).toHaveBeenCalledWith('u1', 'matrix', ROOM)
+      expect(markResourceOk).toHaveBeenCalledWith('u1', 'matrix', ROOM, TX)
       expect(room.aliases.get(ARCHIVE_ALIAS)).toBe(ROOM) // still reachable by its archive alias
       expect(room.state.get('m.room.canonical_alias')).toEqual({ alias: ARCHIVE_ALIAS })
       await expect(getRoomArchiveMarker(ROOM)).resolves.toBeNull()
@@ -675,6 +678,55 @@ describe('room-admin', () => {
       const { unarchiveRoom, RoomConflictError } = await import('./room-admin')
       await expect(unarchiveRoom('u1', ROOM, { userId: 'karenz-service' })).rejects.toThrow(RoomConflictError)
       expect(markResourceOk).not.toHaveBeenCalled()
+    })
+
+    it.each(['failed', 'pending'])('a ledger row (%s) that names a DIFFERENT room is a RoomConflictError too: that room is live and must not be orphaned', async (status) => {
+      getOrgUnit.mockResolvedValue(UNIT)
+      getResource.mockResolvedValue({ status, external_id: '!fresh:matrix.test' })
+      const room = archivedRoom()
+
+      const { unarchiveRoom, RoomConflictError } = await import('./room-admin')
+      await expect(unarchiveRoom('u1', ROOM, { userId: 'karenz-service' })).rejects.toThrow(RoomConflictError)
+      expect(markResourceOk).not.toHaveBeenCalled()
+      expect(room.aliases.has(CANON)).toBe(false) // the Matrix side was not touched
+    })
+
+    it('a pending row without an external id is no conflict: the restore re-attaches the room', async () => {
+      getOrgUnit.mockResolvedValue(UNIT)
+      getResource.mockResolvedValue({ status: 'pending', external_id: null })
+      archivedRoom()
+
+      const { unarchiveRoom } = await import('./room-admin')
+      await unarchiveRoom('u1', ROOM, { userId: 'karenz-service' })
+      expect(markResourceOk).toHaveBeenCalledWith('u1', 'matrix', ROOM, TX)
+    })
+
+    it('the archive alias named by the marker is removed even when the canonical_alias state never got it (an archive that died between the two)', async () => {
+      getOrgUnit.mockResolvedValue(UNIT)
+      getResource.mockResolvedValue({ status: 'ok', external_id: ROOM })
+      const room = archivedRoom()
+      room.state.set('org.gremion.room.archived', { org_unit_id: 'u1', archived_at: '2026-09-01T00:00:00Z', archive_alias: ARCHIVE_ALIAS })
+      room.state.set('m.room.canonical_alias', { alias: CANON })
+
+      const { unarchiveRoom } = await import('./room-admin')
+      await unarchiveRoom('u1', ROOM, { userId: 'karenz-service' })
+
+      expect(room.aliases.has(ARCHIVE_ALIAS)).toBe(false)
+      expect(room.aliases.get(CANON)).toBe(ROOM)
+    })
+
+    it('a marker archive alias that points at ANOTHER room is never deleted', async () => {
+      getOrgUnit.mockResolvedValue(UNIT)
+      getResource.mockResolvedValue(null)
+      const room = archivedRoom()
+      room.state.set('org.gremion.room.archived', { org_unit_id: 'u1', archived_at: '2026-09-01T00:00:00Z', archive_alias: '#stura-archiv-x-202601010000:matrix.test' })
+      room.aliases.set('#stura-archiv-x-202601010000:matrix.test', '!elsewhere:matrix.test')
+
+      const { unarchiveRoom } = await import('./room-admin')
+      await unarchiveRoom('u1', ROOM, { userId: 'karenz-service' })
+
+      expect(room.aliases.get('#stura-archiv-x-202601010000:matrix.test')).toBe('!elsewhere:matrix.test')
+      expect(room.aliases.has(ARCHIVE_ALIAS)).toBe(false) // the canonical_alias fallback still removed its own
     })
 
     it('getRoomArchiveMarker returns null for marker content without org_unit_id (an unarchived room)', async () => {

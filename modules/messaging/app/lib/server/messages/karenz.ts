@@ -16,9 +16,9 @@
 import { getMatrixClient } from './matrix-client'
 import { getSynapseAdmin } from './synapse-admin'
 import {
-  getRoomArchiveMarker, unarchiveRoom, archiveRoom, resolveMatrixError, MatrixUnavailableError,
+  getRoomArchiveMarker, unarchiveRoom, archiveRoom, resolveMatrixError, MatrixUnavailableError, RoomNotFoundError,
 } from './admin/room-admin'
-import { listOrgUnits } from '$lib/server/governance/org-units-db'
+import { getOrgUnit, listOrgUnits } from '$lib/server/governance/org-units-db'
 import { getResource } from '$lib/server/governance/provisioning/ledger'
 import { writeAuditEntry } from '$lib/server/audit-db'
 import { runWithTenant, type TenantContext } from '$lib/server/tenant/context'
@@ -183,6 +183,18 @@ async function switchOff(ctx: KarenzContext): Promise<void> {
   if (failures.length > 0) throw new KarenzPartialError(failures)
 }
 
+/** Why a RoomNotFoundError from unarchiveRoom means "nothing to restore" (the item ends as kept), or null
+ *  when it does not: a locked room whose unit still exists but whose marker is missing stays a failure. */
+async function whyNothingToRestore(item: KarenzItemRow, unitId: string): Promise<string | null> {
+  try {
+    if ((await getOrgUnit(unitId)) === null) return 'the org unit no longer exists, the room stays archived'
+  } catch {
+    return null // not known: stay a failure and be retried
+  }
+  // The archive never completed for this room (lock_failed, recorded): there is nothing to undo.
+  return SWITCH_OFF_PENDING.has(item.state) ? 'the room was never archived, nothing to restore' : null
+}
+
 async function restore(ctx: KarenzContext): Promise<void> {
   const failures: string[] = []
   for (const item of await ctx.items.list(ROOM)) {
@@ -190,10 +202,19 @@ async function restore(ctx: KarenzContext): Promise<void> {
     const unitId = unitOf(item)
     if (unitId === null) continue
     try {
-      const { aliasRestored } = await unarchiveRoom(unitId, item.externalId, { userId: ACTOR })
+      const { aliasRestored, priorGuessed } = await unarchiveRoom(unitId, item.externalId, { userId: ACTOR })
       if (!aliasRestored) ctx.log(`messaging: ${unitLabel(unitId)} restored without its alias (another room holds it)`)
+      if (priorGuessed) ctx.log(`messaging: ${unitLabel(unitId)} restored with default permissions (the archive stored none)`)
       await ctx.items.setState(item.itemId, 'restored')
     } catch (err) {
+      // Nothing left to restore is a terminal fact, not a failure that every later pass would repeat
+      // (a failed item blocks the next switch-off and raises an error event each time).
+      const nothingToRestore = err instanceof RoomNotFoundError ? await whyNothingToRestore(item, unitId) : null
+      if (nothingToRestore !== null) {
+        ctx.log(`messaging: ${unitLabel(unitId)}: ${nothingToRestore}`)
+        if (!(await trySetState(ctx, item, 'kept', nothingToRestore))) failures.push(unitLabel(unitId))
+        continue
+      }
       // A room that is gone at the homeserver cannot come back: that is a fact, not a failure. The
       // client API answers a purged room with 403 (not 404), so the admin API decides, whatever the error was.
       if (await roomIsGone(item.externalId)) {
@@ -225,8 +246,12 @@ async function finalize(ctx: KarenzContext, opts: { dryRun: boolean }): Promise<
       }
       const details = await getSynapseAdmin().getRoomDetails(item.externalId)
       if (details === null) { // already gone at the homeserver
-        // nothing left to delete here, so it adds nothing to the count
-        if (!opts.dryRun) await ctx.items.setState(item.itemId, 'deleted', 'room no longer exists at the homeserver')
+        // nothing left to delete here, so it adds nothing to the count. The audit trail still gets its
+        // entry: an earlier pass may have purged the room and died before writing its own.
+        if (!opts.dryRun) {
+          await writeAuditEntry({ userId: ACTOR, field: 'messages.room.delete', oldValue: null, newValue: `${unitId}:${item.externalId}:ok-already-gone` })
+          await ctx.items.setState(item.itemId, 'deleted', 'room no longer exists at the homeserver')
+        }
         continue
       }
       if (isMeetingAlias(typeof details.canonical_alias === 'string' ? details.canonical_alias : null)) {

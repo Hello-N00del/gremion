@@ -143,7 +143,7 @@ async function homeserver(url: string, init?: RequestInit): Promise<Response> {
     return aliases.has(alias) ? json({ room_id: aliases.get(alias) }) : notFound()
   }
 
-  if (/\/make_room_admin$/.test(path)) return json({})
+  if (path.endsWith('/make_room_admin')) return json({})
 
   const detail = /^\/_synapse\/admin\/v1\/rooms\/([^/?]+)$/.exec(path)
   if (detail) {
@@ -152,7 +152,7 @@ async function homeserver(url: string, init?: RequestInit): Promise<Response> {
     if (method === 'DELETE') {
       if (!room) return notFound()
       rooms.delete(id)
-      for (const [a, r] of [...aliases]) if (r === id) aliases.delete(a)
+      for (const [a, r] of aliases) if (r === id) aliases.delete(a)
       return json({ kicked_users: [] })
     }
     if (!room) return notFound()
@@ -432,6 +432,19 @@ describe('messagingKarenz', () => {
       for (const roomId of ['!r1:matrix.test', '!r2:matrix.test']) expect(levelsOf(roomId)).toEqual(originalLevels())
     })
 
+    it('a stale marker of ANOTHER unit on the room never sets the prior this archive stores', async () => {
+      seed()
+      const stale = { events_default: 77, invite: 77, state_default: 77, events: {} }
+      rooms.get('!r1:matrix.test')!.state.set('org.gremion.room.archived', { org_unit_id: 'someone-else', archived_at: '2020-01-01T00:00:00Z', prior: stale })
+
+      await karenz.messagingKarenz.switchOff(ctx)
+
+      const marker = markerOf('!r1:matrix.test')!
+      expect(marker.org_unit_id).toBe('u1')
+      expect(marker.prior).toMatchObject({ events_default: 0, invite: 0, state_default: 50 })
+      expect(marker.archived_at).not.toBe('2020-01-01T00:00:00Z')
+    })
+
     it('a room archived by a council admin BEFORE the switch-off is not recorded, not restored and not deleted', async () => {
       seed()
       const older = addRoom('!old:matrix.test', { alias: '#stura-archiv-alt-202601010000:matrix.test' })
@@ -567,6 +580,76 @@ describe('messagingKarenz', () => {
       expect(stateOf({ externalId: '!r2:matrix.test' })).toBe('gone')
       expect(stateOf({ externalId: '!r1:matrix.test' })).toBe('restored')
     })
+
+    it('an org unit deleted during the Karenz ends its item as kept (the room stays archived) and the restore converges', async () => {
+      seed()
+      await karenz.messagingKarenz.switchOff(ctx)
+      units.splice(units.findIndex((u) => u.id === 'u1'), 1) // the empty committee was deleted while messaging was off
+
+      await karenz.messagingKarenz.restore(ctx) // must not throw
+
+      expect(stateOf({ externalId: '!r1:matrix.test' })).toBe('kept')
+      expect(store.rows.get('room\u0000!r1:matrix.test')!.detail).toContain('no longer exists')
+      expect(stateOf({ externalId: '!r2:matrix.test' })).toBe('restored')
+      expect(markerOf('!r1:matrix.test')?.org_unit_id).toBe('u1') // nothing to restore it to: still archived and read-only
+      expect(levelsOf('!r1:matrix.test').events_default).toBe(100)
+
+      writes = []
+      await karenz.messagingKarenz.restore(ctx) // the next pass has nothing left to do
+      expect(writes).toEqual([])
+    })
+
+    it('a room the switch-off could not archive (neither attached nor archived) has nothing to restore: the item ends as kept', async () => {
+      addRoom('!detached:matrix.test')
+      units.push({ id: 'u5', name: 'Kasse' }) // no ledger row at all
+      await store.items.upsert({ kind: 'room', externalId: '!detached:matrix.test', state: 'lock_failed', payload: { unitId: 'u5' } })
+
+      await karenz.messagingKarenz.restore(ctx) // must not throw
+
+      expect(stateOf({ externalId: '!detached:matrix.test' })).toBe('kept')
+      expect(store.rows.get('room\u0000!detached:matrix.test')!.detail).toContain('never archived')
+    })
+
+    it('a locked room whose unit exists but whose marker is missing still fails the restore, visibly', async () => {
+      seed()
+      await karenz.messagingKarenz.switchOff(ctx)
+      rooms.get('!r1:matrix.test')!.state.set('org.gremion.room.archived', { unarchived_at: '2026-11-01T00:00:00Z' }) // marker lost
+
+      const err = await karenz.messagingKarenz.restore(ctx).then(() => null, (e: unknown) => e)
+
+      expect(err).toBeInstanceOf(KarenzPartialError)
+      expect(stateOf({ externalId: '!r1:matrix.test' })).toBe('unlock_failed')
+    })
+
+    it('a restore of a room that fell back to the createRoom defaults is audited and logged as such', async () => {
+      seed()
+      await karenz.messagingKarenz.switchOff(ctx)
+      const marker = markerOf('!r1:matrix.test')!
+      rooms.get('!r1:matrix.test')!.state.set('org.gremion.room.archived', { ...marker, prior: null }) // an older build stored none
+      writeAuditEntry.mockClear()
+
+      await karenz.messagingKarenz.restore(ctx)
+
+      const values = writeAuditEntry.mock.calls.map((c) => (c[0] as { newValue: string }).newValue)
+      expect(values).toContain('u1:!r1:matrix.test:ok-defaults')
+      expect(values).toContain('u2:!r2:matrix.test:ok')
+      expect(ctx.log).toHaveBeenCalledWith(expect.stringContaining('unit u1'))
+    })
+
+    it('an archive that died after the archive alias was put but before the canonical alias was written leaves no archive alias behind after the restore', async () => {
+      seed()
+      faults = [{ match: (url, method) => method === 'PUT' && decodeURIComponent(url).includes('!r1:') && url.includes('m.room.canonical_alias'), once: false }]
+      await expect(karenz.messagingKarenz.switchOff(ctx)).rejects.toBeInstanceOf(KarenzPartialError)
+      expect([...aliases.keys()].filter((a) => a.startsWith('#stura-archiv-') && aliases.get(a) === '!r1:matrix.test')).toHaveLength(1)
+      faults = []
+      // the unit alias was deleted and the canonical_alias state still names it; the row is still attached
+      ledger.set('u1', { status: 'ok', external_id: '!r1:matrix.test' })
+
+      await karenz.messagingKarenz.restore(ctx)
+
+      expect([...aliases.keys()].filter((a) => a.startsWith('#stura-archiv-'))).toEqual([])
+      expect(aliases.get('#stura-vorstand:matrix.test')).toBe('!r1:matrix.test')
+    })
   })
 
   describe('finalize', () => {
@@ -678,6 +761,35 @@ describe('messagingKarenz', () => {
       expect(stateOf({ externalId: '!r1:matrix.test' })).toBe('deleted')
     })
 
+    it('a deletion whose success audit write failed leaves an audit entry on the retry that finds the room gone', async () => {
+      seed()
+      await karenz.messagingKarenz.switchOff(ctx)
+      writeAuditEntry.mockClear()
+      writeAuditEntry.mockRejectedValueOnce(new Error('audit down')) // the first room's ':ok' entry (the room IS deleted by then)
+
+      await expect(karenz.messagingKarenz.finalize(ctx, { dryRun: false })).rejects.toBeInstanceOf(KarenzPartialError)
+      expect(rooms.has('!r1:matrix.test')).toBe(false)
+      expect(stateOf({ externalId: '!r1:matrix.test' })).toBe('locked')
+
+      await karenz.messagingKarenz.finalize(ctx, { dryRun: false })
+
+      expect(stateOf({ externalId: '!r1:matrix.test' })).toBe('deleted')
+      const values = writeAuditEntry.mock.calls.map((c) => (c[0] as { newValue: string }).newValue)
+      expect(values).toContain('u1:!r1:matrix.test:ok-already-gone')
+    })
+
+    it('a dry run that finds a room gone writes no audit entry', async () => {
+      seed()
+      await karenz.messagingKarenz.switchOff(ctx)
+      rooms.delete('!r1:matrix.test')
+      writeAuditEntry.mockClear()
+
+      await karenz.messagingKarenz.finalize(ctx, { dryRun: true })
+
+      expect(writeAuditEntry).not.toHaveBeenCalled()
+      expect(stateOf({ externalId: '!r1:matrix.test' })).toBe('locked')
+    })
+
     it('a room whose archive never finished is a failure, never deleted', async () => {
       seed()
       await store.items.upsert({ kind: 'room', externalId: '!r1:matrix.test', state: 'lock_failed', payload: { unitId: 'u1' } })
@@ -703,7 +815,7 @@ describe('messagingKarenz', () => {
     })
   })
 
-  describe('describe', () => {
+  describe('the deletion preview', () => {
     it('counts a room whose ledger row is failed but still names it', async () => {
       seed()
       ledger.set('u1', { status: 'failed', external_id: '!r1:matrix.test' })
