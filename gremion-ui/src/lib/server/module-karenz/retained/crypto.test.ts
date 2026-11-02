@@ -69,19 +69,19 @@ describe('seal and open', () => {
     const t = fakeTenantDb()
     const sealed = await sealLines(t.db, TENANT, KARENZ, 'votes.polls', lines, META, deps)
     t.records()[0]!.ciphertext[0]! ^= 0x01
-    await expect(openLines(t.db, TENANT, sealed.id, { secret: SECRET })).rejects.toThrow()
+    await expect(openLines(t.db, TENANT, sealed.id, { secret: SECRET })).rejects.toThrow(/does not (verify|unwrap)/)
   })
 
   it('opening with another tenant id or karenz id fails (AAD)', async () => {
     const t = fakeTenantDb()
     const sealed = await sealLines(t.db, TENANT, KARENZ, 'votes.polls', lines, META, deps)
-    await expect(openLines(t.db, OTHER_TENANT, sealed.id, { secret: SECRET })).rejects.toThrow()
+    await expect(openLines(t.db, OTHER_TENANT, sealed.id, { secret: SECRET })).rejects.toThrow(/does not (verify|unwrap)/)
     // the same key, but the record claims to belong to another karenz row or extractor: the AAD no longer matches
     t.records()[0]!.karenz_id = '44444444-4444-4444-8444-444444444442'
-    await expect(openLines(t.db, TENANT, sealed.id, { secret: SECRET })).rejects.toThrow()
+    await expect(openLines(t.db, TENANT, sealed.id, { secret: SECRET })).rejects.toThrow(/does not (verify|unwrap)/)
     t.records()[0]!.karenz_id = KARENZ
     t.records()[0]!.extractor_id = 'votes.other'
-    await expect(openLines(t.db, TENANT, sealed.id, { secret: SECRET })).rejects.toThrow()
+    await expect(openLines(t.db, TENANT, sealed.id, { secret: SECRET })).rejects.toThrow(/does not (verify|unwrap)/)
   })
 
   it('a record whose stored hash differs from its plaintext does not open', async () => {
@@ -99,13 +99,13 @@ describe('seal and open', () => {
   it('opening with the wrong secret fails', async () => {
     const t = fakeTenantDb()
     const sealed = await sealLines(t.db, TENANT, KARENZ, 'votes.polls', lines, META, deps)
-    await expect(openLines(t.db, TENANT, sealed.id, { secret: SECRET_2 })).rejects.toThrow()
+    await expect(openLines(t.db, TENANT, sealed.id, { secret: SECRET_2 })).rejects.toThrow(/does not (verify|unwrap)/)
   })
 
   it('sealing with another secret than the data key was wrapped with does not mint a second key silently', async () => {
     const t = fakeTenantDb()
     await sealLines(t.db, TENANT, KARENZ, 'votes.polls', lines, META, deps)
-    await expect(sealLines(t.db, TENANT, KARENZ, 'votes.again', lines, META, { secret: SECRET_2, ...guard })).rejects.toThrow()
+    await expect(sealLines(t.db, TENANT, KARENZ, 'votes.again', lines, META, { secret: SECRET_2, ...guard })).rejects.toThrow(/does not (verify|unwrap)/)
     expect(t.keys()).toHaveLength(1)
     expect(t.records()).toHaveLength(1)
   })
@@ -152,7 +152,7 @@ describe('AUTH_SECRET', () => {
     expect(t.records()[0]!.ciphertext.equals(ciphertextBefore)).toBe(true)
     expect(await openLines(t.db, TENANT, a.id, { secret: SECRET_2 })).toEqual(lines)
     expect(await openLines(t.db, TENANT, b.id, { secret: SECRET_2 })).toEqual(lines.slice(0, 1))
-    await expect(openLines(t.db, TENANT, a.id, { secret: SECRET })).rejects.toThrow()
+    await expect(openLines(t.db, TENANT, a.id, { secret: SECRET })).rejects.toThrow(/does not (verify|unwrap)/)
   })
 
   it('rewrapDataKeys is safe to run again after it finished (a copy already under the new secret is skipped)', async () => {

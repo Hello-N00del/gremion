@@ -39,7 +39,11 @@ export interface RetentionExtractor {
 /** EXTENSION POINT for phase 3 (finance): hold end per class and the legible-names exception under Art. 17. */
 export interface RetentionClassPolicy {
   retentionClass: string
-  /** The date until which the copy must be kept, or null for no automatic deletion in phase 2. */
+  /**
+   * The date until which the copy must be kept, or null for no automatic deletion in phase 2. The
+   * stored value is a calendar day (UTC): a Date that is not at UTC midnight is rounded UP to the
+   * next day, so the hold can only end later than intended, never earlier.
+   */
   holdUntil(i: { startedAt: Date }): Date | null
   /** True when names stay legible in the served copy after an erasure (catalogue section 8 item 3). */
   keepsNamesUnderErasure: boolean
@@ -60,9 +64,24 @@ const DEFAULT_POLICY = (retentionClass: string): RetentionClassPolicy => ({ rete
 const extractors = new Map<string, RetentionExtractor>()
 const policies = new Map<string, RetentionClassPolicy>()
 const sinks = new Map<string, RetainedSink>()
+const noRetention = new Set<string>()
 
 export function registerRetentionExtractor(e: RetentionExtractor): void {
   extractors.set(e.id, e)
+}
+
+/**
+ * Declare that a catalogue id has nothing to retain at switch-off. A catalogue id with neither an
+ * extractor nor this declaration fails its retained step (writeRetainedCopies), so a register.server.ts
+ * that was never loaded cannot be mistaken for "nothing to retain" just before an irreversible delete.
+ */
+export function registerNoRetention(catalogueId: string): void {
+  noRetention.add(catalogueId)
+}
+
+/** True when the catalogue id has at least one extractor or declared that it retains nothing. */
+export function hasRetentionDeclaration(catalogueId: string): boolean {
+  return noRetention.has(catalogueId) || extractorsFor(catalogueId).length > 0
 }
 
 /** The extractors of one catalogue id, in registration order. */
@@ -92,4 +111,5 @@ export function _clearRetentionRegistriesForTests(): void {
   extractors.clear()
   policies.clear()
   sinks.clear()
+  noRetention.clear()
 }

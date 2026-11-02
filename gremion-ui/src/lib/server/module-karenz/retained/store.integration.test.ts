@@ -82,7 +82,7 @@ describe('sealed copies in the database', () => {
     expect(await rewrapDataKeys(db, TENANT, SECRET, SECRET_2)).toBe(1)
     expect((await activeDataKey(db))!.kekVersion).toBe(2)
     expect(await openLines(db, TENANT, sealed.id, { secret: SECRET_2 })).toEqual(lines)
-    await expect(openLines(db, TENANT, sealed.id, { secret: SECRET })).rejects.toThrow()
+    await expect(openLines(db, TENANT, sealed.id, { secret: SECRET })).rejects.toThrow(/does not (verify|unwrap)/)
   })
 })
 

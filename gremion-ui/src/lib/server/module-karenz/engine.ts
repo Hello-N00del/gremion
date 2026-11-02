@@ -30,7 +30,9 @@
 //
 // Stage slots: notice, retained copies, publishing and reminders belong to Tasks 9, 10 and 11, which
 // register their stage with registerKarenzStages(). A stage that is not registered leaves its step
-// unmarked, so the finalize guard refuses until the retained copies really exist (fail closed).
+// unmarked, so the finalize guard refuses until the retained copies really exist (fail closed). The
+// retained stage is registered here for every catalogue id and itself fails closed: a catalogue id with
+// neither a retention extractor nor a registerNoRetention() declaration fails the step.
 import type { Sql } from '@gremion/db'
 import { writeAuditEntry, type AuditEntry } from '$lib/server/audit-db'
 import { safeFailureReason } from '$lib/server/erasure/orchestrator'
@@ -121,7 +123,8 @@ export function registerKarenzStages(s: KarenzStages): void {
 // every module's extractors register into retained/extractors.ts and the writer runs for all of them.
 registerKarenzStages({
   retained: async (ctx) => {
-    await writeRetainedCopies(ctx)
+    const { records, lines } = await writeRetainedCopies(ctx)
+    ctx.log(`retained: ${records} record(s), ${lines} line(s) written in this pass`)
   },
 })
 

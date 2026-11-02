@@ -10,6 +10,7 @@ import {
   _clearRetentionRegistriesForTests,
   extractorsFor,
   policyFor,
+  registerNoRetention,
   registerRetainedSink,
   registerRetentionClassPolicy,
   registerRetentionExtractor,
@@ -191,10 +192,67 @@ describe('writeRetainedCopies', () => {
     expect(t.keys()).toHaveLength(0)
   })
 
-  it('no extractor is success with zero records', async () => {
+  it('a catalogue id that declared it retains nothing is success with zero records', async () => {
     const t = fakeTenantDb()
+    registerNoRetention('votes')
     expect(await writeRetainedCopies(ctxFor(t), guard)).toEqual({ records: 0, lines: 0 })
     expect(t.statements).toHaveLength(0)
+  })
+
+  it('no extractor and no declaration fails the step: a missing registration is not "nothing to retain"', async () => {
+    const t = fakeTenantDb()
+    const err = (await writeRetainedCopies(ctxFor(t), guard).catch((e: unknown) => e)) as KarenzPartialError
+    expect(err).toBeInstanceOf(KarenzPartialError)
+    expect(err.failures).toHaveLength(1)
+    expect(err.failures[0]).toContain('votes')
+    expect(t.statements).toHaveLength(0)
+  })
+
+  it('a declaration for another catalogue id does not cover this one', async () => {
+    const t = fakeTenantDb()
+    registerNoRetention('elections')
+    await expect(writeRetainedCopies(ctxFor(t), guard)).rejects.toBeInstanceOf(KarenzPartialError)
+  })
+
+  it('a unique violation that comes out of an extractor is a failure, not "already written"', async () => {
+    const t = fakeTenantDb()
+    registerRetentionExtractor(
+      extractor('votes.a', [], {
+        async *extract() {
+          yield L1
+          throw Object.assign(new Error('module database said: duplicate key'), { code: '23505' })
+        },
+      }),
+    )
+    const err = (await writeRetainedCopies(ctxFor(t), guard).catch((e: unknown) => e)) as KarenzPartialError
+    expect(err).toBeInstanceOf(KarenzPartialError)
+    expect(err.failures[0]).toContain('votes.a')
+    expect(t.records()).toHaveLength(0)
+  })
+
+  it('a unique violation while sealing counts as written only when the copy really exists', async () => {
+    const t = fakeTenantDb()
+    registerRetentionExtractor(extractor('votes.a', [L1]))
+    const refused = { secret: SECRET, guard: async () => { throw Object.assign(new Error('duplicate'), { code: '23505' }) } }
+    const err = (await writeRetainedCopies(ctxFor(t), refused).catch((e: unknown) => e)) as KarenzPartialError
+    expect(err).toBeInstanceOf(KarenzPartialError)
+    expect(t.records()).toHaveLength(0)
+  })
+
+  it('a database failure label carries the SQLSTATE and never the message', async () => {
+    const t = fakeTenantDb()
+    registerRetentionExtractor(
+      extractor('votes.a', [], {
+        async *extract() {
+          yield L1
+          throw Object.assign(new Error('permission denied for table of Erika Mustermann'), { code: '42501' })
+        },
+      }),
+    )
+    const err = (await writeRetainedCopies(ctxFor(t), guard).catch((e: unknown) => e)) as KarenzPartialError
+    expect(err.failures[0]).toContain('votes.a')
+    expect(err.failures[0]).toContain('[42501]')
+    expect(err.failures[0]).not.toContain('Mustermann')
   })
 
   it('only the extractors of the context catalogue id run', async () => {
@@ -222,6 +280,15 @@ describe('writeRetainedCopies', () => {
     await writeRetainedCopies(ctxFor(t), guard)
     expect(t.records().map((r) => r.hold_until)).toEqual(['2028-10-01', null])
   })
+
+  it('a hold date that is not at UTC midnight moves to the next day, never to the day before', async () => {
+    const t = fakeTenantDb()
+    // local midnight in a UTC+2 zone is 22:00Z of the previous day
+    registerRetentionClassPolicy({ retentionClass: 'RC-HOLD', holdUntil: () => new Date('2028-09-30T22:00:00Z'), keepsNamesUnderErasure: false })
+    registerRetentionExtractor(extractor('votes.a', [L1], { retentionClass: 'RC-HOLD' }))
+    await writeRetainedCopies(ctxFor(t), guard)
+    expect(t.records().map((r) => r.hold_until)).toEqual(['2028-10-01'])
+  })
 })
 
 describe('the engine writes the copies in its retained step', () => {
@@ -230,10 +297,8 @@ describe('the engine writes the copies in its retained step', () => {
     _resetKarenzPassForTests()
   })
 
-  it('a pass over an open row seals the registered extractors through writeRetainedCopies and marks the step done', async () => {
+  async function pass(t: ReturnType<typeof fakeTenantDb>, over: Partial<KarenzRowView> = {}) {
     vi.stubEnv('AUTH_SECRET', SECRET)
-    const t = fakeTenantDb()
-    registerRetentionExtractor(extractor('votes.a', [L1, L2]))
     const tenant = { id: TENANT_ID, slug: 'rat-a', db: t.db } as unknown as TenantContext
     const steps = new Map<string, string>()
     const row: KarenzRowView = {
@@ -247,11 +312,23 @@ describe('the engine writes the copies in its retained step', () => {
       finalMode: null,
       platformDoneAt: null,
       tenantDoneAt: null,
+      ...over,
     }
+    const finalized = vi.fn()
     const result = await runKarenzPass(tenant, {
       listKarenz: async () => [row],
       reportKarenz: async () => {},
-      participantsFor: () => [],
+      participantsFor: () => [
+        {
+          catalogueId: 'votes',
+          switchOff: async () => ({}),
+          restore: async () => {},
+          finalize: async (...a: unknown[]) => {
+            finalized(...a)
+            return { deleted: {} }
+          },
+        } as never,
+      ],
       writeAudit: async () => {},
       startedActor: async () => null,
       now: () => new Date(SWITCHED_OFF.getTime() + 60_000),
@@ -261,14 +338,41 @@ describe('the engine writes the copies in its retained step', () => {
           steps.set(step, patch.state)
           return { step, state: patch.state, attempts: 1 } as never
         },
-        listSteps: async () => [],
+        listSteps: async () => [...steps.entries()].map(([step, state]) => ({ step, state, attempts: 1, lastError: null, lastReportedAt: null }) as never),
         upsertItem: async () => { throw new Error('unused') },
         listItems: async () => [],
         setItemState: async () => true,
       },
     })
+    return { result, steps, finalized }
+  }
+
+  it('a pass over an open row seals the registered extractors through writeRetainedCopies and marks the step done', async () => {
+    const t = fakeTenantDb()
+    registerRetentionExtractor(extractor('votes.a', [L1, L2]))
+    const { result, steps } = await pass(t)
     expect(result.failed).toBe(0)
     expect(steps.get(STEP.retained)).toBe('done')
     expect(t.records().map((r) => r.extractor_id)).toEqual(['votes.a'])
+  })
+
+  it('a catalogue id with no extractor and no declaration leaves the retained step failed and the finalize refused, so nothing is deleted', async () => {
+    const t = fakeTenantDb()
+    const open = await pass(t)
+    expect(open.steps.get(STEP.retained)).toBe('failed')
+    expect(open.result.failed).toBeGreaterThan(0)
+
+    const fin = await pass(t, { state: 'finalizing', finalMode: 'live' })
+    expect(fin.steps.get(STEP.retained)).toBe('failed')
+    expect(fin.steps.get(STEP.final)).toBe('failed')
+    expect(fin.finalized).not.toHaveBeenCalled()
+  })
+
+  it('a catalogue id that declared it retains nothing finalizes', async () => {
+    const t = fakeTenantDb()
+    registerNoRetention('votes')
+    const fin = await pass(t, { state: 'finalizing', finalMode: 'live' })
+    expect(fin.steps.get(STEP.retained)).toBe('done')
+    expect(fin.finalized).toHaveBeenCalled()
   })
 })

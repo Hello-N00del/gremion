@@ -14,30 +14,43 @@
 import type { Sql } from '@gremion/db'
 import { KarenzPartialError, type KarenzContext } from '../participants'
 import { RetainedCryptoError, sealLines, type CryptoDeps } from './crypto'
-import { extractorsFor, policyFor, type RetainedLine } from './extractors'
+import { extractorsFor, hasRetentionDeclaration, policyFor, type RetainedLine } from './extractors'
 import { retainedRecordIdFor } from './store'
 import { RetainedGuardError } from '../retained-guard'
 
 export type WriteDeps = CryptoDeps
 
-const isUniqueViolation = (err: unknown): boolean => (err as { code?: unknown } | null)?.code === '23505'
+const errorCode = (err: unknown): unknown => (err as { code?: unknown } | null)?.code
 
-const isoDate = (d: Date): string => d.toISOString().slice(0, 10)
+const isUniqueViolation = (err: unknown): boolean => errorCode(err) === '23505'
+
+const DAY_MS = 86_400_000
+
+/** The calendar day (UTC) of a hold end; a time part rounds UP, so a hold never ends a day early. */
+const holdDay = (d: Date): string => {
+  const ms = d.getTime()
+  return new Date(ms % DAY_MS === 0 ? ms : (Math.floor(ms / DAY_MS) + 1) * DAY_MS).toISOString().slice(0, 10)
+}
 
 /**
- * What may be said about a failure: the extractor id and the error class. The message stays out
- * unless it comes from this module's own errors (they never carry record content): an extractor's
- * error may quote a name or a path.
+ * What may be said about a failure: the extractor id and the error class, plus the SQLSTATE of a
+ * database error (five characters, no record content). The message stays out unless it comes from
+ * this module's own errors (they never carry record content): an extractor's error may quote a name
+ * or a path.
  */
 function describe(extractorId: string, err: unknown): string {
   const own = err instanceof RetainedGuardError || err instanceof RetainedCryptoError
   const name = err instanceof Error ? err.name : typeof err
-  return own ? `${extractorId}: ${name}: ${(err as Error).message}` : `${extractorId}: ${name}`
+  if (own) return `${extractorId}: ${name}: ${(err as Error).message}`
+  const code = errorCode(err)
+  return typeof code === 'string' && /^[0-9A-Z]{5}$/.test(code) ? `${extractorId}: ${name} [${code}]` : `${extractorId}: ${name}`
 }
 
 /**
  * Seal the copies of this Karenz row. Returns how many records and lines THIS call wrote (an
- * extractor that was already written adds nothing); zero extractors is success with zero records.
+ * extractor that was already written adds nothing). A catalogue id with no extractor is a failure
+ * unless it declared (registerNoRetention) that it retains nothing: a missing registration must not
+ * pass for "nothing to retain" before an irreversible deletion.
  */
 export async function writeRetainedCopies(ctx: KarenzContext, deps: WriteDeps = {}): Promise<{ records: number; lines: number }> {
   const db = ctx.tenant.db
@@ -45,28 +58,27 @@ export async function writeRetainedCopies(ctx: KarenzContext, deps: WriteDeps = 
   let lineTotal = 0
   const failures: string[] = []
 
+  if (!hasRetentionDeclaration(ctx.catalogueId)) {
+    throw new KarenzPartialError([`${ctx.catalogueId}: no retention extractor registered and no declaration that it retains nothing`])
+  }
+
   for (const extractor of extractorsFor(ctx.catalogueId)) {
     try {
       if (await retainedRecordIdFor(db, ctx.karenzId, extractor.id)) continue
       const lines: RetainedLine[] = []
       for await (const line of extractor.extract(ctx)) lines.push(line)
       const hold = policyFor(extractor.retentionClass).holdUntil({ startedAt: ctx.switchedOffAt })
-      const sealed = await db.begin((tx) =>
-        sealLines(
-          tx as unknown as Sql,
-          ctx.tenant.id,
-          ctx.karenzId,
-          extractor.id,
-          lines,
-          { catalogueId: extractor.catalogueId, retentionClass: extractor.retentionClass, holdUntil: hold ? isoDate(hold) : null },
-          deps,
-        ),
-      )
-      records++
-      lineTotal += sealed.lineCount
+      const meta = { catalogueId: extractor.catalogueId, retentionClass: extractor.retentionClass, holdUntil: hold ? holdDay(hold) : null }
+      try {
+        const sealed = await db.begin((tx) => sealLines(tx as unknown as Sql, ctx.tenant.id, ctx.karenzId, extractor.id, lines, meta, deps))
+        records++
+        lineTotal += sealed.lineCount
+      } catch (err) {
+        // another pass sealed the same copy first: counted as written only when the copy really exists
+        if (isUniqueViolation(err) && (await retainedRecordIdFor(db, ctx.karenzId, extractor.id))) continue
+        throw err
+      }
     } catch (err) {
-      // another pass sealed the same copy first: it exists, which is all this step is for
-      if (isUniqueViolation(err)) continue
       const label = describe(extractor.id, err)
       ctx.log(`retained copy ${label}`)
       failures.push(label)
