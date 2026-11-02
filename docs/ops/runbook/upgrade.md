@@ -1,6 +1,6 @@
 # Upgrade: one release onto a running installation
 
-- Version: 6.2.0
+- Version: 6.3.0
 - Status: provisional (see Known gaps)
 - Wall-clock budget: one working day, from step 1 to the asserted post-condition (PRD-PLAT-005)
 - Implements: TRD-200 (upgrade), TRD-206 (the pre-migration dump, R18-4), TRD-189 (blue/green as the deploy path)
@@ -62,6 +62,15 @@ host="$(grep -vE '^[[:space:]]*(#|$)' /opt/gremion/etc/tenant-hosts.txt | head -
   (`/opt/gremion/etc/registry-token`, named by `GREMION_REGISTRY_TOKEN_FILE` in
   `state.env`; [host-tooling.md](../host-tooling.md), "The registry token on the
   host"). A token near its expiry is replaced before the upgrade, not during it.
+- The deploy user is in a group with gid 70, the gid the PgBouncer container
+  reads its userlist as: `id -G gremion | tr ' ' '\n' | grep -x 70` prints `70`.
+  The deploy's step 4 re-renders the userlist 0640 group 70 as the deploy user,
+  and under `gremion-hostd` (`NoNewPrivileges`) only a group the user already
+  belongs to can be set. A host installed before this requirement runs
+  `bootstrap.sh user` once as root (it adds the user to the group) and then
+  `systemctl restart gremion-hostd`, because a running agent keeps the groups it
+  started with; without both, the deploy fails at its step 4 with `cannot hand`
+  naming the group and leaves the previous userlist in place.
 - No other deploy, rollback or switch is running on the host; the agent's log,
   `logs/hostd.log`, names the last call it served.
 
@@ -299,6 +308,7 @@ live, a deploy of any other tag stops at its step 5 and prints both commands.
 
 ## Changelog
 
+- 6.3.0 (2026-11-02): kernel #83. A precondition: the deploy user is in a group with gid 70 (PgBouncer's gid), because the deploy's render step now writes the pgbouncer userlist 0640 group 70 as the deploy user; an older host runs `bootstrap.sh user` once and restarts `gremion-hostd`. Minor: a precondition changed, no step or post-condition did.
 - 6.2.0 (2026-10-30): kernel #47 decision (a). Step 4 (and the registry-token precondition) names the optional host token file `etc/registry-token` that `gremion-deploy` reads when `GREMION_REGISTRY_TOKEN_FILE` is set, with the commands that observe it; the prompt stays the default. Minor: an alternative added to a step, no post-condition changed.
 - 6.1.0 (2026-10-29): kernel #48. Step 6 (existing installs, once per realm): a realm the provisioner service account did not create (older than the account, or made by another admin) is adopted with `tenant-create bootstrap-provisioner --adopt-realm <realm>`, which grants the account exactly the realm-creator roles on master `<realm>-realm`; reconcile names the step when it meets such a realm. Minor: a conditional step added, no post-condition changed.
 - 6.0.0 (2026-10-03): TASK-075. `gremion-deploy` step 5 is `gremion-migration-dump` preflight (no longer `gremion-snapshot`): it dumps the kernel and control databases a release migrates and deletes that dump, logged, at step 12b (`switched`), after step 11 passed and step 12 recorded the release; a failed deletion exits 1 with `DUMP-NOT-DELETED` before the soak (12c). The post-condition counts fourteen step lines. Step 3 now dumps by hand only the other databases a release migrates (module databases, `gremion_platform`); step 5 leaves the deploy's own dump to the program; the failure path restores the kernel or control database from it (restore, then a logged discard). Known gap (b) describes what landed. Major: a step changed.

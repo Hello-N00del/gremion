@@ -42,6 +42,9 @@ RENDER_ALLOWED_VARS=(
     ELEMENT_CALL_LIVEKIT_URL
 )
 
+# The gid the PgBouncer image runs as (edoburu/pgbouncer: postgres, 70).
+PGBOUNCER_GID="${GREMION_PGBOUNCER_GID:-70}"
+
 KC_ARTEFACTS=(internal-ca.crt internal-ca.pem internal-ca.key keycloak.crt keycloak.key)
 
 usage() {
@@ -75,6 +78,69 @@ assert_rendered() {
     ok "rendered $p"
 }
 
+# set_group <file> <gid>
+# Sets the file's group to the numeric gid a container reads it as. The render
+# runs as the deploy user, who may not own that gid, so chgrp is tried directly
+# first (it works for a group the user belongs to, which bootstrap's `user`
+# stage arranges, and it is the only route under the NoNewPrivileges that
+# gremion-hostd's unit sets) and then through `sudo -n` (an interactive deploy
+# over ssh). Returns 1 with both reasons in SET_GROUP_ERR when neither works.
+SET_GROUP_ERR=""
+set_group() {
+    local path="$1" gid="$2" e1 e2=""
+    if e1="$(chgrp -- "$gid" "$path" 2>&1)"; then return 0; fi
+    if ! command -v sudo >/dev/null 2>&1; then
+        e2="sudo is not installed"
+    elif e2="$(sudo -n chgrp -- "$gid" "$path" 2>&1)"; then
+        return 0
+    fi
+    SET_GROUP_ERR="chgrp: ${e1//$'\n'/ }; sudo -n chgrp: ${e2//$'\n'/ }"
+    return 1
+}
+
+# write_userlist <path> <gid> <content>
+# Publishes the userlist atomically in its final state: the temp file is
+# written 0600, handed to the group, THEN made 0640 and renamed over <path>.
+# Nothing is published before it carries the right group, so a failure leaves
+# the previous userlist exactly as it was (no rm of a good file), and the
+# secret is never readable by the deploy user's own group. The result is read
+# back: an exit code is not evidence, the file's group and mode are.
+# On a filesystem that carries no POSIX modes (Git Bash on NTFS) a group means
+# nothing, so the group step is skipped there, as every other mode check is.
+write_userlist() {
+    local path="$1" gid="$2" content="$3" tmp modes=1 seen
+    tmp="${path}.tmp"
+    if [[ -L "$tmp" ]]; then rm -f -- "$tmp"; fi
+    if ! (umask 077; printf '%s\n' "$content" > "$tmp"); then
+        rm -f -- "$tmp"
+        die "cannot write ${tmp}"
+    fi
+    if fs_carries_modes "$(dirname "$path")"; then
+        if ! set_group "$tmp" "$gid"; then
+            rm -f -- "$tmp"
+            die "cannot hand ${path} to group ${gid} (the container reads this file as gid ${gid}): ${SET_GROUP_ERR}. Add the deploy user to group ${gid} (bootstrap's user stage does) and restart gremion-hostd; set GREMION_PGBOUNCER_GID if the image runs as another gid"
+        fi
+    else
+        modes=0
+        info "filesystem carries no POSIX modes: not setting group ${gid} on ${path}"
+    fi
+    if ! chmod 0640 "$tmp"; then
+        rm -f -- "$tmp"
+        die "cannot chmod ${tmp}"
+    fi
+    if [[ "$modes" -eq 1 ]]; then
+        seen="$(stat -c '%g %a' "$tmp")"
+        if [[ "$seen" != "${gid} 640" ]]; then
+            rm -f -- "$tmp"
+            die "userlist temp file is '${seen}', expected '${gid} 640': refusing to publish it"
+        fi
+    fi
+    if ! mv -f -T "$tmp" "$path"; then
+        rm -f -- "$tmp"
+        die "cannot move ${tmp} into place at ${path}"
+    fi
+}
+
 # 1. pgbouncer's auth_user credential. Every other role is resolved through
 #    auth_query against Postgres' SCRAM verifier, so this one line is the whole
 #    file (docker/pgbouncer/userlist.txt.example says so in the kernel tree).
@@ -88,7 +154,14 @@ render_pgbouncer_userlist() {
         die "missing env key PGBOUNCER_AUTH_PASSWORD" 2
     fi
     out="${dir}/userlist.txt"
-    printf '"pgbouncer_auth" "%s"\n' "$PGBOUNCER_AUTH_PASSWORD" | atomic_write "$out" 0600
+    # The PgBouncer container runs as uid/gid 70 and bind-mounts this file
+    # read-only, so a 0600 file owned by the deploy user is unreadable to it on
+    # a Linux host (issue #83; Docker Desktop ignores bind-mount modes, which is
+    # why no proof caught it). The file is therefore 0640 and handed to the
+    # PgBouncer gid: the deploy user keeps read/write, PgBouncer reads, other
+    # users get nothing. This is the group-read-bit precedent of
+    # docker/keycloak/certs/gen-internal-ca.sh, narrowed to one gid.
+    write_userlist "$out" "$PGBOUNCER_GID" "$(printf '"pgbouncer_auth" "%s"' "$PGBOUNCER_AUTH_PASSWORD")"
     assert_rendered "$out"
     if ! grep -q '^"pgbouncer_auth" "' "$out"; then
         die "userlist.txt does not carry the pgbouncer_auth entry: $out"
@@ -257,6 +330,12 @@ main() {
             *) usage >&2; die "unknown argument: $1" 2 ;;
         esac
     done
+
+    # A group NAME would be resolved against the host's /etc/group, not the
+    # container's gids, and could quietly name the wrong group.
+    if [[ ! "$PGBOUNCER_GID" =~ ^[0-9]+$ ]]; then
+        die "GREMION_PGBOUNCER_GID must be a numeric gid, got: ${PGBOUNCER_GID}" 2
+    fi
 
     if [[ -z "$RELEASE_DIR" ]]; then RELEASE_DIR="$(gremion_root)/current"; fi
     if [[ ! -d "$RELEASE_DIR" ]]; then die "release tree not found: $RELEASE_DIR" 2; fi

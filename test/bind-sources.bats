@@ -163,6 +163,67 @@ YML
     [ "$(stat -c %a "$T/docker/pgbouncer/userlist.txt")" = "600" ]
 }
 
+# Issue #83, dev/single-checkout twin: a Linux checkout that runs the prod overlay
+# bind-mounts this file into a PgBouncer that reads it as gid 70, so it needs the
+# same 0640 + gid-70 state gremion-render leaves. Docker Desktop and the plain
+# dev flow keep the 0600 default (no PgBouncer reads the file there).
+container_group_prereqs() {
+    [[ "$(uname -s)" == Linux ]] || skip "--container-group is a Linux-host contract"
+}
+
+@test "render-pgbouncer-userlist --container-group: writes 0640 with group 70" {
+    container_group_prereqs
+    mkdir -p "$T/docker/pgbouncer"
+    printf 'PGBOUNCER_AUTH_PASSWORD=s3cretvalue123\n' > "$T/.env"
+    run "$RENDER" --root "$T" --container-group
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    [ "$(stat -c '%g %a' "$T/docker/pgbouncer/userlist.txt")" = "70 640" ]
+    [ "$(cat "$T/docker/pgbouncer/userlist.txt")" = '"pgbouncer_auth" "s3cretvalue123"' ]
+    [[ "$output" != *"s3cretvalue123"* ]]
+}
+
+@test "render-pgbouncer-userlist --container-group: GREMION_PGBOUNCER_GID picks the group, a non-numeric value is refused" {
+    container_group_prereqs
+    mkdir -p "$T/docker/pgbouncer"
+    printf 'PGBOUNCER_AUTH_PASSWORD=s3cretvalue123\n' > "$T/.env"
+    GREMION_PGBOUNCER_GID=4242 run "$RENDER" --root "$T" --container-group
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    [ "$(stat -c %g "$T/docker/pgbouncer/userlist.txt")" = 4242 ]
+    rm -f "$T/docker/pgbouncer/userlist.txt"
+    GREMION_PGBOUNCER_GID=postgres run "$RENDER" --root "$T" --container-group
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"numeric gid"* ]]
+    [ ! -e "$T/docker/pgbouncer/userlist.txt" ]
+}
+
+@test "render-pgbouncer-userlist --container-group: fails and keeps the previous file when the group cannot be set" {
+    container_group_prereqs
+    mkdir -p "$T/docker/pgbouncer"
+    printf 'PGBOUNCER_AUTH_PASSWORD=newpass1\n' > "$T/.env"
+    printf '"pgbouncer_auth" "earlier-good"\n' > "$T/docker/pgbouncer/userlist.txt"
+    SHIM_DIR="$T/.shims"; SHIM_LOG="$T/.shims/calls.log"; mkdir -p "$SHIM_DIR"; : > "$SHIM_LOG"
+    export SHIM_DIR SHIM_LOG
+    PATH="${SHIM_DIR}:${PATH}"
+    shim chgrp 'echo "chgrp: Operation not permitted" >&2; exit 1'
+    shim sudo 'echo "sudo: a password is required" >&2; exit 1'
+    run "$RENDER" --root "$T" --container-group
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"group 70"* ]]
+    [[ "$output" == *"Operation not permitted"* ]]
+    [ "$(cat "$T/docker/pgbouncer/userlist.txt")" = '"pgbouncer_auth" "earlier-good"' ]
+    [ -z "$(ls -A "$T/docker/pgbouncer" | grep -v "^userlist.txt$")" ]
+}
+
+@test "render-pgbouncer-userlist: without --container-group the dev default stays 0600" {
+    mkdir -p "$T/docker/pgbouncer"
+    printf 'PGBOUNCER_AUTH_PASSWORD=s3cretvalue123\n' > "$T/.env"
+    run "$RENDER" --root "$T"
+    [ "$status" -eq 0 ]
+    [ "$(stat -c %a "$T/docker/pgbouncer/userlist.txt")" = "600" ]
+    [[ "$output" == *"--container-group"* ]]
+}
+
+
 @test "bootstrap wiring: setup.sh generates both sources and runs the preflight" {
     assert_present 'gen-internal-ca\.sh' "${PROJECT_ROOT}/scripts/setup.sh"
     assert_present 'render-pgbouncer-userlist\.sh' "${PROJECT_ROOT}/scripts/setup.sh"

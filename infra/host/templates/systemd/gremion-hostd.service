@@ -14,6 +14,11 @@ Type=exec
 User=${DEPLOY_USER}
 Group=${DEPLOY_USER}
 # The agent drives docker compose on behalf of a deploy.
+# This list EXTENDS the groups the deploy user has in the group database, which
+# include gid 70 (bootstrap's `user` stage): a deploy's gremion-render runs under
+# NoNewPrivileges, where sudo is refused and chgrp works only for a group the
+# user already belongs to. A change to that membership reaches the agent only
+# after a restart of this unit.
 SupplementaryGroups=docker
 # gremion-hostd resolves its install root through gremion_root(), which reads
 # GREMION_ROOT and otherwise falls back to its compiled-in default. Systemd
