@@ -99,9 +99,10 @@ docker compose --env-file /opt/gremion/etc/env/app-blue.env run --rm --no-deps -
 docker compose --env-file /opt/gremion/etc/env/app-blue.env exec <service> pnpm exec events outbox-replay --ctx <ctx> --customer <customer> --tenant <slug> --identity <identity> --subjects <subjects-file>
 ```
 
-`<modules>` is the tenant's real enabled module list plus `kernel-api` (`ensure` is declarative: an incomplete
-list removes the omitted modules' keys, and the kernel API's key with them; `gremion-tenant reconcile <slug>
---apply` does this with the registry's list and needs no hand-written one). `<identity>` is the NATS identity the service publishes as (`kernel` for the kernel's
+`<modules>` is the tenant's real enabled module list (`ensure` is declarative: an incomplete list removes the
+omitted modules' keys; `gremion-tenant reconcile <slug> --apply` does this with the registry's list and needs no
+hand-written one). The command adds the platform identity `kernel-api` to every list itself, so the kernel API's
+key is kept whatever list is typed, as `reconcile --apply` keeps it. `<identity>` is the NATS identity the service publishes as (`kernel` for the kernel's
 services, the module's name otherwise). `<subjects-file>` is the service's event-type to subject map (shipped
 with the service). Add `--since <ISO date>` to re-publish only what was published after that instant. The replay needs
 the `published` rows to still exist: the purge keeps them at least as long as the stream's retention plus its

@@ -26,11 +26,18 @@ bootstrap-provisioner | reconcile | materialize-config`.
 Customers are created, suspended, resumed and reconciled by **requests**: the
 control panel ("Neuer Mandant") submits a row through
 `plt.submit_provisioning_request`, and the host-side `gremion-executor`
-claims, verifies and runs it. The old operator verbs `gremion-tenant create`,
-`suspend`, `resume`, `reconcile` and `status` are gone (they exit 2 and write
-nothing). The one break-glass path is `gremion-tenant request <kind>
+claims, verifies and runs it. The old operator verb `gremion-tenant create` is
+gone (it exits 2 and writes nothing); `suspend`, `resume` and `status` are
+not documented as operator steps and retire the same way with the panel's
+customer screens. The one break-glass path is `gremion-tenant request <kind>
 --args-file <0600 json> --operator <uuid> --reason <text>`, which puts the
 same request into the same queue, flagged `origin=host`.
+
+One host verb stays a supported operator step: `gremion-tenant reconcile <slug>
+[--apply --reason <text>]`. It is audited, a plain run only reports drift, and it is
+what an upgrade runs for every customer (`docs/ops/runbook/upgrade.md`, step 7), because
+that step needs the report on stdout, which a queued request does not give. The A7 docs
+guard (`test/host/executor.bats`) therefore exempts `reconcile` and nothing else.
 <!-- /gremion-tenant decommission note -->
 
 ## The control plane and the per-tenant silo
@@ -387,6 +394,8 @@ pnpm -C gremion-ui exec tsx scripts/tenant-provision.ts reconcile [--verify-only
 
 Re-checks each tenant's realm against the base realm contract (identity, issuer,
 exact URIs, step-up flow) and, without `--verify-only`, replays repairable drift.
+With `--verify-only` (the host verb `gremion-tenant reconcile <slug>` without `--apply`) it only
+reports drift and changes nothing.
 `--all` walks the whole fleet, skips non-realm-bearing rows
 (deleted/deleting/provisioning), and exits non-zero on any genuine failure.
 
@@ -403,8 +412,10 @@ one `reconcile <slug>` (apply) has run.
 Two more checks re-apply provisioning that a later release added and that customers
 created earlier never received (kernel issues #88 and #89; the root cause is the same:
 create-time provisioning is not re-run on an upgrade). Each is read by a plain
-`reconcile` (RED when the customer is behind) and repaired, idempotently, by
-`reconcile <slug>` without `--verify-only`; a second apply changes nothing:
+reconcile (`gremion-tenant reconcile <slug>` without `--apply`, or the library verb with
+`--verify-only`), which **only reports drift and changes nothing** (RED when the customer is
+behind). Only `gremion-tenant reconcile <slug> --apply --reason <text>` (the library verb
+without `--verify-only`) repairs, idempotently; a second apply changes nothing:
 
 | Check | What must hold | What apply does |
 |---|---|---|

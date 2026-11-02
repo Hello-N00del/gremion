@@ -936,6 +936,64 @@ check_postcondition_scope() {
     return "$bad"
 }
 
+# Kernel #88 review note: a post-condition that reads "no output" as green passes when `gremion-tenant reconcile`
+# crashed, printed nothing or printed a report without checks. The documented line is RUN here, with
+# `gremion-tenant` shimmed, against every way a reconcile can fail to produce a green report: all of them must end
+# non-zero, and only a report whose every check says ok:true may end 0. The line is found by its command, so a
+# rewrite that drops the command is caught by the floor (no line found) rather than passing vacuously.
+RECONCILE_GREEN='{"realm":"acme","ok":true,"checks":[{"name":"purger-connect","ok":true},{"name":"kernel-api-nats-seed","ok":true}],"applied":[],"repairHost":[]}'
+# <scenario>: sets RC_OUT (stdout), RC_ERR (stderr) and RC_EXIT for the shim.
+reconcile_scenario() {
+    RC_OUT=""; RC_ERR=""; RC_EXIT=0
+    case "$1" in
+        green)            RC_ERR='[tenant-create] reconcile realm "acme" -- PASS'; RC_OUT="$RECONCILE_GREEN" ;;
+        empty)            ;;
+        crash)            RC_ERR='boom'; RC_EXIT=1 ;;
+        crash-after-json) RC_OUT="$RECONCILE_GREEN"; RC_EXIT=1 ;;
+        prose-only)       RC_OUT='reconcile finished' ;;
+        no-checks)        RC_OUT='{"realm":"acme","ok":true}' ;;
+        empty-checks)     RC_OUT='{"realm":"acme","ok":true,"checks":[]}' ;;
+        check-without-ok) RC_OUT='{"realm":"acme","ok":true,"checks":[{"name":"purger-connect"}]}' ;;
+        red-check)        RC_OUT='{"realm":"acme","ok":false,"checks":[{"name":"purger-connect","ok":false}]}' ;;
+        *) echo "unknown reconcile scenario: $1" >&2; return 1 ;;
+    esac
+}
+# <scenario> <line>: the exit status of the documented line, with gremion-tenant shimmed to that scenario.
+# Returns RC_HARNESS_ERROR (never a status the shim produces) when the harness itself cannot be set up, so a
+# misspelled scenario or a failed shim write is a failure of the check and never counts as a rejection.
+RC_HARNESS_ERROR=99
+run_reconcile_line() {
+    local bin="${BATS_TEST_TMPDIR}/rc-bin"
+    reconcile_scenario "$1" || return "$RC_HARNESS_ERROR"
+    mkdir -p "$bin" || return "$RC_HARNESS_ERROR"
+    printf '%s\n' '#!/usr/bin/env bash' \
+        '[ -z "${RC_ERR:-}" ] || printf "%s\n" "$RC_ERR" >&2' \
+        '[ -z "${RC_OUT:-}" ] || printf "%s\n" "$RC_OUT"' \
+        'exit "${RC_EXIT:-0}"' > "${bin}/gremion-tenant" || return "$RC_HARNESS_ERROR"
+    chmod +x "${bin}/gremion-tenant" || return "$RC_HARNESS_ERROR"
+    RC_OUT="$RC_OUT" RC_ERR="$RC_ERR" RC_EXIT="$RC_EXIT" PATH="${bin}:${PATH}" bash -c 'slug=acme; '"$2" >/dev/null 2>&1
+}
+check_reconcile_postcondition() {
+    local line lines=0 bad=0 s rc
+    while IFS= read -r line; do
+        [ -n "$line" ] || continue
+        [[ "$line" =~ ^[[:space:]]*# ]] && continue
+        lines=$((lines + 1))
+        run_reconcile_line green "$line" && rc=0 || rc=$?
+        [ "$rc" -ne "$RC_HARNESS_ERROR" ] || { echo "harness error: the reconcile shim could not be set up for 'green'" >&2; return 1; }
+        [ "$rc" -eq 0 ] || { echo "upgrade: the reconcile Post-condition rejects a green report: ${line}" >&2; bad=1; }
+        for s in empty crash crash-after-json prose-only no-checks empty-checks check-without-ok red-check; do
+            run_reconcile_line "$s" "$line" && rc=0 || rc=$?
+            [ "$rc" -ne "$RC_HARNESS_ERROR" ] || { echo "harness error: the reconcile shim could not be set up for '${s}'" >&2; return 1; }
+            if [ "$rc" -eq 0 ]; then
+                echo "upgrade: the reconcile Post-condition passes on '${s}' (an empty, crashed or incomplete reconcile reads as green): ${line}" >&2; bad=1
+            fi
+        done
+    done < <(postcondition_blocks "$1" upgrade | grep -F 'gremion-tenant reconcile' || true)
+    [ "$lines" -gt 0 ] || { echo "upgrade: the Post-condition no longer runs gremion-tenant reconcile for each customer" >&2; return 1; }
+    return "$bad"
+}
+
 # TASK-039 (TDD 17): the ops project moved to compose/observability/ and
 # Grafana-managed alerting replaced Alertmanager, whose port (9093) and
 # Prometheus' published port (9090) are gone. A runbook line that still names
@@ -1439,6 +1497,35 @@ private_dumps_with_075_pending() {               # <dir>
     d="$(fixture valid)"
     printf '\n## Post-condition\n\n```bash\nopenssl s_client -connect example.org:443 2>/dev/null | openssl x509 -noout -subject\n```\n' >> "$d/install.md"
     check_postcondition_scope "$d"
+}
+
+@test "the upgrade post-condition fails closed on a crashed, empty or incomplete reconcile (kernel #88)" {
+    d="$(real_dir)"; check_reconcile_postcondition "$d"
+    # Watched RED: the old shape (grep | jq of the failing checks, "no output" = green) passes every broken scenario.
+    d="$(fixture_snippet "${FIX}/snippets/reconcile-postcondition-open.md" upgrade)"
+    run check_reconcile_postcondition "$d"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"passes on 'empty'"* ]]
+    [[ "$output" == *"passes on 'crash'"* ]]
+    [[ "$output" == *"passes on 'red-check'"* ]]
+    # The floor: a Post-condition without the command is not a pass.
+    d="$(fixture valid)"
+    run check_reconcile_postcondition "$d"
+    [ "$status" -ne 0 ]; [[ "$output" == *"no longer runs gremion-tenant reconcile"* ]]
+}
+
+@test "the reconcile harness reports its own setup failure, it is never read as a rejection (kernel #88 review)" {
+    local rc=0
+    run_reconcile_line no-such-scenario 'true' || rc=$?
+    [ "$rc" -eq "$RC_HARNESS_ERROR" ]
+    # a setup failure inside the check is an error of the check, not a pass of the post-condition
+    local saved="$BATS_TEST_TMPDIR"
+    d="$(real_dir)"
+    : > "${saved}/not-a-dir"
+    BATS_TEST_TMPDIR="${saved}/not-a-dir"
+    run check_reconcile_postcondition "$d"
+    BATS_TEST_TMPDIR="$saved"
+    [ "$status" -ne 0 ]; [[ "$output" == *"harness error"* ]]
 }
 
 @test "positive control: the valid fixture passes every check" {

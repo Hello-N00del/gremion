@@ -41,7 +41,7 @@ export const FLOWS: Readonly<Record<string, ModuleFlow>> = Object.freeze({
   calendar: { publishes: ['CALENDAR'], consumes: [] },
   finance: { publishes: [], consumes: ['ORGUNIT'] },
   // TASK-080-a: the kernel API (services/kernel-api) is a NATS user of its own, the one IDT publisher
-  // (bodies, org units, seats, memberships, tenures, persons). `nats-auth ensure --modules` must list it.
+  // (bodies, org units, seats, memberships, tenures, persons). `nats-auth ensure` adds it to every set (PLATFORM_IDENTITIES).
   'kernel-api': { publishes: ['IDT'], consumes: [] },
 })
 
