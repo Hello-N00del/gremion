@@ -72,5 +72,7 @@ describe('nats-auth ensure keeps the platform identities (kernel-api)', () => {
     const r = await run(['ensure', 'ta', '--modules', 'kernel-api,publishing'])
     expect(r.code).toBe(0)
     expect(existsSync(seed('kernel-api'))).toBe(true)
+    expect(r.result?.createdUsers.filter((u) => u === 'kernel-api')).toHaveLength(1)
+    expect(r.result?.createdUsers).toEqual(['admin', 'kernel', 'kernel-api', 'publishing'])
   })
 })

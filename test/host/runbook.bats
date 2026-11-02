@@ -959,27 +959,33 @@ reconcile_scenario() {
     esac
 }
 # <scenario> <line>: the exit status of the documented line, with gremion-tenant shimmed to that scenario.
+# Returns RC_HARNESS_ERROR (never a status the shim produces) when the harness itself cannot be set up, so a
+# misspelled scenario or a failed shim write is a failure of the check and never counts as a rejection.
+RC_HARNESS_ERROR=99
 run_reconcile_line() {
     local bin="${BATS_TEST_TMPDIR}/rc-bin"
-    mkdir -p "$bin"
+    reconcile_scenario "$1" || return "$RC_HARNESS_ERROR"
+    mkdir -p "$bin" || return "$RC_HARNESS_ERROR"
     printf '%s\n' '#!/usr/bin/env bash' \
         '[ -z "${RC_ERR:-}" ] || printf "%s\n" "$RC_ERR" >&2' \
         '[ -z "${RC_OUT:-}" ] || printf "%s\n" "$RC_OUT"' \
-        'exit "${RC_EXIT:-0}"' > "${bin}/gremion-tenant"
-    chmod +x "${bin}/gremion-tenant"
-    reconcile_scenario "$1" || return 2
+        'exit "${RC_EXIT:-0}"' > "${bin}/gremion-tenant" || return "$RC_HARNESS_ERROR"
+    chmod +x "${bin}/gremion-tenant" || return "$RC_HARNESS_ERROR"
     RC_OUT="$RC_OUT" RC_ERR="$RC_ERR" RC_EXIT="$RC_EXIT" PATH="${bin}:${PATH}" bash -c 'slug=acme; '"$2" >/dev/null 2>&1
 }
 check_reconcile_postcondition() {
-    local line lines=0 bad=0 s
+    local line lines=0 bad=0 s rc
     while IFS= read -r line; do
         [ -n "$line" ] || continue
         [[ "$line" =~ ^[[:space:]]*# ]] && continue
         lines=$((lines + 1))
-        run_reconcile_line green "$line" \
-            || { echo "upgrade: the reconcile Post-condition rejects a green report: ${line}" >&2; bad=1; }
+        run_reconcile_line green "$line" && rc=0 || rc=$?
+        [ "$rc" -ne "$RC_HARNESS_ERROR" ] || { echo "harness error: the reconcile shim could not be set up for 'green'" >&2; return 1; }
+        [ "$rc" -eq 0 ] || { echo "upgrade: the reconcile Post-condition rejects a green report: ${line}" >&2; bad=1; }
         for s in empty crash crash-after-json prose-only no-checks empty-checks check-without-ok red-check; do
-            if run_reconcile_line "$s" "$line"; then
+            run_reconcile_line "$s" "$line" && rc=0 || rc=$?
+            [ "$rc" -ne "$RC_HARNESS_ERROR" ] || { echo "harness error: the reconcile shim could not be set up for '${s}'" >&2; return 1; }
+            if [ "$rc" -eq 0 ]; then
                 echo "upgrade: the reconcile Post-condition passes on '${s}' (an empty, crashed or incomplete reconcile reads as green): ${line}" >&2; bad=1
             fi
         done
@@ -1506,6 +1512,20 @@ private_dumps_with_075_pending() {               # <dir>
     d="$(fixture valid)"
     run check_reconcile_postcondition "$d"
     [ "$status" -ne 0 ]; [[ "$output" == *"no longer runs gremion-tenant reconcile"* ]]
+}
+
+@test "the reconcile harness reports its own setup failure, it is never read as a rejection (kernel #88 review)" {
+    local rc=0
+    run_reconcile_line no-such-scenario 'true' || rc=$?
+    [ "$rc" -eq "$RC_HARNESS_ERROR" ]
+    # a setup failure inside the check is an error of the check, not a pass of the post-condition
+    local saved="$BATS_TEST_TMPDIR"
+    d="$(real_dir)"
+    : > "${saved}/not-a-dir"
+    BATS_TEST_TMPDIR="${saved}/not-a-dir"
+    run check_reconcile_postcondition "$d"
+    BATS_TEST_TMPDIR="$saved"
+    [ "$status" -ne 0 ]; [[ "$output" == *"harness error"* ]]
 }
 
 @test "positive control: the valid fixture passes every check" {

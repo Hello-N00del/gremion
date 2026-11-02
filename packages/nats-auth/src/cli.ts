@@ -19,7 +19,8 @@ import { secretsDirOf } from './connect.ts'
 
 const USAGE = 'usage: nats-auth init | nats-auth ensure <tenant> (--modules a,b,c | --suspend) | nats-auth render'
 
-export async function main(argv: string[], opts: EnsureOptions = {}): Promise<number> {
+// ensureOpts is a test seam for `ensure` only (secretsDir / accountsDir / connect); init and render read the env dirs.
+export async function main(argv: string[], ensureOpts: EnsureOptions = {}): Promise<number> {
   const [cmd, ...rest] = argv
   switch (cmd) {
     case 'init': {
@@ -46,7 +47,7 @@ export async function main(argv: string[], opts: EnsureOptions = {}): Promise<nu
         console.error(USAGE)
         return 2
       }
-      const r = await ensureTenantAccount({ tenant, modules: withPlatformIdentities(modules) }, opts)
+      const r = await ensureTenantAccount({ tenant, modules: withPlatformIdentities(modules) }, ensureOpts)
       console.log(JSON.stringify(r))
       return 0
     }
