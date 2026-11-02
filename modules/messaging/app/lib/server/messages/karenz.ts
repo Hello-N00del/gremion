@@ -15,7 +15,7 @@
 import { getMatrixClient } from './matrix-client'
 import { getSynapseAdmin } from './synapse-admin'
 import {
-  getRoomArchiveMarker, RoomNotFoundError, unarchiveRoom, archiveRoom, resolveMatrixError,
+  getRoomArchiveMarker, unarchiveRoom, archiveRoom, resolveMatrixError,
 } from './admin/room-admin'
 import { listOrgUnits } from '$lib/server/governance/org-units-db'
 import { getResource } from '$lib/server/governance/provisioning/ledger'
@@ -58,6 +58,22 @@ function unitLabel(unitId: string | null): string {
 /** What an error may tell the settings page: its class, never its text (texts carry ids and urls). */
 function errorClass(err: unknown): string {
   return err instanceof Error ? err.name : 'Error'
+}
+
+/** The full error goes to the server log only (the homeserver client's errors are plain `Error`s whose
+ *  message carries the HTTP status: the class alone cannot tell a permission problem from an outage).
+ *  The unit is named by id; the settings page never sees this. */
+function logServerSide(what: string, unitId: string | null, err: unknown): void {
+  console.error(`[karenz/messaging] ${what}`, { unitId, err })
+}
+
+/** True only when the admin API positively answers "no such room". Never throws: a failing check is "not known". */
+async function roomIsGone(roomId: string): Promise<boolean> {
+  try {
+    return (await getSynapseAdmin().getRoomDetails(roomId)) === null
+  } catch {
+    return false
+  }
 }
 
 interface HomeserverRoom { room_id: string; creator?: string; canonical_alias?: string | null }
@@ -122,8 +138,15 @@ async function switchOff(ctx: KarenzContext): Promise<void> {
       } // else: an earlier pass archived it and died before the bookkeeping
       await ctx.items.setState(item.itemId, 'locked')
     } catch (err) {
+      // A purged room answers the client API with 403 (not 404), so a failure may only mean "gone":
+      // the admin API is the one that tells.
+      if (await roomIsGone(item.externalId)) {
+        await ctx.items.setState(item.itemId, 'gone', 'room no longer exists at the homeserver')
+        continue
+      }
       failures.push(unitLabel(unitId))
       ctx.log(`messaging: archive failed for ${unitLabel(unitId)}: ${errorClass(err)}`)
+      logServerSide('archive failed', unitId, err)
       await ctx.items.setState(item.itemId, 'lock_failed', `archive failed (${errorClass(err)})`)
     }
   }
@@ -140,17 +163,15 @@ async function restore(ctx: KarenzContext): Promise<void> {
       await unarchiveRoom(unitId, item.externalId, { userId: ACTOR })
       await ctx.items.setState(item.itemId, 'restored')
     } catch (err) {
-      try {
-        // A room that is gone at the homeserver cannot come back: that is a fact, not a failure.
-        if (err instanceof RoomNotFoundError && (await getSynapseAdmin().getRoomDetails(item.externalId)) === null) {
-          await ctx.items.setState(item.itemId, 'gone', 'room no longer exists at the homeserver')
-          continue
-        }
-      } catch {
-        // the existence check failed too: report the original failure below
+      // A room that is gone at the homeserver cannot come back: that is a fact, not a failure. The
+      // client API answers a purged room with 403 (not 404), so the admin API decides, whatever the error was.
+      if (await roomIsGone(item.externalId)) {
+        await ctx.items.setState(item.itemId, 'gone', 'room no longer exists at the homeserver')
+        continue
       }
       failures.push(unitLabel(unitId))
       ctx.log(`messaging: restore failed for ${unitLabel(unitId)}: ${errorClass(err)}`)
+      logServerSide('restore failed', unitId, err)
       await ctx.items.setState(item.itemId, 'unlock_failed', `unarchive failed (${errorClass(err)})`)
     }
   }
@@ -184,7 +205,10 @@ async function finalize(ctx: KarenzContext, opts: { dryRun: boolean }): Promise<
       // Only a room the admin bot archived for THIS unit (the one trusted marker chokepoint) is deleted.
       const marker = await getRoomArchiveMarker(item.externalId)
       if (!marker || marker.org_unit_id !== unitId) {
-        if (!opts.dryRun) await ctx.items.setState(item.itemId, 'kept', 'no trusted archive marker')
+        // Never deleted, but never silent either: the Karenz locked this room itself, so a missing or
+        // untrusted marker means the deletion did not happen. The item stays locked, so every pass reports it.
+        ctx.log(`messaging: ${unitLabel(unitId)} has no trusted archive marker, nothing deleted`)
+        if (!opts.dryRun) failures.push(unitLabel(unitId)) // a preview only counts, it does not fail
         continue
       }
       if (opts.dryRun) { rooms++; continue }
@@ -194,6 +218,7 @@ async function finalize(ctx: KarenzContext, opts: { dryRun: boolean }): Promise<
     } catch (err) {
       failures.push(unitLabel(unitId))
       ctx.log(`messaging: final deletion failed for ${unitLabel(unitId)}: ${errorClass(err)}`)
+      logServerSide('final deletion failed', unitId, err)
     }
   }
   if (failures.length > 0) throw new KarenzPartialError(failures)
@@ -206,7 +231,7 @@ async function removeRoom(unitId: string, roomId: string): Promise<void> {
     await getSynapseAdmin().deleteRoom(roomId)
   } catch (err) {
     await writeAuditEntry({ userId: ACTOR, field: 'messages.room.delete', oldValue: null, newValue: `${unitId}:${roomId}:failed` })
-    throw resolveMatrixError(err) === 'unavailable' ? new Error('homeserver unavailable') : err
+    throw resolveMatrixError(err) === 'unavailable' ? new Error('homeserver unavailable', { cause: err }) : err
   }
   await writeAuditEntry({ userId: ACTOR, field: 'messages.room.delete', oldValue: null, newValue: `${unitId}:${roomId}:ok` })
 }

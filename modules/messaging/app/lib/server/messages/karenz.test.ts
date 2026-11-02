@@ -113,7 +113,9 @@ async function homeserver(url: string, init?: RequestInit): Promise<Response> {
   const st = /^\/_matrix\/client\/v3\/rooms\/([^/]+)\/state\/([^/]+)\//.exec(path)
   if (st) {
     const room = rooms.get(decodeURIComponent(st[1]!))
-    if (!room) return notFound()
+    // Synapse answers a client-API state call about a room the user is not in - and a room that was
+    // purged is one - with 403 M_FORBIDDEN, never 404 (that is the admin API's answer, below).
+    if (!room) return json({ errcode: 'M_FORBIDDEN', error: 'User is not in the room' }, 403)
     const type = decodeURIComponent(st[2]!)
     if (method === 'PUT') {
       const content = JSON.parse(init!.body as string)
@@ -295,6 +297,16 @@ describe('messagingKarenz', () => {
       expect(stateOf({ externalId: '!r1:matrix.test' })).toBe('lock_failed')
     })
 
+    it('a recorded room that was purged at the homeserver (its state read answers 403, not 404) is gone, not lock_failed', async () => {
+      seed()
+      await store.items.upsert({ kind: 'room', externalId: '!old:matrix.test', state: 'recorded', payload: { unitId: 'u3' } })
+
+      await karenz.messagingKarenz.switchOff(ctx)
+
+      expect(stateOf({ externalId: '!old:matrix.test' })).toBe('gone')
+      expect(stateOf({ externalId: '!r1:matrix.test' })).toBe('locked')
+    })
+
     it('a retry after the failure converges, and the restore then puts the room back EXACTLY as it was', async () => {
       seed()
       faults.push({ match: (url, m) => m === 'PUT' && url.includes(encodeURIComponent('!r1:matrix.test')) && url.includes('m.room.power_levels'), once: true })
@@ -428,17 +440,36 @@ describe('messagingKarenz', () => {
       expect(stateOf({ externalId: '!meet:matrix.test' })).toBe('kept')
     })
 
-    it('never deletes a room whose archive marker was not sent by the admin bot (forged marker)', async () => {
+    it('never deletes a room whose archive marker was not sent by the admin bot (forged marker), and says so: a failure naming the unit, the item stays locked', async () => {
       seed()
       await karenz.messagingKarenz.switchOff(ctx)
       rooms.get('!r1:matrix.test')!.markerSender = '@mallory:matrix.test'
 
-      const r = await karenz.messagingKarenz.finalize(ctx, { dryRun: false })
+      const err = await karenz.messagingKarenz.finalize(ctx, { dryRun: false }).then(() => null, (e: unknown) => e)
 
-      expect(r).toEqual({ deleted: { rooms: 1 } }) // only !r2
+      expect(err).toBeInstanceOf(KarenzPartialError)
+      expect((err as KarenzPartialError).failures).toEqual(['unit u1'])
       expect(rooms.has('!r1:matrix.test')).toBe(true)
-      expect(stateOf({ externalId: '!r1:matrix.test' })).toBe('kept')
-      expect(rooms.has('!r2:matrix.test')).toBe(false)
+      expect(stateOf({ externalId: '!r1:matrix.test' })).toBe('locked') // not parked as kept: every pass reports it
+      expect(rooms.has('!r2:matrix.test')).toBe(false) // the other room is still deleted
+      const logged = (ctx.log as ReturnType<typeof vi.fn>).mock.calls.map((c) => String(c[0])).join('\n')
+      expect(logged).toContain('unit u1')
+      expect(logged).not.toMatch(/!r1|Vorstand/)
+    })
+
+    it('a final-deletion failure logs the full error server-side (the settings label keeps the class only)', async () => {
+      seed()
+      await karenz.messagingKarenz.switchOff(ctx)
+      faults.push({ match: (url, m) => m === 'DELETE' && url.includes(encodeURIComponent('!r1:matrix.test')), once: true })
+
+      const err = await karenz.messagingKarenz.finalize(ctx, { dryRun: false }).then(() => null, (e: unknown) => e)
+
+      expect((err as KarenzPartialError).failures.join(' ')).not.toMatch(/injected/)
+      const logged = vi.mocked(console.error).mock.calls
+        .map((c) => c[1] as { unitId?: string; err?: Error } | undefined)
+        .filter((d) => d?.unitId === 'u1')
+      expect(logged).toHaveLength(1)
+      expect(logged[0]!.err?.message).toContain('injected failure') // the homeserver's own answer reaches the server log
     })
 
     it('a room that is already gone at the homeserver is deleted, not a failure', async () => {

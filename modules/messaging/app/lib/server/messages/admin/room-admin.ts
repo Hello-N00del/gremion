@@ -272,11 +272,16 @@ function sanitizePrior(raw: unknown): ArchivePriorPowerLevels | null {
 /** rooms-plan.md S2.2 step 2: read-then-write m.room.power_levels, keeping the
  *  existing `users` map untouched. `current` is the read the caller already did
  *  (the archive reads first to store the prior); without it this reads itself.
+ *  `current` serves the FIRST attempt only: when that write is forbidden, make_room_admin
+ *  raises the bot's own level, and a retry must read the levels again - writing the stale
+ *  `users` map would put the bot back below 100 in a room that now needs 100.
  *  Falls back to make_room_admin ONCE (see withBotAdminRetry). */
 async function applyReadOnlyPowerLevels(roomId: string, current?: PowerLevelsContent): Promise<void> {
   const mc = getMatrixClient()
+  let preRead = current
   await withBotAdminRetry(roomId, async () => {
-    const base = current ?? (((await mc.getRoomState(roomId, 'm.room.power_levels')) ?? {}) as PowerLevelsContent)
+    const base = preRead ?? (((await mc.getRoomState(roomId, 'm.room.power_levels')) ?? {}) as PowerLevelsContent)
+    preRead = undefined
     const events = { ...base.events }
     for (const type of CALL_MEMBER_EVENT_TYPES) events[type] = 100
     await mc.setRoomState(roomId, 'm.room.power_levels', '', {
@@ -327,7 +332,7 @@ async function archiveMatrixSide(unitId: string, unitName: string, roomId: strin
     prior = capturePrior(current)
   }
   await mc.setRoomState(roomId, ROOM_ARCHIVE_MARKER_TYPE, '', {
-    org_unit_id: unitId, archived_at: (keptPrior && existing?.archived_at) || new Date().toISOString(), prior,
+    org_unit_id: unitId, archived_at: (keptPrior && typeof existing?.archived_at === 'string' && existing.archived_at) || new Date().toISOString(), prior,
   })
   await applyReadOnlyPowerLevels(roomId, current)
 
@@ -419,9 +424,12 @@ async function unarchiveMatrixSide(unit: OrgUnit, roomId: string, prior: Archive
 
   const current = (await mc.getRoomState(roomId, 'm.room.canonical_alias')) as { alias?: unknown } | null
   const archiveAlias = typeof current?.alias === 'string' && current.alias.startsWith('#stura-archiv-') ? current.alias : null
-  await mc.setRoomState(roomId, 'm.room.canonical_alias', '', { alias: canonical })
+  // The archive alias is removed BEFORE the canonical alias is overwritten: the room's current canonical
+  // alias is the only place it is found, so a failure after the overwrite would leave it behind for good.
+  // A retry after a failure here still sees the archive alias as canonical and finishes the job.
   // Only delete an archive alias that still points at THIS room (as archiveMatrixSide does for the canonical one).
   if (archiveAlias && (await mc.getRoomIdByAlias(archiveAlias)) === roomId) await mc.deleteRoomAlias(archiveAlias)
+  await mc.setRoomState(roomId, 'm.room.canonical_alias', '', { alias: canonical })
 }
 
 /** Karenz restore (Task 15): the inverse of archiveRoom. Brings an archived room of `unitId` back:
@@ -446,8 +454,13 @@ export async function unarchiveRoom(unitId: string, roomId: string, opts: { user
       throw new RoomConflictError(resource.external_id)
     }
 
+    const prior = sanitizePrior(marker.prior)
+    if (!prior) {
+      // A room archived before the prior was stored: its levels are guessed from the createRoom defaults.
+      console.warn('[room-admin] unarchiveRoom: marker carries no prior power levels, restoring the createRoom defaults', { unitId, roomId })
+    }
     try {
-      await unarchiveMatrixSide(unit, roomId, sanitizePrior(marker.prior))
+      await unarchiveMatrixSide(unit, roomId, prior)
       await getDb().begin(async (tx) => {
         await enqueueResources(tx, unitId, ['matrix'])
         await setSubsystemWanted(tx, unitId, 'matrix', true)

@@ -432,6 +432,45 @@ describe('room-admin', () => {
       expect(makeAdminCalls).toHaveLength(1) // canonical_alias PUT never needed its own forbidden-retry
       expect((fetchMock.mock.calls[8]![0] as string)).toContain('/state/m.room.canonical_alias/')
     })
+
+    it('T11b: a FORBIDDEN power-levels WRITE (read succeeded, bot below 100) re-reads after make_room_admin, so the retried PUT keeps the bot at 100 and the later alias steps are allowed', async () => {
+      getOrgUnit.mockResolvedValue(UNIT)
+      getResource.mockResolvedValue({ status: 'ok', external_id: '!r:matrix.test' })
+      // A stateful homeserver: the bot sits at 50, so writing m.room.power_levels is forbidden
+      // until make_room_admin raises it to 100; a write replaces the whole content.
+      let pl: Record<string, unknown> = { users: { [BOT]: 50 }, state_default: 50 }
+      const plPuts: Array<Record<string, unknown>> = []
+      const botLevel = () => (pl.users as Record<string, number>)[BOT] ?? 0
+      const forbidden = () => new Response(JSON.stringify({ errcode: 'M_FORBIDDEN', error: 'no' }), { status: 403 })
+      fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+        const method = init?.method ?? 'GET'
+        if (url.includes('/state/org.gremion.room.archived/') && method === 'GET') return new Response('{}', { status: 404 })
+        if (url.includes('/make_room_admin')) {
+          pl = { ...pl, users: { ...(pl.users as object), [BOT]: 100 } }
+          return new Response('{}', { status: 200 })
+        }
+        if (url.includes('/state/m.room.power_levels/')) {
+          if (method === 'GET') return new Response(JSON.stringify(pl), { status: 200 })
+          if (botLevel() < 100) return forbidden()
+          pl = JSON.parse(init!.body as string)
+          plPuts.push(pl)
+          return new Response('{}', { status: 200 })
+        }
+        if (url.includes('/state/m.room.canonical_alias/') && method === 'PUT') {
+          // after the archive the room needs PL100 for state events: a demoted bot is locked out
+          return botLevel() >= (pl.state_default as number) ? new Response('{}', { status: 200 }) : forbidden()
+        }
+        return new Response('{}', { status: 200 })
+      })
+      mockReleaseInvokesTeardown('ok')
+
+      const { archiveRoom } = await import('./room-admin')
+      await expect(archiveRoom('u1', { userId: 'admin-1' })).resolves.toBe('!r:matrix.test')
+
+      expect(plPuts).toHaveLength(1)
+      expect((plPuts[0]!.users as Record<string, number>)[BOT]).toBe(100) // not the stale 50
+      expect(plPuts[0]!.state_default).toBe(100)
+    })
   })
 
   describe('unarchiveRoom (Karenz restore)', () => {
@@ -543,6 +582,28 @@ describe('room-admin', () => {
       await unarchiveRoom('u1', ROOM, { userId: 'karenz-service' }) // idempotent second run
       expect(room.aliases.get(CANON)).toBe(ROOM)
       await expect(getRoomArchiveMarker(ROOM)).resolves.toBeNull()
+    })
+
+    it('a transient failure while removing the archive alias does not leak it: the retry still finds and removes it', async () => {
+      getOrgUnit.mockResolvedValue(UNIT)
+      getResource.mockResolvedValue(null)
+      const room = archivedRoom()
+      const inner = fetchMock.getMockImplementation() as (url: string, init?: RequestInit) => Promise<Response>
+      let failed = false
+      fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+        if (!failed && init?.method === 'DELETE' && url.includes(encodeURIComponent(ARCHIVE_ALIAS))) {
+          failed = true
+          return new Response('{"errcode":"M_UNKNOWN"}', { status: 500 })
+        }
+        return inner(url, init)
+      })
+
+      const { unarchiveRoom } = await import('./room-admin')
+      await expect(unarchiveRoom('u1', ROOM, { userId: 'karenz-service' })).rejects.toThrow()
+      await unarchiveRoom('u1', ROOM, { userId: 'karenz-service' })
+
+      expect(room.aliases.has(ARCHIVE_ALIAS)).toBe(false) // not left behind, pointing at an active room
+      expect(room.state.get('m.room.canonical_alias')).toEqual({ alias: CANON })
     })
 
     it('an already active room (no marker, ledger row ok for this room) is a no-op', async () => {
