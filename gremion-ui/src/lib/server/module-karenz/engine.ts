@@ -30,7 +30,9 @@
 //
 // Stage slots: notice, retained copies, publishing and reminders belong to Tasks 9, 10 and 11, which
 // register their stage with registerKarenzStages(). A stage that is not registered leaves its step
-// unmarked, so the finalize guard refuses until the retained copies really exist (fail closed).
+// unmarked, so the finalize guard refuses until the retained copies really exist (fail closed). The
+// retained stage is registered here for every catalogue id and itself fails closed: a catalogue id with
+// neither a retention extractor nor a registerNoRetention() declaration fails the step.
 import type { Sql } from '@gremion/db'
 import { writeAuditEntry, type AuditEntry } from '$lib/server/audit-db'
 import { safeFailureReason } from '$lib/server/erasure/orchestrator'
@@ -41,6 +43,7 @@ import { KarenzPartialError, karenzParticipantsFor, type KarenzContext, type Kar
 import { listKarenz, reportKarenz, type KarenzReport, type KarenzRowView } from './platform'
 import { reminderDue } from './mail'
 import { createNoticeStages } from './notices'
+import { writeRetainedCopies } from './retained/write'
 import * as realStore from './store'
 import type { ItemState, KarenzItem, KarenzItemRow, StepPatch, StepRow } from './store'
 
@@ -108,8 +111,18 @@ export interface KarenzStages {
   publish?: (ctx: KarenzContext) => Promise<Array<{ step: string; run: () => Promise<void> }>>
 }
 
-/** Task 9: the info mail and the reminders are the engine's own, so they are there without any registration. */
-const defaultStages = (): KarenzStages => createNoticeStages()
+/**
+ * The engine's own stages are there without any registration: Task 9's info mail and reminders, and
+ * Task 10's `retained` stage, the sealed-copy writer. The writer lives here (not in a module) because
+ * every module's extractors register into retained/extractors.ts and the writer runs for all of them.
+ */
+const defaultStages = (): KarenzStages => ({
+  ...createNoticeStages(),
+  retained: async (ctx) => {
+    const { records, lines } = await writeRetainedCopies(ctx)
+    ctx.log(`retained: ${records} record(s), ${lines} line(s) written in this pass`)
+  },
+})
 
 let registeredStages: KarenzStages = defaultStages()
 
@@ -118,7 +131,7 @@ export function registerKarenzStages(s: KarenzStages): void {
   registeredStages = { ...registeredStages, ...s }
 }
 
-/** Test-only: drop every registered stage, the default notices included. */
+/** Test-only: drop every registered stage, the defaults included. */
 export function _clearKarenzStagesForTests(): void {
   registeredStages = {}
 }
