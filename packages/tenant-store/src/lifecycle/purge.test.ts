@@ -120,6 +120,19 @@ describe('PURGE_RULES against the retention catalogue', () => {
   })
 })
 
+describe('the module Karenz residuals', () => {
+  it('the RC-MOD-EXPORT and RC-MOD-DATA residual reasons name the Karenz job (karenz-run) and do not say provisional', () => {
+    for (const id of ['RC-MOD-EXPORT', 'RC-MOD-DATA']) {
+      const res = PURGE_RESIDUAL.find((r) => r.catalogueRow === id)
+      expect(res, id).toBeDefined()
+      expect(res?.reason, id).toContain('karenz-run')
+      // the job is not in this tree yet: the ledger must say planned, not present tense
+      expect(res?.reason, id).toMatch(/planned/)
+      expect(res?.reason, id).not.toMatch(/provisional/i)
+    }
+  })
+})
+
 describe('the tenant-code refusal (defence in depth under the purger login)', () => {
   const kernelRules = PURGE_RULES.filter((r) => r.scope === 'kernel')
   const on = (table: string) => `(?:public\\.)?"?${table}"?\\b`

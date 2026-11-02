@@ -275,8 +275,9 @@ Usually a redirect-URI or origin mismatch.
 
 1. Keycloak admin → the tenant's realm → Clients → `gremion-ui` → **Valid Redirect URIs**.
    For local dev these must cover `http://localhost:3001/*`.
-2. Confirm `AUTH_KEYCLOAK_ISSUER` matches the browser-visible issuer
-   (`http://localhost:8082/auth/realms/<realm>` in dev).
+2. Confirm the tenant's registry issuer (the per-tenant `issuer` the app reads;
+   gremion-ui no longer reads `AUTH_KEYCLOAK_ISSUER`) matches the
+   browser-visible issuer (`http://localhost:8082/auth/realms/<realm>` in dev).
 3. For local dev, `make dev-configure` patches `gremion-ui/.env.local` and the
    Keycloak redirect URIs for you.
 
