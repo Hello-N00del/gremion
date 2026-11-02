@@ -1,6 +1,6 @@
 # Install: the from-zero bring-up
 
-- Version: 4.2.0
+- Version: 5.0.0
 - Wall-clock budget: one working day, from the start of step 1 to the asserted post-condition (PRD-PLAT-005)
 - Implements: TRD-200 (install), TRD-042 (the from-zero rebuild, R15-2), FLOW-OPS-002
 - First run: TASK-038, the pilot re-initialisation
@@ -98,7 +98,12 @@ git -C "$REL" -c gpg.format=ssh -c gpg.ssh.allowedSignersFile=/root/allowed_sign
 4. **Base system, deploy user, Docker.** `infra/host/bootstrap.sh`, stages
    `base`, `user` and `docker`; each asserts its own post-conditions. `user`
    creates the deploy user `gremion` and the host layout it owns (`etc/` mode
-   0700). Then the release tree is handed to that user: `gremion-deploy` runs
+   0700), and puts the user in a group with gid 70, the gid the PgBouncer
+   container reads its userlist as (it creates group `pgbouncer-gid` for
+   that gid when no group holds it; `GREMION_PGBOUNCER_GID` names another gid).
+   A deploy driven through `gremion-hostd` runs `gremion-render` as that user
+   under `NoNewPrivileges`, where `sudo` is refused and `chgrp` works only for a
+   group the user belongs to. Then the release tree is handed to that user: `gremion-deploy` runs
    git in it as `gremion`, and git refuses a checkout another user owns
    ("dubious ownership").
 
@@ -107,6 +112,7 @@ bash "$REL/infra/host/bootstrap.sh" base
 bash "$REL/infra/host/bootstrap.sh" user
 bash "$REL/infra/host/bootstrap.sh" docker
 chown -R gremion:gremion "$REL"
+id -G gremion | tr ' ' '\n' | grep -x 70                                          # 70: the deploy user is in the PgBouncer gid
 stat -c '%U %a %n' /opt/gremion /opt/gremion/releases "$REL" /opt/gremion/etc    # gremion, all four
 sudo -u gremion git -C "$REL" describe --tags --exact-match                       # the tag, read as gremion
 ```
@@ -202,9 +208,11 @@ gremion-dns-check --domain "$PLATFORM_DOMAIN" \
     keeps the Keycloak CA in `etc/secrets/keycloak` for every later release,
     and it ends with a `RENDER:` line. It writes the pgbouncer `userlist.txt`
     mode 0640 and hands it to group 70, the gid the PgBouncer container reads
-    it as (`GREMION_PGBOUNCER_GID` names another gid); it sets the group with
-    `chgrp`, or `sudo -n chgrp` for the deploy user, and fails the render when
-    neither works, so no hand-made chmod or chgrp is needed. The log pipeline's `ipcrypt_key` secret
+    it as (`GREMION_PGBOUNCER_GID` names another gid). It sets the group on the
+    temporary file with `chgrp`, or `sudo -n chgrp` for the deploy user, before
+    the file is moved into place; when neither works the render fails naming
+    both reasons and leaves any earlier userlist as it was, so no hand-made
+    chmod or chgrp is needed. The log pipeline's `ipcrypt_key` secret
     is read from the release tree's `secrets/ipcrypt_key.txt`, while the render
     keeps that key in `etc/secrets/ipcrypt_key.txt`; a hard link made as the
     deploy user puts the same key into the tree (one inode, so an in-place key
@@ -452,6 +460,7 @@ in [run-record.md](run-record.md).
 
 ## Changelog
 
+- 5.0.0 (2026-11-02): kernel #83. Step 4's `user` stage puts the deploy user in a group with gid 70 and the step observes it (`id -G`); step 12's render writes the pgbouncer `userlist.txt` mode 0640 group 70 (it was 0600 owned by the deploy user, which PgBouncer, uid/gid 70, could not read) and the step observes `stat -c '%a %g'` as `640 70`. Major: a step and its observations changed.
 - 4.2.0 (2026-10-30): kernel #47 decision (a). Step 14 (and the registry-token precondition) names the optional host token file `etc/registry-token` that `gremion-deploy` reads when `GREMION_REGISTRY_TOKEN_FILE` is set, with the commands that observe it; the prompt stays the default. Minor: an alternative added to a step, no post-condition changed.
 - 4.1.1 (2026-10-29): kernel #48. Known gaps names the adopt step (upgrade.md step 6) for a realm the provisioner service account did not create. Patch: no step or post-condition changed.
 - 4.1.0 (2026-10-03): TASK-039. Step 15 starts the observability stack from `compose/observability/` (Grafana-managed alerting, no separate alert router), the project table and step 8 name its directory, and the Known gap on the old ops project is replaced by the Grafana sign-in note. Minor: a step changed, no post-condition did.
