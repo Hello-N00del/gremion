@@ -628,15 +628,32 @@ describe('room-admin', () => {
       await expect(unarchiveRoom('u1', ROOM, { userId: 'karenz-service' })).rejects.toThrow(RoomNotFoundError)
     })
 
-    it('a canonical alias held by ANOTHER room is a RoomConflictError and nothing is re-attached', async () => {
+    it('a canonical alias held by ANOTHER room never blocks the restore: the alias is not taken over, the room is writable again and re-attached', async () => {
       getOrgUnit.mockResolvedValue(UNIT)
       getResource.mockResolvedValue(null)
-      const room = archivedRoom({ aliasHolder: '!other:matrix.test' })
+      const prior = { events_default: 0, invite: 0, state_default: 50, events: {} }
+      const room = archivedRoom({ aliasHolder: '!other:matrix.test', prior })
 
-      const { unarchiveRoom, RoomConflictError } = await import('./room-admin')
-      await expect(unarchiveRoom('u1', ROOM, { userId: 'karenz-service' })).rejects.toThrow(RoomConflictError)
+      const { unarchiveRoom, getRoomArchiveMarker } = await import('./room-admin')
+      await unarchiveRoom('u1', ROOM, { userId: 'karenz-service' })
+
       expect(room.aliases.get(CANON)).toBe('!other:matrix.test') // never taken over
-      expect(markResourceOk).not.toHaveBeenCalled()
+      expect((room.state.get('m.room.power_levels') as { events_default: number }).events_default).toBe(0)
+      expect(markResourceOk).toHaveBeenCalledWith('u1', 'matrix', ROOM)
+      expect(room.aliases.get(ARCHIVE_ALIAS)).toBe(ROOM) // still reachable by its archive alias
+      expect(room.state.get('m.room.canonical_alias')).toEqual({ alias: ARCHIVE_ALIAS })
+      await expect(getRoomArchiveMarker(ROOM)).resolves.toBeNull()
+    })
+
+    it('a failing audit write in the failure path does not replace the error being reported', async () => {
+      getOrgUnit.mockResolvedValue(UNIT)
+      getResource.mockResolvedValue(null)
+      markResourceOk.mockRejectedValueOnce(new Error('db down'))
+      writeAuditEntry.mockRejectedValueOnce(new Error('audit down'))
+      archivedRoom()
+
+      const { unarchiveRoom } = await import('./room-admin')
+      await expect(unarchiveRoom('u1', ROOM, { userId: 'karenz-service' })).rejects.toThrow('db down')
     })
 
     it('a ledger row that is already ok for a DIFFERENT room is a RoomConflictError', async () => {

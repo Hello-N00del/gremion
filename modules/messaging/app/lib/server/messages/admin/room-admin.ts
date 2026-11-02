@@ -18,6 +18,10 @@
 import { getMatrixClient } from '../matrix-client'
 import { getSynapseAdmin } from '../synapse-admin'
 import { aliasLocalpart } from '../provisioning/matrix-subsystem'
+import {
+  applyReadOnlyPowerLevels, capturePrior, readPowerLevels, restorePowerLevels, sanitizePrior,
+  type ArchivePriorPowerLevels, type PowerLevelsContent,
+} from './archive-power-levels'
 import { serviceEnv } from '$lib/server/env/service-env'
 import { getOrgUnit, listOrgUnits, setSubsystemWanted, type OrgUnit } from '$lib/server/governance/org-units-db'
 import { enqueueResources, getResource, markResourceOk } from '$lib/server/governance/provisioning/ledger'
@@ -67,10 +71,6 @@ const UNAVAILABLE_PATTERN = /ECONNREFUSED|ETIMEDOUT|getaddrinfo|abort(ed)?|\b50[
 export function resolveMatrixError(err: unknown): MatrixErrorKind {
   const msg = err instanceof Error ? err.message : String(err)
   return UNAVAILABLE_PATTERN.test(msg) ? 'unavailable' : 'upstream'
-}
-
-function isForbidden(err: unknown): boolean {
-  return err instanceof Error && /\b403\b|M_FORBIDDEN/.test(err.message)
 }
 
 // R3 (rooms-plan.md, known/flagged-not-fixed bug): this MUST resolve the server
@@ -183,133 +183,6 @@ export async function renameRoom(
   })
 }
 
-interface PowerLevelsContent {
-  events?: Record<string, number>
-  events_default?: number
-  invite?: number
-  state_default?: number
-  users?: Record<string, number>
-  [key: string]: unknown
-}
-
-// The four RTC/call-member event types createRoom's power_level_content_override
-// opens to PL0 (matrix-client.ts createRoom) — archive closes them back to 100
-// alongside events_default/invite/state_default, so a former member cannot start
-// or join a call, publish keys, or send any other event in a read-only room.
-const CALL_MEMBER_EVENT_TYPES = [
-  'org.matrix.msc4143.rtc.member',
-  'org.matrix.msc3401.call.member',
-  'm.call.member',
-  'io.element.call.encryption_keys',
-]
-
-/** The power-level values the archive overwrites, stored in the archive marker so
- *  a Karenz restore (unarchiveRoom) puts the room back exactly as it was. Every
- *  field is optional: a value the room did not carry is simply absent. */
-export interface ArchivePriorPowerLevels {
-  events_default?: number
-  invite?: number
-  state_default?: number
-  /** Only the call-member event types the archive closes (CALL_MEMBER_EVENT_TYPES). */
-  events?: Record<string, number>
-}
-
-// The createRoom defaults (private_chat preset plus the PL0 call-member override of
-// matrix-client.ts createRoom): what unarchiveRoom restores for a marker that carries no prior.
-const CREATE_ROOM_DEFAULTS = { events_default: 0, invite: 0, state_default: 50, callMemberLevel: 0 }
-
-/** Runs `fn`; on a forbidden answer grants the bot PL100 ONCE (S2.2 step 5 - a
- *  legacy room/demo seed where the bot is below PL100) and retries; a second
- *  failure propagates rather than looping. */
-async function withBotAdminRetry<T>(roomId: string, fn: () => Promise<T>): Promise<T> {
-  try {
-    return await fn()
-  } catch (err) {
-    if (!isForbidden(err)) throw err
-    await getSynapseAdmin().makeRoomAdmin(roomId, getMatrixClient().getAdminBotUserId())
-    return await fn() // retry once; a second failure propagates untouched
-  }
-}
-
-async function readPowerLevels(roomId: string): Promise<PowerLevelsContent> {
-  return withBotAdminRetry(roomId, async () =>
-    ((await getMatrixClient().getRoomState(roomId, 'm.room.power_levels')) ?? {}) as PowerLevelsContent)
-}
-
-function capturePrior(current: PowerLevelsContent): ArchivePriorPowerLevels {
-  const prior: ArchivePriorPowerLevels = {}
-  for (const key of ['events_default', 'invite', 'state_default'] as const) {
-    if (typeof current[key] === 'number') prior[key] = current[key]
-  }
-  const events: Record<string, number> = {}
-  for (const type of CALL_MEMBER_EVENT_TYPES) {
-    const level = current.events?.[type]
-    if (typeof level === 'number') events[type] = level
-  }
-  prior.events = events
-  return prior
-}
-
-/** A prior read back from a marker is Matrix state anyone with PL could have shaped: keep only the numbers. */
-function sanitizePrior(raw: unknown): ArchivePriorPowerLevels | null {
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
-  const r = raw as Record<string, unknown>
-  const prior: ArchivePriorPowerLevels = {}
-  for (const key of ['events_default', 'invite', 'state_default'] as const) {
-    if (typeof r[key] === 'number') prior[key] = r[key] as number
-  }
-  if (r.events && typeof r.events === 'object' && !Array.isArray(r.events)) {
-    const events: Record<string, number> = {}
-    for (const type of CALL_MEMBER_EVENT_TYPES) {
-      const level = (r.events as Record<string, unknown>)[type]
-      if (typeof level === 'number') events[type] = level
-    }
-    prior.events = events
-  }
-  return prior
-}
-
-/** rooms-plan.md S2.2 step 2: read-then-write m.room.power_levels, keeping the
- *  existing `users` map untouched. `current` is the read the caller already did
- *  (the archive reads first to store the prior); without it this reads itself.
- *  `current` serves the FIRST attempt only: when that write is forbidden, make_room_admin
- *  raises the bot's own level, and a retry must read the levels again - writing the stale
- *  `users` map would put the bot back below 100 in a room that now needs 100.
- *  Falls back to make_room_admin ONCE (see withBotAdminRetry). */
-async function applyReadOnlyPowerLevels(roomId: string, current?: PowerLevelsContent): Promise<void> {
-  const mc = getMatrixClient()
-  let preRead = current
-  await withBotAdminRetry(roomId, async () => {
-    const base = preRead ?? (((await mc.getRoomState(roomId, 'm.room.power_levels')) ?? {}) as PowerLevelsContent)
-    preRead = undefined
-    const events = { ...base.events }
-    for (const type of CALL_MEMBER_EVENT_TYPES) events[type] = 100
-    await mc.setRoomState(roomId, 'm.room.power_levels', '', {
-      ...base, events, events_default: 100, invite: 100, state_default: 100,
-    })
-  })
-}
-
-/** The inverse of applyReadOnlyPowerLevels: the prior values from the marker, or the createRoom defaults. */
-async function restorePowerLevels(roomId: string, prior: ArchivePriorPowerLevels | null): Promise<void> {
-  const mc = getMatrixClient()
-  await withBotAdminRetry(roomId, async () => {
-    const base = ((await mc.getRoomState(roomId, 'm.room.power_levels')) ?? {}) as PowerLevelsContent
-    const events = { ...base.events }
-    for (const type of CALL_MEMBER_EVENT_TYPES) {
-      if (!prior) events[type] = CREATE_ROOM_DEFAULTS.callMemberLevel
-      else if (prior.events && typeof prior.events[type] === 'number') events[type] = prior.events[type]!
-      else delete events[type] // the room did not carry this type before the archive
-    }
-    await mc.setRoomState(roomId, 'm.room.power_levels', '', {
-      ...base, events,
-      events_default: prior?.events_default ?? CREATE_ROOM_DEFAULTS.events_default,
-      invite: prior?.invite ?? CREATE_ROOM_DEFAULTS.invite,
-      state_default: prior?.state_default ?? CREATE_ROOM_DEFAULTS.state_default,
-    })
-  })
-}
-
 /** rooms-plan.md S2.2: the Matrix-side archive sequence, run in this exact
  *  order (asserted by T10) — the durable marker first (survives even if a
  *  later step fails), then read-only power levels, then the alias swap,
@@ -331,8 +204,12 @@ async function archiveMatrixSide(unitId: string, unitName: string, roomId: strin
     current = await readPowerLevels(roomId)
     prior = capturePrior(current)
   }
+  const keptAlias = existing?.org_unit_id === unitId && typeof existing.archive_alias === 'string' && existing.archive_alias.startsWith('#stura-archiv-')
+    ? existing.archive_alias : null
+  const archiveAlias = keptAlias ?? freshArchiveAlias(unitName)
   await mc.setRoomState(roomId, ROOM_ARCHIVE_MARKER_TYPE, '', {
     org_unit_id: unitId, archived_at: (keptPrior && typeof existing?.archived_at === 'string' && existing.archived_at) || new Date().toISOString(), prior,
+    archive_alias: archiveAlias,
   })
   await applyReadOnlyPowerLevels(roomId, current)
 
@@ -371,8 +248,14 @@ async function archiveMatrixSide(unitId: string, unitName: string, roomId: strin
   // grants the bot PL100 via make_room_admin when the room predates it being
   // admin (a legacy room/demo seed) — this reuses that same grant rather
   // than needing its own separate forbidden-then-retry path.
-  const archiveAlias = freshArchiveAlias(unitName)
-  await mc.putRoomAlias(archiveAlias, roomId)
+  //
+  // The alias was chosen up front and is in the marker (above): a retry after a partial archive reuses
+  // it instead of minting a second one, which would stay behind in the directory and still resolve to
+  // the room after a Karenz restore. Only when it already points at this room is the PUT skipped
+  // (a directory PUT of an existing alias is a 409 at the homeserver).
+  if (!keptAlias || (await mc.getRoomIdByAlias(archiveAlias).catch(() => null)) !== roomId) {
+    await mc.putRoomAlias(archiveAlias, roomId)
+  }
   await mc.setRoomState(roomId, 'm.room.canonical_alias', '', { alias: archiveAlias })
 }
 
@@ -418,8 +301,17 @@ async function unarchiveMatrixSide(unit: OrgUnit, roomId: string, prior: Archive
   const mc = getMatrixClient()
   const canonical = canonicalAlias(unit.name)
   const holder = await mc.getRoomIdByAlias(canonical)
-  if (holder && holder !== roomId) throw new RoomConflictError(holder) // before anything is changed
+  // The alias is never taken over from ANOTHER room (archiveMatrixSide tolerates the same collision):
+  // the restore still completes - writable room, ledger re-attached - and the room keeps its archive
+  // alias as its canonical one, so it stays reachable.
+  const aliasTaken = holder !== null && holder !== undefined && holder !== roomId
+  if (aliasTaken) {
+    console.error('[room-admin] unarchiveRoom: the unit alias belongs to another room, restoring without it', {
+      unitId: unit.id, roomId, alias: canonical, holder,
+    })
+  }
   await restorePowerLevels(roomId, prior)
+  if (aliasTaken) return
   if (!holder) await mc.putRoomAlias(canonical, roomId)
 
   const current = (await mc.getRoomState(roomId, 'm.room.canonical_alias')) as { alias?: unknown } | null
@@ -433,12 +325,13 @@ async function unarchiveMatrixSide(unit: OrgUnit, roomId: string, prior: Archive
 }
 
 /** Karenz restore (Task 15): the inverse of archiveRoom. Brings an archived room of `unitId` back:
- *  writable again (the power levels the archive stored in its marker), the unit's alias back, the
+ *  writable again (the power levels the archive stored in its marker), the unit's alias back (unless
+ *  another room holds it: that alias is never taken over and the restore still completes), the
  *  ledger re-attached, then - LAST, so an interrupted restore is simply run again - the marker is
  *  overwritten with { unarchived_at } (a state event cannot be deleted; getRoomArchiveMarker reads
  *  a marker without org_unit_id as "not archived"). A room that is already the unit's active room
- *  is a no-op. A RoomConflictError means the unit already has another room or its alias is held by
- *  another room; the Matrix side is not touched in either case. */
+ *  is a no-op. A RoomConflictError means the unit already has another active room; the Matrix side is
+ *  not touched then. */
 export async function unarchiveRoom(unitId: string, roomId: string, opts: { userId: string }): Promise<void> {
   const unit = await getOrgUnit(unitId)
   if (!unit) throw new RoomNotFoundError(`org unit not found: ${unitId}`)
@@ -468,12 +361,18 @@ export async function unarchiveRoom(unitId: string, roomId: string, opts: { user
       await markResourceOk(unitId, 'matrix', roomId)
       await getMatrixClient().setRoomState(roomId, ROOM_ARCHIVE_MARKER_TYPE, '', { unarchived_at: new Date().toISOString() })
     } catch (err) {
-      await writeAuditEntry({
-        userId: opts.userId, field: 'messages.room.unarchive',
-        oldValue: unit.name, newValue: `${unitId}:${roomId}:failed`,
-      })
+      // A failing audit write (a database outage is the likely reason the ledger step failed) must not
+      // replace the error that is being reported.
+      try {
+        await writeAuditEntry({
+          userId: opts.userId, field: 'messages.room.unarchive',
+          oldValue: unit.name, newValue: `${unitId}:${roomId}:failed`,
+        })
+      } catch (auditErr) {
+        console.error('[room-admin] unarchiveRoom: the failure audit entry could not be written', { unitId, roomId, auditErr })
+      }
       if (resolveMatrixError(err) === 'unavailable') {
-        throw new MatrixUnavailableError((err as Error).message, err)
+        throw new MatrixUnavailableError(err instanceof Error ? err.message : String(err), err)
       }
       throw err
     }
@@ -751,8 +650,11 @@ export async function probeMatrix(): Promise<boolean> {
 export interface RoomArchiveMarker {
   org_unit_id?: string
   archived_at?: string
-  /** Karenz (Task 15): the power levels the archive overwrote (see ArchivePriorPowerLevels). */
-  prior?: ArchivePriorPowerLevels
+  /** Karenz (Task 15): the power levels the archive overwrote (see ArchivePriorPowerLevels). Raw Matrix
+   *  state, NOT trusted: run it through sanitizePrior before reading a single field. */
+  prior?: unknown
+  /** The archive alias this archive minted (a retry reuses it; the restore removes it). */
+  archive_alias?: string
   /** Set by unarchiveRoom on a marker without org_unit_id (a state event cannot be deleted). */
   unarchived_at?: string
 }

@@ -1537,9 +1537,9 @@
     },
     {
       "path": "modules/messaging/app/lib/server/messages/admin/room-admin.ts",
-      "reason": "TASK-205b: service endpoints through serviceEnv (the deleted default-tenant env reader); Module Karenz Task 15: archive marker keeps the prior power levels, unarchiveRoom, getRoomArchiveMarker reads an unarchived marker as not archived",
+      "reason": "TASK-205b: service endpoints through serviceEnv (the deleted default-tenant env reader); Module Karenz Task 15: archive marker keeps the prior power levels, unarchiveRoom, getRoomArchiveMarker reads an unarchived marker as not archived; the power-level helpers moved to admin/archive-power-levels.ts",
       "owner": "TASK-205",
-      "blob": "8c6c08ed50e9c359eb250a119e59c7a59de43be4"
+      "blob": "eb06302c64d420dc9c19f9d621ebc19e4d0fbbfb"
     },
     {
       "path": "modules/messaging/app/lib/server/messages/matrix-creds.ts",
@@ -1617,7 +1617,7 @@
       "path": "modules/messaging/app/lib/server/messages/admin/room-admin.test.ts",
       "reason": "TASK-205b: the suite feeds the serviceEnv seam from its $env/dynamic/private mock; Module Karenz Task 15: prior power levels, unarchiveRoom and the unarchived marker",
       "owner": "TASK-205",
-      "blob": "86be46269321bfc818e1acf182c7dea9aad26129"
+      "blob": "7bd40c04bc3a722be1999e4f3d560177e971d11a"
     },
     {
       "path": "modules/messaging/app/lib/server/messages/matrix-client.test.ts",
@@ -2193,13 +2193,19 @@
       "path": "modules/messaging/app/lib/server/messages/karenz.ts",
       "reason": "Module Karenz phase 2 Task 15: the messaging Karenz participant (archive rooms at switch-off, unarchive on restore, delete on the final day); new kernel-side file with no counterpart at the tag",
       "owner": "KARENZ-P2-T15",
-      "blob": "de4d82aca68df982a2967c1840c6803c690fdf8e"
+      "blob": "7a797e41405f423b61b8c71bec6f28244afc7aa1"
     },
     {
       "path": "modules/messaging/app/lib/server/messages/karenz.test.ts",
       "reason": "Module Karenz phase 2 Task 15: tests of the messaging Karenz participant against an in-memory homeserver; new kernel-side file with no counterpart at the tag",
       "owner": "KARENZ-P2-T15",
-      "blob": "fbfb61fd15e4cfbf80417f6d91ac6c7cf984f6d0"
+      "blob": "211ae08d1c2deca7569e43edafa3aa616e600e16"
+    },
+    {
+      "path": "modules/messaging/app/lib/server/messages/admin/archive-power-levels.ts",
+      "reason": "Module Karenz phase 2 Task 15: the archive/restore power-level helpers split out of room-admin.ts (file size cap); new kernel-side file with no counterpart at the tag",
+      "owner": "KARENZ-P2-T15",
+      "blob": "0baaf3583c180a6a1f96d2a753f3a5d921c7550f"
     }
   ]
 }

@@ -25,6 +25,7 @@ vi.mock('$lib/server/tenant/context', () => ({
 interface Unit { id: string; name: string }
 const units: Unit[] = []
 const ledger = new Map<string, { status: string; external_id: string | null }>()
+let detachFailures = 0
 vi.mock('$lib/server/governance/org-units-db', () => ({
   getOrgUnit: async (id: string) => units.find((u) => u.id === id) ?? null,
   listOrgUnits: async () => units,
@@ -42,6 +43,7 @@ vi.mock('$lib/server/governance/provisioning/orchestrator', () => ({
   releaseSubsystem: async (unitId: string, _s: string, teardown: (id: string | null) => Promise<void>) => {
     const before = ledger.get(unitId)
     await teardown(before?.external_id ?? null)
+    if (detachFailures > 0) { detachFailures--; throw new Error('db down') } // the Matrix side is done, the detach is not
     ledger.delete(unitId)
     return before?.external_id ?? null
   },
@@ -77,7 +79,7 @@ interface FakeRoom {
 }
 const rooms = new Map<string, FakeRoom>()
 const aliases = new Map<string, string>()
-let faults: Array<{ match: (url: string, method: string) => boolean; once: boolean }> = []
+let faults: Array<{ match: (url: string, method: string) => boolean; once: boolean; status?: number; error?: string }> = []
 let writes: Array<{ method: string; url: string }> = []
 
 function addRoom(id: string, opts: { alias?: string; creator?: string } = {}): FakeRoom {
@@ -106,7 +108,7 @@ async function homeserver(url: string, init?: RequestInit): Promise<Response> {
   const fault = faults.find((f) => f.match(url, method))
   if (fault) {
     if (fault.once) faults = faults.filter((f) => f !== fault)
-    return json({ errcode: 'M_UNKNOWN', error: 'injected failure' }, 500)
+    return json({ errcode: 'M_UNKNOWN', error: fault.error ?? 'injected failure' }, fault.status ?? 500)
   }
   const path = url.replace('http://matrix.test:8008', '')
 
@@ -217,6 +219,7 @@ describe('messagingKarenz', () => {
     vi.clearAllMocks()
     units.length = 0
     ledger.clear()
+    detachFailures = 0
     rooms.clear()
     aliases.clear()
     faults = []
@@ -305,6 +308,76 @@ describe('messagingKarenz', () => {
 
       expect(stateOf({ externalId: '!old:matrix.test' })).toBe('gone')
       expect(stateOf({ externalId: '!r1:matrix.test' })).toBe('locked')
+    })
+
+    it('a room whose ledger row is failed but still names it is archived like any other (a transient member-sync error must not exempt a room)', async () => {
+      seed()
+      ledger.set('u1', { status: 'failed', external_id: '!r1:matrix.test' })
+
+      await karenz.messagingKarenz.switchOff(ctx)
+
+      expect(stateOf({ externalId: '!r1:matrix.test' })).toBe('locked')
+      expect(markerOf('!r1:matrix.test')?.org_unit_id).toBe('u1')
+      expect(levelsOf('!r1:matrix.test').events_default).toBe(100)
+      expect(ledger.has('u1')).toBe(false) // released
+
+      await karenz.messagingKarenz.restore(ctx)
+      expect(levelsOf('!r1:matrix.test')).toEqual(originalLevels())
+    })
+
+    it('a recorded room whose ledger row flipped to failed before the archive is still archived, never dropped as gone', async () => {
+      seed()
+      await store.items.upsert({ kind: 'room', externalId: '!r1:matrix.test', state: 'recorded', payload: { unitId: 'u1' } })
+      ledger.set('u1', { status: 'failed', external_id: '!r1:matrix.test' })
+
+      await karenz.messagingKarenz.switchOff(ctx)
+
+      expect(stateOf({ externalId: '!r1:matrix.test' })).toBe('locked')
+      expect(levelsOf('!r1:matrix.test').events_default).toBe(100)
+    })
+
+    it('a recorded room whose unit now points at ANOTHER room is gone (positive evidence), not a failure', async () => {
+      seed()
+      await store.items.upsert({ kind: 'room', externalId: '!moved:matrix.test', state: 'recorded', payload: { unitId: 'u2' } })
+      addRoom('!moved:matrix.test')
+
+      await karenz.messagingKarenz.switchOff(ctx) // u2's ledger names !r2, not !moved
+
+      expect(stateOf({ externalId: '!moved:matrix.test' })).toBe('gone')
+      expect(stateOf({ externalId: '!r2:matrix.test' })).toBe('locked')
+    })
+
+    it('a live room that is neither attached to its unit nor archived by us fails the step and is logged, not closed silently', async () => {
+      addRoom('!detached:matrix.test')
+      units.push({ id: 'u5', name: 'Kasse' }) // no ledger row at all
+      await store.items.upsert({ kind: 'room', externalId: '!detached:matrix.test', state: 'recorded', payload: { unitId: 'u5' } })
+
+      const err = await karenz.messagingKarenz.switchOff(ctx).then(() => null, (e: unknown) => e)
+
+      expect(err).toBeInstanceOf(KarenzPartialError)
+      expect((err as KarenzPartialError).failures.join(' ')).toContain('u5')
+      expect((err as KarenzPartialError).failures.join(' ')).not.toMatch(/detached|matrix\.test/)
+      expect(stateOf({ externalId: '!detached:matrix.test' })).toBe('lock_failed')
+      expect(ctx.log).toHaveBeenCalled()
+    })
+
+    it('a retry in a later minute reuses the archive alias of the earlier attempt, so the restore leaves no archive alias behind', async () => {
+      seed()
+      vi.useFakeTimers({ toFake: ['Date'] })
+      try {
+        vi.setSystemTime(new Date('2026-11-01T10:00:30Z'))
+        detachFailures = 1 // the Matrix side completes, the ledger detach does not
+        await expect(karenz.messagingKarenz.switchOff(ctx)).rejects.toBeInstanceOf(KarenzPartialError)
+        vi.setSystemTime(new Date('2026-11-01T10:07:30Z'))
+        await karenz.messagingKarenz.switchOff(ctx)
+      } finally {
+        vi.useRealTimers()
+      }
+      expect([...aliases.keys()].filter((a) => a.startsWith('#stura-archiv-') && aliases.get(a) === '!r1:matrix.test')).toHaveLength(1)
+
+      await karenz.messagingKarenz.restore(ctx)
+      expect([...aliases.keys()].filter((a) => a.startsWith('#stura-archiv-'))).toEqual([])
+      expect(aliases.get('#stura-vorstand:matrix.test')).toBe('!r1:matrix.test')
     })
 
     it('a retry after the failure converges, and the restore then puts the room back EXACTLY as it was', async () => {
@@ -472,6 +545,29 @@ describe('messagingKarenz', () => {
       expect(logged[0]!.err?.message).toContain('injected failure') // the homeserver's own answer reaches the server log
     })
 
+    it('a dry run does not fail for a room whose archive never finished (a preview only counts)', async () => {
+      seed()
+      await store.items.upsert({ kind: 'room', externalId: '!r1:matrix.test', state: 'lock_failed', payload: { unitId: 'u1' } })
+
+      const r = await karenz.messagingKarenz.finalize(ctx, { dryRun: true })
+
+      expect(r).toEqual({ deleted: { rooms: 0 } })
+      expect(ctx.log).toHaveBeenCalled()
+    })
+
+    it('an unavailable homeserver at the deletion is reported as MatrixUnavailableError, and a failing audit write does not hide it', async () => {
+      seed()
+      await karenz.messagingKarenz.switchOff(ctx)
+      faults.push({ match: (url, m) => m === 'DELETE' && url.includes('/_synapse/admin/v1/rooms/'), once: false, status: 503, error: 'upstream answered 503' })
+      writeAuditEntry.mockRejectedValueOnce(new Error('audit down'))
+
+      await expect(karenz.messagingKarenz.finalize(ctx, { dryRun: false })).rejects.toBeInstanceOf(KarenzPartialError)
+
+      const logged = vi.mocked(ctx.log).mock.calls.map((c) => String(c[0]))
+      expect(logged.some((l) => l.includes('MatrixUnavailableError'))).toBe(true)
+      expect(rooms.has('!r1:matrix.test')).toBe(true)
+    })
+
     it('a room that is already gone at the homeserver is deleted, not a failure', async () => {
       seed()
       await karenz.messagingKarenz.switchOff(ctx)
@@ -509,6 +605,13 @@ describe('messagingKarenz', () => {
   })
 
   describe('describe', () => {
+    it('counts a room whose ledger row is failed but still names it', async () => {
+      seed()
+      ledger.set('u1', { status: 'failed', external_id: '!r1:matrix.test' })
+      const d = await karenz.messagingKarenz.describe!({ id: 'default', slug: 'default' } as never)
+      expect(d.deletes).toEqual([{ label: 'Chat-Räume', count: 2 }])
+    })
+
     it('counts the rooms a switch-off would archive and delete, and the meeting-linked rooms that stay', async () => {
       seed()
       const d = await karenz.messagingKarenz.describe!({ id: 'default', slug: 'default' } as never)

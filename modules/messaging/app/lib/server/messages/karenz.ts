@@ -1,7 +1,8 @@
 // src/lib/server/messages/karenz.ts
 // Module Karenz (phase 2, Task 15): the messaging participant.
 //
-// Switch-off: every org unit's chat room (the provisioning ledger row 'matrix' in state ok) is
+// Switch-off: every org unit's chat room (the provisioning ledger row 'matrix' that names a room, whatever
+// its status: a failed member sync leaves the external id on the live room) is
 // archived through the same code path as the admin archive (read-only, restorable, the power levels
 // it overwrites are kept in the archive marker). Restore: the rooms come back exactly as they were.
 // Final day: the rooms the Karenz archived are deleted at the homeserver (block + purge), except the
@@ -15,7 +16,7 @@
 import { getMatrixClient } from './matrix-client'
 import { getSynapseAdmin } from './synapse-admin'
 import {
-  getRoomArchiveMarker, unarchiveRoom, archiveRoom, resolveMatrixError,
+  getRoomArchiveMarker, unarchiveRoom, archiveRoom, resolveMatrixError, MatrixUnavailableError,
 } from './admin/room-admin'
 import { listOrgUnits } from '$lib/server/governance/org-units-db'
 import { getResource } from '$lib/server/governance/provisioning/ledger'
@@ -83,12 +84,14 @@ async function homeserverRooms(): Promise<Map<string, HomeserverRoom>> {
   return new Map(all.map((r) => [r.room_id, r]))
 }
 
-/** The ledger rooms of this tenant (org units with a matrix row in state ok). */
+/** The ledger rooms of this tenant: every org unit whose matrix row names a room. The row's STATUS does
+ *  not matter: a transient member-sync error marks the row failed but leaves the external id on the
+ *  live room, and archiveRoom itself only needs the external id. */
 async function ledgerRooms(): Promise<{ unitId: string; roomId: string }[]> {
   const out: { unitId: string; roomId: string }[] = []
   for (const unit of await listOrgUnits()) {
     const r = await getResource(unit.id, 'matrix')
-    if (r?.status === 'ok' && r.external_id) out.push({ unitId: unit.id, roomId: r.external_id })
+    if (r?.external_id) out.push({ unitId: unit.id, roomId: r.external_id })
   }
   return out
 }
@@ -129,11 +132,23 @@ async function switchOff(ctx: KarenzContext): Promise<void> {
     if (unitId === null) continue // not one of ours
     try {
       const resource = await getResource(unitId, 'matrix')
-      if (resource?.status === 'ok' && resource.external_id === item.externalId) {
+      if (resource?.external_id === item.externalId) {
         await archiveRoom(unitId, { userId: ACTOR })
       } else if ((await getRoomArchiveMarker(item.externalId))?.org_unit_id !== unitId) {
-        // neither attached nor archived by us: the room is no longer there to archive
-        await ctx.items.setState(item.itemId, 'gone', 'room no longer attached to its unit')
+        // Not attached to its unit and not archived by us. "Gone" needs positive evidence: the homeserver
+        // says the room does not exist, or the unit's ledger names a DIFFERENT room. Anything else is a
+        // live room the Karenz could not archive: it fails the step (retried) and says so.
+        if (await roomIsGone(item.externalId)) {
+          await ctx.items.setState(item.itemId, 'gone', 'room no longer exists at the homeserver')
+          continue
+        }
+        if (resource?.external_id) {
+          await ctx.items.setState(item.itemId, 'gone', 'unit is attached to another room')
+          continue
+        }
+        failures.push(unitLabel(unitId))
+        ctx.log(`messaging: ${unitLabel(unitId)} has a room that is neither attached nor archived, nothing archived`)
+        await ctx.items.setState(item.itemId, 'lock_failed', 'room is neither attached to its unit nor archived')
         continue
       } // else: an earlier pass archived it and died before the bookkeeping
       await ctx.items.setState(item.itemId, 'locked')
@@ -188,7 +203,7 @@ async function finalize(ctx: KarenzContext, opts: { dryRun: boolean }): Promise<
     try {
       if (item.state !== 'locked') {
         // recorded / lock_failed / unlock_failed: the archive never finished, so nothing may be deleted
-        failures.push(unitLabel(unitId))
+        if (!opts.dryRun) failures.push(unitLabel(unitId)) // a preview only counts, it does not fail
         ctx.log(`messaging: ${unitLabel(unitId)} was not archived (${item.state}), nothing deleted`)
         continue
       }
@@ -230,8 +245,13 @@ async function removeRoom(unitId: string, roomId: string): Promise<void> {
   try {
     await getSynapseAdmin().deleteRoom(roomId)
   } catch (err) {
-    await writeAuditEntry({ userId: ACTOR, field: 'messages.room.delete', oldValue: null, newValue: `${unitId}:${roomId}:failed` })
-    throw resolveMatrixError(err) === 'unavailable' ? new Error('homeserver unavailable', { cause: err }) : err
+    // The audit write must not replace the error being reported (a database outage would hide the homeserver's).
+    try {
+      await writeAuditEntry({ userId: ACTOR, field: 'messages.room.delete', oldValue: null, newValue: `${unitId}:${roomId}:failed` })
+    } catch (auditErr) {
+      logServerSide('final deletion: the failure audit entry could not be written', unitId, auditErr)
+    }
+    throw resolveMatrixError(err) === 'unavailable' ? new MatrixUnavailableError('homeserver unavailable', err) : err
   }
   await writeAuditEntry({ userId: ACTOR, field: 'messages.room.delete', oldValue: null, newValue: `${unitId}:${roomId}:ok` })
 }
