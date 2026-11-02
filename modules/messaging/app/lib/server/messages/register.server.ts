@@ -11,6 +11,7 @@ import {
   registerSetupHealthProbe,
   registerErasureHook,
 } from '$lib/server/modules/runtime-registry'
+import { registerKarenzParticipant } from '$lib/server/module-karenz/participants'
 import { serviceEnv } from '$lib/server/env/service-env'
 import { evictMatrixClient } from './matrix-client'
 import { getMatrixClient } from './matrix-client'
@@ -20,6 +21,7 @@ import { evictLivekitSettings } from './livekit-client'
 import { evictServiceMatrixTokenCache } from './backend/service-client'
 import { createMatrixSubsystem } from './provisioning/matrix-subsystem'
 import { messagingErasureHook } from './erasure'
+import { messagingKarenz } from './karenz'
 
 // Per-tenant runtime handles the messages module caches. The tenant registry's
 // evictTenantRuntime runs these on the suspend/delete lifecycle seam.
@@ -116,3 +118,9 @@ registerSetupHealthProbe({
 // TRD-196: the messaging module's data-subject erasure step (the Matrix account,
 // via the Synapse admin API).
 registerErasureHook(messagingErasureHook)
+
+// Module Karenz (phase 2, Task 15): archive the chat rooms at switch-off, unarchive them on
+// restore, delete them on the final day (meeting-linked rooms excepted). The kernel's per-tenant
+// pass drives the participant; a module switch-off that has no participant would leave the rooms
+// writable.
+registerKarenzParticipant(messagingKarenz)
