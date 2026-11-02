@@ -46,8 +46,24 @@ EOF
 
 make_release_tree() {
     local root="$1"
-    mkdir -p "$root/docker/pgbouncer"
+    mkdir -p "$root/docker/pgbouncer" "$root/legal"
     make_ca_generator "$root" ok
+    # The release tree's own example, read from this checkout so a key added to
+    # it is judged here too. CR-stripped: a Windows checkout may carry CRLF.
+    tr -d '\r' < "${PROJECT_ROOT}/legal/legal.env.example" > "$root/legal/legal.env.example"
+}
+
+# The host-owned legal env file, filled the way an operator fills it. Every
+# value is fictional and none equals the example's placeholder.
+write_legal_env() {
+    tr -d '\r' < "${PROJECT_ROOT}/legal/legal.env.example" | sed \
+        -e 's|^ORG_NAME=.*|ORG_NAME=Beispielgremium|' \
+        -e 's|^ORG_ADDRESS=.*|ORG_ADDRESS=Beispielweg 2, 54321 Beispielstadt|' \
+        -e 's|^ORG_EMAIL=.*|ORG_EMAIL=kontakt@beispiel.example|' \
+        -e 's|^RESPONSIBLE_PERSON=.*|RESPONSIBLE_PERSON=Erika Beispiel|' \
+        -e 's|^RESPONSIBLE_PERSON_EMAIL=.*|RESPONSIBLE_PERSON_EMAIL=datenschutz@beispiel.example|' \
+        -e 's|^DOMAIN=.*|DOMAIN=example.org|' \
+        > "${GREMION_ROOT}/etc/legal.env"
 }
 
 # A STAGING state.env: TRAEFIK_CERT_RESOLVER is deliberately BLANK. The
@@ -85,6 +101,7 @@ setup() {
     RELEASE="${GREMION_ROOT}/releases/dist-v1.0.0"
     make_release_tree "$RELEASE"
     write_state_env
+    write_legal_env
     GEN_CA_CALLS="${GREMION_ROOT}/gen-ca-calls.log"
     export GEN_CA_CALLS
 }
@@ -459,5 +476,202 @@ esac
     stub_compose_services
     run "$RENDER" --release "$RELEASE" --staging
     [ "$status" -eq 0 ]
-    [[ "$output" =~ RENDER:\ outputs=9\ release=${RELEASE}\ staging=yes ]]
+    [[ "$output" =~ RENDER:\ outputs=10\ release=${RELEASE}\ staging=yes ]]
+}
+
+# ---------------------------------------------------------------------------
+# 6. legal/legal.env (kernel #84)
+#
+# docker-compose.yml gives the state project's `legal` service
+# `env_file: legal/legal.env`, resolved in the release tree for EVERY compose
+# verb. Nothing used to create it, so the state project could not start on a
+# fresh release tree. The operator's values live once on the host in
+# etc/legal.env (the way the Keycloak CA lives in etc/secrets/keycloak) and
+# every release tree is given a copy.
+# ---------------------------------------------------------------------------
+
+# legal_example_keys — every key legal/legal.env.example declares.
+legal_example_keys() {
+    grep -oE '^[A-Za-z_][A-Za-z0-9_]*=' "${RELEASE}/legal/legal.env.example" | tr -d '='
+}
+
+@test "legal: a filled etc/legal.env is copied into the release tree as legal/legal.env" {
+    run "$RENDER" --release "$RELEASE"
+    [ "$status" -eq 0 ]
+    [ -s "${RELEASE}/legal/legal.env" ]
+    local k
+    for k in $(legal_example_keys); do
+        grep -q "^${k}=" "${RELEASE}/legal/legal.env" || { echo "legal/legal.env lacks ${k}"; false; }
+    done
+    grep -qx 'ORG_NAME=Beispielgremium' "${RELEASE}/legal/legal.env"
+    cmp "${GREMION_ROOT}/etc/legal.env" "${RELEASE}/legal/legal.env"
+}
+
+@test "legal: every later release tree is given its own copy" {
+    run "$RENDER" --release "$RELEASE"
+    [ "$status" -eq 0 ]
+    local next="${GREMION_ROOT}/releases/dist-v1.0.1"
+    make_release_tree "$next"
+    [ ! -e "${next}/legal/legal.env" ]
+    run "$RENDER" --release "$next"
+    [ "$status" -eq 0 ]
+    cmp "${GREMION_ROOT}/etc/legal.env" "${next}/legal/legal.env"
+}
+
+@test "legal: a render never rewrites an operator-edited etc/legal.env" {
+    printf '# edited by the operator\nORG_NAME_NOTE=kept\n' >> "${GREMION_ROOT}/etc/legal.env"
+    local before
+    before="$(cat "${GREMION_ROOT}/etc/legal.env")"
+    run "$RENDER" --release "$RELEASE"
+    [ "$status" -eq 0 ]
+    [ "$(cat "${GREMION_ROOT}/etc/legal.env")" = "$before" ]
+    run "$RENDER" --release "$RELEASE" --legal-env-only
+    [ "$status" -eq 0 ]
+    run "$RENDER" --release "$RELEASE" --init-legal-env
+    [ "$status" -eq 0 ]
+    [ "$(cat "${GREMION_ROOT}/etc/legal.env")" = "$before" ]
+}
+
+@test "legal: a refused render leaves a legal/legal.env already in the release tree as it was" {
+    printf 'ORG_NAME=Hand placed\n' > "${RELEASE}/legal/legal.env"
+    sed -i 's|^ORG_NAME=.*|ORG_NAME=CHANGE_ME_OPERATOR_ORG_NAME|' "${GREMION_ROOT}/etc/legal.env"
+    run "$RENDER" --release "$RELEASE"
+    [ "$status" -eq 2 ]
+    [ "$(cat "${RELEASE}/legal/legal.env")" = "ORG_NAME=Hand placed" ]
+}
+
+@test "legal: the rendered file and its host source are mode 0600 (Linux only)" {
+    [[ "$(uname -s)" == Linux ]] || skip "file modes are not meaningful on Windows"
+    rm -f "${GREMION_ROOT}/etc/legal.env"
+    run "$RENDER" --release "$RELEASE" --init-legal-env
+    [ "$status" -eq 0 ]
+    [ "$(stat -c '%a' "${GREMION_ROOT}/etc/legal.env")" = "600" ]
+    write_legal_env
+    run "$RENDER" --release "$RELEASE"
+    [ "$status" -eq 0 ]
+    [ "$(stat -c '%a' "${RELEASE}/legal/legal.env")" = "600" ]
+}
+
+@test "legal: an absent etc/legal.env is created with operator placeholders and the render stops (exit 2)" {
+    rm -f "${GREMION_ROOT}/etc/legal.env"
+    run "$RENDER" --release "$RELEASE"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"legal env file absent"* ]]
+    [[ "$output" == *"${GREMION_ROOT}/etc/legal.env"* ]]
+    [ -s "${GREMION_ROOT}/etc/legal.env" ]
+    [ ! -e "${RELEASE}/legal/legal.env" ]
+    local k
+    for k in ORG_NAME ORG_ADDRESS ORG_EMAIL RESPONSIBLE_PERSON RESPONSIBLE_PERSON_EMAIL; do
+        grep -qx "${k}=CHANGE_ME_OPERATOR_${k}" "${GREMION_ROOT}/etc/legal.env" \
+            || { echo "${k} is not an operator placeholder in the created file"; false; }
+    done
+    # the domain is the platform domain, not something to fill in
+    grep -qx 'DOMAIN=example.org' "${GREMION_ROOT}/etc/legal.env"
+    # every key of the example is declared
+    for k in $(legal_example_keys); do
+        grep -q "^${k}=" "${GREMION_ROOT}/etc/legal.env" || { echo "created file lacks ${k}"; false; }
+    done
+}
+
+@test "legal: the created placeholders are refused on the next render and the file is not rewritten" {
+    rm -f "${GREMION_ROOT}/etc/legal.env"
+    run "$RENDER" --release "$RELEASE"
+    [ "$status" -eq 2 ]
+    local first
+    first="$(cat "${GREMION_ROOT}/etc/legal.env")"
+    run "$RENDER" --release "$RELEASE"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"CHANGE_ME_OPERATOR_"* ]]
+    [ ! -e "${RELEASE}/legal/legal.env" ]
+    [ "$(cat "${GREMION_ROOT}/etc/legal.env")" = "$first" ]
+}
+
+@test "legal: a key still holding the example's placeholder is refused, by key name, without its value" {
+    local k ph
+    for k in ORG_NAME ORG_ADDRESS ORG_EMAIL RESPONSIBLE_PERSON RESPONSIBLE_PERSON_EMAIL DOMAIN; do
+        write_legal_env
+        ph="$(grep -E "^${k}=" "${RELEASE}/legal/legal.env.example" | head -n 1)"
+        sed -i "s|^${k}=.*|${ph}|" "${GREMION_ROOT}/etc/legal.env"
+        run "$RENDER" --release "$RELEASE"
+        [ "$status" -eq 2 ] || { echo "${k}: status ${status}"; false; }
+        [[ "$output" == *"${k}"* ]] || { echo "${k}: not named: ${output}"; false; }
+        [[ "$output" != *"${ph#*=}"* ]] || { echo "${k}: the placeholder value was printed"; false; }
+        [ ! -e "${RELEASE}/legal/legal.env" ] || { echo "${k}: a legal.env was rendered"; false; }
+    done
+}
+
+@test "legal: an empty operator key is refused" {
+    sed -i 's|^ORG_ADDRESS=.*|ORG_ADDRESS=|' "${GREMION_ROOT}/etc/legal.env"
+    run "$RENDER" --release "$RELEASE"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"ORG_ADDRESS"* ]]
+    [ ! -e "${RELEASE}/legal/legal.env" ]
+}
+
+@test "legal: a key the example declares but etc/legal.env lacks is refused by name" {
+    sed -i '/^ACCESSIBILITY_DATE=/d' "${GREMION_ROOT}/etc/legal.env"
+    run "$RENDER" --release "$RELEASE"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"missing key ACCESSIBILITY_DATE"* ]]
+    [ ! -e "${RELEASE}/legal/legal.env" ]
+}
+
+@test "legal: a duplicate key in etc/legal.env is refused" {
+    printf 'ORG_NAME=Zweites Gremium\n' >> "${GREMION_ROOT}/etc/legal.env"
+    run "$RENDER" --release "$RELEASE"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"duplicate"* ]]
+    [ ! -e "${RELEASE}/legal/legal.env" ]
+}
+
+@test "legal: a release tree without legal/legal.env.example exits 2" {
+    rm -f "${RELEASE}/legal/legal.env.example"
+    run "$RENDER" --release "$RELEASE"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"no legal/legal.env.example"* ]]
+}
+
+@test "legal: --legal-env-only renders the legal file and nothing else" {
+    run "$RENDER" --release "$RELEASE" --legal-env-only
+    [ "$status" -eq 0 ]
+    cmp "${GREMION_ROOT}/etc/legal.env" "${RELEASE}/legal/legal.env"
+    [ ! -e "${RELEASE}/docker/pgbouncer/userlist.txt" ]
+    [ ! -e "$GEN_CA_CALLS" ]
+    [ ! -e "${GREMION_ROOT}/etc/secrets/ipcrypt_key.txt" ]
+    [[ "$output" =~ RENDER:\ outputs=1\ release=${RELEASE} ]]
+}
+
+@test "legal: --legal-env-only refuses what the full render refuses" {
+    sed -i 's|^ORG_NAME=.*|ORG_NAME=CHANGE_ME_OPERATOR_ORG_NAME|' "${GREMION_ROOT}/etc/legal.env"
+    run "$RENDER" --release "$RELEASE" --legal-env-only
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"ORG_NAME"* ]]
+    [ ! -e "${RELEASE}/legal/legal.env" ]
+}
+
+@test "legal: --init-legal-env creates etc/legal.env, reports what is left, and touches no release file" {
+    rm -f "${GREMION_ROOT}/etc/legal.env"
+    run "$RENDER" --release "$RELEASE" --init-legal-env
+    [ "$status" -eq 0 ]
+    [ -s "${GREMION_ROOT}/etc/legal.env" ]
+    [[ "$output" == *"LEGAL-ENV:"* ]]
+    [[ "$output" == *"unfilled=5"* ]]
+    [ ! -e "${RELEASE}/legal/legal.env" ]
+    [ ! -e "${RELEASE}/docker/pgbouncer/userlist.txt" ]
+}
+
+@test "legal: --init-legal-env keeps an existing etc/legal.env as it is" {
+    printf '# kept\n' >> "${GREMION_ROOT}/etc/legal.env"
+    local first
+    first="$(cat "${GREMION_ROOT}/etc/legal.env")"
+    run "$RENDER" --release "$RELEASE" --init-legal-env
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"unfilled=0"* ]]
+    [ "$(cat "${GREMION_ROOT}/etc/legal.env")" = "$first" ]
+}
+
+@test "legal: --init-legal-env and --legal-env-only cannot be combined" {
+    run "$RENDER" --release "$RELEASE" --init-legal-env --legal-env-only
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"cannot be combined"* ]]
 }

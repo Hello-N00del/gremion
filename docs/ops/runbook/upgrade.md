@@ -1,6 +1,6 @@
 # Upgrade: one release onto a running installation
 
-- Version: 6.2.0
+- Version: 6.3.0
 - Status: provisional (see Known gaps)
 - Wall-clock budget: one working day, from step 1 to the asserted post-condition (PRD-PLAT-005)
 - Implements: TRD-200 (upgrade), TRD-206 (the pre-migration dump, R18-4), TRD-189 (blue/green as the deploy path)
@@ -121,6 +121,22 @@ grep -n 'state-pins' /opt/gremion/etc/env/app-blue.env /opt/gremion/etc/env/app-
 for p in state app-blue app-green; do
   gremion-validate-env --env-file "/opt/gremion/etc/env/${p}.env" --release "$REL"
 done
+```
+
+   Once per host (kernel #84): the state project's `legal` service reads
+   `legal/legal.env` from the release tree, and `gremion-deploy` now writes it
+   there from `/opt/gremion/etc/legal.env` in its step 2. A host installed
+   before this change has no such file, and the deploy stops at step 2 (exit 2,
+   nothing pulled or stopped) until it exists and holds no placeholder. Create
+   it from the release's example and fill it with the values the running
+   release's own `legal/legal.env` holds; `--init-legal-env` keeps a file that
+   is already there.
+
+```bash
+sudo -u gremion /opt/gremion/bin/gremion-render --release "$REL" --init-legal-env   # LEGAL-ENV: file=... unfilled=5
+sudo -u gremion "${EDITOR:-vi}" /opt/gremion/etc/legal.env
+grep -c '=CHANGE_ME_OPERATOR_' /opt/gremion/etc/legal.env                          # 0
+sudo -u gremion /opt/gremion/bin/gremion-render --release "$REL" --legal-env-only   # RENDER: outputs=1 ... legal-env-only=yes
 ```
 
 3. **Take the pre-migration dump (TRD-206, R18-4).** Only when `migrations` is
@@ -299,6 +315,7 @@ live, a deploy of any other tag stops at its step 5 and prints both commands.
 
 ## Changelog
 
+- 6.3.0 (2026-11-01): kernel #84. Step 2 creates, fills and renders `etc/legal.env` once per host, the file `gremion-deploy` now copies into every release tree as `legal/legal.env` (the state project's `legal` service reads it for every compose command). Minor: a conditional step added, no post-condition changed.
 - 6.2.0 (2026-10-30): kernel #47 decision (a). Step 4 (and the registry-token precondition) names the optional host token file `etc/registry-token` that `gremion-deploy` reads when `GREMION_REGISTRY_TOKEN_FILE` is set, with the commands that observe it; the prompt stays the default. Minor: an alternative added to a step, no post-condition changed.
 - 6.1.0 (2026-10-29): kernel #48. Step 6 (existing installs, once per realm): a realm the provisioner service account did not create (older than the account, or made by another admin) is adopted with `tenant-create bootstrap-provisioner --adopt-realm <realm>`, which grants the account exactly the realm-creator roles on master `<realm>-realm`; reconcile names the step when it meets such a realm. Minor: a conditional step added, no post-condition changed.
 - 6.0.0 (2026-10-03): TASK-075. `gremion-deploy` step 5 is `gremion-migration-dump` preflight (no longer `gremion-snapshot`): it dumps the kernel and control databases a release migrates and deletes that dump, logged, at step 12b (`switched`), after step 11 passed and step 12 recorded the release; a failed deletion exits 1 with `DUMP-NOT-DELETED` before the soak (12c). The post-condition counts fourteen step lines. Step 3 now dumps by hand only the other databases a release migrates (module databases, `gremion_platform`); step 5 leaves the deploy's own dump to the program; the failure path restores the kernel or control database from it (restore, then a logged discard). Known gap (b) describes what landed. Major: a step changed.
