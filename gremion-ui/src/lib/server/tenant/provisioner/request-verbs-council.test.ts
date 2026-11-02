@@ -58,8 +58,11 @@ const atHash = (t: string) => createHash('sha256').update(t, 'ascii').digest().s
 async function pair(iss: string, client: string, roles: string[]): Promise<string> {
   const sign = (claims: Record<string, unknown>) => new SignJWT(claims).setProtectedHeader({ alg: 'RS256', kid: 'k1', typ: 'JWT' }).sign(priv)
   const base = { iss, aud: client, azp: client, acr: 'loa2', sid: 's-1', iat: T - 600, exp: T - 300 }
-  const access = await sign({ ...base, typ: 'Bearer', realm_access: { roles } })
-  const id = await sign({ ...base, typ: 'ID', sub: PERSON, at_hash: atHash(access) })
+  // gremion-ui (council): the real user id is the ACCESS token's sub, the ID token's sub is pairwise.
+  // control-panel (ops realm): the ID token's sub is the operator, the access token has none.
+  const council = client === 'gremion-ui'
+  const access = await sign({ ...base, typ: 'Bearer', ...(council ? { sub: PERSON } : {}), realm_access: { roles } })
+  const id = await sign({ ...base, typ: 'ID', sub: council ? 'pairwise-id-token-sub' : PERSON, at_hash: atHash(access) })
   return encodeEvidence({ id, access })
 }
 

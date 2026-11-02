@@ -405,7 +405,10 @@ hierarchy). The `vorstand` role does not confer this right.
 
 **Step-up.** Every switch needs a fresh LoA 2 sign-in (`STEPUP_FRESHNESS_SECONDS`, default
 300 s). A stale session gets `401 STEP_UP_REQUIRED` and the settings page runs the step-up
-flow.
+flow. The sign-in time recorded with the request is the ID token's own `auth_time` (its `iat`
+when the realm emits none), the value the executor compares it with, not the gremion-ui
+server's clock; an ID token without either, or older than the 3600 s evidence window, also
+gets `401 STEP_UP_REQUIRED`.
 
 **How the request is submitted.** gremion-ui connects to `gremion_platform` as the
 least-privilege role `gremion_ui_modules` (LOGIN, member of `plt_council_requester`, EXECUTE
@@ -425,7 +428,8 @@ args (only `enable_module` in phase 1; no token is read for a refused kind); the
 council-switchable; the customer exists in the registry; the signed token pair against that
 customer's own Keycloak realm only (issuer and keys of that realm, client `gremion-ui`,
 role `council-admin` or `it-admin`, `acr` `loa2`, sign-in within the 3600 s evidence
-window), so a pair signed by council A can never carry a request for the customer of
+window; the admin is bound through the access token's `sub`, the real user id, because the
+gremion-ui ID token's `sub` is pairwise or absent), so a pair signed by council A can never carry a request for the customer of
 council B; and finally the admin read back from the realm now (exists, enabled, still
 holds the role). Then the unchanged `enable_module` handler runs with `--actor-kind person`.
 Every existing enable gate still applies: deny list by name, `modules/disabled.json`, a

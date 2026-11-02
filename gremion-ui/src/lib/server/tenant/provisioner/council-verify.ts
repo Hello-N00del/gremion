@@ -16,7 +16,8 @@
 //      customer"). The evidence is verified against THAT realm only, so a pair
 //      signed by realm A can never carry a request for the customer of realm B.
 //   4. the signed evidence (the SAME code path as the panel's, with the realm's
-//      issuer and JWKS, client gremion-ui and the council role).
+//      issuer and JWKS, client gremion-ui and the council role; the person is
+//      bound through the ACCESS token's sub, see EvidenceCheck.subjectToken).
 //   5. the admin, re-read in that realm NOW (exists, enabled, holds the role),
 //      through the provisioner's master-realm transport.
 //
@@ -127,6 +128,8 @@ export async function verifyCouncilRequest(row: CouncilRequestRow, ctx: CouncilV
       issuer: issuerForTenant(customer.host, customer.realm),
       clientId: COUNCIL_CLIENT,
       requiredRole: COUNCIL_SWITCH_ROLES,
+      // the gremion-ui ID token's sub is pairwise (or absent); the real user id is the access token's sub
+      subjectToken: 'access',
       operatorId: row.operator_id,
       createdAt: row.created_at,
       recordedAuthTime: row.evidence_auth_time,
