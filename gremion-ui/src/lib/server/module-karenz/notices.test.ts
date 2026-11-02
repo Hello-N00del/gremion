@@ -3,13 +3,14 @@
 // Module Karenz (phase 2, Task 9): sending the info mail and the reminders. The role lookup, the mail
 // seam and the notice ledger are doubles; sendKarenzNotice is the real one. Review Focus 4: nobody can
 // be told - the switch-off stays in force, the step fails loudly and is retried, nothing is half sent.
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import type { TenantContext } from '$lib/server/tenant/context'
 import { SmtpUnconfiguredError } from '$lib/server/mail/tenant-mail'
 import type { RoleHolder, RoleHolders } from '$lib/server/governance/role-holders'
 import type { NoticeInput, NoticeKind } from './store'
 import type { KarenzRowView } from './platform'
-import { KarenzNoticeError, sendKarenzNotice, type NoticeDeps } from './notices'
+import type { KarenzContext } from './participants'
+import { KarenzNoticeError, createNoticeStages, sendKarenzNotice, type NoticeDeps } from './notices'
 
 const DAY = 24 * 3_600_000
 const T0 = new Date('2026-11-01T10:00:00Z')
@@ -66,7 +67,7 @@ describe('sendKarenzNotice', () => {
   it('sends one mail per holder, none with a shared To or Cc, and records each as sent', async () => {
     const r = rig({ holders: [holder(1), holder(2), holder(3, { roles: ['council-admin', 'vorstand'] })], skipped: [] })
     const out = await sendKarenzNotice(ctx, 'switchoff', r.deps)
-    expect(out).toEqual({ sent: 3, failed: 0, skipped: [] })
+    expect(out).toEqual({ sent: 3, failed: 0, alreadySent: 0, skipped: [] })
     expect(r.sent.map((m) => m.to)).toEqual(['person1@rat.example.test', 'person2@rat.example.test', 'person3@rat.example.test'])
     for (const m of r.sent) {
       expect(m.to).not.toMatch(/[,;]/)
@@ -97,8 +98,18 @@ describe('sendKarenzNotice', () => {
     r.failSendTo.clear()
     r.sent.length = 0
     const out = await sendKarenzNotice(ctx, 'switchoff', r.deps)
-    expect(out).toEqual({ sent: 1, failed: 0, skipped: [] })
+    expect(out).toEqual({ sent: 1, failed: 0, alreadySent: 2, skipped: [] })
     expect(r.sent.map((m) => m.to)).toEqual(['person2@rat.example.test'])
+  })
+
+  it('the engine summary of a retried step counts everyone reached, not only the mails of the retry', async () => {
+    const r = rig({ holders: [holder(1), holder(2), holder(3)], skipped: [] })
+    r.failSendTo.add('person2@rat.example.test')
+    const stages = createNoticeStages(r.deps)
+    const kctx = { tenant, karenzId: row.karenzId, catalogueId: row.catalogueId, switchedOffAt: row.switchedOffAt, finalAt: row.finalAt } as unknown as KarenzContext
+    await expect(stages.noticeSwitchoff(kctx)).rejects.toMatchObject({ code: 'DELIVERY_FAILED' })
+    r.failSendTo.clear()
+    expect(await stages.noticeSwitchoff(kctx)).toBe('sent 3, skipped 0')
   })
 
   it('empty holders throws NO_RECIPIENTS and lists who was skipped (Review Focus 4)', async () => {
@@ -125,7 +136,10 @@ describe('sendKarenzNotice', () => {
   it('a Keycloak failure from listRoleHolders aborts the notice: no partial list, nothing sent or recorded', async () => {
     const r = rig({ holders: [holder(1)], skipped: [] })
     r.keycloakDown = true
-    await expect(sendKarenzNotice(ctx, 'switchoff', r.deps)).rejects.toMatchObject({ code: 'DELIVERY_FAILED' })
+    const err = await sendKarenzNotice(ctx, 'switchoff', r.deps).catch((e) => e)
+    expect(err).toMatchObject({ code: 'DELIVERY_FAILED' })
+    // the underlying error stays attached for the server log; only the class is reported onward
+    expect((err.cause as Error).message).toBe('keycloak 503')
     expect(r.sent).toEqual([])
     expect(r.ledger).toEqual([])
   })
@@ -136,7 +150,7 @@ describe('sendKarenzNotice', () => {
       { userId: 'user-8', reason: 'no-email' },
     ]
     const r = rig({ holders: [holder(1)], skipped })
-    expect(await sendKarenzNotice(ctx, 'switchoff', r.deps)).toEqual({ sent: 1, failed: 0, skipped })
+    expect(await sendKarenzNotice(ctx, 'switchoff', r.deps)).toEqual({ sent: 1, failed: 0, alreadySent: 0, skipped })
   })
 
   it('a reminder due after finalAt is not sent: it throws TOO_LATE, which the engine reports as an ERROR event of the step', async () => {
@@ -165,10 +179,9 @@ describe('sendKarenzNotice', () => {
 
   it('the mail path never reads the actor: the audit entry carries it, this module has no access to module_switch_request', async () => {
     const r = rig({ holders: [holder(1)], skipped: [] })
-    const spy = vi.fn()
     // the only inputs are the tenant, the row (no actor field) and the label
     expect(Object.keys(row)).not.toContain('actorUserId')
-    await sendKarenzNotice(ctx, 'switchoff', { ...r.deps, now: () => (spy(), r.now) })
+    await sendKarenzNotice(ctx, 'switchoff', r.deps)
     const html = r.sent[0]!.html
     expect(html).not.toMatch(/ausgeschaltet von|switched off by/i)
     // the source of the module does not import the switch-request store

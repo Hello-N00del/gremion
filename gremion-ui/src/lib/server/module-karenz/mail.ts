@@ -55,7 +55,8 @@ export function renderKarenzMail(i: KarenzMailInput): { subject: string; html: s
       ? `Modul ${label} ausgeschaltet: endgültige Löschung am ${finalDe} / Module ${label} switched off: final deletion on ${finalEn}`
       : i.kind === 't23'
         ? `Erinnerung: Modul ${label} wird am ${finalDe} endgültig gelöscht / Reminder: module ${label} is deleted for good on ${finalEn}`
-        : `Letzte Erinnerung: Modul ${label} wird morgen endgültig gelöscht (${finalDe}) / Final reminder: module ${label} is deleted for good tomorrow (${finalEn})`
+        : // no "tomorrow": a catch-up after an outage can send this on the day itself; the date is always right
+          `Letzte Erinnerung: Modul ${label} wird am ${finalDe} endgültig gelöscht / Final reminder: module ${label} is deleted for good on ${finalEn}`
 
   const leadDe =
     i.kind === 'switchoff'

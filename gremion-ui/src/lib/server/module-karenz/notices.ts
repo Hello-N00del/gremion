@@ -34,15 +34,18 @@ export type NoticeErrorCode = 'NO_RECIPIENTS' | 'SMTP_UNCONFIGURED' | 'DELIVERY_
 /**
  * Why a notice step failed. The `name` carries the code because the engine reports the error class and
  * nothing else to the platform (external messages hold addresses): KarenzNoticeError_NO_RECIPIENTS.
- * `skipped` lists the role holders who could not be mailed, for the settings page.
+ * `skipped` lists the role holders who could not be mailed (the settings page of Task 17 is its reader;
+ * nothing persists it yet). `cause` keeps the underlying error for the server log; only the class
+ * reaches the platform.
  */
 export class KarenzNoticeError extends Error {
   constructor(
     readonly code: NoticeErrorCode,
     message: string,
     readonly skipped: RoleHolders['skipped'] = [],
+    options?: ErrorOptions,
   ) {
-    super(message)
+    super(message, options)
     this.name = `KarenzNoticeError_${code}`
   }
 }
@@ -92,12 +95,18 @@ function defaults(): NoticeDeps {
  *   throws DELIVERY_FAILED so the step is retried and only the holders left are tried again.
  * - A reminder at or after the final day: TOO_LATE, nothing sent (the engine reports it as an error of
  *   the step; a "your data is deleted tomorrow" mail after the deletion would be false).
+ *
+ * Delivery is at-least-once: when the ledger write after a successful send fails, the error propagates,
+ * the step is retried and that holder is mailed again. For a failsafe notice that is the right side to
+ * err on; a lost mail is not.
+ *
+ * `sent` counts the mails of this call, `alreadySent` the holders an earlier call had reached.
  */
 export async function sendKarenzNotice(
   ctx: { tenant: TenantContext; row: NoticeRow; moduleLabel: string },
   kind: NoticeKind,
   deps: Partial<NoticeDeps> = {},
-): Promise<{ sent: number; failed: number; skipped: RoleHolders['skipped'] }> {
+): Promise<{ sent: number; failed: number; alreadySent: number; skipped: RoleHolders['skipped'] }> {
   const d = { ...defaults(), ...deps }
   const { tenant, row } = ctx
   if (kind !== 'switchoff' && d.now().getTime() >= row.finalAt.getTime()) {
@@ -109,8 +118,8 @@ export async function sendKarenzNotice(
     people = await d.listRoleHolders(tenant)
   } catch (err) {
     // the cause stays in the log; the step records the class only
-    console.error(`[module-karenz] ${tenant.slug}: the role lookup for the ${kind} notice failed:`, err instanceof Error ? err.message : err)
-    throw new KarenzNoticeError('DELIVERY_FAILED', 'the role holders could not be read')
+    console.error(`[module-karenz] ${tenant.slug}: the role lookup for the ${kind} notice failed:`, err)
+    throw new KarenzNoticeError('DELIVERY_FAILED', 'the role holders could not be read', [], { cause: err })
   }
   if (people.holders.length === 0) {
     throw new KarenzNoticeError('NO_RECIPIENTS', 'no admin or Vorstand member can be mailed (none exists, or all are disabled or without an e-mail address)', people.skipped)
@@ -128,14 +137,19 @@ export async function sendKarenzNotice(
   const already = await d.noticesSent(tenant.db, row.karenzId, kind)
   let sent = 0
   let failed = 0
+  // holders reached by an earlier call (a retry after a partial failure): counted so the summary shows the whole reach
+  let alreadySent = 0
   for (const h of people.holders) {
-    if (already.has(h.userId)) continue
+    if (already.has(h.userId)) {
+      alreadySent++
+      continue
+    }
     try {
       await d.send(tenant, { to: h.email, subject, html })
     } catch (err) {
       if (err instanceof SmtpUnconfiguredError) throw new KarenzNoticeError('SMTP_UNCONFIGURED', 'the tenant has no SMTP configuration', people.skipped)
       failed++
-      console.error(`[module-karenz] ${tenant.slug}: the ${kind} mail to user ${h.userId} failed:`, err instanceof Error ? err.message : err)
+      console.error(`[module-karenz] ${tenant.slug}: the ${kind} mail to user ${h.userId} failed:`, err)
       // the stored reason is the class only: an SMTP answer holds the address
       await d.recordNotice(tenant.db, { karenzId: row.karenzId, kind, userId: h.userId, state: 'failed', error: safeFailureReason(err) })
       continue
@@ -146,7 +160,7 @@ export async function sendKarenzNotice(
   if (failed > 0) {
     throw new KarenzNoticeError('DELIVERY_FAILED', `${failed} of ${people.holders.length} mail(s) could not be delivered (${sent} sent in this call)`, people.skipped)
   }
-  return { sent, failed, skipped: people.skipped }
+  return { sent, failed, alreadySent, skipped: people.skipped }
 }
 
 /**
@@ -162,8 +176,9 @@ export function moduleLabelOf(catalogueId: string): string {
 }
 
 /** The one-line result the engine reports as the info event of the step. Counts only, no person. */
-function summary(r: { sent: number; skipped: RoleHolders['skipped'] }): string {
-  return `sent ${r.sent}, skipped ${r.skipped.length}`
+function summary(r: { sent: number; alreadySent: number; skipped: RoleHolders['skipped'] }): string {
+  // the whole reach, not only this call's mails: a retried step must not tell the platform "sent 1" when 3 were told
+  return `sent ${r.sent + r.alreadySent}, skipped ${r.skipped.length}`
 }
 
 /**

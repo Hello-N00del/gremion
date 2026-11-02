@@ -57,6 +57,13 @@ describe('renderKarenzMail', () => {
     expect(renderKarenzMail(base({ kind: 't23' })).subject).not.toBe(renderKarenzMail(base({ kind: 't29' })).subject)
   })
 
+  it('the day-29 subject carries the date and no relative day: a catch-up can send it on the day itself', () => {
+    const subject = renderKarenzMail(base({ kind: 't29' })).subject
+    expect(subject).toContain('1. Dezember 2026')
+    expect(subject).toContain('1 December 2026')
+    expect(subject).not.toMatch(/morgen|tomorrow/i)
+  })
+
   it('escapes the label and the link: nothing from the input becomes markup', () => {
     const out = renderKarenzMail(base({ moduleLabel: '<script>alert(1)</script>', settingsUrl: 'https://x.test/a"onmouseover="b' }))
     expect(out.html).not.toContain('<script>')

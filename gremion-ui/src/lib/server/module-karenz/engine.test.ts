@@ -358,7 +358,7 @@ describe('an open row: the switch-off steps', () => {
     expect(stepOf(K1, STEP.noticeT23)?.state).toBe('done')
     expect(stepOf(K1, STEP.noticeT29)?.state).toBe('done')
     // past the final day a reminder is moot: it is not sent, and the miss is an ERROR event of its own step
-    // (Review Focus 8: a late reminder must not pass in silence), reported once, not on every pass
+    // (Review Focus 8: a late reminder must not pass in silence), reported once per 6 h like any unchanged failure, not on every pass
     const rg2 = rig()
     rg2.rows = [row()]
     rg2.now = new Date(T0.getTime() + 31 * DAY)
@@ -867,6 +867,30 @@ describe('the retained and publish stages after the platform job moved the row o
     rg.rows[0]!.state = 'finalizing'
     rg.rows[0]!.finalMode = 'live'
   }
+
+  it('a reminder that was never sent is reported as an ERROR event on a row the platform job has already moved to finalizing (live mode closes the open window at final_at)', async () => {
+    registerKarenzStages({ reminder: async () => 'never called' })
+    rg.rows = [row({ state: 'finalizing', finalMode: 'live', switchedOffAt: new Date(T0.getTime() - 31 * DAY), finalAt: new Date(T0.getTime() - DAY) })]
+    await pass()
+    for (const step of [STEP.noticeT23, STEP.noticeT29]) {
+      expect(rg.reports.filter((x) => x.level === 'error' && x.step === step), step).toHaveLength(1)
+      expect(stepOf(K1, step)?.state, step).toBe('failed')
+    }
+    // reported once for an unchanged text, not on every pass
+    await pass()
+    expect(rg.reports.filter((x) => x.level === 'error' && x.step === STEP.noticeT23)).toHaveLength(1)
+    // a reminder that WAS sent in time is not reported as missed
+    const rg2 = rig()
+    rg2.rows = [row()]
+    await runKarenzPass(tenant, rg2.deps())
+    rg2.advance(29 * DAY + HOUR)
+    await runKarenzPass(tenant, rg2.deps())
+    rg2.advance(2 * DAY)
+    rg2.rows[0]!.state = 'finalizing'
+    rg2.rows[0]!.finalMode = 'live'
+    await runKarenzPass(tenant, rg2.deps())
+    expect(rg2.reports.filter((x) => x.level === 'error' && (x.step === STEP.noticeT23 || x.step === STEP.noticeT29))).toEqual([])
+  })
 
   it('a retained stage that failed while the row was open is retried on the finalizing row, and the finalize then runs with no hand-written ledger entry', async () => {
     rg.rows = [row()]
