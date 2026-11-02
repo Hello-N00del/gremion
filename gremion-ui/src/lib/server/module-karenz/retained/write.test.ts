@@ -173,6 +173,24 @@ describe('writeRetainedCopies', () => {
     expect(t.keys()).toHaveLength(0)
   })
 
+  it('a record that fails after its data key was minted rolls the key back too (one transaction per extractor)', async () => {
+    const t = fakeTenantDb()
+    registerRetentionExtractor(extractor('votes.a', [L1]))
+    let calls = 0
+    // the first guarded write (the data key) passes, the second (the record) is refused
+    const flaky = {
+      secret: SECRET,
+      guard: async () => {
+        if (++calls > 1) throw new Error('guard says no')
+      },
+    }
+    const err = await writeRetainedCopies(ctxFor(t), flaky).catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(KarenzPartialError)
+    expect(calls).toBe(2)
+    expect(t.records()).toHaveLength(0)
+    expect(t.keys()).toHaveLength(0)
+  })
+
   it('no extractor is success with zero records', async () => {
     const t = fakeTenantDb()
     expect(await writeRetainedCopies(ctxFor(t), guard)).toEqual({ records: 0, lines: 0 })
