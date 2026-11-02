@@ -628,6 +628,17 @@ describe('room-admin', () => {
       await expect(unarchiveRoom('u1', ROOM, { userId: 'karenz-service' })).rejects.toThrow(RoomNotFoundError)
     })
 
+    it('a room that is a unit ledger room is already active whatever the row status (a failed row, no marker): a no-op', async () => {
+      getOrgUnit.mockResolvedValue(UNIT)
+      getResource.mockResolvedValue({ status: 'failed', external_id: ROOM })
+      routeMatrix({ [ROOM]: {} })
+
+      const { unarchiveRoom } = await import('./room-admin')
+      await expect(unarchiveRoom('u1', ROOM, { userId: 'karenz-service' })).resolves.toEqual({ aliasRestored: true })
+      expect(markResourceOk).not.toHaveBeenCalled()
+      expect(fetchMock.mock.calls.filter((c) => ((c[1] as RequestInit | undefined)?.method ?? 'GET') !== 'GET')).toHaveLength(0)
+    })
+
     it('a canonical alias held by ANOTHER room never blocks the restore: the alias is not taken over, the room is writable again and re-attached', async () => {
       getOrgUnit.mockResolvedValue(UNIT)
       getResource.mockResolvedValue(null)

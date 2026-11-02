@@ -17,9 +17,11 @@ vi.mock('$env/dynamic/private', () => ({
     SYNAPSE_SERVER_NAME: 'matrix.test',
   },
 }))
+const runWithTenant = vi.fn(<T>(_tenant: unknown, fn: () => T): T => fn())
 vi.mock('$lib/server/tenant/context', () => ({
   getTenant: () => ({ id: 'default', slug: 'default' }),
   currentTenantId: () => 'default',
+  runWithTenant,
 }))
 
 interface Unit { id: string; name: string }
@@ -336,6 +338,41 @@ describe('messagingKarenz', () => {
       expect(levelsOf('!r1:matrix.test').events_default).toBe(100)
     })
 
+    it('a retry of an archive that an older build interrupted (marker without a prior, levels already read-only) stores no prior, so the restore falls back to the createRoom defaults', async () => {
+      seed()
+      const room = rooms.get('!r1:matrix.test')!
+      room.state.set('org.gremion.room.archived', { org_unit_id: 'u1', archived_at: '2026-10-01T00:00:00Z' })
+      const closed = {
+        ...originalLevels(), events_default: 100, invite: 100, state_default: 100,
+        events: { ...Object.fromEntries(CALL_TYPES.map((t) => [t, 100])), 'm.room.name': 50 },
+      }
+      room.state.set('m.room.power_levels', closed)
+
+      await karenz.messagingKarenz.switchOff(ctx)
+      expect(markerOf('!r1:matrix.test')?.prior).toBeNull()
+
+      await karenz.messagingKarenz.restore(ctx)
+      const pl = levelsOf('!r1:matrix.test')
+      expect([pl.events_default, pl.invite, pl.state_default]).toEqual([0, 0, 50])
+      expect(console.warn).toHaveBeenCalled()
+    })
+
+    it('a failing lookup of the archive alias on a retry is reported as such, the alias PUT is not attempted', async () => {
+      seed()
+      rooms.get('!r1:matrix.test')!.state.set('org.gremion.room.archived', {
+        org_unit_id: 'u1', archived_at: '2026-10-01T00:00:00Z', archive_alias: '#stura-archiv-vorstand-202610010000:matrix.test',
+        prior: { events_default: 0, invite: 0, state_default: 50, events: {} },
+      })
+      aliases.set('#stura-archiv-vorstand-202610010000:matrix.test', '!r1:matrix.test')
+      faults = [{ match: (url, method) => method === 'GET' && decodeURIComponent(url).includes('#stura-archiv-'), once: false, status: 502 }]
+      writes = []
+
+      await expect(karenz.messagingKarenz.switchOff(ctx)).rejects.toThrow(KarenzPartialError)
+
+      expect(writes.filter((w) => w.method === 'PUT' && decodeURIComponent(w.url).includes('directory/room/#stura-archiv-vorstand'))).toEqual([])
+      expect(stateOf({ externalId: '!r1:matrix.test' })).toBe('lock_failed')
+    })
+
     it('a recorded room whose unit now points at ANOTHER room is gone (positive evidence), not a failure', async () => {
       seed()
       await store.items.upsert({ kind: 'room', externalId: '!moved:matrix.test', state: 'recorded', payload: { unitId: 'u2' } })
@@ -442,6 +479,68 @@ describe('messagingKarenz', () => {
 
       expect(writes).toEqual([])
       expect(stateOf({ externalId: '!r1:matrix.test' })).toBe('restored')
+    })
+
+    it('a never-archived room whose ledger row is failed (the archive died before the marker write) restores as already active, whatever the row status', async () => {
+      seed()
+      ledger.set('u1', { status: 'failed', external_id: '!r1:matrix.test' })
+      faults = [{ match: (url, method) => method === 'PUT' && decodeURIComponent(url).includes('!r1:') && url.includes('org.gremion.room.archived'), once: false }]
+      await expect(karenz.messagingKarenz.switchOff(ctx)).rejects.toThrow(KarenzPartialError)
+      expect(stateOf({ externalId: '!r1:matrix.test' })).toBe('lock_failed')
+      expect(markerOf('!r1:matrix.test')).toBeUndefined() // nothing was archived
+      faults = []
+      writes = []
+
+      await karenz.messagingKarenz.restore(ctx)
+
+      expect(stateOf({ externalId: '!r1:matrix.test' })).toBe('restored')
+      expect(stateOf({ externalId: '!r2:matrix.test' })).toBe('restored')
+      expect(levelsOf('!r1:matrix.test')).toEqual(originalLevels())
+      expect(ledger.get('u1')).toEqual({ status: 'failed', external_id: '!r1:matrix.test' }) // untouched
+      expect(writes.filter((w) => decodeURIComponent(w.url).includes('!r1:'))).toEqual([])
+    })
+
+    it('a recorded room with a failed ledger row that was never archived restores as already active', async () => {
+      seed()
+      await store.items.upsert({ kind: 'room', externalId: '!r1:matrix.test', state: 'recorded', payload: { unitId: 'u1' } })
+      ledger.set('u1', { status: 'failed', external_id: '!r1:matrix.test' })
+
+      await karenz.messagingKarenz.restore(ctx)
+
+      expect(stateOf({ externalId: '!r1:matrix.test' })).toBe('restored')
+    })
+
+    it('a restore whose unit alias belongs to another room is audited as such, not as a plain success', async () => {
+      seed()
+      await karenz.messagingKarenz.switchOff(ctx)
+      aliases.set('#stura-vorstand:matrix.test', '!other:matrix.test')
+      writeAuditEntry.mockClear()
+
+      await karenz.messagingKarenz.restore(ctx)
+
+      expect(stateOf({ externalId: '!r1:matrix.test' })).toBe('restored')
+      const values = writeAuditEntry.mock.calls.map((c) => (c[0] as { newValue: string }).newValue)
+      expect(values).toContain('u1:!r1:matrix.test:ok-alias-taken')
+      expect(values).toContain('u2:!r2:matrix.test:ok')
+      expect(ctx.log).toHaveBeenCalledWith(expect.stringContaining('unit u1'))
+    })
+
+    it('a bookkeeping write that fails while reporting a failed room does not stop the remaining rooms', async () => {
+      seed()
+      await karenz.messagingKarenz.switchOff(ctx)
+      faults = [{ match: (url, method) => method === 'PUT' && decodeURIComponent(url).includes('!r1:'), once: false }]
+      const realSetState = store.items.setState
+      store.items.setState = async (itemId, state, detail) => {
+        const row = [...store.rows.values()].find((r) => r.itemId === itemId)
+        if (row?.externalId === '!r1:matrix.test') throw new Error('Karenz item no longer exists')
+        return realSetState(itemId, state, detail)
+      }
+
+      const err = await karenz.messagingKarenz.restore(ctx).catch((e) => e)
+
+      expect(err).toBeInstanceOf(KarenzPartialError)
+      expect((err as KarenzPartialError).failures).toEqual(['unit u1'])
+      expect(stateOf({ externalId: '!r2:matrix.test' })).toBe('restored')
     })
 
     it('one failing room does not stop the others; the failure names the unit only', async () => {
@@ -610,6 +709,13 @@ describe('messagingKarenz', () => {
       ledger.set('u1', { status: 'failed', external_id: '!r1:matrix.test' })
       const d = await karenz.messagingKarenz.describe!({ id: 'default', slug: 'default' } as never)
       expect(d.deletes).toEqual([{ label: 'Chat-Räume', count: 2 }])
+    })
+
+    it('runs under the tenant it is handed, not the ambient one', async () => {
+      seed()
+      const tenant = { id: 't-x', slug: 't-x' } as never
+      await karenz.messagingKarenz.describe!(tenant)
+      expect(runWithTenant).toHaveBeenCalledWith(tenant, expect.any(Function))
     })
 
     it('counts the rooms a switch-off would archive and delete, and the meeting-linked rooms that stay', async () => {

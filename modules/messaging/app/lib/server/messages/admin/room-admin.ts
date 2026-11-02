@@ -19,7 +19,7 @@ import { getMatrixClient } from '../matrix-client'
 import { getSynapseAdmin } from '../synapse-admin'
 import { aliasLocalpart } from '../provisioning/matrix-subsystem'
 import {
-  applyReadOnlyPowerLevels, capturePrior, readPowerLevels, restorePowerLevels, sanitizePrior,
+  applyReadOnlyPowerLevels, capturePrior, isReadOnlyLevels, readPowerLevels, restorePowerLevels, sanitizePrior,
   type ArchivePriorPowerLevels, type PowerLevelsContent,
 } from './archive-power-levels'
 import { serviceEnv } from '$lib/server/env/service-env'
@@ -199,10 +199,18 @@ async function archiveMatrixSide(unitId: string, unitName: string, roomId: strin
   const existing = await getRoomArchiveMarker(roomId)
   const keptPrior = sanitizePrior(existing?.prior)
   let current: PowerLevelsContent | undefined
-  let prior = keptPrior
+  let prior: ArchivePriorPowerLevels | null = keptPrior
   if (!prior) {
     current = await readPowerLevels(roomId)
-    prior = capturePrior(current)
+    if (existing?.org_unit_id === unitId && isReadOnlyLevels(current)) {
+      // A marker of this unit without a prior (written by an older build, which stored the marker before
+      // the levels) on a room that is ALREADY read-only: the levels read now are the archived ones, not
+      // the room's own. They are not stored as the prior; the restore falls back to the createRoom defaults.
+      console.warn('[room-admin] archiveMatrixSide: the room is already read-only and its marker carries no prior, storing none', { unitId, roomId })
+      prior = null
+    } else {
+      prior = capturePrior(current)
+    }
   }
   const keptAlias = existing?.org_unit_id === unitId && typeof existing.archive_alias === 'string' && existing.archive_alias.startsWith('#stura-archiv-')
     ? existing.archive_alias : null
@@ -252,8 +260,9 @@ async function archiveMatrixSide(unitId: string, unitName: string, roomId: strin
   // The alias was chosen up front and is in the marker (above): a retry after a partial archive reuses
   // it instead of minting a second one, which would stay behind in the directory and still resolve to
   // the room after a Karenz restore. Only when it already points at this room is the PUT skipped
-  // (a directory PUT of an existing alias is a 409 at the homeserver).
-  if (!keptAlias || (await mc.getRoomIdByAlias(archiveAlias).catch(() => null)) !== roomId) {
+  // (a directory PUT of an existing alias is a 409 at the homeserver). The lookup answers null for a
+  // missing alias; any other failure propagates, it is not a reason to PUT.
+  if (!keptAlias || (await mc.getRoomIdByAlias(archiveAlias)) !== roomId) {
     await mc.putRoomAlias(archiveAlias, roomId)
   }
   await mc.setRoomState(roomId, 'm.room.canonical_alias', '', { alias: archiveAlias })
@@ -297,7 +306,7 @@ export async function archiveRoom(unitId: string, opts: { userId: string }): Pro
 /** The Matrix side of the restore, every step idempotent: power levels back from the marker's
  *  prior, the unit's canonical alias back (never taken over from ANOTHER room), the archive alias
  *  removed. */
-async function unarchiveMatrixSide(unit: OrgUnit, roomId: string, prior: ArchivePriorPowerLevels | null): Promise<void> {
+async function unarchiveMatrixSide(unit: OrgUnit, roomId: string, prior: ArchivePriorPowerLevels | null): Promise<{ aliasRestored: boolean }> {
   const mc = getMatrixClient()
   const canonical = canonicalAlias(unit.name)
   const holder = await mc.getRoomIdByAlias(canonical)
@@ -311,7 +320,7 @@ async function unarchiveMatrixSide(unit: OrgUnit, roomId: string, prior: Archive
     })
   }
   await restorePowerLevels(roomId, prior)
-  if (aliasTaken) return
+  if (aliasTaken) return { aliasRestored: false }
   if (!holder) await mc.putRoomAlias(canonical, roomId)
 
   const current = (await mc.getRoomState(roomId, 'm.room.canonical_alias')) as { alias?: unknown } | null
@@ -322,6 +331,7 @@ async function unarchiveMatrixSide(unit: OrgUnit, roomId: string, prior: Archive
   // Only delete an archive alias that still points at THIS room (as archiveMatrixSide does for the canonical one).
   if (archiveAlias && (await mc.getRoomIdByAlias(archiveAlias)) === roomId) await mc.deleteRoomAlias(archiveAlias)
   await mc.setRoomState(roomId, 'm.room.canonical_alias', '', { alias: canonical })
+  return { aliasRestored: true }
 }
 
 /** Karenz restore (Task 15): the inverse of archiveRoom. Brings an archived room of `unitId` back:
@@ -330,9 +340,10 @@ async function unarchiveMatrixSide(unit: OrgUnit, roomId: string, prior: Archive
  *  ledger re-attached, then - LAST, so an interrupted restore is simply run again - the marker is
  *  overwritten with { unarchived_at } (a state event cannot be deleted; getRoomArchiveMarker reads
  *  a marker without org_unit_id as "not archived"). A room that is already the unit's active room
- *  is a no-op. A RoomConflictError means the unit already has another active room; the Matrix side is
+ *  is a no-op: the ledger row naming it decides, whatever its status (switchOff archives a room whose
+ *  row is failed too, and an archive that died before the marker write leaves nothing to undo). A RoomConflictError means the unit already has another active room; the Matrix side is
  *  not touched then. */
-export async function unarchiveRoom(unitId: string, roomId: string, opts: { userId: string }): Promise<void> {
+export async function unarchiveRoom(unitId: string, roomId: string, opts: { userId: string }): Promise<{ aliasRestored: boolean }> {
   const unit = await getOrgUnit(unitId)
   if (!unit) throw new RoomNotFoundError(`org unit not found: ${unitId}`)
 
@@ -340,7 +351,7 @@ export async function unarchiveRoom(unitId: string, roomId: string, opts: { user
     const marker = await getRoomArchiveMarker(roomId)
     const resource = await getResource(unitId, 'matrix')
     if (!marker || marker.org_unit_id !== unitId) {
-      if (resource?.status === 'ok' && resource.external_id === roomId) return // already active
+      if (resource?.external_id === roomId) return { aliasRestored: true } // already active
       throw new RoomNotFoundError(`room ${roomId} is not an archived Gremion room of unit ${unitId}`)
     }
     if (resource?.status === 'ok' && resource.external_id && resource.external_id !== roomId) {
@@ -352,8 +363,9 @@ export async function unarchiveRoom(unitId: string, roomId: string, opts: { user
       // A room archived before the prior was stored: its levels are guessed from the createRoom defaults.
       console.warn('[room-admin] unarchiveRoom: marker carries no prior power levels, restoring the createRoom defaults', { unitId, roomId })
     }
+    let aliasRestored = true
     try {
-      await unarchiveMatrixSide(unit, roomId, prior)
+      aliasRestored = (await unarchiveMatrixSide(unit, roomId, prior)).aliasRestored
       await getDb().begin(async (tx) => {
         await enqueueResources(tx, unitId, ['matrix'])
         await setSubsystemWanted(tx, unitId, 'matrix', true)
@@ -378,8 +390,9 @@ export async function unarchiveRoom(unitId: string, roomId: string, opts: { user
     }
     await writeAuditEntry({
       userId: opts.userId, field: 'messages.room.unarchive',
-      oldValue: unit.name, newValue: `${unitId}:${roomId}:ok`,
+      oldValue: unit.name, newValue: `${unitId}:${roomId}:${aliasRestored ? 'ok' : 'ok-alias-taken'}`,
     })
+    return { aliasRestored }
   })
 }
 

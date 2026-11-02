@@ -21,11 +21,12 @@ import {
 import { listOrgUnits } from '$lib/server/governance/org-units-db'
 import { getResource } from '$lib/server/governance/provisioning/ledger'
 import { writeAuditEntry } from '$lib/server/audit-db'
+import { runWithTenant, type TenantContext } from '$lib/server/tenant/context'
 import {
   KarenzPartialError,
   type DeletionItem, type KarenzContext, type KarenzParticipant, type RetainedItem,
 } from '$lib/server/module-karenz/participants'
-import type { KarenzItemRow } from '$lib/server/module-karenz/store'
+import type { ItemState, KarenzItemRow } from '$lib/server/module-karenz/store'
 
 /** The audit actor of every action the Karenz takes (accepted by audit_log_user_id_uuid_chk). */
 const ACTOR = 'karenz-service'
@@ -88,12 +89,26 @@ async function homeserverRooms(): Promise<Map<string, HomeserverRoom>> {
  *  not matter: a transient member-sync error marks the row failed but leaves the external id on the
  *  live room, and archiveRoom itself only needs the external id. */
 async function ledgerRooms(): Promise<{ unitId: string; roomId: string }[]> {
+  const units = await listOrgUnits()
+  const rows = await Promise.all(units.map((unit) => getResource(unit.id, 'matrix')))
   const out: { unitId: string; roomId: string }[] = []
-  for (const unit of await listOrgUnits()) {
-    const r = await getResource(unit.id, 'matrix')
-    if (r?.external_id) out.push({ unitId: unit.id, roomId: r.external_id })
-  }
+  units.forEach((unit, i) => {
+    const externalId = rows[i]?.external_id
+    if (externalId) out.push({ unitId: unit.id, roomId: externalId })
+  })
   return out
+}
+
+/** Bookkeeping inside a catch path: a failing write (the store throws when the item no longer exists)
+ *  must not abort the loop, or the rooms after it would never be processed. Reports whether it was written. */
+async function trySetState(ctx: KarenzContext, item: KarenzItemRow, state: ItemState, detail?: string): Promise<boolean> {
+  try {
+    await ctx.items.setState(item.itemId, state, detail)
+    return true
+  } catch (err) {
+    logServerSide('item state could not be recorded', unitOf(item), err)
+    return false
+  }
 }
 
 /** Meeting-linked rooms that no ledger row owns: rooms the admin bot created with a meeting alias. */
@@ -156,13 +171,13 @@ async function switchOff(ctx: KarenzContext): Promise<void> {
       // A purged room answers the client API with 403 (not 404), so a failure may only mean "gone":
       // the admin API is the one that tells.
       if (await roomIsGone(item.externalId)) {
-        await ctx.items.setState(item.itemId, 'gone', 'room no longer exists at the homeserver')
+        if (!(await trySetState(ctx, item, 'gone', 'room no longer exists at the homeserver'))) failures.push(unitLabel(unitId))
         continue
       }
       failures.push(unitLabel(unitId))
       ctx.log(`messaging: archive failed for ${unitLabel(unitId)}: ${errorClass(err)}`)
       logServerSide('archive failed', unitId, err)
-      await ctx.items.setState(item.itemId, 'lock_failed', `archive failed (${errorClass(err)})`)
+      await trySetState(ctx, item, 'lock_failed', `archive failed (${errorClass(err)})`)
     }
   }
   if (failures.length > 0) throw new KarenzPartialError(failures)
@@ -175,19 +190,20 @@ async function restore(ctx: KarenzContext): Promise<void> {
     const unitId = unitOf(item)
     if (unitId === null) continue
     try {
-      await unarchiveRoom(unitId, item.externalId, { userId: ACTOR })
+      const { aliasRestored } = await unarchiveRoom(unitId, item.externalId, { userId: ACTOR })
+      if (!aliasRestored) ctx.log(`messaging: ${unitLabel(unitId)} restored without its alias (another room holds it)`)
       await ctx.items.setState(item.itemId, 'restored')
     } catch (err) {
       // A room that is gone at the homeserver cannot come back: that is a fact, not a failure. The
       // client API answers a purged room with 403 (not 404), so the admin API decides, whatever the error was.
       if (await roomIsGone(item.externalId)) {
-        await ctx.items.setState(item.itemId, 'gone', 'room no longer exists at the homeserver')
+        if (!(await trySetState(ctx, item, 'gone', 'room no longer exists at the homeserver'))) failures.push(unitLabel(unitId))
         continue
       }
       failures.push(unitLabel(unitId))
       ctx.log(`messaging: restore failed for ${unitLabel(unitId)}: ${errorClass(err)}`)
       logServerSide('restore failed', unitId, err)
-      await ctx.items.setState(item.itemId, 'unlock_failed', `unarchive failed (${errorClass(err)})`)
+      await trySetState(ctx, item, 'unlock_failed', `unarchive failed (${errorClass(err)})`)
     }
   }
   if (failures.length > 0) throw new KarenzPartialError(failures)
@@ -256,7 +272,12 @@ async function removeRoom(unitId: string, roomId: string): Promise<void> {
   await writeAuditEntry({ userId: ACTOR, field: 'messages.room.delete', oldValue: null, newValue: `${unitId}:${roomId}:ok` })
 }
 
-async function describe(): Promise<{ deletes: DeletionItem[]; retained: RetainedItem[] }> {
+async function describe(tenant: TenantContext): Promise<{ deletes: DeletionItem[]; retained: RetainedItem[] }> {
+  // The ledger, the org units and the homeserver clients resolve the tenant from the ambient context.
+  return runWithTenant(tenant, describeForTenant)
+}
+
+async function describeForTenant(): Promise<{ deletes: DeletionItem[]; retained: RetainedItem[] }> {
   const rooms = await homeserverRooms()
   const candidates = await ledgerRooms()
   const archivable = candidates.filter((c) => !isMeetingAlias(rooms.get(c.roomId)?.canonical_alias)).length

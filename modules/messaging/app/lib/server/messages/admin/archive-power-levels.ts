@@ -24,7 +24,7 @@ export interface PowerLevelsContent {
 // opens to PL0 (matrix-client.ts createRoom) — archive closes them back to 100
 // alongside events_default/invite/state_default, so a former member cannot start
 // or join a call, publish keys, or send any other event in a read-only room.
-export const CALL_MEMBER_EVENT_TYPES = [
+export const CALL_MEMBER_EVENT_TYPES: readonly string[] = [
   'org.matrix.msc4143.rtc.member',
   'org.matrix.msc3401.call.member',
   'm.call.member',
@@ -44,7 +44,7 @@ export interface ArchivePriorPowerLevels {
 
 // The createRoom defaults (private_chat preset plus the PL0 call-member override of
 // matrix-client.ts createRoom): what unarchiveRoom restores for a marker that carries no prior.
-export const CREATE_ROOM_DEFAULTS = { events_default: 0, invite: 0, state_default: 50, callMemberLevel: 0 }
+export const CREATE_ROOM_DEFAULTS = Object.freeze({ events_default: 0, invite: 0, state_default: 50, callMemberLevel: 0 })
 
 /** Runs `fn`; on a forbidden answer grants the bot PL100 ONCE (S2.2 step 5 - a
  *  legacy room/demo seed where the bot is below PL100) and retries; a second
@@ -76,6 +76,11 @@ export function capturePrior(current: PowerLevelsContent): ArchivePriorPowerLeve
   }
   prior.events = events
   return prior
+}
+
+/** True when the levels are the ones applyReadOnlyPowerLevels writes (a room that is already archived). */
+export function isReadOnlyLevels(levels: PowerLevelsContent): boolean {
+  return levels.events_default === 100 && levels.invite === 100 && levels.state_default === 100
 }
 
 /** A prior read back from a marker is Matrix state anyone with PL could have shaped: keep only the numbers. */
@@ -127,8 +132,11 @@ export async function restorePowerLevels(roomId: string, prior: ArchivePriorPowe
     const events = { ...base.events }
     for (const type of CALL_MEMBER_EVENT_TYPES) {
       if (!prior) events[type] = CREATE_ROOM_DEFAULTS.callMemberLevel
-      else if (prior.events && typeof prior.events[type] === 'number') events[type] = prior.events[type]!
-      else delete events[type] // the room did not carry this type before the archive
+      else {
+        const level = prior.events?.[type]
+        if (typeof level === 'number') events[type] = level
+        else delete events[type] // the room did not carry this type before the archive
+      }
     }
     await mc.setRoomState(roomId, 'm.room.power_levels', '', {
       ...base, events,
