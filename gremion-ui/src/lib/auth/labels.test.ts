@@ -62,6 +62,11 @@ describe('roleLabel / roleLabels', () => {
     expect(roleLabel('council-admin')).toBe('Gremienverwaltung')
     expect(roleLabel('it-admin')).toBe('IT-Administration')
   })
+  test('vorstand is its own role label and council-admin keeps Gremienverwaltung (Karenz phase 1)', () => {
+    expect(roleLabel('vorstand')).toBe('Vorstand')
+    expect(roleLabel('council-admin')).toBe('Gremienverwaltung')
+    expect(roleLabels(['vorstand', 'council-admin'])).toEqual(['Vorstand', 'Gremienverwaltung'])
+  })
   test('unknown role degrades to raw id', () => {
     expect(roleLabel('referent')).toBe('referent')
   })

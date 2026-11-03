@@ -51,7 +51,12 @@ export { bootstrapPlatform, ensureAccessOwner, pgModules, type AccessOwnerDeps, 
 export {
   ACCESS_OWNER_ROLE,
   ACCESS_READER_ROLE,
+  COUNCIL_EXECUTES,
+  COUNCIL_REQUESTER_MARKER,
+  COUNCIL_REQUESTER_ROLE,
   ensureAccessReader,
+  ensureCouncilRequester,
+  type CouncilRequesterDeps,
   ensureExecutorRole,
   ensurePanelRequester,
   EXECUTOR_EXECUTES,
@@ -66,12 +71,13 @@ export {
   PANEL_REQUESTER_MARKER,
   type ExecutorRoleDeps,
 } from './pg.ts'
-export { HANDLED_KINDS, IMPORT_LIST_MAX_BYTES, isRequestKind, KIND_OWNER, modulesToEnable, REQUEST_KINDS, verifyEnableLoaded, verifyRequestArgs } from './requests.ts'
-export type { CreateRequestArgs, DisableModuleArgs, DpiaDecision, EnableModuleArgs, LifecycleArgs, ReconcileArgs, RecordDpiaArgs, ImportMembersArgs, RequestEnvelope, RequestKind, RequestVerdict, SeedVerticalArgs, VerifiedRequestArgs, VerifyContext } from './requests.ts'
+export { COUNCIL_DISABLE_ALLOWED, HANDLED_KINDS, IMPORT_LIST_MAX_BYTES, isRequestKind, KIND_OWNER, modulesToEnable, REQUEST_KINDS, verifyEnableLoaded, verifyRequestArgs } from './requests.ts'
+export type { CreateRequestArgs, DisableModuleArgs, DpiaDecision, EnableModuleArgs, LifecycleArgs, ReconcileArgs, RecordDpiaArgs, ImportMembersArgs, RequestEnvelope, RequestKind, RequestOrigin, RequestVerdict, SeedVerticalArgs, VerifiedRequestArgs, VerifyContext } from './requests.ts'
 export { renderCustomerRouter } from './router.ts'
 export type { CustomerRouterInput } from './router.ts'
 export type { BootstrapDeps, BootstrapResult } from './pg.ts'
 export type {
+  ActorKind,
   AdminSpec,
   BrokerPort,
   ConfigPort,

@@ -1,4 +1,4 @@
-<!-- i18n-sync: source=modules.md sha256=2560d83eb6e202e832d477d60bd1d67b185a69bbefd827cf1b4b7ea4aa0c2b50 -->
+<!-- i18n-sync: source=modules.md sha256=3c7017946588d22ad17bc3e585bd1233771ca6f1acb00d6cbab919e67c11c297 -->
 [English](./modules.md) | **Deutsch**
 
 # Unterstützte Module
@@ -71,7 +71,12 @@ Es gibt drei getrennte Schalter; im README jedes Moduls steht, welche davon zutr
    angelegt, und Module werden für ihn über die Anfragen `enable_module` und `disable_module`
    aktiviert oder deaktiviert, beschrieben in
    [runbooks/tenant-lifecycle.md](./runbooks/tenant-lifecycle.md) (englisch). Ein Modul, das
-   in `modules/disabled.json` steht, lässt sich auf diesem Weg nicht aktivieren.
+   in `modules/disabled.json` steht, lässt sich auf diesem Weg nicht aktivieren. Ein Modul
+   kann auch von der Gremiumsverwaltung unter Einstellungen > Module **eingeschaltet** werden
+   (`calendar`, `elections` und `votes`; mit frischer Zwei-Faktor-Prüfung, ohne Freigabe durch
+   den Betreiber; siehe „Module self-service by the council“ im selben Runbook). Das
+   **Ausschalten** bleibt dem Betreiber vorbehalten, bis die 30-Tage-Frist der Phase 2
+   existiert: Eine Ausschalt-Anfrage eines Gremiums wird abgewiesen (`DISABLE_NOT_YET`).
 3. **Einstellung pro Instanz.** `config.modules.<manifest id> = false` lässt die Routen des
    Moduls mit der Oberfläche für deaktivierte Module antworten und blendet seinen
    Navigationseintrag aus; die Daten bleiben erhalten

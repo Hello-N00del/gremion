@@ -191,6 +191,8 @@ describe('TDD 6: SECURITY DEFINER hygiene of 0005', () => {
     const base = await r.owner<{ c: string }[]>`
       SELECT attname AS c FROM pg_attribute WHERE attrelid = 'plt.provisioning_request'::regclass AND attnum > 0 AND NOT attisdropped ORDER BY attnum`
     expect(cols.map((x) => x.c)).not.toContain('evidence_token')
-    expect(cols.map((x) => x.c)).toEqual(base.map((x) => x.c).filter((c) => c !== 'evidence_token'))
+    // actor_kind (0014) is deliberately NOT in the panel's view: the origin column already says council,
+    // and recreating the view would change what PANEL_READS exposes for a column the panel does not need.
+    expect(cols.map((x) => x.c)).toEqual(base.map((x) => x.c).filter((c) => c !== 'evidence_token' && c !== 'actor_kind'))
   })
 })

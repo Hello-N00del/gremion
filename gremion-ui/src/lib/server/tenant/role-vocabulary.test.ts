@@ -26,9 +26,12 @@ describe('roleVocabularyForTenant (D-VOCAB seam)', () => {
       'member',
       'finance',
       'council-admin',
+      // Karenz phase 1 (Task 7): vorstand is a standard realm role; this golden is updated deliberately.
+      'vorstand',
       'it-admin',
       'auditor',
     ])
+    expect(DEFAULT_ROLE_VOCABULARY).toContain('vorstand')
     expect(Object.isFrozen(DEFAULT_ROLE_VOCABULARY)).toBe(true)
   })
 

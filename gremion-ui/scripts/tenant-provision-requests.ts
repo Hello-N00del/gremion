@@ -17,6 +17,9 @@
 //     operator in the ops realm (exists, enabled, holds `operator`) with the
 //     provisioner's credential. Read-only: it writes nothing; the executor
 //     marks the request verified (which clears the token) and finishes it.
+//     A COUNCIL request (Karenz phase 1: a council admin's module switch) is
+//     verified by council-verify.ts instead: the pair is the council realm's,
+//     the admin is re-read in the customer's own realm.
 //     EXIT 0 with a verdict; 1 when it could not decide (the database, the
 //     JWKS or the ops realm unreachable); 2 usage.
 import { existsSync, readFileSync } from 'node:fs'
@@ -25,6 +28,7 @@ import { createRemoteJWKSet } from 'jose'
 import postgres from 'postgres'
 import { modulesToEnable, verifyEnableLoaded, verifyRequestArgs, type RequestVerdict } from '@gremion/provisioning'
 import { lookupModuleVersion, type LifecycleModule } from '@gremion/tenant-store/lifecycle'
+import { verifyCouncilRequest } from '../src/lib/server/tenant/provisioner/council-verify'
 import type { KcTransport } from '../src/lib/server/tenant/provisioner/kc-admin-api'
 import { verifyRequestEvidence } from '../src/lib/server/tenant/provisioner/request-verify'
 
@@ -38,6 +42,8 @@ export interface RequestVerbContext {
   kcInternalBase(): string
   /** The least-privilege provisioner's admin transport (it created the ops realm, so it reads its users). */
   provisionerTransport(): KcTransport
+  /** The customer's Keycloak realm and public host from the registry (a council request is verified against it), or null. */
+  customerRealmForSlug(slug: string): Promise<{ realm: string; host: string } | null>
   usage(message: string): Error
   log(line: string): void
 }
@@ -50,7 +56,7 @@ interface RequestRow {
   kind: string
   customer_slug: string
   args: unknown
-  origin: 'panel' | 'host'
+  origin: 'panel' | 'host' | 'council'
   operator_id: string
   evidence_acr: string | null
   evidence_auth_time: Date | null
@@ -60,6 +66,7 @@ interface RequestRow {
   reason: string | null
   created_at: Date
   state: string
+  actor_kind: 'operator' | 'person'
 }
 
 /** The ids of modules/disabled.json (excluded from the default build; never enabled through a request). */
@@ -99,7 +106,7 @@ async function requestVerify(ctx: RequestVerbContext): Promise<void> {
   try {
     const [row] = await platform<RequestRow[]>`
       SELECT kind, customer_slug, args, origin, operator_id::text, evidence_acr, evidence_auth_time, evidence_token,
-             evidence_verified_at, host_actor, reason, created_at, state
+             evidence_verified_at, host_actor, reason, created_at, state, actor_kind
         FROM plt.provisioning_request WHERE request_id = ${id}::uuid`
     const refuse = (reason: string) => {
       ctx.log(`request-verify ${id}: refused: ${reason}`)
@@ -107,22 +114,34 @@ async function requestVerify(ctx: RequestVerbContext): Promise<void> {
     }
     if (!row) return refuse('no such request')
     if (row.state !== 'running') return refuse(`the request is ${row.state}, not running (only a claimed request is verified)`)
+    const byId = new Map(catalogue.map((m) => [m.id, m]))
+    // a create and an enable_module enable modules; every other kind carries no module to load
+    const loadedCheck = (args: Parameters<typeof modulesToEnable>[0]) =>
+      verifyEnableLoaded(modulesToEnable(args), async (ids) => {
+        const missing: string[] = []
+        for (const m of ids) {
+          const mod = byId.get(m)
+          if (!mod || !(await lookupModuleVersion(platform, m, mod.moduleJson.runtime.version))) missing.push(m)
+        }
+        return missing
+      })
+    // 0. a council request: its own branch (the kind and the module first, then the council realm's evidence)
+    if (row.origin === 'council') {
+      const cv = await verifyCouncilRequest(row, ctx, { catalogueIds: catalogue.map((m) => m.id), disabledIds: disabledModuleIds(ctx.modulesDir) })
+      if (cv.verdict === 'refused') return refuse(cv.reason)
+      const councilNotLoaded = await loadedCheck(cv.args)
+      if (councilNotLoaded) return refuse(councilNotLoaded)
+      ctx.log(`request-verify ${id}: ok (${row.kind} ${row.customer_slug}; ${cv.evidence})`)
+      print({ verdict: 'ok', kind: cv.kind, slug: cv.slug, origin: cv.origin, operatorId: cv.operatorId, evidence: cv.evidence, args: cv.args })
+      return
+    }
     // 1. the kind and its args (pure; reuses the engine's own validation)
     const verdict: RequestVerdict = verifyRequestArgs(
       { kind: row.kind, customerSlug: row.customer_slug, args: row.args, operatorId: row.operator_id },
       { catalogueIds: catalogue.map((m) => m.id), disabledIds: disabledModuleIds(ctx.modulesDir) },
     )
     if (verdict.verdict === 'refused') return refuse(verdict.reason)
-    const byId = new Map(catalogue.map((m) => [m.id, m]))
-    // a create and an enable_module enable modules; every other kind carries no module to load
-    const notLoaded = await verifyEnableLoaded(modulesToEnable(verdict.args), async (ids) => {
-      const missing: string[] = []
-      for (const m of ids) {
-        const mod = byId.get(m)
-        if (!mod || !(await lookupModuleVersion(platform, m, mod.moduleJson.runtime.version))) missing.push(m)
-      }
-      return missing
-    })
+    const notLoaded = await loadedCheck(verdict.args)
     if (notLoaded) return refuse(notLoaded)
     // 2. the evidence
     let evidence: string

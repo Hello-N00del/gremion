@@ -6,6 +6,11 @@ export enum Role {
   // realm roles map in through hooks.server.ts validRoles = Object.values(Role).
   Finance = 'finance',
   CouncilAdmin = 'council-admin',
+  // Karenz phase 1: the standard "Vorstand" realm role in every council, next to council-admin. It replaces the
+  // committee-name match as the way to recognise a Vorstand (recipient of the council notices). Phase 1 gives it
+  // member-level page access only (see ROLE_HIERARCHY); the realm template, the gremion-ui scope mapping and
+  // the reconcile check `vorstand-role` carry it into every realm.
+  Vorstand = 'vorstand',
   ITAdmin = 'it-admin',
   // Dedicated finance read-only auditor (D1(a)). Standalone role: it confers finance see-all (read) but
   // NO write, decoupled from it-admin, which used to double as the auditor stand-in.

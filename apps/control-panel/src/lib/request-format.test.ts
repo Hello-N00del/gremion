@@ -6,4 +6,8 @@ describe('originLabel (A8)', () => {
     expect(originLabel('host')).toBe('Break-glass')
     expect(originLabel('panel')).toBe('Panel')
   })
+
+  it('labels a council-origin request Gremium', () => {
+    expect(originLabel('council')).toBe('Gremium')
+  })
 })
