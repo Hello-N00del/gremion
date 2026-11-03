@@ -3,7 +3,8 @@
 # request (TRD-044, PRD-OPS-004: "Modul aktivieren"). SOURCED, NEVER EXECUTED.
 #
 # handle_enable_module <request-id> <slug> <operator-id> <args.json> <workdir>
-#   <args.json> is request-verify's NORMALISED args: {slug, module, dpia}.
+#   <args.json> is request-verify's NORMALISED args: {slug, module, dpia} and,
+#   for a council admin's request, actorKind "person" (forwarded as --actor-kind).
 #   `dpia` is the operator's DPIA-applicability decision ({requiresDpia,
 #   reasonCodes, documentRef}) or null (then the gate demands the one already
 #   recorded). It is written 0600 into the request's workdir (removed by the
@@ -20,8 +21,17 @@ handle_enable_module() {
     [[ -f "$args" ]] || die "enable_module ${id}: no verified args" "$GREMION_EXIT_ASSERT"
     jq -e --arg s "$slug" '.slug == $s' "$args" >/dev/null \
         || die "enable_module ${id}: the verified args name another customer than ${slug}" "$GREMION_EXIT_ASSERT"
-    module="$(jq -r '.module' "$args")"
+    module="$(jq -er '.module | strings' "$args")" \
+        || die "enable_module ${id}: the verified args carry no module" "$GREMION_EXIT_ASSERT"
     local -a argv=("$slug" "$module" --operator "$operator")
+    # The verified actor kind: `person` for a council admin's request (the
+    # verdict's args carry actorKind), absent or `operator` for every panel and
+    # break-glass request, whose argv stays what it always was.
+    local actor_kind
+    actor_kind="$(jq -r '.actorKind // "operator"' "$args")"
+    [[ "$actor_kind" =~ ^(operator|person)$ ]] \
+        || die "enable_module ${id}: the verified args carry an unknown actor kind" "$GREMION_EXIT_ASSERT"
+    if [[ "$actor_kind" == person ]]; then argv+=(--actor-kind person); fi
     if jq -e '.dpia != null' "$args" >/dev/null; then
         jq -c '.dpia' "$args" | atomic_write "$dpia" 600 \
             || die "enable_module ${id}: could not write the DPIA decision" "$GREMION_EXIT_ASSERT"

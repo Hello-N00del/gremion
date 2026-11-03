@@ -5,10 +5,12 @@
 // panel's executor (TASK-043d) reaches the same functions through its request
 // kinds (enable-module, record_dpia, import_isolation).
 //
-//   enable-module <slug> <module> --operator <uuid> [--dpia-json <file>]
+//   enable-module <slug> <module> --operator <uuid> [--actor-kind operator|person] [--dpia-json <file>]
 //       one module for an existing customer through the level-1 gate
-//   disable-module <slug> <module> --operator <uuid>
+//   disable-module <slug> <module> --operator <uuid> [--actor-kind operator|person]
 //       one module off for an existing customer: export + verify, then drop (TRD-424); repeatable
+//       --actor-kind person (default operator): --operator names a council admin, not an
+//       ops-realm operator (a verified council request; Karenz phase 1)
 //   dpia-record <slug> <module> --operator <uuid> --requires-dpia yes|no|not_applicable
 //               --reason-codes a,b --document-ref <TOM-annex entry>
 //       the dated, written DPIA-applicability decision (TRD-161, brief Q3)
@@ -37,6 +39,7 @@ import {
   regateEnablement,
   unprovenEnablements,
   validateGateForeignKeys,
+  type ActorKind,
   type DpiaSpec,
   type ProvisioningDeps,
 } from '@gremion/provisioning'
@@ -47,8 +50,8 @@ export { EnableRefused }
 /** The verbs this file answers (tenant-provision.ts's case lines). */
 export const GATE_VERBS: ReadonlySet<string> = new Set(['enable-module', 'disable-module', 'dpia-record', 'isolation-record', 'gate-status', 'regate'])
 
-export const GATE_USAGE = `  enable-module <slug> <module> --operator <uuid> [--dpia-json <file>]
-  disable-module <slug> <module> --operator <uuid>
+export const GATE_USAGE = `  enable-module <slug> <module> --operator <uuid> [--actor-kind operator|person] [--dpia-json <file>]
+  disable-module <slug> <module> --operator <uuid> [--actor-kind operator|person]
   dpia-record <slug> <module> --operator <uuid> --requires-dpia yes|no|not_applicable --reason-codes a,b --document-ref <ref>
   isolation-record <file> | gate-status [<slug>] | regate <slug> <module> --operator <uuid>`
 
@@ -61,6 +64,8 @@ export interface GateVerbContext {
   openPlatform(): postgres.Sql
   /** The customer id of a slug from the control registry, or null. */
   customerIdForSlug(slug: string): Promise<string | null>
+  /** Tests only: whether TENANT_EXPORT_DIR is its own mount (default: exportDirIsMounted over /proc/self/mountinfo). */
+  exportDirMounted?: (dir: string) => boolean
   flag(name: string): string | undefined
   reqFlag(name: string): string
   positional(index?: number): string | undefined
@@ -75,6 +80,14 @@ function operatorId(ctx: GateVerbContext): string {
   const id = ctx.reqFlag('--operator')
   if (!UUID.test(id)) throw ctx.usage(`--operator must be the operator's ops-realm user id (a lowercase uuid), not ${JSON.stringify(id)}`)
   return id
+}
+
+/** --actor-kind operator|person (default operator): who `--operator` names. Anything else is a usage error. */
+function actorKind(ctx: GateVerbContext): ActorKind {
+  const v = ctx.flag('--actor-kind')
+  if (v === undefined) return 'operator'
+  if (v !== 'operator' && v !== 'person') throw ctx.usage(`--actor-kind must be operator or person, not ${JSON.stringify(v)}; nothing was done`)
+  return v
 }
 
 function arg(ctx: GateVerbContext, index: number, what: string, verb: string): string {
@@ -131,11 +144,12 @@ async function cmdEnableModule(ctx: GateVerbContext): Promise<void> {
   const slug = arg(ctx, 0, 'slug', 'enable-module')
   const moduleKey = arg(ctx, 1, 'module', 'enable-module')
   const op = operatorId(ctx)
+  const kind = actorKind(ctx)
   const dpia = readDpiaSpec(ctx)
   await ctx.withLive({}, async (deps) => {
-    const r = await enableCustomerModule(slug, moduleKey, { operatorId: op, ...(dpia ? { dpia } : {}) }, deps)
-    ctx.log(`enable-module ${slug} ${r.moduleKey} by operator ${op}: ${r.noop ? 'already enabled' : 'enabled'}${r.database ? ` (${r.database})` : ''}; broker ${r.reloaded ? 'reloaded' : 'unchanged'}`)
-    console.log(JSON.stringify({ verb: 'enable-module', slug, module: r.moduleKey, noop: r.noop, database: r.database, enabled: r.enabled, operatorId: op }))
+    const r = await enableCustomerModule(slug, moduleKey, { operatorId: op, actorKind: kind, ...(dpia ? { dpia } : {}) }, deps)
+    ctx.log(`enable-module ${slug} ${r.moduleKey} by ${kind} ${op}: ${r.noop ? 'already enabled' : 'enabled'}${r.database ? ` (${r.database})` : ''}; broker ${r.reloaded ? 'reloaded' : 'unchanged'}`)
+    console.log(JSON.stringify({ verb: 'enable-module', slug, module: r.moduleKey, noop: r.noop, database: r.database, enabled: r.enabled, operatorId: op, actorKind: kind }))
   })
 }
 
@@ -156,14 +170,15 @@ async function cmdDisableModule(ctx: GateVerbContext): Promise<void> {
   const slug = arg(ctx, 0, 'slug', 'disable-module')
   const moduleKey = arg(ctx, 1, 'module', 'disable-module')
   const op = operatorId(ctx)
+  const kind = actorKind(ctx)
   const dir = process.env.TENANT_EXPORT_DIR ?? ''
-  if (!dir || !exportDirIsMounted(dir)) {
+  if (!dir || !(ctx.exportDirMounted ?? exportDirIsMounted)(dir)) {
     throw ctx.usage(`disable-module needs TENANT_EXPORT_DIR (${dir || 'unset'}) to be a mounted volume that outlives this container: the module database is dropped after its export; nothing was touched`)
   }
   await ctx.withLive({}, async (deps) => {
-    const r = await disableCustomerModule(slug, moduleKey, { operatorId: op }, deps)
-    ctx.log(`disable-module ${slug} ${r.moduleKey} by operator ${op}: ${r.noop ? 'already disabled' : 'disabled'}${r.export ? `; export ${r.export.path} sha256 ${r.export.sha256} (${r.export.bytes} bytes)` : ''}; broker ${r.reloaded ? 'reloaded' : 'unchanged'}`)
-    console.log(JSON.stringify({ verb: 'disable-module', slug, module: r.moduleKey, noop: r.noop, dropped: r.dropped, database: r.database, export: r.export, enabled: r.enabled, operatorId: op }))
+    const r = await disableCustomerModule(slug, moduleKey, { operatorId: op, actorKind: kind }, deps)
+    ctx.log(`disable-module ${slug} ${r.moduleKey} by ${kind} ${op}: ${r.noop ? 'already disabled' : 'disabled'}${r.export ? `; export ${r.export.path} sha256 ${r.export.sha256} (${r.export.bytes} bytes)` : ''}; broker ${r.reloaded ? 'reloaded' : 'unchanged'}`)
+    console.log(JSON.stringify({ verb: 'disable-module', slug, module: r.moduleKey, noop: r.noop, dropped: r.dropped, database: r.database, export: r.export, enabled: r.enabled, operatorId: op, actorKind: kind }))
   })
 }
 

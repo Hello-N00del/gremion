@@ -144,6 +144,10 @@ async function kcFetch(timeoutMs: number, url: string, init: RequestInit): Promi
   }
 }
 
+/** Page size and hard ceiling for `listRealmRoleMembers` (a runaway-loop guard, far above any council). */
+const ROLE_MEMBER_PAGE = 200
+const ROLE_MEMBER_MAX = 100_000
+
 export class KeycloakAdminClient {
   private readonly adminUrl: string
   private readonly realm: string
@@ -340,6 +344,24 @@ export class KeycloakAdminClient {
 
   async listRealmRoles(): Promise<readonly KcRole[]> {
     return this.request<KcRole[]>('GET', '/roles')
+  }
+
+  /**
+   * Every user holding the realm role DIRECTLY (`GET /roles/{name}/users`; group
+   * or composite inheritance is not followed, matching what the member admin
+   * assigns). Keycloak pages this endpoint, so it is read in pages of
+   * ROLE_MEMBER_PAGE until a short page. Any failing page rejects the whole call:
+   * a caller that mails the result must never act on a silently partial list.
+   */
+  async listRealmRoleMembers(roleName: string): Promise<readonly KcUser[]> {
+    const base = `/roles/${seg(roleName)}/users`
+    const all: KcUser[] = []
+    for (let first = 0; first < ROLE_MEMBER_MAX; first += ROLE_MEMBER_PAGE) {
+      const page = await this.request<KcUser[]>('GET', `${base}?first=${first}&max=${ROLE_MEMBER_PAGE}`)
+      all.push(...page)
+      if (page.length < ROLE_MEMBER_PAGE) return all
+    }
+    throw new Error(`Keycloak role ${roleName} has more than ${ROLE_MEMBER_MAX} members`)
   }
 
   async executeActionsEmail(userId: string, actions: readonly string[]): Promise<void> {

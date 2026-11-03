@@ -57,7 +57,7 @@ generator_for() {
         docker/keycloak/certs/internal-ca.pem|docker/keycloak/certs/internal-ca.crt|docker/keycloak/certs/keycloak.crt|docker/keycloak/certs/keycloak.key)
             echo "bash docker/keycloak/certs/gen-internal-ca.sh   (make setup runs it)" ;;
         docker/pgbouncer/userlist.txt)
-            echo "bash scripts/render-pgbouncer-userlist.sh   (make setup runs it; hosts: gremion-render)" ;;
+            echo "bash scripts/render-pgbouncer-userlist.sh   (make setup runs it; Linux prod overlay: add --container-group; hosts: gremion-render)" ;;
         *) return 1 ;;
     esac
 }

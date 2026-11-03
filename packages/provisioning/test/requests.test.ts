@@ -183,10 +183,10 @@ describe('enable_module / disable_module / record_dpia / reconcile args (TRD-044
   const dpia = { requires_dpia: false, reason_codes: ['operator_decision'], document_ref: 'TOM-3' }
 
   it('enable_module: slug + module, the DPIA decision optional (recorded or carried), normalised to the library DpiaSpec', () => {
-    expect(v('enable_module', { slug: 'musterstadt', module: 'votes' })).toEqual({ verdict: 'ok', args: { slug: 'musterstadt', module: 'votes', dpia: null } })
+    expect(v('enable_module', { slug: 'musterstadt', module: 'votes' })).toEqual({ verdict: 'ok', args: { slug: 'musterstadt', module: 'votes', dpia: null, actorKind: 'operator' } })
     expect(v('enable_module', { slug: 'musterstadt', module: 'votes', dpia })).toEqual({
       verdict: 'ok',
-      args: { slug: 'musterstadt', module: 'votes', dpia: { requiresDpia: 'no', reasonCodes: ['operator_decision'], documentRef: 'TOM-3' } },
+      args: { slug: 'musterstadt', module: 'votes', dpia: { requiresDpia: 'no', reasonCodes: ['operator_decision'], documentRef: 'TOM-3' }, actorKind: 'operator' },
     })
     expect(v('enable_module', { slug: 'musterstadt', module: 'votes', dpia: { ...dpia, document_ref: '  ' } })).toMatchObject({ verdict: 'refused', reason: expect.stringMatching(/document_ref is required/) })
     expect(v('enable_module', { slug: 'musterstadt', module: 'votes', dpia: { ...dpia, requires_dpia: 'yes' } })).toMatchObject({ verdict: 'refused', reason: expect.stringMatching(/requires_dpia/) })
@@ -196,7 +196,7 @@ describe('enable_module / disable_module / record_dpia / reconcile args (TRD-044
     expect(v(kind, { slug: 'musterstadt', module: 'nosuchmodule' })).toMatchObject({ verdict: 'refused', reason: expect.stringMatching(/not in the catalogue/) })
     // an enable is refused for a module in disabled.json; a disable is not (a build that stops shipping a module must still be able to disable it for a customer)
     const refusedAsDisabled = { verdict: 'refused', reason: expect.stringMatching(/finance is disabled in this build \(modules\/disabled\.json\)/) }
-    const acceptedAsDisabling = { verdict: 'ok', args: { slug: 'musterstadt', module: 'finance' } }
+    const acceptedAsDisabling = { verdict: 'ok', args: { slug: 'musterstadt', module: 'finance', actorKind: 'operator' } }
     expect(v(kind, { slug: 'musterstadt', module: 'finance' })).toMatchObject(kind === 'enable_module' ? refusedAsDisabled : acceptedAsDisabling)
     expect(v(kind, { slug: 'musterstadt', module: 'Votes' })).toMatchObject({ verdict: 'refused' })
     expect(v(kind, { slug: 'musterstadt' })).toMatchObject({ verdict: 'refused', reason: expect.stringMatching(/module/) })
@@ -206,7 +206,7 @@ describe('enable_module / disable_module / record_dpia / reconcile args (TRD-044
   })
 
   it('disable_module and record_dpia accept a module that modules/disabled.json now lists (a build that stops shipping a module must still export and drop it); enable_module does not', () => {
-    expect(v('disable_module', { slug: 'musterstadt', module: 'finance' })).toEqual({ verdict: 'ok', args: { slug: 'musterstadt', module: 'finance' } })
+    expect(v('disable_module', { slug: 'musterstadt', module: 'finance' })).toEqual({ verdict: 'ok', args: { slug: 'musterstadt', module: 'finance', actorKind: 'operator' } })
     expect(v('record_dpia', { slug: 'musterstadt', module: 'finance', requiresDpia: true, documentRef: 'TOM-3' })).toMatchObject({ verdict: 'ok' })
     expect(v('enable_module', { slug: 'musterstadt', module: 'finance' })).toMatchObject({ verdict: 'refused', reason: expect.stringMatching(/disabled in this build/) })
     // the catalogue still bounds the id
@@ -215,7 +215,7 @@ describe('enable_module / disable_module / record_dpia / reconcile args (TRD-044
 
   it('enable_module refuses board and vault by name; disable_module carries no dpia', () => {
     expect(v('enable_module', { slug: 'musterstadt', module: 'board' })).toMatchObject({ verdict: 'refused', reason: expect.stringMatching(/board cannot be enabled/) })
-    expect(v('disable_module', { slug: 'musterstadt', module: 'votes' })).toEqual({ verdict: 'ok', args: { slug: 'musterstadt', module: 'votes' } })
+    expect(v('disable_module', { slug: 'musterstadt', module: 'votes' })).toEqual({ verdict: 'ok', args: { slug: 'musterstadt', module: 'votes', actorKind: 'operator' } })
     expect(v('disable_module', { slug: 'musterstadt', module: 'votes', dpia })).toMatchObject({ verdict: 'refused', reason: expect.stringMatching(/unknown field dpia/) })
   })
 

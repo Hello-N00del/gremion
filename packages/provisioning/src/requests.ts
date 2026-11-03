@@ -16,6 +16,24 @@ import { validateCreate } from './customer.ts'
 import { assertEnableList, DEFAULT_DENY } from './operator-gate.ts'
 import { ProvisioningError } from './errors.ts'
 import { isPrintableText } from './printable-text.ts'
+import type { ActorKind } from './ports.ts'
+
+/**
+ * Phase 1 of the module self-service: a council admin may switch a module ON
+ * through the request queue, never OFF. A council `disable_module` is refused
+ * `DISABLE_NOT_YET` until the 30-day grace period (phase 2) exists, because
+ * today's disableModule exports and then drops the module database at once.
+ * Phase 2 flips this one constant (and nothing else decides it).
+ */
+export const COUNCIL_DISABLE_ALLOWED = false
+
+/** Where a request came from (plt.provisioning_request.origin). */
+export type RequestOrigin = 'panel' | 'host' | 'council'
+
+/** The kinds a council request may name (the database allows exactly these two; phase 1 runs only enable_module). */
+const COUNCIL_KINDS: ReadonlySet<string> = new Set(['enable_module', 'disable_module'])
+/** The only DPIA reason code a council decision may carry (the panel's own is operator_decision). */
+const COUNCIL_REASON_CODE = 'council_decision'
 
 export const REQUEST_KINDS = [
   'create',
@@ -122,12 +140,16 @@ export interface EnableModuleArgs {
   slug: string
   module: string
   dpia: DpiaDecision | null
+  /** `person` for a council request, `operator` for the panel and the host. */
+  actorKind: ActorKind
 }
 
 /** `disable_module` (TRD-044): export first, then drop (tenant-store disableModule). */
 export interface DisableModuleArgs {
   slug: string
   module: string
+  /** `person` for a council request, `operator` for the panel and the host. */
+  actorKind: ActorKind
 }
 
 /** `record_dpia` (TRD-044): the written applicability decision, recorded with reuse-identical semantics. */
@@ -169,7 +191,10 @@ export interface RequestEnvelope {
   kind: string
   customerSlug: string
   args: unknown
+  /** The acting operator, or for a council request the person's id. */
   operatorId: string
+  /** Default `panel`: every existing caller keeps its behaviour. */
+  origin?: RequestOrigin
 }
 
 export type RequestVerdict = { verdict: 'ok'; args: VerifiedRequestArgs } | { verdict: 'refused'; reason: string }
@@ -179,6 +204,8 @@ export interface VerifyContext {
   catalogueIds: readonly string[]
   /** modules/disabled.json ids: excluded from the default build, never enabled through a request. */
   disabledIds: readonly string[]
+  /** Tests only: overrides COUNCIL_DISABLE_ALLOWED for a council disable_module. */
+  councilDisableAllowed?: boolean
 }
 
 // the library's rule (assertDpiaDecisionInput): 1-20 codes, snake_case
@@ -290,6 +317,10 @@ function moduleOf(v: unknown, ctx: VerifyContext, shipped = true): string {
   return v
 }
 
+function actorKindOf(e: RequestEnvelope): ActorKind {
+  return e.origin === 'council' ? 'person' : 'operator'
+}
+
 function verifyEnableModule(e: RequestEnvelope, ctx: VerifyContext): EnableModuleArgs {
   if (!isObject(e.args)) throw new Refused('enable_module args must be an object')
   onlyFields(e.args, ENABLE_FIELDS, '')
@@ -298,14 +329,18 @@ function verifyEnableModule(e: RequestEnvelope, ctx: VerifyContext): EnableModul
   // the engine's own list rules (the deny set board/vault, the catalogue), as for a create
   assertEnableList([module], ctx.catalogueIds)
   const dpia = dpiaOf(e.args.dpia === undefined || e.args.dpia === null ? undefined : { [module]: e.args.dpia }, [module])[module] ?? null
-  return { slug: e.customerSlug, module, dpia }
+  // a council decision is the council's own, never an operator's: exactly one code, council_decision
+  if (e.origin === 'council' && dpia && (dpia.reasonCodes.length !== 1 || dpia.reasonCodes[0] !== COUNCIL_REASON_CODE)) {
+    throw new Refused(`dpia.${module}.reason_codes must be exactly [${COUNCIL_REASON_CODE}] for a council request`)
+  }
+  return { slug: e.customerSlug, module, dpia, actorKind: actorKindOf(e) }
 }
 
 function verifyDisableModule(e: RequestEnvelope, ctx: VerifyContext): DisableModuleArgs {
   if (!isObject(e.args)) throw new Refused('disable_module args must be an object')
   onlyFields(e.args, MODULE_FIELDS, '')
   ownSlug(e, e.args)
-  return { slug: e.customerSlug, module: moduleOf(e.args.module, ctx, false) }
+  return { slug: e.customerSlug, module: moduleOf(e.args.module, ctx, false), actorKind: actorKindOf(e) }
 }
 
 function verifyRecordDpia(e: RequestEnvelope, ctx: VerifyContext): RecordDpiaArgs {
@@ -384,6 +419,13 @@ function verifyCreate(e: RequestEnvelope, ctx: VerifyContext): CreateRequestArgs
  */
 export function verifyRequestArgs(e: RequestEnvelope, ctx: VerifyContext): RequestVerdict {
   if (!isRequestKind(e.kind)) return { verdict: 'refused', reason: `unknown request kind ${e.kind}` }
+  if (e.origin === 'council') {
+    // a council acts on modules only; every other kind is refused before its args are read
+    if (!COUNCIL_KINDS.has(e.kind)) return { verdict: 'refused', reason: `${e.kind} is not allowed for a council request` }
+    if (e.kind === 'disable_module' && !(ctx.councilDisableAllowed ?? COUNCIL_DISABLE_ALLOWED)) {
+      return { verdict: 'refused', reason: 'DISABLE_NOT_YET: switching a module off from the council settings is not available yet; nothing was done' }
+    }
+  }
   if (!HANDLED_KINDS.has(e.kind)) return { verdict: 'refused', reason: `no handler (${KIND_OWNER[e.kind]})` }
   try {
     if (e.kind === 'import_members') return { verdict: 'ok', args: verifyImportMembers(e) }

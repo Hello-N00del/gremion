@@ -19,6 +19,8 @@ import { runOrgUnitRelayPass } from './org-unit-event-relay'
 // it (NOT_DRAINING_THRESHOLD passes), so a change here must move the window too.
 import { ORG_UNIT_RELAY_INTERVAL_MS } from './org-unit-event-outbox'
 import { superviseWorker, markWorkerOff } from '$lib/server/events/consumer-state'
+import { getKeycloakAdminClientForCurrentTenant } from '$lib/server/keycloak-admin'
+import { drainRoleBackfill, ROLE_BACKFILL_INTERVAL_MS } from './vorstand-backfill'
 
 /** The id the relay reports under in worker states. */
 export const ORG_UNIT_RELAY_WORKER = 'org-unit-relay'
@@ -57,4 +59,24 @@ registerServerInitHook(async () => {
       console.info('[org-unit-relay] publishing', STREAMS.ORGUNIT.subjects[0])
     },
   })
+})
+
+/** The id the vorstand role backfill reports under in logs and single-flight. */
+export const VORSTAND_BACKFILL_WORKER = 'vorstand-backfill'
+
+// The standard `vorstand` realm role for the people migration 0062 queued (Karenz
+// phase 1). Not env-gated: the queue is tenant-local and a pass on an empty queue is
+// one cheap SELECT with no Keycloak call. Each tick is a drain per ACTIVE tenant
+// through the worker-fleet seam (explicit tenant scope, single-flight per tenant,
+// one tenant's failure never stops the rest). The first tick is one interval after
+// boot, which also gives the reconcile check time to create the role first.
+// .unref() so the interval never pins the process on shutdown.
+registerServerInitHook(() => {
+  setInterval(
+    () =>
+      forEachActiveTenant(VORSTAND_BACKFILL_WORKER, (ctx) =>
+        drainRoleBackfill(ctx.db, getKeycloakAdminClientForCurrentTenant(), console),
+      ),
+    ROLE_BACKFILL_INTERVAL_MS,
+  ).unref()
 })
