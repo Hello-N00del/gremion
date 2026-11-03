@@ -94,8 +94,20 @@ docker compose --env-file /opt/gremion/etc/env/state.env exec -T postgres \
   psql -U postgres -d "$kdb" -tAc "SELECT count(*) FROM schema_migrations WHERE filename = '0001_governance_schema.sql'"   # 1
 ```
 
-2. **Validate the env files against the new tree (E1).** Once per host, first:
-   a `state.env` rendered before the pins layer was split per project (TASK-048b)
+2. **Refresh the host programs, then validate the env files against the new tree
+   (E1).** The programs under `/opt/gremion/bin` are copies, and nothing in a
+   deploy replaces them: `gremion-deploy` runs the installed sibling programs
+   only. A program that this release changed (the `--init-legal-env` flag of
+   `gremion-render` below, the legal env staging in `gremion-deploy`'s step 2)
+   does not exist on the host until it is copied in, so copy them first, with the
+   same command as install.md step 5.
+
+```bash
+install -m 0755 -o gremion -g gremion "$REL"/infra/host/bin/* /opt/gremion/bin/
+install -m 0644 -o gremion -g gremion "$REL/infra/host/lib/common.sh" /opt/gremion/lib/common.sh
+```
+
+   Once per host, then: a `state.env` rendered before the pins layer was split per project (TASK-048b)
    still layers the app pins `docker-compose.pins.yml` onto the state project.
    `gremion-deploy` refuses it at STEP 2 (exit 2, nothing pulled). Edit only the
    `COMPOSE_FILE` line; do not re-render the env files: `gremion-init-secrets

@@ -583,6 +583,28 @@ check_legal_env_first() {
     fi
 }
 
+# kernel #84, upgrade side: the legal env flags belong to the NEW release's
+# gremion-render, and a deploy never replaces the installed programs
+# (gremion-deploy resolves its siblings from /opt/gremion/bin only). So upgrade.md
+# has to copy the release's host programs in before its first use of either
+# flag, and the same step has to copy lib/common.sh.
+check_upgrade_programs_first() {
+    local steps first refresh lib
+    steps="$(unit_text "$1" upgrade | section_body '## Steps' | bash_blocks | grep -v '^[[:space:]]*#' || true)"
+    first="$(grep -nE -- 'gremion-render [^;|&]*--(init-legal-env|legal-env-only)' <<<"$steps" | head -n 1 | cut -d: -f1)"
+    if [ -z "$first" ]; then
+        echo "upgrade.md never runs gremion-render with --init-legal-env or --legal-env-only" >&2; return 1
+    fi
+    refresh="$(grep -nE -- 'install .*infra/host/bin/\*' <<<"$steps" | head -n 1 | cut -d: -f1)"
+    if [ -z "$refresh" ] || [ "$refresh" -gt "$first" ]; then
+        echo "upgrade.md uses the legal env flags of gremion-render before it installs the release's host programs (infra/host/bin/*)" >&2; return 1
+    fi
+    lib="$(grep -nE -- 'install .*infra/host/lib/common\.sh' <<<"$steps" | head -n 1 | cut -d: -f1)"
+    if [ -z "$lib" ] || [ "$lib" -gt "$first" ]; then
+        echo "upgrade.md uses the legal env flags of gremion-render before it installs the release's lib/common.sh" >&2; return 1
+    fi
+}
+
 # gremion-deploy logs in under the HOME of the user that runs it, so a procedure
 # that runs it observes that user's registry config as well as root's.
 check_registry_creds() {
@@ -1251,6 +1273,28 @@ run_dump_step() {                                # <scratch root>
     grep -vF -- '/opt/gremion/etc/legal.env' "$d/install.md" > "$bad/install.md"
     run check_legal_env_first "$bad"
     [ "$status" -ne 0 ]; [[ "$output" == *"never has the operator fill /opt/gremion/etc/legal.env"* ]]
+}
+
+@test "upgrade installs the release's host programs before the first legal env flag (kernel #84)" {
+    local d bad
+    d="$(real_dir)"; check_upgrade_programs_first "$d"
+    # No refresh at all (the shape the runbook had before this guard).
+    bad="${BATS_TEST_TMPDIR}/no-refresh"; cp -R "$d" "$bad"
+    grep -vF -- 'infra/host/bin/*' "$d/upgrade.md" > "$bad/upgrade.md"
+    run check_upgrade_programs_first "$bad"
+    [ "$status" -ne 0 ]; [[ "$output" == *"before it installs the release's host programs"* ]]
+    # Refresh present but after the first use of the flag.
+    bad="${BATS_TEST_TMPDIR}/late-refresh"; cp -R "$d" "$bad"
+    { grep -vF -- 'infra/host/bin/*' "$d/upgrade.md"
+      printf '\n```bash\ninstall -m 0755 -o gremion -g gremion "$REL"/infra/host/bin/* /opt/gremion/bin/\n```\n'
+    } > "$bad/upgrade.md"
+    run check_upgrade_programs_first "$bad"
+    [ "$status" -ne 0 ]; [[ "$output" == *"before it installs the release's host programs"* ]]
+    # Programs refreshed, lib/common.sh forgotten.
+    bad="${BATS_TEST_TMPDIR}/no-lib"; cp -R "$d" "$bad"
+    grep -vF -- 'infra/host/lib/common.sh' "$d/upgrade.md" > "$bad/upgrade.md"
+    run check_upgrade_programs_first "$bad"
+    [ "$status" -ne 0 ]; [[ "$output" == *"before it installs the release's lib/common.sh"* ]]
 }
 
 @test "every variable a post-condition reads is assigned there or in the preamble" {
