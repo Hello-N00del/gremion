@@ -1,6 +1,6 @@
 # Install: the from-zero bring-up
 
-- Version: 5.0.0
+- Version: 6.0.0
 - Wall-clock budget: one working day, from the start of step 1 to the asserted post-condition (PRD-PLAT-005)
 - Implements: TRD-200 (install), TRD-042 (the from-zero rebuild, R15-2), FLOW-OPS-002
 - First run: TASK-038, the pilot re-initialisation
@@ -153,7 +153,29 @@ id -u gremion; id -g gremion                                  # OPS_UID and OPS_
 sudo -u gremion "${EDITOR:-vi}" /opt/gremion/etc/env/state.env   # and each other file named above
 ```
 
-8. **Validate every env file (E1).** Nothing is started until all five pass.
+   The legal pages (imprint and privacy notice) read their values from one more
+   file, `/opt/gremion/etc/legal.env`, which is not one of the five and is not
+   made by `gremion-init-secrets`. `gremion-render --init-legal-env` creates it
+   from the release's `legal/legal.env.example`: a `CHANGE_ME_OPERATOR_` value
+   for each key only the council knows (the organisation's name, address and
+   e-mail, the responsible person and their e-mail), `DOMAIN` taken from
+   `PLATFORM_DOMAIN` (so run it after `state.env` is filled), and the example's
+   retention periods and accessibility statement, which are to be checked. It
+   ends with a `LEGAL-ENV:` line naming how many keys are still to fill. The
+   state project's `legal` service reads `legal/legal.env` from the release
+   tree for every compose command, so the tree must carry a copy: `gremion-render`
+   writes it from this file (step 8 and step 12 for this release, `gremion-deploy`
+   for every later one) and refuses, exit 2, a file that still holds a
+   placeholder or one of the example's values.
+
+```bash
+sudo -u gremion /opt/gremion/bin/gremion-render --release "$REL" --init-legal-env   # LEGAL-ENV: file=... unfilled=5
+sudo -u gremion "${EDITOR:-vi}" /opt/gremion/etc/legal.env
+grep -c '=CHANGE_ME_OPERATOR_' /opt/gremion/etc/legal.env                          # 0
+```
+
+8. **Validate every env file (E1).** Nothing is started until all five pass,
+   and the legal file renders into the release tree.
 
 ```bash
 for p in state app-blue app-green; do
@@ -161,6 +183,7 @@ for p in state app-blue app-green; do
 done
 gremion-validate-env --env-file /opt/gremion/etc/env/mail.env --release "$REL/infra/host/mail"
 gremion-validate-env --env-file /opt/gremion/etc/env/ops.env --release "$REL/compose/observability"
+sudo -u gremion /opt/gremion/bin/gremion-render --release "$REL" --legal-env-only   # RENDER: outputs=1 ... legal-env-only=yes
 ```
 
 9. **Addresses, networks and volumes, firewall.** `networks` creates the
@@ -204,7 +227,10 @@ gremion-dns-check --domain "$PLATFORM_DOMAIN" \
     under `docker/keycloak/certs/`. Started without them, Docker creates the
     missing `userlist.txt` as a root-owned directory, Keycloak has no
     certificate, and the first deploy's own render (its step 4, as the deploy
-    user) dies on that directory. The render runs as the deploy user, because it
+    user) dies on that directory. The same render copies `etc/legal.env` (step 7)
+    to `legal/legal.env` in the release tree, the `env_file` of the `legal`
+    service: without it every compose command of the state project stops at
+    "env file not found". The render runs as the deploy user, because it
     keeps the Keycloak CA in `etc/secrets/keycloak` for every later release,
     and it ends with a `RENDER:` line. It writes the pgbouncer `userlist.txt`
     mode 0640 and hands it to group 70, the gid the PgBouncer container reads
@@ -227,8 +253,8 @@ gremion-dns-check --domain "$PLATFORM_DOMAIN" \
 
 ```bash
 sudo -u gremion /opt/gremion/bin/gremion-render --release "$REL"
-stat -c '%U %F %n' "$REL/docker/pgbouncer/userlist.txt" "$REL/docker/keycloak/certs/keycloak.crt"   # gremion regular file, both
-stat -c '%a %g %n' "$REL/docker/pgbouncer/userlist.txt"                                              # 640 70: PgBouncer (gid 70) reads it, other users cannot
+stat -c '%U %F %n' "$REL/docker/pgbouncer/userlist.txt" "$REL/docker/keycloak/certs/keycloak.crt" "$REL/legal/legal.env"   # gremion regular file, all three
+stat -c '%a %g %n' "$REL/docker/pgbouncer/userlist.txt"                                                                      # 640 70: PgBouncer (gid 70) reads it, other users cannot
 sudo -u gremion ln /opt/gremion/etc/secrets/ipcrypt_key.txt "$REL/secrets/ipcrypt_key.txt"
 stat -c '%i %U %n' /opt/gremion/etc/secrets/ipcrypt_key.txt "$REL/secrets/ipcrypt_key.txt"         # one inode, gremion, both
 cd "$REL"
@@ -460,6 +486,7 @@ in [run-record.md](run-record.md).
 
 ## Changelog
 
+- 6.0.0 (2026-11-03): kernel #84, on top of 5.0.0. Step 7 creates and fills `etc/legal.env` (`gremion-render --init-legal-env`), step 8 renders it into the release tree (`--legal-env-only`) and step 12 observes `legal/legal.env` beside the userlist and certificate: the state project's `legal` service reads that file for every compose command, and no step made it. Major: steps and a post-condition observation changed.
 - 5.0.0 (2026-11-02): kernel #83. Step 4's `user` stage puts the deploy user in a group with gid 70 and the step observes it (`id -G`); step 12's render writes the pgbouncer `userlist.txt` mode 0640 group 70 (it was 0600 owned by the deploy user, which PgBouncer, uid/gid 70, could not read) and the step observes `stat -c '%a %g'` as `640 70`. Major: a step and its observations changed.
 - 4.2.0 (2026-10-30): kernel #47 decision (a). Step 14 (and the registry-token precondition) names the optional host token file `etc/registry-token` that `gremion-deploy` reads when `GREMION_REGISTRY_TOKEN_FILE` is set, with the commands that observe it; the prompt stays the default. Minor: an alternative added to a step, no post-condition changed.
 - 4.1.1 (2026-10-29): kernel #48. Known gaps names the adopt step (upgrade.md step 6) for a realm the provisioner service account did not create. Patch: no step or post-condition changed.

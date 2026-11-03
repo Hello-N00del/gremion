@@ -1,6 +1,6 @@
 # Upgrade: one release onto a running installation
 
-- Version: 6.3.0
+- Version: 7.0.0
 - Status: provisional (see Known gaps)
 - Wall-clock budget: one working day, from step 1 to the asserted post-condition (PRD-PLAT-005)
 - Implements: TRD-200 (upgrade), TRD-206 (the pre-migration dump, R18-4), TRD-189 (blue/green as the deploy path)
@@ -103,8 +103,20 @@ docker compose --env-file /opt/gremion/etc/env/state.env exec -T postgres \
   psql -U postgres -d "$kdb" -tAc "SELECT count(*) FROM schema_migrations WHERE filename = '0001_governance_schema.sql'"   # 1
 ```
 
-2. **Validate the env files against the new tree (E1).** Once per host, first:
-   a `state.env` rendered before the pins layer was split per project (TASK-048b)
+2. **Refresh the host programs, then validate the env files against the new tree
+   (E1).** The programs under `/opt/gremion/bin` are copies, and nothing in a
+   deploy replaces them: `gremion-deploy` runs the installed sibling programs
+   only. A program that this release changed (the `--init-legal-env` flag of
+   `gremion-render` below, the legal env staging in `gremion-deploy`'s step 2)
+   does not exist on the host until it is copied in, so copy them first, with the
+   same command as install.md step 5.
+
+```bash
+install -m 0755 -o gremion -g gremion "$REL"/infra/host/bin/* /opt/gremion/bin/
+install -m 0644 -o gremion -g gremion "$REL/infra/host/lib/common.sh" /opt/gremion/lib/common.sh
+```
+
+   Once per host, then: a `state.env` rendered before the pins layer was split per project (TASK-048b)
    still layers the app pins `docker-compose.pins.yml` onto the state project.
    `gremion-deploy` refuses it at STEP 2 (exit 2, nothing pulled). Edit only the
    `COMPOSE_FILE` line; do not re-render the env files: `gremion-init-secrets
@@ -130,6 +142,22 @@ grep -n 'state-pins' /opt/gremion/etc/env/app-blue.env /opt/gremion/etc/env/app-
 for p in state app-blue app-green; do
   gremion-validate-env --env-file "/opt/gremion/etc/env/${p}.env" --release "$REL"
 done
+```
+
+   Once per host (kernel #84): the state project's `legal` service reads
+   `legal/legal.env` from the release tree, and `gremion-deploy` now writes it
+   there from `/opt/gremion/etc/legal.env` in its step 2. A host installed
+   before this change has no such file, and the deploy stops at step 2 (exit 2,
+   nothing pulled or stopped) until it exists and holds no placeholder. Create
+   it from the release's example and fill it with the values the running
+   release's own `legal/legal.env` holds; `--init-legal-env` keeps a file that
+   is already there.
+
+```bash
+sudo -u gremion /opt/gremion/bin/gremion-render --release "$REL" --init-legal-env   # LEGAL-ENV: file=... unfilled=5
+sudo -u gremion "${EDITOR:-vi}" /opt/gremion/etc/legal.env
+grep -c '=CHANGE_ME_OPERATOR_' /opt/gremion/etc/legal.env                          # 0
+sudo -u gremion /opt/gremion/bin/gremion-render --release "$REL" --legal-env-only   # RENDER: outputs=1 ... legal-env-only=yes
 ```
 
 3. **Take the pre-migration dump (TRD-206, R18-4).** Only when `migrations` is
@@ -340,6 +368,7 @@ live, a deploy of any other tag stops at its step 5 and prints both commands.
 
 ## Changelog
 
+- 7.0.0 (2026-11-03): kernel #84, on top of 6.3.0. Step 2 creates, fills and renders `etc/legal.env` once per host, the file `gremion-deploy` now copies into every release tree as `legal/legal.env` (the state project's `legal` service reads it for every compose command); an existing host stops at that step until the file is filled, with values copied by hand from the running release. Major: an existing step changed.
 - 6.3.0 (2026-11-02): kernel #83. A precondition: the deploy user is in a group with gid 70 (PgBouncer's gid), because the deploy's render step now writes the pgbouncer userlist 0640 group 70 as the deploy user; an older host runs `bootstrap.sh user` once and restarts `gremion-hostd`. Step 7 (existing installs, once): the deploy pulls but never recreates the state project, so a running PgBouncer keeps the unreadable 0600 userlist of the release it was created from; `up -d --force-recreate --no-deps pgbouncer` from the new tree replaces it. The post-condition observes, in the container, that PgBouncer's own user reads the userlist and that a login routed through PgBouncer succeeds. Minor: a conditional step and post-condition observations added, no existing step changed.
 - 6.2.0 (2026-10-30): kernel #47 decision (a). Step 4 (and the registry-token precondition) names the optional host token file `etc/registry-token` that `gremion-deploy` reads when `GREMION_REGISTRY_TOKEN_FILE` is set, with the commands that observe it; the prompt stays the default. Minor: an alternative added to a step, no post-condition changed.
 - 6.1.0 (2026-10-29): kernel #48. Step 6 (existing installs, once per realm): a realm the provisioner service account did not create (older than the account, or made by another admin) is adopted with `tenant-create bootstrap-provisioner --adopt-realm <realm>`, which grants the account exactly the realm-creator roles on master `<realm>-realm`; reconcile names the step when it meets such a realm. Minor: a conditional step added, no post-condition changed.

@@ -14,6 +14,10 @@
 #   4. every release template ending in .tmpl       through an explicit
 #                                                   variable allow-list
 #   5. etc/edge/extra-hosts.yml                     --staging only
+#   6. <release>/legal/legal.env                    a copy of the host's
+#                                                   etc/legal.env, refused while
+#                                                   it holds a placeholder
+#                                                   (kernel #84)
 #
 # Exit codes: 0 ok · 1 post-condition failed · 2 usage/missing precondition ·
 #             3 blocked.
@@ -25,6 +29,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 RELEASE_DIR=""
 STAGING=0
+LEGAL_ONLY=0
+INIT_LEGAL=0
 OUTPUTS=0
 
 # The ONLY variables a release template may name. A template referencing
@@ -49,7 +55,7 @@ KC_ARTEFACTS=(internal-ca.crt internal-ca.pem internal-ca.key keycloak.crt keycl
 
 usage() {
     cat <<'EOF'
-usage: gremion-render [--release DIR] [--staging]
+usage: gremion-render [--release DIR] [--staging | --legal-env-only | --init-legal-env]
 
   --release DIR   release tree to render into (default: <gremion root>/current)
   --staging       additionally write etc/edge/extra-hosts.yml, the compose
@@ -57,6 +63,17 @@ usage: gremion-render [--release DIR] [--staging]
                   unit's own edge address from inside every container.
                   Requires TRAEFIK_CERT_RESOLVER to be EMPTY in state.env:
                   a staging unit never requests public certificates.
+  --legal-env-only
+                  render only <release>/legal/legal.env, the env file of the
+                  state project's legal service, from etc/legal.env. The
+                  deploy runs this before its first compose call on a new
+                  release tree.
+  --init-legal-env
+                  create etc/legal.env from the release's
+                  legal/legal.env.example, with a CHANGE_ME_OPERATOR_
+                  placeholder for each key only the operator knows, and say
+                  how many are still to fill. Keeps an existing file. Reads
+                  PLATFORM_DOMAIN from state.env, so fill that first.
 EOF
 }
 
@@ -319,6 +336,128 @@ render_staging_extra_hosts() {
     assert_rendered "$out"
 }
 
+# 6. The env file of the state project's `legal` service (kernel #84).
+#    docker-compose.yml gives it `env_file: legal/legal.env`, resolved in the
+#    release tree for EVERY compose verb, so a release tree without the file
+#    cannot be pulled, resolved or started. The values (the council's imprint
+#    and data-protection contact) belong to the host, not to a release: they
+#    live ONCE in etc/legal.env, the way the Keycloak CA lives in
+#    etc/secrets/keycloak, and every release tree is given a copy.
+#
+#    Precedent: the env files of gremion-init-secrets. The keys come from a
+#    template (here the release's own legal/legal.env.example), the keys only
+#    the operator knows carry a CHANGE_ME_OPERATOR_ sentinel, and load_env
+#    refuses a file that still holds one. A key left at the example's
+#    placeholder value is refused as well, because the example ships readable
+#    values, not sentinels (dev and k8s copy it as it is). Messages name keys,
+#    never values.
+LEGAL_PLACEHOLDER_KEYS=(ORG_NAME ORG_ADDRESS ORG_EMAIL RESPONSIBLE_PERSON RESPONSIBLE_PERSON_EMAIL DOMAIN)
+
+# legal_example_value <example> <key> -> the example's value for the key.
+legal_example_value() {
+    local line
+    line="$(tr -d '\r' < "$1" | grep -E "^${2}=" | head -n 1 || true)"
+    printf '%s' "${line#*=}"
+}
+
+# seed_legal_env <example> <host file> — write the host file from the example:
+# operator keys as sentinels, DOMAIN from the platform domain, YEAR from today,
+# everything else (retention periods, accessibility statement) as the example
+# has it. The example's leading comment block (up to its first blank line) is
+# replaced by this program's own header.
+seed_legal_env() {
+    local example="$1" host_file="$2" line key in_header=1
+    if [[ -z "${PLATFORM_DOMAIN:-}" ]]; then die "missing env key PLATFORM_DOMAIN" 2; fi
+    {
+        echo "# Gremion legal pages (imprint, privacy notice, accessibility statement)."
+        echo "# Created by gremion-render from legal/legal.env.example. Every release tree's"
+        echo "# legal/legal.env is a copy of this file. Replace each CHANGE_ME_OPERATOR_ value."
+        while IFS= read -r line || [[ -n "$line" ]]; do
+            line="${line%$'\r'}"
+            if [[ "$in_header" -eq 1 ]]; then
+                if [[ -z "$line" ]]; then in_header=0; printf '\n'; fi
+                continue
+            fi
+            case "$line" in
+                ORG_NAME=*|ORG_ADDRESS=*|ORG_EMAIL=*|RESPONSIBLE_PERSON=*|RESPONSIBLE_PERSON_EMAIL=*)
+                    key="${line%%=*}"
+                    printf '%s=CHANGE_ME_OPERATOR_%s\n' "$key" "$key" ;;
+                DOMAIN=*) printf 'DOMAIN=%s\n' "$PLATFORM_DOMAIN" ;;
+                YEAR=*)   printf 'YEAR=%s\n' "$(date -u +%Y)" ;;
+                *)        printf '%s\n' "$line" ;;
+            esac
+        done < "$example"
+    } | atomic_write "$host_file" 0600 || die "cannot write ${host_file}"
+}
+
+# check_legal_env <example> <host file> — fit to be copied into a release tree?
+check_legal_env() {
+    local example="$1" host_file="$2" k
+    for k in $(tr -d '\r' < "$example" | grep -oE '^[A-Za-z_][A-Za-z0-9_]*=' | tr -d '='); do
+        if ! grep -q "^${k}=" "$host_file"; then
+            die "legal env ${host_file} is missing key ${k} (declared by legal/legal.env.example)" 2
+        fi
+    done
+    # A subshell: load_env exports every key and exits on a refusal (duplicate,
+    # malformed line, CHANGE_ME_ sentinel); neither may reach this program.
+    (
+        load_env "$host_file"
+        local val ph
+        for k in "${LEGAL_PLACEHOLDER_KEYS[@]}"; do
+            val="${!k:-}"
+            if [[ -z "${val//[[:space:]]/}" ]]; then
+                bad "legal env ${k} is empty in ${host_file}"
+                exit "$GREMION_EXIT_USAGE"
+            fi
+            ph="$(legal_example_value "$example" "$k")"
+            if [[ "$val" == "$ph" ]]; then
+                bad "legal env ${k} still holds the placeholder of legal/legal.env.example in ${host_file} (value not shown)"
+                exit "$GREMION_EXIT_USAGE"
+            fi
+        done
+    ) || exit "$GREMION_EXIT_USAGE"
+}
+
+legal_example_path() {
+    local example="${RELEASE_DIR}/legal/legal.env.example"
+    if [[ ! -f "$example" ]]; then die "release tree has no legal/legal.env.example: $example" 2; fi
+    printf '%s\n' "$example"
+}
+
+render_legal_env() {
+    local example host_file out
+    example="$(legal_example_path)"
+    host_file="$(gremion_root)/etc/legal.env"
+    if [[ ! -f "$host_file" ]]; then
+        seed_legal_env "$example" "$host_file"
+        die "legal env file absent: created ${host_file} from legal/legal.env.example with CHANGE_ME_OPERATOR_ placeholders; fill every one (grep -n CHANGE_ME_OPERATOR_ ${host_file}) and render again" 2
+    fi
+    check_legal_env "$example" "$host_file"
+    out="${RELEASE_DIR}/legal/legal.env"
+    atomic_write "$out" 0600 < "$host_file" || die "cannot write ${out}"
+    assert_rendered "$out"
+    if ! cmp -s "$host_file" "$out"; then
+        die "legal.env is not a copy of ${host_file}: $out"
+    fi
+}
+
+# --init-legal-env: create the host file if it is absent and say how much is
+# left, like gremion-init-secrets' INIT-SECRETS line. Never an error for
+# unfilled keys: that is what the following steps are for.
+init_legal_env() {
+    local example host_file n
+    example="$(legal_example_path)"
+    host_file="$(gremion_root)/etc/legal.env"
+    if [[ -f "$host_file" ]]; then
+        info "kept the existing ${host_file}"
+    else
+        seed_legal_env "$example" "$host_file"
+        ok "created ${host_file}"
+    fi
+    n="$(grep -c '^[A-Za-z_][A-Za-z0-9_]*=CHANGE_ME_OPERATOR_' "$host_file" || true)"
+    printf 'LEGAL-ENV: file=%s unfilled=%s\n' "$host_file" "$n"
+}
+
 main() {
     while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -326,10 +465,15 @@ main() {
                 if [[ $# -lt 2 ]]; then die "--release needs a directory" 2; fi
                 RELEASE_DIR="$2"; shift 2 ;;
             --staging) STAGING=1; shift ;;
+            --legal-env-only) LEGAL_ONLY=1; shift ;;
+            --init-legal-env) INIT_LEGAL=1; shift ;;
             -h|--help) usage; exit 0 ;;
             *) usage >&2; die "unknown argument: $1" 2 ;;
         esac
     done
+    if [[ $((LEGAL_ONLY + INIT_LEGAL + STAGING)) -gt 1 ]]; then
+        die "--staging, --legal-env-only and --init-legal-env cannot be combined" 2
+    fi
 
     # A group NAME would be resolved against the host's /etc/group, not the
     # container's gids, and could quietly name the wrong group.
@@ -347,12 +491,23 @@ main() {
     env_file="$(gremion_root)/etc/env/state.env"
     if [[ ! -f "$env_file" ]]; then die "state env file not found: $env_file" 2; fi
     load_env "$env_file"
+
+    if [[ "$INIT_LEGAL" -eq 1 ]]; then
+        init_legal_env
+        exit 0
+    fi
+    if [[ "$LEGAL_ONLY" -eq 1 ]]; then
+        render_legal_env
+        printf 'RENDER: outputs=%d release=%s staging=no legal-env-only=yes\n' "$OUTPUTS" "$RELEASE_DIR"
+        exit 0
+    fi
     need_cmd openssl
 
     render_pgbouncer_userlist
     render_keycloak_certs
     ensure_ipcrypt_key
     render_release_templates
+    render_legal_env
     if [[ "$STAGING" -eq 1 ]]; then
         render_staging_extra_hosts
     fi

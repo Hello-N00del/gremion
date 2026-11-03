@@ -348,6 +348,21 @@ authenticate_release_tree() { # <dir>
     ok "tag $TAG authenticated against $signers"
 }
 
+# stage_legal_env — kernel #84. docker-compose.yml gives the state project's
+# legal service `env_file: legal/legal.env`, and compose resolves an env_file
+# for every verb: without the file in the release tree, the `config --images`
+# of verify_first_party_signatures below (and the pull of step 3) fail on
+# "env file not found" before step 4 renders anything. So this one output of
+# gremion-render is produced here, from the host's etc/legal.env, and the full
+# render of step 4 repeats it. An absent or unfinished etc/legal.env ends the
+# deploy here (exit 2, gremion-render names the keys), before the token is
+# spent on a pull and before anything is stopped.
+stage_legal_env() {
+    local prog; prog="$(bin_path gremion-render)"
+    "$prog" --release "$RELEASE_DIR" --legal-env-only
+    ok "legal/legal.env staged in $RELEASE_DIR"
+}
+
 # ── step 2 — the config tree at the tag (§F.4.2) ────────────────────────────
 # Authenticated BEFORE anything else reads the tree (H10): a fresh clone lands
 # in a staging directory and only a tree that passed authenticate_release_tree
@@ -378,6 +393,7 @@ step_2_checkout() {
     [[ -d "$RELEASE_DIR" ]] || die "release tree absent after checkout: $RELEASE_DIR" 1
     require_spec_b_contracts "$RELEASE_DIR"
     validate_release_tree "$RELEASE_DIR"
+    stage_legal_env
     verify_first_party_signatures
     ok "release tree $RELEASE_DIR"
 }
