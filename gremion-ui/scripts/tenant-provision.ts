@@ -39,7 +39,9 @@ import { handConfigToReader, handToReader, isTenantConfigPath, writeReaderConfig
 import {
   bootstrapPlatform,
   ACCESS_READER_ROLE,
+  COUNCIL_REQUESTER_ROLE,
   ensureAccessReader,
+  ensureCouncilRequester,
   ensureExecutorRole,
   ensurePanelRequester,
   EXECUTOR_ROLE,
@@ -675,6 +677,17 @@ async function cmdInit(): Promise<void> {
     } else {
       log('init: UI_OAC_DB_PASSWORD is unset: the access-record reader role is not (re)made; the council-admin view reports "nicht konfiguriert"')
     }
+    // Module self-service: the council module-switch role (EXECUTE on the three
+    // council request functions only). Optional until the deployment env carries
+    // its password (UI_MODULES_DB_PASSWORD): without it gremion-ui reports the
+    // modules section as "nicht konfiguriert".
+    const modulesPassword = process.env.UI_MODULES_DB_PASSWORD
+    if (modulesPassword) {
+      const council = await ensureCouncilRequester({ kernelAdmin, openAdminOn, password: modulesPassword })
+      log(`init: council requester ${COUNCIL_REQUESTER_ROLE} ${council.created ? 'created' : 'present'} (EXECUTE on the council module request functions only)`)
+    } else {
+      log('init: UI_MODULES_DB_PASSWORD is unset: the council requester role is not (re)made; self-service module switching is off ("nicht konfiguriert")')
+    }
     // TASK-077: the kernel API's SELECT-only role, which deploy step 7
     // (kernel-api-migrate) and the kernel-api service connect as; nothing else
     // creates it.
@@ -852,6 +865,11 @@ async function cmdOperatorAdd(): Promise<void> {
 // ── reconcile (with the TASK-043 sender and fixture checks) ─────────────────
 function tenantHostFromIssuer(issuer: string): string {
   return new URL(issuer).host
+}
+/** A council request is verified against its customer's own realm: the realm and the public host from the registry (null: no such customer). */
+async function customerRealmForSlug(slug: string): Promise<{ realm: string; host: string } | null> {
+  const tenant = await getTenantBySlug(slug)
+  return tenant ? { realm: tenant.realmName, host: tenantHostFromIssuer(tenant.issuer) } : null
 }
 function printReport(report: ReconcileReport): void {
   console.error(`\n[tenant-create] reconcile realm "${report.realm}" — ${report.ok ? 'PASS' : 'FAIL'}`)
@@ -1105,7 +1123,7 @@ async function main(): Promise<void> {
     case 'materialize-config':
       return cmdMaterializeConfig()
     case 'request-verify':
-      return requestVerb(verb, { args: process.argv.slice(3), reqEnv, directPostgresUrl, loadModules, modulesDir: MODULES_DIR, kcInternalBase, provisionerTransport: rawProvisionerTransport, usage: (m) => new UsageError(m), log })
+      return requestVerb(verb, { args: process.argv.slice(3), reqEnv, directPostgresUrl, loadModules, modulesDir: MODULES_DIR, kcInternalBase, provisionerTransport: rawProvisionerTransport, customerRealmForSlug, usage: (m) => new UsageError(m), log })
     case 'provision':
       throw new UsageError('provision is retired (TASK-043): a customer is created from the control panel ("Neuer Mandant"), which the host-side executor runs (phase-a, the host mail step, record-step, phase-b, the router; TASK-043d)')
     // TASK-044: the level-1 gate's verbs (tenant-provision-gate.ts)

@@ -198,6 +198,140 @@ COLOUR=blue
     [[ "$output" == *"TRD-440"* ]]
 }
 
+@test "enable_module forwards --actor-kind person when the verified args say so" {
+    jq -nc '{slug:"alpha-rat", module:"votes", dpia:null, actorKind:"person"}' > "${WORK}/args.json"
+    drive handle_enable_module
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    run order
+    [ "${lines[0]}" = "tc enable-module alpha-rat votes --operator ${OPERATOR} --actor-kind person" ]
+    [ "${#lines[@]}" -eq 1 ]
+}
+
+@test "enable_module keeps --actor-kind person in front of --dpia-json, and an operator request (no actorKind in the args) keeps the old argv" {
+    jq -nc '{slug:"alpha-rat", module:"votes", dpia:{requiresDpia:"no", reasonCodes:["council_decision"], documentRef:"TOM-3"}, actorKind:"person"}' > "${WORK}/args.json"
+    drive handle_enable_module
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    run order
+    [ "${lines[0]}" = "tc enable-module alpha-rat votes --operator ${OPERATOR} --actor-kind person --dpia-json /run/gremion/dpia.json" ]
+    : > "$ORDER"
+    enable_args
+    drive handle_enable_module
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    run order
+    [ "${lines[0]}" = "tc enable-module alpha-rat votes --operator ${OPERATOR} --dpia-json /run/gremion/dpia.json" ]
+    assert_absent 'actor-kind' "$ORDER" 'an operator request keeps the argv byte-identical to before'
+}
+
+@test "enable_module: an actorKind in the verified args that is neither operator nor person fails before the verb runs" {
+    jq -nc '{slug:"alpha-rat", module:"votes", dpia:null, actorKind:"system"}' > "${WORK}/args.json"
+    drive handle_enable_module
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"actor kind"* ]] || { echo "$output"; return 1; }
+    [ ! -s "$ORDER" ]
+}
+
+@test "customer_enable_module and customer_disable_module reject --actor-kind other, nothing runs" {
+    local fn
+    for fn in customer_enable_module customer_disable_module; do
+        : > "$ORDER"
+        run bash -c '
+            set -euo pipefail
+            . "$1/common.sh"; . "$1/customer-ops.sh"
+            . "$2/stubs.sh"
+            ( set -e; "$3" alpha-rat votes --operator "$4" --actor-kind other ) 2>&1
+        ' _ "$SRC" "$GREMION_ROOT" "$fn" "$OPERATOR"
+        [ "$status" -ne 0 ] || { echo "$fn: $output"; return 1; }
+        [[ "$output" == *"--actor-kind must be operator or person"* ]] || { echo "$fn: $output"; return 1; }
+        [ ! -s "$ORDER" ]
+        : > "$ORDER"
+        run bash -c '
+            set -euo pipefail
+            . "$1/common.sh"; . "$1/customer-ops.sh"
+            . "$2/stubs.sh"
+            ( set -e; "$3" alpha-rat votes --operator "$4" --actor-kind person ) 2>&1
+        ' _ "$SRC" "$GREMION_ROOT" "$fn" "$OPERATOR"
+        [ "$status" -eq 0 ] || { echo "$fn: $output"; return 1; }
+        grep -q -- '--actor-kind person' "$ORDER"
+    done
+}
+
+@test "disable_module forwards --actor-kind person; without it the argv is the old one" {
+    jq -nc '{slug:"alpha-rat", module:"votes", actorKind:"person"}' > "${WORK}/args.json"
+    drive handle_disable_module
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    run order
+    [ "${lines[0]}" = "tc disable-module alpha-rat votes --operator ${OPERATOR} --actor-kind person" ]
+    [ "${#lines[@]}" -eq 1 ]
+    : > "$ORDER"
+    jq -nc '{slug:"alpha-rat", module:"votes"}' > "${WORK}/args.json"
+    drive handle_disable_module
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    run order
+    [ "${lines[0]}" = "tc disable-module alpha-rat votes --operator ${OPERATOR}" ]
+}
+
+@test "disable_module: an actorKind in the verified args that is neither operator nor person fails before the verb runs" {
+    jq -nc '{slug:"alpha-rat", module:"votes", actorKind:"system"}' > "${WORK}/args.json"
+    drive handle_disable_module
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"actor kind"* ]] || { echo "$output"; return 1; }
+    [ ! -s "$ORDER" ]
+}
+
+@test "disable_module: verified args without a module fail before the verb runs" {
+    jq -nc '{slug:"alpha-rat"}' > "${WORK}/args.json"
+    drive handle_disable_module
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"no module"* ]] || { echo "$output"; return 1; }
+    [ ! -s "$ORDER" ]
+}
+
+@test "enable_module: verified args without a module fail before the verb runs" {
+    jq -nc '{slug:"alpha-rat", dpia:null}' > "${WORK}/args.json"
+    drive handle_enable_module
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"no module"* ]] || { echo "$output"; return 1; }
+    [ ! -s "$ORDER" ]
+}
+
+@test "record_dpia refuses --actor-kind (the dpia-record verb has no actor kind), nothing runs" {
+    run bash -c '
+        set -euo pipefail
+        . "$1/common.sh"; . "$1/customer-ops.sh"
+        . "$2/stubs.sh"
+        ( set -e; customer_record_dpia alpha-rat votes --operator "$3" --actor-kind person --requires-dpia no --reason-codes operator_decision --document-ref TOM-9 ) 2>&1
+    ' _ "$SRC" "$GREMION_ROOT" "$OPERATOR"
+    [ "$status" -ne 0 ] || { echo "$output"; return 1; }
+    [[ "$output" == *"record_dpia: unknown argument: --actor-kind"* ]] || { echo "$output"; return 1; }
+    [ ! -s "$ORDER" ]
+}
+
+@test "through the real tc() the actor kind reaches the container argv" {
+    jq -nc '{slug:"alpha-rat", module:"votes", dpia:null, actorKind:"person"}' > "${WORK}/args.json"
+    drive_real_tc handle_enable_module
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    assert_present 'tenant-create enable-module alpha-rat votes --operator '"${OPERATOR}"' --actor-kind person' "${GREMION_ROOT}/tc-argv.log"
+}
+
+@test "defence in depth: only the two module kinds have a council path; no other handler reads the actor kind" {
+    run bash -c '
+        set -euo pipefail
+        . "$1/common.sh"; . "$1/customer-ops.sh"; . "$1/executor/registry.sh"
+        for k in create suspend resume reconcile record_dpia import_members seed_vertical; do
+            h="$(handler_for "$k")" || { echo "unregistered kind: $k"; exit 1; }
+            [[ "$h" != handle_enable_module && "$h" != handle_disable_module ]] || { echo "$k -> $h"; exit 1; }
+        done
+    ' _ "$SRC"
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    local f
+    for f in "${SRC}"/executor/handlers/*.sh; do
+        case "$(basename "$f")" in enable_module.sh|disable_module.sh) continue ;; esac
+        assert_absent 'actorKind|actor-kind|ACTOR_KIND' "$f" "$(basename "$f") must not carry a council path"
+    done
+    assert_present 'actorKind' "${SRC}/executor/handlers/enable_module.sh"
+    assert_present 'actorKind' "${SRC}/executor/handlers/disable_module.sh"
+}
+
 @test "record_dpia: the decision as dpia-record flags (reuse-identical in the verb)" {
     jq -nc '{slug:"alpha-rat", module:"votes", requiresDpia:"yes", reasonCodes:["operator_decision"], documentRef:"TOM-9 / DSFA 2026-03"}' > "${WORK}/args.json"
     drive handle_record_dpia

@@ -64,7 +64,11 @@ Three separate switches exist; each module README says which of them applies.
    panel, and modules are enabled or disabled for it through the `enable_module` and
    `disable_module` requests described in
    [runbooks/tenant-lifecycle.md](./runbooks/tenant-lifecycle.md). A module that is in
-   `modules/disabled.json` cannot be enabled that way.
+   `modules/disabled.json` cannot be enabled that way. A module can also be turned **on** by
+   the council's admin in Settings > Module (`calendar`, `elections` and `votes`; fresh
+   step-up, no operator approval; see "Module self-service by the council" in the same
+   runbook). Turning a module **off** stays operator-only until the 30-day grace period of
+   phase 2 exists: a council's switch-off request is refused (`DISABLE_NOT_YET`).
 3. **Per instance setting.** `config.modules.<manifest id> = false` makes the module's routes
    answer with the module-disabled surface and hides its navigation entry; data is kept
    ([playbooks/add-a-module.md](./playbooks/add-a-module.md), section on deselection).

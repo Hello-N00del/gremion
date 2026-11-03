@@ -85,6 +85,10 @@
         "description": "Council administrator"
       },
       {
+        "name": "vorstand",
+        "description": "Vorstand"
+      },
+      {
         "name": "it-admin",
         "description": "IT administrator — full access"
       }
@@ -280,6 +284,7 @@
         "guest",
         "member",
         "council-admin",
+        "vorstand",
         "it-admin"
       ]
     }

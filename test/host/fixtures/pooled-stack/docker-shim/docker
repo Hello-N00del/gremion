@@ -41,6 +41,11 @@
 #                     reports (unset: the inspect fails)
 #   SHIM_COMPOSE_LS   fail: `docker compose ls` exits 1 (counts()' compose-ls reading)
 #   SHIM_BUILD        fail: `docker compose ... build` exits 1 (the build phase must die)
+#   SHIM_USERLIST     unreadable: the pgbouncer container cannot read its userlist
+#                     (`head -c1 /etc/pgbouncer/userlist.txt` is Permission denied, #83)
+#   SHIM_ROUTED       fail: a psql login routed through pgbouncer:6432 is refused
+#                     (password authentication failed, the #83 symptom)
+#   SHIM_PGB_UID      the uid the pgbouncer container reports for `id -u` (default 70)
 set -u
 S="${SHIM_STACK:?SHIM_STACK required}"
 D="${SHIM_DIR:?SHIM_DIR required}"
@@ -135,7 +140,11 @@ case "$1" in
         esac ;;
     exec)
         shift
-        while [[ "${1:-}" == -* ]]; do shift; done   # -i / -t
+        have_i=0
+        while [[ "${1:-}" == -* ]]; do
+            case "$1" in -i) have_i=1 ;; -e|-u|--user|-w) shift ;; esac   # -e NAME / -u USER take a value
+            shift
+        done
         cid="${1:-}"; shift
         case "$cid" in
             cid-ui|cid-public)
@@ -150,9 +159,30 @@ case "$1" in
                     shift; exec "$SELF" __wget "$@"
                 fi
                 echo "shim: unhandled app exec: $*" >&2; exit 1 ;;
+            cid-pgbouncer)
+                case "$args" in
+                    *" id -u "*) echo "${SHIM_PGB_UID:-70}" ;;
+                    *" head -c1 /etc/pgbouncer/userlist.txt "*)
+                        if [[ "${SHIM_USERLIST:-}" == unreadable ]]; then
+                            echo "head: /etc/pgbouncer/userlist.txt: Permission denied" >&2; exit 1
+                        fi
+                        printf '"' ;;
+                    *) echo "shim: unhandled pgbouncer exec: $*" >&2; exit 1 ;;
+                esac ;;
             cid-postgres)
                 state_up || { echo "shim: container cid-postgres is not running" >&2; exit 1; }
+                # the SQL a `docker exec -i ... psql` reads on stdin is kept for the tests
+                [[ "$have_i" == 1 ]] && cat >> "$D/stdin.log"
                 case "$args" in
+                    *" -p 6432 "*)
+                        # a routed login: psql -h <alias> -p 6432 -U <role> ...
+                        if [[ "${SHIM_ROUTED:-}" == fail ]]; then
+                            echo "psql: error: connection to server at \"pgbouncer\" failed: FATAL:  password authentication failed for user \"pgbouncer_auth\"" >&2
+                            exit 2
+                        fi
+                        u="$(printf '%s' "$args" | sed -n 's/.* -U \([^ ]*\) .*/\1/p')"
+                        echo "$u" ;;
+                    *" -qU postgres "*) : ;;   # the proof's own DDL on stdin (roles, schemas)
                     *"INSERT INTO tenant_domain"*)
                         h="$(printf '%s' "$args" | sed -n "s/.*SELECT '\([^']*\)', id FROM tenant.*/\1/p")"
                         if [[ "${SHIM_REGISTER:-}" != fail && -n "$h" ]]; then

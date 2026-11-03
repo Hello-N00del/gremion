@@ -9,10 +9,13 @@
 // (see ./resolve-handle).
 //
 // Friendly strings mirror the v6 design contract (`contracts.jsx §2`
-// FRIENDLY_ROLES / FRIENDLY_SCOPES), which intentionally differ from the
-// `$lib/auth/labels.ts` strings (e.g. council-admin → "Vorstand" here vs
-// "Gremienverwaltung" there). The labels.ts util stays the source of truth for
-// hidden-plumbing rules elsewhere; here we use the design's user-facing names.
+// FRIENDLY_ROLES / FRIENDLY_SCOPES), which differ from the `$lib/auth/labels.ts`
+// strings for the admin tiers (e.g. it-admin → "IT-Team" here vs
+// "IT-Administration" there). The Vorstand and council-admin chips now read the
+// labels.ts names: `vorstand` → "Vorstand", `council-admin` → "Gremienverwaltung"
+// (Karenz phase 1; council-admin used to be shown as "Vorstand"). The labels.ts
+// util stays the source of truth for hidden-plumbing rules elsewhere.
+import { roleLabel } from '$lib/auth/labels'
 import { getKeycloakAdminClientForCurrentTenant, type KcUser } from '$lib/server/keycloak-admin'
 import { getOrgUnitIdsForUser, getOrgUnit, listOrgUnitMembers } from '$lib/server/governance/org-units-db'
 import { tlog } from '$lib/server/observability/tenant-log'
@@ -97,7 +100,10 @@ export async function memberView(u: KcUser): Promise<Member> {
   const placed = memberships.length > 0
   const roles: string[] = []
   if (placed) roles.push('Mitglied')
-  if (realmRoles.includes('council-admin')) roles.push('Vorstand')
+  // Karenz phase 1: "Vorstand" is its own realm role now, not the council-admin chip. council-admin shows the
+  // $lib/auth/labels.ts name (Gremienverwaltung).
+  if (realmRoles.includes('vorstand')) roles.push(roleLabel('vorstand'))
+  if (realmRoles.includes('council-admin')) roles.push(roleLabel('council-admin'))
   if (groups.includes('admin')) roles.push('Admin')
   if (realmRoles.includes('it-admin')) roles.push('IT-Team')
   if (groups.includes('ref-finanzen')) roles.push('Finanzen')

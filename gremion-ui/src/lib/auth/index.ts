@@ -16,7 +16,12 @@ const ROLE_HIERARCHY: Record<Role, Role[]> = {
   // role's array and confers only itself + Guest: its finance see-all is read at the finance access seam
   // (read/access.ts `seesAllFinance`), not via this page-role hierarchy. There is intentionally no
   // PAGE_ACCESS entry until the governance programme introduces actual auditor accounts.
-  [Role.Auditor]: [Role.Auditor, Role.Guest]
+  [Role.Auditor]: [Role.Auditor, Role.Guest],
+  // Vorstand (Karenz phase 1) is a recipient role next to council-admin, NOT a rung of the admin ladder: it
+  // confers itself plus member-level page access and deliberately NOT council-admin (module switching and the
+  // admin pages stay with council-admin; equal-to-admin rights are an operator decision, plan Open Decision 1).
+  // Nothing implies it: a council-admin is not a Vorstand unless the realm role is assigned.
+  [Role.Vorstand]: [Role.Vorstand, Role.Member, Role.Guest]
 }
 
 /** Returns true if the user's roles include the required role (respects hierarchy). */

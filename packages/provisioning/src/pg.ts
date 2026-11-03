@@ -16,7 +16,7 @@ import {
 } from '@gremion/tenant-store/lifecycle'
 import { loadCatalogueRows, provisionalNote, type CatalogueModule, type CatalogueRowsResult } from './catalogue-rows.ts'
 import { ProvisioningError } from './errors.ts'
-import type { CustomerRef, ModulesPort } from './ports.ts'
+import type { ActorKind, CustomerRef, ModulesPort } from './ports.ts'
 
 /**
  * The modules port over @gremion/tenant-store's enableModule. `lifecycle`
@@ -44,16 +44,16 @@ export function pgModules(opts: {
       }
       return missing
     },
-    async enable(c: CustomerRef, moduleId: string, gate: EnableGate, operatorId: string) {
+    async enable(c: CustomerRef, moduleId: string, gate: EnableGate, operatorId: string, actorKind?: ActorKind) {
       const module = byId.get(moduleId)
       if (!module) throw new ProvisioningError('MODULE_UNKNOWN', `module ${moduleId} is not in the catalogue`)
-      const r = await enableModule(c.id, module, { kind: 'operator', id: operatorId }, { ...opts.lifecycle, platform: opts.platform, enableGate: gate })
+      const r = await enableModule(c.id, module, { kind: actorKind ?? 'operator', id: operatorId }, { ...opts.lifecycle, platform: opts.platform, enableGate: gate })
       return { noop: r.noop, database: r.database }
     },
-    async disable(c: CustomerRef, moduleId: string, operatorId: string) {
+    async disable(c: CustomerRef, moduleId: string, operatorId: string, actorKind?: ActorKind) {
       const module = byId.get(moduleId)
       if (!module) throw new ProvisioningError('MODULE_UNKNOWN', `module ${moduleId} is not in the catalogue`)
-      const r = await disableModule(c.id, module, { kind: 'operator', id: operatorId }, { ...opts.lifecycle, platform: opts.platform, enableGate: undefined as never })
+      const r = await disableModule(c.id, module, { kind: actorKind ?? 'operator', id: operatorId }, { ...opts.lifecycle, platform: opts.platform, enableGate: undefined as never })
       return { noop: r.noop, dropped: r.dropped, database: r.database, export: r.export }
     },
     enabled: (c: CustomerRef) => enabledModuleKeys(opts.platform, c.id),
@@ -419,6 +419,75 @@ export async function ensureAccessReader(d: AccessReaderDeps): Promise<{ created
     await assertNoOtherRelation(sql, role, 'plt', [])
     await assertLoginOnly(d.kernelAdmin, role, 'access reader role')
     if ((await memberOf(d.kernelAdmin, role)).length > 0) throw new ProvisioningError('POSTCONDITION', `access reader role ${role} is a member of a marker role`)
+    return { created: !exists }
+  } finally {
+    await sql.end({ timeout: 5 })
+  }
+}
+
+/**
+ * Module self-service (0014): the one table-less door a council's gremion-ui has
+ * into the request queue. Membership in this NOLOGIN marker makes a request
+ * origin=council (plt.submit_council_module_request checks it).
+ */
+export const COUNCIL_REQUESTER_MARKER = 'plt_council_requester'
+/** gremion-ui's own LOGIN role for it (PLATFORM_MODULES_DATABASE_URL). */
+export const COUNCIL_REQUESTER_ROLE = 'gremion_ui_modules'
+/** The three functions of migration 0014; the role may EXECUTE exactly these among plt's. */
+export const COUNCIL_EXECUTES = [
+  'plt.submit_council_module_request(text, text, jsonb, uuid, uuid, text, timestamptz, text)',
+  'plt.council_module_requests(text, integer)',
+  'plt.council_module_state(uuid)',
+] as const
+
+export interface CouncilRequesterDeps {
+  kernelAdmin: Sql
+  openAdminOn(database: string): Sql
+  /** Default gremion_ui_modules. */
+  role?: string
+  password: string
+}
+
+/**
+ * The council module-switch role (module self-service, phase 1): what gremion-ui
+ * connects with to switch a module. LOGIN NOINHERIT, CONNECT on gremion_platform,
+ * USAGE on schema plt, EXECUTE on exactly COUNCIL_EXECUTES, no table privilege
+ * anywhere, and membership (no inherit, no SET) in plt_council_requester only, so
+ * it can neither read the request queue nor claim, finish or approve a request.
+ * Idempotent; a rerun re-sets the password and re-asserts every grant.
+ */
+export async function ensureCouncilRequester(d: CouncilRequesterDeps): Promise<{ created: boolean }> {
+  const role = d.role ?? COUNCIL_REQUESTER_ROLE
+  if (!IDENT.test(role)) throw new ProvisioningError('INVALID_INPUT', `council requester role ${JSON.stringify(role)} is not a plain identifier`)
+  if (role === EXECUTOR_ROLE || role === PANEL_REQUESTER_MARKER || role === EXECUTOR_MARKER || role === COUNCIL_REQUESTER_MARKER) {
+    throw new ProvisioningError('INVALID_INPUT', `the council requester role may not be named ${role}`)
+  }
+  if (d.password.length < 16) throw new ProvisioningError('INVALID_INPUT', 'the council requester password is shorter than 16 characters')
+  const sql = d.openAdminOn('gremion_platform')
+  try {
+    // Every function must exist BEFORE anything is created, so an unmigrated stack
+    // says so instead of leaving a role without grants.
+    for (const f of COUNCIL_EXECUTES) {
+      const [r] = await sql<{ present: boolean }[]>`SELECT to_regprocedure(${f}) IS NOT NULL AS present`
+      if (!r?.present) throw new ProvisioningError('PRECONDITION', `council requester role: function ${f} is absent in gremion_platform; run migratePlatform (bootstrapPlatform, migration 0014) before it`)
+    }
+    const exists = (await d.kernelAdmin`SELECT 1 FROM pg_roles WHERE rolname = ${role}`).length > 0
+    const attrs = 'LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS PASSWORD %L'
+    await execFmt(d.kernelAdmin, `${exists ? 'ALTER' : 'CREATE'} ROLE %I ${attrs}`, [role, d.password])
+    await ensureMarker(d.kernelAdmin, COUNCIL_REQUESTER_MARKER, role)
+    await execFmt(d.kernelAdmin, 'GRANT CONNECT ON DATABASE %I TO %I', ['gremion_platform', role])
+    await execFmt(sql, 'GRANT USAGE ON SCHEMA %I TO %I', ['plt', role])
+    const q = await quoteIdent(sql, role)
+    for (const f of COUNCIL_EXECUTES) await sql.unsafe(`GRANT EXECUTE ON FUNCTION ${f} TO ${q}`)
+    await assertNoOtherRelation(sql, role, 'plt', [])
+    await assertNoOtherRelation(sql, role, 'oac', [])
+    await assertNoOtherRelation(sql, role, 'ops', [])
+    await assertExecutesExactly(sql, role, COUNCIL_EXECUTES)
+    await assertLoginOnly(d.kernelAdmin, role, 'council requester role')
+    const markers = await memberOf(d.kernelAdmin, role)
+    if (markers.length !== 1 || markers[0] !== COUNCIL_REQUESTER_MARKER) {
+      throw new ProvisioningError('POSTCONDITION', `council requester role ${role} memberships [${markers.join(', ')}], want ${COUNCIL_REQUESTER_MARKER} only`)
+    }
     return { created: !exists }
   } finally {
     await sql.end({ timeout: 5 })

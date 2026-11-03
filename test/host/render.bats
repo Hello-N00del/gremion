@@ -46,8 +46,24 @@ EOF
 
 make_release_tree() {
     local root="$1"
-    mkdir -p "$root/docker/pgbouncer"
+    mkdir -p "$root/docker/pgbouncer" "$root/legal"
     make_ca_generator "$root" ok
+    # The release tree's own example, read from this checkout so a key added to
+    # it is judged here too. CR-stripped: a Windows checkout may carry CRLF.
+    tr -d '\r' < "${PROJECT_ROOT}/legal/legal.env.example" > "$root/legal/legal.env.example"
+}
+
+# The host-owned legal env file, filled the way an operator fills it. Every
+# value is fictional and none equals the example's placeholder.
+write_legal_env() {
+    tr -d '\r' < "${PROJECT_ROOT}/legal/legal.env.example" | sed \
+        -e 's|^ORG_NAME=.*|ORG_NAME=Beispielgremium|' \
+        -e 's|^ORG_ADDRESS=.*|ORG_ADDRESS=Beispielweg 2, 54321 Beispielstadt|' \
+        -e 's|^ORG_EMAIL=.*|ORG_EMAIL=kontakt@beispiel.example|' \
+        -e 's|^RESPONSIBLE_PERSON=.*|RESPONSIBLE_PERSON=Erika Beispiel|' \
+        -e 's|^RESPONSIBLE_PERSON_EMAIL=.*|RESPONSIBLE_PERSON_EMAIL=datenschutz@beispiel.example|' \
+        -e 's|^DOMAIN=.*|DOMAIN=example.org|' \
+        > "${GREMION_ROOT}/etc/legal.env"
 }
 
 # A STAGING state.env: TRAEFIK_CERT_RESOLVER is deliberately BLANK. The
@@ -85,6 +101,7 @@ setup() {
     RELEASE="${GREMION_ROOT}/releases/dist-v1.0.0"
     make_release_tree "$RELEASE"
     write_state_env
+    write_legal_env
     GEN_CA_CALLS="${GREMION_ROOT}/gen-ca-calls.log"
     export GEN_CA_CALLS
 }
@@ -172,6 +189,151 @@ teardown() {
     # assertion would pass vacuously against a render that wrote nothing.
     [ -f "${RELEASE}/docker/pgbouncer/userlist.txt" ]
     ! grep -q 'CHANGE_ME_' "${RELEASE}/docker/pgbouncer/userlist.txt"
+}
+
+# Issue #83. PgBouncer runs as uid/gid 70 in its container and bind-mounts the
+# userlist read-only; a 0600 file owned by the deploy user is unreadable to it
+# on a Linux host (Docker Desktop ignores bind-mount modes, so nothing else
+# saw it). The render must leave the file group-readable by gid 70 and closed
+# to every other user. These run on a real Linux filesystem (the bats runner
+# image, as root; CI as its own user with passwordless sudo). On NTFS the mode
+# and group assertions are SKIPPED, visibly, by bats' own skip.
+userlist_needs_posix_modes() {
+    fs_carries_modes "${RELEASE}/docker/pgbouncer" \
+        || skip "this filesystem cannot hold POSIX modes (NTFS); proven on Linux"
+}
+
+userlist_stat() { stat -c '%g %a' "${RELEASE}/docker/pgbouncer/userlist.txt"; }
+
+@test "the rendered userlist is mode 0640 with group 70 and nothing for other users" {
+    userlist_needs_posix_modes
+    run "$RENDER" --release "$RELEASE"
+    [ "$status" -eq 0 ]
+    [ -f "${RELEASE}/docker/pgbouncer/userlist.txt" ]
+    [ "$(userlist_stat)" = "70 640" ]
+}
+
+@test "a re-render over an existing 0600 userlist still ends 0640 with group 70" {
+    userlist_needs_posix_modes
+    printf 'stale\n' > "${RELEASE}/docker/pgbouncer/userlist.txt"
+    chmod 0600 "${RELEASE}/docker/pgbouncer/userlist.txt"
+    run "$RENDER" --release "$RELEASE"
+    [ "$status" -eq 0 ]
+    grep -q '^"pgbouncer_auth" "test-secret-pgbouncer"$' "${RELEASE}/docker/pgbouncer/userlist.txt"
+    [ "$(userlist_stat)" = "70 640" ]
+}
+
+@test "GREMION_PGBOUNCER_GID overrides the group the userlist is handed to" {
+    userlist_needs_posix_modes
+    GREMION_PGBOUNCER_GID=4242 run "$RENDER" --release "$RELEASE"
+    [ "$status" -eq 0 ]
+    [ "$(userlist_stat)" = "4242 640" ]
+}
+
+@test "a GREMION_PGBOUNCER_GID that is not a numeric gid is refused before anything is written" {
+    GREMION_PGBOUNCER_GID=postgres run "$RENDER" --release "$RELEASE"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"GREMION_PGBOUNCER_GID must be a numeric gid"* ]]
+    [ ! -e "${RELEASE}/docker/pgbouncer/userlist.txt" ]
+    GREMION_PGBOUNCER_GID=-1 run "$RENDER" --release "$RELEASE"
+    [ "$status" -eq 2 ]
+}
+
+@test "when the deploy user cannot chgrp itself, the group is set through sudo -n, on the temp file" {
+    userlist_needs_posix_modes
+    if [ "$(id -u)" -ne 0 ] && ! command -v sudo >/dev/null 2>&1; then
+        skip "needs root, or a real passwordless sudo, to hand a file to gid 70"
+    fi
+    if [ "$(id -u)" -ne 0 ] && ! sudo -n true 2>/dev/null; then
+        skip "needs root, or a real passwordless sudo, to hand a file to gid 70"
+    fi
+    shim chgrp 'exit 1'
+    # Runs the REAL chgrp WITH the privilege sudo would give it: the shim
+    # directory is dropped from PATH first, and a non-root runner (CI) goes
+    # through the real sudo -n, since an unprivileged chgrp to gid 70 fails.
+    shim sudo '[ "$1" = "-n" ] && shift; PATH="${PATH#"${SHIM_DIR}":}"; if [ "$(id -u)" -eq 0 ]; then exec "$@"; fi; exec sudo -n "$@"'
+    run "$RENDER" --release "$RELEASE"
+    [ "$status" -eq 0 ]
+    assert_recorded sudo "-n chgrp -- 70 ${RELEASE}/docker/pgbouncer/userlist.txt.tmp"
+    [ "$(userlist_stat)" = "70 640" ]
+}
+
+@test "a userlist whose group cannot be set fails the render and names both reasons" {
+    userlist_needs_posix_modes
+    shim chgrp 'echo "chgrp: changing group: Operation not permitted" >&2; exit 1'
+    shim sudo 'echo "sudo: a password is required" >&2; exit 1'
+    run "$RENDER" --release "$RELEASE"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"cannot hand"*"userlist.txt"*"group 70"* ]]
+    [[ "$output" == *"Operation not permitted"* ]]
+    [[ "$output" == *"a password is required"* ]]
+    [ ! -e "${RELEASE}/docker/pgbouncer/userlist.txt" ]
+    [ ! -e "${RELEASE}/docker/pgbouncer/userlist.txt.tmp" ]
+}
+
+@test "a group that cannot be set leaves the previous good userlist untouched" {
+    userlist_needs_posix_modes
+    printf '"pgbouncer_auth" "earlier-good"\n' > "${RELEASE}/docker/pgbouncer/userlist.txt"
+    chmod 0640 "${RELEASE}/docker/pgbouncer/userlist.txt"
+    shim chgrp 'exit 1'
+    shim sudo 'exit 1'
+    run "$RENDER" --release "$RELEASE"
+    [ "$status" -eq 1 ]
+    [ "$(cat "${RELEASE}/docker/pgbouncer/userlist.txt")" = '"pgbouncer_auth" "earlier-good"' ]
+    [ ! -e "${RELEASE}/docker/pgbouncer/userlist.txt.tmp" ]
+}
+
+# The deploy that gremion-hostd drives runs gremion-render as the deploy user
+# under NoNewPrivileges (the unit sets it), where sudo is refused and a plain
+# chgrp works only for a group the user already belongs to. Root cannot show
+# that, so these run the render as a real unprivileged uid under no_new_privs
+# (setpriv, util-linux). The deploy user's membership of gid 70 is what
+# bootstrap's `user` stage provides; the second test is the failure that
+# membership prevents.
+nnp_prereqs() {
+    [[ "$(uname -s)" == Linux ]] || skip "no_new_privs is a Linux kernel feature"
+    userlist_needs_posix_modes
+    command -v setpriv >/dev/null 2>&1 || { echo "setpriv (util-linux) is required for this guard" >&2; return 1; }
+    if [ "$(id -u)" -ne 0 ]; then
+        sudo -n true 2>/dev/null || { echo "this guard needs root or passwordless sudo" >&2; return 1; }
+    fi
+}
+
+as_root() { if [ "$(id -u)" -eq 0 ]; then "$@"; else sudo -n "$@"; fi; }
+
+# nnp_render <supplementary gids, comma separated>
+nnp_render() {
+    local groups="$1" rc=0
+    mkdir -p "${GREMION_ROOT}/hostsrc/bin" "${GREMION_ROOT}/hostsrc/lib"
+    cp "$RENDER" "${GREMION_ROOT}/hostsrc/bin/gremion-render"
+    cp "$(dirname "$RENDER")/../lib/common.sh" "${GREMION_ROOT}/hostsrc/lib/common.sh"
+    as_root chown -R 65534:65534 "$GREMION_ROOT"
+    as_root setpriv --reuid=65534 --regid=65534 --groups="$groups" --no-new-privs \
+        env PATH="$PATH" GREMION_ROOT="$GREMION_ROOT" GEN_CA_CALLS="$GEN_CA_CALLS" \
+        "${GREMION_ROOT}/hostsrc/bin/gremion-render" --release "$RELEASE" || rc=$?
+    # Owner only, so the group the render set (the thing under test) survives.
+    as_root chown -R "$(id -u)" "$GREMION_ROOT"
+    return "$rc"
+}
+
+@test "as a non-root deploy user under no_new_privs, a member of group 70 renders the userlist 0640 group 70" {
+    nnp_prereqs
+    run nnp_render 65534,70
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    [ "$(userlist_stat)" = "70 640" ]
+    grep -q '^"pgbouncer_auth" "test-secret-pgbouncer"$' "${RELEASE}/docker/pgbouncer/userlist.txt"
+}
+
+@test "as a non-root deploy user under no_new_privs, a user outside group 70 fails loudly and keeps the old userlist" {
+    nnp_prereqs
+    printf '"pgbouncer_auth" "earlier-good"\n' > "${RELEASE}/docker/pgbouncer/userlist.txt"
+    chmod 0640 "${RELEASE}/docker/pgbouncer/userlist.txt"
+    run nnp_render 65534
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"cannot hand"*"group 70"* ]]
+    [[ "$output" == *"bootstrap"* ]]
+    [ "$(cat "${RELEASE}/docker/pgbouncer/userlist.txt")" = '"pgbouncer_auth" "earlier-good"' ]
+    [ ! -e "${RELEASE}/docker/pgbouncer/userlist.txt.tmp" ]
 }
 
 @test "a state.env still carrying a CHANGE_ME_ sentinel is refused" {
@@ -459,5 +621,202 @@ esac
     stub_compose_services
     run "$RENDER" --release "$RELEASE" --staging
     [ "$status" -eq 0 ]
-    [[ "$output" =~ RENDER:\ outputs=9\ release=${RELEASE}\ staging=yes ]]
+    [[ "$output" =~ RENDER:\ outputs=10\ release=${RELEASE}\ staging=yes ]]
+}
+
+# ---------------------------------------------------------------------------
+# 6. legal/legal.env (kernel #84)
+#
+# docker-compose.yml gives the state project's `legal` service
+# `env_file: legal/legal.env`, resolved in the release tree for EVERY compose
+# verb. Nothing used to create it, so the state project could not start on a
+# fresh release tree. The operator's values live once on the host in
+# etc/legal.env (the way the Keycloak CA lives in etc/secrets/keycloak) and
+# every release tree is given a copy.
+# ---------------------------------------------------------------------------
+
+# legal_example_keys — every key legal/legal.env.example declares.
+legal_example_keys() {
+    grep -oE '^[A-Za-z_][A-Za-z0-9_]*=' "${RELEASE}/legal/legal.env.example" | tr -d '='
+}
+
+@test "legal: a filled etc/legal.env is copied into the release tree as legal/legal.env" {
+    run "$RENDER" --release "$RELEASE"
+    [ "$status" -eq 0 ]
+    [ -s "${RELEASE}/legal/legal.env" ]
+    local k
+    for k in $(legal_example_keys); do
+        grep -q "^${k}=" "${RELEASE}/legal/legal.env" || { echo "legal/legal.env lacks ${k}"; false; }
+    done
+    grep -qx 'ORG_NAME=Beispielgremium' "${RELEASE}/legal/legal.env"
+    cmp "${GREMION_ROOT}/etc/legal.env" "${RELEASE}/legal/legal.env"
+}
+
+@test "legal: every later release tree is given its own copy" {
+    run "$RENDER" --release "$RELEASE"
+    [ "$status" -eq 0 ]
+    local next="${GREMION_ROOT}/releases/dist-v1.0.1"
+    make_release_tree "$next"
+    [ ! -e "${next}/legal/legal.env" ]
+    run "$RENDER" --release "$next"
+    [ "$status" -eq 0 ]
+    cmp "${GREMION_ROOT}/etc/legal.env" "${next}/legal/legal.env"
+}
+
+@test "legal: a render never rewrites an operator-edited etc/legal.env" {
+    printf '# edited by the operator\nORG_NAME_NOTE=kept\n' >> "${GREMION_ROOT}/etc/legal.env"
+    local before
+    before="$(cat "${GREMION_ROOT}/etc/legal.env")"
+    run "$RENDER" --release "$RELEASE"
+    [ "$status" -eq 0 ]
+    [ "$(cat "${GREMION_ROOT}/etc/legal.env")" = "$before" ]
+    run "$RENDER" --release "$RELEASE" --legal-env-only
+    [ "$status" -eq 0 ]
+    run "$RENDER" --release "$RELEASE" --init-legal-env
+    [ "$status" -eq 0 ]
+    [ "$(cat "${GREMION_ROOT}/etc/legal.env")" = "$before" ]
+}
+
+@test "legal: a refused render leaves a legal/legal.env already in the release tree as it was" {
+    printf 'ORG_NAME=Hand placed\n' > "${RELEASE}/legal/legal.env"
+    sed -i 's|^ORG_NAME=.*|ORG_NAME=CHANGE_ME_OPERATOR_ORG_NAME|' "${GREMION_ROOT}/etc/legal.env"
+    run "$RENDER" --release "$RELEASE"
+    [ "$status" -eq 2 ]
+    [ "$(cat "${RELEASE}/legal/legal.env")" = "ORG_NAME=Hand placed" ]
+}
+
+@test "legal: the rendered file and its host source are mode 0600 (Linux only)" {
+    [[ "$(uname -s)" == Linux ]] || skip "file modes are not meaningful on Windows"
+    rm -f "${GREMION_ROOT}/etc/legal.env"
+    run "$RENDER" --release "$RELEASE" --init-legal-env
+    [ "$status" -eq 0 ]
+    [ "$(stat -c '%a' "${GREMION_ROOT}/etc/legal.env")" = "600" ]
+    write_legal_env
+    run "$RENDER" --release "$RELEASE"
+    [ "$status" -eq 0 ]
+    [ "$(stat -c '%a' "${RELEASE}/legal/legal.env")" = "600" ]
+}
+
+@test "legal: an absent etc/legal.env is created with operator placeholders and the render stops (exit 2)" {
+    rm -f "${GREMION_ROOT}/etc/legal.env"
+    run "$RENDER" --release "$RELEASE"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"legal env file absent"* ]]
+    [[ "$output" == *"${GREMION_ROOT}/etc/legal.env"* ]]
+    [ -s "${GREMION_ROOT}/etc/legal.env" ]
+    [ ! -e "${RELEASE}/legal/legal.env" ]
+    local k
+    for k in ORG_NAME ORG_ADDRESS ORG_EMAIL RESPONSIBLE_PERSON RESPONSIBLE_PERSON_EMAIL; do
+        grep -qx "${k}=CHANGE_ME_OPERATOR_${k}" "${GREMION_ROOT}/etc/legal.env" \
+            || { echo "${k} is not an operator placeholder in the created file"; false; }
+    done
+    # the domain is the platform domain, not something to fill in
+    grep -qx 'DOMAIN=example.org' "${GREMION_ROOT}/etc/legal.env"
+    # every key of the example is declared
+    for k in $(legal_example_keys); do
+        grep -q "^${k}=" "${GREMION_ROOT}/etc/legal.env" || { echo "created file lacks ${k}"; false; }
+    done
+}
+
+@test "legal: the created placeholders are refused on the next render and the file is not rewritten" {
+    rm -f "${GREMION_ROOT}/etc/legal.env"
+    run "$RENDER" --release "$RELEASE"
+    [ "$status" -eq 2 ]
+    local first
+    first="$(cat "${GREMION_ROOT}/etc/legal.env")"
+    run "$RENDER" --release "$RELEASE"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"CHANGE_ME_OPERATOR_"* ]]
+    [ ! -e "${RELEASE}/legal/legal.env" ]
+    [ "$(cat "${GREMION_ROOT}/etc/legal.env")" = "$first" ]
+}
+
+@test "legal: a key still holding the example's placeholder is refused, by key name, without its value" {
+    local k ph
+    for k in ORG_NAME ORG_ADDRESS ORG_EMAIL RESPONSIBLE_PERSON RESPONSIBLE_PERSON_EMAIL DOMAIN; do
+        write_legal_env
+        ph="$(grep -E "^${k}=" "${RELEASE}/legal/legal.env.example" | head -n 1)"
+        sed -i "s|^${k}=.*|${ph}|" "${GREMION_ROOT}/etc/legal.env"
+        run "$RENDER" --release "$RELEASE"
+        [ "$status" -eq 2 ] || { echo "${k}: status ${status}"; false; }
+        [[ "$output" == *"${k}"* ]] || { echo "${k}: not named: ${output}"; false; }
+        [[ "$output" != *"${ph#*=}"* ]] || { echo "${k}: the placeholder value was printed"; false; }
+        [ ! -e "${RELEASE}/legal/legal.env" ] || { echo "${k}: a legal.env was rendered"; false; }
+    done
+}
+
+@test "legal: an empty operator key is refused" {
+    sed -i 's|^ORG_ADDRESS=.*|ORG_ADDRESS=|' "${GREMION_ROOT}/etc/legal.env"
+    run "$RENDER" --release "$RELEASE"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"ORG_ADDRESS"* ]]
+    [ ! -e "${RELEASE}/legal/legal.env" ]
+}
+
+@test "legal: a key the example declares but etc/legal.env lacks is refused by name" {
+    sed -i '/^ACCESSIBILITY_DATE=/d' "${GREMION_ROOT}/etc/legal.env"
+    run "$RENDER" --release "$RELEASE"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"missing key ACCESSIBILITY_DATE"* ]]
+    [ ! -e "${RELEASE}/legal/legal.env" ]
+}
+
+@test "legal: a duplicate key in etc/legal.env is refused" {
+    printf 'ORG_NAME=Zweites Gremium\n' >> "${GREMION_ROOT}/etc/legal.env"
+    run "$RENDER" --release "$RELEASE"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"duplicate"* ]]
+    [ ! -e "${RELEASE}/legal/legal.env" ]
+}
+
+@test "legal: a release tree without legal/legal.env.example exits 2" {
+    rm -f "${RELEASE}/legal/legal.env.example"
+    run "$RENDER" --release "$RELEASE"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"no legal/legal.env.example"* ]]
+}
+
+@test "legal: --legal-env-only renders the legal file and nothing else" {
+    run "$RENDER" --release "$RELEASE" --legal-env-only
+    [ "$status" -eq 0 ]
+    cmp "${GREMION_ROOT}/etc/legal.env" "${RELEASE}/legal/legal.env"
+    [ ! -e "${RELEASE}/docker/pgbouncer/userlist.txt" ]
+    [ ! -e "$GEN_CA_CALLS" ]
+    [ ! -e "${GREMION_ROOT}/etc/secrets/ipcrypt_key.txt" ]
+    [[ "$output" =~ RENDER:\ outputs=1\ release=${RELEASE} ]]
+}
+
+@test "legal: --legal-env-only refuses what the full render refuses" {
+    sed -i 's|^ORG_NAME=.*|ORG_NAME=CHANGE_ME_OPERATOR_ORG_NAME|' "${GREMION_ROOT}/etc/legal.env"
+    run "$RENDER" --release "$RELEASE" --legal-env-only
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"ORG_NAME"* ]]
+    [ ! -e "${RELEASE}/legal/legal.env" ]
+}
+
+@test "legal: --init-legal-env creates etc/legal.env, reports what is left, and touches no release file" {
+    rm -f "${GREMION_ROOT}/etc/legal.env"
+    run "$RENDER" --release "$RELEASE" --init-legal-env
+    [ "$status" -eq 0 ]
+    [ -s "${GREMION_ROOT}/etc/legal.env" ]
+    [[ "$output" == *"LEGAL-ENV:"* ]]
+    [[ "$output" == *"unfilled=5"* ]]
+    [ ! -e "${RELEASE}/legal/legal.env" ]
+    [ ! -e "${RELEASE}/docker/pgbouncer/userlist.txt" ]
+}
+
+@test "legal: --init-legal-env keeps an existing etc/legal.env as it is" {
+    printf '# kept\n' >> "${GREMION_ROOT}/etc/legal.env"
+    local first
+    first="$(cat "${GREMION_ROOT}/etc/legal.env")"
+    run "$RENDER" --release "$RELEASE" --init-legal-env
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"unfilled=0"* ]]
+    [ "$(cat "${GREMION_ROOT}/etc/legal.env")" = "$first" ]
+}
+
+@test "legal: --init-legal-env and --legal-env-only cannot be combined" {
+    run "$RENDER" --release "$RELEASE" --init-legal-env --legal-env-only
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"cannot be combined"* ]]
 }

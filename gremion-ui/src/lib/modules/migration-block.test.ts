@@ -36,6 +36,10 @@ export const KERNEL_BLOCK_BASENAMES = [
   '0060_erasure_report.sql',
   // TASK-033-a: the audit actor uuid CHECK (claimed through register.mjs).
   '0061_audit_log_actor_uuid_check.sql',
+  // Karenz phase 1: the queue that applies the standard vorstand realm role (claimed through register.mjs).
+  '0062_vorstand_role_backfill.sql',
+  // Karenz phase 1: the tenant-side record of a council module switch (claimed through register.mjs).
+  '0063_module_switch_request.sql',
 ]
 
 /** Module-owned or unshipped numbers that must never appear in the kernel block. */
@@ -46,13 +50,13 @@ const FOREIGN_BASENAMES = [
 ]
 
 describe('kernel data-plane migration block', () => {
-  it('holds exactly the 34 kernel-block basenames', () => {
+  it('holds exactly the 36 kernel-block basenames', () => {
     const onDisk = readdirSync(MIGRATIONS_DIR).filter((f) => f.endsWith('.sql')).sort()
     expect(onDisk).toEqual([...KERNEL_BLOCK_BASENAMES].sort())
   })
 
-  it('is 34 files', () => {
-    expect(KERNEL_BLOCK_BASENAMES.length).toBe(34)
+  it('is 36 files', () => {
+    expect(KERNEL_BLOCK_BASENAMES.length).toBe(36)
   })
 
   it('carries no module-owned or unshipped file', () => {
@@ -90,7 +94,7 @@ export const PORTED_BASENAMES = [
  * through the TASK-029 register. They are neither pre-port-back nor ported, so
  * they must not move the pre-port-back high-water mark.
  */
-export const POST_PORT_BACK_BASENAMES = ['0059_audit_log_chain_anchor.sql', '0060_erasure_report.sql', '0061_audit_log_actor_uuid_check.sql']
+export const POST_PORT_BACK_BASENAMES = ['0059_audit_log_chain_anchor.sql', '0060_erasure_report.sql', '0061_audit_log_actor_uuid_check.sql', '0062_vorstand_role_backfill.sql', '0063_module_switch_request.sql']
 const PRE_PORT_BACK_BASENAMES = KERNEL_BLOCK_BASENAMES.filter(
   (f) => !PORTED_BASENAMES.includes(f) && !POST_PORT_BACK_BASENAMES.includes(f),
 )

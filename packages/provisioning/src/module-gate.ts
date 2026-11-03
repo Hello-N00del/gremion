@@ -27,11 +27,11 @@ import {
 } from '@gremion/tenant-store/lifecycle'
 import { assertUuid, ProvisioningError } from './errors.ts'
 import { assertEnableList } from './operator-gate.ts'
-import type { ControlRow, CustomerRef, DpiaSpec, GatePort, ProvisioningDeps } from './ports.ts'
+import type { ActorKind, ControlRow, CustomerRef, DpiaSpec, GatePort, ProvisioningDeps } from './ports.ts'
 import { assertCustomerSlug, tokenFor } from './slug.ts'
 
 /** Validates one module's DPIA decision as the create request carries it (lane note D2). */
-export function assertDpiaSpec(moduleKey: string, spec: DpiaSpec, operatorId: string): DpiaDecisionInput {
+export function assertDpiaSpec(moduleKey: string, spec: DpiaSpec, operatorId: string, actorKind?: ActorKind): DpiaDecisionInput {
   const input: DpiaDecisionInput = {
     // the customer id is not known before phase A: a placeholder v7 for the shape check only
     customerId: '00000000-0000-7000-8000-000000000000',
@@ -39,7 +39,7 @@ export function assertDpiaSpec(moduleKey: string, spec: DpiaSpec, operatorId: st
     requiresDpia: spec?.requiresDpia,
     reasonCodes: spec?.reasonCodes,
     documentRef: spec?.documentRef,
-    decidedBy: { kind: 'operator', id: operatorId },
+    decidedBy: { kind: actorKind ?? 'operator', id: operatorId },
   }
   try {
     assertDpiaDecisionInput(input)
@@ -63,6 +63,7 @@ export async function preflightGate(
   customerId: string | null,
   operatorId: string,
   gate: GatePort,
+  actorKind?: ActorKind,
 ): Promise<void> {
   for (const key of Object.keys(dpia ?? {})) {
     if (!enable.includes(key)) throw new ProvisioningError('INVALID_INPUT', `a DPIA decision is given for ${key}, which is not in the enable list (${enable.join(', ') || 'none'})`)
@@ -72,7 +73,7 @@ export async function preflightGate(
   for (const m of enable) {
     const given = dpia?.[m]
     if (given) {
-      assertDpiaSpec(m, given, operatorId)
+      assertDpiaSpec(m, given, operatorId, actorKind)
       continue
     }
     if (customerId !== null && (await gate.hasDpiaDecision(customerId, m))) continue
@@ -92,9 +93,14 @@ export async function preflightGate(
  * resume does not mint another), then enableModule. Callers have run the
  * deny list, the loaded-version check and the pre-flight.
  */
-export async function enableOne(c: CustomerRef, moduleId: string, opts: { operatorId: string; dpia?: DpiaSpec | undefined }, deps: Pick<ProvisioningDeps, 'gate' | 'modules'>): Promise<{ noop: boolean; database: string | null }> {
-  if (opts.dpia) await deps.gate.recordDpia(c.id, moduleId, opts.dpia, opts.operatorId)
-  return deps.modules.enable(c, moduleId, deps.gate.enableGate, opts.operatorId)
+export async function enableOne(
+  c: CustomerRef,
+  moduleId: string,
+  opts: { operatorId: string; actorKind?: ActorKind | undefined; dpia?: DpiaSpec | undefined },
+  deps: Pick<ProvisioningDeps, 'gate' | 'modules'>,
+): Promise<{ noop: boolean; database: string | null }> {
+  if (opts.dpia) await deps.gate.recordDpia(c.id, moduleId, opts.dpia, opts.operatorId, opts.actorKind)
+  return deps.modules.enable(c, moduleId, deps.gate.enableGate, opts.operatorId, opts.actorKind)
 }
 
 export interface EnableCustomerModuleResult {
@@ -114,7 +120,12 @@ export interface EnableCustomerModuleResult {
  * pre-flight, the DPIA decision recorded, enableModule through the gate, then
  * the customer's broker users for the enabled set.
  */
-export async function enableCustomerModule(slug: string, moduleId: string, opts: { operatorId: string; dpia?: DpiaSpec }, deps: ProvisioningDeps): Promise<EnableCustomerModuleResult> {
+export async function enableCustomerModule(
+  slug: string,
+  moduleId: string,
+  opts: { operatorId: string; actorKind?: ActorKind; dpia?: DpiaSpec },
+  deps: ProvisioningDeps,
+): Promise<EnableCustomerModuleResult> {
   const s = assertCustomerSlug(slug)
   assertUuid(opts.operatorId, 'operator id')
   const [m] = assertEnableList([moduleId], deps.modules.catalogueIds())
@@ -126,7 +137,7 @@ export async function enableCustomerModule(slug: string, moduleId: string, opts:
   if (row.status !== 'active' && row.status !== 'provisioning') throw new ProvisioningError('CUSTOMER_STATE', `customer ${s} is ${row.status}; a module is enabled only for an active (or provisioning) customer`)
   if (!row.host) throw new ProvisioningError('CUSTOMER_STATE', `customer ${s} has no primary host bound`)
   const c = refOf(row, row.host)
-  await preflightGate([m], opts.dpia ? { [m]: opts.dpia } : undefined, c.id, opts.operatorId, deps.gate)
+  await preflightGate([m], opts.dpia ? { [m]: opts.dpia } : undefined, c.id, opts.operatorId, deps.gate, opts.actorKind)
   const r = await enableOne(c, m, opts, deps)
   const enabled = (await deps.modules.enabled(c)).sort()
   const broker = await deps.broker.ensure(c, enabled)
@@ -152,7 +163,7 @@ export interface DisableCustomerModuleResult {
  * step is repeatable: a module already disabled is a no-op that still converges
  * the broker.
  */
-export async function disableCustomerModule(slug: string, moduleId: string, opts: { operatorId: string }, deps: ProvisioningDeps): Promise<DisableCustomerModuleResult> {
+export async function disableCustomerModule(slug: string, moduleId: string, opts: { operatorId: string; actorKind?: ActorKind }, deps: ProvisioningDeps): Promise<DisableCustomerModuleResult> {
   const s = assertCustomerSlug(slug)
   assertUuid(opts.operatorId, 'operator id')
   if (!deps.modules.catalogueIds().includes(moduleId)) throw new ProvisioningError('MODULE_UNKNOWN', `module ${moduleId} is not in the catalogue`)
@@ -161,7 +172,7 @@ export async function disableCustomerModule(slug: string, moduleId: string, opts
   if (row.status !== 'active' && row.status !== 'provisioning') throw new ProvisioningError('CUSTOMER_STATE', `customer ${s} is ${row.status}; a module is disabled only for an active (or provisioning) customer`)
   if (!row.host) throw new ProvisioningError('CUSTOMER_STATE', `customer ${s} has no primary host bound`)
   const c = refOf(row, row.host)
-  const r = await deps.modules.disable(c, moduleId, opts.operatorId)
+  const r = await deps.modules.disable(c, moduleId, opts.operatorId, opts.actorKind)
   const enabled = (await deps.modules.enabled(c)).sort()
   const broker = await deps.broker.ensure(c, enabled)
   return { customer: c, moduleKey: moduleId, noop: r.noop, dropped: r.dropped, database: r.database, export: r.export, enabled, reloaded: broker.reloaded }
@@ -187,8 +198,8 @@ export function pgGate(platform: Sql, opts: { releaseTipSha: string | null; allo
       const d = await latestDpiaDecision(platform, customerId, moduleKey)
       return d !== null && d.documentRef !== null
     },
-    async recordDpia(customerId, moduleKey, decision, operatorId) {
-      const input = { ...assertDpiaSpec(moduleKey, decision, operatorId), customerId }
+    async recordDpia(customerId, moduleKey, decision, operatorId, actorKind) {
+      const input = { ...assertDpiaSpec(moduleKey, decision, operatorId, actorKind), customerId }
       return recordDpiaDecision(platform, input, { reuseIdentical: true })
     },
     unproven: (customerId) => unprovenEnablements({ ...gateOpts, ...(customerId !== undefined ? { customerId } : {}) }),

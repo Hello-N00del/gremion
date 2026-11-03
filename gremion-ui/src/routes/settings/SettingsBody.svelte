@@ -7,6 +7,9 @@
   import { untrack } from 'svelte'
 
   // Tab bodies lifted in as section panels (logic unchanged):
+  // Keep TabModules first: imported after the other tabs, the vitest SSR render of this file loses its
+  // virtual style module (CssSyntaxError on the script text) on this toolchain.
+  import TabModules from './tabs/TabModules.svelte'
   import TabGeneral from './tabs/TabGeneral.svelte'
   import TabServices from './tabs/TabServices.svelte'
   import TabEmail from './tabs/TabEmail.svelte'
@@ -29,6 +32,7 @@
     | 'profil'
     | 'darstellung'
     | 'organisation'
+    | 'module'
     | 'dienste'
     | 'email'
     | 'rechtliches'
@@ -50,6 +54,8 @@
     { key: 'profil', label: 'Profil', icon: 'badge', group: 'Konto', show: true },
     { key: 'darstellung', label: 'Darstellung & Barrierefreiheit', icon: 'eye', group: 'Konto', show: true },
     { key: 'organisation', label: 'Organisation', icon: 'settings', group: 'Verwaltung', show: data.isITAdmin },
+    // Karenz phase 1: council-admin (isAdmin; an it-admin is one too) switches feature modules on.
+    { key: 'module', label: 'Module', icon: 'settings', group: 'Verwaltung', show: data.isAdmin },
     { key: 'dienste', label: 'Dienste & Portal', icon: 'settings', group: 'Verwaltung', show: data.isITAdmin },
     { key: 'email', label: 'E-Mail', icon: 'send', group: 'Verwaltung', show: data.isITAdmin },
     { key: 'rechtliches', label: 'Rechtliches', icon: 'file', group: 'Verwaltung', show: data.isITAdmin },
@@ -92,6 +98,7 @@
     profil: 'Ihr Konto, Anmeldung über Keycloak (SSO).',
     darstellung: 'Sprache, Schriftgröße, Farbsehen und Bewegung.',
     organisation: 'Name und Logo der Studierendenschaft.',
+    module: 'Funktionsmodule für Ihr Gremium einschalten.',
     dienste: 'Öffentliches Portal.',
     email: 'Postausgang für Benachrichtigungen.',
     rechtliches: 'Pflichttexte des öffentlichen Portals.',
@@ -274,6 +281,8 @@
         <TabAccessibility />
       {:else if activeKey === 'organisation' && data.config}
         <TabGeneral org={data.config.org} />
+      {:else if activeKey === 'module' && data.isAdmin}
+        <TabModules />
       {:else if activeKey === 'dienste' && data.config}
         <TabServices org={data.config.org} />
       {:else if activeKey === 'email' && data.config}

@@ -35,7 +35,7 @@ same request into the same queue, flagged `origin=host`.
 
 One host verb stays a supported operator step: `gremion-tenant reconcile <slug>
 [--apply --reason <text>]`. It is audited, a plain run only reports drift, and it is
-what an upgrade runs for every customer (`docs/ops/runbook/upgrade.md`, step 7), because
+what an upgrade runs for every customer (`docs/ops/runbook/upgrade.md`, step 8), because
 that step needs the report on stdout, which a queued request does not give. The A7 docs
 guard (`test/host/executor.bats`) therefore exempts `reconcile` and nothing else.
 <!-- /gremion-tenant decommission note -->
@@ -385,6 +385,89 @@ These leave no copy encrypted under the shredded key, so they are a separate
 data-erasure-completion step the crypto-shred does not cover. Track them off the
 failed ledger rows until done.
 
+## Module self-service by the council
+
+A council admin switches a feature module **on** from Settings > Module. The switch is a
+provisioning request of a third origin, `council` (next to `panel` and `host`), that goes
+through the same queue and the same host executor as every other request, without operator
+approval and with the actor recorded as a person (`actor_kind = person`), not as an
+operator. It writes no `oac.access_record`: that record is vendor and operator access.
+
+**Scope in phase 1: enable only.** The database accepts `enable_module` and `disable_module`
+for the council origin, but the application refuses a council `disable_module` with
+`DISABLE_NOT_YET` (HTTP 422 from `POST /api/settings/modules`, nothing queued; the executor
+refuses the same request if one ever reaches it). One constant, `COUNCIL_DISABLE_ALLOWED`
+in `@gremion/provisioning`, carries this. Today's `disableModule` exports and then drops the
+module database at once; a council must not reach that before the 30-day grace period of
+phase 2 exists. Switching a module off stays an operator action in the control panel.
+
+**Switchable set.** Catalogue ids that own a toggleable manifest and are not denied:
+`calendar`, `elections`, `votes`. Every other id is refused with `MODULE_NOT_SWITCHABLE`
+(`files`, `messaging`, `publishing` and `handover` are held back; `board` and `vault` are
+`MODULE_DENIED` by name; a module in `modules/disabled.json` is `MODULE_NOT_SHIPPED`). The
+refusal comes before anything is queued and again from the executor's `request-verify`.
+
+**Who may switch.** The realm role `council-admin` (`it-admin` includes it through the role
+hierarchy). The `vorstand` role does not confer this right.
+
+**Step-up.** Every switch needs a fresh LoA 2 sign-in (`STEPUP_FRESHNESS_SECONDS`, default
+300 s). A stale session gets `401 STEP_UP_REQUIRED` and the settings page runs the step-up
+flow. The sign-in time recorded with the request is the ID token's own `auth_time` (its `iat`
+when the realm emits none), the value the executor compares it with, not the gremion-ui
+server's clock; an ID token without either, or older than the 3600 s evidence window, also
+gets `401 STEP_UP_REQUIRED`.
+
+**How the request is submitted.** gremion-ui connects to `gremion_platform` as the
+least-privilege role `gremion_ui_modules` (LOGIN, member of `plt_council_requester`, EXECUTE
+on the three council request functions, no table privilege) through
+`PLATFORM_MODULES_DATABASE_URL`, and calls `plt.submit_council_module_request`. The request
+carries the admin's signed id and access token. One request per customer slug runs at a
+time: a second submit while one is queued or running gets `409 IN_FLIGHT`.
+
+**`UI_MODULES_DB_PASSWORD` is the optional off switch.** When it is unset or empty, `init`
+does not create the role, compose renders an empty `PLATFORM_MODULES_DATABASE_URL`, and the
+settings section answers "nicht konfiguriert" (HTTP 503 `NOT_CONFIGURED`). Do not turn this
+variable into a required one. To switch the feature on, set it, run `init` and recreate the
+app containers.
+
+**What the executor verifies** (`request-verify`, fail closed, in this order): the kind and
+args (only `enable_module` in phase 1; no token is read for a refused kind); the module is
+council-switchable; the customer exists in the registry; the signed token pair against that
+customer's own Keycloak realm only (issuer and keys of that realm, client `gremion-ui`,
+role `council-admin` or `it-admin`, `acr` `loa2`, sign-in within the 3600 s evidence
+window; the admin is bound through the access token's `sub`, the real user id, because the
+gremion-ui ID token's `sub` is pairwise or absent), so a pair signed by council A can never carry a request for the customer of
+council B; and finally the admin read back from the realm now (exists, enabled, still
+holds the role). Then the unchanged `enable_module` handler runs with `--actor-kind person`.
+Every existing enable gate still applies: deny list by name, `modules/disabled.json`, a
+loaded `plt.module_version`, the isolation pass and a written DPIA decision with a document
+reference. The admin may carry the DPIA decision with the request (reason code
+`council_decision`, `decided_by_kind = person`); without one, the recorded decision is used;
+with neither, the enable is refused (`DPIA_REQUIRED` in the settings page,
+`NO_DPIA_DECISION` from the gate).
+
+**What changes in the customer.** The request finishing is not the end: a reconciler in
+gremion-ui reads the finished request and writes `config.modules`. Where a platform
+enablement row exists, it is the source of truth for "is a module on". A module without a
+row (every module of a customer that predates the switch) is *unmanaged* and keeps following
+`config.modules`, which defaults every toggleable module to on.
+
+**Reading a failed switch.** The settings section shows the failure text of the newest
+switch of each module. The states of the tenant-side record are `queued`, `succeeded`,
+`applying`, `applied` and the failures `failed`, `refused`, `expired` and `dead`. The
+control panel's request list for the customer shows the origin as "Gremium".
+
+| Symptom | Reading |
+|---|---|
+| `refused`, reason starting `evidence:` | The token pair did not verify against the customer's realm (wrong realm, wrong client, no `loa2`, sign-in too old). The executor log has `request-verify <id>: refused: <reason>`. |
+| `refused`, `council admin ... no longer holds council-admin` or `is disabled` | The admin lost the role or the account between submit and claim. |
+| `refused`, `MODULE_NOT_SWITCHABLE` or a gate code | The module is outside the set or a gate said no; the text carries the code. |
+| `expired` | No executor claimed the request within 30 minutes. Check that the host executor is running, then submit again. |
+| `failed` or `dead` | The `enable_module` handler failed; read the request's events in the control panel. |
+| stays `applying`, with an error text | The platform enablement succeeded but `config.json` could not be written (a customer created before the `TENANT_SECRETS_UID` fix has it `root:root 0640`). Run `materialize-config <slug>` as described below; the reconciler retries on its own and nothing reads as switched until the write works. |
+
+A failed or refused switch never changes `config.modules`.
+
 ## Reconcile (drift guard)
 
 ```bash
@@ -409,8 +492,9 @@ REVOKE after the kernel chain (the migrate step fails when `audit_log` is missin
 privilege is still held). A customer provisioned before this check shows it RED until
 one `reconcile <slug>` (apply) has run.
 
-Two more checks re-apply provisioning that a later release added and that customers
-created earlier never received (kernel issues #88 and #89; the root cause is the same:
+Three more checks re-apply provisioning that a later release added and that customers
+created earlier never received (`purger-connect` and `kernel-api-nats-seed` are kernel
+issues #88 and #89; `vorstand-role` is Karenz phase 1; the root cause is the same:
 create-time provisioning is not re-run on an upgrade). Each is read by a plain
 reconcile (`gremion-tenant reconcile <slug>` without `--apply`, or the library verb with
 `--verify-only`), which **only reports drift and changes nothing** (RED when the customer is
@@ -421,6 +505,7 @@ without `--verify-only`) repairs, idempotently; a second apply changes nothing:
 |---|---|---|
 | `purger-connect` | the customer's `k_<hex>_purger` role holds `CONNECT` on its kernel database, `USAGE` on schema `public` and `SELECT`, `DELETE` on every kernel purge table that exists (the scheduled purge logs in as it; without `CONNECT` the purge fails with `permission denied for database`, with `CONNECT` alone every table is refused) | `GRANT CONNECT` (exactly `CONNECT`), then the same schema and table grants customer creation gives, then reads all of it back. It never creates a role: a customer without one has no kernel database provisioned |
 | `kernel-api-nats-seed` | the NATS seed `kernel-api/tenant_<slug>.nk` exists and the broker serves the customer's account (the kernel API event relay publishes as that identity) | the same `nats-auth` ensure the lifecycle verbs use, over the customer's **current** module set read from the registry (`plt.module_enablement`) plus the `kernel-api` identity, then the account reload; a hand-written module list is never needed |
+| `vorstand-role` | the standard realm role `vorstand` exists AND is listed in the `gremion-ui` client's realm-role scope mappings (`fullScopeAllowed` is false, so a role missing there never reaches a token); a realm created before the role was added to the realm template shows it RED | creates the role and the scope mapping; both steps are idempotent |
 
 A suspended customer is ensured with the empty module set (suspension evicts the
 modules; reconcile does not restore them) and keeps the `kernel-api` identity like the
