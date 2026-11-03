@@ -174,6 +174,151 @@ teardown() {
     ! grep -q 'CHANGE_ME_' "${RELEASE}/docker/pgbouncer/userlist.txt"
 }
 
+# Issue #83. PgBouncer runs as uid/gid 70 in its container and bind-mounts the
+# userlist read-only; a 0600 file owned by the deploy user is unreadable to it
+# on a Linux host (Docker Desktop ignores bind-mount modes, so nothing else
+# saw it). The render must leave the file group-readable by gid 70 and closed
+# to every other user. These run on a real Linux filesystem (the bats runner
+# image, as root; CI as its own user with passwordless sudo). On NTFS the mode
+# and group assertions are SKIPPED, visibly, by bats' own skip.
+userlist_needs_posix_modes() {
+    fs_carries_modes "${RELEASE}/docker/pgbouncer" \
+        || skip "this filesystem cannot hold POSIX modes (NTFS); proven on Linux"
+}
+
+userlist_stat() { stat -c '%g %a' "${RELEASE}/docker/pgbouncer/userlist.txt"; }
+
+@test "the rendered userlist is mode 0640 with group 70 and nothing for other users" {
+    userlist_needs_posix_modes
+    run "$RENDER" --release "$RELEASE"
+    [ "$status" -eq 0 ]
+    [ -f "${RELEASE}/docker/pgbouncer/userlist.txt" ]
+    [ "$(userlist_stat)" = "70 640" ]
+}
+
+@test "a re-render over an existing 0600 userlist still ends 0640 with group 70" {
+    userlist_needs_posix_modes
+    printf 'stale\n' > "${RELEASE}/docker/pgbouncer/userlist.txt"
+    chmod 0600 "${RELEASE}/docker/pgbouncer/userlist.txt"
+    run "$RENDER" --release "$RELEASE"
+    [ "$status" -eq 0 ]
+    grep -q '^"pgbouncer_auth" "test-secret-pgbouncer"$' "${RELEASE}/docker/pgbouncer/userlist.txt"
+    [ "$(userlist_stat)" = "70 640" ]
+}
+
+@test "GREMION_PGBOUNCER_GID overrides the group the userlist is handed to" {
+    userlist_needs_posix_modes
+    GREMION_PGBOUNCER_GID=4242 run "$RENDER" --release "$RELEASE"
+    [ "$status" -eq 0 ]
+    [ "$(userlist_stat)" = "4242 640" ]
+}
+
+@test "a GREMION_PGBOUNCER_GID that is not a numeric gid is refused before anything is written" {
+    GREMION_PGBOUNCER_GID=postgres run "$RENDER" --release "$RELEASE"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"GREMION_PGBOUNCER_GID must be a numeric gid"* ]]
+    [ ! -e "${RELEASE}/docker/pgbouncer/userlist.txt" ]
+    GREMION_PGBOUNCER_GID=-1 run "$RENDER" --release "$RELEASE"
+    [ "$status" -eq 2 ]
+}
+
+@test "when the deploy user cannot chgrp itself, the group is set through sudo -n, on the temp file" {
+    userlist_needs_posix_modes
+    if [ "$(id -u)" -ne 0 ] && ! command -v sudo >/dev/null 2>&1; then
+        skip "needs root, or a real passwordless sudo, to hand a file to gid 70"
+    fi
+    if [ "$(id -u)" -ne 0 ] && ! sudo -n true 2>/dev/null; then
+        skip "needs root, or a real passwordless sudo, to hand a file to gid 70"
+    fi
+    shim chgrp 'exit 1'
+    # Runs the REAL chgrp WITH the privilege sudo would give it: the shim
+    # directory is dropped from PATH first, and a non-root runner (CI) goes
+    # through the real sudo -n, since an unprivileged chgrp to gid 70 fails.
+    shim sudo '[ "$1" = "-n" ] && shift; PATH="${PATH#"${SHIM_DIR}":}"; if [ "$(id -u)" -eq 0 ]; then exec "$@"; fi; exec sudo -n "$@"'
+    run "$RENDER" --release "$RELEASE"
+    [ "$status" -eq 0 ]
+    assert_recorded sudo "-n chgrp -- 70 ${RELEASE}/docker/pgbouncer/userlist.txt.tmp"
+    [ "$(userlist_stat)" = "70 640" ]
+}
+
+@test "a userlist whose group cannot be set fails the render and names both reasons" {
+    userlist_needs_posix_modes
+    shim chgrp 'echo "chgrp: changing group: Operation not permitted" >&2; exit 1'
+    shim sudo 'echo "sudo: a password is required" >&2; exit 1'
+    run "$RENDER" --release "$RELEASE"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"cannot hand"*"userlist.txt"*"group 70"* ]]
+    [[ "$output" == *"Operation not permitted"* ]]
+    [[ "$output" == *"a password is required"* ]]
+    [ ! -e "${RELEASE}/docker/pgbouncer/userlist.txt" ]
+    [ ! -e "${RELEASE}/docker/pgbouncer/userlist.txt.tmp" ]
+}
+
+@test "a group that cannot be set leaves the previous good userlist untouched" {
+    userlist_needs_posix_modes
+    printf '"pgbouncer_auth" "earlier-good"\n' > "${RELEASE}/docker/pgbouncer/userlist.txt"
+    chmod 0640 "${RELEASE}/docker/pgbouncer/userlist.txt"
+    shim chgrp 'exit 1'
+    shim sudo 'exit 1'
+    run "$RENDER" --release "$RELEASE"
+    [ "$status" -eq 1 ]
+    [ "$(cat "${RELEASE}/docker/pgbouncer/userlist.txt")" = '"pgbouncer_auth" "earlier-good"' ]
+    [ ! -e "${RELEASE}/docker/pgbouncer/userlist.txt.tmp" ]
+}
+
+# The deploy that gremion-hostd drives runs gremion-render as the deploy user
+# under NoNewPrivileges (the unit sets it), where sudo is refused and a plain
+# chgrp works only for a group the user already belongs to. Root cannot show
+# that, so these run the render as a real unprivileged uid under no_new_privs
+# (setpriv, util-linux). The deploy user's membership of gid 70 is what
+# bootstrap's `user` stage provides; the second test is the failure that
+# membership prevents.
+nnp_prereqs() {
+    [[ "$(uname -s)" == Linux ]] || skip "no_new_privs is a Linux kernel feature"
+    userlist_needs_posix_modes
+    command -v setpriv >/dev/null 2>&1 || { echo "setpriv (util-linux) is required for this guard" >&2; return 1; }
+    if [ "$(id -u)" -ne 0 ]; then
+        sudo -n true 2>/dev/null || { echo "this guard needs root or passwordless sudo" >&2; return 1; }
+    fi
+}
+
+as_root() { if [ "$(id -u)" -eq 0 ]; then "$@"; else sudo -n "$@"; fi; }
+
+# nnp_render <supplementary gids, comma separated>
+nnp_render() {
+    local groups="$1" rc=0
+    mkdir -p "${GREMION_ROOT}/hostsrc/bin" "${GREMION_ROOT}/hostsrc/lib"
+    cp "$RENDER" "${GREMION_ROOT}/hostsrc/bin/gremion-render"
+    cp "$(dirname "$RENDER")/../lib/common.sh" "${GREMION_ROOT}/hostsrc/lib/common.sh"
+    as_root chown -R 65534:65534 "$GREMION_ROOT"
+    as_root setpriv --reuid=65534 --regid=65534 --groups="$groups" --no-new-privs \
+        env PATH="$PATH" GREMION_ROOT="$GREMION_ROOT" GEN_CA_CALLS="$GEN_CA_CALLS" \
+        "${GREMION_ROOT}/hostsrc/bin/gremion-render" --release "$RELEASE" || rc=$?
+    # Owner only, so the group the render set (the thing under test) survives.
+    as_root chown -R "$(id -u)" "$GREMION_ROOT"
+    return "$rc"
+}
+
+@test "as a non-root deploy user under no_new_privs, a member of group 70 renders the userlist 0640 group 70" {
+    nnp_prereqs
+    run nnp_render 65534,70
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    [ "$(userlist_stat)" = "70 640" ]
+    grep -q '^"pgbouncer_auth" "test-secret-pgbouncer"$' "${RELEASE}/docker/pgbouncer/userlist.txt"
+}
+
+@test "as a non-root deploy user under no_new_privs, a user outside group 70 fails loudly and keeps the old userlist" {
+    nnp_prereqs
+    printf '"pgbouncer_auth" "earlier-good"\n' > "${RELEASE}/docker/pgbouncer/userlist.txt"
+    chmod 0640 "${RELEASE}/docker/pgbouncer/userlist.txt"
+    run nnp_render 65534
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"cannot hand"*"group 70"* ]]
+    [[ "$output" == *"bootstrap"* ]]
+    [ "$(cat "${RELEASE}/docker/pgbouncer/userlist.txt")" = '"pgbouncer_auth" "earlier-good"' ]
+    [ ! -e "${RELEASE}/docker/pgbouncer/userlist.txt.tmp" ]
+}
+
 @test "a state.env still carrying a CHANGE_ME_ sentinel is refused" {
     sed -i 's/^PGBOUNCER_AUTH_PASSWORD=.*/PGBOUNCER_AUTH_PASSWORD=CHANGE_ME_GEN_password_pgbouncer/' \
         "${GREMION_ROOT}/etc/env/state.env"

@@ -50,7 +50,7 @@ cp .env.example .env
 2. Creates `.env` from `.env.example` (mode `600`) and replaces every `CHANGE_ME_` placeholder with a freshly generated secret.
 3. Makes the helper scripts executable.
 4. Mints the internal TLS CA + Keycloak server cert (`docker/keycloak/certs/gen-internal-ca.sh`). `internal-ca.pem` is a bind-mount source of the app tier, so it is needed in dev too.
-   Renders `docker/pgbouncer/userlist.txt` (`scripts/render-pgbouncer-userlist.sh`: mode `600`, from `PGBOUNCER_AUTH_PASSWORD`; only the prod overlay mounts it).
+   Renders `docker/pgbouncer/userlist.txt` (`scripts/render-pgbouncer-userlist.sh`: mode `600`, from `PGBOUNCER_AUTH_PASSWORD`; only the prod overlay mounts it). A Linux host that runs the prod overlay passes `--container-group` (mode `640`, group `70`, the gid PgBouncer reads it as; see `docs/runbooks/pgbouncer.md`).
    Runs `scripts/check-bind-sources.sh --all`, the bind-mount preflight (below).
 5. Regenerates `docker/keycloak/realm-export.json` **only if** a vertical `config.json` is supplied (`CONFIG_PATH=…` or `config/config.json`). With neither present it keeps the committed **governance-only** realm (the `gremion-ui` + `gremion-admin` clients only — no feature-module groups/roles).
 6. Builds the images and starts the core services (`postgres`, `keycloak`, `gremion-ui`).

@@ -551,6 +551,31 @@ ensure_layout() {
     ok "host layout under ${root} (etc is ${DEPLOY_USER} 0700)"
 }
 
+# ensure_pgbouncer_group — put the deploy user in the group whose gid the
+# PgBouncer container reads its bind-mounted userlist as (70, or
+# GREMION_PGBOUNCER_GID). gremion-render hands the userlist to that gid; a
+# deploy driven through gremion-hostd runs it as the deploy user under
+# NoNewPrivileges, where `sudo` is refused and `chgrp` succeeds only for a
+# group the user already belongs to (issue #83). Idempotent: an existing group
+# that already holds the gid is reused, whatever it is called.
+ensure_pgbouncer_group() {
+    local gid="${GREMION_PGBOUNCER_GID:-70}" grp
+    if [[ ! "$gid" =~ ^[0-9]+$ ]]; then
+        die "GREMION_PGBOUNCER_GID must be a numeric gid, got: ${gid}" 2
+    fi
+    grp="$(getent group "$gid" | cut -d: -f1 || true)"
+    if [[ -z "$grp" ]]; then
+        grp=pgbouncer-gid
+        groupadd --gid "$gid" "$grp"
+    fi
+    usermod -aG "$grp" "${DEPLOY_USER}"
+    # Observe the group database, not the exit codes. A shell that is already
+    # open (and gremion-hostd, until it restarts) keeps the groups it started with.
+    id -G "${DEPLOY_USER}" | tr ' ' '\n' | grep -qx "$gid" \
+        && ok "${DEPLOY_USER} is in group ${gid} (${grp}), the gid PgBouncer reads the userlist as" \
+        || die "${DEPLOY_USER} is not in a group with gid ${gid} after usermod -aG ${grp}"
+}
+
 stage_user() {
     require_root
 
@@ -588,6 +613,7 @@ stage_user() {
     chmod 440 "/etc/sudoers.d/90-${DEPLOY_USER}"
     assert "sudoers file is valid" visudo -cf "/etc/sudoers.d/90-${DEPLOY_USER}"
 
+    ensure_pgbouncer_group
     ensure_layout
 }
 

@@ -63,6 +63,72 @@ setup() {
     grep -q 'phases \[app-wait blue\] RED=0' "${POOLED_OUT}/ledger/run.log"
 }
 
+# ── pgbouncer-routed: the Linux guard of issue #83 ───────────────────────────
+# A userlist the PgBouncer container (uid 70) cannot read, or a login routed
+# through PgBouncer that fails, must turn the proof RED. The shim answers the
+# container's own `id -u`, `head -c1 /etc/pgbouncer/userlist.txt` and the
+# routed psql login (the shim never reaches a real engine).
+
+@test "pgbouncer-routed: a readable userlist and a routed login are GREEN (positive control for the shim)" {
+    run bash "$PROOF" pgbouncer-routed
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"ok   pgbouncer: runs as uid 70 and reads /etc/pgbouncer/userlist.txt"* ]]
+    [[ "$output" == *"ok   pgbouncer: a login routed through pgbouncer-t040-shim:6432"* ]]
+    [[ "$output" == *"[pooled-proof] GREEN"* ]]
+    [[ "$output" != *"FAIL"* ]]
+}
+
+@test "pgbouncer-routed: a userlist the container user cannot read is RED (#83)" {
+    export SHIM_USERLIST=unreadable
+    run bash "$PROOF" pgbouncer-routed
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"FAIL pgbouncer: /etc/pgbouncer/userlist.txt is not readable by the container user"* ]]
+    [[ "$output" == *"[pooled-proof] RED"* ]]
+    [[ "$output" != *"ok   pgbouncer: runs as uid 70"* ]]
+}
+
+@test "pgbouncer-routed: a routed login that PgBouncer refuses is RED (#83: password authentication failed for pgbouncer_auth)" {
+    export SHIM_ROUTED=fail
+    run bash "$PROOF" pgbouncer-routed
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"FAIL pgbouncer: a login routed through pgbouncer-t040-shim:6432 failed"* ]]
+    [[ "$output" == *"[pooled-proof] RED"* ]]
+    [[ "$output" != *"ok   pgbouncer: a login routed"* ]]
+}
+
+@test "pgbouncer-routed: a container that does not run as uid 70 is RED, not a vacuous pass (the guard would read the file as the wrong user)" {
+    export SHIM_PGB_UID=0
+    run bash "$PROOF" pgbouncer-routed
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"FAIL pgbouncer: the container runs as uid 0, not 70"* ]]
+    [[ "$output" == *"[pooled-proof] RED"* ]]
+}
+
+@test "pgbouncer-routed: the scratch login role is dropped again, also when the login fails" {
+    export SHIM_ROUTED=fail
+    run bash "$PROOF" pgbouncer-routed
+    [ "$status" -eq 1 ]
+    grep -q 'DROP ROLE IF EXISTS' "${SHIM_DIR}/stdin.log"
+    [ "$(grep -c 'DROP ROLE IF EXISTS' "${SHIM_DIR}/stdin.log")" -ge 2 ]
+}
+
+@test "all: pgbouncer-routed runs right after state-wait, before any app colour comes up" {
+    run bash -c 'set -euo pipefail; . "$1"; printf "%s\n" "${ALL_PHASES[@]}"' _ "$PROOF"
+    [ "$status" -eq 0 ]
+    local sw rt
+    sw="$(grep -nx 'state-wait' <<< "$output" | head -n1 | cut -d: -f1)"
+    rt="$(grep -nx 'pgbouncer-routed' <<< "$output" | head -n1 | cut -d: -f1)"
+    [ -n "$rt" ]
+    [ "$rt" -eq $(( sw + 1 )) ]
+}
+
+@test "prepare writes the pgbouncer userlist with gremion-render, not a bare printf with the default umask (#83)" {
+    # the only running-stack proof must exercise the production writer: a plain
+    # printf into docker/pgbouncer/userlist.txt is what hid the defect
+    grep -qE 'infra/host/bin/gremion-render"? --release' "$PROOF"
+    ! grep -nE "printf .*pgbouncer_auth.*> *\"?\\\$ROOT/docker/pgbouncer/userlist\\.txt" "$PROOF"
+}
+
 # ── the shim's resolver model (what the real gremion-ui answers) ─────────────
 
 @test "shim: /api/health is not resolve-exempt -- bare 403, untrusted 403, no/forged/unregistered host 404" {
