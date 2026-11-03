@@ -57,7 +57,7 @@ set containing `required`. So `ITAdmin` passes every page check; `Member` passes
 **The `vorstand` realm role.** It is a Keycloak realm role like `council-admin`. It is in
 the realm template (`docker/keycloak/realm-export.base.json`) and in the `gremion-ui`
 client's realm-role scope mappings; a realm created before the role existed gets both from
-the reconcile check `vorstand-role` (`gremion-tenant reconcile <slug>`, see
+the reconcile check `vorstand-role` (the host reconcile verb for the customer, see
 [runbooks/tenant-lifecycle.md](./runbooks/tenant-lifecycle.md)). Existing councils get the
 role assigned to the members of their former "Vorstand" committee by a migration-queued
 backfill (`role_backfill`, applied by the boot worker; a deleted, disabled or mail-less user
