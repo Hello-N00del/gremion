@@ -224,9 +224,17 @@ userlist_stat() { stat -c '%g %a' "${RELEASE}/docker/pgbouncer/userlist.txt"; }
 
 @test "when the deploy user cannot chgrp itself, the group is set through sudo -n, on the temp file" {
     userlist_needs_posix_modes
+    if [ "$(id -u)" -ne 0 ] && ! command -v sudo >/dev/null 2>&1; then
+        skip "needs root, or a real passwordless sudo, to hand a file to gid 70"
+    fi
+    if [ "$(id -u)" -ne 0 ] && ! sudo -n true 2>/dev/null; then
+        skip "needs root, or a real passwordless sudo, to hand a file to gid 70"
+    fi
     shim chgrp 'exit 1'
-    # Runs the REAL chgrp: the shim directory is dropped from PATH first.
-    shim sudo '[ "$1" = "-n" ] && shift; PATH="${PATH#"${SHIM_DIR}":}"; exec "$@"'
+    # Runs the REAL chgrp WITH the privilege sudo would give it: the shim
+    # directory is dropped from PATH first, and a non-root runner (CI) goes
+    # through the real sudo -n, since an unprivileged chgrp to gid 70 fails.
+    shim sudo '[ "$1" = "-n" ] && shift; PATH="${PATH#"${SHIM_DIR}":}"; if [ "$(id -u)" -eq 0 ]; then exec "$@"; fi; exec sudo -n "$@"'
     run "$RENDER" --release "$RELEASE"
     [ "$status" -eq 0 ]
     assert_recorded sudo "-n chgrp -- 70 ${RELEASE}/docker/pgbouncer/userlist.txt.tmp"

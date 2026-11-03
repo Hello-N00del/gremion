@@ -125,8 +125,8 @@ setup() {
 @test "prepare writes the pgbouncer userlist with gremion-render, not a bare printf with the default umask (#83)" {
     # the only running-stack proof must exercise the production writer: a plain
     # printf into docker/pgbouncer/userlist.txt is what hid the defect
-    ! grep -nE "printf .*pgbouncer_auth.*> *\"?\\\$ROOT/docker/pgbouncer/userlist\\.txt" "$PROOF"
     grep -qE 'infra/host/bin/gremion-render"? --release' "$PROOF"
+    ! grep -nE "printf .*pgbouncer_auth.*> *\"?\\\$ROOT/docker/pgbouncer/userlist\\.txt" "$PROOF"
 }
 
 # ── the shim's resolver model (what the real gremion-ui answers) ─────────────
