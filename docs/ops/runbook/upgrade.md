@@ -239,9 +239,11 @@ KEYCLOAK_ADMIN="$KEYCLOAK_ADMIN" KEYCLOAK_ADMIN_PASSWORD="$KEYCLOAK_ADMIN_PASSWO
    extend what creating a customer provisions, and the deploy migrates databases
    but does not re-run customer creation, so a customer created by an earlier
    release lacks the extension until reconcile re-applies it. Two such pieces
-   exist today: the purger role's `CONNECT` on the customer's kernel database
-   (without it the scheduled purge fails for that customer with `permission
-   denied for database`) and the customer's NATS seed for the kernel API
+   exist today: the purger role's access to the customer's kernel database
+   (`CONNECT`, `USAGE` on schema `public`, `SELECT` and `DELETE` on the purge
+   tables; without `CONNECT` the scheduled purge fails for that customer with
+   `permission denied for database`, and with `CONNECT` alone it is refused on
+   every table) and the customer's NATS seed for the kernel API
    (`kernel-api/tenant_<slug>.nk`; without it the kernel API's event relay fails
    every pass for that customer, forever, while its health check stays green).
    `reconcile --apply` re-ensures both, idempotently, from the registry's current

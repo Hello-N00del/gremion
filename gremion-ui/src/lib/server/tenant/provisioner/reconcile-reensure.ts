@@ -3,8 +3,10 @@
 // re-applied to customers created earlier. `reconcile` is the verb that re-applies it. Two checks are appended to
 // a report (reconcile.ts REENSURE_CHECK_NAMES), each a read of the post-condition plus an idempotent repair:
 //
-//   purger-connect         the customer's purger role holds CONNECT on its kernel database (the scheduled purge
-//                          logs in as it; ensureKernelDatabase grants it at create time, an older release did not)
+//   purger-connect         the customer's purger role can do what the scheduled purge needs on its kernel database:
+//                          CONNECT, USAGE on schema public, SELECT + DELETE on the purge tables (the purge logs in as
+//                          it; create time grants all three, an older release none -- CONNECT alone only moves the
+//                          failure from "permission denied for database" to "refused: the purger lacks SELECT, DELETE")
 //   kernel-api-nats-seed   kernel-api/tenant_<slug>.nk exists and the broker serves the account (the kernel API
 //                          relay publishes as that identity; the release that added the relay never backfilled it)
 //
@@ -18,7 +20,7 @@
 import { enabledModuleKeys } from '@gremion/provisioning'
 import { ensureTenantAccount, tenantAccountProblems, withPlatformIdentities } from '@gremion/nats-auth'
 import type postgres from 'postgres'
-import { ensureKernelPurgerConnect, kernelPurgerConnectProblems, type ModuleServer } from '@gremion/tenant-store/lifecycle'
+import { ensureKernelPurgerAccess, kernelPurgerAccessProblems, type ModuleServer } from '@gremion/tenant-store/lifecycle'
 import type { ReconcileReport, ReensureCheckName } from './reconcile'
 
 /** One re-ensurable piece of provisioning: `problems` reads the effective state ([] = holds), `repair` re-applies it idempotently. */
@@ -56,12 +58,12 @@ export async function withReensureCheck(report: ReconcileReport, name: ReensureC
   }
 }
 
-// ── #89: the purger's CONNECT on the customer's kernel database ──────────────────────────────────────────────
+// ── #89: the purger's access to the customer's kernel database (CONNECT, schema USAGE, purge-table grants) ──────────────────────────────────────────────
 export function purgerConnectPort(server: ModuleServer, tenantId: string): ReensurePort {
   return {
-    problems: () => kernelPurgerConnectProblems(server, tenantId),
+    problems: () => kernelPurgerAccessProblems(server, tenantId),
     repair: async () => {
-      await ensureKernelPurgerConnect(server, tenantId)
+      await ensureKernelPurgerAccess(server, tenantId)
     },
   }
 }

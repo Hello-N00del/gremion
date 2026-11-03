@@ -398,6 +398,40 @@ export async function ensureKernelPurgeGrants(server: ModuleServer, tenantId: st
   return { granted, absent }
 }
 
+/**
+ * The read-only twin of ensureKernelPurgeGrants: what the purger's effective state lacks in the customer's
+ * kernel database ([] = it holds), read from the catalogue (so a grant through PUBLIC counts): USAGE on
+ * schema public and SELECT + DELETE on every kernel-scope purge table that exists. A table the kernel chain
+ * has not created yet is not a problem here (ensureKernelPurgeGrants reports it as absent the same way).
+ * Needs CONNECT on nothing: it runs as the server's admin, with search_path pinned (asAdminIn).
+ */
+export async function kernelPurgeGrantProblems(server: ModuleServer, tenantId: string): Promise<string[]> {
+  const { purger } = kernelRoles(tenantId)
+  const dbName = kernelDbName(tenantId)
+  const db = await server.open(dbName)
+  const problems: string[] = []
+  try {
+    await asAdminIn(db, async (tx) => {
+      const [who] = await tx<{ db: string }[]>`SELECT pg_catalog.current_database() AS db`
+      if (who?.db !== dbName) throw new Error(`the admin pool is connected to ${JSON.stringify(who?.db)}, not ${dbName}`)
+      const [usage] = await tx<{ held: boolean }[]>`SELECT pg_catalog.has_schema_privilege(${purger}::pg_catalog.text, 'public'::pg_catalog.text, 'USAGE') AS held`
+      if (!usage?.held) problems.push(`the purger role ${purger} lacks USAGE on schema public in ${dbName}`)
+      for (const rule of PURGE_RULES.filter((r) => r.scope === 'kernel')) {
+        if (!PLAIN_TABLE.test(rule.table)) throw new RangeError(`table ${JSON.stringify(rule.table)} is not a plain identifier`)
+        const qualified = `public.${rule.table}`
+        const [q] = await tx<{ present: boolean; held: boolean | null }[]>`
+          SELECT pg_catalog.to_regclass(${qualified}::pg_catalog.text) IS NOT NULL AS present,
+                 pg_catalog.has_table_privilege(${purger}::pg_catalog.text, pg_catalog.to_regclass(${qualified}::pg_catalog.text), 'SELECT')
+                   AND pg_catalog.has_table_privilege(${purger}::pg_catalog.text, pg_catalog.to_regclass(${qualified}::pg_catalog.text), 'DELETE') AS held`
+        if (q?.present && !q.held) problems.push(`the purger role ${purger} lacks SELECT, DELETE on ${rule.table} in ${dbName} (the scheduled purge refuses that table)`)
+      }
+    })
+  } finally {
+    await db.end({ timeout: 5 })
+  }
+  return problems
+}
+
 /** What the run reads about a purge table before it deletes from it. */
 export interface PurgeTableShape {
   kind: string

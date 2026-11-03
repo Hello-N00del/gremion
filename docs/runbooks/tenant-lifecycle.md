@@ -419,7 +419,7 @@ without `--verify-only`) repairs, idempotently; a second apply changes nothing:
 
 | Check | What must hold | What apply does |
 |---|---|---|
-| `purger-connect` | the customer's `k_<hex>_purger` role holds `CONNECT` on its kernel database (the scheduled purge logs in as it; without the grant the purge fails with `permission denied for database`) | `GRANT CONNECT` to the purger (exactly `CONNECT`), then reads it back. It never creates a role: a customer without one has no kernel database provisioned |
+| `purger-connect` | the customer's `k_<hex>_purger` role holds `CONNECT` on its kernel database, `USAGE` on schema `public` and `SELECT`, `DELETE` on every kernel purge table that exists (the scheduled purge logs in as it; without `CONNECT` the purge fails with `permission denied for database`, with `CONNECT` alone every table is refused) | `GRANT CONNECT` (exactly `CONNECT`), then the same schema and table grants customer creation gives, then reads all of it back. It never creates a role: a customer without one has no kernel database provisioned |
 | `kernel-api-nats-seed` | the NATS seed `kernel-api/tenant_<slug>.nk` exists and the broker serves the customer's account (the kernel API event relay publishes as that identity) | the same `nats-auth` ensure the lifecycle verbs use, over the customer's **current** module set read from the registry (`plt.module_enablement`) plus the `kernel-api` identity, then the account reload; a hand-written module list is never needed |
 
 A suspended customer is ensured with the empty module set (suspension evicts the

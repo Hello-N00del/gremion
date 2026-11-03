@@ -13,11 +13,19 @@
 // password (the verb has no business holding it). It never creates a role: a customer without a purger
 // role has no kernel database provisioned at all, which is a different repair.
 //
-// AS WHOM: the kernel server's admin on the server's maintenance database; no statement runs inside the
-// customer's database, so there is no customer-controlled search_path to guard. Every identifier is
-// spliced by the SERVER (ddl.ts execFormatted); every catalogue function is schema-qualified.
+// The same gap holds for the other two things the purge needs of the purger: USAGE on schema public and
+// SELECT + DELETE on the purge tables (purge.ts ensureKernelPurgeGrants, run at create time only). The
+// release that left no CONNECT left those too, so ensureKernelPurgerAccess re-ensures all three and
+// kernelPurgerAccessProblems reads all three; the CONNECT-only pair stays for the narrow case.
+//
+// AS WHOM: the kernel server's admin. The CONNECT half runs on the maintenance database, where there is no
+// customer-controlled search_path to guard. The schema and table half runs inside the customer's database
+// through purge.ts (asAdminIn: search_path pinned to pg_catalog first, so no name resolves to an object the
+// customer's owner planted). Every identifier is spliced by the SERVER (ddl.ts execFormatted); every
+// catalogue function is schema-qualified.
 import { execFormatted } from './ddl.js'
 import { kernelDbName, kernelRoles } from './kernel.js'
+import { ensureKernelPurgeGrants, kernelPurgeGrantProblems } from './purge.js'
 import type { ModuleServer } from './types.js'
 
 /** What the effective state is, read from the catalogue (so a grant through PUBLIC counts): [] = the purger can CONNECT. */
@@ -48,4 +56,35 @@ export async function ensureKernelPurgerConnect(server: ModuleServer, tenantId: 
   const after = await kernelPurgerConnectProblems(server, tenantId)
   if (after.length) throw new Error(`the purger CONNECT grant on ${dbName} did not take: ${after.join('; ')}`)
   return { granted: true }
+}
+
+/**
+ * Everything the scheduled purge needs of the purger on a customer's kernel database, as one post-condition:
+ * CONNECT (above), USAGE on schema public and SELECT + DELETE on the purge tables. The release a customer was
+ * created on may predate ALL of these (it had no purge run that logs in), and the create-time path that grants
+ * the last two (ensureKernelPurgeGrants) is not re-run by any upgrade step, so CONNECT alone turns the purge
+ * from "permission denied for database" into "refused: the purger lacks SELECT, DELETE" (kernel issue #89).
+ * [] = the purge can run. A customer without a role or database has nothing to read here (that problem alone).
+ */
+export async function kernelPurgerAccessProblems(server: ModuleServer, tenantId: string): Promise<string[]> {
+  const connect = await kernelPurgerConnectProblems(server, tenantId)
+  if (connect.some((p) => p.includes('does not exist'))) return connect
+  return [...connect, ...(await kernelPurgeGrantProblems(server, tenantId))]
+}
+
+/**
+ * Re-ensures all of it, idempotently: CONNECT (ensureKernelPurgerConnect), then USAGE and the per-table grants
+ * (ensureKernelPurgeGrants, the same function the create path runs), and reads the whole post-condition back.
+ * `repaired` is true only when this call found something missing. Throws when the role or database is absent
+ * or a grant did not take.
+ */
+export async function ensureKernelPurgerAccess(server: ModuleServer, tenantId: string): Promise<{ repaired: boolean }> {
+  const before = await kernelPurgerAccessProblems(server, tenantId)
+  if (before.length === 0) return { repaired: false }
+  if (before.some((p) => p.includes('does not exist'))) throw new Error(before.join('; '))
+  await ensureKernelPurgerConnect(server, tenantId)
+  await ensureKernelPurgeGrants(server, tenantId)
+  const after = await kernelPurgerAccessProblems(server, tenantId)
+  if (after.length) throw new Error(`the purger grants on ${kernelDbName(tenantId)} did not take: ${after.join('; ')}`)
+  return { repaired: true }
 }

@@ -11,8 +11,10 @@ import {
   dropKernelDatabase,
   ensureKernelDatabase,
   ensureKernelPurgeGrants,
+  ensureKernelPurgerAccess,
   ensureKernelPurgerConnect,
   kernelDbName,
+  kernelPurgerAccessProblems,
   kernelPurgerConnectProblems,
   kernelRoles,
   runPurge,
@@ -62,6 +64,11 @@ describe('purger CONNECT on the customer kernel database (kernel issue #89)', ()
   const run = () => runPurge({ platform, server, now: () => NOW })
   const mine = (r: Awaited<ReturnType<typeof run>>, t: string) => r.errors.filter((e) => e.tenant === hex(t))
 
+  /** Statements as the database's admin (the harness superuser) inside the customer's kernel database. */
+  async function asOwnerAdmin(tenant: string, stmts: string[]) {
+    for (const stmt of stmts) await db(tenant).unsafe(stmt)
+  }
+
   async function seed(tenant: string) {
     const { owner } = kernelRoles(tenant)
     await db(tenant).begin(async (tx) => {
@@ -82,8 +89,17 @@ describe('purger CONNECT on the customer kernel database (kernel issue #89)', ()
       await ensureKernelDatabase(server, t, pw)
       await seed(t)
     }
-    // what the older release left: the purger role exists, CONNECT was never granted
-    await server.admin.unsafe(`REVOKE CONNECT ON DATABASE ${kernelDbName(T)} FROM ${kernelRoles(T).purger}`)
+    // what the older release left: the purger role exists (NOLOGIN, member of nothing) and NOTHING else.
+    // The release the upgrade starts from has no purge.ts, so it granted the purger neither CONNECT, nor
+    // USAGE on schema public, nor SELECT/DELETE on the purge tables (git grep purger at that release: no grant).
+    const { purger } = kernelRoles(T)
+    await server.admin.unsafe(`REVOKE CONNECT ON DATABASE ${kernelDbName(T)} FROM ${purger}`)
+    await asOwnerAdmin(T, [
+      `REVOKE SELECT, DELETE ON TABLE public.event_consumption, public.scheduled_notifications FROM ${purger}`,
+      // PostgreSQL 15+ lets PUBLIC use schema public, which would mask the purger's own USAGE: take it from PUBLIC as
+      // well, the shape of a customer database hardened that way, so the purger's explicit USAGE is what is measured
+      `REVOKE USAGE ON SCHEMA public FROM ${purger}, PUBLIC`,
+    ])
   })
 
   afterAll(async () => {
@@ -118,6 +134,34 @@ describe('purger CONNECT on the customer kernel database (kernel issue #89)', ()
     const second = await ensureKernelPurgerConnect(server, T)
     expect(second.granted).toBe(false)
     expect(await ensureKernelPurgerConnect(server, W)).toEqual({ granted: false })
+  })
+
+  it('CONNECT alone is NOT the repair: with it the purge still fails, refused for the missing SELECT, DELETE (the rest of #89)', async () => {
+    await ensureKernelPurgerConnect(server, T)
+    expect(await kernelPurgerConnectProblems(server, T)).toEqual([])
+    const r = await run()
+    expect(r.status).toBe('failed')
+    expect(JSON.stringify(mine(r, T))).toMatch(/purger lacks SELECT, DELETE|permission denied for schema/)
+  })
+
+  it('kernelPurgerAccessProblems names CONNECT, schema USAGE and every purge table the pre-change customer lacks; none for the current one', async () => {
+    // the full pre-change shape again: CONNECT taken back too (the connect repair above gave it)
+    await server.admin.unsafe(`REVOKE CONNECT ON DATABASE ${kernelDbName(T)} FROM ${kernelRoles(T).purger}`)
+    const problems = await kernelPurgerAccessProblems(server, T)
+    const text = problems.join('; ')
+    expect(text).toContain('CONNECT')
+    expect(text).toContain('USAGE on schema public')
+    expect(text).toContain('SELECT, DELETE on event_consumption')
+    expect(text).toContain('SELECT, DELETE on scheduled_notifications')
+    expect(await kernelPurgerAccessProblems(server, W)).toEqual([])
+  })
+
+  it('ensureKernelPurgerAccess repairs CONNECT, USAGE and the table grants, reads them back, and a second call changes nothing', async () => {
+    const first = await ensureKernelPurgerAccess(server, T)
+    expect(first.repaired).toBe(true)
+    expect(await kernelPurgerAccessProblems(server, T)).toEqual([])
+    expect((await ensureKernelPurgerAccess(server, T)).repaired).toBe(false)
+    expect((await ensureKernelPurgerAccess(server, W)).repaired).toBe(false)
   })
 
   it('exactly CONNECT: no TEMPORARY, no CREATE on the database for the purger, PUBLIC still without CONNECT', async () => {

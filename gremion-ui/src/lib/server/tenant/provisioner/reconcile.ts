@@ -77,7 +77,7 @@ export type KernelDbCheckName = (typeof KERNEL_DB_CHECK_NAMES)[number]
  *  idempotent repair that `--apply` runs (reconcile-reensure.ts). Entries of their own, not part of the realm
  *  contract list above. */
 export const REENSURE_CHECK_NAMES = [
-  'purger-connect', // #89  the purger role holds CONNECT on the customer's kernel database (the purge run logs in as it)
+  'purger-connect', // #89  the purger role holds CONNECT, schema USAGE and the purge-table grants on the customer's kernel database (the purge run logs in as it)
   'kernel-api-nats-seed', // #88  the kernel-api NATS seed of the customer exists and the broker serves its account
 ] as const
 export type ReensureCheckName = (typeof REENSURE_CHECK_NAMES)[number]
