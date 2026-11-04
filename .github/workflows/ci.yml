@@ -137,6 +137,13 @@ jobs:
       - name: Dockerfiles COPY the whole @gremion/* workspace closure
         run: make lint-dockerfile-workspace-closure
 
+      # Every node base image is at or above the security floor of its Node major
+      # (scripts/check-node-floor.mjs). A digest pin freezes the bundled Brotli,
+      # OpenSSL and undici; this is what notices. Delegates to the Makefile so a
+      # local `make lint` and CI cannot drift apart.
+      - name: Node base images at or above the security floor
+        run: make lint-node-floor
+
       # The pull-request docker path filter and the image matrix: runs the real
       # `changes` step against a synthetic repo (including a change list past the
       # pipe buffer) and asserts every tracked Dockerfile is built or excused.

@@ -4,7 +4,7 @@
         update-legal update-legal-k8s \
         test test-unit test-host-docker test-integration test-all test-ports-nats test-ports-nats-nruns test-nats-auth test-events test-events-live test-events-alert nats-init \
         lint lint-sh lint-yaml lint-json lint-compose \
-        lint-hygiene lint-tom-annex lint-cve-floors lint-nats-nruns lint-packages lint-port-back lint-postgres-major lint-extraction-source \
+        lint-hygiene lint-tom-annex lint-cve-floors lint-node-floor lint-nats-nruns lint-packages lint-port-back lint-postgres-major lint-extraction-source \
         lint-unshipped-migrations lint-toolchain lint-compliance lint-tenant-db-access fresh-init-proof \
         verify \
         health validate-env
@@ -398,6 +398,14 @@ lint-cve-floors:
 	@echo "Checking CVE override floors..."
 	@node --test scripts/check-cve-floors.test.mjs
 	@node scripts/check-cve-floors.mjs
+
+# Every node base image at or above the security floor of its major
+# (CVE-2026-111497 and later Node security releases). The suite runs first so a
+# broken discovery cannot pass vacuously.
+lint-node-floor:
+	@echo "Checking the Node runtime floor of every Dockerfile..."
+	@node --test scripts/check-node-floor.test.mjs
+	@node scripts/check-node-floor.mjs
 
 # The N-run recorder's own RED cases (a failing run, a short series, a bad count),
 # against a stand-in target: no Docker. The suite's count is asserted because
@@ -855,7 +863,7 @@ lint-image-digests:
 	@node scripts/release/check-image-digests.mjs
 	@node scripts/release/check-image-digests.mjs --render
 
-lint: lint-sh lint-yaml lint-json lint-compose lint-compose-latest lint-pooled-stack lint-hygiene lint-tom-annex lint-cve-floors lint-nats-nruns lint-packages lint-port-back lint-postgres-major lint-extraction-source lint-unshipped-migrations lint-compliance lint-tenant-db-access lint-edge-host lint-module-scan lint-module-migration-names lint-module-dockerfile-copy lint-dockerfile-workspace-closure lint-ci-docker-filter lint-traefik-stack-scope lint-migration-register lint-image-digests lint-synapse lint-ci-verify-coverage
+lint: lint-sh lint-yaml lint-json lint-compose lint-compose-latest lint-pooled-stack lint-hygiene lint-tom-annex lint-cve-floors lint-node-floor lint-nats-nruns lint-packages lint-port-back lint-postgres-major lint-extraction-source lint-unshipped-migrations lint-compliance lint-tenant-db-access lint-edge-host lint-module-scan lint-module-migration-names lint-module-dockerfile-copy lint-dockerfile-workspace-closure lint-ci-docker-filter lint-traefik-stack-scope lint-migration-register lint-image-digests lint-synapse lint-ci-verify-coverage
 	@echo "All linters passed."
 
 # ── Local gate (TASK-045, TRD-444/341) ──────────────────────────────────────
