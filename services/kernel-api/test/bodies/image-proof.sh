@@ -37,7 +37,7 @@ API_IMAGE="$P-kernel-api:head"; TC_IMAGE="$P-migrate:head"
 API="${P}-kernel-api-1"
 PGIMAGE="$(cd "$SERVICE/test/harness" && node --input-type=module -e "import('../../../../packages/tenant-store/test/harness/stack.mjs').then((m) => console.log(m.moduleImage()))")"
 NATS_IMAGE="nats:2.12.15-alpine@sha256:b270f5e2428354c0335612694d7dd2fb588148e567a5757fdff325ef9c9332e6"
-NODEIMAGE="node:26-alpine@sha256:7c6af15abe4e3de859690e7db171d0d711bf37d27528eddfe625b2fe89e097f8"
+NODEIMAGE="node:26.13.0-alpine@sha256:c6ad9e9c1d80f6eb607c26b4b0a132ff7a2344fad1c78ea3baa2a7d4c8de6d94"
 SLUG="img-z"
 PROXY="proxy-secret-for-the-scratch-stack-0123456789"
 COMPOSE=(docker compose -p "$P" --env-file ".scratch/t080-image/app.env" -f docker-compose.app.yml -f ".scratch/t080-image/override.yml")
