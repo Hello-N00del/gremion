@@ -19,7 +19,7 @@ test('the bats shards partition the repository\'s bats files: each file in exact
     assert.ok(files.length > 0, `shard ${index} of ${BATS_SHARDS} is empty`)
     for (const f of files) seen.set(f, [...(seen.get(f) ?? []), index])
   }
-  assert.deepEqual([...seen.keys()].sort(), all, 'the shards together are not the whole file list')
+  assert.deepEqual([...seen.keys()].toSorted((a, b) => (a < b ? -1 : a > b ? 1 : 0)), all, 'the shards together are not the whole file list')
   const twice = [...seen].filter(([, shards]) => shards.length > 1)
   assert.deepEqual(twice, [], 'a file is in more than one shard')
 })
