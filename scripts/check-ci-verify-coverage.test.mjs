@@ -19,7 +19,7 @@ import { dirname, join } from 'node:path'
 import { test } from 'node:test'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
-import { checkCiText, loadRegistry, MIN_VERIFY_INVOCATIONS, parseWorkflow, verifyInvocations, yamlUnavailableReason } from './check-ci-verify-coverage.mjs'
+import { checkCiText, loadRegistry, MIN_VERIFY_INVOCATIONS, parseWorkflow, recordUploaders, verifyInvocations, yamlUnavailableReason } from './check-ci-verify-coverage.mjs'
 import { INTEGRATION_PARTS } from './verify/suites/integration.mjs'
 import { UNIT_PARTS } from './verify/suites/unit.mjs'
 
@@ -372,27 +372,63 @@ test('a verify-gate job with `if: !cancelled()` is reported (the fail-fast cance
   assert.match(p, /verify-gate has `if: !cancelled\(\)`; it must be `always\(\)`/)
 })
 
-// ── fail fast: a leg cancels its own run on a pull request, never on a push ──
-const FAIL_FAST_IF = "        if: ${{ failure() && github.event_name == 'pull_request' }}\n        env:\n          GH_TOKEN: ${{ github.token }}\n"
+// ── fail fast: a code-free job per leg cancels a same-repo pull-request run, never a push ──
+const FF_IF = "    if: ${{ failure() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository }}\n"
+const asArray = (v) => (Array.isArray(v) ? v : v === undefined ? [] : [v])
+const FF_STATIC = '  fail-fast-verify-static:\n'
+// Plant into the fail-fast-verify-static job only: its block up to the next job.
+const plantFailFast = (from, to) => {
+  const start = CI.indexOf(FF_STATIC)
+  const end = CI.indexOf('\n  fail-fast-', start + 1)
+  assert.ok(start !== -1 && end !== -1, 'fail-fast-verify-static not found')
+  const block = CI.slice(start, end)
+  assert.equal(block.split(from).length, 2, `plant target not unique in the fail-fast job: ${from.slice(0, 80)}`)
+  return CI.slice(0, start) + block.replace(from, to) + CI.slice(end)
+}
 
-test('every verify leg has the fail-fast step, after its record upload', () => {
+test('every verify leg has exactly one fail-fast job, and no leg holds a write token', () => {
   const doc = parseWorkflow(CI)
-  const legs = Object.keys(doc.jobs).filter((id) => id.startsWith('verify-') && id !== 'verify-gate')
+  const legs = [...recordUploaders(doc)]
   assert.ok(legs.length >= 11, `only ${legs.length} verify legs found`)
-  for (const id of legs) {
-    const steps = doc.jobs[id].steps
-    const cancel = steps.findIndex((s) => /\bgh run cancel\b/.test(s.run ?? ''))
-    const upload = steps.findIndex((s) => String(s.uses ?? '').startsWith('actions/upload-artifact@'))
-    assert.ok(cancel !== -1, `${id} has no fail-fast step`)
-    assert.ok(upload !== -1 && upload < cancel, `${id}: the fail-fast step must come after the record upload`)
-    assert.equal(doc.jobs[id].permissions?.actions, 'write', `${id} cannot cancel its run without actions: write`)
+  for (const leg of legs) {
+    const ff = Object.entries(doc.jobs).filter(([, j]) => asArray(j.needs).includes(leg) && /gh run cancel/.test(JSON.stringify(j.steps)))
+    assert.equal(ff.length, 1, `${leg} has ${ff.length} fail-fast job(s)`)
+    assert.equal(doc.jobs[leg].permissions, undefined, `${leg} sets its own permissions`)
+  }
+  assert.deepEqual(problemsOf(CI), [])
+})
+
+test('a fail-fast `if` that is not the pinned same-repo pull-request one is reported', () => {
+  for (const cond of [
+    "    if: ${{ failure() || github.event_name == 'pull_request' }}\n", // cancels a failing push run
+    "    if: ${{ failure() && github.event_name == 'pull_request' }}\n", // a fork's read-only token: a second, misleading red
+    "    if: ${{ always() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository }}\n", // cancels a passing run
+    '', // no `if` at all
+  ]) {
+    assert.match(joined(plantFailFast(FF_IF, cond)), /fail-fast-verify-static: cancels the run with `if: .*`; it must be exactly/, JSON.stringify(cond))
   }
 })
 
-test('a fail-fast step that is not pull-request-only is reported (a push keeps every leg\'s record)', () => {
-  const ci = CI.split(FAIL_FAST_IF).join("        if: ${{ failure() }}\n        env:\n          GH_TOKEN: ${{ github.token }}\n")
-  assert.notEqual(ci, CI)
-  assert.match(joined(ci), /cancels the run, but its `if` does not require github\.event_name == 'pull_request'/)
+test('a fail-fast job that also runs repository code, or holds more than actions: write, is reported', () => {
+  const withCheckout = plantFailFast('    steps:\n', '    steps:\n      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1\n')
+  assert.match(joined(withCheckout), /fail-fast-verify-static: cancels the run; it must be one step with no `uses:`/)
+  const widened = plantFailFast('    permissions:\n      actions: write\n', '    permissions:\n      actions: write\n      contents: write\n')
+  assert.match(joined(widened), /fail-fast-verify-static: cancels the run; its permissions must be exactly `actions: write`/)
+})
+
+test('a leg without its fail-fast job, or a leg that cancels or holds a write token itself, is reported', () => {
+  const start = CI.indexOf(FF_STATIC)
+  const end = CI.indexOf('\n  fail-fast-', start + 1) + 1
+  assert.match(joined(CI.slice(0, start) + CI.slice(end)), /verify-static has 0 fail-fast job\(s\); it needs exactly one/)
+  const legWrites = plant('    name: "Verify: static suites"\n', '    name: "Verify: static suites"\n    permissions:\n      contents: read\n      actions: write\n')
+  assert.match(joined(legWrites), /verify-static runs repository code with a write token \(actions\)/)
+  const legCancels = plant('        run: node scripts/verify/verify.mjs --only census\n', '        run: |\n          node scripts/verify/verify.mjs --only census\n          gh api -X POST "repos/$REPO/actions/runs/$RUN_ID/cancel"\n')
+  assert.match(joined(legCancels), /verify-census: cancels the run, but it is a verify leg or the gate/)
+})
+
+test('a gate without its cancelled-run step is reported (every other step skips in a cancelled run)', () => {
+  const p = joined(plant('        if: ${{ cancelled() }}\n', '        if: ${{ false }}\n'))
+  assert.match(p, /verify-gate has no step with `if: cancelled\(\)` that exits 1/)
 })
 
 test('a weakening clause ANDed onto the strict check-record step\'s `if` is reported', () => {

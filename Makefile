@@ -210,7 +210,11 @@ test-all: test-unit test-integration test-ports-nats test-nats-auth test-events
 # legs (together they took 11-12 minutes in one): test-events-live is the unit
 # suite, the four live groups and the image check; test-events-alert is the
 # TASK-039 alert path. Each judges only its own groups (`proof.sh down live|alert`).
-test-events: test-events-live test-events-alert
+# On one host they share .scratch/t079, which the live `up` empties, so
+# test-events runs them one after the other even under `make -j`.
+test-events:
+	@$(MAKE) --no-print-directory test-events-live
+	@$(MAKE) --no-print-directory test-events-alert
 
 test-events-live:
 	@pnpm --filter @gremion/events test
