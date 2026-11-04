@@ -70,6 +70,8 @@ export const CARVE_LINT_TARGETS = [
   { name: 'lint-tom-annex', kind: 'make', target: 'lint-tom-annex' },
   { name: 'lint-module-dockerfile-copy', kind: 'make', target: 'lint-module-dockerfile-copy' },
   { name: 'lint-cve-floors', kind: 'make', target: 'lint-cve-floors' },
+  // CVE-2026-111497: every node base image at or above its major's floor.
+  { name: 'lint-node-floor', kind: 'make', target: 'lint-node-floor' },
   { name: 'lint-packages', kind: 'make', target: 'lint-packages' },
   // TASK-048 (TRD-350/066/354): every deployed image pinned by digest, no
   // object storage. Brief G4 fixes tool 'docker' (the release toolchain).
