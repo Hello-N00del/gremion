@@ -2,7 +2,7 @@
         shell-kc shell-db \
         keycloak-configure dev-configure dev-ui fresh-start \
         update-legal update-legal-k8s \
-        test test-unit test-host-docker test-integration test-all test-ports-nats test-ports-nats-nruns test-nats-auth test-events nats-init \
+        test test-unit test-host-docker test-integration test-all test-ports-nats test-ports-nats-nruns test-nats-auth test-events test-events-live test-events-alert nats-init \
         lint lint-sh lint-yaml lint-json lint-compose \
         lint-hygiene lint-tom-annex lint-cve-floors lint-nats-nruns lint-packages lint-port-back lint-postgres-major lint-extraction-source \
         lint-unshipped-migrations lint-toolchain lint-compliance lint-tenant-db-access fresh-init-proof \
@@ -205,18 +205,28 @@ test-all: test-unit test-integration test-ports-nats test-nats-auth test-events
 # per group and tears everything down BY NAME. `down` always runs, and the target
 # fails when any phase failed or `down` reports a group not passed. Last,
 # image-check.sh proves the package resolves in the migrate image.
-test-events:
+#
+# Two halves on separate stacks, so verify runs them as two parts and CI as two
+# legs (together they took 11-12 minutes in one): test-events-live is the unit
+# suite, the four live groups and the image check; test-events-alert is the
+# TASK-039 alert path. Each judges only its own groups (`proof.sh down live|alert`).
+test-events: test-events-live test-events-alert
+
+test-events-live:
 	@pnpm --filter @gremion/events test
 	@rc=0; bash packages/events/scripts/proof.sh up || rc=$$?; \
 	if [ $$rc -eq 0 ]; then \
 		for g in core consumer deadletter rebuild; do bash packages/events/scripts/proof.sh test $$g || { rc=$$?; break; }; done; \
 	fi; \
-	if [ $$rc -eq 0 ]; then \
-		for p in alert-prepare alert-up alert-red alert-fire alert-hold alert-resolve; do bash packages/events/scripts/proof.sh $$p || { rc=$$?; break; }; done; \
-	fi; \
-	out="$$(bash packages/events/scripts/proof.sh down)"; printf '%s\n' "$$out"; \
+	out="$$(bash packages/events/scripts/proof.sh down live)"; printf '%s\n' "$$out"; \
 	[ $$rc -eq 0 ] && printf '%s\n' "$$out" | grep -qx '\[events-proof\] OK' || exit 1
 	@bash packages/events/scripts/image-check.sh
+
+test-events-alert:
+	@rc=0; \
+	for p in alert-prepare alert-up alert-red alert-fire alert-hold alert-resolve; do bash packages/events/scripts/proof.sh $$p || { rc=$$?; break; }; done; \
+	out="$$(bash packages/events/scripts/proof.sh down alert)"; printf '%s\n' "$$out"; \
+	[ $$rc -eq 0 ] && printf '%s\n' "$$out" | grep -qx '\[events-proof\] OK' || exit 1
 
 # @gremion/nats-auth (TASK-024): the unit suite, then the acceptance against a
 # REAL broker -- packages/nats-auth/scripts/proof.sh --auth starts the state

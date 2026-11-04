@@ -29,7 +29,10 @@
 //      sign-release.sh also relies on; and the `if` of the gate job, of the step
 //      that checks every leg's result and of the strict call are pinned, because a
 //      narrowed one makes the gate SKIP, and a skipped required check reads as
-//      passing in a branch ruleset.
+//      passing in a branch ruleset. The first two are pinned to always(): a failed
+//      leg cancels a pull-request run (fail fast), and the gate must still run
+//      then. A step that cancels the run must be pull-request-only, so a push
+//      always carries every leg's record.
 //
 // A scan that found almost nothing would pass every rule above, so it refuses to
 // pass below a floor of verify invocations (the vacuity floor).
@@ -103,11 +106,17 @@ const keepsErrexit = (shell) => shell === undefined || shell === null || (typeof
 
 // The only `if` the gate job and its strict check-record step may carry (after the
 // `${{ }}` wrapper and whitespace are normalized away). Anything narrower can skip
-// them; anything missing on the job skips it when a leg fails.
-const GATE_JOB_IFS = new Set(['!cancelled()', 'always()'])
+// them; anything missing on the job skips it when a leg fails. Only always(): a failed
+// leg cancels a pull-request run (the fail-fast step), and `!cancelled()` would then
+// skip the gate.
+const GATE_JOB_IFS = new Set(['always()'])
 // The step that judges every leg's `result` (found by its `toJSON(needs)`, not by its name)
-// may carry no `if` that can skip it; these are the only ones that do not narrow it.
-const LEGS_STEP_IFS = new Set(['', 'success()', '!cancelled()', 'always()'])
+// must be always() too: in a cancelled run a step without it is skipped, and so is every
+// step after it -- a gate whose steps all skipped finishes green.
+const LEGS_STEP_IFS = new Set(['always()'])
+// A step that cancels its own run (fail fast) must be pull-request-only: a push or a
+// manual run keeps every leg's record, which is what check-record and sign-release need.
+const CANCELS_RUN = /\bgh\s+run\s+cancel\b/
 const STRICT_STEP_IF = "github.event_name != 'pull_request' || needs.verify-census.result == 'success'"
 const normalizeIf = (v) => text(v === undefined || v === null ? '' : String(v)).replace(/^\s*\$\{\{|\}\}\s*$/g, '').replace(/\s+/g, ' ').trim()
 
@@ -264,11 +273,16 @@ export function checkWorkflow(doc, { requiredSuites, unitParts, integrationParts
   if (gate && legSteps.length === 0) problems.push('verify-gate has no step that reads toJSON(needs) -- nothing checks that every leg succeeded')
   for (const { label, step } of legSteps) {
     if (!LEGS_STEP_IFS.has(normalizeIf(step.if))) {
-      problems.push(`${label} has \`if: ${normalizeIf(step.if)}\`; the step that checks every leg's result must have no \`if\` (or only success(), !cancelled(), always()), because a narrowed one skips the check`)
+      problems.push(`${label} has \`if: ${normalizeIf(step.if) || '(none)'}\`; the step that checks every leg's result must have \`if: always()\`, because anything else is skipped in a cancelled (fail-fast) run or narrows the check, and a gate whose steps skipped finishes green`)
     }
   }
   if (gate && !GATE_JOB_IFS.has(normalizeIf(gate.if))) {
-    problems.push(`verify-gate has \`if: ${normalizeIf(gate.if) || '(none)'}\`; it must be \`!cancelled()\` so a failed or skipped leg makes the gate run and fail instead of skipping it (a skipped required check reads as passing)`)
+    problems.push(`verify-gate has \`if: ${normalizeIf(gate.if) || '(none)'}\`; it must be \`always()\` so a failed, skipped or cancelled leg makes the gate run and fail instead of skipping it (a skipped required check reads as passing, and a failed leg cancels a pull-request run)`)
+  }
+  for (const { label, step } of eachStep(doc)) {
+    if (logicalLines(step.run).some((l) => CANCELS_RUN.test(l)) && !PULL_REQUEST_ONLY.test(text(step.if))) {
+      problems.push(`${label}: cancels the run, but its \`if\` does not require github.event_name == 'pull_request' -- a push must keep every leg's record`)
+    }
   }
 
   // ── --allow-missing only on the pull-request path; the strict call is flagless ──

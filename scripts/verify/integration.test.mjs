@@ -7,7 +7,9 @@ import { test } from 'node:test'
 import {
   INTEGRATION_PARTS,
   integrationVitestEnv,
-  judgeEventsTest,
+  EVENTS_ALERT_MIN_CHECKS,
+  judgeEventsAlertTest,
+  judgeEventsLiveTest,
   judgeFreshInit,
   judgeKeycloakStepup,
   judgeNatsAuthTest,
@@ -88,7 +90,7 @@ test('the nats-auth part is registered beside nats', () => {
   const keys = Object.keys(INTEGRATION_PARTS)
   const at = keys.indexOf('nats')
   assert.notEqual(at, -1)
-  assert.deepEqual(keys.slice(at, at + 3), ['nats', 'nats-auth', 'events'])
+  assert.deepEqual(keys.slice(at, at + 4), ['nats', 'nats-auth', 'events-live', 'events-alert'])
 })
 
 // The live Keycloak step-up deny proof (kernel-api test/keycloak/stepup-deny.int.test.ts) as a verify part:
@@ -146,7 +148,7 @@ test('keycloak-stepup: a missing docker or an unparseable report passes through 
   assert.equal(judgeKeycloakStepup(stepupPart({ unparseable: true })).unparseable, true)
 })
 
-// TASK-079: make test-events -- the unit suite, four live groups, three alert phases, the image check.
+// TASK-079, live half: make test-events-live -- the unit suite, four live groups, the image check.
 const EVENTS_OK =
   '      Tests  83 passed (83)\n' +
   '[events-proof] stack t079-0123abcd up\n' +
@@ -159,42 +161,96 @@ const EVENTS_OK =
   '[events-proof] group deadletter OK\n' +
   '[events-proof] 2 passing (minimum 2)\n' +
   '[events-proof] group rebuild OK\n' +
-  '[events-proof] group alert-red OK\n' +
-  '[events-proof] group alert-fire OK\n' +
-  '[events-proof] group alert-hold OK\n' +
-  '[events-proof] group alert-resolve OK\n' +
   '[events-proof] OK\n' +
   '[events-image] OK -- pnpm exec events and the package import work in t079-0123abcd-migrate\n'
 
-test('test-events: the unit summary, every group at its floor, the alert phases, OK and the image line pass, counting unit + live', () => {
-  const p = judgeEventsTest({ code: 0, stdout: EVENTS_OK, stderr: '' })
+test('test-events-live: the unit summary, every group at its floor, OK and the image line pass, counting unit + live', () => {
+  const p = judgeEventsLiveTest({ code: 0, stdout: EVENTS_OK, stderr: '' })
   assert.equal(p.unparseable ?? false, false, JSON.stringify(p))
   assert.equal(p.collected, 83 + 16 + 15 + 6 + 2)
   assert.equal(p.failed, 0)
 })
 
 // One test, a loop inside it (see the test-nats-auth note above for why).
-test('test-events: exit 0 without a proof line is untrusted, never a pass', () => {
+test('test-events-live: exit 0 without a proof line is untrusted, never a pass', () => {
   for (const [missing, drop] of [
     ['the unit summary', /^\s+Tests  83 passed \(83\)\n/m],
     ['the rebuild group', /^\[events-proof\] 2 passing \(minimum 2\)\n\[events-proof\] group rebuild OK\n/m],
-    ['an alert phase', /^\[events-proof\] group alert-hold OK\n/m],
     ['the final OK line', /^\[events-proof\] OK\n/m],
     ['the image line', /^\[events-image\] OK.*\n/m],
   ]) {
-    const p = judgeEventsTest({ code: 0, stdout: EVENTS_OK.replace(drop, ''), stderr: '' })
+    const p = judgeEventsLiveTest({ code: 0, stdout: EVENTS_OK.replace(drop, ''), stderr: '' })
     assert.equal(p.unparseable, true, `without ${missing}: ${JSON.stringify(p)}`)
   }
 })
 
-test('test-events: a group run with its floor lowered below the pinned one is untrusted', () => {
-  const p = judgeEventsTest({ code: 0, stdout: EVENTS_OK.replace('6 passing (minimum 6)', '1 passing (minimum 1)'), stderr: '' })
+test('test-events-live: a group run with its floor lowered below the pinned one is untrusted', () => {
+  const p = judgeEventsLiveTest({ code: 0, stdout: EVENTS_OK.replace('6 passing (minimum 6)', '1 passing (minimum 1)'), stderr: '' })
   assert.equal(p.unparseable, true, JSON.stringify(p))
 })
 
-test('test-events: a non-zero exit is a failure', () => {
-  const p = judgeEventsTest({ code: 1, stdout: '[events-proof] FAILED: the core suite exited 1\n', stderr: '' })
+test('test-events-live: a non-zero exit is a failure', () => {
+  const p = judgeEventsLiveTest({ code: 1, stdout: '[events-proof] FAILED: the core suite exited 1\n', stderr: '' })
   assert.ok(p.failed > 0 && !p.unparseable, JSON.stringify(p))
+})
+
+test('test-events-live: the alert phases are not this half\'s to vouch for -- their lines alone never pass it', () => {
+  const p = judgeEventsLiveTest({ code: 0, stdout: EVENTS_ALERT_OK, stderr: '' })
+  assert.equal(p.unparseable, true, JSON.stringify(p))
+})
+
+// TASK-079, alert half: make test-events-alert -- prepare, up, then the acceptance phases red, fire, hold, resolve.
+const alertPhase = (p, n, min = n) =>
+  `[alert-proof] ${n} passing (minimum ${min}), 0 failing -- phase ${p}\n[events-proof] group ${p} OK\n`
+const EVENTS_ALERT_OK =
+  '[alert-proof] 1 passing (minimum 1), 0 failing -- phase alert-prepare\n[events-proof] phase alert-prepare done\n' +
+  '[alert-proof] 5 passing (minimum 5), 0 failing -- phase alert-up\n[events-proof] phase alert-up done\n' +
+  alertPhase('alert-red', 4) +
+  alertPhase('alert-fire', 12) +
+  alertPhase('alert-hold', 6) +
+  alertPhase('alert-resolve', 5) +
+  '[events-proof] OK\n'
+
+test('test-events-alert: every acceptance phase at its floor, its group line and OK pass, counting the phases\' checks', () => {
+  const p = judgeEventsAlertTest({ code: 0, stdout: EVENTS_ALERT_OK, stderr: '' })
+  assert.equal(p.unparseable ?? false, false, JSON.stringify(p))
+  assert.equal(p.collected, 4 + 12 + 6 + 5)
+  assert.equal(p.failed, 0)
+})
+
+test('test-events-alert: the judge\'s floors are alert-proof.sh\'s own finish minimums', () => {
+  const src = readFileSync(new URL('../../packages/events/scripts/alert-proof.sh', import.meta.url), 'utf8')
+  const fn = { 'alert-red': 'phase_red', 'alert-fire': 'phase_fire', 'alert-hold': 'phase_hold', 'alert-resolve': 'phase_resolve' }
+  for (const [phase, floor] of Object.entries(EVENTS_ALERT_MIN_CHECKS)) {
+    const body = src.split(new RegExp(`^${fn[phase]}\\(\\) \\{`, 'm'))[1]?.split(/^\}/m)[0]
+    assert.ok(body, `alert-proof.sh has no ${fn[phase]}()`)
+    assert.match(body, new RegExp(`^\\s*finish ${floor}\\s*$`, 'm'), `${fn[phase]}() does not finish with minimum ${floor}`)
+  }
+})
+
+// One test, a loop inside it (see the test-nats-auth note above for why).
+test('test-events-alert: exit 0 without a proof line is untrusted, never a pass', () => {
+  for (const [missing, stdout] of [
+    ['the hold phase\'s count line', EVENTS_ALERT_OK.replace(/^\[alert-proof\] 6 passing .*phase alert-hold\n/m, '')],
+    ['the hold phase\'s group line', EVENTS_ALERT_OK.replace(/^\[events-proof\] group alert-hold OK\n/m, '')],
+    ['the final OK line', EVENTS_ALERT_OK.replace(/^\[events-proof\] OK\n/m, '')],
+    ['a floor lowered below the pinned one', EVENTS_ALERT_OK.replace(alertPhase('alert-fire', 12), alertPhase('alert-fire', 3))],
+    ['a phase that reports a failing check', EVENTS_ALERT_OK.replace('0 failing -- phase alert-red', '1 failing -- phase alert-red')],
+    ['the live half\'s lines instead', EVENTS_OK],
+  ]) {
+    const p = judgeEventsAlertTest({ code: 0, stdout, stderr: '' })
+    assert.equal(p.unparseable, true, `without ${missing}: ${JSON.stringify(p)}`)
+  }
+})
+
+test('test-events-alert: a non-zero exit is a failure', () => {
+  const p = judgeEventsAlertTest({ code: 1, stdout: '[events-proof] FAILED: the alert-fire phase exited 1\n', stderr: '' })
+  assert.ok(p.failed > 0 && !p.unparseable, JSON.stringify(p))
+})
+
+test('INTEGRATION_PARTS runs the two TASK-079 halves as separate parts and no whole-run events part beside them', () => {
+  const keys = Object.keys(INTEGRATION_PARTS).filter((k) => k.startsWith('events')).sort()
+  assert.deepEqual(keys, ['events-alert', 'events-live'])
 })
 
 const FRESH_OK = '  ok tables exist\n  ok column present\n  ok check definition\n[fresh-init] all post-conditions hold\n'
@@ -301,30 +357,30 @@ test('test-nats-auth: the proof\'s own echoed summary is not mistaken for the un
   assert.match(p.detail, /unit summary seen: none/)
 })
 
-test('test-events: a unit step that SKIPPED a test is a named failure, not "unparseable"', () => {
+test('test-events-live: a unit step that SKIPPED a test is a named failure, not "unparseable"', () => {
   const stdout = withUnitSummary(EVENTS_OK, 'Tests  83 passed (83)', 'Tests  82 passed | 1 skipped (83)')
-  const p = judgeEventsTest({ code: 0, stdout, stderr: '' })
+  const p = judgeEventsLiveTest({ code: 0, stdout, stderr: '' })
   assert.equal(p.unparseable ?? false, false, JSON.stringify(p))
   assert.ok(p.failed >= 1, JSON.stringify(p))
-  assert.match(p.detail, /unit run inside make test-events skipped 1 test\(s\); an integration part allows no skips/)
+  assert.match(p.detail, /unit run inside make test-events-live skipped 1 test\(s\); an integration part allows no skips/)
   assert.match(p.detail, /Tests {2}82 passed \| 1 skipped \(83\)/)
 })
 
-test('test-events: a unit step that reports a FAILED test yet exited 0 is a named failure', () => {
+test('test-events-live: a unit step that reports a FAILED test yet exited 0 is a named failure', () => {
   const stdout = withUnitSummary(EVENTS_OK, 'Tests  83 passed (83)', 'Tests  2 failed | 81 passed (83)')
-  const p = judgeEventsTest({ code: 0, stdout, stderr: '' })
-  assert.match(p.detail, /unit run inside make test-events reported 2 failed test\(s\) although the target exited 0/)
+  const p = judgeEventsLiveTest({ code: 0, stdout, stderr: '' })
+  assert.match(p.detail, /unit run inside make test-events-live reported 2 failed test\(s\) although the target exited 0/)
 })
 
-test('test-events: an unrecognised summary shape stays untrusted, with the line seen in the detail', () => {
+test('test-events-live: an unrecognised summary shape stays untrusted, with the line seen in the detail', () => {
   const stdout = withUnitSummary(EVENTS_OK, 'Tests  83 passed (83)', 'Tests  81 passed | 2 wobbly (83)')
-  const p = judgeEventsTest({ code: 0, stdout, stderr: '' })
+  const p = judgeEventsLiveTest({ code: 0, stdout, stderr: '' })
   assert.equal(p.unparseable, true, JSON.stringify(p))
   assert.match(p.detail, /unit summary seen: "Tests {2}81 passed \| 2 wobbly \(83\)"/)
 })
 
-test('test-events: a missing summary says so in the detail', () => {
-  const p = judgeEventsTest({ code: 0, stdout: EVENTS_OK.replace(/^\s+Tests {2}83 passed \(83\)\n/m, ''), stderr: '' })
+test('test-events-live: a missing summary says so in the detail', () => {
+  const p = judgeEventsLiveTest({ code: 0, stdout: EVENTS_OK.replace(/^\s+Tests {2}83 passed \(83\)\n/m, ''), stderr: '' })
   assert.match(p.detail, /unit summary seen: none/)
 })
 

@@ -67,8 +67,8 @@ test('a unit part that no leg runs is reported by name', () => {
 })
 
 test('an integration part that no leg runs is reported by name', () => {
-  const p = joined(plant(',integration:events', ''))
-  assert.match(p, /required suite "integration" is not covered: no leg runs integration:events/)
+  const p = joined(plant(',integration:events-live', ''))
+  assert.match(p, /required suite "integration" is not covered: no leg runs integration:events-live/)
 })
 
 test('a plain required suite that no leg runs is reported', () => {
@@ -93,7 +93,7 @@ test('the keycloak step-up part dropped from its leg is reported by name', () =>
 })
 
 test('the keycloak step-up part listed in a second leg is reported, naming both', () => {
-  const p = joined(plant('--only integration:nats,integration:nats-auth,integration:events', '--only integration:nats,integration:nats-auth,integration:events,integration:keycloak-stepup'))
+  const p = joined(plant('--only integration:nats,integration:nats-auth,integration:events-live', '--only integration:nats,integration:nats-auth,integration:events-live,integration:keycloak-stepup'))
   assert.match(p, /"integration:keycloak-stepup" is run 2 times \(verify-integration-db, verify-integration-brokers\)/)
 })
 
@@ -104,7 +104,7 @@ test('a name that is no suite and no part is reported (a typo would be "dropped 
 })
 
 test('the whole unit suite plus one of its parts is reported as ambiguous', () => {
-  const p = joined(plant('--only unit:modules,unit:node,unit:bats', '--only unit,unit:modules,unit:node,unit:bats'))
+  const p = joined(plant('--only unit:modules,unit:node', '--only unit,unit:modules,unit:node'))
   assert.match(p, /"unit" is run whole AND as part\(s\)/)
 })
 
@@ -312,21 +312,29 @@ test('an `if [ ... ]` test that merely precedes a verdict call on its own line i
   assert.deepEqual(problemsOf(combineBlock('if [ -z "$SHA" ]; then exit 1; fi', COMBINE_CMD)), [])
 })
 
-// ── the gate step that checks every leg's result keeps a non-narrowing `if` ──
+// ── the gate step that checks every leg's result is always() ──
 const LEGS_NAME = '      - name: Every verify leg must have succeeded\n'
-const legsIf = (cond) => plant(LEGS_NAME, `${LEGS_NAME}        if: ${cond}\n`)
+const LEGS_IF = `${LEGS_NAME}        if: \${{ always() }}\n`
+const legsIf = (cond) => plant(LEGS_IF, cond === undefined ? LEGS_NAME : `${LEGS_NAME}        if: ${cond}\n`)
 
 test('an `if` narrowed onto the every-leg-succeeded step is reported (a skipped step checks nothing)', () => {
   const p = joined(legsIf("${{ github.event_name != 'pull_request' }}"))
-  assert.match(p, /Every verify leg must have succeeded\) has `if: github\.event_name != 'pull_request'`; the step that checks every leg's result must have no `if`/)
+  assert.match(p, /Every verify leg must have succeeded\) has `if: github\.event_name != 'pull_request'`; the step that checks every leg's result must have `if: always\(\)`/)
 })
 
 test('`if: false` on the every-leg-succeeded step is reported', () => {
   assert.match(joined(legsIf('false')), /has `if: false`; the step that checks every leg's result/)
 })
 
+// In a cancelled (fail-fast) run these are skipped, and so is everything after them: a green gate.
+test('an every-leg-succeeded step with no `if`, success() or !cancelled() is reported', () => {
+  for (const cond of [undefined, '${{ success() }}', '${{ !cancelled() }}']) {
+    assert.match(joined(legsIf(cond)), /the step that checks every leg's result must have `if: always\(\)`/, String(cond))
+  }
+})
+
 test('a renamed every-leg-succeeded step keeps its `if` pinned (it is found by toJSON(needs), not by name)', () => {
-  const renamed = plant(LEGS_NAME, "      - name: Look at the legs\n        if: ${{ false }}\n")
+  const renamed = plant(LEGS_IF, "      - name: Look at the legs\n        if: ${{ false }}\n")
   assert.match(joined(renamed), /Look at the legs\) has `if: false`/)
 })
 
@@ -335,10 +343,9 @@ test('a gate with no step reading toJSON(needs) is reported', () => {
   assert.match(p, /verify-gate has no step that reads toJSON\(needs\)/)
 })
 
-test('an every-leg-succeeded step with no `if`, always() or !cancelled() is accepted', () => {
+test('an every-leg-succeeded step with always() is accepted', () => {
   assert.deepEqual(problemsOf(CI), [])
-  assert.deepEqual(problemsOf(legsIf('${{ always() }}')), [])
-  assert.deepEqual(problemsOf(legsIf('${{ !cancelled() }}')), [])
+  assert.deepEqual(problemsOf(legsIf('always()')), [])
 })
 
 test('a docker diagnostic or cleanup with `|| true` is tolerated, but not when it carries the verify call', () => {
@@ -347,14 +354,45 @@ test('a docker diagnostic or cleanup with `|| true` is tolerated, but not when i
   assert.match(p, /swallows a failing exit status/)
 })
 
-test('a verify-gate job `if` narrowed beyond !cancelled() is reported (a skipped required check reads as passing)', () => {
-  const p = joined(plant('    if: ${{ !cancelled() }}\n    timeout-minutes: 15\n', "    if: ${{ !cancelled() && needs.verify-static.result == 'success' }}\n    timeout-minutes: 15\n"))
-  assert.match(p, /verify-gate has `if: !cancelled\(\) && needs\.verify-static\.result == 'success'`; it must be `!cancelled\(\)`/)
+const GATE_IF = '    if: ${{ always() }}\n    timeout-minutes: 15\n'
+
+test('a verify-gate job `if` narrowed beyond always() is reported (a skipped required check reads as passing)', () => {
+  const p = joined(plant(GATE_IF, "    if: ${{ always() && needs.verify-static.result == 'success' }}\n    timeout-minutes: 15\n"))
+  assert.match(p, /verify-gate has `if: always\(\) && needs\.verify-static\.result == 'success'`; it must be `always\(\)`/)
 })
 
 test('a verify-gate job with no `if` is reported (a failed leg would skip it)', () => {
-  const p = joined(plant('    if: ${{ !cancelled() }}\n    timeout-minutes: 15\n', '    timeout-minutes: 15\n'))
+  const p = joined(plant(GATE_IF, '    timeout-minutes: 15\n'))
   assert.match(p, /verify-gate has `if: \(none\)`/)
+})
+
+// A failed leg cancels a pull-request run; !cancelled() would then skip the gate.
+test('a verify-gate job with `if: !cancelled()` is reported (the fail-fast cancel would skip it)', () => {
+  const p = joined(plant(GATE_IF, '    if: ${{ !cancelled() }}\n    timeout-minutes: 15\n'))
+  assert.match(p, /verify-gate has `if: !cancelled\(\)`; it must be `always\(\)`/)
+})
+
+// ── fail fast: a leg cancels its own run on a pull request, never on a push ──
+const FAIL_FAST_IF = "        if: ${{ failure() && github.event_name == 'pull_request' }}\n        env:\n          GH_TOKEN: ${{ github.token }}\n"
+
+test('every verify leg has the fail-fast step, after its record upload', () => {
+  const doc = parseWorkflow(CI)
+  const legs = Object.keys(doc.jobs).filter((id) => id.startsWith('verify-') && id !== 'verify-gate')
+  assert.ok(legs.length >= 11, `only ${legs.length} verify legs found`)
+  for (const id of legs) {
+    const steps = doc.jobs[id].steps
+    const cancel = steps.findIndex((s) => /\bgh run cancel\b/.test(s.run ?? ''))
+    const upload = steps.findIndex((s) => String(s.uses ?? '').startsWith('actions/upload-artifact@'))
+    assert.ok(cancel !== -1, `${id} has no fail-fast step`)
+    assert.ok(upload !== -1 && upload < cancel, `${id}: the fail-fast step must come after the record upload`)
+    assert.equal(doc.jobs[id].permissions?.actions, 'write', `${id} cannot cancel its run without actions: write`)
+  }
+})
+
+test('a fail-fast step that is not pull-request-only is reported (a push keeps every leg\'s record)', () => {
+  const ci = CI.split(FAIL_FAST_IF).join("        if: ${{ failure() }}\n        env:\n          GH_TOKEN: ${{ github.token }}\n")
+  assert.notEqual(ci, CI)
+  assert.match(joined(ci), /cancels the run, but its `if` does not require github\.event_name == 'pull_request'/)
 })
 
 test('a weakening clause ANDed onto the strict check-record step\'s `if` is reported', () => {
