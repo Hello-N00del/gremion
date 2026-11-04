@@ -250,7 +250,10 @@ export function checkWorkflow(doc, { requiredSuites, unitParts, integrationParts
   }
   // The legs start without waiting for Lint (it runs the guards, this one included), so the
   // gate must wait for it itself or a red Lint would leave a green gate.
-  if (gate && doc.jobs.lint && !needed.has('lint')) {
+  // Fail closed on a renamed job: without `lint` the two lint rules below would check nothing.
+  if (!doc.jobs.lint) {
+    problems.push('there is no `lint` job -- the gate-needs-lint and fail-fast-lint checks cannot run (renamed? update this guard with it)')
+  } else if (gate && !needed.has('lint')) {
     problems.push('verify-gate does not need lint -- the legs no longer wait for it, so a red Lint would not reach the verdict')
   }
 

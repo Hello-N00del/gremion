@@ -432,6 +432,12 @@ test('a gate that does not need lint is reported (the legs no longer wait for it
   assert.match(p, /verify-gate does not need lint/)
 })
 
+test('a renamed lint job fails closed instead of switching the lint rules off', () => {
+  const renamed = CI.split('\n  lint:\n').join('\n  guards:\n').split('needs: lint\n').join('needs: guards\n').split('      - lint\n').join('      - guards\n')
+  assert.notEqual(renamed, CI)
+  assert.match(joined(renamed), /there is no `lint` job -- the gate-needs-lint and fail-fast-lint checks cannot run/)
+})
+
 test('lint without its fail-fast job is reported', () => {
   const start = CI.indexOf('  fail-fast-lint:\n')
   const end = CI.indexOf('\n  fail-fast-', start + 1) + 1

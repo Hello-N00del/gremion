@@ -2205,7 +2205,8 @@ jobs:
               echo "  ok      $job"
             elif [ "$job" = "verify-census" ] && [ "$result" = "skipped" ] && [ "$EVENT_NAME" = "pull_request" ]; then
               # Skipped only when the `changes` job found no census input in the
-              # diff (and lint passed). The record check below then allows exactly
+              # diff (lint is judged as its own row above; a cancelled run fails in the
+              # last step). The record check below then allows exactly
               # this one absence, and only on a pull request.
               echo "  skipped $job (pull request; no census input changed)"
             else
