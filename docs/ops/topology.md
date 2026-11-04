@@ -42,7 +42,7 @@ Containers observed (docker-reported), 32 total, all `Up 8 days`:
 | files-service | host-local first-party `files` image, floating `:latest` (built on the host, no registry pull) | healthy |
 | votes-service | host-local first-party `votes` image, floating `:latest` (built on the host, no registry pull) | healthy |
 | collabora | `collabora/code:24.04.10.1.1` | healthy |
-| traefik | `traefik:v3.7.1` | healthy |
+| traefik | `traefik:v3.7.17` | healthy |
 | fallback | host-local first-party `fallback` image, floating `:latest` (built on the host, no registry pull) | no healthcheck declared |
 | pgbouncer | `edoburu/pgbouncer:v1.25.2-p0` | no healthcheck declared |
 | keycloak | `quay.io/keycloak/keycloak:26.6.1` | healthy |
@@ -106,7 +106,7 @@ is not yet fixed — TRD-352 assigns pinning it to the re-init, owner the operat
 | Redis | cache | `redis:7-alpine` | pinned (rebuild replaces with Valkey, below) |
 | Keycloak | identity | `quay.io/keycloak/keycloak:26.6.1` | pinned |
 | NATS | broker | `nats:2.12-alpine` | pinned |
-| Traefik | edge/reverse proxy | `traefik:v3.7.1` | pinned |
+| Traefik | edge/reverse proxy | `traefik:v3.7.17` | pinned |
 | Collabora | document editing | `collabora/code:24.04.10.1.1` | pinned |
 | LiveKit + JWT auth-service | video/calls | target `livekit-server:v1.7.2` (digest-pinned) [E TRD-242, TRD §11 "as found"] | `[A]` not observed in §1's census — TRD-242's own compose-definition check fails against this host's current compose files; deploy and pin at re-init |
 | PgBouncer | connection pooler | `edoburu/pgbouncer:v1.25.2-p0` (digest-pinned) | pinned |
