@@ -1222,6 +1222,17 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+      # Diagnostic only, no verdict: proof.sh writes one log per phase under
+      # .scratch/t079-logs, so the logs' modification times are the phase timeline
+      # (verify prints no part output on a pass). Read when tuning the events legs.
+      - name: Events proof phase timeline
+        if: ${{ always() && steps.verify.outcome != 'skipped' }}
+        run: |
+          if [ -d .scratch/t079-logs ]; then
+            jq -r '"verify \(.startedAt) -> \(.finishedAt) (UTC)"' scripts/verify/out/*.json
+            ls -l --time-style=+%H:%M:%S -tr .scratch/t079-logs
+          fi
+
   # integration:events-alert: the TASK-079 alert path (make test-events-alert: the TASK-039
   # scratch ops stack, then the red, fire, hold and resolve phases), on stacks of its own, so it
   # runs beside the live half instead of after it (together they took 11-12 minutes).
@@ -1262,6 +1273,17 @@ jobs:
           path: scripts/verify/out/*.json
           if-no-files-found: error
           retention-days: 7
+
+      # Diagnostic only, no verdict: proof.sh writes one log per phase under
+      # .scratch/t079-logs, so the logs' modification times are the phase timeline
+      # (verify prints no part output on a pass). Read when tuning the events legs.
+      - name: Events proof phase timeline
+        if: ${{ always() && steps.verify.outcome != 'skipped' }}
+        run: |
+          if [ -d .scratch/t079-logs ]; then
+            jq -r '"verify \(.startedAt) -> \(.finishedAt) (UTC)"' scripts/verify/out/*.json
+            ls -l --time-style=+%H:%M:%S -tr .scratch/t079-logs
+          fi
 
   # census renders the four production compose projects exactly as a host
   # composes them and BUILDS every first-party image to read its HEALTHCHECK, so it
