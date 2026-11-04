@@ -426,6 +426,19 @@ test('a leg without its fail-fast job, or a leg that cancels or holds a write to
   assert.match(joined(legCancels), /verify-census: cancels the run, but it is a verify leg or the gate/)
 })
 
+// The legs do not wait for Lint, so the gate must, and a red Lint must cancel the legs on a pull request.
+test('a gate that does not need lint is reported (the legs no longer wait for it)', () => {
+  const p = joined(plant('    needs:\n      - lint\n      - verify-static\n', '    needs:\n      - verify-static\n'))
+  assert.match(p, /verify-gate does not need lint/)
+})
+
+test('lint without its fail-fast job is reported', () => {
+  const start = CI.indexOf('  fail-fast-lint:\n')
+  const end = CI.indexOf('\n  fail-fast-', start + 1) + 1
+  assert.ok(start !== -1 && end > start, 'fail-fast-lint not found')
+  assert.match(joined(CI.slice(0, start) + CI.slice(end)), /lint has 0 fail-fast job\(s\); it needs exactly one/)
+})
+
 test('a gate without its cancelled-run step is reported (every other step skips in a cancelled run)', () => {
   const p = joined(plant('        if: ${{ cancelled() }}\n', '        if: ${{ false }}\n'))
   assert.match(p, /verify-gate has no step with `if: cancelled\(\)` that exits 1/)

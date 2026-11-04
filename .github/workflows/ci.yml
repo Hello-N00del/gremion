@@ -548,6 +548,10 @@ jobs:
   # in the Lint job) fails the build when either stops being true, so adding a
   # UNIT_PARTS key without a leg is red on the pull request that adds it.
   #
+  # The legs do not wait for Lint (it took ~95 s that every leg sat out): they start
+  # with the run, and verify-gate needs `lint` itself, so a red Lint is still a red
+  # gate; on a pull request a red Lint also cancels the legs (fail-fast-lint).
+  #
   # FAIL FAST. On a pull request from this repository, a leg that failed cancels
   # the rest of its run, so a red result arrives when the first leg fails instead
   # of when the slowest one finishes. The cancel is a job of its own per leg
@@ -569,7 +573,6 @@ jobs:
   verify-static:
     name: "Verify: static suites"
     runs-on: ubuntu-latest
-    needs: lint
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -652,7 +655,6 @@ jobs:
   verify-render-ops:
     name: "Verify: render and ops suites"
     runs-on: ubuntu-latest
-    needs: lint
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -693,7 +695,6 @@ jobs:
   verify-unit-ui:
     name: "Verify: gremion-ui units"
     runs-on: ubuntu-latest
-    needs: lint
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -757,7 +758,6 @@ jobs:
   verify-unit-packages:
     name: "Verify: package units"
     runs-on: ubuntu-latest
-    needs: lint
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -849,7 +849,6 @@ jobs:
   verify-unit-host:
     name: "Verify: module and script units"
     runs-on: ubuntu-latest
-    needs: lint
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -948,7 +947,6 @@ jobs:
   verify-unit-bats-1:
     name: "Verify: bats suites (shard 1 of 2)"
     runs-on: ubuntu-latest
-    needs: lint
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -1041,7 +1039,6 @@ jobs:
   verify-unit-bats-2:
     name: "Verify: bats suites (shard 2 of 2)"
     runs-on: ubuntu-latest
-    needs: lint
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -1146,7 +1143,6 @@ jobs:
   verify-integration-db:
     name: "Verify: database integration"
     runs-on: ubuntu-latest
-    needs: lint
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -1191,7 +1187,6 @@ jobs:
   verify-integration-brokers:
     name: "Verify: broker integration"
     runs-on: ubuntu-latest
-    needs: lint
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -1233,7 +1228,6 @@ jobs:
   verify-integration-events-alert:
     name: "Verify: event alert-path integration"
     runs-on: ubuntu-latest
-    needs: lint
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -1277,14 +1271,13 @@ jobs:
   verify-census:
     name: "Verify: health census"
     runs-on: ubuntu-latest
-    needs: [lint, changes]
+    needs: changes
     # Same shape as docker-build's condition, for the same reason: `changes` is
     # skipped on push / workflow_dispatch, which would skip this job with it. Push
     # and manual runs always census; a pull request does when a census input
     # changed OR when the `changes` job itself failed (fail safe: run it).
     if: >-
       ${{ !cancelled()
-      && needs.lint.result == 'success'
       && (github.event_name != 'pull_request'
           || needs.changes.result == 'failure'
           || needs.changes.outputs.census == 'true') }}
@@ -1956,6 +1949,22 @@ jobs:
   # from the repository runs here, so the write token never shares a runner with
   # repository or dependency code. scripts/check-ci-verify-coverage.mjs pins the
   # shape: one per leg, this exact `if`, nothing but the cancel.
+  fail-fast-lint:
+    name: "Fail fast: lint failed"
+    runs-on: ubuntu-latest
+    needs: lint
+    if: ${{ failure() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository }}
+    timeout-minutes: 5
+    permissions:
+      actions: write
+    steps:
+      - name: Cancel the rest of this pull-request run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ github.run_id }}
+          REPO: ${{ github.repository }}
+        run: /usr/bin/gh run cancel "$RUN_ID" --repo "$REPO"
+
   fail-fast-verify-static:
     name: "Fail fast: verify-static failed"
     runs-on: ubuntu-latest
@@ -2146,6 +2155,7 @@ jobs:
     name: Verify gate
     runs-on: ubuntu-latest
     needs:
+      - lint
       - verify-static
       - verify-render-ops
       - verify-unit-ui
@@ -2184,8 +2194,8 @@ jobs:
           set -euo pipefail
           # Vacuity floor: a gate that iterates an empty `needs` passes anything.
           total=$(jq 'length' <<<"$NEEDS_JSON")
-          if [ "$total" -lt 11 ]; then
-            echo "::error::verify-gate waits for only $total job(s); expected the eleven verify legs"
+          if [ "$total" -lt 12 ]; then
+            echo "::error::verify-gate waits for only $total job(s); expected lint and the eleven verify legs"
             exit 1
           fi
           rows=$(jq -r 'to_entries[] | [.key, .value.result] | @tsv' <<<"$NEEDS_JSON")
