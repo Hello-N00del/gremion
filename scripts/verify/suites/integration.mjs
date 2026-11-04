@@ -324,22 +324,63 @@ export function judgeNatsAuthTest(res) {
 }
 
 /**
- * `make test-events` (TASK-079): @gremion/events' unit suite, then
+ * TASK-079's acceptance runs as two halves on separate stacks (make test-events
+ * runs both; verify and CI run them as the parts events-live and events-alert,
+ * because together they took 11-12 minutes).
+ *
+ * `make test-events-live`: @gremion/events' unit suite, then
  * packages/events/scripts/proof.sh against a scratch Postgres and the
- * authenticated broker (four live groups and three alert phases), then the
- * migrate-image reach check. Judged like judgeNatsAuthTest: exit 0 counts only
- * with the unit run's all-passed summary, every live group's own
- * "[events-proof] N passing (minimum M)" + "group <g> OK" pair at or above the
- * floor pinned HERE (a log claiming a lower floor did not run the proof this
- * judge vouches for), the three alert phases' OK lines, the proof's final
- * "[events-proof] OK" and the image check's OK line. collected is the unit
- * count plus the live counts.
+ * authenticated broker (four live groups), then the migrate-image reach check.
+ * Judged like judgeNatsAuthTest: exit 0 counts only with the unit run's
+ * all-passed summary, every live group's own "[events-proof] N passing
+ * (minimum M)" + "group <g> OK" pair at or above the floor pinned HERE (a log
+ * claiming a lower floor did not run the proof this judge vouches for), the
+ * proof's own "[events-proof] OK" verdict (`down live`) and the image check's
+ * OK line. collected is the unit count plus the live counts.
  */
 export const EVENTS_MIN_PROOFS = { core: 15, consumer: 15, deadletter: 6, rebuild: 2 }
 export const EVENTS_ALERT_PHASES = ['alert-red', 'alert-fire', 'alert-hold', 'alert-resolve']
+/** alert-proof.sh's own `finish <minimum>` per acceptance phase, pinned here like EVENTS_MIN_PROOFS. */
+export const EVENTS_ALERT_MIN_CHECKS = { 'alert-red': 4, 'alert-fire': 12, 'alert-hold': 6, 'alert-resolve': 5 }
 
-export function judgeEventsTest(res) {
-  const label = 'make test-events'
+/**
+ * `make test-events-alert`: the TASK-039 alert path, one phase per proof.sh call
+ * (prepare, up, then the acceptance phases red, fire, hold, resolve). Exit 0
+ * counts only with every acceptance phase's "[alert-proof] N passing (minimum
+ * M), 0 failing -- phase <p>" line at or above the floor pinned HERE, its
+ * "[events-proof] group <p> OK" line and the proof's own "[events-proof] OK"
+ * verdict (`down alert`). collected is the sum of the acceptance phases' checks.
+ */
+export function judgeEventsAlertTest(res) {
+  const label = 'make test-events-alert'
+  const out = capturedText(res)
+  const phases = new Map()
+  for (const m of out.matchAll(/^\[alert-proof\] (\d+) passing \(minimum (\d+)\), (\d+) failing -- phase ([\w-]+)\s*$/gm)) {
+    phases.set(m[4], { passing: Number(m[1]), minimum: Number(m[2]), failing: Number(m[3]) })
+  }
+  const checks = EVENTS_ALERT_PHASES.reduce((a, p) => a + (phases.get(p)?.passing ?? 0), 0)
+  if (res.code !== 0) {
+    const n = Math.max(1, checks)
+    return { label, collected: n, passed: 0, failed: n, skipped: 0, detail: tail(out) }
+  }
+  const phasesOk = EVENTS_ALERT_PHASES.every((p) => {
+    const r = phases.get(p)
+    const groupOk = new RegExp(`^\\[events-proof\\] group ${p} OK\\s*$`, 'm').test(out)
+    return groupOk && r !== undefined && r.failing === 0 && r.minimum >= EVENTS_ALERT_MIN_CHECKS[p] && r.passing >= r.minimum
+  })
+  const ok = /^\[events-proof\] OK\s*$/m.test(out)
+  if (!phasesOk || !ok) {
+    return {
+      label,
+      unparseable: true,
+      detail: `exit 0 but not all of the four alert phases' "[alert-proof] N passing (minimum >= floor), 0 failing" + "[events-proof] group <phase> OK" lines (red, fire, hold, resolve) and "[events-proof] OK" -- untrusted\n${tail(out)}`,
+    }
+  }
+  return { label, collected: checks, passed: checks, failed: 0, skipped: 0 }
+}
+
+export function judgeEventsLiveTest(res) {
+  const label = 'make test-events-live'
   const out = capturedText(res)
   // The unit run prints BEFORE the proof starts; the proof echoes its own live-suite
   // summaries, which must not stand in for the unit one.
@@ -352,7 +393,6 @@ export function judgeEventsTest(res) {
     const r = groups.get(g)
     return r !== undefined && r.minimum >= floor && r.passing >= r.minimum
   })
-  const alertsOk = EVENTS_ALERT_PHASES.every((p) => new RegExp(`^\\[events-proof\\] group ${p} OK\\s*$`, 'm').test(out))
   const ok = /^\[events-proof\] OK\s*$/m.test(out)
   const image = /^\[events-image\] OK\b/m.test(out)
   const live = [...groups.values()].reduce((a, r) => a + r.passing, 0)
@@ -362,11 +402,11 @@ export function judgeEventsTest(res) {
   }
   const fault = unitFault(label, unit)
   if (fault) return fault
-  if (!cleanUnit(unit) || !groupsOk || !alertsOk || !ok || !image) {
+  if (!cleanUnit(unit) || !groupsOk || !ok || !image) {
     return {
       label,
       unparseable: true,
-      detail: `exit 0 but not all of the unit "Tests N passed (N)" summary, the four "[events-proof] N passing (minimum >= floor)" group pairs, the four alert phase OK lines (red, fire, hold, resolve), "[events-proof] OK" and "[events-image] OK" -- untrusted\nunit summary seen: ${unit ? `"${unit.line}"` : 'none'}\n${tail(out)}`,
+      detail: `exit 0 but not all of the unit "Tests N passed (N)" summary, the four "[events-proof] N passing (minimum >= floor)" group pairs, "[events-proof] OK" and "[events-image] OK" -- untrusted\nunit summary seen: ${unit ? `"${unit.line}"` : 'none'}\n${tail(out)}`,
     }
   }
   const n = unit.passed + live
@@ -449,7 +489,8 @@ export const INTEGRATION_PARTS = {
   'fresh-init': (root) => makePart('fresh-init-proof', judgeFreshInit, root),
   nats: (root) => makePart('test-ports-nats', judgeNatsTest, root),
   'nats-auth': (root) => makePart('test-nats-auth', judgeNatsAuthTest, root),
-  events: (root) => makePart('test-events', judgeEventsTest, root),
+  'events-live': (root) => makePart('test-events-live', judgeEventsLiveTest, root),
+  'events-alert': (root) => makePart('test-events-alert', judgeEventsAlertTest, root),
   'keycloak-stepup': (root) => keycloakStepupPart({ root }),
 }
 

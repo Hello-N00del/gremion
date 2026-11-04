@@ -11,9 +11,10 @@ on:
   workflow_dispatch:
 
 # Least-privilege token: read-only on the repo. No job in this workflow needs
-# write access (no release uploads, no issue/PR-comment steps). If a future
-# step needs write — e.g. publishing artifacts to a release — add a per-job
-# `permissions:` block on that single job rather than elevating workflow-wide.
+# write access to the repository (no release uploads, no issue/PR-comment steps).
+# The fail-fast-* jobs alone add `actions: write`, to cancel their own run (see
+# FAIL FAST below); they run no repository code. Anything else that needs write
+# gets a per-job `permissions:` block rather than elevating workflow-wide.
 permissions:
   contents: read
 
@@ -547,6 +548,16 @@ jobs:
   # in the Lint job) fails the build when either stops being true, so adding a
   # UNIT_PARTS key without a leg is red on the pull request that adds it.
   #
+  # FAIL FAST. On a pull request from this repository, a leg that failed cancels
+  # the rest of its run, so a red result arrives when the first leg fails instead
+  # of when the slowest one finishes. The cancel is a job of its own per leg
+  # (fail-fast-<leg>, before verify-gate): it needs `actions: write`, so it runs no
+  # checkout and no repository or dependency code, and the legs keep the
+  # read-only token. verify-gate is `if: always()` so it still runs in the
+  # cancelled run and fails on the cancelled legs (a skipped gate would read as
+  # passing), and its last step fails any cancelled run outright. Pushes, manual
+  # runs and fork pull requests never cancel: pushes keep every leg's record.
+  #
   # verify refuses a dirty tree. Everything a leg generates before it runs
   # (the paraglide catalogue, the module overlay, `svelte-kit sync`) is
   # gitignored, which is what keeps the record's "this exact commit" claim true.
@@ -830,15 +841,16 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-  # unit:modules, unit:node, unit:bats. This leg REPLACES the old unit-test job: the
-  # bats part globs test/*.bats and test/host/*.bats, the same set `make test-unit`
-  # collects, and test/host/no-host-literals.bats fails if ci.yml stops running it
-  # through verify or the part's patterns drift from the Makefile's.
+  # unit:modules, unit:node: the module vitest parts and every scripts/**/*.test.mjs. This
+  # leg and the two bats shard legs below REPLACE the old unit-test job; it is kept short
+  # (about 3 minutes) so a failing script test turns the run red early (the fail-fast step).
+  # test/host/no-host-literals.bats fails if ci.yml stops running the bats shards through
+  # verify or the shards' patterns drift from the Makefile's.
   verify-unit-host:
-    name: "Verify: module, script and host units"
+    name: "Verify: module and script units"
     runs-on: ubuntu-latest
     needs: lint
-    timeout-minutes: 60
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -909,9 +921,9 @@ jobs:
           age --version
           gitleaks version
 
-      - name: Run verify (unit:modules, unit:node, unit:bats)
+      - name: Run verify (unit:modules, unit:node)
         id: verify
-        run: node scripts/verify/verify.mjs --only unit:modules,unit:node,unit:bats
+        run: node scripts/verify/verify.mjs --only unit:modules,unit:node
 
       # The record is the leg's whole product, so it is uploaded even when a suite
       # failed (verify writes it either way) and a missing record is itself an
@@ -923,6 +935,198 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           name: record-verify-unit-host
+          path: scripts/verify/out/*.json
+          if-no-files-found: error
+          retention-days: 7
+
+  # unit:bats-1-of-2 and unit:bats-2-of-2: the bats suites (test/*.bats and test/host/*.bats,
+  # the set `make test-unit` collects) split into two shards that partition the sorted file
+  # list (suites/unit.mjs#batsShardFiles), one leg each: in one leg they took 10-12 minutes and
+  # were the long pole of every run. Both shard legs install exactly what the module and
+  # script leg installs, because a bats case whose tool is absent `skip`s, and
+  # test/host/no-host-literals.bats pins those installs in every job that runs a shard.
+  verify-unit-bats-1:
+    name: "Verify: bats suites (shard 1 of 2)"
+    runs-on: ubuntu-latest
+    needs: lint
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413  # v6.1.0
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7.1.0
+        with:
+          node-version: 26
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # What the old unit-test job installed, minus nothing: envsubst is needed by
+      # legal.bats' template rendering tests, yamllint by the release-images.yml YAML
+      # assertion in test/host/deploy-workflow.bats (which `skip`s when it is absent, and
+      # a guard that skips is a guard that passes; that file now guards the keyless
+      # release pipeline: release-images.yml, cut-dist-tag.sh, release-tag-check.sh),
+      # bats is an EXTERNAL prerequisite from npm
+      # (not vendored). jq and openssl are preinstalled on the runner image;
+      # python3 too (test/configure-keycloak.bats validates JSON with it).
+      - name: Install BATS and test dependencies
+        run: |
+          sudo apt-get install -y gettext-base jq
+          pip install yamllint
+          sudo npm install -g bats
+
+      # Same pinned, checksummed install as the Lint job: the apt package on
+      # ubuntu-latest is 0.9.0 and raises notes the local gate (0.11.0) does not.
+      - name: Install shellcheck
+        run: |
+          curl -fsSLo /tmp/sc.tar.xz https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.x86_64.tar.xz
+          echo "8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198  /tmp/sc.tar.xz" | sha256sum -c -
+          tar -xJf /tmp/sc.tar.xz -C /tmp
+          sudo install -m 0755 /tmp/shellcheck-v0.11.0/shellcheck /usr/local/bin/shellcheck
+          shellcheck --version
+
+      # unit:node runs EVERY scripts/**/*.test.mjs, and a few of them drive real
+      # release tooling that the old CI never ran. Each is a pinned release asset
+      # checked against its sha256 before it is installed (the pins for cosign are
+      # the ones scripts/release/lib/tools.mjs#COSIGN asserts; assertCosign refuses
+      # any other binary). sops and age were not on the runner image; their hashes
+      # are the release's own checksums (sops) and the asset's own (age publishes
+      # none beside a transparency-log proof, so that one was computed at pin time).
+      - name: Install the release toolchain the node suites drive (cosign, sops, age, gitleaks)
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP"
+          curl -fsSLo cosign https://github.com/sigstore/cosign/releases/download/v2.6.5/cosign-linux-amd64
+          echo "c3b4f5410e608af03a5eb0aaac84a4313d8da131248e08ff1759ac70c79d1644  cosign" | sha256sum -c -
+          sudo install -m 0755 cosign /usr/local/bin/cosign
+          curl -fsSLo sops https://github.com/getsops/sops/releases/download/v3.13.3/sops-v3.13.3.linux.amd64
+          echo "e5bec3346a873ae91d871550f3e698c1aad962aff462a080e40f25fde17fef6b  sops" | sha256sum -c -
+          sudo install -m 0755 sops /usr/local/bin/sops
+          curl -fsSLo age.tar.gz https://github.com/FiloSottile/age/releases/download/v1.3.2/age-v1.3.2-linux-amd64.tar.gz
+          echo "cbe24006683f8eb669266162894b9a522a1af52f2665fbc63a4bb032ed26ac10  age.tar.gz" | sha256sum -c -
+          tar -xzf age.tar.gz
+          sudo install -m 0755 age/age age/age-keygen /usr/local/bin/
+          curl -fsSLo gitleaks.tar.gz https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz
+          echo "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  gitleaks.tar.gz" | sha256sum -c -
+          tar -xzf gitleaks.tar.gz gitleaks
+          sudo install -m 0755 gitleaks /usr/local/bin/gitleaks
+          cosign version | head -n 3
+          sops --version
+          age --version
+          gitleaks version
+
+      - name: Run verify (unit:bats-1-of-2)
+        id: verify
+        run: node scripts/verify/verify.mjs --only unit:bats-1-of-2
+
+      # The record is the leg's whole product, so it is uploaded even when a suite
+      # failed (verify writes it either way) and a missing record is itself an
+      # error. `steps.verify.outcome` keeps that from firing when the leg never
+      # got as far as running verify (a failed install): that failure is reported
+      # by the step that failed, not buried under a second one.
+      - name: Upload verify record
+        if: ${{ always() && steps.verify.outcome != 'skipped' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: record-verify-unit-bats-1
+          path: scripts/verify/out/*.json
+          if-no-files-found: error
+          retention-days: 7
+
+  verify-unit-bats-2:
+    name: "Verify: bats suites (shard 2 of 2)"
+    runs-on: ubuntu-latest
+    needs: lint
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413  # v6.1.0
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7.1.0
+        with:
+          node-version: 26
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # What the old unit-test job installed, minus nothing: envsubst is needed by
+      # legal.bats' template rendering tests, yamllint by the release-images.yml YAML
+      # assertion in test/host/deploy-workflow.bats (which `skip`s when it is absent, and
+      # a guard that skips is a guard that passes; that file now guards the keyless
+      # release pipeline: release-images.yml, cut-dist-tag.sh, release-tag-check.sh),
+      # bats is an EXTERNAL prerequisite from npm
+      # (not vendored). jq and openssl are preinstalled on the runner image;
+      # python3 too (test/configure-keycloak.bats validates JSON with it).
+      - name: Install BATS and test dependencies
+        run: |
+          sudo apt-get install -y gettext-base jq
+          pip install yamllint
+          sudo npm install -g bats
+
+      # Same pinned, checksummed install as the Lint job: the apt package on
+      # ubuntu-latest is 0.9.0 and raises notes the local gate (0.11.0) does not.
+      - name: Install shellcheck
+        run: |
+          curl -fsSLo /tmp/sc.tar.xz https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.x86_64.tar.xz
+          echo "8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198  /tmp/sc.tar.xz" | sha256sum -c -
+          tar -xJf /tmp/sc.tar.xz -C /tmp
+          sudo install -m 0755 /tmp/shellcheck-v0.11.0/shellcheck /usr/local/bin/shellcheck
+          shellcheck --version
+
+      # unit:node runs EVERY scripts/**/*.test.mjs, and a few of them drive real
+      # release tooling that the old CI never ran. Each is a pinned release asset
+      # checked against its sha256 before it is installed (the pins for cosign are
+      # the ones scripts/release/lib/tools.mjs#COSIGN asserts; assertCosign refuses
+      # any other binary). sops and age were not on the runner image; their hashes
+      # are the release's own checksums (sops) and the asset's own (age publishes
+      # none beside a transparency-log proof, so that one was computed at pin time).
+      - name: Install the release toolchain the node suites drive (cosign, sops, age, gitleaks)
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP"
+          curl -fsSLo cosign https://github.com/sigstore/cosign/releases/download/v2.6.5/cosign-linux-amd64
+          echo "c3b4f5410e608af03a5eb0aaac84a4313d8da131248e08ff1759ac70c79d1644  cosign" | sha256sum -c -
+          sudo install -m 0755 cosign /usr/local/bin/cosign
+          curl -fsSLo sops https://github.com/getsops/sops/releases/download/v3.13.3/sops-v3.13.3.linux.amd64
+          echo "e5bec3346a873ae91d871550f3e698c1aad962aff462a080e40f25fde17fef6b  sops" | sha256sum -c -
+          sudo install -m 0755 sops /usr/local/bin/sops
+          curl -fsSLo age.tar.gz https://github.com/FiloSottile/age/releases/download/v1.3.2/age-v1.3.2-linux-amd64.tar.gz
+          echo "cbe24006683f8eb669266162894b9a522a1af52f2665fbc63a4bb032ed26ac10  age.tar.gz" | sha256sum -c -
+          tar -xzf age.tar.gz
+          sudo install -m 0755 age/age age/age-keygen /usr/local/bin/
+          curl -fsSLo gitleaks.tar.gz https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz
+          echo "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  gitleaks.tar.gz" | sha256sum -c -
+          tar -xzf gitleaks.tar.gz gitleaks
+          sudo install -m 0755 gitleaks /usr/local/bin/gitleaks
+          cosign version | head -n 3
+          sops --version
+          age --version
+          gitleaks version
+
+      - name: Run verify (unit:bats-2-of-2)
+        id: verify
+        run: node scripts/verify/verify.mjs --only unit:bats-2-of-2
+
+      # The record is the leg's whole product, so it is uploaded even when a suite
+      # failed (verify writes it either way) and a missing record is itself an
+      # error. `steps.verify.outcome` keeps that from firing when the leg never
+      # got as far as running verify (a failed install): that failure is reported
+      # by the step that failed, not buried under a second one.
+      - name: Upload verify record
+        if: ${{ always() && steps.verify.outcome != 'skipped' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: record-verify-unit-bats-2
           path: scripts/verify/out/*.json
           if-no-files-found: error
           retention-days: 7
@@ -981,9 +1185,9 @@ jobs:
   # integration:nats is ports.yml's NATS step plus its post-condition: `make
   # test-ports-nats` starts its own JetStream container and asserts the integration
   # file's passing-test floor (packages/ports/scripts/nats-test.sh), and verify
-  # judges the printed counts again. integration:nats-auth and integration:events
+  # judges the printed counts again. integration:nats-auth and integration:events-live
   # are the authenticated-broker and event-relay proofs, each in scratch
-  # containers removed by name.
+  # containers removed by name; the event alert path is the next leg.
   verify-integration-brokers:
     name: "Verify: broker integration"
     runs-on: ubuntu-latest
@@ -1005,9 +1209,9 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Run verify (integration:nats, integration:nats-auth, integration:events)
+      - name: Run verify (integration:nats, integration:nats-auth, integration:events-live)
         id: verify
-        run: node scripts/verify/verify.mjs --only integration:nats,integration:nats-auth,integration:events
+        run: node scripts/verify/verify.mjs --only integration:nats,integration:nats-auth,integration:events-live
 
       # The record is the leg's whole product, so it is uploaded even when a suite
       # failed (verify writes it either way) and a missing record is itself an
@@ -1019,6 +1223,48 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           name: record-verify-integration-brokers
+          path: scripts/verify/out/*.json
+          if-no-files-found: error
+          retention-days: 7
+
+  # integration:events-alert: the TASK-079 alert path (make test-events-alert: the TASK-039
+  # scratch ops stack, then the red, fire, hold and resolve phases), on stacks of its own, so it
+  # runs beside the live half instead of after it (together they took 11-12 minutes).
+  verify-integration-events-alert:
+    name: "Verify: event alert-path integration"
+    runs-on: ubuntu-latest
+    needs: lint
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413  # v6.1.0
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7.1.0
+        with:
+          node-version: 26
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run verify (integration:events-alert)
+        id: verify
+        run: node scripts/verify/verify.mjs --only integration:events-alert
+
+      # The record is the leg's whole product, so it is uploaded even when a suite
+      # failed (verify writes it either way) and a missing record is itself an
+      # error. `steps.verify.outcome` keeps that from firing when the leg never
+      # got as far as running verify (a failed install): that failure is reported
+      # by the step that failed, not buried under a second one.
+      - name: Upload verify record
+        if: ${{ always() && steps.verify.outcome != 'skipped' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: record-verify-integration-events-alert
           path: scripts/verify/out/*.json
           if-no-files-found: error
           retention-days: 7
@@ -1705,6 +1951,187 @@ jobs:
         if: always()
         run: docker rm -f gremion-public-smoke || true
 
+  # FAIL FAST (see the verify-legs header): one per leg, started only when that leg
+  # failed on a pull request from this repository. No checkout, no setup, nothing
+  # from the repository runs here, so the write token never shares a runner with
+  # repository or dependency code. scripts/check-ci-verify-coverage.mjs pins the
+  # shape: one per leg, this exact `if`, nothing but the cancel.
+  fail-fast-verify-static:
+    name: "Fail fast: verify-static failed"
+    runs-on: ubuntu-latest
+    needs: verify-static
+    if: ${{ failure() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository }}
+    timeout-minutes: 5
+    permissions:
+      actions: write
+    steps:
+      - name: Cancel the rest of this pull-request run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ github.run_id }}
+          REPO: ${{ github.repository }}
+        run: /usr/bin/gh run cancel "$RUN_ID" --repo "$REPO"
+
+  fail-fast-verify-render-ops:
+    name: "Fail fast: verify-render-ops failed"
+    runs-on: ubuntu-latest
+    needs: verify-render-ops
+    if: ${{ failure() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository }}
+    timeout-minutes: 5
+    permissions:
+      actions: write
+    steps:
+      - name: Cancel the rest of this pull-request run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ github.run_id }}
+          REPO: ${{ github.repository }}
+        run: /usr/bin/gh run cancel "$RUN_ID" --repo "$REPO"
+
+  fail-fast-verify-unit-ui:
+    name: "Fail fast: verify-unit-ui failed"
+    runs-on: ubuntu-latest
+    needs: verify-unit-ui
+    if: ${{ failure() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository }}
+    timeout-minutes: 5
+    permissions:
+      actions: write
+    steps:
+      - name: Cancel the rest of this pull-request run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ github.run_id }}
+          REPO: ${{ github.repository }}
+        run: /usr/bin/gh run cancel "$RUN_ID" --repo "$REPO"
+
+  fail-fast-verify-unit-packages:
+    name: "Fail fast: verify-unit-packages failed"
+    runs-on: ubuntu-latest
+    needs: verify-unit-packages
+    if: ${{ failure() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository }}
+    timeout-minutes: 5
+    permissions:
+      actions: write
+    steps:
+      - name: Cancel the rest of this pull-request run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ github.run_id }}
+          REPO: ${{ github.repository }}
+        run: /usr/bin/gh run cancel "$RUN_ID" --repo "$REPO"
+
+  fail-fast-verify-unit-host:
+    name: "Fail fast: verify-unit-host failed"
+    runs-on: ubuntu-latest
+    needs: verify-unit-host
+    if: ${{ failure() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository }}
+    timeout-minutes: 5
+    permissions:
+      actions: write
+    steps:
+      - name: Cancel the rest of this pull-request run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ github.run_id }}
+          REPO: ${{ github.repository }}
+        run: /usr/bin/gh run cancel "$RUN_ID" --repo "$REPO"
+
+  fail-fast-verify-unit-bats-1:
+    name: "Fail fast: verify-unit-bats-1 failed"
+    runs-on: ubuntu-latest
+    needs: verify-unit-bats-1
+    if: ${{ failure() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository }}
+    timeout-minutes: 5
+    permissions:
+      actions: write
+    steps:
+      - name: Cancel the rest of this pull-request run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ github.run_id }}
+          REPO: ${{ github.repository }}
+        run: /usr/bin/gh run cancel "$RUN_ID" --repo "$REPO"
+
+  fail-fast-verify-unit-bats-2:
+    name: "Fail fast: verify-unit-bats-2 failed"
+    runs-on: ubuntu-latest
+    needs: verify-unit-bats-2
+    if: ${{ failure() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository }}
+    timeout-minutes: 5
+    permissions:
+      actions: write
+    steps:
+      - name: Cancel the rest of this pull-request run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ github.run_id }}
+          REPO: ${{ github.repository }}
+        run: /usr/bin/gh run cancel "$RUN_ID" --repo "$REPO"
+
+  fail-fast-verify-integration-db:
+    name: "Fail fast: verify-integration-db failed"
+    runs-on: ubuntu-latest
+    needs: verify-integration-db
+    if: ${{ failure() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository }}
+    timeout-minutes: 5
+    permissions:
+      actions: write
+    steps:
+      - name: Cancel the rest of this pull-request run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ github.run_id }}
+          REPO: ${{ github.repository }}
+        run: /usr/bin/gh run cancel "$RUN_ID" --repo "$REPO"
+
+  fail-fast-verify-integration-brokers:
+    name: "Fail fast: verify-integration-brokers failed"
+    runs-on: ubuntu-latest
+    needs: verify-integration-brokers
+    if: ${{ failure() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository }}
+    timeout-minutes: 5
+    permissions:
+      actions: write
+    steps:
+      - name: Cancel the rest of this pull-request run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ github.run_id }}
+          REPO: ${{ github.repository }}
+        run: /usr/bin/gh run cancel "$RUN_ID" --repo "$REPO"
+
+  fail-fast-verify-integration-events-alert:
+    name: "Fail fast: verify-integration-events-alert failed"
+    runs-on: ubuntu-latest
+    needs: verify-integration-events-alert
+    if: ${{ failure() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository }}
+    timeout-minutes: 5
+    permissions:
+      actions: write
+    steps:
+      - name: Cancel the rest of this pull-request run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ github.run_id }}
+          REPO: ${{ github.repository }}
+        run: /usr/bin/gh run cancel "$RUN_ID" --repo "$REPO"
+
+  fail-fast-verify-census:
+    name: "Fail fast: verify-census failed"
+    runs-on: ubuntu-latest
+    needs: verify-census
+    if: ${{ failure() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository }}
+    timeout-minutes: 5
+    permissions:
+      actions: write
+    steps:
+      - name: Cancel the rest of this pull-request run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ github.run_id }}
+          REPO: ${{ github.repository }}
+        run: /usr/bin/gh run cancel "$RUN_ID" --repo "$REPO"
+
   # ──────────────────────────────────────────────────────────────────────────
   # Job 6: Verify gate. The one place the legs above become a verdict.
   #
@@ -1724,12 +2151,16 @@ jobs:
       - verify-unit-ui
       - verify-unit-packages
       - verify-unit-host
+      - verify-unit-bats-1
+      - verify-unit-bats-2
       - verify-integration-db
       - verify-integration-brokers
+      - verify-integration-events-alert
       - verify-census
-    # A skipped or failed leg must make this job RUN and fail, not be skipped with
-    # it: a skipped required check reads as passing in a branch ruleset.
-    if: ${{ !cancelled() }}
+    # A skipped, failed or CANCELLED leg must make this job RUN and fail, not be skipped
+    # with it: a skipped required check reads as passing in a branch ruleset. always(),
+    # not !cancelled(): the fail-fast step cancels the run, and the gate must still run then.
+    if: ${{ always() }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -1742,7 +2173,10 @@ jobs:
         with:
           node-version: 26
 
+      # always(): in a cancelled run (fail fast) a step without it is skipped, and a gate whose
+      # every step was skipped would finish green.
       - name: Every verify leg must have succeeded
+        if: ${{ always() }}
         env:
           NEEDS_JSON: ${{ toJSON(needs) }}
           EVENT_NAME: ${{ github.event_name }}
@@ -1750,8 +2184,8 @@ jobs:
           set -euo pipefail
           # Vacuity floor: a gate that iterates an empty `needs` passes anything.
           total=$(jq 'length' <<<"$NEEDS_JSON")
-          if [ "$total" -lt 8 ]; then
-            echo "::error::verify-gate waits for only $total job(s); expected the eight verify legs"
+          if [ "$total" -lt 11 ]; then
+            echo "::error::verify-gate waits for only $total job(s); expected the eleven verify legs"
             exit 1
           fi
           rows=$(jq -r 'to_entries[] | [.key, .value.result] | @tsv' <<<"$NEEDS_JSON")
@@ -1808,3 +2242,13 @@ jobs:
             exit 1
           fi
           node scripts/verify/check-record.mjs "$SHA" --allow-missing census
+
+      # In a cancelled run (fail fast, a superseding push, a manual cancel) every step
+      # above without always() is skipped: the records were never combined or judged.
+      # Without this step a cancelled run whose legs had all succeeded would finish
+      # with a green gate that checked nothing.
+      - name: A cancelled run is never a pass
+        if: ${{ cancelled() }}
+        run: |
+          echo "::error::this run was cancelled, so the verify records were not judged"
+          exit 1
