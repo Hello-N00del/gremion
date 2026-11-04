@@ -11,7 +11,7 @@ import assert from 'node:assert/strict'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { NODE_FLOORS, parseNodeFroms, checkDockerfile, runChecks } from './check-node-floor.mjs'
+import { NODE_FLOORS, parseNodeFroms, checkDockerfile, isDockerfile, runChecks } from './check-node-floor.mjs'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const DIGEST = 'sha256:' + 'a'.repeat(64)
@@ -85,6 +85,31 @@ test('a digest pin whose tag states no full version fails: its Node version is u
 test('a floating major tag on a supported line passes: the registry moves it to the patched release', () => {
   assert.deepEqual(check('FROM node:26-alpine AS builder'), [])
   assert.deepEqual(check('FROM node:22-alpine'), [])
+})
+
+test('a floating major.minor tag below the floor fails: that line never reaches the patched release', () => {
+  for (const ref of ['node:26.11-alpine', 'node:26.2-alpine']) {
+    const p = check(`FROM ${ref}`)
+    assert.equal(p.length, 1, `${ref} must be refused`)
+    assert.match(p[0], /BELOW the floor 26\.12\.1/)
+  }
+  assert.deepEqual(check('FROM node:26.12-alpine'), [], 'the floor minor floats onto 26.12.1')
+  assert.deepEqual(check('FROM node:26.13-alpine'), [])
+})
+
+test('a node base behind any registry host is still checked', () => {
+  for (const ref of ['index.docker.io/library/node:20-alpine', 'mirror.gcr.io/library/node:26.2.0-alpine']) {
+    assert.equal(check(`FROM ${ref}`).length, 1, `${ref} must be refused`)
+  }
+})
+
+test('discovery matches Dockerfile, x.Dockerfile and Containerfile names only', () => {
+  for (const p of ['Dockerfile', 'a/Dockerfile.prod', 'fixtures/collector.Dockerfile', 'Containerfile']) {
+    assert.ok(isDockerfile(p), `${p} must be scanned`)
+  }
+  for (const p of ['docs/Dockerfile.md', 'scripts/check-dockerfile.mjs', 'README']) {
+    assert.ok(!isDockerfile(p), `${p} must not be scanned`)
+  }
 })
 
 test('a tag-pinned full version below the floor fails even without a digest', () => {

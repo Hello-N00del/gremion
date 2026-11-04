@@ -26,6 +26,13 @@
 // both from the registry at once (the `Digest:` of `docker buildx imagetools
 // inspect node:<x.y.z>-alpine`, the multi-arch INDEX digest).
 //
+// NOT SCANNED, bump by hand with every floor raise: VENDOR_MAIL_NODE_IMAGE in
+// infra/host/templates/env/mail.env.tmpl (and its ops/vendor-mail fixture),
+// digest-only by TRD-350 so it states no version, and the NODEIMAGE /
+// NODE_IMAGE helper pins in services/kernel-api/test/bodies/image-proof.sh,
+// services/kernel-api/test/harness/stack-proof.sh and
+// test/host/integration/customer-provision-proof.sh.
+//
 // Run:  node scripts/check-node-floor.mjs [--root DIR]   (wired into `make lint`)
 // Test: node --test scripts/check-node-floor.test.mjs
 
@@ -61,7 +68,8 @@ export const NODE_FLOORS = {
 // FROM [--platform=...] <ref> [AS name]; the ref names the official node image
 // in any of its spellings.
 const FROM = /^\s*FROM\s+(?:--\S+\s+)*(\S+)/i
-const NODE_REPO = /^(?:docker\.io\/)?(?:library\/)?node$/
+// Any registry host (docker.io, index.docker.io, a pull-through mirror) in front.
+const NODE_REPO = /^(?:[\w.-]+\.[\w.-]+(?::\d+)?\/)?(?:library\/)?node$/
 
 /** Every `FROM node...` line in a Dockerfile: { line, ref, tag, digest }. */
 export function parseNodeFroms(text) {
@@ -103,6 +111,14 @@ export function checkDockerfile(path, text, floors = NODE_FLOORS) {
     if (!full) {
       if (f.digest) {
         problems.push(`${at}: digest-pinned but the tag states no x.y.z version, so its Node version is unreadable — pin as node:<x.y.z>-<variant>@sha256:...`)
+        continue
+      }
+      // A major.minor tag floats only within its minor line, so a minor below
+      // the floor's never reaches the patched release.
+      const minor = f.tag.match(/^v?\d+\.(\d+)(?:-|$)/)?.[1]
+      const floorMinor = entry.floor.split('.')[1]
+      if (minor !== undefined && Number(minor) < Number(floorMinor)) {
+        problems.push(`${at}: the Node ${major}.${minor} line is BELOW the floor ${entry.floor} and never reaches it — ${entry.advisory}`)
       }
       continue
     }
@@ -114,11 +130,16 @@ export function checkDockerfile(path, text, floors = NODE_FLOORS) {
   return problems
 }
 
+/** Dockerfile, Dockerfile.<x>, <x>.Dockerfile and Containerfile names. */
+export function isDockerfile(path) {
+  return /^(?:(?:Dockerfile|Containerfile)(?:\.(?!md$)[\w.-]+)?|[\w.-]+\.Dockerfile)$/.test(basename(path))
+}
+
 /** Every tracked Dockerfile under root (git ls-files; fails on a git error). */
 function trackedDockerfiles(root) {
   const r = spawnSync('git', ['ls-files', '-z'], { cwd: root, encoding: 'utf8' })
-  if (r.status !== 0) throw new Error(`git ls-files failed in ${root}: ${r.stderr}`)
-  return r.stdout.split('\0').filter((p) => p && basename(p).startsWith('Dockerfile'))
+  if (r.status !== 0) throw new Error(`git ls-files failed in ${root}: ${r.error?.message ?? r.stderr}`)
+  return r.stdout.split('\0').filter((p) => p && isDockerfile(p))
 }
 
 /** Every check, against a checked-out repo root. */
