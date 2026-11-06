@@ -248,6 +248,14 @@ export function checkWorkflow(doc, { requiredSuites, unitParts, integrationParts
   for (const jobId of new Set(invocations.map((i) => i.jobId))) {
     if (!uploaders.has(jobId)) problems.push(`${jobId} runs verify but uploads no record-* artifact -- its result never reaches the gate`)
   }
+  // The legs start without waiting for Lint (it runs the guards, this one included), so the
+  // gate must wait for it itself or a red Lint would leave a green gate.
+  // Fail closed on a renamed job: without `lint` the two lint rules below would check nothing.
+  if (!doc.jobs.lint) {
+    problems.push('there is no `lint` job -- the gate-needs-lint and fail-fast-lint checks cannot run (renamed? update this guard with it)')
+  } else if (gate && !needed.has('lint')) {
+    problems.push('verify-gate does not need lint -- the legs no longer wait for it, so a red Lint would not reach the verdict')
+  }
 
   // ── nothing may soften the verdict ──────────────────────────────────────
   for (const [jobId, job] of Object.entries(doc.jobs)) {
@@ -306,8 +314,8 @@ export function checkWorkflow(doc, { requiredSuites, unitParts, integrationParts
     if (!steps.some((st) => st && logicalLines(st.run).some((l) => CANCELS_RUN.test(l)))) continue
     const where = `${jobId}: cancels the run`
     const needs = asList(job.needs)
-    if (needs.length !== 1 || !uploaders.has(needs[0])) {
-      problems.push(`${where}, but its \`needs\` is not exactly one verify leg (${needs.join(', ') || 'none'})`)
+    if (needs.length !== 1 || !(uploaders.has(needs[0]) || needs[0] === 'lint')) {
+      problems.push(`${where}, but its \`needs\` is not exactly one verify leg or lint (${needs.join(', ') || 'none'})`)
     } else {
       failFastFor.set(needs[0], [...(failFastFor.get(needs[0]) ?? []), jobId])
     }
@@ -323,7 +331,8 @@ export function checkWorkflow(doc, { requiredSuites, unitParts, integrationParts
     }
     if (verdictJobs.has(jobId)) problems.push(`${where}, but it is a verify leg or the gate -- the cancel must be a job of its own`)
   }
-  for (const leg of uploaders) {
+  // Lint too: the legs no longer wait for it, so its failure must cancel them on a pull request.
+  for (const leg of [...uploaders, ...(doc.jobs.lint ? ['lint'] : [])]) {
     const n = failFastFor.get(leg)?.length ?? 0
     if (n !== 1) problems.push(`${leg} has ${n} fail-fast job(s); it needs exactly one, so its failure cancels the rest of a pull-request run`)
   }
