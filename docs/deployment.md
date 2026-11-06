@@ -55,7 +55,7 @@ The **production profile** (`profiles: [production]` in
 
 | Service | Role |
 |---------|------|
-| `traefik` | The public edge: reverse proxy and TLS termination with certificates it obtains itself over ACME HTTP-01. Pinned image `traefik:v3.7.1` (PRD-DEP-003) |
+| `traefik` | The public edge: reverse proxy and TLS termination with certificates it obtains itself over ACME HTTP-01. Pinned image `traefik:v3.7.17` (PRD-DEP-003) |
 | `docker-socket-proxy` | Read-only Docker API gateway so Traefik never mounts the raw socket |
 
 And `docker-compose.prod.yml` layers on the production-only services:
@@ -178,7 +178,7 @@ Before bringing the stack up, set the production values in `.env`:
 
 ### The edge (Traefik + ACME)
 
-Traefik (`traefik:v3.7.1`, pinned in `docker-compose.yml`) is the public edge.
+Traefik (`traefik:v3.7.17`, pinned in `docker-compose.yml`) is the public edge.
 It terminates TLS with certificates it obtains itself from an ACME CA (Let's
 Encrypt) over **HTTP-01** through the `le-http` resolver; the host publishes
 `:80` and `:443` on its edge address and requests arrive there directly. There
