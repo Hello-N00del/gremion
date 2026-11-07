@@ -323,7 +323,7 @@ export function checkFiles(files) {
 // containers, so an unlabelled Postgres is a server nobody verifies.
 export const MODULE_POSTGRES_IDS = ['board', 'calendar', 'content', 'finance', 'newsletter', 'vault', 'messaging']
 // TASK-084-a: dedicated SERVICE servers, labelled org.gremion.postgres=service:<id>, never profile-gated
-// and created with POSTGRES_DB postgres (the image makes no database of its own beside the built-ins).
+// and created with POSTGRES_DB postgres; the image makes no database of its own beside the built-ins.
 export const SERVICE_POSTGRES_IDS = ['governance']
 export const POSTGRES_LABEL = 'org.gremion.postgres'
 
@@ -553,7 +553,7 @@ export function checkModuleSet(text) {
       problems.push(`${name} is gated under profiles: [${s.profiles.join(', ')}]; a service server is never profile-gated (every customer gets its database at create)`)
     }
     if (s.postgresDb !== 'postgres') {
-      problems.push(`${name} sets POSTGRES_DB ${String(s.postgresDb)}, expected postgres (the image must create no database besides the built-ins)`)
+      problems.push(`${name} sets POSTGRES_DB ${String(s.postgresDb)}, expected postgres: the image must create no database besides the built-ins`)
     }
     const data = s.mounts.find((m) => m.target === POSTGRES_DATA_MOUNT)
     if (!data) { problems.push(`${name} mounts no volume at ${POSTGRES_DATA_MOUNT}`); continue }

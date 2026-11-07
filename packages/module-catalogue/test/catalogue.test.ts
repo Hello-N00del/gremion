@@ -189,7 +189,7 @@ describe('platformDatabases(service) — a closed list', () => {
     [name, { name, postgresLabel: label, env }] as const
   const withGovernance = (label: string | null = 'service:governance') => ({ services: new Map([...compose.services, svcServer('governance-postgres', label)]) })
 
-  it('platformDatabases accepts service:governance and returns exactly the server built-ins for governance-postgres (POSTGRES_DB: postgres)', () => {
+  it('platformDatabases accepts service:governance and returns exactly the server built-ins for governance-postgres with POSTGRES_DB postgres', () => {
     expect(platformDatabases('governance-postgres', { compose: withGovernance(), catalogue: cat })).toEqual(['postgres', 'template0', 'template1'])
   })
 
