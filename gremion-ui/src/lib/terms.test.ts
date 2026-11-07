@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { termFor } from './terms'
+import { ROLE_LABELS } from './auth/labels'
 import { configUpdateSchema, parseConfig, gremionConfigSchema } from './server/config'
 
 // P2.2-data Task 11 — tenant term-map DATA model (design §3.5(e): display
@@ -20,6 +23,18 @@ describe('termFor', () => {
 
   it('returns the fallback when the term map is undefined (config omits terms)', () => {
     expect(termFor(undefined, 'role.council-admin', 'Vorstand')).toBe('Vorstand')
+  })
+
+  // Karenz phase 1 (Task 7, round-2 item 4): "Vorstand" is now its own role, so the dashboard's
+  // council-admin term defaults to the council-admin role label, not the literal 'Vorstand'.
+  it("dashboard: the councilAdmin term defaults to \"Gremienverwaltung\" and no 'Vorstand' literal default remains in src/routes/+page.svelte", () => {
+    const SRC = readFileSync(resolve(process.cwd(), 'src/routes/+page.svelte'), 'utf8')
+    expect(SRC.length).toBeGreaterThan(500) // a zero-byte read would vacuously pass
+    expect(SRC).toContain("termFor(terms, 'councilAdmin', ROLE_LABELS['council-admin'])")
+    expect(SRC).not.toMatch(/termFor\(terms, 'councilAdmin', 'Vorstand'\)/)
+    expect(SRC).not.toMatch(/['"]Vorstand['"]/)
+    expect(termFor(undefined, 'councilAdmin', ROLE_LABELS['council-admin'])).toBe('Gremienverwaltung')
+    expect(termFor({ councilAdmin: 'Buergermeister' }, 'councilAdmin', ROLE_LABELS['council-admin'])).toBe('Buergermeister')
   })
 
   // D6 (design v11): a `null` fallback turns the lookup into a PRESENCE GATE —

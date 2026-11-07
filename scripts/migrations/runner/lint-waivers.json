@@ -44,8 +44,19 @@
     },
     {
       "chain": "platform",
-      "file": "0014_plt_provisioning_step_governance.sql",
-      "sha256": "ab913164907e3aa3151999a41a09b10ba412ff2751398a578df2900a153e656d",
+      "file": "0014_plt_council_requests.sql",
+      "sha256": "535222ac20bdb8ed08aa76f4ca572deb59e875442f1373697726c9029b7bd82b",
+      "rules": [
+        "drop",
+        "or-replace",
+        "revoke"
+      ],
+      "reason": "Adds the council request origin to plt.provisioning_request: the old origin and evidence CHECKs cannot be widened without DROP CONSTRAINT and re-ADD (each re-added NOT VALID and validated in the same file, so no unvalidated constraint remains), the immutability guard body must gain the actor_kind column (CREATE OR REPLACE keeps the grants pg.ts issues), and REVOKE ALL FROM PUBLIC hardens the SECURITY DEFINER functions this same file creates. Same shape as the waivers of 0009, 0010 and 0013. The file sets lock_timeout first; the table is a small queue whose only writers ship in the same release."
+    },
+    {
+      "chain": "platform",
+      "file": "0015_plt_provisioning_step_governance.sql",
+      "sha256": "60f25259025d5d993564187ca4b46312d807f91d596367f8f76d7fd19345acde",
       "rules": [
         "drop",
         "set-expression"

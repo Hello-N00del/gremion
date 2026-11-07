@@ -19,7 +19,12 @@
 #   state-up     the state project (production profile)
 #   state-wait   postgres + keycloak healthy, pgbouncer auth staged; records
 #                the state snapshot (container IDs, volume CreatedAt)
-#   app-up C     migrate one-shot (run --rm) then `up` of app-C
+#   pgbouncer-routed
+#                the Linux guard of issue #83: the userlist (written by
+#                gremion-render, the production writer, in prepare) is read by
+#                the PgBouncer container as its own uid 70, and a login routed
+#                through PgBouncer's auth_query succeeds
+#   app-up C    migrate one-shot (run --rm) then `up` of app-C
 #   app-wait C   app-C healthy, /healthz reports "colour":"C", isolation
 #   aux-up       the non-council ops and mail projects
 #   mail-roles   the vendor mail server's principals and roles@ mailbox by the
@@ -396,8 +401,8 @@ phase_render_env() {
     fi
     # TASK-043: gremion_platform's owner and the panel's reader, ONE value for
     # both colours (one role each); docker-compose.app.yml requires both.
-    local pw_plat pw_panel pw_kapi pw_oac
-    pw_plat="$(gen)"; pw_panel="$(gen)"; pw_kapi="$(gen)"; pw_oac="$(gen)"
+    local pw_plat pw_panel pw_kapi pw_oac pw_modules
+    pw_plat="$(gen)"; pw_panel="$(gen)"; pw_kapi="$(gen)"; pw_oac="$(gen)"; pw_modules="$(gen)"
     local profiles=production
     [[ "${POOLED_CUSTOMER:-0}" == 1 ]] && profiles="production,calendar,vault"
     local mod_keys
@@ -477,8 +482,6 @@ KEYCLOAK_ADMIN_CLIENT_SECRET=$(gen)
 INTERNAL_PUSH_SECRET=${sec_push}
 TENANT_PROXY_SHARED_SECRET=${sec_proxy}
 TENANT_SECRETS_DIR=${SROOT_H}/secrets/tenants
-# not yet in app.env.tmpl (TASK-028 wait): migrate and gremion-ui need it
-AUTH_KEYCLOAK_ISSUER=https://proof.example.org/auth/realms/gremion
 # TASK-043 (app.env.tmpl): tenant-create's and the control panel's mounts
 # under etc/secrets, gremion_platform's owner, the panel's read-only role
 GREMION_ROOT=${SROOT_H}
@@ -486,6 +489,7 @@ PLATFORM_DB_PASSWORD=${pw_plat}
 PANEL_DB_PASSWORD=${pw_panel}
 KERNEL_API_DB_PASSWORD=${pw_kapi}
 UI_OAC_DB_PASSWORD=${pw_oac}
+UI_MODULES_DB_PASSWORD=${pw_modules}
 GREMION_MIGRATION_DUMP_DIR=${SROOT_H}/migration-dumps
 EOF
     done
@@ -657,6 +661,32 @@ skip { next }
     return 0
 }
 
+# stage_userlist <password> -- docker/pgbouncer/userlist.txt, written by the
+# PRODUCTION writer. Issue #83: the proof used to printf this file itself with
+# the default umask, so the one running-stack proof never met the mode and
+# group the host's render gives it, and a userlist the PgBouncer container
+# (uid/gid 70) cannot read passed every check here. gremion-render is run the
+# way a deploy runs it -- --release <tree> -- against a scratch GREMION_ROOT
+# whose state.env carries only the auth password; the keycloak CA it keeps
+# and the ipcrypt key it makes land in that scratch root (removed with $SROOT
+# at teardown), and the certificates it finds in the tree were minted by the
+# step before. On a filesystem with POSIX modes the file is read back: 0640,
+# group 70. (Docker Desktop's bind mounts ignore modes; the pgbouncer-routed
+# phase is what proves the container reads the file there too.)
+stage_userlist() {
+    local pw="$1" rroot="$SROOT/render-root" log="$OUT/ledger/userlist-render.log" out="$ROOT/docker/pgbouncer/userlist.txt" seen
+    mkdir -p "$rroot/etc/env" "$OUT/ledger"
+    ( umask 077; printf 'PGBOUNCER_AUTH_PASSWORD=%s\n' "$pw" > "$rroot/etc/env/state.env" )
+    GREMION_ROOT="$rroot" bash "$ROOT/infra/host/bin/gremion-render" --release "$ROOT" > "$log" 2>&1 \
+        || { tail -n 15 "$log" >&2; die "gremion-render could not write the pgbouncer userlist (ledger/userlist-render.log)"; }
+    [[ -s "$out" ]] || die "gremion-render wrote no pgbouncer userlist at $out"
+    if [[ "$(uname -s)" == Linux ]]; then
+        seen="$(stat -c '%a %g' "$out")"
+        [[ "$seen" == "640 70" ]] || die "pgbouncer userlist is '${seen}' (mode gid), expected '640 70': the container reads it as gid 70"
+    fi
+    info "userlist: written by gremion-render (the production writer)"
+}
+
 phase_prepare() {
     require_scratch prepare
     need_writable "$ENV_DIR" "$SROOT" "$OUT/ledger"
@@ -678,7 +708,7 @@ phase_prepare() {
     [[ -f "$ROOT/docker/keycloak/certs/keycloak.crt" ]] || bash "$ROOT/docker/keycloak/certs/gen-internal-ca.sh" >/dev/null
     [[ -f "$ROOT/docker/keycloak/certs/internal-ca.pem" ]] || cp "$ROOT/docker/keycloak/certs/internal-ca.crt" "$ROOT/docker/keycloak/certs/internal-ca.pem"
     if [[ ! -f "$ROOT/docker/pgbouncer/userlist.txt" ]]; then
-        printf '"pgbouncer_auth" "%s"\n' "$pw_bnc" > "$ROOT/docker/pgbouncer/userlist.txt"
+        stage_userlist "$pw_bnc"
         touch "$OUT/.created-userlist"
     else
         # reuse: the auth password is whatever the existing userlist carries
@@ -834,6 +864,66 @@ EOF
     } > "$OUT/state-snapshot.txt"
     [[ -s "$OUT/state-snapshot.txt" ]] || die "empty state snapshot"
     ok "state healthy; snapshot of $(grep -c . "$OUT/state-snapshot.txt") state ID/volume line(s) taken"
+}
+
+# ── pgbouncer: the Linux guard of issue #83 ────────────────────────────────
+# Issue #83: the render left the userlist 0600 owned by the deploy user; the
+# PgBouncer container (uid 70) could not open it ("could not open auth_file ...
+# Permission denied"), and every routed login failed with "password
+# authentication failed for user pgbouncer_auth". Two observations, both of the
+# RUNNING container, never of the file on the host:
+#   1. the container's own user (docker exec runs as the image's USER, asserted
+#      to be uid 70, else the read below would prove nothing) reads the first
+#      byte of the bind-mounted /etc/pgbouncer/userlist.txt;
+#   2. a login routed through pgbouncer-${STACK}:6432 as a scratch role with a
+#      SCRAM password succeeds. That login takes PgBouncer's auth_query path:
+#      PgBouncer logs in to Postgres as pgbouncer_auth with the userlist's
+#      password to fetch the verifier, so a wrong or unreadable userlist fails it.
+# The scratch role is dropped again on every path. Runs after state-wait (the
+# auth_query role and pgbouncer.get_auth are staged there).
+PGB_ROUTED_ROLE="proof_routed"
+phase_pgbouncer_routed() {
+    require_scratch pgbouncer-routed
+    local cid pg uid first got rpw sql_rc=0 alias="pgbouncer-${STACK}" before="$FAILS"
+    cid="$(svc_cid state pgbouncer)"
+    [[ -n "$cid" ]] || { bad "pgbouncer: the state project runs no pgbouncer container"; return; }
+    pg="$(svc_cid state postgres)"
+    [[ -n "$pg" ]] || { bad "pgbouncer: the state project runs no postgres container"; return; }
+    if ! wait_health "$cid" 90; then
+        bad "pgbouncer: the container is not healthy (an unreadable auth_file ends it at start)"
+        docker logs --tail 15 "$cid" >&2 || true
+        return
+    fi
+    uid="$(docker exec "$cid" id -u 2>/dev/null | tr -d '\r\n' || true)"
+    if [[ "$uid" != 70 ]]; then
+        bad "pgbouncer: the container runs as uid ${uid:-unknown}, not 70: reading the userlist as that user would prove nothing"
+    elif first="$(docker exec "$cid" head -c1 /etc/pgbouncer/userlist.txt 2>&1)" && [[ "$first" == '"' ]]; then
+        ok "pgbouncer: runs as uid 70 and reads /etc/pgbouncer/userlist.txt"
+    else
+        bad "pgbouncer: /etc/pgbouncer/userlist.txt is not readable by the container user (uid 70): ${first:-no output}"
+    fi
+    # The routed login. The role is created and dropped as postgres, directly.
+    rpw="$(gen)"
+    docker exec -i "$pg" psql -v ON_ERROR_STOP=1 -qU postgres -d postgres >/dev/null <<EOF || sql_rc=$?
+DROP ROLE IF EXISTS ${PGB_ROUTED_ROLE};
+CREATE ROLE ${PGB_ROUTED_ROLE} LOGIN PASSWORD '${rpw}';
+EOF
+    if (( sql_rc != 0 )); then
+        bad "pgbouncer: could not create the scratch login role (psql exit ${sql_rc})"
+    else
+        got="$(PGPASSWORD="$rpw" docker exec -e PGPASSWORD "$pg" psql -h "$alias" -p 6432 -U "$PGB_ROUTED_ROLE" -d postgres -Atq -c 'SELECT current_user' 2>&1 | tr -d '\r' | tail -n 3 || true)"
+        if [[ "$got" == "$PGB_ROUTED_ROLE" ]]; then
+            ok "pgbouncer: a login routed through ${alias}:6432 as a scratch role succeeds (auth_query, SCRAM pass-through)"
+        else
+            bad "pgbouncer: a login routed through ${alias}:6432 failed: ${got:-no output}"
+            docker logs --tail 10 "$cid" >&2 || true
+        fi
+    fi
+    docker exec -i "$pg" psql -v ON_ERROR_STOP=1 -qU postgres -d postgres >/dev/null <<EOF || bad "pgbouncer: could not drop the scratch login role"
+DROP ROLE IF EXISTS ${PGB_ROUTED_ROLE};
+EOF
+    rpw=""
+    printf '%s pgbouncer-routed %s fails=%s\n' "$(now)" "$STACK" "$(( FAILS - before ))" | ledger pgbouncer-routed.log
 }
 
 # ── app colours ────────────────────────────────────────────────────────────
@@ -1405,6 +1495,7 @@ run_phase() {
         names) phase_names ;;
         state-up) phase_state_up ;;
         state-wait) phase_state_wait ;;
+        pgbouncer-routed) phase_pgbouncer_routed ;;
         app-up) phase_app_up "$2" ;;
         app-wait) phase_app_wait "$2" ;;
         aux-up) phase_aux_up ;;
@@ -1428,7 +1519,7 @@ run_phase() {
 # explicitly as the last phase BEFORE the verdict, so a failing teardown (a
 # scratch_rm that cannot remove the root, resources left behind) makes the run
 # RED. The EXIT trap below only covers an aborted run.
-ALL_PHASES=(prepare build names state-up state-wait "app-up blue" "app-wait blue" aux-up limits rss isolation probes tenant-before tenant tenant-after "app-up green" "app-wait green" switch cold-state limits)
+ALL_PHASES=(prepare build names state-up state-wait pgbouncer-routed "app-up blue" "app-wait blue" aux-up limits rss isolation probes tenant-before tenant tenant-after "app-up green" "app-wait green" switch cold-state limits)
 
 main() {
     [[ $# -gt 0 ]] || set -- all

@@ -26,7 +26,7 @@ interface Row {
   request_id: string
   kind: string
   state: string
-  origin: 'panel' | 'host'
+  origin: 'panel' | 'host' | 'council'
   reason: string | null
   host_actor: string | null
   outcome: string | null
@@ -147,6 +147,20 @@ describe('H5: a customer that does not exist yet shows the request state', () =>
   it('only the NEWEST request decides (rows arrive newest first)', async () => {
     rows = [row({ state: 'queued', request_id: 'b' }), row({ state: 'failed', request_id: 'a' })]
     expect((await loadFor()).latest).toMatchObject({ phase: 'queued' })
+  })
+})
+
+describe('Karenz phase 1: council-origin requests stay in the customer request list', () => {
+  it('a council enable_module row is listed with origin council next to the panel rows', async () => {
+    rows = [
+      row({ request_id: 'c', kind: 'enable_module', state: 'succeeded', origin: 'council', args: { slug: 'proof-z', module: 'votes' } }),
+      row({ request_id: 'p', kind: 'create', state: 'succeeded', origin: 'panel' }),
+    ]
+    const d = await loadFor()
+    expect(d.requests.map((q: { id: string; origin: string }) => [q.id, q.origin])).toEqual([
+      ['c', 'council'],
+      ['p', 'panel'],
+    ])
   })
 })
 

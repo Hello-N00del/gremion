@@ -28,7 +28,7 @@
 # Build context: the repository root.
 #   docker build -f services/kernel-api/Dockerfile -t ghcr.io/hello-n00del/gremion-kernel-api:<tag> .
 
-FROM node:26-alpine@sha256:7c6af15abe4e3de859690e7db171d0d711bf37d27528eddfe625b2fe89e097f8 AS builder
+FROM node:26.13.0-alpine@sha256:c6ad9e9c1d80f6eb607c26b4b0a132ff7a2344fad1c78ea3baa2a7d4c8de6d94 AS builder
 WORKDIR /repo
 
 # node:26-alpine bundles no corepack (dropped from core in Node 25+); the pnpm
@@ -83,7 +83,7 @@ RUN mkdir -p /registry/modules \
  && for f in modules/*/module.json; do d="$(dirname "$f")"; mkdir -p "/registry/$d"; cp "$f" "/registry/$f"; done
 
 # ---- runtime ----
-FROM node:26-alpine@sha256:7c6af15abe4e3de859690e7db171d0d711bf37d27528eddfe625b2fe89e097f8 AS runner
+FROM node:26.13.0-alpine@sha256:c6ad9e9c1d80f6eb607c26b4b0a132ff7a2344fad1c78ea3baa2a7d4c8de6d94 AS runner
 RUN apk add --no-cache postgresql18-client
 WORKDIR /app
 ENV NODE_ENV=production \

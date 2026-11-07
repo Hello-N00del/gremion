@@ -8,6 +8,13 @@
 // zero mutating calls (TDD 16, the recording adapters in the unit suite).
 import type { LedgerPort } from './ledger.ts'
 
+/**
+ * Who acts on a module: the platform operator (panel, host break-glass) or a
+ * person (a council admin's own request). The same two values the tenant-store
+ * `Actor.kind` and the `*_by_kind` columns allow; default `operator` everywhere.
+ */
+export type ActorKind = 'operator' | 'person'
+
 /** The customer as provisioning addresses it. */
 export interface CustomerRef {
   /** control tenant.id = customer_id (Q1), a UUIDv7. */
@@ -160,12 +167,12 @@ export interface ModulesPort {
    */
   unloaded(ids: readonly string[]): Promise<string[]>
   /** enableModule with the given gate; returns whether it was a no-op. */
-  enable(c: CustomerRef, moduleId: string, gate: import('@gremion/tenant-store/lifecycle').EnableGate, operatorId: string): Promise<{ noop: boolean; database: string | null }>
+  enable(c: CustomerRef, moduleId: string, gate: import('@gremion/tenant-store/lifecycle').EnableGate, operatorId: string, actorKind?: ActorKind): Promise<{ noop: boolean; database: string | null }>
   /**
    * disableModule (TRD-424): the level-1 switch off, the module database
    * exported and verified, then dropped. A repeat on a disabled module is a no-op.
    */
-  disable(c: CustomerRef, moduleId: string, operatorId: string): Promise<{ noop: boolean; dropped: boolean; database: string | null; export: { path: string; sha256: string; bytes: number } | null }>
+  disable(c: CustomerRef, moduleId: string, operatorId: string, actorKind?: ActorKind): Promise<{ noop: boolean; dropped: boolean; database: string | null; export: { path: string; sha256: string; bytes: number } | null }>
   /** Module keys with an `enabled` plt.module_enablement row for the customer. */
   enabled(c: CustomerRef): Promise<string[]>
 }
@@ -193,7 +200,7 @@ export interface GatePort {
   /** A written DPIA decision is recorded for (customer, module). */
   hasDpiaDecision(customerId: string, moduleKey: string): Promise<boolean>
   /** Records the operator's dated decision; an identical latest one is reused. */
-  recordDpia(customerId: string, moduleKey: string, decision: DpiaSpec, operatorId: string): Promise<{ dpiaDecisionId: string; created: boolean }>
+  recordDpia(customerId: string, moduleKey: string, decision: DpiaSpec, operatorId: string, actorKind?: ActorKind): Promise<{ dpiaDecisionId: string; created: boolean }>
   /** Enabled modules not proven on this release (Q8), for one customer or all. */
   unproven(customerId?: string): Promise<import('@gremion/tenant-store/lifecycle').UnprovenEnablement[]>
 }

@@ -2,9 +2,9 @@
         shell-kc shell-db \
         keycloak-configure dev-configure dev-ui fresh-start \
         update-legal update-legal-k8s \
-        test test-unit test-host-docker test-integration test-all test-ports-nats test-ports-nats-nruns test-nats-auth test-events nats-init \
+        test test-unit test-host-docker test-integration test-all test-ports-nats test-ports-nats-nruns test-nats-auth test-events test-events-live test-events-alert nats-init \
         lint lint-sh lint-yaml lint-json lint-compose \
-        lint-hygiene lint-tom-annex lint-cve-floors lint-nats-nruns lint-packages lint-port-back lint-postgres-major lint-extraction-source \
+        lint-hygiene lint-tom-annex lint-cve-floors lint-node-floor lint-nats-nruns lint-packages lint-port-back lint-postgres-major lint-extraction-source \
         lint-unshipped-migrations lint-toolchain lint-compliance lint-tenant-db-access fresh-init-proof \
         verify \
         health validate-env
@@ -205,18 +205,32 @@ test-all: test-unit test-integration test-ports-nats test-nats-auth test-events
 # per group and tears everything down BY NAME. `down` always runs, and the target
 # fails when any phase failed or `down` reports a group not passed. Last,
 # image-check.sh proves the package resolves in the migrate image.
+#
+# Two halves on separate stacks, so verify runs them as two parts and CI as two
+# legs (together they took 11-12 minutes in one): test-events-live is the unit
+# suite, the four live groups and the image check; test-events-alert is the
+# TASK-039 alert path. Each judges only its own groups (`proof.sh down live|alert`).
+# On one host they share .scratch/t079, which the live `up` empties, so
+# test-events runs them one after the other even under `make -j`.
 test-events:
+	@$(MAKE) --no-print-directory test-events-live
+	@$(MAKE) --no-print-directory test-events-alert
+
+test-events-live:
 	@pnpm --filter @gremion/events test
 	@rc=0; bash packages/events/scripts/proof.sh up || rc=$$?; \
 	if [ $$rc -eq 0 ]; then \
 		for g in core consumer deadletter rebuild; do bash packages/events/scripts/proof.sh test $$g || { rc=$$?; break; }; done; \
 	fi; \
-	if [ $$rc -eq 0 ]; then \
-		for p in alert-prepare alert-up alert-red alert-fire alert-hold alert-resolve; do bash packages/events/scripts/proof.sh $$p || { rc=$$?; break; }; done; \
-	fi; \
-	out="$$(bash packages/events/scripts/proof.sh down)"; printf '%s\n' "$$out"; \
+	out="$$(bash packages/events/scripts/proof.sh down live)"; printf '%s\n' "$$out"; \
 	[ $$rc -eq 0 ] && printf '%s\n' "$$out" | grep -qx '\[events-proof\] OK' || exit 1
 	@bash packages/events/scripts/image-check.sh
+
+test-events-alert:
+	@rc=0; \
+	for p in alert-prepare alert-up alert-red alert-fire alert-hold alert-resolve; do bash packages/events/scripts/proof.sh $$p || { rc=$$?; break; }; done; \
+	out="$$(bash packages/events/scripts/proof.sh down alert)"; printf '%s\n' "$$out"; \
+	[ $$rc -eq 0 ] && printf '%s\n' "$$out" | grep -qx '\[events-proof\] OK' || exit 1
 
 # @gremion/nats-auth (TASK-024): the unit suite, then the acceptance against a
 # REAL broker -- packages/nats-auth/scripts/proof.sh --auth starts the state
@@ -384,6 +398,14 @@ lint-cve-floors:
 	@echo "Checking CVE override floors..."
 	@node --test scripts/check-cve-floors.test.mjs
 	@node scripts/check-cve-floors.mjs
+
+# Every node base image at or above the security floor of its major
+# (CVE-2026-111497 and later Node security releases). The suite runs first so a
+# broken discovery cannot pass vacuously.
+lint-node-floor:
+	@echo "Checking the Node runtime floor of every Dockerfile..."
+	@node --test scripts/check-node-floor.test.mjs
+	@node scripts/check-node-floor.mjs
 
 # The N-run recorder's own RED cases (a failing run, a short series, a bad count),
 # against a stand-in target: no Docker. The suite's count is asserted because
@@ -841,7 +863,7 @@ lint-image-digests:
 	@node scripts/release/check-image-digests.mjs
 	@node scripts/release/check-image-digests.mjs --render
 
-lint: lint-sh lint-yaml lint-json lint-compose lint-compose-latest lint-pooled-stack lint-hygiene lint-tom-annex lint-cve-floors lint-nats-nruns lint-packages lint-port-back lint-postgres-major lint-extraction-source lint-unshipped-migrations lint-compliance lint-tenant-db-access lint-edge-host lint-module-scan lint-module-migration-names lint-module-dockerfile-copy lint-dockerfile-workspace-closure lint-ci-docker-filter lint-traefik-stack-scope lint-migration-register lint-image-digests lint-synapse lint-ci-verify-coverage
+lint: lint-sh lint-yaml lint-json lint-compose lint-compose-latest lint-pooled-stack lint-hygiene lint-tom-annex lint-cve-floors lint-node-floor lint-nats-nruns lint-packages lint-port-back lint-postgres-major lint-extraction-source lint-unshipped-migrations lint-compliance lint-tenant-db-access lint-edge-host lint-module-scan lint-module-migration-names lint-module-dockerfile-copy lint-dockerfile-workspace-closure lint-ci-docker-filter lint-traefik-stack-scope lint-migration-register lint-image-digests lint-synapse lint-ci-verify-coverage
 	@echo "All linters passed."
 
 # ── Local gate (TASK-045, TRD-444/341) ──────────────────────────────────────

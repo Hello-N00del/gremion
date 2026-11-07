@@ -17,6 +17,8 @@ const h = vi.hoisted(() => ({
   forEachActiveTenant: vi.fn(),
   connect: vi.fn(),
   runPass: vi.fn(),
+  drain: vi.fn(),
+  kcClient: { tag: 'kc-for-current-tenant' },
 }))
 
 vi.mock('$lib/server/modules/runtime-registry', () => ({
@@ -32,12 +34,14 @@ vi.mock('$lib/server/events/consumer-state', () => ({
 vi.mock('$lib/server/tenant/worker-fleet', () => ({ forEachActiveTenant: h.forEachActiveTenant }))
 vi.mock('@gremion/ports/nats', () => ({ NatsBroker: { connect: h.connect } }))
 vi.mock('./org-unit-event-relay', () => ({ runOrgUnitRelayPass: h.runPass }))
+vi.mock('$lib/server/keycloak-admin', () => ({ getKeycloakAdminClientForCurrentTenant: () => h.kcClient }))
+vi.mock('./vorstand-backfill', () => ({ drainRoleBackfill: h.drain, ROLE_BACKFILL_INTERVAL_MS: 60_000 }))
 
-const { ORG_UNIT_RELAY_WORKER } = await import('./register.server')
+const { ORG_UNIT_RELAY_WORKER, VORSTAND_BACKFILL_WORKER } = await import('./register.server')
 
-/** Run the registered boot hook once. */
+/** Run the registered org-unit relay boot hook (the first of two hooks) once. */
 async function runHook(): Promise<void> {
-  expect(h.hooks).toHaveLength(1)
+  expect(h.hooks).toHaveLength(2)
   await h.hooks[0]!()
 }
 
@@ -48,6 +52,7 @@ beforeEach(() => {
   h.forEachActiveTenant.mockReset()
   h.connect.mockReset()
   h.runPass.mockReset()
+  h.drain.mockReset()
   vi.spyOn(console, 'info').mockImplementation(() => {})
 })
 
@@ -127,5 +132,37 @@ describe('org-unit relay boot hook', () => {
     expect(broker.close).toHaveBeenCalledTimes(1)
     await vi.advanceTimersByTimeAsync(20_000)
     expect(h.forEachActiveTenant).not.toHaveBeenCalled()
+  })
+})
+
+describe('vorstand role backfill boot hook', () => {
+  it('drains every active tenant every 60 s through the worker fleet, with the pool and Keycloak client of the tenant it is given', async () => {
+    vi.useFakeTimers()
+    h.drain.mockResolvedValue({ applied: 0, failed: 0, gone: 0 })
+    expect(h.hooks).toHaveLength(2)
+    await h.hooks[1]!()
+
+    expect(VORSTAND_BACKFILL_WORKER).toBe('vorstand-backfill')
+    expect(h.forEachActiveTenant).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(59_000)
+    expect(h.forEachActiveTenant).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(h.forEachActiveTenant).toHaveBeenCalledTimes(1)
+    expect(h.forEachActiveTenant.mock.calls[0]![0]).toBe('vorstand-backfill')
+
+    const perTenant = h.forEachActiveTenant.mock.calls[0]![1] as (ctx: { id: string; db: unknown }) => unknown
+    const db = { tag: 'tenant-a-pool' }
+    await perTenant({ id: 'tenant-a', db })
+    expect(h.drain).toHaveBeenCalledTimes(1)
+    expect(h.drain).toHaveBeenCalledWith(db, h.kcClient, console)
+  })
+
+  it('does not depend on NATS_URL (the queue is tenant-local)', async () => {
+    vi.useFakeTimers()
+    h.natsUrl = undefined
+    await h.hooks[1]!()
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(h.forEachActiveTenant).toHaveBeenCalledTimes(1)
+    expect(h.markWorkerOff).not.toHaveBeenCalled()
   })
 })

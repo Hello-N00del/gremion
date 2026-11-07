@@ -51,6 +51,8 @@ export interface World {
   isolation: Map<string, { id: string; passed: boolean; tip: string }>
   /** TASK-044: DPIA decisions per `${customerId}/${module}`, oldest first. */
   dpia: Map<string, { id: string; decision: DpiaSpec; operatorId: string }[]>
+  /** Phase 1 Task 4: the actor kind each enable, disable and DPIA record was called with, `<verb> <module> <kind>`. */
+  actors: string[]
   /** Test knobs. */
   knobs: {
     seedsOn: boolean
@@ -88,6 +90,7 @@ export function world(): World {
     // every module but the denied ones holds a current-tip pass unless a test says not
     isolation: new Map(['calendar', 'publishing', 'votes', UNDECIDED_MODULE].map((m) => [m, { id: uuidv7(), passed: true, tip: TIP }])),
     dpia: new Map(),
+    actors: [],
     knobs: { seedsOn: false, runnerShape: 'gremion-ui', dnsFails: false },
     unloaded: new Set([UNDECIDED_MODULE]),
   }
@@ -309,7 +312,8 @@ export function deps(w: World, catalogue = ['board', 'calendar', 'publishing', '
       async unloaded(ids) {
         return ids.filter((id) => w.unloaded.has(id))
       },
-      async enable(c, moduleId, gate: EnableGate, operatorId) {
+      async enable(c, moduleId, gate: EnableGate, operatorId, actorKind) {
+        w.actors.push(`enable ${moduleId} ${actorKind ?? 'operator'}`)
         const mine = w.enabled.get(c.id) ?? new Map()
         if (mine.has(moduleId)) return { noop: true, database: null }
         if (w.unloaded.has(moduleId)) throw Object.assign(new Error(`module ${moduleId} has no plt.module_version`), { code: 'MODULE_VERSION_UNKNOWN' })
@@ -320,7 +324,8 @@ export function deps(w: World, catalogue = ['board', 'calendar', 'publishing', '
         m(`pg:enable ${c.slug}/${moduleId}`)
         return { noop: false, database: `t_x__${moduleId}` }
       },
-      async disable(c, moduleId) {
+      async disable(c, moduleId, _operatorId, actorKind) {
+        w.actors.push(`disable ${moduleId} ${actorKind ?? 'operator'}`)
         const mine = w.enabled.get(c.id)
         if (!mine?.has(moduleId)) return { noop: true, dropped: false, database: null, export: null }
         mine.delete(moduleId)
@@ -368,7 +373,8 @@ export function fakeGate(w: World): GatePort {
     async hasDpiaDecision(c, m) {
       return !!latestDpia(c, m)?.decision.documentRef
     },
-    async recordDpia(c, m, decision, operatorId) {
+    async recordDpia(c, m, decision, operatorId, actorKind) {
+      w.actors.push(`dpia ${m} ${actorKind ?? 'operator'}`)
       const cur = latestDpia(c, m)
       if (cur && JSON.stringify(cur.decision) === JSON.stringify(decision)) return { dpiaDecisionId: cur.id, created: false }
       const id = uuidv7()

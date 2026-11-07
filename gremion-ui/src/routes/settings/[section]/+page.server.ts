@@ -10,6 +10,7 @@ const ALIASES: Record<string, string> = {
   profil: 'profil',
   darstellung: 'darstellung',
   organisation: 'organisation',
+  module: 'module',
   dienste: 'dienste',
   email: 'email',
   rechtliches: 'rechtliches',

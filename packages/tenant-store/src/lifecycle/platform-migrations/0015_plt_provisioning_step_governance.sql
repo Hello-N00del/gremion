@@ -1,5 +1,5 @@
 -- gremion:phase expand
--- gremion_platform, 0014 (TASK-084-a): the ninth provisioning step kind,
+-- gremion_platform, 0015 (TASK-084-a): the ninth provisioning step kind,
 -- governance_database_created (step_order 9).
 --
 -- SCHEMA DB-PLT-PROVISIONING-STEP gains kind 9; answers O-15 as two steps

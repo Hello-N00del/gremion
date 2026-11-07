@@ -11,6 +11,7 @@
   // design roleHue (contracts.jsx): role-tag accent per friendly role.
   const roleHue: Record<string, number> = {
     Vorstand: 300,
+    Gremienverwaltung: 330,
     Finanzen: 52,
     Admin: 29,
     'IT-Team': 205,

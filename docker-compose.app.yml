@@ -98,7 +98,10 @@ services:
       AUTH_SECRET:              ${AUTH_SECRET}
       AUTH_KEYCLOAK_ID:         ${AUTH_KEYCLOAK_ID:-gremion-ui}
       AUTH_KEYCLOAK_SECRET:     ${AUTH_KEYCLOAK_SECRET}
-      AUTH_KEYCLOAK_ISSUER:     ${AUTH_KEYCLOAK_ISSUER:-}
+      # The issuer and the OIDC endpoint bases come from the resolved tenant
+      # row, not from env. Passing an issuer key here would put an empty
+      # string into the container on a host install, and Auth.js would
+      # prefer it over the tenant's (#87; scripts/check-app-compose-env.test.mjs).
       # G-080: server-to-server OIDC over internal TLS. keycloak resolves on
       # ${STACK}_state (one state project per stack, so the bare state-tier
       # name is unambiguous there).
@@ -145,6 +148,12 @@ services:
       # oac.list_access_records only), DIRECT to gremion_platform like the other
       # platform roles; without it the view answers 503 "nicht konfiguriert".
       PLATFORM_ACCESS_DATABASE_URL: postgresql://gremion_ui_oac:${UI_OAC_DB_PASSWORD:?UI_OAC_DB_PASSWORD required}@postgres-${STACK:?STACK required}:5432/gremion_platform
+      # Council module self-service: gremion_ui_modules (EXECUTE on the three
+      # council request functions only), DIRECT to gremion_platform. The password
+      # is OPTIONAL on purpose: unset or empty gives an empty URL and the settings
+      # section answers "nicht konfiguriert" (the safety switch), so this must
+      # never become a required (:?) variable.
+      PLATFORM_MODULES_DATABASE_URL: ${UI_MODULES_DB_PASSWORD:+postgresql://gremion_ui_modules:${UI_MODULES_DB_PASSWORD}@postgres-${STACK:?STACK required}:5432/gremion_platform}
       SEED_TOKEN:               ${SEED_TOKEN:-}
       SEED_USER_PASSWORD:       ${SEED_USER_PASSWORD:-}
       # Keep dev *_seed.sql migrations out of every deployment.
@@ -452,6 +461,10 @@ services:
       # TRD-092: `init` makes the access-record reader gremion_ui_oac
       # (ensureAccessReader) with this password; gremion-ui connects as it.
       UI_OAC_DB_PASSWORD: ${UI_OAC_DB_PASSWORD:?UI_OAC_DB_PASSWORD required}
+      # Council module self-service: `init` makes gremion_ui_modules
+      # (ensureCouncilRequester) when this is non-empty. OPTIONAL (:-): empty
+      # means self-service switching is off on this deployment.
+      UI_MODULES_DB_PASSWORD: ${UI_MODULES_DB_PASSWORD:-}
       # The servers' POSTGRES_USERs (CREATEDB/CREATEROLE for ensureKernelDatabase
       # and enableModule) and each module's app-role password: files written by
       # `gremion-tenant init` into etc/secrets/tenant-create (0600), mounted

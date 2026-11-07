@@ -121,7 +121,7 @@ export function batsWindowsTags(cwd, pid = process.pid) {
 // bats-runner/Dockerfile), against a REAL CLONE: a linked worktree's `.git`
 // is a file whose gitdir line is a host-absolute path the container cannot
 // resolve.
-function batsPartWindows({ label, cwd, patterns }) {
+function batsPartWindows({ label, cwd, patterns, shard }) {
   if (!toolAvailable('docker')) {
     return { label, toolMissing: 'docker' }
   }
@@ -149,9 +149,9 @@ function batsPartWindows({ label, cwd, patterns }) {
       if (clone.code !== 0) {
         return { label, unparseable: true, detail: `git clone into scratch failed:\n${tail(clone.stdout + clone.stderr)}` }
       }
-      const files = patterns.flatMap((p) => globSync(p, { cwd: cloneDir })).map((f) => f.split(path.sep).join('/')).sort()
+      const files = batsShardFiles(patterns.flatMap((p) => globSync(p, { cwd: cloneDir })), shard)
       if (files.length === 0) {
-        return { label, collected: 0, passed: 0, failed: 0, skipped: 0, detail: `no files matched ${patterns.join(', ')}` }
+        return { label, collected: 0, passed: 0, failed: 0, skipped: 0, detail: noBatsFiles(patterns, shard) }
       }
       const res = run('docker', ['run', '--rm', '-v', `${cloneDir}:/wt`, '-w', '/wt', pyTag, '--tap', ...files], {
         env: { ...process.env, MSYS_NO_PATHCONV: '1' },
@@ -187,17 +187,40 @@ export function judgeBats(label, res, what) {
   return { label, ...parsed, detail: parsed.failed > 0 ? failureDetail(out, 1500) : '' }
 }
 
-function batsPart({ cwd, patterns }) {
-  const label = `bats ${patterns.join(' ')}`
+// The bats files run as one part per shard: CI gives each shard its own leg, because
+// the whole set took 10-12 minutes in one. A shard is every `of`-th file of the SORTED,
+// '/'-separated match list, so the shards partition the glob: a new file lands in
+// exactly one shard with no list to edit, and a file is in the same shard on every
+// platform. An empty shard is a part that collected nothing, which fails.
+export const BATS_PATTERNS = ['test/*.bats', 'test/host/*.bats']
+export const BATS_SHARDS = 2
+
+/** The files of shard `index` (1-based) of `of`, or the whole sorted list when `shard` is undefined. */
+export function batsShardFiles(files, shard) {
+  const sorted = files.map((f) => f.split(path.sep).join('/')).sort()
+  if (shard === undefined) return sorted
+  const { index, of } = shard
+  if (!Number.isInteger(of) || of < 1 || !Number.isInteger(index) || index < 1 || index > of) {
+    throw new Error(`invalid bats shard ${index} of ${of}`)
+  }
+  return sorted.filter((_, i) => i % of === index - 1)
+}
+
+function noBatsFiles(patterns, shard) {
+  return `no files matched ${patterns.join(', ')}${shard ? ` in shard ${shard.index} of ${shard.of}` : ''}`
+}
+
+function batsPart({ cwd, patterns, shard }) {
+  const label = `bats ${patterns.join(' ')}${shard ? ` (shard ${shard.index} of ${shard.of})` : ''}`
   if (process.platform === 'win32') {
-    return batsPartWindows({ label, cwd, patterns })
+    return batsPartWindows({ label, cwd, patterns, shard })
   }
   if (!toolAvailable('bats')) {
     return { label, toolMissing: 'bats' }
   }
-  const files = patterns.flatMap((p) => globSync(p, { cwd })).sort()
+  const files = batsShardFiles(patterns.flatMap((p) => globSync(p, { cwd })), shard)
   if (files.length === 0) {
-    return { label, collected: 0, passed: 0, failed: 0, skipped: 0, detail: `no files matched ${patterns.join(', ')}` }
+    return { label, collected: 0, passed: 0, failed: 0, skipped: 0, detail: noBatsFiles(patterns, shard) }
   }
   return judgeBats(label, run('bats', ['--tap', ...files], { cwd }), 'bats')
 }
@@ -365,7 +388,13 @@ export const UNIT_PARTS = {
     runVitestJson({ label: 'disabled-module lane vitest (gremion-ui/scripts/module-lane.mjs)', cwd: path.join(root, 'gremion-ui'), cmd: process.execPath, args: ['scripts/module-lane.mjs', '--'], root }),
   ],
   node: (root) => nodeTestParts({ cwd: root, files: scriptTestFiles(root) }),
-  bats: (root) => [batsPart({ cwd: root, patterns: ['test/*.bats', 'test/host/*.bats'] })],
+  // bats-1-of-2, bats-2-of-2, ... (see BATS_SHARDS above).
+  ...Object.fromEntries(
+    Array.from({ length: BATS_SHARDS }, (_, i) => [
+      `bats-${i + 1}-of-${BATS_SHARDS}`,
+      (root) => [batsPart({ cwd: root, patterns: BATS_PATTERNS, shard: { index: i + 1, of: BATS_SHARDS } })],
+    ]),
+  ),
 }
 
 /** scripts/check-module-source-scan.mjs, loaded on first use by the `modules` part only (never at import

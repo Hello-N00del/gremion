@@ -11,10 +11,15 @@
 #   packages/events/scripts/proof.sh alert-fire         the DLQ conditions fire exactly one e-mail each
 #   packages/events/scripts/proof.sh alert-hold         a still-firing condition sends no second e-mail
 #   packages/events/scripts/proof.sh alert-resolve      a resolve notice follows the clear
-#   packages/events/scripts/proof.sh down               remove everything BY NAME; prints the verdict
+#   packages/events/scripts/proof.sh down [live|alert]  remove everything BY NAME; prints the verdict
 #
-# State: .scratch/t079/state.json (the stack) and .scratch/t079/groups (the groups that passed);
-# `up` refuses while a state exists. Names are t079-<sha8>-*, bound to 127.0.0.1; nothing here runs
+# The live groups (up, test <group>) and the alert phases use separate stacks and run as two halves
+# (make test-events-live / test-events-alert, two CI legs). `down live` tears down and judges only the
+# live groups, `down alert` only the alert phases; plain `down` does both, as one run of both halves.
+#
+# State: .scratch/t079/state.json (the stack), .scratch/t079/groups (the live groups that passed,
+# emptied by `up`) and .scratch/t079/alert-groups (the alert phases that passed, emptied by
+# alert-prepare); `up` refuses while a state exists. Names are t079-<sha8>-*, bound to 127.0.0.1; nothing here runs
 # `docker compose down`, a prune, or touches a gremion_* volume or a container it did not create.
 #
 # Post-condition, not exit code: the verbose reporter's per-test lines for
@@ -31,11 +36,13 @@ SCRATCH="$ROOT/.scratch/t079"
 LOGS="$ROOT/.scratch/t079-logs"
 STATE="$SCRATCH/state.json"
 GROUPS_FILE="$SCRATCH/groups"
+ALERT_GROUPS_FILE="$SCRATCH/alert-groups"
 
 # Minimums, not exact counts: adding a case needs no edit here; removing one below the floor fails
 # until lowered on purpose -- in this file, never from the environment.
 declare -A MIN_PASS=( [core]=15 [consumer]=15 [deadletter]=6 [rebuild]=2 )
-REQUIRED_GROUPS="core consumer deadletter rebuild alert-red alert-fire alert-hold alert-resolve"
+REQUIRED_LIVE="core consumer deadletter rebuild"
+REQUIRED_ALERT="alert-red alert-fire alert-hold alert-resolve"
 
 fail() { echo "[events-proof] FAILED: $*" >&2; }
 
@@ -97,6 +104,8 @@ case "$phase" in
     ;;
   alert-prepare|alert-up|alert-red|alert-fire|alert-hold|alert-resolve)
     mkdir -p "$LOGS" "$SCRATCH"
+    # A fresh alert run starts with no phase recorded, so a pass from an earlier run cannot count.
+    if [ "$phase" = alert-prepare ]; then : > "$ALERT_GROUPS_FILE"; fi
     log="$LOGS/$phase.log"
     set +e
     bash "$PKG/scripts/alert-proof.sh" "$phase" > "$log" 2>&1
@@ -107,14 +116,24 @@ case "$phase" in
     # prepare and up are set-up phases; the others are acceptance groups the verdict requires.
     case "$phase" in
       alert-prepare|alert-up) echo "[events-proof] phase ${phase} done" ;;
-      *) echo "$phase" >> "$GROUPS_FILE"; echo "[events-proof] group ${phase} OK" ;;
+      *) echo "$phase" >> "$ALERT_GROUPS_FILE"; echo "[events-proof] group ${phase} OK" ;;
     esac
     ;;
   down)
-    node "$PKG/scripts/stack.mjs" down
-    if [ -f "$PKG/scripts/alert-proof.sh" ]; then bash "$PKG/scripts/alert-proof.sh" down || true; fi
+    scope="${2:-all}"
+    case "$scope" in
+      live) required="$REQUIRED_LIVE" ;;
+      alert) required="$REQUIRED_ALERT" ;;
+      all) required="$REQUIRED_LIVE $REQUIRED_ALERT" ;;
+      *) echo "usage: $0 down [live|alert]" >&2; exit 2 ;;
+    esac
+    if [ "$scope" != alert ]; then node "$PKG/scripts/stack.mjs" down; fi
+    if [ "$scope" != live ] && [ -f "$PKG/scripts/alert-proof.sh" ]; then bash "$PKG/scripts/alert-proof.sh" down || true; fi
     missing=""
-    for g in $REQUIRED_GROUPS; do grep -qx "$g" "$GROUPS_FILE" 2>/dev/null || missing="$missing $g"; done
+    for g in $required; do
+      case "$g" in alert-*) file="$ALERT_GROUPS_FILE" ;; *) file="$GROUPS_FILE" ;; esac
+      grep -qx "$g" "$file" 2>/dev/null || missing="$missing $g"
+    done
     if [ -z "$missing" ]; then
       echo "[events-proof] OK"
     else
@@ -122,7 +141,7 @@ case "$phase" in
     fi
     ;;
   *)
-    echo "usage: $0 up | test <group> | alert-prepare | alert-up | alert-red | alert-fire | alert-hold | alert-resolve | down" >&2
+    echo "usage: $0 up | test <group> | alert-prepare | alert-up | alert-red | alert-fire | alert-hold | alert-resolve | down [live|alert]" >&2
     exit 2
     ;;
 esac

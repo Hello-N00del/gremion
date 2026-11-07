@@ -22,6 +22,8 @@ export const calendarManifest: ModuleManifest = {
   id: 'calendar',
   order: 70,
   toggleable: true,
+  // Display name: the Systemstatus catalog and the council module switch (its confirmation phrase) read it.
+  status: { label: 'Kalender' },
   pages: [{ segment: 'calendar', minRole: Role.Guest }],
   routePrefixes: ['/calendar', '/api/calendar'],
 }

@@ -41,10 +41,11 @@ const HIDDEN_ROLES: ReadonlySet<string> = new Set(['offline_access', 'uma_author
 
 // Realm role id → friendly label (mirrors the Role enum in ./types plus the
 // `admin` group-role that the users list treats as an admin tier).
-const ROLE_LABELS: Readonly<Record<string, string>> = {
+export const ROLE_LABELS: Readonly<Record<string, string>> = {
   guest: 'Gast',
   member: 'Mitglied',
   'council-admin': 'Gremienverwaltung',
+  vorstand: 'Vorstand',
   admin: 'Administration',
   'it-admin': 'IT-Administration',
 }

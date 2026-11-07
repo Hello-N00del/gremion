@@ -184,7 +184,7 @@
     {#each data.requests as q (q.id)}
       <li>
         <code>{q.kind}</code> · {q.state}
-        {#if q.origin === 'host'}<strong class="breakglass">{originLabel(q.origin)}</strong> ({q.hostActor ?? '—'}: {q.reason ?? '—'}){/if}
+        {#if q.origin === 'host'}<strong class="breakglass">{originLabel(q.origin)}</strong> ({q.hostActor ?? '—'}: {q.reason ?? '—'}){:else if q.origin === 'council'}<strong>{originLabel(q.origin)}</strong>{/if}
         {#if q.outcome}<span class="muted"> — {q.outcome}</span>{/if}
       </li>
     {/each}

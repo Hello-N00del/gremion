@@ -50,7 +50,7 @@ cp .env.example .env
 2. Creates `.env` from `.env.example` (mode `600`) and replaces every `CHANGE_ME_` placeholder with a freshly generated secret.
 3. Makes the helper scripts executable.
 4. Mints the internal TLS CA + Keycloak server cert (`docker/keycloak/certs/gen-internal-ca.sh`). `internal-ca.pem` is a bind-mount source of the app tier, so it is needed in dev too.
-   Renders `docker/pgbouncer/userlist.txt` (`scripts/render-pgbouncer-userlist.sh`: mode `600`, from `PGBOUNCER_AUTH_PASSWORD`; only the prod overlay mounts it).
+   Renders `docker/pgbouncer/userlist.txt` (`scripts/render-pgbouncer-userlist.sh`: mode `600`, from `PGBOUNCER_AUTH_PASSWORD`; only the prod overlay mounts it). A Linux host that runs the prod overlay passes `--container-group` (mode `640`, group `70`, the gid PgBouncer reads it as; see `docs/runbooks/pgbouncer.md`).
    Runs `scripts/check-bind-sources.sh --all`, the bind-mount preflight (below).
 5. Regenerates `docker/keycloak/realm-export.json` **only if** a vertical `config.json` is supplied (`CONFIG_PATH=…` or `config/config.json`). With neither present it keeps the committed **governance-only** realm (the `gremion-ui` + `gremion-admin` clients only — no feature-module groups/roles).
 6. Builds the images and starts the core services (`postgres`, `keycloak`, `gremion-ui`).
@@ -197,7 +197,7 @@ All configuration lives in `.env`. See [`.env.example`](../.env.example) for the
 | `KEYCLOAK_ADMIN` / `KEYCLOAK_ADMIN_PASSWORD` | Keycloak bootstrap admin |
 | `KEYCLOAK_ADMIN_CLIENT_SECRET` | `gremion-admin` service-account secret (admin REST) |
 | `AUTH_SECRET` | Auth.js session-cookie signing key |
-| `AUTH_KEYCLOAK_ID` / `AUTH_KEYCLOAK_SECRET` / `AUTH_KEYCLOAK_ISSUER` | gremion-ui ↔ Keycloak OIDC |
+| `AUTH_KEYCLOAK_ID` / `AUTH_KEYCLOAK_SECRET` | gremion-ui ↔ Keycloak OIDC (the issuer comes from the tenant row, not env) |
 | `GREMION_DB_USER` / `GREMION_DB_PASSWORD` / `GREMION_DB_NAME` | App (governance) database |
 | `CONTROL_DB_USER` / `CONTROL_DB_PASSWORD` / `CONTROL_DB_NAME` | Tenancy control-plane database |
 | `PUBLIC_DB_PASSWORD` / `GREMION_PUBLIC_DB_URL` | Read-only role used by `gremion-public` |
