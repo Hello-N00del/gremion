@@ -610,3 +610,56 @@ exit 0'
     run bash -c "awk '/^ensure_layout\(\)/,/^}/' '$BOOTSTRAP' | grep -n 'assert_deploy_uid\|migration-dumps' | head -1"
     [[ "$output" == *assert_deploy_uid* ]]
 }
+
+# Issue #83: gremion-render runs as the deploy user under NoNewPrivileges when a
+# deploy is driven through gremion-hostd, so the deploy user must already be in
+# the group the PgBouncer container reads its userlist as.
+@test "ensure_pgbouncer_group creates gid 70 when no group holds it and adds the deploy user to it" {
+    shim getent 'exit 2'
+    shim groupadd
+    shim usermod
+    shim id 'echo "1000 70"'
+    run ensure_pgbouncer_group
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    assert_recorded groupadd "--gid 70 pgbouncer-gid"
+    assert_recorded usermod "-aG pgbouncer-gid gremion"
+}
+
+@test "ensure_pgbouncer_group reuses a group that already holds the gid" {
+    shim getent 'echo "someothername:x:70:"'
+    shim groupadd
+    shim usermod
+    shim id 'echo "1000 70"'
+    run ensure_pgbouncer_group
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    refute_recorded groupadd "70"
+    assert_recorded usermod "-aG someothername gremion"
+}
+
+@test "ensure_pgbouncer_group honours GREMION_PGBOUNCER_GID and rejects a non-numeric value" {
+    shim getent 'exit 2'
+    shim groupadd
+    shim usermod
+    shim id 'echo "1000 4242"'
+    GREMION_PGBOUNCER_GID=4242 run ensure_pgbouncer_group
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    assert_recorded groupadd "--gid 4242 pgbouncer-gid"
+    GREMION_PGBOUNCER_GID=postgres run ensure_pgbouncer_group
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"must be a numeric gid"* ]]
+}
+
+@test "ensure_pgbouncer_group fails when the deploy user is not in the gid afterwards" {
+    shim getent 'exit 2'
+    shim groupadd
+    shim usermod
+    shim id 'echo "1000"'
+    run ensure_pgbouncer_group
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"not in a group with gid 70"* ]]
+}
+
+@test "stage_user calls ensure_pgbouncer_group" {
+    run bash -c "awk '/^stage_user\(\)/,/^}/' '$BOOTSTRAP' | grep -c ensure_pgbouncer_group"
+    [ "$output" = 1 ]
+}

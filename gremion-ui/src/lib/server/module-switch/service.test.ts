@@ -34,7 +34,10 @@ const REQUEST = '33333333-3333-4333-8333-333333333333'
 const KEY = '44444444-4444-4444-8444-444444444444'
 const NOW_MS = Date.parse('2026-10-31T10:00:00Z')
 const nowSec = Math.floor(NOW_MS / 1000)
-const ID_TOKEN = 'id.' + 'i'.repeat(60)
+// A decodable (unsigned) ID token: the service reads its sign-in time (auth_time, else iat) like the executor does.
+const jwt = (claims: Record<string, unknown>) => `${Buffer.from('{"alg":"RS256"}').toString('base64url')}.${Buffer.from(JSON.stringify(claims)).toString('base64url')}.${'s'.repeat(40)}`
+const ID_AUTH_TIME = nowSec - 17 // deliberately NOT the session's server-clock authTime (nowSec - 10)
+const ID_TOKEN = jwt({ iat: nowSec - 40, auth_time: ID_AUTH_TIME, sid: 's-1' })
 const ACCESS_TOKEN = 'access.' + 'a'.repeat(60)
 
 const tenant = { id: CUSTOMER, slug: 'rat-a', db: { tenantDb: true } } as unknown as TenantContext
@@ -42,7 +45,7 @@ const tenant = { id: CUSTOMER, slug: 'rat-a', db: { tenantDb: true } } as unknow
 function user(over: Partial<SessionUser> = {}): SessionUser {
   return { id: PERSON, email: 'a@example.org', name: 'A', roles: [Role.CouncilAdmin], groups: [], loa: 2, authTime: nowSec - 10, ...over }
 }
-const ctx = (u: SessionUser = user()) => ({ tenant, user: u, idToken: ID_TOKEN, accessToken: ACCESS_TOKEN })
+const ctx = (u: SessionUser = user(), idToken: string = ID_TOKEN) => ({ tenant, user: u, idToken, accessToken: ACCESS_TOKEN })
 const deps = (extra: Record<string, unknown> = {}) => ({ nowMs: () => NOW_MS, newKey: () => KEY, ...extra })
 
 interface StateRow {
@@ -287,7 +290,7 @@ describe('enable: no-op check uses BOTH the platform state and config.modules', 
 describe('the platform submit', () => {
   const dpia = { requiresDpia: false, documentRef: 'TOM 4.2' }
 
-  it('passes p_acr loa2, p_auth_time from the session, the encodeEvidence token and p_person_id = user.id', async () => {
+  it("passes p_acr loa2, p_auth_time from the ID token's own auth_time, the encodeEvidence token and p_person_id = user.id", async () => {
     await submitModuleSwitch(ctx(), { moduleId: 'votes', action: 'enable', dpia }, deps())
     const [kind, slug, args, key, person, acr, authTime, token] = submits()[0]!.values
     expect(kind).toBe('enable_module')
@@ -296,8 +299,26 @@ describe('the platform submit', () => {
     expect(key).toBe(KEY)
     expect(person).toBe(PERSON)
     expect(acr).toBe('loa2')
-    expect(new Date(authTime as string).getTime()).toBe((nowSec - 10) * 1000)
+    // the executor compares the recorded time with the ID token's auth_time (iat when absent), not with the
+    // session's server-clock step-up stamp (user.authTime), so the token's own value is what is recorded
+    expect(new Date(authTime as string).getTime()).toBe(ID_AUTH_TIME * 1000)
+    expect(new Date(authTime as string).getTime()).not.toBe(user().authTime * 1000)
     expect(token).toBe(JSON.stringify({ id: ID_TOKEN, access: ACCESS_TOKEN }))
+  })
+
+  it('an ID token without auth_time records its iat', async () => {
+    const iat = nowSec - 23
+    await submitModuleSwitch(ctx(user(), jwt({ iat, sid: 's-1' })), { moduleId: 'votes', action: 'enable', dpia }, deps())
+    expect(new Date(submits()[0]!.values[6] as string).getTime()).toBe(iat * 1000)
+  })
+
+  it('an ID token with neither auth_time nor iat, a non-token, or a sign-in beyond the 3600 s evidence window asks for a new step-up and queues nothing', async () => {
+    for (const idToken of [jwt({ sid: 's-1' }), 'not-a-jwt', jwt({ iat: nowSec - 3601 })]) {
+      const r = await submitModuleSwitch(ctx(user(), idToken), { moduleId: 'votes', action: 'enable', dpia }, deps())
+      expect(r).toMatchObject({ ok: false, status: 401, code: 'STEP_UP_REQUIRED' })
+    }
+    expect(submits()).toHaveLength(0)
+    expect(h.insertSwitch).not.toHaveBeenCalled()
   })
 
   it('reads the state for the tenant id (the platform customer id)', async () => {

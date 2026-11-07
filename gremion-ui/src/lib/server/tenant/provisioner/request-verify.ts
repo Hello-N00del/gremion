@@ -23,7 +23,7 @@
 // checked "as of" the request's created_at with a 3600 s tolerance, and the
 // sign-in time is checked explicitly against created_at.
 import { createHash } from 'node:crypto'
-import { jwtVerify, type JWTPayload, type JWTVerifyGetKey } from 'jose'
+import { decodeJwt, jwtVerify, type JWTPayload, type JWTVerifyGetKey } from 'jose'
 
 export const EVIDENCE_WINDOW_SECONDS = 3600
 export const EVIDENCE_SKEW_SECONDS = 60
@@ -38,6 +38,25 @@ export interface EvidencePair {
 /** The ONE string the panel stores as plt.provisioning_request.evidence_token. */
 export function encodeEvidence(p: EvidencePair): string {
   return JSON.stringify({ id: p.id, access: p.access })
+}
+
+/**
+ * The sign-in time an ID token states: auth_time when it carries one, else iat (the code exchange). The ONE rule,
+ * shared by the executor's check below and by a submitter that must record the same value (the council module
+ * switch): the recorded time has to match the token's own claim within 1 s, so a submitter never records its own
+ * clock. Reads the claims without verifying them (the executor verifies the signature); null when the token is
+ * not a JWT or carries neither claim.
+ */
+export function idTokenSignInTime(idToken: string): { seconds: number; claim: 'auth_time' | 'iat' } | null {
+  let claims: JWTPayload
+  try {
+    claims = decodeJwt(idToken)
+  } catch {
+    return null
+  }
+  if (typeof claims.auth_time === 'number' && Number.isFinite(claims.auth_time)) return { seconds: claims.auth_time, claim: 'auth_time' }
+  if (typeof claims.iat === 'number' && Number.isFinite(claims.iat)) return { seconds: claims.iat, claim: 'iat' }
+  return null
 }
 
 function decodeEvidence(evidence: string): EvidencePair | null {
@@ -64,6 +83,14 @@ export interface EvidenceCheck {
    * and client; every other check below is the same code path.
    */
   requiredRole?: string | readonly string[]
+  /**
+   * Which token carries the operator's id as its `sub` (default 'id': the ops realm's control-panel ID token).
+   * A gremion-ui (council) pair has an ID token whose sub is pairwise or absent (the client imports no `basic`
+   * scope); its `sub` mapper puts the real user id in the ACCESS token only. For that pair the person is bound
+   * through the access token's sub: the access token is signed by the realm and is tied to the ID token by
+   * at_hash and sid (both checked above), so it is the same exchange of the same session.
+   */
+  subjectToken?: 'id' | 'access'
   /** plt.provisioning_request.operator_id */
   operatorId: string
   /** plt.provisioning_request.created_at (the server clock at submit) */
@@ -112,15 +139,19 @@ export async function verifyRequestEvidence(c: EvidenceCheck): Promise<EvidenceR
     }
     if (typeof id.at_hash !== 'string' || id.at_hash !== atHash(p.access)) throw new Error('the access token is not the one issued with the ID token (at_hash)')
     if (typeof id.sid !== 'string' || id.sid !== at.sid) throw new Error('the two tokens come from different sessions (sid)')
-    if (id.sub !== c.operatorId) throw new Error(`the ID token's sub ${String(id.sub)} is not the request's operator ${c.operatorId}`)
+    const subjectToken = c.subjectToken ?? 'id'
+    const subject = subjectToken === 'access' ? at.sub : id.sub
+    if (typeof subject !== 'string' || subject !== c.operatorId) {
+      throw new Error(`the ${subjectToken === 'access' ? 'access' : 'ID'} token's sub ${String(subject)} is not the request's operator ${c.operatorId}`)
+    }
     const roles = (at.realm_access as { roles?: unknown } | undefined)?.roles
     const required = c.requiredRole === undefined ? [OPERATOR_ROLE] : typeof c.requiredRole === 'string' ? [c.requiredRole] : [...c.requiredRole]
     if (!Array.isArray(roles) || !required.some((r) => roles.includes(r))) {
       throw new Error(c.requiredRole === undefined ? 'the access token carries no operator role of the ops realm' : `the access token carries none of the realm roles ${required.join(', ')}`)
     }
-    const timeClaim = typeof id.auth_time === 'number' ? 'auth_time' : 'iat'
-    const authTime = timeClaim === 'auth_time' ? (id.auth_time as number) : id.iat
-    if (typeof authTime !== 'number' || !Number.isFinite(authTime)) throw new Error('the ID token carries neither auth_time nor iat')
+    const signedIn = idTokenSignInTime(p.id)
+    if (!signedIn) throw new Error('the ID token carries neither auth_time nor iat')
+    const { seconds: authTime, claim: timeClaim } = signedIn
     const age = Math.floor(c.createdAt.getTime() / 1000) - authTime
     // the database's own bound on the recorded time (plt 0009): [created_at - 3600 s, created_at + 60 s]
     if (age > EVIDENCE_WINDOW_SECONDS || age < -EVIDENCE_SKEW_SECONDS) {
@@ -129,7 +160,7 @@ export async function verifyRequestEvidence(c: EvidenceCheck): Promise<EvidenceR
     if (Math.abs(Math.floor(c.recordedAuthTime.getTime() / 1000) - authTime) > 1) {
       throw new Error(`the recorded sign-in time is not the token's ${timeClaim}`)
     }
-    return { ok: true, sub: id.sub, acr: 'loa2', authTime, timeClaim }
+    return { ok: true, sub: subject, acr: 'loa2', authTime, timeClaim }
   } catch (err) {
     return { ok: false, reason: err instanceof Error ? err.message : String(err) }
   }

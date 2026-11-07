@@ -5,7 +5,7 @@
 // ci.yml splits `make verify` into legs (`node scripts/verify/verify.mjs --only
 // <list>`), each uploading its partial record as `record-<leg>`; the verify-gate
 // job combines the records and judges them with scripts/verify/check-record.mjs.
-// That shape fails SILENTLY in four ways, and this guard is the thing that makes
+// That shape fails SILENTLY in five ways, and this guard is the thing that makes
 // each of them red on the pull request that introduces it:
 //
 //   1. A required suite no leg runs. The combined record then lacks it and the
@@ -29,7 +29,15 @@
 //      sign-release.sh also relies on; and the `if` of the gate job, of the step
 //      that checks every leg's result and of the strict call are pinned, because a
 //      narrowed one makes the gate SKIP, and a skipped required check reads as
-//      passing in a branch ruleset.
+//      passing in a branch ruleset. The first two are pinned to always(): a failed
+//      leg cancels a pull-request run (fail fast), and the gate must still run
+//      then; and the gate must end with a `cancelled()` step that exits 1, since
+//      in a cancelled run every other step is skipped.
+//   5. A fail-fast cancel that reaches too far. Only a fail-fast job of the pinned
+//      shape may cancel (one per leg, same-repo pull requests only, `actions:
+//      write` and nothing else, one step, no `uses:`), so a push always carries
+//      every leg's record and the write token never shares a runner with
+//      repository or dependency code; no leg and not the gate holds a write token.
 //
 // A scan that found almost nothing would pass every rule above, so it refuses to
 // pass below a floor of verify invocations (the vacuity floor).
@@ -103,11 +111,25 @@ const keepsErrexit = (shell) => shell === undefined || shell === null || (typeof
 
 // The only `if` the gate job and its strict check-record step may carry (after the
 // `${{ }}` wrapper and whitespace are normalized away). Anything narrower can skip
-// them; anything missing on the job skips it when a leg fails.
-const GATE_JOB_IFS = new Set(['!cancelled()', 'always()'])
+// them; anything missing on the job skips it when a leg fails. Only always(): a failed
+// leg cancels a pull-request run (the fail-fast step), and `!cancelled()` would then
+// skip the gate.
+const GATE_JOB_IFS = new Set(['always()'])
 // The step that judges every leg's `result` (found by its `toJSON(needs)`, not by its name)
-// may carry no `if` that can skip it; these are the only ones that do not narrow it.
-const LEGS_STEP_IFS = new Set(['', 'success()', '!cancelled()', 'always()'])
+// must be always() too: in a cancelled run a step without it is skipped, and so is every
+// step after it -- a gate whose steps all skipped finishes green.
+const LEGS_STEP_IFS = new Set(['always()'])
+// A run is cancelled (fail fast) only by a fail-fast job of exactly this shape: one per
+// leg, `needs` that leg alone, this exact `if` (pull requests from this repository only:
+// a push or a manual run keeps every leg's record, which check-record and sign-release
+// need; a fork's token cannot cancel), `permissions: {actions: write}` and nothing else,
+// one step that is the cancel and no `uses:` -- the write token never shares a runner
+// with repository or dependency code. Every spelling of the cancel counts: `gh run
+// cancel`, and the REST endpoint (`.../actions/runs/<id>/cancel` or `force-cancel`).
+const CANCELS_RUN = /\bgh\s+run\s+cancel\b|\/actions\/runs\/\S*\/(?:force-)?cancel\b/
+const FAIL_FAST_JOB_IF = "failure() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository"
+// The gate's last word on a cancelled run: every step without always() is skipped there.
+const CANCELLED_STEP_IF = 'cancelled()'
 const STRICT_STEP_IF = "github.event_name != 'pull_request' || needs.verify-census.result == 'success'"
 const normalizeIf = (v) => text(v === undefined || v === null ? '' : String(v)).replace(/^\s*\$\{\{|\}\}\s*$/g, '').replace(/\s+/g, ' ').trim()
 
@@ -226,6 +248,14 @@ export function checkWorkflow(doc, { requiredSuites, unitParts, integrationParts
   for (const jobId of new Set(invocations.map((i) => i.jobId))) {
     if (!uploaders.has(jobId)) problems.push(`${jobId} runs verify but uploads no record-* artifact -- its result never reaches the gate`)
   }
+  // The legs start without waiting for Lint (it runs the guards, this one included), so the
+  // gate must wait for it itself or a red Lint would leave a green gate.
+  // Fail closed on a renamed job: without `lint` the two lint rules below would check nothing.
+  if (!doc.jobs.lint) {
+    problems.push('there is no `lint` job -- the gate-needs-lint and fail-fast-lint checks cannot run (renamed? update this guard with it)')
+  } else if (gate && !needed.has('lint')) {
+    problems.push('verify-gate does not need lint -- the legs no longer wait for it, so a red Lint would not reach the verdict')
+  }
 
   // ── nothing may soften the verdict ──────────────────────────────────────
   for (const [jobId, job] of Object.entries(doc.jobs)) {
@@ -264,11 +294,52 @@ export function checkWorkflow(doc, { requiredSuites, unitParts, integrationParts
   if (gate && legSteps.length === 0) problems.push('verify-gate has no step that reads toJSON(needs) -- nothing checks that every leg succeeded')
   for (const { label, step } of legSteps) {
     if (!LEGS_STEP_IFS.has(normalizeIf(step.if))) {
-      problems.push(`${label} has \`if: ${normalizeIf(step.if)}\`; the step that checks every leg's result must have no \`if\` (or only success(), !cancelled(), always()), because a narrowed one skips the check`)
+      problems.push(`${label} has \`if: ${normalizeIf(step.if) || '(none)'}\`; the step that checks every leg's result must have \`if: always()\`, because anything else is skipped in a cancelled (fail-fast) run or narrows the check, and a gate whose steps skipped finishes green`)
     }
   }
   if (gate && !GATE_JOB_IFS.has(normalizeIf(gate.if))) {
-    problems.push(`verify-gate has \`if: ${normalizeIf(gate.if) || '(none)'}\`; it must be \`!cancelled()\` so a failed or skipped leg makes the gate run and fail instead of skipping it (a skipped required check reads as passing)`)
+    problems.push(`verify-gate has \`if: ${normalizeIf(gate.if) || '(none)'}\`; it must be \`always()\` so a failed, skipped or cancelled leg makes the gate run and fail instead of skipping it (a skipped required check reads as passing, and a failed leg cancels a pull-request run)`)
+  }
+  if (gate) {
+    const cancelledSteps = asList(gate.steps).filter((st) => st && normalizeIf(st.if) === CANCELLED_STEP_IF && logicalLines(st.run).some((l) => /^\s*exit\s+1\s*$/.test(l)))
+    if (cancelledSteps.length === 0) {
+      problems.push(`verify-gate has no step with \`if: ${CANCELLED_STEP_IF}\` that exits 1 -- in a cancelled run every other step is skipped and the gate would finish green without judging a record`)
+    }
+  }
+
+  // ── fail fast: only the pinned fail-fast jobs cancel, one per leg ──────────
+  const failFastFor = new Map() // leg -> [fail-fast job ids]
+  for (const [jobId, job] of Object.entries(doc.jobs)) {
+    const steps = asList(job?.steps)
+    if (!steps.some((st) => st && logicalLines(st.run).some((l) => CANCELS_RUN.test(l)))) continue
+    const where = `${jobId}: cancels the run`
+    const needs = asList(job.needs)
+    if (needs.length !== 1 || !(uploaders.has(needs[0]) || needs[0] === 'lint')) {
+      problems.push(`${where}, but its \`needs\` is not exactly one verify leg or lint (${needs.join(', ') || 'none'})`)
+    } else {
+      failFastFor.set(needs[0], [...(failFastFor.get(needs[0]) ?? []), jobId])
+    }
+    if (normalizeIf(job.if) !== FAIL_FAST_JOB_IF) {
+      problems.push(`${where} with \`if: ${normalizeIf(job.if) || '(none)'}\`; it must be exactly \`${FAIL_FAST_JOB_IF}\` -- anything else can cancel a push run (losing its records) or a passing run`)
+    }
+    const perms = job.permissions
+    if (!perms || typeof perms !== 'object' || Object.keys(perms).length !== 1 || perms.actions !== 'write') {
+      problems.push(`${where}; its permissions must be exactly \`actions: write\``)
+    }
+    if (steps.length !== 1 || steps.some((st) => st?.uses !== undefined || st?.if !== undefined)) {
+      problems.push(`${where}; it must be one step with no \`uses:\` and no step \`if\` -- the write token must not share a runner with repository or dependency code`)
+    }
+    if (verdictJobs.has(jobId)) problems.push(`${where}, but it is a verify leg or the gate -- the cancel must be a job of its own`)
+  }
+  // Lint too: the legs no longer wait for it, so its failure must cancel them on a pull request.
+  for (const leg of [...uploaders, ...(doc.jobs.lint ? ['lint'] : [])]) {
+    const n = failFastFor.get(leg)?.length ?? 0
+    if (n !== 1) problems.push(`${leg} has ${n} fail-fast job(s); it needs exactly one, so its failure cancels the rest of a pull-request run`)
+  }
+  for (const jobId of verdictJobs) {
+    const perms = doc.jobs[jobId]?.permissions
+    const writes = perms && typeof perms === 'object' ? Object.entries(perms).filter(([, v]) => v === 'write').map(([k]) => k) : perms === 'write-all' ? ['write-all'] : []
+    if (writes.length > 0) problems.push(`${jobId} runs repository code with a write token (${writes.join(', ')}) -- only a fail-fast job may hold actions: write`)
   }
 
   // ── --allow-missing only on the pull-request path; the strict call is flagless ──

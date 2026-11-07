@@ -15,6 +15,7 @@ const ISS_A = `https://${HOST_A}/auth/realms/realm-a`
 const ISS_B = 'https://rat-b.example/auth/realms/realm-b'
 const ISS_OPS = 'https://platform.example/auth/realms/platform'
 const PERSON = '5b8e0a52-2f9f-4b46-9e3a-0b5c7f1a2d33'
+const PAIRWISE = 'pairwise-id-token-sub-not-the-user-id'
 const CREATED = new Date('2026-10-05T12:00:00Z')
 const T = Math.floor(CREATED.getTime() / 1000)
 const CATALOGUE = ['board', 'calendar', 'elections', 'files', 'handover', 'messaging', 'publishing', 'vault', 'votes']
@@ -37,7 +38,10 @@ interface Over {
   roles?: string[]
   acr?: string
   iat?: number
+  /** the ACCESS token's sub: the gremion-ui client's `sub` mapper puts the real user id there (default PERSON) */
   sub?: string
+  /** the ID token's sub: the gremion-ui ID token carries a different (pairwise) value or none (default: pairwise); null = no sub */
+  idSub?: string | null
 }
 
 async function pair(o: Over = {}): Promise<{ id: string; access: string }> {
@@ -46,10 +50,11 @@ async function pair(o: Over = {}): Promise<{ id: string; access: string }> {
   const iat = o.iat ?? T - 600
   const sign = (claims: Record<string, unknown>) => new SignJWT(claims).setProtectedHeader({ alg: 'RS256', kid: 'k1', typ: 'JWT' }).sign(priv)
   const access = await sign({
-    iss, aud: client, azp: client, typ: 'Bearer', acr: o.acr ?? 'loa2', sid: 's-1', iat, exp: iat + 300,
+    iss, aud: client, azp: client, typ: 'Bearer', acr: o.acr ?? 'loa2', sid: 's-1', sub: o.sub ?? PERSON, iat, exp: iat + 300,
     realm_access: { roles: o.roles ?? ['council-admin', 'default-roles-realm-a'] },
   })
-  const id = await sign({ iss, aud: client, azp: client, typ: 'ID', acr: o.acr ?? 'loa2', sid: 's-1', sub: o.sub ?? PERSON, iat, exp: iat + 300, at_hash: atHash(access) })
+  const idSub = o.idSub === undefined ? PAIRWISE : o.idSub
+  const id = await sign({ iss, aud: client, azp: client, typ: 'ID', acr: o.acr ?? 'loa2', sid: 's-1', ...(idSub === null ? {} : { sub: idSub }), iat, exp: iat + 300, at_hash: atHash(access) })
   return { id, access }
 }
 
@@ -163,10 +168,26 @@ describe('verifyCouncilRequest: the evidence', () => {
     expect(await verifyCouncilRequest(await row({}, { iat: T - 3601 }), s.ctx, s.deps)).toMatchObject({ verdict: 'refused', reason: expect.stringMatching(/3601 s before the request/) })
   })
 
-  it("the token's sub must be the request's person", async () => {
+  it("the person is bound through the ACCESS token's sub: the gremion-ui ID token's sub is pairwise (or absent) and is not compared", async () => {
     const s = setup()
-    const v = await verifyCouncilRequest(await row({}, { sub: '00000000-0000-4000-8000-000000000000' }), s.ctx, s.deps)
-    expect(v).toMatchObject({ verdict: 'refused', reason: expect.stringMatching(/sub .* is not the request's operator/) })
+    // the realistic shape of a gremion-ui pair: access sub = the real user id, ID sub = a different pairwise value
+    expect((await verifyCouncilRequest(await row({}, { idSub: PAIRWISE }), s.ctx, s.deps)).verdict).toBe('ok')
+    // and an ID token with no sub at all (the client imports no `basic` scope)
+    expect((await verifyCouncilRequest(await row({}, { idSub: null }), s.ctx, s.deps)).verdict).toBe('ok')
+  })
+
+  it("the access token's sub must be the request's person (an ID sub equal to the person does not rescue another access sub)", async () => {
+    const s = setup()
+    const other = '00000000-0000-4000-8000-000000000000'
+    const v = await verifyCouncilRequest(await row({}, { sub: other, idSub: PERSON }), s.ctx, s.deps)
+    expect(v).toMatchObject({ verdict: 'refused', reason: expect.stringMatching(/access token's sub .* is not the request's operator/) })
+    expect(s.calls).toEqual([])
+  })
+
+  it('an access token without sub is refused (nothing binds the person)', async () => {
+    const s = setup()
+    const v = await verifyCouncilRequest(await row({}, { sub: '' }), s.ctx, s.deps)
+    expect(v).toMatchObject({ verdict: 'refused', reason: expect.stringMatching(/access token's sub/) })
   })
 
   it('a council request without its signed evidence is refused', async () => {
