@@ -50,6 +50,7 @@ CONTENT_PG_PASSWORD=unit-content-secret
 FINANCE_PG_PASSWORD=unit-finance-secret
 NEWSLETTER_PG_PASSWORD=unit-newsletter-secret
 VAULT_PG_PASSWORD=unit-vault-secret
+GOVERNANCE_PG_PASSWORD=unit-governance-secret
 KEYCLOAK_ADMIN=admin
 KEYCLOAK_ADMIN_PASSWORD=unit-kc-admin-state-secret
 TRAEFIK_CERT_RESOLVER=le-http
@@ -147,7 +148,7 @@ steps() { cat "$ORDER"; }
 
 refute_state_secrets() {
     local v
-    for v in unit-pg-root-secret unit-board-secret unit-calendar-secret unit-vault-secret \
+    for v in unit-pg-root-secret unit-board-secret unit-calendar-secret unit-vault-secret unit-governance-secret \
              unit-kc-admin-state-secret unit-provisioner-sa-secret; do
         ! grep -qF -- "$v" "$SHIM_LOG" || { echo "secret ${v} on a docker argv"; cat "$SHIM_LOG"; return 1; }
         [[ "$output" != *"$v"* ]] || { echo "secret ${v} printed"; return 1; }
@@ -490,6 +491,11 @@ STUB
     grep -qx 'postgresql://postgres:unit-pg-root-secret@postgres-guardstack:5432/postgres' "${d}/kernel_pg_admin"
     grep -qx 'postgresql://calendar:unit-calendar-secret@calendar-postgres:5432/postgres' "${d}/module_pg_admin_calendar"
     assert_mode_600 "${d}/kernel_pg_admin"
+    # TASK-084-a: the governance server's admin credential (a file, never an argv) and the per-customer directory
+    grep -qx 'postgresql://governance:unit-governance-secret@governance-postgres:5432/postgres' "${d}/governance_pg_admin"
+    assert_mode_600 "${d}/governance_pg_admin"
+    [ -d "${GREMION_ROOT}/etc/secrets/governance" ] || { echo "no etc/secrets/governance"; return 1; }
+    [ "$(stat -c %a "${GREMION_ROOT}/etc/secrets/governance")" = 700 ] || { echo "etc/secrets/governance is mode $(stat -c %a "${GREMION_ROOT}/etc/secrets/governance")"; return 1; }
     run steps
     [ "${lines[0]}" = "tc bootstrap-provisioner " ] || { steps; return 1; }
     [ "${lines[1]}" = "tc init --panel-origin" ]
@@ -497,6 +503,32 @@ STUB
     # the ops client secret moved into the panel's directory, 0600, and left the tenant secrets
     [ "$(cat "${GREMION_ROOT}/etc/secrets/control-panel/client_secret")" = unit-ops-client-secret ]
     [ ! -e "${GREMION_ROOT}/tenant-secrets/platform_client_control-panel" ]
+}
+
+# TASK-084-a: the governance admin credential is derived from state.env on every
+# init (byte-identical on a rerun); a missing password is a named exit-2 failure
+# before anything is written; the per-customer files in etc/secrets/governance are
+# tenant-create's and are never touched here.
+@test "init keeps governance_pg_admin byte-identical on a rerun and never touches the per-customer files (TASK-084-a)" {
+    run "$LAUNCHER" init
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
+    local f="${GREMION_ROOT}/etc/secrets/tenant-create/governance_pg_admin" before
+    before="$(sha256sum "$f")"
+    printf 'postgresql://g_x_app:unit-customer-credential@governance-postgres:5432/t_x__governance\n' > "${GREMION_ROOT}/etc/secrets/governance/0192f1a23b4c7d5e8f60718293a4b5c6"
+    : > "$ORDER"
+    run "$LAUNCHER" init
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
+    [ "$(sha256sum "$f")" = "$before" ] || { echo "governance_pg_admin changed"; return 1; }
+    grep -q 'unit-customer-credential' "${GREMION_ROOT}/etc/secrets/governance/0192f1a23b4c7d5e8f60718293a4b5c6"
+    ! grep -qF -- 'unit-governance-secret' "$SHIM_LOG" || { echo "the governance secret reached a docker argv"; return 1; }
+    ! grep -qF -- 'governance_pg_admin' "$SHIM_LOG" || { echo "the governance admin file reached a docker argv"; return 1; }
+}
+
+@test "init without GOVERNANCE_PG_PASSWORD dies exit 2 naming it (TASK-084-a)" {
+    sed -i '/^GOVERNANCE_PG_PASSWORD=/d' "${GREMION_ROOT}/etc/env/state.env"
+    run "$LAUNCHER" init
+    [ "$status" -eq 2 ] || { echo "status=$status $output"; return 1; }
+    [[ "$output" == *"GOVERNANCE_PG_PASSWORD is empty in"* ]] || { echo "$output"; return 1; }
 }
 
 # TASK-043b F1: every tenant-create verb reads the provisioner credential from
@@ -602,7 +634,7 @@ STUB
     # init's own check first: it dies "<ID>_PG_PASSWORD is empty in state.env".
     run "$LAUNCHER" init
     [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
-    [[ "$output" == *"kernel and 6 module server credential file(s)"* ]] || { echo "$output"; return 1; }
+    [[ "$output" == *"kernel, 6 module and governance server credential file(s)"* ]] || { echo "$output"; return 1; }
     local id up
     for id in board calendar content finance newsletter vault; do
         up="$(printf '%s' "$id" | tr '[:lower:]' '[:upper:]')"
@@ -612,13 +644,18 @@ STUB
             || { echo "state.env carries no ${up}_PG_USER=${id}"; return 1; }
         [ -s "${GREMION_ROOT}/etc/secrets/tenant-create/module_pg_admin_${id}" ] || { echo "no module_pg_admin_${id}"; return 1; }
     done
+    # TASK-084-a: the governance server's login, generated like the others; its admin file is rendered from it.
+    grep -qE '^GOVERNANCE_PG_PASSWORD=[A-Za-z0-9]{32}$' "${GREMION_ROOT}/etc/env/state.env" \
+        || { echo "state.env carries no generated GOVERNANCE_PG_PASSWORD"; return 1; }
+    grep -qx 'GOVERNANCE_PG_USER=governance' "${GREMION_ROOT}/etc/env/state.env" || { echo "state.env carries no GOVERNANCE_PG_USER=governance"; return 1; }
+    [ -s "${GREMION_ROOT}/etc/secrets/tenant-create/governance_pg_admin" ] || { echo "no governance_pg_admin"; return 1; }
     # TASK-198: Synapse's own PostgreSQL server adds MESSAGING_PG_PASSWORD (generated, no tenant-create admin file).
     grep -qE '^MESSAGING_PG_PASSWORD=[A-Za-z0-9]{32}$' "${GREMION_ROOT}/etc/env/state.env" \n        || { echo "state.env carries no generated MESSAGING_PG_PASSWORD"; return 1; }
     # Every <ID>_PG_PASSWORD DISTINCT: one server's credential never opens another (7 servers since TASK-198).
     local keys distinct
     keys="$(grep -cE '^[A-Z]+_PG_PASSWORD=' "${GREMION_ROOT}/etc/env/state.env")"
     distinct="$(grep -E '^[A-Z]+_PG_PASSWORD=' "${GREMION_ROOT}/etc/env/state.env" | cut -d= -f2 | sort -u | wc -l)"
-    [ "$keys" -ge 7 ] && [ "$distinct" -eq "$keys" ] || { echo "keys=$keys distinct=$distinct"; return 1; }
+    [ "$keys" -ge 8 ] && [ "$distinct" -eq "$keys" ] || { echo "keys=$keys distinct=$distinct"; return 1; }
 }
 
 @test "init fails loudly when the ops client secret never arrives (review C, r2)" {

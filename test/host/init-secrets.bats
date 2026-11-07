@@ -190,6 +190,13 @@ copy_host_src() {
     ! grep -rn 'CHANGE_ME_GEN_' "$ENV_DIR"
 }
 
+@test "TASK-084-a: state.env carries a generated GOVERNANCE_PG_PASSWORD (32 alnum) and GOVERNANCE_PG_USER=governance" {
+    render
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    [[ "$(value_of "${ENV_DIR}/state.env" GOVERNANCE_PG_PASSWORD)" =~ ^[A-Za-z0-9]{32}$ ]] || { echo "GOVERNANCE_PG_PASSWORD is not 32 alnum"; return 1; }
+    [ "$(value_of "${ENV_DIR}/state.env" GOVERNANCE_PG_USER)" = governance ]
+}
+
 @test "every CHANGE_ME_OPERATOR_ sentinel survives and is listed on stdout" {
     render
     grep -q 'CHANGE_ME_OPERATOR_platform_domain' "${ENV_DIR}/state.env"

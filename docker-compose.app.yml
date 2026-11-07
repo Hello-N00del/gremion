@@ -482,6 +482,11 @@ services:
       MODULE_APP_PASSWORD_FINANCE_FILE: /run/secrets/tenant-create/module_app_password_finance
       MODULE_APP_PASSWORD_NEWSLETTER_FILE: /run/secrets/tenant-create/module_app_password_newsletter
       MODULE_APP_PASSWORD_VAULT_FILE: /run/secrets/tenant-create/module_app_password_vault
+      # TASK-084-a: the governance server's admin login (a file in the same read-only mount), and the
+      # directory this one-shot writes each customer's governance credential into (a separate rw mount
+      # below, mounted nowhere else; its uid hand-over to the governance image is TASK-084-b).
+      GOVERNANCE_PG_ADMIN_FILE: /run/secrets/tenant-create/governance_pg_admin
+      GOVERNANCE_SECRETS_DIR: /run/secrets/governance
       # TASK-043b F1: the least-privilege Keycloak provisioner's client secret
       # (master SA `tenant-provisioner`, create-realm only), from the same
       # read-only mount. `gremion-tenant init` writes it (0600) on its first run
@@ -509,6 +514,9 @@ services:
       - tenant-config-data:/data
       # TASK-043 G3: the admin credentials above, read-only.
       - ${GREMION_ROOT:-/opt/gremion}/etc/secrets/tenant-create:/run/secrets/tenant-create:ro
+      # TASK-084-a: read-write, tenant-create ONLY (never under /run/secrets/tenants, whose read-only mounts
+      # reach gremion-ui, migrate and the kernel API): one 0600 credential file per customer.
+      - ${GREMION_ROOT:-/opt/gremion}/etc/secrets/governance:/run/secrets/governance
       - ${GREMION_ROOT:-/opt/gremion}/data/module-exports:/var/lib/gremion/exports
       # The ops realm `init` imports (Q5), read-only like the base realm below.
       # Never an etc/edge mount: the router file is written by the host (Q17, j4).
