@@ -1,6 +1,6 @@
 # Upgrade: one release onto a running installation
 
-- Version: 7.0.0
+- Version: 8.0.0
 - Status: provisional (see Known gaps)
 - Wall-clock budget: one working day, from step 1 to the asserted post-condition (PRD-PLAT-005)
 - Implements: TRD-200 (upgrade), TRD-206 (the pre-migration dump, R18-4), TRD-189 (blue/green as the deploy path)
@@ -290,7 +290,7 @@ KEYCLOAK_ADMIN="$KEYCLOAK_ADMIN" KEYCLOAK_ADMIN_PASSWORD="$KEYCLOAK_ADMIN_PASSWO
    seconds. The step is idempotent: run it when in doubt, skip it only on an
    installation whose first `up` of the state project already ran with a
    release that renders the userlist 0640 group 70 (an install by install.md
-   5.0.0 or later). The post-condition's last two lines observe the result.
+   5.0.0 or later). The post-condition's PgBouncer lines observe the result.
 
 ```bash
 cd /opt/gremion/current
@@ -299,10 +299,36 @@ docker compose --env-file /opt/gremion/etc/env/state.env up -d --force-recreate 
 docker compose --env-file /opt/gremion/etc/env/state.env ps pgbouncer  # running, then healthy within about a minute
 ```
 
+8. **Reconcile every customer (every upgrade; kernel #88, #89).** A release can
+   extend what creating a customer provisions, and the deploy migrates databases
+   but does not re-run customer creation, so a customer created by an earlier
+   release lacks the extension until reconcile re-applies it. Two such pieces
+   exist today: the purger role's access to the customer's kernel database
+   (`CONNECT`, `USAGE` on schema `public`, `SELECT` and `DELETE` on the purge
+   tables; without `CONNECT` the scheduled purge fails for that customer with
+   `permission denied for database`, and with `CONNECT` alone it is refused on
+   every table) and the customer's NATS seed for the kernel API
+   (`kernel-api/tenant_<slug>.nk`; without it the kernel API's event relay fails
+   every pass for that customer, forever, while its health check stays green).
+   `reconcile --apply` re-ensures both, idempotently, from the registry's current
+   state (the customer's real module set, never a list typed by hand), and the
+   report names them as the checks `purger-connect` and `kernel-api-nats-seed`.
+   Run it for every customer after the switch (the control panel's reconcile
+   request does the same), and again whenever a later release names a new check.
+   A customer that is suspended is ensured without its modules (reconcile does
+   not resume it); a repair that does not take leaves its check RED and the
+   command exits non-zero.
+
+```bash
+slug="<the customer's slug>"
+gremion-tenant reconcile "$slug" --apply --reason "upgrade to ${TAG}: re-ensure what customer creation added since"
+# [tenant-create] reconcile realm "<realm>" ... ok  purger-connect ... ok  kernel-api-nats-seed ... applied repairs: purger-connect, kernel-api-nats-seed (a rerun: no repairs)
+```
+
 ## Post-condition
 
 The new release serves, the deploy logged fourteen good lines (steps 1-12,
-12b, 12c) and no failed one,
+12b, 12c) and no failed one, every customer's reconcile report is green,
 the serving release keeps every migration the previous one locked, no dump
 is left on the host, and PgBouncer reads the userlist the release rendered
 (observed in the container, as its own user, and by a login routed through it):
@@ -317,6 +343,8 @@ tail -n 14 /opt/gremion/runtime/deploy.log | grep -cE ' STEP [0-9]+[a-z]? [a-z-]
 jq -r '.ts, .ok, (.failures | length)' /opt/gremion/runtime/last-verify.json        # now, true, 0
 curl -s -o /dev/null -w '%{http_code}\n' "https://${host}/api/health"               # 200
 find /opt/gremion/backups -maxdepth 1 -name 'pre-migration-*' | wc -l               # 0
+slug="<each customer's slug, in turn>"
+report="$(gremion-tenant reconcile "$slug")" && printf '%s\n' "$report" | grep '^{' | jq -es 'length > 0 and all(.[]; .ok == true and (.checks | type == "array" and length > 0) and all(.checks[]; .ok == true))'     # true; a failed reconcile, no report line or a check not ok:true is no pass
 cd /opt/gremion/current
 docker compose --env-file /opt/gremion/etc/env/state.env exec -T pgbouncer head -c1 /etc/pgbouncer/userlist.txt   # ": PgBouncer's own user (uid 70) reads the file; "Permission denied" means step 7 is owed
 PGPASSWORD="$PGBOUNCER_AUTH_PASSWORD" docker compose --env-file /opt/gremion/etc/env/state.env exec -T -e PGPASSWORD postgres \
@@ -368,6 +396,7 @@ live, a deploy of any other tag stops at its step 5 and prints both commands.
 
 ## Changelog
 
+- 8.0.0 (2026-11-03): kernel #88, #89, on top of 7.0.0. New step 8, after the PgBouncer recreate: `gremion-tenant reconcile <slug> --apply` for every customer after the switch, which re-ensures what customer creation added since the customer was made (the purger `CONNECT` on its kernel database, the kernel API NATS seed) and reports it as the checks `purger-connect` and `kernel-api-nats-seed`. The post-condition keeps the PgBouncer observations and reads every customer's reconcile report, failing closed: a reconcile that exits non-zero, prints no report line or reports a check without `ok: true` is no pass. Major: a step added and the post-condition changed.
 - 7.0.0 (2026-11-03): kernel #84, on top of 6.3.0. Step 2 creates, fills and renders `etc/legal.env` once per host, the file `gremion-deploy` now copies into every release tree as `legal/legal.env` (the state project's `legal` service reads it for every compose command); an existing host stops at that step until the file is filled, with values copied by hand from the running release. Major: an existing step changed.
 - 6.3.0 (2026-11-02): kernel #83. A precondition: the deploy user is in a group with gid 70 (PgBouncer's gid), because the deploy's render step now writes the pgbouncer userlist 0640 group 70 as the deploy user; an older host runs `bootstrap.sh user` once and restarts `gremion-hostd`. Step 7 (existing installs, once): the deploy pulls but never recreates the state project, so a running PgBouncer keeps the unreadable 0600 userlist of the release it was created from; `up -d --force-recreate --no-deps pgbouncer` from the new tree replaces it. The post-condition observes, in the container, that PgBouncer's own user reads the userlist and that a login routed through PgBouncer succeeds. Minor: a conditional step and post-condition observations added, no existing step changed.
 - 6.2.0 (2026-10-30): kernel #47 decision (a). Step 4 (and the registry-token precondition) names the optional host token file `etc/registry-token` that `gremion-deploy` reads when `GREMION_REGISTRY_TOKEN_FILE` is set, with the commands that observe it; the prompt stays the default. Minor: an alternative added to a step, no post-condition changed.

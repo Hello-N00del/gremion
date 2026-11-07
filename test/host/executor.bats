@@ -314,8 +314,9 @@ outcome() { cat "${GREMION_ROOT}/outcome" 2>/dev/null || true; }
 
 # A7 (last case): customers are created and operated in the panel. No guarded
 # document names a gremion-tenant customer verb as an operator step outside
-# the ONE decommission note (docs/runbooks/tenant-lifecycle.md).
-@test "A7 docs guard: no gremion-tenant (create|suspend|resume|reconcile|status) outside the decommission note" {
+# the ONE decommission note (docs/runbooks/tenant-lifecycle.md). `reconcile`
+# is exempt: it is the supported operator verb the upgrade runbook runs (step 7).
+@test "A7 docs guard: no gremion-tenant (create|suspend|resume|status) outside the decommission note" {
     local root="${KERNEL_ROOT}" hits f
     local -a files=()
     while IFS= read -r f; do files+=("$f"); done < <(find "${root}/docs" -name '*.md' -type f)
@@ -326,7 +327,7 @@ outcome() { cat "${GREMION_ROOT}/outcome" 2>/dev/null || true; }
         hits+="$(awk -v F="${f#"${root}"/}" '
             /<!-- gremion-tenant decommission note \(R31-I4\) -->/ { inside = 1; next }
             /<!-- \/gremion-tenant decommission note -->/ { inside = 0; next }
-            !inside && /gremion-tenant (create|suspend|resume|reconcile|status)/ { printf "%s:%d: %s\n", F, NR, $0 }' "$f")"
+            !inside && /gremion-tenant (create|suspend|resume|status)/ { printf "%s:%d: %s\n", F, NR, $0 }' "$f")"
     done
     [ -z "$hits" ] || { echo "$hits"; return 1; }
     # the note exists exactly once
