@@ -45,6 +45,7 @@ describe('plt.provisioning_step accepts kind 9 (platform migration)', () => {
   let sql: postgres.Sql
   const customers = [uuidv7(), uuidv7(), uuidv7()]
   let newFile: string | undefined
+  let preApplied = 0
   let refusedBefore: Err | null = null
   let ledgerBefore: { filename: string; sha256: string }[] = []
   let snapBefore: { id: string; step_order: number }[] = []
@@ -55,6 +56,7 @@ describe('plt.provisioning_step accepts kind 9 (platform migration)', () => {
     a = admin(2)
     const files = readdirSync(PLATFORM_MIGRATIONS_DIR).filter((f) => f.endsWith('.sql'))
     newFile = files.find((f) => f.endsWith(NEW_SUFFIX))
+    preApplied = files.filter((f) => f !== newFile).length
     // the partial chain: every file but the new one, and a manifest without it
     rmSync(PRE, { recursive: true, force: true })
     mkdirSync(PRE, { recursive: true })
@@ -100,9 +102,10 @@ describe('plt.provisioning_step accepts kind 9 (platform migration)', () => {
     expect(refusedBefore?.constraint_name).toBe('provisioning_step_step_kind_check')
   })
 
-  it('migratePlatform applies exactly the new file over the 13 pre-applied rows, which are unchanged', async () => {
+  it('migratePlatform applies exactly the new file over every pre-applied row, which are unchanged', async () => {
     expect(result.applied).toEqual([newFile])
-    expect(result.alreadyApplied).toBe(13)
+    expect(result.alreadyApplied).toBe(preApplied)
+    expect(preApplied).toBeGreaterThanOrEqual(13)
     const now = await sql<{ filename: string; sha256: string }[]>`SELECT filename, sha256 FROM public.schema_migrations ORDER BY filename`
     expect(now.filter((r) => r.filename !== newFile)).toEqual(ledgerBefore)
     expect(now.find((r) => r.filename === newFile)?.sha256).toBe(sha(readFileSync(join(PLATFORM_MIGRATIONS_DIR, newFile!))))

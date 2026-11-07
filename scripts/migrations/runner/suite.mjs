@@ -4,7 +4,9 @@
 //
 // One run checks, and counts as collected:
 //   1. chain-runners.json covers scripts/migrations/ranges.json exactly, every
-//      chain with a known class (tenant-store | legacy-boot | unadopted | fresh-only);
+//      chain with a known class (tenant-store | legacy-boot | unadopted | fresh-only),
+//      and a fresh-only chain holds at most one file (a second never reaches
+//      existing databases: flip the class first);
 //   2. expand-contract-baseline.json is the one written at the merge: its
 //      digest equals BASELINE_DIGEST, every entry is a locked file (applied.
 //      lock.json) whose bytes still hash to the lock (LOCKED_FILE_CHANGED);
@@ -137,6 +139,14 @@ export function runExpandContractSuite({ root = REPO_ROOT, canaries, canariesPat
   for (const [id, cls] of Object.entries(runners.chains)) {
     if (!ids.includes(id)) coverage.push(`chain ${id} is not in ranges.json (extra)`)
     if (!CLASSES.includes(cls)) coverage.push(`chain ${id} has unknown class ${JSON.stringify(cls)}`)
+  }
+  // A fresh-only chain is applied only to a database created in the same step, so it is sound only
+  // while it holds ONE file: a second would never reach a customer created before it. Refuse it
+  // until the chain flips to a runner that upgrades existing databases (TASK-084-a).
+  for (const chain of register.chains) {
+    if (runners.chains[chain.id] !== 'fresh-only') continue
+    const n = chainFileNames(chain.id, { root, register }).length
+    if (n > 1) coverage.push(`chain ${chain.id} is fresh-only but has ${n} files: a second file never reaches existing databases; flip the chain to tenant-store together with its upgrade runner first`)
   }
   check('chain-runners.json', coverage)
 

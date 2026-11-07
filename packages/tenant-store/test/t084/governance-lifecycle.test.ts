@@ -105,6 +105,27 @@ describe('ensureGovernanceDatabase / dropGovernanceDatabase', () => {
     expect(acl.filter((x) => x.grantee === 'gov_app' || x.grantee === 'gov_purger')).toEqual([])
   })
 
+  it('a stray grantee (gov_app CONNECT, a foreign role TEMPORARY) is revoked by a rerun, not only reported', async () => {
+    const r = governanceRoles(X)
+    const stray = `t084_stray_${X.replaceAll('-', '').slice(-8)}`
+    await a.unsafe(`CREATE ROLE ${stray} NOLOGIN`)
+    try {
+      await a.unsafe(`GRANT CONNECT ON DATABASE "${governanceDbName(X)}" TO gov_app`)
+      await a.unsafe(`GRANT TEMPORARY ON DATABASE "${governanceDbName(X)}" TO ${stray}`)
+      const res = await ensureGovernanceDatabase(server(), X, pwX)
+      expect(res.created).toBe(false)
+      const acl = await a<{ grantee: string; priv: string }[]>`
+        SELECT CASE WHEN x.grantee = 0 THEN 'PUBLIC' ELSE g.rolname END AS grantee, x.privilege_type AS priv
+          FROM pg_database d CROSS JOIN LATERAL aclexplode(d.datacl) x LEFT JOIN pg_roles g ON g.oid = x.grantee
+         WHERE d.datname = ${governanceDbName(X)}`
+      expect([...new Set(acl.map((x) => x.grantee))].sort()).toEqual([r.owner, r.app, r.purger].sort())
+      expect(acl.filter((x) => x.priv === 'CONNECT').map((x) => x.grantee).sort()).toEqual([r.owner, r.app, r.purger].sort())
+    } finally {
+      await a.unsafe(`REVOKE ALL ON DATABASE "${governanceDbName(X)}" FROM ${stray}`).catch(() => {})
+      await a.unsafe(`DROP ROLE IF EXISTS ${stray}`).catch(() => {})
+    }
+  })
+
   it('A4 cross-tenant: g_Y_app cannot connect to X and g_X_app cannot connect to Y', async () => {
     const msgs: string[] = []
     for (const [who, pw, target] of [[Y, pwY, X], [X, pwX, Y]] as const) {

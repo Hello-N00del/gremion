@@ -214,8 +214,12 @@ export async function ensureGovernanceDatabase(server: ModuleServer, tenantId: s
   // CONNECT: exactly the customer's three roles, nothing for PUBLIC
   const acl = await databaseAcl(admin, dbName)
   const connect = new Set(acl.filter((x) => x.priv === 'CONNECT').map((x) => x.grantee))
-  const locked = acl.length > 0 && !acl.some((x) => x.grantee === 'PUBLIC') && [roles.owner, roles.app, roles.purger].every((r) => connect.has(r))
+  const own = new Set([roles.owner, roles.app, roles.purger])
+  // any other grantee (PUBLIC, a group role, a stray login) is repaired, not only reported
+  const strays = [...new Set(acl.map((x) => x.grantee))].filter((g) => !own.has(g))
+  const locked = acl.length > 0 && strays.length === 0 && [...own].every((r) => connect.has(r))
   if (!locked) {
+    for (const g of strays) if (g !== 'PUBLIC') await execFormatted(admin, 'REVOKE ALL ON DATABASE %I FROM %I', [dbName, g])
     await lockDownDatabase(admin, dbName, roles.app)
     await execFormatted(admin, 'GRANT CONNECT ON DATABASE %I TO %I', [dbName, roles.purger])
     await execFormatted(admin, 'GRANT CONNECT ON DATABASE %I TO %I', [dbName, roles.owner])

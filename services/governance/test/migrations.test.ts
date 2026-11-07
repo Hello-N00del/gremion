@@ -32,6 +32,16 @@ describe('governance migrations: the shipped chain', () => {
     expect(t.slice(plumbingSql('gov').length).split('').filter((c) => c.charCodeAt(0) > 127)).toEqual([])
   })
 
+  // Recorded waiver of the plan's "ASCII only in SQL" rule: the prefix is plumbingSql('gov') byte for byte
+  // (TASK-079 owns it; editing it here is STOP gate 2), and its comments carry the section sign three times.
+  // Pinned exactly: a fourth non-ASCII character, or one outside the prefix, fails.
+  it("waiver: the only non-ASCII characters are the three section signs inside the byte-exact plumbingSql('gov') prefix", () => {
+    const prefix = plumbingSql('gov')
+    const nonAscii = (s: string) => s.split('').filter((c) => c.charCodeAt(0) > 127)
+    expect(nonAscii(prefix)).toEqual(['§', '§', '§'])
+    expect(nonAscii(text())).toEqual(nonAscii(prefix))
+  })
+
   it('the lint finds exactly one problem, rule revoke (the REVOKE EXECUTE ... FROM PUBLIC of remove_test_run)', () => {
     const r = lintSql(text()) as { problems: { rule: string; message: string }[] }
     expect(r.problems.map((p) => p.rule)).toEqual(['revoke'])
