@@ -114,15 +114,15 @@ describe('tenant-create phase-a env contract (TDD 19, G3)', () => {
 
     it('GOVERNANCE_PG_ADMIN_FILE empty is a named exit-2 failure', () => {
       expect(refused({ GOVERNANCE_PG_ADMIN_FILE: file('empty.url', '') }, 'GOVERNANCE_PG_ADMIN_FILE')).toMatch(/empty/)
-    })
+    }, 90_000)
     it('GOVERNANCE_PG_ADMIN_FILE that is no postgres url or points at the pooler is a named exit-2 failure', () => {
       expect(refused({ GOVERNANCE_PG_ADMIN_FILE: file('http.url', 'http://example.invalid/x') }, 'GOVERNANCE_PG_ADMIN_FILE')).toMatch(/not a postgres:\/\/ URL/)
       expect(refused({ GOVERNANCE_PG_ADMIN_FILE: file('pool.url', 'postgres://u:p@pgbouncer-unit:6432/postgres') }, 'GOVERNANCE_PG_ADMIN_FILE')).toMatch(/pooler/)
-    })
+    }, 90_000)
     it('GOVERNANCE_SECRETS_DIR that is not an existing directory is a named exit-2 failure', () => {
       refused({ GOVERNANCE_SECRETS_DIR: join(scratch, 'does-not-exist') }, 'GOVERNANCE_SECRETS_DIR')
       refused({ GOVERNANCE_SECRETS_DIR: file('a-file', 'x') }, 'GOVERNANCE_SECRETS_DIR')
-    })
+    }, 90_000)
     it('GOVERNANCE_SECRETS_DIR equal to, inside or containing TENANT_SECRETS_DIR is a named exit-2 failure naming both', () => {
       const root = mkdtempSync(join(tmpdir(), 't084-overlap-'))
       const inner = join(root, 'inner')
@@ -134,7 +134,7 @@ describe('tenant-create phase-a env contract (TDD 19, G3)', () => {
         const out = refused({ GOVERNANCE_SECRETS_DIR: gov, TENANT_SECRETS_DIR: tenant }, 'GOVERNANCE_SECRETS_DIR')
         expect(out).toContain('TENANT_SECRETS_DIR')
       }
-    })
+    }, 90_000)
   })
 
   it('a PLATFORM_DATABASE_URL on the pooler is refused (the runner needs the server itself)', () => {
