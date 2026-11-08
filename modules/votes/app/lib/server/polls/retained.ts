@@ -30,7 +30,9 @@ export const pollResultsExtractor: RetentionExtractor = {
       const full = await polls.getPollWithOptions(p.id)
       const closedBeforeSwitchOff = p.status.expired && !locked.has(String(p.id)) && p.configuration.expire > 0
       const at = closedBeforeSwitchOff ? new Date(p.configuration.expire * 1000) : ctx.switchedOffAt
-      const options = full.options ?? []
+      // an options list that did not come back is not an empty poll: sealing it would let the final day delete the real results
+      if (!Array.isArray(full.options)) throw new Error(`poll ${p.id}: options missing in the Polls answer`)
+      const options = full.options
       yield {
         id: String(p.id),
         data: {

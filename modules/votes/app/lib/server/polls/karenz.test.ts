@@ -46,7 +46,7 @@ beforeEach(() => {
     vi.fn(async (u: string, i?: RequestInit) => {
       const method = (i?.method ?? 'GET').toUpperCase()
       const path = String(u).replace(/^.*\/api\/v1\.0/, '')
-      const body = i?.body ? (JSON.parse(String(i.body)) as Record<string, any>) : {}
+      const body = typeof i?.body === 'string' && i.body ? (JSON.parse(i.body) as Record<string, any>) : {}
       const over = await netHook?.(method, path, body)
       return over ?? nc.handler(String(u), i)
     }),
@@ -268,6 +268,38 @@ describe('votesKarenz.switchOff', () => {
     expect(m.byPoll(1)?.state).toBe('locked')
   })
 
+  it('a refused or unscoped READ of a poll (403/404 on GET) is not "gone": the poll stays open, the item lock_failed, the step fails', async () => {
+    const { votesKarenz } = await import('./karenz')
+    const p = seed({ expire: T0_EPOCH + 600 })
+    const m = memItems()
+    netHook = (method, path) => {
+      if (method === 'GET' && path === '/poll/1') return new Response('{}', { status: 403 })
+    }
+    const failures = await failuresOf(votesKarenz.switchOff(ctxFor(m)))
+    expect(failures).toHaveLength(1)
+    expect(failures[0]).toContain('poll 1')
+    expect(m.byPoll(1)?.state).toBe('lock_failed')
+    expect(p.expire).toBe(T0_EPOCH + 600)
+  })
+
+  it('one unrecordable item does not stop the other polls: it is reported, never touched, and the rest is locked', async () => {
+    const { votesKarenz } = await import('./karenz')
+    const bad = seed({ expire: T0_EPOCH + 600 })
+    const good = seed({ expire: T0_EPOCH + 600 })
+    const m = memItems()
+    const upsert = m.items.upsert
+    m.items.upsert = async (i) => {
+      if (i.externalId === '1') throw new Error('ledger down')
+      return upsert(i)
+    }
+    const failures = await failuresOf(votesKarenz.switchOff(ctxFor(m)))
+    expect(failures).toHaveLength(1)
+    expect(failures[0]).toContain('poll 1')
+    expect(bad.expire).toBe(T0_EPOCH + 600) // not touched without a record
+    expect(good.expire * 1000).toBeLessThan(T0.getTime())
+    expect(m.byPoll(2)?.state).toBe('locked')
+  })
+
   it('run twice it locks nothing twice (idempotent)', async () => {
     const { votesKarenz } = await import('./karenz')
     seed({ expire: T0_EPOCH + 600 })
@@ -367,6 +399,48 @@ describe('votesKarenz.restore', () => {
     expect(keep.expire).toBe(T0_EPOCH + 3600)
   })
 
+  it('a read refused for the whole Polls endpoint is not "gone": every locked poll stays unlock_failed and the step fails', async () => {
+    const { votesKarenz } = await import('./karenz')
+    const p = seed({ expire: T0_EPOCH + 3600 })
+    const m = memItems()
+    await votesKarenz.switchOff(ctxFor(m))
+    netHook = () => new Response('{}', { status: 404 })
+    const failures = await failuresOf(votesKarenz.restore(ctxFor(m)))
+    expect(failures).toHaveLength(1)
+    expect(m.byPoll(1)?.state).toBe('unlock_failed')
+    netHook = undefined
+    await votesKarenz.restore(ctxFor(m)) // a later pass still reaches the poll
+    expect(m.byPoll(1)?.state).toBe('restored')
+    expect(p.expire).toBe(T0_EPOCH + 3600)
+  })
+
+  it('a 403 on the READ of one poll (the poll still exists) is not "gone": it is reported and retried', async () => {
+    const { votesKarenz } = await import('./karenz')
+    const p = seed({ expire: T0_EPOCH + 3600 })
+    const m = memItems()
+    await votesKarenz.switchOff(ctxFor(m))
+    netHook = (method, path) => {
+      if (method === 'GET' && path === '/poll/1') return new Response('{}', { status: 403 })
+    }
+    const failures = await failuresOf(votesKarenz.restore(ctxFor(m)))
+    expect(failures[0]).toContain('poll 1')
+    expect(m.byPoll(1)?.state).toBe('unlock_failed')
+    expect(p.expire * 1000).toBeLessThan(T0.getTime())
+  })
+
+  it('a poll found open again (deadline changed by hand) gets its result visibility back', async () => {
+    const { votesKarenz } = await import('./karenz')
+    const p = seed({ expire: T0_EPOCH + 3600, showResults: 'closed' })
+    const m = memItems()
+    await votesKarenz.switchOff(ctxFor(m))
+    expect(p.showResults).toBe('never')
+    p.expire = T0_EPOCH + 7200 // reopened by hand: only the deadline is touched
+    await votesKarenz.restore(ctxFor(m))
+    expect(m.byPoll(1)?.state).toBe('restored')
+    expect(p.expire).toBe(T0_EPOCH + 7200)
+    expect(p.showResults).toBe('closed')
+  })
+
   it('a poll that stayed locked is reopened only when the unlock reads back as open', async () => {
     const { votesKarenz } = await import('./karenz')
     seed({ expire: T0_EPOCH + 3600 })
@@ -417,6 +491,14 @@ describe('pollResultsExtractor', () => {
     const text = JSON.stringify(lines)
     expect(text).not.toContain('secret-voter-token')
     expect(text).not.toContain('Fremd')
+  })
+
+  it('never seals an empty tally for a poll whose options could not be read', async () => {
+    seed({ expire: T0_EPOCH - DAY })
+    netHook = (method, path) => {
+      if (method === 'GET' && path === '/poll/1/options') return new Response('{}', { status: 200 })
+    }
+    await expect(collect(ctxFor(memItems()))).rejects.toThrow(/options/)
   })
 
   it('a poll already locked by the participant keeps its switch-off time, not the lock value', async () => {
@@ -523,6 +605,21 @@ describe('votesKarenz.finalize', () => {
     await votes.finalize(ctxFor(m, { db: t.db }), { dryRun: false })
     expect(t.statements.join('\n')).toMatch(/FROM protocols/i)
     expect(nc.polls.has(1)).toBe(true)
+  })
+
+  it('a 403 on the READ before the delete (the poll still exists) is not counted as deleted', async () => {
+    seed({ expire: T0_EPOCH + 600 })
+    const m = memItems()
+    const votes = await lockedAll(m)
+    const t = tenantDb([])
+    await seal(t.db, ['1'])
+    netHook = (method, path) => {
+      if (method === 'GET' && path === '/poll/1') return new Response('{}', { status: 403 })
+    }
+    const failures = await failuresOf(votes.finalize(ctxFor(m, { db: t.db }), { dryRun: false }))
+    expect(failures[0]).toContain('poll 1')
+    expect(nc.polls.has(1)).toBe(true)
+    expect(m.byPoll(1)?.state).not.toBe('deleted')
   })
 
   it('a poll that is already gone when it is deleted counts as deleted', async () => {

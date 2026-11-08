@@ -50,7 +50,12 @@ function statusOf(e: unknown): number | null {
   return m ? Number(m[1]) : null
 }
 
-const isGone = (e: unknown): boolean => statusOf(e) === 404
+/**
+ * The Polls client answers 404 for a missing poll, for another tenant's poll AND for a refused read (it maps
+ * every Nextcloud 403 and 404 on a by-id read to 404), and a Nextcloud that lost the Polls app answers 404 to
+ * everything. A 404 alone therefore never means "deleted": see Run.isMissing.
+ */
+const looksGone = (e: unknown): boolean => statusOf(e) === 404
 
 const why = (e: unknown): string => {
   const s = statusOf(e)
@@ -66,10 +71,33 @@ function payloadOf(item: KarenzItemRow): PollPayload | null {
 /** The lock took effect: the poll reads as closed and its deadline is not the one recorded. */
 const lockApplied = (poll: NcPoll, payload: PollPayload): boolean => poll.status.expired && poll.configuration.expire !== payload.expire
 
+/** The lock hides the results ('never'); a poll that is found open again must not keep that. Only our own value is undone. */
+async function showResultsBack(polls: ReturnType<typeof clientFor>, poll: NcPoll, payload: PollPayload): Promise<void> {
+  if (payload.showResults === undefined || payload.showResults === 'never') return
+  if (poll.configuration.showResults !== 'never') return
+  await polls.setConfiguration(poll.id, { showResults: payload.showResults })
+}
+
 /** Collects the failures of one phase: one poll never stops the others, the phase fails at the end. */
 class Run {
   readonly failures: string[] = []
+  private listed: Set<string> | null = null
   constructor(private readonly ctx: KarenzContext) {}
+
+  /**
+   * A poll is gone only when it is absent from a SUCCESSFUL listing of the tenant's polls. A listing that
+   * fails, or that still shows the poll, means the 404 was a refused or unscoped read: false, so the caller
+   * reports it and the item stays retryable. One listing per phase; `fresh` re-reads it (finalize).
+   */
+  async isMissing(e: unknown, id: number, fresh = false): Promise<boolean> {
+    if (!looksGone(e)) return false
+    try {
+      if (fresh || this.listed === null) this.listed = new Set((await clientFor(this.ctx).listPolls()).map((p) => String(p.id)))
+      return !this.listed.has(String(id))
+    } catch {
+      return false
+    }
+  }
 
   fail(pollId: string | number, what: string): void {
     const label = `poll ${pollId}: ${what}`
@@ -82,8 +110,8 @@ class Run {
     try {
       await this.ctx.items.setState(item.itemId, state, detail)
       return true
-    } catch {
-      this.fail(item.externalId, `could not record ${state}`)
+    } catch (e) {
+      this.fail(item.externalId, `could not record ${state} (${why(e)})`)
       return false
     }
   }
@@ -107,7 +135,7 @@ async function lockPoll(ctx: KarenzContext, run: Run, item: KarenzItemRow, paylo
       return
     }
   } catch (e) {
-    if (isGone(e)) {
+    if (await run.isMissing(e, id)) {
       await run.set(item, 'gone')
       return
     }
@@ -125,17 +153,31 @@ async function resolveLock(ctx: KarenzContext, run: Run, item: KarenzItemRow): P
     run.fail(item.externalId, 'item without a recorded deadline')
     return
   }
+  const id = Number(item.externalId)
   let poll: NcPoll
   try {
-    poll = await clientFor(ctx).getPoll(Number(item.externalId))
+    poll = await clientFor(ctx).getPoll(id)
   } catch (e) {
-    if (isGone(e)) await run.set(item, 'gone')
+    if (await run.isMissing(e, id)) await run.set(item, 'gone')
     else run.fail(item.externalId, `read failed (${why(e)})`)
     return
   }
-  if (lockApplied(poll, payload)) await run.set(item, 'locked')
-  else if (poll.status.expired) await run.set(item, 'restored', 'closed by itself before the lock')
-  else await lockPoll(ctx, run, item, payload)
+  if (lockApplied(poll, payload)) {
+    await run.set(item, 'locked')
+    return
+  }
+  if (!poll.status.expired) {
+    await lockPoll(ctx, run, item, payload)
+    return
+  }
+  try {
+    await showResultsBack(clientFor(ctx), poll, payload)
+  } catch (e) {
+    run.fail(id, `result visibility not put back (${why(e)})`)
+    await run.set(item, 'lock_failed', `visibility not put back (${why(e)})`)
+    return
+  }
+  await run.set(item, 'restored', 'closed by itself before the lock')
 }
 
 async function switchOff(ctx: KarenzContext): Promise<void> {
@@ -154,7 +196,14 @@ async function switchOff(ctx: KarenzContext): Promise<void> {
       ...(typeof poll.configuration.showResults === 'string' ? { showResults: poll.configuration.showResults } : {}),
     }
     // record FIRST: the poll is not touched before the way back is on file
-    const item = await ctx.items.upsert({ kind: POLL_ITEM_KIND, externalId: String(poll.id), state: 'recorded', payload })
+    let item: KarenzItemRow
+    try {
+      item = await ctx.items.upsert({ kind: POLL_ITEM_KIND, externalId: String(poll.id), state: 'recorded', payload })
+    } catch (e) {
+      // no record, no lock: the poll stays as it is and the next pass tries again
+      run.fail(poll.id, `could not record (${why(e)})`)
+      continue
+    }
     await lockPoll(ctx, run, item, payload)
   }
   run.done()
@@ -176,6 +225,7 @@ async function restore(ctx: KarenzContext): Promise<void> {
       // still open: the lock never happened (or was lifted by hand); closed with its own deadline: it ran out by itself
       const neverLocked = item.state === 'recorded' || item.state === 'lock_failed'
       if (!poll.status.expired || (neverLocked && !lockApplied(poll, payload))) {
+        await showResultsBack(polls, poll, payload)
         await run.set(item, 'restored')
         continue
       }
@@ -189,7 +239,7 @@ async function restore(ctx: KarenzContext): Promise<void> {
         await run.set(item, 'restored')
       }
     } catch (e) {
-      if (isGone(e)) {
+      if (await run.isMissing(e, id)) {
         await run.set(item, 'gone')
         continue
       }
@@ -226,8 +276,8 @@ async function finalize(ctx: KarenzContext, opts: { dryRun: boolean }): Promise<
     if (opts.dryRun) return
     try {
       await ctx.items.upsert({ kind: POLL_ITEM_KIND, externalId: String(id), state, detail })
-    } catch {
-      ctx.log(`poll ${id}: could not record ${state} (the deletion itself is idempotent)`)
+    } catch (e) {
+      ctx.log(`poll ${id}: could not record ${state} (${why(e)}; the deletion itself is idempotent)`)
     }
   }
   for (const poll of all) {
@@ -250,8 +300,8 @@ async function finalize(ctx: KarenzContext, opts: { dryRun: boolean }): Promise<
     try {
       await polls.deletePoll(poll.id)
     } catch (e) {
-      // already gone counts as deleted; anything else is reported and retried
-      if (!isGone(e)) {
+      // already gone counts as deleted (confirmed by a fresh listing); anything else is reported and retried
+      if (!(await run.isMissing(e, poll.id, true))) {
         run.fail(poll.id, `delete failed (${why(e)})`)
         continue
       }

@@ -2211,19 +2211,19 @@
       "path": "modules/votes/app/lib/server/polls/karenz.ts",
       "reason": "added by Karenz p2 t13: the votes participant (freeze, restore, final deletion of Nextcloud Polls deadlines and polls) and the deletion preview provider",
       "owner": "TASK-205",
-      "blob": "ac2c22d185ac1ec0ff3549c2d61c4a4962f879f8"
+      "blob": "8000be615dd57cee86eaa7aec23d725f96cf702e"
     },
     {
       "path": "modules/votes/app/lib/server/polls/karenz.test.ts",
       "reason": "added by Karenz p2 t13: the participant suite on the fake Nextcloud (lock order, crash recovery, tenant scope, final-day guards)",
       "owner": "TASK-205",
-      "blob": "d3e99a8acb23dc6b407dab8344bbd788cec46a59"
+      "blob": "bee5d9c9a7a7261109aaad75038d81d5affaa032"
     },
     {
       "path": "modules/votes/app/lib/server/polls/retained.ts",
       "reason": "added by Karenz p2 t13: the RC-GOV-RES poll-results extractor (tallies only) sealed at switch-off",
       "owner": "TASK-205",
-      "blob": "59db25c0f86abed3f96c8a93fdd959760febdd25"
+      "blob": "e83eb42f6f15c592b498817ce20ef722a050fd35"
     }
   ]
 }
