@@ -24,6 +24,7 @@ COPY packages/db/package.json ./packages/db/
 COPY packages/generated-clients/package.json ./packages/generated-clients/
 COPY packages/module-catalogue/package.json ./packages/module-catalogue/
 COPY packages/tenant-store/package.json ./packages/tenant-store/
+COPY packages/storage/package.json ./packages/storage/
 COPY packages/retention/package.json ./packages/retention/
 COPY modules/board/package.json ./modules/board/
 RUN pnpm install --frozen-lockfile
@@ -33,6 +34,7 @@ COPY packages/db ./packages/db/
 COPY packages/generated-clients ./packages/generated-clients/
 COPY packages/module-catalogue ./packages/module-catalogue/
 COPY packages/tenant-store ./packages/tenant-store/
+COPY packages/storage ./packages/storage/
 COPY packages/retention ./packages/retention/
 COPY modules/board ./modules/board/
 

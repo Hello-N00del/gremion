@@ -6,9 +6,11 @@
 // (assertNonProductionDbUrl); pg_dump / pg_restore run INSIDE the pgm
 // container (PostgreSQL 18, the server's own major), by its explicit name.
 import { randomBytes, randomUUID } from 'node:crypto'
-import { join } from 'node:path'
+import { mkdirSync, writeFileSync } from 'node:fs'
+import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { Sql } from '@gremion/db'
+import { LocalStorageBackend, type StorageBackend } from '@gremion/storage'
 import { readCompose } from '@gremion/module-catalogue/compose'
 import type { ComposeModel } from '@gremion/module-catalogue/runtime'
 import { pgDumpExporter } from '../../src/lifecycle/export.js'
@@ -127,6 +129,19 @@ export function containerExporter(): Exporter {
   })
 }
 
+/**
+ * The storage seam over the scratch export directory. The seam refuses a root that is not a mount point, and a
+ * scratch directory never is: the fake mount table below lists it as one (the mount check itself is the
+ * seam's own test, packages/storage).
+ */
+export function scratchExportStorage(exportDir: string): (tenantId: string) => StorageBackend {
+  mkdirSync(EXPORT_ROOT, { recursive: true })
+  const mountinfoPath = join(EXPORT_ROOT, `mountinfo.${process.pid}`)
+  writeFileSync(mountinfoPath, `36 1 8:1 / ${resolve(exportDir)} rw - ext4 /dev/scratch rw
+`)
+  return (tenantId) => new LocalStorageBackend(tenantId, { root: exportDir, mountinfoPath, platform: 'linux' })
+}
+
 export const APP_PASSWORD = randomBytes(24).toString('base64url')
 
 export function lifecycleDeps(platform: Sql, server: ModuleServer, overrides: Partial<LifecycleDeps> = {}): LifecycleDeps {
@@ -140,6 +155,7 @@ export function lifecycleDeps(platform: Sql, server: ModuleServer, overrides: Pa
     secrets: { appPassword: () => APP_PASSWORD },
     exporter: containerExporter(),
     exportDir: join(EXPORT_ROOT, String(process.pid)),
+    exportStorage: scratchExportStorage(join(EXPORT_ROOT, String(process.pid))),
     // TASK-075: the lcfix fixture chain is headerless and in no baseline.
     releaseRef: 'dist-v0.0.1',
     phaseFor: () => () => ({ phase: 'expand' as const }),

@@ -17,11 +17,11 @@
 // are platform columns only (Open Decision 8).
 import { createHash } from 'node:crypto'
 import { createReadStream, existsSync, readdirSync } from 'node:fs'
-import { rm } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import type { Sql } from '@gremion/db'
 import { tenantModuleDbName } from '../names.js'
 import { dropTenantModuleDatabase } from './disable.js'
+import { removeKarenzExport, type ExportStorageFactory } from './export-remove.js'
 import { assertKarenzExportPath, assertTenantModuleTarget, LifecycleError } from './guards.js'
 import { casModuleDatabaseState, readModuleDatabase, type KarenzState } from './platform.js'
 import type { LifecycleModule, ModuleServer } from './types.js'
@@ -46,6 +46,8 @@ export interface FinalizeDeps {
   server: (service: string) => ModuleServer
   catalogue: readonly LifecycleModule[]
   exportDir: string
+  /** The storage backend over the export volume, one per tenant; default a LocalStorageBackend rooted at exportDir (export-remove.ts). */
+  exportStorage?: ExportStorageFactory
   /** false: a dry run. Mode is recorded on each due row, nothing is dropped or deleted. */
   finalDeletion: boolean
   /** Wall-clock budget; checked before each row (default 110000). */
@@ -250,9 +252,7 @@ async function finalizeRow(
       kept = true
       log(`export of Karenz ${r.karenz_id} kept until ${hold.toISOString()}`)
     } else {
-      const path = assertKarenzExportPath(r.export_path, deps.exportDir, tenantId, moduleKey)
-      await rm(path, { force: true })
-      await rm(`${path}.sha256`, { force: true })
+      await removeKarenzExport(r.export_path, deps, tenantId, moduleKey)
       await deps.platform`UPDATE plt.module_karenz SET export_deleted_at = now() WHERE karenz_id = ${r.karenz_id} AND export_deleted_at IS NULL`
       await hook('export-deleted')
     }

@@ -19,15 +19,14 @@
 // fresh export (the earlier attempt's file is removed, it was never recorded).
 // A platform server's databases (runtime.platformServer, e.g. synapse) are
 // never touched: they are not (tenant, module) databases.
-import { rmSync } from 'node:fs'
 import type { Sql } from '@gremion/db'
 import { tenantModuleDbName } from '../names.js'
 import { blockModuleDatabase } from './block.js'
 import { execFormatted } from './ddl.js'
 import { assertActor } from './enable.js'
 import { exportDatabase } from './export.js'
+import { removeKarenzExport } from './export-remove.js'
 import {
-  assertKarenzExportPath,
   assertLifecycleModuleId,
   assertLifecycleTenantId,
   assertTenantModuleTarget,
@@ -161,9 +160,7 @@ export async function disableModule(tenantId: string, module: LifecycleModule, a
   if (earlier && earlier !== exp.path) {
     // the export of an attempt that stopped before the block: never owned by a Karenz row, so no job would ever delete it
     try {
-      assertKarenzExportPath(earlier, deps.exportDir, tenantId, moduleId)
-      rmSync(earlier, { force: true })
-      rmSync(`${earlier}.sha256`, { force: true })
+      await removeKarenzExport(earlier, deps, tenantId, moduleId)
     } catch (err) {
       log(`could not remove the export of the earlier attempt ${earlier}: ${(err as Error).message}`)
     }

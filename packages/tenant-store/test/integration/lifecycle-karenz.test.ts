@@ -101,6 +101,7 @@ describe('the module Karenz on the scratch stack', () => {
     server: () => server,
     catalogue: [lcfixModule()],
     exportDir: exportDir(),
+    exportStorage: lifecycleDeps(platform, server).exportStorage!,
     finalDeletion: true,
     now: () => new Date(Date.now() + 40 * DAY),
     ...overrides,

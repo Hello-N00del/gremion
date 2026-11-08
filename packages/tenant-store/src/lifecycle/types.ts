@@ -3,6 +3,7 @@ import type { Sql } from '@gremion/db'
 import type { CatalogueEntry } from '@gremion/module-catalogue/runtime'
 import type { PhaseFor } from '../phase.js'
 import type { RunMigrationsHooks } from '../runner.js'
+import type { ExportStorageFactory } from './export-remove.js'
 
 /** Who asked (SCHEMA module_enablement_enabled_by_check: a person or an operator). */
 export interface Actor {
@@ -66,6 +67,8 @@ export interface LifecycleDeps {
   exporter: Exporter
   /** Exports land in <exportDir>/<tenant>/<module>/<utc>.dump, mode 0600 (Q7). */
   exportDir: string
+  /** The storage backend over the export volume, one per tenant; default a LocalStorageBackend rooted at exportDir (export-remove.ts). */
+  exportStorage?: ExportStorageFactory
   /**
    * TASK-075: the release an enable ships, written into every ledger row it
    * adds (release_ref, 1-64 characters). Required when the module declares a
