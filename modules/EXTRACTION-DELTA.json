@@ -2192,19 +2192,19 @@
     {
       "path": "modules/messaging/app/lib/server/messages/karenz.ts",
       "reason": "Module Karenz phase 2 Task 15: the messaging Karenz participant (archive rooms at switch-off, unarchive on restore, delete on the final day); new kernel-side file with no counterpart at the tag",
-      "owner": "KARENZ-P2-T15",
+      "owner": "TASK-205",
       "blob": "e95caedc4ab775276c27ac63affb5ce145a2ae15"
     },
     {
       "path": "modules/messaging/app/lib/server/messages/karenz.test.ts",
       "reason": "Module Karenz phase 2 Task 15: tests of the messaging Karenz participant against an in-memory homeserver; new kernel-side file with no counterpart at the tag",
-      "owner": "KARENZ-P2-T15",
+      "owner": "TASK-205",
       "blob": "93450fa18ce056effb7765df51a348808270df18"
     },
     {
       "path": "modules/messaging/app/lib/server/messages/admin/archive-power-levels.ts",
       "reason": "Module Karenz phase 2 Task 15: the archive/restore power-level helpers split out of room-admin.ts (file size cap); new kernel-side file with no counterpart at the tag",
-      "owner": "KARENZ-P2-T15",
+      "owner": "TASK-205",
       "blob": "04f04e949d0082a7d4b6dd166eb541110d4fa8f4"
     }
   ]
