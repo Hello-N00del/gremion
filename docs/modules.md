@@ -67,11 +67,32 @@ Three separate switches exist; each module README says which of them applies.
    `modules/disabled.json` cannot be enabled that way. A module can also be turned **on** by
    the council's admin in Settings > Module (`calendar`, `elections` and `votes`; fresh
    step-up, no operator approval; see "Module self-service by the council" in the same
-   runbook). Turning a module **off** stays operator-only until the 30-day grace period of
-   phase 2 exists: a council's switch-off request is refused (`DISABLE_NOT_YET`).
+   runbook). The council's admin can turn the same modules **off** there too; see the next
+   section for what that does.
 3. **Per instance setting.** `config.modules.<manifest id> = false` makes the module's routes
    answer with the module-disabled surface and hides its navigation entry; data is kept
    ([playbooks/add-a-module.md](./playbooks/add-a-module.md), section on deselection).
+
+### Turning a module off: the 30-day Karenz
+
+Turning a module off per customer destroys nothing for 30 days (the "Karenz"). The module's
+database is exported and then blocked, not dropped; deadlines in Nextcloud Polls and in Helios
+freeze; chat rooms are archived; the files module loses only its binding, and no file is
+deleted. Records that must be kept are sealed as read-only copies at the moment of switch-off.
+The holders of the `council-admin` and `vorstand` roles get an information mail at switch-off
+and reminders 7 days and 1 day before the end; the mails never name the person who switched.
+
+Turning the module on again inside the 30 days restores everything: the database is unblocked,
+frozen deadlines continue with the time that was left, and rooms are unarchived. On day 30 a
+scheduled job deletes what is left (the blocked database and its export, polls and chat rooms),
+except meeting-linked chat rooms and the sealed copies. The job's deletion step ships switched
+off and only reports what it would delete until an operator turns it on. After day 30 turning the
+module on starts afresh and shows the sealed copies of the earlier period read-only.
+
+The settings page shows the days left, a restore button, any problem of the switch-off, and
+the sealed copies for download for the roles that may read them (`council-admin`, `vorstand`,
+`finance`, `auditor`, `it-admin`). The operator's procedure is in
+[runbooks/tenant-lifecycle.md](./runbooks/tenant-lifecycle.md), section "Module Karenz (30 days)".
 
 A leaf service is a separate container built from `modules/<directory>/Dockerfile` with the
 repository root as build context. The kernel app reaches it when the module's `*_BACKEND`

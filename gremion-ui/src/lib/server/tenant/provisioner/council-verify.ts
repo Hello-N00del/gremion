@@ -8,7 +8,8 @@
 // is a person (their Keycloak user id in that realm), not an operator of the
 // ops realm. The checks, in this order and each fail-closed:
 //   1. the kind and the args (verifyRequestArgs with origin 'council': only
-//      enable_module; disable_module is DISABLE_NOT_YET until phase 2; every
+//      enable_module, plus disable_module while COUNCIL_DISABLE_ALLOWED holds
+//      (the 30-day Karenz exists since phase 2); every
 //      other kind is "not allowed for a council request"). No token is read
 //      before this passes.
 //   2. the module must be council-switchable (MODULE_NOT_SWITCHABLE).

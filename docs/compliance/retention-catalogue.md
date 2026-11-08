@@ -24,9 +24,10 @@
 > resolved and A-G confirms the module grace only, the audit window stays open): a
 > switch-off blocks the module database, takes the export, writes sealed read-only copies
 > for the categories with their own row, and the Karenz job (`karenz-run`) deletes the rest
-> on day 30. This is the target behaviour: the mechanism (the blocked database, the
-> `karenz-run` job) ships in the module Karenz tasks that follow this re-dating, and until it
-> lands the deletion step does not exist. RC-MSG-ROOM and §9 record the operator's round-2
+> on day 30. The mechanism (the blocked database, the `karenz-run` job, the tenant-side pass)
+> is in the tree; the procedure for turning the deletion on is in
+> [runbooks/tenant-lifecycle.md](../runbooks/tenant-lifecycle.md), "Module Karenz (30 days)".
+> RC-MSG-ROOM and §9 record the operator's round-2
 > reading for chat rooms (archived at once, deleted after the Karenz unless meeting-linked),
 > which differs from the DSB question text ("sofort") and goes to the DSB with part 2. The
 > job's destructive steps run only when `KARENZ_FINAL_DELETION=on`; it ships `off` (a dry

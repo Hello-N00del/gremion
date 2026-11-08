@@ -63,6 +63,7 @@ export function pgModules(opts: {
         server: opts.lifecycle.server,
         catalogue: opts.catalogue,
         exportDir: opts.lifecycle.exportDir,
+        ...(opts.lifecycle.exportStorage ? { exportStorage: opts.lifecycle.exportStorage } : {}),
         finalDeletion: o.finalDeletion,
         deadlineMs: o.deadlineMs,
         ...(opts.lifecycle.log ? { log: opts.lifecycle.log } : {}),

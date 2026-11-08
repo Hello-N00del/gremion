@@ -16,12 +16,13 @@
 // Nothing here trusts a council report to delete: the clock and the blocked state
 // are platform columns only (Open Decision 8).
 import { createHash } from 'node:crypto'
-import { createReadStream, existsSync, readdirSync } from 'node:fs'
-import { rm } from 'node:fs/promises'
+import { createReadStream, existsSync, lstatSync, readdirSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import type { Sql } from '@gremion/db'
+import type { StorageBackend } from '@gremion/storage'
 import { tenantModuleDbName } from '../names.js'
 import { dropTenantModuleDatabase } from './disable.js'
+import { exportStorageFor, removeKarenzExport, type ExportStorageFactory } from './export-remove.js'
 import { assertKarenzExportPath, assertTenantModuleTarget, LifecycleError } from './guards.js'
 import { casModuleDatabaseState, readModuleDatabase, type KarenzState } from './platform.js'
 import type { LifecycleModule, ModuleServer } from './types.js'
@@ -46,6 +47,8 @@ export interface FinalizeDeps {
   server: (service: string) => ModuleServer
   catalogue: readonly LifecycleModule[]
   exportDir: string
+  /** The storage backend over the export volume, one per tenant; default a LocalStorageBackend rooted at exportDir (export-remove.ts). */
+  exportStorage?: ExportStorageFactory
   /** false: a dry run. Mode is recorded on each due row, nothing is dropped or deleted. */
   finalDeletion: boolean
   /** Wall-clock budget; checked before each row (default 110000). */
@@ -72,7 +75,7 @@ export interface FinalizeResult {
   orphanedExports: string[]
 }
 
-interface DueRow {
+export interface DueRow {
   karenz_id: string
   customer_id: string
   module_id: string
@@ -199,6 +202,8 @@ async function finalizeRow(
   const platformSide = r.state === 'open' || (r.state === 'finalizing' && r.platform_done_at === null)
 
   let blockedDb: { dbName: string; admin: Sql } | null = null
+  // Built and checked before the claim when the database is dropped; the day-30 delete uses that same instance.
+  let exportStorage: StorageBackend | undefined
   if (platformSide) {
     const mod = deps.catalogue.find((m) => m.id === moduleKey)
     if (!mod) throw new LifecycleError('MODULE_UNKNOWN', `module ${moduleKey} is not in the catalogue; its Karenz ${r.karenz_id} cannot be finalized`)
@@ -217,6 +222,9 @@ async function finalizeRow(
         // The ROW's own export, not the latest one of the module: a later switch-off must not be able to
         // satisfy (or spoil) this check. Verified BEFORE the row is claimed, so a missing export leaves the
         // switch-on possible instead of freezing the module in `finalizing` with an intact database.
+        // The export storage the day-30 delete goes through is built first, for the same reason: its mount
+        // check and its agreement with exportDir are refused here and not after the drop.
+        exportStorage = exportStorageFor(deps, tenantId)
         await verifyRowExport(deps.exportDir, r)
         await hook('export-verified')
         blockedDb = { dbName, admin: deps.server(database.postgresService).admin }
@@ -250,9 +258,7 @@ async function finalizeRow(
       kept = true
       log(`export of Karenz ${r.karenz_id} kept until ${hold.toISOString()}`)
     } else {
-      const path = assertKarenzExportPath(r.export_path, deps.exportDir, tenantId, moduleKey)
-      await rm(path, { force: true })
-      await rm(`${path}.sha256`, { force: true })
+      await removeKarenzExport(r.export_path, deps, tenantId, moduleKey, exportStorage)
       await deps.platform`UPDATE plt.module_karenz SET export_deleted_at = now() WHERE karenz_id = ${r.karenz_id} AND export_deleted_at IS NULL`
       await hook('export-deleted')
     }
@@ -272,11 +278,31 @@ async function finalizeRow(
 }
 
 /** Re-reads the row's own export and refuses unless the file is there and its sha256 is the recorded one. */
-async function verifyRowExport(exportDir: string, r: DueRow): Promise<void> {
+export async function verifyRowExport(exportDir: string, r: DueRow): Promise<void> {
   if (r.export_path === null || r.export_sha256 === null) {
     throw new LifecycleError('EXPORT_MISSING', `Karenz ${r.karenz_id} records no export of its own; refusing to drop the database`)
   }
   const path = assertKarenzExportPath(r.export_path, exportDir, r.customer_id, r.module_key)
+  // The day-30 delete goes through the storage seam, which refuses a link anywhere from <exportDir>/<tenant> down
+  // to the file. Refuse the same here, BEFORE the database is dropped: otherwise the drop would succeed, the
+  // delete would be refused and the row would sit in `finalizing` with its database gone.
+  // The sidecar goes through the same seam call, so a link there is refused too.
+  for (const part of [join(exportDir, r.customer_id), join(exportDir, r.customer_id, r.module_key), path, `${path}.sha256`]) {
+    let isLink = false
+    try {
+      isLink = lstatSync(part).isSymbolicLink()
+    } catch (err) {
+      // A missing component is reported just below as a missing export (the seam's own walk also stops there).
+      // Any other error (permissions, I/O, a link loop) is not "missing": say what it is.
+      const code = (err as NodeJS.ErrnoException)?.code
+      if (code !== 'ENOENT' && code !== 'ENOTDIR') {
+        throw new LifecycleError('TARGET_REFUSED', `cannot inspect ${part} (${code ?? describeError(err)}); refusing to drop the database of Karenz ${r.karenz_id}`)
+      }
+    }
+    if (isLink) {
+      throw new LifecycleError('TARGET_REFUSED', `the export path ${path} of Karenz ${r.karenz_id} passes through a link (${part}); refusing to drop the database`)
+    }
+  }
   if (!existsSync(path)) {
     throw new LifecycleError('EXPORT_MISSING', `the export ${path} of Karenz ${r.karenz_id} is missing; refusing to drop the database`)
   }

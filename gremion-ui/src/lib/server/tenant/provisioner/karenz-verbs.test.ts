@@ -94,6 +94,18 @@ describe('karenz-run', () => {
     expect(lines()).toEqual([])
   })
 
+  it('the refusal names the seam\'s reason, not only that the directory is "not mounted"', async () => {
+    stdout()
+    // a stand-in check carries only a boolean, so the message gives the generic reason
+    const stub = ctx({ env: { KARENZ_FINAL_DELETION: 'on', TENANT_EXPORT_DIR: '/exports' }, exportDirMounted: () => false })
+    await expect(karenzVerb('karenz-run', stub.c)).rejects.toThrow(/USAGE .*\(it is not a mounted volume\)$/)
+    // the real check (no stand-in) puts the seam's own reason in the message; which one depends on the host
+    // (a Linux host: "not a mount point"; a host without a mount table: the table is named), never nothing
+    const real = ctx({ env: { KARENZ_FINAL_DELETION: 'on', TENANT_EXPORT_DIR: '/exports' }, exportDirMounted: undefined })
+    await expect(karenzVerb('karenz-run', real.c)).rejects.toThrow(/USAGE .*nothing was touched \(.*(mount point|mount table).*\)$/)
+    expect(real.fd).not.toHaveBeenCalled()
+  })
+
   it('karenz-run exits 1 and lists the error when finalizeDue returns an error', async () => {
     const lines = stdout()
     const err = { karenzId: '0198a1b2-0000-7000-8000-000000000001', moduleKey: 'votes', message: 'EXPORT_MISSING: the export is missing' }

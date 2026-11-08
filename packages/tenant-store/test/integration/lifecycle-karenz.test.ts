@@ -26,6 +26,7 @@ import {
   OPERATOR,
   platformDb,
   resetModuleServer,
+  scratchExportStorage,
   seedCatalogue,
   uuidv7,
 } from '../harness/lifecycle.js'
@@ -101,6 +102,7 @@ describe('the module Karenz on the scratch stack', () => {
     server: () => server,
     catalogue: [lcfixModule()],
     exportDir: exportDir(),
+    exportStorage: scratchExportStorage(exportDir()),
     finalDeletion: true,
     now: () => new Date(Date.now() + 40 * DAY),
     ...overrides,
