@@ -8,19 +8,27 @@
 //
 // Runs in the tenant-create one-shot (scripts/tenant-provision.ts), never in
 // the app process.
+import { createHash } from 'node:crypto'
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import postgres from 'postgres'
 import { checkTenantHostDns, type EdgeAddresses } from '@gremion/edge-routers'
 import { ensureTenantAccount } from '@gremion/nats-auth'
-import type { AdminSpec, ControlRow, CustomerRef, KernelPostCondition, ProvisioningDeps, SmtpReadBack } from '@gremion/provisioning'
+import type { AdminSpec, ControlRow, CustomerRef, GovernancePostCondition, KernelPostCondition, ProvisioningDeps, SmtpReadBack } from '@gremion/provisioning'
 import {
+  bindGovernanceDatabase,
+  ensureGovernanceDatabase,
   ensureKernelAuditAppendOnly,
   ensureKernelDatabase,
   ensureKernelPurgeGrants,
+  governanceDbName,
+  governancePostCondition,
+  governanceRoles,
   kernelAuditAppendOnlyProblems,
   kernelDbName,
   kernelRoles,
+  migrateGovernanceDatabase,
+  type ModuleServer,
   type PurgeServer,
 } from '@gremion/tenant-store/lifecycle'
 import type { ModuleManifest } from '$lib/modules/types'
@@ -69,6 +77,20 @@ export interface CustomerAdapterOptions {
   runtimeDatabaseUrl: string
   /** The kernel server's POSTGRES_USER, DIRECT (never the pooler). */
   kernelAdminUrl: string
+  /** TASK-084-a: the governance server's POSTGRES_USER, DIRECT (never the pooler). */
+  governanceAdminUrl: string
+  /**
+   * TASK-084-a: where the per-customer governance credential files are written
+   * (the container path of the rw mount, GOVERNANCE_SECRETS_DIR): a directory
+   * of its own, never TENANT_SECRETS_DIR, whose read-only mounts reach three
+   * other containers. The files are 0600 and owned by this process; handing
+   * them to the governance image's uid is 084-b (GOVERNANCE_SECRETS_UID, DV4).
+   */
+  governanceSecretsDir: string
+  /** TASK-084-a: services/governance/migrations as shipped in this image. */
+  governanceMigrationsDir: string
+  /** TASK-084-a: the release this run ships (ledger release_ref). */
+  releaseRef: string
   /** The operator's --config (the tenant's vertical config, brand identity included). */
   configFile: string
   /** The first body's display name (Q8). */
@@ -81,6 +103,8 @@ export interface CustomerAdapterOptions {
   loadBaseRealm(): Record<string, unknown>
   genSecret(): string
   writeSecretFile(hostPath: string, value: string): Promise<void>
+  /** TASK-084-a: a governance credential file, 0600, written atomically; the CLI's (no hand-over to the tenant reader). */
+  writeGovernanceSecretFile(hostPath: string, value: string): Promise<void>
   /** Writes the tenant's config.json atomically (the CLI's writer: this module
    *  holds no write-capable fs call, check-storage-seam s3). */
   writeConfigFile(path: string, text: string): void
@@ -200,6 +224,34 @@ export function kernelServer(adminUrl: string): PurgeServer & { close(): Promise
   }
 }
 
+/**
+ * The governance server behind GOVERNANCE_PG_ADMIN_FILE (ModuleServer shape):
+ * `open` pins search_path for the admin, and starts the session AS a role when
+ * one is given (the owner for the migration, as enableModule does).
+ */
+export function governanceServer(adminUrl: string): ModuleServer & { close(): Promise<void> } {
+  const admin = postgres(adminUrl, { max: 2, onnotice: () => {}, connect_timeout: 15 })
+  const pools: postgres.Sql[] = []
+  return {
+    admin,
+    open(database, options) {
+      const u = new URL(adminUrl)
+      u.pathname = `/${database}`
+      const sql = postgres(u.toString(), {
+        max: 2,
+        onnotice: () => {},
+        connect_timeout: 15,
+        connection: options?.role ? { options: `-c role=${options.role}` } : { search_path: 'pg_catalog' },
+      })
+      pools.push(sql)
+      return sql
+    },
+    async close() {
+      await Promise.all([admin, ...pools].map((s) => s.end({ timeout: 5 }).catch(() => {})))
+    },
+  }
+}
+
 async function tenantOf(c: CustomerRef): Promise<Tenant> {
   const t = await getTenantById(c.id)
   if (!t) throw new Error(`customer ${c.slug} (${c.id}) has no control row`)
@@ -234,7 +286,7 @@ export function firstBodyAdapters(keycloak: ProvisioningSubsystem): Adapters {
   return { keycloak, matrix: notWanted('matrix'), nextcloud: notWanted('nextcloud') }
 }
 
-export function customerAdapters(o: CustomerAdapterOptions): Pick<ProvisioningDeps, 'control' | 'config' | 'realm' | 'kernel' | 'domain' | 'storage' | 'firstBody' | 'broker'> {
+export function customerAdapters(o: CustomerAdapterOptions): Pick<ProvisioningDeps, 'control' | 'config' | 'realm' | 'kernel' | 'governance' | 'domain' | 'storage' | 'firstBody' | 'broker'> {
   const log = o.log ?? (() => {})
   const hostPath = (name: string) => `${o.tenantSecretsDir.replace(/\/$/, '')}/${name}`
   const readSecretFile = (name: string): string | null => (existsSync(hostPath(name)) ? readFileSync(hostPath(name), 'utf-8').trim() : null)
@@ -460,6 +512,83 @@ export function customerAdapters(o: CustomerAdapterOptions): Pick<ProvisioningDe
           return { ledgerColumns: cols.map((r) => r.c), seedRows, orgUnits: await count('org_units'), committees: await count('committees') }
         } finally {
           await sql.end({ timeout: 5 })
+        }
+      },
+    },
+
+    governance: {
+      async ensureDatabase(c) {
+        const roles = governanceRoles(c.id)
+        const dbName = governanceDbName(c.id)
+        const file = `${o.governanceSecretsDir.replace(/[\\/]$/, '')}/${c.id.replaceAll('-', '')}`
+        // read first: a present, well-formed credential keeps the app role's password; a present file that
+        // is not the credential of THIS customer's role and database fails the step and is never overwritten
+        let appPassword: string | null = null
+        if (existsSync(file)) {
+          const text = readFileSync(file, 'utf-8').trim()
+          let u: URL | null = null
+          let user: string | null = null
+          try {
+            u = new URL(text)
+            // a malformed percent sequence parses as a URL but does not decode: same refusal, not a bare URIError
+            user = decodeURIComponent(u.username)
+            if (u.password) appPassword = decodeURIComponent(u.password)
+          } catch {
+            u = null
+            appPassword = null
+          }
+          if (!u || user !== roles.app || u.pathname !== `/${dbName}` || !u.password) {
+            throw new Error(`the governance credential file ${file} is not the credential of ${roles.app} on ${dbName}: refusing to overwrite it; inspect it and remove it by hand to have it regenerated`)
+          }
+        }
+        const server = governanceServer(o.governanceAdminUrl)
+        try {
+          // a rerun after a crash between CREATE DATABASE and the file write has no file: a fresh password is
+          // generated, the role's verifier is reset to it, and the file is written once, AFTER the database step
+          const password = appPassword ?? o.genSecret()
+          const r = await ensureGovernanceDatabase(server, c.id, password)
+          if (appPassword === null) await o.writeGovernanceSecretFile(file, dbUrl(o.governanceAdminUrl, r.app, password, r.dbName))
+          log(`governance database ${r.dbName} ${r.created ? 'created' : 'present'}`)
+        } finally {
+          await server.close()
+        }
+      },
+      async migrate(c) {
+        const server = governanceServer(o.governanceAdminUrl)
+        try {
+          const r = await migrateGovernanceDatabase(server, c.id, { dir: o.governanceMigrationsDir, releaseRef: o.releaseRef, log })
+          log(`governance database ${governanceDbName(c.id)}: ${r.applied.length} migration(s) applied, ${r.alreadyApplied} already applied`)
+        } finally {
+          await server.close()
+        }
+      },
+      async bind(c) {
+        const server = governanceServer(o.governanceAdminUrl)
+        try {
+          const r = await bindGovernanceDatabase(server, { id: c.id, token: c.token })
+          log(`governance database ${governanceDbName(c.id)}: binding ${r.inserted ? 'written' : 'present'}`)
+        } finally {
+          await server.close()
+        }
+      },
+      async postCondition(c): Promise<GovernancePostCondition> {
+        const roles = governanceRoles(c.id)
+        const server = governanceServer(o.governanceAdminUrl)
+        try {
+          const state = await governancePostCondition(server, c.id)
+          const dir = o.governanceMigrationsDir
+          const shipped = readdirSync(dir)
+            .filter((f) => f.endsWith('.sql'))
+            .sort()
+            .map((filename) => ({ filename, sha256: createHash('sha256').update(readFileSync(join(dir, filename))).digest('hex') }))
+          return {
+            ...state,
+            shipped,
+            expectedConnectGrantees: [roles.owner, roles.app, roles.purger].sort(),
+            expectedDatabase: governanceDbName(c.id),
+          }
+        } finally {
+          await server.close()
         }
       },
     },

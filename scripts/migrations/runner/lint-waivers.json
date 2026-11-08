@@ -1,5 +1,5 @@
 {
-  "$comment": "Per-file, sha256-pinned waivers of expand-lint rules for LOCKED files the lint refuses (suite.mjs section 2c). Not the baseline: the baseline is write-once and maps only pre-header files. A waiver is voided by any byte change (the lock pins the file anyway), may name only WAIVABLE_RULES, and is stale-checked (a waived rule that no longer fires fails). A new file never gets one by default: fix the file while it is unlocked.",
+  "$comment": "Per-file, sha256-pinned waivers of expand-lint rules for LOCKED files the lint refuses (suite.mjs section 2c). Not the baseline: the baseline is write-once and maps only pre-header files. A waiver is voided by any byte change (the lock pins the file anyway), may name only WAIVABLE_RULES, and is stale-checked (a waived rule that no longer fires fails). A new file never gets one by default: fix the file while it is unlocked. TASK-084-a names the exceptions drop and set-expression (platform 0015) and revoke (governance 0001).",
   "waivers": [
     {
       "chain": "platform",
@@ -52,6 +52,25 @@
         "revoke"
       ],
       "reason": "Adds the council request origin to plt.provisioning_request: the old origin and evidence CHECKs cannot be widened without DROP CONSTRAINT and re-ADD (each re-added NOT VALID and validated in the same file, so no unvalidated constraint remains), the immutability guard body must gain the actor_kind column (CREATE OR REPLACE keeps the grants pg.ts issues), and REVOKE ALL FROM PUBLIC hardens the SECURITY DEFINER functions this same file creates. Same shape as the waivers of 0009, 0010 and 0013. The file sets lock_timeout first; the table is a small queue whose only writers ship in the same release."
+    },
+    {
+      "chain": "platform",
+      "file": "0015_plt_provisioning_step_governance.sql",
+      "sha256": "60f25259025d5d993564187ca4b46312d807f91d596367f8f76d7fd19345acde",
+      "rules": [
+        "drop",
+        "set-expression"
+      ],
+      "reason": "Widens the append-only provisioning ledger from eight to nine step kinds: DROP and re-ADD of provisioning_step_step_kind_check (NOT VALID, then VALIDATE) and SET EXPRESSION on the generated step_order. The table holds a handful of rows per customer, no colour reads step_order, existing values and the step_order index are kept, and the rewrite fires no row trigger. The file sets lock_timeout first."
+    },
+    {
+      "chain": "governance",
+      "file": "0001_gov_setup.sql",
+      "sha256": "23e7c5e8c5b0a5a7658f6e70db6605c71ce9e2f9b68e53d7366d5ffac4f8a17b",
+      "rules": [
+        "revoke"
+      ],
+      "reason": "REVOKE EXECUTE ON FUNCTION gov.remove_test_run(uuid) FROM PUBLIC on a function this same file creates: mandatory hardening (PostgreSQL grants EXECUTE to PUBLIC by default), applied only to a database created in the same provisioning step. The file sets lock_timeout first and creates every relation it touches."
     }
   ]
 }

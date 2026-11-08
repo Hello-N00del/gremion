@@ -121,8 +121,18 @@ render_tenant_create_secrets() {
         printf 'postgresql://%s:%s@%s-postgres:5432/postgres\n' "$user" "$pw" "$id" | write_secret "${dir}/module_pg_admin_${id}"
         openssl rand -hex 32 | write_secret "${dir}/module_app_password_${id}"
     done
+    # TASK-084-a: the governance server (a dedicated service server, not a module's) and the directory tenant-create
+    # writes each customer's governance credential into. The admin file is derived from state.env on every run; the
+    # per-customer files under etc/secrets/governance/ are tenant-create's and are never touched here.
+    user="$(env_key "$state" GOVERNANCE_PG_USER)"; user="${user:-governance}"
+    pw="$(env_key "$state" GOVERNANCE_PG_PASSWORD)"
+    [[ -n "$pw" ]] || die "GOVERNANCE_PG_PASSWORD is empty in ${state}" "$GREMION_EXIT_USAGE"
+    rm -f "${dir}/governance_pg_admin"
+    printf 'postgresql://%s:%s@governance-postgres:5432/postgres\n' "$user" "$pw" | write_secret "${dir}/governance_pg_admin"
+    mkdir -p "${ROOT}/etc/secrets/governance"
+    chmod 700 "${ROOT}/etc/secrets/governance"
     pw=""
-    ok "etc/secrets/tenant-create: kernel and $(wc -w <<< "$MODULE_SERVERS") module server credential file(s), 0600"
+    ok "etc/secrets/tenant-create: kernel, $(wc -w <<< "$MODULE_SERVERS") module and governance server credential file(s), 0600"
 }
 
 render_panel_secrets() {

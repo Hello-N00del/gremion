@@ -277,6 +277,25 @@ services:
       retries: 5
       start_period: 20s
 
+  # The governance service's server (TASK-084-a, TRD-089): PostgreSQL 18 holding
+  # one database per customer, t_<hex32>__governance, each with its own owner,
+  # app and purger roles (created by tenant-create, never here). Labelled
+  # service:governance (a dedicated service server, not a module's), NOT
+  # profile-gated (every customer gets a governance database at create), and no
+  # PgBouncer fronts it. POSTGRES_DB is postgres, so the image creates no
+  # database of its own besides the built-ins. The admin credential reaches
+  # tenant-create as a file (infra/host/bin/gremion-tenant), never a service.
+  governance-postgres:
+    <<: *module-postgres
+    labels:
+      org.gremion.postgres: "service:governance"
+    environment:
+      POSTGRES_USER:     ${GOVERNANCE_PG_USER:-governance}
+      POSTGRES_DB:       postgres
+      POSTGRES_PASSWORD: ${GOVERNANCE_PG_PASSWORD}
+    volumes:
+      - governance-pg-data:/var/lib/postgresql
+
   # ============================================================
   # NATS JetStream — the event broker (TASK-024, CAP-NATS-AUTH; D12, TRD-419)
   # ============================================================
@@ -783,6 +802,7 @@ volumes:
   newsletter-pg-data:
   vault-pg-data:
   messaging-pg-data:
+  governance-pg-data:
   synapse-data:
   # JetStream's store: project-scoped like pg-data (${STACK}-state_nats-data),
   # backed up by project label with the rest of the state volumes.

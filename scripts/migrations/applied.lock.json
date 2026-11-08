@@ -22,7 +22,9 @@
     "governance": {
       "legacyFloor": 0,
       "legacy": [],
-      "files": {}
+      "files": {
+        "0001_gov_setup.sql": "23e7c5e8c5b0a5a7658f6e70db6605c71ce9e2f9b68e53d7366d5ffac4f8a17b"
+      }
     },
     "kernel-api": {
       "legacyFloor": 0,
@@ -189,7 +191,8 @@
         "0011_plt_lease_fence.sql": "907288c31417b64748c7804b22c506986b76f7223ff95de1bafcc0874095738a",
         "0012_plt_purge_run.sql": "202379e02d64111efdd7e5910b56726e3477fb886d1c283b25701dd1569287d7",
         "0013_oac_access_record.sql": "889c39a6fc201feead497d559df152c7ae46ba6121321f003d05df7eb4aded77",
-        "0014_plt_council_requests.sql": "535222ac20bdb8ed08aa76f4ca572deb59e875442f1373697726c9029b7bd82b"
+        "0014_plt_council_requests.sql": "535222ac20bdb8ed08aa76f4ca572deb59e875442f1373697726c9029b7bd82b",
+        "0015_plt_provisioning_step_governance.sql": "60f25259025d5d993564187ca4b46312d807f91d596367f8f76d7fd19345acde"
       }
     }
   }

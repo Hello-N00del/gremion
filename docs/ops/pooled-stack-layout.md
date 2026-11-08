@@ -10,14 +10,14 @@ is `test/host/integration/pooled-stack-proof.sh`.
 
 | Project | Compose files | What it holds |
 |---|---|---|
-| `${STACK}-state` | `docker-compose.yml` + `docker-compose.prod.yml` + state pins (`docker-compose.state-pins.yml`) | every database and volume, keycloak, the edge (traefik, its socket proxy, fallback, legal), vector |
+| `${STACK}-state` | `docker-compose.yml` + `docker-compose.prod.yml` + state pins (`docker-compose.state-pins.yml`) | every database and volume (incl. `governance-postgres`, one governance database per customer), keycloak, the edge (traefik, its socket proxy, fallback, legal), vector |
 | `${STACK}-app-blue` | `docker-compose.app.yml` + pins, `COLOUR=blue` | gremion-ui, gremion-public, control-panel (+ the `migrate` / `tenant-create` one-shots) |
 | `${STACK}-app-green` | the same file, `COLOUR=green` | the same five services, other colour |
 | `${STACK}-ops` | `compose/observability/docker-compose.yml` (TASK-039) | grafana, prometheus, loki, tempo, alloy, blackbox (**non-council**) |
 | `${STACK}-mail` | `infra/host/mail/docker-compose.yml` | stalwart, the platform mail server (**non-council**) |
 
 **Tenants cost no containers (TRD-440).** A customer adds databases (its
-kernel database and one per enabled module), a Keycloak realm, a broker
+kernel database, one per enabled module and its governance database), a Keycloak realm, a broker
 account and its first accounts (a create request from the control panel, run by the host-side executor, TASK-043 / TASK-043d).
 It adds no container and no compose project, and `create` fails if the
 container count or any project's `config --services` moved. The per-tenant
@@ -33,6 +33,8 @@ exit-2 failure, never a default:
 | `KERNEL_PG_ADMIN_FILE` | `etc/secrets/tenant-create/kernel_pg_admin` (the kernel server's `POSTGRES_USER` URL) | `ensureKernelDatabase` needs CREATEDB, CREATEROLE and the `pg_shadow` read of `pgbouncer.get_auth` |
 | `MODULE_PG_ADMIN_<ID>_FILE` | one per module server (`MODULE_POSTGRES_IDS`), `etc/secrets/tenant-create/module_pg_admin_<id>` | `ModuleServer.admin` of `enableModule` |
 | `MODULE_APP_PASSWORD_<ID>_FILE` | one per module server, generated once by `gremion-tenant init` | the module's app role password (`secrets.appPassword`) |
+| `GOVERNANCE_PG_ADMIN_FILE` | `etc/secrets/tenant-create/governance_pg_admin` (the governance server's `POSTGRES_USER` URL, derived from `state.env` on every `gremion-tenant init`) | `ensureGovernanceDatabase` needs CREATEDB and CREATEROLE on `governance-postgres` (TASK-084-a) |
+| `GOVERNANCE_SECRETS_DIR` | `/run/secrets/governance`, a read-write bind of `etc/secrets/governance/` (0700), mounted on `tenant-create` ONLY | one 0600 credential file `<hex32>` per customer for its governance app role; never under `/run/secrets/tenants`, whose read-only mounts reach other containers (`make lint-pooled-stack` fails when one does) |
 | `TENANT_EXPORT_DIR` | `/var/lib/gremion/exports` | `disableModule`'s export target (TRD-044); a bind mount of `$GREMION_ROOT/data/module-exports`, without which `disable-module` refuses |
 | `GREMION_RELEASE_REF` | the colour's `IMAGE_TAG` (compose sets it) | TASK-075: `release_ref` of every ledger row `init` (`migratePlatform`) and phase B (`enableModule`) apply; 1-64 of `A-Z a-z 0-9 . _ -` |
 | `GREMION_DISABLE_SEEDS` | `"true"` | the kernel migration tenant-create runs must never apply a `*_seed.sql` |

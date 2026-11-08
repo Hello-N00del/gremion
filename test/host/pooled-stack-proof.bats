@@ -483,7 +483,7 @@ skip_if_mail_api_port_taken() {
     run bash -c 'set -euo pipefail; . "$1"; SROOT="$2"; precreate_bind_dirs' _ "$PROOF" "$SROOT"
     [ "$status" -eq 0 ]
     local d
-    for d in etc/secrets/control-panel etc/secrets/tenant-create data/module-exports etc/edge; do
+    for d in etc/secrets/control-panel etc/secrets/tenant-create etc/secrets/governance data/module-exports etc/edge; do
         [ -d "${SROOT}/${d}" ] || { echo "missing ${d}" >&2; return 1; }
         [ -O "${SROOT}/${d}" ] || { echo "${d} not owned by the invoking user" >&2; return 1; }
     done
