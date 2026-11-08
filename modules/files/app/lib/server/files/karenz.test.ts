@@ -22,10 +22,41 @@ const wanted = new Map<string, boolean>()
 let releaseFailures = new Set<string>()
 let attachFailures = new Set<string>()
 let order: string[] = []
+/** The unit's members as the governance tables hold them (user ids). */
+const members = new Map<string, string[]>()
+/** What the provisioning pass reports for the Nextcloud subsystem of a unit (default ok). */
+let provisionReport: Record<string, 'ok' | 'failed' | 'skipped'> = {}
+const provisioned: string[] = []
+/** The Nextcloud groups ("ou-<unit>") and their member ids; a wire-level fake, so what is asserted is what was sent. */
+const ncGroups = new Map<string, Set<string>>()
+let removeHttpFailures = new Set<string>()
+/** OCS v1 answers a refused change with HTTP 200 and a failure envelope: the group is left unchanged. */
+let removeEnvelopeFailures = new Set<string>()
+
+function ncFake(input: string | URL | Request, init?: RequestInit): Promise<Response> {
+  const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url)
+  const method = init?.method ?? 'GET'
+  const ocs = (data: unknown, statuscode = 100) => new Response(JSON.stringify({ ocs: { meta: { statuscode }, data } }), { status: 200 })
+  let m: RegExpExecArray | null
+  if (method === 'GET' && (m = /^\/ocs\/v1\.php\/cloud\/groups\/([^/]+)$/.exec(url.pathname))) {
+    const group = ncGroups.get(decodeURIComponent(m[1]!))
+    return Promise.resolve(group ? ocs({ users: [...group] }) : ocs([], 101))
+  }
+  if (method === 'DELETE' && (m = /^\/ocs\/v1\.php\/cloud\/users\/([^/]+)\/groups$/.exec(url.pathname))) {
+    const user = decodeURIComponent(m[1]!)
+    const gid = new URLSearchParams(String(init?.body ?? '')).get('groupid') ?? ''
+    if (removeHttpFailures.has(user)) return Promise.resolve(new Response('injected failure', { status: 500 }))
+    if (removeEnvelopeFailures.has(user)) return Promise.resolve(ocs([], 105))
+    ncGroups.get(gid)?.delete(user)
+    return Promise.resolve(ocs([]))
+  }
+  return Promise.resolve(new Response('{}', { status: 200 }))
+}
 
 vi.mock('$lib/server/governance/org-units-db', () => ({
   getOrgUnit: async (id: string) => units.find((u) => u.id === id) ?? null,
   listOrgUnits: async () => units,
+  listOrgUnitMembers: async (id: string) => (members.get(id) ?? []).map((u) => ({ user_keycloak_id: u })),
   setSubsystemWanted: async (_tx: unknown, id: string, _s: string, value: boolean) => {
     if (value && attachFailures.has(id)) throw new Error('db down (' + id + ')')
     wanted.set(id, value)
@@ -43,7 +74,14 @@ vi.mock('$lib/server/governance/provisioning/ledger', () => ({
     order.push(`ok:${unitId}:${externalId}`)
   },
 }))
+vi.mock('$lib/server/governance/provisioning/mutex', () => ({
+  withUnitLock: async <T>(_key: string, fn: () => Promise<T>) => fn(),
+}))
 vi.mock('$lib/server/governance/provisioning/orchestrator', () => ({
+  provisionOrgUnit: async (unitId: string) => {
+    provisioned.push(unitId)
+    return { orgUnitId: unitId, overall: 'ok', subsystems: [{ subsystem: 'nextcloud', status: provisionReport[unitId] ?? 'ok', willRetry: false }] }
+  },
   releaseSubsystem: async (unitId: string, _s: string, teardown: (id: string | null) => Promise<void>) => {
     const before = ledger.get(unitId)
     await teardown(before?.external_id ?? null)
@@ -100,11 +138,13 @@ function makeCtx(items: KarenzContext['items']): KarenzContext {
 }
 
 /** A unit with a provisioned Nextcloud folder: external_id is "<folderId>:<groupId>" as the adapter writes it. */
-function addBoundUnit(id: string, folderId: number): string {
+function addBoundUnit(id: string, folderId: number, people: { members?: string[]; inGroup?: string[] } = {}): string {
   units.push({ id, name: `Gremium ${id}` })
   const externalId = `${folderId}:ou-${id}`
   ledger.set(id, { status: 'ok', external_id: externalId })
   wanted.set(id, true)
+  members.set(id, people.members ?? [])
+  ncGroups.set(`ou-${id}`, new Set(people.inGroup ?? people.members ?? []))
   return externalId
 }
 
@@ -125,7 +165,13 @@ describe('filesKarenz', () => {
     releaseFailures = new Set()
     attachFailures = new Set()
     order = []
-    fetchMock = vi.fn(async () => new Response('{}', { status: 200 }))
+    members.clear()
+    provisionReport = {}
+    provisioned.length = 0
+    ncGroups.clear()
+    removeHttpFailures = new Set()
+    removeEnvelopeFailures = new Set()
+    fetchMock = vi.fn(ncFake)
     vi.stubGlobal('fetch', fetchMock)
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     vi.spyOn(console, 'error').mockImplementation(() => {})
@@ -236,7 +282,8 @@ describe('filesKarenz', () => {
     expect(ledger.get('a')).toEqual({ status: 'ok', external_id: a })
     expect(wanted.get('a')).toBe(true)
     expect(itemOf(a)?.state).toBe('restored')
-    expect(ncCalls()).toEqual([])
+    // the only Nextcloud call of a restore is reading the unit's group: nothing is created, nothing is deleted
+    expect(ncCalls().every((c) => c.startsWith('GET ') && c.includes('/cloud/groups/ou-a'))).toBe(true)
 
     // The REAL adapter: the provisioning worker's ensureResource gets the restored external id as `existing`
     // and must hand it back without creating a group folder or a group.
@@ -321,6 +368,121 @@ describe('filesKarenz', () => {
     await karenz.filesKarenz.restore(ctx)
     expect(ledger.get('bad')).toEqual({ status: 'ok', external_id: '7:ou-bad' })
     expect(itemOf('7:ou-bad')?.state).toBe('restored')
+  })
+
+  // The membership of the restored group. While the binding is released the kernel's removal paths no longer
+  // reach the unit's Nextcloud group (they key off the ledger row, which is gone). A restore therefore brings
+  // the group up to date in BOTH directions before it reports the unit restored: people who joined are added
+  // (the regular provisioning pass), people who left are removed from the GROUP (never an account, a folder
+  // or a file).
+
+  it("restore removes from the unit's group a person who left the committee while the binding was released", async () => {
+    addBoundUnit('a', 7, { members: ['alice', 'bob'] })
+    await karenz.filesKarenz.switchOff(ctx)
+    members.set('a', ['alice']) // bob left the committee while the module was off; the removal never reached Nextcloud
+    expect([...ncGroups.get('ou-a')!].sort()).toEqual(['alice', 'bob'])
+
+    await karenz.filesKarenz.restore(ctx)
+
+    expect([...ncGroups.get('ou-a')!]).toEqual(['alice'])
+    expect(itemOf('7:ou-a')?.state).toBe('restored')
+    // exactly one removal, from exactly that group; no folder, no group, no account and no file is deleted
+    const deletes = ncCalls().filter((c) => c.startsWith('DELETE '))
+    expect(deletes).toEqual(['DELETE http://nextcloud/ocs/v1.php/cloud/users/bob/groups'])
+    expect(ncCalls().some((c) => /groupfolders|\/remote\.php\/|\/cloud\/groups$/.test(c))).toBe(false)
+  })
+
+  it('restore runs the regular provisioning pass for a bound unit, which adds the people who joined while the binding was released', async () => {
+    addBoundUnit('a', 7, { members: ['alice'] })
+    addBoundUnit('b', 8)
+    units.push({ id: 'n', name: 'Neu' }) // no folder
+    ledger.set('n', { status: 'pending', external_id: null })
+    await karenz.filesKarenz.switchOff(ctx)
+
+    await karenz.filesKarenz.restore(ctx)
+
+    expect([...provisioned].sort()).toEqual(['a', 'b']) // the unit without a folder is the worker's job
+  })
+
+  it('restore leaves a current member of the group alone', async () => {
+    addBoundUnit('a', 7, { members: ['alice', 'bob'] })
+    await karenz.filesKarenz.switchOff(ctx)
+    await karenz.filesKarenz.restore(ctx)
+    expect([...ncGroups.get('ou-a')!].sort()).toEqual(['alice', 'bob'])
+    expect(ncCalls().some((c) => c.startsWith('DELETE '))).toBe(false)
+  })
+
+  it('a removal that fails fails the restore of that unit only (unit id only) and the next pass converges', async () => {
+    addBoundUnit('a', 7, { members: ['alice'], inGroup: ['alice', 'bob'] })
+    addBoundUnit('b', 8, { members: ['carol'], inGroup: ['carol', 'dave'] })
+    await karenz.filesKarenz.switchOff(ctx)
+    removeHttpFailures = new Set(['bob'])
+
+    const err = await karenz.filesKarenz.restore(ctx).catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(KarenzPartialError)
+    expect((err as KarenzPartialError).failures).toEqual(['unit a'])
+    expect(JSON.stringify((err as KarenzPartialError).failures)).not.toMatch(/bob|ou-a|7:|Gremium/)
+    expect(itemOf('7:ou-a')?.state).toBe('unlock_failed')
+    expect(itemOf('8:ou-b')?.state).toBe('restored') // the other unit was still processed
+    expect([...ncGroups.get('ou-b')!]).toEqual(['carol'])
+
+    removeHttpFailures = new Set()
+    await karenz.filesKarenz.restore(ctx)
+    expect([...ncGroups.get('ou-a')!]).toEqual(['alice'])
+    expect(itemOf('7:ou-a')?.state).toBe('restored')
+  })
+
+  it('a removal that Nextcloud refuses with HTTP 200 and a failure envelope is NOT taken for a success: the group is read back', async () => {
+    addBoundUnit('a', 7, { members: ['alice'], inGroup: ['alice', 'bob'] })
+    await karenz.filesKarenz.switchOff(ctx)
+    removeEnvelopeFailures = new Set(['bob'])
+
+    await expect(karenz.filesKarenz.restore(ctx)).rejects.toBeInstanceOf(KarenzPartialError)
+    expect(itemOf('7:ou-a')?.state).toBe('unlock_failed')
+    expect([...ncGroups.get('ou-a')!].sort()).toEqual(['alice', 'bob']) // truthfully not yet removed
+
+    removeEnvelopeFailures = new Set()
+    await karenz.filesKarenz.restore(ctx)
+    expect([...ncGroups.get('ou-a')!]).toEqual(['alice'])
+    expect(itemOf('7:ou-a')?.state).toBe('restored')
+  })
+
+  it('an unreadable group listing fails the restore instead of being taken for an empty group', async () => {
+    addBoundUnit('a', 7, { members: ['alice'] })
+    await karenz.filesKarenz.switchOff(ctx)
+    ncGroups.delete('ou-a') // OCS v1: HTTP 200 with a failure envelope (unknown group)
+
+    await expect(karenz.filesKarenz.restore(ctx)).rejects.toBeInstanceOf(KarenzPartialError)
+    expect(itemOf('7:ou-a')?.state).toBe('unlock_failed')
+  })
+
+  it.each(['failed', 'skipped'] as const)('a provisioning pass that reports the Nextcloud subsystem %s fails the restore of the unit, and the next pass retries it', async (outcome) => {
+    addBoundUnit('a', 7, { members: ['alice'] })
+    await karenz.filesKarenz.switchOff(ctx)
+    provisionReport = { a: outcome }
+
+    const err = await karenz.filesKarenz.restore(ctx).catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(KarenzPartialError)
+    expect((err as KarenzPartialError).failures).toEqual(['unit a'])
+    expect(itemOf('7:ou-a')?.state).toBe('unlock_failed')
+    expect(ledger.get('a')).toEqual({ status: 'ok', external_id: '7:ou-a' }) // the binding itself is back
+
+    provisionReport = {}
+    await karenz.filesKarenz.restore(ctx)
+    expect(itemOf('7:ou-a')?.state).toBe('restored')
+  })
+
+  it('an item whose unit cannot be read from its payload fails the switch-off step and the restore instead of being skipped', async () => {
+    await store.items.upsert({ kind: 'file_binding', externalId: '5:ou-x', state: 'recorded', payload: { unitId: 42 } })
+
+    const off = await karenz.filesKarenz.switchOff(ctx).catch((e: unknown) => e)
+    expect(off).toBeInstanceOf(KarenzPartialError)
+    expect((off as KarenzPartialError).failures).toEqual(['unit unknown'])
+    expect(itemOf('5:ou-x')?.state).toBe('recorded')
+
+    const back = await karenz.filesKarenz.restore(ctx).catch((e: unknown) => e)
+    expect(back).toBeInstanceOf(KarenzPartialError)
+    expect((back as KarenzPartialError).failures).toEqual(['unit unknown'])
   })
 
   it('finalize deletes nothing in Nextcloud, dry run or not, and leaves the binding released', async () => {

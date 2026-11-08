@@ -90,8 +90,9 @@ async function readState(db: Sql): Promise<SinkState | null> {
 /**
  * The tenant's sink state, creating the folder and the groups on the first publish. The whole creation
  * runs under a database lock keyed on the sink and ends with the state row in the same transaction, so
- * two app instances never create two folders. A crash between the creation of the folder and the state
- * row leaves a stray folder; the next attempt REFUSES it (never adopts it) and says so.
+ * two app instances never create two folders. A failure after the folder was made removes that folder
+ * again (the one this attempt made, by id); a crash between the creation and the state row leaves a
+ * stray folder, and the next attempt REFUSES it (never adopts it) and says so.
  */
 async function ensureState(tenant: TenantContext, nc: NextcloudClient): Promise<SinkState> {
   const known = await readState(tenant.db)
@@ -117,14 +118,27 @@ async function ensureState(tenant: TenantContext, nc: NextcloudClient): Promise<
     await nc.createGroup(writerGroup)
     await nc.addUserToGroup(adminUser(), writerGroup)
     const folder = await nc.createGroupFolder(mount)
-    await nc.assignGroupFolderPermissions(folder.id, readerGroup, PERMISSION_READ)
-    await nc.assignGroupFolderPermissions(folder.id, writerGroup, PERMISSION_WRITE)
-    const inserted = await db<{ external_id: string }[]>`
-      INSERT INTO retained_sink_state (sink, external_id, group_id)
-      VALUES (${SINK_ID}, ${String(folder.id)}, ${readerGroup})
-      ON CONFLICT (sink) DO NOTHING
-      RETURNING external_id`
-    if (inserted.length === 0) throw new RetainedSinkError(`tenant ${tenant.id}: another run recorded the retained folder first; the next attempt uses that one`)
+    try {
+      await nc.assignGroupFolderPermissions(folder.id, readerGroup, PERMISSION_READ)
+      await nc.assignGroupFolderPermissions(folder.id, writerGroup, PERMISSION_WRITE)
+      const inserted = await db<{ external_id: string }[]>`
+        INSERT INTO retained_sink_state (sink, external_id, group_id)
+        VALUES (${SINK_ID}, ${String(folder.id)}, ${readerGroup})
+        ON CONFLICT (sink) DO NOTHING
+        RETURNING external_id`
+      if (inserted.length === 0) throw new RetainedSinkError(`tenant ${tenant.id}: another run recorded the retained folder first; the next attempt uses that one`)
+    } catch (err) {
+      // The folder was made by THIS attempt, a moment ago, and nothing is in it: take it away again, so the
+      // next attempt does not meet a folder without a state row (which it refuses by design). Only the
+      // folder this attempt made, by the id it was given, is ever removed. If this fails too, the stray
+      // folder stays and the next attempt refuses it loudly.
+      try {
+        await nc.deleteGroupFolder(folder.id)
+      } catch (cleanupErr) {
+        console.error(`[karenz/files] the folder made for tenant ${tenant.id} could not be removed after a failed setup:`, cleanupErr)
+      }
+      throw err
+    }
     return { folderId: folder.id, readerGroup }
   })
 }
@@ -134,20 +148,38 @@ async function ensureState(tenant: TenantContext, nc: NextcloudClient): Promise<
  * holders (after giving them a Nextcloud account), remove the former ones. Only this tenant's group is
  * touched. Every operation is tried; a failure of one does not skip the rest, and the sync then fails so
  * the engine retries it.
+ *
+ * Who counts. The role lookup drops people it cannot MAIL (no address) next to people who are disabled.
+ * The first is irrelevant for reading a folder, so a holder without an address stays a reader; a disabled
+ * holder is not one, and is logged. Nextcloud's OCS v1 answers a refused change with HTTP 200, so the group
+ * is read back after the changes and the sync fails if it does not match.
  */
 async function syncReaders(tenant: TenantContext, nc: NextcloudClient, readerGroup: string): Promise<void> {
-  const { holders } = await listRoleHolders(tenant, RETAINED_READER_ROLES) // a Keycloak failure throws: no partial list
-  const desired = new Map(holders.map((hd) => [hd.userId, hd]))
+  const { holders, skipped } = await listRoleHolders(tenant, RETAINED_READER_ROLES) // a Keycloak failure throws: no partial list
+  const desired = new Map<string, { displayName?: string; email?: string }>(
+    holders.map((hd) => [hd.userId, { displayName: hd.displayName, email: hd.email }]),
+  )
+  const disabled: string[] = []
+  for (const s of skipped) {
+    if (s.reason === 'no-email') desired.set(s.userId, {}) // no name and no address: none is invented
+    else disabled.push(s.userId)
+  }
+  if (disabled.length > 0) {
+    console.warn(`[karenz/files] ${disabled.length} disabled role holder(s) of tenant ${tenant.id} are not readers of the retained group: ${disabled.join(', ')}`)
+  }
   const current = new Set(await nc.listGroupMembers(readerGroup))
   const providerId = Number(serviceEnv('NEXTCLOUD_OIDC_PROVIDER_ID') ?? '1')
 
   let failed = 0
-  for (const hd of desired.values()) {
-    if (current.has(hd.userId)) continue
+  const added: string[] = []
+  const removed: string[] = []
+  for (const [userId, details] of desired) {
+    if (current.has(userId)) continue
     try {
       // the group call 404s for a user without a Nextcloud account
-      await nc.provisionOidcUser({ providerId, userId: hd.userId, displayName: hd.displayName, email: hd.email })
-      await nc.addUserToGroup(hd.userId, readerGroup)
+      await nc.provisionOidcUser({ providerId, userId, displayName: details.displayName, email: details.email })
+      await nc.addUserToGroup(userId, readerGroup)
+      added.push(userId)
     } catch (err) {
       failed++
       console.error(`[karenz/files] adding a reader to the retained group of tenant ${tenant.id} failed:`, err)
@@ -157,12 +189,18 @@ async function syncReaders(tenant: TenantContext, nc: NextcloudClient, readerGro
     if (desired.has(userId)) continue
     try {
       await nc.removeUserFromGroup(userId, readerGroup)
+      removed.push(userId)
     } catch (err) {
       failed++
       console.error(`[karenz/files] removing a former reader from the retained group of tenant ${tenant.id} failed:`, err)
     }
   }
   if (failed > 0) throw new RetainedSinkError(`tenant ${tenant.id}: ${failed} membership change(s) of the retained group failed`)
+  if (added.length + removed.length > 0) {
+    const after = new Set(await nc.listGroupMembers(readerGroup))
+    const wrong = added.filter((id) => !after.has(id)).length + removed.filter((id) => after.has(id)).length
+    if (wrong > 0) throw new RetainedSinkError(`tenant ${tenant.id}: ${wrong} membership change(s) of the retained group were not applied by Nextcloud`)
+  }
 }
 
 export const filesRetainedSink: RetainedSink = {

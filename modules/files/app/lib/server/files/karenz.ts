@@ -7,15 +7,26 @@
 // the row and the flag go, the external id is recorded in the Karenz item, and the Nextcloud folder, its
 // group and every file stay untouched (the teardown handed to releaseSubsystem is a no-op). Restore puts
 // the SAME external id back, so the unit is provisioned again by reusing the folder (ensureResource gets
-// it as `existing`). The final day deletes nothing in Nextcloud. This file does not import the
-// Nextcloud client at all: it has no way to delete anything there.
+// it as `existing`). The final day deletes nothing in Nextcloud. The only Nextcloud operations in this
+// file are reading the member list of ONE unit group and removing a person from that group (see
+// "membership" below); it deletes no folder, no group, no account and no file.
+//
+// Membership. While a binding is released the kernel's removal paths (removeMember, the member-op outbox)
+// no longer reach the unit's Nextcloud group, because they key off the ledger row that switch-off removed;
+// a person who leaves the committee in that time stays in the group. Restore therefore brings the group
+// up to date in both directions before it reports the unit restored: the regular provisioning pass adds
+// the people who joined, and a read-back pass removes the people who left (the group is read, the
+// removals are made, the group is read again: an OCS refusal comes as HTTP 200 and would otherwise pass
+// for a success). Named residual: while the binding is released, and after the final day, the group of a
+// unit is frozen; a removal in that period reaches Nextcloud only at a restore.
 //
 // Everything is idempotent (the pass runs again after a crash) and processes ALL units before it fails:
 // a failure is a KarenzPartialError whose labels carry the org unit id only, never a folder or group id
 // or a unit name.
-import { getOrgUnit, listOrgUnits, setSubsystemWanted } from '$lib/server/governance/org-units-db'
+import { getOrgUnit, listOrgUnitMembers, listOrgUnits, setSubsystemWanted } from '$lib/server/governance/org-units-db'
 import { enqueueResources, getResource, markResourceOk } from '$lib/server/governance/provisioning/ledger'
-import { releaseSubsystem } from '$lib/server/governance/provisioning/orchestrator'
+import { withUnitLock } from '$lib/server/governance/provisioning/mutex'
+import { provisionOrgUnit, releaseSubsystem } from '$lib/server/governance/provisioning/orchestrator'
 import { getDb } from '$lib/server/db'
 import { runWithTenant, type TenantContext } from '$lib/server/tenant/context'
 import {
@@ -23,6 +34,7 @@ import {
   type DeletionItem, type KarenzContext, type KarenzParticipant, type RetainedItem,
 } from '$lib/server/module-karenz/participants'
 import type { ItemState, KarenzItemRow } from '$lib/server/module-karenz/store'
+import { createNextcloudClient } from './nextcloud-client'
 
 const BINDING = 'file_binding'
 
@@ -72,6 +84,54 @@ async function trySetState(ctx: KarenzContext, item: KarenzItemRow, state: ItemS
   }
 }
 
+/** The Nextcloud group of a unit: the ledger's external id is "<folderId>:<groupId>". */
+function groupOf(externalId: string): string {
+  const idx = externalId.indexOf(':')
+  if (idx < 0 || idx === externalId.length - 1) throw new Error('the recorded external id has no group part')
+  return externalId.slice(idx + 1)
+}
+
+/** Remove from the unit's Nextcloud group everybody who is not a member of the unit now. Reads the group
+ *  FIRST and the members second: a person added in between is a member in the database before the group
+ *  call is made, so they are never taken for a former member. Removes people from the GROUP only. The group
+ *  is read again afterwards, so a refusal that Nextcloud answers with HTTP 200 is still a failure. */
+async function pruneFormerMembers(unitId: string, externalId: string): Promise<void> {
+  const groupId = groupOf(externalId)
+  const nc = createNextcloudClient()
+  await withUnitLock(unitId, async () => {
+    const current = await nc.listGroupMembers(groupId)
+    const desired = new Set((await listOrgUnitMembers(unitId)).map((m) => m.user_keycloak_id))
+    const former = current.filter((id) => !desired.has(id))
+    if (former.length === 0) return
+    let failed = 0
+    for (const userId of former) {
+      try {
+        await nc.removeUserFromGroup(userId, groupId)
+      } catch (err) {
+        failed++
+        logServerSide('removing a former member from the unit group failed', unitId, err)
+      }
+    }
+    const after = new Set(await nc.listGroupMembers(groupId))
+    const remaining = former.filter((id) => after.has(id)).length
+    if (failed > 0 || remaining > 0) {
+      throw new Error(`${Math.max(failed, remaining)} former member(s) are still in the unit group`)
+    }
+  })
+}
+
+/** Bring the Nextcloud group of a restored unit up to date: joined people in (the regular pass), left
+ *  people out. A pass that did not complete for Nextcloud (failed, or skipped because the module is not
+ *  on yet) fails the unit, and the restore runs again. */
+async function reconcileGroup(unitId: string, externalId: string): Promise<void> {
+  const report = await provisionOrgUnit(unitId)
+  const nextcloud = report.subsystems.find((s) => s.subsystem === 'nextcloud')
+  if (nextcloud?.status !== 'ok') {
+    throw new Error(`the provisioning pass did not complete for Nextcloud (${nextcloud?.status ?? 'missing'})`)
+  }
+  await pruneFormerMembers(unitId, externalId)
+}
+
 async function switchOff(ctx: KarenzContext): Promise<void> {
   // 1. record first (an upsert never undoes what an earlier pass did to the item), so a crash between
   //    the release and the bookkeeping finds the unit again and the external id is never lost.
@@ -93,7 +153,12 @@ async function switchOff(ctx: KarenzContext): Promise<void> {
   for (const item of await ctx.items.list(BINDING)) {
     if (!SWITCH_OFF_PENDING.has(item.state)) continue
     const unitId = unitOf(item)
-    if (unitId === null) continue // not one of ours
+    if (unitId === null) {
+      // every file_binding item is written by this module with its unit: one without is corrupt, and it must not look finished
+      failures.push(unitLabel(null))
+      logServerSide('a binding item has no readable unit', null, new Error(`item ${item.itemId}`))
+      continue
+    }
     try {
       // The teardown is deliberately empty: the folder, its group and its files are not ours to remove.
       // Releasing an already released unit is a no-op (no row, flag already off).
@@ -117,7 +182,11 @@ async function restore(ctx: KarenzContext): Promise<void> {
   for (const item of await ctx.items.list(BINDING)) {
     if (RESTORE_DONE.has(item.state)) continue
     const unitId = unitOf(item)
-    if (unitId === null) continue
+    if (unitId === null) {
+      failures.push(unitLabel(null))
+      logServerSide('a binding item has no readable unit', null, new Error(`item ${item.itemId}`))
+      continue
+    }
     try {
       if ((await getOrgUnit(unitId)) === null) {
         // the unit was deleted meanwhile: nothing to bind, and the item is a fact, not a failure
@@ -142,6 +211,9 @@ async function restore(ctx: KarenzContext): Promise<void> {
           if (bound) await markResourceOk(unitId, 'nextcloud', item.externalId, tx)
         })
       }
+      // Also for a unit that was attached by an earlier, interrupted pass: the group is brought up to date
+      // before the item is marked restored. A unit that had no folder yet has no group; the worker makes both.
+      if (bound) await reconcileGroup(unitId, item.externalId)
       if (!(await trySetState(ctx, item, 'restored'))) failures.push(unitLabel(unitId))
     } catch (err) {
       failures.push(unitLabel(unitId))

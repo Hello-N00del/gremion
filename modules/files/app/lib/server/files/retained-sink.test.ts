@@ -19,6 +19,7 @@ const h = vi.hoisted(() => ({
   holders: {} as Record<string, Array<{ userId: string; email: string; displayName: string; roles: string[] }>>,
   holderRoles: [] as unknown[],
   holderFailure: { value: false },
+  skipped: {} as Record<string, Array<{ userId: string; reason: 'disabled' | 'no-email' }>>,
 }))
 vi.mock('$lib/server/config', () => ({
   readConfig: () => ({ modules: h.filesOn.value === undefined ? {} : { files: h.filesOn.value } }),
@@ -27,7 +28,7 @@ vi.mock('$lib/server/governance/role-holders', () => ({
   listRoleHolders: async (tenant: { id: string }, roles: readonly string[]) => {
     h.holderRoles.push([...roles])
     if (h.holderFailure.value) throw new Error('keycloak down')
-    return { holders: h.holders[tenant.id] ?? [], skipped: [] }
+    return { holders: h.holders[tenant.id] ?? [], skipped: h.skipped[tenant.id] ?? [] }
   },
 }))
 
@@ -43,6 +44,8 @@ class FakeNextcloud {
   files = new Map<string, string>() // `${folderId}/${filename}`
   requests: Array<{ method: string; path: string; body: string }> = []
   failures: Array<{ match: (method: string, path: string) => boolean; once: boolean }> = []
+  /** Users for whom OCS v1 answers a membership change with HTTP 200 and a failure envelope, the group unchanged. */
+  membershipRefusals = new Set<string>()
   private nextFolder = 100
 
   count(method: string, pathPart: string): number {
@@ -86,6 +89,7 @@ class FakeNextcloud {
       const user = decodeURIComponent(m[1]!)
       const gid = form('groupid')
       if (!this.users.has(user) || !this.groups.has(gid)) return new Response('not found', { status: 404 })
+      if (this.membershipRefusals.has(user)) return ocs([], 103)
       if (method === 'POST') this.groups.get(gid)!.add(user)
       else if (method === 'DELETE') this.groups.get(gid)!.delete(user)
       return ocs([])
@@ -103,6 +107,10 @@ class FakeNextcloud {
         this.folders.set(id, { mount: form('mountpoint'), groups: new Map() })
         return ocs({ id, mount_point: form('mountpoint') })
       }
+    }
+    if ((m = /^\/index\.php\/apps\/groupfolders\/folders\/(\d+)$/.exec(url.pathname)) && method === 'DELETE') {
+      this.folders.delete(Number(m[1]))
+      return ocs([])
     }
     if ((m = /^\/index\.php\/apps\/groupfolders\/folders\/(\d+)\/groups$/.exec(url.pathname)) && method === 'POST') {
       const folder = this.folders.get(Number(m[1]))
@@ -189,6 +197,7 @@ describe('filesRetainedSink', () => {
     h.holders = {}
     h.holderRoles = []
     h.holderFailure.value = false
+    h.skipped = {}
     sink = await import('./retained-sink')
   })
 
@@ -388,18 +397,93 @@ describe('filesRetainedSink', () => {
     expect(nc.files.size).toBe(1)
   })
 
-  it('a failure while creating the folder leaves no state row, and the next attempt refuses the stray folder instead of adopting it', async () => {
+  const failGrant = { match: (method: string, path: string) => method === 'POST' && path.includes('/groupfolders/folders/') && path.endsWith('/groups'), once: true }
+
+  it('a failure after the folder was created removes the folder it just made, so the next attempt converges on one folder instead of refusing a stray one', async () => {
     const t = makeTenant('tenant-a')
-    nc.failures.push({ match: (method, path) => method === 'POST' && path.includes('/groupfolders/folders/') && path.endsWith('/groups'), once: true })
+    h.holders['tenant-a'] = [holder('u1')]
+    nc.failures.push({ ...failGrant })
 
     await expect(publish(t, 'r1', 'a.ndjson', '1\n')).rejects.toThrow(/500/)
     expect(t.state().size).toBe(0)
-    expect(nc.folders.size).toBe(1) // created, not yet granted
+    expect(nc.folders.size).toBe(0) // the folder this attempt created, and only that one, is gone again
+
+    await publish(t, 'r1', 'a.ndjson', '1\n')
+    expect(nc.folders.size).toBe(1)
+    expect(nc.files.size).toBe(1)
+    expect(t.state().get('files')).toBeDefined()
+  })
+
+  it('the clean-up removes only the folder this attempt created, never one that was already there', async () => {
+    const t = makeTenant('tenant-a')
+    nc.folders.set(7, { mount: 'Aufbewahrung-other', groups: new Map([['somebody-else', 31]]) })
+    nc.failures.push({ ...failGrant })
+
+    await expect(publish(t, 'r1', 'a.ndjson', '1\n')).rejects.toThrow(/500/)
+    expect([...nc.folders.keys()]).toEqual([7])
+  })
+
+  it('if the clean-up itself fails, the stray folder stays and the next attempt refuses it instead of adopting it', async () => {
+    const t = makeTenant('tenant-a')
+    nc.failures.push({ ...failGrant })
+    nc.failures.push({ match: (method) => method === 'DELETE', once: true })
+
+    await expect(publish(t, 'r1', 'a.ndjson', '1\n')).rejects.toThrow(/500/)
+    expect(t.state().size).toBe(0)
+    expect(nc.folders.size).toBe(1) // created, not granted, not removed
 
     const err = await publish(t, 'r1', 'a.ndjson', '1\n').catch((e: unknown) => e)
     expect(err).toBeInstanceOf(sink.RetainedSinkError)
+    expect((err as Error).message).toMatch(/not adopted/)
     expect(nc.folders.size).toBe(1)
     expect(nc.files.size).toBe(0)
+  })
+
+  it('a role holder without an e-mail address is a reader like any other: added if missing, kept if present', async () => {
+    const t = makeTenant('tenant-a')
+    h.holders['tenant-a'] = [holder('u1')]
+    h.skipped['tenant-a'] = [{ userId: 'noemail', reason: 'no-email' }]
+    await publish(t, 'r1', 'a.ndjson', '1\n')
+    expect([...nc.groups.get('gremion-retained-tenant-a')!].sort()).toEqual(['noemail', 'u1'])
+    // the account is made without inventing a name or an address
+    const provision = nc.requests.filter((r) => r.path.includes('/user_oidc/api/v1/user')).map((r) => JSON.parse(r.body) as Record<string, unknown>)
+    expect(provision.find((p) => p.userId === 'noemail')).toEqual({ providerId: 3, userId: 'noemail' })
+
+    await publish(t, 'r1', 'a.ndjson', '2\n') // the next sync does not remove them again
+    expect([...nc.groups.get('gremion-retained-tenant-a')!].sort()).toEqual(['noemail', 'u1'])
+  })
+
+  it("a disabled role holder is removed from the readers' group, and the exclusion is logged", async () => {
+    const t = makeTenant('tenant-a')
+    h.holders['tenant-a'] = [holder('u1'), holder('u2')]
+    await publish(t, 'r1', 'a.ndjson', '1\n')
+    h.holders['tenant-a'] = [holder('u1')]
+    h.skipped['tenant-a'] = [{ userId: 'u2', reason: 'disabled' }]
+    vi.mocked(console.warn).mockClear()
+
+    await publish(t, 'r1', 'a.ndjson', '2\n')
+
+    expect([...nc.groups.get('gremion-retained-tenant-a')!]).toEqual(['u1'])
+    expect(vi.mocked(console.warn).mock.calls.flat().join(' ')).toMatch(/disabled/)
+  })
+
+  it('a membership change that Nextcloud refuses with HTTP 200 and a failure envelope fails the publish before the upload', async () => {
+    const t = makeTenant('tenant-a')
+    h.holders['tenant-a'] = [holder('u1'), holder('u2')]
+    await publish(t, 'r1', 'a.ndjson', '1\n')
+
+    // u1 lost the role, u3 gained it; Nextcloud refuses both changes without an HTTP error
+    h.holders['tenant-a'] = [holder('u2'), holder('u3')]
+    nc.membershipRefusals = new Set(['u1', 'u3'])
+    const err = await publish(t, 'r1', 'a.ndjson', '2\n').catch((e: unknown) => e)
+
+    expect(err).toBeInstanceOf(sink.RetainedSinkError)
+    expect((err as Error).message).toMatch(/membership/)
+    expect([...nc.files.values()]).toEqual(['1\n']) // the new document was not uploaded to an audience that is not in sync
+    nc.membershipRefusals = new Set()
+    await publish(t, 'r1', 'a.ndjson', '2\n') // and the retry converges
+    expect([...nc.groups.get('gremion-retained-tenant-a')!].sort()).toEqual(['u2', 'u3'])
+    expect([...nc.files.values()]).toEqual(['2\n'])
   })
 
   it('refuses a tenant id that cannot be part of a Nextcloud name, before any request', async () => {
