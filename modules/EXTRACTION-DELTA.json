@@ -823,9 +823,9 @@
     },
     {
       "path": "modules/files/app/lib/server/files/nextcloud-client.ts",
-      "reason": "TASK-205a: Nextcloud endpoint through serviceEnv (the deleted default-tenant env reader)",
+      "reason": "TASK-205a: Nextcloud endpoint through serviceEnv (the deleted default-tenant env reader); Karenz p2 t16: listGroupMembers for the retained sink membership sync",
       "owner": "TASK-205",
-      "blob": "69ffb32d3a76e6fd1d6d4dffdb0b9b40604f9fae"
+      "blob": "26fa3e6d114cd3e83f158464e05f3c1a9c500844"
     },
     {
       "path": "modules/files/app/lib/server/files/protocol-documents.ts",
@@ -835,9 +835,9 @@
     },
     {
       "path": "modules/files/app/lib/server/files/register.server.ts",
-      "reason": "TASK-205a: NEXTCLOUD_OIDC_PROVIDER_ID through serviceEnv (the deleted default-tenant env reader)",
+      "reason": "TASK-205a: NEXTCLOUD_OIDC_PROVIDER_ID through serviceEnv (the deleted default-tenant env reader); Karenz p2 t16: registers the files Karenz participant, its retains-nothing declaration and the files retained sink",
       "owner": "TASK-205",
-      "blob": "a759bf4cdf65249f5cecd1aa114ce1c606f44ce8"
+      "blob": "264d160be5ec9295b78b587dd13d1551a25702be"
     },
     {
       "path": "modules/files/app/routes/api/files/upload-chunk/upload-chunk.test.ts",
@@ -2284,6 +2284,42 @@
       "reason": "Karenz p2 t14: asserts the new registrations",
       "owner": "TASK-205",
       "blob": "22127ff74b34cc1b60544e74b731beb2d1d3418d"
+    },
+    {
+      "path": "modules/files/app/lib/server/files/nextcloud-client.test.ts",
+      "reason": "Karenz p2 t16: tests of listGroupMembers",
+      "owner": "TASK-205",
+      "blob": "873b99dc3ebd031d88e3c7e5222f4dd57f7c34af"
+    },
+    {
+      "path": "modules/files/app/lib/server/files/register.server.test.ts",
+      "reason": "Karenz p2 t16: asserts the participant, declaration and sink registrations",
+      "owner": "TASK-205",
+      "blob": "420de53389d1fe75f4566afe1e909d1dac898805"
+    },
+    {
+      "path": "modules/files/app/lib/server/files/karenz.ts",
+      "reason": "Karenz p2 t16: the files Karenz participant (release only the Nextcloud binding, restore the same folder, delete nothing on the final day); new kernel-side file with no counterpart at the tag",
+      "owner": "TASK-205",
+      "blob": "d3d3ea3fd978cf3d34eb629e4c52e76d5d0a5e22"
+    },
+    {
+      "path": "modules/files/app/lib/server/files/karenz.test.ts",
+      "reason": "Karenz p2 t16: tests of the files Karenz participant against a stateful ledger and a recording fetch; new kernel-side file with no counterpart at the tag",
+      "owner": "TASK-205",
+      "blob": "c223a750d2b594711e7757016cb596c766f4e8d7"
+    },
+    {
+      "path": "modules/files/app/lib/server/files/retained-sink.ts",
+      "reason": "Karenz p2 t16: the files retained sink (per-tenant group folder and groups, never adopted by name); new kernel-side file with no counterpart at the tag",
+      "owner": "TASK-205",
+      "blob": "aa8cdd52dde6db75c46d85c79d800c476b241e8e"
+    },
+    {
+      "path": "modules/files/app/lib/server/files/retained-sink.test.ts",
+      "reason": "Karenz p2 t16: tests of the files retained sink incl. the two-tenant case against one shared Nextcloud fake; new kernel-side file with no counterpart at the tag",
+      "owner": "TASK-205",
+      "blob": "5155f72c19c420bb085d9b4c52234638b6b91f65"
     }
   ]
 }

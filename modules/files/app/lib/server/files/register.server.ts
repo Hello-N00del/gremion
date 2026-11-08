@@ -14,6 +14,10 @@ import { createNextcloudClient } from './nextcloud-client'
 import { createNextcloudSubsystem } from './provisioning/nextcloud-subsystem'
 import { protocolDocumentPort } from './protocol-documents'
 import { filesErasureHook } from './erasure'
+import { registerKarenzParticipant } from '$lib/server/module-karenz/participants'
+import { registerNoRetention, registerRetainedSink } from '$lib/server/module-karenz/retained/extractors'
+import { filesKarenz } from './karenz'
+import { filesRetainedSink } from './retained-sink'
 
 // The Nextcloud provisioning adapter. The factory captures the files module's
 // own Nextcloud client + the user_oidc provider id; the governance orchestrator
@@ -40,3 +44,17 @@ registerSetupHealthProbe({
 
 // TRD-196: the files module's data-subject erasure step (the Nextcloud account).
 registerErasureHook(filesErasureHook)
+
+// Module Karenz (phase 2, Task 16): a switch-off of the files module releases only the Gremion binding
+// of each org unit (never a folder or a file), and restores the same folders on a switch-on. The kernel's
+// per-tenant pass drives the participant.
+registerKarenzParticipant(filesKarenz)
+
+// The files module retains no records of its own: the files themselves are never deleted. Declared
+// explicitly, because a catalogue id with neither an extractor nor this declaration fails its retained
+// step (and with it the final deletion) as a missing registration.
+registerNoRetention('files')
+
+// Module Karenz (phase 2, Task 16): the per-tenant, read-only folder in which the retained copies of the
+// OTHER modules are published for the people who may read them (while the files module is on).
+registerRetainedSink(filesRetainedSink)
