@@ -1537,9 +1537,9 @@
     },
     {
       "path": "modules/messaging/app/lib/server/messages/admin/room-admin.ts",
-      "reason": "TASK-205b: service endpoints through serviceEnv (the deleted default-tenant env reader)",
+      "reason": "TASK-205b: service endpoints through serviceEnv (the deleted default-tenant env reader); Module Karenz Task 15: archive marker keeps the prior power levels, unarchiveRoom, getRoomArchiveMarker reads an unarchived marker as not archived; the power-level helpers moved to admin/archive-power-levels.ts",
       "owner": "TASK-205",
-      "blob": "d77f999f07c134d63b2575aecc4828fbe7ab4465"
+      "blob": "22a92b4846d79df7a69b0d73c81cda5ba241a930"
     },
     {
       "path": "modules/messaging/app/lib/server/messages/matrix-creds.ts",
@@ -1549,9 +1549,9 @@
     },
     {
       "path": "modules/messaging/app/lib/server/messages/register.server.ts",
-      "reason": "TASK-205b: service endpoints through serviceEnv (the deleted default-tenant env reader)",
+      "reason": "TASK-205b: service endpoints through serviceEnv (the deleted default-tenant env reader); Module Karenz Task 15: registers the messaging Karenz participant",
       "owner": "TASK-205",
-      "blob": "6ad5867a7b5a0278a4b1fb29d24d3644fb48add0"
+      "blob": "0e624ca5eba392361504354275a1b4dfc73a49b4"
     },
     {
       "path": "modules/messaging/app/routes/api/messages/rooms/[roomId]/typing/+server.ts",
@@ -1615,9 +1615,9 @@
     },
     {
       "path": "modules/messaging/app/lib/server/messages/admin/room-admin.test.ts",
-      "reason": "TASK-205b: the suite feeds the serviceEnv seam from its $env/dynamic/private mock",
+      "reason": "TASK-205b: the suite feeds the serviceEnv seam from its $env/dynamic/private mock; Module Karenz Task 15: prior power levels, unarchiveRoom and the unarchived marker",
       "owner": "TASK-205",
-      "blob": "cae0de83cbea39af44d0a2706e0bbeec8109d628"
+      "blob": "b241a7bee49e9ab1065debb275d81a6488f9060c"
     },
     {
       "path": "modules/messaging/app/lib/server/messages/matrix-client.test.ts",
@@ -1633,9 +1633,9 @@
     },
     {
       "path": "modules/messaging/app/lib/server/messages/register.server.test.ts",
-      "reason": "TASK-205b: comment names serviceEnv, not the deleted default-tenant env reader",
+      "reason": "TASK-205b: comment names serviceEnv, not the deleted default-tenant env reader; Module Karenz Task 15: pins the participant registration",
       "owner": "TASK-205",
-      "blob": "db9340e33ff0d4e4036c4384e5e819248cfec347"
+      "blob": "f27364393d5438ee614832dd4f2615f8f20989d6"
     },
     {
       "path": "modules/messaging/app/routes/api/video/meeting-room/+server.ts",
@@ -2188,6 +2188,24 @@
       "reason": "added in the kernel after f2: TASK-058-A-rest pins the elections.notice.* catalogue text to notice.ts",
       "owner": "TASK-058",
       "blob": "fbf8be49c1e9c823a2ee7446032d7b2dcd5e8ac5"
+    },
+    {
+      "path": "modules/messaging/app/lib/server/messages/karenz.ts",
+      "reason": "Module Karenz phase 2 Task 15: the messaging Karenz participant (archive rooms at switch-off, unarchive on restore, delete on the final day); new kernel-side file with no counterpart at the tag",
+      "owner": "TASK-205",
+      "blob": "e95caedc4ab775276c27ac63affb5ce145a2ae15"
+    },
+    {
+      "path": "modules/messaging/app/lib/server/messages/karenz.test.ts",
+      "reason": "Module Karenz phase 2 Task 15: tests of the messaging Karenz participant against an in-memory homeserver; new kernel-side file with no counterpart at the tag",
+      "owner": "TASK-205",
+      "blob": "93450fa18ce056effb7765df51a348808270df18"
+    },
+    {
+      "path": "modules/messaging/app/lib/server/messages/admin/archive-power-levels.ts",
+      "reason": "Module Karenz phase 2 Task 15: the archive/restore power-level helpers split out of room-admin.ts (file size cap); new kernel-side file with no counterpart at the tag",
+      "owner": "TASK-205",
+      "blob": "04f04e949d0082a7d4b6dd166eb541110d4fa8f4"
     }
   ]
 }
