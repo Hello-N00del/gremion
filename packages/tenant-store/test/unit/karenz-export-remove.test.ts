@@ -30,13 +30,22 @@ function recording(tenantId: string): StorageBackend & { deleted: string[] } {
   }
 }
 
+/** A storage factory that remembers every backend it handed out. */
+function recordingFactory(seen: ReturnType<typeof recording>[]): (tenantId: string) => ReturnType<typeof recording> {
+  return (t) => {
+    const r = recording(t)
+    seen.push(r)
+    return r
+  }
+}
+
 describe('removeKarenzExport', () => {
   const dir = '/exports'
   const path = join(dir, T, 'lcfix', '20261031T000000000Z.dump')
 
   it('deletes the dump and its sidecar through the injected storage, by tenant-prefixed handle', async () => {
     const seen: ReturnType<typeof recording>[] = []
-    await removeKarenzExport(path, { exportDir: dir, exportStorage: (t) => (seen.push(recording(t)), seen[seen.length - 1]!) }, T, 'lcfix')
+    await removeKarenzExport(path, { exportDir: dir, exportStorage: recordingFactory(seen) }, T, 'lcfix')
     expect(seen).toHaveLength(1)
     expect(seen[0]!.tenantId).toBe(T)
     expect(seen[0]!.deleted).toEqual([`${T}/lcfix/20261031T000000000Z.dump`, `${T}/lcfix/20261031T000000000Z.dump.sha256`])
@@ -44,7 +53,7 @@ describe('removeKarenzExport', () => {
 
   it('deletes the handle of the VALIDATED path, not of the raw string (a trailing dot segment must not change what is deleted)', async () => {
     const seen: ReturnType<typeof recording>[] = []
-    await removeKarenzExport(`${path}/.`, { exportDir: dir, exportStorage: (t) => (seen.push(recording(t)), seen[seen.length - 1]!) }, T, 'lcfix')
+    await removeKarenzExport(`${path}/.`, { exportDir: dir, exportStorage: recordingFactory(seen) }, T, 'lcfix')
     expect(seen[0]!.deleted).toEqual([`${T}/lcfix/20261031T000000000Z.dump`, `${T}/lcfix/20261031T000000000Z.dump.sha256`])
   })
 
@@ -65,6 +74,28 @@ describe('removeKarenzExport', () => {
   it('a missing dump is success (the day-30 job converges after a crash between delete and the row update)', async () => {
     const mem = new MemoryStorageBackend(T, new Map())
     await expect(removeKarenzExport(path, { exportDir: dir, exportStorage: () => mem }, T, 'lcfix')).resolves.toBeUndefined()
+  })
+})
+
+describe('removeKarenzExport: one root', () => {
+  it('refuses a storage whose root is not the export directory the path was checked against, before anything is deleted', async () => {
+    const real = mkdtempSync(join(tmpdir(), 'karenz one root '))
+    const elsewhere = mkdtempSync(join(tmpdir(), 'karenz other root '))
+    try {
+      const mountinfo = join(real, 'mountinfo')
+      writeFileSync(mountinfo, mountinfoLine(elsewhere))
+      const d = join(real, T, 'lcfix')
+      mkdirSync(d, { recursive: true })
+      writeFileSync(join(d, 'a.dump'), 'x')
+      // the path is checked against `real`, the storage is rooted at `elsewhere`: a delete through it would
+      // resolve as success (a missing object) while the dump under `real` stays
+      const exportStorage = (t: string) => new LocalStorageBackend(t, { root: elsewhere, mountinfoPath: mountinfo, platform: 'linux' })
+      await expect(removeKarenzExport(join(d, 'a.dump'), { exportDir: real, exportStorage }, T, 'lcfix')).rejects.toMatchObject({ code: 'TARGET_REFUSED' })
+      expect(existsSync(join(d, 'a.dump'))).toBe(true)
+    } finally {
+      rmSync(real, { recursive: true, force: true })
+      rmSync(elsewhere, { recursive: true, force: true })
+    }
   })
 })
 

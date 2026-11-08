@@ -16,7 +16,7 @@
 // Nothing here trusts a council report to delete: the clock and the blocked state
 // are platform columns only (Open Decision 8).
 import { createHash } from 'node:crypto'
-import { createReadStream, existsSync, readdirSync } from 'node:fs'
+import { createReadStream, existsSync, lstatSync, readdirSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import type { Sql } from '@gremion/db'
 import { tenantModuleDbName } from '../names.js'
@@ -74,7 +74,7 @@ export interface FinalizeResult {
   orphanedExports: string[]
 }
 
-interface DueRow {
+export interface DueRow {
   karenz_id: string
   customer_id: string
   module_id: string
@@ -272,11 +272,25 @@ async function finalizeRow(
 }
 
 /** Re-reads the row's own export and refuses unless the file is there and its sha256 is the recorded one. */
-async function verifyRowExport(exportDir: string, r: DueRow): Promise<void> {
+export async function verifyRowExport(exportDir: string, r: DueRow): Promise<void> {
   if (r.export_path === null || r.export_sha256 === null) {
     throw new LifecycleError('EXPORT_MISSING', `Karenz ${r.karenz_id} records no export of its own; refusing to drop the database`)
   }
   const path = assertKarenzExportPath(r.export_path, exportDir, r.customer_id, r.module_key)
+  // The day-30 delete goes through the storage seam, which refuses a link anywhere from <exportDir>/<tenant> down
+  // to the file. Refuse the same here, BEFORE the database is dropped: otherwise the drop would succeed, the
+  // delete would be refused and the row would sit in `finalizing` with its database gone.
+  for (const part of [join(exportDir, r.customer_id), join(exportDir, r.customer_id, r.module_key), path]) {
+    let isLink = false
+    try {
+      isLink = lstatSync(part).isSymbolicLink()
+    } catch {
+      // a missing component is reported just below as a missing export
+    }
+    if (isLink) {
+      throw new LifecycleError('TARGET_REFUSED', `the export path ${path} of Karenz ${r.karenz_id} passes through a link (${part}); refusing to drop the database`)
+    }
+  }
   if (!existsSync(path)) {
     throw new LifecycleError('EXPORT_MISSING', `the export ${path} of Karenz ${r.karenz_id} is missing; refusing to drop the database`)
   }

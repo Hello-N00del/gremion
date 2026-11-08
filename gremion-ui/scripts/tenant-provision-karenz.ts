@@ -23,7 +23,7 @@
 import type postgres from 'postgres'
 import { finalDeletionEnabled, type FinalizeResult } from '@gremion/tenant-store/lifecycle'
 import type { ProvisioningDeps } from '@gremion/provisioning'
-import { exportDirIsMounted } from './tenant-provision-gate'
+import { exportDirRefusal } from './tenant-provision-gate'
 
 export const KARENZ_VERBS: ReadonlySet<string> = new Set(['karenz-run', 'karenz-status'])
 
@@ -59,9 +59,9 @@ async function cmdKarenzRun(ctx: KarenzVerbContext): Promise<void> {
     // a live run deletes the exports of finished Karenz rows, and drops databases only against an export
     // that outlives this one-shot container: the same refusal as disable-module, before anything is touched
     const dir = env.TENANT_EXPORT_DIR ?? ''
-    const mounted = ctx.exportDirMounted ?? exportDirIsMounted
-    if (!dir || !mounted(dir)) {
-      throw ctx.usage(`karenz-run with KARENZ_FINAL_DELETION=on needs TENANT_EXPORT_DIR (${dir || 'unset'}) to be a mounted volume that outlives this container; nothing was touched`)
+    const refusal = exportDirRefusal(dir, ctx.exportDirMounted)
+    if (refusal !== null) {
+      throw ctx.usage(`karenz-run with KARENZ_FINAL_DELETION=on needs TENANT_EXPORT_DIR (${dir || 'unset'}) to be a mounted volume that outlives this container; nothing was touched (${refusal})`)
     }
   }
   const r: FinalizeResult = await ctx.withLive({}, async (deps) => {

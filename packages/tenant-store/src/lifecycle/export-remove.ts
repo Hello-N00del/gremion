@@ -10,7 +10,7 @@
 // between the delete and the row update.
 import { basename, resolve } from 'node:path'
 import { LocalStorageBackend, type StorageBackend } from '@gremion/storage'
-import { assertKarenzExportPath } from './guards.js'
+import { assertKarenzExportPath, LifecycleError } from './guards.js'
 
 /** The tenant-bound storage over the export volume. */
 export type ExportStorageFactory = (tenantId: string) => StorageBackend
@@ -26,7 +26,17 @@ export interface ExportRemoveDeps {
 }
 
 export function exportStorageFor(deps: ExportRemoveDeps, tenantId: string): StorageBackend {
-  return deps.exportStorage ? deps.exportStorage(tenantId) : new LocalStorageBackend(tenantId, { root: deps.exportDir })
+  if (!deps.exportStorage) return new LocalStorageBackend(tenantId, { root: deps.exportDir })
+  const storage = deps.exportStorage(tenantId)
+  // One source of truth for where the exports live: the path is checked against exportDir, the delete goes
+  // through the injected storage, and a missing object is success. A storage rooted elsewhere would therefore
+  // answer every delete with success while the dump stays on disk. A backend that exposes its root must
+  // agree with exportDir (one that has none, such as the in-memory one, has nothing to compare).
+  const root = (storage as { root?: unknown }).root
+  if (typeof root === 'string' && resolve(root) !== resolve(deps.exportDir)) {
+    throw new LifecycleError('TARGET_REFUSED', `the export storage is rooted at ${JSON.stringify(root)}, not at the export directory ${JSON.stringify(deps.exportDir)}; refusing to delete through it`)
+  }
+  return storage
 }
 
 /**
