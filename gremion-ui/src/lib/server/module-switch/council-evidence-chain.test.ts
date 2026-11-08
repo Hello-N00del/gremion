@@ -79,6 +79,8 @@ describe('a council module switch: the submit side and the executor side agree o
     h.getCouncilDb.mockReturnValue((strings: TemplateStringsArray, ...values: unknown[]) => {
       const text = strings.join('?')
       if (text.includes('council_module_state')) return Promise.resolve(state)
+      // Karenz phase 2: the service reads the module's live Karenz rows before it queues a switch (none here)
+      if (text.includes('council_karenz_list')) return Promise.resolve([])
       if (text.includes('submit_council_module_request')) {
         submitted = values
         return Promise.resolve([{ request_id: REQUEST }])

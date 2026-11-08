@@ -51,4 +51,15 @@ describe('ModuleSwitchNotice.svelte', () => {
     const { container } = render(ModuleSwitchNotice, { props: { ...base, state: 'applied', mailLine: 'Info-Mail verschickt.' } })
     expect(container.textContent).toContain('Info-Mail verschickt.')
   })
+
+  it('shows a mailAlert in role=alert when a caller supplies one, next to the switched notice', () => {
+    render(ModuleSwitchNotice, { props: { ...base, action: 'disable', state: 'applied', mailAlert: 'Die Info-Mail konnte noch nicht zugestellt werden.' } })
+    expect(screen.getByRole('alert').textContent).toContain('Die Info-Mail konnte noch nicht zugestellt werden.')
+    expect(screen.getByRole('status').textContent).toContain('ausgeschaltet')
+  })
+
+  it('shows no mailAlert unless one is given', () => {
+    render(ModuleSwitchNotice, { props: { ...base, state: 'applied' } })
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
 })

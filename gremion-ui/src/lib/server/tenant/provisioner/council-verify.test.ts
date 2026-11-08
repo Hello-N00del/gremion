@@ -217,9 +217,9 @@ describe('verifyCouncilRequest: the kind and the module come first', () => {
     },
   )
 
-  it('a council disable_module row is refused DISABLE_NOT_YET before any token is read (Review Focus 8)', async () => {
+  it('with the switch off (injected false) a council disable_module row is refused DISABLE_NOT_YET before any token is read (Review Focus 8)', async () => {
     const evidence = vi.fn(verifyRequestEvidence)
-    const s = setup({}, { deps: { verifyEvidence: evidence } })
+    const s = setup({}, { deps: { verifyEvidence: evidence, councilDisableAllowed: false } })
     const v = await verifyCouncilRequest(await row({ kind: 'disable_module', args: { slug: 'musterstadt', module: 'votes' } }), s.ctx, s.deps)
     expect(v).toMatchObject({ verdict: 'refused', reason: expect.stringMatching(/^DISABLE_NOT_YET/) })
     expect(evidence).not.toHaveBeenCalled()

@@ -7,26 +7,37 @@
 // realm and runs the unchanged enable_module handler. Nothing here edits config.modules: the reconciler
 // (Task 13) applies the result once the request has succeeded.
 //
-// Switch-OFF is built (confirmation phrase, preview contract, branch) but unreachable: while
-// COUNCIL_DISABLE_ALLOWED is false (phase 1) every council `disable` is refused DISABLE_NOT_YET before the
-// platform is asked, because today's disableModule exports and then drops the module database at once.
-// Phase 2 flips the one constant in @gremion/provisioning.
+// Switch-OFF is reachable since the 30-day Karenz exists (phase 2, Task 17): COUNCIL_DISABLE_ALLOWED in
+// @gremion/provisioning is true, and a disable blocks the module database instead of dropping it. A caller
+// or a test may still inject `disableAllowed: false` to get the phase 1 refusal DISABLE_NOT_YET back.
+//
+// The Karenz row of the module (plt.council_karenz_list, the platform clock) decides two more things:
+//   - an enable while the row is `finalizing` is refused KARENZ_FINALIZING: the day-30 job is deleting, a
+//     switch-on must never half restore;
+//   - an enable while the row is `open` IS the restore (the same enable_module request), and the DPIA
+//     decision was recorded when the module was first switched on, so no new input is asked for;
+//   - a disable while the row is `restoring` is refused RESTORE_PENDING: locked items must not be adopted by
+//     a second Karenz before the first restore is finished.
 //
 // Guard order: role, step-up, input shape, disable flag, deny by name, build exclusion, switchable set,
-// shipped, no-op, confirmation phrase (disable), DPIA decision (enable), then the platform submit, the
-// tenant-side record and the audit entry.
+// shipped, Karenz state (finalizing, restoring), no-op, confirmation phrase (disable), module switch-off
+// guard (disable), DPIA decision (enable, not for a restore), then the platform submit, the tenant-side
+// record and the audit entry.
 import { randomUUID } from 'node:crypto'
 import { COUNCIL_DISABLE_ALLOWED } from '@gremion/provisioning'
 import { hasRole, Role } from '$lib/auth'
 import type { SessionUser } from '$lib/auth/types'
 import { evaluateStepUp } from '$lib/auth/step-up'
 import { confirmationMatches, manifestIdOf, SWITCHABLE_CATALOGUE_IDS, TOGGLEABLE_PAIRS } from '$lib/modules/catalogue-map'
-import type { ModuleOverview, ModuleOverviewItem } from '$lib/modules/switch-preview'
+import type { KarenzView, ModuleOverview, ModuleOverviewItem } from '$lib/modules/switch-preview'
 import { writeAuditEntry } from '$lib/server/audit-db'
 import { readConfig } from '$lib/server/config'
+import { listKarenz as realListKarenz, type KarenzRowView } from '$lib/server/module-karenz/platform'
 import type { TenantContext } from '$lib/server/tenant/context'
 import { encodeEvidence, EVIDENCE_SKEW_SECONDS, EVIDENCE_WINDOW_SECONDS, idTokenSignInTime } from '$lib/server/tenant/provisioner/request-verify'
 import { CouncilNotConfigured, getCouncilDb } from './council-db'
+import { switchOffBlockedReason } from './guards'
+import { buildKarenzView, type KarenzViewDeps } from './karenz-view'
 import { insertSwitch, listSwitches, type SwitchRow } from './store'
 import { MODULE_SWITCH_REQUIRED_LOA, moduleSwitchStepUpFreshnessSeconds } from './step-up'
 
@@ -59,8 +70,10 @@ export interface SwitchContext {
 }
 
 export interface SwitchDeps {
-  /** Defaults to COUNCIL_DISABLE_ALLOWED (false in phase 1). */
+  /** Defaults to COUNCIL_DISABLE_ALLOWED (true since the Karenz, phase 2). */
   disableAllowed?: boolean
+  /** The live Karenz rows of the customer; defaults to the platform list (plt.council_karenz_list). */
+  listKarenz?: (customerId: string) => Promise<KarenzRowView[]>
   /** Ids from modules/disabled.json when the caller knows them (the executor re-checks against the file). */
   disabledIds?: readonly string[]
   /** Clock and key sources, injectable for tests. */
@@ -110,6 +123,18 @@ async function readState(platform: Platform, tenant: TenantContext): Promise<Map
   return new Map(rows.map((r) => [r.module_key, r]))
 }
 
+const LIVE_KARENZ = new Set<KarenzRowView['state']>(['open', 'restoring', 'finalizing'])
+
+/** The newest live Karenz row (open, restoring, finalizing) of one catalogue id, or undefined. */
+function liveKarenzOf(rows: readonly KarenzRowView[], catalogueId: string): KarenzRowView | undefined {
+  let newest: KarenzRowView | undefined
+  for (const r of rows) {
+    if (r.catalogueId !== catalogueId || !LIVE_KARENZ.has(r.state)) continue
+    if (!newest || r.switchedOffAt.getTime() > newest.switchedOffAt.getTime()) newest = r
+  }
+  return newest
+}
+
 /** The value config.modules holds for a manifest id: absent reads as on (every toggleable manifest defaults to true). */
 function configOn(modules: Record<string, boolean> | undefined, manifestId: string): boolean {
   return modules?.[manifestId] !== false
@@ -156,7 +181,7 @@ export async function submitModuleSwitch(ctx: SwitchContext, input: SwitchInput,
   if (raw.confirm !== undefined && typeof raw.confirm !== 'string') return fail(400, 'BAD_INPUT', 'confirm muss ein Text sein.')
   const { moduleId, action, confirm, dpia } = raw as SwitchInput
 
-  // Phase 1: a council never switches a module off. Before anything else is asked, nothing is queued.
+  // The switch-off can be turned off again (injected, or the constant): nothing is queued, the platform is not asked.
   if (action === 'disable' && !(deps.disableAllowed ?? COUNCIL_DISABLE_ALLOWED)) {
     return fail(422, 'DISABLE_NOT_YET', 'Das Ausschalten von Modulen ist noch nicht freigegeben. Es folgt mit der 30-Tage-Frist.')
   }
@@ -194,6 +219,18 @@ export async function submitModuleSwitch(ctx: SwitchContext, input: SwitchInput,
   const stateRow = state.get(moduleId)
   if (!stateRow) return fail(422, 'MODULE_NOT_SHIPPED', `Das Modul ${moduleId} ist im Modulkatalog der Plattform nicht vorhanden.`)
 
+  // The module's live Karenz row, if any. Unreadable is not "none": a switch that cannot see whether the
+  // day-30 job is deleting must not be queued (fail closed).
+  let karenz: KarenzRowView | undefined
+  try {
+    karenz = liveKarenzOf(await (deps.listKarenz ?? ((id) => realListKarenz(id, 0)))(tenant.id), moduleId)
+  } catch (err) {
+    return mapPlatformError(err)
+  }
+  if (action === 'enable' && karenz?.state === 'finalizing') {
+    return fail(409, 'KARENZ_FINALIZING', `Die endgültige Löschung von ${pair.label} läuft gerade. Das Modul kann erst danach neu eingeschaltet werden.`)
+  }
+
   // No-op: the platform state AND config.modules must both already say so. When they disagree the request is
   // queued and the reconciler writes the platform truth where a platform row exists.
   const platformOn = stateRow.state === 'enabled'
@@ -201,8 +238,19 @@ export async function submitModuleSwitch(ctx: SwitchContext, input: SwitchInput,
   if (action === 'enable' && platformOn && cfgOn) return fail(409, 'NOOP', `${pair.label} ist bereits eingeschaltet.`)
   if (action === 'disable' && !platformOn && !cfgOn) return fail(409, 'NOOP', `${pair.label} ist bereits ausgeschaltet.`)
 
+  if (action === 'disable' && karenz?.state === 'restoring') {
+    return fail(409, 'RESTORE_PENDING', `${pair.label} wird gerade wiederhergestellt. Bitte warten, bis das abgeschlossen ist, bevor es erneut ausgeschaltet wird.`)
+  }
+
   if (action === 'disable' && !confirmationMatches(confirm, pair.label)) {
     return fail(422, 'CONFIRM_MISMATCH', `Zur Bestätigung den Namen des Moduls genau so eingeben: ${pair.label}`)
+  }
+
+  // The module may object to being switched off right now (an election that cannot be paused). A guard that
+  // fails objects too; only the reason text reaches the admin.
+  if (action === 'disable') {
+    const reason = await switchOffBlockedReason(tenant, moduleId)
+    if (reason !== null) return fail(409, 'SWITCH_OFF_BLOCKED', reason)
   }
 
   let args: Record<string, unknown> = { slug: tenant.slug, module: moduleId }
@@ -215,7 +263,8 @@ export async function submitModuleSwitch(ctx: SwitchContext, input: SwitchInput,
         ...args,
         dpia: { requires_dpia: dpia.requiresDpia, reason_codes: [COUNCIL_REASON_CODE], document_ref: dpia.documentRef.trim() },
       }
-    } else if (!stateRow.dpia_recorded) {
+    } else if (!stateRow.dpia_recorded && karenz?.state !== 'open') {
+      // (an open Karenz is the restore of a module that was switched on before: its decision is on record)
       return fail(422, 'DPIA_REQUIRED', 'Für dieses Modul liegt noch keine DPIA-Entscheidung vor. Bitte die Entscheidung mit Dokumentverweis angeben.')
     }
   }
@@ -269,19 +318,44 @@ function lastFailureOf(rows: readonly SwitchRow[]): string | null {
   return null
 }
 
-export async function loadModuleOverview(tenant: TenantContext): Promise<ModuleOverview> {
+export interface OverviewDeps {
+  /** The live Karenz rows of the customer; defaults to the platform list. */
+  listKarenz?: (customerId: string) => Promise<KarenzRowView[]>
+  /** What the Karenz view reads (tests inject doubles). */
+  karenz?: Partial<KarenzViewDeps>
+}
+
+/** The Karenz views of the tenant's switchable modules, keyed by catalogue id; null when the platform list cannot be read. */
+async function loadKarenzViews(tenant: TenantContext, deps: OverviewDeps): Promise<Map<string, KarenzView> | null> {
+  try {
+    const rows = await (deps.listKarenz ?? ((id) => realListKarenz(id, 0)))(tenant.id)
+    const views = new Map<string, KarenzView>()
+    for (const pair of TOGGLEABLE_PAIRS) {
+      const row = liveKarenzOf(rows, pair.catalogueId)
+      if (row) views.set(pair.catalogueId, await buildKarenzView(tenant, row, deps.karenz))
+    }
+    return views
+  } catch (err) {
+    console.error('[module-switch] the Karenz rows could not be loaded:', err instanceof Error ? err.message : err)
+    return null
+  }
+}
+
+export async function loadModuleOverview(tenant: TenantContext, deps: OverviewDeps = {}): Promise<ModuleOverview> {
   const platform = getCouncilDb()
   const state = await readState(platform, tenant)
   const modules = readConfig(tenant).modules
 
   let switches: SwitchRow[] = []
-  let problem: string | null = null
+  const problems: string[] = []
   try {
     switches = await listSwitches(tenant.db, 100)
   } catch (err) {
     console.error('[module-switch] switch history unreadable:', err instanceof Error ? err.message : err)
-    problem = 'Der Verlauf der Modulanfragen konnte nicht geladen werden.'
+    problems.push('Der Verlauf der Modulanfragen konnte nicht geladen werden.')
   }
+  const karenzViews = await loadKarenzViews(tenant, deps)
+  if (karenzViews === null) problems.push('Der Stand der 30-Tage-Frist konnte nicht geladen werden.')
 
   const items: ModuleOverviewItem[] = TOGGLEABLE_PAIRS.map((pair) => {
     const row = state.get(pair.catalogueId)
@@ -296,8 +370,9 @@ export async function loadModuleOverview(tenant: TenantContext): Promise<ModuleO
       denied: MODULE_DENY[pair.catalogueId] ?? null,
       pending: rows.filter((s) => PENDING_STATES.has(s.state)).map((s) => ({ requestId: s.requestId, action: s.action, state: s.state })),
       lastFailure: lastFailureOf(rows),
+      karenz: karenzViews?.get(pair.catalogueId) ?? null,
     }
   }).sort((a, b) => a.moduleId.localeCompare(b.moduleId))
 
-  return { modules: items, disableAvailable: COUNCIL_DISABLE_ALLOWED, problem }
+  return { modules: items, disableAvailable: COUNCIL_DISABLE_ALLOWED, problem: problems.length > 0 ? problems.join(' ') : null }
 }

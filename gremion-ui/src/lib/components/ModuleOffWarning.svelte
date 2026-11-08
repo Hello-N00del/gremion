@@ -2,17 +2,19 @@
   import { Button } from '$lib/components/ui/button'
   import { Input } from '$lib/components/ui/input'
   import { Label } from '$lib/components/ui/label'
-  import { t } from '$lib/i18n'
+  import { lang, t } from '$lib/i18n'
+  import { formatDate } from '$lib/i18n/format'
   import { confirmationMatches } from '$lib/modules/catalogue-map'
   import { fillText } from '$lib/modules/fill-text'
   import type { ModuleDeletionPreview } from '$lib/modules/switch-preview'
 
-  // The red warning before a module is switched OFF: what is deleted, what is kept, how long the grace
-  // period is, and a typed-name confirmation. The confirm button is a convenience: the server compares the
-  // phrase again (NFC-exact, case-sensitive, no trimming) and queues nothing on a mismatch.
+  // The red warning before a module is switched OFF: what is deleted, how long it stays recoverable and when
+  // it is gone for good, what is kept regardless, and a typed-name confirmation. The confirm button is a
+  // convenience: the server compares the phrase again (NFC-exact, case-sensitive, no trimming) and queues
+  // nothing on a mismatch.
   //
-  // Phase 1 never reaches the destructive path: graceDays is null, and then this renders a neutral notice
-  // and NO confirm button, never a sentence that promises removal.
+  // A null graceDays (switch-off not available) renders a neutral notice and NO confirm button, never a
+  // sentence that promises removal. The retained sentence appears only when something is retained.
   let {
     preview,
     busy,
@@ -66,7 +68,7 @@
     <p class="text-sm">
       {fillText($t('settings.modules.warn.grace'), { days: preview.graceDays ?? 0 })}
       {#if preview.finalDeletionAt}
-        {fillText($t('settings.modules.warn.final'), { date: preview.finalDeletionAt })}
+        {fillText($t('settings.modules.warn.final'), { date: formatDate(preview.finalDeletionAt, $lang) })}
       {/if}
       {#if preview.recoverable}
         {$t('settings.modules.warn.recoverable')}
@@ -78,7 +80,7 @@
         <p class="text-sm font-medium">{$t('settings.modules.warn.retained')}</p>
         <ul class="list-disc space-y-0.5 pl-5 text-sm">
           {#each preview.retained as item (item.key)}
-            <li>{item.label} ({item.basis})</li>
+            <li>{item.basis ? `${item.label} (${item.basis})` : item.label}</li>
           {/each}
         </ul>
       </div>

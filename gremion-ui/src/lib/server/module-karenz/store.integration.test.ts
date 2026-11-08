@@ -8,6 +8,7 @@ import {
   listItems,
   listSteps,
   markStep,
+  noticeCounts,
   noticesSent,
   recordNotice,
   setItemState,
@@ -176,6 +177,19 @@ describe('recordNotice / noticesSent', () => {
     expect([...(await noticesSent(db, k, 'switchoff'))]).toEqual(['u1'])
     expect([...(await noticesSent(db, k, 't23'))]).toEqual(['u3'])
     expect((await noticesSent(db, k, 't29')).size).toBe(0)
+  })
+
+  it('noticeCounts counts the sent and the failed rows of one kind of one row, nothing else', async () => {
+    const db = getDb()
+    const k = randomUUID()
+    await recordNotice(db, { karenzId: k, kind: 'switchoff', userId: 'u1', state: 'sent' })
+    await recordNotice(db, { karenzId: k, kind: 'switchoff', userId: 'u2', state: 'sent' })
+    await recordNotice(db, { karenzId: k, kind: 'switchoff', userId: 'u3', state: 'failed', error: 'mailbox full' })
+    await recordNotice(db, { karenzId: k, kind: 't23', userId: 'u4', state: 'sent' })
+    await recordNotice(db, { karenzId: randomUUID(), kind: 'switchoff', userId: 'u5', state: 'sent' })
+    expect(await noticeCounts(db, k, 'switchoff')).toEqual({ sent: 2, failed: 1 })
+    expect(await noticeCounts(db, k, 't23')).toEqual({ sent: 1, failed: 0 })
+    expect(await noticeCounts(db, k, 't29')).toEqual({ sent: 0, failed: 0 })
   })
 
   it('a retry counts attempts, and a failed notice that later succeeds becomes sent', async () => {
