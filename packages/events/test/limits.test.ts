@@ -55,6 +55,16 @@ describe('gauges as OpenMetrics 1.0 text (Q13)', () => {
     expect(text).toContain('gremion_outbox_dead_lettered{ctx="gov"} 0')
   })
 
+  // A sample the host textfile collector cannot parse (the literal `undefined`) makes it reject the WHOLE file, which
+  // silently drops every other gremion_* series. A gauge that is not a finite number must fail the render instead.
+  test('a gauge that is missing or not finite fails the render, never prints a non-numeric sample', () => {
+    const base = { ctx: 'fin', consumer: 'finance', outboxDeadLettered: 0, outboxOldestPendingSeconds: 0, inboxDeadLettered: 0, inboxStalled: 0 }
+    const { outboxOldestPendingSeconds: _omitted, ...missing } = base
+    expect(() => renderMetrics(missing as never)).toThrow(/outboxOldestPendingSeconds/)
+    expect(() => renderMetrics({ ...base, inboxStalled: Number.NaN })).toThrow(/inboxStalled/)
+    expect(() => renderMetrics({ ...base, outboxDeadLettered: Number.POSITIVE_INFINITY })).toThrow(/outboxDeadLettered/)
+  })
+
   test('a label value is escaped', () => {
     expect(renderMetrics({ ctx: 'fin', consumer: 'a"b\\c', outboxDeadLettered: 0, outboxOldestPendingSeconds: 0, inboxDeadLettered: 0, inboxStalled: 0 })).toContain('consumer="a\\"b\\\\c"')
   })

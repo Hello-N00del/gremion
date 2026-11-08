@@ -64,6 +64,13 @@ const label = (v: string): string => v.replace(/\\/g, '\\\\').replace(/"/g, '\\"
 /** OpenMetrics 1.0 exposition of one or more databases' gauges, ending in # EOF. */
 export function renderMetrics(all: EventMetrics | readonly EventMetrics[]): string {
   const list = Array.isArray(all) ? all : [all as EventMetrics]
+  // Fail closed: one sample that is not a number (a field a caller forgot) makes the host textfile collector reject
+  // the whole file, which drops every other gremion_* series with it.
+  for (const m of list) {
+    for (const k of ['outboxDeadLettered', 'outboxOldestPendingSeconds', 'inboxDeadLettered', 'inboxStalled'] as const) {
+      if (!Number.isFinite(m[k])) throw new TypeError(`renderMetrics: ${k} is not a finite number (ctx ${m.ctx})`)
+    }
+  }
   const out: string[] = []
   const family = (name: string, help: string, line: (m: EventMetrics) => string) => {
     out.push(`# HELP ${name} ${help}`, `# TYPE ${name} gauge`)
