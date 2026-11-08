@@ -12,6 +12,7 @@ import {
   NEWSLETTER_AUDIT_WORKER,
 } from '$lib/server/events/newsletter-audit-consumer'
 import { superviseWorker, markWorkerOff } from '$lib/server/events/consumer-state'
+import { registerNoRetention } from '$lib/server/module-karenz/retained/extractors'
 import { publishingErasureHook } from './erasure'
 
 // T15 (P1 / D-P1-7): newsletter-event → audit_log consumer. Env-gated on
@@ -43,3 +44,9 @@ registerServerInitHook(async () => {
 // TRD-196: the publishing module's data-subject erasure step (newsletter list
 // memberships, reached through the newsletter backend port).
 registerErasureHook(publishingErasureHook)
+
+// Module Karenz (phase 2): publishing seals no copy at switch-off. The catalogue keeps its categories
+// (RC-NWS-*, RC-PUB-*) for the 30-day grace through the pg_dump export of the blocked database (RC-MOD-EXPORT),
+// and RC-MOD-DATA lists no publishing class among the sealed copies kept regardless. Without this declaration
+// the retained step fails closed on every pass.
+registerNoRetention('publishing')

@@ -100,4 +100,10 @@ describe('messaging Karenz participant registration (Module Karenz, Task 15)', (
     const { messagingKarenz } = await import('./karenz')
     expect(karenzParticipantsFor('messaging')).toEqual([messagingKarenz])
   })
+
+  it('declares that messaging seals no retained records (otherwise its retained step fails closed and day 30 never finalizes)', async () => {
+    const { hasRetentionDeclaration, extractorsFor } = await import('$lib/server/module-karenz/retained/extractors')
+    expect(hasRetentionDeclaration('messaging')).toBe(true)
+    expect(extractorsFor('messaging')).toEqual([])
+  })
 })

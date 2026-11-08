@@ -12,6 +12,7 @@ import {
   registerErasureHook,
 } from '$lib/server/modules/runtime-registry'
 import { registerKarenzParticipant } from '$lib/server/module-karenz/participants'
+import { registerNoRetention } from '$lib/server/module-karenz/retained/extractors'
 import { serviceEnv } from '$lib/server/env/service-env'
 import { evictMatrixClient } from './matrix-client'
 import { getMatrixClient } from './matrix-client'
@@ -124,3 +125,8 @@ registerErasureHook(messagingErasureHook)
 // pass drives the participant; a module switch-off that has no participant would leave the rooms
 // writable.
 registerKarenzParticipant(messagingKarenz)
+
+// The rooms are the participant's job (RC-MSG-ROOM: archived at switch-off, deleted on day 30); the module
+// keeps no sealed records of its own. Without this declaration the retained step fails closed on every pass
+// and the rooms are never deleted.
+registerNoRetention('messaging')

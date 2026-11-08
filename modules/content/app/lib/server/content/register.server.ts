@@ -5,6 +5,7 @@
 // by the generated server-init barrel; runServerInitHooks() invokes this at cold
 // start.
 import { registerErasureHook, registerServerInitHook } from '$lib/server/modules/runtime-registry'
+import { registerNoRetention } from '$lib/server/module-karenz/retained/extractors'
 import { contentErasureHook } from './erasure'
 import { forEachActiveTenant } from '$lib/server/tenant/worker-fleet'
 import { drainInstagramPublishOps } from './instagram/drain'
@@ -86,3 +87,8 @@ registerServerInitHook(async () => {
 // membership, delivery evidence). Registered regardless of CONTENT_BACKEND: the
 // hook itself reports `skipped` under the service backend.
 registerErasureHook(contentErasureHook)
+
+// Module Karenz (phase 2): content (RC-PUB-*) is kept only for the 30-day grace through the pg_dump export of
+// the blocked database (RC-MOD-EXPORT); no sealed copy is written. Without this declaration the retained step
+// fails closed on every pass once the module is enabled and switched off.
+registerNoRetention('content')

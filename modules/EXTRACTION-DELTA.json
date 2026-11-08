@@ -235,9 +235,9 @@
     },
     {
       "path": "modules/content/app/lib/server/content/register.server.ts",
-      "reason": "TASK-042 (Q3, G6): the import of the deleted default-tenant env helper replaced by platformEnv('NATS_URL') from $lib/server/env/platform-env - NATS_URL is deployment-global and the kernel boots with zero tenants",
+      "reason": "TASK-042 (Q3, G6): the import of the deleted default-tenant env helper replaced by platformEnv('NATS_URL') from $lib/server/env/platform-env - NATS_URL is deployment-global and the kernel boots with zero tenants; Karenz p2 branch-fix: declares registerNoRetention('content')",
       "owner": "TASK-042",
-      "blob": "6d912e98c4d7e866f13b37b09d420ddbd9f3877b"
+      "blob": "2d0c9c6c4450f731829a31859908c66771596e6a"
     },
     {
       "path": "modules/content/app/lib/server/content/segment.ts",
@@ -685,15 +685,15 @@
     },
     {
       "path": "modules/calendar/app/lib/server/calendar/register.server.test.ts",
-      "reason": "post-f2 StuRaOS ba6c04ce: fix(calendar): dashboard upcoming-events yields one row per series (F1-FIX-08 round 2); TASK-205a: mocks platformEnv instead of the deleted default-env",
+      "reason": "post-f2 StuRaOS ba6c04ce: fix(calendar): dashboard upcoming-events yields one row per series (F1-FIX-08 round 2); TASK-205a: mocks platformEnv instead of the deleted default-env; Karenz p2 branch-fix: pins the retains-nothing declaration",
       "owner": "TASK-205",
-      "blob": "56816af19ab905682ad9361a3d060a7fad206418"
+      "blob": "4e5f0b936eddfe92612b1ced4356823d781d1129"
     },
     {
       "path": "modules/calendar/app/lib/server/calendar/register.server.ts",
-      "reason": "post-f2 StuRaOS ba6c04ce: fix(calendar): dashboard upcoming-events yields one row per series (F1-FIX-08 round 2); TASK-205a: NATS_URL read through platformEnv (the default-tenant env family is deleted, TASK-042 T1)",
+      "reason": "post-f2 StuRaOS ba6c04ce: fix(calendar): dashboard upcoming-events yields one row per series (F1-FIX-08 round 2); TASK-205a: NATS_URL read through platformEnv (the default-tenant env family is deleted, TASK-042 T1); Karenz p2 branch-fix: declares registerNoRetention('calendar')",
       "owner": "TASK-205",
-      "blob": "7dd60f3aa0bfc02506c9d58bc5b43ba1325ec49c"
+      "blob": "7c5103dd703872a1b9e5e0e4d58047209841d55e"
     },
     {
       "path": "modules/calendar/app/lib/server/events/calendar-audit-consumer.ts",
@@ -1549,9 +1549,9 @@
     },
     {
       "path": "modules/messaging/app/lib/server/messages/register.server.ts",
-      "reason": "TASK-205b: service endpoints through serviceEnv (the deleted default-tenant env reader); Module Karenz Task 15: registers the messaging Karenz participant",
+      "reason": "TASK-205b: service endpoints through serviceEnv (the deleted default-tenant env reader); Module Karenz Task 15: registers the messaging Karenz participant; Karenz p2 branch-fix: declares registerNoRetention('messaging')",
       "owner": "TASK-205",
-      "blob": "0e624ca5eba392361504354275a1b4dfc73a49b4"
+      "blob": "bc305d3fd0fa7dbab35291bf730c091261dafc87"
     },
     {
       "path": "modules/messaging/app/routes/api/messages/rooms/[roomId]/typing/+server.ts",
@@ -1633,9 +1633,9 @@
     },
     {
       "path": "modules/messaging/app/lib/server/messages/register.server.test.ts",
-      "reason": "TASK-205b: comment names serviceEnv, not the deleted default-tenant env reader; Module Karenz Task 15: pins the participant registration",
+      "reason": "TASK-205b: comment names serviceEnv, not the deleted default-tenant env reader; Module Karenz Task 15: pins the participant registration; Karenz p2 branch-fix: pins the retains-nothing declaration",
       "owner": "TASK-205",
-      "blob": "f27364393d5438ee614832dd4f2615f8f20989d6"
+      "blob": "8662285b47ad77428190dabe9d31e77ae4701f5a"
     },
     {
       "path": "modules/messaging/app/routes/api/video/meeting-room/+server.ts",
@@ -1789,9 +1789,39 @@
     },
     {
       "path": "modules/publishing/app/lib/server/newsletter/register.server.ts",
-      "reason": "TASK-205c: NATS_URL read through platformEnv (the default-tenant env family is deleted, TASK-042 T1)",
+      "reason": "TASK-205c: NATS_URL read through platformEnv (the default-tenant env family is deleted, TASK-042 T1); Karenz p2 branch-fix: declares registerNoRetention('publishing')",
       "owner": "TASK-205c",
-      "blob": "2d623f5ee46cf0e6f42efb54b440577c23ed5ae7"
+      "blob": "b5ff029642e353da6a34eb479950b88dd939dfb2"
+    },
+    {
+      "path": "modules/publishing/app/lib/server/newsletter/register.server.test.ts",
+      "reason": "Karenz p2 branch-fix: pins the publishing retains-nothing declaration",
+      "owner": "TASK-205c",
+      "blob": "90d9489f5efcc76fce7d8c016434d804061e4b5f"
+    },
+    {
+      "path": "modules/board/app/lib/server/board/register.server.ts",
+      "reason": "Karenz p2 branch-fix: declares registerNoRetention('board') so a switch-off does not fail its retained step",
+      "owner": "TASK-205",
+      "blob": "4ce1e2abfa41fe77f1ae1084eaba3d7bc932571b"
+    },
+    {
+      "path": "modules/board/app/lib/server/board/register.server.test.ts",
+      "reason": "Karenz p2 branch-fix: pins the board retains-nothing declaration",
+      "owner": "TASK-205",
+      "blob": "222cb0d7bc3c04f5bab66ff6ebe00787e28b0e92"
+    },
+    {
+      "path": "modules/vault/app/lib/server/vault/register.server.ts",
+      "reason": "Karenz p2 branch-fix: new file, declares registerNoRetention('vault') so a switch-off does not fail its retained step",
+      "owner": "TASK-205",
+      "blob": "7a1e0cf3e3354a81025377a3f4192f2e20b65c12"
+    },
+    {
+      "path": "modules/vault/app/lib/server/vault/register.server.test.ts",
+      "reason": "Karenz p2 branch-fix: new file, pins the vault retains-nothing declaration",
+      "owner": "TASK-205",
+      "blob": "db74179b779034a32471d865ebe0cce2cc2e7f69"
     },
     {
       "path": "modules/publishing/app/routes/api/newsletter/+server.ts",
