@@ -11,7 +11,7 @@ import { CouncilNotConfigured } from '$lib/server/module-switch/council-db'
 import type { SwitchRow } from '$lib/server/module-switch/store'
 import type { ItemState, KarenzItem, KarenzItemRow, StepPatch, StepRow } from './store'
 import { KarenzPartialError, type KarenzContext, type KarenzParticipant } from './participants'
-import type { KarenzRowView, KarenzState } from './platform'
+import type { KarenzRowView } from './platform'
 import type { RoleHolders } from '$lib/server/governance/role-holders'
 import { createNoticeStages, type NoticeDeps } from './notices'
 import {

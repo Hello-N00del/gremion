@@ -2307,7 +2307,7 @@
       "path": "modules/files/app/lib/server/files/karenz.test.ts",
       "reason": "Karenz p2 t16: tests of the files Karenz participant against a stateful ledger and a recording fetch; new kernel-side file with no counterpart at the tag",
       "owner": "TASK-205",
-      "blob": "3a074509e1b77ae7b333a37b63e04cd6d4690e94"
+      "blob": "eb8112e63c4be69c404908345e8dfff38be617e3"
     },
     {
       "path": "modules/files/app/lib/server/files/retained-sink.ts",

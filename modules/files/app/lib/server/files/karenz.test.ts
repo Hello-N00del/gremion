@@ -44,7 +44,7 @@ function ncFake(input: string | URL | Request, init?: RequestInit): Promise<Resp
   }
   if (method === 'DELETE' && (m = /^\/ocs\/v1\.php\/cloud\/users\/([^/]+)\/groups$/.exec(url.pathname))) {
     const user = decodeURIComponent(m[1]!)
-    const gid = new URLSearchParams(String(init?.body ?? '')).get('groupid') ?? ''
+    const gid = new URLSearchParams(typeof init?.body === 'string' ? init.body : '').get('groupid') ?? ''
     if (removeHttpFailures.has(user)) return Promise.resolve(new Response('injected failure', { status: 500 }))
     if (removeEnvelopeFailures.has(user)) return Promise.resolve(ocs([], 105))
     ncGroups.get(gid)?.delete(user)
