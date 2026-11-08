@@ -83,6 +83,8 @@ case " $* " in
     set -- $rest
     verb="$1"; slug="${2:-}"
     printf "tc %s %s\n" "$verb" "$slug" >> "$ORDER"
+    # the state of the credential directory when the container starts: a bind source that is missing then is made by the daemon, as root
+    if [ -d "$GREMION_ROOT/etc/secrets/governance" ]; then echo "$verb present $(stat -c %a "$GREMION_ROOT/etc/secrets/governance")" >> "$GREMION_ROOT/gov-dir-at-run"; else echo "$verb absent" >> "$GREMION_ROOT/gov-dir-at-run"; fi
     [ -f "$GREMION_ROOT/fail-$verb" ] && exit 1
     case "$verb" in
       phase-a|phase-b)
@@ -281,6 +283,19 @@ STUB
     run steps
     [ "${lines[0]}" = "tc phase-a alpha-rat" ]
     [[ "$output" != *"vendor-mail"* && "$output" != *"phase-b"* && "$output" != *"record-step"* ]] || { steps; return 1; }
+}
+
+# The tenant-create container bind-mounts etc/secrets/governance read-write. A source that does not exist when
+# the container starts is created by the daemon as root:root, and the deploy user can then neither chmod it nor
+# rely on it: the host makes the directory first, on EVERY verb that starts the container, not only on `init`
+# (an upgraded host runs reconcile before it ever runs init).
+@test "every tenant-create run finds etc/secrets/governance made by the host beforehand, mode 700" {
+    rm -rf "${GREMION_ROOT}/etc/secrets/governance"
+    run "$LAUNCHER" reconcile alpha-rat
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
+    [ -s "${GREMION_ROOT}/gov-dir-at-run" ] || { echo "the container shim saw no run"; return 1; }
+    ! grep -q absent "${GREMION_ROOT}/gov-dir-at-run" || { cat "${GREMION_ROOT}/gov-dir-at-run"; return 1; }
+    grep -qx 'reconcile present 700' "${GREMION_ROOT}/gov-dir-at-run" || { cat "${GREMION_ROOT}/gov-dir-at-run"; return 1; }
 }
 
 @test "relay suspend, resume and reconcile go through the front and hand the container the descriptor" {

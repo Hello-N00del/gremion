@@ -6,7 +6,7 @@
 // uid:gid, still mode 0600. Files elsewhere (the provisioner credential) keep
 // their root ownership.
 import { randomBytes } from 'node:crypto'
-import { chownSync, closeSync, existsSync, fchownSync, lchownSync, lstatSync, mkdirSync, openSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, chownSync, closeSync, existsSync, fchownSync, lchownSync, lstatSync, mkdirSync, openSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, relative, resolve, isAbsolute } from 'node:path'
 
 export function readerIds(env: Record<string, string | undefined>): { uid: number; gid: number } {
@@ -33,6 +33,36 @@ export function handToReader(
     // Fatal: a file left root:root 0600 under the secrets dir is unreadable to
     // every reader container (EACCES at runtime, long after the create "passed").
     throw new Error(`chown ${uid}:${gid} ${hostPath} failed (${err instanceof Error ? err.message : String(err)}); the reader container would get EACCES`)
+  }
+}
+
+/**
+ * A governance credential file under the host's etc/ tree: 0600, atomic (tmp + rename), written into the
+ * existing directory (never created here) and handed to the deploy user's uid:gid (the tenant-secrets
+ * contract: bootstrap.sh asserts that the deploy user is uid 1000). tenant-create runs as root, and the
+ * nightly backup copies etc/ as the deploy user: a root:root 0600 file there makes rsync exit 23 and every
+ * backup after the first customer create fail. The hand-over to the governance image's own uid is 084-b.
+ */
+export function writeGovernanceCredentialFile(
+  hostPath: string,
+  value: string,
+  deps: { chown?: (path: string, uid: number, gid: number) => void; env?: Record<string, string | undefined>; warn?: (line: string) => void } = {}
+): void {
+  const { uid, gid } = readerIds(deps.env ?? process.env)
+  const tmp = `${hostPath}.tmp-${process.pid}`
+  writeFileSync(tmp, value, { encoding: 'utf-8', mode: 0o600 })
+  try {
+    // by the tmp name, before the rename: the final name never exists with the wrong owner
+    ;(deps.chown ?? lchownSync)(tmp, uid, gid)
+  } catch (err) {
+    rmSync(tmp, { force: true })
+    throw new Error(`chown ${uid}:${gid} ${hostPath} failed (${err instanceof Error ? err.message : String(err)}); the host backup runs as that user and could not read the file`, { cause: err })
+  }
+  renameSync(tmp, hostPath)
+  try {
+    chmodSync(hostPath, 0o600)
+  } catch (err) {
+    ;(deps.warn ?? console.error)(`WARNING: chmod 0600 ${hostPath} failed (${err instanceof Error ? err.message : String(err)})`)
   }
 }
 

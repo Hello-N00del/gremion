@@ -124,9 +124,26 @@ release_tip() {
 # label gremion.request=<id>. The container is the docker daemon's child, not
 # the compose client's: killing the client (a lost lease, a signal) leaves it
 # running, and the executor kills it by this label and confirms it gone.
+# ensure_governance_dir -- the credential directory tenant-create bind-mounts read-write
+# (etc/secrets/governance). A bind source that is missing when the container starts is made by the
+# docker daemon as root:root; the deploy user then cannot chmod it, the files tenant-create writes
+# into it would sit in a root-owned directory, and the host backup (which runs as the deploy user)
+# could not read the tree. So the host makes it, 0700, before EVERY tenant-create run: an upgraded
+# host runs `reconcile` long before it runs `init`. Run as root (sudo), the directory is handed to
+# the owner of etc/secrets, which is the deploy user.
+ensure_governance_dir() {
+    local d="${ROOT}/etc/secrets/governance"
+    mkdir -p "$d" || die "cannot create ${d}" "$GREMION_EXIT_ASSERT"
+    if [[ "${EUID:-$(id -u)}" -eq 0 ]]; then
+        chown --reference="${ROOT}/etc/secrets" "$d" || die "cannot hand ${d} to the owner of ${ROOT}/etc/secrets" "$GREMION_EXIT_ASSERT"
+    fi
+    chmod 700 "$d" || die "cannot chmod 700 ${d} (a directory the docker daemon made is root-owned: chown it to the deploy user once)" "$GREMION_EXIT_ASSERT"
+}
+
 tc() {
     local envfile="${ROOT}/etc/env/app-${COLOUR}.env"
     [[ -f "$envfile" ]] || die "env file absent: ${envfile}" "$GREMION_EXIT_USAGE"
+    ensure_governance_dir
     local tip; tip="$(release_tip)"
     local -a label=()
     if [[ -n "${GREMION_EXECUTOR_REQUEST_ID:-}" ]]; then

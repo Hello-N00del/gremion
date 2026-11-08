@@ -337,12 +337,24 @@ gremion-tenant reconcile "$slug" --apply --reason "upgrade to ${TAG}: re-ensure 
    exits 2 on a customer create or delete, naming `GOVERNANCE_PG_ADMIN_FILE`;
    suspend, resume, the Karenz timer, module enable and disable and imports do
    not read the governance server and keep running. Run it after the deploy has
-   recorded the release (`current` names it); it only adds, and is idempotent:
-   a key that is there is kept, `gremion-tenant init` keeps every credential
-   file it already wrote and derives the admin login from `state.env`, and
-   `up -d --no-deps` creates the one missing container. Keep the key lines out
-   of the shell history: the password is generated inside the command and never
-   printed.
+   recorded the release (`current` names it); it adds only these things, apart
+   from the executor restart and the ops-realm template check `init` always
+   does, and is idempotent: a key that is there is kept, `gremion-tenant init`
+   keeps every credential file it already wrote and derives the admin login
+   from `state.env`, and `up -d --no-deps` creates the one missing container.
+   Keep the key lines out of the shell history: the password is generated
+   inside the command and never printed.
+
+   Ownership matters here. The directory `etc/secrets/governance` is bind-mounted
+   into every customer-create container, and a bind source that does not exist
+   when a container starts is made by the docker daemon as `root:root`.
+   `gremion-tenant` therefore makes the directory (0700, the deploy user) before
+   every `tenant-create` run, including the reconcile of step 8, so the daemon
+   never makes it; the credential files `tenant-create` writes into it are
+   handed to the deploy user's uid and gid (0600), which is what lets the nightly
+   `gremion-backup` copy `etc/` as the deploy user. A host whose directory was
+   already made by the daemon (an earlier release's reconcile) is repaired once,
+   before the first customer create: `sudo chown gremion: /opt/gremion/etc/secrets/governance`.
 
 ```bash
 f=/opt/gremion/etc/env/state.env
@@ -381,7 +393,7 @@ PGPASSWORD="$PGBOUNCER_AUTH_PASSWORD" docker compose --env-file /opt/gremion/etc
   psql -h pgbouncer -p 6432 -U pgbouncer_auth -d postgres -Atc 'SELECT current_user'                             # pgbouncer_auth: a login routed through PgBouncer succeeds
 grep -c '^GOVERNANCE_PG_PASSWORD=.' /opt/gremion/etc/env/state.env                   # 1: the governance server's key exists (step 9)
 sec=/opt/gremion/etc/secrets
-stat -c '%a %n' "$sec/tenant-create/governance_pg_admin" "$sec/governance"                                        # 600 ...governance_pg_admin, then 700 ...secrets/governance
+stat -c '%U %a %n' "$sec/tenant-create/governance_pg_admin" "$sec/governance"    # gremion 600 ...governance_pg_admin, then gremion 700 ...secrets/governance (root as owner: the daemon made the directory, chown it as step 9 says)
 docker compose --env-file /opt/gremion/etc/env/state.env ps --format '{{.Service}} {{.State}} {{.Health}}' governance-postgres   # governance-postgres running healthy
 journalctl -t premigration-dump --since today                                       # one taken/created line per dump, one deleted line per file (step 3 and gremion-migration-dump)
 for f in /root/.docker/config.json /home/gremion/.docker/config.json; do

@@ -203,10 +203,11 @@ export async function replayErasureForRestore(
 }
 
 /**
- * The widest closed window plt.council_karenz_list answers (0..60 days). A `restored` row is closed, and it
- * stays the only proof of the switch-off time for as long as the enable keeps failing to apply: the
- * 14-day default would let the hook lose the restore after two weeks and let the module come back
- * over unreplayed erasures.
+ * The widest closed window plt.council_karenz_list answers (0..60 days). The row stays the only proof of the
+ * switch-off time for as long as the enable has not been applied. The engine holds the `restored` mark
+ * until config.modules shows the module on (processRestoring), so a replay that keeps failing leaves a
+ * live `restoring` row, which the platform lists whatever its age. This window covers the rest: a row
+ * closed after the module came back, and an enable that is retried right after the close.
  */
 const RESTORE_LOOKUP_DAYS = 60
 

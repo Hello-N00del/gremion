@@ -115,6 +115,8 @@ interface Rig {
   reportFails: { times: number }
   actor: string | null
   evidence: boolean
+  /** config.modules shows the module on (the enable has been applied) */
+  moduleOn: boolean
   parts: Map<string, KarenzParticipant[]>
   deps: () => Partial<KarenzPassDeps>
   advance(ms: number): void
@@ -132,6 +134,7 @@ function rig(): Rig {
     reportFails: { times: 0 },
     actor: ACTOR as string | null,
     evidence: false,
+    moduleOn: true,
     parts: new Map<string, KarenzParticipant[]>(),
   } as unknown as Rig
   r.store = new FakeStore(() => r.now)
@@ -165,6 +168,7 @@ function rig(): Rig {
     },
     startedActor: async () => r.actor,
     hasLocalEvidence: async () => r.evidence,
+    moduleOnInConfig: () => r.moduleOn,
     pruneErasure: async (_db, oldest) => {
       r.pruned.push(oldest)
       return 0
@@ -717,6 +721,27 @@ describe('a restoring row', () => {
     expect(notice).not.toHaveBeenCalled()
     expect(p.calls).toEqual(['restore'])
     expect(rg.audits).toEqual([])
+  })
+
+  it('holds the restored mark until config.modules shows the module on: a row closed before the replay ran would age out of the 60-day listing', async () => {
+    rg.rows = [restoring({ restoreRequestedAt: T0 })]
+    part(rg, 'votes')
+    rg.moduleOn = false // the enable is not applied yet: the pre-apply replay has not passed
+    await pass()
+    expect(rg.reports.filter((r) => r.mark)).toEqual([])
+    expect(rg.rows[0]!.state).toBe('restoring')
+    // a hold longer than an hour is the restore-stuck error, and it names the open condition
+    rg.advance(61 * MIN)
+    await pass()
+    expect(errorsOf(STEP.restoreStuck)).toHaveLength(1)
+    expect(errorsOf(STEP.restoreStuck)[0]!.message).toMatch(/not on in config\.modules/)
+    expect(rg.rows[0]!.state).toBe('restoring')
+    // the reconciler applied the enable: the next pass closes the row
+    rg.moduleOn = true
+    rg.advance(5 * MIN)
+    await pass()
+    expect(rg.reports.filter((r) => r.mark)).toHaveLength(1)
+    expect(rg.rows[0]!.state).toBe('restored')
   })
 
   it('a refused restored mark keeps the row restoring and is retried: the step is not done until the platform took the mark', async () => {

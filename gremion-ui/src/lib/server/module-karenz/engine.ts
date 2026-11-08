@@ -14,7 +14,9 @@
 //               participants' finalize(dryRun) is reported as ONE info line per 24 h and nothing is
 //               deleted; with no mode recorded yet (or a live mode the platform job has not acted on
 //               yet) the pass waits for the platform job.
-//   restoring   every participant's restore, then the 'restored' mark, only when all of them are done.
+//   restoring   every participant's restore, then the 'restored' mark, only when all of them are done AND
+//               config.modules shows the module on (the enable's erasure replay has passed and the module
+//               is back); until then the row stays live, and so stays in the platform listing.
 //               More than an hour in this state is an error event of its own.
 //   finalizing  (set by the platform job, so the mode is live) every participant's finalize(live) and
 //               the 'tenant_done' mark, but ONLY once the retained copies exist (step `retained` done,
@@ -35,6 +37,7 @@
 // neither a retention extractor nor a registerNoRetention() declaration fails the step.
 import type { Sql } from '@gremion/db'
 import { writeAuditEntry, type AuditEntry } from '$lib/server/audit-db'
+import { readConfig } from '$lib/server/config'
 import { safeFailureReason } from '$lib/server/erasure/orchestrator'
 import { CouncilNotConfigured } from '$lib/server/module-switch/council-db'
 import { listSwitches, type SwitchRow } from '$lib/server/module-switch/store'
@@ -191,6 +194,13 @@ export interface KarenzPassDeps {
   startedActor: (tenant: TenantContext, catalogueId: string, switchedOffAt: Date) => Promise<string | null>
   /** True when the tenant holds local evidence of a live Karenz (used only when the council pool is not configured). */
   hasLocalEvidence: (tenant: TenantContext) => Promise<boolean>
+  /**
+   * True when config.modules no longer holds the module off (the enable has been applied, after its
+   * pre-apply erasure replay). A key that is absent counts as on, as everywhere else. The restored mark
+   * waits for it, so a restore whose replay keeps failing stays a live (`restoring`) row, which the
+   * platform lists whatever its age.
+   */
+  moduleOnInConfig: (tenant: TenantContext, manifestId: string) => boolean
   /** Task 12: drop the Art. 17 ledger entries older than the cutoff (module_karenz_erasure). */
   pruneErasure: (db: Sql, cutoff: Date) => Promise<number>
   now: () => Date
@@ -263,6 +273,7 @@ function defaults(): KarenzPassDeps {
     writeAudit: (entry) => writeAuditEntry(entry),
     startedActor: defaultStartedActor,
     hasLocalEvidence: defaultHasLocalEvidence,
+    moduleOnInConfig: (tenant, manifestId) => (readConfig(tenant).modules ?? {})[manifestId] !== false,
     pruneErasure: pruneKarenzErasure,
     now: () => new Date(),
   }
@@ -505,7 +516,10 @@ async function processRestoring(env: RowEnv): Promise<void> {
   const steps = await d.store.listSteps(tenant.db, row.karenzId)
   const doneNames = new Set(steps.filter((s) => s.state === 'done').map((s) => s.step))
   const missing = participants.map((p) => STEP.participant(p.catalogueId, 'restore')).filter((s) => !doneNames.has(s))
-  if (missing.length === 0) {
+  // The mark closes the row, and a closed row leaves the platform listing after at most 60 days. Closing it
+  // before the module is back on would let a replay that keeps failing lose its proof of the switch-off time.
+  const backOn = row.manifestId === null || d.moduleOnInConfig(tenant, row.manifestId)
+  if (missing.length === 0 && backOn) {
     const out = await runStep(env, STEP.restore, () => report(env, { step: STEP.restore, level: 'info', message: 'every restore step is done', mark: 'restored' }), { reportsItself: true })
     if (out === 'done' && steps.some((s) => s.step === STEP.restoreStuck && s.state === 'failed')) {
       await d.store.markStep(tenant.db, row.karenzId, STEP.restoreStuck, { state: 'done' })
@@ -516,7 +530,7 @@ async function processRestoring(env: RowEnv): Promise<void> {
   const requested = row.restoreRequestedAt
   if (requested && d.now().getTime() - requested.getTime() >= RESTORE_STUCK_MS) {
     const prev = steps.find((s) => s.step === STEP.restoreStuck) ?? null
-    const open = missing.length > 0 ? `${missing.length} restore step(s) not done` : 'the restored mark was not accepted'
+    const open = missing.length > 0 ? `${missing.length} restore step(s) not done` : !backOn ? 'the module is not on in config.modules yet (the enable is not applied)' : 'the restored mark was not accepted'
     await recordFailure(env, STEP.restoreStuck, `restoring since ${requested.toISOString()}: ${open}`, prev)
   }
 }

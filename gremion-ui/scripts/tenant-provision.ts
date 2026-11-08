@@ -35,7 +35,7 @@ import { createHash, randomBytes } from 'node:crypto'
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import postgres from 'postgres'
-import { handConfigToReader, handToReader, isTenantConfigPath, writeReaderConfigFile } from './tenant-secret-file'
+import { handConfigToReader, handToReader, isTenantConfigPath, writeGovernanceCredentialFile, writeReaderConfigFile } from './tenant-secret-file'
 import {
   bootstrapPlatform,
   ACCESS_READER_ROLE,
@@ -254,8 +254,9 @@ function pathsOverlap(a: string, b: string): boolean {
  * (the host creates it, gremion-tenant), and it must not be, contain or sit
  * inside TENANT_SECRETS_DIR, whose read-only mounts on gremion-ui, kernel-api
  * and kernel-api-migrate would otherwise expose every governance credential. Exit 2,
- * both variables named, before any connection. The uid hand-over to the
- * governance image is 084-b (GOVERNANCE_SECRETS_UID, DV4).
+ * both variables named, before any connection. The files go to the deploy
+ * user's uid:gid (the host backup copies them); the hand-over to the
+ * governance image's own uid is 084-b (GOVERNANCE_SECRETS_UID, DV4).
  */
 function governanceSecretsDir(): string {
   const dir = reqEnv('GOVERNANCE_SECRETS_DIR')
@@ -270,16 +271,9 @@ function governanceSecretsDir(): string {
 const UNUSED_POSTGRES_URL = 'postgres://unused@127.0.0.1/unused'
 const UNUSED_DIR = '/nonexistent'
 
-/** A governance credential file: 0600, atomic (tmp + rename), written into the existing directory (never created here). */
+/** A governance credential file: 0600, atomic (tmp + rename), handed to the deploy user's uid:gid so the host backup can read it. */
 function writeGovernanceSecretFile(hostPath: string, value: string): Promise<void> {
-  const tmp = `${hostPath}.tmp-${process.pid}`
-  writeFileSync(tmp, value, { encoding: 'utf-8', mode: 0o600 })
-  renameSync(tmp, hostPath)
-  try {
-    chmodSync(hostPath, 0o600)
-  } catch (err) {
-    log(`WARNING: chmod 0600 ${hostPath} failed (${err instanceof Error ? err.message : String(err)})`)
-  }
+  writeGovernanceCredentialFile(hostPath, value, { warn: log })
   return Promise.resolve()
 }
 
