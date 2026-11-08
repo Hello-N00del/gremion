@@ -139,8 +139,9 @@ export function finalizedPeriodWorld(o: FinalizedPeriodOptions) {
       return row.state
     },
     records: () => t.records(),
+    statements: () => t.statements,
     /** Statements that change or remove a sealed copy or a data key (there must be none). */
-    mutations: () => t.statements.filter((s) => /(DELETE\s+FROM|TRUNCATE|UPDATE)\s+(retained_record|karenz_data_key)/i.test(s)),
+    mutations: () => t.statements.filter((s) => /(DELETE\s+FROM|TRUNCATE(\s+TABLE)?|UPDATE)\s+(retained_record|karenz_data_key)/i.test(s)),
     async sealAndFinalize() {
       _resetKarenzPassForTests()
       _clearKarenzStagesForTests()

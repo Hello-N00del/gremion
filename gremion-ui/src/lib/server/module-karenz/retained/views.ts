@@ -18,7 +18,10 @@ import { canReadRetained, listRetained } from './serve'
 /** One row of the list: what the person sees and where the download is. */
 export interface RetainedRecordView {
   id: string
+  /** What the copy is called, in German: the text for a consumer of the list route that has no message catalogue. */
   label: string
+  /** The message key of the same title, resolved by the page in the reader's language. */
+  labelKey: string
   /** ISO timestamp of the moment the copy was sealed. */
   createdAt: string
   lineCount: number
@@ -34,12 +37,12 @@ export function isCatalogueId(id: string): boolean {
   return CATALOGUE_ID.test(id)
 }
 
-/** What a copy of this module is called in the list; a module without an entry reads as the generic title. */
-const LABELS: Readonly<Record<string, string>> = {
-  votes: 'Umfrageergebnisse',
-  elections: 'Wahlergebnisse',
+/** What a copy of this module is called in the list: the German text and the message key of the same title. A module without an entry reads as the generic title. */
+const LABELS: Readonly<Record<string, { label: string; labelKey: string }>> = {
+  votes: { label: 'Umfrageergebnisse', labelKey: 'settings.modules.karenz.retained.label.votes' },
+  elections: { label: 'Wahlergebnisse', labelKey: 'settings.modules.karenz.retained.label.elections' },
 }
-const GENERIC_LABEL = 'Aufbewahrte Unterlagen'
+const GENERIC_LABEL = { label: 'Aufbewahrte Unterlagen', labelKey: 'settings.modules.karenz.retained.label.generic' }
 
 export const retainedHref = (id: string): string => `/api/settings/modules/retained?id=${encodeURIComponent(id)}`
 
@@ -54,7 +57,7 @@ export async function retainedViewsFor(tenant: Pick<TenantContext, 'id' | 'db'>,
     .filter((r) => r.catalogueId === catalogueId)
     .map((r) => ({
       id: r.id,
-      label: LABELS[r.catalogueId] ?? GENERIC_LABEL,
+      ...(LABELS[r.catalogueId] ?? GENERIC_LABEL),
       createdAt: r.createdAt.toISOString(),
       lineCount: r.lineCount,
       href: retainedHref(r.id),

@@ -1695,13 +1695,13 @@
       "path": "modules/votes/app/routes/votes/+page.server.ts",
       "reason": "TASK-205b (TASK-058 Q10): the landing page shows polls only while the elections module is off for the tenant (no committee_elections read, no Helios probe, heliosStatus null, electionsEnabled in the page data); Karenz p2 t19: the loader also returns retainedRecords, the sealed poll tallies of an earlier period for the roles that may read retained records",
       "owner": "TASK-205",
-      "blob": "fb8e340a20adf3392de53dca67c10691409723df"
+      "blob": "908282745a80b20f4485e825798bec9a27450d3e"
     },
     {
       "path": "modules/votes/app/routes/votes/+page.svelte",
       "reason": "TASK-205b (TASK-058 Q10): no Helios pill, legend entry, sub-title or Helios-Wahl choice while elections is off; Karenz p2 t19: renders the read-only RetainedRecords list below the votes",
       "owner": "TASK-205",
-      "blob": "33f41d273806c914f7797b0e50d014ab6056af87"
+      "blob": "e5a829f4737a05313d76c6e48f9940dd31e4eea4"
     },
     {
       "path": "modules/votes/app/routes/votes/votes.reflow.browser.test.ts",
@@ -2325,25 +2325,25 @@
       "path": "modules/elections/app/routes/elections/+page.server.ts",
       "reason": "Karenz p2 t19: the loader also returns retainedRecords, the sealed result copies of an earlier period for the roles that may read retained records",
       "owner": "TASK-205",
-      "blob": "cd310452729553728850d902e0319c6af863766c"
+      "blob": "873fdfef189d039b7367499a3cadba6629195746"
     },
     {
       "path": "modules/elections/app/routes/elections/+page.svelte",
       "reason": "Karenz p2 t19: renders the read-only RetainedRecords list below the elections",
       "owner": "TASK-205",
-      "blob": "42193a3adc83c16e4e51ad1ef78e5678ce26cc07"
+      "blob": "03fe9cadc1530fe4a96bf21f80cb41eaf0283460"
     },
     {
       "path": "modules/elections/app/routes/elections/retained-records.test.ts",
       "reason": "Karenz p2 t19: the elections page lists the sealed result copies after a finalized Karenz and a fresh enable; new kernel-side file with no counterpart at the tag",
       "owner": "TASK-205",
-      "blob": "e6204ce7b405b8329781779aa8c8ab8e7c4cd8da"
+      "blob": "379deb443b04f16e7865925dec13cc8469220c74"
     },
     {
       "path": "modules/votes/app/routes/votes/retained-records.test.ts",
       "reason": "Karenz p2 t19: the votes page lists the sealed poll tallies after a finalized Karenz and a fresh enable; new kernel-side file with no counterpart at the tag",
       "owner": "TASK-205",
-      "blob": "e05c81497b949a8e19ca35ce6932a82744331de0"
+      "blob": "6753f146487ac8e5f5cedce75d5f701c378c1ba8"
     }
   ]
 }

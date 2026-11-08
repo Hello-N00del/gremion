@@ -51,7 +51,7 @@ function event(roles: Role[], tenant: unknown) {
   } as unknown as Parameters<typeof load>[0]
 }
 
-type Data = { votes: unknown[]; retainedRecords: { id: string; label: string; createdAt: string; lineCount: number; href: string }[] }
+type Data = { votes: unknown[]; retainedRecords: { id: string; label: string; labelKey: string; createdAt: string; lineCount: number; href: string }[] }
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -73,7 +73,7 @@ describe('/votes loader after a finalized Karenz and a fresh enable', () => {
     expect(data.votes).toEqual([])
     expect(data.retainedRecords).toHaveLength(1)
     const rec = data.retainedRecords[0]!
-    expect(rec).toMatchObject({ id: w.records()[0]!.id, label: 'Umfrageergebnisse', lineCount: 3, href: `/api/settings/modules/retained?id=${w.records()[0]!.id}` })
+    expect(rec).toMatchObject({ id: w.records()[0]!.id, label: 'Umfrageergebnisse', labelKey: 'settings.modules.karenz.retained.label.votes', lineCount: 3, href: `/api/settings/modules/retained?id=${w.records()[0]!.id}` })
     expect(w.mutations(), 'finalize never deletes or rewrites retained_record rows').toEqual([])
   })
 
@@ -83,10 +83,21 @@ describe('/votes loader after a finalized Karenz and a fresh enable', () => {
     expect(((await load(event([role, Role.Member], w.tenant))) as Data).retainedRecords).toHaveLength(1)
   })
 
-  it('a Member sees no list', async () => {
+  it('a Member sees no list and the database is not asked for it', async () => {
     const w = world()
     await w.sealAndFinalize()
-    expect(((await load(event([Role.Member], w.tenant))) as Data).retainedRecords).toEqual([])
+    const before = w.statements().length
+    const data = (await load(event([Role.Member], w.tenant))) as Data
+    expect(data.retainedRecords).toEqual([])
+    expect(w.statements().slice(before).filter((s) => /FROM retained_record/.test(s))).toEqual([])
+  })
+
+  it('a Guest never reaches the loader (403) and the database is not asked', async () => {
+    const w = world()
+    await w.sealAndFinalize()
+    const before = w.statements().length
+    await expect(load(event([Role.Guest], w.tenant))).rejects.toMatchObject({ status: 403 })
+    expect(w.statements().slice(before).filter((s) => /FROM retained_record/.test(s))).toEqual([])
   })
 
   it('the page data carries no tally and no title of a sealed poll', async () => {
@@ -96,13 +107,18 @@ describe('/votes loader after a finalized Karenz and a fresh enable', () => {
     for (const forbidden of ['Sommerfest', 'Raumplan', 'Nein', 'tally']) expect(json).not.toContain(forbidden)
   })
 
-  it('a failing read of the list never fails the page', async () => {
+  it('a failing read of the list never fails the page: an empty list and one log line without a message', async () => {
     const log = vi.spyOn(console, 'error').mockImplementation(() => {})
-    const broken = { id: TENANT, slug: 'rat-a', db: Object.assign(async () => { throw new Error('connection to db.internal.example refused') }, {}) }
-    const data = (await load(event([Role.CouncilAdmin], broken))) as Data
-    expect(data.retainedRecords).toEqual([])
-    expect(log.mock.calls.flat().join(' ')).not.toContain('db.internal')
-    log.mockRestore()
+    try {
+      const broken = { id: TENANT, slug: 'rat-a', db: Object.assign(async () => { throw new Error('connection to db.internal.example refused') }, {}) }
+      const data = (await load(event([Role.CouncilAdmin], broken))) as Data
+      expect(data.retainedRecords).toEqual([])
+      expect(log).toHaveBeenCalledTimes(1)
+      expect(log.mock.calls.flat().join(' ')).toContain('rat-a')
+      expect(log.mock.calls.flat().join(' ')).not.toContain('db.internal')
+    } finally {
+      log.mockRestore()
+    }
   })
 
   it('without a tenant database on the request the loader still answers', async () => {

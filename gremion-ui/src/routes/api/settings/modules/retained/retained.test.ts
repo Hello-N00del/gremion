@@ -12,6 +12,7 @@ import { sealLines } from '$lib/server/module-karenz/retained/crypto'
 import { fakeTenantDb } from '$lib/server/module-karenz/retained/fake-db.test-util'
 import type { RetainedLine } from '$lib/server/module-karenz/retained/extractors'
 
+const I18N_MESSAGES = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '..', '..', 'lib', 'i18n', 'messages')
 const SECRET = 'unit-test-secret-one'
 const TENANT_A = '11111111-1111-4111-8111-111111111111'
 const TENANT_B = '22222222-2222-4222-8222-222222222222'
@@ -205,7 +206,7 @@ describe('GET /api/settings/modules/retained?module=<catalogueId> (the list)', (
     expect(res.status).toBe(200)
     const body = (await res.json()) as { success: boolean; data: unknown[] }
     expect(body.success).toBe(true)
-    expect(body.data).toEqual([{ id: electionsId, label: 'Wahlergebnisse', createdAt: expect.stringMatching(/^2026-10-\d\dT10:00:00\.000Z$/), lineCount: 1, href: `/api/settings/modules/retained?id=${electionsId}` }])
+    expect(body.data).toEqual([{ id: electionsId, label: 'Wahlergebnisse', labelKey: 'settings.modules.karenz.retained.label.elections', createdAt: expect.stringMatching(/^2026-10-\d\dT10:00:00\.000Z$/), lineCount: 1, href: `/api/settings/modules/retained?id=${electionsId}` }])
   })
 
   it("lists only the request tenant's own copies", async () => {
@@ -217,6 +218,17 @@ describe('GET /api/settings/modules/retained?module=<catalogueId> (the list)', (
     expect(other.data[0]!.id).not.toBe(recordId)
   })
 
+  it.each([['elections', 'settings.modules.karenz.retained.label.elections'], ['votes', 'settings.modules.karenz.retained.label.votes']])('the %s copy carries a label key that both message catalogues define', async (mod, key) => {
+    const { GET } = await import('./+server')
+    const body = (await (await GET(event(['vorstand'], a.tenant, `?module=${mod}`))).json()) as { data: { labelKey: string }[] }
+    expect(body.data[0]!.labelKey).toBe(key)
+    for (const lang of ['de', 'en']) {
+      const messages = JSON.parse(readFileSync(join(I18N_MESSAGES, `${lang}.json`), 'utf8')) as Record<string, string>
+      expect(messages[key], `${lang} ${key}`).toBeTruthy()
+      expect(messages['settings.modules.karenz.retained.label.generic'], `${lang} generic`).toBeTruthy()
+    }
+  })
+
   it('a module without copies answers an empty list', async () => {
     const { GET } = await import('./+server')
     const body = await (await GET(event(['vorstand'], a.tenant, '?module=finance'))).json()
@@ -226,7 +238,10 @@ describe('GET /api/settings/modules/retained?module=<catalogueId> (the list)', (
   it('a malformed module answers 400 and asks nothing', async () => {
     const { GET } = await import('./+server')
     for (const bad of ['?module=', '?module=Elections', '?module=a%20b', '?module=..%2Fx', `?module=${'a'.repeat(80)}`]) {
-      expect((await GET(event(['vorstand'], a.tenant, bad))).status, bad).toBe(400)
+      const res = await GET(event(['vorstand'], a.tenant, bad))
+      expect(res.status, bad).toBe(400)
+      // the answer names the module parameter: a route that ignored `module` would answer 400 for the MISSING id instead
+      expect(((await res.json()) as { error: string }).error, bad).toContain('(module)')
     }
     expect(a.t.statements.filter((s) => /FROM retained_record/.test(s))).toHaveLength(0)
   })
@@ -291,7 +306,7 @@ describe('retained records have no mutating route', () => {
       for (const name of readdirSync(dir)) {
         const full = join(dir, name)
         if (statSync(full).isDirectory()) walk(full)
-        else if (/^\+(page|layout)\.server\.ts$/.test(name) && /(DELETE FROM|UPDATE|INSERT INTO)\s+retained_record|insertRetainedRecord|rewrapDataKey/.test(readFileSync(full, 'utf8'))) offenders.push(relative(ROUTES, full))
+        else if (/^\+(page|layout)\.server\.ts$/.test(name) && /(DELETE\s+FROM|UPDATE|INSERT\s+INTO|TRUNCATE(\s+TABLE)?)\s+retained_record|insertRetainedRecord|rewrapDataKey/i.test(readFileSync(full, 'utf8'))) offenders.push(relative(ROUTES, full))
       }
     }
     walk(ROUTES)

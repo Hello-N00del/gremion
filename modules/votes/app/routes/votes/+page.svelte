@@ -463,7 +463,7 @@
   </div>
 
   <!-- Module Karenz (Task 19): sealed tallies of an earlier period, read-only; nothing for an empty list or a reader who may not see them -->
-  <RetainedRecords records={data.retainedRecords} moduleLabel="Abstimmungen" />
+  <RetainedRecords records={data.retainedRecords} moduleLabel={$t('settings.modules.karenz.retained.module.votes')} />
 </div>
 
 <!-- New vote dialog -->

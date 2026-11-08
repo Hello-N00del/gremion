@@ -47,6 +47,11 @@ export const load: PageServerLoad = async ({ locals }) => {
 
   const isAdmin = hasRole(user.roles, Role.CouncilAdmin) || hasRole(user.roles, Role.ITAdmin)
 
+  // Module Karenz (Task 19): the sealed poll tallies of an earlier period, read-only, for the roles that may read
+  // retained records. They survive the final deletion of the module's data, so a module switched on afresh shows them.
+  // Started here so it runs beside the Helios and Polls reads; it never rejects (a failed read gives an empty list and a log line).
+  const retainedRecords = retainedViewsForPage(locals.tenant, user.roles, 'votes')
+
   // TASK-058 Q10 (TASK-205b): votes owns /votes and /polls, the elections module owns /elections and the
   // Helios ballots. While the elections module is OFF for the tenant (an explicit `false` in its module map;
   // absent = on), this page shows polls only: no committee_elections read, no Helios probe, no Helios status
@@ -125,9 +130,7 @@ export const load: PageServerLoad = async ({ locals }) => {
     electionsEnabled,
     // Drives the inline quick-poll create control (relocated from /polls, #197).
     isManager: isAdmin,
-    // Module Karenz (Task 19): the sealed poll tallies of an earlier period, read-only, for the roles that may read
-    // retained records. They survive the final deletion of the module's data, so a module switched on afresh shows them.
-    retainedRecords: await retainedViewsForPage(locals.tenant, user.roles, 'votes'),
+    retainedRecords: await retainedRecords,
   }
 }
 

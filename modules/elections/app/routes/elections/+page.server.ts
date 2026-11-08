@@ -27,6 +27,11 @@ export const load: PageServerLoad = async ({ locals }) => {
 
   const isAdmin = hasRole(user.roles, Role.CouncilAdmin) || hasRole(user.roles, Role.ITAdmin)
 
+  // Module Karenz (Task 19): the sealed result copies of an earlier period, read-only, for the roles that may read
+  // retained records. They survive the final deletion of the module's data, so a module switched on afresh shows them.
+  // Started here so it runs beside the Helios reads; it never rejects (a failed read gives an empty list and a log line).
+  const retainedRecords = retainedViewsForPage(locals.tenant, user.roles, 'elections')
+
   // Admins see all tracked elections; members see elections for org-units they belong to.
   // Membership (org_unit_members) is the source of truth — keycloak_group_id was dropped.
   let rows: readonly CommitteeElection[] = []
@@ -63,9 +68,5 @@ export const load: PageServerLoad = async ({ locals }) => {
     }
   }
 
-  // Module Karenz (Task 19): the sealed result copies of an earlier period, read-only, for the roles that may read
-  // retained records. They survive the final deletion of the module's data, so a module switched on afresh shows them.
-  const retainedRecords = await retainedViewsForPage(locals.tenant, user.roles, 'elections')
-
-  return { elections, isAdmin, retainedRecords }
+  return { elections, isAdmin, retainedRecords: await retainedRecords }
 }

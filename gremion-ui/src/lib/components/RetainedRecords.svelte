@@ -10,16 +10,19 @@
   // (title, sealed date, line count); the download link is the role-gated, audited, redacted route.
   // The page loader only hands a list to readers who may see it, and an empty list renders nothing.
   let {
-    records,
+    records = [],
     moduleLabel,
   }: {
-    records: { id: string; label: string; createdAt: string; lineCount: number; href: string }[]
+    // `labelKey` is the message key of the record's title (the list route also carries the German text as `label`).
+    // The list defaults to empty: a page whose data has no `retainedRecords` key renders nothing instead of throwing.
+    records?: { id: string; label: string; labelKey: string; createdAt: string; lineCount: number; href: string }[]
     moduleLabel: string
   } = $props()
 
   const uid = $props.id()
   const titleId = `${uid}-title`
 
+  const titleOf = (record: { labelKey: string }) => $t(record.labelKey)
   const sealedOn = (iso: string) => formatDate(iso, $lang)
   const linesText = (n: number) => (n === 1 ? $t('settings.modules.karenz.retained.lines.one') : fillText($t('settings.modules.karenz.retained.lines.other'), { count: n }))
 </script>
@@ -34,13 +37,13 @@
       {#each records as record (record.id)}
         <li class="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 py-2">
           <div>
-            <span class="font-medium">{record.label}</span>
+            <span class="font-medium">{titleOf(record)}</span>
             <span class="text-ink-muted"> · {fillText($t('settings.modules.karenz.retained.sealed'), { date: sealedOn(record.createdAt) })} · {linesText(record.lineCount)}</span>
           </div>
           <a
             href={record.href}
             class="underline underline-offset-2"
-            aria-label={fillText($t('settings.modules.karenz.retained.downloadLabel'), { label: record.label, date: sealedOn(record.createdAt) })}
+            aria-label={fillText($t('settings.modules.karenz.retained.downloadLabel'), { label: titleOf(record), date: sealedOn(record.createdAt) })}
           >{$t('settings.modules.karenz.retained.download')}</a>
         </li>
       {/each}

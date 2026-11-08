@@ -47,7 +47,7 @@ function event(roles: Role[], tenant: unknown) {
   } as unknown as Parameters<typeof load>[0]
 }
 
-type Data = { elections: unknown[]; isAdmin: boolean; retainedRecords: { id: string; label: string; createdAt: string; lineCount: number; href: string }[] }
+type Data = { elections: unknown[]; isAdmin: boolean; retainedRecords: { id: string; label: string; labelKey: string; createdAt: string; lineCount: number; href: string }[] }
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -68,7 +68,7 @@ describe('/elections loader after a finalized Karenz and a fresh enable', () => 
     expect(data.elections).toEqual([])
     expect(data.retainedRecords).toHaveLength(1)
     const rec = data.retainedRecords[0]!
-    expect(rec).toMatchObject({ id: w.records()[0]!.id, label: 'Wahlergebnisse', lineCount: 2, href: `/api/settings/modules/retained?id=${w.records()[0]!.id}` })
+    expect(rec).toMatchObject({ id: w.records()[0]!.id, label: 'Wahlergebnisse', labelKey: 'settings.modules.karenz.retained.label.elections', lineCount: 2, href: `/api/settings/modules/retained?id=${w.records()[0]!.id}` })
     expect(rec.createdAt).toBe('2026-10-01T10:00:00.000Z')
     expect(w.mutations(), 'finalize never deletes or rewrites retained_record rows').toEqual([])
   })
@@ -82,8 +82,18 @@ describe('/elections loader after a finalized Karenz and a fresh enable', () => 
   it('a Member sees no list and the database is not asked for it', async () => {
     const w = world()
     await w.sealAndFinalize()
+    const before = w.statements().length
     const data = (await load(event([Role.Member], w.tenant))) as Data
     expect(data.retainedRecords).toEqual([])
+    expect(w.statements().slice(before).filter((s) => /FROM retained_record/.test(s))).toEqual([])
+  })
+
+  it('a Guest never reaches the loader (403) and the database is not asked', async () => {
+    const w = world()
+    await w.sealAndFinalize()
+    const before = w.statements().length
+    await expect(load(event([Role.Guest], w.tenant))).rejects.toMatchObject({ status: 403 })
+    expect(w.statements().slice(before).filter((s) => /FROM retained_record/.test(s))).toEqual([])
   })
 
   it('a tenant that never switched the module off has an empty list', async () => {
@@ -111,12 +121,16 @@ describe('/elections loader after a finalized Karenz and a fresh enable', () => 
 
   it('a failing read of the list never fails the page: an empty list and one log line without a message', async () => {
     const log = vi.spyOn(console, 'error').mockImplementation(() => {})
-    const broken = { id: TENANT, slug: 'rat-a', db: Object.assign(async () => { throw new Error('connection to db.internal.example refused') }, {}) }
-    const data = (await load(event([Role.CouncilAdmin], broken))) as Data
-    expect(data.retainedRecords).toEqual([])
-    expect(log.mock.calls.flat().join(' ')).toContain('rat-a')
-    expect(log.mock.calls.flat().join(' ')).not.toContain('db.internal')
-    log.mockRestore()
+    try {
+      const broken = { id: TENANT, slug: 'rat-a', db: Object.assign(async () => { throw new Error('connection to db.internal.example refused') }, {}) }
+      const data = (await load(event([Role.CouncilAdmin], broken))) as Data
+      expect(data.retainedRecords).toEqual([])
+      expect(log).toHaveBeenCalledTimes(1)
+      expect(log.mock.calls.flat().join(' ')).toContain('rat-a')
+      expect(log.mock.calls.flat().join(' ')).not.toContain('db.internal')
+    } finally {
+      log.mockRestore()
+    }
   })
 
   it('without a tenant database on the request (a bare test locals) the loader still answers', async () => {
