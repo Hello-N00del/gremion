@@ -43,6 +43,8 @@ import { KarenzPartialError, karenzParticipantsFor, type KarenzContext, type Kar
 import { listKarenz, reportKarenz, type KarenzReport, type KarenzRowView } from './platform'
 import { reminderDue } from './mail'
 import { createNoticeStages } from './notices'
+import { retainedSinks } from './retained/extractors'
+import { listRecordsOfKarenz, publishRetained } from './retained/serve'
 import { writeRetainedCopies } from './retained/write'
 import * as realStore from './store'
 import type { ItemState, KarenzItem, KarenzItemRow, StepPatch, StepRow } from './store'
@@ -122,7 +124,33 @@ const defaultStages = (): KarenzStages => ({
     const { records, lines } = await writeRetainedCopies(ctx)
     ctx.log(`retained: ${records} record(s), ${lines} line(s) written in this pass`)
   },
+  publish: publishSteps,
 })
+
+/** A step name of the ledger and of the platform event log. */
+const STEP_NAME = /^[a-z][a-z0-9:_-]{0,59}$/
+
+/**
+ * Task 11: one `publish:<sink>:<record>` step for every sealed copy of this Karenz row and every sink that
+ * is available for the tenant (publishRetained redacts against the current erasure reports). With no
+ * available sink there is nothing to list and the database is not asked. A step name the platform event
+ * log would cut or refuse (a sink id that is too long or has odd characters) fails the LIST loudly: a
+ * step that cannot be reported must not run.
+ */
+async function publishSteps(ctx: KarenzContext): Promise<Array<{ step: string; run: () => Promise<void> }>> {
+  const sinks = retainedSinks().filter((s) => s.available(ctx.tenant))
+  if (sinks.length === 0) return []
+  const records = await listRecordsOfKarenz(ctx.tenant.db, ctx.karenzId)
+  const steps: Array<{ step: string; run: () => Promise<void> }> = []
+  for (const record of records) {
+    for (const sink of sinks) {
+      const step = STEP.publish(sink.id, record.id)
+      if (!STEP_NAME.test(step)) throw new Error(`retained sink id "${sink.id}" does not make a valid step name`)
+      steps.push({ step, run: () => publishRetained({ tenant: ctx.tenant, record, sink }) })
+    }
+  }
+  return steps
+}
 
 let registeredStages: KarenzStages = defaultStages()
 

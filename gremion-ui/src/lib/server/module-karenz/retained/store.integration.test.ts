@@ -4,9 +4,13 @@
 import { randomUUID } from 'node:crypto'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
 import { getDb } from '$lib/server/db'
+import { subjectRef } from '$lib/server/erasure/orchestrator'
+import type { TenantContext } from '$lib/server/tenant/context'
+import { markStep } from '../store'
 import { resetRetainedGuardCache } from '../retained-guard'
 import { openLines, rewrapDataKeys, sealLines } from './crypto'
-import type { RetainedLine } from './extractors'
+import { _clearRetentionRegistriesForTests, registerRetainedSink, type RetainedLine } from './extractors'
+import { listRecordsOfKarenz, listRetained, republishRetainedForSubject, resetPublishStepsForSubject } from './serve'
 import { activeDataKey, getRetainedRecord, retainedRecordIdFor } from './store'
 
 const ROLE = 'kz_retained_app'
@@ -32,7 +36,8 @@ async function code(p: PromiseLike<unknown>): Promise<string> {
 
 beforeEach(async () => {
   resetRetainedGuardCache()
-  await getDb().unsafe('TRUNCATE retained_record, karenz_data_key CASCADE')
+  await getDb().unsafe('TRUNCATE retained_record, karenz_data_key, module_karenz_step CASCADE')
+  _clearRetentionRegistriesForTests()
 })
 
 afterAll(async () => {
@@ -121,5 +126,64 @@ describe('retained_record is append-only for the app role', () => {
       app.release()
       resetRetainedGuardCache()
     }
+  })
+})
+
+describe('serving: the publish steps and the lists, against the real SQL', () => {
+  const REF_A = subjectRef(TENANT, 'user-a', SECRET)
+  const lineB: RetainedLine[] = [{ id: 'q1', data: { title: 'x', createdBy: 'Max Muster' }, persons: [{ id: 'user-b', field: 'createdBy' }] }]
+  const named: RetainedLine[] = [{ id: 'p1', data: { title: 'Haushalt', createdBy: 'Erika Beispiel' }, persons: [{ id: 'user-a', field: 'createdBy' }] }]
+
+  async function setup() {
+    const db = getDb()
+    const k1 = randomUUID()
+    const k2 = randomUUID()
+    const a = await sealLines(db, TENANT, k1, 'votes.a', named, META, seam)
+    const b = await sealLines(db, TENANT, k1, 'votes.b', lineB, META, seam)
+    const c = await sealLines(db, TENANT, k2, 'votes.c', named, META, seam)
+    for (const [k, id] of [[k1, a.id], [k1, b.id], [k2, c.id]] as const) await markStep(db, k, `publish:files:${id}`, { state: 'done' })
+    await markStep(db, k1, 'publish:list', { state: 'done' })
+    await markStep(db, k1, 'retained', { state: 'done' })
+    return { db, k1, k2, a, b, c }
+  }
+  const stateOf = async (k: string, step: string) => (await getDb()<{ state: string }[]>`SELECT state FROM module_karenz_step WHERE karenz_id = ${k} AND step = ${step}`)[0]?.state
+
+  it('resetPublishStepsForSubject resets only the publish steps of the records naming the subject, in every Karenz row', async () => {
+    const { db, k1, k2, a, b, c } = await setup()
+    expect(await resetPublishStepsForSubject(db, REF_A)).toBe(2)
+    expect(await stateOf(k1, `publish:files:${a.id}`)).toBe('pending')
+    expect(await stateOf(k2, `publish:files:${c.id}`)).toBe('pending')
+    expect(await stateOf(k1, `publish:files:${b.id}`)).toBe('done')
+    expect(await stateOf(k1, 'publish:list')).toBe('done')
+    expect(await stateOf(k1, 'retained')).toBe('done')
+    expect(await resetPublishStepsForSubject(db, subjectRef(TENANT, 'nobody', SECRET))).toBe(0)
+  })
+
+  it('listRecordsOfKarenz lists the records of that row only; listRetained all of them without ciphertext', async () => {
+    const { db, k1, k2, a, b, c } = await setup()
+    expect((await listRecordsOfKarenz(db, k1)).map((r) => r.id).toSorted()).toEqual([a.id, b.id].toSorted())
+    expect(await listRecordsOfKarenz(db, k2)).toEqual([{ id: c.id, catalogueId: 'votes' }])
+    const all = await listRetained(TENANT, db)
+    expect(all.map((r) => r.id).toSorted()).toEqual([a.id, b.id, c.id].toSorted())
+  })
+
+  it('republishRetainedForSubject publishes the redacted copy and marks the step done, for a row that is not live', async () => {
+    const { db, k1, a } = await setup()
+    // an erasure report names the subject, whatever its status
+    await db`DELETE FROM erasure_report WHERE tenant_id = ${TENANT} AND status = 'running'`
+    await db`INSERT INTO erasure_report (tenant_id, subject_ref, requested_by) VALUES (${TENANT}, ${REF_A}, 'integration-test')`
+    const sent: string[] = []
+    registerRetainedSink({ id: 'files', available: () => true, publish: async (c) => void sent.push(c.ndjson.toString('utf8')) })
+    const out = await republishRetainedForSubject({ id: TENANT, slug: 'fixture', db } as unknown as TenantContext, REF_A, { secret: SECRET })
+    expect(out.unreachable).toEqual([])
+    expect(out.failed).toEqual([])
+    expect(out.published).toBe(2)
+    expect(await stateOf(k1, `publish:files:${a.id}`)).toBe('done')
+    expect(sent).toHaveLength(2)
+    for (const text of sent) {
+      expect(text).not.toContain('Erika Beispiel')
+      expect(text).toContain('"createdBy":"erased"')
+    }
+    await db`DELETE FROM erasure_report WHERE tenant_id = ${TENANT} AND status = 'running'`
   })
 })
