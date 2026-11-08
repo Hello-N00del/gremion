@@ -160,7 +160,7 @@ async function cmdEnableModule(ctx: GateVerbContext): Promise<void> {
  * before anything is touched, unless TENANT_EXPORT_DIR is its own mount.
  */
 export function exportDirIsMounted(dir: string, mountinfo = DEFAULT_MOUNTINFO_PATH): boolean {
-  return exportDirRefusal(dir, undefined, mountinfo) === null
+  return exportDirRefusal(dir, { mountinfo }) === null
 }
 
 /**
@@ -170,7 +170,8 @@ export function exportDirIsMounted(dir: string, mountinfo = DEFAULT_MOUNTINFO_PA
  * is returned so the operator is told which of those it is. A host without a mount table cannot prove it,
  * which is a refusal. `override` is the tests' stand-in for the check (a boolean has no reason of its own).
  */
-export function exportDirRefusal(dir: string, override?: (dir: string) => boolean, mountinfo = DEFAULT_MOUNTINFO_PATH): string | null {
+export function exportDirRefusal(dir: string, opts: { override?: (dir: string) => boolean; mountinfo?: string } = {}): string | null {
+  const { override, mountinfo = DEFAULT_MOUNTINFO_PATH } = opts
   if (!dir) return 'TENANT_EXPORT_DIR is unset'
   if (override) return override(dir) ? null : 'it is not a mounted volume'
   try {
@@ -187,7 +188,7 @@ async function cmdDisableModule(ctx: GateVerbContext): Promise<void> {
   const op = operatorId(ctx)
   const kind = actorKind(ctx)
   const dir = process.env.TENANT_EXPORT_DIR ?? ''
-  const refusal = exportDirRefusal(dir, ctx.exportDirMounted)
+  const refusal = exportDirRefusal(dir, { override: ctx.exportDirMounted })
   if (refusal !== null) {
     throw ctx.usage(`disable-module needs TENANT_EXPORT_DIR (${dir || 'unset'}) to be a mounted volume that outlives this container: the module database is blocked after its export and the export is its 30-day backup; nothing was touched (${refusal})`)
   }

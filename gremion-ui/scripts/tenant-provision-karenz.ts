@@ -59,7 +59,7 @@ async function cmdKarenzRun(ctx: KarenzVerbContext): Promise<void> {
     // a live run deletes the exports of finished Karenz rows, and drops databases only against an export
     // that outlives this one-shot container: the same refusal as disable-module, before anything is touched
     const dir = env.TENANT_EXPORT_DIR ?? ''
-    const refusal = exportDirRefusal(dir, ctx.exportDirMounted)
+    const refusal = exportDirRefusal(dir, { override: ctx.exportDirMounted })
     if (refusal !== null) {
       throw ctx.usage(`karenz-run with KARENZ_FINAL_DELETION=on needs TENANT_EXPORT_DIR (${dir || 'unset'}) to be a mounted volume that outlives this container; nothing was touched (${refusal})`)
     }

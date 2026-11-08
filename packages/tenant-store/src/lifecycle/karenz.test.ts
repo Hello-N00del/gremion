@@ -75,6 +75,17 @@ describe('verifyRowExport: what the day-30 delete will refuse, it refuses before
     symlinkSync(elsewhere, join(exportDir, T, 'lcfix'), 'junction')
     await expect(verifyRowExport(exportDir, row(join(exportDir, T, 'lcfix', 'a.dump')))).rejects.toMatchObject({ code: 'TARGET_REFUSED' })
   })
+
+  it('refuses a link at <dump>.sha256, which the day-30 delete removes through the seam too: TARGET_REFUSED', async () => {
+    const exportDir = join(root, 'sidecar')
+    const d = join(exportDir, T, 'lcfix')
+    mkdirSync(d, { recursive: true })
+    writeFileSync(join(d, 'a.dump'), content)
+    const elsewhere = join(root, 'sidecar-target')
+    mkdirSync(elsewhere, { recursive: true })
+    symlinkSync(elsewhere, join(d, 'a.dump.sha256'), 'junction')
+    await expect(verifyRowExport(exportDir, row(join(d, 'a.dump')))).rejects.toMatchObject({ code: 'TARGET_REFUSED' })
+  })
 })
 
 describe('the export path guard', () => {

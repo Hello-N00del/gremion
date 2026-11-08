@@ -21,7 +21,7 @@ import { join, resolve } from 'node:path'
 import type { Sql } from '@gremion/db'
 import { tenantModuleDbName } from '../names.js'
 import { dropTenantModuleDatabase } from './disable.js'
-import { removeKarenzExport, type ExportStorageFactory } from './export-remove.js'
+import { exportStorageFor, removeKarenzExport, type ExportStorageFactory } from './export-remove.js'
 import { assertKarenzExportPath, assertTenantModuleTarget, LifecycleError } from './guards.js'
 import { casModuleDatabaseState, readModuleDatabase, type KarenzState } from './platform.js'
 import type { LifecycleModule, ModuleServer } from './types.js'
@@ -219,6 +219,9 @@ async function finalizeRow(
         // The ROW's own export, not the latest one of the module: a later switch-off must not be able to
         // satisfy (or spoil) this check. Verified BEFORE the row is claimed, so a missing export leaves the
         // switch-on possible instead of freezing the module in `finalizing` with an intact database.
+        // The export storage the day-30 delete goes through is built first, for the same reason: its mount
+        // check and its agreement with exportDir are refused here and not after the drop.
+        exportStorageFor(deps, tenantId)
         await verifyRowExport(deps.exportDir, r)
         await hook('export-verified')
         blockedDb = { dbName, admin: deps.server(database.postgresService).admin }
@@ -280,12 +283,18 @@ export async function verifyRowExport(exportDir: string, r: DueRow): Promise<voi
   // The day-30 delete goes through the storage seam, which refuses a link anywhere from <exportDir>/<tenant> down
   // to the file. Refuse the same here, BEFORE the database is dropped: otherwise the drop would succeed, the
   // delete would be refused and the row would sit in `finalizing` with its database gone.
-  for (const part of [join(exportDir, r.customer_id), join(exportDir, r.customer_id, r.module_key), path]) {
+  // The sidecar goes through the same seam call, so a link there is refused too.
+  for (const part of [join(exportDir, r.customer_id), join(exportDir, r.customer_id, r.module_key), path, `${path}.sha256`]) {
     let isLink = false
     try {
       isLink = lstatSync(part).isSymbolicLink()
-    } catch {
-      // a missing component is reported just below as a missing export
+    } catch (err) {
+      // A missing component is reported just below as a missing export (the seam's own walk also stops there).
+      // Any other error (permissions, I/O, a link loop) is not "missing": say what it is.
+      const code = (err as NodeJS.ErrnoException)?.code
+      if (code !== 'ENOENT' && code !== 'ENOTDIR') {
+        throw new LifecycleError('TARGET_REFUSED', `cannot inspect ${part} (${code ?? describeError(err)}); refusing to drop the database of Karenz ${r.karenz_id}`)
+      }
     }
     if (isLink) {
       throw new LifecycleError('TARGET_REFUSED', `the export path ${path} of Karenz ${r.karenz_id} passes through a link (${part}); refusing to drop the database`)
