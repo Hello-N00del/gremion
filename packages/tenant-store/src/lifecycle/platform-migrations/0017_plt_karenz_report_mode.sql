@@ -1,5 +1,5 @@
 -- gremion:phase expand
--- gremion_platform, 0016 (module switch-off with the 30-day Karenz, phase 2):
+-- gremion_platform, 0017 (module switch-off with the 30-day Karenz, phase 2):
 -- plt.council_karenz_report accepts the tenant_done mark only for a row whose
 -- final_mode the platform job recorded as 'live'.
 --
@@ -12,7 +12,7 @@
 -- 'finalizing' row (which only a live job produces); this makes the platform
 -- refuse the other cases too instead of trusting the caller.
 --
--- Body: identical to 0015 except for the added final_mode check in the tenant_done
+-- Body: identical to 0016 except for the added final_mode check in the tenant_done
 -- branch. CREATE OR REPLACE keeps the owner and the ACL of the function (EXECUTE for
 -- the council marker role, none for PUBLIC), so no grant statement is repeated here;
 -- the migration test asserts the ACL is unchanged. SQLSTATE 22023 for the new

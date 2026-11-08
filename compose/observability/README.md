@@ -165,7 +165,10 @@ the host collector's textfile by `emit_events`; the DLQ rule reads the
 collector's `gremion_nats_stream_messages{stream="DLQ"}`. One breached path is
 one e-mail; a single poisoned message also fills the DLQ stream, so it raises
 both `InboxDeadLettered` and `DeadLetterQueueNotEmpty`, two groups. Runbook:
-`docs/runbooks/dead-letter.md`.
+`docs/runbooks/dead-letter.md`. `events metrics` also prints a fourth gauge,
+`gremion_outbox_oldest_pending_seconds{ctx}` (the age of the oldest outbox row still waiting for the
+relay): a relay that can never succeed burns no attempt and dead-letters nothing, so it is the
+only gauge that moves. It is collected like the three above; no alert rule reads it yet.
 
 `ModuleKarenzFailedOrOverdue` (`gremion:cond:module_karenz`, component `module-karenz`)
 is fail-closed, unlike the four above. The host collector (`emit_module_karenz`)

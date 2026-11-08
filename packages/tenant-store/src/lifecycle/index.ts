@@ -25,6 +25,20 @@ export type { InspectionReport, InspectRegistry, InspectServer, ServerReport } f
 // TASK-043 G1: the customer's kernel database (never migrated here, Q3) and the platform bootstrap (Q15).
 export { dropKernelDatabase, ensureKernelDatabase, ensureKernelRoles, KERNEL_MODULE, kernelDbName, kernelRoles } from './kernel.js'
 export type { EnsureKernelResult, KernelRoles } from './kernel.js'
+// TASK-084-a: the customer's governance database on the governance server (names and roles).
+export {
+  bindGovernanceDatabase,
+  dropGovernanceDatabase,
+  ensureGovernanceDatabase,
+  GOVERNANCE_GROUP_ROLES,
+  GOVERNANCE_LEDGER,
+  GOVERNANCE_MODULE,
+  governanceDbName,
+  governancePostCondition,
+  governanceRoles,
+  migrateGovernanceDatabase,
+} from './governance.js'
+export type { EnsureGovernanceResult, GovernanceDbState, GovernanceRoles, MigrateGovernanceOptions } from './governance.js'
 // TASK-077 (C13): the kernel API's SELECT-only role on control + gremion_platform.
 export { ensureKernelApiReader, KERNEL_API_READS, KernelApiReaderError, kernelApiReaderPrivilegeProblems } from './kernel-api-reader.js'
 export type { KernelApiReaderDeps, KernelApiReaderErrorCode } from './kernel-api-reader.js'
@@ -40,6 +54,8 @@ export type { EnsurePlatformResult } from './platform.js'
 // TASK-033-a: audit_log is a governance record, append-only for the app (REVOKE through the hardened admin path).
 export { APPEND_ONLY_TABLES, ensureKernelAuditAppendOnly, kernelAuditAppendOnlyProblems } from './audit-append-only.js'
 export type { AppendOnlyTable } from './audit-append-only.js'
+// Kernel issue #89: the purger's CONNECT on the customer's kernel database, re-ensured by reconcile.
+export { ensureKernelPurgerAccess, ensureKernelPurgerConnect, kernelPurgerAccessProblems, kernelPurgerConnectProblems } from './purger-connect.js'
 // TRD-144/145: the scheduled purge run and the rule table it executes (retention-catalogue.md).
 export {
   deleteBatchSql,

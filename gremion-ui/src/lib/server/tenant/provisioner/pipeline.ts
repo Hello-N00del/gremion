@@ -19,7 +19,7 @@
 //                                           principal (gremion-vendor-mail realm-smtp
 //                                           --tenant), and reconcile's smtp-server
 //                                           check detects drift (repair: host)
-//   - the final flip to `active`         -> createPhaseB, after all eight steps are done
+//   - the final flip to `active`         -> createPhaseB, after all nine steps are done
 
 /** The KC-admin service-account client whose SA must hold realm-management roles. */
 export const ADMIN_CLIENT_ID = 'gremion-admin'

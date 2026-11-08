@@ -1,0 +1,16 @@
+{
+  "name": "@gremion/governance",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "files": [
+    "migrations/**"
+  ],
+  "scripts": {
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@gremion/events": "workspace:*",
+    "vitest": "5.0.1"
+  }
+}

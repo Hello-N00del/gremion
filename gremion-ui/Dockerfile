@@ -97,6 +97,8 @@ COPY modules/files/module.json ./modules/files/
 COPY modules/handover/module.json ./modules/handover/
 COPY modules/messaging/module.json ./modules/messaging/
 COPY modules/votes/module.json ./modules/votes/
+# TASK-084-a: the governance chain tenant-create applies to each customer's governance database
+COPY services/governance/migrations ./services/governance/migrations/
 # TASK-205 Q1: the in-process half of every ENABLED module (routes, api routes, lib/server,
 # components, manifest) lives once under modules/<id>/app and is copied onto gremion-ui/src by
 # scripts/interim-module-overlay.mjs, the first step of `pnpm build`'s prebuild. Without these COPYs

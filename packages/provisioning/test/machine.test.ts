@@ -5,6 +5,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   EXECUTION_ORDER,
+  isComplete,
   memoryLedger,
   openLedger,
   PHASES,
@@ -38,10 +39,28 @@ async function runAll(ledger: ReturnType<typeof memoryLedger>, steps: Record<Ste
 }
 
 describe('EXECUTION_ORDER and the phases', () => {
-  it('holds the eight kinds; broker and principal run before the accounts although their step_order is higher', () => {
+  it('holds the nine kinds; governance_database_created is step_order 9 and runs right after database_created', () => {
+    expect(Object.keys(STEP_ORDER)).toHaveLength(9)
+    expect(STEP_ORDER.governance_database_created).toBe(9)
+    expect(EXECUTION_ORDER.indexOf('governance_database_created')).toBe(EXECUTION_ORDER.indexOf('database_created') + 1)
+    expect(PHASES.a).toEqual([
+      'realm_created',
+      'database_created',
+      'governance_database_created',
+      'domain_bound',
+      'storage_prefix_reserved',
+      'first_body_created',
+      'broker_account_created',
+    ])
+    expect(isComplete(new Set(EXECUTION_ORDER))).toBe(true)
+    expect(isComplete(new Set(EXECUTION_ORDER.filter((k) => k !== 'governance_database_created')))).toBe(false)
+  })
+
+  it('holds the nine kinds; broker and principal run before the accounts although their step_order is higher', () => {
     expect(EXECUTION_ORDER).toEqual([
       'realm_created',
       'database_created',
+      'governance_database_created',
       'domain_bound',
       'storage_prefix_reserved',
       'first_body_created',
@@ -164,7 +183,7 @@ describe('runPhase', () => {
     const ledger = memoryLedger()
     const calls: StepKind[] = []
     await expect(runAll(ledger, recordingSteps(calls, { domain_bound: new Error('dns says no') }))).rejects.toThrow('dns says no')
-    expect(calls).toEqual(['realm_created', 'database_created', 'domain_bound'])
+    expect(calls).toEqual(['realm_created', 'database_created', 'governance_database_created', 'domain_bound'])
     const rows = await ledger.rows(CUSTOMER)
     expect(rows.filter((r) => r.kind === 'domain_bound').map((r) => r.status)).toEqual(['pending', 'failed'])
     const again: StepKind[] = []

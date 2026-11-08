@@ -14,10 +14,11 @@
 //   "refused: <other reason>"                      -> refused
 //   "no handler for <kind>"                        -> no_handler
 
-/** The eight ledger kinds (plt.provisioning_step) in words: the customer's setup list. */
+/** The nine ledger kinds (plt.provisioning_step) in words: the customer's setup list. */
 export const LEDGER_STEP_LABEL: Record<string, string> = {
   realm_created: 'Anmelde-Realm angelegt',
   database_created: 'Kerndatenbank angelegt und migriert',
+  governance_database_created: 'Governance-Datenbank angelegt und migriert',
   domain_bound: 'Host gebunden (DNS geprüft)',
   storage_prefix_reserved: 'Speicherbereich reserviert',
   first_body_created: 'Erstes Gremium angelegt',

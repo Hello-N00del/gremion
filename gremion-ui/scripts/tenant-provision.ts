@@ -14,7 +14,8 @@
 //   render-router <slug>                            the edge router document on STDOUT (Q17)
 //   suspend <slug> --operator <uuid>                status, realm, broker (the host then revokes the principal)
 //   resume <slug> --operator <uuid>                 stamp verified, realm, broker, status last
-//   reconcile [--verify-only] <slug>|--all          the realm contract incl. smtp-server (repair: host), plus the kernel audit-append-only check
+//   reconcile [--verify-only] <slug>|--all          the realm contract incl. smtp-server (repair: host), plus the kernel audit-append-only,
+//                                                   purger-connect and kernel-api-nats-seed checks (apply re-ensures what an older release never gave)
 //   status <slug>                                   provisioning status JSON on STDOUT
 //   operator-add <email> [--no-mail]                an operator in the ops realm `platform` (Q5, Q23)
 //   delete <slug>                                   crypto-shred delete (kernel database by tenant id)
@@ -31,8 +32,8 @@
 // one-time secrets); every log line goes to STDERR. EXIT: 0 ok, 1 a failure,
 // 2 usage or a precondition (a missing environment variable is always named).
 import { createHash, randomBytes } from 'node:crypto'
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import postgres from 'postgres'
 import { handConfigToReader, handToReader, isTenantConfigPath, writeReaderConfigFile } from './tenant-secret-file'
 import {
@@ -69,6 +70,7 @@ import {
 } from '@gremion/provisioning'
 import {
   assertPlatform,
+  dropGovernanceDatabase,
   dropKernelDatabase,
   ensureKernelApiReader,
   KERNEL_API_READS,
@@ -92,7 +94,8 @@ import {
   type Tenant,
 } from '../src/lib/server/tenant/registry'
 import { KcProvisionApi, masterAdminClientId, type KcTransport } from '../src/lib/server/tenant/provisioner/kc-admin-api'
-import { customerAdapters, kernelServer, reconcileKernelAudit } from '../src/lib/server/tenant/provisioner/customer-adapters'
+import { customerAdapters, governanceServer, kernelServer, reconcileKernelAudit } from '../src/lib/server/tenant/provisioner/customer-adapters'
+import { kernelApiSeedDeps, reconcileKernelApiSeed, reconcilePurgerConnect } from '../src/lib/server/tenant/provisioner/reconcile-reensure'
 import { fixtureIdentities } from '../src/lib/server/tenant/provisioner/fixture-identities'
 import {
   reconcileRealm,
@@ -190,6 +193,8 @@ function releaseTip(): string | null {
 function assertCreateEnv(catalogue: readonly LifecycleModule[], opts: { needEdge: boolean }): void {
   directPostgresUrl('PLATFORM_DATABASE_URL', reqEnv('PLATFORM_DATABASE_URL'))
   directPostgresUrl('KERNEL_PG_ADMIN_FILE', reqFileEnv('KERNEL_PG_ADMIN_FILE'))
+  directPostgresUrl('GOVERNANCE_PG_ADMIN_FILE', reqFileEnv('GOVERNANCE_PG_ADMIN_FILE'))
+  governanceSecretsDir()
   for (const id of modulePostgresIds(catalogue)) {
     directPostgresUrl(`MODULE_PG_ADMIN_${envId(id)}_FILE`, reqFileEnv(`MODULE_PG_ADMIN_${envId(id)}_FILE`))
     reqFileEnv(`MODULE_APP_PASSWORD_${envId(id)}_FILE`)
@@ -232,6 +237,50 @@ function writeSecretFile(hostPath: string, value: string): Promise<void> {
   return Promise.resolve()
 }
 const tenantSecretsDir = () => process.env.TENANT_SECRETS_DIR ?? join(repoRoot, 'secrets', 'tenants')
+
+/** True when `a` and `b` are the same directory or one contains the other (path math only). */
+function pathsOverlap(a: string, b: string): boolean {
+  const inside = (parent: string, child: string) => {
+    const rel = relative(resolve(parent), resolve(child))
+    // only a real parent step ('..' or '..' + separator) means outside; a child NAMED '..x' is inside
+    return rel === '' || (rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel))
+  }
+  return inside(a, b) || inside(b, a)
+}
+
+/**
+ * TASK-084-a: the directory of the per-customer governance credential files
+ * (GOVERNANCE_SECRETS_DIR, the container path of the rw mount): it must exist
+ * (the host creates it, gremion-tenant), and it must not be, contain or sit
+ * inside TENANT_SECRETS_DIR, whose read-only mounts on gremion-ui, kernel-api
+ * and kernel-api-migrate would otherwise expose every governance credential. Exit 2,
+ * both variables named, before any connection. The uid hand-over to the
+ * governance image is 084-b (GOVERNANCE_SECRETS_UID, DV4).
+ */
+function governanceSecretsDir(): string {
+  const dir = reqEnv('GOVERNANCE_SECRETS_DIR')
+  if (!existsSync(dir) || !statSync(dir).isDirectory()) throw new UsageError(`GOVERNANCE_SECRETS_DIR names ${dir}, which is not an existing directory (gremion-tenant creates it)`)
+  if (pathsOverlap(dir, tenantSecretsDir())) {
+    throw new UsageError(`GOVERNANCE_SECRETS_DIR (${dir}) and TENANT_SECRETS_DIR (${tenantSecretsDir()}) must be separate directories: neither may equal or contain the other`)
+  }
+  return dir
+}
+
+/** A governance credential file: 0600, atomic (tmp + rename), written into the existing directory (never created here). */
+function writeGovernanceSecretFile(hostPath: string, value: string): Promise<void> {
+  const tmp = `${hostPath}.tmp-${process.pid}`
+  writeFileSync(tmp, value, { encoding: 'utf-8', mode: 0o600 })
+  renameSync(tmp, hostPath)
+  try {
+    chmodSync(hostPath, 0o600)
+  } catch (err) {
+    log(`WARNING: chmod 0600 ${hostPath} failed (${err instanceof Error ? err.message : String(err)})`)
+  }
+  return Promise.resolve()
+}
+
+/** services/governance/migrations as shipped in the image (the Dockerfile copies it beside the app). */
+const governanceMigrationsDir = () => join(repoRoot, 'services', 'governance', 'migrations')
 
 /** The tenant's config.json, atomically (tmp + rename in the same directory), owned by the reader (#49). */
 function writeConfigFile(path: string, text: string): void {
@@ -437,6 +486,8 @@ function resolveLiveEnv(needEdge: boolean) {
     apexDomain: apexDomain(),
     runtimeDatabaseUrl: reqEnv('DATABASE_URL'),
     kernelAdminUrl: directPostgresUrl('KERNEL_PG_ADMIN_FILE', reqFileEnv('KERNEL_PG_ADMIN_FILE')),
+    governanceAdminUrl: directPostgresUrl('GOVERNANCE_PG_ADMIN_FILE', reqFileEnv('GOVERNANCE_PG_ADMIN_FILE')),
+    governanceSecretsDir: governanceSecretsDir(),
     exportDir: reqEnv('TENANT_EXPORT_DIR'),
     releaseRef: releaseRef(),
     edge: needEdge ? edgeAddresses() : null,
@@ -472,6 +523,11 @@ async function liveDeps(opts: { configFile?: string; bodyName?: string; needEdge
       tenantSecretsDir: tenantSecretsDir(),
       runtimeDatabaseUrl: env.runtimeDatabaseUrl,
       kernelAdminUrl: env.kernelAdminUrl,
+      governanceAdminUrl: env.governanceAdminUrl,
+      governanceSecretsDir: env.governanceSecretsDir,
+      governanceMigrationsDir: governanceMigrationsDir(),
+      releaseRef: env.releaseRef,
+      writeGovernanceSecretFile,
       configFile: opts.configFile ?? '/nonexistent',
       bodyName: opts.bodyName ?? 'Rat',
       edge: env.edge,
@@ -791,6 +847,11 @@ async function cmdStatus(): Promise<void> {
       tenantSecretsDir: tenantSecretsDir(),
       runtimeDatabaseUrl: reqEnv('DATABASE_URL'),
       kernelAdminUrl: 'postgres://unused@127.0.0.1/unused',
+      governanceAdminUrl: 'postgres://unused@127.0.0.1/unused',
+      governanceSecretsDir: '/nonexistent',
+      governanceMigrationsDir: '/nonexistent',
+      releaseRef: 'unused',
+      writeGovernanceSecretFile,
       configFile: '/nonexistent',
       bodyName: 'Rat',
       edge: null,
@@ -881,10 +942,18 @@ async function reconcileOne(tenant: Tenant, base: Record<string, unknown>, verif
   const realm = await reconcileRealmOnly(tenant, base, verifyOnly)
   // TASK-033-a: the kernel audit record is append-only (RC-GOV-CHAIN). The privilege lives in the customer's
   // kernel database, so it is one DB-level check appended to the realm report: verify reads, apply re-asserts.
+  // Kernel issues #88/#89: provisioning a later release extended is re-applied to customers created earlier.
+  // Two more checks, each a read of the post-condition (verify) plus an idempotent repair (apply): the purger's
+  // CONNECT on this customer's kernel database, and its kernel-api NATS seed (the registry's CURRENT module set
+  // read from the platform database, never a guessed list). Both pools connect lazily.
+  const platform = openPlatformPool()
   const server = kernelServer(directPostgresUrl('KERNEL_PG_ADMIN_FILE', reqFileEnv('KERNEL_PG_ADMIN_FILE')))
   try {
-    return await reconcileKernelAudit(realm, server, tenant.id, verifyOnly)
+    const audited = await reconcileKernelAudit(realm, server, tenant.id, verifyOnly)
+    const purger = await reconcilePurgerConnect(audited, server, tenant.id, verifyOnly)
+    return await reconcileKernelApiSeed(purger, tenant, kernelApiSeedDeps(platform), verifyOnly)
   } finally {
+    await platform.end({ timeout: 5 }).catch(() => {})
     await server.close()
   }
 }
@@ -961,6 +1030,21 @@ async function cmdDelete(): Promise<void> {
   const slug = slugArg('delete')
   const kc = provisionerKc()
   const server = kernelServer(directPostgresUrl('KERNEL_PG_ADMIN_FILE', reqFileEnv('KERNEL_PG_ADMIN_FILE')))
+  // TASK-084-a: phase A made a governance database and a credential file for the customer; delete drops both.
+  // Named and checked BEFORE anything is shredded, like the kernel server's own variable.
+  let govServer: ReturnType<typeof governanceServer>
+  let govDir: string
+  try {
+    govServer = governanceServer(directPostgresUrl('GOVERNANCE_PG_ADMIN_FILE', reqFileEnv('GOVERNANCE_PG_ADMIN_FILE')))
+    govDir = governanceSecretsDir()
+  } catch (err) {
+    await server.close()
+    throw err
+  }
+  const closeServers = async () => {
+    await server.close()
+    await govServer.close()
+  }
   // Never report DELETED while the customer's data survives (review B2, r2).
   // Refused BEFORE anything is shredded: a pre-TASK-043 t_<slug> database
   // (dropKernelDatabase only knows t_<hex32>__kernel), and live per-customer
@@ -985,12 +1069,13 @@ async function cmdDelete(): Promise<void> {
         await platform.end({ timeout: 5 })
       }
     } catch (err) {
-      await server.close()
+      await closeServers()
       throw err
     }
   }
   const leaf = makeLeafShredExecutor()
   const kernelDb: { dropped: boolean | null } = { dropped: null }
+  const govDb: { dropped: boolean | null } = { dropped: null }
   const deps: DeleteDeps = {
     shredSecretFiles: (paths) => {
       for (const p of paths) if (existsSync(p)) rmSync(p, { force: true })
@@ -1000,18 +1085,23 @@ async function cmdDelete(): Promise<void> {
       dropKernelDatabase: async (tenantId) => {
         kernelDb.dropped = (await dropKernelDatabase(server, tenantId)).dropped
       },
+      dropGovernanceDatabase: async (tenantId) => {
+        govDb.dropped = (await dropGovernanceDatabase(govServer, tenantId)).dropped
+      },
     },
     kc: { deleteRealm: (realm) => kc.deleteRealm(realm) },
     registry: { getTenantBySlug, updateTenantStatus, markTenantResourceFailed, evictTenantRuntime },
     tenantSecretsDir: tenantSecretsDir(),
+    governanceSecretsDir: govDir,
     ...(leaf ? { leaf } : {}),
   }
   try {
     const result = await deleteTenant(slug, deps)
     const kernel = kernelDb.dropped === true ? 'kernel database dropped' : kernelDb.dropped === false ? 'no kernel database was present' : 'kernel database not touched'
-    log(result.shredded ? `${slug} DELETED (${result.shreddedPaths.length} secret file(s) shredded, ${kernel}, realm dropped, row tombstoned)` : `${slug} is already a tombstone`)
+    const governance = govDb.dropped === true ? 'governance database dropped' : govDb.dropped === false ? 'no governance database was present' : 'governance database not touched'
+    log(result.shredded ? `${slug} DELETED (${result.shreddedPaths.length} secret file(s) shredded, ${kernel}, ${governance}, realm dropped, row tombstoned)` : `${slug} is already a tombstone`)
   } finally {
-    await server.close()
+    await closeServers()
   }
 }
 

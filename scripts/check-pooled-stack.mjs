@@ -80,6 +80,8 @@ export const EVICT_IMPLEMENTERS = {
 }
 export const ONE_SHOTS = { migrate: 'migrate', 'tenant-create': 'tenant-create', 'kernel-api-migrate': 'kernel-api-migrate' }
 export const MODULE_POSTGRES_IDS = ['board', 'calendar', 'content', 'finance', 'newsletter', 'vault', 'messaging']
+/** TASK-084-a: dedicated service servers (governance-postgres), state-tier stores like the module servers. */
+export const SERVICE_POSTGRES_IDS = ['governance']
 /** The leaf services app.env.tmpl names (content-service ... vault-service). */
 export const LEAF_SERVICES = ['content', 'finance', 'files', 'votes', 'messages', 'newsletter', 'calendar', 'board', 'vault'].map(
   (l) => `${l}-service`,
@@ -101,6 +103,7 @@ export const PLACEMENT = {
   state: {
     postgres: store,
     ...Object.fromEntries(MODULE_POSTGRES_IDS.map((id) => [`${id}-postgres`, store])),
+    ...Object.fromEntries(SERVICE_POSTGRES_IDS.map((id) => [`${id}-postgres`, store])),
     pgbouncer: store,
     // TASK-024: the NATS broker is state-tier data (JetStream store) reached
     // only over ${STACK}_state by name, like the databases.
@@ -287,6 +290,27 @@ export function colourSuffixViolations(render, colour, label = `app-${colour}`) 
 // ── ISOLATION (TRD-045) ────────────────────────────────────────────────────
 
 /**
+ * TASK-084-a: the services whose /run/secrets/tenants bind mount (read-only on
+ * all but tenant-create) has the per-customer governance credential directory as its
+ * host source or a PARENT of it. Pure path math on the rendered sources: such a
+ * mount would hand every governance credential to the tenant data plane.
+ */
+export function tenantMountsExposeGovernance(render, governanceHostDir) {
+  const norm = (p) => path.posix.normalize(String(p).replaceAll('\\', '/')).replace(/\/$/, '')
+  const gov = norm(governanceHostDir)
+  const out = []
+  for (const [name, svc] of Object.entries(render.services ?? {})) {
+    for (const v of svc.volumes ?? []) {
+      if (v.target !== '/run/secrets/tenants' || v.type !== 'bind') continue
+      const rel = path.posix.relative(norm(v.source), gov)
+      // only a real parent step ('..' or '../x') means the governance directory is outside the mount source
+      if (rel === '' || (rel !== '..' && !rel.startsWith('../'))) out.push(name)
+    }
+  }
+  return [...new Set(out)]
+}
+
+/**
  * renders: [{ id, render }] over every project. The placement table is the
  * contract; every service must be in it, on exactly its networks.
  */
@@ -371,6 +395,21 @@ export function runAll({ render = renderProject } = {}) {
     }
     renders.push({ id: p.id, render: r })
     problems.push(...limitsViolations(r, p.id))
+    if (p.colour) {
+      // TASK-084-a: the governance credential directory is tenant-create's alone, and no tenant mount reaches it
+      const gov = (r.services?.['tenant-create']?.volumes ?? []).find((v) => v.target === '/run/secrets/governance')
+      if (!gov) problems.push(`${p.id}: tenant-create mounts no /run/secrets/governance`)
+      else {
+        for (const name of tenantMountsExposeGovernance(r, gov.source)) {
+          problems.push(`${p.id}: ${name} mounts /run/secrets/tenants from a path that is, or contains, the governance credential directory ${gov.source}`)
+        }
+        for (const [name, svc] of Object.entries(r.services ?? {})) {
+          if (name !== 'tenant-create' && (svc.volumes ?? []).some((v) => v.target === '/run/secrets/governance' || v.source === gov.source)) {
+            problems.push(`${p.id}: ${name} mounts the governance credential directory`)
+          }
+        }
+      }
+    }
     if (p.id === 'state') problems.push(...statePurityViolations(r, p.id))
     else if (p.colour) {
       problems.push(...appShapeViolations(r, p.colour, stack, p.id))

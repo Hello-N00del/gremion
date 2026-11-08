@@ -186,8 +186,11 @@
       "dirs": [
         "services/governance/migrations"
       ],
+      "manifestDirs": [
+        "services/governance/migrations"
+      ],
       "padWidth": 4,
-      "highWater": 0,
+      "highWater": 1,
       "legacyFloor": 0,
       "legacy": []
     },
@@ -212,7 +215,7 @@
         "packages/tenant-store/src/lifecycle/platform-migrations"
       ],
       "padWidth": 4,
-      "highWater": 16,
+      "highWater": 17,
       "legacyFloor": 3,
       "legacy": [
         "0001_plt_setup.sql",

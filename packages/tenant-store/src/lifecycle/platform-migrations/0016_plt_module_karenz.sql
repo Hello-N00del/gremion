@@ -1,5 +1,5 @@
 -- gremion:phase expand
--- gremion_platform, 0015 (module switch-off with the 30-day Karenz, phase 2):
+-- gremion_platform, 0016 (module switch-off with the 30-day Karenz, phase 2):
 -- switching a module off no longer drops its database at once.
 --
 --  * plt.module_database gains the state `blocked`: the module database is kept

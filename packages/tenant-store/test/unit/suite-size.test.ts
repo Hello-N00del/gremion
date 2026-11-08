@@ -61,6 +61,8 @@ export const NAMED: Record<'unit' | 'integration', Record<string, number>> = {
     'test/integration/lifecycle-enable-gate.test.ts': 20,
     // TASK-033-a: audit_log append-only for the app and owner (real chain DDL, hardened admin path)
     'test/integration/audit-append-only.test.ts': 6,
+    // kernel issue #89: the purger access re-ensure (a customer made before the grants existed); +3 schema USAGE / table grants
+    'test/integration/purger-connect.test.ts': 9,
   },
 }
 

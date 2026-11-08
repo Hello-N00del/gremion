@@ -823,7 +823,7 @@ jobs:
         id: verify
         env:
           NATS_TEST_URL: nats://localhost:4222
-        run: node scripts/verify/verify.mjs --only isolation,unit:public,unit:ports,unit:generated-clients,unit:fastify-service-template,unit:generated-clients-dart,unit:tenant-store,unit:module-catalogue,unit:tokens,unit:edge-routers,unit:nats-auth,unit:events,unit:provisioning,unit:member-import,unit:retention,unit:control-panel,unit:tenancy-core,unit:authz-client,unit:kernel-api
+        run: node scripts/verify/verify.mjs --only isolation,unit:public,unit:ports,unit:generated-clients,unit:fastify-service-template,unit:generated-clients-dart,unit:tenant-store,unit:module-catalogue,unit:tokens,unit:edge-routers,unit:nats-auth,unit:events,unit:provisioning,unit:member-import,unit:retention,unit:control-panel,unit:tenancy-core,unit:authz-client,unit:kernel-api,unit:governance
 
       - name: Stop NATS
         if: always()

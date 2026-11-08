@@ -111,6 +111,33 @@ export interface KernelDbPort {
   postCondition(c: CustomerRef): Promise<KernelPostCondition>
 }
 
+/**
+ * TASK-084-a: what the governance step reads back from the governance database
+ * itself. `shipped`, `expected*` are what the adapter says the database should
+ * hold; the step compares the two sides (never a runner's return value).
+ */
+export interface GovernancePostCondition {
+  binding: { customerId: string; tenantToken: string; contextCode: string } | null
+  ledger: { filename: string; sha256: string }[]
+  shipped: { filename: string; sha256: string }[]
+  unforcedRlsTables: string[]
+  connectGrantees: string[]
+  expectedConnectGrantees: string[]
+  currentDatabase: string
+  expectedDatabase: string
+}
+
+export interface GovernanceDbPort {
+  /** ensureGovernanceDatabase + the customer's governance credential file; creates nothing twice. */
+  ensureDatabase(c: CustomerRef): Promise<void>
+  /** The governance chain, applied as the customer's owner role. */
+  migrate(c: CustomerRef): Promise<void>
+  /** The binding row (customer id, tenant token, context gov). */
+  bind(c: CustomerRef): Promise<void>
+  /** Read from the database itself, never from a return code. */
+  postCondition(c: CustomerRef): Promise<GovernancePostCondition>
+}
+
 export interface DomainPort {
   /** The primary host is bound to this customer and resolves (checkTenantHostDns). */
   assertBound(c: CustomerRef): Promise<void>
@@ -218,6 +245,7 @@ export interface ProvisioningDeps {
   config: ConfigPort
   realm: RealmPort
   kernel: KernelDbPort
+  governance: GovernanceDbPort
   domain: DomainPort
   storage: StoragePort
   firstBody: FirstBodyPort

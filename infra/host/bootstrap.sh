@@ -1080,7 +1080,7 @@ stage_timers() {
 
     # Module switch-off Karenz: the hourly finalization run (karenz.sh, the
     # `karenz-run` verb). Same two-argument render_unit. Like the purge, the
-    # service is NOT started here: it needs the platform chain at 0015 and an
+    # service is NOT started here: it needs the platform chain at 0017 and an
     # active colour, so a first run belongs after the first deploy (systemctl
     # start gremion-karenz.service; with KARENZ_FINAL_DELETION=off it is a dry
     # run that prints what it would delete).

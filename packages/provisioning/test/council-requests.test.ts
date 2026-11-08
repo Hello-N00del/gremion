@@ -1,6 +1,6 @@
 // Module self-service, phase 1, Task 2: the constants of the council requester role.
 // The role (gremion_ui_modules) may EXECUTE exactly the three council functions that
-// migrations 0014 and 0015 create; COUNCIL_EXECUTES must name each of them once, spelled as
+// migrations 0014 and 0016 create; COUNCIL_EXECUTES must name each of them once, spelled as
 // regprocedure prints them, so the grant and the postcondition cannot drift from the SQL.
 import { readFileSync, readdirSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
@@ -34,7 +34,7 @@ describe('council requester constants', () => {
     expect(COUNCIL_REQUESTER_ROLE).toBe('gremion_ui_modules')
   })
 
-  it('COUNCIL_EXECUTES lists each function once and every entry exists in 0014 or 0015', () => {
+  it('COUNCIL_EXECUTES lists each function once and every entry exists in 0014 or 0016', () => {
     expect(new Set(COUNCIL_EXECUTES).size).toBe(COUNCIL_EXECUTES.length)
     expect(COUNCIL_EXECUTES).toHaveLength(5)
     const created014 = createdSignatures(council())

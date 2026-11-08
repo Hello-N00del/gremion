@@ -1,5 +1,5 @@
 // Module switch-off with the 30-day Karenz (phase 2), Task 2 on the scratch
-// PostgreSQL 18 (run.mjs): migration 0015 of gremion_platform.
+// PostgreSQL 18 (run.mjs): migration 0016 of gremion_platform.
 //  - plt.module_database gains the state `blocked` (module database kept alive but
 //    unreachable) and may reach it only with a recorded export;
 //  - plt.module_karenz is the authoritative 30-day clock, one live row per
@@ -356,7 +356,7 @@ describe('plt.council_karenz_report', () => {
     }
   })
 
-  it('0016 keeps the grants of the two council functions: EXECUTE for the council role, none for PUBLIC', async () => {
+  it('0017 keeps the grants of the two council functions: EXECUTE for the council role, none for PUBLIC', async () => {
     const rows = await pa<{ proname: string; public_exec: boolean }[]>`
       SELECT p.proname, coalesce((SELECT bool_or(a.grantee = 0) FROM aclexplode(p.proacl) a WHERE a.privilege_type = 'EXECUTE'), false) AS public_exec
         FROM pg_proc p WHERE p.pronamespace = 'plt'::regnamespace AND p.proname IN ('council_karenz_list', 'council_karenz_report') ORDER BY 1`
@@ -509,8 +509,8 @@ describe('switch off, on, off again, with no manual SQL', () => {
   })
 })
 
-describe('migration 0015 constraints', () => {
-  it('every constraint 0015 adds or re-adds is validated (pg_constraint.convalidated is true)', async () => {
+describe('migration 0016 constraints', () => {
+  it('every constraint 0016 adds or re-adds is validated (pg_constraint.convalidated is true)', async () => {
     const rows = await pa<{ rel: string; conname: string; convalidated: boolean }[]>`
       SELECT conrelid::regclass::text AS rel, conname, convalidated FROM pg_constraint
        WHERE conrelid IN ('plt.module_database'::regclass, 'plt.module_karenz'::regclass, 'plt.module_karenz_event'::regclass)

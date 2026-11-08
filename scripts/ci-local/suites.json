@@ -529,6 +529,17 @@
       "excludeGlobs": ["services/kernel-api/test/**/*.int.test.ts"]
     },
     {
+      "id": "kernel-governance-unit",
+      "repo": "kernel",
+      "category": "unit",
+      "cwd": "services/governance",
+      "kind": "vitest",
+      "command": "pnpm run test",
+      "timeoutMs": 600000,
+      "requiresStack": false,
+      "testGlobs": ["services/governance/test/**/*.test.ts"]
+    },
+    {
       "id": "kernel-kernel-api-integration",
       "repo": "kernel",
       "category": "integration",
@@ -719,6 +730,17 @@
       "timeoutMs": 600000,
       "requiresStack": true,
       "testGlobs": ["packages/tenant-store/test/integration/**/*.test.ts"]
+    },
+    {
+      "id": "kernel-tenant-store-t084-integration",
+      "repo": "kernel",
+      "category": "integration",
+      "cwd": "packages/tenant-store",
+      "kind": "vitest",
+      "command": "pnpm run test:t084",
+      "timeoutMs": 600000,
+      "requiresStack": false,
+      "testGlobs": ["packages/tenant-store/test/t084/**/*.test.ts"]
     },
     {
       "id": "kernel-tokens-node-test",

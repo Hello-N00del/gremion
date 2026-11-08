@@ -205,7 +205,7 @@ export async function casModuleDatabaseState(
 /** Length of the grace after a module switch-off (DSB answer of 2026-10-30, catalogue RC-MOD-EXPORT). */
 export const KARENZ_DAYS = 30
 
-/** plt.module_karenz.state (platform migration 0015). */
+/** plt.module_karenz.state (platform migration 0016). */
 export type KarenzState = 'open' | 'restoring' | 'restored' | 'finalizing' | 'finalized'
 
 /** The states of the one live row per (customer, module): the partial unique index module_karenz_live_key. */

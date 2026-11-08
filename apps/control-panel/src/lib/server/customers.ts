@@ -5,10 +5,11 @@
 import postgres from 'postgres'
 import type { PanelConfig } from './config'
 
-/** The eight kinds in EXECUTION_ORDER (@gremion/provisioning). */
+/** The nine kinds in EXECUTION_ORDER (@gremion/provisioning); customers.test.ts pins this copy against it. */
 export const EXECUTION_ORDER = [
   'realm_created',
   'database_created',
+  'governance_database_created',
   'domain_bound',
   'storage_prefix_reserved',
   'first_body_created',
@@ -23,7 +24,7 @@ export interface CustomerRow {
   slug: string
   status: string
   host: string | null
-  /** Done kinds out of eight, or null when no platform database is configured. */
+  /** Done kinds out of nine, or null when no platform database is configured. */
   stepsDone: number | null
 }
 

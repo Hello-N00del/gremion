@@ -4,7 +4,9 @@
 //
 // One run checks, and counts as collected:
 //   1. chain-runners.json covers scripts/migrations/ranges.json exactly, every
-//      chain with a known class (tenant-store | legacy-boot | unadopted);
+//      chain with a known class (tenant-store | legacy-boot | unadopted | fresh-only),
+//      and a fresh-only chain holds at most one file (a second never reaches
+//      existing databases: flip the class first);
 //   2. expand-contract-baseline.json is the one written at the merge: its
 //      digest equals BASELINE_DIGEST, every entry is a locked file (applied.
 //      lock.json) whose bytes still hash to the lock (LOCKED_FILE_CHANGED);
@@ -30,14 +32,14 @@ export const WAIVERS_FILE = 'lint-waivers.json'
  * The only rules a waiver may name. Header, contract and parse failures are
  * never waivable: a file that cannot be classified or parsed is not reviewed.
  */
-export const WAIVABLE_RULES = [RULES.noLockTimeout, RULES.revoke, RULES.drop, RULES.orReplace, RULES.checkNotValid]
+export const WAIVABLE_RULES = [RULES.noLockTimeout, RULES.revoke, RULES.drop, RULES.orReplace, RULES.checkNotValid, RULES.setExpression]
 
 const REPO_ROOT = join(import.meta.dirname, '..', '..', '..')
 
 /** The digest of the baseline written at the TASK-075 merge. Never edited. */
 export const BASELINE_DIGEST = '11464e9ccab82f662db062c0be334aabf15e71c7c7465cae035b0682e6779341'
 
-export const CLASSES = ['tenant-store', 'legacy-boot', 'unadopted']
+export const CLASSES = ['tenant-store', 'legacy-boot', 'unadopted', 'fresh-only']
 
 /**
  * The canaries fixtures/canaries.json must keep (by name). A canary deleted to
@@ -54,6 +56,7 @@ export const REQUIRED_CANARIES = [
   'expand-uuidv7-default',
   'contract-without-contract-after',
   'expand-same-file-table',
+  'expand-set-expression-existing-table',
 ]
 
 const readJson = (p) => JSON.parse(readFileSync(p, 'utf8'))
@@ -136,6 +139,14 @@ export function runExpandContractSuite({ root = REPO_ROOT, canaries, canariesPat
   for (const [id, cls] of Object.entries(runners.chains)) {
     if (!ids.includes(id)) coverage.push(`chain ${id} is not in ranges.json (extra)`)
     if (!CLASSES.includes(cls)) coverage.push(`chain ${id} has unknown class ${JSON.stringify(cls)}`)
+  }
+  // A fresh-only chain is applied only to a database created in the same step, so it is sound only
+  // while it holds ONE file: a second would never reach a customer created before it. Refuse it
+  // until the chain flips to a runner that upgrades existing databases (TASK-084-a).
+  for (const chain of register.chains) {
+    if (runners.chains[chain.id] !== 'fresh-only') continue
+    const n = chainFileNames(chain.id, { root, register }).length
+    if (n > 1) coverage.push(`chain ${chain.id} is fresh-only but has ${n} files: a second file never reaches existing databases; flip the chain to tenant-store together with its upgrade runner first`)
   }
   check('chain-runners.json', coverage)
 

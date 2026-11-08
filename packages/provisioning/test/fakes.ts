@@ -4,7 +4,7 @@
 // assertion on this list, not on call counts.
 import { EnableRefused, type EnableGate, type EnableRefusedCode, type UnprovenEnablement } from '@gremion/tenant-store/lifecycle'
 import { memoryLedger } from '../src/ledger.ts'
-import type { AdminSpec, ControlRow, CustomerRef, DpiaSpec, GatePort, KernelPostCondition, ProvisioningDeps, SmtpReadBack } from '../src/ports.ts'
+import type { AdminSpec, ControlRow, CustomerRef, DpiaSpec, GatePort, GovernancePostCondition, KernelPostCondition, ProvisioningDeps, SmtpReadBack } from '../src/ports.ts'
 
 export const OPERATOR = '8d6b9c7e-1f2a-4b3c-9d4e-5f6a7b8c9d0e'
 /** The release tip the fake gate runs on (GREMION_RELEASE_TIP). */
@@ -39,6 +39,8 @@ export interface World {
   config: Map<string, { modules: string[]; setupComplete: boolean }>
   realms: Map<string, { enabled: boolean; smtp: SmtpReadBack; users: Map<string, AdminSpec>; notBefore: number; mails: string[] }>
   kernel: Map<string, { exists: boolean; migrated: boolean; seedRows: string[]; ledgerColumns: string[]; orgUnits: number; committees: number }>
+  /** TASK-084-a: the governance database per customer. */
+  governance: Map<string, { exists: boolean; migrated: boolean; boundTo: { customerId: string; tenantToken: string } | null; credentialFile: boolean }>
   groups: Map<string, string[]>
   prefixes: Set<string>
   broker: Map<string, string[]>
@@ -52,7 +54,16 @@ export interface World {
   /** Phase 1 Task 4: the actor kind each enable, disable and DPIA record was called with, `<verb> <module> <kind>`. */
   actors: string[]
   /** Test knobs. */
-  knobs: { seedsOn: boolean; runnerShape: 'gremion-ui' | 'tenant-store'; dnsFails: boolean; crashAfterRegister?: boolean }
+  knobs: {
+    seedsOn: boolean
+    runnerShape: 'gremion-ui' | 'tenant-store'
+    dnsFails: boolean
+    crashAfterRegister?: boolean
+    /** TASK-084-a: bind the governance database to this (foreign) customer id instead of the right one. */
+    governanceBindsTo?: string
+    /** TASK-084-a: fields of the governance post-condition to overwrite (one failed arm at a time). */
+    governancePc?: Partial<GovernancePostCondition>
+  }
   /**
    * Catalogue modules with NO plt.module_version row: what `init` leaves
    * undecided under Q20 (no retention profile declared and not in the
@@ -70,6 +81,7 @@ export function world(): World {
     config: new Map(),
     realms: new Map(),
     kernel: new Map(),
+    governance: new Map(),
     groups: new Map(),
     prefixes: new Set(),
     broker: new Map(),
@@ -213,6 +225,44 @@ export function deps(w: World, catalogue = ['board', 'calendar', 'publishing', '
       },
       async postCondition(c) {
         return pc(c)
+      },
+    },
+    governance: {
+      async ensureDatabase(c) {
+        if (w.governance.get(c.id)?.exists) return
+        w.governance.set(c.id, { exists: true, migrated: false, boundTo: null, credentialFile: true })
+        m(`governance:ensure ${c.id}`)
+      },
+      async migrate(c) {
+        const g = w.governance.get(c.id)
+        if (!g) throw new Error('no governance db')
+        if (g.migrated) return
+        g.migrated = true
+        m(`governance:migrate ${c.id}`)
+      },
+      async bind(c) {
+        const g = w.governance.get(c.id)
+        if (!g) throw new Error('no governance db')
+        if (g.boundTo) return
+        g.boundTo = { customerId: w.knobs.governanceBindsTo ?? c.id, tenantToken: c.token }
+        m(`governance:bind ${c.id}`)
+      },
+      async postCondition(c) {
+        const g = w.governance.get(c.id)
+        if (!g) throw new Error('no governance db')
+        const shipped = [{ filename: '0001_gov_setup.sql', sha256: 'a'.repeat(64) }]
+        const grantees = [`g_${c.id}_app`, `g_${c.id}_owner`, `g_${c.id}_purger`]
+        return {
+          binding: g.boundTo ? { customerId: g.boundTo.customerId, tenantToken: g.boundTo.tenantToken, contextCode: 'gov' } : null,
+          ledger: g.migrated ? shipped : [],
+          shipped,
+          unforcedRlsTables: [],
+          connectGrantees: grantees,
+          expectedConnectGrantees: grantees,
+          currentDatabase: `gov_${c.id}`,
+          expectedDatabase: `gov_${c.id}`,
+          ...w.knobs.governancePc,
+        }
       },
     },
     domain: {

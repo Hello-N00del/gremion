@@ -69,13 +69,20 @@ export function pgModules(opts: {
         ...(opts.lifecycle.log ? { log: opts.lifecycle.log } : {}),
       })
     },
-    async enabled(c: CustomerRef) {
-      const rows = await opts.platform<{ module_key: string }[]>`
-        SELECT m.module_key FROM plt.module_enablement e JOIN plt.module m USING (module_id)
-         WHERE e.customer_id = ${c.id} AND e.state = 'enabled' ORDER BY 1`
-      return rows.map((r) => r.module_key)
-    },
+    enabled: (c: CustomerRef) => enabledModuleKeys(opts.platform, c.id),
   }
+}
+
+/**
+ * The customer's CURRENT module set, as the registry holds it: module keys with an `enabled`
+ * plt.module_enablement row. The one reader (pgModules.enabled and `reconcile`, which re-ensures the
+ * customer's NATS account from it -- never from a guessed list, since nats-auth ensure is declarative).
+ */
+export async function enabledModuleKeys(platform: Sql, customerId: string): Promise<string[]> {
+  const rows = await platform<{ module_key: string }[]>`
+    SELECT m.module_key FROM plt.module_enablement e JOIN plt.module m USING (module_id)
+     WHERE e.customer_id = ${customerId} AND e.state = 'enabled' ORDER BY 1`
+  return rows.map((r) => r.module_key)
 }
 
 export interface BootstrapDeps {
@@ -440,7 +447,7 @@ export const COUNCIL_REQUESTER_MARKER = 'plt_council_requester'
 /** gremion-ui's own LOGIN role for it (PLATFORM_MODULES_DATABASE_URL). */
 export const COUNCIL_REQUESTER_ROLE = 'gremion_ui_modules'
 /**
- * The three functions of migration 0014 and the two of 0015 (the Karenz list and
+ * The three functions of migration 0014 and the two of 0016 (the Karenz list and
  * report); the role may EXECUTE exactly these among plt's.
  */
 export const COUNCIL_EXECUTES = [
