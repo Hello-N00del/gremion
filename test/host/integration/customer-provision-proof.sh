@@ -1233,7 +1233,7 @@ RH_KC="${STACK}-rh-kc"
 RH_SINK="${STACK}-rh-sink"
 RH_REALM=proof-r
 RH_HOST=rat.proof-r.test
-NODE_IMAGE="node:26-alpine@sha256:7c6af15abe4e3de859690e7db171d0d711bf37d27528eddfe625b2fe89e097f8"
+NODE_IMAGE="node:26.13.0-alpine@sha256:c6ad9e9c1d80f6eb607c26b4b0a132ff7a2344fad1c78ea3baa2a7d4c8de6d94"
 rh_set() { mkdir -p "$OUT"; printf '%s=%s\n' "$1" "$2" >> "$OUT/rehearsal.env"; }
 rh_get() { [[ -f "$OUT/rehearsal.env" ]] || die "no ${OUT}/rehearsal.env: run rehearsal-up first"; sed -n "s/^$1=//p" "$OUT/rehearsal.env" | tail -n1; }
 rkc() { docker exec -i "$RH_KC" /opt/keycloak/bin/kcadm.sh "$@"; }

@@ -119,10 +119,10 @@ test('unit is synthesised from the parts and passes only when every UNIT_PARTS k
 test('a missing unit part makes unit fail, and the reason names the missing part', () => {
   const parts = unitParts()
   delete parts['unit:ports']
-  delete parts['unit:bats']
+  delete parts['unit:bats-2-of-2']
   const out = combine([input('u.json', record(parts))], SHA)
   assert.equal(out.suites.unit.status, 'fail')
-  assert.match(out.suites.unit.reason, /missing part\(s\): ports, bats/)
+  assert.match(out.suites.unit.reason, /missing part\(s\): ports, bats-2-of-2/)
   assert.equal(out.ok, false)
 })
 

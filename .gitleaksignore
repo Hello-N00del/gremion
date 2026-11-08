@@ -14,3 +14,16 @@ packages/tenant-store/src/lifecycle/platform-migrations/manifest.json:generic-ap
 # docs/ops/module-source-parity.txt lists git commit SHAs (tag=/kernel= 40-hex), not credentials.
 docs/ops/module-source-parity.txt:generic-api-key:195
 docs/ops/module-source-parity.txt:generic-api-key:236
+
+# Full-history (workflow_dispatch) counterparts, found 2026-11-04 by the first manual CI run on main
+# since these files changed: the same checksum manifests at the commits that introduced or moved each
+# line (0013_oac_access_record.sql's sha256; the parity file's 40-hex git SHAs). Commit-pinned, fail closed.
+2f6eb4e65611ff79696e1bf7802852f349c6711e:scripts/migrations/applied.lock.json:generic-api-key:184
+3fa22eb2858eb30f6a6c54adfe7f6a06cf374bb1:scripts/migrations/applied.lock.json:generic-api-key:184
+501a58c2c00327e3e57f67efac97a9cd7002d420:scripts/migrations/applied.lock.json:generic-api-key:191
+59f9fb36a1c500af5ca13783f085d2c5e07df5ed:docs/ops/module-source-parity.txt:generic-api-key:168
+933455071044292a514f7b5108f9911be21058d7:docs/ops/module-source-parity.txt:generic-api-key:216
+b093c87efee5aa33e9c69575816e46a23fd91a3f:packages/tenant-store/src/lifecycle/platform-migrations/manifest.json:generic-api-key:12
+b093c87efee5aa33e9c69575816e46a23fd91a3f:scripts/migrations/applied.lock.json:generic-api-key:181
+c19f9854d36ee5fc5d6d414bc560c53695e776c7:packages/tenant-store/src/lifecycle/platform-migrations/manifest.json:generic-api-key:12
+c19f9854d36ee5fc5d6d414bc560c53695e776c7:scripts/migrations/applied.lock.json:generic-api-key:181
