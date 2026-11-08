@@ -20,6 +20,8 @@ const BEFORE = [
   'kernel:public.org_units\t1\t0f343b0931126a20f133d67c2b018a3b',
   'kernel:public.schema_migrations\t42\t5d41402abc4b2a76b9719d911017c592',
   'calendar:public.events\t0\t-',
+  'governance:gov.database_binding\t1\t6c3e0b1f4b0a7c9d2e8f5a1b3c4d5e6f',
+  'governance:gov.schema_migration\t1\tabcdefabcdefabcdefabcdefabcdefab',
   'realm-users\t2',
   '',
 ].join('\n')
@@ -27,7 +29,7 @@ const BEFORE = [
 describe('parseFingerprint', () => {
   it('reads table lines and the realm user count, ignoring comments and blank lines', () => {
     const fp = parseFingerprint(BEFORE)
-    assert.equal(fp.tables.size, 3)
+    assert.equal(fp.tables.size, 5)
     assert.deepEqual(fp.tables.get('kernel:public.org_units'), { count: '1', md5: '0f343b0931126a20f133d67c2b018a3b' })
     assert.equal(fp.realmUsers, '2')
     assert.deepEqual(fp.malformed, [])
@@ -68,6 +70,20 @@ describe('compareFingerprints', () => {
     assert.ok(compareFingerprints('', '').length > 0)
     assert.ok(compareFingerprints('realm-users\t2\n', 'realm-users\t2\n').some((l) => /no table/.test(l)))
     assert.ok(compareFingerprints(BEFORE.replace('realm-users\t2\n', ''), BEFORE.replace('realm-users\t2\n', '')).some((l) => /no realm user count/.test(l)))
+  })
+
+  it('a fingerprint without a governance table fails on either side (TASK-084-a: every customer has a governance database, a producer that drops it proves nothing about it)', () => {
+    const noGov = BEFORE.replace(/governance:[^\n]*\n/g, '')
+    assert.notEqual(noGov, BEFORE, 'the fixture carries governance tables')
+    assert.ok(compareFingerprints(noGov, noGov).some((l) => /no governance table/.test(l) && /before suspend/.test(l)))
+    assert.ok(compareFingerprints(BEFORE, noGov).some((l) => /after resume: no governance table/.test(l)))
+    assert.ok(compareFingerprints(noGov, BEFORE).some((l) => /before suspend: no governance table/.test(l)))
+    assert.deepEqual(compareFingerprints(BEFORE, BEFORE), [])
+  })
+
+  it('a changed governance row fails, naming the table', () => {
+    const changed = BEFORE.replace('governance:gov.database_binding\t1\t', 'governance:gov.database_binding\t2\t')
+    assert.match(compareFingerprints(BEFORE, changed)[0], /governance:gov\.database_binding: changed \(1 rows -> 2 rows/)
   })
 
   it('a malformed line fails', () => {

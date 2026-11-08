@@ -478,6 +478,20 @@ skip_if_mail_api_port_taken() {
     [[ "$output" == *"FATAL: cannot detect the docker0 gateway"*"shim: no such network"*"PROOF_HOST_GATEWAY_IP"* ]]   # docker's own stderr is in the message
 }
 
+@test "render-env: state.env carries the governance server's credential (TASK-084-a: governance-postgres is not profile-gated and tenant-create's init dies without it)" {
+    run bash "$PROOF" render-env
+    [ "$status" -eq 0 ]
+    grep -qxF 'GOVERNANCE_PG_USER=governance' "${POOLED_OUT}/env/state.env"
+    grep -qE '^GOVERNANCE_PG_PASSWORD=[0-9a-f]{16,}$' "${POOLED_OUT}/env/state.env"
+}
+
+@test "module_pg_keys: the customer render reads the governance pair from the fresh init-secrets render and dies by name without it (TASK-084-a)" {
+    local body; body="$(sed -n '/^module_pg_keys() {/,/^}/p' "$PROOF")"
+    grep -q 'GOVERNANCE_PG_USER' <<< "$body"
+    grep -q 'GOVERNANCE_PG_PASSWORD' <<< "$body"
+    grep -qE 'GOVERNANCE_PG_PASSWORD.*(CHANGE_ME|usable)|usable.*GOVERNANCE_PG' <<< "$body"
+}
+
 @test "precreate_bind_dirs: the app's bind sources exist, owned by the invoking user, before any container" {
     export SROOT="${BATS_TEST_TMPDIR}/sroot"
     run bash -c 'set -euo pipefail; . "$1"; SROOT="$2"; precreate_bind_dirs' _ "$PROOF" "$SROOT"

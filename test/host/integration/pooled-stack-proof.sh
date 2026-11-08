@@ -341,7 +341,7 @@ overlay_ref() {
     else printf '%s/%s' "$OVL_HOST" "$1"; fi
 }
 
-# The six module servers' <ID>_PG_USER/<ID>_PG_PASSWORD lines of state.env.
+# The six module servers' <ID>_PG_USER/<ID>_PG_PASSWORD lines of state.env, plus the governance pair.
 # POOLED_CUSTOMER (TASK-043b F5): from a FRESH gremion-init-secrets render of
 # the product's own state.env.tmpl, never this script's gen() -- generating
 # them here hid a template that lacked the keys `gremion-tenant init` needs.
@@ -352,6 +352,8 @@ module_pg_keys() {
     local id u p f="$OUT/init-secrets/etc/env/state.env"
     if [[ "${POOLED_CUSTOMER:-0}" != 1 ]]; then
         for id in BOARD CALENDAR CONTENT FINANCE NEWSLETTER VAULT; do printf '%s_PG_PASSWORD=%s\n' "$id" "$(gen)"; done
+        # TASK-084-a: governance-postgres has no profile and no password default
+        printf 'GOVERNANCE_PG_USER=governance\nGOVERNANCE_PG_PASSWORD=%s\n' "$(gen)"
         return 0
     fi
     rm -rf "$OUT/init-secrets"; mkdir -p "$OUT/init-secrets" "$OUT/ledger"
@@ -365,6 +367,13 @@ module_pg_keys() {
             || { rm -rf "$OUT/init-secrets"; die "TASK-043b F5: a fresh gremion-init-secrets render of state.env.tmpl carries no usable ${id}_PG_USER/${id}_PG_PASSWORD"; }
         printf '%s_PG_USER=%s\n%s_PG_PASSWORD=%s\n' "$id" "$u" "$id" "$p"
     done
+    # TASK-084-a: the governance server (not a module server; no profile) and
+    # tenant-create's governance admin file both derive from this pair.
+    u="$(sed -n "s/^GOVERNANCE_PG_USER=//p" "$f" | tr -d '\r' | tail -n1)"
+    p="$(sed -n "s/^GOVERNANCE_PG_PASSWORD=//p" "$f" | tr -d '\r' | tail -n1)"
+    [[ -n "$u" && -n "$p" && "$p" != CHANGE_ME* ]] \
+        || { rm -rf "$OUT/init-secrets"; die "TASK-084-a: a fresh gremion-init-secrets render of state.env.tmpl carries no usable GOVERNANCE_PG_USER/GOVERNANCE_PG_PASSWORD"; }
+    printf 'GOVERNANCE_PG_USER=%s\nGOVERNANCE_PG_PASSWORD=%s\n' "$u" "$p"
     p=""
     rm -rf "$OUT/init-secrets"
     printf '%s F5: the six <ID>_PG_USER/_PG_PASSWORD keys came from a fresh gremion-init-secrets render of state.env.tmpl\n' "$(now)" >> "$OUT/ledger/init-secrets.log"
