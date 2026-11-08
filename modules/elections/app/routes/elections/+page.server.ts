@@ -4,6 +4,7 @@ import { hasRole, Role } from '$lib/auth'
 import type { SessionUser } from '$lib/auth/types'
 import { HeliosClient, deriveLifecycle, type ElectionLifecycle } from '$lib/server/elections/helios-client'
 import { ElectionDb, type CommitteeElection } from '$lib/server/elections/election-db'
+import { retainedViewsForPage } from '$lib/server/module-karenz/retained/views'
 
 export interface ElectionListRow {
   uuid: string
@@ -62,5 +63,9 @@ export const load: PageServerLoad = async ({ locals }) => {
     }
   }
 
-  return { elections, isAdmin }
+  // Module Karenz (Task 19): the sealed result copies of an earlier period, read-only, for the roles that may read
+  // retained records. They survive the final deletion of the module's data, so a module switched on afresh shows them.
+  const retainedRecords = await retainedViewsForPage(locals.tenant, user.roles, 'elections')
+
+  return { elections, isAdmin, retainedRecords }
 }

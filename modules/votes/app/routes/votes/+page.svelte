@@ -8,6 +8,7 @@
   import { t } from '$lib/i18n'
   import { Dialog } from '$lib/components/ui/dialog'
   import PollCreateForm from '$lib/components/polls/PollCreateForm.svelte'
+  import RetainedRecords from '$lib/components/RetainedRecords.svelte'
   import type { PageData } from './$types'
   import type { VoteItem } from '$lib/votes/types'
   import type { VoteListItem, NormalVoteItem, DegradedVoteItem } from './+page.server'
@@ -460,6 +461,9 @@
       {/if}
     </div>
   </div>
+
+  <!-- Module Karenz (Task 19): sealed tallies of an earlier period, read-only; nothing for an empty list or a reader who may not see them -->
+  <RetainedRecords records={data.retainedRecords} moduleLabel="Abstimmungen" />
 </div>
 
 <!-- New vote dialog -->

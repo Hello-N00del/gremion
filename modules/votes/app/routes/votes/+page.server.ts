@@ -5,6 +5,7 @@ import type { SessionUser } from '$lib/auth/types'
 import { ElectionDb, type CommitteeElection } from '$lib/server/elections/election-db'
 import { getOrgUnit } from '$lib/server/governance/org-units-db'
 import { getVotesBackend } from '$lib/server/elections/backend'
+import { retainedViewsForPage } from '$lib/server/module-karenz/retained/views'
 import { dedupeDegradedUuids, deriveHeliosStatus } from '$lib/votes/helios-status'
 import type { VoteItem } from '$lib/votes/types'
 
@@ -124,6 +125,9 @@ export const load: PageServerLoad = async ({ locals }) => {
     electionsEnabled,
     // Drives the inline quick-poll create control (relocated from /polls, #197).
     isManager: isAdmin,
+    // Module Karenz (Task 19): the sealed poll tallies of an earlier period, read-only, for the roles that may read
+    // retained records. They survive the final deletion of the module's data, so a module switched on afresh shows them.
+    retainedRecords: await retainedViewsForPage(locals.tenant, user.roles, 'votes'),
   }
 }
 

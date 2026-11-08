@@ -5,6 +5,7 @@ import { writeAuditEntry } from '$lib/server/audit-db'
 import { safeFailureReason } from '$lib/server/erasure/orchestrator'
 import { RetainedCryptoError, RetainedNotFoundError } from '$lib/server/module-karenz/retained/crypto'
 import { canReadRetained, readRetainedRedacted } from '$lib/server/module-karenz/retained/serve'
+import { isCatalogueId, retainedViewsFor } from '$lib/server/module-karenz/retained/views'
 
 // Module Karenz (phase 2, Task 11): the settings download of a sealed retained copy.
 //   GET /api/settings/modules/retained?id=<retained record id> -> 200 application/x-ndjson attachment
@@ -14,6 +15,12 @@ import { canReadRetained, readRetainedRedacted } from '$lib/server/module-karenz
 // BEFORE the body is released, and when it cannot be written the answer is 503 with a short error and no record content.
 // 401 no session, 403 a role that may not read, 400 no id, 404 an unknown id (the copies live in the
 // request tenant's own database, so another tenant's id is unknown here), 500 a copy that does not verify.
+//
+//   GET /api/settings/modules/retained?module=<catalogueId> -> 200 { success: true, data: RetainedRecordView[] }
+// (Task 19) The list of the sealed copies of one module, newest first, for the same roles: title, sealed date,
+// line count and the download link above. It carries no record content. This route is read-only by design: it
+// exports GET and nothing else, and no other route writes, edits or deletes a retained copy. 400 for a module
+// that is not a catalogue id, 500 when the list cannot be read.
 
 /** The failure class (and SQLSTATE when there is one) for the log: never a message, which may carry content. */
 function failureClass(err: unknown): string {
@@ -28,6 +35,17 @@ export const GET: RequestHandler = async ({ url, locals }) => {
   const user = session?.user as SessionUser | undefined
   if (!user) return json({ success: false, error: 'Unauthorized' }, { status: 401 })
   if (!canReadRetained(user.roles)) return json({ success: false, error: 'Forbidden' }, { status: 403 })
+
+  const moduleParam = url.searchParams.get('module')
+  if (moduleParam !== null) {
+    if (!isCatalogueId(moduleParam)) return json({ success: false, code: 'BAD_INPUT', error: 'Das Modul (module) ist ungültig.' }, { status: 400 })
+    try {
+      return json({ success: true, data: await retainedViewsFor(locals.tenant, user.roles, moduleParam) }, { headers: { 'Cache-Control': 'no-store' } })
+    } catch (err) {
+      console.error(`[settings/modules/retained] ${locals.tenant.slug}: list for ${moduleParam} failed:`, failureClass(err))
+      return json({ success: false, code: 'INTERNAL', error: 'Die aufbewahrten Unterlagen konnten nicht aufgelistet werden.' }, { status: 500 })
+    }
+  }
 
   const id = url.searchParams.get('id')
   if (!id) return json({ success: false, code: 'BAD_INPUT', error: 'Es fehlt die Kennung der aufbewahrten Unterlagen (id).' }, { status: 400 })
