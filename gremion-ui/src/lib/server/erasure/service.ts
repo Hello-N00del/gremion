@@ -3,7 +3,13 @@
 import { readConfig } from '$lib/server/config'
 import { getDb } from '$lib/server/db'
 import { MODULE_MANIFESTS } from '$lib/modules/registry'
-import { currentTenantId } from '$lib/server/tenant/context'
+import { currentTenantId, getTenant } from '$lib/server/tenant/context'
+import {
+  KARENZ_LIST_UNAVAILABLE_MODULE_ID,
+  karenzErasureModules,
+  karenzListUnavailableHook,
+  recordKarenzErasure,
+} from '$lib/server/module-karenz/erasure'
 import { getErasureHook } from '$lib/server/modules/runtime-registry'
 import { KERNEL_MODULE_ID, kernelErasureHook } from './kernel-hook'
 import { IDENTITY_MODULE_ID, createIdentityErasureHook } from './identity-hook'
@@ -97,9 +103,22 @@ export async function tenantHoldsSubjectData(sql: Sql, tenantId: string, subject
 
 export function defaultErasureDeps(): ErasureDeps {
   return {
-    enabledModuleIds: async () => erasureModuleIds(readConfig().modules, await appliedMigrations()),
+    // Module Karenz (Task 12): a module that is switched off for 30 days still holds the person in its
+    // external stores (Nextcloud Polls, Matrix), so the modules with a live Karenz row are walked too. A
+    // Karenz list that cannot be read is a failing step of its own in the report, never a silent omission.
+    enabledModuleIds: async () => {
+      const ids = erasureModuleIds(readConfig().modules, await appliedMigrations())
+      const karenz = await karenzErasureModules(getTenant())
+      return [...new Set([...ids, ...karenz.ids, ...(karenz.unreadable ? [KARENZ_LIST_UNAVAILABLE_MODULE_ID] : [])])]
+    },
     hookFor: (id) =>
-      id === KERNEL_MODULE_ID ? kernelErasureHook : id === IDENTITY_MODULE_ID ? identityErasureHook : getErasureHook(id),
+      id === KERNEL_MODULE_ID
+        ? kernelErasureHook
+        : id === IDENTITY_MODULE_ID
+          ? identityErasureHook
+          : id === KARENZ_LIST_UNAVAILABLE_MODULE_ID
+            ? karenzListUnavailableHook
+            : getErasureHook(id),
     // In-process modules share the tenant pool; a module whose data lives in its own
     // service database reports that itself (its hook returns `skipped`).
     connectionFor: () => {
@@ -118,10 +137,18 @@ export function defaultErasureDeps(): ErasureDeps {
   }
 }
 
-export function startErasure(
+/**
+ * Run an erasure for the current tenant. The subject ID is written to the Karenz erasure ledger FIRST
+ * (module_karenz_erasure, id only): a run that fails midway has already erased part of the person, and a
+ * module that comes back from a Karenz must replay it. A ledger that cannot be written stops the request
+ * before any hook ran, so the retry is safe and nothing is half-done.
+ */
+export async function startErasure(
   input: { subjectId: string; requestedBy: string },
   deps: ErasureDeps = defaultErasureDeps(),
+  ledger: (subjectId: string) => Promise<void> = (subjectId) => recordKarenzErasure(getDb(), subjectId),
 ): Promise<ErasureReport> {
+  if (typeof input.subjectId === 'string' && input.subjectId.trim() !== '') await ledger(input.subjectId)
   return runErasure({ tenantId: currentTenantId(), ...input }, deps)
 }
 

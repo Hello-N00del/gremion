@@ -48,6 +48,14 @@
 //                             drains them (Keycloak/Matrix/Nextcloud groups). A
 //                             pending or failed op is NEVER deleted.
 //
+//   Module Karenz (phase 2, Task 12) -- tables of the 30-day switch-off:
+//     module_karenz_notice    the subject's rows of the mail ledger are operative data -- DELETED.
+//     retained_record         sealed copies that name the subject are NEVER altered (the stored bytes stay
+//                             as sealed); they are served redacted. A copy already PUBLISHED to a sink
+//                             (the files module's folder) is published again, redacted, under the same
+//                             filename after the erasure committed (republishForErasure). A sink that
+//                             cannot be reached is a residual of the report: the person stays legible there.
+//
 // NOT touched, by design: audit_log (hash chain, TRD-160 redaction layer) and
 // the protocol/Beschluss register (open conflict, TRD section 2.4). The external
 // identities themselves are the separate `identity` step (identity-hook.ts),
@@ -57,6 +65,9 @@ import type { ErasureResidual, ModuleErasureHook } from '@gremion/ports/erasure'
 import type { PgTransaction } from '$lib/server/db/tx'
 import { enqueueMemberRemoveOps } from '$lib/server/governance/provisioning/member-ops'
 import type { Subsystem } from '$lib/server/governance/provisioning/types'
+import { republishRetainedForSubject, type RepublishResult } from '$lib/server/module-karenz/retained/serve'
+import { getTenant, type TenantContext } from '$lib/server/tenant/context'
+import { safeFailureReason, subjectRef } from './orchestrator'
 
 export const KERNEL_MODULE_ID = 'kernel'
 export const ERASED_MARKER = 'erased'
@@ -79,85 +90,150 @@ export const KERNEL_RESIDUAL_COLUMNS: readonly Omit<ErasureResidual, 'rows'>[] =
   },
 ]
 
-export const kernelErasureHook: ModuleErasureHook<Sql> = {
-  moduleId: KERNEL_MODULE_ID,
-  async erase({ db, subjectId }) {
-    // The orchestrator never passes null to a connection-requiring hook; guard anyway.
-    if (db === null) return { status: 'skipped', reason: 'no database connection' }
-    const { counts, residuals } = await db.begin(async (tx) => {
-      const c: Record<string, number> = {}
-
-      // HIGH-1: queue the external removals BEFORE the membership rows go, in this tx.
-      // Same subsystem filter as removeUserEverywhere: any ledger row with an external
-      // id still holds a live external resource (the drain is 404-tolerant for the rest).
-      const units = await tx<{ org_unit_id: string }[]>`
-        SELECT DISTINCT org_unit_id FROM org_unit_members WHERE user_keycloak_id = ${subjectId}`
-      const resources = units.length === 0 ? [] : await tx<{ org_unit_id: string; subsystem: Subsystem }[]>`
-        SELECT org_unit_id, subsystem FROM provisioning_resources
-        WHERE external_id IS NOT NULL AND org_unit_id IN ${tx(units.map((u) => u.org_unit_id))}
-        ORDER BY org_unit_id, subsystem`
-      c.provisioning_member_ops_enqueued = 0
-      for (const { org_unit_id: unitId } of units) {
-        const subs = resources.filter((r) => r.org_unit_id === unitId).map((r) => r.subsystem)
-        await enqueueMemberRemoveOps(tx as unknown as PgTransaction, unitId, subjectId, subs)
-        c.provisioning_member_ops_enqueued += subs.length
-      }
-      // Only finished ops may go; pending/failed ones are the outbox of the external removal.
-      c.provisioning_member_ops_done_purged = (
-        await tx`DELETE FROM provisioning_member_ops WHERE user_keycloak_id = ${subjectId} AND status = 'ok'`
-      ).count
-
-      // HIGH-2 (RC-IDT-TENURE): the governance record survives, the person does not.
-      c.governance_membership_record = (
-        await tx`
-          INSERT INTO governance_membership_record
-            (source, org_unit_id, caucus_id, membership_type, voting, term_start, term_end, joined_at)
-          SELECT 'org_unit_members', org_unit_id, NULL, membership_type, voting, term_start, term_end, joined_at
-          FROM org_unit_members WHERE user_keycloak_id = ${subjectId} AND membership_type = 'elected'
-          UNION ALL
-          SELECT 'caucus_membership', council_org_unit_id, caucus_id, NULL, NULL, term_start, term_end, joined_at
-          FROM caucus_membership WHERE user_keycloak_id = ${subjectId}`
-      ).count
-      c.role_assignment_history_archived = (
-        await tx`
-          INSERT INTO role_assignment_history (role_id, user_keycloak_id, start_date, end_date, ended_reason)
-          SELECT role_id, NULL, s, e, r FROM (
-            SELECT role_id,
-                   COALESCE(start_date, created_at::date) AS s,
-                   CASE WHEN status IN ('active', 'grace')
-                        THEN LEAST(COALESCE(end_date, current_date), current_date)
-                        ELSE COALESCE(end_date, current_date) END AS e,
-                   CASE WHEN status IN ('expired', 'grace') THEN 'expired' ELSE 'removed' END AS r
-            FROM role_assignments WHERE user_keycloak_id = ${subjectId}
-          ) t
-          WHERE s <= e`
-      ).count
-
-      c.org_unit_members = (await tx`DELETE FROM org_unit_members WHERE user_keycloak_id = ${subjectId}`).count
-      c.caucus_membership = (await tx`DELETE FROM caucus_membership WHERE user_keycloak_id = ${subjectId}`).count
-      c.notification_read_marker = (await tx`DELETE FROM notification_read_marker WHERE user_keycloak_id = ${subjectId}`).count
-      c.scheduled_notifications = (await tx`DELETE FROM scheduled_notifications WHERE recipient_keycloak_id = ${subjectId}`).count
-      c.role_assignments = (await tx`DELETE FROM role_assignments WHERE user_keycloak_id = ${subjectId}`).count
-      c.role_assignments_assigned_by = (
-        await tx`UPDATE role_assignments SET assigned_by_keycloak_id = ${ERASED_MARKER} WHERE assigned_by_keycloak_id = ${subjectId}`
-      ).count
-      c.role_assignment_history = (
-        await tx`UPDATE role_assignment_history SET user_keycloak_id = NULL WHERE user_keycloak_id = ${subjectId}`
-      ).count
-
-      // RC-BRD: operative board data, not a register record.
-      c.card_assignee = (await tx`UPDATE card SET assignee_keycloak_id = NULL WHERE assignee_keycloak_id = ${subjectId}`).count
-      c.card_created_by = (await tx`UPDATE card SET created_by = ${ERASED_MARKER} WHERE created_by = ${subjectId}`).count
-
-      // What stays, said out loud (MED-3): counted inside the same tx, after the writes.
-      const left: ErasureResidual[] = []
-      for (const col of KERNEL_RESIDUAL_COLUMNS) {
-        const [{ n }] = await tx<{ n: number }[]>`
-          SELECT count(*)::int AS n FROM ${tx(col.table)} WHERE ${tx(col.column)}::text = ${subjectId}`
-        if (n > 0) left.push({ ...col, rows: n })
-      }
-      return { counts: c, residuals: left }
-    })
-    return { status: 'erased', counts, residuals }
-  },
+export interface RepublishInput {
+  db: Sql
+  tenantId: string
+  subjectId: string
 }
+
+export interface RepublishDeps {
+  getTenant?: () => TenantContext
+  republishRetainedForSubject?: (tenant: TenantContext, ref: string) => Promise<RepublishResult>
+}
+
+const NOTHING_REPUBLISHED: RepublishResult = { published: 0, unreachable: [], failed: [] }
+
+/**
+ * After the erasure committed: publish again, redacted, every published retained copy that names the
+ * subject. The erasure reports (the redaction source) already hold the subject: the orchestrator opens
+ * the report header before the first hook. When no retained copy names the subject nothing is asked and no
+ * tenant context is needed. The request tenant must be the tenant being erased; the copies are read through
+ * the pool the erasure itself used.
+ */
+export async function republishForErasure(input: RepublishInput, deps: RepublishDeps = {}): Promise<RepublishResult> {
+  const ref = subjectRef(input.tenantId, input.subjectId)
+  const [hit] = await input.db<{ found: number }[]>`SELECT 1 AS found FROM retained_record WHERE ${ref}::text = ANY (subject_refs) LIMIT 1`
+  if (!hit) return NOTHING_REPUBLISHED
+  const tenant = (deps.getTenant ?? getTenant)()
+  if (tenant.id !== input.tenantId) throw new Error('republish after an erasure: the request tenant is not the tenant being erased')
+  return (deps.republishRetainedForSubject ?? republishRetainedForSubject)({ ...tenant, db: input.db }, ref)
+}
+
+export interface KernelHookDeps {
+  /** Republish the retained copies that name the subject (default: republishForErasure). */
+  republish?: (input: RepublishInput) => Promise<RepublishResult>
+}
+
+export function createKernelErasureHook(deps: KernelHookDeps = {}): ModuleErasureHook<Sql> {
+  const republish = deps.republish ?? ((input: RepublishInput) => republishForErasure(input))
+  return {
+    moduleId: KERNEL_MODULE_ID,
+    async erase({ db, tenantId, subjectId }) {
+      // The orchestrator never passes null to a connection-requiring hook; guard anyway.
+      if (db === null) return { status: 'skipped', reason: 'no database connection' }
+      const { counts, residuals } = await db.begin(async (tx) => {
+        const c: Record<string, number> = {}
+
+        // HIGH-1: queue the external removals BEFORE the membership rows go, in this tx.
+        // Same subsystem filter as removeUserEverywhere: any ledger row with an external
+        // id still holds a live external resource (the drain is 404-tolerant for the rest).
+        const units = await tx<{ org_unit_id: string }[]>`
+          SELECT DISTINCT org_unit_id FROM org_unit_members WHERE user_keycloak_id = ${subjectId}`
+        const resources = units.length === 0 ? [] : await tx<{ org_unit_id: string; subsystem: Subsystem }[]>`
+          SELECT org_unit_id, subsystem FROM provisioning_resources
+          WHERE external_id IS NOT NULL AND org_unit_id IN ${tx(units.map((u) => u.org_unit_id))}
+          ORDER BY org_unit_id, subsystem`
+        c.provisioning_member_ops_enqueued = 0
+        for (const { org_unit_id: unitId } of units) {
+          const subs = resources.filter((r) => r.org_unit_id === unitId).map((r) => r.subsystem)
+          await enqueueMemberRemoveOps(tx as unknown as PgTransaction, unitId, subjectId, subs)
+          c.provisioning_member_ops_enqueued += subs.length
+        }
+        // Only finished ops may go; pending/failed ones are the outbox of the external removal.
+        c.provisioning_member_ops_done_purged = (
+          await tx`DELETE FROM provisioning_member_ops WHERE user_keycloak_id = ${subjectId} AND status = 'ok'`
+        ).count
+
+        // HIGH-2 (RC-IDT-TENURE): the governance record survives, the person does not.
+        c.governance_membership_record = (
+          await tx`
+            INSERT INTO governance_membership_record
+              (source, org_unit_id, caucus_id, membership_type, voting, term_start, term_end, joined_at)
+            SELECT 'org_unit_members', org_unit_id, NULL, membership_type, voting, term_start, term_end, joined_at
+            FROM org_unit_members WHERE user_keycloak_id = ${subjectId} AND membership_type = 'elected'
+            UNION ALL
+            SELECT 'caucus_membership', council_org_unit_id, caucus_id, NULL, NULL, term_start, term_end, joined_at
+            FROM caucus_membership WHERE user_keycloak_id = ${subjectId}`
+        ).count
+        c.role_assignment_history_archived = (
+          await tx`
+            INSERT INTO role_assignment_history (role_id, user_keycloak_id, start_date, end_date, ended_reason)
+            SELECT role_id, NULL, s, e, r FROM (
+              SELECT role_id,
+                     COALESCE(start_date, created_at::date) AS s,
+                     CASE WHEN status IN ('active', 'grace')
+                          THEN LEAST(COALESCE(end_date, current_date), current_date)
+                          ELSE COALESCE(end_date, current_date) END AS e,
+                     CASE WHEN status IN ('expired', 'grace') THEN 'expired' ELSE 'removed' END AS r
+              FROM role_assignments WHERE user_keycloak_id = ${subjectId}
+            ) t
+            WHERE s <= e`
+        ).count
+
+        c.org_unit_members = (await tx`DELETE FROM org_unit_members WHERE user_keycloak_id = ${subjectId}`).count
+        c.caucus_membership = (await tx`DELETE FROM caucus_membership WHERE user_keycloak_id = ${subjectId}`).count
+        c.notification_read_marker = (await tx`DELETE FROM notification_read_marker WHERE user_keycloak_id = ${subjectId}`).count
+        c.scheduled_notifications = (await tx`DELETE FROM scheduled_notifications WHERE recipient_keycloak_id = ${subjectId}`).count
+        c.role_assignments = (await tx`DELETE FROM role_assignments WHERE user_keycloak_id = ${subjectId}`).count
+        c.role_assignments_assigned_by = (
+          await tx`UPDATE role_assignments SET assigned_by_keycloak_id = ${ERASED_MARKER} WHERE assigned_by_keycloak_id = ${subjectId}`
+        ).count
+        c.role_assignment_history = (
+          await tx`UPDATE role_assignment_history SET user_keycloak_id = NULL WHERE user_keycloak_id = ${subjectId}`
+        ).count
+
+        // RC-BRD: operative board data, not a register record.
+        c.card_assignee = (await tx`UPDATE card SET assignee_keycloak_id = NULL WHERE assignee_keycloak_id = ${subjectId}`).count
+        c.card_created_by = (await tx`UPDATE card SET created_by = ${ERASED_MARKER} WHERE created_by = ${subjectId}`).count
+
+        // Module Karenz: the mail ledger of a switch-off holds the holder's user id. Operative data.
+        c.module_karenz_notice = (await tx`DELETE FROM module_karenz_notice WHERE user_id = ${subjectId}`).count
+
+        // What stays, said out loud (MED-3): counted inside the same tx, after the writes.
+        const left: ErasureResidual[] = []
+        for (const col of KERNEL_RESIDUAL_COLUMNS) {
+          const [{ n }] = await tx<{ n: number }[]>`
+            SELECT count(*)::int AS n FROM ${tx(col.table)} WHERE ${tx(col.column)}::text = ${subjectId}`
+          if (n > 0) left.push({ ...col, rows: n })
+        }
+        return { counts: c, residuals: left }
+      })
+      // After the commit: a sealed copy that was published keeps the person legible in the sink until it is
+      // published again redacted. A failure here never undoes the erasure; it is a residual of the report.
+      try {
+        const out = await republish({ db, tenantId, subjectId })
+        counts.retained_copies_republished = out.published
+        const open = out.unreachable.length + out.failed.length
+        if (open > 0) {
+          residuals.push({
+            table: 'retained_record',
+            column: 'subject_refs',
+            rows: open,
+            reason: 'published copy still shows the person: its sink is off or failed, the copy is republished redacted when the sink is reachable again (see the Karenz settings page)',
+          })
+        }
+      } catch (err) {
+        console.error('[erasure] republishing the retained copies after an erasure failed:', safeFailureReason(err))
+        residuals.push({
+          table: 'retained_record',
+          column: 'subject_refs',
+          rows: null,
+          reason: `published copies were not checked after the erasure (${safeFailureReason(err)}): republish them redacted by hand or run the erasure again`,
+        })
+      }
+      return { status: 'erased', counts, residuals }
+    },
+  }
+}
+
+export const kernelErasureHook: ModuleErasureHook<Sql> = createKernelErasureHook()
