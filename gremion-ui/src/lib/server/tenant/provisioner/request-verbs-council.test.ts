@@ -132,9 +132,10 @@ describe('request-verify: a council row', () => {
     expect(await verdictOf(ctx())).toMatchObject({ verdict: 'refused', reason: expect.stringMatching(/^evidence: /) })
   })
 
-  it('a council disable_module is refused DISABLE_NOT_YET in the printed verdict', async () => {
+  it('a council disable_module verifies in the printed verdict (Karenz phase 2 lifted DISABLE_NOT_YET) with actorKind person', async () => {
     held.row = { ...baseRow, kind: 'disable_module', origin: 'council', actor_kind: 'person', evidence_token: await pair(COUNCIL_ISS, 'gremion-ui', ['council-admin']) }
-    expect(await verdictOf(ctx())).toMatchObject({ verdict: 'refused', reason: expect.stringMatching(/^DISABLE_NOT_YET/) })
+    const v = await verdictOf(ctx())
+    expect(v).toMatchObject({ verdict: 'ok', kind: 'disable_module', origin: 'council', args: { slug: 'musterstadt', module: 'votes', actorKind: 'person' } })
   })
 
   it('a request that is not running is refused for every origin', async () => {

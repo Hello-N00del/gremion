@@ -239,6 +239,16 @@ export async function recordNotice(db: Sql, n: NoticeInput): Promise<void> {
                              THEN NULL ELSE EXCLUDED.last_error END`
 }
 
+/** How many people were mailed (`sent`) and how many mails failed (`failed`) for one kind of one row. Counts only, no ids. */
+export async function noticeCounts(db: Sql, karenzId: string, kind: NoticeKind): Promise<{ sent: number; failed: number }> {
+  const rows = await db<{ sent: number; failed: number }[]>`
+    SELECT count(*) FILTER (WHERE state = 'sent')::int   AS sent,
+           count(*) FILTER (WHERE state = 'failed')::int AS failed
+      FROM module_karenz_notice
+     WHERE karenz_id = ${karenzId} AND kind = ${kind}`
+  return { sent: rows[0]?.sent ?? 0, failed: rows[0]?.failed ?? 0 }
+}
+
 /** The user ids already mailed for this kind (state `sent`); a failed notice is not in the set. */
 export async function noticesSent(db: Sql, karenzId: string, kind: NoticeKind): Promise<Set<string>> {
   const rows = await db<{ user_id: string }[]>`

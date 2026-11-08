@@ -26,6 +26,8 @@ vi.mock('$lib/server/audit-db', () => ({ writeAuditEntry: h.writeAuditEntry }))
 vi.mock('$env/dynamic/private', () => ({ env: {} }))
 
 import { CouncilNotConfigured } from './council-db'
+import { _clearSwitchOffGuardsForTests, registerSwitchOffGuard } from './guards'
+import type { KarenzViewDeps } from './karenz-view'
 import { MODULE_DENY, loadModuleOverview, submitModuleSwitch } from './service'
 
 const CUSTOMER = '11111111-1111-4111-8111-111111111111'
@@ -66,23 +68,50 @@ const row = (module_key: string, over: Partial<StateRow> = {}): StateRow => ({
 // plt.module is catalogue-wide (every row is toggleable): the double returns the whole catalogue.
 const CATALOGUE = ['board', 'calendar', 'elections', 'files', 'handover', 'messaging', 'publishing', 'votes', 'vault']
 
-let platform: { calls: { text: string; values: unknown[] }[]; state: StateRow[]; submit: () => Promise<unknown[]> }
+let platform: { calls: { text: string; values: unknown[] }[]; state: StateRow[]; karenz: Record<string, unknown>[]; submit: () => Promise<unknown[]> }
 
-function installPlatform(state: StateRow[] = CATALOGUE.map((k) => row(k))) {
+function installPlatform(state: StateRow[] = CATALOGUE.map((k) => row(k)), karenz: Record<string, unknown>[] = []) {
   platform = {
     calls: [],
     state,
+    karenz,
     submit: async () => [{ request_id: REQUEST }],
   }
   const sql = (strings: TemplateStringsArray, ...values: unknown[]) => {
     const text = strings.join('?')
     platform.calls.push({ text, values })
     if (text.includes('council_module_state')) return Promise.resolve(platform.state)
+    if (text.includes('council_karenz_list')) return Promise.resolve(platform.karenz)
     if (text.includes('submit_council_module_request')) return platform.submit()
     throw new Error(`unexpected platform query: ${text}`)
   }
   h.getCouncilDb.mockReturnValue(sql)
 }
+
+/**
+ * A plt.council_karenz_list row. The real function returns no actor column; the double ADDS one on purpose
+ * (a distinctive person), so a mapping that copied unknown columns would put it into the overview.
+ */
+const ACTOR_ID = 'ACTOR-ID-9f3c1e7a-0000-4000-8000-feedfacecafe'
+const ACTOR_MAIL = 'schaltende.person.distinctive@example.org'
+function karenzRow(module_key: string, state: string, over: Record<string, unknown> = {}) {
+  return {
+    karenz_id: KARENZ,
+    module_key,
+    state,
+    switched_off_at: new Date('2026-11-05T09:00:00Z'),
+    final_at: new Date('2026-12-05T09:00:00Z'),
+    restore_requested_at: null,
+    final_mode: null,
+    platform_done_at: null,
+    tenant_done_at: null,
+    export_kept_until: null,
+    actor_user_id: ACTOR_ID,
+    actor_email: ACTOR_MAIL,
+    ...over,
+  }
+}
+const KARENZ = '55555555-5555-4555-8555-555555555555'
 const submits = () => platform.calls.filter((c) => c.text.includes('submit_council_module_request'))
 
 function config(modules: Record<string, boolean>) {
@@ -97,6 +126,7 @@ beforeEach(() => {
   h.writeAuditEntry.mockReset().mockResolvedValue(undefined)
   installPlatform()
   config({ calendar: true, elections: true, votes: false })
+  _clearSwitchOffGuardsForTests()
 })
 
 describe('guards: who may switch, and with which assurance', () => {
@@ -132,28 +162,168 @@ describe('guards: who may switch, and with which assurance', () => {
   })
 })
 
-describe('switch-off is not available in phase 1 (Review Focus 8)', () => {
-  it('the shipped constant is false', () => {
-    expect(COUNCIL_DISABLE_ALLOWED).toBe(false)
+describe('switch-off is available since the 30-day Karenz exists (phase 2, Task 17)', () => {
+  beforeEach(() => {
+    installPlatform(CATALOGUE.map((k) => (k === 'votes' ? row(k, { state: 'enabled', has_row: true, dpia_recorded: true }) : row(k))))
+    config({ calendar: true, elections: true, votes: true })
   })
 
-  it('with the shipped constant every disable returns 422 DISABLE_NOT_YET whatever the confirm phrase, makes no platform call and queues nothing', async () => {
+  it('the shipped constant is true', () => {
+    expect(COUNCIL_DISABLE_ALLOWED).toBe(true)
+  })
+
+  it('DISABLE_NOT_YET is no longer returned: a council disable with the exact label queues disable_module', async () => {
+    const r = await submitModuleSwitch(ctx(), { moduleId: 'votes', action: 'disable', confirm: 'Abstimmungen' }, deps())
+    expect(r).toEqual({ ok: true, requestId: REQUEST })
+    expect(submits()).toHaveLength(1)
+    expect(submits()[0]!.values[0]).toBe('disable_module')
+    expect(JSON.parse(submits()[0]!.values[2] as string)).toEqual({ slug: 'rat-a', module: 'votes' })
+  })
+
+  it('an injected disableAllowed false still refuses 422 DISABLE_NOT_YET before the platform is asked', async () => {
+    h.getCouncilDb.mockClear()
     for (const confirm of [undefined, '', 'wrong', 'Abstimmungen']) {
-      const r = await submitModuleSwitch(ctx(), { moduleId: 'votes', action: 'disable', confirm }, deps())
+      const r = await submitModuleSwitch(ctx(), { moduleId: 'votes', action: 'disable', confirm }, deps({ disableAllowed: false }))
       expect(r).toMatchObject({ ok: false, status: 422, code: 'DISABLE_NOT_YET' })
     }
     expect(h.getCouncilDb).not.toHaveBeenCalled()
     expect(h.insertSwitch).not.toHaveBeenCalled()
-    expect(h.writeAuditEntry).not.toHaveBeenCalled()
   })
 
   it('the default for deps.disableAllowed is the provisioning constant', async () => {
     const r = await submitModuleSwitch(ctx(), { moduleId: 'votes', action: 'disable', confirm: 'Abstimmungen' }, { nowMs: () => NOW_MS, newKey: () => KEY })
-    expect(r).toMatchObject({ ok: false, code: 'DISABLE_NOT_YET' })
+    expect(r).toMatchObject({ ok: true })
   })
 })
 
-describe('disable with the flag injected (the path phase 2 lifts)', () => {
+describe('Karenz states decide what a switch may do (Review Focus 1 and 2)', () => {
+  const enabledVotes = () => CATALOGUE.map((k) => (k === 'votes' ? row(k, { state: 'enabled', has_row: true, dpia_recorded: true }) : row(k)))
+  const disabledVotes = (dpia: boolean) => CATALOGUE.map((k) => (k === 'votes' ? row(k, { state: 'disabled', has_row: true, dpia_recorded: dpia }) : row(k)))
+
+  it('disable while the module is restoring returns 409 RESTORE_PENDING and queues nothing', async () => {
+    installPlatform(enabledVotes(), [karenzRow('votes', 'restoring')])
+    config({ votes: true })
+    const r = await submitModuleSwitch(ctx(), { moduleId: 'votes', action: 'disable', confirm: 'Abstimmungen' }, deps())
+    expect(r).toMatchObject({ ok: false, status: 409, code: 'RESTORE_PENDING' })
+    expect(submits()).toHaveLength(0)
+    expect(h.insertSwitch).not.toHaveBeenCalled()
+  })
+
+  it('RESTORE_PENDING is answered before the confirmation phrase is looked at', async () => {
+    installPlatform(enabledVotes(), [karenzRow('votes', 'restoring')])
+    config({ votes: true })
+    const r = await submitModuleSwitch(ctx(), { moduleId: 'votes', action: 'disable', confirm: 'wrong' }, deps())
+    expect(r).toMatchObject({ ok: false, code: 'RESTORE_PENDING' })
+  })
+
+  it('enable while finalizing returns 409 KARENZ_FINALIZING (never half restored) and queues nothing', async () => {
+    installPlatform(disabledVotes(true), [karenzRow('votes', 'finalizing')])
+    const r = await submitModuleSwitch(ctx(), { moduleId: 'votes', action: 'enable' }, deps())
+    expect(r).toMatchObject({ ok: false, status: 409, code: 'KARENZ_FINALIZING' })
+    expect(submits()).toHaveLength(0)
+    expect(h.insertSwitch).not.toHaveBeenCalled()
+  })
+
+  it('enable while the Karenz is open is the restore: the same enable_module request as a first enable, with no dpia input needed', async () => {
+    // no recorded decision on the platform side, none in the body: a first enable would be DPIA_REQUIRED
+    installPlatform(disabledVotes(false), [karenzRow('votes', 'open')])
+    const r = await submitModuleSwitch(ctx(), { moduleId: 'votes', action: 'enable' }, deps())
+    expect(r).toEqual({ ok: true, requestId: REQUEST })
+    expect(submits()).toHaveLength(1)
+    expect(submits()[0]!.values[0]).toBe('enable_module')
+    expect(JSON.parse(submits()[0]!.values[2] as string)).toEqual({ slug: 'rat-a', module: 'votes' })
+    expect(h.insertSwitch).toHaveBeenCalledWith(tenant.db, expect.objectContaining({ moduleId: 'votes', action: 'enable' }))
+  })
+
+  it('the DPIA rule is unchanged without an open Karenz (and a finalized or restored row is no Karenz)', async () => {
+    for (const state of ['finalized', 'restored']) {
+      installPlatform(disabledVotes(false), [karenzRow('votes', state)])
+      const r = await submitModuleSwitch(ctx(), { moduleId: 'votes', action: 'enable' }, deps())
+      expect(r, state).toMatchObject({ ok: false, status: 422, code: 'DPIA_REQUIRED' })
+    }
+    installPlatform(disabledVotes(false), [])
+    expect(await submitModuleSwitch(ctx(), { moduleId: 'votes', action: 'enable' }, deps())).toMatchObject({ code: 'DPIA_REQUIRED' })
+  })
+
+  it('a Karenz of ANOTHER module changes nothing for this one', async () => {
+    installPlatform(disabledVotes(true), [karenzRow('elections', 'finalizing'), karenzRow('calendar', 'restoring')])
+    const r = await submitModuleSwitch(ctx(), { moduleId: 'votes', action: 'enable' }, deps())
+    expect(r).toMatchObject({ ok: true })
+  })
+
+  it('asks the platform for the Karenz rows of the tenant id', async () => {
+    installPlatform(disabledVotes(true), [])
+    await submitModuleSwitch(ctx(), { moduleId: 'votes', action: 'enable' }, deps())
+    const call = platform.calls.find((c) => c.text.includes('council_karenz_list'))!
+    expect(call.values[0]).toBe(CUSTOMER)
+  })
+
+  it('a Karenz list that cannot be read is 503 PLATFORM_ERROR and nothing is queued (fail closed)', async () => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {})
+    installPlatform(disabledVotes(true), [])
+    const sql = h.getCouncilDb()
+    h.getCouncilDb.mockReturnValue((strings: TemplateStringsArray, ...values: unknown[]) => {
+      if (strings.join('?').includes('council_karenz_list')) return Promise.reject(Object.assign(new Error('function plt.council_karenz_list does not exist'), { code: '42883' }))
+      return sql(strings, ...values)
+    })
+    const r = await submitModuleSwitch(ctx(), { moduleId: 'votes', action: 'enable' }, deps())
+    expect(r).toMatchObject({ ok: false, status: 503, code: 'PLATFORM_ERROR' })
+    expect(submits()).toHaveLength(0)
+    log.mockRestore()
+  })
+})
+
+describe('the switch-off guard (Task 8 registry, Task 14 elections guard)', () => {
+  beforeEach(() => {
+    installPlatform(CATALOGUE.map((k) => (k === 'elections' ? row(k, { state: 'enabled', has_row: true, dpia_recorded: true }) : row(k))))
+    config({ calendar: true, elections: true, votes: false })
+  })
+
+  it('a registered guard reason returns 409 SWITCH_OFF_BLOCKED with the reason and queues nothing', async () => {
+    registerSwitchOffGuard('elections', async () => 'Eine Wahl laeuft noch und kann nicht angehalten werden.')
+    const r = await submitModuleSwitch(ctx(), { moduleId: 'elections', action: 'disable', confirm: 'Wahlen' }, deps())
+    expect(r).toMatchObject({ ok: false, status: 409, code: 'SWITCH_OFF_BLOCKED' })
+    expect((r as { message: string }).message).toContain('Eine Wahl laeuft noch')
+    expect(submits()).toHaveLength(0)
+    expect(h.insertSwitch).not.toHaveBeenCalled()
+    expect(h.writeAuditEntry).not.toHaveBeenCalled()
+  })
+
+  it('a guard that throws blocks too (fail closed), with the neutral reason', async () => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {})
+    registerSwitchOffGuard('elections', async () => {
+      throw new Error('helios unreachable at 10.0.0.9')
+    })
+    const r = await submitModuleSwitch(ctx(), { moduleId: 'elections', action: 'disable', confirm: 'Wahlen' }, deps())
+    expect(r).toMatchObject({ ok: false, status: 409, code: 'SWITCH_OFF_BLOCKED' })
+    expect((r as { message: string }).message).not.toContain('10.0.0.9')
+    log.mockRestore()
+  })
+
+  it('a guard that finds nothing in the way lets the disable through', async () => {
+    registerSwitchOffGuard('elections', async () => null)
+    const r = await submitModuleSwitch(ctx(), { moduleId: 'elections', action: 'disable', confirm: 'Wahlen' }, deps())
+    expect(r).toMatchObject({ ok: true })
+  })
+
+  it('the guard is asked for a disable only, never for an enable', async () => {
+    const guard = vi.fn(async () => 'blocked')
+    registerSwitchOffGuard('elections', guard)
+    installPlatform(CATALOGUE.map((k) => (k === 'elections' ? row(k, { state: 'disabled', has_row: true, dpia_recorded: true }) : row(k))))
+    await submitModuleSwitch(ctx(), { moduleId: 'elections', action: 'enable' }, deps())
+    expect(guard).not.toHaveBeenCalled()
+  })
+
+  it('a wrong confirmation phrase is answered before the guard is asked (no network probe for a typo)', async () => {
+    const guard = vi.fn(async () => 'blocked')
+    registerSwitchOffGuard('elections', guard)
+    const r = await submitModuleSwitch(ctx(), { moduleId: 'elections', action: 'disable', confirm: 'nope' }, deps())
+    expect(r).toMatchObject({ code: 'CONFIRM_MISMATCH' })
+    expect(guard).not.toHaveBeenCalled()
+  })
+})
+
+describe('disable with the flag injected', () => {
   beforeEach(() => {
     installPlatform(CATALOGUE.map((k) => (k === 'votes' ? row(k, { state: 'enabled', has_row: true, dpia_recorded: true }) : row(k))))
     config({ calendar: true, elections: true, votes: true })
@@ -415,7 +585,7 @@ describe('after the platform accepted', () => {
 })
 
 describe('loadModuleOverview', () => {
-  it('lists only calendar, elections and votes, reports enabled from the platform when has_row is true and from config.modules when it is not, and disableAvailable false', async () => {
+  it('lists only calendar, elections and votes, reports enabled from the platform when has_row is true and from config.modules when it is not, and disableAvailable true', async () => {
     installPlatform(
       CATALOGUE.map((k) =>
         k === 'votes'
@@ -434,8 +604,10 @@ describe('loadModuleOverview', () => {
     expect(by.elections).toMatchObject({ enabled: false, managed: true, label: 'Wahlen' })
     // no platform row: follows config.modules
     expect(by.calendar).toMatchObject({ enabled: true, managed: false, label: 'Kalender' })
-    expect(o.disableAvailable).toBe(false)
+    expect(o.disableAvailable).toBe(true)
     expect(o.problem).toBeNull()
+    // no Karenz row: no Karenz view
+    expect(o.modules.every((m) => m.karenz === null)).toBe(true)
   })
 
   it('an unmanaged module whose config.modules is absent reads as on (the default of every toggleable manifest)', async () => {
@@ -483,6 +655,80 @@ describe('loadModuleOverview', () => {
     const o = await loadModuleOverview(tenant)
     expect(o.problem).toMatch(/Verlauf/)
     expect(o.modules).toHaveLength(3)
+    log.mockRestore()
+  })
+})
+
+describe('loadModuleOverview: the Karenz view of a module that is off', () => {
+  const NOTICE_DONE = { karenzId: KARENZ, step: 'notice:switchoff', state: 'done', attempts: 1, lastError: null, lastReportedAt: null, doneAt: new Date(), updatedAt: new Date() }
+  const karenzDeps = (over: Partial<KarenzViewDeps> = {}): { karenz: Partial<KarenzViewDeps> } => ({
+    karenz: {
+      listSteps: async () => [NOTICE_DONE] as never,
+      listItems: async () => [],
+      noticeCounts: async () => ({ sent: 2, failed: 0 }),
+      listRetained: async () => [],
+      skippedHolders: async () => 1,
+      now: () => new Date('2026-11-10T12:00:00Z'),
+      ...over,
+    },
+  })
+  const offVotes = () => CATALOGUE.map((k) => (k === 'votes' ? row(k, { state: 'disabled', has_row: true, dpia_recorded: true }) : row(k)))
+
+  it("an open Karenz row becomes the module's karenz view; the other modules have none", async () => {
+    installPlatform(offVotes(), [karenzRow('votes', 'open')])
+    const o = await loadModuleOverview(tenant, karenzDeps())
+    const by = Object.fromEntries(o.modules.map((m) => [m.moduleId, m]))
+    expect(by.votes!.karenz).toMatchObject({ karenzId: KARENZ, state: 'open', canRestore: true, daysLeft: 25, mail: { recipients: 2, failed: 0, skippedHolders: 1 } })
+    expect(by.calendar!.karenz).toBeNull()
+    expect(by.elections!.karenz).toBeNull()
+  })
+
+  it('restoring and finalizing rows are shown too; restored and finalized rows are not (the module is back, or it is gone)', async () => {
+    for (const [state, shown] of [['open', true], ['restoring', true], ['finalizing', true], ['restored', false], ['finalized', false]] as const) {
+      installPlatform(offVotes(), [karenzRow('votes', state)])
+      const o = await loadModuleOverview(tenant, karenzDeps())
+      expect(o.modules.find((m) => m.moduleId === 'votes')!.karenz !== null, state).toBe(shown)
+    }
+  })
+
+  it("ModuleOverview JSON never contains the platform row's actor id or the actor's e-mail (the response is actor-free)", async () => {
+    installPlatform(offVotes(), [karenzRow('votes', 'open')])
+    // the tenant-side switch history DOES carry the actor (module_switch_request.actor_user_id): it must not travel either
+    h.listSwitches.mockResolvedValue([
+      { requestId: 'r1', moduleId: 'votes', action: 'disable', actorUserId: ACTOR_ID, submittedAt: new Date('2026-11-05T09:00:00Z'), state: 'applied', outcome: 'ok', configError: null },
+    ])
+    const o = await loadModuleOverview(tenant, karenzDeps())
+    const json = JSON.stringify(o)
+    expect(json).not.toContain(ACTOR_ID)
+    expect(json).not.toContain(ACTOR_MAIL)
+    expect(json).not.toContain('actor')
+    expect(json).not.toContain(PERSON)
+  })
+
+  it('a Karenz list the platform cannot answer degrades to a problem text; the modules are still listed, without a karenz view', async () => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {})
+    installPlatform(offVotes(), [])
+    const sql = h.getCouncilDb()
+    h.getCouncilDb.mockReturnValue((strings: TemplateStringsArray, ...values: unknown[]) => {
+      if (strings.join('?').includes('council_karenz_list')) return Promise.reject(new Error('platform down'))
+      return sql(strings, ...values)
+    })
+    const o = await loadModuleOverview(tenant, karenzDeps())
+    expect(o.modules).toHaveLength(3)
+    expect(o.modules.every((m) => m.karenz === null)).toBe(true)
+    expect(o.problem).toMatch(/30-Tage-Frist/)
+    expect(JSON.stringify(o)).not.toContain('platform down')
+    expect(log).toHaveBeenCalled()
+    log.mockRestore()
+  })
+
+  it('the Karenz problem does not hide a history problem', async () => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {})
+    h.listSwitches.mockRejectedValue(new Error('tenant db down'))
+    installPlatform(offVotes(), [karenzRow('votes', 'open')])
+    const o = await loadModuleOverview(tenant, karenzDeps())
+    expect(o.problem).toMatch(/Verlauf/)
+    expect(o.modules.find((m) => m.moduleId === 'votes')!.karenz).not.toBeNull()
     log.mockRestore()
   })
 })
