@@ -1,12 +1,12 @@
 // The integration judges read a make target's text with line-anchored regexes. On a CI runner vitest
 // colours its summary although stdout is a pipe (CI is set), so the unit step's
 // "Tests  N passed (N)" line arrives wrapped in SGR escapes and a raw regex never matches: both
-// `make test-nats-auth` and `make test-events` read "exit 0 but ... untrusted" on ubuntu-latest while
+// `make test-nats-auth` and `make test-events` (now its live half) read "exit 0 but ... untrusted" on ubuntu-latest while
 // every case had passed. The judges strip terminal control sequences first; a post-condition line
 // that is genuinely missing must still be untrusted afterwards.
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { capturedText, judgeEventsTest, judgeNatsAuthTest } from './suites/integration.mjs'
+import { capturedText, judgeEventsLiveTest, judgeNatsAuthTest } from './suites/integration.mjs'
 
 const ESC = String.fromCharCode(27)
 // The exact shape vitest 5 printed on the runner (SGR dim / bold-green / grey around the counts).
@@ -25,8 +25,6 @@ const EVENTS_COLOURED =
   '[events-proof] 18 passing (minimum 15)\n[events-proof] group consumer OK\n' +
   '[events-proof] 6 passing (minimum 6)\n[events-proof] group deadletter OK\n' +
   '[events-proof] 2 passing (minimum 2)\n[events-proof] group rebuild OK\n' +
-  '[events-proof] group alert-red OK\n[events-proof] group alert-fire OK\n' +
-  '[events-proof] group alert-hold OK\n[events-proof] group alert-resolve OK\n' +
   '[events-proof] OK\n' +
   '[events-image] OK -- pnpm exec events and the package import work in t079-0123abcd-migrate\n'
 
@@ -46,15 +44,15 @@ test('test-nats-auth: colour does not hide a MISSING unit summary', () => {
   assert.equal(p.unparseable, true, JSON.stringify(p))
 })
 
-test('test-events: a colour-wrapped unit summary (the CI runner) still counts, unit + live', () => {
-  const p = judgeEventsTest({ code: 0, stdout: EVENTS_COLOURED, stderr: '' })
+test('test-events-live: a colour-wrapped unit summary (the CI runner) still counts, unit + live', () => {
+  const p = judgeEventsLiveTest({ code: 0, stdout: EVENTS_COLOURED, stderr: '' })
   assert.equal(p.unparseable ?? false, false, JSON.stringify(p))
   assert.equal(p.collected, 83 + 17 + 18 + 6 + 2)
   assert.equal(p.failed, 0)
 })
 
-test('test-events: colour does not hide a MISSING unit summary', () => {
-  const p = judgeEventsTest({ code: 0, stdout: EVENTS_COLOURED.replace(coloured(83), ''), stderr: '' })
+test('test-events-live: colour does not hide a MISSING unit summary', () => {
+  const p = judgeEventsLiveTest({ code: 0, stdout: EVENTS_COLOURED.replace(coloured(83), ''), stderr: '' })
   assert.equal(p.unparseable, true, JSON.stringify(p))
 })
 
@@ -72,9 +70,9 @@ test('test-nats-auth: a colour-wrapped summary with a skipped test is a named fa
   assert.doesNotMatch(p.detail, new RegExp(ESC))
 })
 
-test('test-events: a colour-wrapped summary with a skipped test is a named failure that shows the line seen', () => {
-  const p = judgeEventsTest({ code: 0, stdout: EVENTS_COLOURED.replace(coloured(83), colouredSkipped(82, 1)), stderr: '' })
+test('test-events-live: a colour-wrapped summary with a skipped test is a named failure that shows the line seen', () => {
+  const p = judgeEventsLiveTest({ code: 0, stdout: EVENTS_COLOURED.replace(coloured(83), colouredSkipped(82, 1)), stderr: '' })
   assert.equal(p.unparseable ?? false, false, JSON.stringify(p))
-  assert.match(p.detail, /unit run inside make test-events skipped 1 test\(s\); an integration part allows no skips/)
+  assert.match(p.detail, /unit run inside make test-events-live skipped 1 test\(s\); an integration part allows no skips/)
   assert.match(p.detail, /Tests\s+82 passed \| 1 skipped \(83\)/)
 })

@@ -30,7 +30,9 @@
 //
 // Stage slots: notice, retained copies, publishing and reminders belong to Tasks 9, 10 and 11, which
 // register their stage with registerKarenzStages(). A stage that is not registered leaves its step
-// unmarked, so the finalize guard refuses until the retained copies really exist (fail closed).
+// unmarked, so the finalize guard refuses until the retained copies really exist (fail closed). The
+// retained stage is registered here for every catalogue id and itself fails closed: a catalogue id with
+// neither a retention extractor nor a registerNoRetention() declaration fails the step.
 import type { Sql } from '@gremion/db'
 import { writeAuditEntry, type AuditEntry } from '$lib/server/audit-db'
 import { safeFailureReason } from '$lib/server/erasure/orchestrator'
@@ -39,6 +41,9 @@ import { listSwitches, type SwitchRow } from '$lib/server/module-switch/store'
 import type { TenantContext } from '$lib/server/tenant/context'
 import { KarenzPartialError, karenzParticipantsFor, type KarenzContext, type KarenzParticipant } from './participants'
 import { listKarenz, reportKarenz, type KarenzReport, type KarenzRowView } from './platform'
+import { reminderDue } from './mail'
+import { createNoticeStages } from './notices'
+import { writeRetainedCopies } from './retained/write'
 import * as realStore from './store'
 import type { ItemState, KarenzItem, KarenzItemRow, StepPatch, StepRow } from './store'
 
@@ -55,9 +60,6 @@ const DRY_REPORT_INTERVAL_MS = 24 * HOUR
 const RESTORE_STUCK_MS = HOUR
 /** The "no council pool" message with a Karenz on record is logged at most this often per tenant. */
 const NOT_CONFIGURED_LOG_INTERVAL_MS = 10 * 60_000
-/** Reminders: 7 days and 1 day before the final day (day 23 and day 29). */
-const REMINDER_T23_BEFORE_MS = 7 * DAY
-const REMINDER_T29_BEFORE_MS = DAY
 /** The Karenz length, for the "is there local evidence of a live Karenz" check. */
 const KARENZ_WINDOW_MS = 31 * DAY
 
@@ -109,16 +111,39 @@ export interface KarenzStages {
   publish?: (ctx: KarenzContext) => Promise<Array<{ step: string; run: () => Promise<void> }>>
 }
 
-let registeredStages: KarenzStages = {}
+/**
+ * The engine's own stages are there without any registration: Task 9's info mail and reminders, and
+ * Task 10's `retained` stage, the sealed-copy writer. The writer lives here (not in a module) because
+ * every module's extractors register into retained/extractors.ts and the writer runs for all of them.
+ */
+const defaultStages = (): KarenzStages => ({
+  ...createNoticeStages(),
+  retained: async (ctx) => {
+    const { records, lines } = await writeRetainedCopies(ctx)
+    ctx.log(`retained: ${records} record(s), ${lines} line(s) written in this pass`)
+  },
+})
+
+let registeredStages: KarenzStages = defaultStages()
 
 /** Register (merge) the stages of Tasks 9 to 11. A second registration of the same stage replaces it. */
 export function registerKarenzStages(s: KarenzStages): void {
   registeredStages = { ...registeredStages, ...s }
 }
 
-/** Test-only: drop every registered stage. */
+/** Test-only: drop every registered stage, the defaults included. */
 export function _clearKarenzStagesForTests(): void {
   registeredStages = {}
+}
+
+/** Test-only: back to the stages a fresh process has. */
+export function _resetKarenzStagesToDefaultsForTests(): void {
+  registeredStages = defaultStages()
+}
+
+/** Test-only: what is registered right now. */
+export function _registeredStagesForTests(): Readonly<KarenzStages> {
+  return { ...registeredStages }
 }
 
 export interface KarenzPassDeps {
@@ -345,6 +370,28 @@ async function runRetentionStages(env: RowEnv): Promise<void> {
   }
 }
 
+const REMINDER_STEPS = [
+  ['t23', STEP.noticeT23],
+  ['t29', STEP.noticeT29],
+] as const
+
+/**
+ * A reminder that was never sent is not sent after the final day ("deleted tomorrow" after the deletion
+ * would be false), but it is not silent either: an error event of its own step, so the failed gauge and
+ * the log see it. Called for an open row past final_at AND for a finalizing one: in live mode the
+ * platform job moves the row to finalizing at final_at, so the window in which the row is still open is
+ * only as long as the gap to that job's next run.
+ */
+async function reportMissedReminders(env: RowEnv): Promise<void> {
+  if (!env.d.stages().reminder) return
+  for (const [kind, step] of REMINDER_STEPS) {
+    const prev = await env.d.store.getStep(env.tenant.db, env.row.karenzId, step)
+    if (prev?.state === 'done' || prev?.state === 'skipped') continue
+    env.counters.steps++
+    await recordFailure(env, step, `the ${kind} reminder was not sent before the final day`, prev)
+  }
+}
+
 async function processOpen(env: RowEnv): Promise<void> {
   const { tenant, d, row, ctx } = env
   const stages = d.stages()
@@ -372,17 +419,15 @@ async function processOpen(env: RowEnv): Promise<void> {
 
   const now = d.now().getTime()
   if (now >= row.finalAt.getTime()) {
+    await reportMissedReminders(env)
     if (row.finalMode === 'dry') await dryRunFinal(env, participants)
     // finalMode null: the platform job has not looked at the row yet; 'live': it is about to move the row to finalizing. Either way, wait.
     return
   }
   if (stages.reminder) {
     const reminder = stages.reminder
-    for (const [kind, step, before] of [
-      ['t23', STEP.noticeT23, REMINDER_T23_BEFORE_MS],
-      ['t29', STEP.noticeT29, REMINDER_T29_BEFORE_MS],
-    ] as const) {
-      if (now >= row.finalAt.getTime() - before) {
+    for (const [kind, step] of REMINDER_STEPS) {
+      if (now >= reminderDue(kind, row.finalAt).getTime()) {
         await runStep(env, step, async () => report(env, { step, level: 'info', message: (await reminder(ctx, kind)) || 'done' }), { reportsItself: true })
       }
     }
@@ -444,6 +489,7 @@ async function processFinalizing(env: RowEnv): Promise<void> {
   const participants = d.participantsFor(row.catalogueId)
   // The retained copies and their publication are retried here as well: the platform job flips the row
   // at final_at whatever this ledger says, and the guard below only reads the ledger.
+  await reportMissedReminders(env)
   await runRetentionStages(env)
   const steps = await d.store.listSteps(tenant.db, row.karenzId)
   const prev = steps.find((s) => s.step === STEP.final) ?? null

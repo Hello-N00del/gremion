@@ -131,6 +131,11 @@ case "$1" in
   rev-parse|rev-list) printf "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\\n"; exit 0 ;;
 esac
 exit 0`)
+  // kernel #84: step 2 stages legal/legal.env through gremion-render before it
+  // verifies signatures. The real program, its etc/legal.env and the legal
+  // content rules are proved in test/host/deploy.bats (and bootstrap-render.bats);
+  // here a shim that succeeds keeps the refusals under test the SIGNATURE ones.
+  shim('gremion-render', 'exit 0')
   // `docker compose … config --images` answers what compose would resolve:
   // the tree's canonical pins (both layers) plus opts.extraResolved.
   shim('docker', `case "$1" in login) cat >/dev/null; exit 0 ;; esac

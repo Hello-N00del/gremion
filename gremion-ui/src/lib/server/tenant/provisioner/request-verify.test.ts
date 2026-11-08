@@ -9,7 +9,7 @@
 import { createHash } from 'node:crypto'
 import { createLocalJWKSet, exportJWK, generateKeyPair, SignJWT, type JWK } from 'jose'
 import { beforeAll, describe, expect, it } from 'vitest'
-import { encodeEvidence, verifyRequestEvidence, type EvidenceCheck } from './request-verify'
+import { encodeEvidence, idTokenSignInTime, verifyRequestEvidence, type EvidenceCheck } from './request-verify'
 
 const ISS = 'https://platform.example/auth/realms/platform'
 const OPERATOR = '5b8e0a52-2f9f-4b46-9e3a-0b5c7f1a2d33'
@@ -139,5 +139,45 @@ describe('verifyRequestEvidence: requiredRole', () => {
     expect(await councilCheck(['operator'], undefined)).toMatchObject({ ok: true })
     const r = await verifyRequestEvidence(check(encodeEvidence(await pair({ at: { realm_access: { roles: ['default-roles-platform'] } } }))))
     expect(r.ok ? '' : r.reason).toBe('the access token carries no operator role of the ops realm')
+  })
+})
+
+// Branch fix: a gremion-ui (council) pair has an ID token whose sub is pairwise or absent and an access token
+// whose `sub` mapper carries the real user id, so the person is bound through the ACCESS token's sub.
+describe("verifyRequestEvidence: subjectToken 'access'", () => {
+  const PAIRWISE = 'pairwise-id-token-sub'
+  const accessCheck = async (o: Over, over: Partial<EvidenceCheck> = {}) =>
+    verifyRequestEvidence(check(encodeEvidence(await pair(o)), { subjectToken: 'access', ...over }))
+
+  it('binds the person through the access token sub; the ID token sub is not compared', async () => {
+    expect(await accessCheck({ at: { sub: OPERATOR }, id: { sub: PAIRWISE } })).toMatchObject({ ok: true, sub: OPERATOR })
+  })
+
+  it('an ID token without any sub still verifies', async () => {
+    // undefined is dropped by the JSON encoding: the signed ID token carries no sub claim at all
+    expect(await accessCheck({ at: { sub: OPERATOR }, id: { sub: undefined } })).toMatchObject({ ok: true, sub: OPERATOR })
+  })
+
+  it('refuses an access token whose sub is another person, and one without sub, even when the ID sub is the operator', async () => {
+    const other = await accessCheck({ at: { sub: '00000000-0000-4000-8000-000000000000' }, id: { sub: OPERATOR } })
+    expect(other.ok ? '' : other.reason).toMatch(/access token's sub .* is not the request's operator/)
+    const none = await accessCheck({ id: { sub: OPERATOR } })
+    expect(none.ok ? '' : none.reason).toMatch(/access token's sub/)
+  })
+
+  it('the default (the panel path) still compares the ID token sub', async () => {
+    const r = await verifyRequestEvidence(check(encodeEvidence(await pair({ at: { sub: OPERATOR }, id: { sub: PAIRWISE } }))))
+    expect(r.ok ? '' : r.reason).toMatch(/ID token's sub/)
+  })
+})
+
+describe('idTokenSignInTime: the one rule for the sign-in time (auth_time, else iat)', () => {
+  const jwt = (claims: Record<string, unknown>) => `${Buffer.from('{"alg":"none"}').toString('base64url')}.${Buffer.from(JSON.stringify(claims)).toString('base64url')}.x`
+  it('prefers auth_time, falls back to iat, and is null for anything else', () => {
+    expect(idTokenSignInTime(jwt({ auth_time: 100, iat: 200 }))).toEqual({ seconds: 100, claim: 'auth_time' })
+    expect(idTokenSignInTime(jwt({ iat: 200 }))).toEqual({ seconds: 200, claim: 'iat' })
+    expect(idTokenSignInTime(jwt({ sub: 'x' }))).toBeNull()
+    expect(idTokenSignInTime('not a jwt')).toBeNull()
+    expect(idTokenSignInTime('')).toBeNull()
   })
 })

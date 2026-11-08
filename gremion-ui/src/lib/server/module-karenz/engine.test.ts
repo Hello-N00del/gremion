@@ -12,9 +12,13 @@ import type { SwitchRow } from '$lib/server/module-switch/store'
 import type { ItemState, KarenzItem, KarenzItemRow, StepPatch, StepRow } from './store'
 import { KarenzPartialError, type KarenzContext, type KarenzParticipant } from './participants'
 import type { KarenzRowView, KarenzState } from './platform'
+import type { RoleHolders } from '$lib/server/governance/role-holders'
+import { createNoticeStages, type NoticeDeps } from './notices'
 import {
   _clearKarenzStagesForTests,
+  _registeredStagesForTests,
   _resetKarenzPassForTests,
+  _resetKarenzStagesToDefaultsForTests,
   defaultHasLocalEvidence,
   pickStartedActor,
   registerKarenzStages,
@@ -215,6 +219,24 @@ function part(rg: Rig, id: string, opts: PartOpts = {}): KarenzParticipant & { c
   return p
 }
 
+/** The mail seam of Task 9 as a double: `sent` collects `<kind>:<user>` for every notice recorded as sent. */
+function noticeDeps(sent: string[], now: () => Date, who: RoleHolders = { holders: [], skipped: [] }): Partial<NoticeDeps> {
+  const holders = who.holders.length > 0 || who.skipped.length > 0 ? who : { holders: [1, 2].map((n) => ({ userId: `user-${n}`, email: `p${n}@rat.example.test`, displayName: `P ${n}`, roles: ['council-admin'] })), skipped: [] }
+  const ledger = new Set<string>()
+  return {
+    listRoleHolders: async () => holders,
+    send: async () => ({}),
+    noticesSent: async (_db, karenzId, kind) => new Set([...ledger].filter((k) => k.startsWith(`${karenzId}|${kind}|`)).map((k) => k.split('|')[2]!)),
+    recordNotice: async (_db, n) => {
+      if (n.state !== 'sent') return
+      ledger.add(`${n.karenzId}|${n.kind}|${n.userId}`)
+      sent.push(`${n.kind}:${n.userId}`)
+    },
+    now,
+    settingsUrl: () => 'https://rat.example.test/settings/module',
+  }
+}
+
 let rg: Rig
 beforeEach(() => {
   rg = rig()
@@ -335,7 +357,8 @@ describe('an open row: the switch-off steps', () => {
     expect(kinds).toEqual(['t23', 't29'])
     expect(stepOf(K1, STEP.noticeT23)?.state).toBe('done')
     expect(stepOf(K1, STEP.noticeT29)?.state).toBe('done')
-    // past the final day a reminder is moot
+    // past the final day a reminder is moot: it is not sent, and the miss is an ERROR event of its own step
+    // (Review Focus 8: a late reminder must not pass in silence), reported once per 6 h like any unchanged failure, not on every pass
     const rg2 = rig()
     rg2.rows = [row()]
     rg2.now = new Date(T0.getTime() + 31 * DAY)
@@ -343,6 +366,70 @@ describe('an open row: the switch-off steps', () => {
     registerKarenzStages({ reminder: async (_c, k) => void late.push(k) })
     await runKarenzPass(tenant, rg2.deps())
     expect(late).toEqual([])
+    for (const step of [STEP.noticeT23, STEP.noticeT29]) {
+      expect(rg2.reports.filter((x) => x.level === 'error' && x.step === step), step).toHaveLength(1)
+      expect(rg2.store.steps.get(`${K1}|${step}`)?.state, step).toBe('failed')
+    }
+    await runKarenzPass(tenant, rg2.deps())
+    expect(rg2.reports.filter((x) => x.level === 'error' && x.step === STEP.noticeT23)).toHaveLength(1)
+    // and in dry mode, where the pass keeps working past the final day, the misses are still reported
+    const rg3 = rig()
+    rg3.rows = [row({ finalMode: 'dry' })]
+    rg3.now = new Date(T0.getTime() + 31 * DAY)
+    await runKarenzPass(tenant, rg3.deps())
+    expect(rg3.reports.filter((x) => x.level === 'error').map((x) => x.step).toSorted()).toEqual([STEP.noticeT23, STEP.noticeT29])
+    // a reminder that WAS sent in time is not reported as missed
+    const rg4 = rig()
+    rg4.rows = [row()]
+    await runKarenzPass(tenant, rg4.deps())
+    rg4.advance(29 * DAY + HOUR)
+    await runKarenzPass(tenant, rg4.deps())
+    rg4.advance(2 * DAY)
+    await runKarenzPass(tenant, rg4.deps())
+    expect(rg4.reports.filter((x) => x.level === 'error')).toEqual([])
+  })
+
+  it('the default stages are the notices of Task 9: the switch-off mail runs first of all steps after started, the reminders when due, each through the ledger', async () => {
+    _resetKarenzStagesToDefaultsForTests()
+    const stages = _registeredStagesForTests()
+    expect(typeof stages.noticeSwitchoff).toBe('function')
+    expect(typeof stages.reminder).toBe('function')
+    // wired through the real engine, with a doubled mail seam
+    const sent: string[] = []
+    registerKarenzStages(createNoticeStages(noticeDeps(sent, () => rg.now)))
+    rg.rows = [row()]
+    part(rg, 'votes')
+    registerKarenzStages({ retained: async () => void rg.order.push('retained') })
+    await pass()
+    expect(sent).toEqual(['switchoff:user-1', 'switchoff:user-2'])
+    expect(rg.order).toEqual(['retained', 'votes:switchOff'])
+    expect(rg.reports.find((x) => x.step === STEP.noticeSwitchoff)).toMatchObject({ level: 'info', message: 'sent 2, skipped 0' })
+    rg.advance(23 * DAY + HOUR)
+    await pass()
+    expect(sent.slice(2)).toEqual(['t23:user-1', 't23:user-2'])
+    await pass()
+    expect(sent).toHaveLength(4) // done steps are not run again
+    rg.advance(6 * DAY)
+    await pass()
+    expect(sent.slice(4)).toEqual(['t29:user-1', 't29:user-2'])
+    // no message anywhere on the platform side names a person or an address
+    expect(JSON.stringify(rg.reports)).not.toMatch(/@|person/i)
+  })
+
+  it('a notice that cannot be delivered fails its step loudly (error event named after the code), the next steps still run, and the next pass retries it', async () => {
+    registerKarenzStages(createNoticeStages(noticeDeps([], () => rg.now, { holders: [], skipped: [{ userId: 'u9', reason: 'no-email' }] })))
+    rg.rows = [row()]
+    part(rg, 'votes')
+    await pass()
+    expect(stepOf(K1, STEP.noticeSwitchoff)?.state).toBe('failed')
+    expect(errorsOf(STEP.noticeSwitchoff)).toEqual([expect.objectContaining({ message: 'KarenzNoticeError_NO_RECIPIENTS' })])
+    expect(rg.order).toEqual(['votes:switchOff'])
+    // fixed (an admin got an e-mail address): the next pass sends it
+    const sent: string[] = []
+    registerKarenzStages(createNoticeStages(noticeDeps(sent, () => rg.now)))
+    await pass()
+    expect(sent).toEqual(['switchoff:user-1', 'switchoff:user-2'])
+    expect(stepOf(K1, STEP.noticeSwitchoff)?.state).toBe('done')
   })
 
   it('the publish steps are the stage\'s own list, each run through the ledger: a failed one is retried on the next pass and does not stop the other steps', async () => {
@@ -780,6 +867,30 @@ describe('the retained and publish stages after the platform job moved the row o
     rg.rows[0]!.state = 'finalizing'
     rg.rows[0]!.finalMode = 'live'
   }
+
+  it('a reminder that was never sent is reported as an ERROR event on a row the platform job has already moved to finalizing (live mode closes the open window at final_at)', async () => {
+    registerKarenzStages({ reminder: async () => 'never called' })
+    rg.rows = [row({ state: 'finalizing', finalMode: 'live', switchedOffAt: new Date(T0.getTime() - 31 * DAY), finalAt: new Date(T0.getTime() - DAY) })]
+    await pass()
+    for (const step of [STEP.noticeT23, STEP.noticeT29]) {
+      expect(rg.reports.filter((x) => x.level === 'error' && x.step === step), step).toHaveLength(1)
+      expect(stepOf(K1, step)?.state, step).toBe('failed')
+    }
+    // reported once for an unchanged text, not on every pass
+    await pass()
+    expect(rg.reports.filter((x) => x.level === 'error' && x.step === STEP.noticeT23)).toHaveLength(1)
+    // a reminder that WAS sent in time is not reported as missed
+    const rg2 = rig()
+    rg2.rows = [row()]
+    await runKarenzPass(tenant, rg2.deps())
+    rg2.advance(29 * DAY + HOUR)
+    await runKarenzPass(tenant, rg2.deps())
+    rg2.advance(2 * DAY)
+    rg2.rows[0]!.state = 'finalizing'
+    rg2.rows[0]!.finalMode = 'live'
+    await runKarenzPass(tenant, rg2.deps())
+    expect(rg2.reports.filter((x) => x.level === 'error' && (x.step === STEP.noticeT23 || x.step === STEP.noticeT29))).toEqual([])
+  })
 
   it('a retained stage that failed while the row was open is retried on the finalizing row, and the finalize then runs with no hand-written ledger entry', async () => {
     rg.rows = [row()]

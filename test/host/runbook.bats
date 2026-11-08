@@ -562,6 +562,49 @@ check_render_first() {
     return "$bad"
 }
 
+# kernel #84: docker-compose.yml gives the state project's legal service
+# `env_file: legal/legal.env` in the release tree, which compose resolves for
+# every verb. gremion-render writes it from the host's etc/legal.env, and that
+# file is created and filled in a step of its own, before the first state `up`.
+check_legal_env_first() {
+    local steps up init edit
+    steps="$(unit_text "$1" install | section_body '## Steps' | bash_blocks | grep -v '^[[:space:]]*#' || true)"
+    up="$(grep -nE -- "$STATE_UP_RE" <<<"$steps" | head -n 1 | cut -d: -f1)"
+    if [ -z "$up" ]; then
+        echo "install.md never starts the state project" >&2; return 1
+    fi
+    init="$(grep -nE -- 'sudo -u gremion [^;|&]*gremion-render --release [^;|&]*--init-legal-env' <<<"$steps" | head -n 1 | cut -d: -f1)"
+    if [ -z "$init" ] || [ "$init" -gt "$up" ]; then
+        echo "install.md never creates the host legal env (gremion-render --init-legal-env) before the state project's first up" >&2; return 1
+    fi
+    edit="$(grep -nF -- '/opt/gremion/etc/legal.env' <<<"$steps" | head -n 1 | cut -d: -f1)"
+    if [ -z "$edit" ] || [ "$edit" -gt "$up" ]; then
+        echo "install.md never has the operator fill /opt/gremion/etc/legal.env before the state project's first up" >&2; return 1
+    fi
+}
+
+# kernel #84, upgrade side: the legal env flags belong to the NEW release's
+# gremion-render, and a deploy never replaces the installed programs
+# (gremion-deploy resolves its siblings from /opt/gremion/bin only). So upgrade.md
+# has to copy the release's host programs in before its first use of either
+# flag, and the same step has to copy lib/common.sh.
+check_upgrade_programs_first() {
+    local steps first refresh lib
+    steps="$(unit_text "$1" upgrade | section_body '## Steps' | bash_blocks | grep -v '^[[:space:]]*#' || true)"
+    first="$(grep -nE -- 'gremion-render [^;|&]*--(init-legal-env|legal-env-only)' <<<"$steps" | head -n 1 | cut -d: -f1)"
+    if [ -z "$first" ]; then
+        echo "upgrade.md never runs gremion-render with --init-legal-env or --legal-env-only" >&2; return 1
+    fi
+    refresh="$(grep -nE -- 'install .*infra/host/bin/\*' <<<"$steps" | head -n 1 | cut -d: -f1)"
+    if [ -z "$refresh" ] || [ "$refresh" -gt "$first" ]; then
+        echo "upgrade.md uses the legal env flags of gremion-render before it installs the release's host programs (infra/host/bin/*)" >&2; return 1
+    fi
+    lib="$(grep -nE -- 'install .*infra/host/lib/common\.sh' <<<"$steps" | head -n 1 | cut -d: -f1)"
+    if [ -z "$lib" ] || [ "$lib" -gt "$first" ]; then
+        echo "upgrade.md uses the legal env flags of gremion-render before it installs the release's lib/common.sh" >&2; return 1
+    fi
+}
+
 # gremion-deploy logs in under the HOME of the user that runs it, so a procedure
 # that runs it observes that user's registry config as well as root's.
 check_registry_creds() {
@@ -1217,6 +1260,43 @@ run_dump_step() {                                # <scratch root>
     [ "$status" -ne 0 ]; [[ "$output" == *"without secrets/ipcrypt_key.txt in the release tree"* ]]
 }
 
+@test "install creates and fills the host legal env before the state project's first up (kernel #84)" {
+    local d bad
+    d="$(real_dir)"; check_legal_env_first "$d"
+    # No creation step at all.
+    bad="${BATS_TEST_TMPDIR}/no-legal-init"; cp -R "$d" "$bad"
+    grep -vF -- '--init-legal-env' "$d/install.md" > "$bad/install.md"
+    run check_legal_env_first "$bad"
+    [ "$status" -ne 0 ]; [[ "$output" == *"never creates the host legal env"* ]]
+    # Created, but the operator is never told to fill it.
+    bad="${BATS_TEST_TMPDIR}/no-legal-fill"; cp -R "$d" "$bad"
+    grep -vF -- '/opt/gremion/etc/legal.env' "$d/install.md" > "$bad/install.md"
+    run check_legal_env_first "$bad"
+    [ "$status" -ne 0 ]; [[ "$output" == *"never has the operator fill /opt/gremion/etc/legal.env"* ]]
+}
+
+@test "upgrade installs the release's host programs before the first legal env flag (kernel #84)" {
+    local d bad
+    d="$(real_dir)"; check_upgrade_programs_first "$d"
+    # No refresh at all (the shape the runbook had before this guard).
+    bad="${BATS_TEST_TMPDIR}/no-refresh"; cp -R "$d" "$bad"
+    grep -vF -- 'infra/host/bin/*' "$d/upgrade.md" > "$bad/upgrade.md"
+    run check_upgrade_programs_first "$bad"
+    [ "$status" -ne 0 ]; [[ "$output" == *"before it installs the release's host programs"* ]]
+    # Refresh present but after the first use of the flag.
+    bad="${BATS_TEST_TMPDIR}/late-refresh"; cp -R "$d" "$bad"
+    { grep -vF -- 'infra/host/bin/*' "$d/upgrade.md"
+      printf '\n```bash\ninstall -m 0755 -o gremion -g gremion "$REL"/infra/host/bin/* /opt/gremion/bin/\n```\n'
+    } > "$bad/upgrade.md"
+    run check_upgrade_programs_first "$bad"
+    [ "$status" -ne 0 ]; [[ "$output" == *"before it installs the release's host programs"* ]]
+    # Programs refreshed, lib/common.sh forgotten.
+    bad="${BATS_TEST_TMPDIR}/no-lib"; cp -R "$d" "$bad"
+    grep -vF -- 'infra/host/lib/common.sh' "$d/upgrade.md" > "$bad/upgrade.md"
+    run check_upgrade_programs_first "$bad"
+    [ "$status" -ne 0 ]; [[ "$output" == *"before it installs the release's lib/common.sh"* ]]
+}
+
 @test "every variable a post-condition reads is assigned there or in the preamble" {
     d="$(real_dir)"; check_post_vars "$d"
     d="$(fixture valid)"; check_post_vars "$d"
@@ -1459,4 +1539,33 @@ private_dumps_with_075_pending() {               # <dir>
     [ "$status" -ne 0 ]
     [[ "$output" == *"delete this entry from test/host/runbook.bats"* ]]
     [[ "$output" == *"scripts/backup/|TASK-089"* ]]
+}
+
+# Kernel #83. PgBouncer belongs to the STATE project, which gremion-deploy pulls
+# but never recreates, so a running PgBouncer keeps the unreadable userlist of
+# the release it was created from. upgrade.md must therefore (a) recreate that
+# one container from the new tree and (b) observe, in the container and by a
+# routed login, that it reads the userlist.
+check_upgrade_recreates_pgbouncer() {            # <runbook dir>
+    local steps post
+    steps="$(unit_text "$1" upgrade | section_body '## Steps' | bash_blocks)"
+    post="$(postcondition_blocks "$1" upgrade)"
+    grep -qE 'up -d --force-recreate --no-deps pgbouncer' <<<"$steps" \
+        || { echo "upgrade.md Steps never recreate pgbouncer from the new release (up -d --force-recreate --no-deps pgbouncer)" >&2; return 1; }
+    grep -qE 'exec -T pgbouncer head -c1 /etc/pgbouncer/userlist\.txt' <<<"$post" \
+        || { echo "upgrade.md Post-condition does not read the userlist inside the pgbouncer container" >&2; return 1; }
+    grep -qE 'psql .*-p 6432 ' <<<"$post" \
+        || { echo "upgrade.md Post-condition has no login routed through PgBouncer (psql -p 6432)" >&2; return 1; }
+}
+
+@test "upgrade.md recreates pgbouncer from the new release and observes the userlist in the container (#83)" {
+    local d pat; d="$(real_dir)"
+    check_upgrade_recreates_pgbouncer "$d"
+    # watched RED: each of the three lines removed from a copy breaks the check
+    for pat in 'force-recreate --no-deps pgbouncer' 'exec -T pgbouncer head -c1' '-p 6432'; do
+        rm -rf "${d}-no"; cp -r "$d" "${d}-no"
+        grep -vF -- "$pat" "$d/upgrade.md" > "${d}-no/upgrade.md"
+        run check_upgrade_recreates_pgbouncer "${d}-no"
+        [ "$status" -ne 0 ]
+    done
 }

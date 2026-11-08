@@ -881,6 +881,31 @@ exit 0
         'TASK-075: step 5 is the pre-migration dump, not a restic class=snapshot'
 }
 
+# kernel #84: the state project's legal service reads `env_file:
+# legal/legal.env` from the release tree, and compose resolves it for every
+# verb, the `config --images` of step 2's signature check included. So the
+# file is staged in step 2, BEFORE the first compose call, not left to step 4.
+@test "kernel #84: step 2 stages legal/legal.env before the first compose call on the release tree" {
+    stub_all
+    run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
+    [ "$status" -eq 0 ]
+    assert_recorded gremion-render "--release ${GREMION_ROOT}/releases/dist-v1.2.3 --legal-env-only"
+    local legal first_compose
+    legal="$(grep -n '^gremion-render .*--legal-env-only' "$SHIM_LOG" | head -n 1 | cut -d: -f1)"
+    first_compose="$(grep -n '^docker compose' "$SHIM_LOG" | head -n 1 | cut -d: -f1)"
+    [ -n "$legal" ]
+    [ -n "$first_compose" ]
+    [ "$legal" -lt "$first_compose" ] || { echo "legal env staged at log line ${legal}, first compose call at ${first_compose}"; false; }
+}
+
+@test "kernel #84: an unfinished legal env (render exit 2) stops the deploy before any compose call" {
+    stub_all
+    shim gremion-render 'exit 2'
+    run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
+    [ "$status" -eq 2 ]
+    refute_recorded docker "compose"
+}
+
 # TASK-075 (TRD-206): another release's live dump refuses at step 5, before
 # step 6 stops anything and before step 7 migrates.
 @test "a refused preflight (another release's live dump) exits 1 before the old colour is stopped or anything migrates" {

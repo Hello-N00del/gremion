@@ -24,7 +24,7 @@ REPO="$(cd "$SERVICE/../.." && (pwd -W 2>/dev/null || pwd))"
 SHA8="$(cd "$HERE" && node --input-type=module -e "import('./stack.mjs').then((m) => console.log(m.sha8))")"
 PGIMAGE="$(cd "$HERE" && node --input-type=module -e "import('../../../../packages/tenant-store/test/harness/stack.mjs').then((m) => console.log(m.moduleImage()))")"
 KCIMAGE="quay.io/keycloak/keycloak:26.6.1"
-NODEIMAGE="node:26-alpine@sha256:7c6af15abe4e3de859690e7db171d0d711bf37d27528eddfe625b2fe89e097f8"
+NODEIMAGE="node:26.13.0-alpine@sha256:c6ad9e9c1d80f6eb607c26b4b0a132ff7a2344fad1c78ea3baa2a7d4c8de6d94"
 PFX="${T077_PREFIX:-t077}"   # a lane sets T077_PREFIX=t077r so its objects carry the lane prefix
 P="${PFX}-${SHA8}-e2e"
 N_DUMP="$P-dump"

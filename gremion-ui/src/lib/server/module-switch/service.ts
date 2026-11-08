@@ -25,7 +25,7 @@ import type { ModuleOverview, ModuleOverviewItem } from '$lib/modules/switch-pre
 import { writeAuditEntry } from '$lib/server/audit-db'
 import { readConfig } from '$lib/server/config'
 import type { TenantContext } from '$lib/server/tenant/context'
-import { encodeEvidence } from '$lib/server/tenant/provisioner/request-verify'
+import { encodeEvidence, EVIDENCE_SKEW_SECONDS, EVIDENCE_WINDOW_SECONDS, idTokenSignInTime } from '$lib/server/tenant/provisioner/request-verify'
 import { CouncilNotConfigured, getCouncilDb } from './council-db'
 import { insertSwitch, listSwitches, type SwitchRow } from './store'
 import { MODULE_SWITCH_REQUIRED_LOA, moduleSwitchStepUpFreshnessSeconds } from './step-up'
@@ -173,6 +173,16 @@ export async function submitModuleSwitch(ctx: SwitchContext, input: SwitchInput,
     return fail(422, 'MODULE_NOT_SHIPPED', `Das Modul ${moduleId} ist in dieser Installation nicht enthalten.`)
   }
 
+  // The sign-in time the platform records must be the ID token's OWN (auth_time, else iat): the executor compares
+  // the recorded value with that claim within 1 s, and user.authTime is the gremion-ui server's clock at the jwt
+  // callback (a different instant). The token also has to lie inside the evidence window, or the executor would
+  // refuse it later: a new sign-in is the remedy, said now.
+  const signedIn = idTokenSignInTime(ctx.idToken)
+  const ageSeconds = signedIn === null ? null : Math.floor((deps.nowMs ?? Date.now)() / 1000) - signedIn.seconds
+  if (signedIn === null || ageSeconds === null || ageSeconds > EVIDENCE_WINDOW_SECONDS || ageSeconds < -EVIDENCE_SKEW_SECONDS) {
+    return fail(401, 'STEP_UP_REQUIRED', 'Bitte erneut anmelden und die Zwei-Faktor-Prüfung wiederholen.')
+  }
+
   let platform: Platform
   let state: Map<string, StateRow>
   try {
@@ -213,7 +223,7 @@ export async function submitModuleSwitch(ctx: SwitchContext, input: SwitchInput,
   let requestId: string
   try {
     const key = (deps.newKey ?? randomUUID)()
-    const authTime = new Date(user.authTime * 1000).toISOString()
+    const authTime = new Date(signedIn.seconds * 1000).toISOString()
     const rows = await platform<{ request_id: string }[]>`
       SELECT plt.submit_council_module_request(
         ${action === 'enable' ? 'enable_module' : 'disable_module'}, ${tenant.slug}, ${JSON.stringify(args)}::jsonb,
