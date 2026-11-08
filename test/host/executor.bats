@@ -315,7 +315,7 @@ outcome() { cat "${GREMION_ROOT}/outcome" 2>/dev/null || true; }
 # A7 (last case): customers are created and operated in the panel. No guarded
 # document names a gremion-tenant customer verb as an operator step outside
 # the ONE decommission note (docs/runbooks/tenant-lifecycle.md). `reconcile`
-# is exempt: it is the supported operator verb the upgrade runbook runs (step 7).
+# is exempt: it is the supported operator verb the upgrade runbook runs (step 8).
 @test "A7 docs guard: no gremion-tenant (create|suspend|resume|status) outside the decommission note" {
     local root="${KERNEL_ROOT}" hits f
     local -a files=()
@@ -332,6 +332,19 @@ outcome() { cat "${GREMION_ROOT}/outcome" 2>/dev/null || true; }
     [ -z "$hits" ] || { echo "$hits"; return 1; }
     # the note exists exactly once
     [ "$(grep -rl --include='*.md' 'gremion-tenant decommission note (R31-I4)' "${root}/docs" | wc -l)" -eq 1 ]
+}
+
+# Kernel #103 review: `reconcile --apply` repairs an account only when its check reports a gap, and that check never
+# looks at JetStream streams, so after a JetStream loss it reports ok and recreates nothing. The dead-letter
+# runbook's rebuild section must keep the explicit `nats-auth ensure` step and must not hand the step to reconcile.
+@test "docs guard: the JetStream rebuild runbook keeps the explicit ensure step and does not delegate it to reconcile" {
+    local sec
+    sec="$(awk '/^## 4\. Rebuild after JetStream was lost/ { on = 1; next } on && /^## / { exit } on' "${KERNEL_ROOT}/docs/runbooks/dead-letter.md" | tr -d '\r' | tr '\n' ' ')"
+    [ -n "$sec" ]
+    [[ "$sec" == *"nats-auth ensure <slug> --modules <modules>"* ]]
+    [[ "$sec" == *"does not replace this step"* ]]
+    [[ "$sec" != *"reconcile <slug> --apply\` does this"* ]]
+    [[ "$sec" != *"needs no hand-written one"* ]]
 }
 
 # ---------------------------------------------------------------------------

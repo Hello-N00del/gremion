@@ -998,6 +998,10 @@ reconcile_scenario() {
         empty-checks)     RC_OUT='{"realm":"acme","ok":true,"checks":[]}' ;;
         check-without-ok) RC_OUT='{"realm":"acme","ok":true,"checks":[{"name":"purger-connect"}]}' ;;
         red-check)        RC_OUT='{"realm":"acme","ok":false,"checks":[{"name":"purger-connect","ok":false}]}' ;;
+        # a report that is green but lacks a named check: the check was never run (an older tenant-create), not passed
+        no-purger-check)  RC_OUT='{"realm":"acme","ok":true,"checks":[{"name":"kernel-api-nats-seed","ok":true}]}' ;;
+        no-seed-check)    RC_OUT='{"realm":"acme","ok":true,"checks":[{"name":"purger-connect","ok":true}]}' ;;
+        unrelated-check)  RC_OUT='{"realm":"acme","ok":true,"checks":[{"name":"realm-roles","ok":true}]}' ;;
         *) echo "unknown reconcile scenario: $1" >&2; return 1 ;;
     esac
 }
@@ -1025,7 +1029,7 @@ check_reconcile_postcondition() {
         run_reconcile_line green "$line" && rc=0 || rc=$?
         [ "$rc" -ne "$RC_HARNESS_ERROR" ] || { echo "harness error: the reconcile shim could not be set up for 'green'" >&2; return 1; }
         [ "$rc" -eq 0 ] || { echo "upgrade: the reconcile Post-condition rejects a green report: ${line}" >&2; bad=1; }
-        for s in empty crash crash-after-json prose-only no-checks empty-checks check-without-ok red-check; do
+        for s in empty crash crash-after-json prose-only no-checks empty-checks check-without-ok red-check no-purger-check no-seed-check unrelated-check; do
             run_reconcile_line "$s" "$line" && rc=0 || rc=$?
             [ "$rc" -ne "$RC_HARNESS_ERROR" ] || { echo "harness error: the reconcile shim could not be set up for '${s}'" >&2; return 1; }
             if [ "$rc" -eq 0 ]; then
@@ -1588,6 +1592,13 @@ private_dumps_with_075_pending() {               # <dir>
     [[ "$output" == *"passes on 'empty'"* ]]
     [[ "$output" == *"passes on 'crash'"* ]]
     [[ "$output" == *"passes on 'red-check'"* ]]
+    # ...and the shape that checks ok:true but not WHICH checks ran passes a report missing a named check.
+    d="$(fixture_snippet "${FIX}/snippets/reconcile-postcondition-no-names.md" upgrade)"
+    run check_reconcile_postcondition "$d"
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"passes on 'no-purger-check'"* ]]
+    [[ "$output" == *"passes on 'no-seed-check'"* ]]
+    [[ "$output" == *"passes on 'unrelated-check'"* ]]
     # The floor: a Post-condition without the command is not a pass.
     d="$(fixture valid)"
     run check_reconcile_postcondition "$d"
