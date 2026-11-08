@@ -416,4 +416,44 @@ describe('restore through the real reconciler: the replay runs before config.mod
     expect(r.order).toEqual(['replay', 'replay', 'config'])
     expect(r.config.modules.votes).toBe(true)
   })
+
+  it('startup alignment of a restored module (platform enabled, config still off, no request row yet) replays the erasures BEFORE config.modules flips, and a failing replay keeps it off', async () => {
+    const r = rig()
+    r.switches.clear() // no council request row: only the platform enablement says "on"
+    r.deps.state = { aligned: new Set(), sweptAt: new Map([[TENANT_ID, T0]]), alignRetryAt: new Map(), migrateOwed: new Set() } as ReconcilerState
+    r.deps.council = () => ({ requests: async () => [], state: async () => [{ module_key: 'votes', state: 'enabled', has_row: true }] })
+    let broken = true
+    registerPreApplyHook(
+      createErasureReplayPreApply({
+        listKarenz: async () => [row({ state: 'restored' })],
+        tenantFor: async () => tenant,
+        withTenant: (_t, fn) => fn(),
+        replay: async () => {
+          r.order.push('replay')
+          if (broken) throw new ErasureReplayError('1 of 1')
+          return { subjects: 1, erased: 1, skipped: 0, failed: 0, details: [] }
+        },
+      }),
+    )
+    await runModuleSwitchPass(tenant, r.deps)
+    expect(r.order).toEqual(['replay'])
+    expect(r.config.modules.votes).toBe(false)
+    broken = false
+    r.tick(120_000)
+    await runModuleSwitchPass(tenant, r.deps)
+    expect(r.order).toEqual(['replay', 'replay', 'config'])
+    expect(r.config.modules.votes).toBe(true)
+  })
+
+  it('startup alignment of a module with no Karenz row (or none restoring) still turns it on without any replay', async () => {
+    const r = rig()
+    r.switches.clear()
+    r.deps.state = { aligned: new Set(), sweptAt: new Map([[TENANT_ID, T0]]), alignRetryAt: new Map(), migrateOwed: new Set() } as ReconcilerState
+    r.deps.council = () => ({ requests: async () => [], state: async () => [{ module_key: 'votes', state: 'enabled', has_row: true }] })
+    const replay = vi.fn()
+    registerPreApplyHook(createErasureReplayPreApply({ listKarenz: async () => [row({ state: 'open' })], tenantFor: async () => tenant, withTenant: (_t, fn) => fn(), replay }))
+    await runModuleSwitchPass(tenant, r.deps)
+    expect(replay).not.toHaveBeenCalled()
+    expect(r.config.modules.votes).toBe(true)
+  })
 })

@@ -577,6 +577,67 @@ describe('platform calls and the first pass', () => {
     expect(r.migrated).toHaveLength(2) // done: aligned
   })
 
+  it('alignment runs the pre-apply hooks for every module it turns ON, before config.modules is written, and never for one it turns off', async () => {
+    const seen: Array<{ moduleId: string; manifestId: string | null; action: string; writesAtCall: number }> = []
+    registerPreApplyHook(async (e) => {
+      seen.push({ moduleId: e.moduleId, manifestId: e.manifestId, action: e.action, writesAtCall: r.writes.length })
+    })
+    r.platform.state = CATALOGUE.map((k) => {
+      if (k === 'calendar') return st(k, 'enabled', true) // platform on, config off -> on: hook first
+      if (k === 'elections') return st(k, 'disabled', true) // platform off, config on -> off: no hook
+      return st(k)
+    })
+    r.config.modules = { calendar: false }
+    await runModuleSwitchPass(tenant, r.deps())
+    expect(seen).toEqual([{ moduleId: 'calendar', manifestId: 'calendar', action: 'enable', writesAtCall: 0 }])
+    expect(r.writes).toEqual([{ calendar: true, elections: false }])
+  })
+
+  it('a failing pre-apply hook keeps that module OFF at alignment, still aligns the others, and the module comes on only after a later attempt succeeds', async () => {
+    let broken = true
+    const calls: string[] = []
+    registerPreApplyHook(async (e) => {
+      calls.push(e.moduleId)
+      if (broken && e.moduleId === 'votes') throw new Error('erasure replay failed')
+    })
+    r.platform.state = CATALOGUE.map((k) => (k === 'votes' || k === 'calendar' ? st(k, 'enabled', true) : st(k)))
+    r.config.modules = { votes: false, calendar: false }
+    const deps = r.deps()
+    await runModuleSwitchPass(tenant, deps)
+    // votes stays off; calendar (no pending replay) is aligned and migrated in the same pass
+    expect(r.config.modules).toEqual({ votes: false, calendar: true })
+    expect(r.writes).toEqual([{ calendar: true }])
+    expect(r.migrated).toEqual(['rat-a'])
+    expect(vi.mocked(console.error).mock.calls.flat().join(' ')).toContain('erasure replay failed')
+    // inside the backoff nothing is retried
+    r.store.clock += 1_000
+    await runModuleSwitchPass(tenant, deps)
+    expect(r.writes).toEqual([{ calendar: true }])
+    // after the backoff, with the hook working, votes comes on and is migrated; then it is done for good
+    broken = false
+    r.store.clock += 120_000
+    await runModuleSwitchPass(tenant, deps)
+    expect(r.config.modules).toEqual({ votes: true, calendar: true })
+    expect(r.writes).toEqual([{ calendar: true }, { votes: true }])
+    expect(r.migrated).toEqual(['rat-a', 'rat-a'])
+    r.store.clock += 120_000
+    const callsBefore = calls.length
+    await runModuleSwitchPass(tenant, deps)
+    expect(calls).toHaveLength(callsBefore)
+  })
+
+  it('a failing pre-apply hook for the only module turned on writes nothing and runs no migration', async () => {
+    registerPreApplyHook(async () => {
+      throw new Error('replay down')
+    })
+    r.platform.state = CATALOGUE.map((k) => (k === 'votes' ? st(k, 'enabled', true) : st(k)))
+    r.config.modules = { votes: false }
+    await runModuleSwitchPass(tenant, r.deps())
+    expect(r.writes).toEqual([])
+    expect(r.migrated).toEqual([])
+    expect(r.config.modules.votes).toBe(false)
+  })
+
   it('a pending row triggers the platform read on every pass until it is final', async () => {
     r.store.seed({ requestId: R1 })
     r.platform.requests = [req(R1, { state: 'running', finished_at: null })]
