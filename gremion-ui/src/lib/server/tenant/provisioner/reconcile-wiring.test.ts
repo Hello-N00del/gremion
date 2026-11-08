@@ -56,3 +56,26 @@ describe('tenant-provision.ts: reconcile always carries the audit-append-only ch
     expect([...body.matchAll(/await reconcileOne\(/g)].length).toBe(2)
   })
 })
+
+// Kernel issues #88 and #89: the two re-ensure checks are wired where the verb really runs, with the verb mode,
+// so a plain reconcile REPORTS the drift and --apply repairs it. reconcile-reensure.test.ts proves the flow.
+describe('tenant-provision.ts: reconcile always carries the purger-connect and kernel-api-nats-seed checks', () => {
+  it('reconcileOne passes the report through reconcilePurgerConnect with the tenant id and the verb mode', () => {
+    expect(bodyOf('reconcileOne')).toMatch(/reconcilePurgerConnect\(\s*\w+\s*,\s*server\s*,\s*tenant\.id\s*,\s*verifyOnly\s*\)/)
+  })
+
+  it('reconcileOne passes the report through reconcileKernelApiSeed with the tenant, the live deps and the verb mode', () => {
+    expect(bodyOf('reconcileOne')).toMatch(/reconcileKernelApiSeed\(\s*\w+\s*,\s*tenant\s*,\s*kernelApiSeedDeps\(\s*platform\s*\)\s*,\s*verifyOnly\s*\)/)
+  })
+
+  it('the platform pool reconcileOne opens for the registry read is closed again', () => {
+    const body = bodyOf('reconcileOne')
+    expect(body).toMatch(/openPlatformPool\(\)/)
+    expect(body).toMatch(/platform\.end\(/)
+  })
+
+  it('the checks are called from reconcileOne and nowhere else', () => {
+    const rest = src.replace(bodyOf('reconcileOne'), '')
+    expect(rest).not.toMatch(/reconcilePurgerConnect\(\s*\w+\s*,|reconcileKernelApiSeed\(\s*\w+\s*,/)
+  })
+})

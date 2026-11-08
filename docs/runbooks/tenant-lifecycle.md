@@ -26,11 +26,18 @@ bootstrap-provisioner | reconcile | materialize-config`.
 Customers are created, suspended, resumed and reconciled by **requests**: the
 control panel ("Neuer Mandant") submits a row through
 `plt.submit_provisioning_request`, and the host-side `gremion-executor`
-claims, verifies and runs it. The old operator verbs `gremion-tenant create`,
-`suspend`, `resume`, `reconcile` and `status` are gone (they exit 2 and write
-nothing). The one break-glass path is `gremion-tenant request <kind>
+claims, verifies and runs it. The old operator verb `gremion-tenant create` is
+gone (it exits 2 and writes nothing); `suspend`, `resume` and `status` are
+not documented as operator steps and retire the same way with the panel's
+customer screens. The one break-glass path is `gremion-tenant request <kind>
 --args-file <0600 json> --operator <uuid> --reason <text>`, which puts the
 same request into the same queue, flagged `origin=host`.
+
+One host verb stays a supported operator step: `gremion-tenant reconcile <slug>
+[--apply --reason <text>]`. It is audited, a plain run only reports drift, and it is
+what an upgrade runs for every customer (`docs/ops/runbook/upgrade.md`, step 8), because
+that step needs the report on stdout, which a queued request does not give. The A7 docs
+guard (`test/host/executor.bats`) therefore exempts `reconcile` and nothing else.
 <!-- /gremion-tenant decommission note -->
 
 ## The control plane and the per-tenant silo
@@ -486,6 +493,8 @@ pnpm -C gremion-ui exec tsx scripts/tenant-provision.ts reconcile [--verify-only
 
 Re-checks each tenant's realm against the base realm contract (identity, issuer,
 exact URIs, step-up flow) and, without `--verify-only`, replays repairable drift.
+With `--verify-only` (the host verb `gremion-tenant reconcile <slug>` without `--apply`) it only
+reports drift and changes nothing.
 `--all` walks the whole fleet, skips non-realm-bearing rows
 (deleted/deleting/provisioning), and exits non-zero on any genuine failure.
 
@@ -499,11 +508,27 @@ REVOKE after the kernel chain (the migrate step fails when `audit_log` is missin
 privilege is still held). A customer provisioned before this check shows it RED until
 one `reconcile <slug>` (apply) has run.
 
-Karenz phase 1 adds one realm check, `vorstand-role`: the standard realm role `vorstand`
-must exist AND be listed in the `gremion-ui` client's realm-role scope mappings
-(`fullScopeAllowed` is false, so a role missing there never reaches a token). A realm created
-before the role was added to the realm template shows it RED until one `reconcile <slug>`
-(apply) has created the role and the mapping; both steps are idempotent.
+Three more checks re-apply provisioning that a later release added and that customers
+created earlier never received (`purger-connect` and `kernel-api-nats-seed` are kernel
+issues #88 and #89; `vorstand-role` is Karenz phase 1; the root cause is the same:
+create-time provisioning is not re-run on an upgrade). Each is read by a plain
+reconcile (`gremion-tenant reconcile <slug>` without `--apply`, or the library verb with
+`--verify-only`), which **only reports drift and changes nothing** (RED when the customer is
+behind). Only `gremion-tenant reconcile <slug> --apply --reason <text>` (the library verb
+without `--verify-only`) repairs, idempotently; a second apply changes nothing:
+
+| Check | What must hold | What apply does |
+|---|---|---|
+| `purger-connect` | the customer's `k_<hex>_purger` role holds `CONNECT` on its kernel database, `USAGE` on schema `public` and `SELECT`, `DELETE` on every kernel purge table that exists (the scheduled purge logs in as it; without `CONNECT` the purge fails with `permission denied for database`, with `CONNECT` alone every table is refused) | `GRANT CONNECT` (exactly `CONNECT`), then the same schema and table grants customer creation gives, then reads all of it back. It never creates a role: a customer without one has no kernel database provisioned |
+| `kernel-api-nats-seed` | the NATS seed `kernel-api/tenant_<slug>.nk` exists, every seed of the customer's current module set exists, **no seed is held for a module outside that set** (the declarative apply would revoke and delete it, so it is reported as drift before apply does it), and the broker serves the customer's account (the kernel API event relay publishes as that identity). The check reads seeds and the accounts file only; it never looks at JetStream streams | the same `nats-auth` ensure the lifecycle verbs use, over the customer's **current** module set read from the registry (`plt.module_enablement`) plus the `kernel-api` identity, then the account reload; a hand-written module list is never needed |
+| `vorstand-role` | the standard realm role `vorstand` exists AND is listed in the `gremion-ui` client's realm-role scope mappings (`fullScopeAllowed` is false, so a role missing there never reaches a token); a realm created before the role was added to the realm template shows it RED | creates the role and the scope mapping; both steps are idempotent |
+
+A suspended customer is ensured with the empty module set (suspension evicts the
+modules; reconcile does not restore them) and keeps the `kernel-api` identity like the
+kernel. A customer that is neither active nor suspended has no `kernel-api-nats-seed`
+check. Every later `ensure` of a customer account (create, enable, disable, suspend,
+resume) carries `kernel-api` as well, so the seed is not removed again. An upgrade runs
+`reconcile --apply` for every customer (`docs/ops/runbook/upgrade.md`).
 
 **Operator note, chain anchor:** with `INSERT` on `audit_log_chain_anchor` revoked from
 the app role, the migration-0059 *adopt* path (`gremion.audit_chain_adopt_head`, only

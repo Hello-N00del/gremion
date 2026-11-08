@@ -13,7 +13,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import postgres from 'postgres'
 import { checkTenantHostDns, type EdgeAddresses } from '@gremion/edge-routers'
-import { ensureTenantAccount } from '@gremion/nats-auth'
+import { ensureTenantAccount, withPlatformIdentities } from '@gremion/nats-auth'
 import type { AdminSpec, ControlRow, CustomerRef, GovernancePostCondition, KernelPostCondition, ProvisioningDeps, SmtpReadBack } from '@gremion/provisioning'
 import {
   bindGovernanceDatabase,
@@ -655,7 +655,10 @@ export function customerAdapters(o: CustomerAdapterOptions): Pick<ProvisioningDe
 
     broker: {
       async ensure(c, modules) {
-        return ensureTenantAccount({ tenant: c.slug, modules })
+        // The registry's module set plus the platform identities (kernel-api, kernel issue #88): ensure is
+        // declarative, so a set without kernel-api would delete the seed the relay needs on every enable,
+        // disable, suspend and resume. Create gives a new customer the seed; reconcile --apply an older one.
+        return ensureTenantAccount({ tenant: c.slug, modules: withPlatformIdentities(modules) })
       },
     },
   }

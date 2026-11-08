@@ -14,7 +14,8 @@
 //   render-router <slug>                            the edge router document on STDOUT (Q17)
 //   suspend <slug> --operator <uuid>                status, realm, broker (the host then revokes the principal)
 //   resume <slug> --operator <uuid>                 stamp verified, realm, broker, status last
-//   reconcile [--verify-only] <slug>|--all          the realm contract incl. smtp-server (repair: host), plus the kernel audit-append-only check
+//   reconcile [--verify-only] <slug>|--all          the realm contract incl. smtp-server (repair: host), plus the kernel audit-append-only,
+//                                                   purger-connect and kernel-api-nats-seed checks (apply re-ensures what an older release never gave)
 //   status <slug>                                   provisioning status JSON on STDOUT
 //   operator-add <email> [--no-mail]                an operator in the ops realm `platform` (Q5, Q23)
 //   delete <slug>                                   crypto-shred delete (kernel database by tenant id)
@@ -94,6 +95,7 @@ import {
 } from '../src/lib/server/tenant/registry'
 import { KcProvisionApi, masterAdminClientId, type KcTransport } from '../src/lib/server/tenant/provisioner/kc-admin-api'
 import { customerAdapters, governanceServer, kernelServer, reconcileKernelAudit } from '../src/lib/server/tenant/provisioner/customer-adapters'
+import { kernelApiSeedDeps, reconcileKernelApiSeed, reconcilePurgerConnect } from '../src/lib/server/tenant/provisioner/reconcile-reensure'
 import { fixtureIdentities } from '../src/lib/server/tenant/provisioner/fixture-identities'
 import {
   reconcileRealm,
@@ -939,10 +941,18 @@ async function reconcileOne(tenant: Tenant, base: Record<string, unknown>, verif
   const realm = await reconcileRealmOnly(tenant, base, verifyOnly)
   // TASK-033-a: the kernel audit record is append-only (RC-GOV-CHAIN). The privilege lives in the customer's
   // kernel database, so it is one DB-level check appended to the realm report: verify reads, apply re-asserts.
+  // Kernel issues #88/#89: provisioning a later release extended is re-applied to customers created earlier.
+  // Two more checks, each a read of the post-condition (verify) plus an idempotent repair (apply): the purger's
+  // CONNECT on this customer's kernel database, and its kernel-api NATS seed (the registry's CURRENT module set
+  // read from the platform database, never a guessed list). Both pools connect lazily.
+  const platform = openPlatformPool()
   const server = kernelServer(directPostgresUrl('KERNEL_PG_ADMIN_FILE', reqFileEnv('KERNEL_PG_ADMIN_FILE')))
   try {
-    return await reconcileKernelAudit(realm, server, tenant.id, verifyOnly)
+    const audited = await reconcileKernelAudit(realm, server, tenant.id, verifyOnly)
+    const purger = await reconcilePurgerConnect(audited, server, tenant.id, verifyOnly)
+    return await reconcileKernelApiSeed(purger, tenant, kernelApiSeedDeps(platform), verifyOnly)
   } finally {
+    await platform.end({ timeout: 5 }).catch(() => {})
     await server.close()
   }
 }

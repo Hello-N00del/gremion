@@ -127,7 +127,7 @@ CTXS="idt gov plt"
 write_metrics() {   # <ctx> <outbox dead> <inbox dead> <stalled>
   mkdir -p "$SDIR/$1"
   ( cd "$ROOT/packages/events" && CTX="$1" O="$2" D="$3" S="$4" node --import tsx --input-type=module -e \
-    "import { renderMetrics } from './src/metrics.ts'; process.stdout.write(renderMetrics({ ctx: process.env.CTX, consumer: 'finance', outboxDeadLettered: Number(process.env.O), inboxDeadLettered: Number(process.env.D), inboxStalled: Number(process.env.S) }))" \
+    "import { renderMetrics } from './src/metrics.ts'; process.stdout.write(renderMetrics({ ctx: process.env.CTX, consumer: 'finance', outboxDeadLettered: Number(process.env.O), outboxOldestPendingSeconds: 0, inboxDeadLettered: Number(process.env.D), inboxStalled: Number(process.env.S) }))" \
   ) > "$SDIR/$1/metrics.prom"
   grep -q "^gremion_outbox_dead_lettered{ctx=\"$1\"} $2\$" "$SDIR/$1/metrics.prom" || die "renderMetrics did not print the expected gauge for $1"
 }
