@@ -1495,9 +1495,9 @@
     },
     {
       "path": "modules/votes/app/lib/server/polls/polls-client.ts",
-      "reason": "post-f2 StuRaOS e28191a1: fix(votes): apply requested anonymous/description/expire when creating a poll (F1-FIX-08 H16); TASK-205b: service endpoints through serviceEnv (the deleted default-tenant env reader)",
+      "reason": "post-f2 StuRaOS e28191a1: fix(votes): apply requested anonymous/description/expire when creating a poll (F1-FIX-08 H16); TASK-205b: service endpoints through serviceEnv (the deleted default-tenant env reader); Karenz p2 t13: setConfiguration and deletePoll (tenant-checked) and the optional showResults of the configuration",
       "owner": "TASK-205",
-      "blob": "ceebe19efb9614caf62f5765970cefc50f53cb9d"
+      "blob": "1d0fbe22ba4e69206cae9d46553b6d0ce8e2befc"
     },
     {
       "path": "modules/messaging/app/routes/api/auth/matrix-token/+server.ts",
@@ -2206,6 +2206,42 @@
       "reason": "Module Karenz phase 2 Task 15: the archive/restore power-level helpers split out of room-admin.ts (file size cap); new kernel-side file with no counterpart at the tag",
       "owner": "TASK-205",
       "blob": "04f04e949d0082a7d4b6dd166eb541110d4fa8f4"
+    },
+    {
+      "path": "modules/votes/app/lib/server/polls/fake-nc.ts",
+      "reason": "Karenz p2 t13: the double carries showResults (view and PUT), so the participant tests can prove it hides and restores result visibility",
+      "owner": "TASK-205",
+      "blob": "50d8c9e35dc86cd32ff09110018b246913e305f7"
+    },
+    {
+      "path": "modules/votes/app/lib/server/polls/register.server.ts",
+      "reason": "Karenz p2 t13: registers the votes Karenz participant, the poll-results retention extractor and the deletion preview provider beside the erasure hook",
+      "owner": "TASK-205",
+      "blob": "7ae1e49d257020131b533cb255b5532e91d5f9b7"
+    },
+    {
+      "path": "modules/votes/app/lib/server/polls/register.server.test.ts",
+      "reason": "Karenz p2 t13: asserts the three new registrations",
+      "owner": "TASK-205",
+      "blob": "c3f328d7a4c11542194c79bf380a50f15198460d"
+    },
+    {
+      "path": "modules/votes/app/lib/server/polls/karenz.ts",
+      "reason": "added by Karenz p2 t13: the votes participant (freeze, restore, final deletion of Nextcloud Polls deadlines and polls) and the deletion preview provider",
+      "owner": "TASK-205",
+      "blob": "8000be615dd57cee86eaa7aec23d725f96cf702e"
+    },
+    {
+      "path": "modules/votes/app/lib/server/polls/karenz.test.ts",
+      "reason": "added by Karenz p2 t13: the participant suite on the fake Nextcloud (lock order, crash recovery, tenant scope, final-day guards)",
+      "owner": "TASK-205",
+      "blob": "bee5d9c9a7a7261109aaad75038d81d5affaa032"
+    },
+    {
+      "path": "modules/votes/app/lib/server/polls/retained.ts",
+      "reason": "added by Karenz p2 t13: the RC-GOV-RES poll-results extractor (tallies only) sealed at switch-off",
+      "owner": "TASK-205",
+      "blob": "e83eb42f6f15c592b498817ce20ef722a050fd35"
     }
   ]
 }
