@@ -31,7 +31,7 @@ export const COUNCIL_DISABLE_ALLOWED = true
 /** Where a request came from (plt.provisioning_request.origin). */
 export type RequestOrigin = 'panel' | 'host' | 'council'
 
-/** The kinds a council request may name (the database allows exactly these two; phase 1 runs only enable_module). */
+/** The kinds a council request may name (the database allows exactly these two). */
 const COUNCIL_KINDS: ReadonlySet<string> = new Set(['enable_module', 'disable_module'])
 /** The only DPIA reason code a council decision may carry (the panel's own is operator_decision). */
 const COUNCIL_REASON_CODE = 'council_decision'
@@ -145,7 +145,7 @@ export interface EnableModuleArgs {
   actorKind: ActorKind
 }
 
-/** `disable_module` (TRD-044): export first, then drop (tenant-store disableModule). */
+/** `disable_module` (TRD-044): export first, then block and open the 30-day Karenz (tenant-store disableModule). */
 export interface DisableModuleArgs {
   slug: string
   module: string

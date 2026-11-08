@@ -255,11 +255,12 @@ blocked), a "DPIA-Entscheidung festhalten" form per enabled module and the
   loaded catalogue version, isolation pass on the release tip, the decision
   recorded, enableModule through the gate, broker users). Repeatable.
 - `disable_module` {slug, module}: `tenant-create disable-module` (export and
-  verify the module database, only then drop it; broker users shrunk). It refuses,
+  verify the module database, then BLOCK it and open the 30-day Karenz, see "Module
+  Karenz (30 days)" below; nothing is dropped; broker users shrunk). It refuses,
   nothing touched, unless `TENANT_EXPORT_DIR` is a mounted volume
   (`$GREMION_ROOT/data/module-exports`, which must exist and be writable by the
-  container user). A failed export leaves the database; the same request again
-  resumes.
+  container user). A failed export leaves the database in place and unblocked; the
+  same request again resumes.
 - `record_dpia` {slug, module, requiresDpia, documentRef}: `tenant-create
   dpia-record`, identical latest decision reused (no second row on a rerun).
 - `reconcile` {slug, apply}: the dry run is `tenant-create reconcile
@@ -386,13 +387,13 @@ through the same queue and the same host executor as every other request, withou
 approval and with the actor recorded as a person (`actor_kind = person`), not as an
 operator. It writes no `oac.access_record`: that record is vendor and operator access.
 
-**Scope in phase 1: enable only.** The database accepts `enable_module` and `disable_module`
-for the council origin, but the application refuses a council `disable_module` with
-`DISABLE_NOT_YET` (HTTP 422 from `POST /api/settings/modules`, nothing queued; the executor
-refuses the same request if one ever reaches it). One constant, `COUNCIL_DISABLE_ALLOWED`
-in `@gremion/provisioning`, carries this. Today's `disableModule` exports and then drops the
-module database at once; a council must not reach that before the 30-day grace period of
-phase 2 exists. Switching a module off stays an operator action in the control panel.
+**Scope: on and off.** The database accepts `enable_module` and `disable_module` for the
+council origin, and since the 30-day Karenz exists (next section) the application accepts both.
+Phase 1 refused a council `disable_module` with `DISABLE_NOT_YET` because the switch-off
+dropped the module database at once; the constant `COUNCIL_DISABLE_ALLOWED` in
+`@gremion/provisioning` is now `true` and that refusal is gone. A switch-off is recoverable for
+30 days, and a switch-on inside those days is the same `enable_module` request as a first
+switch-on, without a new DPIA input.
 
 **Switchable set.** Catalogue ids that own a toggleable manifest and are not denied:
 `calendar`, `elections`, `votes`. Every other id is refused with `MODULE_NOT_SWITCHABLE`
@@ -424,14 +425,14 @@ variable into a required one. To switch the feature on, set it, run `init` and r
 app containers.
 
 **What the executor verifies** (`request-verify`, fail closed, in this order): the kind and
-args (only `enable_module` in phase 1; no token is read for a refused kind); the module is
+args (`enable_module` or `disable_module`; no token is read for a refused kind); the module is
 council-switchable; the customer exists in the registry; the signed token pair against that
 customer's own Keycloak realm only (issuer and keys of that realm, client `gremion-ui`,
 role `council-admin` or `it-admin`, `acr` `loa2`, sign-in within the 3600 s evidence
 window; the admin is bound through the access token's `sub`, the real user id, because the
 gremion-ui ID token's `sub` is pairwise or absent), so a pair signed by council A can never carry a request for the customer of
 council B; and finally the admin read back from the realm now (exists, enabled, still
-holds the role). Then the unchanged `enable_module` handler runs with `--actor-kind person`.
+holds the role). Then the unchanged `enable_module` or `disable_module` handler runs with `--actor-kind person`.
 Every existing enable gate still applies: deny list by name, `modules/disabled.json`, a
 loaded `plt.module_version`, the isolation pass and a written DPIA decision with a document
 reference. The admin may carry the DPIA decision with the request (reason code
@@ -460,6 +461,156 @@ control panel's request list for the customer shows the origin as "Gremium".
 | stays `applying`, with an error text | The platform enablement succeeded but `config.json` could not be written (a customer created before the `TENANT_SECRETS_UID` fix has it `root:root 0640`). Run `materialize-config <slug>` as described below; the reconciler retries on its own and nothing reads as switched until the write works. |
 
 A failed or refused switch never changes `config.modules`.
+
+## Module Karenz (30 days)
+
+Switching a module off destroys nothing for 30 days. Every disable, from any origin (the council's
+Settings > Module, the control panel, the host break-glass), opens one row in `plt.module_karenz`
+in the same transaction that turns the enablement off. That row is the only clock: `final_at` is
+`switched_off_at` plus 30 days (`KARENZ_DAYS`), and neither the tenant nor a council report can move it.
+
+### What a switch-off does
+
+| Where | At switch-off | Switch-on inside the 30 days | Day 30 |
+|---|---|---|---|
+| Module database (board, calendar, content, finance, publishing, vault) | exported and verified, then BLOCKED: the app role loses CONNECT, the database stays alive | unblocked, the data is back | dropped, and the row's own export is deleted with it |
+| `votes` (Nextcloud Polls) | every open poll is locked by moving its deadline into the past, the remaining time is stored | the deadline becomes "now plus the stored remaining time"; a poll without a deadline gets none again; a poll that had already expired or been closed is never reopened | polls are deleted unless a protocol references them; a poll without a sealed line is kept and reported |
+| `elections` (Helios) | open elections are paused through the pause port | unpaused with the stored remaining time | nothing is deleted in Helios; an election with a sealed result is archived in the tenant table |
+| `messaging` (Matrix) | every org unit's room is archived (read-only) | unarchived | rooms the Karenz archived are deleted, except meeting-linked rooms (RC-MSG-LINK) |
+| `files` (Nextcloud) | only the Gremion binding of each org unit is released; folders, groups and files are untouched | the same folder is bound again and the group membership is brought up to date | nothing is deleted in Nextcloud |
+| Retained records | sealed as read-only encrypted copies at switch-off | stay | stay (`retained_record` is append-only and `finalize` never touches it) |
+
+A deadline is never closed silently. A refused lock or unlock leaves the item locked (or flagged
+`lock_failed` / `unlock_failed`) and is reported on the settings page and in the ops alert.
+
+**Helios pause mode.** The Helios source is not part of this repository, so whether an election can
+be paused is a fact of the deployed instance. `HELIOS_PAUSE_MODE` in
+`modules/elections/app/lib/server/elections/helios-pause.ts` ships `unsupported`. In that mode the
+switch-off guard refuses to switch `elections` off while an election is open
+(`SWITCH_OFF_BLOCKED`, HTTP 409); with no open election the switch-off goes through. Probe the
+running Helios (list the admin endpoints of an unfrozen and a frozen election), record the result,
+and only then change the mode together with its implementation.
+
+**Notice.** The holders of the realm roles `council-admin` and `vorstand` are mailed once at
+switch-off and again on day 23 and day 29, de-duplicated, one mail per person. The mail, the
+reminders, the settings page and every API response name no actor; the person who switched exists
+only in `audit_log`, in the tenant's own `module_switch_request.actor_user_id` and in
+`plt.module_karenz.actor_*` (read by `karenz-status` below, never by the shared council role).
+When nobody can be told (Keycloak down, SMTP unconfigured, no holder with an address) the
+switch-off stays in force, the notice step fails loudly and is retried, and skipped holders are
+listed on the settings page.
+
+**Retained records.** Readable by `council-admin`, `vorstand`, `finance`, `auditor` and `it-admin`:
+always as a download behind `GET /api/settings/modules/retained?id=<id>` (the list is
+`?module=<catalogue id>`), and through a read-only group folder in the files module when it is on.
+The Nextcloud is one shared instance, so the folder and its groups are named per tenant and are
+never adopted by name. The copies are served redacted for persons erased under Art. 17 after the
+copy was sealed; the stored bytes never change, and an erasure during the Karenz is replayed
+before a restore. After day 30 a module switched on afresh shows the earlier period's sealed copies,
+still read-only.
+
+### States
+
+`plt.module_karenz.state`:
+
+| State | Meaning |
+|---|---|
+| `open` | the module is off, the clock runs |
+| `restoring` | switched on inside the 30 days; the tenant pass is still restoring the external items. A new switch-off is refused `KARENZ_RESTORE_PENDING` until it has finished |
+| `restored` | the restore finished; a later switch-off starts a fresh 30 days and fresh reminders |
+| `finalizing` | the day-30 job has claimed the row. A switch-on is refused `KARENZ_FINALIZING` until the job has finished, after which it is a fresh start, not a restore |
+| `finalized` | the platform side (`platform_done_at`) and the tenant side (`tenant_done_at`) are both done |
+
+A switch-on after `final_at` but before the job has run is still a restore: nothing was deleted yet.
+
+### The day-30 job and the deletion switch
+
+`gremion-karenz.timer` runs `infra/host/ops/karenz.sh` hourly (minute 17 UTC) under
+`runtime/hostd.lock`. It calls `tenant-create karenz-run` in the active colour, which finalizes the
+due rows (see `infra/host/ops/README.md` for the exit codes and the one JSON line it prints). Every
+sub-step is keyed on persisted state, so a crash or a skipped hour converges on the next run.
+
+`KARENZ_FINAL_DELETION` ships `off`. Only the exact string `on` deletes; `ON`, `true`, `1` and empty
+are off. It is read by `karenz-run` only; gremion-ui takes the mode from the row (`final_mode`) and
+never from its own environment. `off` is a dry run on both sides: the platform side records the mode
+and counts what is due, the tenant pass writes one info event per 24 hours that starts with
+"deletion off: would delete:".
+
+Procedure to turn the deletion on, per environment:
+
+1. Re-date check. `node --test scripts/check-karenz-catalogue.test.mjs` is green and the rows RC-MOD-EXPORT,
+   RC-MOD-DATA, RC-MSG-ROOM and A-G/A-MOD in `docs/compliance/retention-catalogue.md` carry the
+   30-day reading.
+2. Finance. The per-class extraction of finance records (phase 3) must be verified first: the finance
+   export is deleted with the blocked database on day 30. Do not turn deletion on for an environment
+   that has the finance module in use before that.
+3. Read one dry-run line. Run `infra/host/ops/karenz.sh` with the switch `off` (or wait for the
+   timer) and read its JSON line: `due`, `errors` (must be empty) and `orphanedExports`. Then wait for
+   one tenant pass and read the tenant-side "would delete: ..." info event. Both must list what you
+   expect and nothing else.
+4. Set `KARENZ_FINAL_DELETION=on` in the active colour's app env file (`etc/env/app-<colour>.env`),
+   run one `karenz.sh` by hand and read the line again (`deletion":"on"`, `finalized`, empty
+   `errors`). `TENANT_EXPORT_DIR` must be its own mount; otherwise `karenz-run` refuses with exit 2
+   and touches nothing.
+5. Check the gauges: `gremion_module_karenz_*` in `runtime/textfile/gremion.prom`, and that
+   `gremion:cond:module_karenz` is 0.
+
+**Orphaned exports.** `orphanedExports` lists dumps under `TENANT_EXPORT_DIR/<tenant>/<module>/` that
+no Karenz row and no `plt.module_database` row references: strays of an attempt that failed before
+it was recorded. They are listed on every run, dry or live, and never deleted automatically,
+because one may be a backup you still want. Read the list, then delete the files you do not need by
+hand, each together with its `.sha256` sidecar.
+
+### Reading the state: `karenz-status`
+
+```bash
+tc karenz-status <slug>        # tc: infra/host/lib/customer-ops.sh, the tenant-create one-shot
+```
+
+One JSON line with the live rows and the rows of the last 90 days of one customer: module, state,
+`switchedOffAt`, `finalAt`, the actor, the export path, `finalMode` and the done marks. It includes
+the actor and is therefore for the operator only. The council sees the same rows without actor and
+export columns on Settings > Module: days left, the restore button, problems in an alert,
+the retained downloads and the link to the backup export (`/settings/sicherungen`).
+
+Alerting: `gremion:cond:module_karenz` is the sum of four conditions, all derived from platform
+columns only: `gremion_module_karenz_failed` (the newest event of a step is an error),
+`gremion_module_karenz_stale` (a notice or reminder is overdue because the tenant pass never ran),
+`gremion_module_karenz_overdue` (a row is more than 6 hours past `final_at` while the deletion switch
+is on) and an absent `gremion_module_karenz_live` (the collector could not read the platform table).
+Any of them pages through the normal ops alert path.
+
+### A stuck restore
+
+A restore that is still `restoring` after an hour is reported as the failed step `restore:stuck`.
+Read the failing steps on the settings page, or the tenant pass log, for the named item (a kind and an
+external id, never a title). A permanently failing unlock of a Polls or Helios item is fixed by hand in
+Nextcloud or Helios; the pass observes the live state and completes. Do not switch the module off
+again meanwhile: that is refused (`KARENZ_RESTORE_PENDING`) so that locked items are never adopted by
+a second Karenz.
+
+### AUTH_SECRET rotation
+
+Retained records are sealed with a per-tenant data key that is wrapped by a key derived from
+`AUTH_SECRET`. Rotating `AUTH_SECRET` therefore has two consequences:
+
+1. **Re-wrap the data keys, as part of the rotation.** Call `rewrapDataKeys(db, tenantId, oldSecret,
+   newSecret)` (`gremion-ui/src/lib/server/module-karenz/retained/crypto.ts`) for every tenant before
+   the old secret is dropped. It is safe to run again; it stops, guessing nothing, at a key that opens
+   under neither secret. Without it every sealed copy becomes unreadable, possibly years from now.
+2. **Redaction of earlier erasures silently stops.** The `subjectRef` hashes that recognise an erased
+   person in a retained copy and in the files sink are keyed with `AUTH_SECRET`. After a rotation the
+   hashes of earlier erasures no longer match, so those persons become legible again in retained
+   copies and in the republished documents unless the references are re-derived. There is no warning.
+   Re-derive them, or hold the rotation until that is done.
+
+### Open items of this runbook
+
+Owed after the kernel is deployed to the test environment (never proved in the repository): the
+timer and the platform table on the running host, a real-browser switch-off and switch-on of
+`votes`, the delivered mail, the day-30 simulation, the forced failure and its alert, the Polls
+lock, the Helios pause probe and the Nextcloud read-only group folder, the two-tenant folder
+separation, and the retained list after a fresh start.
 
 ## Reconcile (drift guard)
 
