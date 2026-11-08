@@ -1765,9 +1765,9 @@
     },
     {
       "path": "modules/elections/app/lib/server/elections/election-db.integration.test.ts",
-      "reason": "TASK-205b: the kernel database has no finance schema (the finance migrations are not in its chain), so the truncate names org_units only (CASCADE reaches committee_elections); TASK-205b: the kernel database has no finance schema (the finance migrations are not in its chain), so the truncate names org_units only (CASCADE reaches committee_elections); an afterAll clears the rows it created (a left-behind committee_elections row broke every later file that deletes org_units)",
+      "reason": "TASK-205b: the kernel database has no finance schema (the finance migrations are not in its chain), so the truncate names org_units only (CASCADE reaches committee_elections); TASK-205b: the kernel database has no finance schema (the finance migrations are not in its chain), so the truncate names org_units only (CASCADE reaches committee_elections); an afterAll clears the rows it created (a left-behind committee_elections row broke every later file that deletes org_units); Karenz p2 t14: an integration case for archiveForKarenz and unarchiveForKarenz",
       "owner": "TASK-205",
-      "blob": "a9c2a185829b84358d10a68000c519aa90ce3762"
+      "blob": "80023a30296b9fe07336d371a8a84cabcd503406"
     },
     {
       "path": "modules/calendar/app/lib/modules/manifests/calendar.test.ts",
@@ -2242,6 +2242,48 @@
       "reason": "added by Karenz p2 t13: the RC-GOV-RES poll-results extractor (tallies only) sealed at switch-off",
       "owner": "TASK-205",
       "blob": "e83eb42f6f15c592b498817ce20ef722a050fd35"
+    },
+    {
+      "path": "modules/elections/app/lib/server/elections/karenz.ts",
+      "reason": "added by Karenz p2 t14: the elections participant (pause, restore and archive of Helios elections), the RC-ELE election-results extractor and the switch-off guard for an unsupported pause",
+      "owner": "TASK-205",
+      "blob": "814f80841ed3ff75b75d6d4a9ba3a28fc7333332"
+    },
+    {
+      "path": "modules/elections/app/lib/server/elections/karenz.test.ts",
+      "reason": "added by Karenz p2 t14: the participant suite on a stateful fake Helios and pause port (lock order, crash recovery, final-day guards, switch-off guard)",
+      "owner": "TASK-205",
+      "blob": "485ae17fe9e02a27d9e9d1423e00de9a00ccf01c"
+    },
+    {
+      "path": "modules/elections/app/lib/server/elections/helios-pause.ts",
+      "reason": "added by Karenz p2 t14: the Helios pause port; ships unsupported until the running Helios is probed",
+      "owner": "TASK-205",
+      "blob": "d1a9a5ad9c81e98800ce70a62f272e1225c107d0"
+    },
+    {
+      "path": "modules/elections/app/lib/server/elections/election-db.karenz.test.ts",
+      "reason": "added by Karenz p2 t14: the SQL shape of archiveForKarenz and unarchiveForKarenz",
+      "owner": "TASK-205",
+      "blob": "4a01d7c7e595db7a34468007a029cba4f3e053d1"
+    },
+    {
+      "path": "modules/elections/app/lib/server/elections/election-db.ts",
+      "reason": "Karenz p2 t14: archiveForKarenz and unarchiveForKarenz for the final step and the restore",
+      "owner": "TASK-205",
+      "blob": "07d119f33784f94e3bcd114d6b92ee98298e620a"
+    },
+    {
+      "path": "modules/elections/app/lib/server/elections/register.server.ts",
+      "reason": "Karenz p2 t14: registers the elections Karenz participant, the election-results extractor and, while the pause is unsupported, the switch-off guard",
+      "owner": "TASK-205",
+      "blob": "e3a370d332a4cd425fc019780bf37df6f5803d4a"
+    },
+    {
+      "path": "modules/elections/app/lib/server/elections/register.server.test.ts",
+      "reason": "Karenz p2 t14: asserts the new registrations",
+      "owner": "TASK-205",
+      "blob": "4652c8793d8d3d1c031624bdbb9cbec19399842f"
     }
   ]
 }
