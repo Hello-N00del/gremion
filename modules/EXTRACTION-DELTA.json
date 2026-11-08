@@ -1693,15 +1693,15 @@
     },
     {
       "path": "modules/votes/app/routes/votes/+page.server.ts",
-      "reason": "TASK-205b (TASK-058 Q10): the landing page shows polls only while the elections module is off for the tenant (no committee_elections read, no Helios probe, heliosStatus null, electionsEnabled in the page data)",
+      "reason": "TASK-205b (TASK-058 Q10): the landing page shows polls only while the elections module is off for the tenant (no committee_elections read, no Helios probe, heliosStatus null, electionsEnabled in the page data); Karenz p2 t19: the loader also returns retainedRecords, the sealed poll tallies of an earlier period for the roles that may read retained records",
       "owner": "TASK-205",
-      "blob": "3a7a08dc7a44e13c262964668dd28e1799f34f2d"
+      "blob": "908282745a80b20f4485e825798bec9a27450d3e"
     },
     {
       "path": "modules/votes/app/routes/votes/+page.svelte",
-      "reason": "TASK-205b (TASK-058 Q10): no Helios pill, legend entry, sub-title or Helios-Wahl choice while elections is off",
+      "reason": "TASK-205b (TASK-058 Q10): no Helios pill, legend entry, sub-title or Helios-Wahl choice while elections is off; Karenz p2 t19: renders the read-only RetainedRecords list below the votes",
       "owner": "TASK-205",
-      "blob": "aa3996cb78ef28265624045e95cb4b306354fdda"
+      "blob": "e5a829f4737a05313d76c6e48f9940dd31e4eea4"
     },
     {
       "path": "modules/votes/app/routes/votes/votes.reflow.browser.test.ts",
@@ -2320,6 +2320,30 @@
       "reason": "Karenz p2 t16: tests of the files retained sink incl. the two-tenant case against one shared Nextcloud fake; new kernel-side file with no counterpart at the tag",
       "owner": "TASK-205",
       "blob": "07b460a9bfac5515d4312073f6c5c6239c74cf7c"
+    },
+    {
+      "path": "modules/elections/app/routes/elections/+page.server.ts",
+      "reason": "Karenz p2 t19: the loader also returns retainedRecords, the sealed result copies of an earlier period for the roles that may read retained records",
+      "owner": "TASK-205",
+      "blob": "873fdfef189d039b7367499a3cadba6629195746"
+    },
+    {
+      "path": "modules/elections/app/routes/elections/+page.svelte",
+      "reason": "Karenz p2 t19: renders the read-only RetainedRecords list below the elections",
+      "owner": "TASK-205",
+      "blob": "03fe9cadc1530fe4a96bf21f80cb41eaf0283460"
+    },
+    {
+      "path": "modules/elections/app/routes/elections/retained-records.test.ts",
+      "reason": "Karenz p2 t19: the elections page lists the sealed result copies after a finalized Karenz and a fresh enable; new kernel-side file with no counterpart at the tag",
+      "owner": "TASK-205",
+      "blob": "379deb443b04f16e7865925dec13cc8469220c74"
+    },
+    {
+      "path": "modules/votes/app/routes/votes/retained-records.test.ts",
+      "reason": "Karenz p2 t19: the votes page lists the sealed poll tallies after a finalized Karenz and a fresh enable; new kernel-side file with no counterpart at the tag",
+      "owner": "TASK-205",
+      "blob": "6753f146487ac8e5f5cedce75d5f701c378c1ba8"
     }
   ]
 }
