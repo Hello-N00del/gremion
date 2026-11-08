@@ -149,6 +149,15 @@ describe('deleteTenant — crypto-shred-first ordering', () => {
     expect(lifecycle).toEqual(['shred', 'db-drop', 'gov-drop', 'status:deleted'])
   })
 
+  it('TASK-084-a: an empty governance secrets directory is refused before anything is changed, never a silent skip of the credential shred', async () => {
+    const h = harness()
+    h.deps.governanceSecretsDir = ''
+    await expect(deleteTenant('t2', h.deps)).rejects.toThrow(/governanceSecretsDir/)
+    expect(h.deps.shredSecretFiles).not.toHaveBeenCalled()
+    expect(h.deps.db.dropKernelDatabase).not.toHaveBeenCalled()
+    expect(h.row?.status).not.toBe('deleting')
+  })
+
   it('TASK-084-a: a failing governance drop aborts the delete before the tombstone and leaves it retryable', async () => {
     const h = harness()
     h.deps.db.dropGovernanceDatabase = vi.fn(async () => {

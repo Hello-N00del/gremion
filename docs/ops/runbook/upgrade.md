@@ -1,6 +1,6 @@
 # Upgrade: one release onto a running installation
 
-- Version: 8.0.0
+- Version: 9.0.0
 - Status: provisional (see Known gaps)
 - Wall-clock budget: one working day, from step 1 to the asserted post-condition (PRD-PLAT-005)
 - Implements: TRD-200 (upgrade), TRD-206 (the pre-migration dump, R18-4), TRD-189 (blue/green as the deploy path)
@@ -325,6 +325,36 @@ gremion-tenant reconcile "$slug" --apply --reason "upgrade to ${TAG}: re-ensure 
 # [tenant-create] reconcile realm "<realm>" ... ok  purger-connect ... ok  kernel-api-nats-seed ... applied repairs: purger-connect, kernel-api-nats-seed (a rerun: no repairs)
 ```
 
+9. **Bring the governance server up (installations first brought up before
+   TASK-084-a, once).** Creating a customer makes it a governance database on
+   its own server, `governance-postgres`, and deleting one drops it. That server
+   belongs to the state project, which the deploy never recreates, and
+   `state.env.tmpl` feeds only new installs, so an older host has none of the
+   four things the two verbs read: the keys `GOVERNANCE_PG_USER` and
+   `GOVERNANCE_PG_PASSWORD` in `state.env`, the running container, the admin
+   login file `etc/secrets/tenant-create/governance_pg_admin` and the credential
+   directory `etc/secrets/governance` (0700). Without them `gremion-tenant`
+   exits 2 on a customer create or delete, naming `GOVERNANCE_PG_ADMIN_FILE`;
+   suspend, resume, the Karenz timer, module enable and disable and imports do
+   not read the governance server and keep running. Run it after the deploy has
+   recorded the release (`current` names it); it only adds, and is idempotent:
+   a key that is there is kept, `gremion-tenant init` keeps every credential
+   file it already wrote and derives the admin login from `state.env`, and
+   `up -d --no-deps` creates the one missing container. Keep the key lines out
+   of the shell history: the password is generated inside the command and never
+   printed.
+
+```bash
+f=/opt/gremion/etc/env/state.env
+grep -c '^GOVERNANCE_PG_PASSWORD=.' "$f"      # 1: the keys are already there, skip the next line
+sudo -u gremion sh -c 'umask 077; printf "\nGOVERNANCE_PG_USER=governance\nGOVERNANCE_PG_PASSWORD=%s\n" "$(openssl rand -hex 16)" >> /opt/gremion/etc/env/state.env'
+stat -c '%U %a %n' "$f"                       # still gremion 600
+cd /opt/gremion/current
+docker compose --env-file "$f" up -d --no-deps governance-postgres
+docker compose --env-file "$f" ps governance-postgres                    # running, then healthy within about a minute
+gremion-tenant init                           # renders etc/secrets/tenant-create/governance_pg_admin and etc/secrets/governance
+```
+
 ## Post-condition
 
 The new release serves, the deploy logged fourteen good lines (steps 1-12,
@@ -349,6 +379,9 @@ cd /opt/gremion/current
 docker compose --env-file /opt/gremion/etc/env/state.env exec -T pgbouncer head -c1 /etc/pgbouncer/userlist.txt   # ": PgBouncer's own user (uid 70) reads the file; "Permission denied" means step 7 is owed
 PGPASSWORD="$PGBOUNCER_AUTH_PASSWORD" docker compose --env-file /opt/gremion/etc/env/state.env exec -T -e PGPASSWORD postgres \
   psql -h pgbouncer -p 6432 -U pgbouncer_auth -d postgres -Atc 'SELECT current_user'                             # pgbouncer_auth: a login routed through PgBouncer succeeds
+grep -c '^GOVERNANCE_PG_PASSWORD=.' /opt/gremion/etc/env/state.env                   # 1: the governance server's key exists (step 9)
+stat -c '%a %n' /opt/gremion/etc/secrets/tenant-create/governance_pg_admin /opt/gremion/etc/secrets/governance   # 600 ...governance_pg_admin, 700 ...secrets/governance
+docker compose --env-file /opt/gremion/etc/env/state.env ps --format '{{.Service}} {{.State}} {{.Health}}' governance-postgres   # governance-postgres running healthy
 journalctl -t premigration-dump --since today                                       # one taken/created line per dump, one deleted line per file (step 3 and gremion-migration-dump)
 for f in /root/.docker/config.json /home/gremion/.docker/config.json; do
   [ -f "$f" ] && jq -e '(.auths // {}) | length == 0' "$f"                          # no registry credential left
@@ -393,9 +426,11 @@ live, a deploy of any other tag stops at its step 5 and prints both commands.
 - (e) The register renumbered the kernel chain from three to four digits. The kernel data plane compares its ledger by name only and refuses no ledger that still records the old names: on a kernel database created before the renumber it treats every migration as pending and stops at the first `already exists` error without naming the cause. Such a database is re-initialised, not upgraded; step 1's ledger count observes it.
 - (c) TRD-189: a release with `overlap: false` makes the deploy's step 6 stop the old colour before the migration, so that release has downtime, where TRD-189 asks for a zero-downtime switch. The idle-colour test against live council data with its records marked as test data and removed afterwards (TRD-179) is not done by `gremion-deploy`, whose step 9 checks health and the verification contract only.
 - (f) Kernel #47: whether the GHCR packages are public or the host pulls with a token is not decided; this procedure is written for the token. `gremion-deploy` logs in whatever the answer, and the `deploy` verb of `gremion-hostd` still takes a `TOKEN` line even where the token file is configured ([host-tooling.md](../host-tooling.md), "The registry token on the host").
+- (g) TASK-084-a: a customer made before the governance server existed has no governance database and no ledger row of the kind `governance_database_created`, so the control panel counts its setup as eight of nine kinds. Neither reconcile (step 8) nor this runbook creates it afterwards, and no backfill exists yet; it has to exist before TASK-084-b, the first consumer of that database, can serve such a customer. Deleting such a customer is not affected (the drop is a no-op and the log line says `no governance database was present`).
 
 ## Changelog
 
+- 9.0.0 (2026-11-08): TASK-084-a. New step 9, after the reconcile: bring the governance server up on an installation first brought up before it existed (the two `GOVERNANCE_PG_*` keys in `state.env`, the `governance-postgres` container of the state project, and `gremion-tenant init` for the admin login file and the credential directory), with its post-condition lines. Only a customer create and delete read the governance server; every other `gremion-tenant` verb runs without it. Major: a step added and the post-condition changed.
 - 8.0.0 (2026-11-03): kernel #88, #89, on top of 7.0.0. New step 8, after the PgBouncer recreate: `gremion-tenant reconcile <slug> --apply` for every customer after the switch, which re-ensures what customer creation added since the customer was made (the purger role's `CONNECT` on its kernel database, `USAGE` on schema `public` and `SELECT` + `DELETE` on the purge tables, and the kernel API NATS seed) and reports it as the checks `purger-connect` and `kernel-api-nats-seed`. The post-condition keeps the PgBouncer observations and reads every customer's reconcile report, failing closed: a reconcile that exits non-zero, prints no report line, reports a check without `ok: true` or lacks the checks `purger-connect` and `kernel-api-nats-seed` is no pass. Major: a step added and the post-condition changed.
 - 7.0.0 (2026-11-03): kernel #84, on top of 6.3.0. Step 2 creates, fills and renders `etc/legal.env` once per host, the file `gremion-deploy` now copies into every release tree as `legal/legal.env` (the state project's `legal` service reads it for every compose command); an existing host stops at that step until the file is filled, with values copied by hand from the running release. Major: an existing step changed.
 - 6.3.0 (2026-11-02): kernel #83. A precondition: the deploy user is in a group with gid 70 (PgBouncer's gid), because the deploy's render step now writes the pgbouncer userlist 0640 group 70 as the deploy user; an older host runs `bootstrap.sh user` once and restarts `gremion-hostd`. Step 7 (existing installs, once): the deploy pulls but never recreates the state project, so a running PgBouncer keeps the unreadable 0600 userlist of the release it was created from; `up -d --force-recreate --no-deps pgbouncer` from the new tree replaces it. The post-condition observes, in the container, that PgBouncer's own user reads the userlist and that a login routed through PgBouncer succeeds. Minor: a conditional step and post-condition observations added, no existing step changed.

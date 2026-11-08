@@ -157,6 +157,27 @@ describe('tenant-create phase-a env contract (TDD 19, G3)', () => {
     expect(r.out).not.toMatch(/ECONNREFUSED|ENOTFOUND|getaddrinfo|CONNECT_TIMEOUT/)
   }, 90_000)
 
+  // Only phase A (and delete) touch the governance server. A host installed before the governance
+  // server existed has neither GOVERNANCE_PG_ADMIN_FILE nor the credential directory, and every other
+  // live verb (suspend, resume, activate, record-step; the gate, import and Karenz verbs share the
+  // same live set) must keep working there: it stops at the NEXT missing variable, never at a
+  // governance one.
+  it.each([
+    ['suspend', ['suspend', 'musterstadt', '--operator', '8d6b9c7e-1f2a-4b3c-9d4e-5f6a7b8c9d0e']],
+    ['resume', ['resume', 'musterstadt', '--operator', '8d6b9c7e-1f2a-4b3c-9d4e-5f6a7b8c9d0e']],
+    ['activate', ['activate', 'musterstadt']],
+    ['record-step', ['record-step', 'musterstadt', 'mail_principal_issued', '--operator', '8d6b9c7e-1f2a-4b3c-9d4e-5f6a7b8c9d0e']],
+  ])('%s does not need the governance server: with no GOVERNANCE_* it stops at the next missing variable', (_verb, args) => {
+    const env = { ...CONTRACT }
+    delete env.GOVERNANCE_PG_ADMIN_FILE
+    delete env.GOVERNANCE_SECRETS_DIR
+    delete env.TENANT_EXPORT_DIR
+    const r = run(args as string[], env)
+    expect(r.status, r.out).toBe(2)
+    expect(r.out).toContain('TENANT_EXPORT_DIR')
+    expect(r.out).not.toContain('GOVERNANCE_')
+  }, 90_000)
+
   // r3 verifier MEDIUM #70: `init` makes the panel's read-only role, so it
   // needs that role's name and password -- named, before any connection.
   it.each(['PANEL_DB_USER', 'PANEL_DB_PASSWORD'])('init without %s: exit 2 naming it, before any connection', (missing) => {

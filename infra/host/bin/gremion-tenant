@@ -27,8 +27,9 @@ set -euo pipefail
 # the SAME request into the SAME queue (origin=host, with the reason and the
 # invoking login user, audited), and the executor runs it exactly as a panel
 # request (D10: move, do not duplicate; customer-ops.sh holds the code).
-# The suspend/resume/reconcile/status verbs below retire the same way with the
-# panel's customer screens (TASK-043d-2).
+# The suspend/resume/status verbs below retire the same way with the panel's customer
+# screens (TASK-043d-2). `reconcile` stays: it is a supported operator step of every
+# upgrade (docs/ops/runbook/upgrade.md step 8).
 #
 # suspend: container first (status, realm disabled + notBefore + logout,
 # broker users evicted), then the principal revoked (the realm's sender is

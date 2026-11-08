@@ -10,11 +10,12 @@ const h = vi.hoisted(() => ({
   hasRole: vi.fn(),
   writeConfig: vi.fn(),
   parseConfig: vi.fn(),
+  readConfig: vi.fn(),
   writeAuditEntry: vi.fn(),
 }))
 
 vi.mock('$lib/auth', () => ({ hasRole: h.hasRole, Role: { ITAdmin: 'it-admin' } }))
-vi.mock('$lib/server/config', () => ({ writeConfig: h.writeConfig, parseConfig: h.parseConfig }))
+vi.mock('$lib/server/config', () => ({ writeConfig: h.writeConfig, parseConfig: h.parseConfig, readConfig: h.readConfig }))
 vi.mock('$lib/server/audit-db', () => ({ writeAuditEntry: h.writeAuditEntry }))
 
 const DEFAULTS = {
@@ -39,6 +40,7 @@ beforeEach(() => {
   h.hasRole.mockReset().mockReturnValue(true)
   h.writeConfig.mockReset().mockReturnValue({})
   h.parseConfig.mockReset().mockReturnValue(DEFAULTS)
+  h.readConfig.mockReset().mockReturnValue({ modules: { somemodule: true } })
   h.writeAuditEntry.mockReset().mockResolvedValue(undefined)
 })
 
@@ -71,6 +73,20 @@ describe('POST /api/settings/reset', () => {
     expect(update.backups).toEqual({ retention_days: 30 })
     // legal / compliance / retention / setup state are NOT part of this reset
     expect(Object.keys(update).sort()).toEqual(['backups', 'modules', 'org', 'smtp'])
+  })
+
+  // Karenz: the defaults say "on" for every toggleable module, but a council-switchable module that is
+  // off comes back only through the council switch (the Art. 17 replay of a restore lives there).
+  it('does not switch a council-switchable module on that is off; the rest of the reset still applies', async () => {
+    h.parseConfig.mockReturnValue({ ...DEFAULTS, modules: { somemodule: true, votes: true, elections: true, calendar: true } })
+    h.readConfig.mockReturnValue({ modules: { somemodule: false, votes: false, elections: true } })
+    const res = await post({ confirm: 'ZURÜCKSETZEN' })
+    expect(res.status).toBe(200)
+    const update = h.writeConfig.mock.calls[0]![0]
+    expect(update.modules).not.toHaveProperty('votes')
+    expect(update.modules).toEqual({ somemodule: true, elections: true, calendar: true })
+    expect(update.org).toEqual(DEFAULTS.org)
+    expect((await res.json()).heldBack).toEqual(['votes'])
   })
 
   it('audits the reset with the acting user', async () => {

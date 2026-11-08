@@ -266,6 +266,10 @@ function governanceSecretsDir(): string {
   return dir
 }
 
+/** What a verb that never reaches the governance server hands the adapters (same convention as `status`): nothing real is behind them. */
+const UNUSED_POSTGRES_URL = 'postgres://unused@127.0.0.1/unused'
+const UNUSED_DIR = '/nonexistent'
+
 /** A governance credential file: 0600, atomic (tmp + rename), written into the existing directory (never created here). */
 function writeGovernanceSecretFile(hostPath: string, value: string): Promise<void> {
   const tmp = `${hostPath}.tmp-${process.pid}`
@@ -479,15 +483,20 @@ function moduleServerFor(adminUrl: string): ModuleServer & { close(): Promise<vo
  * the one-shot alive after the error. `needEdge`: only phase A binds a domain
  * (the DNS pre-flight); suspend/resume/record-step never read EDGE_BIND_IP.
  */
-function resolveLiveEnv(needEdge: boolean) {
+function resolveLiveEnv(needEdge: boolean, needGovernance: boolean) {
+  // `needGovernance`: only create (phase A makes the customer's governance database and credential file)
+  // reads the governance server. Every other live verb (suspend, resume, activate, record-step, the gate,
+  // import and Karenz verbs) must keep working on a host that has not brought the governance server up
+  // yet, so it neither requires GOVERNANCE_PG_ADMIN_FILE nor touches GOVERNANCE_SECRETS_DIR. `delete`
+  // reads them itself (it drops the governance database).
   return {
     platformUrl: directPostgresUrl('PLATFORM_DATABASE_URL', reqEnv('PLATFORM_DATABASE_URL')),
     platformDomain: reqEnv('PLATFORM_DOMAIN'),
     apexDomain: apexDomain(),
     runtimeDatabaseUrl: reqEnv('DATABASE_URL'),
     kernelAdminUrl: directPostgresUrl('KERNEL_PG_ADMIN_FILE', reqFileEnv('KERNEL_PG_ADMIN_FILE')),
-    governanceAdminUrl: directPostgresUrl('GOVERNANCE_PG_ADMIN_FILE', reqFileEnv('GOVERNANCE_PG_ADMIN_FILE')),
-    governanceSecretsDir: governanceSecretsDir(),
+    governanceAdminUrl: needGovernance ? directPostgresUrl('GOVERNANCE_PG_ADMIN_FILE', reqFileEnv('GOVERNANCE_PG_ADMIN_FILE')) : UNUSED_POSTGRES_URL,
+    governanceSecretsDir: needGovernance ? governanceSecretsDir() : UNUSED_DIR,
     exportDir: reqEnv('TENANT_EXPORT_DIR'),
     releaseRef: releaseRef(),
     edge: needEdge ? edgeAddresses() : null,
@@ -502,9 +511,9 @@ function mailStampExpectation(): MailStampExpectation {
   return s.mode === 'relay' ? { mode: 'relay', host: s.host, port: s.port, fromAddress: s.fromAddress, user: s.user } : { mode: 'stalwart' }
 }
 
-async function liveDeps(opts: { configFile?: string; bodyName?: string; needEdge?: boolean } = {}): Promise<Live> {
+async function liveDeps(opts: { configFile?: string; bodyName?: string; needEdge?: boolean; needGovernance?: boolean } = {}): Promise<Live> {
   const catalogue = loadModules()
-  const env = resolveLiveEnv(opts.needEdge ?? false)
+  const env = resolveLiveEnv(opts.needEdge ?? false, opts.needGovernance ?? false)
   const kc = provisionerKc(env.creds)
   const adminKc = adminKcOrUndefined()
   const servers = new Map<string, ReturnType<typeof moduleServerFor>>()
@@ -599,7 +608,7 @@ async function liveDeps(opts: { configFile?: string; bodyName?: string; needEdge
   }
 }
 
-async function withLive<T>(opts: { configFile?: string; bodyName?: string; needEdge?: boolean }, fn: (deps: ProvisioningDeps) => Promise<T>): Promise<T> {
+async function withLive<T>(opts: { configFile?: string; bodyName?: string; needEdge?: boolean; needGovernance?: boolean }, fn: (deps: ProvisioningDeps) => Promise<T>): Promise<T> {
   const live = await liveDeps(opts)
   try {
     return await fn(live.deps)
@@ -765,7 +774,7 @@ async function cmdPhase(which: 'a' | 'b'): Promise<void> {
   const spec = createSpec(slug)
   assertCreateEnv(loadModules(), { needEdge: true })
   // domain_bound (phase A) runs the DNS pre-flight: both create phases resolve EDGE_BIND_IP.
-  await withLive({ configFile: spec.configFile, bodyName: spec.bodyName, needEdge: true }, async (deps) => {
+  await withLive({ configFile: spec.configFile, bodyName: spec.bodyName, needEdge: true, needGovernance: true }, async (deps) => {
     if (which === 'a') {
       const r = await createPhaseA(spec, deps)
       log(`phase A ${slug}: ran [${r.run.ran.join(', ')}], skipped [${r.run.skipped.join(', ')}]${r.registered ? ' (control row registered)' : ''}`)

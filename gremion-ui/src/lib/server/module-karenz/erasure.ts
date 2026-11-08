@@ -202,8 +202,16 @@ export async function replayErasureForRestore(
   return out
 }
 
+/**
+ * The widest closed window plt.council_karenz_list answers (0..60 days). A `restored` row is closed, and it
+ * stays the only proof of the switch-off time for as long as the enable keeps failing to apply: the
+ * 14-day default would let the hook lose the restore after two weeks and let the module come back
+ * over unreplayed erasures.
+ */
+const RESTORE_LOOKUP_DAYS = 60
+
 export interface ReplayPreApplyDeps {
-  listKarenz?: (customerId: string) => Promise<KarenzRowView[]>
+  listKarenz?: (customerId: string, closedWithinDays: number) => Promise<KarenzRowView[]>
   tenantFor?: (slug: string) => Promise<TenantContext | null>
   withTenant?: <T>(tenant: TenantContext, fn: () => T) => T
   replay?: typeof replayErasureForRestore
@@ -217,7 +225,7 @@ export interface ReplayPreApplyDeps {
 export function createErasureReplayPreApply(deps: ReplayPreApplyDeps = {}): PreApplyHook {
   return async (e) => {
     if (e.manifestId === null) return
-    const rows = await (deps.listKarenz ?? listKarenz)(e.tenantId)
+    const rows = await (deps.listKarenz ?? listKarenz)(e.tenantId, RESTORE_LOOKUP_DAYS)
     const restore = rows
       .filter((r) => r.catalogueId === e.moduleId && (r.state === 'restoring' || r.state === 'restored'))
       .toSorted((a, b) => (b.restoreRequestedAt ?? b.switchedOffAt).getTime() - (a.restoreRequestedAt ?? a.switchedOffAt).getTime())[0]

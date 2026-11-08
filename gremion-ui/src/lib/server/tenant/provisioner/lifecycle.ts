@@ -176,6 +176,10 @@ export async function deleteTenant(slugInput: string, deps: DeleteDeps): Promise
     return { slug, shredded: false, shreddedPaths: [] }
   }
 
+  // (0c) the governance credential file is shredded with the rest: an empty directory would skip it
+  // silently and leave a live credential behind, so it is refused before the first change.
+  if (!deps.governanceSecretsDir.trim()) throw new Error('deleteTenant: governanceSecretsDir is empty (the per-customer governance credential would not be shredded)')
+
   const tenantId = tenant.id
 
   // (1) flip to 'deleting' BEFORE the first destructive step, so a mid-sequence
@@ -187,9 +191,7 @@ export async function deleteTenant(slugInput: string, deps: DeleteDeps): Promise
   // instantly) plus every live per-tenant credential file. Idempotent: shredding
   // an already-gone file is a no-op, so a re-run is terminal-safe.
   const shreddedPaths = shredTargets(tenant, deps.tenantSecretsDir)
-  if (deps.governanceSecretsDir) {
-    shreddedPaths.push(`${deps.governanceSecretsDir.replace(/[/\\]+$/, '')}/${tenantId.replaceAll('-', '')}`)
-  }
+  shreddedPaths.push(`${deps.governanceSecretsDir.replace(/[/\\]+$/, '')}/${tenantId.replaceAll('-', '')}`)
   await deps.shredSecretFiles(shreddedPaths)
 
   // (3) drop the kernel database t_<hex32>__kernel and its three roles

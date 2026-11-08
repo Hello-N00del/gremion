@@ -309,6 +309,18 @@ describe('the pre-apply hook', () => {
     expect(replay).not.toHaveBeenCalled()
   })
 
+  it('finds a restore that closed long ago: it asks the platform for the widest closed window it allows (60 days), not the 14-day default', async () => {
+    // A restored row stays the proof of the switch-off time for as long as the enable keeps failing to
+    // apply. The platform list answers closed rows only inside the window it is asked for.
+    const restored = row({ state: 'restored', switchedOffAt: SWITCH_OFF, restoreRequestedAt: new Date('2026-10-12T00:00:00Z') })
+    const listKarenz = vi.fn(async (_customerId: string, closedWithinDays?: number) => ((closedWithinDays ?? 14) >= 60 ? [restored] : []))
+    const replay = vi.fn(async () => ({ subjects: 0, erased: 0, skipped: 0, failed: 0, details: [] }))
+    const hook = createErasureReplayPreApply({ listKarenz, tenantFor: async () => tenant, withTenant: (_t, fn) => fn(), replay })
+    await hook(event)
+    expect(listKarenz).toHaveBeenCalledWith(TENANT_ID, 60)
+    expect(replay).toHaveBeenCalledWith({ tenantId: TENANT_ID, manifestId: 'votes', switchedOffAt: SWITCH_OFF, db: tenant.db })
+  })
+
   it('a replay failure rejects, so the reconciler keeps the enable applying', async () => {
     const hook = createErasureReplayPreApply({
       listKarenz: async () => [row({ state: 'restoring' })],
