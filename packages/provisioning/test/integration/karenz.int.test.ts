@@ -496,7 +496,7 @@ describe('switch off, on, off again, with no manual SQL', () => {
     expect(rows.map((x) => x.state)).toEqual(['restored', 'open'])
     // and the council sees both: the open one live, the restored one inside the closed window
     const listed = await list(council, first.customer, 14)
-    expect(listed.map((x) => x.state).toSorted((a, b) => a.localeCompare(b))).toEqual(['open', 'restored'])
+    expect(listed.map((x) => String(x.state)).toSorted((a, b) => a.localeCompare(b))).toEqual(['open', 'restored'])
   })
 
   it('a restoring row that never gets its mark stays live and listed (the signal the host collector and the tenant pass raise)', async () => {
