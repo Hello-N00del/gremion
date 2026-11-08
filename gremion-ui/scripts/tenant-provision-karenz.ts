@@ -43,7 +43,7 @@ export interface KarenzVerbContext {
   openPlatform(): postgres.Sql
   /** The customer id of a slug from the control registry, or null. */
   customerIdForSlug(slug: string): Promise<string | null>
-  /** Tests only: whether TENANT_EXPORT_DIR is its own mount (default: exportDirIsMounted over /proc/self/mountinfo). */
+  /** Tests only: whether TENANT_EXPORT_DIR is its own mount (default: exportDirRefusal over /proc/self/mountinfo). */
   exportDirMounted?: (dir: string) => boolean
   usage(message: string): Error
   log(line: string): void

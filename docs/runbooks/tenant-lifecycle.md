@@ -564,7 +564,8 @@ hand, each together with its `.sha256` sidecar.
 ### Reading the state: `karenz-status`
 
 ```bash
-tc karenz-status <slug>        # tc: infra/host/lib/customer-ops.sh, the tenant-create one-shot
+source infra/host/lib/customer-ops.sh   # defines tc(), the tenant-create one-shot; once per shell
+tc karenz-status <slug>
 ```
 
 One JSON line with the live rows and the rows of the last 90 days of one customer: module, state,

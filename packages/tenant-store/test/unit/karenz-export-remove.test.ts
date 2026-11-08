@@ -57,6 +57,15 @@ describe('removeKarenzExport', () => {
     expect(seen[0]!.deleted).toEqual([`${T}/lcfix/20261031T000000000Z.dump`, `${T}/lcfix/20261031T000000000Z.dump.sha256`])
   })
 
+  it('deletes through the backend it is handed, without building a second one (the instance that passed the checks is the one that deletes)', async () => {
+    const seen: ReturnType<typeof recording>[] = []
+    const factory = recordingFactory(seen)
+    const given = recording(T)
+    await removeKarenzExport(path, { exportDir: dir, exportStorage: factory }, T, 'lcfix', given)
+    expect(seen).toHaveLength(0)
+    expect(given.deleted).toEqual([`${T}/lcfix/20261031T000000000Z.dump`, `${T}/lcfix/20261031T000000000Z.dump.sha256`])
+  })
+
   it('refuses a path outside <exportDir>/<tenant>/<module>/ before the storage is asked for anything', async () => {
     let asked = 0
     const deps = { exportDir: dir, exportStorage: (t: string) => (asked++, recording(t)) }

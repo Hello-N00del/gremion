@@ -65,6 +65,19 @@ describe('verifyRowExport: what the day-30 delete will refuse, it refuses before
     await expect(verifyRowExport(join(root, 'plain'), row(join(d, 'a.dump')))).resolves.toBeUndefined()
   })
 
+  it('refuses a file whose sha256 differs from the recorded one, and a missing file: EXPORT_MISSING', async () => {
+    const d = join(root, 'sha', T, 'lcfix')
+    mkdirSync(d, { recursive: true })
+    writeFileSync(join(d, 'a.dump'), `${content} changed`)
+    await expect(verifyRowExport(join(root, 'sha'), row(join(d, 'a.dump')))).rejects.toMatchObject({ code: 'EXPORT_MISSING' })
+    await expect(verifyRowExport(join(root, 'sha'), row(join(d, 'b.dump')))).rejects.toMatchObject({ code: 'EXPORT_MISSING' })
+  })
+
+  it('refuses a row that records no export or no sha256: EXPORT_MISSING', async () => {
+    await expect(verifyRowExport(join(root, 'plain'), { ...row(join(root, 'plain', T, 'lcfix', 'a.dump')), export_sha256: null })).rejects.toMatchObject({ code: 'EXPORT_MISSING' })
+    await expect(verifyRowExport(join(root, 'plain'), { ...row(''), export_path: null })).rejects.toMatchObject({ code: 'EXPORT_MISSING' })
+  })
+
   it('refuses a link on the way (the storage seam refuses it at delete time, after the drop): TARGET_REFUSED', async () => {
     const exportDir = join(root, 'linked')
     const elsewhere = join(root, 'linked-target')

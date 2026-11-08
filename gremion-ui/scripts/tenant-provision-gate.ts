@@ -65,7 +65,7 @@ export interface GateVerbContext {
   openPlatform(): postgres.Sql
   /** The customer id of a slug from the control registry, or null. */
   customerIdForSlug(slug: string): Promise<string | null>
-  /** Tests only: whether TENANT_EXPORT_DIR is its own mount (default: exportDirIsMounted over /proc/self/mountinfo). */
+  /** Tests only: whether TENANT_EXPORT_DIR is its own mount (default: exportDirRefusal over /proc/self/mountinfo). */
   exportDirMounted?: (dir: string) => boolean
   flag(name: string): string | undefined
   reqFlag(name: string): string
@@ -158,13 +158,8 @@ async function cmdEnableModule(ctx: GateVerbContext): Promise<void> {
  * disableModule exports the module database and blocks it; the export is the 30-day backup and
  * must outlive this one-shot container (docker compose run --rm). So the verb refuses,
  * before anything is touched, unless TENANT_EXPORT_DIR is its own mount.
- */
-export function exportDirIsMounted(dir: string, mountinfo = DEFAULT_MOUNTINFO_PATH): boolean {
-  return exportDirRefusal(dir, { mountinfo }) === null
-}
-
-/**
- * Why `dir` is not an acceptable export directory, or null when it is. The storage seam's own check (the day-30
+ *
+ * Returns why `dir` is not an acceptable export directory, or null when it is. The storage seam's own check (the day-30
  * job deletes through it): a root it would refuse at day 30 (not a mount point, a memory-backed or root
  * filesystem, an unreadable table) is refused here, before the database is blocked, and the seam's own reason
  * is returned so the operator is told which of those it is. A host without a mount table cannot prove it,

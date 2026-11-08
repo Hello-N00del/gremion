@@ -19,6 +19,7 @@ import { createHash } from 'node:crypto'
 import { createReadStream, existsSync, lstatSync, readdirSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import type { Sql } from '@gremion/db'
+import type { StorageBackend } from '@gremion/storage'
 import { tenantModuleDbName } from '../names.js'
 import { dropTenantModuleDatabase } from './disable.js'
 import { exportStorageFor, removeKarenzExport, type ExportStorageFactory } from './export-remove.js'
@@ -201,6 +202,8 @@ async function finalizeRow(
   const platformSide = r.state === 'open' || (r.state === 'finalizing' && r.platform_done_at === null)
 
   let blockedDb: { dbName: string; admin: Sql } | null = null
+  // Built and checked before the claim when the database is dropped; the day-30 delete uses that same instance.
+  let exportStorage: StorageBackend | undefined
   if (platformSide) {
     const mod = deps.catalogue.find((m) => m.id === moduleKey)
     if (!mod) throw new LifecycleError('MODULE_UNKNOWN', `module ${moduleKey} is not in the catalogue; its Karenz ${r.karenz_id} cannot be finalized`)
@@ -221,7 +224,7 @@ async function finalizeRow(
         // switch-on possible instead of freezing the module in `finalizing` with an intact database.
         // The export storage the day-30 delete goes through is built first, for the same reason: its mount
         // check and its agreement with exportDir are refused here and not after the drop.
-        exportStorageFor(deps, tenantId)
+        exportStorage = exportStorageFor(deps, tenantId)
         await verifyRowExport(deps.exportDir, r)
         await hook('export-verified')
         blockedDb = { dbName, admin: deps.server(database.postgresService).admin }
@@ -255,7 +258,7 @@ async function finalizeRow(
       kept = true
       log(`export of Karenz ${r.karenz_id} kept until ${hold.toISOString()}`)
     } else {
-      await removeKarenzExport(r.export_path, deps, tenantId, moduleKey)
+      await removeKarenzExport(r.export_path, deps, tenantId, moduleKey, exportStorage)
       await deps.platform`UPDATE plt.module_karenz SET export_deleted_at = now() WHERE karenz_id = ${r.karenz_id} AND export_deleted_at IS NULL`
       await hook('export-deleted')
     }

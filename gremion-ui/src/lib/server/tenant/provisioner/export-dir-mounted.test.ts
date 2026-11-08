@@ -8,9 +8,9 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
-import { exportDirIsMounted, exportDirRefusal } from '../../../../../scripts/tenant-provision-gate'
+import { exportDirRefusal } from '../../../../../scripts/tenant-provision-gate'
 
-describe('exportDirIsMounted', () => {
+describe('exportDirRefusal: is the directory an acceptable export mount', () => {
   const scratch = mkdtempSync(join(tmpdir(), 'export-dir-mounted-'))
   afterAll(() => rmSync(scratch, { recursive: true, force: true }))
   const table = (name: string, body: string) => {
@@ -22,19 +22,19 @@ describe('exportDirIsMounted', () => {
 
   it('accepts a directory that is its own mount on a durable filesystem', () => {
     const p = table('ext4', `36 1 8:1 / ${EXPORTS} rw - ext4 /dev/sda1 rw\n`)
-    expect(exportDirIsMounted(EXPORTS, p)).toBe(true)
-    expect(exportDirIsMounted(`${EXPORTS}/`, p)).toBe(true)
+    expect(exportDirRefusal(EXPORTS, { mountinfo: p })).toBeNull()
+    expect(exportDirRefusal(`${EXPORTS}/`, { mountinfo: p })).toBeNull()
   })
 
   it('refuses a directory on a memory-backed mount (the seam refuses it, so the gate must too)', () => {
     const p = table('tmpfs', `36 1 0:30 / ${EXPORTS} rw - tmpfs tmpfs rw\n`)
-    expect(exportDirIsMounted(EXPORTS, p)).toBe(false)
+    expect(exportDirRefusal(EXPORTS, { mountinfo: p })).toEqual(expect.any(String))
   })
 
   it('refuses a directory that is not a mount point, and a missing or empty mount table', () => {
-    expect(exportDirIsMounted(EXPORTS, table('other', '36 1 8:1 / /srv/other rw - ext4 /dev/sda1 rw\n'))).toBe(false)
-    expect(exportDirIsMounted(EXPORTS, join(scratch, 'does-not-exist'))).toBe(false)
-    expect(exportDirIsMounted(EXPORTS, table('empty', ''))).toBe(false)
+    expect(exportDirRefusal(EXPORTS, { mountinfo: table('other', '36 1 8:1 / /srv/other rw - ext4 /dev/sda1 rw\n') })).toEqual(expect.any(String))
+    expect(exportDirRefusal(EXPORTS, { mountinfo: join(scratch, 'does-not-exist') })).toEqual(expect.any(String))
+    expect(exportDirRefusal(EXPORTS, { mountinfo: table('empty', '') })).toEqual(expect.any(String))
   })
 
   it('says WHY it refuses: the seam\'s own reason, so a tmpfs export volume is not reported as "not mounted"', () => {
@@ -51,6 +51,6 @@ describe('exportDirIsMounted', () => {
 
   it('reads a mount point with an escaped space the way the seam does', () => {
     const p = table('space', '36 1 8:1 / /srv/with\\040space rw - ext4 /dev/sda1 rw\n')
-    expect(exportDirIsMounted('/srv/with space', p)).toBe(true)
+    expect(exportDirRefusal('/srv/with space', { mountinfo: p })).toBeNull()
   })
 })

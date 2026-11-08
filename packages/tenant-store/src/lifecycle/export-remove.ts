@@ -42,12 +42,14 @@ export function exportStorageFor(deps: ExportRemoveDeps, tenantId: string): Stor
 /**
  * Deletes the dump at `path` and its sidecar. `path` must be a `*.dump` directly under
  * <exportDir>/<tenant>/<module>/ (assertKarenzExportPath, checked before the storage is touched).
+ * `storage` is the backend a caller already built and checked with exportStorageFor: the instance that passed
+ * the checks is then the one that deletes. Without it, one is built here.
  */
-export async function removeKarenzExport(path: string, deps: ExportRemoveDeps, tenantId: string, moduleId: string): Promise<void> {
+export async function removeKarenzExport(path: string, deps: ExportRemoveDeps, tenantId: string, moduleId: string, storage?: StorageBackend): Promise<void> {
   const valid = assertKarenzExportPath(path, deps.exportDir, tenantId, moduleId)
-  const storage = exportStorageFor(deps, tenantId)
+  const backend = storage ?? exportStorageFor(deps, tenantId)
   // the file name of the path the guard RESOLVED and approved ('x.dump/.' is 'x.dump' to the guard)
   const handle = `${tenantId}/${moduleId}/${basename(resolve(valid))}`
-  await storage.delete(handle)
-  await storage.delete(`${handle}.sha256`)
+  await backend.delete(handle)
+  await backend.delete(`${handle}.sha256`)
 }
