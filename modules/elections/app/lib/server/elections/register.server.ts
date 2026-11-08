@@ -14,8 +14,7 @@ import { registerRetentionExtractor } from '$lib/server/module-karenz/retained/e
 import { registerSwitchOffGuard } from '$lib/server/module-switch/guards'
 import { electionsErasureHook } from './erasure'
 import { evictHeliosSession } from './helios-client'
-import { heliosPause } from './helios-pause'
-import { electionResultsExtractor, electionsKarenz, electionsSwitchOffGuard } from './karenz'
+import { electionResultsExtractor, electionsKarenz, electionsPausePort, electionsSwitchOffGuard } from './karenz'
 
 // The per-tenant Helios session the elections module caches. The tenant
 // registry's evictTenantRuntime runs this on the suspend/delete lifecycle seam.
@@ -26,5 +25,6 @@ registerErasureHook(electionsErasureHook)
 
 registerKarenzParticipant(electionsKarenz)
 registerRetentionExtractor(electionResultsExtractor)
-// With no way to pause Helios, a running election must keep the module on (Open Decision 11).
-if (heliosPause().mode === 'unsupported') registerSwitchOffGuard('elections', electionsSwitchOffGuard)
+// With no way to pause Helios (the declared mode is `unsupported`, or `extend` without an implementation behind it),
+// a running election must keep the module on (Open Decision 11).
+if (!electionsPausePort.canPause) registerSwitchOffGuard('elections', electionsSwitchOffGuard)

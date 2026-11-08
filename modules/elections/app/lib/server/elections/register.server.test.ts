@@ -52,4 +52,20 @@ describe('elections register.server', () => {
     expect(heliosPause().mode).toBe('unsupported')
     expect(h.guards).toEqual([['elections', electionsSwitchOffGuard]])
   })
+
+  it('registers the switch-off guard when the mode says extend but nothing implements the pause', async () => {
+    h.guards.length = 0
+    vi.resetModules()
+    vi.doMock('./helios-pause', async (orig) => {
+      const real = await orig<typeof import('./helios-pause')>()
+      return { ...real, heliosPause: () => real.heliosPause('extend') }
+    })
+    try {
+      await import('./register.server')
+      const { electionsSwitchOffGuard } = await import('./karenz')
+      expect(h.guards).toEqual([['elections', electionsSwitchOffGuard]])
+    } finally {
+      vi.doUnmock('./helios-pause')
+    }
+  })
 })

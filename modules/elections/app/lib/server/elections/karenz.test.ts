@@ -26,6 +26,8 @@ const h = vi.hoisted(() => ({
   getElectionCalls: [] as string[],
   resultFor: undefined as undefined | ((uuid: string) => unknown),
   failRead: new Set<string>(),
+  /** tracked in the election table, but Helios answers 404 for them */
+  ghosts: new Set<string>(),
   archiveCalls: [] as string[][],
   unarchiveCalls: [] as string[][],
 }))
@@ -59,7 +61,10 @@ vi.mock('./helios-client', async (orig) => {
 })
 vi.mock('./election-db', () => ({
   ElectionDb: {
-    findAll: async () => [...h.elections.values()].filter((e) => !(e as FakeElection).archived).map((e) => ({ helios_uuid: (e as FakeElection).uuid, id: (e as FakeElection).uuid })),
+    findAll: async () => [
+      ...[...h.elections.values()].filter((e) => !(e as FakeElection).archived).map((e) => ({ helios_uuid: (e as FakeElection).uuid, id: (e as FakeElection).uuid })),
+      ...[...h.ghosts].map((u) => ({ helios_uuid: u, id: u })),
+    ],
     archiveForKarenz: async (uuids: string[]) => {
       h.archiveCalls.push(uuids)
       let n = 0
@@ -105,6 +110,7 @@ beforeEach(() => {
   h.getElectionCalls.length = 0
   h.resultFor = undefined
   h.failRead.clear()
+  h.ghosts.clear()
   h.archiveCalls.length = 0
   h.unarchiveCalls.length = 0
   vi.stubEnv('AUTH_SECRET', SECRET)
@@ -125,6 +131,7 @@ function fakePort(over: { lock?: HeliosPausePort['lock']; unlock?: HeliosPausePo
   const calls: Array<{ op: 'lock' | 'unlock'; uuid: string; remainingMs?: number }> = []
   const port: HeliosPausePort = {
     mode: 'extend',
+    canPause: true,
     lock: async (uuid) => {
       calls.push({ op: 'lock', uuid })
       if (over.lock) return over.lock(uuid)
@@ -436,6 +443,47 @@ describe('electionsKarenz.restore', () => {
     expect(m.byUuid(U1)?.state).toBe('restored')
   })
 
+  it('a failed read of a never-locked election keeps its state, so an election that ends by itself is never reopened', async () => {
+    const { createElectionsKarenz } = await import('./karenz')
+    const e = seed(U1, { voting_ends_at: new Date(T0.getTime() + HOUR).toISOString() })
+    const endsAt = e.voting_ends_at
+    const { port, calls } = fakePort({ lock: async () => ({ ok: false, reason: 'HTTP 500' }) })
+    const k = createElectionsKarenz(port)
+    const m = memItems()
+    await failuresOf(k.switchOff(ctxFor(m)))
+    expect(m.byUuid(U1)?.state).toBe('lock_failed')
+    // the first restore cannot read the election: the item is not demoted to unlock_failed
+    h.failRead.add(U1)
+    const failures = await failuresOf(k.restore(ctxFor(m)))
+    expect(failures[0]).toContain(U1)
+    expect(m.byUuid(U1)?.state).toBe('lock_failed')
+    // the election then ends by itself; the next restore must not reopen it
+    h.failRead.clear()
+    const later = new Date(T0.getTime() + 2 * HOUR)
+    vi.setSystemTime(later)
+    await k.restore(ctxFor(m, { now: later }))
+    expect(calls.filter((c) => c.op === 'unlock')).toEqual([])
+    expect(m.byUuid(U1)?.state).toBe('restored')
+    expect(e.voting_ends_at).toBe(endsAt)
+  })
+
+  it('a failed read of a locked election is unlock_failed and the next restore still reopens it', async () => {
+    const { createElectionsKarenz } = await import('./karenz')
+    const e = seed(U1)
+    const { port, calls } = fakePort()
+    const k = createElectionsKarenz(port)
+    const m = memItems()
+    await k.switchOff(ctxFor(m))
+    h.failRead.add(U1)
+    await failuresOf(k.restore(ctxFor(m)))
+    expect(m.byUuid(U1)?.state).toBe('unlock_failed')
+    h.failRead.clear()
+    await k.restore(ctxFor(m))
+    expect(calls.filter((c) => c.op === 'unlock')).toHaveLength(1)
+    expect(m.byUuid(U1)?.state).toBe('restored')
+    expect(new Date(e.voting_ends_at as string).getTime()).toBeGreaterThan(T0.getTime())
+  })
+
   it('restore is idempotent and un-archives what the final step archived', async () => {
     const { createElectionsKarenz } = await import('./karenz')
     seed(U1)
@@ -502,10 +550,28 @@ describe('electionResultsExtractor', () => {
     expect(lines.map((l) => l.id)).toEqual([U2])
   })
 
+  it('an election that closed by itself before the lock (item restored) is sealed like any other closed election', async () => {
+    const { createElectionsKarenz } = await import('./karenz')
+    const e = seed(U1, { voting_ends_at: new Date(T0.getTime() + HOUR).toISOString() })
+    const m = memItems()
+    await m.items.upsert({ kind: 'election', externalId: U1, state: 'recorded', payload: { endsAt: e.voting_ends_at, remainingMs: HOUR } })
+    const later = new Date(T0.getTime() + 2 * HOUR)
+    vi.setSystemTime(later)
+    await createElectionsKarenz(fakePort().port).switchOff(ctxFor(m, { now: later }))
+    expect(m.byUuid(U1)?.state).toBe('restored')
+    expect((await collect(ctxFor(m, { now: later }))).map((l) => l.id)).toEqual([U1])
+  })
+
+  it('an election Helios no longer knows (404) is skipped and does not block the extraction of the others', async () => {
+    seed(U1, { voting_ends_at: '2026-09-25T12:00:00.000Z' })
+    h.ghosts.add(U2)
+    expect((await collect(ctxFor(memItems()))).map((l) => l.id)).toEqual([U1])
+  })
+
   it('an unreadable election fails the extraction instead of sealing a partial copy', async () => {
     seed(U1, { voting_ends_at: '2026-09-25T12:00:00.000Z' })
     h.failRead.add(U1)
-    await expect(collect(ctxFor(memItems()))).rejects.toThrow()
+    await expect(collect(ctxFor(memItems()))).rejects.toThrow(/unreachable/)
   })
 })
 
@@ -567,11 +633,19 @@ describe('the switch-off guard', () => {
     expect(await electionsSwitchOffGuard(tenant)).toMatch(/Laufende Wahlen/)
   })
 
+  it('an election Helios no longer knows (404) cannot be open and does not block the switch-off', async () => {
+    const { electionsSwitchOffGuard } = await import('./karenz')
+    h.ghosts.add(U2)
+    expect(await electionsSwitchOffGuard(tenant)).toBeNull()
+    seed(U1) // open
+    expect(await electionsSwitchOffGuard(tenant)).toMatch(/Laufende Wahlen/)
+  })
+
   it('a Helios that cannot be read makes the guard throw, so the switch service fails closed', async () => {
     const { electionsSwitchOffGuard } = await import('./karenz')
     seed(U1)
     h.failRead.add(U1)
-    await expect(electionsSwitchOffGuard(tenant)).rejects.toThrow()
+    await expect(electionsSwitchOffGuard(tenant)).rejects.toThrow(/unreachable/)
   })
 })
 
@@ -581,6 +655,7 @@ describe('heliosPause', () => {
     expect(HELIOS_PAUSE_MODE).toBe('unsupported')
     const p = heliosPause()
     expect(p.mode).toBe('unsupported')
+    expect(p.canPause).toBe(false)
     expect(await p.lock(U1)).toEqual({ ok: false, reason: 'unsupported' })
     expect(await p.unlock(U1, 1000)).toEqual({ ok: false, reason: 'unsupported' })
   })
@@ -589,6 +664,8 @@ describe('heliosPause', () => {
     const { heliosPause } = await import('./helios-pause')
     const p = heliosPause('extend')
     expect(p.mode).toBe('extend')
+    // the label alone does not make an election pausable: the switch-off guard keys on this
+    expect(p.canPause).toBe(false)
     const r = await p.lock(U1)
     expect(r.ok).toBe(false)
   })
@@ -600,6 +677,7 @@ describe('heliosPause', () => {
       throw new Error('boom Erika')
     })
     const p = heliosPause('extend', { lock, unlock })
+    expect(p.canPause).toBe(true)
     expect(await p.lock(U1)).toEqual({ ok: true })
     expect(lock).toHaveBeenCalledWith(U1)
     const r = await p.unlock(U1, 5000)

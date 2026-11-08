@@ -2247,19 +2247,19 @@
       "path": "modules/elections/app/lib/server/elections/karenz.ts",
       "reason": "added by Karenz p2 t14: the elections participant (pause, restore and archive of Helios elections), the RC-ELE election-results extractor and the switch-off guard for an unsupported pause",
       "owner": "TASK-205",
-      "blob": "814f80841ed3ff75b75d6d4a9ba3a28fc7333332"
+      "blob": "9797c5fc379e399ad655efac4404eaf2ba36bbd8"
     },
     {
       "path": "modules/elections/app/lib/server/elections/karenz.test.ts",
       "reason": "added by Karenz p2 t14: the participant suite on a stateful fake Helios and pause port (lock order, crash recovery, final-day guards, switch-off guard)",
       "owner": "TASK-205",
-      "blob": "485ae17fe9e02a27d9e9d1423e00de9a00ccf01c"
+      "blob": "51b653df1d4102ca9430e4703111cdaa73a23331"
     },
     {
       "path": "modules/elections/app/lib/server/elections/helios-pause.ts",
       "reason": "added by Karenz p2 t14: the Helios pause port; ships unsupported until the running Helios is probed",
       "owner": "TASK-205",
-      "blob": "d1a9a5ad9c81e98800ce70a62f272e1225c107d0"
+      "blob": "76b3c78d165699e5956f53c79958b87f4a90479f"
     },
     {
       "path": "modules/elections/app/lib/server/elections/election-db.karenz.test.ts",
@@ -2275,15 +2275,15 @@
     },
     {
       "path": "modules/elections/app/lib/server/elections/register.server.ts",
-      "reason": "Karenz p2 t14: registers the elections Karenz participant, the election-results extractor and, while the pause is unsupported, the switch-off guard",
+      "reason": "Karenz p2 t14: registers the elections Karenz participant, the election-results extractor and, while Helios cannot be paused (canPause false), the switch-off guard",
       "owner": "TASK-205",
-      "blob": "e3a370d332a4cd425fc019780bf37df6f5803d4a"
+      "blob": "c306e690fe86c09fd25243445ca80491cc4c89dd"
     },
     {
       "path": "modules/elections/app/lib/server/elections/register.server.test.ts",
       "reason": "Karenz p2 t14: asserts the new registrations",
       "owner": "TASK-205",
-      "blob": "4652c8793d8d3d1c031624bdbb9cbec19399842f"
+      "blob": "22127ff74b34cc1b60544e74b731beb2d1d3418d"
     }
   ]
 }

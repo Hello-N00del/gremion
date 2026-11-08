@@ -22,6 +22,12 @@ export type HeliosPauseResult = { ok: true } | { ok: false; reason: string }
 
 export interface HeliosPausePort {
   readonly mode: 'extend' | 'unsupported'
+  /**
+   * True only when this port can really pause an election: mode `extend` AND an implementation behind it.
+   * The switch-off guard keys on this, not on the mode label, so a declared-but-unimplemented `extend`
+   * cannot leave a running election unprotected.
+   */
+  readonly canPause: boolean
   lock(uuid: string): Promise<HeliosPauseResult>
   unlock(uuid: string, remainingMs: number): Promise<HeliosPauseResult>
 }
@@ -50,19 +56,21 @@ function reasonOf(e: unknown): string {
 
 export function heliosPause(mode: HeliosPausePort['mode'] = HELIOS_PAUSE_MODE, impl?: HeliosExtendImpl): HeliosPausePort {
   if (mode === 'unsupported') {
-    return { mode, lock: async () => refuse('unsupported'), unlock: async () => refuse('unsupported') }
+    return { mode, canPause: false, lock: async () => refuse('unsupported'), unlock: async () => refuse('unsupported') }
   }
   if (!impl) {
     // extend was declared but nothing implements it yet: say so instead of pretending to pause
-    return { mode, lock: async () => refuse('not implemented'), unlock: async () => refuse('not implemented') }
+    return { mode, canPause: false, lock: async () => refuse('not implemented'), unlock: async () => refuse('not implemented') }
   }
   const run = async (fn: () => Promise<void>): Promise<HeliosPauseResult> => {
     try {
       await fn()
       return { ok: true }
     } catch (e) {
+      // the short label goes to the participant (and from there to the council); the full error stays in the operator log
+      console.error('[elections-karenz] pause implementation failed:', e)
       return refuse(reasonOf(e))
     }
   }
-  return { mode, lock: (uuid) => run(() => impl.lock(uuid)), unlock: (uuid, remainingMs) => run(() => impl.unlock(uuid, remainingMs)) }
+  return { mode, canPause: true, lock: (uuid) => run(() => impl.lock(uuid)), unlock: (uuid, remainingMs) => run(() => impl.unlock(uuid, remainingMs)) }
 }

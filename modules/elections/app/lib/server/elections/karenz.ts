@@ -71,14 +71,32 @@ async function trackedUuids(): Promise<string[]> {
   return (await ElectionDb.findAll()).map((r) => r.helios_uuid).toSorted()
 }
 
+/** An election that Helios answers with a definite 404 no longer exists there: it cannot be open and has no result to keep. */
+const isGone = (e: unknown): boolean => e instanceof HeliosUnavailableError && e.status === 404
+
+/** Reads an election; null when Helios definitely does not know it. Network errors and 5xx still throw (fail closed). */
+async function readElectionOrGone(uuid: string): Promise<HeliosElection | null> {
+  try {
+    return await HeliosClient.getElection(uuid)
+  } catch (e) {
+    if (isGone(e)) {
+      console.error(`[elections-karenz] election ${uuid} is tracked but Helios answers 404`)
+      return null
+    }
+    throw e
+  }
+}
+
 /** Collects the failures of one phase: one election never stops the others, the phase fails at the end. */
 class Run {
   readonly failures: string[] = []
   constructor(private readonly ctx: KarenzContext) {}
 
-  fail(uuid: string, what: string): void {
+  /** `cause` is the raw error: only the short label reaches the failure list (shown to the council), the full error goes to the operator log. */
+  fail(uuid: string, what: string, cause?: unknown): void {
     const label = `election ${uuid}: ${what}`
     this.ctx.log(label)
+    if (cause !== undefined) console.error(`[elections-karenz] ${label}`, cause)
     this.failures.push(label)
   }
 
@@ -88,7 +106,7 @@ class Run {
       await this.ctx.items.setState(item.itemId, state, detail)
       return true
     } catch (e) {
-      this.fail(item.externalId, `could not record ${state} (${why(e)})`)
+      this.fail(item.externalId, `could not record ${state} (${why(e)})`, e)
       return false
     }
   }
@@ -107,6 +125,7 @@ async function lockElection(ctx: KarenzContext, run: Run, port: HeliosPausePort,
     if (!r.ok) refusal = r.reason.slice(0, 60)
   } catch (e) {
     refusal = why(e)
+    console.error(`[elections-karenz] election ${uuid}: lock call threw`, e)
   }
   if (refusal !== null) {
     run.fail(uuid, `lock refused (${refusal})`)
@@ -121,7 +140,7 @@ async function lockElection(ctx: KarenzContext, run: Run, port: HeliosPausePort,
     }
   } catch (e) {
     // the lock may have taken effect: the item stays retryable and the next run reads the election back
-    run.fail(uuid, `lock not read back (${why(e)})`)
+    run.fail(uuid, `lock not read back (${why(e)})`, e)
     await run.set(item, 'lock_failed', `lock not read back (${why(e)})`)
     return
   }
@@ -139,7 +158,7 @@ async function resolveLock(ctx: KarenzContext, run: Run, port: HeliosPausePort, 
   try {
     election = await HeliosClient.getElection(item.externalId)
   } catch (e) {
-    run.fail(item.externalId, `read failed (${why(e)})`)
+    run.fail(item.externalId, `read failed (${why(e)})`, e)
     return
   }
   if (lockApplied(election, payload)) {
@@ -168,7 +187,7 @@ function switchOff(port: HeliosPausePort): KarenzParticipant['switchOff'] {
         election = await HeliosClient.getElection(uuid)
       } catch (e) {
         // not read, not recorded, not locked: the next pass tries again
-        run.fail(uuid, `read failed (${why(e)})`)
+        run.fail(uuid, `read failed (${why(e)})`, e)
         continue
       }
       // closed and draft elections have nothing to freeze and nothing to reopen later
@@ -179,7 +198,7 @@ function switchOff(port: HeliosPausePort): KarenzParticipant['switchOff'] {
       try {
         item = await ctx.items.upsert({ kind: ELECTION_ITEM_KIND, externalId: uuid, state: 'recorded', payload })
       } catch (e) {
-        run.fail(uuid, `could not record (${why(e)})`)
+        run.fail(uuid, `could not record (${why(e)})`, e)
         continue
       }
       await lockElection(ctx, run, port, item)
@@ -199,10 +218,19 @@ function restore(port: HeliosPausePort): KarenzParticipant['restore'] {
         run.fail(uuid, 'item without a recorded end date')
         continue
       }
+      // never locked: the pause may not have happened at all, so an election that ended by itself is not ours to reopen
+      const neverLocked = item.state === 'recorded' || item.state === 'lock_failed'
+      let election: HeliosElection
       try {
-        const election = await HeliosClient.getElection(uuid)
+        election = await HeliosClient.getElection(uuid)
+      } catch (e) {
+        // nothing was written yet: the item keeps its state (a never-locked item must not turn into unlock_failed) and the next pass reads again
+        run.fail(uuid, `read failed (${why(e)})`, e)
+        if (!neverLocked) await run.set(item, 'unlock_failed', `read failed (${why(e)})`)
+        continue
+      }
+      try {
         // still open: the lock never happened (or was lifted by hand); closed with its own end date: it ran out by itself
-        const neverLocked = item.state === 'recorded' || item.state === 'lock_failed'
         if (deriveLifecycle(election) === 'open' || (neverLocked && !lockApplied(election, payload))) {
           await run.set(item, 'restored')
           continue
@@ -221,7 +249,8 @@ function restore(port: HeliosPausePort): KarenzParticipant['restore'] {
         }
         await run.set(item, 'restored')
       } catch (e) {
-        run.fail(uuid, `unlock failed (${why(e)})`)
+        // the unlock was attempted (or its read-back failed): the election is, or may be, locked
+        run.fail(uuid, `unlock failed (${why(e)})`, e)
         await run.set(item, 'unlock_failed', `unlock failed (${why(e)})`)
       }
     }
@@ -233,7 +262,7 @@ function restore(port: HeliosPausePort): KarenzParticipant['restore'] {
         await ElectionDb.unarchiveForKarenz(archived.map((i) => i.externalId))
         for (const item of archived) await run.set(item, 'restored')
       } catch (e) {
-        run.fail('archive', `could not un-archive (${why(e)})`)
+        run.fail('archive', `could not un-archive (${why(e)})`, e)
       }
     }
     run.done()
@@ -266,7 +295,10 @@ export function createElectionsKarenz(port: HeliosPausePort): KarenzParticipant 
   return { catalogueId: 'elections', switchOff: switchOff(port), restore: restore(port), finalize: finalize() }
 }
 
-export const electionsKarenz: KarenzParticipant = createElectionsKarenz(heliosPause())
+/** The one pause port of this process: the participant and the switch-off guard registration both read it. */
+export const electionsPausePort: HeliosPausePort = heliosPause()
+
+export const electionsKarenz: KarenzParticipant = createElectionsKarenz(electionsPausePort)
 
 /**
  * RC-ELE: one line per closed tracked election, the name, the end of voting and the published result.
@@ -277,19 +309,22 @@ export const electionResultsExtractor: RetentionExtractor = {
   catalogueId: 'elections',
   retentionClass: 'RC-ELE',
   async *extract(ctx) {
-    // an election with an item was open and paused by the participant: it is not a closed election of the council
-    const pausedByUs = new Set((await ctx.items.list(ELECTION_ITEM_KIND)).map((i) => i.externalId))
+    // an election the participant paused (or may have paused) reads as closed because of us, not because it ended: it is not
+    // a closed election of the council. One that is `restored` is not such an election: it ran out by itself or was reopened.
+    const mayBePaused = new Set<ItemState>(['recorded', 'lock_failed', 'locked', 'unlock_failed'])
+    const pausedByUs = new Set((await ctx.items.list(ELECTION_ITEM_KIND)).filter((i) => mayBePaused.has(i.state)).map((i) => i.externalId))
     for (const uuid of await trackedUuids()) {
       if (pausedByUs.has(uuid)) continue
       // an election that cannot be read fails the extraction: a copy without it would let the final day archive it unsealed
-      const election = await HeliosClient.getElection(uuid)
-      if (deriveLifecycle(election) !== 'closed') continue
+      // (an election Helios no longer knows is skipped: it has no sealed line, so the final day never archives it)
+      const election = await readElectionOrGone(uuid)
+      if (election === null || deriveLifecycle(election) !== 'closed') continue
       let result: unknown = null
       try {
         result = await HeliosClient.getResult(uuid)
       } catch (e) {
         // closed but not tallied: there is no result to keep yet
-        if (!(e instanceof HeliosUnavailableError && e.status === 404)) throw e
+        if (!isGone(e)) throw e
       }
       yield { id: uuid, data: { name: election.name, votingEndsAt: election.voting_ends_at, result }, persons: [] }
     }
@@ -300,14 +335,15 @@ export const electionResultsExtractor: RetentionExtractor = {
 export const ELECTION_RUNNING_REASON = 'Laufende Wahlen können nicht pausiert werden. Das Modul kann erst abgeschaltet werden, wenn keine Wahl mehr läuft.'
 
 /**
- * Registered only when the pause port is `unsupported`: switching elections off while an election is open
+ * Registered whenever the pause port cannot pause (`!canPause`): switching elections off while an election is open
  * would leave it running in Helios with nobody able to freeze it. A Helios that cannot be read throws, and
  * the guard registry then refuses (fail closed).
  */
 export const electionsSwitchOffGuard: SwitchOffGuard = (tenant) =>
   runWithTenant(tenant, async () => {
     for (const uuid of await trackedUuids()) {
-      if (deriveLifecycle(await HeliosClient.getElection(uuid)) === 'open') return ELECTION_RUNNING_REASON
+      const election = await readElectionOrGone(uuid)
+      if (election !== null && deriveLifecycle(election) === 'open') return ELECTION_RUNNING_REASON
     }
     return null
   })
