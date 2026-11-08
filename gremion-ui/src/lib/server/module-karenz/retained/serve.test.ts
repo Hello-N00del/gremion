@@ -11,7 +11,7 @@ import { STEP } from '../engine'
 import { sealLines } from './crypto'
 import { _clearRetentionRegistriesForTests, registerRetainedSink, registerRetentionClassPolicy, registerRetentionExtractor, type RetainedLine, type RetainedSink } from './extractors'
 import { fakeTenantDb } from './fake-db.test-util'
-import { canReadRetained, listRetained, publishRetained, redactLines, resetPublishStepsForSubject, retainedFilename } from './serve'
+import { canReadRetained, listRetained, publishRetained, redactLines, republishRetainedForSubject, resetPublishStepsForSubject, retainedFilename } from './serve'
 
 const TENANT_ID = '11111111-1111-4111-8111-111111111111'
 const KARENZ = '44444444-4444-4444-8444-444444444441'
@@ -57,7 +57,21 @@ function world() {
         s.state = 'pending'
         s.last_error = null
       }
-      return hit.map((s) => ({ step: s.step }))
+      return hit.map((s) => {
+        const rec = t.records().find((r) => r.karenz_id === s.karenz_id && s.step.endsWith(`:${r.id}`))!
+        return { step: s.step, karenz_id: s.karenz_id, record_id: rec.id, catalogue_id: rec.catalogue_id }
+      })
+    }
+    if (/INSERT INTO module_karenz_step/.test(text)) {
+      const [karenz_id, step, state] = v as [string, string, StepFake['state']]
+      let s = steps.find((x) => x.karenz_id === karenz_id && x.step === step)
+      if (!s) {
+        s = { karenz_id, step, state, last_error: null }
+        steps.push(s)
+      }
+      s.state = state
+      s.last_error = null
+      return [{ karenz_id, step, state, attempts: 1, last_error: null, last_reported_at: null, done_at: null, updated_at: new Date() }]
     }
     if (/SELECT id, catalogue_id, retention_class FROM retained_record/.test(text) && /WHERE karenz_id =/.test(text)) {
       return t.records().filter((r) => r.karenz_id === v[0]).map((r) => ({ id: r.id, catalogue_id: r.catalogue_id, retention_class: r.retention_class }))
@@ -127,6 +141,20 @@ describe('redactLines', () => {
   it('an erasure of another tenant (a ref hashed under another tenant id) redacts nothing', () => {
     const foreign = subjectRef('99999999-9999-4999-8999-999999999999', 'user-a', SECRET)
     expect(redactLines([NAMED], new Set([foreign]), TENANT_ID, false, SECRET)).toEqual([NAMED])
+  })
+
+  it('a person field that is not in the line data is reported (field name only), not skipped silently', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const typo: RetainedLine = { id: 'p7', data: { createdBy: 'Erika Beispiel' }, persons: [{ id: 'user-a', field: 'author.name' }] }
+      redactLines([typo], new Set([refOf('user-a')]), TENANT_ID, false, SECRET)
+      const logged = warn.mock.calls.flat().join(' ')
+      expect(logged).toContain('author.name')
+      expect(logged).not.toContain('Erika')
+      expect(logged).not.toContain('user-a')
+    } finally {
+      warn.mockRestore()
+    }
   })
 
   it('keepsNamesUnderErasure true leaves the name legible (phase 3 finance case)', () => {
@@ -240,6 +268,95 @@ describe('resetPublishStepsForSubject', () => {
     const a = await w.seal(KARENZ, 'votes.a', [OTHER])
     w.steps.push({ karenz_id: KARENZ, step: STEP.publish('files', a.id), state: 'done', last_error: null })
     expect(await resetPublishStepsForSubject(w.db, refOf('user-a'))).toBe(0)
+  })
+})
+
+describe('republishRetainedForSubject (an erasure after the Karenz row left the live states)', () => {
+  function publishedWorld() {
+    const w = world()
+    const calls: { sink: string; filename: string; text: string }[] = []
+    const sinkOf = (id: string, over: Partial<RetainedSink> = {}): RetainedSink => ({
+      id,
+      available: () => true,
+      publish: async (c) => void calls.push({ sink: id, filename: c.filename, text: c.ndjson.toString('utf8') }),
+      ...over,
+    })
+    return { w, calls, sinkOf }
+  }
+
+  it('publishes the redacted copy at once, whatever state the Karenz row is in: no engine pass runs', async () => {
+    const { w, calls, sinkOf } = publishedWorld()
+    const a = await w.seal(KARENZ, 'votes.a', [NAMED, PLAIN])
+    registerRetainedSink(sinkOf('files'))
+    // the row finalized long ago: its publish step is done and no pass will ever list it again
+    w.steps.push({ karenz_id: KARENZ, step: STEP.publish('files', a.id), state: 'done', last_error: null })
+    w.erase('user-a')
+
+    const out = await republishRetainedForSubject(w.tenant, refOf('user-a'))
+
+    expect(out).toEqual({ published: 1, unreachable: [], failed: [] })
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.filename).toBe(retainedFilename('votes', a.id))
+    expect(calls[0]!.text).not.toContain('Erika Beispiel')
+    expect(calls[0]!.text).toContain('"createdBy":"erased"')
+    // nothing is left pending behind it
+    expect(w.steps.find((s) => s.step === STEP.publish('files', a.id))?.state).toBe('done')
+  })
+
+  it('a sink that is unavailable (the files module is off) is reported, and the step stays pending for a later pass', async () => {
+    const { w, calls, sinkOf } = publishedWorld()
+    const a = await w.seal(KARENZ, 'votes.a', [NAMED])
+    registerRetainedSink(sinkOf('files', { available: () => false }))
+    w.steps.push({ karenz_id: KARENZ, step: STEP.publish('files', a.id), state: 'done', last_error: null })
+    w.erase('user-a')
+
+    const out = await republishRetainedForSubject(w.tenant, refOf('user-a'))
+
+    expect(out).toEqual({ published: 0, unreachable: [STEP.publish('files', a.id)], failed: [] })
+    expect(calls).toHaveLength(0)
+    expect(w.steps.find((s) => s.step === STEP.publish('files', a.id))?.state).toBe('pending')
+  })
+
+  it('a sink that fails is reported without any message text, and the step stays pending', async () => {
+    const { w, sinkOf } = publishedWorld()
+    const a = await w.seal(KARENZ, 'votes.a', [NAMED])
+    registerRetainedSink(sinkOf('files', { publish: async () => { throw new Error('upload of Erika Beispiel refused') } }))
+    w.steps.push({ karenz_id: KARENZ, step: STEP.publish('files', a.id), state: 'done', last_error: null })
+    w.erase('user-a')
+
+    const out = await republishRetainedForSubject(w.tenant, refOf('user-a'))
+
+    expect(out.published).toBe(0)
+    expect(out.failed).toHaveLength(1)
+    expect(out.failed[0]).toContain(STEP.publish('files', a.id))
+    expect(JSON.stringify(out)).not.toContain('Erika')
+    expect(w.steps.find((s) => s.step === STEP.publish('files', a.id))?.state).toBe('pending')
+  })
+
+  it('one failing copy does not stop the others, and a record that does not name the subject is left alone', async () => {
+    const { w, calls, sinkOf } = publishedWorld()
+    const a = await w.seal(KARENZ, 'votes.a', [NAMED])
+    const b = await w.seal(KARENZ, 'votes.b', [OTHER])
+    const c = await w.seal(KARENZ_2, 'votes.c', [NAMED])
+    registerRetainedSink(sinkOf('files', { publish: async (x) => { if (x.recordId === a.id) throw new Error('boom'); calls.push({ sink: 'files', filename: x.filename, text: x.ndjson.toString('utf8') }) } }))
+    for (const [k, id] of [[KARENZ, a.id], [KARENZ, b.id], [KARENZ_2, c.id]] as const) w.steps.push({ karenz_id: k, step: STEP.publish('files', id), state: 'done', last_error: null })
+    w.erase('user-a')
+
+    const out = await republishRetainedForSubject(w.tenant, refOf('user-a'))
+
+    expect(out.published).toBe(1)
+    expect(out.failed).toHaveLength(1)
+    expect(calls.map((x) => x.filename)).toEqual([retainedFilename('votes', c.id)])
+    expect(w.steps.find((s) => s.step === STEP.publish('files', b.id))?.state).toBe('done')
+  })
+
+  it('a copy that was never published (no step) is not published by the erasure', async () => {
+    const { w, calls, sinkOf } = publishedWorld()
+    await w.seal(KARENZ, 'votes.a', [NAMED])
+    registerRetainedSink(sinkOf('files'))
+    w.erase('user-a')
+    expect(await republishRetainedForSubject(w.tenant, refOf('user-a'))).toEqual({ published: 0, unreachable: [], failed: [] })
+    expect(calls).toHaveLength(0)
   })
 })
 

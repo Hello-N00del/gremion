@@ -2,6 +2,7 @@ import { json } from '@sveltejs/kit'
 import type { RequestHandler } from './$types'
 import type { SessionUser } from '$lib/auth/types'
 import { writeAuditEntry } from '$lib/server/audit-db'
+import { safeFailureReason } from '$lib/server/erasure/orchestrator'
 import { RetainedCryptoError, RetainedNotFoundError } from '$lib/server/module-karenz/retained/crypto'
 import { canReadRetained, readRetainedRedacted } from '$lib/server/module-karenz/retained/serve'
 
@@ -10,9 +11,15 @@ import { canReadRetained, readRetainedRedacted } from '$lib/server/module-karenz
 // Readable by council-admin, it-admin, finance, Vorstand and the auditor (canReadRetained). The copy is
 // opened, redacted against the erasure reports (the stored bytes are never altered) and served with
 // no-store. Access to retained data is accountable: an audit entry `module.retained.read` is written
-// BEFORE the body is released, and when it cannot be written the answer is 503 without a body.
+// BEFORE the body is released, and when it cannot be written the answer is 503 with a short error and no record content.
 // 401 no session, 403 a role that may not read, 400 no id, 404 an unknown id (the copies live in the
 // request tenant's own database, so another tenant's id is unknown here), 500 a copy that does not verify.
+
+/** The failure class (and SQLSTATE when there is one) for the log: never a message, which may carry content. */
+function failureClass(err: unknown): string {
+  const code = (err as { code?: unknown } | null | undefined)?.code
+  return typeof code === 'string' && /^[0-9A-Z]{5}$/.test(code) ? `${safeFailureReason(err)} SQLSTATE ${code}` : safeFailureReason(err)
+}
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
@@ -33,14 +40,14 @@ export const GET: RequestHandler = async ({ url, locals }) => {
   } catch (err) {
     if (err instanceof RetainedNotFoundError) return notFound()
     // the class and the id only: a crypto error never carries record content, a database error may not either
-    console.error('[settings/modules/retained] read failed:', err instanceof RetainedCryptoError ? err.message : err instanceof Error ? err.name : 'error')
+    console.error(`[settings/modules/retained] ${locals.tenant.slug}: read of ${id.toLowerCase()} failed:`, err instanceof RetainedCryptoError ? err.message : failureClass(err))
     return json({ success: false, code: 'INTERNAL', error: 'Die aufbewahrten Unterlagen konnten nicht gelesen werden.' }, { status: 500 })
   }
 
   try {
     await writeAuditEntry({ userId: user.id, field: 'module.retained.read', oldValue: null, newValue: id.toLowerCase() })
   } catch (err) {
-    console.error('[settings/modules/retained] audit write failed, nothing served:', err instanceof Error ? err.name : 'error')
+    console.error(`[settings/modules/retained] ${locals.tenant.slug}: audit write for ${id.toLowerCase()} failed, nothing served:`, failureClass(err))
     return json({ success: false, code: 'AUDIT_UNAVAILABLE', error: 'Der Zugriff kann gerade nicht protokolliert werden; die Unterlagen werden deshalb nicht ausgegeben.' }, { status: 503, headers: { 'Cache-Control': 'no-store' } })
   }
 

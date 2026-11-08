@@ -18,12 +18,13 @@ const USER = '0192f0c4-0000-7000-8000-000000000001'
 const h = vi.hoisted(() => ({
   audit: [] as { userId: string; field: string; oldValue: string | null; newValue: string }[],
   auditFails: false,
+  auditError: null as Error | null,
   erased: [] as { tenant_id: string; subject_ref: string }[],
 }))
 
 vi.mock('$lib/server/audit-db', () => ({
   writeAuditEntry: async (e: { userId: string; field: string; oldValue: string | null; newValue: string }) => {
-    if (h.auditFails) throw new Error('audit_log unavailable')
+    if (h.auditFails) throw h.auditError ?? new Error('audit_log unavailable')
     h.audit.push(e)
   },
 }))
@@ -62,6 +63,7 @@ beforeEach(async () => {
   vi.stubEnv('AUTH_SECRET', SECRET)
   h.audit.length = 0
   h.auditFails = false
+  h.auditError = null
   h.erased.length = 0
   a = tenantWorld(TENANT_A)
   b = tenantWorld(TENANT_B)
@@ -118,6 +120,24 @@ describe('GET /api/settings/modules/retained', () => {
     expect(text).not.toContain('Haushalt')
     expect(text).not.toContain('Erika')
     expect(res.headers.get('content-type') ?? '').not.toMatch(/ndjson/)
+  })
+
+  it('the failure log names the tenant, the record and the failure class with its SQLSTATE, and never a message', async () => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      h.auditFails = true
+      h.auditError = Object.assign(new Error('connection to db.internal.example refused for Erika Beispiel'), { code: '57P01' })
+      const { GET } = await import('./+server')
+      await GET(event(['vorstand'], a.tenant, `?id=${recordId}`))
+      const logged = log.mock.calls.flat().join(' ')
+      expect(logged).toContain('rat-a')
+      expect(logged).toContain(recordId)
+      expect(logged).toContain('57P01')
+      expect(logged).not.toContain('Erika')
+      expect(logged).not.toContain('db.internal')
+    } finally {
+      log.mockRestore()
+    }
   })
 
   it('serves a person erased after sealing redacted', async () => {
