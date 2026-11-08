@@ -380,7 +380,8 @@ docker compose --env-file /opt/gremion/etc/env/state.env exec -T pgbouncer head 
 PGPASSWORD="$PGBOUNCER_AUTH_PASSWORD" docker compose --env-file /opt/gremion/etc/env/state.env exec -T -e PGPASSWORD postgres \
   psql -h pgbouncer -p 6432 -U pgbouncer_auth -d postgres -Atc 'SELECT current_user'                             # pgbouncer_auth: a login routed through PgBouncer succeeds
 grep -c '^GOVERNANCE_PG_PASSWORD=.' /opt/gremion/etc/env/state.env                   # 1: the governance server's key exists (step 9)
-stat -c '%a %n' /opt/gremion/etc/secrets/tenant-create/governance_pg_admin /opt/gremion/etc/secrets/governance   # 600 ...governance_pg_admin, 700 ...secrets/governance
+sec=/opt/gremion/etc/secrets
+stat -c '%a %n' "$sec/tenant-create/governance_pg_admin" "$sec/governance"                                        # 600 ...governance_pg_admin, then 700 ...secrets/governance
 docker compose --env-file /opt/gremion/etc/env/state.env ps --format '{{.Service}} {{.State}} {{.Health}}' governance-postgres   # governance-postgres running healthy
 journalctl -t premigration-dump --since today                                       # one taken/created line per dump, one deleted line per file (step 3 and gremion-migration-dump)
 for f in /root/.docker/config.json /home/gremion/.docker/config.json; do
