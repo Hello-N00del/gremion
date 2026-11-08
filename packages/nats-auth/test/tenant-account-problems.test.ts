@@ -122,6 +122,39 @@ describe('tenantAccountProblems', () => {
     expect(tenantAccountProblems({ tenant: 'alpha', modules: ['no-such-module'] }, opts()).join('\n')).toContain('no-such-module')
   })
 
+  test('a seed held for a module OUTSIDE the declared set is named (apply would revoke and delete it); kernel and kernel-api never are', async () => {
+    const { broker } = fakeBroker()
+    await ensureTenantAccount({ tenant: 'alpha', modules: withPlatformIdentities(['calendar', 'content']) }, opts(broker))
+    expect(tenantAccountProblems({ tenant: 'alpha', modules: withPlatformIdentities(['calendar', 'content']) }, opts())).toEqual([])
+    // content left the declared set, its seed is still held: the declarative apply removes it, so verify must say so
+    const surplus = tenantAccountProblems({ tenant: 'alpha', modules: withPlatformIdentities(['calendar']) }, opts())
+    expect(surplus).toEqual(['seed content/tenant_alpha.nk is held but content is not in the declared set; apply removes it'])
+    // the platform identity and the kernel are not "surplus" for a caller that passes the bare module set
+    expect(tenantAccountProblems({ tenant: 'alpha', modules: ['calendar', 'content'] }, opts())).toEqual([])
+    // a suspended customer (declared set = platform identities only): every module seed is surplus, kernel-api and kernel are not
+    const suspended = tenantAccountProblems({ tenant: 'alpha', modules: withPlatformIdentities([]) }, opts())
+    expect(suspended.map((l) => l.split(' ')[1])).toEqual(['calendar/tenant_alpha.nk', 'content/tenant_alpha.nk'])
+  })
+
+  test('verify goes green again after the apply that removes the surplus seed', async () => {
+    const { broker } = fakeBroker()
+    await ensureTenantAccount({ tenant: 'alpha', modules: withPlatformIdentities(['calendar', 'content']) }, opts(broker))
+    const declared = withPlatformIdentities(['calendar'])
+    expect(tenantAccountProblems({ tenant: 'alpha', modules: declared }, opts()).length).toBe(1)
+    await ensureTenantAccount({ tenant: 'alpha', modules: declared }, opts(broker))
+    expect(tenantAccountProblems({ tenant: 'alpha', modules: declared }, opts())).toEqual([])
+  })
+
+  test('an unreadable seed store is reported as such, not as "never initialised"', () => {
+    const sys = path.join(secretsDir, '_sys', 'reload.nk')
+    writeFileSync(sys, 'not a seed')
+    const lines = tenantAccountProblems({ tenant: 'alpha', modules: withPlatformIdentities(['calendar']) }, opts())
+    expect(lines).toHaveLength(1)
+    expect(lines[0]).toContain(`cannot read the seed store under ${secretsDir}`)
+    expect(lines[0]).toContain('is not a user seed')
+    expect(lines[0]).not.toMatch(/never initialised/)
+  })
+
   test('is read-only: it writes no seed, no file, takes no lock', async () => {
     const before = existsSync(seedFile('alpha'))
     tenantAccountProblems({ tenant: 'alpha', modules: withPlatformIdentities(['calendar']) }, opts())

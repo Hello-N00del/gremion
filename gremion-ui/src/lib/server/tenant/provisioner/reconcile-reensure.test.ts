@@ -188,6 +188,20 @@ describe('a customer created before the relay and before the purger CONNECT gran
     expect(existsSync(seed('kernel-api'))).toBe(true)
   })
 
+  it('a seed held for a module the registry no longer lists is drift: verify reports it, apply removes it (the declared set is the truth)', async () => {
+    await reconcile(false) // converge: calendar + kernel-api
+    registry = []
+    const verify = await reconcile(true)
+    expect(verify.ok).toBe(false)
+    expect(verify.checks.find((c) => c.name === 'kernel-api-nats-seed')!.detail).toContain('calendar is not in the declared set')
+    expect(existsSync(seed('calendar'))).toBe(true)
+    const applied = await reconcile(false)
+    expect(applied.ok).toBe(true)
+    expect(applied.applied).toContain('kernel-api-nats-seed')
+    expect(existsSync(seed('calendar'))).toBe(false)
+    expect(existsSync(seed('kernel-api'))).toBe(true)
+  })
+
   it('a suspended customer: the registry set is not restored (suspension evicts modules), only the kernel-api seed is ensured', async () => {
     await ensureTenantAccount({ tenant: TENANT.slug, modules: [] }, { secretsDir, accountsDir, broker }) // suspend: modules evicted
     expect(existsSync(seed('calendar'))).toBe(false)

@@ -30,7 +30,7 @@ import { DEFAULT_ACCOUNTS_DIR, secretsDirOf } from './connect.ts'
 import { FLOWS, KERNEL, NO_BROKER, PLATFORM_IDENTITIES, SYSTEM_STREAMS } from './flows.ts'
 import { accountFor, assertTenantId } from './permissions.ts'
 import { renderServerConfig, type ServerState } from './render.ts'
-import { ADMIN_DIR, IMAGE_OWNERS, SeedStore, tenantFile } from './store.ts'
+import { ADMIN_DIR, IMAGE_OWNERS, SYS_DIR, SYS_RELOAD_FILE, SeedStore, tenantFile } from './store.ts'
 
 export interface BrokerOps {
   /** Ask the running server to re-read its config. */
@@ -157,7 +157,8 @@ export async function initAccounts(opts: { secretsDir?: string; accountsDir?: st
  * The READ-ONLY half of ensureTenantAccount, for `reconcile` (kernel issue #88): what ensureTenantAccount would
  * still have to do for this tenant and module set, as one line per gap, [] = nothing. It takes no lock, writes
  * nothing and never talks to the broker, so it is safe in verify mode:
- *  - the tenant admin seed and one seed per user of the set (kernel always) exist;
+ *  - the tenant admin seed and one seed per user of the set (kernel always) exist, and no seed is held for a module
+ *    OUTSIDE the set (the declarative apply would revoke and delete it; the kernel and kernel-api are exempt);
  *  - the accounts file renders from the store's seeds to exactly the bytes on disk AND the marker says the server
  *    reloaded those bytes (a seed written but never loaded is a customer whose relay is still refused).
  * A volume `nats-auth init` never ran on, a module id outside FLOWS/NO_BROKER and an unrenderable store are
@@ -175,13 +176,24 @@ export function tenantAccountProblems(input: { tenant: string; modules: readonly
   const store = new SeedStore(secretsDirOf(opts))
   try {
     store.sysReload()
-  } catch {
-    return [`the seed store under ${store.root} was never initialised (run \`nats-auth init\`; the deploy does it before any colour comes up)`]
+  } catch (err) {
+    // Only an ABSENT reload seed means init never ran; an unreadable or malformed one is a different repair.
+    if (!existsSync(path.join(store.root, SYS_DIR, SYS_RELOAD_FILE))) {
+      return [`the seed store under ${store.root} was never initialised (run \`nats-auth init\`; the deploy does it before any colour comes up)`]
+    }
+    return [`cannot read the seed store under ${store.root}: ${err instanceof Error ? err.message : String(err)}`]
   }
   const problems: string[] = []
   if (!store.tenants().includes(tenant)) problems.push(`no tenant admin seed ${ADMIN_DIR}/${tenantFile(tenant)}`)
   const held = new Set(store.modulesOf(tenant))
   for (const u of users) if (!held.has(u)) problems.push(`no seed ${u}/${tenantFile(tenant)}`)
+  // The other direction: ensureTenantAccount is declarative and revokes + deletes every seed outside the set it is
+  // given, so a held seed the set does not name is drift too. The kernel and the platform identities (kernel-api)
+  // are never surplus: ensure keeps them whatever module list a caller types.
+  const declared = new Set([...users, KERNEL, ...PLATFORM_IDENTITIES])
+  for (const m of [...held].sort()) {
+    if (!declared.has(m)) problems.push(`seed ${m}/${tenantFile(tenant)} is held but ${m} is not in the declared set; apply removes it`)
+  }
   // Whether the server serves the bytes cannot be judged until every seed is there.
   if (problems.length) return problems
   let bytes: string
