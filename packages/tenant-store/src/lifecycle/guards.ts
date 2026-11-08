@@ -47,7 +47,7 @@ export function assertLifecycleModuleId(moduleId: string): void {
   } catch (err) {
     throw new LifecycleError('INVALID_INPUT', (err as Error).message, { cause: err })
   }
-  if (RESERVED_MODULE_IDS.has(moduleId)) throw new LifecycleError('INVALID_INPUT', `module id ${moduleId} is reserved (the customer's kernel database), not a module`)
+  if (RESERVED_MODULE_IDS.has(moduleId)) throw new LifecycleError('INVALID_INPUT', `module id ${moduleId} is reserved (the customer's kernel or governance database), not a module`)
 }
 
 export function assertLifecycleTenantId(tenantId: string): void {

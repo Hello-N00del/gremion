@@ -1021,7 +1021,7 @@ async function cmdDelete(): Promise<void> {
   const server = kernelServer(directPostgresUrl('KERNEL_PG_ADMIN_FILE', reqFileEnv('KERNEL_PG_ADMIN_FILE')))
   // TASK-084-a: phase A made a governance database and a credential file for the customer; delete drops both.
   // Named and checked BEFORE anything is shredded, like the kernel server's own variable.
-  let govServer: ModuleServer
+  let govServer: ReturnType<typeof governanceServer>
   let govDir: string
   try {
     govServer = governanceServer(directPostgresUrl('GOVERNANCE_PG_ADMIN_FILE', reqFileEnv('GOVERNANCE_PG_ADMIN_FILE')))
@@ -1066,6 +1066,7 @@ async function cmdDelete(): Promise<void> {
   }
   const leaf = makeLeafShredExecutor()
   const kernelDb: { dropped: boolean | null } = { dropped: null }
+  const govDb: { dropped: boolean | null } = { dropped: null }
   const deps: DeleteDeps = {
     shredSecretFiles: (paths) => {
       for (const p of paths) if (existsSync(p)) rmSync(p, { force: true })
@@ -1076,7 +1077,7 @@ async function cmdDelete(): Promise<void> {
         kernelDb.dropped = (await dropKernelDatabase(server, tenantId)).dropped
       },
       dropGovernanceDatabase: async (tenantId) => {
-        await dropGovernanceDatabase(govServer, tenantId)
+        govDb.dropped = (await dropGovernanceDatabase(govServer, tenantId)).dropped
       },
     },
     kc: { deleteRealm: (realm) => kc.deleteRealm(realm) },
@@ -1088,7 +1089,8 @@ async function cmdDelete(): Promise<void> {
   try {
     const result = await deleteTenant(slug, deps)
     const kernel = kernelDb.dropped === true ? 'kernel database dropped' : kernelDb.dropped === false ? 'no kernel database was present' : 'kernel database not touched'
-    log(result.shredded ? `${slug} DELETED (${result.shreddedPaths.length} secret file(s) shredded, ${kernel}, governance database dropped, realm dropped, row tombstoned)` : `${slug} is already a tombstone`)
+    const governance = govDb.dropped === true ? 'governance database dropped' : govDb.dropped === false ? 'no governance database was present' : 'governance database not touched'
+    log(result.shredded ? `${slug} DELETED (${result.shreddedPaths.length} secret file(s) shredded, ${kernel}, ${governance}, realm dropped, row tombstoned)` : `${slug} is already a tombstone`)
   } finally {
     await closeServers()
   }

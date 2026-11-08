@@ -40,7 +40,6 @@ describe('0001_gov_setup.sql on a fresh governance database', () => {
   let app: Sql
   let first: Awaited<ReturnType<typeof runMigrations>>
   let second: Awaited<ReturnType<typeof runMigrations>>
-  let ddlOnSecond = 0
   const server = (): ModuleServer => ({
     admin: a,
     open: (d, o) => {
@@ -56,7 +55,6 @@ describe('0001_gov_setup.sql on a fresh governance database', () => {
     owner = await openAsOwner(server(), db, roles.owner)
     first = await runMigrations({ sql: owner, dir: DIR, ledger: GOVERNANCE_LEDGER, releaseRef: 'dist-t084', log: () => {} })
     second = await runMigrations({ sql: owner, dir: DIR, ledger: GOVERNANCE_LEDGER, releaseRef: 'dist-t084', log: () => {} })
-    ddlOnSecond = second.applied.length
     app = connectAs(db, roles.app, pw)
   })
 
@@ -79,7 +77,6 @@ describe('0001_gov_setup.sql on a fresh governance database', () => {
       SELECT filename, sha256, phase, release_ref FROM gov.schema_migration ORDER BY filename`
     expect(rows).toEqual([{ filename: FILE, sha256: createHash('sha256').update(bytes).digest('hex'), phase: 'expand', release_ref: 'dist-t084' }])
     expect(second.applied).toEqual([])
-    expect(ddlOnSecond).toBe(0)
     expect(second.alreadyApplied).toBe(1)
   })
 

@@ -307,7 +307,7 @@ const TENANT_TOKEN = /^[a-z][a-z0-9_]{2,39}$/
  * row it is.
  */
 export async function bindGovernanceDatabase(server: ModuleServer, tenant: { id: string; token: string }): Promise<{ inserted: boolean }> {
-  const dbName = governanceDbName(tenant?.id)
+  const dbName = governanceDbName(tenant.id)
   const roles = governanceRoles(tenant.id)
   if (typeof tenant.token !== 'string' || !TENANT_TOKEN.test(tenant.token)) {
     throw new LifecycleError('INVALID_INPUT', `tenant token ${JSON.stringify(tenant.token)} does not match ${TENANT_TOKEN.source}`)

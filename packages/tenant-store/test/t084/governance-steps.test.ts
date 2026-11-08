@@ -23,6 +23,11 @@ const REPO = fileURLToPath(new URL('../../../../', import.meta.url))
 const DIR = join(REPO, 'services', 'governance', 'migrations')
 const SHA = createHash('sha256').update(readFileSync(join(DIR, '0001_gov_setup.sql'))).digest('hex')
 
+/** A statement (comments stripped) that creates, changes, drops or grants something. */
+function isDdl(q: string): boolean {
+  return /\b(CREATE|ALTER|DROP|GRANT|REVOKE)\b/i.test(q.replace(/--[^\n]*/g, ''))
+}
+
 async function failure(p: PromiseLike<unknown>): Promise<(Error & { code?: string }) | null> {
   try {
     await p
@@ -37,19 +42,12 @@ describe('migrateGovernanceDatabase / bindGovernanceDatabase / governancePostCon
   const pools: Sql[] = []
   const created: string[] = []
   const ddl: string[] = []
+  // record = true: every statement that leaves ANY pool the migration runs on (the owner pool that
+  // openAsOwner opens, transaction statements included) is pushed into ddl.
   const server = (record = false): ModuleServer => ({
-    admin: record
-      ? (new Proxy(a, {
-          get(t, p) {
-            if (p === 'unsafe') return (q: string, ...rest: never[]) => (ddl.push(q), t.unsafe(q, ...rest))
-            const v = Reflect.get(t, p, t)
-            return typeof v === 'function' ? v.bind(t) : v
-          },
-          apply: (t, _this, args) => Reflect.apply(t, t, args as never),
-        }) as Sql)
-      : a,
+    admin: a,
     open: (d, o) => {
-      const p = adminOn(d, o?.role ? { role: o.role } : {})
+      const p = adminOn(d, { ...(o?.role ? { role: o.role } : {}), ...(record ? { record: (q: string) => void ddl.push(q) } : {}) })
       pools.push(p)
       return p
     },
@@ -85,13 +83,17 @@ describe('migrateGovernanceDatabase / bindGovernanceDatabase / governancePostCon
     expect(ledger).toEqual([{ filename: '0001_gov_setup.sql', sha256: lock.chains.governance.files['0001_gov_setup.sql'] }])
   })
 
-  it('migrate a second time applies nothing and issues no DDL', async () => {
+  it('migrate a second time applies nothing and issues no DDL (the recorder sees the first run, so it can fail)', async () => {
     const X = await fresh()
-    await migrateGovernanceDatabase(server(), X, opts)
+    ddl.length = 0
+    await migrateGovernanceDatabase(server(true), X, opts)
+    // positive control: the same recorder, on the same code path, DOES see the DDL of the first run
+    expect(ddl.filter(isDdl).length).toBeGreaterThan(0)
     ddl.length = 0
     const again = await migrateGovernanceDatabase(server(true), X, opts)
     expect(again).toEqual({ applied: [], alreadyApplied: 1 })
-    expect(ddl.filter((q) => /^(CREATE|ALTER|DROP|GRANT|REVOKE)/i.test(q.trim()))).toEqual([])
+    expect(ddl.length).toBeGreaterThan(0) // the ledger read is recorded too: the recorder is live on this run
+    expect(ddl.filter(isDdl)).toEqual([])
   })
 
   it('a kill after migrate and before bind resumes: bind inserts once', async () => {

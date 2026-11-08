@@ -62,6 +62,7 @@ function harness(opts: { row?: Tenant | null; shredFailsOnce?: boolean; dbDropFa
         if (opts.dbDropFailsOnce && dropCalls === 1) throw new Error('boom: DB drop failed')
         order.push('db-drop')
       }),
+      dropGovernanceDatabase: vi.fn(async () => {}),
     },
     kc: {
       deleteRealm: vi.fn(async () => {
@@ -82,6 +83,7 @@ function harness(opts: { row?: Tenant | null; shredFailsOnce?: boolean; dbDropFa
       evictTenantRuntime: evict,
     },
     tenantSecretsDir: './secrets/tenants',
+    governanceSecretsDir: './secrets/governance',
   }
   return {
     deps,

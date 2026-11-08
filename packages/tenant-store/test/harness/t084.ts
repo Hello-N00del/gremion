@@ -60,12 +60,14 @@ export function admin(max = 2): postgres.Sql {
   return postgres(dbUrlFor('postgres'), { max, onnotice: () => {} })
 }
 
-/** The harness admin on `database`, optionally with a startup role (options=-c role=<role>). */
-export function adminOn(database: string, opts: { max?: number; role?: string } = {}): postgres.Sql {
+/** The harness admin on `database`, optionally with a startup role (options=-c role=<role>) and a statement recorder. */
+export function adminOn(database: string, opts: { max?: number; role?: string; record?: (query: string) => void } = {}): postgres.Sql {
   if (opts.role !== undefined && !/^[a-z][a-z0-9_]{0,62}$/.test(opts.role)) throw new Error(`[t084] refusing role ${JSON.stringify(opts.role)}`)
   return postgres(dbUrlFor(database), {
     max: opts.max ?? 2,
     onnotice: () => {},
+    // every statement that leaves this pool (postgres.js debug hook: unsafe, tagged and transaction ones alike)
+    ...(opts.record ? { debug: (_connection: number, query: string) => opts.record!(query) } : {}),
     ...(opts.role ? { connection: { options: `-c role=${opts.role}` } } : { connection: { search_path: 'pg_catalog' } }),
   })
 }
