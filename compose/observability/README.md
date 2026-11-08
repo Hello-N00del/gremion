@@ -153,6 +153,7 @@ evaluation errors alert too.
 | `InboxDeadLettered` | a consumer's message reached MaxDeliver and went to the DLQ stream | 1m |
 | `InboxStalled` | an inbox row received/failed for over 10 min: a crash on the last delivery | 1m |
 | `DeadLetterQueueNotEmpty` | the tenant's DLQ stream holds any entry (kept 7 days) | 1m |
+| `ModuleKarenzFailedOrOverdue` | a module switch-off Karenz step failed, a notice or reminder is overdue, or a row is past its final day (phase 2) | 5m |
 
 The four TASK-079 conditions have no `absent()` arm (as `ThirdPartyUnreachable`):
 a host that runs no events service yet has no gauge, and an `absent()` arm would
@@ -168,6 +169,18 @@ both `InboxDeadLettered` and `DeadLetterQueueNotEmpty`, two groups. Runbook:
 `gremion_outbox_oldest_pending_seconds{ctx}` (the age of the oldest outbox row still waiting for the
 relay): a relay that can never succeed burns no attempt and dead-letters nothing, so it is the
 only gauge that moves. It is collected like the three above; no alert rule reads it yet.
+
+`ModuleKarenzFailedOrOverdue` (`gremion:cond:module_karenz`, component `module-karenz`)
+is fail-closed, unlike the four above. The host collector (`emit_module_karenz`)
+reads `plt.module_karenz` and `plt.module_karenz_event` and emits
+`gremion_module_karenz_live` (live rows, always, 0 when there are none),
+`gremion_module_karenz_failed{customer,module}` (a step whose newest event is an
+error), `gremion_module_karenz_stale{customer,module}` (no switch-off notice
+after 1 h, a day-23 / day-29 reminder more than 2 h late, or a restoring row that
+has waited over 1 h for its restored report: the tenant pass is not running) and, only while `KARENZ_FINAL_DELETION=on`,
+`gremion_module_karenz_overdue{customer,module}` (a row more than 6 h past
+`final_at`). An unreadable table drops `gremion_module_karenz_live`, and the
+`absent()` arm then fires, so a blind collector never reads as healthy.
 
 The policy (`grafana/provisioning/alerting/policies.yaml`) groups by
 `[alertname, component]`, `group_wait 30s`, `group_interval 5m`,

@@ -19,18 +19,19 @@ import { isPrintableText } from './printable-text.ts'
 import type { ActorKind } from './ports.ts'
 
 /**
- * Phase 1 of the module self-service: a council admin may switch a module ON
- * through the request queue, never OFF. A council `disable_module` is refused
- * `DISABLE_NOT_YET` until the 30-day grace period (phase 2) exists, because
- * today's disableModule exports and then drops the module database at once.
- * Phase 2 flips this one constant (and nothing else decides it).
+ * Whether a council may switch a module OFF through the request queue. Phase 1 shipped this
+ * `false`: a council `disable_module` was refused `DISABLE_NOT_YET` because disableModule
+ * exported and then dropped the module database at once. The 30-day Karenz (phase 2) blocks
+ * the database instead of dropping it, freezes the external deadlines and keeps sealed copies
+ * of the records that must be kept, so the constant is `true` (and nothing else decides it).
+ * A test or a caller may still pass `false` to get the refusal back.
  */
-export const COUNCIL_DISABLE_ALLOWED = false
+export const COUNCIL_DISABLE_ALLOWED = true
 
 /** Where a request came from (plt.provisioning_request.origin). */
 export type RequestOrigin = 'panel' | 'host' | 'council'
 
-/** The kinds a council request may name (the database allows exactly these two; phase 1 runs only enable_module). */
+/** The kinds a council request may name (the database allows exactly these two). */
 const COUNCIL_KINDS: ReadonlySet<string> = new Set(['enable_module', 'disable_module'])
 /** The only DPIA reason code a council decision may carry (the panel's own is operator_decision). */
 const COUNCIL_REASON_CODE = 'council_decision'
@@ -144,7 +145,7 @@ export interface EnableModuleArgs {
   actorKind: ActorKind
 }
 
-/** `disable_module` (TRD-044): export first, then drop (tenant-store disableModule). */
+/** `disable_module` (TRD-044): export first, then block and open the 30-day Karenz (tenant-store disableModule). */
 export interface DisableModuleArgs {
   slug: string
   module: string

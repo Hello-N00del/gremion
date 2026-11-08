@@ -1,4 +1,4 @@
-<!-- i18n-sync: source=modules.md sha256=3c7017946588d22ad17bc3e585bd1233771ca6f1acb00d6cbab919e67c11c297 -->
+<!-- i18n-sync: source=modules.md sha256=e2909b06082742ea72635800d7274783806b3754c3f0fbf5cbb43af3dd19ff28 -->
 [English](./modules.md) | **Deutsch**
 
 # Unterstützte Module
@@ -74,13 +74,40 @@ Es gibt drei getrennte Schalter; im README jedes Moduls steht, welche davon zutr
    in `modules/disabled.json` steht, lässt sich auf diesem Weg nicht aktivieren. Ein Modul
    kann auch von der Gremiumsverwaltung unter Einstellungen > Module **eingeschaltet** werden
    (`calendar`, `elections` und `votes`; mit frischer Zwei-Faktor-Prüfung, ohne Freigabe durch
-   den Betreiber; siehe „Module self-service by the council“ im selben Runbook). Das
-   **Ausschalten** bleibt dem Betreiber vorbehalten, bis die 30-Tage-Frist der Phase 2
-   existiert: Eine Ausschalt-Anfrage eines Gremiums wird abgewiesen (`DISABLE_NOT_YET`).
+   den Betreiber; siehe „Module self-service by the council“ im selben Runbook). Dieselben
+   Module kann die Gremiumsverwaltung dort auch **ausschalten**; was das bewirkt, steht im
+   nächsten Abschnitt.
 3. **Einstellung pro Instanz.** `config.modules.<manifest id> = false` lässt die Routen des
    Moduls mit der Oberfläche für deaktivierte Module antworten und blendet seinen
    Navigationseintrag aus; die Daten bleiben erhalten
    ([playbooks/add-a-module.md](./playbooks/add-a-module.md), Abschnitt zur Abwahl; englisch).
+
+### Ein Modul ausschalten: die 30-Tage-Karenz
+
+Das Ausschalten eines Moduls pro Kunde zerstört 30 Tage lang nichts (die „Karenz“). Die
+Datenbank des Moduls wird exportiert und dann gesperrt, nicht gelöscht; Fristen in Nextcloud
+Polls und in Helios werden eingefroren; Chat-Räume werden archiviert; das Dateimodul verliert
+nur seine Bindung, und keine Datei wird gelöscht. Unterlagen, die aufbewahrt werden müssen,
+werden im Moment des Ausschaltens als schreibgeschützte Kopien versiegelt. Die Inhaberinnen
+und Inhaber der Rollen `council-admin` und `vorstand` erhalten beim Ausschalten eine
+Info-Mail und Erinnerungen 7 Tage und 1 Tag vor dem Ende; die Mails nennen nie die Person,
+die ausgeschaltet hat.
+
+Schaltet man das Modul innerhalb der 30 Tage wieder ein, wird alles wiederhergestellt: Die
+Datenbank wird entsperrt, eingefrorene Fristen laufen mit der verbleibenden Zeit weiter, und
+Räume werden wieder aus dem Archiv geholt. Am Tag 30 löscht ein geplanter Job den Rest (die
+gesperrte Datenbank und ihren Export, Umfragen und Chat-Räume), ausgenommen Chat-Räume mit
+Bezug zu einer Sitzung und die versiegelten Kopien. Der Lösch-Schritt des Jobs wird
+ausgeschaltet ausgeliefert und meldet nur, was er löschen würde, bis der Betreiber ihn
+einschaltet. Nach Tag 30 beginnt ein erneutes Einschalten von vorn und zeigt die versiegelten
+Kopien des früheren Zeitraums schreibgeschützt an.
+
+Die Einstellungsseite zeigt die verbleibenden Tage, eine Schaltfläche zum Wiederherstellen,
+jedes Problem des Ausschaltens und die versiegelten Kopien zum Herunterladen für die Rollen,
+die sie lesen dürfen (`council-admin`, `vorstand`, `finance`, `auditor`, `it-admin`). Das
+Vorgehen des Betreibers steht in
+[runbooks/tenant-lifecycle.md](./runbooks/tenant-lifecycle.md) (englisch), Abschnitt „Module
+Karenz (30 days)“.
 
 Ein Leaf-Service ist ein separater Container, der aus `modules/<directory>/Dockerfile` mit dem
 Repository-Root als Build-Kontext gebaut wird. Die Kernel-App erreicht ihn, wenn die Variable

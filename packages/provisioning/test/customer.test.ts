@@ -538,10 +538,10 @@ describe('TRD-044: disableCustomerModule', () => {
     return { w, d }
   }
 
-  it('switches the module off (export + drop in the port), then shrinks the broker users; kernel stays', async () => {
+  it('switches the module off (export + block in the port, no drop), then shrinks the broker users; kernel stays', async () => {
     const { w, d } = await active()
     const r = await disableCustomerModule('musterstadt', 'calendar', { operatorId: OPERATOR }, d)
-    expect(r).toMatchObject({ moduleKey: 'calendar', noop: false, dropped: true, enabled: ['votes'], reloaded: true })
+    expect(r).toMatchObject({ moduleKey: 'calendar', noop: false, dropped: false, blocked: true, enabled: ['votes'], reloaded: true })
     expect(r.export?.sha256).toMatch(/^[0-9a-f]{64}$/)
     expect(w.mutations).toEqual(['pg:disable musterstadt/calendar', 'nats:ensure musterstadt=[kernel]'])
   })

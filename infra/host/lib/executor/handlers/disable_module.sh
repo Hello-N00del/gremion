@@ -8,11 +8,14 @@
 #   request-verify refuses a council disable until phase 2). The SAME
 #   customer_disable_module the break-glass path runs: the container's
 #   disable-module verb (the level-1 switch off, the module database EXPORTED
-#   and verified, only then dropped; the broker users shrunk), with the TRD-440
-#   fingerprint asserted around it. The verb refuses, nothing touched, when the
-#   export directory is not a mounted volume. A failed export leaves the
-#   database in place and the row `disabling`; the same request again resumes
-#   with a fresh export, and a disabled module is a no-op (idempotent).
+#   and verified, only then BLOCKED, not dropped: the 30-day Karenz opens and
+#   gremion-karenz.timer drops the database on day 30 once KARENZ_FINAL_DELETION
+#   is on; the broker users shrunk), with the TRD-440 fingerprint asserted
+#   around it. The verb refuses, nothing touched, when the export directory is
+#   not a mounted volume. A failed export leaves the database in place and the
+#   row `disabling`; the same request again resumes with a fresh export, and a
+#   disabled module is a no-op (idempotent: a second disable keeps the first
+#   Karenz and its final day).
 handle_disable_module() {
     # shellcheck disable=SC2034  # the handler signature is the registry's: <id> <slug> <operator> <args> <work>
     local id="$1" slug="$2" operator="$3" args="$4" work="$5"

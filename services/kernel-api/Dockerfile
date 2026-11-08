@@ -47,6 +47,7 @@ COPY packages/ports/package.json ./packages/ports/
 # tenant-store's devDependency: `pnpm deploy --legacy` resolves it although nothing bundles it.
 COPY packages/retention/package.json ./packages/retention/
 COPY packages/tenant-store/package.json ./packages/tenant-store/
+COPY packages/storage/package.json ./packages/storage/
 # tenant-store depends on @gremion/retention (TASK-033-a): pnpm resolves it from the workspace,
 # so `pnpm deploy` needs its manifest here and its source below.
 COPY packages/retention/package.json ./packages/retention/
@@ -62,6 +63,7 @@ COPY packages/nats-auth ./packages/nats-auth/
 COPY packages/ports ./packages/ports/
 COPY packages/retention ./packages/retention/
 COPY packages/tenant-store ./packages/tenant-store/
+COPY packages/storage ./packages/storage/
 COPY packages/retention ./packages/retention/
 COPY packages/tenancy-core ./packages/tenancy-core/
 COPY packages/fastify-service-template ./packages/fastify-service-template/

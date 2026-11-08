@@ -1,11 +1,15 @@
 // @gremion/tenant-store/lifecycle — create or drop the database of one
 // (tenant, module) (D13, TRD-424), and the TRD-089 inspection. A subpath of
 // its own: the package root exports no create/drop helper (index.test.ts).
-export { disableModule, dropTenantModuleDatabase } from './disable.js'
-export { enableModule, ensureModuleRoles, lockDownDatabase } from './enable.js'
+export { blockModuleDatabase, disableModule, dropTenantModuleDatabase } from './disable.js'
+export { enableModule, ensureModuleRoles, lockDownDatabase, unblockModuleDatabase } from './enable.js'
+// Module Karenz (2026-10-30): the 30-day clock, the deletion switch and the day-30 job.
+export { assertKarenzExportPath, finalDeletionEnabled, finalizeDueKarenz, KARENZ_DAYS } from './karenz.js'
+export type { FinalizeDeps, FinalizeResult, FinalizeStep, KarenzState } from './karenz.js'
 // TASK-044: the level-1 enable gate, its records and the enabled-module checks (CAP-ISOLATION).
 export * from './enable-gate/index.js'
 export { exportDatabase, exportStamp, pgDumpExporter } from './export.js'
+export type { ExportStorageFactory } from './export-remove.js'
 export type { PgDumpExporterOptions, VerifiedExport } from './export.js'
 export {
   assertTenantModuleTarget,

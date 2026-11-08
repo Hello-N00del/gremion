@@ -35,7 +35,7 @@ import { createHash, randomBytes } from 'node:crypto'
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import postgres from 'postgres'
-import { handConfigToReader, handToReader, isTenantConfigPath, writeReaderConfigFile } from './tenant-secret-file'
+import { handConfigToReader, handToReader, isTenantConfigPath, writeGovernanceCredentialFile, writeReaderConfigFile } from './tenant-secret-file'
 import {
   bootstrapPlatform,
   ACCESS_READER_ROLE,
@@ -111,6 +111,7 @@ import { deleteTenant, type DeleteDeps, type LeafShredExecutor } from '../src/li
 import { requestVerb } from './tenant-provision-requests'
 import { GATE_USAGE, GATE_VERBS, refusalLine, runGateVerb } from './tenant-provision-gate'
 import { EXPORT_USAGE, EXPORT_VERBS, exportVerb } from './tenant-provision-export'
+import { KARENZ_USAGE, KARENZ_VERBS, karenzVerb, liveModuleDatabases, liveModuleDatabasesRefusal } from './tenant-provision-karenz'
 import { IMPORT_USAGE, IMPORT_VERBS, importVerb } from './tenant-provision-import'
 import { PURGE_USAGE, PURGE_VERBS, purgeVerb } from './tenant-provision-purge'
 import { parseDpiaMap, scratchFixturesAllowed } from './tenant-provision-scratch'
@@ -253,8 +254,9 @@ function pathsOverlap(a: string, b: string): boolean {
  * (the host creates it, gremion-tenant), and it must not be, contain or sit
  * inside TENANT_SECRETS_DIR, whose read-only mounts on gremion-ui, kernel-api
  * and kernel-api-migrate would otherwise expose every governance credential. Exit 2,
- * both variables named, before any connection. The uid hand-over to the
- * governance image is 084-b (GOVERNANCE_SECRETS_UID, DV4).
+ * both variables named, before any connection. The files go to the deploy
+ * user's uid:gid (the host backup copies them); the hand-over to the
+ * governance image's own uid is 084-b (GOVERNANCE_SECRETS_UID, DV4).
  */
 function governanceSecretsDir(): string {
   const dir = reqEnv('GOVERNANCE_SECRETS_DIR')
@@ -265,16 +267,13 @@ function governanceSecretsDir(): string {
   return dir
 }
 
-/** A governance credential file: 0600, atomic (tmp + rename), written into the existing directory (never created here). */
+/** What a verb that never reaches the governance server hands the adapters (same convention as `status`): nothing real is behind them. */
+const UNUSED_POSTGRES_URL = 'postgres://unused@127.0.0.1/unused'
+const UNUSED_DIR = '/nonexistent'
+
+/** A governance credential file: 0600, atomic (tmp + rename), handed to the deploy user's uid:gid so the host backup can read it. */
 function writeGovernanceSecretFile(hostPath: string, value: string): Promise<void> {
-  const tmp = `${hostPath}.tmp-${process.pid}`
-  writeFileSync(tmp, value, { encoding: 'utf-8', mode: 0o600 })
-  renameSync(tmp, hostPath)
-  try {
-    chmodSync(hostPath, 0o600)
-  } catch (err) {
-    log(`WARNING: chmod 0600 ${hostPath} failed (${err instanceof Error ? err.message : String(err)})`)
-  }
+  writeGovernanceCredentialFile(hostPath, value, { warn: log })
   return Promise.resolve()
 }
 
@@ -478,15 +477,20 @@ function moduleServerFor(adminUrl: string): ModuleServer & { close(): Promise<vo
  * the one-shot alive after the error. `needEdge`: only phase A binds a domain
  * (the DNS pre-flight); suspend/resume/record-step never read EDGE_BIND_IP.
  */
-function resolveLiveEnv(needEdge: boolean) {
+function resolveLiveEnv(needEdge: boolean, needGovernance: boolean) {
+  // `needGovernance`: only create (phase A makes the customer's governance database and credential file)
+  // reads the governance server. Every other live verb (suspend, resume, activate, record-step, the gate,
+  // import and Karenz verbs) must keep working on a host that has not brought the governance server up
+  // yet, so it neither requires GOVERNANCE_PG_ADMIN_FILE nor touches GOVERNANCE_SECRETS_DIR. `delete`
+  // reads them itself (it drops the governance database).
   return {
     platformUrl: directPostgresUrl('PLATFORM_DATABASE_URL', reqEnv('PLATFORM_DATABASE_URL')),
     platformDomain: reqEnv('PLATFORM_DOMAIN'),
     apexDomain: apexDomain(),
     runtimeDatabaseUrl: reqEnv('DATABASE_URL'),
     kernelAdminUrl: directPostgresUrl('KERNEL_PG_ADMIN_FILE', reqFileEnv('KERNEL_PG_ADMIN_FILE')),
-    governanceAdminUrl: directPostgresUrl('GOVERNANCE_PG_ADMIN_FILE', reqFileEnv('GOVERNANCE_PG_ADMIN_FILE')),
-    governanceSecretsDir: governanceSecretsDir(),
+    governanceAdminUrl: needGovernance ? directPostgresUrl('GOVERNANCE_PG_ADMIN_FILE', reqFileEnv('GOVERNANCE_PG_ADMIN_FILE')) : UNUSED_POSTGRES_URL,
+    governanceSecretsDir: needGovernance ? governanceSecretsDir() : UNUSED_DIR,
     exportDir: reqEnv('TENANT_EXPORT_DIR'),
     releaseRef: releaseRef(),
     edge: needEdge ? edgeAddresses() : null,
@@ -501,9 +505,9 @@ function mailStampExpectation(): MailStampExpectation {
   return s.mode === 'relay' ? { mode: 'relay', host: s.host, port: s.port, fromAddress: s.fromAddress, user: s.user } : { mode: 'stalwart' }
 }
 
-async function liveDeps(opts: { configFile?: string; bodyName?: string; needEdge?: boolean } = {}): Promise<Live> {
+async function liveDeps(opts: { configFile?: string; bodyName?: string; needEdge?: boolean; needGovernance?: boolean } = {}): Promise<Live> {
   const catalogue = loadModules()
-  const env = resolveLiveEnv(opts.needEdge ?? false)
+  const env = resolveLiveEnv(opts.needEdge ?? false, opts.needGovernance ?? false)
   const kc = provisionerKc(env.creds)
   const adminKc = adminKcOrUndefined()
   const servers = new Map<string, ReturnType<typeof moduleServerFor>>()
@@ -598,7 +602,7 @@ async function liveDeps(opts: { configFile?: string; bodyName?: string; needEdge
   }
 }
 
-async function withLive<T>(opts: { configFile?: string; bodyName?: string; needEdge?: boolean }, fn: (deps: ProvisioningDeps) => Promise<T>): Promise<T> {
+async function withLive<T>(opts: { configFile?: string; bodyName?: string; needEdge?: boolean; needGovernance?: boolean }, fn: (deps: ProvisioningDeps) => Promise<T>): Promise<T> {
   const live = await liveDeps(opts)
   try {
     return await fn(live.deps)
@@ -764,7 +768,7 @@ async function cmdPhase(which: 'a' | 'b'): Promise<void> {
   const spec = createSpec(slug)
   assertCreateEnv(loadModules(), { needEdge: true })
   // domain_bound (phase A) runs the DNS pre-flight: both create phases resolve EDGE_BIND_IP.
-  await withLive({ configFile: spec.configFile, bodyName: spec.bodyName, needEdge: true }, async (deps) => {
+  await withLive({ configFile: spec.configFile, bodyName: spec.bodyName, needEdge: true, needGovernance: true }, async (deps) => {
     if (which === 'a') {
       const r = await createPhaseA(spec, deps)
       log(`phase A ${slug}: ran [${r.run.ran.join(', ')}], skipped [${r.run.skipped.join(', ')}]${r.registered ? ' (control row registered)' : ''}`)
@@ -1047,8 +1051,9 @@ async function cmdDelete(): Promise<void> {
   // Never report DELETED while the customer's data survives (review B2, r2).
   // Refused BEFORE anything is shredded: a pre-TASK-043 t_<slug> database
   // (dropKernelDatabase only knows t_<hex32>__kernel), and live per-customer
-  // module databases (delete has no module drop yet: the disable verb is
-  // TASK-044/077's). Both are named residuals, never silent.
+  // module databases (delete has no module drop: a switched-off module's
+  // database is dropped by the Karenz day-30 job, karenz-run). Both are named
+  // residuals, never silent.
   const tenant = await getTenantBySlug(slug)
   if (tenant && tenant.status !== 'deleted') {
     try {
@@ -1060,12 +1065,9 @@ async function cmdDelete(): Promise<void> {
       if (!platformUrl) throw new UsageError('delete needs PLATFORM_DATABASE_URL to prove the customer has no enabled module database left')
       const platform = postgres(directPostgresUrl('PLATFORM_DATABASE_URL', platformUrl), { max: 1, onnotice: () => {}, connect_timeout: 15 })
       try {
-        const live = await platform<{ module_key: string }[]>`
-          SELECT m.module_key FROM plt.module_database d JOIN plt.module m USING (module_id)
-           WHERE d.customer_id = ${tenant.id} AND d.state <> 'dropped' ORDER BY 1`
-        if (live.length) {
-          throw new UsageError(`${slug} has module(s) ${live.map((r) => r.module_key).join(', ')} enabled with their own databases; delete does not drop module databases yet -- disable them first (TASK-044/077), then rerun delete`)
-        }
+        // Not-dropped module databases include the BLOCKED ones of a switch-off inside its 30-day Karenz.
+        const live = await liveModuleDatabases(platform, tenant.id)
+        if (live.length) throw new UsageError(liveModuleDatabasesRefusal(slug, live))
       } finally {
         await platform.end({ timeout: 5 })
       }
@@ -1162,7 +1164,8 @@ const USAGE = `usage: tenant-create <verb> ...
 ${GATE_USAGE}
 ${IMPORT_USAGE}
 ${PURGE_USAGE}
-${EXPORT_USAGE}`
+${EXPORT_USAGE}
+${KARENZ_USAGE}`
 
 async function main(): Promise<void> {
   const verb = process.argv[2]
@@ -1250,6 +1253,18 @@ async function main(): Promise<void> {
         args: process.argv.slice(3),
         openPlatform: openPlatformPool,
         openKernelServer: () => kernelServer(directPostgresUrl('KERNEL_PG_ADMIN_FILE', reqFileEnv('KERNEL_PG_ADMIN_FILE'))),
+        usage: (m) => new UsageError(m),
+        log,
+      })
+    // module Karenz day 30 + the operator's view of it (tenant-provision-karenz.ts), run by the host's timer
+    case 'karenz-run':
+    case 'karenz-status':
+      if (!KARENZ_VERBS.has(verb)) throw new UsageError(`unknown verb ${verb}`)
+      return karenzVerb(verb, {
+        args: process.argv.slice(3),
+        withLive,
+        openPlatform: openPlatformPool,
+        customerIdForSlug: async (s) => (await getTenantBySlug(s))?.id ?? null,
         usage: (m) => new UsageError(m),
         log,
       })

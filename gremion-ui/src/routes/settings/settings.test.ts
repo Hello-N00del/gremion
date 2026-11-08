@@ -146,6 +146,50 @@ describe('PATCH /api/settings', () => {
     expect(res.status).toBe(200)
     expect(mockWriteConfig).toHaveBeenCalled()
   })
+
+  // Karenz: a council-switchable module that is off comes back only through the council switch (the
+  // platform request, the DPIA decision for a first enable, and the Art. 17 replay of a restore). A direct
+  // settings write used to flip it on over unreplayed erasures.
+  describe('a council-switchable module that is off', () => {
+    beforeEach(() => mockWriteConfig.mockClear())
+    const patch = async (body: unknown) => {
+      mockHasRole.mockReturnValue(true)
+      mockReadConfig.mockReturnValue({ ...baseConfig, modules: { ...baseConfig.modules, votes: false } })
+      const { PATCH } = await import('../api/settings/+server')
+      const request = new Request('http://localhost', { method: 'PATCH', body: JSON.stringify(body) })
+      // @ts-expect-error partial mock
+      return PATCH({ request, locals: makeLocals(true) })
+    }
+
+    it('is not switched on by a PATCH: 409, nothing written', async () => {
+      const res = await patch({ modules: { votes: true } })
+      expect(res.status).toBe(409)
+      expect(await res.json()).toMatchObject({ success: false, code: 'USE_MODULE_SWITCH' })
+      expect(mockWriteConfig).not.toHaveBeenCalled()
+    })
+
+    it('refuses the whole request when it rides along with other settings', async () => {
+      const res = await patch({ org: { name: 'X' }, modules: { votes: true, calendar: true } })
+      expect(res.status).toBe(409)
+      expect(mockWriteConfig).not.toHaveBeenCalled()
+    })
+
+    it('can still be left off, and other modules still toggle', async () => {
+      expect((await patch({ modules: { votes: false } })).status).toBe(200)
+      expect((await patch({ modules: { finance: false } })).status).toBe(200)
+      expect(mockWriteConfig).toHaveBeenCalledTimes(2)
+    })
+
+    it('a module that is already on may be sent as on again', async () => {
+      mockHasRole.mockReturnValue(true)
+      mockReadConfig.mockReturnValue(baseConfig)
+      const { PATCH } = await import('../api/settings/+server')
+      const request = new Request('http://localhost', { method: 'PATCH', body: JSON.stringify({ modules: { elections: true } }) })
+      // @ts-expect-error partial mock
+      const res = await PATCH({ request, locals: makeLocals(true) })
+      expect(res.status).toBe(200)
+    })
+  })
 })
 
 describe('POST /api/settings/backup', () => {

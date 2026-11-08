@@ -66,6 +66,7 @@
   "dependencies": {
     "@gremion/db": "workspace:*",
     "@gremion/module-catalogue": "workspace:*",
+    "@gremion/storage": "workspace:*",
     "postgres": "^3.4.4"
   },
   "devDependencies": {

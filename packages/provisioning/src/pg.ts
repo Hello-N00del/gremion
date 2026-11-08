@@ -8,6 +8,7 @@ import {
   disableModule,
   enableModule,
   ensurePlatformDatabase,
+  finalizeDueKarenz,
   lookupModuleVersion,
   migratePlatform,
   type EnableGate,
@@ -54,7 +55,19 @@ export function pgModules(opts: {
       const module = byId.get(moduleId)
       if (!module) throw new ProvisioningError('MODULE_UNKNOWN', `module ${moduleId} is not in the catalogue`)
       const r = await disableModule(c.id, module, { kind: actorKind ?? 'operator', id: operatorId }, { ...opts.lifecycle, platform: opts.platform, enableGate: undefined as never })
-      return { noop: r.noop, dropped: r.dropped, database: r.database, export: r.export }
+      return { noop: r.noop, dropped: r.dropped, blocked: r.blocked, finalAt: r.karenz?.finalAt ?? null, database: r.database, export: r.export }
+    },
+    async finalizeDue(o: { finalDeletion: boolean; deadlineMs: number }) {
+      return finalizeDueKarenz({
+        platform: opts.platform,
+        server: opts.lifecycle.server,
+        catalogue: opts.catalogue,
+        exportDir: opts.lifecycle.exportDir,
+        ...(opts.lifecycle.exportStorage ? { exportStorage: opts.lifecycle.exportStorage } : {}),
+        finalDeletion: o.finalDeletion,
+        deadlineMs: o.deadlineMs,
+        ...(opts.lifecycle.log ? { log: opts.lifecycle.log } : {}),
+      })
     },
     enabled: (c: CustomerRef) => enabledModuleKeys(opts.platform, c.id),
   }
@@ -433,11 +446,16 @@ export async function ensureAccessReader(d: AccessReaderDeps): Promise<{ created
 export const COUNCIL_REQUESTER_MARKER = 'plt_council_requester'
 /** gremion-ui's own LOGIN role for it (PLATFORM_MODULES_DATABASE_URL). */
 export const COUNCIL_REQUESTER_ROLE = 'gremion_ui_modules'
-/** The three functions of migration 0014; the role may EXECUTE exactly these among plt's. */
+/**
+ * The three functions of migration 0014 and the two of 0016 (the Karenz list and
+ * report); the role may EXECUTE exactly these among plt's.
+ */
 export const COUNCIL_EXECUTES = [
   'plt.submit_council_module_request(text, text, jsonb, uuid, uuid, text, timestamptz, text)',
   'plt.council_module_requests(text, integer)',
   'plt.council_module_state(uuid)',
+  'plt.council_karenz_list(uuid, integer)',
+  'plt.council_karenz_report(uuid, uuid, text, text, text, text)',
 ] as const
 
 export interface CouncilRequesterDeps {

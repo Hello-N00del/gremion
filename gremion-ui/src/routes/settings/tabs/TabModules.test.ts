@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, fireEvent, screen, waitFor } from '@testing-library/svelte'
-import type { ModuleOverview, ModuleOverviewItem } from '$lib/modules/switch-preview'
+import type { KarenzView, ModuleOverview, ModuleOverviewItem } from '$lib/modules/switch-preview'
 import TabModules from './TabModules.svelte'
 
 // Karenz phase 1, Task 12: the settings section "Module". A council admin switches a module ON; the
@@ -19,9 +19,24 @@ const item = (over: Partial<ModuleOverviewItem> = {}): ModuleOverviewItem => ({
   denied: null,
   pending: [],
   lastFailure: null,
+  karenz: null,
   ...over,
 })
-const overview = (modules: ModuleOverviewItem[], over: Partial<ModuleOverview> = {}): ModuleOverview => ({
+const karenzView = (over: Partial<KarenzView> = {}): KarenzView => ({
+  karenzId: '55555555-5555-4555-8555-555555555555',
+  state: 'open',
+  switchedOffAt: '2026-11-05T09:00:00.000Z',
+  finalAt: '2026-12-05T09:00:00.000Z',
+  daysLeft: 25,
+  canRestore: true,
+  mail: null,
+  mailFailed: false,
+  problems: [],
+  retained: [],
+  backupHref: '/settings/sicherungen',
+  ...over,
+})
+const overview =(modules: ModuleOverviewItem[], over: Partial<ModuleOverview> = {}): ModuleOverview => ({
   modules,
   disableAvailable: false,
   problem: null,
@@ -260,6 +275,80 @@ describe('TabModules.svelte', () => {
     render(TabModules, { props: { pollMs: 10_000 } })
     expect(await screen.findByText(/not tenant-isolated yet/)).toBeTruthy()
     expect(screen.queryByRole('button', { name: 'Einschalten' })).toBeNull()
+  })
+
+  it('a module in Karenz shows days left and a restore button that posts enable (no DPIA fields, no second Einschalten)', async () => {
+    const { calls } = fetchDouble([ok(overview([item({ enabled: false, dpiaRecorded: false, karenz: karenzView() })], { disableAvailable: true }))])
+    render(TabModules, { props: { pollMs: 10_000 } })
+    expect(await screen.findByText(/Noch 25 Tage/)).toBeTruthy()
+    // the plain enable button gives way to the restore button of the status block
+    expect(screen.queryByRole('button', { name: 'Einschalten' })).toBeNull()
+    await fireEvent.click(screen.getByRole('button', { name: 'Modul wieder einschalten' }))
+    await waitFor(() => expect(calls.some((c) => c.method === 'POST')).toBe(true))
+    expect(calls.find((c) => c.method === 'POST')!.body).toEqual({ moduleId: 'votes', action: 'enable' })
+    expect(screen.queryByLabelText(/Dokumentverweis/)).toBeNull()
+  })
+
+  it('a refused restore shows the server text in role=alert', async () => {
+    fetchDouble(
+      [ok(overview([item({ enabled: false, karenz: karenzView() })], { disableAvailable: true }))],
+      () => reply(409, { success: false, code: 'KARENZ_FINALIZING', error: 'Die endgültige Löschung läuft gerade.' }),
+    )
+    render(TabModules, { props: { pollMs: 10_000 } })
+    await fireEvent.click(await screen.findByRole('button', { name: 'Modul wieder einschalten' }))
+    expect((await screen.findByRole('alert')).textContent).toContain('Die endgültige Löschung läuft gerade.')
+  })
+
+  it('a finalizing Karenz offers no switch at all (neither Einschalten nor restore)', async () => {
+    fetchDouble([ok(overview([item({ enabled: false, karenz: karenzView({ state: 'finalizing', canRestore: false }) })], { disableAvailable: true }))])
+    render(TabModules, { props: { pollMs: 10_000 } })
+    expect(await screen.findByText(/endgültige Löschung läuft/)).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Einschalten' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Modul wieder einschalten' })).toBeNull()
+  })
+
+  it('problems of the Karenz render in role=alert', async () => {
+    fetchDouble([ok(overview([item({ enabled: false, karenz: karenzView({ problems: ['Schritt participant:votes:switchoff fehlgeschlagen: KarenzPartialError (1 item(s))'] }) })]))])
+    render(TabModules, { props: { pollMs: 10_000 } })
+    const alert = await screen.findByRole('alert')
+    expect(alert.textContent).toContain('participant:votes:switchoff')
+  })
+
+  it('the mail line appears only after the notice step succeeded', async () => {
+    fetchDouble([ok(overview([item({ enabled: false, karenz: karenzView({ mail: null }) })]))])
+    const before = render(TabModules, { props: { pollMs: 10_000 } })
+    await screen.findByText(/Noch 25 Tage/)
+    expect(before.container.textContent).not.toContain('Info-Mail')
+    before.unmount()
+
+    fetchDouble([ok(overview([item({ enabled: false, karenz: karenzView({ mail: { recipients: 2, failed: 0, skippedHolders: 0 } }) })]))])
+    const after = render(TabModules, { props: { pollMs: 10_000 } })
+    expect(await screen.findByText('Eine Info-Mail ging an 2 Empfänger.')).toBeTruthy()
+    after.unmount()
+
+    // a done step with nobody reached (N = 0) claims nothing
+    fetchDouble([ok(overview([item({ enabled: false, karenz: karenzView({ mail: { recipients: 0, failed: 0, skippedHolders: 2 } }) })]))])
+    const none = render(TabModules, { props: { pollMs: 10_000 } })
+    await screen.findByText(/Noch 25 Tage/)
+    expect(none.container.textContent).not.toContain('Eine Info-Mail ging an')
+  })
+
+  it('a failed info mail is an alert, not a mail line', async () => {
+    fetchDouble([ok(overview([item({ enabled: false, karenz: karenzView({ mail: null, mailFailed: true }) })]))])
+    const { container } = render(TabModules, { props: { pollMs: 10_000 } })
+    await screen.findByText(/Noch 25 Tage/)
+    expect(screen.getAllByRole('alert').map((a) => a.textContent).join(' ')).toContain('Info-Mail')
+    expect(container.textContent).not.toContain('Eine Info-Mail ging an')
+  })
+
+  it('retained downloads link to /api/settings/modules/retained?id=', async () => {
+    const id = 'aaaaaaaa-0000-4000-8000-000000000001'
+    fetchDouble([
+      ok(overview([item({ enabled: false, karenz: karenzView({ retained: [{ id, label: 'Wahlergebnisse', lineCount: 3, href: `/api/settings/modules/retained?id=${id}` }] }) })])),
+    ])
+    render(TabModules, { props: { pollMs: 10_000 } })
+    const link = await screen.findByRole('link', { name: /Wahlergebnisse/ })
+    expect(link.getAttribute('href')).toBe(`/api/settings/modules/retained?id=${id}`)
   })
 
   it('a history problem is shown as a note while the list stays', async () => {

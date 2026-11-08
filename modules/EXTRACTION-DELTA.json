@@ -235,9 +235,9 @@
     },
     {
       "path": "modules/content/app/lib/server/content/register.server.ts",
-      "reason": "TASK-042 (Q3, G6): the import of the deleted default-tenant env helper replaced by platformEnv('NATS_URL') from $lib/server/env/platform-env - NATS_URL is deployment-global and the kernel boots with zero tenants",
+      "reason": "TASK-042 (Q3, G6): the import of the deleted default-tenant env helper replaced by platformEnv('NATS_URL') from $lib/server/env/platform-env - NATS_URL is deployment-global and the kernel boots with zero tenants; Karenz p2 branch-fix: declares registerNoRetention('content')",
       "owner": "TASK-042",
-      "blob": "6d912e98c4d7e866f13b37b09d420ddbd9f3877b"
+      "blob": "2d0c9c6c4450f731829a31859908c66771596e6a"
     },
     {
       "path": "modules/content/app/lib/server/content/segment.ts",
@@ -685,15 +685,15 @@
     },
     {
       "path": "modules/calendar/app/lib/server/calendar/register.server.test.ts",
-      "reason": "post-f2 StuRaOS ba6c04ce: fix(calendar): dashboard upcoming-events yields one row per series (F1-FIX-08 round 2); TASK-205a: mocks platformEnv instead of the deleted default-env",
+      "reason": "post-f2 StuRaOS ba6c04ce: fix(calendar): dashboard upcoming-events yields one row per series (F1-FIX-08 round 2); TASK-205a: mocks platformEnv instead of the deleted default-env; Karenz p2 branch-fix: pins the retains-nothing declaration",
       "owner": "TASK-205",
-      "blob": "56816af19ab905682ad9361a3d060a7fad206418"
+      "blob": "4e5f0b936eddfe92612b1ced4356823d781d1129"
     },
     {
       "path": "modules/calendar/app/lib/server/calendar/register.server.ts",
-      "reason": "post-f2 StuRaOS ba6c04ce: fix(calendar): dashboard upcoming-events yields one row per series (F1-FIX-08 round 2); TASK-205a: NATS_URL read through platformEnv (the default-tenant env family is deleted, TASK-042 T1)",
+      "reason": "post-f2 StuRaOS ba6c04ce: fix(calendar): dashboard upcoming-events yields one row per series (F1-FIX-08 round 2); TASK-205a: NATS_URL read through platformEnv (the default-tenant env family is deleted, TASK-042 T1); Karenz p2 branch-fix: declares registerNoRetention('calendar')",
       "owner": "TASK-205",
-      "blob": "7dd60f3aa0bfc02506c9d58bc5b43ba1325ec49c"
+      "blob": "7c5103dd703872a1b9e5e0e4d58047209841d55e"
     },
     {
       "path": "modules/calendar/app/lib/server/events/calendar-audit-consumer.ts",
@@ -823,9 +823,9 @@
     },
     {
       "path": "modules/files/app/lib/server/files/nextcloud-client.ts",
-      "reason": "TASK-205a: Nextcloud endpoint through serviceEnv (the deleted default-tenant env reader)",
+      "reason": "TASK-205a: Nextcloud endpoint through serviceEnv (the deleted default-tenant env reader); Karenz p2 t16: listGroupMembers for the retained sink membership sync",
       "owner": "TASK-205",
-      "blob": "69ffb32d3a76e6fd1d6d4dffdb0b9b40604f9fae"
+      "blob": "26fa3e6d114cd3e83f158464e05f3c1a9c500844"
     },
     {
       "path": "modules/files/app/lib/server/files/protocol-documents.ts",
@@ -835,9 +835,9 @@
     },
     {
       "path": "modules/files/app/lib/server/files/register.server.ts",
-      "reason": "TASK-205a: NEXTCLOUD_OIDC_PROVIDER_ID through serviceEnv (the deleted default-tenant env reader)",
+      "reason": "TASK-205a: NEXTCLOUD_OIDC_PROVIDER_ID through serviceEnv (the deleted default-tenant env reader); Karenz p2 t16: registers the files Karenz participant, its retains-nothing declaration and the files retained sink",
       "owner": "TASK-205",
-      "blob": "a759bf4cdf65249f5cecd1aa114ce1c606f44ce8"
+      "blob": "264d160be5ec9295b78b587dd13d1551a25702be"
     },
     {
       "path": "modules/files/app/routes/api/files/upload-chunk/upload-chunk.test.ts",
@@ -1495,9 +1495,9 @@
     },
     {
       "path": "modules/votes/app/lib/server/polls/polls-client.ts",
-      "reason": "post-f2 StuRaOS e28191a1: fix(votes): apply requested anonymous/description/expire when creating a poll (F1-FIX-08 H16); TASK-205b: service endpoints through serviceEnv (the deleted default-tenant env reader)",
+      "reason": "post-f2 StuRaOS e28191a1: fix(votes): apply requested anonymous/description/expire when creating a poll (F1-FIX-08 H16); TASK-205b: service endpoints through serviceEnv (the deleted default-tenant env reader); Karenz p2 t13: setConfiguration and deletePoll (tenant-checked) and the optional showResults of the configuration",
       "owner": "TASK-205",
-      "blob": "ceebe19efb9614caf62f5765970cefc50f53cb9d"
+      "blob": "1d0fbe22ba4e69206cae9d46553b6d0ce8e2befc"
     },
     {
       "path": "modules/messaging/app/routes/api/auth/matrix-token/+server.ts",
@@ -1537,9 +1537,9 @@
     },
     {
       "path": "modules/messaging/app/lib/server/messages/admin/room-admin.ts",
-      "reason": "TASK-205b: service endpoints through serviceEnv (the deleted default-tenant env reader)",
+      "reason": "TASK-205b: service endpoints through serviceEnv (the deleted default-tenant env reader); Module Karenz Task 15: archive marker keeps the prior power levels, unarchiveRoom, getRoomArchiveMarker reads an unarchived marker as not archived; the power-level helpers moved to admin/archive-power-levels.ts",
       "owner": "TASK-205",
-      "blob": "d77f999f07c134d63b2575aecc4828fbe7ab4465"
+      "blob": "22a92b4846d79df7a69b0d73c81cda5ba241a930"
     },
     {
       "path": "modules/messaging/app/lib/server/messages/matrix-creds.ts",
@@ -1549,9 +1549,9 @@
     },
     {
       "path": "modules/messaging/app/lib/server/messages/register.server.ts",
-      "reason": "TASK-205b: service endpoints through serviceEnv (the deleted default-tenant env reader)",
+      "reason": "TASK-205b: service endpoints through serviceEnv (the deleted default-tenant env reader); Module Karenz Task 15: registers the messaging Karenz participant; Karenz p2 branch-fix: declares registerNoRetention('messaging')",
       "owner": "TASK-205",
-      "blob": "6ad5867a7b5a0278a4b1fb29d24d3644fb48add0"
+      "blob": "bc305d3fd0fa7dbab35291bf730c091261dafc87"
     },
     {
       "path": "modules/messaging/app/routes/api/messages/rooms/[roomId]/typing/+server.ts",
@@ -1615,9 +1615,9 @@
     },
     {
       "path": "modules/messaging/app/lib/server/messages/admin/room-admin.test.ts",
-      "reason": "TASK-205b: the suite feeds the serviceEnv seam from its $env/dynamic/private mock",
+      "reason": "TASK-205b: the suite feeds the serviceEnv seam from its $env/dynamic/private mock; Module Karenz Task 15: prior power levels, unarchiveRoom and the unarchived marker",
       "owner": "TASK-205",
-      "blob": "cae0de83cbea39af44d0a2706e0bbeec8109d628"
+      "blob": "b241a7bee49e9ab1065debb275d81a6488f9060c"
     },
     {
       "path": "modules/messaging/app/lib/server/messages/matrix-client.test.ts",
@@ -1633,9 +1633,9 @@
     },
     {
       "path": "modules/messaging/app/lib/server/messages/register.server.test.ts",
-      "reason": "TASK-205b: comment names serviceEnv, not the deleted default-tenant env reader",
+      "reason": "TASK-205b: comment names serviceEnv, not the deleted default-tenant env reader; Module Karenz Task 15: pins the participant registration; Karenz p2 branch-fix: pins the retains-nothing declaration",
       "owner": "TASK-205",
-      "blob": "db9340e33ff0d4e4036c4384e5e819248cfec347"
+      "blob": "8662285b47ad77428190dabe9d31e77ae4701f5a"
     },
     {
       "path": "modules/messaging/app/routes/api/video/meeting-room/+server.ts",
@@ -1693,15 +1693,15 @@
     },
     {
       "path": "modules/votes/app/routes/votes/+page.server.ts",
-      "reason": "TASK-205b (TASK-058 Q10): the landing page shows polls only while the elections module is off for the tenant (no committee_elections read, no Helios probe, heliosStatus null, electionsEnabled in the page data)",
+      "reason": "TASK-205b (TASK-058 Q10): the landing page shows polls only while the elections module is off for the tenant (no committee_elections read, no Helios probe, heliosStatus null, electionsEnabled in the page data); Karenz p2 t19: the loader also returns retainedRecords, the sealed poll tallies of an earlier period for the roles that may read retained records",
       "owner": "TASK-205",
-      "blob": "3a7a08dc7a44e13c262964668dd28e1799f34f2d"
+      "blob": "908282745a80b20f4485e825798bec9a27450d3e"
     },
     {
       "path": "modules/votes/app/routes/votes/+page.svelte",
-      "reason": "TASK-205b (TASK-058 Q10): no Helios pill, legend entry, sub-title or Helios-Wahl choice while elections is off",
+      "reason": "TASK-205b (TASK-058 Q10): no Helios pill, legend entry, sub-title or Helios-Wahl choice while elections is off; Karenz p2 t19: renders the read-only RetainedRecords list below the votes",
       "owner": "TASK-205",
-      "blob": "aa3996cb78ef28265624045e95cb4b306354fdda"
+      "blob": "e5a829f4737a05313d76c6e48f9940dd31e4eea4"
     },
     {
       "path": "modules/votes/app/routes/votes/votes.reflow.browser.test.ts",
@@ -1765,9 +1765,9 @@
     },
     {
       "path": "modules/elections/app/lib/server/elections/election-db.integration.test.ts",
-      "reason": "TASK-205b: the kernel database has no finance schema (the finance migrations are not in its chain), so the truncate names org_units only (CASCADE reaches committee_elections); TASK-205b: the kernel database has no finance schema (the finance migrations are not in its chain), so the truncate names org_units only (CASCADE reaches committee_elections); an afterAll clears the rows it created (a left-behind committee_elections row broke every later file that deletes org_units)",
+      "reason": "TASK-205b: the kernel database has no finance schema (the finance migrations are not in its chain), so the truncate names org_units only (CASCADE reaches committee_elections); TASK-205b: the kernel database has no finance schema (the finance migrations are not in its chain), so the truncate names org_units only (CASCADE reaches committee_elections); an afterAll clears the rows it created (a left-behind committee_elections row broke every later file that deletes org_units); Karenz p2 t14: an integration case for archiveForKarenz and unarchiveForKarenz",
       "owner": "TASK-205",
-      "blob": "a9c2a185829b84358d10a68000c519aa90ce3762"
+      "blob": "80023a30296b9fe07336d371a8a84cabcd503406"
     },
     {
       "path": "modules/calendar/app/lib/modules/manifests/calendar.test.ts",
@@ -1789,9 +1789,39 @@
     },
     {
       "path": "modules/publishing/app/lib/server/newsletter/register.server.ts",
-      "reason": "TASK-205c: NATS_URL read through platformEnv (the default-tenant env family is deleted, TASK-042 T1)",
+      "reason": "TASK-205c: NATS_URL read through platformEnv (the default-tenant env family is deleted, TASK-042 T1); Karenz p2 branch-fix: declares registerNoRetention('publishing')",
       "owner": "TASK-205c",
-      "blob": "2d623f5ee46cf0e6f42efb54b440577c23ed5ae7"
+      "blob": "b5ff029642e353da6a34eb479950b88dd939dfb2"
+    },
+    {
+      "path": "modules/publishing/app/lib/server/newsletter/register.server.test.ts",
+      "reason": "Karenz p2 branch-fix: pins the publishing retains-nothing declaration",
+      "owner": "TASK-205c",
+      "blob": "90d9489f5efcc76fce7d8c016434d804061e4b5f"
+    },
+    {
+      "path": "modules/board/app/lib/server/board/register.server.ts",
+      "reason": "Karenz p2 branch-fix: declares registerNoRetention('board') so a switch-off does not fail its retained step",
+      "owner": "TASK-205",
+      "blob": "4ce1e2abfa41fe77f1ae1084eaba3d7bc932571b"
+    },
+    {
+      "path": "modules/board/app/lib/server/board/register.server.test.ts",
+      "reason": "Karenz p2 branch-fix: pins the board retains-nothing declaration",
+      "owner": "TASK-205",
+      "blob": "222cb0d7bc3c04f5bab66ff6ebe00787e28b0e92"
+    },
+    {
+      "path": "modules/vault/app/lib/server/vault/register.server.ts",
+      "reason": "Karenz p2 branch-fix: new file, declares registerNoRetention('vault') so a switch-off does not fail its retained step",
+      "owner": "TASK-205",
+      "blob": "7a1e0cf3e3354a81025377a3f4192f2e20b65c12"
+    },
+    {
+      "path": "modules/vault/app/lib/server/vault/register.server.test.ts",
+      "reason": "Karenz p2 branch-fix: new file, pins the vault retains-nothing declaration",
+      "owner": "TASK-205",
+      "blob": "db74179b779034a32471d865ebe0cce2cc2e7f69"
     },
     {
       "path": "modules/publishing/app/routes/api/newsletter/+server.ts",
@@ -2188,6 +2218,162 @@
       "reason": "added in the kernel after f2: TASK-058-A-rest pins the elections.notice.* catalogue text to notice.ts",
       "owner": "TASK-058",
       "blob": "fbf8be49c1e9c823a2ee7446032d7b2dcd5e8ac5"
+    },
+    {
+      "path": "modules/messaging/app/lib/server/messages/karenz.ts",
+      "reason": "Module Karenz phase 2 Task 15: the messaging Karenz participant (archive rooms at switch-off, unarchive on restore, delete on the final day); new kernel-side file with no counterpart at the tag",
+      "owner": "TASK-205",
+      "blob": "e95caedc4ab775276c27ac63affb5ce145a2ae15"
+    },
+    {
+      "path": "modules/messaging/app/lib/server/messages/karenz.test.ts",
+      "reason": "Module Karenz phase 2 Task 15: tests of the messaging Karenz participant against an in-memory homeserver; new kernel-side file with no counterpart at the tag",
+      "owner": "TASK-205",
+      "blob": "93450fa18ce056effb7765df51a348808270df18"
+    },
+    {
+      "path": "modules/messaging/app/lib/server/messages/admin/archive-power-levels.ts",
+      "reason": "Module Karenz phase 2 Task 15: the archive/restore power-level helpers split out of room-admin.ts (file size cap); new kernel-side file with no counterpart at the tag",
+      "owner": "TASK-205",
+      "blob": "04f04e949d0082a7d4b6dd166eb541110d4fa8f4"
+    },
+    {
+      "path": "modules/votes/app/lib/server/polls/fake-nc.ts",
+      "reason": "Karenz p2 t13: the double carries showResults (view and PUT), so the participant tests can prove it hides and restores result visibility",
+      "owner": "TASK-205",
+      "blob": "50d8c9e35dc86cd32ff09110018b246913e305f7"
+    },
+    {
+      "path": "modules/votes/app/lib/server/polls/register.server.ts",
+      "reason": "Karenz p2 t13: registers the votes Karenz participant, the poll-results retention extractor and the deletion preview provider beside the erasure hook",
+      "owner": "TASK-205",
+      "blob": "7ae1e49d257020131b533cb255b5532e91d5f9b7"
+    },
+    {
+      "path": "modules/votes/app/lib/server/polls/register.server.test.ts",
+      "reason": "Karenz p2 t13: asserts the three new registrations",
+      "owner": "TASK-205",
+      "blob": "c3f328d7a4c11542194c79bf380a50f15198460d"
+    },
+    {
+      "path": "modules/votes/app/lib/server/polls/karenz.ts",
+      "reason": "added by Karenz p2 t13: the votes participant (freeze, restore, final deletion of Nextcloud Polls deadlines and polls) and the deletion preview provider",
+      "owner": "TASK-205",
+      "blob": "8000be615dd57cee86eaa7aec23d725f96cf702e"
+    },
+    {
+      "path": "modules/votes/app/lib/server/polls/karenz.test.ts",
+      "reason": "added by Karenz p2 t13: the participant suite on the fake Nextcloud (lock order, crash recovery, tenant scope, final-day guards)",
+      "owner": "TASK-205",
+      "blob": "bee5d9c9a7a7261109aaad75038d81d5affaa032"
+    },
+    {
+      "path": "modules/votes/app/lib/server/polls/retained.ts",
+      "reason": "added by Karenz p2 t13: the RC-GOV-RES poll-results extractor (tallies only) sealed at switch-off",
+      "owner": "TASK-205",
+      "blob": "e83eb42f6f15c592b498817ce20ef722a050fd35"
+    },
+    {
+      "path": "modules/elections/app/lib/server/elections/karenz.ts",
+      "reason": "added by Karenz p2 t14: the elections participant (pause, restore and archive of Helios elections), the RC-ELE election-results extractor and the switch-off guard for an unsupported pause",
+      "owner": "TASK-205",
+      "blob": "9797c5fc379e399ad655efac4404eaf2ba36bbd8"
+    },
+    {
+      "path": "modules/elections/app/lib/server/elections/karenz.test.ts",
+      "reason": "added by Karenz p2 t14: the participant suite on a stateful fake Helios and pause port (lock order, crash recovery, final-day guards, switch-off guard)",
+      "owner": "TASK-205",
+      "blob": "51b653df1d4102ca9430e4703111cdaa73a23331"
+    },
+    {
+      "path": "modules/elections/app/lib/server/elections/helios-pause.ts",
+      "reason": "added by Karenz p2 t14: the Helios pause port; ships unsupported until the running Helios is probed",
+      "owner": "TASK-205",
+      "blob": "76b3c78d165699e5956f53c79958b87f4a90479f"
+    },
+    {
+      "path": "modules/elections/app/lib/server/elections/election-db.karenz.test.ts",
+      "reason": "added by Karenz p2 t14: the SQL shape of archiveForKarenz and unarchiveForKarenz",
+      "owner": "TASK-205",
+      "blob": "4a01d7c7e595db7a34468007a029cba4f3e053d1"
+    },
+    {
+      "path": "modules/elections/app/lib/server/elections/election-db.ts",
+      "reason": "Karenz p2 t14: archiveForKarenz and unarchiveForKarenz for the final step and the restore",
+      "owner": "TASK-205",
+      "blob": "07d119f33784f94e3bcd114d6b92ee98298e620a"
+    },
+    {
+      "path": "modules/elections/app/lib/server/elections/register.server.ts",
+      "reason": "Karenz p2 t14: registers the elections Karenz participant, the election-results extractor and, while Helios cannot be paused (canPause false), the switch-off guard",
+      "owner": "TASK-205",
+      "blob": "c306e690fe86c09fd25243445ca80491cc4c89dd"
+    },
+    {
+      "path": "modules/elections/app/lib/server/elections/register.server.test.ts",
+      "reason": "Karenz p2 t14: asserts the new registrations",
+      "owner": "TASK-205",
+      "blob": "22127ff74b34cc1b60544e74b731beb2d1d3418d"
+    },
+    {
+      "path": "modules/files/app/lib/server/files/nextcloud-client.test.ts",
+      "reason": "Karenz p2 t16: tests of listGroupMembers",
+      "owner": "TASK-205",
+      "blob": "873b99dc3ebd031d88e3c7e5222f4dd57f7c34af"
+    },
+    {
+      "path": "modules/files/app/lib/server/files/register.server.test.ts",
+      "reason": "Karenz p2 t16: asserts the participant, declaration and sink registrations",
+      "owner": "TASK-205",
+      "blob": "420de53389d1fe75f4566afe1e909d1dac898805"
+    },
+    {
+      "path": "modules/files/app/lib/server/files/karenz.ts",
+      "reason": "Karenz p2 t16: the files Karenz participant (release only the Nextcloud binding, restore the same folder, delete nothing on the final day); new kernel-side file with no counterpart at the tag",
+      "owner": "TASK-205",
+      "blob": "91d1ccf8594b711cf90b874b9581fcaee64d633f"
+    },
+    {
+      "path": "modules/files/app/lib/server/files/karenz.test.ts",
+      "reason": "Karenz p2 t16: tests of the files Karenz participant against a stateful ledger and a recording fetch; new kernel-side file with no counterpart at the tag",
+      "owner": "TASK-205",
+      "blob": "eb8112e63c4be69c404908345e8dfff38be617e3"
+    },
+    {
+      "path": "modules/files/app/lib/server/files/retained-sink.ts",
+      "reason": "Karenz p2 t16: the files retained sink (per-tenant group folder and groups, never adopted by name); new kernel-side file with no counterpart at the tag",
+      "owner": "TASK-205",
+      "blob": "a4707c88892225b9a43984786ecec2b29201c834"
+    },
+    {
+      "path": "modules/files/app/lib/server/files/retained-sink.test.ts",
+      "reason": "Karenz p2 t16: tests of the files retained sink incl. the two-tenant case against one shared Nextcloud fake; new kernel-side file with no counterpart at the tag",
+      "owner": "TASK-205",
+      "blob": "07b460a9bfac5515d4312073f6c5c6239c74cf7c"
+    },
+    {
+      "path": "modules/elections/app/routes/elections/+page.server.ts",
+      "reason": "Karenz p2 t19: the loader also returns retainedRecords, the sealed result copies of an earlier period for the roles that may read retained records",
+      "owner": "TASK-205",
+      "blob": "873fdfef189d039b7367499a3cadba6629195746"
+    },
+    {
+      "path": "modules/elections/app/routes/elections/+page.svelte",
+      "reason": "Karenz p2 t19: renders the read-only RetainedRecords list below the elections",
+      "owner": "TASK-205",
+      "blob": "03fe9cadc1530fe4a96bf21f80cb41eaf0283460"
+    },
+    {
+      "path": "modules/elections/app/routes/elections/retained-records.test.ts",
+      "reason": "Karenz p2 t19: the elections page lists the sealed result copies after a finalized Karenz and a fresh enable; new kernel-side file with no counterpart at the tag",
+      "owner": "TASK-205",
+      "blob": "379deb443b04f16e7865925dec13cc8469220c74"
+    },
+    {
+      "path": "modules/votes/app/routes/votes/retained-records.test.ts",
+      "reason": "Karenz p2 t19: the votes page lists the sealed poll tallies after a finalized Karenz and a fresh enable; new kernel-side file with no counterpart at the tag",
+      "owner": "TASK-205",
+      "blob": "6753f146487ac8e5f5cedce75d5f701c378c1ba8"
     }
   ]
 }

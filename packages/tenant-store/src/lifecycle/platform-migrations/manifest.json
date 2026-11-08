@@ -13,5 +13,7 @@
   "0012_plt_purge_run.sql": "202379e02d64111efdd7e5910b56726e3477fb886d1c283b25701dd1569287d7",
   "0013_oac_access_record.sql": "889c39a6fc201feead497d559df152c7ae46ba6121321f003d05df7eb4aded77",
   "0014_plt_council_requests.sql": "535222ac20bdb8ed08aa76f4ca572deb59e875442f1373697726c9029b7bd82b",
-  "0015_plt_provisioning_step_governance.sql": "60f25259025d5d993564187ca4b46312d807f91d596367f8f76d7fd19345acde"
+  "0015_plt_provisioning_step_governance.sql": "60f25259025d5d993564187ca4b46312d807f91d596367f8f76d7fd19345acde",
+  "0016_plt_module_karenz.sql": "4904dfc2def0530de7a7f5fa8fe27b9c12c35da1e1eebf83060b8f2b69b6473d",
+  "0017_plt_karenz_report_mode.sql": "b7414b56813803d5e9d88706e21cad138e48ec0e8bef93ac5123e6c83150708a"
 }

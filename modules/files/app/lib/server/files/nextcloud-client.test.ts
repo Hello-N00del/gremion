@@ -143,3 +143,43 @@ describe('NextcloudClient.deleteUser (TRD-196 erasure)', () => {
     expect(fetchSpy).not.toHaveBeenCalled()
   })
 })
+
+describe('NextcloudClient.listGroupMembers (Karenz p2 t16: retained sink membership sync)', () => {
+  it('GETs the OCS group endpoint with an encoded id and returns the member ids', async () => {
+    const calls: Array<{ url: string; method: string }> = []
+    const c = clientWithFetch((async (url: string, init: RequestInit) => {
+      calls.push({ url: String(url), method: String(init.method) })
+      return new Response(
+        JSON.stringify({ ocs: { meta: { status: 'ok', statuscode: 100 }, data: { users: ['u-1', 'u-2'] } } }),
+        { status: 200 }
+      )
+    }) as typeof fetch)
+    await expect(c.listGroupMembers('gremion-retained-t 1')).resolves.toEqual(['u-1', 'u-2'])
+    expect(calls).toHaveLength(1)
+    expect(calls[0].method).toBe('GET')
+    expect(calls[0].url).toContain('/ocs/v1.php/cloud/groups/gremion-retained-t%201')
+    expect(calls[0].url).toContain('format=json')
+  })
+
+  it('an empty group is an empty list', async () => {
+    const c = clientWithFetch((async () =>
+      new Response(JSON.stringify({ ocs: { meta: { statuscode: 100 }, data: { users: [] } } }), { status: 200 })) as typeof fetch)
+    await expect(c.listGroupMembers('g')).resolves.toEqual([])
+  })
+
+  it('an OCS error envelope on HTTP 200 (group not found, 101) throws instead of reading as an empty group', async () => {
+    const c = clientWithFetch((async () =>
+      new Response(JSON.stringify({ ocs: { meta: { status: 'failure', statuscode: 101, message: 'The requested group could not be found' }, data: [] } }), { status: 200 })) as typeof fetch)
+    await expect(c.listGroupMembers('g')).rejects.toThrow(/101/)
+  })
+
+  it('a body without a users list throws: an unreadable answer must not look like "nobody is in the group"', async () => {
+    const c = clientWithFetch((async () => new Response(JSON.stringify({ ocs: { meta: { statuscode: 100 }, data: {} } }), { status: 200 })) as typeof fetch)
+    await expect(c.listGroupMembers('g')).rejects.toThrow(/users/)
+  })
+
+  it('propagates an HTTP failure', async () => {
+    const c = clientWithFetch((async () => new Response('boom', { status: 500 })) as typeof fetch)
+    await expect(c.listGroupMembers('g')).rejects.toThrow(/500/)
+  })
+})

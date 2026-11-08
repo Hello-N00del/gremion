@@ -35,6 +35,8 @@ export interface NcPoll {
     allowComment: boolean
     anonymous: boolean    // API field (not isAnonymous)
     expire: number        // unix timestamp or 0
+    /** 'always' | 'closed' | 'never'; absent when Nextcloud does not return it. */
+    showResults?: string
   }
   status: {
     expired: boolean      // API field (not isExpired)
@@ -229,6 +231,24 @@ export function createPollsClient(opts: { oidcBearer?: string; tenantId?: string
       // configuration so callers never see the stale POST defaults.
       const stored = configured ?? { ...poll, configuration: { ...poll.configuration, ...settings } }
       return scopePoll(stored, tenant(), legacy(), adminUser()) ?? stored
+    },
+
+    /** Change the deadline and / or the result visibility of one poll (Karenz: freeze and
+     *  restore). Ownership first: another tenant's poll answers 404 and nothing is written.
+     *  Returns the poll as Nextcloud stores it afterwards (read back when the PUT does not echo it). */
+    async setConfiguration(id: number, patch: { expire?: number; showResults?: string }): Promise<NcPoll> {
+      await this.getPoll(id)
+      const res = await ncFetch<{ poll?: NcPoll }>(`/poll/${id}`, {
+        method: 'PUT',
+        body: JSON.stringify({ pollConfiguration: patch }),
+      })
+      return (res?.poll ? scopePoll(res.poll, tenant(), legacy(), adminUser()) : null) ?? (await this.getPoll(id))
+    },
+
+    /** Delete one poll of the calling tenant (Karenz day 30). Another tenant's poll answers 404. */
+    async deletePoll(id: number): Promise<void> {
+      await this.getPoll(id)
+      await ncFetch(`/poll/${id}`, { method: 'DELETE' })
     },
 
     /** Cast the acting user's vote. Integrity, in order: acting-user bearer (never

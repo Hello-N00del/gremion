@@ -123,7 +123,7 @@ export async function exportVerb(verb: string, ctx: ExportVerbContext): Promise<
     }
   }
   try {
-    // Every module database row but the dropped ones: 'enabling' / 'disabling' may still hold rows (MED).
+    // Every module database row but the dropped ones: 'enabling' / 'disabling' may still hold rows (MED); 'blocked' is read like 'enabled'.
     const states = new Map(
       (
         await platform<{ module_key: string; state: string }[]>`
@@ -134,7 +134,9 @@ export async function exportVerb(verb: string, ctx: ExportVerbContext): Promise<
     const modules: ExportModule[] = ctx.catalogue().map((m) => {
       const rt = m.moduleJson.runtime
       const state = states.get(m.id)
-      const isEnabled = state === 'enabled'
+      // 'blocked' (a switch-off inside its 30-day Karenz) is a live database the app role cannot reach: its
+      // rows are the customer's data and belong in the export. The export reader has its own CONNECT grant.
+      const isEnabled = state === 'enabled' || state === 'blocked'
       const base: ExportModule = { id: m.id, runtimeExport: rt.export ?? null, platformServer: rt.platformServer ?? null, enabled: isEnabled }
       if (state === 'enabling' || state === 'disabling') base.transitional = state
       if (rt.export && isEnabled && rt.database) {

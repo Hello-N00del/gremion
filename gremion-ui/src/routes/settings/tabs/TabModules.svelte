@@ -3,16 +3,19 @@
   import { Button } from '$lib/components/ui/button'
   import { Input } from '$lib/components/ui/input'
   import { Label } from '$lib/components/ui/label'
+  import KarenzStatus from '$lib/components/KarenzStatus.svelte'
   import ModuleOffWarning from '$lib/components/ModuleOffWarning.svelte'
   import ModuleSwitchNotice from '$lib/components/ModuleSwitchNotice.svelte'
   import { t } from '$lib/i18n'
   import { fillText } from '$lib/modules/fill-text'
-  import type { ModuleDeletionPreview, ModuleOverview, ModuleOverviewItem } from '$lib/modules/switch-preview'
+  import type { KarenzView, ModuleDeletionPreview, ModuleOverview, ModuleOverviewItem } from '$lib/modules/switch-preview'
 
-  // Karenz phase 1: the council admin's module switches. Switching a module ON is a request to the
-  // platform (POST /api/settings/modules) that the host carries out; this page only reports what the
-  // server says and polls while a request is pending. Nothing here reads as "switched" before the
-  // request is applied. Switching OFF is shown but inert until phase 2 (overview.disableAvailable).
+  // The council admin's module switches. A switch is a request to the platform (POST /api/settings/modules)
+  // that the host carries out; this page only reports what the server says and polls while a request is
+  // pending. Nothing here reads as "switched" before the request is applied. Switching OFF opens the red
+  // warning (what is deleted after 30 days, what is kept) and then the typed-name gate. A module that is
+  // off keeps its 30 days (Karenz): the status block shows the days left, the problems, the sealed copies
+  // and the one button that restores the module, which is the same enable request as any other.
   let {
     pollMs = 5000,
     navigate = (url: string) => {
@@ -34,7 +37,7 @@
   // A submit or preview in flight, and the last refusal text per module.
   let busyId = $state<string | null>(null)
   let errors = $state<Record<string, string>>({})
-  // The switch-off warning (phase 2 reaches it; phase 1 renders the control inert).
+  // The switch-off warning.
   let warning = $state<{ preview: ModuleDeletionPreview; busy: boolean; error: string | null } | null>(null)
 
   // The last refresh failed after a good one: the list on screen may be out of date.
@@ -133,6 +136,29 @@
     }
   }
 
+  // Switching a module on inside its 30 days is the restore: the same request, no DPIA input.
+  async function onRestore(m: ModuleOverviewItem) {
+    busyId = m.moduleId
+    setError(m.moduleId, null)
+    const r = await send({ moduleId: m.moduleId, action: 'enable' })
+    busyId = null
+    if (r.ok) await refresh()
+    else if (r.code === 'STEP_UP_REQUIRED') navigate(STEP_UP)
+    else setError(m.moduleId, r.text)
+  }
+
+  /** The sentence about the info mail: only once its step is done and it reached somebody. */
+  function mailLineOf(k: KarenzView): string | null {
+    const n = k.mail?.recipients ?? 0
+    if (n < 1) return null
+    return n === 1 ? $t('settings.modules.karenz.mail.one') : fillText($t('settings.modules.karenz.mail.many'), { count: n })
+  }
+
+  /** The alert about the info mail: the step failed, or some of its mails did. */
+  function mailAlertOf(k: KarenzView): string | null {
+    return k.mailFailed || (k.mail?.failed ?? 0) > 0 ? $t('settings.modules.karenz.mail.failed') : null
+  }
+
   function onEnable(m: ModuleOverviewItem) {
     if (!m.dpiaRecorded) openDpia(m.moduleId)
     else void enable(m)
@@ -217,7 +243,9 @@
             </div>
 
             {#if !m.denied}
-              {#if m.enabled}
+              {#if m.karenz}
+                <!-- inside its 30 days the module is restored (or waits for its deletion) from the status block below -->
+              {:else if m.enabled}
                 {#if overview.disableAvailable}
                   <Button variant="outline" disabled={!!request || busyId === m.moduleId} onclick={() => onDisable(m)}>
                     {$t('settings.modules.disable')}
@@ -237,6 +265,19 @@
             <ModuleSwitchNotice moduleLabel={m.label} action={request.action} state={request.state} outcome={m.lastFailure} />
           {:else if m.lastFailure}
             <ModuleSwitchNotice moduleLabel={m.label} action="enable" state="failed" outcome={m.lastFailure} />
+          {/if}
+
+          {#if m.karenz}
+            {#if !request && m.karenz.state !== 'restoring'}
+              <ModuleSwitchNotice
+                moduleLabel={m.label}
+                action="disable"
+                state="applied"
+                mailLine={mailLineOf(m.karenz)}
+                mailAlert={mailAlertOf(m.karenz)}
+              />
+            {/if}
+            <KarenzStatus karenz={m.karenz} busy={!!request || busyId === m.moduleId} onrestore={() => onRestore(m)} />
           {/if}
 
           {#if errors[m.moduleId]}

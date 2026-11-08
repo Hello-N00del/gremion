@@ -114,6 +114,21 @@ describe('ElectionDb', () => {
     expect(row?.calendar_linked).toBe(true)
   })
 
+  it('archiveForKarenz hides the given elections from findAll and unarchiveForKarenz brings them back', async () => {
+    const unit = await createOrgUnit({
+      name: 'Gremium Karenz', description: null, parentId: null, kind: 'committee',
+      visibility: 'all_members', wantsMatrixRoom: false, wantsNextcloudFolder: false
+    })
+    for (const heliosUuid of ['h-karenz-1', 'h-karenz-2']) {
+      await ElectionDb.insert({ heliosUuid, orgUnitId: unit.id, createdBy: USER_UUID, calendarLinked: false })
+    }
+    expect(await ElectionDb.archiveForKarenz(['h-karenz-1'])).toBe(1)
+    expect(await ElectionDb.archiveForKarenz(['h-karenz-1'])).toBe(0) // already archived: untouched
+    expect((await ElectionDb.findAll()).map((e) => e.helios_uuid)).toEqual(['h-karenz-2'])
+    expect(await ElectionDb.unarchiveForKarenz(['h-karenz-1'])).toBe(1)
+    expect((await ElectionDb.findAll()).map((e) => e.helios_uuid).toSorted()).toEqual(['h-karenz-1', 'h-karenz-2'])
+  })
+
   it('findVisibleToUser returns elections of org-units the user is a member of', async () => {
     const unit = await createOrgUnit({
       name: 'Wahlgremium', description: null, parentId: null, kind: 'committee',

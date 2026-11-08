@@ -29,6 +29,7 @@ vi.mock('./backend/service-client', () => ({ evictServiceMatrixTokenCache: vi.fn
 vi.mock('./provisioning/matrix-subsystem', () => ({ createMatrixSubsystem: vi.fn() }))
 
 import { getDataProvider, getErasureHook } from '$lib/server/modules/runtime-registry'
+import { karenzParticipantsFor } from '$lib/server/module-karenz/participants'
 // Side-effect import: registers the messages module's providers/hooks.
 import './register.server'
 
@@ -91,5 +92,18 @@ describe('messaging erasure hook registration (TRD-196)', () => {
   it('registers the messaging erasure hook under its module id', async () => {
     const { messagingErasureHook } = await import('./erasure')
     expect(getErasureHook('messaging')).toBe(messagingErasureHook)
+  })
+})
+
+describe('messaging Karenz participant registration (Module Karenz, Task 15)', () => {
+  it('registers the messaging participant under the messaging catalogue id', async () => {
+    const { messagingKarenz } = await import('./karenz')
+    expect(karenzParticipantsFor('messaging')).toEqual([messagingKarenz])
+  })
+
+  it('declares that messaging seals no retained records (otherwise its retained step fails closed and day 30 never finalizes)', async () => {
+    const { hasRetentionDeclaration, extractorsFor } = await import('$lib/server/module-karenz/retained/extractors')
+    expect(hasRetentionDeclaration('messaging')).toBe(true)
+    expect(extractorsFor('messaging')).toEqual([])
   })
 })

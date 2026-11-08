@@ -63,6 +63,8 @@ tests:
         values: '100+0x90'
       - series: 'probe_success{job="blackbox-third-party",kind="third_party",service="nextcloud",instance="https://cloud.example.org/status.php"}'
         values: '1+0x90'
+      - series: 'gremion_module_karenz_live{instance="host",job="host"}'
+        values: '0+0x90'
     promql_expr_test:
       - expr: gremion:cond:disk_above_70
         eval_time: 70m
@@ -153,6 +155,12 @@ tests:
         exp_samples:
           - labels: 'gremion:cond:dead_letter_queue{component="nats-dlq"}'
             value: 0
+      # a live gauge of 0 and no failed, stale or overdue sample: silent
+      - expr: gremion:cond:module_karenz
+        eval_time: 70m
+        exp_samples:
+          - labels: 'gremion:cond:module_karenz{component="module-karenz"}'
+            value: 0
 
   # ---- blind: every collector is gone, every fail-closed condition is 1 ---
   - interval: 1m
@@ -242,6 +250,12 @@ tests:
         exp_samples:
           - labels: 'gremion:cond:dead_letter_queue{component="nats-dlq"}'
             value: 0
+      # an unreadable platform table or a blind collector: the live gauge is absent, the condition fires
+      - expr: gremion:cond:module_karenz
+        eval_time: 70m
+        exp_samples:
+          - labels: 'gremion:cond:module_karenz{component="module-karenz"}'
+            value: 1
 
   # ---- TDD 5: the backup signal (Q8) ------------------------------------
   # Timer DISABLED and the last run good but 27 hours old: silent. The old
@@ -459,3 +473,48 @@ tests:
       - expr: count(gremion:cond:dead_letter_queue{stream="ORGUNIT"})
         eval_time: 5m
         exp_samples: []
+
+  # ---- Module Karenz: a failed, a stale and an overdue sample each fire; a live gauge alone is silent ----
+  - interval: 1m
+    input_series:
+      - series: 'gremion_module_karenz_live{instance="host",job="host"}'
+        values: '1+0x30'
+      - series: 'gremion_module_karenz_failed{customer="0192f0c1-0000-7000-8000-00000000000a",module="votes",instance="host",job="host"}'
+        values: '_ _ _ _ _ 1+0x25'
+    promql_expr_test:
+      - expr: gremion:cond:module_karenz
+        eval_time: 3m
+        exp_samples:
+          - labels: 'gremion:cond:module_karenz{component="module-karenz"}'
+            value: 0
+      - expr: gremion:cond:module_karenz
+        eval_time: 10m
+        exp_samples:
+          - labels: 'gremion:cond:module_karenz{component="module-karenz"}'
+            value: 1
+
+  - interval: 1m
+    input_series:
+      - series: 'gremion_module_karenz_live{instance="host",job="host"}'
+        values: '1+0x30'
+      - series: 'gremion_module_karenz_stale{customer="0192f0c1-0000-7000-8000-00000000000a",module="elections",instance="host",job="host"}'
+        values: '1+0x30'
+    promql_expr_test:
+      - expr: gremion:cond:module_karenz
+        eval_time: 10m
+        exp_samples:
+          - labels: 'gremion:cond:module_karenz{component="module-karenz"}'
+            value: 1
+
+  - interval: 1m
+    input_series:
+      - series: 'gremion_module_karenz_live{instance="host",job="host"}'
+        values: '1+0x30'
+      - series: 'gremion_module_karenz_overdue{customer="0192f0c1-0000-7000-8000-00000000000a",module="messaging",instance="host",job="host"}'
+        values: '1+0x30'
+    promql_expr_test:
+      - expr: gremion:cond:module_karenz
+        eval_time: 10m
+        exp_samples:
+          - labels: 'gremion:cond:module_karenz{component="module-karenz"}'
+            value: 1

@@ -14,4 +14,10 @@ describe('board register.server', () => {
     const { boardErasureHook } = await import('./erasure')
     expect(h.registered).toEqual([boardErasureHook])
   })
+
+  it('declares that the board module seals no retained records (otherwise its retained step fails closed)', async () => {
+    const { hasRetentionDeclaration, extractorsFor } = await import('$lib/server/module-karenz/retained/extractors')
+    expect(hasRetentionDeclaration('board')).toBe(true)
+    expect(extractorsFor('board')).toEqual([])
+  })
 })
