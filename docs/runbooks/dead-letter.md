@@ -80,6 +80,14 @@ event id is the `event_id` of the outbox row (the alert's label names the contex
 All three gauges (`gremion_outbox_dead_lettered`, `gremion_inbox_dead_lettered`, `gremion_inbox_stalled`)
 return to 0 when nothing is left dead-lettered.
 
+A relay that can never succeed does not dead-letter anything: it burns no attempt, so those gauges stay 0 and
+only the log says so. The fourth gauge, `gremion_outbox_oldest_pending_seconds{ctx}`, is the age of the oldest
+row still waiting for the relay (0 when none). A value that keeps growing past a few minutes means the relay of
+that service cannot publish. The usual cause on the kernel API (`ctx` `idt`) is a customer without its
+`kernel-api` NATS seed (the log line names `no seed kernel-api/tenant_<slug>.nk`): run
+`gremion-tenant reconcile <slug> --apply`, which re-ensures the seed from the customer's current module set
+(see `docs/ops/runbook/upgrade.md`).
+
 ## 4. Rebuild after JetStream was lost
 
 The outbox outlives the stream (TRD-422). If the broker's volume was lost or a stream was deleted, recreate
@@ -92,7 +100,11 @@ docker compose --env-file /opt/gremion/etc/env/app-blue.env exec <service> pnpm 
 ```
 
 `<modules>` is the tenant's real enabled module list (`ensure` is declarative: an incomplete list removes the
-omitted modules' keys). `<identity>` is the NATS identity the service publishes as (`kernel` for the kernel's
+omitted modules' keys; read the list from the registry, do not guess it). `gremion-tenant reconcile <slug> --apply`
+does not replace this step: it repairs the account only when its check finds a missing or surplus seed or a stale
+accounts file, and it never looks at streams, so after a JetStream loss it reports ok and recreates nothing. The
+command adds the platform identity `kernel-api` to every list itself, so the kernel API's key is kept whatever list
+is typed. `<identity>` is the NATS identity the service publishes as (`kernel` for the kernel's
 services, the module's name otherwise). `<subjects-file>` is the service's event-type to subject map (shipped
 with the service). Add `--since <ISO date>` to re-publish only what was published after that instant. The replay needs
 the `published` rows to still exist: the purge keeps them at least as long as the stream's retention plus its

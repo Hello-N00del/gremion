@@ -56,13 +56,20 @@ export function pgModules(opts: {
       const r = await disableModule(c.id, module, { kind: actorKind ?? 'operator', id: operatorId }, { ...opts.lifecycle, platform: opts.platform, enableGate: undefined as never })
       return { noop: r.noop, dropped: r.dropped, database: r.database, export: r.export }
     },
-    async enabled(c: CustomerRef) {
-      const rows = await opts.platform<{ module_key: string }[]>`
-        SELECT m.module_key FROM plt.module_enablement e JOIN plt.module m USING (module_id)
-         WHERE e.customer_id = ${c.id} AND e.state = 'enabled' ORDER BY 1`
-      return rows.map((r) => r.module_key)
-    },
+    enabled: (c: CustomerRef) => enabledModuleKeys(opts.platform, c.id),
   }
+}
+
+/**
+ * The customer's CURRENT module set, as the registry holds it: module keys with an `enabled`
+ * plt.module_enablement row. The one reader (pgModules.enabled and `reconcile`, which re-ensures the
+ * customer's NATS account from it -- never from a guessed list, since nats-auth ensure is declarative).
+ */
+export async function enabledModuleKeys(platform: Sql, customerId: string): Promise<string[]> {
+  const rows = await platform<{ module_key: string }[]>`
+    SELECT m.module_key FROM plt.module_enablement e JOIN plt.module m USING (module_id)
+     WHERE e.customer_id = ${customerId} AND e.state = 'enabled' ORDER BY 1`
+  return rows.map((r) => r.module_key)
 }
 
 export interface BootstrapDeps {
