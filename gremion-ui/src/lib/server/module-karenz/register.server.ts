@@ -14,10 +14,12 @@
 // Both blue and green load this file; the step ledger keeps a repeat from redoing finished work.
 import { registerServerInitHook } from '$lib/server/modules/runtime-registry'
 import { registerModuleSwitchListener } from '$lib/server/module-switch/listeners'
+import { registerPreApplyHook } from '$lib/server/module-switch/reconciler'
 import { runWithTenant } from '$lib/server/tenant/context'
 import { resolveTenantBySlug } from '$lib/server/tenant/registry'
 import { forEachActiveTenant } from '$lib/server/tenant/worker-fleet'
 import { KARENZ_PASS_INTERVAL_MS, runKarenzPass } from './engine'
+import { erasureReplayPreApply } from './erasure'
 
 /** The id the pass reports under in logs and single-flight. */
 export const MODULE_KARENZ_WORKER = 'module-karenz'
@@ -26,6 +28,9 @@ export const MODULE_KARENZ_WORKER = 'module-karenz'
 const FIRST_TICK_DELAY_MS = 60_000
 
 registerServerInitHook(() => {
+  // Art. 17 during a Karenz (Task 12): the erasures recorded since the switch-off are replayed BEFORE an
+  // enabled module comes back. A replay that fails keeps the enable applying (the reconciler retries it).
+  registerPreApplyHook(erasureReplayPreApply)
   // Immediately after a switch reached the tenant (the reconciler tells its listeners once).
   registerModuleSwitchListener(async (e) => {
     if (e.outcome !== 'applied') return

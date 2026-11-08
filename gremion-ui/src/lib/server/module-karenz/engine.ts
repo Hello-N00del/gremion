@@ -41,6 +41,7 @@ import { listSwitches, type SwitchRow } from '$lib/server/module-switch/store'
 import type { TenantContext } from '$lib/server/tenant/context'
 import { KarenzPartialError, karenzParticipantsFor, type KarenzContext, type KarenzParticipant } from './participants'
 import { listKarenz, reportKarenz, type KarenzReport, type KarenzRowView } from './platform'
+import { oldestKeptSwitchOff, pruneKarenzErasure } from './erasure'
 import { reminderDue } from './mail'
 import { createNoticeStages } from './notices'
 import { retainedSinks } from './retained/extractors'
@@ -62,6 +63,11 @@ const DRY_REPORT_INTERVAL_MS = 24 * HOUR
 const RESTORE_STUCK_MS = HOUR
 /** The "no council pool" message with a Karenz on record is logged at most this often per tenant. */
 const NOT_CONFIGURED_LOG_INTERVAL_MS = 10 * 60_000
+/**
+ * The Art. 17 ledger is never pruned past the start of the pass minus this: an erasure recorded after the
+ * platform list was read may belong to a switch-off that list did not show yet.
+ */
+const LEDGER_PRUNE_SLACK_MS = 5 * 60_000
 /** The Karenz length, for the "is there local evidence of a live Karenz" check. */
 const KARENZ_WINDOW_MS = 31 * DAY
 
@@ -185,6 +191,8 @@ export interface KarenzPassDeps {
   startedActor: (tenant: TenantContext, catalogueId: string, switchedOffAt: Date) => Promise<string | null>
   /** True when the tenant holds local evidence of a live Karenz (used only when the council pool is not configured). */
   hasLocalEvidence: (tenant: TenantContext) => Promise<boolean>
+  /** Task 12: drop the Art. 17 ledger entries older than the cutoff (module_karenz_erasure). */
+  pruneErasure: (db: Sql, cutoff: Date) => Promise<number>
   now: () => Date
 }
 
@@ -255,6 +263,7 @@ function defaults(): KarenzPassDeps {
     writeAudit: (entry) => writeAuditEntry(entry),
     startedActor: defaultStartedActor,
     hasLocalEvidence: defaultHasLocalEvidence,
+    pruneErasure: pruneKarenzErasure,
     now: () => new Date(),
   }
 }
@@ -575,6 +584,7 @@ async function processRow(tenant: TenantContext, d: KarenzPassDeps, row: KarenzR
 
 async function pass(tenant: TenantContext, d: KarenzPassDeps): Promise<KarenzPassResult> {
   const counters: KarenzPassResult = { steps: 0, failed: 0 }
+  const startedAt = d.now()
   let rows: KarenzRowView[]
   try {
     rows = await d.listKarenz(tenant.id)
@@ -607,7 +617,22 @@ async function pass(tenant: TenantContext, d: KarenzPassDeps): Promise<KarenzPas
       console.error(`[module-karenz] ${tenant.slug}: the pass for Karenz ${row.karenzId} (${row.catalogueId}) stopped:`, err instanceof Error ? err.message : err)
     }
   }
+  await pruneLedger(tenant, d, rows, startedAt)
   return counters
+}
+
+/**
+ * Task 12: the Art. 17 ledger (subject ids erased while a module was off) is only needed back to the oldest
+ * switch-off that still has a database behind it; with none, back to the start of this pass. Best effort: a
+ * failure is logged and the next pass prunes. Not reached when the platform could not be read.
+ */
+async function pruneLedger(tenant: TenantContext, d: KarenzPassDeps, rows: readonly KarenzRowView[], startedAt: Date): Promise<void> {
+  try {
+    const cutoff = oldestKeptSwitchOff(rows) ?? new Date(startedAt.getTime() - LEDGER_PRUNE_SLACK_MS)
+    await d.pruneErasure(tenant.db, cutoff)
+  } catch (err) {
+    console.error(`[module-karenz] ${tenant.slug}: pruning the erasure ledger failed (the next pass retries):`, err instanceof Error ? err.message : err)
+  }
 }
 
 /**

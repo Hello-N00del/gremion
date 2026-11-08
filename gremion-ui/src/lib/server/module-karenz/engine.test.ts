@@ -111,6 +111,7 @@ interface Rig {
   audits: Array<{ userId: string; field: string; oldValue: string | null; newValue: string }>
   order: string[]
   listCalls: number
+  pruned: Date[]
   reportFails: { times: number }
   actor: string | null
   evidence: boolean
@@ -127,6 +128,7 @@ function rig(): Rig {
     audits: [] as Rig['audits'],
     order: [] as string[],
     listCalls: 0,
+    pruned: [] as Date[],
     reportFails: { times: 0 },
     actor: ACTOR as string | null,
     evidence: false,
@@ -163,6 +165,10 @@ function rig(): Rig {
     },
     startedActor: async () => r.actor,
     hasLocalEvidence: async () => r.evidence,
+    pruneErasure: async (_db, oldest) => {
+      r.pruned.push(oldest)
+      return 0
+    },
     now: () => r.now,
   })
   return r
@@ -567,6 +573,42 @@ describe('a pass without work', () => {
     rg.rows = [row({ state: 'restored' }), row({ karenzId: K2, state: 'finalized' })]
     expect(await pass()).toEqual({ steps: 0, failed: 0 })
     expect(rg.store.steps.size).toBe(0)
+  })
+
+  it('the Art. 17 ledger is pruned at the end of every pass, back to the oldest switch-off that still has a database (Task 12)', async () => {
+    rg.rows = [row({ state: 'restored', switchedOffAt: new Date(T0.getTime() - 20 * DAY) }), row({ karenzId: K2, state: 'finalized', switchedOffAt: new Date(T0.getTime() - 40 * DAY) }), row({ karenzId: K1, state: 'open' })]
+    await pass()
+    expect(rg.pruned).toEqual([new Date(T0.getTime() - 20 * DAY)])
+    // nothing keeps a database: back to the start of the pass (minus a slack), never past it
+    rg.rows = [row({ state: 'finalized' })]
+    await pass()
+    expect(rg.pruned.at(-1)).toEqual(new Date(rg.now.getTime() - 5 * MIN))
+  })
+
+  it('a ledger prune that fails is logged and never fails the pass or stops the rows', async () => {
+    rg.rows = [row()]
+    const p = part(rg, 'votes')
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const out = await runKarenzPass(tenant, {
+      ...rg.deps(),
+      pruneErasure: async () => {
+        throw new Error('tenant database down')
+      },
+    })
+    expect(p.calls).toEqual(['switchOff'])
+    expect(out.failed).toBe(0)
+    expect(err).toHaveBeenCalled()
+  })
+
+  it('a pass that could not read the platform prunes nothing (an unknown set of live switch-offs must not shorten the ledger)', async () => {
+    const out = await runKarenzPass(tenant, {
+      ...rg.deps(),
+      listKarenz: async () => {
+        throw new CouncilNotConfigured()
+      },
+    })
+    expect(out).toEqual({ steps: 0, failed: 0 })
+    expect(rg.pruned).toEqual([])
   })
 
   it('two concurrent passes for one tenant do not run a step twice (single-flight)', async () => {

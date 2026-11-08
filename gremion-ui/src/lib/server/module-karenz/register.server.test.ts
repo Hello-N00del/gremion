@@ -15,6 +15,8 @@ const h = vi.hoisted(() => ({
   runPass: vi.fn(),
   resolveTenantBySlug: vi.fn(),
   runWithTenant: vi.fn(),
+  registerPreApplyHook: vi.fn(),
+  replayHook: vi.fn(),
 }))
 
 vi.mock('$lib/server/modules/runtime-registry', () => ({
@@ -30,6 +32,8 @@ vi.mock('$lib/server/module-switch/listeners', () => ({
     h.listeners.push(l)
   }),
 }))
+vi.mock('$lib/server/module-switch/reconciler', () => ({ registerPreApplyHook: h.registerPreApplyHook }))
+vi.mock('./erasure', () => ({ erasureReplayPreApply: h.replayHook }))
 vi.mock('./engine', () => ({ KARENZ_PASS_INTERVAL_MS: 300_000, runKarenzPass: h.runPass }))
 
 const { MODULE_KARENZ_WORKER } = await import('./register.server')
@@ -40,6 +44,7 @@ beforeEach(() => {
   h.runPass.mockReset()
   h.resolveTenantBySlug.mockReset()
   h.runWithTenant.mockReset()
+  h.registerPreApplyHook.mockReset()
   h.runWithTenant.mockImplementation(async (_ctx: unknown, fn: () => unknown) => fn())
   vi.useFakeTimers()
   vi.spyOn(console, 'info').mockImplementation(() => {})
@@ -68,6 +73,12 @@ describe('module Karenz boot hook', () => {
     expect(h.forEachActiveTenant).toHaveBeenCalledTimes(2)
     await vi.advanceTimersByTimeAsync(300_000)
     expect(h.forEachActiveTenant).toHaveBeenCalledTimes(3)
+  })
+
+  it('registers the erasure replay as a pre-apply hook of the module switch (Task 12): it runs before an enabled module comes back', async () => {
+    await h.hooks[0]!()
+    expect(h.registerPreApplyHook).toHaveBeenCalledTimes(1)
+    expect(h.registerPreApplyHook).toHaveBeenCalledWith(h.replayHook)
   })
 
   it('registers a switch listener that runs the pass at once for an applied request, inside the tenant scope', async () => {
