@@ -127,7 +127,10 @@ describe('tenant-create phase-a env contract (TDD 19, G3)', () => {
       const root = mkdtempSync(join(tmpdir(), 't084-overlap-'))
       const inner = join(root, 'inner')
       mkdirSync(inner)
-      for (const [gov, tenant] of [[root, root], [root, inner], [inner, root]] as const) {
+      // a child whose NAME starts with two dots is still a child, not a parent step
+      const dotted = join(root, '..x')
+      mkdirSync(dotted)
+      for (const [gov, tenant] of [[root, root], [root, inner], [inner, root], [dotted, root], [root, dotted]] as const) {
         const out = refused({ GOVERNANCE_SECRETS_DIR: gov, TENANT_SECRETS_DIR: tenant }, 'GOVERNANCE_SECRETS_DIR')
         expect(out).toContain('TENANT_SECRETS_DIR')
       }

@@ -527,15 +527,19 @@ export function customerAdapters(o: CustomerAdapterOptions): Pick<ProvisioningDe
         if (existsSync(file)) {
           const text = readFileSync(file, 'utf-8').trim()
           let u: URL | null = null
+          let user: string | null = null
           try {
             u = new URL(text)
+            // a malformed percent sequence parses as a URL but does not decode: same refusal, not a bare URIError
+            user = decodeURIComponent(u.username)
+            if (u.password) appPassword = decodeURIComponent(u.password)
           } catch {
             u = null
+            appPassword = null
           }
-          if (!u || decodeURIComponent(u.username) !== roles.app || u.pathname !== `/${dbName}` || !u.password) {
+          if (!u || user !== roles.app || u.pathname !== `/${dbName}` || !u.password) {
             throw new Error(`the governance credential file ${file} is not the credential of ${roles.app} on ${dbName}: refusing to overwrite it; inspect it and remove it by hand to have it regenerated`)
           }
-          appPassword = decodeURIComponent(u.password)
         }
         const server = governanceServer(o.governanceAdminUrl)
         try {

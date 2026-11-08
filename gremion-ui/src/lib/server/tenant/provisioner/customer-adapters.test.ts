@@ -293,6 +293,14 @@ describe('customerAdapters.governance (TASK-084-a)', () => {
     expect(readFileSync(join(dir, HEX), 'utf8')).toBe('this is not a url')
   })
 
+  it('a credential file with a malformed percent sequence is refused with the file-naming error, not a bare URIError', async () => {
+    writeFileSync(join(dir, HEX), `postgresql://${APP}:bad%zzsecret@governance-postgres:5432/${DB}`)
+    const { a, govWritten } = adapters(kcFake(true), undefined, '/tenantsecrets', { governanceSecretsDir: dir })
+    await expect(a.governance.ensureDatabase(C)).rejects.toThrow(/refusing to overwrite/)
+    expect(govWritten).toEqual([])
+    expect(lc.ensureGovernanceDatabase).not.toHaveBeenCalled()
+  })
+
   it('a credential file for another role or database is refused the same way', async () => {
     writeFileSync(join(dir, HEX), 'postgresql://someone_else:x1234567890123456@governance-postgres:5432/other')
     const { a } = adapters(kcFake(true), undefined, '/tenantsecrets', { governanceSecretsDir: dir })

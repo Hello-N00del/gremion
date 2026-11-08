@@ -135,7 +135,7 @@ export function platformDatabases(service: string, opts: { compose: ComposeModel
       if (ps && ps.postgresService === service) for (const d of ps.databases) out.add(d)
     }
   } else if (SERVICE_LABEL.test(label)) {
-    // TASK-084-a: a dedicated service server (service:governance): the server built-ins and its init database only
+    // TASK-084-a: a dedicated service server (service:governance): its init database (added above) and the server built-ins, nothing else
     for (const d of SERVER_BUILTIN_DATABASES) out.add(d)
   } else {
     throw new Error(`${service} carries ${POSTGRES_LABEL}=${label}, neither kernel, module:<id> nor service:<id>`)

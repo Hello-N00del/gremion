@@ -159,8 +159,10 @@ async function databaseAcl(admin: Sql, dbName: string): Promise<{ grantee: strin
 /**
  * Creates (or re-asserts) the customer's governance database and roles on the
  * governance server. `server.admin` is the server's POSTGRES_USER. Idempotent,
- * and a rerun over a finished database issues no DDL except the password
- * verifier (the one thing the caller's secret can change). CONNECT goes ONLY
+ * and a rerun over a finished database issues no DDL except two ALTER ROLE
+ * statements: the purger's credential reset (PASSWORD NULL: at rest it holds no
+ * credential) and the app's password verifier (the one thing the caller's secret
+ * can change; a fresh salt, so it is rewritten on every call). CONNECT goes ONLY
  * to this customer's three roles: never PUBLIC, never gov_app / gov_purger.
  */
 export async function ensureGovernanceDatabase(server: ModuleServer, tenantId: string, appPassword: string): Promise<EnsureGovernanceResult> {
@@ -244,7 +246,7 @@ export async function ensureGovernanceDatabase(server: ModuleServer, tenantId: s
   return { dbName, created, ...roles }
 }
 
-/** The inverse, for tests and a future customer delete: DROP DATABASE ... WITH (FORCE), then the three roles. The group roles stay. Idempotent. */
+/** The inverse, run by the customer delete verb and by tests: DROP DATABASE ... WITH (FORCE), then the three roles. The group roles stay. Idempotent. */
 export async function dropGovernanceDatabase(server: ModuleServer, tenantId: string): Promise<{ dbName: string; dropped: boolean }> {
   const dbName = governanceDbName(tenantId)
   const roles = governanceRoles(tenantId)

@@ -221,10 +221,10 @@ teardown_rm() {
 # precreate_bind_dirs -- every host directory a compose file bind-mounts, made
 # HERE by the invoking user. A missing bind source is created by the Docker
 # daemon, root-owned, before customer-layout can (docker-compose.app.yml mounts
-# etc/secrets/control-panel, etc/secrets/tenant-create and data/module-exports;
-# the edge file provider reads etc/edge).
+# etc/secrets/control-panel, etc/secrets/tenant-create, etc/secrets/governance
+# and data/module-exports; the edge file provider reads etc/edge).
 precreate_bind_dirs() {
-    mkdir -p "$SROOT/etc/edge" "$SROOT/secrets/tenants" "$SROOT/etc/secrets/control-panel" "$SROOT/etc/secrets/tenant-create" "$SROOT/data/module-exports"
+    mkdir -p "$SROOT/etc/edge" "$SROOT/secrets/tenants" "$SROOT/etc/secrets/control-panel" "$SROOT/etc/secrets/tenant-create" "$SROOT/etc/secrets/governance" "$SROOT/data/module-exports"
 }
 
 # host_gateway_ip -- the address host-gateway resolves to for a container, when

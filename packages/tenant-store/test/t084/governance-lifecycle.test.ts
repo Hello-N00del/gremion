@@ -180,8 +180,11 @@ describe('ensureGovernanceDatabase / dropGovernanceDatabase', () => {
     const res = await ensureGovernanceDatabase({ admin: rec, open: server().open }, X, pwX)
     expect(res.created).toBe(false)
     const ddl = seen.filter((q) => /^(CREATE|ALTER|DROP|GRANT|REVOKE)/i.test(q.trim()))
-    expect(ddl.filter((q) => !/^ALTER ROLE .* PASSWORD /i.test(q.trim()))).toEqual([])
-    expect(ddl.length).toBeGreaterThan(0) // the password verifier is re-asserted
+    // exactly two statements: the purger's credential reset and the app's re-asserted verifier
+    const roles = governanceRoles(X)
+    const allowed = [new RegExp(`^ALTER ROLE "?${roles.purger}"? PASSWORD NULL$`, 'i'), new RegExp(`^ALTER ROLE "?${roles.app}"? PASSWORD '`, 'i')]
+    expect(ddl.filter((q) => !allowed.some((re) => re.test(q.trim())))).toEqual([])
+    expect(ddl.length).toBe(2)
   })
 
   it('refuses a database of that name owned by someone else; nothing in it is touched', async () => {

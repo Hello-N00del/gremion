@@ -40,6 +40,10 @@ import type { Tenant, TenantStatus, TenantSubsystem } from '$lib/server/tenant/r
 export interface DeleteDbExecutor {
   /** Idempotent: DROP DATABASE … WITH (FORCE) when present, then the three roles. */
   dropKernelDatabase(tenantId: string): Promise<void>
+  /** TASK-084-a: idempotent: DROP DATABASE t_<hex32>__governance WITH (FORCE), then its three roles
+   *  (a customer made before the governance server existed has neither: a no-op). Optional only so
+   *  older callers compile; the live delete verb always supplies it. */
+  dropGovernanceDatabase?(tenantId: string): Promise<void>
 }
 
 /** Client secret files a pre-TASK-043 provisioner wrote for clients no template
@@ -81,6 +85,9 @@ export interface DeleteDeps {
   registry: DeleteRegistry
   /** The HOST root for per-tenant secret files (mirrors tenantSecretHostPath). */
   tenantSecretsDir: string
+  /** TASK-084-a: the directory of the per-customer governance credential files (<hex32>, never under
+   *  tenantSecretsDir); the customer's file is shredded with the other secrets. */
+  governanceSecretsDir?: string
   /** T21 (§8.7) — optional: if the newsletter leaf PG is provisioned, shred its
    *  per-tenant DB + catalog row. A missing dep (leaf === undefined/null) means the
    *  leaf is not configured; the delete succeeds without it (no error).
@@ -179,11 +186,18 @@ export async function deleteTenant(slugInput: string, deps: DeleteDeps): Promise
   // instantly) plus every live per-tenant credential file. Idempotent: shredding
   // an already-gone file is a no-op, so a re-run is terminal-safe.
   const shreddedPaths = shredTargets(tenant, deps.tenantSecretsDir)
+  if (deps.governanceSecretsDir) {
+    shreddedPaths.push(`${deps.governanceSecretsDir.replace(/[/\\]+$/, '')}/${tenantId.replaceAll('-', '')}`)
+  }
   await deps.shredSecretFiles(shreddedPaths)
 
   // (3) drop the kernel database t_<hex32>__kernel and its three roles
   // (idempotent). The name follows the tenant ID, never the slug (TASK-043 Q3).
   await deps.db.dropKernelDatabase(tenantId)
+
+  // (3a) TASK-084-a: the governance database t_<hex32>__governance and its three roles (idempotent).
+  // A throw aborts the delete before the tombstone, like the leaf shred below.
+  if (deps.db.dropGovernanceDatabase) await deps.db.dropGovernanceDatabase(tenantId)
 
   // (3b) T21 §8.7 — leaf shred: drop the newsletter_<slug> DB on the leaf PG +
   // delete the tenant_catalog row. A missing `deps.leaf` means the leaf is not

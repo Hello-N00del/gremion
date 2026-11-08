@@ -1,5 +1,5 @@
 {
-  "$comment": "Per-file, sha256-pinned waivers of expand-lint rules for LOCKED files the lint refuses (suite.mjs section 2c). Not the baseline: the baseline is write-once and maps only pre-header files. A waiver is voided by any byte change (the lock pins the file anyway), may name only WAIVABLE_RULES, and is stale-checked (a waived rule that no longer fires fails). A new file never gets one by default: fix the file while it is unlocked. TASK-084-a names the exceptions drop and set-expression (platform 0014) and revoke (governance 0001).",
+  "$comment": "Per-file, sha256-pinned waivers of expand-lint rules for LOCKED files the lint refuses (suite.mjs section 2c). Not the baseline: the baseline is write-once and maps only pre-header files. A waiver is voided by any byte change (the lock pins the file anyway), may name only WAIVABLE_RULES, and is stale-checked (a waived rule that no longer fires fails). A new file never gets one by default: fix the file while it is unlocked. TASK-084-a names the exceptions drop and set-expression (platform 0015) and revoke (governance 0001).",
   "waivers": [
     {
       "chain": "platform",

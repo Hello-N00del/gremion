@@ -130,6 +130,32 @@ describe('deleteTenant — crypto-shred-first ordering', () => {
     expect(h.deps.db.dropKernelDatabase).toHaveBeenCalledWith('id-t2')
   })
 
+  // TASK-084-a review: phase A creates a governance database, its three roles and a credential file for
+  // every customer, so delete must not report DELETED while they survive.
+  it('TASK-084-a: drops the governance database by the tenant ID and shreds its credential file, before the tombstone', async () => {
+    const h = harness()
+    const drop = vi.fn(async (_id: string) => {
+      h.order.push('gov-drop')
+    })
+    h.deps.db.dropGovernanceDatabase = drop
+    h.deps.governanceSecretsDir = '/gov/secrets/'
+    await deleteTenant('t2', h.deps)
+    expect(drop).toHaveBeenCalledWith('id-t2')
+    const paths = (h.deps.shredSecretFiles as any).mock.calls[0][0] as string[]
+    expect(paths).toContain('/gov/secrets/idt2')
+    const lifecycle = h.order.filter((s) => s === 'shred' || s === 'db-drop' || s === 'gov-drop' || s === 'status:deleted')
+    expect(lifecycle).toEqual(['shred', 'db-drop', 'gov-drop', 'status:deleted'])
+  })
+
+  it('TASK-084-a: a failing governance drop aborts the delete before the tombstone and leaves it retryable', async () => {
+    const h = harness()
+    h.deps.db.dropGovernanceDatabase = vi.fn(async () => {
+      throw new Error('boom: governance drop failed')
+    })
+    await expect(deleteTenant('t2', h.deps)).rejects.toThrow(/governance drop failed/)
+    expect(h.row?.status).toBe('deleting')
+  })
+
   it('marks NC + Matrix for manual teardown (silo satellites the script cannot reach)', async () => {
     const h = harness()
     await deleteTenant('t2', h.deps)

@@ -303,7 +303,8 @@ export function tenantMountsExposeGovernance(render, governanceHostDir) {
     for (const v of svc.volumes ?? []) {
       if (v.target !== '/run/secrets/tenants' || v.type !== 'bind') continue
       const rel = path.posix.relative(norm(v.source), gov)
-      if (rel === '' || !rel.startsWith('..')) out.push(name)
+      // only a real parent step ('..' or '../x') means the governance directory is outside the mount source
+      if (rel === '' || (rel !== '..' && !rel.startsWith('../'))) out.push(name)
     }
   }
   return [...new Set(out)]

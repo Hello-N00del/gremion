@@ -539,6 +539,9 @@ test('tenantMountsExposeGovernance: pure path math (equal, parent, sibling, chil
   assert.deepEqual(tenantMountsExposeGovernance(r('/opt/gremion'), gov), ['a'])
   assert.deepEqual(tenantMountsExposeGovernance(r('/opt/gremion/secrets/tenants'), gov), [])
   assert.deepEqual(tenantMountsExposeGovernance(r('/opt/gremion/etc/secrets/governance-other'), gov), [])
+  // a directory whose NAME starts with two dots is a child, not a parent step
+  assert.deepEqual(tenantMountsExposeGovernance(r('/opt/gremion/etc/secrets'), '/opt/gremion/etc/secrets/..gov'), ['a'])
+  assert.deepEqual(tenantMountsExposeGovernance(r('/opt/gremion/etc/secrets/governance'), '/opt/gremion/etc/secrets/..gov'), [])
 })
 
 // TASK-075: init and phase B write release_ref into every ledger row they

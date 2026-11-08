@@ -192,6 +192,19 @@ describe('0001_gov_setup.sql on a fresh governance database', () => {
     expect(s?.code).toBe('42501')
   })
 
+  // The chain is part 2 of the schema, verbatim (plan R6). gov.remove_test_run names gov.poll and the
+  // erasure guard calls gov.redaction_covers; both objects belong to a later part of the schema and are
+  // NOT in 0001. regression-1.sql and regression-2.sql stand them in as test doubles. This records the gap:
+  // when a later chain file creates them, this test fails and the doubles are to be dropped from the fixtures.
+  it('the objects 0001 only refers to (gov.poll, gov.redaction_covers) are absent from the shipped schema; the fixtures stand them in', async () => {
+    const rows = await owner<{ poll: string | null; covers: string | null }[]>`
+      SELECT to_regclass('gov.poll')::text AS poll,
+             to_regprocedure('gov.redaction_covers(uuid,text,text,text[])')::text AS covers`
+    expect(rows[0]).toEqual({ poll: null, covers: null })
+    expect(readFileSync(join(FIXTURES, 'regression-1.sql'), 'utf8')).toMatch(/CREATE TABLE IF NOT EXISTS gov\.poll/)
+    expect(readFileSync(join(FIXTURES, 'regression-2.sql'), 'utf8')).toMatch(/CREATE OR REPLACE FUNCTION gov\.redaction_covers/)
+  })
+
   it('SCHEMA 2.21 regression 1 and 2 pass as the owner and leave no meeting behind', async () => {
     for (const f of ['regression-1.sql', 'regression-2.sql']) {
       const text = readFileSync(join(FIXTURES, f), 'utf8')

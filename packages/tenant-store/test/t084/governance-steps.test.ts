@@ -165,7 +165,8 @@ describe('migrateGovernanceDatabase / bindGovernanceDatabase / governancePostCon
     const X = await fresh()
     for (const releaseRef of ['', 'r'.repeat(65), 'dist\nref']) {
       const e = await failure(migrateGovernanceDatabase(server(), X, { ...opts, releaseRef }))
-      expect(e).toBeInstanceOf(Error)
+      expect(e).toBeInstanceOf(LifecycleError)
+      expect((e as unknown as LifecycleError).code).toBe('INVALID_INPUT')
     }
     const o = adminOn(governanceDbName(X))
     pools.push(o)

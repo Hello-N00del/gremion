@@ -32,7 +32,7 @@
 // 2 usage or a precondition (a missing environment variable is always named).
 import { createHash, randomBytes } from 'node:crypto'
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
-import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import postgres from 'postgres'
 import { handConfigToReader, handToReader, isTenantConfigPath, writeReaderConfigFile } from './tenant-secret-file'
 import {
@@ -69,6 +69,7 @@ import {
 } from '@gremion/provisioning'
 import {
   assertPlatform,
+  dropGovernanceDatabase,
   dropKernelDatabase,
   ensureKernelApiReader,
   KERNEL_API_READS,
@@ -92,7 +93,7 @@ import {
   type Tenant,
 } from '../src/lib/server/tenant/registry'
 import { KcProvisionApi, masterAdminClientId, type KcTransport } from '../src/lib/server/tenant/provisioner/kc-admin-api'
-import { customerAdapters, kernelServer, reconcileKernelAudit } from '../src/lib/server/tenant/provisioner/customer-adapters'
+import { customerAdapters, governanceServer, kernelServer, reconcileKernelAudit } from '../src/lib/server/tenant/provisioner/customer-adapters'
 import { fixtureIdentities } from '../src/lib/server/tenant/provisioner/fixture-identities'
 import {
   reconcileRealm,
@@ -238,7 +239,8 @@ const tenantSecretsDir = () => process.env.TENANT_SECRETS_DIR ?? join(repoRoot, 
 function pathsOverlap(a: string, b: string): boolean {
   const inside = (parent: string, child: string) => {
     const rel = relative(resolve(parent), resolve(child))
-    return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel))
+    // only a real parent step ('..' or '..' + separator) means outside; a child NAMED '..x' is inside
+    return rel === '' || (rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel))
   }
   return inside(a, b) || inside(b, a)
 }
@@ -247,8 +249,8 @@ function pathsOverlap(a: string, b: string): boolean {
  * TASK-084-a: the directory of the per-customer governance credential files
  * (GOVERNANCE_SECRETS_DIR, the container path of the rw mount): it must exist
  * (the host creates it, gremion-tenant), and it must not be, contain or sit
- * inside TENANT_SECRETS_DIR, whose read-only mounts on gremion-ui, migrate and
- * control-panel would otherwise expose every governance credential. Exit 2,
+ * inside TENANT_SECRETS_DIR, whose read-only mounts on gremion-ui, kernel-api
+ * and kernel-api-migrate would otherwise expose every governance credential. Exit 2,
  * both variables named, before any connection. The uid hand-over to the
  * governance image is 084-b (GOVERNANCE_SECRETS_UID, DV4).
  */
@@ -1017,6 +1019,21 @@ async function cmdDelete(): Promise<void> {
   const slug = slugArg('delete')
   const kc = provisionerKc()
   const server = kernelServer(directPostgresUrl('KERNEL_PG_ADMIN_FILE', reqFileEnv('KERNEL_PG_ADMIN_FILE')))
+  // TASK-084-a: phase A made a governance database and a credential file for the customer; delete drops both.
+  // Named and checked BEFORE anything is shredded, like the kernel server's own variable.
+  let govServer: ModuleServer
+  let govDir: string
+  try {
+    govServer = governanceServer(directPostgresUrl('GOVERNANCE_PG_ADMIN_FILE', reqFileEnv('GOVERNANCE_PG_ADMIN_FILE')))
+    govDir = governanceSecretsDir()
+  } catch (err) {
+    await server.close()
+    throw err
+  }
+  const closeServers = async () => {
+    await server.close()
+    await govServer.close()
+  }
   // Never report DELETED while the customer's data survives (review B2, r2).
   // Refused BEFORE anything is shredded: a pre-TASK-043 t_<slug> database
   // (dropKernelDatabase only knows t_<hex32>__kernel), and live per-customer
@@ -1043,7 +1060,7 @@ async function cmdDelete(): Promise<void> {
         await platform.end({ timeout: 5 })
       }
     } catch (err) {
-      await server.close()
+      await closeServers()
       throw err
     }
   }
@@ -1058,18 +1075,22 @@ async function cmdDelete(): Promise<void> {
       dropKernelDatabase: async (tenantId) => {
         kernelDb.dropped = (await dropKernelDatabase(server, tenantId)).dropped
       },
+      dropGovernanceDatabase: async (tenantId) => {
+        await dropGovernanceDatabase(govServer, tenantId)
+      },
     },
     kc: { deleteRealm: (realm) => kc.deleteRealm(realm) },
     registry: { getTenantBySlug, updateTenantStatus, markTenantResourceFailed, evictTenantRuntime },
     tenantSecretsDir: tenantSecretsDir(),
+    governanceSecretsDir: govDir,
     ...(leaf ? { leaf } : {}),
   }
   try {
     const result = await deleteTenant(slug, deps)
     const kernel = kernelDb.dropped === true ? 'kernel database dropped' : kernelDb.dropped === false ? 'no kernel database was present' : 'kernel database not touched'
-    log(result.shredded ? `${slug} DELETED (${result.shreddedPaths.length} secret file(s) shredded, ${kernel}, realm dropped, row tombstoned)` : `${slug} is already a tombstone`)
+    log(result.shredded ? `${slug} DELETED (${result.shreddedPaths.length} secret file(s) shredded, ${kernel}, governance database dropped, realm dropped, row tombstoned)` : `${slug} is already a tombstone`)
   } finally {
-    await server.close()
+    await closeServers()
   }
 }
 
