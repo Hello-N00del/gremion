@@ -964,8 +964,9 @@ async function cmdDelete(): Promise<void> {
   // Never report DELETED while the customer's data survives (review B2, r2).
   // Refused BEFORE anything is shredded: a pre-TASK-043 t_<slug> database
   // (dropKernelDatabase only knows t_<hex32>__kernel), and live per-customer
-  // module databases (delete has no module drop yet: the disable verb is
-  // TASK-044/077's). Both are named residuals, never silent.
+  // module databases (delete has no module drop: a switched-off module's
+  // database is dropped by the Karenz day-30 job, karenz-run). Both are named
+  // residuals, never silent.
   const tenant = await getTenantBySlug(slug)
   if (tenant && tenant.status !== 'deleted') {
     try {
