@@ -8,7 +8,7 @@
 //
 // A missing object is success (the backend's own rule), which the day-30 job needs to converge after a crash
 // between the delete and the row update.
-import { basename } from 'node:path'
+import { basename, resolve } from 'node:path'
 import { LocalStorageBackend, type StorageBackend } from '@gremion/storage'
 import { assertKarenzExportPath } from './guards.js'
 
@@ -34,9 +34,10 @@ export function exportStorageFor(deps: ExportRemoveDeps, tenantId: string): Stor
  * <exportDir>/<tenant>/<module>/ (assertKarenzExportPath, checked before the storage is touched).
  */
 export async function removeKarenzExport(path: string, deps: ExportRemoveDeps, tenantId: string, moduleId: string): Promise<void> {
-  assertKarenzExportPath(path, deps.exportDir, tenantId, moduleId)
+  const valid = assertKarenzExportPath(path, deps.exportDir, tenantId, moduleId)
   const storage = exportStorageFor(deps, tenantId)
-  const handle = `${tenantId}/${moduleId}/${basename(path)}`
+  // the file name of the path the guard RESOLVED and approved ('x.dump/.' is 'x.dump' to the guard)
+  const handle = `${tenantId}/${moduleId}/${basename(resolve(valid))}`
   await storage.delete(handle)
   await storage.delete(`${handle}.sha256`)
 }

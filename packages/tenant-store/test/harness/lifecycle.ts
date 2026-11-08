@@ -7,7 +7,7 @@
 // container (PostgreSQL 18, the server's own major), by its explicit name.
 import { randomBytes, randomUUID } from 'node:crypto'
 import { mkdirSync, writeFileSync } from 'node:fs'
-import { join, resolve } from 'node:path'
+import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { Sql } from '@gremion/db'
 import { LocalStorageBackend, type StorageBackend } from '@gremion/storage'
@@ -16,6 +16,7 @@ import type { ComposeModel } from '@gremion/module-catalogue/runtime'
 import { pgDumpExporter } from '../../src/lifecycle/export.js'
 import type { EnableGate, Exporter, LifecycleDeps, LifecycleModule, ModuleServer } from '../../src/lifecycle/types.js'
 import { connect, connectModule, stack } from './db.js'
+import { mountinfoLine } from './mountinfo.js'
 
 /** The compose service names of the harness servers (the generated compose file). */
 export const KERNEL_SERVICE = 'pg'
@@ -137,8 +138,7 @@ export function containerExporter(): Exporter {
 export function scratchExportStorage(exportDir: string): (tenantId: string) => StorageBackend {
   mkdirSync(EXPORT_ROOT, { recursive: true })
   const mountinfoPath = join(EXPORT_ROOT, `mountinfo.${process.pid}`)
-  writeFileSync(mountinfoPath, `36 1 8:1 / ${resolve(exportDir)} rw - ext4 /dev/scratch rw
-`)
+  writeFileSync(mountinfoPath, mountinfoLine(exportDir))
   return (tenantId) => new LocalStorageBackend(tenantId, { root: exportDir, mountinfoPath, platform: 'linux' })
 }
 

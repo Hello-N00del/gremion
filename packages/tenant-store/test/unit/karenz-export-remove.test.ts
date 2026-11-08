@@ -2,10 +2,11 @@
 // (@gremion/storage), never with a raw fs call (scripts/check-storage-seam.mjs, guard s3).
 import { mkdirSync, mkdtempSync, existsSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { join } from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
 import { LocalStorageBackend, MemoryStorageBackend, type StorageBackend } from '@gremion/storage'
 import { removeKarenzExport } from '../../src/lifecycle/export-remove.js'
+import { mountinfoLine } from '../harness/mountinfo.js'
 
 const T = '0192f0c1-2b3c-7d4e-8f00-112233445566'
 const U = '0192f0c1-2b3c-7d4e-8f00-665544332211'
@@ -41,6 +42,12 @@ describe('removeKarenzExport', () => {
     expect(seen[0]!.deleted).toEqual([`${T}/lcfix/20261031T000000000Z.dump`, `${T}/lcfix/20261031T000000000Z.dump.sha256`])
   })
 
+  it('deletes the handle of the VALIDATED path, not of the raw string (a trailing dot segment must not change what is deleted)', async () => {
+    const seen: ReturnType<typeof recording>[] = []
+    await removeKarenzExport(`${path}/.`, { exportDir: dir, exportStorage: (t) => (seen.push(recording(t)), seen[seen.length - 1]!) }, T, 'lcfix')
+    expect(seen[0]!.deleted).toEqual([`${T}/lcfix/20261031T000000000Z.dump`, `${T}/lcfix/20261031T000000000Z.dump.sha256`])
+  })
+
   it('refuses a path outside <exportDir>/<tenant>/<module>/ before the storage is asked for anything', async () => {
     let asked = 0
     const deps = { exportDir: dir, exportStorage: (t: string) => (asked++, recording(t)) }
@@ -62,11 +69,12 @@ describe('removeKarenzExport', () => {
 })
 
 describe('removeKarenzExport on the local backend', () => {
-  const root = mkdtempSync(join(tmpdir(), 'karenz-export-remove-'))
+  // a space in the scratch root: the mount table escapes it as \040, so the fake table must too
+  const root = mkdtempSync(join(tmpdir(), 'karenz export remove '))
   afterAll(() => rmSync(root, { recursive: true, force: true }))
   // a mount table that lists the scratch root, so the seam's mount check passes on any host
   const mountinfo = join(root, 'mountinfo')
-  writeFileSync(mountinfo, `36 1 8:1 / ${resolve(root)} rw - ext4 /dev/sda1 rw\n`)
+  writeFileSync(mountinfo, mountinfoLine(root))
   const exportStorage = (t: string) => new LocalStorageBackend(t, { root, mountinfoPath: mountinfo, platform: 'linux' })
 
   it('removes the dump and the sidecar from disk and leaves a sibling dump and another tenant alone', async () => {

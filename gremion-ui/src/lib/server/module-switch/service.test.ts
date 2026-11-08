@@ -1,8 +1,9 @@
 // @vitest-environment node
 //
 // Karenz phase 1, Task 11: the council module switch. A council admin switches a module ON through
-// the platform request queue (plt.submit_council_module_request); a switch OFF is refused
-// DISABLE_NOT_YET until phase 2 flips COUNCIL_DISABLE_ALLOWED. The platform pool, the tenant store,
+// the platform request queue (plt.submit_council_module_request); a switch OFF was refused
+// DISABLE_NOT_YET until phase 2 flipped COUNCIL_DISABLE_ALLOWED (it is queued now; the refusal stays
+// reachable through the injected flag). The platform pool, the tenant store,
 // the config and the audit writer are doubles; the guards, the order of the guards and the exact
 // platform arguments are what these tests pin.
 import { beforeEach, describe, expect, it, vi } from 'vitest'

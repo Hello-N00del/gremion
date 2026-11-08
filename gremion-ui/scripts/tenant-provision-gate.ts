@@ -28,7 +28,7 @@
 // H10-authenticated release tree. A refusal is an EnableRefused: exit 1 with
 // its code and reason on stderr (tenant-provision.ts's exit mapping).
 import { readFileSync } from 'node:fs'
-import { existsSync } from 'node:fs'
+import { assertMountedRoot, DEFAULT_MOUNTINFO_PATH } from '@gremion/storage'
 import type postgres from 'postgres'
 import {
   attestedEnablements,
@@ -159,12 +159,15 @@ async function cmdEnableModule(ctx: GateVerbContext): Promise<void> {
  * must outlive this one-shot container (docker compose run --rm). So the verb refuses,
  * before anything is touched, unless TENANT_EXPORT_DIR is its own mount.
  */
-export function exportDirIsMounted(dir: string, mountinfo = '/proc/self/mountinfo'): boolean {
-  if (!existsSync(mountinfo)) return false
-  const want = dir.replace(/\/+$/, '')
-  return readFileSync(mountinfo, 'utf-8')
-    .split('\n')
-    .some((l) => l.split(' ')[4] === want)
+export function exportDirIsMounted(dir: string, mountinfo = DEFAULT_MOUNTINFO_PATH): boolean {
+  // The storage seam's own check (the day-30 job deletes through it): a root it would refuse at day 30 (not a
+  // mount point, a memory-backed or root filesystem, an unreadable table) is refused here, before the
+  // database is blocked. A host without a mount table cannot prove it, which is a refusal.
+  try {
+    return assertMountedRoot(dir, mountinfo).checked
+  } catch {
+    return false
+  }
 }
 
 async function cmdDisableModule(ctx: GateVerbContext): Promise<void> {
