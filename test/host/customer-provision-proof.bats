@@ -183,3 +183,119 @@ run_cp() { # <bash code run after sourcing the proof and the fakes>
     local body; body="$(sed -n '/^phase_customer_before() {/,/^}/p' "$PROOF")"
     grep -q 'need_pooled no-operator' <<< "$body"
 }
+
+# ── TASK-084-a: the ninth ledger kind and the governance database ────────────
+# The unit writes nine step kinds per customer (governance_database_created), so
+# the proof expects 9/9 done rows, has a phase for A3-A7 and fingerprints the
+# governance database. Static guards: a live run needs a pooled stack.
+
+@test "the create-check expects nine done ledger rows, one per kind, and no stale 8/8 (TASK-084-a)" {
+    local body; body="$(sed -n '/^phase_customer_create_check() {/,/^}/p' "$PROOF")"
+    grep -qF '== "9/9"' <<< "$body"
+    grep -q 'nine done ledger rows' <<< "$body"
+    # Last on purpose (see above): no done-row count of eight is left anywhere in the proof.
+    ! grep -qE '"8/8"|eight done ledger rows' "$PROOF"
+}
+
+@test "customer-governance-db is a phase: run_phase dispatches it, the header documents it, and it is defined (A3-A7)" {
+    grep -qE '^        customer-governance-db\) phase_customer_governance_db ;;$' "$PROOF"
+    grep -qE '^#   customer-governance-db ' "$PROOF"
+    grep -q '^phase_customer_governance_db() {' "$PROOF"
+}
+
+@test "customer-governance-db asserts A3 to A7 from the running system (database list, binding, ledger sha256, FORCE RLS, datacl, cross-credential refusals, RLS matrix, rerun, credential placement)" {
+    local body; body="$(sed -n '/^phase_customer_governance_db() {/,/^}/p;/^gov_a[3-7]() {/,/^}/p' "$PROOF")"
+    [ -n "$body" ]
+    # A3: the two databases on governance-postgres, one binding row each, the lock's sha256, FORCE RLS, datacl
+    grep -qF "LIKE 't\\\\_%\\\\_\\\\_governance'" <<< "$body"
+    grep -q 'gov.database_binding' <<< "$body"
+    grep -q 'gov.schema_migration' <<< "$body"
+    grep -q 'applied.lock.json' <<< "$body"
+    grep -q 'relforcerowsecurity' <<< "$body"
+    grep -q 'aclexplode' <<< "$body"
+    # A4: both cross-credential refusals, the kernel credential, no CONNECT for the group roles
+    grep -q 'permission denied for database' <<< "$body"
+    grep -q 'tenant_.*_db' <<< "$body"
+    grep -q 'gov_app' <<< "$body"
+    # A5: the RLS matrix as the customer's app role
+    grep -q 'gremion.customer_id' <<< "$body"
+    # A6: a second create request changes nothing
+    grep -q 'panel_create' <<< "$body"
+    # A7: credential placement
+    grep -q 'etc/secrets/governance' <<< "$body"
+    grep -q 'docker inspect' <<< "$body"
+}
+
+@test "customer-governance-db never prints a credential: the password rides a name-only -e, never an argv" {
+    local body; body="$(sed -n '/^phase_customer_governance_db() {/,/^}/p;/^gov_login() {/,/^}/p;/^gov_cred() {/,/^}/p;/^gov_a[3-7]() {/,/^}/p' "$PROOF")"
+    [ -n "$body" ]
+    grep -q 'docker exec -e PGPASSWORD' "$PROOF"
+    # Last on purpose: no inline PGPASSWORD= assignment in the phase or its helpers.
+    ! grep -qE -- '-e PGPASSWORD=|PGPASSWORD=[^"]*$' <<< "$body"
+}
+
+@test "the stored-data fingerprint covers the governance database of the customer (TASK-084-a, PRD-OPS-004)" {
+    local body; body="$(sed -n '/^data_fingerprint() {/,/^}/p' "$PROOF")"
+    grep -q 'governance-postgres' <<< "$body"
+    grep -q '__governance' <<< "$body"
+}
+
+# The A3 checks run against fake q / qg readers: a database that reads as the brief
+# says is GREEN, and each deviation (foreign binding, wrong lock sha256, an unforced
+# table, a PUBLIC CONNECT) goes RED on its own.
+gov_world='
+GOV_ID=01927f00-0000-7000-8000-000000000001; GOV_HEX=01927f00000070008000000000000001
+GOV_SHA="$(jq -r ".chains.governance.files[\"0001_gov_setup.sql\"]" "$ROOT/scripts/migrations/applied.lock.json")"
+: "${G_BINDING:=1:${GOV_ID}:proof_x:gov}" "${G_SHA:=$GOV_SHA}" "${G_FORCE:=19/0}" "${G_ACL:=g_${GOV_HEX}_app,g_${GOV_HEX}_owner,g_${GOV_HEX}_purger}"
+q() { case "$2" in *governance_database_created*) echo 1 ;; *) echo "fake q: $2" >&2; return 1 ;; esac; }
+qg() { case "$2" in
+    *"count(*) FROM pg_database WHERE datname"*) echo 1 ;;
+    *"FROM gov.database_binding"*) echo "$G_BINDING" ;;
+    *"FROM gov.schema_migration"*) echo "0001_gov_setup.sql ${G_SHA}" ;;
+    *relforcerowsecurity*) echo "$G_FORCE" ;;
+    *aclexplode*) echo "$G_ACL" ;;
+    *) echo "fake qg: $2" >&2; return 1 ;; esac; }'
+
+@test "A3 on a database that reads as the brief says is GREEN (positive control for the drill below)" {
+    cp_unit_setup "$SHA_A"
+    run_cp "$gov_world"'; gov_a3 proof-x "$GOV_ID"; echo "RED=$RED"'
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"RED=0"* ]]
+    [[ "$output" == *"datacl grants CONNECT to its own owner, app and purger roles only"* ]]
+    [[ "$output" == *"sha256 of applied.lock.json"* ]]
+}
+
+@test "A3 goes RED on each deviation alone: another customer's binding, a stale sha256, an unforced table, a PUBLIC CONNECT" {
+    cp_unit_setup "$SHA_A"
+    local d want
+    while IFS='|' read -r d want; do
+        run_cp "$d"'; '"$gov_world"'; gov_a3 proof-x "$GOV_ID"; echo "RED=$RED"'
+        [ "$status" -eq 0 ]
+        [[ "$output" == *"RED=1"* ]] || { echo "not RED for ${d}: ${output}" >&2; return 1; }
+        [[ "$output" == *"$want"* ]] || { echo "no '${want}' for ${d}: ${output}" >&2; return 1; }
+    done <<'EOF'
+G_BINDING=1:01927f00-0000-7000-8000-0000000000ff:proof_x:gov|gov.database_binding reads '1:01927f00-0000-7000-8000-0000000000ff
+G_SHA=0000000000000000000000000000000000000000000000000000000000000000|differs from applied.lock.json
+G_FORCE=19/1|without FORCE row level security: 19/1
+G_ACL=PUBLIC,g_01927f00000070008000000000000001_app|CONNECT grantees on t_01927f00000070008000000000000001__governance are 'PUBLIC,g_
+EOF
+}
+
+@test "gov_cred reads one field of a postgres URL credential file and refuses anything else" {
+    cp_unit_setup "$SHA_A"
+    local f="${BATS_TEST_TMPDIR}/cred"
+    printf 'postgresql://g_abc_app:S3cretValue@governance-postgres:5432/t_abc__governance?sslmode=disable\n' > "$f"
+    run_cp "gov_cred '$f' user; echo; gov_cred '$f' database; echo; gov_cred '$f' password; echo"
+    [ "$status" -eq 0 ]
+    [ "${lines[0]}" = g_abc_app ]
+    [ "${lines[1]}" = t_abc__governance ]
+    [ "${lines[2]}" = S3cretValue ]
+    printf 'not a url\n' > "$f"
+    run_cp "gov_cred '$f' user && echo parsed || echo refused; gov_cred '${BATS_TEST_TMPDIR}/absent' user && echo parsed || echo refused"
+    [ "${lines[0]}" = refused ]
+    [ "${lines[1]}" = refused ]
+}
+
+@test "the shim's phase A line names the governance step (the fixture mirrors the nine kinds)" {
+    grep -qF 'ran [realm_created, database_created, governance_database_created]' "$REPO_ROOT/test/host/fixtures/executor/docker-shim"
+}

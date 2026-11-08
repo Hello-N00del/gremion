@@ -15,6 +15,8 @@ import assert from 'node:assert/strict'
 import { bindRefusesMissingHostDir } from './compose-edge.mjs'
 import {
   PLACEMENT,
+  SERVICE_POSTGRES_IDS,
+  tenantMountsExposeGovernance,
   limitsViolations,
   statePurityViolations,
   appShapeViolations,
@@ -109,6 +111,12 @@ test('the synthetic good renders are clean under every rule (the RED cases below
 })
 
 // ── 1. limits (TRD-177) ────────────────────────────────────────────────────
+
+test('TASK-084-a: governance-postgres is a council-store on the state network only', () => {
+  assert.deepEqual([...SERVICE_POSTGRES_IDS], ['governance'])
+  assert.deepEqual(PLACEMENT.state['governance-postgres'], { class: 'council-store', networks: ['state'] })
+  assert.equal(PLACEMENT.app['governance-postgres'], undefined)
+})
 
 test('limits: a service without limits fails, by name, for memory and cpus', () => {
   const r = stateRender()
@@ -452,6 +460,88 @@ test('real renders: tenant-create reads TENANT_PROVISIONER_SECRET_FILE from its 
       assert.equal(svc.environment?.TENANT_PROVISIONER_SECRET_FILE, undefined, `${colour}: ${name} names the provisioner credential`)
     }
   }
+})
+
+// TASK-084-a: the governance admin credential and the per-customer credential
+// directory reach tenant-create ONLY. The directory is a host path of its own,
+// mounted read-write there; no other service mounts it, and no
+// /run/secrets/tenants mount (read-only on the other containers) may be the
+// directory or a parent of it.
+const GOV_DIR = 'etc/secrets/governance'
+const isGovDir = (v) => v.type === 'bind' && String(v.source).replaceAll('\\', '/').endsWith(`/${GOV_DIR}`)
+test('real renders: tenant-create carries GOVERNANCE_PG_ADMIN_FILE and GOVERNANCE_SECRETS_DIR; the etc/secrets/governance mount is read-write on tenant-create and on NO other service', () => {
+  for (const { project, colour } of [
+    { project: PROJECTS[1], colour: 'blue' },
+    { project: PROJECTS[2], colour: 'green' },
+  ]) {
+    const render = renderProject(project)
+    const tc = render.services?.['tenant-create']
+    assert.equal(tc.environment?.GOVERNANCE_PG_ADMIN_FILE, '/run/secrets/tenant-create/governance_pg_admin', `${colour}: GOVERNANCE_PG_ADMIN_FILE`)
+    assert.equal(tc.environment?.GOVERNANCE_SECRETS_DIR, '/run/secrets/governance', `${colour}: GOVERNANCE_SECRETS_DIR`)
+    const mounts = (tc.volumes ?? []).filter((v) => v.target === '/run/secrets/governance')
+    assert.equal(mounts.length, 1, `${colour}: tenant-create mounts /run/secrets/governance ${mounts.length} times`)
+    assert.ok(isGovDir(mounts[0]), `${colour}: not the ${GOV_DIR} bind (${JSON.stringify(mounts[0])})`)
+    assert.notEqual(mounts[0].read_only, true, `${colour}: the governance credential directory must be writable by tenant-create`)
+    for (const [name, svc] of Object.entries(render.services ?? {})) {
+      if (name === 'tenant-create') continue
+      assert.ok(!(svc.volumes ?? []).some(isGovDir), `${colour}: ${name} mounts ${GOV_DIR}`)
+      assert.ok(!(svc.volumes ?? []).some((v) => v.target === '/run/secrets/governance'), `${colour}: ${name} mounts /run/secrets/governance`)
+      assert.equal(svc.environment?.GOVERNANCE_SECRETS_DIR, undefined, `${colour}: ${name} names GOVERNANCE_SECRETS_DIR`)
+    }
+  }
+})
+
+test('real renders: no /run/secrets/tenants mount is the governance directory or a parent of it', () => {
+  for (const { project, colour } of [
+    { project: PROJECTS[1], colour: 'blue' },
+    { project: PROJECTS[2], colour: 'green' },
+  ]) {
+    const render = renderProject(project)
+    const gov = (render.services['tenant-create'].volumes ?? []).find((v) => v.target === '/run/secrets/governance')
+    assert.deepEqual(tenantMountsExposeGovernance(render, String(gov.source)), [], `${colour}: a tenant mount exposes the governance credentials`)
+  }
+})
+
+test('guard drill: TENANT_SECRETS_DIR as a parent of etc/secrets/governance is reported on every service that mounts it', () => {
+  const base = renderProject(PROJECTS[1])
+  const gov = String(base.services['tenant-create'].volumes.find((v) => v.target === '/run/secrets/governance').source)
+  const parent = gov.slice(0, gov.lastIndexOf(`/${GOV_DIR}`)) + '/etc/secrets'
+  const bad = renderProject(PROJECTS[1], { env: { TENANT_SECRETS_DIR: parent } })
+  const gov2 = String(bad.services['tenant-create'].volumes.find((v) => v.target === '/run/secrets/governance').source)
+  assert.deepEqual(
+    tenantMountsExposeGovernance(bad, gov2).sort(),
+    ['gremion-ui', 'kernel-api', 'kernel-api-migrate', 'migrate', 'tenant-create'].sort(),
+  )
+})
+
+// TASK-084-a Task 10: the tenant-create environment table in
+// docs/ops/pooled-stack-layout.md names every *_FILE / *_DIR variable of the
+// rendered block (per-module rows are written once with <ID>). Two older
+// variables are documented in docs/runbooks/tenant-lifecycle.md and are exempt.
+test('docs: every *_FILE / *_DIR variable of the tenant-create block appears in the pooled-stack-layout env table', async () => {
+  const { readFileSync } = await import('node:fs')
+  const doc = readFileSync(new URL('../docs/ops/pooled-stack-layout.md', import.meta.url), 'utf8')
+  const exempt = new Set(['TENANT_PROVISIONER_SECRET_FILE', 'TENANT_SECRETS_DIR'])
+  const env = renderProject(PROJECTS[1]).services['tenant-create'].environment
+  const missing = []
+  for (const key of Object.keys(env).filter((k) => /_(FILE|DIR)$/.test(k) && !exempt.has(k))) {
+    const documented = key.replace(/^(MODULE_(?:PG_ADMIN|APP_PASSWORD))_[A-Z]+_FILE$/, '$1_<ID>_FILE')
+    if (!doc.includes(`\`${documented}\``)) missing.push(documented)
+  }
+  assert.deepEqual([...new Set(missing)], [], 'tenant-create variables missing from the env table of docs/ops/pooled-stack-layout.md')
+})
+
+test('tenantMountsExposeGovernance: pure path math (equal, parent, sibling, child)', () => {
+  const r = (src) => ({ services: { a: { volumes: [{ type: 'bind', source: src, target: '/run/secrets/tenants' }] } } })
+  const gov = '/opt/gremion/etc/secrets/governance'
+  assert.deepEqual(tenantMountsExposeGovernance(r(gov), gov), ['a'])
+  assert.deepEqual(tenantMountsExposeGovernance(r('/opt/gremion/etc/secrets'), gov), ['a'])
+  assert.deepEqual(tenantMountsExposeGovernance(r('/opt/gremion'), gov), ['a'])
+  assert.deepEqual(tenantMountsExposeGovernance(r('/opt/gremion/secrets/tenants'), gov), [])
+  assert.deepEqual(tenantMountsExposeGovernance(r('/opt/gremion/etc/secrets/governance-other'), gov), [])
+  // a directory whose NAME starts with two dots is a child, not a parent step
+  assert.deepEqual(tenantMountsExposeGovernance(r('/opt/gremion/etc/secrets'), '/opt/gremion/etc/secrets/..gov'), ['a'])
+  assert.deepEqual(tenantMountsExposeGovernance(r('/opt/gremion/etc/secrets/governance'), '/opt/gremion/etc/secrets/..gov'), [])
 })
 
 // TASK-075: init and phase B write release_ref into every ledger row they

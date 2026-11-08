@@ -21,6 +21,20 @@ export type { InspectionReport, InspectRegistry, InspectServer, ServerReport } f
 // TASK-043 G1: the customer's kernel database (never migrated here, Q3) and the platform bootstrap (Q15).
 export { dropKernelDatabase, ensureKernelDatabase, ensureKernelRoles, KERNEL_MODULE, kernelDbName, kernelRoles } from './kernel.js'
 export type { EnsureKernelResult, KernelRoles } from './kernel.js'
+// TASK-084-a: the customer's governance database on the governance server (names and roles).
+export {
+  bindGovernanceDatabase,
+  dropGovernanceDatabase,
+  ensureGovernanceDatabase,
+  GOVERNANCE_GROUP_ROLES,
+  GOVERNANCE_LEDGER,
+  GOVERNANCE_MODULE,
+  governanceDbName,
+  governancePostCondition,
+  governanceRoles,
+  migrateGovernanceDatabase,
+} from './governance.js'
+export type { EnsureGovernanceResult, GovernanceDbState, GovernanceRoles, MigrateGovernanceOptions } from './governance.js'
 // TASK-077 (C13): the kernel API's SELECT-only role on control + gremion_platform.
 export { ensureKernelApiReader, KERNEL_API_READS, KernelApiReaderError, kernelApiReaderPrivilegeProblems } from './kernel-api-reader.js'
 export type { KernelApiReaderDeps, KernelApiReaderErrorCode } from './kernel-api-reader.js'

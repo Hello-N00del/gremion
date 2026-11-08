@@ -322,6 +322,9 @@ export function checkFiles(files) {
 // The label is how the RUNNING check (check-postgres-major-running.mjs) finds
 // containers, so an unlabelled Postgres is a server nobody verifies.
 export const MODULE_POSTGRES_IDS = ['board', 'calendar', 'content', 'finance', 'newsletter', 'vault', 'messaging']
+// TASK-084-a: dedicated SERVICE servers, labelled org.gremion.postgres=service:<id>, never profile-gated
+// and created with POSTGRES_DB postgres; the image makes no database of its own beside the built-ins.
+export const SERVICE_POSTGRES_IDS = ['governance']
 export const POSTGRES_LABEL = 'org.gremion.postgres'
 
 // Volume names a module server must never mount: the kernel's own cluster and
@@ -332,6 +335,7 @@ export const POSTGRES_LABEL = 'org.gremion.postgres'
 export const FORBIDDEN_MODULE_VOLUMES = new Set([
   'gremion_pg_data',
   ...MODULE_POSTGRES_IDS.map((id) => `gremion_${id}_pg_data`),
+  ...SERVICE_POSTGRES_IDS.map((id) => `gremion_${id}_pg_data`),
 ])
 
 const isPostgresService = (s) => s.name === 'postgres' || s.name.endsWith('-postgres') || s.label != null
@@ -371,7 +375,7 @@ export function composeServices(text) {
       const m = l.match(/^\s*["']?([A-Za-z0-9._-]+)["']?:\s*(&\S+\s*)?(#.*)?$/)
       cur = m && ind === svcIndent
         ? { name: m[1], line: i + 1, image: null, imageLine: null, label: null,
-            profiles: [], merge: false, merges: [], mounts: [], propIndent: null }
+            profiles: [], merge: false, merges: [], mounts: [], propIndent: null, postgresDb: null }
         : null
       if (cur) out.push(cur)
       section = null
@@ -400,6 +404,10 @@ export function composeServices(text) {
       if (m) cur.profiles.push(m[1])
     }
     if (section === 'labels') readLabel(cur, l)
+    if (section === 'environment') {
+      const m = l.match(/^\s*POSTGRES_DB:\s*(.*)$/)
+      if (m) cur.postgresDb = unquote(m[1])
+    }
     if (section === 'volumes') {
       const m = l.match(/^\s*-\s*["']?([^:"'\s]+):([^:"'\s]+)/)
       if (m) cur.mounts.push({ source: m[1], target: m[2] })
@@ -526,7 +534,37 @@ export function checkModuleSet(text) {
     if (seenVolumes.has(vol)) problems.push(`${name} shares volume ${vol} with ${seenVolumes.get(vol)}`)
     seenVolumes.set(vol, name)
   }
-  const known = new Set(['postgres', ...MODULE_POSTGRES_IDS.map((id) => `${id}-postgres`)])
+  for (const id of SERVICE_POSTGRES_IDS) {
+    const name = `${id}-postgres`
+    const s = byName.get(name)
+    if (!s) { problems.push(`no ${name} service: the service-server set is ${SERVICE_POSTGRES_IDS.join(', ')}`); continue }
+    if (s.image != null && s.image !== POSTGRES_IMAGE_REF) {
+      problems.push(`${name} runs image ${String(s.image)}, expected ${POSTGRES_IMAGE_REF} (or none, taken from the anchor)`)
+    } else if (s.image == null && !s.merge) {
+      problems.push(`${name} declares no image and merges no anchor`)
+    }
+    if (s.merge && (s.merges.length !== 1 || s.merges[0] !== 'module-postgres')) {
+      problems.push(`${name} merges [${s.merges.join(', ')}], expected exactly [module-postgres]`)
+    }
+    if (s.label !== `service:${id}`) {
+      problems.push(`${name} is labelled ${POSTGRES_LABEL}=${s.label}, expected service:${id}`)
+    }
+    if (s.profiles.length !== 0) {
+      problems.push(`${name} is gated under profiles: [${s.profiles.join(', ')}]; a service server is never profile-gated (every customer gets its database at create)`)
+    }
+    if (s.postgresDb !== 'postgres') {
+      problems.push(`${name} sets POSTGRES_DB ${String(s.postgresDb)}, expected postgres: the image must create no database besides the built-ins`)
+    }
+    const data = s.mounts.find((m) => m.target === POSTGRES_DATA_MOUNT)
+    if (!data) { problems.push(`${name} mounts no volume at ${POSTGRES_DATA_MOUNT}`); continue }
+    const vol = volumeNames.get(data.source) ?? data.source
+    if (FORBIDDEN_MODULE_VOLUMES.has(vol)) {
+      problems.push(`${name} mounts volume ${vol}, which is the kernel's cluster or a live extraction-source PG16 volume`)
+    }
+    if (seenVolumes.has(vol)) problems.push(`${name} shares volume ${vol} with ${seenVolumes.get(vol)}`)
+    seenVolumes.set(vol, name)
+  }
+  const known = new Set(['postgres', ...MODULE_POSTGRES_IDS.map((id) => `${id}-postgres`), ...SERVICE_POSTGRES_IDS.map((id) => `${id}-postgres`)])
   for (const s of svcs.filter(isPostgresService)) {
     if (!known.has(s.name)) problems.push(`${s.name} is a Postgres service outside the module set (${[...known].join(', ')})`)
   }

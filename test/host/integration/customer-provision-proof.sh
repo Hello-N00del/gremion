@@ -99,6 +99,23 @@
 #                    with the dashboard PageTitle. Needs mail.env with
 #                    ROLES_IMAP_PASSWORD (roles@ provisioned) and a Keycloak that
 #                    reaches mail.<PLATFORM_DOMAIN>:587.
+#   customer-governance-db  TASK-084-a (brief A3-A7), after customer-create: on
+#                    governance-postgres exactly the two t_<hex>__governance
+#                    databases; per customer one gov.database_binding row, the
+#                    ledger of gov.schema_migration equal to applied.lock.json,
+#                    FORCE row level security on every customer_id table, CONNECT
+#                    for its own roles only (A3); each customer's app credential
+#                    refused on the other's database ("permission denied for
+#                    database"), the kernel credential refused on the server, no
+#                    CONNECT for gov_app / gov_purger (A4); the RLS matrix as
+#                    g_<hex>_app, the catalogue checks and SCHEMA 2.21's two
+#                    regression blocks (A5); a second create request changes no
+#                    ledger row, credential file or governance data (A6); the
+#                    credential files 0600 under etc/secrets/governance and in no
+#                    app container's tenant mounts (A7). Not in this phase (owed
+#                    after deploy): the customer created at the 084-a base sha
+#                    without kind 9 (A6), and the RED run of this phase against a
+#                    stack built at that base (TDD 9).
 #   customer-after   TRD-440: the container set and the services unchanged
 #
 # ADMINS REHEARSAL (scratch, plain `docker run` only; no pooled stack): the
@@ -632,6 +649,37 @@ seed_gate_fixtures() {
 accounts() { # the rendered NATS accounts file(s)
     docker run --rm --name "${STACK}-accounts" -v "${PSTACK}_nats_accounts:/a:ro" --entrypoint sh "$PG_IMAGE" -c 'cat /a/*' | tr -d '\r'
 }
+gov_admin_user() { local u; u="$(penv GOVERNANCE_PG_USER)"; printf '%s' "${u:-governance}"; }
+qg() { # <database> <sql> -- one value per line from governance-postgres, as its admin (TASK-084-a)
+    docker exec -i "$(svc state governance-postgres)" psql -v ON_ERROR_STOP=1 -tAqU "$(gov_admin_user)" -d "$1" -c "$2" | tr -d '\r'
+}
+# gov_cred <credential file> <field: user|password|database> -- one field of a postgres URL file
+# (postgresql://<user>:<password>@<host>:<port>/<database>[?query]); prints nothing on a
+# file that is not of that shape. The password is read by the caller into a variable,
+# never echoed (gov_login hands it over by a name-only -e).
+gov_cred() {
+    local f="$1" url
+    [[ -r "$f" ]] || return 1
+    url="$(tr -d '\r\n' < "$f")"
+    [[ "$url" =~ ^postgres(ql)?://([^:@/]+):([^@/]+)@[^/]+/([^?]+) ]] || return 1
+    case "$2" in
+        user) printf '%s' "${BASH_REMATCH[2]}" ;;
+        password) printf '%s' "${BASH_REMATCH[3]}" ;;
+        database) printf '%s' "${BASH_REMATCH[4]}" ;;
+        *) return 1 ;;
+    esac
+}
+# gov_login <user> <database> <password> [sql] -- connect to governance-postgres over TCP (the
+# container's own hostname, so the SCRAM rule applies, not the local trust of the socket) with
+# the given credential and run the sql (default SELECT 1). Prints psql's output and stderr
+# (without the password: libpq never echoes it); returns psql's status. The password rides a
+# name-only -e (PGPASSWORD), never an argv.
+gov_login() {
+    local cid; cid="$(svc state governance-postgres)"
+    [[ -n "$cid" ]] || { echo "no governance-postgres container" >&2; return 2; }
+    PGPASSWORD="$3" docker exec -e PGPASSWORD -i "$cid" sh -c \
+        'exec psql -v ON_ERROR_STOP=1 -tAq -h "$(hostname)" -U "$0" -d "$1" -c "$2" 2>&1' "$1" "$2" "${4:-SELECT 1}" | tr -d '\r'
+}
 dbs_kernel() { q postgres "SELECT datname FROM pg_database WHERE datname LIKE 't\\_%' ORDER BY 1"; }
 dbs_module() { qm "$1" "SELECT datname FROM pg_database WHERE datname LIKE 't\\_%' ORDER BY 1"; }
 edge_status() { # <host> -- the tenant host through the edge Traefik
@@ -833,6 +881,9 @@ data_fingerprint() { # <slug>
         sid="${psvc%-postgres}"
         fp_db "$(svc state "$psvc")" "$sid" "t_${hex}__${m}" "$m" || return 1
     done
+    # TASK-084-a: the customer's governance database (ledger kind 9) on its own
+    # server, read as that server's admin; PRD-OPS-004 covers it like the rest.
+    fp_db "$(svc state governance-postgres)" "$(gov_admin_user)" "t_${hex}__governance" governance || return 1
     n="$(skc get users/count -r "$slug" | tr -d '\r[:space:]')" || return 1
     [[ "$n" =~ ^[0-9]+$ ]] || { info "fingerprint: realm ${slug} user count unreadable (${n:-empty})" >&2; return 1; }
     printf 'realm-users\t%s\n' "$n"
@@ -1023,7 +1074,7 @@ phase_customer_create_check() {
     if [[ "$smtp" == "[\"kc-${XT}@$(penv PLATFORM_DOMAIN)\",\"kc-${XT}@$(penv PLATFORM_DOMAIN)\",\"mail.$(penv PLATFORM_DOMAIN)\",\"587\",\"true\"]" ]]; then ok "customer-create: the realm sends as kc-${XT}@ through mail.<domain>:587 STARTTLS (R-E5b)"; else bad "customer-create: realm SMTP ${smtp}"; fi
     # The control row, the ledger, the broker, the router.
     if [[ "$(q control "SELECT count(*) FROM tenant_domain WHERE tenant_id = '${id}' AND is_primary")" == 1 ]]; then ok "customer-create: one primary tenant_domain row binds $(host_of "$X")"; else bad "customer-create: tenant_domain rows"; fi
-    if [[ "$(q gremion_platform "SELECT count(DISTINCT step_kind) || '/' || count(*) FROM plt.provisioning_step WHERE customer_id = '${id}' AND status = 'done'")" == "8/8" ]]; then ok "customer-create: eight done ledger rows, one per kind (Q2)"; else bad "customer-create: the ledger is not eight done rows"; fi
+    if [[ "$(q gremion_platform "SELECT count(DISTINCT step_kind) || '/' || count(*) FROM plt.provisioning_step WHERE customer_id = '${id}' AND status = 'done'")" == "9/9" ]]; then ok "customer-create: nine done ledger rows, one per kind (Q2, governance_database_created is the ninth)"; else bad "customer-create: the ledger is not nine done rows"; fi
     # R33 item 4: the post-condition behind handToReader -- every tenant secret
     # file is 0600 AND owned by the reader uid (a root:root file is EACCES to the readers).
     # The directory the app env mounts (pooled-stack-proof renders TENANT_SECRETS_DIR into app-blue.env, under
@@ -1331,6 +1382,205 @@ phase_rehearsal_down() {
     else bad "rehearsal-down left resources"; fi
 }
 
+# ── TASK-084-a: the governance database per customer (kind 9; brief A3-A7) ────
+# Every assertion reads the running governance-postgres (and the stack's
+# containers), never the repo. The two customers are proof-x and proof-y (run
+# customer-create first). A credential is read from its 0600 file into a
+# variable and handed to psql by a name-only -e; nothing here prints one.
+tenant_secrets_dir() { # the directory the app env mounts at /run/secrets/tenants (see create-check)
+    local d="${PROOF_TENANT_SECRETS_DIR:-$(sed -n 's/^TENANT_SECRETS_DIR=//p' "$PENV/app-blue.env" 2>/dev/null | tr -d '"' | tail -n1)}"
+    [[ -n "$d" ]] || d="$(croot)/secrets/tenants"
+    printf '%s' "$d"
+}
+stack_cids() { # <service> -- container ids of that compose service in any project of this pooled stack
+    docker ps -a --filter "label=com.docker.compose.service=$1" --format '{{.ID}} {{.Label "com.docker.compose.project"}}' \
+        | tr -d '\r' | awk -v p="${PSTACK}-" 'index($2, p) == 1 { print $1 }'
+}
+one_line() { tr '\r\n' '  ' | sed 's/  */ /g; s/ $//'; }
+
+gov_a3() { # <slug> <customer id> -- created through the 043d path
+    local slug="$1" id="$2" hex db tok lock got want
+    hex="${id//-/}"; db="t_${hex}__governance"; tok="${slug//-/_}"
+    if [[ "$(q gremion_platform "SELECT count(*) FROM plt.provisioning_step WHERE customer_id = '${id}' AND step_kind = 'governance_database_created' AND status = 'done'")" == 1 ]]; then
+        ok "customer-governance-db A3: ${slug} has one done governance_database_created ledger row"
+    else bad "customer-governance-db A3: ${slug} has no (or more than one) done governance_database_created row"; fi
+    if [[ "$(qg postgres "SELECT count(*) FROM pg_database WHERE datname = '${db}'")" == 1 ]]; then ok "customer-governance-db A3: governance-postgres holds ${db}"
+    else bad "customer-governance-db A3: governance-postgres has no ${db}"; return; fi
+    got="$(qg "$db" "SELECT count(*) || ':' || min(customer_id::text) || ':' || min(tenant_token) || ':' || min(context_code) FROM gov.database_binding")" || got=unreadable
+    if [[ "$got" == "1:${id}:${tok}:gov" ]]; then ok "customer-governance-db A3: ${slug}: one gov.database_binding row (customer ${id}, token ${tok}, context gov)"
+    else bad "customer-governance-db A3: ${slug}: gov.database_binding reads '${got}', want 1:${id}:${tok}:gov"; fi
+    # the ledger of the chain carries the lock's sha256 for every shipped file (applied.lock.json is the frozen truth)
+    lock="$ROOT/scripts/migrations/applied.lock.json"
+    want="$(jq -r '.chains.governance.files | to_entries | sort_by(.key)[] | "\(.key) \(.value)"' "$lock")" || want=""
+    got="$(qg "$db" "SELECT filename || ' ' || sha256 FROM gov.schema_migration ORDER BY filename")" || got=unreadable
+    if [[ -n "$want" && "$got" == "$want" ]]; then ok "customer-governance-db A3: ${slug}: gov.schema_migration lists $(grep -c . <<< "$want") file(s) with the sha256 of applied.lock.json"
+    else bad "customer-governance-db A3: ${slug}: gov.schema_migration [$(one_line <<< "$got")] differs from applied.lock.json [$(one_line <<< "$want")]"; fi
+    got="$(qg "$db" "SELECT count(*) || '/' || count(*) FILTER (WHERE NOT (c.relrowsecurity AND c.relforcerowsecurity)) FROM pg_catalog.pg_class c JOIN pg_catalog.pg_attribute a ON a.attrelid = c.oid AND a.attname = 'customer_id' AND NOT a.attisdropped WHERE c.relnamespace = 'gov'::regnamespace AND c.relkind = 'r' AND c.relname <> 'database_binding'")" || got=unreadable
+    if [[ "$got" =~ ^([0-9]+)/0$ && "${BASH_REMATCH[1]}" -gt 0 ]]; then ok "customer-governance-db A3: ${slug}: all ${BASH_REMATCH[1]} gov tables with a customer_id column have row level security enabled AND forced"
+    else bad "customer-governance-db A3: ${slug}: gov tables with customer_id / without FORCE row level security: ${got}"; fi
+    got="$(qg postgres "SELECT coalesce(string_agg(coalesce(r.rolname, 'PUBLIC'), ',' ORDER BY coalesce(r.rolname, 'PUBLIC')), '') FROM pg_database d CROSS JOIN LATERAL aclexplode(d.datacl) a LEFT JOIN pg_roles r ON r.oid = a.grantee WHERE d.datname = '${db}' AND a.privilege_type = 'CONNECT'")" || got=unreadable
+    if [[ "$got" == "g_${hex}_app,g_${hex}_owner,g_${hex}_purger" ]]; then ok "customer-governance-db A3: ${slug}: datacl grants CONNECT to its own owner, app and purger roles only (PUBLIC none)"
+    else bad "customer-governance-db A3: ${slug}: CONNECT grantees on ${db} are '${got}'"; fi
+}
+
+gov_a4() { # <slug x> <id x> <slug y> <id y> -- cross-tenant connections are refused
+    local gdir xh yh xf yf xpw ypw xdb ydb out kf kpw kuser tsd
+    gdir="$(croot)/etc/secrets/governance"; xh="${2//-/}"; yh="${4//-/}"
+    xf="$gdir/$xh"; yf="$gdir/$yh"; xdb="t_${xh}__governance"; ydb="t_${yh}__governance"
+    xpw="$(gov_cred "$xf" password)" && [[ "$(gov_cred "$xf" user)" == "g_${xh}_app" && "$(gov_cred "$xf" database)" == "$xdb" ]] \
+        || { bad "customer-governance-db A4: ${xf} is not a credential file for g_${xh}_app on ${xdb}"; return; }
+    ypw="$(gov_cred "$yf" password)" && [[ "$(gov_cred "$yf" user)" == "g_${yh}_app" && "$(gov_cred "$yf" database)" == "$ydb" ]] \
+        || { bad "customer-governance-db A4: ${yf} is not a credential file for g_${yh}_app on ${ydb}"; return; }
+    # positive controls first: a refusal below must come from the grants, not from a broken login path
+    if [[ "$(gov_login "g_${xh}_app" "$xdb" "$xpw" || true)" == 1 && "$(gov_login "g_${yh}_app" "$ydb" "$ypw" || true)" == 1 ]]; then
+        ok "customer-governance-db A4: each customer's own credential opens its own governance database (positive control)"
+    else bad "customer-governance-db A4: a customer's own credential does not open its own governance database"; return; fi
+    out="$(gov_login "g_${yh}_app" "$xdb" "$ypw" | one_line)" && out="(connected) ${out}" || true
+    if [[ "$out" == *"permission denied for database"* ]]; then ok "customer-governance-db A4: g_${yh}_app against ${xdb} is refused: ${out}"
+    else bad "customer-governance-db A4: g_${yh}_app against ${xdb}: ${out:-no output}, want permission denied for database"; fi
+    out="$(gov_login "g_${xh}_app" "$ydb" "$xpw" | one_line)" && out="(connected) ${out}" || true
+    if [[ "$out" == *"permission denied for database"* ]]; then ok "customer-governance-db A4: g_${xh}_app against ${ydb} is refused: ${out}"
+    else bad "customer-governance-db A4: g_${xh}_app against ${ydb}: ${out:-no output}, want permission denied for database"; fi
+    # the kernel half: the customer's kernel application credential is no login on this server
+    tsd="$(tenant_secrets_dir)"; kf="$tsd/tenant_${1}_db"
+    kuser="$(gov_cred "$kf" user)" && kpw="$(gov_cred "$kf" password)" && [[ "$kuser" == "k_${xh}_app" ]] \
+        || { bad "customer-governance-db A4: ${kf} is not the kernel credential of k_${xh}_app"; return; }
+    out="$(gov_login "$kuser" "$xdb" "$kpw" | one_line)" && out="(connected) ${out}" || true
+    if [[ "$out" == *"authentication failed"* || "$out" == *"does not exist"* ]]; then ok "customer-governance-db A4: the kernel credential ${kuser} against governance-postgres is refused: ${out}"
+    else bad "customer-governance-db A4: the kernel credential ${kuser} against ${xdb}: ${out:-no output}, want a refused login"; fi
+    # the group roles hold CONNECT on no database
+    if [[ "$(qg postgres "SELECT count(*) FROM pg_roles WHERE rolname IN ('gov_app', 'gov_purger')")" == 2 \
+        && "$(qg postgres "SELECT count(*) FROM pg_database d CROSS JOIN LATERAL aclexplode(d.datacl) a JOIN pg_roles r ON r.oid = a.grantee WHERE r.rolname IN ('gov_app', 'gov_purger')")" == 0 ]]; then
+        ok "customer-governance-db A4: gov_app and gov_purger exist and hold no privilege on any database's ACL"
+    else bad "customer-governance-db A4: a group role is missing, or gov_app / gov_purger appears on a database ACL"; fi
+}
+
+gov_a5() { # <slug> <customer id> <other customer id> -- RLS fails closed as g_<hex>_app
+    local slug="$1" id="$2" other="$3" hex pw db app n out sql seed
+    hex="${id//-/}"; db="t_${hex}__governance"; app="g_${hex}_app"
+    pw="$(gov_cred "$(croot)/etc/secrets/governance/${hex}" password)" || { bad "customer-governance-db A5: no credential file for ${slug}"; return; }
+    qg "$db" "DELETE FROM gov.meeting WHERE title = 'proof RLS probe'" >/dev/null || true
+    seed="INSERT INTO gov.meeting (customer_id, body_id, title, scheduled_start, notice_period_days_snapshot, notice_due_at, created_by_kind, updated_by_kind, test_run_id) VALUES ('CID', uuidv7(), 'proof RLS probe', now() + interval '30 days', 14, now() + interval '10 days', 'system', 'system', uuidv7())"
+    if out="$(gov_login "$app" "$db" "$pw" "SELECT set_config('gremion.customer_id', '${id}', true); ${seed/CID/$id}" | one_line)"; then ok "customer-governance-db A5: ${slug}: one test meeting seeded as ${app} under its own customer"
+    else bad "customer-governance-db A5: ${slug}: the seed insert failed: ${out}"; return; fi
+    sql="SELECT count(*) FROM gov.meeting WHERE title = 'proof RLS probe'"
+    n="$(gov_login "$app" "$db" "$pw" "$sql" | tail -n1)"
+    if [[ "$n" == 0 ]]; then ok "customer-governance-db A5: ${slug}: no GUC -> 0 rows (fails closed)"; else bad "customer-governance-db A5: ${slug}: no GUC reads '${n}' rows, want 0"; fi
+    n="$(gov_login "$app" "$db" "$pw" "SELECT set_config('gremion.customer_id', '${other}', true); ${sql}" | tail -n1)"
+    if [[ "$n" == 0 ]]; then ok "customer-governance-db A5: ${slug}: GUC = another customer's uuid -> 0 rows"; else bad "customer-governance-db A5: ${slug}: another customer's GUC reads '${n}' rows, want 0"; fi
+    n="$(gov_login "$app" "$db" "$pw" "SELECT set_config('gremion.customer_id', '${id}', true); ${sql}" | tail -n1)"
+    if [[ "$n" == 1 ]]; then ok "customer-governance-db A5: ${slug}: GUC = its own uuid -> 1 row"; else bad "customer-governance-db A5: ${slug}: its own GUC reads '${n}' rows, want 1"; fi
+    out="$(gov_login "$app" "$db" "$pw" "SELECT set_config('gremion.customer_id', '${id}', true); ${seed/CID/$other}" | one_line)" || true
+    if [[ "$out" == *"row-level security policy"* ]]; then ok "customer-governance-db A5: ${slug}: an INSERT carrying another customer_id is refused: ${out}"
+    else bad "customer-governance-db A5: ${slug}: an INSERT carrying another customer_id answered '${out}', want a row-level security violation"; fi
+    out="$(gov_login "$app" "$db" "$pw" "SELECT set_config('gremion.customer_id', '${id}', true); DELETE FROM gov.quorum_check" | one_line)" || true
+    if [[ "$out" == *"permission denied"* ]]; then ok "customer-governance-db A5: ${slug}: DELETE on the append-only gov.quorum_check is refused: ${out}"
+    else bad "customer-governance-db A5: ${slug}: DELETE on gov.quorum_check answered '${out}', want permission denied"; fi
+    qg "$db" "DELETE FROM gov.meeting WHERE title = 'proof RLS probe'" >/dev/null || bad "customer-governance-db A5: ${slug}: the probe meeting could not be removed"
+    # the SCHEMA part 2 verification queries, on the live database: every list must be empty
+    n="$(qg "$db" "SELECT (SELECT count(*) FROM pg_catalog.pg_constraint c WHERE c.contype = 'f' AND c.connamespace = 'gov'::regnamespace AND NOT EXISTS (SELECT 1 FROM pg_catalog.pg_index i WHERE i.indrelid = c.conrelid AND pg_catalog.array_to_string((i.indkey::int2[])[0:pg_catalog.cardinality(c.conkey) - 1], ',') = pg_catalog.array_to_string(c.conkey, ','))) || '/' || (SELECT count(*) FROM pg_catalog.pg_class c WHERE c.relnamespace = 'gov'::regnamespace AND c.relkind = 'r' AND c.relname <> 'schema_migration' AND pg_catalog.obj_description(c.oid, 'pg_class') IS NULL) || '/' || (SELECT count(*) FROM pg_catalog.pg_class c WHERE c.relnamespace = 'gov'::regnamespace AND pg_catalog.octet_length(c.relname::text) >= 60) || '/' || (SELECT count(*) FROM pg_catalog.pg_constraint WHERE connamespace = 'gov'::regnamespace AND pg_catalog.octet_length(conname::text) >= 60)")" || n=unreadable
+    if [[ "$n" == 0/0/0/0 ]]; then ok "customer-governance-db A5: ${slug}: catalogue checks clean (every FK has a leading index, every table a COMMENT, no name reaches 60 bytes)"
+    else bad "customer-governance-db A5: ${slug}: catalogue checks (fk-without-index/uncommented/long-relation/long-constraint) read ${n}, want 0/0/0/0"; fi
+    local f
+    for f in regression-1 regression-2; do
+        if { printf 'SET ROLE g_%s_owner;\n' "$hex"; cat "$ROOT/packages/tenant-store/test/fixtures/governance/${f}.sql"; } \
+            | docker exec -i "$(svc state governance-postgres)" psql -v ON_ERROR_STOP=1 -qU "$(gov_admin_user)" -d "$db" >/dev/null 2>"$OUT/ledger/gov-${f}-${slug}.err"; then
+            ok "customer-governance-db A5: ${slug}: SCHEMA 2.21 ${f} passes as the owner role"
+        else bad "customer-governance-db A5: ${slug}: SCHEMA 2.21 ${f} failed: $(head -n 3 "$OUT/ledger/gov-${f}-${slug}.err" | one_line)"; fi
+    done
+}
+
+gov_a6() { # <slug> <customer id> -- a second create request changes nothing
+    local slug="$1" id="$2" hex db cred before after rid st ev ledger_sql
+    hex="${id//-/}"; db="t_${hex}__governance"; cred="$(croot)/etc/secrets/governance/${hex}"
+    [[ -f "$OUT/ledger/dpia.json" ]] || { bad "customer-governance-db A6: ledger/dpia.json is absent (run customer-create first)"; return; }
+    ledger_sql="SELECT count(*) || ':' || coalesce(md5(string_agg(t::text, E'\n' ORDER BY t::text)), '-') FROM plt.provisioning_step t WHERE customer_id = '${id}'"
+    # each read is checked on its own: a failed read must not digest as "nothing", equal on both sides
+    gov_digest() {
+        local l c f
+        l="$(q gremion_platform "$ledger_sql")" && [[ -n "$l" ]] || return 1
+        c="$(sha256sum < "$cred" | cut -d' ' -f1)" && [[ -n "$c" ]] || return 1
+        f="$(fp_db "$(svc state governance-postgres)" "$(gov_admin_user)" "$db" governance | sha256sum | cut -d' ' -f1)" && [[ -n "$f" ]] || return 1
+        printf '%s|%s|%s\n' "$l" "$c" "$f"
+    }
+    before="$(gov_digest)" || { bad "customer-governance-db A6: could not take the digest of ${slug}'s ledger, credential file and governance data"; return; }
+    rid="$(panel_create "$slug" calendar,votes "$OUT/ledger/dpia.json")" || { bad "customer-governance-db A6: could not queue the second create of ${slug}"; return; }
+    st="$(executor_once "$rid" "$OUT/ledger/gov-rerun-${slug}.log")" || true
+    if [[ "$st" != succeeded ]]; then tail -n 25 "$OUT/ledger/gov-rerun-${slug}.log" >&2 || true; bad "customer-governance-db A6: the second create (request ${rid}) is ${st:-unknown}"; return; fi
+    after="$(gov_digest)" || { bad "customer-governance-db A6: could not take the digest after the second create"; return; }
+    if [[ "$before" == "$after" ]]; then ok "customer-governance-db A6: ${slug}: the second create left its ledger rows, credential file and governance data byte-identical"
+    else bad "customer-governance-db A6: ${slug}: the second create changed state: ${before} -> ${after}"; fi
+    ev="$(q gremion_platform "SELECT message FROM plt.provisioning_request_event WHERE request_id = '${rid}' AND message LIKE '{\"phase\":\"a\"%' ORDER BY at DESC, event_id DESC LIMIT 1")"
+    if [[ "$(jq -c '.ran' <<< "${ev:-{\}}")" == '[]' ]]; then ok "customer-governance-db A6: ${slug}: phase A of the second create ran no step (governance included)"
+    else bad "customer-governance-db A6: ${slug}: phase A of the second create was ${ev:-silent}"; fi
+}
+
+gov_a7() { # <hex x> <hex y> -- credential placement
+    local gdir f n=0 badf=0 s cid ui tsd hits src dest seen=0
+    gdir="$(croot)/etc/secrets/governance"
+    while IFS= read -r f; do
+        n=$(( n + 1 ))
+        [[ "$(stat -c '%a' "$f")" == 600 && "$(basename "$f")" =~ ^[0-9a-f]{32}$ ]] || { badf=1; info "governance secret ${f}: mode $(stat -c '%a' "$f")"; }
+    done < <(find "$gdir" -type f ! -name .gitkeep 2>/dev/null)
+    if (( n >= 2 && badf == 0 )) && [[ -f "$gdir/$1" && -f "$gdir/$2" ]]; then ok "customer-governance-db A7: etc/secrets/governance holds ${n} credential file(s), mode 0600, named by the customer's hex id (the owner-uid check is 084-b, DV4)"
+    else bad "customer-governance-db A7: etc/secrets/governance: ${n} file(s), a mode or name is wrong, or a customer's file is missing"; fi
+    # the host source of every /run/secrets/tenants mount is neither the governance dir nor a parent of it
+    for s in gremion-ui gremion-public control-panel migrate kernel-api; do
+        for cid in $(stack_cids "$s"); do
+            seen=$(( seen + 1 ))
+            hits=""
+            while read -r src dest; do
+                [[ -n "$dest" ]] || continue
+                if [[ "$src" == *"etc/secrets/governance"* || "$dest" == *"/run/secrets/governance"* ]]; then hits+=" ${src}->${dest}"; fi
+                if [[ "$dest" == /run/secrets/tenants* ]]; then
+                    if [[ "$gdir" == "$src" || "$gdir" == "${src%/}"/* || "$(host_path "$gdir")" == "${src%/}"/* ]]; then hits+=" ${src}->${dest}"; fi
+                fi
+            done < <(docker inspect -f '{{range .Mounts}}{{.Source}} {{.Destination}}{{"\n"}}{{end}}' "$cid" | tr -d '\r')
+            if [[ -z "$hits" ]]; then ok "customer-governance-db A7: ${s} (${cid:0:12}) mounts no governance credential directory and no parent of it as tenant secrets"
+            else bad "customer-governance-db A7: ${s} (${cid:0:12}) mounts the governance credentials:${hits}"; fi
+        done
+    done
+    (( seen > 0 )) || bad "customer-governance-db A7: none of gremion-ui, gremion-public, control-panel, migrate, kernel-api runs in ${PSTACK}-*: nothing was inspected"
+    # no governance URL in the tenant secrets the app container sees
+    ui="$(stack_cids gremion-ui | head -n1)"
+    if [[ -z "$ui" ]]; then bad "customer-governance-db A7: no gremion-ui container to look into"
+    else
+        hits="$(docker exec "$ui" sh -c 'test -d /run/secrets/tenants || exit 3; find /run/secrets/tenants -type f | wc -l; grep -rl __governance /run/secrets/tenants 2>/dev/null | wc -l' | tr -d '\r' | xargs)" || hits=unreadable
+        if [[ "$hits" =~ ^[1-9][0-9]*\ 0$ ]]; then ok "customer-governance-db A7: gremion-ui sees ${hits%% *} tenant secret file(s) under /run/secrets/tenants and none names a __governance database"
+        else bad "customer-governance-db A7: /run/secrets/tenants in gremion-ui: files/governance-hits '${hits}', want >0 files and 0 hits"; fi
+    fi
+    tsd="$(tenant_secrets_dir)"
+    if [[ "$tsd" == "$gdir" || "$tsd" == "$gdir"/* || "$gdir" == "${tsd%/}"/* ]]; then bad "customer-governance-db A7: TENANT_SECRETS_DIR ${tsd} equals, contains or sits inside ${gdir}"
+    else ok "customer-governance-db A7: TENANT_SECRETS_DIR is disjoint from etc/secrets/governance"; fi
+}
+
+phase_customer_governance_db() {
+    need_pooled
+    local xid yid
+    xid="$(customer_id "$X")"; yid="$(customer_id "$Y")"
+    [[ -n "$xid" && -n "$yid" ]] || { bad "customer-governance-db: no control row for ${X} or ${Y} (run customer-create first)"; return; }
+    [[ -n "$(svc state governance-postgres)" ]] || { bad "customer-governance-db A1: no governance-postgres container runs in ${PSTACK}-state"; return; }
+    local want got
+    # A1 on the running server: its label and its major (the compose-level evidence is emit-ops and the lints)
+    got="$(docker inspect -f '{{index .Config.Labels "org.gremion.postgres"}}' "$(svc state governance-postgres)" | tr -d '\r')" || got=unreadable
+    if [[ "$got" == service:governance ]]; then ok "customer-governance-db A1: the running governance-postgres carries org.gremion.postgres=service:governance"
+    else bad "customer-governance-db A1: governance-postgres is labelled '${got}', want service:governance"; fi
+    got="$(qg postgres "SHOW server_version_num")" || got=unreadable
+    if [[ "$got" == 18* ]]; then ok "customer-governance-db A1: governance-postgres runs PostgreSQL 18 (${got})"
+    else bad "customer-governance-db A1: governance-postgres reports server_version_num '${got}', want 18xxxx"; fi
+    want="$(printf 't_%s__governance\nt_%s__governance\n' "${xid//-/}" "${yid//-/}" | LC_ALL=C sort)"
+    got="$(qg postgres "SELECT datname FROM pg_database WHERE datname LIKE 't\\_%\\_\\_governance'" | LC_ALL=C sort)" || got=unreadable
+    if [[ "$got" == "$want" ]]; then ok "customer-governance-db A3: governance-postgres holds exactly the two governance databases, t_<hex>__governance of ${X} and ${Y}"
+    else bad "customer-governance-db A3: governance-postgres databases [$(one_line <<< "$got")], want [$(one_line <<< "$want")]"; fi
+    gov_a3 "$X" "$xid"
+    gov_a3 "$Y" "$yid"
+    gov_a4 "$X" "$xid" "$Y" "$yid"
+    gov_a5 "$X" "$xid" "$yid"
+    gov_a6 "$X" "$xid"
+    gov_a7 "${xid//-/}" "${yid//-/}"
+    info "customer-governance-db: A6's second half (a customer created at the 084-a base without kind 9 gets its database from one new request) needs a stack built at the base sha, and the RED run of this phase against it is TDD 9: both are owed after deploy"
+}
+
 phase_customer_after() {
     need_pooled
     trd440 > "$OUT/ledger/trd440-after.txt"
@@ -1358,6 +1608,7 @@ run_phase() {
         customer-resume) phase_customer_resume ;;
         customer-reconcile) phase_customer_reconcile ;;
         customer-admins) phase_customer_admins ;;
+        customer-governance-db) phase_customer_governance_db ;;
         customer-after) phase_customer_after ;;
         rehearsal-up) phase_rehearsal_up ;;
         rehearsal-run) phase_rehearsal_run ;;

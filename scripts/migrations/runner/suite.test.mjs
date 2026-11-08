@@ -149,6 +149,28 @@ describe('expand-contract suite (TDD 3)', () => {
     assert.equal(good.failed, 0, good.detail)
   })
 
+  test('a fresh-only chain needs no manual-dump marker on a new file; an unknown class is still refused', () => {
+    const f = fixture({ runners: { alpha: 'tenant-store', beta: 'fresh-only' }, files: { 'db/beta/001_b.sql': HEADERED } })
+    const good = run(f)
+    assert.equal(good.failed, 0, good.detail)
+    const bad = run(fixture({ runners: { alpha: 'tenant-store', beta: 'fresh-onlyy' }, files: { 'db/beta/001_b.sql': HEADERED } }))
+    assert.ok(bad.failed > 0, bad.detail)
+    assert.match(bad.detail, /fresh-onlyy/)
+  })
+
+  // TASK-084-a verify finding (MEDIUM): the class is only sound while the chain has ONE file, applied
+  // to a database created in the same step. A second file would never reach existing customers.
+  test('a fresh-only chain refuses a second file until it flips class (guard)', () => {
+    const second = HEADERED.replace('CREATE TABLE b', 'CREATE TABLE b2')
+    const one = run(fixture({ runners: { alpha: 'tenant-store', beta: 'fresh-only' }, files: { 'db/beta/001_b.sql': HEADERED } }))
+    assert.equal(one.failed, 0, one.detail)
+    const two = run(fixture({ runners: { alpha: 'tenant-store', beta: 'fresh-only' }, files: { 'db/beta/001_b.sql': HEADERED, 'db/beta/002_b.sql': second } }))
+    assert.ok(two.failed > 0, two.detail)
+    assert.match(two.detail, /chain beta is fresh-only but has 2 files.*flip/)
+    const flipped = run(fixture({ runners: { alpha: 'tenant-store', beta: 'tenant-store' }, files: { 'db/beta/001_b.sql': HEADERED, 'db/beta/002_b.sql': second } }))
+    assert.doesNotMatch(flipped.detail, /fresh-only/)
+  })
+
   // Waivers (lint-waivers.json): sha256-pinned, rule-bounded, stale-checked.
   describe('lint waivers', () => {
     const BAD = '-- gremion:phase expand\nCREATE TABLE c (id int);\nREVOKE ALL ON TABLE c FROM PUBLIC;\n'
@@ -180,6 +202,14 @@ describe('expand-contract suite (TDD 3)', () => {
       const f = waived()
       writeFileSync(join(f.root, 'db', 'alpha', '002_c.sql'), BAD + '-- edited\n')
       assert.match(run(f).detail, /no longer hash to the lock/)
+    })
+    test('set-expression is waivable; alter-column, truncate and mixed lists are not', () => {
+      const SE = "-- gremion:phase expand\nSET LOCAL lock_timeout = '5s';\nALTER TABLE a ALTER COLUMN id SET EXPRESSION AS (1);\n"
+      const ok = run(waived({ text: SE, waiver: { rules: ['set-expression'] } }))
+      assert.equal(ok.failed, 0, ok.detail)
+      assert.match(run(waived({ text: SE, waiver: { rules: ['alter-column'] } })).detail, /rules must be a non-empty subset/)
+      assert.match(run(waived({ text: SE, waiver: { rules: ['truncate'] } })).detail, /rules must be a non-empty subset/)
+      assert.match(run(waived({ text: SE, waiver: { rules: ['set-expression', 'alter-column'] } })).detail, /rules must be a non-empty subset/)
     })
     test('an unlocked file, a wrong sha, a short reason and an unwaivable rule are each refused', () => {
       assert.match(run(waived({ locked: false })).detail, /not in applied\.lock\.json: only a locked file/)

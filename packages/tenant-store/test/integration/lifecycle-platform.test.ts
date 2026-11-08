@@ -5,7 +5,7 @@
 //    owner is refused; migratePlatform as that owner applies every manifest
 //    file (0001-0005);
 //  - plt.provisioning_step (0004) is append-only, done at most once per
-//    (customer, kind), v7 ids only, eight kinds (7 and 8 appended, Q2);
+//    (customer, kind), v7 ids only, nine kinds (7 and 8 appended, Q2; 9 governance_database_created, TASK-084-a);
 //  - plt.operator_enable_attestation (Q19) is one row per (customer, module),
 //    append-only.
 import { createHash, randomBytes } from 'node:crypto'
@@ -168,15 +168,15 @@ describe('plt.provisioning_step (0004, TDD 2)', () => {
     await platform.end()
   })
 
-  it('accepts all eight kinds, step_order 7 and 8 for the appended ones', async () => {
+  it('accepts all nine kinds, step_order 7 and 8 for the appended ones and 9 for governance_database_created', async () => {
     const c = uuidv7()
-    for (const k of ['realm_created', 'database_created', 'domain_bound', 'storage_prefix_reserved', 'first_body_created', 'first_accounts_created', 'broker_account_created', 'mail_principal_issued']) {
+    for (const k of ['realm_created', 'database_created', 'domain_bound', 'storage_prefix_reserved', 'first_body_created', 'first_accounts_created', 'broker_account_created', 'mail_principal_issued', 'governance_database_created']) {
       await platform`INSERT INTO plt.provisioning_step (customer_id, step_kind, status) VALUES (${c}, ${k}, 'pending')`
     }
     const rows = await platform<{ step_kind: string; step_order: number }[]>`
       SELECT step_kind, step_order FROM plt.provisioning_step WHERE customer_id = ${c} ORDER BY step_order`
-    expect(rows.map((r) => r.step_order)).toEqual([1, 2, 3, 4, 5, 6, 7, 8])
-    expect(rows.slice(6).map((r) => r.step_kind)).toEqual(['broker_account_created', 'mail_principal_issued'])
+    expect(rows.map((r) => r.step_order)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9])
+    expect(rows.slice(6).map((r) => r.step_kind)).toEqual(['broker_account_created', 'mail_principal_issued', 'governance_database_created'])
   })
 
   it('refuses UPDATE (append-only)', async () => {

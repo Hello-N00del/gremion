@@ -6,7 +6,8 @@
 // The proof writes ledger/fingerprint-before-suspend.txt before `tenant
 // suspend` and ledger/fingerprint-after-resume.txt after `tenant resume`, one
 // line per table of the customer's kernel database and of every enabled
-// module database, plus the realm's user count:
+// module database and of its governance database (scope "governance", TASK-084-a),
+// plus the realm's user count:
 //   <scope>:<schema>.<table>\t<row count>\t<md5 over the ordered rows | ->
 //   realm-users\t<count>
 // ('#' lines are comments.) This compares the two. Equal is the ONLY pass:
@@ -47,6 +48,11 @@ export function parseFingerprint(text) {
 function emptiness(fp, when) {
   const out = []
   if (fp.tables.size === 0) out.push(`${when}: no table was fingerprinted (zero tables proves nothing)`)
+  // TASK-084-a: every customer has a governance database (ledger kind 9), so a
+  // fingerprint without one means the producer dropped it, not that it is empty.
+  if (![...fp.tables.keys()].some((k) => k.startsWith('governance:'))) {
+    out.push(`${when}: no governance table was fingerprinted (every customer has a governance database)`)
+  }
   if (fp.realmUsers === null) out.push(`${when}: no realm user count was recorded`)
   for (const l of fp.malformed) out.push(`${when}: malformed line ${JSON.stringify(l)}`)
   return out

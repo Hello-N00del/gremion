@@ -126,6 +126,7 @@ is not yet fixed — TRD-352 assigns pinning it to the re-init, owner the operat
 | Loki | ops log store, class-4 (observability) [D R17-25] | `grafana/loki:3.7.0` (digest-pinned, TASK-039) | pinned |
 | Alloy | ops collector and OTLP ingest, class-4 (observability) | `grafana/alloy:v1.14.0` (digest-pinned, TASK-039) | pinned |
 | Prometheus, blackbox exporter | ops metrics store and probes, class-4 (observability) | `prom/prometheus:v3.1.0`, `prom/blackbox-exporter:v0.26.0` (digest-pinned) | pinned |
+| `governance-postgres` | governance database server, class-5, state tier: one database per customer (`t_<hex32>__governance`), no PgBouncer in front; added 2026-10-31 (TASK-084-a, TRD-089) | `postgres:18-alpine@sha256:77f585114c32fbca283dc835b0596f4e52b51b4c6662d7810b2f4084f60a1873` (digest-pinned, the module-server image) | pinned |
 
 The observability rows (Tempo, Grafana, Loki, Alloy, Prometheus, the blackbox exporter) are one
 exception-class-4 unit, the operator-only `${STACK}-ops` project of `compose/observability/`

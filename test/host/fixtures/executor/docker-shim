@@ -156,7 +156,7 @@ case " $* " in
                 echo "[tenant-create] request-verify ${slug}: checking" >&2
                 cat "$R/verdict.json" ;;
             phase-a)
-                echo "[tenant-create] phase A ${slug}: ran [realm_created, database_created]" >&2
+                echo "[tenant-create] phase A ${slug}: ran [realm_created, database_created, governance_database_created]" >&2
                 [ -f "$R/leak" ] && echo "APP-PASSWORD: unit-app-secret-t043d" >&2
                 echo '{"phase":"a"}' ;;
             phase-b) echo "[tenant-create] phase B ${slug}: enabled [calendar, votes]" >&2 ;;

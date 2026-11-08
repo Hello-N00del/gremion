@@ -351,6 +351,15 @@ recoverable backup:
    missing file is a no-op.
 3. **Drop the data-plane DB + role** — `DROP DATABASE IF EXISTS "t_<slug>" WITH
    (FORCE)` + `DROP ROLE IF EXISTS` (idempotent).
+   Since TASK-084-a the customer's **governance database**
+   `t_<hex32>__governance` and its three roles are dropped in the same step
+   (idempotent; a customer made before the governance server existed has neither,
+   and the log line says `no governance database was present`), and the customer's
+   credential file under `${GOVERNANCE_SECRETS_DIR}` is shredded with the other
+   secrets in step 2. The `delete` verb therefore needs `GOVERNANCE_PG_ADMIN_FILE`
+   (the governance server's admin URL, direct, not the pooler) and
+   `GOVERNANCE_SECRETS_DIR` besides the kernel variables, and refuses before
+   shredding anything when either is missing.
 4. **Module leaf-shred (optional)** — if a feature module registered a leaf store,
    the delete drops the tenant's leaf data through that module-supplied
    dependency. A module that registered such a hook propagates real failures
@@ -363,6 +372,13 @@ recoverable backup:
    permanent tombstone: **identifier reuse is forbidden** (§7.8) — `provision
    <slug>` of a deleted/deleting slug is refused, and re-running `delete` on a
    tombstone is a terminal-safe no-op.
+
+**Rolling back past TASK-084-a:** platform migration `0015` adds the ledger step
+kind `governance_database_created`. The previous release's ledger reader throws on
+a step kind it does not know, so after the new colour created a customer,
+switching back to the old colour breaks `tenant-create` for that customer until
+the new colour runs again. Roll forward, not back, once a customer was created
+by this release.
 
 **Resumability:** a failure at any step leaves the row at `deleting`; re-run
 `delete <slug>` and it replays from the top — each step is idempotent, so re-runs
