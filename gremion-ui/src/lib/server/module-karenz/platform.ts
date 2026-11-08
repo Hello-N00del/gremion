@@ -103,7 +103,7 @@ export async function listKarenz(customerId: string, closedWithinDays = DEFAULT_
 export async function reportKarenz(customerId: string, karenzId: string, e: KarenzReport): Promise<void> {
   const step = e.step.slice(0, STEP_MAX)
   // by code point, like the platform's length(): a cut must not split a surrogate pair
-  const points = [...e.message]
+  const points = Array.from(e.message)
   const message = points.length > MESSAGE_MAX ? points.slice(0, MESSAGE_MAX).join('') : e.message
   await getCouncilDb()`
     SELECT plt.council_karenz_report(${customerId}::uuid, ${karenzId}::uuid, ${step}, ${e.level}, ${message}, ${e.mark ?? null})`
