@@ -193,7 +193,7 @@ test('a docker ps that fails throws instead of looking like zero containers', ()
 test('R1: expectedServices can be narrowed to the active profiles; the kernel is always expected', () => {
   const text = readFileSync(join(ROOT, 'docker-compose.yml'), 'utf8')
   // TASK-084-a: governance-postgres has no profile, so it is expected under every profile set
-  assert.deepEqual(expectedServices([text], []).map((e) => e.service).sort(), ['governance-postgres', 'postgres'])
+  assert.deepEqual(expectedServices([text], []).map((e) => e.service).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)), ['governance-postgres', 'postgres'])
   assert.deepEqual(expectedServices([text], ['vault']).map((e) => e.service).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)), ['governance-postgres', 'postgres', 'vault-postgres'])
   assert.deepEqual(expectedServices([text], ['board']).map((e) => e.service).filter((s) => s === 'governance-postgres'), ['governance-postgres'])
 })
