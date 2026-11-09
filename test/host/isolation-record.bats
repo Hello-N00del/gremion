@@ -204,6 +204,17 @@ rows_all_pass() {
     [ ! -e "$(cat "${GREMION_ROOT}/out-dir-seen")" ]
 }
 
+@test "run: a failed rerun for the same tip leaves no evidence of the earlier pass behind, so 'no evidence was kept' is true" {
+    mkdir -p "${GREMION_ROOT}/ev/${TIP}"
+    echo '{}' > "${GREMION_ROOT}/ev/${TIP}.json"
+    echo '{}' > "${GREMION_ROOT}/ev/${TIP}/calendar.vitest.json"
+    : > "${GREMION_ROOT}/toolchain-fails"
+    run "$PROG" run --out "${GREMION_ROOT}/ev"
+    [ "$status" -eq 1 ]
+    [ ! -e "${GREMION_ROOT}/ev/${TIP}.json" ]
+    [ ! -e "${GREMION_ROOT}/ev/${TIP}" ]
+}
+
 @test "run asserts the post-condition: a toolchain run that exits 0 and wrote no evidence file is a failure" {
     : > "${GREMION_ROOT}/toolchain-writes-nothing"
     run "$PROG" run --out "${GREMION_ROOT}/ev"

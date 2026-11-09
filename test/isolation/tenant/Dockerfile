@@ -17,11 +17,15 @@ FROM node:26.13.0-alpine@sha256:c6ad9e9c1d80f6eb607c26b4b0a132ff7a2344fad1c78ea3
 
 # node:26-alpine bundles no corepack (dropped from core in Node 25+); the pnpm
 # version is the one the root package.json pins in packageManager, prepared here
-# so the run does not fetch it. git: the clone and the verify dirty-tree checks.
+# so the run does not fetch it. The run is another uid with HOME=/tmp, so the
+# prepared copy lives in a shared, world-readable COREPACK_HOME rather than under
+# root's home. git: the clone and the verify dirty-tree checks.
+ENV COREPACK_HOME=/opt/corepack
 RUN apk add --no-cache git \
  && npm install -g corepack \
  && corepack enable pnpm \
- && corepack prepare pnpm@10.33.0 --activate
+ && corepack prepare pnpm@10.33.0 --activate \
+ && chmod -R a+rX /opt/corepack
 
 # The run uses the host user's uid (the bind-mounted output directory is 0700 and
 # owned by that user), which has no passwd entry here: HOME is passed with -e and

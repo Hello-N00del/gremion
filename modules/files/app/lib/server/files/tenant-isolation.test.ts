@@ -68,6 +68,7 @@ interface Recorded {
   path: string
   auth: string | null
   destination: string | null
+  /** the X-Nextcloud-User header: when present it must name the caller */
   impersonate: string | null
 }
 
@@ -193,7 +194,7 @@ class FakeNextcloud {
       }
     }
     if (m === 'POST' && path === '/ocs/v2.php/apps/richdocuments/api/v1/document') {
-      const fileId = Number(new URLSearchParams(String(init.body)).get('fileId'))
+      const fileId = Number(new URLSearchParams(typeof init.body === 'string' ? init.body : '').get('fileId'))
       const p = this.fileIds.get(fileId)
       if (!p || !mayTouch(p)) return new Response('forbidden', { status: 403 })
       return Response.json({ ocs: { data: { url: 'http://nc.test/apps/richdocuments/direct/abc' } } })
@@ -266,29 +267,22 @@ const call = (h: Handler, e: never) => Promise.resolve(h(e))
 
 /** Everything the attack caused must belong to the attacker: its bearer, its folder. */
 function expectConfinedToA(reqs: Recorded[]): void {
+  const inA = (p: string) => p === A_ROOT || p.startsWith(`${A_ROOT}/`)
+  const okPath = (p: string) => inA(p) || p.startsWith(`/remote.php/dav/uploads/${A_ID}/`) || p.startsWith('/ocs/v2.php/apps/richdocuments/') || p.startsWith('/apps/richdocuments/')
   for (const r of reqs) {
     // the single-use direct-view page: its token is in the path, it carries no credential
-    if (r.method === 'GET' && r.path.startsWith('/apps/richdocuments/direct/')) {
-      expect(r.auth).toBeNull()
-      continue
-    }
-    const isUser = r.auth === 'Bearer tok-A'
-    const isAdminChunk = r.auth?.startsWith('Basic ') === true
-    expect(isUser || isAdminChunk, `request ${r.method} ${r.path} carries ${r.auth}`).toBe(true)
-    if (r.auth === 'Bearer tok-B') throw new Error('the caller sent the other customer\'s bearer')
-    const ok = (p: string) => p === A_ROOT || p.startsWith(`${A_ROOT}/`) || p.startsWith(`/remote.php/dav/uploads/${A_ID}/`) || p.startsWith('/ocs/v2.php/apps/richdocuments/') || p.startsWith('/apps/richdocuments/')
-    expect(ok(r.path), `${r.method} ${r.path} is outside the caller's folder`).toBe(true)
-    if (r.destination !== null) expect(r.destination === A_ROOT || r.destination.startsWith(`${A_ROOT}/`), `destination ${r.destination} is outside the caller's folder`).toBe(true)
+    const direct = r.method === 'GET' && r.path.startsWith('/apps/richdocuments/direct/')
+    const credentialOk = direct ? r.auth === null : r.auth === 'Bearer tok-A' || r.auth?.startsWith('Basic ') === true
+    expect(credentialOk, `request ${r.method} ${r.path} carries ${r.auth}`).toBe(true)
+    expect(direct || okPath(r.path), `${r.method} ${r.path} is outside the caller's folder`).toBe(true)
+    expect(r.destination === null || inA(r.destination), `destination ${r.destination} is outside the caller's folder`).toBe(true)
+    expect(r.impersonate === null || r.impersonate === A_ID, `request ${r.method} ${r.path} impersonates ${r.impersonate}`).toBe(true)
   }
 }
 const bIntact = () => {
   expect(nc.read(B_ID, 'Docs/b-secret.txt')).toBe('canary-b-secret')
   expect(nc.read(B_ID, 'Docs/b-secret.docx')).toBe('canary-b-doc')
   expect([...nc.files.keys()].filter((k) => k.startsWith(`${B_ROOT}/`)).sort()).toEqual([`${B_ROOT}/Docs/b-secret.docx`, `${B_ROOT}/Docs/b-secret.txt`])
-}
-const control = (route: string, fn: () => Promise<void>) => async () => {
-  controlled.add(route)
-  await fn()
 }
 const attack = (route: string, fn: () => Promise<void>) => async () => {
   attacked.add(route)
@@ -504,11 +498,12 @@ describe('DELETE /api/files/[...path]: A cannot delete from B', () => {
     }))
   }
 
-  it("A's bearer against B's folder is refused by Nextcloud, even if a path reached it (the fake's own rule)", attack(R.del, async () => {
+  // The fake's own rule, not app code: it is not counted as an attack on the route.
+  it("A's bearer against B's folder is refused by Nextcloud, even if a path reached it (the fake's own rule)", async () => {
     const res = await nc.handle(`http://nc.test${B_ROOT}/Docs/b-secret.txt`, { method: 'DELETE', headers: { Authorization: 'Bearer tok-A' } })
     expect(res.status).toBe(403)
     bIntact()
-  }))
+  })
 })
 
 describe('PATCH /api/files/[...path]: A cannot move or copy from or into B', () => {
@@ -565,7 +560,7 @@ describe('POST /api/files/upload-chunk: the admin-credentialed chunk path cannot
     const m = nc.mark()
     // `.` and `..` fit the id's character set and would climb out of the caller's upload folder.
     for (const id of [`../${B_ID}/up-3`, `${B_ID}/up-3`, `a${BS}b`, '..', '.', 'x y', '']) {
-      await expect(post(q({ uploadId: id }))).rejects.toMatchObject({ status: expect.any(Number) })
+      await expect(post(q({ uploadId: id }))).rejects.toMatchObject({ status: 400 })
     }
     expect(nc.since(m)).toEqual([])
     bIntact()
@@ -608,14 +603,15 @@ describe('GET /api/files/edit-token/[...path]: A cannot obtain an editor session
     expect(reqs.some((r) => r.path.startsWith('/ocs/'))).toBe(false)
   }))
 
-  it("A's bearer cannot mint an editor session for B's file id even when the id is known (Nextcloud's own rule, as the fake enforces it)", attack(R.edit, async () => {
+  // The fake's own rule, not app code: it is not counted as an attack on the route.
+  it("A's bearer cannot mint an editor session for B's file id even when the id is known (Nextcloud's own rule, as the fake enforces it)", async () => {
     const res = await nc.handle('http://nc.test/ocs/v2.php/apps/richdocuments/api/v1/document?format=json', {
       method: 'POST',
       headers: { Authorization: 'Bearer tok-A', 'Content-Type': 'application/x-www-form-urlencoded' },
       body: 'fileId=102',
     })
     expect(res.status).toBe(403)
-  }))
+  })
 })
 
 // ================================================================================

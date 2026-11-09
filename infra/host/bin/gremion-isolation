@@ -160,6 +160,10 @@ cmd_run() {
     done
     [[ -n "$ready" ]] || die "the throwaway postgres ${pg} was not ready over TCP within 60 s" "$GREMION_EXIT_ASSERT"
 
+    # An earlier pass for this tip must not survive a failed rerun: "no evidence was
+    # kept" below is then true, and `record` cannot import a stale file.
+    rm -rf "${out:?}/${tip:?}.json" "${out:?}/${tip:?}"
+
     info "building the toolchain image ${tool} (no repository content)"
     docker build -q -t "$tool" -f "${RELEASE_DIR}/${TOOLCHAIN_CONTEXT}/Dockerfile" "${RELEASE_DIR}/${TOOLCHAIN_CONTEXT}" >/dev/null \
         || die "could not build the toolchain image ${tool}" "$GREMION_EXIT_ASSERT"

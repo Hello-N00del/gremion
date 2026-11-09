@@ -17,9 +17,11 @@
  *      homeserver per tenant (registry services) it only reaches A's homeserver
  *      and never B's admin or user token, with the shared homeserver the user
  *      tokens stay A's;
- *   3. B's rooms are not listed, not readable, not writable and not addressable
- *      by alias as A, and a room administration action on B's room is refused
- *      before any Matrix write, because the room is looked up in A's own ledger.
+ *   3. B's rooms are not listed, not readable and not writable as A, and a room
+ *      administration action on B's room is refused before any Matrix write,
+ *      because the room is looked up in A's own ledger. Alias lookup is checked
+ *      with a homeserver per tenant only; room aliases on ONE shared homeserver
+ *      are outside what this file shows.
  *
  * It shows app-layer scoping against ONE shared Synapse. It does NOT show that a
  * second customer can be added to a running installation, and it does not
@@ -106,7 +108,7 @@ const B_SHARED = ctx('tid-b')
 const A_OWN = ctx('tid-a', { matrixUrl: 'http://synapse-a.test:8008', synapseAdminTokenRef: 'env:TOKEN_ADMIN_A', synapseAdminBotUserId: '@bot:a.test', synapseServerName: 'a.test' })
 const B_OWN = ctx('tid-b', { matrixUrl: 'http://synapse-b.test:8008', synapseAdminTokenRef: 'env:TOKEN_ADMIN_B', synapseAdminBotUserId: '@bot:b.test', synapseServerName: 'b.test' })
 LEDGER.currentTenant = () => current?.id ?? ''
-let current: TenantContext | null = null
+let current: { id: string } | null = null
 const as = <T>(t: TenantContext, fn: () => T): T => {
   current = t
   return runWithTenant(t, fn)
@@ -185,7 +187,7 @@ class FakeSynapses {
     const kind: Rec['kind'] = token === null ? 'none' : token === server.adminToken ? 'admin' : userId ? 'user' : 'unknown'
     this.requests.push({ host: u.host, method, path, token, kind })
     const json = (status: number, body: unknown = {}) => Response.json(body, { status })
-    const body = init.body ? ((): Record<string, unknown> => { try { return JSON.parse(String(init.body)) as Record<string, unknown> } catch { return {} } })() : {}
+    const body = init.body ? ((): Record<string, unknown> => { try { return JSON.parse(typeof init.body === 'string' ? init.body : '') as Record<string, unknown> } catch { return {} } })() : {}
 
     if (method === 'POST' && path === '/_matrix/client/v3/login') {
       const sub = (JSON.parse(Buffer.from(String(body.token).split('.')[1]!, 'base64url').toString()) as { sub: string }).sub
@@ -313,7 +315,7 @@ function ev(tenant: TenantContext, who: SessionUser, sub: string, p: { roomId?: 
     params: { roomId: p.roomId },
     locals: { user: who, auth: async () => ({ user: who, accessToken: jwt(sub) }) },
     url,
-    request: new Request(url, { method: p.method ?? 'GET', headers: { Authorization: `Bearer ${jwt(sub)}`, ...(p.headers ?? {}) }, ...(p.body !== undefined && p.body !== null ? { body: p.body } : {}) }),
+    request: new Request(url, { method: p.method ?? 'GET', headers: { Authorization: `Bearer ${jwt(sub)}`, ...p.headers }, ...(p.body !== undefined && p.body !== null ? { body: p.body } : {}) }),
     _tenant: tenant,
   } as never
 }
@@ -444,11 +446,9 @@ describe('no Matrix token crosses customers', () => {
     await as(B_OWN, () => getSynapseAdmin().isRoomMember('!room-b:b.test', '@bob:b.test'))
     const reqs = net.since(m)
     noUnknownTokens(reqs)
-    for (const r of reqs) {
-      // the login carries no token; everything else carries the host's own admin token or a token it issued
-      if (r.host === 'synapse-a.test:8008') expect([null, 'admin-of-a', sa]).toContain(r.token)
-      if (r.host === 'synapse-b.test:8008') expect([null, 'admin-of-b', sb]).toContain(r.token)
-    }
+    // the login carries no token; everything else carries the host's own admin token or a token it issued
+    const ownTokens = (host: string): Array<string | null> => (host === 'synapse-a.test:8008' ? [null, 'admin-of-a', sa] : host === 'synapse-b.test:8008' ? [null, 'admin-of-b', sb] : [])
+    expect(reqs.filter((r) => !ownTokens(r.host).includes(r.token))).toEqual([])
     expect(reqs.some((r) => r.host === 'synapse-a.test:8008')).toBe(true)
     expect(reqs.some((r) => r.host === 'synapse-b.test:8008')).toBe(true)
   })
@@ -508,7 +508,7 @@ describe("B's rooms are not listed, readable or writable as A", () => {
   })
 })
 
-describe("B's rooms and aliases are not addressable as A", () => {
+describe("B's rooms and aliases are not addressable as A (homeserver per tenant)", () => {
   it('with a homeserver per tenant, B\'s alias does not resolve through A\'s client and A\'s alias does not through B\'s', async () => {
     separate()
     expect(await as(A_OWN, () => getMatrixClient().getRoomIdByAlias('#stura-vorstand:b.test'))).toBeNull()

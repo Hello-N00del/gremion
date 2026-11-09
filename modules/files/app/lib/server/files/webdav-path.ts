@@ -50,6 +50,7 @@ export function sanitizeRelPath(paramPath: string): string {
   // another user's folder. Control characters and backslashes are never part of
   // a Nextcloud file name (its forbidden characters include `\`), so they are
   // refused outright rather than normalised.
+  // oxlint-disable-next-line no-control-regex -- the pattern exists to REFUSE control characters
   if (/[\\\u0000-\u001f\u007f]/.test(decoded)) {
     throw error(400, 'Invalid path characters')
   }
