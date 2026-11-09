@@ -24,6 +24,7 @@ const reg = vi.hoisted(() => ({
   evictTenantRuntime: vi.fn(),
   getTenantById: vi.fn(),
   getTenantBySlug: vi.fn(),
+  resolveTenantById: vi.fn(),
   markTenantResourceOk: vi.fn(async () => {}),
   primaryHostForTenant: vi.fn(async () => 'rat.musterstadt.example'),
   registerTenant: vi.fn(async (input: { slug: string }) => ({ id: '0192f1a2-3b4c-7d5e-8f60-718293a4b5c6', slug: input.slug, status: 'provisioning', realmName: input.slug })),
@@ -72,7 +73,7 @@ vi.mock('postgres', async (orig) => {
   }
 })
 
-const { customerAdapters, kernelServer, ensureKernelPostMigrationPrivileges, reconcileKernelAudit } = await import('./customer-adapters')
+const { customerAdapters, kernelServer, ensureKernelPostMigrationPrivileges, reconcileKernelAudit, inActiveContext } = await import('./customer-adapters')
 const { runWithTenant } = await import('$lib/server/tenant/context')
 const { runMigrations } = await import('$lib/server/db')
 
@@ -606,5 +607,59 @@ describe('customerAdapters.broker.ensure: the kernel-api identity rides with eve
     expect(ensure).toHaveBeenLastCalledWith({ tenant: 'musterstadt', modules: ['calendar', 'finance', 'kernel-api'] })
     await a.broker.ensure(C, [])
     expect(ensure).toHaveBeenLastCalledWith({ tenant: 'musterstadt', modules: ['kernel-api'] })
+  })
+})
+
+// gremion#82: the member-import verbs (seed-vertical, import-validate, import-apply) run on an ACTIVE
+// customer. inProvisioningContext refuses an active row (the Q21 guard stays as it is), so they use
+// inActiveContext: the ordinary tenant context (resolveTenantById: active rows only, null otherwise),
+// the pool evicted before and after, no owner-role url override.
+describe('inActiveContext: a tenant context for an active customer only (gremion#82)', () => {
+  const ctx = { id: C.id, slug: C.slug }
+  // resolveTenantById's contract (registry.ts): the context for an active row, null for any other status
+  const registryRow = (status: string) => reg.resolveTenantById.mockImplementation(async () => (status === 'active' ? ctx : null))
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.mocked(runWithTenant).mockImplementation(async (_ctx, fn) => fn())
+  })
+
+  it('runs fn inside runWithTenant with the resolved context for an active row, and returns its value', async () => {
+    registryRow('active')
+    const seen: unknown[] = []
+    vi.mocked(runWithTenant).mockImplementation(async (c, fn) => (seen.push(c), fn()))
+    await expect(inActiveContext(C, async () => 'done')).resolves.toBe('done')
+    expect(reg.resolveTenantById).toHaveBeenCalledWith(C.id)
+    expect(seen).toEqual([ctx])
+    expect(reg.contextForProvisioningTenant).not.toHaveBeenCalled()
+  })
+
+  it('evicts the tenant pool before the context is built and again after fn', async () => {
+    registryRow('active')
+    const order: string[] = []
+    reg.evictTenantRuntime.mockImplementation(() => void order.push('evict'))
+    reg.resolveTenantById.mockImplementation(async () => (order.push('resolve'), ctx))
+    await inActiveContext(C, async () => void order.push('fn'))
+    expect(order).toEqual(['evict', 'resolve', 'fn', 'evict'])
+    expect(reg.evictTenantRuntime).toHaveBeenCalledWith(C.id)
+    reg.evictTenantRuntime.mockReset()
+  })
+
+  it.each(['provisioning', 'suspended', 'deleting'])('throws for a %s row and never runs fn', async (status) => {
+    registryRow(status)
+    const fn = vi.fn(async () => 'never')
+    await expect(inActiveContext(C, fn)).rejects.toThrow(/not active/)
+    expect(fn).not.toHaveBeenCalled()
+    expect(runWithTenant).not.toHaveBeenCalled()
+  })
+
+  it('evicts the pool in finally when fn throws, and when the row is not active', async () => {
+    registryRow('active')
+    reg.evictTenantRuntime.mockClear()
+    await expect(inActiveContext(C, async () => { throw new Error('boom') })).rejects.toThrow('boom')
+    expect(reg.evictTenantRuntime).toHaveBeenCalledTimes(2)
+    reg.evictTenantRuntime.mockClear()
+    registryRow('suspended')
+    await expect(inActiveContext(C, async () => 1)).rejects.toThrow(/not active/)
+    expect(reg.evictTenantRuntime).toHaveBeenCalledTimes(2)
   })
 })

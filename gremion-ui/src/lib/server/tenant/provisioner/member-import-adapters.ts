@@ -10,7 +10,7 @@
 //     the vertical's roles.json, enforced by the later role catalogue).
 //   * rows: the legacy org_unit_members / org_units / provisioning_resources
 //     tables through the tenant's own getDb() (the app role's pooled runtime
-//     URL inside inProvisioningContext). It opens no connection of its own.
+//     URL inside inActiveContext). It opens no connection of its own.
 //   * seed: org units created with their projection rows in ONE transaction
 //     each; D-8 decides the matrix / Nextcloud rows (planSeed).
 import {
@@ -98,7 +98,7 @@ export function memberImportTarget(accounts: Pick<MemberImportTarget, 'findUserI
   }
 }
 
-/** The SQL store. Must be called inside the tenant's context (inProvisioningContext). */
+/** The SQL store. Must be called inside the tenant's context (inActiveContext). */
 export function sqlOrgStore(): OrgStore {
   return {
     async listBodies() {

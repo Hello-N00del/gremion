@@ -145,7 +145,9 @@ phase_import_unstage() {
 phase_import_seed() {
     need_pooled
     local id st units want
-    want="$(jq '.orgUnits | length' "$ROOT/packages/member-import/test/fixtures/verticals/fixture/blueprint.json")"
+    # the unit count is the seeded vertical's own blueprint (the staged fixture, or a real vertical such as stura), never the fixture's
+    [[ -f "$ROOT/verticals/$VERTICAL/blueprint.json" ]] || die "import-seed: no blueprint at verticals/${VERTICAL} (run import-stage first, or use a vertical that is part of this tree)"
+    want="$(jq '.orgUnits | length' "$ROOT/verticals/$VERTICAL/blueprint.json")"
     id="$(jq -nc --arg slug "$SLUG" --arg v "$VERTICAL" '{slug:$slug, vertical:$v}' | submit seed_vertical)" || { bad "import-seed: the request was not queued"; return; }
     st="$(run_request "$id")" || true
     events "$id" | ledger "seed-${id}.events"
