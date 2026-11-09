@@ -7,6 +7,9 @@
 // "verify: ...", "<kind> <slug>: failed in <step> (exit N); ...",
 // "refused: <reason>", "no handler for <kind>".
 import { describe, expect, it } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { describeRequest, EXECUTOR_STEP_LABEL } from './request-state'
 
 const base = { kind: 'create', state: 'queued', evidenceVerifiedAt: null as string | null, outcome: null as string | null, lastStep: null as string | null }
@@ -80,7 +83,7 @@ describe('describeRequest: refused', () => {
       'refused: module vault is disabled in this build (modules/disabled.json)',
       'refused: dpia.calendar.document_ref is required: the written decision (TOM-annex entry) must be named for every module, whatever requires_dpia says',
       'refused: operator 8d6b9c7e is disabled in the ops realm',
-      'no handler for import_members',
+      'no handler for import_isolation',
     ]) {
       const d = describeRequest({ ...base, state: 'refused', outcome: o })
       expect(d).toMatchObject({ phase: 'refused', retryable: false })
@@ -132,5 +135,59 @@ describe('describeRequest: the module and reconcile kinds (TRD-044)', () => {
   it('the running step is named in German', () => {
     expect(describeRequest({ ...base, kind: 'reconcile', state: 'running', evidenceVerifiedAt: '2026-10-27T10:00:30Z', lastStep: 'reconcile' }).text).toMatch(/Abgleich/)
     expect(describeRequest({ ...base, kind: 'disable_module', state: 'running', evidenceVerifiedAt: '2026-10-27T10:00:30Z', lastStep: 'disable_module' }).text).toMatch(/Modul deaktivieren/)
+  })
+})
+
+describe('the vertical and member kinds (seed_vertical, import_members)', () => {
+  it.each(['seed_vertical', 'import_members', 'validate', 'dump', 'apply', 'rerun', 'discard', 'import-apply'])('executor step %s has a German label', (s) => {
+    expect(EXECUTOR_STEP_LABEL[s]).toBeTruthy()
+    expect(describeRequest({ ...base, kind: 'import_members', state: 'running', evidenceVerifiedAt: 'x', lastStep: s }).text).toContain(EXECUTOR_STEP_LABEL[s]!)
+  })
+  it('the import-apply marker tenant-provision.ts writes on stderr is the one that is labelled', () => {
+    const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '../../../../gremion-ui/scripts/tenant-provision.ts'), 'utf8')
+    const m = /@@executor-step (import-apply)\\n/.exec(src)
+    expect(m).not.toBeNull()
+    expect(EXECUTOR_STEP_LABEL[m![1]!]).toBeTruthy()
+  })
+  it.each(['seed_vertical', 'import_members'])('a failed %s is never retried as a copy: the page says to trigger the action again (the list is purged from the row)', (kind) => {
+    const d = describeRequest({ ...base, kind, state: 'failed', outcome: `${kind} proof-z: failed in apply (exit 1); a new request resumes from the ledger` })
+    expect(d.retryable).toBe(false)
+    expect(d.retryNote).toMatch(/Bereich „Vertikale und Mitglieder“/)
+    expect(d.step).toBe('apply')
+  })
+  it.each(['expired', 'dead'])('a %s import is not retried as a copy either', (state) => {
+    const d = describeRequest({ ...base, kind: 'import_members', state })
+    expect(d.retryable).toBe(false)
+    expect(d.retryNote).toMatch(/Bereich „Vertikale und Mitglieder“/)
+  })
+  it('the seed_vertical handler marks its step "seed": it has a German label, running and failed', () => {
+    expect(EXECUTOR_STEP_LABEL.seed).toBeTruthy()
+    const run = describeRequest({ ...base, kind: 'seed_vertical', state: 'running', evidenceVerifiedAt: 'x', lastStep: 'seed' })
+    expect(run.text).toContain(EXECUTOR_STEP_LABEL.seed!)
+    const failed = describeRequest({ ...base, kind: 'seed_vertical', state: 'failed', outcome: 'seed_vertical proof-z: failed in seed (exit 1); a new request resumes from the ledger' })
+    expect(failed.text).toContain(EXECUTOR_STEP_LABEL.seed!)
+  })
+  it('a failed or expired seed_vertical does not say a member list is uploaded again; import_members does', () => {
+    for (const state of ['failed', 'expired', 'dead']) {
+      const seed = describeRequest({ ...base, kind: 'seed_vertical', state, outcome: 'seed_vertical proof-z: failed in seed (exit 1); x' })
+      expect(seed.retryNote).toMatch(/Bereich „Vertikale und Mitglieder“/)
+      expect(seed.retryNote).not.toMatch(/Mitgliederliste/)
+      const imp = describeRequest({ ...base, kind: 'import_members', state, outcome: 'import_members proof-z: failed in apply (exit 1); x' })
+      expect(imp.retryNote).toMatch(/Mitgliederliste wird dafür neu hochgeladen/)
+    }
+  })
+  it.each(['seed_vertical', 'import_members'])('a refused %s points to its own section, not to the "Neuer Mandant" form', (kind) => {
+    for (const outcome of ['refused: the member list exceeds 1048576 bytes', 'no handler for x']) {
+      const d = describeRequest({ ...base, kind, state: 'refused', outcome })
+      expect(d.retryNote).toMatch(/Bereich „Vertikale und Mitglieder“/)
+      expect(d.retryNote).not.toMatch(/Neuer Mandant/)
+    }
+  })
+  it('a refused create still points to the "Neuer Mandant" form', () => {
+    expect(describeRequest({ ...base, kind: 'create', state: 'refused', outcome: 'refused: bad slug' }).retryNote).toMatch(/Neuer Mandant/)
+  })
+  it('"no handler" is shown only for the outcome the executor wrote, never derived from a handled kind', () => {
+    expect(describeRequest({ ...base, kind: 'import_members', state: 'succeeded' }).code).toBeNull()
+    expect(describeRequest({ ...base, kind: 'import_members', state: 'refused', outcome: 'refused: the member list exceeds 1048576 bytes' }).code).toBe('refused')
   })
 })

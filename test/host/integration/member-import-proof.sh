@@ -145,7 +145,9 @@ phase_import_unstage() {
 phase_import_seed() {
     need_pooled
     local id st units want
-    want="$(jq '.orgUnits | length' "$ROOT/packages/member-import/test/fixtures/verticals/fixture/blueprint.json")"
+    # the unit count is the seeded vertical's own blueprint (the staged fixture, or a real vertical such as stura), never the fixture's
+    [[ -f "$ROOT/verticals/$VERTICAL/blueprint.json" ]] || die "import-seed: no blueprint at verticals/${VERTICAL} (run import-stage first, or use a vertical that is part of this tree)"
+    want="$(jq '.orgUnits | length' "$ROOT/verticals/$VERTICAL/blueprint.json")"
     id="$(jq -nc --arg slug "$SLUG" --arg v "$VERTICAL" '{slug:$slug, vertical:$v}' | submit seed_vertical)" || { bad "import-seed: the request was not queued"; return; }
     st="$(run_request "$id")" || true
     events "$id" | ledger "seed-${id}.events"
@@ -194,12 +196,10 @@ phase_import_validate() {
     st="$(run_request "$id")" || true
     events "$id" | ledger "validate-${id}.events"
     [[ "$st" == succeeded ]] && ok "import-validate: request ${id} succeeded" || { bad "import-validate: request is ${st:-unknown}"; return; }
-    sha="$(events "$id" | sed -n 's/.*status=validated sha256=\([0-9a-f]\{64\}\).*//p' | head -n1)"
-    [[ "$sha" =~ ^[0-9a-f]{64}$ ]] && { printf '%s
-' "$sha" > "$OUT/sha256"; ok "import-validate: the events carry the list's sha256"; } || bad "import-validate: no sha256 in the events"
+    sha="$(events "$id" | sed -n 's/.*status=validated sha256=\([0-9a-f]\{64\}\).*/\1/p' | head -n1)"
+    [[ "$sha" =~ ^[0-9a-f]{64}$ ]] && { printf '%s\n' "$sha" > "$OUT/sha256"; ok "import-validate: the events carry the list's sha256"; } || bad "import-validate: no sha256 in the events"
     [[ "$(k "SELECT count(*) FROM org_unit_members")" == "$mb" ]] && ok "import-validate: wrote nothing" || bad "import-validate: memberships changed"
-    printf '%s
-' "$mb" > "$OUT/members-before"
+    printf '%s\n' "$mb" > "$OUT/members-before"
 }
 
 phase_import_apply() {

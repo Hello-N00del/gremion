@@ -28,6 +28,20 @@ printf 'dump %s\n' "$*" >> "$ORDER"
 exit 0
 STUB
     chmod +x "${GREMION_ROOT}/stubbin/gremion-migration-dump"
+    # the mail front the real mail_sender_args calls (customer-ops.sh): the
+    # transport comes from MAIL_TRANSPORT (stalwart when a case sets nothing);
+    # a marker file makes it unresolvable, which must fail the handler closed
+    cat > "${GREMION_ROOT}/stubbin/gremion-mail" <<'STUB'
+#!/usr/bin/env bash
+[ ! -f "${GREMION_ROOT}/mail-unresolvable" ] || exit 2
+[ ! -f "${GREMION_ROOT}/sender-json-unresolvable" ] || [ "$1" != sender-json ] || exit 3
+case "$1" in
+    transport) echo "${MAIL_TRANSPORT:-stalwart}" ;;
+    sender-json) echo '{"mode":"relay","host":"relay.example.net","port":587,"fromAddress":"no-reply@example.org","user":"relay-user@example.org"}' ;;
+    *) exit 64 ;;
+esac
+STUB
+    chmod +x "${GREMION_ROOT}/stubbin/gremion-mail"
     # tc <verb> ...: the list on STDIN; the answer of the Nth call of a verb is
     # ${GREMION_ROOT}/answer.<verb>.<N> (line 1 the exit code, the rest stdout).
     cat > "${GREMION_ROOT}/stubs.sh" <<'STUB'
@@ -216,6 +230,77 @@ order() { cat "$ORDER"; }
     [[ "$output" == *"  row 2: role_changed"* ]]
     [[ "$output" != *"Erika"* && "$output" != *"Mustermann"* ]]
     grep -q "^dump discard --release import-${REQ} --reason member import rejected before any write" "$ORDER"
+}
+
+# ---- the relay sender (the container's assertSmtpStamped refuses an apply without it) ----
+
+SENDER_FLAG='--sender-json {"mode":"relay"'
+
+@test "relay: validate, the apply and its rerun ALL carry --sender-json (assertSmtpStamped refuses an apply without the stamp)" {
+    export MAIL_TRANSPORT=relay
+    args_apply
+    answer import-validate "" 0 "$(validated_json)"
+    answer import-apply 1 0 "$(applied_json 1 1 1)"
+    answer import-apply 2 0 "$(applied_json 0 0 0)"
+    drive handle_import_members
+    [ "$status" -eq 0 ]
+    grep -q "^tc import-validate #1 .*${SENDER_FLAG}" "$ORDER"
+    grep -q "^tc import-apply #1 .*--expect-sha256 ${SHA} ${SENDER_FLAG}" "$ORDER"
+    grep -q "^tc import-apply #2 .*--expect-sha256 ${SHA} ${SENDER_FLAG}" "$ORDER"
+}
+
+@test "relay: a validate-only request carries --sender-json too (one launcher shape for both phases)" {
+    export MAIL_TRANSPORT=relay
+    answer import-validate "" 0 "$(validated_json)"
+    drive handle_import_members
+    [ "$status" -eq 0 ]
+    grep -q "^tc import-validate #1 .*${SENDER_FLAG}" "$ORDER"
+}
+
+@test "stalwart: no --sender-json on any call (the container calls stay byte-identical to before)" {
+    export MAIL_TRANSPORT=stalwart
+    args_apply
+    answer import-validate "" 0 "$(validated_json)"
+    answer import-apply 1 0 "$(applied_json 1 1 1)"
+    answer import-apply 2 0 "$(applied_json 0 0 0)"
+    drive handle_import_members
+    [ "$status" -eq 0 ]
+    assert_absent 'sender-json' "$ORDER" 'stalwart must pass no sender descriptor'
+    grep -q "^tc import-apply #1 stdin=[0-9]* argv=import-apply alpha-rat --vertical stura --expect-sha256 ${SHA}\$" "$ORDER"
+}
+
+@test "relay: no member data reaches a recorded argv beside the sender descriptor" {
+    export MAIL_TRANSPORT=relay
+    answer import-validate "" 0 "$(validated_json)"
+    drive handle_import_members
+    [ "$status" -eq 0 ]
+    assert_absent 'Mustermann' "$ORDER" 'a row name reached a recorded argv'
+    assert_absent "$SECRET_MAIL" "$ORDER" 'an address reached a recorded argv'
+}
+
+@test "a transport that cannot be resolved fails the request closed before the container is touched" {
+    export MAIL_TRANSPORT=relay
+    touch "${GREMION_ROOT}/mail-unresolvable"
+    args_apply
+    drive handle_import_members
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"mail sender could not be resolved"* ]]
+    [[ "$output" == *"MAIL_TRANSPORT"* ]]
+    [ ! -s "$ORDER" ]
+    [ ! -e "${WORK}/list.csv" ]
+}
+
+@test "relay whose sender descriptor cannot be read fails closed too, and the message names the descriptor, not only the transport" {
+    export MAIL_TRANSPORT=relay
+    touch "${GREMION_ROOT}/sender-json-unresolvable"
+    args_apply
+    drive handle_import_members
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"mail sender could not be resolved"* ]]
+    [[ "$output" == *"sender descriptor"* ]]
+    [[ "$output" == *"nothing was written"* ]]
+    [ ! -s "$ORDER" ]
+    [ ! -e "${WORK}/list.csv" ]
 }
 
 @test "args that name another customer than the request are refused before the container is touched" {

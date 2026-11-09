@@ -26,6 +26,10 @@
 #             discard commands. A list the apply rejects before any write (a
 #             role change) discards its dump, nothing having been written.
 #
+#   Every container call (validate, apply, rerun) carries the host's mail sender
+#   descriptor (`--sender-json`, MAIL_TRANSPORT=relay only; stalwart passes
+#   nothing): the apply refuses without it (assertSmtpStamped).
+#
 # Neither an e-mail address nor a NAME is ever printed: every line of this handler
 # becomes an append-only request event and an audit.log line, so a rejected row is
 # named by its row number and reason code only (the operator reads the list).
@@ -78,6 +82,10 @@ handle_import_members() {
     [[ -f "$args" ]] || die "import_members ${id}: no verified args" "$GREMION_EXIT_ASSERT"
     jq -e --arg s "$slug" '.slug == $s' "$args" >/dev/null \
         || die "import_members ${id}: the verified args name another customer than ${slug}" "$GREMION_EXIT_ASSERT"
+    # On MAIL_TRANSPORT=relay the container's apply refuses (assertSmtpStamped) unless the
+    # host hands it the sender it stamped; stalwart passes nothing. Resolved before the list
+    # is written or the container is touched: an unresolvable transport or sender descriptor fails the request closed.
+    mail_sender_args || die "import_members ${id}: the mail sender could not be resolved (MAIL_TRANSPORT, or the relay sender descriptor for --sender-json); nothing was written" "$GREMION_EXIT_ASSERT"
     phase="$(jq -r '.phase' "$args")"
     vertical="$(jq -r '.vertical' "$args")"
     jq -j '.csv' "$args" | atomic_write "$list" 600 \
@@ -86,7 +94,7 @@ handle_import_members() {
 
     import_step validate
     rc=0
-    import_tc "$list" import-validate "$slug" --vertical "$vertical" || rc=$?
+    import_tc "$list" import-validate "$slug" --vertical "$vertical" ${MAIL_SENDER_ARGS[@]+"${MAIL_SENDER_ARGS[@]}"} || rc=$?
     [[ -n "$IMPORT_JSON" ]] || die "import_members ${id}: import-validate printed no result (exit ${rc})" "$GREMION_EXIT_ASSERT"
     import_report validate
     status="$(import_field '.status')"
@@ -117,7 +125,7 @@ handle_import_members() {
 
     import_step apply
     rc=0
-    import_tc "$list" import-apply "$slug" --vertical "$vertical" --expect-sha256 "$expect" || rc=$?
+    import_tc "$list" import-apply "$slug" --vertical "$vertical" --expect-sha256 "$expect" ${MAIL_SENDER_ARGS[@]+"${MAIL_SENDER_ARGS[@]}"} || rc=$?
     if [[ -z "$IMPORT_JSON" ]]; then
         import_keep "$id" "$rel" "$db" "import-apply printed no result (exit ${rc})"
     fi
@@ -135,7 +143,7 @@ handle_import_members() {
 
     import_step rerun
     rc=0
-    import_tc "$list" import-apply "$slug" --vertical "$vertical" --expect-sha256 "$expect" || rc=$?
+    import_tc "$list" import-apply "$slug" --vertical "$vertical" --expect-sha256 "$expect" ${MAIL_SENDER_ARGS[@]+"${MAIL_SENDER_ARGS[@]}"} || rc=$?
     [[ -n "$IMPORT_JSON" ]] || import_keep "$id" "$rel" "$db" "the idempotency rerun printed no result (exit ${rc})"
     import_report rerun
     if [[ "$rc" -ne 0 ]] || ! jq -e '.status == "applied" and .counts.created == 0 and .counts.accounts_created == 0 and .counts.invites_sent == 0 and .counts.rejected == 0' <<< "$IMPORT_JSON" >/dev/null; then

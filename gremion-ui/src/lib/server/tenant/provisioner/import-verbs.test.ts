@@ -191,3 +191,13 @@ describe('runImport: errors and the lease heartbeat', () => {
     expect(src).not.toMatch(/slug\.replace\(/)
   })
 })
+
+// gremion#82: the three verbs run on an ACTIVE customer; inProvisioningContext refuses one (Q21), so the
+// verb file must not reach for it. inActiveContext is the active-row twin.
+describe('the verbs use the active-customer context (gremion#82)', () => {
+  it('tenant-provision-import.ts does not reference inProvisioningContext, and uses inActiveContext at both call sites', () => {
+    const src = readFileSync('scripts/tenant-provision-import.ts', 'utf8')
+    expect(src).not.toMatch(/inProvisioningContext/)
+    expect(src.match(/inActiveContext\(/g)?.length).toBe(2)
+  })
+})
