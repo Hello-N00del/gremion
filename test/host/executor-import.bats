@@ -36,7 +36,7 @@ STUB
 [ ! -f "${GREMION_ROOT}/mail-unresolvable" ] || exit 2
 case "$1" in
     transport) echo "${MAIL_TRANSPORT:-stalwart}" ;;
-    sender-json) echo '{"mode":"relay","host":"relay.example.net","port":"587","fromAddress":"no-reply@example.org","user":"relay-user@example.org"}' ;;
+    sender-json) echo '{"mode":"relay","host":"relay.example.net","port":587,"fromAddress":"no-reply@example.org","user":"relay-user@example.org"}' ;;
     *) exit 64 ;;
 esac
 STUB
@@ -285,6 +285,7 @@ SENDER_FLAG='--sender-json {"mode":"relay"'
     [ "$status" -ne 0 ]
     [[ "$output" == *"MAIL_TRANSPORT could not be resolved"* ]]
     [ ! -s "$ORDER" ]
+    [ ! -e "${WORK}/list.csv" ]
 }
 
 @test "args that name another customer than the request are refused before the container is touched" {
