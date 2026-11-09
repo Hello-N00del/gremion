@@ -44,7 +44,7 @@ export interface ImportSummary {
 
 // The handler's own line (infra/host/lib/executor/handlers/import_members.sh, import_report):
 //   import validate: status=<s> sha256=<hex> created=N linked_existing=N unchanged=N rejected=N accounts_created=N invites_sent=N
-const SUMMARY_LINE =
+export const SUMMARY_LINE =
   /^import validate: status=([a-z]+) sha256=([0-9a-f]{64}) created=(\d+) linked_existing=(\d+) unchanged=(\d+) rejected=(\d+) accounts_created=(\d+) invites_sent=(\d+)$/
 
 /** The validate summary of a request's events, or null when there is none (or it is not exactly the handler's line). */

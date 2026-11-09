@@ -4,6 +4,7 @@
 // answers by the SQL text; nothing here opens a connection. The args every
 // action submits are run through the host's own verifier (@gremion/provisioning
 // verifyRequestArgs), so a field the executor would refuse fails here first.
+import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -52,7 +53,8 @@ const importRow = (over: Partial<ImportRow> = {}): ImportRow => ({ id: IMPORT_ID
 const SUMMARY = (sha = SHA, status = 'validated', rejected = 0) => ({
   level: 'info',
   step: 'validate',
-  message: `import validate: status=${status} sha256=${sha} created=12 linked_existing=3 unchanged=1 rejected=${rejected} accounts_created=0 invites_sent=0`,
+  // what the validate verb can emit: it writes nothing, so every count but `rejected` is 0 (apply.ts validationResult)
+  message: `import validate: status=${status} sha256=${sha} created=0 linked_existing=0 unchanged=0 rejected=${rejected} accounts_created=0 invites_sent=0`,
 })
 
 let rows: Row[] = []
@@ -60,9 +62,14 @@ let customer: { id: string; slug: string; status: string; host: string | null } 
 let newestImport: ImportRow | null = null
 let eventsById: Record<string, { level: string; step: string; message: string }[]> = {}
 let submits: unknown[][] = []
+/** When set, the platform database read of the import state throws it. */
+let importReadError: unknown = null
+/** When set, the registry read of the customer throws it. */
+let statusError: unknown = null
 const fakeSql = Object.assign(
   async (strings: TemplateStringsArray, ...vals: unknown[]) => {
     const text = strings.join('?')
+    if (importReadError && text.includes("kind = 'import_members'")) throw importReadError
     if (text.includes('submit_provisioning_request')) {
       submits.push(vals)
       return [{ id: '0192f0c4-0000-7000-8000-0000000000bb' }]
@@ -79,7 +86,10 @@ vi.mock('$lib/server/customers', async (orig) => {
   return {
     ...real,
     platformDb: () => fakeSql,
-    customerStatus: async () => customer,
+    customerStatus: async () => {
+      if (statusError) throw statusError
+      return customer
+    },
     customerRequests: async () =>
       rows.map((r) => ({
         id: r.request_id,
@@ -135,6 +145,8 @@ beforeEach(() => {
   newestImport = null
   eventsById = {}
   submits = []
+  importReadError = null
+  statusError = null
 })
 
 describe('the member section is shown only when an action can be queued', () => {
@@ -156,17 +168,18 @@ describe('the member section is shown only when an action can be queued', () => 
   })
 })
 
-describe('the validated list: the counts and the sha256 come from the validate request events', () => {
-  it('a succeeded validate as the newest import request is offered for apply, with its vertical, counts and sha256', async () => {
+describe('the validated list: the sha256 comes from the validate request events', () => {
+  it('a succeeded validate as the newest import request is offered for apply, with its vertical and sha256 and NO counts (the validate verb writes nothing, so its counts are always zero and would only mislead)', async () => {
     newestImport = importRow()
     eventsById[IMPORT_ID] = [{ level: 'info', step: 'claim', message: 'claimed' }, SUMMARY()]
     const d = await loadFor()
-    expect(d.memberSection.validated).toEqual({
-      requestId: IMPORT_ID,
-      vertical: 'stura',
-      sha256: SHA,
-      counts: { created: 12, linkedExisting: 3, unchanged: 1, rejected: 0, accountsCreated: 0, invitesSent: 0 },
-    })
+    expect(d.memberSection.validated).toEqual({ requestId: IMPORT_ID, vertical: 'stura', sha256: SHA })
+  })
+  it('the page asks the operator to confirm nothing it does not show: no counts, no "the numbers above", no hidden vertical field', () => {
+    const page = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '+page.svelte'), 'utf8')
+    expect(page).not.toMatch(/\.counts\./)
+    expect(page).not.toContain('Zahlen oben')
+    expect(page).not.toMatch(/name="vertical"\s+value=/)
   })
   it.each([
     ['a validate that failed', importRow({ state: 'failed' })],
@@ -347,5 +360,73 @@ describe.each([
   it('needs a signed-in operator (403)', async () => {
     await expect(act(name, fields, null)).rejects.toMatchObject({ status: 403 })
     expect(submits).toHaveLength(0)
+  })
+})
+
+describe('a read that fails is said to fail (and logged), never turned into a false "none" answer', () => {
+  const sqlFailure = () => Object.assign(new Error('connection refused'), { code: 'ECONNREFUSED' })
+  const quiet = () => vi.spyOn(console, 'error').mockImplementation(() => {})
+  const logged = (spy: ReturnType<typeof quiet>) => spy.mock.calls.map((c) => String(c[0])).join('\n')
+  it('the page load: an unreadable import state switches the actions off and says so; the section does not look as if no validate ever ran', async () => {
+    const spy = quiet()
+    importReadError = sqlFailure()
+    const d = await loadFor()
+    expect(d.memberSection).toMatchObject({ canAct: false, unreadable: true, validated: null })
+    expect(logged(spy)).toContain('ECONNREFUSED')
+    spy.mockRestore()
+  })
+  it('the page load: a readable state is not marked unreadable', async () => {
+    expect((await loadFor()).memberSection.unreadable).toBe(false)
+  })
+  it('importApply: an unreadable import state is a 503 "nicht lesbar", not "validate first"; nothing is queued, the cause is logged', async () => {
+    newestImport = importRow()
+    eventsById[IMPORT_ID] = [SUMMARY()]
+    const spy = quiet()
+    importReadError = sqlFailure()
+    const res = await act('importApply', { vertical: 'stura', sha256: SHA, confirm: 'yes', list: csvFile(CSV) })
+    expect(res.status).toBe(503)
+    expect(res.data.memberError).toMatch(/nicht lesbar/)
+    expect(res.data.memberError).not.toMatch(/zuerst prüfen/)
+    expect(submits).toHaveLength(0)
+    expect(logged(spy)).toContain('ECONNREFUSED')
+    expect(logged(spy)).not.toContain(MARKER)
+    spy.mockRestore()
+  })
+  it.each([
+    ['seedVertical', { vertical: 'stura' }],
+    ['importValidate', { vertical: 'stura', list: csvFile(CSV) }],
+    ['importApply', { vertical: 'stura', sha256: SHA, confirm: 'yes', list: csvFile(CSV) }],
+  ] as const)('%s: an unreadable customer registry is a 503 "nicht lesbar", not "there is no such customer"', async (name, fields) => {
+    const spy = quiet()
+    statusError = sqlFailure()
+    const res = await act(name, fields)
+    expect(res.status).toBe(503)
+    expect(res.data.memberError).toMatch(/nicht lesbar/)
+    expect(res.data.memberError).not.toMatch(/keinen Mandanten/)
+    expect(submits).toHaveLength(0)
+    expect(logged(spy)).toContain('ECONNREFUSED')
+    spy.mockRestore()
+  })
+  const rawAct = (name: Name, formData: () => Promise<FormData>) =>
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (actions[name] as unknown as (e: unknown) => Promise<any>)({ params: { slug: 'proof-z' }, request: { formData }, locals: { operator: { id: OPERATOR } } })
+  it.each(['seedVertical', 'importValidate', 'importApply'] as const)('%s: a body over the server limit (413 while reading the form) gets the size refusal, not "reload the page"', async (name) => {
+    const res = await rawAct(name, async () => {
+      throw Object.assign(new Error('Content-length exceeds limit'), { status: 413 })
+    })
+    expect(res.status).toBe(413)
+    expect(res.data.memberError).toMatch(/1 MiB/)
+    expect(submits).toHaveLength(0)
+  })
+  it('any other failure to read the form is a 400 "reload", logged without its message', async () => {
+    const spy = quiet()
+    const res = await rawAct('importValidate', async () => {
+      throw new TypeError(`could not parse ${MARKER}`)
+    })
+    expect(res.status).toBe(400)
+    expect(res.data.memberError).toMatch(/neu laden/)
+    expect(spy).toHaveBeenCalled()
+    expect(logged(spy)).not.toContain(MARKER)
+    spy.mockRestore()
   })
 })

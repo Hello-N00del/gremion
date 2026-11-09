@@ -6,7 +6,7 @@ import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
-import { IMPORT_LIST_MAX_BYTES, IMPORT_PAYLOAD_MAX_BYTES, isKnownVertical, parseImportSummary, redactAddresses, VERTICALS, VERTICAL_ID } from './members'
+import { IMPORT_LIST_MAX_BYTES, IMPORT_PAYLOAD_MAX_BYTES, isKnownVertical, parseImportSummary, redactAddresses, SUMMARY_LINE, VERTICALS, VERTICAL_ID } from './members'
 
 const SRC = join(dirname(fileURLToPath(import.meta.url)), '../../../../packages/provisioning/src/requests.ts')
 const SHA = 'a'.repeat(64)
@@ -42,6 +42,7 @@ describe('parseImportSummary: the validate line the host handler writes', () => 
   const line = () => ({
     level: 'info',
     step: 'validate',
+    // an apply/rerun line has real counts; the parser reads them all (only a validate line is offered for apply)
     message: `import validate: status=validated sha256=${SHA} created=12 linked_existing=3 unchanged=1 rejected=0 accounts_created=0 invites_sent=0`,
   })
   it('reads the status, the sha256 and every count', () => {
@@ -63,6 +64,24 @@ describe('parseImportSummary: the validate line the host handler writes', () => 
   })
   it('an apply or rerun line is not a validate summary', () => {
     expect(parseImportSummary([{ level: 'info', step: 'apply', message: line().message.replace('import validate:', 'import apply:') }])).toBeNull()
+  })
+})
+
+describe('SUMMARY_LINE is pinned to the handler that writes the line (read from its source)', () => {
+  const sh = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '../../../../infra/host/lib/executor/handlers/import_members.sh'), 'utf8')
+  const template = sh.split(/\r?\n/).find((l) => l.includes('import \\($p): status='))
+  it('the handler writes one summary line with the fields, in the order, that the panel parses', () => {
+    expect(template).toBeTruthy()
+    const handlerFields = [...(template ?? '').matchAll(/\b([a-z0-9_]+)=\\\(/g)].map((m) => m[1])
+    const panelFields = [...SUMMARY_LINE.source.matchAll(/\b([a-z0-9_]+)=\(/g)].map((m) => m[1])
+    expect(handlerFields).toEqual(['status', 'sha256', 'created', 'linked_existing', 'unchanged', 'rejected', 'accounts_created', 'invites_sent'])
+    expect(panelFields).toEqual(handlerFields)
+  })
+  it('a line built from the handler template parses', () => {
+    const fields = [...(template ?? '').matchAll(/\b([a-z0-9_]+)=\\\(/g)].map((m) => m[1]!)
+    const values: Record<string, string> = { status: 'validated', sha256: SHA }
+    const line = `import validate: ${fields.map((f) => `${f}=${values[f] ?? '0'}`).join(' ')}`
+    expect(parseImportSummary([{ level: 'info', step: 'validate', message: line }])).toMatchObject({ status: 'validated', sha256: SHA })
   })
 })
 

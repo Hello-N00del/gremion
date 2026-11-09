@@ -151,6 +151,32 @@ describe('the vertical and member kinds (seed_vertical, import_members)', () => 
     expect(d.retryable).toBe(false)
     expect(d.retryNote).toMatch(/Bereich „Vertikale und Mitglieder“/)
   })
+  it('the seed_vertical handler marks its step "seed": it has a German label, running and failed', () => {
+    expect(EXECUTOR_STEP_LABEL.seed).toBeTruthy()
+    const run = describeRequest({ ...base, kind: 'seed_vertical', state: 'running', evidenceVerifiedAt: 'x', lastStep: 'seed' })
+    expect(run.text).toContain(EXECUTOR_STEP_LABEL.seed!)
+    const failed = describeRequest({ ...base, kind: 'seed_vertical', state: 'failed', outcome: 'seed_vertical proof-z: failed in seed (exit 1); a new request resumes from the ledger' })
+    expect(failed.text).toContain(EXECUTOR_STEP_LABEL.seed!)
+  })
+  it('a failed or expired seed_vertical does not say a member list is uploaded again; import_members does', () => {
+    for (const state of ['failed', 'expired', 'dead']) {
+      const seed = describeRequest({ ...base, kind: 'seed_vertical', state, outcome: 'seed_vertical proof-z: failed in seed (exit 1); x' })
+      expect(seed.retryNote).toMatch(/Bereich „Vertikale und Mitglieder“/)
+      expect(seed.retryNote).not.toMatch(/Mitgliederliste/)
+      const imp = describeRequest({ ...base, kind: 'import_members', state, outcome: 'import_members proof-z: failed in apply (exit 1); x' })
+      expect(imp.retryNote).toMatch(/Mitgliederliste wird dafür neu hochgeladen/)
+    }
+  })
+  it.each(['seed_vertical', 'import_members'])('a refused %s points to its own section, not to the "Neuer Mandant" form', (kind) => {
+    for (const outcome of ['refused: the member list exceeds 1048576 bytes', 'no handler for x']) {
+      const d = describeRequest({ ...base, kind, state: 'refused', outcome })
+      expect(d.retryNote).toMatch(/Bereich „Vertikale und Mitglieder“/)
+      expect(d.retryNote).not.toMatch(/Neuer Mandant/)
+    }
+  })
+  it('a refused create still points to the "Neuer Mandant" form', () => {
+    expect(describeRequest({ ...base, kind: 'create', state: 'refused', outcome: 'refused: bad slug' }).retryNote).toMatch(/Neuer Mandant/)
+  })
   it('"no handler" is shown only for the outcome the executor wrote, never derived from a handled kind', () => {
     expect(describeRequest({ ...base, kind: 'import_members', state: 'succeeded' }).code).toBeNull()
     expect(describeRequest({ ...base, kind: 'import_members', state: 'refused', outcome: 'refused: the member list exceeds 1048576 bytes' }).code).toBe('refused')

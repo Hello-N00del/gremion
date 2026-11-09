@@ -183,7 +183,9 @@
   <section class="members" aria-labelledby="mem-h">
     <h2 id="mem-h">Vertikale und Mitglieder</h2>
     {#if form?.memberError}<p class="error" role="alert">{form.memberError}</p>{/if}
-    {#if !ms.canAct}
+    {#if ms.unreadable}
+      <p class="error" role="alert">Der Stand der Mitgliederlisten ist nicht lesbar (Plattform-Datenbank; Details im Panel-Log). Aktionen werden erst wieder angeboten, wenn er gelesen werden kann.</p>
+    {:else if !ms.canAct}
       <p class="muted" role="status">Vertikale und Mitgliederlisten können nur für einen aktiven Mandanten ohne laufende Anfrage angestoßen werden.</p>
     {:else}
       <h3>Vertikale einspielen</h3>
@@ -199,7 +201,7 @@
       </form>
 
       <h3>Mitgliederliste prüfen</h3>
-      <p class="muted">CSV-Datei in UTF-8, höchstens 1 MiB. Die Prüfung schreibt nichts; sie meldet Zahlen und die Nummern abgelehnter Zeilen, nie Namen oder Adressen.</p>
+      <p class="muted">CSV-Datei in UTF-8, höchstens 1 MiB. Die Prüfung schreibt nichts; sie meldet die Nummern abgelehnter Zeilen, nie Namen oder Adressen.</p>
       <form method="POST" action="?/importValidate" enctype="multipart/form-data" use:enhance>
         <label>
           Vertikale
@@ -217,25 +219,20 @@
       {#if ms.validated}
         {@const v = ms.validated}
         <h3>Geprüfte Liste einspielen</h3>
-        <p>Die letzte Prüfung ({v.vertical}) war erfolgreich:</p>
+        <p>Die letzte Prüfung ({v.vertical}) war erfolgreich: die Liste ist formal gültig, keine Zeile wurde abgelehnt. Die Prüfung schreibt nichts und zählt deshalb nichts; wie viele Konten neu angelegt oder verknüpft wurden, steht im Ergebnis des Einspielens.</p>
         <dl class="counts">
-          <dt>Neu anzulegen</dt><dd>{v.counts.created}</dd>
-          <dt>Mit bestehenden Konten verknüpft</dt><dd>{v.counts.linkedExisting}</dd>
-          <dt>Unverändert</dt><dd>{v.counts.unchanged}</dd>
-          <dt>Abgelehnte Zeilen</dt><dd>{v.counts.rejected}</dd>
           <dt>Prüfsumme (sha256)</dt><dd><code class="sha">{v.sha256}</code></dd>
         </dl>
-        <p class="muted">Die Liste wird nach der Prüfung vom Server gelöscht. Zum Einspielen bitte dieselbe Datei erneut wählen; stimmt sie nicht mit der geprüften überein, wird nichts geschrieben. Vor dem Einspielen wird eine Sicherung angelegt, danach ein Wiederholungslauf zur Kontrolle gemacht.</p>
+        <p class="muted">Die Liste wird nach der Prüfung vom Server gelöscht. Zum Einspielen bitte dieselbe Datei erneut wählen; stimmt sie nicht mit der geprüften überein, wird nichts geschrieben. Vor dem Einspielen wird eine Sicherung angelegt, danach ein Wiederholungslauf zur Kontrolle gemacht. Das Einspielen legt Konten an und versendet Einladungen.</p>
         <form method="POST" action="?/importApply" enctype="multipart/form-data" use:enhance>
           <input type="hidden" name="sha256" value={v.sha256} />
-          <input type="hidden" name="vertical" value={v.vertical} />
           <label>
             Dieselbe Mitgliederliste (CSV)
             <input type="file" name="list" accept=".csv,text/csv" required />
           </label>
           <label class="confirm">
             <input type="checkbox" name="confirm" value="yes" required />
-            Die Zahlen oben stimmen; die Liste soll jetzt eingespielt werden.
+            Die Liste mit dieser Prüfsumme soll jetzt eingespielt werden; dabei werden Konten angelegt und Einladungen versendet.
           </label>
           <button type="submit">Liste einspielen</button>
         </form>

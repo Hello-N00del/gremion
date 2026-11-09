@@ -44,6 +44,8 @@ export const EXECUTOR_STEP_LABEL: Record<string, string> = {
   record_dpia: 'DPIA-Entscheidung festhalten',
   reconcile: 'Abgleich der Anmeldung (Realm-Vertrag)',
   seed_vertical: 'Vertikale einspielen (Vorlage des Mandanten)',
+  // the seed_vertical handler's own marker (it stamps "seed" before running the container verb)
+  seed: 'Vertikale einspielen (Vorlage des Mandanten)',
   import_members: 'Mitgliederliste verarbeiten',
   validate: 'Mitgliederliste prüfen (es wird nichts geschrieben)',
   dump: 'Sicherung vor dem Einspielen',
@@ -99,6 +101,8 @@ const MODULE_KINDS = ['enable_module', 'disable_module', 'record_dpia', 'reconci
 /** The kinds of the "Vertikale und Mitglieder" section; a failed one is triggered again from there (the member list is purged from the request, so a copy could not run). */
 const MEMBER_KINDS = ['seed_vertical', 'import_members']
 const REDO_MEMBER = 'Die Aktion kann im Bereich „Vertikale und Mitglieder“ unten erneut ausgelöst werden; die Mitgliederliste wird dafür neu hochgeladen.'
+const REDO_SEED = 'Die Aktion kann im Bereich „Vertikale und Mitglieder“ unten erneut ausgelöst werden; sie ist wiederholbar und ändert Vorhandenes nicht.'
+const FIX_MEMBER = 'Die Angaben der Anfrage selbst wurden abgelehnt. Bitte im Bereich „Vertikale und Mitglieder“ unten korrigiert neu anfordern.'
 const REDO_MODULE = 'Die Aktion kann im Bereich „Module“ unten erneut ausgelöst werden; sie setzt am bisherigen Stand fort und ist wiederholbar.'
 const FIX_FORM = 'Die Angaben der Anfrage selbst wurden abgelehnt. Bitte im Formular „Neuer Mandant“ korrigiert neu anfordern.'
 
@@ -122,7 +126,9 @@ export function describeRequest(r: RequestStateInput): RequestDescription {
    * (it counts as not enabled) and the retry is the only way back to the resumable disable.
    * Otherwise says why not.
    */
-  const retry = (): Partial<RequestDescription> => (isCreate || r.kind === 'disable_module' ? { retryable: true } : { retryNote: r.kind === 'suspend' || r.kind === 'resume' ? REDO_ACTION : MODULE_KINDS.includes(r.kind) ? REDO_MODULE : MEMBER_KINDS.includes(r.kind) ? REDO_MEMBER : NOT_REPLAYABLE })
+  const retry = (): Partial<RequestDescription> => (isCreate || r.kind === 'disable_module' ? { retryable: true } : { retryNote: r.kind === 'suspend' || r.kind === 'resume' ? REDO_ACTION : MODULE_KINDS.includes(r.kind) ? REDO_MODULE : r.kind === 'seed_vertical' ? REDO_SEED : MEMBER_KINDS.includes(r.kind) ? REDO_MEMBER : NOT_REPLAYABLE })
+  /** The note of a refusal of the request's own args: the member kinds are asked for again from their own section. */
+  const fixForm = (): string => (MEMBER_KINDS.includes(r.kind) ? FIX_MEMBER : FIX_FORM)
   switch (r.state) {
     case 'queued':
       return d('queued', 'In der Warteschlange', 'Die Anfrage wartet darauf, dass der Ausführer sie übernimmt.', { active: true })
@@ -149,14 +155,14 @@ export function describeRequest(r: RequestStateInput): RequestDescription {
     }
     case 'refused': {
       const o = r.outcome ?? ''
-      if (o.startsWith('no handler for ')) return d('refused', 'Abgelehnt', 'Für diese Art von Anfrage gibt es noch keinen Bearbeiter.', { code: 'no_handler', detail: o, retryNote: FIX_FORM })
+      if (o.startsWith('no handler for ')) return d('refused', 'Abgelehnt', 'Für diese Art von Anfrage gibt es noch keinen Bearbeiter.', { code: 'no_handler', detail: o, retryNote: fixForm() })
       const reason = o.replace(/^refused:\s*/, '').trim()
       const detail = reason === '' ? null : reason
       // the sign-in evidence (request-verify "evidence: ..." and a missing token): a fresh sign-in can fix it
       if (reason.startsWith('evidence: ') || reason.startsWith('a panel request without its signed evidence')) {
         return d('refused', 'Abgelehnt', 'Der Anmeldenachweis wurde nicht akzeptiert. Mit einer frischen Anmeldung kann die Anfrage erneut gestellt werden.', { ...retry(), code: 'refused_evidence', detail })
       }
-      return d('refused', 'Abgelehnt', 'Die Anfrage wurde bei der Prüfung abgelehnt.', { code: 'refused', detail, retryNote: FIX_FORM })
+      return d('refused', 'Abgelehnt', 'Die Anfrage wurde bei der Prüfung abgelehnt.', { code: 'refused', detail, retryNote: fixForm() })
     }
     case 'expired':
       return d('expired', 'Verfallen', 'Der Ausführer hat die Anfrage nicht rechtzeitig übernommen (30 Minuten).', retry())

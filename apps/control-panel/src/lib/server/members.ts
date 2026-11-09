@@ -9,7 +9,7 @@
 // event, a log line or an access-record word here: the page names counts, row
 // numbers (the handler's own lines), the sha256 and the size limits only.
 import type postgres from 'postgres'
-import { IMPORT_LIST_MAX_BYTES, IMPORT_PAYLOAD_MAX_BYTES, isKnownVertical, parseImportSummary, redactAddresses, type ImportSummary } from '../members'
+import { IMPORT_LIST_MAX_BYTES, IMPORT_PAYLOAD_MAX_BYTES, isKnownVertical, parseImportSummary, redactAddresses } from '../members'
 import { moduleActionsOffered } from '../modules'
 import { newestRequest, queueRequest, UUID } from './customer-request'
 import { requestEvents, type EventLine } from './modules'
@@ -27,6 +27,8 @@ export const memberArgs = {
 export type CsvList = { ok: true; csv: string } | { ok: false; status: 400 | 413; error: string }
 
 const NOT_A_LIST = 'Bitte die Mitgliederliste als CSV-Datei wählen.'
+/** The refusal of a list over the cap, also the answer when the server's body limit already stopped the upload. */
+export const LIST_TOO_BIG = 'Die CSV-Datei ist größer als 1 MiB und wird nicht angenommen.'
 
 /**
  * The uploaded member list as text, checked BEFORE a request is queued: a file part, not
@@ -39,7 +41,7 @@ export async function readCsvList(form: FormData, key = 'list'): Promise<CsvList
   if (typeof f !== 'object' || f === null || typeof (f as Blob).arrayBuffer !== 'function') return { ok: false, status: 400, error: NOT_A_LIST }
   const file = f as Blob
   if (file.size === 0) return { ok: false, status: 400, error: 'Die CSV-Datei ist leer.' }
-  if (file.size > IMPORT_LIST_MAX_BYTES) return { ok: false, status: 413, error: 'Die CSV-Datei ist größer als 1 MiB und wird nicht angenommen.' }
+  if (file.size > IMPORT_LIST_MAX_BYTES) return { ok: false, status: 413, error: LIST_TOO_BIG }
   let csv: string
   try {
     csv = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(await file.arrayBuffer())
@@ -60,7 +62,9 @@ export interface ValidatedList {
   requestId: string
   vertical: string
   sha256: string
-  counts: ImportSummary['counts']
+  // No counts: the validate verb writes nothing, so its created/linked/unchanged are always 0 and
+  // showing them asked the operator to confirm numbers that carry no information. The real figures
+  // come with the apply's own events.
 }
 
 export interface ImportState {
@@ -89,7 +93,7 @@ export async function loadImportState(sql: postgres.Sql, slug: string): Promise<
   const summary = r.phase === 'validate' && r.state === 'succeeded' ? parseImportSummary(events) : null
   const validated =
     summary && summary.status === 'validated' && typeof r.vertical === 'string' && isKnownVertical(r.vertical)
-      ? { requestId: r.id, vertical: r.vertical, sha256: summary.sha256, counts: summary.counts }
+      ? { requestId: r.id, vertical: r.vertical, sha256: summary.sha256 }
       : null
   return { validated, events }
 }
