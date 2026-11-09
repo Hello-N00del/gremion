@@ -1,4 +1,4 @@
-<!-- i18n-sync: source=README.md sha256=a08e03a7afffe44cfccbccb8fe3be8bd30cfa8b9da7c65e7c9b34d3ea87f2d3c -->
+<!-- i18n-sync: source=README.md sha256=bf30900f8bd11afae71150c7713706503a4e55052774a72b7887250d7718d80d -->
 [English](./README.md) | **Deutsch**
 
 # elections
@@ -66,7 +66,12 @@ bewusst keine `migrations`, weil eine spätere Kernel-Migration diese Tabelle in
   bei der Anlage oder die Anfrage `enable_module` des Panels schaltet es ein.
 - Instanzeinstellung: `config.modules.elections = false` beantwortet `/elections` und
   `/api/elections` mit der Oberfläche für deaktivierte Module. Die Seite `/votes` blendet dann
-  jeden Helios-Eintrag aus.
+  jeden Helios-Eintrag aus, und ihr Kopf und der Navigationseintrag lassen das Wort „Wahlen“
+  weg. Das Manifest erklärt `defaultEnabled: false`, und `gremion-ui/src/lib/server/config.ts`
+  hält die ID bei jedem Lesen und Schreiben von `config.modules` ausgeschaltet
+  (`HELD_OFF_MODULES`, Pilot-Oberfläche 2026-11-09); ein gespeichertes `true` oder ein
+  Schreibzugriff der Einstellungen schaltet sie also nicht ein, die Festschreibung zu lösen ist
+  eine Codeänderung.
 - Der Wortlaut des Hinweises und was er behaupten darf und was nicht, ist in
   [compliance/elections-scope.de.md](../../docs/compliance/elections-scope.de.md) festgelegt.
 

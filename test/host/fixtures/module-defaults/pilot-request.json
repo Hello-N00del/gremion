@@ -1,5 +1,5 @@
 {
-  "comment": "TASK-058: the pilot tenant create request as the pilot runbook issues it (gremion-tenant create ... --enable <id>). Only votes is named; elections, finance, board, vault, content and handover are deliberately absent. scripts/check-pilot-module-defaults.mjs reads this file (check a).",
+  "comment": "The pilot tenant create request as the pilot runbook issues it (gremion-tenant create ... --enable <id>): votes, calendar, content, publishing, files, messaging. Elections, finance, board, vault and handover are deliberately absent (board is served in-process and default-on, elections are held off in the app config). scripts/check-pilot-module-defaults.mjs reads this file (check a).",
   "customer": "pilot",
-  "enable": ["votes"]
+  "enable": ["votes", "calendar", "content", "publishing", "files", "messaging"]
 }

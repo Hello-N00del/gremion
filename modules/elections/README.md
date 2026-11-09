@@ -63,7 +63,10 @@ a later kernel migration alters that table unconditionally.
   at creation, or the panel's `enable_module` request, turns it on.
 - Instance setting: `config.modules.elections = false` answers `/elections` and
   `/api/elections` with the module-disabled surface. The `/votes` page then hides every Helios
-  item.
+  item and its head and the rail entry drop the word "Wahlen". The manifest declares
+  `defaultEnabled: false` and `gremion-ui/src/lib/server/config.ts` pins the id off on every
+  read and write of `config.modules` (`HELD_OFF_MODULES`, pilot surface 2026-11-09), so a
+  stored `true` or a settings write does not turn it on; lifting the pin is a code change.
 - The wording of the notice and what it may and may not claim is fixed in
   [compliance/elections-scope.md](../../docs/compliance/elections-scope.md).
 

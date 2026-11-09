@@ -1,4 +1,4 @@
-<!-- i18n-sync: source=README.md sha256=0eb467782887420eec2596532fe0db4f232ed650833ce4254dd16da2976f3492 -->
+<!-- i18n-sync: source=README.md sha256=9939436fe18fea0d743d90590b4703fb1c553419a51a3d4ea61a3cebd522c6bc -->
 [English](./README.md) | **Deutsch**
 
 # content
@@ -7,8 +7,8 @@ Content-Engine: Ein Beitrag wird einmal verfasst und auf bis zu drei Kanälen ve
 nämlich per E-Mail (über Mailinglisten), im Website-Portal (News-Beiträge) und auf Instagram
 (Karussell). Das Modul enthält außerdem Mailinglisten, die Verwaltung von Abmeldungen, zeitgesteuerte
 Veröffentlichung und eine Warteschlange für Veröffentlichungsvorgänge. Status:
-**standardmäßig deaktiviert** (aufgeführt in `modules/disabled.json`, daher vom
-Standard-Build und -Deploy ausgeschlossen; [docs/modules.md](../../docs/modules.de.md)).
+**unterstützt**, Teil des Standard-Builds (nicht in `modules/disabled.json` aufgeführt;
+[docs/modules.md](../../docs/modules.de.md)).
 
 | | |
 |---|---|
@@ -110,10 +110,10 @@ Der PostgreSQL-Server des Moduls ist `content-postgres` unter dem Compose-Profil
 
 ## Aktivieren und Deaktivieren
 
-- Build: durch `modules/disabled.json` **ausgeschlossen**. Das Overlay-Skript lehnt ein
-  deaktiviertes Modul im Build-Modus ab, und das Runbook zum Mandanten-Lebenszyklus setzt
-  voraus, dass ein Modul nicht in dieser Datei steht, bevor es für einen Kunden aktiviert
-  werden kann.
+- Build: **enthalten**. Das Modul steht nicht in `modules/disabled.json`, daher kopiert der
+  Image-Build `modules/content/app` und das Overlay-Skript legt es auf `gremion-ui/src/`; die
+  Navigation zeigt einen Eintrag „Inhalte“ (`/content`), solange `config.modules.content`
+  nicht `false` ist.
 - Instanzeinstellung: `config.modules.content = false` beantwortet `/content` und
   `/api/content` mit der Oberfläche für deaktivierte Module.
 - Leaf: `docker build -f modules/content/Dockerfile .` im Wurzelverzeichnis des Repositorys.
