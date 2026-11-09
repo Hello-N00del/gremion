@@ -92,7 +92,7 @@ function suite({ cases = fakeCases(), declaredModules = ISOLATION_TENANT_MODULES
 }
 
 /** Runs verify's own CLI with the given suite result; returns what it did. */
-function verify(raw, { dirty = () => false, head = () => SHA } = {}) {
+function verify(raw, { dirty = () => false, head = () => SHA, expectDiscard = true } = {}) {
   const outDir = tmp('iso-tenant-out-')
   const err = []
   const deps = {
@@ -107,6 +107,9 @@ function verify(raw, { dirty = () => false, head = () => SHA } = {}) {
     error: (m) => err.push(m),
   }
   const code = runVerify(['--only', ISOLATION_TENANT_PART], deps)
+  // verify removes the suite's temporary reports on every path that ran the suite (pass, fail, tree changed)
+  if (expectDiscard) assert.ok(!raw.evidence?.reportsDir || !existsSync(raw.evidence.reportsDir), 'the kept vitest reports were left behind')
+  else discardIsolationEvidence(raw.evidence)
   return { code, outDir, err: err.join('\n'), files: existsSync(outDir) ? readdirSync(outDir) : [] }
 }
 
@@ -242,7 +245,8 @@ test('a failing overlay preparation fails the part and writes no file', () => {
 })
 
 test('a dirty tree refuses before anything runs and writes no file', () => {
-  const res = verify(suite(), { dirty: () => true })
+  // refused before the suite runs: the suite() made here was never run by verify, the test removes its reports itself
+  const res = verify(suite(), { dirty: () => true, expectDiscard: false })
   assert.equal(res.code, 1)
   assert.match(res.err, /refusing to run/)
   assert.deepEqual(res.files, [])
