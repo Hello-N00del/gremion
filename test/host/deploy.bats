@@ -1535,7 +1535,7 @@ exit 0
                gremion-migrate@sha256:3333333333333333333333333333333333333333333333333333333333333333; do
         assert_recorded cosign "verify --key ${GREMION_ROOT}/etc/cosign.pub --insecure-ignore-tlog=true --output json ghcr.io/hello-n00del/${img}"
     done
-    [[ "$output" == *"9 first-party image(s) verified against ${GREMION_ROOT}/etc/cosign.pub"* ]]
+    [[ "$output" == *"15 first-party image(s) verified against ${GREMION_ROOT}/etc/cosign.pub"* ]]
     # Order: the last verify precedes the first manifest read and the first pull.
     local last_verify first_manifest first_pull
     last_verify="$(grep -n '^cosign verify' "$SHIM_LOG" | tail -1 | cut -d: -f1)"
@@ -1614,8 +1614,8 @@ exit 0'
     export FIXTURE_RELEASE="$tree"
     run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
     [ "$status" -eq 0 ]
-    # 9 first-party pins in release/valid (TASK-198 adds gremion-synapse to the state layer, TASK-077 gremion-kernel-api to the app layer)
-    [ "$(grep -c "^cosign verify --key ${GREMION_ROOT}/etc/cosign.pub " "$SHIM_LOG")" -eq 9 ]
+    # 15 first-party pins in release/valid (TASK-198 adds gremion-synapse to the state layer, TASK-077 gremion-kernel-api to the app layer; the pilot adds nextcloud, collabora, element-call and the calendar, content and newsletter leaves)
+    [ "$(grep -c "^cosign verify --key ${GREMION_ROOT}/etc/cosign.pub " "$SHIM_LOG")" -eq 15 ]
     [ "$(grep -c 'releases/dist-v1.2.3/cosign.pub' "$SHIM_LOG")" -eq 0 ]
 }
 
@@ -1694,8 +1694,8 @@ PINS
         > "${GREMION_ROOT}/etc/third-party-images"
     run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
     [ "$status" -eq 0 ]
-    # 9 first-party pins in release/valid (TASK-198 adds gremion-synapse to the state layer, TASK-077 gremion-kernel-api to the app layer)
-    [ "$(grep -c '^cosign verify' "$SHIM_LOG")" -eq 9 ]
+    # 15 first-party pins in release/valid (TASK-198 adds gremion-synapse to the state layer, TASK-077 gremion-kernel-api to the app layer; the pilot adds nextcloud, collabora, element-call and the calendar, content and newsletter leaves)
+    [ "$(grep -c '^cosign verify' "$SHIM_LOG")" -eq 15 ]
     [ "$(grep -c 'redis' "$SHIM_LOG" | tr -d ' ')" -eq 0 ] || ! grep -q '^cosign verify.*redis' "$SHIM_LOG"
     [[ "$output" == *"1 third-party image(s) on the host list"* ]]
 }
@@ -1790,7 +1790,7 @@ PINS
         : > "$SHIM_LOG"
         run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
         [ "$status" -eq 0 ] || { echo "host list '$listed': $output"; return 1; }
-        [[ "$output" == *"9 first-party image(s) verified"*"1 third-party image(s) on the host list"* ]]
+        [[ "$output" == *"15 first-party image(s) verified"*"1 third-party image(s) on the host list"* ]]
         [ "$(grep -c '^cosign verify.*redis' "$SHIM_LOG")" -eq 0 ]
     done
 }
@@ -1820,7 +1820,7 @@ PINS
     export FIXTURE_RELEASE="$tagged"
     run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
     [ "$status" -eq 0 ]
-    [[ "$output" == *"9 first-party image(s) verified"* ]]
+    [[ "$output" == *"15 first-party image(s) verified"* ]]
     assert_recorded cosign "verify --key ${GREMION_ROOT}/etc/cosign.pub --insecure-ignore-tlog=true --output json ghcr.io/hello-n00del/gremion-ui:dist-v1.2.3@sha256:"
 }
 
@@ -1889,9 +1889,9 @@ state_tree() {
                gremion-fallback@sha256:9999999999999999999999999999999999999999999999999999999999999999; do
         assert_recorded cosign "verify --key ${GREMION_ROOT}/etc/cosign.pub --insecure-ignore-tlog=true --output json ghcr.io/hello-n00del/${img}"
     done
-    # release/valid pins 9 first-party images: app gremion-ui, gremion-public, gremion-migrate, gremion-control-panel (TASK-043), gremion-kernel-api (TASK-077) + state legal, vector, synapse (matrix, TASK-198), fallback
-    [[ "$output" == *"9 first-party image(s) verified against ${GREMION_ROOT}/etc/cosign.pub"* ]]
-    [[ "$output" == *"9 pinned image(s)"* ]]
+    # release/valid pins 15 first-party images (the pilot adds nextcloud, collabora, element-call, calendar, content, newsletter to the nine below): app gremion-ui, gremion-public, gremion-migrate, gremion-control-panel (TASK-043), gremion-kernel-api (TASK-077) + state legal, vector, synapse (matrix, TASK-198), fallback
+    [[ "$output" == *"15 first-party image(s) verified against ${GREMION_ROOT}/etc/cosign.pub"* ]]
+    [[ "$output" == *"15 pinned image(s)"* ]]
 }
 
 @test "a tag-only, real-build, gremion/ or flow-map image in the STATE layer exits 1 naming the file" {

@@ -62,7 +62,11 @@ test('the render guard catches ports, a bind, a named volume, a wrong probe, a s
     [(r) => (r.volumes['synapse-data'].name = 'gremion_synapse_data'), /realises as gremion_synapse_data/],
     [(r) => (r.services.matrix.healthcheck.test = ['CMD-SHELL', 'curl -sf http://127.0.0.1:8008/_matrix/client/versions']), /versions/],
     [(r) => (r.services.matrix.healthcheck.start_period = '60s'), /start_period/],
-    [(r) => (r.services.matrix.networks = { state: null, edge: null }), /networks/],
+    // matrix is on _edge AND _state since the pilot routes /_matrix to it: dropping _edge, adding the
+    // socket proxy's network, or a state-only messaging-postgres gaining _edge are each a violation
+    [(r) => (r.services.matrix.networks = { state: null }), /matrix: networks .*, want .*_edge, .*_state\] only/],
+    [(r) => (r.services.matrix.networks = { state: null, edge: null, socket: null }), /matrix: networks/],
+    [(r) => (r.services['messaging-postgres'].networks = { state: null, edge: null }), /messaging-postgres: networks/],
     [(r) => delete r.services.matrix.environment.SYNAPSE_DB_PASSWORD, /lacks SYNAPSE_DB_PASSWORD/],
     [(r) => (r.services.matrix.environment.LIVEKIT_JWT_SERVICE_URL = 'x'), /dropped key/],
     [(r) => (r.services['messaging-postgres'].labels['org.gremion.postgres'] = 'module:chat'), /module:messaging/],

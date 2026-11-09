@@ -129,12 +129,18 @@ jobs:
           - { name: legal, image: ghcr.io/hello-n00del/gremion-legal, services: legal, dockerfile: docker/legal/Dockerfile, context: docker/legal }
           - { name: vector, image: ghcr.io/hello-n00del/gremion-vector, services: vector, dockerfile: docker/vector/Dockerfile, context: docker/vector }
           - { name: synapse, image: ghcr.io/hello-n00del/gremion-synapse, services: matrix, dockerfile: modules/messaging/synapse/Dockerfile, context: modules/messaging/synapse }
+          - { name: nextcloud, image: ghcr.io/hello-n00del/gremion-nextcloud, services: nextcloud, dockerfile: docker/nextcloud/Dockerfile, context: docker/nextcloud }
+          - { name: collabora, image: ghcr.io/hello-n00del/gremion-collabora, services: collabora, dockerfile: docker/collabora/Dockerfile, context: docker/collabora }
+          - { name: element-call, image: ghcr.io/hello-n00del/gremion-element-call, services: element-call, dockerfile: docker/element-call/Dockerfile, context: docker/element-call }
           - { name: fallback, image: ghcr.io/hello-n00del/gremion-fallback, services: fallback, dockerfile: docker/fallback/Dockerfile, context: docker/fallback }
           - { name: gremion-ui, image: ghcr.io/hello-n00del/gremion-ui, services: gremion-ui, dockerfile: gremion-ui/Dockerfile, context: . }
           - { name: gremion-public, image: ghcr.io/hello-n00del/gremion-public, services: gremion-public, dockerfile: gremion-public/Dockerfile, context: . }
           - { name: control-panel, image: ghcr.io/hello-n00del/gremion-control-panel, services: control-panel, dockerfile: apps/control-panel/Dockerfile, context: . }
           - { name: migrate, image: ghcr.io/hello-n00del/gremion-migrate, services: migrate tenant-create, dockerfile: gremion-ui/Dockerfile, context: ., target: builder }
           - { name: kernel-api, image: ghcr.io/hello-n00del/gremion-kernel-api, services: kernel-api kernel-api-migrate, dockerfile: services/kernel-api/Dockerfile, context: . }
+          - { name: calendar, image: ghcr.io/hello-n00del/gremion-calendar, services: calendar-service, dockerfile: modules/calendar/Dockerfile, context: . }
+          - { name: content, image: ghcr.io/hello-n00del/gremion-content, services: content-service, dockerfile: modules/content/Dockerfile, context: . }
+          - { name: newsletter, image: ghcr.io/hello-n00del/gremion-newsletter, services: newsletter-service, dockerfile: modules/publishing/Dockerfile, context: . }
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:

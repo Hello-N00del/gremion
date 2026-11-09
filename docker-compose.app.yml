@@ -114,7 +114,10 @@ services:
       # PLATFORM_DOMAIN in the compose files carries `:?`
       # (test/host/validate-env.bats).
       DOMAIN: ${PLATFORM_DOMAIN:?PLATFORM_DOMAIN required}
-      PUBLIC_BASE_URL:          ${PUBLIC_BASE_URL:-https://${PLATFORM_DOMAIN:?PLATFORM_DOMAIN required}}
+      # An explicit PUBLIC_BASE_URL wins; on the single-customer pilot install it is
+      # the tenant host (VideoCallPip and the leaves' unsubscribe links read it);
+      # otherwise the platform domain.
+      PUBLIC_BASE_URL:          ${PUBLIC_BASE_URL:-https://${PILOT_TENANT_HOST:-${PLATFORM_DOMAIN:?PLATFORM_DOMAIN required}}}
       # AGPL-3.0 section 13: an operator running a MODIFIED build MUST point
       # this at their own repository. Unset falls back to upstream.
       PUBLIC_SOURCE_URL:        ${PUBLIC_SOURCE_URL:-}
@@ -175,6 +178,53 @@ services:
       NODE_EXTRA_CA_CERTS:      /etc/ssl/internal/internal-ca.pem
       SMTP_TEST_ALLOW_PRIVATE:  ${SMTP_TEST_ALLOW_PRIVATE:-}
       TRACE_EXPORTER:           ${TRACE_EXPORTER:-log}
+      # ----------------------------------------------------------------------
+      # The pilot's service endpoints (infra/host/module-profiles.json, docs/ops/
+      # pilot-services.md). Every name below is read by existing code: the in-process
+      # halves of the files, votes and messaging modules and the three leaf clients.
+      # A service that is not running leaves its module answering "not configured";
+      # nothing here starts one.
+      # ----------------------------------------------------------------------
+      # Files and votes (in-process): Nextcloud by its in-network name, the admin
+      # login for the chunked-upload and Polls paths. The user's own bearer carries
+      # every other WebDAV request. Kept out of gremion-public (#241).
+      NEXTCLOUD_URL:            http://nextcloud
+      NEXTCLOUD_ADMIN_USER:     ${NEXTCLOUD_ADMIN_USER:-admin}
+      NEXTCLOUD_ADMIN_PASSWORD: ${NEXTCLOUD_ADMIN_PASSWORD}
+      # Collabora's convert-to endpoints live under its service root (/office).
+      COLLABORA_URL:            http://collabora:9980/office
+      COLLABORA_INTERNAL_URL:   http://collabora:9980/office
+      # Messaging (in-process): Synapse on _state, the admin bot's real token (a
+      # placeholder until `gremion-services wire` records it), the server name.
+      MATRIX_URL:               http://matrix:8008
+      SYNAPSE_SERVER_NAME:      ${PLATFORM_DOMAIN:?PLATFORM_DOMAIN required}
+      SYNAPSE_ADMIN_TOKEN:      ${SYNAPSE_ADMIN_TOKEN:-}
+      SYNAPSE_ADMIN_BOT_USER_ID: ${SYNAPSE_ADMIN_BOT_USER_ID:-@gremion-admin-bot:${PLATFORM_DOMAIN:?PLATFORM_DOMAIN required}}
+      # The browser receives MATRIX_PUBLIC_URL and LIVEKIT_URL (the signalling
+      # socket is routed at /livekit-sfu on the platform host, never the in-network
+      # name); Element Call is a same-origin frame on the tenant host (CSP
+      # frame-src is 'self') that gremion-ui proxies from ELEMENT_CALL_INTERNAL_URL.
+      MATRIX_PUBLIC_URL:        https://${PLATFORM_DOMAIN:?PLATFORM_DOMAIN required}
+      LIVEKIT_URL:              wss://${PLATFORM_DOMAIN:?PLATFORM_DOMAIN required}/livekit-sfu
+      LIVEKIT_API_KEY:          ${LIVEKIT_API_KEY:-}
+      LIVEKIT_API_SECRET:       ${LIVEKIT_API_SECRET:-}
+      PUBLIC_ELEMENT_CALL_URL:  https://${PILOT_TENANT_HOST:-}/element-call
+      ELEMENT_CALL_INTERNAL_URL: http://element-call:8080
+      # Calendar, content and newsletter run as LEAVES (the evidence case table and the
+      # running path are the same code; newsletter has no other backend). Votes, files
+      # and messages stay in-process and board stays default: no FILES_, VOTES_,
+      # MESSAGES_ or BOARD_BACKEND key belongs here (scripts/check-app-compose-env.test.mjs).
+      CALENDAR_BACKEND:         service
+      CONTENT_BACKEND:          service
+      NEWSLETTER_BACKEND:       service
+      # This colour's own leaves, by their colour-suffixed alias, and the shared
+      # secret each presents back to gremion-ui (tenant/leaf-trust.ts).
+      CALENDAR_SERVICE_URL:     http://calendar-service-${COLOUR:?COLOUR required}:8080
+      CONTENT_SERVICE_URL:      http://content-service-${COLOUR:?COLOUR required}:8080
+      NEWSLETTER_SERVICE_URL:   http://newsletter-service-${COLOUR:?COLOUR required}:8080
+      INTERNAL_CALENDAR_SECRET: ${INTERNAL_CALENDAR_SECRET:-}
+      INTERNAL_CONTENT_SECRET:  ${INTERNAL_CONTENT_SECRET:-}
+      INTERNAL_NEWSLETTER_SECRET: ${INTERNAL_NEWSLETTER_SECRET:-}
     volumes:
       - config-data:/app/config
       # /data holds the per-tenant config files the provisioner writes
@@ -693,6 +743,135 @@ services:
     networks:
       state:
         aliases: ["kernel-api-migrate-${COLOUR:?COLOUR required}"]
+
+  # ============================================================
+  # The pilot's module leaves: calendar, content, newsletter
+  # ============================================================
+  # Three leaf services, one per module profile (calendar, content, newsletter),
+  # rendered into COMPOSE_PROFILES by gremion-init-secrets from
+  # infra/host/module-profiles.json. Each is the module's own image, built from the
+  # repo root (modules/<id>/Dockerfile), and reached ONLY by its colour-suffixed
+  # alias on _app and _state: no edge network, no published port, no Traefik route.
+  # Its database server is the state project's <id>-postgres (profile of the same
+  # name); the leaf connects as that server's admin and creates one database per
+  # customer itself (calendar_<slug> ...), which is not the database the module
+  # enable gate creates (docs/ops/pilot-services.md, named residual).
+  #
+  # NATS_URL is deliberately absent: the kernel NATS admits only the nkeys
+  # tenant-create holds, so the leaves run with the relay loop OFF. Their outbox
+  # rows accumulate and no audit event reaches the kernel from these leaves (a
+  # named residual of the pilot).
+  calendar-service:
+    profiles: [calendar]
+    image: ghcr.io/hello-n00del/gremion-calendar:${IMAGE_TAG:?IMAGE_TAG required}
+    build:
+      context: .
+      dockerfile: modules/calendar/Dockerfile
+    restart: unless-stopped
+    logging: *logging
+    deploy: *limits-m
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    labels:
+      traefik.enable: "false"
+      org.gremion.stack: "${STACK:?STACK required}"
+    environment:
+      COLOUR: ${COLOUR:?COLOUR required}
+      PORT: "8080"
+      CALENDAR_PG_URL: postgresql://${CALENDAR_PG_USER:-calendar}:${CALENDAR_PG_PASSWORD}@calendar-postgres:5432/postgres
+      # This colour's gremion-ui, derived from COLOUR like INTERNAL_BASE_URL: never an
+      # env value that could name the other colour.
+      KERNEL_BASE_URL: http://gremion-ui-${COLOUR:?COLOUR required}:3000
+      INTERNAL_CALENDAR_SECRET: ${INTERNAL_CALENDAR_SECRET:-}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-https://${PILOT_TENANT_HOST:-${PLATFORM_DOMAIN:?PLATFORM_DOMAIN required}}}
+      TRACE_EXPORTER: ${TRACE_EXPORTER:-log}
+      # CalDAV-direct: the leaf talks to Nextcloud with its own admin Basic login.
+      NEXTCLOUD_URL: http://nextcloud
+      NEXTCLOUD_ADMIN_USER: ${NEXTCLOUD_ADMIN_USER:-admin}
+      NEXTCLOUD_ADMIN_PASSWORD: ${NEXTCLOUD_ADMIN_PASSWORD}
+      CALDAV_SHARED_USER: ${CALDAV_SHARED_USER:-}
+    networks:
+      app:
+        aliases: ["calendar-service-${COLOUR:?COLOUR required}"]
+      state:
+        aliases: ["calendar-service-${COLOUR:?COLOUR required}"]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/healthz | grep -q ok || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  content-service:
+    profiles: [content]
+    image: ghcr.io/hello-n00del/gremion-content:${IMAGE_TAG:?IMAGE_TAG required}
+    build:
+      context: .
+      dockerfile: modules/content/Dockerfile
+    restart: unless-stopped
+    logging: *logging
+    deploy: *limits-m
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    labels:
+      traefik.enable: "false"
+      org.gremion.stack: "${STACK:?STACK required}"
+    environment:
+      COLOUR: ${COLOUR:?COLOUR required}
+      PORT: "8080"
+      # The content server's own database (the image's default for POSTGRES_USER=content).
+      CONTENT_PG_URL: postgresql://${CONTENT_PG_USER:-content}:${CONTENT_PG_PASSWORD}@content-postgres:5432/${CONTENT_PG_USER:-content}
+      KERNEL_BASE_URL: http://gremion-ui-${COLOUR:?COLOUR required}:3000
+      INTERNAL_CONTENT_SECRET: ${INTERNAL_CONTENT_SECRET:-}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-https://${PILOT_TENANT_HOST:-${PLATFORM_DOMAIN:?PLATFORM_DOMAIN required}}}
+      TRACE_EXPORTER: ${TRACE_EXPORTER:-log}
+    networks:
+      app:
+        aliases: ["content-service-${COLOUR:?COLOUR required}"]
+      state:
+        aliases: ["content-service-${COLOUR:?COLOUR required}"]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/healthz | grep -q ok || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  newsletter-service:
+    profiles: [newsletter]
+    image: ghcr.io/hello-n00del/gremion-newsletter:${IMAGE_TAG:?IMAGE_TAG required}
+    build:
+      context: .
+      dockerfile: modules/publishing/Dockerfile
+    restart: unless-stopped
+    logging: *logging
+    deploy: *limits-m
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    labels:
+      traefik.enable: "false"
+      org.gremion.stack: "${STACK:?STACK required}"
+    environment:
+      COLOUR: ${COLOUR:?COLOUR required}
+      PORT: "8080"
+      NEWSLETTER_PG_URL: postgresql://${NEWSLETTER_PG_USER:-newsletter}:${NEWSLETTER_PG_PASSWORD}@newsletter-postgres:5432/postgres
+      # Mail goes out through gremion-ui's transport (kernel callback): the leaf
+      # holds no SMTP credential.
+      KERNEL_BASE_URL: http://gremion-ui-${COLOUR:?COLOUR required}:3000
+      INTERNAL_NEWSLETTER_SECRET: ${INTERNAL_NEWSLETTER_SECRET:-}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-https://${PILOT_TENANT_HOST:-${PLATFORM_DOMAIN:?PLATFORM_DOMAIN required}}}
+      TRACE_EXPORTER: ${TRACE_EXPORTER:-log}
+    networks:
+      app:
+        aliases: ["newsletter-service-${COLOUR:?COLOUR required}"]
+      state:
+        aliases: ["newsletter-service-${COLOUR:?COLOUR required}"]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/healthz | grep -q ok || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
 
 # ============================================================
 # Networks

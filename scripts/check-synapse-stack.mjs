@@ -9,7 +9,8 @@
 //      its label and profile, a project-scoped data volume (no name:), ONE
 //      bind -- the initdb script, read-only; matrix built from
 //      modules/messaging/synapse as ghcr.io/hello-n00del/gremion-synapse, on
-//      ${STACK}_state only, no ports, limits-l, the honest probe with its
+//      ${STACK}_state and ${STACK}_edge (Traefik routes /_matrix to it), no
+//      ports, limits-l, the honest probe with its
 //      start_period, depends_on messaging-postgres healthy, the section 5.2
 //      environment and no bind at all.
 //   2. profile OFF from .env.example as shipped: must render. A `${VAR:?}` on
@@ -103,11 +104,14 @@ export function renderViolations(render, { stack, project, domain }) {
     else if (v.external) out.push(`volume ${key} is external -- it must be the state project's own`)
     else if (v.name !== `${project}_${key}`) out.push(`volume ${key} realises as ${v.name}, want ${project}_${key} (no name: -- the backup enumeration reads the project label)`)
   }
-  const onlyState = (name, svc) => {
+  // messaging-postgres: _state only. matrix: _state, plus _edge since the pilot routes /_matrix on
+  // the platform host to it (docker-compose.prod.yml); it still publishes nothing, and no other
+  // network (the socket proxy's included) may carry it.
+  const onlyNets = (name, svc, want) => {
     const keys = Array.isArray(svc.networks) ? svc.networks : Object.keys(svc.networks ?? {})
-    const nets = keys.map((k) => render.networks?.[k]?.name ?? k)
-    if (svc.network_mode !== undefined || JSON.stringify(nets) !== JSON.stringify([`${stack}_state`]))
-      out.push(`${name}: networks [${nets.join(', ')}], want [${stack}_state] only`)
+    const nets = keys.map((k) => render.networks?.[k]?.name ?? k).sort()
+    if (svc.network_mode !== undefined || JSON.stringify(nets) !== JSON.stringify([...want].sort()))
+      out.push(`${name}: networks [${nets.join(', ')}], want [${want.join(', ')}] only`)
     if ((svc.ports ?? []).length) out.push(`${name}: publishes ports -- reachable from every non-council network`)
   }
   const profile = (name, svc) => {
@@ -116,7 +120,7 @@ export function renderViolations(render, { stack, project, domain }) {
   }
   if (pg) {
     profile('messaging-postgres', pg)
-    onlyState('messaging-postgres', pg)
+    onlyNets('messaging-postgres', pg, [`${stack}_state`])
     if (String(pg.labels?.['org.gremion.postgres']) !== 'module:messaging')
       out.push(`messaging-postgres: label org.gremion.postgres is ${JSON.stringify(pg.labels?.['org.gremion.postgres'] ?? null)}, want module:messaging`)
     if (pg.image !== POSTGRES_IMAGE_REF) out.push(`messaging-postgres: image ${pg.image} is not the kernel pin (check-postgres-major.mjs)`)
@@ -143,7 +147,7 @@ export function renderViolations(render, { stack, project, domain }) {
   }
   if (mx) {
     profile('matrix', mx)
-    onlyState('matrix', mx)
+    onlyNets('matrix', mx, [`${stack}_edge`, `${stack}_state`])
     const img = String(mx.image ?? '')
     if (!img.startsWith(`${IMAGE_REPO}:`)) out.push(`matrix: image ${img || '(none)'}, want ${IMAGE_REPO}:<IMAGE_TAG>`)
     const ctx = mx.build?.context ? repoRelative(mx.build.context) : null

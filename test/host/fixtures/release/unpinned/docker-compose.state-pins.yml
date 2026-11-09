@@ -10,6 +10,15 @@ services:
   matrix:
     build: !reset null
     image: ghcr.io/hello-n00del/gremion-synapse@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd
+  nextcloud:
+    build: !reset null
+    image: ghcr.io/hello-n00del/gremion-nextcloud@sha256:5555555555555555555555555555555555555555555555555555555555555555
+  collabora:
+    build: !reset null
+    image: ghcr.io/hello-n00del/gremion-collabora@sha256:6666666666666666666666666666666666666666666666666666666666666666
+  element-call:
+    build: !reset null
+    image: ghcr.io/hello-n00del/gremion-element-call@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
   fallback:
     build: !reset null
     image: ghcr.io/hello-n00del/gremion-fallback@sha256:9999999999999999999999999999999999999999999999999999999999999999
