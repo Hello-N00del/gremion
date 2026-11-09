@@ -152,8 +152,8 @@ cmd_run() {
         || die "could not start the throwaway postgres ${pg}" "$GREMION_EXIT_ASSERT"
 
     # Over TCP: the entrypoint's temporary server answers on the socket only.
-    local i ready=""
-    for i in $(seq 1 60); do
+    local ready=""
+    for _ in $(seq 1 60); do
         if docker exec "$pg" pg_isready -q -h 127.0.0.1 -p "$port" -U postgres >/dev/null 2>&1; then ready=1; break; fi
         sleep 1
     done

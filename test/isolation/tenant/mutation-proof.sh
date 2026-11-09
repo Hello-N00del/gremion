@@ -111,6 +111,7 @@ run_producer() {
 # continue when the line is absent or occurs more than once (a mutation that
 # changes nothing would prove nothing).
 mutate() {
+  # shellcheck disable=SC2016  # the JavaScript is deliberately literal, nothing here is shell
   node -e '
     const fs = require("node:fs")
     const [file, find, repl] = process.argv.slice(1)
@@ -146,6 +147,7 @@ mut_d_client() { # getMatrixClient ignores the tenant key
   DESC="messaging: getMatrixClient serves one client to every tenant"
 }
 mut_d_token() { # the Matrix token cache key ignores the tenant
+  # shellcheck disable=SC2016  # a JavaScript template literal, deliberately not expanded
   mutate "modules/messaging/app/lib/server/messages/matrix-client.ts" '    const cacheKey = `${tenantId}|${subKey}`' '    const cacheKey = `${subKey}`'
   EXPECT="gets two logins and two different Matrix tokens"
   DESC="messaging: the token cache is shared between tenants"
@@ -171,6 +173,7 @@ mut_e_uploadid() { # an upload id may be . or ..
   DESC="files: an upload id of . or .. is accepted"
 }
 mut_e_bearer() { # A's request carries another bearer
+  # shellcheck disable=SC2016  # a JavaScript template literal, deliberately not expanded
   mutate "modules/files/app/lib/server/files/nextcloud-client.ts" '    if (this.webdavBearer) return `Bearer ${this.webdavBearer}`' "    if (this.webdavBearer) return 'Bearer tok-B'"
   EXPECT="GET list: A sees its own folder|request carries exactly its caller bearer"
   DESC="files: every request carries one fixed bearer"
