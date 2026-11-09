@@ -5,9 +5,11 @@
 // PLATFORM_DOMAIN, IMAGE_TAG, subnets) are exempt: they come from app-<colour>.env.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
+import { spawnSync } from 'node:child_process'
+import { readFileSync, readdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { readEnvFile, renderState } from './compose-edge.mjs'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const read = (p) => readFileSync(join(ROOT, p), 'utf8')
@@ -87,4 +89,97 @@ test('gremion-ui environment of docker-compose.app.yml carries no AUTH_KEYCLOAK_
 
 test('gremion-ui environment of docker-compose.app.dev.yml carries no AUTH_KEYCLOAK_ISSUER / AUTH_KEYCLOAK_BASE (#87)', () => {
   assertNoIssuerKeys('docker-compose.app.dev.yml')
+})
+
+// ── the pilot's service endpoints (infra/host/module-profiles.json, docs/ops/pilot-services.md) ──
+//
+// gremion-ui carries the endpoint and credential names the in-process halves of the files, votes and
+// messaging modules and the three leaf clients already read, and the BACKEND TABLE of the evidence
+// contract: calendar, content and newsletter run as leaves (CALENDAR_BACKEND, CONTENT_BACKEND,
+// NEWSLETTER_BACKEND = service), votes/files/messages stay in-process (no *_BACKEND key at all) and
+// board stays default. The isolation evidence's case table describes exactly these paths, so a
+// drift in either is a proof about code that is not running.
+
+/** The `KEY: value` pairs of one service's environment block, comments and blank lines dropped. */
+function environmentOf(file, service) {
+  const block = serviceBlockWithoutComments(file, service)
+  const start = block.indexOf('    environment:')
+  assert.ok(start >= 0, `${service} has no environment block in ${file}`)
+  const out = {}
+  for (const line of block.slice(start).split('\n').slice(1)) {
+    if (/^ {4}\S/.test(line)) break
+    const m = /^ {6}([A-Z][A-Z0-9_]*):\s*(.*?)\s*$/.exec(line)
+    if (m) out[m[1]] = m[2]
+  }
+  return out
+}
+
+const PILOT_UI_ENV = [
+  'NEXTCLOUD_URL', 'NEXTCLOUD_ADMIN_USER', 'NEXTCLOUD_ADMIN_PASSWORD', 'MATRIX_URL', 'SYNAPSE_SERVER_NAME', 'LIVEKIT_URL',
+  'LIVEKIT_API_KEY', 'LIVEKIT_API_SECRET', 'SYNAPSE_ADMIN_TOKEN', 'SYNAPSE_ADMIN_BOT_USER_ID', 'MATRIX_PUBLIC_URL',
+  'PUBLIC_ELEMENT_CALL_URL', 'COLLABORA_URL', 'ELEMENT_CALL_INTERNAL_URL', 'CALENDAR_BACKEND', 'CONTENT_BACKEND', 'NEWSLETTER_BACKEND',
+  'CALENDAR_SERVICE_URL', 'CONTENT_SERVICE_URL', 'NEWSLETTER_SERVICE_URL', 'INTERNAL_CALENDAR_SECRET', 'INTERNAL_CONTENT_SECRET',
+  'INTERNAL_NEWSLETTER_SECRET', 'PUBLIC_BASE_URL',
+]
+
+test('pilot env: gremion-ui carries every endpoint name the module code reads, and every secret is a ${VAR}, never a literal', () => {
+  const env = environmentOf('docker-compose.app.yml', 'gremion-ui')
+  assert.deepEqual(PILOT_UI_ENV.filter((k) => !(k in env)), [])
+  for (const [k, v] of Object.entries(env)) {
+    if (/PASSWORD|SECRET|TOKEN|API_KEY/.test(k)) assert.match(v, /^\$\{[A-Z0-9_]+(:-[^}]*)?\}$/, `${k} is not a \${VAR} reference: ${v}`)
+  }
+  // the browser receives these two: never the in-network names
+  assert.match(env.LIVEKIT_URL, /^wss:\/\/\$\{PLATFORM_DOMAIN:\?PLATFORM_DOMAIN required\}\/livekit-sfu$/)
+  assert.match(env.PUBLIC_ELEMENT_CALL_URL, /^https:\/\/\$\{PILOT_TENANT_HOST:-\}\/element-call$/)
+  assert.match(env.MATRIX_PUBLIC_URL, /^https:\/\/\$\{PLATFORM_DOMAIN:\?PLATFORM_DOMAIN required\}$/)
+  // Nextcloud's admin login stays out of gremion-public (#241)
+  assert.doesNotMatch(serviceBlockWithoutComments('docker-compose.app.yml', 'gremion-public'), /NEXTCLOUD_ADMIN/)
+})
+
+test('backend table: exactly the three leaf backends are `service`; no FILES_, VOTES_, MESSAGES_ or BOARD_BACKEND key exists in any app compose', () => {
+  for (const file of ['docker-compose.app.yml', 'docker-compose.app.dev.yml']) {
+    const text = read(file).split(/\r?\n/).filter((l) => !/^\s*#/.test(l)).join('\n')
+    assert.doesNotMatch(text, /\b(FILES|VOTES|MESSAGES|MESSAGING|BOARD|ELECTIONS|FINANCE|VAULT|HANDOVER)_BACKEND\b/, file)
+  }
+  const env = environmentOf('docker-compose.app.yml', 'gremion-ui')
+  const backends = Object.entries(env).filter(([k]) => /_BACKEND$/.test(k))
+  assert.deepEqual(backends, [['CALENDAR_BACKEND', 'service'], ['CONTENT_BACKEND', 'service'], ['NEWSLETTER_BACKEND', 'service']])
+})
+
+test('leaf urls: every <ID>_SERVICE_URL of the rendered gremion-ui resolves to a declared alias of a leaf, on the leaf\'s own port', () => {
+  const fx = readEnvFile('test/host/fixtures/pooled-stack/app-blue.env')
+  const r = renderState({ envFile: 'test/host/fixtures/pooled-stack/app-blue.env', env: { COMPOSE_PROFILES: '*' } })
+  const ui = r.services['gremion-ui'].environment
+  const aliases = new Map()
+  for (const [name, svc] of Object.entries(r.services)) {
+    for (const att of Object.values(svc.networks ?? {})) for (const a of att?.aliases ?? []) aliases.set(a, name)
+  }
+  for (const [key, leaf] of [['CALENDAR_SERVICE_URL', 'calendar-service'], ['CONTENT_SERVICE_URL', 'content-service'], ['NEWSLETTER_SERVICE_URL', 'newsletter-service']]) {
+    const u = new URL(ui[key])
+    assert.equal(u.hostname, `${leaf}-${fx.COLOUR}`, `${key} names this colour's ${leaf}`)
+    assert.equal(aliases.get(u.hostname), leaf, `${key}: no service of the render answers to ${u.hostname}`)
+    assert.equal(u.port, String(r.services[leaf].environment.PORT), `${key} names the port ${leaf} listens on`)
+  }
+  // the three BACKEND values reach the container as rendered
+  assert.deepEqual([ui.CALENDAR_BACKEND, ui.CONTENT_BACKEND, ui.NEWSLETTER_BACKEND], ['service', 'service', 'service'])
+})
+
+test('release templates: every docker/**/*.tmpl renders to a path git ignores, so a host render never dirties the release tree', () => {
+  const tmpls = []
+  const walk = (dir) => {
+    for (const e of readdirSync(join(ROOT, dir), { withFileTypes: true })) {
+      const p = `${dir}/${e.name}`
+      if (e.isDirectory()) walk(p)
+      else if (e.name.endsWith('.tmpl')) tmpls.push(p)
+    }
+  }
+  walk('docker')
+  assert.ok(tmpls.includes('docker/element-call/config.json.tmpl'), `the guard sees the Element Call template (${tmpls.join(', ')})`)
+  for (const t of tmpls) {
+    const out = t.slice(0, -'.tmpl'.length)
+    // git is the oracle: it reads the repository's own ignore rules (exit 0: ignored, 1: not)
+    const r = spawnSync('git', ['check-ignore', '-q', '--', out], { cwd: ROOT })
+    assert.equal(r.status, 0, `${out} (rendered by gremion-render from ${t}) is not gitignored: a render would dirty the release tree`)
+    assert.equal(spawnSync('git', ['check-ignore', '-q', '--', t], { cwd: ROOT }).status, 1, `${t} itself must not be ignored`)
+  }
 })

@@ -45,9 +45,19 @@ describe('docker-compose.prod.yml traefik labels = platformMiddlewareLabels (hos
     expect(block).not.toMatch(/middlewares\.edge-ratelimit\./)
   })
 
-  it('declares no edge-hostpin-* yet: the platform host pins stay TASK-034 34b (Qc2)', () => {
+  it('declares ONE edge-hostpin-* yet, the apex pin the pilot routers chain; www, control and sales stay TASK-034 34b (Qc2)', () => {
     // label lines only: the comments name the pins
-    expect(block.split('\n').filter((l) => /^\s*- "/.test(l) && /edge-hostpin-/.test(l))).toEqual([])
+    const pins = block.split('\n').filter((l) => /^\s*- "/.test(l) && /edge-hostpin-/.test(l))
+    expect(pins).toHaveLength(1)
+    // the value is the platform domain, read from the one guarded key, exactly platformMiddlewareLabels' shape
+    expect(pins[0]).toContain('traefik.http.middlewares.edge-hostpin-apex.headers.customrequestheaders.X-Forwarded-Host=${PLATFORM_DOMAIN:?PLATFORM_DOMAIN required}')
+    expect(Object.keys(all).filter((k) => k.includes('.edge-hostpin-apex.'))).toHaveLength(1)
+  })
+
+  it('declares the livekit-sfu-strip middleware on the traefik container (spec B B-09), not on livekit', () => {
+    expect(block).toContain('"traefik.http.middlewares.livekit-sfu-strip.stripprefix.prefixes=/livekit-sfu"')
+    const livekit = PROD.slice(PROD.indexOf('\n  livekit:\n'), PROD.indexOf('\n  collabora:\n'))
+    expect(livekit).not.toMatch(/traefik\.http\.middlewares\./)
   })
 
   it('keeps the interim names the static routers still chain (34b retires them)', () => {
