@@ -59,6 +59,13 @@ test('the render guard catches ports, a bind, a named volume, a wrong probe, a s
   const cases = [
     [(r) => (r.services.matrix.ports = [{ target: 8008, published: '8008' }]), /publishes ports/],
     [(r) => r.services.matrix.volumes.push({ type: 'bind', source: REPO_ROOT, target: '/src' }), /exactly synapse-data/],
+    // the one bind matrix may carry is the host's secrets directory, read-only, never created by Docker, never in the repo
+    [(r) => (r.services.matrix.volumes.find((v) => v.type === 'bind').read_only = false), /secrets bind is not read-only/],
+    [(r) => (r.services.matrix.volumes.find((v) => v.type === 'bind').bind = { create_host_path: true }), /would create a missing host directory/],
+    [(r) => (r.services.matrix.volumes.find((v) => v.type === 'bind').target = '/run/secrets/other'), /secrets bind targets \/run\/secrets\/other/],
+    [(r) => (r.services.matrix.volumes.find((v) => v.type === 'bind').source = path.join(REPO_ROOT, 'secrets')), /want <GREMION_ROOT>\/etc\/secrets\/synapse/],
+    [(r) => r.services.matrix.volumes.splice(r.services.matrix.volumes.findIndex((v) => v.type === 'bind'), 1), /exactly synapse-data:\/data and one read-only bind/],
+    [(r) => delete r.services.matrix.environment.SYNAPSE_OIDC_CLIENT_SECRET_FILE, /lacks SYNAPSE_OIDC_CLIENT_SECRET_FILE/],
     [(r) => (r.volumes['synapse-data'].name = 'gremion_synapse_data'), /realises as gremion_synapse_data/],
     [(r) => (r.services.matrix.healthcheck.test = ['CMD-SHELL', 'curl -sf http://127.0.0.1:8008/_matrix/client/versions']), /versions/],
     [(r) => (r.services.matrix.healthcheck.start_period = '60s'), /start_period/],

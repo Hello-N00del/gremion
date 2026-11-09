@@ -30,7 +30,7 @@ import { readFileSync, readdirSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { REPO_ROOT, readEnvFile, renderState } from './compose-edge.mjs'
+import { REPO_ROOT, bindRefusesMissingHostDir, readEnvFile, renderState } from './compose-edge.mjs'
 import { POSTGRES_IMAGE_REF } from './check-postgres-major.mjs'
 
 export const MODULE_DIR = 'modules/messaging/synapse'
@@ -39,6 +39,10 @@ export const IMAGE_REPO = 'ghcr.io/hello-n00del/gremion-synapse'
 export const INIT_TARGET = '/docker-entrypoint-initdb.d/10-synapse-db.sh'
 export const INIT_SOURCE = `${MODULE_DIR}/postgres-init/10-synapse-db.sh`
 export const PROBE = '/synapse-healthcheck.sh'
+/** The host directory `gremion-services wire` writes the OIDC client secret into (0600), and where matrix reads it. */
+export const SECRETS_DIR_REL = 'etc/secrets/synapse'
+export const SECRETS_TARGET = '/run/secrets/synapse'
+export const SECRET_FILE = `${SECRETS_TARGET}/oidc_client_secret`
 // start_period (brief section 5.5): SYNAPSE_KC_MAX key-fetch attempts of ~7 s
 // each (curl --max-time 5 + sleep 2) plus the first boot measured by the
 // scratch proof (phase b: 17 s and 18 s to healthy on an empty synapse
@@ -60,6 +64,7 @@ export const MATRIX_ENV = (domain) => ({
   SYNAPSE_KEYCLOAK_ISSUER_URL: null,
   SYNAPSE_KEYCLOAK_FETCH_URL: null,
   SYNAPSE_OIDC_CLIENT_SECRET: null,
+  SYNAPSE_OIDC_CLIENT_SECRET_FILE: SECRET_FILE,
   SYNAPSE_REGISTRATION_SHARED_SECRET: null,
   SYNAPSE_ADMIN_BOT_USER_ID: `@gremion-admin-bot:${domain}`,
   BOOTSTRAP_MODE: null,
@@ -157,9 +162,22 @@ export function renderViolations(render, { stack, project, domain }) {
       out.push(`matrix: limits ${JSON.stringify(lim)}, want limits-l (1G / 1.0)`)
     const dep = mx.depends_on?.['messaging-postgres']
     if (!dep || dep.condition !== 'service_healthy') out.push('matrix: not depends_on messaging-postgres: service_healthy')
+    // synapse-data:/data, and ONE read-only bind of the host's etc/secrets/synapse (the OIDC client
+    // secret `gremion-services wire` writes there, 0600): never a repo path, never read-write, and a
+    // missing host directory refuses `up` instead of Docker creating it root-owned.
     const vs = mx.volumes ?? []
-    if (vs.length !== 1 || vs[0].type !== 'volume' || vs[0].source !== 'synapse-data' || vs[0].target !== '/data')
-      out.push(`matrix: volumes ${JSON.stringify(vs.map((v) => `${v.type}:${v.source}:${v.target}`))}, want exactly synapse-data:/data (no bind, no repo mount)`)
+    const data = vs.find((v) => v.type === 'volume')
+    const secrets = vs.filter((v) => v.type === 'bind')
+    if (vs.length !== 2 || !data || data.source !== 'synapse-data' || data.target !== '/data' || secrets.length !== 1)
+      out.push(`matrix: volumes ${JSON.stringify(vs.map((v) => `${v.type}:${v.source}:${v.target}`))}, want exactly synapse-data:/data and one read-only bind of ${SECRETS_DIR_REL} (no repo mount)`)
+    else {
+      const b = secrets[0]
+      if (b.target !== SECRETS_TARGET) out.push(`matrix: the secrets bind targets ${b.target}, want ${SECRETS_TARGET}`)
+      if (!b.read_only) out.push('matrix: the secrets bind is not read-only')
+      if (!bindRefusesMissingHostDir(b)) out.push('matrix: the secrets bind would create a missing host directory (create_host_path must be false)')
+      if (!String(b.source).replaceAll('\\', '/').endsWith(`/${SECRETS_DIR_REL}`)) out.push(`matrix: the secrets bind's source is ${b.source}, want <GREMION_ROOT>/${SECRETS_DIR_REL}`)
+      if (repoRelative(b.source).startsWith('..') === false) out.push(`matrix: the secrets bind's source ${b.source} is inside the repository`)
+    }
     const hc = mx.healthcheck ?? {}
     const t = hc.test ?? []
     if (JSON.stringify(t) !== JSON.stringify(['CMD', PROBE])) out.push(`matrix: healthcheck ${JSON.stringify(t)}, want ["CMD", "${PROBE}"]`)

@@ -63,7 +63,9 @@ type RealmDoc = Record<string, unknown> & {
 // of which no template carried -- a secret file per phantom client). The public
 // PKCE client (gremion-mobile) has no secret; gremion-admin DOES (service
 // account). realm-doc.test.ts pins this list against the template.
-export const PROVISIONER_SECRET_CLIENTS = ['gremion-ui', 'gremion-admin', 'synapse'] as const
+// `nextcloud` (the pilot's Nextcloud user_oidc provider, registered by `gremion-services wire`)
+// is the fourth: its secret file is tenant_<slug>_client_nextcloud, read by that host verb.
+export const PROVISIONER_SECRET_CLIENTS = ['gremion-ui', 'gremion-admin', 'synapse', 'nextcloud'] as const
 
 /**
  * TASK-043 Q11 (RFC 8252 §7.1): the native app's private-use URI scheme is the

@@ -85,6 +85,8 @@ case " $* " in
     printf "tc %s %s\n" "$verb" "$slug" >> "$ORDER"
     # the state of the credential directory when the container starts: a bind source that is missing then is made by the daemon, as root
     if [ -d "$GREMION_ROOT/etc/secrets/governance" ]; then echo "$verb present $(stat -c %a "$GREMION_ROOT/etc/secrets/governance")" >> "$GREMION_ROOT/gov-dir-at-run"; else echo "$verb absent" >> "$GREMION_ROOT/gov-dir-at-run"; fi
+    # the same for the per-customer secrets directory (TENANT_SECRETS_DIR of app-blue.env, #85)
+    if [ -d "$GREMION_ROOT/tenant-secrets" ]; then echo "$verb present $(stat -c %a "$GREMION_ROOT/tenant-secrets")" >> "$GREMION_ROOT/ts-dir-at-run"; else echo "$verb absent" >> "$GREMION_ROOT/ts-dir-at-run"; fi
     [ -f "$GREMION_ROOT/fail-$verb" ] && exit 1
     case "$verb" in
       phase-a|phase-b)
@@ -296,6 +298,54 @@ STUB
     [ -s "${GREMION_ROOT}/gov-dir-at-run" ] || { echo "the container shim saw no run"; return 1; }
     ! grep -q absent "${GREMION_ROOT}/gov-dir-at-run" || { cat "${GREMION_ROOT}/gov-dir-at-run"; return 1; }
     grep -qx 'reconcile present 700' "${GREMION_ROOT}/gov-dir-at-run" || { cat "${GREMION_ROOT}/gov-dir-at-run"; return 1; }
+}
+
+# #85: the per-customer secrets directory (TENANT_SECRETS_DIR). The default, ./secrets/tenants, lies INSIDE the
+# release tree: a redeploy replaces the tree and a build context copies it. app.env.tmpl therefore sets it outside
+# the tree, and the host makes it, 0700 and the deploy user's, before EVERY run of the container (a bind source the
+# daemon creates is root-owned), refusing a place that is inside the release tree, relative, or not a leaf apart
+# from the tenant-create credential directory (gremion-ui/scripts/check-tenant-secrets-dir.mjs).
+@test "every tenant-create run finds TENANT_SECRETS_DIR made by the host beforehand, mode 700" {
+    rm -rf "${GREMION_ROOT}/tenant-secrets"
+    run "$LAUNCHER" reconcile alpha-rat
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
+    [ -s "${GREMION_ROOT}/ts-dir-at-run" ] || { echo "the container shim saw no run"; return 1; }
+    ! grep -q absent "${GREMION_ROOT}/ts-dir-at-run" || { cat "${GREMION_ROOT}/ts-dir-at-run"; return 1; }
+    grep -qx 'reconcile present 700' "${GREMION_ROOT}/ts-dir-at-run" || { cat "${GREMION_ROOT}/ts-dir-at-run"; return 1; }
+}
+
+@test "a missing TENANT_SECRETS_DIR in the colour's env file is a precondition failure naming it (exit 2), before the container starts" {
+    sed -i '/^TENANT_SECRETS_DIR=/d' "${GREMION_ROOT}/etc/env/app-blue.env"
+    run "$LAUNCHER" reconcile alpha-rat
+    [ "$status" -eq 2 ] || { echo "status=$status $output"; return 1; }
+    [[ "$output" == *"TENANT_SECRETS_DIR"* ]]
+    [ ! -s "${GREMION_ROOT}/ts-dir-at-run" ] || { echo "the container ran anyway"; return 1; }
+}
+
+@test "a TENANT_SECRETS_DIR inside the release tree, a relative one, and one that contains a credential directory are each refused (exit 2)" {
+    local bad
+    for bad in "${REL}/secrets/tenants" "secrets/tenants" "${GREMION_ROOT}/etc/secrets" "${GREMION_ROOT}/etc/secrets/tenant-create" "${GREMION_ROOT}/etc/secrets/governance" "${GREMION_ROOT}/etc"; do
+        sed -i '/^TENANT_SECRETS_DIR=/d' "${GREMION_ROOT}/etc/env/app-blue.env"
+        printf 'TENANT_SECRETS_DIR=%s\n' "$bad" >> "${GREMION_ROOT}/etc/env/app-blue.env"
+        : > "${GREMION_ROOT}/ts-dir-at-run"
+        run "$LAUNCHER" reconcile alpha-rat
+        [ "$status" -eq 2 ] || { echo "${bad}: status=$status $output"; return 1; }
+        [[ "$output" == *"TENANT_SECRETS_DIR"* ]] || { echo "${bad}: $output"; return 1; }
+        [ ! -s "${GREMION_ROOT}/ts-dir-at-run" ] || { echo "${bad}: the container ran anyway"; return 1; }
+    done
+}
+
+@test "app.env.tmpl sets TENANT_SECRETS_DIR under etc/secrets, a leaf apart from tenant-create and the release tree" {
+    local tmpl="${HOST_SRC}/templates/env/app.env.tmpl"
+    [ "$(grep -c '^TENANT_SECRETS_DIR=' "$tmpl")" = 1 ]
+    grep -qx 'TENANT_SECRETS_DIR=/opt/gremion/etc/secrets/tenants' "$tmpl"
+    rm -f "${GREMION_ROOT}/etc/env/"*.env
+    run "${HOST_SRC}/bin/gremion-init-secrets" --root "$GREMION_ROOT" --stack guardstack
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    local f
+    for f in app-blue.env app-green.env; do
+        [ "$(sed -n 's/^TENANT_SECRETS_DIR=//p' "${GREMION_ROOT}/etc/env/${f}")" = "/opt/gremion/etc/secrets/tenants" ]
+    done
 }
 
 @test "relay suspend, resume and reconcile go through the front and hand the container the descriptor" {
@@ -645,7 +695,8 @@ STUB
     rm -f "${GREMION_ROOT}/etc/env/"*.env
     run "${HOST_SRC}/bin/gremion-init-secrets" --root "$GREMION_ROOT" --stack guardstack
     [ "$status" -eq 0 ] || { echo "render: status=$status $output"; return 1; }
-    printf 'TENANT_SECRETS_DIR=%s/tenant-secrets\n' "$GREMION_ROOT" >> "${GREMION_ROOT}/etc/env/app-blue.env"
+    # the template now sets TENANT_SECRETS_DIR itself (under /opt/gremion): point it at this test's root
+    sed -i "s|^TENANT_SECRETS_DIR=.*|TENANT_SECRETS_DIR=${GREMION_ROOT}/tenant-secrets|" "${GREMION_ROOT}/etc/env/app-blue.env"
     # init's own check first: it dies "<ID>_PG_PASSWORD is empty in state.env".
     run "$LAUNCHER" init
     [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }

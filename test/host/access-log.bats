@@ -28,7 +28,7 @@ setup() {
     export ORDER
     echo blue > "${GREMION_ROOT}/runtime/active-colour"
     printf 'STACK=guardstack\nPOSTGRES_USER=postgres\nPOSTGRES_PASSWORD=unit-pg-root-secret\nKEYCLOAK_ADMIN_PASSWORD=unit-kc\nTRAEFIK_CERT_RESOLVER=le-http\nEDGE_BIND_IP=192.0.2.10\nEDGE_BIND_IP6=2001:db8::a\n' > "${GREMION_ROOT}/etc/env/state.env"
-    printf 'STACK=guardstack\nCOLOUR=blue\n' > "${GREMION_ROOT}/etc/env/app-blue.env"
+    printf 'STACK=guardstack\nCOLOUR=blue\nTENANT_SECRETS_DIR=%s/tenant-secrets\n' "$GREMION_ROOT" > "${GREMION_ROOT}/etc/env/app-blue.env"
     printf '{"brand":{"product":"Rat","org_short":"MS"}}\n' > "${GREMION_ROOT}/tenant-config.json"
     shim docker "exec bash '${FIX}/docker-shim' \"\$@\""
     export GREMION_EXECUTOR_PG_CONTAINER=t092-pg-fixture MAIL_TRANSPORT=stalwart SUDO_USER=deploy

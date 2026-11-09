@@ -384,3 +384,63 @@ describe('(D) role-vocabulary guard (assertRoleVocabularyCarried)', () => {
     ).not.toThrow()
   })
 })
+
+// The pilot's Nextcloud (the files module's WebDAV, the Polls client of the votes module). gremion-ui
+// authenticates to WebDAV with the USER's own bearer, so Nextcloud's user_oidc provider (registered by
+// `gremion-services wire`, --clientid=nextcloud --check-bearer=1) needs (a) a confidential `nextcloud`
+// client in the customer realm, whose secret the provisioner generates like the other three, and (b) an
+// `aud: nextcloud` claim on the gremion-ui client's access token (an audience mapper).
+describe('the nextcloud client and the nextcloud audience mapper', () => {
+  type Mapper = { name: string; protocolMapper: string; config: Record<string, string> }
+  type Client = { clientId: string; secret?: string; publicClient?: boolean; protocolMappers?: Mapper[] } & Record<string, unknown>
+  const clientOf = (doc: { clients?: unknown[] }, id: string) => (doc.clients as Client[]).find((c) => c.clientId === id)
+
+  const build = () =>
+    buildTenantRealmDoc({
+      base,
+      manifests: MODULE_MANIFESTS,
+      config: cfgOff,
+      slug: 't2',
+      realmName: 'verein',
+      tenantHost: 't2.council.example',
+      apexDomain: 'council.example',
+      clientSecrets: Object.fromEntries(PROVISIONER_SECRET_CLIENTS.map((c) => [c, secretFor(c)])),
+      smtp: TEST_SMTP,
+    })
+
+  it('the provisioner generates a secret file for the nextcloud client, named like the others', () => {
+    expect([...PROVISIONER_SECRET_CLIENTS]).toEqual(['gremion-ui', 'gremion-admin', 'synapse', 'nextcloud'])
+    // the template's placeholders are exactly this list (a placeholder with no generated secret throws)
+    const placeholders = (base.clients as Client[]).map((c) => c.secret).filter((s): s is string => typeof s === 'string' && s.startsWith('__'))
+    expect(placeholders.sort()).toEqual(
+      ['__GREMION_ADMIN_OIDC_CLIENT_SECRET__', '__GREMION_UI_OIDC_CLIENT_SECRET__', '__NEXTCLOUD_OIDC_CLIENT_SECRET__', '__SYNAPSE_OIDC_CLIENT_SECRET__'].sort(),
+    )
+  })
+
+  it('the realm carries a confidential nextcloud client with its generated secret and no browser flow', () => {
+    const nc = clientOf(build(), 'nextcloud')
+    expect(nc, 'the nextcloud client').toBeDefined()
+    expect(nc!.publicClient).toBe(false)
+    expect(nc!.secret).toBe('secret-nextcloud')
+    // bearer validation only: Nextcloud has no public router, so no sign-in redirect, no implicit or password grant
+    expect(nc!.standardFlowEnabled).toBe(false)
+    expect(nc!.implicitFlowEnabled).toBe(false)
+    expect(nc!.directAccessGrantsEnabled).toBe(false)
+    expect(nc!.serviceAccountsEnabled).toBe(false)
+    expect(nc!.redirectUris ?? []).toEqual([])
+    expect(JSON.stringify(build())).not.toMatch(/__[A-Z][A-Z0-9_]*__/)
+  })
+
+  it('the gremion-ui access token carries aud nextcloud: an audience mapper on the gremion-ui client, access token only', () => {
+    const ui = clientOf(build(), 'gremion-ui')!
+    const m = (ui.protocolMappers ?? []).filter((x) => x.name === 'audience-nextcloud')
+    expect(m).toHaveLength(1)
+    expect(m[0]!.protocolMapper).toBe('oidc-audience-mapper')
+    expect(m[0]!.config['included.client.audience']).toBe('nextcloud')
+    expect(m[0]!.config['access.token.claim']).toBe('true')
+    // never on the ID token: the audience is for the resource server, not for the browser
+    expect(m[0]!.config['id.token.claim']).toBe('false')
+    // the two audiences that were already there stay
+    expect((ui.protocolMappers ?? []).map((x) => x.name)).toEqual(expect.arrayContaining(['audience-gremion-ui', 'audience-gremion-kernel-api']))
+  })
+})

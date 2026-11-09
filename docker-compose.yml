@@ -781,6 +781,9 @@ services:
       SYNAPSE_KEYCLOAK_FETCH_URL:   ${SYNAPSE_KEYCLOAK_FETCH_URL:-}
       # Scratch only: on a host the secret is the mounted file, which wins.
       SYNAPSE_OIDC_CLIENT_SECRET:   ${SYNAPSE_OIDC_CLIENT_SECRET:-}
+      # The host's file (below), written 0600 by `gremion-services wire`. A NAMED file the
+      # shim cannot read is a refusal, never a quiet fallback to the env value.
+      SYNAPSE_OIDC_CLIENT_SECRET_FILE: /run/secrets/synapse/oidc_client_secret
       # Rendered only in a BOOTSTRAP_MODE=1 boot (bootstrap.sh), else stripped.
       SYNAPSE_REGISTRATION_SHARED_SECRET: ${SYNAPSE_REGISTRATION_SHARED_SECRET:-}
       # The only account allowed to create room aliases (alias_creation_rules). The bot's
@@ -792,6 +795,16 @@ services:
       # Media and the signing key (the homeserver's identity) live only here:
       # no S3 offload (TASK-198 Q5). Backed up by project label (TASK-089).
       - synapse-data:/data
+      # The customer realm's synapse client secret, a 0600 file `gremion-services wire`
+      # copies from the tenant secrets directory. Read-only; long syntax so that a host
+      # that has not been wired yet refuses `up` here instead of Docker creating an empty,
+      # root-owned directory (matrix is a post-realm profile: wire is what starts it).
+      - type: bind
+        source: ${GREMION_ROOT}/etc/secrets/synapse
+        target: /run/secrets/synapse
+        read_only: true
+        bind:
+          create_host_path: false
     deploy: *limits-l
     networks:
       # _state: its database and the app tier. _edge: Traefik's docker provider

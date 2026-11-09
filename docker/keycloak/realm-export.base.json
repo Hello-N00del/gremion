@@ -172,6 +172,18 @@
           }
         },
         {
+          "name": "audience-nextcloud",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "consentRequired": false,
+          "config": {
+            "included.client.audience": "nextcloud",
+            "id.token.claim": "false",
+            "access.token.claim": "true",
+            "introspection.token.claim": "true"
+          }
+        },
+        {
           "name": "sub",
           "protocol": "openid-connect",
           "protocolMapper": "oidc-usermodel-property-mapper",
@@ -241,6 +253,22 @@
       "webOrigins": [],
       "fullScopeAllowed": false,
       "secret": "__SYNAPSE_OIDC_CLIENT_SECRET__"
+    },
+    {
+      "clientId": "nextcloud",
+      "name": "Nextcloud",
+      "description": "Nextcloud user_oidc provider (the files and votes modules). Confidential, and its identity is used for BEARER validation only: gremion-ui presents the user's own access token on WebDAV, which must carry aud nextcloud (the audience mapper on the gremion-ui client). No browser flow: Nextcloud has no public router.",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "standardFlowEnabled": false,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "redirectUris": [],
+      "webOrigins": [],
+      "fullScopeAllowed": false,
+      "secret": "__NEXTCLOUD_OIDC_CLIENT_SECRET__"
     },
     {
       "clientId": "gremion-mobile",
