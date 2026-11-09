@@ -23,8 +23,13 @@ export const contentManifest: ModuleManifest = {
   toggleable: true,
   // Authoring surface view gate matches finance/elections: a basic Mitglied
   // reaches /content; write/publish is capability-gated (below).
-  pages: [{ segment: 'content', minRole: Role.Member }],
-  routePrefixes: ['/content', '/api/content'],
+  // /news is the portal-news editor of the same module (routes/news, routes/api/news): CouncilAdmin only,
+  // as its loaders and handlers check, and gated by the module toggle with the rest of the surface.
+  pages: [
+    { segment: 'content', minRole: Role.Member },
+    { segment: 'news', minRole: Role.CouncilAdmin },
+  ],
+  routePrefixes: ['/content', '/api/content', '/news', '/api/news'],
   groups: { ...G },
   capabilities: {
     'content.author':            [G.admin, G.itAdmin],

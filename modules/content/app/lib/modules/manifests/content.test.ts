@@ -9,12 +9,15 @@ describe('content manifest — shape conforms (golden)', () => {
     expect(contentManifest.toggleable).toBe(true)
   })
 
-  it('owns the /content authoring page at the finance/elections view minRole', () => {
-    expect(contentManifest.pages).toEqual([{ segment: 'content', minRole: Role.Member }])
+  it('owns the /content authoring page at the finance/elections view minRole and the council-admin /news editor', () => {
+    expect(contentManifest.pages).toEqual([
+      { segment: 'content', minRole: Role.Member },
+      { segment: 'news', minRole: Role.CouncilAdmin },
+    ])
   })
 
-  it('owns exactly its UI + API route prefixes', () => {
-    expect(contentManifest.routePrefixes).toEqual(['/content', '/api/content'])
+  it('owns exactly its UI + API route prefixes, the news editor included (off means no route to it)', () => {
+    expect(contentManifest.routePrefixes).toEqual(['/content', '/api/content', '/news', '/api/news'])
   })
 
   it('declares the content capabilities; publish.instagram is defined but ungranted (L3 wires it)', () => {
