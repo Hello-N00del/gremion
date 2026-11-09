@@ -50,6 +50,7 @@ import {
   markTenantResourceOk,
   primaryHostForTenant,
   registerTenant,
+  resolveTenantById,
   resumeTenant,
   suspendTenant,
   updateTenantStatus,
@@ -266,6 +267,26 @@ export async function inProvisioningContext<T>(c: CustomerRef, fn: () => Promise
   evictTenantRuntime(c.id)
   try {
     const ctx = await contextForProvisioningTenant(tenant, opts)
+    return await runWithTenant(ctx, fn)
+  } finally {
+    evictTenantRuntime(c.id)
+  }
+}
+
+/**
+ * gremion#82: the tenant context of an ACTIVE customer, for the work that runs
+ * after provisioning (seed-vertical, import-validate, import-apply).
+ * inProvisioningContext serves `provisioning` rows only (the Q21 guard) and
+ * throws for an active one. resolveTenantById returns a context for an active
+ * row and null for every other status, so a provisioning, suspended or deleting
+ * customer is refused here. The runtime db secret is used as it is (no owner-role
+ * url override); the pool is dropped before and after, like inProvisioningContext.
+ */
+export async function inActiveContext<T>(c: CustomerRef, fn: () => Promise<T>): Promise<T> {
+  evictTenantRuntime(c.id)
+  try {
+    const ctx = await resolveTenantById(c.id)
+    if (!ctx) throw new Error(`customer ${c.slug} is not active: no tenant context`)
     return await runWithTenant(ctx, fn)
   } finally {
     evictTenantRuntime(c.id)

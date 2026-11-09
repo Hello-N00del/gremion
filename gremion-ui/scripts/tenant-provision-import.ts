@@ -42,7 +42,7 @@ import { kernelDbName } from '@gremion/tenant-store/lifecycle'
 import { assertSmtpStamped, tokenFor, type CustomerRef, type ProvisioningDeps } from '@gremion/provisioning'
 import { readConfig } from '../src/lib/server/config'
 import { configPathForTenant, getTenantById } from '../src/lib/server/tenant/registry'
-import { inProvisioningContext } from '../src/lib/server/tenant/provisioner/customer-adapters'
+import { inActiveContext } from '../src/lib/server/tenant/provisioner/customer-adapters'
 import type { KcProvisionApi } from '../src/lib/server/tenant/provisioner/kc-admin-api'
 import { keycloakAccounts, memberImportTarget, seedVertical, sqlOrgStore, type OrgStore } from '../src/lib/server/tenant/provisioner/member-import-adapters'
 
@@ -166,7 +166,7 @@ export async function importVerb(verb: string, ctx: ImportVerbContext): Promise<
       const c = await customerRef(deps, slug)
       const tenant = await getTenantById(c.id)
       if (!tenant) throw new Error(`customer ${slug} has no control row`)
-      const report = await inProvisioningContext(c, async () => {
+      const report = await inActiveContext(c, async () => {
         const cfg = readConfig()
         return seedVertical(vertical, {
           store: sqlOrgStore(),
@@ -195,7 +195,7 @@ export async function importVerb(verb: string, ctx: ImportVerbContext): Promise<
     try {
       // the realm sends its mail from its own submission principal, or nothing is created (assertSmtpStamped)
       if (verb === 'import-apply') await assertSmtpStamped(c, deps)
-      result = await inProvisioningContext(c, () =>
+      result = await inActiveContext(c, () =>
         runImport(verb as 'import-validate' | 'import-apply', text, vertical, expected, {
           store: sqlOrgStore(),
           accounts: keycloakAccounts(ctx.provisionerKc(), c.realm),
