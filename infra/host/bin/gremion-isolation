@@ -1,0 +1,275 @@
+#!/usr/bin/env bash
+set -euo pipefail
+#
+# gremion-isolation -- produce the cross-customer isolation evidence of this
+# release ON THE HOST, and record it for the module enable gate.
+#
+#   gremion-isolation run [--out DIR]
+#   gremion-isolation record <file>
+#
+# WHY. A module can only be enabled for a customer when its latest cross-customer
+# isolation result passed on the release tip being run (TASK-044, TRD-060/063:
+# NO_ISOLATION_RESULT, ISOLATION_FAILED, ISOLATION_STALE_TIP, FIXTURE_EVIDENCE).
+# This is where that result comes from on a host built from one pinned commit:
+# verify's own suite part `isolation:tenant` (scripts/verify/suites/
+# isolation-tenant.mjs), run here, against a clean clone of the release commit,
+# with a throwaway Postgres. docs/ops/isolation-evidence.md says what it proves
+# and what it does not (single-customer installs only).
+#
+# run
+#   Refuses unless the release tree has a release tip and a clean work tree.
+#   Starts the kernel's own postgres image (the pin of docker-compose.yml's
+#   x-module-postgres) as gremion-iso-<tip8>: listening on 127.0.0.1 inside its
+#   own network namespace, a random port other than 5432, NO published port, no
+#   compose project, no volume. The toolchain container
+#   (test/isolation/tenant/Dockerfile) joins that namespace (--network
+#   container:), so nothing else can reach the server, and gets the release tree
+#   read-only at /src: it `git clone --no-hardlinks`s it (an untracked file such
+#   as an in-tree secrets/ directory is never copied in), checks the tip out
+#   detached, installs with --frozen-lockfile and runs
+#   `node scripts/verify/verify.mjs --only isolation:tenant`. The evidence file
+#   (and the vitest reports it hashes) is moved to <out>/<tip>.json, mode 0644 so
+#   the tenant-create uid can read it, and its path is printed. Both containers
+#   and the temporary directory are removed on EVERY exit path.
+#
+# record <file>
+#   Refuses a file that is not stamped by verify, is not clean, names another
+#   release tip, carries a scratch-fixture reference or does not name exactly the
+#   pilot modules. Imports it through the container verb `isolation-record` (the
+#   file is mounted read-only), then READS THE DATABASE: for each pilot module the
+#   LATEST cross_customer row -- the ordering the gate reads
+#   (enable-gate/gate.ts) -- must be a pass on this tip with a real reference.
+#   An exit code of the import proves nothing; the rows do.
+#
+# THE STAMP IS FORGEABLE BY HAND until TASK-046 signs it
+# (enable-gate/record.ts). Any commit after the run, a docs-only commit included,
+# makes the pass ISOLATION_STALE_TIP: run it after the host build of the pinned
+# commit, and only claim it for a single-customer install.
+#
+# EXIT CODES: 0 ok - 1 a step or post-condition failed - 2 usage/precondition -
+# 3 blocked (a container of this run is already there).
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../lib/common.sh
+. "$SCRIPT_DIR/../lib/common.sh"
+
+umask 077
+
+# tc (the tenant-create one-shot), release_tip, setup_paths, active_colour, need_value, env_key.
+# shellcheck source=../lib/customer-ops.sh
+. "$SCRIPT_DIR/../lib/customer-ops.sh"
+# platform_sql: gremion-tenant sources it too, it is not part of customer-ops.
+# shellcheck source=../lib/executor/db.sh
+. "$SCRIPT_DIR/../lib/executor/db.sh"
+
+# The modules the producer proves. MUST equal ISOLATION_TENANT_MODULES in
+# scripts/verify/suites/isolation-tenant.mjs (scripts/verify/isolation-tenant.test.mjs pins it).
+PILOT_MODULES="calendar content publishing votes files messaging"
+FIXTURE_PREFIX="scratch-fixture:"
+TOOLCHAIN_CONTEXT="test/isolation/tenant"
+
+usage() {
+    cat <<'EOF'
+usage: gremion-isolation <verb> [args...]
+  run [--out DIR]      produce the evidence for the release tip (default DIR: <root>/data/isolation-evidence)
+  record <file>        import it and assert the rows the enable gate reads
+EOF
+}
+
+RUN_PG=""
+RUN_RUNNER=""
+RUN_TMP=""
+cleanup_run() {
+    local rc=$?
+    [[ -z "$RUN_PG$RUN_RUNNER" ]] || docker rm -f ${RUN_RUNNER:+"$RUN_RUNNER"} ${RUN_PG:+"$RUN_PG"} >/dev/null 2>&1 || true
+    [[ -z "$RUN_TMP" ]] || rm -rf "$RUN_TMP"
+    return "$rc"
+}
+
+# pg_image -- the kernel's postgres pin: the `image:` of docker-compose.yml's
+# x-module-postgres anchor, read from the release tree so there is one pin.
+pg_image() {
+    local compose="${RELEASE_DIR}/docker-compose.yml" img
+    [[ -f "$compose" ]] || die "no docker-compose.yml in the release tree ${RELEASE_DIR}" "$GREMION_EXIT_USAGE"
+    img="$(awk '/^x-module-postgres:/ { f = 1; next } f && /^[^ \t#]/ { exit } f && /^[ \t]+image:[ \t]*/ { sub(/^[ \t]+image:[ \t]*/, ""); print; exit }' "$compose" | tr -d '\r[:space:]')"
+    [[ "$img" =~ ^postgres:18[^@]*@sha256:[0-9a-f]{64}$ ]] \
+        || die "the x-module-postgres image in ${compose} is not a digest-pinned postgres:18 (got '${img}')" "$GREMION_EXIT_USAGE"
+    printf '%s' "$img"
+}
+
+# The program the toolchain container runs. Plain sh: the image is alpine.
+read -r -d '' IN_CONTAINER <<'EOS' || true
+set -eu
+git clone -q --no-hardlinks /src /work/tree
+cd /work/tree
+git checkout -q --detach "$ISOLATION_TIP"
+test "$(git rev-parse HEAD)" = "$ISOLATION_TIP"
+pnpm install --frozen-lockfile
+node scripts/verify/verify.mjs --only isolation:tenant
+cp "scripts/verify/out/isolation/${ISOLATION_TIP}.json" /out/
+cp -r "scripts/verify/out/isolation/${ISOLATION_TIP}" /out/
+EOS
+
+cmd_run() {
+    local out="${ROOT}/data/isolation-evidence"
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --out) need_value "$@"; out="$2"; shift 2 ;;
+            *) die "run: unknown argument: $1" "$GREMION_EXIT_USAGE" ;;
+        esac
+    done
+
+    local tip dirty
+    tip="$(release_tip)"
+    [[ -n "$tip" ]] || die "the release tree ${RELEASE_DIR} has no release tip (it is no git checkout of its own, or HEAD is not a full commit id): the evidence is recorded against a tip" "$GREMION_EXIT_USAGE"
+    dirty="$(git -C "$RELEASE_DIR" status --porcelain)" || die "git status failed in ${RELEASE_DIR}" "$GREMION_EXIT_ASSERT"
+    [[ -z "$dirty" ]] || die "the release tree ${RELEASE_DIR} is not clean (uncommitted or untracked, non-ignored files): the evidence must describe the exact tree tested, and verify refuses a dirty tree too" "$GREMION_EXIT_USAGE"
+    [[ -f "${RELEASE_DIR}/${TOOLCHAIN_CONTEXT}/Dockerfile" ]] || die "the release tree has no ${TOOLCHAIN_CONTEXT}/Dockerfile: it is not a release that carries the isolation producer" "$GREMION_EXIT_USAGE"
+
+    local pgimg short pg runner tool port
+    pgimg="$(pg_image)"
+    short="${tip:0:8}"
+    pg="gremion-iso-${short}"
+    runner="gremion-iso-run-${short}"
+    tool="gremion-isolation-toolchain:${short}"
+    if [[ -n "$(docker ps -aq --filter "name=^${pg}\$" --filter "name=^${runner}\$")" ]]; then
+        die "BLOCKED: a container of an earlier run (${pg} or ${runner}) is still there; remove it with: docker rm -f ${pg} ${runner}" "$GREMION_EXIT_BLOCKED"
+    fi
+
+    RUN_TMP="$(mktemp -d)"
+    chmod 700 "$RUN_TMP"
+    RUN_PG="$pg"
+    RUN_RUNNER="$runner"
+    trap cleanup_run EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+
+    port=$((40000 + RANDOM % 20000))
+    info "throwaway postgres ${pg} on 127.0.0.1:${port}, inside its own network namespace (no published port)"
+    docker run -d --name "$pg" --memory 1g --cpus 2 --pids-limit 512 \
+        -e POSTGRES_HOST_AUTH_METHOD=trust -e POSTGRES_USER=postgres \
+        "$pgimg" -c listen_addresses=127.0.0.1 -c "port=${port}" >/dev/null \
+        || die "could not start the throwaway postgres ${pg}" "$GREMION_EXIT_ASSERT"
+
+    # Over TCP: the entrypoint's temporary server answers on the socket only.
+    local i ready=""
+    for i in $(seq 1 60); do
+        if docker exec "$pg" pg_isready -q -h 127.0.0.1 -p "$port" -U postgres >/dev/null 2>&1; then ready=1; break; fi
+        sleep 1
+    done
+    [[ -n "$ready" ]] || die "the throwaway postgres ${pg} was not ready over TCP within 60 s" "$GREMION_EXIT_ASSERT"
+
+    info "building the toolchain image ${tool} (no repository content)"
+    docker build -q -t "$tool" -f "${RELEASE_DIR}/${TOOLCHAIN_CONTEXT}/Dockerfile" "${RELEASE_DIR}/${TOOLCHAIN_CONTEXT}" >/dev/null \
+        || die "could not build the toolchain image ${tool}" "$GREMION_EXIT_ASSERT"
+
+    info "running isolation:tenant for ${tip} (a clean clone of the release tree, frozen lockfile)"
+    local rc=0
+    timeout --foreground -k 10 "${GREMION_ISOLATION_TIMEOUT:-1800}" \
+        docker run --rm --name "$runner" --network "container:${pg}" \
+            --user "$(id -u):$(id -g)" --memory 6g --cpus 4 \
+            -e HOME=/tmp -e CI=true \
+            -e "ISOLATION_TIP=${tip}" \
+            -e "ISOLATION_TENANT_PG_URL=postgres://postgres@127.0.0.1:${port}/postgres" \
+            -e GIT_CONFIG_COUNT=1 -e GIT_CONFIG_KEY_0=safe.directory -e GIT_CONFIG_VALUE_0=/src \
+            -v "${RELEASE_DIR}:/src:ro" -v "${RUN_TMP}:/out" \
+            "$tool" sh -c "$IN_CONTAINER" || rc=$?
+    [[ "$rc" -eq 0 ]] || die "the isolation run failed (exit ${rc}): no evidence was kept; a failing module is named in the output above" "$GREMION_EXIT_ASSERT"
+
+    local produced="${RUN_TMP}/${tip}.json"
+    [[ -s "$produced" ]] || die "the run exited 0 but wrote no evidence file for ${tip}" "$GREMION_EXIT_ASSERT"
+    jq -e --arg tip "$tip" '.produced_by == "verify" and .tree_clean == true and .release_tip_sha == $tip' "$produced" >/dev/null \
+        || die "the evidence file is not a clean verify stamp for ${tip}" "$GREMION_EXIT_ASSERT"
+
+    local dest="${out}/${tip}.json" f
+    mkdir -p "${out}/${tip}"
+    chmod 755 "$out" "${out}/${tip}"
+    for f in "${RUN_TMP}/${tip}"/*.json; do
+        [[ -f "$f" ]] || continue
+        install -m 0644 "$f" "${out}/${tip}/$(basename "$f")"
+    done
+    install -m 0644 "$produced" "${dest}.tmp"
+    mv -f "${dest}.tmp" "$dest"
+    ok "isolation evidence for ${tip}: ${dest}"
+    printf '%s\n' "$dest"
+}
+
+# record_problems <tip> -- the rows the gate reads, one problem per line (none: all good).
+record_problems() {
+    local tip="$1" su rows m found mod passed rtip ref
+    su="$(env_key "${ROOT}/etc/env/state.env" POSTGRES_USER)"
+    rows="$(platform_sql "${su:-postgres}" "
+        SELECT m.module_key, r.passed, r.release_tip_sha, r.evidence_ref
+          FROM plt.module m
+          JOIN LATERAL (
+                SELECT x.passed, x.release_tip_sha, x.evidence_ref
+                  FROM plt.isolation_test_result x
+                 WHERE x.module_id = m.module_id AND x.test_kind = 'cross_customer'
+                 ORDER BY x.run_at DESC, x.created_at DESC, x.isolation_test_result_id DESC
+                 LIMIT 1) r ON true
+         WHERE m.module_key = ANY (string_to_array(:'mods', ','))
+         ORDER BY m.module_key;" -v "mods=${PILOT_MODULES// /,}")" \
+        || { printf 'could not read plt.isolation_test_result\n'; return 0; }
+    for m in $PILOT_MODULES; do
+        found=""
+        while IFS='|' read -r mod passed rtip ref; do
+            [[ "$mod" == "$m" ]] || continue
+            found=1
+            [[ "$passed" == t ]] || printf '%s: the latest cross_customer row is a FAIL\n' "$m"
+            [[ "$rtip" == "$tip" ]] || printf '%s: the latest cross_customer row is for tip %s, not %s\n' "$m" "$rtip" "$tip"
+            [[ "$ref" != "${FIXTURE_PREFIX}"* ]] || printf '%s: the latest row is fixture evidence\n' "$m"
+        done <<< "$rows"
+        [[ -n "$found" ]] || printf '%s: no cross_customer row at all\n' "$m"
+    done
+    return 0
+}
+
+cmd_record() {
+    [[ $# -eq 1 ]] || die "record <file>" "$GREMION_EXIT_USAGE"
+    local file tip
+    file="$(realpath "$1" 2>/dev/null || true)"
+    [[ -n "$file" && -f "$file" ]] || die "evidence file not found: $1" "$GREMION_EXIT_USAGE"
+    tip="$(release_tip)"
+    [[ -n "$tip" ]] || die "the release tree ${RELEASE_DIR} has no release tip: nothing to record the evidence against" "$GREMION_EXIT_USAGE"
+
+    jq -e . "$file" >/dev/null 2>&1 || die "${file} is not JSON" "$GREMION_EXIT_USAGE"
+    jq -e '.produced_by == "verify" and .tree_clean == true' "$file" >/dev/null \
+        || die "${file} is not stamped by a clean verify run (produced_by, tree_clean)" "$GREMION_EXIT_USAGE"
+    jq -e --arg tip "$tip" '.release_tip_sha == $tip' "$file" >/dev/null \
+        || die "${file} is evidence for another release tip than ${tip}: re-run gremion-isolation run on this tree" "$GREMION_EXIT_USAGE"
+    jq -e --arg p "$FIXTURE_PREFIX" '[.results[]?.evidence_ref | tostring | startswith($p)] | any | not' "$file" >/dev/null \
+        || die "${file} carries a ${FIXTURE_PREFIX} reference: fixture evidence is never recorded here" "$GREMION_EXIT_USAGE"
+    jq -e --arg m "$PILOT_MODULES" '([.results[]?.module] | sort) == ($m | split(" ") | sort)' "$file" >/dev/null \
+        || die "${file} does not name exactly the pilot modules (${PILOT_MODULES})" "$GREMION_EXIT_USAGE"
+
+    active_colour
+    TC_MOUNT=(-v "${file}:/run/isolation-evidence.json:ro")
+    tc isolation-record /run/isolation-evidence.json \
+        || die "isolation-record failed for ${file}" "$GREMION_EXIT_ASSERT"
+    TC_MOUNT=()
+
+    local problems
+    problems="$(record_problems "$tip")"
+    if [[ -n "$problems" ]]; then
+        printf '%s\n' "$problems" >&2
+        die "the database does not hold the passing rows the gate reads for ${tip} (see above): the import exit code is not the post-condition" "$GREMION_EXIT_ASSERT"
+    fi
+    ok "recorded: the latest cross_customer row of each of ${PILOT_MODULES} is a pass on ${tip}"
+}
+
+main() {
+    [[ $# -ge 1 ]] || { usage >&2; exit "$GREMION_EXIT_USAGE"; }
+    local verb="$1"; shift
+    case "$verb" in
+        -h|--help) usage; exit "$GREMION_EXIT_OK" ;;
+    esac
+    need_cmd docker git jq awk tr mktemp realpath install timeout
+    setup_paths
+    case "$verb" in
+        run)    cmd_run "$@" ;;
+        record) cmd_record "$@" ;;
+        *) usage >&2; die "unknown verb: ${verb}" "$GREMION_EXIT_USAGE" ;;
+    esac
+}
+
+main "$@"
