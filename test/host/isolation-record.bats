@@ -145,7 +145,7 @@ rows_all_pass() {
     assert_recorded docker "--network container:gremion-iso-${short}"
     assert_recorded docker "ISOLATION_TENANT_PG_URL=postgres://postgres@127.0.0.1:"
     # the image is the pin of docker-compose.yml's x-module-postgres anchor: tag and digest
-    grep '^docker run -d ' "$SHIM_LOG" | grep -Eq 'postgres:18-alpine@sha256:[0-9a-f]{64}'
+    grep '^docker run -d ' "$SHIM_LOG" | grep -Eq 'postgres:[0-9]+-alpine@sha256:[0-9a-f]{64}'
     # no published port, no compose project, no volume on the throwaway server
     local line
     line="$(grep '^docker run -d ' "$SHIM_LOG")"

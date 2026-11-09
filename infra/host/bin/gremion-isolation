@@ -92,8 +92,9 @@ pg_image() {
     local compose="${RELEASE_DIR}/docker-compose.yml" img
     [[ -f "$compose" ]] || die "no docker-compose.yml in the release tree ${RELEASE_DIR}" "$GREMION_EXIT_USAGE"
     img="$(awk '/^x-module-postgres:/ { f = 1; next } f && /^[^ \t#]/ { exit } f && /^[ \t]+image:[ \t]*/ { sub(/^[ \t]+image:[ \t]*/, ""); print; exit }' "$compose" | tr -d '\r[:space:]')"
-    [[ "$img" =~ ^postgres:18[^@]*@sha256:[0-9a-f]{64}$ ]] \
-        || die "the x-module-postgres image in ${compose} is not a digest-pinned postgres:18 (got '${img}')" "$GREMION_EXIT_USAGE"
+    # scripts/check-postgres-major.mjs owns the tag and the digest; this only refuses an unpinned read.
+    [[ "$img" =~ ^postgres:[0-9]+[^@]*@sha256:[0-9a-f]{64}$ ]] \
+        || die "the x-module-postgres image in ${compose} is not a digest-pinned postgres image (got '${img}')" "$GREMION_EXIT_USAGE"
     printf '%s' "$img"
 }
 

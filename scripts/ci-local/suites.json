@@ -729,7 +729,7 @@
       "command": "pnpm run test:integration",
       "timeoutMs": 600000,
       "requiresStack": true,
-      "testGlobs": ["packages/tenant-store/test/integration/**/*.test.ts"]
+      "testGlobs": ["packages/tenant-store/test/integration/**/*.test.ts", "packages/tenant-store/test/isolation-evidence-producer.test.ts"]
     },
     {
       "id": "kernel-tenant-store-t084-integration",
