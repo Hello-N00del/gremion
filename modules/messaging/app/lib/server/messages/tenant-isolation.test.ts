@@ -22,14 +22,11 @@
  *      before any Matrix write, because the room is looked up in A's own ledger.
  *
  * It shows app-layer scoping against ONE shared Synapse. It does NOT show that a
- * second customer can be added to a running installation (Synapse accepts the
- * JWT of one realm), and it does not exercise Synapse itself
- * (docs/ops/isolation-evidence.md says so; a live two-customer probe is owed).
- * Not attacked here: the SSE sync route (same token path as the others), the
- * video and LiveKit routes (livekit.tenant.test.ts covers the room namespace).
- * Known and named: resolveMatrixCreds and the typing route read the Matrix base
- * URL from the process environment, so they are correct only while all
- * customers share one homeserver, which is the pilot's shape.
+ * second customer can be added to a running installation, and it does not
+ * exercise Synapse itself (docs/ops/isolation-evidence.md says so; a live
+ * two-customer probe is owed). Not attacked here: the SSE sync route (same
+ * token path as the others), the video and LiveKit routes
+ * (livekit.tenant.test.ts covers the room namespace).
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Role } from '$lib/auth'

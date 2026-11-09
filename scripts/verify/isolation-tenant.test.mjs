@@ -310,6 +310,15 @@ test('the writer refuses a kept report that no longer hashes to its reference', 
   assert.deepEqual(existsSync(outDir) ? readdirSync(outDir) : [], [])
 })
 
+// ---- the host program and the case table name the same modules --------------
+
+test('gremion-isolation records exactly the modules the producer proves', () => {
+  const text = readFileSync(path.join(REPO_ROOT, 'infra', 'host', 'bin', 'gremion-isolation'), 'utf8')
+  const m = /^PILOT_MODULES="([^"]+)"$/m.exec(text)
+  assert.ok(m, 'gremion-isolation no longer declares PILOT_MODULES')
+  assert.deepEqual(m[1].split(' ').sort(), [...ISOLATION_TENANT_MODULES].sort())
+})
+
 // ---- runVitestJson keeps the report only when asked ------------------------
 
 const FAKE_VITEST = [
