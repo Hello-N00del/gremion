@@ -544,7 +544,9 @@ ensure_layout() {
     # The pre-migration dump (whole database in clear): 0700, the deploy user's.
     # kernel-api-migrate bind-mounts it and runs as uid 1000, which must own it.
     install -d -m 700 -o "${DEPLOY_USER}" -g "${DEPLOY_USER}" "${root}/migration-dumps"
-    for d in env secrets secrets/tenants secrets/mail edge; do
+    # secrets/governance: tenant-create bind-mounts it read-write (#578); made here so the
+    # docker daemon never does (it would make a missing bind source root:root).
+    for d in env secrets secrets/tenants secrets/mail secrets/governance edge; do
         install -d -m 700 -o "${DEPLOY_USER}" -g "${DEPLOY_USER}" "${root}/etc/${d}"
     done
     [[ "$(stat -c '%U %a' "${root}/etc")" == "${DEPLOY_USER} 700" ]] \
