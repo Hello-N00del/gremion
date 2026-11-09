@@ -209,7 +209,14 @@ async function queueMember(c: MemberContext, kind: MemberKind, args: Record<stri
   try {
     await submitMemberRequest(c.p, kind, c.slug, c.status.status, args, c.operatorId, c.evidence)
   } catch (err) {
-    if (err instanceof SubmitRefused) return fail(err.status, { memberError: err.message })
+    if (err instanceof SubmitRefused) {
+      // the 503 tells the operator to read the panel log: write what failed there (name and SQLSTATE; never the message, which could carry list content)
+      if (err.status === 503) {
+        const e = err.dbError as { code?: string; name?: string } | null | undefined
+        console.error(`[control-panel] member request ${kind} ${c.slug} write failed: ${e?.name ?? 'Error'}: ${e?.code ?? 'no-sqlstate'}`)
+      }
+      return fail(err.status, { memberError: err.message })
+    }
     throw err
   }
   redirect(303, `/customers/${c.slug}`)
