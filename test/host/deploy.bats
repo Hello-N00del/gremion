@@ -1953,7 +1953,7 @@ exit 0
     printf 'services: {}\n' > "$T/docker-compose.state-pins.yml"
     run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
     [ "$status" -eq 0 ]
-    [[ "$output" == *"5 pinned image(s)"* ]]
+    [[ "$output" == *"8 pinned image(s)"* ]]
     printf 'services: {}\n' > "$T/docker-compose.pins.yml"
     rm -rf "${GREMION_ROOT}/releases/dist-v1.2.3"
     : > "$SHIM_LOG"
