@@ -79,9 +79,12 @@ EOF
 RUN_PG=""
 RUN_RUNNER=""
 RUN_TMP=""
+RUN_TOOL=""
 cleanup_run() {
     local rc=$?
     [[ -z "$RUN_PG$RUN_RUNNER" ]] || docker rm -f ${RUN_RUNNER:+"$RUN_RUNNER"} ${RUN_PG:+"$RUN_PG"} >/dev/null 2>&1 || true
+    # The image is tagged per release tip: without this every release run leaves another one behind.
+    [[ -z "$RUN_TOOL" ]] || docker rmi -f "$RUN_TOOL" >/dev/null 2>&1 || true
     [[ -z "$RUN_TMP" ]] || rm -rf "$RUN_TMP"
     return "$rc"
 }
@@ -141,6 +144,7 @@ cmd_run() {
     chmod 700 "$RUN_TMP"
     RUN_PG="$pg"
     RUN_RUNNER="$runner"
+    RUN_TOOL="$tool"
     trap cleanup_run EXIT
     trap 'exit 130' INT
     trap 'exit 143' TERM

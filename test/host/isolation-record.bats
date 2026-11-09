@@ -194,6 +194,17 @@ rows_all_pass() {
     [ ! -e "$(cat "${GREMION_ROOT}/out-dir-seen")" ]
 }
 
+@test "run removes the tip-tagged toolchain image it built, on success and on failure, so a release run leaves no image behind" {
+    run "$PROG" run --out "${GREMION_ROOT}/ev"
+    [ "$status" -eq 0 ]
+    assert_recorded docker "rmi -f gremion-isolation-toolchain:${TIP:0:8}"
+    : > "$SHIM_LOG"
+    : > "${GREMION_ROOT}/toolchain-fails"
+    run "$PROG" run --out "${GREMION_ROOT}/ev"
+    [ "$status" -eq 1 ]
+    assert_recorded docker "rmi -f gremion-isolation-toolchain:${TIP:0:8}"
+}
+
 @test "run cleans up on FAILURE too: a failing isolation case exits 1, keeps no evidence, removes both containers and the temp dir" {
     : > "${GREMION_ROOT}/toolchain-fails"
     run "$PROG" run --out "${GREMION_ROOT}/ev"

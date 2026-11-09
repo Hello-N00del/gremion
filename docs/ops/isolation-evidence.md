@@ -46,8 +46,10 @@ is not running would be evidence for nothing; the others are not enabled.
 
 Every case runs a positive control first (each customer reaches its own data),
 then the attempts of customer A against customer B's record. The files case
-derives its routes from `modules/files/app/routes/api/files/**` and fails when a
-route has no control or no attempt, or when there is no attempt at all.
+derives its routes from `modules/files/app/routes/api/files/**` and from every page
+load under `modules/files/app/routes/files/**` that reaches Nextcloud (the editor
+page), and fails when one has no control or no attempt, or when there is no
+attempt at all.
 
 ## What a pass means, and what it does not
 
@@ -129,8 +131,8 @@ clone and requires the producer to fail, write no file and name the failing test
 of that module: a shared database name, a removed identity binding, a poll scope
 that serves any poll, one Matrix client or token cache for every tenant, an
 administration route that trusts the room id in the URL, a path guard that lets
-`..`, a backslash, a control character or an upload id of `.` through, and a
-fixed bearer. A control run on the unmutated clone must first pass and write the
+`..`, a backslash, a control character or an upload id of `.` through, an editor
+page that builds its WebDAV path without the shared guard, and a fixed bearer. A control run on the unmutated clone must first pass and write the
 file, and each mutation is committed in the clone, because verify refuses a dirty
 tree and an uncommitted mutation would "fail" for that reason alone.
 `scripts/verify/isolation-tenant.test.mjs` pins the producer's own refusals: a

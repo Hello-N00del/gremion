@@ -8,7 +8,8 @@ import type { SessionUser } from '$lib/auth'
 //   1. env vars resolved via `$env/dynamic/private` (not `process.env`);
 //   2. `finalPath` runs through the shared `sanitizeRelPath` guard
 //      (decodeURIComponent + `..` rejection + leading-slash strip);
-//   3. `uploadId` must match `/^[A-Za-z0-9._-]{1,64}$/` so a hostile client
+//   3. `uploadId` must match `/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/` (it may not
+//      start with a dot, so `.` and `..` are out) so a hostile client
 //      cannot inject `../other-user-id/...` into the Nextcloud upload URL.
 //
 // We mock the global `fetch` to observe what would be sent to Nextcloud

@@ -1,6 +1,7 @@
 import { redirect, error } from '@sveltejs/kit'
 import type { PageServerLoad } from './$types'
 import { createNextcloudClient } from '$lib/server/files/nextcloud-client'
+import { buildWebdavPath } from '$lib/server/files/webdav-path'
 import { isEditableFile } from '$lib/files/editable-types'
 import type { SessionUser } from '$lib/auth'
 
@@ -15,10 +16,9 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 
   // Nextcloud user id = Keycloak UUID (user_oidc --unique-uid=0), not username.
   const username = user.id
-  const decoded = decodeURIComponent(paramPath)
-  if (decoded.split('/').some((seg) => seg === '..')) throw error(400, 'Invalid path')
-  const clean = decoded.replace(/^\/+/, '')
-  const webdavPath = `/remote.php/dav/files/${encodeURIComponent(username)}/${clean}`
+  // The same guard as every files route (loop decode, backslash and control
+  // characters, `..`): a hand-rolled copy let `.<LF>.` and `%252e%252e` through.
+  const webdavPath = buildWebdavPath(username, paramPath)
 
   // Back URL: parent folder so "← Zurück" lands in the right directory.
   const parts = paramPath.split('/').filter(Boolean)

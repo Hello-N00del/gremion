@@ -42,7 +42,7 @@ MUTATION_IDS=(
   b-calendar b-content b-publishing
   c-votes
   d-client d-token d-admin
-  e-backslash e-dotdot e-uploadid e-bearer
+  e-backslash e-dotdot e-uploadid e-bearer e-editpage
 )
 
 die() { printf 'mutation-proof: %s\n' "$*" >&2; exit "${2:-1}"; }
@@ -179,6 +179,13 @@ mut_e_bearer() { # A's request carries another bearer
   DESC="files: every request carries one fixed bearer"
 }
 
+mut_e_editpage() { # the editor page builds its WebDAV path by hand again, without the shared guard
+  # shellcheck disable=SC2016  # a JavaScript template literal, deliberately not expanded
+  mutate "modules/files/app/routes/files/edit/[...path]/+page.server.ts" '  const webdavPath = buildWebdavPath(username, paramPath)' '  const webdavPath = `/remote.php/dav/files/${encodeURIComponent(username)}/${decodeURIComponent(paramPath)}`'
+  EXPECT="the edit page"
+  DESC="files: the editor page skips the shared path guard"
+}
+
 apply() {
   EXPECT=""; DESC=""
   case "$1" in
@@ -196,6 +203,7 @@ apply() {
     e-dotdot) mut_e_dotdot ;;
     e-uploadid) mut_e_uploadid ;;
     e-bearer) mut_e_bearer ;;
+    e-editpage) mut_e_editpage ;;
     *) die "unknown mutation id: $1" 2 ;;
   esac
 }

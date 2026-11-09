@@ -22,9 +22,10 @@
  * isolation-evidence.md says so; a live two-customer probe is owed).
  *
  * Route coverage is derived from the route table on disk
- * (routes/api/files/** /+server.ts): every exported method must have at least
- * one positive control and one attack, or the last test fails. A zero-attempt
- * run fails too. Positive controls run first; if one fails nothing after it
+ * (routes/api/files/** /+server.ts, plus every page load under routes/files/**
+ * that reaches Nextcloud, such as the editor page): every exported method or
+ * load must have at least one positive control and one attack, or the last test
+ * fails. A zero-attempt run fails too. Positive controls run first; if one fails nothing after it
  * means anything.
  */
 import { readdirSync, readFileSync } from 'node:fs'
@@ -43,6 +44,7 @@ vi.mock('$lib/server/env/service-env', () => ({ serviceEnv: (name: string) => NC
 import { GET as listOrDownload, PUT, DELETE, PATCH } from '../../../routes/api/files/[...path]/+server'
 import { POST as uploadChunk } from '../../../routes/api/files/upload-chunk/+server'
 import { GET as editToken } from '../../../routes/api/files/edit-token/[...path]/+server'
+import { load as editPage } from '../../../routes/files/edit/[...path]/+page.server'
 import { getFilesBackend } from './backend'
 import { createNextcloudClient } from './nextcloud-client'
 
@@ -223,17 +225,26 @@ afterEach(() => {
 // (jsdom environment: import.meta.url is not a file: URL here, import.meta.dirname is)
 const ROUTES_DIR = join(import.meta.dirname, '..', '..', '..', 'routes', 'api', 'files')
 
+const PAGES_DIR = join(import.meta.dirname, '..', '..', '..', 'routes', 'files')
+
+/** A page load that can cause an upstream request: it imports the files server libs (the Nextcloud client, the path guard), names WebDAV or calls fetch. */
+const REACHES_UPSTREAM = /\$lib\/server\/files\/|webdav|\bfetch\(/i
+
 function routeTable(): string[] {
   const out: string[] = []
-  const walk = (dir: string, url: string) => {
+  const walk = (dir: string, url: string, pages: boolean) => {
     for (const e of readdirSync(dir, { withFileTypes: true })) {
-      if (e.isDirectory()) walk(join(dir, e.name), `${url}/${e.name}`)
-      else if (e.name === '+server.ts') {
+      if (e.isDirectory()) walk(join(dir, e.name), `${url}/${e.name}`, pages)
+      else if (!pages && e.name === '+server.ts') {
         for (const m of readFileSync(join(dir, e.name), 'utf8').matchAll(/export const (GET|POST|PUT|PATCH|DELETE)\b/g)) out.push(`${m[1]} ${url}`)
+      } else if (pages && e.name === '+page.server.ts') {
+        const src = readFileSync(join(dir, e.name), 'utf8')
+        if (/export const load\b/.test(src) && REACHES_UPSTREAM.test(src)) out.push(`LOAD ${url}`)
       }
     }
   }
-  walk(ROUTES_DIR, '/api/files')
+  walk(ROUTES_DIR, '/api/files', false)
+  walk(PAGES_DIR, '/files', true)
   return out.sort()
 }
 
@@ -248,6 +259,7 @@ const R = {
   patch: 'PATCH /api/files/[...path]',
   chunk: 'POST /api/files/upload-chunk',
   edit: 'GET /api/files/edit-token/[...path]',
+  editPage: 'LOAD /files/edit/[...path]',
 } as const
 
 // ---- request builders ---------------------------------------------------------
@@ -402,6 +414,18 @@ describe('positive controls: A and B each reach their own data, with their own b
     expect(res.status).toBe(200)
     const body = (await res.json()) as { token: string; editorUrl: string }
     expect(body.token).toBe('wopi-tok')
+    expectConfinedToA(nc.since(m))
+  })
+})
+
+describe('positive control: the editor page', () => {
+  it('LOAD /files/edit: A gets an editor url for its own document, in its own folder', async () => {
+    controlled.add(R.editPage)
+    const m = nc.mark()
+    const out = (await call(editPage as Handler, event(A, 'tok-A', { route: '/files/edit/', path: 'Docs/a-doc.docx' }))) as { editorUrl: string; fileName: string }
+    expect(out.fileName).toBe('a-doc.docx')
+    expect(out.editorUrl).toContain('office.test')
+    expect(nc.since(m).length).toBeGreaterThan(0)
     expectConfinedToA(nc.since(m))
   })
 })
@@ -614,12 +638,38 @@ describe('GET /api/files/edit-token/[...path]: A cannot obtain an editor session
   })
 })
 
+describe("LOAD /files/edit/[...path]: A cannot open an editor session for B's document (the edit page)", () => {
+  for (const [what, p] of TRAVERSALS) {
+    it(`${what}: refused before any upstream request`, attack(R.editPage, async () => {
+      const m = nc.mark()
+      await expect(call(editPage as Handler, event(A, 'tok-A', { route: '/files/edit/', path: p.replace('b-secret.txt', 'b-secret.docx') }))).rejects.toMatchObject({ status: 400 })
+      expect(nc.since(m)).toEqual([])
+    }))
+  }
+
+  it("B's id under A's folder resolves to nothing: 404 from A's folder, no editor session is created", attack(R.editPage, async () => {
+    const m = nc.mark()
+    await expect(call(editPage as Handler, event(A, 'tok-A', { route: '/files/edit/', path: `${B_ID}/Docs/b-secret.docx` }))).rejects.toMatchObject({ status: 404 })
+    const reqs = nc.since(m)
+    expectConfinedToA(reqs)
+    expect(reqs.some((r) => r.path.startsWith('/ocs/'))).toBe(false)
+  }))
+
+  it('a request with no session user is sent to the login page before any upstream request', attack(R.editPage, async () => {
+    const m = nc.mark()
+    const e = event(A, 'tok-A', { route: '/files/edit/', path: 'Docs/a-doc.docx' }) as { locals: { user?: unknown } }
+    e.locals.user = undefined
+    await expect(call(editPage as Handler, e as never)).rejects.toMatchObject({ status: 302 })
+    expect(nc.since(m)).toEqual([])
+  }))
+})
+
 // ================================================================================
 // 3. coverage: the route table on disk against what was controlled and attacked
 // ================================================================================
 
 describe('coverage', () => {
-  it('every route of routes/api/files/** has a positive control and an attack, and the run is not vacuous', () => {
+  it('every route of routes/api/files/** and every page load of routes/files/** that reaches Nextcloud has a positive control and an attack, and the run is not vacuous', () => {
     const table = routeTable()
     expect(table.length).toBeGreaterThan(0)
     expect(attempts).toBeGreaterThan(0)

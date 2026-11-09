@@ -85,9 +85,14 @@ export function buildWebdavPath(ncUsername: string, paramPath: string): string {
  * traversal (`%2e%2e`) can never be decoded into `..` downstream.
  */
 export function validatePublishedPdfPath(pdfPath: string): string {
+  // Backslash and control characters: fetch reads `\` as `/` and deletes tab and
+  // newline, so they can build a `..` segment after the check (see sanitizeRelPath).
+  // oxlint-disable-next-line no-control-regex -- the pattern exists to REFUSE control characters
+  const hasUnsafeChar = /[\\\u0000-\u001f\u007f]/.test(pdfPath)
   const ok =
     pdfPath.startsWith('/protocols/published/') &&
     !pdfPath.includes('%') &&
+    !hasUnsafeChar &&
     !pdfPath.split('/').some((seg) => seg === '..')
   if (!ok) throw error(400, 'Invalid published PDF path')
   return pdfPath
