@@ -162,6 +162,8 @@ rows_all_pass() {
     run "$PROG" run --out "${GREMION_ROOT}/ev"
     [ "$status" -eq 0 ]
     assert_recorded docker ":/src:ro"
+    # git inside the container trusts the read-only tree (a clone reads /src/.git): by environment, not by git config
+    assert_recorded docker "-e GIT_CONFIG_KEY_1=safe.directory -e GIT_CONFIG_VALUE_1=/src/.git"
     # the in-container procedure is the multi-line `sh -c` argument: its lines are logged on their own
     local want
     for want in 'git clone -q --no-hardlinks /src /work/tree' 'git checkout -q --detach "$ISOLATION_TIP"' 'pnpm install --frozen-lockfile' 'node scripts/verify/verify.mjs --only isolation:tenant'; do

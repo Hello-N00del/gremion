@@ -172,7 +172,8 @@ cmd_run() {
             -e HOME=/tmp -e CI=true \
             -e "ISOLATION_TIP=${tip}" \
             -e "ISOLATION_TENANT_PG_URL=postgres://postgres@127.0.0.1:${port}/postgres" \
-            -e GIT_CONFIG_COUNT=1 -e GIT_CONFIG_KEY_0=safe.directory -e GIT_CONFIG_VALUE_0=/src \
+            -e GIT_CONFIG_COUNT=2 -e GIT_CONFIG_KEY_0=safe.directory -e GIT_CONFIG_VALUE_0=/src \
+            -e GIT_CONFIG_KEY_1=safe.directory -e GIT_CONFIG_VALUE_1=/src/.git \
             -v "${RELEASE_DIR}:/src:ro" -v "${RUN_TMP}:/out" \
             "$tool" sh -c "$IN_CONTAINER" || rc=$?
     [[ "$rc" -eq 0 ]] || die "the isolation run failed (exit ${rc}): no evidence was kept; a failing module is named in the output above" "$GREMION_EXIT_ASSERT"
