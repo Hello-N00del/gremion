@@ -83,6 +83,16 @@ teardown() {
     grep -q '^set -euo pipefail$' "$BOOTSTRAP"
 }
 
+# #578: tenant-create bind-mounts etc/secrets/governance read-write; a bind source
+# missing at container start is made root:root by the docker daemon. Bootstrap makes
+# it with the other 0700 deploy-user directories of etc/.
+@test "#578: ensure_layout makes etc/secrets/governance with the other 0700 deploy-user directories" {
+    local loop
+    loop="$(grep -E '^[[:space:]]*for d in .*secrets/mail' "$BOOTSTRAP")"
+    [[ "$loop" == *" secrets/governance "* || "$loop" == *" secrets/governance;"* ]]
+    grep -qE 'install -d -m 700 -o "\$\{DEPLOY_USER\}" -g "\$\{DEPLOY_USER\}" "\$\{root\}/etc/\$\{d\}"' "$BOOTSTRAP"
+}
+
 @test "bootstrap.sh sources the shared host library" {
     grep -q 'SCRIPT_DIR/lib/common.sh' "$BOOTSTRAP"
 }

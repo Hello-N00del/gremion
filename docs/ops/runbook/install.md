@@ -250,6 +250,10 @@ gremion-dns-check --domain "$PLATFORM_DOMAIN" \
     broker's config includes that file and does not start without it. It runs
     in the `tenant-create` one-shot of the blue colour, with no dependency
     started, and is idempotent (`gremion-deploy` repeats it in its step 4).
+    That container bind-mounts `etc/secrets/governance`; bootstrap made it
+    (0700, `gremion`), so the docker daemon does not make it as `root:root`.
+    On a host bootstrapped before this was added, make it first:
+    `sudo -u gremion install -d -m 700 /opt/gremion/etc/secrets/governance`.
 
 ```bash
 sudo -u gremion /opt/gremion/bin/gremion-render --release "$REL"

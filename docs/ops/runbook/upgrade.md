@@ -347,14 +347,22 @@ gremion-tenant reconcile "$slug" --apply --reason "upgrade to ${TAG}: re-ensure 
 
    Ownership matters here. The directory `etc/secrets/governance` is bind-mounted
    into every customer-create container, and a bind source that does not exist
-   when a container starts is made by the docker daemon as `root:root`.
-   `gremion-tenant` therefore makes the directory (0700, the deploy user) before
-   every `tenant-create` run, including the reconcile of step 8, so the daemon
-   never makes it; the credential files `tenant-create` writes into it are
-   handed to the deploy user's uid and gid (0600), which is what lets the nightly
-   `gremion-backup` copy `etc/` as the deploy user. A host whose directory was
-   already made by the daemon (an earlier release's reconcile) is repaired once,
-   before the first customer create: `sudo chown gremion: /opt/gremion/etc/secrets/governance`.
+   when a container starts is made by the docker daemon as `root:root`, which the
+   deploy user can neither chmod nor write credential files into. Two host
+   programs make it first (0700, the deploy user) so the daemon never does:
+   `gremion-deploy` at the start of its step 4, before the `nats-auth init` run
+   (the first `tenant-create` container of a deploy, which also covers a host
+   upgraded from a release that never made the directory), and `gremion-tenant`
+   before every later `tenant-create` run, including the reconcile of step 8.
+   `bootstrap.sh` makes it on a new host. The credential files `tenant-create`
+   writes into it are handed to the deploy user's uid and gid (0600), which is
+   what lets the nightly `gremion-backup` copy `etc/` as the deploy user.
+
+   A directory that already exists and is not owned by the deploy user (the
+   daemon made it, or an earlier release's run did) makes `gremion-deploy` stop
+   at step 4 with exit 1, before it renders anything, naming the path. Nothing
+   has been switched; repair it once and run the deploy again:
+   `sudo chown gremion: /opt/gremion/etc/secrets/governance && sudo chmod 700 /opt/gremion/etc/secrets/governance`.
 
 ```bash
 f=/opt/gremion/etc/env/state.env

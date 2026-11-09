@@ -881,6 +881,73 @@ exit 0
         'TASK-075: step 5 is the pre-migration dump, not a restic class=snapshot'
 }
 
+# #578: docker-compose.app.yml binds etc/secrets/governance into tenant-create.
+# Step 4's nats-auth init is the first tenant-create run of a deploy, and a bind
+# source that is missing then is made by the docker daemon as root:root, which
+# the deploy user can never chmod (every later tenant-create verb dies on it).
+# So the deploy makes the directory, deploy-user owned 0700, BEFORE that run,
+# and refuses -- before step 4 renders anything -- a directory it cannot own.
+
+# A docker front for the stateful stub: it records what the governance directory
+# looked like at the instant the nats-auth init run starts, then hands over.
+stub_docker_probing_governance_dir() {
+    stub_docker
+    mv "${SHIM_DIR}/docker" "${SHIM_DIR}/docker.real"
+    cat > "${SHIM_DIR}/docker" <<'PROBE'
+#!/usr/bin/env bash
+case "$*" in
+  *"nats-auth init"*)
+      d="${GREMION_ROOT}/etc/secrets/governance"
+      if [ -d "$d" ]; then stat -c '%u %a' "$d" > "${GREMION_ROOT}/.gov-at-init"
+      else echo absent > "${GREMION_ROOT}/.gov-at-init"; fi ;;
+esac
+exec "${SHIM_DIR}/docker.real" "$@"
+PROBE
+    chmod +x "${SHIM_DIR}/docker"
+}
+
+@test "#578: the governance directory is made deploy-owned 0700 before the nats-auth init run starts" {
+    stub_git; stub_siblings; stub_docker_probing_governance_dir
+    [ ! -e "${GREMION_ROOT}/etc/secrets/governance" ]
+    run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
+    [ "$status" -eq 0 ]
+    assert_recorded docker "nats-auth init"
+    [ -f "${GREMION_ROOT}/.gov-at-init" ]
+    [ "$(cat "${GREMION_ROOT}/.gov-at-init")" = "$(id -u) 700" ]
+    [ "$(stat -c '%u %a' "${GREMION_ROOT}/etc/secrets/governance")" = "$(id -u) 700" ]
+}
+
+@test "#578: an existing deploy-owned governance directory is kept and tightened to 0700" {
+    stub_git; stub_siblings; stub_docker_probing_governance_dir
+    mkdir -p "${GREMION_ROOT}/etc/secrets/governance"
+    chmod 755 "${GREMION_ROOT}/etc/secrets/governance"
+    printf 'keep\n' > "${GREMION_ROOT}/etc/secrets/governance/abc"
+    run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
+    [ "$status" -eq 0 ]
+    [ "$(cat "${GREMION_ROOT}/.gov-at-init")" = "$(id -u) 700" ]
+    [ "$(cat "${GREMION_ROOT}/etc/secrets/governance/abc")" = keep ]
+}
+
+@test "#578: a governance directory another user owns is refused before step 4 changes anything, naming the repair" {
+    stub_git; stub_siblings; stub_docker_probing_governance_dir
+    mkdir -p "${GREMION_ROOT}/etc/secrets/governance"
+    # The daemon-made directory is root-owned; a unit test cannot chown, so the
+    # owner the program reads is faked for that one path (everything else is the real stat).
+    local real_stat; real_stat="$(command -v stat)"
+    shim stat "
+case \"\$*\" in *etc/secrets/governance*) printf '4242\n'; exit 0 ;; esac
+exec '${real_stat}' \"\$@\""
+    run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"${GREMION_ROOT}/etc/secrets/governance"* ]]
+    [[ "$output" == *"chown"* ]]
+    assert_absent '^gremion-render --release [^ ]+$' "$SHIM_LOG" 'step 4 rendered although the governance directory is foreign'
+    assert_absent 'nats-auth init' "$SHIM_LOG" 'the tenant-create run started although the governance directory is foreign'
+    [ ! -e "${GREMION_ROOT}/.gov-at-init" ]
+    assert_absent ' STEP 4 render ok$' "${GREMION_ROOT}/runtime/deploy.log"
+    assert_absent ' STEP (5|6|7|8) ' "${GREMION_ROOT}/runtime/deploy.log"
+}
+
 # kernel #84: the state project's legal service reads `env_file:
 # legal/legal.env` from the release tree, and compose resolves it for every
 # verb, the `config --images` of step 2's signature check included. So the
