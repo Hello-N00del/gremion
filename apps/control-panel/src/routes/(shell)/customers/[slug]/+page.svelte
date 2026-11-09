@@ -178,6 +178,77 @@
   </section>
 {/if}
 
+{#if data.memberSection}
+  {@const ms = data.memberSection}
+  <section class="members" aria-labelledby="mem-h">
+    <h2 id="mem-h">Vertikale und Mitglieder</h2>
+    {#if form?.memberError}<p class="error" role="alert">{form.memberError}</p>{/if}
+    {#if ms.unreadable}
+      <p class="error" role="alert">Der Stand der Mitgliederlisten ist nicht lesbar (Plattform-Datenbank; Details im Panel-Log). Aktionen werden erst wieder angeboten, wenn er gelesen werden kann.</p>
+    {:else if ms.noPlatformDb}
+      <p class="error" role="alert">Keine Plattform-Datenbank konfiguriert: es kann keine Anfrage gestellt werden.</p>
+    {:else if !ms.canAct}
+      <p class="muted" role="status">Vertikale und Mitgliederlisten können nur für einen aktiven Mandanten ohne laufende Anfrage angestoßen werden.</p>
+    {:else}
+      <h3>Vertikale einspielen</h3>
+      <p class="muted">Spielt die Vorlage der Vertikale (Gremien, Rollen, Einheiten) in den Mandanten ein. Wiederholbar: ein zweiter Lauf ändert nichts.</p>
+      <form method="POST" action="?/seedVertical" use:enhance>
+        <label>
+          Vertikale
+          <select name="vertical" required>
+            {#each ms.verticals as v (v.id)}<option value={v.id}>{v.label}</option>{/each}
+          </select>
+        </label>
+        <button type="submit">Vertikale einspielen</button>
+      </form>
+
+      <h3>Mitgliederliste prüfen</h3>
+      <p class="muted">CSV-Datei in UTF-8, höchstens 1 MiB. Die Prüfung schreibt nichts; sie meldet die Nummern abgelehnter Zeilen, nie Namen oder Adressen.</p>
+      <form method="POST" action="?/importValidate" enctype="multipart/form-data" use:enhance>
+        <label>
+          Vertikale
+          <select name="vertical" required>
+            {#each ms.verticals as v (v.id)}<option value={v.id}>{v.label}</option>{/each}
+          </select>
+        </label>
+        <label>
+          Mitgliederliste (CSV)
+          <input type="file" name="list" accept=".csv,text/csv" required />
+        </label>
+        <button type="submit">Liste prüfen</button>
+      </form>
+
+      {#if ms.validated}
+        {@const v = ms.validated}
+        <h3>Geprüfte Liste einspielen</h3>
+        <p>Die letzte Prüfung ({v.vertical}) war erfolgreich: die Liste ist formal gültig, keine Zeile wurde abgelehnt. Die Prüfung schreibt nichts und zählt deshalb nichts; wie viele Konten neu angelegt oder verknüpft wurden, steht im Ergebnis des Einspielens.</p>
+        <dl class="counts">
+          <dt>Prüfsumme (sha256)</dt><dd><code class="sha">{v.sha256}</code></dd>
+        </dl>
+        <p class="muted">Die Liste wird nach der Prüfung vom Server gelöscht. Zum Einspielen bitte dieselbe Datei erneut wählen; stimmt sie nicht mit der geprüften überein, wird nichts geschrieben. Vor dem Einspielen wird eine Sicherung angelegt, danach ein Wiederholungslauf zur Kontrolle gemacht. Das Einspielen legt Konten an und versendet Einladungen.</p>
+        <form method="POST" action="?/importApply" enctype="multipart/form-data" use:enhance>
+          <input type="hidden" name="sha256" value={v.sha256} />
+          <label>
+            Dieselbe Mitgliederliste (CSV)
+            <input type="file" name="list" accept=".csv,text/csv" required />
+          </label>
+          <label class="confirm">
+            <input type="checkbox" name="confirm" value="yes" required />
+            Die Liste mit dieser Prüfsumme soll jetzt eingespielt werden; dabei werden Konten angelegt und Einladungen versendet.
+          </label>
+          <button type="submit">Liste einspielen</button>
+        </form>
+      {/if}
+    {/if}
+
+    {#if ms.importEvents.length}
+      <h3>Ergebnis der letzten Mitgliederliste</h3>
+      <pre class="events">{#each ms.importEvents as e, i (i)}{e.level === 'error' ? '! ' : '  '}{e.message}
+{/each}</pre>
+    {/if}
+  </section>
+{/if}
+
 {#if data.requests.length}
   <h2>Anfragen</h2>
   <ul class="requests">
@@ -254,6 +325,27 @@
   .modules {
     max-width: 36rem;
     margin-bottom: 1.5rem;
+  }
+  .members {
+    max-width: 36rem;
+    margin-bottom: 1.5rem;
+  }
+  .members h3 {
+    font-size: 1rem;
+    margin: 1rem 0 0.25rem;
+  }
+  .members label {
+    display: block;
+    margin: 0.25rem 0;
+  }
+  .members .confirm {
+    margin: 0.5rem 0;
+  }
+  .counts {
+    max-width: 30rem;
+  }
+  .sha {
+    overflow-wrap: anywhere;
   }
   .modules h3 {
     font-size: 1rem;
