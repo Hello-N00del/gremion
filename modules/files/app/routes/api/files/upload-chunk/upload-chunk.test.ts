@@ -111,6 +111,23 @@ describe('POST /api/files/upload-chunk — G-023 validation gate', () => {
     expect(fetchMock).not.toHaveBeenCalled()
   })
 
+  it('returns 400 when uploadId is `.` or `..` (the whole id climbs out of the caller\'s upload folder)', async () => {
+    const { POST } = await import('./+server')
+    for (const uploadId of ['.', '..', '.hidden']) {
+      await expect(
+        POST(
+          makeEvent(makeUser(), {
+            uploadId,
+            chunkIndex: '0',
+            totalChunks: '1',
+            finalPath: 'upload.bin'
+          })
+        )
+      ).rejects.toMatchObject({ status: 400 })
+    }
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
   it('returns 400 when uploadId contains unsafe characters', async () => {
     const { POST } = await import('./+server')
     await expect(

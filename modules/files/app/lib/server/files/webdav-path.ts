@@ -43,6 +43,16 @@ export function sanitizeRelPath(paramPath: string): string {
   if (decoded.includes('%')) {
     throw error(400, 'Invalid path encoding')
   }
+  // The path is spliced into a URL string and fetch's URL parser then
+  // normalises it: a backslash is a path separator there, and a tab or newline
+  // is DELETED, so `..\x`, `.<LF>.` and `%2e%09%2e` all become a `..` segment
+  // AFTER the `..` check above and climb out of /dav/files/<caller>/ into
+  // another user's folder. Control characters and backslashes are never part of
+  // a Nextcloud file name (its forbidden characters include `\`), so they are
+  // refused outright rather than normalised.
+  if (/[\\\u0000-\u001f\u007f]/.test(decoded)) {
+    throw error(400, 'Invalid path characters')
+  }
   if (decoded.split('/').some((seg) => seg === '..')) {
     throw error(400, 'Path traversal not allowed')
   }

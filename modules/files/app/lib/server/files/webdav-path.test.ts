@@ -34,6 +34,15 @@ describe('sanitizeRelPath (#257-2 loop-decode + residual-% reject)', () => {
   it('rejects a literal `..` segment', () => {
     expect(() => sanitizeRelPath('../../etc/passwd')).toThrow()
   })
+
+  // fetch's URL parser treats a backslash as `/` and DELETES tab and newline, so each of these
+  // becomes a `..` segment only after the `..` check (pilot wave 2 isolation evidence).
+  it('rejects a backslash, a raw or encoded tab or newline, and any other control character', () => {
+    const BS = String.fromCharCode(92)
+    for (const p of [`..${BS}x`, `a${BS}b`, '.\n./x', '.%0a./x', '%2e%09%2e/x', 'a\u0000b', 'a\u007fb', 'a%250ab']) {
+      expect(() => sanitizeRelPath(p), JSON.stringify(p)).toThrow()
+    }
+  })
 })
 
 describe('validatePublishedPdfPath (#241)', () => {
