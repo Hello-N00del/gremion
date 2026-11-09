@@ -108,6 +108,7 @@ COPY services/governance/migrations ./services/governance/migrations/
 COPY modules/disabled.json ./modules/
 COPY modules/board/app ./modules/board/app/
 COPY modules/calendar/app ./modules/calendar/app/
+COPY modules/content/app ./modules/content/app/
 COPY modules/files/app ./modules/files/app/
 COPY modules/messaging/app ./modules/messaging/app/
 COPY modules/votes/app ./modules/votes/app/

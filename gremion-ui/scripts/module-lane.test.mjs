@@ -55,11 +55,11 @@ test('laneTestFiles lists unit tests only: no integration, no browser, nothing u
   }
 })
 
-test('the real tree has at least one disabled module with unit tests (content), so the lane collects something', () => {
+test('the real tree has at least one disabled module with unit tests (vault), so the lane collects something', () => {
   const ids = laneModules(DEFAULT_ROOT)
-  assert.ok(ids.includes('content'), `disabled modules with an app/ half: ${ids.join(', ')}`)
-  const files = laneTestFiles(DEFAULT_ROOT, ['content'])
-  assert.ok(files.length > 0, 'content has app/ unit tests that no other lane collects')
+  assert.ok(ids.includes('vault'), `disabled modules with an app/ half: ${ids.join(', ')}`)
+  const files = laneTestFiles(DEFAULT_ROOT, ['vault'])
+  assert.ok(files.length > 0, 'vault has app/ unit tests that no other lane collects')
   assert.ok(files.every((p) => p.startsWith('src/') && /\.test\.[cm]?[jt]s$/.test(p)))
 })
 
@@ -119,7 +119,7 @@ test('the default lane dir is excluded from the Docker build context (a lane a k
 test('the CLI lists the lane without running it, and refuses an empty selection (exit 1) and bad arguments (exit 2)', () => {
   const list = spawnSync(process.execPath, [SCRIPT, '--list'], { encoding: 'utf8' })
   assert.equal(list.status, 0, list.stderr)
-  assert.match(list.stdout + list.stderr, /\[module-lane\] .*content.*unit test file/)
+  assert.match(list.stdout + list.stderr, /\[module-lane\] .*vault.*unit test file/)
   const none = spawnSync(process.execPath, [SCRIPT, '--list', '--modules', 'board'], { encoding: 'utf8' })
   assert.equal(none.status, 1)
   assert.match(none.stderr, /a lane over nothing must not pass/)
@@ -135,12 +135,12 @@ test('buildLane on the real tree: the disabled manifests are in the lane barrel,
   const base = mkdtempSync(join(tmpdir(), 't205c-lane-build-'))
   const laneDir = join(base, '_module-lane')
   try {
-    const r = buildLane(DEFAULT_ROOT, ['content', 'vault'], laneDir)
+    const r = buildLane(DEFAULT_ROOT, ['vault'], laneDir)
     const barrel = readFileSync(join(laneDir, 'src/lib/modules/manifests/index.generated.ts'), 'utf8')
-    for (const name of ['contentManifest', 'vaultManifest', 'newsletterManifest', 'boardManifest']) assert.match(barrel, new RegExp(name), `${name} is in the lane barrel`)
+    for (const name of ['vaultManifest', 'newsletterManifest', 'boardManifest']) assert.match(barrel, new RegExp(name), `${name} is in the lane barrel`)
     const realBarrel = readFileSync(join(DEFAULT_ROOT, 'gremion-ui/src/lib/modules/manifests/index.generated.ts'), 'utf8')
-    assert.doesNotMatch(realBarrel, /contentManifest|vaultManifest/, 'a disabled module never reaches the real barrel')
-    assert.ok(r.modules.includes('content') && r.modules.includes('vault') && r.modules.includes('publishing'), `overlaid: ${r.modules.join(', ')}`)
+    assert.doesNotMatch(realBarrel, /vaultManifest/, 'a disabled module never reaches the real barrel')
+    assert.ok(r.modules.includes('vault') && r.modules.includes('publishing'), `overlaid: ${r.modules.join(', ')}`)
     assert.ok(existsSync(join(laneDir, 'src/lib/server/newsletter/collabora-convert.ts')), 'an enabled half a disabled one imports is overlaid')
   } finally {
     rmSync(base, { recursive: true, force: true })

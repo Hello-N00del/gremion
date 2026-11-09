@@ -28,11 +28,10 @@ describe('content manifest — shape conforms (golden)', () => {
     expect(contentManifest.capabilities?.['content.publish.instagram']).toEqual([])
   })
 
-  it('owns the 044 content-schema + 045 publish + 046 publish-ops migration basenames', () => {
+  it('owns the migration basenames of modules/content/app/migrations (1200 news posts + 1201 public reader columns)', () => {
     expect(contentManifest.migrations).toEqual([
-      '044_content_schema',
-      '045_content_publish',
-      '046_content_publish_ops',
+      '1200_content_news_posts',
+      '1201_news_posts_public_reader_columns',
     ])
   })
 

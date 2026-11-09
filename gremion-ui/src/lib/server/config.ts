@@ -145,10 +145,27 @@ export interface GremionConfig {
 const REQUIRED_MODULES: readonly string[] = []
 
 /**
+ * Pilot surface (operator ruling 2026-11-09): modules pinned OFF on every read and every write of
+ * config.modules, the mirror of REQUIRED_MODULES. A stored `true` is read as `false` and a settings write
+ * cannot widen it, so the rail, the pages and the api of a held-off module stay answered by the
+ * module-disabled surface (module-gate.ts). Elections only: the Helios election path is not part of the
+ * pilot. The board is NOT held off (it is a pilot key feature, served in-process). This is the surface
+ * pin; level 1 per request (TASK-044-b) and the enable gate are separate and unchanged.
+ */
+const HELD_OFF_MODULES: readonly string[] = ['elections']
+
+function pinHeldOff(modules: Record<string, boolean>): Record<string, boolean> {
+  const out = { ...modules }
+  for (const id of HELD_OFF_MODULES) out[id] = false
+  return out
+}
+
+/**
  * WP3-modules-dynamic: the derived default module-toggle map. Every core
- * (REQUIRED_MODULES) id AND every toggleable manifest id (sourced from
- * MODULE_MANIFESTS) defaults to `true`. A net-new toggleable module is force-on
- * by default with ZERO edits to this file — its id flows in from its manifest.
+ * (REQUIRED_MODULES) id defaults to `true`; every toggleable manifest id (sourced
+ * from MODULE_MANIFESTS) defaults to `true` unless its manifest declares
+ * `defaultEnabled: false`. A net-new toggleable module is on by default with
+ * ZERO edits to this file — its id and default flow in from its manifest.
  *
  * In the governance-only kernel there are no always-on (REQUIRED_MODULES) ids
  * and the kept manifests (core, governance) are non-toggleable, so this is `{}`
@@ -158,7 +175,7 @@ export function defaultModulesConfig(): Record<string, boolean> {
   const modules: Record<string, boolean> = {}
   for (const id of REQUIRED_MODULES) modules[id] = true
   for (const m of MODULE_MANIFESTS) {
-    if (m.toggleable) modules[m.id] = true
+    if (m.toggleable) modules[m.id] = m.defaultEnabled !== false
   }
   return modules
 }
@@ -535,7 +552,7 @@ function mergeStored(stored: StoredConfig): GremionConfig {
     brand: mergeStoredBrand(stored.brand),
     admin_accounts: { ...DEFAULT_CONFIG.admin_accounts, ...stored.admin_accounts },
     smtp: { ...DEFAULT_CONFIG.smtp, ...stored.smtp },
-    modules: { ...DEFAULT_CONFIG.modules, ...stored.modules },
+    modules: pinHeldOff({ ...DEFAULT_CONFIG.modules, ...stored.modules }),
     elections: { ...DEFAULT_CONFIG.elections, ...stored.elections },
     calendar: { ...DEFAULT_CONFIG.calendar, ...stored.calendar },
     legal: { ...DEFAULT_CONFIG.legal, ...stored.legal },
@@ -673,6 +690,10 @@ export function writeConfig(update: ConfigUpdate, tenant: ConfigTenant = require
   const mergedModules = { ...current.modules, ...update.modules }
   for (const mod of REQUIRED_MODULES) {
     ;(mergedModules as Record<string, boolean>)[mod] = true
+  }
+  // ... and the held-off set cannot be turned on (HELD_OFF_MODULES)
+  for (const mod of HELD_OFF_MODULES) {
+    ;(mergedModules as Record<string, boolean>)[mod] = false
   }
 
   // Clamp backup retention to minimum 7 days

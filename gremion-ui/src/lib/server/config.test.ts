@@ -52,7 +52,7 @@ describe('ConfigStore', () => {
       // The default modules map is the toggleable manifests the build composes (TASK-205; R33 F5 added files,
       // messages and newsletter: the enabled module halves are overlaid before the barrels are generated); pinned by
       // the WP3 default golden below.
-      expect(config.modules).toEqual({ elections: true, votes: true, newsletter: true, calendar: true, files: true, messages: true, board: true })
+      expect(config.modules).toEqual({ elections: false, votes: true, content: true, newsletter: true, calendar: true, files: true, messages: true, board: true })
       expect(config.backups.retention_days).toBe(30)
     })
 
@@ -597,12 +597,12 @@ describe('WP3 config.modules dynamic open record — (a) schema accepts a net-ne
 })
 
 describe('WP3 config.modules dynamic open record — (b) defaultModulesConfig()', () => {
-  it('returns true for every toggleable manifest id', async () => {
+  it('returns true for every toggleable manifest id, false for one that declares defaultEnabled: false', async () => {
     const { defaultModulesConfig } = await import('./config')
     const { MODULE_MANIFESTS } = await import('$lib/modules/registry')
     const defaults = defaultModulesConfig()
     for (const m of MODULE_MANIFESTS.filter((x) => x.toggleable)) {
-      expect(defaults[m.id]).toBe(true)
+      expect(defaults[m.id]).toBe(m.defaultEnabled !== false)
     }
   })
 
@@ -614,7 +614,81 @@ describe('WP3 config.modules dynamic open record — (b) defaultModulesConfig()'
     // so the pin is exactly the toggleable manifests of the overlaid enabled modules (TASK-205a:
     // elections, votes, calendar and board; R33 F5 (b2b9cb70, operator ruling Q3 2026-10-21) made messages, files and
     // newsletter deselectable, so they are in the pin too).
-    expect(defaultModulesConfig()).toEqual({ elections: true, votes: true, newsletter: true, calendar: true, files: true, messages: true, board: true })
+    expect(defaultModulesConfig()).toEqual({ elections: false, votes: true, content: true, newsletter: true, calendar: true, files: true, messages: true, board: true })
+  })
+})
+
+// Pilot surface (operator ruling 2026-11-09): elections are off and invisible, the board (/tasks) is on.
+// ModuleManifest.defaultEnabled lets a toggleable manifest start OFF; the held-off set is pinned false on
+// read and on write, mirror of the required-modules pin, so no stored value and no settings write widens it.
+describe('pilot held-off modules: elections off, board on, and a write cannot widen it', () => {
+  beforeEach(() => {
+    vi.resetModules()
+    vi.clearAllMocks()
+    mockFs.writeFileSync.mockImplementation(() => undefined)
+  })
+
+  it('a fresh tenant reads elections false and board true', async () => {
+    mockFs.existsSync.mockReturnValue(false)
+    const { readConfig } = await import('./config')
+    const cfg = readConfig()
+    expect(cfg.modules.elections).toBe(false)
+    expect(cfg.modules.board).toBe(true)
+  })
+
+  it('a create-time config with modules {} (what the create handler writes) reads the same', async () => {
+    mockFs.existsSync.mockReturnValue(true)
+    mockFs.readFileSync.mockReturnValue(JSON.stringify({ modules: {} }))
+    const { readConfig } = await import('./config')
+    const cfg = readConfig()
+    expect(cfg.modules.elections).toBe(false)
+    expect(cfg.modules.board).toBe(true)
+  })
+
+  it('a stored elections: true is read as false (the pin is on the read path)', async () => {
+    mockFs.existsSync.mockReturnValue(true)
+    mockFs.readFileSync.mockReturnValue(JSON.stringify({ modules: { elections: true, board: true } }))
+    const { readConfig, parseConfig } = await import('./config')
+    expect(readConfig().modules.elections).toBe(false)
+    expect(parseConfig({ modules: { elections: true } }).modules.elections).toBe(false)
+  })
+
+  it('writeConfig cannot turn elections on, neither in its result nor in the file it writes', async () => {
+    mockFs.existsSync.mockReturnValue(false)
+    const { writeConfig } = await import('./config')
+    const result = writeConfig({ modules: { elections: true, votes: true } })
+    expect(result.modules.elections).toBe(false)
+    expect(result.modules.votes).toBe(true)
+    const written = JSON.parse(String(mockFs.writeFileSync.mock.calls.at(-1)![1])) as { modules: Record<string, boolean> }
+    expect(written.modules.elections).toBe(false)
+  })
+
+  it('the pin holds elections only: any other module toggle is still honoured', async () => {
+    mockFs.existsSync.mockReturnValue(false)
+    const { writeConfig } = await import('./config')
+    const result = writeConfig({ modules: { board: false, content: false } })
+    expect(result.modules.board).toBe(false)
+    expect(result.modules.content).toBe(false)
+  })
+
+  it('defaultModulesConfig reads defaultEnabled from a manifest (a toggleable manifest defaults ON unless it says false)', async () => {
+    vi.doMock('$lib/modules/registry', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('$lib/modules/registry')>()
+      return {
+        ...actual,
+        MODULE_MANIFESTS: [
+          { id: 'demo_on', toggleable: true, pages: [], routePrefixes: [] },
+          { id: 'demo_off', toggleable: true, defaultEnabled: false, pages: [], routePrefixes: [] },
+          { id: 'demo_fixed', toggleable: false, defaultEnabled: false, pages: [], routePrefixes: [] },
+        ],
+      }
+    })
+    const { defaultModulesConfig } = await import('./config')
+    const defaults = defaultModulesConfig()
+    vi.doUnmock('$lib/modules/registry')
+    expect(defaults.demo_on).toBe(true)
+    expect(defaults.demo_off).toBe(false)
+    expect('demo_fixed' in defaults).toBe(false)
   })
 })
 

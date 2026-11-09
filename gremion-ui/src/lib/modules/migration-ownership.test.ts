@@ -151,6 +151,44 @@ describe('backFillNotice', () => {
   })
 })
 
+// A manifest's `migrations` names the files the module-OFF skip filter and the OFF->ON catch-up act on
+// (module-migrations.ts). A name that matches no file filters nothing and replays nothing, so a stale list
+// fails silently: the content manifest named 044-046 long after the files became modules/content/app/migrations
+// 1200 and 1201. Every named basename must exist as a .sql in the kernel directory or in some module's
+// app/migrations (the prebuild copies those into gremion-ui/migrations, interim-module-overlay.mjs --migrations).
+describe('manifest migration basenames name files that exist', () => {
+  const MODULES_DIR = join(MIGRATIONS_DIR, '..', '..', 'modules')
+  const present = () => {
+    const names = new Set(readdirSync(MIGRATIONS_DIR).filter((f) => f.endsWith('.sql')))
+    for (const e of readdirSync(MODULES_DIR, { withFileTypes: true })) {
+      if (!e.isDirectory()) continue
+      let files: string[] = []
+      try {
+        files = readdirSync(join(MODULES_DIR, e.name, 'app', 'migrations'))
+      } catch {
+        continue
+      }
+      for (const f of files) if (f.endsWith('.sql')) names.add(f)
+    }
+    return names
+  }
+
+  it('every migration basename of every registered manifest resolves to a file', () => {
+    const names = present()
+    const missing: string[] = []
+    for (const m of MODULE_MANIFESTS) {
+      for (const base of m.migrations ?? []) if (!names.has(`${base}.sql`)) missing.push(`${m.id}: ${base}.sql`)
+    }
+    expect(missing).toEqual([])
+  })
+
+  it('the guard is not vacuous: a manifest naming a missing file is reported', () => {
+    const names = present()
+    expect(names.has('044_content_schema.sql')).toBe(false)
+    expect(names.has('1200_content_news_posts.sql')).toBe(true)
+  })
+})
+
 describe('F6 guard: calendar_events (003), committee_elections (004), deck_board (034) stay kernel-applied', () => {
   const kernelFiles = () =>
     new Set(readdirSync(MIGRATIONS_DIR).filter((f) => f.endsWith('.sql')))

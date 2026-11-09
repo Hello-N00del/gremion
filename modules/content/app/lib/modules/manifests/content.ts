@@ -32,12 +32,11 @@ export const contentManifest: ModuleManifest = {
     // L3 wires the Instagram publish path; the grant list stays empty until then.
     'content.publish.instagram': [],
   },
-  // Migration basenames this module owns. Source of truth for the migration
-  // skip-filter; completeness enforced by the migration-ownership guard test.
-  migrations: ['044_content_schema', '045_content_publish', '046_content_publish_ops'],
-  // NOTE: no `nav` fragment in L1. composeNavSchema only weaves a manifest's
-  // nav at a matching `{ slot:'module', moduleId }` anchor in baseNavSchema;
-  // there is no 'content' anchor yet, so a nav fragment here would be dead
-  // config. The rail entry + its base-template anchor are a later
-  // design hand-off (the authoring UI is reached directly via /content).
+  // Migration basenames this module owns: the files of modules/content/app/migrations, which the image
+  // prebuild copies into gremion-ui/migrations. Source of truth for the migration skip-filter; the
+  // migration-ownership guard test fails a name that matches no file (044-046 did, after the schema moved
+  // to the leaf database).
+  migrations: ['1200_content_news_posts', '1201_news_posts_public_reader_columns'],
+  // NOTE: no `nav` fragment. The rail entry (/content, "Inhalte") is an inline item of baseNavSchema
+  // (nav-schema.ts) carrying moduleId 'content', like calendar and tasks, so it hides when the module is off.
 }
