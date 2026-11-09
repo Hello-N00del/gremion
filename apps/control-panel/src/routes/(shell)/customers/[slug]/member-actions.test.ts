@@ -66,6 +66,8 @@ let submits: unknown[][] = []
 let importReadError: unknown = null
 /** When set, the registry read of the customer throws it. */
 let statusError: unknown = null
+/** When set, the panel has no platform database configured. */
+let noPlatformDb = false
 const fakeSql = Object.assign(
   async (strings: TemplateStringsArray, ...vals: unknown[]) => {
     const text = strings.join('?')
@@ -85,7 +87,7 @@ vi.mock('$lib/server/customers', async (orig) => {
   const real = await orig<typeof import('$lib/server/customers')>()
   return {
     ...real,
-    platformDb: () => fakeSql,
+    platformDb: () => (noPlatformDb ? null : fakeSql),
     customerStatus: async () => {
       if (statusError) throw statusError
       return customer
@@ -147,6 +149,7 @@ beforeEach(() => {
   submits = []
   importReadError = null
   statusError = null
+  noPlatformDb = false
 })
 
 describe('the member section is shown only when an action can be queued', () => {
@@ -374,6 +377,11 @@ describe('a read that fails is said to fail (and logged), never turned into a fa
     expect(d.memberSection).toMatchObject({ canAct: false, unreadable: true, validated: null })
     expect(logged(spy)).toContain('ECONNREFUSED')
     spy.mockRestore()
+  })
+  it('the page load: no platform database is its own state (noPlatformDb), not "inactive or busy"', async () => {
+    noPlatformDb = true
+    const d = await loadFor()
+    expect(d.memberSection).toMatchObject({ canAct: false, unreadable: false, noPlatformDb: true })
   })
   it('the page load: a readable state is not marked unreadable', async () => {
     expect((await loadFor()).memberSection.unreadable).toBe(false)

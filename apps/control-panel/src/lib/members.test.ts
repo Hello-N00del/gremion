@@ -42,7 +42,7 @@ describe('parseImportSummary: the validate line the host handler writes', () => 
   const line = () => ({
     level: 'info',
     step: 'validate',
-    // an apply/rerun line has real counts; the parser reads them all (only a validate line is offered for apply)
+    // the parser reads every count the handler line carries, though a validate line only has a real rejected count
     message: `import validate: status=validated sha256=${SHA} created=12 linked_existing=3 unchanged=1 rejected=0 accounts_created=0 invites_sent=0`,
   })
   it('reads the status, the sha256 and every count', () => {

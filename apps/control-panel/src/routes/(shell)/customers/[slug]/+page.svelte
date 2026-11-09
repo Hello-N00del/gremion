@@ -185,6 +185,8 @@
     {#if form?.memberError}<p class="error" role="alert">{form.memberError}</p>{/if}
     {#if ms.unreadable}
       <p class="error" role="alert">Der Stand der Mitgliederlisten ist nicht lesbar (Plattform-Datenbank; Details im Panel-Log). Aktionen werden erst wieder angeboten, wenn er gelesen werden kann.</p>
+    {:else if ms.noPlatformDb}
+      <p class="error" role="alert">Keine Plattform-Datenbank konfiguriert: es kann keine Anfrage gestellt werden.</p>
     {:else if !ms.canAct}
       <p class="muted" role="status">Vertikale und Mitgliederlisten können nur für einen aktiven Mandanten ohne laufende Anfrage angestoßen werden.</p>
     {:else}

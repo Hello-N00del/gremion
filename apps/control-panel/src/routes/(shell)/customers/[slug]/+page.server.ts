@@ -3,7 +3,7 @@
 // its NEWEST request, which exists before the customer does (queued,
 // verifying, running with its step, failed, refused). "Erneut versuchen" is a
 // new request with a new idempotency key, only after failed/refused.
-import { error, fail, redirect } from '@sveltejs/kit'
+import { error, fail, redirect, type ActionFailure } from '@sveltejs/kit'
 import { env } from '$env/dynamic/private'
 import { lifecycleOffer, type LifecycleKind } from '$lib/lifecycle'
 import { isKnownVertical, VERTICALS } from '$lib/members'
@@ -55,7 +55,7 @@ export const load: PageServerLoad = async ({ params }) => {
   // newest validate accepted (the apply is offered only for it) and the events of the newest ended import request
   // `unreadable`: the import state could not be read (logged); no action is offered then, and the page says so
   // instead of looking as if no validate ever ran.
-  let memberSection: { canAct: boolean; unreadable: boolean; verticals: typeof VERTICALS; validated: ValidatedList | null; importEvents: EventLine[] } | null = null
+  let memberSection: { canAct: boolean; unreadable: boolean; noPlatformDb: boolean; verticals: typeof VERTICALS; validated: ValidatedList | null; importEvents: EventLine[] } | null = null
   if (status) {
     let st: ImportState | null = null
     let unreadable = false
@@ -70,6 +70,7 @@ export const load: PageServerLoad = async ({ params }) => {
     memberSection = {
       canAct: p !== null && !unreadable && moduleActionsOffered(status.status, newestLite),
       unreadable,
+      noPlatformDb: p === null,
       verticals: VERTICALS,
       validated: st?.validated ?? null,
       importEvents: st?.events ?? [],
@@ -186,12 +187,14 @@ async function memberContext({ params, request, locals }: MemberEvent) {
   if (!status) return { failed: fail(409, { memberError: 'Es gibt keinen Mandanten mit diesem Kurznamen.' }) }
   return { p, evidence, status, operatorId: locals.operator.id, slug: params.slug, failed: null }
 }
-type MemberContext = Exclude<Awaited<ReturnType<typeof memberContext>>, { failed: ReturnType<typeof fail> }>
+/** The one failure shape of the member actions (a concrete type: ReturnType of the overloaded fail() is ActionFailure<unknown> and would erase ActionData). */
+type MemberFailure = ActionFailure<{ memberError: string }>
+type MemberContext = Exclude<Awaited<ReturnType<typeof memberContext>>, { failed: MemberFailure }>
 
 const UNREADABLE_FORM = 'Das Formular konnte nicht gelesen werden. Bitte die Seite neu laden.'
 
 /** The form of the request, or the refusal to return: 413 when the server's body limit stopped it, else 400 (logged by type and status only). */
-async function memberForm(request: Request): Promise<{ form: FormData; failed: null } | { form: null; failed: ReturnType<typeof fail> }> {
+async function memberForm(request: Request): Promise<{ form: FormData; failed: null } | { form: null; failed: MemberFailure }> {
   try {
     return { form: await request.formData(), failed: null }
   } catch (err) {
