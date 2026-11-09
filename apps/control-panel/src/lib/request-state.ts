@@ -43,6 +43,13 @@ export const EXECUTOR_STEP_LABEL: Record<string, string> = {
   disable_module: 'Modul deaktivieren (Export, dann Datenbank entfernen)',
   record_dpia: 'DPIA-Entscheidung festhalten',
   reconcile: 'Abgleich der Anmeldung (Realm-Vertrag)',
+  seed_vertical: 'Vertikale einspielen (Vorlage des Mandanten)',
+  import_members: 'Mitgliederliste verarbeiten',
+  validate: 'Mitgliederliste prüfen (es wird nichts geschrieben)',
+  dump: 'Sicherung vor dem Einspielen',
+  apply: 'Mitgliederliste einspielen',
+  rerun: 'Wiederholungslauf (darf nichts mehr ändern)',
+  discard: 'Sicherung verwerfen',
   resume: 'Fortsetzen (Mail-Absender, Anmeldung, Broker)',
   'phase-a': 'Phase A (Realm, Kerndatenbank, Host)',
   mail: 'Mail-Absender',
@@ -89,6 +96,9 @@ const NOT_REPLAYABLE = 'Nur eine Einrichtung („create“) lässt sich hier wie
 const REDO_ACTION = 'Die Aktion „Mandant sperren“ bzw. „Mandant fortsetzen“ kann unten erneut ausgelöst werden; die Daten wurden nicht angetastet.'
 /** The kinds of the "Module" section (modules.ts); a failed one is triggered again from there. */
 const MODULE_KINDS = ['enable_module', 'disable_module', 'record_dpia', 'reconcile']
+/** The kinds of the "Vertikale und Mitglieder" section; a failed one is triggered again from there (the member list is purged from the request, so a copy could not run). */
+const MEMBER_KINDS = ['seed_vertical', 'import_members']
+const REDO_MEMBER = 'Die Aktion kann im Bereich „Vertikale und Mitglieder“ unten erneut ausgelöst werden; die Mitgliederliste wird dafür neu hochgeladen.'
 const REDO_MODULE = 'Die Aktion kann im Bereich „Module“ unten erneut ausgelöst werden; sie setzt am bisherigen Stand fort und ist wiederholbar.'
 const FIX_FORM = 'Die Angaben der Anfrage selbst wurden abgelehnt. Bitte im Formular „Neuer Mandant“ korrigiert neu anfordern.'
 
@@ -112,7 +122,7 @@ export function describeRequest(r: RequestStateInput): RequestDescription {
    * (it counts as not enabled) and the retry is the only way back to the resumable disable.
    * Otherwise says why not.
    */
-  const retry = (): Partial<RequestDescription> => (isCreate || r.kind === 'disable_module' ? { retryable: true } : { retryNote: r.kind === 'suspend' || r.kind === 'resume' ? REDO_ACTION : MODULE_KINDS.includes(r.kind) ? REDO_MODULE : NOT_REPLAYABLE })
+  const retry = (): Partial<RequestDescription> => (isCreate || r.kind === 'disable_module' ? { retryable: true } : { retryNote: r.kind === 'suspend' || r.kind === 'resume' ? REDO_ACTION : MODULE_KINDS.includes(r.kind) ? REDO_MODULE : MEMBER_KINDS.includes(r.kind) ? REDO_MEMBER : NOT_REPLAYABLE })
   switch (r.state) {
     case 'queued':
       return d('queued', 'In der Warteschlange', 'Die Anfrage wartet darauf, dass der Ausführer sie übernimmt.', { active: true })

@@ -80,7 +80,7 @@ describe('describeRequest: refused', () => {
       'refused: module vault is disabled in this build (modules/disabled.json)',
       'refused: dpia.calendar.document_ref is required: the written decision (TOM-annex entry) must be named for every module, whatever requires_dpia says',
       'refused: operator 8d6b9c7e is disabled in the ops realm',
-      'no handler for import_members',
+      'no handler for import_isolation',
     ]) {
       const d = describeRequest({ ...base, state: 'refused', outcome: o })
       expect(d).toMatchObject({ phase: 'refused', retryable: false })
@@ -132,5 +132,27 @@ describe('describeRequest: the module and reconcile kinds (TRD-044)', () => {
   it('the running step is named in German', () => {
     expect(describeRequest({ ...base, kind: 'reconcile', state: 'running', evidenceVerifiedAt: '2026-10-27T10:00:30Z', lastStep: 'reconcile' }).text).toMatch(/Abgleich/)
     expect(describeRequest({ ...base, kind: 'disable_module', state: 'running', evidenceVerifiedAt: '2026-10-27T10:00:30Z', lastStep: 'disable_module' }).text).toMatch(/Modul deaktivieren/)
+  })
+})
+
+describe('the vertical and member kinds (seed_vertical, import_members)', () => {
+  it.each(['seed_vertical', 'import_members', 'validate', 'dump', 'apply', 'rerun', 'discard'])('executor step %s has a German label', (s) => {
+    expect(EXECUTOR_STEP_LABEL[s]).toBeTruthy()
+    expect(describeRequest({ ...base, kind: 'import_members', state: 'running', evidenceVerifiedAt: 'x', lastStep: s }).text).toContain(EXECUTOR_STEP_LABEL[s]!)
+  })
+  it.each(['seed_vertical', 'import_members'])('a failed %s is never retried as a copy: the page says to trigger the action again (the list is purged from the row)', (kind) => {
+    const d = describeRequest({ ...base, kind, state: 'failed', outcome: `${kind} proof-z: failed in apply (exit 1); a new request resumes from the ledger` })
+    expect(d.retryable).toBe(false)
+    expect(d.retryNote).toMatch(/Bereich „Vertikale und Mitglieder“/)
+    expect(d.step).toBe('apply')
+  })
+  it.each(['expired', 'dead'])('a %s import is not retried as a copy either', (state) => {
+    const d = describeRequest({ ...base, kind: 'import_members', state })
+    expect(d.retryable).toBe(false)
+    expect(d.retryNote).toMatch(/Bereich „Vertikale und Mitglieder“/)
+  })
+  it('"no handler" is shown only for the outcome the executor wrote, never derived from a handled kind', () => {
+    expect(describeRequest({ ...base, kind: 'import_members', state: 'succeeded' }).code).toBeNull()
+    expect(describeRequest({ ...base, kind: 'import_members', state: 'refused', outcome: 'refused: the member list exceeds 1048576 bytes' }).code).toBe('refused')
   })
 })

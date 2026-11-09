@@ -6,12 +6,14 @@
 import { error, fail, redirect } from '@sveltejs/kit'
 import { env } from '$env/dynamic/private'
 import { lifecycleOffer, type LifecycleKind } from '$lib/lifecycle'
+import { isKnownVertical, VERTICALS } from '$lib/members'
 import { moduleActionsOffered, type ModuleKind } from '$lib/modules'
 import { describeRequest } from '$lib/request-state'
 import { evidenceFromRequest } from '$lib/server/auth'
 import { loadConfig } from '$lib/server/config'
 import { customerRequests, customerStatus, platformDb } from '$lib/server/customers'
 import { submitLifecycle } from '$lib/server/lifecycle'
+import { loadImportState, memberArgs, readCsvList, submitMemberRequest, type MemberKind, type ValidatedList } from '$lib/server/members'
 import { loadCustomerModules, moduleArgs, parseDpiaForm, requestEvents, submitModuleRequest, type CustomerModules, type EventLine } from '$lib/server/modules'
 import { SubmitRefused } from '$lib/server/requests'
 import { retryRequest } from '$lib/server/retry'
@@ -43,10 +45,17 @@ export const load: PageServerLoad = async ({ params }) => {
     const mods = p ? await loadCustomerModules(p, status.id).catch(() => null) : null
     moduleSection = { canAct: mods !== null && moduleActionsOffered(status.status, newestLite), enabled: mods?.enabled ?? [], available: mods?.available ?? [] }
   }
+  // the "Vertikale und Mitglieder" section: the verticals, whether an action can be queued now, the list the
+  // newest validate accepted (the apply is offered only for it) and the events of the newest ended import request
+  let memberSection: { canAct: boolean; verticals: typeof VERTICALS; validated: ValidatedList | null; importEvents: EventLine[] } | null = null
+  if (status) {
+    const st = p ? await loadImportState(p, params.slug).catch(() => null) : null
+    memberSection = { canAct: p !== null && moduleActionsOffered(status.status, newestLite), verticals: VERTICALS, validated: st?.validated ?? null, importEvents: st?.events ?? [] }
+  }
   // the dry run's report: the events of the newest reconcile request once it has ended
   let reconcileEvents: EventLine[] = []
   if (p && newest && newest.kind === 'reconcile' && latest && !latest.active) reconcileEvents = await requestEvents(p, newest.id).catch(() => [])
-  return { slug: params.slug, status, requests, latest, refresh, offer, moduleSection, reconcileEvents }
+  return { slug: params.slug, status, requests, latest, refresh, offer, moduleSection, memberSection, reconcileEvents }
 }
 
 // "Mandant sperren" / "Mandant fortsetzen": a suspend or resume REQUEST (TRD-044), only in the state that
@@ -128,7 +137,87 @@ const moduleAction =
     redirect(303, `/customers/${params.slug}`)
   }
 
+type MemberEvent = { params: { slug: string }; request: Request; locals: App.Locals }
+
+/**
+ * The checks every member action shares, in the neighbours' order: the slug, the configuration, the signed-in
+ * operator (403), the platform database, the operator's signed sign-in as evidence (the step-up rule), and a
+ * customer that exists. `failed` is the refusal to return; otherwise the context to queue with.
+ */
+async function memberContext({ params, request, locals }: MemberEvent) {
+  if (!SLUG.test(params.slug) || params.slug.length > 30) error(404, 'no such customer')
+  const r = loadConfig(env)
+  if (!r.ok) error(503, 'the control panel is not configured')
+  if (!locals.operator) error(403, 'not signed in through the ops realm')
+  const p = platformDb(r.config)
+  if (!p) return { failed: fail(409, { memberError: 'Keine Plattform-Datenbank konfiguriert: es kann keine Anfrage gestellt werden.' }) }
+  const evidence = await evidenceFromRequest(request, r.config)
+  if (!evidence) return { failed: fail(403, { memberError: 'Die Anmeldung trägt keinen Nachweis (loa2). Bitte neu anmelden.' }) }
+  const status = await customerStatus(r.config, params.slug).catch(() => null)
+  if (!status) return { failed: fail(409, { memberError: 'Es gibt keinen Mandanten mit diesem Kurznamen.' }) }
+  return { p, evidence, status, operatorId: locals.operator.id, slug: params.slug, failed: null }
+}
+type MemberContext = Exclude<Awaited<ReturnType<typeof memberContext>>, { failed: ReturnType<typeof fail> }>
+
+async function memberForm(request: Request): Promise<FormData | null> {
+  return request.formData().catch(() => null)
+}
+const UNREADABLE_FORM = 'Das Formular konnte nicht gelesen werden. Bitte die Seite neu laden.'
+
+async function queueMember(c: MemberContext, kind: MemberKind, args: Record<string, unknown>) {
+  try {
+    await submitMemberRequest(c.p, kind, c.slug, c.status.status, args, c.operatorId, c.evidence)
+  } catch (err) {
+    if (err instanceof SubmitRefused) return fail(err.status, { memberError: err.message })
+    throw err
+  }
+  redirect(303, `/customers/${c.slug}`)
+}
+
+// "Vertikale und Mitglieder": seed_vertical, and import_members in two phases, are REQUESTS (TRD-044 gate: an
+// active customer without a queued or running request, 409 otherwise), with the operator's signed sign-in as
+// evidence. The list is checked here (size, text) and never echoed; the apply names the sha256 the VALIDATE
+// reported, read from that request's events on the server, never taken from the form.
+const seedVertical = async (e: MemberEvent) => {
+  const c = await memberContext(e)
+  if (c.failed) return c.failed
+  const form = await memberForm(e.request)
+  if (!form) return fail(400, { memberError: UNREADABLE_FORM })
+  const vertical = field(form, 'vertical')
+  if (!isKnownVertical(vertical)) return fail(400, { memberError: 'Unbekannte Vertikale: bitte eine der angebotenen wählen.' })
+  return queueMember(c, 'seed_vertical', memberArgs.seed(c.slug, vertical))
+}
+
+const importValidate = async (e: MemberEvent) => {
+  const c = await memberContext(e)
+  if (c.failed) return c.failed
+  const form = await memberForm(e.request)
+  if (!form) return fail(400, { memberError: UNREADABLE_FORM })
+  const vertical = field(form, 'vertical')
+  if (!isKnownVertical(vertical)) return fail(400, { memberError: 'Unbekannte Vertikale: bitte eine der angebotenen wählen.' })
+  const list = await readCsvList(form)
+  if (!list.ok) return fail(list.status, { memberError: list.error })
+  return queueMember(c, 'import_members', memberArgs.validate(c.slug, vertical, list.csv))
+}
+
+const importApply = async (e: MemberEvent) => {
+  const c = await memberContext(e)
+  if (c.failed) return c.failed
+  const form = await memberForm(e.request)
+  if (!form) return fail(400, { memberError: UNREADABLE_FORM })
+  const { validated } = await loadImportState(c.p, c.slug).catch(() => ({ validated: null }))
+  if (!validated) return fail(409, { memberError: 'Es gibt keine erfolgreiche Prüfung einer Mitgliederliste, die eingespielt werden könnte. Bitte die Liste zuerst prüfen.' })
+  if (field(form, 'sha256') !== validated.sha256) return fail(409, { memberError: 'Die Prüfung hat sich seit dem Laden der Seite geändert. Bitte die Seite neu laden und das Ergebnis erneut ansehen.' })
+  if (field(form, 'confirm') !== 'yes') return fail(400, { memberError: 'Bitte bestätigen, dass die Zahlen der Prüfung stimmen und die Liste eingespielt werden soll.' })
+  const list = await readCsvList(form)
+  if (!list.ok) return fail(list.status, { memberError: list.error })
+  return queueMember(c, 'import_members', memberArgs.apply(c.slug, validated.vertical, list.csv, validated.sha256))
+}
+
 export const actions: Actions = {
+  seedVertical,
+  importValidate,
+  importApply,
   suspend: lifecycleAction('suspend'),
   resume: lifecycleAction('resume'),
   enable_module: moduleAction('enable_module'),
