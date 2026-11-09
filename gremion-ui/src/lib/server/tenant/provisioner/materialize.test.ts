@@ -19,7 +19,7 @@ describe('materializeConfig (defaults + stored -> fully-merged effective config)
     expect(merged.brand.logo_letter).toBe('P') // neutral default
     // The default modules map is the toggleable manifests the build composes (TASK-205a; messages, files and newsletter since R33 F5, b2b9cb70): a stored
     // partial that omits `modules` back-fills it.
-    expect(merged.modules).toEqual({ elections: true, votes: true, newsletter: true, calendar: true, files: true, messages: true, board: true })
+    expect(merged.modules).toEqual({ elections: false, votes: true, content: true, newsletter: true, calendar: true, files: true, messages: true, board: true })
     expect(merged.legal.impressum_html).toContain('per-tenant: set via config')
   })
 
