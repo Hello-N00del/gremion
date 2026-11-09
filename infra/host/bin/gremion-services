@@ -97,7 +97,6 @@ set_env_key() {
     atomic_write "$file" 600 <<< "$out" || die "cannot write ${file}" "$GREMION_EXIT_ASSERT"
 }
 
-compose_state() { ( cd "$RELEASE_DIR" && docker compose --env-file "$STATE_ENV" "$@" ); }
 compose_app() { ( cd "$RELEASE_DIR" && docker compose --env-file "$APP_ENV" "$@" ); }
 
 # container_of <project> <service> -- the ONE container of a compose service, by its labels.
@@ -128,9 +127,25 @@ wait_healthy() {
 # (a hairpin to the public address is not assumed). A certificate that is not publicly trusted (an
 # ACME staging directory) fails here, loudly.
 edge_curl() {
-    local url="$1" host
+    local url="$1" host rest
     host="${url#https://}"; host="${host%%/*}"
+    rest="${url#https://"${host}"}"
+    # --resolve pins the PORT too, so a non-443 edge port has to be in the URL for the pin to apply
+    [[ "$EDGE_HTTPS_PORT" == 443 ]] || url="https://${host}:${EDGE_HTTPS_PORT}${rest}"
     curl -fsS --max-time 20 --resolve "${host}:${EDGE_HTTPS_PORT}:${EDGE_BIND_IP}" "$url"
+}
+
+# Armed by wire's step 4, disarmed once step 5 has recreated matrix: an exit in between (a die)
+# recreates matrix WITHOUT the bootstrap mode, best effort, so shared-secret registration is not
+# left open. The exit status of the script is the one the die chose.
+BOOTSTRAP_MODE_ON=0
+close_bootstrap_mode() {
+    local rc=$?
+    [[ "$BOOTSTRAP_MODE_ON" == 1 ]] || return "$rc"
+    BOOTSTRAP_MODE_ON=0
+    ( cd "$RELEASE_DIR" && unset SYNAPSE_BOOTSTRAP_MODE && docker compose --env-file "$STATE_ENV" up -d --force-recreate matrix ) >/dev/null 2>&1 \
+        || printf 'WARNING: matrix may still run in bootstrap mode (shared-secret registration open): recreate it without SYNAPSE_BOOTSTRAP_MODE\n' >&2
+    return "$rc"
 }
 
 # ---------------------------------------------------------------------------
@@ -208,6 +223,10 @@ cmd_wire() {
     ok "state.env: issuer, fetch URL and COMPOSE_PROFILES=${profiles}"
 
     # -- 4. matrix in bootstrap mode, the bot --
+    # From here until step 5 has recreated matrix, any exit (a die included) closes the
+    # shared-secret registration again instead of leaving it open.
+    BOOTSTRAP_MODE_ON=1
+    trap close_bootstrap_mode EXIT
     ( cd "$RELEASE_DIR" && SYNAPSE_BOOTSTRAP_MODE=1 docker compose --env-file "$STATE_ENV" up -d matrix ) \
         || die "matrix could not be started in bootstrap mode" "$GREMION_EXIT_ASSERT"
     local mx
@@ -218,8 +237,10 @@ cmd_wire() {
     cur="$(env_key "$STATE_ENV" SYNAPSE_ADMIN_TOKEN)"
     if [[ -n "$cur" && "$cur" != CHANGE_ME_* ]]; then
         # the token goes into the container by NAME; the shell inside expands it
+        # (printf is a builtin and curl -K - reads the header from its stdin: the token is on no argv
+        # inside the container either)
         if SYNAPSE_ADMIN_TOKEN="$cur" docker exec -e SYNAPSE_ADMIN_TOKEN "$mx" bash -c \
-            'curl -sf --max-time 10 -H "Authorization: Bearer ${SYNAPSE_ADMIN_TOKEN}" http://127.0.0.1:8008/_matrix/client/v3/account/whoami' \
+            'printf "header = \"Authorization: Bearer %s\"\n" "$SYNAPSE_ADMIN_TOKEN" | curl -sf --max-time 10 -K - http://127.0.0.1:8008/_matrix/client/v3/account/whoami' \
             2>/dev/null | jq -e --arg u "$bot_id" '.user_id == $u' >/dev/null 2>&1; then
             recorded=yes
         fi
@@ -228,9 +249,17 @@ cmd_wire() {
         token="$cur"
         ok "the admin bot's token is already recorded and verified: no bootstrap"
     else
-        local out
-        out="$(docker exec "$mx" bash /bootstrap.sh 2>/dev/null)" \
-            || die "the admin bot bootstrap failed (modules/messaging/synapse/bootstrap.sh). If the bot is already registered its token is not recoverable from here: remove the bot account's registration or restore the token into state.env and both app-<colour>.env by hand, then re-run" "$GREMION_EXIT_ASSERT"
+        # stdout carries the token and stays in a variable; stderr (bootstrap.sh does not trace) is kept
+        # in a 0600 temp file and shown on failure, so the cause survives: an unreachable database, a
+        # wrong shared secret and an already-registered bot are three different repairs
+        local out errf
+        errf="$(mktemp)" || die "cannot create a temp file for the bootstrap's error output" "$GREMION_EXIT_ASSERT"
+        if ! out="$(docker exec "$mx" bash /bootstrap.sh 2>"$errf")"; then
+            tail -n 20 "$errf" >&2 || true
+            rm -f "$errf"
+            die "the admin bot bootstrap failed (modules/messaging/synapse/bootstrap.sh; its own error is above). If the bot is already registered its token is not recoverable from here: remove the bot account's registration or restore the token into state.env and both app-<colour>.env by hand, then re-run" "$GREMION_EXIT_ASSERT"
+        fi
+        rm -f "$errf"
         token="$(sed -n 's/^[[:space:]]*SYNAPSE_ADMIN_TOKEN=//p' <<< "$out" | head -n1 | tr -d '[:space:]')"
         out=""
         [[ -n "$token" ]] || die "the admin bot bootstrap printed no access token" "$GREMION_EXIT_ASSERT"
@@ -246,6 +275,7 @@ cmd_wire() {
     # -- 5. matrix again, WITHOUT bootstrap mode; the login flows --
     ( cd "$RELEASE_DIR" && unset SYNAPSE_BOOTSTRAP_MODE && docker compose --env-file "$STATE_ENV" up -d --force-recreate matrix ) \
         || die "matrix could not be recreated without bootstrap mode" "$GREMION_EXIT_ASSERT"
+    BOOTSTRAP_MODE_ON=0
     mx="$(container_of "${STACK}-state" matrix)"
     wait_healthy "$mx" matrix
     [[ "$(docker exec "$mx" printenv BOOTSTRAP_MODE 2>/dev/null | tr -d '[:space:]')" == 0 ]] \
@@ -278,10 +308,16 @@ cmd_wire() {
         jq -e --arg a "$app" '.enabled | has($a)' <<< "$apps" >/dev/null 2>&1 \
             || die "Nextcloud app ${app} is not enabled (the install hooks end in a warning: docker logs ${nc_c}; install it with occ app:install ${app})" "$GREMION_EXIT_ASSERT"
     done
+    # the install hook sets both URLs (and warns on a failure); a missing one surfaces only when a browser opens an editor
+    local wopi_key
+    for wopi_key in wopi_url public_wopi_url; do
+        [[ -n "$(docker exec -u www-data "$nc_c" php occ config:app:get richdocuments "$wopi_key" 2>/dev/null | tr -d '[:space:]')" ]] \
+            || die "richdocuments ${wopi_key} is not set in Nextcloud (the install hook warns in docker logs ${nc_c}; set it with occ config:app:set richdocuments ${wopi_key} --value=<url>, see docs/ops/pilot-services.md)" "$GREMION_EXIT_ASSERT"
+    done
     local prov
     prov="$(docker exec -u www-data "$nc_c" php occ user_oidc:provider Keycloak --output=json)" \
         || die "occ user_oidc:provider Keycloak (read-back) failed" "$GREMION_EXIT_ASSERT"
-    jq -e '.checkBearer == true and (.id | tostring) == "1"' <<< "$prov" >/dev/null 2>&1 \
+    jq -e '.settings.checkBearer == true and (.id | tostring) == "1"' <<< "$prov" >/dev/null 2>&1 \
         || die "the user_oidc provider read back without checkBearer true or is not provider id 1 (NEXTCLOUD_OIDC_PROVIDER_ID defaults to 1)" "$GREMION_EXIT_ASSERT"
     docker exec "$nc_c" curl -fsS --max-time 15 -o /dev/null "$discovery" \
         || die "the discovery URI is not reachable from inside the nextcloud container (a staging ACME certificate fails here): ${discovery}" "$GREMION_EXIT_ASSERT"

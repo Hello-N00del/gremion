@@ -132,7 +132,10 @@ and the member import.
 4. starts `matrix` in a boot with `SYNAPSE_BOOTSTRAP_MODE=1` handed from the
    shell and runs the bot bootstrap unless the bot's token is already recorded
    and verified (`whoami`); the token is captured without being echoed or
-   logged and written into `state.env` and both `app-<colour>.env`;
+   logged and written into `state.env` and both `app-<colour>.env`. A failure
+   from here to step 5 recreates `matrix` without bootstrap mode on the way
+   out (shared-secret registration is not left open), and the bootstrap's own
+   error is shown;
 5. boots `matrix` again without bootstrap mode (that closes shared-secret
    registration) and asserts `GET /_matrix/client/versions` and
    `GET /_matrix/client/v3/login` through the edge, the latter listing
@@ -141,8 +144,9 @@ and the member import.
 6. registers Nextcloud's `user_oidc` provider (`--clientid=nextcloud`,
    bearer validation, `--unique-uid=0`), runs `occ richdocuments:activate-config`
    and reads back that `polls`, `user_oidc`, `richdocuments` and `groupfolders`
-   are enabled (the image's install hooks warn instead of failing) and that
-   the provider has `checkBearer` true and id 1, which
+   are enabled (the image's install hooks warn instead of failing), that
+   richdocuments has both `wopi_url` and `public_wopi_url` set, and that
+   the provider has `settings.checkBearer` true and id 1, which
    `NEXTCLOUD_OIDC_PROVIDER_ID` defaults to; it also fetches the discovery URI
    from inside the `nextcloud` container (a certificate from an ACME staging
    directory fails here);
@@ -180,6 +184,11 @@ not offered for the pilot.
 - **Router names.** `gremion-verify` expects emitted router names of the form
   `tenant-<slug>[-<i>]`; the realm router (`.kc`) and the Collabora router
   (`.office`) carry a dot suffix and are not yet recognised by that check.
+  The `.office` router is also emitted for every routed host whether or not
+  Collabora runs; on a host without it traefik lists that router as not
+  enabled. Making it conditional on the collabora profile, and teaching the
+  check both names, is one follow-up (`gremion-verify` and the router input),
+  owed with the post-deploy verification.
 - **Platform pins.** Only the apex host pin is declared on the `traefik`
   service; the `www`, `control` and `sales` pins belong to the static routers
   that are not part of this install.

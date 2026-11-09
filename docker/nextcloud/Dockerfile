@@ -20,9 +20,9 @@ COPY config/custom.config.php /usr/src/nextcloud/config/custom.config.php
 # `occ app:list` back and fails if an app is not enabled.
 
 # Entrypoint hooks:
-#   pre-installation / post-installation  first install only
-#   before-starting                       every start (self-heals config drift)
-COPY hooks/pre-installation/  /docker-entrypoint-hooks.d/pre-installation/
+#   post-installation  first install only
+#   before-starting    every start (self-heals config drift)
+# (No pre-installation hook: nothing is bind-mounted into the config directory.)
 COPY hooks/post-installation/ /docker-entrypoint-hooks.d/post-installation/
 COPY hooks/before-starting/   /docker-entrypoint-hooks.d/before-starting/
 RUN find /docker-entrypoint-hooks.d -name "*.sh" -exec chmod +x {} \;

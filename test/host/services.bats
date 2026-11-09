@@ -72,7 +72,7 @@ case " $* " in
     exit 0 ;;
   *" exec "*"/bootstrap.sh"*)
     printf "bootstrap\n" >> "$ORDER"
-    [ -f "$GREMION_ROOT/bootstrap-fails" ] && exit 1
+    if [ -f "$GREMION_ROOT/bootstrap-fails" ]; then echo "bootstrap.sh: homeserver database unreachable" >&2; exit 1; fi
     printf "==> Bootstrap complete.\n    Add the following to your .env file:\n\n    SYNAPSE_ADMIN_TOKEN=%s\n    SYNAPSE_ADMIN_BOT_USER_ID=@gremion-admin-bot:guard.example.org\n" "'"$TOKEN"'"
     exit 0 ;;
   *" exec "*"whoami"*)
@@ -95,8 +95,13 @@ case " $* " in
     exit 0 ;;
   *" exec "*"user_oidc:provider Keycloak"*"--clientid"*) printf "occ provider-set\n" >> "$ORDER"; exit 0 ;;
   *" exec "*"user_oidc:provider Keycloak"*)
-    if [ -f "$GREMION_ROOT/bearer-off" ]; then echo "{\"id\":1,\"identifier\":\"Keycloak\",\"checkBearer\":false}"; else echo "{\"id\":1,\"identifier\":\"Keycloak\",\"checkBearer\":true}"; fi
+    # The real command prints the provider with its settings nested under .settings.
+    if [ -f "$GREMION_ROOT/bearer-off" ]; then echo "{\"id\":1,\"identifier\":\"Keycloak\",\"clientId\":\"nextcloud\",\"settings\":{\"checkBearer\":false}}"; else echo "{\"id\":1,\"identifier\":\"Keycloak\",\"clientId\":\"nextcloud\",\"settings\":{\"checkBearer\":true}}"; fi
     exit 0 ;;
+  *" exec "*"config:app:get richdocuments public_wopi_url"*)
+    if [ -f "$GREMION_ROOT/wopi-missing" ]; then exit 1; fi
+    echo "https://pilot.guard.example.org/office"; exit 0 ;;
+  *" exec "*"config:app:get richdocuments wopi_url"*) echo "http://collabora:9980/office"; exit 0 ;;
   *" exec "*"richdocuments:activate-config"*) printf "occ activate-config\n" >> "$ORDER"; exit 0 ;;
   *" exec "*"curl "*) exit 0 ;;
   *" exec "*) exit 0 ;;
@@ -233,6 +238,11 @@ wire() { run "$SVC" wire "${1:-$SLUG}"; }
     [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
     ! grep -q '^bootstrap$' "$ORDER" || { echo "the bot was bootstrapped again"; return 1; }
     grep -q '^whoami$' "$ORDER"
+    # the bearer header reaches curl over its stdin config, never as an argument inside the container
+    local who
+    who="$(grep '^docker .*whoami' "$SHIM_LOG" | tail -n 1)"
+    [[ "$who" == *"-K -"* ]] || { echo "$who"; return 1; }
+    [[ "$who" != *"-H "* ]] || { echo "$who"; return 1; }
     [ "$(sed -n 's/^COMPOSE_PROFILES=//p' "${GREMION_ROOT}/etc/env/state.env")" = "production,calendar,collabora,content,newsletter,nextcloud,video,messaging" ]
     [ "$(grep -c '^COMPOSE_PROFILES=' "${GREMION_ROOT}/etc/env/state.env")" = 1 ]
     grep -q 'force-recreate gremion-ui' "$ORDER"
@@ -245,6 +255,35 @@ wire() { run "$SVC" wire "${1:-$SLUG}"; }
     [[ "$output" == *"bootstrap"* ]]
     [ "$(sed -n 's/^SYNAPSE_ADMIN_TOKEN=//p' "${GREMION_ROOT}/etc/env/state.env")" = "placeholder-not-the-token" ]
     ! grep -q 'force-recreate gremion-ui' "$ORDER"
+}
+
+@test "a failed bot bootstrap shows the bootstrap's own error and closes the shared-secret registration again (matrix recreated without bootstrap mode on the way out)" {
+    : > "${GREMION_ROOT}/bootstrap-fails"
+    wire
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"homeserver database unreachable"* ]] || { echo "the cause was discarded: ${output}"; return 1; }
+    # the last compose call is the recreate without the mode, after the failed bootstrap
+    local last
+    last="$(grep '^compose bootstrap=' "$ORDER" | tail -n 1)"
+    [[ "$last" == "compose bootstrap=unset :: "*"up -d --force-recreate matrix" ]] || { echo "last compose call: ${last}"; return 1; }
+    ! grep -q 'force-recreate gremion-ui' "$ORDER"
+}
+
+@test "a successful wire does not recreate matrix a third time (the exit guard is disarmed once the mode is off)" {
+    wire
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
+    [ "$(grep -c 'force-recreate matrix' "$ORDER")" = 1 ]
+}
+
+@test "an EDGE_HTTPS_PORT other than 443 is honoured by every edge request (--resolve and the URL carry the port)" {
+    sed -i 's/^EDGE_HTTPS_PORT=.*/EDGE_HTTPS_PORT=8443/' "${GREMION_ROOT}/etc/env/state.env"
+    wire
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
+    local calls
+    calls="$(grep '^curl ' "$SHIM_LOG" | grep -- '--resolve')"
+    [ -n "$calls" ]
+    ! grep -vE -- '--resolve pilot\.guard\.example\.org:8443:|--resolve guard\.example\.org:8443:' <<< "$calls" || { echo "a request without the pinned port"; return 1; }
+    ! grep -E 'https://(pilot\.)?guard\.example\.org/' <<< "$calls" || { echo "a URL without the port: ${calls}"; return 1; }
 }
 
 # The post-conditions are read back from the running stack; each failure is its own named exit 1.
@@ -260,6 +299,14 @@ wire() { run "$SVC" wire "${1:-$SLUG}"; }
     wire
     [ "$status" -eq 1 ]
     [[ "$output" == *"polls"* ]]
+}
+
+@test "a Nextcloud whose richdocuments public_wopi_url is unset fails the wire naming the key (the install hook's occ calls are not guaranteed)" {
+    : > "${GREMION_ROOT}/wopi-missing"
+    wire
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"public_wopi_url"* ]]
+    ! grep -q 'force-recreate gremion-ui' "$ORDER"
 }
 
 @test "a provider read back without bearer validation fails the wire" {

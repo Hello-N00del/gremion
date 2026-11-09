@@ -322,9 +322,15 @@ export function checkFiles(files) {
 // The label is how the RUNNING check (check-postgres-major-running.mjs) finds
 // containers, so an unlabelled Postgres is a server nobody verifies.
 export const MODULE_POSTGRES_IDS = ['board', 'calendar', 'content', 'finance', 'newsletter', 'vault', 'messaging']
-// TASK-084-a: dedicated SERVICE servers, labelled org.gremion.postgres=service:<id>, never profile-gated
-// and created with POSTGRES_DB postgres; the image makes no database of its own beside the built-ins.
-export const SERVICE_POSTGRES_IDS = ['governance']
+// TASK-084-a: dedicated SERVICE servers, labelled org.gremion.postgres=service:<id>. The governance server
+// is never profile-gated and is created with POSTGRES_DB postgres: the image makes no database of its own
+// beside the built-ins. The pilot's Nextcloud server exists only while its profile does and holds the one
+// database Nextcloud keeps (POSTGRES_DB nextcloud). Each row names the gate and the database it must have.
+export const SERVICE_POSTGRES_SHAPE = {
+  governance: { profiles: [], db: 'postgres' },
+  nextcloud: { profiles: ['nextcloud'], db: 'nextcloud' },
+}
+export const SERVICE_POSTGRES_IDS = Object.keys(SERVICE_POSTGRES_SHAPE)
 export const POSTGRES_LABEL = 'org.gremion.postgres'
 
 // Volume names a module server must never mount: the kernel's own cluster and
@@ -549,11 +555,16 @@ export function checkModuleSet(text) {
     if (s.label !== `service:${id}`) {
       problems.push(`${name} is labelled ${POSTGRES_LABEL}=${s.label}, expected service:${id}`)
     }
-    if (s.profiles.length !== 0) {
-      problems.push(`${name} is gated under profiles: [${s.profiles.join(', ')}]; a service server is never profile-gated (every customer gets its database at create)`)
+    const shape = SERVICE_POSTGRES_SHAPE[id]
+    if (shape.profiles.length === 0) {
+      if (s.profiles.length !== 0) {
+        problems.push(`${name} is gated under profiles: [${s.profiles.join(', ')}]; a service server is never profile-gated (every customer gets its database at create)`)
+      }
+    } else if (s.profiles.join(',') !== shape.profiles.join(',')) {
+      problems.push(`${name} is not gated under profiles: [${shape.profiles.join(', ')}] (found [${s.profiles.join(', ')}])`)
     }
-    if (s.postgresDb !== 'postgres') {
-      problems.push(`${name} sets POSTGRES_DB ${String(s.postgresDb)}, expected postgres: the image must create no database besides the built-ins`)
+    if (s.postgresDb !== shape.db) {
+      problems.push(`${name} sets POSTGRES_DB ${String(s.postgresDb)}, expected ${shape.db}${shape.db === 'postgres' ? ': the image must create no database besides the built-ins' : ''}`)
     }
     const data = s.mounts.find((m) => m.target === POSTGRES_DATA_MOUNT)
     if (!data) { problems.push(`${name} mounts no volume at ${POSTGRES_DATA_MOUNT}`); continue }

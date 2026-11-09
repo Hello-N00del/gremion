@@ -779,7 +779,8 @@ services:
       # blank issuer at boot. A blank fetch URL derives the in-network one.
       SYNAPSE_KEYCLOAK_ISSUER_URL:  ${SYNAPSE_KEYCLOAK_ISSUER_URL:-}
       SYNAPSE_KEYCLOAK_FETCH_URL:   ${SYNAPSE_KEYCLOAK_FETCH_URL:-}
-      # Scratch only: on a host the secret is the mounted file, which wins.
+      # Unused while the file below is named (the file wins, and a named unreadable file is a
+      # refusal); the scratch proof writes the same value into its own root's file.
       SYNAPSE_OIDC_CLIENT_SECRET:   ${SYNAPSE_OIDC_CLIENT_SECRET:-}
       # The host's file (below), written 0600 by `gremion-services wire`. A NAMED file the
       # shim cannot read is a refusal, never a quiet fallback to the env value.

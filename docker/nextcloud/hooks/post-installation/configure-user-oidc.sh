@@ -22,6 +22,11 @@ php /var/www/html/occ app:install user_oidc \
   || php /var/www/html/occ app:enable user_oidc \
   || echo "WARNING: user_oidc could not be installed or enabled (app store unreachable?); gremion-services wire will refuse until it is" >&2
 
+# Circles is unused (groupfolders handles committee folders) and throws on every
+# federated group event. Disabled before the early exit below: the pilot's first
+# install always takes that exit.
+php /var/www/html/occ app:disable circles 2>/dev/null || true
+
 if [ -z "${NEXTCLOUD_OIDC_CLIENT_SECRET:-}" ] || [ -z "${KEYCLOAK_OIDC_DISCOVERY_URI:-}" ]; then
   echo "user_oidc: no client secret or discovery URI at install: provider registration skipped (gremion-services wire registers it)"
   exit 0
@@ -41,10 +46,6 @@ php /var/www/html/occ user_oidc:provider Keycloak \
   --check-bearer=1 \
   --bearer-provisioning=1 \
   || echo "WARNING: the user_oidc provider could not be registered" >&2
-
-# Circles is unused (groupfolders handles committee folders) and throws on every
-# federated group event.
-php /var/www/html/occ app:disable circles 2>/dev/null || true
 
 echo "user_oidc hook finished"
 exit 0

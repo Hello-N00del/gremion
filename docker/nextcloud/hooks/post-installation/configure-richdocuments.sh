@@ -11,6 +11,14 @@
 set -u
 
 PUBLIC_URL="${COLLABORA_PUBLIC_URL:-}"
+FAILED=0
+
+# setc <key> <value> -- occ config:app:set richdocuments; a failure is a visible warning
+# (gremion-services wire reads wopi_url and public_wopi_url back and refuses without them).
+setc() {
+  php /var/www/html/occ config:app:set richdocuments "$1" --value="$2" \
+    || { echo "WARNING: occ config:app:set richdocuments $1 failed" >&2; FAILED=1; }
+}
 INTERNAL_URL="http://collabora:9980${COLLABORA_SERVICE_ROOT:-}"
 
 if [ -z "$PUBLIC_URL" ]; then
@@ -23,12 +31,12 @@ php /var/www/html/occ app:install richdocuments || php /var/www/html/occ app:ena
 
 # wopi_url        Nextcloud -> Collabora (the internal network)
 # public_wopi_url browser -> Collabora (the tenant host)
-php /var/www/html/occ config:app:set richdocuments wopi_url --value="$INTERNAL_URL"
-php /var/www/html/occ config:app:set richdocuments public_wopi_url --value="$PUBLIC_URL"
+setc wopi_url "$INTERNAL_URL"
+setc public_wopi_url "$PUBLIC_URL"
 
 # Documents the file picker offers to the editor. A PDF opens in annotation mode.
-php /var/www/html/occ config:app:set richdocuments mimetypes \
-  --value='application/pdf,application/vnd.oasis.opendocument.text,application/vnd.oasis.opendocument.spreadsheet,application/vnd.oasis.opendocument.presentation,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.openxmlformats-officedocument.presentationml.presentation'
+setc mimetypes \
+  'application/pdf,application/vnd.oasis.opendocument.text,application/vnd.oasis.opendocument.spreadsheet,application/vnd.oasis.opendocument.presentation,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.openxmlformats-officedocument.presentationml.presentation'
 
 # Fetch the WOPI discovery from Collabora and cache it. Collabora may come up after
 # Nextcloud finishes installing, so retry up to 10 times, 10 seconds apart.
@@ -52,7 +60,11 @@ fi
 
 # activate-config resets wopi_callback_url: set it back. It must be the internal
 # URL, so Collabora can reach Nextcloud for WOPI file operations.
-php /var/www/html/occ config:app:set richdocuments wopi_callback_url --value="http://nextcloud"
+setc wopi_callback_url "http://nextcloud"
 
-echo "richdocuments hook finished: internal=${INTERNAL_URL}, public=${PUBLIC_URL}"
+if [ "$FAILED" -eq 0 ]; then
+  echo "richdocuments hook finished: internal=${INTERNAL_URL}, public=${PUBLIC_URL}"
+else
+  echo "WARNING: richdocuments hook finished WITH FAILED settings (see above): internal=${INTERNAL_URL}, public=${PUBLIC_URL}" >&2
+fi
 exit 0
