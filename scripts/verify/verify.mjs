@@ -19,6 +19,7 @@ import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { evaluateSuite } from './lib/guard.mjs'
 import { headSha, isDirty } from './lib/git.mjs'
+import { writeIsolationEvidence } from './lib/isolation-evidence.mjs'
 import { parseSvelteCheckMachine } from './lib/parsers.mjs'
 import { writeRecord } from './lib/record.mjs'
 import { allowedSkipsForSuite, checkSkipsByFile, loadAllowedSkips } from './lib/skips.mjs'
@@ -29,6 +30,7 @@ import { runCarveLintSuite } from './suites/carve-lint.mjs'
 import { runFixtureMissingTool, runFixtureNodeZero, runFixtureVitestAllskip } from './suites/fixtures.mjs'
 import { DEFERRED_BATS_NOTE, INTEGRATION_PARTS, runIntegrationSuite } from './suites/integration.mjs'
 import { runIsolationSuite } from './suites/isolation.mjs'
+import { discardIsolationEvidence, ISOLATION_TENANT_PART, runIsolationTenantSuite } from './suites/isolation-tenant.mjs'
 import { runMigrationHashSuite } from './suites/migration-hash.mjs'
 import { runObservabilitySuite } from './suites/observability.mjs'
 import { runTypecheckSuite } from './suites/typecheck.mjs'
@@ -68,6 +70,12 @@ export const SUITE_REGISTRY = {
   // isolation (TRD-065/067) ran solely as a side effect of gremion-ui's vite
   // include glob; nothing here named or pinned it. See suites/isolation.mjs.
   isolation: () => runIsolationSuite({ root: REPO_ROOT }),
+  // Pilot wave 2: the per-module cross-customer proof the module enable gate
+  // reads, and the PRODUCER of scripts/verify/out/isolation/<sha>.json. It needs
+  // a throwaway Postgres (ISOLATION_TENANT_PG_URL), so it is reachable only
+  // through `--only isolation:tenant` and is NOT in required-suites.txt
+  // (meta.test.mjs stays green). See suites/isolation-tenant.mjs.
+  [ISOLATION_TENANT_PART]: () => runIsolationTenantSuite({ root: REPO_ROOT }),
   // TASK-036 (L1-17, TRD-178): declared health census of the production renders.
   census: () => runCensusSuite(),
   // TASK-075 (TRD-361): a migration that would break the serving colour is
@@ -218,6 +226,9 @@ export function runAll(names, { skipsData = loadAllowedSkips(), registry = SUITE
       skipped: raw.skipped ?? 0,
       detail: raw.detail ?? '',
       durationMs: Date.now() - startedAt,
+      // Only the isolation:tenant part carries one; runVerify strips it from
+      // the record and hands it to the evidence writer (never trusted from a record).
+      ...(raw.evidence ? { evidence: raw.evidence } : {}),
     }
   }
   return results
@@ -250,6 +261,8 @@ export function runVerify(argv, deps = {}) {
     headShaFn = headSha,
     runAllFn = runAll,
     writeRecordFn = writeRecord,
+    writeEvidenceFn = writeIsolationEvidence,
+    discardEvidenceFn = discardIsolationEvidence,
     loadRequiredFn = loadRequiredSuites,
     loadSkipsFn = loadAllowedSkips,
     log = console.log,
@@ -306,47 +319,76 @@ export function runVerify(argv, deps = {}) {
 
   for (const name of names) log(formatLine(name, results[name]))
 
-  if (touchesRealSuite) {
-    // A suite (or anything else) that edits tracked files, or a commit made
-    // in this checkout mid-run, means the results describe no single commit.
-    // No record is written: a green record here would authorize bytes that
-    // were never tested as a whole.
-    const shaAfter = headShaFn(repoRoot)
-    if (shaAfter !== sha) {
-      error(`[verify] FAILED -- HEAD moved during the run (${sha} -> ${shaAfter}); no record written, re-run on a quiet checkout`)
+  // The isolation:tenant part carries per-module evidence (kept vitest
+  // reports in a temp directory). Whatever happens below, those are removed.
+  try {
+    if (touchesRealSuite) {
+      // A suite (or anything else) that edits tracked files, or a commit made
+      // in this checkout mid-run, means the results describe no single commit.
+      // No record is written: a green record here would authorize bytes that
+      // were never tested as a whole.
+      const shaAfter = headShaFn(repoRoot)
+      if (shaAfter !== sha) {
+        error(`[verify] FAILED -- HEAD moved during the run (${sha} -> ${shaAfter}); no record written, re-run on a quiet checkout`)
+        return 1
+      }
+      if (isDirtyFn(repoRoot)) {
+        error('[verify] FAILED -- the tree changed during the run (tracked edits or new untracked files); no record written')
+        return 1
+      }
+    }
+
+    const allPass = names.every((n) => results[n]?.status === 'pass')
+    const partial = only !== null
+
+    if (touchesRealSuite) {
+      const { path: recordFile } = writeRecordFn({
+        sha,
+        suites: stripEvidence(results),
+        only: partial ? names.join(',') : null,
+        startedAt,
+        finishedAt,
+        deferred: [DEFERRED_BATS_NOTE],
+      })
+      log(`[verify] record: ${recordFile}${partial ? ' (partial -- never satisfies check-record.mjs)' : ''}`)
+    }
+
+    // The isolation evidence (pilot wave 2): written only for a run of
+    // isolation:tenant ALONE that passed, here, after the dirty-tree and
+    // HEAD-moved checks above and next to the record. Any refusal is a failure.
+    const isolation = results[ISOLATION_TENANT_PART]
+    if (isolation?.evidence) {
+      if (allPass && names.length === 1) {
+        try {
+          const { path: evidenceFile } = writeEvidenceFn({ sha, names, result: isolation, startedAt, finishedAt })
+          log(`[verify] isolation evidence: ${evidenceFile}`)
+        } catch (err) {
+          error(`[verify] FAILED -- ${err?.message ?? err}`)
+          return 1
+        }
+      } else if (allPass) {
+        log(`[verify] no isolation evidence: it is produced only by a run of ${ISOLATION_TENANT_PART} alone (--only ${ISOLATION_TENANT_PART})`)
+      }
+    }
+
+    if (!allPass) {
+      error('[verify] FAILED')
       return 1
     }
-    if (isDirtyFn(repoRoot)) {
-      error('[verify] FAILED -- the tree changed during the run (tracked edits or new untracked files); no record written')
-      return 1
+    if (partial) {
+      log('[verify] partial run OK (--only) -- this does NOT satisfy check-record.mjs')
+      return 0
     }
-  }
-
-  const allPass = names.every((n) => results[n]?.status === 'pass')
-  const partial = only !== null
-
-  if (touchesRealSuite) {
-    const { path: recordFile } = writeRecordFn({
-      sha,
-      suites: results,
-      only: partial ? names.join(',') : null,
-      startedAt,
-      finishedAt,
-      deferred: [DEFERRED_BATS_NOTE],
-    })
-    log(`[verify] record: ${recordFile}${partial ? ' (partial -- never satisfies check-record.mjs)' : ''}`)
-  }
-
-  if (!allPass) {
-    error('[verify] FAILED')
-    return 1
-  }
-  if (partial) {
-    log('[verify] partial run OK (--only) -- this does NOT satisfy check-record.mjs')
+    log('[verify] all suites PASS')
     return 0
+  } finally {
+    discardEvidenceFn(results[ISOLATION_TENANT_PART]?.evidence)
   }
-  log('[verify] all suites PASS')
-  return 0
+}
+
+/** results without the isolation evidence (it is not part of the record). */
+function stripEvidence(results) {
+  return Object.fromEntries(Object.entries(results).map(([name, r]) => [name, Object.fromEntries(Object.entries(r).filter(([k]) => k !== 'evidence'))]))
 }
 
 // Re-exported for lib/parsers.mjs consumers that want the machine-check
