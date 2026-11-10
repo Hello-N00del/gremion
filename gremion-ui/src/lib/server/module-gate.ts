@@ -13,11 +13,13 @@ import { moduleRoutePrefixes } from '$lib/modules/registry'
 /**
  * F5 r2: routes that stay reachable although their owning module is OFF. A former
  * subscriber must always be able to opt out, so BOTH the unsubscribe page and its
- * API are exempt (exact match; every other newsletter route stays gated).
+ * API are exempt (exact match; every other newsletter route stays gated). The content
+ * e-mail footer links to its own opt-out page, which is exempt on the same grounds.
  */
 export const MODULE_GATE_EXEMPT: readonly string[] = Object.freeze([
   '/newsletter/unsubscribe',
   '/api/newsletter/unsubscribe',
+  '/content/unsubscribe',
 ])
 
 /**

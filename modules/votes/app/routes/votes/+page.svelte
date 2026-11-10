@@ -160,8 +160,8 @@
   <!-- Page head -->
   <div class="page-head">
     <div>
-      <div class="eyebrow">Abstimmungen &amp; Wahlen</div>
-      <h1 class="page-title">Wahl- und Meinungsbilder</h1>
+      <div class="eyebrow">{data.electionsEnabled ? 'Abstimmungen & Wahlen' : 'Abstimmungen'}</div>
+      <h1 class="page-title">{data.electionsEnabled ? 'Wahl- und Meinungsbilder' : 'Meinungsbilder'}</h1>
       <div class="page-sub">
         {#if data.electionsEnabled}
           Zwei Stimmen-Arten: <b>Helios</b> für anonyme, verifizierbare Wahlen ·

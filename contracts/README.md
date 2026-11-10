@@ -40,13 +40,14 @@ Route-directory coverage:
 
 | Spec file | Covers (route-dir prefixes, relative to `src/routes/`) |
 |---|---|
-| `openapi.governance.json` | `api/governance/**` (8 files) · `api/groups/**` (2) · `api/health` (1) · exact-route extra: `api/committees/[id]/child-term` (governance helper under a non-governance prefix) |
+| `openapi.governance.json` | `api/governance/**` (8 files) · `api/groups/**` (2) · `api/users` (1, the member search only) · `api/health` (1) · exact-route extra: `api/committees/[id]/child-term` (governance helper under a non-governance prefix) |
 
 **Excluded routes** (get contracts when/if they become service surfaces):
 `api/auth`, `api/committees/[id]/beschluesse*` (protocols domain), `api/internal`,
 `api/members`, `api/protocols`, `api/public`, `api/settings`, `api/setup` — satellite glue.
-(`api/users*` is not excluded, it is ABSENT: the users-admin surface left the kernel
-with its module in the carve. That break is what the spec's own `info.description`
+(`api/users` is not excluded: its one operation, `GET /api/users`, is the member search of the
+committee add-member panel and is in the spec since 1.2.0. The rest of the users-admin
+surface (`api/users/*`) is ABSENT: it left the kernel with its module in the carve. That break is what the spec's own `info.description`
 still narrates ("v0.2.0 (breaking)"); `info.version` itself is `1.0.0` — TASK-030
 decision 3 bumped every spec to 1.0.0 since the re-init has no consumers yet, so the
 plain major/minor rule applies going forward, and the carve break predates that reset.)

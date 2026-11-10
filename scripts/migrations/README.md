@@ -53,7 +53,7 @@ database. `legacyFloor` / `legacy[]` are written once and never edited
 
 | Chain | Database | Dirs | Pad | Files |
 |---|---|---|---|---|
-| `kernel-data` | kernel | `gremion-ui/migrations` + block `modules/content/app/migrations` [1200, 1299] | 4 | 31 legacy (<= 0058) + 1200, 1201 |
+| `kernel-data` | kernel | `gremion-ui/migrations` + block `modules/content/app/migrations` [1200, 1299] | 4 | 31 legacy (<= 0058) + 1200, 1201, 1202 |
 | `control` | control | `gremion-ui/migrations-control` | 3 | 5 legacy (<= 006, gap at 005) |
 | `module-<id>` | module:<id> | `modules/<id>/migrations` (board, calendar, content, finance, publishing, vault) | 3 | 15, numbers kept |
 | `kernel-api` | service:kernel-api | `services/kernel-api/migrations/{bodies,authz,roles,erasure}` | 4 | none yet |

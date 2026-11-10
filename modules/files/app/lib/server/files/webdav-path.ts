@@ -54,10 +54,24 @@ export function sanitizeRelPath(paramPath: string): string {
   if (/[\\\u0000-\u001f\u007f]/.test(decoded)) {
     throw error(400, 'Invalid path characters')
   }
-  if (decoded.split('/').some((seg) => seg === '..')) {
+  // A segment fetch's URL parser reduces to `.` or `..` climbs out of the namespace just
+  // like a bare `..`: it cuts the path at the first `?` or `#` and trims a space around the
+  // dots (`..?x`, `..#x`, `.. `). The files leaf and finance leaf copies must agree.
+  if (decoded.split('/').some(isDotSegment)) {
     throw error(400, 'Path traversal not allowed')
   }
   return decoded.replace(/^\/+/, '')
+}
+
+function isDotSegment(seg: string): boolean {
+  const head = seg.split(/[?#]/, 1)[0].trim()
+  return head === '.' || head === '..'
+}
+
+/** Percent-encode each segment of an already-sanitised relative path exactly once
+ *  ('/' separators kept), so a `?` or `#` in a name cannot end the URL path. */
+function encodeRelPath(sanitizedRel: string): string {
+  return sanitizedRel.split('/').map(encodeURIComponent).join('/')
 }
 
 /**
@@ -68,7 +82,7 @@ export function sanitizeRelPath(paramPath: string): string {
  * non-alphanumeric identifiers Keycloak may emit as `preferred_username`.
  */
 export function buildWebdavPath(ncUsername: string, paramPath: string): string {
-  const clean = sanitizeRelPath(paramPath)
+  const clean = encodeRelPath(sanitizeRelPath(paramPath))
   return `/remote.php/dav/files/${encodeURIComponent(ncUsername)}/${clean}`
 }
 
@@ -93,7 +107,7 @@ export function validatePublishedPdfPath(pdfPath: string): string {
     pdfPath.startsWith('/protocols/published/') &&
     !pdfPath.includes('%') &&
     !hasUnsafeChar &&
-    !pdfPath.split('/').some((seg) => seg === '..')
+    !pdfPath.split('/').some(isDotSegment)
   if (!ok) throw error(400, 'Invalid published PDF path')
   return pdfPath
 }

@@ -44,6 +44,8 @@ export 'package:gremion_kernel_governance_client/src/model/api_groups_post201_re
 export 'package:gremion_kernel_governance_client/src/model/api_groups_post201_response_data.dart';
 export 'package:gremion_kernel_governance_client/src/model/api_groups_post_request.dart';
 export 'package:gremion_kernel_governance_client/src/model/api_health_get200_response.dart';
+export 'package:gremion_kernel_governance_client/src/model/api_users_get200_response.dart';
+export 'package:gremion_kernel_governance_client/src/model/api_users_get200_response_data_inner.dart';
 export 'package:gremion_kernel_governance_client/src/model/committee_member.dart';
 export 'package:gremion_kernel_governance_client/src/model/committee_role.dart';
 export 'package:gremion_kernel_governance_client/src/model/governance_error.dart';

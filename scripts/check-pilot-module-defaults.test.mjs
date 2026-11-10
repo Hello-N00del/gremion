@@ -1,12 +1,13 @@
 #!/usr/bin/env node
-// node --test suite for the pilot module defaults check (TASK-058-A). Each RED
-// case mutates a throwaway tree and asserts on the report text.
+// node --test suite for the pilot module defaults check (TASK-058-A; pilot wave 2 task 3 widened the set to
+// votes, calendar, content, publishing, files, messaging). Each RED case mutates a throwaway tree and asserts
+// on the report text.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
-import { ROOT, REQUEST_PATH, PANEL_FORM, ENV_DIR, runChecks } from './check-pilot-module-defaults.mjs'
+import { ROOT, REQUEST_PATH, PANEL_FORM, ENV_DIR, PILOT_IDS, runChecks } from './check-pilot-module-defaults.mjs'
 
 function fixture() {
   const root = mkdtempSync(join(tmpdir(), 't058-'))
@@ -14,8 +15,8 @@ function fixture() {
     mkdirSync(dirname(join(root, rel)), { recursive: true })
     writeFileSync(join(root, rel), text)
   }
-  put(REQUEST_PATH, JSON.stringify({ enable: ['votes'] }))
-  for (const id of ['votes', 'elections', 'finance']) put(`modules/${id}/module.json`, JSON.stringify({ id, runtime: { version: '1.0.0' } }))
+  put(REQUEST_PATH, JSON.stringify({ enable: [...PILOT_IDS] }))
+  for (const id of [...PILOT_IDS, 'elections', 'finance', 'board']) put(`modules/${id}/module.json`, JSON.stringify({ id, runtime: { version: '1.0.0' } }))
   put(`${ENV_DIR}/app.env.tmpl`, 'STACK=x\nCOMPOSE_PROFILES=production\n')
   put(`${ENV_DIR}/mail.env.tmpl`, 'COMPOSE_PROFILES=mail\n')
   put(PANEL_FORM, readFileSync(join(ROOT, PANEL_FORM), 'utf8'))
@@ -40,6 +41,40 @@ test('RED (a): elections in the pilot request', () => {
   } finally { f.cleanup() }
 })
 
+test('the pilot set is votes, calendar, content, publishing, files, messaging', () => {
+  assert.deepEqual([...PILOT_IDS].sort(), ['calendar', 'content', 'files', 'messaging', 'publishing', 'votes'])
+})
+
+test('GREEN (a): content and publishing are part of the pilot request', () => {
+  const f = fixture()
+  try {
+    const enable = JSON.parse(readFileSync(join(f.root, REQUEST_PATH), 'utf8')).enable.sort()
+    assert.deepEqual(enable, ['calendar', 'content', 'files', 'messaging', 'publishing', 'votes'])
+    assert.deepEqual(failures(f.root), [])
+  } finally { f.cleanup() }
+})
+
+test('RED (a): each pilot module missing from the request is named', () => {
+  const f = fixture()
+  try {
+    for (const id of PILOT_IDS) {
+      f.put(REQUEST_PATH, JSON.stringify({ enable: PILOT_IDS.filter((x) => x !== id) }))
+      assert.match(failures(f.root).join('\n'), new RegExp(`\\(a\\) the pilot request does not enable ${id}`), id)
+    }
+  } finally { f.cleanup() }
+})
+
+test('RED (a): board, finance, vault and handover stay out of the request', () => {
+  const f = fixture()
+  try {
+    for (const id of ['board', 'finance', 'vault', 'handover']) {
+      f.put(`modules/${id}/module.json`, JSON.stringify({ id }))
+      f.put(REQUEST_PATH, JSON.stringify({ enable: [...PILOT_IDS, id] }))
+      assert.match(failures(f.root).join('\n'), new RegExp(`\\(a\\) the pilot request enables "${id}"`), id)
+    }
+  } finally { f.cleanup() }
+})
+
 test('RED (a): votes missing, and an id without a module.json', () => {
   const f = fixture()
   try {
@@ -58,6 +93,18 @@ test('RED (b): finance on a COMPOSE_PROFILES line; zero lines is also a failure'
     f.put(`${ENV_DIR}/app.env.tmpl`, 'X=1\n')
     f.put(`${ENV_DIR}/mail.env.tmpl`, 'X=1\n')
     assert.match(failures(f.root).join('\n'), /no COMPOSE_PROFILES line found/)
+  } finally { f.cleanup() }
+})
+
+test('RED (b): vault and board stay off a COMPOSE_PROFILES line, content may be on one (the content leaf is a pilot service)', () => {
+  const f = fixture()
+  try {
+    f.put(`${ENV_DIR}/app.env.tmpl`, 'COMPOSE_PROFILES=production,content\n')
+    assert.deepEqual(failures(f.root), [])
+    for (const p of ['vault', 'board', 'vaultwarden']) {
+      f.put(`${ENV_DIR}/app.env.tmpl`, `COMPOSE_PROFILES=production,${p}\n`)
+      assert.match(failures(f.root).join('\n'), new RegExp(`\\(b\\) app.env.tmpl:1 COMPOSE_PROFILES names "${p}"`), p)
+    }
   } finally { f.cleanup() }
 })
 

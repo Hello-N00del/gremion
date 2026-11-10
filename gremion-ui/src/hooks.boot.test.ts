@@ -633,10 +633,10 @@ describe('the full handle sequence (TASK-023)', () => {
     const mod = await import('./hooks.server')
     await mod.boot()
     const tenant = { id: 't1', slug: 't1', issuer: 'https://kc/realms/t1' }
-    // TASK-205c: the newsletter callbacks are public (exact PUBLIC_PATHS entries, each self-guarded by its secret); the
-    // content callback is not until the content half is enabled, so it still takes the session gate.
-    const res = await throughHandle(mod, '/api/internal/content/portal-publish', tenant)
-    expect(authHandleCalls).toEqual(['/api/internal/content/portal-publish'])
+    // The leaf callbacks are public (exact PUBLIC_PATHS entries, each self-guarded by its secret); any other
+    // tenant-resolved /api/internal/ path (here the push route) still takes the session gate.
+    const res = await throughHandle(mod, '/api/internal/push', tenant)
+    expect(authHandleCalls).toEqual(['/api/internal/push'])
     // ...and then the session guard: no session, so a machine-readable 401.
     expect(res.status).toBe(401)
   })
@@ -777,9 +777,9 @@ describe('authGuard boot gate (TASK-023 item 3)', () => {
     const mod = await import('./hooks.server')
     await mod.boot()
     const o = await (async () => {
-      // TASK-205c: not a newsletter callback (those are public by exact path, each self-guarded by its secret): the
-      // content callback stays behind the session until the content half is enabled.
-      const event = makeFakeEvent('/api/internal/content/portal-publish')
+      // Not a leaf callback (those are public by exact path, each self-guarded by its secret): the push route
+      // stays behind the session.
+      const event = makeFakeEvent('/api/internal/push')
       event.locals.tenant = { id: 't1', slug: 't1', issuer: 'https://kc/realms/t1' }
       event.locals.auth = async () => null
       let reached = false
@@ -827,6 +827,10 @@ describe('authGuard publicPaths segment-boundary matching (netcup T03)', () => {
     { entry: '/newsletter/unsubscribe', attack: '/newsletter/unsubscribe/extra' },
     { entry: '/api/newsletter/unsubscribe', attack: '/api/newsletter/unsubscribes' },
     { entry: '/api/newsletter/unsubscribe', attack: '/api/newsletter/unsubscribe/extra' },
+    // Content's opt-out page is exact too. (The leaf callback's negatives need a resolved tenant, since an
+    // unresolved /api/internal/ request skips the guard by design: see the leaf callbacks block below.)
+    { entry: '/content/unsubscribe', attack: '/content/unsubscribeX' },
+    { entry: '/content/unsubscribe', attack: '/content/unsubscribe/extra' },
   ] as const
 
   for (const { entry, attack } of BOUNDARY_LESS_ENTRIES) {
@@ -895,6 +899,8 @@ describe('authGuard publicPaths segment-boundary matching (netcup T03)', () => {
     { entry: '/api/internal/newsletter/render', path: '/api/internal/newsletter/render' },
     { entry: '/api/internal/newsletter/resolve-group', path: '/api/internal/newsletter/resolve-group' },
     { entry: '/api/internal/newsletter/send-mail', path: '/api/internal/newsletter/send-mail' },
+    { entry: '/content/unsubscribe', path: '/content/unsubscribe' },
+    { entry: '/api/internal/content/portal-publish', path: '/api/internal/content/portal-publish' },
     { entry: '/api/setup/seed', path: '/api/setup/seed' },
     { entry: '/api/health', path: '/api/health' },
     { entry: '/api/public/protocols/*/pdf', path: '/api/public/protocols/42/pdf' },
@@ -906,8 +912,10 @@ describe('authGuard publicPaths segment-boundary matching (netcup T03)', () => {
   // only the two page trees '/auth/' and '/legal/' stay prefixes.
   // TASK-205b: plus the messaging module's three public entries (LiveKit proxy, Element Call SPA).
   // TASK-205c: plus the publishing module's five (unsubscribe page and API, the three leaf callbacks), all exact.
+  // Content (wave 2 task 3): plus its opt-out page and its leaf callback, both exact.
   const FIVE = [
     '/api/health',
+    '/api/internal/content/portal-publish',
     '/api/internal/newsletter/render',
     '/api/internal/newsletter/resolve-group',
     '/api/internal/newsletter/send-mail',
@@ -917,6 +925,7 @@ describe('authGuard publicPaths segment-boundary matching (netcup T03)', () => {
     '/auth/',
     '/element-call',
     '/element-call/',
+    '/content/unsubscribe',
     '/legal/',
     '/livekit/',
     '/newsletter/unsubscribe',
@@ -1087,6 +1096,10 @@ describe('authGuard leaf callbacks (TASK-205c)', () => {
 
   const tenant = { id: 't1', slug: 't1', issuer: 'https://kc/realms/t1' }
   const NEWSLETTER_CALLBACKS = ['/api/internal/newsletter/render', '/api/internal/newsletter/resolve-group', '/api/internal/newsletter/send-mail']
+  // The content leaf's callback (guarded by INTERNAL_CONTENT_SECRET in its handler) and the e-mail footer's opt-out
+  // page: a recipient has no session, and an external subscriber has no account at all.
+  const CONTENT_CALLBACKS = ['/api/internal/content/portal-publish']
+  const UNSUBSCRIBE_PAGES = ['/content/unsubscribe']
 
   async function guard(path: string): Promise<{ res: Response; resolved: boolean }> {
     const mod = await import('./hooks.server')
@@ -1105,7 +1118,7 @@ describe('authGuard leaf callbacks (TASK-205c)', () => {
     return { res, resolved }
   }
 
-  for (const path of NEWSLETTER_CALLBACKS) {
+  for (const path of [...NEWSLETTER_CALLBACKS, ...CONTENT_CALLBACKS, ...UNSUBSCRIBE_PAGES]) {
     it(`serves the tenant-resolved callback '${path}' without a session (its handler checks the secret)`, async () => {
       const { res, resolved } = await guard(path)
       expect(resolved).toBe(true)
@@ -1113,12 +1126,32 @@ describe('authGuard leaf callbacks (TASK-205c)', () => {
     })
   }
 
+  it("serves the opt-out form POST of '/content/unsubscribe' without a session too (the page's action consumes the token)", async () => {
+    const mod = await import('./hooks.server')
+    await mod.boot()
+    const event = makeFakeEvent('/content/unsubscribe')
+    event.request = new Request('http://localhost/content/unsubscribe?token=abc', { method: 'POST' })
+    event.locals.tenant = tenant
+    event.locals.auth = async () => null
+    let resolved = false
+    const res = (await mod.authGuard({
+      event: event as never,
+      resolve: async () => {
+        resolved = true
+        return new Response('public', { status: 200 })
+      },
+    } as never)) as Response
+    expect(resolved).toBe(true)
+    expect(res.status).toBe(200)
+  })
+
   for (const path of [
     '/api/internal/newsletter/render/extra',
     '/api/internal/newsletter/renderX',
     '/api/internal/newsletter/',
     '/api/internal/newsletter/other',
-    '/api/internal/content/portal-publish',
+    '/api/internal/content/portal-publish/extra',
+    '/api/internal/content/other',
     '/api/internal/push',
   ]) {
     it(`does NOT serve the tenant-resolved '${path}' without a session: a 401`, async () => {
@@ -1128,15 +1161,13 @@ describe('authGuard leaf callbacks (TASK-205c)', () => {
     })
   }
 
-  it('PUBLIC_PATHS holds exactly the newsletter keys of LEAF_CALLBACK_ROUTES (content stays guarded until its half is enabled)', async () => {
+  it('PUBLIC_PATHS holds exactly the keys of LEAF_CALLBACK_ROUTES (newsletter and content) plus the two opt-out pages', async () => {
     const mod = await import('./hooks.server')
     const { LEAF_CALLBACK_ROUTES } = await import('$lib/server/tenant/leaf-trust')
-    const newsletterKeys = Object.keys(LEAF_CALLBACK_ROUTES).filter((k) => k.startsWith('/api/internal/newsletter/'))
-    expect(newsletterKeys.toSorted()).toEqual([...NEWSLETTER_CALLBACKS].toSorted())
-    for (const key of newsletterKeys) expect(mod.PUBLIC_PATHS).toContain(key)
-    for (const key of Object.keys(LEAF_CALLBACK_ROUTES).filter((k) => !k.startsWith('/api/internal/newsletter/'))) {
-      expect(mod.PUBLIC_PATHS, `${key} is a content callback: public only with the content half`).not.toContain(key)
-    }
+    const keys = Object.keys(LEAF_CALLBACK_ROUTES)
+    expect(keys.toSorted()).toEqual([...NEWSLETTER_CALLBACKS, ...CONTENT_CALLBACKS].toSorted())
+    for (const key of keys) expect(mod.PUBLIC_PATHS).toContain(key)
+    expect(mod.PUBLIC_PATHS).toContain('/content/unsubscribe')
   })
 })
 

@@ -379,13 +379,18 @@ export const PUBLIC_PATHS: readonly string[] = [
   // by a recipient with no session. The page and its API are EXACT routes (nothing below them is public); the API
   // consumes a single-use token and answers 400/404/410 without a valid one. The three callbacks are the publishing
   // leaf's LEAF_CALLBACK_ROUTES keys (tenant/leaf-trust.ts): each handler refuses without INTERNAL_NEWSLETTER_SECRET
-  // in x-internal-auth (constantTimeEqual), and nothing else under /api/internal/newsletter/ is public. Content's
-  // callback and unsubscribe join with the content half when it is enabled.
+  // in x-internal-auth (constantTimeEqual), and nothing else under /api/internal/newsletter/ is public.
+  // Content half (enabled in the pilot set): the content e-mail footer links to /content/unsubscribe, opened by a
+  // recipient with no session (an external subscriber has no account at all), and the content leaf's portal-publish
+  // callback is a machine call that carries no session; its handler refuses without INTERNAL_CONTENT_SECRET in
+  // x-internal-auth (constantTimeEqual). Both are exact entries, nothing below them is public.
   '/newsletter/unsubscribe',
   '/api/newsletter/unsubscribe',
+  '/content/unsubscribe',
   '/api/internal/newsletter/render',
   '/api/internal/newsletter/resolve-group',
   '/api/internal/newsletter/send-mail',
+  '/api/internal/content/portal-publish',
   '/api/setup/seed',
   '/api/health',
   '/api/public/protocols/*/pdf',

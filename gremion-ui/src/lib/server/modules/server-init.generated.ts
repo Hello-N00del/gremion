@@ -10,6 +10,7 @@
 // under bare tsx/Node, not just the Vite graph).
 import '../board/register.server'
 import '../calendar/register.server'
+import '../content/register.server'
 import '../elections/register.server'
 import '../files/register.server'
 import '../governance/register.server'

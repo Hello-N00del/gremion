@@ -1082,6 +1082,61 @@ rule_case() {  # <router> <rule> -> runs verify with that router's rule replaced
     [[ "$output" == *"etc/edge/tenant-a.yml declares router tenant-b-1"* ]]
 }
 
+# A second router in tenant-a.yml, live in the fake traefik with the rule the file carries, the way
+# the services wave emits tenant-<slug>.office (Collabora) and tenant-<slug>.kc beside the host router.
+emitted_extra_router() {  # <router name> <service>
+    local name="$1" svc="$2" rule='Host(`tenant-a.example.org`) && PathPrefix(`/office`)'
+    awk -v n="$name" -v s="$svc" -v r="$rule" '
+        {print}
+        /^  routers:$/ && !d {
+            print "    " n ":"
+            print "      entryPoints: [\"websecure\"]"
+            print "      rule: \"" r "\""
+            print "      service: \"" s "\""
+            print "      priority: 100"
+            print "      middlewares:"
+            print "        - \"edge-hostpin-a@file\""
+            print "        - \"edge-hsts-custom@docker\""
+            print "        - \"edge-ratelimit-app@docker\""
+            print "      tls:"
+            print "        certResolver: \"le-http\""
+            d=1
+        }' "${GREMION_ROOT}/etc/edge/tenant-a.yml" > "${GREMION_ROOT}/etc/edge/t.new"
+    mv "${GREMION_ROOT}/etc/edge/t.new" "${GREMION_ROOT}/etc/edge/tenant-a.yml"
+    api_edit routers ". + [{\"name\":\"${name}@file\",\"status\":\"enabled\",\"entryPoints\":[\"websecure\"],
+        \"rule\":\"${rule}\",\"service\":\"${svc}\",\"tls\":{\"certResolver\":\"le-http\"},
+        \"middlewares\":[\"edge-hostpin-a@file\",\"edge-hsts-custom@docker\",\"edge-ratelimit-app@docker\"]}]"
+    # collabora's docker-label service, which the office router targets
+    api_edit services 'if any(.[]; .name == "collabora@docker") then . else . + [{"name":"collabora@docker","loadBalancer":{"servers":[{"url":"http://collabora:9980"}]}}] end'
+}
+
+@test "emitted: the services-wave routers tenant-<slug>.office and tenant-<slug>.kc are accepted" {
+    emitted_extra_router tenant-a.office collabora@docker
+    emitted_extra_router tenant-a.kc keycloak@docker
+    run "$VERIFY" --hosts "$HOSTS"
+    [[ "$output" != *"which is not tenant-a"* ]]
+    [[ "$output" != *"tenant-a.office"* ]]
+    [[ "$output" != *"tenant-a.kc"* ]]
+}
+
+@test "emitted: tenant-<slug>-<i>.office is accepted on an indexed host" {
+    emitted_extra_router tenant-a-2.office collabora@docker
+    run "$VERIFY" --hosts "$HOSTS"
+    [[ "$output" != *"which is not tenant-a"* ]]
+    [[ "$output" != *"tenant-a-2.office"* ]]
+}
+
+@test "emitted: a foreign or wider router name is still refused (other tenant, other suffix, indexed .kc, stacked suffixes)" {
+    local bad
+    for bad in tenant-b.office tenant-a.evil tenant-a-1.kc tenant-a.kc.office tenant-a.office.office tenant-a. tenant-ax.office; do
+        emitted_file a tenant-a.example.org
+        emitted_extra_router "$bad" collabora@docker
+        run "$VERIFY" --hosts "$HOSTS"
+        [ "$status" -eq 1 ]
+        [[ "$output" == *"etc/edge/tenant-a.yml declares router ${bad}, which is not tenant-a"* ]]
+    done
+}
+
 @test "the router functions are wired into run_pass, in order" {
     local body
     body="$(sed -n '/^run_pass() {/,/^}/p' "$VERIFY")"

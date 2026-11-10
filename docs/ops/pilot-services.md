@@ -190,13 +190,10 @@ not offered for the pilot.
   backends this install runs; board runs in-process and has no evidence row, so
   a second customer needs it first. Votes, files and messaging are proven at the
   app layer against a shared Nextcloud and Synapse.
-- **Router names.** `gremion-verify` expects emitted router names of the form
-  `tenant-<slug>[-<i>]`; the realm router (`.kc`) and the Collabora router
-  (`.office`) carry a dot suffix and are not yet recognised by that check.
-  The `.office` router is also emitted for every routed host whether or not
-  Collabora runs; on a host without it traefik lists that router as not
-  enabled. Making it conditional on the collabora profile, and teaching the
-  check both names, is one follow-up (`gremion-verify` and the router input),
+- **Office router.** The `.office` router is emitted for every routed host
+  whether or not Collabora runs; on a host without it traefik lists that router
+  as not enabled, and `gremion-verify` reports it as not live. Making it
+  conditional on the collabora profile is one follow-up (the router input),
   owed with the post-deploy verification.
 - **Platform pins.** Only the apex host pin is declared on the `traefik`
   service; the `www`, `control` and `sales` pins belong to the static routers

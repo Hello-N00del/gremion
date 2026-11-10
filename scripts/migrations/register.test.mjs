@@ -286,8 +286,8 @@ test('real tree: kernel-data holds the 31 legacy files (floor 58), the F1-FIX-02
   assert.ok(s.lock.chains['kernel-data'].files['0059_audit_log_chain_anchor.sql'], '0059 is not in the lock')
   const files = s.files.filter((f) => k.dirs.some((d) => f.path.startsWith(`${d}/`)))
   assert.ok(s.lock.chains['kernel-data'].files['0060_erasure_report.sql'], '0060 is not in the lock')
-  // every claimed number above the legacy floor has a file (no gap), plus the content app block (1200, 1201)
-  assert.equal(files.length, k.legacy.length + (k.highWater - k.legacyFloor) + 2)
+  // every claimed number above the legacy floor has a file (no gap), plus the content app block (1200, 1201, 1202)
+  assert.equal(files.length, k.legacy.length + (k.highWater - k.legacyFloor) + 3)
   assert.equal(s.slugs.slugs.length, 29)
 })
 

@@ -60,7 +60,7 @@ export const portalRenderer: ChannelRenderer<PortalPreview> = {
 	 *   - no linkage → delegate to portalCallback (creates/anchors the row, inside a
 	 *     tx with setPublication so the news_posts row and its linkage commit
 	 *     atomically). Never creates a duplicate; idempotency is anchored by
-	 *     content_origin_post_id (migration 047).
+	 *     content_origin_post_id (migration 1202).
 	 * `updateNewsBodyHtml` re-sanitizes the body at the storage boundary.
 	 */
 	async publish(post: Post, _media: PostMedia[], _channel: PostChannel): Promise<PublishResult> {
