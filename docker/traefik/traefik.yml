@@ -88,8 +88,9 @@ entryPoints:
         - "@EDGE_V6_SUBNET@"
     # The read timeout covers the WHOLE request body (Traefik's default is 60 s). A file upload
     # is one PUT of up to 100 MiB (BODY_SIZE_LIMIT in docker-compose.app.yml), which at venue
-    # uplink speeds takes longer than a minute: the default would cut it mid-body. Guarded by
-    # scripts/check-app-compose-env.test.mjs.
+    # uplink speeds takes longer than a minute: the default would cut it mid-body. The app hop
+    # needs the same budget (Node's own request timeout is 300 s): gremion-ui/scripts/serve.mjs.
+    # Both are guarded by scripts/check-app-compose-env.test.mjs.
     transport:
       respondingTimeouts:
         readTimeout: "600s"

@@ -159,7 +159,9 @@
         const targetPath = (rootPath ? rootPath + '/' : '') + filename
 
         uploadingName = filename
-        const res = await fetch('/api/files/' + targetPath, {
+        // Each segment is encoded: a raw # or ? in a name would end the URL path there, and the
+        // PUT would store the file under the truncated name and still answer 200.
+        const res = await fetch('/api/files/' + targetPath.split('/').map(encodeURIComponent).join('/'), {
           method: 'PUT',
           headers: { 'Content-Type': file.type || 'application/octet-stream' },
           body: file

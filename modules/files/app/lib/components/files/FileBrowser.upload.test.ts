@@ -64,6 +64,20 @@ describe('FileBrowser upload', () => {
     expect(calls.some((c) => c.url.includes('upload-chunk'))).toBe(false)
   })
 
+  it('encodes each path segment: a # or ? in the name stays in the path, never becomes a fragment or a query', async () => {
+    const calls = stubFetch(() => ({ ok: true, status: 201 }))
+    const { container } = render(FileBrowser, { props: { rootPath: 'docs/Sitzung 1', readonly: false } })
+    await pick(container, [fileOfSize('Protokoll #3.pdf', 1 * MIB), fileOfSize('a?b.pdf', 1 * MIB)])
+    await waitFor(() => expect(calls.filter((c) => c.method !== 'GET')).toHaveLength(2))
+    const urls = calls.filter((c) => c.method !== 'GET').map((c) => c.url)
+    expect(urls).toEqual(['/api/files/docs/Sitzung%201/Protokoll%20%233.pdf', '/api/files/docs/Sitzung%201/a%3Fb.pdf'])
+    for (const u of urls) {
+      const parsed = new URL(u, 'https://example.test')
+      expect(parsed.hash).toBe('')
+      expect(parsed.search).toBe('')
+    }
+  })
+
   it('refuses a file above 100 MiB: no request leaves, the German too-large message shows', async () => {
     const calls = stubFetch(() => ({ ok: true, status: 201 }))
     const { container, findByText } = render(FileBrowser, { props: { rootPath: '', readonly: false } })

@@ -162,6 +162,42 @@ test('the public entrypoint gives a body as large as the upload cap time to arri
   assert.ok(Number(timeout[1]) >= 600, `readTimeout ${timeout[1]}s is below 600s`)
 })
 
+test('the app server waits as long as the edge does: the image starts the serve wrapper, whose requestTimeout is at least the websecure readTimeout', () => {
+  // adapter-node's own server leaves Node's requestTimeout at its 300 s default, which cuts a slow
+  // body at the app while the edge (readTimeout) still allows it. gremion-ui/scripts/serve.mjs lifts it.
+  const edge = /respondingTimeouts:\s*\n\s+readTimeout:\s*"?(\d+)s"?/.exec(read('docker/traefik/traefik.yml'))
+  assert.ok(edge, 'no websecure readTimeout in docker/traefik/traefik.yml')
+  const serve = read('gremion-ui/scripts/serve.mjs')
+  const app = /REQUEST_TIMEOUT_MS\s*=\s*(\d+)\s*\*\s*1000/.exec(serve)
+  assert.ok(app, 'gremion-ui/scripts/serve.mjs does not write REQUEST_TIMEOUT_MS as <n> * 1000')
+  assert.ok(Number(app[1]) >= Number(edge[1]), `app requestTimeout ${app[1]}s is below the edge readTimeout ${edge[1]}s`)
+  const cmd = /^CMD\s+(\[.*\])\s*$/m.exec(read('gremion-ui/Dockerfile'))
+  assert.ok(cmd, 'gremion-ui/Dockerfile has no CMD')
+  assert.deepEqual(JSON.parse(cmd[1]), ['node', 'scripts/serve.mjs'])
+  assert.match(read('gremion-ui/Dockerfile'), /^COPY --from=builder \/repo\/gremion-ui\/scripts\/serve\.mjs \.\/scripts\/serve\.mjs$/m)
+})
+
+test('serve.mjs sets requestTimeout on the adapter-node http server, and the value is what Node reports', async () => {
+  const { mkdtempSync, mkdirSync, writeFileSync, copyFileSync, rmSync } = await import('node:fs')
+  const { tmpdir } = await import('node:os')
+  const { pathToFileURL } = await import('node:url')
+  const dir = mkdtempSync(join(tmpdir(), 'serve-wrapper-'))
+  try {
+    // A stand-in for adapter-node's build/index.js, which exports the polka app; polka keeps the http server on .server.
+    mkdirSync(join(dir, 'build'))
+    mkdirSync(join(dir, 'scripts'))
+    writeFileSync(join(dir, 'package.json'), '{"type":"module"}')
+    writeFileSync(join(dir, 'build', 'index.js'), "import http from 'node:http'\nexport const server = { server: http.createServer() }\nglobalThis.__serveProbeServer = server.server\n")
+    copyFileSync(join(ROOT, 'gremion-ui/scripts/serve.mjs'), join(dir, 'scripts', 'serve.mjs'))
+    await import(pathToFileURL(join(dir, 'scripts', 'serve.mjs')).href)
+    assert.equal(globalThis.__serveProbeServer.requestTimeout, 600 * 1000)
+    assert.notEqual(globalThis.__serveProbeServer.requestTimeout, 300000)
+  } finally {
+    delete globalThis.__serveProbeServer
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 test('backend table: exactly the three leaf backends are `service`; no FILES_, VOTES_, MESSAGES_ or BOARD_BACKEND key exists in any app compose', () => {
   for (const file of ['docker-compose.app.yml', 'docker-compose.app.dev.yml']) {
     const text = read(file).split(/\r?\n/).filter((l) => !/^\s*#/.test(l)).join('\n')
