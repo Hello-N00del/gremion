@@ -416,7 +416,8 @@ postgres_services() {
 # as the kernel's user fails with "role does not exist". The server is therefore
 # asked for the user it was created with (its container environment, the same
 # value compose passed it), and the kernel's $POSTGRES_USER is used only when it
-# cannot answer (an image that carries no such variable runs as `postgres`).
+# cannot answer (an image that carries no such variable runs as `postgres`); the
+# fallback is announced, never silent.
 # A role's default database is named after it and does not exist for those
 # servers, so every psql connects to the maintenance database `postgres`, which
 # every server has.
@@ -433,7 +434,12 @@ resolve_pg_user() {   # $1 = compose service name; sets PG_USER
     done <<<"$PG_USER_CACHE"
     u="$( ( cd "$RELEASE_DIR" && docker compose --env-file "$STATE_ENV" exec -T "$1" \
             printenv POSTGRES_USER </dev/null ) 2>/dev/null | tr -d '\r' | sed '/^[[:space:]]*$/d' | head -n 1 )" || u=""
-    [[ "$u" =~ ^[A-Za-z0-9_]+$ ]] || u="$POSTGRES_USER"
+    if ! [[ "$u" =~ ^[A-Za-z0-9_]+$ ]]; then
+        u="$POSTGRES_USER"
+        # Said on stderr so that no caller's command substitution captures it; a
+        # later "role does not exist" then traces back to this lookup.
+        info "could not read POSTGRES_USER from ${1}; using ${u}" >&2
+    fi
     PG_USER_CACHE="${PG_USER_CACHE}${1}"$'\t'"${u}"$'\n'
     PG_USER="$u"
 }

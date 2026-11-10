@@ -466,8 +466,8 @@ exit 0'
     [[ "$output" == *"volumes enumerated: 10"* ]]
     # Repeated --filter label= is ANDed by docker, so the two projects MUST be
     # two calls; one call with both filters returns nothing.
-    assert_recorded docker "label=com.docker.compose.project=staging-state"
-    assert_recorded docker "label=com.docker.compose.project=staging-mail"
+    assert_recorded docker "volume ls -q --filter label=com.docker.compose.project=staging-state"
+    assert_recorded docker "volume ls -q --filter label=com.docker.compose.project=staging-mail"
 }
 
 @test "an enumeration that returns zero volumes refuses to back up" {
@@ -1876,8 +1876,7 @@ staged_dump_files() {
     # The listed server is not reported as missing.
     [[ "$output" != *"missing from BACKUP_POSTGRES_SERVICES: postgres"* ]]
     # It was the engine's labelled, state-project containers that were asked.
-    assert_recorded docker "label=org.gremion.postgres"
-    assert_recorded docker "label=com.docker.compose.project=staging-state"
+    assert_recorded docker "ps --filter label=org.gremion.postgres --filter label=com.docker.compose.project=staging-state"
 }
 
 @test "the server cross-check refuses before anything is staged or dumped" {
@@ -1985,4 +1984,7 @@ staged_dump_files() {
     run "$BACKUP" --class daily --label user-fallback
     [ "$status" -eq 0 ]
     assert_recorded docker "exec -T postgres pg_dump -U postgres t_pilot"
+    # The fallback is not silent: a later "role does not exist" can be traced to
+    # the failed lookup.
+    [[ "$output" == *"could not read POSTGRES_USER from postgres; using postgres"* ]]
 }
