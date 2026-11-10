@@ -154,7 +154,8 @@ and the member import.
    shared account, named by the `CALDAV_CALENDAR_TEMPLATE` the running leaf
    carries (`gremion-{slug}`), and reads it back; the leaf has no way to create
    the collection, and without a per-tenant target its CalDAV drain refuses
-   every customer;
+   every customer; under `MAIL_TRANSPORT=relay` it also wires the customer's
+   mail login (step 6c below);
 7. recreates `gremion-ui` and reads the bot token back from the running
    container.
 
@@ -168,6 +169,46 @@ the client secret reaches `docker exec` by name (`-e NAME`), and the bot token
 only through files and shell variables. The one named exception is `occ`'s own
 argument vector inside the `nextcloud` container, which carries the client
 secret for the length of the call because `occ` has no other input.
+
+### Step 6c: the customer's mail login (relay transport only)
+
+With `MAIL_TRANSPORT=relay` (`etc/env/mail.env`) every mail of the app, the
+invitations and the newsletter included, goes through the one relay login.
+`wire` sets it up after the calendar collection and before the `gremion-ui`
+recreate, so no separate restart and no hand step remain. Under any other
+transport it does nothing and says so.
+
+Preconditions, checked with the other facts before anything is written: the
+password file named by `RELAY_SMTP_PASSWORD_REF` (default
+`etc/secrets/mail/relay-password`) exists, is not empty, belongs to the owner of
+`etc/secrets` and is mode `0600`; `RELAY_SMTP_HOST`, `RELAY_SMTP_PORT`,
+`RELAY_SMTP_USER` and `RELAY_FROM_DOMAIN` (the domain the relay signs; it
+defaults to `PLATFORM_DOMAIN`) are read from `mail.env`, none is hardcoded. An
+empty `RELAY_SMTP_USER` is a relay that allows the host by address: no password
+is copied and the entry carries no login.
+
+1. copies the password file to `<TENANT_SECRETS_DIR>/relay-smtp-password`
+   (`0600`, the directory's owner), on every run, so a rotated password
+   propagates. It goes through a pipe: it is in no variable, no argv and no
+   output;
+2. merges `smtp` into `tenant.domain_profile` of the control database
+   (`domain_profile || jsonb_build_object('smtp', ...)`, so `residencyZone` and
+   every other key stay): `host`, `port`, `from` (`"Gremion"
+   <no-reply@<from domain>>`), `user` and `passwordRef`
+   (`file:/run/secrets/tenants/relay-smtp-password`). The values are psql
+   variables, never part of the SQL text; the row is read back and every other
+   key must be unchanged;
+3. writes `smtp.configured: true`, `host`, `port` and `from_address` into the
+   tenant's `config.json` from inside the `gremion-ui` container that owns the
+   volume (a temporary file, then a rename, owner and mode of the old file
+   kept) and reads the file back. Without `configured` every app mail throws
+   `SmtpUnconfiguredError`, even though the registry entry is set. This replaces
+   the hand edit of the Settings page's mail step;
+4. reads from the running container, before and after the recreate, that
+   `/run/secrets/tenants/relay-smtp-password` is readable and not empty.
+
+Not done by `wire`: one test mail to the operator's address (named residual
+below), and the first Settings save, which is not needed any more.
 
 ## Video: TURN
 
@@ -199,6 +240,11 @@ not offered for the pilot.
   as not enabled, and `gremion-verify` reports it as not live. Making it
   conditional on the collabora profile is one follow-up (the router input),
   owed with the post-deploy verification.
+- **Mail login proof.** Step 6c reads its writes back (row, config file, the
+  password file inside the container) but sends no message: whether the relay
+  accepts the login is proven by one real mail from the running app (owed after
+  deploy, below). A reset removes the copied password file and the control
+  database, so `wire` is part of every install that follows one.
 - **Platform pins.** Only the apex host pin is declared on the `traefik`
   service; the `www`, `control` and `sales` pins belong to the static routers
   that are not part of this install.
@@ -212,4 +258,7 @@ event, one content post and one newsletter draft saved and read back through
 the leaves, and that event listed in the customer's CalDAV collection of
 Nextcloud (the collection step of `wire` reads `occ dav:list-calendars`, whose
 table layout is not yet seen against a running Nextcloud); a video call between two accounts, with the TCP fallback checked
-from a network that blocks UDP.
+from a network that blocks UDP. With the relay transport: after `wire`, one
+invitation or newsletter test mail sent from the running app arrives (the relay
+accepts the login and signs the From domain), and the Settings page's mail step
+shows the relay as configured without a hand edit.

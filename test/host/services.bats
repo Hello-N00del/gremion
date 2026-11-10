@@ -14,6 +14,7 @@ SLUG='alpha-rat'
 TOKEN='syt_TESTBOTTOKENvalueABCDEF'
 SYN_SECRET='synapse-client-secret-value-1234'
 NC_SECRET='nextcloud-client-secret-value-5678'
+RELAY_PW='relay-app-password-value-9012'
 
 setup() {
     setup_host_root
@@ -40,7 +41,14 @@ SYNAPSE_KEYCLOAK_ISSUER_URL=
 SYNAPSE_KEYCLOAK_FETCH_URL=
 SYNAPSE_REGISTRATION_SHARED_SECRET=reg-secret-fixture
 SYNAPSE_ADMIN_TOKEN=placeholder-not-the-token
+POSTGRES_USER=gremion_pg
+CONTROL_DB_NAME=control
 ENV
+    # what the control database's tenant row and the tenant's config.json hold before the wire (the shims keep them)
+    printf '{"residencyZone":"eu"}
+' > "${GREMION_ROOT}/tenant-row.json"
+    printf '{"setup_complete":true,"smtp":{"configured":false,"host":"","port":587,"from_address":"","from_name":""}}
+' > "${GREMION_ROOT}/ui-config.json"
     local c
     for c in blue green; do
         printf 'STACK=guardstack\nCOLOUR=%s\nTENANT_SECRETS_DIR=%s/tenant-secrets\nSYNAPSE_ADMIN_TOKEN=placeholder-not-the-token\nPILOT_TENANT_HOST=pilot.guard.example.org\n' "$c" "$GREMION_ROOT" > "${GREMION_ROOT}/etc/env/app-${c}.env"
@@ -65,6 +73,7 @@ case " $* " in
   *" ps "*"service=matrix"*)        echo c-matrix; exit 0 ;;
   *" ps "*"service=nextcloud"*)     echo c-nextcloud; exit 0 ;;
   *" ps "*"service=gremion-ui"*)    echo c-ui; exit 0 ;;
+  *" ps "*"service=postgres"*)      echo c-pg; exit 0 ;;
   *" ps "*"service=calendar-service"*)
     if [ -f "$GREMION_ROOT/no-calendar-leaf" ]; then exit 0; fi
     echo c-calendar; exit 0 ;;
@@ -120,6 +129,37 @@ case " $* " in
     echo "https://pilot.guard.example.org/office"; exit 0 ;;
   *" exec "*"config:app:get richdocuments wopi_url"*) echo "http://collabora:9980/office"; exit 0 ;;
   *" exec "*"richdocuments:activate-config"*) printf "occ activate-config\n" >> "$ORDER"; exit 0 ;;
+  *" exec "*"psql "*)
+    # the control database: the SQL arrives on stdin, every value as -v name=value; the tenant row is a file
+    sql="$(cat)"
+    printf "%s\n--\n" "$sql" >> "$GREMION_ROOT/psql-sql.log"
+    row="$GREMION_ROOT/tenant-row.json"
+    prev=""; for a in "$@"; do
+      if [ "$prev" = "-v" ]; then k="${a%%=*}"; v="${a#*=}"; eval "V_$k=\$v"; fi
+      prev="$a"
+    done
+    case "$sql" in
+      *"UPDATE tenant"*)
+        if [ -f "$GREMION_ROOT/no-tenant-row" ]; then echo 0; exit 0; fi
+        printf "psql-update\n" >> "$ORDER"
+        jq --arg h "$V_host" --argjson p "$V_port" --arg f "$V_from" --arg u "$V_user" --arg r "$V_pref" ".smtp = ({host:\$h,port:\$p,from:\$f} + (if \$u != \"\" then {user:\$u,passwordRef:\$r} else {} end))" "$row" > "$row.new" && mv "$row.new" "$row"
+        echo 1; exit 0 ;;
+      *"SELECT domain_profile"*)
+        if [ -f "$GREMION_ROOT/no-tenant-row" ]; then exit 0; fi
+        jq -c . "$row"; exit 0 ;;
+    esac
+    exit 0 ;;
+  *" exec "*"node -"*)
+    # the tenant config write inside gremion-ui: the program arrives on stdin, the values by NAME in the environment
+    cat > "$GREMION_ROOT/ui-config-js.log"
+    if [ -f "$GREMION_ROOT/config-write-fails" ]; then echo "EACCES: permission denied" >&2; exit 1; fi
+    printf "ui-config\n" >> "$ORDER"
+    cfg="$GREMION_ROOT/ui-config.json"
+    jq --arg h "$WIRE_SMTP_HOST" --argjson p "$WIRE_SMTP_PORT" --arg f "$WIRE_SMTP_FROM" ".smtp = ((.smtp // {}) + {configured:true,host:\$h,port:\$p,from_address:\$f})" "$cfg" > "$cfg.new" && mv "$cfg.new" "$cfg"
+    jq -c .smtp "$cfg"; exit 0 ;;
+  *" exec "*"test -r /run/secrets/tenants/relay-smtp-password"*)
+    if [ -f "$GREMION_ROOT/relay-pw-invisible" ]; then exit 1; fi
+    exit 0 ;;
   *" exec "*"curl "*) exit 0 ;;
   *" exec "*) exit 0 ;;
 esac
@@ -424,4 +464,176 @@ wire() { run "$SVC" wire "${1:-$SLUG}"; }
     owner="$(stat -c '%u:%g' "${GREMION_ROOT}/etc/secrets")"
     grep -qF -- "chown ${owner} ${GREMION_ROOT}/etc/secrets/synapse" "$SHIM_LOG" || { cat "$SHIM_LOG"; return 1; }
     grep -qF -- "chown ${owner} ${GREMION_ROOT}/etc/secrets/synapse/oidc_client_secret" "$SHIM_LOG"
+}
+
+# ---------------------------------------------------------------------------
+# Step 6c: the customer's mail login. Active only when MAIL_TRANSPORT=relay: the relay password is
+# copied where gremion-ui mounts the tenant secrets, the tenant row's domain_profile gets its smtp
+# entry (MERGED: the keys it already holds stay) and the tenant's config.json is marked configured.
+# ---------------------------------------------------------------------------
+
+# relay_mail [user] -- a relay-mode mail.env, the relay password file the ref names (0600)
+relay_mail() {
+    local user="${1-relay-login@example.org}"
+    cat > "${GREMION_ROOT}/etc/env/mail.env" <<ENV
+STACK=guardstack
+MAIL_TRANSPORT=relay
+RELAY_SMTP_HOST=relay.example.org
+RELAY_SMTP_PORT=587
+RELAY_SMTP_USER=${user}
+RELAY_SMTP_PASSWORD_REF=secret:mail/relay-password
+RELAY_FROM_DOMAIN=mail.example.org
+PLATFORM_DOMAIN=platform.guard.example.org
+ENV
+    mkdir -p "${GREMION_ROOT}/etc/secrets/mail"
+    printf '%s\n' "$RELAY_PW" > "${GREMION_ROOT}/etc/secrets/mail/relay-password"
+    chmod 600 "${GREMION_ROOT}/etc/secrets/mail/relay-password"
+}
+
+@test "wire with MAIL_TRANSPORT=relay: the relay password is copied (0600) to the tenant secrets directory and is on no argv and no output line" {
+    relay_mail
+    wire
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
+    local f="${GREMION_ROOT}/tenant-secrets/relay-smtp-password"
+    [ -s "$f" ] || { echo "no password file at ${f}"; return 1; }
+    [ "$(cat "$f")" = "$RELAY_PW" ] || { echo "the copy differs from the source"; return 1; }
+    if fs_carries_modes "${GREMION_ROOT}/tenant-secrets"; then
+        [ "$(stat -c %a "$f")" = 600 ]
+    fi
+    ! grep -qF -- "$RELAY_PW" "$SHIM_LOG" || { echo "the relay password reached an argv"; return 1; }
+    ! grep -qF -- "$RELAY_PW" <<< "$output" || { echo "the relay password reached the output"; return 1; }
+    ! grep -qF -- "$RELAY_PW" "${GREMION_ROOT}/psql-sql.log" || { echo "the relay password reached the SQL"; return 1; }
+}
+
+@test "wire with MAIL_TRANSPORT=relay: domain_profile gets its smtp entry MERGED (residencyZone stays), the values come from mail.env and the password is never read" {
+    relay_mail
+    wire
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
+    local row="${GREMION_ROOT}/tenant-row.json"
+    jq -e '.residencyZone == "eu"' "$row" >/dev/null || { echo "residencyZone was dropped: $(cat "$row")"; return 1; }
+    jq -e '.smtp == {host:"relay.example.org", port:587, from:"\"Gremion\" <no-reply@mail.example.org>", user:"relay-login@example.org", passwordRef:"file:/run/secrets/tenants/relay-smtp-password"}' "$row" >/dev/null \
+        || { echo "smtp entry: $(cat "$row")"; return 1; }
+    # the statement merges into the column (||) and never replaces it, and carries no value inline
+    local sql="${GREMION_ROOT}/psql-sql.log"
+    grep -qE 'domain_profile *= *domain_profile *\|\|' "$sql" || { cat "$sql"; return 1; }
+    grep -q "WHERE slug = :'slug'" "$sql"
+    ! grep -qF 'relay.example.org' "$sql" || { echo "a value is inlined in the SQL"; return 1; }
+    # it runs in the control database, as the state project's postgres user, with every value as a psql variable
+    local call
+    call="$(grep '^docker exec -i c-pg psql' "$SHIM_LOG" | grep -- 'v host=' | head -1)"
+    [[ "$call" == *"-U gremion_pg -d control"* ]] || { echo "$call"; return 1; }
+    [[ "$call" == *"-v slug=${SLUG}"* && "$call" == *"-v host=relay.example.org"* && "$call" == *"-v port=587"* ]] || { echo "$call"; return 1; }
+    ! grep -qF -- "$RELAY_PW" <<< "$call"
+}
+
+@test "wire with MAIL_TRANSPORT=relay: the tenant config.json is marked smtp.configured with host, port and from_address, by names in the environment, before gremion-ui is recreated" {
+    relay_mail
+    wire
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
+    jq -e '.smtp.configured == true and .smtp.host == "relay.example.org" and .smtp.port == 587 and .smtp.from_address == "no-reply@mail.example.org" and .setup_complete == true' "${GREMION_ROOT}/ui-config.json" >/dev/null \
+        || { cat "${GREMION_ROOT}/ui-config.json"; return 1; }
+    # written inside the container that owns the volume: tmp file, then rename, owner kept
+    grep -q 'renameSync' "${GREMION_ROOT}/ui-config-js.log"
+    grep -q 'chownSync' "${GREMION_ROOT}/ui-config-js.log"
+    local call
+    call="$(grep '^docker exec -i .*c-ui node -' "$SHIM_LOG" | head -1)"
+    [[ "$call" == *"-e WIRE_SLUG"* && "$call" == *"-e WIRE_SMTP_HOST"* && "$call" == *"-e WIRE_SMTP_PORT"* && "$call" == *"-e WIRE_SMTP_FROM"* ]] || { echo "$call"; return 1; }
+    ! grep -E '^docker .* -e [A-Z_]+=' "$SHIM_LOG" || { echo "a value-carrying -e"; return 1; }
+    # row, then config, then the recreate that makes a separate restart unnecessary
+    local r c u
+    r="$(grep -n '^psql-update$' "$ORDER" | head -1 | cut -d: -f1)"
+    c="$(grep -n '^ui-config$' "$ORDER" | head -1 | cut -d: -f1)"
+    u="$(grep -n 'force-recreate gremion-ui' "$ORDER" | head -1 | cut -d: -f1)"
+    [ -n "$r" ] && [ -n "$c" ] && [ -n "$u" ] || { echo "missing step: r=${r} c=${c} u=${u}"; return 1; }
+    [ "$r" -lt "$u" ] && [ "$c" -lt "$u" ] || { echo "after the recreate: r=${r} c=${c} u=${u}"; return 1; }
+    [[ "$output" == *"mail login"* ]]
+}
+
+@test "wire with MAIL_TRANSPORT=relay is idempotent and re-copies a rotated password on every run; the row keeps one smtp entry and the other keys" {
+    relay_mail
+    wire
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
+    printf '%s\n' 'rotated-relay-password-3456' > "${GREMION_ROOT}/etc/secrets/mail/relay-password"
+    chmod 600 "${GREMION_ROOT}/etc/secrets/mail/relay-password"
+    : > "$ORDER"
+    wire
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
+    [ "$(cat "${GREMION_ROOT}/tenant-secrets/relay-smtp-password")" = 'rotated-relay-password-3456' ]
+    jq -e '.residencyZone == "eu" and (.smtp | keys) == ["from","host","passwordRef","port","user"]' "${GREMION_ROOT}/tenant-row.json" >/dev/null \
+        || { cat "${GREMION_ROOT}/tenant-row.json"; return 1; }
+    [ "$(grep -c '^psql-update$' "$ORDER")" = 1 ]
+}
+
+@test "wire with a relay that has no login (RELAY_SMTP_USER empty, an address-allow-listed relay): no password is copied and the smtp entry has no user and no passwordRef" {
+    relay_mail ""
+    rm -f "${GREMION_ROOT}/etc/secrets/mail/relay-password"
+    wire
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
+    [ ! -e "${GREMION_ROOT}/tenant-secrets/relay-smtp-password" ]
+    jq -e '.residencyZone == "eu" and .smtp == {host:"relay.example.org", port:587, from:"\"Gremion\" <no-reply@mail.example.org>"}' "${GREMION_ROOT}/tenant-row.json" >/dev/null \
+        || { cat "${GREMION_ROOT}/tenant-row.json"; return 1; }
+    jq -e '.smtp.configured == true' "${GREMION_ROOT}/ui-config.json" >/dev/null
+}
+
+@test "wire under another transport (stalwart) does nothing for the mail login: no password file, no SQL, no config write, and it says so" {
+    relay_mail
+    sed -i 's/^MAIL_TRANSPORT=.*/MAIL_TRANSPORT=stalwart/' "${GREMION_ROOT}/etc/env/mail.env"
+    wire
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
+    [ ! -e "${GREMION_ROOT}/tenant-secrets/relay-smtp-password" ]
+    [ ! -e "${GREMION_ROOT}/psql-sql.log" ] || { echo "SQL ran under stalwart"; return 1; }
+    ! grep -q '^ui-config$' "$ORDER"
+    ! grep -q 'psql' "$SHIM_LOG"
+    [ "$(jq -c . "${GREMION_ROOT}/tenant-row.json")" = '{"residencyZone":"eu"}' ]
+    [[ "$output" == *"MAIL_TRANSPORT=stalwart"* ]] || { echo "$output"; return 1; }
+}
+
+@test "wire with a relay password file that is absent, empty or not owner-only refuses before anything is written (exit 2)" {
+    relay_mail
+    rm -f "${GREMION_ROOT}/etc/secrets/mail/relay-password"
+    wire
+    [ "$status" -eq 2 ] || { echo "status=$status $output"; return 1; }
+    [[ "$output" == *"relay-password"* ]]
+    : > "${GREMION_ROOT}/etc/secrets/mail/relay-password"
+    chmod 600 "${GREMION_ROOT}/etc/secrets/mail/relay-password"
+    wire
+    [ "$status" -eq 2 ] || { echo "empty file: status=$status $output"; return 1; }
+    printf '%s\n' "$RELAY_PW" > "${GREMION_ROOT}/etc/secrets/mail/relay-password"
+    if fs_carries_modes "${GREMION_ROOT}/etc/secrets/mail"; then
+        chmod 644 "${GREMION_ROOT}/etc/secrets/mail/relay-password"
+        wire
+        [ "$status" -eq 2 ] || { echo "mode 644: status=$status $output"; return 1; }
+        [[ "$output" == *"600"* ]]
+    fi
+    # nothing was written or started by any of the refusals
+    [ -z "$(sed -n 's/^SYNAPSE_KEYCLOAK_ISSUER_URL=//p' "${GREMION_ROOT}/etc/env/state.env")" ]
+    [ ! -e "${GREMION_ROOT}/tenant-secrets/relay-smtp-password" ]
+    ! grep -q compose "$ORDER"
+}
+
+@test "wire with a relay and no tenant row for the slug fails (exit 1) before gremion-ui is recreated" {
+    relay_mail
+    : > "${GREMION_ROOT}/no-tenant-row"
+    wire
+    [ "$status" -eq 1 ] || { echo "status=$status $output"; return 1; }
+    [[ "$output" == *"tenant"* ]]
+    ! grep -q 'force-recreate gremion-ui' "$ORDER"
+    ! grep -q '^ui-config$' "$ORDER"
+}
+
+@test "wire with a relay whose config.json write fails (exit 1) names the cause and does not recreate gremion-ui" {
+    relay_mail
+    : > "${GREMION_ROOT}/config-write-fails"
+    wire
+    [ "$status" -eq 1 ] || { echo "status=$status $output"; return 1; }
+    [[ "$output" == *"config.json"* ]]
+    ! grep -q 'force-recreate gremion-ui' "$ORDER"
+}
+
+@test "wire with a relay whose password file is not visible inside gremion-ui fails the wire (the bind mount is read back from the running container)" {
+    relay_mail
+    : > "${GREMION_ROOT}/relay-pw-invisible"
+    wire
+    [ "$status" -eq 1 ] || { echo "status=$status $output"; return 1; }
+    [[ "$output" == *"relay-smtp-password"* ]]
 }
