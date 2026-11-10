@@ -150,6 +150,41 @@ describe('the Module section is shown only when an action can be queued', () => 
   })
 })
 
+describe('a failed or refused request names its cause (the events of the newest request, any kind)', () => {
+  const CAUSE = [
+    { level: 'info', step: 'phase-a', message: 'DNS check for the host' },
+    { level: 'error', step: 'phase-a', message: 'DNS check failed: rat.proof.example does not resolve; mail to rat@proof.example not sent' },
+  ]
+  it.each([
+    ['a failed create', { kind: 'create', state: 'failed', outcome: 'create proof-z: failed in phase-a (exit 1)' }],
+    ['a refused create', { kind: 'create', state: 'refused', outcome: 'refused: no isolation result' }],
+    ['a failed enable_module', { kind: 'enable_module', state: 'failed', outcome: 'x: failed in enable (exit 1)' }],
+    ['a failed seed_vertical', { kind: 'seed_vertical', state: 'failed', outcome: 'x: failed in seed (exit 1)' }],
+  ])('%s: the events are loaded, with any address redacted', async (_n, over) => {
+    rows = [row(over)]
+    events = CAUSE
+    const d = await loadFor()
+    expect(d.failureEvents.map((e: { message: string }) => e.message)).toEqual(['DNS check for the host', 'DNS check failed: rat.proof.example does not resolve; mail to [address] not sent'])
+  })
+  it('a succeeded request shows no failure block', async () => {
+    rows = [row({ kind: 'create', state: 'succeeded' })]
+    events = CAUSE
+    expect((await loadFor()).failureEvents).toEqual([])
+  })
+  it('a request that still runs shows no failure block', async () => {
+    rows = [row({ kind: 'create', state: 'running' })]
+    events = CAUSE
+    expect((await loadFor()).failureEvents).toEqual([])
+  })
+  it('the kinds whose events the page already shows in their own section (reconcile, import_members) are not shown twice', async () => {
+    events = CAUSE
+    rows = [row({ kind: 'reconcile', state: 'failed', outcome: 'x: failed in reconcile (exit 1)' })]
+    expect((await loadFor()).failureEvents).toEqual([])
+    rows = [row({ kind: 'import_members', state: 'failed', outcome: 'x: failed in apply (exit 1)' })]
+    expect((await loadFor()).failureEvents).toEqual([])
+  })
+})
+
 describe('enable_module', () => {
   it('submits the module with the explicit DPIA decision and the document reference, operator and signed evidence, fresh key', async () => {
     await expect(act('enable_module', ENABLE)).rejects.toMatchObject({ status: 303 })

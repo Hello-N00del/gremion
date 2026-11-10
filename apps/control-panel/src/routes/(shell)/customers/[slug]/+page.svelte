@@ -34,6 +34,11 @@
     {:else if data.latest.retryNote}
       <p class="muted">{data.latest.retryNote}</p>
     {/if}
+    {#if data.failureEvents.length}
+      <h3>Letzte Meldungen des Ausführers</h3>
+      <pre class="events">{#each data.failureEvents as e, i (i)}{e.level === 'error' ? '! ' : '  '}{e.message}
+{/each}</pre>
+    {/if}
   </section>
 {/if}
 

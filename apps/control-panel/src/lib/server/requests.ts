@@ -160,8 +160,12 @@ export function submitRefusal(err: unknown): SubmitRefused {
       return new SubmitRefused(409, 'Dieser Schlüssel wurde schon für eine andere Anfrage benutzt. Bitte das Formular neu laden.')
     case '22023':
       return new SubmitRefused(400, 'Die Anfrage wurde von der Datenbank abgelehnt (ungültige Angaben).')
-    default:
+    default: {
+      // the 503 sends the operator to the panel log: write the cause there, name and SQLSTATE only (the message can carry form content)
+      const e = err as { name?: string } | null
+      console.error(`[control-panel] request write failed: ${e?.name ?? 'Error'}: ${code ?? 'no-sqlstate'}`)
       return new SubmitRefused(503, 'Die Anfrage konnte nicht gespeichert werden (Plattform-Datenbank; Details im Panel-Log).', err)
+    }
   }
 }
 

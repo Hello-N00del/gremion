@@ -3,7 +3,7 @@
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { createArgs, DENY_REASONS, listModuleChoices, PRINTABLE, PROVEN_MODULES, RESERVED_SLUGS, submitCreate, submitRefusal, SubmitRefused, validateNewCustomer, type Evidence, type NewCustomerInput } from './requests'
 
 const OP = '8d6b9c7e-1f2a-4b3c-9d4e-5f6a7b8c9d0e'
@@ -207,5 +207,28 @@ describe('submitCreate (A3/A4 at unit level): ONE call of plt.submit_provisionin
       expect((err as SubmitRefused).status).toBe(status)
     }
     expect(submitRefusal(null).status).toBe(503)
+  })
+  it('an unclassified database error is logged by name and SQLSTATE once, never its message (the 503 sends the operator to the log)', () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      submitRefusal(Object.assign(new Error('value too long for rat@proof.example'), { code: '53100', name: 'PostgresError' }))
+      expect(spy).toHaveBeenCalledTimes(1)
+      const line = String(spy.mock.calls[0]![0])
+      expect(line).toContain('PostgresError')
+      expect(line).toContain('53100')
+      expect(line).not.toContain('proof.example')
+      expect(line).not.toContain('value too long')
+    } finally {
+      spy.mockRestore()
+    }
+  })
+  it('a refusal the operator can act on is not logged as a failure', () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      for (const code of ['28000', '42501', '23505', '22023']) submitRefusal(Object.assign(new Error('x'), { code }))
+      expect(spy).not.toHaveBeenCalled()
+    } finally {
+      spy.mockRestore()
+    }
   })
 })

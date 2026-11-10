@@ -40,12 +40,15 @@ export interface EventLine {
   message: string
 }
 
-/** The events of one request, oldest first (already redacted by the executor), at most `limit`. */
+/**
+ * The NEWEST `limit` events of one request (already redacted by the executor), oldest of those first. A create
+ * writes many lines and the cause of a failure is at the tail, so the cut is made at the old end.
+ */
 export async function requestEvents(sql: postgres.Sql, requestId: string, limit = 60): Promise<EventLine[]> {
   const rows = await sql<EventLine[]>`
     SELECT level, step, message FROM plt.provisioning_request_event
-     WHERE request_id = ${requestId}::uuid ORDER BY at, event_id LIMIT ${limit}`
-  return rows.map((r) => ({ level: r.level, step: r.step, message: r.message }))
+     WHERE request_id = ${requestId}::uuid ORDER BY at DESC, event_id DESC LIMIT ${limit}`
+  return rows.reverse().map((r) => ({ level: r.level, step: r.step, message: r.message }))
 }
 
 export type DpiaForm = { ok: true; requiresDpia: boolean; documentRef: string } | { ok: false; error: string }
