@@ -26,7 +26,7 @@ setup() {
     export GREMION_EXECUTOR_PG_CONTAINER=iso-pg-fixture
     echo blue > "${GREMION_ROOT}/runtime/active-colour"
     printf 'STACK=isostack\nPOSTGRES_USER=postgres\n' > "${GREMION_ROOT}/etc/env/state.env"
-    printf 'STACK=isostack\nCOLOUR=blue\n' > "${GREMION_ROOT}/etc/env/app-blue.env"
+    printf 'STACK=isostack\nCOLOUR=blue\nTENANT_SECRETS_DIR=%s/tenant-secrets\n' "$GREMION_ROOT" > "${GREMION_ROOT}/etc/env/app-blue.env"
     printf '%s\n' "$TIP" > "${GREMION_ROOT}/tip"
     : > "${GREMION_ROOT}/git-status"
     make_evidence "$TIP" > "${GREMION_ROOT}/evidence.json"
