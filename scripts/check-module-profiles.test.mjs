@@ -41,7 +41,7 @@ const catalogueIds = () =>
       }
     })
     .filter(Boolean)
-    .sort()
+    .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))
 
 test('module profiles: every catalogue id is classified and nothing else is; pilot=false carries a reason and no profile', () => {
   const ids = catalogueIds()
@@ -66,8 +66,9 @@ test('module profiles: every named profile is known and defined by a compose fil
   const named = new Set(Object.values(MAP.modules).flatMap((m) => [...m.profiles, ...m.postRealm]))
   for (const p of named) assert.ok(known.has(p), `${p} is named by a module but not in knownProfiles`)
   for (const p of known) assert.ok(defined.has(p), `${p} is in knownProfiles but no compose file defines it`)
-  const moduleLevel = [...defined].filter((p) => !SYSTEM_PROFILES.has(p)).sort()
-  assert.deepEqual(moduleLevel, [...known].sort(), 'knownProfiles is exactly the set of module-level profiles the compose files define')
+  const byCodeUnit = (a, b) => (a < b ? -1 : a > b ? 1 : 0)
+  const moduleLevel = [...defined].filter((p) => !SYSTEM_PROFILES.has(p)).sort(byCodeUnit)
+  assert.deepEqual(moduleLevel, [...known].sort(byCodeUnit),'knownProfiles is exactly the set of module-level profiles the compose files define')
   // the profiles the pilot actually starts exist in the compose files that name them
   for (const p of ['calendar', 'content', 'newsletter', 'nextcloud', 'collabora', 'video', 'messaging']) assert.ok(defined.has(p), p)
 })

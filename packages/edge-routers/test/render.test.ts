@@ -126,13 +126,11 @@ describe('renderTenantRouter — TDD 2: what the file declares and chains', () =
       expect(block).toContain('entryPoints: ["websecure"]')
       expect(block).toMatch(/tls:\n {8}certResolver: "le-http"/)
       expect(block).not.toMatch(/HostRegexp|\|\|/)
-      if (officeBlocks.includes(block)) {
-        expect(block).toContain('service: "collabora@docker"')
-        expect(block).toContain(`rule: "Host(\`${host}\`) && PathPrefix(\`/office\`)"`)
-      } else {
-        expect(block).toContain('service: "app@file"')
-        expect(block).not.toMatch(/PathPrefix/)
-      }
+      // the office router is the only one with a path rule and the only one that reaches collabora
+      const isOffice = officeBlocks.includes(block)
+      expect(block).toContain(isOffice ? 'service: "collabora@docker"' : 'service: "app@file"')
+      expect(block.includes(`rule: "Host(\`${host}\`) && PathPrefix(\`/office\`)"`)).toBe(isOffice)
+      expect(/PathPrefix/.test(block)).toBe(isOffice)
     }
   })
 

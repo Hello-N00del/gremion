@@ -234,8 +234,9 @@ test('guard 2: the five markers sit where the render substitutes them, and no ot
   assert.equal(acme?.email, '@ACME_EMAIL@')
   assert.equal(acme?.caServer, '@ACME_CA_SERVER@')
   assert.deepEqual(doc.entryPoints?.websecure?.forwardedHeaders?.trustedIPs, ['127.0.0.1/32', '@EDGE_V4_SUBNET@', '@EDGE_V6_SUBNET@'])
-  const found = [...new Set(staticText().match(/@[A-Z][A-Z0-9_]*@/g) ?? [])].sort()
-  assert.deepEqual(found, [...MARKERS].sort())
+  const byCodeUnit = (a, b) => (a < b ? -1 : a > b ? 1 : 0)
+  const found = [...new Set(staticText().match(/@[A-Z][A-Z0-9_]*@/g) ?? [])].sort(byCodeUnit)
+  assert.deepEqual(found, [...MARKERS].sort(byCodeUnit))
   // Incident 2026-10-29: the docker provider reads only its own stack's containers.
   assert.equal(doc.providers?.docker?.constraints, 'Label(`org.gremion.stack`,`@STACK@`)')
 })
@@ -471,7 +472,7 @@ test('guard 7: matrix, livekit and collabora are routed by label correctly, and 
   assert.equal(lk.rule, `Host(\`${domain}\`) && PathPrefix(\`/livekit-sfu\`)`)
   assert.deepEqual(routerNames(r.services.livekit.labels), ['livekit'])
   assert.equal(r.services.livekit.labels['traefik.http.services.livekit.loadbalancer.server.port'], '7880')
-  for (const [name, rt] of [['matrix', mx], ['livekit', lk]]) {
+  for (const [name, rt] of Object.entries({ matrix: mx, livekit: lk })) {
     assert.equal(rt.entrypoints, 'websecure', `${name}: entrypoints`)
     assert.equal(rt.tls, 'true', `${name}: tls`)
     assert.equal(rt['tls.certresolver'], env.TRAEFIK_CERT_RESOLVER, `${name}: an explicit tls.certresolver (tls=true alone serves the default certificate)`)
