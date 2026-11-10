@@ -51,7 +51,7 @@ const isBlank = (line) => line.trim() === ''
 const isComment = (line) => line.trimStart().startsWith('#')
 
 const SCRIPT_CMD = /(?:^|[\s;&|(`'"])(node|bash|sh)(?=\s)/g
-const SCRIPT_PATH = /^[A-Za-z0-9_@.\/-]+\.(?:mjs|cjs|js|mts|cts|ts|sh)$/
+const SCRIPT_PATH = /^[A-Za-z0-9_@./-]+\.(?:mjs|cjs|js|mts|cts|ts|sh)$/
 const SEPARATORS = new Set(['&&', '||', ';', '|', '>', '>>', '<', '<<', '&'])
 
 /** The repo scripts that one line runs through node, bash or sh. */
@@ -77,7 +77,7 @@ function scriptsOfLine(line) {
 // It is read only from the `run:` of a step, and only where a command can start: at the start of a line, or after
 // `;`, `&&`, `||`, `|`, `&`, `(`, a shell keyword, `sudo`, `time` or a variable assignment. A word that an `echo`
 // prints is not a command. The path is a path from the working directory of the step (see finish() in parseJobs).
-const FILE_PATH = /^[A-Za-z0-9_@.\/-]+$/
+const FILE_PATH = /^[A-Za-z0-9_@./-]+$/
 // A word is text with quoted parts; a separator is a word of its own, also when it is written next to a word.
 const WORD_OR_SEPARATOR = /(?:"[^"]*"|'[^']*'|[^\s;&|<>("'])+|&&|\|\||[;&|<>(]/g
 const IS_SEPARATOR = /^(?:&&|\|\||[;&|<>(])$/
@@ -158,9 +158,9 @@ function dirOfValue(v) {
 // key of an item of `include:`. A key in a deeper map, in another key, or in `exclude:` does not count.
 const MAX_DEPTH = 8
 const MAX_FLOW_LINES = 200
-const KEY_START = /^("[^"]*"|'[^']*'|[A-Za-z0-9_.@\/-]+)\s*:(?=\s|$)/
+const KEY_START = /^("[^"]*"|'[^']*'|[A-Za-z0-9_.@/-]+)\s*:(?=\s|$)/
 const DASH_START = /^-(?:\s|$)/
-const FLOW_SCALAR = /^(?:"[^"]*"|'[^']*'|(?:\$\{\{[^}]*\}\}|[^,\]}\[{])*)/
+const FLOW_SCALAR = /^(?:"[^"]*"|'[^']*'|(?:\$\{\{[^}]*\}\}|[^,\]}[{])*)/
 const isBare = (o) => o !== null && typeof o === 'object' && !Array.isArray(o)
 
 /** A value in flow style, read from the start of `s`: { node, rest }. */

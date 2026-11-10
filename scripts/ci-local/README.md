@@ -129,7 +129,12 @@ never skips the rest, so the dated result always shows every arm's outcome:
    line and the dated JSON holds it (with the full report in `output`). The
    check's exit codes are 0 (it ran, stale items allowed), 1 (a leak: a host
    name, an address or a credential in the generated page, `ste-text.json` or
-   `template.html`) and 3 (the tool itself failed). Only exit 1 **fails** the
+   `template.html`) and 3 (the tool itself failed). The check scans the two
+   hand-written files, `ste-text.json` and `template.html`, **first**, before
+   the extractor runs, so a leak in them is exit 1 even when the extractor, the
+   `typescript` pre-check or `ste-lint` then fails. What a failed run leaves
+   unchecked is the generated page (and the two files too, when the tool cannot
+   read them or cannot start). Only exit 1 **fails** the
    arm, and only when the report names a leak, because Node also exits 1 when
    the tool crashes before it can report. Exit 3, a timeout, a crash, or the
    tool file or `typescript` being absent (a kernel-only checkout with no

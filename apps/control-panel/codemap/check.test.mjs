@@ -42,9 +42,18 @@ describe('analyse', () => {
     expect(r.lists.undescribedAreas).toEqual(['area:b@L3'])
     expect(r.lists.ambiguousSteps).toHaveLength(1)
     expect(r.report).toContain('moved')
-    expect(r.report).toContain('old text')
     expect(r.report).toContain('area:gone@L3')
     expect(r.report).toContain('STE findings: 5')
+  })
+
+  it('a stale step is reported by walkthrough, step and function, never by its text (a value planted in the text stays out of the report, the warnings and the table)', () => {
+    const planted = `${['203', '0', '113', '9'].join('.')} planted-in-stale-step`
+    const r = run({ walkthroughs: [{ title: 'W', steps: [{ text: planted, file: 'x.ts', function: 'moved' }] }] })
+    expect(r.lists.staleSteps).toHaveLength(1)
+    expect(r.report).toContain('moved')
+    expect(r.report).not.toContain('planted-in-stale-step')
+    expect(r.report).not.toContain(planted)
+    expect(r.warnings.join('\n') + markdownSummary(r)).not.toContain('planted-in-stale-step')
   })
 
   it('one warning for each stale item, never an error', () => {
@@ -127,6 +136,9 @@ const GRAPH_WRITER = [
   '',
 ].join('\n')
 
+// An extractor that kills itself with SIGKILL (the timer keeps it alive if the kill is slow, so the test never waits on a clean exit).
+const KILL_SELF = "process.kill(process.pid, 'SIGKILL')\nsetTimeout(() => {}, 60000)\n"
+
 describe('the run, when the extractor fails', () => {
   it('exits 3 (the tool failed, not a leak) and still removes its temp folder (a process.exit inside the try would skip the finally)', () => {
     const { res, leftInTemp } = runCopy('console.error("boom"); process.exit(3)\n')
@@ -135,10 +147,17 @@ describe('the run, when the extractor fails', () => {
     expect(leftInTemp).toEqual([])
   })
 
-  it('exits 3 when the extractor is killed or exits with any other code', () => {
+  it('exits 3 when the extractor exits with any other code than 0', () => {
     const { res } = runCopy('process.exit(2)\n')
     expect(res.status).toBe(3)
     expect(res.stderr).toMatch(/the extractor failed \(exit 2\)/)
+  })
+
+  it('exits 3 when the extractor is killed by a signal (the stub kills itself with SIGKILL), and still removes its temp folder', () => {
+    const { res, leftInTemp } = runCopy(KILL_SELF)
+    expect(res.status, res.stderr).toBe(3)
+    expect(res.stderr).toMatch(/the extractor failed \((exit \d+|SIGKILL)\)/)
+    expect(leftInTemp).toEqual([])
   })
 })
 
@@ -197,6 +216,52 @@ describe('the run, when the tool fails outside the work of the check', () => {
     const { res } = runCopy(GRAPH_WRITER, (tool) => fs.rmSync(path.join(tool, 'leak-scan.mjs')))
     expect(res.status, res.stderr).toBe(3)
     expect(res.stderr).toMatch(/the check could not start/)
+  })
+})
+
+describe('the run, when the hand-written text leaks and the tool fails as well', () => {
+  const secret = ['203', '0', '113', '9'].join('.')
+  const expectLeakOnly = (res, leftInTemp) => {
+    expect(res.status, res.stderr).toBe(1)
+    expect(res.stdout).toMatch(/^leaks: [1-9]/m)
+    expect(res.stdout).toMatch(/::error title=Code map leak::ipv4 in ste-text\.json/)
+    expect(res.stdout + res.stderr).not.toContain(secret)
+    expect(leftInTemp).toEqual([])
+  }
+
+  it('the extractor fails: still exit 1 (the text was scanned first), and the failure is still said', () => {
+    const { res, leftInTemp } = runCopy('console.error("boom"); process.exit(3)\n', plantLeak)
+    expectLeakOnly(res, leftInTemp)
+    expect(res.stderr).toMatch(/the extractor failed \(exit 3\)/)
+  })
+
+  it('the extractor is killed: still exit 1', () => {
+    const { res, leftInTemp } = runCopy(KILL_SELF, plantLeak)
+    expectLeakOnly(res, leftInTemp)
+    expect(res.stderr).toMatch(/the extractor failed/)
+  })
+
+  it('ste-lint crashes: still exit 1, and the crash is still said', () => {
+    const { res, leftInTemp } = runCopy(GRAPH_WRITER, (tool) => {
+      plantLeak(tool)
+      fs.writeFileSync(path.join(tool, 'ste-lint.mjs'), 'process.exit(2)\n')
+    })
+    expectLeakOnly(res, leftInTemp)
+    expect(res.stderr).toMatch(/the check crashed/)
+  })
+
+  it('the template leaks: still exit 1 when the extractor fails', () => {
+    const { res, leftInTemp } = runCopy('process.exit(3)\n', (tool) => fs.appendFileSync(path.join(tool, 'template.html'), `\n<!-- ${secret} -->\n`))
+    expect(res.status, res.stderr).toBe(1)
+    expect(res.stdout).toMatch(/::error title=Code map leak::ipv4 in template\.html/)
+    expect(res.stdout + res.stderr).not.toContain(secret)
+    expect(leftInTemp).toEqual([])
+  })
+
+  it('no leak in the text and the extractor fails: still exit 3 (nothing found in the text)', () => {
+    const { res } = runCopy('process.exit(3)\n')
+    expect(res.status).toBe(3)
+    expect(res.stdout).not.toMatch(/Code map leak/)
   })
 })
 

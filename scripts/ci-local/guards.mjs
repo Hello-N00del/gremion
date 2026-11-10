@@ -39,7 +39,9 @@
 //                      walkthrough steps, the stale areas and the undescribed
 //                      areas (in the arm's detail, the console and the dated
 //                      JSON). Only a leak fails it. A problem of the tool itself,
-//                      or the tool or typescript being absent, passes with a note.
+//                      or the tool or typescript being absent, passes with a note
+//                      (when the tool fails, ste-text.json and template.html were
+//                      still scanned first; the generated page was not).
 //
 // Any failing arm means a non-zero exit (acceptance item 4). Nothing here
 // mutates either repo; the CVE-floor and overrides-drift arms literally ARE
@@ -615,7 +617,9 @@ export function runRunnerPolicyArm(kernelPath, verticalPath, waiversPath) {
 // made, so the dated JSON and the console show it.
 //
 // check.mjs exit codes: 0 it ran (stale items allowed), 1 a leak was found,
-// 3 the tool itself failed. Only a leak fails the arm. A problem of the tool
+// 3 the tool itself failed. The tool scans ste-text.json and template.html first, so a leak there is exit 1 even when
+// the extractor or ste-lint fails afterwards; what a failed run leaves unchecked is the generated page.
+// Only a leak fails the arm. A problem of the tool
 // (exit 3, a timeout, a spawn error, a crash, the file or `typescript` absent
 // in a kernel-only checkout with no install) passes the arm with a note that the
 // list could not be made: a code map tool problem must never block a merge.
@@ -671,6 +675,11 @@ export function runCodemapStaleArm(kernelPath, { runFn = run, typescriptAvailabl
   // Exit 1 is a leak only when the report says so. Node itself also exits 1 when the tool crashes before it can report.
   if (r.exitCode === 1 && (/^leaks: [1-9]/m.test(output) || /::error title=Code map leak/.test(output))) {
     return { arm: 'codemap-stale', repo: 'kernel', status: 'FAIL', reason: 'the code map check found a leak in the page, in ste-text.json or in template.html (rule and place are in the output)', output }
+  }
+  // Exit 3: the tool failed. It scans ste-text.json and template.html before anything else can fail, so a leak there is exit 1 and
+  // fails this arm even when the tool then fails; what exit 3 leaves unchecked is the generated page (and the text, if it could not be read).
+  if (r.exitCode === 3) {
+    return passWithNote('the tool failed, exit 3: the generated page was not checked; the text and the template are scanned first when the tool can read them, and a leak there fails this arm', output)
   }
   if (r.exitCode !== 0) return passWithNote(`the tool failed, exit ${r.exitCode}`, output)
 

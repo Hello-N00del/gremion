@@ -4,9 +4,11 @@
 //
 //   node codemap/check.mjs        (the entry; package.json: pnpm --filter control-panel codemap:check)
 //
+// 0. scans ste-text.json and template.html for leaks (leak-scan.mjs) FIRST: they are hand-written, need no graph, and a
+//    leak in them is exit 1 even when everything after this step fails,
 // 1. runs extract.mjs in normal git mode into a temp folder under the system temp folder,
 // 2. joins the written text to the graph (resolve.mjs): stale steps, stale areas, undescribed areas, ambiguous steps,
-// 3. scans the generated page, ste-text.json and template.html for leaks (leak-scan.mjs),
+// 3. scans the generated page for leaks as well,
 // 4. runs ste-lint.mjs and reports the number of findings.
 // With GITHUB_STEP_SUMMARY set it appends a markdown table; it prints a ::warning:: line for each stale item.
 // The exit codes are distinct, so that a caller can tell a leak from a broken tool:
@@ -35,6 +37,20 @@ export const EXIT_TOOL_FAILED = 3
 export const escapeCommand = (s) => String(s).replace(/%/g, '%25').replace(/\r/g, '%0D').replace(/\n/g, '%0A')
 
 const lineOf = (source, index) => source.slice(0, index).split('\n').length
+
+/**
+ * The leaks in the two hand-written files, by rule and place (never the matched text). This needs no graph and no
+ * extractor, so main() runs it first: a leak in the text is found even when the generated page cannot be made.
+ * @returns {{ rule: string, where: string }[]}
+ */
+export function scanHandWritten(textSource, templateSource) {
+  const leaks = []
+  for (const [where, source] of [['ste-text.json', textSource], ['template.html', templateSource]]) {
+    for (const l of findLeaks(source)) leaks.push({ rule: l.rule, where: `${where}, line ${lineOf(source, l.index)}` })
+  }
+  return leaks
+}
+
 const stepWhat = (s) => (s.function ? `${s.file} · ${s.function}` : (s.nodeId ?? 'unknown'))
 
 /**
@@ -47,9 +63,7 @@ export function analyse({ graph, text, template, textSource, templateSource, com
   const built = buildMap({ graph, text, template, commit })
   const leaks = []
   for (const l of built.leaks) leaks.push({ rule: l.rule, where: 'generated page' })
-  for (const [where, source] of [['ste-text.json', textSource], ['template.html', templateSource]]) {
-    for (const l of findLeaks(source)) leaks.push({ rule: l.rule, where: `${where}, line ${lineOf(source, l.index)}` })
-  }
+  leaks.push(...scanHandWritten(textSource, templateSource))
 
   const out = []
   const p = (s = '') => out.push(s)
@@ -58,7 +72,8 @@ export function analyse({ graph, text, template, textSource, templateSource, com
   p(`map: ${built.status.counts.functions} functions, ${built.status.counts.connections} connections`)
   p('')
   p(`stale steps: ${lists.staleSteps.length}`)
-  for (const s of lists.staleSteps) p(`  - ${s.walkthrough} | step ${s.step} | ${s.file ?? ''} | ${s.function ?? s.nodeId ?? ''} | ${s.text}`)
+  // The line ends at the function or node id: the text of the step is not repeated (it is hand-written, and a leak in it is named by rule and place).
+  for (const s of lists.staleSteps) p(`  - ${s.walkthrough} | step ${s.step} | ${s.file ?? ''} | ${s.function ?? s.nodeId ?? ''}`)
   p(`stale areas: ${lists.staleAreas.length}`)
   for (const a of lists.staleAreas) p(`  - ${a}`)
   p(`undescribed areas: ${lists.undescribedAreas.length}`)
@@ -102,9 +117,26 @@ function steLint(textPath, graphPath) {
   return { count: Number(m[1]), byRule: m[2] ? JSON.parse(m[2]) : {} }
 }
 
+/** What is said about leaks found before the generated page exists: the rule and the place, never the matched text. */
+function reportTextLeaks(leaks) {
+  console.log(`leaks: ${leaks.length} (the hand-written text only: the generated page was not checked)`)
+  for (const l of leaks) console.log(`  - ${l.rule} in ${l.where}`)
+  for (const l of leaks) console.log(`::error title=Code map leak::${escapeCommand(`${l.rule} in ${l.where}`)}`)
+}
+
 export function main() {
   let tmp = null
+  // The leaks in the hand-written text and template. They are found first, before the extractor runs, and stay found
+  // when the extractor, the typescript pre-check, the join or ste-lint fails afterwards: the code is then 1, not 3.
+  let textLeaks = []
+  let reported = false
   try {
+    const read = (f) => fs.readFileSync(path.join(HERE, f), 'utf8')
+    const textSource = read('ste-text.json')
+    const templateSource = read('template.html')
+    textLeaks = scanHandWritten(textSource, templateSource)
+    if (textLeaks.length) process.exitCode = EXIT_LEAK
+
     tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'codemap-check-'))
     const graphPath = path.join(tmp, 'graph.json')
     const ex = spawnSync(process.execPath, ['--max-old-space-size=3072', path.join(HERE, 'extract.mjs'), '--out', graphPath, '--deps', path.resolve(HERE, '..')], {
@@ -116,18 +148,19 @@ export function main() {
       console.error(`::error title=Code map::the extractor failed (exit ${ex.status ?? ex.signal})`)
       console.error(String(ex.stdout ?? '').split('\n').slice(-15).join('\n'))
       console.error(String(ex.stderr ?? '').split('\n').slice(-15).join('\n'))
+      if (textLeaks.length) {
+        reportTextLeaks(textLeaks)
+        reported = true
+      }
       // not process.exit: it would skip the finally below and leave the temp folder behind
-      process.exitCode = EXIT_TOOL_FAILED
+      process.exitCode = textLeaks.length ? EXIT_LEAK : EXIT_TOOL_FAILED
       return
     }
-    const read = (f) => fs.readFileSync(path.join(HERE, f), 'utf8')
     const graph = JSON.parse(fs.readFileSync(graphPath, 'utf8'))
     let commit = 'unknown'
     try {
       commit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: HERE, encoding: 'utf8' }).trim()
     } catch { /* no git: the commit is unknown */ }
-    const textSource = read('ste-text.json')
-    const templateSource = read('template.html')
     const r = analyse({
       graph,
       text: JSON.parse(textSource),
@@ -138,6 +171,7 @@ export function main() {
       steFindings: steLint(path.join(HERE, 'ste-text.json'), graphPath),
     })
     console.log(r.report)
+    reported = true
     for (const w of r.warnings) console.log(w)
     for (const e of r.errors) console.log(e)
     // The result is set before anything else is done, so that nothing after this line can change a leak into another code.
@@ -152,7 +186,8 @@ export function main() {
     console.log(r.exitCode === EXIT_LEAK ? `\nresult: a leak was found (exit ${EXIT_LEAK})` : `\nresult: the check ran (exit ${EXIT_RAN})`)
   } catch (err) {
     console.error(`::error title=Code map::the check crashed: ${escapeCommand(err instanceof Error ? err.message : String(err))}`)
-    // a leak that is already found stays a leak
+    // a leak that is already found stays a leak, and is said if the report that would have said it was never printed
+    if (textLeaks.length && !reported) reportTextLeaks(textLeaks)
     if (process.exitCode !== EXIT_LEAK) process.exitCode = EXIT_TOOL_FAILED
   } finally {
     if (tmp) {

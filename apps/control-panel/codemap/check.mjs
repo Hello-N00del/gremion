@@ -11,7 +11,7 @@ try {
   const core = await import('./check-core.mjs')
   core.main()
 } catch (err) {
-  const why = String((err instanceof Error ? err.message : err) ?? '').replace(/%/g, '%25').replace(/\r/g, '%0D').replace(/\n/g, '%0A')
+  const why = (err instanceof Error ? err.message : typeof err === 'string' ? err : 'a value that is not an error was thrown').replace(/%/g, '%25').replace(/\r/g, '%0D').replace(/\n/g, '%0A')
   console.error(`::error title=Code map::the check could not start: ${why}`)
   process.exitCode = EXIT_TOOL_FAILED
 }

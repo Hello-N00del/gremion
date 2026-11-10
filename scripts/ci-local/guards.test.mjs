@@ -1017,6 +1017,18 @@ test('codemap-stale: exit 3 (the tool failed), a timeout, a spawn error and a th
   }
 })
 
+test('codemap-stale: the note of a failed tool (exit 3) says the generated page was not checked and that the text is scanned first, not that nothing was checked', () => {
+  const root = makeCodemapRepo()
+  try {
+    const r = runCodemapStaleArm(root, { runFn: () => result(3, '::error title=Code map::the extractor failed (exit 2)'), typescriptAvailableFn: hasTs })
+    assert.equal(r.status, 'PASS')
+    assert.match(r.note, /the generated page was not checked/)
+    assert.match(r.note, /text and the template are scanned first/)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
 test('codemap-stale: the tool file absent, or typescript absent (a kernel-only checkout with no install), PASSes with a note and does not run anything', () => {
   const noFile = makeCodemapRepo({ withCheck: false })
   const withFile = makeCodemapRepo()
