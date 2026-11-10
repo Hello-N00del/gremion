@@ -523,7 +523,7 @@
              an empty store before that (or an archive-only list) does not mean "no body". The
              wording stays conditional because a body without a room yet looks the same. -->
         <div class="room-empty mono">
-          Keine Räume gefunden. Falls Sie noch keinem Gremium zugeordnet sind: Räume erscheinen, sobald Sie Mitglied eines Gremiums sind; die Zuordnung ändern Verwaltende unter Mitglieder.
+          Keine Räume gefunden. Falls Sie noch keinem Gremium zugeordnet sind: Räume erscheinen, sobald Sie Mitglied eines Gremiums sind; die Zuordnung ändern Verwaltende unter Gremien & Referate: das Gremium öffnen, Verwalten, dann Mitglied hinzufügen.
         </div>
       {:else if roomsLoaded}
         <div class="room-empty mono">Keine aktiven Räume.</div>

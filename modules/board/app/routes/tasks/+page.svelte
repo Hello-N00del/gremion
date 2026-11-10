@@ -62,6 +62,8 @@
   )
 
   function selectBoard(id: string) {
+    // Same route, same component instance: drop a stale create error from the board left behind.
+    createError = null
     goto(`/tasks?board=${id}`, { invalidateAll: true })
   }
 

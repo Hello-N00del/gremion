@@ -35,4 +35,12 @@ describe('a failed board create', () => {
     // and it sits before the empty/non-empty split of the page
     expect(at).toBeLessThan(src.indexOf('{#if data.boards.length === 0}'))
   })
+
+  // The page instance survives a same-route navigation, so $state persists: switching boards must
+  // clear a stale error, or it stays on screen next to a board it has nothing to do with.
+  it('forgets a stale error when the member switches to another board', () => {
+    const body = /function selectBoard\([^)]*\) \{([\s\S]*?)\n {2}\}/.exec(src)?.[1]
+    expect(body).toBeDefined()
+    expect(body).toContain('createError = null')
+  })
 })

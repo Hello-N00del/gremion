@@ -1,11 +1,12 @@
-// The German waiting page for the two 503 answers a person can meet while the app starts:
+// The German waiting page for the 503 answers a person can meet while the app starts:
 //   'booting'  : the process is up, boot (migrations, fleet) has not finished;
 //   'tenant'   : the host is known, but this tenant's data plane is not ready yet;
 //   'tenant-failed' : the tenant's preparation failed. Waiting does not fix that, so this page
 //                 does not reload itself (a reload would also start another attempt each time).
 // Before this, both were bare English text. A browser does not retry a 503, so the person saw
 // "Service Unavailable: ..." and had to know to reload. This page says what is happening in
-// German and reloads itself (meta refresh, matching Retry-After). Machine callers keep the
+// German and, except for 'tenant-failed', reloads itself (meta refresh, matching Retry-After).
+// Machine callers keep the
 // status code and the Retry-After header, which is all they read.
 //
 // No dependencies, no request data in the output: nothing here can echo user input.

@@ -322,7 +322,10 @@ describe('/messages — empty room list', () => {
   it('tells a user without rooms that they belong to no body yet and where to change that', async () => {
     renderAs(Role.CouncilAdmin, [])
     const hint = await within(document.body).findByText(/noch keinem Gremium zugeordnet/)
-    expect(hint.textContent).toContain('Mitglieder')
+    // The path has to be the real one: Mitglieder (/members) is a read-only list and cannot assign a body.
+    expect(hint.textContent).toContain('Gremien & Referate')
+    expect(hint.textContent).toContain('Mitglied hinzufügen')
+    expect(hint.textContent).not.toContain('unter Mitglieder')
   })
 
   it('does not show the no-body hint while rooms exist', async () => {

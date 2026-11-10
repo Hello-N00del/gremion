@@ -21,6 +21,10 @@ const matrixTokenCache = new Map<string, CachedMatrixToken>()
 // all firing a /login request simultaneously (thundering herd on server restart).
 const matrixTokenInflight = new Map<string, Promise<string>>()
 
+// Rate limit for the "unread counts degraded" log line (see readUnreadCounts).
+const UNREAD_FAILURE_LOG_INTERVAL_MS = 60_000
+let lastUnreadFailureLog = 0
+
 /** Synapse rejected this user token (admin logout, device deletion, expiry):
  *  401, or errcode M_UNKNOWN_TOKEN. */
 function isDeadTokenResponse(status: number, errcode: unknown): boolean {
@@ -320,9 +324,16 @@ class MatrixClient {
         if (!n.room_id) continue
         counts.set(n.room_id, (counts.get(n.room_id) ?? 0) + 1)
       }
-    } catch {
-      // Intentionally swallowed — see method docs (graceful degradation to 0).
+    } catch (e) {
+      // Not rethrown — see method docs (graceful degradation to 0) — but not silent either: a
+      // persistent failure would otherwise show every badge as 0 with no trace. One line a minute;
+      // the message holds the method, path and status, never the token.
       degraded = true
+      const now = Date.now()
+      if (now - lastUnreadFailureLog >= UNREAD_FAILURE_LOG_INTERVAL_MS) {
+        lastUnreadFailureLog = now
+        console.warn('[messages] /notifications read failed; unread counts degraded:', e instanceof Error ? e.message : 'unknown error')
+      }
     }
     return { counts, degraded }
   }

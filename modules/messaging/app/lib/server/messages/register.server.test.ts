@@ -193,6 +193,21 @@ describe('messages:unread-count provider cache', () => {
     expect(mockSync).toHaveBeenCalledTimes(2)
   })
 
+  it('stores the answer of a sync that finished after the 4 s cap, so the next page does not start another one', async () => {
+    const provider = getDataProvider('messages:unread-count')!
+    let finish!: (v: unknown) => void
+    mockSync.mockReturnValueOnce(new Promise((resolve) => { finish = resolve }))
+    const first = provider(jwtFor('user-1'))
+    await vi.advanceTimersByTimeAsync(4100)
+    // The page was served with the 0 fallback after the cap ...
+    expect(await first).toBe(0)
+    // ... but the abandoned sync still answers later, and that answer fills the cache.
+    finish({ nextBatch: 'b1', rooms: [{ roomId: '!a:hs', events: [], unreadCount: 6 }] })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(await provider(jwtFor('user-1'))).toBe(6)
+    expect(mockSync).toHaveBeenCalledTimes(1)
+  })
+
   it('forgetUnread drops the user entry, so a read room refreshes the badge at once', async () => {
     const provider = getDataProvider('messages:unread-count')!
     await provider(jwtFor('user-1'))

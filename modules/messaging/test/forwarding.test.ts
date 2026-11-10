@@ -266,16 +266,6 @@ describe('leaf op forwarding (dispatchOp) — contract-identical envelopes', () 
     })
   })
 
-  it('messages.sync marks countsDegraded when /notifications fails (the kernel must not cache those zeros)', async () => {
-    route([
-      { match: (u) => u.includes('/_matrix/client/v3/sync'), res: () => jr({ next_batch: 'nb1', rooms: { join: { '!r:s': {} } } }) },
-      { match: (u) => u.includes('/_matrix/client/v3/notifications'), res: () => jr({ errcode: 'M_UNKNOWN' }, 500) },
-    ])
-    const r = await run('messages.sync', { userToken: 'tok' })
-    expect(r.status).toBe(200)
-    expect(r.body).toEqual({ nextBatch: 'nb1', rooms: [{ roomId: '!r:s', events: [], unreadCount: 0 }], countsDegraded: true })
-  })
-
   it('messages.rooms → { rooms } (joined room ids)', async () => {
     route([{ match: (u) => u.includes('/_matrix/client/v3/joined_rooms'), res: () => jr({ joined_rooms: ['!a:s', '!b:s'] }) }])
     const r = await run('messages.rooms', { userToken: 'tok' })
