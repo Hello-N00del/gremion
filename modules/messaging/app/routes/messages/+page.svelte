@@ -515,7 +515,9 @@
           <button type="button" class="btn btn-ghost btn-sm" onclick={() => void loadRooms()}>Erneut versuchen</button>
         </div>
       {:else}
-        <div class="room-empty mono">Keine Räume gefunden.</div>
+        <div class="room-empty mono">
+          Keine Räume gefunden. Sie sind noch keinem Gremium zugeordnet. Räume erscheinen, sobald Sie Mitglied eines Gremiums sind; die Zuordnung ändern Verwaltende unter Mitglieder.
+        </div>
       {/if}
     {/each}
 

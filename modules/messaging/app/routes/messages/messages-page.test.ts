@@ -315,6 +315,23 @@ describe('/messages — Einstellungen panel (row 15)', () => {
   })
 })
 
+describe('/messages — empty room list', () => {
+  // A first administrator is created in the identity provider only and belongs to no body yet.
+  // Rooms are joined through body membership, so an empty list has to say that and where to
+  // change it, instead of reading like a broken product.
+  it('tells a user without rooms that they belong to no body yet and where to change that', async () => {
+    renderAs(Role.CouncilAdmin, [])
+    const hint = await within(document.body).findByText(/noch keinem Gremium zugeordnet/)
+    expect(hint.textContent).toContain('Mitglieder')
+  })
+
+  it('does not show the no-body hint while rooms exist', async () => {
+    const { findByTitle } = renderAs(Role.CouncilAdmin, [ACTIVE_ROOM])
+    await findByTitle('Einstellungen')
+    expect(within(document.body).queryByText(/noch keinem Gremium zugeordnet/)).toBeNull()
+  })
+})
+
 describe('/messages — Archiv section (R23-5: read-only, no Einstellungen)', () => {
   it('lists an archived room separately and renders it read-only when opened', async () => {
     const { getByText, findByText } = renderAs(Role.CouncilAdmin, [ACTIVE_ROOM, ARCHIVED_ROOM])
