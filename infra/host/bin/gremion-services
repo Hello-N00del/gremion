@@ -41,7 +41,14 @@ set -euo pipefail
 #      user_oidc, richdocuments and groupfolders are enabled (the image's install
 #      hooks end in a warning, never in a failure) and that the provider has
 #      checkBearer true and id 1;
+#      Then, when the calendar leaf runs, creates the customer's CalDAV collection
+#      (the leaf's CALDAV_CALENDAR_TEMPLATE with the slug, under its shared
+#      account) by occ and reads it back: the leaf cannot create it itself;
 #   7. recreates gremion-ui (active colour) and reads its environment back.
+#
+# It takes the host lock (runtime/hostd.lock, non-blocking, exit 3 when busy) like
+# the other mutating verbs, and under sudo hands every file it rewrites back to the
+# owner it had.
 #
 # Post-conditions are read from the RUNNING system (container environment, the
 # edge's own answers, occ), never from an exit code.
@@ -85,8 +92,9 @@ STACK=""
 # set_env_key <file> <key> <value> -- replace the one `KEY=` line (or append it), atomically,
 # keeping the file 0600. The value reaches awk through its ENVIRONMENT, never its argv.
 set_env_key() {
-    local file="$1" key="$2" value="$3" out
+    local file="$1" key="$2" value="$3" out owner
     [[ -f "$file" ]] || die "env file not found: ${file}" "$GREMION_EXIT_USAGE"
+    owner="$(stat -c '%u:%g' "$file")" || die "cannot read the owner of ${file}" "$GREMION_EXIT_ASSERT"
     [[ "$value" != *$'\n'* ]] || die "refusing a multi-line value for ${key}" "$GREMION_EXIT_ASSERT"
     out="$(KEY="$key" VAL="$value" awk '
         BEGIN { k = ENVIRON["KEY"]; v = ENVIRON["VAL"]; done = 0 }
@@ -95,6 +103,31 @@ set_env_key() {
         END { if (!done) print k "=" v }' "$file")" \
         || die "cannot rewrite ${key} in ${file}" "$GREMION_EXIT_ASSERT"
     atomic_write "$file" 600 <<< "$out" || die "cannot write ${file}" "$GREMION_EXIT_ASSERT"
+    keep_owner "$owner" "$file"
+}
+
+# keep_owner <uid:gid> <path> -- under sudo, atomic_write makes a NEW file, which would be root's and
+# unreadable to the deploy user every later compose verb runs as: hand it back to the owner it had.
+keep_owner() {
+    [[ "$(id -u)" -eq 0 ]] || return 0
+    chown "$1" "$2" || die "cannot hand ${2} back to ${1}" "$GREMION_EXIT_ASSERT"
+}
+
+# One host operation at a time: the lock gremion-hostd, gremion-deploy and the executor take (fd 9, so a
+# crash releases it). wire reads the active colour and then rewrites the env files and recreates services
+# of that colour; a concurrent deploy or switch must not interleave with it. Non-blocking: busy is exit 3.
+acquire_host_lock() {
+    local lock
+    if [[ "${GREMION_HOST_LOCK_HELD:-}" != 1 ]]; then
+        need_cmd flock
+        mkdir -p "${ROOT}/runtime"
+        lock="${ROOT}/runtime/hostd.lock"
+        exec 9>>"$lock" || die "cannot open the host lock: ${lock}" 2
+        flock -n 9 \
+            || die "busy: another host operation is running (lock ${lock}); retry when it has finished" 3
+    fi
+    GREMION_HOST_LOCK_HELD=1
+    export GREMION_HOST_LOCK_HELD
 }
 
 compose_app() { ( cd "$RELEASE_DIR" && docker compose --env-file "$APP_ENV" "$@" ); }
@@ -157,6 +190,7 @@ cmd_wire() {
     need_slug "$slug"
     need_cmd docker jq curl awk sed grep
     setup_paths
+    acquire_host_lock
     active_colour
     STATE_ENV="${ROOT}/etc/env/state.env"
     APP_ENV="${ROOT}/etc/env/app-${COLOUR}.env"
@@ -189,7 +223,7 @@ cmd_wire() {
     syn_file="${tsd}/tenant_${slug}_client_synapse"
     nc_file="${tsd}/tenant_${slug}_client_nextcloud"
     [[ -s "$syn_file" ]] || die "the realm's synapse client secret is absent: ${syn_file} (was the create request for ${slug} run by this release?)" "$GREMION_EXIT_USAGE"
-    [[ -s "$nc_file" ]] || die "the realm's nextcloud client secret is absent: ${nc_file} (a realm created before the nextcloud client existed has none: re-run reconcile)" "$GREMION_EXIT_USAGE"
+    [[ -s "$nc_file" ]] || die "the realm's nextcloud client secret is absent: ${nc_file} (the create request writes it only when it creates the realm, and reconcile does not add it: a realm created before the nextcloud client existed has none; create the client in the realm and write this file by hand, or re-create the customer)" "$GREMION_EXIT_USAGE"
 
     local nc_c
     nc_c="$(container_of "${STACK}-state" nextcloud)"
@@ -204,8 +238,10 @@ cmd_wire() {
 
     # -- 2. the synapse client secret, 0600, where matrix mounts it --
     install -d -m 700 "${ROOT}/etc/secrets/synapse" || die "cannot create ${ROOT}/etc/secrets/synapse" "$GREMION_EXIT_ASSERT"
+    keep_owner "$(stat -c '%u:%g' "${ROOT}/etc/secrets")" "${ROOT}/etc/secrets/synapse"
     tr -d '\r\n' < "$syn_file" | atomic_write "${ROOT}/etc/secrets/synapse/oidc_client_secret" 600 \
         || die "cannot write the synapse client secret file" "$GREMION_EXIT_ASSERT"
+    keep_owner "$(stat -c '%u:%g' "${ROOT}/etc/secrets")" "${ROOT}/etc/secrets/synapse/oidc_client_secret"
     [[ -s "${ROOT}/etc/secrets/synapse/oidc_client_secret" ]] || die "the synapse client secret file is empty after the copy" "$GREMION_EXIT_ASSERT"
     ok "etc/secrets/synapse/oidc_client_secret written (0600)"
 
@@ -322,6 +358,43 @@ cmd_wire() {
     docker exec "$nc_c" curl -fsS --max-time 15 -o /dev/null "$discovery" \
         || die "the discovery URI is not reachable from inside the nextcloud container (a staging ACME certificate fails here): ${discovery}" "$GREMION_EXIT_ASSERT"
     ok "nextcloud: provider Keycloak (checkBearer, id 1), apps enabled, richdocuments active, discovery reachable"
+
+    # -- 6b. the customer's CalDAV collection --
+    # The calendar leaf pushes each customer's events to one collection of the shared Nextcloud account
+    # (CALDAV_CALENDAR_TEMPLATE of its environment, read back from the running leaf) and has no way to
+    # create it. Created here by occ, which needs no credential on any argv; idempotent by listing first.
+    local cal_c cal_tpl cal_user cal_name cal_re cal_list
+    cal_c="$(docker ps -q --filter "label=com.docker.compose.project=${STACK}-app-${COLOUR}" \
+                          --filter "label=com.docker.compose.service=calendar-service")" \
+        || die "docker ps failed while looking for calendar-service of ${STACK}-app-${COLOUR}" "$GREMION_EXIT_ASSERT"
+    if [[ -z "${cal_c//[[:space:]]/}" ]]; then
+        info "no calendar-service runs in ${STACK}-app-${COLOUR} (calendar profile off): no CalDAV collection is created"
+    else
+        cal_c="$(container_of "${STACK}-app-${COLOUR}" calendar-service)"
+        cal_tpl="$(docker exec "$cal_c" printenv CALDAV_CALENDAR_TEMPLATE 2>/dev/null | tr -d '[:space:]' || true)"
+        [[ "$cal_tpl" == *"{slug}"* ]] \
+            || die "calendar-service carries no CALDAV_CALENDAR_TEMPLATE with a {slug} (docker exec ${cal_c} printenv): its CalDAV drain would refuse every customer" "$GREMION_EXIT_ASSERT"
+        cal_user="$(docker exec "$cal_c" printenv CALDAV_SHARED_USER 2>/dev/null | tr -d '[:space:]' || true)"
+        [[ -n "$cal_user" ]] || cal_user="$(docker exec "$cal_c" printenv NEXTCLOUD_ADMIN_USER 2>/dev/null | tr -d '[:space:]' || true)"
+        [[ -n "$cal_user" ]] || cal_user=admin
+        cal_name="${cal_tpl//\{slug\}/${slug}}"
+        [[ "$cal_name" =~ ^[A-Za-z0-9._-]{1,64}$ ]] \
+            || die "the calendar name ${cal_name} (CALDAV_CALENDAR_TEMPLATE with the slug) is not one safe path segment" "$GREMION_EXIT_ASSERT"
+        [[ "$cal_user" =~ ^[A-Za-z0-9._@-]{1,64}$ ]] \
+            || die "the CalDAV owner account name of calendar-service is not a plain account name" "$GREMION_EXIT_ASSERT"
+        cal_list="$(docker exec -u www-data "$nc_c" php occ dav:list-calendars "$cal_user")" \
+            || die "occ dav:list-calendars ${cal_user} failed (does the account exist in Nextcloud? docker logs ${nc_c})" "$GREMION_EXIT_ASSERT"
+        cal_re="${cal_name//./\\.}"
+        if ! grep -Eq -- "^\| ${cal_re} " <<< "$cal_list"; then
+            docker exec -u www-data "$nc_c" php occ dav:create-calendar "$cal_user" "$cal_name" >/dev/null \
+                || die "occ dav:create-calendar ${cal_user} ${cal_name} failed (docker logs ${nc_c})" "$GREMION_EXIT_ASSERT"
+            cal_list="$(docker exec -u www-data "$nc_c" php occ dav:list-calendars "$cal_user")" \
+                || die "occ dav:list-calendars ${cal_user} (read-back) failed" "$GREMION_EXIT_ASSERT"
+        fi
+        grep -Eq -- "^\| ${cal_re} " <<< "$cal_list" \
+            || die "the CalDAV collection ${cal_name} of ${cal_user} is not listed after creating it (occ dav:list-calendars ${cal_user})" "$GREMION_EXIT_ASSERT"
+        ok "calendar: the CalDAV collection ${cal_name} of ${cal_user} exists (the leaf's drain target)"
+    fi
 
     # -- 7. gremion-ui, recreated, its environment read back --
     compose_app up -d --force-recreate gremion-ui \

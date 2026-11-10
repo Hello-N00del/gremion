@@ -164,6 +164,19 @@ test('leaf urls: every <ID>_SERVICE_URL of the rendered gremion-ui resolves to a
   assert.deepEqual([ui.CALENDAR_BACKEND, ui.CONTENT_BACKEND, ui.NEWSLETTER_BACKEND], ['service', 'service', 'service'])
 })
 
+test('calendar leaf: the rendered environment gives the CalDAV drain a per-tenant target the leaf itself accepts', async () => {
+  const r = renderState({ envFile: 'test/host/fixtures/pooled-stack/app-blue.env', env: { COMPOSE_PROFILES: '*' } })
+  const env = r.services['calendar-service'].environment
+  // the leaf's own resolver, not a copy of its rules: without a per-tenant target the drain refuses every tenant
+  const { resolveCaldavTarget } = await import('../modules/calendar/src/caldav/target.ts')
+  const res = resolveCaldavTarget({ slug: 'pilot' }, env)
+  assert.equal(res.ok, true, res.ok ? '' : res.reason)
+  assert.match(env.CALDAV_CALENDAR_TEMPLATE ?? '', /\{slug\}/)
+  assert.equal(res.target.calendar, env.CALDAV_CALENDAR_TEMPLATE.split('{slug}').join('pilot'))
+  // the collection is created by `gremion-services wire` for that same name: one shared definition, no second spelling
+  assert.match(read('infra/host/bin/gremion-services'), /dav:create-calendar/)
+})
+
 test('release templates: every docker/**/*.tmpl renders to a path git ignores, so a host render never dirties the release tree', () => {
   const tmpls = []
   const walk = (dir) => {

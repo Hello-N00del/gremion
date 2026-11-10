@@ -65,6 +65,23 @@ case " $* " in
   *" ps "*"service=matrix"*)        echo c-matrix; exit 0 ;;
   *" ps "*"service=nextcloud"*)     echo c-nextcloud; exit 0 ;;
   *" ps "*"service=gremion-ui"*)    echo c-ui; exit 0 ;;
+  *" ps "*"service=calendar-service"*)
+    if [ -f "$GREMION_ROOT/no-calendar-leaf" ]; then exit 0; fi
+    echo c-calendar; exit 0 ;;
+  *" exec c-calendar printenv CALDAV_CALENDAR_TEMPLATE"*)
+    if [ -f "$GREMION_ROOT/no-caldav-template" ]; then exit 1; fi
+    echo "gremion-{slug}"; exit 0 ;;
+  *" exec c-calendar printenv CALDAV_SHARED_USER"*) exit 1 ;;
+  *" exec c-calendar printenv NEXTCLOUD_ADMIN_USER"*) echo admin; exit 0 ;;
+  *" exec "*"dav:list-calendars"*)
+    printf "occ list-calendars\n" >> "$ORDER"
+    echo "| uri | displayname |"; echo "| personal | Personal |"
+    if [ -f "$GREMION_ROOT/caldav-created" ] || [ -f "$GREMION_ROOT/caldav-exists" ]; then echo "| gremion-'"$SLUG"' | Gremion |"; fi
+    exit 0 ;;
+  *" exec "*"dav:create-calendar"*)
+    printf "occ create-calendar\n" >> "$ORDER"
+    if [ -f "$GREMION_ROOT/caldav-create-fails" ]; then exit 1; fi
+    : > "$GREMION_ROOT/caldav-created"; exit 0 ;;
   *" inspect "*)                    echo healthy; exit 0 ;;
   *" compose "*)
     # the bootstrap-mode value the shell handed this compose call, in call order
@@ -333,4 +350,76 @@ wire() { run "$SVC" wire "${1:-$SLUG}"; }
     [ "$names" = " -e NEXTCLOUD_OIDC_CLIENT_SECRET -e SYNAPSE_ADMIN_TOKEN" ] || { echo "-e names: ${names}"; return 1; }
     # no env file content is dumped: nothing runs `env`, `printenv` without a name, or cats an env file through docker
     ! grep -E '^docker exec [^ ]+ (env|printenv)$' "$SHIM_LOG" || { echo "an unnamed environment dump"; return 1; }
+}
+
+# The calendar leaf pushes each customer's events to one CalDAV collection of the shared account and
+# cannot create it: wire does, by occ, from the template the RUNNING leaf carries.
+@test "wire: the customer's CalDAV collection is created by occ for the shared user from the leaf's template, after the provider and before gremion-ui, and read back" {
+    wire
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
+    grep -q "^docker exec -u www-data c-nextcloud php occ dav:create-calendar admin gremion-${SLUG}\$" "$SHIM_LOG" || { cat "$SHIM_LOG"; return 1; }
+    local p c u
+    p="$(grep -n 'occ provider-set' "$ORDER" | head -1 | cut -d: -f1)"
+    c="$(grep -n 'occ create-calendar' "$ORDER" | head -1 | cut -d: -f1)"
+    u="$(grep -n 'force-recreate gremion-ui' "$ORDER" | head -1 | cut -d: -f1)"
+    [ "$p" -lt "$c" ] && [ "$c" -lt "$u" ]
+    # listed before it is created and again to read it back
+    [ "$(grep -c 'occ list-calendars' "$ORDER")" = 2 ]
+    [[ "$output" == *"CalDAV collection gremion-${SLUG} of admin exists"* ]]
+}
+
+@test "wire: a CalDAV collection that already exists is not created again" {
+    : > "${GREMION_ROOT}/caldav-exists"
+    wire
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
+    ! grep -q 'occ create-calendar' "$ORDER" || { echo "created again"; return 1; }
+    [ "$(grep -c 'occ list-calendars' "$ORDER")" = 1 ]
+}
+
+@test "wire: a calendar leaf without a CALDAV_CALENDAR_TEMPLATE fails the wire before gremion-ui is recreated (its drain would refuse every customer)" {
+    : > "${GREMION_ROOT}/no-caldav-template"
+    wire
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"CALDAV_CALENDAR_TEMPLATE"* ]]
+    ! grep -q 'occ create-calendar' "$ORDER"
+    ! grep -q 'force-recreate gremion-ui' "$ORDER"
+}
+
+@test "wire: a failed collection creation fails the wire before gremion-ui is recreated" {
+    : > "${GREMION_ROOT}/caldav-create-fails"
+    wire
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"dav:create-calendar"* ]]
+    ! grep -q 'force-recreate gremion-ui' "$ORDER"
+}
+
+@test "wire: without a running calendar leaf (profile off) no collection is created and the wire still succeeds, saying so" {
+    : > "${GREMION_ROOT}/no-calendar-leaf"
+    wire
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
+    ! grep -q 'occ create-calendar' "$ORDER"
+    [[ "$output" == *"no calendar-service runs"* ]]
+}
+
+@test "wire takes the host lock: while another host operation holds it the wire is busy (exit 3) and nothing is written or started" {
+    hold_host_lock 20
+    wire
+    [ "$status" -eq 3 ] || { echo "status=$status $output"; return 1; }
+    [[ "$output" == *"busy: another host operation is running"* ]]
+    [ -z "$(sed -n 's/^SYNAPSE_KEYCLOAK_ISSUER_URL=//p' "${GREMION_ROOT}/etc/env/state.env")" ]
+    ! grep -q compose "$ORDER"
+}
+
+@test "wire run as root (sudo) hands every env file it rewrites and the synapse secret directory and file back to their owners" {
+    shim id 'echo 0'
+    shim chown 'exit 0'
+    wire
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
+    local f owner
+    for f in "${GREMION_ROOT}/etc/env/state.env" "${GREMION_ROOT}/etc/env/app-blue.env" "${GREMION_ROOT}/etc/env/app-green.env"; do
+        grep '^chown ' "$SHIM_LOG" | grep -qF -- " ${f}" || { echo "not handed back: ${f}"; return 1; }
+    done
+    owner="$(stat -c '%u:%g' "${GREMION_ROOT}/etc/secrets")"
+    grep -qF -- "chown ${owner} ${GREMION_ROOT}/etc/secrets/synapse" "$SHIM_LOG" || { cat "$SHIM_LOG"; return 1; }
+    grep -qF -- "chown ${owner} ${GREMION_ROOT}/etc/secrets/synapse/oidc_client_secret" "$SHIM_LOG"
 }

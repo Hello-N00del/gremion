@@ -149,9 +149,18 @@ and the member import.
    the provider has `settings.checkBearer` true and id 1, which
    `NEXTCLOUD_OIDC_PROVIDER_ID` defaults to; it also fetches the discovery URI
    from inside the `nextcloud` container (a certificate from an ACME staging
-   directory fails here);
+   directory fails here). When the calendar leaf runs it then creates the
+   customer's CalDAV collection by `occ dav:create-calendar`, for the leaf's
+   shared account, named by the `CALDAV_CALENDAR_TEMPLATE` the running leaf
+   carries (`gremion-{slug}`), and reads it back; the leaf has no way to create
+   the collection, and without a per-tenant target its CalDAV drain refuses
+   every customer;
 7. recreates `gremion-ui` and reads the bot token back from the running
    container.
+
+`wire` takes the host lock (`runtime/hostd.lock`, non-blocking: another host
+operation holding it is `busy`, exit 3), and when run under `sudo` it hands each
+file it rewrites back to the owner it had.
 
 Post-conditions are read from the running system (container environment, the
 edge's answers, `occ`), never from an exit code. No secret is on a host argv:
@@ -199,5 +208,7 @@ not offered for the pilot.
 login flow listed and `/livekit-sfu` through the edge; one file opened in
 Collabora and one poll created from the running app in a browser; one calendar
 event, one content post and one newsletter draft saved and read back through
-the leaves; a video call between two accounts, with the TCP fallback checked
+the leaves, and that event listed in the customer's CalDAV collection of
+Nextcloud (the collection step of `wire` reads `occ dav:list-calendars`, whose
+table layout is not yet seen against a running Nextcloud); a video call between two accounts, with the TCP fallback checked
 from a network that blocks UDP.
