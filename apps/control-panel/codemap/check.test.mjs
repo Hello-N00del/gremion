@@ -6,7 +6,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
-import { analyse, escapeCommand, EXIT_LEAK, EXIT_RAN, EXIT_TOOL_FAILED, markdownSummary } from './check-core.mjs'
+import { analyse, escapeCommand, EXIT_LEAK, EXIT_RAN, EXIT_TOOL_FAILED, exitReason, markdownSummary } from './check-core.mjs'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 const template = fs.readFileSync(path.join(HERE, 'template.html'), 'utf8')
@@ -99,6 +99,20 @@ describe('the CI helpers', () => {
   })
 })
 
+describe('why the extractor stopped', () => {
+  // On Linux a process killed by a signal has no exit code: spawnSync gives status null and the signal name.
+  // On Windows the same kill gives an exit code and no signal, so only these direct cases cover the Linux path there.
+  it('an exit code is said as "exit N"', () => {
+    expect(exitReason({ status: 2, signal: null })).toBe('exit 2')
+  })
+  it('a signal is said as "signal NAME", never as an exit', () => {
+    expect(exitReason({ status: null, signal: 'SIGKILL' })).toBe('signal SIGKILL')
+  })
+  it('no exit code and no signal (the process did not start) says so', () => {
+    expect(exitReason({ status: null, signal: null })).toBe('no exit code')
+  })
+})
+
 describe('the exit codes: 0 it ran, 1 a leak, 3 the tool itself failed', () => {
   it('the three codes are distinct and fixed (the merge-gate arm in scripts/ci-local reads them)', () => {
     expect([EXIT_RAN, EXIT_LEAK, EXIT_TOOL_FAILED]).toEqual([0, 1, 3])
@@ -156,7 +170,8 @@ describe('the run, when the extractor fails', () => {
   it('exits 3 when the extractor is killed by a signal (the stub kills itself with SIGKILL), and still removes its temp folder', () => {
     const { res, leftInTemp } = runCopy(KILL_SELF)
     expect(res.status, res.stderr).toBe(3)
-    expect(res.stderr).toMatch(/the extractor failed \((exit \d+|SIGKILL)\)/)
+    // Linux: the kill is a signal. Windows: the kill gives exit code 1 and no signal.
+    expect(res.stderr).toMatch(process.platform === 'win32' ? /the extractor failed \(exit \d+\)/ : /the extractor failed \(signal SIGKILL\)/)
     expect(leftInTemp).toEqual([])
   })
 })

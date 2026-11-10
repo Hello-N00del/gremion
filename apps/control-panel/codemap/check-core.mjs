@@ -36,6 +36,12 @@ export const EXIT_TOOL_FAILED = 3
 /** A workflow command message: % and line breaks must be escaped or the command is cut. */
 export const escapeCommand = (s) => String(s).replace(/%/g, '%25').replace(/\r/g, '%0D').replace(/\n/g, '%0A')
 
+/**
+ * Why a child process stopped, from a spawnSync result. On Linux a process killed by a signal has no exit code
+ * (status null), so the signal is named as a signal, never as an exit.
+ */
+export const exitReason = (r) => (r.status !== null && r.status !== undefined ? `exit ${r.status}` : r.signal ? `signal ${r.signal}` : 'no exit code')
+
 const lineOf = (source, index) => source.slice(0, index).split('\n').length
 
 /**
@@ -145,7 +151,7 @@ export function main() {
       timeout: 10 * 60 * 1000,
     })
     if (ex.status !== 0) {
-      console.error(`::error title=Code map::the extractor failed (exit ${ex.status ?? ex.signal})`)
+      console.error(`::error title=Code map::the extractor failed (${exitReason(ex)})`)
       console.error(String(ex.stdout ?? '').split('\n').slice(-15).join('\n'))
       console.error(String(ex.stderr ?? '').split('\n').slice(-15).join('\n'))
       if (textLeaks.length) {
