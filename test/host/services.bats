@@ -159,6 +159,8 @@ case " $* " in
     jq -c .smtp "$cfg"; exit 0 ;;
   *" exec "*"test -r /run/secrets/tenants/relay-smtp-password"*)
     if [ -f "$GREMION_ROOT/relay-pw-invisible" ]; then exit 1; fi
+    # only the RECREATED app lacks it: the read-back after step 7 is what must notice
+    if [ -f "$GREMION_ROOT/relay-pw-invisible-after-recreate" ] && grep -q "force-recreate gremion-ui" "$ORDER"; then exit 1; fi
     exit 0 ;;
   *" exec "*"curl "*) exit 0 ;;
   *" exec "*) exit 0 ;;
@@ -496,6 +498,7 @@ ENV
     [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
     local f="${GREMION_ROOT}/tenant-secrets/relay-smtp-password"
     [ -s "$f" ] || { echo "no password file at ${f}"; return 1; }
+    [[ "$output" == *"password file copied (0600) and read back from gremion-ui"* ]] || { echo "$output"; return 1; }
     [ "$(cat "$f")" = "$RELAY_PW" ] || { echo "the copy differs from the source"; return 1; }
     if fs_carries_modes "${GREMION_ROOT}/tenant-secrets"; then
         [ "$(stat -c %a "$f")" = 600 ]
@@ -570,6 +573,9 @@ ENV
     wire
     [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
     [ ! -e "${GREMION_ROOT}/tenant-secrets/relay-smtp-password" ]
+    # the evidence line names no password check that did not run
+    [[ "$output" == *"no login (allow-listed relay), no password file"* ]] || { echo "$output"; return 1; }
+    if [[ "$output" == *"read back from gremion-ui"* ]]; then echo "the line claims a password read-back on a relay with no login"; return 1; fi
     jq -e '.residencyZone == "eu" and .smtp == {host:"relay.example.org", port:587, from:"\"Gremion\" <no-reply@mail.example.org>"}' "${GREMION_ROOT}/tenant-row.json" >/dev/null \
         || { cat "${GREMION_ROOT}/tenant-row.json"; return 1; }
     jq -e '.smtp.configured == true' "${GREMION_ROOT}/ui-config.json" >/dev/null
@@ -578,12 +584,16 @@ ENV
 @test "wire under another transport (stalwart) does nothing for the mail login: no password file, no SQL, no config write, and it says so" {
     relay_mail
     sed -i 's/^MAIL_TRANSPORT=.*/MAIL_TRANSPORT=stalwart/' "${GREMION_ROOT}/etc/env/mail.env"
+    local cfg_before
+    cfg_before="$(cksum < "${GREMION_ROOT}/ui-config.json")"
     wire
     [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
     [ ! -e "${GREMION_ROOT}/tenant-secrets/relay-smtp-password" ]
     [ ! -e "${GREMION_ROOT}/psql-sql.log" ] || { echo "SQL ran under stalwart"; return 1; }
-    ! grep -q '^ui-config$' "$ORDER"
-    ! grep -q 'psql' "$SHIM_LOG"
+    # `!` in the middle of a test cannot fail it (errexit ignores a negated pipeline): each carries its own return
+    if grep -q '^ui-config$' "$ORDER"; then echo "the config.json was written under stalwart"; return 1; fi
+    if grep -q 'psql' "$SHIM_LOG"; then echo "the control database was touched under stalwart"; return 1; fi
+    [ "$(cksum < "${GREMION_ROOT}/ui-config.json")" = "$cfg_before" ] || { echo "config.json changed under stalwart: $(cat "${GREMION_ROOT}/ui-config.json")"; return 1; }
     [ "$(jq -c . "${GREMION_ROOT}/tenant-row.json")" = '{"residencyZone":"eu"}' ]
     [[ "$output" == *"MAIL_TRANSPORT=stalwart"* ]] || { echo "$output"; return 1; }
 }
@@ -617,8 +627,8 @@ ENV
     wire
     [ "$status" -eq 1 ] || { echo "status=$status $output"; return 1; }
     [[ "$output" == *"tenant"* ]]
-    ! grep -q 'force-recreate gremion-ui' "$ORDER"
-    ! grep -q '^ui-config$' "$ORDER"
+    if grep -q 'force-recreate gremion-ui' "$ORDER"; then echo "gremion-ui was recreated after a missing tenant row"; return 1; fi
+    if grep -q '^ui-config$' "$ORDER"; then echo "the config.json was written after a missing tenant row"; return 1; fi
 }
 
 @test "wire with a relay whose config.json write fails (exit 1) names the cause and does not recreate gremion-ui" {
@@ -627,7 +637,7 @@ ENV
     wire
     [ "$status" -eq 1 ] || { echo "status=$status $output"; return 1; }
     [[ "$output" == *"config.json"* ]]
-    ! grep -q 'force-recreate gremion-ui' "$ORDER"
+    if grep -q 'force-recreate gremion-ui' "$ORDER"; then echo "gremion-ui was recreated after the config write failed"; return 1; fi
 }
 
 @test "wire with a relay whose password file is not visible inside gremion-ui fails the wire (the bind mount is read back from the running container)" {
@@ -636,4 +646,29 @@ ENV
     wire
     [ "$status" -eq 1 ] || { echo "status=$status $output"; return 1; }
     [[ "$output" == *"relay-smtp-password"* ]]
+}
+
+@test "wire with a relay whose password file is visible before the recreate but not inside the RECREATED gremion-ui fails the wire at the read-back after step 7" {
+    relay_mail
+    : > "${GREMION_ROOT}/relay-pw-invisible-after-recreate"
+    wire
+    [ "$status" -eq 1 ] || { echo "status=$status $output"; return 1; }
+    [[ "$output" == *"relay-smtp-password"* ]] || { echo "$output"; return 1; }
+    # the failure came AFTER the recreate: that is the read-back of the new container, not the early one
+    grep -q 'force-recreate gremion-ui' "$ORDER" || { echo "gremion-ui was not recreated before the failure"; return 1; }
+}
+
+@test "wire with a relay password file owned by another user than the deploy user refuses before anything is written (exit 2)" {
+    relay_mail
+    local src="${GREMION_ROOT}/etc/secrets/mail/relay-password" real_stat
+    real_stat="$(command -v stat)"
+    # report another owner for the password file only; every other stat answers as it is
+    shim stat "if [ \"\$1\" = '-c' ] && [ \"\$2\" = '%u' ] && [ \"\$3\" = '${src}' ]; then echo 4242; exit 0; fi
+exec ${real_stat} \"\$@\""
+    wire
+    [ "$status" -eq 2 ] || { echo "status=$status $output"; return 1; }
+    [[ "$output" == *"not owned by the deploy user"* ]] || { echo "$output"; return 1; }
+    [ ! -e "${GREMION_ROOT}/tenant-secrets/relay-smtp-password" ]
+    [ ! -e "${GREMION_ROOT}/psql-sql.log" ] || { echo "SQL ran after the refusal"; return 1; }
+    if grep -q compose "$ORDER"; then echo "something was started after the refusal"; return 1; fi
 }

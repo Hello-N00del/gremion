@@ -207,6 +207,11 @@ is copied and the entry carries no login.
 4. reads from the running container, before and after the recreate, that
    `/run/secrets/tenants/relay-smtp-password` is readable and not empty.
 
+A restored copy of the instance does not keep this login: `gremion-neuter`
+points the row's `smtp` entry (`host`, `port`) at the sink, removes its `user`
+and `passwordRef`, and empties `<TENANT_SECRETS_DIR>/relay-smtp-password`,
+beside the env files, the `config.json` files and the realms.
+
 Not done by `wire`: one test mail to the operator's address (named residual
 below), and the first Settings save, which is not needed any more.
 
@@ -245,6 +250,10 @@ not offered for the pilot.
   accepts the login is proven by one real mail from the running app (owed after
   deploy, below). A reset removes the copied password file and the control
   database, so `wire` is part of every install that follows one.
+- **Install checklist for the mail login.** The control panel's install steps
+  do not yet list step 6c, and no verify yet fails when the tenant row has no
+  `smtp` entry or the tenant's `config.json` is not `smtp.configured`. Both live
+  outside this repository's host tooling and are a named follow-up.
 - **Platform pins.** Only the apex host pin is declared on the `traefik`
   service; the `www`, `control` and `sales` pins belong to the static routers
   that are not part of this install.

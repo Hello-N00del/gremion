@@ -270,7 +270,7 @@ mail_login_visible() {
 
 # mail_login_apply <slug> <tenant secrets dir> -- step 6c (after mail_login_facts). Idempotent.
 mail_login_apply() {
-    local slug="$1" tsd="$2" dest pref="" before after want n cfgout ui_c
+    local slug="$1" tsd="$2" dest pref="" before after want n cfgout ui_c pwnote
     if [[ "$MAIL_LOGIN" != on ]]; then
         info "mail login: not wired, MAIL_TRANSPORT=${ML_TRANSPORT:-unset} (this step is for the relay transport only)"
         return 0
@@ -328,7 +328,10 @@ NODEJS
     jq -e --arg h "$ML_HOST" --argjson p "$ML_PORT" --arg f "$ML_FROM_ADDR" '.configured == true and .host == $h and .port == $p and .from_address == $f' <<< "$cfgout" >/dev/null 2>&1 \
         || die "the tenant's config.json reads back without smtp.configured, host, port and from_address as written" "$GREMION_EXIT_ASSERT"
     mail_login_visible "$ui_c" "$tsd"
-    ok "mail login: relay ${ML_HOST}:${ML_PORT} as ${ML_FROM_ADDR}; tenant row smtp merged, config.json smtp.configured, password file ${ML_USER:+copied (0600) and }read back from gremion-ui"
+    # the evidence line names only what ran: no login, no password file, nothing read back
+    pwnote="no login (allow-listed relay), no password file"
+    if [[ -n "$ML_USER" ]]; then pwnote="password file copied (0600) and read back from gremion-ui"; fi
+    ok "mail login: relay ${ML_HOST}:${ML_PORT} as ${ML_FROM_ADDR}; tenant row smtp merged, config.json smtp.configured, ${pwnote}"
 }
 
 # ---------------------------------------------------------------------------
