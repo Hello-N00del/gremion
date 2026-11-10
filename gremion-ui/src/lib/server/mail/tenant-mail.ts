@@ -57,6 +57,18 @@ const _cache = new Map<string, Entry>()
 
 type TransportOptions = Parameters<typeof nodemailer.createTransport>[0] & object
 
+/**
+ * The name announced in EHLO. Without it nodemailer sends the OS host name, which in a container
+ * is its id, and Google's relay refuses that with 421 (EHLO).
+ */
+function smtpEhloName(): string | undefined {
+  try {
+    return new URL(process.env.PUBLIC_BASE_URL ?? '').hostname || undefined
+  } catch {
+    return undefined
+  }
+}
+
 function guardedTransport(host: string, port: number, base: TransportOptions): Transporter {
   const facade = {
     async sendMail(msg: unknown) {
@@ -113,6 +125,7 @@ export function getTenantMailContext(): TenantMailContext {
 
   const baseOptions = {
     port,
+    name: smtpEhloName(),
     // O-5: implicit TLS only on 465; nodemailer auto-STARTTLSes on 587.
     secure: port === 465,
     auth,
