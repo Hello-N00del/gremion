@@ -10,6 +10,8 @@ import { accessWords } from './access-log'
 
 export interface NewCustomerInput {
   slug: string
+  /** The slug typed a second time (a typo guard: the slug is permanent). The form action always sets it; absent (other callers) is not checked. */
+  confirmSlug?: string
   host: string
   itAdmin: string
   councilAdmin: string
@@ -78,6 +80,9 @@ export function validateNewCustomer(
     errors.slug = 'Kurzname: 3-30 Zeichen, a-z, 0-9 und einzelne Bindestriche, beginnend mit einem Buchstaben.'
   } else if (RESERVED_SLUGS.has(input.slug)) {
     errors.slug = `Kurzname „${input.slug}“ ist reserviert und kann nicht vergeben werden.`
+  }
+  if (input.confirmSlug !== undefined && input.confirmSlug !== input.slug) {
+    errors.confirmSlug = 'Der Kurzname ist dauerhaft und lässt sich später nicht ändern: bitte ihn zur Kontrolle noch einmal genau so eingeben.'
   }
   if (NON_ASCII.test(input.host)) errors.host = 'Hostname nur in ASCII (a-z, 0-9, Punkt, Bindestrich); Umlaute und IDN-Namen sind im Pilotbetrieb nicht möglich, kein Punycode.'
   else if (!HOST.test(input.host.toLowerCase())) errors.host = 'Hostname in Kleinbuchstaben, z. B. rat.musterstadt.de.'
