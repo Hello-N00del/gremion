@@ -1,0 +1,1297 @@
+{
+  "intro": [
+    "This page shows a map of the program code of Gremion. Gremion is software for councils, for example the student council of a university. A council is a group of people that make decisions together. The software keeps the people, the groups, the minutes and the votes of the council. You need no knowledge of software to read this page.",
+    "The map has six layers, from L0 to L5. A layer is one level of the system. L0 holds the computers and the containers. L5 holds what the user sees in the browser. A line between two items on the map shows that one item uses the other item.",
+    "The map shows areas, files, functions, pages, routes and tables. An area is a group of files that belong together. A function is a small piece of code that does one job. A page is a screen that the user can open. A route is an address that a program can ask for data. A table is one list of data in the database.",
+    "The map also shows the GitHub workflows of the project. A workflow is a file that tells GitHub which jobs to run when someone changes the code. A job is one task of a workflow.",
+    "A program made the map. The program reads the code of Gremion and finds the links. The program cannot see all links. It cannot see a link that the code makes only when it runs. The last section of the page gives the share of function calls that the map shows. Treat the map as a good guide and not as a complete proof."
+  ],
+  "howToRead": [
+    "Read the six layers first, from L0 to L5.",
+    "Select a layer to see the areas in it.",
+    "Select an area to read what it does and why it exists.",
+    "Select a function to see the functions that it calls.",
+    "Select a job in a workflow to see the jobs that it waits for.",
+    "Select a walkthrough to follow one real action step by step.",
+    "Read the glossary when a word is new to you."
+  ],
+  "layers": {
+    "L0": {
+      "title": "L0: Servers and containers",
+      "text": "A server is a computer that runs programs for other computers. A container is a closed box that holds one program and all that the program needs. L0 holds the files that tell the server which containers to start, and the workflow files of GitHub Actions. The map shows connections in L0 only for the jobs of the workflows. A job connects to the jobs that it waits for and to the files and areas that it runs. L0 has no functions, because the map does not follow these files."
+    },
+    "L1": {
+      "title": "L1: Database",
+      "text": "A database keeps data for a long time. The map shows the database as the SQL files that build it. A table is one list of data in the database. One example is the list of committees. L1 shows each table. It also shows the code that reads or writes the table."
+    },
+    "L2": {
+      "title": "L2: Shared packages",
+      "text": "A package is a folder of code that many other parts use. L2 holds these packages. One package connects to the database. Another package sends messages between services. Another package creates a new customer. Each package does one job, and no package has a screen."
+    },
+    "L3": {
+      "title": "L3: Backend services",
+      "text": "A backend service is a program that runs on the server and has no screen. L3 holds the kernel API and the backend service of each module. The web app asks these services for data. The services answer, and they read and write the database."
+    },
+    "L4": {
+      "title": "L4: Web server code",
+      "text": "The web app has two halves. One half runs on the server. The other half runs in the browser. L4 is the server half. It checks who the user is and it receives the requests of the browser. It also asks the services and the database for data."
+    },
+    "L5": {
+      "title": "L5: Web pages",
+      "text": "L5 is the half of the web app that the user sees in the browser. It holds the pages and the parts of the pages. When the user does an action, a page sends a request to L4. L5 also holds some shared helper code. The server half uses this code too."
+    }
+  },
+  "areas": {
+    "area:compose@L0": {
+      "title": "Top-level compose files",
+      "what": "This area holds the files in the top of the compose folder. They are a short guide to the folder and one example environment file for the test system.",
+      "why": "A new reader needs to know where the container files are. The guide says which compose projects exist.",
+      "leadsTo": "These files do not call any code. They point to the other compose areas and to the root compose files."
+    },
+    "area:compose/control-panel@L0": {
+      "title": "Compose files for the control panel",
+      "what": "A compose file lists the containers to start and how they connect. These files start the control panel alone, on a host that has no full Gremion stack. One file starts the panel. One file links it to the operator tools.",
+      "why": "The operator needs the control panel to create customers. A new host can start the panel first.",
+      "leadsTo": "The files start the container that the control panel build file makes. The panel then reads the platform database."
+    },
+    "area:compose/observability@L0": {
+      "title": "Compose files for monitoring",
+      "what": "Monitoring means that a system watches the health of the servers and keeps the logs. This folder holds the compose file of the operator-only monitoring stack. It also holds the rules for alerts, the dashboards and the tests of these files.",
+      "why": "The operator must see when a service stops or when a disk is full. These tools keep logs and traces for a limited time.",
+      "leadsTo": "The stack uses the Prometheus, Loki, Tempo, Grafana and Alloy programs. The configuration of Loki, Tempo and Alloy is in the docker folders."
+    },
+    "area:docker-compose@L0": {
+      "title": "Root compose files",
+      "what": "The root of the repository holds five compose files. The main file starts the shared services, for example the database, Keycloak, the message broker and the edge proxy. Other files add production changes, local development ports, and the two app colours blue and green.",
+      "why": "One command must start the whole system on a developer computer. On a host, the same files start the real system in a safe order.",
+      "leadsTo": "The files start containers from the images that the container build files make. The app file starts the web app, the public site and the module services."
+    },
+    "area:docker/alloy@L0": {
+      "title": "Alloy collector configuration",
+      "what": "Alloy is a program that collects data about the health of the system. This file tells Alloy what to read and where to send it.",
+      "why": "The operator needs one place that collects the health data. The file lets Alloy read only a few read-only sources, and it gives Alloy no access to the council networks.",
+      "leadsTo": "Alloy sends the data to Prometheus, Loki and Tempo. The compose file of the monitoring stack starts Alloy."
+    },
+    "area:docker/cloudflared@L0": {
+      "title": "Cloudflare origin certificate",
+      "what": "This folder holds one certificate file. It is the root certificate of the Cloudflare origin authority.",
+      "why": "A tunnel program must trust this certificate to connect to the origin server.",
+      "leadsTo": "The production compose file mounts this certificate into the tunnel container."
+    },
+    "area:docker/collabora@L0": {
+      "title": "Collabora container build",
+      "what": "This folder holds one Dockerfile. It builds the Collabora image for the office editor. The base is the official Collabora image, pinned by digest. The recipe then upgrades one system library. The library decodes compressed web answers, and its old version has a known security fault.",
+      "why": "Collabora fetches documents and linked files over HTTP, so it uses this library. The upgrade closes the fault. The recipe calls the fix a stopgap, because the Collabora line in use has no new release.",
+      "leadsTo": "The compose file builds the service collabora from this folder. Nextcloud uses the service to let a person edit a document in the browser."
+    },
+    "area:docker/element-call@L0": {
+      "title": "Element Call container build and settings",
+      "what": "This folder holds a Dockerfile and the template of one settings file. The Dockerfile starts from the official Element Call image, pinned by digest, and adds no file. The settings are not in the image. The template names the Matrix home server and the address where a call gets its token. It also skips the lobby of a call.",
+      "why": "A rule of the release checks refuses an image of another owner on the registry of GitHub in the compose file. A Dockerfile that starts from that image gives an image of the project. The settings name the platform and the pilot tenant, so they stay out of the image.",
+      "leadsTo": "The host makes the settings file from the template. The compose file builds the service element-call from this folder and binds the settings file into the container. The browser loads the web app from this container."
+    },
+    "area:docker/fallback@L0": {
+      "title": "Fallback page",
+      "what": "This area holds a small container build file and one HTML page. The page says in two languages that the system starts. The page reloads itself every 10 seconds.",
+      "why": "The edge proxy needs a page to show while the real app is not ready. A person then sees a clear message and not an error.",
+      "leadsTo": "The proxy shows this page when the real app does not answer. The page makes no calls."
+    },
+    "area:docker/keycloak@L0": {
+      "title": "Keycloak realm templates and theme",
+      "what": "Keycloak is the program that checks who a person is. A realm is one separate set of users inside Keycloak. This folder holds the template of a customer realm, the template of the operator realm and the login theme. Keycloak starts with the master realm only. It imports no realm at boot.",
+      "why": "Each customer needs its own realm, so that the users of one customer never mix with those of another. The login theme is the real login form that people see.",
+      "leadsTo": "The provisioning code builds the realm of a new customer from the template. The browser shows the theme when a person proves who they are."
+    },
+    "area:docker/legal@L0": {
+      "title": "Legal pages container",
+      "what": "This area builds a container that serves static legal pages with the nginx web server. The pages are the imprint and the data protection text. The folder holds the container build file, the nginx configuration and the page templates.",
+      "why": "The law asks for these pages on a public site. A static server is simple and has little to attack.",
+      "leadsTo": "The compose file starts this container. The edge proxy sends legal addresses to it."
+    },
+    "area:docker/livekit@L0": {
+      "title": "LiveKit settings",
+      "what": "This folder holds one settings file for the LiveKit server. LiveKit is the media server of the video calls. The file holds settings that are not secret. It sets the port for call setup, the range of ports for media and the fallback on TCP. It does not use TURN. A room opens for the first person, and a room that nobody joins closes after five minutes.",
+      "why": "A call with many people needs a server that forwards the video of each person to the others. The API key and the secret are not in the file. The compose file gives them to the server from the env file of the host.",
+      "leadsTo": "The compose file binds this file into the livekit container as read only. Traefik sends the call setup path of the platform host to the port for setup. Element Call uses this server for the video of a call."
+    },
+    "area:docker/loki@L0": {
+      "title": "Loki log store configuration",
+      "what": "Loki is a program that stores logs. A log is a list of messages that a program writes about what it does. The retention package makes this file from its list of rules. It sets the time after which Loki deletes each class of log.",
+      "why": "Logs can hold personal data, so they must not live for ever. The file keeps the rules and the real configuration the same.",
+      "leadsTo": "The monitoring compose file mounts this file into the Loki container. The retention package writes it."
+    },
+    "area:docker/nats@L0": {
+      "title": "NATS broker configuration",
+      "what": "NATS is a message broker. A message broker carries short messages between programs. This file configures the broker. It allows no anonymous client. Each client uses a key and lands in the account of its customer.",
+      "why": "The modules must send events and must not use one database together. One account for each customer keeps the messages of the customers apart.",
+      "leadsTo": "The nats-auth package writes the accounts file that this file includes. The compose file mounts this file into the NATS container."
+    },
+    "area:docker/nextcloud@L0": {
+      "title": "Nextcloud container build, hooks and settings",
+      "what": "This folder builds the Nextcloud image for the files module and the votes module. The Dockerfile starts from the official Nextcloud image, pinned by digest. It copies in one settings file and the hook scripts. The settings file sets the cache, the host names, the region, the language and the protection against repeated login tries. One group of hooks runs at the first install and adds the apps. Another group runs at each start, sets the host names again and makes sure that the Keycloak login accepts tokens for WebDAV.",
+      "why": "The apps need a Nextcloud that runs with a database, so the build cannot install them. The hooks do it in the container. A hook that fails prints a message and does not stop the start.",
+      "leadsTo": "The compose file builds the service nextcloud from this folder. The files module and the votes module call this server. Collabora edits the documents for it."
+    },
+    "area:docker/pgbouncer@L0": {
+      "title": "PgBouncer connection pool",
+      "what": "PgBouncer is a program between the web app and the database. It shares a small number of database connections between many requests. This folder holds its configuration and the file with its user list.",
+      "why": "A database can serve only a limited number of connections. The pool keeps the number small and steady in production.",
+      "leadsTo": "The production compose file points the web app at PgBouncer. PgBouncer forwards the work to Postgres."
+    },
+    "area:docker/postgres@L0": {
+      "title": "Postgres first-start script",
+      "what": "This area holds one shell script. It runs only the first time the database container starts. It creates the databases and the users for Keycloak, the kernel, the control registry and the public reader.",
+      "why": "A new system needs these databases before any program can connect. The module servers start empty. The provisioner makes their databases later.",
+      "leadsTo": "The Postgres container runs this script on its first start. The migrations in L1 then build the tables."
+    },
+    "area:docker/tempo@L0": {
+      "title": "Tempo trace store configuration",
+      "what": "Tempo is a program that stores traces. A trace shows the path of one request through many programs. This file sets that Tempo keeps a trace for 7 days.",
+      "why": "A trace can hold user identifiers, so it counts as personal data. A short time limit protects the people.",
+      "leadsTo": "The monitoring compose file starts Tempo with this file. Alloy sends the traces to Tempo."
+    },
+    "area:docker/traefik@L0": {
+      "title": "Traefik edge proxy configuration",
+      "what": "Traefik is the edge proxy. It is the first program that receives a request from the internet. This folder holds its main configuration and its dynamic rules. Traefik gets its own certificates from a certificate authority.",
+      "why": "Every customer has its own host name. Traefik must send each host name to the right program. It also adds the safe web address layer, TLS.",
+      "leadsTo": "Traefik sends requests to the web app, to Keycloak and to the public site. The edge-routers package writes one router file for each customer."
+    },
+    "area:docker/vector@L0": {
+      "title": "Vector log pipeline",
+      "what": "Vector is a program that moves logs. This folder holds its configuration and several shell scripts. The scripts change each IP address into a pseudonym, rotate the log files and delete old files. The folder also holds tests for these scripts.",
+      "why": "An IP address is personal data. The system must not keep it in clear text. The scripts make sure that the logs follow the retention rules.",
+      "leadsTo": "Vector reads the logs of Traefik and writes the processed logs. Alloy then reads the processed logs."
+    },
+    "area:infra/hardening@L0": {
+      "title": "Safety values",
+      "what": "To harden a system is to make it harder to attack. This folder holds a Makefile, a values file and templates. The Makefile builds the safety environment file. It also makes and changes the key for IP pseudonyms. It checks the backup repository too.",
+      "why": "The operator must have one place for the safety values. The key for IP pseudonyms must change from time to time.",
+      "leadsTo": "The generated file feeds the log and backup programs. The folder calls no application function."
+    },
+    "area:infra/host@L0": {
+      "title": "Host programs",
+      "what": "The host is the real computer that runs Gremion. This folder holds the shell programs that run on that computer. The programs have names that start with gremion. Examples are backup, deploy, rollback, tenant and mail. A library file holds the shared helper code. Templates make the environment files.",
+      "why": "The operator must manage the host in a safe and repeatable way. The programs copy to the host as real files and never as links.",
+      "leadsTo": "The tenant program runs the steps that create a customer. The deploy program starts the compose projects."
+    },
+    "area:k8s/base@L0": {
+      "title": "Kubernetes base files",
+      "what": "Kubernetes is a system that runs containers on a cluster of computers. This folder holds the base description of the Gremion stack for Kubernetes. It has parts for the web app, the public site, Keycloak and Postgres. It also has parts for Traefik, the legal pages, the log pipeline and backups.",
+      "why": "Some customers run Gremion on a cluster and not on one host. One base description serves all clusters.",
+      "leadsTo": "The overlays change this base for each cluster type. The files start the same container images as the compose files."
+    },
+    "area:k8s/overlays@L0": {
+      "title": "Kubernetes overlays",
+      "what": "An overlay changes a base description for one place. This folder holds the overlays for development and for production. It also holds one overlay for each of three clouds. The clouds are AKS, EKS and GKE.",
+      "why": "Each cloud has its own names for disks and load balancers. The overlays hold only these differences.",
+      "leadsTo": "Each overlay uses the base files and applies its own changes. The production overlay also holds patches and secret placeholders."
+    },
+    "area:k8s/traefik@L0": {
+      "title": "Kubernetes Traefik values",
+      "what": "These files are value files for the Traefik install on Kubernetes. One file holds the shared values. One file is for development and one file is for production.",
+      "why": "The edge proxy needs different values on a developer cluster and on a production cluster.",
+      "leadsTo": "The Traefik install reads these values. The base files send the web traffic to Traefik."
+    },
+    "area:ops/scripts@L0": {
+      "title": "Operator check scripts",
+      "what": "This area holds two checks that the operator can run. One script checks the submodule of the Helios election software. The other script checks the sales text for forbidden claims. Each script has a test file.",
+      "why": "The operator must not publish a wrong claim or use a wrong version of Helios. A script finds the fault before a person does.",
+      "leadsTo": "These scripts stand alone. No web app function calls them."
+    },
+    "area:ops/vendor-mail@L0": {
+      "title": "Vendor mail tools",
+      "what": "The vendor is the company that runs Gremion. This area holds the tools for the mail system of the vendor. That mail system is the self-hosted Stalwart server. It sends password resets of the operator login and the alerts. Many small check scripts test the identities, the secrets and the delivery records.",
+      "why": "Mail from the vendor must not go through a third-party mail service. The checks stop a wrong secret or a wrong sender before production.",
+      "leadsTo": "The checks read the mail configuration of the host. The runbook tells the operator what to do."
+    },
+    "area:dockerfile:apps/control-panel@L0": {
+      "title": "Container build: apps/control-panel",
+      "what": "A Dockerfile is a recipe that builds a container image. This Dockerfile builds the image of the control panel web app. The operator uses this container to manage customers.",
+      "why": "Each program must run in the same way on every computer. The recipe fixes the version of every part that the program needs.",
+      "leadsTo": "The compose files and the Kubernetes files start containers from this image. The recipe copies the code of this part from the repository."
+    },
+    "area:dockerfile:gremion-public@L0": {
+      "title": "Container build: gremion-public",
+      "what": "A Dockerfile is a recipe that builds a container image. This Dockerfile builds the image of the public portal. The portal shows the published minutes to everyone.",
+      "why": "Each program must run in the same way on every computer. The recipe fixes the version of every part that the program needs.",
+      "leadsTo": "The compose files and the Kubernetes files start containers from this image. The recipe copies the code of this part from the repository."
+    },
+    "area:dockerfile:gremion-ui@L0": {
+      "title": "Container build: gremion-ui",
+      "what": "A Dockerfile is a recipe that builds a container image. This Dockerfile builds the image of the main web app. Council members use this container for their daily work.",
+      "why": "Each program must run in the same way on every computer. The recipe fixes the version of every part that the program needs.",
+      "leadsTo": "The compose files and the Kubernetes files start containers from this image. The recipe copies the code of this part from the repository."
+    },
+    "area:dockerfile:modules/board@L0": {
+      "title": "Container build: modules/board",
+      "what": "A Dockerfile is a recipe that builds a container image. This Dockerfile builds the image of the board module backend. It keeps the task boards.",
+      "why": "Each program must run in the same way on every computer. The recipe fixes the version of every part that the program needs.",
+      "leadsTo": "The compose files and the Kubernetes files start containers from this image. The recipe copies the code of this part from the repository."
+    },
+    "area:dockerfile:modules/calendar@L0": {
+      "title": "Container build: modules/calendar",
+      "what": "A Dockerfile is a recipe that builds a container image. This Dockerfile builds the image of the calendar module backend. It keeps the events.",
+      "why": "Each program must run in the same way on every computer. The recipe fixes the version of every part that the program needs.",
+      "leadsTo": "The compose files and the Kubernetes files start containers from this image. The recipe copies the code of this part from the repository."
+    },
+    "area:dockerfile:modules/content@L0": {
+      "title": "Container build: modules/content",
+      "what": "A Dockerfile is a recipe that builds a container image. This Dockerfile builds the image of the content module backend. It keeps the posts and the address lists.",
+      "why": "Each program must run in the same way on every computer. The recipe fixes the version of every part that the program needs.",
+      "leadsTo": "The compose files and the Kubernetes files start containers from this image. The recipe copies the code of this part from the repository."
+    },
+    "area:dockerfile:modules/files@L0": {
+      "title": "Container build: modules/files",
+      "what": "A Dockerfile is a recipe that builds a container image. This Dockerfile builds the image of the files module backend. It passes file requests to Nextcloud.",
+      "why": "Each program must run in the same way on every computer. The recipe fixes the version of every part that the program needs.",
+      "leadsTo": "The compose files and the Kubernetes files start containers from this image. The recipe copies the code of this part from the repository."
+    },
+    "area:dockerfile:modules/finance@L0": {
+      "title": "Container build: modules/finance",
+      "what": "A Dockerfile is a recipe that builds a container image. This Dockerfile builds the image of the finance module backend. It keeps budgets, expenses and bookings.",
+      "why": "Each program must run in the same way on every computer. The recipe fixes the version of every part that the program needs.",
+      "leadsTo": "The compose files and the Kubernetes files start containers from this image. The recipe copies the code of this part from the repository."
+    },
+    "area:dockerfile:modules/messaging/synapse@L0": {
+      "title": "Container build: modules/messaging/synapse",
+      "what": "A Dockerfile is a recipe that builds a container image. This Dockerfile builds the image of the Synapse chat server. Synapse is the Matrix home server of the messaging module.",
+      "why": "Each program must run in the same way on every computer. The recipe fixes the version of every part that the program needs.",
+      "leadsTo": "The compose files and the Kubernetes files start containers from this image. The recipe copies the code of this part from the repository."
+    },
+    "area:dockerfile:modules/messaging@L0": {
+      "title": "Container build: modules/messaging",
+      "what": "A Dockerfile is a recipe that builds a container image. This Dockerfile builds the image of the messaging module backend. It passes chat and video requests to Matrix and LiveKit.",
+      "why": "Each program must run in the same way on every computer. The recipe fixes the version of every part that the program needs.",
+      "leadsTo": "The compose files and the Kubernetes files start containers from this image. The recipe copies the code of this part from the repository."
+    },
+    "area:dockerfile:modules/publishing@L0": {
+      "title": "Container build: modules/publishing",
+      "what": "A Dockerfile is a recipe that builds a container image. This Dockerfile builds the image of the newsletter module backend. It keeps newsletters and sends them.",
+      "why": "Each program must run in the same way on every computer. The recipe fixes the version of every part that the program needs.",
+      "leadsTo": "The compose files and the Kubernetes files start containers from this image. The recipe copies the code of this part from the repository."
+    },
+    "area:dockerfile:modules/vault@L0": {
+      "title": "Container build: modules/vault",
+      "what": "A Dockerfile is a recipe that builds a container image. This Dockerfile builds the image of the vault module backend. It keeps secrets in encrypted form.",
+      "why": "Each program must run in the same way on every computer. The recipe fixes the version of every part that the program needs.",
+      "leadsTo": "The compose files and the Kubernetes files start containers from this image. The recipe copies the code of this part from the repository."
+    },
+    "area:dockerfile:modules/votes@L0": {
+      "title": "Container build: modules/votes",
+      "what": "A Dockerfile is a recipe that builds a container image. This Dockerfile builds the image of the votes module backend. It joins polls and Helios ballots in one list.",
+      "why": "Each program must run in the same way on every computer. The recipe fixes the version of every part that the program needs.",
+      "leadsTo": "The compose files and the Kubernetes files start containers from this image. The recipe copies the code of this part from the repository."
+    },
+    "area:dockerfile:scripts/verify/bats-runner@L0": {
+      "title": "Container build: scripts/verify/bats-runner",
+      "what": "A Dockerfile is a recipe that builds a container image. This Dockerfile builds the image of a test runner for shell tests. It runs the Bats tests of the host scripts.",
+      "why": "Each program must run in the same way on every computer. The recipe fixes the version of every part that the program needs.",
+      "leadsTo": "The compose files and the Kubernetes files start containers from this image. The recipe copies the code of this part from the repository."
+    },
+    "area:dockerfile:services/kernel-api@L0": {
+      "title": "Container build: services/kernel-api",
+      "what": "A Dockerfile is a recipe that builds a container image. This Dockerfile builds the image of the kernel API service. It answers questions about customers, modules and access.",
+      "why": "Each program must run in the same way on every computer. The recipe fixes the version of every part that the program needs.",
+      "leadsTo": "The compose files and the Kubernetes files start containers from this image. The recipe copies the code of this part from the repository."
+    },
+    "area:dockerfile:test/host/fixtures/observability@L0": {
+      "title": "Container build: test/host/fixtures/observability",
+      "what": "A Dockerfile is a recipe that builds a container image. This Dockerfile builds the image of a test fixture for monitoring. The tests use it as a fake monitored system.",
+      "why": "Each program must run in the same way on every computer. The recipe fixes the version of every part that the program needs.",
+      "leadsTo": "The compose files and the Kubernetes files start containers from this image. The recipe copies the code of this part from the repository."
+    },
+    "area:dockerfile:test/host/runner@L0": {
+      "title": "Container build: test/host/runner",
+      "what": "A Dockerfile is a recipe that builds a container image. This Dockerfile builds the image of the runner of the host tests. It runs the tests of the host programs in a clean container.",
+      "why": "Each program must run in the same way on every computer. The recipe fixes the version of every part that the program needs.",
+      "leadsTo": "The compose files and the Kubernetes files start containers from this image. The recipe copies the code of this part from the repository."
+    },
+    "area:dockerfile:test/isolation/tenant@L0": {
+      "title": "Container build: test/isolation/tenant",
+      "what": "A Dockerfile is a recipe that builds a container image. This Dockerfile builds the toolchain for the test that one customer cannot read the data of another customer. The image holds node, pnpm and git and holds no code of the repository. It has its own ignore file, so the build gets no file from this folder.",
+      "why": "A clean clone in a fixed toolchain gives the same result on every host. The container gets the release tree, but the program works on a clone of it. An untracked file, for example a secret, is not in a clone, so it never gets into the run.",
+      "leadsTo": "The host program gremion-isolation starts a container from this image. The container clones the release tree and runs the isolation check there."
+    },
+    "area:db:gremion-ui/migrations-control@L1": {
+      "title": "Control database tables",
+      "what": "The control database is the list of all customers. This area holds its 5 SQL files. The main table is tenant. It holds one row for each customer. The other tables hold the resources of a customer, the migration runs and the host names of a customer.",
+      "why": "Gremion must know which customers exist and where their data is before it can serve a request. The status of a customer is one of five values, from provisioning to deleted.",
+      "leadsTo": "The tenancy-core package reads the host names. The web app, the kernel API and the control panel read the customer rows."
+    },
+    "area:db:gremion-ui/migrations@L1": {
+      "title": "Customer data tables of the web app",
+      "what": "This area holds 37 SQL files. They build the data tables that each customer has. The tables hold committees, members, roles, protocols and resolutions. They also hold the audit log, calendar events and the first board tables. Some tables are also in the module areas. Those tables come from an older form of the same module.",
+      "why": "The council needs its records in a database that a person can trust. The audit log table keeps a hash chain, so a change in old rows shows.",
+      "leadsTo": "The server half of the web app reads and writes these tables. The public portal reads the published protocols with a read-only role."
+    },
+    "area:db:modules/board/migrations@L1": {
+      "title": "Board tables",
+      "what": "This area holds the SQL file of the board module. It builds three tables. The tables are board, stack and card. A board holds stacks and a stack holds cards.",
+      "why": "A task board needs a list of tasks that a person can sort and move. The module keeps one database for each customer and board.",
+      "leadsTo": "The board backend and the board server code read and write these tables."
+    },
+    "area:db:modules/calendar/migrations@L1": {
+      "title": "Calendar tables",
+      "what": "This area holds the 3 SQL files of the calendar module. The tables hold events, event types and repeat rules. They also hold the options of each committee, the sync queue for CalDAV, the audit rows and the outbox.",
+      "why": "A calendar must keep one source of truth for each event. The outbox keeps each change event until the relay sends it, so the system loses no event.",
+      "leadsTo": "The calendar backend and the calendar server code read and write these tables."
+    },
+    "area:db:modules/content/app/migrations@L1": {
+      "title": "Content app tables",
+      "what": "This area holds 2 SQL files that the content app half owns. They build the table for news posts.",
+      "why": "The public news list needs its own table in the kernel database.",
+      "leadsTo": "The content server code reads and writes the news posts."
+    },
+    "area:db:modules/content/migrations@L1": {
+      "title": "Content backend tables",
+      "what": "This area holds the 3 SQL files of the content backend. The tables hold posts, the channels of a post and the media of a post. They also hold publications, recipients, address lists, deliveries, tokens and unsubscribes. It also has an outbox and an audit table.",
+      "why": "A post can reach several channels. Examples are mail, the website and Instagram. The tables keep the state of each channel and each recipient.",
+      "leadsTo": "The content backend and the content server code read and write these tables."
+    },
+    "area:db:modules/finance/migrations@L1": {
+      "title": "Finance tables",
+      "what": "This area holds the 6 SQL files of the finance module. It builds 32 tables in the finance schema. They hold budget plans, projects, expenses and receipts. They also hold approvals, ledger entries, bank accounts, payment orders and fiscal years.",
+      "why": "A council must show where its money goes. These tables keep every step from the budget to the entry in the ledger.",
+      "leadsTo": "Only the finance backend reads and writes these tables. The app half of finance is not in this repository."
+    },
+    "area:db:modules/publishing/migrations@L1": {
+      "title": "Newsletter tables",
+      "what": "This area holds the SQL file of the newsletter module. The tables hold newsletters, address lists, list members and recipients. They also hold deliveries, send tokens, unsubscribes, the outbox and an audit table.",
+      "why": "A newsletter must reach each person once and must let a person stop the mail. The unsubscribe table records that choice.",
+      "leadsTo": "The newsletter backend reads and writes these tables."
+    },
+    "area:db:modules/vault/migrations@L1": {
+      "title": "Vault tables",
+      "what": "This area holds the 2 SQL files of the vault module. One table holds the encrypted secrets. The other table is the access log. It records each time a person reads a secret.",
+      "why": "A secret store must show who read which secret. The log gives that proof.",
+      "leadsTo": "The vault backend reads and writes these tables."
+    },
+    "area:db:packages/events/sql@L1": {
+      "title": "Standard event tables template",
+      "what": "This area holds one SQL file. It is a template, not a set of finished tables. The template holds the standard tables of each service database. These are the outbox, the inbox, the applied version and the job table. The events package renders the template for each service.",
+      "why": "Every service needs the same safe pattern to send and to receive events once. One template keeps all copies the same.",
+      "leadsTo": "The events package makes the real SQL from this template. The first migration of a service must copy it byte for byte."
+    },
+    "area:db:packages/tenant-store/src/lifecycle/platform-migrations@L1": {
+      "title": "Platform database tables",
+      "what": "The platform database holds data about the whole installation. This area holds its 17 SQL files. The tables hold the module list, the module versions and the enablement of modules. They also hold the provisioning steps and requests, the Karenz rows and the access records. The plt schema holds most of these tables.",
+      "why": "The operator must track what the system did for each customer. The request table lets the control panel ask for work without root rights.",
+      "leadsTo": "The control panel writes the requests. The host programs, the provisioning package and the Karenz code read and write the other tables."
+    },
+    "area:db:services/governance/migrations@L1": {
+      "title": "Governance service tables",
+      "what": "This area holds one SQL file for a governance service. The tables hold agendas, motions, meetings and attendance. They also hold invitations, quorum checks and the standard outbox and inbox. This repository holds the migration and a test only. It holds no server for this service.",
+      "why": "The design of the service needs a stable schema first. The schema is ready before the service code.",
+      "leadsTo": "The tenant-store package reads the file for the migration runner. No service code in this repository uses these tables yet."
+    },
+    "area:db:services/kernel-api/migrations/authz@L1": {
+      "title": "Access rights tables",
+      "what": "This area holds 2 SQL files. They build the tables for capabilities, roles and grants. A capability is one right. A role is a set of rights. A grant gives a role to a person.",
+      "why": "The system must answer one question. Can this person do this action? These tables hold the data for the answer.",
+      "leadsTo": "The kernel API reads and writes these tables."
+    },
+    "area:db:services/kernel-api/migrations/bodies@L1": {
+      "title": "Bodies, persons and seats tables",
+      "what": "This area holds 2 SQL files. They build the tables for bodies, org units, seats, persons, memberships and tenures. A body is a council or a committee. A seat is one place in a body. A tenure is the time in which a person holds a seat. The files also have the standard outbox and inbox tables.",
+      "why": "A council must show who sat where and when. The tables keep the past as well as the present.",
+      "leadsTo": "The kernel API reads and writes these tables most of all. The web app and the tenant-store package also use them."
+    },
+    "area:db:services/kernel-api/migrations/core@L1": {
+      "title": "Kernel database setup",
+      "what": "This area holds the first SQL file of the kernel database. It creates the idt schema and the helper objects that the other files need.",
+      "why": "The later files need the schema to exist.",
+      "leadsTo": "The kernel API runs this file first, before the other kernel migrations."
+    },
+    "area:packages/authz-client@L2": {
+      "title": "Package: authz-client",
+      "what": "This package is a small client for the access decision service of the kernel API. A module asks it one question. Can this person do this action in this body? The answer is yes or no. If an error occurs, the client says no.",
+      "why": "A module must not compare roles by itself. One service must decide. The client never keeps an answer, so a disabled module stays off.",
+      "leadsTo": "The client sends an HTTP request to the kernel API. It uses no database."
+    },
+    "area:packages/db@L2": {
+      "title": "Package: db",
+      "what": "This package makes a connection to Postgres. It also holds the shared types of database rows.",
+      "why": "Every part of the code must connect to the database in the same way.",
+      "leadsTo": "The tenant-store package and the web app call this package. It calls the Postgres driver."
+    },
+    "area:packages/edge-routers@L2": {
+      "title": "Package: edge-routers",
+      "what": "This package writes the Traefik router file of one customer. It also checks that the host name of the customer points to the server. It can remove a file and it can sync all files of all customers.",
+      "why": "Each customer needs its own address. Traefik must know the address. One package writes all router files, so that they all have the same form.",
+      "leadsTo": "The provisioning package and the web app call it. The files that it writes go to the edge folder of the host."
+    },
+    "area:packages/events@L2": {
+      "title": "Package: events",
+      "what": "This package keeps events safe between services. A service writes an event into the outbox table in the same transaction as its data change. A relay then sends the event to NATS. A consumer on the other side records each event once in the inbox. Events that fail many times go to a dead-letter list.",
+      "why": "A service must not lose an event and must not process it twice. The outbox and inbox patterns give that promise.",
+      "leadsTo": "It calls the tenant-store package and the nats-auth package. The kernel API calls it."
+    },
+    "area:packages/fastify-service-template@L2": {
+      "title": "Package: fastify-service-template",
+      "what": "Fastify is a web server library. This package is a template for a new service. It reads the routes from a written spec in the OpenAPI format. It checks that each route in the spec has a handler. It also sets the upload size limit and a standard error form.",
+      "why": "A written spec and the real code must always agree. The template fails at start if they do not agree.",
+      "leadsTo": "The kernel API uses this template. The package has a command that makes a new service."
+    },
+    "area:packages/generated-clients-dart@L2": {
+      "title": "Package: generated-clients-dart",
+      "what": "Dart is the language of the mobile app. This package makes the Dart clients from the API specs. It also checks that the generated code has no drift and that the Dart analyzer finds no error.",
+      "why": "A client that a person writes by hand can differ from the API. A generated client cannot.",
+      "leadsTo": "It reads the contract registry. No function on the map calls it. A script runs it."
+    },
+    "area:packages/generated-clients@L2": {
+      "title": "Package: generated-clients",
+      "what": "This package holds the contract registry. A contract is the written promise of an API or of an event. It checks that a new version of a contract does not break an old version. It also makes the TypeScript client from the spec.",
+      "why": "Many teams change many services. A change must not break a caller.",
+      "leadsTo": "The module-catalogue package calls it to validate module contracts. Scripts call it in the checks."
+    },
+    "area:packages/member-import@L2": {
+      "title": "Package: member-import",
+      "what": "This package reads a list of members from a file. It checks each row, plans the import and applies it. It also loads a vertical, which is a set of start data for one kind of customer. Each side effect goes through a port that the caller supplies.",
+      "why": "A new customer needs its people in the system on the first day. The checks stop wrong mail addresses and double names.",
+      "leadsTo": "The web app calls it for the import and for the seed. It calls back into the web app code through the ports."
+    },
+    "area:packages/module-catalogue@L2": {
+      "title": "Package: module-catalogue",
+      "what": "This package reads and checks the module.json file of each module. It also finds facts for the operator, for example which services need a backup.",
+      "why": "Each module must describe itself in the same form. The operator tools use these facts and need not guess.",
+      "leadsTo": "It calls the generated-clients package to check the contracts. Scripts and checks call it."
+    },
+    "area:packages/nats-auth@L2": {
+      "title": "Package: nats-auth",
+      "what": "This package makes the NATS accounts. It makes one account for each customer and one key for each module. It also writes the rules about which subjects a module can publish and read. It tells the broker to reload the new file.",
+      "why": "One customer must never read the events of another customer. One module must never use the subject of another module.",
+      "leadsTo": "It calls the ports package. The events package, the web app and the kernel API call it."
+    },
+    "area:packages/ports@L2": {
+      "title": "Package: ports",
+      "what": "A port is an interface that hides one outside system. This package holds the broker port and the tracer port. It has a NATS broker, an in-memory broker for tests, and the functions that make the event envelope and the subject names.",
+      "why": "A test must not need a real broker. A port lets a test use a fake one.",
+      "leadsTo": "The calendar module, the content module and the newsletter module call it often. It calls the NATS client library."
+    },
+    "area:packages/provisioning@L2": {
+      "title": "Package: provisioning",
+      "what": "Provisioning means to make a new customer ready to use. This package runs the steps in a fixed order. It writes each step to a ledger. Phase A makes the realm, the database and the first body. Phase B makes the first accounts and enables the modules. It can also pause and resume a customer.",
+      "why": "A crash in the middle must not leave a half customer. The ledger lets the run continue from the last step.",
+      "leadsTo": "It calls the adapters of the web app for Keycloak and the databases. It calls the tenant-store package and the edge-routers package."
+    },
+    "area:packages/retention@L2": {
+      "title": "Package: retention",
+      "what": "Retention is the time for which data can stay. This package holds the six classes of logs and the time limit of each class. It makes the Loki file and the deletion concept document from one list. It also scans for actor data.",
+      "why": "The law limits the time for personal data. One list of rules must drive every file.",
+      "leadsTo": "The command line of the package writes the Loki file. The tenant-store package reads the same rules for the purge."
+    },
+    "area:packages/storage@L2": {
+      "title": "Package: storage",
+      "what": "This package is the one place to read and write the files of a customer. It has a backend for the local disk and a backend for memory. Each backend belongs to one customer, and no path can leave the folder of that customer.",
+      "why": "A bug in a path must never show the files of another customer.",
+      "leadsTo": "The web app and the tenant-store package call it. It calls the file system of the server."
+    },
+    "area:packages/tenancy-core@L2": {
+      "title": "Package: tenancy-core",
+      "what": "Tenancy means that one system serves many customers. This package makes a host name into one standard form and holds the list of reserved host names. It reads and changes the host names of a customer in the control database.",
+      "why": "The host name is the key to find the customer. Every part must read it in the same way.",
+      "leadsTo": "It reads the control database tables. The web app and the kernel API call it."
+    },
+    "area:packages/tenant-store@L2": {
+      "title": "Package: tenant-store",
+      "what": "This package is the only way to enter the database of a customer. It also runs all migrations. It makes dumps, exports, purges and the lifecycle of modules. It holds the gate that must pass before a module can start for a customer.",
+      "why": "All database work must go through one door. Then no code can reach the wrong customer.",
+      "leadsTo": "It reads the platform migration files and the storage package. The web app, the kernel API, the provisioning package and the board backend call it."
+    },
+    "area:services/kernel-api@L3": {
+      "title": "Kernel API service",
+      "what": "The kernel API is the central backend service. It finds the customer of a request and it lists the modules. It decides if a person can do an action. It also keeps grants, bodies, seats, tenures and persons. It has 19 routes and 113 exported functions.",
+      "why": "Many parts need the same answers about people and rights. One service gives them, and so all parts agree.",
+      "leadsTo": "It uses the fastify-service-template package and the tenant-store package. It reads the tables of the idt schema."
+    },
+    "area:modules/board@L3": {
+      "title": "Board module backend",
+      "what": "This is the leaf service of the board module. A leaf service is a small server program of one module. It keeps task boards. A board holds stacks and a stack holds cards. It keeps one database for each customer and each board.",
+      "why": "A module that has its own service can fail without a stop of the main app.",
+      "leadsTo": "The web app calls its routes. It reads and writes the board tables. It uses the tenant-store package."
+    },
+    "area:modules/calendar@L3": {
+      "title": "Calendar module backend",
+      "what": "This is the leaf service of the calendar module. It keeps events, event types and repeat rules. It pushes each event to Nextcloud by CalDAV. It also sends change events over NATS through an outbox. A scheduler runs timed jobs.",
+      "why": "The database is the source of truth. Other systems get a copy.",
+      "leadsTo": "The web app calls its routes. It reads and writes the calendar tables. It calls Nextcloud and NATS."
+    },
+    "area:modules/content@L3": {
+      "title": "Content module backend",
+      "what": "This is the leaf service of the content module. A post can reach three channels. The channels are mail, the website and Instagram. It keeps address lists and runs the plan for timed publication.",
+      "why": "The council writes one text and the service sends it to each channel.",
+      "leadsTo": "The web app calls its routes. It reads and writes the content tables. It calls NATS and the Instagram API."
+    },
+    "area:modules/elections@L3": {
+      "title": "Elections module manifest and notice",
+      "what": "The elections module has no leaf service. This area holds the module description and the notice text that a council sees when it enables the module. The notice says that the module is optional and does not replace a legal election.",
+      "why": "A council must not think that an online vote has legal force when it has none.",
+      "leadsTo": "The web app reads the notice and shows it."
+    },
+    "area:modules/files@L3": {
+      "title": "Files module backend",
+      "what": "This is the leaf service of the files module. It is a thin proxy to Nextcloud over WebDAV. It keeps no database and no state. It sends the bearer token of the user to Nextcloud with each request.",
+      "why": "Files stay in Nextcloud, so the council has one place for its documents.",
+      "leadsTo": "The web app calls its routes. It calls Nextcloud."
+    },
+    "area:modules/finance@L3": {
+      "title": "Finance module backend",
+      "what": "This is the leaf service of the finance module. It keeps budget plans, projects, expenses, approvals and bank accounts. It also makes exports. The routes stay locked with a 501 answer until the operator decides to open them.",
+      "why": "Money data needs strong rules and a full record.",
+      "leadsTo": "It reads and writes the finance tables. It can call FinTS for bank data. No app half of finance is in this repository."
+    },
+    "area:modules/messaging@L3": {
+      "title": "Messaging module backend",
+      "what": "This is the leaf service of the messaging module. It is a thin proxy to the Matrix home server and to LiveKit for video. It keeps no state. It uses the Matrix token of the user in each request.",
+      "why": "Chat and video exist already as open systems. The module joins them to the council groups.",
+      "leadsTo": "The web app calls its routes. It calls Matrix and LiveKit."
+    },
+    "area:modules/publishing@L3": {
+      "title": "Newsletter module backend",
+      "what": "This is the leaf service of the newsletter module. It keeps address lists, drafts and schedules. It sends each newsletter and records each delivery. It writes events through an outbox to NATS.",
+      "why": "A newsletter must reach each person once and must let a person leave the list.",
+      "leadsTo": "The web app calls its routes. It reads and writes the newsletter tables. It sends mail through the SMTP service of the kernel."
+    },
+    "area:modules/vault@L3": {
+      "title": "Vault module backend",
+      "what": "This is the leaf service of the vault module. It keeps secrets for each organisation unit. It encrypts each secret with AES-256-GCM before it stores the secret. It writes an access log row each time a person reads a secret.",
+      "why": "A council must keep passwords in a safe place and must know who read them.",
+      "leadsTo": "The web app calls its routes. It reads and writes the vault tables."
+    },
+    "area:modules/votes@L3": {
+      "title": "Votes module backend",
+      "what": "This is the leaf service of the votes module. It joins open polls from Nextcloud Polls and ballots from Helios in one list. It keeps no state of its own. The kernel gives it the election identifiers.",
+      "why": "A member wants one list of all open votes.",
+      "leadsTo": "The web app calls its routes. It calls the Nextcloud Polls API and the Helios API."
+    },
+    "area:apps/control-panel@L4": {
+      "title": "Control panel: server code",
+      "what": "The control panel is a small web app for the operator. The operator is the person who runs Gremion for many customers. This area is the server half of the panel. It checks the host name and the login of the operator on every request. It reads customers from the control database. It writes a request row to the platform database.",
+      "why": "The panel can create and stop customers, so it must be very safe. The gate decides before any page or form runs.",
+      "leadsTo": "It calls the pages in L5 and it reads the platform tables. A host program reads the request later and does the work."
+    },
+    "area:apps/control-panel@L5": {
+      "title": "Control panel: pages",
+      "what": "This area holds the four pages of the control panel. The pages are the home page, the operations page, the page of one customer and the form for a new customer. It also holds small helpers that format values and name the state of a request.",
+      "why": "The operator must see the state of every customer and must send requests from one place.",
+      "leadsTo": "Each page asks the server half for its data. The form for a new customer sends its fields to the server half."
+    },
+    "area:gremion-public@L4": {
+      "title": "Public portal: server code",
+      "what": "The public portal shows the published minutes of the council to anyone. This area is its server half. It reads the published protocols and the committee names from the database. It uses a read-only database role. It also answers requests for the PDF of one protocol and adds safe headers to every answer.",
+      "why": "The public site needs no login, so it must never write data.",
+      "leadsTo": "It calls the page code in L5 and it reads the tables of the web app database."
+    },
+    "area:gremion-public@L5": {
+      "title": "Public portal: pages",
+      "what": "This area holds the four pages of the public portal. They are the home page, the contact page, the list of protocols and one protocol. It also holds helpers that format dates and numbers, clean HTML and choose the language.",
+      "why": "A visitor must read the minutes in a clear form and in the right language.",
+      "leadsTo": "Each page asks the server half in L4 for its data."
+    },
+    "area:gremion-ui@L4": {
+      "title": "Main web app: server code",
+      "what": "The main web app is the place where council members do their work. This area is its server half and it is the largest area. It has 247 files and about 1300 functions. It holds the chain of checks that every request passes. It holds the rules of the council, the code that reads and writes the database, and 61 API routes.",
+      "why": "The system cannot trust a browser. All rules about who can see and change data must run on the server.",
+      "leadsTo": "It calls the pages in L5 and the shared packages in L2. It reads and writes the customer tables in L1. The module server areas call back into this area."
+    },
+    "area:gremion-ui@L5": {
+      "title": "Main web app: pages and shared code",
+      "what": "This area holds 25 pages of the main web app and the parts that these pages use. It has the page frame, the menu, the dashboard cards, the forms and the language text. It also holds shared code, for example the role checks. The server half uses that code too.",
+      "why": "A council member needs a clear screen for committees, protocols and settings.",
+      "leadsTo": "The pages ask L4 for data and send requests to its routes. The module pages use parts from this area."
+    },
+    "area:modules/board@L4": {
+      "title": "Board module: server code",
+      "what": "This is the part of the board module that runs inside the main web app. A backend port picks the local code or the leaf service. It holds the board routes. It also holds the code that turns a protocol action item into a card.",
+      "why": "The council wants to track the tasks that come from its minutes.",
+      "leadsTo": "It calls the leaf service or the board tables. It calls the board page code in L5."
+    },
+    "area:modules/calendar@L4": {
+      "title": "Calendar module: server code",
+      "what": "This is the part of the calendar module that runs inside the main web app. It holds the calendar page loader and the routes for events, event types and settings. It also holds the CalDAV push client, the sync to Nextcloud, the notification scheduler and the holiday import.",
+      "why": "The calendar must work with a leaf service or with the local database, so a backend port chooses.",
+      "leadsTo": "It calls the leaf service by HTTP or the calendar tables. It calls Nextcloud. It calls the calendar page code in L5."
+    },
+    "area:modules/content@L4": {
+      "title": "Content module: server code",
+      "what": "This is the part of the content module that runs inside the main web app. It holds the routes for posts, channels, address lists and news. It also holds the code that previews a post for each channel.",
+      "why": "The council needs to write one post and to check how it looks on each channel.",
+      "leadsTo": "It calls the leaf service, the content tables and NATS. It calls the content page code in L5."
+    },
+    "area:modules/elections@L4": {
+      "title": "Elections module: server code",
+      "what": "This is the part of the elections module that runs inside the main web app. It holds the Helios client, the election store and the election routes. The module is optional and has no leaf service.",
+      "why": "The council can run an online vote with the Helios election software.",
+      "leadsTo": "It calls the Helios server and the election tables. It calls the election page code in L5."
+    },
+    "area:modules/files@L4": {
+      "title": "Files module: server code",
+      "what": "This is the part of the files module that runs inside the main web app. It holds the file routes, the Nextcloud client and the WebDAV path code. It also holds the code that makes a token for Collabora to edit a document.",
+      "why": "A person must open, upload and edit documents from the web app.",
+      "leadsTo": "It calls the leaf service or Nextcloud directly. It calls the file page code in L5."
+    },
+    "area:modules/messaging@L4": {
+      "title": "Messaging module: server code",
+      "what": "This is the part of the messaging module that runs inside the main web app. It holds the routes for rooms, messages, media and sync. It also holds the routes for Element Call, LiveKit and push. It adds a person to the right rooms at first login.",
+      "why": "A council member wants to chat and to call inside one system.",
+      "leadsTo": "It calls the Matrix server and LiveKit. It calls the messaging page code in L5."
+    },
+    "area:modules/publishing@L4": {
+      "title": "Newsletter module: server code",
+      "what": "This is the part of the newsletter module that runs inside the main web app. It holds the routes to list, edit, preview, schedule and send a newsletter. It also holds the routes for address lists, unsubscribe and the Collabora token.",
+      "why": "A newsletter editor needs a draft, a preview and a safe send button.",
+      "leadsTo": "It calls the leaf service and Collabora. It calls the newsletter page code in L5."
+    },
+    "area:modules/vault@L4": {
+      "title": "Vault module: server code",
+      "what": "This is the part of the vault module that runs inside the main web app. It holds the vault routes and the page for an outside Vaultwarden. The route that shows a secret answers with a step-up error. It does this until the person does a second login.",
+      "why": "To show a secret is a risk, so the system asks for a fresh proof of the person.",
+      "leadsTo": "It calls the vault leaf service. It calls the vault page code in L5."
+    },
+    "area:modules/votes@L4": {
+      "title": "Votes module: server code",
+      "what": "This is the part of the votes module that runs inside the main web app. It holds the poll routes and the Nextcloud Polls client. The votes page hides Helios items when the elections module is off.",
+      "why": "A member wants to vote in a poll from the web app.",
+      "leadsTo": "It calls the votes leaf service and Nextcloud Polls. It calls the votes page code in L5."
+    },
+    "area:modules/board@L5": {
+      "title": "Board module: pages",
+      "what": "This area holds the page for tasks and the card parts of the board module.",
+      "why": "A person must see stacks and cards and must move them.",
+      "leadsTo": "The page sends requests to the board routes in L4."
+    },
+    "area:modules/calendar@L5": {
+      "title": "Calendar module: pages",
+      "what": "This area holds the calendar page and the invite page. It also holds the month grid, the week grid, the agenda list, the toolbar and the dialogs to make and read an event. The calendar store loads events from the API.",
+      "why": "A member must see the sessions of the committees in one view.",
+      "leadsTo": "The store sends a request to the events route in L4."
+    },
+    "area:modules/content@L5": {
+      "title": "Content module: pages",
+      "what": "This area holds the pages of the content module. They are the post list, the new post form, the editor, the address lists and the news pages.",
+      "why": "An editor needs forms to write, plan and publish a post.",
+      "leadsTo": "The pages send requests to the content routes in L4."
+    },
+    "area:modules/elections@L5": {
+      "title": "Elections module: pages",
+      "what": "This area holds the pages of the elections module. They are the list, the new election form, the manage pages and the Helios callback page. It also holds the notice component that shows the legal notice.",
+      "why": "A council must see the notice before it runs an online election.",
+      "leadsTo": "The pages send requests to the elections routes in L4."
+    },
+    "area:modules/files@L5": {
+      "title": "Files module: pages",
+      "what": "This area holds the file browser pages, the group area page and the editor page. The file browser component lists, uploads, moves and deletes files.",
+      "why": "A member must handle documents without a second program.",
+      "leadsTo": "The browser component sends requests to the files routes in L4."
+    },
+    "area:modules/messaging@L5": {
+      "title": "Messaging module: pages",
+      "what": "This area holds the pages for rooms and for room management. It also holds the chat parts and the video call parts.",
+      "why": "A member must read and write messages in the same web app.",
+      "leadsTo": "The pages send requests to the messaging routes in L4."
+    },
+    "area:modules/publishing@L5": {
+      "title": "Newsletter module: pages",
+      "what": "This area holds the pages of the newsletter module. They are the list, the editor, the preview, the address lists and the unsubscribe page.",
+      "why": "A reader must be able to leave the list on a clear page.",
+      "leadsTo": "The pages send requests to the newsletter routes in L4."
+    },
+    "area:modules/vault@L5": {
+      "title": "Vault module: pages",
+      "what": "This area holds the vault page, the access log view and the launcher page for Vaultwarden.",
+      "why": "A person must find a secret and must see who read it.",
+      "leadsTo": "The pages send requests to the vault routes in L4."
+    },
+    "area:modules/votes@L5": {
+      "title": "Votes module: pages",
+      "what": "This area holds the pages for the list of votes, the list of polls, a new poll and one poll.",
+      "why": "A member must see all open votes and must cast a vote.",
+      "leadsTo": "The pages send requests to the polls routes in L4."
+    },
+    "area:github-actions/ci@L0": {
+      "title": "CI: the check of each change",
+      "what": "This workflow is the main check of the code. It starts on a push to the main or develop branch and on a pull request to one of them. A person can also start it by hand. Its jobs lint the files, run the tests, build the images and judge the result.",
+      "why": "A change must not break the code. This workflow finds a break before the change joins the main branch. A new push to a pull request stops the old run of that pull request. On a pull request from this repository, a failed lint or verify job also cancels the rest of the run.",
+      "leadsTo": "The job verify-gate waits for lint and for the verify jobs. It gives the one verdict of these jobs. The jobs docker-build, integration-test and e2e-smoke run beside it. The folder scripts/ci-local holds the same kind of merge guards for one computer, for a time when GitHub Actions does not run."
+    },
+    "area:github-actions/release-images@L0": {
+      "title": "Release images: build and push",
+      "what": "This workflow builds every first-party container image of a release and pushes each image to the registry. It starts by hand, or when someone pushes a release tag that begins with v or rc-v. The last job writes the pins files that name the digest of each pushed image.",
+      "why": "A host pulls an image by its digest and not by its name. The workflow records the digest that the registry holds for each image. It uses only a token that GitHub makes for the run. It has no key for signatures and no deploy key.",
+      "leadsTo": "After the run, the operator takes the pins files, signs each digest on the computer of the operator and pushes a tag for the release. The host deploy is a manual step of the operator."
+    },
+    "area:github-actions/release-npm@L0": {
+      "title": "Release to npm",
+      "what": "This workflow publishes the two packages db and ports to npm. It starts when someone pushes a tag that begins with v. A person can also start it by hand, and a run by hand is a dry run by default.",
+      "why": "Other projects can then use these packages from npm. The workflow holds no npm token. It asks npm for a short credential that proves the identity of the run.",
+      "leadsTo": "The job publish checks the types, builds the package, checks the packed file and then publishes. The package ports also gets its tests first. The package db goes first. If it fails, the run stops and the package ports does not publish."
+    },
+    "area:github-actions/dependency-audit@L0": {
+      "title": "Dependency audit: a weekly check",
+      "what": "This workflow checks the packages that the product needs when it runs. It starts once a week and a person can start it by hand. The job audit fails when it finds a high or critical advisory. The job report then opens an issue.",
+      "why": "A package can get a known fault after a person wrote the code. A weekly check finds this fault even when nobody changes the code. The check does not run on a pull request. The job audit also lists old packages in its summary, and this list does not change the result.",
+      "leadsTo": "The job report opens one issue, or adds a comment to the issue that is open. A person reads the issue and updates the package."
+    },
+    "area:github-actions/dependabot-unpause@L0": {
+      "title": "Dependabot: restore the update limit",
+      "what": "A person starts this workflow by hand. It has no schedule. The job measure reads how fast GitHub starts a job. The job unpause runs only when this time is 120 seconds or less. Then it restores paused update limits in the Dependabot settings, and it opens a pull request when it changes a limit.",
+      "why": "Dependabot is a tool that opens pull requests for new versions of packages. A person can pause it for one kind of package. This workflow reverses a pause. If GitHub is slow to start the job measure, the job unpause does not run and no limit changes. If the settings hold no paused limit, the run makes no change and ends without an error.",
+      "leadsTo": "The pull request has the labels dependencies, ci and automated. A person reads the pull request and merges it. The workflow never merges it."
+    },
+    "area:github-actions/semgrep@L0": {
+      "title": "Semgrep: a scan for security faults",
+      "what": "This workflow runs Semgrep on the code. It starts on a push to the main or develop branch, on a pull request to one of them and once a week. A person can also start it by hand.",
+      "why": "The job semgrep uses two rule sets. One set finds common security faults. The other set finds secrets that someone wrote into the code. The weekly run uses new rules even when the code did not change.",
+      "leadsTo": "A fault that Semgrep finds makes the job fail, and the run shows red. No other job in this workflow waits for it."
+    },
+    "area:github-actions/scripts@L0": {
+      "title": "Scripts that the jobs run",
+      "what": "This area holds the scripts that the jobs of the workflows run. One script runs the test suites and writes a record of the result. Another script joins the records of many jobs. A third script judges the joined record.",
+      "why": "The same script runs in a job and on a computer, so the rule does not change. A person can run a check before a push and get the same result as the job.",
+      "leadsTo": "The jobs in the workflows call these scripts. A script that fails makes its job fail. The folder scripts/ci-local holds guards for a computer without GitHub Actions."
+    }
+  },
+  "glossary": {
+    "Gremion": "The name of the software. It helps councils to keep people, groups, minutes and votes.",
+    "council": "A group of people that make decisions together, for example a student council.",
+    "committee": "A smaller group inside a council. A committee has its own members and its own minutes.",
+    "protocol": "The written minutes of one session of a committee.",
+    "resolution": "A decision that a committee makes. The German word is Beschluss.",
+    "Beschluss": "The German word for a resolution. It is a decision of a committee.",
+    "quorum": "The number of members that must be present, so that a vote is valid.",
+    "audit log": "A list that records who did what and when. A hash chain protects the old rows from change.",
+    "hash chain": "A list of records where each record holds a code of the record before it. A change in an old record breaks the chain.",
+    "server": "A computer that runs programs for other computers.",
+    "host": "The real computer that runs the containers of Gremion.",
+    "container": "A closed box that holds one program and all that the program needs.",
+    "image": "A packed copy of a program that a container starts from.",
+    "Docker": "The program that builds and starts containers.",
+    "compose file": "A text file that lists the containers to start and how they connect.",
+    "Dockerfile": "A recipe that builds a container image.",
+    "Kubernetes": "A system that runs containers on a group of computers.",
+    "database": "A program that keeps data in an ordered form for a long time.",
+    "Postgres": "The database program that Gremion uses.",
+    "table": "One list of data in a database. A table has rows and columns.",
+    "SQL": "The language that a program uses to ask a database for data.",
+    "migration": "An SQL file that changes the database to a new form. Migrations run in a fixed order.",
+    "schema": "A named group of tables in a database.",
+    "outbox": "A table where a service keeps an event until a relay sends the event.",
+    "inbox": "A table where a service records each event that it received. It stops a second run of the same event.",
+    "function": "A small piece of code that does one job.",
+    "call": "A function call is a place where one function starts another function.",
+    "code": "The text of a program that a person writes.",
+    "repository": "The folder that holds all the files and the history of the code.",
+    "package": "A folder of code that many other parts use.",
+    "kernel": "The core of Gremion. It holds identity, customers, the council model and the rules. It needs no module.",
+    "vertical": "A set of start data for one kind of customer, for example a student council.",
+    "tenant": "The technical name in the code for one customer.",
+    "customer": "One organisation that uses Gremion. Its data is apart from the data of all other customers.",
+    "operator": "The person who runs Gremion for many customers.",
+    "module": "An optional feature of Gremion, for example the calendar. A customer can enable or disable it.",
+    "leaf service": "A small server program that belongs to one module.",
+    "backend": "The part of a system that runs on the server and has no screen.",
+    "web app": "A program that a person uses in a browser.",
+    "browser": "The program that a person uses to see web pages.",
+    "SvelteKit": "The framework that builds the web apps of Gremion. A framework is a base of ready code.",
+    "Svelte": "The language of the page files that end in svelte.",
+    "page": "A screen that a person can open at one web address.",
+    "component": "One part of a page, for example a button or a list.",
+    "route": "An address that a program can ask for data or for an action.",
+    "API": "A set of routes that programs use to talk to each other.",
+    "HTTP": "The rules that a browser and a server use to send requests and answers.",
+    "request": "A message that asks a server for data or for an action.",
+    "hook": "A piece of code that runs on every request before the page code runs.",
+    "token": "A small signed piece of data that proves who a person is. It has a limited life.",
+    "session": "The time in which a person has a valid login.",
+    "role": "A set of rights. A person can hold one or more roles.",
+    "capability": "One right, for example the right to read a secret.",
+    "Keycloak": "The program that checks who a person is. It keeps the users and the logins.",
+    "realm": "One separate set of users in Keycloak. Each customer has its own realm.",
+    "step-up": "A second login that a person must do before a risky action.",
+    "edge": "The first place that a request from the internet reaches.",
+    "Traefik": "The edge proxy. It sends each request to the right program.",
+    "proxy": "A program that receives a request and forwards it to another program.",
+    "TLS": "The method that makes web traffic secret and checks the name of the server.",
+    "NATS": "The message broker of Gremion. It carries events between programs.",
+    "event": "A short message that says that data changed.",
+    "Nextcloud": "A file and calendar server that Gremion uses for documents and CalDAV.",
+    "WebDAV": "A web standard to list, read and write files on a server.",
+    "CalDAV": "A web standard to share calendars between programs.",
+    "Collabora": "A program that lets a person edit a document in the browser.",
+    "Matrix": "An open chat system. The messaging module uses it.",
+    "LiveKit": "A program for video calls that the messaging module uses.",
+    "Helios": "An open election program that the elections module uses.",
+    "Vaultwarden": "A program that keeps passwords. The vault module links to it.",
+    "control panel": "The web app of the operator. The operator creates and manages customers there.",
+    "provisioning": "The work to make a new customer ready to use.",
+    "control database": "The database that lists all customers and their host names.",
+    "platform database": "The database that holds data about the whole installation, for example module versions and requests.",
+    "Karenz": "A grace period of 30 days. When a council disables a module, the system deletes no data in this time.",
+    "erasure": "The removal of the personal data of one person from all modules.",
+    "Vorstand": "A role for the board of a council. In the code it has the name vorstand.",
+    "org unit": "One group in the tree of the organisation, for example a committee.",
+    "body": "A council or a committee as a unit that makes decisions.",
+    "seat": "One place in a body that one person holds for a time.",
+    "tenure": "The time in which a person holds a seat.",
+    "monitoring": "The work to watch the health of the system and to keep logs.",
+    "log": "A list of messages that a program writes about what it does.",
+    "trace": "A record of the path of one request through many programs.",
+    "backup": "A copy of data that the operator can restore after a fault.",
+    "layer": "One level of the map. L0 is the lowest and L5 is the highest.",
+    "area": "A group of files in one layer that belong together.",
+    "pilot": "The first real use of Gremion by a customer, to test it.",
+    "IP address": "A number that names a computer on the internet. It counts as personal data.",
+    "pseudonym": "A made-up name that replaces a real name or number, so a person cannot find the real one easily.",
+    "retention": "The time for which data can stay before the system must delete it.",
+    "messaging": "The module for chat and video calls. Its name in the code is messaging.",
+    "publishing": "The module for newsletters. The folder of the module in the code has the name publishing.",
+    "acclamation": "A decision that the chair declares, with no count of votes.",
+    "Nextcloud Polls": "An app in Nextcloud that lets people vote in polls.",
+    "module.json": "The file in which a module describes itself.",
+    "Azure": "The cloud of a large software company.",
+    "Amazon": "A company that offers a cloud for computers.",
+    "Google": "A company that offers a cloud for computers.",
+    "FinTS": "A German standard for bank access by program. The finance module can use it.",
+    "SMTP": "The standard way to send mail from one program to a mail server.",
+    "Instagram": "A social network. The content module can post to it.",
+    "Grafana": "A program that shows health data as dashboards.",
+    "Prometheus": "A program that collects numbers about the health of the system.",
+    "Loki": "A program that stores logs.",
+    "Tempo": "A program that stores traces.",
+    "Alloy": "A program that collects health data and sends it to Prometheus, Loki and Tempo.",
+    "PgBouncer": "A program between the web app and Postgres. It shares database connections.",
+    "Fastify": "A web server library for the programs that run on the server.",
+    "OpenAPI": "A standard format to describe the routes of an API.",
+    "TypeScript": "The language of most Gremion code. It adds types to JavaScript.",
+    "JavaScript": "A language that runs in the browser and on the server.",
+    "Dart": "The language that the mobile app uses.",
+    "Stalwart": "A mail server program that the vendor runs for its own mail.",
+    "Cloudflare": "A company that offers edge and tunnel services for web sites.",
+    "AKS": "The Kubernetes service of the Azure cloud.",
+    "EKS": "The Kubernetes service of the Amazon cloud.",
+    "GKE": "The Kubernetes service of the Google cloud.",
+    "nginx": "A small web server. Gremion uses it for the static legal pages.",
+    "PDF": "A file format for documents that look the same on every screen.",
+    "HTML": "The language that a browser reads to show a web page.",
+    "Auth.js": "The library that handles the login in the web app.",
+    "Element Call": "The video call part of the Matrix system.",
+    "Synapse": "The Matrix home server that the messaging module ships.",
+    "Bats": "A tool to test shell scripts.",
+    "Makefile": "A file that lists short commands to build or run things.",
+    "shell script": "A text file with commands that a computer runs one after the other.",
+    "Beschluss register": "A list of the resolutions of a committee.",
+    "AES-256-GCM": "A strong method to encrypt data.",
+    "encrypt": "To change data into a form that nobody can read without a key.",
+    "node": "On the map, one item. An item is a layer, an area, a file or a function. It can also be a page, a route or a table.",
+    "node.js": "The program that runs the JavaScript code on the server.",
+    "ASD-STE100": "A standard for simple English. It limits the length of sentences and the choice of words.",
+    "GitHub": "A web service that stores the code of a project and runs automatic checks on the code.",
+    "GitHub Actions": "The part of GitHub that runs workflows. A workflow starts when an event happens, for example a push of code.",
+    "workflow": "A file that tells GitHub Actions which jobs to run and when to start them.",
+    "job": "One task in a workflow. GitHub runs each job on its own computer.",
+    "CI": "Short for continuous integration. A set of automatic checks that run on each change of the code.",
+    "pull request": "A request to add the changes of one branch to another branch. People read and check the changes first.",
+    "commit": "One saved change in the history of the code.",
+    "branch": "One line of changes in a repository. The main branch holds the current code.",
+    "tag": "A name that marks one commit, for example the commit of a release.",
+    "release": "A version of the product that is ready to install.",
+    "registry": "A server that stores container images. A host pulls an image from it by name or by digest.",
+    "digest": "A long code that a registry makes from the content of an image. A different image has a different digest.",
+    "pin": "A fixed link to one exact version. A pin names the digest of an image, so the image cannot change.",
+    "lint": "A fast check of files for mistakes. A lint check does not run the program.",
+    "guard": "A check that stops a change when the change breaks a rule.",
+    "advisory": "A public notice of a security fault in a package.",
+    "verify-gate": "A job of the CI workflow. It waits for lint and for the verify jobs, and then gives one verdict. The other jobs of the workflow run beside it. It does not wait for them.",
+    "ci.yml": "The workflow file of the main check of each change.",
+    "release-images.yml": "The workflow file that builds and pushes the images of a release.",
+    "release-npm.yml": "The workflow file that publishes two packages to npm.",
+    "dependency-audit.yml": "The workflow file of the weekly check of the packages that the product needs.",
+    "dependabot-unpause.yml": "The workflow file that restores paused update limits of Dependabot.",
+    "semgrep.yml": "The workflow file that scans the code for security faults.",
+    "scripts/ci-local": "A folder of guards and a snapshot tool. A person runs them on one computer when GitHub Actions does not run.",
+    "Semgrep": "A tool that scans code for security faults.",
+    "Dependabot": "A GitHub tool that opens pull requests for new versions of packages.",
+    "npm": "The public registry for JavaScript packages.",
+    "OIDC": "A standard way to get access with an account that another system holds. Keycloak is such a system.",
+    "TCP": "A way to send data on a network. It checks that all data arrives.",
+    "UDP": "A fast way to send data on a network. It does not check that all data arrives.",
+    "TURN": "A relay that passes call data for a person behind a strict firewall.",
+    "pnpm": "A tool that installs the packages of a node project.",
+    "gremion-isolation": "The program on the host that runs the test of customer isolation in a container."
+  },
+  "walkthroughs": [
+    {
+      "title": "Sign-in: a person enters the system",
+      "steps": [
+        {
+          "text": "The person opens the login page. A short piece of code on the page sends the browser to Keycloak at once.",
+          "nodeId": "page:gremion-ui/src/routes/auth/login/+page.svelte"
+        },
+        {
+          "text": "This function builds the login config for the request. It names Keycloak and the realm of this customer.",
+          "file": "gremion-ui/src/auth.ts",
+          "function": "buildAuthConfig"
+        },
+        {
+          "text": "Each request passes the chain called handle. The chain has ten steps. The steps run in a fixed order.",
+          "file": "gremion-ui/src/hooks.server.ts",
+          "function": "handle"
+        },
+        {
+          "text": "One step reads the host name of the request. It finds the customer that owns the host name.",
+          "file": "gremion-ui/src/lib/server/tenant/resolve.ts",
+          "function": "tenantResolveHandle"
+        },
+        {
+          "text": "The function that handles the forwarded host name reads the registry of customers.",
+          "file": "gremion-ui/src/lib/server/tenant/resolve.ts",
+          "function": "resolveByForwardedHost"
+        },
+        {
+          "text": "After the first login, this function stores the tokens and reads the roles from the access token.",
+          "file": "gremion-ui/src/auth.ts",
+          "function": "jwtCallback"
+        },
+        {
+          "text": "This function makes the user record from the token. A token without a subject gets no session.",
+          "file": "gremion-ui/src/hooks.server.ts",
+          "function": "sessionUserFromPayload"
+        },
+        {
+          "text": "The guard checks the session on each request. It also checks that the module of the page is on.",
+          "file": "gremion-ui/src/hooks.server.ts",
+          "function": "authGuard"
+        },
+        {
+          "text": "The last check compares the roles of the person with the role that the page needs.",
+          "file": "gremion-ui/src/lib/auth/index.ts",
+          "function": "canAccess"
+        }
+      ]
+    },
+    {
+      "title": "Operator: make a new customer",
+      "steps": [
+        {
+          "text": "The operator opens the form for a new customer in the control panel.",
+          "nodeId": "page:apps/control-panel/src/routes/(shell)/customers/new/+page.svelte"
+        },
+        {
+          "text": "The operator sends the form. The form action reads the fields and checks that the operator has a valid login.",
+          "file": "apps/control-panel/src/routes/(shell)/customers/new/+page.server.ts",
+          "function": "actions.default"
+        },
+        {
+          "text": "This function checks each field, for example the slug, the host name, the two administrators and the module choice.",
+          "file": "apps/control-panel/src/lib/server/requests.ts",
+          "function": "validateNewCustomer"
+        },
+        {
+          "text": "The panel only writes a request. It does not create the customer by itself.",
+          "file": "apps/control-panel/src/lib/server/requests.ts",
+          "function": "submitCreate"
+        },
+        {
+          "text": "The request is one row in this table of the platform database.",
+          "nodeId": "table:packages/tenant-store/src/lifecycle/platform-migrations/0009_plt_provisioning_request.sql#plt.provisioning_request"
+        },
+        {
+          "text": "A program on the host reads the request. It checks the signed login of the operator again.",
+          "file": "gremion-ui/scripts/tenant-provision-requests.ts",
+          "function": "requestVerify"
+        },
+        {
+          "text": "This function checks the kind and the arguments of the request.",
+          "file": "packages/provisioning/src/requests.ts",
+          "function": "verifyRequestArgs"
+        },
+        {
+          "text": "Phase A runs the steps in order. It makes the control row, the realm, the databases and the first body.",
+          "file": "packages/provisioning/src/customer.ts",
+          "function": "createPhaseA"
+        },
+        {
+          "text": "One adapter makes the Keycloak realm of the new customer.",
+          "file": "gremion-ui/src/lib/server/tenant/provisioner/customer-adapters.ts",
+          "function": "customerAdapters.realm.ensureRealm"
+        },
+        {
+          "text": "Phase B makes the first accounts and enables the chosen modules.",
+          "file": "packages/provisioning/src/customer.ts",
+          "function": "createPhaseB"
+        },
+        {
+          "text": "The last step sets the customer to active, after the host writes the router file.",
+          "file": "packages/provisioning/src/customer.ts",
+          "function": "activateCustomer"
+        }
+      ]
+    },
+    {
+      "title": "Calendar: a member opens the calendar",
+      "steps": [
+        {
+          "text": "The member opens the calendar page. The page shows a month grid and a week grid.",
+          "nodeId": "page:modules/calendar/app/routes/calendar/+page.svelte"
+        },
+        {
+          "text": "The page loader runs on the server. It reads the committees, the committees of the member and the event types.",
+          "file": "modules/calendar/app/routes/calendar/+page.server.ts",
+          "function": "load"
+        },
+        {
+          "text": "An option decides if the calendar uses the local code or the leaf service. This function reads that option.",
+          "file": "modules/calendar/app/lib/server/calendar/backend/resolve.ts",
+          "function": "resolveCalendarBackendForPage"
+        },
+        {
+          "text": "In the browser, the store asks for the events of the visible time range.",
+          "file": "modules/calendar/app/lib/stores/calendar.ts",
+          "function": "loadEvents"
+        },
+        {
+          "text": "The request goes to this route of the web app.",
+          "nodeId": "route:GET /api/calendar/events@modules/calendar"
+        },
+        {
+          "text": "The route handler checks the role and chooses the backend. It then expands the repeat rules of the events.",
+          "file": "modules/calendar/app/routes/api/calendar/events/+server.ts",
+          "function": "GET"
+        },
+        {
+          "text": "With the leaf service, this client sends the request to the leaf service. The local client reads the database directly.",
+          "file": "modules/calendar/app/lib/server/calendar/backend/service-client.ts",
+          "function": "ServiceCalendarClient.listEvents"
+        },
+        {
+          "text": "The leaf service has this route. It answers with the events.",
+          "nodeId": "route:GET /api/v1/events@modules/calendar"
+        },
+        {
+          "text": "The store function of the leaf service reads the events from the database.",
+          "file": "modules/calendar/src/store/events.ts",
+          "function": "listEvents"
+        },
+        {
+          "text": "Each event is one row in this table.",
+          "nodeId": "table:modules/calendar/migrations/001_init.sql#calendar_events"
+        }
+      ]
+    },
+    {
+      "title": "Vote: a committee records a decision",
+      "steps": [
+        {
+          "text": "A council administrator opens the protocol page of a committee. The protocol holds the minutes of one session.",
+          "nodeId": "page:gremion-ui/src/routes/members/committees/[id]/protokolle/[protocolId]/+page.svelte"
+        },
+        {
+          "text": "The administrator adds a resolution. The page sends a request to this route.",
+          "nodeId": "route:POST /api/protocols/:id/resolutions@gremion-ui"
+        },
+        {
+          "text": "The route handler receives the request. It reads the mode. The mode is a counted vote or an acclamation.",
+          "file": "gremion-ui/src/routes/api/protocols/[id]/resolutions/+server.ts",
+          "function": "POST"
+        },
+        {
+          "text": "First, it checks that the person has the role of council administrator.",
+          "file": "gremion-ui/src/routes/api/protocols/[id]/resolutions/+server.ts",
+          "function": "requireAdmin"
+        },
+        {
+          "text": "It then loads the protocol. A published protocol is closed, and the handler refuses to change it.",
+          "file": "gremion-ui/src/lib/server/protocols/protocol-db.ts",
+          "function": "getProtocol"
+        },
+        {
+          "text": "This function decides the result. The client can never send the result free-hand.",
+          "file": "gremion-ui/src/lib/server/governance/resolution-decision.ts",
+          "function": "decideResolution"
+        },
+        {
+          "text": "It checks the quorum. A quorum is the number of members that must be present.",
+          "file": "gremion-ui/src/lib/server/governance/quorum.ts",
+          "function": "getQuorumContext"
+        },
+        {
+          "text": "It then applies the decision rule to the counts of the vote. The rule gives passed or rejected.",
+          "file": "gremion-ui/src/lib/server/governance/decision-rule.ts",
+          "function": "evaluateDecisionRule"
+        },
+        {
+          "text": "The resolution goes into the protocol with the result that the server computed.",
+          "file": "gremion-ui/src/lib/server/protocols/protocol-db.ts",
+          "function": "addResolution"
+        },
+        {
+          "text": "The resolution is one row in this table.",
+          "nodeId": "table:gremion-ui/migrations/0007_protocols.sql#protocol_resolutions"
+        }
+      ]
+    },
+    {
+      "title": "Files: a person uploads a file",
+      "steps": [
+        {
+          "text": "The person opens a folder in the file browser.",
+          "nodeId": "page:modules/files/app/routes/files/[...path]/+page.svelte"
+        },
+        {
+          "text": "The person selects a file. This function in the browser component starts the upload.",
+          "file": "modules/files/app/lib/components/files/FileBrowser.svelte",
+          "function": "handleFileInput"
+        },
+        {
+          "text": "The browser sends a PUT request to this route. A big file goes in chunks to another route.",
+          "nodeId": "route:PUT /api/files/:*path@modules/files"
+        },
+        {
+          "text": "The route handler checks the login of the person. It also checks that the person can write.",
+          "file": "modules/files/app/routes/api/files/[...path]/+server.ts",
+          "function": "requireWrite"
+        },
+        {
+          "text": "This function builds the WebDAV path of the file in the folder of the person.",
+          "file": "modules/files/app/lib/server/files/webdav-path.ts",
+          "function": "buildWebdavPath"
+        },
+        {
+          "text": "With the leaf service, this client forwards the upload to the leaf service.",
+          "file": "modules/files/app/lib/server/files/backend/service-client.ts",
+          "function": "ServiceFilesClient.upload"
+        },
+        {
+          "text": "The leaf service receives the upload on this route.",
+          "nodeId": "route:ANY /api/v1/upload@modules/files"
+        },
+        {
+          "text": "The leaf handler first checks the shared secret of the caller. It then reads the body of the request.",
+          "file": "modules/files/src/http/server.ts",
+          "function": "handle"
+        },
+        {
+          "text": "It cleans the path. It rejects a path with two dots or with a hidden escape.",
+          "file": "modules/files/src/nextcloud/webdav-path.ts",
+          "function": "sanitizeRelPath"
+        },
+        {
+          "text": "The WebDAV client sends the file to Nextcloud. Nextcloud keeps the file. The leaf service keeps no copy.",
+          "file": "modules/files/src/nextcloud/webdav-client.ts",
+          "function": "WebdavClient.upload"
+        }
+      ]
+    },
+    {
+      "title": "Karenz: the 30-day wait after a module is disabled",
+      "steps": [
+        {
+          "text": "In this code, Karenz starts when a council disables a module. It does not start when a member leaves.",
+          "nodeId": "file:gremion-ui/src/lib/server/module-karenz/engine.ts"
+        },
+        {
+          "text": "A council administrator opens the module tab of the settings and disables a module. This function sends the request.",
+          "file": "gremion-ui/src/routes/settings/tabs/TabModules.svelte",
+          "function": "send"
+        },
+        {
+          "text": "The request goes to this route.",
+          "nodeId": "route:POST /api/settings/modules@gremion-ui"
+        },
+        {
+          "text": "The route handler asks for a fresh second login. This is the step-up check.",
+          "file": "gremion-ui/src/lib/auth/step-up.ts",
+          "function": "evaluateStepUp"
+        },
+        {
+          "text": "This function checks that the person has the right to switch modules. It then stores the switch request.",
+          "file": "gremion-ui/src/lib/server/module-switch/service.ts",
+          "function": "submitModuleSwitch"
+        },
+        {
+          "text": "The platform opens one row in this table. The row holds the day of the switch and the final day, 30 days later.",
+          "nodeId": "table:packages/tenant-store/src/lifecycle/platform-migrations/0016_plt_module_karenz.sql#plt.module_karenz"
+        },
+        {
+          "text": "Every 5 minutes, one pass runs for each customer. The pass reads the live Karenz rows.",
+          "file": "gremion-ui/src/lib/server/module-karenz/engine.ts",
+          "function": "runKarenzPass"
+        },
+        {
+          "text": "For an open row, the pass runs these steps. They are the audit entry, the notice, the sealed copies and the switch-off of each participant.",
+          "file": "gremion-ui/src/lib/server/module-karenz/engine.ts",
+          "function": "processOpen"
+        },
+        {
+          "text": "This function mails the holders of the council administrator role and the Vorstand role.",
+          "file": "gremion-ui/src/lib/server/module-karenz/notices.ts",
+          "function": "sendKarenzNotice"
+        },
+        {
+          "text": "The system sends a reminder 7 days and 1 day before the final day.",
+          "file": "gremion-ui/src/lib/server/module-karenz/mail.ts",
+          "function": "reminderDue"
+        },
+        {
+          "text": "After the final day, the pass deletes no data while the deletion switch is off. It only reports the data that the final job will delete.",
+          "file": "gremion-ui/src/lib/server/module-karenz/engine.ts",
+          "function": "dryRunFinal"
+        },
+        {
+          "text": "A member who leaves follows another path. An erasure removes the personal data of that person.",
+          "file": "gremion-ui/src/lib/server/erasure/orchestrator.ts",
+          "function": "runErasure"
+        }
+      ]
+    },
+    {
+      "title": "CI: a change is checked and becomes an image",
+      "steps": [
+        {
+          "text": "A person pushes a change or opens a pull request to the main or develop branch. GitHub starts the workflow in this file. A person can also start it by hand.",
+          "nodeId": "file:.github/workflows/ci.yml"
+        },
+        {
+          "text": "On a pull request only, this job reads the list of changed files. It decides if the images or the health census must run. On a push it does not run.",
+          "nodeId": "job:.github/workflows/ci.yml#changes"
+        },
+        {
+          "text": "This job runs fast checks on the files. It checks shell scripts, YAML files, rules for secrets and rules for the images. Other jobs wait for it.",
+          "nodeId": "job:.github/workflows/ci.yml#lint"
+        },
+        {
+          "text": "A verify job starts at the same time as lint. This job runs the type check and three more static checks with one script. It also checks the types of the control panel.",
+          "nodeId": "job:.github/workflows/ci.yml#verify-static"
+        },
+        {
+          "text": "This job builds each container image and pushes none. It waits for lint and for the job changes. On a pull request it runs when a build input changed. It also runs when the job changes fails, so that a broken filter does not skip the builds.",
+          "nodeId": "job:.github/workflows/ci.yml#docker-build"
+        },
+        {
+          "text": "This Dockerfile is one of the files that the job builds. It builds the control panel image. The same build also makes this code map.",
+          "nodeId": "file:apps/control-panel/Dockerfile"
+        },
+        {
+          "text": "This job waits for lint and for the eleven verify jobs. It joins their records and judges them. It gives the one verdict of the run. It does not wait for docker-build.",
+          "nodeId": "job:.github/workflows/ci.yml#verify-gate"
+        },
+        {
+          "text": "This is a different workflow, and it is not part of CI. A person starts it by hand, or someone pushes a release tag, to make the images of a release.",
+          "nodeId": "file:.github/workflows/release-images.yml"
+        },
+        {
+          "text": "This job turns the chosen branch, tag or commit into one exact commit. All later jobs use this commit. It also decides if the run can write the shared build cache.",
+          "nodeId": "job:.github/workflows/release-images.yml#resolve-ref"
+        },
+        {
+          "text": "This job runs once for each image of the release. It builds the image and pushes it to the registry. It saves one pin record with the digest of the image.",
+          "nodeId": "job:.github/workflows/release-images.yml#build-and-push"
+        },
+        {
+          "text": "This job waits for all builds. It checks that every record names the same commit. Then it writes the pins files, judges them and saves them for the operator.",
+          "nodeId": "job:.github/workflows/release-images.yml#emit-release-pins"
+        }
+      ]
+    }
+  ]
+}

@@ -6,8 +6,8 @@
 import { error, fail, redirect, type ActionFailure } from '@sveltejs/kit'
 import { env } from '$env/dynamic/private'
 import { lifecycleOffer, type LifecycleKind } from '$lib/lifecycle'
-import { isKnownVertical, VERTICALS } from '$lib/members'
-import { moduleActionsOffered, type ModuleKind } from '$lib/modules'
+import { isKnownVertical, redactAddresses, VERTICALS } from '$lib/members'
+import { DISABLE_LOCKED, moduleActionsOffered, type ModuleKind } from '$lib/modules'
 import { describeRequest } from '$lib/request-state'
 import { evidenceFromRequest } from '$lib/server/auth'
 import { loadConfig } from '$lib/server/config'
@@ -79,7 +79,14 @@ export const load: PageServerLoad = async ({ params }) => {
   // the dry run's report: the events of the newest reconcile request once it has ended
   let reconcileEvents: EventLine[] = []
   if (p && newest && newest.kind === 'reconcile' && latest && !latest.active) reconcileEvents = await requestEvents(p, newest.id).catch(() => [])
-  return { slug: params.slug, status, requests, latest, refresh, offer, moduleSection, memberSection, reconcileEvents }
+  // the cause of a failure: the newest ended request of ANY kind that failed or was refused shows its events (the
+  // newest 60, like the reconcile block; the executor stores every handler line already redacted, addresses are
+  // cut again here). Reconcile and import_members already show theirs in their own section.
+  let failureEvents: EventLine[] = []
+  if (p && newest && latest && (latest.phase === 'failed' || latest.phase === 'refused') && newest.kind !== 'reconcile' && newest.kind !== 'import_members') {
+    failureEvents = (await requestEvents(p, newest.id).catch(() => [])).map((e) => ({ level: e.level, step: e.step, message: redactAddresses(e.message) }))
+  }
+  return { slug: params.slug, status, requests, latest, refresh, offer, moduleSection, memberSection, reconcileEvents, failureEvents }
 }
 
 // "Mandant sperren" / "Mandant fortsetzen": a suspend or resume REQUEST (TRD-044), only in the state that
@@ -144,6 +151,7 @@ const moduleAction =
       } else {
         if (!mods.enabled.some((m) => m.id === module)) return fail(409, { moduleError: 'Dieses Modul ist für den Mandanten nicht aktiv.' })
         if (kind === 'disable_module') {
+          if (DISABLE_LOCKED.has(module)) return fail(409, { moduleError: 'Dieses Modul kann bis zum Abgleich der Leaf-Datenbanken nicht deaktiviert werden.' })
           args = moduleArgs.disable(params.slug, module)
         } else {
           const d = parseDpiaForm(field(form, 'dpia'), field(form, 'dpiaRef'))
@@ -209,14 +217,8 @@ async function queueMember(c: MemberContext, kind: MemberKind, args: Record<stri
   try {
     await submitMemberRequest(c.p, kind, c.slug, c.status.status, args, c.operatorId, c.evidence)
   } catch (err) {
-    if (err instanceof SubmitRefused) {
-      // the 503 tells the operator to read the panel log: write what failed there (name and SQLSTATE; never the message, which could carry list content)
-      if (err.status === 503) {
-        const e = err.dbError as { code?: string; name?: string } | null | undefined
-        console.error(`[control-panel] member request ${kind} ${c.slug} write failed: ${e?.name ?? 'Error'}: ${e?.code ?? 'no-sqlstate'}`)
-      }
-      return fail(err.status, { memberError: err.message })
-    }
+    // a 503 is already in the panel log (submitRefusal writes name and SQLSTATE, never the message, which could carry list content)
+    if (err instanceof SubmitRefused) return fail(err.status, { memberError: err.message })
     throw err
   }
   redirect(303, `/customers/${c.slug}`)

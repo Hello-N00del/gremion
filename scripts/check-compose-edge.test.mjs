@@ -511,3 +511,51 @@ test('guard 7: matrix, livekit and collabora are routed by label correctly, and 
   assert.deepEqual(got, want)
   assert.ok(!(r.services.livekit.ports ?? []).some((p) => WILDCARD.has(normIp(p.host_ip))), 'livekit publishes on a wildcard address')
 })
+
+// ── 8. the video relay: TURN over TLS on 443 ───────────────────────────────
+//
+// With a customer host (PILOT_TENANT_HOST in state.env) livekit carries ONE TCP router on websecure:
+// HostSNI(`turn.<host>`), TLS terminated by Traefik with the same resolver as the HTTP routers (never
+// passthrough), to LiveKit's TURN port 5349. Without a customer host the install is what it was before
+// the relay: no label Traefik reads as a TCP router, so no router and no certificate order for any
+// name. The CPU limit is one core with the memory limit unchanged, and the rendered LiveKit config is
+// a bind that refuses to be created empty.
+
+const tcpLabels = (labels) => Object.fromEntries(Object.entries(labels ?? {}).filter(([k]) => k.startsWith('traefik.tcp.')))
+
+test('guard 8: with a customer host livekit carries exactly the one TLS-terminating TURN router on websecure', () => {
+  const r = renderState({ env: { COMPOSE_PROFILES: PILOT_PROFILES, PILOT_TENANT_HOST: 'customer.example.org' } })
+  const l = r.services.livekit.labels
+  assert.deepEqual(tcpLabels(l), {
+    'traefik.tcp.routers.livekit-turn.rule': 'HostSNI(`turn.customer.example.org`)',
+    'traefik.tcp.routers.livekit-turn.entrypoints': 'websecure',
+    'traefik.tcp.routers.livekit-turn.tls': 'true',
+    'traefik.tcp.routers.livekit-turn.tls.certresolver': fixtureEnv().TRAEFIK_CERT_RESOLVER,
+    'traefik.tcp.routers.livekit-turn.service': 'livekit-turn',
+    'traefik.tcp.services.livekit-turn.loadbalancer.server.port': '5349',
+  })
+  // the HTTP router of the signalling socket is untouched
+  assert.deepEqual(routerNames(l), ['livekit'])
+})
+
+test('guard 8: without a customer host (unset or empty) no label of livekit is a Traefik TCP router and no name is ordered', () => {
+  for (const env of [{}, { PILOT_TENANT_HOST: '' }]) {
+    const r = renderState({ env: { COMPOSE_PROFILES: PILOT_PROFILES, ...env } })
+    const l = r.services.livekit.labels
+    assert.deepEqual(tcpLabels(l), {}, `a TCP router label with PILOT_TENANT_HOST=${JSON.stringify(env.PILOT_TENANT_HOST)}`)
+    const traefikLabels = Object.entries(l).filter(([k]) => k.startsWith('traefik.'))
+    assert.ok(!traefikLabels.some(([, v]) => /(^|[^a-z])turn\./.test(String(v))), 'a turn.* name is carried by a traefik label')
+    assert.deepEqual(routerNames(l), ['livekit'])
+  }
+})
+
+test('guard 8: livekit has one CPU core and the memory limit it had, and its rendered config is a bind that refuses an empty create', () => {
+  const svc = pilotState().services.livekit
+  assert.equal(Number(svc.deploy.resources.limits.cpus), 1)
+  assert.equal(Number(svc.deploy.resources.limits.memory), 512 * 1024 * 1024)
+  const cfg = (svc.volumes ?? []).filter((v) => v.target === '/etc/livekit/livekit.yaml')
+  assert.equal(cfg.length, 1)
+  assert.equal(cfg[0].read_only, true)
+  assert.ok(String(cfg[0].source).replaceAll('\\', '/').endsWith('/docker/livekit/livekit.yaml'), `source ${cfg[0].source}`)
+  assert.ok(bindRefusesMissingHostDir(cfg[0]), `a config that was not rendered would be created empty (rendered bind: ${JSON.stringify(cfg[0].bind)})`)
+})

@@ -91,6 +91,23 @@ test('the render guard catches ports, a bind, a named volume, a wrong probe, a s
   }
 })
 
+test('matrix carries a login limit per address sized for one shared address, and the pin catches its removal', () => {
+  const base = profileOn()
+  const env = base.services.matrix.environment
+  // every request reaches Synapse from the one app container address: the default 5-login burst locks the 6th user out
+  assert.equal(String(env.SYNAPSE_RC_LOGIN_ADDRESS_PER_SECOND), '1')
+  assert.equal(String(env.SYNAPSE_RC_LOGIN_ADDRESS_BURST), '100')
+  // the per-account limit stays at the render default
+  assert.equal(env.SYNAPSE_RC_LOGIN_ACCOUNT_PER_SECOND, undefined)
+  assert.equal(env.SYNAPSE_RC_LOGIN_ACCOUNT_BURST, undefined)
+  for (const key of ['SYNAPSE_RC_LOGIN_ADDRESS_PER_SECOND', 'SYNAPSE_RC_LOGIN_ADDRESS_BURST']) {
+    const r = structuredClone(base)
+    delete r.services.matrix.environment[key]
+    const v = renderViolations(r, CTX)
+    assert.ok(v.some((x) => x.includes(`lacks ${key}`)), `${key}: removal not caught; got ${JSON.stringify(v)}`)
+  }
+})
+
 test('profile off: .env.example as shipped renders, without the chat services', () => {
   const r = renderExample()
   assert.ok(Object.keys(r.services ?? {}).length > 0)

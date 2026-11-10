@@ -343,8 +343,12 @@ describe('tenantResolveHandle: outcomes', () => {
     const event = makeEvent({ forwardedHost: 'council.example' })
     const res = await run(event, resolve)
     expect(res.status).toBe(503)
-    expect(res.headers.get('Retry-After')).toBe('5')
-    expect(await res.text()).toBe('Service Unavailable: tenant not ready')
+    // A failed tenant does not heal by waiting: honest copy, no self-reload (the retry above still runs).
+    expect(Number(res.headers.get('Retry-After'))).toBeGreaterThanOrEqual(60)
+    expect(res.headers.get('Content-Type')).toMatch(/^text\/html/)
+    const html = await res.text()
+    expect(html).toContain('Ihr Bereich ist gerade nicht verfügbar')
+    expect(html).not.toContain('http-equiv="refresh"')
     expect(triggerTenantMigrationRetry).toHaveBeenCalledWith(ACME_CTX)
     expect(resolve).not.toHaveBeenCalled()
     expect(event.locals.tenant).toBeUndefined()
@@ -355,6 +359,10 @@ describe('tenantResolveHandle: outcomes', () => {
     readinessState.state = 'pending'
     const res = await run(makeEvent({ forwardedHost: 'council.example' }))
     expect(res.status).toBe(503)
+    expect(res.headers.get('Retry-After')).toBe('5')
+    const html = await res.text()
+    expect(html).toContain('Ihr Bereich wird vorbereitet')
+    expect(html).toContain('http-equiv="refresh"')
   })
 
   it('passes through while the fleet map is NOT yet populated', async () => {

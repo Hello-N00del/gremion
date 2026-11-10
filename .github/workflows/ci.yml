@@ -655,6 +655,35 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  # The code map (apps/control-panel/codemap) joins hand-written text to the code by file and function name.
+  # When a refactor renames a function the text names, this job LISTS the stale step (job summary and a
+  # warning per item). It never blocks: it is not a verify leg, writes no record, is not in verify-gate's
+  # needs and has no fail-fast job; stale text exits 0, only a leak hit or a crash of the check reads red.
+  # codemap:check exits 0 when it ran, 1 for a leak (a host name, address or credential in the generated page,
+  # the text or the template) and 3 when the check itself failed; 1 and 3 show here as a failed step.
+  codemap-stale:
+    name: "Code map: stale text"
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413  # v6.1.0
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7.1.0
+        with:
+          node-version: 26
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --filter control-panel...
+
+      - name: List what the code map text no longer matches
+        run: pnpm --filter control-panel codemap:check
+
   # render-guards and observability render the production compose projects
   # (docker compose config); vendor-mail and expand-contract are node-only.
   verify-render-ops:

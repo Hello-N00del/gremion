@@ -11,7 +11,7 @@
  *
  * Fail-closed guard mirrors deliveries.integration.test.ts.
  */
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest'
+import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest'
 import postgres from 'postgres'
 import { storeFor, _resetTenantStoreForTests, type TenantRef } from '../src/tenant-store.ts'
 import {
@@ -254,6 +254,41 @@ describe('dispatch — kernel render failure', () => {
 
 // ── per-recipient SMTP failure → partial, failed status, bounded at-least-once ──
 describe('dispatch — per-recipient SMTP failure', () => {
+  it('logs the failure without the recipient address, naming the cause fields it has', async () => {
+    const { nlId } = await makeNewsletterWithList(['bad@x.com'])
+    const transport: MailTransport = {
+      async sendMail() {
+        throw Object.assign(new Error('550 <bad@x.com> relay denied'), {
+          code: 'EENVELOPE', responseCode: 550, command: 'RCPT TO',
+        })
+      },
+    }
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    try {
+      const thrown = await dispatch(DISPATCH_TENANT, nlId, ACTOR, {
+        sql, kernel: makeFakeKernel(), transport, origin: 'https://o',
+      }).then(() => null, (e: unknown) => e)
+      expect(thrown).toBeInstanceOf(Error)
+      // the callers log this message, so it carries the cause fields only
+      expect((thrown as Error).message).toContain('failed to send')
+      expect((thrown as Error).message).not.toContain('bad@x.com')
+      expect((thrown as Error).message).not.toContain('relay denied')
+      const lines = spy.mock.calls.filter((c) => String(c[0]).startsWith('[dispatch] send ('))
+      expect(lines).toHaveLength(1)
+      const logged = JSON.stringify(lines)
+      expect(logged).toContain('EENVELOPE')
+      expect(logged).toContain('RCPT TO')
+      expect(logged).not.toContain('bad@x.com')
+      expect(logged).not.toContain('relay denied')
+      // everything the whole dispatch logged, not only the send line
+      const everything = JSON.stringify(spy.mock.calls)
+      expect(everything).not.toContain('bad@x.com')
+      expect(everything).not.toContain('relay denied')
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
   it('sends the good ones, marks failed, leaves the failed recipient claimed (retry after staleness)', async () => {
     const { nlId } = await makeNewsletterWithList(['ok@x.com', 'bad@x.com'])
     const transport = makeFakeTransport({ failFor: new Set(['bad@x.com']) })

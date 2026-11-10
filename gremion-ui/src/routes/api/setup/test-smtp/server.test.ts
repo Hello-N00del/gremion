@@ -139,6 +139,20 @@ describe('POST /api/setup/test-smtp -- session + IT-admin gate (TASK-042 Q1)', (
     expect(hoisted.sendMail).toHaveBeenCalledTimes(1)
   })
 
+  // The settings test must announce the same EHLO name as the real tenant sends. Google's relay
+  // refuses a container id with 421, so a probe without the name reports the opposite of the
+  // production path.
+  it('introduces itself with the public host name, as the tenant mail transport does', async () => {
+    process.env.PUBLIC_BASE_URL = 'https://rat.musterstadt.example'
+    try {
+      const res = await call('smtp.example.com')
+      expect(res.status).toBe(200)
+      expect(hoisted.createTransport.mock.calls[0][0]).toMatchObject({ name: 'rat.musterstadt.example' })
+    } finally {
+      delete process.env.PUBLIC_BASE_URL
+    }
+  })
+
   it('serves an IT admin after setup is complete (Settings -> E-Mail), no 404', async () => {
     hoisted.readConfig.mockReturnValue({ setup_complete: true, smtp: { host: '' } })
     const res = await call('smtp.example.com')

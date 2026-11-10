@@ -183,3 +183,33 @@ describe('NextcloudClient.listGroupMembers (Karenz p2 t16: retained sink members
     await expect(c.listGroupMembers('g')).rejects.toThrow(/500/)
   })
 })
+
+describe('NextcloudClient upload', () => {
+  // Node's fetch builds a Request from the init; a ReadableStream body without `duplex: 'half'`
+  // makes that constructor throw. The stub does exactly that construction, unmocked.
+  const realRequestFetch = (async (url: string, init: RequestInit) => {
+    new Request(url, init)
+    return new Response(null, { status: 201 })
+  }) as unknown as typeof fetch
+
+  it('sends a ReadableStream body: the request init carries duplex half', async () => {
+    const c = clientWithFetch(realRequestFetch)
+    const body = new ReadableStream<Uint8Array>({
+      start(ctl) {
+        ctl.enqueue(new Uint8Array([1, 2, 3]))
+        ctl.close()
+      }
+    })
+    await expect(c.upload('/remote.php/dav/files/u-1/a.pdf', 'u-1', body, 'application/pdf')).resolves.toBeUndefined()
+  })
+
+  it('a plain string body does not get a duplex option', async () => {
+    const inits: RequestInit[] = []
+    const c = clientWithFetch((async (_url: string, init: RequestInit) => {
+      inits.push(init)
+      return new Response(null, { status: 201 })
+    }) as unknown as typeof fetch)
+    await c.upload('/remote.php/dav/files/u-1/a.txt', 'u-1', 'hello', 'text/plain')
+    expect('duplex' in inits[0]).toBe(false)
+  })
+})
