@@ -107,6 +107,14 @@ export async function buildAuthConfig(event: RequestEvent): Promise<SvelteKitAut
 
 /** A transient refresh failure keeps the expired access token for this long (ms). */
 const REFRESH_GRACE_MS = 60_000
+/** [A] Assumption: how long the refresh fetch may wait for Keycloak. Well under
+ *  REFRESH_GRACE_MS and above normal Keycloak latency. */
+const REFRESH_FETCH_TIMEOUT_MS = 5_000
+/** [A] Assumption: after a refresh timeout inside the grace window, later requests
+ *  keep the expired token and skip the refresh for this long, so a stalled Keycloak
+ *  does not make every request wait out the timeout again. Kept short so a stall
+ *  cannot outlast the grace window (the back-off only applies while within grace). */
+const REFRESH_TIMEOUT_BACKOFF_MS = 10_000
 /** 429 back-off: Retry-After as delta-seconds or HTTP-date; default 5 s when
  *  missing/unparseable/non-positive; capped at 60 s (the refresh grace). */
 function retryAfterMs(header: string | null): number {
@@ -228,6 +236,15 @@ const jwtCallback: NonNullable<NonNullable<SvelteKitAuthConfig['callbacks']>['jw
       }
 
       let tenantId = 'unknown'
+      // Abort the refresh fetch (and the body read) when Keycloak accepts the
+      // connection but never answers. A plain timer, not AbortSignal.timeout, so the
+      // flag below records that the abort was ours.
+      const abort = new AbortController()
+      let timedOut = false
+      const timer = setTimeout(() => {
+        timedOut = true
+        abort.abort(new DOMException('token refresh timed out', 'TimeoutError'))
+      }, REFRESH_FETCH_TIMEOUT_MS)
       try {
         // ALS tenant — set by tenantResolveHandle for this request. The refresh
         // must hit the SAME realm's token endpoint and use the same UI client.
@@ -244,7 +261,8 @@ const jwtCallback: NonNullable<NonNullable<SvelteKitAuthConfig['callbacks']>['jw
               client_id: tenant.authClientId,
               client_secret: resolveSecret(tenant.authClientSecretRef),
               refresh_token: token.refreshToken as string
-            }).toString()
+            }).toString(),
+            signal: abort.signal
           }
         )
 
@@ -317,11 +335,21 @@ const jwtCallback: NonNullable<NonNullable<SvelteKitAuthConfig['callbacks']>['jw
           error: undefined
         }
       } catch (err) {
+        if (timedOut) {
+          // Logged apart from other network errors; no message text from the error.
+          console.warn(`[auth] token refresh timeout tenant=${tenantId} after=${REFRESH_FETCH_TIMEOUT_MS}ms`)
+          // Within grace: keep the token and back off so the next requests do not
+          // each wait out the timeout; outside grace: same as other transient faults.
+          if (withinRefreshGrace(token)) return { ...token, refreshRetryAt: Date.now() + REFRESH_TIMEOUT_BACKOFF_MS }
+          return { ...token, error: 'RefreshTokenFailed' }
+        }
         const e = err as { name?: string; message?: string }
         console.warn(`[auth] token refresh failed tenant=${tenantId} exception=${e?.name ?? 'Error'}: ${String(e?.message ?? '').slice(0, 200)}`)
         // Network error: transient while within grace, else force re-login.
         if (withinRefreshGrace(token)) return token
         return { ...token, error: 'RefreshTokenFailed' }
+      } finally {
+        clearTimeout(timer)
       }
     }
 
