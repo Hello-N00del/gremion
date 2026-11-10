@@ -11,7 +11,7 @@
 # Pinned by digest: the tag names the release, the digest is what runs. To re-pin
 # after an intentional bump:
 #   docker buildx imagetools inspect collabora/code:<tag> --format '{{.Manifest.Digest}}'
-FROM collabora/code:24.04.10.1.1@sha256:98bfe4bbd18d5faa77f7e3dc0b87309a8d0252c1f4fc81a7f1d9f7a58d4b6ce8
+FROM collabora/code:26.04.5.2.1@sha256:c7415b963e32eb0986a562583f154d36d3d7a461e1ddfb660a95e87094328acb
 USER root
 RUN apt-get update -qq \
  && apt-get install -y -qq --only-upgrade libbrotli1 \
