@@ -15,6 +15,9 @@ vi.mock('$lib/server/messages/matrix-client', () => ({
   }),
 }))
 
+const { mockForgetUnread } = vi.hoisted(() => ({ mockForgetUnread: vi.fn() }))
+vi.mock('$lib/server/messages/unread-cache', () => ({ forgetUnread: mockForgetUnread }))
+
 vi.mock('$env/dynamic/private', () => ({
   env: new Proxy({}, { get: () => 'sentinel' }),
 }))
@@ -60,6 +63,20 @@ describe('POST /api/messages/rooms/[roomId]/read', () => {
     expect(mockSetReadMarker).toHaveBeenCalledWith('matrix-token', '!room1:matrix.test', '$evt-1:matrix.test')
     // It should NOT need to resolve the latest event when the client supplied one.
     expect(mockGetMessages).not.toHaveBeenCalled()
+  })
+
+  it('drops the cached unread count of the user once the marker is set, so the badge refreshes at once', async () => {
+    mockForgetUnread.mockClear()
+    const res = await POST(makeEvent({ authed: true, accessToken: 'kc-jwt-1', body: { eventId: '$evt-1:matrix.test' } }))
+    expect(res.status).toBe(200)
+    expect(mockForgetUnread).toHaveBeenCalledWith('kc-jwt-1')
+  })
+
+  it('keeps the cached count when no marker was set (room without messages)', async () => {
+    mockForgetUnread.mockClear()
+    const res = await POST(makeEvent({ authed: true, body: {} }))
+    expect(res.status).toBe(200)
+    expect(mockForgetUnread).not.toHaveBeenCalled()
   })
 
   it('resolves the latest event when no eventId is supplied, then marks it read', async () => {

@@ -62,6 +62,8 @@
   )
 
   function selectBoard(id: string) {
+    // Same route, same component instance: drop a stale create error from the board left behind.
+    createError = null
     goto(`/tasks?board=${id}`, { invalidateAll: true })
   }
 
@@ -120,6 +122,8 @@
   {/if}
 </div>
 
+{#if createError}<div class="create-error" role="alert">{createError}</div>{/if}
+
 {#if data.boards.length === 0}
   <div class="empty-state">
     <div class="glyph"><Icon name="checklist" size={22} /></div>
@@ -136,7 +140,6 @@
     {:else}
       <div class="sub">Tritt zuerst einem Gremium bei, dann kannst du dessen Board anlegen.</div>
     {/if}
-    {#if createError}<div class="create-error" role="alert">{createError}</div>{/if}
   </div>
 {:else}
   <nav class="board-bar" aria-label="Board auswählen">
@@ -248,6 +251,6 @@
   .create-error {
     color: var(--rust);
     font-size: 13px;
-    margin-top: 10px;
+    margin: 0 0 10px;
   }
 </style>
