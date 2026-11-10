@@ -155,6 +155,12 @@ tests:
         exp_samples:
           - labels: 'gremion:cond:dead_letter_queue{component="nats-dlq"}'
             value: 0
+      # A stalled relay is read from the oldest-pending gauge alone; no events service, no gauge: it reads 0.
+      - expr: gremion:cond:outbox_stalled
+        eval_time: 70m
+        exp_samples:
+          - labels: 'gremion:cond:outbox_stalled{component="events-outbox-stalled"}'
+            value: 0
       # a live gauge of 0 and no failed, stale or overdue sample: silent
       - expr: gremion:cond:module_karenz
         eval_time: 70m
@@ -249,6 +255,12 @@ tests:
         eval_time: 70m
         exp_samples:
           - labels: 'gremion:cond:dead_letter_queue{component="nats-dlq"}'
+            value: 0
+      # blind is NOT a stalled relay either: no absent() arm, SignalAbsent reports the blindness.
+      - expr: gremion:cond:outbox_stalled
+        eval_time: 70m
+        exp_samples:
+          - labels: 'gremion:cond:outbox_stalled{component="events-outbox-stalled"}'
             value: 0
       # an unreadable platform table or a blind collector: the live gauge is absent, the condition fires
       - expr: gremion:cond:module_karenz
@@ -473,6 +485,61 @@ tests:
       - expr: count(gremion:cond:dead_letter_queue{stream="ORGUNIT"})
         eval_time: 5m
         exp_samples: []
+
+  # ---- A stalled outbox relay: the oldest-pending gauge over the 900 s threshold [A] ----
+  # A relay that cannot publish burns no attempt and dead-letters nothing; only this gauge moves. idt stalls
+  # (1200 s) and then recovers, gov is healthy (0), plt sits exactly ON the threshold (900 s: the comparison is
+  # strict, so it reads 0), fin has a growing age that never recovers inside the window.
+  - interval: 1m
+    input_series:
+      - series: 'gremion_outbox_oldest_pending_seconds{ctx="idt",instance="host",job="host"}'
+        values: '0 0 0 1200 1200 1200 1200 0 0 0'
+      - series: 'gremion_outbox_oldest_pending_seconds{ctx="gov",instance="host",job="host"}'
+        values: '0+0x9'
+      - series: 'gremion_outbox_oldest_pending_seconds{ctx="plt",instance="host",job="host"}'
+        values: '900+0x9'
+      - series: 'gremion_outbox_oldest_pending_seconds{ctx="fin",instance="host",job="host"}'
+        values: '60 120 180 240 300 960 1020 1080 1140 1200'
+    promql_expr_test:
+      - expr: gremion:cond:outbox_stalled
+        eval_time: 2m
+        exp_samples:
+          - labels: 'gremion:cond:outbox_stalled{component="idt",ctx="idt"}'
+            value: 0
+          - labels: 'gremion:cond:outbox_stalled{component="gov",ctx="gov"}'
+            value: 0
+          - labels: 'gremion:cond:outbox_stalled{component="plt",ctx="plt"}'
+            value: 0
+          - labels: 'gremion:cond:outbox_stalled{component="fin",ctx="fin"}'
+            value: 0
+          - labels: 'gremion:cond:outbox_stalled{component="events-outbox-stalled"}'
+            value: 0
+      - expr: gremion:cond:outbox_stalled
+        eval_time: 5m
+        exp_samples:
+          - labels: 'gremion:cond:outbox_stalled{component="idt",ctx="idt"}'
+            value: 1
+          - labels: 'gremion:cond:outbox_stalled{component="gov",ctx="gov"}'
+            value: 0
+          - labels: 'gremion:cond:outbox_stalled{component="plt",ctx="plt"}'
+            value: 0
+          - labels: 'gremion:cond:outbox_stalled{component="fin",ctx="fin"}'
+            value: 1
+          - labels: 'gremion:cond:outbox_stalled{component="events-outbox-stalled"}'
+            value: 0
+      - expr: gremion:cond:outbox_stalled
+        eval_time: 8m
+        exp_samples:
+          - labels: 'gremion:cond:outbox_stalled{component="idt",ctx="idt"}'
+            value: 0
+          - labels: 'gremion:cond:outbox_stalled{component="gov",ctx="gov"}'
+            value: 0
+          - labels: 'gremion:cond:outbox_stalled{component="plt",ctx="plt"}'
+            value: 0
+          - labels: 'gremion:cond:outbox_stalled{component="fin",ctx="fin"}'
+            value: 1
+          - labels: 'gremion:cond:outbox_stalled{component="events-outbox-stalled"}'
+            value: 0
 
   # ---- Module Karenz: a failed, a stale and an overdue sample each fire; a live gauge alone is silent ----
   - interval: 1m

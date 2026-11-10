@@ -244,6 +244,7 @@ export const NO_ABSENT = new Set([
   'gremion:cond:third_party_unreachable',
   // TASK-079: a host without an events service has no gauge; an absent() arm would fire there for ever.
   'gremion:cond:outbox_dead_lettered',
+  'gremion:cond:outbox_stalled',
   'gremion:cond:inbox_dead_lettered',
   'gremion:cond:inbox_stalled',
   'gremion:cond:dead_letter_queue',

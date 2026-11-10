@@ -150,6 +150,7 @@ evaluation errors alert too.
 | `ThirdPartyUnreachable` | a third-party service not answering (PRD-DEP-002) | 5m |
 | `SignalAbsent` | a signal stopped arriving (TRD-181) | 5m |
 | `OutboxDeadLettered` | the relay gave up on an outbox row (TASK-079, TRD-420) | 1m |
+| `OutboxStalled` | the oldest pending outbox row is older than 900 s [A]: the relay cannot publish and burns no attempt (A05) | 10m |
 | `InboxDeadLettered` | a consumer's message reached MaxDeliver and went to the DLQ stream | 1m |
 | `InboxStalled` | an inbox row received/failed for over 10 min: a crash on the last delivery | 1m |
 | `DeadLetterQueueNotEmpty` | the tenant's DLQ stream holds any entry (kept 7 days) | 1m |
@@ -168,7 +169,11 @@ both `InboxDeadLettered` and `DeadLetterQueueNotEmpty`, two groups. Runbook:
 `docs/runbooks/dead-letter.md`. `events metrics` also prints a fourth gauge,
 `gremion_outbox_oldest_pending_seconds{ctx}` (the age of the oldest outbox row still waiting for the
 relay): a relay that can never succeed burns no attempt and dead-letters nothing, so it is the
-only gauge that moves. It is collected like the three above; no alert rule reads it yet.
+only gauge that moves. It is collected like the three above and read by `OutboxStalled`
+(`gremion:cond:outbox_stalled`, one component per ctx, no `absent()` arm either). The threshold,
+900 s [A], is an assumption and lives in one place, the `> bool 900` of that recording rule
+(`alerting.test.mjs` reads it back); `for: 10m` is on top. Too low and a busy but healthy relay
+pages, too high and a stall goes unseen. A ctx that runs no events service has no gauge and reads 0.
 
 `ModuleKarenzFailedOrOverdue` (`gremion:cond:module_karenz`, component `module-karenz`)
 is fail-closed, unlike the four above. The host collector (`emit_module_karenz`)
