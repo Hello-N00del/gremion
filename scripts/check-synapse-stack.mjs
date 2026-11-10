@@ -114,8 +114,8 @@ export function renderViolations(render, { stack, project, domain }) {
   // network (the socket proxy's included) may carry it.
   const onlyNets = (name, svc, want) => {
     const keys = Array.isArray(svc.networks) ? svc.networks : Object.keys(svc.networks ?? {})
-    const nets = keys.map((k) => render.networks?.[k]?.name ?? k).sort()
-    if (svc.network_mode !== undefined || JSON.stringify(nets) !== JSON.stringify([...want].sort()))
+    const nets = keys.map((k) => render.networks?.[k]?.name ?? k).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))
+    if (svc.network_mode !== undefined || JSON.stringify(nets) !== JSON.stringify([...want].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))))
       out.push(`${name}: networks [${nets.join(', ')}], want [${want.join(', ')}] only`)
     if ((svc.ports ?? []).length) out.push(`${name}: publishes ports -- reachable from every non-council network`)
   }
