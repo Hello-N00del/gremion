@@ -1,7 +1,7 @@
 // TASK-045: one vitest run, judged from its JSON report AND its exit code.
 // Shared by every suite that runs vitest (unit, integration, contracts,
 // f1-defect) so they cannot drift apart in how much of vitest they trust.
-import { mkdtempSync, rmSync } from 'node:fs'
+import { copyFileSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { collectedFileNamesFromVitestJson, parseVitestJsonFile, skipsByFileFromVitestJson, summarizeVitestFailures } from './parsers.mjs'
@@ -24,7 +24,7 @@ export const REPO_ROOT = path.join(import.meta.dirname, '..', '..', '..')
  * `--`, after which vitest treats its own flags as positional and writes no
  * report at all.
  */
-export function runVitestJson({ label, cwd, cmd = 'pnpm', args, env, root = REPO_ROOT }) {
+export function runVitestJson({ label, cwd, cmd = 'pnpm', args, env, root = REPO_ROOT, keepReportAt }) {
   const dir = mkdtempSync(path.join(tmpdir(), 'verify-vitest-'))
   const outFile = path.join(dir, 'result.json')
   try {
@@ -44,6 +44,14 @@ export function runVitestJson({ label, cwd, cmd = 'pnpm', args, env, root = REPO
       }
     }
     const failures = parsed.failed > 0 ? summarizeVitestFailures(outFile) : []
+    // keepReportAt: the isolation evidence producer hashes the report and
+    // keeps it beside the evidence file (suites/isolation-tenant.mjs). Only a
+    // report that parsed and was judged above is kept; the default (no
+    // argument) leaves nothing behind, exactly as before.
+    if (keepReportAt) {
+      mkdirSync(path.dirname(keepReportAt), { recursive: true })
+      copyFileSync(outFile, keepReportAt)
+    }
     return {
       label,
       toolMissing: null,
@@ -56,6 +64,7 @@ export function runVitestJson({ label, cwd, cmd = 'pnpm', args, env, root = REPO
       // suites/isolation.mjs).
       collectedFiles: collectedFileNamesFromVitestJson(outFile, { root }),
       detail: failures.length > 0 ? failures.join('\n') : '',
+      ...(keepReportAt ? { reportFile: keepReportAt } : {}),
     }
   } finally {
     rmSync(dir, { recursive: true, force: true })

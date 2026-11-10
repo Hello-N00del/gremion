@@ -22,6 +22,13 @@ export function sanitizeRelPath(paramPath: string): string {
   if (decoded.includes('%')) {
     throw new WebdavPathError('Invalid path encoding')
   }
+  // Mirror of the kernel copy: fetch's URL parser reads a backslash as `/` and
+  // deletes tab and newline, so `..\x` or `.<LF>.` becomes a `..` segment after
+  // the check below. A Nextcloud file name never holds these; refuse them.
+  // oxlint-disable-next-line no-control-regex -- the pattern exists to REFUSE control characters
+  if (/[\\\u0000-\u001f\u007f]/.test(decoded)) {
+    throw new WebdavPathError('Invalid path characters')
+  }
   if (decoded.split('/').some((seg) => seg === '..')) {
     throw new WebdavPathError('Path traversal not allowed')
   }

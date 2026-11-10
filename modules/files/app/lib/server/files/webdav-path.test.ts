@@ -34,6 +34,15 @@ describe('sanitizeRelPath (#257-2 loop-decode + residual-% reject)', () => {
   it('rejects a literal `..` segment', () => {
     expect(() => sanitizeRelPath('../../etc/passwd')).toThrow()
   })
+
+  // fetch's URL parser treats a backslash as `/` and DELETES tab and newline, so each of these
+  // becomes a `..` segment only after the `..` check (pilot wave 2 isolation evidence).
+  it('rejects a backslash, a raw or encoded tab or newline, and any other control character', () => {
+    const BS = String.fromCharCode(92)
+    for (const p of [`..${BS}x`, `a${BS}b`, '.\n./x', '.%0a./x', '%2e%09%2e/x', 'a\u0000b', 'a\u007fb', 'a%250ab']) {
+      expect(() => sanitizeRelPath(p), JSON.stringify(p)).toThrow()
+    }
+  })
 })
 
 describe('validatePublishedPdfPath (#241)', () => {
@@ -54,5 +63,14 @@ describe('validatePublishedPdfPath (#241)', () => {
 
   it('rejects a raw percent so an encoded traversal cannot be decoded into ..', () => {
     expect(() => validatePublishedPdfPath('/protocols/published/%2e%2e/x.pdf')).toThrow()
+  })
+
+  // fetch's URL parser reads a backslash as `/` and deletes tab and newline, so
+  // each of these becomes a `..` segment only after the `..` check.
+  it('rejects a backslash and control characters (they normalise into a .. segment)', () => {
+    const BS = String.fromCharCode(92)
+    for (const p of [`/protocols/published/..${BS}x.pdf`, '/protocols/published/.\n./x.pdf', '/protocols/published/.\t./x.pdf', '/protocols/published/a\u0000b.pdf']) {
+      expect(() => validatePublishedPdfPath(p), JSON.stringify(p)).toThrow()
+    }
   })
 })

@@ -43,6 +43,17 @@ export function sanitizeRelPath(paramPath: string): string {
   if (decoded.includes('%')) {
     throw error(400, 'Invalid path encoding')
   }
+  // The path is spliced into a URL string and fetch's URL parser then
+  // normalises it: a backslash is a path separator there, and a tab or newline
+  // is DELETED, so `..\x`, `.<LF>.` and `%2e%09%2e` all become a `..` segment
+  // AFTER the `..` check above and climb out of /dav/files/<caller>/ into
+  // another user's folder. Control characters and backslashes are never part of
+  // a Nextcloud file name (its forbidden characters include `\`), so they are
+  // refused outright rather than normalised.
+  // oxlint-disable-next-line no-control-regex -- the pattern exists to REFUSE control characters
+  if (/[\\\u0000-\u001f\u007f]/.test(decoded)) {
+    throw error(400, 'Invalid path characters')
+  }
   if (decoded.split('/').some((seg) => seg === '..')) {
     throw error(400, 'Path traversal not allowed')
   }
@@ -74,9 +85,14 @@ export function buildWebdavPath(ncUsername: string, paramPath: string): string {
  * traversal (`%2e%2e`) can never be decoded into `..` downstream.
  */
 export function validatePublishedPdfPath(pdfPath: string): string {
+  // Backslash and control characters: fetch reads `\` as `/` and deletes tab and
+  // newline, so they can build a `..` segment after the check (see sanitizeRelPath).
+  // oxlint-disable-next-line no-control-regex -- the pattern exists to REFUSE control characters
+  const hasUnsafeChar = /[\\\u0000-\u001f\u007f]/.test(pdfPath)
   const ok =
     pdfPath.startsWith('/protocols/published/') &&
     !pdfPath.includes('%') &&
+    !hasUnsafeChar &&
     !pdfPath.split('/').some((seg) => seg === '..')
   if (!ok) throw error(400, 'Invalid published PDF path')
   return pdfPath
