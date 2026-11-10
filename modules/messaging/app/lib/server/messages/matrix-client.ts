@@ -21,6 +21,10 @@ const matrixTokenCache = new Map<string, CachedMatrixToken>()
 // all firing a /login request simultaneously (thundering herd on server restart).
 const matrixTokenInflight = new Map<string, Promise<string>>()
 
+// Rate limit for the "unread counts degraded" log line (see readUnreadCounts).
+const UNREAD_FAILURE_LOG_INTERVAL_MS = 60_000
+let lastUnreadFailureLog = 0
+
 /** Synapse rejected this user token (admin logout, device deletion, expiry):
  *  401, or errcode M_UNKNOWN_TOKEN. */
 function isDeadTokenResponse(status: number, errcode: unknown): boolean {
@@ -72,6 +76,8 @@ export interface SyncResponse {
     events: MatrixMessage[]
     unreadCount: number
   }[]
+  /** Set only when the per-room unread counts could not be read: the zeros are then a fallback, not a measurement. */
+  countsDegraded?: true
 }
 
 class MatrixClient {
@@ -294,7 +300,17 @@ class MatrixClient {
   // Public: also consumed by GET /api/messages/rooms (#188) to populate the
   // per-room unread badge on the initial room list, not only by sync().
   async unreadMessageCountsByRoom(userToken: string): Promise<Map<string, number>> {
+    return (await this.readUnreadCounts(userToken)).counts
+  }
+
+  // Same read, but it says whether the /notifications call answered. sync() needs that: an
+  // empty map from a failed call looks exactly like "nothing unread", and a caller that caches
+  // the total would pin the badge to 0.
+  private async readUnreadCounts(
+    userToken: string
+  ): Promise<{ counts: Map<string, number>; degraded: boolean }> {
     const counts = new Map<string, number>()
+    let degraded = false
     try {
       const raw = (await this.cs(
         'GET',
@@ -308,10 +324,18 @@ class MatrixClient {
         if (!n.room_id) continue
         counts.set(n.room_id, (counts.get(n.room_id) ?? 0) + 1)
       }
-    } catch {
-      // Intentionally swallowed — see method docs (graceful degradation to 0).
+    } catch (e) {
+      // Not rethrown — see method docs (graceful degradation to 0) — but not silent either: a
+      // persistent failure would otherwise show every badge as 0 with no trace. One line a minute;
+      // the message holds the method, path and status, never the token.
+      degraded = true
+      const now = Date.now()
+      if (now - lastUnreadFailureLog >= UNREAD_FAILURE_LOG_INTERVAL_MS) {
+        lastUnreadFailureLog = now
+        console.warn('[messages] /notifications read failed; unread counts degraded:', e instanceof Error ? e.message : 'unknown error')
+      }
     }
-    return counts
+    return { counts, degraded }
   }
 
   // Long-poll sync.
@@ -334,7 +358,7 @@ class MatrixClient {
 
     // Per-room unread *message* counts (excludes the invite_for_me membership
     // notification that Synapse's notification_count would otherwise add).
-    const messageUnread = await this.unreadMessageCountsByRoom(userToken)
+    const { counts: messageUnread, degraded } = await this.readUnreadCounts(userToken)
 
     const rooms: SyncResponse['rooms'] = []
     for (const [roomId, room] of Object.entries(raw.rooms?.join ?? {})) {
@@ -355,7 +379,9 @@ class MatrixClient {
         unreadCount: messageUnread.get(roomId) ?? 0
       })
     }
-    return { nextBatch: raw.next_batch, rooms }
+    return degraded
+      ? { nextBatch: raw.next_batch, rooms, countsDegraded: true }
+      : { nextBatch: raw.next_batch, rooms }
   }
 
   async getMessages(

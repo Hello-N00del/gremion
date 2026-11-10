@@ -3,6 +3,7 @@ import type { RequestEvent, RequestHandler } from '@sveltejs/kit'
 import { z } from 'zod'
 import { getMessagesBackend } from '$lib/server/messages/backend'
 import type { SessionUser } from '$lib/auth'
+import { forgetUnread } from '$lib/server/messages/unread-cache'
 
 function requireAuth(event: RequestEvent): SessionUser {
   const user = event.locals.user as SessionUser | undefined
@@ -60,5 +61,8 @@ export const POST: RequestHandler = async (event) => {
   if (!eventId) return json({ success: true, data: { marked: false } })
 
   await mc.setReadMarker(matrixToken, roomId, eventId)
+  // The shell badge is cached for a short time; drop this user's entry so the invalidate the
+  // client issues next sees the new count instead of the cached one.
+  forgetUnread(keycloakJwt)
   return json({ success: true, data: { marked: true, eventId } })
 }
