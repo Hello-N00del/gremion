@@ -14,7 +14,7 @@ describe('content capability for customer administrators', () => {
   })
 
   it('a plain member without a granting group is still refused', () => {
-    expect(() => requireContentAuthor(user([Role.Member]))).toThrow()
-    expect(() => requireContentPublish(user([Role.Member]))).toThrow()
+    expect(() => requireContentAuthor(user([Role.Member]))).toThrow(expect.objectContaining({ status: 403 }))
+    expect(() => requireContentPublish(user([Role.Member]))).toThrow(expect.objectContaining({ status: 403 }))
   })
 })

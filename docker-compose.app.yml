@@ -829,6 +829,8 @@ services:
       CONTENT_PG_URL: postgresql://${CONTENT_PG_USER:-content}:${CONTENT_PG_PASSWORD}@content-postgres:5432/${CONTENT_PG_USER:-content}
       KERNEL_BASE_URL: http://gremion-ui-${COLOUR:?COLOUR required}:3000
       INTERNAL_CONTENT_SECRET: ${INTERNAL_CONTENT_SECRET:-}
+      # The kernel's mail callbacks (resolve-group, send-mail) authenticate with this one.
+      INTERNAL_NEWSLETTER_SECRET: ${INTERNAL_NEWSLETTER_SECRET:-}
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-https://${PILOT_TENANT_HOST:-${PLATFORM_DOMAIN:?PLATFORM_DOMAIN required}}}
       TRACE_EXPORTER: ${TRACE_EXPORTER:-log}
     networks:

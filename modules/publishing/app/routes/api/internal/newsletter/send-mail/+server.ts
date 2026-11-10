@@ -80,7 +80,7 @@ export const POST: RequestHandler = async ({ request }) => {
       // (operator needs to configure SMTP for this tenant; retry will not help)
       return json({ success: false, error: 'smtp-unconfigured' }, { status: 503 })
     }
-    console.error('[newsletter:send-mail] SMTP send failed', { to, err })
+    console.error('[newsletter:send-mail] SMTP send failed', { errorClass: err instanceof Error ? err.name : typeof err })
     return json({ success: false, error: 'Send failed' }, { status: 500 })
   }
 }

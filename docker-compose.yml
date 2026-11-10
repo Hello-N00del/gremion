@@ -950,9 +950,9 @@ services:
         max-size: "50m"
         max-file: "5"
     environment:
-      # The WOPI host Collabora accepts: Nextcloud by its in-network name. A regex
-      # over the whole WOPISrc, so the app paths under it match.
-      aliasgroup1: "http://nextcloud.*"
+      # The one WOPI host Collabora accepts: Nextcloud by its in-network name. A literal: the
+      # value is a regex over the HOST only, so a wildcard would admit attacker-registered names.
+      aliasgroup1: "http://nextcloud:80"
       server_name: ${PILOT_TENANT_HOST:-}
       DONT_GEN_SSL_CERT: "YES"
       dictionaries: de_DE en_GB en_US

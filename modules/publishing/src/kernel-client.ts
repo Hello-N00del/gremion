@@ -238,7 +238,7 @@ export function createKernelClient(opts: KernelClientOptions): KernelClient {
         const body = (await res.json().catch(() => ({}))) as { error?: unknown }
         if (body.error === 'smtp-unconfigured') {
           throw new MailUnconfiguredError(
-            `kernel send-mail: tenant SMTP not configured (to=${msg.to})`,
+            `kernel send-mail: tenant SMTP not configured`,
           )
         }
       }
