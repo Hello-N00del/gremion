@@ -114,6 +114,8 @@ case " $* " in
         # secret where TENANT_PROVISIONER_SECRET_FILE points (the scratch mount).
         case " $all " in *" -e KEYCLOAK_ADMIN_PASSWORD "*) ;; *) echo "no name-only -e KEYCLOAK_ADMIN_PASSWORD" >&2; exit 1 ;; esac
         case " $all " in *" -e TENANT_PROVISIONER_SECRET_FILE=/run/secrets/provisioner-out/tenant_provisioner "*) ;; *) echo "no scratch TENANT_PROVISIONER_SECRET_FILE" >&2; exit 1 ;; esac
+        # The image runs as root: without --user the 0600 secret lands root-owned and the deploy user cannot move it.
+        case " $all " in *" --user "*) ;; *) echo "bootstrap-provisioner must run as the deploy user" >&2; exit 1 ;; esac
         [ -n "${KEYCLOAK_ADMIN:-}" ] && [ -n "${KEYCLOAK_ADMIN_PASSWORD:-}" ] || { echo "no admin credential in the environment" >&2; exit 1; }
         printf "%s" "$KEYCLOAK_ADMIN_PASSWORD" > "$GREMION_ROOT/kc-pw-seen"
         [ -n "$od" ] && [ -d "$od" ] || { echo "no scratch mount" >&2; exit 1; }
