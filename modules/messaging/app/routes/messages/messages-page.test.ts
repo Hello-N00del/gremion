@@ -330,6 +330,27 @@ describe('/messages — empty room list', () => {
     await findByTitle('Einstellungen')
     expect(within(document.body).queryByText(/noch keinem Gremium zugeordnet/)).toBeNull()
   })
+
+  // The list is empty until /api/messages/rooms answers (it reads Matrix state, so it can be slow).
+  // An empty store is not "no body": nothing may be claimed before the first answer.
+  it('says nothing about membership while the room list is still loading', async () => {
+    renderWithFetch(Role.CouncilAdmin, vi.fn(() => new Promise(() => {})))
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    expect(within(document.body).queryByText(/noch keinem Gremium zugeordnet/)).toBeNull()
+    expect(within(document.body).queryByText(/Keine Räume gefunden/)).toBeNull()
+  })
+
+  it('does not claim a missing membership when only archived rooms exist', async () => {
+    renderAs(Role.CouncilAdmin, [ARCHIVED_ROOM])
+    await within(document.body).findByText('Altbau-Initiative')
+    expect(within(document.body).queryByText(/noch keinem Gremium zugeordnet/)).toBeNull()
+  })
+
+  it('does not claim a missing membership when loading the list failed', async () => {
+    renderWithFetch(Role.CouncilAdmin, vi.fn(async () => { throw new Error('offline') }))
+    await within(document.body).findByText(/Räume konnten nicht geladen werden/)
+    expect(within(document.body).queryByText(/noch keinem Gremium zugeordnet/)).toBeNull()
+  })
 })
 
 describe('/messages — Archiv section (R23-5: read-only, no Einstellungen)', () => {

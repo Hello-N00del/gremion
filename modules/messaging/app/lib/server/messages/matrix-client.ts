@@ -72,6 +72,8 @@ export interface SyncResponse {
     events: MatrixMessage[]
     unreadCount: number
   }[]
+  /** Set only when the per-room unread counts could not be read: the zeros are then a fallback, not a measurement. */
+  countsDegraded?: true
 }
 
 class MatrixClient {
@@ -294,7 +296,17 @@ class MatrixClient {
   // Public: also consumed by GET /api/messages/rooms (#188) to populate the
   // per-room unread badge on the initial room list, not only by sync().
   async unreadMessageCountsByRoom(userToken: string): Promise<Map<string, number>> {
+    return (await this.readUnreadCounts(userToken)).counts
+  }
+
+  // Same read, but it says whether the /notifications call answered. sync() needs that: an
+  // empty map from a failed call looks exactly like "nothing unread", and a caller that caches
+  // the total would pin the badge to 0.
+  private async readUnreadCounts(
+    userToken: string
+  ): Promise<{ counts: Map<string, number>; degraded: boolean }> {
     const counts = new Map<string, number>()
+    let degraded = false
     try {
       const raw = (await this.cs(
         'GET',
@@ -310,8 +322,9 @@ class MatrixClient {
       }
     } catch {
       // Intentionally swallowed — see method docs (graceful degradation to 0).
+      degraded = true
     }
-    return counts
+    return { counts, degraded }
   }
 
   // Long-poll sync.
@@ -334,7 +347,7 @@ class MatrixClient {
 
     // Per-room unread *message* counts (excludes the invite_for_me membership
     // notification that Synapse's notification_count would otherwise add).
-    const messageUnread = await this.unreadMessageCountsByRoom(userToken)
+    const { counts: messageUnread, degraded } = await this.readUnreadCounts(userToken)
 
     const rooms: SyncResponse['rooms'] = []
     for (const [roomId, room] of Object.entries(raw.rooms?.join ?? {})) {
@@ -355,7 +368,9 @@ class MatrixClient {
         unreadCount: messageUnread.get(roomId) ?? 0
       })
     }
-    return { nextBatch: raw.next_batch, rooms }
+    return degraded
+      ? { nextBatch: raw.next_batch, rooms, countsDegraded: true }
+      : { nextBatch: raw.next_batch, rooms }
   }
 
   async getMessages(

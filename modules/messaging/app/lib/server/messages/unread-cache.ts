@@ -10,7 +10,8 @@
 //     same subject in two tenants stays apart;
 //   - 20 s lifetime, at most UNREAD_CACHE_MAX entries (expired ones are swept first, then the
 //     oldest goes), so it cannot grow with the number of users;
-//   - only a successful read is stored (the caller never stores a failure);
+//   - only a successful read is stored (the caller never stores a failure or a degraded sync),
+//     and not one that was overtaken by forgetUnread while it ran;
 //   - no key (no tenant scope, token without a subject) means no caching, never a shared key.
 import { currentTenantId } from '$lib/server/tenant/context'
 
@@ -23,6 +24,10 @@ interface Entry {
 }
 
 const cache = new Map<string, Entry>()
+
+// forgetUnread notes, per user, a sequence number; beginUnreadRead hands out the current one.
+let forgetSeq = 0
+const noteForgotten = new Map<string, { seq: number; expiresAt: number }>()
 
 function subjectOf(jwt: string): string | null {
   try {
@@ -57,10 +62,23 @@ export function getCachedUnread(accessToken: string | null): number | null {
   return hit.count
 }
 
-export function setCachedUnread(accessToken: string | null, count: number): void {
+/**
+ * Call before the sync starts and pass the result to setCachedUnread. A read that finished after
+ * forgetUnread ran for the same user (the user marked a room read while the sync was in flight)
+ * was computed from older state and must not be stored.
+ */
+export function beginUnreadRead(): number {
+  return forgetSeq
+}
+
+export function setCachedUnread(accessToken: string | null, count: number, began?: number): void {
   const key = keyFor(accessToken)
   if (!key) return
   const now = Date.now()
+  if (began !== undefined) {
+    const forgotten = noteForgotten.get(key)
+    if (forgotten && forgotten.seq > began && now < forgotten.expiresAt) return
+  }
   cache.delete(key)
   if (cache.size >= UNREAD_CACHE_MAX) {
     for (const [k, v] of cache) if (now >= v.expiresAt) cache.delete(k)
@@ -77,11 +95,24 @@ export function setCachedUnread(accessToken: string | null, count: number): void
 /** Drop one user's entry, e.g. after a room was marked read, so the badge refreshes at once. */
 export function forgetUnread(accessToken: string | null): void {
   const key = keyFor(accessToken)
-  if (key) cache.delete(key)
+  if (!key) return
+  cache.delete(key)
+  // Remember that this user's state changed, for a sync that is running right now (see
+  // beginUnreadRead). The note only matters while such a sync can still finish (the caller caps
+  // it at a few seconds), so it lives as long as a cache entry and is bounded like the cache.
+  const now = Date.now()
+  noteForgotten.delete(key)
+  while (noteForgotten.size >= UNREAD_CACHE_MAX) {
+    const oldest = noteForgotten.keys().next().value
+    if (oldest === undefined) break
+    noteForgotten.delete(oldest)
+  }
+  noteForgotten.set(key, { seq: ++forgetSeq, expiresAt: now + UNREAD_CACHE_TTL_MS })
 }
 
 export function clearAllUnreadCache(): void {
   cache.clear()
+  noteForgotten.clear()
 }
 
 export function unreadCacheSize(): number {

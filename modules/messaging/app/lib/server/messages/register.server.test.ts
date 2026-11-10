@@ -170,6 +170,29 @@ describe('messages:unread-count provider cache', () => {
     expect(mockSync).toHaveBeenCalledTimes(2)
   })
 
+  it('does not cache a sync whose unread counts were degraded (the /notifications read failed)', async () => {
+    const provider = getDataProvider('messages:unread-count')!
+    mockSync.mockResolvedValueOnce({ nextBatch: 'b1', rooms: [{ roomId: '!a:hs', events: [], unreadCount: 0 }], countsDegraded: true })
+    expect(await provider(jwtFor('user-1'))).toBe(0)
+    expect(await provider(jwtFor('user-1'))).toBe(5)
+    expect(mockSync).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not store a count that was computed before forgetUnread ran while the sync was in flight', async () => {
+    const provider = getDataProvider('messages:unread-count')!
+    let finish!: (v: unknown) => void
+    mockSync.mockReturnValueOnce(new Promise((resolve) => { finish = resolve }))
+    const inFlight = provider(jwtFor('user-1'))
+    await vi.advanceTimersByTimeAsync(0)
+    // The user marks a room read while the sync is still running.
+    forgetUnread(jwtFor('user-1'))
+    finish({ nextBatch: 'b1', rooms: [{ roomId: '!a:hs', events: [], unreadCount: 9 }] })
+    expect(await inFlight).toBe(9)
+    // The stale 9 must not be served from the cache: the next call asks again.
+    expect(await provider(jwtFor('user-1'))).toBe(5)
+    expect(mockSync).toHaveBeenCalledTimes(2)
+  })
+
   it('forgetUnread drops the user entry, so a read room refreshes the badge at once', async () => {
     const provider = getDataProvider('messages:unread-count')!
     await provider(jwtFor('user-1'))

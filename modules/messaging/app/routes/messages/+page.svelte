@@ -43,6 +43,9 @@
   // silent to us (no logging at all). Tracked separately so the room list
   // can show a real error state with a retry action instead.
   let roomsLoadError = $state(false)
+  // True once loadRooms() got a successful answer. Before that the empty store only means "not
+  // loaded yet", so the empty-list copy must not say anything about the user's membership.
+  let roomsLoaded = $state(false)
 
   let totalUnread = $derived(activeRooms.reduce((sum, r) => sum + (r.unreadCount ?? 0), 0))
 
@@ -85,6 +88,7 @@
       const json = await res.json()
       if (json.success) {
         roomsLoadError = false
+        roomsLoaded = true
         const loaded: Record<string, RoomState> = {}
         for (const r of json.data as Array<{
           roomId: string; name: string; unreadCount: number; lastMessageTs: number; archived?: boolean
@@ -514,10 +518,15 @@
           Räume konnten nicht geladen werden.
           <button type="button" class="btn btn-ghost btn-sm" onclick={() => void loadRooms()}>Erneut versuchen</button>
         </div>
-      {:else}
+      {:else if roomsLoaded && archivedRooms.length === 0}
+        <!-- Only after the first successful answer, and only when nothing is archived either:
+             an empty store before that (or an archive-only list) does not mean "no body". The
+             wording stays conditional because a body without a room yet looks the same. -->
         <div class="room-empty mono">
-          Keine Räume gefunden. Sie sind noch keinem Gremium zugeordnet. Räume erscheinen, sobald Sie Mitglied eines Gremiums sind; die Zuordnung ändern Verwaltende unter Mitglieder.
+          Keine Räume gefunden. Falls Sie noch keinem Gremium zugeordnet sind: Räume erscheinen, sobald Sie Mitglied eines Gremiums sind; die Zuordnung ändern Verwaltende unter Mitglieder.
         </div>
+      {:else if roomsLoaded}
+        <div class="room-empty mono">Keine aktiven Räume.</div>
       {/if}
     {/each}
 

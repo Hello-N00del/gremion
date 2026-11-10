@@ -372,3 +372,41 @@ describe('MatrixClient.getRoomState / setRoomState / putRoomAlias / deleteRoomAl
     ).resolves.toBeUndefined()
   })
 })
+
+describe('MatrixClient.sync — unread counts report their own failure', () => {
+  const json = (body: unknown, status = 200) =>
+    new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })
+  const syncBody = { next_batch: 's1', rooms: { join: { '!a:matrix.test': { timeline: { events: [] } } } } }
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('marks the result degraded when /notifications fails, so a caller never caches the 0 as a real count', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) =>
+        url.includes('/notifications') ? json({ errcode: 'M_UNKNOWN' }, 500) : json(syncBody),
+      ),
+    )
+    const { getMatrixClient } = await import('./matrix-client')
+    const res = await getMatrixClient().sync('user-token')
+    expect(res.rooms).toEqual([{ roomId: '!a:matrix.test', events: [], unreadCount: 0 }])
+    expect(res.countsDegraded).toBe(true)
+  })
+
+  it('does not mark a sync degraded when /notifications answered', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) =>
+        url.includes('/notifications')
+          ? json({ notifications: [{ room_id: '!a:matrix.test', read: false, event: { type: 'm.room.message' } }] })
+          : json(syncBody),
+      ),
+    )
+    const { getMatrixClient } = await import('./matrix-client')
+    const res = await getMatrixClient().sync('user-token')
+    expect(res.rooms[0]?.unreadCount).toBe(1)
+    expect(res.countsDegraded).toBeUndefined()
+  })
+})

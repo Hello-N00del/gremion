@@ -231,8 +231,11 @@ export const tenantResolveHandle: Handle = async ({ event, resolve }) => {
   // plane failure = process-wide 503), and a request racing the boot fleet can
   // never start a concurrent second migration.
   if (isFleetPopulated() && getTenantReadiness(ctx.id) !== 'ready') {
+    // A failed tenant gets the page that does not reload itself: waiting does not heal it, and a
+    // reloading page would start another re-migration every few seconds for as long as a tab is open.
+    const failed = getTenantReadiness(ctx.id) === 'failed'
     void triggerTenantMigrationRetry(ctx)
-    return waitingResponse('tenant')
+    return waitingResponse(failed ? 'tenant-failed' : 'tenant')
   }
 
   // P2.1b T10 (§7.6, D-RATE): per-tenant token bucket — after resolution and

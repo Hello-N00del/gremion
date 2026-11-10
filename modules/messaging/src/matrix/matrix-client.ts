@@ -40,6 +40,8 @@ export interface SyncResponse {
     events: MatrixMessage[]
     unreadCount: number
   }[]
+  /** Set only when the per-room unread counts could not be read: the zeros are then a fallback, not a measurement. */
+  countsDegraded?: true
 }
 
 export interface MatrixClientOptions {
@@ -144,7 +146,14 @@ export function createMatrixClient(opts: MatrixClientOptions): MatrixLeafClient 
   }
 
   async function unreadMessageCountsByRoom(userToken: string): Promise<Map<string, number>> {
+    return (await readUnreadCounts(userToken)).counts
+  }
+
+  // Same read, saying whether /notifications answered (an empty map from a failed call must not be
+  // mistaken for "nothing unread" by a caller that caches the total).
+  async function readUnreadCounts(userToken: string): Promise<{ counts: Map<string, number>; degraded: boolean }> {
     const counts = new Map<string, number>()
+    let degraded = false
     try {
       const raw = (await cs('GET', '/_matrix/client/v3/notifications?limit=1000', userToken)) as {
         notifications?: Array<{ room_id?: string; read?: boolean; event?: { type?: string } }>
@@ -158,8 +167,9 @@ export function createMatrixClient(opts: MatrixClientOptions): MatrixLeafClient 
       }
     } catch {
       // Swallowed — graceful degradation to 0 (mirrors the kernel).
+      degraded = true
     }
-    return counts
+    return { counts, degraded }
   }
 
   async function sync(userToken: string, since?: string): Promise<SyncResponse> {
@@ -178,7 +188,7 @@ export function createMatrixClient(opts: MatrixClientOptions): MatrixLeafClient 
       }
     }
 
-    const messageUnread = await unreadMessageCountsByRoom(userToken)
+    const { counts: messageUnread, degraded } = await readUnreadCounts(userToken)
 
     const rooms: SyncResponse['rooms'] = []
     for (const [roomId, room] of Object.entries(raw.rooms?.join ?? {})) {
@@ -197,7 +207,7 @@ export function createMatrixClient(opts: MatrixClientOptions): MatrixLeafClient 
         )
       rooms.push({ roomId, events, unreadCount: messageUnread.get(roomId) ?? 0 })
     }
-    return { nextBatch: raw.next_batch, rooms }
+    return degraded ? { nextBatch: raw.next_batch, rooms, countsDegraded: true } : { nextBatch: raw.next_batch, rooms }
   }
 
   async function getJoinedRooms(userToken: string): Promise<string[]> {
