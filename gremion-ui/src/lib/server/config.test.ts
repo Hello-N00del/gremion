@@ -659,7 +659,9 @@ describe('pilot held-off modules: elections off, board on, and a write cannot wi
     const result = writeConfig({ modules: { elections: true, votes: true } })
     expect(result.modules.elections).toBe(false)
     expect(result.modules.votes).toBe(true)
-    const written = JSON.parse(String(mockFs.writeFileSync.mock.calls.at(-1)![1])) as { modules: Record<string, boolean> }
+    const data = mockFs.writeFileSync.mock.calls.at(-1)![1]
+    expect(typeof data).toBe('string')
+    const written = JSON.parse(data as string) as { modules: Record<string, boolean> }
     expect(written.modules.elections).toBe(false)
   })
 

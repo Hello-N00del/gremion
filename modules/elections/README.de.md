@@ -1,4 +1,4 @@
-<!-- i18n-sync: source=README.md sha256=bf30900f8bd11afae71150c7713706503a4e55052774a72b7887250d7718d80d -->
+<!-- i18n-sync: source=README.md sha256=687a1e0636dfa59efb3ca591b93dee05d0b63e953e62c2a08ab82e733eb7ce58 -->
 [English](./README.md) | **Deutsch**
 
 # elections

@@ -173,19 +173,41 @@ describe('manifest migration basenames name files that exist', () => {
     return names
   }
 
-  it('every migration basename of every registered manifest resolves to a file', () => {
-    const names = present()
+  /** The manifest-declared basenames that match no file, as `<id>: <name>.sql`. */
+  const missingNames = (manifests: { id: string; migrations?: string[] }[], names: Set<string>) => {
     const missing: string[] = []
-    for (const m of MODULE_MANIFESTS) {
+    for (const m of manifests) {
       for (const base of m.migrations ?? []) if (!names.has(`${base}.sql`)) missing.push(`${m.id}: ${base}.sql`)
     }
-    expect(missing).toEqual([])
+    return missing
+  }
+
+  it('every migration basename of every registered manifest resolves to a file', () => {
+    expect(missingNames(MODULE_MANIFESTS, present())).toEqual([])
   })
 
   it('the guard is not vacuous: a manifest naming a missing file is reported', () => {
-    const names = present()
-    expect(names.has('044_content_schema.sql')).toBe(false)
-    expect(names.has('1200_content_news_posts.sql')).toBe(true)
+    expect(
+      missingNames([{ id: 'rogue', migrations: ['044_content_schema', '1200_content_news_posts'] }], present()),
+    ).toEqual(['rogue: 044_content_schema.sql'])
+  })
+
+  // The portal-publish callback and the news insert name news_posts.content_origin_post_id. The column is
+  // created by no kernel migration, so a content-ON build without the content block's ALTER answers every
+  // publish with an unknown-column error from the database. Pin the pairing: code names the column, the
+  // content block adds it.
+  it('news_posts.content_origin_post_id, which the news code reads and writes, is added by the content migration block', () => {
+    const appDir = join(MODULES_DIR, 'content', 'app')
+    const code = ['news-db.ts', 'portal-callback.ts']
+      .map((f) => readFileSync(join(appDir, 'lib', 'server', 'news', f), 'utf8'))
+      .join('\n')
+    expect(code).toContain('content_origin_post_id')
+    const migrationsDir = join(appDir, 'migrations')
+    const ddl = readdirSync(migrationsDir)
+      .filter((f) => f.endsWith('.sql'))
+      .map((f) => readFileSync(join(migrationsDir, f), 'utf8'))
+      .join('\n')
+    expect(ddl).toMatch(/ALTER TABLE news_posts\s+ADD COLUMN IF NOT EXISTS content_origin_post_id\s+UUID/)
   })
 })
 

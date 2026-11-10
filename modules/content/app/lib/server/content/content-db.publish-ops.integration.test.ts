@@ -1,13 +1,12 @@
 // DB-backed suite for the L3 Instagram publish-outbox helpers (content.publish_ops,
-// migration 046). Runs under `test:integration` against a real Postgres
+// content leaf migration 001). Runs under `test:integration` against a real Postgres
 // (vitest.integration.config.ts; tests/integration/setup.ts establishes the
-// default tenant in ALS). The `content` schema (044) + its L2 (045) + L3 outbox
-// (046) migrations are applied here in beforeAll, all idempotent (IF NOT EXISTS),
-// so the suite is self-contained whether or not the content module is enabled.
+// default tenant in ALS). The `content` schema with its L2 and L3 outbox tables
+// (modules/content/migrations/001_init.sql, the squash of the old kernel 044-046) is
+// applied here in beforeAll, idempotent (IF NOT EXISTS), so the suite is self-contained.
 import { describe, it, expect, beforeAll, beforeEach } from 'vitest'
-import { readFileSync } from 'node:fs'
-import { join } from 'node:path'
 import { getDb } from '../db'
+import { contentLeafMigration } from './leaf-schema.test-util'
 import {
 	createPost,
 	enqueuePublishOp,
@@ -25,14 +24,7 @@ describe('content-db L3 publish-ops outbox (integration)', () => {
 		// Reserve one dedicated connection so the embedded transaction is permitted.
 		const reserved = await getDb().reserve()
 		try {
-			for (const file of [
-				'044_content_schema.sql',
-				'045_content_publish.sql',
-				'046_content_publish_ops.sql',
-			]) {
-				const ddl = readFileSync(join(process.cwd(), 'migrations', file), 'utf-8')
-				await reserved.unsafe(ddl)
-			}
+			await reserved.unsafe(contentLeafMigration('001_init.sql'))
 		} finally {
 			reserved.release()
 		}

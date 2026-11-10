@@ -113,6 +113,13 @@ describe('GET /api/users: what is returned', () => {
     expect(Object.keys(body.data[0]).sort()).toEqual(['email', 'firstName', 'id', 'lastName', 'username'])
   })
 
+  it('a user whose profile has no e-mail or name still carries all five fields (Keycloak omits unset attributes; the contract requires them)', async () => {
+    realms['tenant-a'].listUsers.mockResolvedValue([{ id: 'a-9', username: 'bare', enabled: true } as KcUser])
+    const res = await GET(event({ query: '?search=bare' }))
+    const body = (await res.json()) as { data: Record<string, unknown>[] }
+    expect(body.data[0]).toEqual({ id: 'a-9', username: 'bare', email: '', firstName: '', lastName: '' })
+  })
+
   it('leaves out service accounts (the kernel\'s own admin client is a Keycloak user)', async () => {
     const res = await GET(event({ query: '?search=service' }))
     const body = (await res.json()) as { data: { username: string }[] }

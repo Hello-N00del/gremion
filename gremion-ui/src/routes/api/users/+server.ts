@@ -57,7 +57,8 @@ export const GET: RequestHandler = async ({ url, locals }) => {
     const found = await getKeycloakAdminClient(locals.tenant).listUsers({ search, max, first, enabled: true })
     const data = found
       .filter((u) => !u.username.startsWith(SERVICE_ACCOUNT_PREFIX))
-      .map((u) => ({ id: u.id, email: u.email, firstName: u.firstName, lastName: u.lastName, username: u.username }))
+      // Keycloak leaves unset profile attributes out of its JSON; the contract requires all five fields.
+      .map((u) => ({ id: u.id, email: u.email ?? '', firstName: u.firstName ?? '', lastName: u.lastName ?? '', username: u.username }))
     return json({ success: true, data })
   } catch (err) {
     // The upstream text can echo the search term (an address); log the error class only.

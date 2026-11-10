@@ -1,4 +1,4 @@
-<!-- i18n-sync: source=README.md sha256=9939436fe18fea0d743d90590b4703fb1c553419a51a3d4ea61a3cebd522c6bc -->
+<!-- i18n-sync: source=README.md sha256=4c1fb3e2e1975a900e29ac26f18012a34421d44ca9c44d779d3e980e23d96754 -->
 [English](./README.md) | **Deutsch**
 
 # content
@@ -70,11 +70,10 @@ Leaf, eine Datenbank pro Mandant (`content_<slug>`), vom Leaf angewendet und geg
 | `002_posts_status.sql` | Spalten für den Versand-Lebenszyklus in `content.posts` |
 | `003_content_audit.sql` | `content.content_audit` |
 
-Kernel, angewendet auf die Kernel-Datenbank: `app/migrations/1200_content_news_posts.sql` und
-`1201_news_posts_public_reader_columns.sql` (die News-Beiträge, die der Portal-Kanal
-schreibt). Das Manifest nennt außerdem die Kernel-Migrationen `044_content_schema`,
-`045_content_publish` und `046_content_publish_ops` als Eigentum dieses Moduls; diese Dateien
-liegen nicht in diesem Baum.
+Kernel, angewendet auf die Kernel-Datenbank: `app/migrations/1200_content_news_posts.sql`,
+`1201_news_posts_public_reader_columns.sql` und `1202_news_posts_publish_origin.sql` (die
+News-Beiträge, die der Portal-Kanal schreibt, und die Spalte, mit der eine wiederholte
+Veröffentlichung ihre Zeile wiederfindet). Das Manifest nennt genau diese drei Dateien.
 
 Beim Deaktivieren des Moduls für einen Mandanten wird die Datenbank mit `pg_dump` exportiert
 (Aufbewahrungsprofil `rp-pub-module-data`); `content.send_tokens.token` wird dabei

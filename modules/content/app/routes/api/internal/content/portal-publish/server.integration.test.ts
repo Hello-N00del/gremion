@@ -5,12 +5,12 @@
 // tenant in ALS before each test so getDb() / news-db functions work against the
 // real `stura` test DB (postgres://stura:stura_test@localhost:5432/stura).
 //
-// Migration 047_news_posts_content_origin.sql (adds content_origin_post_id) is
-// applied idempotently in beforeAll so this suite is self-contained.
+// The content app block's news_posts migrations (1200 creates the table, 1202 adds
+// content_origin_post_id and its unique index) are applied idempotently in beforeAll so
+// this suite is self-contained.
 import { describe, it, expect, beforeAll, beforeEach } from 'vitest'
-import { readFileSync } from 'node:fs'
-import { join } from 'node:path'
 import { getDb } from '$lib/server/db'
+import { contentAppMigration } from '$lib/server/content/leaf-schema.test-util'
 import { POST } from './+server'
 
 const SECRET = process.env.INTERNAL_CONTENT_SECRET ?? 'test-secret'
@@ -32,14 +32,12 @@ describe('portal-publish callback', () => {
   const A = '11111111-1111-1111-1111-111111111111'
 
   beforeAll(async () => {
-    // Apply migration 047 idempotently — IF NOT EXISTS guards make it safe to
+    // Apply 1200 and 1202 idempotently — IF NOT EXISTS guards make them safe to
     // run against an already-migrated DB.
     const sql = getDb()
-    const ddl = readFileSync(
-      join(process.cwd(), 'migrations', '047_news_posts_content_origin.sql'),
-      'utf-8',
-    )
-    await sql.unsafe(ddl)
+    for (const file of ['1200_content_news_posts.sql', '1202_news_posts_publish_origin.sql']) {
+      await sql.unsafe(contentAppMigration(file))
+    }
     // Set the secret so the guard works without a .env
     process.env.INTERNAL_CONTENT_SECRET = SECRET
   })

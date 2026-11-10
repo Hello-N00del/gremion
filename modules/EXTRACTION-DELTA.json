@@ -258,6 +258,12 @@
       "blob": "7573db1aa2d4f6adc5c5a5572554b55f1483b745"
     },
     {
+      "path": "modules/content/app/migrations/1202_news_posts_publish_origin.sql",
+      "reason": "added: forward migration adding news_posts.content_origin_post_id and its partial unique index, the idempotency anchor the portal-publish callback reads and writes; same DDL as StuRa 047 under its own slug (that slug is StuRa-only in the register); not a StuRa file",
+      "owner": "TASK-200",
+      "blob": "193aceb165e30e38f7257c658497c49b1b6bd1b1"
+    },
+    {
       "path": "modules/content/app/routes/api/content/posts/[id]/publish/[channel]/+server.ts",
       "reason": "kernel-ahead of f2: StuRaOS#534 follow-up (BFF-409-MISMATCH): the publish client and route answer a leaf 409 tenant_identity_mismatch with its own operator error (502, German text) before the 409 channel-not-publishable mapping",
       "owner": "TASK-205",

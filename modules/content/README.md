@@ -68,10 +68,10 @@ Leaf, one database per tenant (`content_<slug>`), applied by the leaf and checke
 | `002_posts_status.sql` | dispatch-lifecycle columns on `content.posts` |
 | `003_content_audit.sql` | `content.content_audit` |
 
-Kernel, applied to the kernel database: `app/migrations/1200_content_news_posts.sql` and
-`1201_news_posts_public_reader_columns.sql` (the news posts the portal channel writes). The
-manifest also names the kernel migrations `044_content_schema`, `045_content_publish` and
-`046_content_publish_ops` as owned by this module; those files are not in this tree.
+Kernel, applied to the kernel database: `app/migrations/1200_content_news_posts.sql`,
+`1201_news_posts_public_reader_columns.sql` and `1202_news_posts_publish_origin.sql` (the news
+posts the portal channel writes, and the column that makes a repeated publish find its row).
+The manifest names exactly these three files.
 
 Disabling the module for a tenant exports the database with `pg_dump` (retention profile
 `rp-pub-module-data`), withholding `content.send_tokens.token` (`module.json`). Two timed

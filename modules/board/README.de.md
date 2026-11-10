@@ -89,8 +89,6 @@ Keine außer dem Kernel und dem PostgreSQL-Server des Moduls.
 wird (das es weiterhin namentlich ablehnt), im Pilot aber im Prozess ausgeliefert und
 standardmäßig an ist (Entscheidung des Betreibers 2026-11-09) und dass es den Isolationsnachweis
 nicht hat, den ein zweiter Kunde bräuchte.
-und was das Repository darüber belegt und was nicht, ob es auf einem laufenden System
-tatsächlich abgeschaltet ist.
 
 ## Tests
 
