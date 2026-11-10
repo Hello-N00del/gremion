@@ -4,7 +4,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const submitCreate = vi.fn(async () => 'req-1')
-vi.mock('$env/dynamic/private', () => ({ env: {} }))
+const ENV = vi.hoisted(() => ({}) as Record<string, string>)
+vi.mock('$env/dynamic/private', () => ({ env: ENV }))
 vi.mock('$lib/server/config', () => ({
   loadConfig: () => ({ ok: true, config: {} }),
   newCustomerDisabledReason: () => null,
@@ -23,13 +24,14 @@ vi.mock('$lib/server/requests', async (orig) => ({
   ],
 }))
 
-const { actions } = await import('./+page.server')
+const { actions, load } = await import('./+page.server')
 
 const KEY = '0192f0c4-0000-7000-8000-00000000000a'
 const OP = '8d6b9c7e-1f2a-4b3c-9d4e-5f6a7b8c9d0e'
 const GOOD: Record<string, string | string[]> = {
   key: KEY,
   slug: 'proof-z',
+  confirmSlug: 'proof-z',
   host: 'rat.proof.example',
   itAdmin: 'it@proof.example',
   councilAdmin: 'rat@proof.example',
@@ -62,7 +64,10 @@ function failed(r: Awaited<ReturnType<typeof post>>) {
   return o
 }
 
-beforeEach(() => submitCreate.mockClear())
+beforeEach(() => {
+  submitCreate.mockClear()
+  delete ENV.PILOT_TENANT_HOST
+})
 
 describe('Neuer Mandant action: validation before any request row', () => {
   it('a valid form is submitted once and redirects', async () => {
@@ -142,5 +147,32 @@ describe('Neuer Mandant action: validation before any request row', () => {
     const o = failed(await post({ ...GOOD, slug: 'keycloak' }))
     expect(o.data.errors.slug).toBeDefined()
     expect(submitCreate).not.toHaveBeenCalled()
+  })
+})
+
+describe('Neuer Mandant: the slug typed twice and the expected host', () => {
+  it('T12: a repeated slug that differs is fail(400) on confirmSlug and submits nothing', async () => {
+    const o = failed(await post({ ...GOOD, confirmSlug: 'proof-y' }))
+    expect(o.status).toBe(400)
+    expect(o.data.errors.confirmSlug).toMatch(/Kurzname/)
+    expect(submitCreate).not.toHaveBeenCalled()
+  })
+  it('T12: a missing or blank repeated slug (a hand-made POST) is refused the same way', async () => {
+    expect(failed(await post({ ...GOOD, confirmSlug: undefined })).data.errors.confirmSlug).toBeDefined()
+    expect(failed(await post({ ...GOOD, confirmSlug: '   ' })).data.errors.confirmSlug).toBeDefined()
+    expect(submitCreate).not.toHaveBeenCalled()
+  })
+  it('T12: the typed slug is kept on the re-rendered form, the confirmation is not read as the slug', async () => {
+    const o = failed(await post({ ...GOOD, confirmSlug: 'proof-y' })) as unknown as { data: { values: { slug: string } } }
+    expect(o.data.values.slug).toBe('proof-z')
+    expect(submitCreate).not.toHaveBeenCalled()
+  })
+  it('T12: the load names the install host from PILOT_TENANT_HOST; unset or a placeholder: no hint', async () => {
+    const run = () => (load as unknown as (e: unknown) => Promise<{ expectedHost: string | null }>)({})
+    expect((await run()).expectedHost).toBeNull()
+    ENV.PILOT_TENANT_HOST = 'CHANGE_ME_OPERATOR_pilot_tenant_host'
+    expect((await run()).expectedHost).toBeNull()
+    ENV.PILOT_TENANT_HOST = 'Rat.Proof.Example'
+    expect((await run()).expectedHost).toBe('rat.proof.example')
   })
 })

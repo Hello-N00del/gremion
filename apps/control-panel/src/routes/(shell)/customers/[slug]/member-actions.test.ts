@@ -281,6 +281,17 @@ describe('importValidate', () => {
     }
     expect(submits).toHaveLength(0)
   })
+  it('a non-UTF-8 file is refused with the way to export it as UTF-8 (Excel: CSV UTF-8)', async () => {
+    const res = await act('importValidate', { vertical: 'stura', list: csvFile(new Uint8Array([0xe4, 0xf6, 0xfc, 0x3b])) })
+    expect(res.status).toBe(400)
+    expect(res.data.memberError).toMatch(/kein UTF-8-Text/)
+    expect(res.data.memberError).toMatch(/CSV UTF-8/)
+    expect(submits).toHaveLength(0)
+  })
+  it('a semicolon list from German Excel is queued, not refused here (the parser reads it on the host)', async () => {
+    await expect(act('importValidate', { vertical: 'stura', list: csvFile('﻿name;email;body;role\r\nAnna;a@x.example;Rat;member\r\n') })).rejects.toMatchObject({ status: 303 })
+    expect(submits).toHaveLength(1)
+  })
   it('an unknown vertical is refused with 400', async () => {
     expect((await act('importValidate', { vertical: 'nosuch', list: csvFile(CSV) })).status).toBe(400)
     expect(submits).toHaveLength(0)

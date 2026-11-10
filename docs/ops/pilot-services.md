@@ -188,8 +188,8 @@ not offered for the pilot.
   Do not disable calendar, content or publishing until the two are reconciled.
   The council switch refuses a calendar switch-off while `CALENDAR_BACKEND` names the
   leaf (a switch-off guard); content and publishing are not council-switchable at all.
-  An operator `disable_module` request is not refused by code, so it stays an
-  operator rule.
+  The panel refuses `disable_module` for these three (`DISABLE_LOCKED`); only the
+  host break-glass request is not refused by code, so that stays an operator rule.
 - **Isolation evidence.** The case table behind the enable gate covers the
   backends this install runs; board runs in-process and has no evidence row, so
   a second customer needs it first. Votes, files and messaging are proven at the

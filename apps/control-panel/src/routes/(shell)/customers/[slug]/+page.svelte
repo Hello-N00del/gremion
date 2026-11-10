@@ -1,5 +1,6 @@
 <script lang="ts">
   import { enhance } from '$app/forms'
+  import { DISABLE_LOCKED } from '$lib/modules'
   import { originLabel } from '$lib/request-format'
   import { LEDGER_STEP_LABEL as STEP_LABEL } from '$lib/request-state'
   import type { ActionData, PageData } from './$types'
@@ -32,6 +33,11 @@
       </form>
     {:else if data.latest.retryNote}
       <p class="muted">{data.latest.retryNote}</p>
+    {/if}
+    {#if data.failureEvents.length}
+      <h3>Letzte Meldungen des Ausführers</h3>
+      <pre class="events">{#each data.failureEvents as e, i (i)}{e.level === 'error' ? '! ' : '  '}{e.message}
+{/each}</pre>
     {/if}
   </section>
 {/if}
@@ -94,11 +100,15 @@
           <li>
             <span>{m.name} <code>{m.id}</code></span>
             {#if data.moduleSection.canAct}
-              <form method="POST" action="?/disable_module" use:enhance>
-                <input type="hidden" name="module" value={m.id} />
-                <p class="muted">Deaktivieren: Die Moduldaten werden zuerst exportiert und geprüft, erst danach wird die Moduldatenbank entfernt.</p>
-                <button type="submit">Modul deaktivieren</button>
-              </form>
+              {#if DISABLE_LOCKED.has(m.id)}
+                <p class="muted">Deaktivieren ist bis zum Abgleich der Leaf-Datenbanken gesperrt.</p>
+              {:else}
+                <form method="POST" action="?/disable_module" use:enhance>
+                  <input type="hidden" name="module" value={m.id} />
+                  <p class="muted">Deaktivieren: Die Moduldaten werden zuerst exportiert und geprüft, erst danach wird die Moduldatenbank entfernt.</p>
+                  <button type="submit">Modul deaktivieren</button>
+                </form>
+              {/if}
               <details>
                 <summary>DPIA-Entscheidung festhalten</summary>
                 <form method="POST" action="?/record_dpia" use:enhance>
@@ -204,6 +214,9 @@
 
       <h3>Mitgliederliste prüfen</h3>
       <p class="muted">CSV-Datei in UTF-8, höchstens 1 MiB. Die Prüfung schreibt nichts; sie meldet die Nummern abgelehnter Zeilen, nie Namen oder Adressen.</p>
+      <p class="muted">
+        Spalten (erste Zeile): <code>name,email,body,role</code>. <code>body</code> ist der Name des Gremiums, genau wie beim Anlegen des Mandanten; <code>role</code> ist <code>member</code> oder <code>helper</code> und darf leer bleiben. Aus Excel: „CSV UTF-8 (durch Trennzeichen getrennt)“; Semikolon oder Komma als Trennzeichen sind beide möglich, leere Spalten und Zeilen am Ende werden übergangen.
+      </p>
       <form method="POST" action="?/importValidate" enctype="multipart/form-data" use:enhance>
         <label>
           Vertikale
