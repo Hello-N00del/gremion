@@ -11,17 +11,24 @@
 -- a retried publish finds its row instead of creating a second one. Without the
 -- column every portal publish fails at the first SELECT.
 --
--- WHY THIS NAME. The same DDL exists in the StuRa tree as migration 047, whose
--- slug the register lists as StuRa-only (scripts/migrations/stura-only-slugs.json).
+-- NO UNIQUE INDEX HERE. The expand lint refuses an index on a table an earlier
+-- file created, and a contract file cannot pass before the first release tag.
+-- A contract-phase file adds the partial unique index on the column once the
+-- first release is tagged; until then the lookup-then-insert in the callback is
+-- the only guard (the slug UNIQUE of 1200 stops a concurrent duplicate that
+-- carries the same title).
+--
+-- WHY THIS NAME. The same column exists in the StuRa tree as migration 047,
+-- whose slug the register lists as StuRa-only (scripts/migrations/stura-only-slugs.json).
 -- The kernel's content app code needs the column, so the kernel chain carries
 -- its own file under its own slug. Both are idempotent (IF NOT EXISTS), so a
 -- database that has applied the StuRa file converges to the same schema.
 --
 -- The public-reader role is not granted the column: 1201 narrowed its SELECT to
 -- seven columns and the portal never reads this one.
+--
+-- No file-level BEGIN/COMMIT: the runner wraps each file and its ledger insert in
+-- one transaction.
+SET LOCAL lock_timeout = '5s';
 
 ALTER TABLE news_posts ADD COLUMN IF NOT EXISTS content_origin_post_id UUID;
-
-CREATE UNIQUE INDEX IF NOT EXISTS uq_news_posts_content_origin
-  ON news_posts (content_origin_post_id)
-  WHERE content_origin_post_id IS NOT NULL;

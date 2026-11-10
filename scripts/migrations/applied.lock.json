@@ -112,7 +112,7 @@
         "0064_module_karenz.sql": "65f153eb9781f685ec95372d48a03a3b4b1e743b8861a3fcb757469d617757a4",
         "1200_content_news_posts.sql": "dabcd6a81e45b8dc6ac1dbfc4cbfb77286bc5471ee3eb18c2ae5bbacbc508707",
         "1201_news_posts_public_reader_columns.sql": "b3d0f74a26a63a560111ac9cdad9ba603f2e34b9d75b3bf2769c7dc103acd801",
-        "1202_news_posts_publish_origin.sql": "296337b7efac3ec70cec8c5130d1252bdf7297155b847df4777a47031dec7cc5"
+        "1202_news_posts_publish_origin.sql": "a12bed73d2df61131096268ff65e24edf1c657d129752e10cd6eb283e03734aa"
       }
     },
     "mail": {

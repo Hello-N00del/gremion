@@ -6,7 +6,7 @@
 // real `stura` test DB (postgres://stura:stura_test@localhost:5432/stura).
 //
 // The content app block's news_posts migrations (1200 creates the table, 1202 adds
-// content_origin_post_id and its unique index) are applied idempotently in beforeAll so
+// content_origin_post_id) are applied idempotently in beforeAll so
 // this suite is self-contained.
 import { describe, it, expect, beforeAll, beforeEach } from 'vitest'
 import { getDb } from '$lib/server/db'
