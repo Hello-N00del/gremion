@@ -195,7 +195,9 @@ Two guards, both watched RED before they were trusted:
   on any labelled compose service (profile-gated ones included) with no
   running container, and on empty or failing psql output. Measured 2026-09-25
   on a scratch stack with all six profiles: seven containers, each
-  `PostgreSQL 18.6 on x86_64-pc-linux-musl`, each `uuid_version=7`.
+  `PostgreSQL 18.6 on x86_64-pc-linux-musl`, each `uuid_version=7`. `--profile <id>`
+  takes a module id or the profile of a dedicated service server (`nextcloud`), so a
+  run that enabled the Nextcloud profile is held to `nextcloud-postgres` as well.
 - `test/host/integration/postgres-major-proof.sh` — the running half for the
   kernel server, and the only one that can tell a bootable stack from an
   unbootable one. It starts the

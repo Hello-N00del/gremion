@@ -362,7 +362,9 @@ wire() { run "$SVC" wire "${1:-$SLUG}"; }
     p="$(grep -n 'occ provider-set' "$ORDER" | head -1 | cut -d: -f1)"
     c="$(grep -n 'occ create-calendar' "$ORDER" | head -1 | cut -d: -f1)"
     u="$(grep -n 'force-recreate gremion-ui' "$ORDER" | head -1 | cut -d: -f1)"
-    [ "$p" -lt "$c" ] && [ "$c" -lt "$u" ]
+    [ -n "$p" ] && [ -n "$c" ] && [ -n "$u" ] || { echo "missing step: p=${p} c=${c} u=${u}"; return 1; }
+    [ "$p" -lt "$c" ] || { echo "created before the provider: p=${p} c=${c}"; return 1; }
+    [ "$c" -lt "$u" ] || { echo "created after gremion-ui was recreated: c=${c} u=${u}"; return 1; }
     # listed before it is created and again to read it back
     [ "$(grep -c 'occ list-calendars' "$ORDER")" = 2 ]
     [[ "$output" == *"CalDAV collection gremion-${SLUG} of admin exists"* ]]
@@ -381,7 +383,7 @@ wire() { run "$SVC" wire "${1:-$SLUG}"; }
     wire
     [ "$status" -eq 1 ]
     [[ "$output" == *"CALDAV_CALENDAR_TEMPLATE"* ]]
-    ! grep -q 'occ create-calendar' "$ORDER"
+    ! grep -q 'occ create-calendar' "$ORDER" || { echo "a collection was created without a template"; return 1; }
     ! grep -q 'force-recreate gremion-ui' "$ORDER"
 }
 
@@ -397,7 +399,7 @@ wire() { run "$SVC" wire "${1:-$SLUG}"; }
     : > "${GREMION_ROOT}/no-calendar-leaf"
     wire
     [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
-    ! grep -q 'occ create-calendar' "$ORDER"
+    ! grep -q 'occ create-calendar' "$ORDER" || { echo "a collection was created with the profile off"; return 1; }
     [[ "$output" == *"no calendar-service runs"* ]]
 }
 

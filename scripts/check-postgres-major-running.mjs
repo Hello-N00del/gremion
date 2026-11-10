@@ -32,7 +32,7 @@ import { readFileSync } from 'node:fs'
 import { join, dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { POSTGRES_MAJOR, POSTGRES_LABEL, MODULE_POSTGRES_IDS, composeServices } from './check-postgres-major.mjs'
+import { POSTGRES_MAJOR, POSTGRES_LABEL, MODULE_POSTGRES_IDS, SERVICE_POSTGRES_SHAPE, composeServices } from './check-postgres-major.mjs'
 
 export const UUID_VERSION = '7'
 
@@ -59,6 +59,12 @@ export function expectedServices(composeTexts, profiles = null) {
   return [...out.values()]
 }
 
+// The profiles a labelled server can be gated by: one per module server, plus the profiles of the
+// dedicated service servers (SERVICE_POSTGRES_SHAPE, e.g. nextcloud).
+const KNOWN_PROFILES = [
+  ...new Set([...MODULE_POSTGRES_IDS, ...Object.values(SERVICE_POSTGRES_SHAPE).flatMap((s) => s.profiles)]),
+]
+
 /**
  * --profile <id>... | --no-profiles -> the profile list, or null for "all".
  * Refuses what would silently narrow the expected set: an unknown id (a typo),
@@ -70,8 +76,8 @@ export function parseProfiles(args) {
     if (args[i] !== '--profile') continue
     const v = args[i + 1]
     if (!v || v.startsWith('--')) throw new Error('--profile needs a module id')
-    if (!MODULE_POSTGRES_IDS.includes(v)) {
-      throw new Error(`unknown module profile '${v}' (known: ${MODULE_POSTGRES_IDS.join(', ')})`)
+    if (!KNOWN_PROFILES.includes(v)) {
+      throw new Error(`unknown module profile '${v}' (known: ${KNOWN_PROFILES.join(', ')})`)
     }
     ids.push(v)
   }

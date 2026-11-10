@@ -24,13 +24,19 @@ $OCC app:enable groupfolders >/dev/null 2>&1 || true
 
 # Re-assert bearer validation on the Keycloak provider when it exists. Passing
 # only these flags is an update that keeps client id, secret and discovery URI.
-if $OCC user_oidc:provider 2>/dev/null | grep -q "Keycloak"; then
-  $OCC user_oidc:provider Keycloak \
-    --check-bearer=1 \
-    --bearer-provisioning=1 \
-    --unique-uid=0 >/dev/null 2>&1 \
-    && echo "reconcile-oidc-bearer: ensured check-bearer=1 on provider Keycloak" \
-    || echo "reconcile-oidc-bearer: provider update skipped (non-fatal)"
+if providers="$($OCC user_oidc:provider 2>&1)"; then
+  if printf '%s\n' "$providers" | grep -q "Keycloak"; then
+    $OCC user_oidc:provider Keycloak \
+      --check-bearer=1 \
+      --bearer-provisioning=1 \
+      --unique-uid=0 >/dev/null 2>&1 \
+      && echo "reconcile-oidc-bearer: ensured check-bearer=1 on provider Keycloak" \
+      || echo "reconcile-oidc-bearer: WARNING provider update failed (non-fatal); WebDAV may answer 401 until the flag is set"
+  else
+    echo "reconcile-oidc-bearer: WARNING no provider named Keycloak is registered (non-fatal); WebDAV answers 401 until gremion-services wire registers it"
+  fi
+else
+  echo "reconcile-oidc-bearer: WARNING occ user_oidc:provider failed (non-fatal): $(printf '%s' "$providers" | head -n 1)"
 fi
 
 exit 0
