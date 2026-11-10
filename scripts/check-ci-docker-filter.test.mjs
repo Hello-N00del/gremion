@@ -148,6 +148,8 @@ const dockerBuild = {
 // Dockerfiles that are deliberately not in the image matrix, each with the
 // reason. Anything else that is a tracked Dockerfile must be built.
 const NOT_BUILT = {
+  // Not an image: BuildKit's per-Dockerfile ignore file for apps/control-panel/Dockerfile, which the matrix builds.
+  'apps/control-panel/Dockerfile.dockerignore': 'the build-context filter of the control-panel image, not a Dockerfile',
   'docker/vector/Dockerfile': 'clones and compiles ipcrypt2: not worth a per-commit gate',
   'scripts/verify/bats-runner/Dockerfile': 'test-runner image, not shipped',
   'test/host/runner/Dockerfile': 'test-runner image, not shipped',
