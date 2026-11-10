@@ -1,5 +1,6 @@
 <script lang="ts">
   import { enhance } from '$app/forms'
+  import { DISABLE_LOCKED } from '$lib/modules'
   import { originLabel } from '$lib/request-format'
   import { LEDGER_STEP_LABEL as STEP_LABEL } from '$lib/request-state'
   import type { ActionData, PageData } from './$types'
@@ -94,11 +95,15 @@
           <li>
             <span>{m.name} <code>{m.id}</code></span>
             {#if data.moduleSection.canAct}
-              <form method="POST" action="?/disable_module" use:enhance>
-                <input type="hidden" name="module" value={m.id} />
-                <p class="muted">Deaktivieren: Die Moduldaten werden zuerst exportiert und geprüft, erst danach wird die Moduldatenbank entfernt.</p>
-                <button type="submit">Modul deaktivieren</button>
-              </form>
+              {#if DISABLE_LOCKED.has(m.id)}
+                <p class="muted">Deaktivieren ist bis zum Abgleich der Leaf-Datenbanken gesperrt.</p>
+              {:else}
+                <form method="POST" action="?/disable_module" use:enhance>
+                  <input type="hidden" name="module" value={m.id} />
+                  <p class="muted">Deaktivieren: Die Moduldaten werden zuerst exportiert und geprüft, erst danach wird die Moduldatenbank entfernt.</p>
+                  <button type="submit">Modul deaktivieren</button>
+                </form>
+              {/if}
               <details>
                 <summary>DPIA-Entscheidung festhalten</summary>
                 <form method="POST" action="?/record_dpia" use:enhance>

@@ -7,7 +7,7 @@ import { error, fail, redirect, type ActionFailure } from '@sveltejs/kit'
 import { env } from '$env/dynamic/private'
 import { lifecycleOffer, type LifecycleKind } from '$lib/lifecycle'
 import { isKnownVertical, VERTICALS } from '$lib/members'
-import { moduleActionsOffered, type ModuleKind } from '$lib/modules'
+import { DISABLE_LOCKED, moduleActionsOffered, type ModuleKind } from '$lib/modules'
 import { describeRequest } from '$lib/request-state'
 import { evidenceFromRequest } from '$lib/server/auth'
 import { loadConfig } from '$lib/server/config'
@@ -144,6 +144,7 @@ const moduleAction =
       } else {
         if (!mods.enabled.some((m) => m.id === module)) return fail(409, { moduleError: 'Dieses Modul ist für den Mandanten nicht aktiv.' })
         if (kind === 'disable_module') {
+          if (DISABLE_LOCKED.has(module)) return fail(409, { moduleError: 'Dieses Modul kann bis zum Abgleich der Leaf-Datenbanken nicht deaktiviert werden.' })
           args = moduleArgs.disable(params.slug, module)
         } else {
           const d = parseDpiaForm(field(form, 'dpia'), field(form, 'dpiaRef'))
