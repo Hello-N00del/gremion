@@ -257,7 +257,7 @@
     {
       "clientId": "nextcloud",
       "name": "Nextcloud",
-      "description": "Nextcloud user_oidc provider (the files and votes modules). Confidential, and its identity is used for BEARER validation only: gremion-ui presents the user's own access token on WebDAV, which must carry aud nextcloud (the audience mapper on the gremion-ui client). No browser flow: Nextcloud has no public router.",
+      "description": "Nextcloud user_oidc provider (files and votes). Confidential; bearer validation only: gremion-ui presents the user access token on WebDAV (aud nextcloud). No browser flow: Nextcloud has no public router.",
       "enabled": true,
       "protocol": "openid-connect",
       "publicClient": false,
