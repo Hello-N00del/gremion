@@ -81,11 +81,11 @@ describe('the real modules/ tree', () => {
     ])
   })
 
-  it('TASK-084-a: with compose, governance-postgres is listed last and has the closed built-in database list', () => {
+  it('TASK-084-a: with compose, the service-labelled servers (governance, nextcloud) are listed last and governance has the closed built-in database list', () => {
     const catalogue = loadCatalogue(MODULES).modules
     const withCompose = deriveBackupServices(catalogue, { compose })
     console.info(`[084-a] BACKUP_POSTGRES_SERVICES = ${withCompose.join(' ')}`)
-    expect(withCompose).toEqual([...deriveBackupServices(catalogue), 'governance-postgres'])
+    expect(withCompose).toEqual([...deriveBackupServices(catalogue), 'governance-postgres', 'nextcloud-postgres'])
     expect(platformDatabases('governance-postgres', { compose, catalogue })).toEqual(['postgres', 'template0', 'template1'])
     expect(compose.services.get('governance-postgres')?.postgresLabel).toBe('service:governance')
   })

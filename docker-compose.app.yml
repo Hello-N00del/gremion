@@ -757,7 +757,7 @@ services:
   # customer itself (calendar_<slug> ...), which is not the database the module
   # enable gate creates (docs/ops/pilot-services.md, named residual).
   #
-  # NATS_URL is deliberately absent: the kernel NATS admits only the nkeys
+  # The broker URL is deliberately absent: the kernel NATS admits only the nkeys
   # tenant-create holds, so the leaves run with the relay loop OFF. Their outbox
   # rows accumulate and no audit event reaches the kernel from these leaves (a
   # named residual of the pilot).
