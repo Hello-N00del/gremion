@@ -238,6 +238,31 @@ outcome() { cat "${GREMION_ROOT}/outcome" 2>/dev/null || true; }
     [ ! -e "${GREMION_ROOT}/etc/edge/tenant-alpha-rat.yml" ]
 }
 
+@test "create host tie: a host other than PILOT_TENANT_HOST fails before phase A and the events name both hosts" {
+    echo 'PILOT_TENANT_HOST=rat.other.example' >> "${GREMION_ROOT}/etc/env/state.env"
+    queue create
+    run "$EXEC" --once
+    [ "$status" -eq 1 ] || { echo "status=$status $output"; steps; return 1; }
+    run steps
+    [[ "$output" != *"phase-a"* && "$output" != *"vendor-mail"* && "$output" != *"phase-b"* ]] || { echo "$output"; return 1; }
+    [ "${lines[-1]}" = "psql finish failed" ]
+    grep -q '^error .*rat\.alpha\.example.*rat\.other\.example' "${GREMION_ROOT}/events.log" || { cat "${GREMION_ROOT}/events.log"; return 1; }
+}
+
+@test "create host tie: the same host (any case) runs the create; an unset or placeholder PILOT_TENANT_HOST ties nothing" {
+    local v
+    for v in 'PILOT_TENANT_HOST=Rat.Alpha.Example' 'PILOT_TENANT_HOST=' 'PILOT_TENANT_HOST=CHANGE_ME_OPERATOR_pilot_tenant_host'; do
+        echo "$v" >> "${GREMION_ROOT}/etc/env/state.env"
+        queue create
+        run "$EXEC" --once
+        [ "$status" -eq 0 ] || { echo "value ${v}: status=$status $output"; steps; return 1; }
+        run steps
+        [[ "$output" == *"tc phase-a alpha-rat"* ]] || { echo "value ${v}: $output"; return 1; }
+        : > "$ORDER"
+        sed -i '/^PILOT_TENANT_HOST=/d' "${GREMION_ROOT}/etc/env/state.env"
+    done
+}
+
 @test "a line carrying a credential never reaches an event or the audit log" {
     touch "${GREMION_ROOT}/leak"
     queue create

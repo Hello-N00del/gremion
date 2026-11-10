@@ -26,8 +26,8 @@ export interface RawRow {
   role: string
 }
 
-/** RFC 4180 records of `text` (quotes, doubled quotes, CRLF or LF, embedded newlines). */
-export function parseRecords(text: string): string[][] {
+/** RFC 4180 records of `text` (quotes, doubled quotes, CRLF or LF, embedded newlines); `delimiter` is a comma unless a spreadsheet wrote another one. */
+export function parseRecords(text: string, delimiter: ',' | ';' | '	' = ','): string[][] {
   const out: string[][] = []
   let rec: string[] = []
   let field = ''
@@ -64,7 +64,7 @@ export function parseRecords(text: string): string[][] {
     if (c === '"' && field === '') {
       quoted = true
       i++
-    } else if (c === ',') {
+    } else if (c === delimiter) {
       endField()
       i++
     } else if (c === '\r') {
@@ -86,8 +86,21 @@ export function parseRecords(text: string): string[][] {
 /** The list's rows, or a ListFormatError naming why the whole list is unreadable. */
 export function parseList(text: string): RawRow[] {
   if (Buffer.byteLength(text, 'utf8') > MAX_BYTES) throw new ListFormatError('too_large', `the list exceeds ${MAX_BYTES} bytes`)
-  const records = parseRecords(text)
+  let records = parseRecords(text)
   if (records.length === 0) throw new ListFormatError('empty', 'the list is empty')
+  // German spreadsheets write "CSV UTF-8" with semicolons (or tabs): a header cell that holds one means the
+  // delimiter was not a comma, so the list is read again with it. Which delimiter is decided by the header alone.
+  const headCell = records[0]!.find((c) => c.includes(';') || c.includes('	'))
+  if (headCell !== undefined) records = parseRecords(text, headCell.includes(';') ? ';' : '	')
+  // Spreadsheets pad every row to the widest formatted cell: rows that are empty in every cell and trailing
+  // columns that are empty in every row (the header included) carry nothing. The record's own position is its
+  // spreadsheet row number (the header is row 1), so a dropped row does not renumber the ones after it.
+  const numbered = records.map((cells, i) => ({ cells, row: i + 1 })).filter((r, i) => i === 0 || r.cells.some((c) => c.trim() !== ''))
+  let width = 0
+  for (const r of numbered) for (let k = r.cells.length; k > width; k--) if (r.cells[k - 1]!.trim() !== '') { width = k; break }
+  if (width === 0) throw new ListFormatError('bad_header', 'the header must be ' + COLUMNS.join(',') + ' (role optional); 0 columns read')
+  for (const r of numbered) if (r.cells.length > width && r.cells.slice(width).every((c) => c.trim() === '')) r.cells = r.cells.slice(0, width)
+  records = numbered.map((r) => r.cells)
   const header = records[0]!.map((h) => h.normalize('NFC').trim().toLowerCase())
   const unknown = header.filter((h) => !(COLUMNS as readonly string[]).includes(h))
   const missing = (['name', 'email', 'body'] as const).filter((h) => !header.includes(h))
@@ -102,16 +115,16 @@ export function parseList(text: string): RawRow[] {
     if (repeated.length) parts.push(`repeated: ${repeated.join(', ')}`)
     throw new ListFormatError('bad_header', `the header must be ${COLUMNS.join(',')} (role optional); ${parts.join('; ')}`)
   }
-  const data = records.slice(1)
+  const data = numbered.slice(1)
   if (data.length > MAX_ROWS) throw new ListFormatError('too_many_rows', `the list has ${data.length} rows; the cap is ${MAX_ROWS}`)
-  return data.map((r, n) => {
+  return data.map(({ cells: r, row }) => {
     if (r.length !== header.length) {
-      throw new ListFormatError('bad_row_width', `row ${n + 2} has ${r.length} fields, the header has ${header.length}`)
+      throw new ListFormatError('bad_row_width', `row ${row} has ${r.length} fields, the header has ${header.length}`)
     }
     const get = (col: string) => {
       const k = header.indexOf(col)
       return k < 0 ? '' : (r[k] ?? '')
     }
-    return { row: n + 2, name: get('name'), email: get('email'), body: get('body'), role: get('role') }
+    return { row, name: get('name'), email: get('email'), body: get('body'), role: get('role') }
   })
 }

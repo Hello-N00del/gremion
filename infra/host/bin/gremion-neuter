@@ -5,7 +5,7 @@
 # A restore carries production mail hosts and external publish tokens into a
 # non-production instance in FOUR places: the env files, the per-tenant
 # config.json files (gremion-ui reads config.smtp from disk), the control
-# registry's tenant.domain_profile.services.smtp, and every Keycloak realm's
+# registry's tenant.domain_profile.smtp (host, port and login), and every Keycloak realm's
 # smtpServer (gremion#6 - host, user and the plaintext platform app password
 # live in Keycloak's OWN database, where no env rewrite can reach them). This
 # program rewrites all four, recreates the services that carried a live value,
@@ -233,6 +233,27 @@ neuter_relay_secrets() {
         [[ ! -s "${secrets}/ops/smtp-password" ]] || die "could not empty ${secrets}/ops/smtp-password" 1
         RELAY_SECRETS_EMPTIED=$((RELAY_SECRETS_EMPTIED + 1))
     fi
+    # `gremion-services wire` keeps a third copy, relay-smtp-password, in the tenant secrets
+    # directory the app mounts (TENANT_SECRETS_DIR of each app env file; the default
+    # etc/secrets/tenants when none names one). Same rule as above: emptied under etc/secrets,
+    # named and left alone elsewhere.
+    local tdirs=("${secrets}/tenants") td tpw
+    for f in "${ROOT}"/etc/env/*.env; do
+        [[ -f "$f" ]] || continue
+        td="$(sed -n 's/^TENANT_SECRETS_DIR=//p' "$f" | tail -n 1 | tr -d '\r')"
+        if [[ -n "$td" ]]; then tdirs+=("$td"); fi
+    done
+    for td in "${tdirs[@]}"; do
+        tpw="${td%/}/relay-smtp-password"
+        [[ -s "$tpw" ]] || continue
+        if [[ "$tpw" == *..* || "$tpw" != "${secrets}/"* ]]; then
+            relay_warn "relay password copy ${tpw} is outside ${secrets} (or contains ..): not touched, empty or remove it yourself"
+            continue
+        fi
+        : >"$tpw"
+        [[ ! -s "$tpw" ]] || die "could not empty the relay password copy ${tpw}" 1
+        RELAY_SECRETS_EMPTIED=$((RELAY_SECRETS_EMPTIED + 1))
+    done
     ok "relay password files emptied: ${RELAY_SECRETS_EMPTIED}"
 }
 
@@ -482,7 +503,14 @@ neuter_registry_rows() {
     # completion tag: `-q` suppresses "UPDATE n" entirely, so parsing the tag
     # reported rows=0 after a genuine rewrite (review round 2). The CTE asks the
     # server how many rows it wrote and prints that number as a normal result.
-    sql="WITH rewritten AS (UPDATE tenant SET domain_profile = jsonb_set(domain_profile, '{services,smtp,host}', to_jsonb('${NULL_SINK_HOST}'::text), false), updated_at = now() WHERE domain_profile #>> '{services,smtp,host}' IS NOT NULL AND domain_profile #>> '{services,smtp,host}' <> '${NULL_SINK_HOST}' RETURNING 1) SELECT count(*) FROM rewritten;"
+    # The entry is domain_profile.smtp (what the app maps onto the tenant's services.smtp, and what
+    # `gremion-services wire` writes): host and port go to the sink, the login (user, passwordRef)
+    # is removed, From and any other key stay. "Live" = any of host, port, user or passwordRef
+    # differs from that, so the rewrite and the proof below share ONE predicate.
+    local live_pred
+    [[ "$NULL_SINK_PORT" =~ ^[0-9]+$ ]] || die "the null sink port ${NULL_SINK_PORT} is not a number" 2
+    live_pred="jsonb_typeof(domain_profile -> 'smtp') = 'object' AND (domain_profile #>> '{smtp,host}' IS DISTINCT FROM '${NULL_SINK_HOST}' OR domain_profile #>> '{smtp,port}' IS DISTINCT FROM '${NULL_SINK_PORT}' OR domain_profile #>> '{smtp,user}' IS NOT NULL OR domain_profile #>> '{smtp,passwordRef}' IS NOT NULL)"
+    sql="WITH rewritten AS (UPDATE tenant SET domain_profile = jsonb_set(domain_profile, '{smtp}', ((domain_profile -> 'smtp') - 'user' - 'passwordRef') || jsonb_build_object('host', '${NULL_SINK_HOST}'::text, 'port', ${NULL_SINK_PORT}), false), updated_at = now() WHERE ${live_pred} RETURNING 1) SELECT count(*) FROM rewritten;"
     ROWS_REWRITTEN="$(docker exec -i "$cid" psql -tAq -v ON_ERROR_STOP=1 -U "$user" -d "$db" \
                         -c "$sql")" \
         || die "the control registry rewrite failed on database ${db}" 1
@@ -492,7 +520,7 @@ neuter_registry_rows() {
     [[ "$ROWS_REWRITTEN" =~ ^[0-9]+$ ]] || \
         die "unreadable rewritten-row count from database ${db}: ${ROWS_REWRITTEN}" 1
     live="$(docker exec -i "$cid" psql -tAq -v ON_ERROR_STOP=1 -U "$user" -d "$db" \
-              -c "SELECT count(*) FROM tenant WHERE domain_profile #>> '{services,smtp,host}' IS NOT NULL AND domain_profile #>> '{services,smtp,host}' <> '${NULL_SINK_HOST}';")"
+              -c "SELECT count(*) FROM tenant WHERE ${live_pred};")"
     live="${live//[^0-9]/}"
     [[ "$live" == "0" ]] || die "${live} tenant row(s) still name a live SMTP host" 1
     ok "control registry rows rewritten: ${ROWS_REWRITTEN}"
