@@ -57,7 +57,7 @@ http:
           X-Forwarded-Host: "tenant-a.example.org"
     edge-perip-a:
       inFlightReq:
-        amount: 50
+        amount: 500
         sourceCriterion:
           ipStrategy:
             depth: 0
