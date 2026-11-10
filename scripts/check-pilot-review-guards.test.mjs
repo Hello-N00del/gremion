@@ -67,3 +67,16 @@ test('the content leaf warns at startup when the mail callback secret is unset',
     /if \(!process\.env\.INTERNAL_NEWSLETTER_SECRET\) \{\s*console\.warn\(/,
   )
 })
+
+test('a rethrown mail failure and a ledger-write failure log never carry the error text or the address', () => {
+  for (const f of ['modules/content/src/dispatch.ts', 'modules/publishing/src/dispatch.ts']) {
+    const src = read(f)
+    assert.doesNotMatch(src, /lastError\.message/, `${f} rethrows the cause fields, not the message`)
+    assert.match(src, /mailCauseText\(lastError\)/, `${f} builds the rethrown text from the cause fields`)
+  }
+  assert.doesNotMatch(read('modules/content/src/store/deliveries.ts'), /\[deliveries\] \$\{emailLower\}/)
+  assert.doesNotMatch(
+    read('modules/content/app/lib/server/content/channels/email-renderer.ts'),
+    /\[email-renderer\] \$\{emailLower\}/,
+  )
+})

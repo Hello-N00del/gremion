@@ -46,7 +46,7 @@ import {
 } from './store/index.js'
 import { enqueueOutbox } from './outbox.js'
 import { checkLinkBase } from './link-base.js'
-import { mailErrorFields } from './mail-error.js'
+import { mailCauseText, mailErrorFields } from './mail-error.js'
 
 // ── injected transport ──────────────────────────────────────────────────────
 
@@ -330,8 +330,9 @@ async function dispatchEmail(
   }
 
   if (failed > 0) {
-    const detail = lastError instanceof Error ? `: ${lastError.message}` : ''
-    throw new Error(`${failed} email recipient(s) failed to send${detail}`)
+    // The text is logged by the catch below and stored on the post: the cause
+    // fields only, since an error message can echo the recipient address.
+    throw new Error(`${failed} email recipient(s) failed to send${mailCauseText(lastError)}`)
   }
 
   // Record the channel.email.sent event (will be co-committed in the outer tx).

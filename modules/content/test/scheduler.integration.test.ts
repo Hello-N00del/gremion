@@ -466,12 +466,43 @@ describe('dispatchDueChannels — a failed scheduled publish is logged, never si
     const line = logLines().find((l) => l.includes(emailPost))
     expect(line).toContain('unusable public base URL')
     expect(line).toContain(TENANT.slug)
+    // The exact fault stays in the log: it is the operator's only summary here.
+    expect(line).toContain('PUBLIC_BASE_URL')
 
     // The next tick finds nothing due for it and says nothing more about it.
     errSpy.mockClear()
     await dispatchDueChannels(TENANT, dueDeps({ origin: 'http://localhost:3000', emailTransport: transport }))
     expect(logLines().filter((l) => l.includes(emailPost))).toHaveLength(0)
   })
+
+  it('a delivered mail whose ledger write failed is logged as "do not re-publish", with no address, and never as "publish again"', async () => {
+    const postId = await makePost()
+    await addEmailRecipients(postId, ['ghost@x.com'])
+    await armChannelViaApi(postId, 'email', pastIso())
+    await sql.unsafe(`
+      CREATE OR REPLACE FUNCTION content.sched_block() RETURNS trigger AS $$
+      BEGIN
+        IF NEW.status = 'sent' AND NEW.email = 'ghost@x.com' THEN RAISE EXCEPTION 'ledger down'; END IF;
+        RETURN NEW;
+      END $$ LANGUAGE plpgsql`)
+    await sql.unsafe(
+      `CREATE TRIGGER sched_block_d BEFORE UPDATE ON content.deliveries
+       FOR EACH ROW EXECUTE FUNCTION content.sched_block()`,
+    )
+    try {
+      await dispatchDueChannels(TENANT, dueDeps({ emailTransport: failingTransport({}) }))
+    } finally {
+      await sql.unsafe('DROP TRIGGER IF EXISTS sched_block_d ON content.deliveries')
+    }
+
+    expect((await getChannelRow(sql, postId, 'email'))!.status).toBe('failed')
+    const line = logLines().find((l) => l.includes('scheduled publish failed') && l.includes(postId))
+    expect(line).toBeDefined()
+    expect(line).toContain('delivery not recorded')
+    expect(line).toContain('do not re-publish before checking the delivery log')
+    expect(line).not.toContain('publish again')
+    expect(logLines().join('\n')).not.toContain('ghost@x.com')
+  }, 20_000)
 
   it('SMTP unconfigured keeps the channel scheduled (SMTP can be fixed at runtime) and logs once, not every tick', async () => {
     const postId = await makePost()

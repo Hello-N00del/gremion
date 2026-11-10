@@ -384,16 +384,19 @@ export class KeycloakAdminClient {
   /**
    * Every group of the realm at every depth, as one flat list ordered by path
    * (the recipient picker needs bodies, which are subgroups). A failure on the
-   * top-level read throws; a failure on one group's children skips that branch
-   * only (logged with the group id and the error class, never silently).
-   * Bounded by depth and total size (a cut is logged once), and each id is
-   * visited once.
+   * top-level read throws; a definite answer from Keycloak (an HTTP error) on
+   * one group's children skips that branch only (logged with the group id and
+   * the error class, never silently). Any other failure (a timeout, a refused
+   * connection) stops the walk and returns what was read, because every further
+   * call would cost a full timeout. Bounded by depth and total size (a cut is
+   * logged once), and each id is visited once.
    */
   async listGroupTree(): Promise<readonly KcGroup[]> {
     const MAX_DEPTH = 6
     const MAX_GROUPS = 500
     const out = new Map<string, KcGroup>()
     let truncated = false
+    let halted = false
     const visit = async (level: readonly KcGroup[], parentPath: string, depth: number): Promise<void> => {
       for (const g of level) {
         if (out.size >= MAX_GROUPS) {
@@ -408,10 +411,16 @@ export class KeycloakAdminClient {
           if (g.subGroupCount === undefined || g.subGroupCount > 0) truncated = true
           continue
         }
+        if (halted) continue // keep the groups already listed, read no more children
         try {
           await visit(await this.listSubGroups(g.id), path, depth + 1)
         } catch (err) {
           // best-effort: keep this group, skip its branch, leave a trace
+          const definite = err instanceof KcAdminError || err instanceof KcInvalidIdError
+          if (!definite) {
+            halted = true
+            truncated = true
+          }
           const status = err instanceof KcAdminError ? ` status=${err.status}` : ''
           console.warn(
             `[keycloak-admin] group tree: children of ${g.id} not read (${errClass(err)}${status})`,

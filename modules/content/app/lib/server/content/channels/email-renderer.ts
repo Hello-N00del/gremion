@@ -69,10 +69,12 @@ async function recordDelivered(
 			}
 		}
 	}
+	// No address and no error message (a database error can echo the row): the
+	// message id lets the operator find the recipient in the delivery log.
 	console.error(
-		`[email-renderer] ${emailLower} (post ${postId}) was DELIVERED (message ${messageId}) but the ledger ` +
+		`[email-renderer] a mail (post ${postId}, message ${messageId}) was DELIVERED but the ledger ` +
 			`write failed ${RECORD_DELIVERED_ATTEMPTS}x; its claim is left in place (not marked failed):`,
-		lastError instanceof Error ? lastError.message : String(lastError),
+		lastError instanceof Error ? lastError.name : typeof lastError,
 	)
 	return false
 }

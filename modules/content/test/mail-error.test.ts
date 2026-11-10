@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { mailErrorFields } from '../src/mail-error.ts'
+import { mailCauseText, mailErrorFields } from '../src/mail-error.ts'
 
 // What a mail failure may put in a log: its class name and the cause fields,
 // never its message or response (those can echo the recipient).
@@ -33,5 +33,20 @@ describe('mailErrorFields', () => {
   it('drops an httpStatus that is not a valid status', () => {
     const err = Object.assign(new Error('x'), { httpStatus: 'a@example.org' })
     expect(mailErrorFields(err)).toEqual({ name: 'Error' })
+  })
+})
+
+describe('mailCauseText', () => {
+  it('names the class and the cause fields, never the message', () => {
+    const err = Object.assign(new Error('550 <a@example.org> relay denied'), {
+      code: 'EENVELOPE', responseCode: 550, command: 'RCPT TO',
+    })
+    const text = mailCauseText(err)
+    expect(text).toBe(' (Error EENVELOPE 550 RCPT TO)')
+    expect(text).not.toContain('example.org')
+  })
+
+  it('names a non-Error by its type only', () => {
+    expect(mailCauseText('a@example.org')).toBe(' (string)')
   })
 })

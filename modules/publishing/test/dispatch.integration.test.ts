@@ -265,11 +265,14 @@ describe('dispatch — per-recipient SMTP failure', () => {
     }
     const spy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
     try {
-      await expect(
-        dispatch(DISPATCH_TENANT, nlId, ACTOR, {
-          sql, kernel: makeFakeKernel(), transport, origin: 'https://o',
-        }),
-      ).rejects.toThrow()
+      const thrown = await dispatch(DISPATCH_TENANT, nlId, ACTOR, {
+        sql, kernel: makeFakeKernel(), transport, origin: 'https://o',
+      }).then(() => null, (e: unknown) => e)
+      expect(thrown).toBeInstanceOf(Error)
+      // the callers log this message, so it carries the cause fields only
+      expect((thrown as Error).message).toContain('failed to send')
+      expect((thrown as Error).message).not.toContain('bad@x.com')
+      expect((thrown as Error).message).not.toContain('relay denied')
       const lines = spy.mock.calls.filter((c) => String(c[0]).startsWith('[dispatch] send ('))
       expect(lines).toHaveLength(1)
       const logged = JSON.stringify(lines)
@@ -277,6 +280,10 @@ describe('dispatch — per-recipient SMTP failure', () => {
       expect(logged).toContain('RCPT TO')
       expect(logged).not.toContain('bad@x.com')
       expect(logged).not.toContain('relay denied')
+      // everything the whole dispatch logged, not only the send line
+      const everything = JSON.stringify(spy.mock.calls)
+      expect(everything).not.toContain('bad@x.com')
+      expect(everything).not.toContain('relay denied')
     } finally {
       spy.mockRestore()
     }

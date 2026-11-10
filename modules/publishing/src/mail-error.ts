@@ -41,3 +41,14 @@ export function mailErrorFields(err: unknown): MailErrorFields {
   }
   return out
 }
+
+/**
+ * The cause as a short text for an error that is rethrown and then logged: the
+ * class name and the same plain-token fields, never the message. Empty parts
+ * are left out.
+ */
+export function mailCauseText(err: unknown): string {
+  const f = mailErrorFields(err)
+  const parts = [f.name, f.code, f.responseCode, f.httpStatus, f.command].filter((v) => v !== undefined)
+  return ` (${parts.join(' ')})`
+}

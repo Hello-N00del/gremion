@@ -22,6 +22,8 @@ interface Opts {
   patchStatus?: number
   publishStatus?: number
   publishBody?: unknown
+  /** Hold the first body PATCH until hold.release() is called. */
+  hold?: { release?: () => void }
 }
 
 function reply(status: number, body: unknown): Response {
@@ -30,6 +32,7 @@ function reply(status: number, body: unknown): Response {
 
 function stubFetch(opts: Opts = {}): Call[] {
   const calls: Call[] = []
+  let held = false
   vi.stubGlobal(
     'fetch',
     vi.fn(async (input: string | URL, init?: RequestInit) => {
@@ -50,7 +53,16 @@ function stubFetch(opts: Opts = {}): Call[] {
       if (url.includes('/publish/')) {
         return reply(opts.publishStatus ?? 200, opts.publishBody ?? { status: 'sent', warnings: [], recipientCount: 1 })
       }
-      if (method === 'PATCH') return reply(opts.patchStatus ?? 200, { ok: true })
+      if (method === 'PATCH') {
+        const b = init?.body ? (JSON.parse(String(init.body)) as object) : {}
+        if (opts.hold && !held && 'body_html' in b) {
+          held = true
+          await new Promise<void>((resolve) => {
+            opts.hold!.release = resolve
+          })
+        }
+        return reply(opts.patchStatus ?? 200, { ok: true })
+      }
       return reply(404, {})
     }),
   )
@@ -177,6 +189,38 @@ describe('publish sends the text that is on screen', () => {
     expect(calls.filter(isBodyPatch)).toHaveLength(1)
   })
 
+  it('refreshes the previews after it saved a pending edit, so they show the text that is sent', async () => {
+    const calls = stubFetch()
+    const { findByLabelText, getAllByRole, getByLabelText } = renderPage()
+    await fireEvent.click(await findByLabelText('Liste A'))
+    await fireEvent.input(getByLabelText('Titel'), { target: { value: 'Neuer Titel' } })
+    await fireEvent.click(getAllByRole('button', { name: 'Jetzt veröffentlichen' })[0])
+    await waitFor(() => expect(calls.some(isPublish)).toBe(true))
+    const patch = idx(calls, isBodyPatch)
+    await waitFor(() =>
+      expect(calls.slice(patch + 1).some((c) => c.method === 'GET' && c.url.includes('/preview/'))).toBe(true),
+    )
+  })
+
+  it('waits for an autosave that is already in flight, so the older text cannot land last', async () => {
+    const hold: { release?: () => void } = {}
+    const calls = stubFetch({ hold })
+    const { findByLabelText, getAllByRole, getByLabelText } = renderPage()
+    await fireEvent.click(await findByLabelText('Liste A'))
+    await fireEvent.input(getByLabelText('Titel'), { target: { value: 'A' } })
+    await waitFor(() => expect(calls.filter(isBodyPatch)).toHaveLength(1), { timeout: 3000 })
+    await fireEvent.input(getByLabelText('Titel'), { target: { value: 'B' } })
+    await fireEvent.click(getAllByRole('button', { name: 'Jetzt veröffentlichen' })[0])
+    await new Promise((r) => setTimeout(r, 100))
+    // the second save has not been sent while the first one is still open
+    expect(calls.filter(isBodyPatch)).toHaveLength(1)
+    hold.release?.()
+    await waitFor(() => expect(calls.some(isPublish)).toBe(true))
+    const patches = calls.filter(isBodyPatch)
+    expect(patches).toHaveLength(2)
+    expect(patches[1].body).toMatchObject({ title: 'B' })
+  })
+
   it('aborts the publish when the text cannot be saved', async () => {
     const calls = stubFetch({ patchStatus: 500 })
     const { findByLabelText, getAllByRole, findByText } = renderPage()
@@ -235,6 +279,15 @@ describe('an invalid group id cannot break a send', () => {
     await fireEvent.click(await findByLabelText('Liste A'))
     await fireEvent.click(getByRole('button', { name: 'Empfänger speichern' }))
     expect(await findByText('Gruppe nicht gefunden: gx')).toBeTruthy()
+  })
+
+  it('shows a German text, not the generic English server text, when saving the recipients fails unexpectedly', async () => {
+    stubFetch({ putStatus: 500, putBody: { message: 'Internal Error' } })
+    const { findByLabelText, getByRole, findByText, queryByText } = renderPage()
+    await fireEvent.click(await findByLabelText('Liste A'))
+    await fireEvent.click(getByRole('button', { name: 'Empfänger speichern' }))
+    expect(await findByText('Empfänger konnten nicht gespeichert werden.')).toBeTruthy()
+    expect(queryByText('Internal Error')).toBeNull()
   })
 
   it('shows a German text, not the generic English one, when the publish fails on the server', async () => {

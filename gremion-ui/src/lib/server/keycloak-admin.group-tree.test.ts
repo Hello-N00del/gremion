@@ -153,6 +153,40 @@ describe('listGroupTree', () => {
     warn.mockRestore()
   })
 
+  it('stops the walk on a timeout instead of paying one timeout per parent group', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    const childCalls: string[] = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL) => {
+        const url = String(input)
+        if (url.includes('/protocol/openid-connect/token')) {
+          return new Response(JSON.stringify({ access_token: 't', expires_in: 300 }), { status: 200 })
+        }
+        const path = url.slice(PREFIX.length).replace(/\?.*$/, '')
+        if (path === '/groups') {
+          return new Response(
+            JSON.stringify([
+              { id: 'a', name: 'A', path: '/A' },
+              { id: 'b', name: 'B', path: '/B' },
+              { id: 'c', name: 'C', path: '/C' },
+            ]),
+            { status: 200 },
+          )
+        }
+        childCalls.push(path)
+        throw Object.assign(new Error('The operation was aborted due to timeout'), { name: 'TimeoutError' })
+      }),
+    )
+    const tree = await client().listGroupTree()
+    // the top level is kept, and only the first branch was tried
+    expect(tree.map((g) => g.path)).toEqual(['/A', '/B', '/C'])
+    expect(childCalls).toHaveLength(1)
+    // the cut is reported
+    expect(warn.mock.calls.map((c) => c.join(' ')).join('\n')).toContain('truncated')
+    warn.mockRestore()
+  })
+
   it('logs once when the walk is cut short by the size bound', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
     const many = Array.from({ length: 600 }, (_, i) => ({

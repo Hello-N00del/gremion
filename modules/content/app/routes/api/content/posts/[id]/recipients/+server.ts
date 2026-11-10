@@ -16,9 +16,9 @@ import { requireContentAuthor } from '$lib/server/content/route-auth'
 import { resolveContentBackendOr503 } from '$lib/server/content/backend/resolve'
 import { getKeycloakAdminClientForCurrentTenant } from '$lib/server/keycloak-admin'
 
-// Log the error class only: a Keycloak error body can echo what was asked for.
 const MAX_RECIPIENT_ENTRIES = 200
 
+// Log the error class only: a Keycloak error body can echo what was asked for.
 const errName = (err: unknown): string => (err instanceof Error ? err.name : typeof err)
 
 export const GET: RequestHandler = async (event) => {
@@ -73,7 +73,8 @@ export const PUT: RequestHandler = async (event) => {
   }
   if (!Array.isArray(recipients)) throw error(400, 'recipients must be an array')
   if (recipients.length > MAX_RECIPIENT_ENTRIES) {
-    throw error(400, `recipients: at most ${MAX_RECIPIENT_ENTRIES} entries`)
+    // The editor shows this text to the author.
+    throw error(400, `Empfänger: höchstens ${MAX_RECIPIENT_ENTRIES} Einträge`)
   }
 
   // Validate each entry targets EXACTLY one of a list OR a group (mirror the DB

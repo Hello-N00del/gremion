@@ -61,7 +61,7 @@ import {
   type NewsletterRecipient,
 } from './store/index.js'
 import { enqueueOutbox } from './outbox.js'
-import { mailErrorFields } from './mail-error.js'
+import { mailCauseText, mailErrorFields } from './mail-error.js'
 
 // ── injected transport ──────────────────────────────────────────────────────
 
@@ -580,8 +580,9 @@ export async function dispatch(
     }
 
     if (failed > 0) {
-      const detail = lastError instanceof Error ? `: ${lastError.message}` : ''
-      throw new Error(`${failed} recipient(s) failed to send${detail}`)
+      // Logged by the catch below and stored with the send: the cause fields
+      // only, since an error message can echo the recipient address.
+      throw new Error(`${failed} recipient(s) failed to send${mailCauseText(lastError)}`)
     }
 
     // 5a. SUCCESS finish: status 'sent' + send.succeeded outbox in ONE tx.

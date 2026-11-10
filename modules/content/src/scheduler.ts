@@ -36,7 +36,7 @@ import type { TenantRef, Sql } from './tenant-store.js'
 import type { KernelClient } from './kernel-client.js'
 import type { ChannelTransport } from './dispatch.js'
 import type { TracerPort } from '@gremion/ports/tracer'
-import { publishChannel, type PublishResult } from './publish-channel.js'
+import { publishChannel, DELIVERY_NOT_RECORDED, type PublishResult } from './publish-channel.js'
 import { checkLinkBase } from './link-base.js'
 import {
   listDueScheduledChannels,
@@ -330,13 +330,19 @@ async function reportScheduledResult(
   } else {
     _loggedPendingFailures.delete(key)
   }
-  // The warnings name recipients and carry transport error text, so a log gets
-  // only their number; the per-recipient cause is logged by the send itself.
-  const warnings = result.warnings.length > 0 ? `; ${result.warnings.length} warning(s)` : ''
+  // result.warnings name recipients and carry transport error text, so a log
+  // gets only the operator warnings (address-free by construction); the
+  // per-recipient cause is logged by the send itself.
+  const notes = result.operatorWarnings ?? []
+  const warnings = notes.length > 0 ? ` (${notes.join('; ')})` : ''
+  // A delivered-but-unrecorded send must not be retried: a second publish could
+  // mail the same recipients again.
   const next =
     row?.status === 'scheduled'
       ? ' Channel stays scheduled and is retried every tick.'
-      : ' Channel set to failed; publish again to retry the undelivered recipients.'
+      : detail === DELIVERY_NOT_RECORDED
+        ? ' Channel set to failed; check the delivery log before anything is published again.'
+        : ' Channel set to failed; publish again to retry the undelivered recipients.'
   console.error(`[${LABEL}] scheduled publish failed for ${where}: ${detail}${warnings}.${next}`)
 }
 

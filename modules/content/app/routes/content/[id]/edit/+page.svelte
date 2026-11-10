@@ -61,11 +61,20 @@
     }
   }
 
+  // Text saves run one after another, and each reads the text when it RUNS, so
+  // a save queued behind one in flight carries the newest text and lands last.
+  let textSaves: Promise<unknown> = Promise.resolve()
+  function saveText(): Promise<boolean> {
+    const run = textSaves.then(() => patch({ title: title.trim() || 'Ohne Titel', body_html: body }))
+    textSaves = run.catch(() => undefined)
+    return run
+  }
+
   function scheduleSave() {
     if (saveTimer) clearTimeout(saveTimer)
     saveTimer = setTimeout(async () => {
       saveTimer = null
-      const ok = await patch({ title: title.trim() || 'Ohne Titel', body_html: body })
+      const ok = await saveText()
       // After a successful body save, refresh previews of enabled channels.
       if (ok) refreshEnabledPreviews()
     }, 800)
@@ -153,11 +162,16 @@
   // save what is on screen now, so a click right after typing (or while the
   // "Fehler beim Speichern" label shows) cannot send the previous text.
   async function flushPostText(): Promise<boolean> {
+    const pending = saveTimer !== null
     if (saveTimer) {
       clearTimeout(saveTimer)
       saveTimer = null
     }
-    return patch({ title: title.trim() || 'Ohne Titel', body_html: body })
+    const ok = await saveText()
+    // The cancelled timer would have refreshed the previews; do it here so they
+    // show the text that is about to be sent.
+    if (ok && pending) refreshEnabledPreviews()
+    return ok
   }
 
   // Email only: the send resolves its audience from the SAVED recipient rows, so
@@ -359,7 +373,10 @@
       recipientsSaved = res.ok
       if (!res.ok) {
         const d = (await res.json().catch(() => null)) as { message?: string } | null
-        publishError.email = d?.message || 'Empfänger konnten nicht gespeichert werden.'
+        // Only a 400 carries a German message the author can act on; the generic
+        // texts of 401, 403 and 5xx are English.
+        publishError.email =
+          (res.status === 400 && d?.message) || 'Empfänger konnten nicht gespeichert werden.'
       }
       return res.ok
     } catch {

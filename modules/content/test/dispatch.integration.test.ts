@@ -277,6 +277,11 @@ describe('dispatch email — per-recipient SMTP failure', () => {
       expect(logged).toContain('RCPT TO')
       expect(logged).not.toContain('bad@x.com')
       expect(logged).not.toContain('relay denied')
+      // the failure line of dispatch() itself, and everything else it logged
+      const everything = JSON.stringify(spy.mock.calls)
+      expect(everything).toContain('failed to send')
+      expect(everything).not.toContain('bad@x.com')
+      expect(everything).not.toContain('relay denied')
     } finally {
       spy.mockRestore()
     }

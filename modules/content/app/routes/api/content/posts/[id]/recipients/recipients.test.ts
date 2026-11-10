@@ -172,7 +172,11 @@ describe('/api/content/posts/[id]/recipients', () => {
 
   it('PUT 400s an audience of more than 200 entries without asking Keycloak', async () => {
     const recipients = Array.from({ length: 201 }, (_, i) => ({ keycloak_group_id: `g${i}` }))
-    await expect(PUT(makeEvent({ user: author, body: { recipients } }))).rejects.toMatchObject({ status: 400 })
+    // The page shows this text to the author, so it is German.
+    await expect(PUT(makeEvent({ user: author, body: { recipients } }))).rejects.toMatchObject({
+      status: 400,
+      body: { message: expect.stringMatching(/Empf/) },
+    })
     expect(mockGetGroup).not.toHaveBeenCalled()
     expect(mockSetRecipients).not.toHaveBeenCalled()
   })
