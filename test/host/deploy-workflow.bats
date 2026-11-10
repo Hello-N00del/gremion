@@ -119,15 +119,17 @@ step_body() {
     assert_absent '^    branches:' "$WORKFLOW" 'a branch push can push images'
 }
 
-@test "release-images.yml token is exactly contents: read and packages: write" {
-    local perms
+@test "release-images.yml token is contents: read, and only the push job adds packages: write" {
+    local perms job
     perms="$(awk '/^permissions:/ { f = 1; next } f && /^[^ ]/ { exit } f && NF { print }' "$WORKFLOW")"
-    [ "$perms" = "$(printf '  contents: read\n  packages: write')" ] || {
+    [ "$perms" = '  contents: read' ] || {
         echo "workflow permissions are: ${perms}" >&2
         return 1
     }
-    # packages is the only writable scope anywhere, job-level blocks included.
+    # packages is the only writable scope anywhere, and it sits on build-and-push.
     [ "$(grep -cE ': write$' "$WORKFLOW")" -eq 1 ]
+    job="$(awk '/^  build-and-push:/ { f = 1; next } f && /^  [a-z-]+:$/ { exit } f { print }' "$WORKFLOW")"
+    [[ "$job" == *'      packages: write'* ]] || { echo 'build-and-push does not hold packages: write' >&2; return 1; }
     assert_absent 'id-token:' "$WORKFLOW" 'an OIDC token is minted for a release build'
 }
 
