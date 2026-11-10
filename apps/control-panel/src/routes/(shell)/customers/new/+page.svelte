@@ -87,7 +87,7 @@
           </div>
         {/if}
       {/each}
-      <p class="muted">„board“ ist noch nicht mandantengetrennt, „vault“ (Tresor) bleibt im Pilotbetrieb abgeschaltet: beide sind nicht wählbar.</p>
+      <p class="muted">„board“ ist noch nicht mandantengetrennt, „vault“ (Tresor) bleibt im Pilotbetrieb abgeschaltet: beide sind nicht wählbar. Module ohne Isolationsprüfung sind ebenfalls nicht wählbar; die DPIA-Entscheidung trägt weiterhin die Betreiberin oder der Betreiber ein.</p>
       {#if errors.enable}<span class="err">{errors.enable}</span>{/if}
       {#if errors.dpia}<span id="err-dpia" class="err">{errors.dpia}</span>{/if}
     </fieldset>

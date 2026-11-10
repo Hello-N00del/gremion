@@ -195,10 +195,19 @@ export interface ModuleChoice {
   denied: string | null
 }
 
-/** The module checkboxes: plt.module's toggleable rows, the deny set shown disabled with its reason. */
+/**
+ * The modules the isolation producer proves (PILOT_MODULES in infra/host/bin/gremion-isolation); the create's
+ * preflight refuses any other one (NO_ISOLATION_RESULT) after the form was accepted. A constant on purpose: a
+ * query of the evidence table that is wrong would block every create. requests.test.ts pins it equal to the script.
+ */
+export const PROVEN_MODULES: ReadonlySet<string> = new Set(['calendar', 'content', 'publishing', 'votes', 'files', 'messaging'])
+
+const NOT_PROVEN = 'keine Isolationsprüfung auf diesem Stand; das Modul kann beim Anlegen nicht gewählt werden.'
+
+/** The module checkboxes: plt.module's toggleable rows; the deny set and every module without isolation evidence shown disabled with the reason. */
 export async function listModuleChoices(sql: postgres.Sql, deny: Readonly<Record<string, string>> = DENY_REASONS): Promise<ModuleChoice[]> {
   const rows = await sql<{ module_key: string; name: string }[]>`SELECT module_key, name FROM plt.module WHERE toggleable ORDER BY module_key`
-  return rows.map((r) => ({ id: r.module_key, name: r.name, denied: deny[r.module_key] ?? null }))
+  return rows.map((r) => ({ id: r.module_key, name: r.name, denied: deny[r.module_key] ?? (PROVEN_MODULES.has(r.module_key) ? null : NOT_PROVEN) }))
 }
 
 /** Seconds since the executor's newest heartbeat, or null when there is none. */

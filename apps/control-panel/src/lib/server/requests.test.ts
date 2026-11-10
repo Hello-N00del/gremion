@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
-import { createArgs, DENY_REASONS, PRINTABLE, RESERVED_SLUGS, submitCreate, submitRefusal, SubmitRefused, validateNewCustomer, type Evidence, type NewCustomerInput } from './requests'
+import { createArgs, DENY_REASONS, listModuleChoices, PRINTABLE, PROVEN_MODULES, RESERVED_SLUGS, submitCreate, submitRefusal, SubmitRefused, validateNewCustomer, type Evidence, type NewCustomerInput } from './requests'
 
 const OP = '8d6b9c7e-1f2a-4b3c-9d4e-5f6a7b8c9d0e'
 const KEY = '0192f0c4-0000-7000-8000-00000000000a'
@@ -28,6 +28,30 @@ describe('the panel deny set is the gate deny set (no second list that can drift
     const gate = [...block.matchAll(/^\s*([a-z_]+):/gm)].map((m) => m[1]!).sort()
     expect(gate.length).toBeGreaterThan(0)
     expect(Object.keys(DENY_REASONS).sort()).toEqual(gate)
+  })
+})
+
+describe('only the modules with isolation evidence can be ticked at creation', () => {
+  it('the panel constant is the list in gremion-isolation (the panel image cannot read the script, so one test pins the two)', () => {
+    const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '../../../../../infra/host/bin/gremion-isolation'), 'utf8')
+    const line = /^PILOT_MODULES="([^"]+)"/m.exec(src)?.[1] ?? ''
+    const proven = line.split(/\s+/).filter(Boolean).sort()
+    expect(proven.length).toBe(6)
+    expect([...PROVEN_MODULES].sort()).toEqual(proven)
+  })
+  it('a module outside the set is listed but disabled with a reason, the gate deny reasons keep priority', async () => {
+    const rows = ['board', 'calendar', 'elections', 'files', 'handover', 'vault', 'votes'].map((module_key) => ({ module_key, name: module_key.toUpperCase() }))
+    const sql = (async () => rows) as never
+    const out = await listModuleChoices(sql)
+    const by = Object.fromEntries(out.map((m) => [m.id, m.denied]))
+    expect(by.calendar).toBeNull()
+    expect(by.files).toBeNull()
+    expect(by.votes).toBeNull()
+    expect(by.elections).toMatch(/Isolationspr/)
+    expect(by.handover).toMatch(/Isolationspr/)
+    expect(by.board).toBe(DENY_REASONS.board)
+    expect(by.vault).toBe(DENY_REASONS.vault)
+    expect(out).toHaveLength(rows.length)
   })
 })
 
