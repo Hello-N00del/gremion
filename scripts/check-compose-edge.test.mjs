@@ -471,7 +471,7 @@ test('guard 7: matrix, livekit and collabora are routed by label correctly, and 
   assert.equal(lk.rule, `Host(\`${domain}\`) && PathPrefix(\`/livekit-sfu\`)`)
   assert.deepEqual(routerNames(r.services.livekit.labels), ['livekit'])
   assert.equal(r.services.livekit.labels['traefik.http.services.livekit.loadbalancer.server.port'], '7880')
-  for (const [name, rt] of [['matrix', mx], ['livekit', lk]]) {
+  for (const { name, rt } of [{ name: 'matrix', rt: mx }, { name: 'livekit', rt: lk }]) {
     assert.equal(rt.entrypoints, 'websecure', `${name}: entrypoints`)
     assert.equal(rt.tls, 'true', `${name}: tls`)
     assert.equal(rt['tls.certresolver'], env.TRAEFIK_CERT_RESOLVER, `${name}: an explicit tls.certresolver (tls=true alone serves the default certificate)`)

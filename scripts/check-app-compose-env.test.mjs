@@ -142,7 +142,7 @@ test('backend table: exactly the three leaf backends are `service`; no FILES_, V
     assert.doesNotMatch(text, /\b(FILES|VOTES|MESSAGES|MESSAGING|BOARD|ELECTIONS|FINANCE|VAULT|HANDOVER)_BACKEND\b/, file)
   }
   const env = environmentOf('docker-compose.app.yml', 'gremion-ui')
-  const backends = Object.entries(env).filter(([k]) => /_BACKEND$/.test(k))
+  const backends = Object.entries(env).filter(([k]) => k.endsWith('_BACKEND'))
   assert.deepEqual(backends, [['CALENDAR_BACKEND', 'service'], ['CONTENT_BACKEND', 'service'], ['NEWSLETTER_BACKEND', 'service']])
 })
 
