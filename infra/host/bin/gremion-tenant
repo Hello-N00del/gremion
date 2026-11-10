@@ -177,7 +177,8 @@ ensure_provisioner_credential() {
     # shellcheck disable=SC2064
     trap "rm -rf '${out}'; exit 143" TERM
     chmod 700 "$out"
-    TC_MOUNT=(-v "$(realpath "$out"):/run/secrets/provisioner-out"
+    # The image runs as root; the secret must land owned by the deploy user, who moves it out.
+    TC_MOUNT=(--user "$(id -u):$(id -g)" -v "$(realpath "$out"):/run/secrets/provisioner-out"
               -e TENANT_PROVISIONER_SECRET_FILE=/run/secrets/provisioner-out/tenant_provisioner
               -e KEYCLOAK_ADMIN -e KEYCLOAK_ADMIN_PASSWORD)
     # A prefix assignment on a function call: in tc's (and so docker's)
