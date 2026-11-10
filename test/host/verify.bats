@@ -879,6 +879,111 @@ rule_case() {  # <router> <rule> -> runs verify with that router's rule replaced
     [[ "$output" == *"TCP router(s) on a public entrypoint: passthru@docker"* ]]
 }
 
+# The video relay (TURN over TLS on 443) is the ONE TCP router a public entrypoint may carry: exactly
+# livekit-turn@docker, on websecure alone, answering HostSNI(`turn.<PILOT_TENANT_HOST>`) with the host
+# read from state.env, terminating TLS with a certificate resolver (not passthrough). Every other TCP
+# router stays refused, and with no PILOT_TENANT_HOST there is no exception at all.
+relay_host() { printf 'PILOT_TENANT_HOST=customer.example.org\n' >> "${GREMION_ROOT}/etc/env/state.env"; }
+# relay_json <name> <entryPoints-json> <rule> <tls-json>
+relay_json() {
+    jq -cn --arg n "$1" --argjson e "$2" --arg r "$3" --argjson t "$4" \
+        '{name:$n, entryPoints:$e, rule:$r, tls:$t, service:"livekit-turn"}'
+}
+RELAY_RULE='HostSNI(`turn.customer.example.org`)'
+
+@test "relay: the exact livekit-turn router on websecure passes" {
+    relay_host
+    printf '[%s]\n' "$(relay_json 'livekit-turn@docker' '["websecure"]' "$RELAY_RULE" '{"certResolver":"le-http"}')" \
+        > "${FAKE_HTTP}/api-tcp-routers.json"
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"all checks passed"* ]]
+    [[ "$output" != *"TCP router(s) on a public entrypoint"* ]]
+}
+
+@test "relay: a catch-all HostSNI rule on the relay router fails" {
+    relay_host
+    printf '[%s]\n' "$(relay_json 'livekit-turn@docker' '["websecure"]' 'HostSNI(`*`)' '{"certResolver":"le-http"}')" \
+        > "${FAKE_HTTP}/api-tcp-routers.json"
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"TCP router(s) on a public entrypoint: livekit-turn@docker"* ]]
+}
+
+@test "relay: a passthrough relay router fails" {
+    relay_host
+    printf '[%s]\n' "$(relay_json 'livekit-turn@docker' '["websecure"]' "$RELAY_RULE" '{"certResolver":"le-http","passthrough":true}')" \
+        > "${FAKE_HTTP}/api-tcp-routers.json"
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"TCP router(s) on a public entrypoint: livekit-turn@docker"* ]]
+}
+
+@test "relay: a relay router for another host fails" {
+    relay_host
+    printf '[%s]\n' "$(relay_json 'livekit-turn@docker' '["websecure"]' 'HostSNI(`turn.other.example.org`)' '{"certResolver":"le-http"}')" \
+        > "${FAKE_HTTP}/api-tcp-routers.json"
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"TCP router(s) on a public entrypoint: livekit-turn@docker"* ]]
+}
+
+@test "relay: the right rule under a different router name fails" {
+    relay_host
+    printf '[%s]\n' "$(relay_json 'relay@docker' '["websecure"]' "$RELAY_RULE" '{"certResolver":"le-http"}')" \
+        > "${FAKE_HTTP}/api-tcp-routers.json"
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"TCP router(s) on a public entrypoint: relay@docker"* ]]
+}
+
+@test "relay: a relay router without a certificate resolver fails" {
+    relay_host
+    printf '[%s]\n' "$(relay_json 'livekit-turn@docker' '["websecure"]' "$RELAY_RULE" '{}')" \
+        > "${FAKE_HTTP}/api-tcp-routers.json"
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"TCP router(s) on a public entrypoint: livekit-turn@docker"* ]]
+}
+
+@test "relay: a relay router on the plain-HTTP entrypoint as well as websecure fails" {
+    relay_host
+    printf '[%s]\n' "$(relay_json 'livekit-turn@docker' '["web","websecure"]' "$RELAY_RULE" '{"certResolver":"le-http"}')" \
+        > "${FAKE_HTTP}/api-tcp-routers.json"
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"TCP router(s) on a public entrypoint: livekit-turn@docker"* ]]
+}
+
+@test "relay: a second TCP router next to the good one fails, and only the second is named" {
+    relay_host
+    printf '[%s,%s]\n' \
+        "$(relay_json 'livekit-turn@docker' '["websecure"]' "$RELAY_RULE" '{"certResolver":"le-http"}')" \
+        "$(relay_json 'passthru@docker' '["websecure"]' 'HostSNI(`*`)' '{"passthrough":true}')" \
+        > "${FAKE_HTTP}/api-tcp-routers.json"
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"TCP router(s) on a public entrypoint: passthru@docker"* ]]
+    [[ "$output" != *"public entrypoint: livekit-turn@docker"* ]]
+}
+
+@test "relay: without PILOT_TENANT_HOST there is no exception, the exact router fails" {
+    printf '[%s]\n' "$(relay_json 'livekit-turn@docker' '["websecure"]' "$RELAY_RULE" '{"certResolver":"le-http"}')" \
+        > "${FAKE_HTTP}/api-tcp-routers.json"
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"TCP router(s) on a public entrypoint: livekit-turn@docker"* ]]
+}
+
+@test "relay: a UDP router named livekit-turn is never excepted" {
+    relay_host
+    printf '[%s]\n' "$(relay_json 'livekit-turn@docker' '["websecure"]' "$RELAY_RULE" '{"certResolver":"le-http"}')" \
+        > "${FAKE_HTTP}/api-udp-routers.json"
+    run "$VERIFY" --hosts "$HOSTS"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"UDP router(s) on a public entrypoint: livekit-turn@docker"* ]]
+}
+
 @test "universal: a UDP router with no entryPoints fails; a TCP router on a private entrypoint does not" {
     printf '[{"name":"u@docker"}]\n' > "${FAKE_HTTP}/api-udp-routers.json"
     printf '[{"name":"smtp@docker","entryPoints":["smtp"],"rule":"HostSNI(`*`)"}]\n' > "${FAKE_HTTP}/api-tcp-routers.json"
