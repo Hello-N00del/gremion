@@ -304,7 +304,7 @@ export function renderTenantRouter(input: RenderTenantRouterInput): RenderTenant
     out.push(
       `    ${kc.name}:`,
       '      entryPoints: ["websecure"]',
-      `      rule: "Host(\`${kc.host}\`) && (PathPrefix(\`/auth/realms/${kcRealm}/\`) || PathPrefix(\`/auth/resources/\`))"`,
+      `      rule: "Host(\`${kc.host}\`) && (Path(\`/auth/realms/${kcRealm}\`) || PathPrefix(\`/auth/realms/${kcRealm}/\`) || PathPrefix(\`/auth/resources/\`))"`,
       `      service: "${KEYCLOAK_SERVICE}"`,
       `      priority: ${KEYCLOAK_ROUTER_PRIORITY}`,
       '      middlewares:',
