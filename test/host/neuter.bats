@@ -284,6 +284,47 @@ EOF2
     [[ "$output" == *"outside ${GREMION_ROOT}/etc/secrets"* ]]
 }
 
+# `gremion-services wire` (step 6c) keeps a THIRD copy of the relay password in the
+# tenant secrets directory (relay-smtp-password): a restored instance must not keep
+# it at rest either, whether the directory is the default or the one the app env names.
+@test "gremion-neuter empties the relay password copy in the default tenant secrets directory" {
+    shim_docker_empty
+    local tsd="${GREMION_ROOT}/etc/secrets/tenants"
+    mkdir -p "$tsd"
+    printf '%s' live-relay-app-password >"${tsd}/relay-smtp-password"
+    chmod 600 "${tsd}/relay-smtp-password"
+    run "$NEUTER" --stack stg
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
+    [ ! -s "${tsd}/relay-smtp-password" ] || { echo "the tenants relay password copy still has content"; return 1; }
+    if grep -rq live-relay-app-password "${GREMION_ROOT}/etc"; then echo "the live password is still on disk"; return 1; fi
+}
+
+@test "gremion-neuter empties the relay password copy in the tenant secrets directory the app env names" {
+    shim_docker_empty
+    local tsd="${GREMION_ROOT}/etc/secrets/customers"
+    mkdir -p "$tsd"
+    printf '%s' live-relay-app-password >"${tsd}/relay-smtp-password"
+    chmod 600 "${tsd}/relay-smtp-password"
+    printf 'TENANT_SECRETS_DIR=%s\n' "$tsd" >>"${GREMION_ROOT}/etc/env/app-blue.env"
+    run "$NEUTER" --stack stg
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
+    [ ! -s "${tsd}/relay-smtp-password" ] || { echo "the named tenants relay password copy still has content"; return 1; }
+    if grep -rq live-relay-app-password "${GREMION_ROOT}/etc"; then echo "the live password is still on disk"; return 1; fi
+}
+
+@test "gremion-neuter leaves a relay password copy in a tenant secrets directory outside etc/secrets alone and says so" {
+    shim_docker_empty
+    local tsd="${GREMION_ROOT}/elsewhere-tenants"
+    mkdir -p "$tsd"
+    printf '%s' operator-owned >"${tsd}/relay-smtp-password"
+    chmod 600 "${tsd}/relay-smtp-password"
+    printf 'TENANT_SECRETS_DIR=%s\n' "$tsd" >>"${GREMION_ROOT}/etc/env/app-blue.env"
+    run "$NEUTER" --stack stg
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
+    [ -s "${tsd}/relay-smtp-password" ]
+    [[ "$output" == *"outside ${GREMION_ROOT}/etc/secrets"* ]]
+}
+
 @test "gremion-neuter finds keycloak by its compose labels and logs in at /auth (TASK-015)" {
     shim_docker_empty
     run "$NEUTER" --stack stg
@@ -429,6 +470,25 @@ esac'
     [ "$status" -eq 0 ]
     assert_recorded docker "UPDATE tenant SET domain_profile = jsonb_set"
     assert_recorded docker "SELECT count(*) FROM tenant"
+}
+
+# The entry the app reads is the TOP-LEVEL domain_profile.smtp (registry.ts maps it onto the
+# tenant's services.smtp); `gremion-services wire` writes host, port, From, login and password
+# ref there. The rewrite and its proof must name that path, point it at the sink and drop the
+# login: a restored row that kept the relay host and login would override the sunk config.json.
+@test "gremion-neuter sinks the registry smtp entry of domain_profile and drops its login" {
+    echo blue >"${GREMION_ROOT}/runtime/active-colour"
+    shim_docker_live
+    run "$NEUTER" --stack stg
+    [ "$status" -eq 0 ]
+    assert_recorded docker "jsonb_set(domain_profile, '{smtp}'"
+    assert_recorded docker "- 'user' - 'passwordRef'"
+    assert_recorded docker "domain_profile #>> '{smtp,host}' IS DISTINCT FROM 'null-sink'"
+    assert_recorded docker "domain_profile #>> '{smtp,user}' IS NOT NULL OR domain_profile #>> '{smtp,passwordRef}' IS NOT NULL"
+    # the earlier path nothing writes is not what is rewritten any more
+    refute_recorded docker "'{services,smtp,host}'"
+    # the proof query asks about the same entry
+    assert_recorded docker "SELECT count(*) FROM tenant WHERE jsonb_typeof(domain_profile -> 'smtp') = 'object'"
 }
 
 @test "gremion-neuter prints its proof line" {

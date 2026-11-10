@@ -132,6 +132,8 @@ ENV NODE_ENV=production
 COPY --from=builder /deploy/node_modules ./node_modules
 COPY --from=builder /deploy/package.json ./
 COPY --from=builder /repo/gremion-ui/build ./build
+# Runtime entry: adapter-node's server plus the request timeout it does not expose (see the file).
+COPY --from=builder /repo/gremion-ui/scripts/serve.mjs ./scripts/serve.mjs
 COPY --from=builder /repo/gremion-ui/migrations ./migrations
 # P2.1c (#202): control-plane registry migrations (tenant registry + fleet
 # ledger) read at boot by runControlMigrations(). Without this COPY the runtime
@@ -165,4 +167,4 @@ RUN mkdir -p /data && chown -R node:node /data
 USER node
 
 EXPOSE 3000
-CMD ["node", "build"]
+CMD ["node", "scripts/serve.mjs"]

@@ -257,7 +257,8 @@ export class NextcloudClient {
   ): Promise<void> {
     const url = this.baseUrl.replace(/\/$/, '') + path
     const userAuth = this.webdavUserAuth(userId)
-    const res = await fetch(url, {
+    // The DOM typings lack `duplex`; widen only that one field so method, headers and body stay checked.
+    const init: RequestInit & { duplex?: 'half' } = {
       method: 'PUT',
       headers: {
         Authorization: userAuth ?? this.authHeader(),
@@ -265,8 +266,11 @@ export class NextcloudClient {
         'Content-Type': contentType,
         ...(!userAuth ? { 'X-Nextcloud-User': userId } : {})
       },
-      body
-    })
+      body,
+      // Node fetch requires duplex for a streaming request body (as service-client.ts does).
+      ...(body instanceof ReadableStream ? { duplex: 'half' } : {})
+    }
+    const res = await fetch(url, init)
     if (!res.ok) {
       throw await responseError('PUT', path, res)
     }

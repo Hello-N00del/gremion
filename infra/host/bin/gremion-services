@@ -44,6 +44,13 @@ set -euo pipefail
 #      Then, when the calendar leaf runs, creates the customer's CalDAV collection
 #      (the leaf's CALDAV_CALENDAR_TEMPLATE with the slug, under its shared
 #      account) by occ and reads it back: the leaf cannot create it itself;
+#      Then, ONLY when MAIL_TRANSPORT=relay (mail.env), wires the customer's mail
+#      login (6c): copies the relay password file to the tenant secrets directory
+#      (0600, owner kept, re-copied on every run so a rotated password propagates),
+#      MERGES the tenant row's domain_profile.smtp in the control database (host, port,
+#      From, login, password ref: values from mail.env), marks the tenant's config.json
+#      smtp.configured with host, port and from_address, and reads all three back. The
+#      password is never read into a variable, an argv or the output;
 #   7. recreates gremion-ui (active colour) and reads its environment back.
 #
 # It takes the host lock (runtime/hostd.lock, non-blocking, exit 3 when busy) like
@@ -182,6 +189,152 @@ close_bootstrap_mode() {
 }
 
 # ---------------------------------------------------------------------------
+# the customer's mail login (step 6c): MAIL_TRANSPORT=relay only
+# ---------------------------------------------------------------------------
+# Under the relay transport every realm and every app mail goes through the ONE relay login. The app
+# reads it from the tenant row (control database, domain_profile.smtp: host, port, From, login, password
+# REF) plus the tenant's config.json (smtp.configured, host, port, from_address). The password itself is a
+# file the app mounts read-only (TENANT_SECRETS_DIR, /run/secrets/tenants). Without this step the operator
+# copies the file, edits the jsonb and the config by hand, and restarts gremion-ui, after every install.
+
+MAIL_LOGIN=off
+ML_TRANSPORT=""
+ML_HOST="" ML_PORT="" ML_USER="" ML_FROM="" ML_FROM_ADDR="" ML_SRC="" ML_PG_USER="" ML_PG_DB=""
+# the password file as gremion-ui sees it (the container side of TENANT_SECRETS_DIR)
+ML_CONTAINER_PW="/run/secrets/tenants/relay-smtp-password"
+
+# mail_login_facts -- reads mail.env and decides whether step 6c runs; with the relay transport it checks
+# every precondition, so that nothing is written before all of them hold. Sets MAIL_LOGIN=on|off.
+mail_login_facts() {
+    local mail_env ref fromdom
+    mail_env="${MAIL_ENV:-${ROOT}/etc/env/mail.env}"
+    ML_TRANSPORT="${MAIL_TRANSPORT:-}"
+    if [[ -z "$ML_TRANSPORT" && -f "$mail_env" ]]; then ML_TRANSPORT="$(env_key "$mail_env" MAIL_TRANSPORT)"; fi
+    if [[ "$ML_TRANSPORT" != relay ]]; then
+        MAIL_LOGIN=off
+        return 0
+    fi
+    MAIL_LOGIN=on
+    [[ -f "$mail_env" ]] || die "MAIL_TRANSPORT=relay but there is no mail env file (${mail_env})" "$GREMION_EXIT_USAGE"
+    ML_HOST="$(env_key "$mail_env" RELAY_SMTP_HOST)"
+    ML_PORT="$(env_key "$mail_env" RELAY_SMTP_PORT)"; ML_PORT="${ML_PORT:-587}"
+    ML_USER="$(env_key "$mail_env" RELAY_SMTP_USER)"
+    fromdom="$(env_key "$mail_env" RELAY_FROM_DOMAIN)"
+    [[ -n "$fromdom" ]] || fromdom="$(env_key "$mail_env" PLATFORM_DOMAIN)"
+    [[ "$ML_HOST" =~ ^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$ ]] \
+        || die "MAIL_TRANSPORT=relay needs RELAY_SMTP_HOST (a host name) in ${mail_env}" "$GREMION_EXIT_USAGE"
+    [[ "$ML_PORT" =~ ^[1-9][0-9]{0,4}$ && "$ML_PORT" -le 65535 ]] \
+        || die "RELAY_SMTP_PORT ${ML_PORT} in ${mail_env} is not a port" "$GREMION_EXIT_USAGE"
+    [[ "$fromdom" =~ ^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$ ]] \
+        || die "the relay From domain is not a lowercase DNS name: set RELAY_FROM_DOMAIN (the domain the relay signs) in ${mail_env}" "$GREMION_EXIT_USAGE"
+    ML_FROM_ADDR="no-reply@${fromdom}"
+    ML_FROM="\"Gremion\" <${ML_FROM_ADDR}>"
+    if [[ -n "$ML_USER" ]]; then
+        [[ "$ML_USER" =~ ^[^[:space:][:cntrl:]]+$ ]] || die "RELAY_SMTP_USER in ${mail_env} holds a space or a control character" "$GREMION_EXIT_USAGE"
+        ref="$(env_key "$mail_env" RELAY_SMTP_PASSWORD_REF)"
+        case "$ref" in
+            secret:*) ML_SRC="${ROOT}/etc/secrets/${ref#secret:}" ;;
+            file:*)   ML_SRC="${ref#file:}" ;;
+            *) die "RELAY_SMTP_PASSWORD_REF in ${mail_env} must be secret:<name> or file:<absolute path> (RELAY_SMTP_USER is set)" "$GREMION_EXIT_USAGE" ;;
+        esac
+        [[ "$ML_SRC" == /* && "$ML_SRC" != *..* ]] || die "RELAY_SMTP_PASSWORD_REF names no absolute path without .. (${ML_SRC})" "$GREMION_EXIT_USAGE"
+        [[ -s "$ML_SRC" ]] || die "the relay password file is absent or empty: ${ML_SRC} (the operator places it; reset removes the copy under the tenant secrets only)" "$GREMION_EXIT_USAGE"
+        [[ "$(stat -c '%u' "$ML_SRC")" == "$(stat -c '%u' "${ROOT}/etc/secrets")" ]] \
+            || die "the relay password file ${ML_SRC} is not owned by the deploy user (the owner of ${ROOT}/etc/secrets)" "$GREMION_EXIT_USAGE"
+        if fs_carries_modes "$(dirname "$ML_SRC")"; then
+            [[ "$(stat -c '%a' "$ML_SRC")" == 600 ]] || die "the relay password file ${ML_SRC} must be mode 0600 (it is $(stat -c '%a' "$ML_SRC"))" "$GREMION_EXIT_USAGE"
+        fi
+    fi
+    ML_PG_USER="$(env_key "$STATE_ENV" POSTGRES_USER)"
+    ML_PG_DB="$(env_key "$STATE_ENV" CONTROL_DB_NAME)"; ML_PG_DB="${ML_PG_DB:-control}"
+    [[ "$ML_PG_USER" =~ ^[A-Za-z0-9_]+$ ]] || die "POSTGRES_USER in ${STATE_ENV} is not a plain role name" "$GREMION_EXIT_USAGE"
+    [[ "$ML_PG_DB" =~ ^[A-Za-z0-9_]+$ ]] || die "CONTROL_DB_NAME in ${STATE_ENV} is not a plain database name" "$GREMION_EXIT_USAGE"
+}
+
+# ml_psql <sql> [-v name=value ...] -- the control database as the state project's postgres user. The SQL
+# is on stdin and every value a psql variable, never interpolated; tuples only.
+ml_psql() {
+    local sql="$1" c
+    shift
+    c="$(container_of "${STACK}-state" postgres)"
+    printf '%s\n' "$sql" | docker exec -i "$c" psql -X -U "$ML_PG_USER" -d "$ML_PG_DB" -tAq -v ON_ERROR_STOP=1 "$@" -f -
+}
+
+# mail_login_visible <gremion-ui container> -- the password file as the running app sees it (the tenant
+# secrets directory is a live read-only bind mount); only when the relay has a login.
+mail_login_visible() {
+    [[ -n "$ML_USER" ]] || return 0
+    docker exec "$1" sh -c "test -r ${ML_CONTAINER_PW} && test -s ${ML_CONTAINER_PW}" \
+        || die "gremion-ui cannot read ${ML_CONTAINER_PW}, the relay-smtp-password file of the tenant secrets directory (docker exec ${1} ls -l /run/secrets/tenants: owner and mode, and the bind mount)" "$GREMION_EXIT_ASSERT"
+}
+
+# mail_login_apply <slug> <tenant secrets dir> -- step 6c (after mail_login_facts). Idempotent.
+mail_login_apply() {
+    local slug="$1" tsd="$2" dest pref="" before after want n cfgout ui_c pwnote
+    if [[ "$MAIL_LOGIN" != on ]]; then
+        info "mail login: not wired, MAIL_TRANSPORT=${ML_TRANSPORT:-unset} (this step is for the relay transport only)"
+        return 0
+    fi
+    # (2) the password file, where gremion-ui mounts the tenant secrets: copied on EVERY run (a rotated
+    # password propagates), through pipes only: it is in no variable, no argv and no output
+    if [[ -n "$ML_USER" ]]; then
+        dest="${tsd}/relay-smtp-password"
+        pref="file:${ML_CONTAINER_PW}"
+        tr -d '\r\n' < "$ML_SRC" | atomic_write "$dest" 600 || die "cannot write ${dest}" "$GREMION_EXIT_ASSERT"
+        keep_owner "$(stat -c '%u:%g' "$tsd")" "$dest"
+        [[ -s "$dest" ]] || die "the relay password copy is empty: ${dest}" "$GREMION_EXIT_ASSERT"
+        [[ "$(tr -d '\r\n' < "$ML_SRC" | sha256sum | cut -d' ' -f1)" == "$(sha256sum < "$dest" | cut -d' ' -f1)" ]] \
+            || die "the relay password copy ${dest} differs from its source" "$GREMION_EXIT_ASSERT"
+    fi
+    # (3) the tenant row: smtp is MERGED into domain_profile (the other keys, residencyZone first, stay)
+    before="$(ml_psql "SELECT domain_profile FROM tenant WHERE slug = :'slug';" -v slug="$slug")" \
+        || die "the control database (${ML_PG_DB}) could not be read" "$GREMION_EXIT_ASSERT"
+    jq -e 'type == "object"' <<< "$before" >/dev/null 2>&1 \
+        || die "there is no tenant row for ${slug} in the control database ${ML_PG_DB} (was the create request run by this install?)" "$GREMION_EXIT_ASSERT"
+    n="$(ml_psql "WITH u AS (UPDATE tenant SET domain_profile = domain_profile || jsonb_build_object('smtp', jsonb_strip_nulls(jsonb_build_object('host', :'host', 'port', (:'port')::int, 'from', :'from', 'user', nullif(:'user', ''), 'passwordRef', nullif(:'pref', '')))), updated_at = now() WHERE slug = :'slug' RETURNING 1) SELECT count(*) FROM u;" \
+            -v slug="$slug" -v host="$ML_HOST" -v port="$ML_PORT" -v from="$ML_FROM" -v user="$ML_USER" -v pref="$pref")" \
+        || die "the tenant row of ${slug} could not be updated (control database ${ML_PG_DB})" "$GREMION_EXIT_ASSERT"
+    [[ "${n//[[:space:]]/}" == 1 ]] || die "the smtp entry of the tenant row of ${slug} was not written (rows updated: ${n//[[:space:]]/})" "$GREMION_EXIT_ASSERT"
+    want="$(jq -nc --arg h "$ML_HOST" --argjson p "$ML_PORT" --arg f "$ML_FROM" --arg u "$ML_USER" --arg r "$pref" \
+            '{host: $h, port: $p, from: $f} + (if $u != "" then {user: $u, passwordRef: $r} else {} end)')"
+    after="$(ml_psql "SELECT domain_profile FROM tenant WHERE slug = :'slug';" -v slug="$slug")" \
+        || die "the control database (${ML_PG_DB}) could not be read back" "$GREMION_EXIT_ASSERT"
+    jq -e --argjson b "$before" --argjson w "$want" '(del(.smtp) == ($b | del(.smtp))) and (.smtp == $w)' <<< "$after" >/dev/null 2>&1 \
+        || die "the tenant row of ${slug} reads back without the expected domain_profile.smtp, or with another key changed" "$GREMION_EXIT_ASSERT"
+    # (4) the tenant's config.json, inside the container that owns the volume (tmp file, then rename, the
+    # owner and mode of the file it replaces kept): the values are not secret, they go in by NAME
+    ui_c="$(container_of "${STACK}-app-${COLOUR}" gremion-ui)"
+    cfgout="$(WIRE_SLUG="$slug" WIRE_SMTP_HOST="$ML_HOST" WIRE_SMTP_PORT="$ML_PORT" WIRE_SMTP_FROM="$ML_FROM_ADDR" \
+        docker exec -i -e WIRE_SLUG -e WIRE_SMTP_HOST -e WIRE_SMTP_PORT -e WIRE_SMTP_FROM "$ui_c" node - <<'NODEJS'
+const fs = require('fs')
+const root = (process.env.TENANT_DATA_ROOT || '/data').replace(/\/+$/, '')
+const f = root + '/' + process.env.WIRE_SLUG + '/config.json'
+const st = fs.statSync(f)
+const cur = JSON.parse(fs.readFileSync(f, 'utf8'))
+const smtp = Object.assign({}, cur.smtp, {
+  configured: true,
+  host: process.env.WIRE_SMTP_HOST,
+  port: Number(process.env.WIRE_SMTP_PORT),
+  from_address: process.env.WIRE_SMTP_FROM,
+})
+const tmp = f + '.tmp'
+fs.writeFileSync(tmp, JSON.stringify(Object.assign({}, cur, { smtp }), null, 2) + '\n', { mode: st.mode & 0o777 })
+if (process.getuid && process.getuid() === 0) fs.chownSync(tmp, st.uid, st.gid)
+fs.renameSync(tmp, f)
+// read back from disk: the post-condition, not the write's return value
+process.stdout.write(JSON.stringify(JSON.parse(fs.readFileSync(f, 'utf8')).smtp))
+NODEJS
+    )" || die "writing the tenant's config.json inside gremion-ui failed (docker exec ${ui_c} node -; its own error is above)" "$GREMION_EXIT_ASSERT"
+    jq -e --arg h "$ML_HOST" --argjson p "$ML_PORT" --arg f "$ML_FROM_ADDR" '.configured == true and .host == $h and .port == $p and .from_address == $f' <<< "$cfgout" >/dev/null 2>&1 \
+        || die "the tenant's config.json reads back without smtp.configured, host, port and from_address as written" "$GREMION_EXIT_ASSERT"
+    mail_login_visible "$ui_c" "$tsd"
+    # the evidence line names only what ran: no login, no password file, nothing read back
+    pwnote="no login (allow-listed relay), no password file"
+    if [[ -n "$ML_USER" ]]; then pwnote="password file copied (0600) and read back from gremion-ui"; fi
+    ok "mail login: relay ${ML_HOST}:${ML_PORT} as ${ML_FROM_ADDR}; tenant row smtp merged, config.json smtp.configured, ${pwnote}"
+}
+
+# ---------------------------------------------------------------------------
 # wire
 # ---------------------------------------------------------------------------
 
@@ -227,6 +380,8 @@ cmd_wire() {
 
     local nc_c
     nc_c="$(container_of "${STACK}-state" nextcloud)"
+    # the mail login's preconditions (relay transport only) belong to the facts: nothing is written before they hold
+    mail_login_facts
 
     # -- 1. the realm answers publicly with the expected issuer --
     local doc
@@ -396,12 +551,18 @@ cmd_wire() {
         ok "calendar: the CalDAV collection ${cal_name} of ${cal_user} exists (the leaf's drain target)"
     fi
 
+    # -- 6c. the customer's mail login (MAIL_TRANSPORT=relay only) --
+    # Before the recreate below, which is what makes the app read the new row and config: no separate restart.
+    mail_login_apply "$slug" "$tsd"
+
     # -- 7. gremion-ui, recreated, its environment read back --
     compose_app up -d --force-recreate gremion-ui \
         || die "gremion-ui could not be recreated" "$GREMION_EXIT_ASSERT"
     local ui_c
     ui_c="$(container_of "${STACK}-app-${COLOUR}" gremion-ui)"
     wait_healthy "$ui_c" gremion-ui
+    # the relay password file, read back from the RECREATED app
+    if [[ "$MAIL_LOGIN" == on ]]; then mail_login_visible "$ui_c"; fi
     [[ "$(docker exec "$ui_c" printenv SYNAPSE_ADMIN_TOKEN 2>/dev/null | tr -d '[:space:]')" == "$token" ]] \
         || die "gremion-ui's SYNAPSE_ADMIN_TOKEN is not the recorded bot token after the recreate (docker exec ${ui_c} printenv)" "$GREMION_EXIT_ASSERT"
     ok "gremion-ui recreated and carries the bot token"

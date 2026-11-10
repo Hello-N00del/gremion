@@ -372,3 +372,68 @@ describe('MatrixClient.getRoomState / setRoomState / putRoomAlias / deleteRoomAl
     ).resolves.toBeUndefined()
   })
 })
+
+describe('MatrixClient.sync — unread counts report their own failure', () => {
+  const json = (body: unknown, status = 200) =>
+    new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })
+  const syncBody = { next_batch: 's1', rooms: { join: { '!a:matrix.test': { timeline: { events: [] } } } } }
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('marks the result degraded when /notifications fails, so a caller never caches the 0 as a real count', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) =>
+        url.includes('/notifications') ? json({ errcode: 'M_UNKNOWN' }, 500) : json(syncBody),
+      ),
+    )
+    const { getMatrixClient } = await import('./matrix-client')
+    const res = await getMatrixClient().sync('user-token')
+    expect(res.rooms).toEqual([{ roomId: '!a:matrix.test', events: [], unreadCount: 0 }])
+    expect(res.countsDegraded).toBe(true)
+  })
+
+  it('logs a failed /notifications read, at most once a minute, without the user token', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2030-01-01T00:00:00Z'))
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async (url: string) =>
+          url.includes('/notifications') ? json({ errcode: 'M_UNKNOWN' }, 500) : json(syncBody),
+        ),
+      )
+      const { getMatrixClient } = await import('./matrix-client')
+      await getMatrixClient().sync('secret-user-token')
+      await getMatrixClient().sync('secret-user-token')
+      expect(warn).toHaveBeenCalledTimes(1)
+      const line = warn.mock.calls[0]!.map(String).join(' ')
+      expect(line).toContain('/notifications')
+      expect(line).not.toContain('secret-user-token')
+      vi.setSystemTime(new Date('2030-01-01T00:01:01Z'))
+      await getMatrixClient().sync('secret-user-token')
+      expect(warn).toHaveBeenCalledTimes(2)
+    } finally {
+      warn.mockRestore()
+      vi.useRealTimers()
+    }
+  })
+
+  it('does not mark a sync degraded when /notifications answered', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) =>
+        url.includes('/notifications')
+          ? json({ notifications: [{ room_id: '!a:matrix.test', read: false, event: { type: 'm.room.message' } }] })
+          : json(syncBody),
+      ),
+    )
+    const { getMatrixClient } = await import('./matrix-client')
+    const res = await getMatrixClient().sync('user-token')
+    expect(res.rooms[0]?.unreadCount).toBe(1)
+    expect(res.countsDegraded).toBeUndefined()
+  })
+})

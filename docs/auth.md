@@ -148,7 +148,7 @@ with a lazy re-migration retry, while every other tenant serves normally.
 `authGuard` checks `_bootComplete` first:
 
 - `_bootError` set → permanent `503 Service Unavailable: boot failed`.
-- Still booting → `503 Service Unavailable: booting` with `Retry-After: 5`.
+- Still booting → `503` with `Retry-After: 5` and a German HTML waiting page that reloads itself (`lib/server/waiting-page.ts`).
 - Complete → fall through.
 
 Prevents the failure mode where a half-migrated DB still accepts traffic.
