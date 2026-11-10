@@ -515,6 +515,63 @@ nnp_render() {
     [ ! -f "${RELEASE}/docker/element-call/config.json" ]
 }
 
+# The video relay (TURN over TLS on 443) is rendered from the REAL LiveKit template in this checkout.
+# PILOT_TENANT_HOST decides: set, the relay is on at turn.<host> and the media range is shortened to
+# leave the top of the published block to the relay; unset or empty, the relay is off, the media range
+# is today's 45000-45100 and no public name appears.
+render_livekit_template() {
+    mkdir -p "${RELEASE}/docker/livekit"
+    tr -d '\r' < "${PROJECT_ROOT}/docker/livekit/livekit.yaml.tmpl" > "${RELEASE}/docker/livekit/livekit.yaml.tmpl"
+}
+
+@test "the real LiveKit template with PILOT_TENANT_HOST: relay enabled at turn.<host>, media range leaves the relay its ports, no placeholder" {
+    render_livekit_template
+    run "$RENDER" --release "$RELEASE"
+    [ "$status" -eq 0 ]
+    local out="${RELEASE}/docker/livekit/livekit.yaml"
+    [ -s "$out" ]
+    grep -q '^  enabled: true$' "$out"
+    grep -q '^  domain: turn\.pilot\.example\.org$' "$out"
+    grep -q '^  tls_port: 5349$' "$out"
+    grep -q '^  external_tls: true$' "$out"
+    grep -q '^  port_range_end: 45050$' "$out"
+    grep -q '^  relay_range_start: 45051$' "$out"
+    grep -q '^  relay_range_end: 45100$' "$out"
+    ! grep -q '\${' "$out"
+}
+
+@test "the real LiveKit template without PILOT_TENANT_HOST: relay disabled, today's media range, no public name" {
+    render_livekit_template
+    sed -i '/^PILOT_TENANT_HOST=/d' "${GREMION_ROOT}/etc/env/state.env"
+    run "$RENDER" --release "$RELEASE"
+    [ "$status" -eq 0 ]
+    local out="${RELEASE}/docker/livekit/livekit.yaml"
+    [ -s "$out" ]
+    grep -q '^  enabled: false$' "$out"
+    grep -q '^  port_range_end: 45100$' "$out"
+    grep -q '^  domain: turn\.relay\.invalid$' "$out"
+    ! grep -q 'example\.org' "$out"
+    ! grep -q '\${' "$out"
+}
+
+@test "the real LiveKit template with an EMPTY PILOT_TENANT_HOST renders like an unset one" {
+    render_livekit_template
+    sed -i 's/^PILOT_TENANT_HOST=.*/PILOT_TENANT_HOST=/' "${GREMION_ROOT}/etc/env/state.env"
+    run "$RENDER" --release "$RELEASE"
+    [ "$status" -eq 0 ]
+    grep -q '^  enabled: false$' "${RELEASE}/docker/livekit/livekit.yaml"
+    grep -q '^  port_range_end: 45100$' "${RELEASE}/docker/livekit/livekit.yaml"
+}
+
+@test "a PILOT_TENANT_HOST that is not a lower-case host name is refused before anything is rendered" {
+    render_livekit_template
+    sed -i 's/^PILOT_TENANT_HOST=.*/PILOT_TENANT_HOST=Pilot.Example.org/' "${GREMION_ROOT}/etc/env/state.env"
+    run "$RENDER" --release "$RELEASE"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"PILOT_TENANT_HOST is not a lower-case host name"* ]]
+    [ ! -f "${RELEASE}/docker/livekit/livekit.yaml" ]
+}
+
 @test "no dollar-brace placeholder survives in a rendered file" {
     mkdir -p "${RELEASE}/docker/livekit"
     printf 'domain: %s\n' '${PLATFORM_DOMAIN}' > "${RELEASE}/docker/livekit/livekit.yaml.tmpl"
