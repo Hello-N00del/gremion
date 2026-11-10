@@ -87,7 +87,7 @@
     "area:docker/element-call@L0": {
       "title": "Element Call container build and settings",
       "what": "This folder holds a Dockerfile and the template of one settings file. The Dockerfile starts from the official Element Call image, pinned by digest, and adds no file. The settings are not in the image. The template names the Matrix home server and the address where a call gets its token. It also skips the lobby of a call.",
-      "why": "A rule of the release checks refuses an image of another owner in the compose file. A Dockerfile that starts from that image gives an image of the project. The settings name the platform and the pilot tenant, so they stay out of the image.",
+      "why": "A rule of the release checks refuses an image of another owner on the registry of GitHub in the compose file. A Dockerfile that starts from that image gives an image of the project. The settings name the platform and the pilot tenant, so they stay out of the image.",
       "leadsTo": "The host makes the settings file from the template. The compose file builds the service element-call from this folder and binds the settings file into the container. The browser loads the web app from this container."
     },
     "area:docker/fallback@L0": {
@@ -110,7 +110,7 @@
     },
     "area:docker/livekit@L0": {
       "title": "LiveKit settings",
-      "what": "This folder holds one settings file for the LiveKit server. LiveKit is the media server of the video calls. The file holds settings that are not secret. It sets the port for call setup, the range of ports for media and the fallback on TCP. It does not use TURN. A room opens for the first person and closes five minutes after the last person leaves.",
+      "what": "This folder holds one settings file for the LiveKit server. LiveKit is the media server of the video calls. The file holds settings that are not secret. It sets the port for call setup, the range of ports for media and the fallback on TCP. It does not use TURN. A room opens for the first person, and a room that nobody joins closes after five minutes.",
       "why": "A call with many people needs a server that forwards the video of each person to the others. The API key and the secret are not in the file. The compose file gives them to the server from the env file of the host.",
       "leadsTo": "The compose file binds this file into the livekit container as read only. Traefik sends the call setup path of the platform host to the port for setup. Element Call uses this server for the video of a call."
     },
@@ -309,7 +309,7 @@
     "area:dockerfile:test/isolation/tenant@L0": {
       "title": "Container build: test/isolation/tenant",
       "what": "A Dockerfile is a recipe that builds a container image. This Dockerfile builds the toolchain for the test that one customer cannot read the data of another customer. The image holds node, pnpm and git and holds no code of the repository. It has its own ignore file, so the build gets no file from this folder.",
-      "why": "A clean clone in a fixed toolchain gives the same result on every host. The image holds no repository code, so an untracked file, for example a secret, never gets into the run.",
+      "why": "A clean clone in a fixed toolchain gives the same result on every host. The container gets the release tree, but the program works on a clone of it. An untracked file, for example a secret, is not in a clone, so it never gets into the run.",
       "leadsTo": "The host program gremion-isolation starts a container from this image. The container clones the release tree and runs the isolation check there."
     },
     "area:db:gremion-ui/migrations-control@L1": {
@@ -915,7 +915,9 @@
     "OIDC": "A standard way to get access with an account that another system holds. Keycloak is such a system.",
     "TCP": "A way to send data on a network. It checks that all data arrives.",
     "UDP": "A fast way to send data on a network. It does not check that all data arrives.",
-    "TURN": "A relay that passes call data for a person behind a strict firewall."
+    "TURN": "A relay that passes call data for a person behind a strict firewall.",
+    "pnpm": "A tool that installs the packages of a node project.",
+    "gremion-isolation": "The program on the host that runs the test of customer isolation in a container."
   },
   "walkthroughs": [
     {

@@ -264,7 +264,7 @@
       "command": "pnpm run test",
       "timeoutMs": 600000,
       "requiresStack": false,
-      "testGlobs": ["apps/control-panel/src/**/*.test.ts"]
+      "testGlobs": ["apps/control-panel/src/**/*.test.ts", "apps/control-panel/codemap/**/*.test.mjs"]
     },
     {
       "id": "kernel-module-board-unit",

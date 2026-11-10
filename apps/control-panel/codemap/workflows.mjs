@@ -11,13 +11,17 @@
 //   line         the line of the job id (1 based)
 //   needs        `needs:` as a single value, an inline list or a block list
 //   dockerfiles  every `dockerfile:` value in the job, also in an inline matrix map such as `{ name: x, dockerfile: a/Dockerfile }`,
-//                and the literal path of `-f` or `--file` in a `docker build` or `docker buildx build` command
+//                and the literal path of `-f` or `--file` in a `docker build` or `docker buildx build` command of a `run:`,
+//                taken from the `working-directory` of its own step (as for scripts); a directory that only a run knows gives none
 //   scripts      repo scripts that `node`, `node --test`, `bash` or `sh` run (a test file is skipped)
 //   runs         the same scripts, each paired with the working directory of its own step: { script, dir }
 //                (dir is the `working-directory:` of the step, else the job default under `defaults:`, else '')
 //   filters      the package names of `pnpm --filter <name>`
 //   workingDirs  `working-directory:` values; `${{ matrix.<key> }}` stands for every literal value of `<key>` in the matrix of the job
+//                (the matrix of the strategy of the job: its own keys and the keys of its include: items, not `exclude:`, not a deeper key)
 // A value that holds an expression (`${{`) or a shell variable is never taken: the scanner cannot know its value.
+
+import { posix } from 'node:path'
 
 const MAX_LINE = 4000 // a longer line is cut before it is scanned, so no line can make the scan slow
 
@@ -70,35 +74,68 @@ function scriptsOfLine(line) {
 }
 
 // `docker build` and `docker buildx build`: a -f or --file path with no `$` is a Dockerfile of the job.
-const DOCKER_BUILD = /(?:^|[\s;&|(`'"])docker\s+(?:buildx\s+)?build(?=\s|$)/g
+// It is read only from the `run:` of a step, and only where a command can start: at the start of a line, or after
+// `;`, `&&`, `||`, `|`, `&`, `(`, a shell keyword, `sudo`, `time` or a variable assignment. A word that an `echo`
+// prints is not a command. The path is a path from the working directory of the step (see finish() in parseJobs).
 const FILE_PATH = /^[A-Za-z0-9_@.\/-]+$/
-/** Reads the -f / --file values of the words of one docker command into `out`. Returns false when a separator ends the command. */
-function dockerFilesOfTokens(tokens, out) {
-  for (let i = 0; i < tokens.length; i++) {
-    const raw = tokens[i]
-    if (SEPARATORS.has(raw) || raw.startsWith('#')) return false
+// A word is text with quoted parts; a separator is a word of its own, also when it is written next to a word.
+const WORD_OR_SEPARATOR = /(?:"[^"]*"|'[^']*'|[^\s;&|<>("'])+|&&|\|\||[;&|<>(]/g
+const IS_SEPARATOR = /^(?:&&|\|\||[;&|<>(])$/
+const COMMAND_PREFIX = /^(?:sudo|time|if|then|else|elif|do|while|until|!|exec|command|[A-Za-z_][A-Za-z0-9_]*=.*)$/
+const unquoteWord = (w) => w.replace(/["']/g, '')
+
+/** The -f / --file values of the words of one docker build command (the words after `build`). */
+function dockerFileValues(args, out) {
+  for (let i = 0; i < args.length; i++) {
+    const raw = args[i]
     let v
-    if (raw === '-f' || raw === '--file') v = tokens[++i]
-    else { const m = /^(?:-f|--file)=(.*)$/.exec(raw); if (m) v = m[1] }
+    if (raw === '-f' || raw === '--file') v = args[++i]
+    else {
+      const m = /^(?:--file=|-f=?)(.+)$/.exec(raw)
+      if (m) v = m[1]
+    }
     if (v === undefined) continue
-    const t = clean(unquote(v.replace(/[;)&|]+$/, '')))
-    if (t && t !== '-' && FILE_PATH.test(t) && !t.startsWith('/') && !t.startsWith('../')) out.push(t)
+    const t = clean(unquoteWord(v).replace(/\)+$/, ''))
+    if (t && t !== '-' && FILE_PATH.test(t) && !t.startsWith('/')) out.push(t)
   }
-  return true
 }
-/** The Dockerfiles that one line builds. `continued` says that the line goes on a command of the line before (a backslash). */
-function dockerfilesOfLine(line, continued) {
+/** The Dockerfiles that one command line builds (a line that is already joined: no `\` at its end). */
+function dockerfilesOfCommandLine(line) {
   const out = []
-  let open = false
-  if (continued) open = dockerFilesOfTokens(line.split(/\s+/).filter(Boolean), out)
-  DOCKER_BUILD.lastIndex = 0
-  let m
-  let last = -1
-  while ((m = DOCKER_BUILD.exec(line))) {
-    last = m.index + m[0].length
-    open = dockerFilesOfTokens(line.slice(last).split(/\s+/).filter(Boolean), out)
+  const words = line.match(WORD_OR_SEPARATOR) ?? []
+  const commands = [[]]
+  for (const w of words) {
+    if (IS_SEPARATOR.test(w)) commands.push([])
+    else commands[commands.length - 1].push(w)
   }
-  return { files: out, continues: open && /\\s*$/.test(line) }
+  for (const cmd of commands) {
+    let i = 0
+    while (i < cmd.length && COMMAND_PREFIX.test(cmd[i])) i++
+    if (cmd[i] !== 'docker') continue
+    i++
+    if (cmd[i] === 'buildx') i++
+    if (cmd[i] === 'build') dockerFileValues(cmd.slice(i + 1), out)
+  }
+  return out
+}
+/**
+ * The lines of a `run:` joined as the shell reads them: a line that ends in `\` goes on with the next line; for a
+ * folded value (`run: >`) every line goes on with the next one.
+ */
+function dockerfilesOfRun(run) {
+  const joined = []
+  let cur = null
+  for (const raw of run.lines) {
+    const l = raw.trim()
+    const goesOn = run.folded || l.endsWith('\\')
+    const piece = !run.folded && l.endsWith('\\') ? l.slice(0, -1) : l
+    cur = cur === null ? piece : `${cur} ${piece}`
+    if (!goesOn) { joined.push(cur); cur = null }
+  }
+  if (cur !== null) joined.push(cur)
+  const out = []
+  for (const line of joined) for (const f of dockerfilesOfCommandLine(line)) if (!out.includes(f)) out.push(f)
+  return out
 }
 
 // A matrix value is a plain word or path. `${{ matrix.key }}` in a working-directory stands for those values.
@@ -111,31 +148,154 @@ function dirOfValue(v) {
     const pre = v.slice(0, m.index), post = v.slice(m.index + m[0].length)
     if (!hasExpression(pre + post)) return { dir: '', tpl: { key: m[1], pre, post } }
   }
-  return { dir: hasExpression(v) ? '' : v }
+  return hasExpression(v) ? { dir: '', unknown: true } : { dir: v }
 }
-const KEY_VALUE = /(?:^|[\s,{[])([A-Za-z0-9_-]+):(?:\s+|$)("[^"]*"|'[^']*'|\[[^\]{}:]*\]|[^\s,}\]]+)?/g
-const addValue = (mx, key, raw) => {
-  const v = unquote(raw).trim()
-  if (!v) return
-  if (!mx.vals.has(key)) mx.vals.set(key, [])
-  mx.vals.get(key).push(v)
-}
-/** Takes the keys and values of one line of the matrix of a job. */
-function collectMatrixLine(mx, text, ind) {
-  const trimmed = text.trim()
-  if (mx.listKey !== null) {
-    const item = /^-\s+(.*)$/.exec(trimmed)
-    if (item && ind >= mx.listInd && !/:(?:\s|$)/.test(item[1])) { addValue(mx, mx.listKey, item[1]); return }
-    mx.listKey = null
+
+// ---- the matrix of a job: a small reader of the part of YAML that a matrix uses ----
+// A matrix holds block maps and block lists, flow lists `[a, b]` and flow maps `{ k: v }` (also over several lines),
+// and plain or quoted values. The reader never throws: text it does not know gives an empty value. It reads the
+// matrix into maps and lists, and only then looks for a key. A key counts when it is a key of the matrix itself, or a
+// key of an item of `include:`. A key in a deeper map, in another key, or in `exclude:` does not count.
+const MAX_DEPTH = 8
+const MAX_FLOW_LINES = 200
+const KEY_START = /^("[^"]*"|'[^']*'|[A-Za-z0-9_.@\/-]+)\s*:(?=\s|$)/
+const DASH_START = /^-(?:\s|$)/
+const FLOW_SCALAR = /^(?:"[^"]*"|'[^']*'|(?:\$\{\{[^}]*\}\}|[^,\]}\[{])*)/
+const isBare = (o) => o !== null && typeof o === 'object' && !Array.isArray(o)
+
+/** A value in flow style, read from the start of `s`: { node, rest }. */
+function readFlow(s, depth = 0) {
+  s = s.trimStart()
+  if (depth > MAX_DEPTH || !s) return { node: '', rest: '' }
+  if (s[0] === '[') {
+    const items = []
+    let rest = s.slice(1)
+    for (;;) {
+      rest = rest.trimStart()
+      if (!rest) break
+      if (rest[0] === ']') { rest = rest.slice(1); break }
+      if (rest[0] === ',') { rest = rest.slice(1); continue }
+      const r = readFlow(rest, depth + 1)
+      if (r.rest.length >= rest.length) { rest = rest.slice(1); continue } // no progress: drop one character
+      items.push(r.node)
+      rest = r.rest
+    }
+    return { node: items, rest }
   }
-  KEY_VALUE.lastIndex = 0
-  for (const m of text.matchAll(KEY_VALUE)) {
-    const key = m[1], val = m[2]
-    if (val === undefined) { if (m.index + m[0].length >= text.trimEnd().length) { mx.listKey = key; mx.listInd = ind } continue }
-    if (val.startsWith('[') && val.endsWith(']') && val.length > 1) for (const part of val.slice(1, -1).split(',')) addValue(mx, key, part)
-    else addValue(mx, key, val)
+  if (s[0] === '{') {
+    const map = Object.create(null)
+    let rest = s.slice(1)
+    for (;;) {
+      rest = rest.trimStart()
+      if (!rest) break
+      if (rest[0] === '}') { rest = rest.slice(1); break }
+      if (rest[0] === ',') { rest = rest.slice(1); continue }
+      const km = /^("[^"]*"|'[^']*'|[^\s,:{}[\]]+)\s*:(?:\s+|(?=[,}\]]|$))/.exec(rest)
+      if (!km) { rest = rest.slice(1); continue }
+      const r = readFlow(rest.slice(km[0].length), depth + 1)
+      map[unquote(km[1])] = r.node
+      rest = r.rest
+    }
+    return { node: map, rest }
   }
+  const m = FLOW_SCALAR.exec(s)
+  const len = m ? m[0].length : 0
+  return { node: unquote(s.slice(0, len)).trim(), rest: s.slice(len) }
 }
+const unbalanced = (s) => {
+  let depth = 0
+  for (const c of s.replace(/"[^"]*"|'[^']*'/g, '')) {
+    if (c === '[' || c === '{') depth++
+    else if (c === ']' || c === '}') depth--
+  }
+  return depth > 0
+}
+/** A value that starts on line `p` with `text`: a flow value goes on over the next lines until it is closed. Returns { node, next }. */
+function readValue(L, p, text) {
+  const t = text.trim()
+  if (t[0] !== '[' && t[0] !== '{') return { node: unquote(t).trim(), next: p + 1 }
+  let joined = t
+  let q = p + 1
+  while (unbalanced(joined) && q < L.length && q - p < MAX_FLOW_LINES) joined += ' ' + L[q++].text
+  return { node: readFlow(joined).node, next: q }
+}
+/** A block node that starts on line `p` (lines are { ind, text }). Returns { node, next }; next is always more than p. */
+function readBlock(L, p, depth = 0) {
+  if (depth > MAX_DEPTH || p >= L.length) return { node: '', next: Math.max(p + 1, L.length) }
+  const ind = L[p].ind
+  if (DASH_START.test(L[p].text)) {
+    const items = []
+    while (p < L.length && L[p].ind === ind && DASH_START.test(L[p].text)) {
+      const after = L[p].text.replace(/^-\s*/, '')
+      const off = L[p].text.length - after.length
+      if (!after) {
+        p++
+        if (p < L.length && L[p].ind > ind) { const r = readBlock(L, p, depth + 1); items.push(r.node); p = r.next } else items.push('')
+      } else if (KEY_START.test(after)) {
+        // a map that starts on the line of the dash: its other keys sit at the column of the first key
+        const sub = [{ ind: ind + off, text: after }]
+        let q = p + 1
+        while (q < L.length && L[q].ind > ind) sub.push(L[q++])
+        items.push(readBlock(sub, 0, depth + 1).node)
+        p = q
+      } else {
+        const r = readValue(L, p, after)
+        items.push(r.node)
+        p = r.next
+      }
+    }
+    return { node: items, next: p }
+  }
+  if (KEY_START.test(L[p].text)) {
+    const map = Object.create(null)
+    while (p < L.length && L[p].ind === ind) {
+      const m = KEY_START.exec(L[p].text)
+      if (!m) break
+      const key = unquote(m[1])
+      const value = L[p].text.slice(m[0].length)
+      if (!value.trim()) {
+        p++
+        // the value is a block that sits deeper, or a list at the indent of the key
+        if (p < L.length && (L[p].ind > ind || (L[p].ind === ind && DASH_START.test(L[p].text)))) { const r = readBlock(L, p, depth + 1); map[key] = r.node; p = r.next } else map[key] = ''
+      } else {
+        const r = readValue(L, p, value)
+        map[key] = r.node
+        p = r.next
+      }
+    }
+    return { node: map, next: Math.max(p, 1) }
+  }
+  const r = readValue(L, p, L[p].text)
+  return { node: r.node, next: r.next }
+}
+/** The matrix as a map of key to the literal values it has: { dir: ['a', 'b'] }. */
+function matrixValues(rest, lines) {
+  const vals = new Map()
+  let node
+  if (rest) node = readValue([{ ind: 0, text: rest }, ...lines], 0, rest).node
+  else {
+    node = ''
+    for (let p = 0; p < lines.length; ) { const r = readBlock(lines, p); if (isBare(r.node)) { node = r.node; break } p = Math.max(r.next, p + 1) }
+  }
+  const add = (key, v) => {
+    const list = Array.isArray(v) ? v : [v]
+    for (const x of list) {
+      if (typeof x !== 'string' || !x.trim()) continue
+      if (!vals.has(key)) vals.set(key, [])
+      vals.get(key).push(x.trim())
+    }
+  }
+  if (isBare(node)) {
+    for (const [key, v] of Object.entries(node)) {
+      if (key === 'exclude') continue
+      if (key === 'include') {
+        for (const item of Array.isArray(v) ? v : []) if (isBare(item)) for (const [k, iv] of Object.entries(item)) add(k, iv)
+      } else add(key, v)
+    }
+  }
+  return vals
+}
+
 /** Every directory a matrix expression stands for. A key that has no literal value gives none. */
 function expandDirs(mx, tpl) {
   const out = []
@@ -145,6 +305,7 @@ function expandDirs(mx, tpl) {
   }
   return out
 }
+
 
 const push = (arr, v) => { if (v && !arr.includes(v)) arr.push(v) }
 
@@ -167,15 +328,32 @@ export function parseJobs(text) {
   let cur = null
   // What is read of the steps of the current job. `dir` of a step is undefined until the step has a working-directory.
   let st = null
-  const fresh = () => ({ inSteps: false, stepInd: -1, step: null, jobDir: '', jobTpl: null, tpls: [], dockerCont: false, runs: [], mx: { ind: -1, excl: -1, listKey: null, listInd: 0, vals: new Map() } })
+  // `strat`: the job is inside its `strategy:` key; `stratChild` is the indent of the keys of the strategy. `run` is the
+  // `run:` value of the current step while its lines are read. `mx` is the matrix: its lines, until the matrix ends, then its values.
+  const fresh = () => ({ inSteps: false, stepInd: -1, step: null, jobDir: '', jobTpl: null, jobUnknown: false, tpls: [], runs: [], dockerRuns: [], run: null, strat: false, stratChild: -1, mx: { ind: -1, done: false, rest: '', lines: [], vals: new Map() } })
+  const flushRun = () => {
+    const run = st.run
+    st.run = null
+    if (run && st.step) for (const f of dockerfilesOfRun(run)) st.step.dockers.push(f)
+  }
   const closeStep = () => {
+    flushRun()
     if (!st.step) return
     for (const script of st.step.scripts) st.runs.push({ script, dir: st.step.dir, tpl: st.step.tpl })
+    for (const file of st.step.dockers) st.dockerRuns.push({ file, dir: st.step.dir, tpl: st.step.tpl, unknown: st.step.unknown })
     st.step = null
+  }
+  const closeMatrix = () => {
+    const mx = st.mx
+    if (mx.ind < 0) return
+    mx.vals = matrixValues(mx.rest, mx.lines)
+    mx.ind = -1
+    mx.lines = []
   }
   const finish = () => {
     if (!cur) return
     closeStep()
+    closeMatrix()
     for (const tpl of st.tpls) for (const d of expandDirs(st.mx, tpl)) push(cur.workingDirs, d)
     const seen = new Set()
     for (const r of st.runs) {
@@ -187,6 +365,18 @@ export function parseJobs(text) {
         if (seen.has(key)) continue
         seen.add(key)
         cur.runs.push({ script: r.script, dir })
+      }
+    }
+    // The -f path of docker build is read from the working directory of its step. A directory that only a run knows
+    // (an expression, a matrix key with no literal value) gives no Dockerfile: a path from an unknown place would be a wrong edge.
+    for (const r of st.dockerRuns) {
+      const own = r.dir !== undefined || r.tpl
+      const tpl = own ? r.tpl : st.jobTpl
+      if ((own ? r.unknown : st.jobUnknown) && !tpl) continue
+      const dirs = tpl ? expandDirs(st.mx, tpl) : [r.dir ?? st.jobDir]
+      for (const dir of dirs) {
+        const p = posix.normalize(dir ? `${dir}/${r.file}` : r.file)
+        if (p !== '.' && p !== '..' && !p.startsWith('../') && !p.startsWith('/')) push(cur.dockerfiles, p)
       }
     }
   }
@@ -206,17 +396,17 @@ export function parseJobs(text) {
     }
     if (!cur) continue
 
-    // The matrix of the job: its keys and values, read for `${{ matrix.<key> }}`. `exclude:` entries are not values that run.
+    // The matrix of the job is the `matrix:` key of its `strategy:`, and nothing else. Its lines are kept until it ends,
+    // and read then (matrixValues): its keys and values are used for `${{ matrix.<key> }}`.
+    if (ind === 4) {
+      if (/^ {4}strategy:/.test(line)) { st.strat = true; st.stratChild = -1 } else if (!line.trimStart().startsWith('-')) st.strat = false
+    } else if (st.strat && ind > 4 && st.stratChild < 0) st.stratChild = ind
     const mx = st.mx
-    if (mx.ind >= 0 && ind <= mx.ind) { mx.ind = -1; mx.excl = -1; mx.listKey = null }
-    if (mx.excl >= 0 && ind <= mx.excl) mx.excl = -1
-    if (mx.ind < 0 && ind > 4) {
+    if (mx.ind >= 0 && ind <= mx.ind) closeMatrix()
+    if (mx.ind >= 0) mx.lines.push({ ind, text: stripComment(line).trim() })
+    else if (st.strat && !mx.done && ind === st.stratChild) {
       const mm = /^\s*matrix:\s*(.*)$/.exec(stripComment(line))
-      if (mm) { mx.ind = ind; collectMatrixLine(mx, mm[1], ind + 2) }
-    } else if (mx.ind >= 0 && mx.excl < 0) {
-      const text = stripComment(line)
-      if (/^\s*exclude:/.test(text)) mx.excl = ind
-      else collectMatrixLine(mx, text, ind)
+      if (mm) { mx.ind = ind; mx.done = true; mx.rest = mm[1].trim() }
     }
 
     if (ind === 4) {
@@ -256,36 +446,44 @@ export function parseJobs(text) {
     }
 
     // A step starts at a `- ` at the indent of the first item of the list. A deeper `- ` is a list inside a step.
+    if (st.run && ind <= st.run.keyInd) flushRun()
     if (st.inSteps) {
       const sm = /^(\s*)-\s/.exec(line)
       if (sm && (st.stepInd < 0 || sm[1].length === st.stepInd)) {
         closeStep()
         st.stepInd = sm[1].length
-        st.step = { dir: undefined, scripts: [] }
+        // keyInd: the column of the keys of the step (the first key sits on the line of the dash)
+        st.step = { dir: undefined, scripts: [], dockers: [], unknown: false, keyInd: sm[1].length + 1 + indentOf(line.slice(sm[1].length + 1)) }
       }
     }
 
     const body = stripComment(line)
+    // The `run:` of a step: its lines are the only place where a docker build is read. A `run:` is a key of the step itself.
+    if (st.run) st.run.lines.push(body)
+    else if (st.inSteps && st.step) {
+      const rm = /^(\s*)(-\s+)?run:(?:\s+(.*))?$/.exec(body)
+      if (rm && rm[1].length + (rm[2] ? rm[2].length : 0) === st.step.keyInd) {
+        const v = (rm[3] ?? '').trim()
+        const block = /^[|>][+-]?\d*$/.exec(v)
+        const quoted = !block && /^"[^"]*"$|^'[^']*'$/.test(v)
+        st.run = { keyInd: st.step.keyInd, folded: block ? v[0] === '>' : false, lines: block || !v ? [] : [quoted ? v.slice(1, -1) : v] }
+      }
+    }
     // A step name or a description is prose: it may say "run node x.mjs" without running anything.
     if (/^\s*(?:-\s+)?(?:name|description):/.test(body)) continue
-    {
-      const d = dockerfilesOfLine(body, st.dockerCont)
-      st.dockerCont = d.continues
-      for (const f of d.files) push(cur.dockerfiles, f)
-    }
     for (const m of body.matchAll(/(?:^|[\s,{-])dockerfile:\s*("[^"]*"|'[^']*'|[^\s,}]+)/g)) {
       const v = clean(unquote(m[1]))
       if (v && !hasExpression(v)) push(cur.dockerfiles, v)
     }
     const wd = /^\s*(?:-\s+)?working-directory:\s*(.+)$/.exec(body)
     if (wd) {
-      const { dir, tpl } = dirOfValue(clean(unquote(wd[1])))
+      const { dir, tpl, unknown } = dirOfValue(clean(unquote(wd[1])))
       // A value that only an expression knows gives no directory, and it also hides the job default: the step names its own.
       // A matrix expression stands for the literal values of its key in the matrix of the job (they are known at the end of the job).
       if (dir) push(cur.workingDirs, dir)
       if (tpl) st.tpls.push(tpl)
-      if (st.inSteps && st.step) { st.step.dir = dir; st.step.tpl = tpl }
-      else { st.jobDir = dir; st.jobTpl = tpl ?? null }
+      if (st.inSteps && st.step) { st.step.dir = dir; st.step.tpl = tpl; st.step.unknown = !!unknown }
+      else { st.jobDir = dir; st.jobTpl = tpl ?? null; st.jobUnknown = !!unknown }
     }
     for (const m of body.matchAll(/--filter[=\s]\s*("[^"]*"|'[^']*'|\S+)/g)) {
       const v = unquote(m[1]).replace(/^\.{3}/, '').replace(/\.{3}$/, '').replace(/^[!^]+/, '')

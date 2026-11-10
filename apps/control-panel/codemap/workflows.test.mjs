@@ -486,3 +486,123 @@ describe('parseJobs: working-directory with a matrix expression', () => {
     }
   })
 })
+
+describe('parseJobs: the -f path of docker build is read from the directory of its own step', () => {
+  const wf = (...lines) => ['jobs:', '  a:', '    steps:', ...lines, ''].join('\n')
+  const filesOf = (t) => byId(parseJobs(t), 'a').dockerfiles
+
+  it('a step with working-directory: the path is below that directory, wherever the key is written in the step', () => {
+    expect(filesOf(wf('      - run: docker build -f Dockerfile -t x .', '        working-directory: gremion-public'))).toEqual(['gremion-public/Dockerfile'])
+    expect(filesOf(wf('      - working-directory: gremion-public', '        run: docker build -f docker/app.Dockerfile .'))).toEqual(['gremion-public/docker/app.Dockerfile'])
+    expect(filesOf(wf('      - run: docker build --file=./Dockerfile .', '        working-directory: ./apps/x/'))).toEqual(['apps/x/Dockerfile'])
+  })
+
+  it('the directory of one step is not given to the next step, and a job default applies to a step without its own', () => {
+    expect(filesOf(wf('      - run: docker build -f a/Dockerfile .', '        working-directory: sub', '      - run: docker build -f b/Dockerfile .'))).toEqual(['sub/a/Dockerfile', 'b/Dockerfile'])
+    const t = ['jobs:', '  a:', '    defaults:', '      run:', '        working-directory: dflt', '    steps:', '      - run: docker build -f Dockerfile .', ''].join('\n')
+    expect(filesOf(t)).toEqual(['dflt/Dockerfile'])
+  })
+
+  it('a path that goes up and stays in the repository is kept; one that leaves the repository is not', () => {
+    expect(filesOf(wf('      - run: docker build -f ../docker/Dockerfile .', '        working-directory: sub'))).toEqual(['docker/Dockerfile'])
+    expect(filesOf(wf('      - run: docker build -f ../../x/Dockerfile .', '        working-directory: sub'))).toEqual([])
+  })
+
+  it('a directory that only a run knows gives no path (a path from an unknown place would be a wrong edge)', () => {
+    expect(filesOf(wf('      - run: docker build -f Dockerfile .', '        working-directory: ${{ inputs.dir }}'))).toEqual([])
+    const noLiteral = ['jobs:', '  a:', '    strategy:', '      matrix:', '        other: [x]', '    steps:', '      - run: docker build -f Dockerfile .', '        working-directory: ${{ matrix.dir }}', ''].join('\n')
+    expect(filesOf(noLiteral)).toEqual([])
+  })
+
+  it('a matrix directory gives one path for each value', () => {
+    const t = ['jobs:', '  a:', '    strategy:', '      matrix:', '        dir: [p/one, p/two]', '    steps:', '      - run: docker build -f Dockerfile .', '        working-directory: ${{ matrix.dir }}', ''].join('\n')
+    expect(filesOf(t)).toEqual(['p/one/Dockerfile', 'p/two/Dockerfile'])
+  })
+})
+
+describe('parseJobs: a docker build is read from the run of a step only, and only as a command', () => {
+  const wf = (...lines) => ['jobs:', '  a:', ...lines, ''].join('\n')
+  const filesOf = (t) => byId(parseJobs(t), 'a').dockerfiles
+
+  it('text in env, with and similar keys is not a command', () => {
+    expect(filesOf(wf('    env:', '      HINT: docker build -f env/Dockerfile .', '    steps:', '      - uses: x/y@v1', '        with:', '          text: docker build -f with/Dockerfile .', '        env:', '          NOTE: docker build -f step-env/Dockerfile .'))).toEqual([])
+  })
+
+  it('a docker build that an echo prints is not a command', () => {
+    expect(filesOf(wf('    steps:', '      - run: echo "docker build -f a/Dockerfile ."', "      - run: echo 'docker build -f b/Dockerfile .'"))).toEqual([])
+  })
+
+  it('a command after ;, &&, || or a pipe is a command; a word with ; at its end ends the command', () => {
+    expect(filesOf(wf('    steps:', '      - run: docker build . -f a/Dockerfile; docker push x -f no/Dockerfile'))).toEqual(['a/Dockerfile'])
+    expect(filesOf(wf('    steps:', '      - run: cd x && docker build -f b/Dockerfile .'))).toEqual(['b/Dockerfile'])
+    expect(filesOf(wf('    steps:', '      - run: make || docker build -f c/Dockerfile .'))).toEqual(['c/Dockerfile'])
+    expect(filesOf(wf('    steps:', '      - run: FOO=1 sudo docker build -f d/Dockerfile .'))).toEqual(['d/Dockerfile'])
+  })
+
+  it('a key that only looks like run: inside another block is not a run', () => {
+    expect(filesOf(wf('    steps:', '      - uses: x/y@v1', '        with:', '          script: |', '            run: docker build -f no/Dockerfile .'))).toEqual([])
+  })
+})
+
+describe('parseJobs: more literal forms of docker build -f', () => {
+  const wf = (...lines) => ['jobs:', '  a:', '    steps:', ...lines, ''].join('\n')
+  const filesOf = (t) => byId(parseJobs(t), 'a').dockerfiles
+
+  it('-f at the end of a continued line, with the path on the next line', () => {
+    expect(filesOf(wf('      - run: |', '          docker build -f \\', '            a/Dockerfile .'))).toEqual(['a/Dockerfile'])
+  })
+
+  it('an attached -fpath', () => {
+    expect(filesOf(wf('      - run: docker build -fa/Dockerfile .'))).toEqual(['a/Dockerfile'])
+  })
+
+  it('a command folded with run: > (and its variants)', () => {
+    expect(filesOf(wf('      - run: >', '          docker build', '          -f a/Dockerfile', '          .'))).toEqual(['a/Dockerfile'])
+    expect(filesOf(wf('      - run: >-', '          docker buildx build', '          --file b/Dockerfile', '          .'))).toEqual(['b/Dockerfile'])
+  })
+
+  it('a command in a quoted run value', () => {
+    expect(filesOf(wf('      - run: "docker build -f q/Dockerfile ."'))).toEqual(['q/Dockerfile'])
+  })
+
+  it('the same with CRLF', () => {
+    const t = wf('      - run: |', '          docker build -f \\', '            a/Dockerfile .')
+    expect(parseJobs(t.replace(/\n/g, '\r\n'))).toEqual(parseJobs(t))
+  })
+})
+
+describe('parseJobs: the matrix is the matrix of the strategy of the job, and only its own values count', () => {
+  const dirsOf = (t) => byId(parseJobs(t), 'p').workingDirs
+  const step = ['      - run: node a.mjs', '        working-directory: ${{ matrix.dir }}']
+
+  it('a matrix: key in a with: block or in a run script is not a matrix', () => {
+    const withBlock = ['jobs:', '  p:', '    strategy:', '      matrix:', '        dir: [a]', '    steps:', '      - uses: x/y@v1', '        with:', '          matrix: |', '            dir: bogus', ...step, ''].join('\n')
+    expect(dirsOf(withBlock)).toEqual(['a'])
+    const heredoc = ['jobs:', '  p:', '    strategy:', '      matrix:', '        dir: [a]', '    steps:', '      - run: |', '          cat <<END', '          matrix:', '            dir: bogus2', '          END', '      - run: node a.mjs', '        working-directory: ${{ matrix.dir }}', ''].join('\n')
+    expect(dirsOf(heredoc)).toEqual(['a'])
+  })
+
+  it('a job without a strategy has no matrix, even when a with: block holds a matrix: key', () => {
+    const t = ['jobs:', '  p:', '    steps:', '      - uses: x/y@v1', '        with:', '          matrix: |', '            dir: bogus3', ...step, ''].join('\n')
+    expect(dirsOf(t)).toEqual([])
+  })
+
+  it('a key of the same name that sits deeper in an include item or in another key is not a value', () => {
+    const t = ['jobs:', '  p:', '    strategy:', '      matrix:', '        include:', '          - dir: a', '            env:', '              dir: wrongnested', '        other: { dir: wrongother }', '        more:', '          dir: wrongmore', '    steps:', ...step, ''].join('\n')
+    expect(dirsOf(t)).toEqual(['a'])
+  })
+
+  it('a flow list written over several lines', () => {
+    expect(dirsOf(['jobs:', '  p:', '    strategy:', '      matrix:', '        dir: [', '          a,', '          b', '        ]', '    steps:', ...step, ''].join('\n'))).toEqual(['a', 'b'])
+    expect(dirsOf(['jobs:', '  p:', '    strategy:', '      matrix:', '        dir: [a,', '          b]', '    steps:', ...step, ''].join('\n'))).toEqual(['a', 'b'])
+  })
+
+  it('an inline include with no space after the brace', () => {
+    expect(dirsOf(['jobs:', '  p:', '    strategy:', '      matrix:', '        include: [{dir: a}, {dir: b}]', '    steps:', ...step, ''].join('\n'))).toEqual(['a', 'b'])
+    expect(dirsOf(['jobs:', '  p:', '    strategy:', '      matrix: {dir: [a, b]}', '    steps:', ...step, ''].join('\n'))).toEqual(['a', 'b'])
+  })
+
+  it('fail-fast and other keys of the strategy before the matrix do not hide it', () => {
+    expect(dirsOf(['jobs:', '  p:', '    strategy:', '      fail-fast: false', '      max-parallel: 2', '      matrix:', '        dir: [a]', '    steps:', ...step, ''].join('\n'))).toEqual(['a'])
+  })
+})

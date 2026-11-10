@@ -37,3 +37,36 @@ describe('claims about the workflows that must stay true', () => {
     expect(t).toMatch(/also runs when the job changes fails/)
   })
 })
+
+describe('claims about the docker folders that must stay true', () => {
+  const area = (id) => text.areas[id]
+
+  it('element-call: the lint refuses an image of another owner on the GitHub registry, not every image of another owner', () => {
+    // scripts/release/check-image-digests.mjs refuses a ghcr.io reference that is not exactly ours (isFirstPartyLookalike).
+    // docker-compose.yml also names livekit/livekit-server by digest: another owner on another registry is accepted.
+    const why = area('area:docker/element-call@L0').why
+    expect(why).not.toMatch(/refuses an image of another owner in the compose file/)
+    expect(why).toMatch(/on the registry of GitHub/)
+    // the page scan refuses a host name, so the text cannot name the registry host
+    expect(why).not.toMatch(/ghcr[.]io/)
+  })
+
+  it('livekit: empty_timeout covers a room that nobody joined; after a person left, departure_timeout (20 s by default) applies', () => {
+    // livekit v1.7.2 pkg/rtc/room.go: FirstJoinedAt > 0 && LastLeftAt > 0 uses DepartureTimeout, else EmptyTimeout.
+    const what = area('area:docker/livekit@L0').what
+    expect(what).not.toMatch(/after the last person leaves/)
+    expect(what).toMatch(/room that nobody joins closes after five minutes/)
+  })
+
+  it('test/isolation/tenant: the tree is mounted; the clone is what keeps an untracked file out', () => {
+    // infra/host/bin/gremion-isolation mounts the release tree at /src and runs git clone --no-hardlinks /src /work/tree.
+    const why = area('area:dockerfile:test/isolation/tenant@L0').why
+    expect(why).not.toMatch(/image holds no repository code, so/)
+    expect(why).toMatch(/gets the release tree/)
+    expect(why).toMatch(/clone/)
+  })
+
+  it('the glossary names the tools that the tenant text uses', () => {
+    for (const term of ['gremion-isolation', 'pnpm']) expect(Object.keys(text.glossary)).toContain(term)
+  })
+})

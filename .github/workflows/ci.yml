@@ -656,8 +656,8 @@ jobs:
   # When a refactor renames a function the text names, this job LISTS the stale step (job summary and a
   # warning per item). It never blocks: it is not a verify leg, writes no record, is not in verify-gate's
   # needs and has no fail-fast job; stale text exits 0, only a leak hit or a crash of the check reads red.
-  # codemap:check itself exits 1 only for a leak (a host name, address or credential in the generated page,
-  # the text or the template) or a crash, and that shows here as a failed step.
+  # codemap:check exits 0 when it ran, 1 for a leak (a host name, address or credential in the generated page,
+  # the text or the template) and 3 when the check itself failed; 1 and 3 show here as a failed step.
   codemap-stale:
     name: "Code map: stale text"
     runs-on: ubuntu-latest

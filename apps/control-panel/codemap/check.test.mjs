@@ -1,4 +1,4 @@
-// check.mjs: the CI check LISTS what does not match and never blocks on it. Its exit codes are distinct: 0 it ran
+// check.mjs (the entry) and check-core.mjs (the work): the CI check LISTS what does not match and never blocks on it. Its exit codes are distinct: 0 it ran
 // (stale items allowed), 1 a leak was found, 3 the tool itself failed (the extractor, a file it cannot read, a crash).
 import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
@@ -6,7 +6,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
-import { analyse, escapeCommand, EXIT_LEAK, EXIT_RAN, EXIT_TOOL_FAILED, markdownSummary } from './check.mjs'
+import { analyse, escapeCommand, EXIT_LEAK, EXIT_RAN, EXIT_TOOL_FAILED, markdownSummary } from './check-core.mjs'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 const template = fs.readFileSync(path.join(HERE, 'template.html'), 'utf8')
@@ -97,7 +97,7 @@ describe('the exit codes: 0 it ran, 1 a leak, 3 the tool itself failed', () => {
 })
 
 // A copy of this folder in a temp folder, with an extractor of the test's own, and a temp folder of its own to look into.
-function runCopy(extractSource, mutate = () => {}) {
+function runCopy(extractSource, mutate = () => {}, extraEnv = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codemap-check-test-'))
   try {
     const tool = path.join(root, 'codemap')
@@ -109,7 +109,7 @@ function runCopy(extractSource, mutate = () => {}) {
     mutate(tool)
     const res = spawnSync(process.execPath, [path.join(tool, 'check.mjs')], {
       encoding: 'utf8',
-      env: { ...process.env, TMPDIR: scratch, TMP: scratch, TEMP: scratch, GITHUB_STEP_SUMMARY: '' },
+      env: { ...process.env, TMPDIR: scratch, TMP: scratch, TEMP: scratch, GITHUB_STEP_SUMMARY: '', ...extraEnv },
     })
     return { res, leftInTemp: fs.readdirSync(scratch) }
   } finally {
@@ -175,5 +175,44 @@ describe('the run, when the check ran and found only stale text', () => {
     expect(res.stdout).toMatch(/^stale areas: \d+/m)
     expect(res.stdout).toMatch(/^undescribed areas: \d+/m)
     expect(res.stdout).toMatch(/^ambiguous steps: \d+/m)
+  })
+})
+
+const NO_SUCH_FOLDER = () => path.join(os.tmpdir(), `codemap-check-no-such-folder-${process.pid}`)
+const plantLeak = (tool) => {
+  const t = JSON.parse(fs.readFileSync(path.join(tool, 'ste-text.json'), 'utf8'))
+  t.intro = [`Go to ${['203', '0', '113', '9'].join('.')}`]
+  fs.writeFileSync(path.join(tool, 'ste-text.json'), JSON.stringify(t))
+}
+
+describe('the run, when the tool fails outside the work of the check', () => {
+  it('exits 3, not the leak code 1, when the temp folder cannot be made (the temp folder of the system does not exist)', () => {
+    const missing = NO_SUCH_FOLDER()
+    const { res } = runCopy(GRAPH_WRITER, () => {}, { TMPDIR: missing, TMP: missing, TEMP: missing })
+    expect(res.status, res.stderr).toBe(3)
+    expect(res.stderr).toMatch(/the check crashed/)
+  })
+
+  it('exits 3, not the leak code 1, when a module of the tool cannot be loaded (node itself would exit 1)', () => {
+    const { res } = runCopy(GRAPH_WRITER, (tool) => fs.rmSync(path.join(tool, 'leak-scan.mjs')))
+    expect(res.status, res.stderr).toBe(3)
+    expect(res.stderr).toMatch(/the check could not start/)
+  })
+})
+
+describe('the run, when the step summary cannot be written', () => {
+  it('a leak still exits 1 (a failed summary does not hide it), the failure is said, and the temp folder is removed', () => {
+    const { res, leftInTemp } = runCopy(GRAPH_WRITER, plantLeak, { GITHUB_STEP_SUMMARY: path.join(NO_SUCH_FOLDER(), 'summary.md') })
+    expect(res.status, res.stderr).toBe(1)
+    expect(res.stdout).toMatch(/^leaks: [1-9]/m)
+    expect(res.stderr).toMatch(/the summary could not be written/)
+    expect(res.stdout + res.stderr).not.toContain(['203', '0', '113', '9'].join('.'))
+    expect(leftInTemp).toEqual([])
+  })
+
+  it('with nothing wrong it exits 0 (a lost summary is a warning only)', () => {
+    const { res } = runCopy(GRAPH_WRITER, () => {}, { GITHUB_STEP_SUMMARY: path.join(NO_SUCH_FOLDER(), 'summary.md') })
+    expect(res.status, res.stderr).toBe(0)
+    expect(res.stderr).toMatch(/the summary could not be written/)
   })
 })
