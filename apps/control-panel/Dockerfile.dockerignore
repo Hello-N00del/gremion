@@ -1,0 +1,55 @@
+# apps/control-panel/Dockerfile.dockerignore -- the build context of the control panel image, and ONLY of it.
+#
+# BuildKit reads `<Dockerfile name>.dockerignore` next to the Dockerfile in place of the root .dockerignore, for
+# that one Dockerfile. This image copies the whole repository into its builder stage (`COPY . /codemap-src`) so
+# that the code map can be made from the code, and a copy of everything must not carry a secret. So this file is
+# an ALLOW-LIST: the first line excludes everything, the next lines let the source folders back in, and the
+# last lines exclude again what must never be in a build context. Secrets never enter this context: the last lines
+# drop a `secrets` folder at any depth (the operator's, and k8s/overlays/production/secrets), every `.env*` and
+# `*.env` file, key and certificate files, and the generated livekit.prod.yaml. They mirror what .gitignore marks
+# as secret; when .gitignore gains a new secret path, add it here too (dockerignore.test.mjs checks the list).
+# A new top-level folder stays out until it is added here.
+#
+# The legacy builder (DOCKER_BUILDKIT=0) ignores this file and applies the root .dockerignore: the code map then
+# reads its commit as "unknown" and has fewer L0 files, and nothing fails (apps/control-panel/codemap/README.md).
+*
+
+!apps
+!compose
+!docker
+!docker-compose*.yml
+!gremion-public
+!gremion-ui
+!infra
+!k8s
+!modules
+!ops
+!packages
+!services
+!scripts
+!test
+!LICENSE
+!NOTICE
+!package.json
+!pnpm-lock.yaml
+!pnpm-workspace.yaml
+
+# the commit, without a git program: HEAD, and the refs that HEAD can point at
+!.git/HEAD
+!.git/packed-refs
+!.git/refs
+
+**/node_modules
+**/.svelte-kit
+**/build
+**/coverage
+gremion-ui/_module-lane
+**/.env*
+**/*.env
+**/*.env.local
+**/*.key
+**/*.pem
+**/*.p12
+**/*.pfx
+**/secrets
+docker/livekit/livekit.prod.yaml

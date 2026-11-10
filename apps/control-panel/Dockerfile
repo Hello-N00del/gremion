@@ -29,6 +29,17 @@ RUN pnpm build
 WORKDIR /repo
 RUN pnpm --filter control-panel deploy --prod --legacy /deploy
 
+# The code map (apps/control-panel/codemap): a page of the Gremion code that the panel shows to the operator
+# (/codemap). It is made HERE, once per image, from the repository as copied below, so it always matches the
+# code in this image. It must never be able to fail this build: image-step.sh never exits non-zero, it times
+# out its own extractor (300 s, 3 GiB), and on ANY failure it writes a status file that says why and removes
+# the half-made files, so the panel shows a notice instead of a map. The "|| true" is a second lock on the same
+# door. Nothing here reaches the network, and the copy is filtered so that secret-class files (env files, keys,
+# `secrets` folders) do not enter this builder layer: Dockerfile.dockerignore is an allow-list for this image. Only the
+# status file and the page reach the runner stage, a read-only folder.
+COPY . /codemap-src
+RUN mkdir -p /codemap-out && { sh /repo/apps/control-panel/codemap/image-step.sh /codemap-src /codemap-out /repo/apps/control-panel || true; }
+
 # ---- runtime ----
 FROM node:26.13.0-alpine@sha256:c6ad9e9c1d80f6eb607c26b4b0a132ff7a2344fad1c78ea3baa2a7d4c8de6d94 AS runner
 WORKDIR /app
@@ -40,6 +51,8 @@ ENV NODE_ENV=production \
 COPY --from=builder /deploy/node_modules ./node_modules
 COPY --from=builder /deploy/package.json ./
 COPY --from=builder /repo/apps/control-panel/build ./build
+# status.json always, code-map.html when the map was made; read-only at runtime (CODEMAP_DIR defaults to /app/codemap)
+COPY --from=builder /codemap-out ./codemap
 
 # AGPL §4/§5: a conveyed copy carries its licence.
 COPY LICENSE NOTICE /usr/share/doc/gremion/
