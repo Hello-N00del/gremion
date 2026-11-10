@@ -23,6 +23,7 @@ import { evictServiceMatrixTokenCache } from './backend/service-client'
 import { createMatrixSubsystem } from './provisioning/matrix-subsystem'
 import { messagingErasureHook } from './erasure'
 import { messagingKarenz } from './karenz'
+import { getCachedUnread, setCachedUnread } from './unread-cache'
 
 // Per-tenant runtime handles the messages module caches. The tenant registry's
 // evictTenantRuntime runs these on the suspend/delete lifecycle seam.
@@ -51,6 +52,10 @@ registerProvisioningSubsystem('matrix', (kc) =>
 // 0 on any Matrix/auth error so a homeserver hiccup never blocks the shell.
 registerDataProvider('messages:unread-count', async (accessToken) => {
   if (!accessToken) return 0
+  // Short per-user cache (unread-cache.ts): a click right after a render does not wait for
+  // another /sync. A failure below is returned as 0 and never stored.
+  const cached = getCachedUnread(accessToken)
+  if (cached !== null) return cached
   try {
     const mc = getMatrixClient()
     const matrixToken = await mc.getMatrixToken(accessToken)
@@ -63,7 +68,9 @@ registerDataProvider('messages:unread-count', async (accessToken) => {
         setTimeout(() => reject(new Error('matrix sync timeout')), 4000),
       ),
     ])
-    return sync.rooms.reduce((sum, r) => sum + (r.unreadCount ?? 0), 0)
+    const total = sync.rooms.reduce((sum, r) => sum + (r.unreadCount ?? 0), 0)
+    setCachedUnread(accessToken, total)
+    return total
   } catch {
     return 0
   }
