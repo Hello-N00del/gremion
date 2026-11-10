@@ -95,6 +95,9 @@ services:
     environment:
       # TASK-023's hand-off: /healthz reports {"colour":"<COLOUR>"}.
       COLOUR: ${COLOUR:?COLOUR required}
+      # adapter-node refuses any request body above 512K by default, which cuts every file and
+      # image upload; the Files client refuses files above the same 100 MiB.
+      BODY_SIZE_LIMIT:          100M
       AUTH_SECRET:              ${AUTH_SECRET}
       AUTH_KEYCLOAK_ID:         ${AUTH_KEYCLOAK_ID:-gremion-ui}
       AUTH_KEYCLOAK_SECRET:     ${AUTH_KEYCLOAK_SECRET}
