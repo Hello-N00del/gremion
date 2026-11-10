@@ -24,6 +24,12 @@
     <span class="muted">Das Panel selbst ist davon nicht betroffen.</span>
   </p>
 {:else}
+  {#if !data.map.readable}
+    <p class="notice bad" role="status">
+      Die Code-Karte ist in diesem Image nicht verfügbar. Grund: {data.map.reason}
+      <span class="muted">Das Panel selbst ist davon nicht betroffen.</span>
+    </p>
+  {/if}
   {#if staleTotal > 0}
     <p class="notice warn" role="status">
       Der Text der Karte passt an {staleTotal} {staleTotal === 1 ? 'Stelle' : 'Stellen'} nicht mehr zum Code: {s.staleSteps.length}
@@ -59,7 +65,9 @@
     </details>
   {/if}
   <p class="muted counts">{s.counts.functions} Funktionen, {s.counts.connections} Verbindungen.</p>
-  <iframe class="map" src="/codemap/map" sandbox="allow-scripts" title="Code-Karte von Gremion"></iframe>
+  {#if data.map.readable}
+    <iframe class="map" src="/codemap/map" sandbox="allow-scripts" title="Code-Karte von Gremion"></iframe>
+  {/if}
 {/if}
 
 <style>

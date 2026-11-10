@@ -42,5 +42,10 @@ CI runs the same check in the job `codemap-stale`. The job never blocks a merge.
 `status.json` with `"ok": false` and a fixed reason, and removes a partial page. The panel reads `status.json` and
 `code-map.html` from `CODEMAP_DIR` (default `/app/codemap`), shows the reason when there is no map, and serves
 the page in a sandboxed iframe. `apps/control-panel/Dockerfile.dockerignore` is the allow-list of the build context
-for this image. The legacy builder ignores it and applies the root `.dockerignore`: the commit then reads `unknown`
-and the map has fewer L0 files. Both filters drop the secret classes (env files, key files, `secrets` folders); `codemap/dockerignore.test.mjs` checks the allow-list.
+for this image, and `codemap/dockerignore.test.mjs` checks it against `.gitignore` and against the areas of the map.
+
+BuildKit is the supported builder for this image. Under `DOCKER_BUILDKIT=0` (the legacy builder) the allow-list is
+ignored and the root `.dockerignore` applies. That file filters far fewer secret classes (no key, certificate,
+keystore, ssh key, kubeconfig or backups rules, for example), so such a file can land in a discarded builder layer
+(the `COPY . /codemap-src` layer of the builder stage). It never reaches the runner stage, which copies only
+`code-map.html` and `status.json`. The commit then reads `unknown` and the map has fewer L0 files, and nothing fails.

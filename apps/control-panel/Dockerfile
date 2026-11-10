@@ -35,7 +35,7 @@ RUN pnpm --filter control-panel deploy --prod --legacy /deploy
 # out its own extractor (300 s, 3 GiB), and on ANY failure it writes a status file that says why and removes
 # the half-made files, so the panel shows a notice instead of a map. The "|| true" is a second lock on the same
 # door. Nothing here reaches the network, and the copy is filtered so that secret-class files (env files, keys,
-# `secrets` folders) do not enter this builder layer: Dockerfile.dockerignore is an allow-list for this image. Only the
+# `secrets` folders) do not enter this builder layer under BuildKit, the supported builder: Dockerfile.dockerignore is an allow-list for this image. Only the
 # status file and the page reach the runner stage, a read-only folder.
 COPY . /codemap-src
 RUN mkdir -p /codemap-out && { sh /repo/apps/control-panel/codemap/image-step.sh /codemap-src /codemap-out /repo/apps/control-panel || true; }

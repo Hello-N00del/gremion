@@ -5,7 +5,7 @@
 //
 // Both file names are FIXED here: nothing from a request reaches a path. A missing, unreadable or malformed
 // file never throws and never stops the panel: the page shows a notice and the log holds one line.
-import { readFileSync, statSync } from 'node:fs'
+import { closeSync, fstatSync, openSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { env } from '$env/dynamic/private'
 
@@ -91,12 +91,16 @@ export function readStatus(): CodemapStatus {
   const path = join(dir(), STATUS_FILE)
   let raw: string
   try {
-    if (statSync(path).size > MAX_STATUS_BYTES) throw new Error('too large')
+    if (statSync(path).size > MAX_STATUS_BYTES) {
+      console.error(`[control-panel] codemap: cannot read ${STATUS_FILE} (too large)`)
+      return unavailable('Die Statusdatei der Code-Karte ist zu groß.')
+    }
     raw = readFileSync(path, 'utf8')
   } catch (err) {
     const code = (err as NodeJS.ErrnoException)?.code ?? 'error'
     console.error(`[control-panel] codemap: cannot read ${STATUS_FILE} (${code})`)
-    return unavailable('Die Code-Karte ist in diesem Image nicht vorhanden (status.json fehlt).')
+    // only ENOENT says the file is absent; any other cause is reported as what it is
+    return unavailable(code === 'ENOENT' ? 'Die Code-Karte ist in diesem Image nicht vorhanden (status.json fehlt).' : 'Die Statusdatei der Code-Karte konnte nicht gelesen werden.')
   }
   let parsed: unknown
   try {
@@ -111,6 +115,49 @@ export function readStatus(): CodemapStatus {
     return unavailable('Die Statusdatei der Code-Karte hat ein unerwartetes Format.')
   }
   return s
+}
+
+export interface MapCheck {
+  readable: boolean
+  /** Why the page cannot be served (German, for the notice), or null when it can. */
+  reason: string | null
+}
+
+/**
+ * Whether the generated page can be served, for a status that says ok. It looks at the file (open, fstat, close)
+ * and never reads its content. Logs one line when the page cannot be served: the fixed file name and an error
+ * code or "too large", nothing else.
+ */
+export function checkMap(): MapCheck {
+  const path = join(dir(), MAP_FILE)
+  let fd: number | undefined
+  let why: string | null = null
+  let reason = ''
+  try {
+    fd = openSync(path, 'r')
+    const st = fstatSync(fd)
+    if (!st.isFile()) {
+      why = 'not a file'
+      reason = 'Die Seite der Code-Karte (code-map.html) konnte nicht gelesen werden.'
+    } else if (st.size > MAX_MAP_BYTES) {
+      why = 'too large'
+      reason = 'Die Seite der Code-Karte (code-map.html) ist zu groß.'
+    }
+  } catch (err) {
+    why = (err as NodeJS.ErrnoException)?.code ?? 'error'
+    reason = why === 'ENOENT' ? 'Die Seite der Code-Karte (code-map.html) fehlt in diesem Image.' : 'Die Seite der Code-Karte (code-map.html) konnte nicht gelesen werden.'
+  } finally {
+    if (fd !== undefined) {
+      try {
+        closeSync(fd)
+      } catch {
+        /* nothing to do: the check has its answer */
+      }
+    }
+  }
+  if (why === null) return { readable: true, reason: null }
+  console.error(`[control-panel] codemap: cannot use ${MAP_FILE} (${why})`)
+  return { readable: false, reason }
 }
 
 /** The generated page, or null when it is not there or cannot be read. */

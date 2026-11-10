@@ -1,18 +1,39 @@
 // The Code-Karte page: the load hands the status over, the template says what the operator needs to read.
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const status = { ok: true, commit: '0123456789abcdef0123456789abcdef01234567', generatedFor: 'x', counts: { functions: 1, connections: 1 }, staleSteps: [], staleAreas: [], undescribedAreas: [], reason: null }
-vi.mock('$lib/server/codemap', () => ({ readStatus: () => status }))
+let current = status as typeof status | { ok: false; reason: string }
+let mapCheck = { readable: true, reason: null as string | null }
+const checkMap = vi.fn(() => mapCheck)
+vi.mock('$lib/server/codemap', () => ({ readStatus: () => current, checkMap: () => checkMap() }))
 
 const { load } = await import('./+page.server')
 const svelte = readFileSync(join(__dirname, '+page.svelte'), 'utf-8')
 const layout = readFileSync(join(__dirname, '..', '+layout.svelte'), 'utf-8')
 
 describe('the Code-Karte load', () => {
-  it('hands the status to the page', async () => {
-    expect(await load({} as never)).toEqual({ status })
+  beforeEach(() => {
+    current = status
+    mapCheck = { readable: true, reason: null }
+    checkMap.mockClear()
+  })
+
+  it('hands the status and the readability of the map page to the page', async () => {
+    expect(await load({} as never)).toEqual({ status, map: { readable: true, reason: null } })
+  })
+
+  it('reports a map page that cannot be served, with its reason', async () => {
+    mapCheck = { readable: false, reason: 'Die Seite der Code-Karte (code-map.html) fehlt in diesem Image.' }
+    expect(await load({} as never)).toEqual({ status, map: mapCheck })
+  })
+
+  it('does not look at the map page when the status is not ok (the status already says why)', async () => {
+    current = { ok: false, reason: 'extract failed' }
+    const data = (await load({} as never)) as { map: { readable: boolean } }
+    expect(checkMap).not.toHaveBeenCalled()
+    expect(data.map.readable).toBe(false)
   })
 })
 
@@ -39,8 +60,13 @@ describe('the Code-Karte template', () => {
     expect(svelte).toMatch(/min-height/)
   })
 
-  it('shows the iframe only when the status is ok', () => {
-    expect(svelte).toMatch(/\{#if !s\.ok\}[\s\S]*\{:else\}[\s\S]*<iframe/)
+  it('shows the iframe only when the status is ok and the map page is readable', () => {
+    expect(svelte).toMatch(/\{#if !s\.ok\}[\s\S]*\{:else\}[\s\S]*\{#if data\.map\.readable\}\s*<iframe/)
+    expect(svelte.match(/<iframe/g)).toHaveLength(1)
+  })
+
+  it('shows a notice with the reason, and no iframe, when the status is ok but the map page is not readable', () => {
+    expect(svelte).toMatch(/\{#if !data\.map\.readable\}[\s\S]*role="status"[\s\S]*data\.map\.reason/)
   })
 })
 

@@ -315,7 +315,7 @@ function resolveWorkspace(spec) {
   for (const c of cands) { const abs = path.posix.join(ws.dir, c); if (fexists(abs)) return abs }
   return null
 }
-const modulesWithApp = () => fs.readdirSync(`${KERNEL}/modules`).filter((m) => fs.existsSync(`${KERNEL}/modules/${m}/app/lib`))
+const modulesWithApp = () => (fs.existsSync(`${KERNEL}/modules`) ? fs.readdirSync(`${KERNEL}/modules`) : []).filter((m) => fs.existsSync(`${KERNEL}/modules/${m}/app/lib`))
 const MOD_APP_LIBS = modulesWithApp().map((m) => `${KERNEL}/modules/${m}/app/lib`)
 function libRootsFor(cf) {
   const rel = cf.slice(KERNEL.length + 1)

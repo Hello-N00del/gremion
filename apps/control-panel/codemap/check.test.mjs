@@ -1,6 +1,8 @@
 // check.mjs: the CI check LISTS what does not match and never blocks on it. It fails (exit 1) only for a leak
 // or a crash of the tool itself.
+import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
@@ -85,5 +87,29 @@ describe('the CI helpers', () => {
     expect(md).toContain('| ')
     expect(md).toContain('moved')
     expect(md).toContain('area:gone@L3')
+  })
+})
+
+describe('the run, when the extractor fails', () => {
+  it('exits 1 and still removes its temp folder (a process.exit inside the try would skip the finally)', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codemap-check-test-'))
+    try {
+      // a copy of this folder with an extractor that always fails, and a temp folder of its own to look into
+      const tool = path.join(root, 'codemap')
+      const scratch = path.join(root, 'tmp')
+      fs.mkdirSync(tool)
+      fs.mkdirSync(scratch)
+      for (const f of fs.readdirSync(HERE)) if (!f.endsWith('.test.mjs') && fs.statSync(path.join(HERE, f)).isFile()) fs.copyFileSync(path.join(HERE, f), path.join(tool, f))
+      fs.writeFileSync(path.join(tool, 'extract.mjs'), 'console.error("boom"); process.exit(3)\n')
+      const res = spawnSync(process.execPath, [path.join(tool, 'check.mjs')], {
+        encoding: 'utf8',
+        env: { ...process.env, TMPDIR: scratch, TMP: scratch, TEMP: scratch, GITHUB_STEP_SUMMARY: '' },
+      })
+      expect(res.status).toBe(1)
+      expect(res.stderr).toMatch(/the extractor failed \(exit 3\)/)
+      expect(fs.readdirSync(scratch)).toEqual([])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
   })
 })

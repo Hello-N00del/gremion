@@ -104,7 +104,9 @@ function main() {
       console.error(`::error title=Code map::the extractor failed (exit ${ex.status ?? ex.signal})`)
       console.error(String(ex.stdout ?? '').split('\n').slice(-15).join('\n'))
       console.error(String(ex.stderr ?? '').split('\n').slice(-15).join('\n'))
-      process.exit(1)
+      // not process.exit: it would skip the finally below and leave the temp folder behind
+      process.exitCode = 1
+      return
     }
     const read = (f) => fs.readFileSync(path.join(HERE, f), 'utf8')
     const graph = JSON.parse(fs.readFileSync(graphPath, 'utf8'))
