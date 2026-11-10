@@ -792,6 +792,11 @@ services:
       SYNAPSE_ADMIN_BOT_USER_ID:    ${SYNAPSE_ADMIN_BOT_USER_ID:-@gremion-admin-bot:${PLATFORM_DOMAIN:?PLATFORM_DOMAIN required}}
       BOOTSTRAP_MODE:               ${SYNAPSE_BOOTSTRAP_MODE:-0}
       SYNAPSE_KC_MAX:               ${SYNAPSE_KC_MAX:-30}
+      # Every login reaches Synapse from the one app container address, so the render default
+      # (burst 5, then one per ~5 min) locks the 6th user out of chat and video. The per-account
+      # limit stays at the render default.
+      SYNAPSE_RC_LOGIN_ADDRESS_PER_SECOND: ${SYNAPSE_RC_LOGIN_ADDRESS_PER_SECOND:-1}
+      SYNAPSE_RC_LOGIN_ADDRESS_BURST: ${SYNAPSE_RC_LOGIN_ADDRESS_BURST:-100}
     volumes:
       # Media and the signing key (the homeserver's identity) live only here:
       # no S3 offload (TASK-198 Q5). Backed up by project label (TASK-089).
@@ -974,8 +979,10 @@ services:
   # Video: LiveKit and Element Call (profile video)
   # ============================================================
   # The kernel homeserver has no MatrixRTC focus (TASK-101); Element Call finds
-  # the SFU through livekit_service_url in its own config. TURN is off: media
-  # reaches the SFU on UDP 45000-45100 or, from a restricted network, on TCP 7881.
+  # the SFU through livekit_service_url in its own config. Media reaches the SFU
+  # on UDP 45000-45100 or, from a restricted network, on TCP 7881; with a customer
+  # host (PILOT_TENANT_HOST) it also has a TURN relay over TLS on 443, routed by
+  # the label of docker-compose.prod.yml, its ports the top of the same UDP block.
   livekit:
     profiles: [video]
     # Externally pulled: tag and digest, the digest is what runs (G-037).
@@ -988,7 +995,15 @@ services:
     environment:
       LIVEKIT_KEYS: "${LIVEKIT_API_KEY}: ${LIVEKIT_API_SECRET}"
     volumes:
-      - ./docker/livekit/livekit.yaml:/etc/livekit/livekit.yaml:ro
+      # Rendered on the host by gremion-render from docker/livekit/livekit.yaml.tmpl
+      # (gitignored). Long syntax: a config that was not rendered refuses `up`, instead
+      # of Docker creating an empty directory at the path.
+      - type: bind
+        source: ./docker/livekit/livekit.yaml
+        target: /etc/livekit/livekit.yaml
+        read_only: true
+        bind:
+          create_host_path: false
     ports:
       # The same rule as traefik's: nothing here binds 0.0.0.0 (spec A section A).
       # The signalling socket (7880) is never published: Traefik routes /livekit-sfu
@@ -1002,7 +1017,13 @@ services:
       options:
         max-size: "50m"
         max-file: "5"
-    deploy: *limits-m
+    # limits-m's memory, one full core: the relay path (TURN over TLS) does its crypto
+    # here, so half a core is not enough. Inline, not an anchor: no other service wants it.
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "1.0"
     networks:
       - edge
 

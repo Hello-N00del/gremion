@@ -37,12 +37,21 @@ async function situation(c: PanelConfig) {
   return { disabled: newCustomerDisabledReason(c, age), modules }
 }
 
+/**
+ * The customer host this install is built for (PILOT_TENANT_HOST, passed to the panel by the app compose file),
+ * shown on the form; the host-side create refuses any other. Null when it is unset or still the operator placeholder.
+ */
+function expectedHost(): string | null {
+  const v = (env.PILOT_TENANT_HOST ?? '').trim().toLowerCase()
+  return /^[a-z0-9]([a-z0-9.-]*[a-z0-9])?\.[a-z]{2,}$/.test(v) ? v : null
+}
+
 export const load: PageServerLoad = async () => {
   const r = loadConfig(env)
   if (!r.ok) error(503, 'the control panel is not configured')
   const s = await situation(r.config)
   // the idempotency key of THIS form: a re-post of it never writes a second row
-  return { disabled: s.disabled, modules: s.modules, key: randomUUID() }
+  return { disabled: s.disabled, modules: s.modules, key: randomUUID(), expectedHost: expectedHost() }
 }
 
 export const actions: Actions = {
@@ -66,6 +75,7 @@ export const actions: Actions = {
     }
     const input: NewCustomerInput = {
       slug: textField(form, 'slug'),
+      confirmSlug: textField(form, 'confirmSlug'),
       host: textField(form, 'host'),
       itAdmin: textField(form, 'itAdmin'),
       councilAdmin: textField(form, 'councilAdmin'),

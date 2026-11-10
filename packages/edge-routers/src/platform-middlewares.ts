@@ -20,7 +20,7 @@ export const HSTS_MAX_AGE_SECONDS = 31536000
 
 /** Rate-limit tiers (spec B §3): average per period, burst, period. */
 export const RATE_LIMIT_TIERS = Object.freeze({
-  app: Object.freeze({ average: 300, burst: 100, period: '1m' }),
+  app: Object.freeze({ average: 3000, burst: 1500, period: '1m' }),
   portal: Object.freeze({ average: 100, burst: 50, period: '1m' }),
   auth: Object.freeze({ average: 30, burst: 10, period: '1m' }),
 })
@@ -48,7 +48,7 @@ export const MW_PROXYTRUST = 'gremion-ui-proxytrust@docker'
  * Keyed on the connection address (ipStrategy depth 0), the same keying the
  * rate-limit family uses, so a forged X-Forwarded-For cannot pick the bucket.
  */
-export const PER_IP_INFLIGHT = 50
+export const PER_IP_INFLIGHT = 500
 
 export interface PlatformHosts {
   /** PLATFORM_DOMAIN — the apex. */

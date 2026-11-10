@@ -376,7 +376,8 @@ describe('hooks.server authGuard 503 while booting (T4.1 / G-014)', () => {
     const response = res as Response
     expect(response.status).toBe(503)
     expect(response.headers.get('Retry-After')).toBe('5')
-    expect(await response.text()).toBe('Service Unavailable: booting')
+    expect(response.headers.get('Content-Type')).toMatch(/^text\/html/)
+    expect(await response.text()).toContain('Die Anwendung startet gerade')
 
     // Release the migration so vitest doesn't hold the promise forever.
     await vi.waitFor(() => expect(pending.resolve).toBeTypeOf('function'))
@@ -702,7 +703,7 @@ describe('authGuard boot gate (TASK-023 item 3)', () => {
       expect(o.reached, path).toBe(false)
       expect(o.res.status).toBe(503)
       expect(o.res.headers.get('Retry-After')).toBe('5')
-      expect(await o.res.text()).toBe('Service Unavailable: booting')
+      expect(await o.res.text()).toContain('Die Anwendung startet gerade')
     }
     await vi.waitFor(() => expect(pending.resolve).toBeTypeOf('function'))
     pending.resolve?.()
@@ -738,7 +739,7 @@ describe('authGuard boot gate (TASK-023 item 3)', () => {
     const o = await guard(mod, '/dashboard')
     expect(o.res.status).toBe(503)
     expect(o.res.headers.get('Retry-After')).toBe('5')
-    expect(await o.res.text()).toBe('Service Unavailable: booting')
+    expect(await o.res.text()).toContain('Die Anwendung startet gerade')
   })
 
   it("after a non-retryable failure other paths are 503 'boot failed'; /healthz still answers 200 (Q5)", async () => {

@@ -22,6 +22,7 @@ import { readConfig } from '$lib/server/config'
 // derive the transport type from createTransport's return type instead.
 type Transporter = ReturnType<typeof nodemailer.createTransport>
 import { isAllowedSmtpPort, resolveSmtpTarget } from '$lib/server/mail/smtp-target-guard'
+import { smtpEhloName } from '$lib/server/mail/ehlo-name'
 import { env } from '$env/dynamic/private'
 import { getTenant } from '$lib/server/tenant/context'
 import { resolveSecret } from '$lib/server/tenant/secrets'
@@ -56,18 +57,6 @@ interface Entry {
 const _cache = new Map<string, Entry>()
 
 type TransportOptions = Parameters<typeof nodemailer.createTransport>[0] & object
-
-/**
- * The name announced in EHLO. Without it nodemailer sends the OS host name, which in a container
- * is its id, and Google's relay refuses that with 421 (EHLO).
- */
-function smtpEhloName(): string | undefined {
-  try {
-    return new URL(process.env.PUBLIC_BASE_URL ?? '').hostname || undefined
-  } catch {
-    return undefined
-  }
-}
 
 function guardedTransport(host: string, port: number, base: TransportOptions): Transporter {
   const facade = {
