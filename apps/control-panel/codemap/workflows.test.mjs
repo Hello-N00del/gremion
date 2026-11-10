@@ -343,3 +343,146 @@ describe('parseJobs: YAML forms that formatters write', () => {
     expect(byId(jobs, 'd').name).toBe('Plain')
   })
 })
+
+describe('parseJobs: a literal docker build -f is a Dockerfile of the job', () => {
+  const job = (...runLines) => ['jobs:', '  a:', '    steps:', ...runLines, ''].join('\n')
+
+  it('reads -f, --file, --file= and -f= of docker build and docker buildx build', () => {
+    const t = job(
+      '      - run: docker build -f gremion-public/Dockerfile -t x:smoke .',
+      '      - run: docker buildx build --file ./docker/b/Dockerfile.prod --push .',
+      '      - run: docker build --file=docker/c/Dockerfile .',
+      '      - run: docker buildx build -f=docker/d/Dockerfile .',
+      '      - run: docker build -t x -f "docker/e/Dockerfile" .',
+    )
+    expect(byId(parseJobs(t), 'a').dockerfiles).toEqual(['gremion-public/Dockerfile', 'docker/b/Dockerfile.prod', 'docker/c/Dockerfile', 'docker/d/Dockerfile', 'docker/e/Dockerfile'])
+  })
+
+  it('skips a path that holds a $ (an expression or a variable), stdin, and an absolute or outside path', () => {
+    const t = job(
+      '      - run: docker build -f ${{ matrix.dockerfile }} -t x .',
+      '      - run: docker build -f "$DF" .',
+      '      - run: docker build -f - .',
+      '      - run: docker build -f /abs/Dockerfile .',
+      '      - run: docker build -f ../out/Dockerfile .',
+    )
+    expect(byId(parseJobs(t), 'a').dockerfiles).toEqual([])
+  })
+
+  it('reads a -f on a continuation line of the same command, and not on the next command', () => {
+    const t = [
+      'jobs:',
+      '  a:',
+      '    steps:',
+      '      - run: |',
+      '          docker buildx build \\',
+      '            --push \\',
+      '            -f docker/x/Dockerfile \\',
+      '            .',
+      '          docker version -f json',
+      '          echo -f docker/not/Dockerfile',
+      '',
+    ].join('\n')
+    expect(byId(parseJobs(t), 'a').dockerfiles).toEqual(['docker/x/Dockerfile'])
+  })
+
+  it('stops at a command separator: a -f of the next command is not a Dockerfile', () => {
+    const t = job('      - run: docker build . && tar -f docker/not/Dockerfile x')
+    expect(byId(parseJobs(t), 'a').dockerfiles).toEqual([])
+  })
+
+  it('is not taken from prose (a step name, a description, a comment) or from docker build without -f', () => {
+    const t = job(
+      '      - name: Run docker build -f docker/prose/Dockerfile',
+      '        run: docker build -t x .',
+      '        # docker build -f docker/comment/Dockerfile .',
+      '      - run: echo "A docker build input changed"',
+    )
+    expect(byId(parseJobs(t), 'a').dockerfiles).toEqual([])
+  })
+
+  it('keeps one entry when the value is also a dockerfile: matrix value', () => {
+    const t = ['jobs:', '  a:', '    with:', '      dockerfile: a/Dockerfile', '    steps:', '      - run: docker build -f ./a/Dockerfile .', ''].join('\n')
+    expect(byId(parseJobs(t), 'a').dockerfiles).toEqual(['a/Dockerfile'])
+  })
+
+  it('gives the same result with CRLF line ends', () => {
+    const t = job('      - run: docker build -f a/Dockerfile .')
+    expect(parseJobs(t.replace(/\n/g, '\r\n'))).toEqual(parseJobs(t))
+  })
+})
+
+describe('parseJobs: working-directory with a matrix expression', () => {
+  const wf = (matrixLines, stepLines = ['      - run: pnpm pack', '        working-directory: ${{ matrix.dir }}']) =>
+    ['jobs:', '  p:', '    strategy:', '      matrix:', ...matrixLines, '    steps:', ...stepLines, ''].join('\n')
+  const dirsOf = (t) => byId(parseJobs(t), 'p').workingDirs
+
+  it('expands a key of include: maps written as block maps', () => {
+    const t = wf(['        include:', "          - pkg: '@gremion/db'", '            dir: packages/db', '          - pkg: "@gremion/ports"', '            dir: "packages/ports"  # a comment', '            has_tests: true'])
+    expect(dirsOf(t)).toEqual(['packages/db', 'packages/ports'])
+  })
+
+  it('expands a key of include: maps written inline, and the first key of an item', () => {
+    const t = wf(['        include:', '          - { pkg: a, dir: packages/a }', '          - dir: packages/b', '            pkg: b', "          - { dir: 'packages/c', pkg: c }"])
+    expect(dirsOf(t)).toEqual(['packages/a', 'packages/b', 'packages/c'])
+  })
+
+  it('expands a plain key with an inline list and with a block list', () => {
+    expect(dirsOf(wf(['        dir: [packages/a, "packages/b", ./packages/c/]']))).toEqual(['packages/a', 'packages/b', 'packages/c'])
+    expect(dirsOf(wf(['        dir:', '          - packages/a', '          - packages/b', '        os: [x]']))).toEqual(['packages/a', 'packages/b'])
+    expect(dirsOf(wf(['        dir:', '        - packages/a', '        - packages/b']))).toEqual(['packages/a', 'packages/b'])
+  })
+
+  it('expands an inline matrix map', () => {
+    expect(dirsOf(wf(['        include: [{ dir: packages/a }, { dir: packages/b }]']))).toEqual(['packages/a', 'packages/b'])
+  })
+
+  it('takes one entry for a repeated value, and no value that holds an expression', () => {
+    const t = wf(['        include:', '          - dir: packages/a', '          - dir: packages/a', '          - dir: ${{ inputs.x }}'])
+    expect(dirsOf(t)).toEqual(['packages/a'])
+  })
+
+  it('a key with no literal value gives no directory, and hides the job default', () => {
+    const t = ['jobs:', '  p:', '    defaults:', '      run:', '        working-directory: apps/default', '    strategy:', '      matrix:', '        include:', '          - dir: ${{ inputs.d }}', '    steps:', '      - run: node scripts/s.mjs', '        working-directory: ${{ matrix.dir }}', '      - run: node scripts/t.mjs', '        working-directory: ${{ matrix.other }}', ''].join('\n')
+    const p = byId(parseJobs(t), 'p')
+    expect(p.runs).toEqual([{ script: 'scripts/s.mjs', dir: '' }, { script: 'scripts/t.mjs', dir: '' }])
+    expect(p.workingDirs).toEqual(['apps/default'])
+  })
+
+  it('reads only the matrix of the job: a key of another place does not count', () => {
+    const t = ['jobs:', '  p:', '    env:', '      dir: packages/not-matrix', '    with:', '      dir: packages/also-not', '    strategy:', '      matrix:', '        include:', '          - dir: packages/yes', '          - { name: n }', '        exclude:', '          - dir: packages/excluded', '    steps:', '      - run: node a.mjs', '        working-directory: ${{ matrix.dir }}', ''].join('\n')
+    expect(byId(parseJobs(t), 'p').workingDirs).toEqual(['packages/yes'])
+  })
+
+  it('does not take the matrix of another job', () => {
+    const t = ['jobs:', '  p:', '    steps:', '      - run: node a.mjs', '        working-directory: ${{ matrix.dir }}', '  q:', '    strategy:', '      matrix:', '        dir: [packages/q]', ''].join('\n')
+    expect(byId(parseJobs(t), 'p').workingDirs).toEqual([])
+  })
+
+  it('pairs each value with the scripts of that step: one run for each directory', () => {
+    const t = wf(['        include:', '          - dir: packages/a', '          - dir: packages/b'], ['      - run: node scripts/own.mjs', '        working-directory: ${{ matrix.dir }}', '      - run: node scripts/root.mjs'])
+    expect(byId(parseJobs(t), 'p').runs).toEqual([
+      { script: 'scripts/own.mjs', dir: 'packages/a' },
+      { script: 'scripts/own.mjs', dir: 'packages/b' },
+      { script: 'scripts/root.mjs', dir: '' },
+    ])
+  })
+
+  it('works when the matrix comes after the steps, and with a job default that names the matrix', () => {
+    const t = ['jobs:', '  p:', '    defaults:', '      run:', '        working-directory: ${{ matrix.dir }}', '    steps:', '      - run: node s.mjs', '    strategy:', '      matrix:', '        dir: [packages/a, packages/b]', ''].join('\n')
+    const p = byId(parseJobs(t), 'p')
+    expect(p.runs).toEqual([{ script: 's.mjs', dir: 'packages/a' }, { script: 's.mjs', dir: 'packages/b' }])
+    expect(p.workingDirs).toEqual(['packages/a', 'packages/b'])
+  })
+
+  it('same result with CRLF', () => {
+    const t = wf(['        include:', '          - dir: packages/a', '          - dir: packages/b'])
+    expect(parseJobs(t.replace(/\n/g, '\r\n'))).toEqual(parseJobs(t))
+  })
+
+  it('never throws on odd matrix text', () => {
+    for (const m of ['        include: [{ dir: ', '        dir: [[[[', '        :::', '        dir: "unclosed', '        dir:\n          - - -']) {
+      expect(() => parseJobs(wf([m]))).not.toThrow()
+    }
+  })
+})

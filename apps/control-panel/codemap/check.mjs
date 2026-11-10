@@ -7,8 +7,12 @@
 // 3. scans the generated page, ste-text.json and template.html for leaks (leak-scan.mjs),
 // 4. runs ste-lint.mjs and reports the number of findings.
 // With GITHUB_STEP_SUMMARY set it appends a markdown table; it prints a ::warning:: line for each stale item.
-// Exit 0 whenever the check ran, stale items or not. Exit 1 only for a leak, or when the tool itself crashes
-// (the extractor fails, a file cannot be read). A leak is reported by rule id and place, never by the matched text.
+// The exit codes are distinct, so that a caller can tell a leak from a broken tool:
+//   0  the check ran, stale items or not
+//   1  a leak was found (a host name, an address or a credential in the page, the text or the template)
+//   3  the tool itself failed (the extractor failed, a file cannot be read, the check crashed)
+// A leak is reported by rule id and place, never by the matched text. scripts/ci-local/guards.mjs (the arm
+// codemap-stale) reads these codes: only a leak fails there.
 import { execFileSync, spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -19,6 +23,10 @@ import { findLeaks } from './leak-scan.mjs'
 import { resolve } from './resolve.mjs'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
+
+export const EXIT_RAN = 0
+export const EXIT_LEAK = 1
+export const EXIT_TOOL_FAILED = 3
 
 /** A workflow command message: % and line breaks must be escaped or the command is cut. */
 export const escapeCommand = (s) => String(s).replace(/%/g, '%25').replace(/\r/g, '%0D').replace(/\n/g, '%0A')
@@ -63,7 +71,7 @@ export function analyse({ graph, text, template, textSource, templateSource, com
     ...lists.staleAreas.map((a) => `::warning title=Code map stale area::${escapeCommand(`the text for ${a} matches no area in the code`)}`),
   ]
   const errors = leaks.map((l) => `::error title=Code map leak::${escapeCommand(`${l.rule} in ${l.where}`)}`)
-  return { exitCode: leaks.length ? 1 : 0, report: out.join('\n'), lists, leaks, warnings, errors, steFindings, commit }
+  return { exitCode: leaks.length ? EXIT_LEAK : EXIT_RAN, report: out.join('\n'), lists, leaks, warnings, errors, steFindings, commit }
 }
 
 /** The table for GITHUB_STEP_SUMMARY. */
@@ -105,7 +113,7 @@ function main() {
       console.error(String(ex.stdout ?? '').split('\n').slice(-15).join('\n'))
       console.error(String(ex.stderr ?? '').split('\n').slice(-15).join('\n'))
       // not process.exit: it would skip the finally below and leave the temp folder behind
-      process.exitCode = 1
+      process.exitCode = EXIT_TOOL_FAILED
       return
     }
     const read = (f) => fs.readFileSync(path.join(HERE, f), 'utf8')
@@ -129,11 +137,11 @@ function main() {
     for (const w of r.warnings) console.log(w)
     for (const e of r.errors) console.log(e)
     if (process.env.GITHUB_STEP_SUMMARY) fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, markdownSummary(r))
-    console.log(r.exitCode ? '\nresult: a leak was found (exit 1)' : '\nresult: the check ran (exit 0)')
+    console.log(r.exitCode === EXIT_LEAK ? `\nresult: a leak was found (exit ${EXIT_LEAK})` : `\nresult: the check ran (exit ${EXIT_RAN})`)
     process.exitCode = r.exitCode
   } catch (err) {
     console.error(`::error title=Code map::the check crashed: ${escapeCommand(err instanceof Error ? err.message : String(err))}`)
-    process.exitCode = 1
+    process.exitCode = EXIT_TOOL_FAILED
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true })
   }

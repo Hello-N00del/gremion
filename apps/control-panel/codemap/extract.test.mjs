@@ -241,6 +241,70 @@ describe('extract.mjs: workflows', () => {
     expect(edge(g, 'job:.github/workflows/w.yml#k', 'area:gremion-public@L5', 'runs')).toBeTruthy()
   })
 
+  it('a literal docker build -f in a run gives a runs edge to that Dockerfile; a path with an expression gives none', () => {
+    put('.github/workflows/w.yml', [
+      'jobs:',
+      '  smoke:',
+      '    steps:',
+      '      - run: docker build -f apps/web/Dockerfile -t x:smoke .',
+      '      - run: docker buildx build --file ./apps/api/Dockerfile .',
+      '      - run: docker build -f ${{ matrix.dockerfile }} .',
+      '      - run: docker build -f apps/ghost/Dockerfile .',
+      '',
+    ].join('\n'))
+    put('apps/web/Dockerfile', 'FROM scratch\n')
+    put('apps/api/Dockerfile', 'FROM scratch\n')
+    expect(extract(out, '--tree', '--commit', SHA).status).toBe(0)
+    const g = read()
+    const j = 'job:.github/workflows/w.yml#smoke'
+    expect(edge(g, j, 'file:apps/web/Dockerfile', 'runs')).toBeTruthy()
+    expect(edge(g, j, 'file:apps/api/Dockerfile', 'runs')).toBeTruthy()
+    expect(g.edges.filter((e) => e.from === j)).toHaveLength(2)
+  })
+
+  it('working-directory: ${{ matrix.<key> }} works on the area and the scripts of every value of the key', () => {
+    put('.github/workflows/w.yml', [
+      'jobs:',
+      '  publish:',
+      '    strategy:',
+      '      matrix:',
+      '        include:',
+      '          - pkg: "@fixture/a"',
+      '            dir: packages/a',
+      '          - { pkg: "@fixture/b", dir: packages/b }',
+      '          - dir: ${{ inputs.x }}',
+      '    steps:',
+      '      - run: node scripts/local.mjs',
+      '        working-directory: ${{ matrix.dir }}',
+      '      - run: pnpm pack',
+      '        working-directory: ${{ matrix.dir }}',
+      '  other:',
+      '    strategy:',
+      '      matrix:',
+      '        os: [linux]',
+      '    steps:',
+      '      - run: pnpm pack',
+      '        working-directory: ${{ matrix.dir }}',
+      '',
+    ].join('\n'))
+    put('packages/a/package.json', JSON.stringify({ name: '@fixture/a' }))
+    put('packages/a/src/a.ts', 'export function a(): number {\n  return 1\n}\n')
+    put('packages/a/scripts/local.mjs', 'console.log(1)\n')
+    put('packages/b/package.json', JSON.stringify({ name: '@fixture/b' }))
+    put('packages/b/src/b.ts', 'export function b(): number {\n  return 2\n}\n')
+    put('scripts/local.mjs', 'console.log(2)\n')
+    expect(extract(out, '--tree', '--commit', SHA).status).toBe(0)
+    const g = read()
+    const j = 'job:.github/workflows/w.yml#publish'
+    expect(edge(g, j, 'area:packages/a@L2', 'runs')).toBeTruthy()
+    expect(edge(g, j, 'area:packages/b@L2', 'runs')).toBeTruthy()
+    // the script is looked up in the directory of its own step first: packages/a has it, packages/b falls back to the root
+    expect(edge(g, j, 'file:packages/a/scripts/local.mjs', 'runs')).toBeTruthy()
+    expect(edge(g, j, 'file:scripts/local.mjs', 'runs')).toBeTruthy()
+    // a key with no literal value stays skipped
+    expect(g.edges.some((e) => e.from === 'job:.github/workflows/w.yml#other')).toBe(false)
+  })
+
   it('tree mode and git mode give the same job nodes, edges and workflow areas', () => {
     fixture()
     expect(git('init', '-q').status).toBe(0)

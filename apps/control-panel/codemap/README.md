@@ -11,7 +11,7 @@ the code while the image is built. Nothing is generated inside the repository an
 | `build.mjs` | makes `code-map.html` and `status.json` from a graph, a commit and the text |
 | `leak-scan.mjs` | refuses a page that holds an address, host name, key or local path (the kernel repo is public) |
 | `image-step.sh` | the image build step: never exits non-zero, always leaves a valid `status.json` |
-| `check.mjs` | the CI check: lists what does not match, blocks only on a leak or a crash |
+| `check.mjs` | the CI check: lists what does not match. Exit 0 it ran, 1 a leak, 3 the tool itself failed. `scripts/ci-local/guards.mjs` runs it as the arm `codemap-stale` |
 | `ste-lint.mjs` | a rule check of `ste-text.json` (not a certified ASD-STE100 checker) |
 
 ## GitHub Actions in the map

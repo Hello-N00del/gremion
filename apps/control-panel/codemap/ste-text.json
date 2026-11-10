@@ -78,6 +78,18 @@
       "why": "A tunnel program must trust this certificate to connect to the origin server.",
       "leadsTo": "The production compose file mounts this certificate into the tunnel container."
     },
+    "area:docker/collabora@L0": {
+      "title": "Collabora container build",
+      "what": "This folder holds one Dockerfile. It builds the Collabora image for the office editor. The base is the official Collabora image, pinned by digest. The recipe then upgrades one system library. The library decodes compressed web answers, and its old version has a known security fault.",
+      "why": "Collabora fetches documents and linked files over HTTP, so it uses this library. The upgrade closes the fault. The recipe calls the fix a stopgap, because the Collabora line in use has no new release.",
+      "leadsTo": "The compose file builds the service collabora from this folder. Nextcloud uses the service to let a person edit a document in the browser."
+    },
+    "area:docker/element-call@L0": {
+      "title": "Element Call container build and settings",
+      "what": "This folder holds a Dockerfile and the template of one settings file. The Dockerfile starts from the official Element Call image, pinned by digest, and adds no file. The settings are not in the image. The template names the Matrix home server and the address where a call gets its token. It also skips the lobby of a call.",
+      "why": "A rule of the release checks refuses an image of another owner in the compose file. A Dockerfile that starts from that image gives an image of the project. The settings name the platform and the pilot tenant, so they stay out of the image.",
+      "leadsTo": "The host makes the settings file from the template. The compose file builds the service element-call from this folder and binds the settings file into the container. The browser loads the web app from this container."
+    },
     "area:docker/fallback@L0": {
       "title": "Fallback page",
       "what": "This area holds a small container build file and one HTML page. The page says in two languages that the system starts. The page reloads itself every 10 seconds.",
@@ -96,6 +108,12 @@
       "why": "The law asks for these pages on a public site. A static server is simple and has little to attack.",
       "leadsTo": "The compose file starts this container. The edge proxy sends legal addresses to it."
     },
+    "area:docker/livekit@L0": {
+      "title": "LiveKit settings",
+      "what": "This folder holds one settings file for the LiveKit server. LiveKit is the media server of the video calls. The file holds settings that are not secret. It sets the port for call setup, the range of ports for media and the fallback on TCP. It does not use TURN. A room opens for the first person and closes five minutes after the last person leaves.",
+      "why": "A call with many people needs a server that forwards the video of each person to the others. The API key and the secret are not in the file. The compose file gives them to the server from the env file of the host.",
+      "leadsTo": "The compose file binds this file into the livekit container as read only. Traefik sends the call setup path of the platform host to the port for setup. Element Call uses this server for the video of a call."
+    },
     "area:docker/loki@L0": {
       "title": "Loki log store configuration",
       "what": "Loki is a program that stores logs. A log is a list of messages that a program writes about what it does. The retention package makes this file from its list of rules. It sets the time after which Loki deletes each class of log.",
@@ -107,6 +125,12 @@
       "what": "NATS is a message broker. A message broker carries short messages between programs. This file configures the broker. It allows no anonymous client. Each client uses a key and lands in the account of its customer.",
       "why": "The modules must send events and must not use one database together. One account for each customer keeps the messages of the customers apart.",
       "leadsTo": "The nats-auth package writes the accounts file that this file includes. The compose file mounts this file into the NATS container."
+    },
+    "area:docker/nextcloud@L0": {
+      "title": "Nextcloud container build, hooks and settings",
+      "what": "This folder builds the Nextcloud image for the files module and the votes module. The Dockerfile starts from the official Nextcloud image, pinned by digest. It copies in one settings file and the hook scripts. The settings file sets the cache, the host names, the region, the language and the protection against repeated login tries. One group of hooks runs at the first install and adds the apps. Another group runs at each start, sets the host names again and makes sure that the Keycloak login accepts tokens for WebDAV.",
+      "why": "The apps need a Nextcloud that runs with a database, so the build cannot install them. The hooks do it in the container. A hook that fails prints a message and does not stop the start.",
+      "leadsTo": "The compose file builds the service nextcloud from this folder. The files module and the votes module call this server. Collabora edits the documents for it."
     },
     "area:docker/pgbouncer@L0": {
       "title": "PgBouncer connection pool",
@@ -281,6 +305,12 @@
       "what": "A Dockerfile is a recipe that builds a container image. This Dockerfile builds the image of the runner of the host tests. It runs the tests of the host programs in a clean container.",
       "why": "Each program must run in the same way on every computer. The recipe fixes the version of every part that the program needs.",
       "leadsTo": "The compose files and the Kubernetes files start containers from this image. The recipe copies the code of this part from the repository."
+    },
+    "area:dockerfile:test/isolation/tenant@L0": {
+      "title": "Container build: test/isolation/tenant",
+      "what": "A Dockerfile is a recipe that builds a container image. This Dockerfile builds the toolchain for the test that one customer cannot read the data of another customer. The image holds node, pnpm and git and holds no code of the repository. It has its own ignore file, so the build gets no file from this folder.",
+      "why": "A clean clone in a fixed toolchain gives the same result on every host. The image holds no repository code, so an untracked file, for example a secret, never gets into the run.",
+      "leadsTo": "The host program gremion-isolation starts a container from this image. The container clones the release tree and runs the isolation check there."
     },
     "area:db:gremion-ui/migrations-control@L1": {
       "title": "Control database tables",
@@ -881,7 +911,11 @@
     "scripts/ci-local": "A folder of guards and a snapshot tool. A person runs them on one computer when GitHub Actions does not run.",
     "Semgrep": "A tool that scans code for security faults.",
     "Dependabot": "A GitHub tool that opens pull requests for new versions of packages.",
-    "npm": "The public registry for JavaScript packages."
+    "npm": "The public registry for JavaScript packages.",
+    "OIDC": "A standard way to get access with an account that another system holds. Keycloak is such a system.",
+    "TCP": "A way to send data on a network. It checks that all data arrives.",
+    "UDP": "A fast way to send data on a network. It does not check that all data arrives.",
+    "TURN": "A relay that passes call data for a person behind a strict firewall."
   },
   "walkthroughs": [
     {

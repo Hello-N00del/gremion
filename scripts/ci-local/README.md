@@ -122,6 +122,21 @@ never skips the rest, so the dated result always shows every arm's outcome:
    pointed at *this* kernel checkout's `pnpm-workspace.yaml` (`--kernel`),
    never at the `upstream/gremion` submodule.
 6. **runner-policy** — `runner-policy.mjs` on both repos' `.github/workflows/*.yml`.
+7. **codemap-stale** (kernel only, last) — runs
+   `node apps/control-panel/codemap/check.mjs` and **lists** the stale
+   walkthrough steps, the stale areas and the areas that have no text yet.
+   The list is the arm's `detail`, so the console prints it under the arm's
+   line and the dated JSON holds it (with the full report in `output`). The
+   check's exit codes are 0 (it ran, stale items allowed), 1 (a leak: a host
+   name, an address or a credential in the generated page, `ste-text.json` or
+   `template.html`) and 3 (the tool itself failed). Only exit 1 **fails** the
+   arm, and only when the report names a leak, because Node also exits 1 when
+   the tool crashes before it can report. Exit 3, a timeout, a crash, or the
+   tool file or `typescript` being absent (a kernel-only checkout with no
+   `pnpm install`) **passes** the arm with a note that the list could not be
+   made: a code map problem must never block a merge. It has a 5 minute limit,
+   not the 60 seconds of the other script arms, because the extractor reads the
+   whole kernel.
 
 `--waivers <path>` defaults to the committed `scripts/ci-local/waivers.json`.
 
@@ -135,7 +150,8 @@ Every guard command is spawned as an argument array with no shell
 ref with whitespace, a leading `-`, `..` or shell metacharacters is refused
 before git or gitleaks sees it. The script arms (native known-secrets,
 cve-floor, overrides-drift) run the script's own `node --test` first and
-FAIL if it collected 0 tests. Only `suites.json` commands (committed text,
+FAIL if it collected 0 tests (codemap-stale has no own test step: it runs the
+check and reads its exit code and its report). Only `suites.json` commands (committed text,
 no runtime value) go through a shell.
 
 ### `snapshot.mjs` — the dated pass/fail census

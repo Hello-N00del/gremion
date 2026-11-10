@@ -1,12 +1,12 @@
-// check.mjs: the CI check LISTS what does not match and never blocks on it. It fails (exit 1) only for a leak
-// or a crash of the tool itself.
+// check.mjs: the CI check LISTS what does not match and never blocks on it. Its exit codes are distinct: 0 it ran
+// (stale items allowed), 1 a leak was found, 3 the tool itself failed (the extractor, a file it cannot read, a crash).
 import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
-import { analyse, escapeCommand, markdownSummary } from './check.mjs'
+import { analyse, escapeCommand, EXIT_LEAK, EXIT_RAN, EXIT_TOOL_FAILED, markdownSummary } from './check.mjs'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 const template = fs.readFileSync(path.join(HERE, 'template.html'), 'utf8')
@@ -90,26 +90,90 @@ describe('the CI helpers', () => {
   })
 })
 
+describe('the exit codes: 0 it ran, 1 a leak, 3 the tool itself failed', () => {
+  it('the three codes are distinct and fixed (the merge-gate arm in scripts/ci-local reads them)', () => {
+    expect([EXIT_RAN, EXIT_LEAK, EXIT_TOOL_FAILED]).toEqual([0, 1, 3])
+  })
+})
+
+// A copy of this folder in a temp folder, with an extractor of the test's own, and a temp folder of its own to look into.
+function runCopy(extractSource, mutate = () => {}) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codemap-check-test-'))
+  try {
+    const tool = path.join(root, 'codemap')
+    const scratch = path.join(root, 'tmp')
+    fs.mkdirSync(tool)
+    fs.mkdirSync(scratch)
+    for (const f of fs.readdirSync(HERE)) if (!f.endsWith('.test.mjs') && fs.statSync(path.join(HERE, f)).isFile()) fs.copyFileSync(path.join(HERE, f), path.join(tool, f))
+    fs.writeFileSync(path.join(tool, 'extract.mjs'), extractSource)
+    mutate(tool)
+    const res = spawnSync(process.execPath, [path.join(tool, 'check.mjs')], {
+      encoding: 'utf8',
+      env: { ...process.env, TMPDIR: scratch, TMP: scratch, TEMP: scratch, GITHUB_STEP_SUMMARY: '' },
+    })
+    return { res, leftInTemp: fs.readdirSync(scratch) }
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true })
+  }
+}
+// An extractor that writes a graph with the six layers and nothing else, to the --out path it is given.
+const GRAPH_WRITER = [
+  "import fs from 'node:fs'",
+  "import path from 'node:path'",
+  "const out = process.argv[process.argv.indexOf('--out') + 1]",
+  'fs.mkdirSync(path.dirname(out), { recursive: true })',
+  "const nodes = [0, 1, 2, 3, 4, 5].map((l) => ({ id: 'L' + l, kind: 'layer', name: 'L' + l, parent: null, file: '', line: 0, layer: 'L' + l }))",
+  "fs.writeFileSync(out, JSON.stringify({ meta: { commit: 'x', resolvedRatioPercent: 80 }, nodes, edges: [] }))",
+  '',
+].join('\n')
+
 describe('the run, when the extractor fails', () => {
-  it('exits 1 and still removes its temp folder (a process.exit inside the try would skip the finally)', () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codemap-check-test-'))
-    try {
-      // a copy of this folder with an extractor that always fails, and a temp folder of its own to look into
-      const tool = path.join(root, 'codemap')
-      const scratch = path.join(root, 'tmp')
-      fs.mkdirSync(tool)
-      fs.mkdirSync(scratch)
-      for (const f of fs.readdirSync(HERE)) if (!f.endsWith('.test.mjs') && fs.statSync(path.join(HERE, f)).isFile()) fs.copyFileSync(path.join(HERE, f), path.join(tool, f))
-      fs.writeFileSync(path.join(tool, 'extract.mjs'), 'console.error("boom"); process.exit(3)\n')
-      const res = spawnSync(process.execPath, [path.join(tool, 'check.mjs')], {
-        encoding: 'utf8',
-        env: { ...process.env, TMPDIR: scratch, TMP: scratch, TEMP: scratch, GITHUB_STEP_SUMMARY: '' },
-      })
-      expect(res.status).toBe(1)
-      expect(res.stderr).toMatch(/the extractor failed \(exit 3\)/)
-      expect(fs.readdirSync(scratch)).toEqual([])
-    } finally {
-      fs.rmSync(root, { recursive: true, force: true })
-    }
+  it('exits 3 (the tool failed, not a leak) and still removes its temp folder (a process.exit inside the try would skip the finally)', () => {
+    const { res, leftInTemp } = runCopy('console.error("boom"); process.exit(3)\n')
+    expect(res.status).toBe(3)
+    expect(res.stderr).toMatch(/the extractor failed \(exit 3\)/)
+    expect(leftInTemp).toEqual([])
+  })
+
+  it('exits 3 when the extractor is killed or exits with any other code', () => {
+    const { res } = runCopy('process.exit(2)\n')
+    expect(res.status).toBe(3)
+    expect(res.stderr).toMatch(/the extractor failed \(exit 2\)/)
+  })
+})
+
+describe('the run, when the check itself crashes after the extractor ran', () => {
+  it('exits 3, says so, and removes its temp folder (here the text file is not JSON)', () => {
+    const { res, leftInTemp } = runCopy(GRAPH_WRITER, (tool) => fs.writeFileSync(path.join(tool, 'ste-text.json'), '{ not json'))
+    expect(res.status).toBe(3)
+    expect(res.stderr).toMatch(/the check crashed/)
+    expect(leftInTemp).toEqual([])
+  })
+})
+
+describe('the run, when a leak is found', () => {
+  it('exits 1, names the rule and the place and never the matched text, and prints the lines the merge-gate arm reads', () => {
+    const secret = ['203', '0', '113', '9'].join('.')
+    const { res, leftInTemp } = runCopy(GRAPH_WRITER, (tool) => {
+      const t = JSON.parse(fs.readFileSync(path.join(tool, 'ste-text.json'), 'utf8'))
+      t.intro = [`Go to ${secret}`]
+      fs.writeFileSync(path.join(tool, 'ste-text.json'), JSON.stringify(t))
+    })
+    expect(res.status).toBe(1)
+    expect(res.stdout).toMatch(/^leaks: [1-9]/m)
+    expect(res.stdout).toMatch(/::error title=Code map leak::ipv4 in ste-text\.json/)
+    expect(res.stdout + res.stderr).not.toContain(secret)
+    expect(leftInTemp).toEqual([])
+  })
+})
+
+describe('the run, when the check ran and found only stale text', () => {
+  it('exits 0 and prints the three lists that the merge-gate arm reads', () => {
+    const { res } = runCopy(GRAPH_WRITER)
+    expect(res.status, res.stderr).toBe(0)
+    expect(res.stdout).toMatch(/^stale steps: \d+/m)
+    expect(res.stdout).toMatch(/^stale areas: \d+/m)
+    expect(res.stdout).toMatch(/^undescribed areas: \d+/m)
+    expect(res.stdout).toMatch(/^ambiguous steps: \d+/m)
   })
 })
