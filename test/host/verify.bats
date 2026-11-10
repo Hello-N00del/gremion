@@ -182,7 +182,7 @@ emitted_file() {  # <slug> <host>
         printf '  middlewares:\n    edge-hostpin-%s:\n' "$slug"
         printf '      headers:\n        customRequestHeaders:\n'
         printf '          X-Forwarded-Host: "%s"\n' "$host"
-        printf '    edge-perip-%s:\n      inFlightReq:\n        amount: 50\n' "$slug"
+        printf '    edge-perip-%s:\n      inFlightReq:\n        amount: 500\n' "$slug"
         printf '        sourceCriterion:\n          ipStrategy:\n            depth: 0\n'
     } > "${GREMION_ROOT}/etc/edge/tenant-${slug}.yml"
 }
