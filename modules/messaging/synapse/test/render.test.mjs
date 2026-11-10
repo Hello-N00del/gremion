@@ -65,7 +65,8 @@ test('federation is off: empty whitelist, no trusted key servers, a client-only 
   assert.deepEqual(r.cfg.trusted_key_servers, [])
   assert.equal(r.cfg.listeners.length, 1)
   const names = r.cfg.listeners[0].resources.flatMap((x) => x.names)
-  assert.deepEqual(names, ['client'])
+  // openid serves only /_matrix/federation/v1/openid/userinfo, which the LiveKit token check needs.
+  assert.deepEqual(names, ['client', 'openid'])
 })
 
 test('no media storage provider and no RTC focus, even with the dropped S3 switch set', () => {
