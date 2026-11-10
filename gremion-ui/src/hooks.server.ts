@@ -30,6 +30,7 @@ import { setTenantReadinessFromFleet } from '$lib/server/tenant/readiness'
 import { getControlDb } from '$lib/server/tenant/control-db'
 import { startTenantEvictListener } from '$lib/server/tenant/evict-listener'
 import { forEachActiveTenant } from '$lib/server/tenant/worker-fleet'
+import { waitingResponse } from '$lib/server/waiting-page'
 // Session-A inversion A1: importing the generated server-init barrel for
 // its side effects runs every module's register.server.ts, which registers that
 // module's boot hooks (schedulers, consumers, drains), per-tenant evict hooks,
@@ -538,10 +539,7 @@ export const authGuard: Handle = async ({ event, resolve }) => {
     if (_bootError && !_bootErrorRetryable) {
       return new Response('Service Unavailable: boot failed', { status: 503 })
     }
-    return new Response('Service Unavailable: booting', {
-      status: 503,
-      headers: { 'Retry-After': '5' }
-    })
+    return waitingResponse('booting')
   }
 
   // TASK-023: an unresolved exempt request is not session-authenticated either —

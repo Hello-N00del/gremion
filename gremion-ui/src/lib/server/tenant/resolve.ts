@@ -26,6 +26,7 @@ import {
   readProxyTrustSecret,
 } from '$lib/server/internal-fetch'
 import { isResolveExemptRequest } from '$lib/server/boot-exempt'
+import { waitingResponse } from '$lib/server/waiting-page'
 
 /**
  * P2.1c (T4): is this request a TRUSTED internal server-to-server caller?
@@ -231,10 +232,7 @@ export const tenantResolveHandle: Handle = async ({ event, resolve }) => {
   // never start a concurrent second migration.
   if (isFleetPopulated() && getTenantReadiness(ctx.id) !== 'ready') {
     void triggerTenantMigrationRetry(ctx)
-    return new Response('Service Unavailable: tenant not ready', {
-      status: 503,
-      headers: { 'Retry-After': '5' },
-    })
+    return waitingResponse('tenant')
   }
 
   // P2.1b T10 (§7.6, D-RATE): per-tenant token bucket — after resolution and
