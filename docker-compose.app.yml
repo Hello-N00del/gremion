@@ -367,6 +367,9 @@ services:
       CONTROL_DATABASE_URL: postgresql://${PANEL_DB_USER:-gremion_panel}:${PANEL_DB_PASSWORD:?PANEL_DB_PASSWORD required}@postgres-${STACK:?STACK required}:5432/${CONTROL_DB_NAME:-control}
       PLATFORM_DATABASE_URL: postgresql://${PANEL_DB_USER:-gremion_panel}:${PANEL_DB_PASSWORD:?PANEL_DB_PASSWORD required}@postgres-${STACK:?STACK required}:5432/gremion_platform
       PANEL_EXECUTOR: queue
+      # Shown on "Neuer Mandant" as the host this install is built for (the host-side create refuses any other);
+      # empty: no hint.
+      PILOT_TENANT_HOST: ${PILOT_TENANT_HOST:-}
     volumes:
       - ${GREMION_ROOT:-/opt/gremion}/etc/secrets/control-panel:/run/secrets/control-panel:ro
       - ./docker/keycloak/certs/internal-ca.pem:/etc/ssl/internal/internal-ca.pem:ro

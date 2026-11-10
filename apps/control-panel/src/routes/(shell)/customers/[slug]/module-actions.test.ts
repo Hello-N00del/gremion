@@ -86,6 +86,7 @@ vi.mock('$lib/server/auth', () => ({
 }))
 
 const { load, actions } = await import('./+page.server')
+const { DISABLE_LOCKED } = await import('$lib/modules')
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const loadFor = () => (load as unknown as (e: unknown) => Promise<any>)({ params: { slug: 'proof-z' } })
@@ -105,7 +106,10 @@ beforeEach(() => {
   rows = [row()]
   customer = cust('active')
   modules = {
-    enabled: [{ id: 'calendar', name: 'Kalender' }],
+    enabled: [
+      { id: 'calendar', name: 'Kalender' },
+      { id: 'files', name: 'Dateien' },
+    ],
     available: [
       { id: 'votes', name: 'Abstimmungen', denied: null },
       { id: 'board', name: 'Board', denied: 'board ist noch nicht mandantengetrennt und kann nicht aktiviert werden (R29-I1).' },
@@ -120,7 +124,7 @@ const ENABLE = { module: 'votes', dpia: 'no', dpiaRef: 'TOM-3' }
 describe('the Module section is shown only when an action can be queued', () => {
   it('an active customer with no open request: the enabled and the available modules, actions on', async () => {
     const d = await loadFor()
-    expect(d.moduleSection).toMatchObject({ canAct: true, enabled: [{ id: 'calendar' }], available: [{ id: 'votes' }, { id: 'board', denied: expect.stringMatching(/mandantengetrennt/) }] })
+    expect(d.moduleSection).toMatchObject({ canAct: true, enabled: [{ id: 'calendar' }, { id: 'files' }], available: [{ id: 'votes' }, { id: 'board', denied: expect.stringMatching(/mandantengetrennt/) }] })
   })
   it.each(['queued', 'running'])('a %s request switches every action off', async (state) => {
     rows = [row({ state, kind: 'enable_module' })]
@@ -143,6 +147,41 @@ describe('the Module section is shown only when an action can be queued', () => 
   it('no events are read for another kind of request', async () => {
     events = [{ level: 'info', step: 'x', message: 'y' }]
     expect((await loadFor()).reconcileEvents).toEqual([])
+  })
+})
+
+describe('a failed or refused request names its cause (the events of the newest request, any kind)', () => {
+  const CAUSE = [
+    { level: 'info', step: 'phase-a', message: 'DNS check for the host' },
+    { level: 'error', step: 'phase-a', message: 'DNS check failed: rat.proof.example does not resolve; mail to rat@proof.example not sent' },
+  ]
+  it.each([
+    ['a failed create', { kind: 'create', state: 'failed', outcome: 'create proof-z: failed in phase-a (exit 1)' }],
+    ['a refused create', { kind: 'create', state: 'refused', outcome: 'refused: no isolation result' }],
+    ['a failed enable_module', { kind: 'enable_module', state: 'failed', outcome: 'x: failed in enable (exit 1)' }],
+    ['a failed seed_vertical', { kind: 'seed_vertical', state: 'failed', outcome: 'x: failed in seed (exit 1)' }],
+  ])('%s: the events are loaded, with any address redacted', async (_n, over) => {
+    rows = [row(over)]
+    events = CAUSE
+    const d = await loadFor()
+    expect(d.failureEvents.map((e: { message: string }) => e.message)).toEqual(['DNS check for the host', 'DNS check failed: rat.proof.example does not resolve; mail to [address] not sent'])
+  })
+  it('a succeeded request shows no failure block', async () => {
+    rows = [row({ kind: 'create', state: 'succeeded' })]
+    events = CAUSE
+    expect((await loadFor()).failureEvents).toEqual([])
+  })
+  it('a request that still runs shows no failure block', async () => {
+    rows = [row({ kind: 'create', state: 'running' })]
+    events = CAUSE
+    expect((await loadFor()).failureEvents).toEqual([])
+  })
+  it('the kinds whose events the page already shows in their own section (reconcile, import_members) are not shown twice', async () => {
+    events = CAUSE
+    rows = [row({ kind: 'reconcile', state: 'failed', outcome: 'x: failed in reconcile (exit 1)' })]
+    expect((await loadFor()).failureEvents).toEqual([])
+    rows = [row({ kind: 'import_members', state: 'failed', outcome: 'x: failed in apply (exit 1)' })]
+    expect((await loadFor()).failureEvents).toEqual([])
   })
 })
 
@@ -184,8 +223,22 @@ describe('enable_module', () => {
 
 describe('disable_module', () => {
   it('submits the module only', async () => {
-    await expect(act('disable_module', { module: 'calendar' })).rejects.toMatchObject({ status: 303 })
-    expect(submits[0]!.slice(0, 3)).toEqual(['disable_module', 'proof-z', { slug: 'proof-z', module: 'calendar' }])
+    await expect(act('disable_module', { module: 'files' })).rejects.toMatchObject({ status: 303 })
+    expect(submits[0]!.slice(0, 3)).toEqual(['disable_module', 'proof-z', { slug: 'proof-z', module: 'files' }])
+  })
+  it.each(['calendar', 'content', 'publishing'])('%s is locked until the leaf databases are reconciled: 409 and no request', async (id) => {
+    modules = { ...modules, enabled: [{ id, name: id }] }
+    const res = await act('disable_module', { module: id })
+    expect(res.status).toBe(409)
+    expect(res.data.moduleError).toMatch(/Leaf-Datenbanken/)
+    expect(submits).toHaveLength(0)
+  })
+  it('the locked modules are exactly calendar, content and publishing', () => {
+    expect([...DISABLE_LOCKED].sort()).toEqual(['calendar', 'content', 'publishing'])
+  })
+  it('enable and record_dpia stay open for a locked module', async () => {
+    await expect(act('record_dpia', { module: 'calendar', dpia: 'no', dpiaRef: 'X-1' })).rejects.toMatchObject({ status: 303 })
+    expect(submits).toHaveLength(1)
   })
   it('a module that is not enabled is refused with 409', async () => {
     expect((await act('disable_module', { module: 'votes' })).status).toBe(409)
@@ -223,7 +276,7 @@ describe('reconcile', () => {
 
 describe.each([
   ['enable_module', ENABLE],
-  ['disable_module', { module: 'calendar' }],
+  ['disable_module', { module: 'files' }],
   ['record_dpia', { module: 'calendar', dpia: 'no', dpiaRef: 'X-1' }],
   ['reconcile', { apply: 'false' }],
 ] as const)('%s: states, 409 and 403', (name, fields) => {
