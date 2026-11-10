@@ -1,6 +1,6 @@
 # Backup: installed, verified once, then off
 
-- Version: 1.0.0
+- Version: 1.1.0
 - Wall-clock budget: one working day, from step 1 to the asserted post-condition (PRD-PLAT-005)
 - Implements: TRD-200 (backup), TRD-170 and TRD-174 in their pilot form (R15-1), FLOW-OPS-005
 - First run: TASK-089, on the rebuilt host, before any council data exists
@@ -115,9 +115,11 @@ systemctl show gremion-backup.timer -p NextElapseUSecRealtime --value      # a d
 
 - `gremion-backup` refuses without a reachable off-site remote, while the pilot keeps off-site copies off; the verification run therefore needs a remote for that one run.
 - The pooled layout (TASK-040, [pooled-stack-layout.md](../pooled-stack-layout.md)) puts the kernel's databases on the state project's `postgres` and each enabled module's on its own `<id>-postgres` (D14). `BACKUP_POSTGRES_SERVICES` must name every one of them for step 3 to find one dump per database; the release's restore script still restores into `postgres` only, so `gremion-restore-into` stops with `BLOCKED:` on a module server's dump ([restore.md](restore.md), arm B), until PENDING TASK-089 (`scripts/backup/`) lands the per-module path.
-- `governance-postgres` (TASK-084-a, one governance database per customer) is a PostgreSQL server of the state project too, and `BACKUP_POSTGRES_SERVICES` is filled in by hand: a host whose list omits it backs up no governance database and the run still ends `ok`, because the coverage check only compares the servers it was given. Name `governance-postgres` in the list on every host that creates customers. Until TASK-084-b the governance databases hold only the binding row and the migration ledger, so the exposure is small; the cross-check against the running servers (spec B27, not yet built) is the permanent fix, and it is a blocking prerequisite of TASK-084-b: no governance data is written before `gremion-backup` refuses a run that leaves a running PostgreSQL server of the state project out of its list.
+- `BACKUP_POSTGRES_SERVICES` is filled in by hand, and `gremion-backup` cross-checks it against the running system (K-21, TASK-232, spec B27). Before anything is staged it asks the engine for every running container that carries the `org.gremion.postgres` label in the `<stack>-state` compose project and takes its `com.docker.compose.service` name; a server that runs but is not in the list (for example `nextcloud-postgres`, `messaging-postgres` or `governance-postgres`) refuses the run with exit 1 and the error names it. Containers of another stack on the same engine do not carry that project and are not counted. The check fails closed: a query that errors, or that finds no server although the kernel's `postgres` always runs in the state project, refuses the run instead of passing. A listed server that is not running is not refused here; its dump fails by name at the enumeration.
+- Upgrade order for a host that predates this check: `gremion-snapshot` runs `gremion-backup` on every deploy, so the first deploy that carries the check refuses to go on when the host's `BACKUP_POSTGRES_SERVICES` leaves out a running server. Before upgrading a host, list every running server in `state.env` (`docker ps --filter label=org.gremion.postgres --filter label=com.docker.compose.project=<stack>-state --format '{{.Label "com.docker.compose.service"}}'`), set `BACKUP_POSTGRES_SERVICES` to that full set, and only then deploy. This is a blocking prerequisite of TASK-084-b: no governance data is written on a host whose list leaves out `governance-postgres`.
 - PENDING TASK-089 (`scripts/backup/`): the per-module verification (one database per module server, D14) and the pilot's verification path replace today's enumeration; TASK-089 also runs this procedure first.
 
 ## Changelog
 
 - 1.0.0 (2026-09-27): first version (TASK-037).
+- 1.1.0 (2026-11-10): `gremion-backup` refuses a run that leaves a running PostgreSQL server of the state project out of `BACKUP_POSTGRES_SERVICES` (K-21, TASK-232); Known gaps updated, with the upgrade order.

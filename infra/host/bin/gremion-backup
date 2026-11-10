@@ -12,6 +12,10 @@
 # Exit codes: 0 ok · 1 assertion/post-condition failed · 2 usage or missing
 #             precondition · 3 blocked on an external step.
 #
+# Before anything is staged, assert_postgres_server_coverage refuses a run that
+# leaves a running PostgreSQL server of the state project (label
+# org.gremion.postgres) out of BACKUP_POSTGRES_SERVICES (K-21, spec B27).
+#
 # STAGED DUMP NAMING — two zones under $(gremion_root)/backups/current, both of
 # which Task 10's gremion-restore-into consumes:
 #
@@ -553,6 +557,47 @@ assert_dump_coverage() {
     ok "every enumerated database has a non-empty dump (${DB_COUNT})"
 }
 
+# K-21 / TASK-232 (spec B27 cross-check). assert_dump_coverage only compares the
+# servers it is GIVEN, so a PostgreSQL server of the state project that is left
+# out of BACKUP_POSTGRES_SERVICES was never enumerated, never dumped and never
+# noticed: the run ended ok with a whole server absent from the snapshot. The
+# servers are discovered from the running engine through the label every one of
+# them carries (org.gremion.postgres) and the compose project the stack's state
+# services run in; containers of any other stack on the same engine do not match
+# the project filter and are not counted. `docker ps` lists running containers
+# only, which is the set that has data a dump could miss.
+running_postgres_services() {
+    docker ps --filter "label=org.gremion.postgres" \
+        --filter "label=com.docker.compose.project=${STACK}-state" \
+        --format '{{.Label "com.docker.compose.service"}}'
+}
+
+# Fails closed: a query that errors, or that finds no server at all, refuses the
+# run. The kernel's own `postgres` server is always part of the state project, so
+# an empty answer means the discovery is broken (a label that moved, a project
+# name that no longer matches), not that there is nothing to back up; passing on
+# it would be the vacuous coverage this check exists to remove. It runs before
+# reset_stage_dir, so a refusal leaves the previous staged tree intact and stages
+# nothing of its own.
+assert_postgres_server_coverage() {
+    local running listed svc unlisted="" n=0
+    running="$(running_postgres_services)" \
+        || die "cannot list the running PostgreSQL servers of ${STACK}-state" 1
+    running="$(printf '%s\n' "$running" | tr -d '\r' | sed '/^[[:space:]]*$/d' | sort -u)"
+    [ -n "$running" ] \
+        || die "no running PostgreSQL server found in ${STACK}-state (label org.gremion.postgres): refusing to back up blind" 1
+    listed="$(postgres_services)"
+    while read -r svc <&3; do
+        [ -n "$svc" ] || continue
+        n=$(( n + 1 ))
+        printf '%s\n' "$listed" | grep -qxF -- "$svc" \
+            || unlisted="${unlisted:+${unlisted} }${svc}"
+    done 3<<<"$running"
+    [ -z "$unlisted" ] \
+        || die "running PostgreSQL server(s) of ${STACK}-state missing from BACKUP_POSTGRES_SERVICES: ${unlisted}" 1
+    ok "every running PostgreSQL server of ${STACK}-state is in BACKUP_POSTGRES_SERVICES (${n})"
+}
+
 archive_volumes() {
     local v img
     img="${BACKUP_ARCHIVE_IMAGE:-alpine:3.22@sha256:5291449c3df73caf6ed85e649dec1b9e818b39a5d8c871e97afc13e9cd5e8fa8}"
@@ -896,6 +941,7 @@ main() {
     assert_offsite_reachable
     assert_free_space
     assert_volume_enumeration
+    assert_postgres_server_coverage
     reset_stage_dir
     run_kernel_dumps
     dump_remaining_databases
