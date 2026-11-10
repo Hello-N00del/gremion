@@ -87,7 +87,7 @@ describe('buildMap', () => {
     expect(dataOf(r.html).stale.areas).toBe(1)
   })
 
-  it('the limits count the jobs of the graph, and say that L0 shows connections for these jobs only', () => {
+  it('the limits count the jobs of the graph, and say that the other files of L0 show only the connections from jobs', () => {
     const wf = { id: 'file:.github/workflows/ci.yml', kind: 'file', name: 'ci.yml', parent: 'area:svc@L3', file: '.github/workflows/ci.yml', line: 1, layer: 'L0' }
     const job = (id, line) => ({ id: `job:.github/workflows/ci.yml#${id}`, kind: 'job', name: id, parent: wf.id, file: wf.file, line, layer: 'L0' })
     const g = makeGraph([wf, job('lint', 4), job('build', 9)])
@@ -98,7 +98,11 @@ describe('buildMap', () => {
     expect(d.kinds).toContain('job')
     const l0 = d.limits.find((l) => l.startsWith('L0 shows'))
     expect(l0).toMatch(/jobs of the GitHub workflows/)
-    expect(l0).toMatch(/connections for these jobs only/)
+    // The other files of L0 show only the connections that come from jobs. The text must not say that they show none.
+    expect(l0).toMatch(/A job shows its own connections\./)
+    expect(l0).toMatch(/A workflow file shows the connections of its jobs\./)
+    expect(l0).toMatch(/The other files of L0 show only the connections from jobs\./)
+    expect(l0).not.toMatch(/for these jobs only|does not show connections/)
     expect(l0).not.toMatch(/files only/)
     expect(dataOf(buildMap({ graph: makeGraph(), text: baseText(), template, commit: SHA }).html).limits[0]).toBe('This map shows 2 functions, 0 jobs of GitHub workflows and 1 connections.')
   })
@@ -176,7 +180,9 @@ describe('the template', () => {
   it('knows the job item and the needs and runs edge kinds in every map that lists kinds', () => {
     expect(template).toMatch(/KN=\{[^}]*job:'Job'/)
     for (const name of ['EV', 'K3', 'KC', 'KW']) {
-      const body = new RegExp(`(?:const ${name}=|const K3=k=>\\()\\{[^}]*\\}`).exec(template)?.[0] ?? ''
+      // One pattern for each name. K3 is an arrow function that returns an object; the others are plain objects.
+      const head = name === 'K3' ? 'const K3=k=>\\(' : `const ${name}=`
+      const body = new RegExp(`${head}\\{[^}]*\\}`).exec(template)?.[0] ?? ''
       expect(body, name).toMatch(/needs:/)
       expect(body, name).toMatch(/runs:/)
     }

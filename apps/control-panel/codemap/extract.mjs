@@ -1256,20 +1256,20 @@ function scriptFile(c) {
   files.push(fi); fileByRel.set(c, fi)
   return fi.fileId
 }
-/** A path that starts at the repo root wins. A relative path is looked up in each working directory of the job. */
-function scriptNodes(script, workingDirs) {
-  const out = []
-  for (const c of [script, ...workingDirs.map((w) => `${w}/${script}`)]) {
+/** A script is looked up in the working directory of its own step first, then at the repo root. The first file that exists is the target. */
+function scriptNode(script, dir) {
+  for (const c of dir ? [`${dir}/${script}`, script] : [script]) {
     const id = scriptFile(c)
-    if (id) { out.push(id); if (c === script) break }
+    if (id) return id
   }
-  return out
+  return null
 }
 let jobCount = 0
 for (const wf of files.filter((f) => /^\.github\/workflows\/[^/]+\.ya?ml$/.test(f.rel))) {
-  let text = ''
-  try { text = fs.readFileSync(wf.abs, 'utf8') } catch { /* an unreadable file keeps its file node and has no job */ }
-  const jobs = parseJobs(text)
+  // A workflow that cannot be read or scanned keeps its file node and has no job. The run says so: a map without the jobs of a workflow must not look complete.
+  let jobs = []
+  try { jobs = parseJobs(fs.readFileSync(wf.abs, 'utf8')) } catch (e) { log('workflow not read', wf.rel, e?.code ?? e?.name ?? 'error', e?.message ?? '') }
+  if (!jobs.length) log('workflow with no job', wf.rel)
   const jobId = (id) => `job:${wf.rel}#${id}`
   for (const j of jobs) {
     addNode({ id: jobId(j.id), kind: 'job', name: j.name ? `${j.id}: ${j.name}` : j.id, parent: wf.fileId, file: wf.rel, line: j.line, doc: '', layer: 'L0' })
@@ -1279,7 +1279,7 @@ for (const wf of files.filter((f) => /^\.github\/workflows\/[^/]+\.ya?ml$/.test(
     const from = jobId(j.id)
     for (const n of j.needs) if (nodes.has(jobId(n))) addEdge(from, jobId(n), 'needs', 'workflow')
     for (const d of j.dockerfiles) { const t = fileByRel.get(d); if (t) addEdge(from, t.fileId, 'runs', 'dockerfile') }
-    for (const sc of j.scripts) for (const t of scriptNodes(sc, j.workingDirs)) addEdge(from, t, 'runs', 'script')
+    for (const r of j.runs) { const t = scriptNode(r.script, r.dir); if (t) addEdge(from, t, 'runs', 'script') }
     for (const f of j.filters) { const ws = workspace.get(f); const a = ws ? wsAreaOf(ws.dir.slice(KERNEL.length + 1)) : null; if (a) addEdge(from, a, 'runs', 'area') }
     for (const w of j.workingDirs) { const a = areaOfDir(w); if (a) addEdge(from, a, 'runs', 'area') }
   }

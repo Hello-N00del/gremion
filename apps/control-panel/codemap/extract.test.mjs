@@ -127,9 +127,12 @@ describe('extract.mjs: workflows', () => {
     expect(g.nodes.filter((n) => n.kind === 'job').map((n) => n.id)).toEqual(['job:.github/workflows/ci.yml#build', 'job:.github/workflows/ci.yml#lint', 'job:.github/workflows/ci.yml#panel'])
   })
 
-  it('a workflow file that cannot be read still has its file node and area, and gives no job', () => {
+  it('a workflow file that holds no job (here: garbage) still has its file node and area, and the run logs its path', () => {
     fixture()
-    expect(extract(out, '--tree', '--commit', SHA).status).toBe(0)
+    const res = extract(out, '--tree', '--commit', SHA)
+    expect(res.status).toBe(0)
+    expect(res.stdout).toMatch(/workflow with no job .*\.github\/workflows\/broken\.yml/)
+    expect(res.stdout).not.toMatch(/workflow with no job .*\.github\/workflows\/ci\.yml/)
     const g = read()
     expect(g.nodes.find((n) => n.id === 'file:.github/workflows/broken.yml')).toMatchObject({ kind: 'file', parent: 'area:github-actions/broken@L0' })
     expect(g.nodes.some((n) => n.kind === 'job' && n.file.endsWith('broken.yml'))).toBe(false)
@@ -186,7 +189,7 @@ describe('extract.mjs: workflows', () => {
     expect(g.nodes.some((n) => n.id === 'area:github-actions/scripts@L0')).toBe(false)
   })
 
-  it('a relative script is looked up in each working directory of the job, and a path from the repo root wins', () => {
+  it('a relative script is looked up in the working directory of its own step first, then at the repo root', () => {
     put('.github/workflows/w.yml', [
       'jobs:',
       '  j:',
@@ -197,19 +200,31 @@ describe('extract.mjs: workflows', () => {
       '        working-directory: gremion-public',
       '      - run: node scripts/both.mjs',
       '        working-directory: gremion-ui',
+      '      - run: node scripts/rootonly.mjs',
+      '        working-directory: gremion-ui',
+      '      - run: node src/other.js',
+      '        working-directory: gremion-ui',
       '',
     ].join('\n'))
     put('gremion-ui/src/gen.js', 'console.log(1)\n')
     put('gremion-public/src/gen.js', 'console.log(2)\n')
     put('gremion-ui/scripts/both.mjs', 'console.log(3)\n')
     put('scripts/both.mjs', 'console.log(4)\n')
+    put('scripts/rootonly.mjs', 'console.log(5)\n')
+    // exists in the directory of a different step only
+    put('gremion-public/src/other.js', 'console.log(6)\n')
     expect(extract(out, '--tree', '--commit', SHA).status).toBe(0)
     const g = read()
     const j = 'job:.github/workflows/w.yml#j'
     expect(edge(g, j, 'file:gremion-ui/src/gen.js', 'runs')).toBeTruthy()
     expect(edge(g, j, 'file:gremion-public/src/gen.js', 'runs')).toBeTruthy()
-    expect(edge(g, j, 'file:scripts/both.mjs', 'runs')).toBeTruthy()
-    expect(edge(g, j, 'file:gremion-ui/scripts/both.mjs', 'runs')).toBeFalsy()
+    // the directory of the step wins over the repo root
+    expect(edge(g, j, 'file:gremion-ui/scripts/both.mjs', 'runs')).toBeTruthy()
+    expect(edge(g, j, 'file:scripts/both.mjs', 'runs')).toBeFalsy()
+    // no such file in the directory of the step: the repo root
+    expect(edge(g, j, 'file:scripts/rootonly.mjs', 'runs')).toBeTruthy()
+    // a directory of another step of the job is not tried
+    expect(edge(g, j, 'file:gremion-public/src/other.js', 'runs')).toBeFalsy()
   })
 
   it('works on the app area by working-directory: L4 before L5; and by a package name', () => {

@@ -37,6 +37,7 @@ function findJsdom() {
   return null
 }
 const jsdom = findJsdom()
+if (!jsdom) console.warn('page.test.mjs: the DOM suite is skipped because jsdom was not found (not a dependency of the control panel, and not in the pnpm store of a full install).')
 
 const CI = [
   'name: CI',
@@ -48,6 +49,9 @@ const CI = [
   '  lint:',
   '    name: Lint',
   '    runs-on: ubuntu-latest',
+  '    steps:',
+  '      - run: pnpm run check',
+  '        working-directory: packages/x',
   '  verify-static:',
   '    name: Verify Static',
   '    runs-on: ubuntu-latest',
@@ -224,6 +228,17 @@ describe.skipIf(!jsdom)('the built page: a DOM run', () => {
     win.__cmView(idx('file:.github/workflows/ci.yml'))
     const cards = $$('.card').map((c) => c.textContent)
     expect(cards.some((t) => t.startsWith('lint: Lint') && t.includes('Job, line'))).toBe(true)
+  })
+
+  it('the lens of a workflow file lists the area that a job of the file works on, and the file that a job runs', () => {
+    const area = graph.edges.find((e) => e.kind === 'runs' && e.from === ci('lint') && e.to.startsWith('area:'))
+    expect(area, 'the fixture has a job-to-area edge').toBeTruthy()
+    win.__cmView(idx('file:.github/workflows/ci.yml'))
+    const right = $$('#cr .item').map((b) => b.textContent)
+    // an area has no file above it: it stays in the list as itself, with the number of connections
+    expect(right.some((t) => t.includes(graph.nodes.find((n) => n.id === area.to).name) && t.includes('connections'))).toBe(true)
+    // a file target is still grouped by its own file
+    expect(right.some((t) => t.includes('Dockerfile'))).toBe(true)
   })
 
   it('the new example is listed, and it plays step by step in the walk view', () => {

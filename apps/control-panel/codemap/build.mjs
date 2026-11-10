@@ -67,7 +67,7 @@ export function buildMap({ graph: g, text: t, template, commit: rawCommit }) {
     `A program made the map from the code. The program found the target of ${pct} percent of the calls inside the project.`,
     'The map does not show the other calls. Some of these calls use a value that the program can only know when the code runs.',
     'The build of this page can have fewer outside packages than a full build. If it has fewer, the map shows fewer connections.',
-    'L0 shows files and the jobs of the GitHub workflows. L0 shows connections for these jobs only. The map does not show connections for the other files of L0.',
+    'L0 shows files and the jobs of the GitHub workflows. A job shows its own connections. A workflow file shows the connections of its jobs. The other files of L0 show only the connections from jobs.',
     'The sentences about one function come from the name of the function. A person did not write these sentences.',
     'The other text follows the rules of ASD-STE100 Simplified Technical English. A program did a rule check on this text. The rule check is not a certified STE check.',
   ]

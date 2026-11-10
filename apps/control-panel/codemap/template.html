@@ -174,7 +174,7 @@ function text(i){const x=n(i);
   return fnText(i)}
 const direct=i=>['function','page','route','table','job'].includes(n(i).k);
 function under(i,a=[]){kids[i].forEach(c=>{a.push(c);under(c,a)});return a}
-function grouped(i,edges,lvl){const m=new Map(),own=new Set([i,...under(i)]);own.forEach(s=>edges[s].forEach(([t])=>{if(own.has(t))return;const g=up(t,lvl);if(g<0)return;m.set(g,(m.get(g)||0)+1)}));return [...m].sort((a,b)=>b[1]-a[1])}
+function grouped(i,edges,lvl){const m=new Map(),own=new Set([i,...under(i)]);own.forEach(s=>edges[s].forEach(([t])=>{if(own.has(t))return;const a=up(t,lvl),g=a<0?t:a;m.set(g,(m.get(g)||0)+1)}));return [...m].sort((a,b)=>b[1]-a[1])}
 function row(t,why,chain){const has=direct(t)&&(out[t].length>0||inc[t].length>0)&&!chain.has(t);return `<div class="row">${has?`<button class="tog" data-o="${t}" aria-expanded="false" aria-label="Open the next level">+</button>`:'<span></span>'}<button class="item" data-go="${t}" style="--c:${col(t)}">${esc(label(t))}${why?`<small>${esc(why)}</small>`:''}</button></div>`}
 const uniq=a=>{const s=new Set();return a.filter(([t])=>!s.has(t)&&s.add(t))};
 function list(arr,chain,cap=14){if(!arr.length)return '<div class="note">No items.</div>';const h=arr.slice(0,cap).map(([t,w])=>row(t,w,chain)).join('');return h+(arr.length>cap?`<button class="more" data-more>Show all ${arr.length} items</button>`:'')}

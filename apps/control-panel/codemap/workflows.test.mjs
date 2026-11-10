@@ -198,6 +198,65 @@ describe('parseJobs: pnpm filter and working directory', () => {
   })
 })
 
+describe('parseJobs: a run is paired with the working directory of its own step', () => {
+  const t = [
+    'jobs:',
+    '  a:',
+    '    defaults:',
+    '      run:',
+    '        working-directory: apps/default',
+    '    steps:',
+    '      - name: The directory comes before the run',
+    '        working-directory: gremion-ui',
+    '        run: node src/gen.js',
+    '      - run: node src/gen.js',
+    '        working-directory: gremion-public',
+    '      - run: node scripts/own.mjs',
+    '        working-directory: ${{ matrix.dir }}',
+    '      - run: |',
+    '          echo start',
+    '          bash scripts/two.sh',
+    '        working-directory: ./gremion-ui/',
+    '  b:',
+    '    steps:',
+    '      - run: node scripts/plain.mjs',
+    '      - uses: actions/checkout@v4',
+    '        with:',
+    '          path: x',
+    '      - run: node scripts/after.mjs',
+    '        working-directory: apps/after',
+    '',
+  ].join('\n')
+
+  it('gives each script the directory of the step that runs it', () => {
+    expect(byId(parseJobs(t), 'a').runs).toEqual([
+      { script: 'src/gen.js', dir: 'gremion-ui' },
+      { script: 'src/gen.js', dir: 'gremion-public' },
+      // the step names a directory that only an expression knows: the job default does not apply, so there is none
+      { script: 'scripts/own.mjs', dir: '' },
+      { script: 'scripts/two.sh', dir: 'gremion-ui' },
+    ])
+  })
+
+  it('a step without its own directory has the directory of the job default', () => {
+    const d = ['jobs:', '  c:', '    defaults:', '      run:', '        working-directory: apps/default', '    steps:', '      - run: node scripts/d.mjs', ''].join('\n')
+    expect(byId(parseJobs(d), 'c').runs).toEqual([{ script: 'scripts/d.mjs', dir: 'apps/default' }])
+  })
+
+  it('a step without a directory has no directory; the directory of one step is not given to the next', () => {
+    expect(byId(parseJobs(t), 'b').runs).toEqual([
+      { script: 'scripts/plain.mjs', dir: '' },
+      { script: 'scripts/after.mjs', dir: 'apps/after' },
+    ])
+  })
+
+  it('still lists every script and every directory of the job', () => {
+    const a = byId(parseJobs(t), 'a')
+    expect(a.scripts).toEqual(['src/gen.js', 'scripts/own.mjs', 'scripts/two.sh'])
+    expect(a.workingDirs).toEqual(['apps/default', 'gremion-ui', 'gremion-public'])
+  })
+})
+
 describe('parseJobs: odd input never throws', () => {
   it('accepts CRLF and gives the same result as LF', () => {
     const lf = ['name: x', 'jobs:', '  a:', '    name: "A"', '    needs: [b]', '    steps:', '      - run: node scripts/x.mjs', '  b:', '    needs:', '      - a', ''].join('\n')
