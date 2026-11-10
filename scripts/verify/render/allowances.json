@@ -28,6 +28,27 @@
       "date": "2026-10-02",
       "retiresWith": "TASK-048b",
       "reason": "adders clause (TASK-198): Synapse is a first-party build: service in the state project (profiles: [messaging]); the render-guards state render carries no pins layer, so it keeps build like legal, vector and fallback; the release state-pins fixture pins it (test/host/fixtures/release/valid)"
+    },
+    {
+      "project": "state",
+      "service": "nextcloud",
+      "date": "2026-11-09",
+      "retiresWith": "TASK-048b",
+      "reason": "adders clause (pilot wave 2): Nextcloud is a first-party build: service in the state project (profiles: [nextcloud], docker/nextcloud); the render-guards state render carries no pins layer, so it keeps build like matrix; the pilot host builds it from the pinned commit and tags it with that commit"
+    },
+    {
+      "project": "state",
+      "service": "collabora",
+      "date": "2026-11-09",
+      "retiresWith": "TASK-048b",
+      "reason": "adders clause (pilot wave 2): Collabora is a first-party build: service in the state project (profiles: [collabora], docker/collabora); the render-guards state render carries no pins layer, so it keeps build like matrix; the pilot host builds it from the pinned commit and tags it with that commit"
+    },
+    {
+      "project": "state",
+      "service": "element-call",
+      "date": "2026-11-09",
+      "retiresWith": "TASK-048b",
+      "reason": "adders clause (pilot wave 2): Element Call is a first-party build: service in the state project (profiles: [video], docker/element-call); the render-guards state render carries no pins layer, so it keeps build like matrix; the pilot host builds it from the pinned commit and tags it with that commit"
     }
   ]
 }

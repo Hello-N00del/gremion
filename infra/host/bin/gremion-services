@@ -376,7 +376,7 @@ cmd_wire() {
             || die "calendar-service carries no CALDAV_CALENDAR_TEMPLATE with a {slug} (docker exec ${cal_c} printenv): its CalDAV drain would refuse every customer" "$GREMION_EXIT_ASSERT"
         cal_user="$(docker exec "$cal_c" printenv CALDAV_SHARED_USER 2>/dev/null | tr -d '[:space:]' || true)"
         [[ -n "$cal_user" ]] || cal_user="$(docker exec "$cal_c" printenv NEXTCLOUD_ADMIN_USER 2>/dev/null | tr -d '[:space:]' || true)"
-        [[ -n "$cal_user" ]] || cal_user=admin
+        [[ -n "$cal_user" ]] || cal_user="admin"
         cal_name="${cal_tpl//\{slug\}/${slug}}"
         [[ "$cal_name" =~ ^[A-Za-z0-9._-]{1,64}$ ]] \
             || die "the calendar name ${cal_name} (CALDAV_CALENDAR_TEMPLATE with the slug) is not one safe path segment" "$GREMION_EXIT_ASSERT"

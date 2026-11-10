@@ -34,6 +34,12 @@ set -euo pipefail
 #                            long proof can run in several calls; the caller
 #                            removes it. Unset: a temporary clone, removed on exit.
 #
+#   --check-targets          offline, no Postgres, no clone: only prove that every
+#                            mutation's target line occurs exactly once in this
+#                            work tree. A refactor that rewrites a target line makes
+#                            a full pass die half way; this makes it red at once.
+#                            scripts/check-isolation-mutation-targets.test.mjs runs it.
+#
 # One pass is a producer run per mutation (about 30 s each). Exit codes follow
 # infra/host/README.md: 0 every mutation proved RED, 1 a proof failed, 2 usage.
 
@@ -42,37 +48,43 @@ MUTATION_IDS=(
   b-calendar b-content b-publishing
   c-votes
   d-client d-token d-admin
-  e-backslash e-dotdot e-uploadid e-bearer e-editpage
+  e-backslash e-dotdot e-dothidden e-uploadid e-bearer e-editpage
 )
 
 die() { printf 'mutation-proof: %s\n' "$*" >&2; exit "${2:-1}"; }
 usage() { sed -n '2,/^$/p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 
 ONLY=""
+CHECK=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --only) [[ $# -ge 2 ]] || die "--only needs a value" 2; ONLY="$2"; shift 2 ;;
+    --check-targets) CHECK=1; shift ;;
     --list) printf '%s\n' "${MUTATION_IDS[@]}"; exit 0 ;;
     -h|--help) usage ;;
     *) die "unknown argument: $1" 2 ;;
   esac
 done
-[[ -n "${ISOLATION_TENANT_PG_URL:-}" ]] || die "ISOLATION_TENANT_PG_URL is required (a throwaway Postgres on localhost, not port 5432)" 2
+[[ "$CHECK" == 1 || -n "${ISOLATION_TENANT_PG_URL:-}" ]] || die "ISOLATION_TENANT_PG_URL is required (a throwaway Postgres on localhost, not port 5432)" 2
 
 SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$SELF_DIR/../../.." && pwd)"
-command -v git >/dev/null 2>&1 || die "git is required" 2
 command -v node >/dev/null 2>&1 || die "node is required" 2
-command -v pnpm >/dev/null 2>&1 || die "pnpm is required" 2
-
-if [[ -n "$(git -C "$REPO" status --porcelain)" ]]; then
-  die "the working tree is not clean: the proof is about the HEAD commit, commit or remove the changes first" 2
+if [[ "$CHECK" != 1 ]]; then
+  command -v git >/dev/null 2>&1 || die "git is required" 2
+  command -v pnpm >/dev/null 2>&1 || die "pnpm is required" 2
+  if [[ -n "$(git -C "$REPO" status --porcelain)" ]]; then
+    die "the working tree is not clean: the proof is about the HEAD commit, commit or remove the changes first" 2
+  fi
+  BASE="$(git -C "$REPO" rev-parse HEAD)"
 fi
-BASE="$(git -C "$REPO" rev-parse HEAD)"
 
 KEEP=1
 CLONE="${MUTATION_PROOF_CLONE:-}"
-if [[ -z "$CLONE" ]]; then
+if [[ "$CHECK" == 1 ]]; then
+  # --check-targets reads this work tree and writes nothing
+  CLONE="$REPO"
+elif [[ -z "$CLONE" ]]; then
   CLONE="$(mktemp -d)"
   KEEP=0
 fi
@@ -87,7 +99,7 @@ export CI=true
 g() { git -C "$CLONE" "$@"; }
 
 # The marker lives inside .git: a file in the work tree would make verify see a dirty tree.
-if [[ ! -e "$CLONE/.git/mutation-proof-ready" ]]; then
+if [[ "$CHECK" != 1 && ! -e "$CLONE/.git/mutation-proof-ready" ]]; then
   # never delete a directory this script did not make
   if [[ -e "$CLONE" && -n "$(ls -A "$CLONE" 2>/dev/null)" ]]; then die "MUTATION_PROOF_CLONE=$CLONE exists, is not empty and is not a prepared clone of this proof" 2; fi
   mkdir -p "$CLONE"
@@ -97,8 +109,10 @@ if [[ ! -e "$CLONE/.git/mutation-proof-ready" ]]; then
   (cd "$CLONE" && pnpm install --frozen-lockfile >/dev/null 2>&1) || die "pnpm install --frozen-lockfile failed in the scratch clone"
   : > "$CLONE/.git/mutation-proof-ready"
 fi
-g reset --hard -q "$BASE"
-[[ "$(g rev-parse HEAD)" == "$BASE" ]] || die "the scratch clone is not at $BASE"
+if [[ "$CHECK" != 1 ]]; then
+  g reset --hard -q "$BASE"
+  [[ "$(g rev-parse HEAD)" == "$BASE" ]] || die "the scratch clone is not at $BASE"
+fi
 
 # run_producer -- the producer on the clone's HEAD; output in $LOG, exit code in $RC.
 RC=0
@@ -111,15 +125,20 @@ run_producer() {
 # continue when the line is absent or occurs more than once (a mutation that
 # changes nothing would prove nothing).
 mutate() {
+  # Git Bash hands node a POSIX path it cannot always convert (a `[roomId]` segment defeats the
+  # automatic conversion), so give it the native form where cygpath exists.
+  local target="$CLONE/$1"
+  if command -v cygpath >/dev/null 2>&1; then target="$(cygpath -m "$target")"; fi
   # shellcheck disable=SC2016  # the JavaScript is deliberately literal, nothing here is shell
   node -e '
     const fs = require("node:fs")
-    const [file, find, repl] = process.argv.slice(1)
+    const [file, find, repl, check] = process.argv.slice(1)
     const text = fs.readFileSync(file, "utf8")
     const n = text.split(find).length - 1
     if (n !== 1) { console.error(`mutate: ${JSON.stringify(find)} occurs ${n} time(s) in ${file}, expected exactly 1`); process.exit(3) }
-    fs.writeFileSync(file, text.replace(find, () => repl))
-  ' "$CLONE/$1" "$2" "$3" || die "could not apply a mutation to $1"
+    if (find === repl) { console.error(`mutate: the replacement equals the target in ${file}, it would change nothing`); process.exit(3) }
+    if (check !== "1") fs.writeFileSync(file, text.replace(find, () => repl))
+  ' "$target" "$2" "$3" "$CHECK" || die "could not apply a mutation to $1"
 }
 
 # ---- the mutations: each sets EXPECT (an ERE the failing output must match) and DESC ----
@@ -163,9 +182,14 @@ mut_e_backslash() { # the path guard no longer refuses backslashes and control c
   DESC="files: backslash and control characters pass the path guard"
 }
 mut_e_dotdot() { # the dot-dot check is gone
-  mutate "modules/files/app/lib/server/files/webdav-path.ts" "  if (decoded.split('/').some((seg) => seg === '..')) {" "  if (false as boolean) {"
+  mutate "modules/files/app/lib/server/files/webdav-path.ts" "  if (decoded.split('/').some(isDotSegment)) {" "  if (false as boolean) {"
   EXPECT="dot-dot to the other customer"
   DESC="files: a .. segment passes the path guard"
+}
+mut_e_dothidden() { # a dot segment is only recognised when it is bare: `..?x`, `..#x`, `.. ` pass
+  mutate "modules/files/app/lib/server/files/webdav-path.ts" "  const head = seg.split(/[?#]/, 1)[0].trim()" "  const head = seg"
+  EXPECT="dot-dot with a query suffix"
+  DESC="files: a dot segment hidden behind ?x, #x or a space passes the path guard"
 }
 mut_e_uploadid() { # an upload id may be . or ..
   mutate "modules/files/app/routes/api/files/upload-chunk/+server.ts" 'const UPLOAD_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/' 'const UPLOAD_ID_PATTERN = /^[A-Za-z0-9._-]{1,64}$/'
@@ -201,12 +225,21 @@ apply() {
     d-admin) mut_d_admin ;;
     e-backslash) mut_e_backslash ;;
     e-dotdot) mut_e_dotdot ;;
+    e-dothidden) mut_e_dothidden ;;
     e-uploadid) mut_e_uploadid ;;
     e-bearer) mut_e_bearer ;;
     e-editpage) mut_e_editpage ;;
     *) die "unknown mutation id: $1" 2 ;;
   esac
 }
+
+# ---- --check-targets: every target line is present, exactly once, in this tree ----
+
+if [[ "$CHECK" == 1 ]]; then
+  for id in "${MUTATION_IDS[@]}"; do apply "$id"; done
+  printf 'mutation-proof: all %s mutation targets occur exactly once\n' "${#MUTATION_IDS[@]}"
+  exit 0
+fi
 
 # ---- CONTROL ---------------------------------------------------------------
 

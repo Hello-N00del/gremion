@@ -15,10 +15,16 @@
 import { registerServerInitHook } from '$lib/server/modules/runtime-registry'
 import { forEachActiveTenant } from '$lib/server/tenant/worker-fleet'
 import { CouncilNotConfigured, getCouncilDb } from './council-db'
+import { registerSwitchOffGuard } from './guards'
+import { calendarLeafSwitchOffGuard } from './leaf-guards'
 import { MODULE_SWITCH_INTERVAL_MS, runModuleSwitchPass } from './reconciler'
 
 /** The id the reconciler reports under in logs and single-flight. */
 export const MODULE_SWITCH_WORKER = 'module-switch'
+
+// Unconditional (not inside the hook below): the guard answers the switch service, which runs whether or
+// not the reconciler does. See leaf-guards.ts for why a leaf-backed calendar may not be switched off yet.
+registerSwitchOffGuard('calendar', calendarLeafSwitchOffGuard())
 
 registerServerInitHook(() => {
   try {

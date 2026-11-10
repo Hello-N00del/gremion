@@ -28,6 +28,7 @@ vi.mock('$env/dynamic/private', () => ({ env: {} }))
 
 import { CouncilNotConfigured } from './council-db'
 import { _clearSwitchOffGuardsForTests, registerSwitchOffGuard } from './guards'
+import { calendarLeafSwitchOffGuard, LEAF_BACKED_SWITCH_OFF_REASON } from './leaf-guards'
 import type { KarenzViewDeps } from './karenz-view'
 import { MODULE_DENY, loadModuleOverview, submitModuleSwitch } from './service'
 
@@ -288,6 +289,22 @@ describe('the switch-off guard (Task 8 registry, Task 14 elections guard)', () =
     expect(submits()).toHaveLength(0)
     expect(h.insertSwitch).not.toHaveBeenCalled()
     expect(h.writeAuditEntry).not.toHaveBeenCalled()
+  })
+
+  it('the calendar guard: a council admin who passes the phrase and the step-up still cannot switch off a leaf-backed calendar', async () => {
+    registerSwitchOffGuard('calendar', calendarLeafSwitchOffGuard({ CALENDAR_BACKEND: 'service' }))
+    const r = await submitModuleSwitch(ctx(), { moduleId: 'calendar', action: 'disable', confirm: 'Kalender' }, deps())
+    expect(r).toMatchObject({ ok: false, status: 409, code: 'SWITCH_OFF_BLOCKED' })
+    expect((r as { message: string }).message).toBe(LEAF_BACKED_SWITCH_OFF_REASON)
+    expect(submits()).toHaveLength(0)
+    expect(h.insertSwitch).not.toHaveBeenCalled()
+    expect(h.writeAuditEntry).not.toHaveBeenCalled()
+  })
+
+  it('the calendar guard lets an in-process calendar through', async () => {
+    registerSwitchOffGuard('calendar', calendarLeafSwitchOffGuard({ CALENDAR_BACKEND: 'inprocess' }))
+    const r = await submitModuleSwitch(ctx(), { moduleId: 'calendar', action: 'disable', confirm: 'Kalender' }, deps())
+    expect(r).toMatchObject({ ok: true })
   })
 
   it('a guard that throws blocks too (fail closed), with the neutral reason', async () => {

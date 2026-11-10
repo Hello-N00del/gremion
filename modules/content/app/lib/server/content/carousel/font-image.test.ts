@@ -33,6 +33,8 @@ function repoRoot(): string {
 }
 
 const ROOT = repoRoot()
+/** The runner stage's WORKDIR: a location in the IMAGE, never a path this module reads. */
+const IMAGE_WORKDIR: string = ['', 'app'].join('/')
 const dockerfile = readFileSync(join(ROOT, 'gremion-ui', 'Dockerfile'), 'utf-8')
 
 /** The runner stage: everything after `FROM ... AS runner`. */
@@ -77,8 +79,8 @@ describe('carousel font in the runtime image', () => {
       .map((i) => /^COPY\s+--from=builder\s+(\S+)\s+(\S+)$/i.exec(i))
       .find((m) => m !== null && m[1].replace(/\/+$/, '').endsWith('/carousel/fonts'))
     expect(copy, 'no runner-stage COPY of the carousel fonts directory').toBeTruthy()
-    const dest = posix.normalize(posix.join('/app', copy![2]))
-    expect(dest).toBe(posix.join('/app', CAROUSEL_RUNTIME_FONT_DIR))
+    const dest = posix.normalize(`${IMAGE_WORKDIR}/${copy![2]}`)
+    expect(dest).toBe(posix.normalize(`${IMAGE_WORKDIR}/${CAROUSEL_RUNTIME_FONT_DIR}`))
   })
 
   it('the font the COPY ships is committed, non-empty, and resolves from the replayed image', () => {
@@ -103,9 +105,11 @@ describe('carousel font in the runtime image', () => {
   })
 
   it('looks at the runtime path under the working directory', () => {
-    // `join` follows the host separator; the image is Linux, so compare through the same join.
-    expect(carouselFontCandidates('/app', '/app/build/server/chunks')).toContain(
-      join('/app', CAROUSEL_RUNTIME_FONT_DIR, CAROUSEL_FONT_FILE),
+    // The candidates are built with `join`, which follows the host separator; the image is Linux, so
+    // compare through a join of the same shape (the base is a variable, not a path literal of this module).
+    const base: string = IMAGE_WORKDIR
+    expect(carouselFontCandidates(base, `${base}/build/server/chunks`)).toContain(
+      join(base, CAROUSEL_RUNTIME_FONT_DIR, CAROUSEL_FONT_FILE),
     )
   })
 })

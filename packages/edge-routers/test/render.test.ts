@@ -116,9 +116,8 @@ describe('renderTenantRouter — TDD 2: what the file declares and chains', () =
     expect(routerBlocks).toHaveLength(6)
     const officeBlocks = routerBlocks.filter((b) => /^ {4}tenant-[a-z0-9-]+\.office:/.test(b))
     expect(officeBlocks).toHaveLength(3)
-    const hostOf = (block: string) => /rule: "Host\(`([^`]+)`\)/.exec(block)?.[1]
     for (const block of routerBlocks) {
-      const host = hostOf(block)
+      const host = /rule: "Host\(`([^`]+)`\)/.exec(block)?.[1]
       const firstMw = /middlewares:\n {8}- "([a-z0-9-]+)@file"/.exec(block)?.[1]
       expect(host).toBeTruthy()
       expect(firstMw).toMatch(/^edge-hostpin-/)
@@ -127,16 +126,11 @@ describe('renderTenantRouter — TDD 2: what the file declares and chains', () =
       expect(block).toContain('entryPoints: ["websecure"]')
       expect(block).toMatch(/tls:\n {8}certResolver: "le-http"/)
       expect(block).not.toMatch(/HostRegexp|\|\|/)
-    }
-    for (const block of officeBlocks) {
-      expect(block).toContain('service: "collabora@docker"')
-      expect(block).toContain(`rule: "Host(\`${hostOf(block)}\`) && PathPrefix(\`/office\`)"`)
-    }
-    const appBlocks = routerBlocks.filter((b) => !officeBlocks.includes(b))
-    expect(appBlocks).toHaveLength(3)
-    for (const block of appBlocks) {
-      expect(block).toContain('service: "app@file"')
-      expect(block).not.toMatch(/PathPrefix/)
+      // the office router is the only one with a path rule and the only one that reaches collabora
+      const isOffice = officeBlocks.includes(block)
+      expect(block).toContain(isOffice ? 'service: "collabora@docker"' : 'service: "app@file"')
+      expect(block.includes(`rule: "Host(\`${host}\`) && PathPrefix(\`/office\`)"`)).toBe(isOffice)
+      expect(/PathPrefix/.test(block)).toBe(isOffice)
     }
   })
 
