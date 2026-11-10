@@ -61,15 +61,18 @@ bewusst keine `migrations`, weil eine spätere Kernel-Migration diese Tabelle in
 ## Aktivieren und Deaktivieren
 
 - Build: im Standard-Build enthalten.
-- Pro Kunde: nicht aktiviert, solange es nicht genannt wird. Die Pilot-Anlageanfrage nennt es
-  nicht ([pilot/module-defaults.de.md](../../docs/pilot/module-defaults.de.md)); `--enable elections`
-  bei der Anlage oder die Anfrage `enable_module` des Panels schaltet es ein.
+- Pro Kunde: ausgeschaltet. Die Pilot-Anlageanfrage nennt es nicht
+  ([pilot/module-defaults.de.md](../../docs/pilot/module-defaults.de.md)), und solange die
+  Festschreibung unten gilt, schaltet es weder `--enable elections` bei der Anlage noch die
+  Anfrage `enable_module` des Panels ein: die Modulschaltung der Gremiumsverwaltung führt es nicht
+  auf, lehnt ein Einschalten mit `MODULE_HELD_OFF` ab und verbucht ein plattformseitiges
+  Einschalten als abgelehnt, nie als umgesetzt.
 - Instanzeinstellung: `config.modules.elections = false` beantwortet `/elections` und
   `/api/elections` mit der Oberfläche für deaktivierte Module. Die Seite `/votes` blendet dann
   jeden Helios-Eintrag aus, und ihr Kopf und der Navigationseintrag lassen das Wort „Wahlen“
   weg. Das Manifest erklärt `defaultEnabled: false`, und `gremion-ui/src/lib/server/config.ts`
   hält die ID bei jedem Lesen und Schreiben von `config.modules` ausgeschaltet
-  (`HELD_OFF_MODULES`, Pilot-Oberfläche 2026-11-09); ein gespeichertes `true` oder ein
+  (`HELD_OFF_MODULE_IDS` in `gremion-ui/src/lib/modules/held-off.ts`, Pilot-Oberfläche 2026-11-09); ein gespeichertes `true` oder ein
   Schreibzugriff der Einstellungen schaltet sie also nicht ein, die Festschreibung zu lösen ist
   eine Codeänderung.
 - Der Wortlaut des Hinweises und was er behaupten darf und was nicht, ist in

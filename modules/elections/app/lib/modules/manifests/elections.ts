@@ -6,7 +6,7 @@ export const electionsManifest: ModuleManifest = {
   order: 30,
   toggleable: true,
   // Pilot surface (2026-11-09): elections start OFF for a fresh tenant. config.ts also pins the id off on
-  // read and write (HELD_OFF_MODULES), so this default cannot be overridden through the settings route.
+  // read and write (HELD_OFF_MODULE_IDS in lib/modules/held-off.ts), so this default cannot be overridden through the settings route.
   defaultEnabled: false,
   // Display name: the Systemstatus catalog and the council module switch (its confirmation phrase) read it.
   status: { label: 'Wahlen' },

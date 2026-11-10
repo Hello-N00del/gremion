@@ -62,7 +62,7 @@ export interface ModuleManifest {
   toggleable: boolean
   /** Initial value of config.modules[id] for a toggleable module. Absent = true (a toggleable module is on
    *  for a fresh tenant); `false` starts it OFF. Read by defaultModulesConfig() only: it is a default, not
-   *  a pin (a module that must stay off also joins HELD_OFF_MODULES in config.ts). */
+   *  a pin (a module that must stay off also joins HELD_OFF_MODULE_IDS in held-off.ts). */
   defaultEnabled?: boolean
   /** Page segments this module owns (→ composed PAGE_ACCESS). */
   pages: ModulePage[]

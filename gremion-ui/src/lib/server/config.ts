@@ -7,6 +7,7 @@ import { requireTenant } from '$lib/server/tenant/context'
 // NavItem; none import this config module (verified), so this static edge has no
 // init cycle (registry.test.ts carries the cycle smoke).
 import { MODULE_MANIFESTS } from '$lib/modules/registry'
+import { HELD_OFF_MODULE_IDS } from '$lib/modules/held-off'
 // gremion#22: read-time mapping of the DEPRECATED freeform brand.accent onto
 // the curated palette registry (pure, client-safe module — no cycle:
 // instance-theme imports nothing).
@@ -152,11 +153,9 @@ const REQUIRED_MODULES: readonly string[] = []
  * pilot. The board is NOT held off (it is a pilot key feature, served in-process). This is the surface
  * pin; level 1 per request (TASK-044-b) and the enable gate are separate and unchanged.
  */
-const HELD_OFF_MODULES: readonly string[] = ['elections']
-
 function pinHeldOff(modules: Record<string, boolean>): Record<string, boolean> {
   const out = { ...modules }
-  for (const id of HELD_OFF_MODULES) out[id] = false
+  for (const id of HELD_OFF_MODULE_IDS) out[id] = false
   return out
 }
 
@@ -691,8 +690,8 @@ export function writeConfig(update: ConfigUpdate, tenant: ConfigTenant = require
   for (const mod of REQUIRED_MODULES) {
     ;(mergedModules as Record<string, boolean>)[mod] = true
   }
-  // ... and the held-off set cannot be turned on (HELD_OFF_MODULES)
-  for (const mod of HELD_OFF_MODULES) {
+  // ... and the held-off set cannot be turned on (HELD_OFF_MODULE_IDS)
+  for (const mod of HELD_OFF_MODULE_IDS) {
     ;(mergedModules as Record<string, boolean>)[mod] = false
   }
 
