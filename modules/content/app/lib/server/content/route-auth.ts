@@ -47,7 +47,8 @@ export function requireContentAuthor(user: SessionUser | null): SessionUser {
   if (!user) throw error(401, 'Unauthorized')
   const granting = contentCapabilityGroups('content.author')
   const groups = new Set(user.groups)
-  if (!granting.some((g) => groups.has(g))) throw error(403, 'Forbidden')
+  // A customer administrator holds a realm role and no group until someone grants a body role.
+  if (!hasRole(user.roles, Role.CouncilAdmin) && !granting.some((g) => groups.has(g))) throw error(403, 'Forbidden')
   return user
 }
 
@@ -62,7 +63,8 @@ export function requireContentPublish(user: SessionUser | null): SessionUser {
   if (!user) throw error(401, 'Unauthorized')
   const granting = contentCapabilityGroups('content.publish')
   const groups = new Set(user.groups)
-  if (!granting.some((g) => groups.has(g))) throw error(403, 'Forbidden')
+  // A customer administrator holds a realm role and no group until someone grants a body role.
+  if (!hasRole(user.roles, Role.CouncilAdmin) && !granting.some((g) => groups.has(g))) throw error(403, 'Forbidden')
   return user
 }
 
