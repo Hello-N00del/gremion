@@ -82,7 +82,7 @@ describe('codemap status', () => {
     expect(s.reason).toMatch(/nicht gelesen/)
     expect(s.reason).not.toMatch(/fehlt|nicht vorhanden/)
     expect(errors).toHaveLength(1)
-    expect(String(errors[0]?.[0])).toMatch(/((E[A-Z]+))/)
+    expect(String(errors[0]?.[0])).toMatch(/\(E[A-Z]+\)/)
     expect(String(errors[0]?.[0])).not.toMatch(/ENOENT/)
     expect(String(errors[0]?.[0])).not.toContain(dir)
   })

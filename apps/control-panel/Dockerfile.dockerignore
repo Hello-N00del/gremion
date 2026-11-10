@@ -4,14 +4,15 @@
 # that one Dockerfile. This image copies the whole repository into its builder stage (`COPY . /codemap-src`) so
 # that the code map can be made from the code, and a copy of everything must not carry a secret. So this file is
 # an ALLOW-LIST: the first rule excludes everything, the next lines let the source folders back in, and the
-# last lines exclude again what must never be in a build context. Those last lines mirror what .gitignore marks
-# as secret: a `secrets` folder at any depth, every `.env*` and `*.env` file, key, certificate and keystore files,
+# last lines exclude again what must never be in a build context. Those last lines mirror what the root .gitignore marks
+# as secret, plus the per-run test state that nested .gitignore files name: a `secrets` folder at any depth, every `.env*` and `*.env` file, key, certificate and keystore files,
 # ssh keys, kubeconfig files, backups, the generated or host-owned files (livekit.prod.yaml, the pgbouncer user list,
 # the keycloak realm export, the element-call config, the compose pins and local compose files) and the Playwright
 # sweep scratch. When .gitignore gains a new secret path, add it here too (dockerignore.test.mjs derives the secret
 # classes from .gitignore and fails when one is not covered). A new top-level folder stays out until it is added here.
 #
-# Two tracked public files are hidden by those rules: compose/ci.placeholder.env (a placeholder, no value) and
+# Those rules hide more tracked files than the map needs, so the image map has a few fewer L0 file nodes than the CI map.
+# Two of the hidden files are the only files of their areas: compose/ci.placeholder.env (a placeholder, no value) and
 # docker/cloudflared/origin-ca-root.pem (a public root certificate). They are the only files of their areas in the
 # code map, so the last two lines of this file let them back in. dockerignore.test.mjs checks that the rules hide
 # no area of the code map; it does not check that every tracked file gets in.
@@ -90,6 +91,12 @@ docker/element-call/config.json
 gremion-ui/finance/migration/reports
 gremion-ui/sweep-*
 
+# Per-run test state that nested .gitignore files name (throwaway keys, connection state): absent from a clean clone.
+**/.proof-root
+**/.t046-tmp
+**/.testdb-state.json
+**/.stack-state.json
+**/docker-compose.local-testdb.*.yml
 # LAST, so that nothing above hides them again: the tracked public files that the rules above hide (see the header)
 !compose/ci.placeholder.env
 !docker/cloudflared/origin-ca-root.pem
