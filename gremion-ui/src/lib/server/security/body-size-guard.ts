@@ -9,7 +9,7 @@ import { requestPath } from '$lib/server/request-path'
 // client could hold ~100 MiB per request in a 1 GiB container. This guard keeps a
 // small cap everywhere except the upload routes:
 //
-//   - Content-Length above MAX_BUFFERED_BODY_BYTES -> 413, body never read.
+//   - Content-Length above MAX_BUFFERED_BODY_BYTES (512 KiB) -> 413, body never read.
 //   - A body with no Content-Length (Transfer-Encoding present) -> 413: the size
 //     is unknown, so it cannot be bounded before it is buffered.
 //
@@ -17,8 +17,8 @@ import { requestPath } from '$lib/server/request-path'
 // the stream. The adapter's 100M limit stays as the outer cap for the exempt
 // upload routes.
 
-/** Largest body a buffering route accepts: 1 MiB (the adapter default was 512 KiB). */
-export const MAX_BUFFERED_BODY_BYTES = 1024 * 1024
+/** Largest body a buffering route accepts: 512 KiB, the adapter default the app had before the 100M lift. */
+export const MAX_BUFFERED_BODY_BYTES = 512 * 1024
 
 /** Streaming upload routes (authenticated, never buffered whole) keep the adapter cap. */
 export const STREAMING_UPLOAD_PREFIX = '/api/files/'

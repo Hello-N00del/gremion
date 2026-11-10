@@ -1,5 +1,5 @@
 // BODY_SIZE_LIMIT is 100M for the Files upload; bodySizeGuard keeps every route
-// that buffers its body (Auth.js sign-in, JSON endpoints) at 1 MiB, so an
+// that buffers its body (Auth.js sign-in, JSON endpoints) at 512 KiB, so an
 // anonymous client cannot hold ~100 MiB per request in the shared app container.
 import { describe, it, expect, vi } from 'vitest'
 import { bodySizeGuard, MAX_BUFFERED_BODY_BYTES } from './body-size-guard'
