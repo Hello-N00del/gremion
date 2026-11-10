@@ -196,12 +196,10 @@ phase_import_validate() {
     st="$(run_request "$id")" || true
     events "$id" | ledger "validate-${id}.events"
     [[ "$st" == succeeded ]] && ok "import-validate: request ${id} succeeded" || { bad "import-validate: request is ${st:-unknown}"; return; }
-    sha="$(events "$id" | sed -n 's/.*status=validated sha256=\([0-9a-f]\{64\}\).*//p' | head -n1)"
-    [[ "$sha" =~ ^[0-9a-f]{64}$ ]] && { printf '%s
-' "$sha" > "$OUT/sha256"; ok "import-validate: the events carry the list's sha256"; } || bad "import-validate: no sha256 in the events"
+    sha="$(events "$id" | sed -n 's/.*status=validated sha256=\([0-9a-f]\{64\}\).*/\1/p' | head -n1)"
+    [[ "$sha" =~ ^[0-9a-f]{64}$ ]] && { printf '%s\n' "$sha" > "$OUT/sha256"; ok "import-validate: the events carry the list's sha256"; } || bad "import-validate: no sha256 in the events"
     [[ "$(k "SELECT count(*) FROM org_unit_members")" == "$mb" ]] && ok "import-validate: wrote nothing" || bad "import-validate: memberships changed"
-    printf '%s
-' "$mb" > "$OUT/members-before"
+    printf '%s\n' "$mb" > "$OUT/members-before"
 }
 
 phase_import_apply() {

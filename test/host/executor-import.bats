@@ -34,6 +34,7 @@ STUB
     cat > "${GREMION_ROOT}/stubbin/gremion-mail" <<'STUB'
 #!/usr/bin/env bash
 [ ! -f "${GREMION_ROOT}/mail-unresolvable" ] || exit 2
+[ ! -f "${GREMION_ROOT}/sender-json-unresolvable" ] || [ "$1" != sender-json ] || exit 3
 case "$1" in
     transport) echo "${MAIL_TRANSPORT:-stalwart}" ;;
     sender-json) echo '{"mode":"relay","host":"relay.example.net","port":587,"fromAddress":"no-reply@example.org","user":"relay-user@example.org"}' ;;
@@ -283,7 +284,21 @@ SENDER_FLAG='--sender-json {"mode":"relay"'
     args_apply
     drive handle_import_members
     [ "$status" -ne 0 ]
-    [[ "$output" == *"MAIL_TRANSPORT could not be resolved"* ]]
+    [[ "$output" == *"mail sender could not be resolved"* ]]
+    [[ "$output" == *"MAIL_TRANSPORT"* ]]
+    [ ! -s "$ORDER" ]
+    [ ! -e "${WORK}/list.csv" ]
+}
+
+@test "relay whose sender descriptor cannot be read fails closed too, and the message names the descriptor, not only the transport" {
+    export MAIL_TRANSPORT=relay
+    touch "${GREMION_ROOT}/sender-json-unresolvable"
+    args_apply
+    drive handle_import_members
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"mail sender could not be resolved"* ]]
+    [[ "$output" == *"sender descriptor"* ]]
+    [[ "$output" == *"nothing was written"* ]]
     [ ! -s "$ORDER" ]
     [ ! -e "${WORK}/list.csv" ]
 }

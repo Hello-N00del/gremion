@@ -66,6 +66,8 @@ let submits: unknown[][] = []
 let importReadError: unknown = null
 /** When set, the registry read of the customer throws it. */
 let statusError: unknown = null
+/** When set, the write of the request (submit_provisioning_request) throws it. */
+let submitError: unknown = null
 /** When set, the panel has no platform database configured. */
 let noPlatformDb = false
 const fakeSql = Object.assign(
@@ -73,6 +75,7 @@ const fakeSql = Object.assign(
     const text = strings.join('?')
     if (importReadError && text.includes("kind = 'import_members'")) throw importReadError
     if (text.includes('submit_provisioning_request')) {
+      if (submitError) throw submitError
       submits.push(vals)
       return [{ id: '0192f0c4-0000-7000-8000-0000000000bb' }]
     }
@@ -149,6 +152,7 @@ beforeEach(() => {
   submits = []
   importReadError = null
   statusError = null
+  submitError = null
   noPlatformDb = false
 })
 
@@ -413,6 +417,29 @@ describe('a read that fails is said to fail (and logged), never turned into a fa
     expect(res.data.memberError).not.toMatch(/keinen Mandanten/)
     expect(submits).toHaveLength(0)
     expect(logged(spy)).toContain('ECONNREFUSED')
+    spy.mockRestore()
+  })
+  it.each([
+    ['seedVertical', { vertical: 'stura' }],
+    ['importValidate', { vertical: 'stura', list: csvFile(CSV) }],
+  ] as const)('%s: a request that cannot be written is a 503 that points to the panel log, and the log has the cause (name and SQLSTATE only, never the message or the list)', async (name, fields) => {
+    const spy = quiet()
+    submitError = Object.assign(new Error(`value too long: ${MARKER}`), { code: '53100', name: 'PostgresError' })
+    const res = await act(name, fields)
+    expect(res.status).toBe(503)
+    expect(res.data.memberError).toMatch(/Panel-Log/)
+    expect(submits).toHaveLength(0)
+    expect(logged(spy)).toContain('53100')
+    expect(logged(spy)).toContain('PostgresError')
+    expect(logged(spy)).not.toContain(MARKER)
+    spy.mockRestore()
+  })
+  it('a refusal the operator can act on (the key was used, 409) is not logged as a failure', async () => {
+    const spy = quiet()
+    submitError = Object.assign(new Error('duplicate key'), { code: '23505' })
+    const res = await act('seedVertical', { vertical: 'stura' })
+    expect(res.status).toBe(409)
+    expect(spy).not.toHaveBeenCalled()
     spy.mockRestore()
   })
   const rawAct = (name: Name, formData: () => Promise<FormData>) =>

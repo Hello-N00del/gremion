@@ -139,9 +139,12 @@ export function createArgs(input: NewCustomerInput): Record<string, unknown> {
 /** A request the database refused, in the operator's words (SQLSTATE of submit_provisioning_request). */
 export class SubmitRefused extends Error {
   readonly status: 400 | 403 | 409 | 503
-  constructor(status: 400 | 403 | 409 | 503, message: string) {
+  /** The database error behind a 503 that names no detail (for the panel log; never shown to the operator). */
+  readonly dbError: unknown
+  constructor(status: 400 | 403 | 409 | 503, message: string, dbError?: unknown) {
     super(message)
     this.status = status
+    this.dbError = dbError
   }
 }
 
@@ -158,7 +161,7 @@ export function submitRefusal(err: unknown): SubmitRefused {
     case '22023':
       return new SubmitRefused(400, 'Die Anfrage wurde von der Datenbank abgelehnt (ungültige Angaben).')
     default:
-      return new SubmitRefused(503, 'Die Anfrage konnte nicht gespeichert werden (Plattform-Datenbank; Details im Panel-Log).')
+      return new SubmitRefused(503, 'Die Anfrage konnte nicht gespeichert werden (Plattform-Datenbank; Details im Panel-Log).', err)
   }
 }
 

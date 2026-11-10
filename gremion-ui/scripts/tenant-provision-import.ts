@@ -5,13 +5,15 @@
 // `seed_vertical` request kinds (infra/host/lib/executor/handlers/), not an
 // operator CLI (R31-I4): the member list arrives on STDIN, never in argv or env.
 //
-//   import-validate <slug> --vertical <id>
+//   import-validate <slug> --vertical <id> [--sender-json <json>]
 //       STDIN: the member list (CSV). STDOUT: ONE JSON line, the result
 //       {status, sha256, counts, rows, database}. Exit 0 validated, 1 rejected. Writes nothing.
-//   import-apply <slug> --vertical <id> --expect-sha256 <hex>
+//   import-apply <slug> --vertical <id> --expect-sha256 <hex> [--sender-json <json>]
 //       STDIN: the same list. Refused unless it validates AND its sha256 is the
 //       validated one AND the realm is stamped with its own mail principal
 //       (before any account is created). Exit 0 applied, 1 otherwise.
+//   (--sender-json is the host's mail-sender descriptor, as for record-step and
+//   reconcile in tenant-provision.ts; absent means the stalwart sender)
 //   seed-vertical <slug> --vertical <id>
 //       Adopts the customer's single root, creates the vertical's other units
 //       with their projection rows, merges the vertical's wording into the
@@ -48,8 +50,8 @@ import { keycloakAccounts, memberImportTarget, seedVertical, sqlOrgStore, type O
 
 export const IMPORT_VERBS: ReadonlySet<string> = new Set(['import-validate', 'import-apply', 'seed-vertical'])
 
-export const IMPORT_USAGE = `  import-validate <slug> --vertical <id>              (member list CSV on STDIN)
-  import-apply <slug> --vertical <id> --expect-sha256 <hex>   (same list on STDIN)
+export const IMPORT_USAGE = `  import-validate <slug> --vertical <id> [--sender-json <json>]   (member list CSV on STDIN)
+  import-apply <slug> --vertical <id> --expect-sha256 <hex> [--sender-json <json>]   (same list on STDIN)
   seed-vertical <slug> --vertical <id>`
 
 export interface ImportVerbContext {

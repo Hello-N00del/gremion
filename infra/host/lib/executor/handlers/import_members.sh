@@ -84,8 +84,8 @@ handle_import_members() {
         || die "import_members ${id}: the verified args name another customer than ${slug}" "$GREMION_EXIT_ASSERT"
     # On MAIL_TRANSPORT=relay the container's apply refuses (assertSmtpStamped) unless the
     # host hands it the sender it stamped; stalwart passes nothing. Resolved before the list
-    # is written or the container is touched: an unresolvable transport fails the request closed.
-    mail_sender_args || die "import_members ${id}: MAIL_TRANSPORT could not be resolved; nothing was written" "$GREMION_EXIT_ASSERT"
+    # is written or the container is touched: an unresolvable transport or sender descriptor fails the request closed.
+    mail_sender_args || die "import_members ${id}: the mail sender could not be resolved (MAIL_TRANSPORT, or the relay sender descriptor for --sender-json); nothing was written" "$GREMION_EXIT_ASSERT"
     phase="$(jq -r '.phase' "$args")"
     vertical="$(jq -r '.vertical' "$args")"
     jq -j '.csv' "$args" | atomic_write "$list" 600 \

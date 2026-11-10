@@ -50,6 +50,8 @@ export const EXECUTOR_STEP_LABEL: Record<string, string> = {
   validate: 'Mitgliederliste prüfen (es wird nichts geschrieben)',
   dump: 'Sicherung vor dem Einspielen',
   apply: 'Mitgliederliste einspielen',
+  // the import-apply verb's heartbeat marker (tenant-provision.ts writes it while it applies)
+  'import-apply': 'Mitgliederliste einspielen (Verb läuft)',
   rerun: 'Wiederholungslauf (darf nichts mehr ändern)',
   discard: 'Sicherung verwerfen',
   resume: 'Fortsetzen (Mail-Absender, Anmeldung, Broker)',
