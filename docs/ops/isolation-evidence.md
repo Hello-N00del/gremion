@@ -131,10 +131,15 @@ clone and requires the producer to fail, write no file and name the failing test
 of that module: a shared database name, a removed identity binding, a poll scope
 that serves any poll, one Matrix client or token cache for every tenant, an
 administration route that trusts the room id in the URL, a path guard that lets
-`..`, a backslash, a control character or an upload id of `.` through, an editor
-page that builds its WebDAV path without the shared guard, and a fixed bearer. A control run on the unmutated clone must first pass and write the
+`..`, a `..` hidden behind a `?x` or `#x` suffix or a space, a backslash, a control
+character or an upload id of `.` through, an editor page that builds its WebDAV
+path without the shared guard, and a fixed bearer. A control run on the unmutated clone must first pass and write the
 file, and each mutation is committed in the clone, because verify refuses a dirty
 tree and an uncommitted mutation would "fail" for that reason alone.
+Each mutation names its target line literally, so a refactor of that line would stop
+a full pass half way; `mutation-proof.sh --check-targets` (no Postgres, no clone) checks
+that every target still occurs exactly once, and
+`scripts/check-isolation-mutation-targets.test.mjs` runs it in the unit suite.
 `scripts/verify/isolation-tenant.test.mjs` pins the producer's own refusals: a
 leaking store, nothing collected, a skipped case, a missing module, a dirty tree
 and a HEAD that moves during the run each write no file.

@@ -315,6 +315,11 @@ const TRAVERSALS: Array<[string, string]> = [
   ['newline inside a dot segment (fetch deletes it)', `.${NL}./${B_ID}/Docs/b-secret.txt`],
   ['encoded newline inside a dot segment', `.%0a./${B_ID}/Docs/b-secret.txt`],
   ['tab inside an encoded dot segment', `%2e%09%2e/${B_ID}/Docs/b-secret.txt`],
+  // fetch cuts the path at the first ? or # and trims a space around the dots, so each of these
+  // leaves a bare `..` after the guard has looked at the segment
+  ['dot-dot with a query suffix (fetch cuts the path at ?)', `..?x/${B_ID}/Docs/b-secret.txt`],
+  ['dot-dot with a fragment suffix (fetch cuts the path at #)', `..#x/${B_ID}/Docs/b-secret.txt`],
+  ['dot-dot with a trailing space (fetch trims it)', `.. /${B_ID}/Docs/b-secret.txt`],
 ]
 
 // ================================================================================
