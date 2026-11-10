@@ -53,13 +53,15 @@ describe('padding Excel adds', () => {
 
 describe('what stays refused, and never echoes a cell', () => {
   it('a headerless semicolon list: counts only, no names or addresses in the message', () => {
-    let msg = ''
+    let caught: unknown
     try {
       parseList('Anna Berger;a@x.example\nBen Hoffmann;b@x.example\n')
     } catch (e) {
-      msg = (e as Error).message
-      expect((e as ListFormatError).code).toBe('bad_header')
+      caught = e
     }
+    expect(caught).toBeInstanceOf(ListFormatError)
+    expect((caught as ListFormatError).code).toBe('bad_header')
+    const msg = (caught as ListFormatError).message
     expect(msg).toMatch(/2 columns read/)
     expect(msg).not.toMatch(/anna|berger|@x\.example/i)
   })
