@@ -563,6 +563,20 @@ render_livekit_template() {
     grep -q '^  port_range_end: 45100$' "${RELEASE}/docker/livekit/livekit.yaml"
 }
 
+# The pinned livekit-server v1.7.2 logs "created TURN password" (username AND password) at INFO
+# for every participant that joins while the relay is on (service/roommanager.go, global logger,
+# which no component_levels entry reaches). The global level is the only switch: at warn the line
+# is gone and warnings and errors stay. Proved against the pinned image; do not raise it back.
+@test "the real LiveKit template keeps the global log level at warn so a TURN password never reaches the log" {
+    render_livekit_template
+    run "$RENDER" --release "$RELEASE"
+    [ "$status" -eq 0 ]
+    local out="${RELEASE}/docker/livekit/livekit.yaml"
+    [ "$(awk '/^logging:/{f=1;next} /^[^ ]/{f=0} f && /^  level:/{print $2}' "$out")" = "warn" ]
+    ! grep -Eq '^[[:space:]]+level:[[:space:]]*(debug|info)' "$out"
+    ! grep -Eq '^[[:space:]]+(component_levels|pion_level)' "$out"
+}
+
 @test "a PILOT_TENANT_HOST that is not a lower-case host name is refused before anything is rendered" {
     render_livekit_template
     sed -i 's/^PILOT_TENANT_HOST=.*/PILOT_TENANT_HOST=Pilot.Example.org/' "${GREMION_ROOT}/etc/env/state.env"

@@ -38,8 +38,11 @@ turn:
   external_tls: true
   relay_range_start: 45051
   relay_range_end: 45100
+# warn, not info: with the relay on, v1.7.2 logs every participant's TURN username and
+# password at info ("created TURN password"), from the global logger that no
+# component_levels entry reaches. Warnings and errors still log. test/host/render.bats pins it.
 logging:
-  level: info
+  level: warn
 room:
   auto_create: true
   # close a room 5 minutes after the last participant leaves
