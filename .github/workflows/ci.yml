@@ -1350,11 +1350,12 @@ jobs:
   # Every first-party image that builds from this repository, build only: no
   # login, no push, no secrets. All build contexts are the repository root
   # except legal's, fallback's and synapse's, which are their own directories
-  # (a pinned nginx or synapse base plus a few COPYs). The one image left out
-  # is vector, whose build clones and compiles ipcrypt2 and is not worth a
-  # per-commit gate; the two test-runner images (scripts/verify/bats-runner,
-  # test/host/runner) are not shipped. scripts/check-ci-docker-filter.test.mjs
-  # fails if a tracked Dockerfile is in neither the matrix nor that list.
+  # (a pinned nginx or synapse base plus a few COPYs). The one shipped image left
+  # out is vector: verify-census builds it on every push and on every pull request
+  # that touches docker/, and a failed build fails the census. The two test-runner
+  # images (scripts/verify/bats-runner, test/host/runner) are not shipped.
+  # scripts/check-ci-docker-filter.test.mjs fails if a tracked Dockerfile is in
+  # neither the matrix nor that list.
   #
   # Why this runs on pull requests (2026-10-29): it used to be push-only
   # ("PR-time docker builds duplicate work that is recovered the moment the PR
@@ -2173,7 +2174,8 @@ jobs:
   # ──────────────────────────────────────────────────────────────────────────
   # Job 6: Verify gate. The one place the legs above become a verdict.
   #
-  # Waits for every verify-* leg, merges their records into the record a single
+  # Waits for every verify-* leg and for the image builds (which carry no record,
+  # so only their job result counts), merges the legs' records into the record a single
   # `make verify` would have written (combine-records.mjs: one `--only` record
   # per leg, all for THIS commit, no suite twice) and hands it to the SAME
   # check-record.mjs that scripts/release/sign-release.sh trusts. The merge
@@ -2196,6 +2198,7 @@ jobs:
       - verify-integration-brokers
       - verify-integration-events-alert
       - verify-census
+      - docker-build
     # A skipped, failed or CANCELLED leg must make this job RUN and fail, not be skipped
     # with it: a skipped required check reads as passing in a branch ruleset. always(),
     # not !cancelled(): the fail-fast step cancels the run, and the gate must still run then.
@@ -2223,8 +2226,8 @@ jobs:
           set -euo pipefail
           # Vacuity floor: a gate that iterates an empty `needs` passes anything.
           total=$(jq 'length' <<<"$NEEDS_JSON")
-          if [ "$total" -lt 12 ]; then
-            echo "::error::verify-gate waits for only $total job(s); expected lint and the eleven verify legs"
+          if [ "$total" -lt 13 ]; then
+            echo "::error::verify-gate waits for only $total job(s); expected lint, the eleven verify legs and the image builds"
             exit 1
           fi
           rows=$(jq -r 'to_entries[] | [.key, .value.result] | @tsv' <<<"$NEEDS_JSON")
@@ -2237,6 +2240,10 @@ jobs:
               # diff (and lint passed). The record check below then allows exactly
               # this one absence, and only on a pull request.
               echo "  skipped $job (pull request; no census input changed)"
+            elif [ "$job" = "docker-build" ] && [ "$result" = "skipped" ] && [ "$EVENT_NAME" = "pull_request" ]; then
+              # Skipped when the `changes` job found no image input in the diff, or
+              # when lint failed, which this same loop reports as a failure.
+              echo "  skipped $job (pull request; no image input changed)"
             else
               echo "::error::$job finished $result"
               bad=1

@@ -18,7 +18,9 @@
 //   2. A suite two legs both run. Two records then carry the same key and
 //      combine-records.mjs refuses to merge them -- again only at the gate.
 //   3. A leg whose record the gate does not wait for. Its failure would be
-//      invisible: the gate would combine whatever records had arrived.
+//      invisible: the gate would combine whatever records had arrived. The image
+//      builds carry no record, so the gate must need docker-build by name, or a
+//      Dockerfile that no longer builds would leave a green gate.
 //   4. A way past the strict check. `--allow-missing` exists for one case (a pull
 //      request that touched no census input skips that leg) and must never be
 //      reachable from a push; `continue-on-error` turns any red job into a green
@@ -136,6 +138,9 @@ const FAIL_FAST_JOB_IF = "failure() && github.event_name == 'pull_request' && gi
 // The gate's last word on a cancelled run: every step without always() is skipped there.
 const CANCELLED_STEP_IF = 'cancelled()'
 const STRICT_STEP_IF = "github.event_name != 'pull_request' || needs.verify-census.result == 'success'"
+// The only jobs the gate may accept as skipped, and only on a pull request: each one is
+// skipped there when the diff touches none of its inputs. A push always runs both.
+const MAY_SKIP_ON_PR = new Set(['verify-census', 'docker-build'])
 const normalizeIf = (v) => text(v === undefined || v === null ? '' : String(v)).replace(/^\s*\$\{\{|\}\}\s*$/g, '').replace(/\s+/g, ' ').trim()
 
 /** The logical lines of a `run` script: backslash continuations joined, comments dropped. */
@@ -319,6 +324,12 @@ export function checkWorkflow(doc, { requiredSuites, unitParts, integrationParts
   } else if (gate && !needed.has('lint')) {
     problems.push('verify-gate does not need lint -- the legs no longer wait for it, so a red Lint would not reach the verdict')
   }
+  // Fail closed on a renamed job, as for lint.
+  if (!doc.jobs['docker-build']) {
+    problems.push('there is no `docker-build` job -- the gate-needs-the-image-builds check cannot run (renamed? update this guard with it)')
+  } else if (gate && !needed.has('docker-build')) {
+    problems.push('verify-gate does not need docker-build -- a Dockerfile that no longer builds would leave a green gate')
+  }
 
   // ── nothing may soften the verdict ──────────────────────────────────────
   for (const [jobId, job] of Object.entries(doc.jobs)) {
@@ -331,8 +342,9 @@ export function checkWorkflow(doc, { requiredSuites, unitParts, integrationParts
     }
   }
 
-  // Jobs whose steps decide the verdict: every leg that produces a record, and the gate.
-  const verdictJobs = new Set([...uploaders, ...invocations.map((i) => i.jobId), ...(gate ? ['verify-gate'] : [])])
+  // Jobs whose steps decide the verdict: every leg that produces a record, the gate, and
+  // the image builds (no record, but the gate reads their result).
+  const verdictJobs = new Set([...uploaders, ...invocations.map((i) => i.jobId), ...(gate ? ['verify-gate'] : []), ...(doc.jobs['docker-build'] ? ['docker-build'] : [])])
   for (const { label, jobId, step } of eachStep(doc)) {
     if (!verdictJobs.has(jobId)) continue
     for (const line of logicalLines(step.run)) {
@@ -358,6 +370,13 @@ export function checkWorkflow(doc, { requiredSuites, unitParts, integrationParts
   for (const { label, step } of legSteps) {
     if (!LEGS_STEP_IFS.has(normalizeIf(step.if))) {
       problems.push(`${label} has \`if: ${normalizeIf(step.if) || '(none)'}\`; the step that checks every leg's result must have \`if: always()\`, because anything else is skipped in a cancelled (fail-fast) run or narrows the check, and a gate whose steps skipped finishes green`)
+    }
+    // Any line that weighs a skip, however it is spelled. An echo only reports one.
+    for (const line of logicalLines(step.run).filter((l) => /\bskipped\b/.test(l) && !/^\s*echo\b/.test(l))) {
+      const job = /"\$job"\s*==?\s*"([^"]+)"/.exec(line)?.[1]
+      if (!job || !MAY_SKIP_ON_PR.has(job) || !/"\$EVENT_NAME"\s*==?\s*"pull_request"/.test(line)) {
+        problems.push(`${label}: \`${line.trim()}\` accepts a skipped job; only ${[...MAY_SKIP_ON_PR].join(' and ')} may be skipped, and only when "$EVENT_NAME" is "pull_request"`)
+      }
     }
   }
   if (gate && !GATE_JOB_IFS.has(normalizeIf(gate.if))) {

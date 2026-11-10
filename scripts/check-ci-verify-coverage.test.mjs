@@ -572,6 +572,38 @@ test('a scan that finds no pinned yamllint or bats fails closed rather than pass
   assert.match(p, /no pinned install of bats found/)
 })
 
+// The image builds reach the verdict: run 42785784926 had a failed build and a green gate.
+const DOCKER_BUILD_RUN = 'run: docker build -f ${{ matrix.dockerfile }} -t gremion-ci/${{ matrix.name }}:ci ${{ matrix.context }}'
+const DOCKER_SKIP = '[ "$job" = "docker-build" ] && [ "$result" = "skipped" ] && [ "$EVENT_NAME" = "pull_request" ]'
+
+test('a gate that does not wait for the image builds is reported', () => {
+  assert.match(joined(plant('      - docker-build\n', '')), /verify-gate does not need docker-build/)
+})
+
+test('a renamed docker-build job fails closed rather than passing', () => {
+  assert.match(joined(plant('  docker-build:\n', '  image-build:\n')), /there is no `docker-build` job/)
+})
+
+test('a docker-build step that swallows a failed build is reported', () => {
+  const p = joined(plant(DOCKER_BUILD_RUN, `${DOCKER_BUILD_RUN} || true`))
+  assert.match(p, /docker-build step \d+ \(.*\): `docker build .* \|\| true` swallows a failing exit status/)
+})
+
+test('a skipped image build accepted on a push is reported', () => {
+  const p = joined(plant(DOCKER_SKIP, '[ "$job" = "docker-build" ] && [ "$result" = "skipped" ]'))
+  assert.match(p, /accepts a skipped job; only verify-census and docker-build may be skipped/)
+})
+
+test('a skip accepted for any other job is reported', () => {
+  const p = joined(plant(DOCKER_SKIP, DOCKER_SKIP.replace('docker-build', 'verify-static')))
+  assert.match(p, /accepts a skipped job; only verify-census and docker-build may be skipped/)
+})
+
+test('a skip accepted under another spelling is still weighed', () => {
+  const p = joined(plant(DOCKER_SKIP, '[ "$result" == skipped ]'))
+  assert.match(p, /accepts a skipped job/)
+})
+
 // The runner-policy idiom (scripts/ci-local/yaml-unavailable.test.mjs): a child node whose
 // resolver refuses `yaml`, which is exactly what a missing node_modules/yaml looks like.
 test('with the yaml package unimportable the CLI fails closed, naming the cause', () => {
