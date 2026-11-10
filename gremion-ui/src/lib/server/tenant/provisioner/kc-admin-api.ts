@@ -141,13 +141,14 @@ export function stepup2faGateProblem(execs: readonly FlowExecRep[]): string | nu
 /**
  * The Keycloak username of an invited user. Synapse takes the Matrix localpart from
  * preferred_username, and an email address is not a valid localpart, so other characters are
- * encoded the way Matrix maps foreign identifiers (=hh). Users still sign in with their address.
+ * encoded as _hh, which both Matrix and Keycloak's username policy accept (= is refused by
+ * Keycloak). Users still sign in with their address.
  */
 export function matrixSafeUsername(email: string): string {
   const bytes = new TextEncoder().encode(email.toLowerCase())
   return Array.from(bytes, (b) => {
     const c = String.fromCharCode(b)
-    return /[a-z0-9._-]/.test(c) ? c : `=${b.toString(16).padStart(2, '0')}`
+    return /[a-z0-9.-]/.test(c) ? c : `_${b.toString(16).padStart(2, '0')}`
   }).join('')
 }
 
