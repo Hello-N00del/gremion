@@ -60,6 +60,10 @@ export interface ModuleManifest {
   order?: number
   /** Whether config.modules[id] can disable this module (core modules: false). */
   toggleable: boolean
+  /** Initial value of config.modules[id] for a toggleable module. Absent = true (a toggleable module is on
+   *  for a fresh tenant); `false` starts it OFF. Read by defaultModulesConfig() only: it is a default, not
+   *  a pin (a module that must stay off also joins HELD_OFF_MODULE_IDS in held-off.ts). */
+  defaultEnabled?: boolean
   /** Page segments this module owns (→ composed PAGE_ACCESS). */
   pages: ModulePage[]
   /** Route prefixes gated by the module toggle, e.g. ['/finance','/api/finance']. */

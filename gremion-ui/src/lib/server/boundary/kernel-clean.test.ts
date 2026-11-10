@@ -77,6 +77,8 @@ const MODULE_OWNER_PREFIXES = [
   'routes/api/video', 'routes/api/elections', 'routes/api/polls',
   'routes/api/content', 'routes/api/newsletter', 'routes/api/files',
   'routes/api/users', 'routes/api/internal/newsletter',
+  // the content module's news surface (modules/content/app, back in the build 2026-11-09)
+  'routes/news', 'routes/api/news', 'routes/api/internal/content', 'lib/server/news',
   'routes/api/auth/matrix-token', 'routes/api/auth/matrix-device',
 ]
 

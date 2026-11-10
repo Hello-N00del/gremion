@@ -5,9 +5,8 @@
 // are applied here in beforeAll, both idempotent (IF NOT EXISTS), so the suite
 // is self-contained whether or not the content module is enabled in the test DB.
 import { describe, it, expect, beforeAll, beforeEach } from 'vitest'
-import { readFileSync } from 'node:fs'
-import { join } from 'node:path'
 import { getDb } from '../db'
+import { contentLeafMigration } from './leaf-schema.test-util'
 import {
 	createPost,
 	setChannelStatus,
@@ -43,10 +42,8 @@ describe('content-db L2 publish/email (integration)', () => {
 		// Reserve one dedicated connection so the embedded transaction is permitted.
 		const reserved = await getDb().reserve()
 		try {
-			for (const file of ['044_content_schema.sql', '045_content_publish.sql']) {
-				const ddl = readFileSync(join(process.cwd(), 'migrations', file), 'utf-8')
-				await reserved.unsafe(ddl)
-			}
+			// 001_init.sql carries the whole squashed 044-046 schema (idempotent).
+			await reserved.unsafe(contentLeafMigration('001_init.sql'))
 		} finally {
 			reserved.release()
 		}

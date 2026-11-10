@@ -1,4 +1,4 @@
-<!-- i18n-sync: source=README.md sha256=0eb467782887420eec2596532fe0db4f232ed650833ce4254dd16da2976f3492 -->
+<!-- i18n-sync: source=README.md sha256=4c1fb3e2e1975a900e29ac26f18012a34421d44ca9c44d779d3e980e23d96754 -->
 [English](./README.md) | **Deutsch**
 
 # content
@@ -7,8 +7,8 @@ Content-Engine: Ein Beitrag wird einmal verfasst und auf bis zu drei Kanälen ve
 nämlich per E-Mail (über Mailinglisten), im Website-Portal (News-Beiträge) und auf Instagram
 (Karussell). Das Modul enthält außerdem Mailinglisten, die Verwaltung von Abmeldungen, zeitgesteuerte
 Veröffentlichung und eine Warteschlange für Veröffentlichungsvorgänge. Status:
-**standardmäßig deaktiviert** (aufgeführt in `modules/disabled.json`, daher vom
-Standard-Build und -Deploy ausgeschlossen; [docs/modules.md](../../docs/modules.de.md)).
+**unterstützt**, Teil des Standard-Builds (nicht in `modules/disabled.json` aufgeführt;
+[docs/modules.md](../../docs/modules.de.md)).
 
 | | |
 |---|---|
@@ -70,11 +70,10 @@ Leaf, eine Datenbank pro Mandant (`content_<slug>`), vom Leaf angewendet und geg
 | `002_posts_status.sql` | Spalten für den Versand-Lebenszyklus in `content.posts` |
 | `003_content_audit.sql` | `content.content_audit` |
 
-Kernel, angewendet auf die Kernel-Datenbank: `app/migrations/1200_content_news_posts.sql` und
-`1201_news_posts_public_reader_columns.sql` (die News-Beiträge, die der Portal-Kanal
-schreibt). Das Manifest nennt außerdem die Kernel-Migrationen `044_content_schema`,
-`045_content_publish` und `046_content_publish_ops` als Eigentum dieses Moduls; diese Dateien
-liegen nicht in diesem Baum.
+Kernel, angewendet auf die Kernel-Datenbank: `app/migrations/1200_content_news_posts.sql`,
+`1201_news_posts_public_reader_columns.sql` und `1202_news_posts_publish_origin.sql` (die
+News-Beiträge, die der Portal-Kanal schreibt, und die Spalte, mit der eine wiederholte
+Veröffentlichung ihre Zeile wiederfindet). Das Manifest nennt genau diese drei Dateien.
 
 Beim Deaktivieren des Moduls für einen Mandanten wird die Datenbank mit `pg_dump` exportiert
 (Aufbewahrungsprofil `rp-pub-module-data`); `content.send_tokens.token` wird dabei
@@ -110,10 +109,10 @@ Der PostgreSQL-Server des Moduls ist `content-postgres` unter dem Compose-Profil
 
 ## Aktivieren und Deaktivieren
 
-- Build: durch `modules/disabled.json` **ausgeschlossen**. Das Overlay-Skript lehnt ein
-  deaktiviertes Modul im Build-Modus ab, und das Runbook zum Mandanten-Lebenszyklus setzt
-  voraus, dass ein Modul nicht in dieser Datei steht, bevor es für einen Kunden aktiviert
-  werden kann.
+- Build: **enthalten**. Das Modul steht nicht in `modules/disabled.json`, daher kopiert der
+  Image-Build `modules/content/app` und das Overlay-Skript legt es auf `gremion-ui/src/`; die
+  Navigation zeigt einen Eintrag „Inhalte“ (`/content`), solange `config.modules.content`
+  nicht `false` ist.
 - Instanzeinstellung: `config.modules.content = false` beantwortet `/content` und
   `/api/content` mit der Oberfläche für deaktivierte Module.
 - Leaf: `docker build -f modules/content/Dockerfile .` im Wurzelverzeichnis des Repositorys.

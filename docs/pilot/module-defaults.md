@@ -9,31 +9,38 @@
 
 ## 1. The intended pilot set
 
-A pilot customer is created with **votes** and nothing else enabled by default. The
-create request names every module explicitly; naming no module enables none
-(`packages/provisioning/test/code-default-off.test.ts`).
+A pilot customer is created with **votes, calendar, content, publishing, files and
+messaging**. The create request names every module explicitly; naming no module enables
+none (`packages/provisioning/test/code-default-off.test.ts`).
 
 | Module | Pilot create request | Why |
 |---|---|---|
 | votes | enabled | The two open-poll forms of the pilot ([poll-usage](./poll-usage/README.md)) |
-| elections | not named | Optional, no statutory election ([elections-scope](../compliance/elections-scope.md)); a permanent notice is mounted on every `/elections` page |
-| finance, vault, content | not named | Excluded from the default build (`modules/disabled.json`) |
-| board | not named | Not yet tenant-separated; refused by the real provisioning gate |
+| calendar | enabled | Council calendar |
+| content | enabled | News and content authoring; in the default build since 2026-11-09 (`modules/disabled.json` lists finance and vault only) |
+| publishing | enabled | Newsletter |
+| files | enabled | Documents over Nextcloud, editing in Collabora |
+| messaging | enabled | Chat and video |
+| elections | not named | Optional, no statutory election ([elections-scope](../compliance/elections-scope.md)); starts off and is held off in the app config (`defaultEnabled: false` on its manifest and a pin on read and write of `config.modules`), so the rail and `/votes` carry no election wording; a permanent notice is mounted on every `/elections` page |
+| finance, vault | not named | Excluded from the default build (`modules/disabled.json`) |
+| board | not named | Not yet tenant-separated; refused by the real provisioning gate. Served in-process and on by default for the pilot (operator ruling 2026-11-09), so it needs no gate row; it has no isolation evidence, which a second customer needs first |
 | handover | not named | Not part of the pilot set |
 
-Calendar, publishing (newsletter), messaging and files are deselectable as well; they
-are chosen per customer at creation, and a module that is off must leave the kernel
-working with no dangling link to it.
+All six pilot modules are deselectable; they are chosen per customer at creation, and a
+module that is off must leave the kernel working with no dangling link to it (the rail
+entries of calendar, files, messaging and content carry their module id and drop out).
 
 ## 2. What the repository checks (part A)
 
 `node scripts/check-pilot-module-defaults.mjs`, with its tests in
 `scripts/check-pilot-module-defaults.test.mjs`:
 
-- (a) `test/host/fixtures/module-defaults/pilot-request.json` enables votes and none of
-  elections, finance, board, vault, content, handover; every named id has a `module.json`.
+- (a) `test/host/fixtures/module-defaults/pilot-request.json` enables votes, calendar,
+  content, publishing, files and messaging and none of elections, finance, board, vault,
+  handover; every named id has a `module.json`.
 - (b) no `COMPOSE_PROFILES` line in `infra/host/templates/env/*.env.tmpl` names finance,
-  board, vault, content or vaultwarden.
+  board, vault or vaultwarden. The profiles of the pilot modules are rendered from
+  `infra/host/module-profiles.json`, not written into a template.
 - (c) no `modules/*/module.json` carries a default-enable declaration.
 - (d) the panel create form preselects no module checkbox.
 
@@ -47,23 +54,29 @@ stack serves.
 
 ## 3. What is not claimed
 
-**Elections and board are not shown to be off on the running system.** The module gate
-(`gremion-ui/src/lib/server/module-gate.ts`) reads the per-instance setting only and the
-default settings seed every toggleable module as on; the per-customer enablement level
-(`plt.module_enablement`) is not yet consulted per request. That is TASK-044-b, which has
-no brief and no commit. Until it lands and the named end-to-end proof (part B, TASK-058-B)
-passes on a scratch stack, a fresh customer may still serve `/elections` and `/tasks`,
-and no document, offer or demo may say that elections or board are off by default on a
-running system. The statement "off by default" holds for the create request and the
-build, not yet for the served routes.
+**Elections are held off in the app config, not shown to be off on the running system.**
+The module gate (`gremion-ui/src/lib/server/module-gate.ts`) reads the per-instance
+setting only; the per-customer enablement level (`plt.module_enablement`) is not yet
+consulted per request. That is TASK-044-b, which has no brief and no commit. What the
+repository does state: a fresh tenant's `config.modules` reads `elections: false` (the
+manifest default plus a pin that no stored value and no settings write can widen), and
+`/elections`, `/api/elections`, the rail and the `/votes` page head follow it. Until the
+named end-to-end proof (part B, TASK-058-B) passes on a running stack, no document, offer
+or demo may say that the running system serves no election page. The other modules of the
+pilot set, calendar, content, publishing, files and messaging, are on at creation and
+gated per request by the same config only; level 1 per request is still TASK-044-b.
+
+**Board is on by design.** It is not requested through the enable gate, which still
+refuses it by name; it is served in-process on kernel tables and is on by default (operator
+ruling 2026-11-09). It has no tenant-isolation evidence: a second customer needs that first.
 
 ## 4. Hand-offs
 
 | To | What |
 |---|---|
-| TASK-043d (panel create form) | Offer **votes** in the module list (today: calendar, content, publishing, finance) and validate the ids against the module catalogue. 058 does not edit `apps/control-panel`. |
+| TASK-043d (panel create form) | The form lists the toggleable `plt.module` rows (`apps/control-panel/src/lib/server/modules.ts`), so content and publishing appear with the catalogue; tick votes, calendar, content, publishing, files and messaging, each with a DPIA reference. 058 does not edit `apps/control-panel`. |
 | TASK-044-b | Resolve level 1 once per request, fail closed; PATCH to true without level 1 answers 409. Precondition for every "off" row of part B. |
 | TASK-129 | An `ackNotice` field on the enable step, so the elections notice is acknowledged where the module is enabled; the in-app mount is already permanent. |
 | TASK-038 (runbook) | One line: votes plus messaging plus the messaging compose profile, because the chat poll (Matrix MSC3381) needs the messaging profile. |
 | New unit (vendor/automation switch) | Put any Nextcloud-polls-to-voting automation behind a files-on switch. Per the 2026-10-21 decision there is **no** Nextcloud-poll gate on protocol publishing; this switch concerns the votes poll only. Not built here. |
-| Part B (TASK-058-B) | Module OFF matrix on a scratch stack once 044-b has landed; rows for finance, vault and content can be proven earlier (they are 404 already). |
+| Part B (TASK-058-B) | Module OFF matrix on a scratch stack once 044-b has landed; rows for finance and vault can be proven earlier (they are 404 already). |

@@ -39,6 +39,7 @@ export const SWITCHABLE_CATALOGUE_IDS: ReadonlySet<string> = new Set(['calendar'
  */
 export const HELD_BACK_CATALOGUE_IDS: Readonly<Record<string, string>> = Object.freeze({
   board: 'denied by name: not tenant-isolated yet',
+  content: 'held back: switching it off needs its own retention and Karenz work before a council may do it',
   files: 'held back: switching it off needs its own retention and Karenz work before a council may do it',
   messaging: 'held back: switching it off needs its own retention and Karenz work before a council may do it',
   publishing: 'held back: switching it off needs its own retention and Karenz work before a council may do it',

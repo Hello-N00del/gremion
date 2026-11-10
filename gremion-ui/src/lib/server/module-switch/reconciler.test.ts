@@ -233,6 +233,35 @@ describe('applying a succeeded request', () => {
     expect(r.events[0]).toMatchObject({ action: 'disable', outcome: 'applied', moduleId: 'elections' })
   })
 
+  it('a succeeded enable of a held-off module (elections) is refused, never reported applied, and config is not written', async () => {
+    r.store.seed({ requestId: R1, moduleId: 'elections', action: 'enable' })
+    r.platform.requests = [req(R1, { module: 'elections', outcome: 'enabled elections' })]
+    const out = await runModuleSwitchPass(tenant, r.deps())
+    expect(out).toEqual({ applied: 0, failed: 1, adopted: 0 })
+    expect(r.writes).toEqual([])
+    expect(r.migrated).toEqual([])
+    const row = r.store.rows.get(R1)!
+    expect(row.state).toBe('refused')
+    expect(row.outcome).toContain('held off')
+    expect(r.events).toHaveLength(1)
+    expect(r.events[0]).toMatchObject({ moduleId: 'elections', outcome: 'refused' })
+  })
+
+  it('a config write that did not take the value is not reported applied: the request stays applying with the error visible', async () => {
+    r.store.seed({ requestId: R1 })
+    r.config.modules = { votes: false }
+    r.platform.requests = [req(R1)]
+    const deps = r.deps()
+    // a store that swallows the write (the shape of a pin or a read-only file): the read-back still says off
+    const out = await runModuleSwitchPass(tenant, { ...deps, writeConfig: () => ({}) as never })
+    expect(out.applied).toBe(0)
+    expect(out.failed).toBe(1)
+    const row = r.store.rows.get(R1)!
+    expect(row.state).toBe('applying')
+    expect(row.configError).toContain('votes')
+    expect(r.events).toEqual([])
+  })
+
   it('a running request is left queued and nothing is written', async () => {
     r.store.seed({ requestId: R1 })
     r.platform.requests = [req(R1, { state: 'running', finished_at: null })]

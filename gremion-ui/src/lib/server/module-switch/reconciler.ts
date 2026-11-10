@@ -18,6 +18,7 @@
 // with no row ("unmanaged": default-on in config.modules, every pre-existing council) keep following
 // config.modules; the one-time alignment below never touches them.
 import { manifestIdOf, SWITCHABLE_CATALOGUE_IDS } from '$lib/modules/catalogue-map'
+import { isHeldOffModule } from '$lib/modules/held-off'
 import { readConfig, writeConfig } from '$lib/server/config'
 import type { TenantContext } from '$lib/server/tenant/context'
 import { notifyModuleSwitchListeners, type ModuleSwitchEvent } from './listeners'
@@ -174,6 +175,8 @@ const FAILURE_TEXT: Record<FinalFailure, string> = {
 
 const NOT_SWITCHABLE_TEXT = 'not switchable: Dieses Modul kann von der Gremiumsverwaltung nicht geschaltet werden. Es wurde nichts geändert.'
 
+const HELD_OFF_TEXT = 'held off: Dieses Modul ist für diese Installation nicht freigegeben. Es wurde nichts geändert.'
+
 const isFinalFailure = (s: string): s is FinalFailure => s === 'failed' || s === 'refused' || s === 'expired' || s === 'dead'
 
 const errText = (err: unknown): string => (err instanceof Error ? err.message : String(err))
@@ -207,6 +210,8 @@ async function alignOnce(tenant: TenantContext, d: ReconcilerDeps, council: Coun
       const row = byKey.get(catalogueId)
       if (manifestId === null || !row?.has_row) continue
       const platformOn = row.state === 'enabled'
+      // A held-off module stays off whatever the platform says: aligning it on would be dropped by the pin.
+      if (platformOn && isHeldOffModule(manifestId)) continue
       if (platformOn !== (configured[manifestId] !== false)) {
         diff[manifestId] = platformOn
         if (platformOn) turningOn.set(manifestId, catalogueId)
@@ -345,6 +350,9 @@ export async function runModuleSwitchPass(tenant: TenantContext, deps: Partial<R
       const manifestId = switchable(row.moduleId) ? manifestIdOf(row.moduleId) : null
       if (manifestId === null) {
         await finishFailed(tenant, d, row, p, 'refused', NOT_SWITCHABLE_TEXT, out)
+      } else if (row.action === 'enable' && isHeldOffModule(manifestId)) {
+        // config.modules pins it false: writing true would be silently dropped and the request reported applied.
+        await finishFailed(tenant, d, row, p, 'refused', HELD_OFF_TEXT, out)
       } else {
         await apply(tenant, d, row, p, manifestId, out)
       }
@@ -411,6 +419,10 @@ async function apply(
     // An explicit, identical value needs no write (and no write permission on config.json).
     if ((d.readConfig(tenant).modules ?? {})[manifestId] !== enable) {
       d.writeConfig({ modules: { [manifestId]: enable } }, tenant)
+      // The post-condition, not the absence of an exception: a write the store did not honour must not read as applied.
+      if ((d.readConfig(tenant).modules ?? {})[manifestId] !== enable) {
+        throw new Error(`config.modules.${manifestId} did not take the value ${enable} after the write`)
+      }
     }
     if (enable) {
       const m = await d.migrate({ id: tenant.id, slug: tenant.slug })

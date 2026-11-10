@@ -1,4 +1,4 @@
-<!-- i18n-sync: source=modules.md sha256=e2909b06082742ea72635800d7274783806b3754c3f0fbf5cbb43af3dd19ff28 -->
+<!-- i18n-sync: source=modules.md sha256=4c6163c557841f71f5c60ce5d1cfae32d847a45128cf685dac30d46f4530245f -->
 [English](./modules.md) | **Deutsch**
 
 # Unterstützte Module
@@ -39,7 +39,7 @@ bekommt und was nicht behauptet wird, steht in
 |---|---|---|---|---|
 | `board` | Aufgabenboard (Stacks und Karten) je Organisationseinheit; Aktionspunkte aus Protokollen lassen sich in Karten umwandeln. | unterstützt | außer dem Kernel nichts; ein eigener PostgreSQL-Server (Compose-Profil `board`) | [modules/board/README.de.md](../modules/board/README.de.md) |
 | `calendar` | Termine, Terminarten, Wiederholungen und Kalendereinstellungen der Gremien; überträgt Termine an CalDAV und leitet Änderungsereignisse über NATS weiter. | unterstützt | Nextcloud (CalDAV), NATS, ein eigener PostgreSQL-Server (Profil `calendar`) | [modules/calendar/README.de.md](../modules/calendar/README.de.md) |
-| `content` | Content-Engine: Beiträge mit den Kanälen E-Mail, Website (Portal) und Instagram, Mailinglisten, zeitgesteuerte Veröffentlichung. | standardmäßig deaktiviert | NATS, SMTP über den Kernel, Instagram Graph API (optionaler Kanal), ein eigener PostgreSQL-Server (Profil `content`) | [modules/content/README.de.md](../modules/content/README.de.md) |
+| `content` | Content-Engine: Beiträge mit den Kanälen E-Mail, Website (Portal) und Instagram, Mailinglisten, zeitgesteuerte Veröffentlichung. | unterstützt | NATS, SMTP über den Kernel, Instagram Graph API (optionaler Kanal), ein eigener PostgreSQL-Server (Profil `content`) | [modules/content/README.de.md](../modules/content/README.de.md) |
 | `elections` | Optionale Gremienwahlen über Helios, mit einem dauerhaften Hinweis, dass das Modul keine satzungsgemäße Wahl ersetzt. Nur App-Hälfte; kein Leaf-Service. | unterstützt | Helios (Wahlserver) | [modules/elections/README.de.md](../modules/elections/README.de.md) |
 | `files` | Dokumentenbrowser über Nextcloud-WebDAV; Bearbeitung im Browser über Collabora. | unterstützt | Nextcloud, Collabora | [modules/files/README.de.md](../modules/files/README.de.md) |
 | `finance` | Haushaltspläne, Projekte, Ausgaben, Freigaben, Buchungen, Bankkonten, SEPA-Export, FinTS- und CSV-Import. Nur Leaf-Service; die App-Hälfte liegt nicht in diesem Tree. | standardmäßig deaktiviert | NATS, Bankzugang über FinTS (optional), Nextcloud (optionale Belegablage), ein eigener PostgreSQL-Server (Profil `finance`) | [modules/finance/README.de.md](../modules/finance/README.de.md) |

@@ -175,6 +175,9 @@ importers:
       '@gremion/tokens':
         specifier: workspace:*
         version: link:../packages/tokens
+      '@resvg/resvg-js':
+        specifier: ^2.6.2
+        version: 2.6.2
       '@xmldom/xmldom':
         specifier: ^0.9.10
         version: 0.9.12
@@ -211,6 +214,9 @@ importers:
       postgres:
         specifier: ^3.4.9
         version: 3.4.9
+      satori:
+        specifier: ^0.12.2
+        version: 0.12.2
       svelte-dnd-action:
         specifier: ^0.9.69
         version: 0.9.79(svelte@5.57.1)
@@ -248,9 +254,6 @@ importers:
       '@playwright/test':
         specifier: ^1.63.0
         version: 1.63.0
-      '@resvg/resvg-js':
-        specifier: ^2.6.2
-        version: 2.6.2
       '@sveltejs/adapter-node':
         specifier: ^5.5.7
         version: 5.5.7(@sveltejs/kit@2.70.3(@sveltejs/vite-plugin-svelte@7.3.0(svelte@5.57.1)(vite@8.3.5(@types/node@26.6.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.13)(yaml@2.9.0)))(svelte@5.57.1)(typescript@5.9.3)(vite@8.3.5(@types/node@26.6.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.13)(yaml@2.9.0)))
@@ -290,9 +293,6 @@ importers:
       msw:
         specifier: ^2.15.0
         version: 2.15.0(@types/node@26.6.0)(typescript@5.9.3)
-      satori:
-        specifier: ^0.12.2
-        version: 0.12.2
       svelte:
         specifier: ^5.57.1
         version: 5.57.1

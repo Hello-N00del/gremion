@@ -1,13 +1,12 @@
 // DB-backed suite for content-db — runs under `test:integration` against a real
 // Postgres (vitest.integration.config.ts; tests/integration/setup.ts establishes
 // the default tenant in ALS before each test). The `content` schema is created
-// by migration 044, which is module-gated — so we apply the migration's
-// (idempotent, IF NOT EXISTS) DDL once in beforeAll, making this suite
-// self-contained whether or not the content module is enabled in the test DB.
+// by the content leaf chain (modules/content/migrations/001_init.sql, which squashes the old
+// kernel 044-046), and no kernel-chain migration creates it — so we apply that (idempotent,
+// IF NOT EXISTS) DDL once in beforeAll, making this suite self-contained.
 import { describe, it, expect, beforeAll, beforeEach } from 'vitest'
-import { readFileSync } from 'node:fs'
-import { join } from 'node:path'
 import { getDb } from '../db'
+import { contentLeafMigration } from './leaf-schema.test-util'
 import {
 	createPost,
 	getPost,
@@ -17,10 +16,7 @@ import {
 
 describe('content-db (integration)', () => {
 	beforeAll(async () => {
-		const ddl = readFileSync(
-			join(process.cwd(), 'migrations', '044_content_schema.sql'),
-			'utf-8',
-		)
+		const ddl = contentLeafMigration('001_init.sql')
 		// Idempotent (all IF NOT EXISTS) — safe to re-apply on an already-migrated DB.
 		// The migration file wraps its DDL in BEGIN;…COMMIT;. Running that via
 		// sql.unsafe() on the POOLED connection throws

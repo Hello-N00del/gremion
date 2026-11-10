@@ -36,6 +36,7 @@ import 'package:gremion_kernel_governance_client/src/model/api_groups_id_get200_
 import 'package:gremion_kernel_governance_client/src/model/api_groups_id_patch_request.dart';
 import 'package:gremion_kernel_governance_client/src/model/api_groups_post201_response.dart';
 import 'package:gremion_kernel_governance_client/src/model/api_groups_post_request.dart';
+import 'package:gremion_kernel_governance_client/src/model/api_users_get200_response.dart';
 import 'package:gremion_kernel_governance_client/src/model/governance_error.dart';
 import 'package:gremion_kernel_governance_client/src/model/governance_ok.dart';
 import 'package:gremion_kernel_governance_client/src/model/svelte_kit_http_error.dart';
@@ -1953,6 +1954,106 @@ class GovernanceApi {
     }
 
     return Response<ApiGroupsPost201Response>(
+      data: _responseData,
+      headers: _response.headers,
+      isRedirect: _response.isRedirect,
+      requestOptions: _response.requestOptions,
+      redirects: _response.redirects,
+      statusCode: _response.statusCode,
+      statusMessage: _response.statusMessage,
+      extra: _response.extra,
+    );
+  }
+
+  /// Search the calling tenant&#39;s realm users for the committee add-member panel; CouncilAdmin only. An empty search returns an empty list; service accounts and disabled accounts are left out
+  /// 
+  ///
+  /// Parameters:
+  /// * [search] - Search term (trimmed). Empty or absent returns an empty list without a realm query.
+  /// * [slim] - Accepted for the caller's convenience; the response always carries only the five slim fields.
+  /// * [max] - Result bound; a value outside 1..25 is clamped.
+  /// * [first] - Offset; clamped to 0..10000.
+  /// * [cancelToken] - A [CancelToken] that can be used to cancel the operation
+  /// * [headers] - Can be used to add additional headers to the request
+  /// * [extras] - Can be used to add flags to the request
+  /// * [validateStatus] - A [ValidateStatus] callback that can be used to determine request success based on the HTTP status of the response
+  /// * [onSendProgress] - A [ProgressCallback] that can be used to get the send progress
+  /// * [onReceiveProgress] - A [ProgressCallback] that can be used to get the receive progress
+  ///
+  /// Returns a [Future] containing a [Response] with a [ApiUsersGet200Response] as data
+  /// Throws [DioException] if API call or serialization fails
+  Future<Response<ApiUsersGet200Response>> apiUsersGet({ 
+    String? search,
+    bool? slim,
+    int? max = 10,
+    int? first = 0,
+    CancelToken? cancelToken,
+    Map<String, dynamic>? headers,
+    Map<String, dynamic>? extra,
+    ValidateStatus? validateStatus,
+    ProgressCallback? onSendProgress,
+    ProgressCallback? onReceiveProgress,
+  }) async {
+    final _path = r'/api/users';
+    final _options = Options(
+      method: r'GET',
+      headers: <String, dynamic>{
+        ...?headers,
+      },
+      extra: <String, dynamic>{
+        'secure': <Map<String, String>>[
+          {
+            'type': 'http',
+            'scheme': 'bearer',
+            'name': 'bearerJwt',
+          },{
+            'type': 'apiKey',
+            'name': 'cookieSession',
+            'keyName': 'authjs.session-token',
+            'where': '',
+          },
+        ],
+        ...?extra,
+      },
+      validateStatus: validateStatus,
+    );
+
+    final _queryParameters = <String, dynamic>{
+      if (search != null) r'search': encodeQueryParameter(_serializers, search, const FullType(String)),
+      if (slim != null) r'slim': encodeQueryParameter(_serializers, slim, const FullType(bool)),
+      if (max != null) r'max': encodeQueryParameter(_serializers, max, const FullType(int)),
+      if (first != null) r'first': encodeQueryParameter(_serializers, first, const FullType(int)),
+    };
+
+    final _response = await _dio.request<Object>(
+      _path,
+      options: _options,
+      queryParameters: _queryParameters,
+      cancelToken: cancelToken,
+      onSendProgress: onSendProgress,
+      onReceiveProgress: onReceiveProgress,
+    );
+
+    ApiUsersGet200Response? _responseData;
+
+    try {
+      final rawResponse = _response.data;
+      _responseData = rawResponse == null ? null : _serializers.deserialize(
+        rawResponse,
+        specifiedType: const FullType(ApiUsersGet200Response),
+      ) as ApiUsersGet200Response;
+
+    } catch (error, stackTrace) {
+      throw DioException(
+        requestOptions: _response.requestOptions,
+        response: _response,
+        type: DioExceptionType.unknown,
+        error: error,
+        stackTrace: stackTrace,
+      );
+    }
+
+    return Response<ApiUsersGet200Response>(
       data: _responseData,
       headers: _response.headers,
       isRedirect: _response.isRedirect,

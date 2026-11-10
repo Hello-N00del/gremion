@@ -371,6 +371,15 @@ describe('enable: refusals before anything is queued (Review Focus 7)', () => {
     expect(submits()).toHaveLength(0)
   })
 
+  it('elections is held off: an enable is 422 MODULE_HELD_OFF and nothing is queued (the pin would make it a silent no-op)', async () => {
+    installPlatform(CATALOGUE.map((k) => (k === 'elections' ? row(k, { state: 'disabled', has_row: true, dpia_recorded: true }) : row(k))))
+    config({ calendar: true, elections: false, votes: false })
+    const r = await submitModuleSwitch(ctx(), { moduleId: 'elections', action: 'enable', dpia: { requiresDpia: false, documentRef: 'TOM 4.2' } }, deps())
+    expect(r).toMatchObject({ ok: false, status: 422, code: 'MODULE_HELD_OFF' })
+    expect(submits()).toHaveLength(0)
+    expect(h.insertSwitch).not.toHaveBeenCalled()
+  })
+
   it('a module listed in modules/disabled.json is 422 MODULE_NOT_SHIPPED', async () => {
     const r = await submitModuleSwitch(ctx(), { moduleId: 'finance', action: 'enable' }, deps({ disabledIds: ['content', 'finance', 'vault'] }))
     expect(r).toMatchObject({ ok: false, status: 422, code: 'MODULE_NOT_SHIPPED' })
@@ -586,7 +595,7 @@ describe('after the platform accepted', () => {
 })
 
 describe('loadModuleOverview', () => {
-  it('lists only calendar, elections and votes, reports enabled from the platform when has_row is true and from config.modules when it is not, and disableAvailable true', async () => {
+  it('lists only calendar and votes (elections is held off and invisible), reports enabled from the platform when has_row is true and from config.modules when it is not, and disableAvailable true', async () => {
     installPlatform(
       CATALOGUE.map((k) =>
         k === 'votes'
@@ -598,11 +607,9 @@ describe('loadModuleOverview', () => {
     )
     config({ calendar: true, elections: true, votes: false })
     const o = await loadModuleOverview(tenant)
-    expect(o.modules.map((m) => m.moduleId)).toEqual(['calendar', 'elections', 'votes'])
+    expect(o.modules.map((m) => m.moduleId)).toEqual(['calendar', 'votes'])
     const by = Object.fromEntries(o.modules.map((m) => [m.moduleId, m]))
     expect(by.votes).toMatchObject({ enabled: true, managed: true, dpiaRecorded: true, label: 'Abstimmungen' })
-    // a platform row says off although config says on: the platform wins where a row exists
-    expect(by.elections).toMatchObject({ enabled: false, managed: true, label: 'Wahlen' })
     // no platform row: follows config.modules
     expect(by.calendar).toMatchObject({ enabled: true, managed: false, label: 'Kalender' })
     expect(o.disableAvailable).toBe(true)
@@ -621,7 +628,6 @@ describe('loadModuleOverview', () => {
     h.listSwitches.mockResolvedValue([
       { requestId: 'r3', moduleId: 'votes', action: 'enable', actorUserId: PERSON, submittedAt: new Date('2026-10-31T09:00:00Z'), state: 'queued', outcome: null, configError: null },
       { requestId: 'r2', moduleId: 'calendar', action: 'enable', actorUserId: PERSON, submittedAt: new Date('2026-10-31T08:00:00Z'), state: 'failed', outcome: 'DPIA gate refused: NO_DPIA_DECISION', configError: null },
-      { requestId: 'r1', moduleId: 'elections', action: 'enable', actorUserId: PERSON, submittedAt: new Date('2026-10-31T07:00:00Z'), state: 'applying', outcome: null, configError: 'config.json not writable' },
     ])
     const o = await loadModuleOverview(tenant)
     const by = Object.fromEntries(o.modules.map((m) => [m.moduleId, m]))
@@ -629,9 +635,24 @@ describe('loadModuleOverview', () => {
     expect(by.votes!.lastFailure).toBeNull()
     expect(by.calendar!.pending).toEqual([])
     expect(by.calendar!.lastFailure).toBe('DPIA gate refused: NO_DPIA_DECISION')
-    // plt succeeded but config could not be written: still applying, the error is visible (Review Focus 4)
-    expect(by.elections!.pending).toEqual([{ requestId: 'r1', action: 'enable', state: 'applying' }])
-    expect(by.elections!.lastFailure).toBe('config.json not writable')
+  })
+
+  it('plt succeeded but config could not be written: the request is still applying and the error is visible (Review Focus 4)', async () => {
+    h.listSwitches.mockResolvedValue([
+      { requestId: 'r1', moduleId: 'calendar', action: 'enable', actorUserId: PERSON, submittedAt: new Date('2026-10-31T07:00:00Z'), state: 'applying', outcome: null, configError: 'config.json not writable' },
+    ])
+    const o = await loadModuleOverview(tenant)
+    const calendar = o.modules.find((m) => m.moduleId === 'calendar')!
+    expect(calendar.pending).toEqual([{ requestId: 'r1', action: 'enable', state: 'applying' }])
+    expect(calendar.lastFailure).toBe('config.json not writable')
+  })
+
+  it('a held-off module (elections) is not offered, even when the platform has a row for it that reads enabled', async () => {
+    installPlatform(CATALOGUE.map((k) => (k === 'elections' ? row(k, { state: 'enabled', has_row: true, dpia_recorded: true }) : row(k))))
+    config({ calendar: true, elections: false, votes: true })
+    const o = await loadModuleOverview(tenant)
+    expect(o.modules.map((m) => m.moduleId)).not.toContain('elections')
+    expect(JSON.stringify(o)).not.toContain('Wahlen')
   })
 
   it('a later success clears an older failure', async () => {
@@ -655,7 +676,7 @@ describe('loadModuleOverview', () => {
     h.listSwitches.mockRejectedValue(new Error('tenant db down'))
     const o = await loadModuleOverview(tenant)
     expect(o.problem).toMatch(/Verlauf/)
-    expect(o.modules).toHaveLength(3)
+    expect(o.modules).toHaveLength(2)
     log.mockRestore()
   })
 })
@@ -681,7 +702,6 @@ describe('loadModuleOverview: the Karenz view of a module that is off', () => {
     const by = Object.fromEntries(o.modules.map((m) => [m.moduleId, m]))
     expect(by.votes!.karenz).toMatchObject({ karenzId: KARENZ, state: 'open', canRestore: true, daysLeft: 25, mail: { recipients: 2, failed: 0, skippedHolders: 1 } })
     expect(by.calendar!.karenz).toBeNull()
-    expect(by.elections!.karenz).toBeNull()
   })
 
   it('restoring and finalizing rows are shown too; restored and finalized rows are not (the module is back, or it is gone)', async () => {
@@ -715,7 +735,7 @@ describe('loadModuleOverview: the Karenz view of a module that is off', () => {
       return sql(strings, ...values)
     })
     const o = await loadModuleOverview(tenant, karenzDeps())
-    expect(o.modules).toHaveLength(3)
+    expect(o.modules).toHaveLength(2)
     expect(o.modules.every((m) => m.karenz === null)).toBe(true)
     expect(o.problem).toMatch(/30-Tage-Frist/)
     expect(JSON.stringify(o)).not.toContain('platform down')
