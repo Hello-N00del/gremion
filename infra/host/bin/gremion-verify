@@ -583,7 +583,8 @@ check_middleware_placement() {
 # between two tenant files leaves one tenant's host routed by the other's
 # router). No router or middleware name may appear in two tenant files. The
 # file's shape is held to the emitter contract: only http.routers and
-# http.middlewares, routers tenant-<slug>[-i], middlewares only
+# http.middlewares, routers tenant-<slug>[-i] / tenant-<slug>[-i].office /
+# tenant-<slug>.kc, middlewares only
 # edge-hostpin-<slug>[-i] / edge-perip-<slug>, at least one router, a slug of
 # the tenant alphabet, and never a .yaml sibling (the emitter writes .yml).
 #
@@ -619,8 +620,11 @@ check_emitted_routers() {
                         || fail "${rel} declares http.${obj} — an emitted file declares only routers and middlewares" ;;
                 routers)
                     nrouters=$(( nrouters + 1 ))
-                    [[ "$obj" =~ ^tenant-${slug}(-[1-9][0-9]*)?$ ]] \
-                        || fail "${rel} declares router ${obj}, which is not tenant-${slug}[-i]"
+                    # The host router tenant-<slug>[-i], its Collabora sibling tenant-<slug>[-i].office and the
+                    # realm router tenant-<slug>.kc (host 0 only): the dot cannot occur in a slug, so a suffixed
+                    # name never collides with another customer's host router. Nothing wider.
+                    [[ "$obj" =~ ^tenant-${slug}(-[1-9][0-9]*)?(\.office)?$ || "$obj" == "tenant-${slug}.kc" ]] \
+                        || fail "${rel} declares router ${obj}, which is not tenant-${slug}[-i], tenant-${slug}[-i].office or tenant-${slug}.kc"
                     [[ -z "${seen_name[r:$obj]:-}" ]] \
                         || fail "router name ${obj} is declared in both ${seen_name[r:$obj]} and ${rel} — traefik keeps one and skips the other"
                     seen_name["r:$obj"]="$rel"
