@@ -16,7 +16,7 @@
  *
  * Fail-closed guard mirrors store.integration.test.ts.
  */
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest'
+import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest'
 import postgres from 'postgres'
 import { storeFor, _resetTenantStoreForTests, type TenantRef } from '../src/tenant-store.ts'
 import {
@@ -251,6 +251,37 @@ describe('dispatch email — recipient assembly', () => {
 
 // ── email channel: per-recipient failure ────────────────────────────────────
 describe('dispatch email — per-recipient SMTP failure', () => {
+  it('logs the cause of a failed send (class, code, response code, command) and never the address', async () => {
+    const { postId } = await makePostWithEmailList(['bad@x.com'])
+    const failing: ChannelTransport = {
+      async send() {
+        throw Object.assign(new Error('550 <bad@x.com> relay denied'), {
+          code: 'EENVELOPE', responseCode: 550, command: 'RCPT TO',
+        })
+      },
+    }
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    try {
+      await expect(
+        dispatch(DISPATCH_TENANT, postId, ACTOR, {
+          sql, kernel: makeFakeKernel(),
+          channels: new Map([['email', failing]]),
+          origin: 'https://o',
+        }),
+      ).rejects.toThrow()
+      const lines = spy.mock.calls.filter((c) => String(c[0]).startsWith('[dispatch] email send'))
+      expect(lines).toHaveLength(1)
+      const logged = JSON.stringify(lines)
+      expect(logged).toContain('EENVELOPE')
+      expect(logged).toContain('550')
+      expect(logged).toContain('RCPT TO')
+      expect(logged).not.toContain('bad@x.com')
+      expect(logged).not.toContain('relay denied')
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
   it('sends good ones, marks failed status, records the bad one as failed (re-claimable)', async () => {
     const { postId } = await makePostWithEmailList(['ok@x.com', 'bad@x.com'])
     const emailTransport = makeFakeEmailTransport({ failFor: new Set(['bad@x.com']) })

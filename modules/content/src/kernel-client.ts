@@ -57,6 +57,7 @@
 // and error handling against a FAKE fetch — no live kernel is ever required.
 
 import type { TenantRef } from './tenant-store.js'
+import { mailCause, type MailCause } from './mail-error.js'
 
 /** A resolved recipient (mirrors gremion-ui newsletter-sender Recipient). */
 export interface Recipient {
@@ -87,6 +88,33 @@ export class MailUnconfiguredError extends Error {
   constructor(message = 'kernel send-mail: tenant SMTP not configured') {
     super(message)
     this.name = 'MailUnconfiguredError'
+  }
+}
+
+/**
+ * A non-503 send-mail failure. Retryable like any generic Error; it only adds the
+ * SMTP cause fields the kernel reports (see mail-error.ts for why these are the
+ * only ones). `code` is absent when the body carried none.
+ */
+export class MailSendError extends Error {
+  code?: string
+  responseCode?: number
+  command?: string
+  constructor(message: string, cause: MailCause = {}) {
+    super(message)
+    this.name = 'MailSendError'
+    if (cause.code !== undefined) this.code = cause.code
+    if (cause.responseCode !== undefined) this.responseCode = cause.responseCode
+    if (cause.command !== undefined) this.command = cause.command
+  }
+}
+
+/** Read the cause fields out of a send-mail failure body; anything else is ignored. */
+function parseSendFailure(text: string): MailCause {
+  try {
+    return mailCause(JSON.parse(text))
+  } catch {
+    return {}
   }
 }
 
@@ -239,9 +267,14 @@ export function createKernelClient(opts: KernelClientOptions): KernelClient {
           )
         }
       }
-      // Any other non-ok (400/401/500/…) is a retryable infra failure.
+      // Any other non-ok (400/401/500/…) is a retryable infra failure. The kernel
+      // returns the SMTP failure's code (never the address) on a 500: carry it on
+      // the error so the dispatch log can name the cause.
       const snippet = await res.text().catch(() => '')
-      throw new Error(`kernel send-mail failed: ${res.status} ${snippet.slice(0, 200)}`)
+      throw new MailSendError(
+        `kernel send-mail failed: ${res.status} ${snippet.slice(0, 200)}`,
+        parseSendFailure(snippet),
+      )
     },
 
     async portalPublish(

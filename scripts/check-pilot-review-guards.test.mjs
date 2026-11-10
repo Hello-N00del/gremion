@@ -24,3 +24,24 @@ test('no recipient address reaches a send-failure log or error text', () => {
   assert.doesNotMatch(read('modules/content/src/kernel-client.ts'), /to=\$\{msg\.to\}/)
   assert.doesNotMatch(read('modules/publishing/src/kernel-client.ts'), /to=\$\{msg\.to\}/)
 })
+
+test('no recipient address reaches the publishing send-failure log', () => {
+  const src = read('modules/publishing/src/dispatch.ts')
+  assert.doesNotMatch(src, /send to \$\{email\}/)
+  assert.match(src, /mailErrorFields\(err\)/, 'the failure log names the cause fields')
+})
+
+test('a failed send names its cause in every log, and never logs the error text', () => {
+  const content = read('modules/content/src/dispatch.ts')
+  assert.match(content, /email send \(post \$\{postId\}\) failed`, mailErrorFields\(err\)/)
+  const route = read('modules/publishing/app/routes/api/internal/newsletter/send-mail/+server.ts')
+  assert.match(route, /SMTP send failed', cause\)/)
+  assert.doesNotMatch(route, /err\.message|err\.response/)
+})
+
+test('the content leaf warns at startup when the mail callback secret is unset', () => {
+  assert.match(
+    read('modules/content/src/index.ts'),
+    /if \(!process\.env\.INTERNAL_NEWSLETTER_SECRET\) \{\s*console\.warn\(/,
+  )
+})

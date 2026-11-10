@@ -46,6 +46,7 @@ import {
 } from './store/index.js'
 import { enqueueOutbox } from './outbox.js'
 import { checkLinkBase } from './link-base.js'
+import { mailErrorFields } from './mail-error.js'
 
 // ── injected transport ──────────────────────────────────────────────────────
 
@@ -303,7 +304,9 @@ async function dispatchEmail(
       await markFailed(sql, postId, email, message, claimedAt ?? undefined)
       failed += 1
       lastError = err
-      console.error(`[dispatch] email send (post ${postId}) failed`)
+      // Name the cause (class, SMTP code, response code, command); never the
+      // address, message or response, which can echo the recipient.
+      console.error(`[dispatch] email send (post ${postId}) failed`, mailErrorFields(err))
       continue
     }
 
