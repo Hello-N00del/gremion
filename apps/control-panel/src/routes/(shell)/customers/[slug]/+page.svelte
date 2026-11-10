@@ -214,6 +214,9 @@
 
       <h3>Mitgliederliste prüfen</h3>
       <p class="muted">CSV-Datei in UTF-8, höchstens 1 MiB. Die Prüfung schreibt nichts; sie meldet die Nummern abgelehnter Zeilen, nie Namen oder Adressen.</p>
+      <p class="muted">
+        Spalten (erste Zeile): <code>name,email,body,role</code>. <code>body</code> ist der Name des Gremiums, genau wie beim Anlegen des Mandanten; <code>role</code> ist <code>member</code> oder <code>helper</code> und darf leer bleiben. Aus Excel: „CSV UTF-8 (durch Trennzeichen getrennt)“; Semikolon oder Komma als Trennzeichen sind beide möglich, leere Spalten und Zeilen am Ende werden übergangen.
+      </p>
       <form method="POST" action="?/importValidate" enctype="multipart/form-data" use:enhance>
         <label>
           Vertikale
