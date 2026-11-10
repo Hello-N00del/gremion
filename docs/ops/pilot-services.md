@@ -169,14 +169,46 @@ only through files and shell variables. The one named exception is `occ`'s own
 argument vector inside the `nextcloud` container, which carries the client
 secret for the length of the call because `occ` has no other input.
 
-## Video: TURN
+## Video: relay over TLS on 443
 
-TURN is off. Media reaches LiveKit on `45000-45100/udp` or, from a network that
-blocks UDP, on `7881/tcp`. A client that can reach neither (a network that
-allows only 443) cannot join a call. TURN over TLS on 443 would need an L4
-route on a public entrypoint, which the edge verification refuses by design
-(`gremion-verify` rejects a TCP or UDP router on `web` or `websecure`), so it is
-not offered for the pilot.
+Media reaches LiveKit on `45000-45100/udp` or, from a network that blocks UDP, on
+`7881/tcp`. A client behind a network that allows only 443 uses LiveKit's TURN
+relay over TLS instead: it connects to `turn.<PILOT_TENANT_HOST>` on 443,
+Traefik terminates TLS there (an ACME certificate from the same resolver as the
+HTTP routers) and hands the plain stream to LiveKit's TURN port `5349`. LiveKit
+gives its ICE servers to the client, so no client change is involved.
+
+- **Where it is configured.** `PILOT_TENANT_HOST` in `state.env` reaches both
+  halves. `gremion-render` renders `docker/livekit/livekit.yaml` from
+  `docker/livekit/livekit.yaml.tmpl` (gitignored, bound read-only; a config that
+  was not rendered refuses `up`) with `turn.enabled: true` and
+  `domain: turn.<PILOT_TENANT_HOST>`. `docker compose --env-file state.env` reads
+  the same key for the Traefik labels of the `livekit` service in
+  `docker-compose.prod.yml`: one TCP router `livekit-turn`, rule
+  ``HostSNI(`turn.<PILOT_TENANT_HOST>`)`` on `websecure`, `tls=true`, the
+  `TRAEFIK_CERT_RESOLVER` resolver, never passthrough, to port `5349`.
+- **Port split.** The published block is unchanged: `45000-45100/udp`. Media
+  takes `45000-45050`, the relay's allocations `45051-45100`. `3478/udp` is not
+  published. `7881/tcp` stays the media fallback. Nothing in the firewall
+  template or the edge guard changes.
+- **Capacity.** The relay has 50 ports, about 25 relayed participants at once (a
+  relayed participant uses a port to send and one to receive). A call between
+  clients that reach the media ports directly does not use them. LiveKit has one
+  CPU core (and 512 MiB) for the relay's crypto and the media it forwards.
+- **Install prerequisite.** A DNS record `turn.<customer host>` pointing at the
+  host's edge address, in place before the first `up` of the video profile:
+  without it the certificate cannot be issued and relayed clients cannot connect
+  (direct media is unaffected).
+- **Without `PILOT_TENANT_HOST`** the relay is off exactly as before: no TCP
+  router label is read by Traefik, no certificate is ordered, and LiveKit keeps
+  the whole `45000-45100` block for media. `gremion-render` refuses a value that
+  is not a lower-case host name.
+- **Verification.** `gremion-verify` still refuses every TCP or UDP router on
+  `web` or `websecure`, with one exception: the TCP router named exactly
+  `livekit-turn@docker` on `websecure` alone, rule exactly
+  ``HostSNI(`turn.<PILOT_TENANT_HOST>`)``, a non-empty `tls.certResolver`, not
+  passthrough. A second TCP router next to it, a UDP router, and any router when
+  `PILOT_TENANT_HOST` is unset stay failures.
 
 ## Named residuals
 
