@@ -61,3 +61,22 @@ describe('nextcloud/webdav-path — buildWebdavPath', () => {
     expect(() => buildWebdavPath('stura', '../../escape')).toThrow(WebdavPathError)
   })
 })
+
+// A segment that fetch's URL parser reduces to `.` or `..`: the query or fragment cut-off
+// (`..?x`, `..#x`) and surrounding whitespace (`.. `) all leave a dot segment that climbs out
+// of /remote.php/dav/files/<caller>/. The three copies of this guard (kernel app, files leaf,
+// finance leaf) must agree on every vector below.
+describe('nextcloud/webdav-path — dot segments hidden behind ?, # or whitespace', () => {
+  const REFUSED = ['..?x', '..#x', '.. ', ' ..', '.?x', '. #y', 'a/..?x/b', 'a/..#/b', '%2e%2e%3fx', '%2e%2e%23x', '..%20', '. ', 'a/./b']
+  for (const p of REFUSED) {
+    it(`refuses ${JSON.stringify(p)}`, () => {
+      expect(() => sanitizeRelPath(p)).toThrow(WebdavPathError)
+    })
+  }
+
+  it('keeps a ? or # inside an ordinary name, and buildWebdavPath percent-encodes it', () => {
+    expect(sanitizeRelPath('a?b/c#d.txt')).toBe('a?b/c#d.txt')
+    expect(sanitizeRelPath('..a/b..')).toBe('..a/b..')
+    expect(buildWebdavPath('stura', 'a?b/c#d e.txt')).toBe('/remote.php/dav/files/stura/a%3Fb/c%23d%20e.txt')
+  })
+})
