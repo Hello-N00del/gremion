@@ -156,7 +156,7 @@ evaluation errors alert too.
 | `DeadLetterQueueNotEmpty` | the tenant's DLQ stream holds any entry (kept 7 days) | 1m |
 | `ModuleKarenzFailedOrOverdue` | a module switch-off Karenz step failed, a notice or reminder is overdue, or a row is past its final day (phase 2) | 5m |
 
-The four TASK-079 conditions have no `absent()` arm (as `ThirdPartyUnreachable`):
+The four TASK-079 conditions and `OutboxStalled` (below) have no `absent()` arm (as `ThirdPartyUnreachable`):
 a host that runs no events service yet has no gauge, and an `absent()` arm would
 fire there for ever; a blind collector is `SignalAbsent`'s. The three gauges
 (`gremion_outbox_dead_lettered{ctx}`, `gremion_inbox_dead_lettered{ctx,consumer}`,
@@ -176,7 +176,7 @@ only gauge that moves. It is collected like the three above and read by `OutboxS
 pages, too high and a stall goes unseen. A ctx that runs no events service has no gauge and reads 0.
 
 `ModuleKarenzFailedOrOverdue` (`gremion:cond:module_karenz`, component `module-karenz`)
-is fail-closed, unlike the four above. The host collector (`emit_module_karenz`)
+is fail-closed, unlike the five above. The host collector (`emit_module_karenz`)
 reads `plt.module_karenz` and `plt.module_karenz_event` and emits
 `gremion_module_karenz_live` (live rows, always, 0 when there are none),
 `gremion_module_karenz_failed{customer,module}` (a step whose newest event is an

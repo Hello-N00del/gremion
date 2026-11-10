@@ -530,7 +530,7 @@ groups:
         labels:
           severity: critical
         annotations:
-          summary: "The outbox relay cannot publish: its oldest pending row is over 15 minutes old and nothing dead-letters (docs/runbooks/dead-letter.md, section 3)"
+          summary: "The outbox relay cannot publish: its oldest pending row is over 15 minutes old. If OutboxDeadLettered is open for the same ctx, the held-back rows sit behind a dead-lettered one: requeue that first; otherwise see docs/runbooks/dead-letter.md, section 3"
           component: "{{ $labels.component }}"
       - uid: gremion-inbox-dead-lettered
         title: InboxDeadLettered

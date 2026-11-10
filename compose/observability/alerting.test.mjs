@@ -125,6 +125,14 @@ test('outbox stall: the Grafana rule OutboxStalled reads the condition, alerts o
   assert.ok(readme.includes('| `OutboxStalled` |'), 'not in the README rule table')
   assert.ok(/900 s \[A\]/.test(readme), 'the README does not state the 900 s [A] threshold')
   assert.ok(!/no alert rule reads it yet/.test(readme), 'the README still says no rule reads the gauge')
+  // the threshold is copied as minutes into the Grafana summary and the runbook: both are read back against the expression
+  const threshold = Number(String(recs(RULES).find((r) => r.record === 'gremion:cond:outbox_stalled').expr).match(/> bool (\d+)/)[1])
+  const minutes = `${threshold / 60} minutes`
+  assert.ok(rule.annotations.summary.includes(`over ${minutes} old`), `the summary does not state ${minutes}`)
+  assert.ok(readText('docs/runbooks/dead-letter.md').includes(`stays over ${minutes} for ${seconds(rule.for) / 60} minutes`), `the runbook does not state ${minutes} / the for: duration`)
+  // a dead-lettered row holds its aggregate's later rows pending, so both alerts can fire together: the summary must not deny it
+  assert.ok(!/nothing dead-letters/.test(rule.annotations.summary), 'the summary claims nothing dead-letters unconditionally')
+  assert.match(rule.annotations.summary, /OutboxDeadLettered/)
 })
 
 test('module Karenz: the condition reads the failed, stale and overdue gauges and carries an absent(gremion_module_karenz_live) arm (it is NOT a NO_ABSENT exemption)', () => {
