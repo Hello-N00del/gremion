@@ -280,6 +280,9 @@ render_template() {
 # placeholder domain is a reserved .invalid name, there only because the key must
 # hold a value: it is never served and no certificate is ever ordered for it.
 # The value ends up in a Traefik rule, so only a lower-case host name is accepted.
+# The three LIVEKIT_* values set below are read by render_template through the
+# RENDER_ALLOWED_VARS envsubst list, not by name in this file.
+# shellcheck disable=SC2034
 derive_livekit_relay() {
     local host="${PILOT_TENANT_HOST:-}"
     local re='^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$'

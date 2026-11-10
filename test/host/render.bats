@@ -550,7 +550,7 @@ render_livekit_template() {
     grep -q '^  enabled: false$' "$out"
     grep -q '^  port_range_end: 45100$' "$out"
     grep -q '^  domain: turn\.relay\.invalid$' "$out"
-    ! grep -q 'example\.org' "$out"
+    assert_absent 'example\.org' "$out" 'no placeholder public name rendered'
     ! grep -q '\${' "$out"
 }
 
@@ -573,7 +573,7 @@ render_livekit_template() {
     [ "$status" -eq 0 ]
     local out="${RELEASE}/docker/livekit/livekit.yaml"
     [ "$(awk '/^logging:/{f=1;next} /^[^ ]/{f=0} f && /^  level:/{print $2}' "$out")" = "warn" ]
-    ! grep -Eq '^[[:space:]]+level:[[:space:]]*(debug|info)' "$out"
+    assert_absent '^[[:space:]]+level:[[:space:]]*(debug|info)' "$out" 'global log level is not debug or info'
     ! grep -Eq '^[[:space:]]+(component_levels|pion_level)' "$out"
 }
 
