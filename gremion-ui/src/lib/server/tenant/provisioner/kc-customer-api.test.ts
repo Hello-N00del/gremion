@@ -1,7 +1,7 @@
 // TASK-043 TDD 10 / 14 (unit halves): the realm operations the customer
 // lifecycle adds to KcProvisionApi, over a scripted transport.
 import { describe, expect, it } from 'vitest'
-import { KcProvisionApi, type KcTransport } from './kc-admin-api'
+import { KcProvisionApi, matrixSafeUsername, type KcTransport } from './kc-admin-api'
 
 type Call = { method: string; path: string; body?: unknown }
 
@@ -59,7 +59,7 @@ describe('ensureInvitedUser (FLOW-IDN-002, Q9)', () => {
     const r = await new KcProvisionApi(transport).ensureInvitedUser('musterstadt', { email: EMAIL, realmRole: 'it-admin' }, () => '2026-09-30T00:00:00.000Z')
     expect(r).toEqual({ id: 'u-1', created: true, invited: true })
     const create = calls.find((c) => c.method === 'POST' && c.path === `${R}/users`)!
-    expect(create.body).toMatchObject({ username: EMAIL, email: EMAIL, enabled: true, requiredActions: ['UPDATE_PASSWORD', 'CONFIGURE_TOTP'] })
+    expect(create.body).toMatchObject({ username: matrixSafeUsername(EMAIL), email: EMAIL, enabled: true, requiredActions: ['UPDATE_PASSWORD', 'CONFIGURE_TOTP'] })
     // never an operator-set password (Q9)
     expect(create.body).not.toHaveProperty('credentials')
     expect(create.body).not.toHaveProperty('password')
