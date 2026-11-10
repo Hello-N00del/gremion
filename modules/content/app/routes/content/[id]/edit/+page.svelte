@@ -195,9 +195,13 @@
         // SMTP unconfigured (email): surface the failed result with its detail.
         publishResult[ch] = result as PublishResult
         publishError[ch] = (result as PublishResult).detail ?? 'Versand fehlgeschlagen.'
-      } else if (res.status >= 500) {
-        // The server's generic text is English; do not show it.
-        publishError[ch] = 'Veröffentlichung fehlgeschlagen. Bitte Empfänger prüfen und erneut versuchen.'
+      } else if (res.status === 500) {
+        // The server's generic 500 text is English; do not show it. Other 5xx
+        // (e.g. 502) carry a German message of their own and fall through.
+        publishError[ch] =
+          ch === 'email'
+            ? 'Veröffentlichung fehlgeschlagen. Bitte Empfänger prüfen und erneut versuchen.'
+            : 'Veröffentlichung fehlgeschlagen. Bitte erneut versuchen.'
       } else {
         publishError[ch] =
           (result && 'message' in result && result.message) || `Veröffentlichung fehlgeschlagen (HTTP ${res.status}).`
@@ -232,6 +236,12 @@
     if (!v) return
     const iso = new Date(v).toISOString()
     publishError[ch] = ''
+    // The scheduler sends whatever the post holds at tick time: save the text on
+    // screen first, and arm nothing when that fails.
+    if (!(await flushPostText())) {
+      publishError[ch] = 'Der Text konnte nicht gespeichert werden. Es wurde nichts geplant.'
+      return
+    }
     if (ch === 'email' && !(await persistAudience())) return
     const ok = await patch({ channel: ch, scheduled_at: iso })
     if (ok) channelState[ch] = { status: 'scheduled', scheduled_at: iso }

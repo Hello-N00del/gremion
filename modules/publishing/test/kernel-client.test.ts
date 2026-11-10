@@ -8,6 +8,7 @@
  */
 import { describe, it, expect } from 'vitest'
 import { createKernelClient, MailUnconfiguredError, type FetchLike } from '../src/kernel-client.ts'
+import { mailErrorFields } from '../src/mail-error.ts'
 import type { TenantRef } from '../src/tenant-store.ts'
 
 const TENANT: TenantRef = { id: 'tid-1', slug: 'alpha' }
@@ -256,5 +257,33 @@ describe('createKernelClient — the callback header set is closed', () => {
     })
     await client.render('/x.odt')
     expect(Object.keys(calls[0]!.headers).sort()).toEqual(CALLBACK_HEADERS)
+  })
+})
+
+// ── a failed send carries its cause (and the HTTP status), never the address ──
+describe('createKernelClient — a failed send names its cause for the dispatch log', () => {
+  it('exposes code, responseCode, command and the HTTP status on the thrown error', async () => {
+    const { fetchImpl } = makeFetch(() => ({
+      ok: false, status: 500,
+      body: { success: false, error: 'Send failed', code: 'EAUTH', responseCode: 535, command: 'AUTH LOGIN' },
+    }))
+    const client = createKernelClient({
+      baseUrl: 'http://k', secret: 's', tenant: TENANT, correlationId: '1', fetchImpl,
+    })
+    const err = await client.sendMail({ to: 'r@example.org', subject: 'S', html: 'h' }).catch((e) => e)
+    expect(mailErrorFields(err)).toEqual({
+      name: 'MailSendError', code: 'EAUTH', responseCode: 535, command: 'AUTH LOGIN', httpStatus: 500,
+    })
+    expect(JSON.stringify(mailErrorFields(err))).not.toContain('example.org')
+  })
+
+  it('a 403 with no cause body still logs the status', async () => {
+    const { fetchImpl } = makeFetch(() => ({ ok: false, status: 403, body: 'Forbidden' }))
+    const client = createKernelClient({
+      baseUrl: 'http://k', secret: 's', tenant: TENANT, correlationId: '1', fetchImpl,
+    })
+    const err = await client.sendMail({ to: 'r@x.com', subject: 'S', html: 'h' }).catch((e) => e)
+    expect(mailErrorFields(err)).toEqual({ name: 'MailSendError', httpStatus: 403 })
+    expect(err.message).toMatch(/kernel send-mail failed: 403/)
   })
 })

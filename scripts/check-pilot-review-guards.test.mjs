@@ -39,6 +39,28 @@ test('a failed send names its cause in every log, and never logs the error text'
   assert.doesNotMatch(route, /err\.message|err\.response/)
 })
 
+test('the scheduler log never carries the per-recipient warnings (they name addresses and error text)', () => {
+  const src = read('modules/content/src/scheduler.ts')
+  assert.doesNotMatch(src, /result\.warnings\.join/)
+  assert.match(read('modules/content/src/publish-channel.ts'), /email send \(post \$\{postId\}\) failed`, mailErrorFields\(err\)/)
+})
+
+test('the mail-cause sanitizer is the same in the kernel route and in both leaves', () => {
+  const files = [
+    'modules/publishing/app/routes/api/internal/newsletter/send-mail/+server.ts',
+    'modules/content/src/mail-error.ts',
+    'modules/publishing/src/mail-error.ts',
+  ]
+  const rules = files.map((f) => {
+    const src = read(f)
+    const token = src.match(/^const TOKEN = (\/.*\/)$/m)
+    const command = src.match(/^const COMMAND = (\/.*\/)$/m)
+    assert.ok(token && command, `${f} declares TOKEN and COMMAND`)
+    return `${token[1]} ${command[1]}`
+  })
+  assert.equal(new Set(rules).size, 1, `the three copies drifted: ${rules.join(' | ')}`)
+})
+
 test('the content leaf warns at startup when the mail callback secret is unset', () => {
   assert.match(
     read('modules/content/src/index.ts'),

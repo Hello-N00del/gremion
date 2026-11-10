@@ -37,6 +37,7 @@ import type { ContentEvent } from '@gremion/ports/broker'
 import type { Sql, TenantRef } from './tenant-store.js'
 import { MailUnconfiguredError, type KernelClient } from './kernel-client.js'
 import { enqueueOutbox } from './outbox.js'
+import { mailErrorFields } from './mail-error.js'
 import { checkLinkBase } from './link-base.js'
 import {
   getPost,
@@ -330,6 +331,9 @@ async function publishEmail(
       await markFailed(sql, postId, emailLower, message, claimedAt ?? undefined)
       failedCount += 1
       warnings.push(`send to ${emailLower} failed: ${message}`)
+      // Name the cause (class, SMTP code, response code, command, HTTP status);
+      // never the address or message, which can echo the recipient.
+      console.error(`[publish-channel] email send (post ${postId}) failed`, mailErrorFields(err))
       continue
     }
 

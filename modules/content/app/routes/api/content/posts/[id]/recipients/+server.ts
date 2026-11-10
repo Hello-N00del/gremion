@@ -17,6 +17,8 @@ import { resolveContentBackendOr503 } from '$lib/server/content/backend/resolve'
 import { getKeycloakAdminClientForCurrentTenant } from '$lib/server/keycloak-admin'
 
 // Log the error class only: a Keycloak error body can echo what was asked for.
+const MAX_RECIPIENT_ENTRIES = 200
+
 const errName = (err: unknown): string => (err instanceof Error ? err.name : typeof err)
 
 export const GET: RequestHandler = async (event) => {
@@ -70,6 +72,9 @@ export const PUT: RequestHandler = async (event) => {
     recipients?: { mailing_list_id?: string; keycloak_group_id?: string }[]
   }
   if (!Array.isArray(recipients)) throw error(400, 'recipients must be an array')
+  if (recipients.length > MAX_RECIPIENT_ENTRIES) {
+    throw error(400, `recipients: at most ${MAX_RECIPIENT_ENTRIES} entries`)
+  }
 
   // Validate each entry targets EXACTLY one of a list OR a group (mirror the DB
   // CHECK so we 400 early rather than surfacing a constraint violation).
@@ -84,7 +89,12 @@ export const PUT: RequestHandler = async (event) => {
   // fail, mailing lists included. Refuse it now, naming the id. Only a definite
   // miss refuses: a Keycloak outage must not block saving mailing lists.
   // Status/name checks, not instanceof: the admin module is mocked in tests.
-  const groupIds = recipients.map((r) => r.keycloak_group_id).filter((id): id is string => !!id)
+  // Each distinct id is checked once, and the checks stop at the first failure
+  // that is not a definite miss (an outage would otherwise cost one full
+  // timeout per id).
+  const groupIds = [
+    ...new Set(recipients.map((r) => r.keycloak_group_id).filter((id): id is string => !!id)),
+  ]
   if (groupIds.length > 0) {
     let kc: ReturnType<typeof getKeycloakAdminClientForCurrentTenant> | null = null
     try {
@@ -101,7 +111,8 @@ export const PUT: RequestHandler = async (event) => {
         if (e?.status === 404 || e?.name === 'KcInvalidIdError') {
           throw error(400, `Gruppe nicht gefunden: ${id}`)
         }
-        console.error('[content:recipients] KC group check failed, id accepted', errName(err))
+        console.error('[content:recipients] KC group check failed, remaining ids accepted unchecked', errName(err))
+        break
       }
     }
   }

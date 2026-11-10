@@ -185,6 +185,29 @@ describe('publish sends the text that is on screen', () => {
     expect(await findByText(/Der Text konnte nicht gespeichert werden/)).toBeTruthy()
     expect(calls.some(isPublish)).toBe(false)
   })
+
+  it('saves the text on screen before it schedules, and arms nothing when that fails', async () => {
+    const calls = stubFetch()
+    const { findByLabelText, getAllByLabelText, getAllByRole, getByLabelText } = renderPage()
+    await fireEvent.click(await findByLabelText('Liste A'))
+    await fireEvent.input(getByLabelText('Titel'), { target: { value: 'Neuer Titel' } })
+    await fireEvent.input(getAllByLabelText('Geplante Zeit')[0], { target: { value: '2030-01-01T10:00' } })
+    await fireEvent.click(getAllByRole('button', { name: 'Planen' })[0])
+    await waitFor(() => expect(calls.some(isSchedulePatch)).toBe(true))
+    const patch = idx(calls, isBodyPatch)
+    expect(patch).toBeGreaterThan(-1)
+    expect(patch).toBeLessThan(idx(calls, isSchedulePatch))
+  })
+
+  it('does not schedule when the text cannot be saved', async () => {
+    const calls = stubFetch({ patchStatus: 500 })
+    const { findByLabelText, getAllByLabelText, getAllByRole, findByText } = renderPage()
+    await fireEvent.click(await findByLabelText('Liste A'))
+    await fireEvent.input(getAllByLabelText('Geplante Zeit')[0], { target: { value: '2030-01-01T10:00' } })
+    await fireEvent.click(getAllByRole('button', { name: 'Planen' })[0])
+    expect(await findByText(/Der Text konnte nicht gespeichert werden/)).toBeTruthy()
+    expect(calls.some(isSchedulePatch)).toBe(false)
+  })
 })
 
 describe('an invalid group id cannot break a send', () => {
@@ -223,6 +246,23 @@ describe('an invalid group id cannot break a send', () => {
       await findByText('Veröffentlichung fehlgeschlagen. Bitte Empfänger prüfen und erneut versuchen.'),
     ).toBeTruthy()
     expect(queryByText('Internal Error')).toBeNull()
+  })
+
+  it('keeps the German message of the server for a 502 (a deployment fault the author cannot fix by retrying)', async () => {
+    stubFetch({ publishStatus: 502, publishBody: { message: 'Mandantenkennung stimmt nicht. Bitte vom Betrieb prüfen lassen.' } })
+    const { findByLabelText, getAllByRole, findByText, queryByText } = renderPage()
+    await fireEvent.click(await findByLabelText('Liste A'))
+    await fireEvent.click(getAllByRole('button', { name: 'Jetzt veröffentlichen' })[0])
+    expect(await findByText('Mandantenkennung stimmt nicht. Bitte vom Betrieb prüfen lassen.')).toBeTruthy()
+    expect(queryByText(/Bitte Empfänger prüfen/)).toBeNull()
+  })
+
+  it('does not tell the author to check recipients when the portal channel fails', async () => {
+    stubFetch({ publishStatus: 500, publishBody: { message: 'Internal Error' } })
+    const { getAllByRole, findByText, queryByText } = renderPage()
+    await fireEvent.click(getAllByRole('button', { name: 'Jetzt veröffentlichen' })[1])
+    expect(await findByText('Veröffentlichung fehlgeschlagen. Bitte erneut versuchen.')).toBeTruthy()
+    expect(queryByText(/Empfänger prüfen/)).toBeNull()
   })
 })
 

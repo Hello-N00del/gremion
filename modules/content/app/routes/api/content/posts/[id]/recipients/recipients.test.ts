@@ -149,6 +149,34 @@ describe('/api/content/posts/[id]/recipients', () => {
     expect(mockSetRecipients).toHaveBeenCalledWith('p1', [{ keycloak_group_id: 'g1' }])
   })
 
+  it('PUT checks each distinct group id once, however often it is listed', async () => {
+    const res = await PUT(
+      makeEvent({
+        user: author,
+        body: { recipients: [{ keycloak_group_id: 'g1' }, { keycloak_group_id: 'g1' }, { keycloak_group_id: 'g2' }] },
+      }),
+    )
+    expect(res.status).toBe(200)
+    expect(mockGetGroup).toHaveBeenCalledTimes(2)
+  })
+
+  it('PUT stops asking Keycloak after the first failure that is not a definite miss', async () => {
+    mockGetGroup.mockRejectedValue(new Error('kc down'))
+    const ids = ['g1', 'g2', 'g3', 'g4', 'g5']
+    const res = await PUT(
+      makeEvent({ user: author, body: { recipients: ids.map((id) => ({ keycloak_group_id: id })) } }),
+    )
+    expect(res.status).toBe(200)
+    expect(mockGetGroup).toHaveBeenCalledTimes(1)
+  })
+
+  it('PUT 400s an audience of more than 200 entries without asking Keycloak', async () => {
+    const recipients = Array.from({ length: 201 }, (_, i) => ({ keycloak_group_id: `g${i}` }))
+    await expect(PUT(makeEvent({ user: author, body: { recipients } }))).rejects.toMatchObject({ status: 400 })
+    expect(mockGetGroup).not.toHaveBeenCalled()
+    expect(mockSetRecipients).not.toHaveBeenCalled()
+  })
+
   it('PUT with mailing lists only does not ask Keycloak at all', async () => {
     const res = await PUT(makeEvent({ user: author, body: { recipients: [{ mailing_list_id: 'l1' }] } }))
     expect(res.status).toBe(200)

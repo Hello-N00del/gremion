@@ -330,7 +330,9 @@ async function reportScheduledResult(
   } else {
     _loggedPendingFailures.delete(key)
   }
-  const warnings = result.warnings.length > 0 ? `; warnings: ${result.warnings.join('; ')}` : ''
+  // The warnings name recipients and carry transport error text, so a log gets
+  // only their number; the per-recipient cause is logged by the send itself.
+  const warnings = result.warnings.length > 0 ? `; ${result.warnings.length} warning(s)` : ''
   const next =
     row?.status === 'scheduled'
       ? ' Channel stays scheduled and is retried every tick.'

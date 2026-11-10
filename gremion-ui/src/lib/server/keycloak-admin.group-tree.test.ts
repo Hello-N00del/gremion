@@ -31,6 +31,27 @@ function stubKc(routes: Record<string, Group[] | number>): string[] {
   return seen
 }
 
+/** Like stubKc, but honours first/max on /children and applies Keycloak's
+ *  default page size of 10 when max is absent. */
+function stubPaged(routes: Record<string, Group[]>): void {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (input: string | URL) => {
+      const url = String(input)
+      if (url.includes('/protocol/openid-connect/token')) {
+        return new Response(JSON.stringify({ access_token: 't', expires_in: 300 }), { status: 200 })
+      }
+      const [rawPath, query = ''] = url.slice(PREFIX.length).split('?')
+      const q = new URLSearchParams(query)
+      const all = routes[rawPath] ?? []
+      if (!rawPath.endsWith('/children')) return new Response(JSON.stringify(all), { status: 200 })
+      const first = Number(q.get('first') ?? 0)
+      const max = Number(q.get('max') ?? 10)
+      return new Response(JSON.stringify(all.slice(first, first + max)), { status: 200 })
+    }),
+  )
+}
+
 const client = () => new KeycloakAdminClient(BASE, 'r1', 'cid', 'secret')
 
 afterEach(() => {
@@ -103,5 +124,47 @@ describe('listGroupTree', () => {
     const top = await client().listGroups()
     expect(top).toHaveLength(1)
     expect(seen).toEqual(['/groups'])
+  })
+
+  it('reads every child of a group, because Keycloak pages /children at 10 by default', async () => {
+    const kids = Array.from({ length: 12 }, (_, i) => ({
+      id: `k${String(i).padStart(2, '0')}`,
+      name: `K${String(i).padStart(2, '0')}`,
+      path: `/Rat/K${String(i).padStart(2, '0')}`,
+      subGroupCount: 0,
+    }))
+    stubPaged({ '/groups': [{ id: 'a', name: 'Rat', path: '/Rat', subGroupCount: 12 }], '/groups/a/children': kids })
+    const tree = await client().listGroupTree()
+    expect(tree).toHaveLength(13)
+  })
+
+  it('logs the group id and the error class when a branch cannot be read, and keeps the rest', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    stubKc({
+      '/groups': [{ id: 'grp-7', name: 'Rat', path: '/Rat' }],
+      '/groups/grp-7/children': 403,
+    })
+    const tree = await client().listGroupTree()
+    expect(tree.map((g) => g.path)).toEqual(['/Rat'])
+    const line = warn.mock.calls.map((c) => c.join(' ')).join('\n')
+    expect(line).toContain('grp-7')
+    expect(line).toContain('KcAdminError')
+    expect(line).toContain('403')
+    warn.mockRestore()
+  })
+
+  it('logs once when the walk is cut short by the size bound', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    const many = Array.from({ length: 600 }, (_, i) => ({
+      id: `g${i}`,
+      name: `G${i}`,
+      path: `/G${i}`,
+      subGroupCount: 0,
+    }))
+    stubPaged({ '/groups': many })
+    const tree = await client().listGroupTree()
+    expect(tree).toHaveLength(500)
+    expect(warn.mock.calls.filter((c) => c.join(' ').includes('truncated'))).toHaveLength(1)
+    warn.mockRestore()
   })
 })

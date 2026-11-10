@@ -100,9 +100,12 @@ export class MailSendError extends Error {
   code?: string
   responseCode?: number
   command?: string
-  constructor(message: string, cause: MailCause = {}) {
+  /** HTTP status of the kernel callback that failed. */
+  httpStatus?: number
+  constructor(message: string, cause: MailCause = {}, httpStatus?: number) {
     super(message)
     this.name = 'MailSendError'
+    if (httpStatus !== undefined) this.httpStatus = httpStatus
     if (cause.code !== undefined) this.code = cause.code
     if (cause.responseCode !== undefined) this.responseCode = cause.responseCode
     if (cause.command !== undefined) this.command = cause.command
@@ -274,6 +277,7 @@ export function createKernelClient(opts: KernelClientOptions): KernelClient {
       throw new MailSendError(
         `kernel send-mail failed: ${res.status} ${snippet.slice(0, 200)}`,
         parseSendFailure(snippet),
+        res.status,
       )
     },
 

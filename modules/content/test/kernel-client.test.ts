@@ -481,7 +481,7 @@ describe('createKernelClient — a failed send carries its cause, never the addr
     })
     const err = await client.sendMail({ to: 'r@example.org', subject: 'S', html: 'h' }).catch((e) => e)
     expect(err).toBeInstanceOf(Error)
-    expect(err).toMatchObject({ name: 'MailSendError', code: 'EAUTH', responseCode: 535, command: 'AUTH LOGIN' })
+    expect(err).toMatchObject({ name: 'MailSendError', code: 'EAUTH', responseCode: 535, command: 'AUTH LOGIN', httpStatus: 500 })
     expect(String(err.message)).not.toContain('r@example.org')
   })
 

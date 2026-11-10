@@ -12,6 +12,8 @@ export interface MailCause {
 
 export interface MailErrorFields extends MailCause {
   name: string
+  /** HTTP status of a failed kernel callback; set by the kernel client, never read from a body. */
+  httpStatus?: number
 }
 
 const TOKEN = /^[A-Za-z0-9_]{1,40}$/
@@ -32,5 +34,10 @@ export function mailCause(source: unknown): MailCause {
 
 export function mailErrorFields(err: unknown): MailErrorFields {
   if (!(err instanceof Error)) return { name: typeof err }
-  return { name: err.name, ...mailCause(err) }
+  const out: MailErrorFields = { name: err.name, ...mailCause(err) }
+  const status = (err as { httpStatus?: unknown }).httpStatus
+  if (typeof status === 'number' && Number.isInteger(status) && status >= 100 && status <= 599) {
+    out.httpStatus = status
+  }
+  return out
 }

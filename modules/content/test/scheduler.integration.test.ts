@@ -424,7 +424,7 @@ describe('dispatchDueChannels — a failed scheduled publish is logged, never si
     }
   }
 
-  it('a partial failure is logged with post, channel, tenant, detail and the failed recipient', async () => {
+  it('a partial failure is logged with post, channel, tenant and detail, and never a recipient address or the error text', async () => {
     const postId = await makePost()
     await addEmailRecipients(postId, ['one@x.com', 'two@x.com', 'three@x.com'])
     await armChannelViaApi(postId, 'email', pastIso())
@@ -432,12 +432,17 @@ describe('dispatchDueChannels — a failed scheduled publish is logged, never si
     await dispatchDueChannels(TENANT, dueDeps({ emailTransport: failingTransport({ failFor: new Set(['two@x.com']) }) }))
 
     expect((await getChannelRow(sql, postId, 'email'))!.status).toBe('failed')
-    const line = logLines().find((l) => l.includes(postId))
+    const line = logLines().find((l) => l.includes('scheduled publish failed') && l.includes(postId))
     expect(line).toBeDefined()
     expect(line).toContain('email')
     expect(line).toContain(TENANT.slug)
     expect(line).toContain('1 send(s) failed')
-    expect(line).toContain('two@x.com')
+    // The send itself logs its failure, by cause class only.
+    expect(logLines().some((l) => l.includes('email send') && l.includes(postId))).toBe(true)
+    // Neither the address nor the transport's error text (which can echo it) reaches a log.
+    const all = logLines().join('\n')
+    expect(all).not.toContain('two@x.com')
+    expect(all).not.toContain('fake SMTP failure')
   })
 
   it('an unusable link base parks the due email channel as failed, claims nobody, logs it; a due portal channel still publishes', async () => {

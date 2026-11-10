@@ -24,4 +24,14 @@ describe('mailErrorFields', () => {
   it('names a non-Error by its type only', () => {
     expect(mailErrorFields('a@example.org')).toEqual({ name: 'string' })
   })
+
+  it('keeps the HTTP status of a failed callback when it is a valid status', () => {
+    const err = Object.assign(new Error('x'), { httpStatus: 403 })
+    expect(mailErrorFields(err)).toEqual({ name: 'Error', httpStatus: 403 })
+  })
+
+  it('drops an httpStatus that is not a valid status', () => {
+    const err = Object.assign(new Error('x'), { httpStatus: 'a@example.org' })
+    expect(mailErrorFields(err)).toEqual({ name: 'Error' })
+  })
 })
