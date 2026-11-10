@@ -265,8 +265,10 @@ export class NextcloudClient {
         'Content-Type': contentType,
         ...(!userAuth ? { 'X-Nextcloud-User': userId } : {})
       },
-      body
-    })
+      body,
+      // Node fetch requires duplex for a streaming request body (as service-client.ts does).
+      ...(body instanceof ReadableStream ? { duplex: 'half' } : {})
+    } as RequestInit)
     if (!res.ok) {
       throw await responseError('PUT', path, res)
     }

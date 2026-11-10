@@ -136,6 +136,11 @@ test('pilot env: gremion-ui carries every endpoint name the module code reads, a
   assert.doesNotMatch(serviceBlockWithoutComments('docker-compose.app.yml', 'gremion-public'), /NEXTCLOUD_ADMIN/)
 })
 
+test('gremion-ui lifts the adapter-node body cap: a 1 MB upload is refused at the 512K default, so BODY_SIZE_LIMIT is 100M', () => {
+  const env = environmentOf('docker-compose.app.yml', 'gremion-ui')
+  assert.equal(env.BODY_SIZE_LIMIT?.replace(/^["']|["']$/g, ''), '100M')
+})
+
 test('backend table: exactly the three leaf backends are `service`; no FILES_, VOTES_, MESSAGES_ or BOARD_BACKEND key exists in any app compose', () => {
   for (const file of ['docker-compose.app.yml', 'docker-compose.app.dev.yml']) {
     const text = read(file).split(/\r?\n/).filter((l) => !/^\s*#/.test(l)).join('\n')

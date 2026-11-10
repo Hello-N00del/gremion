@@ -7,6 +7,7 @@
   import type { DavEntry } from '$lib/server/files/nextcloud-client'
   import { goto } from '$app/navigation'
   import { isEditableFile, isViewableFile } from '$lib/files/editable-types'
+  import { isUploadTooLarge } from '$lib/files/upload-limit'
   import { t } from '$lib/i18n'
 
   interface Props {
@@ -143,56 +144,28 @@
     loadError = null
     try {
       for (const file of files) {
-        const CHUNK_SIZE = 5 * 1024 * 1024 // 5 MB
         const filename = file.name
         const targetPath = (rootPath ? rootPath + '/' : '') + filename
 
-        if (file.size < CHUNK_SIZE) {
-          const res = await fetch('/api/files/' + targetPath, {
-            method: 'PUT',
-            headers: { 'Content-Type': file.type || 'application/octet-stream' },
-            body: file
-          })
-          if (!res.ok) {
-            // Surface the failure and stop — a silent small-file PUT failure
-            // would just leave the file missing from the list with no feedback.
-            loadError = $t('files.uploadFailed')
-            break
-          }
-          await loadEntries()
-        } else {
-          const uploadId = crypto.randomUUID()
-          const totalChunks = Math.ceil(file.size / CHUNK_SIZE)
-          let chunkFailed = false
-          for (let i = 0; i < totalChunks; i++) {
-            const chunk = file.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE)
-            const params = new URLSearchParams({
-              uploadId,
-              chunkIndex: String(i),
-              totalChunks: String(totalChunks),
-              filename,
-              finalPath: targetPath,
-              totalSize: String(file.size)
-            })
-            const res = await fetch('/api/files/upload-chunk?' + params.toString(), {
-              method: 'POST',
-              body: chunk
-            })
-            if (!res.ok) {
-              // Abort the chunk loop on first failure so we don't march the
-              // progress bar to 100% over a server-side assembly that is broken.
-              chunkFailed = true
-              loadError = $t('files.uploadFailed')
-              break
-            }
-            uploadProgress = new Map(uploadProgress.set(filename, Math.round(((i + 1) / totalChunks) * 100)))
-          }
-          // Clear the per-file progress row whether the upload finished or aborted.
-          uploadProgress = new Map(uploadProgress)
-          uploadProgress.delete(filename)
-          if (chunkFailed) break
-          await loadEntries()
+        // Every file goes through the single PUT (the chunk route /api/files/upload-chunk is
+        // not used: it does not assemble a file today). The app container caps the body at
+        // 100 MiB, so a larger file is refused here with a clear message instead of a 413.
+        if (isUploadTooLarge(file.size)) {
+          loadError = $t('files.uploadTooLarge')
+          break
         }
+        const res = await fetch('/api/files/' + targetPath, {
+          method: 'PUT',
+          headers: { 'Content-Type': file.type || 'application/octet-stream' },
+          body: file
+        })
+        if (!res.ok) {
+          // Surface the failure and stop — a silent PUT failure would just leave the
+          // file missing from the list with no feedback.
+          loadError = $t('files.uploadFailed')
+          break
+        }
+        await loadEntries()
       }
     } catch (e) {
       // eslint-disable-next-line no-console
