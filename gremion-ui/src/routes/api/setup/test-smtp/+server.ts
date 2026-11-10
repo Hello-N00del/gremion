@@ -9,6 +9,7 @@ import { requireSetupRateLimit, checkAndIncrement, RATE_LIMITS } from '$lib/serv
 import { clientIpWithReason } from '$lib/server/client-ip'
 import { isAllowedSmtpPort, resolveSmtpTarget, REFUSAL_HINT, DNS_FAILURE_HINT } from '$lib/server/mail/smtp-target-guard'
 import { currentTenantId } from '$lib/server/tenant/context'
+import { smtpEhloName } from '$lib/server/mail/ehlo-name'
 
 
 const smtpTestSchema = z.object({
@@ -87,6 +88,7 @@ export const POST: RequestHandler = async (event) => {
     // here would reopen the DNS-rebinding window the guard just closed.
     host: target.connectHost,
     port,
+    name: smtpEhloName(),
     secure: port === 465,
     auth: user ? { user, pass: password } : undefined,
     connectionTimeout: 5000,
