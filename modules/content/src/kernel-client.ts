@@ -138,6 +138,8 @@ export interface KernelClientOptions {
   baseUrl: string
   /** Shared internal secret — forwarded as x-internal-auth. */
   secret: string
+  /** The secret of the kernel's newsletter callbacks (resolve-group, send-mail); defaults to `secret`. */
+  mailSecret?: string
   /** The tenant this client is bound to (forwarded as x-tenant-id / -slug). */
   tenant: TenantRef
   /** The correlation id for this dispatch (forwarded as x-correlation-id). */
@@ -188,12 +190,13 @@ export function createKernelClient(opts: KernelClientOptions): KernelClient {
   const fetchImpl: FetchLike = opts.fetchImpl ?? (globalThis.fetch as unknown as FetchLike)
   const base = trimBase(opts.baseUrl)
   const headers = buildHeaders(opts)
+  const mailHeaders = opts.mailSecret ? { ...headers, 'x-internal-auth': opts.mailSecret } : headers
 
   return {
     async resolveGroup(groupId: string): Promise<Recipient[]> {
       const res = await fetchImpl(`${base}/api/internal/newsletter/resolve-group`, {
         method: 'POST',
-        headers,
+        headers: mailHeaders,
         body: JSON.stringify({ groupId }),
       })
       if (!res.ok) {
@@ -218,7 +221,7 @@ export function createKernelClient(opts: KernelClientOptions): KernelClient {
     async sendMail(msg: OutgoingMail): Promise<SentMail> {
       const res = await fetchImpl(`${base}/api/internal/newsletter/send-mail`, {
         method: 'POST',
-        headers,
+        headers: mailHeaders,
         // No `from` — the kernel resolves the per-tenant from-fields (SP-2).
         body: JSON.stringify({ to: msg.to, subject: msg.subject, html: msg.html }),
       })
@@ -232,7 +235,7 @@ export function createKernelClient(opts: KernelClientOptions): KernelClient {
         const body = (await res.json().catch(() => ({}))) as { error?: unknown }
         if (body.error === 'smtp-unconfigured') {
           throw new MailUnconfiguredError(
-            `kernel send-mail: tenant SMTP not configured (to=${msg.to})`,
+            `kernel send-mail: tenant SMTP not configured`,
           )
         }
       }

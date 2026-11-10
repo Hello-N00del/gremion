@@ -93,6 +93,7 @@ IMAGE_TAG=dist-v1.0.0
 PGBOUNCER_AUTH_PASSWORD=test-secret-pgbouncer
 LIVEKIT_API_KEY=lk-key
 LIVEKIT_API_SECRET=lk-secret
+PILOT_TENANT_HOST=pilot.example.org
 EOF
 }
 
@@ -486,6 +487,32 @@ nnp_render() {
     grep -q '^  lk-key: lk-secret$' "${RELEASE}/docker/livekit/livekit.yaml"
     grep -q 'wss://example.org/livekit-sfu' "${RELEASE}/docker/element-call/config.json"
     [[ "$output" == *"release templates rendered: 2"* ]]
+}
+
+# The pilot's Element Call config is rendered from the REAL template in this checkout, never from a
+# stand-in: PILOT_TENANT_HOST is allow-listed (and therefore required once a template names it), the
+# output carries both hosts and no placeholder, and the rendered file is gitignored so a render never
+# dirties the release tree (gremion-isolation and verify refuse a dirty tree).
+@test "the real Element Call template renders from state.env: platform domain and pilot tenant host, no placeholder" {
+    mkdir -p "${RELEASE}/docker/element-call"
+    tr -d '\r' < "${PROJECT_ROOT}/docker/element-call/config.json.tmpl" > "${RELEASE}/docker/element-call/config.json.tmpl"
+    run "$RENDER" --release "$RELEASE"
+    [ "$status" -eq 0 ]
+    [ -s "${RELEASE}/docker/element-call/config.json" ]
+    grep -q '"base_url": "https://example.org"' "${RELEASE}/docker/element-call/config.json"
+    grep -q '"server_name": "example.org"' "${RELEASE}/docker/element-call/config.json"
+    grep -q '"livekit_service_url": "https://pilot.example.org/livekit/jwt"' "${RELEASE}/docker/element-call/config.json"
+    ! grep -q '\${' "${RELEASE}/docker/element-call/config.json"
+}
+
+@test "the Element Call template without PILOT_TENANT_HOST in state.env exits 2 and names the key" {
+    mkdir -p "${RELEASE}/docker/element-call"
+    tr -d '\r' < "${PROJECT_ROOT}/docker/element-call/config.json.tmpl" > "${RELEASE}/docker/element-call/config.json.tmpl"
+    sed -i '/^PILOT_TENANT_HOST=/d' "${GREMION_ROOT}/etc/env/state.env"
+    run "$RENDER" --release "$RELEASE"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"missing env key PILOT_TENANT_HOST"* ]]
+    [ ! -f "${RELEASE}/docker/element-call/config.json" ]
 }
 
 @test "no dollar-brace placeholder survives in a rendered file" {

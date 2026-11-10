@@ -243,6 +243,12 @@ describe('newsletter unsubscribe is exempt from the module gate (F5 r2)', () => 
     expect(disabledModuleForPath('/newsletter/unsubscribe', { modules: { newsletter: false } } as never)).toBeNull()
     expect(disabledModuleForPath('/api/newsletter/unsubscribe', { modules: { newsletter: false } } as never)).toBeNull()
   })
+  // The content e-mail footer carries the same promise: a former subscriber must always be able to opt out.
+  it('the content opt-out page is exempt too (exact entry, nothing below it)', async () => {
+    const { disabledModuleForPath, MODULE_GATE_EXEMPT } = await import('$lib/server/module-gate')
+    expect(MODULE_GATE_EXEMPT).toContain('/content/unsubscribe')
+    expect(disabledModuleForPath('/content/unsubscribe', { modules: { content: false } } as never)).toBeNull()
+  })
 })
 
 // Raw-vs-decoded path: SvelteKit routes on the DECODED path, so the gate must

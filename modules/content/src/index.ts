@@ -154,6 +154,7 @@ async function main(): Promise<void> {
         const kernel = createKernelClient({
           baseUrl: kernelBaseUrl,
           secret: secret ?? '',
+          mailSecret: process.env.INTERNAL_NEWSLETTER_SECRET,
           tenant,
           correlationId,
         })
@@ -219,6 +220,7 @@ async function main(): Promise<void> {
         const kernel = createKernelClient({
           baseUrl: kernelBaseUrl,
           secret: secret ?? '',
+          mailSecret: process.env.INTERNAL_NEWSLETTER_SECRET,
           tenant,
           correlationId: corrId,
           // Tenancy D1 HARDENING-3: nothing host-shaped. This call site is the

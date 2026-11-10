@@ -1,4 +1,4 @@
-<!-- i18n-sync: source=README.md sha256=d101369ecd9bf45499b9989ef5c60d4bdac7ecb0ebf1411690e03c7d495049ed -->
+<!-- i18n-sync: source=README.md sha256=fb69fd1d54ea6190c10e124d314e652e760be22df733cf2a6b17248f84859467 -->
 [English](./README.md) | **Deutsch**
 
 # board
@@ -85,9 +85,10 @@ Keine außer dem Kernel und dem PostgreSQL-Server des Moduls.
   Antwort für deaktivierte Module aus.
 - Leaf: `docker build -f modules/board/Dockerfile .` aus dem Repository-Root.
 
-`docs/pilot/module-defaults.md` hält fest, dass board nicht zum Modulsatz des Piloten gehört,
-und was das Repository darüber belegt und was nicht, ob es auf einem laufenden System
-tatsächlich abgeschaltet ist.
+`docs/pilot/module-defaults.md` hält fest, dass board nicht über das Aktivierungs-Gate angefragt
+wird (das es weiterhin namentlich ablehnt), im Pilot aber im Prozess ausgeliefert und
+standardmäßig an ist (Entscheidung des Betreibers 2026-11-09) und dass es den Isolationsnachweis
+nicht hat, den ein zweiter Kunde bräuchte.
 
 ## Tests
 

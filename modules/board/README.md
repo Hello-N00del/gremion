@@ -81,8 +81,9 @@ None besides the kernel and the module's PostgreSQL server.
   with the module-disabled surface.
 - Leaf: `docker build -f modules/board/Dockerfile .` from the repository root.
 
-`docs/pilot/module-defaults.md` states that board is not part of the pilot module set and
-what the repository does and does not show about it being off on a running system.
+`docs/pilot/module-defaults.md` states that board is not requested through the enable gate
+(which still refuses it by name) but is served in-process and on by default for the pilot
+(operator ruling 2026-11-09), and that it has no isolation evidence a second customer would need.
 
 ## Tests
 

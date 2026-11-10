@@ -4,6 +4,9 @@
 // reads) and assert the POST-CONDITION: nothing of Helios is read, probed or offered, and the page's
 // `electionsEnabled` / `heliosStatus` data say so; with elections on (or the key absent) nothing changes.
 import { describe, test, expect, vi, beforeEach } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { Role } from '$lib/auth'
 
 const getElection = vi.fn()
@@ -93,5 +96,22 @@ describe('/votes loader — the Helios items follow the elections module', () =>
   test('no tenant on locals (a bare event) means ON as well: the gate is an explicit false only', async () => {
     const data = (await load(event())) as Data
     expect(data.electionsEnabled).toBe(true)
+  })
+})
+
+// Pilot surface: with elections off the page head must not say Wahlen either (the rail entry already says
+// "Abstimmungen"). Source guard on the page: the eyebrow and the title are chosen by electionsEnabled.
+describe('/votes page head — the wording follows the elections module', () => {
+  const source = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '+page.svelte'), 'utf8')
+
+  test('the eyebrow and the h1 are switched on data.electionsEnabled, and name Wahlen only on the ON branch', () => {
+    const eyebrow = source.match(/<div class="eyebrow">([^\n]*)<\/div>/)?.[1] ?? ''
+    const title = source.match(/<h1 class="page-title">([^\n]*)<\/h1>/)?.[1] ?? ''
+    for (const line of [eyebrow, title]) {
+      expect(line).toContain('data.electionsEnabled')
+      const [onBranch, offBranch] = line.split(':').map((p) => p.trim())
+      expect(onBranch).toMatch(/Wahl/)
+      expect(offBranch).not.toMatch(/Wahl/)
+    }
   })
 })

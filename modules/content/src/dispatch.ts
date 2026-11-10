@@ -303,7 +303,7 @@ async function dispatchEmail(
       await markFailed(sql, postId, email, message, claimedAt ?? undefined)
       failed += 1
       lastError = err
-      console.error(`[dispatch] email send to ${email} (post ${postId}) failed:`, message)
+      console.error(`[dispatch] email send (post ${postId}) failed`)
       continue
     }
 

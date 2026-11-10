@@ -29,6 +29,7 @@ import { hasRole, Role } from '$lib/auth'
 import type { SessionUser } from '$lib/auth/types'
 import { evaluateStepUp } from '$lib/auth/step-up'
 import { confirmationMatches, manifestIdOf, SWITCHABLE_CATALOGUE_IDS, TOGGLEABLE_PAIRS } from '$lib/modules/catalogue-map'
+import { isHeldOffModule } from '$lib/modules/held-off'
 import type { KarenzView, ModuleOverview, ModuleOverviewItem } from '$lib/modules/switch-preview'
 import { writeAuditEntry } from '$lib/server/audit-db'
 import { readConfig } from '$lib/server/config'
@@ -186,6 +187,11 @@ export async function submitModuleSwitch(ctx: SwitchContext, input: SwitchInput,
     return fail(422, 'DISABLE_NOT_YET', 'Das Ausschalten von Modulen ist noch nicht freigegeben. Es folgt mit der 30-Tage-Frist.')
   }
   if (Object.hasOwn(MODULE_DENY, moduleId)) return fail(422, 'MODULE_DENIED', `Das Modul ${moduleId} kann nicht eingeschaltet werden: ${MODULE_DENY[moduleId]}.`)
+  // A held-off module (elections) is pinned false in config.modules, so an enable would pass the platform and then
+  // never take effect. Refused here, before anything is queued; a disable is a no-op the checks below already answer.
+  if (action === 'enable' && isHeldOffModule(moduleId)) {
+    return fail(422, 'MODULE_HELD_OFF', `Das Modul ${moduleId} ist für diese Installation nicht freigegeben und kann nicht eingeschaltet werden.`)
+  }
   if ((deps.disabledIds ?? []).includes(moduleId)) {
     return fail(422, 'MODULE_NOT_SHIPPED', `Das Modul ${moduleId} ist in dieser Installation nicht enthalten (modules/disabled.json).`)
   }
@@ -357,7 +363,8 @@ export async function loadModuleOverview(tenant: TenantContext, deps: OverviewDe
   const karenzViews = await loadKarenzViews(tenant, deps)
   if (karenzViews === null) problems.push('Der Stand der 30-Tage-Frist konnte nicht geladen werden.')
 
-  const items: ModuleOverviewItem[] = TOGGLEABLE_PAIRS.map((pair) => {
+  // A held-off module is invisible here: a row with an enable button that can never take effect is a lie.
+  const items: ModuleOverviewItem[] = TOGGLEABLE_PAIRS.filter((pair) => !isHeldOffModule(pair.manifestId)).map((pair) => {
     const row = state.get(pair.catalogueId)
     const managed = row?.has_row === true
     const rows = switches.filter((s) => s.moduleId === pair.catalogueId)

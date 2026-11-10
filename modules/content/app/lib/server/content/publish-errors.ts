@@ -26,7 +26,7 @@ export class ChannelNotPublishableError extends Error {
 /**
  * The code a leaf service answers (HTTP 409, body {"success":false,"error":"…"})
  * when the tenant id/slug pair it was called with does not match its own catalog
- * (StuRaOS#534). It is a deployment fault, not a state of the post or the channel.
+ * (consumer issue 534). It is a deployment fault, not a state of the post or the channel.
  */
 export const TENANT_IDENTITY_MISMATCH_CODE = 'tenant_identity_mismatch'
 

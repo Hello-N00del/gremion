@@ -27,6 +27,7 @@ vi.mock('./reconciler', () => ({ MODULE_SWITCH_INTERVAL_MS: 10_000, runModuleSwi
 
 const { MODULE_SWITCH_WORKER } = await import('./register.server')
 const { CouncilNotConfigured } = await import('./council-db')
+const { switchOffBlockedReason } = await import('./guards')
 
 beforeEach(() => {
   h.getCouncilDb.mockReset()
@@ -76,5 +77,36 @@ describe('module switch boot hook', () => {
     expect(h.runPass).toHaveBeenCalledWith(ctx)
     await vi.advanceTimersByTimeAsync(10_000)
     expect(h.forEachActiveTenant).toHaveBeenCalledTimes(2)
+  })
+})
+
+// The calendar runs as a leaf with its own database in the pilot, and the Karenz export of a switch-off
+// reads a different, empty one. A council admin who passes the confirmation phrase must not reach it.
+describe('calendar switch-off guard (leaf backend)', () => {
+  const tenant = { id: 't', slug: 'rat-a' } as never
+  afterEach(() => vi.unstubAllEnvs())
+
+  it('refuses a calendar switch-off while the calendar runs as a leaf service', async () => {
+    vi.stubEnv('CALENDAR_BACKEND', 'service')
+    const reason = await switchOffBlockedReason(tenant, 'calendar')
+    expect(reason).toMatch(/Kalender/)
+  })
+
+  it('fails closed on a backend value it does not know', async () => {
+    vi.stubEnv('CALENDAR_BACKEND', 'redis')
+    expect(await switchOffBlockedReason(tenant, 'calendar')).toMatch(/Kalender/)
+  })
+
+  it('does not object when the calendar runs in-process (unset, empty or inprocess)', async () => {
+    for (const v of [undefined, '', 'inprocess']) {
+      if (v === undefined) vi.stubEnv('CALENDAR_BACKEND', undefined as unknown as string)
+      else vi.stubEnv('CALENDAR_BACKEND', v)
+      expect(await switchOffBlockedReason(tenant, 'calendar'), String(v)).toBeNull()
+    }
+  })
+
+  it('does not touch any other module', async () => {
+    vi.stubEnv('CALENDAR_BACKEND', 'service')
+    expect(await switchOffBlockedReason(tenant, 'votes')).toBeNull()
   })
 })

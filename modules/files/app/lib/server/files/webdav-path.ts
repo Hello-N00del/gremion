@@ -43,10 +43,35 @@ export function sanitizeRelPath(paramPath: string): string {
   if (decoded.includes('%')) {
     throw error(400, 'Invalid path encoding')
   }
-  if (decoded.split('/').some((seg) => seg === '..')) {
+  // The path is spliced into a URL string and fetch's URL parser then
+  // normalises it: a backslash is a path separator there, and a tab or newline
+  // is DELETED, so `..\x`, `.<LF>.` and `%2e%09%2e` all become a `..` segment
+  // AFTER the `..` check above and climb out of /dav/files/<caller>/ into
+  // another user's folder. Control characters and backslashes are never part of
+  // a Nextcloud file name (its forbidden characters include `\`), so they are
+  // refused outright rather than normalised.
+  // oxlint-disable-next-line no-control-regex -- the pattern exists to REFUSE control characters
+  if (/[\\\u0000-\u001f\u007f]/.test(decoded)) {
+    throw error(400, 'Invalid path characters')
+  }
+  // A segment fetch's URL parser reduces to `.` or `..` climbs out of the namespace just
+  // like a bare `..`: it cuts the path at the first `?` or `#` and trims a space around the
+  // dots (`..?x`, `..#x`, `.. `). The files leaf and finance leaf copies must agree.
+  if (decoded.split('/').some(isDotSegment)) {
     throw error(400, 'Path traversal not allowed')
   }
   return decoded.replace(/^\/+/, '')
+}
+
+function isDotSegment(seg: string): boolean {
+  const head = seg.split(/[?#]/, 1)[0].trim()
+  return head === '.' || head === '..'
+}
+
+/** Percent-encode each segment of an already-sanitised relative path exactly once
+ *  ('/' separators kept), so a `?` or `#` in a name cannot end the URL path. */
+function encodeRelPath(sanitizedRel: string): string {
+  return sanitizedRel.split('/').map(encodeURIComponent).join('/')
 }
 
 /**
@@ -57,7 +82,7 @@ export function sanitizeRelPath(paramPath: string): string {
  * non-alphanumeric identifiers Keycloak may emit as `preferred_username`.
  */
 export function buildWebdavPath(ncUsername: string, paramPath: string): string {
-  const clean = sanitizeRelPath(paramPath)
+  const clean = encodeRelPath(sanitizeRelPath(paramPath))
   return `/remote.php/dav/files/${encodeURIComponent(ncUsername)}/${clean}`
 }
 
@@ -74,10 +99,15 @@ export function buildWebdavPath(ncUsername: string, paramPath: string): string {
  * traversal (`%2e%2e`) can never be decoded into `..` downstream.
  */
 export function validatePublishedPdfPath(pdfPath: string): string {
+  // Backslash and control characters: fetch reads `\` as `/` and deletes tab and
+  // newline, so they can build a `..` segment after the check (see sanitizeRelPath).
+  // oxlint-disable-next-line no-control-regex -- the pattern exists to REFUSE control characters
+  const hasUnsafeChar = /[\\\u0000-\u001f\u007f]/.test(pdfPath)
   const ok =
     pdfPath.startsWith('/protocols/published/') &&
     !pdfPath.includes('%') &&
-    !pdfPath.split('/').some((seg) => seg === '..')
+    !hasUnsafeChar &&
+    !pdfPath.split('/').some(isDotSegment)
   if (!ok) throw error(400, 'Invalid published PDF path')
   return pdfPath
 }

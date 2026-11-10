@@ -1,0 +1,84 @@
+{
+  "schemaVersion": 1,
+  "description": "Which compose profiles each catalogue module needs on the pilot install. gremion-init-secrets renders COMPOSE_PROFILES=production,<the profiles of every pilot module> into state.env and both app-<colour>.env; gremion-services wire adds the postRealm profiles once the customer's realm exists. Profile names are stated here and nowhere else: the env templates keep COMPOSE_PROFILES=production. scripts/check-module-profiles.test.mjs pins this file against modules/*/module.json and the compose files.",
+  "knownProfiles": [
+    "board",
+    "calendar",
+    "collabora",
+    "content",
+    "finance",
+    "messaging",
+    "newsletter",
+    "nextcloud",
+    "vault",
+    "video"
+  ],
+  "modules": {
+    "board": {
+      "pilot": false,
+      "profiles": [],
+      "postRealm": [],
+      "reason": "runs in-process on kernel tables (operator ruling 2026-11-09, default on, no leaf, no isolation gate lift); board-postgres is not started"
+    },
+    "calendar": {
+      "pilot": true,
+      "profiles": ["calendar"],
+      "postRealm": [],
+      "reason": "calendar-postgres (state) and calendar-service (app) share the profile; calendar runs as a leaf so the isolation evidence and the running path are the same code"
+    },
+    "content": {
+      "pilot": true,
+      "profiles": ["content"],
+      "postRealm": [],
+      "reason": "content-postgres (state) and content-service (app): the content tables exist only in the leaf database"
+    },
+    "elections": {
+      "pilot": false,
+      "profiles": [],
+      "postRealm": [],
+      "reason": "off and invisible on the pilot; the Helios service is not part of this install"
+    },
+    "files": {
+      "pilot": true,
+      "profiles": ["nextcloud", "collabora"],
+      "postRealm": [],
+      "reason": "in-process against Nextcloud (WebDAV with the user's own bearer); Collabora is its office editor"
+    },
+    "finance": {
+      "pilot": false,
+      "profiles": [],
+      "postRealm": [],
+      "reason": "stays as it is: not part of this install and not part of its isolation evidence"
+    },
+    "handover": {
+      "pilot": false,
+      "profiles": [],
+      "postRealm": [],
+      "reason": "no service of its own; not requested on the pilot"
+    },
+    "messaging": {
+      "pilot": true,
+      "profiles": ["video"],
+      "postRealm": ["messaging"],
+      "reason": "video (livekit, element-call) needs no realm; messaging (messaging-postgres, matrix) is post-realm because Synapse refuses a blank issuer at boot, so gremion-services wire adds it. No new profile: the messaging module has runtime.database null, so a create with messaging ticked never connects to messaging-postgres"
+    },
+    "publishing": {
+      "pilot": true,
+      "profiles": ["newsletter"],
+      "postRealm": [],
+      "reason": "newsletter-postgres (state) and newsletter-service (app): the newsletter has no backend but the leaf"
+    },
+    "vault": {
+      "pilot": false,
+      "profiles": [],
+      "postRealm": [],
+      "reason": "stays as it is: not part of this install"
+    },
+    "votes": {
+      "pilot": true,
+      "profiles": ["nextcloud"],
+      "postRealm": [],
+      "reason": "in-process: the Polls client of the votes module talks to Nextcloud's Polls app"
+    }
+  }
+}

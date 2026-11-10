@@ -112,7 +112,8 @@ enable_args() { jq -nc '{slug:"alpha-rat", module:"votes", dpia:{requiresDpia:"n
 drive_real_tc() {
     printf 'STACK=guardstack
 COLOUR=blue
-' > "${GREMION_ROOT}/etc/env/app-blue.env"
+TENANT_SECRETS_DIR=%s/tenant-secrets
+' "$GREMION_ROOT" > "${GREMION_ROOT}/etc/env/app-blue.env"
     shim docker "exec bash '${HOST_TEST_DIR}/fixtures/executor/docker-shim' \"\$@\""
     mkdir -p "${GREMION_ROOT}/current"
     run bash -c '

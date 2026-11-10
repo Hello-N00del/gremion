@@ -70,7 +70,13 @@ and that code is the authoritative copy.
 | postgres, 7 × `<id>-postgres`, pgbouncer | council store | state | `_state` |
 | nats (TASK-024: nkey auth, one account per tenant) | council store | state | `_state` |
 | keycloak | council | state | `_state`, `_edge` |
-| matrix (Synapse, `profiles: [messaging]`, TASK-198) | council | state | `_state` only, no ports |
+| matrix (Synapse, `profiles: [messaging]`, TASK-198) | council | state | `_state`, `_edge` (Traefik routes `/_matrix` to it), no ports |
+| nextcloud-postgres (service server), nextcloud-redis (pilot, `profiles: [nextcloud]`) | council store | state | `_state` |
+| nextcloud (pilot, `profiles: [nextcloud]`; no router) | council | state | `_state` |
+| collabora (pilot, `profiles: [collabora]`; routed per tenant host at `/office`) | council | state | `_state`, `_edge` |
+| livekit (pilot, `profiles: [video]`; RTC ports on the edge addresses only) | council (edge) | state | `_edge` |
+| element-call (pilot, `profiles: [video]`; no router) | council | state | `_state` |
+| calendar-service, content-service, newsletter-service (pilot leaves, one profile each; no port, no router) | council app | app-`<colour>` | `_state`, `app` |
 | legal, fallback | council (edge) | state | `_edge` |
 | traefik | council (edge) | state | `_edge`, `socket` |
 | docker-socket-proxy | council (edge) | state | `socket` only (internal) |
@@ -109,6 +115,11 @@ limit.
 | state | postgres | 1G | 1.0 | 0 |
 | state | 7 × `<id>-postgres` (profile-gated, only enabled modules start) | 7 × 256M | 7 × 0.25 | 0 |
 | state | matrix (profile-gated with messaging-postgres, TASK-198) | 1G | 1.0 | 0 |
+| state | nextcloud-postgres, nextcloud-redis (pilot, `nextcloud` profile) | 2 × 256M | 2 × 0.25 | 0 |
+| state | nextcloud, collabora (pilot) | 2 × 1G | 2 × 1.0 | 0 |
+| state | livekit (pilot, `video` profile) | 512M | 0.5 | 0 |
+| state | element-call (pilot, `video` profile) | 256M | 0.25 | 0 |
+| app-`<colour>` | calendar-service, content-service, newsletter-service (pilot leaves) | 3 × 512M | 3 × 0.5 | 0 |
 | state | pgbouncer | 256M | 0.25 | 0 |
 | state | nats | 512M | 0.5 | 0 |
 | state | keycloak | 1.5G | 1.0 | 0 |
@@ -139,6 +150,7 @@ limit.
 | mail | 0.5G | 0.5 |
 | **steady state** (state with all modules + one colour + ops + mail) | **14.0G** | **13.0** |
 | **deploy window** (+ the second colour + migrate) | **17.0G** | **16.0** |
+| the pilot services on top of the above (Nextcloud and its two stores, Collabora, LiveKit, Element Call: 3.25G / 3.25 CPUs; the three leaves: 1.5G / 1.5 CPUs per colour) | **+ 4.75G** (+ 1.5G in a deploy window) | **+ 4.75** (+ 1.5) |
 
 These are ceilings, not usage. A CPU limit caps each container and reserves
 nothing, so a CPU sum above the host's core count means contention under load,

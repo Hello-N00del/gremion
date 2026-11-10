@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Gremion kernel — governance surface",
-    "version": "1.1.0",
-    "description": "Documents the governance/groups/health HTTP surface of the Gremion governance kernel. v0.2.0 (breaking): the users-admin API (/api/users*) left the kernel with the users-admin module during the open-core carve. Contract-first: edit this spec in the same change as the route. Error envelope: {success:false, error:string}. Coverage and breaking-change gates: see contracts/README.md."
+    "version": "1.2.0",
+    "description": "Documents the governance/groups/health HTTP surface of the Gremion governance kernel. v0.2.0 (breaking): the users-admin API (/api/users*) left the kernel with the users-admin module during the open-core carve. v1.2.0 (additive): GET /api/users is back as the committee add-member search only (no user administration). Contract-first: edit this spec in the same change as the route. Error envelope: {success:false, error:string}. Coverage and breaking-change gates: see contracts/README.md."
   },
   "servers": [
     {
@@ -974,6 +974,150 @@
           },
           "403": {
             "description": "Not CouncilAdmin",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GovernanceError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/users": {
+      "get": {
+        "summary": "Search the calling tenant's realm users for the committee add-member panel; CouncilAdmin only. An empty search returns an empty list; service accounts and disabled accounts are left out",
+        "tags": [
+          "governance"
+        ],
+        "parameters": [
+          {
+            "name": "search",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 100
+            },
+            "description": "Search term (trimmed). Empty or absent returns an empty list without a realm query."
+          },
+          {
+            "name": "slim",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean"
+            },
+            "description": "Accepted for the caller's convenience; the response always carries only the five slim fields."
+          },
+          {
+            "name": "max",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 25,
+              "default": 10
+            },
+            "description": "Result bound; a value outside 1..25 is clamped."
+          },
+          {
+            "name": "first",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 10000,
+              "default": 0
+            },
+            "description": "Offset; clamped to 0..10000."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "success",
+                    "data"
+                  ],
+                  "properties": {
+                    "success": {
+                      "const": true
+                    },
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": [
+                          "id",
+                          "email",
+                          "firstName",
+                          "lastName",
+                          "username"
+                        ],
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "email": {
+                            "type": "string"
+                          },
+                          "firstName": {
+                            "type": "string"
+                          },
+                          "lastName": {
+                            "type": "string"
+                          },
+                          "username": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Search term over 100 characters, or an `export` parameter (no export exists)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GovernanceError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not signed in",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GovernanceError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not CouncilAdmin, or the request carries no tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GovernanceError"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The realm query failed",
             "content": {
               "application/json": {
                 "schema": {

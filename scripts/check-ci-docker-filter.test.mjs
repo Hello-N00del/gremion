@@ -151,6 +151,9 @@ const NOT_BUILT = {
   'docker/vector/Dockerfile': 'clones and compiles ipcrypt2: not worth a per-commit gate',
   'scripts/verify/bats-runner/Dockerfile': 'test-runner image, not shipped',
   'test/host/runner/Dockerfile': 'test-runner image, not shipped',
+  // gremion-isolation builds it on the host from the release tree (pilot wave 2); toolchain only, not shipped.
+  'test/isolation/tenant/Dockerfile': 'test toolchain image built on the host by gremion-isolation, not shipped',
+  'test/isolation/tenant/Dockerfile.dockerignore': 'the ignore file of the toolchain image above (it ignores everything)',
 }
 
 function git(cwd, args, input) {

@@ -5,7 +5,9 @@ import { defineConfig } from 'vitest/config'
 // so they run one at a time.
 export default defineConfig({
   test: {
-    include: ['test/integration/**/*.test.ts'],
+    // isolation-evidence-producer.test.ts (pilot wave 2) records the producer's
+    // file into gremion_platform; it cleans up its own rows.
+    include: ['test/integration/**/*.test.ts', 'test/isolation-evidence-producer.test.ts'],
     environment: 'node',
     globalSetup: ['test/harness/global-setup.ts'],
     fileParallelism: false,

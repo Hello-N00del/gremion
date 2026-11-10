@@ -21,8 +21,11 @@
 //   - ok       → confirmation.
 //   - expired  → the link is past its 7-day TTL.
 //   - invalid  → no such token (already used, or never minted).
+import { fail, type ActionFailure } from '@sveltejs/kit'
 import type { Actions, PageServerLoad } from './$types'
 import { resolveContentBackendForPage } from '$lib/server/content/backend/resolve'
+import { clientIpWithReason } from '$lib/server/client-ip'
+import { requireUnsubscribeRateLimit } from '$lib/server/rate-limit'
 
 export type UnsubscribeStatus = 'ok' | 'expired' | 'invalid'
 
@@ -35,7 +38,11 @@ export const load: PageServerLoad = async ({
 }
 
 export const actions: Actions = {
-  default: async ({ request, url }): Promise<{ status: UnsubscribeStatus }> => {
+  default: async (event): Promise<{ status: UnsubscribeStatus } | ActionFailure<{ status: UnsubscribeStatus }>> => {
+    const { request, url } = event
+    // Public and unauthenticated, like the newsletter unsubscribe: the same per-client limit applies
+    // BEFORE the token is read, so failed attempts count.
+    if (requireUnsubscribeRateLimit(clientIpWithReason(event)) !== null) return fail(429, { status: 'invalid' })
     const form = await request.formData().catch(() => null)
     const posted = form?.get('token')
     const token = (typeof posted === 'string' && posted) || url.searchParams.get('token')

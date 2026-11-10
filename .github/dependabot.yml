@@ -71,6 +71,10 @@ updates:
       - /docker/fallback
       - /docker/legal
       - /docker/vector
+      # The pilot's upstream bases, each pinned by digest in its Dockerfile.
+      - /docker/nextcloud
+      - /docker/collabora
+      - /docker/element-call
       - /gremion-ui
       # TASK-043 G11: the ops control panel image (gremion-control-panel).
       - /apps/control-panel
@@ -81,6 +85,9 @@ updates:
       # check-dependabot-dockerfiles.mjs fails on a tracked Dockerfile whose
       # directory no docker entry names (TASK-046).
       - /test/host/runner
+      # The isolation producer's toolchain image (gremion-isolation, pilot wave 2):
+      # built on the host from the release tree, a node base pinned by digest.
+      - /test/isolation/tenant
       # The nine module images (TASK-200) and the bats runner that
       # test/*.bats runs in (TASK-045): a tracked Dockerfile that no entry
       # names never opens a base-image PR (R29-MD-C-K).

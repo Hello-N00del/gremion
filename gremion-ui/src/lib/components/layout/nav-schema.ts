@@ -15,6 +15,9 @@ export type NavItem =
       badge?: 'count' | 'live' | 'unread';
       role?: Role;
       moduleId?: string;
+      // Pilot surface: a label that names another module (the merged votes entry says "Wahlen") is swapped
+      // for `label` here while that module is deselected, so a tenant with elections off never reads the word.
+      labelIfOff?: { moduleId: string; label: string };
       // #289 (HANDOVER-v8 Part F): when set, the label is re-termed via the
       // active tenant's term-map (retermNav). Absent → label is a fixed literal.
       termKey?: string;
@@ -46,7 +49,7 @@ const isModuleSlot = (e: NavTemplateEntry): e is ModuleNavSlot =>
 // committees + protokolle/beschlüsse, the portal admin, the Verwaltung section) plus the rail entries of the
 // module halves the build composes (TASK-205: calendar, tasks, files, chat inline in Arbeitsbereich as in the
 // source; the votes and Räume entries at `{ slot:'module' }` anchors that resolve to nothing when the module
-// is absent). Entries of modules that are not built (finance, vault, handover, content) are not declared here;
+// is absent). Entries of modules that are not built (finance, vault, handover) are not declared here;
 // they re-attach with their halves.
 //
 // P3-WP1: this is the module-NEUTRAL base template. Module-owned rail entries
@@ -58,7 +61,9 @@ export const baseNavSchema: NavTemplateEntry[] = [
     { kind: 'item', href: '/',          label: 'Übersicht',     icon: 'home',      role: Role.Guest },
     // TASK-205 (carve-keep hunk re-applied, MODULE): the workspace items of the moved module halves.
     // Each href is a route its module's app/ half provides (the interim overlay puts it under src/routes).
-    { kind: 'item', href: '/calendar',  label: 'Kalender',      icon: 'calendar',  role: Role.Guest },
+    // moduleId on calendar, files and messages: each manifest is toggleable and states that its rail entry is
+    // dropped while it is off (isItemVisible below), so none dangles into the module-disabled surface.
+    { kind: 'item', href: '/calendar',  label: 'Kalender',      icon: 'calendar',  role: Role.Guest, moduleId: 'calendar' },
     // /tasks is owned by the toggleable board module (manifests/board.ts routePrefixes ['/tasks', '/api/board']):
     // moduleId:'board' hides the entry for a board-OFF tenant instead of dangling a link into the
     // module-disabled surface (isItemVisible below).
@@ -66,8 +71,8 @@ export const baseNavSchema: NavTemplateEntry[] = [
     // Dokumente is member-gated (#194): guests are never provisioned a Nextcloud account, so /files always
     // failed for them. Hiding the rail entry + member-gating the page (PAGE_ACCESS.files) keeps guests away
     // from a surface that can never work for them.
-    { kind: 'item', href: '/files',     label: 'Dokumente',     icon: 'folder',    role: Role.Member },
-    { kind: 'item', href: '/messages',  label: 'Matrix · Chat', icon: 'chat',      role: Role.Member, badge: 'unread' },
+    { kind: 'item', href: '/files',     label: 'Dokumente',     icon: 'folder',    role: Role.Member, moduleId: 'files' },
+    { kind: 'item', href: '/messages',  label: 'Matrix · Chat', icon: 'chat',      role: Role.Member, badge: 'unread', moduleId: 'messages' },
   ] },
   { kind: 'section', label: 'Gremien', termKey: 'gremien', children: [
     // committees + protokolle are guest-readable (council structure is
@@ -85,6 +90,10 @@ export const baseNavSchema: NavTemplateEntry[] = [
   ] },
   { kind: 'section', label: 'Öffentlichkeit', children: [
     { kind: 'item', href: '/portal', label: 'Portal-Verwaltung', icon: 'globe', role: Role.CouncilAdmin },
+    // The content module's authoring surface (/content, manifests/content.ts routePrefixes). Authors are the
+    // admin groups (content.author), so the entry is council-admin gated like the portal admin beside it;
+    // moduleId hides it while the module is off.
+    { kind: 'item', href: '/content', label: 'Inhalte', icon: 'newspaper', role: Role.CouncilAdmin, moduleId: 'content' },
   ] },
   { kind: 'section', label: 'Verwaltung', children: [
     { kind: 'item', href: '/members',  label: 'Mitglieder',    icon: 'badge',    role: Role.Member },
@@ -150,12 +159,21 @@ export function filterNavForSession(
   roles: Role[],
   disabledModules: Set<string> = new Set()
 ): NavItem[] {
+  const wording = (item: NavItem): NavItem =>
+    item.kind === 'item' && item.labelIfOff && disabledModules.has(item.labelIfOff.moduleId)
+      ? { ...item, label: item.labelIfOff.label }
+      : item;
   return schema
     .filter((item) => isItemVisible(item, helpers, roles, disabledModules))
     .map((item) =>
       item.kind === 'section'
-        ? { ...item, children: item.children.filter((c) => isItemVisible(c, helpers, roles, disabledModules)) }
-        : item
+        ? {
+            ...item,
+            children: item.children
+              .filter((c) => isItemVisible(c, helpers, roles, disabledModules))
+              .map(wording),
+          }
+        : wording(item)
     );
 }
 

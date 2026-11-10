@@ -1,0 +1,4 @@
+# The toolchain image carries no repository content: nothing in this directory is
+# sent to the build. (The root .dockerignore excludes scripts/ and test/, which is
+# why this Dockerfile has its own ignore file and its own context.)
+*

@@ -35,6 +35,10 @@ function fakeRender(p, { env = {} } = {}) {
         fallback: { image: `${P}fallback:dist`, build },
         // TASK-198: Synapse joins the state project (profiles: [messaging]) with a build: key
         matrix: { image: `${P}synapse:dist`, build },
+        // pilot wave 2: Nextcloud, Collabora and Element Call join the state project with a build: key
+        nextcloud: { image: `${P}nextcloud:dist`, build },
+        collabora: { image: `${P}collabora:dist`, build },
+        'element-call': { image: `${P}element-call:dist`, build },
       },
     }
   }
@@ -50,7 +54,7 @@ test('the suite is green over a conforming stack, one check per (guard, project)
   // harness 5 + drift 5 + colour 3 (blue, green, template) + build 3 (state, blue, green)
   assert.equal(out.collected, 16)
   assert.equal(evaluateSuite(out).status, 'pass')
-  assert.match(out.detail, /build-absence state: judged 0, allowance 4 \(first-party 4\)/)
+  assert.match(out.detail, /build-absence state: judged 0, allowance 7 \(first-party 7\)/)
   assert.match(out.detail, /build-absence app-blue: judged 4, allowance 0/)
 })
 

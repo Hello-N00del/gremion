@@ -8,7 +8,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { execFileSync, spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, posix } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -240,4 +240,31 @@ test('REAL TREE: the image build copies every module app/ and disabled.json befo
   const pkg = JSON.parse(readFileSync(join(DEFAULT_ROOT, 'gremion-ui', 'package.json'), 'utf8'))
   for (const s of ['prebuild', 'precheck', 'pretest:unit']) assert.match(pkg.scripts[s] ?? '', /^node scripts\/interim-module-overlay\.mjs/, `${s} must start with the overlay`)
   assert.match(pkg.scripts.prebuild, /interim-module-overlay\.mjs --migrations/)
+})
+
+// adapter-node bundles every import that is not a package.json `dependencies` entry, and a native addon
+// (@resvg/resvg-js, the .node binary behind the content carousel) cannot be bundled: the image build died with
+// "Unexpected character" on the ELF header. `pnpm deploy --prod` also leaves devDependencies out of the runner.
+// So a package an overlaid module's server code imports at runtime and that is native or wasm-backed must be a
+// runtime dependency. The list is the packages the overlaid modules actually import; a new one is added here.
+test('REAL TREE: a native or wasm package an overlaid module imports is a runtime dependency of gremion-ui, not a devDependency', () => {
+  const { withApp: all, disabled } = discoverModules(DEFAULT_ROOT)
+  const overlaid = all.filter((id) => !disabled.includes(id))
+  const pkg = JSON.parse(readFileSync(join(DEFAULT_ROOT, 'gremion-ui', 'package.json'), 'utf8'))
+  const walkFiles = (dir) =>
+    readdirSync(dir, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? walkFiles(join(dir, e.name)) : [join(dir, e.name)]))
+  const NATIVE_OR_WASM = ['@resvg/resvg-js', 'satori']
+  const used = new Map()
+  for (const id of overlaid) {
+    for (const f of walkFiles(join(DEFAULT_ROOT, 'modules', id, 'app'))) {
+      if (!/\.(ts|svelte|js|mjs)$/.test(f) || /\.(test|spec|integration\.test|browser\.test)\.[cm]?[jt]s$/.test(f) || f.includes(`${posix.sep}scripts${posix.sep}`) || f.includes('\\scripts\\')) continue
+      const src = readFileSync(f, 'utf8')
+      for (const name of NATIVE_OR_WASM) if (new RegExp(`from\\s+['"]${name}['"]`).test(src)) used.set(name, id)
+    }
+  }
+  assert.ok(overlaid.includes('content') ? used.has('@resvg/resvg-js') : true, 'the scan must see the content carousel import, or it proves nothing')
+  for (const [name, id] of used) {
+    assert.ok(pkg.dependencies?.[name], `${name} is imported by modules/${id}/app at runtime and must be in gremion-ui dependencies (devDependencies are bundled by adapter-node and left out of the image)`)
+    assert.ok(!pkg.devDependencies?.[name], `${name} must not also stay in devDependencies`)
+  }
 })

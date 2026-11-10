@@ -42,6 +42,8 @@ lib/src/model/api_groups_post201_response.dart
 lib/src/model/api_groups_post201_response_data.dart
 lib/src/model/api_groups_post_request.dart
 lib/src/model/api_health_get200_response.dart
+lib/src/model/api_users_get200_response.dart
+lib/src/model/api_users_get200_response_data_inner.dart
 lib/src/model/committee_member.dart
 lib/src/model/committee_role.dart
 lib/src/model/date.dart

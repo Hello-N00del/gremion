@@ -29,7 +29,7 @@ describe('the realm router (TDD 18)', () => {
   it('holds the app@file router and a Keycloak router for exactly /auth/realms/<slug>/ and /auth/resources/', () => {
     expect(block(yaml, 'tenant-musterstadt')).toContain('service: "app@file"')
     const kc = block(yaml, keycloakRouterName('musterstadt'))
-    expect(kc).toContain('rule: "Host(`rat.musterstadt.example`) && (PathPrefix(`/auth/realms/musterstadt/`) || PathPrefix(`/auth/resources/`))"')
+    expect(kc).toContain('rule: "Host(`rat.musterstadt.example`) && (Path(`/auth/realms/musterstadt`) || PathPrefix(`/auth/realms/musterstadt/`) || PathPrefix(`/auth/resources/`))"')
     expect(kc).toContain(`service: "${KEYCLOAK_SERVICE}"`)
     expect(kc).toContain(`priority: ${KEYCLOAK_ROUTER_PRIORITY}`)
     expect(KEYCLOAK_ROUTER_PRIORITY).toBeGreaterThan(10)

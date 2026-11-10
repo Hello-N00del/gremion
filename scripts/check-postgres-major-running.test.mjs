@@ -210,6 +210,17 @@ test('R1: a container whose label disagrees with its service is RED', () => {
     /calendar-postgres is labelled kernel, expected module:calendar/)
 })
 
+test('R2: a service profile (nextcloud) is accepted and puts nextcloud-postgres in the expected set', async () => {
+  const { parseProfiles } = await import('./check-postgres-major-running.mjs')
+  assert.deepEqual(parseProfiles(['--profile', 'nextcloud']), ['nextcloud'])
+  const text = readFileSync(join(ROOT, 'docker-compose.yml'), 'utf8')
+  const withProfile = expectedServices([text], parseProfiles(['--profile', 'nextcloud'])).map((e) => e.service)
+  assert.ok(withProfile.includes('nextcloud-postgres'), `expected nextcloud-postgres in ${withProfile.join(', ')}`)
+  assert.ok(withProfile.includes('governance-postgres'), 'the unprofiled governance server is always expected')
+  const without = expectedServices([text], parseProfiles(['--profile', 'vault'])).map((e) => e.service)
+  assert.ok(!without.includes('nextcloud-postgres'), 'a run without the nextcloud profile does not expect its server')
+})
+
 test('R2: parseProfiles refuses unknown ids, a missing value and a contradictory pair', async () => {
   const { parseProfiles } = await import('./check-postgres-major-running.mjs')
   assert.equal(parseProfiles([]), null)

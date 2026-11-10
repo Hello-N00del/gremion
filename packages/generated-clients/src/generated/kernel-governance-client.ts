@@ -740,6 +740,97 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/users": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Search the calling tenant's realm users for the committee add-member panel; CouncilAdmin only. An empty search returns an empty list; service accounts and disabled accounts are left out */
+        get: {
+            parameters: {
+                query?: {
+                    /** @description Search term (trimmed). Empty or absent returns an empty list without a realm query. */
+                    search?: string;
+                    /** @description Accepted for the caller's convenience; the response always carries only the five slim fields. */
+                    slim?: boolean;
+                    /** @description Result bound; a value outside 1..25 is clamped. */
+                    max?: number;
+                    /** @description Offset; clamped to 0..10000. */
+                    first?: number;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** @constant */
+                            success: true;
+                            data: {
+                                id: string;
+                                email: string;
+                                firstName: string;
+                                lastName: string;
+                                username: string;
+                            }[];
+                        };
+                    };
+                };
+                /** @description Search term over 100 characters, or an `export` parameter (no export exists) */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["GovernanceError"];
+                    };
+                };
+                /** @description Not signed in */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["GovernanceError"];
+                    };
+                };
+                /** @description Not CouncilAdmin, or the request carries no tenant */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["GovernanceError"];
+                    };
+                };
+                /** @description The realm query failed */
+                502: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["GovernanceError"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/groups": {
         parameters: {
             query?: never;

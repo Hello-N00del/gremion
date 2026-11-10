@@ -42,8 +42,8 @@ import {
 } from '@gremion/member-import'
 import { kernelDbName } from '@gremion/tenant-store/lifecycle'
 import { assertSmtpStamped, tokenFor, type CustomerRef, type ProvisioningDeps } from '@gremion/provisioning'
-import { readConfig } from '../src/lib/server/config'
 import { configPathForTenant, getTenantById } from '../src/lib/server/tenant/registry'
+import { seedModulesFor } from '../src/lib/server/tenant/provisioner/seed-modules'
 import { inActiveContext } from '../src/lib/server/tenant/provisioner/customer-adapters'
 import type { KcProvisionApi } from '../src/lib/server/tenant/provisioner/kc-admin-api'
 import { keycloakAccounts, memberImportTarget, seedVertical, sqlOrgStore, type OrgStore } from '../src/lib/server/tenant/provisioner/member-import-adapters'
@@ -168,12 +168,12 @@ export async function importVerb(verb: string, ctx: ImportVerbContext): Promise<
       const c = await customerRef(deps, slug)
       const tenant = await getTenantById(c.id)
       if (!tenant) throw new Error(`customer ${slug} has no control row`)
+      // D-8: a matrix room / Nextcloud folder is asked for only when the PLATFORM enabled messaging / files for the customer
+      const modules = seedModulesFor(await deps.modules.enabled(c))
       const report = await inActiveContext(c, async () => {
-        const cfg = readConfig()
         return seedVertical(vertical, {
           store: sqlOrgStore(),
-          // D-8: a matrix room / Nextcloud folder is asked for only when messaging / files are enabled for the tenant
-          modules: { messaging: cfg.modules.messages === true, files: cfg.modules.files === true },
+          modules,
           readConfig: () => readFileSync(configPathForTenant(tenant.slug), 'utf8'),
           writeConfig: (text) => ctx.writeConfigFile(configPathForTenant(tenant.slug), text),
         })

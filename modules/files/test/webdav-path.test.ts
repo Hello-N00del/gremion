@@ -14,7 +14,7 @@
 // path validation lives only kernel-side).
 
 import { describe, it, expect } from 'vitest'
-import { sanitizeRelPath, WebdavPathError } from '../src/nextcloud/webdav-path.ts'
+import { buildWebdavPath, sanitizeRelPath, WebdavPathError } from '../src/nextcloud/webdav-path.ts'
 
 interface Vector {
   name: string
@@ -51,4 +51,32 @@ describe('sanitizeRelPath (files leaf) — #257-2 loop-decode + residual-% rejec
       }
     })
   }
+
+  // Mirrors the kernel copy: fetch's URL parser treats a backslash as `/` and deletes
+  // tab and newline, so each of these becomes a `..` segment only after the `..` check.
+  it('rejects a backslash, a raw or encoded tab or newline, and any other control character', () => {
+    const BS = String.fromCharCode(92)
+    for (const p of [`..${BS}x`, `a${BS}b`, '.\n./x', '.%0a./x', '%2e%09%2e/x', 'a\u0000b', 'a\u007fb', 'a%250ab']) {
+      expect(() => sanitizeRelPath(p), JSON.stringify(p)).toThrow(WebdavPathError)
+    }
+  })
+})
+
+// A segment that fetch's URL parser reduces to `.` or `..`: the query or fragment cut-off
+// (`..?x`, `..#x`) and surrounding whitespace (`.. `) all leave a dot segment that climbs out
+// of /remote.php/dav/files/<caller>/. The three copies of this guard (kernel app, files leaf,
+// finance leaf) must agree on every vector below.
+describe('sanitizeRelPath (files leaf) — dot segments hidden behind ?, # or whitespace', () => {
+  const REFUSED = ['..?x', '..#x', '.. ', ' ..', '.?x', '. #y', 'a/..?x/b', 'a/..#/b', '%2e%2e%3fx', '%2e%2e%23x', '..%20', '. ', 'a/./b']
+  for (const p of REFUSED) {
+    it(`refuses ${JSON.stringify(p)}`, () => {
+      expect(() => sanitizeRelPath(p)).toThrow(WebdavPathError)
+    })
+  }
+
+  it('keeps a ? or # inside an ordinary name, and buildWebdavPath percent-encodes it', () => {
+    expect(sanitizeRelPath('a?b/c#d.txt')).toBe('a?b/c#d.txt')
+    expect(sanitizeRelPath('..a/b..')).toBe('..a/b..')
+    expect(buildWebdavPath('stura', 'a?b/c#d e.txt')).toBe('/remote.php/dav/files/stura/a%3Fb/c%23d%20e.txt')
+  })
 })

@@ -151,6 +151,66 @@ describe('backFillNotice', () => {
   })
 })
 
+// A manifest's `migrations` names the files the module-OFF skip filter and the OFF->ON catch-up act on
+// (module-migrations.ts). A name that matches no file filters nothing and replays nothing, so a stale list
+// fails silently: the content manifest named 044-046 long after the files became modules/content/app/migrations
+// 1200 and 1201. Every named basename must exist as a .sql in the kernel directory or in some module's
+// app/migrations (the prebuild copies those into gremion-ui/migrations, interim-module-overlay.mjs --migrations).
+describe('manifest migration basenames name files that exist', () => {
+  const MODULES_DIR = join(MIGRATIONS_DIR, '..', '..', 'modules')
+  const present = () => {
+    const names = new Set(readdirSync(MIGRATIONS_DIR).filter((f) => f.endsWith('.sql')))
+    for (const e of readdirSync(MODULES_DIR, { withFileTypes: true })) {
+      if (!e.isDirectory()) continue
+      let files: string[] = []
+      try {
+        files = readdirSync(join(MODULES_DIR, e.name, 'app', 'migrations'))
+      } catch {
+        continue
+      }
+      for (const f of files) if (f.endsWith('.sql')) names.add(f)
+    }
+    return names
+  }
+
+  /** The manifest-declared basenames that match no file, as `<id>: <name>.sql`. */
+  const missingNames = (manifests: { id: string; migrations?: string[] }[], names: Set<string>) => {
+    const missing: string[] = []
+    for (const m of manifests) {
+      for (const base of m.migrations ?? []) if (!names.has(`${base}.sql`)) missing.push(`${m.id}: ${base}.sql`)
+    }
+    return missing
+  }
+
+  it('every migration basename of every registered manifest resolves to a file', () => {
+    expect(missingNames(MODULE_MANIFESTS, present())).toEqual([])
+  })
+
+  it('the guard is not vacuous: a manifest naming a missing file is reported', () => {
+    expect(
+      missingNames([{ id: 'rogue', migrations: ['044_content_schema', '1200_content_news_posts'] }], present()),
+    ).toEqual(['rogue: 044_content_schema.sql'])
+  })
+
+  // The portal-publish callback and the news insert name news_posts.content_origin_post_id. The column is
+  // created by no kernel migration, so a content-ON build without the content block's ALTER answers every
+  // publish with an unknown-column error from the database. Pin the pairing: code names the column, the
+  // content block adds it.
+  it('news_posts.content_origin_post_id, which the news code reads and writes, is added by the content migration block', () => {
+    const appDir = join(MODULES_DIR, 'content', 'app')
+    const code = ['news-db.ts', 'portal-callback.ts']
+      .map((f) => readFileSync(join(appDir, 'lib', 'server', 'news', f), 'utf8'))
+      .join('\n')
+    expect(code).toContain('content_origin_post_id')
+    const migrationsDir = join(appDir, 'migrations')
+    const ddl = readdirSync(migrationsDir)
+      .filter((f) => f.endsWith('.sql'))
+      .map((f) => readFileSync(join(migrationsDir, f), 'utf8'))
+      .join('\n')
+    expect(ddl).toMatch(/ALTER TABLE news_posts\s+ADD COLUMN IF NOT EXISTS content_origin_post_id\s+UUID/)
+  })
+})
+
 describe('F6 guard: calendar_events (003), committee_elections (004), deck_board (034) stay kernel-applied', () => {
   const kernelFiles = () =>
     new Set(readdirSync(MIGRATIONS_DIR).filter((f) => f.endsWith('.sql')))

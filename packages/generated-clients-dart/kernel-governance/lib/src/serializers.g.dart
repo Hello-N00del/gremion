@@ -47,6 +47,8 @@ Serializers _$serializers = (Serializers().toBuilder()
       ..add(ApiGroupsPost201ResponseData.serializer)
       ..add(ApiGroupsPostRequest.serializer)
       ..add(ApiHealthGet200Response.serializer)
+      ..add(ApiUsersGet200Response.serializer)
+      ..add(ApiUsersGet200ResponseDataInner.serializer)
       ..add(CommitteeMember.serializer)
       ..add(CommitteeRole.serializer)
       ..add(CommitteeRoleElectionMethodEnum.serializer)
@@ -66,6 +68,10 @@ Serializers _$serializers = (Serializers().toBuilder()
       ..add(SubsystemResultStatusEnum.serializer)
       ..add(SubsystemResultSubsystemEnum.serializer)
       ..add(SvelteKitHttpError.serializer)
+      ..addBuilderFactory(
+          const FullType(BuiltList,
+              const [const FullType(ApiUsersGet200ResponseDataInner)]),
+          () => ListBuilder<ApiUsersGet200ResponseDataInner>())
       ..addBuilderFactory(
           const FullType(BuiltList, const [
             const FullType(BuiltMap, const [
