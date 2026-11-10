@@ -97,6 +97,7 @@ import { KcProvisionApi, masterAdminClientId, type KcTransport } from '../src/li
 import { customerAdapters, governanceServer, kernelServer, reconcileKernelAudit } from '../src/lib/server/tenant/provisioner/customer-adapters'
 import { kernelApiSeedDeps, reconcileKernelApiSeed, reconcilePurgerConnect } from '../src/lib/server/tenant/provisioner/reconcile-reensure'
 import { fixtureIdentities } from '../src/lib/server/tenant/provisioner/fixture-identities'
+import { frontendUrlFor } from '../src/lib/server/tenant/provisioner/realm-doc'
 import {
   reconcileRealm,
   reconcileFleet,
@@ -643,6 +644,8 @@ async function ensureOpsRealm(kc: KcProvisionApi, raw: KcTransport): Promise<{ c
   const origin = panelOrigin()
   const templateText = readFileSync(join(kcDir, 'realm-export.ops.json'), 'utf-8')
   const fingerprint = createHash('sha256').update(templateText).update('\n').update(origin).digest('hex')
+  // The admin calls use Keycloak's internal address: without this, mailed links name that address.
+  const frontendUrl = frontendUrlFor(reqEnv('PLATFORM_DOMAIN'), OPS_REALM)
   if (await kc.realmExists(OPS_REALM)) {
     const rep = (await raw('GET', `/admin/realms/${OPS_REALM}`)) as { attributes?: Record<string, string> }
     const have = rep?.attributes?.[OPS_FINGERPRINT_ATTR]
@@ -651,6 +654,10 @@ async function ensureOpsRealm(kc: KcProvisionApi, raw: KcTransport): Promise<{ c
       // setup that failed after createRealm must not stay missing because the
       // fingerprint (imported with the realm) already matches.
       await kc.configureStepupFlow(OPS_REALM)
+      if (rep?.attributes?.frontendUrl !== frontendUrl) {
+        await raw('PUT', `/admin/realms/${OPS_REALM}`, { realm: OPS_REALM, attributes: { ...rep?.attributes, frontendUrl } })
+        log(`ops realm ${OPS_REALM}: frontendUrl set to ${frontendUrl}`)
+      }
       return { created: false }
     }
     throw new ProvisioningError('PRECONDITION', `realm ${OPS_REALM} exists but differs from realm-export.ops.json for panel origin ${origin} (fingerprint ${have ?? 'absent'}): refusing to overwrite an ops realm by hand`)
@@ -666,7 +673,7 @@ async function ensureOpsRealm(kc: KcProvisionApi, raw: KcTransport): Promise<{ c
   client.redirectUris = [`${origin}/*`]
   client.webOrigins = [origin]
   client.attributes = { ...(client.attributes as Record<string, string>), 'post.logout.redirect.uris': `${origin}/*` }
-  doc.attributes = { ...doc.attributes, [OPS_FINGERPRINT_ATTR]: fingerprint }
+  doc.attributes = { ...doc.attributes, [OPS_FINGERPRINT_ATTR]: fingerprint, frontendUrl }
   await writeSecretFile(secretPath, secret)
   await kc.createRealm(doc)
   await kc.configureStepupFlow(OPS_REALM)
