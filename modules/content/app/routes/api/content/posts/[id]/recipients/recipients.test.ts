@@ -10,7 +10,8 @@ const {
   mockSetRecipients,
   mockListLists,
   mockKcClient,
-  mockListGroups,
+  mockListGroupTree,
+  mockGetGroup,
 } = vi.hoisted(() => ({
   mockComposeCapabilities: vi.fn(),
   mockGetPost: vi.fn(),
@@ -18,7 +19,8 @@ const {
   mockSetRecipients: vi.fn(),
   mockListLists: vi.fn(),
   mockKcClient: vi.fn(),
-  mockListGroups: vi.fn(),
+  mockListGroupTree: vi.fn(),
+  mockGetGroup: vi.fn(),
 }))
 
 vi.mock('$lib/auth', () => ({
@@ -62,8 +64,9 @@ describe('/api/content/posts/[id]/recipients', () => {
     mockGetRecipients.mockReset().mockResolvedValue([])
     mockSetRecipients.mockReset().mockResolvedValue(undefined)
     mockListLists.mockReset().mockResolvedValue([{ id: 'l1', name: 'A', created_at: 'x' }])
-    mockListGroups.mockReset().mockResolvedValue([{ id: 'g1', name: 'StuRa', path: '/StuRa' }])
-    mockKcClient.mockReset().mockReturnValue({ listGroups: mockListGroups })
+    mockListGroupTree.mockReset().mockResolvedValue([{ id: 'g1', name: 'StuRa', path: '/StuRa' }])
+    mockGetGroup.mockReset().mockResolvedValue({ id: 'g1', name: 'StuRa', path: '/StuRa' })
+    mockKcClient.mockReset().mockReturnValue({ listGroupTree: mockListGroupTree, getGroup: mockGetGroup })
   })
 
   it('GET 401s with no user', async () => {
@@ -85,7 +88,7 @@ describe('/api/content/posts/[id]/recipients', () => {
   })
 
   it('GET degrades gracefully when the KC group lookup fails', async () => {
-    mockListGroups.mockRejectedValue(new Error('kc down'))
+    mockListGroupTree.mockRejectedValue(new Error('kc down'))
     const res = await GET(makeEvent({ user: { roles: ['member'], groups: ['authors'], id: 'u1' } }))
     expect(res.status).toBe(200)
     const data = await res.json()
@@ -105,6 +108,52 @@ describe('/api/content/posts/[id]/recipients', () => {
       { mailing_list_id: 'l1' },
       { keycloak_group_id: 'g1' },
     ])
+  })
+
+  it('GET lists nested groups with their full path', async () => {
+    mockListGroupTree.mockResolvedValue([
+      { id: 'g1', name: 'Studierendenrat', path: '/Studierendenrat', subGroupCount: 1 },
+      { id: 'g2', name: 'Vorstand', path: '/Studierendenrat/Vorstand' },
+    ])
+    const res = await GET(makeEvent({ user: { roles: ['member'], groups: ['authors'], id: 'u1' } }))
+    const data = await res.json()
+    expect(data.groups).toEqual([
+      { id: 'g1', name: 'Studierendenrat', path: '/Studierendenrat' },
+      { id: 'g2', name: 'Vorstand', path: '/Studierendenrat/Vorstand' },
+    ])
+  })
+
+  const author = { roles: ['member'], groups: ['authors'], id: 'u1' }
+
+  it('PUT 400s a group that Keycloak does not know, with the id in the message, and stores nothing', async () => {
+    mockGetGroup.mockRejectedValue(Object.assign(new Error('Keycloak Admin API error: 404 {}'), { status: 404 }))
+    await expect(
+      PUT(makeEvent({ user: author, body: { recipients: [{ keycloak_group_id: 'typo' }] } })),
+    ).rejects.toMatchObject({ status: 400, body: { message: 'Gruppe nicht gefunden: typo' } })
+    expect(mockGetGroup).toHaveBeenCalledWith('typo')
+    expect(mockSetRecipients).not.toHaveBeenCalled()
+  })
+
+  it('PUT 400s a group id that cannot be a path segment', async () => {
+    mockGetGroup.mockRejectedValue(Object.assign(new Error('Invalid Keycloak id'), { name: 'KcInvalidIdError' }))
+    await expect(
+      PUT(makeEvent({ user: author, body: { recipients: [{ keycloak_group_id: '..' }] } })),
+    ).rejects.toMatchObject({ status: 400 })
+    expect(mockSetRecipients).not.toHaveBeenCalled()
+  })
+
+  it('PUT accepts the set when Keycloak is down, so mailing lists can still be saved', async () => {
+    mockGetGroup.mockRejectedValue(new Error('kc down'))
+    const res = await PUT(makeEvent({ user: author, body: { recipients: [{ keycloak_group_id: 'g1' }] } }))
+    expect(res.status).toBe(200)
+    expect(mockSetRecipients).toHaveBeenCalledWith('p1', [{ keycloak_group_id: 'g1' }])
+  })
+
+  it('PUT with mailing lists only does not ask Keycloak at all', async () => {
+    const res = await PUT(makeEvent({ user: author, body: { recipients: [{ mailing_list_id: 'l1' }] } }))
+    expect(res.status).toBe(200)
+    expect(mockKcClient).not.toHaveBeenCalled()
+    expect(mockGetGroup).not.toHaveBeenCalled()
   })
 
   it('PUT 400s an entry targeting both a list and a group', async () => {

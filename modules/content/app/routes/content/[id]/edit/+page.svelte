@@ -26,7 +26,9 @@
   const postId = data.post.id
   const CHANNELS: { id: ChannelId; label: string }[] = [
     { id: 'email', label: 'E-Mail' },
-    { id: 'portal', label: 'Portal' },
+    // The portal channel files the post internally (the in-app news list). No
+    // public website page renders it yet, so the toggle says so.
+    { id: 'portal', label: 'Portal (intern abgelegt, noch nicht auf einer Website)' },
     { id: 'instagram', label: 'Instagram' },
   ]
 
@@ -62,6 +64,7 @@
   function scheduleSave() {
     if (saveTimer) clearTimeout(saveTimer)
     saveTimer = setTimeout(async () => {
+      saveTimer = null
       const ok = await patch({ title: title.trim() || 'Ohne Titel', body_html: body })
       // After a successful body save, refresh previews of enabled channels.
       if (ok) refreshEnabledPreviews()
@@ -146,12 +149,43 @@
   })
   let publishError = $state<Record<ChannelId, string>>({ email: '', portal: '', instagram: '' })
 
+  // The send reads the SERVER copy of the post. Cancel the pending debounce and
+  // save what is on screen now, so a click right after typing (or while the
+  // "Fehler beim Speichern" label shows) cannot send the previous text.
+  async function flushPostText(): Promise<boolean> {
+    if (saveTimer) {
+      clearTimeout(saveTimer)
+      saveTimer = null
+    }
+    return patch({ title: title.trim() || 'Ohne Titel', body_html: body })
+  }
+
+  // Email only: the send resolves its audience from the SAVED recipient rows, so
+  // save what is ticked first. The loaded check is mandatory: when the load
+  // failed the Set is empty, and saving it would wipe the saved audience.
+  async function persistAudience(): Promise<boolean> {
+    if (!recipientsLoaded) {
+      publishError.email = 'Empfänger sind nicht geladen. Bitte Seite neu laden.'
+      return false
+    }
+    if (selectedRecipients.size === 0) {
+      publishError.email = 'Bitte mindestens einen Empfänger auswählen.'
+      return false
+    }
+    return saveRecipients()
+  }
+
   async function publishNow(ch: ChannelId) {
     if (ch === 'instagram') return // L3 — not enabled
     publishing[ch] = true
     publishError[ch] = ''
     publishResult[ch] = null
     try {
+      if (!(await flushPostText())) {
+        publishError[ch] = 'Der Text konnte nicht gespeichert werden. Es wurde nichts veröffentlicht.'
+        return
+      }
+      if (ch === 'email' && !(await persistAudience())) return
       const res = await fetch(`/api/content/posts/${postId}/publish/${ch}`, { method: 'POST' })
       const result = (await res.json().catch(() => null)) as PublishResult | { message?: string } | null
       if (res.ok && result && 'status' in result) {
@@ -161,6 +195,9 @@
         // SMTP unconfigured (email): surface the failed result with its detail.
         publishResult[ch] = result as PublishResult
         publishError[ch] = (result as PublishResult).detail ?? 'Versand fehlgeschlagen.'
+      } else if (res.status >= 500) {
+        // The server's generic text is English; do not show it.
+        publishError[ch] = 'Veröffentlichung fehlgeschlagen. Bitte Empfänger prüfen und erneut versuchen.'
       } else {
         publishError[ch] =
           (result && 'message' in result && result.message) || `Veröffentlichung fehlgeschlagen (HTTP ${res.status}).`
@@ -195,6 +232,7 @@
     if (!v) return
     const iso = new Date(v).toISOString()
     publishError[ch] = ''
+    if (ch === 'email' && !(await persistAudience())) return
     const ok = await patch({ channel: ch, scheduled_at: iso })
     if (ok) channelState[ch] = { status: 'scheduled', scheduled_at: iso }
     else publishError[ch] = 'Planung fehlgeschlagen.'
@@ -243,12 +281,26 @@
         groups: { id: string; name: string; path: string }[]
       }
       availableLists = d.lists
-      availableGroups = d.groups
+      const known = new Set(d.groups.map((g) => g.id))
+      const stale: { id: string; name: string; path: string }[] = []
       const sel = new Set<string>()
       for (const r of d.recipients) {
         if (r.mailing_list_id) sel.add(`list:${r.mailing_list_id}`)
-        else if (r.keycloak_group_id) sel.add(`group:${r.keycloak_group_id}`)
+        else if (r.keycloak_group_id) {
+          sel.add(`group:${r.keycloak_group_id}`)
+          // A stored group the list does not know (deleted, or the group
+          // lookup failed) still needs a checkbox, or it cannot be unticked.
+          if (!known.has(r.keycloak_group_id)) {
+            known.add(r.keycloak_group_id)
+            stale.push({
+              id: r.keycloak_group_id,
+              name: `${r.keycloak_group_id} (nicht in der Liste)`,
+              path: r.keycloak_group_id,
+            })
+          }
+        }
       }
+      availableGroups = [...d.groups, ...stale]
       selectedRecipients = sel
       recipientsLoaded = true
     } catch {
@@ -275,7 +327,13 @@
     groupIdInput = ''
   }
 
-  async function saveRecipients() {
+  // A group is labelled by its path, so a body (a subgroup) is told apart from
+  // its parent. Entries without a real path (typed or stale ids) use the name.
+  function groupLabel(g: { id: string; name: string; path: string }): string {
+    return g.path && g.path !== g.id ? g.path : g.name
+  }
+
+  async function saveRecipients(): Promise<boolean> {
     recipientsSaving = true
     recipientsSaved = false
     const recipients = [...selectedRecipients].map((key) => {
@@ -289,9 +347,14 @@
         body: JSON.stringify({ recipients }),
       })
       recipientsSaved = res.ok
-      if (!res.ok) publishError.email = 'Empfänger konnten nicht gespeichert werden.'
+      if (!res.ok) {
+        const d = (await res.json().catch(() => null)) as { message?: string } | null
+        publishError.email = d?.message || 'Empfänger konnten nicht gespeichert werden.'
+      }
+      return res.ok
     } catch {
       publishError.email = 'Netzwerkfehler beim Speichern der Empfänger.'
+      return false
     } finally {
       recipientsSaving = false
     }
@@ -438,6 +501,10 @@
             {#if availableGroups.length > 0}
               <div class="pick-group">
                 <div class="pick-head">Keycloak-Gruppen</div>
+                <p class="muted">
+                  Es werden nur die direkten Mitglieder der gewählten Gruppe angeschrieben, nicht die
+                  Mitglieder ihrer Untergruppen.
+                </p>
                 {#each availableGroups as g (g.id)}
                   <label class="pick">
                     <input
@@ -445,7 +512,7 @@
                       checked={selectedRecipients.has(`group:${g.id}`)}
                       onchange={() => toggleRecipient(`group:${g.id}`)}
                     />
-                    <span>{g.name}</span>
+                    <span>{groupLabel(g)}</span>
                   </label>
                 {/each}
               </div>

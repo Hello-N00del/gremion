@@ -20,6 +20,8 @@ export interface KcGroup {
   readonly name: string
   readonly path: string
   readonly attributes?: Readonly<Record<string, readonly string[]>>
+  /** Present on KC 23+: 0 means a leaf, so its children need no request. */
+  readonly subGroupCount?: number
 }
 
 export interface KcRole {
@@ -370,6 +372,34 @@ export class KeycloakAdminClient {
 
   async listGroups(): Promise<readonly KcGroup[]> {
     return this.request<KcGroup[]>('GET', '/groups')
+  }
+
+  /**
+   * Every group of the realm at every depth, as one flat list ordered by path
+   * (the recipient picker needs bodies, which are subgroups). A failure on the
+   * top-level read throws; a failure on one group's children skips that branch
+   * only. Bounded by depth and total size, and each id is visited once.
+   */
+  async listGroupTree(): Promise<readonly KcGroup[]> {
+    const MAX_DEPTH = 6
+    const MAX_GROUPS = 500
+    const out = new Map<string, KcGroup>()
+    const visit = async (level: readonly KcGroup[], parentPath: string, depth: number): Promise<void> => {
+      for (const g of level) {
+        if (out.size >= MAX_GROUPS) return
+        if (out.has(g.id)) continue
+        const path = g.path || `${parentPath}/${g.name}`
+        out.set(g.id, { ...g, path })
+        if (depth >= MAX_DEPTH || g.subGroupCount === 0) continue
+        try {
+          await visit(await this.listSubGroups(g.id), path, depth + 1)
+        } catch {
+          // best-effort: keep this group, skip its branch
+        }
+      }
+    }
+    await visit(await this.listGroups(), '', 1)
+    return [...out.values()].sort((a, b) => a.path.localeCompare(b.path))
   }
 
   /** Direct children of a group (one level). Used to adopt an existing same-name
