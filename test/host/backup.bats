@@ -396,7 +396,13 @@ echo "/dev/vda4 1000000000000 999000000000 1000000000 99% /"'
 # running container, "<compose project> <compose service>". The default is the
 # kernel server alone. The project filter is honoured, so a container of another
 # stack on the same engine is only returned when the query names its project.
-# A file named .ps-fails makes the query itself fail.
+# A file named .ps-fails makes the query itself fail. A file named .pg-users
+# gives servers their OWN superuser, one "<service> <user>" per line (the kernel
+# server is `postgres`, every module and service server has its own, as
+# POSTGRES_USER in the container): for such a server the engine answers
+# `printenv` with that user, refuses `psql` without `-d postgres` (a role's
+# default database is named after it) and refuses any `-U` that is not that user.
+# Servers not named there accept any user, as before.
 set_running_pg() {   # $@ = "<project> <service>" lines
     printf '%s\n' "$@" > "${GREMION_ROOT}/.pg-containers"
 }
@@ -415,7 +421,28 @@ shim_docker_engine() {   # $1 = the shim body for every call that is not `docker
     [ "$p" = "$proj" ] && [ -n "$s" ] && printf "%s\n" "$s"
   done
   exit 0
-fi'
+fi
+case "$*" in *" exec -T "*)
+  svc=""; usr=""; prev=""
+  for a in "$@"; do
+    [ "$prev" = "-T" ] && svc="$a"
+    [ "$prev" = "-U" ] && usr="$a"
+    prev="$a"
+  done
+  want=""
+  if [ -f "$GREMION_ROOT/.pg-users" ]; then
+    want="$(while read -r s u; do if [ "$s" = "$svc" ]; then printf "%s" "$u"; fi; done < "$GREMION_ROOT/.pg-users")"
+  fi
+  if [ -n "$want" ]; then
+    case "$*" in
+      *printenv*) printf "%s\n" "$want"; exit 0 ;;
+      *psql*) case "$*" in *" -d postgres "*) ;; *) echo "psql: FATAL: database does not exist" >&2; exit 2 ;; esac ;;
+    esac
+    case "$*" in
+      *" -U "*) [ "$usr" = "$want" ] || { echo "FATAL: role ${usr} does not exist" >&2; exit 2; } ;;
+    esac
+  fi ;;
+esac'
     shim docker "${prelude}"$'\n'"$1"
 }
 
@@ -1916,4 +1943,46 @@ staged_dump_files() {
     [[ "$output" == *"no running PostgreSQL server found in staging-state"* ]]
     [ -z "$(staged_dump_files)" ]
     refute_recorded docker "pg_dump"
+}
+
+# ---------------------------------------------------------------------------
+# Per-server superuser. Only the kernel's own server runs as `postgres`; every
+# module and service server (governance-postgres, nextcloud-postgres,
+# messaging-postgres, ...) is created with its OWN POSTGRES_USER and has no
+# `postgres` role. Enumerating and dumping every listed server as the kernel's
+# user therefore failed on exactly the servers the cross-check above forces into
+# the list, and no backup could finish. Each server is now asked for its own
+# superuser and connected to as that user, on the maintenance database.
+# ---------------------------------------------------------------------------
+
+@test "every listed server is enumerated and dumped as its own superuser, governance-postgres included" {
+    shim_baseline; shim_docker_full
+    shim_rsync_honouring_excludes; shim_restic_ok
+    set_running_pg 'staging-state postgres' 'staging-state governance-postgres' 'staging-state nextcloud-postgres'
+    printf '%s\n' 'postgres postgres' 'governance-postgres governance' 'nextcloud-postgres nextcloud' \
+        > "${GREMION_ROOT}/.pg-users"
+    export BACKUP_POSTGRES_SERVICES='postgres governance-postgres nextcloud-postgres'
+    run "$BACKUP" --class daily --label own-superuser
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"every running PostgreSQL server of staging-state is in BACKUP_POSTGRES_SERVICES (3)"* ]]
+    # Enumeration on the maintenance database, as the server's own user.
+    assert_recorded docker "exec -T governance-postgres psql -U governance -d postgres"
+    assert_recorded docker "exec -T nextcloud-postgres psql -U nextcloud -d postgres"
+    # Dumps as the same user, never as the kernel's.
+    assert_recorded docker "exec -T governance-postgres pg_dump -U governance t_pilot"
+    assert_recorded docker "exec -T nextcloud-postgres pg_dump -U nextcloud t_pilot"
+    refute_recorded docker "exec -T governance-postgres pg_dump -U postgres"
+    refute_recorded docker "exec -T governance-postgres psql -U postgres"
+    [ -s "${GREMION_ROOT}/backups/current/governance-postgres__t_pilot.sql.gz" ]
+    [ -s "${GREMION_ROOT}/backups/current/nextcloud-postgres__t_pilot.sql.gz" ]
+}
+
+@test "a server whose container cannot be asked for its user is still enumerated as the kernel's user" {
+    shim_baseline; shim_docker_full
+    shim_rsync_honouring_excludes; shim_restic_ok
+    # No .pg-users fixture: `printenv` answers nothing, as a minimal image
+    # without the variable would. The kernel's POSTGRES_USER is the fallback.
+    run "$BACKUP" --class daily --label user-fallback
+    [ "$status" -eq 0 ]
+    assert_recorded docker "exec -T postgres pg_dump -U postgres t_pilot"
 }

@@ -409,9 +409,39 @@ postgres_services() {
     printf '%s\n' ${BACKUP_POSTGRES_SERVICES:-postgres}
 }
 
+# Only the kernel's own server runs as $POSTGRES_USER (`postgres`). Every module
+# and service server (governance-postgres, nextcloud-postgres, messaging-postgres,
+# the <id>-postgres of each module) is created with its OWN POSTGRES_USER, which
+# is its bootstrap superuser, and has no `postgres` role at all: connecting to it
+# as the kernel's user fails with "role does not exist". The server is therefore
+# asked for the user it was created with (its container environment, the same
+# value compose passed it), and the kernel's $POSTGRES_USER is used only when it
+# cannot answer (an image that carries no such variable runs as `postgres`).
+# A role's default database is named after it and does not exist for those
+# servers, so every psql connects to the maintenance database `postgres`, which
+# every server has.
+# The answer is cached per service and the cache lives in this shell: callers
+# must not call it from a command substitution, which would lose it.
+PG_USER_CACHE=""
+PG_USER=""
+resolve_pg_user() {   # $1 = compose service name; sets PG_USER
+    local line u
+    while IFS= read -r line; do
+        case "$line" in
+            "$1"$'\t'*) PG_USER="${line#*$'\t'}"; return 0 ;;
+        esac
+    done <<<"$PG_USER_CACHE"
+    u="$( ( cd "$RELEASE_DIR" && docker compose --env-file "$STATE_ENV" exec -T "$1" \
+            printenv POSTGRES_USER </dev/null ) 2>/dev/null | tr -d '\r' | sed '/^[[:space:]]*$/d' | head -n 1 )" || u=""
+    [[ "$u" =~ ^[A-Za-z0-9_]+$ ]] || u="$POSTGRES_USER"
+    PG_USER_CACHE="${PG_USER_CACHE}${1}"$'\t'"${u}"$'\n'
+    PG_USER="$u"
+}
+
 list_databases() {   # $1 = compose service name
+    resolve_pg_user "$1"
     ( cd "$RELEASE_DIR" && docker compose --env-file "$STATE_ENV" exec -T "$1" \
-        psql -U "$POSTGRES_USER" -tAc \
+        psql -U "$PG_USER" -d postgres -tAc \
         "SELECT datname FROM pg_database WHERE datallowconn AND NOT datistemplate ORDER BY 1" </dev/null ) \
       | tr -d '\r' | sed '/^[[:space:]]*$/d'
 }
@@ -419,8 +449,9 @@ list_databases() {   # $1 = compose service name
 # The server's own count of the same set, read separately so a truncated name
 # stream cannot pass unnoticed.
 list_database_count() {   # $1 = compose service name
+    resolve_pg_user "$1"
     ( cd "$RELEASE_DIR" && docker compose --env-file "$STATE_ENV" exec -T "$1" \
-        psql -U "$POSTGRES_USER" -tAc \
+        psql -U "$PG_USER" -d postgres -tAc \
         "SELECT count(*) FROM pg_database WHERE datallowconn AND NOT datistemplate" </dev/null ) \
       | tr -d '\r' | sed '/^[[:space:]]*$/d'
 }
@@ -444,11 +475,12 @@ dump_database() {    # $1 = service, $2 = database
     dst="$(staged_dump_path "$1" "$2")"
     tmp="${dst}.part"
     rm -f "$tmp"
+    resolve_pg_user "$1"
     # R29-MD-A: the .part is created private from its first byte (umask 077 in
     # the subshell that holds the redirect); mv keeps the mode. No global umask:
     # this program also writes runtime/ files other readers use.
     if ( umask 077; ( cd "$RELEASE_DIR" && docker compose --env-file "$STATE_ENV" exec -T "$1" \
-            pg_dump -U "$POSTGRES_USER" "$2" </dev/null ) | gzip >"$tmp" ); then
+            pg_dump -U "$PG_USER" "$2" </dev/null ) | gzip >"$tmp" ); then
         mv -f "$tmp" "$dst"
     else
         rm -f "$tmp"
@@ -492,6 +524,9 @@ dump_remaining_databases() {
         case "$svc" in
             *__*) die "invalid Postgres service name (contains '__'): ${svc}" 2 ;;
         esac
+        # Resolved here, in this shell, so the answer is cached for the command
+        # substitutions below and for dump_database.
+        resolve_pg_user "$svc"
         names="$(list_databases "$svc")" \
             || die "database enumeration failed for service ${svc}" 1
         n_names="$(printf '%s\n' "$names" | grep -c . || true)"
