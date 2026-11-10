@@ -189,22 +189,17 @@
     </div>
 
     {#if deck.cards.length === 0}
-      <div class="empty-state">
-        <div class="glyph"><Icon name="checklist" size={22} /></div>
-        <div class="ttl">Dieses Board ist noch leer</div>
-        <div class="sub">Lege eine Karte an oder übernimm eine Aufgabe aus einem Protokoll.</div>
-      </div>
-    {:else}
-      <div class="deck-board" style="grid-template-columns: repeat({deck.stacks.length}, minmax(248px, 1fr))">
-        {#each deck.stacks as stack (stack.id)}
-          <BoardColumn
-            boardId={deck.board.id}
-            stack={{ id: stack.id, name: stack.name }}
-            cards={cardsByStack[stack.id] ?? []}
-          />
-        {/each}
-      </div>
+      <p class="muted">Dieses Board ist noch leer. Lege eine Karte an oder übernimm eine Aufgabe aus einem Protokoll.</p>
     {/if}
+    <div class="deck-board" style="grid-template-columns: repeat({deck.stacks.length}, minmax(248px, 1fr))">
+      {#each deck.stacks as stack (stack.id)}
+        <BoardColumn
+          boardId={deck.board.id}
+          stack={{ id: stack.id, name: stack.name }}
+          cards={cardsByStack[stack.id] ?? []}
+        />
+      {/each}
+    </div>
   {/if}
 {/if}
 
