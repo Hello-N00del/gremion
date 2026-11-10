@@ -342,8 +342,9 @@ check_routers() {
 # loopback-only inactive-colour routers). A router with NO entryPoints listens
 # on every default entrypoint, so it is a subject too — exemption is by
 # evidence, never by absence. TCP/UDP routers on the public entrypoints are
-# refused outright (check_l4_routers): a TCP passthrough on websecure takes the
-# connection before any HTTP router, pin included, ever sees it.
+# refused outright (check_l4_routers, one exact exception: the video relay's
+# livekit-turn router): a TCP passthrough on websecure takes the connection
+# before any HTTP router, pin included, ever sees it.
 #
 # Each subject must carry:
 #   - a non-empty tls.certResolver. A bare `tls: {}` does not inherit the
@@ -498,13 +499,37 @@ check_router_universal() {
 # TCP and UDP routers on the public entrypoints (or on none, which means all)
 # sit IN FRONT of every HTTP router: a TCP HostSNI passthrough on websecure
 # hands the raw client stream — forged headers included — to its backend.
+#
+# The ONE exception is the video relay (TURN over TLS on 443): the TCP router
+# named exactly livekit-turn@docker, on websecure alone, whose rule is exactly
+# HostSNI(`turn.<PILOT_TENANT_HOST>`) with the host read from state.env, which
+# terminates TLS with a certificate resolver (tls.passthrough is not true). It
+# answers one name and hands LiveKit's own TURN port the decrypted stream; it
+# never sees an HTTP request. Any other TCP router, a UDP router of any name, a
+# second router, and every router when PILOT_TENANT_HOST is unset stay refused.
 check_l4_routers() {
-    local proto json bad
+    local proto json bad relay_rule=""
     for proto in tcp udp; do
-        if [[ "$proto" == tcp ]]; then json="$TCP_ROUTERS_JSON"; else json="$UDP_ROUTERS_JSON"; fi
-        bad="$(printf '%s' "$json" | jq -r '.[]
+        relay_rule=""
+        if [[ "$proto" == tcp ]]; then
+            json="$TCP_ROUTERS_JSON"
+            # Armed for tcp only, and only when the host is known.
+            if [[ -n "${PILOT_TENANT_HOST:-}" ]]; then
+                relay_rule="HostSNI(\`turn.${PILOT_TENANT_HOST}\`)"
+            fi
+        else
+            json="$UDP_ROUTERS_JSON"
+        fi
+        bad="$(printf '%s' "$json" | jq -r --arg rule "$relay_rule" '.[]
             | select((.name | endswith("@internal")) | not)
             | select((.entryPoints // []) as $e | ($e | length) == 0 or ($e | index("web")) != null or ($e | index("websecure")) != null)
+            | select((
+                $rule != "" and .name == "livekit-turn@docker"
+                and .entryPoints == ["websecure"]
+                and .rule == $rule
+                and ((.tls.certResolver // "") != "")
+                and ((.tls.passthrough // false) == false)
+              ) | not)
             | .name' | paste -sd, -)" \
             || { fail "router universal: the ${proto} router list is not JSON"; continue; }
         [[ -z "$bad" ]] \
