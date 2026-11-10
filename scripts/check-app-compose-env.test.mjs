@@ -141,6 +141,27 @@ test('gremion-ui lifts the adapter-node body cap: a 1 MB upload is refused at th
   assert.equal(env.BODY_SIZE_LIMIT?.replace(/^["']|["']$/g, ''), '100M')
 })
 
+test('the Files client limit and the app body cap are one number: MAX_UPLOAD_BYTES is BODY_SIZE_LIMIT in MiB', () => {
+  const env = environmentOf('docker-compose.app.yml', 'gremion-ui')
+  const cap = /^(\d+)M$/.exec((env.BODY_SIZE_LIMIT ?? '').replace(/^["']|["']$/g, ''))
+  assert.ok(cap, `BODY_SIZE_LIMIT is not of the form <n>M: ${env.BODY_SIZE_LIMIT}`)
+  const client = /MAX_UPLOAD_BYTES\s*=\s*(\d+)\s*\*\s*1024\s*\*\s*1024/.exec(read('modules/files/app/lib/files/upload-limit.ts'))
+  assert.ok(client, 'MAX_UPLOAD_BYTES is no longer written as <n> * 1024 * 1024')
+  assert.equal(Number(client[1]), Number(cap[1]))
+})
+
+test('the public entrypoint gives a body as large as the upload cap time to arrive: websecure readTimeout is at least 600s', () => {
+  // Traefik's default read timeout (60 s) covers the whole request body, so one 100 MiB PUT on a
+  // venue uplink would be cut mid-body. The block is the websecure entrypoint, up to the next entrypoint.
+  const text = read('docker/traefik/traefik.yml')
+  const block = /^ {2}websecure:\n([\s\S]*?)(?=^ {2}\S)/m.exec(text)
+  assert.ok(block, 'no websecure entrypoint in docker/traefik/traefik.yml')
+  const lines = block[1].split(/\r?\n/).filter((l) => !/^\s*#/.test(l)).join('\n')
+  const timeout = /respondingTimeouts:\s*\n\s+readTimeout:\s*"?(\d+)s"?/.exec(lines)
+  assert.ok(timeout, 'websecure has no transport.respondingTimeouts.readTimeout: the 60 s default cuts a large upload')
+  assert.ok(Number(timeout[1]) >= 600, `readTimeout ${timeout[1]}s is below 600s`)
+})
+
 test('backend table: exactly the three leaf backends are `service`; no FILES_, VOTES_, MESSAGES_ or BOARD_BACKEND key exists in any app compose', () => {
   for (const file of ['docker-compose.app.yml', 'docker-compose.app.dev.yml']) {
     const text = read(file).split(/\r?\n/).filter((l) => !/^\s*#/.test(l)).join('\n')

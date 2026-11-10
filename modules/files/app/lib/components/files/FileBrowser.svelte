@@ -23,7 +23,8 @@
   // #194: set when the API reports the user has no Nextcloud account (guest).
   // Rendered as a calm "kein Dokumentenzugriff" empty state, not an error banner.
   let noAccess = $state(false)
-  let uploadProgress = $state(new Map<string, number>())
+  // Name of the file whose single PUT is in flight (a large file can take minutes).
+  let uploadingName = $state<string | null>(null)
 
   let showNewFolderDialog = $state(false)
   let newFolderName = $state('')
@@ -142,18 +143,22 @@
     const input = event.target as HTMLInputElement
     const files = Array.from(input.files ?? [])
     loadError = null
+    // Every file goes through the single PUT (the chunk route /api/files/upload-chunk is
+    // unused). The app container caps the body at 100 MiB, so a larger file is refused here
+    // with a clear message instead of a 413. The whole selection is checked before the first
+    // PUT, so a batch is never half uploaded, and the message names the files.
+    const tooLarge = files.filter((f) => isUploadTooLarge(f.size))
+    if (tooLarge.length > 0) {
+      loadError = `${tooLarge.map((f) => f.name).join(', ')}: ${$t('files.uploadTooLarge')}`
+      input.value = ''
+      return
+    }
     try {
       for (const file of files) {
         const filename = file.name
         const targetPath = (rootPath ? rootPath + '/' : '') + filename
 
-        // Every file goes through the single PUT (the chunk route /api/files/upload-chunk is
-        // not used: it does not assemble a file today). The app container caps the body at
-        // 100 MiB, so a larger file is refused here with a clear message instead of a 413.
-        if (isUploadTooLarge(file.size)) {
-          loadError = $t('files.uploadTooLarge')
-          break
-        }
+        uploadingName = filename
         const res = await fetch('/api/files/' + targetPath, {
           method: 'PUT',
           headers: { 'Content-Type': file.type || 'application/octet-stream' },
@@ -172,6 +177,7 @@
       console.error('[FileBrowser] upload failed', e)
       loadError = $t('files.uploadFailed')
     } finally {
+      uploadingName = null
       input.value = ''
     }
   }
@@ -233,7 +239,7 @@
       <label class="btn btn-sm fb-upload-label">
         <Icon name="upload" size={14} />
         {$t('files.upload')}
-        <input type="file" multiple class="fb-file-input" onchange={handleFileInput} />
+        <input type="file" multiple class="fb-file-input" disabled={uploadingName !== null} onchange={handleFileInput} />
       </label>
       <button class="btn btn-primary btn-sm" onclick={() => (showNewFolderDialog = true)}>
         <Icon name="plus" size={14} />
@@ -242,10 +248,10 @@
     </div>
   {/if}
 
-  <!-- Upload progress -->
-  {#each [...uploadProgress.entries()] as [name, pct] (name)}
-    <div class="fb-progress">{name}: {pct}%</div>
-  {/each}
+  <!-- Upload status: one PUT per file, so no percentage, but a visible "in progress" -->
+  {#if uploadingName !== null}
+    <div class="fb-progress" role="status">{$t('files.uploading')} {uploadingName}</div>
+  {/if}
 
   {#if noAccess}
     <!-- #194: guest with no Nextcloud account — calm informational state, not an

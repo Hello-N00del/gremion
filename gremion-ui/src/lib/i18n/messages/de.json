@@ -80,6 +80,7 @@
   "files.create": "Erstellen",
   "files.loadFailed": "Dokumente konnten nicht geladen werden.",
   "files.uploadFailed": "Hochladen fehlgeschlagen.",
+  "files.uploading": "Wird hochgeladen:",
   "files.uploadTooLarge": "Die Datei ist größer als 100 MB und kann nicht hochgeladen werden. Bitte verkleinere sie oder teile sie auf.",
   "files.noAccessTitle": "Kein Dokumentenzugriff",
   "files.noAccessBody": "Für Gäste ist kein Dokumentenbereich eingerichtet. Wende dich an deinen StuRa, um ein Konto zu erhalten.",
