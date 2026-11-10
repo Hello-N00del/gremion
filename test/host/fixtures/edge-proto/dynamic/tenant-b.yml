@@ -5,9 +5,11 @@
 #
 # One tenant, one file in etc/edge/ under the Gremion root, one router per host:
 #
-#   1. every router targets the COLOUR-BOUND service app@file, which lives in
+#   1. every host router targets the COLOUR-BOUND service app@file, which lives in
 #      active.yml and is rewritten by gremion-switch — so a colour switch never
-#      rewrites a router (TRD-189);
+#      rewrites a router (TRD-189). Each host also carries a /office router
+#      (<router>.office) to collabora@docker, the office editor's own docker-label
+#      service, with the same chain minus the proxy-trust stamp;
 #   2. the chain is the tenant's own host pin FIRST, then edge-hsts-custom and
 #      edge-ratelimit-app (declared on the Traefik container's labels, @docker,
 #      the one container that exists whenever a router does), then the tenant's
@@ -34,6 +36,18 @@ http:
         - "edge-ratelimit-app@docker"
         - "edge-perip-b@file"
         - "gremion-ui-proxytrust@docker"
+      tls:
+        certResolver: "le-http"
+    tenant-b.office:
+      entryPoints: ["websecure"]
+      rule: "Host(`tenant-b.example.org`) && PathPrefix(`/office`)"
+      service: "collabora@docker"
+      priority: 100
+      middlewares:
+        - "edge-hostpin-b@file"
+        - "edge-hsts-custom@docker"
+        - "edge-ratelimit-app@docker"
+        - "edge-perip-b@file"
       tls:
         certResolver: "le-http"
   middlewares:

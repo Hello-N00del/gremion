@@ -1,0 +1,25 @@
+# LiveKit SFU configuration for the pilot's video calls (service `livekit`).
+#
+# Non-secret settings only. The API key and secret reach the server through the
+# LIVEKIT_KEYS environment variable ("key: secret"), set in docker-compose.yml
+# from the host's env file: no `keys:` block, and no key file, in the tree. The
+# advertised node address is the --node-ip flag of the same service.
+#
+# Media path: UDP 45000-45100 on the edge addresses, with TCP 7881 as the fallback
+# for a network that blocks UDP. Both are published by docker-compose.yml on the
+# edge IPs only. The signalling socket (7880) is not published: Traefik routes
+# /livekit-sfu on the platform host to it. TURN is off.
+port: 7880
+rtc:
+  tcp_port: 7881
+  port_range_start: 45000
+  port_range_end: 45100
+  use_external_ip: false
+turn:
+  enabled: false
+logging:
+  level: info
+room:
+  auto_create: true
+  # close a room 5 minutes after the last participant leaves
+  empty_timeout: 300

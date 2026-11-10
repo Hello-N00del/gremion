@@ -80,13 +80,29 @@ export const EVICT_IMPLEMENTERS = {
 }
 export const ONE_SHOTS = { migrate: 'migrate', 'tenant-create': 'tenant-create', 'kernel-api-migrate': 'kernel-api-migrate' }
 export const MODULE_POSTGRES_IDS = ['board', 'calendar', 'content', 'finance', 'newsletter', 'vault', 'messaging']
-/** TASK-084-a: dedicated service servers (governance-postgres), state-tier stores like the module servers. */
-export const SERVICE_POSTGRES_IDS = ['governance']
+/**
+ * TASK-084-a: dedicated service servers (governance-postgres), state-tier stores like the module servers.
+ * The pilot adds nextcloud-postgres (label service:nextcloud, profile nextcloud). It is a SERVICE server,
+ * not a module's: MODULE_POSTGRES_IDS drives the module_pg_admin_<id> files of tenant-create, and
+ * Nextcloud's own database is not a per-customer module database.
+ */
+export const SERVICE_POSTGRES_IDS = ['governance', 'nextcloud']
 /** The leaf services app.env.tmpl names (content-service ... vault-service). */
 export const LEAF_SERVICES = ['content', 'finance', 'files', 'votes', 'messages', 'newsletter', 'calendar', 'board', 'vault'].map(
   (l) => `${l}-service`,
 )
 export const FIRST_PARTY_IMAGE = /^ghcr\.io\/hello-n00del\/gremion-/
+/**
+ * The pilot's module leaves in the APP project (docker-compose.app.yml): service -> the one compose profile
+ * that gates it. Calendar, content and newsletter run as leaves (the evidence case table of the isolation
+ * task and the running path are the same code); every other module is in-process. A leaf is long-running
+ * but profile-gated, which the APP SHAPE rule would otherwise refuse, so this table is its exemption.
+ */
+export const LEAF_PROFILES = {
+  'calendar-service': 'calendar',
+  'content-service': 'content',
+  'newsletter-service': 'newsletter',
+}
 
 // ── the placement table (TRD §2.1 topology, §2.2 workload classes) ─────────
 //
@@ -108,10 +124,24 @@ export const PLACEMENT = {
     // TASK-024: the NATS broker is state-tier data (JetStream store) reached
     // only over ${STACK}_state by name, like the databases.
     nats: store,
+    // The pilot's Nextcloud cache (profile nextcloud); its server, nextcloud-postgres, is a
+    // SERVICE_POSTGRES_IDS row above.
+    'nextcloud-redis': store,
     keycloak: { class: 'council', networks: ['edge', 'state'] },
     // TASK-198: the chat module's Synapse (profiles: [messaging]); the app tier
-    // reaches it on _state, and it publishes nothing.
-    matrix: { class: 'council', networks: ['state'] },
+    // reaches it on _state. It publishes nothing, but Traefik routes /_matrix on the
+    // platform host to it, so it is on _edge as well (docker-compose.prod.yml).
+    matrix: { class: 'council', networks: ['edge', 'state'] },
+    // The pilot's file and office services (docs/ops/pilot-services.md). Nextcloud is reached
+    // only by name on _state (no router); Collabora is routed per tenant host through the
+    // edge's file provider, so it is on _edge too; Element Call has no router (gremion-ui
+    // proxies it) and sits on _state.
+    nextcloud: { class: 'council', networks: ['state'] },
+    collabora: { class: 'council', networks: ['edge', 'state'] },
+    'element-call': { class: 'council', networks: ['state'] },
+    // LiveKit publishes its RTC ports on the edge addresses and is routed on _edge; it has no
+    // data store and no route to one (not on _state).
+    livekit: { class: 'council-edge', networks: ['edge'] },
     legal: { class: 'council-edge', networks: ['edge'] },
     fallback: { class: 'council-edge', networks: ['edge'] },
     traefik: { class: 'council-edge', networks: ['edge', 'socket'] },
@@ -130,6 +160,9 @@ export const PLACEMENT = {
     // app tier and the modules; internal only (no edge, no port, no router).
     'kernel-api': { class: 'council-app', networks: ['app', 'state'] },
     'kernel-api-migrate': { class: 'council-oneshot', networks: ['state'] },
+    // The pilot's module leaves (LEAF_PROFILES): internal only, reached by their colour-suffixed
+    // alias on _app and _state, no edge network, no port, no Traefik route.
+    ...Object.fromEntries(Object.keys(LEAF_PROFILES).map((l) => [l, { class: 'council-app', networks: ['app', 'state'] }])),
   },
   // TASK-039: the observability stack. On `ops` only: no ops service shares a
   // network with _state or with Keycloak (TRD-203, TRD-111); the OTLP ingest
@@ -256,6 +289,11 @@ export function appShapeViolations(render, colour, stack, label = `app-${colour}
       const p = svc.profiles ?? []
       if (p.length !== 1 || p[0] !== ONE_SHOTS[name]) out.push(`${label}/${name}: one-shot not gated under profiles: [${ONE_SHOTS[name]}] (has [${p.join(', ')}])`)
       if (String(svc.restart ?? '') !== 'no') out.push(`${label}/${name}: one-shot restart is ${JSON.stringify(svc.restart ?? null)}, want "no"`)
+    } else if (name in LEAF_PROFILES) {
+      // A leaf is gated by exactly its own module profile: gremion-init-secrets renders the profile
+      // for a pilot module into COMPOSE_PROFILES, so an `up` starts it for that module only.
+      const p = svc.profiles ?? []
+      if (p.length !== 1 || p[0] !== LEAF_PROFILES[name]) out.push(`${label}/${name}: leaf not gated under profiles: [${LEAF_PROFILES[name]}] (has [${p.join(', ')}])`)
     } else if ((svc.profiles ?? []).length) {
       out.push(`${label}/${name}: long-running service is profile-gated ([${svc.profiles.join(', ')}]) -- up would not start it`)
     }
@@ -360,6 +398,93 @@ export function isolationViolations(renders, stack) {
   return out
 }
 
+// ── PUBLISHES (spec A section A: nothing binds 0.0.0.0) ───────────────────
+
+const WILDCARD_HOST_IPS = new Set(['', '0.0.0.0', '::', '[::]'])
+const normHostIp = (ip) => {
+  const v = String(ip ?? '').replace(/^\[|\]$/g, '')
+  // an all-zero IPv6 spelling (`::0`, `0:0:0:0:0:0:0:0`) is the wildcard too
+  return v.includes(':') && /^[0:]+$/.test(v) ? '::' : v
+}
+
+/**
+ * Every published port of every service of one render names a host address that is not a wildcard.
+ * A publish with no host address binds every interface, and compose renders an EMPTY interpolated
+ * address (`:7881:7881`) exactly like that. The pilot's LiveKit publishes its RTC ports on the
+ * edge addresses, so this reads the rendered `host_ip`, never the source text.
+ */
+export function portBindViolations(render, label = 'render') {
+  const out = []
+  for (const [name, svc] of services(render)) {
+    for (const p of svc.ports ?? []) {
+      if (WILDCARD_HOST_IPS.has(normHostIp(p.host_ip))) {
+        out.push(`${label}/${name}: publishes ${p.published ?? '?'}->${p.target}/${p.protocol ?? 'tcp'} with no host address (${JSON.stringify(p.host_ip ?? '')}), which binds every interface`)
+      }
+    }
+  }
+  return out
+}
+
+// ── LEAVES (the pilot's calendar, content and newsletter services) ─────────
+
+const urlOrNull = (u) => {
+  try {
+    return new URL(String(u))
+  } catch {
+    return null
+  }
+}
+
+/**
+ * The module leaves of one APP render, and the URLs gremion-ui reaches them by. A leaf, when it is in
+ * the render, is internal only (no port, no edge network, no docker router label), carries the stack
+ * label, and answers to `<leaf>-<colour>` on _app and _state. gremion-ui's <ID>_SERVICE_URL names
+ * exactly that alias on the port the leaf listens on, so a URL cannot resolve to nothing. Every leaf
+ * is expected in a profile-on render, and every leaf URL must resolve to an alias of the render.
+ */
+export function leafViolations(render, colour, stack, label = `app-${colour}`) {
+  const out = []
+  const svcs = render?.services ?? {}
+  const ui = svcs['gremion-ui']
+  for (const [leaf, profile] of Object.entries(LEAF_PROFILES)) {
+    const svc = svcs[leaf]
+    if (!svc) {
+      out.push(`${label}: leaf ${leaf} is absent from the render (profile ${profile})`)
+      continue
+    }
+    const nets = serviceNetworks(render, svc)
+    const want = [`${stack}-app-${colour}_app`, `${stack}_state`].sort()
+    if (JSON.stringify(nets) !== JSON.stringify(want)) out.push(`${label}/${leaf}: networks [${nets.join(', ')}], want [${want.join(', ')}] (no edge network)`)
+    if ((svc.ports ?? []).length) out.push(`${label}/${leaf}: publishes a port -- a leaf is reachable only by its colour-suffixed name`)
+    if (!labelsOf(svc)['org.gremion.stack']) out.push(`${label}/${leaf}: no org.gremion.stack label`)
+    const port = String(svc.environment?.PORT ?? '')
+    if (port !== '8080') out.push(`${label}/${leaf}: environment.PORT is ${JSON.stringify(port)}, want "8080" (the port gremion-ui's URL names)`)
+    for (const key of Object.keys(svc.networks ?? {})) {
+      const net = render.networks?.[key]?.name ?? key
+      if (want.includes(net) && !(svc.networks[key]?.aliases ?? []).includes(`${leaf}-${colour}`)) {
+        out.push(`${label}/${leaf}: no ${leaf}-${colour} alias on ${net}`)
+      }
+    }
+    if (ui) {
+      const id = leaf.replace(/-service$/, '').toUpperCase()
+      const url = String(ui.environment?.[`${id}_SERVICE_URL`] ?? '')
+      const u = urlOrNull(url)
+      if (!u) out.push(`${label}/gremion-ui: ${id}_SERVICE_URL is ${JSON.stringify(url)}, not a URL`)
+      else if (u.hostname !== `${leaf}-${colour}` || u.port !== '8080') out.push(`${label}/gremion-ui: ${id}_SERVICE_URL ${url} does not name ${leaf}-${colour}:8080`)
+    }
+  }
+  if (ui) {
+    // every leaf URL gremion-ui carries must resolve to an alias some service of this render answers to
+    const aliases = new Set(Object.values(svcs).flatMap((s) => Object.values(s.networks ?? {}).flatMap((n) => n?.aliases ?? [])))
+    for (const [k, v] of Object.entries(ui.environment ?? {})) {
+      if (/^(CALENDAR|CONTENT|NEWSLETTER)_SERVICE_URL$/.test(k) && !aliases.has(urlOrNull(v)?.hostname)) {
+        out.push(`${label}/gremion-ui: ${k} names ${urlOrNull(v)?.hostname ?? String(v)}, which no service of the render answers to`)
+      }
+    }
+  }
+  return out
+}
+
 // ── the CLI ────────────────────────────────────────────────────────────────
 
 /** Renders one project with every profile on, from its fixed env file. */
@@ -395,6 +520,7 @@ export function runAll({ render = renderProject } = {}) {
     }
     renders.push({ id: p.id, render: r })
     problems.push(...limitsViolations(r, p.id))
+    problems.push(...portBindViolations(r, p.id))
     if (p.colour) {
       // TASK-084-a: the governance credential directory is tenant-create's alone, and no tenant mount reaches it
       const gov = (r.services?.['tenant-create']?.volumes ?? []).find((v) => v.target === '/run/secrets/governance')
@@ -414,6 +540,7 @@ export function runAll({ render = renderProject } = {}) {
     else if (p.colour) {
       problems.push(...appShapeViolations(r, p.colour, stack, p.id))
       problems.push(...colourSuffixViolations(r, p.colour, p.id))
+      problems.push(...leafViolations(r, p.colour, stack, p.id))
     } else problems.push(...globalNameViolations(r, p.id))
   }
   problems.push(...isolationViolations(renders, stack))

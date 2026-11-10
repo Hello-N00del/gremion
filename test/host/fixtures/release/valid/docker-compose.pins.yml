@@ -22,3 +22,12 @@ services:
   kernel-api-migrate:
     build: !reset null
     image: ghcr.io/hello-n00del/gremion-kernel-api@sha256:4444444444444444444444444444444444444444444444444444444444444444
+  calendar-service:
+    build: !reset null
+    image: ghcr.io/hello-n00del/gremion-calendar@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+  content-service:
+    build: !reset null
+    image: ghcr.io/hello-n00del/gremion-content@sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
+  newsletter-service:
+    build: !reset null
+    image: ghcr.io/hello-n00del/gremion-newsletter@sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff

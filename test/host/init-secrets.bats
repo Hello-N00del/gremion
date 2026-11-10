@@ -463,3 +463,113 @@ copy_host_src() {
             || { echo "${d} is $(stat -c '%a' "${d%/}"), not 700"; return 1; }
     done
 }
+
+# ---------------------------------------------------------------------------
+# The pilot's services: secrets, the pilot tenant host, module profiles, host build
+# (docs/ops/pilot-services.md). Every secret is generated here and never committed.
+# ---------------------------------------------------------------------------
+
+@test "pilot: the service secrets are generated (alnum32 and hex32), and one value per group across state and both colours" {
+    render
+    [ "$status" -eq 0 ]
+    local f k v
+    for k in NEXTCLOUD_DB_PASSWORD NEXTCLOUD_ADMIN_PASSWORD REDIS_PASSWORD LIVEKIT_API_KEY LIVEKIT_API_SECRET; do
+        v="$(value_of "${ENV_DIR}/state.env" "$k")"
+        [[ "$v" =~ ^[A-Za-z0-9]{32}$ ]] || { echo "state.env ${k} is not 32 alnum"; return 1; }
+    done
+    for f in app-blue.env app-green.env; do
+        for k in NEXTCLOUD_ADMIN_PASSWORD LIVEKIT_API_KEY LIVEKIT_API_SECRET; do
+            [ "$(value_of "${ENV_DIR}/${f}" "$k")" = "$(value_of "${ENV_DIR}/state.env" "$k")" ] \
+                || { echo "${f} ${k} differs from state.env"; return 1; }
+        done
+        for k in INTERNAL_CALENDAR_SECRET INTERNAL_CONTENT_SECRET INTERNAL_NEWSLETTER_SECRET; do
+            [[ "$(value_of "${ENV_DIR}/${f}" "$k")" =~ ^[0-9a-f]{64}$ ]] || { echo "${f} ${k} is not 64 hex"; return 1; }
+        done
+        # the leaves' database servers are the state tier's: the same password in both files
+        for k in CALENDAR_PG_PASSWORD CONTENT_PG_PASSWORD NEWSLETTER_PG_PASSWORD; do
+            v="$(value_of "${ENV_DIR}/${f}" "$k")"
+            [[ "$v" =~ ^[A-Za-z0-9]{32}$ ]] || { echo "${f} ${k} is not 32 alnum"; return 1; }
+            [ "$v" = "$(value_of "${ENV_DIR}/state.env" "$k")" ] || { echo "${f} ${k} differs from state.env"; return 1; }
+        done
+    done
+    # the three leaf secrets are three different values, and the same in both colours
+    [ "$(value_of "${ENV_DIR}/app-blue.env" INTERNAL_CALENDAR_SECRET)" = "$(value_of "${ENV_DIR}/app-green.env" INTERNAL_CALENDAR_SECRET)" ]
+    [ "$(value_of "${ENV_DIR}/app-blue.env" INTERNAL_CALENDAR_SECRET)" != "$(value_of "${ENV_DIR}/app-blue.env" INTERNAL_CONTENT_SECRET)" ]
+    [ "$(value_of "${ENV_DIR}/app-blue.env" INTERNAL_CONTENT_SECRET)" != "$(value_of "${ENV_DIR}/app-blue.env" INTERNAL_NEWSLETTER_SECRET)" ]
+    # no secret of the state tier's own (redis, nextcloud database) reaches the app tier
+    for f in app-blue.env app-green.env; do
+        ! grep -qE '^(REDIS_PASSWORD|NEXTCLOUD_DB_PASSWORD)=' "${ENV_DIR}/${f}" || { echo "${f} carries a state-only secret"; return 1; }
+    done
+}
+
+@test "pilot: PILOT_TENANT_HOST is an operator item in state.env and both colours, listed on stdout, never a default" {
+    render
+    [ "$status" -eq 0 ]
+    local f
+    for f in state.env app-blue.env app-green.env; do
+        [ "$(value_of "${ENV_DIR}/${f}" PILOT_TENANT_HOST)" = "CHANGE_ME_OPERATOR_pilot_tenant_host" ] \
+            || { echo "${f}: PILOT_TENANT_HOST is not operator-pending"; return 1; }
+        [[ "$output" == *"${f}: PILOT_TENANT_HOST"* ]] || { echo "${f}: PILOT_TENANT_HOST not listed"; return 1; }
+    done
+}
+
+@test "pilot: SYNAPSE_ADMIN_TOKEN is a placeholder the wire step replaces, and the template says so" {
+    # bootstrap.sh prints the bot's REAL access token: a generated value can never be it.
+    local tmpl="${HOST_SRC}/templates/env/state.env.tmpl"
+    grep -B6 '^SYNAPSE_ADMIN_TOKEN=' "$tmpl" | grep -q 'gremion-services wire'
+    grep -B6 '^SYNAPSE_ADMIN_TOKEN=' "${HOST_SRC}/templates/env/app.env.tmpl" | grep -q 'gremion-services wire'
+}
+
+@test "profiles: COMPOSE_PROFILES is rendered from module-profiles.json into state.env and both colours, and nowhere else" {
+    render
+    [ "$status" -eq 0 ]
+    local want="production,calendar,collabora,content,newsletter,nextcloud,video" f
+    for f in state.env app-blue.env app-green.env; do
+        [ "$(value_of "${ENV_DIR}/${f}" COMPOSE_PROFILES)" = "$want" ] \
+            || { echo "${f}: COMPOSE_PROFILES is $(value_of "${ENV_DIR}/${f}" COMPOSE_PROFILES), want ${want}"; return 1; }
+    done
+    # mail.env and ops.env name no profile list this render writes
+    for f in mail.env ops.env; do
+        [ "$(grep -c '^COMPOSE_PROFILES=production,' "${ENV_DIR}/${f}" || true)" = 0 ]
+    done
+    # the templates keep the bare `production`: profile names live in ONE place
+    grep -q '^COMPOSE_PROFILES=production$' "${HOST_SRC}/templates/env/state.env.tmpl"
+    grep -q '^COMPOSE_PROFILES=production$' "${HOST_SRC}/templates/env/app.env.tmpl"
+}
+
+@test "profiles: no off-module profile is rendered and the post-realm one (messaging) is not, finance and vault stay off" {
+    render
+    [ "$status" -eq 0 ]
+    local f p
+    for f in state.env app-blue.env app-green.env; do
+        for p in messaging board finance vault elections handover dev migrate tenant-create kernel-api-migrate; do
+            [[ ",$(value_of "${ENV_DIR}/${f}" COMPOSE_PROFILES)," != *",${p},"* ]] || { echo "${f} renders profile ${p}"; return 1; }
+        done
+    done
+}
+
+@test "profiles: a pilot module with a profile the compose files do not know is refused before anything is written (exit 1)" {
+    copy_host_src
+    # a module's own profile list only: the knownProfiles list keeps the real name
+    sed -i '/"profiles":/s/"nextcloud"/"nextclod"/' "${GREMION_ROOT}/host-src/module-profiles.json"
+    run "$COPY_INIT" --root "$GREMION_ROOT" --stack gremion
+    [ "$status" -ne 0 ]
+    [[ "$output" == *"nextclod"* ]]
+    [[ ! -f "${ENV_DIR}/state.env" ]]
+}
+
+@test "host build: --host-build renders COMPOSE_FILE without the two release pins layers; the default keeps them" {
+    render
+    [ "$status" -eq 0 ]
+    [ "$(value_of "${ENV_DIR}/state.env" COMPOSE_FILE)" = "docker-compose.yml:docker-compose.prod.yml:docker-compose.state-pins.yml" ]
+    [ "$(value_of "${ENV_DIR}/app-blue.env" COMPOSE_FILE)" = "docker-compose.app.yml:docker-compose.pins.yml" ]
+    run "$INIT" --root "$GREMION_ROOT" --stack gremion --force --host-build
+    [ "$status" -eq 0 ]
+    local f
+    [ "$(value_of "${ENV_DIR}/state.env" COMPOSE_FILE)" = "docker-compose.yml:docker-compose.prod.yml" ]
+    for f in app-blue.env app-green.env; do
+        [ "$(value_of "${ENV_DIR}/${f}" COMPOSE_FILE)" = "docker-compose.app.yml" ] || { echo "${f}: $(value_of "${ENV_DIR}/${f}" COMPOSE_FILE)"; return 1; }
+    done
+    # the profiles are rendered the same way in a host build
+    [ "$(value_of "${ENV_DIR}/state.env" COMPOSE_PROFILES)" = "production,calendar,collabora,content,newsletter,nextcloud,video" ]
+}

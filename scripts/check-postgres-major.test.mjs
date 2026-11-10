@@ -710,7 +710,7 @@ test('a variable image on a service that is not Postgres is none of this guard\'
 })
 
 /** A docker-compose.yml body carrying the full, correct module set. */
-function moduleCompose({ skip = null, override = {}, gov = {} } = {}) {
+function moduleCompose({ skip = null, override = {}, gov = {}, nc = {} } = {}) {
   const lines = [
     'x-module-postgres: &module-postgres',
     `  image: ${POSTGRES_IMAGE_REF}`,
@@ -738,6 +738,14 @@ function moduleCompose({ skip = null, override = {}, gov = {} } = {}) {
       '    volumes:', `      - governance-pg-data:${POSTGRES_DATA_MOUNT}`)
     vols.push('  governance-pg-data:', `    name: ${gov.volume ?? 'gremion_service_governance_pg_data'}`)
   }
+  // The pilot's Nextcloud server: service:nextcloud label, gated by the nextcloud profile, POSTGRES_DB nextcloud
+  if (skip !== 'nextcloud') {
+    lines.push('  nextcloud-postgres:', '    <<: *module-postgres', `    profiles: [${nc.profile ?? 'nextcloud'}]`,
+      '    labels:', `      org.gremion.postgres: "${nc.label ?? 'service:nextcloud'}"`,
+      '    environment:', ...(nc.noDb ? [] : ['      POSTGRES_DB: nextcloud']),
+      '    volumes:', `      - nextcloud-pg-data:${POSTGRES_DATA_MOUNT}`)
+    vols.push('  nextcloud-pg-data:', `    name: ${nc.volume ?? 'gremion_service_nextcloud_pg_data'}`)
+  }
   return [...lines, ...vols].join('\n') + '\n'
 }
 
@@ -758,8 +766,15 @@ test('checkModuleSet goes RED on a wrong label, a wrong profile and an unlabelle
   assert.match(checkModuleSet(noKernel).join('\n'), /the kernel postgres service is not labelled org\.gremion\.postgres=kernel/)
 })
 
-test('TASK-084-a: the service-server set is governance', () => {
-  assert.deepEqual([...SERVICE_POSTGRES_IDS], ['governance'])
+test('TASK-084-a: the service-server set is governance and the pilot Nextcloud server', () => {
+  assert.deepEqual([...SERVICE_POSTGRES_IDS], ['governance', 'nextcloud'])
+})
+
+test('the pilot Nextcloud server goes RED on a missing server, a wrong label, a wrong profile gate and a wrong POSTGRES_DB', () => {
+  assert.match(checkModuleSet(moduleCompose({ skip: 'nextcloud' })).join('\n'), /no nextcloud-postgres service/)
+  assert.match(checkModuleSet(moduleCompose({ nc: { label: 'module:files' } })).join('\n'), /nextcloud-postgres is labelled org\.gremion\.postgres=module:files, expected service:nextcloud/)
+  assert.match(checkModuleSet(moduleCompose({ nc: { profile: 'files' } })).join('\n'), /nextcloud-postgres is not gated under profiles: \[nextcloud\]/)
+  assert.match(checkModuleSet(moduleCompose({ nc: { noDb: true } })).join('\n'), /nextcloud-postgres sets POSTGRES_DB null, expected nextcloud/)
 })
 
 test('TASK-084-a: checkModuleSet goes RED on a missing governance-postgres, a module label, a profile gate, a shared volume and a missing POSTGRES_DB', () => {

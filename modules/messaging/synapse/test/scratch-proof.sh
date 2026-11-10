@@ -131,6 +131,15 @@ phase_prepare() {
   docker tag "$IMAGE_LOCAL" "$IMAGE_COMPOSE"
   rnd() { openssl rand -hex 16 | tr -d '\r'; }
   umask 077
+  # matrix names SYNAPSE_OIDC_CLIENT_SECRET_FILE and binds ${GREMION_ROOT}/etc/secrets/synapse
+  # (create_host_path false), so the scratch root must carry the file `gremion-services wire`
+  # writes on a host. The directory and file are world-readable here for the same reason as
+  # the stub below: whatever user the render runs as has to read it.
+  local oidc_secret; oidc_secret="$(rnd)"
+  mkdir -p "$OUT/root/etc/secrets/synapse"
+  printf '%s' "$oidc_secret" > "$OUT/root/etc/secrets/synapse/oidc_client_secret"
+  chmod 0755 "$OUT/root" "$OUT/root/etc" "$OUT/root/etc/secrets" "$OUT/root/etc/secrets/synapse"
+  chmod 0644 "$OUT/root/etc/secrets/synapse/oidc_client_secret"
   cat > "$ENVF" <<EOF
 # TASK-198 scratch proof -- generated, gitignored, never the checkout's .env
 STACK=${STACK}
@@ -159,7 +168,7 @@ MESSAGING_PG_PASSWORD=$(rnd)
 SYNAPSE_DB_PASSWORD=$(rnd)
 SYNAPSE_KEYCLOAK_ISSUER_URL=https://idp.${STACK}.example.org/auth/realms/t198
 SYNAPSE_KEYCLOAK_FETCH_URL=http://${STUB}:8080/realm.json
-SYNAPSE_OIDC_CLIENT_SECRET=$(rnd)
+SYNAPSE_OIDC_CLIENT_SECRET=${oidc_secret}
 SYNAPSE_KC_MAX=3
 EOF
   docker network inspect "${STACK}_state" >/dev/null 2>&1 || docker network create "${STACK}_state" >/dev/null

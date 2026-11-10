@@ -1396,7 +1396,7 @@ jobs:
           # images, the vertical data directories, the kernel-api's migration
           # register, this workflow, the LICENSE/NOTICE files, and the
           # lockfile/workspace/root manifests every pnpm image copies first.
-          pattern='(^|/)(Dockerfile|Containerfile)(\.[^/]*)?$|(^|/)\.dockerignore$|^(packages|services|modules|apps|gremion-ui|gremion-public|verticals|docker/legal|docker/fallback|scripts/migrations)/|^(pnpm-lock\.yaml|pnpm-workspace\.yaml|package\.json|LICENSE|NOTICE|\.github/workflows/ci\.yml)$'
+          pattern='(^|/)(Dockerfile|Containerfile)(\.[^/]*)?$|(^|/)\.dockerignore$|^(packages|services|modules|apps|gremion-ui|gremion-public|verticals|docker/legal|docker/fallback|docker/nextcloud|docker/collabora|docker/element-call|scripts/migrations)/|^(pnpm-lock\.yaml|pnpm-workspace\.yaml|package\.json|LICENSE|NOTICE|\.github/workflows/ci\.yml)$'
           # --no-renames: with rename detection --name-only prints only the
           # destination of a move, so `git mv packages/x docs/x` (a docker input
           # leaving its build tree) would look like a docs-only change. With it
@@ -1487,6 +1487,9 @@ jobs:
           - { name: votes, dockerfile: modules/votes/Dockerfile, context: . }
           - { name: fallback, dockerfile: docker/fallback/Dockerfile, context: docker/fallback/ }
           - { name: synapse, dockerfile: modules/messaging/synapse/Dockerfile, context: modules/messaging/synapse/ }
+          - { name: nextcloud, dockerfile: docker/nextcloud/Dockerfile, context: docker/nextcloud/ }
+          - { name: collabora, dockerfile: docker/collabora/Dockerfile, context: docker/collabora/ }
+          - { name: element-call, dockerfile: docker/element-call/Dockerfile, context: docker/element-call/ }
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:

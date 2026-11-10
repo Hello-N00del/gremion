@@ -296,6 +296,23 @@ services:
     volumes:
       - governance-pg-data:/var/lib/postgresql
 
+  # The pilot's Nextcloud server (profile nextcloud): a SERVICE server, not a
+  # module's (label service:nextcloud, never module:), holding the one database
+  # Nextcloud keeps for files, calendars and polls. The files and votes modules
+  # run in-process against Nextcloud, so this server exists only while the
+  # nextcloud profile does. docs/ops/pilot-services.md.
+  nextcloud-postgres:
+    <<: *module-postgres
+    profiles: [nextcloud]
+    labels:
+      org.gremion.postgres: "service:nextcloud"
+    environment:
+      POSTGRES_USER:     ${NEXTCLOUD_DB_USER:-nextcloud}
+      POSTGRES_PASSWORD: ${NEXTCLOUD_DB_PASSWORD}
+      POSTGRES_DB:       nextcloud
+    volumes:
+      - nextcloud-pg-data:/var/lib/postgresql
+
   # ============================================================
   # NATS JetStream — the event broker (TASK-024, CAP-NATS-AUTH; D12, TRD-419)
   # ============================================================
@@ -762,8 +779,12 @@ services:
       # blank issuer at boot. A blank fetch URL derives the in-network one.
       SYNAPSE_KEYCLOAK_ISSUER_URL:  ${SYNAPSE_KEYCLOAK_ISSUER_URL:-}
       SYNAPSE_KEYCLOAK_FETCH_URL:   ${SYNAPSE_KEYCLOAK_FETCH_URL:-}
-      # Scratch only: on a host the secret is the mounted file, which wins.
+      # Unused while the file below is named (the file wins, and a named unreadable file is a
+      # refusal); the scratch proof writes the same value into its own root's file.
       SYNAPSE_OIDC_CLIENT_SECRET:   ${SYNAPSE_OIDC_CLIENT_SECRET:-}
+      # The host's file (below), written 0600 by `gremion-services wire`. A NAMED file the
+      # shim cannot read is a refusal, never a quiet fallback to the env value.
+      SYNAPSE_OIDC_CLIENT_SECRET_FILE: /run/secrets/synapse/oidc_client_secret
       # Rendered only in a BOOTSTRAP_MODE=1 boot (bootstrap.sh), else stripped.
       SYNAPSE_REGISTRATION_SHARED_SECRET: ${SYNAPSE_REGISTRATION_SHARED_SECRET:-}
       # The only account allowed to create room aliases (alias_creation_rules). The bot's
@@ -775,8 +796,22 @@ services:
       # Media and the signing key (the homeserver's identity) live only here:
       # no S3 offload (TASK-198 Q5). Backed up by project label (TASK-089).
       - synapse-data:/data
+      # The customer realm's synapse client secret, a 0600 file `gremion-services wire`
+      # copies from the tenant secrets directory. Read-only; long syntax so that a host
+      # that has not been wired yet refuses `up` here instead of Docker creating an empty,
+      # root-owned directory (matrix is a post-realm profile: wire is what starts it).
+      - type: bind
+        source: ${GREMION_ROOT}/etc/secrets/synapse
+        target: /run/secrets/synapse
+        read_only: true
+        bind:
+          create_host_path: false
     deploy: *limits-l
     networks:
+      # _state: its database and the app tier. _edge: Traefik's docker provider
+      # routes /_matrix on the platform host to it (docker-compose.prod.yml);
+      # it still publishes nothing.
+      - edge
       - state
     healthcheck:
       test: ["CMD", "/synapse-healthcheck.sh"]
@@ -784,6 +819,234 @@ services:
       timeout: 10s
       retries: 3
       start_period: 240s
+
+  # ============================================================
+  # The pilot's file and office services (docs/ops/pilot-services.md)
+  # ============================================================
+  # Ported from the StuRaOS composition. Nextcloud backs the files module (WebDAV
+  # with the user's own bearer) and the Polls client of the votes module; Collabora
+  # is its office editor. Profiles are rendered per pilot module by
+  # gremion-init-secrets from infra/host/module-profiles.json (nextcloud, collabora).
+  # Nothing here publishes a port: gremion-ui reaches Nextcloud as http://nextcloud
+  # on _state, and Collabora only through Traefik (a /office router per tenant host,
+  # emitted by @gremion/edge-routers).
+
+  # Cache, file locking and sessions of Nextcloud. The password reaches redis-server
+  # through the container's own shell, so the compose render and `docker inspect`
+  # show the variable name, not the secret, in the command.
+  nextcloud-redis:
+    profiles: [nextcloud]
+    image: redis:7-alpine@sha256:c5d34a98396a4775e223c74e929162c35c5a2182901ba26b50ade939941ce14b
+    restart: unless-stopped
+    command:
+      - sh
+      - -c
+      - exec redis-server --requirepass "$${REDIS_PASSWORD}" --appendonly yes --maxmemory 128mb --maxmemory-policy allkeys-lru
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+      # redis-cli authenticates from this variable, so the probe carries no secret.
+      REDISCLI_AUTH:  ${REDIS_PASSWORD}
+    volumes:
+      - nextcloud-redis-data:/data
+    deploy: *limits-s
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
+    networks:
+      - state
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Nextcloud (apache image, docker/nextcloud). Its public URL is the in-network
+  # one: no router reaches it, so every URL it generates names `nextcloud` over
+  # http. getCollaboraEditorUrl fetches Nextcloud's direct-view page server-side and
+  # dies when overwritehost is unset, which is why the three overwrite keys are set.
+  # NEXTCLOUD_OIDC_CLIENT_SECRET and KEYCLOAK_OIDC_DISCOVERY_URI stay UNSET at the
+  # first install on purpose: the user_oidc hook then skips, and
+  # `gremion-services wire <slug>` registers the provider once the customer's realm
+  # exists.
+  nextcloud:
+    build:
+      context: docker/nextcloud
+    # `:-dev` as matrix and legal: the release pins layer, when there is one,
+    # resets build and pins the digest; a host build tags the commit it built.
+    image: ghcr.io/hello-n00del/gremion-nextcloud:${IMAGE_TAG:-dev}
+    profiles: [nextcloud]
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
+    depends_on:
+      nextcloud-postgres:
+        condition: service_healthy
+      nextcloud-redis:
+        condition: service_healthy
+    environment:
+      POSTGRES_HOST:     nextcloud-postgres
+      POSTGRES_DB:       nextcloud
+      POSTGRES_USER:     ${NEXTCLOUD_DB_USER:-nextcloud}
+      POSTGRES_PASSWORD: ${NEXTCLOUD_DB_PASSWORD}
+      NEXTCLOUD_ADMIN_USER:     ${NEXTCLOUD_ADMIN_USER:-admin}
+      NEXTCLOUD_ADMIN_PASSWORD: ${NEXTCLOUD_ADMIN_PASSWORD}
+      NEXTCLOUD_TRUSTED_DOMAINS: nextcloud
+      NEXTCLOUD_OVERWRITEHOST:     nextcloud
+      NEXTCLOUD_OVERWRITEPROTOCOL: http
+      NEXTCLOUD_OVERWRITECLIURL:   http://nextcloud
+      NEXTCLOUD_OVERWRITEWEBROOT:  ""
+      # The state network's own subnet: the only peers that reach Nextcloud.
+      NEXTCLOUD_TRUSTED_PROXIES: ${STATE_V4_SUBNET:-172.16.0.0/12}
+      REDIS_HOST:          nextcloud-redis
+      REDIS_HOST_PASSWORD: ${REDIS_PASSWORD}
+      # Read by configure-richdocuments.sh at the first install: the browser-facing
+      # editor base (a /office router on the pilot tenant host) and Collabora's
+      # service root, which moves the discovery and WOPI mount with it.
+      COLLABORA_PUBLIC_URL:   https://${PILOT_TENANT_HOST:-}/office
+      COLLABORA_SERVICE_ROOT: /office
+      # Mail: empty keys mean Nextcloud sends nothing (mailpit is dev-only).
+      MAIL_FROM_ADDRESS: ${NEXTCLOUD_MAIL_FROM_ADDRESS:-noreply}
+      MAIL_DOMAIN:       ${NEXTCLOUD_MAIL_DOMAIN:-${PLATFORM_DOMAIN:?PLATFORM_DOMAIN required}}
+      SMTP_HOST:         ${NEXTCLOUD_MAIL_SMTPHOST:-}
+      SMTP_PORT:         ${NEXTCLOUD_MAIL_SMTPPORT:-587}
+      SMTP_SECURE:       ${NEXTCLOUD_MAIL_SMTPSECURE:-}
+      SMTP_AUTHTYPE:     ${NEXTCLOUD_MAIL_SMTPAUTHTYPE:-}
+      SMTP_NAME:         ${NEXTCLOUD_MAIL_SMTPNAME:-}
+      SMTP_PASSWORD:     ${NEXTCLOUD_MAIL_SMTPPASSWORD:-}
+    volumes:
+      - nextcloud-data:/var/www/html
+    deploy: *limits-l
+    networks:
+      - state
+    healthcheck:
+      # status.php answers from the installed instance; the Host header is the
+      # one trusted domain, so the probe never depends on a localhost entry.
+      test: ["CMD", "curl", "-sf", "-H", "Host: nextcloud", "http://127.0.0.1/status.php"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 180s
+
+  # Collabora Online (docker/collabora: the 24.04 image with the libbrotli fix).
+  # server_name is the pilot tenant host, and net.service_root moves the whole
+  # service under /office, so the editor iframe is same-origin with gremion-ui
+  # (CSP frame-src 'self'). The image's own healthcheck probes the root and reads
+  # unhealthy under a service root, and Traefik then silently drops the router:
+  # the probe below is the one that holds.
+  collabora:
+    build:
+      context: docker/collabora
+    image: ghcr.io/hello-n00del/gremion-collabora:${IMAGE_TAG:-dev}
+    profiles: [collabora]
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
+    environment:
+      # The WOPI host Collabora accepts: Nextcloud by its in-network name. A regex
+      # over the whole WOPISrc, so the app paths under it match.
+      aliasgroup1: "http://nextcloud.*"
+      server_name: ${PILOT_TENANT_HOST:-}
+      DONT_GEN_SSL_CERT: "YES"
+      dictionaries: de_DE en_GB en_US
+      extra_params: --o:ssl.enable=false --o:ssl.termination=true --o:security.capabilities=false --o:net.service_root=/office
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:9980/office/hosting/discovery"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    deploy: *limits-l
+    networks:
+      # _edge: Traefik reaches it there. _state: Nextcloud calls it and it calls
+      # Nextcloud back (WOPI).
+      - edge
+      - state
+
+  # ============================================================
+  # Video: LiveKit and Element Call (profile video)
+  # ============================================================
+  # The kernel homeserver has no MatrixRTC focus (TASK-101); Element Call finds
+  # the SFU through livekit_service_url in its own config. TURN is off: media
+  # reaches the SFU on UDP 45000-45100 or, from a restricted network, on TCP 7881.
+  livekit:
+    profiles: [video]
+    # Externally pulled: tag and digest, the digest is what runs (G-037).
+    image: livekit/livekit-server:v1.7.2@sha256:27d72fa264baa4db4e635b3b6df12d185b4a95fee5f2ddce03e06d150d599e0e
+    restart: unless-stopped
+    # --node-ip is the address the SFU advertises: the edge's own. The API key and
+    # secret come from the environment (LIVEKIT_KEYS, "key: secret"), never from a
+    # file in the tree.
+    command: ["--config", "/etc/livekit/livekit.yaml", "--node-ip", "${EDGE_BIND_IP}"]
+    environment:
+      LIVEKIT_KEYS: "${LIVEKIT_API_KEY}: ${LIVEKIT_API_SECRET}"
+    volumes:
+      - ./docker/livekit/livekit.yaml:/etc/livekit/livekit.yaml:ro
+    ports:
+      # The same rule as traefik's: nothing here binds 0.0.0.0 (spec A section A).
+      # The signalling socket (7880) is never published: Traefik routes /livekit-sfu
+      # to it on _edge.
+      - "${EDGE_BIND_IP}:7881:7881/tcp"
+      - "[${EDGE_BIND_IP6}]:7881:7881/tcp"
+      - "${EDGE_BIND_IP}:45000-45100:45000-45100/udp"
+      - "[${EDGE_BIND_IP6}]:45000-45100:45000-45100/udp"
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
+    deploy: *limits-m
+    networks:
+      - edge
+
+  # The official Element Call web app, unchanged: docker/element-call/Dockerfile
+  # builds FROM the upstream image pinned by digest (the image-digest lint accepts no
+  # other ghcr.io reference). Reached only through gremion-ui's /element-call proxy
+  # (ELEMENT_CALL_INTERNAL_URL), so it has no router. Its config is rendered on the
+  # host by gremion-render from docker/element-call/config.json.tmpl (gitignored) and
+  # bound at both paths the app reads it from: the root, and /room for the room pages.
+  element-call:
+    build:
+      context: docker/element-call
+    image: ghcr.io/hello-n00del/gremion-element-call:${IMAGE_TAG:-dev}
+    profiles: [video]
+    restart: unless-stopped
+    volumes:
+      # Long syntax: a config that was not rendered refuses `up`, instead of
+      # Docker creating an empty directory at the path.
+      - type: bind
+        source: ./docker/element-call/config.json
+        target: /app/config.json
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./docker/element-call/config.json
+        target: /app/room/config.json
+        read_only: true
+        bind:
+          create_host_path: false
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
+    deploy: *limits-s
+    networks:
+      - state
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/config.json | grep -q default_server_config"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
 
 # ============================================================
 # Volumes
@@ -803,6 +1066,9 @@ volumes:
   vault-pg-data:
   messaging-pg-data:
   governance-pg-data:
+  nextcloud-pg-data:
+  nextcloud-redis-data:
+  nextcloud-data:
   synapse-data:
   # JetStream's store: project-scoped like pg-data (${STACK}-state_nats-data),
   # backed up by project label with the rest of the state volumes.

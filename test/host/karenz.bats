@@ -19,7 +19,7 @@ setup() {
     cp "${HOST_SRC}/lib/common.sh" "${HOST_SRC}/lib/customer-ops.sh" "${GREMION_ROOT}/current/infra/host/lib/"
     cp "$KARENZ" "${GREMION_ROOT}/current/infra/host/ops/karenz.sh"
     echo blue > "${GREMION_ROOT}/runtime/active-colour"
-    printf 'STACK=unitstack\nCOLOUR=blue\n' > "${GREMION_ROOT}/etc/env/app-blue.env"
+    printf 'STACK=unitstack\nCOLOUR=blue\nTENANT_SECRETS_DIR=%s/tenant-secrets\n' "$GREMION_ROOT" > "${GREMION_ROOT}/etc/env/app-blue.env"
     # tenant-create karenz-run prints its one JSON line; KARENZ_RC makes it fail
     shim docker 'echo "{\"verb\":\"karenz-run\",\"deletion\":\"off\",\"due\":0,\"finalized\":0,\"kept\":0,\"orphanedExports\":[],\"errors\":[]}"; exit "${KARENZ_RC:-0}"'
     shim flock '[ -f "$GREMION_ROOT/lock-held" ] && exit 1; exit 0'

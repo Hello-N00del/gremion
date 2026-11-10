@@ -5,7 +5,7 @@
       "path": "k8s/overlays/production/secrets/README.md",
       "rule": "secret-path",
       "reason": "documentation of the k8s secret workflow under a secrets/ directory; carries no values",
-      "blob": "382cd2817bd1f85eeb458a84964b05a4575f44a2"
+      "blob": "2a28f2eff26a81b240ccd5bf09406eef250b2aa0"
     }
   ]
 }

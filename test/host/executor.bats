@@ -51,7 +51,7 @@ TRAEFIK_CERT_RESOLVER=le-http
 EDGE_BIND_IP=192.0.2.10
 EDGE_BIND_IP6=2001:db8::a
 ENV
-    printf 'STACK=guardstack\nCOLOUR=blue\n' > "${GREMION_ROOT}/etc/env/app-blue.env"
+    printf 'STACK=guardstack\nCOLOUR=blue\nTENANT_SECRETS_DIR=%s/tenant-secrets\n' "$GREMION_ROOT" > "${GREMION_ROOT}/etc/env/app-blue.env"
     cp "${FIX}/verdict-create-ok.json" "${GREMION_ROOT}/verdict.json"
     shim docker "exec bash '${FIX}/docker-shim' \"\$@\""
     shim flock '[ -f "$GREMION_ROOT/lock-held" ] && exit 1; exit 0'
