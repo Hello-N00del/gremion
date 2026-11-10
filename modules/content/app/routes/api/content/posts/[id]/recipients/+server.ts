@@ -97,7 +97,7 @@ export const PUT: RequestHandler = async (event) => {
     ...new Set(recipients.map((r) => r.keycloak_group_id).filter((id): id is string => !!id)),
   ]
   if (groupIds.length > 0) {
-    let kc: ReturnType<typeof getKeycloakAdminClientForCurrentTenant> | null = null
+    let kc: { getGroup(id: string): Promise<unknown> } | null = null
     try {
       kc = getKeycloakAdminClientForCurrentTenant()
     } catch (err) {

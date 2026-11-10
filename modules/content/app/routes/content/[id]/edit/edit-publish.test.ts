@@ -38,7 +38,7 @@ function stubFetch(opts: Opts = {}): Call[] {
     vi.fn(async (input: string | URL, init?: RequestInit) => {
       const url = String(input)
       const method = init?.method ?? 'GET'
-      calls.push({ url, method, body: init?.body ? JSON.parse(String(init.body)) : undefined })
+      calls.push({ url, method, body: init?.body ? JSON.parse(init.body as string) : undefined })
       if (url.includes('/preview/') || url.includes('/carousel/')) return reply(500, {})
       if (url.endsWith('/recipients')) {
         if (method === 'PUT') return reply(opts.putStatus ?? 200, opts.putBody ?? { ok: true })
@@ -54,7 +54,7 @@ function stubFetch(opts: Opts = {}): Call[] {
         return reply(opts.publishStatus ?? 200, opts.publishBody ?? { status: 'sent', warnings: [], recipientCount: 1 })
       }
       if (method === 'PATCH') {
-        const b = init?.body ? (JSON.parse(String(init.body)) as object) : {}
+        const b = init?.body ? (JSON.parse(init.body as string) as object) : {}
         if (opts.hold && !held && 'body_html' in b) {
           held = true
           await new Promise<void>((resolve) => {
