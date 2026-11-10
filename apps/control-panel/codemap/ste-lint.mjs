@@ -150,7 +150,7 @@ for (const k of needed) if (!glossaryKeys.has(k)) add('glossary', 'SHAPE', `requ
 const nodeIds = new Set(graph.nodes.map((n) => n.id))
 const fnKeys = new Set(graph.nodes.filter((n) => n.kind === 'function').map((n) => n.file + '#' + n.name))
 const wts = text.walkthroughs || []
-if (wts.length !== 6) add('walkthroughs', 'SHAPE', `${wts.length} walkthroughs (need 6)`, '')
+if (wts.length < 6) add('walkthroughs', 'SHAPE', `${wts.length} walkthroughs (need at least 6)`, '')
 let stepCount = 0
 wts.forEach((w, i) => {
   checkParagraph(`walkthroughs[${i}].title`, w.title, 25, true)

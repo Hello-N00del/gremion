@@ -60,13 +60,14 @@ export function buildMap({ graph: g, text: t, template, commit: rawCommit }) {
   }
   const flow = [...fm].map(([k, c]) => [...k.split('|').map(Number), c]).sort((x, y) => y[0] - x[0] || y[1] - x[1])
   const functions = g.nodes.filter((x) => x.kind === 'function').length
+  const jobs = g.nodes.filter((x) => x.kind === 'job').length
   const pct = Math.round(Number(g.meta?.resolvedRatioPercent) || 0)
   const limits = [
-    `This map shows ${functions} functions and ${e.length} connections.`,
+    `This map shows ${functions} functions, ${jobs} jobs of GitHub workflows and ${e.length} connections.`,
     `A program made the map from the code. The program found the target of ${pct} percent of the calls inside the project.`,
     'The map does not show the other calls. Some of these calls use a value that the program can only know when the code runs.',
     'The build of this page can have fewer outside packages than a full build. If it has fewer, the map shows fewer connections.',
-    'L0 shows files only. The map does not show connections for these files.',
+    'L0 shows files and the jobs of the GitHub workflows. L0 shows connections for these jobs only. The map does not show connections for the other files of L0.',
     'The sentences about one function come from the name of the function. A person did not write these sentences.',
     'The other text follows the rules of ASD-STE100 Simplified Technical English. A program did a rule check on this text. The rule check is not a certified STE check.',
   ]

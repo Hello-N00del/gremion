@@ -51,6 +51,15 @@ describe('Dockerfile.dockerignore', () => {
       expect(included(real, f), f).toBe(true)
   })
 
+  it('lets the workflow files in, as it lets .git/HEAD in under the first rule, and nothing else of .github', () => {
+    for (const f of ['.github/workflows/ci.yml', '.github/workflows/release-images.yml', '.github/workflows/semgrep.yaml']) expect(included(real, f), f).toBe(true)
+    for (const f of ['.github/dependabot.yml', '.github/CODEOWNERS', '.github/labels.yml', '.github/ISSUE_TEMPLATE/bug.md', '.github/PULL_REQUEST_TEMPLATE.md', '.github/actions/x/action.yml']) expect(included(real, f), f).toBe(false)
+  })
+
+  it('keeps a secret-class file out of the workflow folder too', () => {
+    for (const f of ['.github/workflows/.env', '.github/workflows/deploy.env', '.github/workflows/secrets/a.yml', '.github/workflows/tls.pem', '.github/workflows/id_rsa']) expect(included(real, f), f).toBe(false)
+  })
+
   it('keeps out what is not listed, and the git config and objects', () => {
     for (const f of ['docs/a.md', 'secrets/a', '.env', 'TEST_USERS.md', '.git/config', '.git/objects/ab/cd'])
       expect(included(real, f), f).toBe(false)

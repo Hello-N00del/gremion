@@ -16,6 +16,11 @@
 // Exit:  non-zero only for a crash or a graph with no nodes. A moved function never fails the run: the self
 //        checks at the end are printed as information.
 //
+// GitHub Actions: each file of .github/workflows is a file node in its own L0 area, and each job in it is a `job` node. A job
+// has `needs` edges to the jobs it waits for and `runs` edges to the Dockerfile it builds, the script it runs and the
+// area of the package or app it works on. A small line scanner (workflows.mjs, no yaml library) reads the jobs, so git
+// mode and --tree mode give the same result.
+//
 // Method (short): one TypeScript Program over all kept .ts files plus one virtual .ts file per .svelte
 // script block (padded with blank lines so line numbers stay true). The type checker resolves each call
 // site to a declaration; declarations that are function nodes become `calls` edges. Everything else
@@ -27,6 +32,7 @@ import { execFileSync } from 'node:child_process'
 import { createRequire } from 'node:module'
 import os from 'node:os'
 import { fileURLToPath } from 'node:url'
+import { parseJobs } from './workflows.mjs'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url)).replace(/\\/g, '/')
 const argv = process.argv.slice(2)
@@ -98,7 +104,7 @@ log(TREE ? 'tree mode' : 'git mode', 'commit', COMMIT.slice(0, 8), 'files', TRAC
 // layers, areas, files
 // ---------------------------------------------------------------------------------------------
 const LAYERS = [
-  ['L0', 'Servers and containers', 'Compose files, container build files, host scripts and cluster files. File nodes only.'],
+  ['L0', 'Servers and containers', 'Compose files, container build files, host scripts and cluster files, and the GitHub Actions workflows. File nodes, and the jobs of the workflows with their connections.'],
   ['L1', 'Database', 'SQL migration files and the tables they create.'],
   ['L2', 'Shared packages', 'Libraries in packages/ that services and the web app import.'],
   ['L3', 'Backend services and module backends', 'Server programs in services/ and the backend of each module in modules/*/src.'],
@@ -138,6 +144,7 @@ function classify(p) {
   const base = p.split('/').pop()
   // L0
   let m
+  if ((m = p.match(/^\.github\/workflows\/([^/]+)\.ya?ml$/))) return { kind: 'infra', layer: 'L0', areaId: area('L0', `github-actions/${m[1]}`, `github-actions/${m[1]}`, 'A GitHub Actions workflow file and the jobs in it.') }
   if (/^docker-compose[^/]*\.ya?ml$/.test(p)) return { kind: 'infra', layer: 'L0', areaId: area('L0', 'docker-compose', 'Root docker-compose files', 'The compose files at the repo root. Each one lists containers.') }
   if ((m = p.match(/^(compose|docker|infra|k8s|ops)\/([^/]+)\//))) {
     if (EXCL_DIR.test(p) || NOT_INFRA.test(p) || /\.test\./.test(p)) return null
@@ -1231,6 +1238,55 @@ for (const pub of pubHits) for (const sub of subHits) if (natsMatch(sub.pat, pub
 log('events publish sites', pubHits.length, 'subscribe sites', subHits.length, 'matches', eventMatches)
 
 // ---------------------------------------------------------------------------------------------
+// GitHub Actions: jobs, needs, runs. Layer L0 only.
+// ---------------------------------------------------------------------------------------------
+const trackedSet = new Set(TRACKED)
+const wsAreaOf = (dirRel) => { for (const L of ['L4', 'L5', 'L3', 'L2']) { const id = `area:${dirRel}@${L}`; if (nodes.has(id)) return id } return null }
+function areaOfDir(dir) {
+  for (let d = dir; d && d !== '.' && d !== '/'; d = path.posix.dirname(d)) { const id = wsAreaOf(d); if (id) return id }
+  return null
+}
+/** The file node of a script that a job runs. A script that no other layer holds gets a node in the scripts area. It is a plain file node: it is never a root of the TypeScript program. */
+function scriptFile(c) {
+  const known = fileByRel.get(c)
+  if (known) return known.fileId
+  if (!trackedSet.has(c) || /\.(test|spec)\./.test(c)) return null
+  const fi = { rel: c, abs: `${KERNEL}/${c}`, fileId: `file:${c}`, kind: 'infra', layer: 'L0', areaId: area('L0', 'github-actions/scripts', 'github-actions/scripts', 'Scripts that a GitHub Actions job runs and that no other layer of the map holds.') }
+  addNode({ id: fi.fileId, kind: 'file', name: path.posix.basename(c), parent: fi.areaId, file: c, line: 1, doc: '', layer: 'L0' })
+  files.push(fi); fileByRel.set(c, fi)
+  return fi.fileId
+}
+/** A path that starts at the repo root wins. A relative path is looked up in each working directory of the job. */
+function scriptNodes(script, workingDirs) {
+  const out = []
+  for (const c of [script, ...workingDirs.map((w) => `${w}/${script}`)]) {
+    const id = scriptFile(c)
+    if (id) { out.push(id); if (c === script) break }
+  }
+  return out
+}
+let jobCount = 0
+for (const wf of files.filter((f) => /^\.github\/workflows\/[^/]+\.ya?ml$/.test(f.rel))) {
+  let text = ''
+  try { text = fs.readFileSync(wf.abs, 'utf8') } catch { /* an unreadable file keeps its file node and has no job */ }
+  const jobs = parseJobs(text)
+  const jobId = (id) => `job:${wf.rel}#${id}`
+  for (const j of jobs) {
+    addNode({ id: jobId(j.id), kind: 'job', name: j.name ? `${j.id}: ${j.name}` : j.id, parent: wf.fileId, file: wf.rel, line: j.line, doc: '', layer: 'L0' })
+    jobCount++
+  }
+  for (const j of jobs) {
+    const from = jobId(j.id)
+    for (const n of j.needs) if (nodes.has(jobId(n))) addEdge(from, jobId(n), 'needs', 'workflow')
+    for (const d of j.dockerfiles) { const t = fileByRel.get(d); if (t) addEdge(from, t.fileId, 'runs', 'dockerfile') }
+    for (const sc of j.scripts) for (const t of scriptNodes(sc, j.workingDirs)) addEdge(from, t, 'runs', 'script')
+    for (const f of j.filters) { const ws = workspace.get(f); const a = ws ? wsAreaOf(ws.dir.slice(KERNEL.length + 1)) : null; if (a) addEdge(from, a, 'runs', 'area') }
+    for (const w of j.workingDirs) { const a = areaOfDir(w); if (a) addEdge(from, a, 'runs', 'area') }
+  }
+}
+log('workflow jobs', jobCount)
+
+// ---------------------------------------------------------------------------------------------
 // output
 // ---------------------------------------------------------------------------------------------
 const nodeList = [...nodes.values()].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
@@ -1258,7 +1314,7 @@ const meta = {
   events: { publishCallsSeen: eventSites.publishCalls, subscribeCallsSeen: eventSites.subscribeCalls, publishSitesWithKnownSubject: pubHits.length, subscribeSitesWithKnownSubject: subHits.length, matched: eventMatches },
   http: { pathLiteralsInCallArguments: httpHits.length },
   unresolvedImportSpecifiers: Object.fromEntries([...unresolvedImports].sort((a, b) => b[1] - a[1]).slice(0, 15)),
-  edgeFields: 'kind is one of calls, http, sql, renders, event. `via` tells how the edge was found (call, ref, template, component, route, path, text, subject, page). `n` is how many call sites produced it.',
+  edgeFields: 'kind is one of calls, http, sql, renders, event, needs, runs. `needs` and `runs` come from the GitHub Actions workflows (a job waits for a job; a job runs a Dockerfile, a script or the area of a package). `via` tells how the edge was found (call, ref, template, component, route, path, text, subject, page, workflow, dockerfile, script, area). `n` is how many call sites produced it.',
 }
 // A graph with only the six layer nodes is structurally empty: the one failure that is not a crash.
 if (nodeList.filter((n) => n.kind !== 'layer').length === 0) { console.error('the graph has no nodes: no source file was found under the kernel folder'); process.exit(3) }

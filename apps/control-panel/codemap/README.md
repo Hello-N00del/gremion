@@ -6,12 +6,26 @@ the code while the image is built. Nothing is generated inside the repository an
 | File | Job |
 | --- | --- |
 | `extract.mjs` | reads the code and writes a graph (`--tree` for a folder without git, `--deps <dir>` for `typescript`) |
+| `workflows.mjs` | a small line scanner for the jobs of a GitHub workflow file (no yaml library, never throws) |
 | `resolve.mjs` | joins `ste-text.json` to the graph by file and function name, never by line number |
 | `build.mjs` | makes `code-map.html` and `status.json` from a graph, a commit and the text |
 | `leak-scan.mjs` | refuses a page that holds an address, host name, key or local path (the kernel repo is public) |
 | `image-step.sh` | the image build step: never exits non-zero, always leaves a valid `status.json` |
 | `check.mjs` | the CI check: lists what does not match, blocks only on a leak or a crash |
 | `ste-lint.mjs` | a rule check of `ste-text.json` (not a certified ASD-STE100 checker) |
+
+## GitHub Actions in the map
+
+Each file of `.github/workflows` is a file node in its own L0 area (`area:github-actions/<name>@L0`). Each job in it
+is a `job` node (`job:.github/workflows/<file>#<job id>`). `workflows.mjs` reads the jobs from the lines of the file,
+so git mode (CI) and `--tree` mode (the image) give the same jobs. A job has `needs` edges to the jobs it waits for and
+`runs` edges to the Dockerfile it builds (`dockerfile:` values, also in an inline matrix), the script it runs (`node`,
+`node --test`, `bash`, `sh` followed by a path; a test file is skipped) and the area of the package or app it works on
+(`pnpm --filter <name>` or `working-directory`, L4 before L5 before L3 before L2). A script that no other layer holds
+gets a file node in `area:github-actions/scripts@L0`; it is never a root of the TypeScript program. A value with an
+expression (`${{ ... }}`) or a shell variable is never read: the scanner cannot know it. A step of a walkthrough names a
+job by its id (`{ "text", "nodeId": "job:.github/workflows/ci.yml#lint" }`); a renamed job is a stale step. The image
+gets the workflow files through `!.github/workflows` in `Dockerfile.dockerignore`.
 
 ## What "stale" means
 

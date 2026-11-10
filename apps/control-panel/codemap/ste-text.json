@@ -3,6 +3,7 @@
     "This page shows a map of the program code of Gremion. Gremion is software for councils, for example the student council of a university. A council is a group of people that make decisions together. The software keeps the people, the groups, the minutes and the votes of the council. You need no knowledge of software to read this page.",
     "The map has six layers, from L0 to L5. A layer is one level of the system. L0 holds the computers and the containers. L5 holds what the user sees in the browser. A line between two items on the map shows that one item uses the other item.",
     "The map shows areas, files, functions, pages, routes and tables. An area is a group of files that belong together. A function is a small piece of code that does one job. A page is a screen that the user can open. A route is an address that a program can ask for data. A table is one list of data in the database.",
+    "The map also shows the GitHub workflows of the project. A workflow is a file that tells GitHub which jobs to run when someone changes the code. A job is one task of a workflow.",
     "A program made the map. The program reads the code of Gremion and finds the links. The program cannot see all links. It cannot see a link that the code makes only when it runs. The last section of the page gives the share of function calls that the map shows. Treat the map as a good guide and not as a complete proof."
   ],
   "howToRead": [
@@ -10,13 +11,14 @@
     "Select a layer to see the areas in it.",
     "Select an area to read what it does and why it exists.",
     "Select a function to see the functions that it calls.",
+    "Select a job in a workflow to see the jobs that it waits for.",
     "Select a walkthrough to follow one real action step by step.",
     "Read the glossary when a word is new to you."
   ],
   "layers": {
     "L0": {
       "title": "L0: Servers and containers",
-      "text": "A server is a computer that runs programs for other computers. A container is a closed box that holds one program and all that the program needs. L0 holds the files that tell the server which containers to start. These files are compose files, container build files, host scripts and cluster files. L0 has file items only. It has no functions, because the map does not follow these files."
+      "text": "A server is a computer that runs programs for other computers. A container is a closed box that holds one program and all that the program needs. L0 holds the files that tell the server which containers to start, and the workflow files of GitHub Actions. The map shows connections in L0 only for the jobs of the workflows. A job connects to the jobs that it waits for and to the files and areas that it runs. L0 has no functions, because the map does not follow these files."
     },
     "L1": {
       "title": "L1: Database",
@@ -675,6 +677,48 @@
       "what": "This area holds the pages for the list of votes, the list of polls, a new poll and one poll.",
       "why": "A member must see all open votes and must cast a vote.",
       "leadsTo": "The pages send requests to the polls routes in L4."
+    },
+    "area:github-actions/ci@L0": {
+      "title": "CI: the check of each change",
+      "what": "This workflow is the main check of the code. It starts on a push to the main or develop branch and on a pull request to one of them. A person can also start it by hand. Its jobs lint the files, run the tests, build the images and judge the result.",
+      "why": "A change must not break the code. This workflow finds a break before the change joins the main branch. A new push to a pull request stops the old run of that pull request. On a pull request from this repository, a failed lint or verify job also cancels the rest of the run.",
+      "leadsTo": "The job verify-gate waits for lint and for the verify jobs. It gives the one verdict of these jobs. The jobs docker-build, integration-test and e2e-smoke run beside it. The folder scripts/ci-local holds the same kind of merge guards for one computer, for a time when GitHub Actions does not run."
+    },
+    "area:github-actions/release-images@L0": {
+      "title": "Release images: build and push",
+      "what": "This workflow builds every first-party container image of a release and pushes each image to the registry. It starts by hand, or when someone pushes a release tag that begins with v or rc-v. The last job writes the pins files that name the digest of each pushed image.",
+      "why": "A host pulls an image by its digest and not by its name. The workflow records the digest that the registry holds for each image. It uses only a token that GitHub makes for the run. It has no key for signatures and no deploy key.",
+      "leadsTo": "After the run, the operator takes the pins files, signs each digest on the computer of the operator and pushes a tag for the release. The host deploy is a manual step of the operator."
+    },
+    "area:github-actions/release-npm@L0": {
+      "title": "Release to npm",
+      "what": "This workflow publishes the two packages db and ports to npm. It starts when someone pushes a tag that begins with v. A person can also start it by hand, and a run by hand is a dry run by default.",
+      "why": "Other projects can then use these packages from npm. The workflow holds no npm token. It asks npm for a short credential that proves the identity of the run.",
+      "leadsTo": "The job publish checks the types, builds the package, checks the packed file and then publishes. The package ports also gets its tests first. The package db goes first. If it fails, the run stops and the package ports does not publish."
+    },
+    "area:github-actions/dependency-audit@L0": {
+      "title": "Dependency audit: a weekly check",
+      "what": "This workflow checks the packages that the product needs when it runs. It starts once a week and a person can start it by hand. The job audit fails when it finds a high or critical advisory. The job report then opens an issue.",
+      "why": "A package can get a known fault after a person wrote the code. A weekly check finds this fault even when nobody changes the code. The check does not run on a pull request. The job audit also lists old packages in its summary, and this list does not change the result.",
+      "leadsTo": "The job report opens one issue, or adds a comment to the issue that is open. A person reads the issue and updates the package."
+    },
+    "area:github-actions/dependabot-unpause@L0": {
+      "title": "Dependabot: restore the update limit",
+      "what": "A person starts this workflow by hand. It has no schedule. The job measure reads how fast GitHub starts a job. The job unpause runs only when this time is 120 seconds or less. Then it restores paused update limits in the Dependabot settings, and it opens a pull request when it changes a limit.",
+      "why": "Dependabot is a tool that opens pull requests for new versions of packages. A person can pause it for one kind of package. This workflow reverses a pause. If GitHub is slow to start the job measure, the job unpause does not run and no limit changes. If the settings hold no paused limit, the run makes no change and ends without an error.",
+      "leadsTo": "The pull request has the labels dependencies, ci and automated. A person reads the pull request and merges it. The workflow never merges it."
+    },
+    "area:github-actions/semgrep@L0": {
+      "title": "Semgrep: a scan for security faults",
+      "what": "This workflow runs Semgrep on the code. It starts on a push to the main or develop branch, on a pull request to one of them and once a week. A person can also start it by hand.",
+      "why": "The job semgrep uses two rule sets. One set finds common security faults. The other set finds secrets that someone wrote into the code. The weekly run uses new rules even when the code did not change.",
+      "leadsTo": "A fault that Semgrep finds makes the job fail, and the run shows red. No other job in this workflow waits for it."
+    },
+    "area:github-actions/scripts@L0": {
+      "title": "Scripts that the jobs run",
+      "what": "This area holds the scripts that the jobs of the workflows run. One script runs the test suites and writes a record of the result. Another script joins the records of many jobs. A third script judges the joined record.",
+      "why": "The same script runs in a job and on a computer, so the rule does not change. A person can run a check before a push and get the same result as the job.",
+      "leadsTo": "The jobs in the workflows call these scripts. A script that fails makes its job fail. The folder scripts/ci-local holds guards for a computer without GitHub Actions."
     }
   },
   "glossary": {
@@ -810,7 +854,34 @@
     "encrypt": "To change data into a form that nobody can read without a key.",
     "node": "On the map, one item. An item is a layer, an area, a file or a function. It can also be a page, a route or a table.",
     "node.js": "The program that runs the JavaScript code on the server.",
-    "ASD-STE100": "A standard for simple English. It limits the length of sentences and the choice of words."
+    "ASD-STE100": "A standard for simple English. It limits the length of sentences and the choice of words.",
+    "GitHub": "A web service that stores the code of a project and runs automatic checks on the code.",
+    "GitHub Actions": "The part of GitHub that runs workflows. A workflow starts when an event happens, for example a push of code.",
+    "workflow": "A file that tells GitHub Actions which jobs to run and when to start them.",
+    "job": "One task in a workflow. GitHub runs each job on its own computer.",
+    "CI": "Short for continuous integration. A set of automatic checks that run on each change of the code.",
+    "pull request": "A request to add the changes of one branch to another branch. People read and check the changes first.",
+    "commit": "One saved change in the history of the code.",
+    "branch": "One line of changes in a repository. The main branch holds the current code.",
+    "tag": "A name that marks one commit, for example the commit of a release.",
+    "release": "A version of the product that is ready to install.",
+    "registry": "A server that stores container images. A host pulls an image from it by name or by digest.",
+    "digest": "A long code that a registry makes from the content of an image. A different image has a different digest.",
+    "pin": "A fixed link to one exact version. A pin names the digest of an image, so the image cannot change.",
+    "lint": "A fast check of files for mistakes. A lint check does not run the program.",
+    "guard": "A check that stops a change when the change breaks a rule.",
+    "advisory": "A public notice of a security fault in a package.",
+    "verify-gate": "A job of the CI workflow. It waits for lint and for the verify jobs, and then gives one verdict. The other jobs of the workflow run beside it. It does not wait for them.",
+    "ci.yml": "The workflow file of the main check of each change.",
+    "release-images.yml": "The workflow file that builds and pushes the images of a release.",
+    "release-npm.yml": "The workflow file that publishes two packages to npm.",
+    "dependency-audit.yml": "The workflow file of the weekly check of the packages that the product needs.",
+    "dependabot-unpause.yml": "The workflow file that restores paused update limits of Dependabot.",
+    "semgrep.yml": "The workflow file that scans the code for security faults.",
+    "scripts/ci-local": "A folder of guards and a snapshot tool. A person runs them on one computer when GitHub Actions does not run.",
+    "Semgrep": "A tool that scans code for security faults.",
+    "Dependabot": "A GitHub tool that opens pull requests for new versions of packages.",
+    "npm": "The public registry for JavaScript packages."
   },
   "walkthroughs": [
     {
@@ -1134,6 +1205,55 @@
           "text": "A member who leaves follows another path. An erasure removes the personal data of that person.",
           "file": "gremion-ui/src/lib/server/erasure/orchestrator.ts",
           "function": "runErasure"
+        }
+      ]
+    },
+    {
+      "title": "CI: a change is checked and becomes an image",
+      "steps": [
+        {
+          "text": "A person pushes a change or opens a pull request to the main or develop branch. GitHub starts the workflow in this file. A person can also start it by hand.",
+          "nodeId": "file:.github/workflows/ci.yml"
+        },
+        {
+          "text": "On a pull request only, this job reads the list of changed files. It decides if the images or the health census must run. On a push it does not run.",
+          "nodeId": "job:.github/workflows/ci.yml#changes"
+        },
+        {
+          "text": "This job runs fast checks on the files. It checks shell scripts, YAML files, rules for secrets and rules for the images. Other jobs wait for it.",
+          "nodeId": "job:.github/workflows/ci.yml#lint"
+        },
+        {
+          "text": "A verify job starts at the same time as lint. This job runs the type check and three more static checks with one script. It also checks the types of the control panel.",
+          "nodeId": "job:.github/workflows/ci.yml#verify-static"
+        },
+        {
+          "text": "This job builds each container image and pushes none. It waits for lint and for the job changes. On a pull request it runs when a build input changed. It also runs when the job changes fails, so that a broken filter does not skip the builds.",
+          "nodeId": "job:.github/workflows/ci.yml#docker-build"
+        },
+        {
+          "text": "This Dockerfile is one of the files that the job builds. It builds the control panel image. The same build also makes this code map.",
+          "nodeId": "file:apps/control-panel/Dockerfile"
+        },
+        {
+          "text": "This job waits for lint and for the eleven verify jobs. It joins their records and judges them. It gives the one verdict of the run. It does not wait for docker-build.",
+          "nodeId": "job:.github/workflows/ci.yml#verify-gate"
+        },
+        {
+          "text": "This is a different workflow, and it is not part of CI. A person starts it by hand, or someone pushes a release tag, to make the images of a release.",
+          "nodeId": "file:.github/workflows/release-images.yml"
+        },
+        {
+          "text": "This job turns the chosen branch, tag or commit into one exact commit. All later jobs use this commit. It also decides if the run can write the shared build cache.",
+          "nodeId": "job:.github/workflows/release-images.yml#resolve-ref"
+        },
+        {
+          "text": "This job runs once for each image of the release. It builds the image and pushes it to the registry. It saves one pin record with the digest of the image.",
+          "nodeId": "job:.github/workflows/release-images.yml#build-and-push"
+        },
+        {
+          "text": "This job waits for all builds. It checks that every record names the same commit. Then it writes the pins files, judges them and saves them for the operator.",
+          "nodeId": "job:.github/workflows/release-images.yml#emit-release-pins"
         }
       ]
     }

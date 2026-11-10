@@ -7,15 +7,15 @@
 /* Layout: a geological column. The six layers stack with the ground (L0) at the bottom; the selected item sits between what uses it and where it leads. */
 :root{
   --bg:#eef1ee;--panel:#fbfcfa;--line:#c6cec8;--fg:#1c2622;--muted:#55635c;--accent:#0b6b5f;--accent-fg:#ffffff;--hover:#e1e8e3;
-  --L0:#59616b;--L1:#7a4b86;--L2:#23689b;--L3:#2d7d55;--L4:#a0660c;--L5:#b6452f;
+  --L0:#59616b;--job:#0a7487;--L1:#7a4b86;--L2:#23689b;--L3:#2d7d55;--L4:#a0660c;--L5:#b6452f;
   --sans:system-ui,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;--mono:ui-monospace,"Cascadia Code","SFMono-Regular",Consolas,"Liberation Mono",monospace;
 }
 @media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
   --bg:#141a18;--panel:#1d2522;--line:#37443e;--fg:#e8efea;--muted:#a3b1a9;--accent:#58c9b6;--accent-fg:#0d1a17;--hover:#28332e;
-  --L0:#a4adb8;--L1:#c79ad3;--L2:#7db8e6;--L3:#79c99d;--L4:#e0aa55;--L5:#ee8d76;color-scheme:dark}}
+  --L0:#a4adb8;--job:#5fc7da;--L1:#c79ad3;--L2:#7db8e6;--L3:#79c99d;--L4:#e0aa55;--L5:#ee8d76;color-scheme:dark}}
 :root[data-theme="dark"]{
   --bg:#141a18;--panel:#1d2522;--line:#37443e;--fg:#e8efea;--muted:#a3b1a9;--accent:#58c9b6;--accent-fg:#0d1a17;--hover:#28332e;
-  --L0:#a4adb8;--L1:#c79ad3;--L2:#7db8e6;--L3:#79c99d;--L4:#e0aa55;--L5:#ee8d76;color-scheme:dark}
+  --L0:#a4adb8;--job:#5fc7da;--L1:#c79ad3;--L2:#7db8e6;--L3:#79c99d;--L4:#e0aa55;--L5:#ee8d76;color-scheme:dark}
 html,body{height:auto}
 body{background:var(--bg);color:var(--fg);font:16px/1.55 var(--sans);padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:16px}
 *{box-sizing:border-box}
@@ -88,7 +88,7 @@ section.stale{margin:0}section.stale h3{color:var(--L4)}
 abbr[data-t]{text-decoration:underline dotted var(--muted);cursor:help}
 #def{position:fixed;left:max(16px,env(safe-area-inset-left,0px));right:max(16px,env(safe-area-inset-right,0px));bottom:calc(14px + env(safe-area-inset-bottom,0px));max-width:560px;margin-inline:auto;background:var(--fg);color:var(--bg);padding:10px 14px;border-radius:6px;z-index:20}
 @media (prefers-reduced-motion:no-preference){.main>section{animation:in .12s ease-out}@keyframes in{from{opacity:.55}to{opacity:1}}}
-:root{--bp-bg:#1b1d20;--bp-grid:#26292d;--bp-grid2:#32363b;--bp-node:#24272c;--bp-edge:#0c0d0f;--bp-text:#eceef0;--bp-dim:#a9b0b8;--bp-exec:#f4f5f6;--bp-calls:#59c3ff;--bp-sql:#5fd38a;--bp-http:#c79bff;--bp-event:#ffb454;--bp-renders:#ff8fb1;--bp-hot:#ffd34d}
+:root{--bp-bg:#1b1d20;--bp-grid:#26292d;--bp-grid2:#32363b;--bp-node:#24272c;--bp-edge:#0c0d0f;--bp-text:#eceef0;--bp-dim:#a9b0b8;--bp-exec:#f4f5f6;--bp-calls:#59c3ff;--bp-sql:#5fd38a;--bp-http:#c79bff;--bp-event:#ffb454;--bp-renders:#ff8fb1;--bp-needs:#7fe0c4;--bp-runs:#f08fd8;--bp-hot:#ffd34d}
 [hidden]{display:none!important}
 .modes{display:flex;gap:4px;margin-left:auto}.modes button{padding:6px 12px;background:var(--panel);border:1px solid var(--line);border-radius:4px;cursor:pointer}.modes button.on{background:var(--fg);color:var(--bg);border-color:var(--fg)}
 #fm{display:flex;flex-direction:column;gap:10px;min-width:0}
@@ -135,14 +135,14 @@ abbr[data-t]{text-decoration:underline dotted var(--muted);cursor:help}
 <script>
 const D=__DATA__;
 const $=s=>document.querySelector(s),K=D.kinds,N=D.n,T=D.t;
-const KN={layer:'Layer',area:'Area',file:'File',function:'Function',page:'Page',route:'Route',table:'Table'};
-const EV={calls:'calls this function',sql:'reads or writes this table',http:'sends a request to this route',renders:'shows or uses this item',event:'sends a message to this item'};
+const KN={layer:'Layer',area:'Area',file:'File',function:'Function',page:'Page',route:'Route',table:'Table',job:'Job'};
+const EV={calls:'calls this function',sql:'reads or writes this table',http:'sends a request to this route',renders:'shows or uses this item',event:'sends a message to this item',needs:'waits for this job',runs:'runs this item or works on this area'};
 const n=i=>({k:K[N[i][0]],name:N[i][1],p:N[i][2],line:N[i][3],l:N[i][4]});
 const out=N.map(()=>[]),inc=N.map(()=>[]),kids=N.map(()=>[]);
 N.forEach((x,i)=>{if(x[2]>=0)kids[x[2]].push(i)});
 D.e.forEach(([f,t,k])=>{out[f].push([t,k]);inc[t].push([f,k])});
 const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
-const col=i=>`var(--L${n(i).l})`;
+const col=i=>n(i).k==='job'?'var(--job)':`var(--L${n(i).l})`;
 const up=(i,k)=>{while(i>=0&&n(i).k!==k)i=n(i).p;return i};
 const label=i=>{const x=n(i);if(x.k==='area'&&T.areas[i])return T.areas[i].title;if(x.k==='layer')return T.layers[x.l].title;return x.name};
 const terms=Object.keys(T.glossary).sort((a,b)=>b.length-a.length);
@@ -154,26 +154,36 @@ const words=s=>s.replace(/^[_#$]+/,'').replace(/([a-z0-9])([A-Z])/g,'$1 $2').rep
 const VERB=[[/^(create|make|build|new|generate|mint|compose|init|provision|seed)\b/,'This function makes a new item or new data.'],[/^(get|load|read|fetch|list|find|lookup|query|select|search|pick|collect|current)\b/,'This function gets data and gives the data to the function that calls it.'],[/^(is|has|can|should|was|needs|are|does|may)\b/,'This function does a check. The result is yes or no.'],[/^(assert|require|ensure|verify|validate|check|guard|refuse|preflight|enforce|authorize)\b/,'This function does a check. If the check fails, the function stops the work or shows an error.'],[/^(parse|decode|normalize|normalise|sanitize|clean)\b/,'This function reads text or raw data and makes the data correct and usable.'],[/^(to|format|fmt|render|serialize|map|convert|encode|describe|summarize)\b/,'This function changes data into a different form.'],[/^(run|start|main|handle|execute|process|boot|launch|on|do|apply|perform|reconcile)\b/,'This function starts a task and does the work of the task.'],[/^(set|update|write|save|record|mark|add|insert|upsert|store|put|register|claim|attach|enable|grant)\b/,'This function adds or changes data.'],[/^(delete|remove|clear|reset|evict|drain|purge|drop|disable|revoke|close|stop|cancel|detach|shutdown)\b/,'This function removes data or stops a task.'],[/^(send|publish|submit|post|emit|notify|forward|enqueue|push|warn|log)\b/,'This function sends data to a different part of the system.'],[/^(resolve|locate|derive|compute|calculate|count|sum|sha|hash)\b/,'This function calculates a value or finds the correct item.']];
 function fnText(i){const x=n(i),w=words(x.name),a=up(i,'area'),f=up(i,'file');if(/top level/.test(x.name))return ['This item is the code of one file that runs when the file loads.',`The file is ${N[f][1]}.`];
   const v=VERB.find(([r])=>r.test(w));return [`This item is a function. A function is one small part of a program. It does one task.`,`The name of this function is ${x.name}. The name contains these words: ${w}.`,v?v[1]:'The name of this function does not show the task. Read the list of items that the function uses.',v?'A program made this sentence from the name of the function. A person did not write this sentence.':'',`The function is in the file ${N[f][1]}, at line ${x.line}.`,a>=0?`The function is part of this area: ${label(a)}.`:'',`This function uses ${out[i].length} items. ${inc[i].length} items use this function.`]}
+const jid=i=>n(i).name.split(': ')[0];
+const names=(a,m=8)=>a.length<=m?a.join(', '):a.slice(0,m).join(', ')+' and '+(a.length-m)+' more';
+function jobText(i){const f=up(i,'file'),k=D.ek,pick=(arr,kind)=>arr.filter(([,e])=>k[e]===kind).map(([t])=>t);
+  const byLine=(a,b)=>n(a).line-n(b).line,wf=f>=0?N[f][1].split('/').pop():'',waits=pick(out[i],'needs').sort(byLine).map(jid),runs=pick(out[i],'runs').map(label),after=pick(inc[i],'needs').sort(byLine).map(jid);
+  return ['This item is a job. A job is one part of a workflow. A workflow is a file that tells GitHub what to run. GitHub runs each job on its own computer.',
+    `This job is part of the workflow ${wf}.`,
+    waits.length?`It starts after these jobs: ${names(waits)}.`:'It does not wait for a different job. It starts when the workflow starts.',
+    runs.length?`It runs or builds these items: ${names(runs)}.`:'',
+    after.length?`These jobs start after this job: ${names(after)}.`:'']}
 function text(i){const x=n(i);
   if(x.k==='layer')return [T.layers[x.l].text,`This layer has ${kids[i].length} areas.`];
   if(x.k==='area'){const a=T.areas[i];return a?[a.what,a.why,a.leadsTo]:['This area has no text.']}
   if(x.k==='file')return [`This item is a file. A file holds program code or settings.`,`The full name is ${x.name}.`,`The file holds ${kids[i].length} items.`,`The file is part of this area: ${label(up(i,'area'))}.`];
   if(x.k==='page')return [`This item is a page. A person opens a page in a web browser.`,`The address of the page is ${x.name}.`,`This page uses ${out[i].length} items.`];
   if(x.k==='route'){const[m,p]=x.name.split(' ');const M={GET:'A GET request asks for data.',POST:'A POST request sends new data.',PUT:'A PUT request replaces data.',PATCH:'A PATCH request changes a part of the data.',DELETE:'A DELETE request removes data.',ANY:'This route accepts all types of request.'};return [`This item is a route. A route is an address on a server. The server receives requests at this address.`,M[m]||'',`The address is ${p||x.name}.`,`${inc[i].length} items send requests to this route. This route uses ${out[i].length} items.`]}
+  if(x.k==='job')return jobText(i);
   if(x.k==='table')return [`This item is a table. A table is one list of data in the database.`,`The name of the table is ${x.name}.`,`${inc[i].length} functions read or write this table.`];
   return fnText(i)}
-const direct=i=>['function','page','route','table'].includes(n(i).k);
+const direct=i=>['function','page','route','table','job'].includes(n(i).k);
 function under(i,a=[]){kids[i].forEach(c=>{a.push(c);under(c,a)});return a}
 function grouped(i,edges,lvl){const m=new Map(),own=new Set([i,...under(i)]);own.forEach(s=>edges[s].forEach(([t])=>{if(own.has(t))return;const g=up(t,lvl);if(g<0)return;m.set(g,(m.get(g)||0)+1)}));return [...m].sort((a,b)=>b[1]-a[1])}
 function row(t,why,chain){const has=direct(t)&&(out[t].length>0||inc[t].length>0)&&!chain.has(t);return `<div class="row">${has?`<button class="tog" data-o="${t}" aria-expanded="false" aria-label="Open the next level">+</button>`:'<span></span>'}<button class="item" data-go="${t}" style="--c:${col(t)}">${esc(label(t))}${why?`<small>${esc(why)}</small>`:''}</button></div>`}
 const uniq=a=>{const s=new Set();return a.filter(([t])=>!s.has(t)&&s.add(t))};
 function list(arr,chain,cap=14){if(!arr.length)return '<div class="note">No items.</div>';const h=arr.slice(0,cap).map(([t,w])=>row(t,w,chain)).join('');return h+(arr.length>cap?`<button class="more" data-more>Show all ${arr.length} items</button>`:'')}
 let cur=-1,trail=[],walk=null,lastLists=null;
-function lens(i){let L,R;if(direct(i)){L=uniq(inc[i]).map(([t,k])=>[t,K2(k)]);R=uniq(out[i]).map(([t,k])=>[t,K3(k)])}else{const lvl=n(i).k;L=grouped(i,inc,lvl).map(([t,c])=>[t,c+' connections']);R=grouped(i,out,lvl).map(([t,c])=>[t,c+' connections'])}
+function lens(i){let L,R;if(direct(i)){const first=a=>n(i).k==='job'?a.slice().sort((x,y)=>(D.ek[x[1]]==='needs'?0:1)-(D.ek[y[1]]==='needs'?0:1)):a;L=first(uniq(inc[i])).map(([t,k])=>[t,K2(k)]);R=first(uniq(out[i])).map(([t,k])=>[t,K3(k)])}else{const lvl=n(i).k;L=grouped(i,inc,lvl).map(([t,c])=>[t,c+' connections']);R=grouped(i,out,lvl).map(([t,c])=>[t,c+' connections'])}
   lastLists={L,R};const ch=new Set([i]);
   return `<section><h3>Where this item leads</h3><p class="note" style="margin-bottom:10px">The left column shows the items that use this item. The right column shows the items that this item uses. Push + to see the next level.</p><div class="lens" id="lens"><svg aria-hidden="true"></svg><div class="col" id="cl"><h3>Used by</h3>${list(L,ch)}</div><div class="focus" id="fo" style="--c:${col(i)}">${esc(label(i))}</div><div class="col" id="cr"><h3>Uses</h3>${list(R,ch)}</div></div></section>`}
 const K2=k=>EV[D.ek[k]]||'';
-const K3=k=>({calls:'this function is called',sql:'a table that this function reads or writes',http:'a route that receives a request',renders:'an item that this page shows or uses',event:'an item that receives a message'})[D.ek[k]]||'';
+const K3=k=>({calls:'this function is called',sql:'a table that this function reads or writes',http:'a route that receives a request',renders:'an item that this page shows or uses',event:'an item that receives a message',needs:'a job that this job waits for',runs:'a file or an area that this job runs or works on'})[D.ek[k]]||'';
 function draw(){const w=$('#lens');if(!w)return;const s=w.querySelector('svg'),b=w.getBoundingClientRect(),f=$('#fo').getBoundingClientRect();const fy=f.top+f.height/2-b.top;let p='';
   const go=(sel,side)=>w.querySelectorAll(sel).forEach(r=>{const a=r.getBoundingClientRect();const y=a.top+a.height/2-b.top;const x=side?a.left-b.left:a.right-b.left;const fx=side?f.right-b.left:f.left-b.left;const m=(x+fx)/2;p+=`M${fx} ${fy}C${m} ${fy} ${m} ${y} ${x} ${y}`});
   go('#cl>.row>.item',0);go('#cr>.row>.item',1);s.setAttribute('viewBox',`0 0 ${b.width} ${b.height}`);s.innerHTML=`<path d="${p}"/>`}
@@ -194,7 +204,7 @@ function tab(t){[0,1,2].forEach(i=>$('#t'+i).classList.toggle('on',i===t));const
   if(t===0)p.innerHTML=(T.walkthroughs.length?`<p class="note">An example follows one real action through the code.</p>`:`<p class="note">This page shows no example. The text of the examples does not match the code now.</p>`)+T.walkthroughs.map((w,i)=>`<button class="link" data-ex="${i}">${esc(w.title)}</button>`).join('');
   if(t===1){p.innerHTML=`<label for="gq" class="note">Enter a word.</label><input id="gq" autocomplete="off"><dl id="gl" style="margin:0"></dl>`;const g=()=>{const q=$('#gq').value.toLowerCase();$('#gl').innerHTML=Object.keys(T.glossary).sort((a,b)=>a.localeCompare(b)).filter(k=>!q||k.toLowerCase().includes(q)).map(k=>`<dt>${esc(k)}</dt><dd>${esc(T.glossary[k])}</dd>`).join('')};$('#gq').oninput=g;g()}
   if(t===2)p.innerHTML=T.howToRead.map(s=>`<p>${esc(s)}</p>`).join('')+'<p>Select an underlined word to read the meaning of the word.</p>'}
-const hay=N.map((x,i)=>(label(i)+' '+x[1]).toLowerCase()),rank={area:0,page:1,route:2,table:3,function:4,file:5,layer:0};
+const hay=N.map((x,i)=>(label(i)+' '+x[1]).toLowerCase()),rank={area:0,page:1,route:2,job:3,table:4,function:5,file:6,layer:0};
 $('#q').oninput=e=>{const q=e.target.value.trim().toLowerCase();if(q.length<2){$('#res').innerHTML='';return}const r=[];for(let i=0;i<N.length;i++)if(hay[i].includes(q))r.push(i);r.sort((a,b)=>rank[n(a).k]-rank[n(b).k]||label(a).length-label(b).length);$('#res').innerHTML=(r.length?r.slice(0,40).map(i=>`<button class="link" data-go="${i}"><span class="chip" style="--c:${col(i)}">${KN[n(i).k]}</span> ${esc(label(i))}</button>`).join(''):'<div class="note">No items have this name.</div>')};
 document.addEventListener('click',e=>{const t=e.target.closest('button,abbr');const d=$('#def');if(t&&t.matches('abbr[data-t]')){d.textContent=t.dataset.t+': '+T.glossary[t.dataset.t];d.hidden=false;return}d.hidden=true;if(!t)return;const g=t.dataset;
   if('go' in g){if(t.closest('#res')){$('#res').innerHTML='';$('#q').value=''}view(+g.go)}
@@ -211,8 +221,8 @@ strata();tab(0);home();
 window.__cmView=i=>view(i);
 /* Flow map: the examples as a node graph. Every node and wire comes from the same data as the code map. */
 (()=>{
-const KC={calls:'--bp-calls',sql:'--bp-sql',http:'--bp-http',event:'--bp-event',renders:'--bp-renders'};
-const KW={calls:'Calls',sql:'Tables',http:'Requests',event:'Messages',renders:'Shows'};
+const KC={calls:'--bp-calls',sql:'--bp-sql',http:'--bp-http',event:'--bp-event',renders:'--bp-renders',needs:'--bp-needs',runs:'--bp-runs'};
+const KW={calls:'Calls',sql:'Tables',http:'Requests',event:'Messages',renders:'Shows',needs:'Waits for',runs:'Runs'};
 const W=250,S={ex:0,step:0,nodes:[],wires:[],z:1,x:0,y:0,sel:null,timer:0,open:new Set()};
 const fv=$('#fm-view'),world=$('#fm-world'),svg=$('#fm-wires');
 const ek=k=>D.ek[k];
@@ -271,7 +281,7 @@ $('#fm-ex').innerHTML=T.walkthroughs.map((w,i)=>`<option value="${i}">${esc(w.ti
 $('#fm-ex').onchange=e=>load(+e.target.value);
 $('#fm-prev').onclick=()=>{stop();go(S.step-1)};$('#fm-next').onclick=()=>{stop();go(S.step+1)};$('#fm-fit').onclick=()=>{stop();fit()};
 $('#fm-play').onclick=()=>{if(S.timer){stop();return}if(S.step>=T.walkthroughs[S.ex].steps.length-1)go(0);$('#fm-play').textContent='Stop';S.timer=setInterval(()=>{if(S.step>=T.walkthroughs[S.ex].steps.length-1){stop();return}go(S.step+1)},2200)};
-$('#fm-legend').innerHTML=[['--bp-exec','The next step'],['--bp-calls','A function calls another function'],['--bp-sql','A function reads or writes a table'],['--bp-http','A request goes to a route'],['--bp-event','A message goes to an item'],['--bp-renders','A page shows an item']].map(([k,t])=>`<span style="--k:var(${k})"><i></i>${t}</span>`).join('');
+$('#fm-legend').innerHTML=[['--bp-exec','The next step'],['--bp-calls','A function calls another function'],['--bp-sql','A function reads or writes a table'],['--bp-http','A request goes to a route'],['--bp-event','A message goes to an item'],['--bp-renders','A page shows an item'],['--bp-needs','A job waits for a job'],['--bp-runs','A job runs a file or works on an area']].map(([k,t])=>`<span style="--k:var(${k})"><i></i>${t}</span>`).join('');
 let ready=false;
 function mode(m){$('.app').hidden=m===1;$('#fm').hidden=m===0;$('#m0').classList.toggle('on',m===0);$('#m1').classList.toggle('on',m===1);try{history.replaceState(null,'',m?'#flow-map':'#')}catch{}if(m===1){if(!ready){ready=true;load(0)}else{apply();wires()}}else stop()}
 $('#m0').onclick=()=>mode(0);$('#m1').onclick=()=>mode(1);

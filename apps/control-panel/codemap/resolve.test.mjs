@@ -54,6 +54,22 @@ describe('resolve: steps', () => {
     expect(r.walkthroughs[0].stale[0].name).toBe('gone/+page.svelte')
   })
 
+  it('a job step matches by its exact id, and a renamed or removed job is a stale step', () => {
+    const job = (file, id) => ({ id: `job:${file}#${id}`, kind: 'job', name: id, file })
+    const g = graph([job('.github/workflows/ci.yml', 'lint'), job('.github/workflows/ci.yml', 'verify-gate')])
+    const r = resolve(g, text([{ title: 'W', steps: [
+      { text: 'A.', nodeId: 'job:.github/workflows/ci.yml#lint' },
+      { text: 'B.', nodeId: 'job:.github/workflows/ci.yml#verify-gate-renamed' },
+      { text: 'C.', nodeId: 'job:.github/workflows/gone.yml#lint' },
+    ] }]))
+    expect(r.walkthroughs[0].steps).toEqual([{ text: 'A.', id: 'job:.github/workflows/ci.yml#lint' }])
+    expect(r.staleSteps).toEqual([
+      { walkthrough: 'W', step: 2, nodeId: 'job:.github/workflows/ci.yml#verify-gate-renamed', text: 'B.' },
+      { walkthrough: 'W', step: 3, nodeId: 'job:.github/workflows/gone.yml#lint', text: 'C.' },
+    ])
+    expect(r.walkthroughs[0].stale.map((s) => s.name)).toEqual(['ci.yml#verify-gate-renamed', 'gone.yml#lint'])
+  })
+
   it('the step position counts the written order, so a stale step in the middle keeps its number', () => {
     const g = graph([fn('a.ts', 'one', 1), fn('a.ts', 'three', 3)])
     const r = resolve(g, text([{ title: 'W', steps: [step('a.ts', 'one'), step('a.ts', 'two'), step('a.ts', 'three')] }]))

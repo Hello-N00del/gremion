@@ -87,6 +87,22 @@ describe('buildMap', () => {
     expect(dataOf(r.html).stale.areas).toBe(1)
   })
 
+  it('the limits count the jobs of the graph, and say that L0 shows connections for these jobs only', () => {
+    const wf = { id: 'file:.github/workflows/ci.yml', kind: 'file', name: 'ci.yml', parent: 'area:svc@L3', file: '.github/workflows/ci.yml', line: 1, layer: 'L0' }
+    const job = (id, line) => ({ id: `job:.github/workflows/ci.yml#${id}`, kind: 'job', name: id, parent: wf.id, file: wf.file, line, layer: 'L0' })
+    const g = makeGraph([wf, job('lint', 4), job('build', 9)])
+    g.edges.push({ from: 'job:.github/workflows/ci.yml#build', to: 'job:.github/workflows/ci.yml#lint', kind: 'needs' })
+    const d = dataOf(buildMap({ graph: g, text: baseText(), template, commit: SHA }).html)
+    expect(d.limits[0]).toBe('This map shows 2 functions, 2 jobs of GitHub workflows and 2 connections.')
+    expect(d.ek).toContain('needs')
+    expect(d.kinds).toContain('job')
+    const l0 = d.limits.find((l) => l.startsWith('L0 shows'))
+    expect(l0).toMatch(/jobs of the GitHub workflows/)
+    expect(l0).toMatch(/connections for these jobs only/)
+    expect(l0).not.toMatch(/files only/)
+    expect(dataOf(buildMap({ graph: makeGraph(), text: baseText(), template, commit: SHA }).html).limits[0]).toBe('This map shows 2 functions, 0 jobs of GitHub workflows and 1 connections.')
+  })
+
   it('the share of resolved calls comes from the graph, not from a constant', () => {
     const limits = (ratio) => dataOf(buildMap({ graph: makeGraph([], ratio), text: baseText(), template, commit: SHA }).html).limits.join(' ')
     expect(limits(85.6)).toContain('86 percent')
@@ -155,6 +171,20 @@ describe('the template', () => {
     expect(template).toContain('does not match the code now')
     expect(template).toContain('walkNotice')
     expect(template).toContain('D.stale')
+  })
+
+  it('knows the job item and the needs and runs edge kinds in every map that lists kinds', () => {
+    expect(template).toMatch(/KN=\{[^}]*job:'Job'/)
+    for (const name of ['EV', 'K3', 'KC', 'KW']) {
+      const body = new RegExp(`(?:const ${name}=|const K3=k=>\\()\\{[^}]*\\}`).exec(template)?.[0] ?? ''
+      expect(body, name).toMatch(/needs:/)
+      expect(body, name).toMatch(/runs:/)
+    }
+    expect(template).toMatch(/const direct=i=>\[[^\]]*'job'/)
+    expect(template).toMatch(/rank=\{[^}]*job:/)
+    expect(template).toContain("['--bp-needs'")
+    expect(template).toContain("['--bp-runs'")
+    expect(template).toMatch(/--job:#[0-9a-f]{6}/)
   })
 
   it('holds no guard that throws for an empty example list', () => {

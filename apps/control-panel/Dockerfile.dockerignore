@@ -50,6 +50,9 @@
 !.git/packed-refs
 !.git/refs
 
+# the workflow files, and nothing else of .github: the code map shows the jobs of each workflow
+!.github/workflows
+
 **/node_modules
 **/.svelte-kit
 **/build

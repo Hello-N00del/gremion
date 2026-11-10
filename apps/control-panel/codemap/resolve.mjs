@@ -8,7 +8,8 @@
 // make the map say so; it can never stop a build.
 
 const idTail = (id) => String(id).replace(/^[a-z]+:/, '').replace(/@[^@/]*$/, '')
-const shortName = (id) => idTail(id).split('/').slice(-2).join('/')
+// A job id is the workflow file and the job: the file name and the job are enough to find it (ci.yml#lint).
+const shortName = (id) => idTail(id).split('/').slice(String(id).startsWith('job:') ? -1 : -2).join('/')
 
 /**
  * @param {{ nodes?: Array<{id:string,kind:string,name:string,file?:string,line?:number}> }} graph
