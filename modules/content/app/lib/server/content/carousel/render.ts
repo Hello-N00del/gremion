@@ -9,8 +9,14 @@
 // The Inter .ttf font is committed under ./fonts (satori requires an explicit
 // ttf/otf buffer; the repo's @fontsource packages ship only woff/woff2 which
 // satori cannot use). It is read once and cached for the process lifetime.
+//
+// In the running gremion-ui image this module is bundled into /app/build/server/chunks, so
+// ./fonts does not exist next to it; gremion-ui/Dockerfile's runner stage copies the font
+// directory to <cwd>/fonts/carousel (cwd = /app) and loadCarouselFont reads it from there.
+// font-image.test.ts replays that COPY and fails if the two ever disagree.
 
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { Resvg } from '@resvg/resvg-js'
 import satori from 'satori'
@@ -27,17 +33,57 @@ export interface CarouselResult {
 /** Square slide edge in pixels. */
 const SLIDE_PX = 1080
 
-// Resolve the committed Inter ttf relative to THIS module, LAZILY: the URL is
-// built only when a carousel is actually rendered, so a non-file import.meta.url
-// under a test runner's SSR transform cannot crash this module at import time
-// (the boot/registration graph imports this module without ever rendering a
-// slide). Read + cache once.
+/** The committed font's file name. */
+export const CAROUSEL_FONT_FILE = 'Inter-Regular.ttf'
+/** Where the runtime image carries the font, relative to the process working directory (/app). */
+export const CAROUSEL_RUNTIME_FONT_DIR = 'fonts/carousel'
+
+/** Thrown when no candidate path holds the carousel font; names every place that was looked at. */
+export class CarouselFontMissingError extends Error {
+	constructor(readonly searched: readonly string[]) {
+		super(
+			`Carousel font ${CAROUSEL_FONT_FILE} not found. Looked in: ${searched.join(', ')}. ` +
+				`The runtime image must carry it at <cwd>/${CAROUSEL_RUNTIME_FONT_DIR}/${CAROUSEL_FONT_FILE} ` +
+				`(gremion-ui/Dockerfile, runner stage).`,
+		)
+		this.name = 'CarouselFontMissingError'
+	}
+}
+
+/**
+ * The places the font may live, best first: the runtime image path under the working directory,
+ * then the committed ./fonts next to this module (a source checkout: tests, dev). The module
+ * directory is derived LAZILY and defensively: a non-file import.meta.url under a test runner's
+ * SSR transform must not crash the boot/registration graph, which imports this module without
+ * ever rendering a slide. There is deliberately no `new URL('./fonts/...', import.meta.url)`
+ * literal here, which the bundler would rewrite into an asset reference.
+ */
+export function carouselFontCandidates(cwd: string = process.cwd(), moduleDir?: string): string[] {
+	let here = moduleDir
+	if (here === undefined) {
+		try {
+			here = dirname(fileURLToPath(import.meta.url))
+		} catch {
+			here = undefined
+		}
+	}
+	const candidates = [join(cwd, CAROUSEL_RUNTIME_FONT_DIR, CAROUSEL_FONT_FILE)]
+	if (here !== undefined) candidates.push(join(here, 'fonts', CAROUSEL_FONT_FILE))
+	return candidates
+}
+
+/** Read the first candidate that exists; throw CarouselFontMissingError (not ENOENT) when none does. */
+export function loadCarouselFont(candidates: readonly string[] = carouselFontCandidates()): Buffer {
+	for (const path of candidates) {
+		if (existsSync(path)) return readFileSync(path)
+	}
+	throw new CarouselFontMissingError(candidates)
+}
+
+// Read + cache once, LAZILY (see carouselFontCandidates).
 let fontData: Buffer | null = null
 function interFont(): Buffer {
-	if (fontData === null) {
-		const fontPath = fileURLToPath(new URL('./fonts/Inter-Regular.ttf', import.meta.url))
-		fontData = readFileSync(fontPath)
-	}
+	if (fontData === null) fontData = loadCarouselFont()
 	return fontData
 }
 

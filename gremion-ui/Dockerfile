@@ -144,6 +144,11 @@ COPY --from=builder /repo/gremion-ui/migrations-control ./migrations-control
 COPY --from=builder /repo/verticals ./verticals
 ENV GREMION_VERTICALS_DIR=/app/verticals
 
+# Content Engine: the Instagram carousel renderer (satori) needs an explicit .ttf buffer and reads it at
+# runtime from <cwd>/fonts/carousel. The bundled server code has no ./fonts next to it, so without this COPY
+# every slide preview fails. carousel/font-image.test.ts replays this line against render.ts.
+COPY --from=builder /repo/modules/content/app/lib/server/content/carousel/fonts ./fonts/carousel
+
 # AGPL §4/§5: a conveyed copy must be accompanied by the licence text. This
 # image IS a conveyed copy — without these two files the recipient of the image
 # has the program and not its licence. NOTICE additionally carries the OFL-1.1
