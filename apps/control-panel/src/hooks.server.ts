@@ -137,7 +137,9 @@ function withSecurityHeaders(response: Response): Response {
   // text/plain refusals echo request data, and an admin surface leaks no URL.
   try {
     response.headers.set('X-Content-Type-Options', 'nosniff')
-    response.headers.set('Referrer-Policy', 'no-referrer')
+    // same-origin, not no-referrer: no-referrer makes a browser send Origin: null on a form POST,
+    // and SvelteKit's CSRF check then refuses every form of the panel.
+    response.headers.set('Referrer-Policy', 'same-origin')
   } catch {
     // an immutable-header response (a fetch passthrough) keeps its own headers
   }

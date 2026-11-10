@@ -266,7 +266,7 @@ describe('the host guard (R29-I11)', () => {
   it('every response carries nosniff and no-referrer (review A LOW, r2)', async () => {
     const res = await securityHeaders({ event: {} as never, resolve: (async () => new Response('x', { headers: { 'content-type': 'text/plain' } })) as never })
     expect(res.headers.get('x-content-type-options')).toBe('nosniff')
-    expect(res.headers.get('referrer-policy')).toBe('no-referrer')
+    expect(res.headers.get('referrer-policy')).toBe('same-origin')
   })
 
   it('a request without a Host is refused', async () => {
@@ -298,7 +298,7 @@ describe('the host guard (R29-I11)', () => {
     expect(res.status).toBe(302)
     expect(res.headers.getSetCookie().some((c) => /authjs\.pkce\.code_verifier=/.test(c))).toBe(true)
     expect(res.headers.get('x-content-type-options')).toBe('nosniff')
-    expect(res.headers.get('referrer-policy')).toBe('no-referrer')
+    expect(res.headers.get('referrer-policy')).toBe('same-origin')
     expect(resolve).not.toHaveBeenCalled()
   })
 
