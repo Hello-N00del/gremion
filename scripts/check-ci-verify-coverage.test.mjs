@@ -511,6 +511,67 @@ test('the CLI rejects an unknown argument', () => {
   assert.match(r.stderr, /unknown argument: --nope/)
 })
 
+/** ci.yml with the FIRST `from` replaced: for lines that repeat across the install steps. */
+function plantFirst(from, to, ci = CI) {
+  assert.ok(ci.includes(from), `the plant target must occur in ci.yml: ${from.slice(0, 80)}`)
+  return ci.replace(from, to)
+}
+
+const CHECKOUT = 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1\n'
+const INTEGRATION_HEAD = 'name: Integration Tests\n    runs-on: ubuntu-latest\n    needs: lint\n    timeout-minutes: 30\n\n    steps:\n      - uses: '
+
+test('a checkout that keeps its credentials is reported, naming the job', () => {
+  const p = joined(plant(`${INTEGRATION_HEAD}${CHECKOUT}        with:\n          persist-credentials: false\n`, `${INTEGRATION_HEAD}${CHECKOUT}`))
+  assert.match(p, /integration-test step 1: actions\/checkout does not set persist-credentials: false/)
+})
+
+test('a GitHub release download without retries is reported, naming the job', () => {
+  const p = joined(plantFirst('curl --retry 5 --retry-all-errors -fsSLo', 'curl -fsSLo'))
+  assert.match(p, /lint step \d+ \(Install shellcheck\): a GitHub release download has no retry/)
+})
+
+test('--retry without --retry-all-errors is reported: curl alone does not retry every 5xx', () => {
+  const p = joined(plantFirst('curl --retry 5 --retry-all-errors -fsSLo', 'curl --retry 5 -fsSLo'))
+  assert.match(p, /lint step \d+ \(Install shellcheck\): a GitHub release download has no retry/)
+})
+
+test('an unpinned yamllint install is reported', () => {
+  const p = joined(plantFirst('pip install yamllint==1.38.0', 'pip install yamllint'))
+  assert.match(p, /lint step \d+ \(Install yamllint\): pip package yamllint is not pinned/)
+})
+
+test('an unpinned bats install is reported', () => {
+  const p = joined(plantFirst('npm install -g bats@1.13.0', 'npm install -g bats'))
+  assert.match(p, /global npm package bats is not pinned/)
+})
+
+test('two pinned versions of one tool are reported', () => {
+  const p = joined(plantFirst('pip install yamllint==1.38.0', 'pip install yamllint==1.37.0'))
+  assert.match(p, /yamllint is installed at 2 versions/)
+})
+
+test('a repeated make fresh-init-proof is reported', () => {
+  const start = '      - name: Start Keycloak\n'
+  const p = joined(plant(start, `      - name: Proof again\n        run: make fresh-init-proof\n\n${start}`))
+  assert.match(p, /runs make fresh-init-proof, which verify-integration-db already runs/)
+})
+
+test('a job without timeout-minutes is reported, naming the job', () => {
+  const p = joined(plant('name: Docker inputs changed\n    runs-on: ubuntu-latest\n    timeout-minutes: 5\n', 'name: Docker inputs changed\n    runs-on: ubuntu-latest\n'))
+  assert.match(p, /changes has no timeout-minutes/)
+})
+
+test('a scan that finds no release download fails closed rather than passing', () => {
+  const p = joined(CI.replaceAll('/releases/download/', '/releases/fetch/'))
+  assert.match(p, /no GitHub release download found/)
+})
+
+test('a scan that finds no pinned yamllint or bats fails closed rather than passing', () => {
+  const p = joined(CI.replaceAll('pip install yamllint==1.38.0', 'true').replaceAll('npm install -g bats@1.13.0', 'true'))
+  assert.match(p, /no pinned install of yamllint found/)
+  assert.match(p, /no pinned install of bats found/)
+})
+
 // The runner-policy idiom (scripts/ci-local/yaml-unavailable.test.mjs): a child node whose
 // resolver refuses `yaml`, which is exactly what a missing node_modules/yaml looks like.
 test('with the yaml package unimportable the CLI fails closed, naming the cause', () => {

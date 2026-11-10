@@ -39,6 +39,11 @@
 //      every leg's record and the write token never shares a runner with
 //      repository or dependency code; no leg and not the gate holds a write token.
 //
+//   6. Runner hygiene, which fails loudly but on the wrong commit. Every job has a
+//      timeout-minutes; every checkout sets persist-credentials: false; every GitHub
+//      release download retries; pip and global npm tools are pinned to one exact
+//      version; and no step repeats make fresh-init-proof, which a verify leg owns.
+//
 // A scan that found almost nothing would pass every rule above, so it refuses to
 // pass below a floor of verify invocations (the vacuity floor).
 //
@@ -183,6 +188,64 @@ export function recordUploaders(doc) {
     if (text(step.uses).startsWith('actions/upload-artifact@') && text(step.with?.name).startsWith('record-')) jobs.add(jobId)
   }
   return jobs
+}
+
+// A GitHub release download. The 2026-11-08 run lost five jobs to one 504 from this CDN.
+const RELEASE_DOWNLOAD = /\bcurl\b.*https:\/\/github\.com\/\S+\/releases\/download\//
+const PIP_INSTALL = /\bpip3?\s+install\s+([^;&|]+)/
+const NPM_GLOBAL_INSTALL = /\bnpm\s+(?:install|i)\s+(?:-g|--global)\s+([^;&|]+)/
+const PIP_PIN = /^([A-Za-z0-9._-]+)==(\d+(?:\.\d+)+)$/
+const NPM_PIN = /^((?:@[^/@\s]+\/)?[^/@\s]+)@(\d+(?:\.\d+)+)$/
+
+function checkPins(label, kind, line, pattern, pin, versions, problems) {
+  const m = pattern.exec(line)
+  if (!m) return
+  for (const spec of m[1].trim().split(/\s+/).filter((t) => !t.startsWith('-'))) {
+    const pinned = pin.exec(spec)
+    if (!pinned) {
+      problems.push(`${label}: ${kind} package ${spec} is not pinned to an exact version -- an upstream release would break every run at once`)
+      continue
+    }
+    versions.set(pinned[1], new Set([...(versions.get(pinned[1]) ?? []), pinned[2]]))
+  }
+}
+
+/** Rule 6 of the header: credentials, downloads, tool versions, runaway jobs and the duplicate proof. */
+function checkRunnerHygiene(doc, problems) {
+  const versions = new Map() // tool -> distinct pinned versions
+  let downloads = 0
+  for (const [jobId, job] of Object.entries(doc.jobs)) {
+    const timeout = job?.['timeout-minutes']
+    if (!Number.isInteger(timeout) || timeout < 1) {
+      problems.push(`${jobId} has no timeout-minutes -- a hung step would hold a runner for GitHub's six-hour default`)
+    }
+  }
+  for (const { label, step } of eachStep(doc)) {
+    if (text(step.uses).startsWith('actions/checkout@') && step.with?.['persist-credentials'] !== false) {
+      problems.push(`${label}: actions/checkout does not set persist-credentials: false -- the job token stays in .git/config while later steps run`)
+    }
+    for (const line of logicalLines(step.run)) {
+      if (RELEASE_DOWNLOAD.test(line)) {
+        downloads += 1
+        if (!/(?:^|\s)--retry\s+[1-9]\d*(?:\s|$)/.test(line) || !/(?:^|\s)--retry-all-errors(?:\s|$)/.test(line)) {
+          problems.push(`${label}: a GitHub release download has no retry (--retry <n> --retry-all-errors) -- one CDN error fails the job before verify starts`)
+        }
+      }
+      checkPins(label, 'pip', line, PIP_INSTALL, PIP_PIN, versions, problems)
+      checkPins(label, 'global npm', line, NPM_GLOBAL_INSTALL, NPM_PIN, versions, problems)
+      if (/\bmake\s+fresh-init-proof\b/.test(line)) {
+        problems.push(`${label}: runs make fresh-init-proof, which verify-integration-db already runs as integration:fresh-init and records for the gate`)
+      }
+    }
+  }
+  // Vacuity floor: a respelled install would otherwise leave these rules checking nothing.
+  if (downloads === 0) problems.push('no GitHub release download found -- the retry rule is not looking at the install steps (respelled? update this guard with it)')
+  for (const tool of ['yamllint', 'bats']) {
+    if (!versions.has(tool)) problems.push(`no pinned install of ${tool} found -- the pin rule is not looking at its install steps (respelled? update this guard with it)`)
+  }
+  for (const [tool, seen] of versions) {
+    if (seen.size > 1) problems.push(`${tool} is installed at ${seen.size} versions (${[...seen].join(', ')}) -- every job must run the same one`)
+  }
 }
 
 /**
@@ -373,6 +436,8 @@ export function checkWorkflow(doc, { requiredSuites, unitParts, integrationParts
     }
   }
   if (strictCalls === 0) problems.push('no step calls `check-record.mjs <sha>` without a flag -- the strict check is gone')
+
+  checkRunnerHygiene(doc, problems)
 
   return { problems, invocations: invocations.length, names: [...seen.keys()] }
 }

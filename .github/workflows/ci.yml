@@ -31,6 +31,7 @@ jobs:
   lint:
     name: Lint
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     permissions:
       contents: read
       pull-requests: read  # gitleaks-action needs this to GET /repos/.../pulls/N/commits
@@ -64,14 +65,14 @@ jobs:
       # ubuntu-latest is 0.9.0, which raises SC2317/SC2015 notes 0.11 does not.
       - name: Install shellcheck
         run: |
-          curl -fsSLo /tmp/sc.tar.xz https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.x86_64.tar.xz
+          curl --retry 5 --retry-all-errors -fsSLo /tmp/sc.tar.xz https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.x86_64.tar.xz
           echo "8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198  /tmp/sc.tar.xz" | sha256sum -c -
           tar -xJf /tmp/sc.tar.xz -C /tmp
           sudo install -m 0755 /tmp/shellcheck-v0.11.0/shellcheck /usr/local/bin/shellcheck
           shellcheck --version
 
       - name: Install yamllint
-        run: pip install yamllint
+        run: pip install yamllint==1.38.0
 
       # One home for the rule. This step used to repeat a shellcheck argument
       # list that `make lint-sh` also carried, and the two drifted: ci.yml
@@ -487,10 +488,12 @@ jobs:
     if: >-
       github.event_name == 'pull_request' &&
       github.event.pull_request.head.repo.full_name != github.repository
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           fetch-depth: 0  # need the full range to walk every commit in the PR
+          persist-credentials: false
 
       - name: Every commit in this PR must be signed off
         env:
@@ -596,19 +599,19 @@ jobs:
       # ubuntu-latest is 0.9.0 and raises notes the local gate (0.11.0) does not.
       - name: Install shellcheck
         run: |
-          curl -fsSLo /tmp/sc.tar.xz https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.x86_64.tar.xz
+          curl --retry 5 --retry-all-errors -fsSLo /tmp/sc.tar.xz https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.x86_64.tar.xz
           echo "8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198  /tmp/sc.tar.xz" | sha256sum -c -
           tar -xJf /tmp/sc.tar.xz -C /tmp
           sudo install -m 0755 /tmp/shellcheck-v0.11.0/shellcheck /usr/local/bin/shellcheck
           shellcheck --version
 
       - name: Install yamllint
-        run: pip install yamllint
+        run: pip install yamllint==1.38.0
 
       # kernel-hygiene check a9 ("the documented onboarding path works") runs
       # `bats --version`; carve-lint runs that check through lint-hygiene.
       - name: Install BATS
-        run: sudo npm install -g bats
+        run: sudo npm install -g bats@1.13.0
 
       # `pnpm check` runs these before svelte-check; the typecheck suite calls
       # svelte-check on its own (to get machine output) and does not, so on a clean
@@ -879,14 +882,14 @@ jobs:
       - name: Install BATS and test dependencies
         run: |
           sudo apt-get install -y gettext-base jq
-          pip install yamllint
-          sudo npm install -g bats
+          pip install yamllint==1.38.0
+          sudo npm install -g bats@1.13.0
 
       # Same pinned, checksummed install as the Lint job: the apt package on
       # ubuntu-latest is 0.9.0 and raises notes the local gate (0.11.0) does not.
       - name: Install shellcheck
         run: |
-          curl -fsSLo /tmp/sc.tar.xz https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.x86_64.tar.xz
+          curl --retry 5 --retry-all-errors -fsSLo /tmp/sc.tar.xz https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.x86_64.tar.xz
           echo "8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198  /tmp/sc.tar.xz" | sha256sum -c -
           tar -xJf /tmp/sc.tar.xz -C /tmp
           sudo install -m 0755 /tmp/shellcheck-v0.11.0/shellcheck /usr/local/bin/shellcheck
@@ -903,17 +906,17 @@ jobs:
         run: |
           set -euo pipefail
           cd "$RUNNER_TEMP"
-          curl -fsSLo cosign https://github.com/sigstore/cosign/releases/download/v2.6.5/cosign-linux-amd64
+          curl --retry 5 --retry-all-errors -fsSLo cosign https://github.com/sigstore/cosign/releases/download/v2.6.5/cosign-linux-amd64
           echo "c3b4f5410e608af03a5eb0aaac84a4313d8da131248e08ff1759ac70c79d1644  cosign" | sha256sum -c -
           sudo install -m 0755 cosign /usr/local/bin/cosign
-          curl -fsSLo sops https://github.com/getsops/sops/releases/download/v3.13.3/sops-v3.13.3.linux.amd64
+          curl --retry 5 --retry-all-errors -fsSLo sops https://github.com/getsops/sops/releases/download/v3.13.3/sops-v3.13.3.linux.amd64
           echo "e5bec3346a873ae91d871550f3e698c1aad962aff462a080e40f25fde17fef6b  sops" | sha256sum -c -
           sudo install -m 0755 sops /usr/local/bin/sops
-          curl -fsSLo age.tar.gz https://github.com/FiloSottile/age/releases/download/v1.3.2/age-v1.3.2-linux-amd64.tar.gz
+          curl --retry 5 --retry-all-errors -fsSLo age.tar.gz https://github.com/FiloSottile/age/releases/download/v1.3.2/age-v1.3.2-linux-amd64.tar.gz
           echo "cbe24006683f8eb669266162894b9a522a1af52f2665fbc63a4bb032ed26ac10  age.tar.gz" | sha256sum -c -
           tar -xzf age.tar.gz
           sudo install -m 0755 age/age age/age-keygen /usr/local/bin/
-          curl -fsSLo gitleaks.tar.gz https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz
+          curl --retry 5 --retry-all-errors -fsSLo gitleaks.tar.gz https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz
           echo "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  gitleaks.tar.gz" | sha256sum -c -
           tar -xzf gitleaks.tar.gz gitleaks
           sudo install -m 0755 gitleaks /usr/local/bin/gitleaks
@@ -977,14 +980,14 @@ jobs:
       - name: Install BATS and test dependencies
         run: |
           sudo apt-get install -y gettext-base jq
-          pip install yamllint
-          sudo npm install -g bats
+          pip install yamllint==1.38.0
+          sudo npm install -g bats@1.13.0
 
       # Same pinned, checksummed install as the Lint job: the apt package on
       # ubuntu-latest is 0.9.0 and raises notes the local gate (0.11.0) does not.
       - name: Install shellcheck
         run: |
-          curl -fsSLo /tmp/sc.tar.xz https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.x86_64.tar.xz
+          curl --retry 5 --retry-all-errors -fsSLo /tmp/sc.tar.xz https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.x86_64.tar.xz
           echo "8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198  /tmp/sc.tar.xz" | sha256sum -c -
           tar -xJf /tmp/sc.tar.xz -C /tmp
           sudo install -m 0755 /tmp/shellcheck-v0.11.0/shellcheck /usr/local/bin/shellcheck
@@ -1001,17 +1004,17 @@ jobs:
         run: |
           set -euo pipefail
           cd "$RUNNER_TEMP"
-          curl -fsSLo cosign https://github.com/sigstore/cosign/releases/download/v2.6.5/cosign-linux-amd64
+          curl --retry 5 --retry-all-errors -fsSLo cosign https://github.com/sigstore/cosign/releases/download/v2.6.5/cosign-linux-amd64
           echo "c3b4f5410e608af03a5eb0aaac84a4313d8da131248e08ff1759ac70c79d1644  cosign" | sha256sum -c -
           sudo install -m 0755 cosign /usr/local/bin/cosign
-          curl -fsSLo sops https://github.com/getsops/sops/releases/download/v3.13.3/sops-v3.13.3.linux.amd64
+          curl --retry 5 --retry-all-errors -fsSLo sops https://github.com/getsops/sops/releases/download/v3.13.3/sops-v3.13.3.linux.amd64
           echo "e5bec3346a873ae91d871550f3e698c1aad962aff462a080e40f25fde17fef6b  sops" | sha256sum -c -
           sudo install -m 0755 sops /usr/local/bin/sops
-          curl -fsSLo age.tar.gz https://github.com/FiloSottile/age/releases/download/v1.3.2/age-v1.3.2-linux-amd64.tar.gz
+          curl --retry 5 --retry-all-errors -fsSLo age.tar.gz https://github.com/FiloSottile/age/releases/download/v1.3.2/age-v1.3.2-linux-amd64.tar.gz
           echo "cbe24006683f8eb669266162894b9a522a1af52f2665fbc63a4bb032ed26ac10  age.tar.gz" | sha256sum -c -
           tar -xzf age.tar.gz
           sudo install -m 0755 age/age age/age-keygen /usr/local/bin/
-          curl -fsSLo gitleaks.tar.gz https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz
+          curl --retry 5 --retry-all-errors -fsSLo gitleaks.tar.gz https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz
           echo "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  gitleaks.tar.gz" | sha256sum -c -
           tar -xzf gitleaks.tar.gz gitleaks
           sudo install -m 0755 gitleaks /usr/local/bin/gitleaks
@@ -1069,14 +1072,14 @@ jobs:
       - name: Install BATS and test dependencies
         run: |
           sudo apt-get install -y gettext-base jq
-          pip install yamllint
-          sudo npm install -g bats
+          pip install yamllint==1.38.0
+          sudo npm install -g bats@1.13.0
 
       # Same pinned, checksummed install as the Lint job: the apt package on
       # ubuntu-latest is 0.9.0 and raises notes the local gate (0.11.0) does not.
       - name: Install shellcheck
         run: |
-          curl -fsSLo /tmp/sc.tar.xz https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.x86_64.tar.xz
+          curl --retry 5 --retry-all-errors -fsSLo /tmp/sc.tar.xz https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.x86_64.tar.xz
           echo "8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198  /tmp/sc.tar.xz" | sha256sum -c -
           tar -xJf /tmp/sc.tar.xz -C /tmp
           sudo install -m 0755 /tmp/shellcheck-v0.11.0/shellcheck /usr/local/bin/shellcheck
@@ -1093,17 +1096,17 @@ jobs:
         run: |
           set -euo pipefail
           cd "$RUNNER_TEMP"
-          curl -fsSLo cosign https://github.com/sigstore/cosign/releases/download/v2.6.5/cosign-linux-amd64
+          curl --retry 5 --retry-all-errors -fsSLo cosign https://github.com/sigstore/cosign/releases/download/v2.6.5/cosign-linux-amd64
           echo "c3b4f5410e608af03a5eb0aaac84a4313d8da131248e08ff1759ac70c79d1644  cosign" | sha256sum -c -
           sudo install -m 0755 cosign /usr/local/bin/cosign
-          curl -fsSLo sops https://github.com/getsops/sops/releases/download/v3.13.3/sops-v3.13.3.linux.amd64
+          curl --retry 5 --retry-all-errors -fsSLo sops https://github.com/getsops/sops/releases/download/v3.13.3/sops-v3.13.3.linux.amd64
           echo "e5bec3346a873ae91d871550f3e698c1aad962aff462a080e40f25fde17fef6b  sops" | sha256sum -c -
           sudo install -m 0755 sops /usr/local/bin/sops
-          curl -fsSLo age.tar.gz https://github.com/FiloSottile/age/releases/download/v1.3.2/age-v1.3.2-linux-amd64.tar.gz
+          curl --retry 5 --retry-all-errors -fsSLo age.tar.gz https://github.com/FiloSottile/age/releases/download/v1.3.2/age-v1.3.2-linux-amd64.tar.gz
           echo "cbe24006683f8eb669266162894b9a522a1af52f2665fbc63a4bb032ed26ac10  age.tar.gz" | sha256sum -c -
           tar -xzf age.tar.gz
           sudo install -m 0755 age/age age/age-keygen /usr/local/bin/
-          curl -fsSLo gitleaks.tar.gz https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz
+          curl --retry 5 --retry-all-errors -fsSLo gitleaks.tar.gz https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz
           echo "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb  gitleaks.tar.gz" | sha256sum -c -
           tar -xzf gitleaks.tar.gz gitleaks
           sudo install -m 0755 gitleaks /usr/local/bin/gitleaks
@@ -1373,6 +1376,7 @@ jobs:
   changes:
     name: Docker inputs changed
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     if: github.event_name == 'pull_request'
     outputs:
       docker: ${{ steps.filter.outputs.docker }}
@@ -1448,6 +1452,7 @@ jobs:
     name: Docker Image Builds
     runs-on: ubuntu-latest
     needs: [lint, changes]
+    timeout-minutes: 45
     # `changes` is skipped on push / workflow_dispatch, and a job that needs a
     # skipped job is skipped itself unless it opts out with always(). So the
     # condition is explicit: the !cancelled() + lint check keep a failed lint
@@ -1510,14 +1515,17 @@ jobs:
     name: Integration Tests
     runs-on: ubuntu-latest
     needs: lint
+    timeout-minutes: 30
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Install BATS and test dependencies
         run: |
           sudo apt-get install -y gettext-base
-          sudo npm install -g bats
+          sudo npm install -g bats@1.13.0
 
       - name: Set up .env
         run: |
@@ -1569,13 +1577,6 @@ jobs:
           echo "Waiting for PostgreSQL..."
           timeout 120 bash -c 'until docker compose exec -T postgres pg_isready -U "${POSTGRES_USER:-postgres}" >/dev/null 2>&1; do sleep 3; printf "."; done'
           echo " ready"
-
-      # Applies the whole kernel chain to a THROWAWAY Postgres and asserts
-      # tables, a column, a CHECK definition and the public-reader grants in the
-      # database. Independent of the compose stack started above - it starts and
-      # removes its own container on port 15433.
-      - name: Fresh init of the kernel migration chain
-        run: make fresh-init-proof
 
       - name: Start Keycloak
         run: docker compose up -d keycloak
