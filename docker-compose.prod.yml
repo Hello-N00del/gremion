@@ -226,6 +226,22 @@ services:
       - "traefik.http.routers.livekit.priority=100"
       - "traefik.http.routers.livekit.middlewares=edge-hostpin-apex@docker,edge-hsts-platform@docker,edge-ratelimit-app@docker,livekit-sfu-strip@docker"
       - "traefik.http.services.livekit.loadbalancer.server.port=7880"
+      # The video relay: TURN over TLS on 443, for a network that blocks UDP and every other
+      # port. ONE TCP router on websecure, matched by SNI on turn.<customer host>, TLS terminated
+      # here with the same resolver as the HTTP routers (never passthrough) and the plain stream
+      # handed to LiveKit's TURN port. docker/livekit/livekit.yaml.tmpl turns TURN on for the
+      # same host, from the same PILOT_TENANT_HOST. With no customer host there must be NO
+      # router (it would be refused by gremion-verify and would order a certificate for a name
+      # nobody serves), and compose cannot omit a label: so the key itself is conditional. Set,
+      # the key starts with `traefik.` and Traefik reads it; unset or empty, the key is
+      # `tcp.routers...`, which Traefik's docker provider ignores. Install prerequisite: a DNS
+      # record turn.<customer host> to this host's edge address (docs/ops/pilot-services.md).
+      - "${PILOT_TENANT_HOST:+traefik.}tcp.routers.livekit-turn.rule=HostSNI(`turn.${PILOT_TENANT_HOST:-relay.invalid}`)"
+      - "${PILOT_TENANT_HOST:+traefik.}tcp.routers.livekit-turn.entrypoints=websecure"
+      - "${PILOT_TENANT_HOST:+traefik.}tcp.routers.livekit-turn.tls=true"
+      - "${PILOT_TENANT_HOST:+traefik.}tcp.routers.livekit-turn.tls.certresolver=${TRAEFIK_CERT_RESOLVER-le-http}"
+      - "${PILOT_TENANT_HOST:+traefik.}tcp.routers.livekit-turn.service=livekit-turn"
+      - "${PILOT_TENANT_HOST:+traefik.}tcp.services.livekit-turn.loadbalancer.server.port=5349"
 
   # Collabora is routed per TENANT host: @gremion/edge-routers emits a /office router
   # into each tenant's own file that targets collabora@docker, THIS service. The

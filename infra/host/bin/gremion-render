@@ -36,9 +36,10 @@ OUTPUTS=0
 # The ONLY variables a release template may name. A template referencing
 # anything else is a mistake we refuse to guess at. A key is REQUIRED only when a
 # template actually names it, so an entry costs nothing until one does. The pilot's
-# one template today is docker/element-call/config.json.tmpl (PLATFORM_DOMAIN and
-# PILOT_TENANT_HOST); the LiveKit keys reach LiveKit through its environment, not a
-# template.
+# templates are docker/element-call/config.json.tmpl (PLATFORM_DOMAIN and
+# PILOT_TENANT_HOST) and docker/livekit/livekit.yaml.tmpl (the three LIVEKIT_TURN_* /
+# LIVEKIT_RTC_PORT_END values derived from PILOT_TENANT_HOST by derive_livekit_relay);
+# the LiveKit keys reach LiveKit through its environment, not a template.
 RENDER_ALLOWED_VARS=(
     STACK PLATFORM_DOMAIN ACME_EMAIL TRAEFIK_CERT_RESOLVER
     EDGE_BIND_IP EDGE_BIND_IP6 EDGE_HTTP_PORT EDGE_HTTPS_PORT
@@ -48,6 +49,7 @@ RENDER_ALLOWED_VARS=(
     LIVEKIT_API_KEY LIVEKIT_API_SECRET LIVEKIT_TURN_SECRET
     ELEMENT_CALL_LIVEKIT_URL
     PILOT_TENANT_HOST
+    LIVEKIT_TURN_ENABLED LIVEKIT_TURN_DOMAIN LIVEKIT_RTC_PORT_END
 )
 
 # The gid the PgBouncer image runs as (edoburu/pgbouncer: postgres, 70).
@@ -268,6 +270,31 @@ render_template() {
     if grep -q '\${' "$out"; then
         die "unsubstituted \${...} left in ${out}"
     fi
+}
+
+# The video relay (TURN over TLS on 443) is configured from PILOT_TENANT_HOST, the
+# one value state.env hands both this program (load_env, above) and `docker compose
+# --env-file state.env` (the Traefik labels of docker-compose.prod.yml read it
+# there). With a customer host the relay answers turn.<host>; without one it is OFF
+# and LiveKit keeps its whole UDP block for media, exactly as before the relay. The
+# placeholder domain is a reserved .invalid name, there only because the key must
+# hold a value: it is never served and no certificate is ever ordered for it.
+# The value ends up in a Traefik rule, so only a lower-case host name is accepted.
+derive_livekit_relay() {
+    local host="${PILOT_TENANT_HOST:-}"
+    local re='^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$'
+    if [[ -z "$host" ]]; then
+        LIVEKIT_TURN_ENABLED=false
+        LIVEKIT_TURN_DOMAIN="turn.relay.invalid"
+        LIVEKIT_RTC_PORT_END=45100
+        return 0
+    fi
+    if [[ ! "$host" =~ $re ]]; then
+        die "PILOT_TENANT_HOST is not a lower-case host name (value not shown): it names the video relay's public host" 2
+    fi
+    LIVEKIT_TURN_ENABLED=true
+    LIVEKIT_TURN_DOMAIN="turn.${host}"
+    LIVEKIT_RTC_PORT_END=45050
 }
 
 render_release_templates() {
@@ -508,6 +535,7 @@ main() {
     render_pgbouncer_userlist
     render_keycloak_certs
     ensure_ipcrypt_key
+    derive_livekit_relay
     render_release_templates
     render_legal_env
     if [[ "$STAGING" -eq 1 ]]; then
