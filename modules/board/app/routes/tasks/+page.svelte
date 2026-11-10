@@ -65,6 +65,34 @@
     goto(`/tasks?board=${id}`, { invalidateAll: true })
   }
 
+  let creatingFor = $state<string | null>(null)
+  let createError = $state<string | null>(null)
+
+  // Create the unit's board, then open it. 409 = a board appeared meanwhile
+  // (another tab / member): open that one instead of reporting a failure.
+  async function createBoard(orgUnitId: string) {
+    creatingFor = orgUnitId
+    createError = null
+    try {
+      const res = await fetch('/api/board', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ orgUnitId }),
+      })
+      const body = await res.json().catch(() => null)
+      const id = body?.data?.id
+      if ((res.status === 201 || res.status === 409) && typeof id === 'string') {
+        await goto(`/tasks?board=${id}`, { invalidateAll: true })
+        return
+      }
+      createError = res.status === 403 ? 'Dafür fehlt dir die Berechtigung.' : 'Das Board konnte nicht angelegt werden. Bitte versuche es noch einmal.'
+    } catch {
+      createError = 'Das Board konnte nicht angelegt werden. Bitte prüfe die Verbindung und versuche es noch einmal.'
+    } finally {
+      creatingFor = null
+    }
+  }
+
   async function onPromoted() {
     showPromote = false
     await invalidateAll()
@@ -97,6 +125,18 @@
     <div class="glyph"><Icon name="checklist" size={22} /></div>
     <div class="ttl">Noch keine Aufgabenboards</div>
     <div class="sub">Für deine Gremien wurde noch kein Board angelegt.</div>
+    {#if data.creatable.length > 0}
+      <div class="create-row">
+        {#each data.creatable as u (u.id)}
+          <button class="btn btn-primary" disabled={creatingFor !== null} onclick={() => createBoard(u.id)}>
+            Board für {u.name} anlegen
+          </button>
+        {/each}
+      </div>
+    {:else}
+      <div class="sub">Tritt zuerst einem Gremium bei, dann kannst du dessen Board anlegen.</div>
+    {/if}
+    {#if createError}<div class="create-error" role="alert">{createError}</div>{/if}
   </div>
 {:else}
   <nav class="board-bar" aria-label="Board auswählen">
@@ -112,6 +152,11 @@
       </button>
     {/each}
     <span class="deck-grow"></span>
+    {#each data.creatable as u (u.id)}
+      <button class="btn btn-sm" disabled={creatingFor !== null} onclick={() => createBoard(u.id)}>
+        <Icon name="plus" size={13} /> Board für {u.name} anlegen
+      </button>
+    {/each}
     {#if data.archivedCount > 0}
       <span class="board-archived" title="Archivierte Boards"><Icon name="archive" size={13} /> {data.archivedCount} archiviert</span>
     {/if}
@@ -197,5 +242,17 @@
   }
   .overdue {
     color: var(--rust);
+  }
+  .create-row {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 8px;
+    margin-top: 14px;
+  }
+  .create-error {
+    color: var(--rust);
+    font-size: 13px;
+    margin-top: 10px;
   }
 </style>
