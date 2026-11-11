@@ -157,7 +157,33 @@ and the member import.
    every customer; under `MAIL_TRANSPORT=relay` it also wires the customer's
    mail login (step 6c below);
 7. recreates `gremion-ui` and reads the bot token back from the running
-   container.
+   container;
+8. the creation order (below): marks the customer wired and retries the unit
+   resources that failed before the wiring.
+
+### Step 8: the creation order (create, wire, seed)
+
+The order is create, then `wire`, then the vertical seed. Nothing forbids the
+other order, and a vertical seeded before `wire` leaves every unit's chat room
+failed, because the app had no bot token yet; the app's own retry backs off for
+up to an hour and gives up after a day. So `wire` ends with two things, both
+after `gremion-ui` is recreated with the token:
+
+- it merges `servicesWiredAt` into the customer's registry row
+  (`domain_profile`; the keys it holds stay). The control panel reads it: the
+  customer page warns before a vertical is seeded for a customer that is not
+  wired yet, names the order, and still queues the seed;
+- it puts every `failed` row of the customer's provisioning ledger back to
+  `pending` and due now (attempts and the give-up clock cleared), waits for the
+  app's worker (a tick a minute; `GREMION_SERVICES_RETRY_WAIT_S`, default 150 s)
+  and reports how many org units it repaired. Rows that fail again, or that
+  the worker has not reached in time, are reported as warnings and do not fail
+  the wire: the wiring is done, and the committee page's "Erneut provisionieren"
+  retries a single unit.
+
+With nothing failed the step says so and changes nothing. A customer wired
+before this step existed shows the panel's warning until `wire` has run once
+more (it is idempotent).
 
 `wire` takes the host lock (`runtime/hostd.lock`, non-blocking: another host
 operation holding it is `busy`, exit 3), and when run under `sudo` it hands each

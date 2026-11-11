@@ -51,7 +51,12 @@ set -euo pipefail
 #      From, login, password ref: values from mail.env), marks the tenant's config.json
 #      smtp.configured with host, port and from_address, and reads all three back. The
 #      password is never read into a variable, an argv or the output;
-#   7. recreates gremion-ui (active colour) and reads its environment back.
+#   7. recreates gremion-ui (active colour) and reads its environment back;
+#   8. (the creation order) marks the customer's registry row wired (domain_profile.servicesWiredAt, which the
+#      control panel reads to warn when a vertical is seeded first), puts every FAILED row of the customer's
+#      provisioning ledger back to pending and due now (a vertical seeded before the wire left every unit's chat
+#      room failed), waits for the app's own worker to retry them (up to GREMION_SERVICES_RETRY_WAIT_S, default
+#      150 s) and reports how many org units it repaired. Rows that fail again are reported, not an error.
 #
 # It takes the host lock (runtime/hostd.lock, non-blocking, exit 3 when busy) like
 # the other mutating verbs, and under sudo hands every file it rewrites back to the
@@ -335,6 +340,107 @@ NODEJS
 }
 
 # ---------------------------------------------------------------------------
+# step 8: the creation order (the wired marker, the retry of failed unit resources)
+# ---------------------------------------------------------------------------
+# The vertical may be seeded before the services are wired (create, WIRE, seed is the order, but nothing
+# enforces it): every unit's chat room then fails, because the app had no bot token, and stays failed: the
+# app's own retry backs off up to an hour and gives up after a day. Once matrix is ready and gremion-ui
+# carries the token, this step (1) marks the customer as wired in its registry row, which the control panel
+# reads to warn about the wrong order, and (2) puts every failed row of the customer's provisioning ledger
+# back to pending and due now, then waits for the app's own worker (a tick a minute) to retry them, and
+# reports how many it repaired. Nothing is created here: the retry is the worker's, as the button's is.
+
+RETRY_WAIT_S="${GREMION_SERVICES_RETRY_WAIT_S:-150}"
+RETRY_POLL_S="${GREMION_SERVICES_RETRY_POLL_S:-5}"
+PROV_PG_USER=""
+PROV_PG_CONTROL=""
+
+# creation_order_facts -- the state project's postgres user and the control database, and the wait, checked
+# before anything is written.
+creation_order_facts() {
+    PROV_PG_USER="$(env_key "$STATE_ENV" POSTGRES_USER)"
+    PROV_PG_CONTROL="$(env_key "$STATE_ENV" CONTROL_DB_NAME)"; PROV_PG_CONTROL="${PROV_PG_CONTROL:-control}"
+    [[ "$PROV_PG_USER" =~ ^[A-Za-z0-9_]+$ ]] || die "POSTGRES_USER in ${STATE_ENV} is not a plain role name" "$GREMION_EXIT_USAGE"
+    [[ "$PROV_PG_CONTROL" =~ ^[A-Za-z0-9_]+$ ]] || die "CONTROL_DB_NAME in ${STATE_ENV} is not a plain database name" "$GREMION_EXIT_USAGE"
+    [[ "$RETRY_WAIT_S" =~ ^[0-9]+$ ]] || die "GREMION_SERVICES_RETRY_WAIT_S '${RETRY_WAIT_S}' is not a number of seconds" "$GREMION_EXIT_USAGE"
+    [[ "$RETRY_POLL_S" =~ ^[1-9][0-9]*$ ]] || die "GREMION_SERVICES_RETRY_POLL_S '${RETRY_POLL_S}' is not a positive number of seconds" "$GREMION_EXIT_USAGE"
+}
+
+# prov_psql <database> <sql> [-v name=value ...] -- a database of the state project as its postgres user. The SQL
+# is on stdin and every value a psql variable, never interpolated; tuples only.
+prov_psql() {
+    local db="$1" sql="$2" c
+    shift 2
+    c="$(container_of "${STACK}-state" postgres)"
+    printf '%s\n' "$sql" | docker exec -i "$c" psql -X -U "$PROV_PG_USER" -d "$db" -tAq -v ON_ERROR_STOP=1 "$@" -f -
+}
+
+# plural <n> <singular> <plural> -- "1 resource", "2 resources"
+plural() { if [[ "$1" == 1 ]]; then printf '%s %s' "$1" "$2"; else printf '%s %s' "$1" "$3"; fi; }
+
+# creation_order_finish <slug> -- step 8 (after the recreate of gremion-ui). Idempotent.
+creation_order_finish() {
+    local slug="$1" kdb n out ids units total waited=0
+    local ok_n=0 pend_n=0 fail_n=0 units_ok=0
+    kdb="$(prov_psql "$PROV_PG_CONTROL" "SELECT 't_' || replace(id::text, '-', '') || '__kernel' FROM tenant WHERE slug = :'slug';" -v slug="$slug")" \
+        || die "the control database (${PROV_PG_CONTROL}) could not be read for the customer's kernel database" "$GREMION_EXIT_ASSERT"
+    kdb="${kdb//[[:space:]]/}"
+    if [[ -z "$kdb" ]]; then
+        printf 'WARNING: there is no registry row for %s in the control database %s: the customer is not marked wired and its failed unit resources are not retried\n' "$slug" "$PROV_PG_CONTROL" >&2
+        return 0
+    fi
+    [[ "$kdb" =~ ^t_[0-9a-f]{32}__kernel$ ]] || die "the customer's kernel database name is not the expected t_<id>__kernel" "$GREMION_EXIT_ASSERT"
+
+    # (1) the marker: merged into domain_profile (the keys it holds, smtp and residencyZone first, stay)
+    n="$(prov_psql "$PROV_PG_CONTROL" "WITH u AS (UPDATE tenant SET domain_profile = domain_profile || jsonb_build_object('servicesWiredAt', now()), updated_at = now() WHERE slug = :'slug' RETURNING 1) SELECT count(*) FROM u;" -v slug="$slug")" \
+        || die "the registry row of ${slug} could not be marked wired (control database ${PROV_PG_CONTROL})" "$GREMION_EXIT_ASSERT"
+    [[ "${n//[[:space:]]/}" == 1 ]] || die "the registry row of ${slug} was not marked wired (rows updated: ${n//[[:space:]]/})" "$GREMION_EXIT_ASSERT"
+    ok "registry: ${slug} is marked wired (domain_profile.servicesWiredAt)"
+
+    # (2) every failed ledger row back to pending and due now, its backoff and give-up clock cleared
+    out="$(prov_psql "$kdb" "WITH r AS (UPDATE provisioning_resources SET status = 'pending', attempts = 0, next_attempt_at = NULL, first_failed_at = NULL, updated_at = now() WHERE status = 'failed' RETURNING id, org_unit_id) SELECT coalesce(string_agg(id::text, ','), '') || '|' || count(DISTINCT org_unit_id) FROM r;")" \
+        || die "the failed provisioning rows of ${slug} could not be reset (database ${kdb})" "$GREMION_EXIT_ASSERT"
+    out="${out//[[:space:]]/}"
+    ids="${out%%|*}"
+    units="${out##*|}"
+    if [[ -z "$ids" ]]; then
+        info "provisioning retry: no failed unit resource to retry"
+        return 0
+    fi
+    [[ "$ids" =~ ^[0-9a-f,-]+$ && "$units" =~ ^[0-9]+$ ]] || die "the retry reset answered something else than ids and a unit count" "$GREMION_EXIT_ASSERT"
+    total="$(tr ',' '\n' <<< "$ids" | grep -c .)"
+    info "provisioning retry: $(plural "$total" resource resources) of $(plural "$units" 'org unit' 'org units') back to due; waiting for the app's worker (up to ${RETRY_WAIT_S} s)"
+
+    # the worker ticks once a minute; read the ledger until none of the reset rows is pending any more
+    while :; do
+        out="$(prov_psql "$kdb" "SELECT count(*) FILTER (WHERE status = 'ok') || '|' || count(*) FILTER (WHERE status = 'pending') || '|' || count(*) FILTER (WHERE status = 'failed') || '|' || count(DISTINCT org_unit_id) FILTER (WHERE NOT EXISTS (SELECT 1 FROM provisioning_resources x WHERE x.org_unit_id = r.org_unit_id AND x.status <> 'ok')) FROM provisioning_resources r WHERE r.id = ANY(string_to_array(:'ids', ',')::uuid[]);" -v ids="$ids")" \
+            || die "the provisioning ledger of ${slug} could not be read back (database ${kdb})" "$GREMION_EXIT_ASSERT"
+        out="${out//[[:space:]]/}"
+        IFS='|' read -r ok_n pend_n fail_n units_ok <<< "$out"
+        [[ "$ok_n" =~ ^[0-9]+$ && "$pend_n" =~ ^[0-9]+$ && "$fail_n" =~ ^[0-9]+$ && "$units_ok" =~ ^[0-9]+$ ]] \
+            || die "the ledger read-back answered something else than four counts: '${out}'" "$GREMION_EXIT_ASSERT"
+        (( pend_n > 0 && waited < RETRY_WAIT_S )) || break
+        sleep "$RETRY_POLL_S"
+        waited=$((waited + RETRY_POLL_S))
+    done
+
+    local line="provisioning retry: ${units_ok} of ${units} org units repaired (${ok_n} of ${total} resources ok)"
+    if (( ok_n == total )); then
+        ok "$line"
+        return 0
+    fi
+    info "$line"
+    if (( fail_n > 0 )); then
+        printf 'WARNING: %s still failing: the cause is in each row'"'"'s last_error of provisioning_resources (database %s); the app retries with a growing delay, and the committee page offers "Erneut provisionieren" per unit\n' \
+            "$(plural "$fail_n" 'resource is' 'resources are')" "$kdb" >&2
+    fi
+    if (( pend_n > 0 )); then
+        printf 'WARNING: %s still pending after %s s: they stay due and the app'"'"'s worker takes them at its next tick\n' \
+            "$(plural "$pend_n" 'resource is' 'resources are')" "$waited" >&2
+    fi
+}
+
+# ---------------------------------------------------------------------------
 # wire
 # ---------------------------------------------------------------------------
 
@@ -382,6 +488,7 @@ cmd_wire() {
     nc_c="$(container_of "${STACK}-state" nextcloud)"
     # the mail login's preconditions (relay transport only) belong to the facts: nothing is written before they hold
     mail_login_facts
+    creation_order_facts
 
     # -- 1. the realm answers publicly with the expected issuer --
     local doc
@@ -566,6 +673,9 @@ cmd_wire() {
     [[ "$(docker exec "$ui_c" printenv SYNAPSE_ADMIN_TOKEN 2>/dev/null | tr -d '[:space:]')" == "$token" ]] \
         || die "gremion-ui's SYNAPSE_ADMIN_TOKEN is not the recorded bot token after the recreate (docker exec ${ui_c} printenv)" "$GREMION_EXIT_ASSERT"
     ok "gremion-ui recreated and carries the bot token"
+
+    # -- 8. the creation order: marked wired, failed unit resources retried --
+    creation_order_finish "$slug"
 
     printf 'WIRE: ok %s\n' "$slug"
 }
