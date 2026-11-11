@@ -11,6 +11,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 const h = vi.hoisted(() => ({ getCouncilDb: vi.fn() }))
 vi.mock('./council-db', () => ({ getCouncilDb: h.getCouncilDb }))
 
+import { HELD_BACK_CATALOGUE_IDS, SWITCHABLE_CATALOGUE_IDS } from '$lib/modules/catalogue-map'
+import type { GremionConfig } from '$lib/server/config'
+import { disabledModuleForPath } from '$lib/server/module-gate'
 import type { TenantContext } from '$lib/server/tenant/context'
 import type { SwitchRow, SwitchState } from './store'
 import { _clearModuleSwitchListenersForTests, registerModuleSwitchListener, type ModuleSwitchEvent } from './listeners'
@@ -524,10 +527,15 @@ describe('platform calls and the first pass', () => {
     const out = await runModuleSwitchPass(tenant, deps)
     expect(out).toEqual({ applied: 0, failed: 0, adopted: 0 })
     expect(r.calls).toEqual({ requests: 0, state: 0 })
+    // the platform state of the platform-followed modules (the board) is re-read once a minute, nothing else
+    r.store.clock += 50_000
+    await runModuleSwitchPass(tenant, deps)
+    expect(r.calls).toEqual({ requests: 0, state: 1 })
+    r.calls = { requests: 0, state: 0 }
     // the next adopting read is due after the sweep interval
     r.store.clock += 5 * 60_000
     await runModuleSwitchPass(tenant, deps)
-    expect(r.calls).toEqual({ requests: 1, state: 0 })
+    expect(r.calls).toEqual({ requests: 1, state: 1 })
   })
 
   it('a lost terminal outcome write (updateSwitch returns false) is logged, not dropped silently', async () => {
@@ -788,5 +796,153 @@ describe('pre-apply hooks (Karenz phase 2, Task 8)', () => {
     r.platform.requests = [req(R1, { state: 'refused', outcome: 'NO_DPIA_DECISION: none' })]
     await runModuleSwitchPass(tenant, r.deps())
     expect(hook).not.toHaveBeenCalled()
+  })
+})
+
+// B3 (board wave 2026-11-11): the board is served in-process, so a platform-level disable_module of it has
+// no database to block; the only thing that can hide it for the customer is config.modules.board. Councils
+// still may not switch it (it is held back from SWITCHABLE_CATALOGUE_IDS), so the platform enablement is
+// followed by the reconciler on its own, in both directions, without any council request.
+describe('the board follows the platform enablement', () => {
+  const boardState = (state: 'enabled' | 'disabled') => CATALOGUE.map((k) => (k === 'board' ? st(k, state, true) : st(k)))
+  const gateConfig = () => ({ modules: { ...r.config.modules } }) as GremionConfig
+
+  it('a platform disable of board is aligned to config.modules.board=false in the first pass, without a migration, and /tasks and /api/board then answer as disabled', async () => {
+    r.platform.state = boardState('disabled')
+    r.config.modules = { board: true }
+    expect(disabledModuleForPath('/tasks', gateConfig())).toBeNull()
+    await runModuleSwitchPass(tenant, r.deps())
+    expect(r.writes).toEqual([{ board: false }])
+    expect(r.migrated).toEqual([])
+    expect(disabledModuleForPath('/tasks', gateConfig())).toBe('board')
+    expect(disabledModuleForPath('/tasks/42', gateConfig())).toBe('board')
+    expect(disabledModuleForPath('/api/board/cards', gateConfig())).toBe('board')
+  })
+
+  it('a board with no platform row stays as configured (unmanaged, like every other module without a row)', async () => {
+    r.platform.state = CATALOGUE.map((k) => st(k))
+    r.config.modules = { board: true }
+    await runModuleSwitchPass(tenant, r.deps())
+    expect(r.writes).toEqual([])
+  })
+
+  it('a disable that reaches the platform while the process runs hides the board within a minute, and the enable brings it back after the pre-apply work and the migration catch-up', async () => {
+    const order: string[] = []
+    registerPreApplyHook(async (e) => {
+      order.push(`hook:${e.moduleId}:${e.action}:writes=${r.writes.length}`)
+    })
+    r.platform.state = boardState('enabled')
+    r.config.modules = { board: true }
+    const deps = r.deps()
+    await runModuleSwitchPass(tenant, deps) // boot: aligned, nothing to change
+    expect(r.writes).toEqual([])
+
+    r.platform.state = boardState('disabled')
+    r.store.clock += 10_000
+    await runModuleSwitchPass(tenant, deps)
+    expect(r.writes).toEqual([]) // inside the interval: no platform read yet
+    r.store.clock += 60_000
+    await runModuleSwitchPass(tenant, deps)
+    expect(r.writes).toEqual([{ board: false }])
+    expect(r.config.modules.board).toBe(false)
+    expect(r.migrated).toEqual([]) // an off needs no catch-up and no hook
+
+    // not written again while nothing changes
+    r.store.clock += 60_000
+    await runModuleSwitchPass(tenant, deps)
+    expect(r.writes).toEqual([{ board: false }])
+
+    r.platform.state = boardState('enabled')
+    r.store.clock += 60_000
+    await runModuleSwitchPass(tenant, deps)
+    expect(r.writes).toEqual([{ board: false }, { board: true }])
+    expect(r.config.modules.board).toBe(true)
+    expect(order).toEqual(['hook:board:enable:writes=1'])
+    expect(r.migrated).toEqual(['rat-a'])
+  })
+
+  it("between two platform changes the admin's own setting is left alone (only a change of the platform state is followed)", async () => {
+    r.platform.state = boardState('enabled')
+    r.config.modules = { board: true }
+    const deps = r.deps()
+    await runModuleSwitchPass(tenant, deps)
+    r.config.modules = { board: false } // switched off in the settings, the platform still says enabled
+    r.store.clock += 60_000
+    await runModuleSwitchPass(tenant, deps)
+    r.store.clock += 60_000
+    await runModuleSwitchPass(tenant, deps)
+    expect(r.writes).toEqual([])
+    expect(r.config.modules.board).toBe(false)
+  })
+
+  it('an enable whose pre-apply work fails leaves the board off and is retried on the next interval', async () => {
+    let broken = true
+    registerPreApplyHook(async () => {
+      if (broken) throw new Error('replay down')
+    })
+    r.platform.state = boardState('disabled')
+    r.config.modules = { board: false }
+    const deps = r.deps()
+    await runModuleSwitchPass(tenant, deps)
+    r.platform.state = boardState('enabled')
+    r.store.clock += 60_000
+    await runModuleSwitchPass(tenant, deps)
+    expect(r.writes).toEqual([])
+    expect(r.config.modules.board).toBe(false)
+    broken = false
+    r.store.clock += 60_000
+    await runModuleSwitchPass(tenant, deps)
+    expect(r.writes).toEqual([{ board: true }])
+  })
+
+  it('a failed read of the platform state never stops the pass', async () => {
+    r.platform.state = boardState('enabled')
+    r.config.modules = { board: true }
+    const deps = r.deps()
+    await runModuleSwitchPass(tenant, deps)
+    const council = deps.council!()
+    deps.council = () => ({ ...council, state: async () => Promise.reject(new Error('platform down')) })
+    r.store.clock += 60_000
+    await expect(runModuleSwitchPass(tenant, deps)).resolves.toEqual({ applied: 0, failed: 0, adopted: 0 })
+    expect(vi.mocked(console.error).mock.calls.flat().join(' ')).toContain('platform down')
+  })
+
+  it('a council still cannot switch the board: its request is refused as not switchable, config.modules.board is untouched and the board stays out of the council set', async () => {
+    expect(SWITCHABLE_CATALOGUE_IDS.has('board')).toBe(false)
+    expect(Object.keys(HELD_BACK_CATALOGUE_IDS)).toContain('board')
+    r.platform.state = boardState('enabled')
+    r.config.modules = { board: true }
+    r.store.seed({ requestId: R1, moduleId: 'board', action: 'disable' })
+    r.platform.requests = [req(R1, { kind: 'disable_module', module: 'board' })]
+    const out = await runModuleSwitchPass(tenant, r.deps())
+    expect(out).toEqual({ applied: 0, failed: 1, adopted: 0 })
+    expect(r.store.rows.get(R1)!.state).toBe('refused')
+    expect(r.store.rows.get(R1)!.outcome).toContain('not switchable')
+    expect(r.writes).toEqual([])
+    expect(r.config.modules.board).toBe(true)
+  })
+
+  it('following the platform never touches the data plane: the pass issues nothing on the tenant database, so a disable hides the board rows and deletes none', async () => {
+    const used: string[] = []
+    const guarded = new Proxy(() => {}, {
+      apply: () => {
+        used.push('call')
+        throw new Error('the tenant database was used')
+      },
+      get: (_t, p) => {
+        used.push(String(p))
+        throw new Error('the tenant database was used')
+      },
+    })
+    const t = { id: TENANT_ID, slug: 'rat-a', db: guarded } as unknown as TenantContext
+    r.platform.state = boardState('disabled')
+    r.config.modules = { board: true }
+    const deps = r.deps()
+    await runModuleSwitchPass(t, deps)
+    r.platform.state = boardState('enabled')
+    r.store.clock += 60_000
+    await runModuleSwitchPass(t, deps)
+    expect(r.writes).toEqual([{ board: false }, { board: true }])
+    expect(used).toEqual([])
   })
 })

@@ -10,6 +10,10 @@
 //   kept           boards, stacks, cards (their text is the council's task record;
 //                  free text a user typed into a title is not searched for names)
 //
+// While the board is switched off (Karenz) its rows stay in the tenant's kernel database, so this hook still
+// reaches them: the Art. 17 walk covers a module with a live Karenz row, and the replay on a re-enable
+// calls it again with the id only. Both runs are idempotent updates on the same tables.
+//
 // With BOARD_BACKEND=service the board leaf owns its own database; the kernel holds
 // no connection to it, so this module reports `skipped` rather than claim an
 // erasure it did not perform.
