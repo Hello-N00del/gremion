@@ -712,7 +712,7 @@
       "title": "CI: the check of each change",
       "what": "This workflow is the main check of the code. It starts on a push to the main or develop branch and on a pull request to one of them. A person can also start it by hand. Its jobs lint the files, run the tests, build the images and judge the result.",
       "why": "A change must not break the code. This workflow finds a break before the change joins the main branch. A new push to a pull request stops the old run of that pull request. On a pull request from this repository, a failed lint or verify job also cancels the rest of the run.",
-      "leadsTo": "The job verify-gate waits for lint and for the verify jobs. It gives the one verdict of these jobs. The jobs docker-build, integration-test and e2e-smoke run beside it. The folder scripts/ci-local holds the same kind of merge guards for one computer, for a time when GitHub Actions does not run."
+      "leadsTo": "The job verify-gate waits for lint, for the verify jobs and for the job docker-build. It gives the one verdict of these jobs. The jobs integration-test and e2e-smoke run beside it. The folder scripts/ci-local holds the same kind of merge guards for one computer, for a time when GitHub Actions does not run."
     },
     "area:github-actions/release-images@L0": {
       "title": "Release images: build and push",
@@ -895,7 +895,7 @@
     "lint": "A fast check of files for mistakes. A lint check does not run the program.",
     "guard": "A check that stops a change when the change breaks a rule.",
     "advisory": "A public notice of a security fault in a package.",
-    "verify-gate": "A job of the CI workflow. It waits for lint and for the verify jobs, and then gives one verdict. The other jobs of the workflow run beside it. It does not wait for them.",
+    "verify-gate": "A job of the CI workflow. It waits for lint, for the verify jobs and for the image builds, and then gives one verdict. The other jobs of the workflow run beside it. It does not wait for them.",
     "ci.yml": "The workflow file of the main check of each change.",
     "release-images.yml": "The workflow file that builds and pushes the images of a release.",
     "release-npm.yml": "The workflow file that publishes two packages to npm.",
@@ -1265,7 +1265,7 @@
           "nodeId": "file:apps/control-panel/Dockerfile"
         },
         {
-          "text": "This job waits for lint and for the eleven verify jobs. It joins their records and judges them. It gives the one verdict of the run. It does not wait for docker-build.",
+          "text": "This job waits for lint, for the eleven verify jobs and for docker-build. It joins the records of the verify jobs and judges them. It gives the one verdict of the run. On a pull request it accepts a skipped docker-build or census only when the job changes ran and found no change for it.",
           "nodeId": "job:.github/workflows/ci.yml#verify-gate"
         },
         {
