@@ -72,7 +72,7 @@ const RUN = `${process.pid}_${Math.random().toString(36).slice(2, 8)}`
 const DB_NAME: Record<Who, string> = { A: `board_iso_test_a_${RUN}`, B: `board_iso_test_b_${RUN}` }
 const STACKS = ['Offen', 'In Arbeit', 'Erledigt']
 
-// --- the throwaway server ---------------------------------------------------
+// == the throwaway server
 
 function serverUrl(): URL {
   const explicit = process.env.ISOLATION_TENANT_PG_URL
@@ -101,7 +101,7 @@ function urlFor(db: string): string {
   return url
 }
 
-// --- fixtures, written and read over administrative connections --------------
+// == fixtures, written and read over administrative connections
 
 interface Seed {
   ouId: string
@@ -235,7 +235,7 @@ async function fingerprint(who: Who): Promise<string> {
   return JSON.stringify({ boards, stacks, cards })
 }
 
-// --- driving the real handlers as one customer --------------------------------
+// == driving the real handlers as one customer
 
 const memberOf = (who: Who) => ({
   auth: async () => ({ user: { id: seed[who].userId, roles: ['member'] } }),
@@ -308,7 +308,7 @@ const leaksNothingOf = (reply: Reply, who: Who) => {
   return canariesOf(who).filter((c) => text.includes(c))
 }
 
-// --- setup -------------------------------------------------------------------
+// == setup
 
 const ADMIN_ID = {
   server: 'board-iso-admin-server',
@@ -367,7 +367,7 @@ afterAll(async () => {
   if (first) throw first
 }, 60_000)
 
-// --- the case ----------------------------------------------------------------
+// == the case
 
 describe('board: two customers on real PostgreSQL', () => {
   it('fixture: each customer is its own physical database holding only its own board', async () => {
