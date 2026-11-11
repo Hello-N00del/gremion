@@ -46,14 +46,16 @@ events — are P3-additive (DOMAIN's events table) and are deliberately
    the ports subject grammar. The `govSubject` helper and its NATS topology
    entry are **not** added here — they belong to TASK-079/084; this spec
    only names the subject shape the helper must produce.
-2. **Importers**: neither the governance service (TASK-084, W11) nor the
-   web app's real usage (TASK-032's `gremion-ui/**`) exists yet in this
-   wave. A consumer fixture in `packages/generated-clients` proves both
+2. **Importers**: `services/governance/` so far holds only its migrations
+   (`0001_gov_setup.sql`), not an HTTP surface (TASK-084), and no
+   `gremion-ui/**` code imports the governance client yet. A consumer fixture in `packages/generated-clients` proves both
    import shapes (node-style and browser-style) typecheck against the
    generated client now; TASK-084 and TASK-038 assert the real importers.
-3. **Dart**: a smoke run only (`openapitools/openapi-generator-cli:v7.12.0`
-   via Docker, `-g dart-dio`, into the gitignored `.tmp/dart-gov/`), no
-   package committed. TASK-124 (P3) owns `generated-clients-dart/**`.
+3. **Dart**: the dart-dio client for this spec is committed in
+   `packages/generated-clients-dart/governance-http/` (TASK-124 owns
+   `generated-clients-dart/**`); `packages/generated-clients-dart` checks it
+   against the spec for drift. The first run of this wave was a smoke run
+   into the gitignored `.tmp/dart-gov/`.
 4. **Ids**: section/override/admission ids are bigint, exposed as strings
    matching `^[0-9]+$` to avoid JS precision loss. Meeting/agenda-item/
    invitation/motion/recipient ids are UUIDv7, `format: uuid`.

@@ -23,12 +23,24 @@ nothing reads it at boot or at run time. It:
 - stamps `sslRequired: "all"`;
 - swaps the `__APEX_DOMAIN__` authority for the tenant host across redirect URIs,
   web origins and post-logout attributes;
-- substitutes the `__GREMION_UI_OIDC_CLIENT_SECRET__` /
-  `__GREMION_ADMIN_OIDC_CLIENT_SECRET__` placeholders with per-tenant generated
-  secrets.
+- substitutes the `__GREMION_UI_OIDC_CLIENT_SECRET__`,
+  `__GREMION_ADMIN_OIDC_CLIENT_SECRET__`, `__SYNAPSE_OIDC_CLIENT_SECRET__` and
+  `__NEXTCLOUD_OIDC_CLIENT_SECRET__` placeholders with per-tenant generated
+  secrets (`gremion-mobile` is a public PKCE client and has none);
+- fills the `__SMTP_*__` sentinels from the customer's mail sender, or drops
+  `smtpServer` when there is none.
 
 To change which realm objects a module owns, edit that module's manifest fragment
-(`gremion-ui/src/lib/modules/manifests/*.ts`), not the JSON.
+(`modules/<id>/app/lib/modules/manifests/*.ts`, which
+`gremion-ui/scripts/interim-module-overlay.mjs` copies into
+`gremion-ui/src/lib/modules/manifests/`), not the JSON.
+
+## `realm-export.ops.json` is the operator realm
+
+`realm-export.ops.json` is the realm `platform`, the operator realm of the
+control panel, not a tenant template. It holds the `control-panel` and
+`grafana` clients and no users; the host verb `gremion-tenant init` creates it
+(see `apps/control-panel/README.md`). `buildTenantRealmDoc` does not read it.
 
 ## `realm-export.json` is a generator OUTPUT
 
@@ -42,9 +54,9 @@ To change which realm objects a module owns, edit that module's manifest fragmen
   manifest.
 
 A module that is disabled in the target vertical's `config.json`
-(`modules.<id> = false`) contributes no groups/roles. The governance-only kernel
-enables no feature modules, so its output carries only the `gremion-ui` and
-`gremion-admin` clients.
+(`modules.<id> = false`) contributes no groups/roles. A module fragment adds
+groups and realm roles only; the clients (`gremion-ui`, `gremion-admin`,
+`synapse`, `nextcloud`, `gremion-mobile`) all come from the base realm.
 
 ### Regenerate
 

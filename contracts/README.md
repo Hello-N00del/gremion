@@ -3,15 +3,20 @@
 ## 1. What lives here
 
 Kernel contract documents, the two module event contracts the kernel's own
-subject grammar is derived from, and oasdiff test fixtures:
+subject grammar is derived from, the governance service's own contract
+(`governance/`, see [its README](./governance/README.md)), and oasdiff test
+fixtures:
 
 - `kernel/openapi.governance.json` — OpenAPI 3.1, governance/groups/health surface
 - `kernel/asyncapi.provisioning.json` — AsyncAPI 3.0, provisioning lifecycle event class
 - `calendar/asyncapi.calendar.json` — AsyncAPI 3.0, calendar event lifecycle
 - `content/asyncapi.content.json` — AsyncAPI 3.0, content publish lifecycle
+- `governance/openapi.gov.json`, `governance/asyncapi.gov.json` — the governance
+  service's `/api/v1` surface and its lifecycle event class
 - `fixtures/oasdiff/` — base/breaking/compatible fixtures for the self-test gate
 - `registry.json` — DB-PLT-API-CONTRACT / DB-PLT-EVENT-TYPE registry: every
-  first-party spec, one entry each (see §6)
+  first-party spec, one entry each (see §6); it also lists the two documents
+  of `services/kernel-api/` (`openapi/kernel-core.json`, `asyncapi/idt.json`)
 - `fixtures/compat/{openapi,asyncapi}/` — version-bump-rule fixtures (§6)
 - `schema/module-contracts.schema.json` — a module's provides/requires
   declaration shape (§6, TASK-077's input)
@@ -29,8 +34,9 @@ declares the JetStream stream topology, including the `calendar`, `content`,
 disjoint across domains, and a grammar defined once in the kernel is the only
 way to prove that (`nats-topology.test.ts`) — but it means the kernel names
 those domains. The calendar and content AsyncAPI documents ship here for the
-same reason: they are what the subject grammar is field-matched against. No
-module CODE is in this repo, and the kernel imports none.
+same reason: they are what the subject grammar is field-matched against. The
+module code lives under `modules/` (see `docs/modules.md`); the kernel imports
+none of it.
 
 `newsletter/asyncapi.newsletter.json` is NOT here. The newsletter subject
 helper predates the carve and its contract went with the module; the helper's
@@ -76,11 +82,12 @@ Change a kernel route => **same commit updates the spec**. The enforcement chain
    it lives in `--staged`. Both document lists are DISCOVERED from `contracts/kernel/`,
    not hardcoded, and each refuses to report OK when it finds no document to validate.
    Its scope is `contracts/kernel/` only. `contracts/calendar/` and `contracts/content/`
-   describe module leaves that ship in their own repositories; they are **not**
+   describe the leaves of the calendar and content modules (`modules/calendar`,
+   `modules/content`); they are **not**
    validated by this mode, but they ARE validated — TASK-030 (§6 below) closed
    the gap `../KNOWN_ISSUES.md`'s "Two contract documents are validated by no
    mode" entry describes: `@gremion/generated-clients`'s `registry.ts`/`schema.ts`
-   structurally validate and `$ref`-close all four registered specs, including
+   structurally validate and `$ref`-close every registered spec, including
    calendar and content, on every `pnpm --filter @gremion/generated-clients
    test` and `contracts:check` run. That entry is stale and pending an
    operator edit to `KNOWN_ISSUES.md` (out of this package's ownership).
@@ -98,7 +105,7 @@ Change a kernel route => **same commit updates the spec**. The enforcement chain
 |---|---|---|
 | `--staged` pre-commit | Every `git commit` | `--no-verify` (caveat below) |
 | `--contracts` unit-suite | `pnpm test` | n/a -- runs regardless |
-| CI oasdiff gate | **Not wired** -- the breaking-change gate runs locally via `--staged`; adding it to CI is an open item | n/a |
+| spec-first compat gate (§6) | CI job `verify-unit-packages` runs `unit:generated-clients`, whose real-tree test (T9, `contracts-check.test.ts`) diffs every registered spec against the base branch (the job checks out full history for that) | n/a -- a version bump is the only way through |
 
 - **`--staged`** runs boundary lint on staged `gremion-ui/**` blobs, plus `oasdiff` vs HEAD on any staged `contracts/kernel/openapi.*.json` (`CONTRACTS_ALLOW_BREAKING=1` to permit a detected break). No schema validation happens here.
 - **`--contracts`** (used in the unit suite) runs structural validation (`validateOpenApiDoc` / `validateAsyncApiDoc`) + `$ref` closure + bidirectional route↔spec coverage across every discovered `contracts/kernel/` document.
@@ -109,7 +116,7 @@ the same structural validation, `$ref` closure and route↔spec coverage over th
 docs on every `pnpm test`, so a violation that skipped the hook still fails the branch. (The
 fallback used to be a Windows scheduled task pointing at an absolute path on one maintainer's
 workstation; it was operator-local glue, not kernel surface, and has been removed.) The
-`oasdiff` breaking-change gate in CI is still an operator sign-off item.
+`--staged` oasdiff gate itself runs locally only; CI runs the §6 gate (table above).
 
 ## 5. v1 honesty notes
 
@@ -131,8 +138,8 @@ TASK-030 (PRD-PLAT-002b/008, TRD-403/404/405). `packages/generated-clients/` own
 
 - `registry.json` (this directory) — every first-party spec, one entry each; the check
   fails on an unregistered spec, a missing file, or an empty registry.
-- Structural validation + `$ref` closure (percent-decoded) on all four registered specs,
-  including calendar and content (closes the `../KNOWN_ISSUES.md` gap referenced in §3.2).
+- Structural validation + `$ref` closure (percent-decoded) on every registered spec
+  (eight entries today), including calendar and content (closes the `../KNOWN_ISSUES.md` gap referenced in §3.2).
 - The OpenAPI compat gate (`oasdiff-gate.ts`, ported from `gremion-ui/scripts/contracts-gate.ts`
   `ab45a0e` — PATH `oasdiff`, then the Docker fallback only if the daemon answers, never a
   bare docker exit code as a verdict) plus the version-bump rule: remove/narrow without a
@@ -163,8 +170,8 @@ TASK-030 (PRD-PLAT-002b/008, TRD-403/404/405). `packages/generated-clients/` own
   a module's provides/requires declaration against this registry (D2 adapted; the
   migration-range and nav/realm checks are TASK-021's, per the brief's decision 5).
 
-Run: `pnpm --filter @gremion/generated-clients contracts:check` (Q2 default — `verify`,
-TASK-045, wires this in once it lands). The base ref is the merge-base with `origin/main`, then
+Run: `pnpm --filter @gremion/generated-clients contracts:check` (the same check
+runs inside `unit:generated-clients` of `node scripts/verify/verify.mjs`). The base ref is the merge-base with `origin/main`, then
 `main`; on trunk itself that merge-base is HEAD and the check fails closed, so there pass it
 explicitly: `CONTRACTS_BASE_REF=HEAD~1 pnpm --filter @gremion/generated-clients contracts:check`.
 

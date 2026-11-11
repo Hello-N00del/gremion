@@ -5,8 +5,9 @@ live here and at the root:
 
 - the state project is the root `docker-compose.yml` plus
   `docker-compose.prod.yml`;
-- the app colours are the root `docker-compose.app.yml`, plus the dev-only
-  `docker-compose.app.dev.yml`;
+- the app colours are the root `docker-compose.app.yml` (gremion-ui,
+  gremion-public, control-panel, kernel-api and the profile-gated module
+  services), plus the dev-only `docker-compose.app.dev.yml`;
 - the non-council projects are `compose/observability/` (`${STACK}-ops`,
   TASK-039) and `infra/host/mail/`.
 
@@ -21,9 +22,11 @@ This directory holds:
   README.
 - `compose/control-panel/`: the standalone control panel for a host without
   the pooled stack (TASK-043 G11).
-- `compose/services/<id>.yml` (later units): one app-tier fragment per
-  extracted module service (TASK-084). Each fragment follows the app file's
-  conventions: `traefik.enable=false`, the `<svc>-${COLOUR}` alias on
-  `${STACK}_edge` and `${STACK}_state`, a memory and CPU limit, and external
-  volumes only. `scripts/check-pooled-stack.mjs` must classify each fragment
-  in its placement table before the fragment ships.
+- No `compose/services/` directory exists. The extracted module services
+  (`calendar-service`, `content-service`, `newsletter-service`, each behind
+  its module's compose profile) are services of the root
+  `docker-compose.app.yml`: `traefik.enable=false`, the `<svc>-${COLOUR}`
+  alias on the colour's own `app` network and on `${STACK}_state` (no edge
+  network, no published port), a memory and CPU limit, and external volumes
+  only. `scripts/check-pooled-stack.mjs` must classify every
+  service in its placement table before it ships.

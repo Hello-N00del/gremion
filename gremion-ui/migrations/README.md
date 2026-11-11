@@ -14,7 +14,7 @@ gate are documented in [`../../docs/architecture.md`](../../docs/architecture.md
 
 ## How migrations run
 
-Migrations live in this directory as `NNN_snake_case.sql` files and run in
+Migrations live in this directory as `NNNN_snake_case.sql` files and run in
 **filename (lexical) order**. There are two entry points, both routed through
 the same verified path in
 [`../src/lib/server/db.ts`](../src/lib/server/db.ts):
@@ -112,8 +112,9 @@ non-idempotent DDL and explode on the first duplicate object).
 ### Seeds
 
 Files ending in `_seed.sql` populate dev-only data keyed by dev-realm Keycloak
-UUIDs. When `GREMION_DISABLE_SEEDS=true` (set in `docker-compose.prod.yml`) the
-runner skips them, so production never applies a seed.
+UUIDs. When `GREMION_DISABLE_SEEDS=true` (set in `docker-compose.app.yml` on
+`gremion-ui`, `migrate` and `tenant-create`) the runner skips them, so a
+deployment never applies a seed.
 
 ---
 
@@ -147,12 +148,15 @@ runner skips them, so production never applies a seed.
 
 ```bash
 # from gremion-ui/
-# 1. create migrations/0NN_my_change.sql  (next number, LF, no BEGIN/COMMIT)
+# 1. claim the number (node scripts/migrations/register.mjs claim --chain kernel-data --name my_change,
+#    run from the repository root), then write migrations/NNNN_my_change.sql  (LF, no BEGIN/COMMIT)
 # 2. regenerate the manifest
 node scripts/build-migration-manifest.mjs
 # 3. apply locally to verify
 pnpm migrate
-# 4. commit BOTH the .sql file AND the updated manifest.json
+# 4. from the repository root: node scripts/migrations/register.mjs freeze --chain kernel-data
+#    (locks the file's sha256 in scripts/migrations/applied.lock.json)
+# 5. commit the .sql file, the updated manifest.json, ranges.json and applied.lock.json
 ```
 
 If you commit the `.sql` without regenerating `manifest.json`, boot fails with
@@ -259,7 +263,8 @@ machine-readable as `CROSS_CUTTING_MIGRATIONS` in
 [`../src/lib/modules/migration-ownership.ts`](../src/lib/modules/migration-ownership.ts)
 and is asserted against a module-OFF apply list in
 `../src/lib/modules/migration-ownership.test.ts`. It is a closed list: a new
-migration that touches a module-owned table belongs in that module's repository.
+migration that touches a module-owned table belongs in that module's directory
+under `modules/`.
 
 ### Table ownership: kernel-guaranteed vs module-owned
 
@@ -306,6 +311,9 @@ module's app chain (`modules/content/app/migrations/`). That grant covers
 the whole row, drafts and `author_id` included; the forward migration
 `1201_news_posts_public_reader_columns.sql` in the same chain narrows it to the
 seven columns the portal reads, on published rows only (row-level security).
+`1202_news_posts_publish_origin.sql` (same chain) adds the
+`content_origin_post_id` column the portal-publish callback uses to find a post
+again; it grants the public reader nothing.
 The consequence is the rule: a
 **content-OFF** kernel-only fresh init completes green and serves the
 anonymous portal on exactly `protocols` and `org_units`, and a content-ON
@@ -438,7 +446,10 @@ imposes on a pre-existing database are in
 The reference product chain has **58** data-plane files; 31 of them ship
 here (the 32nd to 37th files here, `0059`, `0060`, `0061`, `0062`, `0063` and `0064`, are kernel-only), so **27 are absent**. Every one of them is module-owned or unshipped — finance
 (`013`–`017`, `019`–`023`, `025`–`032`, `035`, `036`) and content (`044`–`047`)
-ship in their own repositories, and handover (`050`–`052`) ships in no release-1
+belong to their modules, which now carry their own chains under
+`modules/finance/migrations` and `modules/content/migrations` (own databases,
+own numbering, not these numbers) and, for content's kernel-database half,
+`modules/content/app/migrations` (block 1200-1299); handover (`050`–`052`) ships in no release-1
 tree at all: `make lint-unshipped-migrations` fails any tree that carries one.
 
 **No governance-side data-plane migration of the product is absent here any

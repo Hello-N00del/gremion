@@ -11,9 +11,16 @@ the single place those strings could ever appear.
 
 ```
 infra/host/
+  bootstrap.sh           the staged host bootstrap (check, base, user, docker, firewall, ...)
   lib/common.sh          primitives every gremion-* program sources
+  lib/access-log.sh      the vendor/operator access record writer
+  lib/customer-ops.sh, lib/executor/   the host-side executor's library and request handlers
   bin/gremion-*          the host programs
-  templates/env/*.tmpl   one template per compose project
+  templates/env/*.tmpl   one template per compose project (app.env.tmpl serves both colours)
+  templates/{systemd,edge,nftables}/   unit files, edge router and firewall templates
+  ops/                   the host half of the ops stack (see ops/README.md)
+  mail/                  the platform mail server's compose project
+  module-profiles.json   the compose profiles each catalogue module needs on the pilot install
 ```
 
 Installed on a host as:
@@ -28,7 +35,7 @@ Installed on a host as:
 ```
 
 `lib/` is the one directory beyond the spec's list, and it exists for one
-reason: every program locates its library as
+reason: every program locates `common.sh` as
 `"$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../lib/common.sh"`.
 `${BASH_SOURCE[0]}` is the *invoked* path, so a symlinked `bin/` would resolve
 `../lib` to a directory that does not exist. Copy both, never link.

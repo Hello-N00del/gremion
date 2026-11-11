@@ -28,7 +28,7 @@ wrongly. The same holds for the webhook (`webhook=off`, Q12). It exits 2 naming
 on or off (compose interpolates both on every render; a `CHANGE_ME_` host stays
 allowed while e-mail is off), and exits 3 for a port outside 1 to 65535 once
 e-mail is on. It refuses a
-`PROM_RETENTION_TIME` above 30 days [D R29-I6] and an empty or sentinel
+`PROM_RETENTION_TIME` above 27 days (the window that keeps the worst case under the 30-day ceiling [D R29-I6]) and an empty or sentinel
 `OTLP_INGEST_TOKEN` (the OTLP ingest is never open, Q15).
 
 Every metric the collector writes is **absent** rather than zero when it cannot
@@ -42,8 +42,11 @@ on every boot. It waits for the Docker daemon, verifies once, and on failure
 restarts the active colour **exactly once**, verifies again, and reports either
 way to `ALERT_WEBHOOK_URL` (read from `ops.env` when the environment does not
 already carry it — systemd passes only `GREMION_ROOT`). It prints
-`REBOOT-GATE: verify=<pass|fail> restarted=<0|1>` into
+`REBOOT-GATE: verify=<pass|fail|precondition-failure> restarted=<0|1>` into
 `/opt/gremion/logs/reboot-gate.log`.
+
+`precondition-failure` means the verifier could not run (exit 2, for example a
+missing file or an unset key): that is reported but never restarts anything.
 
 `GREMION_IN_REBOOT_GATE` stops it nesting inside itself (exit 2).
 `REBOOT_GATE_SETTLE_SECONDS` (default 30), `REBOOT_GATE_DOCKER_TRIES` (60) and
