@@ -948,7 +948,9 @@ services:
   # (security.capabilities true): coolwsd builds a chroot jail through its
   # coolforkit-caps helper, which needs only the container's default capabilities,
   # and refuses to start when it can get no isolation at all. Setting it to false
-  # asks for landlock alone and runs unisolated on a kernel without it.
+  # asks for landlock alone and runs unisolated on a kernel without it. Do not add
+  # cap_drop or no-new-privileges to this service: the helper's file capabilities
+  # then do not apply, and coolwsd never becomes healthy (it fails closed).
   collabora:
     build:
       context: docker/collabora
