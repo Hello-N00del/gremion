@@ -604,6 +604,52 @@ test('a skip accepted under another spelling is still weighed', () => {
   assert.match(p, /accepts a skipped job/)
 })
 
+// A pull-request skip is legitimate only when the `changes` filter ran and found no input.
+// A cancelled or timed-out `changes` has no outputs, and docker-build and the census then
+// skip exactly as if nothing had changed: the gate must not read that as "no input changed".
+const CHANGES_OK = '[ "$changes_result" = "success" ]'
+const DOCKER_UNCHANGED = '[ "$docker_changed" = "false" ]'
+const CENSUS_UNCHANGED = '[ "$census_changed" = "false" ]'
+const DOCKER_SKIP_LINE = `${DOCKER_SKIP} && ${CHANGES_OK} && ${DOCKER_UNCHANGED}`
+
+test('a gate that does not wait for the changes filter is reported', () => {
+  assert.match(joined(plant('      - changes\n', '')), /verify-gate does not need changes/)
+})
+
+test('a renamed changes job fails closed rather than passing', () => {
+  assert.match(joined(plant('  changes:\n', '  diff-filter:\n')), /there is no `changes` job/)
+})
+
+test('an image-build skip accepted without checking that the changes filter succeeded is reported', () => {
+  const p = joined(plant(DOCKER_SKIP_LINE, `${DOCKER_SKIP} && ${DOCKER_UNCHANGED}`))
+  assert.match(p, /accepts a skipped docker-build without `"\$changes_result" = "success"`/)
+})
+
+test('an image-build skip accepted without checking the docker output is reported', () => {
+  const p = joined(plant(DOCKER_SKIP_LINE, `${DOCKER_SKIP} && ${CHANGES_OK}`))
+  assert.match(p, /accepts a skipped docker-build without `"\$docker_changed" = "false"`/)
+})
+
+test('an image-build skip that checks the census output instead of the docker output is reported', () => {
+  const p = joined(plant(DOCKER_SKIP_LINE, `${DOCKER_SKIP} && ${CHANGES_OK} && ${CENSUS_UNCHANGED}`))
+  assert.match(p, /accepts a skipped docker-build without `"\$docker_changed" = "false"`/)
+})
+
+test('a census skip accepted without checking the census output is reported', () => {
+  const p = joined(plant(`&& ${CHANGES_OK} && ${CENSUS_UNCHANGED}`, `&& ${CHANGES_OK}`))
+  assert.match(p, /accepts a skipped verify-census without `"\$census_changed" = "false"`/)
+})
+
+test('a docker_changed read from the census output is reported', () => {
+  const p = joined(plant("docker_changed=$(jq -r '.changes.outputs.docker", "docker_changed=$(jq -r '.changes.outputs.census"))
+  assert.match(p, /does not set docker_changed from the changes job's docker output/)
+})
+
+test('a changes_result that is not read from the changes job is reported', () => {
+  const p = joined(plant("changes_result=$(jq -r '.changes.result'", "changes_result=$(jq -r '.lint.result'"))
+  assert.match(p, /does not set changes_result from the changes job's result/)
+})
+
 // The runner-policy idiom (scripts/ci-local/yaml-unavailable.test.mjs): a child node whose
 // resolver refuses `yaml`, which is exactly what a missing node_modules/yaml looks like.
 test('with the yaml package unimportable the CLI fails closed, naming the cause', () => {

@@ -335,8 +335,9 @@ test('a failed `changes` job forces the image build instead of skipping it', () 
   assert.match(cond, /needs\.changes\.result == 'failure'/)
   // On a pull request a failed filter must build; lint must still gate.
   assert.match(cond, /needs\.lint\.result == 'success'/)
-  // verify-gate accepts a pull-request skip of this job as "no image input changed",
-  // so every clause that makes the job run is load-bearing for the verdict.
+  // verify-gate accepts a pull-request skip of this job as "no image input changed" when
+  // `changes` succeeded with docker == 'false', so every clause that makes the job run
+  // is load-bearing for the verdict.
   assert.match(cond, /github\.event_name != 'pull_request'/)
   assert.match(cond, /needs\.changes\.outputs\.docker == 'true'/)
   assert.match(cond, /!cancelled\(\)/)

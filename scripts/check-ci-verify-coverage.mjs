@@ -20,7 +20,10 @@
 //   3. A leg whose record the gate does not wait for. Its failure would be
 //      invisible: the gate would combine whatever records had arrived. The image
 //      builds carry no record, so the gate must need docker-build by name, or a
-//      Dockerfile that no longer builds would leave a green gate.
+//      Dockerfile that no longer builds would leave a green gate. It must need the
+//      `changes` filter too, and accept a pull-request skip of docker-build or the
+//      census only when that filter succeeded and reported no matching input: a
+//      cancelled filter has no outputs, and both jobs then skip as if nothing changed.
 //   4. A way past the strict check. `--allow-missing` exists for one case (a pull
 //      request that touched no census input skips that leg) and must never be
 //      reachable from a push; `continue-on-error` turns any red job into a green
@@ -141,6 +144,10 @@ const STRICT_STEP_IF = "github.event_name != 'pull_request' || needs.verify-cens
 // The only jobs the gate may accept as skipped, and only on a pull request: each one is
 // skipped there when the diff touches none of its inputs. A push always runs both.
 const MAY_SKIP_ON_PR = new Set(['verify-census', 'docker-build'])
+// The output of the `changes` job that decides each of those skips. A skip is legitimate only
+// when `changes` itself succeeded and its output for that job is "false": a cancelled or
+// timed-out `changes` has no outputs, and the job then skips exactly as if nothing had changed.
+const SKIP_DECIDED_BY = { 'verify-census': 'census', 'docker-build': 'docker' }
 const normalizeIf = (v) => text(v === undefined || v === null ? '' : String(v)).replace(/^\s*\$\{\{|\}\}\s*$/g, '').replace(/\s+/g, ' ').trim()
 
 /** The logical lines of a `run` script: backslash continuations joined, comments dropped. */
@@ -330,6 +337,12 @@ export function checkWorkflow(doc, { requiredSuites, unitParts, integrationParts
   } else if (gate && !needed.has('docker-build')) {
     problems.push('verify-gate does not need docker-build -- a Dockerfile that no longer builds would leave a green gate')
   }
+  // The gate reads the filter's result and outputs to tell a no-input skip from a fail-open one.
+  if (!doc.jobs.changes) {
+    problems.push('there is no `changes` job -- the gate cannot tell a no-input skip from a cancelled filter (renamed? update this guard with it)')
+  } else if (gate && !needed.has('changes')) {
+    problems.push('verify-gate does not need changes -- a cancelled filter skips docker-build and the census, and the gate would read that as "no input changed"')
+  }
 
   // ── nothing may soften the verdict ──────────────────────────────────────
   for (const [jobId, job] of Object.entries(doc.jobs)) {
@@ -371,11 +384,29 @@ export function checkWorkflow(doc, { requiredSuites, unitParts, integrationParts
     if (!LEGS_STEP_IFS.has(normalizeIf(step.if))) {
       problems.push(`${label} has \`if: ${normalizeIf(step.if) || '(none)'}\`; the step that checks every leg's result must have \`if: always()\`, because anything else is skipped in a cancelled (fail-fast) run or narrows the check, and a gate whose steps skipped finishes green`)
     }
-    // Any line that weighs a skip, however it is spelled. An echo only reports one.
+    // Every non-echo line that names `skipped` (an echo only reports a skip). This catches the
+    // spellings the tests plant; a branch that accepts a result without the word `skipped`, or
+    // that joins conditions with `||`, is not caught here -- see SCOPE above.
     for (const line of logicalLines(step.run).filter((l) => /\bskipped\b/.test(l) && !/^\s*echo\b/.test(l))) {
       const job = /"\$job"\s*==?\s*"([^"]+)"/.exec(line)?.[1]
       if (!job || !MAY_SKIP_ON_PR.has(job) || !/"\$EVENT_NAME"\s*==?\s*"pull_request"/.test(line)) {
         problems.push(`${label}: \`${line.trim()}\` accepts a skipped job; only ${[...MAY_SKIP_ON_PR].join(' and ')} may be skipped, and only when "$EVENT_NAME" is "pull_request"`)
+        continue
+      }
+      const out = SKIP_DECIDED_BY[job]
+      for (const clause of ['"$changes_result" = "success"', `"$${out}_changed" = "false"`]) {
+        const [name, value] = clause.split(' = ')
+        const re = new RegExp(`${name.replace(/[$]/g, '\\$')}\\s*==?\\s*${value}`)
+        if (!re.test(line)) problems.push(`${label}: \`${line.trim()}\` accepts a skipped ${job} without \`${clause}\` -- a cancelled changes filter has no outputs and would read as "no input changed"`)
+      }
+    }
+    const run = String(step.run ?? '')
+    if (!/\bchanges_result=\$\(jq -r '\.changes\.result'/.test(run)) {
+      problems.push(`${label} does not set changes_result from the changes job's result (\`changes_result=$(jq -r '.changes.result' ...)\`)`)
+    }
+    for (const out of Object.values(SKIP_DECIDED_BY)) {
+      if (!new RegExp(`\\b${out}_changed=\\$\\(jq -r '\\.changes\\.outputs\\.${out}\\b`).test(run)) {
+        problems.push(`${label} does not set ${out}_changed from the changes job's ${out} output (\`${out}_changed=$(jq -r '.changes.outputs.${out} // ""' ...)\`)`)
       }
     }
   }

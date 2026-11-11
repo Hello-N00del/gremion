@@ -2228,6 +2228,10 @@ jobs:
       - verify-integration-events-alert
       - verify-census
       - docker-build
+      # Not a leg: the filter whose result and outputs tell a pull request's legitimate
+      # skip of docker-build or the census (nothing changed) from a fail-open one (the
+      # filter was cancelled or timed out, has no outputs, and both skip with it).
+      - changes
     # A skipped, failed or CANCELLED leg must make this job RUN and fail, not be skipped
     # with it: a skipped required check reads as passing in a branch ruleset. always(),
     # not !cancelled(): the fail-fast step cancels the run, and the gate must still run then.
@@ -2255,23 +2259,34 @@ jobs:
           set -euo pipefail
           # Vacuity floor: a gate that iterates an empty `needs` passes anything.
           total=$(jq 'length' <<<"$NEEDS_JSON")
-          if [ "$total" -lt 13 ]; then
-            echo "::error::verify-gate waits for only $total job(s); expected lint, the eleven verify legs and the image builds"
+          if [ "$total" -lt 14 ]; then
+            echo "::error::verify-gate waits for only $total job(s); expected lint, the eleven verify legs, the image builds and the changes filter"
             exit 1
           fi
+          # A skip is legitimate only when the filter RAN and found no matching input. A
+          # cancelled or timed-out filter has no outputs: these read empty, and the skip fails.
+          changes_result=$(jq -r '.changes.result' <<<"$NEEDS_JSON")
+          docker_changed=$(jq -r '.changes.outputs.docker // ""' <<<"$NEEDS_JSON")
+          census_changed=$(jq -r '.changes.outputs.census // ""' <<<"$NEEDS_JSON")
           rows=$(jq -r 'to_entries[] | [.key, .value.result] | @tsv' <<<"$NEEDS_JSON")
           bad=0
           while IFS=$'\t' read -r job result; do
             if [ "$result" = "success" ]; then
               echo "  ok      $job"
-            elif [ "$job" = "verify-census" ] && [ "$result" = "skipped" ] && [ "$EVENT_NAME" = "pull_request" ]; then
-              # Skipped only when the `changes` job found no census input in the
-              # diff (and lint passed). The record check below then allows exactly
-              # this one absence, and only on a pull request.
+            elif [ "$job" = "changes" ]; then
+              # Judged through the two skips below, not on its own: it runs only on a
+              # pull request; when it fails, docker-build and the census RUN (fail safe)
+              # and their own results decide; when it is cancelled, both skip and fail.
+              echo "  info    $job finished $result (it only decides which pull-request skips are allowed)"
+            elif [ "$job" = "verify-census" ] && [ "$result" = "skipped" ] && [ "$EVENT_NAME" = "pull_request" ] && [ "$changes_result" = "success" ] && [ "$census_changed" = "false" ]; then
+              # Skipped because the `changes` job ran and found no census input in the
+              # diff. The record check below then allows exactly this one absence, and
+              # only on a pull request.
               echo "  skipped $job (pull request; no census input changed)"
-            elif [ "$job" = "docker-build" ] && [ "$result" = "skipped" ] && [ "$EVENT_NAME" = "pull_request" ]; then
-              # Skipped when the `changes` job found no image input in the diff, or
-              # when lint failed, which this same loop reports as a failure.
+            elif [ "$job" = "docker-build" ] && [ "$result" = "skipped" ] && [ "$EVENT_NAME" = "pull_request" ] && [ "$changes_result" = "success" ] && [ "$docker_changed" = "false" ]; then
+              # Skipped because the `changes` job ran and found no image input in the diff.
+              # A skip for any other reason (lint failed, filter cancelled) falls through
+              # to the error below.
               echo "  skipped $job (pull request; no image input changed)"
             else
               echo "::error::$job finished $result"
