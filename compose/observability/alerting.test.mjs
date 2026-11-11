@@ -19,8 +19,8 @@ const TIMES = readYaml('compose/observability/grafana/provisioning/alerting/time
 const copy = (o) => JSON.parse(JSON.stringify(o))
 const recs = (doc) => doc.groups.flatMap((g) => g.rules)
 
-test('rules.yml: seventeen gremion:cond:* conditions, each fail-closed (absent()) but the documented ones (third_party, the four TASK-079 dead-letter conditions)', () => {
-  assert.equal(recs(RULES).length, 17)
+test('rules.yml: eighteen gremion:cond:* conditions, each fail-closed (absent()) but the documented ones (third_party, the four TASK-079 dead-letter conditions, outbox_stalled)', () => {
+  assert.equal(recs(RULES).length, 18)
   assert.deepEqual(recordingRuleViolations(RULES), [])
 })
 
@@ -58,7 +58,7 @@ test('Grafana: one rule per condition, threshold > 0 on the prometheus datasourc
   const titles = recs(GRAFANA).map((r) => r.title).sort()
   assert.deepEqual(titles, [
     'BackupFailedOrOverdue', 'BrokerConsumerStalled', 'CertExpiresUnder20d', 'ContainerUnhealthy2m', 'DeadLetterQueueNotEmpty', 'DiskAbove70',
-    'EdgePort80Down', 'InboxDeadLettered', 'InboxStalled', 'MailQueueOldest1h', 'MemoryPressure', 'ModuleKarenzFailedOrOverdue', 'OutboxDeadLettered', 'PostgresConnections80pct',
+    'EdgePort80Down', 'InboxDeadLettered', 'InboxStalled', 'MailQueueOldest1h', 'MemoryPressure', 'ModuleKarenzFailedOrOverdue', 'OutboxDeadLettered', 'OutboxStalled', 'PostgresConnections80pct',
     'SignalAbsent', 'StorageComponentAbove70pct', 'ThirdPartyUnreachable',
   ])
 })
@@ -80,6 +80,59 @@ test('TASK-079: each dead-letter path has its OWN Grafana rule on its OWN condit
     assert.ok(seconds(rule.for) > 0, `${title}: no pending period`)
     assert.ok(readme.includes(`| \`${title}\` |`), `${title}: not in the README rule table`)
   }
+})
+
+// A relay that can never succeed burns no attempt and dead-letters nothing: the oldest-pending age is the only
+// gauge that moves (docs/runbooks/dead-letter.md section 3). The threshold is one number, here read back out of
+// the expression and compared with the README, so the two cannot drift. 900 s is an assumption [A].
+test('outbox stall: the condition is max by (ctx) of gremion_outbox_oldest_pending_seconds over one threshold, one component per ctx, no absent() arm', () => {
+  const rec = recs(RULES).find((r) => r.record === 'gremion:cond:outbox_stalled')
+  assert.ok(rec, 'no gremion:cond:outbox_stalled recording rule')
+  const expr = String(rec.expr)
+  const m = expr.match(/max by \(ctx\) \(gremion_outbox_oldest_pending_seconds\) > bool (\d+)/)
+  assert.ok(m, `the expression does not compare max by (ctx) of the gauge to a number: ${expr}`)
+  assert.equal(Number(m[1]), 900, 'the [A] threshold is 900 s')
+  assert.match(expr, /"component", "\$1", "ctx", "\(\.\*\)"/)
+  assert.match(expr, /vector\(0\), "component", "events-outbox-stalled"/)
+  assert.ok(!/absent\(/.test(expr), 'outbox_stalled must not carry an absent() arm')
+  assert.ok(NO_ABSENT.has('gremion:cond:outbox_stalled'))
+  assert.deepEqual(recordingRuleViolations(RULES), [])
+  // RED: without the exemption the checker names the condition
+  const r = copy(RULES)
+  recs(r).find((x) => x.record === 'gremion:cond:outbox_stalled').record = 'gremion:cond:outbox_stalled_renamed'
+  assert.match(recordingRuleViolations(r).join('\n'), /gremion:cond:outbox_stalled_renamed has no absent\(\) arm/)
+  // RED: with the rule removed, the Grafana rule reads a condition that does not exist
+  const gone = copy(RULES)
+  gone.groups.forEach((g) => { g.rules = g.rules.filter((x) => x.record !== 'gremion:cond:outbox_stalled') })
+  assert.match(grafanaRuleViolations(GRAFANA, gone).join('\n'), /OutboxStalled: query A \(gremion:cond:outbox_stalled\) is not one recording rule/)
+})
+
+test('outbox stall: the Grafana rule OutboxStalled reads the condition, alerts on > 0, waits 10m, points at the dead-letter runbook, and is in the README table with its threshold', () => {
+  const rule = recs(GRAFANA).find((r) => r.title === 'OutboxStalled')
+  assert.ok(rule, 'no Grafana rule OutboxStalled')
+  assert.equal(rule.uid, 'gremion-outbox-stalled')
+  assert.equal(rule.data.find((d) => d.refId === 'A').model.expr, 'gremion:cond:outbox_stalled')
+  const b = rule.data.find((d) => d.refId === 'B').model.conditions[0].evaluator
+  assert.equal(b.type, 'gt')
+  assert.deepEqual(b.params, [0])
+  assert.equal(rule.noDataState, 'Alerting')
+  assert.equal(rule.execErrState, 'Alerting')
+  assert.equal(rule.labels.severity, 'critical')
+  assert.equal(rule.annotations.component, '{{ $labels.component }}')
+  assert.equal(seconds(rule.for), 600)
+  assert.match(rule.annotations.summary, /docs\/runbooks\/dead-letter\.md/)
+  const readme = readText('compose/observability/README.md')
+  assert.ok(readme.includes('| `OutboxStalled` |'), 'not in the README rule table')
+  assert.ok(/900 s \[A\]/.test(readme), 'the README does not state the 900 s [A] threshold')
+  assert.ok(!/no alert rule reads it yet/.test(readme), 'the README still says no rule reads the gauge')
+  // the threshold is copied as minutes into the Grafana summary and the runbook: both are read back against the expression
+  const threshold = Number(String(recs(RULES).find((r) => r.record === 'gremion:cond:outbox_stalled').expr).match(/> bool (\d+)/)[1])
+  const minutes = `${threshold / 60} minutes`
+  assert.ok(rule.annotations.summary.includes(`over ${minutes} old`), `the summary does not state ${minutes}`)
+  assert.ok(readText('docs/runbooks/dead-letter.md').includes(`stays over ${minutes} for ${seconds(rule.for) / 60} minutes`), `the runbook does not state ${minutes} / the for: duration`)
+  // a dead-lettered row holds its aggregate's later rows pending, so both alerts can fire together: the summary must not deny it
+  assert.ok(!/nothing dead-letters/.test(rule.annotations.summary), 'the summary claims nothing dead-letters unconditionally')
+  assert.match(rule.annotations.summary, /OutboxDeadLettered/)
 })
 
 test('module Karenz: the condition reads the failed, stale and overdue gauges and carries an absent(gremion_module_karenz_live) arm (it is NOT a NO_ABSENT exemption)', () => {
@@ -139,7 +192,7 @@ test('a Grafana annotation template is written plainly: alerting provisioning is
     .filter((l) => !l.trimStart().startsWith('#'))
     .join('\n')
   assert.ok(!/\$\$/.test(body), 'a $$ outside a comment')
-  assert.equal((body.match(/\{\{ \$labels\.component \}\}/g) ?? []).length, 17)
+  assert.equal((body.match(/\{\{ \$labels\.component \}\}/g) ?? []).length, 18)
 })
 
 test('TDD 6: the policy groups by [alertname, component], waits 30s, re-groups at 5m, never repeats an open condition (8760h)', () => {

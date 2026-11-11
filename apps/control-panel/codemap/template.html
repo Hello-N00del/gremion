@@ -1,0 +1,291 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Gremion Code Map</title>
+<style>
+/* Layout: a geological column. The six layers stack with the ground (L0) at the bottom; the selected item sits between what uses it and where it leads. */
+:root{
+  --bg:#eef1ee;--panel:#fbfcfa;--line:#c6cec8;--fg:#1c2622;--muted:#55635c;--accent:#0b6b5f;--accent-fg:#ffffff;--hover:#e1e8e3;
+  --L0:#59616b;--job:#0a7487;--L1:#7a4b86;--L2:#23689b;--L3:#2d7d55;--L4:#a0660c;--L5:#b6452f;
+  --sans:system-ui,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;--mono:ui-monospace,"Cascadia Code","SFMono-Regular",Consolas,"Liberation Mono",monospace;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --bg:#141a18;--panel:#1d2522;--line:#37443e;--fg:#e8efea;--muted:#a3b1a9;--accent:#58c9b6;--accent-fg:#0d1a17;--hover:#28332e;
+  --L0:#a4adb8;--job:#5fc7da;--L1:#c79ad3;--L2:#7db8e6;--L3:#79c99d;--L4:#e0aa55;--L5:#ee8d76;color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#141a18;--panel:#1d2522;--line:#37443e;--fg:#e8efea;--muted:#a3b1a9;--accent:#58c9b6;--accent-fg:#0d1a17;--hover:#28332e;
+  --L0:#a4adb8;--job:#5fc7da;--L1:#c79ad3;--L2:#7db8e6;--L3:#79c99d;--L4:#e0aa55;--L5:#ee8d76;color-scheme:dark}
+html,body{height:auto}
+body{background:var(--bg);color:var(--fg);font:16px/1.55 var(--sans);padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:16px}
+*{box-sizing:border-box}
+button,input{font:inherit;color:inherit}
+h1{font-size:1.6rem;margin:0;line-height:1.2}
+h2{font-size:1.25rem;margin:0;line-height:1.3;text-wrap:balance;overflow-wrap:anywhere}
+h3{font-size:.8rem;margin:0 0 8px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+p{margin:0;max-width:68ch}
+.top{display:flex;flex-wrap:wrap;gap:8px 16px;align-items:baseline;margin-bottom:14px}
+.top small{color:var(--muted)}
+.app{display:grid;grid-template-columns:320px minmax(0,1fr);gap:16px;align-items:start}
+@media (max-width:900px){.app{grid-template-columns:minmax(0,1fr)}}
+.side,.main>section{background:var(--panel);border:1px solid var(--line);border-radius:6px}
+.side{padding:12px;display:flex;flex-direction:column;gap:12px;min-width:0}
+.main{display:flex;flex-direction:column;gap:12px;min-width:0}
+.main>section{padding:14px}
+#q,#gq{width:100%;padding:8px 10px;background:var(--bg);border:1px solid var(--line);border-radius:4px}
+:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.results{display:flex;flex-direction:column;max-height:320px;overflow:auto}
+.strata{display:flex;flex-direction:column;gap:3px}
+.stratum{display:grid;grid-template-columns:34px minmax(0,1fr) auto;gap:8px;align-items:center;text-align:left;padding:7px 8px;background:transparent;border:0;border-left:6px solid var(--c);cursor:pointer;border-radius:0 4px 4px 0}
+.stratum:hover,.stratum.on{background:var(--hover)}
+.stratum b{font-family:var(--mono);font-size:.85rem;color:var(--c)}
+.stratum span{min-width:0;overflow-wrap:anywhere}
+.stratum i{font-style:normal;color:var(--muted);font-size:.8rem;font-variant-numeric:tabular-nums}
+.ground{font-size:.75rem;color:var(--muted);text-align:center;border-top:3px double var(--line);padding-top:3px}
+.tabs{display:flex;gap:4px}
+.tabs button{flex:1;padding:6px;background:transparent;border:1px solid var(--line);border-radius:4px;cursor:pointer}
+.tabs button.on{background:var(--accent);color:var(--accent-fg);border-color:var(--accent)}
+.pane{display:flex;flex-direction:column;gap:6px;max-height:440px;overflow:auto}
+.pane dt{font-weight:700}.pane dd{margin:0 0 8px;color:var(--muted)}
+.link{all:unset;cursor:pointer;display:block;padding:5px 7px;border-radius:4px;overflow-wrap:anywhere;box-sizing:border-box}
+.link:hover{background:var(--hover)}
+.link:focus-visible{outline:2px solid var(--accent)}
+.crumb{display:flex;flex-wrap:wrap;gap:2px 6px;font-size:.85rem;color:var(--muted);margin-bottom:6px}
+.crumb button{all:unset;cursor:pointer;text-decoration:underline;overflow-wrap:anywhere}
+.chip{display:inline-block;font-size:.72rem;letter-spacing:.05em;text-transform:uppercase;padding:1px 7px;border:1px solid var(--c,var(--line));color:var(--c,var(--muted));border-radius:3px}
+.head{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px}
+.name{font-family:var(--mono);font-weight:600}
+.txt{display:flex;flex-direction:column;gap:8px}
+.lens{position:relative;display:grid;grid-template-columns:minmax(0,1fr) minmax(120px,200px) minmax(0,1.25fr);gap:44px;align-items:center}
+.lens svg{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;overflow:visible}
+.lens path{fill:none;stroke:var(--line);stroke-width:1.5}
+.col{min-width:0;display:flex;flex-direction:column;gap:3px;position:relative;z-index:1}
+.focus{position:relative;z-index:1;padding:12px;text-align:center;border:2px solid var(--c);border-radius:6px;background:var(--panel);font-family:var(--mono);font-weight:600;overflow-wrap:anywhere;font-size:.9rem}
+.main{container-type:inline-size}
+@container (max-width:760px){.lens{grid-template-columns:minmax(0,1fr);gap:12px}.lens svg{display:none}}
+.row{display:grid;grid-template-columns:24px minmax(0,1fr);align-items:start;gap:2px}
+.tog{all:unset;cursor:pointer;width:24px;height:30px;text-align:center;color:var(--muted);font-family:var(--mono)}
+.tog:hover{color:var(--accent)}.tog:focus-visible{outline:2px solid var(--accent)}
+.item{all:unset;cursor:pointer;padding:4px 7px;border-left:4px solid var(--c);border-radius:0 4px 4px 0;font-family:var(--mono);font-size:.84rem;overflow-wrap:anywhere;box-sizing:border-box;min-width:0}
+.item:hover{background:var(--hover)}.item:focus-visible{outline:2px solid var(--accent)}
+.item small{display:block;font-family:var(--sans);color:var(--muted);font-size:.74rem}
+.sub{grid-column:2;display:flex;flex-direction:column;gap:3px;margin:3px 0 3px 2px;padding-left:8px;border-left:1px dashed var(--line)}
+.note{color:var(--muted);font-size:.85rem}
+.more{all:unset;cursor:pointer;color:var(--accent);font-size:.85rem;padding:4px 7px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:6px}
+.card{all:unset;cursor:pointer;padding:9px 10px;border:1px solid var(--line);border-left:5px solid var(--c);border-radius:0 5px 5px 0;box-sizing:border-box;min-width:0;display:flex;flex-direction:column;gap:3px}
+.card:hover{background:var(--hover)}.card:focus-visible{outline:2px solid var(--accent)}
+.card b{overflow-wrap:anywhere}.card small{color:var(--muted);overflow-wrap:anywhere}
+.flow{width:100%;border-collapse:collapse;font-size:.88rem;font-variant-numeric:tabular-nums}
+.flow th,.flow td{padding:3px 8px;border-bottom:1px solid var(--line);text-align:left}
+.scroll{overflow-x:auto}
+.walk{border-left:5px solid var(--accent)!important}
+.stale{margin:8px 0;padding:8px 10px;border:1px solid var(--L4);border-left:5px solid var(--L4);border-radius:4px;background:var(--bg)}
+section.stale{margin:0}section.stale h3{color:var(--L4)}
+.walkbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px}
+.btn{padding:5px 14px;border:1px solid var(--line);border-radius:4px;background:transparent;cursor:pointer}
+.btn:disabled{opacity:.45;cursor:default}.btn.pri{background:var(--accent);color:var(--accent-fg);border-color:var(--accent)}
+abbr[data-t]{text-decoration:underline dotted var(--muted);cursor:help}
+#def{position:fixed;left:max(16px,env(safe-area-inset-left,0px));right:max(16px,env(safe-area-inset-right,0px));bottom:calc(14px + env(safe-area-inset-bottom,0px));max-width:560px;margin-inline:auto;background:var(--fg);color:var(--bg);padding:10px 14px;border-radius:6px;z-index:20}
+@media (prefers-reduced-motion:no-preference){.main>section{animation:in .12s ease-out}@keyframes in{from{opacity:.55}to{opacity:1}}}
+:root{--bp-bg:#1b1d20;--bp-grid:#26292d;--bp-grid2:#32363b;--bp-node:#24272c;--bp-edge:#0c0d0f;--bp-text:#eceef0;--bp-dim:#a9b0b8;--bp-exec:#f4f5f6;--bp-calls:#59c3ff;--bp-sql:#5fd38a;--bp-http:#c79bff;--bp-event:#ffb454;--bp-renders:#ff8fb1;--bp-needs:#7fe0c4;--bp-runs:#f08fd8;--bp-hot:#ffd34d}
+[hidden]{display:none!important}
+.modes{display:flex;gap:4px;margin-left:auto}.modes button{padding:6px 12px;background:var(--panel);border:1px solid var(--line);border-radius:4px;cursor:pointer}.modes button.on{background:var(--fg);color:var(--bg);border-color:var(--fg)}
+#fm{display:flex;flex-direction:column;gap:10px;min-width:0}
+.fm-bar{display:flex;flex-wrap:wrap;gap:8px;align-items:center}.fm-bar select,.fm-bar button{padding:6px 10px;background:var(--panel);border:1px solid var(--line);border-radius:4px;cursor:pointer;max-width:100%}.fm-bar button:disabled{opacity:.45;cursor:default}.fm-bar .count{font-variant-numeric:tabular-nums;color:var(--muted)}
+#fm-view{position:relative;height:min(68vh,640px);min-height:380px;overflow:hidden;background-color:var(--bp-bg);border:1px solid var(--bp-edge);border-radius:4px;touch-action:none;cursor:grab;user-select:none;color:var(--bp-text)}
+#fm-view.drag{cursor:grabbing}
+#fm-world{position:absolute;left:0;top:0;transform-origin:0 0;width:1px;height:1px}
+#fm-world.ease{transition:transform .45s cubic-bezier(.2,.7,.2,1)}
+#fm-wires{position:absolute;left:0;top:0;overflow:visible;pointer-events:none}
+.w{fill:none;stroke-width:2;opacity:.75}.w.exec{stroke:var(--bp-exec);stroke-width:3;opacity:.32}.w.exec.done{opacity:.95}.w.exec.now{stroke:var(--bp-hot);opacity:1;stroke-dasharray:10 8;animation:flow .7s linear infinite}
+@keyframes flow{to{stroke-dashoffset:-18}}
+.bn{position:absolute;width:250px;background:var(--bp-node);border:1px solid var(--bp-edge);border-radius:7px;box-shadow:0 5px 14px #0007;font-size:13px;line-height:1.3;cursor:move}
+.bn.sel{outline:2px solid var(--bp-hot);outline-offset:1px}.bn.ghost{opacity:.42}
+.bn header{display:flex;justify-content:space-between;gap:8px;padding:5px 9px;border-radius:6px 6px 0 0;background:color-mix(in srgb,var(--c) 62%,#111);color:#fff;font:600 11px/1.3 var(--mono);letter-spacing:.03em}
+.bn .nm{display:block;width:100%;padding:8px 22px 6px;background:none;border:0;text-align:left;color:var(--bp-text);font:700 13px/1.3 var(--sans);overflow-wrap:anywhere;cursor:pointer}
+.bn .ex{position:relative;height:0}.pin{position:absolute;display:block}
+.pin.ex-in,.pin.ex-out{top:-28px;width:0;height:0;border-top:7px solid transparent;border-bottom:7px solid transparent;border-left:11px solid var(--bp-exec)}.pin.ex-in{left:6px}.pin.ex-out{right:5px}
+.rows{display:flex;flex-direction:column;gap:2px;padding:2px 0 8px}
+.rw{display:flex;align-items:center;gap:7px;width:100%;padding:3px 10px;background:none;border:0;color:var(--bp-dim);font:12px/1.3 var(--sans);cursor:pointer;justify-content:flex-end}.rw.left{justify-content:flex-start}.rw:hover,.rw:focus-visible{color:var(--bp-text);background:#fff1}
+.dot{flex:none;width:11px;height:11px;border-radius:50%;border:2px solid var(--k);background:transparent}.rw[aria-pressed=true] .dot{background:var(--k)}
+.fm-legend{display:flex;flex-wrap:wrap;gap:4px 14px;font-size:.85rem;color:var(--muted)}.fm-legend span{display:inline-flex;align-items:center;gap:6px}.fm-legend i{width:18px;height:3px;background:var(--k);outline:1px solid var(--line)}
+#fm-info{background:var(--panel);border:1px solid var(--line);border-radius:4px;padding:12px 14px;display:flex;flex-direction:column;gap:6px;min-width:0}#fm-info h2{font-size:1.05rem;overflow-wrap:anywhere}#fm-info .sm{font-size:.85rem;color:var(--muted);overflow-wrap:anywhere}#fm-info button{align-self:flex-start;padding:5px 10px;background:var(--bg);border:1px solid var(--line);border-radius:4px;cursor:pointer}
+@media (prefers-reduced-motion:reduce){#fm-world.ease{transition:none}.w.exec.now{animation:none;stroke-dasharray:none}}
+</style>
+<div class="top"><h1>Gremion Code Map</h1><small id="stamp"></small><div class="modes"><button id="m0" class="on">Code map</button><button id="m1">Flow map</button></div></div>
+<div class="app">
+  <aside class="side">
+    <div><label for="q" class="note">Enter a name to find an item.</label><input id="q" autocomplete="off" placeholder="For example: calendar"><div id="res" class="results"></div></div>
+    <div><h3>The six layers. The ground is at the bottom.</h3><div id="strata" class="strata"></div><div class="ground">Ground</div></div>
+    <div class="tabs"><button id="t0" class="on">Examples</button><button id="t1">Words</button><button id="t2">Help</button></div>
+    <div id="pane" class="pane"></div>
+  </aside>
+  <main class="main" id="main"></main>
+</div>
+<div id="fm" hidden>
+  <p class="note">A flow map shows one action as a chain of nodes. The white wire shows the order of the steps. Select a colored row on a node to add the items that it uses.</p>
+  <div class="fm-bar"><label for="fm-ex" class="note">Example</label><select id="fm-ex"></select><button id="fm-prev">Previous step</button><button id="fm-next">Next step</button><button id="fm-play">Play</button><button id="fm-fit">Show all</button><span class="count" id="fm-count"></span></div>
+  <p class="stale" id="fm-stale" role="status" hidden></p>
+  <div id="fm-view" tabindex="0" aria-label="Flow map. Use the left and right arrow keys to change the step."><div id="fm-world"><svg id="fm-wires" width="1" height="1"></svg></div></div>
+  <div class="fm-legend" id="fm-legend"></div>
+  <div id="fm-info" aria-live="polite"></div>
+</div>
+<div id="def" hidden></div>
+<script>
+const D=__DATA__;
+const $=s=>document.querySelector(s),K=D.kinds,N=D.n,T=D.t;
+const KN={layer:'Layer',area:'Area',file:'File',function:'Function',page:'Page',route:'Route',table:'Table',job:'Job'};
+const EV={calls:'calls this function',sql:'reads or writes this table',http:'sends a request to this route',renders:'shows or uses this item',event:'sends a message to this item',needs:'waits for this job',runs:'runs this item or works on this area'};
+const n=i=>({k:K[N[i][0]],name:N[i][1],p:N[i][2],line:N[i][3],l:N[i][4]});
+const out=N.map(()=>[]),inc=N.map(()=>[]),kids=N.map(()=>[]);
+N.forEach((x,i)=>{if(x[2]>=0)kids[x[2]].push(i)});
+D.e.forEach(([f,t,k])=>{out[f].push([t,k]);inc[t].push([f,k])});
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const col=i=>n(i).k==='job'?'var(--job)':`var(--L${n(i).l})`;
+const up=(i,k)=>{while(i>=0&&n(i).k!==k)i=n(i).p;return i};
+const label=i=>{const x=n(i);if(x.k==='area'&&T.areas[i])return T.areas[i].title;if(x.k==='layer')return T.layers[x.l].title;return x.name};
+const terms=Object.keys(T.glossary).sort((a,b)=>b.length-a.length);
+const re=new RegExp('\\b('+terms.map(t=>t.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')).join('|')+')\\b','gi');
+const lower={};terms.forEach(t=>lower[t.toLowerCase()]=t);
+function gl(s){const seen=new Set();return esc(s).replace(re,m=>{const t=lower[m.toLowerCase()];if(!t||seen.has(t))return m;seen.add(t);return `<abbr data-t="${esc(t)}" tabindex="0">${m}</abbr>`})}
+const P=a=>a.filter(Boolean).map(s=>`<p>${gl(s)}</p>`).join('');
+const words=s=>s.replace(/^[_#$]+/,'').replace(/([a-z0-9])([A-Z])/g,'$1 $2').replace(/[_-]+/g,' ').toLowerCase();
+const VERB=[[/^(create|make|build|new|generate|mint|compose|init|provision|seed)\b/,'This function makes a new item or new data.'],[/^(get|load|read|fetch|list|find|lookup|query|select|search|pick|collect|current)\b/,'This function gets data and gives the data to the function that calls it.'],[/^(is|has|can|should|was|needs|are|does|may)\b/,'This function does a check. The result is yes or no.'],[/^(assert|require|ensure|verify|validate|check|guard|refuse|preflight|enforce|authorize)\b/,'This function does a check. If the check fails, the function stops the work or shows an error.'],[/^(parse|decode|normalize|normalise|sanitize|clean)\b/,'This function reads text or raw data and makes the data correct and usable.'],[/^(to|format|fmt|render|serialize|map|convert|encode|describe|summarize)\b/,'This function changes data into a different form.'],[/^(run|start|main|handle|execute|process|boot|launch|on|do|apply|perform|reconcile)\b/,'This function starts a task and does the work of the task.'],[/^(set|update|write|save|record|mark|add|insert|upsert|store|put|register|claim|attach|enable|grant)\b/,'This function adds or changes data.'],[/^(delete|remove|clear|reset|evict|drain|purge|drop|disable|revoke|close|stop|cancel|detach|shutdown)\b/,'This function removes data or stops a task.'],[/^(send|publish|submit|post|emit|notify|forward|enqueue|push|warn|log)\b/,'This function sends data to a different part of the system.'],[/^(resolve|locate|derive|compute|calculate|count|sum|sha|hash)\b/,'This function calculates a value or finds the correct item.']];
+function fnText(i){const x=n(i),w=words(x.name),a=up(i,'area'),f=up(i,'file');if(/top level/.test(x.name))return ['This item is the code of one file that runs when the file loads.',`The file is ${N[f][1]}.`];
+  const v=VERB.find(([r])=>r.test(w));return [`This item is a function. A function is one small part of a program. It does one task.`,`The name of this function is ${x.name}. The name contains these words: ${w}.`,v?v[1]:'The name of this function does not show the task. Read the list of items that the function uses.',v?'A program made this sentence from the name of the function. A person did not write this sentence.':'',`The function is in the file ${N[f][1]}, at line ${x.line}.`,a>=0?`The function is part of this area: ${label(a)}.`:'',`This function uses ${out[i].length} items. ${inc[i].length} items use this function.`]}
+const jid=i=>n(i).name.split(': ')[0];
+const names=(a,m=8)=>a.length<=m?a.join(', '):a.slice(0,m).join(', ')+' and '+(a.length-m)+' more';
+function jobText(i){const f=up(i,'file'),k=D.ek,pick=(arr,kind)=>arr.filter(([,e])=>k[e]===kind).map(([t])=>t);
+  const byLine=(a,b)=>n(a).line-n(b).line,wf=f>=0?N[f][1].split('/').pop():'',waits=pick(out[i],'needs').sort(byLine).map(jid),runs=pick(out[i],'runs').map(label),after=pick(inc[i],'needs').sort(byLine).map(jid);
+  return ['This item is a job. A job is one part of a workflow. A workflow is a file that tells GitHub what to run. GitHub runs each job on its own computer.',
+    `This job is part of the workflow ${wf}.`,
+    waits.length?`It starts after these jobs: ${names(waits)}.`:'It does not wait for a different job. It starts when the workflow starts.',
+    runs.length?`It runs or builds these items: ${names(runs)}.`:'',
+    after.length?`These jobs start after this job: ${names(after)}.`:'']}
+function text(i){const x=n(i);
+  if(x.k==='layer')return [T.layers[x.l].text,`This layer has ${kids[i].length} areas.`];
+  if(x.k==='area'){const a=T.areas[i];return a?[a.what,a.why,a.leadsTo]:['This area has no text.']}
+  if(x.k==='file')return [`This item is a file. A file holds program code or settings.`,`The full name is ${x.name}.`,`The file holds ${kids[i].length} items.`,`The file is part of this area: ${label(up(i,'area'))}.`];
+  if(x.k==='page')return [`This item is a page. A person opens a page in a web browser.`,`The address of the page is ${x.name}.`,`This page uses ${out[i].length} items.`];
+  if(x.k==='route'){const[m,p]=x.name.split(' ');const M={GET:'A GET request asks for data.',POST:'A POST request sends new data.',PUT:'A PUT request replaces data.',PATCH:'A PATCH request changes a part of the data.',DELETE:'A DELETE request removes data.',ANY:'This route accepts all types of request.'};return [`This item is a route. A route is an address on a server. The server receives requests at this address.`,M[m]||'',`The address is ${p||x.name}.`,`${inc[i].length} items send requests to this route. This route uses ${out[i].length} items.`]}
+  if(x.k==='job')return jobText(i);
+  if(x.k==='table')return [`This item is a table. A table is one list of data in the database.`,`The name of the table is ${x.name}.`,`${inc[i].length} functions read or write this table.`];
+  return fnText(i)}
+const direct=i=>['function','page','route','table','job'].includes(n(i).k);
+function under(i,a=[]){kids[i].forEach(c=>{a.push(c);under(c,a)});return a}
+function grouped(i,edges,lvl){const m=new Map(),own=new Set([i,...under(i)]);own.forEach(s=>edges[s].forEach(([t])=>{if(own.has(t))return;const a=up(t,lvl),g=a<0?t:a;m.set(g,(m.get(g)||0)+1)}));return [...m].sort((a,b)=>b[1]-a[1])}
+function row(t,why,chain){const has=direct(t)&&(out[t].length>0||inc[t].length>0)&&!chain.has(t);return `<div class="row">${has?`<button class="tog" data-o="${t}" aria-expanded="false" aria-label="Open the next level">+</button>`:'<span></span>'}<button class="item" data-go="${t}" style="--c:${col(t)}">${esc(label(t))}${why?`<small>${esc(why)}</small>`:''}</button></div>`}
+const uniq=a=>{const s=new Set();return a.filter(([t])=>!s.has(t)&&s.add(t))};
+function list(arr,chain,cap=14){if(!arr.length)return '<div class="note">No items.</div>';const h=arr.slice(0,cap).map(([t,w])=>row(t,w,chain)).join('');return h+(arr.length>cap?`<button class="more" data-more>Show all ${arr.length} items</button>`:'')}
+let cur=-1,trail=[],walk=null,lastLists=null;
+function lens(i){let L,R;if(direct(i)){const first=a=>n(i).k==='job'?a.slice().sort((x,y)=>(D.ek[x[1]]==='needs'?0:1)-(D.ek[y[1]]==='needs'?0:1)):a;L=first(uniq(inc[i])).map(([t,k])=>[t,K2(k)]);R=first(uniq(out[i])).map(([t,k])=>[t,K3(k)])}else{const lvl=n(i).k;L=grouped(i,inc,lvl).map(([t,c])=>[t,c+' connections']);R=grouped(i,out,lvl).map(([t,c])=>[t,c+' connections'])}
+  lastLists={L,R};const ch=new Set([i]);
+  return `<section><h3>Where this item leads</h3><p class="note" style="margin-bottom:10px">The left column shows the items that use this item. The right column shows the items that this item uses. Push + to see the next level.</p><div class="lens" id="lens"><svg aria-hidden="true"></svg><div class="col" id="cl"><h3>Used by</h3>${list(L,ch)}</div><div class="focus" id="fo" style="--c:${col(i)}">${esc(label(i))}</div><div class="col" id="cr"><h3>Uses</h3>${list(R,ch)}</div></div></section>`}
+const K2=k=>EV[D.ek[k]]||'';
+const K3=k=>({calls:'this function is called',sql:'a table that this function reads or writes',http:'a route that receives a request',renders:'an item that this page shows or uses',event:'an item that receives a message',needs:'a job that this job waits for',runs:'a file or an area that this job runs or works on'})[D.ek[k]]||'';
+function draw(){const w=$('#lens');if(!w)return;const s=w.querySelector('svg'),b=w.getBoundingClientRect(),f=$('#fo').getBoundingClientRect();const fy=f.top+f.height/2-b.top;let p='';
+  const go=(sel,side)=>w.querySelectorAll(sel).forEach(r=>{const a=r.getBoundingClientRect();const y=a.top+a.height/2-b.top;const x=side?a.left-b.left:a.right-b.left;const fx=side?f.right-b.left:f.left-b.left;const m=(x+fx)/2;p+=`M${fx} ${fy}C${m} ${fy} ${m} ${y} ${x} ${y}`});
+  go('#cl>.row>.item',0);go('#cr>.row>.item',1);s.setAttribute('viewBox',`0 0 ${b.width} ${b.height}`);s.innerHTML=`<path d="${p}"/>`}
+function crumb(i){const a=[];for(let c=i;c>=0;c=n(c).p)a.unshift(c);return `<nav class="crumb"><button data-home>Start</button>${a.map(c=>`<span>/</span><button data-go="${c}">${esc(label(c))}</button>`).join('')}</nav>`}
+function children(i){const x=n(i);if(x.k==='layer')return `<section><h3>Areas in this layer</h3><div class="grid">${kids[i].map(c=>`<button class="card" data-go="${c}" style="--c:${col(c)}"><b>${esc(label(c))}</b><small>${kids[c].length} files</small></button>`).join('')}</div></section>`;
+  if(x.k==='area'||x.k==='file'){const c=kids[i],ks=x.k==='area'?'Files in this area':'Items in this file';return `<section><h3>${ks}</h3><div class="grid">${c.slice(0,240).map(k=>`<button class="card" data-go="${k}" style="--c:${col(k)}"><b class="name" style="font-size:.84rem">${esc(n(k).k==='file'?n(k).name.split('/').slice(-2).join('/'):n(k).name)}</b><small>${KN[n(k).k]}${n(k).line?', line '+n(k).line:''}</small></button>`).join('')}</div>${c.length>240?`<p class="note">This list shows 240 of ${c.length} items. Enter a name in the box to find an item.</p>`:''}</section>`}return ''}
+function walkNotice(W){const s=(W.stale||[]);if(!s.length)return '';const names=s.map(x=>x.name).join(', ');return s.length===1?`One step of this example does not match the code now. The page does not show this step: ${names}.`:`${s.length} steps of this example do not match the code now. The page does not show these steps: ${names}.`}
+function walkHtml(){if(!walk)return '';const W=T.walkthroughs[walk.w],S=W.steps[walk.s],wn=walkNotice(W);return `<section class="walk"><h3>Example ${walk.w+1}: step ${walk.s+1} of ${W.steps.length}</h3><h2>${esc(W.title)}</h2>${wn?`<p class="stale" role="status">${esc(wn)}</p>`:''}<div class="txt" style="margin-top:6px">${P([S.text])}</div><div class="walkbar"><button class="btn" data-w="-1" ${walk.s?'':'disabled'}>Previous step</button><button class="btn pri" data-w="1" ${walk.s<W.steps.length-1?'':'disabled'}>Next step</button><button class="btn" data-w="0">Stop the example</button></div></section>`}
+function view(i,push=true){if(push&&cur!==i)trail.push(cur);cur=i;const x=n(i);
+  $('#main').innerHTML=walkHtml()+`<section>${crumb(i)}<div class="head"><span class="chip" style="--c:${col(i)}">${KN[x.k]}</span><h2 class="${direct(i)?'name':''}">${esc(label(i))}</h2></div><div class="txt">${P(text(i))}</div><div class="walkbar">${trail.length?'<button class="btn" data-back>Previous item</button>':''}</div></section>`+(x.k==='layer'?'':lens(i))+children(i);
+  mark(x.l);draw();window.scrollTo(0,0)}
+function mark(l){document.querySelectorAll('.stratum').forEach(b=>b.classList.toggle('on',+b.dataset.l===l))}
+function staleHome(){const s=D.stale;if(!s||!(s.steps||s.areas||(s.dropped||[]).length))return '';const a=[];if(s.steps)a.push(s.steps===1?'One step of an example does not match the code now.':`${s.steps} steps of the examples do not match the code now.`);if(s.areas)a.push(s.areas===1?'The text of one area does not match the code now.':`The text of ${s.areas} areas does not match the code now.`);if((s.dropped||[]).length)a.push((s.dropped.length===1?'The page does not show this example: ':'The page does not show these examples: ')+s.dropped.join(', ')+'.');return `<section class="stale" role="status"><h3>Text and code do not match</h3>${a.map(x=>`<p>${esc(x)}</p>`).join('')}</section>`}
+function home(){cur=-1;walk=null;trail=[];const flow=D.flow.map(([a,b,c])=>`<tr><td>L${a}</td><td>L${b}</td><td>${c}</td></tr>`).join('');
+  $('#main').innerHTML=staleHome()+`<section><div class="txt">${P(T.intro)}</div></section><section><h3>The six layers, from the top to the ground</h3><div class="grid">${[5,4,3,2,1,0].map(l=>`<button class="card" data-go="${D.layers[l]}" style="--c:var(--L${l})"><b>${esc(T.layers[l].title)}</b><small>${esc(T.layers[l].text.split('. ')[0])}.</small></button>`).join('')}</div></section><section><h3>Connections between the layers</h3><p class="note" style="margin-bottom:8px">One connection shows that an item in one layer uses an item in a different layer.</p><div class="scroll"><table class="flow"><thead><tr><th>From layer</th><th>To layer</th><th>Connections</th></tr></thead><tbody>${flow}</tbody></table></div></section><section><h3>Limits of this map</h3><div class="txt">${P(D.limits)}</div></section>`;mark(-1);window.scrollTo(0,0)}
+function strata(){$('#strata').innerHTML=[5,4,3,2,1,0].map(l=>`<button class="stratum" data-go="${D.layers[l]}" data-l="${l}" style="--c:var(--L${l})"><b>L${l}</b><span>${esc(T.layers[l].title.replace(/^L\d:\s*/,''))}</span><i>${kids[D.layers[l]].length}</i></button>`).join('')}
+function tab(t){[0,1,2].forEach(i=>$('#t'+i).classList.toggle('on',i===t));const p=$('#pane');
+  if(t===0)p.innerHTML=(T.walkthroughs.length?`<p class="note">An example follows one real action through the code.</p>`:`<p class="note">This page shows no example. The text of the examples does not match the code now.</p>`)+T.walkthroughs.map((w,i)=>`<button class="link" data-ex="${i}">${esc(w.title)}</button>`).join('');
+  if(t===1){p.innerHTML=`<label for="gq" class="note">Enter a word.</label><input id="gq" autocomplete="off"><dl id="gl" style="margin:0"></dl>`;const g=()=>{const q=$('#gq').value.toLowerCase();$('#gl').innerHTML=Object.keys(T.glossary).sort((a,b)=>a.localeCompare(b)).filter(k=>!q||k.toLowerCase().includes(q)).map(k=>`<dt>${esc(k)}</dt><dd>${esc(T.glossary[k])}</dd>`).join('')};$('#gq').oninput=g;g()}
+  if(t===2)p.innerHTML=T.howToRead.map(s=>`<p>${esc(s)}</p>`).join('')+'<p>Select an underlined word to read the meaning of the word.</p>'}
+const hay=N.map((x,i)=>(label(i)+' '+x[1]).toLowerCase()),rank={area:0,page:1,route:2,job:3,table:4,function:5,file:6,layer:0};
+$('#q').oninput=e=>{const q=e.target.value.trim().toLowerCase();if(q.length<2){$('#res').innerHTML='';return}const r=[];for(let i=0;i<N.length;i++)if(hay[i].includes(q))r.push(i);r.sort((a,b)=>rank[n(a).k]-rank[n(b).k]||label(a).length-label(b).length);$('#res').innerHTML=(r.length?r.slice(0,40).map(i=>`<button class="link" data-go="${i}"><span class="chip" style="--c:${col(i)}">${KN[n(i).k]}</span> ${esc(label(i))}</button>`).join(''):'<div class="note">No items have this name.</div>')};
+document.addEventListener('click',e=>{const t=e.target.closest('button,abbr');const d=$('#def');if(t&&t.matches('abbr[data-t]')){d.textContent=t.dataset.t+': '+T.glossary[t.dataset.t];d.hidden=false;return}d.hidden=true;if(!t)return;const g=t.dataset;
+  if('go' in g){if(t.closest('#res')){$('#res').innerHTML='';$('#q').value=''}view(+g.go)}
+  else if('home' in g)home();
+  else if('back' in g){const b=trail.pop();b>=0?view(b,false):home()}
+  else if('ex' in g){walk={w:+g.ex,s:0};view(T.walkthroughs[+g.ex].steps[0].i)}
+  else if('w' in g){const v=+g.w;if(!v){walk=null;view(cur,false)}else{walk.s+=v;view(T.walkthroughs[walk.w].steps[walk.s].i)}}
+  else if('more' in g){const c=t.closest('.col'),isL=c.id==='cl',ch=new Set([cur]);c.innerHTML=`<h3>${isL?'Used by':'Uses'}</h3>`+list(isL?lastLists.L:lastLists.R,ch,1e5);draw()}
+  else if('o' in g){const r=t.parentElement,o=+g.o;if(t.getAttribute('aria-expanded')==='true'){r.querySelector(':scope>.sub').remove();t.textContent='+';t.setAttribute('aria-expanded','false');t.setAttribute('aria-label','Open the next level')}else{const ch=new Set([cur]);for(let a=r;a&&!a.classList.contains('col');a=a.parentElement)if(a.classList.contains('row'))ch.add(+a.querySelector(':scope>.tog').dataset.o);const s=document.createElement('div');s.className='sub';const isL=!!t.closest('#cl');s.innerHTML=list(uniq(isL?inc[o]:out[o]).map(([x,k])=>[x,ch.has(x)?'This item is already in this chain.':(isL?K2(k):K3(k))]),ch,30);r.append(s);t.textContent='-';t.setAttribute('aria-expanded','true');t.setAttribute('aria-label','Close this level')}draw()}});
+[0,1,2].forEach(i=>$('#t'+i).onclick=()=>tab(i));
+addEventListener('resize',draw);
+$('#stamp').textContent=D.commit==='unknown'?'Made from the code at an unknown version.':'Made from the code at version '+D.commit+'.';
+strata();tab(0);home();
+window.__cmView=i=>view(i);
+/* Flow map: the examples as a node graph. Every node and wire comes from the same data as the code map. */
+(()=>{
+const KC={calls:'--bp-calls',sql:'--bp-sql',http:'--bp-http',event:'--bp-event',renders:'--bp-renders',needs:'--bp-needs',runs:'--bp-runs'};
+const KW={calls:'Calls',sql:'Tables',http:'Requests',event:'Messages',renders:'Shows',needs:'Waits for',runs:'Runs'};
+const W=250,S={ex:0,step:0,nodes:[],wires:[],z:1,x:0,y:0,sel:null,timer:0,open:new Set()};
+const fv=$('#fm-view'),world=$('#fm-world'),svg=$('#fm-wires');
+const ek=k=>D.ek[k];
+const find=i=>S.nodes.find(o=>o.i===i);
+const apply=()=>{world.style.transform=`translate(${S.x}px,${S.y}px) scale(${S.z})`;fv.style.backgroundImage=`linear-gradient(var(--bp-grid2) 1px,transparent 1px),linear-gradient(90deg,var(--bp-grid2) 1px,transparent 1px),linear-gradient(var(--bp-grid) 1px,transparent 1px),linear-gradient(90deg,var(--bp-grid) 1px,transparent 1px)`;const g=16*S.z;fv.style.backgroundSize=`${g*8}px ${g*8}px,${g*8}px ${g*8}px,${g}px ${g}px,${g}px ${g}px`;fv.style.backgroundPosition=`${S.x}px ${S.y}px`};
+function pinAt(el){const box=el.closest('.bn'),o=box.__o;let x=el.offsetWidth/2,y=el.offsetHeight/2;for(let e=el;e&&e!==box;e=e.offsetParent){x+=e.offsetLeft;y+=e.offsetTop}return[o.x+x,o.y+y]}
+function path(a,b){const d=Math.max(70,Math.abs(b[0]-a[0])*.5);return`M${a[0]} ${a[1]}C${a[0]+d} ${a[1]} ${b[0]-d} ${b[1]} ${b[0]} ${b[1]}`}
+function wires(){svg.innerHTML=S.wires.map(w=>{const a=pinAt(w.from),b=pinAt(w.to);let c='w';if(w.exec){c+=' exec';if(w.s<S.step)c+=' done';if(w.s===S.step-1)c+=' now'}return`<path class="${c}" d="${path(a,b)}"${w.exec?'':` style="stroke:var(${KC[w.k]})"`}/>`}).join('')}
+function free(x,y,h,self){let t=y;for(let g=0;g<60;g++){if(!S.nodes.some(o=>o!==self&&x<o.x+W+24&&x+W+24>o.x&&t<o.y+o.el.offsetHeight+22&&t+h+22>o.y))return t;t+=34}return t}
+function node(i,x,y,step){const c=n(i),el=document.createElement('div');el.className='bn';el.style.setProperty('--c',col(i));
+  const o={i,x,y,step,el};el.__o=o;
+  const by=g=>{const m={};g.forEach(([t,k])=>{(m[ek(k)]=m[ek(k)]||[]).push(t)});return m};
+  const u=by(uniq(out[i])),v=by(uniq(inc[i]));
+  el.innerHTML=`<header><span>${KN[c.k]}</span><span>L${c.l}</span></header><button class="nm">${esc(label(i))}</button><div class="ex">${step!=null?'<span class="pin ex-in"></span><span class="pin ex-out"></span>':''}</div><div class="rows">`+
+   Object.keys(v).map(k=>`<button class="rw left" data-dir="in" data-k="${k}" style="--k:var(${KC[k]})" aria-pressed="false"><span class="dot"></span>Used by ${v[k].length}</button>`).join('')+
+   Object.keys(u).map(k=>`<button class="rw" data-dir="out" data-k="${k}" style="--k:var(${KC[k]})" aria-pressed="false">${KW[k]} ${u[k].length}<span class="dot"></span></button>`).join('')+`</div>`;
+  o.u=u;o.v=v;el.style.transform=`translate(${x}px,${y}px)`;world.appendChild(el);S.nodes.push(o);
+  el.querySelector('.nm').onclick=e=>{e.stopPropagation();pick(o)};
+  el.querySelectorAll('.rw').forEach(b=>b.onclick=e=>{e.stopPropagation();toggle(o,b)});
+  el.onpointerdown=e=>{if(e.target.closest('button'))return;e.stopPropagation();drag(e,o)};
+  return o}
+function toggle(o,b){const d=b.dataset.dir,k=b.dataset.k,key=o.i+d+k;
+  if(S.open.has(key)){S.open.delete(key);b.setAttribute('aria-pressed','false');const gone=S.wires.filter(w=>w.key===key);S.wires=S.wires.filter(w=>w.key!==key);gone.forEach(w=>w.made&&remove(w.made));wires();return}
+  S.open.add(key);b.setAttribute('aria-pressed','true');const list=(d==='out'?o.u:o.v)[k],max=8,cx=o.x+(d==='out'?W+90:-W-90);let y=o.y;
+  list.slice(0,max).forEach(t=>{let m=find(t),made=null;if(!m){m=node(t,cx,y,null);m.y=free(cx,y,m.el.offsetHeight,m);m.el.style.transform=`translate(${cx}px,${m.y}px)`;made=m;y=m.y+40}
+   const far=m.el.querySelector('.nm'),dot=b.querySelector('.dot');S.wires.push({from:d==='out'?dot:far,to:d==='out'?far:dot,k,key,made})});
+  wires();if(list.length>max)note(`This list shows ${max} of ${list.length} items. Open the item in the code map to see all items.`)}
+function remove(m){const gone=S.wires.filter(w=>w.from.closest('.bn')===m.el||w.to.closest('.bn')===m.el);S.wires=S.wires.filter(w=>!gone.includes(w));gone.forEach(w=>{if(w.made&&w.made!==m)remove(w.made)});m.el.remove();S.nodes=S.nodes.filter(x=>x!==m);[...S.open].filter(s=>s.startsWith(m.i+'i')||s.startsWith(m.i+'o')).forEach(s=>S.open.delete(s))}
+function note(t){$('#fm-count').textContent=t;clearTimeout(note.t);note.t=setTimeout(count,6000)}
+function count(){const w=T.walkthroughs[S.ex];if(!w)return;$('#fm-count').textContent=`Step ${S.step+1} of ${w.steps.length}`}
+function info(o,txt){const x=n(o.i),f=up(o.i,'file');const lines=txt?[txt]:text(o.i);$('#fm-info').innerHTML=`<h2>${esc(label(o.i))}</h2><div class="sm">${KN[x.k]} in layer L${x.l}${f>=0&&f!==o.i?' · '+esc(n(f).name):''}</div>`+lines.map(l=>`<p>${gl(l)}</p>`).join('')+`<button id="fm-open">Open in the code map</button>`;$('#fm-open').onclick=()=>{mode(0);window.__cmView(o.i)}}
+function pick(o){S.nodes.forEach(x=>x.el.classList.toggle('sel',x===o));S.sel=o;const w=T.walkthroughs[S.ex];info(o,o.step!=null?w.steps[o.step].text:null)}
+function center(o,ease=true){const r=fv.getBoundingClientRect();world.classList.toggle('ease',ease);S.x=r.width/2-(o.x+W/2)*S.z;S.y=r.height/2-(o.y+70)*S.z;apply()}
+function go(s,ease=true){const w=T.walkthroughs[S.ex];if(!w)return;S.step=Math.max(0,Math.min(w.steps.length-1,s));const o=S.nodes.find(x=>x.step===S.step);pick(o);S.nodes.forEach(x=>x.step!=null&&x.el.classList.toggle('ghost',x.step>S.step));wires();count();$('#fm-prev').disabled=S.step===0;$('#fm-next').disabled=S.step===w.steps.length-1;center(o,ease)}
+function fit(){const r=fv.getBoundingClientRect();let a=1e9,b=1e9,c=-1e9,d=-1e9;S.nodes.forEach(o=>{a=Math.min(a,o.x);b=Math.min(b,o.y);c=Math.max(c,o.x+W);d=Math.max(d,o.y+o.el.offsetHeight)});S.z=Math.max(.25,Math.min(1,Math.min((r.width-40)/(c-a),(r.height-40)/(d-b))));S.x=(r.width-(c-a)*S.z)/2-a*S.z;S.y=(r.height-(d-b)*S.z)/2-b*S.z;world.classList.add('ease');apply();wires()}
+function stop(){clearInterval(S.timer);S.timer=0;$('#fm-play').textContent='Play'}
+const NONE='This page shows no example. The text of the examples does not match the code now.';
+function load(ex){stop();
+  if(!T.walkthroughs.length){S.nodes.forEach(o=>o.el.remove());S.nodes=[];S.wires=[];S.open.clear();wires();$('#fm-count').textContent='';$('#fm-info').textContent=NONE;['fm-ex','fm-prev','fm-next','fm-play','fm-fit'].forEach(id=>{$('#'+id).disabled=true});return}
+  S.ex=ex;S.nodes.forEach(o=>o.el.remove());S.nodes=[];S.wires=[];S.open.clear();S.step=0;S.z=1;S.x=0;S.y=0;apply();
+  const w=T.walkthroughs[ex],sn=walkNotice(w);$('#fm-stale').textContent=sn;$('#fm-stale').hidden=!sn;w.steps.forEach((s,idx)=>{const l=n(s.i).l;node(s.i,idx*330,(5-l)*120+(idx%2)*46,idx)});
+  S.nodes.slice(1).forEach((o,j)=>S.wires.push({from:S.nodes[j].el.querySelector('.ex-out'),to:o.el.querySelector('.ex-in'),exec:true,s:j}));
+  go(0,false);S.step=fv.clientWidth>900?S.step:S.step;if(fv.clientWidth>900){fit();world.classList.remove('ease')}}
+function drag(e,o){const z=S.z,sx=e.clientX,sy=e.clientY,ox=o.x,oy=o.y;world.classList.remove('ease');o.el.setPointerCapture(e.pointerId);
+  const mv=ev=>{o.x=ox+(ev.clientX-sx)/z;o.y=oy+(ev.clientY-sy)/z;o.el.style.transform=`translate(${o.x}px,${o.y}px)`;wires()};
+  const end=()=>{o.el.removeEventListener('pointermove',mv);o.el.removeEventListener('pointerup',end);o.el.removeEventListener('pointercancel',end)};o.el.addEventListener('pointermove',mv);o.el.addEventListener('pointerup',end);o.el.addEventListener('pointercancel',end)}
+const pts=new Map();let pan=null,pd=0;
+fv.onpointerdown=e=>{if(e.target.closest('.bn'))return;fv.setPointerCapture(e.pointerId);pts.set(e.pointerId,[e.clientX,e.clientY]);world.classList.remove('ease');stop();if(pts.size===1){pan=[e.clientX-S.x,e.clientY-S.y];fv.classList.add('drag')}else if(pts.size===2){const[p,q]=[...pts.values()];pd=Math.hypot(p[0]-q[0],p[1]-q[1]);pan=null}};
+fv.onpointermove=e=>{if(!pts.has(e.pointerId))return;pts.set(e.pointerId,[e.clientX,e.clientY]);if(pts.size===1&&pan){S.x=e.clientX-pan[0];S.y=e.clientY-pan[1];apply()}else if(pts.size===2){const[p,q]=[...pts.values()],d=Math.hypot(p[0]-q[0],p[1]-q[1]),r=fv.getBoundingClientRect();zoom(d/pd,(p[0]+q[0])/2-r.left,(p[1]+q[1])/2-r.top);pd=d}};
+fv.onpointerup=fv.onpointercancel=e=>{pts.delete(e.pointerId);if(!pts.size){pan=null;fv.classList.remove('drag')}};
+function zoom(f,cx,cy){const z=Math.max(.25,Math.min(1.6,S.z*f)),k=z/S.z;S.x=cx-(cx-S.x)*k;S.y=cy-(cy-S.y)*k;S.z=z;apply();wires()}
+fv.addEventListener('wheel',e=>{e.preventDefault();world.classList.remove('ease');const r=fv.getBoundingClientRect();zoom(e.deltaY<0?1.1:.91,e.clientX-r.left,e.clientY-r.top)},{passive:false});
+fv.onkeydown=e=>{if(e.key==='ArrowRight'){e.preventDefault();stop();go(S.step+1)}if(e.key==='ArrowLeft'){e.preventDefault();stop();go(S.step-1)}};
+world.addEventListener('transitionend',wires);
+$('#fm-ex').innerHTML=T.walkthroughs.map((w,i)=>`<option value="${i}">${esc(w.title)}</option>`).join('');
+$('#fm-ex').onchange=e=>load(+e.target.value);
+$('#fm-prev').onclick=()=>{stop();go(S.step-1)};$('#fm-next').onclick=()=>{stop();go(S.step+1)};$('#fm-fit').onclick=()=>{stop();fit()};
+$('#fm-play').onclick=()=>{if(S.timer){stop();return}if(S.step>=T.walkthroughs[S.ex].steps.length-1)go(0);$('#fm-play').textContent='Stop';S.timer=setInterval(()=>{if(S.step>=T.walkthroughs[S.ex].steps.length-1){stop();return}go(S.step+1)},2200)};
+$('#fm-legend').innerHTML=[['--bp-exec','The next step'],['--bp-calls','A function calls another function'],['--bp-sql','A function reads or writes a table'],['--bp-http','A request goes to a route'],['--bp-event','A message goes to an item'],['--bp-renders','A page shows an item'],['--bp-needs','A job waits for a job'],['--bp-runs','A job runs a file or works on an area']].map(([k,t])=>`<span style="--k:var(${k})"><i></i>${t}</span>`).join('');
+let ready=false;
+function mode(m){$('.app').hidden=m===1;$('#fm').hidden=m===0;$('#m0').classList.toggle('on',m===0);$('#m1').classList.toggle('on',m===1);try{history.replaceState(null,'',m?'#flow-map':'#')}catch{}if(m===1){if(!ready){ready=true;load(0)}else{apply();wires()}}else stop()}
+$('#m0').onclick=()=>mode(0);$('#m1').onclick=()=>mode(1);
+addEventListener('resize',()=>{if(ready&&!$('#fm').hidden)wires()});
+if(location.hash==='#flow-map')mode(1);
+})();
+</script>

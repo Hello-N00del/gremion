@@ -22,6 +22,7 @@ import { readConfig } from '$lib/server/config'
 // derive the transport type from createTransport's return type instead.
 type Transporter = ReturnType<typeof nodemailer.createTransport>
 import { isAllowedSmtpPort, resolveSmtpTarget } from '$lib/server/mail/smtp-target-guard'
+import { smtpEhloName } from '$lib/server/mail/ehlo-name'
 import { env } from '$env/dynamic/private'
 import { getTenant } from '$lib/server/tenant/context'
 import { resolveSecret } from '$lib/server/tenant/secrets'
@@ -113,6 +114,7 @@ export function getTenantMailContext(): TenantMailContext {
 
   const baseOptions = {
     port,
+    name: smtpEhloName(),
     // O-5: implicit TLS only on 465; nodemailer auto-STARTTLSes on 587.
     secure: port === 465,
     auth,

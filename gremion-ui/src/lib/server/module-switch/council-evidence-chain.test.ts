@@ -76,7 +76,7 @@ describe('a council module switch: the submit side and the executor side agree o
     const state = ['board', 'calendar', 'elections', 'files', 'handover', 'messaging', 'publishing', 'votes', 'vault'].map((k) => ({
       module_key: k, name: k, state: 'disabled', has_row: false, dpia_recorded: false,
     }))
-    h.getCouncilDb.mockReturnValue((strings: TemplateStringsArray, ...values: unknown[]) => {
+    const sql = (strings: TemplateStringsArray, ...values: unknown[]) => {
       const text = strings.join('?')
       if (text.includes('council_module_state')) return Promise.resolve(state)
       // Karenz phase 2: the service reads the module's live Karenz rows before it queues a switch (none here)
@@ -86,7 +86,10 @@ describe('a council module switch: the submit side and the executor side agree o
         return Promise.resolve([{ request_id: REQUEST }])
       }
       throw new Error(`unexpected platform query: ${text}`)
-    })
+    }
+    // postgres.js: jsonb values go through sql.json, as in the real pool
+    ;(sql as unknown as { json: (v: unknown) => unknown }).json = (v: unknown) => ({ __pgJson: v })
+    h.getCouncilDb.mockReturnValue(sql)
   })
 
   // The login is a few seconds old when the jwt callback stamps the server-side step-up time, so the
@@ -126,7 +129,7 @@ describe('a council module switch: the submit side and the executor side agree o
     const row: CouncilRequestRow = {
       kind,
       customer_slug: slug,
-      args: JSON.parse(args),
+      args: (args as unknown as { __pgJson: unknown }).__pgJson,
       operator_id: person,
       evidence_auth_time: new Date(authTime),
       evidence_token: evidence,

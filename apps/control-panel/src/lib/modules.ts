@@ -13,3 +13,9 @@ export function moduleActionsOffered(status: string | null, newest: NewestReques
   if (status !== 'active') return false
   return !(newest && describeRequest({ ...newest, lastStep: null }).active)
 }
+
+// Modules whose "Modul deaktivieren" the panel does not offer and the action refuses (409): their leaf
+// databases are not reconciled with the module registry yet (docs/ops/pilot-services.md, Leaf databases).
+// Not the enable deny list (DENY_REASONS in requests.ts): these modules stay enableable at creation. The host
+// break-glass request is not refused by this; request-verify is unchanged.
+export const DISABLE_LOCKED: ReadonlySet<string> = new Set(['calendar', 'content', 'publishing'])

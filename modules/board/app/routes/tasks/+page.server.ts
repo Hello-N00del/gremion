@@ -23,7 +23,16 @@ export const load: PageServerLoad = async ({ locals, url }) => {
   const archivedCount = allBoards.length - boards.length
   // Friendly org-unit name for the switcher + header sub-line (id → name); the
   // per-Gremium hue is derived client-side from org_unit_id (committee-color).
-  const ouNames = new Map((await listOrgUnits()).map((o) => [o.id, o.name]))
+  const orgUnits = await listOrgUnits()
+  const ouNames = new Map(orgUnits.map((o) => [o.id, o.name]))
+
+  // Units the user may create a board for: in their scope, no live board yet.
+  // Only {id, name} leaves the server, and only for units in the user's scope.
+  const scoped = new Set(ouIds)
+  const withBoard = new Set(boards.map((b) => b.org_unit_id))
+  const creatable = orgUnits
+    .filter((o) => scoped.has(o.id) && !withBoard.has(o.id))
+    .map((o) => ({ id: o.id, name: o.name }))
 
   const selectedId = url.searchParams.get('board') ?? boards[0]?.id ?? null
   const rawDeck = selectedId && boards.some((b) => b.id === selectedId) ? await backend.deckFor(selectedId) : null
@@ -58,6 +67,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
   return {
     boards: boards.map((b) => ({ id: b.id, org_unit_id: b.org_unit_id, name: b.name, archived: b.archived })),
     archivedCount,
+    creatable,
     deck,
     me: user.id,
   }

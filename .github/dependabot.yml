@@ -20,9 +20,8 @@
 # entry produced nothing but workspace-duplicate PRs.
 #
 # PAUSING AN ECOSYSTEM: set `open-pull-requests-limit: 0` with an inline
-# `# PAUSED — restore to N` comment. That comment is not decoration —
-# .github/workflows/dependabot-unpause.yml parses N back out of it to restore
-# the limit. A pause without the hint cannot be undone by that workflow.
+# `# PAUSED — restore to N` comment, so whoever un-pauses it by hand knows the
+# limit to put back.
 #
 # Every label referenced below must be declared in .github/labels.yml. GitHub
 # does NOT create a missing label; it silently drops it, so a PR lands

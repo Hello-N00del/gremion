@@ -148,7 +148,9 @@ const dockerBuild = {
 // Dockerfiles that are deliberately not in the image matrix, each with the
 // reason. Anything else that is a tracked Dockerfile must be built.
 const NOT_BUILT = {
-  'docker/vector/Dockerfile': 'clones and compiles ipcrypt2: not worth a per-commit gate',
+  // Not an image: BuildKit's per-Dockerfile ignore file for apps/control-panel/Dockerfile, which the matrix builds.
+  'apps/control-panel/Dockerfile.dockerignore': 'the build-context filter of the control-panel image, not a Dockerfile',
+  'docker/vector/Dockerfile': 'verify-census builds it, and a failed build fails the census',
   'scripts/verify/bats-runner/Dockerfile': 'test-runner image, not shipped',
   'test/host/runner/Dockerfile': 'test-runner image, not shipped',
   // gremion-isolation builds it on the host from the release tree (pilot wave 2); toolchain only, not shipped.
@@ -333,6 +335,12 @@ test('a failed `changes` job forces the image build instead of skipping it', () 
   assert.match(cond, /needs\.changes\.result == 'failure'/)
   // On a pull request a failed filter must build; lint must still gate.
   assert.match(cond, /needs\.lint\.result == 'success'/)
+  // verify-gate accepts a pull-request skip of this job as "no image input changed" when
+  // `changes` succeeded with docker == 'false', so every clause that makes the job run
+  // is load-bearing for the verdict.
+  assert.match(cond, /github\.event_name != 'pull_request'/)
+  assert.match(cond, /needs\.changes\.outputs\.docker == 'true'/)
+  assert.match(cond, /!cancelled\(\)/)
 })
 
 test('docker-build needs both lint and changes', () => {

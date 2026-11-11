@@ -46,7 +46,7 @@ export async function readCsvList(form: FormData, key = 'list'): Promise<CsvList
   try {
     csv = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(await file.arrayBuffer())
   } catch {
-    return { ok: false, status: 400, error: 'Die Datei ist kein UTF-8-Text. Bitte die Liste als CSV in UTF-8 speichern.' }
+    return { ok: false, status: 400, error: 'Die Datei ist kein UTF-8-Text. In Excel: „Speichern unter“ und als Dateityp „CSV UTF-8 (durch Trennzeichen getrennt)“ wählen (nicht „CSV (Trennzeichen-getrennt)“); in LibreOffice: Zeichensatz „Unicode (UTF-8)“.' }
   }
   if (csv.includes('\u0000')) return { ok: false, status: 400, error: 'Die Datei enthält Nullzeichen und ist keine CSV-Liste.' }
   if (csv.trim() === '') return { ok: false, status: 400, error: 'Die CSV-Datei enthält keine Zeilen.' }

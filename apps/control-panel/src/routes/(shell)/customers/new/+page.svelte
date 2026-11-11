@@ -33,8 +33,15 @@
       {#if errors.slug}<span class="err">{errors.slug}</span>{/if}
     </label>
     <label>
+      Kurzname noch einmal eingeben
+      <input name="confirmSlug" required autocomplete="off" value={String(values.confirmSlug ?? '')} aria-invalid={errors.confirmSlug ? 'true' : undefined} aria-describedby="slug-once" />
+      <span id="slug-once" class="muted">Der Kurzname bleibt dauerhaft (Anmelde-Realm, Datenbank, Kalender) und lässt sich nicht umbenennen.</span>
+      {#if errors.confirmSlug}<span class="err">{errors.confirmSlug}</span>{/if}
+    </label>
+    <label>
       Host
-      <input name="host" required autocomplete="off" placeholder="rat.musterstadt.de" value={String(values.host ?? '')} aria-invalid={errors.host ? 'true' : undefined} />
+      <input name="host" required autocomplete="off" placeholder="rat.musterstadt.de" value={String(values.host ?? data.expectedHost ?? '')} aria-invalid={errors.host ? 'true' : undefined} aria-describedby={data.expectedHost ? 'host-expected' : undefined} />
+      {#if data.expectedHost}<span id="host-expected" class="muted">Diese Installation ist für den Host <code>{data.expectedHost}</code> eingerichtet; jeder andere Host wird beim Anlegen abgelehnt.</span>{/if}
       {#if errors.host}<span class="err">{errors.host}</span>{/if}
     </label>
     <label>
@@ -87,7 +94,7 @@
           </div>
         {/if}
       {/each}
-      <p class="muted">„board“ ist noch nicht mandantengetrennt, „vault“ (Tresor) bleibt im Pilotbetrieb abgeschaltet: beide sind nicht wählbar.</p>
+      <p class="muted">„board“ ist noch nicht mandantengetrennt, „vault“ (Tresor) bleibt im Pilotbetrieb abgeschaltet: beide sind nicht wählbar. Module ohne Isolationsprüfung sind ebenfalls nicht wählbar; die DPIA-Entscheidung trägt weiterhin die Betreiberin oder der Betreiber ein.</p>
       {#if errors.enable}<span class="err">{errors.enable}</span>{/if}
       {#if errors.dpia}<span id="err-dpia" class="err">{errors.dpia}</span>{/if}
     </fieldset>
