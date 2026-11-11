@@ -14,9 +14,9 @@
 > leaf service — derived a port, ran a conformance suite across both
 > implementations, wired a transactional outbox onto the broker, flipped live on a
 > flag, and decommissioned the old store after a rehearsed rollback. The newsletter
-> feature itself is a **module** (it lives outside the governance kernel); what
-> generalises — and what this file captures — is the kernel SDK methodology that
-> any module extraction follows.
+> feature itself is a **module** (`modules/publishing/`, manifest id `newsletter`;
+> it is not part of the governance kernel); what generalises — and what this file
+> captures — is the kernel SDK methodology that any module extraction follows.
 >
 > **How to use it.** Walk the seven sections in order. Each ends with a
 > **checklist** you copy into the extraction's task plan and tick off. Section 4
@@ -131,7 +131,12 @@ retryable `Error` so the dispatch claim is left in place for stale-takeover.
 The leaf owns its events. State changes and the intent-to-publish are co-committed
 in ONE transaction (transactional outbox), a relay drains the outbox to the broker,
 and the consumer is idempotent. This is the kernel's outbox-saga idiom (see
-`@gremion/ports`) applied to the leaf's own physical DB.
+`@gremion/ports`) applied to the leaf's own physical DB. A new leaf does not
+hand-write it: `@gremion/events` (`packages/events`, TASK-079) provides the
+outbox `enqueue`, the relay, the idempotent inbox consumer, dead-letter handling
+and the `events` CLI ([runbooks/dead-letter.md](../runbooks/dead-letter.md)); the
+tables, backoff and idempotency gate below describe the shape that library
+implements.
 
 **Outbox table + backoff + terminal.** The outbox is a table in the leaf's
 per-tenant DB with `status` (`pending`/`ok`/`failed`), `attempts`,
@@ -204,19 +209,26 @@ The FLIP-FIRST order:
    `/healthz/tenants` is green.
 
 **Pinned compose invocation (mandatory).** Run every cutover command against an
-explicit file set and explicit services, e.g.
-`docker compose -f docker-compose.yml -f docker-compose.prod.yml --profile production <cmd> <explicit services>`.
-A bare `docker compose …` resolves `docker-compose.yml` + `docker-compose.override.yml`
-— a different file set that recreates services under dev config (a recorded outage
-class). Pre-step: inspect the running container's
-`com.docker.compose.project.config_files` label and confirm it lists the intended
-files or STOP. **Bare `docker compose down` is FORBIDDEN during a cutover.**
+explicit project and explicit services. On a host that is
+`docker compose --env-file /opt/gremion/etc/env/<project>.env <cmd> <explicit services>`
+from the release tree: the env file carries `COMPOSE_FILE`, the project name and
+the profiles, and `--env-file` is the only flag a host command passes
+([deployment-architecture.md](../deployment-architecture.md)). A bare
+`docker compose …` resolves a different file set and project and recreates
+services under the wrong config (a recorded outage class). Pre-step: inspect the
+running container's `com.docker.compose.project.config_files` label and confirm
+it lists the intended files or STOP. **Bare `docker compose down` is FORBIDDEN
+during a cutover.**
 
-> **Compose topology in this kernel.** The governance-only stack defaults to 7
-> services (`postgres`, `keycloak`, `gremion-ui`, `gremion-public`, `legal`, `vector`,
-> `mailpit`). The `production` profile in `docker-compose.yml` adds `traefik` +
-> `docker-socket-proxy`; `docker-compose.prod.yml` adds `pgbouncer` + `cloudflared`.
-> An extracted leaf adds its own service + Postgres + a broker (NATS) container.
+> **Compose topology in this kernel.** The stack is a state project
+> (`docker-compose.yml`: the databases, Keycloak, NATS, legal, vector, plus the
+> `production` edge and `docker-compose.prod.yml`'s `pgbouncer` and `fallback`) and
+> one app project per colour (`docker-compose.app.yml`: `gremion-ui`,
+> `gremion-public`, `control-panel`, `kernel-api`, the leaf services and the
+> one-shots); see [deployment.md](../deployment.md#what-gets-deployed). An
+> extracted leaf adds its own service (app project, behind a compose profile) and
+> its `<id>-postgres` server (state project); NATS is already in the state
+> project.
 
 **Rollback rehearsal BEFORE decommission.** The rollback must be rehearsed and
 proven real while the old store is still present — Section 5 does not start until it
@@ -245,7 +257,11 @@ one. Removing the old path before the new one is backed up is data-loss-by-omiss
   leaf's per-tenant DB (via `docker compose exec -T <leaf>-postgres`), encrypted
   under the same per-tenant backup key, written next to the kernel artifacts.
   Existence-checked (WARN + skip if the leaf is not provisioned). Prove the
-  dump → encrypt → round-trip is lossless before trusting it.
+  dump → encrypt → round-trip is lossless before trusting it. (In this tree
+  `scripts/tenant-backup.sh` carries no leaf step since a leaf was carved out of
+  the kernel compose files; on a host `gremion-backup` dumps every server named in
+  `BACKUP_POSTGRES_SERVICES`, so the new `<id>-postgres` must be added there,
+  [ops/runbook/backup.md](../ops/runbook/backup.md).)
 - **Crypto-shred** — tenant lifecycle gains a leaf-shred executor (`DROP DATABASE`
   of the leaf's per-tenant DB + catalog-row delete), invoked AFTER the data-plane DB
   drop and BEFORE realm delete; pin the ordering with unit tests. A configured-leaf
@@ -260,7 +276,8 @@ Only once those three surfaces address the leaf DB does removal run.
   the in-process-coupled tests (their non-store-specific semantic assertions live on
   in the service/port suites per Section 1).
 - **Flag default flipped** — factory: unset → `service`; the removed in-process flag
-  value now throws (resolve → `503`). Mirror the default in `docker-compose.yml`.
+  value now throws (resolve → `503`). Mirror the default in the compose file that
+  sets the flag (`docker-compose.app.yml` for an app-tier service).
 - **Boundary rule** — update the module's boundary rule to "dir = port + ACL
   client"; remove the now-unused allow entries. The backstop flags unused allows, so
   their removal proves the coupling is genuinely gone (see
@@ -296,14 +313,17 @@ and comments.
 Author BOTH deploy manifests together and keep them in sync with a **drift test
 written FIRST**. The leaf must deploy independently on Compose AND on k8s.
 
-**Compose + kustomize together.** Define the leaf, its Postgres, and its broker in
-`docker-compose.yml` (+ overlays `docker-compose.prod.yml` /
-`docker-compose.override.yml`) and mirror them in the kustomize base
+**Compose + kustomize together.** Define the leaf service in
+`docker-compose.app.yml` and its Postgres server in `docker-compose.yml`
+(`<id>-postgres`, behind the module's compose profile; the broker, `nats`, is
+already there) and mirror them in the kustomize base
 (`k8s/base/<broker>/` service + statefulset and `k8s/base/<leaf>/` deployment,
-service, configmap, secret, postgres-statefulset/service/secret).
+service, configmap, secret, postgres-statefulset/service/secret). `k8s/base` holds
+no broker or leaf manifest today (see the scope note in
+[deployment.md](../deployment.md)), so a first extraction adds them.
 
 **Drift test FIRST.** A deploy-drift test asserts the k8s manifests stay in sync
-with `docker-compose.yml` on three axes: image tag, env-var KEY NAMES (compose env
+with the compose file on three axes: image tag, env-var KEY NAMES (compose env
 block vs k8s configmap + secret stubs), and readiness probe path + port. Write or
 extend it before you hand-edit either manifest so a divergence fails CI instead of
 leaking to deploy.

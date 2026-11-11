@@ -10,23 +10,26 @@ solutions. For vision, architecture, and the governance charter, see
 - [ENVIRONMENT.md](ENVIRONMENT.md) — environment variable reference
 - [deployment.md](deployment.md) — production deployment
 - [architecture.md](architecture.md) — technical architecture
-- [runbooks/](runbooks/) — `tenant-edge.md`, `tenant-lifecycle.md`, `email-smtp.md`, `pgbouncer.md`
+- [runbooks/](runbooks/) — `tenant-edge.md`, `tenant-lifecycle.md`, `email-smtp.md`, `pgbouncer.md`, `dead-letter.md`
+- [ops/runbook/](ops/runbook/README.md) — install, upgrade, backup and restore on a distribution host
 
-> **Scope.** The kernel ships a **governance-only** stack: identity & auth
-> (Keycloak OIDC), multi-tenancy, the governance domain (committees, members,
-> org-unit tree, protocols, resolutions/Beschlüsse, the public portal), the
-> governance invariant hooks, and the module SDK. It ships exactly two module
-> manifests (`core` and `governance`). Finance, files/Nextcloud, messages,
-> elections, content, calendar, the mobile app, and the board are **not** part
-> of the kernel — each lives in its own repository. If a guide mentions any of
-> those services, it does not apply here.
+> **Scope.** The kernel is identity & auth (Keycloak OIDC), multi-tenancy, the
+> governance domain (committees, members, org-unit tree, protocols,
+> resolutions/Beschlüsse, the public portal), the governance invariant hooks, and
+> the module SDK. Its own manifests are `core` and `governance`; the feature
+> modules (board, calendar, content, elections, files, finance, handover,
+> messaging, publishing, vault, votes) live under `modules/` in this tree
+> ([modules.md](modules.md)), are switched on or off per customer, and bring their
+> own services only when enabled.
 
 ---
 
 ## Default services & host ports (local dev)
 
-The base stack brings up seven services. `docker-compose.override.yml` is
-auto-loaded in local dev and exposes these on loopback only:
+`make up` starts two compose projects: the state project `dev-state` (base file +
+`docker-compose.override.yml`, `COMPOSE_PROFILES=dev`) and the app project
+`dev-app-blue` (`docker-compose.app.yml` + `docker-compose.app.dev.yml`). The
+override files expose these on loopback only:
 
 | Service        | Role                                      | Dev URL / port (localhost) |
 |----------------|-------------------------------------------|----------------------------|
@@ -37,11 +40,26 @@ auto-loaded in local dev and exposes these on loopback only:
 | `legal`        | Static legal pages (Impressum, GDPR)      | http://localhost:8083      |
 | `mailpit`      | SMTP catcher (web UI)                     | http://localhost:8026      |
 | `vector`       | Log pipeline (IP pseudonymisation)        | internal only              |
+| `governance-postgres`, `nats`, `control-panel`, `kernel-api` | governance databases, broker, operator panel, kernel API | internal only |
 
 The **production** profile adds `traefik` + `docker-socket-proxy`
-(`docker-compose.yml`, `profiles: [production]`) and `pgbouncer` + `cloudflared`
-(`docker-compose.prod.yml`). Local dev reaches services directly on the ports
+(`docker-compose.yml`, `profiles: [production]`), and `docker-compose.prod.yml`
+adds `pgbouncer` and `fallback`. Local dev reaches services directly on the ports
 above and does not run Traefik.
+
+A bare `docker compose` in the repository addresses neither dev project (the
+Makefile runs them with `STACK=dev`). This guide uses the Makefile's two command
+prefixes:
+
+```bash
+DS="env STACK=dev IMAGE_TAG=dev docker compose -p dev-state"
+DA="env STACK=dev COLOUR=blue IMAGE_TAG=dev docker compose -f docker-compose.app.yml -f docker-compose.app.dev.yml -p dev-app-blue"
+```
+
+`$DS` is `DEV_STATE` (postgres, keycloak, legal, vector, mailpit, nats) and `$DA`
+is `DEV_APP` (gremion-ui, gremion-public, control-panel, kernel-api). On a
+distribution host use `docker compose --env-file /opt/gremion/etc/env/<project>.env`
+instead ([ops/runbook/README.md](ops/runbook/README.md)).
 
 > `gremion-ui` and `gremion-public` are the admin shell app and the public
 > portal app, respectively.
@@ -56,9 +74,9 @@ above and does not run Traefik.
 # All-in-one: container status + endpoint probes
 make health
 
-# Raw compose view
-docker compose ps
-docker compose logs -f            # all services
+# Raw compose view of both projects
+make ps
+make logs                         # all services
 make logs SERVICE=gremion-ui        # one service
 ```
 
@@ -83,10 +101,11 @@ make validate-env                 # fails if any CHANGE_ME_ placeholder remains
 ## First-run setup (`setup.sh` / `make setup`)
 
 `make setup` runs `scripts/setup.sh`, which: creates `.env` from `.env.example`,
-generates random secrets, mints the internal TLS CA, ensures
-`docker/keycloak/realm-export.json` exists, builds images, and starts
-`postgres`, `keycloak` and `gremion-ui` — then waits for `gremion-ui` to become
-healthy.
+generates random secrets, mints the internal TLS CA, renders the PgBouncer
+userlist, checks the compose bind-mount sources, creates the dev networks and
+volumes, builds the images, and starts the state project and the blue app colour
+(`make up`) — then waits for `gremion-ui` to become healthy. No realm file is
+prepared (B-01).
 
 ### Setup aborts before starting containers
 
@@ -97,6 +116,7 @@ healthy.
 | `Invalid domain name` | Domain prompt got a bad value | Re-run; press Enter for `localhost`, or enter a valid hostname |
 | `Some CHANGE_ME_ placeholders were not replaced` | `sed` incompatibility | Check your `sed`; on macOS the script uses BSD `sed -i ''` automatically |
 | `gen-realm: set CONFIG_PATH=...` | `make gen-realm` run without a vertical config | Supply `CONFIG_PATH=/path/to/config.json` or add `config/config.json`. Nothing needs `realm-export.json` to exist: B-01 deleted the boot import and the file is a gitignored generator output |
+| `required variable TENANT_PROXY_SHARED_SECRET is missing a value` (from `make up`) | `docker-compose.app.yml` requires it for `kernel-api`; `.env.example` ships it commented out and `setup.sh` does not set it | Put a value in `.env` (`openssl rand -hex 32`). The tenant resolver's proxy-trust gate is then on, so a request to a loopback port must carry `x-proxy-trust: <that value>` ([runbooks/tenant-edge.md](runbooks/tenant-edge.md) STEP 0c) |
 
 ### `.env` already exists — secrets not regenerated
 
@@ -118,46 +138,63 @@ The wait loop in `setup.sh` polls for ~3 minutes. If it times out:
 make logs SERVICE=gremion-ui
 ```
 
-`gremion-ui` `depends_on` Postgres and Keycloak being **healthy**, so a timeout
-usually means one of those is not up — check `docker compose ps` and the logs
-for `postgres` / `keycloak` first.
+`gremion-ui` is in another compose project than Postgres and Keycloak, so it has
+no `depends_on` on them: its own boot retry waits for the control database. A
+timeout usually means one of them is not up — check `make ps` and the logs for
+`postgres` / `keycloak` first.
 
 ### Seeding a starter organisation
 
-`fresh-start` is retired; seed via the one-time endpoint after the stack is up:
+`fresh-start` is retired; seed via the one-time endpoint after the stack is up and
+a tenant exists. The seed runs in the request's tenant context, so the request
+names a host that is bound to a provisioned tenant:
 
 ```bash
 curl -X POST -H "X-Seed-Token: $SEED_TOKEN" \
+  -H "X-Forwarded-Host: <a host bound to a tenant>" \
   http://localhost:3001/api/setup/seed
 ```
 
-`SEED_TOKEN` lives in `.env`. Leave it empty to disable the endpoint. See
+`SEED_TOKEN` lives in `.env`. Leave it empty to disable the endpoint. The endpoint
+answers `409` when `org_units` is not empty. See
 [LOCAL_TESTING.md](LOCAL_TESTING.md).
 
 ---
 
-## Fresh-kernel "incomplete brand identity" 503
+## A platform with no tenant answers 404, not a setup page
 
-**Symptom:** A freshly started kernel returns **HTTP 503** for a tenant, and the
-logs show:
+**Symptom:** a freshly started stack answers **HTTP 404** on every host
+(`/healthz` answers `200`), and there is no setup page.
+
+**This is expected.** The first-run setup wizard and the default tenant are gone
+(TASK-042, TRD-075): a platform with zero customers boots healthy and serves no
+tenant on any host. A tenant exists once a `create` request has run, which binds
+its host ([runbooks/tenant-lifecycle.md](runbooks/tenant-lifecycle.md),
+[runbooks/tenant-edge.md](runbooks/tenant-edge.md)).
+
+---
+
+## A tenant answers 503 "incomplete brand identity"
+
+**Symptom:** a tenant returns a **tenant-scoped HTTP 503**, and the logs show:
 
 ```
 [fleet-migrations] tenant <slug>: FAILED — tenant "<slug>" config has an INCOMPLETE brand identity ...
 ```
 
-**This is expected for an un-provisioned tenant.** During boot the fleet runs
-each active tenant's migrations and then asserts a **complete** brand identity
-(`product` / `org_short` / … in the tenant's `config.json`). An un-materialized
-tenant resolves these to empty values, so the fleet records that tenant
-`failed` and `resolve.ts` serves a **tenant-scoped** 503 instead of rendering a
-blank brand. Other tenants are unaffected.
+During boot the fleet runs each active tenant's migrations and then asserts a
+**complete** brand identity (`product` / `org_short` / … in the tenant's
+`config.json`). A tenant whose stored config lacks it is recorded `failed` and
+`resolve.ts` serves a **tenant-scoped** 503 instead of rendering a blank brand.
+Other tenants are unaffected.
 
-**Fix:** complete the tenant's setup so a real `config.json` is written. Run the
-seed endpoint above (which provisions the default tenant with real brand
-values), or finish the Setup flow / provision the tenant
-([runbooks/tenant-lifecycle.md](runbooks/tenant-lifecycle.md)). Once the tenant
-config carries a complete brand identity it passes the guard and serves
-normally.
+**Fix:** write a complete config for that tenant:
+`pnpm -C gremion-ui exec tsx scripts/tenant-provision.ts materialize-config <slug>`
+refuses (exit non-zero, writes nothing) a still-blank brand and otherwise bakes
+the merged config back
+([runbooks/tenant-lifecycle.md](runbooks/tenant-lifecycle.md), "Materialize
+config"). A tenant created by a create request already carries the brand the
+request named.
 
 ---
 
@@ -171,25 +208,25 @@ all created on first init by `docker/postgres/init-databases.sh`.
 
 ```bash
 make shell-db                          # psql -U postgres
-docker compose ps postgres
-docker compose logs postgres
-docker compose exec postgres pg_isready -U postgres
+make ps
+make logs SERVICE=postgres
+$DS exec postgres pg_isready -U postgres
 ```
 
 | Cause | Fix |
 |---|---|
-| Postgres still starting | Wait for the healthcheck (`start_period` 20s); it gates `gremion-ui` |
+| Postgres still starting | Wait for the healthcheck (`start_period` 20s); `gremion-ui`'s boot retry waits for it |
 | Wrong credentials | Check `.env`: `POSTGRES_PASSWORD`, `GREMION_DB_PASSWORD`, `KEYCLOAK_DB_PASSWORD`, `CONTROL_DB_PASSWORD` |
 | Disk full | `df -h`; prune Docker (see below) |
-| Network missing | `docker network inspect gremion_net` |
+| Network missing | `docker network inspect dev_state` (`make dev-networks` creates `dev_state` and `dev_edge`) |
 
 ### Restart or rebuild
 
 ```bash
-docker compose restart postgres
+$DS restart postgres
 
-# Full reset — DESTROYS the database volume (gremion_pg_data)
-docker compose down -v && make setup
+# Full reset — DESTROYS the database volumes (dev-state_pg-data and the others)
+make down && $DS down -v && make up
 ```
 
 ### Control-plane DB missing (`503` on every request)
@@ -198,12 +235,12 @@ If `init-databases.sh` ran on a pre-existing volume the `control` DB may be
 absent — `gremion-ui`'s `runControlMigrations()` then dies on boot and all
 requests 503. Create it with the one-shot in
 [runbooks/tenant-edge.md](runbooks/tenant-edge.md) (step 3). Note
-`CONTROL_DATABASE_URL` targets `postgres:5432` **directly** and must never be
-re-pointed at PgBouncer.
+`CONTROL_DATABASE_URL` targets `postgres-<stack>:5432` **directly** and must never
+be re-pointed at PgBouncer.
 
-> Changing a DB password in `.env` requires `docker compose up -d
-> --force-recreate gremion-ui postgres` — a plain `restart` does **not** reload
-> `.env`.
+> Changing a DB password in `.env` requires recreating the services that read it
+> (`$DS up -d --force-recreate postgres`, `$DA up -d --force-recreate gremion-ui`)
+> — a plain `restart` does **not** reload `.env`.
 
 ---
 
@@ -225,18 +262,18 @@ from `.env` at that point.
 
 ```bash
 make logs SERVICE=keycloak
-make shell-db -c '\l'                  # keycloak DB should exist
+$DS exec postgres psql -U postgres -c '\l'   # keycloak DB should exist
 ```
 
 | Cause | Fix |
 |---|---|
-| Postgres not healthy | Keycloak `depends_on: postgres (service_healthy)` — fix Postgres first |
+| Postgres not healthy | Keycloak `depends_on: postgres (service_healthy)` (same project) — fix Postgres first |
 | Wrong DB credentials | Check `.env`: `KEYCLOAK_DB_PASSWORD` |
 | Tenant-create fails on the realm | A required OIDC secret is empty — `buildTenantRealmDoc` throws; ensure `GREMION_UI_OIDC_CLIENT_SECRET` and `GREMION_ADMIN_OIDC_CLIENT_SECRET` are set |
 | Port 8082 in use | Change the dev mapping in `docker-compose.override.yml` |
 
 ```bash
-docker compose restart keycloak
+$DS restart keycloak
 ```
 
 ### Can't reach the Keycloak admin console
@@ -244,20 +281,20 @@ docker compose restart keycloak
 **URL:** http://localhost:8082/auth/admin
 
 ```bash
-docker compose ps keycloak
+make ps
 curl -I http://localhost:8082/auth/health/ready
 grep '^KEYCLOAK_ADMIN' .env            # admin username + password
 ```
 
 > In production the admin console + Admin REST API are IP-restricted by
 > `KC_ADMIN_ALLOWLIST_CIDRS` (default `127.0.0.1/32` = nobody). Use
-> `docker compose exec keycloak /opt/keycloak/bin/kcadm.sh` or a port-forward,
-> or add your bastion/VPN CIDR.
+> `docker compose --env-file /opt/gremion/etc/env/state.env exec keycloak /opt/keycloak/bin/kcadm.sh`
+> or a port-forward, or add your bastion/VPN CIDR.
 
 ### OIDC client not found / secret mismatch
 
-The realm export ships the clients, but their secrets come from `.env`. To
-(re)apply them:
+The composed realm document carries the clients, but their secrets come from
+`.env`. To (re)apply them:
 
 ```bash
 make keycloak-configure                # scripts/configure-keycloak-clients.sh
@@ -286,7 +323,7 @@ Usually a redirect-URI or origin mismatch.
 > and `buildTenantRealmDoc` pins every realm it composes to `sslRequired: all`.
 > A dev realm therefore refuses plain-HTTP requests until you either trust the
 > internal CA or apply a per-realm delta:
-> `docker compose exec keycloak /opt/keycloak/bin/kcadm.sh update realms/<realm> -s sslRequired=external`.
+> `$DS exec keycloak /opt/keycloak/bin/kcadm.sh update realms/<realm> -s sslRequired=external`.
 > Production runs `start` with the server-to-server hop over internal TLS
 > (`https://keycloak:8443`). A login that works in dev but 403s/redirects in
 > prod is almost always missing internal-CA trust (`NODE_EXTRA_CA_CERTS`) or an
@@ -305,13 +342,13 @@ production a missing edge-injected `x-proxy-trust` (once
 
 ### Every request 404s locally
 
-A request must carry a host that is BOUND to a tenant (`addTenantDomain`); the
-default tenant binds none (TRD-075), and no shipped tool binds one yet (the
-customer-create CLI of TASK-043 is the first; see
-[runbooks/tenant-edge.md](runbooks/tenant-edge.md) STEP 0a), so on a stack
-built from this tree every tenant route 404s. The `gremion-ui` healthcheck probes
-`/healthz`, which is exempt from resolution. To test by hand, stamp a bound
-host:
+A request must carry a host that is BOUND to a tenant (`addTenantDomain`). There
+is no default tenant (TRD-075); a create request (TASK-043, run by the host
+executor) binds the customer's host ([runbooks/tenant-edge.md](runbooks/tenant-edge.md)
+STEP 0a), so a stack with no customer answers 404 on every tenant route. The
+`gremion-ui` healthcheck probes `/healthz`, which is exempt from resolution. To
+test by hand, stamp a bound host (and `x-proxy-trust` when
+`TENANT_PROXY_SHARED_SECRET` is set):
 
 ```bash
 curl -s -H 'X-Forwarded-Host: <a-bound-host>' http://localhost:3001/
@@ -326,11 +363,12 @@ missing; an app 404 logs a `tenant.host.rejected` line with the reason. See
 
 ### Cross-tenant data / wrong tenant resolved on a self-call
 
-`INTERNAL_BASE_URL` must stay `http://gremion-ui:3000` (the in-container origin).
-If it falls through to the public apex, the hop crosses the edge, which then
-decides what `X-Forwarded-Host` (the whole tenant selector) says; historically
-that aimed a second tenant's self-call at the **default** tenant. Do not point
-it at the public apex.
+`INTERNAL_BASE_URL` must stay `http://gremion-ui-<colour>:3000` (this colour's
+in-container origin, derived from `COLOUR` in `docker-compose.app.yml`). If it
+falls through to the public apex, the hop crosses the edge, which then decides
+what `X-Forwarded-Host` (the whole tenant selector) says; historically that aimed
+a second tenant's self-call at the **default** tenant. Do not point it at the
+public apex.
 
 ---
 
@@ -338,10 +376,11 @@ it at the public apex.
 
 Two migration sets run at boot: **control-plane** migrations
 (`gremion-ui/migrations-control/`, against the `control` DB) and per-tenant
-**data-plane** migrations (`gremion-ui/migrations/`, governance-only:
-`0001_governance_schema`, `0004_committee_elections`, `0007_protocols`,
-`0008_public_portal`, `0009_audit_log`, `0010_org_units`, `0043_audit_log_hash_chain`,
-…).
+**data-plane** migrations (`gremion-ui/migrations/`, for example
+`0001_governance_schema`, `0007_protocols`, `0008_public_portal`,
+`0009_audit_log`, `0010_org_units`, `0043_audit_log_hash_chain`, …, plus each
+enabled module's `app/migrations/` that the module overlay copies in). The
+`migrate` one-shot of the app project runs the same two sets.
 
 ### Migration failure on boot
 
@@ -352,22 +391,25 @@ make logs SERVICE=gremion-ui | grep -i 'migration\|fleet-migrations'
 - A **control** migration failure makes every request 503 — fix the `control`
   DB connection (see PostgreSQL above) and restart `gremion-ui`.
 - A **per-tenant** failure is recorded in the fleet-migration ledger and yields
-  a tenant-scoped 503; the most common one for a fresh kernel is the brand-identity
-  guard above.
+  a tenant-scoped 503; a common one is the brand-identity guard above.
 
-### Realm export out of date after a config change
+### Realm template out of date after a config change
 
-The realm export is generated from the enabled module manifests gated by a
-vertical's `config.json`. The committed `realm-export.json` is the
-governance-only base (`gremion-ui` + `gremion-admin` clients). Regenerate before
-`docker compose up`:
+The per-tenant realm is composed from `docker/keycloak/realm-export.base.json`
+(the committed `gremion-ui` + `gremion-admin` base) and the enabled modules'
+manifests by `buildTenantRealmDoc` at tenant-create time. `make gen-realm` writes
+the module-composed template for a vertical's `config.json` to the gitignored
+`docker/keycloak/realm-export.json`, for inspection only; nothing reads it at
+boot:
 
 ```bash
 CONFIG_PATH=/path/to/config.json make gen-realm
 ```
 
 (With neither `CONFIG_PATH` nor `config/config.json`, `make gen-realm` errors
-rather than no-opping.)
+rather than no-opping.) An existing tenant realm drifts from a changed template
+until `gremion-tenant reconcile <slug> --apply --reason <text>`
+([runbooks/tenant-lifecycle.md](runbooks/tenant-lifecycle.md), "Reconcile").
 
 ---
 
@@ -378,8 +420,8 @@ no auth, TLS off) — nothing leaves the host. Read trapped mail at
 http://localhost:8026.
 
 ```bash
-docker compose ps mailpit
-docker compose logs mailpit
+make ps
+make logs SERVICE=mailpit
 ```
 
 If a feature reports a send failure but no mail appears in Mailpit, confirm the
@@ -397,7 +439,8 @@ healthy. To switch to a real relay, see
 # Find the conflicting listener (loopback dev ports: 3001 3002 5433 8082 8083 8026)
 sudo lsof -i :3001            # macOS/Linux
 
-# Change the host-side mapping in docker-compose.override.yml, e.g. 9001:3000
+# Change the host-side mapping in docker-compose.override.yml (state services) or
+# docker-compose.app.dev.yml (gremion-ui 3001, gremion-public 3002), e.g. 9001:3000
 ```
 
 ### Docker daemon not running
@@ -411,20 +454,22 @@ sudo lsof -i :3001            # macOS/Linux
 ### Container crashes on startup
 
 ```bash
-docker compose ps                          # exit code
-docker compose logs <service>
+make ps                                    # exit code
+make logs SERVICE=<service>
 docker inspect <container-name> | grep -A 20 Health
 ```
 
 ### Network issues between containers
 
-The compose network is **`gremion_net`**.
+The dev stack's two external networks are **`dev_state`** (databases, Keycloak, NATS,
+and the app project) and **`dev_edge`**; `make dev-networks` creates them, and
+each app colour adds its own project-scoped `app` network.
 
 ```bash
-docker network inspect gremion_net
-docker compose exec gremion-ui wget -qO- http://postgres:5432 2>&1 | head   # name resolution
+docker network inspect dev_state
+$DA exec gremion-ui wget -qO- http://postgres-dev:5432 2>&1 | head   # name resolution (postgres-<stack> alias)
 
-docker compose down && docker network prune && docker compose up -d
+make down && docker network prune && make up
 ```
 
 ### Out of disk space
@@ -438,17 +483,22 @@ docker image prune -a --filter "until=240h"
 docker volume prune                         # keeps named gremion_* volumes in use
 ```
 
-> The kernel's named volumes are `gremion_pg_data`, `gremion_config_data`,
-> `gremion_tenant_config_data`, `gremion_mailpit_data`, `gremion_traefik_logs`,
-> `gremion_vector_processed_logs`. Pruning **in-use** volumes is safe; a full
-> `docker compose down -v` deletes them and your data.
+> The state project's named volumes are project-scoped (`dev-state_pg-data`,
+> `dev-state_mailpit-data`, `dev-state_traefik-logs`,
+> `dev-state_vector-processed-logs`, plus one data volume per module database
+> server); the shared volumes `dev_config_data`, `dev_tenant_config_data`,
+> `dev_nats_accounts`, `dev_nats_secrets` and `dev_traefik_acme` are external, made
+> by `make dev-networks`. Pruning **in-use** volumes is safe; `$DS down -v`
+> deletes the project-scoped ones and your data.
 
 ---
 
 ## Backup & restore
 
-The kernel uses **restic** (`RESTIC_PASSWORD` in `.env`) via `scripts/backup.sh`
-/ `scripts/restore.sh`. See [OPERATIONS.md](OPERATIONS.md) for the full routine.
+The kernel scripts use **restic** (`RESTIC_PASSWORD` in `.env`) via
+`scripts/backup.sh` / `scripts/restore.sh`; a distribution host runs them through
+`gremion-backup` ([ops/runbook/backup.md](ops/runbook/backup.md)). See
+[OPERATIONS.md](OPERATIONS.md) for the full routine.
 
 ```bash
 # Diagnose a failing backup
@@ -468,9 +518,9 @@ grep -E '^(RESTIC_PASSWORD|RCLONE_)' .env
 {
   echo "=== System ==="; uname -a
   echo "=== Docker ==="; docker --version; docker compose version
-  echo "=== Containers ==="; docker compose ps
+  echo "=== Containers ==="; make ps
   echo "=== Health ==="; make health
-  echo "=== Logs (last 100) ==="; docker compose logs --tail=100
+  echo "=== Logs (last 100) ==="; $DS logs --tail=100; $DA logs --tail=100
   echo "=== .env (redacted) ==="; sed 's/=.*$/=REDACTED/' .env
 } > debug.txt
 ```
