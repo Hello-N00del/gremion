@@ -46,6 +46,31 @@ function open(card: CardView = CARD, extra: { onclose?: () => void; onsaved?: ()
 
 const sentBody = () => JSON.parse(fetchMock.mock.calls[0][1].body as string)
 
+describe('the card editor as a modal dialog', () => {
+  it('hands focus back to the control that opened it when it closes', () => {
+    const opener = document.createElement('button')
+    document.body.append(opener)
+    opener.focus()
+    open()
+    expect(document.activeElement).toBe(screen.getByLabelText('Titel'))
+    cleanup()
+    expect(document.activeElement).toBe(opener)
+    opener.remove()
+  })
+
+  it('keeps Tab inside the dialog: from the last control it wraps to the first, and back', async () => {
+    open()
+    const dialog = screen.getByRole('dialog')
+    const cancel = screen.getByRole('button', { name: 'Abbrechen' })
+    const first = screen.getByRole('button', { name: 'Schließen' })
+    cancel.focus()
+    await fireEvent.keyDown(dialog, { key: 'Tab' })
+    expect(document.activeElement).toBe(first)
+    await fireEvent.keyDown(dialog, { key: 'Tab', shiftKey: true })
+    expect(document.activeElement).toBe(cancel)
+  })
+})
+
 describe('the card editor', () => {
   it('shows the card\'s title, description, assignee and due date', () => {
     open()

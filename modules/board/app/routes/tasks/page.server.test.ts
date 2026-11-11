@@ -130,3 +130,38 @@ describe('/tasks load — members for the card editor', () => {
     for (const c of data.deck.cards) expect(c).not.toHaveProperty('assignee_keycloak_id')
   })
 })
+
+// The in-process backend reads the DATE column through the kernel pool, whose driver parses a
+// DATE to a JS Date; the service backend sends an ISO timestamp. The client gets a bare
+// YYYY-MM-DD either way (an <input type="date"> and the due pill both need exactly that).
+describe('/tasks load — due date shape', () => {
+  const deckWith = (due: unknown) => ({
+    board: { id: 'b1', org_unit_id: OU_A, name: 'Aufgaben', archived: false },
+    stacks: [{ id: 's1', name: 'To Do', sort_order: 0 }],
+    cards: [{ id: 'c1', stack_id: 's1', title: 'A', assignee_keycloak_id: null, due_date: due }],
+  })
+  beforeEach(() => {
+    vi.clearAllMocks()
+    listOrgUnits.mockResolvedValue([{ id: OU_A, name: 'StuRa' }])
+    resolveScope.mockResolvedValue([OU_A])
+    listBoardsForOrgUnits.mockResolvedValue([{ id: 'b1', org_unit_id: OU_A, name: 'Aufgaben', archived: false }])
+    listOrgUnitMembers.mockResolvedValue([])
+    resolveMany.mockResolvedValue(new Map())
+  })
+
+  it.each([
+    ['a Date from the pool driver', new Date('2026-12-15T00:00:00Z')],
+    ['an ISO date string', '2026-12-15'],
+    ['an ISO timestamp from the service backend', '2026-12-15T00:00:00.000Z'],
+  ])('sends %s as YYYY-MM-DD', async (_label, due) => {
+    deckFor.mockResolvedValue(deckWith(due))
+    const data = await run()
+    expect(data.deck.cards[0].due_date).toBe('2026-12-15')
+  })
+
+  it('keeps no due date as null', async () => {
+    deckFor.mockResolvedValue(deckWith(null))
+    const data = await run()
+    expect(data.deck.cards[0].due_date).toBeNull()
+  })
+})

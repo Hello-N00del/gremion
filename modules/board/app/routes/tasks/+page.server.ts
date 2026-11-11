@@ -13,6 +13,15 @@ import type { CardView, StackView, BoardView, MemberOption } from '$lib/componen
 // members of the selected board's own committee as {id, name}, and `assignee_id` on a card
 // only while its assignee is one of them. CardView lives in a client-safe module so components
 // can type against it.
+// The in-process backend reads the DATE column through the kernel pool, whose driver parses it
+// to a JS Date (UTC midnight); the service backend sends an ISO string. String(Date) would give
+// "Tue Dec 15 ..." and break the date input and the due pill, so a Date is formatted explicitly.
+function dayOf(v: unknown): string | null {
+  if (!v) return null
+  if (v instanceof Date) return Number.isNaN(v.getTime()) ? null : v.toISOString().slice(0, 10)
+  return String(v).slice(0, 10)
+}
+
 export const load: PageServerLoad = async ({ locals, url }) => {
   const session = await locals.auth()
   const user = session?.user as SessionUser | undefined
@@ -72,7 +81,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
           ...rest,
           // Normalise to a bare YYYY-MM-DD so the client never receives a Date
           // object / full timestamp — the root of the old "Invalid Date" badge.
-          due_date: c.due_date ? String(c.due_date).slice(0, 10) : null,
+          due_date: dayOf(c.due_date),
           assignee_name: assignee_keycloak_id ? (names.get(assignee_keycloak_id) ?? null) : null,
           assignee_id: assignee_keycloak_id && memberIds.has(assignee_keycloak_id) ? assignee_keycloak_id : null,
           is_mine: assignee_keycloak_id === user.id,

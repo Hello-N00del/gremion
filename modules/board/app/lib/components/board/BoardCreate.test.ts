@@ -40,27 +40,46 @@ describe('creating a board', () => {
     expect(screen.queryByRole('combobox')).toBeNull()
   })
 
-  it('on a phone folds them into ONE control named "Board anlegen"', () => {
+  it('on a phone folds them into ONE row: a select to choose the body and a button to create', () => {
     stubViewport(true)
     render(BoardCreate, { units: UNITS, busy: false, oncreate: vi.fn() })
     expect(createButtons()).toHaveLength(0)
-    const control = screen.getByRole('combobox', { name: 'Board anlegen' })
+    const control = screen.getByRole('combobox', { name: 'Gremium für das neue Board' })
     expect([...(control as HTMLSelectElement).options].map((o) => o.textContent?.trim())).toEqual([
-      'Board anlegen …',
-      'Board für StuRa',
-      'Board für Vorstand',
-      'Board für Fachschaftsrat Informatik',
+      'Gremium wählen …',
+      'StuRa',
+      'Vorstand',
+      'Fachschaftsrat Informatik',
     ])
-    // one control in total, not one per body
-    expect(screen.getAllByRole('combobox').length + screen.queryAllByRole('button').length).toBe(1)
+    // not one button per body
+    expect(screen.getAllByRole('button')).toHaveLength(1)
   })
 
-  it('creates the board of the body picked in the phone control, then resets it', async () => {
+  it('choosing a body in the phone select creates nothing (arrowing through the list is not a decision)', async () => {
     stubViewport(true)
     const oncreate = vi.fn()
     render(BoardCreate, { units: UNITS, busy: false, oncreate })
-    const control = screen.getByRole('combobox', { name: 'Board anlegen' }) as HTMLSelectElement
+    const control = screen.getByRole('combobox', { name: 'Gremium für das neue Board' }) as HTMLSelectElement
     await fireEvent.change(control, { target: { value: 'ou-2' } })
+    expect(oncreate).not.toHaveBeenCalled()
+  })
+
+  it('the phone button stays disabled until a body is chosen', async () => {
+    stubViewport(true)
+    render(BoardCreate, { units: UNITS, busy: false, oncreate: vi.fn() })
+    expect(screen.getByRole('button', { name: 'Board anlegen' })).toBeDisabled()
+    await fireEvent.change(screen.getByRole('combobox', { name: 'Gremium für das neue Board' }), { target: { value: 'ou-1' } })
+    expect(screen.getByRole('button', { name: 'Board anlegen' })).toBeEnabled()
+  })
+
+  it('creates the board of the chosen body when the phone button is pressed, then resets the select', async () => {
+    stubViewport(true)
+    const oncreate = vi.fn()
+    render(BoardCreate, { units: UNITS, busy: false, oncreate })
+    const control = screen.getByRole('combobox', { name: 'Gremium für das neue Board' }) as HTMLSelectElement
+    await fireEvent.change(control, { target: { value: 'ou-2' } })
+    await fireEvent.click(screen.getByRole('button', { name: 'Board anlegen' }))
+    expect(oncreate).toHaveBeenCalledTimes(1)
     expect(oncreate).toHaveBeenCalledWith('ou-2')
     expect(control.value).toBe('')
   })
@@ -82,6 +101,7 @@ describe('creating a board', () => {
   it('disables every control while a create is running', () => {
     stubViewport(true)
     render(BoardCreate, { units: UNITS, busy: true, oncreate: vi.fn() })
-    expect(screen.getByRole('combobox', { name: 'Board anlegen' })).toBeDisabled()
+    expect(screen.getByRole('combobox', { name: 'Gremium für das neue Board' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Board anlegen' })).toBeDisabled()
   })
 })

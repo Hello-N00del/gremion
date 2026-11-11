@@ -79,8 +79,33 @@
     }
   }
 
+  // Focus goes into the dialog on open and back to the control that opened it on close.
   function focusFirst(node: HTMLElement) {
+    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null
     node.focus()
+    return { destroy: () => opener?.isConnected && opener.focus() }
+  }
+
+  // aria-modal: Tab must not leave the dialog for the board behind it.
+  const FOCUSABLE = 'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [href]'
+  function keepFocusInside(e: KeyboardEvent) {
+    if (e.key === 'Escape') {
+      onclose()
+      return
+    }
+    if (e.key !== 'Tab') return
+    const items = [...(e.currentTarget as HTMLElement).querySelectorAll<HTMLElement>(FOCUSABLE)]
+    if (items.length === 0) return
+    const first = items[0]
+    const last = items[items.length - 1]
+    const at = document.activeElement
+    if (e.shiftKey && (at === first || at === e.currentTarget)) {
+      e.preventDefault()
+      last.focus()
+    } else if (!e.shiftKey && at === last) {
+      e.preventDefault()
+      first.focus()
+    }
   }
 </script>
 
@@ -92,9 +117,7 @@
     tabindex="-1"
     aria-modal="true"
     aria-labelledby="card-editor-title"
-    onkeydown={(e) => {
-      if (e.key === 'Escape') onclose()
-    }}
+    onkeydown={keepFocusInside}
   >
     <div class="dialog-head">
       <div>

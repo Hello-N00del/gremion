@@ -4,7 +4,8 @@ const OU = 'ou-1'
 const MEMBER_ID = '11111111-1111-4111-8111-111111111111'
 const STRANGER_ID = '22222222-2222-4222-8222-222222222222'
 
-const { updateCard, moveCard, deckFor, resolveScope, isMemberOf } = vi.hoisted(() => ({
+const { createCard, updateCard, moveCard, deckFor, resolveScope, isMemberOf } = vi.hoisted(() => ({
+  createCard: vi.fn(),
   updateCard: vi.fn(),
   moveCard: vi.fn(),
   deckFor: vi.fn(),
@@ -18,11 +19,12 @@ vi.mock('$lib/server/board/board-db', () => ({
   boardDb: {
     getBoard: vi.fn(async () => ({ id: 'b1', org_unit_id: OU, name: 'StuRa', archived: false })),
     deckFor,
+    createCard,
     updateCard,
     moveCard,
   },
 }))
-import { PATCH } from './[id]/cards/+server'
+import { PATCH, POST } from './[id]/cards/+server'
 
 const member = { auth: async () => ({ user: { id: 'u1', roles: ['member'] } }) } as any
 const guest = { auth: async () => ({ user: { id: 'u9', roles: [] } }) } as any
@@ -119,5 +121,55 @@ describe('board card edit (PATCH without a stack)', () => {
     expect(res.status).toBe(200)
     expect(moveCard).toHaveBeenCalledWith('c1', { stackId: 's1', order: 2 })
     expect(updateCard).not.toHaveBeenCalled()
+  })
+
+  it('passes only the fields the caller named to the backend (no undefined keys)', async () => {
+    await patch({ cardId: 'c1', title: 'Nur Titel' })
+    expect(Object.keys(updateCard.mock.calls[0][1])).toEqual(['title'])
+  })
+})
+
+// Creating a card obeys the same assignee rule as editing one: a member of the board's own committee.
+describe('board card create (POST) assignee rule', () => {
+  const post = (body: unknown) =>
+    POST({
+      params: { id: 'b1' },
+      request: new Request('http://x', { method: 'POST', body: JSON.stringify(body) }),
+      locals: member,
+    } as any)
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    resolveScope.mockResolvedValue([OU])
+    isMemberOf.mockImplementation(async (_ou: string, id: string) => id === MEMBER_ID)
+    deckFor.mockResolvedValue({
+      board: { id: 'b1', org_unit_id: OU, name: 'StuRa', archived: false },
+      stacks: [{ id: 's1', board_id: 'b1', name: 'To Do', sort_order: 0 }],
+      cards: [],
+    })
+    createCard.mockImplementation(async (d: any) => ({ id: 'new', ...d }))
+  })
+
+  it('creates a card assigned to a member of the committee', async () => {
+    const res = await post({ stackId: 's1', title: 'A', assigneeKeycloakId: MEMBER_ID })
+    expect(res.status).toBe(201)
+    expect(isMemberOf).toHaveBeenCalledWith(OU, MEMBER_ID)
+    expect(createCard).toHaveBeenCalled()
+  })
+
+  it('refuses an assignee who is not a member of the committee, and creates nothing', async () => {
+    await expect(post({ stackId: 's1', title: 'A', assigneeKeycloakId: STRANGER_ID })).rejects.toMatchObject({ status: 400 })
+    expect(createCard).not.toHaveBeenCalled()
+  })
+
+  it('refuses an assignee that is no user id at all', async () => {
+    await expect(post({ stackId: 's1', title: 'A', assigneeKeycloakId: 'not-a-uuid' })).rejects.toMatchObject({ status: 400 })
+    expect(createCard).not.toHaveBeenCalled()
+  })
+
+  it('creates an unassigned card without a membership lookup', async () => {
+    const res = await post({ stackId: 's1', title: 'A' })
+    expect(res.status).toBe(201)
+    expect(isMemberOf).not.toHaveBeenCalled()
   })
 })

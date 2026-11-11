@@ -5,7 +5,7 @@ import { Role, hasRole } from '$lib/auth'
 import type { SessionUser } from '$lib/auth/types'
 import { resolveBoardOrgUnitScope } from '$lib/server/board/scope'
 import { resolveBoardBackendOr503 } from '$lib/server/board/backend/resolve'
-import type { BoardBackendPort } from '$lib/server/board/backend'
+import type { BoardBackendPort, UpdateCardPatch } from '$lib/server/board/backend'
 import { isMemberOf } from '$lib/server/governance/org-units-db'
 
 // Shared gate: authenticated member + the board's org-unit is in the user's scope.
@@ -20,17 +20,24 @@ async function gate(locals: App.Locals, boardId: string, backend: BoardBackendPo
   return user
 }
 
+// An assignee is a user id of a member of the board's own body: one shape and one check for both
+// the create and the edit, so the two paths cannot drift.
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+const assignee = z.string().regex(UUID, 'Ungültige Person').nullable().optional()
+async function assertAssignable(orgUnitId: string, userId: string | null | undefined): Promise<void> {
+  if (userId && !(await isMemberOf(orgUnitId, userId))) throw error(400, 'Die Person ist kein Mitglied dieses Gremiums')
+}
+
 const createSchema = z.object({
   stackId: z.string().min(1),
   title: z.string().min(1).max(200),
   description: z.string().max(2000).optional(),
-  assigneeKeycloakId: z.string().nullable().optional(),
+  assigneeKeycloakId: assignee,
   dueDate: z.string().nullable().optional(),
   label: z.string().nullable().optional(),
 })
 // A card edit names the card and the fields to change; a field left out stays as it is.
 // An emptied description is stored as null; the due date is a real calendar day, ISO.
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const isoDay = z
   .string()
   .regex(/^\d{4}-\d{2}-\d{2}$/, 'Datum muss JJJJ-MM-TT sein')
@@ -49,7 +56,7 @@ const editSchema = z
       .nullable()
       .optional()
       .transform((v) => (v === undefined ? undefined : v === null || v.trim() === '' ? null : v)),
-    assigneeKeycloakId: z.string().regex(UUID, 'Ungültige Person').nullable().optional(),
+    assigneeKeycloakId: assignee,
     dueDate: isoDay.nullable().optional(),
   })
   .refine(
@@ -74,6 +81,7 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
   if (!parsed.success) throw error(400, parsed.error.issues.map((i) => i.message).join(', '))
   const deck = await backend.deckFor(params.id)
   if (!deck.stacks.some((s) => s.id === parsed.data.stackId)) throw error(404, 'Stapel nicht gefunden')
+  await assertAssignable(deck.board.org_unit_id, parsed.data.assigneeKeycloakId)
   const card = await backend.createCard({ ...parsed.data, createdBy: user.id })
   return json({ data: card }, { status: 201 })
 }
@@ -108,11 +116,14 @@ async function editCard(boardId: string, raw: unknown, backend: BoardBackendPort
   const { cardId, ...patch } = parsed.data
   const deck = await backend.deckFor(boardId)
   if (!deck.cards.some((c) => c.id === cardId)) throw error(404, 'Karte nicht gefunden')
-  if (patch.assigneeKeycloakId && !(await isMemberOf(deck.board.org_unit_id, patch.assigneeKeycloakId))) {
-    throw error(400, 'Die Person ist kein Mitglied dieses Gremiums')
+  await assertAssignable(deck.board.org_unit_id, patch.assigneeKeycloakId)
+  // zod leaves undefined keys on the object: send only what the caller named, typed as the port's patch
+  const named: UpdateCardPatch = {
+    ...(patch.title !== undefined && { title: patch.title }),
+    ...(patch.description !== undefined && { description: patch.description }),
+    ...(patch.assigneeKeycloakId !== undefined && { assigneeKeycloakId: patch.assigneeKeycloakId }),
+    ...(patch.dueDate !== undefined && { dueDate: patch.dueDate }),
   }
-  // zod leaves undefined keys on the object: send only what the caller named
-  const named = Object.fromEntries(Object.entries(patch).filter(([, v]) => v !== undefined))
   const card = await backend.updateCard(cardId, named)
   if (!card) throw error(404, 'Karte nicht gefunden')
   return json({ data: card })
