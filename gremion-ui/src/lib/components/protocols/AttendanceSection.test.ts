@@ -86,4 +86,39 @@ describe('AttendanceSection', () => {
     })
     expect(getByText('Nicht beschlussfähig')).toBeTruthy()
   })
+
+  // Same-route client navigation (another protocol of the committee, browser
+  // back/forward) keeps the component alive and only swaps the props.
+  test('new roster props (navigation to another protocol) replace chips and quorum line', async () => {
+    const { getByRole, getByText, queryByText, rerender } = render(AttendanceSection, { props: props() })
+    expect(getByText('Beschlussfähig 2/3')).toBeTruthy()
+    await rerender({
+      attendance: [
+        { user_id: 'u-1', status: 'absent', displayName: 'Anna Beispiel' },
+        { user_id: 'u-2', status: 'absent', displayName: 'Ben Muster' },
+        { user_id: 'u-3', status: 'absent', displayName: 'Cora Probe' },
+      ],
+      advisoryAttendance: [],
+      protocolId: 'p-2',
+    })
+    expect(getByRole('button', { name: 'Anna Beispiel: abwesend' })).toBeTruthy()
+    expect(getByText('Nicht beschlussfähig')).toBeTruthy()
+    expect(queryByText('Beschlussfähig 2/3')).toBeNull()
+    expect(queryByText('Dora Gast')).toBeNull()
+  })
+
+  test('a click after the props changed saves against the new protocol with its own status', async () => {
+    stubFetch(200)
+    const { getByRole, rerender } = render(AttendanceSection, { props: props() })
+    await rerender({
+      attendance: [{ user_id: 'u-1', status: 'absent', displayName: 'Anna Beispiel' }],
+      advisoryAttendance: [],
+      protocolId: 'p-2',
+    })
+    await fireEvent.click(getByRole('button', { name: 'Anna Beispiel: abwesend' }))
+    await waitFor(() => expect(fetch).toHaveBeenCalledTimes(1))
+    const [url, init] = (fetch as unknown as ReturnType<typeof vi.fn>).mock.calls[0]
+    expect(String(url)).toContain('p-2')
+    expect(String(init.body)).not.toContain('"present"')
+  })
 })

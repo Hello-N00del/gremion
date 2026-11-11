@@ -71,8 +71,17 @@
   const hasNoVote = $derived(
     !isAcclamation && resolution.result !== 'withdrawn' && tallyIsEmpty(resolution),
   )
+  // In the editor a cleared field (null or '') is a missing count, which the
+  // "Stimmen unvollständig" line below explains; only explicit zeros mean "not
+  // voted yet".
+  const isBlank = (v: unknown) => v === null || v === undefined || v === ''
   const draftHasNoVote = $derived(
-    !isAcclamation && draft.result !== 'withdrawn' && tallyIsEmpty(draft),
+    !isAcclamation &&
+      draft.result !== 'withdrawn' &&
+      !isBlank(draft.votes_yes) &&
+      !isBlank(draft.votes_no) &&
+      !isBlank(draft.votes_abstain) &&
+      tallyIsEmpty(draft),
   )
 
   // INV-5: the result shown while editing is COMPUTED from the fixed rule +

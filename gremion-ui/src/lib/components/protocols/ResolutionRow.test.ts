@@ -204,4 +204,14 @@ describe('ResolutionRow — a decision without a vote (finding 7)', () => {
       expect(getByLabelText(label).tagName).toBe('INPUT')
     }
   })
+
+  test('clearing every tally field in the editor reports missing counts, not "noch keine Abstimmung"', async () => {
+    const { container, getByText, getByLabelText } = renderFresh()
+    await enterEditMode(getByText)
+    for (const label of ['Ja', 'Nein', 'Enthaltung']) {
+      await fireEvent.input(getByLabelText(label), { target: { value: '' } })
+    }
+    expect(container.textContent).toMatch(/Stimmen unvollständig/)
+    expect(container.textContent).not.toMatch(/noch keine Abstimmung/)
+  })
 })

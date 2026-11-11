@@ -18,12 +18,19 @@
     protocolId: string
   } = $props()
 
-  // `attendance` / `advisoryAttendance` seed the local lists; later load data
-  // (a reload) remounts the page, so the initial value is the right capture.
+  // `attendance` / `advisoryAttendance` seed the local lists (so the first and
+  // the server render already carry the roster). SvelteKit reuses this component
+  // when the route stays the same and only the load data changes (another
+  // protocol of the committee, browser back/forward), so the effect below
+  // re-seeds the lists whenever the incoming rosters change.
   // svelte-ignore state_referenced_locally
   let voting = $state<AttendanceEntry[]>(attendance)
   // svelte-ignore state_referenced_locally
   let advisory = $state<AttendanceEntry[]>(advisoryAttendance)
+  $effect.pre(() => {
+    voting = attendance
+    advisory = advisoryAttendance
+  })
 
   // INV-5 quorum (preset rule): a strict majority of eligible VOTING members
   // must be present. Mirrors getQuorumContext's `present*2 > eligible`; advisory
