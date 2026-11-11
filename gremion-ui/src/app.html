@@ -44,7 +44,13 @@
           }
           return v === null ? dflt : v;
         };
-        var t = read('gremion.theme', 'stura-theme', 'light');
+        // No stored choice: follow the system preference (matches the theme
+        // store in src/lib/stores/theme.ts). An explicit choice always wins.
+        var t = read('gremion.theme', 'stura-theme', null);
+        if (t !== 'light' && t !== 'dark') {
+          t = typeof window !== 'undefined' && window.matchMedia &&
+            window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+        }
         var cb = read('gremion.colorblind', 'stura-colorblind', 'none');
         var h = document.documentElement;
         if (t === 'dark') h.classList.add('dark');

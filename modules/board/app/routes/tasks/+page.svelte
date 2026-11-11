@@ -4,6 +4,9 @@
   import PageTitle from '$lib/components/PageTitle.svelte'
   import BoardColumn from '$lib/components/board/BoardColumn.svelte'
   import PromoteDialog from '$lib/components/board/PromoteDialog.svelte'
+  import CardEditor from '$lib/components/board/CardEditor.svelte'
+  import BoardCreate from '$lib/components/board/BoardCreate.svelte'
+  import { cardCount, stackCount } from '$lib/components/board/count'
   import { deriveHue } from '$lib/governance/committee-color'
   import { dueState } from '$lib/components/board/due'
   import type { PageData } from './$types'
@@ -24,6 +27,8 @@
   let filterMine = $state(false)
   let labelFilter = $state<string | null>(null)
   let showPromote = $state(false)
+  // The card open in the detail editor (null = closed).
+  let editing = $state<CardView | null>(null)
 
   const selectedBoardId = $derived(data.deck?.board.id ?? null)
 
@@ -95,6 +100,12 @@
     }
   }
 
+  // The server is the source of truth: reload the board, so the card is re-rendered from what was saved.
+  async function onCardSaved() {
+    editing = null
+    await invalidateAll()
+  }
+
   async function onPromoted() {
     showPromote = false
     await invalidateAll()
@@ -109,7 +120,7 @@
     <h1 class="page-title">Aufgaben</h1>
     {#if deck}
       <div class="page-sub">
-        Board <strong>{deck.board.name}</strong> · {deck.board.org_unit_name} · {visibleCards.length} Karten{#if overdueCount > 0} · <span class="overdue">{overdueCount} überfällig</span>{/if} · {myOpenCount} offen für dich
+        Board <strong>{deck.board.name}</strong> · {deck.board.org_unit_name} · {cardCount(visibleCards.length)}{#if overdueCount > 0} · <span class="overdue">{overdueCount} überfällig</span>{/if} · {myOpenCount} offen für dich
       </div>
     {:else}
       <div class="page-sub">Aufgabenboards der Gremien — ziehen zum Verschieben.</div>
@@ -131,11 +142,7 @@
     <div class="sub">Für deine Gremien wurde noch kein Board angelegt.</div>
     {#if data.creatable.length > 0}
       <div class="create-row">
-        {#each data.creatable as u (u.id)}
-          <button class="btn btn-primary" disabled={creatingFor !== null} onclick={() => createBoard(u.id)}>
-            Board für {u.name} anlegen
-          </button>
-        {/each}
+        <BoardCreate units={data.creatable} busy={creatingFor !== null} oncreate={createBoard} primary />
       </div>
     {:else}
       <div class="sub">Tritt zuerst einem Gremium bei, dann kannst du dessen Board anlegen.</div>
@@ -155,11 +162,7 @@
       </button>
     {/each}
     <span class="deck-grow"></span>
-    {#each data.creatable as u (u.id)}
-      <button class="btn btn-sm" disabled={creatingFor !== null} onclick={() => createBoard(u.id)}>
-        <Icon name="plus" size={13} /> Board für {u.name} anlegen
-      </button>
-    {/each}
+    <BoardCreate units={data.creatable} busy={creatingFor !== null} oncreate={createBoard} />
     {#if data.archivedCount > 0}
       <span class="board-archived" title="Archivierte Boards"><Icon name="archive" size={13} /> {data.archivedCount} archiviert</span>
     {/if}
@@ -188,7 +191,7 @@
         </div>
       {/if}
       <span class="deck-grow"></span>
-      <span class="eyebrow">{deck.stacks.length} Stacks · {visibleCards.length} Karten</span>
+      <span class="eyebrow">{stackCount(deck.stacks.length)} · {cardCount(visibleCards.length)}</span>
     </div>
 
     {#if deck.cards.length === 0}
@@ -200,10 +203,23 @@
           boardId={deck.board.id}
           stack={{ id: stack.id, name: stack.name }}
           cards={cardsByStack[stack.id] ?? []}
+          onopen={(card) => (editing = card)}
         />
       {/each}
     </div>
   {/if}
+{/if}
+
+{#if editing && deck}
+  {#key editing.id}
+    <CardEditor
+      boardId={deck.board.id}
+      card={editing}
+      members={data.members}
+      onclose={() => (editing = null)}
+      onsaved={onCardSaved}
+    />
+  {/key}
 {/if}
 
 {#if showPromote && selectedBoardId}

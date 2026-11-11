@@ -10,6 +10,7 @@
 //   GET   /api/v1/boards/:id/deck      → { board,stacks,cards } | 404 (deckFor)
 //   POST  /api/v1/boards/:id/stacks    → Stack (201) | 404   (createStack, R29-BOARD-STORE-K)
 //   POST  /api/v1/cards                → Card (201) | 404    (createCard)
+//   PATCH /api/v1/cards/:id            → Card | 404          (updateCard: title, description, assignee, due date)
 //   PATCH /api/v1/cards/:id/move       → Card | 404          (moveCard)
 //   POST  /api/v1/cards/promoted       → { data: string[] } (listPromotedActionItemIds, #384)
 //         body: { candidateIds: string[] } — a POST body (not repeated GET query
@@ -48,6 +49,7 @@ import {
   createStack,
   createCard,
   moveCard,
+  updateCard,
   stackExists,
   promoteActionItem,
   listPromotedActionItemIds,
@@ -131,6 +133,21 @@ const CreateCardSchema = z.object({
   // 22P02 → 404 'stack not found' mapping can only ever be about stackId.
   protocolActionItemId: z.string().regex(UUID, 'protocolActionItemId must be a uuid').nullable().optional(),
   createdBy: z.string().nullable().optional(),
+})
+
+/** A calendar day as the due_date column takes it (YYYY-MM-DD, a real day). */
+const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/
+const UpdateCardSchema = z.object({
+  title: z.string().min(1).max(200).optional(),
+  description: z.string().max(2000).nullable().optional(),
+  assigneeKeycloakId: z.string().nullable().optional(),
+  dueDate: z
+    .string()
+    .regex(ISO_DAY, 'dueDate must be YYYY-MM-DD')
+    .refine((v) => !Number.isNaN(Date.parse(`${v}T00:00:00Z`)) && new Date(`${v}T00:00:00Z`).toISOString().startsWith(v), 'dueDate must be a real day')
+    .nullable()
+    .optional(),
+  label: z.string().nullable().optional(),
 })
 
 const MoveCardSchema = z.object({
@@ -333,6 +350,24 @@ export function buildApiRoutes(store: StoreFn): Route[] {
         const card = await createCard(sql, body)
         sendJson(res, 201, card)
       }, 'stack not found'),
+    },
+
+    // ── PATCH /api/v1/cards/:id ──────────────────────────────────────────────
+    // The card edit: only the fields the body names change (null clears a
+    // description / assignee / due date). Which assignee is allowed is the
+    // kernel's rule (a member of the board's body), not the leaf's.
+    {
+      method: 'PATCH',
+      path: '/api/v1/cards/:id',
+      handler: wrap(async ({ req, res, params, tenant }) => {
+        const body = UpdateCardSchema.parse(await readBody(req))
+        const sql = await storeFn(tenant)
+        const cardId = params['id']!
+        if (!UUID.test(cardId)) return sendError(res, 404, 'not found')
+        const card = await updateCard(sql, cardId, body)
+        if (!card) return sendError(res, 404, 'not found')
+        sendJson(res, 200, card)
+      }, 'not found'),
     },
 
     // ── PATCH /api/v1/cards/:id/move ─────────────────────────────────────────
