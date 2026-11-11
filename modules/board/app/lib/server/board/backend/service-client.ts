@@ -13,6 +13,7 @@ import type {
   Card,
   CreateCardInput,
   MoveCardTarget,
+  UpdateCardPatch,
   PromoteActionItemInput,
   Deck,
   CreateBoardInput,
@@ -263,6 +264,21 @@ export class ServiceBoardClient implements BoardBackendPort {
         'PATCH',
         `/api/v1/cards/${encodeURIComponent(id)}/move`,
         to,
+      )) as Record<string, unknown>
+      return deserializeCard(res)
+    } catch (err) {
+      if (err instanceof BoardServiceError && err.status === 404) return null
+      throw err
+    }
+  }
+
+  /** PATCH /api/v1/cards/:id. Not retried (a PATCH); 404 → null like moveCard. */
+  async updateCard(id: string, patch: UpdateCardPatch): Promise<Card | null> {
+    try {
+      const res = (await this.leafFetch(
+        'PATCH',
+        `/api/v1/cards/${encodeURIComponent(id)}`,
+        patch,
       )) as Record<string, unknown>
       return deserializeCard(res)
     } catch (err) {
