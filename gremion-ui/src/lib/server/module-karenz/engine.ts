@@ -21,7 +21,8 @@
 //   finalizing  (set by the platform job, so the mode is live) every participant's finalize(live) and
 //               the 'tenant_done' mark, but ONLY once the retained copies exist (step `retained` done,
 //               no failed `publish:*` step): without them the pass refuses and says so. The retained
-//               and publish stages are retried first, on every pass: the platform job flips the row at
+//               and publish stages are retried first, on every pass; the 'module.karenz.finalized' audit entry
+//               is written once (step final:audit) after every participant's final step, before the mark: the platform job flips the row at
 //               final_at without reading this ledger, so a stage still failing then must recover here.
 //
 // Failure handling: a failing step is recorded failed, reported once as an error event (again after 6
@@ -95,6 +96,8 @@ export const STEP = {
   finalDry: 'final:dry',
   /** The completion step of the final day: reports the `tenant_done` mark; also where a refused finalize is recorded. */
   final: 'final',
+  /** The audit entry of the completed final deletion: its own step so the ledger makes it insert-once; runs before `final`. */
+  finalAudit: 'final:audit',
 } as const
 
 /** The tenant-database store the pass uses (store.ts is the production implementation). */
@@ -573,6 +576,22 @@ async function processFinalizing(env: RowEnv): Promise<void> {
   const after = await d.store.listSteps(tenant.db, row.karenzId)
   const done = new Set(after.filter((s) => s.state === 'done').map((s) => s.step))
   if (participants.every((p) => done.has(STEP.participant(p.catalogueId, 'final')))) {
+    // The audit entry of the completed deletion, before the tenant_done mark. It is its own ledger step, so
+    // a later pass (a failed mark report, say) does not write it again. At-least-once: if the entry is
+    // written and the ledger mark after it then fails, the next pass writes it a second time; accepted.
+    // A failing audit write is a failed step (the host collector reports it as ModuleKarenzFailedOrOverdue,
+    // which is intended) and the final step is not reached until a pass writes it.
+    // The counts are those of THIS pass (like the tenant_done line); a participant finished in an earlier pass adds none.
+    // Only the module id, the Karenz id and counts: never a person's name or e-mail.
+    const audit = await runStep(env, STEP.finalAudit, () =>
+      d.writeAudit({
+        userId: KARENZ_SERVICE_USER,
+        field: 'module.karenz.finalized',
+        oldValue: null,
+        newValue: `module=${row.catalogueId} karenz=${row.karenzId} deleted=${deleted.length > 0 ? deleted.join(',') : 'none counted in this pass'}`,
+      }),
+    )
+    if (audit === 'failed') return
     await runStep(
       env,
       STEP.final,
