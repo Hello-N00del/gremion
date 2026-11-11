@@ -69,14 +69,14 @@ function stubFetch(opts: Opts = {}): Call[] {
   return calls
 }
 
-function renderPage() {
+function renderPage(emailScheduledAt: string | null = null) {
   return render(Page, {
     props: {
       data: {
         post: { id: 'p1', title: 'Titel', body_html: '<p>Text</p>' },
         channelEnabled: { email: true, portal: true, instagram: false },
         channelState: {
-          email: { status: 'draft', scheduled_at: null },
+          email: { status: emailScheduledAt ? 'scheduled' : 'draft', scheduled_at: emailScheduledAt },
           portal: { status: 'draft', scheduled_at: null },
           instagram: { status: 'draft', scheduled_at: null },
         },
@@ -153,7 +153,7 @@ describe('publish uses the audience that is ticked on screen', () => {
     const calls = stubFetch()
     const { findByLabelText, getAllByLabelText, getAllByRole } = renderPage()
     await fireEvent.click(await findByLabelText('Liste A'))
-    await fireEvent.input(getAllByLabelText('Geplante Zeit')[0], { target: { value: '2030-01-01T10:00' } })
+    await fireEvent.input(getAllByLabelText('Geplante Zeit')[0], { target: { value: '01.01.2030 10:00' } })
     await fireEvent.click(getAllByRole('button', { name: 'Planen' })[0])
     await waitFor(() => expect(calls.some(isSchedulePatch)).toBe(true))
     const put = idx(calls, isPut)
@@ -165,10 +165,42 @@ describe('publish uses the audience that is ticked on screen', () => {
     const calls = stubFetch()
     const { findByLabelText, getAllByLabelText, getAllByRole, findByText } = renderPage()
     await findByLabelText('Liste A')
-    await fireEvent.input(getAllByLabelText('Geplante Zeit')[0], { target: { value: '2030-01-01T10:00' } })
+    await fireEvent.input(getAllByLabelText('Geplante Zeit')[0], { target: { value: '01.01.2030 10:00' } })
     await fireEvent.click(getAllByRole('button', { name: 'Planen' })[0])
     expect(await findByText('Bitte mindestens einen Empfänger auswählen.')).toBeTruthy()
     expect(calls.some(isSchedulePatch)).toBe(false)
+  })
+})
+
+describe('the schedule field is German and still stores ISO', () => {
+  it('sends the German input as the ISO instant of that local time', async () => {
+    const calls = stubFetch()
+    const { findByLabelText, getAllByLabelText, getAllByRole } = renderPage()
+    await fireEvent.click(await findByLabelText('Liste A'))
+    await fireEvent.input(getAllByLabelText('Geplante Zeit')[0], { target: { value: '05.11.2030 09:30' } })
+    await fireEvent.click(getAllByRole('button', { name: 'Planen' })[0])
+    await waitFor(() => expect(calls.some(isSchedulePatch)).toBe(true))
+    const sent = calls.find(isSchedulePatch)!.body as { scheduled_at: string }
+    expect(sent.scheduled_at).toBe(new Date(2030, 10, 5, 9, 30).toISOString())
+    expect(sent.scheduled_at).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/)
+  })
+
+  it('refuses the ISO or English form with a hint, and sends nothing', async () => {
+    const calls = stubFetch()
+    const { findByLabelText, getAllByLabelText, getAllByRole, findByText } = renderPage()
+    await fireEvent.click(await findByLabelText('Liste A'))
+    await fireEvent.input(getAllByLabelText('Geplante Zeit')[0], { target: { value: '11/05/2030 09:30' } })
+    await fireEvent.click(getAllByRole('button', { name: 'Planen' })[0])
+    expect(await findByText('Bitte Datum und Uhrzeit so eingeben: TT.MM.JJJJ HH:MM')).toBeTruthy()
+    expect(calls.some(isSchedulePatch)).toBe(false)
+    expect(calls.some(isPut)).toBe(false)
+  })
+
+  it('shows a stored schedule in German order, in the field', async () => {
+    stubFetch()
+    const iso = new Date(2030, 0, 5, 7, 5).toISOString()
+    const { getAllByLabelText } = renderPage(iso)
+    expect((getAllByLabelText('Geplante Zeit')[0] as HTMLInputElement).value).toBe('05.01.2030 07:05')
   })
 })
 
@@ -235,7 +267,7 @@ describe('publish sends the text that is on screen', () => {
     const { findByLabelText, getAllByLabelText, getAllByRole, getByLabelText } = renderPage()
     await fireEvent.click(await findByLabelText('Liste A'))
     await fireEvent.input(getByLabelText('Titel'), { target: { value: 'Neuer Titel' } })
-    await fireEvent.input(getAllByLabelText('Geplante Zeit')[0], { target: { value: '2030-01-01T10:00' } })
+    await fireEvent.input(getAllByLabelText('Geplante Zeit')[0], { target: { value: '01.01.2030 10:00' } })
     await fireEvent.click(getAllByRole('button', { name: 'Planen' })[0])
     await waitFor(() => expect(calls.some(isSchedulePatch)).toBe(true))
     const patch = idx(calls, isBodyPatch)
@@ -247,7 +279,7 @@ describe('publish sends the text that is on screen', () => {
     const calls = stubFetch({ patchStatus: 500 })
     const { findByLabelText, getAllByLabelText, getAllByRole, findByText } = renderPage()
     await fireEvent.click(await findByLabelText('Liste A'))
-    await fireEvent.input(getAllByLabelText('Geplante Zeit')[0], { target: { value: '2030-01-01T10:00' } })
+    await fireEvent.input(getAllByLabelText('Geplante Zeit')[0], { target: { value: '01.01.2030 10:00' } })
     await fireEvent.click(getAllByRole('button', { name: 'Planen' })[0])
     expect(await findByText(/Der Text konnte nicht gespeichert werden/)).toBeTruthy()
     expect(calls.some(isSchedulePatch)).toBe(false)
