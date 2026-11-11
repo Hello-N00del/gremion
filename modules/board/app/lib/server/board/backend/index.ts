@@ -22,6 +22,7 @@ export type {
   Card,
   CreateCardInput,
   MoveCardTarget,
+  UpdateCardPatch,
   PromoteActionItemInput,
   Deck,
   CreateBoardInput,

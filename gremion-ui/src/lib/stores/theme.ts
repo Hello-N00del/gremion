@@ -53,9 +53,52 @@ function applyToHtml(mode: 'light' | 'dark', cb: ColorblindType) {
 	h.classList.toggle('cb-by', cb === 'by')
 }
 
-const modeStore = writable<'light' | 'dark'>(
-	getInitial(THEME_KEY, 'light', (v) => v as 'light' | 'dark')
-)
+// The theme follows the system (prefers-color-scheme) until the person picks
+// one explicitly; an explicit stored choice always wins. app.html runs the same
+// rule before first paint so the page never flashes the wrong theme.
+const DARK_QUERY = '(prefers-color-scheme: dark)'
+
+function systemMode(): 'light' | 'dark' {
+	if (!browser) return 'light'
+	try {
+		return typeof matchMedia === 'function' && matchMedia(DARK_QUERY).matches ? 'dark' : 'light'
+	} catch {
+		return 'light'
+	}
+}
+
+/** The explicit choice, or null when the person never picked one. */
+function storedMode(): 'light' | 'dark' | null {
+	const v = readPref(THEME_KEY)
+	return v === 'light' || v === 'dark' ? v : null
+}
+
+let unfollowSystem: (() => void) | null = null
+
+/** While no explicit choice is stored, re-theme live when the system preference flips. */
+function followSystem() {
+	if (!browser || unfollowSystem || typeof matchMedia !== 'function') return
+	try {
+		const mq = matchMedia(DARK_QUERY)
+		const onChange = (e: { matches: boolean }) => {
+			if (storedMode() !== null) return stopFollowingSystem()
+			const mode = e.matches ? 'dark' : 'light'
+			modeStore.set(mode)
+			colorblindStore.subscribe((cb) => applyToHtml(mode, cb))()
+		}
+		mq.addEventListener('change', onChange)
+		unfollowSystem = () => mq.removeEventListener('change', onChange)
+	} catch {
+		// No usable matchMedia: the theme just stays as initialised.
+	}
+}
+
+function stopFollowingSystem() {
+	unfollowSystem?.()
+	unfollowSystem = null
+}
+
+const modeStore = writable<'light' | 'dark'>(browser ? (storedMode() ?? systemMode()) : 'light')
 
 const colorblindStore = writable<ColorblindType>(
 	getInitial(COLORBLIND_KEY, 'none', (v) => v as ColorblindType)
@@ -66,6 +109,7 @@ export const themeMode = {
 	set(mode: 'light' | 'dark') {
 		modeStore.set(mode)
 		if (browser) {
+			stopFollowingSystem()
 			localStorage.setItem(THEME_KEY, mode)
 			colorblindStore.subscribe((cb) => applyToHtml(mode, cb))()
 		}
@@ -122,7 +166,10 @@ export const reducedMotion = {
 export function initTheme() {
 	if (!browser) return
 	const h = document.documentElement
-	const mode = (readPref(THEME_KEY) as 'light' | 'dark' | null) ?? 'light'
+	const explicit = storedMode()
+	const mode = explicit ?? systemMode()
+	modeStore.set(mode)
+	if (explicit === null) followSystem()
 	const cb = (readPref(COLORBLIND_KEY) as ColorblindType | null) ?? 'none'
 	applyToHtml(mode, cb)
 	h.style.setProperty('--base-font-size', fontSizePx(readPref(FONT_SIZE_KEY) ?? 'normal'))

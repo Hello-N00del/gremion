@@ -12,6 +12,8 @@ const {
   mockKcClient,
   mockListGroupTree,
   mockGetGroup,
+  mockListOrgUnits,
+  mockGetResource,
 } = vi.hoisted(() => ({
   mockComposeCapabilities: vi.fn(),
   mockGetPost: vi.fn(),
@@ -21,6 +23,8 @@ const {
   mockKcClient: vi.fn(),
   mockListGroupTree: vi.fn(),
   mockGetGroup: vi.fn(),
+  mockListOrgUnits: vi.fn(),
+  mockGetResource: vi.fn(),
 }))
 
 vi.mock('$lib/auth', () => ({
@@ -34,6 +38,8 @@ vi.mock('$lib/server/content/content-db', () => ({
   setPostRecipients: mockSetRecipients,
   listMailingLists: mockListLists,
 }))
+vi.mock('$lib/server/governance/org-units-db', () => ({ listOrgUnits: mockListOrgUnits }))
+vi.mock('$lib/server/governance/provisioning/ledger', () => ({ getResource: mockGetResource }))
 vi.mock('$lib/server/keycloak-admin', () => ({
   getKeycloakAdminClientForCurrentTenant: mockKcClient,
 }))
@@ -66,6 +72,11 @@ describe('/api/content/posts/[id]/recipients', () => {
     mockListLists.mockReset().mockResolvedValue([{ id: 'l1', name: 'A', created_at: 'x' }])
     mockListGroupTree.mockReset().mockResolvedValue([{ id: 'g1', name: 'StuRa', path: '/StuRa' }])
     mockGetGroup.mockReset().mockResolvedValue({ id: 'g1', name: 'StuRa', path: '/StuRa' })
+    // Org units u-g1 and u-g2 own the Keycloak groups g1 and g2 (the provisioning ledger).
+    mockListOrgUnits.mockReset().mockResolvedValue([{ id: 'u-g1' }, { id: 'u-g2' }])
+    mockGetResource.mockReset().mockImplementation(async (unitId: string, subsystem: string) =>
+      subsystem === 'keycloak' ? { external_id: unitId.replace('u-', '') } : null,
+    )
     mockKcClient.mockReset().mockReturnValue({ listGroupTree: mockListGroupTree, getGroup: mockGetGroup })
   })
 
@@ -124,6 +135,49 @@ describe('/api/content/posts/[id]/recipients', () => {
   })
 
   const author = { roles: ['member'], groups: ['authors'], id: 'u1' }
+
+  it('GET offers only the groups that belong to an org unit, not the technical ones', async () => {
+    mockListGroupTree.mockResolvedValue([
+      { id: 'kc-admin', name: 'admin', path: '/admin' },
+      { id: 'kc-login', name: 'login', path: '/login' },
+      { id: 'g1', name: 'StuRa', path: '/StuRa', subGroupCount: 1 },
+      { id: 'g2', name: 'Vorstand', path: '/StuRa/Vorstand' },
+    ])
+    const res = await GET(makeEvent({ user: author }))
+    const data = await res.json()
+    expect(data.groups).toEqual([
+      { id: 'g1', name: 'StuRa', path: '/StuRa' },
+      { id: 'g2', name: 'Vorstand', path: '/StuRa/Vorstand' },
+    ])
+  })
+
+  it('GET offers a group that is created later, by the same rule and without a code change', async () => {
+    mockListGroupTree.mockResolvedValue([
+      { id: 'kc-service', name: 'service-accounts', path: '/service-accounts' },
+      { id: 'g9', name: 'Neues Referat', path: '/StuRa/Neues Referat' },
+    ])
+    mockListOrgUnits.mockResolvedValue([{ id: 'u-g9' }])
+    const res = await GET(makeEvent({ user: author }))
+    const data = await res.json()
+    expect(data.groups).toEqual([{ id: 'g9', name: 'Neues Referat', path: '/StuRa/Neues Referat' }])
+  })
+
+  it('GET ignores an org unit whose group is not created yet', async () => {
+    mockListGroupTree.mockResolvedValue([{ id: 'kc-admin', name: 'admin', path: '/admin' }])
+    mockListOrgUnits.mockResolvedValue([{ id: 'u-new' }])
+    mockGetResource.mockResolvedValue({ external_id: null })
+    const res = await GET(makeEvent({ user: author }))
+    expect((await res.json()).groups).toEqual([])
+  })
+
+  it('GET offers no group, but still the lists, when the org units cannot be read', async () => {
+    mockListOrgUnits.mockRejectedValue(new Error('db down'))
+    const res = await GET(makeEvent({ user: author }))
+    expect(res.status).toBe(200)
+    const data = await res.json()
+    expect(data.groups).toEqual([])
+    expect(data.lists).toHaveLength(1)
+  })
 
   it('PUT 400s a group that Keycloak does not know, with the id in the message, and stores nothing', async () => {
     mockGetGroup.mockRejectedValue(Object.assign(new Error('Keycloak Admin API error: 404 {}'), { status: 404 }))
