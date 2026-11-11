@@ -39,10 +39,29 @@ leaf that is not deployed. The compose side is pinned in
 | votes | in-process | `fake-upstream-app`, a recording fake Nextcloud | `modules/votes/app/lib/server/polls/polls-tenant.test.ts` |
 | files | in-process | `fake-upstream-app`, a recording fake WebDAV | `modules/files/app/lib/server/files/tenant-isolation.test.ts` |
 | messaging | in-process | `fake-upstream-app`, a recording fake Synapse | `modules/messaging/app/lib/server/messages/tenant-isolation.test.ts`, `matrix-synapse.tenant.test.ts`, `livekit.tenant.test.ts` |
+| board | in-process | `real-pg-app`, two real tenant databases on the throwaway Postgres | `modules/board/app/lib/server/board/tenant-isolation.integration.test.ts` |
 
-There is no result for `board`, `elections`, `finance`, `vault` or `handover`.
-The board's suite tests a leaf the pilot does not run, and a result for code that
-is not running would be evidence for nothing; the others are not enabled.
+There is no result for `elections`, `finance`, `vault` or `handover`: a result for
+a module that is not enabled would be evidence for code that is not running. The
+board is served in-process from the customer's own kernel database; its case
+proves that path, not the board leaf (`BOARD_BACKEND=service`, test environment
+only), which has its own suite and is not what the pilot runs.
+
+The board case runs the real route handlers (`/api/board`, `/api/board/[id]`,
+`.../cards`, `.../promotable`, `.../promote` and the `/tasks` load), the real scope
+resolver, the real `getDb()` and the real per-tenant pool registry against two
+physically separate databases with the kernel migration chain applied. Nothing
+between the handler and the database is mocked; only the Keycloak display-name
+lookup is replaced. The fixtures are written and the before/after fingerprints
+are read over separate administrative connections, so the proof that B's data did
+not change does not depend on the code under test. It covers the board leaf's
+vectors 1 to 9 and H in both directions (A on B, then B on A), with positive
+controls, plus a scan that no board file opens its own connection. It needs
+`ISOLATION_TENANT_PG_URL` like the leaf cases; the runner then states
+`GREMION_PRODUCTION_STACK=none` for that case only, after checking the server is
+loopback and not port 5432, and derives the harness database URLs from it. The same
+file also runs in the shared integration lane, where it uses the server of the
+lane's own `DATABASE_URL`.
 
 Every case runs a positive control first (each customer reaches its own data),
 then the attempts of customer A against customer B's record. The files case
@@ -58,6 +77,14 @@ Honest labelling, because the proof kinds differ:
 - `real-pg-leaf`: the leaf's own two-tenant suite against a real Postgres. A
   tenant's data is in a database of its own, and the tenant binding refuses a
   mismatched id and slug.
+- `real-pg-app`: the app half's real handlers and database layer run against two
+  real tenant databases. This shows that every board statement a customer causes
+  reaches that customer's own database and no other, and that the other customer's
+  rows are neither readable nor writable from there. It is the same guarantee as
+  the kernel's own protocols and members, which share the `getDb()` seam; it says
+  nothing about the board leaf and nothing about members of one customer seeing
+  each other's boards (that is the within-customer scope, covered by the board's
+  own route tests).
 - `fake-upstream-app`: the real route handlers and clients run against a
   recording fake of the shared upstream. This shows app-layer scoping against
   ONE shared Nextcloud and ONE shared Synapse: every upstream request a caller
@@ -133,7 +160,8 @@ that serves any poll, one Matrix client or token cache for every tenant, an
 administration route that trusts the room id in the URL, a path guard that lets
 `..`, a `..` hidden behind a `?x` or `#x` suffix or a space, a backslash, a control
 character or an upload id of `.` through, an editor page that builds its WebDAV
-path without the shared guard, and a fixed bearer. A control run on the unmutated clone must first pass and write the
+path without the shared guard, a fixed bearer, and one pool serving every customer's
+`getDb()` (the board case). A control run on the unmutated clone must first pass and write the
 file, and each mutation is committed in the clone, because verify refuses a dirty
 tree and an uncommitted mutation would "fail" for that reason alone.
 Each mutation names its target line literally, so a refactor of that line would stop
