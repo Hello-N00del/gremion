@@ -35,6 +35,13 @@
 //                      copy of the kernel tip is the source of truth here).
 //   6. runner-policy — self-hosted / signing / age / SSH / deploy secret
 //                      references in .github/workflows/*.yml, on both repos.
+//   7. codemap-stale — kernel only. Runs the code map check and LISTS the stale
+//                      walkthrough steps, the stale areas and the undescribed
+//                      areas (in the arm's detail, the console and the dated
+//                      JSON). Only a leak fails it. A problem of the tool itself,
+//                      or the tool or typescript being absent, passes with a note
+//                      (when the tool fails, ste-text.json and template.html were
+//                      still scanned first; the generated page was not).
 //
 // Any failing arm means a non-zero exit (acceptance item 4). Nothing here
 // mutates either repo; the CVE-floor and overrides-drift arms literally ARE
@@ -42,7 +49,8 @@
 // path is handed in, so a scratch clone works exactly like a real checkout.
 
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, rmSync, existsSync } from 'node:fs'
+import { createRequire } from 'node:module'
+import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, readdirSync, rmSync, existsSync } from 'node:fs'
 import { join, dirname, relative, resolve, isAbsolute } from 'node:path'
 import { walkFiles } from './lib/discover.mjs'
 import { tmpdir } from 'node:os'
@@ -599,6 +607,114 @@ export function runRunnerPolicyArm(kernelPath, verticalPath, waiversPath) {
 }
 
 // ---------------------------------------------------------------------------
+// Arm 7 — codemap-stale, kernel only
+// ---------------------------------------------------------------------------
+//
+// Runs the code map check (apps/control-panel/codemap/check.mjs) and LISTS what
+// it finds: the walkthrough steps and the areas whose text no longer matches the
+// code, and the areas that have no text yet. GitHub Actions runs the same check
+// as a job that only lists. While Actions is off, this arm is where the list is
+// made, so the dated JSON and the console show it.
+//
+// check.mjs exit codes: 0 it ran (stale items allowed), 1 a leak was found,
+// 3 the tool itself failed. The tool scans ste-text.json and template.html first, so a leak there is exit 1 even when
+// the extractor or ste-lint fails afterwards; what a failed run leaves unchecked is the generated page.
+// Only a leak fails the arm. A problem of the tool
+// (exit 3, a timeout, a spawn error, a crash, the file or `typescript` absent
+// in a kernel-only checkout with no install) passes the arm with a note that the
+// list could not be made: a code map tool problem must never block a merge.
+
+export const CODEMAP_STALE_NOTE_PREFIX = 'code map not checked'
+const CODEMAP_CHECK = 'apps/control-panel/codemap/check.mjs'
+// The extractor reads the whole kernel (about a minute); the other script arms get 60 s.
+const CODEMAP_TIMEOUT_MS = 300_000
+
+/** Can `typescript` be found the way the code map extractor looks for it (the kernel folders, the app folder, the pnpm store)? */
+export function typescriptAvailable(kernelPath) {
+  const root = resolve(kernelPath)
+  const appDir = join(root, 'apps', 'control-panel')
+  for (const base of [join(root, 'gremion-ui', 'package.json'), join(root, 'package.json'), join(appDir, 'package.json')]) {
+    try {
+      createRequire(base).resolve('typescript')
+      return true
+    } catch {
+      /* try the next place */
+    }
+  }
+  for (const dir of [root, appDir]) {
+    try {
+      if (readdirSync(join(dir, 'node_modules', '.pnpm')).some((d) => d.startsWith('typescript@'))) return true
+    } catch {
+      /* no store here */
+    }
+  }
+  return false
+}
+
+const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`
+
+export function runCodemapStaleArm(kernelPath, { runFn = run, typescriptAvailableFn = typescriptAvailable } = {}) {
+  const cwd = resolve(kernelPath)
+  const passWithNote = (why, output) => {
+    const arm = { arm: 'codemap-stale', repo: 'kernel', status: 'PASS', note: `${CODEMAP_STALE_NOTE_PREFIX}: the list of stale code map text could not be made (${why})` }
+    return output ? { ...arm, output } : arm
+  }
+  if (!existsSync(join(cwd, ...CODEMAP_CHECK.split('/')))) return passWithNote(`${CODEMAP_CHECK} is not in this checkout`)
+  if (!typescriptAvailableFn(cwd)) return passWithNote('typescript is not installed here: run pnpm install')
+
+  let r
+  try {
+    r = runFn([NODE, CODEMAP_CHECK], cwd, { timeoutMs: CODEMAP_TIMEOUT_MS })
+  } catch (err) {
+    return passWithNote(`the tool threw: ${err?.message ?? err}`)
+  }
+  const output = r.output ?? ''
+  if (r.spawnError) return passWithNote(`the tool did not start: ${r.spawnError.message}`, output)
+  if (r.timedOut) return passWithNote('the tool timed out', output)
+
+  // Exit 1 is a leak only when the report says so. Node itself also exits 1 when the tool crashes before it can report.
+  if (r.exitCode === 1 && (/^leaks: [1-9]/m.test(output) || /::error title=Code map leak/.test(output))) {
+    return { arm: 'codemap-stale', repo: 'kernel', status: 'FAIL', reason: 'the code map check found a leak in the page, in ste-text.json or in template.html (rule and place are in the output)', output }
+  }
+  // Exit 3: the tool failed. It scans ste-text.json and template.html before anything else can fail, so a leak there is exit 1 and
+  // fails this arm even when the tool then fails; what exit 3 leaves unchecked is the generated page (and the text, if it could not be read).
+  if (r.exitCode === 3) {
+    return passWithNote('the tool failed, exit 3: the generated page was not checked; the text and the template are scanned first when the tool can read them, and a leak there fails this arm', output)
+  }
+  if (r.exitCode !== 0) return passWithNote(`the tool failed, exit ${r.exitCode}`, output)
+
+  const count = (name) => {
+    const m = new RegExp(`^${name}: (\\d+)`, 'm').exec(output)
+    return m ? Number(m[1]) : null
+  }
+  const steps = count('stale steps')
+  const areas = count('stale areas')
+  const undescribed = count('undescribed areas')
+  if (steps === null || areas === null || undescribed === null) return passWithNote('the report of the tool has no list', output)
+  // The list is every line from "stale steps:" up to "ambiguous steps:" (stale steps, stale areas, undescribed areas).
+  const lines = output.split(/\r?\n/)
+  const from = lines.findIndex((l) => l.startsWith('stale steps:'))
+  let to = lines.findIndex((l, i) => i > from && l.startsWith('ambiguous steps:'))
+  if (to < 0) to = lines.length
+  const detail = lines.slice(from, to).join('\n')
+  return {
+    arm: 'codemap-stale',
+    repo: 'kernel',
+    status: 'PASS',
+    note: `code map text, listed only and never blocking: ${plural(steps, 'stale step', 'stale steps')}, ${plural(areas, 'stale area', 'stale areas')}, ${plural(undescribed, 'undescribed area', 'undescribed areas')}`,
+    detail,
+    output,
+  }
+}
+
+/** The console lines of one arm: its verdict line, then its detail (if it has one) under it. */
+export function armConsoleLines(arm) {
+  const lines = [`  [${arm.status}] ${arm.arm} (${arm.repo})${arm.reason ? ` — ${arm.reason}` : ''}${arm.note ? ` [${arm.note}]` : ''}`]
+  if (arm.detail) for (const l of String(arm.detail).split(/\r?\n/)) lines.push(`      ${l}`)
+  return lines
+}
+
+// ---------------------------------------------------------------------------
 // --image-build — TASK-012 §5 Q5 default: "the image-build job" is the
 // existing `docker-build` jobs, which stay beside this file unchanged. This
 // flag is purely informational (it never runs docker, never gates anything)
@@ -647,7 +763,7 @@ export function skippedVerticalArm(arm) {
  * `runGitleaksArm` independently verifies whichever ref it ends up with
  * resolves in ITS OWN repo before scanning.
  */
-export function runAllArms({ kernelPath, verticalPath, base, kernelBase, verticalBase, waiversPath, denylistPath, runFn = run }) {
+export function runAllArms({ kernelPath, verticalPath, base, kernelBase, verticalBase, waiversPath, denylistPath, runFn = run, typescriptAvailableFn }) {
   const arms = []
   arms.push(runGitleaksArm('kernel', kernelPath, kernelBase ?? base, { runFn }))
   arms.push(runKnownSecretsArm('kernel', kernelPath, { denylistPath }))
@@ -667,6 +783,8 @@ export function runAllArms({ kernelPath, verticalPath, base, kernelBase, vertica
     for (const arm of VERTICAL_ARMS) arms.push(skippedVerticalArm(arm))
   }
   arms.push(runRunnerPolicyArm(kernelPath, verticalPath, waiversPath))
+  // Last, and kernel only: it lists stale code map text and fails only for a leak (see its header).
+  arms.push(runCodemapStaleArm(kernelPath, { runFn, ...(typescriptAvailableFn ? { typescriptAvailableFn } : {}) }))
   const overallExit = arms.some((a) => a.status === 'FAIL') ? 1 : 0
   return { arms, overallExit }
 }
@@ -750,7 +868,7 @@ export function main(argv = process.argv.slice(2)) {
 
   console.log(`\nci-local guards — ${new Date().toISOString()}\n`)
   for (const arm of arms) {
-    console.log(`  [${arm.status}] ${arm.arm} (${arm.repo})${arm.reason ? ` — ${arm.reason}` : ''}${arm.note ? ` [${arm.note}]` : ''}`)
+    for (const line of armConsoleLines(arm)) console.log(line)
   }
   console.log(`\nguards: overall ${overallExit === 0 ? 'PASS' : 'FAIL'} (${arms.filter((a) => a.status === 'FAIL').length}/${arms.length} arm(s) failed, ${arms.filter((a) => a.status === 'SKIPPED').length} skipped)\n`)
 

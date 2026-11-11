@@ -6,7 +6,7 @@
 # kernel base compose is rendered, its postgres service is STARTED with the real
 # mounts it declares, and the major is read back out of the running database —
 # together with the pg_dump / pg_restore / psql clients the backup path execs
-# (infra/host/bin/gremion-backup:414-415, scripts/restore.sh:109,122). There is
+# (infra/host/bin/gremion-backup, resolve_pg_user and dump_database, scripts/restore.sh:109,122). There is
 # no dedicated backup image at f7ac826 — the client major FOLLOWS the server pin
 # through `docker compose exec`, and this proof is what establishes that.
 #
@@ -386,7 +386,7 @@ if ! grep -qF 'docker compose --env-file "$STATE_ENV" exec -T "$1"' "$BACKUP"; t
     exit 1
 fi
 # shellcheck disable=SC2016
-if ! grep -qF 'pg_dump -U "$POSTGRES_USER" "$2"' "$BACKUP"; then
+if ! grep -qF 'pg_dump -U "$PG_USER" "$2"' "$BACKUP"; then
     echo "FAIL: gremion-backup no longer execs pg_dump inside the pinned Postgres service"
     exit 1
 fi

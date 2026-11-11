@@ -2,7 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, readdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
@@ -17,6 +17,9 @@ import {
   runCveFloorArm,
   runOverridesDriftArm,
   runRunnerPolicyArm,
+  runCodemapStaleArm,
+  armConsoleLines,
+  CODEMAP_STALE_NOTE_PREFIX,
   runAllArms,
   listDockerfiles,
   isSafeRef,
@@ -642,7 +645,7 @@ test('runAllArms: overall exit is non-zero when even one arm fails, and every ar
     })
     const { arms, overallExit } = runAllArms({ kernelPath: kernel, verticalPath: vertical, waiversPath: undefined, runFn })
     assert.equal(overallExit, 1)
-    assert.equal(arms.length, 8) // 2 gitleaks + 2 known-secrets + known-secrets-vertical-native + cve-floor + overrides-drift + runner-policy
+    assert.equal(arms.length, 9) // 2 gitleaks + 2 known-secrets + known-secrets-vertical-native + cve-floor + overrides-drift + runner-policy + codemap-stale
     const cve = arms.find((a) => a.arm === 'cve-floor')
     assert.equal(cve.status, 'FAIL')
     // every other arm still has a real verdict, not "skipped"
@@ -810,6 +813,8 @@ test('runAllArms with no verticalPath: kernel arms run, every vertical arm is SK
     assert.ok(kernelArms.includes('known-secrets:kernel'))
     assert.ok(kernelArms.includes('cve-floor:kernel'))
     assert.ok(kernelArms.includes('runner-policy:kernel'))
+    // codemap-stale is a kernel arm: never SKIPPED for want of a vertical checkout (here it passes with a note: the tool is not in this scratch repo)
+    assert.ok(kernelArms.includes('codemap-stale:kernel'))
   } finally {
     rmSync(kernel, { recursive: true, force: true })
   }
@@ -885,5 +890,182 @@ test('main(): a --vertical path that does not exist is a loud error (exit 1, not
   } finally {
     rmSync(kernel, { recursive: true, force: true })
     rmSync(outDir, { recursive: true, force: true })
+  }
+})
+
+// ---------------------------------------------------------------------------
+// codemap-stale: a kernel-only arm that LISTS stale code map text. It never blocks on a tool problem.
+// ---------------------------------------------------------------------------
+
+const CODEMAP_REPORT = [
+  'Code map check (it lists; it never blocks)',
+  'commit: abc',
+  'map: 10 functions, 4 connections',
+  '',
+  'stale steps: 1',
+  '  - CI walkthrough | step 2 | x.ts | moved | old text',
+  'stale areas: 1',
+  '  - area:gone@L3',
+  'undescribed areas: 2',
+  '  - area:docker/new@L0',
+  '  - area:docker/newer@L0',
+  'ambiguous steps: 0',
+  'STE findings: 0',
+  'leaks: 0',
+  '',
+  'result: the check ran (exit 0)',
+].join('\n')
+const LEAK_REPORT = ['Code map check (it lists; it never blocks)', 'stale steps: 0', 'stale areas: 0', 'undescribed areas: 0', 'ambiguous steps: 0', 'STE findings: 0', 'leaks: 1', '  - ipv4 in ste-text.json, line 3', '::error title=Code map leak::ipv4 in ste-text.json, line 3', '', 'result: a leak was found (exit 1)'].join('\n')
+
+function makeCodemapRepo({ withCheck = true } = {}) {
+  const root = mkdtempSync(join(tmpdir(), 'ci-local-guards-codemap-'))
+  if (withCheck) {
+    mkdirSync(join(root, 'apps', 'control-panel', 'codemap'), { recursive: true })
+    writeFileSync(join(root, 'apps', 'control-panel', 'codemap', 'check.mjs'), '// stub\n')
+  }
+  return root
+}
+const result = (exitCode, output, extra = {}) => ({ exitCode, output, timedOut: false, spawnError: null, ...extra })
+const hasTs = () => true
+
+test('runCodemapStaleArm runs node apps/control-panel/codemap/check.mjs in the kernel path, with the injected runner (no shell)', () => {
+  const root = makeCodemapRepo()
+  try {
+    let seen
+    const r = runCodemapStaleArm(root, { runFn: (argv, cwd, opts) => { seen = { argv, cwd, opts }; return result(0, CODEMAP_REPORT) }, typescriptAvailableFn: hasTs })
+    assert.equal(r.status, 'PASS')
+    assert.ok(Array.isArray(seen.argv))
+    assert.equal(seen.argv[0], process.execPath)
+    assert.equal(seen.argv[1], 'apps/control-panel/codemap/check.mjs')
+    assert.equal(seen.cwd, resolve(root))
+    assert.ok(seen.opts.timeoutMs >= 120_000, 'the extractor needs more than the 60 s of the other script arms')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('codemap-stale: exit 0 passes and carries the stale steps, stale areas and undescribed areas in its detail, and a count in its note', () => {
+  const root = makeCodemapRepo()
+  try {
+    const r = runCodemapStaleArm(root, { runFn: () => result(0, CODEMAP_REPORT), typescriptAvailableFn: hasTs })
+    assert.equal(r.arm, 'codemap-stale')
+    assert.equal(r.repo, 'kernel')
+    assert.equal(r.status, 'PASS')
+    assert.match(r.detail, /stale steps: 1/)
+    assert.match(r.detail, /CI walkthrough \| step 2 \| x\.ts \| moved \| old text/)
+    assert.match(r.detail, /stale areas: 1/)
+    assert.match(r.detail, /area:gone@L3/)
+    assert.match(r.detail, /undescribed areas: 2/)
+    assert.match(r.detail, /area:docker\/newer@L0/)
+    // the other lines of the report are not the list
+    assert.doesNotMatch(r.detail, /STE findings|commit:/)
+    assert.match(r.note, /1 stale step, 1 stale area, 2 undescribed areas/)
+    // the console shows it too
+    const lines = armConsoleLines(r).join('\n')
+    assert.match(lines, /\[PASS\] codemap-stale \(kernel\)/)
+    assert.match(lines, /area:gone@L3/)
+    assert.match(lines, /area:docker\/newer@L0/)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('codemap-stale: nothing stale is a pass with a note that says so', () => {
+  const root = makeCodemapRepo()
+  try {
+    const clean = CODEMAP_REPORT.replace('stale steps: 1\n  - CI walkthrough | step 2 | x.ts | moved | old text', 'stale steps: 0').replace('stale areas: 1\n  - area:gone@L3', 'stale areas: 0').replace('undescribed areas: 2\n  - area:docker/new@L0\n  - area:docker/newer@L0', 'undescribed areas: 0')
+    const r = runCodemapStaleArm(root, { runFn: () => result(0, clean), typescriptAvailableFn: hasTs })
+    assert.equal(r.status, 'PASS')
+    assert.match(r.note, /0 stale steps, 0 stale areas, 0 undescribed areas/)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('codemap-stale: exit 1 with a leak in the report FAILs the arm, and the leak (rule and place, never the matched text) is in its output', () => {
+  const root = makeCodemapRepo()
+  try {
+    const r = runCodemapStaleArm(root, { runFn: () => result(1, LEAK_REPORT), typescriptAvailableFn: hasTs })
+    assert.equal(r.status, 'FAIL')
+    assert.match(r.reason, /leak/)
+    assert.match(r.output, /ipv4 in ste-text\.json, line 3/)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('codemap-stale: exit 3 (the tool failed), a timeout, a spawn error and a throw all PASS with a note that the list could not be made', () => {
+  const root = makeCodemapRepo()
+  try {
+    const cases = {
+      'exit 3': () => result(3, '::error title=Code map::the extractor failed (exit 2)'),
+      timeout: () => result(1, 'partial', { timedOut: true }),
+      'spawn error': () => result(1, '', { spawnError: new Error('ENOENT') }),
+      throw: () => { throw new Error('boom') },
+      'exit 1 and no leak in the report (the check crashed before it could say)': () => result(1, 'TypeError: x is not a function\n    at file'),
+      'exit 2 (anything else)': () => result(2, 'odd'),
+    }
+    for (const [name, runFn] of Object.entries(cases)) {
+      const r = runCodemapStaleArm(root, { runFn, typescriptAvailableFn: hasTs })
+      assert.equal(r.status, 'PASS', name)
+      assert.equal(r.reason, undefined, name)
+      assert.ok(r.note.startsWith(CODEMAP_STALE_NOTE_PREFIX), name)
+      assert.match(r.note, /could not be made/, name)
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('codemap-stale: the note of a failed tool (exit 3) says the generated page was not checked and that the text is scanned first, not that nothing was checked', () => {
+  const root = makeCodemapRepo()
+  try {
+    const r = runCodemapStaleArm(root, { runFn: () => result(3, '::error title=Code map::the extractor failed (exit 2)'), typescriptAvailableFn: hasTs })
+    assert.equal(r.status, 'PASS')
+    assert.match(r.note, /the generated page was not checked/)
+    assert.match(r.note, /text and the template are scanned first/)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('codemap-stale: the tool file absent, or typescript absent (a kernel-only checkout with no install), PASSes with a note and does not run anything', () => {
+  const noFile = makeCodemapRepo({ withCheck: false })
+  const withFile = makeCodemapRepo()
+  try {
+    const mustNotRun = () => { throw new Error('the tool must not run') }
+    const a = runCodemapStaleArm(noFile, { runFn: mustNotRun, typescriptAvailableFn: hasTs })
+    assert.equal(a.status, 'PASS')
+    assert.match(a.note, /could not be made/)
+    assert.match(a.note, /not in this checkout/)
+    const b = runCodemapStaleArm(withFile, { runFn: mustNotRun, typescriptAvailableFn: () => false })
+    assert.equal(b.status, 'PASS')
+    assert.match(b.note, /could not be made/)
+    assert.match(b.note, /typescript/)
+  } finally {
+    rmSync(noFile, { recursive: true, force: true })
+    rmSync(withFile, { recursive: true, force: true })
+  }
+})
+
+test('runAllArms: codemap-stale comes after every other arm, is a kernel arm, and a leak in it makes the overall exit 1', () => {
+  const kernel = makeSecretRepo()
+  mkdirSync(join(kernel, '.github', 'workflows'), { recursive: true })
+  mkdirSync(join(kernel, 'apps', 'control-panel', 'codemap'), { recursive: true })
+  writeFileSync(join(kernel, 'apps', 'control-panel', 'codemap', 'check.mjs'), '// stub\n')
+  try {
+    const base = {
+      gitleaks: { exitCode: 0, output: 'no leaks found', timedOut: false, spawnError: null },
+      'check-cve-floors': { exitCode: 0, output: '# tests 2\nok', timedOut: false, spawnError: null },
+    }
+    const ok = runAllArms({ kernelPath: kernel, verticalPath: undefined, waiversPath: undefined, runFn: fakeRun({ ...base, 'codemap/check.mjs': result(0, CODEMAP_REPORT) }), typescriptAvailableFn: hasTs })
+    assert.equal(ok.arms[ok.arms.length - 1].arm, 'codemap-stale')
+    assert.equal(ok.arms[ok.arms.length - 1].repo, 'kernel')
+    assert.equal(ok.arms[ok.arms.length - 1].status, 'PASS')
+    const leak = runAllArms({ kernelPath: kernel, verticalPath: undefined, waiversPath: undefined, runFn: fakeRun({ ...base, 'codemap/check.mjs': result(1, LEAK_REPORT) }), typescriptAvailableFn: hasTs })
+    assert.equal(leak.arms.find((a) => a.arm === 'codemap-stale').status, 'FAIL')
+    assert.equal(leak.overallExit, 1)
+  } finally {
+    rmSync(kernel, { recursive: true, force: true })
   }
 })

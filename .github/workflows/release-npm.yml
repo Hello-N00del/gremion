@@ -69,6 +69,10 @@ jobs:
   publish:
     name: Publish ${{ matrix.pkg }}
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      PKG: ${{ matrix.pkg }}
+      PKG_DIR: ${{ matrix.dir }}
     strategy:
       fail-fast: true   # do not publish ports if db failed
       max-parallel: 1
@@ -89,8 +93,10 @@ jobs:
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
 
-      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413  # v6.1.0
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115  # v6.1.1
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7.1.0
         with:
@@ -102,10 +108,10 @@ jobs:
       # OIDC trusted publishing needs npm >= 11.5.1. Node 26 ships an older
       # npm, so upgrade explicitly rather than assuming the bundled one is new
       # enough — a too-old npm ignores the OIDC path and fails asking for a
-      # token.
+      # token. Pinned: this job holds id-token: write.
       - name: Ensure an npm new enough for trusted publishing
         run: |
-          npm install -g npm@latest
+          npm install -g npm@11.21.1
           npm --version
 
       - name: Install dependencies
@@ -113,21 +119,27 @@ jobs:
 
       # A v-tag says which version is being released. If it disagrees with the
       # manifest, either the tag is wrong or the bump was forgotten — stop
-      # before anything is published, because npm versions are immutable.
+      # before anything is published, because npm versions are immutable. A
+      # manual run that would really publish is held to this too, so it must
+      # be dispatched on the release tag, not on a branch.
       - name: Tag and manifest must agree
-        if: github.event_name == 'push'
+        if: github.event_name == 'push' || inputs.dry_run != true
         run: |
           set -euo pipefail
+          if [ "$GITHUB_REF_TYPE" != "tag" ]; then
+            echo "::error::a live publish must run on a v* tag, not on the $GITHUB_REF_TYPE $GITHUB_REF_NAME"
+            exit 1
+          fi
           tag="${GITHUB_REF_NAME#v}"
-          manifest=$(node -p "require('./${{ matrix.dir }}/package.json').version")
+          manifest=$(node -p "require('./${PKG_DIR}/package.json').version")
           echo "tag=$tag manifest=$manifest"
           if [ "$tag" != "$manifest" ]; then
-            echo "::error::tag v$tag does not match ${{ matrix.dir }}/package.json version $manifest"
+            echo "::error::tag v$tag does not match ${PKG_DIR}/package.json version $manifest"
             exit 1
           fi
 
       - name: Typecheck
-        run: pnpm --filter ${{ matrix.pkg }} typecheck
+        run: pnpm --filter "$PKG" typecheck
 
       # UNIT SPECS ONLY, said out loud. packages/ports/vitest.config.ts collects
       # nats-broker*.integration.test.ts with no integration exclude, and those
@@ -141,10 +153,10 @@ jobs:
       # step alone.
       - name: Test (unit only — see the note above)
         if: matrix.has_tests
-        run: pnpm --filter ${{ matrix.pkg }} test
+        run: pnpm --filter "$PKG" test
 
       - name: Build
-        run: pnpm --filter ${{ matrix.pkg }} build
+        run: pnpm --filter "$PKG" build
 
       # Post-condition, not exit code: tsc can succeed having emitted nothing
       # (a mis-scoped `include` is the usual way), and an empty dist/ publishes
@@ -152,7 +164,7 @@ jobs:
       - name: Assert the build emitted JS and declarations
         run: |
           set -euo pipefail
-          d="${{ matrix.dir }}/dist"
+          d="${PKG_DIR}/dist"
           js=$(find "$d" -name '*.js' | wc -l)
           dt=$(find "$d" -name '*.d.ts' | wc -l)
           echo "$d: $js .js, $dt .d.ts"
@@ -188,10 +200,12 @@ jobs:
       - name: Publish
         # No NODE_AUTH_TOKEN. Trusted publishing mints a short-lived OIDC
         # credential; there is no npm token anywhere in this repo's secrets.
+        env:
+          DRY_RUN: ${{ inputs.dry_run }}
         run: |
           set -euo pipefail
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ] \
-             && [ "${{ inputs.dry_run }}" = "true" ]; then
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ] \
+             && [ "$DRY_RUN" = "true" ]; then
             echo "Dry run — validating the tarball without publishing."
             npm publish "$TARBALL" --provenance --access public --dry-run
           else

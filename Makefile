@@ -753,6 +753,21 @@ lint-ci-verify-coverage:
 	 echo "[ci-verify-coverage] suite: $$collected of $$declared declared test(s) ran"
 	@node scripts/check-ci-verify-coverage.mjs
 
+.PHONY: lint-workflow-hygiene
+lint-workflow-hygiene:
+	@echo "Checking runner hygiene in the workflows other than ci.yml..."
+	@declared=$$(grep -c '^test(' scripts/check-workflow-hygiene.test.mjs); \
+	 out=$$(node --test --test-reporter=tap scripts/check-workflow-hygiene.test.mjs 2>&1); \
+	 status=$$?; \
+	 [ "$$status" -eq 0 ] || { printf '%s\n' "$$out" >&2; exit "$$status"; }; \
+	 collected=$$(printf '%s\n' "$$out" | tr -d '\r' | sed -n 's/^1\.\.\([0-9][0-9]*\)$$/\1/p' | tail -n1); \
+	 if [ "$$declared" -lt 1 ] || [ "$$collected" != "$$declared" ]; then \
+	   echo "lint-workflow-hygiene: scripts/check-workflow-hygiene.test.mjs declares $$declared test(s) but node ran '$$collected'." >&2; \
+	   exit 1; \
+	 fi; \
+	 echo "[workflow-hygiene] suite: $$collected of $$declared declared test(s) ran"
+	@node scripts/check-workflow-hygiene.mjs
+
 # Incident 2026-10-29: a Traefik whose docker provider is unconstrained reads the
 # labels of EVERY container on the daemon; two stacks on one host then collide on
 # identical router/middleware names and Traefik disables the routers that use
@@ -863,7 +878,7 @@ lint-image-digests:
 	@node scripts/release/check-image-digests.mjs
 	@node scripts/release/check-image-digests.mjs --render
 
-lint: lint-sh lint-yaml lint-json lint-compose lint-compose-latest lint-pooled-stack lint-hygiene lint-tom-annex lint-cve-floors lint-node-floor lint-nats-nruns lint-packages lint-port-back lint-postgres-major lint-extraction-source lint-unshipped-migrations lint-compliance lint-tenant-db-access lint-edge-host lint-module-scan lint-module-migration-names lint-module-dockerfile-copy lint-dockerfile-workspace-closure lint-ci-docker-filter lint-traefik-stack-scope lint-migration-register lint-image-digests lint-synapse lint-ci-verify-coverage
+lint: lint-workflow-hygiene lint-sh lint-yaml lint-json lint-compose lint-compose-latest lint-pooled-stack lint-hygiene lint-tom-annex lint-cve-floors lint-node-floor lint-nats-nruns lint-packages lint-port-back lint-postgres-major lint-extraction-source lint-unshipped-migrations lint-compliance lint-tenant-db-access lint-edge-host lint-module-scan lint-module-migration-names lint-module-dockerfile-copy lint-dockerfile-workspace-closure lint-ci-docker-filter lint-traefik-stack-scope lint-migration-register lint-image-digests lint-synapse lint-ci-verify-coverage
 	@echo "All linters passed."
 
 # ── Local gate (TASK-045, TRD-444/341) ──────────────────────────────────────

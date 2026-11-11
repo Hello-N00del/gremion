@@ -281,7 +281,7 @@ export async function submitModuleSwitch(ctx: SwitchContext, input: SwitchInput,
     const authTime = new Date(signedIn.seconds * 1000).toISOString()
     const rows = await platform<{ request_id: string }[]>`
       SELECT plt.submit_council_module_request(
-        ${action === 'enable' ? 'enable_module' : 'disable_module'}, ${tenant.slug}, ${JSON.stringify(args)}::jsonb,
+        ${action === 'enable' ? 'enable_module' : 'disable_module'}, ${tenant.slug}, ${platform.json(args as Parameters<typeof platform.json>[0])}::jsonb,
         ${key}::uuid, ${user.id}::uuid, ${'loa2'}, ${authTime}::timestamptz,
         ${encodeEvidence({ id: ctx.idToken, access: ctx.accessToken })})::text AS request_id`
     const id = rows[0]?.request_id
