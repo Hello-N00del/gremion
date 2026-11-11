@@ -3,6 +3,8 @@
   import { Button } from '$lib/components/ui/button'
   import { Input } from '$lib/components/ui/input'
   import { Label } from '$lib/components/ui/label'
+  import DateTimeFieldDe from './DateTimeFieldDe.svelte'
+  import { switchLocalKind } from './german-datetime'
   import { loadEvents, visibleRange } from '$lib/stores/calendar'
   import { toast } from 'svelte-sonner'
   import { onMount, untrack } from 'svelte'
@@ -75,6 +77,14 @@
     }
   })
 
+  // An all-day event holds dates only: carry the typed values over to the
+  // other kind, so flipping the switch never blanks the fields.
+  function setAllDay(next: boolean) {
+    allDay = next
+    startAt = switchLocalKind(startAt, next)
+    endAt = switchLocalKind(endAt, next)
+  }
+
   function toggleCommittee(id: string) {
     committeeIds = committeeIds.includes(id)
       ? committeeIds.filter((c) => c !== id)
@@ -105,8 +115,11 @@
     }
   }
 
+  // startAt/endAt are '' while a field holds text that is not a real German date.
+  const datesValid = $derived(startAt !== '' && endAt !== '')
+
   async function save() {
-    if (!title) return
+    if (!title || !datesValid) return
     saving = true
     try {
       const res = await fetch('/api/calendar/events', {
@@ -141,11 +154,16 @@
   const WEEKDAYS = ['MO', 'TU', 'WE', 'TH', 'FR', 'SA', 'SU']
 </script>
 
-<Dialog {open} onClose={onClose}>
+<!--
+  The dialog never grows past the window: its height is capped to the viewport
+  and the form body is the only part that scrolls, so the title and the
+  buttons stay in view (E2E finding 14).
+-->
+<Dialog {open} onClose={onClose} class="ce-dialog">
   <DialogHeader>
     <DialogTitle>Termin erstellen</DialogTitle>
   </DialogHeader>
-  <div class="py-4 space-y-4 max-h-[70vh] overflow-y-auto">
+  <div data-dialog-body class="ce-body space-y-4">
     <div class="space-y-1">
       <Label for="ce-title">Titel *</Label>
       <Input id="ce-title" bind:value={title} placeholder="Termin-Titel" />
@@ -157,28 +175,23 @@
     </div>
 
     <div class="flex items-center gap-2">
-      <input type="checkbox" id="ce-allday" bind:checked={allDay} />
+      <input
+        type="checkbox"
+        id="ce-allday"
+        checked={allDay}
+        onchange={(e) => setAllDay(e.currentTarget.checked)}
+      />
       <Label for="ce-allday">Ganztägig</Label>
     </div>
 
-    <div class="grid grid-cols-2 gap-4">
+    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
       <div class="space-y-1">
         <Label for="ce-start">Beginn</Label>
-        <input
-          id="ce-start"
-          type={allDay ? 'date' : 'datetime-local'}
-          bind:value={startAt}
-          class="flex h-10 w-full rounded-md border border-border-strong bg-paper px-3 py-2 text-sm"
-        />
+        <DateTimeFieldDe id="ce-start" label="Beginn" dateOnly={allDay} bind:value={startAt} />
       </div>
       <div class="space-y-1">
         <Label for="ce-end">Ende</Label>
-        <input
-          id="ce-end"
-          type={allDay ? 'date' : 'datetime-local'}
-          bind:value={endAt}
-          class="flex h-10 w-full rounded-md border border-border-strong bg-paper px-3 py-2 text-sm"
-        />
+        <DateTimeFieldDe id="ce-end" label="Ende" dateOnly={allDay} bind:value={endAt} />
       </div>
     </div>
 
@@ -294,19 +307,23 @@
               />
               Wiederholungen
             </label>
-            <label class="flex items-center gap-1">
-              <input
-                type="radio"
-                bind:group={recurrenceEndMode}
-                value="until"
-              />
-              Am
-              <input
-                type="date"
+            <div class="flex items-start gap-1">
+              <label class="flex h-10 items-center gap-1">
+                <input
+                  type="radio"
+                  bind:group={recurrenceEndMode}
+                  value="until"
+                />
+                Am
+              </label>
+              <DateTimeFieldDe
+                id="ce-until"
+                label="Wiederholung endet am"
+                dateOnly
                 bind:value={recurrenceUntil}
-                class="flex h-9 rounded-md border border-border-strong bg-paper px-3 py-2 text-sm"
+                class="ce-until"
               />
-            </label>
+            </div>
           </div>
         </div>
       </div>
@@ -324,8 +341,27 @@
   </div>
   <DialogFooter>
     <Button variant="outline" onclick={onClose}>Abbrechen</Button>
-    <Button onclick={save} disabled={!title || saving}>
+    <Button onclick={save} disabled={!title || !datesValid || saving}>
       {saving ? 'Speichern...' : 'Speichern'}
     </Button>
   </DialogFooter>
 </Dialog>
+
+<style>
+  /* The classes below are plain CSS on purpose: the layout fix must not depend
+     on a utility class that the stylesheet build might not generate for this
+     module. */
+  :global(.ce-dialog) {
+    max-height: calc(100dvh - 2rem);
+    grid-template-rows: auto minmax(0, 1fr) auto;
+  }
+  :global(.ce-until) {
+    width: 16rem;
+    max-width: 100%;
+  }
+  .ce-body {
+    min-height: 0;
+    overflow-y: auto;
+    padding: 0.5rem 0.25rem 0.5rem 0;
+  }
+</style>
