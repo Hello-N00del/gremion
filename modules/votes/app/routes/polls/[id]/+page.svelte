@@ -4,6 +4,7 @@
   import { Alert } from '$lib/components/ui/alert'
   import Pill from '$lib/components/pills/Pill.svelte'
   import { Button } from '$lib/components/ui/button'
+  import { voteCount } from '$lib/components/polls/count'
 
   let { data }: { data: PageData } = $props()
 
@@ -49,8 +50,11 @@
     <a href="/votes" class="text-sm text-ink-muted hover:underline">← Abstimmungen</a>
   </div>
 
-  <div class="rounded-lg border bg-surface">
-    <div class="px-6 pt-6 pb-0">
+  <div class="rounded-lg border border-border bg-surface">
+    <!-- Padding is inline on purpose: this page is copied into the app from the module, and the
+         stylesheet scan skips that copy, so px-6/pb-0 were never generated and the title sat on
+         the card border. -->
+    <div data-testid="poll-card-head" style="padding: 1.5rem 1.5rem 0">
       <div class="flex items-start justify-between gap-2">
         <span class="text-lg font-semibold">{poll.configuration.title}</span>
         <div class="flex gap-1 shrink-0">
@@ -71,7 +75,7 @@
       {/if}
     </div>
 
-    <div class="p-6 space-y-4">
+    <div class="space-y-4" style="padding: 1.5rem">
       {#if errorMsg}
         <Alert variant="destructive">{errorMsg}</Alert>
       {/if}
@@ -95,7 +99,7 @@
                 />
                 <span class="flex-1 text-sm">{option.text}</span>
                 {#if voted}
-                  <span class="text-sm text-ink-muted">{option.votes.count} Stimmen</span>
+                  <span class="text-sm text-ink-muted">{voteCount(option.votes.count)}</span>
                 {/if}
               </label>
             </li>
