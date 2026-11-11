@@ -44,12 +44,12 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { readFileSync, readdirSync } from 'node:fs'
 import path from 'node:path'
-import postgres from 'postgres'
+import type { Sql } from '@gremion/db'
 import { isHttpError } from '@sveltejs/kit'
 import { assertNonProductionDbUrl } from '../../../../tests/integration/assert-safe-test-db-url'
 import { runWithTenant, type TenantContext } from '$lib/server/tenant/context'
 import { getDb } from '$lib/server/db'
-import { _resetPoolRegistryForTests } from '$lib/server/db/pool-registry'
+import { evictTenantPool, getPoolForTenant } from '$lib/server/db/pool-registry'
 import { GET as listBoards, POST as createBoard } from '../../../routes/api/board/+server'
 import { GET as readBoard } from '../../../routes/api/board/[id]/+server'
 import { POST as createCard, PATCH as moveCard } from '../../../routes/api/board/[id]/cards/+server'
@@ -64,7 +64,6 @@ vi.mock('$lib/server/identity/display-names', () => ({
 }))
 
 type Who = 'A' | 'B'
-type Sql = postgres.Sql
 
 const UI_ROOT = path.resolve(__dirname, '..', '..', '..', '..')
 const MIGRATIONS = path.join(UI_ROOT, 'migrations')
@@ -311,18 +310,31 @@ const leaksNothingOf = (reply: Reply, who: Who) => {
 
 // --- setup -------------------------------------------------------------------
 
+const ADMIN_ID = {
+  server: 'board-iso-admin-server',
+  A: 'board-iso-admin-a',
+  B: 'board-iso-admin-b',
+} as const
+
+/**
+ * An administrative connection, made with the kernel's own pool factory (this file
+ * opens no driver of its own). One connection: the migration files carry their own
+ * BEGIN/COMMIT. These pools are the test's oracle and are never reached through
+ * getDb(): they are keyed by their own ids and URLs.
+ */
+const adminPool = (id: string, url: string): Sql => getPoolForTenant({ id, dbUrl: url, dbMax: 1, dbPrepare: false })
+
 beforeAll(async () => {
   const adminUrl = (() => {
     const u = serverUrl()
     u.pathname = '/postgres'
     return u.toString()
   })()
-  adminServer = postgres(adminUrl, { max: 1, onnotice: () => {} })
+  adminServer = adminPool(ADMIN_ID.server, adminUrl)
   for (const who of ['A', 'B'] as const) {
     await adminServer.unsafe(`CREATE DATABASE ${DB_NAME[who]}`)
     created.push(DB_NAME[who])
-    // max 1: the migration files carry their own BEGIN/COMMIT
-    admin[who] = postgres(urlFor(DB_NAME[who]), { max: 1, onnotice: () => {} })
+    admin[who] = adminPool(ADMIN_ID[who], urlFor(DB_NAME[who]))
     await migrate(admin[who], 'before-role')
   }
   await ensureReaderRole()
@@ -342,12 +354,15 @@ afterAll(async () => {
       first ??= e
     }
   }
-  await step(() => _resetPoolRegistryForTests())
-  for (const who of ['A', 'B'] as const) await step(() => admin[who]?.end({ timeout: 5 }))
+  // the customers' pools and the oracle's pools first; the server pool drops what this file created
+  for (const who of ['A', 'B'] as const) {
+    if (ctx[who]) await step(() => evictTenantPool(ctx[who].id))
+    await step(() => evictTenantPool(ADMIN_ID[who]))
+  }
   if (adminServer) {
     for (const name of created) await step(() => adminServer.unsafe(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`))
     if (createdRole) await step(() => adminServer.unsafe(`DROP ROLE IF EXISTS ${READER_ROLE}`))
-    await step(() => adminServer.end({ timeout: 5 }))
+    await step(() => evictTenantPool(ADMIN_ID.server))
   }
   if (first) throw first
 }, 60_000)

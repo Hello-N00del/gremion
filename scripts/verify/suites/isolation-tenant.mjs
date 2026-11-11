@@ -15,10 +15,15 @@
 //   votes       in-process     app half, recording fake Nextcloud
 //   files       in-process     app half, recording fake WebDAV
 //   messaging   in-process     app half, recording fake Synapse
+//   board       in-process     real route handlers, real getDb(), two real tenant databases
 //
-// board, elections, finance, vault and handover have NO case on purpose: the
-// board suite tests a leaf the pilot does not run, and a result for a module
-// that cannot be enabled would be evidence for code that is not running.
+// elections, finance, vault and handover have NO case on purpose: a result for
+// a module that cannot be enabled would be evidence for code that is not running.
+// The board case is `real-pg-app`: the board's data lives in the kernel's own
+// per-customer database, so the proof runs the handlers the pilot runs against two
+// physically separate Postgres databases (gremion-ui's integration config), not
+// against a recording fake. The board LEAF (BOARD_BACKEND=service, test
+// environment only) is not what this case proves.
 //
 // Every part is judged by lib/guard.mjs (combineParts) like any other suite, so
 // zero collected, one skip, a missing tool and an unparseable report all fail it.
@@ -27,6 +32,11 @@
 //     be among the files vitest reported running (the pin, like isolation.mjs);
 //   - a leaf case with no throwaway Postgres (ISOLATION_TENANT_PG_URL) fails
 //     instead of running against nothing;
+//   - a real-pg-app case runs the kernel's integration harness, whose guard
+//     (assert-safe-test-db-url) needs GREMION_PRODUCTION_STACK and database URLs
+//     it can place. The runner owns that database, so it states `none` and
+//     derives the harness URLs from the throwaway server, but only after
+//     checking that server is loopback and not port 5432;
 //   - the overlay preparation (the modules' app halves are copied into
 //     gremion-ui before their tests can import `$lib/...`) failing fails the part.
 //
@@ -45,7 +55,7 @@ import { REPO_ROOT, runVitestJson } from '../lib/vitest.mjs'
 export const ISOLATION_TENANT_PART = 'isolation:tenant'
 
 /** Catalogue ids (modules/<id>/module.json), the keys plt.module and the gate use. */
-export const ISOLATION_TENANT_MODULES = Object.freeze(['calendar', 'content', 'publishing', 'votes', 'files', 'messaging'])
+export const ISOLATION_TENANT_MODULES = Object.freeze(['calendar', 'content', 'publishing', 'votes', 'files', 'messaging', 'board'])
 
 /** The throwaway Postgres every leaf case connects to (localhost, a non-5432 port). */
 export const PG_URL_VAR = 'ISOLATION_TENANT_PG_URL'
@@ -74,6 +84,52 @@ const inProcess = (module, files) => ({
   prepare: true,
 })
 
+/**
+ * The databases the integration harness config insists on (its DATABASE_URL and
+ * CONTROL_DATABASE_URL guard) are derived from the throwaway server, under names
+ * the guard accepts on loopback ("test" in the database name). The case itself
+ * creates and drops its own board_iso_test_* databases on that server.
+ */
+const HARNESS_DATABASES = Object.freeze({ DATABASE_URL: 'board_iso_test_fixture', CONTROL_DATABASE_URL: 'board_iso_test_control' })
+
+// A real-pg-app case: an in-process app half proven against real Postgres through
+// gremion-ui's integration config (the file is named *.integration.test.ts).
+const realPgApp = (module, files) => ({
+  module,
+  proofKind: 'real-pg-app',
+  cwd: 'gremion-ui',
+  cmd: 'pnpm',
+  args: ['exec', 'vitest', 'run', '--config', 'vitest.integration.config.ts', ...files.map((f) => f.replace(/^gremion-ui\//, ''))],
+  files,
+  needsPg: true,
+  pgEnv: [],
+  pgDatabases: HARNESS_DATABASES,
+  harnessOwnedDb: true,
+  prepare: true,
+})
+
+/** A reason the throwaway server is not acceptable to a harness-owned case, or null. */
+export function throwawayServerProblem(url) {
+  let u
+  try {
+    u = new URL(url)
+  } catch {
+    return `${PG_URL_VAR} is not a URL`
+  }
+  if (u.protocol !== 'postgres:' && u.protocol !== 'postgresql:') return `${PG_URL_VAR} is not a postgres:// URL`
+  const host = u.hostname.toLowerCase().replace(/^\[|\]$/g, '')
+  if (!['localhost', '127.0.0.1', '::1'].includes(host)) return `${PG_URL_VAR} must name loopback, not ${host}`
+  if (u.port === '' || u.port === '5432') return `${PG_URL_VAR} must not use port 5432 (a live server's port)`
+  return null
+}
+
+/** The same server, another database. */
+export function serverWithDatabase(url, database) {
+  const u = new URL(url)
+  u.pathname = `/${database}`
+  return u.toString()
+}
+
 /** The case table: one entry per declared module. */
 export function isolationTenantCases() {
   return [
@@ -88,6 +144,7 @@ export function isolationTenantCases() {
       'gremion-ui/src/lib/server/messages/matrix-synapse.tenant.test.ts',
       'gremion-ui/src/lib/server/messages/livekit.tenant.test.ts',
     ]),
+    realPgApp('board', ['gremion-ui/src/lib/server/board/tenant-isolation.integration.test.ts']),
   ]
 }
 
@@ -187,7 +244,21 @@ export function runIsolationTenantSuite({
       parts.push(failingPart(label, `${PG_URL_VAR} is not set: a leaf case needs the throwaway Postgres (localhost, a port other than 5432); the part never falls back to anything else`))
       continue
     }
-    const caseEnv = c.needsPg ? { ...env, ...Object.fromEntries((c.pgEnv ?? []).map((k) => [k, pgUrl])) } : undefined
+    if (c.harnessOwnedDb) {
+      const problem = throwawayServerProblem(pgUrl)
+      if (problem) {
+        parts.push(failingPart(label, `${problem}: this case states GREMION_PRODUCTION_STACK=none for the database it owns, so the server must be a throwaway one`))
+        continue
+      }
+    }
+    const caseEnv = c.needsPg
+      ? {
+          ...env,
+          ...Object.fromEntries((c.pgEnv ?? []).map((k) => [k, pgUrl])),
+          ...Object.fromEntries(Object.entries(c.pgDatabases ?? {}).map(([k, db]) => [k, serverWithDatabase(pgUrl, db)])),
+          ...(c.harnessOwnedDb ? { GREMION_PRODUCTION_STACK: 'none' } : {}),
+        }
+      : undefined
     const keepReportAt = path.join(reportsDir, `${c.module}.vitest.json`)
     const part = runVitest({
       label,
