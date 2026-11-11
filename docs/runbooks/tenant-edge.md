@@ -226,10 +226,11 @@ gremion-dns-check --domain example.org --edge-ip <EDGE_BIND_IP> --edge-ip6 <EDGE
 
 ### 2. Let the edge issue the certificate
 
-Nothing to configure per tenant. The first request for the host through the
-`websecure` entrypoint makes Traefik obtain a certificate over HTTP-01
-(`:80` must reach Traefik, which is why the `web` entrypoint never captures
-`/.well-known/acme-challenge/`). Rehearse against the ACME staging directory
+Nothing to configure per tenant. The router file written by the create request
+names the `le-http` resolver, so Traefik requests a certificate for the host over
+HTTP-01 when it loads that file (`:80` must reach Traefik, which is why the `web`
+entrypoint never captures `/.well-known/acme-challenge/`, and the host's DNS
+record must already resolve to the edge address). Rehearse against the ACME staging directory
 first (`ACME_CA_SERVER`, [deployment.md](../deployment.md#the-edge-traefik--acme)).
 
 ### 3. Create the control-plane DB on an existing volume (one-shot)
