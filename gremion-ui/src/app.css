@@ -26,6 +26,7 @@
   --color-ink-faint:     var(--ink-faint);
   --color-border:        var(--border);
   --color-border-strong: var(--border-strong);
+  --color-input:         var(--input);
   --color-accent:        var(--accent);
   --color-accent-ink:    var(--accent-ink);
   --color-accent-soft:   var(--accent-soft);
@@ -180,6 +181,10 @@
   --border:        rgba(22, 21, 19, 0.09);
   --border-strong: rgba(22, 21, 19, 0.16);
 
+  /* Form-field outline (shadcn `border-input`). Same value as --border in
+     light mode; the dark theme raises it to the non-text contrast floor. */
+  --input:         rgba(22, 21, 19, 0.09);
+
   /* Status hues — light */
   --ember:         oklch(56% 0.14 52);
   --ember-soft:    oklch(94% 0.05 60);
@@ -218,7 +223,11 @@
   --ink-muted:     #8c8a82;
   --ink-faint:     #5e5c55;
   --border:        rgba(237, 236, 231, 0.08);
-  --border-strong: rgba(237, 236, 231, 0.16);
+  /* WCAG 1.4.11: a form field outline needs 3:1 against the surface it sits on.
+     0.16 gave about 1.4:1, so fields had no visible outline. dark-field-contrast.test.ts
+     computes the ratio from these values. --border (card edges) stays subtle. */
+  --border-strong: rgba(237, 236, 231, 0.45);
+  --input:         var(--border-strong);
 
   --ember:        oklch(74% 0.14 60);   /* v5: dark ember hue 60 (tokens.css:76) */
   --ember-soft:   oklch(28% 0.07 60);
