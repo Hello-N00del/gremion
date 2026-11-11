@@ -5,7 +5,7 @@
   import type { SessionUser } from '$lib/auth/types'
   import { makeAuthHelpers } from '$lib/auth/group-helpers'
   import { moduleHref } from '$lib/modules/registry'
-  import { resolveBrand } from '$lib/brand'
+  import { configuredPortalDomain } from '../routes/portal/portal-domain'
   import { termFor } from '$lib/terms'
   import { ROLE_LABELS } from '$lib/auth/labels'
   import { INSTANCE_STATE_META, instanceReady, type InstanceState } from '$lib/instance-status'
@@ -22,8 +22,12 @@
 
   let { data }: { data: PageData } = $props()
 
-  // Tenant brand (v4 re-audit slice 10) — portal domain.
-  let brand = $derived(resolveBrand(page.data.brand))
+  // Public portal address from the layout payload. Read from the raw brand, not
+  // resolveBrand(): its fallback would turn "nothing configured" into
+  // "localhost". No address configured → no portal card.
+  let portalDomain = $derived(
+    configuredPortalDomain((page.data as { brand?: { domain?: string } }).brand?.domain)
+  )
 
   // #289 (HANDOVER-v8 Part F): re-term institution nouns from the tenant term-map;
   // StuRa tenant #1 has no override → literal fallbacks (byte-identical).
@@ -142,7 +146,9 @@
       {/if}
     </div>
 
-    <ExternalServicesCard domain={brand.domain} />
+    {#if portalDomain}
+      <ExternalServicesCard domain={portalDomain} />
+    {/if}
   {/if}
 </div>
 
