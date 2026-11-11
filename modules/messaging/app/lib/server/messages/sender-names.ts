@@ -10,7 +10,7 @@
 
 import { currentTenantId } from '$lib/server/tenant/context'
 import { getKeycloakAdminClientForCurrentTenant } from '$lib/server/keycloak-admin'
-import { fallbackSenderName, isShowableName, localpartOf } from '$lib/messaging/sender-label'
+import { fallbackSenderName, isShowableName, localpartOf } from '$lib/components/messaging/sender-label'
 
 /** The identity data this resolver needs from a member: nothing but the name parts. */
 export interface NameParts {
