@@ -1,4 +1,4 @@
-<!-- i18n-sync: source=module-defaults.md sha256=00124542a9d3e805ee13980d48e8ced5bde0cde309b3bc479e76db93b487aa90 -->
+<!-- i18n-sync: source=module-defaults.md sha256=c8ffcf36d0c97295d00ceaea5e1a4b1b99d9c949a9ac3a2af155c85bc6cecce2 -->
 [English](./module-defaults.md) | **Deutsch**
 
 # Modul-Standards im Pilot: was das Repository festhält, was gemessen ist, was übergeben wird
@@ -10,7 +10,7 @@
 
 ## 1. Der vorgesehene Pilotsatz
 
-Ein Pilotkunde wird mit **votes, calendar, content, publishing, files und messaging**
+Ein Pilotkunde wird mit **votes, calendar, content, publishing, files, messaging und board**
 angelegt. Die Anlageanfrage nennt jedes Modul ausdrücklich; wer kein Modul nennt, aktiviert
 keines (`packages/provisioning/test/code-default-off.test.ts`).
 
@@ -22,12 +22,12 @@ keines (`packages/provisioning/test/code-default-off.test.ts`).
 | publishing | aktiviert | Newsletter |
 | files | aktiviert | Dokumente über Nextcloud, Bearbeitung in Collabora |
 | messaging | aktiviert | Chat und Video |
+| board | aktiviert | Aufgabenboard je Organisationseinheit; wird im Prozess aus der eigenen Datenbank des Kunden ausgeliefert, die Aktivierung öffnet also keine Moduldatenbank und startet kein Compose-Profil. Es wird bei der Anlage über dasselbe Isolations-Gate gewählt wie die anderen Module (der Board-Isolationsfall, `scripts/verify/suites/isolation-tenant.mjs`) |
 | elections | nicht genannt | Optional, keine satzungsgemäße Wahl ([elections-scope](../compliance/elections-scope.de.md)); startet aus und wird in der App-Konfiguration ausgeschaltet gehalten (`defaultEnabled: false` im Manifest und eine Festschreibung beim Lesen und Schreiben von `config.modules`), sodass weder die Navigation noch `/votes` Wahl-Wortlaut tragen; auf jeder Seite unter `/elections` ist ein dauerhafter Hinweis eingebunden |
 | finance, vault | nicht genannt | Vom Standard-Build ausgeschlossen (`modules/disabled.json`) |
-| board | nicht genannt | Noch nicht mandantengetrennt; vom echten Bereitstellungs-Gate abgelehnt. Im Pilot im Prozess ausgeliefert und standardmäßig an (Entscheidung des Betreibers 2026-11-09), braucht also keine Gate-Zeile; es hat keinen Isolationsnachweis, den ein zweiter Kunde zuerst braucht |
 | handover | nicht genannt | Nicht Teil des Pilotsatzes |
 
-Alle sechs Pilotmodule sind abwählbar; sie werden je Kunde bei der Anlage gewählt, und ein
+Alle sieben Pilotmodule sind abwählbar; sie werden je Kunde bei der Anlage gewählt, und ein
 ausgeschaltetes Modul muss den Kernel funktionsfähig lassen, ohne hängenden Verweis darauf (die
 Navigationseinträge von calendar, files, messaging und content tragen ihre Modul-ID und
 entfallen).
@@ -38,10 +38,10 @@ entfallen).
 `scripts/check-pilot-module-defaults.test.mjs`:
 
 - (a) `test/host/fixtures/module-defaults/pilot-request.json` aktiviert votes, calendar,
-  content, publishing, files und messaging und keines von elections, finance, board, vault,
+  content, publishing, files, messaging und board und keines von elections, finance, vault,
   handover; jede genannte ID hat eine `module.json`.
 - (b) keine `COMPOSE_PROFILES`-Zeile in `infra/host/templates/env/*.env.tmpl` nennt finance,
-  board, vault oder vaultwarden. Die Profile der Pilotmodule werden aus
+  board, vault oder vaultwarden (board braucht keines: es läuft im Prozess). Die Profile der Pilotmodule werden aus
   `infra/host/module-profiles.json` gerendert, nicht in eine Vorlage geschrieben.
 - (c) keine `modules/*/module.json` enthält eine Deklaration zur Standardaktivierung.
 - (d) das Create-Formular des Panels wählt kein Modul-Kontrollkästchen vor.
@@ -69,16 +69,20 @@ laufende System liefere keine Wahlseite aus. Die übrigen Module des Pilotsatzes
 content, publishing, files, messaging) sind bei der Anlage an und werden je Anfrage nur über
 dieselbe Konfiguration gesperrt; Stufe 1 je Anfrage ist weiterhin TASK-044-b.
 
-**Board ist gewollt an.** Es wird nicht über das Aktivierungs-Gate angefragt, das es weiterhin
-namentlich ablehnt; es wird im Prozess auf Kernel-Tabellen ausgeliefert und ist standardmäßig an
-(Entscheidung des Betreibers 2026-11-09). Es hat keinen Mandanten-Isolationsnachweis; den braucht
-ein zweiter Kunde zuerst.
+**Board ist bei der Anlage wählbar.** Das Aktivierungs-Gate lehnt es nicht mehr namentlich ab
+(nur vault bleibt abgelehnt); es durchläuft das Gate wie jedes andere Modul, auf ein bestandenes
+kundenübergreifendes Isolationsergebnis für den eingesetzten Release. Es wird im Prozess auf
+Kernel-Tabellen der eigenen Datenbank des Kunden ausgeliefert und hat daher keine eigene
+Moduldatenbank. Ein Gremium kann board in den eigenen Einstellungen weiterhin nicht schalten: Dort
+bleibt es zurückgehalten. Der Isolationsnachweis für board auf einem laufenden Host wird nach dem
+Einsatz erfasst; solange ein Host ihn für den eingesetzten Release nicht erfasst hat, lehnt das Gate
+board ab wie jedes Modul ohne Nachweis.
 
 ## 4. Übergaben
 
 | An | Was |
 |---|---|
-| TASK-043d (Create-Formular des Panels) | Das Formular listet die abschaltbaren `plt.module`-Zeilen (`apps/control-panel/src/lib/server/modules.ts`), content und publishing erscheinen also mit dem Katalog; votes, calendar, content, publishing, files und messaging ankreuzen, je mit einem DPIA-Verweis. 058 ändert `apps/control-panel` nicht. |
+| TASK-043d (Create-Formular des Panels) | Das Formular listet die abschaltbaren `plt.module`-Zeilen (`apps/control-panel/src/lib/server/modules.ts`), content und publishing erscheinen also mit dem Katalog; votes, calendar, content, publishing, files, messaging und board ankreuzen, je mit einem DPIA-Verweis. 058 ändert `apps/control-panel` nicht. |
 | TASK-044-b | Stufe 1 einmal je Anfrage auflösen, fail-closed; PATCH auf true ohne Stufe 1 antwortet mit 409. Voraussetzung für jede „aus“-Zeile von Teil B. |
 | TASK-129 | Ein Feld `ackNotice` im Aktivierungsschritt, damit der Elections-Hinweis dort bestätigt wird, wo das Modul aktiviert wird; die Einbindung in der App ist bereits dauerhaft. |
 | TASK-038 (Runbook) | Eine Zeile: votes plus Messaging plus das Compose-Profil für Messaging, denn die Chat-Umfrage (Matrix MSC3381) braucht das Messaging-Profil. |

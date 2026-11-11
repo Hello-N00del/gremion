@@ -245,10 +245,10 @@ describe('verifyCouncilRequest: the kind and the module come first', () => {
     expect((await verifyCouncilRequest(await row({ args: { ...ARGS, module } }), s.ctx, s.deps)).verdict).toBe('ok')
   })
 
-  it('board and vault stay refused by name, a module disabled in this build stays refused', async () => {
+  it('vault stays refused by name, board is refused as not council-switchable (held back, no longer denied), a module disabled in this build stays refused', async () => {
     const s = setup({}, { deps: { disabledIds: ['calendar'] } })
-    expect(await verifyCouncilRequest(await row({ args: { ...ARGS, module: 'board' } }), s.ctx, s.deps)).toMatchObject({ verdict: 'refused', reason: expect.stringMatching(/MODULE_DENIED|cannot be enabled/) })
-    expect(await verifyCouncilRequest(await row({ args: { ...ARGS, module: 'vault' } }), s.ctx, s.deps)).toMatchObject({ verdict: 'refused' })
+    expect(await verifyCouncilRequest(await row({ args: { ...ARGS, module: 'board' } }), s.ctx, s.deps)).toMatchObject({ verdict: 'refused', reason: expect.stringMatching(/MODULE_NOT_SWITCHABLE/) })
+    expect(await verifyCouncilRequest(await row({ args: { ...ARGS, module: 'vault' } }), s.ctx, s.deps)).toMatchObject({ verdict: 'refused', reason: expect.stringMatching(/cannot be enabled/) })
     expect(await verifyCouncilRequest(await row({ args: { ...ARGS, module: 'calendar' } }), s.ctx, s.deps)).toMatchObject({ verdict: 'refused', reason: expect.stringMatching(/disabled in this build/) })
   })
 

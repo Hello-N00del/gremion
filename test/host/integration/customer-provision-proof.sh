@@ -57,8 +57,8 @@
 #                    is loaded. Run it after customer-before, before any create.
 #   customer-create  = the four sub-phases below, in order (each fits a 4-minute
 #                    tool call on its own; run them separately from a supervisor)
-#     customer-create-refuse  `--enable board` and `--enable vault` refused by
-#                    name before any write (R29-I1; R30 A1, PRD-PLAT-012 / PRD-REC-003)
+#     customer-create-refuse  `--enable vault` refused by name before any write
+#                    (R30 A1, PRD-PLAT-012 / PRD-REC-003; board left the deny list in the board wave)
 #     customer-create-x       the gate fixtures, then
 #                    a create REQUEST for proof-x (panel-create, then `gremion-executor --once`; calendar,votes) (calendar:
 #                    a database and a broker user; votes: neither)
@@ -966,15 +966,15 @@ phase_customer_create_refuse() {
     need_pooled
     local cfg="$ROOT/test/host/fixtures/pooled-stack/tenant-t040-b.json" out rc
     [[ -f "$cfg" ]] || die "the customer config fixture ${cfg} is absent"
-    # R29-I1: board is refused BY NAME, before any write. "No write" is the
+    # Vault is refused BY NAME (board was lifted from the deny list, board wave 2026-11-11), before any write. "No write" is the
     # control registry and the ledger UNCHANGED across the refused call (not
     # "no row for X": a rerun after a failed create already has one).
     local snap_before snap_after
     snap() { printf '%s|%s' "$(q control "SELECT string_agg(slug || ':' || status, ',' ORDER BY slug) FROM tenant")" \
         "$(q postgres "SELECT 1 FROM pg_database WHERE datname = 'gremion_platform'" | grep -q 1 && q gremion_platform "SELECT count(*) || ':' || coalesce(max(occurred_at)::text, '-') FROM plt.provisioning_step")"; }
-    # R30 A1 (PRD-PLAT-012 / PRD-REC-003): vault is refused the same way.
+    # R30 A1 (PRD-PLAT-012 / PRD-REC-003): vault stays on the deny list.
     local denied rid st oc
-    for denied in board vault; do
+    for denied in vault; do
         snap_before="$(snap)"
         rc=0; rid="$(panel_create "$X" "calendar,${denied}")" || rc=$?
         if (( rc != 0 )); then bad "customer-create: could not queue the ${denied} request"; continue; fi
@@ -1079,7 +1079,8 @@ phase_customer_create_check() {
     # file is 0600 AND owned by the reader uid (a root:root file is EACCES to the readers).
     # The directory the app env mounts (pooled-stack-proof renders TENANT_SECRETS_DIR into app-blue.env, under
     # the scratch root), not the release tree's secrets/tenants, which holds only .gitkeep (#50 item 4).
-    local tsd="${PROOF_TENANT_SECRETS_DIR:-$(sed -n 's/^TENANT_SECRETS_DIR=//p' "$PENV/app-blue.env" 2>/dev/null | tr -d '"' | tail -n1)}" tsf tsbad=0 tsn=0 want_uid="${TENANT_SECRETS_UID:-1000}"
+    local tsd="${PROOF_TENANT_SECRETS_DIR:-$(sed -n 's/^TENANT_SECRETS_DIR=//p' "$PENV/app-blue.env" 2>/dev/null | tr -d '"
+' | tail -n1)}" tsf tsbad=0 tsn=0 want_uid="${TENANT_SECRETS_UID:-1000}"
     [[ -n "$tsd" ]] || tsd="$(croot)/secrets/tenants"
     while IFS= read -r tsf; do
         tsn=$(( tsn + 1 ))
