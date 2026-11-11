@@ -19,7 +19,10 @@ function prePaintScript(): string {
   return script
 }
 
-function run(stored: Record<string, string>, opts: { throwing?: boolean; writeThrows?: boolean } = {}) {
+function run(
+  stored: Record<string, string>,
+  opts: { throwing?: boolean; writeThrows?: boolean; systemDark?: boolean; noMatchMedia?: boolean } = {}
+) {
   const data = new Map(Object.entries(stored))
   const writes: string[] = []
   const classes = new Set<string>()
@@ -43,7 +46,10 @@ function run(stored: Record<string, string>, opts: { throwing?: boolean; writeTh
       contains: (c: string) => classes.has(c)
     }
   }
-  runInNewContext(prePaintScript(), { localStorage, document: { documentElement } })
+  const window = opts.noMatchMedia
+    ? {}
+    : { matchMedia: (q: string) => ({ matches: q.includes('prefers-color-scheme: dark') && !!opts.systemDark }) }
+  runInNewContext(prePaintScript(), { localStorage, document: { documentElement }, window })
   return { classes, writes }
 }
 
@@ -94,5 +100,37 @@ describe('app.html pre-paint: gremion.nav', () => {
     const { classes } = run({ 'gremion.theme': 'dark', [NAV_STORAGE_KEY]: 'rail' })
     expect(classes.has('dark')).toBe(true)
     expect(classes.has(RAIL)).toBe(true)
+  })
+})
+
+describe('app.html pre-paint: theme follows the system until an explicit choice', () => {
+  test('no stored choice and a dark system preference sets html.dark', () => {
+    expect(run({}, { systemDark: true }).classes.has('dark')).toBe(true)
+  })
+
+  test('no stored choice and a light system preference sets no class', () => {
+    expect(run({}, { systemDark: false }).classes.has('dark')).toBe(false)
+  })
+
+  test('a stored explicit light wins over a dark system preference', () => {
+    expect(run({ 'gremion.theme': 'light' }, { systemDark: true }).classes.has('dark')).toBe(false)
+  })
+
+  test('a stored explicit dark applies on a light system', () => {
+    expect(run({ 'gremion.theme': 'dark' }, { systemDark: false }).classes.has('dark')).toBe(true)
+  })
+
+  test('a legacy stored light also wins over the system preference', () => {
+    expect(run({ 'stura-theme': 'light' }, { systemDark: true }).classes.has('dark')).toBe(false)
+  })
+
+  test('without matchMedia the theme stays light and the other prefs still apply', () => {
+    const { classes } = run({ 'gremion.colorblind': 'rg' }, { noMatchMedia: true })
+    expect(classes.has('dark')).toBe(false)
+    expect(classes.has('cb-rg')).toBe(true)
+  })
+
+  test('the script never writes the theme key on its own', () => {
+    expect(run({}, { systemDark: true }).writes).not.toContain('gremion.theme')
   })
 })
