@@ -107,8 +107,15 @@ curl -X POST http://localhost:3001/api/setup/test-smtp \
   -H "Content-Type: application/json" \
   -H "Cookie: $IT_ADMIN_SESSION_COOKIE" \
   -d '{"host":"mailpit","port":1025,"user":"","password":"",
-       "from_address":"noreply@localhost","to_address":"test@example.org"}'
+       "from_address":"noreply@localhost"}'
 ```
+
+The test mail goes to the signed-in admin's own address; the endpoint takes no
+recipient. Leave `user` and `password` empty to authenticate with the tenant's
+stored relay login (the same one real sending uses; it is attached only when
+`host`/`port` name the relay the operator registered, never a host typed in
+Settings). Fill both to try other credentials instead; a password without a
+user is refused.
 
 A success returns `{"success":true,"data":{"success":true}}`; an SMTP failure
 returns `success:false` with the transport error message.

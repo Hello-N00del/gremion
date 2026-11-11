@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -39,8 +39,19 @@ const hoisted = vi.hoisted(() => ({
   readConfig: vi.fn(),
   env: {} as Record<string, string | undefined>,
   /** The session user locals.auth() answers with; null = no session. */
-  user: null as { id: string; roles: string[] } | null,
+  user: null as { id: string; roles: string[]; email?: string } | null,
+  /** The tenant services getTenant() answers with (registry domain_profile.smtp). */
+  tenantSmtp: undefined as
+    | { host?: string; port?: number; user?: string; passwordRef?: string }
+    | undefined,
+  /** What resolveSecret() returns, or throws when set to an Error. */
+  secret: 'stored-relay-secret' as string | Error,
+  resolveSecret: vi.fn(),
 }))
+hoisted.resolveSecret.mockImplementation(() => {
+  if (hoisted.secret instanceof Error) throw hoisted.secret
+  return hoisted.secret
+})
 hoisted.createTransport.mockImplementation(() => ({ sendMail: hoisted.sendMail }))
 
 vi.mock('nodemailer', () => ({
@@ -63,14 +74,18 @@ vi.mock('$env/dynamic/private', () => ({ env: hoisted.env }))
 vi.mock('$lib/server/config', () => ({ readConfig: hoisted.readConfig }))
 // The route handler is called directly (no hooks.server.ts runWithTenant wrap),
 // so the ALS-backed canonical tenant id used by the rate limiter is stubbed.
-vi.mock('$lib/server/tenant/context', () => ({ currentTenantId: () => 'default' }))
+vi.mock('$lib/server/tenant/context', () => ({
+  currentTenantId: () => 'default',
+  getTenant: () => ({ id: 'default', services: { smtp: hoisted.tenantSmtp } }),
+}))
+vi.mock('$lib/server/tenant/secrets', () => ({ resolveSecret: hoisted.resolveSecret }))
 
 import { POST } from './+server'
 import { __resetRateLimits } from '$lib/server/rate-limit'
 import { isIP } from 'node:net'
 import { Role } from '$lib/auth'
 
-const IT_ADMIN = { id: 'it-admin-1', roles: [Role.ITAdmin] }
+const IT_ADMIN = { id: 'it-admin-1', roles: [Role.ITAdmin], email: 'admin@example.org' }
 
 const BODY = {
   port: 587,
@@ -99,6 +114,9 @@ beforeEach(() => {
   hoisted.createTransport.mockClear()
   hoisted.readConfig.mockReturnValue({ setup_complete: false, smtp: { host: '' } })
   hoisted.user = IT_ADMIN
+  hoisted.tenantSmtp = undefined
+  hoisted.secret = 'stored-relay-secret'
+  hoisted.resolveSecret.mockClear()
   for (const k of Object.keys(hoisted.env)) delete hoisted.env[k]
 })
 
@@ -195,7 +213,7 @@ describe('POST /api/setup/test-smtp -- tenant-admin scope hardening (TASK-042 R2
 
   it('the per-user cap is per user: a second IT admin is not starved by the first', async () => {
     for (let i = 1; i <= 5; i++) await callFrom(`203.0.113.${i}`)
-    hoisted.user = { id: 'it-admin-2', roles: [Role.ITAdmin] }
+    hoisted.user = { id: 'it-admin-2', roles: [Role.ITAdmin], email: 'admin2@example.org' }
     expect((await callFrom('203.0.113.50')).status).toBe(200)
   })
 
@@ -822,5 +840,265 @@ describe('the guard doc is reachable and states its residuals', () => {
     const doc = readFileSync(join(repoRoot, 'docs/security/test-smtp-guard.md'), 'utf8')
     expect(doc).toContain('.env.example')
     expect(doc).toMatch(/DNS/)
+  })
+})
+
+
+// E4 (end-to-end finding 5): the Settings test button sent without credentials
+// unless a user and password were typed into the form, so against an
+// authenticating relay it always ended in "Connection closed unexpectedly" while
+// real sending (tenant-mail.ts) used the stored login. The default test now uses
+// the same stored credential, only toward the target real sending uses, and mails
+// only the signed-in admin.
+describe('POST /api/setup/test-smtp -- stored relay credential (E4)', () => {
+  const STORED = {
+    host: 'relay.example.org',
+    port: 587,
+    user: 'relay-user',
+    passwordRef: 'file:/run/secrets/tenants/relay-smtp-password',
+  }
+
+  function callWith(fields: Record<string, unknown>) {
+    const request = new Request('http://localhost/api/setup/test-smtp', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(fields),
+    })
+    const locals = { auth: async () => (hoisted.user ? { user: hoisted.user } : null) }
+    return POST({ request, locals, getClientAddress: () => '203.0.113.9' } as never)
+  }
+
+  const EMPTY_FORM = {
+    host: 'relay.example.org',
+    port: 587,
+    user: '',
+    password: '',
+    from_address: 'noreply@example.org',
+  }
+
+  it('builds the transport with the stored login when the form login is empty', async () => {
+    hoisted.tenantSmtp = STORED
+    const res = await callWith(EMPTY_FORM)
+    expect(res.status).toBe(200)
+    expect(hoisted.createTransport.mock.calls[0][0]).toMatchObject({
+      auth: { user: 'relay-user', pass: 'stored-relay-secret' },
+    })
+    expect(hoisted.resolveSecret).toHaveBeenCalledWith(STORED.passwordRef)
+  })
+
+  it('never hands the stored login to a relay named only in config.smtp (tenant-admin controlled)', async () => {
+    // The registry host is operator-trusted; config.smtp.host is what a tenant
+    // admin types in Settings -> E-Mail. A login must not follow that host.
+    hoisted.tenantSmtp = { user: 'relay-user', passwordRef: STORED.passwordRef }
+    hoisted.readConfig.mockReturnValue({
+      setup_complete: true,
+      smtp: { host: 'relay.example.org', port: 587 },
+    })
+    const res = await callWith(EMPTY_FORM)
+    expect(res.status).toBe(200)
+    expect(hoisted.createTransport.mock.calls[0][0].auth).toBeUndefined()
+    expect(hoisted.resolveSecret).not.toHaveBeenCalled()
+  })
+
+  it('takes only the port from config.smtp when the registry names the host but no port', async () => {
+    hoisted.tenantSmtp = { host: 'relay.example.org', user: 'relay-user', passwordRef: STORED.passwordRef }
+    hoisted.readConfig.mockReturnValue({ setup_complete: true, smtp: { host: 'elsewhere.example.net', port: 587 } })
+    await callWith(EMPTY_FORM)
+    expect(hoisted.createTransport.mock.calls[0][0]).toMatchObject({
+      auth: { user: 'relay-user', pass: 'stored-relay-secret' },
+    })
+  })
+
+  it('requires TLS upgrade when the stored login goes out on a STARTTLS port', async () => {
+    hoisted.tenantSmtp = STORED
+    await callWith(EMPTY_FORM)
+    expect(hoisted.createTransport.mock.calls[0][0].requireTLS).toBe(true)
+  })
+
+  it('does not set requireTLS on implicit-TLS 465, nor when no login is attached', async () => {
+    hoisted.tenantSmtp = { ...STORED, port: 465 }
+    await callWith({ ...EMPTY_FORM, port: 465 })
+    expect(hoisted.createTransport.mock.calls[0][0].requireTLS).toBeUndefined()
+    hoisted.createTransport.mockClear()
+    hoisted.tenantSmtp = undefined
+    await callWith(EMPTY_FORM)
+    expect(hoisted.createTransport.mock.calls[0][0].requireTLS).toBeUndefined()
+  })
+
+  it('refuses a typed password without a typed user instead of silently ignoring it', async () => {
+    hoisted.tenantSmtp = STORED
+    const res = await callWith({ ...EMPTY_FORM, user: '', password: 'rotated-pass' })
+    expect(res.status).toBe(400)
+    expect(hoisted.createTransport).not.toHaveBeenCalled()
+    expect(hoisted.resolveSecret).not.toHaveBeenCalled()
+  })
+
+  it('uses the typed override instead of the stored login when a user is typed', async () => {
+    hoisted.tenantSmtp = STORED
+    await callWith({ ...EMPTY_FORM, user: 'typed-user', password: 'typed-pass' })
+    expect(hoisted.createTransport.mock.calls[0][0]).toMatchObject({
+      auth: { user: 'typed-user', pass: 'typed-pass' },
+    })
+    expect(hoisted.resolveSecret).not.toHaveBeenCalled()
+  })
+
+  it('does not hand the stored login to a host other than the one real sending uses', async () => {
+    hoisted.tenantSmtp = STORED
+    await callWith({ ...EMPTY_FORM, host: 'other.example.com' })
+    expect(hoisted.createTransport).toHaveBeenCalledTimes(1)
+    expect(hoisted.createTransport.mock.calls[0][0].auth).toBeUndefined()
+    expect(hoisted.resolveSecret).not.toHaveBeenCalled()
+  })
+
+  it('does not hand the stored login to another port of the right host', async () => {
+    hoisted.tenantSmtp = STORED
+    await callWith({ ...EMPTY_FORM, port: 25 })
+    expect(hoisted.createTransport.mock.calls[0][0].auth).toBeUndefined()
+    expect(hoisted.resolveSecret).not.toHaveBeenCalled()
+  })
+
+  it('tells the admin that the stored login was withheld when the target is not the relay', async () => {
+    hoisted.tenantSmtp = STORED
+    hoisted.sendMail.mockRejectedValueOnce(new Error('Connection closed unexpectedly'))
+    const res = await callWith({ ...EMPTY_FORM, host: 'other.example.com' })
+    const body = (await res.json()) as { data: { error: string } }
+    expect(body.data.error).toMatch(/hinterlegte Anmeldung/)
+  })
+
+  it('sends without auth when the tenant has no stored login and the form is empty', async () => {
+    await callWith(EMPTY_FORM)
+    expect(hoisted.createTransport.mock.calls[0][0].auth).toBeUndefined()
+  })
+
+  it('mails only the signed-in admin, whatever to_address the body names', async () => {
+    hoisted.tenantSmtp = STORED
+    const res = await callWith({ ...EMPTY_FORM, to_address: 'someone-else@example.net' })
+    expect(res.status).toBe(200)
+    const sentMessages = hoisted.sendMail.mock.calls as unknown as Array<[{ to: string }]>
+    expect(sentMessages[0][0].to).toBe('admin@example.org')
+  })
+
+  it('refuses a session that carries no address, before any connect', async () => {
+    hoisted.user = { id: 'it-admin-1', roles: [Role.ITAdmin] }
+    const res = await callWith(EMPTY_FORM)
+    expect(res.status).toBe(400)
+    expect(hoisted.createTransport).not.toHaveBeenCalled()
+  })
+
+  describe('secret hygiene', () => {
+    let spies: Array<ReturnType<typeof vi.spyOn>>
+    beforeEach(() => {
+      spies = (['log', 'info', 'warn', 'error', 'debug'] as const).map((m) =>
+        vi.spyOn(console, m).mockImplementation(() => {}),
+      )
+    })
+    afterEach(() => {
+      for (const s of spies) s.mockRestore()
+    })
+    const logged = () => JSON.stringify(spies.flatMap((s) => s.mock.calls))
+
+    it('never returns or logs the stored password, even when the transport error quotes it', async () => {
+      hoisted.tenantSmtp = STORED
+      hoisted.sendMail.mockRejectedValueOnce(
+        new Error('Invalid login for relay-user with stored-relay-secret'),
+      )
+      const res = await callWith(EMPTY_FORM)
+      const text = await res.text()
+      // Reached the transport and failed there: the assertions below are not vacuous.
+      expect(hoisted.sendMail).toHaveBeenCalledTimes(1)
+      expect(JSON.parse(text).success).toBe(false)
+      expect(text).not.toContain('stored-relay-secret')
+      expect(logged()).not.toContain('stored-relay-secret')
+    })
+
+    it('never returns or logs a typed override password', async () => {
+      hoisted.sendMail.mockRejectedValueOnce(new Error('bad login typed-pass-9'))
+      const res = await callWith({ ...EMPTY_FORM, user: 'typed-user', password: 'typed-pass-9' })
+      const text = await res.text()
+      expect(hoisted.sendMail).toHaveBeenCalledTimes(1)
+      expect(JSON.parse(text).success).toBe(false)
+      expect(text).not.toContain('typed-pass-9')
+      expect(logged()).not.toContain('typed-pass-9')
+    })
+
+    it('reports an unreadable stored secret without naming the secret path or logging it', async () => {
+      hoisted.tenantSmtp = STORED
+      hoisted.secret = new Error('ENOENT /run/secrets/tenants/relay-smtp-password')
+      const res = await callWith(EMPTY_FORM)
+      const text = await res.text()
+      expect(hoisted.createTransport).not.toHaveBeenCalled()
+      expect(text).toMatch(/hinterlegt/)
+      expect(text).not.toContain('relay-smtp-password')
+      expect(logged()).not.toContain('relay-smtp-password')
+    })
+  })
+
+  describe('stored login failures are classified', () => {
+    let spies: Array<ReturnType<typeof vi.spyOn>>
+    beforeEach(() => {
+      spies = (['log', 'info', 'warn', 'error', 'debug'] as const).map((m) =>
+        vi.spyOn(console, m).mockImplementation(() => {}),
+      )
+    })
+    afterEach(() => {
+      for (const s of spies) s.mockRestore()
+    })
+    const logged = () => JSON.stringify(spies.flatMap((s) => s.mock.calls))
+
+    it('names an incomplete registry login (password ref without a user) as such', async () => {
+      hoisted.tenantSmtp = { host: STORED.host, port: 587, passwordRef: STORED.passwordRef }
+      const res = await callWith(EMPTY_FORM)
+      const text = await res.text()
+      expect(hoisted.createTransport).not.toHaveBeenCalled()
+      expect(text).toMatch(/unvollständig/)
+      expect(logged()).toContain('incomplete')
+      expect(logged()).not.toContain('relay-smtp-password')
+    })
+
+    it('logs a fixed reason and the error code for an unreadable secret, never its message', async () => {
+      hoisted.tenantSmtp = STORED
+      hoisted.secret = Object.assign(new Error('ENOENT /run/secrets/tenants/relay-smtp-password'), {
+        code: 'ENOENT',
+      })
+      const res = await callWith(EMPTY_FORM)
+      expect(res.status).toBe(200)
+      expect(logged()).toContain('secret-unreadable:ENOENT')
+      expect(logged()).not.toContain('relay-smtp-password')
+    })
+  })
+
+  describe('error mapping', () => {
+    async function failWith(err: Error & { code?: string }, fields: Record<string, unknown> = EMPTY_FORM) {
+      hoisted.sendMail.mockRejectedValueOnce(err)
+      const res = await callWith(fields)
+      return (await res.json()) as { success: boolean; data: { error: string } }
+    }
+
+    it('maps a closed connection to a German message naming authentication', async () => {
+      const body = await failWith(
+        Object.assign(new Error('Connection closed unexpectedly'), { code: 'ECONNECTION' }),
+      )
+      expect(body.success).toBe(false)
+      expect(body.data.error).toMatch(/Anmeldung/)
+      expect(body.data.error).toMatch(/Verbindung/)
+      expect(body.data.error).not.toMatch(/closed unexpectedly/)
+    })
+
+    it('says that no login was sent when none was available', async () => {
+      const body = await failWith(new Error('Connection closed unexpectedly'))
+      expect(body.data.error).toMatch(/keine Zugangsdaten/)
+    })
+
+    it('maps a rejected login to a German authentication message', async () => {
+      const body = await failWith(
+        Object.assign(new Error('Invalid login: 535 5.7.8 Authentication failed'), { code: 'EAUTH' }),
+      )
+      expect(body.data.error).toMatch(/Anmeldung/)
+    })
+
+    it('keeps other transport errors readable', async () => {
+      const body = await failWith(new Error('getaddrinfo ENOTFOUND relay.example.org'))
+      expect(body.data.error).toContain('ENOTFOUND')
+    })
   })
 })

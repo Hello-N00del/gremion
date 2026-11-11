@@ -162,3 +162,61 @@ describe('TabEmail.svelte — SMTP test result surface', () => {
     expect(screen.queryByTestId('smtp-test-hint')).toBeNull()
   })
 })
+
+// E4: the server mails the signed-in admin and uses the stored relay login unless
+// an override is typed. The tab must not pretend otherwise: it names no recipient
+// field, sends none, and labels the login fields as an optional override.
+describe('TabEmail.svelte — test uses the stored login (E4)', () => {
+  function okFetch() {
+    return vi.fn(
+      async (_url: string, _init?: RequestInit) =>
+        new Response(JSON.stringify({ success: true, data: { success: true } }), { status: 200 }),
+    )
+  }
+
+  it('posts no recipient, so the server can only mail the signed-in admin', async () => {
+    const fetchMock = okFetch()
+    vi.stubGlobal('fetch', fetchMock)
+    render(TabEmail, { props: { smtp: SMTP } })
+    await fireEvent.click(testButton())
+    await screen.findByText(/erfolgreich gesendet/)
+    const sent = JSON.parse(String(fetchMock.mock.calls[0][1]?.body))
+    expect(sent).not.toHaveProperty('to_address')
+    expect(sent).toMatchObject({ host: 'mailpit', port: 1025, user: '', password: '' })
+  })
+
+  it('forwards a typed login as the override', async () => {
+    const fetchMock = okFetch()
+    vi.stubGlobal('fetch', fetchMock)
+    render(TabEmail, { props: { smtp: SMTP } })
+    await fireEvent.input(screen.getByLabelText(/SMTP-Benutzer/), { target: { value: 'typed-user' } })
+    await fireEvent.input(screen.getByLabelText(/Passwort \(/), { target: { value: 'typed-pass' } })
+    await fireEvent.click(testButton())
+    await screen.findByText(/erfolgreich gesendet/)
+    const sent = JSON.parse(String(fetchMock.mock.calls[0][1]?.body))
+    expect(sent).toMatchObject({ user: 'typed-user', password: 'typed-pass' })
+  })
+
+  it('explains that the stored login is used and the mail goes to the signed-in admin', () => {
+    const { container } = render(TabEmail, { props: { smtp: SMTP } })
+    expect(container.textContent).toMatch(/hinterlegte Anmeldung/)
+    expect(container.textContent).toMatch(/eigene Adresse/)
+  })
+
+  it('shows the server message for a closed connection that names the login', async () => {
+    const message =
+      'Der Mailserver hat die Verbindung unerwartet geschlossen. Häufigste Ursache: Er verlangt eine Anmeldung (SMTP-AUTH).'
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          new Response(JSON.stringify({ success: false, data: { success: false, error: message } }), {
+            status: 200,
+          }),
+      ),
+    )
+    render(TabEmail, { props: { smtp: SMTP } })
+    await fireEvent.click(testButton())
+    expect(await screen.findByText(message)).toBeTruthy()
+  })
+})
