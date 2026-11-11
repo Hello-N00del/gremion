@@ -251,11 +251,44 @@ describe('jwtCallback refresh timeout', () => {
     expect(f).toHaveBeenCalledTimes(1)
   })
 
-  it('timeout outside the grace window surfaces RefreshTokenFailed', async () => {
+  // An idle user returns long after the access token expired. A short Keycloak stall
+  // must not log them out: the grace window starts at the FIRST failed refresh, not
+  // at accessTokenExpires (the refresh token is still good, rotation is off).
+  it('a timeout for a user whose token expired long ago keeps the token: grace starts at the first failed refresh', async () => {
     vi.stubGlobal('fetch', hangingFetch())
     const out = await settle(run({ ...base(), accessTokenExpires: Date.now() - 120_000 }))
-    expect(out.error).toBe('RefreshTokenFailed')
+    expect(out.error).toBeUndefined()
+    expect(out.accessToken).toBe('SECRET-AT')
+    expect(out.refreshRetryAt as number).toBeGreaterThan(Date.now())
+    expect(typeof out.refreshFailingSince).toBe('number')
     expect(String(warn.mock.calls[0].join(' '))).toContain('timeout')
+  })
+
+  it('a stall that outlasts the grace window measured from the first failed refresh ends the session', async () => {
+    const f = hangingFetch()
+    vi.stubGlobal('fetch', f)
+    const first = await settle(run({ ...base(), accessTokenExpires: Date.now() - 120_000 }))
+    expect(first.error).toBeUndefined()
+    // ~52 s after the first failure: still inside the window, retried, kept.
+    await vi.advanceTimersByTimeAsync(46_000)
+    const second = await settle(run(first))
+    expect(f).toHaveBeenCalledTimes(2)
+    expect(second.error).toBeUndefined()
+    // the window is anchored to the FIRST failure: later failures do not extend it
+    expect(second.refreshFailingSince).toBe(first.refreshFailingSince)
+    // past the window: the session ends.
+    await vi.advanceTimersByTimeAsync(11_000)
+    const third = await settle(run(second))
+    expect(third.error).toBe('RefreshTokenFailed')
+  })
+
+  it('the back-off never points past the end of the grace window', async () => {
+    vi.stubGlobal('fetch', hangingFetch())
+    const first = await settle(run({ ...base(), accessTokenExpires: Date.now() - 120_000 }))
+    await vi.advanceTimersByTimeAsync(46_000)
+    const second = await settle(run(first))
+    expect(second.error).toBeUndefined()
+    expect(second.refreshRetryAt as number).toBeLessThanOrEqual((first.refreshFailingSince as number) + 60_000)
   })
 
   it('a fast answer clears the timer: no stray abort after success', async () => {

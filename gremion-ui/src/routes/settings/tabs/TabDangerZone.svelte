@@ -12,7 +12,7 @@
   let resetSuccess = ''
   let heldBack: string[] = []
 
-  // StuRaOS#581: the reset answers with `heldBack`, the modules the council switched off. They stay off
+  // The reset answers with `heldBack`, the modules the council switched off. They stay off
   // and come back only through the module switch. Parsed defensively: anything but an array of
   // non-empty strings is ignored, and each id is capped so a bad payload cannot flood the page.
   const HELD_BACK_MAX_ITEMS = 50
