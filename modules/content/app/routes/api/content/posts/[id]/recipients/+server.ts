@@ -8,13 +8,15 @@
 //
 // Gated by `content.author` (same capability as authoring/recipient curation;
 // the heavier `content.publish` gates the actual send). The KC group list is a
-// best-effort convenience for the picker — if the admin lookup fails we still
+// best-effort convenience for the picker, limited to the groups of the customer's
+// org units — if the admin lookup fails we still
 // return lists + recipients so the operator can manage mailing lists.
 import { json, error } from '@sveltejs/kit'
 import type { RequestHandler } from './$types'
 import { requireContentAuthor } from '$lib/server/content/route-auth'
 import { resolveContentBackendOr503 } from '$lib/server/content/backend/resolve'
 import { getKeycloakAdminClientForCurrentTenant } from '$lib/server/keycloak-admin'
+import { listOrgUnitGroupIds, onlyOrgUnitGroups } from '$lib/server/content/recipient-groups'
 
 const MAX_RECIPIENT_ENTRIES = 200
 
@@ -41,9 +43,14 @@ export const GET: RequestHandler = async (event) => {
   let groups: { id: string; name: string; path: string }[] = []
   try {
     const kc = getKeycloakAdminClientForCurrentTenant()
-    // The whole tree: bodies (Vorstand, Referate) are subgroups.
-    const raw = await kc.listGroupTree()
-    groups = raw.map((g) => ({ id: g.id, name: g.name, path: g.path }))
+    // The whole tree: bodies (Vorstand, Referate) are subgroups. Only the groups
+    // of the customer's org units are offered, not the technical Keycloak groups;
+    // if the org units cannot be read, no group is offered (never all of them).
+    const [raw, orgUnitGroupIds] = await Promise.all([kc.listGroupTree(), listOrgUnitGroupIds()])
+    groups = onlyOrgUnitGroups(
+      raw.map((g) => ({ id: g.id, name: g.name, path: g.path })),
+      orgUnitGroupIds,
+    )
   } catch (err) {
     console.error('[content:recipients] KC group list failed', err)
   }

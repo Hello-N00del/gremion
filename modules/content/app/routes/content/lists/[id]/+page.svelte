@@ -3,6 +3,7 @@
   // (email + optional name) and remove. CSV import is L2-stretch; out of scope.
   import { invalidateAll } from '$app/navigation'
   import PageTitle from '$lib/components/PageTitle.svelte'
+  import { countLabel } from '$lib/components/news/format-de'
   import type { PageData } from './$types'
 
   let { data }: { data: PageData } = $props()
@@ -56,7 +57,7 @@
   <button onclick={addMember}>Hinzufügen</button>
 </div>
 
-<h2 class="h2">{data.members.length} Mitglieder</h2>
+<h2 class="h2">{countLabel(data.members.length, 'Mitglied', 'Mitglieder')}</h2>
 
 {#if data.members.length === 0}
   <p class="muted">Noch keine Mitglieder.</p>
