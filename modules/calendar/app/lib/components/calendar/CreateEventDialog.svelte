@@ -117,9 +117,14 @@
 
   // startAt/endAt are '' while a field holds text that is not a real German date.
   const datesValid = $derived(startAt !== '' && endAt !== '')
+  // With 'Am' chosen the end date must be a real date: an empty value (text the
+  // reader refused, or nothing typed) would otherwise save an endless series.
+  const recurrenceValid = $derived(
+    !recurrenceFreq || recurrenceEndMode !== 'until' || recurrenceUntil !== '',
+  )
 
   async function save() {
-    if (!title || !datesValid) return
+    if (!title || !datesValid || !recurrenceValid) return
     saving = true
     try {
       const res = await fetch('/api/calendar/events', {
@@ -319,6 +324,7 @@
               <DateTimeFieldDe
                 id="ce-until"
                 label="Wiederholung endet am"
+                inputLabel="Wiederholung endet am"
                 dateOnly
                 bind:value={recurrenceUntil}
                 class="ce-until"
@@ -341,7 +347,7 @@
   </div>
   <DialogFooter>
     <Button variant="outline" onclick={onClose}>Abbrechen</Button>
-    <Button onclick={save} disabled={!title || !datesValid || saving}>
+    <Button onclick={save} disabled={!title || !datesValid || !recurrenceValid || saving}>
       {saving ? 'Speichern...' : 'Speichern'}
     </Button>
   </DialogFooter>

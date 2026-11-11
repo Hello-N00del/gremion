@@ -125,6 +125,63 @@ describe('create-event dialog: German dates, ISO on the wire', () => {
     expect(button?.disabled).toBe(true)
   })
 
+  describe('recurrence end date', () => {
+    async function chooseUntil() {
+      await typeInto(field('ce-title'), 'Sitzung')
+      const select = document.getElementById('ce-recur') as HTMLSelectElement
+      select.value = 'weekly'
+      select.dispatchEvent(new Event('change', { bubbles: true }))
+      await tick()
+      const until = Array.from(document.querySelectorAll('input[type="radio"]')).find(
+        (r) => (r as HTMLInputElement).value === 'until',
+      ) as HTMLInputElement
+      until.click()
+      await tick()
+    }
+    const saveButton = () =>
+      Array.from(document.querySelectorAll('button')).find((b) => b.textContent?.trim() === 'Speichern')
+
+    test.each(['31.11.2026', '30.11.26', '12/31/2027', 'bald'])(
+      'invalid end text %s blocks saving and nothing is sent',
+      async (text) => {
+        await mountDialog()
+        await chooseUntil()
+        await typeInto(field('ce-until'), text)
+        expect(field('ce-until').getAttribute('aria-invalid')).toBe('true')
+        expect(saveButton()?.disabled).toBe(true)
+        saveButton()?.click()
+        await tick()
+        expect(posted).toBeNull()
+      },
+    )
+
+    test('an empty end date in the until mode also blocks saving', async () => {
+      await mountDialog()
+      await chooseUntil()
+      expect(saveButton()?.disabled).toBe(true)
+    })
+
+    test('a valid end date is sent as the ISO instant', async () => {
+      await mountDialog()
+      await chooseUntil()
+      await typeInto(field('ce-until'), '30.11.2026')
+      expect(saveButton()?.disabled).toBe(false)
+      await save('Sitzung')
+      const rec = (posted as unknown as { recurrence: { until: string | null } }).recurrence
+      expect(rec.until).toBe(new Date('2026-11-30').toISOString())
+    })
+
+    test('the end text field has an accessible name and the format hint is linked to it', async () => {
+      await mountDialog()
+      await chooseUntil()
+      expect(field('ce-until').getAttribute('aria-label')).toBe('Wiederholung endet am')
+      await typeInto(field('ce-until'), 'bald')
+      const hintId = field('ce-until').getAttribute('aria-describedby')
+      expect(hintId).toBeTruthy()
+      expect(document.getElementById(hintId as string)?.textContent).toContain('TT.MM.JJJJ')
+    })
+  })
+
   test('an all-day event shows the date only, in German order, and still sends ISO', async () => {
     await mountDialog()
     const allDay = field('ce-allday')

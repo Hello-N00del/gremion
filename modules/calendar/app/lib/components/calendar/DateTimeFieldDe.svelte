@@ -16,10 +16,19 @@
     dateOnly?: boolean
     /** Names the field for the calendar button, e.g. "Beginn". */
     label: string
+    /** Names the text input itself when no <label for> points at it. */
+    inputLabel?: string
     class?: string
   }
 
-  let { id, value = $bindable(''), dateOnly = false, label, class: className = '' }: Props = $props()
+  let {
+    id,
+    value = $bindable(''),
+    dateOnly = false,
+    label,
+    inputLabel,
+    class: className = ''
+  }: Props = $props()
 
   const show = (v: string): string => (dateOnly ? formatDateDe(v) : formatLocalInputDe(v))
   const read = (t: string): string | null => (dateOnly ? parseDateDe(t) : parseDateTimeDe(t))
@@ -75,7 +84,9 @@
       inputmode="numeric"
       autocomplete="off"
       placeholder={dateOnly ? 'TT.MM.JJJJ' : 'TT.MM.JJJJ HH:MM'}
+      aria-label={inputLabel}
       aria-invalid={invalid ? 'true' : undefined}
+      aria-describedby={invalid ? `${id}-hint` : undefined}
       bind:value={text}
       oninput={typed}
       onblur={tidy}
@@ -93,7 +104,7 @@
     />
   </div>
   {#if invalid}
-    <p class="hint" role="status">
+    <p class="hint" id="{id}-hint" role="status">
       Bitte im Format {dateOnly ? 'TT.MM.JJJJ' : 'TT.MM.JJJJ HH:MM'} eingeben.
     </p>
   {/if}
