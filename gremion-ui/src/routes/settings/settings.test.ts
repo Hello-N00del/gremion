@@ -37,6 +37,8 @@ vi.mock('$lib/auth', () => ({
   Role: { ITAdmin: 'it-admin', Member: 'member' },
 }))
 
+import { _clearPlatformHeldForTests, rememberPlatformHeld } from '$lib/server/module-switch/platform-held'
+
 const baseConfig = {
   setup_complete: true,
   wizard_steps: { health_check: 'complete', org_info: 'complete', admin_accounts: 'complete', smtp: 'complete' },
@@ -152,9 +154,9 @@ describe('PATCH /api/settings', () => {
   // settings write used to flip it on over unreplayed erasures.
   describe('a council-switchable module that is off', () => {
     beforeEach(() => mockWriteConfig.mockClear())
-    const patch = async (body: unknown) => {
+    const patch = async (body: unknown, extraModules: Record<string, boolean> = { board: false }) => {
       mockHasRole.mockReturnValue(true)
-      mockReadConfig.mockReturnValue({ ...baseConfig, modules: { ...baseConfig.modules, votes: false } })
+      mockReadConfig.mockReturnValue({ ...baseConfig, modules: { ...baseConfig.modules, votes: false, ...extraModules } })
       const { PATCH } = await import('../api/settings/+server')
       const request = new Request('http://localhost', { method: 'PATCH', body: JSON.stringify(body) })
       // @ts-expect-error partial mock
@@ -178,6 +180,23 @@ describe('PATCH /api/settings', () => {
       expect((await patch({ modules: { votes: false } })).status).toBe(200)
       expect((await patch({ modules: { finance: false } })).status).toBe(200)
       expect(mockWriteConfig).toHaveBeenCalledTimes(2)
+    })
+
+    // B3: the platform disabled a module the council cannot switch (the board); a direct write must not undo it.
+    it('a module the platform holds off is not switched on by a PATCH either: 409, nothing written', async () => {
+      rememberPlatformHeld('tenant-1', 'board', true)
+      try {
+        const res = await patch({ modules: { board: true } })
+        expect(res.status).toBe(409)
+        expect(mockWriteConfig).not.toHaveBeenCalled()
+      } finally {
+        _clearPlatformHeldForTests()
+      }
+    })
+
+    it('the same module is a plain write again once the platform no longer holds it off', async () => {
+      const res = await patch({ modules: { board: true } }, { board: false })
+      expect(res.status).toBe(200)
     })
 
     it('a module that is already on may be sent as on again', async () => {

@@ -2,6 +2,7 @@ import { json } from '@sveltejs/kit'
 import type { RequestHandler } from './$types'
 import { parseConfig, readConfig, writeConfig } from '$lib/server/config'
 import { councilSwitchEnablesIn } from '$lib/server/module-switch/direct-writes'
+import { platformHeldOffForCurrentTenant } from '$lib/server/module-switch/platform-held'
 import { writeAuditEntry } from '$lib/server/audit-db'
 import { hasRole, Role } from '$lib/auth'
 import type { SessionUser } from '$lib/auth/types'
@@ -38,7 +39,7 @@ export const POST: RequestHandler = async ({ request, locals }) => {
     // Karenz: the defaults say "on" for every toggleable module, but a council-switchable module that is
     // off comes back only through the council switch (platform request, DPIA decision, Art. 17 replay of a
     // restore). The reset leaves such a module as it is and says so.
-    const heldBack = councilSwitchEnablesIn(defaults.modules, readConfig().modules)
+    const heldBack = councilSwitchEnablesIn(defaults.modules, readConfig().modules, platformHeldOffForCurrentTenant())
     const modules = Object.fromEntries(Object.entries(defaults.modules).filter(([id]) => !heldBack.includes(id)))
     const updated = writeConfig({
       org: defaults.org,

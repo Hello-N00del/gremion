@@ -7,6 +7,7 @@ import { z } from 'zod'
 import { env } from '$env/dynamic/private'
 import { isAllowedSmtpPort, resolveSmtpTarget } from '$lib/server/mail/smtp-target-guard'
 import { councilSwitchEnablesIn } from '$lib/server/module-switch/direct-writes'
+import { platformHeldOffForCurrentTenant } from '$lib/server/module-switch/platform-held'
 
 // G-098: `.strict()` rejects unknown top-level keys (e.g. typos). Per-field
 // constraints below remain tighter than the baseline `configUpdateSchema`
@@ -113,13 +114,13 @@ export const PATCH: RequestHandler = async ({ request, locals }) => {
   // Karenz: a council-switchable module that is off comes back only through the council switch (platform
   // request, DPIA decision, Art. 17 replay of a restore); a direct write has none of those. The whole
   // request is refused, nothing is written.
-  const switchOnly = councilSwitchEnablesIn(parsed.data.modules, config.modules)
+  const switchOnly = councilSwitchEnablesIn(parsed.data.modules, config.modules, platformHeldOffForCurrentTenant())
   if (switchOnly.length > 0) {
     return json(
       {
         success: false,
         code: 'USE_MODULE_SWITCH',
-        error: `Ein ausgeschaltetes Modul (${switchOnly.join(', ')}) kann nur über die Modulverwaltung wieder eingeschaltet werden.`,
+        error: `Ein ausgeschaltetes Modul (${switchOnly.join(', ')}) kann nur über die Modulverwaltung oder durch die Plattform wieder eingeschaltet werden.`,
       },
       { status: 409 },
     )

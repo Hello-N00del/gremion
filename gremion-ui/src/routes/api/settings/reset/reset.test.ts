@@ -17,6 +17,8 @@ const h = vi.hoisted(() => ({
 vi.mock('$lib/auth', () => ({ hasRole: h.hasRole, Role: { ITAdmin: 'it-admin' } }))
 vi.mock('$lib/server/config', () => ({ writeConfig: h.writeConfig, parseConfig: h.parseConfig, readConfig: h.readConfig }))
 vi.mock('$lib/server/audit-db', () => ({ writeAuditEntry: h.writeAuditEntry }))
+vi.mock('$lib/server/tenant/context', () => ({ getTenant: () => ({ id: 'tenant-1' }) }))
+import { _clearPlatformHeldForTests, rememberPlatformHeld } from '$lib/server/module-switch/platform-held'
 
 const DEFAULTS = {
   org: { name: 'Default Org', domain: 'example.org', logo_path: null, portal_sections: { news: true } },
@@ -87,6 +89,21 @@ describe('POST /api/settings/reset', () => {
     expect(update.modules).toEqual({ somemodule: true, elections: true, calendar: true })
     expect(update.org).toEqual(DEFAULTS.org)
     expect((await res.json()).heldBack).toEqual(['votes'])
+  })
+
+  // B3: a module the platform holds off (the board) must not be switched back on by the defaults either.
+  it('does not switch a module on that the platform holds off', async () => {
+    h.parseConfig.mockReturnValue({ ...DEFAULTS, modules: { somemodule: true, board: true } })
+    h.readConfig.mockReturnValue({ modules: { somemodule: true, board: false } })
+    rememberPlatformHeld('tenant-1', 'board', true)
+    try {
+      const res = await post({ confirm: 'ZURÜCKSETZEN' })
+      expect(res.status).toBe(200)
+      expect(h.writeConfig.mock.calls[0]![0].modules).toEqual({ somemodule: true })
+      expect((await res.json()).heldBack).toEqual(['board'])
+    } finally {
+      _clearPlatformHeldForTests()
+    }
   })
 
   it('audits the reset with the acting user', async () => {

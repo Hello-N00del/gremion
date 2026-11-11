@@ -6,7 +6,8 @@
 //
 // One tick every MODULE_SWITCH_INTERVAL_MS per ACTIVE tenant through the worker-fleet seam (explicit
 // tenant scope, single-flight per tenant, one tenant's failure never stops the rest). A tick on a
-// tenant with no pending switch is one cheap SELECT on the tenant database and no platform call.
+// tenant with no pending switch is one cheap SELECT on the tenant database and, once a minute, one read of the
+// platform enablement state (the board follows it); the platform requests are read only on the sweep interval.
 //
 // Gated on the council requester pool: PLATFORM_MODULES_DATABASE_URL empty or unset (deploy wiring
 // leaves it empty when UI_MODULES_DB_PASSWORD is unset) means self-service switching is off on this

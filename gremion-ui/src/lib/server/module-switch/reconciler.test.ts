@@ -14,6 +14,7 @@ vi.mock('./council-db', () => ({ getCouncilDb: h.getCouncilDb }))
 import { HELD_BACK_CATALOGUE_IDS, SWITCHABLE_CATALOGUE_IDS } from '$lib/modules/catalogue-map'
 import type { GremionConfig } from '$lib/server/config'
 import { disabledModuleForPath } from '$lib/server/module-gate'
+import { _clearPlatformHeldForTests, platformHeldOffModules } from './platform-held'
 import type { TenantContext } from '$lib/server/tenant/context'
 import type { SwitchRow, SwitchState } from './store'
 import { _clearModuleSwitchListenersForTests, registerModuleSwitchListener, type ModuleSwitchEvent } from './listeners'
@@ -196,6 +197,7 @@ function rig(): Rig {
 let r: Rig
 beforeEach(() => {
   _clearModuleSwitchListenersForTests()
+  _clearPlatformHeldForTests()
   vi.spyOn(console, 'error').mockImplementation(() => {})
   vi.spyOn(console, 'warn').mockImplementation(() => {})
   vi.spyOn(console, 'info').mockImplementation(() => {})
@@ -873,6 +875,59 @@ describe('the board follows the platform enablement', () => {
     await runModuleSwitchPass(tenant, deps)
     expect(r.writes).toEqual([])
     expect(r.config.modules.board).toBe(false)
+  })
+
+  it("while the platform still says disabled, the admin's own board=true is put back within the interval (the platform wins in the off direction)", async () => {
+    r.platform.state = boardState('disabled')
+    r.config.modules = { board: true }
+    const deps = r.deps()
+    await runModuleSwitchPass(tenant, deps) // boot: aligned to off
+    expect(r.writes).toEqual([{ board: false }])
+    r.config.modules = { board: true } // a settings write turns it back on; the platform row is unchanged
+    expect(disabledModuleForPath('/tasks', gateConfig())).toBeNull()
+    r.store.clock += 60_000
+    await runModuleSwitchPass(tenant, deps)
+    expect(r.writes).toEqual([{ board: false }, { board: false }])
+    expect(disabledModuleForPath('/tasks', gateConfig())).toBe('board')
+    // already off and the platform unchanged: nothing is written again
+    r.store.clock += 60_000
+    await runModuleSwitchPass(tenant, deps)
+    expect(r.writes).toHaveLength(2)
+    expect(r.migrated).toEqual([])
+  })
+
+  it('the modules the platform holds off are published for the direct settings writes, and released again by an enable', async () => {
+    r.platform.state = boardState('disabled')
+    r.config.modules = { board: true }
+    const deps = r.deps()
+    expect(platformHeldOffModules(TENANT_ID)).toEqual([])
+    await runModuleSwitchPass(tenant, deps)
+    expect(platformHeldOffModules(TENANT_ID)).toEqual(['board'])
+    r.platform.state = boardState('enabled')
+    r.store.clock += 60_000
+    await runModuleSwitchPass(tenant, deps)
+    expect(platformHeldOffModules(TENANT_ID)).toEqual([])
+  })
+
+  it('a platform row in an in-progress state (awaiting the isolation test, test failed) neither hides a running board nor re-enables a hidden one', async () => {
+    r.platform.state = boardState('enabled')
+    r.config.modules = { board: true }
+    const deps = r.deps()
+    await runModuleSwitchPass(tenant, deps)
+    for (const inProgress of ['awaiting_isolation_test', 'test_failed']) {
+      r.platform.state = CATALOGUE.map((k) => (k === 'board' ? st(k, inProgress, true) : st(k)))
+      r.store.clock += 60_000
+      await runModuleSwitchPass(tenant, deps)
+    }
+    expect(r.writes).toEqual([])
+    expect(r.config.modules.board).toBe(true)
+    // and at the first alignment of a process
+    r.platform.state = CATALOGUE.map((k) => (k === 'board' ? st(k, 'awaiting_isolation_test', true) : st(k)))
+    const fresh = rig()
+    fresh.platform.state = r.platform.state
+    fresh.config.modules = { board: true }
+    await runModuleSwitchPass(tenant, fresh.deps())
+    expect(fresh.writes).toEqual([])
   })
 
   it('an enable whose pre-apply work fails leaves the board off and is retried on the next interval', async () => {
