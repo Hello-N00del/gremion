@@ -87,7 +87,18 @@ function installPlatform(state: StateRow[] = CATALOGUE.map((k) => row(k)), karen
     if (text.includes('submit_council_module_request')) return platform.submit()
     throw new Error(`unexpected platform query: ${text}`)
   }
+  // postgres.js serialises a value bound to a jsonb parameter itself; the real code must hand it the
+  // object through sql.json, never a pre-stringified text (that arrives as a jsonb STRING: 2026-11-11).
+  ;(sql as unknown as { json: (v: unknown) => unknown }).json = (v: unknown) => ({ __pgJson: v })
   h.getCouncilDb.mockReturnValue(sql)
+}
+
+/** The jsonb args of a submit call: must be the sql.json wrapper around a plain object, never a string. */
+function argsOf(call: { values: unknown[] }): unknown {
+  const v = call.values[2]
+  expect(typeof v).not.toBe("string")
+  expect(v).toHaveProperty("__pgJson")
+  return (v as { __pgJson: unknown }).__pgJson
 }
 
 /**
@@ -179,7 +190,7 @@ describe('switch-off is available since the 30-day Karenz exists (phase 2, Task 
     expect(r).toEqual({ ok: true, requestId: REQUEST })
     expect(submits()).toHaveLength(1)
     expect(submits()[0]!.values[0]).toBe('disable_module')
-    expect(JSON.parse(submits()[0]!.values[2] as string)).toEqual({ slug: 'rat-a', module: 'votes' })
+    expect(argsOf(submits()[0]!)).toEqual({ slug: 'rat-a', module: 'votes' })
   })
 
   it('an injected disableAllowed false still refuses 422 DISABLE_NOT_YET before the platform is asked', async () => {
@@ -233,7 +244,7 @@ describe('Karenz states decide what a switch may do (Review Focus 1 and 2)', () 
     expect(r).toEqual({ ok: true, requestId: REQUEST })
     expect(submits()).toHaveLength(1)
     expect(submits()[0]!.values[0]).toBe('enable_module')
-    expect(JSON.parse(submits()[0]!.values[2] as string)).toEqual({ slug: 'rat-a', module: 'votes' })
+    expect(argsOf(submits()[0]!)).toEqual({ slug: 'rat-a', module: 'votes' })
     expect(h.insertSwitch).toHaveBeenCalledWith(tenant.db, expect.objectContaining({ moduleId: 'votes', action: 'enable' }))
   })
 
@@ -362,7 +373,7 @@ describe('disable with the flag injected', () => {
     expect(exact).toEqual({ ok: true, requestId: REQUEST })
     expect(submits()).toHaveLength(1)
     expect(submits()[0]!.values[0]).toBe('disable_module')
-    expect(JSON.parse(submits()[0]!.values[2] as string)).toEqual({ slug: 'rat-a', module: 'votes' })
+    expect(argsOf(submits()[0]!)).toEqual({ slug: 'rat-a', module: 'votes' })
     expect(h.insertSwitch).toHaveBeenCalledWith(tenant.db, expect.objectContaining({ requestId: REQUEST, moduleId: 'votes', action: 'disable', actorUserId: PERSON }))
   })
 
@@ -433,7 +444,7 @@ describe('enable: DPIA decision', () => {
   it('with {requiresDpia:false, documentRef:"TOM 4.2"} it queues args {slug, module, dpia} carrying the council reason', async () => {
     const r = await submitModuleSwitch(ctx(), { moduleId: 'votes', action: 'enable', dpia: { requiresDpia: false, documentRef: 'TOM 4.2' } }, deps())
     expect(r).toEqual({ ok: true, requestId: REQUEST })
-    expect(JSON.parse(submits()[0]!.values[2] as string)).toEqual({
+    expect(argsOf(submits()[0]!)).toEqual({
       slug: 'rat-a',
       module: 'votes',
       dpia: { requires_dpia: false, reason_codes: ['council_decision'], document_ref: 'TOM 4.2' },
@@ -444,7 +455,7 @@ describe('enable: DPIA decision', () => {
     installPlatform(CATALOGUE.map((k) => (k === 'votes' ? row(k, { dpia_recorded: true }) : row(k))))
     const r = await submitModuleSwitch(ctx(), { moduleId: 'votes', action: 'enable' }, deps())
     expect(r).toEqual({ ok: true, requestId: REQUEST })
-    expect(JSON.parse(submits()[0]!.values[2] as string)).toEqual({ slug: 'rat-a', module: 'votes' })
+    expect(argsOf(submits()[0]!)).toEqual({ slug: 'rat-a', module: 'votes' })
   })
 
   it('a documentRef that is blank, over 500 chars, has control characters or starts with "-" is 422 DPIA_INVALID', async () => {
@@ -492,7 +503,7 @@ describe('the platform submit', () => {
     const [kind, slug, args, key, person, acr, authTime, token] = submits()[0]!.values
     expect(kind).toBe('enable_module')
     expect(slug).toBe('rat-a')
-    expect(typeof args).toBe('string')
+    expect(argsOf({ values: [kind, slug, args] })).toMatchObject({ slug: 'rat-a', module: 'votes' })
     expect(key).toBe(KEY)
     expect(person).toBe(PERSON)
     expect(acr).toBe('loa2')
