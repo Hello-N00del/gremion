@@ -112,7 +112,7 @@ beforeEach(() => {
     ],
     available: [
       { id: 'votes', name: 'Abstimmungen', denied: null },
-      { id: 'board', name: 'Board', denied: 'board ist noch nicht mandantengetrennt und kann nicht aktiviert werden (R29-I1).' },
+      { id: 'vault', name: 'Tresor', denied: 'vault (Tresor) bleibt im Pilotbetrieb abgeschaltet und kann nicht aktiviert werden (PRD-PLAT-012).' },
     ],
   }
   events = []
@@ -124,7 +124,7 @@ const ENABLE = { module: 'votes', dpia: 'no', dpiaRef: 'TOM-3' }
 describe('the Module section is shown only when an action can be queued', () => {
   it('an active customer with no open request: the enabled and the available modules, actions on', async () => {
     const d = await loadFor()
-    expect(d.moduleSection).toMatchObject({ canAct: true, enabled: [{ id: 'calendar' }, { id: 'files' }], available: [{ id: 'votes' }, { id: 'board', denied: expect.stringMatching(/mandantengetrennt/) }] })
+    expect(d.moduleSection).toMatchObject({ canAct: true, enabled: [{ id: 'calendar' }, { id: 'files' }], available: [{ id: 'votes' }, { id: 'vault', denied: expect.stringMatching(/Tresor/) }] })
   })
   it.each(['queued', 'running'])('a %s request switches every action off', async (state) => {
     rows = [row({ state, kind: 'enable_module' })]
@@ -212,7 +212,7 @@ describe('enable_module', () => {
   })
   it.each([
     ['an already enabled module', 'calendar'],
-    ['a denied module', 'board'],
+    ['a denied module', 'vault'],
     ['an unknown module', 'nosuch'],
     ['no module', ''],
   ])('%s is refused with 409', async (_n, module) => {
