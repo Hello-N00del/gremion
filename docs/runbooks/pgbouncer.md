@@ -1,8 +1,9 @@
 # Runbook: PgBouncer + pinned connection budget
 
 PgBouncer is part of the **production profile** of the Gremion governance
-kernel. It is defined in `docker-compose.prod.yml` and is not loaded in dev or
-CI. This runbook covers deploying, verifying, and rolling it back.
+kernel. It is defined in `docker-compose.prod.yml` (the state project) and is not
+loaded in dev or CI. This runbook covers deploying, verifying, and rolling it
+back.
 
 For the kernel's overall architecture and the multi-tenancy model, see
 [about-gremion.md](../about-gremion.md). This document is the operational layer.
@@ -32,8 +33,8 @@ The shared `postgres:18-alpine` instance also serves Keycloak **directly**
 | Surface | Dev / CI (base file) | Production (prod overlay) |
 | --- | --- | --- |
 | `postgres` | image-default `max_connections` | explicit `command: ["postgres", "-c", "max_connections=100"]` (pinned — container **recreate** required) |
-| `pgbouncer` | not present | `edoburu/pgbouncer` (digest-pinned), `pgbouncer.ini` + `userlist.txt` mounted, listens on `pgbouncer:6432` (no host port) |
-| `gremion-ui` `DATABASE_URL` | `…@postgres:5432/gremion` | `…@pgbouncer:6432/gremion` (prod overlay override) |
+| `pgbouncer` | not present | `edoburu/pgbouncer` (digest-pinned), `pgbouncer.ini` + `userlist.txt` mounted, listens on `pgbouncer-<stack>:6432` on the state network (no host port) |
+| `gremion-ui` `DATABASE_URL` | `…@postgres-<stack>:5432/gremion` (`docker-compose.app.dev.yml`) | `…@pgbouncer-<stack>:6432/gremion` (`docker-compose.app.yml`, which has no prod overlay) |
 | `CONTROL_DATABASE_URL` | direct to postgres | **unchanged — direct to postgres** (the control plane must never be routed through PgBouncer; see the prod overlay note) |
 | Keycloak | direct to postgres | unchanged (direct) |
 
@@ -42,18 +43,23 @@ Prepared statements: postgres-js runs with `prepare: true` (per-tenant
 `max_prepared_statements = 200` (set in `pgbouncer.ini`). Do not downgrade the
 image below 1.21 without flipping `conn_profile.prepare` to `false` per tenant.
 
-All commands below use the full prod file set (never a partial `-f` list — a
-partial set recreates dependencies with the invoked config):
+All commands below run from the release tree and name the project's env file,
+which carries its compose files, project name and profiles (never a partial `-f`
+list — a partial set recreates dependencies with the invoked config). `$DC` is
+the state project (Postgres, PgBouncer); `$DA` is the serving colour of the app
+project (`gremion-ui`):
 
 ```bash
-DC="docker compose -f docker-compose.yml -f docker-compose.prod.yml --profile production"
+DC="docker compose --env-file /opt/gremion/etc/env/state.env"
+DA="docker compose --env-file /opt/gremion/etc/env/app-blue.env"   # the serving colour
 ```
 
 > **One-time setup must precede the first prod-overlay `up -d`.** The
 > bind-mounted `docker/pgbouncer/userlist.txt` is gitignored. If it does not
-> exist when `gremion-ui` (which points at `pgbouncer:6432`) is brought up,
+> exist when the state project (which holds PgBouncer) is brought up,
 > Docker materializes a **directory** at that mount path, PgBouncer cannot
-> start, and `gremion-ui` has no database. Always run the [Pre-deploy](#pre-deploy-one-time)
+> start, and `gremion-ui` (which points at `pgbouncer-<stack>:6432`) has no
+> database. Always run the [Pre-deploy](#pre-deploy-one-time)
 > steps first.
 
 ## Pre-deploy (one-time)
@@ -92,7 +98,9 @@ DC="docker compose -f docker-compose.yml -f docker-compose.prod.yml --profile pr
      `GREMION_PGBOUNCER_GID`) before publishing it, and fails when it cannot;
    - Docker Desktop and the plain dev flow: the default, 0600 (no PgBouncer
      container reads the file there; `make setup` runs this form);
-   - a distribution host: `gremion-render` (deploy step 4).
+   - a distribution host: `gremion-render` (deploy step 4;
+     [docs/ops/runbook/install.md](../ops/runbook/install.md) and
+     [upgrade.md](../ops/runbook/upgrade.md) carry the observation).
 
    ```bash
    # Linux single checkout, prod overlay: renders from .env, mode 0640 group 70
@@ -106,14 +114,16 @@ DC="docker compose -f docker-compose.yml -f docker-compose.prod.yml --profile pr
 
 ## Deploy
 
-`restart` reloads **neither** `.env` **nor** `command:` — recreate:
+`restart` reloads **neither** the env file **nor** `command:` — recreate:
 
 ```bash
-$DC up -d --force-recreate postgres pgbouncer gremion-ui
+$DC up -d --force-recreate postgres pgbouncer
+$DA up -d --force-recreate gremion-ui
 ```
 
 Recreating `postgres` briefly drops every DB consumer (Keycloak and
-gremion-public reconnect on their own); schedule accordingly.
+gremion-public reconnect on their own); schedule accordingly. A release deploy
+(`gremion-deploy`) recreates the app colour for you.
 
 ## Verify (in this order)
 
@@ -127,7 +137,7 @@ gremion-public reconnect on their own); schedule accordingly.
    the file):
 
    ```bash
-   $DC exec gremion-ui printenv DATABASE_URL   # → …@pgbouncer:6432/gremion
+   $DA exec gremion-ui printenv DATABASE_URL   # → …@pgbouncer-<stack>:6432/gremion
    ```
 
 3. **PgBouncer routes and authenticates** (psql lives in the postgres
@@ -148,26 +158,35 @@ gremion-public reconnect on their own); schedule accordingly.
 
 5. **App smoke:** log in, open a governance page that reads and writes the
    data plane — e.g. create a committee or record a protocol/resolution — then
-   check `$DC logs gremion-ui` for connection errors. Prepared-statement
+   check `$DA logs gremion-ui` for connection errors. Prepared-statement
    failures here mean the PgBouncer version lost `max_prepared_statements`
    support (see above).
 
 ## Rollback
 
-`gremion-ui` is the only PgBouncer consumer — rollback is a one-service repoint:
+PgBouncer is not a one-service switch any more. The app tier's `DATABASE_URL`
+(`gremion-ui` and the `tenant-create` one-shot in `docker-compose.app.yml`) names
+`pgbouncer-<stack>:6432`, and `gremion-tenant`'s create writes each customer's
+runtime database URL (`tenant_<slug>_db`, a secret file under `TENANT_SECRETS_DIR`)
+from the scheme and host:port of that `DATABASE_URL`
+(`authorityOf` in `gremion-ui/src/lib/server/tenant/provisioner/customer-adapters.ts`),
+so a customer created while PgBouncer was in front carries the pooler address in
+its own file. To take PgBouncer out of the path:
 
-1. Comment out the `DATABASE_URL` override in `docker-compose.prod.yml`
-   (gremion-ui falls back to the base file's direct `postgres:5432` URL).
-2. `$DC up -d --force-recreate gremion-ui` (recreate, not restart).
-3. Re-run verify step 2 (expect `…@postgres:5432/gremion`) + the app smoke.
-4. Optional: `$DC stop pgbouncer` (harmless to leave running). The
+1. Repoint the `DATABASE_URL` of the app tier at `postgres-<stack>:5432`, as
+   `docker-compose.app.dev.yml` does for dev, in a release that is then deployed
+   with `gremion-deploy`, and rewrite the `tenant_<slug>_db` files of existing
+   customers to the direct address.
+2. Re-run verify step 2 (expect `…@postgres-<stack>:5432/gremion`) and the app
+   smoke.
+3. Optional: `$DC stop pgbouncer` (harmless to leave running). The
    `max_connections` pin needs no rollback — it equals the image default.
 
 ## Budget reference (what the unit tests assert)
 
 | Constant | Value | Where |
 | --- | --- | --- |
-| `MAX_CONNECTIONS` (pinned) | 100 | prod overlay `postgres` command + `pool-registry.ts` |
+| `MAX_CONNECTIONS` (pinned) | 100 | `docker-compose.prod.yml` `postgres` command + `pool-registry.ts` |
 | `ADMIN_RESERVE` (control pool max 3 + KC-admin/migrations/psql) | 16 | `pool-registry.ts` |
 | `POOL_REGISTRY_MAX` (live tenant pools) | 16 | `pool-registry.ts` |
 | `TENANT_DB_MAX_LIMIT` (write-clamp on `conn_profile.perTenantMax`) | 5 | `pool-registry.ts` + `tenant/conn-profile.ts` |

@@ -60,9 +60,11 @@ loudly while a realm still carries the other mode's stamp).
 
 ## Default: the Mailpit catcher (local dev / staging)
 
-Out of the box the stack does **not** relay mail to the internet. A `mailpit`
-service (`axllent/mailpit`, pinned) runs on the internal `gremion_net` network
-and **captures** every message instead:
+Out of the box the dev stack does **not** relay mail to the internet. A
+`mailpit` service (`axllent/mailpit`, pinned by tag and digest) runs on the state
+network (`${STACK}_state`) and **captures** every message instead. It carries
+`profiles: [dev]`: `.env.example` sets `COMPOSE_PROFILES=dev`, while a host
+renders with `COMPOSE_PROFILES=production`, so no catcher exists there:
 
 - **SMTP** listens on `mailpit:1025` (internal network only — no host port, no
   auth, no TLS). Mailpit is configured to accept any/no SMTP auth
@@ -74,13 +76,14 @@ and **captures** every message instead:
 
 A tenant whose SMTP config points at `host=mailpit port=1025` with no auth
 sends to the catcher with **zero** real credentials. Captured mail persists
-across restarts in the `gremion_mailpit_data` named volume.
+across restarts in the `mailpit-data` named volume (project-scoped, so
+`dev-state_mailpit-data` for `make up`).
 
 To point a tenant at the catcher, set host `mailpit`, port `1025` in
 **Settings → E-Mail** (leave the test user/password blank), then mark SMTP
-configured. The `default` tenant carries no registry override, so its
-host/port/from come straight from its `config.json` and `auth` is undefined —
-byte-identical to the auth-less Mailpit transport.
+configured. A tenant with no registry override takes its host/port/from straight from its
+`config.json` and `auth` is undefined — byte-identical to the auth-less Mailpit
+transport.
 
 ## Reading trapped mail
 
@@ -193,7 +196,7 @@ tenant:
    `passwordRef: file:/run/secrets/tenants/<slug>-smtp-pass`) **before** the
    tenant is flipped `active`.
 
-3. **Set host / port / from** in **Settings → E-Mail** (or the setup wizard) to
+3. **Set host / port / from** in **Settings → E-Mail** to
    the relay values, and mark SMTP configured. (The registry override wins over
    `config.json` for host/port/from when present, but keeping them in sync keeps
    the UI honest.)
@@ -201,26 +204,25 @@ tenant:
 4. **Verify** before declaring it live. A `config.json` edit is picked up within
    `RESOLUTION_CACHE_TTL_MS`; a registry/secret rotation should be paired with a
    tenant evict so the transport is rebuilt. Then send a real test mail to your
-   own address. In production Mailpit is not exposed, so confirm by checking the
-   recipient mailbox (and the relay's send logs), not the Mailpit UI.
-
-> You may drop the `mailpit` service entirely in production by adding a
-> `profiles:` guard or simply not relying on it — once every active tenant
-> points at a real relay, no producer points at `mailpit` anymore. Keeping it
-> running is harmless (internal-only) and useful for catching stray mail during
-> a cutover.
+   own address. A host runs no Mailpit (it is `profiles: [dev]` and a host
+   renders with `COMPOSE_PROFILES=production`), so confirm by checking the
+   recipient mailbox (and the relay's send logs), not the Mailpit UI. A tenant
+   that still points at `mailpit:1025` on a host has nowhere to send.
 
 ## Bumping the Mailpit image
 
-The image is pinned in `docker-compose.yml` (`axllent/mailpit:v1.30.1`). Bump
-it deliberately: change the tag, then
-`docker compose up -d --force-recreate mailpit` and confirm the web UI still
-loads at `http://localhost:8026`. Do not use `:latest` — tags drift.
+The image is pinned in `docker-compose.yml` by tag and digest
+(`axllent/mailpit:v1.30.1@sha256:…`). Bump it deliberately: change the tag and
+the digest together, then recreate it in the dev state project
+(`STACK=dev IMAGE_TAG=dev docker compose -p dev-state up -d --force-recreate mailpit`)
+and confirm the web UI still loads at `http://localhost:8026`. Do not use
+`:latest` — tags drift (`make lint-image-digests` and `make lint-compose-latest`
+refuse it).
 
 ## Files
 
-- `docker-compose.yml` — `mailpit` service + `mailpit-data` volume
-  (`gremion_mailpit_data`); internal `gremion_net` network.
+- `docker-compose.yml` — `mailpit` service (`profiles: [dev]`) + `mailpit-data`
+  volume; the `${STACK}_state` network.
 - `docker-compose.override.yml` — Mailpit web-UI host-port mapping
   (`8026:8025`, loopback-only).
 - `gremion-ui/src/lib/server/mail/tenant-mail.ts` — the single per-tenant mail

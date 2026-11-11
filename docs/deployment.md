@@ -11,47 +11,82 @@ step-up), multi-tenancy (tenant resolver, control-plane registry, fleet
 migrations), the governance domain (committees, members, org-unit tree,
 protocols, resolutions/*Beschlüsse*, public portal), the governance invariant
 hooks (hash-chained audit log, quorum/decision-rule engine, tenant isolation),
-and the module SDK. Feature modules (elections, newsletter, calendar,
-files, messages, board, users, finance, content, vault, handover)
-are **not** part of the kernel — each lives in its own repository and
-integrates over the module SDK, as a separate service over a stable API where
-it has its own store.
+and the module SDK. The feature modules (board, calendar, content, elections,
+files, finance, handover, messaging, publishing, vault, votes) live under
+`modules/` in this tree ([modules.md](./modules.md)) and are not part of the
+kernel: the kernel builds and boots with none of them, each is switched on or off
+per customer, and a module with its own store runs as a separate leaf service
+over a stable API.
 
 ## What gets deployed
 
-The governance-only kernel runs **7 default services**:
+A Gremion installation is a **pooled stack**: one stack per host, split into
+compose projects that meet only on two external networks (`${STACK}_state` and
+`${STACK}_edge`). A new customer adds databases, a realm and an account, never a
+container ([ops/pooled-stack-layout.md](ops/pooled-stack-layout.md)).
+
+| Project | Compose files | Holds |
+|---------|---------------|-------|
+| state, `${STACK}-state` | `docker-compose.yml` (+ `docker-compose.override.yml` in dev, `docker-compose.prod.yml` on a host) | the databases, Keycloak, NATS, legal, vector, and the edge in production |
+| app, one per colour, `${STACK}-app-blue` / `-green` | `docker-compose.app.yml` (+ `docker-compose.app.dev.yml` in dev) | `gremion-ui`, `gremion-public`, `control-panel`, `kernel-api`, the enabled leaf services, and the `migrate`, `tenant-create` and `kernel-api-migrate` one-shots |
+
+The **local dev stack** (`make up`; `COMPOSE_PROFILES=dev` from `.env.example`)
+starts, in the state project `dev-state`: `postgres` (`postgres:18-alpine`, holding
+the `keycloak`, `gremion` and `control` databases), `governance-postgres`, `nats`,
+`keycloak`, `legal`, `vector` and `mailpit` (the SMTP catcher, `profiles: [dev]`);
+and in the app project `dev-app-blue`: `gremion-ui`, `gremion-public`,
+`control-panel` and `kernel-api`. The images are built locally and tagged
+`IMAGE_TAG=dev`.
+
+What each service is:
 
 | Service | Image | Role |
 |---------|-------|------|
-| `postgres` | `postgres:18-alpine` | Database for Keycloak, the app data plane, and the tenancy control plane |
-| `keycloak` | `quay.io/keycloak/keycloak` | Identity provider (OIDC/SSO, realms, LoA/ACR step-up) |
-| `gremion-ui` | `ghcr.io/hello-n00del/gremion-ui` † | The admin shell — unified SvelteKit app, built from `gremion-ui/` |
+| `postgres` | `postgres:18-alpine` (digest-pinned) | Database for Keycloak, the app data plane, and the tenancy control plane; on a host also `gremion_platform` and every customer's kernel database |
+| `governance-postgres` | same pin | One governance database per customer, created by the create request |
+| `nats` | `nats` (digest-pinned) | The broker for the event outbox/inbox (nkey auth, one account per tenant) |
+| `keycloak` | `quay.io/keycloak/keycloak` (digest-pinned) | Identity provider (OIDC/SSO, one realm per customer, LoA/ACR step-up) |
+| `gremion-ui` | `ghcr.io/hello-n00del/gremion-ui` † | The admin shell, a unified SvelteKit app, built from `gremion-ui/` |
 | `gremion-public` | `ghcr.io/hello-n00del/gremion-public` † | Read-only public portal (no auth, no sessions), built from `gremion-public/` |
+| `control-panel` | `ghcr.io/hello-n00del/gremion-control-panel` † | The operator's control panel (no published port, no router); built from `apps/control-panel/` |
+| `kernel-api` | `ghcr.io/hello-n00del/gremion-kernel-api` † | Internal kernel API (tenancy resolution and the module registry); built from `services/kernel-api/` |
 | `legal` | `ghcr.io/hello-n00del/gremion-legal` † | Static legal/imprint pages (Impressum, GDPR), built from `docker/legal/` |
 | `vector` | `ghcr.io/hello-n00del/gremion-vector` † | Log pipeline with `ipcrypt-nd` IP pseudonymisation + retention, built from `docker/vector/` |
-| `mailpit` | `axllent/mailpit` | SMTP catcher for local/staging mail (swap for a real relay via `.env`) |
+| `mailpit` | `axllent/mailpit` (dev only) | SMTP catcher for local mail |
 
-> **† First-party images are BUILT here, not pulled.** All five
-> `ghcr.io/hello-n00del/gremion-*` images — `gremion-ui`, `gremion-public`,
-> `gremion-legal`, `gremion-vector`, and `gremion-fallback` from the production
-> overlay — carry a `build:` section in `docker-compose.yml` /
-> `docker-compose.prod.yml`, and `make build` (`docker compose build`) produces
-> them locally. The kernel has **no image-publish workflow**: nothing under
-> `.github/workflows` runs `docker push`, so that coordinate is the name these
-> images are *built as*, not one you can pull today. Build them yourself, or
-> push them to a registry you control and repoint the reference (Path 2,
-> Step 2).
+> **† First-party images carry a `build:` section.** `make build` (`docker
+> compose build`) produces them locally as `ghcr.io/hello-n00del/gremion-<service>:dev`.
+> A release is built and pushed by `.github/workflows/release-images.yml`
+> (`workflow_dispatch`, or a pushed `rc-v*` / `v*` tag), which uses only the
+> run's own `GITHUB_TOKEN`; it covers `gremion-ui`, `-public`, `-control-panel`,
+> `-migrate`, `-kernel-api`, `-calendar`, `-content`, `-newsletter`, `-legal`,
+> `-vector`, `-fallback`, `-synapse`, `-nextcloud`, `-collabora` and
+> `-element-call`, and emits the pins layers that name the pushed digests. The
+> release is the digest, not the tag
+> ([deployment-architecture.md](deployment-architecture.md#the-release-tree)).
+> A fork pushes its own images to a registry it controls and repoints the
+> reference (Path 2, Step 2).
 >
 > Write the registry host out in full. An unqualified name such as
 > `gremion/<service>` resolves to `docker.io/<that same string>` — a Docker Hub
-> namespace owned by an unrelated third party, not by this project. A CI guard
-> in `.github/workflows/ci.yml` fails the build if a first-party image ever
-> loses its `build:` section (which would make it pullable), and
-> `scripts/kernel-hygiene-check.mjs` fails `make lint` if a manifest or a doc
-> reintroduces the unqualified coordinate.
+> namespace owned by an unrelated third party, not by this project.
+> `scripts/kernel-hygiene-check.mjs` (check `g9`) fails `make lint` if a manifest
+> or a doc reintroduces the unqualified coordinate.
 
-The **production profile** (`profiles: [production]` in
-`docker-compose.yml`) adds two more for edge routing:
+The **profile-gated** services of the state project start only when their profile
+is in `COMPOSE_PROFILES` (`infra/host/module-profiles.json` says which profiles a
+pilot install renders):
+
+| Profile | Services |
+|---------|----------|
+| `board`, `calendar`, `content`, `finance`, `newsletter`, `vault` | that module's own PostgreSQL server (`<id>-postgres`); `calendar`, `content` and `newsletter` also gate the leaf service in the app project |
+| `messaging` | `messaging-postgres` and `matrix` (Synapse) |
+| `nextcloud` | `nextcloud-postgres`, `nextcloud-redis`, `nextcloud` |
+| `collabora` | `collabora` |
+| `video` | `livekit`, `element-call` |
+| `production` | `traefik`, `docker-socket-proxy`, and `fallback` from the production overlay |
+
+The **production profile** (`profiles: [production]`) adds the edge:
 
 | Service | Role |
 |---------|------|
@@ -63,17 +98,24 @@ And `docker-compose.prod.yml` layers on the production-only services:
 | Service | Role |
 |---------|------|
 | `pgbouncer` | Transaction-pooling front for the app's data-plane connections |
-| `cloudflared` | Outbound-only Cloudflare Tunnel connector (no inbound host ports) |
-| `fallback` | Friendly "starting" page served while `gremion-ui` is mid-cold-start — the fifth first-party image (`ghcr.io/hello-n00del/gremion-fallback`, built from `docker/fallback/`) |
+| `fallback` | Friendly "starting" page served while `gremion-ui` is mid-cold-start (`ghcr.io/hello-n00del/gremion-fallback`, built from `docker/fallback/`) |
+
+There is no `cloudflared` service: `docker-compose.prod.yml` records it as
+removed, and Traefik is the first hop.
 
 There are two supported deployment paths:
 
 1. **Single-host Docker Compose** — the primary path. Best for local
    development, evaluation, and self-hosted single-node production with
-   Traefik as the public ACME edge.
+   Traefik as the public ACME edge. A production host is built and operated with
+   the tooling under `infra/host/` ([deployment-architecture.md](deployment-architecture.md),
+   [ops/runbook/](ops/runbook/README.md)).
 2. **Kubernetes (Kustomize)** — the portable reference path, rendered and
    validated on a local k3d cluster. All resources live in the `gremion-system`
-   namespace.
+   namespace. It carries the governance workload set only (`gremion-ui`,
+   `gremion-public`, `legal`, `vector`, Keycloak, PostgreSQL, a backup CronJob);
+   it has no `kernel-api`, `control-panel`, NATS, `governance-postgres`, one-shots
+   or leaf services, which the Compose path above runs.
 
 ---
 
@@ -95,11 +137,16 @@ cp .env.example .env
 
 `scripts/setup.sh` prompts for a domain (press Enter for `localhost`), fills
 `.env` from `.env.example`, generates random secrets for every `CHANGE_ME_`
-placeholder, mints the internal TLS certs, regenerates the Keycloak realm
-export, then builds and starts the core services.
+placeholder, mints the internal TLS certs, renders the PgBouncer userlist and
+checks the compose bind-mount sources. Then it creates the two external networks
+and the shared volumes (`make dev-networks`), builds the images (`make build`) and
+starts the state project and the blue app colour (`make up`). No realm is prepared:
+Keycloak starts with `master` only, and every tenant realm is created over the
+Admin API when the tenant is created.
 
-In local dev (`docker-compose.override.yml`, auto-loaded) the services are
-published on loopback host ports:
+In local dev (`docker-compose.override.yml` for the state project and
+`docker-compose.app.dev.yml` for the app colour, both loaded by the Makefile) the
+services are published on loopback host ports:
 
 | Service | URL |
 |---------|-----|
@@ -108,6 +155,15 @@ published on loopback host ports:
 | Keycloak | <http://localhost:8082/auth> |
 | Legal pages | <http://localhost:8083/impressum> |
 | Mailpit (trapped mail) | <http://localhost:8026> |
+| PostgreSQL | `127.0.0.1:5433` |
+
+> **Required value.** `docker-compose.app.yml` marks `TENANT_PROXY_SHARED_SECRET`
+> required for `kernel-api`, while `.env.example` ships it commented out and
+> `setup.sh` does not set it: the app project does not render until `.env` holds a
+> value (checked with `docker compose config` at `fb46f89a`). With a value set the
+> tenant resolver's proxy-trust gate is on, so a request straight to a loopback
+> port must carry `x-proxy-trust: <the value>`
+> ([runbooks/tenant-edge.md](runbooks/tenant-edge.md), STEP 0c).
 
 > **Host ports bind loopback only (`127.0.0.1` + `[::1]`), deliberately.** The
 > tenant resolver selects a tenant from the inbound `x-forwarded-host`; a
@@ -115,13 +171,16 @@ published on loopback host ports:
 > tenant. A `check` guard (`gremion-ui/scripts/check-app-port-binding.mjs`)
 > enforces the loopback binding.
 
-Common lifecycle commands (see the `Makefile` for the full list):
+The Makefile runs both projects with `STACK=dev IMAGE_TAG=dev` (`DEV_STATE`,
+`DEV_APP`), so a bare `docker compose` in the repository addresses neither of
+them. Common lifecycle commands (see the `Makefile` for the full list):
 
 ```bash
-make up                 # docker compose up -d
-make ps                 # running containers
+make up                 # state project, then the blue app colour
+make ps                 # running containers of both projects
 make logs SERVICE=gremion-ui
 make health             # service + endpoint health summary
+make rebuild            # rebuild and force-recreate both projects
 make down               # stop (volumes preserved)
 make validate-env       # fail if .env still has CHANGE_ME_ placeholders
 ```
@@ -133,48 +192,61 @@ The kernel seeds via a one-time endpoint rather than a script. With
 
 ```bash
 curl -X POST -H "X-Seed-Token: $SEED_TOKEN" \
+  -H "X-Forwarded-Host: <a host bound to a tenant>" \
   http://localhost:3001/api/setup/seed
 ```
 
-This provisions the structure-aware governance fixtures (committees, members,
-org-units). Leave `SEED_TOKEN` empty to disable the endpoint. In production,
-`GREMION_DISABLE_SEEDS=true` keeps dev seed migrations out of the data plane.
+The seed runs in the request's tenant context and feeds that tenant its own
+blueprint, so the request must name a host bound to a provisioned tenant; on a
+platform with no tenant every host answers 404 (there is no first-run setup
+wizard and no default tenant). The endpoint answers `409` once `org_units` is not
+empty. It provisions the structure-aware governance fixtures (committees,
+members, org-units). Leave `SEED_TOKEN` empty to disable the endpoint. In
+production, `GREMION_DISABLE_SEEDS=true` keeps dev seed migrations out of the
+data plane.
 
 ### Single-host production
 
-Production loads both compose files explicitly (the prod overlay is **not**
-auto-loaded):
+A production host is not started with a hand-typed `docker compose up`. The
+prod overlay is **not** auto-loaded and each project's env file names its own
+composition, so every command is
+`docker compose --env-file /opt/gremion/etc/env/<project>.env <verb>` run from the
+release tree ([docs/ops/runbook/README.md](ops/runbook/README.md)). The host is
+built by `infra/host/bootstrap.sh`, its env files are rendered by
+`gremion-init-secrets`, a release is brought up by `gremion-deploy` and moved
+between colours by `gremion-switch`
+([deployment-architecture.md](deployment-architecture.md),
+[ops/runbook/install.md](ops/runbook/install.md)).
 
-```bash
-docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
-```
+The production values live in the env files, `state.env` for the state project
+and `app-<colour>.env` for each colour (templates:
+`infra/host/templates/env/`):
 
-Before bringing the stack up, set the production values in `.env`:
-
-- **`DOMAIN`** — your real domain (e.g. `gov.example.org`).
+- **`PLATFORM_DOMAIN`** — your real domain (e.g. `gov.example.org`).
 - **Tenant hosts** — there is no wildcard router. Each tenant host is a
   `tenant_domain` row plus its own `Host(...)`-literal router; the apex binds no
-  tenant and 404s by design (TASK-041, TRD-075). **No shipped tool writes a
-  `tenant_domain` row yet** (the customer-create CLI of TASK-043 is the first),
-  so until it lands a stack built from this tree serves no tenant on any host:
-  do not deploy it where a tenant must be served. See
+  tenant and 404s by design (TASK-041, TRD-075). A customer's host is bound by
+  the create request (TASK-043, run by the host executor), which writes the row
+  and the router file `etc/edge/tenant-<slug>.yml`; a stack with no customer
+  serves no tenant on any host. See
   [runbooks/tenant-edge.md](runbooks/tenant-edge.md) STEP 0a.
 - **`KC_ADMIN_ALLOWLIST_CIDRS`** — CIDRs allowed to reach the Keycloak admin
-  console at `https://${DOMAIN}/auth/admin`. Defaults to `127.0.0.1/32`, so by
+  console at `https://${PLATFORM_DOMAIN}/auth/admin`. Defaults to `127.0.0.1/32`, so by
   default no external request matches; operators reach the console via
-  `docker compose exec keycloak /opt/keycloak/bin/kcadm.sh ...`.
-- **`TENANT_PROXY_SHARED_SECRET`** — when set, Traefik stamps an `x-proxy-trust`
+  `docker compose --env-file /opt/gremion/etc/env/state.env exec keycloak /opt/keycloak/bin/kcadm.sh ...`.
+- **`TENANT_PROXY_SHARED_SECRET`** — Traefik stamps an `x-proxy-trust`
   header on every request reaching `gremion-ui`, and the tenant resolver 403s any
   request lacking a match, so `x-forwarded-host` trust no longer rests on
-  network topology alone. Unset = the gate is a byte-identical no-op.
+  network topology alone. The host templates generate it into both `state.env` and
+  `app-<colour>.env`; unset, the gate is a byte-identical no-op.
 - The **Edge** block (bind addresses, ports, ACME contact and directory,
   pinned subnets; see [The edge](#the-edge-traefik--acme) below), PgBouncer
-  auth and backup values per the comments in `.env.example`.
+  auth and backup values per the comments in the env templates.
 
-> **Reload `.env` with a recreate, not a restart.** A plain
-> `docker compose restart` does **not** re-read `.env`. After changing an
-> environment value, use `docker compose up -d --force-recreate <service>` and
-> verify the value inside the container before declaring the change live.
+> **Reload an env file with a recreate, not a restart.** A plain
+> `docker compose restart` does **not** re-read the env file. After changing an
+> environment value, use `docker compose --env-file … up -d --force-recreate <service>`
+> and verify the value inside the container before declaring the change live.
 
 ### The edge (Traefik + ACME)
 
@@ -231,11 +303,13 @@ red.
   files, `active.yml`). A file written there registers without a restart.
   `docker/traefik/dynamic/dev-csp.yaml` is kept in the repository but is no
   longer mounted by any composition (TASK-041 decides its home).
-- **Known gap until TASK-034.** The routers in `docker-compose.yml` and
-  `docker-compose.prod.yml` still carry `tls=true` without a `certresolver`,
-  and a TLS router does **not** inherit the entrypoint's resolver (measured),
-  so until TASK-034 labels them they serve Traefik's default certificate.
-  Nothing deploys before the pilot re-init (TASK-038), which carries TASK-034.
+- **Known gap until TASK-034.** The `keycloak`, `keycloak-admin` and `fallback`
+  routers in `docker-compose.prod.yml` still carry `tls=true` without a
+  `certresolver`, and a TLS router does **not** inherit the entrypoint's resolver
+  (measured), so until TASK-034 labels them they serve Traefik's default
+  certificate. The routers of the pilot's `matrix` and `livekit` services name
+  `le-http` themselves, and so does every per-customer router file rendered by
+  `packages/edge-routers` (`gremion-verify` fails a public router without one).
 
 Proofs: `make lint-edge-render` (the render guard,
 `scripts/check-compose-edge.test.mjs`), and `make test-edge-static`
@@ -289,7 +363,9 @@ make update-legal       # rebuild + recreate only the legal service (~2s)
 ```
 
 The legal pages read from `legal/legal.env` (copy from
-`legal/legal.env.example`).
+`legal/legal.env.example`; `setup.sh` creates it). On a host `gremion-render`
+and `gremion-deploy` handle it
+([ops/runbook/install.md](ops/runbook/install.md)).
 
 ---
 
@@ -319,14 +395,16 @@ cp .env.example .env
 ### Step 2 — Build and push images
 
 `k8s/base` pins **four** first-party images — `gremion-ui`, `gremion-public`,
-`gremion-legal` and `gremion-vector` — and this repository publishes **none** of
-them (`git grep 'docker push' -- .github/ Makefile scripts/` returns nothing).
-Build and push **all four**; every one you skip leaves its workload in
-`ImagePullBackOff`, and `vector` is a DaemonSet, so that failure lands on every
-node.
+`gremion-legal` and `gremion-vector` — to the kernel version `0.1.0`. The release
+workflow (`.github/workflows/release-images.yml`) pushes those images to
+`ghcr.io/hello-n00del` under the release commit's tag and records their digests;
+no workflow pushes a `:0.1.0` tag, so either point the cluster at a pushed digest
+(the `images:` block below) or build and push **all four** yourself. Every one
+you skip leaves its workload in `ImagePullBackOff`, and `vector` is a DaemonSet,
+so that failure lands on every node.
 
-Tag them with the kernel version (`0.1.0`, from `package.json`) rather than
-`:latest` — `k8s/base` pins that version, a mutable tag makes a rollback
+Tag your own builds with the kernel version (`0.1.0`, from `package.json`) rather
+than `:latest` — `k8s/base` pins that version, a mutable tag makes a rollback
 unreproducible, and a CI guard rejects `:latest` anywhere under `k8s/`.
 
 ```bash
@@ -480,16 +558,22 @@ values.
 
 ## Upgrading
 
-**`gremion-ui` and `gremion-public`**: rebuild from source, push the new tag, then
-redeploy (Compose recreate, or bump the image tag and re-apply the Kustomize
-overlay). SvelteKit migrations — including the tenancy control-plane migrations
-and the governance fleet migrations — run automatically on container startup.
+**On a host**, an upgrade is a release: `gremion-deploy` pulls the pinned images,
+runs the `migrate` one-shot, brings up the inactive colour and verifies it, and
+`gremion-switch` moves traffic ([ops/runbook/upgrade.md](ops/runbook/upgrade.md)).
+Schema migrations (the control plane and each customer's kernel chain) run in
+that `migrate` job and in the fleet run at `gremion-ui` boot, not per container by
+hand; the platform schema is applied by `gremion-tenant init`.
 
-**`gremion-legal`, `gremion-vector`, `gremion-fallback`**: the other three
-first-party images. They hold no schema and run no migrations, but they are
-still built from this repo, so a source change to `docker/legal/`,
-`docker/vector/` or `docker/fallback/` needs the same rebuild-and-push before
-the new bytes reach a cluster.
+**For a local stack or the Kubernetes path**, rebuild `gremion-ui` and
+`gremion-public` from source, then redeploy (`make rebuild`, or bump the image tag
+and re-apply the Kustomize overlay).
+
+**`gremion-legal`, `gremion-vector`, `gremion-fallback`** and the other
+first-party images hold no schema and run no migrations, but they are still built
+from this repo, so a source change to `docker/legal/`, `docker/vector/` or
+`docker/fallback/` needs the same rebuild before the new bytes reach a
+deployment.
 
 ### Schema-rename rebuilds
 
@@ -502,16 +586,19 @@ producing a container that boots but 500s on the first query against the
 renamed surface.
 
 ```bash
-# Force a fresh build (no cache) after a schema rename:
-docker compose build --no-cache <service-name>
+# Force a fresh build (no cache) after a schema rename (local stack):
+STACK=dev IMAGE_TAG=dev docker compose -p dev-state build --no-cache <state-service>
+STACK=dev COLOUR=blue IMAGE_TAG=dev docker compose -f docker-compose.app.yml \
+  -f docker-compose.app.dev.yml -p dev-app-blue build --no-cache <app-service>
 ```
 
 For Kubernetes deployments the same applies: bump the image tag **and** ensure
 the build that produced the new tag was run without a cache hit on the
 schema-baking layer (`docker build --no-cache` is the simplest safe option).
 
-See the post-mortem in [`KNOWN_ISSUES.md`](../KNOWN_ISSUES.md) for the
-image-staleness incident and analogous cases.
+The staleness bug (fixed in PR #88) is recorded in `.github/dependabot.yml`; the
+`e2e-smoke` job in `.github/workflows/ci.yml` now builds and boots the
+`gremion-public` image so a stale layer fails CI.
 
 ---
 
@@ -522,8 +609,8 @@ image-staleness incident and analogous cases.
 | Pod won't start (K8s) | `kubectl describe pod -n gremion-system <pod-name>` |
 | App returns 503 on every request | Check `gremion-ui` logs — the tenancy control-plane DB (`CONTROL_DATABASE_URL`) must be reachable for boot's `runControlMigrations()` to succeed |
 | A tenant host 404s (prod) | Check its `Host(...)` router exists and the `tenant.host.rejected` log line's `reason` |
-| Keycloak DB connection | `docker compose logs keycloak` / `kubectl logs -n gremion-system <kc-pod>` |
+| Keycloak DB connection | `make logs SERVICE=keycloak` / `kubectl logs -n gremion-system <kc-pod>` |
 | OIDC `iss` mismatch behind a proxy | Confirm Traefik forwards `X-Forwarded-*` and `KC_PROXY_HEADERS=xforwarded` is set |
 | TLS cert pending (K8s) | `kubectl describe challenge -n gremion-system` |
 | Ingress 404 (K8s) | Verify ingress class: `kubectl get ingressclass` |
-| `.env` change didn't take effect | Use `docker compose up -d --force-recreate <service>`, not `restart` |
+| `.env` / env-file change didn't take effect | Recreate the service (`docker compose … up -d --force-recreate <service>`), not `restart` |
