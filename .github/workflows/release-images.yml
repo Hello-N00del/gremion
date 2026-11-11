@@ -55,11 +55,10 @@ on:
       - 'rc-v*'
       - 'v*'
 
-# `contents: read` reads the checkout; `packages: write` is what lets the job
-# token push to ghcr.io. Nothing else is granted, here or per job.
+# `contents: read` reads the checkout. Only build-and-push adds the packages
+# scope that lets its token push to ghcr.io. Nothing else is granted anywhere.
 permissions:
   contents: read
-  packages: write
 
 # One release build per ref, never cancelled: a cancelled run would leave some
 # images pushed and the rest not, and the pins record would never exist.
@@ -116,6 +115,9 @@ jobs:
     runs-on: ubuntu-latest
     needs: resolve-ref
     timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
     strategy:
       # Every image is part of the release: let the others finish so one run
       # reports every failure instead of the first.
@@ -234,6 +236,8 @@ jobs:
           name: pin-${{ matrix.name }}
           path: ${{ runner.temp }}/pin-${{ matrix.name }}.txt
           if-no-files-found: error
+          # Read only by emit-release-pins in this run; a week leaves room to re-run it.
+          retention-days: 7
 
       # The runner is ephemeral, but a logout is cheap and a leftover
       # credential file is exactly what this workflow exists not to leave.
@@ -245,6 +249,7 @@ jobs:
     name: Emit the release pins layers
     runs-on: ubuntu-latest
     needs: [resolve-ref, build-and-push]
+    timeout-minutes: 15
     # Reads the checkout and the run's own artefacts; pushes nothing.
     permissions:
       contents: read
@@ -335,3 +340,5 @@ jobs:
           name: release-pins-${{ steps.sha.outputs.sha }}
           path: ${{ runner.temp }}/release-pins/
           if-no-files-found: error
+          # cut-dist-tag.sh downloads this; explicit so a repository default cannot shorten it.
+          retention-days: 90
