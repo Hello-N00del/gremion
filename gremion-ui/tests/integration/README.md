@@ -94,7 +94,7 @@ pnpm -C gremion-ui test:deselection
 | 3 | Councillor in 1 Fraktion + ≥2 Ausschüsse | `caucus_membership` count = 1 and `org_unit_members` of `kind='committee'` ≥ 2 for the Hauptausschuss councillor |
 | 4 | Distinct data-plane DB | `dbNameForSlug('musterstadt') === 't_musterstadt'`, ≠ `gremion` / `t_demo` (registry-level) |
 | 5 | (carved out) LiveKit token mint tenant-scoped | no case remains: the token-namespace check rode with the messages/video feature module and the test file only keeps a comment for it |
-| 6 | Newsletter module absent from the kernel | `MODULE_MANIFESTS` never registers a `newsletter` module id. **Out of date:** the committed barrel `src/lib/modules/manifests/index.generated.ts` now names `newsletterManifest` (the manifest lives in `modules/publishing/` and `scripts/interim-module-overlay.mjs` copies it into `src/`), so this case's premise no longer holds in the current tree; it has not been re-proved against the in-tree modules |
+| 6 | Newsletter module absent from the kernel | the case asserts that `MODULE_MANIFESTS` holds no `newsletter` module id. The committed barrel `src/lib/modules/manifests/index.generated.ts` now imports `newsletterManifest` (the manifest lives in `modules/publishing/` and `scripts/interim-module-overlay.mjs` copies it into `src/`; its id is `newsletter`, see `docs/modules.md`), so the barrel and this case disagree |
 
 ### Run (criterion 7 — realm contract, env-gated, optional)
 

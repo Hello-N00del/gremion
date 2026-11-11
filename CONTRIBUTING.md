@@ -81,12 +81,11 @@ inbound = outbound AGPL-3.0-only, **no party, including the maintainers, can
 ever relicense your contribution away from the AGPL.** That guarantee is the
 point.
 
-The feature modules under `modules/` are part of this repository and fall under
-the same licence (no module directory carries a licence file of its own). A
-component that is not part of this repository stays closed not by acquiring
-relicensing rights over the core, but by being a **separate program / service**
-over Gremion's APIs (AGPL "mere aggregation"). The core stays free; the
-boundary is architectural, not legal-by-CLA.
+Feature modules attach to the core over the module SDK; the ones in this tree
+live under `modules/`. A component that has to stay closed does so not by
+acquiring relicensing rights over the core, but by being a **separate program /
+service** over Gremion's APIs (AGPL "mere aggregation"). The core stays free;
+the boundary is architectural, not legal-by-CLA.
 
 ## Network use (AGPL §13)
 

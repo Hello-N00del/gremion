@@ -1,7 +1,13 @@
 # ci-local
 
 TASK-012 (L1-28): dated test-suite snapshots plus the merge-gate guard set,
-run locally while GitHub Actions stays disabled (TRD-340/342/346/356/364).
+run locally (TRD-340/342/346/356/364). `.github/workflows/ci.yml` does not call
+`guards.mjs` as one entry point: its `lint` job runs the runner-policy arm alone
+(`runner-policy.test.mjs`, then `runner-policy.mjs`), runs gitleaks as its own
+step, and the `codemap-stale` job runs `pnpm --filter control-panel
+codemap:check` (the same check as the codemap-stale arm below). The whole call
+below is what a local run, or a pipeline that does have a gitleaks binary and a
+vertical checkout, makes.
 Everything here is Node plus one npm package, `yaml` (runner-policy parses
 workflows with it), and `gitleaks` on PATH, so one call works unchanged on
 Windows, Debian and `ubuntu-latest`.
@@ -22,7 +28,7 @@ package's own flag/label/ids were exactly that. `StuRaOS` (capitalized, the
 vertical's proper noun) still appears in prose comments — h2 is
 case-sensitive and only owns the lower-case identifier form.
 
-## The one-line call a re-enabled pipeline makes unchanged
+## The one-line call a pipeline with both repositories makes unchanged
 
 ```
 node scripts/ci-local/guards.mjs --kernel <kernel-path> --vertical <vertical-path> --kernel-base <kernel-base-ref> --vertical-base <vertical-base-ref>
@@ -37,10 +43,9 @@ a pipeline sets `CI_LOCAL_GUARDS_OUT` (or passes `--out`) to its artifact
 directory.
 
 Exit code is the merge gate: non-zero means at least one arm failed and the
-merge must be blocked. This is exactly the call a re-enabled `ci.yml` (or the
-`docker-build` image-build job beside it, see below) makes — nothing here
-takes an Actions-specific input, and the runner-policy arm (below) is what
-keeps a re-enabled Actions runner honest about TRD-364 in the first place.
+merge must be blocked. Nothing here takes an Actions-specific input, and the
+runner-policy arm (below) is what keeps an Actions runner honest about TRD-364
+in the first place; `ci.yml` runs that arm on every run (see above).
 
 ## Kernel-only checkout (no `--vertical`)
 
@@ -295,7 +300,7 @@ it.
 stay beside `guards.mjs` unchanged (§5 Q5) — this package does not build
 images. `guards.mjs --kernel <path> --vertical <path> --image-build` is purely
 informational: it lists the Dockerfiles those jobs build (for both repos)
-and exits 0 without running any guard arm. A re-enabled pipeline runs
+and exits 0 without running any guard arm. A pipeline runs
 `docker-build` as its own job, in parallel with (not instead of) the call at
 the top of this file.
 
