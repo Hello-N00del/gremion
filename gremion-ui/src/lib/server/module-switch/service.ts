@@ -58,7 +58,6 @@ export type SwitchResult =
  * settings page shows; the unit test pins it equal to the provisioning list, as the control panel does.
  */
 export const MODULE_DENY: Readonly<Record<string, string>> = Object.freeze({
-  board: 'it is not tenant-isolated yet (R29-I1; TASK-058 / R29-BOARD-STORE-K)',
   vault: 'the password vault stays off for the pilot (PRD-PLAT-012 / PRD-REC-003) until its own isolation pass (TRD-064, TASK-058)',
 })
 
