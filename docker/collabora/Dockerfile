@@ -1,20 +1,18 @@
 # Collabora Online CODE for the pilot's office editing (service `collabora`, image
-# gremion-collabora), with the Debian Brotli fix.
-#
-# The 24.04 line ships Debian 12 libbrotli1 1.0.9-2+b6, which carries the Brotli
-# decoder out-of-bounds write (CVE-2026-111497). Collabora reaches out over HTTP
-# (WOPI and linked document resources) through curl, which decodes
-# Content-Encoding: br. This image upgrades only that library. It is a STOPGAP: the
-# 24.04 line has had no release since April 2025, and moving to 26.04 (a shell-less
-# image) is its own smoke-tested upgrade.
-#
-# Pinned by digest: the tag names the release, the digest is what runs. To re-pin
-# after an intentional bump:
+# gremion-collabora). The official image, pinned by digest: the tag names the
+# release, the digest is what runs. To re-pin after an intentional bump:
 #   docker buildx imagetools inspect collabora/code:<tag> --format '{{.Manifest.Digest}}'
-FROM collabora/code:24.04.10.1.1@sha256:98bfe4bbd18d5faa77f7e3dc0b87309a8d0252c1f4fc81a7f1d9f7a58d4b6ce8
-USER root
-RUN apt-get update -qq \
- && apt-get install -y -qq --only-upgrade libbrotli1 \
- && rm -rf /var/lib/apt/lists/* \
- && dpkg --compare-versions "$(dpkg-query -W -f='${Version}' libbrotli1)" ge 1.0.9-2+deb12u1
-USER 100
+#
+# The 26.04 line is a shell-less image on Debian 13: no shell, no apt, no curl, and
+# it runs as uid 1001 (so this file sets no USER). Nothing can be installed or
+# patched in a RUN layer, and nothing needs to be: it carries no libbrotli at all.
+# The Brotli decoder out-of-bounds write (CVE-2026-111497) lived in the Debian 12
+# libbrotli1 of the 24.04 line, which the previous version of this file upgraded as
+# a stopgap. In 26.04 the package list (the SBOM under /usr/share/sbom) has no
+# brotli or curl package, no libbrotli shared object exists in the image, and the
+# DT_NEEDED entries of coolwsd and of the bundled libcurl name neither: there is no
+# Brotli decoder to reach. Re-check that on every bump.
+#
+# The compose file's healthcheck is the exec-form `/usr/bin/coolwsd --probe
+# --use-env-vars` (no shell, no curl); see docker-compose.yml.
+FROM collabora/code:26.04.6.1.1@sha256:95f29f1c0a1778999125f53f058d968fe0afb37c95e32ebfb9f3444140faebd2
