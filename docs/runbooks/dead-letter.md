@@ -83,7 +83,7 @@ return to 0 when nothing is left dead-lettered.
 A relay that can never succeed does not dead-letter anything: it burns no attempt, so those gauges stay 0 and
 only the log says so. The fourth gauge, `gremion_outbox_oldest_pending_seconds{ctx}`, is the age of the oldest
 row still waiting for the relay (0 when none). A value that keeps growing past a few minutes means the relay of
-that service cannot publish. The usual cause on the kernel API (`ctx` `idt`) is a customer without its
+that service cannot publish; the alert `OutboxStalled` fires when it stays over 15 minutes for 10 minutes. One exception: a dead-lettered row holds back every later row of its aggregate, which stay pending, so `OutboxStalled` can then fire together with `OutboxDeadLettered`; requeue the dead-lettered row first (above) and the age falls. Otherwise the usual cause on the kernel API (`ctx` `idt`) is a customer without its
 `kernel-api` NATS seed (the log line names `no seed kernel-api/tenant_<slug>.nk`): run
 `gremion-tenant reconcile <slug> --apply`, which re-ensures the seed from the customer's current module set
 (see `docs/ops/runbook/upgrade.md`).
