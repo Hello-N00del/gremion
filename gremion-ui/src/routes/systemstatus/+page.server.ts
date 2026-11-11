@@ -1,18 +1,16 @@
 import type { PageServerLoad } from './$types'
-import { instanceStatusDetail } from '$lib/server/tenant/instance-state'
 import { readConfig } from '$lib/server/config'
+import { getSetupHealthProbes } from '$lib/server/modules/runtime-registry'
+import { probeServices, type ProbedService } from './probes.server'
 
-// #264 (HANDOVER-v8 Part C). The route is it-admin-gated centrally
-// (hooks.server.ts authGuard via PAGE_ACCESS.systemstatus = Role.ITAdmin), so the
-// load only assembles the convergence view: the real per-silo ledger overlay +
-// overall state (instanceStatusDetail) and the live module config for the
-// "Aktive Module" catalog. Everything degrades to a safe default rather than
-// throwing — a status page must never 500.
+// The route is it-admin-gated centrally (hooks.server.ts authGuard via
+// PAGE_ACCESS.systemstatus = Role.ITAdmin). The load runs live probes against the
+// services the app can reach (see ./probes.server.ts) and reads the module switches
+// for the "Aktive Module" catalog. It reads no provisioning ledger: that records
+// history, not whether a service answers now. Everything degrades to a safe
+// default rather than throwing, because a status page must never 500.
 export const load: PageServerLoad = async (event) => {
   const tenant = event.locals.tenant
-  const instance = tenant
-    ? await instanceStatusDetail(tenant)
-    : { state: 'ready' as const, realStatuses: {} }
 
   let modules: Record<string, boolean> = {}
   try {
@@ -21,6 +19,30 @@ export const load: PageServerLoad = async (event) => {
     modules = {}
   }
 
-  // TASK-042: no tenant resolved means no realm, never a made-up 'default'.
-  return { instance, modules, realm: tenant?.slug ?? null }
+  let services: ProbedService[] = []
+  if (tenant) {
+    let moduleProbes: ReturnType<typeof getSetupHealthProbes> = []
+    try {
+      moduleProbes = getSetupHealthProbes()
+    } catch {
+      moduleProbes = []
+    }
+    const kcBase = tenant.kcInternal.replace(/\/$/, '')
+    services = await probeServices({
+      db: () => tenant.db`SELECT 1`,
+      keycloak: async () => {
+        const res = await fetch(`${kcBase}/.well-known/openid-configuration`, { method: 'GET', signal: AbortSignal.timeout(3000) })
+        if (!res.ok) return false
+        const doc = (await res.json()) as { issuer?: string }
+        return typeof doc.issuer === 'string' && doc.issuer.length > 0
+      },
+      modules,
+      moduleProbes,
+    })
+  }
+
+  // TASK-042: no tenant resolved means no realm, never a made-up 'default'. A
+  // resolved tenant is active by construction (the resolver refuses any other
+  // status), which is the only tenant-status signal this page needs.
+  return { services, modules, realm: tenant?.slug ?? null, tenantActive: Boolean(tenant) }
 }
