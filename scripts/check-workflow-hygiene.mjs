@@ -26,8 +26,11 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 export const WORKFLOWS_DIR = join(ROOT, '.github', 'workflows')
 
-/** Fewer workflows than this and the scan is not looking at the directory. */
-export const MIN_WORKFLOWS = 4
+/**
+ * Fewer workflows than this and the scan is not looking at the directory. Kept below today's
+ * count (4) on purpose: retiring one workflow must not turn this guard red.
+ */
+export const MIN_WORKFLOWS = 2
 
 const ALLOWED_ROOT_WRITES = { 'release-npm.yml': ['id-token'] }
 const LIVE_PUBLISH_IF = "github.event_name == 'push' || inputs.dry_run != true"
