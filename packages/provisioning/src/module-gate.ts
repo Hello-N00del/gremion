@@ -148,7 +148,12 @@ export interface DisableCustomerModuleResult {
   customer: CustomerRef
   moduleKey: string
   noop: boolean
+  /** false since the Karenz: a switch-off blocks the module database, the day-30 job drops it. */
   dropped: boolean
+  /** true when the module database is kept alive but unreachable for the app role until `finalAt`. */
+  blocked: boolean
+  /** The day the 30-day Karenz ends; null when this call opened no clock. */
+  finalAt: Date | null
   database: string | null
   export: { path: string; sha256: string; bytes: number } | null
   /** Every module still enabled for the customer (the broker's list). */
@@ -159,7 +164,7 @@ export interface DisableCustomerModuleResult {
 /**
  * TRD-044: disable one module for an existing customer -- the catalogue id,
  * the customer (active or provisioning), disableModule (switch off, export and
- * verify, then drop), then the broker users for what is still enabled. Every
+ * verify, then block for the 30-day Karenz; nothing is dropped), then the broker users for what is still enabled. Every
  * step is repeatable: a module already disabled is a no-op that still converges
  * the broker.
  */
@@ -175,7 +180,7 @@ export async function disableCustomerModule(slug: string, moduleId: string, opts
   const r = await deps.modules.disable(c, moduleId, opts.operatorId, opts.actorKind)
   const enabled = (await deps.modules.enabled(c)).sort()
   const broker = await deps.broker.ensure(c, enabled)
-  return { customer: c, moduleKey: moduleId, noop: r.noop, dropped: r.dropped, database: r.database, export: r.export, enabled, reloaded: broker.reloaded }
+  return { customer: c, moduleKey: moduleId, noop: r.noop, dropped: r.dropped, blocked: r.blocked, finalAt: r.finalAt, database: r.database, export: r.export, enabled, reloaded: broker.reloaded }
 }
 
 function refOf(row: ControlRow, host: string): CustomerRef {

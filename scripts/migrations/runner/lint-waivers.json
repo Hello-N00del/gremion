@@ -1,5 +1,5 @@
 {
-  "$comment": "Per-file, sha256-pinned waivers of expand-lint rules for LOCKED files the lint refuses (suite.mjs section 2c). Not the baseline: the baseline is write-once and maps only pre-header files. A waiver is voided by any byte change (the lock pins the file anyway), may name only WAIVABLE_RULES, and is stale-checked (a waived rule that no longer fires fails). A new file never gets one by default: fix the file while it is unlocked.",
+  "$comment": "Per-file, sha256-pinned waivers of expand-lint rules for LOCKED files the lint refuses (suite.mjs section 2c). Not the baseline: the baseline is write-once and maps only pre-header files. A waiver is voided by any byte change (the lock pins the file anyway), may name only WAIVABLE_RULES, and is stale-checked (a waived rule that no longer fires fails). A new file never gets one by default: fix the file while it is unlocked. TASK-084-a names the exceptions drop and set-expression (platform 0015) and revoke (governance 0001).",
   "waivers": [
     {
       "chain": "platform",
@@ -52,6 +52,44 @@
         "revoke"
       ],
       "reason": "Adds the council request origin to plt.provisioning_request: the old origin and evidence CHECKs cannot be widened without DROP CONSTRAINT and re-ADD (each re-added NOT VALID and validated in the same file, so no unvalidated constraint remains), the immutability guard body must gain the actor_kind column (CREATE OR REPLACE keeps the grants pg.ts issues), and REVOKE ALL FROM PUBLIC hardens the SECURITY DEFINER functions this same file creates. Same shape as the waivers of 0009, 0010 and 0013. The file sets lock_timeout first; the table is a small queue whose only writers ship in the same release."
+    },
+    {
+      "chain": "platform",
+      "file": "0015_plt_provisioning_step_governance.sql",
+      "sha256": "60f25259025d5d993564187ca4b46312d807f91d596367f8f76d7fd19345acde",
+      "rules": [
+        "drop",
+        "set-expression"
+      ],
+      "reason": "Widens the append-only provisioning ledger from eight to nine step kinds: DROP and re-ADD of provisioning_step_step_kind_check (NOT VALID, then VALIDATE) and SET EXPRESSION on the generated step_order. The table holds a handful of rows per customer, no colour reads step_order, existing values and the step_order index are kept, and the rewrite fires no row trigger. The file sets lock_timeout first."
+    },
+    {
+      "chain": "platform",
+      "file": "0016_plt_module_karenz.sql",
+      "sha256": "4904dfc2def0530de7a7f5fa8fe27b9c12c35da1e1eebf83060b8f2b69b6473d",
+      "rules": [
+        "drop",
+        "revoke"
+      ],
+      "reason": "Adds the blocked module database state: the old module_database_state_check cannot be widened without DROP CONSTRAINT and re-ADD (re-added NOT VALID and validated in the same file, so no unvalidated constraint remains), and REVOKE ALL ON FUNCTION .. FROM PUBLIC hardens the two SECURITY DEFINER council functions this same file creates (Postgres grants EXECUTE to PUBLIC by default). Same shape as the waivers of 0013 and 0014. The file sets lock_timeout first; module_database is a small control-plane table and the two new tables are created empty."
+    },
+    {
+      "chain": "platform",
+      "file": "0017_plt_karenz_report_mode.sql",
+      "sha256": "b7414b56813803d5e9d88706e21cad138e48ec0e8bef93ac5123e6c83150708a",
+      "rules": [
+        "or-replace"
+      ],
+      "reason": "Replaces the body of plt.council_karenz_report (created by 0016) to add one refusal: the tenant_done mark needs final_mode live. CREATE OR REPLACE keeps the owner and the ACL (EXECUTE for the council marker role, none for PUBLIC), so no grant is repeated, and the signature and return type are unchanged. Same shape as the waiver of 0014. The file sets lock_timeout first and touches no table definition."
+    },
+    {
+      "chain": "governance",
+      "file": "0001_gov_setup.sql",
+      "sha256": "23e7c5e8c5b0a5a7658f6e70db6605c71ce9e2f9b68e53d7366d5ffac4f8a17b",
+      "rules": [
+        "revoke"
+      ],
+      "reason": "REVOKE EXECUTE ON FUNCTION gov.remove_test_run(uuid) FROM PUBLIC on a function this same file creates: mandatory hardening (PostgreSQL grants EXECUTE to PUBLIC by default), applied only to a database created in the same provisioning step. The file sets lock_timeout first and creates every relation it touches."
     }
   ]
 }

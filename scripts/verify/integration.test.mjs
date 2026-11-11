@@ -203,8 +203,8 @@ test('test-events-live: the alert phases are not this half\'s to vouch for -- th
 const alertPhase = (p, n, min = n) =>
   `[alert-proof] ${n} passing (minimum ${min}), 0 failing -- phase ${p}\n[events-proof] group ${p} OK\n`
 const EVENTS_ALERT_OK =
-  '[alert-proof] 1 passing (minimum 1), 0 failing -- phase alert-prepare\n[events-proof] phase alert-prepare done\n' +
-  '[alert-proof] 5 passing (minimum 5), 0 failing -- phase alert-up\n[events-proof] phase alert-up done\n' +
+  '[alert-proof] 2 passing (minimum 2), 0 failing -- phase alert-prepare\n[events-proof] phase alert-prepare done\n' +
+  '[alert-proof] 6 passing (minimum 6), 0 failing -- phase alert-up\n[events-proof] phase alert-up done\n' +
   alertPhase('alert-red', 4) +
   alertPhase('alert-fire', 12) +
   alertPhase('alert-hold', 6) +
@@ -226,6 +226,18 @@ test('test-events-alert: the judge\'s floors are alert-proof.sh\'s own finish mi
     assert.ok(body, `alert-proof.sh has no ${fn[phase]}()`)
     assert.match(body, new RegExp(`^\\s*finish ${floor}\\s*$`, 'm'), `${fn[phase]}() does not finish with minimum ${floor}`)
   }
+})
+
+test('test-events-alert: the hold spans three group intervals, on an interval the proof sets and the file mounted into Grafana carries', () => {
+  const src = readFileSync(new URL('../../packages/events/scripts/alert-proof.sh', import.meta.url), 'utf8')
+  const body = (fn) => src.split(`\n${fn}() {\n`)[1]?.split('\n}\n')[0] ?? ''
+  const interval = Number(/^PROOF_GROUP_INTERVAL=(\d+)$/m.exec(src)?.[1])
+  assert.ok(interval >= 30, `PROOF_GROUP_INTERVAL is ${interval}: the floor is 30 s (collector cadence 15-20 s)`)
+  assert.ok(body('phase_hold').includes('+ 3 * PROOF_GROUP_INTERVAL + 5 ))'), 'the hold is not three intervals')
+  const set = 'group_interval: 60s\\$/    group_interval: ${PROOF_GROUP_INTERVAL}s/" "$policies"'
+  assert.ok(body('phase_prepare').includes(set), 'prepare does not narrow the root policy')
+  const seen = 'docker exec "$(container_of grafana)" grep -q "^    group_interval: ${PROOF_GROUP_INTERVAL}s'
+  assert.ok(body('phase_up').includes(seen), 'up does not read the interval from the file mounted into Grafana')
 })
 
 // One test, a loop inside it (see the test-nats-auth note above for why).

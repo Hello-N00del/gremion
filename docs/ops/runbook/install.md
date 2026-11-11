@@ -1,6 +1,6 @@
 # Install: the from-zero bring-up
 
-- Version: 6.0.0
+- Version: 6.1.0
 - Wall-clock budget: one working day, from the start of step 1 to the asserted post-condition (PRD-PLAT-005)
 - Implements: TRD-200 (install), TRD-042 (the from-zero rebuild, R15-2), FLOW-OPS-002
 - First run: TASK-038, the pilot re-initialisation
@@ -250,6 +250,10 @@ gremion-dns-check --domain "$PLATFORM_DOMAIN" \
     broker's config includes that file and does not start without it. It runs
     in the `tenant-create` one-shot of the blue colour, with no dependency
     started, and is idempotent (`gremion-deploy` repeats it in its step 4).
+    That container bind-mounts `etc/secrets/governance`; bootstrap made it
+    (0700, `gremion`), so the docker daemon does not make it as `root:root`.
+    On a host bootstrapped before this was added, make it first:
+    `sudo -u gremion install -d -m 700 /opt/gremion/etc/secrets/governance`.
 
 ```bash
 sudo -u gremion /opt/gremion/bin/gremion-render --release "$REL"
@@ -268,9 +272,19 @@ docker compose --env-file /opt/gremion/etc/env/state.env ps
 
 13. **Take the baseline backup.** `gremion-deploy` refuses its step 3 without
     `runtime/last-backup.json`, so one backup of the fresh state project runs
-    before the first deploy (see Known gaps).
+    before the first deploy (see Known gaps). The backup refuses a run that
+    leaves a running PostgreSQL server of the state project out of
+    `BACKUP_POSTGRES_SERVICES`, and the rendered `state.env` carries no such
+    line (its default, `postgres`, leaves out `governance-postgres`, which runs
+    in every state project). So list the running servers first and set the key
+    to exactly that set, together with the `RESTIC_*` and `RCLONE_*` keys the
+    backup needs ([backup.md](backup.md), Preconditions).
 
 ```bash
+STACK_NAME="$(sed -n 's/^STACK=//p' /opt/gremion/etc/env/state.env)"
+docker ps --filter label=org.gremion.postgres --filter "label=com.docker.compose.project=${STACK_NAME}-state" \
+    --format '{{.Label "com.docker.compose.service"}}' | sort   # every server the state project runs, one per line
+sudo -u gremion "${EDITOR:-vi}" /opt/gremion/etc/env/state.env  # add BACKUP_POSTGRES_SERVICES='<those names, space-separated>'
 sudo -u gremion /opt/gremion/bin/gremion-backup --label install-baseline
 jq -e '.ok == true' /opt/gremion/runtime/last-backup.json
 ```
@@ -486,6 +500,7 @@ in [run-record.md](run-record.md).
 
 ## Changelog
 
+- 6.1.0 (2026-11-10): step 13 lists the running PostgreSQL servers of the state project and has the operator set `BACKUP_POSTGRES_SERVICES` to that set before the baseline backup, which now refuses a run that leaves a running server out (backup.md 1.1.0); a fresh `state.env` carries no such line. Minor: a step changed, no post-condition did.
 - 6.0.0 (2026-11-03): kernel #84, on top of 5.0.0. Step 7 creates and fills `etc/legal.env` (`gremion-render --init-legal-env`), step 8 renders it into the release tree (`--legal-env-only`) and step 12 observes `legal/legal.env` beside the userlist and certificate: the state project's `legal` service reads that file for every compose command, and no step made it. Major: steps and a post-condition observation changed.
 - 5.0.0 (2026-11-02): kernel #83. Step 4's `user` stage puts the deploy user in a group with gid 70 and the step observes it (`id -G`); step 12's render writes the pgbouncer `userlist.txt` mode 0640 group 70 (it was 0600 owned by the deploy user, which PgBouncer, uid/gid 70, could not read) and the step observes `stat -c '%a %g'` as `640 70`. Major: a step and its observations changed.
 - 4.2.0 (2026-10-30): kernel #47 decision (a). Step 14 (and the registry-token precondition) names the optional host token file `etc/registry-token` that `gremion-deploy` reads when `GREMION_REGISTRY_TOKEN_FILE` is set, with the commands that observe it; the prompt stays the default. Minor: an alternative added to a step, no post-condition changed.

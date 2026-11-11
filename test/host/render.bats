@@ -93,6 +93,7 @@ IMAGE_TAG=dist-v1.0.0
 PGBOUNCER_AUTH_PASSWORD=test-secret-pgbouncer
 LIVEKIT_API_KEY=lk-key
 LIVEKIT_API_SECRET=lk-secret
+PILOT_TENANT_HOST=pilot.example.org
 EOF
 }
 
@@ -486,6 +487,103 @@ nnp_render() {
     grep -q '^  lk-key: lk-secret$' "${RELEASE}/docker/livekit/livekit.yaml"
     grep -q 'wss://example.org/livekit-sfu' "${RELEASE}/docker/element-call/config.json"
     [[ "$output" == *"release templates rendered: 2"* ]]
+}
+
+# The pilot's Element Call config is rendered from the REAL template in this checkout, never from a
+# stand-in: PILOT_TENANT_HOST is allow-listed (and therefore required once a template names it), the
+# output carries both hosts and no placeholder, and the rendered file is gitignored so a render never
+# dirties the release tree (gremion-isolation and verify refuse a dirty tree).
+@test "the real Element Call template renders from state.env: platform domain and pilot tenant host, no placeholder" {
+    mkdir -p "${RELEASE}/docker/element-call"
+    tr -d '\r' < "${PROJECT_ROOT}/docker/element-call/config.json.tmpl" > "${RELEASE}/docker/element-call/config.json.tmpl"
+    run "$RENDER" --release "$RELEASE"
+    [ "$status" -eq 0 ]
+    [ -s "${RELEASE}/docker/element-call/config.json" ]
+    grep -q '"base_url": "https://example.org"' "${RELEASE}/docker/element-call/config.json"
+    grep -q '"server_name": "example.org"' "${RELEASE}/docker/element-call/config.json"
+    grep -q '"livekit_service_url": "https://pilot.example.org/livekit/jwt"' "${RELEASE}/docker/element-call/config.json"
+    ! grep -q '\${' "${RELEASE}/docker/element-call/config.json"
+}
+
+@test "the Element Call template without PILOT_TENANT_HOST in state.env exits 2 and names the key" {
+    mkdir -p "${RELEASE}/docker/element-call"
+    tr -d '\r' < "${PROJECT_ROOT}/docker/element-call/config.json.tmpl" > "${RELEASE}/docker/element-call/config.json.tmpl"
+    sed -i '/^PILOT_TENANT_HOST=/d' "${GREMION_ROOT}/etc/env/state.env"
+    run "$RENDER" --release "$RELEASE"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"missing env key PILOT_TENANT_HOST"* ]]
+    [ ! -f "${RELEASE}/docker/element-call/config.json" ]
+}
+
+# The video relay (TURN over TLS on 443) is rendered from the REAL LiveKit template in this checkout.
+# PILOT_TENANT_HOST decides: set, the relay is on at turn.<host> and the media range is shortened to
+# leave the top of the published block to the relay; unset or empty, the relay is off, the media range
+# is today's 45000-45100 and no public name appears.
+render_livekit_template() {
+    mkdir -p "${RELEASE}/docker/livekit"
+    tr -d '\r' < "${PROJECT_ROOT}/docker/livekit/livekit.yaml.tmpl" > "${RELEASE}/docker/livekit/livekit.yaml.tmpl"
+}
+
+@test "the real LiveKit template with PILOT_TENANT_HOST: relay enabled at turn.<host>, media range leaves the relay its ports, no placeholder" {
+    render_livekit_template
+    run "$RENDER" --release "$RELEASE"
+    [ "$status" -eq 0 ]
+    local out="${RELEASE}/docker/livekit/livekit.yaml"
+    [ -s "$out" ]
+    grep -q '^  enabled: true$' "$out"
+    grep -q '^  domain: turn\.pilot\.example\.org$' "$out"
+    grep -q '^  tls_port: 5349$' "$out"
+    grep -q '^  external_tls: true$' "$out"
+    grep -q '^  port_range_end: 45050$' "$out"
+    grep -q '^  relay_range_start: 45051$' "$out"
+    grep -q '^  relay_range_end: 45100$' "$out"
+    ! grep -q '\${' "$out"
+}
+
+@test "the real LiveKit template without PILOT_TENANT_HOST: relay disabled, today's media range, no public name" {
+    render_livekit_template
+    sed -i '/^PILOT_TENANT_HOST=/d' "${GREMION_ROOT}/etc/env/state.env"
+    run "$RENDER" --release "$RELEASE"
+    [ "$status" -eq 0 ]
+    local out="${RELEASE}/docker/livekit/livekit.yaml"
+    [ -s "$out" ]
+    grep -q '^  enabled: false$' "$out"
+    grep -q '^  port_range_end: 45100$' "$out"
+    grep -q '^  domain: turn\.relay\.invalid$' "$out"
+    assert_absent 'example\.org' "$out" 'no placeholder public name rendered'
+    ! grep -q '\${' "$out"
+}
+
+@test "the real LiveKit template with an EMPTY PILOT_TENANT_HOST renders like an unset one" {
+    render_livekit_template
+    sed -i 's/^PILOT_TENANT_HOST=.*/PILOT_TENANT_HOST=/' "${GREMION_ROOT}/etc/env/state.env"
+    run "$RENDER" --release "$RELEASE"
+    [ "$status" -eq 0 ]
+    grep -q '^  enabled: false$' "${RELEASE}/docker/livekit/livekit.yaml"
+    grep -q '^  port_range_end: 45100$' "${RELEASE}/docker/livekit/livekit.yaml"
+}
+
+# The pinned livekit-server v1.7.2 logs "created TURN password" (username AND password) at INFO
+# for every participant that joins while the relay is on (service/roommanager.go, global logger,
+# which no component_levels entry reaches). The global level is the only switch: at warn the line
+# is gone and warnings and errors stay. Proved against the pinned image; do not raise it back.
+@test "the real LiveKit template keeps the global log level at warn so a TURN password never reaches the log" {
+    render_livekit_template
+    run "$RENDER" --release "$RELEASE"
+    [ "$status" -eq 0 ]
+    local out="${RELEASE}/docker/livekit/livekit.yaml"
+    [ "$(awk '/^logging:/{f=1;next} /^[^ ]/{f=0} f && /^  level:/{print $2}' "$out")" = "warn" ]
+    assert_absent '^[[:space:]]+level:[[:space:]]*(debug|info)' "$out" 'global log level is not debug or info'
+    ! grep -Eq '^[[:space:]]+(component_levels|pion_level)' "$out"
+}
+
+@test "a PILOT_TENANT_HOST that is not a lower-case host name is refused before anything is rendered" {
+    render_livekit_template
+    sed -i 's/^PILOT_TENANT_HOST=.*/PILOT_TENANT_HOST=Pilot.Example.org/' "${GREMION_ROOT}/etc/env/state.env"
+    run "$RENDER" --release "$RELEASE"
+    [ "$status" -eq 2 ]
+    [[ "$output" == *"PILOT_TENANT_HOST is not a lower-case host name"* ]]
+    [ ! -f "${RELEASE}/docker/livekit/livekit.yaml" ]
 }
 
 @test "no dollar-brace placeholder survives in a rendered file" {

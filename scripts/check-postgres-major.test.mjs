@@ -633,6 +633,7 @@ test('the registry-prefix net does not read URLs, paths or host:ports as images'
 
 import {
   MODULE_POSTGRES_IDS,
+  SERVICE_POSTGRES_IDS,
   composeServices,
   checkComposeServices,
   checkModuleSet,
@@ -709,7 +710,7 @@ test('a variable image on a service that is not Postgres is none of this guard\'
 })
 
 /** A docker-compose.yml body carrying the full, correct module set. */
-function moduleCompose({ skip = null, override = {} } = {}) {
+function moduleCompose({ skip = null, override = {}, gov = {}, nc = {} } = {}) {
   const lines = [
     'x-module-postgres: &module-postgres',
     `  image: ${POSTGRES_IMAGE_REF}`,
@@ -729,6 +730,22 @@ function moduleCompose({ skip = null, override = {} } = {}) {
       '    volumes:', `      - ${id}-pg-data:${POSTGRES_DATA_MOUNT}`)
     vols.push(`  ${id}-pg-data:`, `    name: ${o.volume ?? `gremion_module_${id}_pg_data`}`)
   }
+  // TASK-084-a: the dedicated governance server (service:governance label, never profile-gated, POSTGRES_DB postgres)
+  if (skip !== 'governance') {
+    lines.push('  governance-postgres:', '    <<: *module-postgres', ...(gov.profile ? [`    profiles: [${gov.profile}]`] : []),
+      '    labels:', `      org.gremion.postgres: "${gov.label ?? 'service:governance'}"`,
+      '    environment:', ...(gov.noDb ? [] : ['      POSTGRES_DB: postgres']),
+      '    volumes:', `      - governance-pg-data:${POSTGRES_DATA_MOUNT}`)
+    vols.push('  governance-pg-data:', `    name: ${gov.volume ?? 'gremion_service_governance_pg_data'}`)
+  }
+  // The pilot's Nextcloud server: service:nextcloud label, gated by the nextcloud profile, POSTGRES_DB nextcloud
+  if (skip !== 'nextcloud') {
+    lines.push('  nextcloud-postgres:', '    <<: *module-postgres', `    profiles: [${nc.profile ?? 'nextcloud'}]`,
+      '    labels:', `      org.gremion.postgres: "${nc.label ?? 'service:nextcloud'}"`,
+      '    environment:', ...(nc.noDb ? [] : ['      POSTGRES_DB: nextcloud']),
+      '    volumes:', `      - nextcloud-pg-data:${POSTGRES_DATA_MOUNT}`)
+    vols.push('  nextcloud-pg-data:', `    name: ${nc.volume ?? 'gremion_service_nextcloud_pg_data'}`)
+  }
   return [...lines, ...vols].join('\n') + '\n'
 }
 
@@ -747,6 +764,26 @@ test('checkModuleSet goes RED on a wrong label, a wrong profile and an unlabelle
     /board-postgres is not gated under profiles: \[board\]/)
   const noKernel = moduleCompose().replace('      org.gremion.postgres: "kernel"\n', '')
   assert.match(checkModuleSet(noKernel).join('\n'), /the kernel postgres service is not labelled org\.gremion\.postgres=kernel/)
+})
+
+test('TASK-084-a: the service-server set is governance and the pilot Nextcloud server', () => {
+  assert.deepEqual([...SERVICE_POSTGRES_IDS], ['governance', 'nextcloud'])
+})
+
+test('the pilot Nextcloud server goes RED on a missing server, a wrong label, a wrong profile gate and a wrong POSTGRES_DB', () => {
+  assert.match(checkModuleSet(moduleCompose({ skip: 'nextcloud' })).join('\n'), /no nextcloud-postgres service/)
+  assert.match(checkModuleSet(moduleCompose({ nc: { label: 'module:files' } })).join('\n'), /nextcloud-postgres is labelled org\.gremion\.postgres=module:files, expected service:nextcloud/)
+  assert.match(checkModuleSet(moduleCompose({ nc: { profile: 'files' } })).join('\n'), /nextcloud-postgres is not gated under profiles: \[nextcloud\]/)
+  assert.match(checkModuleSet(moduleCompose({ nc: { noDb: true } })).join('\n'), /nextcloud-postgres sets POSTGRES_DB null, expected nextcloud/)
+})
+
+test('TASK-084-a: checkModuleSet goes RED on a missing governance-postgres, a module label, a profile gate, a shared volume and a missing POSTGRES_DB', () => {
+  assert.match(checkModuleSet(moduleCompose({ skip: 'governance' })).join('\n'), /no governance-postgres service/)
+  assert.match(checkModuleSet(moduleCompose({ gov: { label: 'module:governance' } })).join('\n'), /governance-postgres is labelled org\.gremion\.postgres=module:governance, expected service:governance/)
+  assert.match(checkModuleSet(moduleCompose({ gov: { profile: 'board' } })).join('\n'), /governance-postgres is gated under profiles: \[board\]/)
+  assert.match(checkModuleSet(moduleCompose({ gov: { volume: 'gremion_module_board_pg_data' } })).join('\n'), /governance-postgres shares volume gremion_module_board_pg_data with board-postgres/)
+  assert.match(checkModuleSet(moduleCompose({ gov: { volume: 'gremion_governance_pg_data' } })).join('\n'), /governance-postgres mounts volume gremion_governance_pg_data/)
+  assert.match(checkModuleSet(moduleCompose({ gov: { noDb: true } })).join('\n'), /governance-postgres sets POSTGRES_DB null, expected postgres/)
 })
 
 test('checkModuleSet goes RED on a stray labelled or *-postgres service outside the set', () => {
@@ -769,7 +806,7 @@ test('the committed docker-compose.yml carries the full, correct module set', ()
   assert.deepEqual(checkModuleSet(text), [])
   assert.deepEqual(checkComposeServices([{ path: 'docker-compose.yml', text }]), [])
   const labelled = composeServices(text).filter((s) => s.label)
-  assert.equal(labelled.length, 1 + MODULE_POSTGRES_IDS.length)
+  assert.equal(labelled.length, 1 + MODULE_POSTGRES_IDS.length + SERVICE_POSTGRES_IDS.length)
 })
 
 // ── TASK-019: a per-module server left on an older major, digest and all ────

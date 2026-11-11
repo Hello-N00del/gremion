@@ -8,6 +8,7 @@
   import { t } from '$lib/i18n'
   import { Dialog } from '$lib/components/ui/dialog'
   import PollCreateForm from '$lib/components/polls/PollCreateForm.svelte'
+  import RetainedRecords from '$lib/components/RetainedRecords.svelte'
   import type { PageData } from './$types'
   import type { VoteItem } from '$lib/votes/types'
   import type { VoteListItem, NormalVoteItem, DegradedVoteItem } from './+page.server'
@@ -159,8 +160,8 @@
   <!-- Page head -->
   <div class="page-head">
     <div>
-      <div class="eyebrow">Abstimmungen &amp; Wahlen</div>
-      <h1 class="page-title">Wahl- und Meinungsbilder</h1>
+      <div class="eyebrow">{data.electionsEnabled ? 'Abstimmungen & Wahlen' : 'Abstimmungen'}</div>
+      <h1 class="page-title">{data.electionsEnabled ? 'Wahl- und Meinungsbilder' : 'Meinungsbilder'}</h1>
       <div class="page-sub">
         {#if data.electionsEnabled}
           Zwei Stimmen-Arten: <b>Helios</b> für anonyme, verifizierbare Wahlen ·
@@ -460,6 +461,9 @@
       {/if}
     </div>
   </div>
+
+  <!-- Module Karenz (Task 19): sealed tallies of an earlier period, read-only; nothing for an empty list or a reader who may not see them -->
+  <RetainedRecords records={data.retainedRecords} moduleLabel={$t('settings.modules.karenz.retained.module.votes')} />
 </div>
 
 <!-- New vote dialog -->

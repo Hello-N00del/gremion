@@ -12,6 +12,9 @@
 #                 newest run per plt.scheduled_job definition, TASK-039-FU;
 #                 the weekly footprint's own series is written by footprint.sh to
 #                 its own file, runtime/textfile/gremion-footprint.prom)
+#   karenz       gremion_module_karenz_{live,failed,stale,overdue}  (module switch-off
+#                 30-day Karenz: plt.module_karenz and its events, platform columns only;
+#                 overdue only while KARENZ_FINAL_DELETION=on, see emit_module_karenz)
 #   broker       gremion_nats_jsz_up, gremion_nats_stream_*, gremion_nats_consumer_*
 #                 (`jsz` read inside the broker container: its monitor listens
 #                 on the container loopback only, TASK-024)
@@ -38,6 +41,33 @@
 #
 # exit 0 wrote the file · 2 missing runtime directory or tool
 set -euo pipefail
+
+# The Karenz query, built in one place. `--print-karenz-sql on|off` renders it
+# and exits before anything else runs (no docker, no runtime directory), so a
+# test can execute the exact text against a real platform database: a
+# substring check on a shimmed `docker exec` cannot tell a query that parses
+# from one that does not. `on` adds the overdue arm (KARENZ_FINAL_DELETION=on).
+karenz_query_sql() {
+    local overdue_sql="" sql
+    if [[ "${1:-off}" == "on" ]]; then
+        overdue_sql=" UNION SELECT 'overdue', l.customer_id::text, l.module_key, 1 FROM live l WHERE l.state IN ('open','finalizing') AND l.final_at + interval '6 hours' < now()"
+    fi
+    sql="WITH live AS (SELECT k.karenz_id, k.customer_id, m.module_key, k.state, k.switched_off_at, k.final_at, k.restore_requested_at FROM plt.module_karenz k JOIN plt.module m ON m.module_id = k.module_id WHERE k.state IN ('open','restoring','finalizing')), \
+newest AS (SELECT DISTINCT ON (e.karenz_id, e.step) e.karenz_id, e.level FROM plt.module_karenz_event e WHERE e.karenz_id IN (SELECT karenz_id FROM live) ORDER BY e.karenz_id, e.step, e.at DESC, e.event_id DESC) \
+SELECT 'live', '', '', count(*) FROM live \
+UNION SELECT 'failed', l.customer_id::text, l.module_key, 1 FROM live l WHERE EXISTS (SELECT 1 FROM newest n WHERE n.karenz_id = l.karenz_id AND n.level = 'error') \
+UNION SELECT 'stale', l.customer_id::text, l.module_key, 1 FROM live l WHERE (l.state = 'open' AND ( \
+(l.switched_off_at < now() - interval '1 hour' AND NOT EXISTS (SELECT 1 FROM plt.module_karenz_event e WHERE e.karenz_id = l.karenz_id AND e.step = 'notice:switchoff')) \
+OR (l.final_at - interval '7 days' + interval '2 hours' < now() AND NOT EXISTS (SELECT 1 FROM plt.module_karenz_event e WHERE e.karenz_id = l.karenz_id AND e.step = 'notice:t23')) \
+OR (l.final_at - interval '1 day' + interval '2 hours' < now() AND NOT EXISTS (SELECT 1 FROM plt.module_karenz_event e WHERE e.karenz_id = l.karenz_id AND e.step = 'notice:t29')))) \
+OR (l.state = 'restoring' AND l.restore_requested_at < now() - interval '1 hour')${overdue_sql} \
+ORDER BY 1, 2, 3"
+    printf '%s\n' "$sql"
+}
+if [[ "${1:-}" == "--print-karenz-sql" ]]; then
+    karenz_query_sql "${2:-off}"
+    exit 0
+fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=../lib/common.sh
@@ -255,6 +285,112 @@ emit_job_last_run() {
     printf '%s' "$out"
 }
 
+# karenz_final_deletion_on -- true only when the ACTIVE colour's app env file
+# says KARENZ_FINAL_DELETION=on, the exact string (as finalDeletionEnabled in
+# the platform job: ON, true, 1 and empty are off). Any unreadable piece (no
+# active colour, no env file) is off: the overdue gauge is then simply not
+# emitted, which is the safe reading while the switch ships off. It is said in a
+# note, so that a host where the switch is on but the file cannot be read does
+# not look the same as one where it is off.
+karenz_final_deletion_on() {
+    local c="" f v
+    [[ -f "$RUNTIME/active-colour" ]] && c="$(tr -d '[:space:]' < "$RUNTIME/active-colour" 2>/dev/null || true)"
+    case "$c" in
+        blue|green) ;;
+        *) note "no readable active colour -- the module Karenz overdue gauge is not emitted"; return 1 ;;
+    esac
+    f="$ROOT/etc/env/app-${c}.env"
+    [[ -f "$f" ]] || { note "no app env file for the active colour -- the module Karenz overdue gauge is not emitted"; return 1; }
+    v="$(sed -n 's/^KARENZ_FINAL_DELETION=//p' "$f" 2>/dev/null | tail -n 1 || true)"
+    v="${v%$'\r'}"
+    if [[ "$v" == \"*\" || "$v" == \'*\' ]]; then v="${v:1:${#v}-2}"; fi
+    [[ "$v" == "on" ]]
+}
+
+# Module switch-off Karenz (phase 2): four gauges from plt.module_karenz and
+# plt.module_karenz_event in the platform database, read through the state
+# Postgres, one query, rows kind|customer|module|n. PLATFORM COLUMNS AND EVENTS
+# ONLY: nothing here reads a tenant table, and the stale and overdue arms do not
+# depend on whether the day-30 job or any tenant pass is running.
+#
+#   gremion_module_karenz_live                 live rows (open, restoring,
+#                                              finalizing); ALWAYS emitted when
+#                                              the table is readable, 0 with no
+#                                              rows, so an unreadable table makes
+#                                              it ABSENT and the condition's
+#                                              absent() arm fires
+#   gremion_module_karenz_failed{customer,module} 1
+#                                              a live row whose NEWEST event of
+#                                              some step has level error
+#   gremion_module_karenz_stale{customer,module} 1
+#                                              an OPEN row with no
+#                                              notice:switchoff event after 1 h,
+#                                              or a reminder (notice:t23 at
+#                                              final_at - 7 d, notice:t29 at
+#                                              final_at - 1 d) more than 2 h due
+#                                              with no event, or a RESTORING row
+#                                              1 h after the switch-on (the
+#                                              tenant pass has not reported
+#                                              restored, so the module cannot be
+#                                              switched off again): the tenant
+#                                              pass is not running
+#   gremion_module_karenz_overdue{customer,module} 1
+#                                              a row still open or finalizing 6 h
+#                                              past final_at; queried and emitted
+#                                              ONLY while KARENZ_FINAL_DELETION is
+#                                              on (a dry run deletes nothing, so
+#                                              no row can be overdue)
+#
+# Each row is validated (kind, uuid, module key, count); an unreadable database,
+# a missing relation or garbage emits NOTHING -- absent, never 0 -- and a note.
+emit_module_karenz() {
+    local cid rows errf first_err="" sql mode=off kind customer module n extra
+    local uuid_re='^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+    local live="" failed="" stale="" overdue=""
+    cid="$(state_container postgres)"
+    [[ -n "$cid" ]] || { note "no ${STATE_PROJECT_NAME} postgres container -- gremion_module_karenz_live absent"; return 0; }
+    if karenz_final_deletion_on; then mode=on; fi
+    sql="$(karenz_query_sql "$mode")"
+    errf="$(mktemp)"
+    rows="$(docker exec "$cid" psql -U postgres -d gremion_platform -X -tAF'|' -c "$sql" 2>"$errf" || true)"
+    first_err="$(head -n 1 "$errf" 2>/dev/null || true)"
+    rm -f "$errf"
+    while IFS='|' read -r kind customer module n extra; do
+        [[ -n "$kind$customer$module$n$extra" ]] || continue
+        if [[ -z "$extra" && "$kind" == "live" && -z "$customer" && -z "$module" && "$n" =~ ^[0-9]+$ ]]; then
+            live="$n"
+        elif [[ -z "$extra" && "$kind" =~ ^(failed|stale|overdue)$ && "$customer" =~ $uuid_re \
+                && "$module" =~ ^[a-z][a-z_]{1,39}$ && "$n" == "1" ]]; then
+            case "$kind" in
+                failed)  failed+="gremion_module_karenz_failed{customer=\"${customer}\",module=\"${module}\"} 1"$'\n' ;;
+                stale)   stale+="gremion_module_karenz_stale{customer=\"${customer}\",module=\"${module}\"} 1"$'\n' ;;
+                overdue) overdue+="gremion_module_karenz_overdue{customer=\"${customer}\",module=\"${module}\"} 1"$'\n' ;;
+            esac
+        else
+            note "module Karenz row '${kind}|${customer}|${module}|${n}' is not <kind>|<customer uuid>|<module key>|<count> -- skipped"
+        fi
+    done <<< "$rows"
+    [[ -n "$live" ]] || { note "no module Karenz reading${first_err:+ (${first_err})} -- gremion_module_karenz_live is absent"; return 0; }
+    printf '# HELP gremion_module_karenz_live Module switch-offs inside their 30-day Karenz (open, restoring or finalizing).\n'
+    printf '# TYPE gremion_module_karenz_live gauge\n'
+    printf 'gremion_module_karenz_live %s\n' "$live"
+    if [[ -n "$failed" ]]; then
+        printf '# HELP gremion_module_karenz_failed 1 for a live Karenz whose newest event of some step is an error.\n'
+        printf '# TYPE gremion_module_karenz_failed gauge\n'
+        printf '%s' "$failed"
+    fi
+    if [[ -n "$stale" ]]; then
+        printf '# HELP gremion_module_karenz_stale 1 for an open Karenz whose switch-off notice or a day-23 or day-29 reminder is overdue, or a restoring Karenz that has waited over an hour for its restored report: the tenant pass is not running.\n'
+        printf '# TYPE gremion_module_karenz_stale gauge\n'
+        printf '%s' "$stale"
+    fi
+    if [[ -n "$overdue" ]]; then
+        printf '# HELP gremion_module_karenz_overdue 1 for a Karenz row still open or finalizing 6 hours past its final day (emitted only with KARENZ_FINAL_DELETION=on).\n'
+        printf '# TYPE gremion_module_karenz_overdue gauge\n'
+        printf '%s' "$overdue"
+    fi
+}
+
 # The jq program per family: one family per pass, so every family's samples
 # stay contiguous (the text format requires it). The `$a`, `$s`, `$c` below are
 # jq variables, single-quoted on purpose.
@@ -406,6 +542,7 @@ main() {
         emit_containers
         emit_postgres_connections
         emit_job_last_run
+        emit_module_karenz
         emit_nats
         emit_events
         emit_filesystems

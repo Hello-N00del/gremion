@@ -1,0 +1,23 @@
+[Unit]
+Description=Gremion module Karenz run, finalizes switch-offs after 30 days
+Documentation=file://${GREMION_ROOT}/current/infra/host/ops/README.md
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+User=${DEPLOY_USER}
+Group=${DEPLOY_USER}
+# karenz.sh runs `docker compose run tenant-create karenz-run` in the active
+# colour under runtime/hostd.lock. With KARENZ_FINAL_DELETION=off (the shipped
+# value) the run only records and reports what it would delete.
+SupplementaryGroups=docker
+Environment=GREMION_ROOT=${GREMION_ROOT}
+ExecStart=${GREMION_ROOT}/current/infra/host/ops/karenz.sh
+# A stuck call dies inside the 4-minute rule instead of hanging the unit. The
+# run stops itself first (KARENZ_RUN_DEADLINE_MS, 110 s, after karenz.sh's 20 s
+# host lock wait); every sub-step is keyed on persisted state, so a run cut
+# short is finished by the next hour's.
+TimeoutStartSec=170
+ProtectSystem=full
+NoNewPrivileges=true

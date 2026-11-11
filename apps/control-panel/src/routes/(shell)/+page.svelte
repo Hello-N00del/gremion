@@ -37,7 +37,7 @@
           <td><a href={`/customers/${c.slug}`}>{c.slug}</a></td>
           <td>{c.host ?? '—'}</td>
           <td><span class={`status ${c.status}`}>{STATUS_LABEL[c.status] ?? c.status}</span></td>
-          <td>{c.stepsDone === null ? 'keine Plattform-DB' : `${c.stepsDone} / 8 Schritte`}</td>
+          <td>{c.stepsDone === null ? 'keine Plattform-DB' : `${c.stepsDone} / ${data.stepsTotal} Schritte`}</td>
         </tr>
       {/each}
     </tbody>

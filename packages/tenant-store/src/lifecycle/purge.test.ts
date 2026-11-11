@@ -126,8 +126,9 @@ describe('the module Karenz residuals', () => {
       const res = PURGE_RESIDUAL.find((r) => r.catalogueRow === id)
       expect(res, id).toBeDefined()
       expect(res?.reason, id).toContain('karenz-run')
-      // the job is not in this tree yet: the ledger must say planned, not present tense
-      expect(res?.reason, id).toMatch(/planned/)
+      // the job is in this tree (gremion-karenz.timer): the ledger must say so, not "planned" or "not in this tree yet"
+      expect(res?.reason, id).toContain('gremion-karenz.timer')
+      expect(res?.reason, id).not.toMatch(/planned|not in this tree/i)
       expect(res?.reason, id).not.toMatch(/provisional/i)
     }
   })

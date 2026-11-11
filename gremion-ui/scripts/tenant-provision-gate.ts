@@ -8,7 +8,8 @@
 //   enable-module <slug> <module> --operator <uuid> [--actor-kind operator|person] [--dpia-json <file>]
 //       one module for an existing customer through the level-1 gate
 //   disable-module <slug> <module> --operator <uuid> [--actor-kind operator|person]
-//       one module off for an existing customer: export + verify, then drop (TRD-424); repeatable
+//       one module off for an existing customer: export + verify, then BLOCK the database for the
+//       30-day Karenz (module Karenz 2026-10-30; nothing is dropped, the day-30 job `karenz-run` drops it); repeatable
 //       --actor-kind person (default operator): --operator names a council admin, not an
 //       ops-realm operator (a verified council request; Karenz phase 1)
 //   dpia-record <slug> <module> --operator <uuid> --requires-dpia yes|no|not_applicable
@@ -27,7 +28,7 @@
 // H10-authenticated release tree. A refusal is an EnableRefused: exit 1 with
 // its code and reason on stderr (tenant-provision.ts's exit mapping).
 import { readFileSync } from 'node:fs'
-import { existsSync } from 'node:fs'
+import { assertMountedRoot, DEFAULT_MOUNTINFO_PATH } from '@gremion/storage'
 import type postgres from 'postgres'
 import {
   attestedEnablements,
@@ -64,7 +65,7 @@ export interface GateVerbContext {
   openPlatform(): postgres.Sql
   /** The customer id of a slug from the control registry, or null. */
   customerIdForSlug(slug: string): Promise<string | null>
-  /** Tests only: whether TENANT_EXPORT_DIR is its own mount (default: exportDirIsMounted over /proc/self/mountinfo). */
+  /** Tests only: whether TENANT_EXPORT_DIR is its own mount (default: exportDirRefusal over /proc/self/mountinfo). */
   exportDirMounted?: (dir: string) => boolean
   flag(name: string): string | undefined
   reqFlag(name: string): string
@@ -154,16 +155,26 @@ async function cmdEnableModule(ctx: GateVerbContext): Promise<void> {
 }
 
 /**
- * disableModule drops the module database after exporting it; the export must
- * outlive this one-shot container (docker compose run --rm). So the verb refuses,
+ * disableModule exports the module database and blocks it; the export is the 30-day backup and
+ * must outlive this one-shot container (docker compose run --rm). So the verb refuses,
  * before anything is touched, unless TENANT_EXPORT_DIR is its own mount.
+ *
+ * Returns why `dir` is not an acceptable export directory, or null when it is. The storage seam's own check (the day-30
+ * job deletes through it): a root it would refuse at day 30 (not a mount point, a memory-backed or root
+ * filesystem, an unreadable table) is refused here, before the database is blocked, and the seam's own reason
+ * is returned so the operator is told which of those it is. A host without a mount table cannot prove it,
+ * which is a refusal. `override` is the tests' stand-in for the check (a boolean has no reason of its own).
  */
-export function exportDirIsMounted(dir: string, mountinfo = '/proc/self/mountinfo'): boolean {
-  if (!existsSync(mountinfo)) return false
-  const want = dir.replace(/\/+$/, '')
-  return readFileSync(mountinfo, 'utf-8')
-    .split('\n')
-    .some((l) => l.split(' ')[4] === want)
+export function exportDirRefusal(dir: string, opts: { override?: (dir: string) => boolean; mountinfo?: string } = {}): string | null {
+  const { override, mountinfo = DEFAULT_MOUNTINFO_PATH } = opts
+  if (!dir) return 'TENANT_EXPORT_DIR is unset'
+  if (override) return override(dir) ? null : 'it is not a mounted volume'
+  try {
+    const c = assertMountedRoot(dir, mountinfo)
+    return c.checked ? null : c.reason
+  } catch (err) {
+    return err instanceof Error ? err.message : String(err)
+  }
 }
 
 async function cmdDisableModule(ctx: GateVerbContext): Promise<void> {
@@ -172,13 +183,15 @@ async function cmdDisableModule(ctx: GateVerbContext): Promise<void> {
   const op = operatorId(ctx)
   const kind = actorKind(ctx)
   const dir = process.env.TENANT_EXPORT_DIR ?? ''
-  if (!dir || !(ctx.exportDirMounted ?? exportDirIsMounted)(dir)) {
-    throw ctx.usage(`disable-module needs TENANT_EXPORT_DIR (${dir || 'unset'}) to be a mounted volume that outlives this container: the module database is dropped after its export; nothing was touched`)
+  const refusal = exportDirRefusal(dir, { override: ctx.exportDirMounted })
+  if (refusal !== null) {
+    throw ctx.usage(`disable-module needs TENANT_EXPORT_DIR (${dir || 'unset'}) to be a mounted volume that outlives this container: the module database is blocked after its export and the export is its 30-day backup; nothing was touched (${refusal})`)
   }
   await ctx.withLive({}, async (deps) => {
     const r = await disableCustomerModule(slug, moduleKey, { operatorId: op, actorKind: kind }, deps)
-    ctx.log(`disable-module ${slug} ${r.moduleKey} by ${kind} ${op}: ${r.noop ? 'already disabled' : 'disabled'}${r.export ? `; export ${r.export.path} sha256 ${r.export.sha256} (${r.export.bytes} bytes)` : ''}; broker ${r.reloaded ? 'reloaded' : 'unchanged'}`)
-    console.log(JSON.stringify({ verb: 'disable-module', slug, module: r.moduleKey, noop: r.noop, dropped: r.dropped, database: r.database, export: r.export, enabled: r.enabled, operatorId: op, actorKind: kind }))
+    const until = r.blocked && r.finalAt ? `; blocked until ${r.finalAt.toISOString().slice(0, 10)}` : ''
+    ctx.log(`disable-module ${slug} ${r.moduleKey} by ${kind} ${op}: ${r.noop ? 'already disabled' : 'disabled'}${until}${r.export ? `; export ${r.export.path} sha256 ${r.export.sha256} (${r.export.bytes} bytes)` : ''}; broker ${r.reloaded ? 'reloaded' : 'unchanged'}`)
+    console.log(JSON.stringify({ verb: 'disable-module', slug, module: r.moduleKey, noop: r.noop, dropped: r.dropped, blocked: r.blocked, finalAt: r.finalAt ?? null, database: r.database, export: r.export, enabled: r.enabled, operatorId: op, actorKind: kind }))
   })
 }
 

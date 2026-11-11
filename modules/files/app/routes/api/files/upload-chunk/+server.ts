@@ -24,7 +24,10 @@ function requireWrite(user: SessionUser): void {
 // would also need to write into that other user's path), so this regex is
 // defence-in-depth — restrict to a safe character set typical of UUID/ULID
 // upload IDs so the URL stays well-formed.
-const UPLOAD_ID_PATTERN = /^[A-Za-z0-9._-]{1,64}$/
+// The first character is alphanumeric: `.` and `..` fit the old set and, spliced
+// into /dav/uploads/<userId>/<uploadId>/, climb out of the caller's own upload
+// folder once fetch normalises the URL.
+const UPLOAD_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/
 
 export const POST: RequestHandler = async (event) => {
   const user = requireAuth(event)

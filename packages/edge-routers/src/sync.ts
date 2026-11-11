@@ -164,6 +164,8 @@ export function syncTenantRouters(opts: SyncTenantRoutersOptions): EdgeSyncRepor
       claim(nameOwner, r.name, t.slug, 'router name')
       claim(nameOwner, r.pin, t.slug, 'middleware name')
     }
+    // The /office routers carry names too (tenant-<slug>[-<i>].office): two tenants must not both own one.
+    for (const c of plan.collaboraRouters ?? []) claim(nameOwner, c.name, t.slug, 'router name')
     if (plan.routers.length > 0) claim(nameOwner, `edge-perip-${t.slug}`, t.slug, 'middleware name')
   }
 

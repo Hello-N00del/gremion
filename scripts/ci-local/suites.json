@@ -10,7 +10,7 @@
       "command": "pnpm run test:unit",
       "timeoutMs": 600000,
       "requiresStack": false,
-      "//": "TASK-205a/b: modules/<id>/app/** of every module the interim overlay enables (gremion-ui/scripts/interim-module-overlay.mjs; pretest:unit / pretest:browser copy app/** onto gremion-ui/src) runs here, so each enabled module's app tests are claimed per module. Their *.integration.test.ts run under kernel-ui-vitest-integration (pretest:integration overlays them too). content/app stays disabled (kernel-module-content-app-overlay-vitest).",
+      "//": "TASK-205a/b: modules/<id>/app/** of every module the interim overlay enables (gremion-ui/scripts/interim-module-overlay.mjs; pretest:unit / pretest:browser copy app/** onto gremion-ui/src) runs here, so each enabled module's app tests are claimed per module. Their *.integration.test.ts run under kernel-ui-vitest-integration (pretest:integration overlays them too), content/app's among them since content left modules/disabled.json; its unit tests stay claimed by kernel-module-content-app-overlay-vitest.",
       "testGlobs": [
         "gremion-ui/tests/unit/**/*.test.ts",
         "gremion-ui/src/**/*.test.ts",
@@ -40,6 +40,7 @@
         "gremion-ui/src/**/*.integration.test.ts",
         "modules/board/app/**/*.integration.test.ts",
         "modules/calendar/app/**/*.integration.test.ts",
+        "modules/content/app/**/*.integration.test.ts",
         "modules/elections/app/**/*.integration.test.ts",
         "modules/files/app/**/*.integration.test.ts",
         "modules/messaging/app/**/*.integration.test.ts",
@@ -263,7 +264,7 @@
       "command": "pnpm run test",
       "timeoutMs": 600000,
       "requiresStack": false,
-      "testGlobs": ["apps/control-panel/src/**/*.test.ts"]
+      "testGlobs": ["apps/control-panel/src/**/*.test.ts", "apps/control-panel/codemap/**/*.test.mjs"]
     },
     {
       "id": "kernel-module-board-unit",
@@ -366,17 +367,6 @@
       "timeoutMs": 600000,
       "testGlobs": ["modules/content/app/**/*.test.ts", "modules/vault/app/**/*.test.ts"],
       "excludeGlobs": ["modules/*/app/**/*.integration.test.ts"]
-    },
-    {
-      "id": "kernel-module-content-app-integration",
-      "repo": "kernel",
-      "category": "integration",
-      "cwd": "gremion-ui",
-      "kind": "vitest",
-      "command": "n/a (no runner for the disabled halves' integration tests)",
-      "unrunnable": "no runner: vitest.integration.config.ts collects the overlaid halves of the ENABLED modules; content is disabled (modules/disabled.json), so its *.integration.test.ts files (a scratch PostgreSQL and NATS) are collected by no config. Give the module lane an integration project, then replace this field with a command.",
-      "requiresStack": true,
-      "testGlobs": ["modules/content/app/**/*.integration.test.ts"]
     },
     {
       "id": "kernel-module-elections-unit",
@@ -527,6 +517,17 @@
       "requiresStack": false,
       "testGlobs": ["services/kernel-api/test/**/*.test.ts"],
       "excludeGlobs": ["services/kernel-api/test/**/*.int.test.ts"]
+    },
+    {
+      "id": "kernel-governance-unit",
+      "repo": "kernel",
+      "category": "unit",
+      "cwd": "services/governance",
+      "kind": "vitest",
+      "command": "pnpm run test",
+      "timeoutMs": 600000,
+      "requiresStack": false,
+      "testGlobs": ["services/governance/test/**/*.test.ts"]
     },
     {
       "id": "kernel-kernel-api-integration",
@@ -718,7 +719,18 @@
       "command": "pnpm run test:integration",
       "timeoutMs": 600000,
       "requiresStack": true,
-      "testGlobs": ["packages/tenant-store/test/integration/**/*.test.ts"]
+      "testGlobs": ["packages/tenant-store/test/integration/**/*.test.ts", "packages/tenant-store/test/isolation-evidence-producer.test.ts"]
+    },
+    {
+      "id": "kernel-tenant-store-t084-integration",
+      "repo": "kernel",
+      "category": "integration",
+      "cwd": "packages/tenant-store",
+      "kind": "vitest",
+      "command": "pnpm run test:t084",
+      "timeoutMs": 600000,
+      "requiresStack": false,
+      "testGlobs": ["packages/tenant-store/test/t084/**/*.test.ts"]
     },
     {
       "id": "kernel-tokens-node-test",

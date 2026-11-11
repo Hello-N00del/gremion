@@ -14,7 +14,8 @@
 //   render-router <slug>                            the edge router document on STDOUT (Q17)
 //   suspend <slug> --operator <uuid>                status, realm, broker (the host then revokes the principal)
 //   resume <slug> --operator <uuid>                 stamp verified, realm, broker, status last
-//   reconcile [--verify-only] <slug>|--all          the realm contract incl. smtp-server (repair: host), plus the kernel audit-append-only check
+//   reconcile [--verify-only] <slug>|--all          the realm contract incl. smtp-server (repair: host), plus the kernel audit-append-only,
+//                                                   purger-connect and kernel-api-nats-seed checks (apply re-ensures what an older release never gave)
 //   status <slug>                                   provisioning status JSON on STDOUT
 //   operator-add <email> [--no-mail]                an operator in the ops realm `platform` (Q5, Q23)
 //   delete <slug>                                   crypto-shred delete (kernel database by tenant id)
@@ -31,10 +32,10 @@
 // one-time secrets); every log line goes to STDERR. EXIT: 0 ok, 1 a failure,
 // 2 usage or a precondition (a missing environment variable is always named).
 import { createHash, randomBytes } from 'node:crypto'
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import postgres from 'postgres'
-import { handConfigToReader, handToReader, isTenantConfigPath, writeReaderConfigFile } from './tenant-secret-file'
+import { handConfigToReader, handToReader, isTenantConfigPath, writeGovernanceCredentialFile, writeReaderConfigFile } from './tenant-secret-file'
 import {
   bootstrapPlatform,
   ACCESS_READER_ROLE,
@@ -69,6 +70,7 @@ import {
 } from '@gremion/provisioning'
 import {
   assertPlatform,
+  dropGovernanceDatabase,
   dropKernelDatabase,
   ensureKernelApiReader,
   KERNEL_API_READS,
@@ -92,8 +94,10 @@ import {
   type Tenant,
 } from '../src/lib/server/tenant/registry'
 import { KcProvisionApi, masterAdminClientId, type KcTransport } from '../src/lib/server/tenant/provisioner/kc-admin-api'
-import { customerAdapters, kernelServer, reconcileKernelAudit } from '../src/lib/server/tenant/provisioner/customer-adapters'
+import { customerAdapters, governanceServer, kernelServer, reconcileKernelAudit } from '../src/lib/server/tenant/provisioner/customer-adapters'
+import { kernelApiSeedDeps, reconcileKernelApiSeed, reconcilePurgerConnect } from '../src/lib/server/tenant/provisioner/reconcile-reensure'
 import { fixtureIdentities } from '../src/lib/server/tenant/provisioner/fixture-identities'
+import { frontendUrlFor } from '../src/lib/server/tenant/provisioner/realm-doc'
 import {
   reconcileRealm,
   reconcileFleet,
@@ -108,6 +112,7 @@ import { deleteTenant, type DeleteDeps, type LeafShredExecutor } from '../src/li
 import { requestVerb } from './tenant-provision-requests'
 import { GATE_USAGE, GATE_VERBS, refusalLine, runGateVerb } from './tenant-provision-gate'
 import { EXPORT_USAGE, EXPORT_VERBS, exportVerb } from './tenant-provision-export'
+import { KARENZ_USAGE, KARENZ_VERBS, karenzVerb, liveModuleDatabases, liveModuleDatabasesRefusal } from './tenant-provision-karenz'
 import { IMPORT_USAGE, IMPORT_VERBS, importVerb } from './tenant-provision-import'
 import { PURGE_USAGE, PURGE_VERBS, purgeVerb } from './tenant-provision-purge'
 import { parseDpiaMap, scratchFixturesAllowed } from './tenant-provision-scratch'
@@ -189,6 +194,8 @@ function releaseTip(): string | null {
 function assertCreateEnv(catalogue: readonly LifecycleModule[], opts: { needEdge: boolean }): void {
   directPostgresUrl('PLATFORM_DATABASE_URL', reqEnv('PLATFORM_DATABASE_URL'))
   directPostgresUrl('KERNEL_PG_ADMIN_FILE', reqFileEnv('KERNEL_PG_ADMIN_FILE'))
+  directPostgresUrl('GOVERNANCE_PG_ADMIN_FILE', reqFileEnv('GOVERNANCE_PG_ADMIN_FILE'))
+  governanceSecretsDir()
   for (const id of modulePostgresIds(catalogue)) {
     directPostgresUrl(`MODULE_PG_ADMIN_${envId(id)}_FILE`, reqFileEnv(`MODULE_PG_ADMIN_${envId(id)}_FILE`))
     reqFileEnv(`MODULE_APP_PASSWORD_${envId(id)}_FILE`)
@@ -231,6 +238,48 @@ function writeSecretFile(hostPath: string, value: string): Promise<void> {
   return Promise.resolve()
 }
 const tenantSecretsDir = () => process.env.TENANT_SECRETS_DIR ?? join(repoRoot, 'secrets', 'tenants')
+
+/** True when `a` and `b` are the same directory or one contains the other (path math only). */
+function pathsOverlap(a: string, b: string): boolean {
+  const inside = (parent: string, child: string) => {
+    const rel = relative(resolve(parent), resolve(child))
+    // only a real parent step ('..' or '..' + separator) means outside; a child NAMED '..x' is inside
+    return rel === '' || (rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel))
+  }
+  return inside(a, b) || inside(b, a)
+}
+
+/**
+ * TASK-084-a: the directory of the per-customer governance credential files
+ * (GOVERNANCE_SECRETS_DIR, the container path of the rw mount): it must exist
+ * (the host creates it, gremion-tenant), and it must not be, contain or sit
+ * inside TENANT_SECRETS_DIR, whose read-only mounts on gremion-ui, kernel-api
+ * and kernel-api-migrate would otherwise expose every governance credential. Exit 2,
+ * both variables named, before any connection. The files go to the deploy
+ * user's uid:gid (the host backup copies them); the hand-over to the
+ * governance image's own uid is 084-b (GOVERNANCE_SECRETS_UID, DV4).
+ */
+function governanceSecretsDir(): string {
+  const dir = reqEnv('GOVERNANCE_SECRETS_DIR')
+  if (!existsSync(dir) || !statSync(dir).isDirectory()) throw new UsageError(`GOVERNANCE_SECRETS_DIR names ${dir}, which is not an existing directory (gremion-tenant creates it)`)
+  if (pathsOverlap(dir, tenantSecretsDir())) {
+    throw new UsageError(`GOVERNANCE_SECRETS_DIR (${dir}) and TENANT_SECRETS_DIR (${tenantSecretsDir()}) must be separate directories: neither may equal or contain the other`)
+  }
+  return dir
+}
+
+/** What a verb that never reaches the governance server hands the adapters (same convention as `status`): nothing real is behind them. */
+const UNUSED_POSTGRES_URL = 'postgres://unused@127.0.0.1/unused'
+const UNUSED_DIR = '/nonexistent'
+
+/** A governance credential file: 0600, atomic (tmp + rename), handed to the deploy user's uid:gid so the host backup can read it. */
+function writeGovernanceSecretFile(hostPath: string, value: string): Promise<void> {
+  writeGovernanceCredentialFile(hostPath, value, { warn: log })
+  return Promise.resolve()
+}
+
+/** services/governance/migrations as shipped in the image (the Dockerfile copies it beside the app). */
+const governanceMigrationsDir = () => join(repoRoot, 'services', 'governance', 'migrations')
 
 /** The tenant's config.json, atomically (tmp + rename in the same directory), owned by the reader (#49). */
 function writeConfigFile(path: string, text: string): void {
@@ -429,13 +478,20 @@ function moduleServerFor(adminUrl: string): ModuleServer & { close(): Promise<vo
  * the one-shot alive after the error. `needEdge`: only phase A binds a domain
  * (the DNS pre-flight); suspend/resume/record-step never read EDGE_BIND_IP.
  */
-function resolveLiveEnv(needEdge: boolean) {
+function resolveLiveEnv(needEdge: boolean, needGovernance: boolean) {
+  // `needGovernance`: only create (phase A makes the customer's governance database and credential file)
+  // reads the governance server. Every other live verb (suspend, resume, activate, record-step, the gate,
+  // import and Karenz verbs) must keep working on a host that has not brought the governance server up
+  // yet, so it neither requires GOVERNANCE_PG_ADMIN_FILE nor touches GOVERNANCE_SECRETS_DIR. `delete`
+  // reads them itself (it drops the governance database).
   return {
     platformUrl: directPostgresUrl('PLATFORM_DATABASE_URL', reqEnv('PLATFORM_DATABASE_URL')),
     platformDomain: reqEnv('PLATFORM_DOMAIN'),
     apexDomain: apexDomain(),
     runtimeDatabaseUrl: reqEnv('DATABASE_URL'),
     kernelAdminUrl: directPostgresUrl('KERNEL_PG_ADMIN_FILE', reqFileEnv('KERNEL_PG_ADMIN_FILE')),
+    governanceAdminUrl: needGovernance ? directPostgresUrl('GOVERNANCE_PG_ADMIN_FILE', reqFileEnv('GOVERNANCE_PG_ADMIN_FILE')) : UNUSED_POSTGRES_URL,
+    governanceSecretsDir: needGovernance ? governanceSecretsDir() : UNUSED_DIR,
     exportDir: reqEnv('TENANT_EXPORT_DIR'),
     releaseRef: releaseRef(),
     edge: needEdge ? edgeAddresses() : null,
@@ -450,9 +506,9 @@ function mailStampExpectation(): MailStampExpectation {
   return s.mode === 'relay' ? { mode: 'relay', host: s.host, port: s.port, fromAddress: s.fromAddress, user: s.user } : { mode: 'stalwart' }
 }
 
-async function liveDeps(opts: { configFile?: string; bodyName?: string; needEdge?: boolean } = {}): Promise<Live> {
+async function liveDeps(opts: { configFile?: string; bodyName?: string; needEdge?: boolean; needGovernance?: boolean } = {}): Promise<Live> {
   const catalogue = loadModules()
-  const env = resolveLiveEnv(opts.needEdge ?? false)
+  const env = resolveLiveEnv(opts.needEdge ?? false, opts.needGovernance ?? false)
   const kc = provisionerKc(env.creds)
   const adminKc = adminKcOrUndefined()
   const servers = new Map<string, ReturnType<typeof moduleServerFor>>()
@@ -471,6 +527,11 @@ async function liveDeps(opts: { configFile?: string; bodyName?: string; needEdge
       tenantSecretsDir: tenantSecretsDir(),
       runtimeDatabaseUrl: env.runtimeDatabaseUrl,
       kernelAdminUrl: env.kernelAdminUrl,
+      governanceAdminUrl: env.governanceAdminUrl,
+      governanceSecretsDir: env.governanceSecretsDir,
+      governanceMigrationsDir: governanceMigrationsDir(),
+      releaseRef: env.releaseRef,
+      writeGovernanceSecretFile,
       configFile: opts.configFile ?? '/nonexistent',
       bodyName: opts.bodyName ?? 'Rat',
       edge: env.edge,
@@ -542,7 +603,7 @@ async function liveDeps(opts: { configFile?: string; bodyName?: string; needEdge
   }
 }
 
-async function withLive<T>(opts: { configFile?: string; bodyName?: string; needEdge?: boolean }, fn: (deps: ProvisioningDeps) => Promise<T>): Promise<T> {
+async function withLive<T>(opts: { configFile?: string; bodyName?: string; needEdge?: boolean; needGovernance?: boolean }, fn: (deps: ProvisioningDeps) => Promise<T>): Promise<T> {
   const live = await liveDeps(opts)
   try {
     return await fn(live.deps)
@@ -583,6 +644,8 @@ async function ensureOpsRealm(kc: KcProvisionApi, raw: KcTransport): Promise<{ c
   const origin = panelOrigin()
   const templateText = readFileSync(join(kcDir, 'realm-export.ops.json'), 'utf-8')
   const fingerprint = createHash('sha256').update(templateText).update('\n').update(origin).digest('hex')
+  // The admin calls use Keycloak's internal address: without this, mailed links name that address.
+  const frontendUrl = frontendUrlFor(reqEnv('PLATFORM_DOMAIN'), OPS_REALM)
   if (await kc.realmExists(OPS_REALM)) {
     const rep = (await raw('GET', `/admin/realms/${OPS_REALM}`)) as { attributes?: Record<string, string> }
     const have = rep?.attributes?.[OPS_FINGERPRINT_ATTR]
@@ -591,6 +654,10 @@ async function ensureOpsRealm(kc: KcProvisionApi, raw: KcTransport): Promise<{ c
       // setup that failed after createRealm must not stay missing because the
       // fingerprint (imported with the realm) already matches.
       await kc.configureStepupFlow(OPS_REALM)
+      if (rep?.attributes?.frontendUrl !== frontendUrl) {
+        await raw('PUT', `/admin/realms/${OPS_REALM}`, { realm: OPS_REALM, attributes: { ...rep?.attributes, frontendUrl } })
+        log(`ops realm ${OPS_REALM}: frontendUrl set to ${frontendUrl}`)
+      }
       return { created: false }
     }
     throw new ProvisioningError('PRECONDITION', `realm ${OPS_REALM} exists but differs from realm-export.ops.json for panel origin ${origin} (fingerprint ${have ?? 'absent'}): refusing to overwrite an ops realm by hand`)
@@ -606,7 +673,7 @@ async function ensureOpsRealm(kc: KcProvisionApi, raw: KcTransport): Promise<{ c
   client.redirectUris = [`${origin}/*`]
   client.webOrigins = [origin]
   client.attributes = { ...(client.attributes as Record<string, string>), 'post.logout.redirect.uris': `${origin}/*` }
-  doc.attributes = { ...doc.attributes, [OPS_FINGERPRINT_ATTR]: fingerprint }
+  doc.attributes = { ...doc.attributes, [OPS_FINGERPRINT_ATTR]: fingerprint, frontendUrl }
   await writeSecretFile(secretPath, secret)
   await kc.createRealm(doc)
   await kc.configureStepupFlow(OPS_REALM)
@@ -708,7 +775,7 @@ async function cmdPhase(which: 'a' | 'b'): Promise<void> {
   const spec = createSpec(slug)
   assertCreateEnv(loadModules(), { needEdge: true })
   // domain_bound (phase A) runs the DNS pre-flight: both create phases resolve EDGE_BIND_IP.
-  await withLive({ configFile: spec.configFile, bodyName: spec.bodyName, needEdge: true }, async (deps) => {
+  await withLive({ configFile: spec.configFile, bodyName: spec.bodyName, needEdge: true, needGovernance: true }, async (deps) => {
     if (which === 'a') {
       const r = await createPhaseA(spec, deps)
       log(`phase A ${slug}: ran [${r.run.ran.join(', ')}], skipped [${r.run.skipped.join(', ')}]${r.registered ? ' (control row registered)' : ''}`)
@@ -790,6 +857,11 @@ async function cmdStatus(): Promise<void> {
       tenantSecretsDir: tenantSecretsDir(),
       runtimeDatabaseUrl: reqEnv('DATABASE_URL'),
       kernelAdminUrl: 'postgres://unused@127.0.0.1/unused',
+      governanceAdminUrl: 'postgres://unused@127.0.0.1/unused',
+      governanceSecretsDir: '/nonexistent',
+      governanceMigrationsDir: '/nonexistent',
+      releaseRef: 'unused',
+      writeGovernanceSecretFile,
       configFile: '/nonexistent',
       bodyName: 'Rat',
       edge: null,
@@ -880,10 +952,18 @@ async function reconcileOne(tenant: Tenant, base: Record<string, unknown>, verif
   const realm = await reconcileRealmOnly(tenant, base, verifyOnly)
   // TASK-033-a: the kernel audit record is append-only (RC-GOV-CHAIN). The privilege lives in the customer's
   // kernel database, so it is one DB-level check appended to the realm report: verify reads, apply re-asserts.
+  // Kernel issues #88/#89: provisioning a later release extended is re-applied to customers created earlier.
+  // Two more checks, each a read of the post-condition (verify) plus an idempotent repair (apply): the purger's
+  // CONNECT on this customer's kernel database, and its kernel-api NATS seed (the registry's CURRENT module set
+  // read from the platform database, never a guessed list). Both pools connect lazily.
+  const platform = openPlatformPool()
   const server = kernelServer(directPostgresUrl('KERNEL_PG_ADMIN_FILE', reqFileEnv('KERNEL_PG_ADMIN_FILE')))
   try {
-    return await reconcileKernelAudit(realm, server, tenant.id, verifyOnly)
+    const audited = await reconcileKernelAudit(realm, server, tenant.id, verifyOnly)
+    const purger = await reconcilePurgerConnect(audited, server, tenant.id, verifyOnly)
+    return await reconcileKernelApiSeed(purger, tenant, kernelApiSeedDeps(platform), verifyOnly)
   } finally {
+    await platform.end({ timeout: 5 }).catch(() => {})
     await server.close()
   }
 }
@@ -960,11 +1040,27 @@ async function cmdDelete(): Promise<void> {
   const slug = slugArg('delete')
   const kc = provisionerKc()
   const server = kernelServer(directPostgresUrl('KERNEL_PG_ADMIN_FILE', reqFileEnv('KERNEL_PG_ADMIN_FILE')))
+  // TASK-084-a: phase A made a governance database and a credential file for the customer; delete drops both.
+  // Named and checked BEFORE anything is shredded, like the kernel server's own variable.
+  let govServer: ReturnType<typeof governanceServer>
+  let govDir: string
+  try {
+    govServer = governanceServer(directPostgresUrl('GOVERNANCE_PG_ADMIN_FILE', reqFileEnv('GOVERNANCE_PG_ADMIN_FILE')))
+    govDir = governanceSecretsDir()
+  } catch (err) {
+    await server.close()
+    throw err
+  }
+  const closeServers = async () => {
+    await server.close()
+    await govServer.close()
+  }
   // Never report DELETED while the customer's data survives (review B2, r2).
   // Refused BEFORE anything is shredded: a pre-TASK-043 t_<slug> database
   // (dropKernelDatabase only knows t_<hex32>__kernel), and live per-customer
-  // module databases (delete has no module drop yet: the disable verb is
-  // TASK-044/077's). Both are named residuals, never silent.
+  // module databases (delete has no module drop: a switched-off module's
+  // database is dropped by the Karenz day-30 job, karenz-run). Both are named
+  // residuals, never silent.
   const tenant = await getTenantBySlug(slug)
   if (tenant && tenant.status !== 'deleted') {
     try {
@@ -976,22 +1072,20 @@ async function cmdDelete(): Promise<void> {
       if (!platformUrl) throw new UsageError('delete needs PLATFORM_DATABASE_URL to prove the customer has no enabled module database left')
       const platform = postgres(directPostgresUrl('PLATFORM_DATABASE_URL', platformUrl), { max: 1, onnotice: () => {}, connect_timeout: 15 })
       try {
-        const live = await platform<{ module_key: string }[]>`
-          SELECT m.module_key FROM plt.module_database d JOIN plt.module m USING (module_id)
-           WHERE d.customer_id = ${tenant.id} AND d.state <> 'dropped' ORDER BY 1`
-        if (live.length) {
-          throw new UsageError(`${slug} has module(s) ${live.map((r) => r.module_key).join(', ')} enabled with their own databases; delete does not drop module databases yet -- disable them first (TASK-044/077), then rerun delete`)
-        }
+        // Not-dropped module databases include the BLOCKED ones of a switch-off inside its 30-day Karenz.
+        const live = await liveModuleDatabases(platform, tenant.id)
+        if (live.length) throw new UsageError(liveModuleDatabasesRefusal(slug, live))
       } finally {
         await platform.end({ timeout: 5 })
       }
     } catch (err) {
-      await server.close()
+      await closeServers()
       throw err
     }
   }
   const leaf = makeLeafShredExecutor()
   const kernelDb: { dropped: boolean | null } = { dropped: null }
+  const govDb: { dropped: boolean | null } = { dropped: null }
   const deps: DeleteDeps = {
     shredSecretFiles: (paths) => {
       for (const p of paths) if (existsSync(p)) rmSync(p, { force: true })
@@ -1001,18 +1095,23 @@ async function cmdDelete(): Promise<void> {
       dropKernelDatabase: async (tenantId) => {
         kernelDb.dropped = (await dropKernelDatabase(server, tenantId)).dropped
       },
+      dropGovernanceDatabase: async (tenantId) => {
+        govDb.dropped = (await dropGovernanceDatabase(govServer, tenantId)).dropped
+      },
     },
     kc: { deleteRealm: (realm) => kc.deleteRealm(realm) },
     registry: { getTenantBySlug, updateTenantStatus, markTenantResourceFailed, evictTenantRuntime },
     tenantSecretsDir: tenantSecretsDir(),
+    governanceSecretsDir: govDir,
     ...(leaf ? { leaf } : {}),
   }
   try {
     const result = await deleteTenant(slug, deps)
     const kernel = kernelDb.dropped === true ? 'kernel database dropped' : kernelDb.dropped === false ? 'no kernel database was present' : 'kernel database not touched'
-    log(result.shredded ? `${slug} DELETED (${result.shreddedPaths.length} secret file(s) shredded, ${kernel}, realm dropped, row tombstoned)` : `${slug} is already a tombstone`)
+    const governance = govDb.dropped === true ? 'governance database dropped' : govDb.dropped === false ? 'no governance database was present' : 'governance database not touched'
+    log(result.shredded ? `${slug} DELETED (${result.shreddedPaths.length} secret file(s) shredded, ${kernel}, ${governance}, realm dropped, row tombstoned)` : `${slug} is already a tombstone`)
   } finally {
-    await server.close()
+    await closeServers()
   }
 }
 
@@ -1072,7 +1171,8 @@ const USAGE = `usage: tenant-create <verb> ...
 ${GATE_USAGE}
 ${IMPORT_USAGE}
 ${PURGE_USAGE}
-${EXPORT_USAGE}`
+${EXPORT_USAGE}
+${KARENZ_USAGE}`
 
 async function main(): Promise<void> {
   const verb = process.argv[2]
@@ -1160,6 +1260,18 @@ async function main(): Promise<void> {
         args: process.argv.slice(3),
         openPlatform: openPlatformPool,
         openKernelServer: () => kernelServer(directPostgresUrl('KERNEL_PG_ADMIN_FILE', reqFileEnv('KERNEL_PG_ADMIN_FILE'))),
+        usage: (m) => new UsageError(m),
+        log,
+      })
+    // module Karenz day 30 + the operator's view of it (tenant-provision-karenz.ts), run by the host's timer
+    case 'karenz-run':
+    case 'karenz-status':
+      if (!KARENZ_VERBS.has(verb)) throw new UsageError(`unknown verb ${verb}`)
+      return karenzVerb(verb, {
+        args: process.argv.slice(3),
+        withLive,
+        openPlatform: openPlatformPool,
+        customerIdForSlug: async (s) => (await getTenantBySlug(s))?.id ?? null,
         usage: (m) => new UsageError(m),
         log,
       })

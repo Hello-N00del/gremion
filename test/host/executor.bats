@@ -51,7 +51,7 @@ TRAEFIK_CERT_RESOLVER=le-http
 EDGE_BIND_IP=192.0.2.10
 EDGE_BIND_IP6=2001:db8::a
 ENV
-    printf 'STACK=guardstack\nCOLOUR=blue\n' > "${GREMION_ROOT}/etc/env/app-blue.env"
+    printf 'STACK=guardstack\nCOLOUR=blue\nTENANT_SECRETS_DIR=%s/tenant-secrets\n' "$GREMION_ROOT" > "${GREMION_ROOT}/etc/env/app-blue.env"
     cp "${FIX}/verdict-create-ok.json" "${GREMION_ROOT}/verdict.json"
     shim docker "exec bash '${FIX}/docker-shim' \"\$@\""
     shim flock '[ -f "$GREMION_ROOT/lock-held" ] && exit 1; exit 0'
@@ -238,6 +238,31 @@ outcome() { cat "${GREMION_ROOT}/outcome" 2>/dev/null || true; }
     [ ! -e "${GREMION_ROOT}/etc/edge/tenant-alpha-rat.yml" ]
 }
 
+@test "create host tie: a host other than PILOT_TENANT_HOST fails before phase A and the events name both hosts" {
+    echo 'PILOT_TENANT_HOST=rat.other.example' >> "${GREMION_ROOT}/etc/env/state.env"
+    queue create
+    run "$EXEC" --once
+    [ "$status" -eq 1 ] || { echo "status=$status $output"; steps; return 1; }
+    run steps
+    [[ "$output" != *"phase-a"* && "$output" != *"vendor-mail"* && "$output" != *"phase-b"* ]] || { echo "$output"; return 1; }
+    [ "${lines[-1]}" = "psql finish failed" ]
+    grep -q '^error .*rat\.alpha\.example.*rat\.other\.example' "${GREMION_ROOT}/events.log" || { cat "${GREMION_ROOT}/events.log"; return 1; }
+}
+
+@test "create host tie: the same host (any case) runs the create; an unset or placeholder PILOT_TENANT_HOST ties nothing" {
+    local v
+    for v in 'PILOT_TENANT_HOST=Rat.Alpha.Example' 'PILOT_TENANT_HOST=' 'PILOT_TENANT_HOST=CHANGE_ME_OPERATOR_pilot_tenant_host'; do
+        echo "$v" >> "${GREMION_ROOT}/etc/env/state.env"
+        queue create
+        run "$EXEC" --once
+        [ "$status" -eq 0 ] || { echo "value ${v}: status=$status $output"; steps; return 1; }
+        run steps
+        [[ "$output" == *"tc phase-a alpha-rat"* ]] || { echo "value ${v}: $output"; return 1; }
+        : > "$ORDER"
+        sed -i '/^PILOT_TENANT_HOST=/d' "${GREMION_ROOT}/etc/env/state.env"
+    done
+}
+
 @test "a line carrying a credential never reaches an event or the audit log" {
     touch "${GREMION_ROOT}/leak"
     queue create
@@ -314,8 +339,9 @@ outcome() { cat "${GREMION_ROOT}/outcome" 2>/dev/null || true; }
 
 # A7 (last case): customers are created and operated in the panel. No guarded
 # document names a gremion-tenant customer verb as an operator step outside
-# the ONE decommission note (docs/runbooks/tenant-lifecycle.md).
-@test "A7 docs guard: no gremion-tenant (create|suspend|resume|reconcile|status) outside the decommission note" {
+# the ONE decommission note (docs/runbooks/tenant-lifecycle.md). `reconcile`
+# is exempt: it is the supported operator verb the upgrade runbook runs (step 8).
+@test "A7 docs guard: no gremion-tenant (create|suspend|resume|status) outside the decommission note" {
     local root="${KERNEL_ROOT}" hits f
     local -a files=()
     while IFS= read -r f; do files+=("$f"); done < <(find "${root}/docs" -name '*.md' -type f)
@@ -326,11 +352,24 @@ outcome() { cat "${GREMION_ROOT}/outcome" 2>/dev/null || true; }
         hits+="$(awk -v F="${f#"${root}"/}" '
             /<!-- gremion-tenant decommission note \(R31-I4\) -->/ { inside = 1; next }
             /<!-- \/gremion-tenant decommission note -->/ { inside = 0; next }
-            !inside && /gremion-tenant (create|suspend|resume|reconcile|status)/ { printf "%s:%d: %s\n", F, NR, $0 }' "$f")"
+            !inside && /gremion-tenant (create|suspend|resume|status)/ { printf "%s:%d: %s\n", F, NR, $0 }' "$f")"
     done
     [ -z "$hits" ] || { echo "$hits"; return 1; }
     # the note exists exactly once
     [ "$(grep -rl --include='*.md' 'gremion-tenant decommission note (R31-I4)' "${root}/docs" | wc -l)" -eq 1 ]
+}
+
+# Kernel #103 review: `reconcile --apply` repairs an account only when its check reports a gap, and that check never
+# looks at JetStream streams, so after a JetStream loss it reports ok and recreates nothing. The dead-letter
+# runbook's rebuild section must keep the explicit `nats-auth ensure` step and must not hand the step to reconcile.
+@test "docs guard: the JetStream rebuild runbook keeps the explicit ensure step and does not delegate it to reconcile" {
+    local sec
+    sec="$(awk '/^## 4\. Rebuild after JetStream was lost/ { on = 1; next } on && /^## / { exit } on' "${KERNEL_ROOT}/docs/runbooks/dead-letter.md" | tr -d '\r' | tr '\n' ' ')"
+    [ -n "$sec" ]
+    [[ "$sec" == *"nats-auth ensure <slug> --modules <modules>"* ]]
+    [[ "$sec" == *"does not replace this step"* ]]
+    [[ "$sec" != *"reconcile <slug> --apply\` does this"* ]]
+    [[ "$sec" != *"needs no hand-written one"* ]]
 }
 
 # ---------------------------------------------------------------------------

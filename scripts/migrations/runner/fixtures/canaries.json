@@ -42,6 +42,11 @@
       "sql": "-- gremion:phase contract\nSET LOCAL lock_timeout = '5s';\nDROP TABLE canary_t;\n"
     },
     {
+      "name": "expand-set-expression-existing-table",
+      "expect": "set-expression",
+      "sql": "-- gremion:phase expand\nSET LOCAL lock_timeout = '5s';\nALTER TABLE canary_t ALTER COLUMN canary_c SET EXPRESSION AS (1);\n"
+    },
+    {
       "name": "expand-same-file-table",
       "expect": null,
       "sql": "-- gremion:phase expand\nSET LOCAL lock_timeout = '5s';\nCREATE TABLE canary_new (id int);\nCREATE INDEX canary_new_idx ON canary_new (id);\nCREATE TRIGGER canary_trg BEFORE UPDATE ON canary_new FOR EACH ROW EXECUTE FUNCTION canary_fn();\nALTER TABLE canary_new ENABLE ROW LEVEL SECURITY;\nINSERT INTO canary_new (id) VALUES (1);\nALTER TABLE canary_old ADD COLUMN canary_c text;\n"

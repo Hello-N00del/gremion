@@ -234,8 +234,9 @@ test('guard 2: the five markers sit where the render substitutes them, and no ot
   assert.equal(acme?.email, '@ACME_EMAIL@')
   assert.equal(acme?.caServer, '@ACME_CA_SERVER@')
   assert.deepEqual(doc.entryPoints?.websecure?.forwardedHeaders?.trustedIPs, ['127.0.0.1/32', '@EDGE_V4_SUBNET@', '@EDGE_V6_SUBNET@'])
-  const found = [...new Set(staticText().match(/@[A-Z][A-Z0-9_]*@/g) ?? [])].sort()
-  assert.deepEqual(found, [...MARKERS].sort())
+  const byCodeUnit = (a, b) => (a < b ? -1 : a > b ? 1 : 0)
+  const found = [...new Set(staticText().match(/@[A-Z][A-Z0-9_]*@/g) ?? [])].sort(byCodeUnit)
+  assert.deepEqual(found, [...MARKERS].sort(byCodeUnit))
   // Incident 2026-10-29: the docker provider reads only its own stack's containers.
   assert.equal(doc.providers?.docker?.constraints, 'Label(`org.gremion.stack`,`@STACK@`)')
 })
@@ -414,4 +415,147 @@ test('guard 6: the production traefik labels declare every <name>@docker the ten
   )
   const missing = [...chained].filter((n) => !declared.has(n)).sort((a, b) => a.localeCompare(b))
   assert.deepEqual(missing, [], `tenant routers chain ${missing.map((n) => `${n}@docker`).join(', ')}, which the production traefik service does not declare: Traefik reports "middleware does not exist", disables the router and the customer host answers 404`)
+})
+
+// ── 7. the pilot's services: routers, ports and the labels that make them live ──
+//
+// The pilot adds three Traefik-labelled containers to the state project: matrix (/_matrix on the
+// platform host), livekit (/livekit-sfu on the platform host, RTC ports on the edge addresses)
+// and collabora (a docker-label SERVICE the per-tenant /office routers of @gremion/edge-routers
+// target). Rendered with their profiles on, never read off the source:
+//   - every one carries traefik.enable, org.gremion.stack (a stack-constrained Traefik never sees
+//     a container without it: a silent 404), traefik.docker.network=${STACK}_edge and is ON that
+//     network (a container on two networks must name the one Traefik reaches it on);
+//   - a public router names an explicit tls.certresolver (tls=true alone serves the default
+//     certificate, silently), websecure, and a chain whose every member the TRAEFIK service
+//     declares (spec B B-09: a state container's own middleware vanishes with it);
+//   - /_matrix and /livekit-sfu are the only prefixes, and neither is /_synapse, /livekit or a bare
+//     host rule; collabora has NO public router at all, only its service and a loopback-only anchor;
+//   - LiveKit publishes 7881/tcp and 45000-45100/udp on EDGE_BIND_IP and [EDGE_BIND_IP6] only.
+
+const PILOT_PROFILES = 'production,messaging,nextcloud,collabora,video'
+const pilotState = () => renderState({ env: { COMPOSE_PROFILES: PILOT_PROFILES } })
+const routerKeys = (labels, router) =>
+  Object.fromEntries(
+    Object.entries(labels)
+      .filter(([k]) => k.startsWith(`traefik.http.routers.${router}.`))
+      .map(([k, v]) => [k.slice(`traefik.http.routers.${router}.`.length), String(v)]),
+  )
+const routerNames = (labels) => [...new Set(Object.keys(labels).map((k) => /^traefik\.http\.routers\.([^.]+)\./.exec(k)?.[1]).filter(Boolean))]
+
+test('guard 7: matrix, livekit and collabora are routed by label correctly, and LiveKit binds the edge addresses only', () => {
+  const r = pilotState()
+  const env = fixtureEnv()
+  const stack = env.STACK
+  const domain = env.PLATFORM_DOMAIN
+  const declaredOnTraefik = new Set(
+    Object.keys(r.services.traefik.labels ?? {})
+      .map((k) => /^traefik\.http\.middlewares\.([^.]+)\./.exec(k)?.[1])
+      .filter(Boolean),
+  )
+  for (const name of ['matrix', 'livekit', 'collabora']) {
+    const svc = r.services[name]
+    assert.ok(svc, `${name} is absent from the profile-on render`)
+    const l = svc.labels ?? {}
+    assert.equal(l['traefik.enable'], 'true', `${name}: traefik.enable`)
+    assert.equal(l['org.gremion.stack'], stack, `${name}: org.gremion.stack`)
+    assert.equal(l['traefik.docker.network'], `${stack}_edge`, `${name}: traefik.docker.network`)
+    assert.ok(Object.keys(svc.networks ?? {}).includes('edge'), `${name} is not on the edge network it is routed on`)
+  }
+  // matrix: /_matrix only (federation is off; /_synapse carries the admin API and is never public)
+  const mx = routerKeys(r.services.matrix.labels, 'matrix')
+  assert.equal(mx.rule, `Host(\`${domain}\`) && PathPrefix(\`/_matrix\`)`)
+  assert.deepEqual(routerNames(r.services.matrix.labels), ['matrix'])
+  assert.equal(r.services.matrix.labels['traefik.http.services.matrix.loadbalancer.server.port'], '8008')
+  // livekit: /livekit-sfu, deliberately not /livekit (gremion-ui's /livekit/jwt), signalling port 7880 only
+  const lk = routerKeys(r.services.livekit.labels, 'livekit')
+  assert.equal(lk.rule, `Host(\`${domain}\`) && PathPrefix(\`/livekit-sfu\`)`)
+  assert.deepEqual(routerNames(r.services.livekit.labels), ['livekit'])
+  assert.equal(r.services.livekit.labels['traefik.http.services.livekit.loadbalancer.server.port'], '7880')
+  for (const [name, rt] of Object.entries({ matrix: mx, livekit: lk })) {
+    assert.equal(rt.entrypoints, 'websecure', `${name}: entrypoints`)
+    assert.equal(rt.tls, 'true', `${name}: tls`)
+    assert.equal(rt['tls.certresolver'], env.TRAEFIK_CERT_RESOLVER, `${name}: an explicit tls.certresolver (tls=true alone serves the default certificate)`)
+    const chain = rt.middlewares.split(',')
+    assert.equal(chain[0], 'edge-hostpin-apex@docker', `${name}: the host pin is first`)
+    assert.ok(chain.includes('edge-hsts-platform@docker') && chain.includes('edge-ratelimit-app@docker'), `${name}: HSTS and a rate limit`)
+    for (const m of chain) {
+      const [base, provider] = m.split('@')
+      assert.ok(provider === undefined || provider === 'docker', `${name}: ${m} is not a docker-provider middleware`)
+      assert.ok(declaredOnTraefik.has(base), `${name}: chains ${m}, which the traefik service does not declare (B-09)`)
+    }
+  }
+  // the pin stamps the platform host, and the strip middleware removes exactly /livekit-sfu
+  const tl = r.services.traefik.labels
+  assert.equal(tl['traefik.http.middlewares.edge-hostpin-apex.headers.customrequestheaders.X-Forwarded-Host'], domain)
+  assert.equal(tl['traefik.http.middlewares.livekit-sfu-strip.stripprefix.prefixes'], '/livekit-sfu')
+  assert.ok(lk.middlewares.split(',').includes('livekit-sfu-strip@docker'))
+  // collabora: a service the tenant routers target, and NO public router (a default router would be
+  // generated for a labelled container with none): one anchor on the loopback-only internaltest entrypoint
+  const cl = r.services.collabora.labels
+  assert.equal(cl['traefik.http.services.collabora.loadbalancer.server.port'], '9980')
+  assert.deepEqual(routerNames(cl), ['collabora-anchor'])
+  const anchor = routerKeys(cl, 'collabora-anchor')
+  assert.equal(anchor.entrypoints, 'internaltest')
+  assert.equal(anchor.service, 'collabora')
+  assert.match(anchor.rule, /^Host\(`[a-z0-9.-]+\.invalid`\)$/)
+  // livekit publishes only the RTC ports, only on the edge addresses
+  const got = (r.services.livekit.ports ?? []).map((p) => `${normIp(p.host_ip)} ${p.published}->${p.target}/${p.protocol}`).sort()
+  // compose renders a published range one port at a time
+  const media = Array.from({ length: 101 }, (_, i) => 45000 + i)
+  const want = [
+    `${env.EDGE_BIND_IP} 7881->7881/tcp`,
+    `${env.EDGE_BIND_IP6} 7881->7881/tcp`,
+    ...media.flatMap((p) => [`${env.EDGE_BIND_IP} ${p}->${p}/udp`, `${env.EDGE_BIND_IP6} ${p}->${p}/udp`]),
+  ].sort()
+  assert.deepEqual(got, want)
+  assert.ok(!(r.services.livekit.ports ?? []).some((p) => WILDCARD.has(normIp(p.host_ip))), 'livekit publishes on a wildcard address')
+})
+
+// ── 8. the video relay: TURN over TLS on 443 ───────────────────────────────
+//
+// With a customer host (PILOT_TENANT_HOST in state.env) livekit carries ONE TCP router on websecure:
+// HostSNI(`turn.<host>`), TLS terminated by Traefik with the same resolver as the HTTP routers (never
+// passthrough), to LiveKit's TURN port 5349. Without a customer host the install is what it was before
+// the relay: no label Traefik reads as a TCP router, so no router and no certificate order for any
+// name. The CPU limit is one core with the memory limit unchanged, and the rendered LiveKit config is
+// a bind that refuses to be created empty.
+
+const tcpLabels = (labels) => Object.fromEntries(Object.entries(labels ?? {}).filter(([k]) => k.startsWith('traefik.tcp.')))
+
+test('guard 8: with a customer host livekit carries exactly the one TLS-terminating TURN router on websecure', () => {
+  const r = renderState({ env: { COMPOSE_PROFILES: PILOT_PROFILES, PILOT_TENANT_HOST: 'customer.example.org' } })
+  const l = r.services.livekit.labels
+  assert.deepEqual(tcpLabels(l), {
+    'traefik.tcp.routers.livekit-turn.rule': 'HostSNI(`turn.customer.example.org`)',
+    'traefik.tcp.routers.livekit-turn.entrypoints': 'websecure',
+    'traefik.tcp.routers.livekit-turn.tls': 'true',
+    'traefik.tcp.routers.livekit-turn.tls.certresolver': fixtureEnv().TRAEFIK_CERT_RESOLVER,
+    'traefik.tcp.routers.livekit-turn.service': 'livekit-turn',
+    'traefik.tcp.services.livekit-turn.loadbalancer.server.port': '5349',
+  })
+  // the HTTP router of the signalling socket is untouched
+  assert.deepEqual(routerNames(l), ['livekit'])
+})
+
+test('guard 8: without a customer host (unset or empty) no label of livekit is a Traefik TCP router and no name is ordered', () => {
+  for (const env of [{}, { PILOT_TENANT_HOST: '' }]) {
+    const r = renderState({ env: { COMPOSE_PROFILES: PILOT_PROFILES, ...env } })
+    const l = r.services.livekit.labels
+    assert.deepEqual(tcpLabels(l), {}, `a TCP router label with PILOT_TENANT_HOST=${JSON.stringify(env.PILOT_TENANT_HOST)}`)
+    const traefikLabels = Object.entries(l).filter(([k]) => k.startsWith('traefik.'))
+    assert.ok(!traefikLabels.some(([, v]) => /(^|[^a-z])turn\./.test(String(v))), 'a turn.* name is carried by a traefik label')
+    assert.deepEqual(routerNames(l), ['livekit'])
+  }
+})
+
+test('guard 8: livekit has one CPU core and the memory limit it had, and its rendered config is a bind that refuses an empty create', () => {
+  const svc = pilotState().services.livekit
+  assert.equal(Number(svc.deploy.resources.limits.cpus), 1)
+  assert.equal(Number(svc.deploy.resources.limits.memory), 512 * 1024 * 1024)
+  const cfg = (svc.volumes ?? []).filter((v) => v.target === '/etc/livekit/livekit.yaml')
+  assert.equal(cfg.length, 1)
+  assert.equal(cfg[0].read_only, true)
+  assert.ok(String(cfg[0].source).replaceAll('\\', '/').endsWith('/docker/livekit/livekit.yaml'), `source ${cfg[0].source}`)
+  assert.ok(bindRefusesMissingHostDir(cfg[0]), `a config that was not rendered would be created empty (rendered bind: ${JSON.stringify(cfg[0].bind)})`)
 })

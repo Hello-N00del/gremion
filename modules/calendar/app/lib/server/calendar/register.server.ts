@@ -10,6 +10,7 @@ import {
   registerDataProvider,
   registerErasureHook,
 } from '$lib/server/modules/runtime-registry'
+import { registerNoRetention } from '$lib/server/module-karenz/retained/extractors'
 import { calendarErasureHook } from './erasure'
 import { startNotificationScheduler } from './notification-scheduler'
 import { startCalDavSyncWorker } from './caldav-sync'
@@ -25,6 +26,12 @@ import { superviseWorker, markWorkerOff } from '$lib/server/events/consumer-stat
 
 // TRD-196 / PRD-OPS-005: the calendar's data-subject erasure step (per-module report).
 registerErasureHook(calendarErasureHook)
+
+// Module Karenz (phase 2): calendar events are planning data (RC-CAL-EVENT, the council record of a meeting
+// lives in RC-GOV-MEET), so a switch-off seals no copy: the pg_dump export of the blocked database (RC-MOD-EXPORT)
+// is the only thing kept, for the 30-day grace. Without this declaration the retained step fails closed on every
+// pass and day 30 can never finalize.
+registerNoRetention('calendar')
 
 // SP-2 §2.5: the scheduler resolves the sender PER TENANT at tick time via the
 // mail seam (getTenantMailContext), so every active tenant sends from its own

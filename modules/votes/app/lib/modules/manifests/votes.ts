@@ -28,6 +28,6 @@ export const votesManifest: ModuleManifest = {
   // Umfragen + Wahlen into this single /votes item, woven into the Gremien section by composeNavSchema
   // (anchor: 'elections'). It belongs to votes now, so it survives elections being off.
   nav: [
-    { kind: 'item', href: '/votes', label: 'Abstimmungen & Wahlen', icon: 'vote', role: Role.Member, badge: 'live', moduleId: 'votes' } satisfies NavItem,
+    { kind: 'item', href: '/votes', label: 'Abstimmungen & Wahlen', icon: 'vote', role: Role.Member, badge: 'live', moduleId: 'votes', labelIfOff: { moduleId: 'elections', label: 'Abstimmungen' } } satisfies NavItem,
   ],
 }

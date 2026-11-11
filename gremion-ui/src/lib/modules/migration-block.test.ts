@@ -40,6 +40,8 @@ export const KERNEL_BLOCK_BASENAMES = [
   '0062_vorstand_role_backfill.sql',
   // Karenz phase 1: the tenant-side record of a council module switch (claimed through register.mjs).
   '0063_module_switch_request.sql',
+  // Karenz phase 2: the tenant step ledger, item, notice and retained-record tables (claimed through register.mjs).
+  '0064_module_karenz.sql',
 ]
 
 /** Module-owned or unshipped numbers that must never appear in the kernel block. */
@@ -55,8 +57,8 @@ describe('kernel data-plane migration block', () => {
     expect(onDisk).toEqual([...KERNEL_BLOCK_BASENAMES].sort())
   })
 
-  it('is 36 files', () => {
-    expect(KERNEL_BLOCK_BASENAMES.length).toBe(36)
+  it('is 37 files', () => {
+    expect(KERNEL_BLOCK_BASENAMES.length).toBe(37)
   })
 
   it('carries no module-owned or unshipped file', () => {
@@ -94,7 +96,7 @@ export const PORTED_BASENAMES = [
  * through the TASK-029 register. They are neither pre-port-back nor ported, so
  * they must not move the pre-port-back high-water mark.
  */
-export const POST_PORT_BACK_BASENAMES = ['0059_audit_log_chain_anchor.sql', '0060_erasure_report.sql', '0061_audit_log_actor_uuid_check.sql', '0062_vorstand_role_backfill.sql', '0063_module_switch_request.sql']
+export const POST_PORT_BACK_BASENAMES = ['0059_audit_log_chain_anchor.sql', '0060_erasure_report.sql', '0061_audit_log_actor_uuid_check.sql', '0062_vorstand_role_backfill.sql', '0063_module_switch_request.sql', '0064_module_karenz.sql']
 const PRE_PORT_BACK_BASENAMES = KERNEL_BLOCK_BASENAMES.filter(
   (f) => !PORTED_BASENAMES.includes(f) && !POST_PORT_BACK_BASENAMES.includes(f),
 )

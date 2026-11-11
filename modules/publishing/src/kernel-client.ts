@@ -59,6 +59,7 @@
 // and error handling against a FAKE fetch — no live kernel is ever required.
 
 import type { TenantRef } from './tenant-store.js'
+import { mailCause, type MailCause } from './mail-error.js'
 
 /** A resolved recipient (mirrors gremion-ui newsletter-sender Recipient). */
 export interface Recipient {
@@ -77,6 +78,35 @@ export interface OutgoingMail {
 /** What a successful kernel send-mail returns (the kernel's SMTP message id). */
 export interface SentMail {
   messageId: string
+}
+
+/**
+ * A non-503 send-mail failure. Retryable like any generic Error; it only adds the
+ * HTTP status of the callback and the SMTP cause fields the kernel reports (see
+ * mail-error.ts for why these are the only ones the dispatch log reads).
+ */
+export class MailSendError extends Error {
+  code?: string
+  responseCode?: number
+  command?: string
+  httpStatus?: number
+  constructor(message: string, cause: MailCause = {}, httpStatus?: number) {
+    super(message)
+    this.name = 'MailSendError'
+    if (cause.code !== undefined) this.code = cause.code
+    if (cause.responseCode !== undefined) this.responseCode = cause.responseCode
+    if (cause.command !== undefined) this.command = cause.command
+    if (httpStatus !== undefined) this.httpStatus = httpStatus
+  }
+}
+
+/** Read the cause fields out of a send-mail failure body; anything else is ignored. */
+function parseSendFailure(text: string): MailCause {
+  try {
+    return mailCause(JSON.parse(text))
+  } catch {
+    return {}
+  }
 }
 
 /**
@@ -238,14 +268,18 @@ export function createKernelClient(opts: KernelClientOptions): KernelClient {
         const body = (await res.json().catch(() => ({}))) as { error?: unknown }
         if (body.error === 'smtp-unconfigured') {
           throw new MailUnconfiguredError(
-            `kernel send-mail: tenant SMTP not configured (to=${msg.to})`,
+            `kernel send-mail: tenant SMTP not configured`,
           )
         }
       }
       // Any other non-ok (400/401/500/…) is a retryable infra failure → throw a
       // generic Error so dispatch leaves the claim in place for the stale-takeover.
       const snippet = await res.text().catch(() => '')
-      throw new Error(`kernel send-mail failed: ${res.status} ${snippet.slice(0, 200)}`)
+      throw new MailSendError(
+        `kernel send-mail failed: ${res.status} ${snippet.slice(0, 200)}`,
+        parseSendFailure(snippet),
+        res.status,
+      )
     },
   }
 }

@@ -3,7 +3,7 @@
  * TASK-205 TDD 11 (TASK-200 residual (a)): the unit tests of the DISABLED modules' in-process halves.
  *
  * The interim overlay (interim-module-overlay.mjs) never copies a disabled module (modules/disabled.json:
- * content, finance, vault) into the build tree, so gremion-ui's own vitest project never collects their
+ * finance, vault) into the build tree, so gremion-ui's own vitest project never collects their
  * `modules/<id>/app/**` tests, and no verify suite ran them either. This is the test-only lane: it builds a
  * SCRATCH copy of the app (gremion-ui/_module-lane: the tracked src, the config files, the unit setup file),
  * overlays the disabled modules' halves into it (the overlay's --include-disabled mode: a scratch target
@@ -12,7 +12,7 @@
  * (gremion-ui/.gitignore) and the real tree is untouched.
  *
  *   node scripts/module-lane.mjs                      # every disabled module that has an app/ half
- *   node scripts/module-lane.mjs --modules content    # an explicit set
+ *   node scripts/module-lane.mjs --modules vault    # an explicit set
  *   node scripts/module-lane.mjs --list               # print the test files and exit (no run)
  *   node scripts/module-lane.mjs [--modules ...] -- <extra vitest args>   (e.g. --reporter=json --outputFile=...)
  *

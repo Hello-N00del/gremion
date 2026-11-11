@@ -19,7 +19,7 @@ import {
   checkRunning,
   PS_FORMAT,
 } from './check-postgres-major-running.mjs'
-import { POSTGRES_MAJOR, MODULE_POSTGRES_IDS } from './check-postgres-major.mjs'
+import { POSTGRES_MAJOR, MODULE_POSTGRES_IDS, SERVICE_POSTGRES_IDS } from './check-postgres-major.mjs'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const PROJECT = 't019-test'
@@ -74,8 +74,10 @@ test('expectedServices reads the kernel and all six module servers off the commi
   const text = readFileSync(join(ROOT, 'docker-compose.yml'), 'utf8')
   const exp = expectedServices([text])
   assert.deepEqual(exp.map((e) => e.service).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)),
-    ['postgres', ...MODULE_POSTGRES_IDS.map((id) => `${id}-postgres`)].sort())
+    ['postgres', ...MODULE_POSTGRES_IDS.map((id) => `${id}-postgres`), ...SERVICE_POSTGRES_IDS.map((id) => `${id}-postgres`)].sort())
   assert.equal(exp.find((e) => e.service === 'postgres').label, 'kernel')
+  // TASK-084-a: the governance server is expected with no profile flag at all
+  assert.equal(exp.find((e) => e.service === 'governance-postgres').label, 'service:governance')
 })
 
 test('listContainers asks docker for the project AND the label, and parses its rows', () => {
@@ -190,8 +192,10 @@ test('a docker ps that fails throws instead of looking like zero containers', ()
 
 test('R1: expectedServices can be narrowed to the active profiles; the kernel is always expected', () => {
   const text = readFileSync(join(ROOT, 'docker-compose.yml'), 'utf8')
-  assert.deepEqual(expectedServices([text], []).map((e) => e.service), ['postgres'])
-  assert.deepEqual(expectedServices([text], ['vault']).map((e) => e.service).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)), ['postgres', 'vault-postgres'])
+  // TASK-084-a: governance-postgres has no profile, so it is expected under every profile set
+  assert.deepEqual(expectedServices([text], []).map((e) => e.service).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)), ['governance-postgres', 'postgres'])
+  assert.deepEqual(expectedServices([text], ['vault']).map((e) => e.service).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)), ['governance-postgres', 'postgres', 'vault-postgres'])
+  assert.deepEqual(expectedServices([text], ['board']).map((e) => e.service).filter((s) => s === 'governance-postgres'), ['governance-postgres'])
 })
 
 test('R1: an empty expected set is RED — a compose scan that found nothing proves nothing', () => {
@@ -204,6 +208,17 @@ test('R1: a container whose label disagrees with its service is RED', () => {
   const { docker } = fakeDocker(good({ cal: { label: 'kernel' } }))
   assert.match(checkRunning({ project: PROJECT, expected: [KERNEL, CAL], docker }).problems.join('\n'),
     /calendar-postgres is labelled kernel, expected module:calendar/)
+})
+
+test('R2: a service profile (nextcloud) is accepted and puts nextcloud-postgres in the expected set', async () => {
+  const { parseProfiles } = await import('./check-postgres-major-running.mjs')
+  assert.deepEqual(parseProfiles(['--profile', 'nextcloud']), ['nextcloud'])
+  const text = readFileSync(join(ROOT, 'docker-compose.yml'), 'utf8')
+  const withProfile = expectedServices([text], parseProfiles(['--profile', 'nextcloud'])).map((e) => e.service)
+  assert.ok(withProfile.includes('nextcloud-postgres'), `expected nextcloud-postgres in ${withProfile.join(', ')}`)
+  assert.ok(withProfile.includes('governance-postgres'), 'the unprofiled governance server is always expected')
+  const without = expectedServices([text], parseProfiles(['--profile', 'vault'])).map((e) => e.service)
+  assert.ok(!without.includes('nextcloud-postgres'), 'a run without the nextcloud profile does not expect its server')
 })
 
 test('R2: parseProfiles refuses unknown ids, a missing value and a contradictory pair', async () => {

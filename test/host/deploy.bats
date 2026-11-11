@@ -881,6 +881,73 @@ exit 0
         'TASK-075: step 5 is the pre-migration dump, not a restic class=snapshot'
 }
 
+# #578: docker-compose.app.yml binds etc/secrets/governance into tenant-create.
+# Step 4's nats-auth init is the first tenant-create run of a deploy, and a bind
+# source that is missing then is made by the docker daemon as root:root, which
+# the deploy user can never chmod (every later tenant-create verb dies on it).
+# So the deploy makes the directory, deploy-user owned 0700, BEFORE that run,
+# and refuses -- before step 4 renders anything -- a directory it cannot own.
+
+# A docker front for the stateful stub: it records what the governance directory
+# looked like at the instant the nats-auth init run starts, then hands over.
+stub_docker_probing_governance_dir() {
+    stub_docker
+    mv "${SHIM_DIR}/docker" "${SHIM_DIR}/docker.real"
+    cat > "${SHIM_DIR}/docker" <<'PROBE'
+#!/usr/bin/env bash
+case "$*" in
+  *"nats-auth init"*)
+      d="${GREMION_ROOT}/etc/secrets/governance"
+      if [ -d "$d" ]; then stat -c '%u %a' "$d" > "${GREMION_ROOT}/.gov-at-init"
+      else echo absent > "${GREMION_ROOT}/.gov-at-init"; fi ;;
+esac
+exec "${SHIM_DIR}/docker.real" "$@"
+PROBE
+    chmod +x "${SHIM_DIR}/docker"
+}
+
+@test "#578: the governance directory is made deploy-owned 0700 before the nats-auth init run starts" {
+    stub_git; stub_siblings; stub_docker_probing_governance_dir
+    [ ! -e "${GREMION_ROOT}/etc/secrets/governance" ]
+    run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
+    [ "$status" -eq 0 ]
+    assert_recorded docker "nats-auth init"
+    [ -f "${GREMION_ROOT}/.gov-at-init" ]
+    [ "$(cat "${GREMION_ROOT}/.gov-at-init")" = "$(id -u) 700" ]
+    [ "$(stat -c '%u %a' "${GREMION_ROOT}/etc/secrets/governance")" = "$(id -u) 700" ]
+}
+
+@test "#578: an existing deploy-owned governance directory is kept and tightened to 0700" {
+    stub_git; stub_siblings; stub_docker_probing_governance_dir
+    mkdir -p "${GREMION_ROOT}/etc/secrets/governance"
+    chmod 755 "${GREMION_ROOT}/etc/secrets/governance"
+    printf 'keep\n' > "${GREMION_ROOT}/etc/secrets/governance/abc"
+    run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
+    [ "$status" -eq 0 ]
+    [ "$(cat "${GREMION_ROOT}/.gov-at-init")" = "$(id -u) 700" ]
+    [ "$(cat "${GREMION_ROOT}/etc/secrets/governance/abc")" = keep ]
+}
+
+@test "#578: a governance directory another user owns is refused before step 4 changes anything, naming the repair" {
+    stub_git; stub_siblings; stub_docker_probing_governance_dir
+    mkdir -p "${GREMION_ROOT}/etc/secrets/governance"
+    # The daemon-made directory is root-owned; a unit test cannot chown, so the
+    # owner the program reads is faked for that one path (everything else is the real stat).
+    local real_stat; real_stat="$(command -v stat)"
+    shim stat "
+case \"\$*\" in *etc/secrets/governance*) printf '4242\n'; exit 0 ;; esac
+exec '${real_stat}' \"\$@\""
+    run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"${GREMION_ROOT}/etc/secrets/governance"* ]]
+    [[ "$output" == *"chown"* ]]
+    assert_absent '^gremion-render --release [^ ]+$' "$SHIM_LOG" 'step 4 rendered although the governance directory is foreign'
+    assert_absent 'nats-auth init' "$SHIM_LOG" 'the tenant-create run started although the governance directory is foreign'
+    [ ! -e "${GREMION_ROOT}/.gov-at-init" ]
+    assert_absent ' STEP 4 render ok$' "${GREMION_ROOT}/runtime/deploy.log"
+    assert_absent ' STEP (5|6|7|8) ' "${GREMION_ROOT}/runtime/deploy.log"
+}
+
 # kernel #84: the state project's legal service reads `env_file:
 # legal/legal.env` from the release tree, and compose resolves it for every
 # verb, the `config --images` of step 2's signature check included. So the
@@ -1468,7 +1535,7 @@ exit 0
                gremion-migrate@sha256:3333333333333333333333333333333333333333333333333333333333333333; do
         assert_recorded cosign "verify --key ${GREMION_ROOT}/etc/cosign.pub --insecure-ignore-tlog=true --output json ghcr.io/hello-n00del/${img}"
     done
-    [[ "$output" == *"9 first-party image(s) verified against ${GREMION_ROOT}/etc/cosign.pub"* ]]
+    [[ "$output" == *"15 first-party image(s) verified against ${GREMION_ROOT}/etc/cosign.pub"* ]]
     # Order: the last verify precedes the first manifest read and the first pull.
     local last_verify first_manifest first_pull
     last_verify="$(grep -n '^cosign verify' "$SHIM_LOG" | tail -1 | cut -d: -f1)"
@@ -1547,8 +1614,8 @@ exit 0'
     export FIXTURE_RELEASE="$tree"
     run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
     [ "$status" -eq 0 ]
-    # 9 first-party pins in release/valid (TASK-198 adds gremion-synapse to the state layer, TASK-077 gremion-kernel-api to the app layer)
-    [ "$(grep -c "^cosign verify --key ${GREMION_ROOT}/etc/cosign.pub " "$SHIM_LOG")" -eq 9 ]
+    # 15 first-party pins in release/valid (TASK-198 adds gremion-synapse to the state layer, TASK-077 gremion-kernel-api to the app layer; the pilot adds nextcloud, collabora, element-call and the calendar, content and newsletter leaves)
+    [ "$(grep -c "^cosign verify --key ${GREMION_ROOT}/etc/cosign.pub " "$SHIM_LOG")" -eq 15 ]
     [ "$(grep -c 'releases/dist-v1.2.3/cosign.pub' "$SHIM_LOG")" -eq 0 ]
 }
 
@@ -1627,8 +1694,8 @@ PINS
         > "${GREMION_ROOT}/etc/third-party-images"
     run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
     [ "$status" -eq 0 ]
-    # 9 first-party pins in release/valid (TASK-198 adds gremion-synapse to the state layer, TASK-077 gremion-kernel-api to the app layer)
-    [ "$(grep -c '^cosign verify' "$SHIM_LOG")" -eq 9 ]
+    # 15 first-party pins in release/valid (TASK-198 adds gremion-synapse to the state layer, TASK-077 gremion-kernel-api to the app layer; the pilot adds nextcloud, collabora, element-call and the calendar, content and newsletter leaves)
+    [ "$(grep -c '^cosign verify' "$SHIM_LOG")" -eq 15 ]
     [ "$(grep -c 'redis' "$SHIM_LOG" | tr -d ' ')" -eq 0 ] || ! grep -q '^cosign verify.*redis' "$SHIM_LOG"
     [[ "$output" == *"1 third-party image(s) on the host list"* ]]
 }
@@ -1723,7 +1790,7 @@ PINS
         : > "$SHIM_LOG"
         run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
         [ "$status" -eq 0 ] || { echo "host list '$listed': $output"; return 1; }
-        [[ "$output" == *"9 first-party image(s) verified"*"1 third-party image(s) on the host list"* ]]
+        [[ "$output" == *"15 first-party image(s) verified"*"1 third-party image(s) on the host list"* ]]
         [ "$(grep -c '^cosign verify.*redis' "$SHIM_LOG")" -eq 0 ]
     done
 }
@@ -1753,7 +1820,7 @@ PINS
     export FIXTURE_RELEASE="$tagged"
     run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
     [ "$status" -eq 0 ]
-    [[ "$output" == *"9 first-party image(s) verified"* ]]
+    [[ "$output" == *"15 first-party image(s) verified"* ]]
     assert_recorded cosign "verify --key ${GREMION_ROOT}/etc/cosign.pub --insecure-ignore-tlog=true --output json ghcr.io/hello-n00del/gremion-ui:dist-v1.2.3@sha256:"
 }
 
@@ -1822,9 +1889,9 @@ state_tree() {
                gremion-fallback@sha256:9999999999999999999999999999999999999999999999999999999999999999; do
         assert_recorded cosign "verify --key ${GREMION_ROOT}/etc/cosign.pub --insecure-ignore-tlog=true --output json ghcr.io/hello-n00del/${img}"
     done
-    # release/valid pins 9 first-party images: app gremion-ui, gremion-public, gremion-migrate, gremion-control-panel (TASK-043), gremion-kernel-api (TASK-077) + state legal, vector, synapse (matrix, TASK-198), fallback
-    [[ "$output" == *"9 first-party image(s) verified against ${GREMION_ROOT}/etc/cosign.pub"* ]]
-    [[ "$output" == *"9 pinned image(s)"* ]]
+    # release/valid pins 15 first-party images (the pilot adds nextcloud, collabora, element-call, calendar, content, newsletter to the nine below): app gremion-ui, gremion-public, gremion-migrate, gremion-control-panel (TASK-043), gremion-kernel-api (TASK-077) + state legal, vector, synapse (matrix, TASK-198), fallback
+    [[ "$output" == *"15 first-party image(s) verified against ${GREMION_ROOT}/etc/cosign.pub"* ]]
+    [[ "$output" == *"15 pinned image(s)"* ]]
 }
 
 @test "a tag-only, real-build, gremion/ or flow-map image in the STATE layer exits 1 naming the file" {
@@ -1886,7 +1953,7 @@ exit 0
     printf 'services: {}\n' > "$T/docker-compose.state-pins.yml"
     run bash -c "printf 'TOKEN t\n' | '$DEPLOY' dist-v1.2.3"
     [ "$status" -eq 0 ]
-    [[ "$output" == *"5 pinned image(s)"* ]]
+    [[ "$output" == *"8 pinned image(s)"* ]]
     printf 'services: {}\n' > "$T/docker-compose.pins.yml"
     rm -rf "${GREMION_ROOT}/releases/dist-v1.2.3"
     : > "$SHIM_LOG"

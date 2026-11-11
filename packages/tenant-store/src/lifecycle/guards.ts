@@ -4,13 +4,14 @@
 // creates, connects to or drops a database. Every identifier the lifecycle
 // puts into DDL comes from here (validated) and is then quoted by the SERVER
 // (format('%I')), never concatenated into SQL text.
+import { isAbsolute, relative, resolve, sep } from 'node:path'
 import { assertModuleId, assertTenantId, tenantModuleDbName } from '../names.js'
 
 /** A (tenant, module) database: t_<tenant uuid as 32 hex>__<module id>. */
 export const TENANT_MODULE_DB = /^t_[0-9a-f]{32}__[a-z][a-z0-9]*(?:_[a-z0-9]+)*$/
 
-/** Module ids the lifecycle refuses: `kernel` names the customer's kernel database, never a module's. */
-export const RESERVED_MODULE_IDS: ReadonlySet<string> = new Set(['kernel'])
+/** Module ids the lifecycle refuses: `kernel` and `governance` name the customer's kernel and governance databases, never a module's. */
+export const RESERVED_MODULE_IDS: ReadonlySet<string> = new Set(['kernel', 'governance'])
 
 /** The legacy and platform databases the lifecycle never opens (test 12). */
 export const NEVER_OPENED: ReadonlySet<string> = new Set(['control', 'gremion', 'keycloak', 'postgres', 'template0', 'template1'])
@@ -28,6 +29,9 @@ export type LifecycleErrorCode =
   | 'TARGET_REFUSED'
   | 'EXPORT_FAILED'
   | 'EXPORT_UNVERIFIED'
+  | 'KARENZ_FINALIZING'
+  | 'KARENZ_RESTORE_PENDING'
+  | 'EXPORT_MISSING'
 
 export class LifecycleError extends Error {
   override name = 'LifecycleError'
@@ -47,7 +51,7 @@ export function assertLifecycleModuleId(moduleId: string): void {
   } catch (err) {
     throw new LifecycleError('INVALID_INPUT', (err as Error).message, { cause: err })
   }
-  if (RESERVED_MODULE_IDS.has(moduleId)) throw new LifecycleError('INVALID_INPUT', `module id ${moduleId} is reserved (the customer's kernel database), not a module`)
+  if (RESERVED_MODULE_IDS.has(moduleId)) throw new LifecycleError('INVALID_INPUT', `module id ${moduleId} is reserved (the customer's kernel or governance database), not a module`)
 }
 
 export function assertLifecycleTenantId(tenantId: string): void {
@@ -82,6 +86,25 @@ export function assertTenantModuleTarget(dbName: string, tenantId: string, modul
   }
   if (dbName !== expected) throw new LifecycleError('TARGET_REFUSED', `refusing ${dbName}: (${tenantId}, ${moduleId}) owns ${expected}`)
   return dbName
+}
+
+/**
+ * The one place a Karenz row's export may live: a `*.dump` directly under
+ * <exportDir>/<tenant>/<module>/ (exportDatabase writes exactly there). The
+ * day-30 job re-checks the path it reads from the platform row before it opens,
+ * hashes or deletes anything, so a row can never point it at another file.
+ */
+export function assertKarenzExportPath(path: string, exportDir: string, tenantId: string, moduleId: string): string {
+  assertLifecycleTenantId(tenantId)
+  assertLifecycleModuleId(moduleId)
+  if (typeof path !== 'string' || path === '' || typeof exportDir !== 'string' || exportDir === '') {
+    throw new LifecycleError('TARGET_REFUSED', `refusing export path ${JSON.stringify(path)}: not a path`)
+  }
+  const rel = relative(resolve(exportDir, tenantId, moduleId), resolve(path))
+  if (rel === '' || rel.startsWith('..') || isAbsolute(rel) || rel.includes(sep) || !rel.endsWith('.dump')) {
+    throw new LifecycleError('TARGET_REFUSED', `refusing export path ${JSON.stringify(path)}: not a dump directly under <exportDir>/${tenantId}/${moduleId}/`)
+  }
+  return path
 }
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/

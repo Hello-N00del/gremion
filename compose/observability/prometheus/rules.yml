@@ -152,6 +152,15 @@ groups:
           label_replace(max by (ctx) (gremion_outbox_dead_lettered) > bool 0, "component", "$1", "ctx", "(.*)")
           or label_replace(vector(0), "component", "events-outbox", "", "")
 
+      # A stalled outbox relay: the age of the oldest row still waiting for the relay is over 900 s [A]. A relay
+      # that can never succeed (no NATS seed, broker unreachable) burns no attempt and dead-letters nothing, so
+      # this is the only gauge that moves. 900 is the ONE threshold; the README rule table names it, alerting.test.mjs
+      # reads it back out of this line. NO absent() arm (same reason as above); a ctx without the gauge reads 0.
+      - record: gremion:cond:outbox_stalled
+        expr: |
+          label_replace(max by (ctx) (gremion_outbox_oldest_pending_seconds) > bool 900, "component", "$1", "ctx", "(.*)")
+          or label_replace(vector(0), "component", "events-outbox-stalled", "", "")
+
       # A consumer's message that reached MaxDeliver and went to the DLQ stream (inbox dead_lettered).
       - record: gremion:cond:inbox_dead_lettered
         expr: |
@@ -169,3 +178,23 @@ groups:
         expr: |
           label_join(max by (account, stream) (gremion_nats_stream_messages{stream="DLQ"}) > bool 0, "component", "/", "account", "stream")
           or label_replace(vector(0), "component", "nats-dlq", "", "")
+
+      # ---- Module switch-off Karenz (30-day grace, phase 2) ----
+      # The host collector (emit_module_karenz) reads plt.module_karenz and plt.module_karenz_event in the
+      # platform database. ONE component, module-karenz: it is 1 when any LIVE row has a step whose newest
+      # event is an error (gremion_module_karenz_failed), a notice or reminder that is overdue because the
+      # tenant pass never ran (gremion_module_karenz_stale), or a row past final_at + 6 h while the deletion
+      # switch is on (gremion_module_karenz_overdue). Fail-closed: gremion_module_karenz_live is emitted
+      # whenever the table is readable (0 with no rows), so an absent live gauge is an unreadable table or a
+      # blind collector and counts as a breach. The arms are SUMMED, not `or`-ed: an `or` would let the
+      # healthy zero of the left arm hide the absent() arm that carries the same label set. No NO_ABSENT row.
+      - record: gremion:cond:module_karenz
+        expr: |
+          label_replace(
+            clamp_max(
+              (count(gremion_module_karenz_failed) or vector(0))
+              + (count(gremion_module_karenz_stale) or vector(0))
+              + (count(gremion_module_karenz_overdue) or vector(0))
+              + (absent(gremion_module_karenz_live) or vector(0)),
+              1),
+            "component", "module-karenz", "", "")

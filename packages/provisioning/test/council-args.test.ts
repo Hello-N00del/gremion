@@ -84,16 +84,18 @@ describe('council origin: kinds', () => {
 describe('council origin: disable_module (Review Focus 8)', () => {
   const args = { slug: 'musterstadt', module: 'votes' }
 
-  it('the constant is false in phase 1', () => {
-    expect(COUNCIL_DISABLE_ALLOWED).toBe(false)
+  it('the constant is true: the 30-day Karenz (phase 2) lifts the phase 1 refusal', () => {
+    expect(COUNCIL_DISABLE_ALLOWED).toBe(true)
   })
 
-  it('is refused DISABLE_NOT_YET while the constant is false', () => {
-    const v = verifyRequestArgs(council('disable_module', args), ctx())
-    expect(v).toMatchObject({ verdict: 'refused', reason: expect.stringMatching(/^DISABLE_NOT_YET/) })
+  it('with the shipped constant a council disable verifies (actorKind person) and is no longer refused DISABLE_NOT_YET', () => {
+    expect(verifyRequestArgs(council('disable_module', args), ctx())).toEqual({
+      verdict: 'ok',
+      args: { slug: 'musterstadt', module: 'votes', actorKind: 'person' },
+    })
   })
 
-  it('is refused DISABLE_NOT_YET for an explicit councilDisableAllowed false too, whatever the module', () => {
+  it('is still refused DISABLE_NOT_YET for an explicit councilDisableAllowed false, whatever the module', () => {
     expect(verifyRequestArgs(council('disable_module', { slug: 'musterstadt', module: 'nosuch' }), ctx({ councilDisableAllowed: false }))).toMatchObject({ verdict: 'refused', reason: expect.stringMatching(/^DISABLE_NOT_YET/) })
   })
 

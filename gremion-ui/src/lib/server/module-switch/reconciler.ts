@@ -18,6 +18,7 @@
 // with no row ("unmanaged": default-on in config.modules, every pre-existing council) keep following
 // config.modules; the one-time alignment below never touches them.
 import { manifestIdOf, SWITCHABLE_CATALOGUE_IDS } from '$lib/modules/catalogue-map'
+import { isHeldOffModule } from '$lib/modules/held-off'
 import { readConfig, writeConfig } from '$lib/server/config'
 import type { TenantContext } from '$lib/server/tenant/context'
 import { notifyModuleSwitchListeners, type ModuleSwitchEvent } from './listeners'
@@ -109,6 +110,33 @@ export function _resetModuleSwitchReconcilerForTests(): void {
   processState.migrateOwed.clear()
 }
 
+/**
+ * Karenz phase 2 (Task 8): work that must be finished BEFORE an enabled module comes back, run for
+ * `action === 'enable'` after the platform request succeeded and before config.modules is written (the
+ * erasure replay of Task 12 is the first user). The event has no outcome and no time: the request has
+ * not been applied yet. A hook that rejects leaves the request `applying` with the error in
+ * config_error, config.modules untouched, and the next pass retries it; hooks after the failing one
+ * are not run. A hook must be idempotent.
+ */
+export type PreApplyHook = (e: Omit<ModuleSwitchEvent, 'outcome' | 'at'>) => Promise<void>
+
+const preApplyHooks: PreApplyHook[] = []
+
+/** Register a pre-apply hook; called in registration order. */
+export function registerPreApplyHook(h: PreApplyHook): void {
+  preApplyHooks.push(h)
+}
+
+/** Run every pre-apply hook in registration order; the first rejection propagates and the later hooks do not run. */
+async function runPreApplyHooks(pre: Omit<ModuleSwitchEvent, 'outcome' | 'at'>): Promise<void> {
+  for (const hook of preApplyHooks) await hook(pre)
+}
+
+/** Test-only: drop every registered pre-apply hook. */
+export function _clearPreApplyHooksForTests(): void {
+  preApplyHooks.length = 0
+}
+
 /** The production council port: the three functions of the gremion_ui_modules role, nothing else. */
 function defaultCouncil(): CouncilPort {
   const platform = async () => (await import('./council-db')).getCouncilDb()
@@ -147,6 +175,8 @@ const FAILURE_TEXT: Record<FinalFailure, string> = {
 
 const NOT_SWITCHABLE_TEXT = 'not switchable: Dieses Modul kann von der Gremiumsverwaltung nicht geschaltet werden. Es wurde nichts geändert.'
 
+const HELD_OFF_TEXT = 'held off: Dieses Modul ist für diese Installation nicht freigegeben. Es wurde nichts geändert.'
+
 const isFinalFailure = (s: string): s is FinalFailure => s === 'failed' || s === 'refused' || s === 'expired' || s === 'dead'
 
 const errText = (err: unknown): string => (err instanceof Error ? err.message : String(err))
@@ -159,8 +189,10 @@ const switchable = (catalogueId: string | null): catalogueId is string => catalo
  * Step 0, once per tenant per process: align config.modules to the platform state, ONLY for switchable
  * modules that have a platform row. Platform enabled + config off -> on; platform row not enabled +
  * config on -> off. A module with no row is left alone (aligning "no row" to "off" would switch off
- * every existing council's default-on modules). A failed write is logged and retried after a backoff;
- * it never stops the pass.
+ * every existing council's default-on modules). A module turned ON here first runs the pre-apply hooks
+ * (the Karenz erasure replay), exactly like an applied enable; one whose hooks fail stays off and is
+ * retried after the backoff while the other modules are still aligned. A failed write is logged and
+ * retried after a backoff; it never stops the pass.
  */
 async function alignOnce(tenant: TenantContext, d: ReconcilerDeps, council: CouncilPort): Promise<void> {
   if (d.state.aligned.has(tenant.id)) return
@@ -171,12 +203,42 @@ async function alignOnce(tenant: TenantContext, d: ReconcilerDeps, council: Coun
     const byKey = new Map(rows.map((r) => [r.module_key, r]))
     const configured = d.readConfig(tenant).modules ?? {}
     const diff: Record<string, boolean> = {}
+    /** manifest id -> catalogue id, for the modules this alignment would turn ON. */
+    const turningOn = new Map<string, string>()
     for (const catalogueId of SWITCHABLE_CATALOGUE_IDS) {
       const manifestId = manifestIdOf(catalogueId)
       const row = byKey.get(catalogueId)
       if (manifestId === null || !row?.has_row) continue
       const platformOn = row.state === 'enabled'
-      if (platformOn !== (configured[manifestId] !== false)) diff[manifestId] = platformOn
+      // A held-off module stays off whatever the platform says: aligning it on would be dropped by the pin.
+      if (platformOn && isHeldOffModule(manifestId)) continue
+      if (platformOn !== (configured[manifestId] !== false)) {
+        diff[manifestId] = platformOn
+        if (platformOn) turningOn.set(manifestId, catalogueId)
+      }
+    }
+    // A module coming back on through alignment must pass the same pre-apply work as an applied enable
+    // (the Art. 17 replay of a Karenz restore): a platform enablement that reached the platform before a
+    // restart, with apply() never having run, must not switch the module on over unreplayed erasures. A
+    // module whose hooks fail stays OFF (left out of the diff) and the alignment is retried after the backoff.
+    let blocked = false
+    for (const [manifestId, catalogueId] of turningOn) {
+      try {
+        await runPreApplyHooks({
+          requestId: 'alignment',
+          tenantId: tenant.id,
+          slug: tenant.slug,
+          moduleId: catalogueId,
+          manifestId,
+          action: 'enable',
+          actorUserId: 'system',
+          detail: null,
+        })
+      } catch (err) {
+        delete diff[manifestId]
+        blocked = true
+        console.error(`[module-switch] ${tenant.slug}: ${catalogueId} stays off at alignment, its pre-apply work failed (retried later):`, errText(err))
+      }
     }
     if (Object.keys(diff).length > 0) {
       d.writeConfig({ modules: diff }, tenant)
@@ -192,6 +254,11 @@ async function alignOnce(tenant: TenantContext, d: ReconcilerDeps, council: Coun
         return
       }
       d.state.migrateOwed.delete(tenant.id)
+    }
+    if (blocked) {
+      // Not aligned yet: the held-back module is retried (hooks run again) after the backoff.
+      d.state.alignRetryAt.set(tenant.id, d.now() + ALIGN_RETRY_MS)
+      return
     }
     d.state.aligned.add(tenant.id)
   } catch (err) {
@@ -283,6 +350,9 @@ export async function runModuleSwitchPass(tenant: TenantContext, deps: Partial<R
       const manifestId = switchable(row.moduleId) ? manifestIdOf(row.moduleId) : null
       if (manifestId === null) {
         await finishFailed(tenant, d, row, p, 'refused', NOT_SWITCHABLE_TEXT, out)
+      } else if (row.action === 'enable' && isHeldOffModule(manifestId)) {
+        // config.modules pins it false: writing true would be silently dropped and the request reported applied.
+        await finishFailed(tenant, d, row, p, 'refused', HELD_OFF_TEXT, out)
       } else {
         await apply(tenant, d, row, p, manifestId, out)
       }
@@ -334,9 +404,25 @@ async function apply(
 
   const enable = row.action === 'enable'
   try {
+    if (enable) {
+      await runPreApplyHooks({
+        requestId: row.requestId,
+        tenantId: tenant.id,
+        slug: tenant.slug,
+        moduleId: row.moduleId,
+        manifestId,
+        action: row.action,
+        actorUserId: row.actorUserId,
+        detail: p.outcome?.trim() || null,
+      })
+    }
     // An explicit, identical value needs no write (and no write permission on config.json).
     if ((d.readConfig(tenant).modules ?? {})[manifestId] !== enable) {
       d.writeConfig({ modules: { [manifestId]: enable } }, tenant)
+      // The post-condition, not the absence of an exception: a write the store did not honour must not read as applied.
+      if ((d.readConfig(tenant).modules ?? {})[manifestId] !== enable) {
+        throw new Error(`config.modules.${manifestId} did not take the value ${enable} after the write`)
+      }
     }
     if (enable) {
       const m = await d.migrate({ id: tenant.id, slug: tenant.slug })

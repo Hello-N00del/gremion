@@ -5,13 +5,15 @@
 // `seed_vertical` request kinds (infra/host/lib/executor/handlers/), not an
 // operator CLI (R31-I4): the member list arrives on STDIN, never in argv or env.
 //
-//   import-validate <slug> --vertical <id>
+//   import-validate <slug> --vertical <id> [--sender-json <json>]
 //       STDIN: the member list (CSV). STDOUT: ONE JSON line, the result
 //       {status, sha256, counts, rows, database}. Exit 0 validated, 1 rejected. Writes nothing.
-//   import-apply <slug> --vertical <id> --expect-sha256 <hex>
+//   import-apply <slug> --vertical <id> --expect-sha256 <hex> [--sender-json <json>]
 //       STDIN: the same list. Refused unless it validates AND its sha256 is the
 //       validated one AND the realm is stamped with its own mail principal
 //       (before any account is created). Exit 0 applied, 1 otherwise.
+//   (--sender-json is the host's mail-sender descriptor, as for record-step and
+//   reconcile in tenant-provision.ts; absent means the stalwart sender)
 //   seed-vertical <slug> --vertical <id>
 //       Adopts the customer's single root, creates the vertical's other units
 //       with their projection rows, merges the vertical's wording into the
@@ -40,16 +42,16 @@ import {
 } from '@gremion/member-import'
 import { kernelDbName } from '@gremion/tenant-store/lifecycle'
 import { assertSmtpStamped, tokenFor, type CustomerRef, type ProvisioningDeps } from '@gremion/provisioning'
-import { readConfig } from '../src/lib/server/config'
 import { configPathForTenant, getTenantById } from '../src/lib/server/tenant/registry'
-import { inProvisioningContext } from '../src/lib/server/tenant/provisioner/customer-adapters'
+import { seedModulesFor } from '../src/lib/server/tenant/provisioner/seed-modules'
+import { inActiveContext } from '../src/lib/server/tenant/provisioner/customer-adapters'
 import type { KcProvisionApi } from '../src/lib/server/tenant/provisioner/kc-admin-api'
 import { keycloakAccounts, memberImportTarget, seedVertical, sqlOrgStore, type OrgStore } from '../src/lib/server/tenant/provisioner/member-import-adapters'
 
 export const IMPORT_VERBS: ReadonlySet<string> = new Set(['import-validate', 'import-apply', 'seed-vertical'])
 
-export const IMPORT_USAGE = `  import-validate <slug> --vertical <id>              (member list CSV on STDIN)
-  import-apply <slug> --vertical <id> --expect-sha256 <hex>   (same list on STDIN)
+export const IMPORT_USAGE = `  import-validate <slug> --vertical <id> [--sender-json <json>]   (member list CSV on STDIN)
+  import-apply <slug> --vertical <id> --expect-sha256 <hex> [--sender-json <json>]   (same list on STDIN)
   seed-vertical <slug> --vertical <id>`
 
 export interface ImportVerbContext {
@@ -166,12 +168,12 @@ export async function importVerb(verb: string, ctx: ImportVerbContext): Promise<
       const c = await customerRef(deps, slug)
       const tenant = await getTenantById(c.id)
       if (!tenant) throw new Error(`customer ${slug} has no control row`)
-      const report = await inProvisioningContext(c, async () => {
-        const cfg = readConfig()
+      // D-8: a matrix room / Nextcloud folder is asked for only when the PLATFORM enabled messaging / files for the customer
+      const modules = seedModulesFor(await deps.modules.enabled(c))
+      const report = await inActiveContext(c, async () => {
         return seedVertical(vertical, {
           store: sqlOrgStore(),
-          // D-8: a matrix room / Nextcloud folder is asked for only when messaging / files are enabled for the tenant
-          modules: { messaging: cfg.modules.messages === true, files: cfg.modules.files === true },
+          modules,
           readConfig: () => readFileSync(configPathForTenant(tenant.slug), 'utf8'),
           writeConfig: (text) => ctx.writeConfigFile(configPathForTenant(tenant.slug), text),
         })
@@ -195,7 +197,7 @@ export async function importVerb(verb: string, ctx: ImportVerbContext): Promise<
     try {
       // the realm sends its mail from its own submission principal, or nothing is created (assertSmtpStamped)
       if (verb === 'import-apply') await assertSmtpStamped(c, deps)
-      result = await inProvisioningContext(c, () =>
+      result = await inActiveContext(c, () =>
         runImport(verb as 'import-validate' | 'import-apply', text, vertical, expected, {
           store: sqlOrgStore(),
           accounts: keycloakAccounts(ctx.provisionerKc(), c.realm),

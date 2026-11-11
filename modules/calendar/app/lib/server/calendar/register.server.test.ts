@@ -59,6 +59,14 @@ function ev(over: Partial<DbEvent> & { id: string; startAt: Date; endAt: Date },
 
 const weekly: DbRecurrence = { frequency: 'weekly', interval: 1, until: null, count: null, byday: null, exceptions: null }
 
+describe('calendar Karenz retention declaration', () => {
+  it('declares that the calendar seals no retained records (otherwise a council switch-off fails its retained step and can never be finalized or switched back on)', async () => {
+    const { hasRetentionDeclaration, extractorsFor } = await import('$lib/server/module-karenz/retained/extractors')
+    expect(hasRetentionDeclaration('calendar')).toBe(true)
+    expect(extractorsFor('calendar')).toEqual([])
+  })
+})
+
 describe("dashboard 'calendar:upcoming-events' provider with a weekly series", () => {
   it('returns one row per series (its next occurrence), so the dashboard each key stays unique', async () => {
     // Monday 18:00 Berlin weekly since January; the 30-day window holds 4 Mondays.

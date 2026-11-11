@@ -50,6 +50,7 @@ CONTENT_PG_PASSWORD=unit-content-secret
 FINANCE_PG_PASSWORD=unit-finance-secret
 NEWSLETTER_PG_PASSWORD=unit-newsletter-secret
 VAULT_PG_PASSWORD=unit-vault-secret
+GOVERNANCE_PG_PASSWORD=unit-governance-secret
 KEYCLOAK_ADMIN=admin
 KEYCLOAK_ADMIN_PASSWORD=unit-kc-admin-state-secret
 TRAEFIK_CERT_RESOLVER=le-http
@@ -82,6 +83,10 @@ case " $* " in
     set -- $rest
     verb="$1"; slug="${2:-}"
     printf "tc %s %s\n" "$verb" "$slug" >> "$ORDER"
+    # the state of the credential directory when the container starts: a bind source that is missing then is made by the daemon, as root
+    if [ -d "$GREMION_ROOT/etc/secrets/governance" ]; then echo "$verb present $(stat -c %a "$GREMION_ROOT/etc/secrets/governance")" >> "$GREMION_ROOT/gov-dir-at-run"; else echo "$verb absent" >> "$GREMION_ROOT/gov-dir-at-run"; fi
+    # the same for the per-customer secrets directory (TENANT_SECRETS_DIR of app-blue.env, #85)
+    if [ -d "$GREMION_ROOT/tenant-secrets" ]; then echo "$verb present $(stat -c %a "$GREMION_ROOT/tenant-secrets")" >> "$GREMION_ROOT/ts-dir-at-run"; else echo "$verb absent" >> "$GREMION_ROOT/ts-dir-at-run"; fi
     [ -f "$GREMION_ROOT/fail-$verb" ] && exit 1
     case "$verb" in
       phase-a|phase-b)
@@ -109,6 +114,8 @@ case " $* " in
         # secret where TENANT_PROVISIONER_SECRET_FILE points (the scratch mount).
         case " $all " in *" -e KEYCLOAK_ADMIN_PASSWORD "*) ;; *) echo "no name-only -e KEYCLOAK_ADMIN_PASSWORD" >&2; exit 1 ;; esac
         case " $all " in *" -e TENANT_PROVISIONER_SECRET_FILE=/run/secrets/provisioner-out/tenant_provisioner "*) ;; *) echo "no scratch TENANT_PROVISIONER_SECRET_FILE" >&2; exit 1 ;; esac
+        # The image runs as root: without --user the 0600 secret lands root-owned and the deploy user cannot move it.
+        case " $all " in *" --user "*) ;; *) echo "bootstrap-provisioner must run as the deploy user" >&2; exit 1 ;; esac
         [ -n "${KEYCLOAK_ADMIN:-}" ] && [ -n "${KEYCLOAK_ADMIN_PASSWORD:-}" ] || { echo "no admin credential in the environment" >&2; exit 1; }
         printf "%s" "$KEYCLOAK_ADMIN_PASSWORD" > "$GREMION_ROOT/kc-pw-seen"
         [ -n "$od" ] && [ -d "$od" ] || { echo "no scratch mount" >&2; exit 1; }
@@ -147,7 +154,7 @@ steps() { cat "$ORDER"; }
 
 refute_state_secrets() {
     local v
-    for v in unit-pg-root-secret unit-board-secret unit-calendar-secret unit-vault-secret \
+    for v in unit-pg-root-secret unit-board-secret unit-calendar-secret unit-vault-secret unit-governance-secret \
              unit-kc-admin-state-secret unit-provisioner-sa-secret; do
         ! grep -qF -- "$v" "$SHIM_LOG" || { echo "secret ${v} on a docker argv"; cat "$SHIM_LOG"; return 1; }
         [[ "$output" != *"$v"* ]] || { echo "secret ${v} printed"; return 1; }
@@ -280,6 +287,67 @@ STUB
     run steps
     [ "${lines[0]}" = "tc phase-a alpha-rat" ]
     [[ "$output" != *"vendor-mail"* && "$output" != *"phase-b"* && "$output" != *"record-step"* ]] || { steps; return 1; }
+}
+
+# The tenant-create container bind-mounts etc/secrets/governance read-write. A source that does not exist when
+# the container starts is created by the daemon as root:root, and the deploy user can then neither chmod it nor
+# rely on it: the host makes the directory first, on EVERY verb that starts the container, not only on `init`
+# (an upgraded host runs reconcile before it ever runs init).
+@test "every tenant-create run finds etc/secrets/governance made by the host beforehand, mode 700" {
+    rm -rf "${GREMION_ROOT}/etc/secrets/governance"
+    run "$LAUNCHER" reconcile alpha-rat
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
+    [ -s "${GREMION_ROOT}/gov-dir-at-run" ] || { echo "the container shim saw no run"; return 1; }
+    ! grep -q absent "${GREMION_ROOT}/gov-dir-at-run" || { cat "${GREMION_ROOT}/gov-dir-at-run"; return 1; }
+    grep -qx 'reconcile present 700' "${GREMION_ROOT}/gov-dir-at-run" || { cat "${GREMION_ROOT}/gov-dir-at-run"; return 1; }
+}
+
+# #85: the per-customer secrets directory (TENANT_SECRETS_DIR). The default, ./secrets/tenants, lies INSIDE the
+# release tree: a redeploy replaces the tree and a build context copies it. app.env.tmpl therefore sets it outside
+# the tree, and the host makes it, 0700 and the deploy user's, before EVERY run of the container (a bind source the
+# daemon creates is root-owned), refusing a place that is inside the release tree, relative, or not a leaf apart
+# from the tenant-create credential directory (gremion-ui/scripts/check-tenant-secrets-dir.mjs).
+@test "every tenant-create run finds TENANT_SECRETS_DIR made by the host beforehand, mode 700" {
+    rm -rf "${GREMION_ROOT}/tenant-secrets"
+    run "$LAUNCHER" reconcile alpha-rat
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
+    [ -s "${GREMION_ROOT}/ts-dir-at-run" ] || { echo "the container shim saw no run"; return 1; }
+    ! grep -q absent "${GREMION_ROOT}/ts-dir-at-run" || { cat "${GREMION_ROOT}/ts-dir-at-run"; return 1; }
+    grep -qx 'reconcile present 700' "${GREMION_ROOT}/ts-dir-at-run" || { cat "${GREMION_ROOT}/ts-dir-at-run"; return 1; }
+}
+
+@test "a missing TENANT_SECRETS_DIR in the colour's env file is a precondition failure naming it (exit 2), before the container starts" {
+    sed -i '/^TENANT_SECRETS_DIR=/d' "${GREMION_ROOT}/etc/env/app-blue.env"
+    run "$LAUNCHER" reconcile alpha-rat
+    [ "$status" -eq 2 ] || { echo "status=$status $output"; return 1; }
+    [[ "$output" == *"TENANT_SECRETS_DIR"* ]]
+    [ ! -s "${GREMION_ROOT}/ts-dir-at-run" ] || { echo "the container ran anyway"; return 1; }
+}
+
+@test "a TENANT_SECRETS_DIR inside the release tree, a relative one, and one that contains a credential directory are each refused (exit 2)" {
+    local bad
+    for bad in "${REL}/secrets/tenants" "secrets/tenants" "${GREMION_ROOT}/etc/secrets" "${GREMION_ROOT}/etc/secrets/tenant-create" "${GREMION_ROOT}/etc/secrets/governance" "${GREMION_ROOT}/etc"; do
+        sed -i '/^TENANT_SECRETS_DIR=/d' "${GREMION_ROOT}/etc/env/app-blue.env"
+        printf 'TENANT_SECRETS_DIR=%s\n' "$bad" >> "${GREMION_ROOT}/etc/env/app-blue.env"
+        : > "${GREMION_ROOT}/ts-dir-at-run"
+        run "$LAUNCHER" reconcile alpha-rat
+        [ "$status" -eq 2 ] || { echo "${bad}: status=$status $output"; return 1; }
+        [[ "$output" == *"TENANT_SECRETS_DIR"* ]] || { echo "${bad}: $output"; return 1; }
+        [ ! -s "${GREMION_ROOT}/ts-dir-at-run" ] || { echo "${bad}: the container ran anyway"; return 1; }
+    done
+}
+
+@test "app.env.tmpl sets TENANT_SECRETS_DIR under etc/secrets, a leaf apart from tenant-create and the release tree" {
+    local tmpl="${HOST_SRC}/templates/env/app.env.tmpl"
+    [ "$(grep -c '^TENANT_SECRETS_DIR=' "$tmpl")" = 1 ]
+    grep -qx 'TENANT_SECRETS_DIR=/opt/gremion/etc/secrets/tenants' "$tmpl"
+    rm -f "${GREMION_ROOT}/etc/env/"*.env
+    run "${HOST_SRC}/bin/gremion-init-secrets" --root "$GREMION_ROOT" --stack guardstack
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    local f
+    for f in app-blue.env app-green.env; do
+        [ "$(sed -n 's/^TENANT_SECRETS_DIR=//p' "${GREMION_ROOT}/etc/env/${f}")" = "/opt/gremion/etc/secrets/tenants" ]
+    done
 }
 
 @test "relay suspend, resume and reconcile go through the front and hand the container the descriptor" {
@@ -490,6 +558,11 @@ STUB
     grep -qx 'postgresql://postgres:unit-pg-root-secret@postgres-guardstack:5432/postgres' "${d}/kernel_pg_admin"
     grep -qx 'postgresql://calendar:unit-calendar-secret@calendar-postgres:5432/postgres' "${d}/module_pg_admin_calendar"
     assert_mode_600 "${d}/kernel_pg_admin"
+    # TASK-084-a: the governance server's admin credential (a file, never an argv) and the per-customer directory
+    grep -qx 'postgresql://governance:unit-governance-secret@governance-postgres:5432/postgres' "${d}/governance_pg_admin"
+    assert_mode_600 "${d}/governance_pg_admin"
+    [ -d "${GREMION_ROOT}/etc/secrets/governance" ] || { echo "no etc/secrets/governance"; return 1; }
+    [ "$(stat -c %a "${GREMION_ROOT}/etc/secrets/governance")" = 700 ] || { echo "etc/secrets/governance is mode $(stat -c %a "${GREMION_ROOT}/etc/secrets/governance")"; return 1; }
     run steps
     [ "${lines[0]}" = "tc bootstrap-provisioner " ] || { steps; return 1; }
     [ "${lines[1]}" = "tc init --panel-origin" ]
@@ -497,6 +570,32 @@ STUB
     # the ops client secret moved into the panel's directory, 0600, and left the tenant secrets
     [ "$(cat "${GREMION_ROOT}/etc/secrets/control-panel/client_secret")" = unit-ops-client-secret ]
     [ ! -e "${GREMION_ROOT}/tenant-secrets/platform_client_control-panel" ]
+}
+
+# TASK-084-a: the governance admin credential is derived from state.env on every
+# init (byte-identical on a rerun); a missing password is a named exit-2 failure
+# before anything is written; the per-customer files in etc/secrets/governance are
+# tenant-create's and are never touched here.
+@test "init keeps governance_pg_admin byte-identical on a rerun and never touches the per-customer files (TASK-084-a)" {
+    run "$LAUNCHER" init
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
+    local f="${GREMION_ROOT}/etc/secrets/tenant-create/governance_pg_admin" before
+    before="$(sha256sum "$f")"
+    printf 'postgresql://g_x_app:unit-customer-credential@governance-postgres:5432/t_x__governance\n' > "${GREMION_ROOT}/etc/secrets/governance/0192f1a23b4c7d5e8f60718293a4b5c6"
+    : > "$ORDER"
+    run "$LAUNCHER" init
+    [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
+    [ "$(sha256sum "$f")" = "$before" ] || { echo "governance_pg_admin changed"; return 1; }
+    grep -q 'unit-customer-credential' "${GREMION_ROOT}/etc/secrets/governance/0192f1a23b4c7d5e8f60718293a4b5c6"
+    ! grep -qF -- 'unit-governance-secret' "$SHIM_LOG" || { echo "the governance secret reached a docker argv"; return 1; }
+    ! grep -qF -- 'governance_pg_admin' "$SHIM_LOG" || { echo "the governance admin file reached a docker argv"; return 1; }
+}
+
+@test "init without GOVERNANCE_PG_PASSWORD dies exit 2 naming it (TASK-084-a)" {
+    sed -i '/^GOVERNANCE_PG_PASSWORD=/d' "${GREMION_ROOT}/etc/env/state.env"
+    run "$LAUNCHER" init
+    [ "$status" -eq 2 ] || { echo "status=$status $output"; return 1; }
+    [[ "$output" == *"GOVERNANCE_PG_PASSWORD is empty in"* ]] || { echo "$output"; return 1; }
 }
 
 # TASK-043b F1: every tenant-create verb reads the provisioner credential from
@@ -598,11 +697,12 @@ STUB
     rm -f "${GREMION_ROOT}/etc/env/"*.env
     run "${HOST_SRC}/bin/gremion-init-secrets" --root "$GREMION_ROOT" --stack guardstack
     [ "$status" -eq 0 ] || { echo "render: status=$status $output"; return 1; }
-    printf 'TENANT_SECRETS_DIR=%s/tenant-secrets\n' "$GREMION_ROOT" >> "${GREMION_ROOT}/etc/env/app-blue.env"
+    # the template now sets TENANT_SECRETS_DIR itself (under /opt/gremion): point it at this test's root
+    sed -i "s|^TENANT_SECRETS_DIR=.*|TENANT_SECRETS_DIR=${GREMION_ROOT}/tenant-secrets|" "${GREMION_ROOT}/etc/env/app-blue.env"
     # init's own check first: it dies "<ID>_PG_PASSWORD is empty in state.env".
     run "$LAUNCHER" init
     [ "$status" -eq 0 ] || { echo "status=$status $output"; return 1; }
-    [[ "$output" == *"kernel and 6 module server credential file(s)"* ]] || { echo "$output"; return 1; }
+    [[ "$output" == *"kernel, 6 module and governance server credential file(s)"* ]] || { echo "$output"; return 1; }
     local id up
     for id in board calendar content finance newsletter vault; do
         up="$(printf '%s' "$id" | tr '[:lower:]' '[:upper:]')"
@@ -612,13 +712,18 @@ STUB
             || { echo "state.env carries no ${up}_PG_USER=${id}"; return 1; }
         [ -s "${GREMION_ROOT}/etc/secrets/tenant-create/module_pg_admin_${id}" ] || { echo "no module_pg_admin_${id}"; return 1; }
     done
+    # TASK-084-a: the governance server's login, generated like the others; its admin file is rendered from it.
+    grep -qE '^GOVERNANCE_PG_PASSWORD=[A-Za-z0-9]{32}$' "${GREMION_ROOT}/etc/env/state.env" \
+        || { echo "state.env carries no generated GOVERNANCE_PG_PASSWORD"; return 1; }
+    grep -qx 'GOVERNANCE_PG_USER=governance' "${GREMION_ROOT}/etc/env/state.env" || { echo "state.env carries no GOVERNANCE_PG_USER=governance"; return 1; }
+    [ -s "${GREMION_ROOT}/etc/secrets/tenant-create/governance_pg_admin" ] || { echo "no governance_pg_admin"; return 1; }
     # TASK-198: Synapse's own PostgreSQL server adds MESSAGING_PG_PASSWORD (generated, no tenant-create admin file).
     grep -qE '^MESSAGING_PG_PASSWORD=[A-Za-z0-9]{32}$' "${GREMION_ROOT}/etc/env/state.env" \n        || { echo "state.env carries no generated MESSAGING_PG_PASSWORD"; return 1; }
     # Every <ID>_PG_PASSWORD DISTINCT: one server's credential never opens another (7 servers since TASK-198).
     local keys distinct
     keys="$(grep -cE '^[A-Z]+_PG_PASSWORD=' "${GREMION_ROOT}/etc/env/state.env")"
     distinct="$(grep -E '^[A-Z]+_PG_PASSWORD=' "${GREMION_ROOT}/etc/env/state.env" | cut -d= -f2 | sort -u | wc -l)"
-    [ "$keys" -ge 7 ] && [ "$distinct" -eq "$keys" ] || { echo "keys=$keys distinct=$distinct"; return 1; }
+    [ "$keys" -ge 8 ] && [ "$distinct" -eq "$keys" ] || { echo "keys=$keys distinct=$distinct"; return 1; }
 }
 
 @test "init fails loudly when the ops client secret never arrives (review C, r2)" {

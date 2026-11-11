@@ -9,7 +9,8 @@
 //     exactly ONE primary tenant_domain row through addTenantDomain (the one
 //     path with the reserved-host / owner refusals);
 //   - status moves only along provisioning -> active, active <-> suspended.
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -23,6 +24,7 @@ const reg = vi.hoisted(() => ({
   evictTenantRuntime: vi.fn(),
   getTenantById: vi.fn(),
   getTenantBySlug: vi.fn(),
+  resolveTenantById: vi.fn(),
   markTenantResourceOk: vi.fn(async () => {}),
   primaryHostForTenant: vi.fn(async () => 'rat.musterstadt.example'),
   registerTenant: vi.fn(async (input: { slug: string }) => ({ id: '0192f1a2-3b4c-7d5e-8f60-718293a4b5c6', slug: input.slug, status: 'provisioning', realmName: input.slug })),
@@ -36,12 +38,16 @@ vi.mock('$lib/server/governance/org-units-db', () => ({ createOrgUnit: vi.fn() }
 vi.mock('$lib/server/governance/provisioning/orchestrator', () => ({ provisionOrgUnit: vi.fn() }))
 vi.mock('$lib/server/governance/provisioning/subsystems/keycloak', () => ({ createKeycloakSubsystem: vi.fn() }))
 vi.mock('$lib/server/tenant/context', () => ({ runWithTenant: vi.fn(), getTenant: vi.fn() }))
-vi.mock('@gremion/nats-auth', () => ({ ensureTenantAccount: vi.fn() }))
+vi.mock('@gremion/nats-auth', async (orig) => ({ ...(await orig<Record<string, unknown>>()), ensureTenantAccount: vi.fn() }))
 const lc = vi.hoisted(() => ({
   ensureKernelDatabase: vi.fn(),
   ensureKernelPurgeGrants: vi.fn(),
   ensureKernelAuditAppendOnly: vi.fn(),
   kernelAuditAppendOnlyProblems: vi.fn(),
+  ensureGovernanceDatabase: vi.fn(),
+  migrateGovernanceDatabase: vi.fn(),
+  bindGovernanceDatabase: vi.fn(),
+  governancePostCondition: vi.fn(),
 }))
 vi.mock('@gremion/tenant-store/lifecycle', async (orig) => ({
   ...(await orig<Record<string, unknown>>()),
@@ -49,6 +55,10 @@ vi.mock('@gremion/tenant-store/lifecycle', async (orig) => ({
   ensureKernelPurgeGrants: lc.ensureKernelPurgeGrants,
   ensureKernelAuditAppendOnly: lc.ensureKernelAuditAppendOnly,
   kernelAuditAppendOnlyProblems: lc.kernelAuditAppendOnlyProblems,
+  ensureGovernanceDatabase: lc.ensureGovernanceDatabase,
+  migrateGovernanceDatabase: lc.migrateGovernanceDatabase,
+  bindGovernanceDatabase: lc.bindGovernanceDatabase,
+  governancePostCondition: lc.governancePostCondition,
 }))
 
 // the real driver (pools connect lazily), recorded: kernelServer's startup parameters
@@ -63,7 +73,7 @@ vi.mock('postgres', async (orig) => {
   }
 })
 
-const { customerAdapters, kernelServer, ensureKernelPostMigrationPrivileges, reconcileKernelAudit } = await import('./customer-adapters')
+const { customerAdapters, kernelServer, ensureKernelPostMigrationPrivileges, reconcileKernelAudit, inActiveContext } = await import('./customer-adapters')
 const { runWithTenant } = await import('$lib/server/tenant/context')
 const { runMigrations } = await import('$lib/server/db')
 
@@ -85,8 +95,9 @@ function kcFake(exists: boolean, held: string[][] = [[], ['realm-admin']]) {
   }
 }
 
-function adapters(kc: ReturnType<typeof kcFake>, adminKc?: { assignServiceAccountRealmRoles: ReturnType<typeof vi.fn> }, tenantSecretsDir = '/secrets') {
+function adapters(kc: ReturnType<typeof kcFake>, adminKc?: { assignServiceAccountRealmRoles: ReturnType<typeof vi.fn> }, tenantSecretsDir = '/secrets', over: Record<string, unknown> = {}) {
   const written: string[] = []
+  const govWritten: { path: string; value: string }[] = []
   const a = customerAdapters({
     apexDomain: 'platform.example',
     tenantSecretsDir,
@@ -98,15 +109,21 @@ function adapters(kc: ReturnType<typeof kcFake>, adminKc?: { assignServiceAccoun
     storageRoot: null,
     manifests: [],
     loadBaseRealm: () => JSON.parse(JSON.stringify(BASE)) as Record<string, unknown>,
-    genSecret: () => 'unit-generated',
+    genSecret: () => 'unit-generated-secret-0123456789',
     writeSecretFile: async (p) => void written.push(p),
+    governanceAdminUrl: 'postgresql://governance:x@governance-postgres:5432/postgres',
+    governanceSecretsDir: '/nonexistent/governance',
+    governanceMigrationsDir: '/nonexistent/migrations',
+    releaseRef: 'dist-unit',
+    writeGovernanceSecretFile: async (path: string, value: string) => void govWritten.push({ path, value }),
     writeConfigFile: () => {},
     repairConfigOwner: () => {},
     makePrivateDir: () => {},
     kc: kc as never,
     ...(adminKc ? { adminKc: adminKc as never } : {}),
+    ...over,
   })
-  return { a, written }
+  return { a, written, govWritten }
 }
 
 // Review B2 MEDIUM (r2): the first-body projection passed `{keycloak} as
@@ -232,6 +249,116 @@ describe('customerAdapters.kernel.ensureDatabase: the PgBouncer grant (review B1
     await a.kernel.ensureDatabase(C)
     expect(written.some((p) => p.endsWith('tenant_musterstadt_db'))).toBe(true)
     expect(reg.markTenantResourceOk).toHaveBeenCalledWith(C.id, 'db', 't_0192f1a23b4c7d5e8f60718293a4b5c6__kernel')
+  })
+})
+
+describe('customerAdapters.governance (TASK-084-a)', () => {
+  const HEX = C.id.replaceAll('-', '')
+  const DB = `t_${HEX}__governance`
+  const APP = `g_${HEX}_app`
+  const roles = { owner: `g_${HEX}_owner`, app: APP, purger: `g_${HEX}_purger` }
+  let dir: string
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 't084-gov-'))
+    for (const f of Object.values(lc)) f.mockReset()
+    lc.ensureGovernanceDatabase.mockResolvedValue({ dbName: DB, created: true, ...roles })
+    lc.migrateGovernanceDatabase.mockResolvedValue({ applied: [], alreadyApplied: 1 })
+    lc.bindGovernanceDatabase.mockResolvedValue({ inserted: true })
+  })
+  afterEach(() => rmSync(dir, { recursive: true, force: true }))
+
+  it('ensureDatabase writes the credential file once, under governanceSecretsDir, never under tenantSecretsDir', async () => {
+    const { a, written, govWritten } = adapters(kcFake(true), undefined, '/tenantsecrets', { governanceSecretsDir: dir })
+    await a.governance.ensureDatabase(C)
+    expect(govWritten).toHaveLength(1)
+    expect(govWritten[0]!.path.replaceAll('\\', '/')).toBe(`${dir.replaceAll('\\', '/')}/${HEX}`)
+    expect(govWritten[0]!.value).toBe(`postgresql://${APP}:unit-generated-secret-0123456789@governance-postgres:5432/${DB}`)
+    expect(written).toEqual([]) // writeSecretFile (the tenant dir) is never called
+    expect(lc.ensureGovernanceDatabase).toHaveBeenCalledWith(expect.anything(), C.id, 'unit-generated-secret-0123456789')
+  })
+
+  it('a present credential file is read, not rewritten: the password is passed on', async () => {
+    writeFileSync(join(dir, HEX), `postgresql://${APP}:from-the-file-0123456789@governance-postgres:5432/${DB}\n`)
+    const { a, govWritten } = adapters(kcFake(true), undefined, '/tenantsecrets', { governanceSecretsDir: dir })
+    await a.governance.ensureDatabase(C)
+    expect(govWritten).toEqual([])
+    expect(lc.ensureGovernanceDatabase).toHaveBeenCalledWith(expect.anything(), C.id, 'from-the-file-0123456789')
+  })
+
+  it('an unparsable existing credential file fails the step naming the file and is not overwritten', async () => {
+    writeFileSync(join(dir, HEX), 'this is not a url')
+    const { a, govWritten } = adapters(kcFake(true), undefined, '/tenantsecrets', { governanceSecretsDir: dir })
+    await expect(a.governance.ensureDatabase(C)).rejects.toThrow(new RegExp(HEX))
+    expect(govWritten).toEqual([])
+    expect(lc.ensureGovernanceDatabase).not.toHaveBeenCalled()
+    expect(readFileSync(join(dir, HEX), 'utf8')).toBe('this is not a url')
+  })
+
+  it('a credential file with a malformed percent sequence is refused with the file-naming error, not a bare URIError', async () => {
+    writeFileSync(join(dir, HEX), `postgresql://${APP}:bad%zzsecret@governance-postgres:5432/${DB}`)
+    const { a, govWritten } = adapters(kcFake(true), undefined, '/tenantsecrets', { governanceSecretsDir: dir })
+    await expect(a.governance.ensureDatabase(C)).rejects.toThrow(/refusing to overwrite/)
+    expect(govWritten).toEqual([])
+    expect(lc.ensureGovernanceDatabase).not.toHaveBeenCalled()
+  })
+
+  it('a credential file for another role or database is refused the same way', async () => {
+    writeFileSync(join(dir, HEX), 'postgresql://someone_else:x1234567890123456@governance-postgres:5432/other')
+    const { a } = adapters(kcFake(true), undefined, '/tenantsecrets', { governanceSecretsDir: dir })
+    await expect(a.governance.ensureDatabase(C)).rejects.toThrow(new RegExp(HEX))
+    expect(lc.ensureGovernanceDatabase).not.toHaveBeenCalled()
+  })
+
+  it('migrate passes the shipped dir and the release ref; bind passes (id, token)', async () => {
+    const { a } = adapters(kcFake(true), undefined, '/tenantsecrets', { governanceMigrationsDir: '/ship/migrations', releaseRef: 'dist-v9' })
+    await a.governance.migrate(C)
+    expect(lc.migrateGovernanceDatabase).toHaveBeenCalledWith(expect.anything(), C.id, expect.objectContaining({ dir: '/ship/migrations', releaseRef: 'dist-v9' }))
+    await a.governance.bind(C)
+    expect(lc.bindGovernanceDatabase).toHaveBeenCalledWith(expect.anything(), { id: C.id, token: C.token })
+  })
+
+  it('postCondition fills shipped from the migrations dir (filename + sha256 of every *.sql, sorted) and expectedDatabase / expectedConnectGrantees from the id', async () => {
+    const mig = join(dir, 'migrations')
+    mkdirSync(mig)
+    writeFileSync(join(mig, '0002_b.sql'), 'select 2;\n')
+    writeFileSync(join(mig, '0001_a.sql'), 'select 1;\n')
+    writeFileSync(join(mig, 'manifest.json'), '{}')
+    lc.governancePostCondition.mockResolvedValue({
+      binding: { customerId: C.id, tenantToken: C.token, contextCode: 'gov' },
+      ledger: [],
+      unforcedRlsTables: [],
+      connectGrantees: [roles.owner],
+      currentDatabase: DB,
+    })
+    const { a } = adapters(kcFake(true), undefined, '/tenantsecrets', { governanceMigrationsDir: mig })
+    const pc = await a.governance.postCondition(C)
+    const sha = (t: string) => createHash('sha256').update(t).digest('hex')
+    expect(pc.shipped).toEqual([
+      { filename: '0001_a.sql', sha256: sha('select 1;\n') },
+      { filename: '0002_b.sql', sha256: sha('select 2;\n') },
+    ])
+    expect(pc.expectedDatabase).toBe(DB)
+    expect(pc.expectedConnectGrantees).toEqual([roles.owner, roles.app, roles.purger].sort())
+    expect(pc.currentDatabase).toBe(DB)
+    expect(pc.binding).toEqual({ customerId: C.id, tenantToken: C.token, contextCode: 'gov' })
+  })
+
+  it('the governance server is closed after every call', async () => {
+    const { a } = adapters(kcFake(true), undefined, '/tenantsecrets', { governanceSecretsDir: dir })
+    const closed: ReturnType<typeof vi.fn>[] = []
+    const spy = (server: { close(): Promise<void> }) => {
+      const s = vi.fn(server.close.bind(server))
+      server.close = s as never
+      closed.push(s)
+    }
+    lc.ensureGovernanceDatabase.mockImplementation(async (server) => (spy(server), { dbName: DB, created: true, ...roles }))
+    lc.migrateGovernanceDatabase.mockImplementation(async (server) => (spy(server), { applied: [], alreadyApplied: 1 }))
+    lc.bindGovernanceDatabase.mockImplementation(async (server) => (spy(server), { inserted: true }))
+    await a.governance.ensureDatabase(C)
+    await a.governance.migrate(C)
+    await a.governance.bind(C)
+    expect(closed).toHaveLength(3)
+    for (const s of closed) expect(s).toHaveBeenCalledTimes(1)
   })
 })
 
@@ -451,6 +578,8 @@ describe('customerAdapters.config.ensure: an existing config is handed to the re
     const a = customerAdapters({
       apexDomain: 'platform.example', tenantSecretsDir: '/secrets', runtimeDatabaseUrl: 'postgresql://gremion:x@pgbouncer:6432/gremion',
       kernelAdminUrl: 'postgresql://postgres:x@postgres:5432/postgres', configFile: '/nonexistent/config.json', bodyName: 'Rat', edge: null,
+      governanceAdminUrl: 'postgresql://governance:x@governance-postgres:5432/postgres', governanceSecretsDir: '/nonexistent/governance',
+      governanceMigrationsDir: '/nonexistent/migrations', releaseRef: 'dist-unit', writeGovernanceSecretFile: async () => {},
       storageRoot: null, manifests: [], loadBaseRealm: () => ({}), genSecret: () => 'g', writeSecretFile: async () => {},
       writeConfigFile: (p) => void writes.push(p), repairConfigOwner: (p) => void repaired.push(p), makePrivateDir: () => {}, kc: {} as never,
     })
@@ -462,5 +591,75 @@ describe('customerAdapters.config.ensure: an existing config is handed to the re
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
+  })
+})
+
+// Kernel issue #88: ensureTenantAccount is declarative -- a module set without kernel-api deletes the seed the
+// kernel API relay reads. Every broker.ensure (create phase B, enable, disable, suspend, resume) therefore
+// carries the platform identities beside the registry's module set.
+describe('customerAdapters.broker.ensure: the kernel-api identity rides with every module set (#88)', () => {
+  it('passes the module set plus kernel-api, sorted, to nats-auth; the empty (suspended) set keeps kernel-api', async () => {
+    const { ensureTenantAccount } = await import('@gremion/nats-auth')
+    const ensure = vi.mocked(ensureTenantAccount)
+    ensure.mockClear()
+    const { a } = adapters(kcFake(true))
+    await a.broker.ensure(C, ['finance', 'calendar'])
+    expect(ensure).toHaveBeenLastCalledWith({ tenant: 'musterstadt', modules: ['calendar', 'finance', 'kernel-api'] })
+    await a.broker.ensure(C, [])
+    expect(ensure).toHaveBeenLastCalledWith({ tenant: 'musterstadt', modules: ['kernel-api'] })
+  })
+})
+
+// gremion#82: the member-import verbs (seed-vertical, import-validate, import-apply) run on an ACTIVE
+// customer. inProvisioningContext refuses an active row (the Q21 guard stays as it is), so they use
+// inActiveContext: the ordinary tenant context (resolveTenantById: active rows only, null otherwise),
+// the pool evicted before and after, no owner-role url override.
+describe('inActiveContext: a tenant context for an active customer only (gremion#82)', () => {
+  const ctx = { id: C.id, slug: C.slug }
+  // resolveTenantById's contract (registry.ts): the context for an active row, null for any other status
+  const registryRow = (status: string) => reg.resolveTenantById.mockImplementation(async () => (status === 'active' ? ctx : null))
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.mocked(runWithTenant).mockImplementation(async (_ctx, fn) => fn())
+  })
+
+  it('runs fn inside runWithTenant with the resolved context for an active row, and returns its value', async () => {
+    registryRow('active')
+    const seen: unknown[] = []
+    vi.mocked(runWithTenant).mockImplementation(async (c, fn) => (seen.push(c), fn()))
+    await expect(inActiveContext(C, async () => 'done')).resolves.toBe('done')
+    expect(reg.resolveTenantById).toHaveBeenCalledWith(C.id)
+    expect(seen).toEqual([ctx])
+    expect(reg.contextForProvisioningTenant).not.toHaveBeenCalled()
+  })
+
+  it('evicts the tenant pool before the context is built and again after fn', async () => {
+    registryRow('active')
+    const order: string[] = []
+    reg.evictTenantRuntime.mockImplementation(() => void order.push('evict'))
+    reg.resolveTenantById.mockImplementation(async () => (order.push('resolve'), ctx))
+    await inActiveContext(C, async () => void order.push('fn'))
+    expect(order).toEqual(['evict', 'resolve', 'fn', 'evict'])
+    expect(reg.evictTenantRuntime).toHaveBeenCalledWith(C.id)
+    reg.evictTenantRuntime.mockReset()
+  })
+
+  it.each(['provisioning', 'suspended', 'deleting'])('throws for a %s row and never runs fn', async (status) => {
+    registryRow(status)
+    const fn = vi.fn(async () => 'never')
+    await expect(inActiveContext(C, fn)).rejects.toThrow(/not active/)
+    expect(fn).not.toHaveBeenCalled()
+    expect(runWithTenant).not.toHaveBeenCalled()
+  })
+
+  it('evicts the pool in finally when fn throws, and when the row is not active', async () => {
+    registryRow('active')
+    reg.evictTenantRuntime.mockClear()
+    await expect(inActiveContext(C, async () => { throw new Error('boom') })).rejects.toThrow('boom')
+    expect(reg.evictTenantRuntime).toHaveBeenCalledTimes(2)
+    reg.evictTenantRuntime.mockClear()
+    registryRow('suspended')
+    await expect(inActiveContext(C, async () => 1)).rejects.toThrow(/not active/)
+    expect(reg.evictTenantRuntime).toHaveBeenCalledTimes(2)
   })
 })

@@ -1,6 +1,8 @@
 <script lang="ts">
   import PageTitle from '$lib/components/PageTitle.svelte'
   import Icon from '$lib/components/ui/Icon.svelte'
+  import RetainedRecords from '$lib/components/RetainedRecords.svelte'
+  import { t } from '$lib/i18n'
   import type { PageData } from './$types'
   import { env } from '$env/dynamic/public'
 
@@ -121,6 +123,9 @@
       {/each}
     </ul>
   {/if}
+
+  <!-- Module Karenz (Task 19): sealed result copies of an earlier period, read-only; nothing for an empty list or a reader who may not see them -->
+  <RetainedRecords records={data.retainedRecords} moduleLabel={$t('settings.modules.karenz.retained.module.elections')} />
 </div>
 
 <style>

@@ -426,6 +426,25 @@ test('a leg without its fail-fast job, or a leg that cancels or holds a write to
   assert.match(joined(legCancels), /verify-census: cancels the run, but it is a verify leg or the gate/)
 })
 
+// The legs do not wait for Lint, so the gate must, and a red Lint must cancel the legs on a pull request.
+test('a gate that does not need lint is reported (the legs no longer wait for it)', () => {
+  const p = joined(plant('    needs:\n      - lint\n      - verify-static\n', '    needs:\n      - verify-static\n'))
+  assert.match(p, /verify-gate does not need lint/)
+})
+
+test('a renamed lint job fails closed instead of switching the lint rules off', () => {
+  const renamed = CI.split('\n  lint:\n').join('\n  guards:\n').split('needs: lint\n').join('needs: guards\n').split('      - lint\n').join('      - guards\n')
+  assert.notEqual(renamed, CI)
+  assert.match(joined(renamed), /there is no `lint` job -- the gate-needs-lint and fail-fast-lint checks cannot run/)
+})
+
+test('lint without its fail-fast job is reported', () => {
+  const start = CI.indexOf('  fail-fast-lint:\n')
+  const end = CI.indexOf('\n  fail-fast-', start + 1) + 1
+  assert.ok(start !== -1 && end > start, 'fail-fast-lint not found')
+  assert.match(joined(CI.slice(0, start) + CI.slice(end)), /lint has 0 fail-fast job\(s\); it needs exactly one/)
+})
+
 test('a gate without its cancelled-run step is reported (every other step skips in a cancelled run)', () => {
   const p = joined(plant('        if: ${{ cancelled() }}\n', '        if: ${{ false }}\n'))
   assert.match(p, /verify-gate has no step with `if: cancelled\(\)` that exits 1/)
@@ -490,6 +509,145 @@ test('the CLI rejects an unknown argument', () => {
   const r = spawnSync(process.execPath, [GUARD, '--nope'], { cwd: ROOT, encoding: 'utf8' })
   assert.equal(r.status, 1)
   assert.match(r.stderr, /unknown argument: --nope/)
+})
+
+/** ci.yml with the FIRST `from` replaced: for lines that repeat across the install steps. */
+function plantFirst(from, to, ci = CI) {
+  assert.ok(ci.includes(from), `the plant target must occur in ci.yml: ${from.slice(0, 80)}`)
+  return ci.replace(from, to)
+}
+
+const CHECKOUT = 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1\n'
+const INTEGRATION_HEAD = 'name: Integration Tests\n    runs-on: ubuntu-latest\n    needs: lint\n    timeout-minutes: 30\n\n    steps:\n      - uses: '
+
+test('a checkout that keeps its credentials is reported, naming the job', () => {
+  const p = joined(plant(`${INTEGRATION_HEAD}${CHECKOUT}        with:\n          persist-credentials: false\n`, `${INTEGRATION_HEAD}${CHECKOUT}`))
+  assert.match(p, /integration-test step 1: actions\/checkout does not set persist-credentials: false/)
+})
+
+test('a GitHub release download without retries is reported, naming the job', () => {
+  const p = joined(plantFirst('curl --retry 5 --retry-all-errors -fsSLo', 'curl -fsSLo'))
+  assert.match(p, /lint step \d+ \(Install shellcheck\): a GitHub release download has no retry/)
+})
+
+test('--retry without --retry-all-errors is reported: curl alone does not retry every 5xx', () => {
+  const p = joined(plantFirst('curl --retry 5 --retry-all-errors -fsSLo', 'curl --retry 5 -fsSLo'))
+  assert.match(p, /lint step \d+ \(Install shellcheck\): a GitHub release download has no retry/)
+})
+
+test('an unpinned yamllint install is reported', () => {
+  const p = joined(plantFirst('pip install yamllint==1.38.0', 'pip install yamllint'))
+  assert.match(p, /lint step \d+ \(Install yamllint\): pip package yamllint is not pinned/)
+})
+
+test('an unpinned bats install is reported', () => {
+  const p = joined(plantFirst('npm install -g bats@1.13.0', 'npm install -g bats'))
+  assert.match(p, /global npm package bats is not pinned/)
+})
+
+test('two pinned versions of one tool are reported', () => {
+  const p = joined(plantFirst('pip install yamllint==1.38.0', 'pip install yamllint==1.37.0'))
+  assert.match(p, /yamllint is installed at 2 versions/)
+})
+
+test('a repeated make fresh-init-proof is reported', () => {
+  const start = '      - name: Start Keycloak\n'
+  const p = joined(plant(start, `      - name: Proof again\n        run: make fresh-init-proof\n\n${start}`))
+  assert.match(p, /runs make fresh-init-proof, which verify-integration-db already runs/)
+})
+
+test('a job without timeout-minutes is reported, naming the job', () => {
+  const p = joined(plant('name: Docker inputs changed\n    runs-on: ubuntu-latest\n    timeout-minutes: 5\n', 'name: Docker inputs changed\n    runs-on: ubuntu-latest\n'))
+  assert.match(p, /changes has no timeout-minutes/)
+})
+
+test('a scan that finds no release download fails closed rather than passing', () => {
+  const p = joined(CI.replaceAll('/releases/download/', '/releases/fetch/'))
+  assert.match(p, /no GitHub release download found/)
+})
+
+test('a scan that finds no pinned yamllint or bats fails closed rather than passing', () => {
+  const p = joined(CI.replaceAll('pip install yamllint==1.38.0', 'true').replaceAll('npm install -g bats@1.13.0', 'true'))
+  assert.match(p, /no pinned install of yamllint found/)
+  assert.match(p, /no pinned install of bats found/)
+})
+
+// The image builds reach the verdict: run 42785784926 had a failed build and a green gate.
+const DOCKER_BUILD_RUN = 'run: docker build -f ${{ matrix.dockerfile }} -t gremion-ci/${{ matrix.name }}:ci ${{ matrix.context }}'
+const DOCKER_SKIP = '[ "$job" = "docker-build" ] && [ "$result" = "skipped" ] && [ "$EVENT_NAME" = "pull_request" ]'
+
+test('a gate that does not wait for the image builds is reported', () => {
+  assert.match(joined(plant('      - docker-build\n', '')), /verify-gate does not need docker-build/)
+})
+
+test('a renamed docker-build job fails closed rather than passing', () => {
+  assert.match(joined(plant('  docker-build:\n', '  image-build:\n')), /there is no `docker-build` job/)
+})
+
+test('a docker-build step that swallows a failed build is reported', () => {
+  const p = joined(plant(DOCKER_BUILD_RUN, `${DOCKER_BUILD_RUN} || true`))
+  assert.match(p, /docker-build step \d+ \(.*\): `docker build .* \|\| true` swallows a failing exit status/)
+})
+
+test('a skipped image build accepted on a push is reported', () => {
+  const p = joined(plant(DOCKER_SKIP, '[ "$job" = "docker-build" ] && [ "$result" = "skipped" ]'))
+  assert.match(p, /accepts a skipped job; only verify-census and docker-build may be skipped/)
+})
+
+test('a skip accepted for any other job is reported', () => {
+  const p = joined(plant(DOCKER_SKIP, DOCKER_SKIP.replace('docker-build', 'verify-static')))
+  assert.match(p, /accepts a skipped job; only verify-census and docker-build may be skipped/)
+})
+
+test('a skip accepted under another spelling is still weighed', () => {
+  const p = joined(plant(DOCKER_SKIP, '[ "$result" == skipped ]'))
+  assert.match(p, /accepts a skipped job/)
+})
+
+// A pull-request skip is legitimate only when the `changes` filter ran and found no input.
+// A cancelled or timed-out `changes` has no outputs, and docker-build and the census then
+// skip exactly as if nothing had changed: the gate must not read that as "no input changed".
+const CHANGES_OK = '[ "$changes_result" = "success" ]'
+const DOCKER_UNCHANGED = '[ "$docker_changed" = "false" ]'
+const CENSUS_UNCHANGED = '[ "$census_changed" = "false" ]'
+const DOCKER_SKIP_LINE = `${DOCKER_SKIP} && ${CHANGES_OK} && ${DOCKER_UNCHANGED}`
+
+test('a gate that does not wait for the changes filter is reported', () => {
+  assert.match(joined(plant('      - changes\n', '')), /verify-gate does not need changes/)
+})
+
+test('a renamed changes job fails closed rather than passing', () => {
+  assert.match(joined(plant('  changes:\n', '  diff-filter:\n')), /there is no `changes` job/)
+})
+
+test('an image-build skip accepted without checking that the changes filter succeeded is reported', () => {
+  const p = joined(plant(DOCKER_SKIP_LINE, `${DOCKER_SKIP} && ${DOCKER_UNCHANGED}`))
+  assert.match(p, /accepts a skipped docker-build without `"\$changes_result" = "success"`/)
+})
+
+test('an image-build skip accepted without checking the docker output is reported', () => {
+  const p = joined(plant(DOCKER_SKIP_LINE, `${DOCKER_SKIP} && ${CHANGES_OK}`))
+  assert.match(p, /accepts a skipped docker-build without `"\$docker_changed" = "false"`/)
+})
+
+test('an image-build skip that checks the census output instead of the docker output is reported', () => {
+  const p = joined(plant(DOCKER_SKIP_LINE, `${DOCKER_SKIP} && ${CHANGES_OK} && ${CENSUS_UNCHANGED}`))
+  assert.match(p, /accepts a skipped docker-build without `"\$docker_changed" = "false"`/)
+})
+
+test('a census skip accepted without checking the census output is reported', () => {
+  const p = joined(plant(`&& ${CHANGES_OK} && ${CENSUS_UNCHANGED}`, `&& ${CHANGES_OK}`))
+  assert.match(p, /accepts a skipped verify-census without `"\$census_changed" = "false"`/)
+})
+
+test('a docker_changed read from the census output is reported', () => {
+  const p = joined(plant("docker_changed=$(jq -r '.changes.outputs.docker", "docker_changed=$(jq -r '.changes.outputs.census"))
+  assert.match(p, /does not set docker_changed from the changes job's docker output/)
+})
+
+test('a changes_result that is not read from the changes job is reported', () => {
+  const p = joined(plant("changes_result=$(jq -r '.changes.result'", "changes_result=$(jq -r '.lint.result'"))
+  assert.match(p, /does not set changes_result from the changes job's result/)
 })
 
 // The runner-policy idiom (scripts/ci-local/yaml-unavailable.test.mjs): a child node whose

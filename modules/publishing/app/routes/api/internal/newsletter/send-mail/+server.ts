@@ -80,7 +80,32 @@ export const POST: RequestHandler = async ({ request }) => {
       // (operator needs to configure SMTP for this tenant; retry will not help)
       return json({ success: false, error: 'smtp-unconfigured' }, { status: 503 })
     }
-    console.error('[newsletter:send-mail] SMTP send failed', { to, err })
-    return json({ success: false, error: 'Send failed' }, { status: 500 })
+    // The cause, never the address: the error's text and its server response can
+    // echo the recipient. The same fields go back to the leaf so its log can name them.
+    const cause = mailErrorFields(err)
+    console.error('[newsletter:send-mail] SMTP send failed', cause)
+    const { name: _name, ...fields } = cause
+    return json({ success: false, error: 'Send failed', ...fields }, { status: 500 })
   }
+}
+
+const TOKEN = /^[A-Za-z0-9_]{1,40}$/
+const COMMAND = /^[A-Z][A-Z0-9 ]{0,19}$/
+
+/** Class name plus the SMTP cause fields (nodemailer sets code, responseCode, command), each only when a plain token. */
+function mailErrorFields(err: unknown): {
+  name: string
+  code?: string
+  responseCode?: number
+  command?: string
+} {
+  if (!(err instanceof Error)) return { name: typeof err }
+  const e = err as Error & { code?: unknown; responseCode?: unknown; command?: unknown }
+  const out: ReturnType<typeof mailErrorFields> = { name: err.name }
+  if (typeof e.code === 'string' && TOKEN.test(e.code)) out.code = e.code
+  if (typeof e.responseCode === 'number' && Number.isInteger(e.responseCode) && e.responseCode >= 100 && e.responseCode <= 599) {
+    out.responseCode = e.responseCode
+  }
+  if (typeof e.command === 'string' && COMMAND.test(e.command)) out.command = e.command
+  return out
 }

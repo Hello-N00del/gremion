@@ -11,6 +11,8 @@ import {
   registerSetupHealthProbe,
   registerErasureHook,
 } from '$lib/server/modules/runtime-registry'
+import { registerKarenzParticipant } from '$lib/server/module-karenz/participants'
+import { registerNoRetention } from '$lib/server/module-karenz/retained/extractors'
 import { serviceEnv } from '$lib/server/env/service-env'
 import { evictMatrixClient } from './matrix-client'
 import { getMatrixClient } from './matrix-client'
@@ -20,6 +22,8 @@ import { evictLivekitSettings } from './livekit-client'
 import { evictServiceMatrixTokenCache } from './backend/service-client'
 import { createMatrixSubsystem } from './provisioning/matrix-subsystem'
 import { messagingErasureHook } from './erasure'
+import { messagingKarenz } from './karenz'
+import { beginUnreadRead, getCachedUnread, setCachedUnread } from './unread-cache'
 
 // Per-tenant runtime handles the messages module caches. The tenant registry's
 // evictTenantRuntime runs these on the suspend/delete lifecycle seam.
@@ -46,21 +50,38 @@ registerProvisioningSubsystem('matrix', (kc) =>
 // (matrix-client caches per user, so repeated navigations don't re-login). Caps
 // the sync at 4 s so a slow homeserver can't stall a page navigation; degrades to
 // 0 on any Matrix/auth error so a homeserver hiccup never blocks the shell.
+function totalUnread(sync: { rooms: { unreadCount?: number }[] }): number {
+  return sync.rooms.reduce((sum, r) => sum + (r.unreadCount ?? 0), 0)
+}
+
 registerDataProvider('messages:unread-count', async (accessToken) => {
   if (!accessToken) return 0
+  // Short per-user cache (unread-cache.ts): a click right after a render does not wait for
+  // another /sync. A failure below is returned as 0 and never stored; neither is a sync whose
+  // /notifications read failed (its zeros are a fallback), nor one that a mark-as-read overtook.
+  const cached = getCachedUnread(accessToken)
+  if (cached !== null) return cached
+  const began = beginUnreadRead()
   try {
     const mc = getMatrixClient()
     const matrixToken = await mc.getMatrixToken(accessToken)
     // An initial /sync (no `since`) returns the current state snapshot without
     // long-polling, but we cap it anyway so a slow homeserver can never stall a
     // page navigation — the badge degrades to 0 rather than hanging the shell.
+    // The cache is filled from the sync itself, not from the race winner: a sync that is slower
+    // than the cap still answers later, and that answer spares the next page another full /sync
+    // (storing only from the winner would leave every navigation waiting the full cap again).
+    const syncing = mc.sync(matrixToken).then((s) => {
+      if (!s.countsDegraded) setCachedUnread(accessToken, totalUnread(s), began)
+      return s
+    })
     const sync = await Promise.race([
-      mc.sync(matrixToken),
+      syncing,
       new Promise<never>((_, reject) =>
         setTimeout(() => reject(new Error('matrix sync timeout')), 4000),
       ),
     ])
-    return sync.rooms.reduce((sum, r) => sum + (r.unreadCount ?? 0), 0)
+    return totalUnread(sync)
   } catch {
     return 0
   }
@@ -69,7 +90,7 @@ registerDataProvider('messages:unread-count', async (accessToken) => {
 // D11 notification popover chat rows: the rooms with unread messages (display
 // name + count + last activity), from the same capped short /sync the
 // unread-count badge uses (sync() folds in the per-room unread *message* counts,
-// so the row counts always agree with the badge total). Room display names come
+// so the rows are read fresh; the badge total may be up to UNREAD_CACHE_TTL_MS older). Room display names come
 // from each room's m.room.name state, read through the SAME tenant-keyed client
 // that minted the token (mc.getRoomName) — never a hand-built default-env URL,
 // which would transmit a non-default tenant's per-user Matrix token to the
@@ -116,3 +137,14 @@ registerSetupHealthProbe({
 // TRD-196: the messaging module's data-subject erasure step (the Matrix account,
 // via the Synapse admin API).
 registerErasureHook(messagingErasureHook)
+
+// Module Karenz (phase 2, Task 15): archive the chat rooms at switch-off, unarchive them on
+// restore, delete them on the final day (meeting-linked rooms excepted). The kernel's per-tenant
+// pass drives the participant; a module switch-off that has no participant would leave the rooms
+// writable.
+registerKarenzParticipant(messagingKarenz)
+
+// The rooms are the participant's job (RC-MSG-ROOM: archived at switch-off, deleted on day 30); the module
+// keeps no sealed records of its own. Without this declaration the retained step fails closed on every pass
+// and the rooms are never deleted.
+registerNoRetention('messaging')

@@ -185,6 +185,82 @@ services:
       - "traefik.http.services.legal.loadbalancer.server.port=8080"
 
   # ----------------------------------------------------------
+  # The pilot's routed services (profiles messaging, video, collabora). Every one
+  # carries the stack label (a stack-constrained Traefik never sees a container
+  # without it) and names the one network Traefik reaches it on. Their chains use
+  # only middlewares the traefik service declares below (spec B B-09). A public
+  # router names its certificate resolver itself: tls=true alone serves the default
+  # certificate, silently (docker/traefik/traefik.yml, mechanism 1). The resolver
+  # value is empty when TLS terminates in front of Traefik (staging).
+  # ----------------------------------------------------------
+
+  # The chat module's homeserver on the platform host: the client API only.
+  # /_synapse carries the admin API and is never routed; federation is off
+  # (federation_domain_whitelist is empty in the homeserver config).
+  matrix:
+    labels:
+      - "traefik.enable=true"
+      - "org.gremion.stack=${STACK:?STACK required}"
+      - "traefik.docker.network=${STACK:?STACK required}_edge"
+      - "traefik.http.routers.matrix.rule=Host(`${PLATFORM_DOMAIN:?PLATFORM_DOMAIN required}`) && PathPrefix(`/_matrix`)"
+      - "traefik.http.routers.matrix.entrypoints=websecure"
+      - "traefik.http.routers.matrix.tls=true"
+      - "traefik.http.routers.matrix.tls.certresolver=${TRAEFIK_CERT_RESOLVER-le-http}"
+      - "traefik.http.routers.matrix.priority=100"
+      - "traefik.http.routers.matrix.middlewares=edge-hostpin-apex@docker,edge-hsts-platform@docker,edge-ratelimit-app@docker"
+      - "traefik.http.services.matrix.loadbalancer.server.port=8008"
+
+  # LiveKit's signalling socket on the platform host. The prefix is /livekit-sfu,
+  # deliberately NOT /livekit: that would shadow gremion-ui's /livekit/jwt token
+  # endpoint. The RTC ports are published in docker-compose.yml, on the edge
+  # addresses only.
+  livekit:
+    labels:
+      - "traefik.enable=true"
+      - "org.gremion.stack=${STACK:?STACK required}"
+      - "traefik.docker.network=${STACK:?STACK required}_edge"
+      - "traefik.http.routers.livekit.rule=Host(`${PLATFORM_DOMAIN:?PLATFORM_DOMAIN required}`) && PathPrefix(`/livekit-sfu`)"
+      - "traefik.http.routers.livekit.entrypoints=websecure"
+      - "traefik.http.routers.livekit.tls=true"
+      - "traefik.http.routers.livekit.tls.certresolver=${TRAEFIK_CERT_RESOLVER-le-http}"
+      - "traefik.http.routers.livekit.priority=100"
+      - "traefik.http.routers.livekit.middlewares=edge-hostpin-apex@docker,edge-hsts-platform@docker,edge-ratelimit-app@docker,livekit-sfu-strip@docker"
+      - "traefik.http.services.livekit.loadbalancer.server.port=7880"
+      # The video relay: TURN over TLS on 443, for a network that blocks UDP and every other
+      # port. ONE TCP router on websecure, matched by SNI on turn.<customer host>, TLS terminated
+      # here with the same resolver as the HTTP routers (never passthrough) and the plain stream
+      # handed to LiveKit's TURN port. docker/livekit/livekit.yaml.tmpl turns TURN on for the
+      # same host, from the same PILOT_TENANT_HOST. With no customer host there must be NO
+      # router (it would be refused by gremion-verify and would order a certificate for a name
+      # nobody serves), and compose cannot omit a label: so the key itself is conditional. Set,
+      # the key starts with `traefik.` and Traefik reads it; unset or empty, the key is
+      # `tcp.routers...`, which Traefik's docker provider ignores. Install prerequisite: a DNS
+      # record turn.<customer host> to this host's edge address (docs/ops/pilot-services.md).
+      - "${PILOT_TENANT_HOST:+traefik.}tcp.routers.livekit-turn.rule=HostSNI(`turn.${PILOT_TENANT_HOST:-relay.invalid}`)"
+      - "${PILOT_TENANT_HOST:+traefik.}tcp.routers.livekit-turn.entrypoints=websecure"
+      - "${PILOT_TENANT_HOST:+traefik.}tcp.routers.livekit-turn.tls=true"
+      - "${PILOT_TENANT_HOST:+traefik.}tcp.routers.livekit-turn.tls.certresolver=${TRAEFIK_CERT_RESOLVER-le-http}"
+      - "${PILOT_TENANT_HOST:+traefik.}tcp.routers.livekit-turn.service=livekit-turn"
+      - "${PILOT_TENANT_HOST:+traefik.}tcp.services.livekit-turn.loadbalancer.server.port=5349"
+
+  # Collabora is routed per TENANT host: @gremion/edge-routers emits a /office router
+  # into each tenant's own file that targets collabora@docker, THIS service. The
+  # container therefore declares the service and no public router. A labelled
+  # container with no router gets a generated default router (Host(`<container>`)
+  # on every default entrypoint, no pin, no resolver), so one anchor router sits
+  # on the loopback-only internaltest entrypoint, on a reserved .invalid host, and
+  # points at the service: it answers nothing from outside and stops the default.
+  collabora:
+    labels:
+      - "traefik.enable=true"
+      - "org.gremion.stack=${STACK:?STACK required}"
+      - "traefik.docker.network=${STACK:?STACK required}_edge"
+      - "traefik.http.services.collabora.loadbalancer.server.port=9980"
+      - "traefik.http.routers.collabora-anchor.rule=Host(`collabora-anchor.invalid`)"
+      - "traefik.http.routers.collabora-anchor.entrypoints=internaltest"
+      - "traefik.http.routers.collabora-anchor.service=collabora"
+
+  # ----------------------------------------------------------
   # Traefik's own labels: the middlewares every edge router chains. They
   # live on the traefik container — the only container guaranteed to exist
   # whenever a router does (active.yml.tmpl: "no middleware here") — because
@@ -248,8 +324,8 @@ services:
       - "traefik.http.middlewares.edge-hsts-custom.headers.stsseconds=31536000"
       - "traefik.http.middlewares.edge-hsts-custom.headers.stsincludesubdomains=false"
       - "traefik.http.middlewares.edge-hsts-custom.headers.stspreload=false"
-      - "traefik.http.middlewares.edge-ratelimit-app.ratelimit.average=300"
-      - "traefik.http.middlewares.edge-ratelimit-app.ratelimit.burst=100"
+      - "traefik.http.middlewares.edge-ratelimit-app.ratelimit.average=3000"
+      - "traefik.http.middlewares.edge-ratelimit-app.ratelimit.burst=1500"
       - "traefik.http.middlewares.edge-ratelimit-app.ratelimit.period=1m"
       - "traefik.http.middlewares.edge-ratelimit-app.ratelimit.sourcecriterion.ipstrategy.depth=0"
       - "traefik.http.middlewares.edge-ratelimit-portal.ratelimit.average=100"
@@ -260,6 +336,15 @@ services:
       - "traefik.http.middlewares.edge-ratelimit-auth.ratelimit.burst=10"
       - "traefik.http.middlewares.edge-ratelimit-auth.ratelimit.period=1m"
       - "traefik.http.middlewares.edge-ratelimit-auth.ratelimit.sourcecriterion.ipstrategy.depth=0"
+      # The pilot's platform-host routers (matrix, livekit; above). edge-hostpin-apex is the ONE
+      # platform pin declared here: it SETS X-Forwarded-Host to the platform host, so a client
+      # value never reaches Synapse, which builds URLs from it. The www, control and sales pins
+      # stay TASK-034 34b's, with the static routers that chain them. livekit-sfu-strip removes
+      # the /livekit-sfu prefix before LiveKit's signalling socket sees the path; it is
+      # declared on this container, not on livekit's own, so it survives livekit being stopped
+      # (spec B B-09).
+      - "traefik.http.middlewares.edge-hostpin-apex.headers.customrequestheaders.X-Forwarded-Host=${PLATFORM_DOMAIN:?PLATFORM_DOMAIN required}"
+      - "traefik.http.middlewares.livekit-sfu-strip.stripprefix.prefixes=/livekit-sfu"
 
   # ----------------------------------------------------------
   # PR-C (reboot-404): static "starting" fallback. A low-priority (1)

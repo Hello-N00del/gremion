@@ -5,9 +5,11 @@
 // PLATFORM_DOMAIN, IMAGE_TAG, subnets) are exempt: they come from app-<colour>.env.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
+import { spawnSync } from 'node:child_process'
+import { readFileSync, readdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { readEnvFile, renderState } from './compose-edge.mjs'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const read = (p) => readFileSync(join(ROOT, p), 'utf8')
@@ -87,4 +89,172 @@ test('gremion-ui environment of docker-compose.app.yml carries no AUTH_KEYCLOAK_
 
 test('gremion-ui environment of docker-compose.app.dev.yml carries no AUTH_KEYCLOAK_ISSUER / AUTH_KEYCLOAK_BASE (#87)', () => {
   assertNoIssuerKeys('docker-compose.app.dev.yml')
+})
+
+// ── the pilot's service endpoints (infra/host/module-profiles.json, docs/ops/pilot-services.md) ──
+//
+// gremion-ui carries the endpoint and credential names the in-process halves of the files, votes and
+// messaging modules and the three leaf clients already read, and the BACKEND TABLE of the evidence
+// contract: calendar, content and newsletter run as leaves (CALENDAR_BACKEND, CONTENT_BACKEND,
+// NEWSLETTER_BACKEND = service), votes/files/messages stay in-process (no *_BACKEND key at all) and
+// board stays default. The isolation evidence's case table describes exactly these paths, so a
+// drift in either is a proof about code that is not running.
+
+/** The `KEY: value` pairs of one service's environment block, comments and blank lines dropped. */
+function environmentOf(file, service) {
+  const block = serviceBlockWithoutComments(file, service)
+  const start = block.indexOf('    environment:')
+  assert.ok(start >= 0, `${service} has no environment block in ${file}`)
+  const out = {}
+  for (const line of block.slice(start).split('\n').slice(1)) {
+    if (/^ {4}\S/.test(line)) break
+    const m = /^ {6}([A-Z][A-Z0-9_]*):\s*(.*?)\s*$/.exec(line)
+    if (m) out[m[1]] = m[2]
+  }
+  return out
+}
+
+const PILOT_UI_ENV = [
+  'NEXTCLOUD_URL', 'NEXTCLOUD_ADMIN_USER', 'NEXTCLOUD_ADMIN_PASSWORD', 'MATRIX_URL', 'SYNAPSE_SERVER_NAME', 'LIVEKIT_URL',
+  'LIVEKIT_API_KEY', 'LIVEKIT_API_SECRET', 'SYNAPSE_ADMIN_TOKEN', 'SYNAPSE_ADMIN_BOT_USER_ID', 'MATRIX_PUBLIC_URL',
+  'PUBLIC_ELEMENT_CALL_URL', 'COLLABORA_URL', 'ELEMENT_CALL_INTERNAL_URL', 'CALENDAR_BACKEND', 'CONTENT_BACKEND', 'NEWSLETTER_BACKEND',
+  'CALENDAR_SERVICE_URL', 'CONTENT_SERVICE_URL', 'NEWSLETTER_SERVICE_URL', 'INTERNAL_CALENDAR_SECRET', 'INTERNAL_CONTENT_SECRET',
+  'INTERNAL_NEWSLETTER_SECRET', 'PUBLIC_BASE_URL',
+]
+
+test('pilot env: gremion-ui carries every endpoint name the module code reads, and every secret is a ${VAR}, never a literal', () => {
+  const env = environmentOf('docker-compose.app.yml', 'gremion-ui')
+  assert.deepEqual(PILOT_UI_ENV.filter((k) => !(k in env)), [])
+  for (const [k, v] of Object.entries(env)) {
+    if (/PASSWORD|SECRET|TOKEN|API_KEY/.test(k)) assert.match(v, /^\$\{[A-Z0-9_]+(:-[^}]*)?\}$/, `${k} is not a \${VAR} reference: ${v}`)
+  }
+  // the browser receives these two: never the in-network names
+  assert.match(env.LIVEKIT_URL, /^wss:\/\/\$\{PLATFORM_DOMAIN:\?PLATFORM_DOMAIN required\}\/livekit-sfu$/)
+  assert.match(env.PUBLIC_ELEMENT_CALL_URL, /^https:\/\/\$\{PILOT_TENANT_HOST:-\}\/element-call$/)
+  assert.match(env.MATRIX_PUBLIC_URL, /^https:\/\/\$\{PLATFORM_DOMAIN:\?PLATFORM_DOMAIN required\}$/)
+  // Nextcloud's admin login stays out of gremion-public (#241)
+  assert.doesNotMatch(serviceBlockWithoutComments('docker-compose.app.yml', 'gremion-public'), /NEXTCLOUD_ADMIN/)
+})
+
+test('gremion-ui lifts the adapter-node body cap: a 1 MB upload is refused at the 512K default, so BODY_SIZE_LIMIT is 100M', () => {
+  const env = environmentOf('docker-compose.app.yml', 'gremion-ui')
+  assert.equal(env.BODY_SIZE_LIMIT?.replace(/^["']|["']$/g, ''), '100M')
+})
+
+test('the Files client limit and the app body cap are one number: MAX_UPLOAD_BYTES is BODY_SIZE_LIMIT in MiB', () => {
+  const env = environmentOf('docker-compose.app.yml', 'gremion-ui')
+  const cap = /^(\d+)M$/.exec((env.BODY_SIZE_LIMIT ?? '').replace(/^["']|["']$/g, ''))
+  assert.ok(cap, `BODY_SIZE_LIMIT is not of the form <n>M: ${env.BODY_SIZE_LIMIT}`)
+  const client = /MAX_UPLOAD_BYTES\s*=\s*(\d+)\s*\*\s*1024\s*\*\s*1024/.exec(read('modules/files/app/lib/files/upload-limit.ts'))
+  assert.ok(client, 'MAX_UPLOAD_BYTES is no longer written as <n> * 1024 * 1024')
+  assert.equal(Number(client[1]), Number(cap[1]))
+})
+
+test('the public entrypoint gives a body as large as the upload cap time to arrive: websecure readTimeout is at least 600s', () => {
+  // Traefik's default read timeout (60 s) covers the whole request body, so one 100 MiB PUT on a
+  // venue uplink would be cut mid-body. The block is the websecure entrypoint, up to the next entrypoint.
+  const text = read('docker/traefik/traefik.yml')
+  const block = /^ {2}websecure:\n([\s\S]*?)(?=^ {2}\S)/m.exec(text)
+  assert.ok(block, 'no websecure entrypoint in docker/traefik/traefik.yml')
+  const lines = block[1].split(/\r?\n/).filter((l) => !/^\s*#/.test(l)).join('\n')
+  const timeout = /respondingTimeouts:\s*\n\s+readTimeout:\s*"?(\d+)s"?/.exec(lines)
+  assert.ok(timeout, 'websecure has no transport.respondingTimeouts.readTimeout: the 60 s default cuts a large upload')
+  assert.ok(Number(timeout[1]) >= 600, `readTimeout ${timeout[1]}s is below 600s`)
+})
+
+test('the app server waits as long as the edge does: the image starts the serve wrapper, whose requestTimeout is at least the websecure readTimeout', () => {
+  // adapter-node's own server leaves Node's requestTimeout at its 300 s default, which cuts a slow
+  // body at the app while the edge (readTimeout) still allows it. gremion-ui/scripts/serve.mjs lifts it.
+  const edge = /respondingTimeouts:\s*\n\s+readTimeout:\s*"?(\d+)s"?/.exec(read('docker/traefik/traefik.yml'))
+  assert.ok(edge, 'no websecure readTimeout in docker/traefik/traefik.yml')
+  const serve = read('gremion-ui/scripts/serve.mjs')
+  const app = /REQUEST_TIMEOUT_MS\s*=\s*(\d+)\s*\*\s*1000/.exec(serve)
+  assert.ok(app, 'gremion-ui/scripts/serve.mjs does not write REQUEST_TIMEOUT_MS as <n> * 1000')
+  assert.ok(Number(app[1]) >= Number(edge[1]), `app requestTimeout ${app[1]}s is below the edge readTimeout ${edge[1]}s`)
+  const cmd = /^CMD\s+(\[.*\])\s*$/m.exec(read('gremion-ui/Dockerfile'))
+  assert.ok(cmd, 'gremion-ui/Dockerfile has no CMD')
+  assert.deepEqual(JSON.parse(cmd[1]), ['node', 'scripts/serve.mjs'])
+  assert.match(read('gremion-ui/Dockerfile'), /^COPY --from=builder \/repo\/gremion-ui\/scripts\/serve\.mjs \.\/scripts\/serve\.mjs$/m)
+})
+
+test('serve.mjs sets requestTimeout on the adapter-node http server, and the value is what Node reports', async () => {
+  const { mkdtempSync, mkdirSync, writeFileSync, copyFileSync, rmSync } = await import('node:fs')
+  const { tmpdir } = await import('node:os')
+  const { pathToFileURL } = await import('node:url')
+  const dir = mkdtempSync(join(tmpdir(), 'serve-wrapper-'))
+  try {
+    // A stand-in for adapter-node's build/index.js, which exports the polka app; polka keeps the http server on .server.
+    mkdirSync(join(dir, 'build'))
+    mkdirSync(join(dir, 'scripts'))
+    writeFileSync(join(dir, 'package.json'), '{"type":"module"}')
+    writeFileSync(join(dir, 'build', 'index.js'), "import http from 'node:http'\nexport const server = { server: http.createServer() }\nglobalThis.__serveProbeServer = server.server\n")
+    copyFileSync(join(ROOT, 'gremion-ui/scripts/serve.mjs'), join(dir, 'scripts', 'serve.mjs'))
+    await import(pathToFileURL(join(dir, 'scripts', 'serve.mjs')).href)
+    assert.equal(globalThis.__serveProbeServer.requestTimeout, 600 * 1000)
+    assert.notEqual(globalThis.__serveProbeServer.requestTimeout, 300000)
+  } finally {
+    delete globalThis.__serveProbeServer
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('backend table: exactly the three leaf backends are `service`; no FILES_, VOTES_, MESSAGES_ or BOARD_BACKEND key exists in any app compose', () => {
+  for (const file of ['docker-compose.app.yml', 'docker-compose.app.dev.yml']) {
+    const text = read(file).split(/\r?\n/).filter((l) => !/^\s*#/.test(l)).join('\n')
+    assert.doesNotMatch(text, /\b(FILES|VOTES|MESSAGES|MESSAGING|BOARD|ELECTIONS|FINANCE|VAULT|HANDOVER)_BACKEND\b/, file)
+  }
+  const env = environmentOf('docker-compose.app.yml', 'gremion-ui')
+  const backends = Object.entries(env).filter(([k]) => k.endsWith('_BACKEND'))
+  assert.deepEqual(backends, [['CALENDAR_BACKEND', 'service'], ['CONTENT_BACKEND', 'service'], ['NEWSLETTER_BACKEND', 'service']])
+})
+
+test('leaf urls: every <ID>_SERVICE_URL of the rendered gremion-ui resolves to a declared alias of a leaf, on the leaf\'s own port', () => {
+  const fx = readEnvFile('test/host/fixtures/pooled-stack/app-blue.env')
+  const r = renderState({ envFile: 'test/host/fixtures/pooled-stack/app-blue.env', env: { COMPOSE_PROFILES: '*' } })
+  const ui = r.services['gremion-ui'].environment
+  const aliases = new Map()
+  for (const [name, svc] of Object.entries(r.services)) {
+    for (const att of Object.values(svc.networks ?? {})) for (const a of att?.aliases ?? []) aliases.set(a, name)
+  }
+  for (const [key, leaf] of [['CALENDAR_SERVICE_URL', 'calendar-service'], ['CONTENT_SERVICE_URL', 'content-service'], ['NEWSLETTER_SERVICE_URL', 'newsletter-service']]) {
+    const u = new URL(ui[key])
+    assert.equal(u.hostname, `${leaf}-${fx.COLOUR}`, `${key} names this colour's ${leaf}`)
+    assert.equal(aliases.get(u.hostname), leaf, `${key}: no service of the render answers to ${u.hostname}`)
+    assert.equal(u.port, String(r.services[leaf].environment.PORT), `${key} names the port ${leaf} listens on`)
+  }
+  // the three BACKEND values reach the container as rendered
+  assert.deepEqual([ui.CALENDAR_BACKEND, ui.CONTENT_BACKEND, ui.NEWSLETTER_BACKEND], ['service', 'service', 'service'])
+})
+
+test('calendar leaf: the rendered environment gives the CalDAV drain a per-tenant target the leaf itself accepts', async () => {
+  const r = renderState({ envFile: 'test/host/fixtures/pooled-stack/app-blue.env', env: { COMPOSE_PROFILES: '*' } })
+  const env = r.services['calendar-service'].environment
+  // the leaf's own resolver, not a copy of its rules: without a per-tenant target the drain refuses every tenant
+  const { resolveCaldavTarget } = await import('../modules/calendar/src/caldav/target.ts')
+  const res = resolveCaldavTarget({ slug: 'pilot' }, env)
+  assert.equal(res.ok, true, res.ok ? '' : res.reason)
+  assert.match(env.CALDAV_CALENDAR_TEMPLATE ?? '', /\{slug\}/)
+  assert.equal(res.target.calendar, env.CALDAV_CALENDAR_TEMPLATE.split('{slug}').join('pilot'))
+  // the collection is created by `gremion-services wire` for that same name: one shared definition, no second spelling
+  assert.match(read('infra/host/bin/gremion-services'), /dav:create-calendar/)
+})
+
+test('release templates: every docker/**/*.tmpl renders to a path git ignores, so a host render never dirties the release tree', () => {
+  const tmpls = []
+  const walk = (dir) => {
+    for (const e of readdirSync(join(ROOT, dir), { withFileTypes: true })) {
+      const p = `${dir}/${e.name}`
+      if (e.isDirectory()) walk(p)
+      else if (e.name.endsWith('.tmpl')) tmpls.push(p)
+    }
+  }
+  walk('docker')
+  assert.ok(tmpls.includes('docker/element-call/config.json.tmpl'), `the guard sees the Element Call template (${tmpls.join(', ')})`)
+  for (const t of tmpls) {
+    const out = t.slice(0, -'.tmpl'.length)
+    // git is the oracle: it reads the repository's own ignore rules (exit 0: ignored, 1: not)
+    const r = spawnSync('git', ['check-ignore', '-q', '--', out], { cwd: ROOT })
+    assert.equal(r.status, 0, `${out} (rendered by gremion-render from ${t}) is not gitignored: a render would dirty the release tree`)
+    assert.equal(spawnSync('git', ['check-ignore', '-q', '--', t], { cwd: ROOT }).status, 1, `${t} itself must not be ignored`)
+  }
 })

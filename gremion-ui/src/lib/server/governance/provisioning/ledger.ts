@@ -72,10 +72,13 @@ export async function getResource(
   return rows[0] ?? null
 }
 
+/** Marks the row ok with its external id. With `tx` it joins the caller's transaction (a restore that
+ *  re-attaches a row must not leave a due 'pending' row without an external id if it dies half way). */
 export async function markResourceOk(
-  orgUnitId: string, subsystem: Subsystem, externalId: string
+  orgUnitId: string, subsystem: Subsystem, externalId: string, tx?: PgTransaction
 ): Promise<void> {
-  await getDb()`
+  const sql = getRunner(tx, getDb)
+  await sql`
     UPDATE provisioning_resources SET
       status = 'ok', external_id = ${externalId}, last_error = NULL,
       next_attempt_at = NULL, synced_at = now(), updated_at = now(),

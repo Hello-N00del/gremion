@@ -150,11 +150,13 @@ evaluation errors alert too.
 | `ThirdPartyUnreachable` | a third-party service not answering (PRD-DEP-002) | 5m |
 | `SignalAbsent` | a signal stopped arriving (TRD-181) | 5m |
 | `OutboxDeadLettered` | the relay gave up on an outbox row (TASK-079, TRD-420) | 1m |
+| `OutboxStalled` | the oldest pending outbox row is older than 900 s [A]: the relay cannot publish and burns no attempt (A05) | 10m |
 | `InboxDeadLettered` | a consumer's message reached MaxDeliver and went to the DLQ stream | 1m |
 | `InboxStalled` | an inbox row received/failed for over 10 min: a crash on the last delivery | 1m |
 | `DeadLetterQueueNotEmpty` | the tenant's DLQ stream holds any entry (kept 7 days) | 1m |
+| `ModuleKarenzFailedOrOverdue` | a module switch-off Karenz step failed, a notice or reminder is overdue, or a row is past its final day (phase 2) | 5m |
 
-The four TASK-079 conditions have no `absent()` arm (as `ThirdPartyUnreachable`):
+The four TASK-079 conditions and `OutboxStalled` (below) have no `absent()` arm (as `ThirdPartyUnreachable`):
 a host that runs no events service yet has no gauge, and an `absent()` arm would
 fire there for ever; a blind collector is `SignalAbsent`'s. The three gauges
 (`gremion_outbox_dead_lettered{ctx}`, `gremion_inbox_dead_lettered{ctx,consumer}`,
@@ -164,7 +166,26 @@ the host collector's textfile by `emit_events`; the DLQ rule reads the
 collector's `gremion_nats_stream_messages{stream="DLQ"}`. One breached path is
 one e-mail; a single poisoned message also fills the DLQ stream, so it raises
 both `InboxDeadLettered` and `DeadLetterQueueNotEmpty`, two groups. Runbook:
-`docs/runbooks/dead-letter.md`.
+`docs/runbooks/dead-letter.md`. `events metrics` also prints a fourth gauge,
+`gremion_outbox_oldest_pending_seconds{ctx}` (the age of the oldest outbox row still waiting for the
+relay): a relay that can never succeed burns no attempt and dead-letters nothing, so it is the
+only gauge that moves. It is collected like the three above and read by `OutboxStalled`
+(`gremion:cond:outbox_stalled`, one component per ctx, no `absent()` arm either). The threshold,
+900 s [A], is an assumption and lives in one place, the `> bool 900` of that recording rule
+(`alerting.test.mjs` reads it back); `for: 10m` is on top. Too low and a busy but healthy relay
+pages, too high and a stall goes unseen. A ctx that runs no events service has no gauge and reads 0.
+
+`ModuleKarenzFailedOrOverdue` (`gremion:cond:module_karenz`, component `module-karenz`)
+is fail-closed, unlike the five above. The host collector (`emit_module_karenz`)
+reads `plt.module_karenz` and `plt.module_karenz_event` and emits
+`gremion_module_karenz_live` (live rows, always, 0 when there are none),
+`gremion_module_karenz_failed{customer,module}` (a step whose newest event is an
+error), `gremion_module_karenz_stale{customer,module}` (no switch-off notice
+after 1 h, a day-23 / day-29 reminder more than 2 h late, or a restoring row that
+has waited over 1 h for its restored report: the tenant pass is not running) and, only while `KARENZ_FINAL_DELETION=on`,
+`gremion_module_karenz_overdue{customer,module}` (a row more than 6 h past
+`final_at`). An unreadable table drops `gremion_module_karenz_live`, and the
+`absent()` arm then fires, so a blind collector never reads as healthy.
 
 The policy (`grafana/provisioning/alerting/policies.yaml`) groups by
 `[alertname, component]`, `group_wait 30s`, `group_interval 5m`,

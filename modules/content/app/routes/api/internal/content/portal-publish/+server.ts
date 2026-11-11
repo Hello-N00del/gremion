@@ -5,9 +5,12 @@
 // portal channel. It creates or updates a `news_posts` row in the kernel DB
 // anchored by `content_origin_post_id` (the leaf's content post UUID).
 //
-// Idempotency: the UNIQUE index on news_posts.content_origin_post_id (migration
-// 047) prevents duplicates. A retry with the same contentPostId finds the
-// existing row and updates it — no orphan rows, no 500 on retry.
+// Idempotency: news_posts.content_origin_post_id (migration 1202) has NO unique
+// index yet (the expand lint refuses one before the first release tag; a
+// contract-phase file adds it afterwards). Until then portal-callback's
+// lookup-then-insert is the guard: a retry with the same contentPostId finds the
+// existing row and updates it, and the slug UNIQUE of 1200 stops a concurrent
+// duplicate that carries the same title.
 //
 // Guard: x-internal-auth header validated with timingSafeEqual against
 //   INTERNAL_CONTENT_SECRET (mirrors the api/internal/push + send-mail pattern).
@@ -23,7 +26,7 @@ import { constantTimeEqual } from '$lib/server/internal-fetch'
 
 // UUID validation: use a format-only regex (not RFC-4122 variant-strict) so
 // the leaf can send any UUID-shaped string including test UUIDs with repeated
-// digits. The uniqueness constraint on the column is the real guard.
+// digits. The column is a uuid, so Postgres rejects anything that is not UUID-shaped.
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 const PortalPublishBody = z.object({

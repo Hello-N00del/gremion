@@ -10,7 +10,7 @@
 #   alert-red       RED first: the DeadLetterQueueNotEmpty rule absent from the rendered tree -> the
 #                   condition is 1 in Prometheus and NO e-mail follows; the rule is then restored
 #   alert-fire      all four conditions breach: exactly one FIRING e-mail each
-#   alert-hold      the breach persists and grows for 3 x group_interval (180 s): still one each
+#   alert-hold      the breach persists and grows for 3 x group_interval (90 s): still one each
 #   alert-resolve   every condition clears: exactly one RESOLVED e-mail each
 #   down            stand-ins removed BY NAME, then the 039 harness's own teardown
 #
@@ -19,7 +19,8 @@
 # script refuses a stack name that does not start with t039-, so ours is t039-t079-<sha8>-obs: every name
 # it derives (containers, volumes, networks, the ops project) carries t079. Proof timings are the harness's
 # (evaluation 10 s, for 10 s, group_wait 10 s, group_interval 60 s), applied to the rendered tree by sed on the
-# exact line shapes the committed rules keep.
+# exact line shapes the committed rules keep, except group_interval: this proof narrows it to
+# PROOF_GROUP_INTERVAL on the same tree after the harness has written it (see the constant).
 #
 # Deviations from the live path, named (the ledger repeats them):
 #   - the three service gauges come from a stand-in container per context labelled
@@ -51,6 +52,12 @@ NET_STATE="${STACK}_state"
 C_NATS="${STACK}-state-nats-1"
 C_COLL="${STACK}-collector"
 MAILPIT_PORT=18079
+
+# group_interval for this proof only, in seconds [A, operator decision 2026-11-06, CI wall time]. The harness's
+# 60 s stays for TASK-039's own proof and the committed 5m for production. The hold spans three intervals whatever
+# this is, so the proof still sees three flushes in which a duplicate e-mail could go out. Not below 30: the
+# collector runs every 15-20 s here, so a shorter interval would flush between two samples.
+PROOF_GROUP_INTERVAL=30
 
 # The ports and subnets are t079's own so a TASK-039 proof running elsewhere cannot collide.
 export OBS_PROOF_STACK="$STACK" OBS_PROOF_OUT="$OUT"
@@ -120,7 +127,7 @@ CTXS="idt gov plt"
 write_metrics() {   # <ctx> <outbox dead> <inbox dead> <stalled>
   mkdir -p "$SDIR/$1"
   ( cd "$ROOT/packages/events" && CTX="$1" O="$2" D="$3" S="$4" node --import tsx --input-type=module -e \
-    "import { renderMetrics } from './src/metrics.ts'; process.stdout.write(renderMetrics({ ctx: process.env.CTX, consumer: 'finance', outboxDeadLettered: Number(process.env.O), inboxDeadLettered: Number(process.env.D), inboxStalled: Number(process.env.S) }))" \
+    "import { renderMetrics } from './src/metrics.ts'; process.stdout.write(renderMetrics({ ctx: process.env.CTX, consumer: 'finance', outboxDeadLettered: Number(process.env.O), outboxOldestPendingSeconds: 0, inboxDeadLettered: Number(process.env.D), inboxStalled: Number(process.env.S) }))" \
   ) > "$SDIR/$1/metrics.prom"
   grep -q "^gremion_outbox_dead_lettered{ctx=\"$1\"} $2\$" "$SDIR/$1/metrics.prom" || die "renderMetrics did not print the expected gauge for $1"
 }
@@ -159,11 +166,20 @@ phase_prepare() {
   local env_file="$SROOT/etc/env/ops.env"
   sed -i -E "s#^OPS_V4_SUBNET=.*#OPS_V4_SUBNET=${OPS_SUBNET_V4}#; s#^OPS_V6_SUBNET=.*#OPS_V6_SUBNET=${OPS_SUBNET_V6}#" "$env_file"
   grep -q "^OPS_V4_SUBNET=${OPS_SUBNET_V4}\$" "$env_file" && ok "ops subnets are t079's own" || bad "ops subnets not set"
-  finish 1
+  # The four alerts are severity=critical, so they take the root policy; only its 4-space line is the one to narrow.
+  local policies="$SROOT/runtime/ops/grafana-provisioning/alerting/policies.yaml"
+  sed -i -E "s/^    group_interval: 60s\$/    group_interval: ${PROOF_GROUP_INTERVAL}s/" "$policies"
+  grep -q "^    group_interval: ${PROOF_GROUP_INTERVAL}s\$" "$policies" \
+    && ok "group_interval is ${PROOF_GROUP_INTERVAL} s in the rendered tree" || bad "group_interval not narrowed to ${PROOF_GROUP_INTERVAL} s"
+  finish 2
 }
 
 phase_up() {
   obs up || die "observability-proof.sh up failed"
+  # The file mounted into the running container, so this proves compose used the narrowed tree. It does not read
+  # the policy Grafana loaded: that API sits behind SSO here, so the effective interval is not checked.
+  docker exec "$(container_of grafana)" grep -q "^    group_interval: ${PROOF_GROUP_INTERVAL}s\$" /etc/grafana/provisioning/alerting/policies.yaml \
+    && ok "the policy file mounted into Grafana has group_interval ${PROOF_GROUP_INTERVAL} s" || bad "the policy file mounted into Grafana has another group_interval"
   set_quiet
   local c
   for c in $CTXS; do standin_up "$c"; done
@@ -179,7 +195,7 @@ phase_up() {
   local a n=0
   for a in $ALERTS; do n=$(( n + $(mail_count FIRING "$a") )); done
   [[ "$n" == 0 ]] && ok "no dead-letter e-mail at rest" || bad "$n dead-letter e-mails before any breach"
-  finish 5
+  finish 6
 }
 
 # RED first: with the rule absent from the rendered tree the condition fires in Prometheus and nothing is mailed.
@@ -238,7 +254,7 @@ phase_fire() {
 
 phase_hold() {
   dlq_put
-  local end=$(( $(date +%s) + 185 ))
+  local end=$(( $(date +%s) + 3 * PROOF_GROUP_INTERVAL + 5 ))
   while (( $(date +%s) < end )); do collect || true; sleep 20; done
   [[ "$(dlq_messages)" -ge 2 ]] 2>/dev/null && ok "the breach grew (DLQ holds $(dlq_messages) entries) while firing" || bad "the DLQ did not grow"
   value_is 'max(gremion:cond:outbox_dead_lettered{component="idt"})' 1 && ok "the conditions are still firing" || bad "a condition cleared during the hold"

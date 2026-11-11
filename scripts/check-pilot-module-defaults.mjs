@@ -1,13 +1,17 @@
 #!/usr/bin/env node
 // Pilot module defaults - TASK-058-A (PRD-ELE-001, TRD-030, TRD-064).
 //
-// Repo-side checks of the claim "a pilot customer starts with votes only". They
+// Repo-side checks of the claim "a pilot customer is created with exactly the pilot module set". They
 // read files; they do NOT prove the running system (that is 058-B, blocked on
-// TASK-044-b). Four checks, each with a falsifiable failure:
-//   (a) test/host/fixtures/module-defaults/pilot-request.json enables votes and none of
-//       elections|finance|board|vault|content|handover; every id has modules/<id>/module.json
+// TASK-044-b). The pilot set (pilot wave 2, 2026-11-09) is votes, calendar, content, publishing, files and
+// messaging; elections, finance, board, vault and handover are never requested through the create request
+// (board is served in-process and default-on, elections are held off in config.ts). Four checks, each with a
+// falsifiable failure:
+//   (a) test/host/fixtures/module-defaults/pilot-request.json enables every pilot module and none of
+//       elections|finance|board|vault|handover; every id has modules/<id>/module.json
 //   (b) no infra/host/templates/env/*.env.tmpl COMPOSE_PROFILES value names
-//       finance|board|vault|content|vaultwarden
+//       finance|board|vault|vaultwarden (a pilot module's profile is rendered from
+//       infra/host/module-profiles.json, not written into a template)
 //   (c) no modules/*/module.json declares a default-enable key (anywhere in the JSON)
 //   (d) the panel create form preselects no module checkbox
 //
@@ -22,8 +26,9 @@ export const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 export const REQUEST_PATH = 'test/host/fixtures/module-defaults/pilot-request.json'
 export const PANEL_FORM = 'apps/control-panel/src/routes/(shell)/customers/new/+page.svelte'
 export const ENV_DIR = 'infra/host/templates/env'
-export const FORBIDDEN_IDS = ['elections', 'finance', 'board', 'vault', 'content', 'handover']
-export const FORBIDDEN_PROFILES = ['finance', 'board', 'vault', 'content', 'vaultwarden']
+export const PILOT_IDS = ['votes', 'calendar', 'content', 'publishing', 'files', 'messaging']
+export const FORBIDDEN_IDS = ['elections', 'finance', 'board', 'vault', 'handover']
+export const FORBIDDEN_PROFILES = ['finance', 'board', 'vault', 'vaultwarden']
 const DEFAULT_KEY = /^(default|defaults|defaultEnabled|enabledByDefault|enableByDefault|autoEnable|preselected|defaultOn)$/i
 
 const readJson = (root, rel) => JSON.parse(readFileSync(join(root, rel), 'utf8'))
@@ -38,7 +43,7 @@ export function checkRequest(root) {
   }
   const enable = Array.isArray(req.enable) ? req.enable : null
   if (!enable) return [`(a) ${REQUEST_PATH}: "enable" is not an array`]
-  if (!enable.includes('votes')) bad.push('(a) the pilot request does not enable votes')
+  for (const id of PILOT_IDS) if (!enable.includes(id)) bad.push(`(a) the pilot request does not enable ${id}`)
   for (const id of enable) {
     if (FORBIDDEN_IDS.includes(id)) bad.push(`(a) the pilot request enables "${id}"`)
     if (!existsSync(join(root, 'modules', String(id), 'module.json'))) bad.push(`(a) "${id}" has no modules/${id}/module.json`)

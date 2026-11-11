@@ -1,11 +1,15 @@
 // @gremion/tenant-store/lifecycle — create or drop the database of one
 // (tenant, module) (D13, TRD-424), and the TRD-089 inspection. A subpath of
 // its own: the package root exports no create/drop helper (index.test.ts).
-export { disableModule, dropTenantModuleDatabase } from './disable.js'
-export { enableModule, ensureModuleRoles, lockDownDatabase } from './enable.js'
+export { blockModuleDatabase, disableModule, dropTenantModuleDatabase } from './disable.js'
+export { enableModule, ensureModuleRoles, lockDownDatabase, unblockModuleDatabase } from './enable.js'
+// Module Karenz (2026-10-30): the 30-day clock, the deletion switch and the day-30 job.
+export { assertKarenzExportPath, finalDeletionEnabled, finalizeDueKarenz, KARENZ_DAYS } from './karenz.js'
+export type { FinalizeDeps, FinalizeResult, FinalizeStep, KarenzState } from './karenz.js'
 // TASK-044: the level-1 enable gate, its records and the enabled-module checks (CAP-ISOLATION).
 export * from './enable-gate/index.js'
 export { exportDatabase, exportStamp, pgDumpExporter } from './export.js'
+export type { ExportStorageFactory } from './export-remove.js'
 export type { PgDumpExporterOptions, VerifiedExport } from './export.js'
 export {
   assertTenantModuleTarget,
@@ -21,6 +25,20 @@ export type { InspectionReport, InspectRegistry, InspectServer, ServerReport } f
 // TASK-043 G1: the customer's kernel database (never migrated here, Q3) and the platform bootstrap (Q15).
 export { dropKernelDatabase, ensureKernelDatabase, ensureKernelRoles, KERNEL_MODULE, kernelDbName, kernelRoles } from './kernel.js'
 export type { EnsureKernelResult, KernelRoles } from './kernel.js'
+// TASK-084-a: the customer's governance database on the governance server (names and roles).
+export {
+  bindGovernanceDatabase,
+  dropGovernanceDatabase,
+  ensureGovernanceDatabase,
+  GOVERNANCE_GROUP_ROLES,
+  GOVERNANCE_LEDGER,
+  GOVERNANCE_MODULE,
+  governanceDbName,
+  governancePostCondition,
+  governanceRoles,
+  migrateGovernanceDatabase,
+} from './governance.js'
+export type { EnsureGovernanceResult, GovernanceDbState, GovernanceRoles, MigrateGovernanceOptions } from './governance.js'
 // TASK-077 (C13): the kernel API's SELECT-only role on control + gremion_platform.
 export { ensureKernelApiReader, KERNEL_API_READS, KernelApiReaderError, kernelApiReaderPrivilegeProblems } from './kernel-api-reader.js'
 export type { KernelApiReaderDeps, KernelApiReaderErrorCode } from './kernel-api-reader.js'
@@ -36,6 +54,8 @@ export type { EnsurePlatformResult } from './platform.js'
 // TASK-033-a: audit_log is a governance record, append-only for the app (REVOKE through the hardened admin path).
 export { APPEND_ONLY_TABLES, ensureKernelAuditAppendOnly, kernelAuditAppendOnlyProblems } from './audit-append-only.js'
 export type { AppendOnlyTable } from './audit-append-only.js'
+// Kernel issue #89: the purger's CONNECT on the customer's kernel database, re-ensured by reconcile.
+export { ensureKernelPurgerAccess, ensureKernelPurgerConnect, kernelPurgerAccessProblems, kernelPurgerConnectProblems } from './purger-connect.js'
 // TRD-144/145: the scheduled purge run and the rule table it executes (retention-catalogue.md).
 export {
   deleteBatchSql,

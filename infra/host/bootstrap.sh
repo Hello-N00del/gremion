@@ -85,6 +85,7 @@ Stages:
                + gremion-footprint.timer (weekly, TRD-223)
                + gremion-purge.timer (daily, TRD-144/145)
                + gremion-access-purge.timer (daily, TRD-092)
+               + gremion-karenz.timer (hourly, module Karenz finalization)
   harden-ssh   key-only SSH   (RUN LAST, gated, not part of 'all')
   trust        pinned cosign + the release public key       (not part of 'all')
   signers      the release-tag signers file (allowed_signers) (not part of 'all')
@@ -543,7 +544,9 @@ ensure_layout() {
     # The pre-migration dump (whole database in clear): 0700, the deploy user's.
     # kernel-api-migrate bind-mounts it and runs as uid 1000, which must own it.
     install -d -m 700 -o "${DEPLOY_USER}" -g "${DEPLOY_USER}" "${root}/migration-dumps"
-    for d in env secrets secrets/tenants secrets/mail edge; do
+    # secrets/governance: tenant-create bind-mounts it read-write (#578); made here so the
+    # docker daemon never does (it would make a missing bind source root:root).
+    for d in env secrets secrets/tenants secrets/mail secrets/governance edge; do
         install -d -m 700 -o "${DEPLOY_USER}" -g "${DEPLOY_USER}" "${root}/etc/${d}"
     done
     [[ "$(stat -c '%U %a' "${root}/etc")" == "${DEPLOY_USER} 700" ]] \
@@ -1076,6 +1079,22 @@ stage_timers() {
     [[ -n "$pg_next" && "$pg_next" != "n/a" ]] \
         || die "gremion-purge.timer is enabled but has no next elapse"
     ok "gremion-purge.timer next elapse: ${pg_next}"
+
+    # Module switch-off Karenz: the hourly finalization run (karenz.sh, the
+    # `karenz-run` verb). Same two-argument render_unit. Like the purge, the
+    # service is NOT started here: it needs the platform chain at 0017 and an
+    # active colour, so a first run belongs after the first deploy (systemctl
+    # start gremion-karenz.service; with KARENZ_FINAL_DELETION=off it is a dry
+    # run that prints what it would delete).
+    render_unit gremion-karenz.service /etc/systemd/system/gremion-karenz.service
+    render_unit gremion-karenz.timer /etc/systemd/system/gremion-karenz.timer
+    systemctl daemon-reload
+    systemctl enable --now gremion-karenz.timer
+    local kz_next
+    kz_next="$(systemctl show gremion-karenz.timer -p NextElapseUSecRealtime --value)"
+    [[ -n "$kz_next" && "$kz_next" != "n/a" ]] \
+        || die "gremion-karenz.timer is enabled but has no next elapse"
+    ok "gremion-karenz.timer next elapse: ${kz_next}"
 }
 
 # ──────────────────────────────────────────────────────────────────────────

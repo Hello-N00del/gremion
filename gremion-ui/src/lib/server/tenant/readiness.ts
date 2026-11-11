@@ -81,9 +81,9 @@ export function getTenantReadinessError(tenantId: string): string | undefined {
  * HONESTY NOTE: no production surface calls this, and neither does
  * getTenantReadinessError — both have zero non-test callers in gremion-ui/src.
  * resolve.ts imports only getTenantReadiness, isFleetPopulated and
- * triggerTenantMigrationRetry, and its readiness gate returns the constant
- * `Service Unavailable: tenant not ready`. So the classification reaches the
- * console line in fleet.ts and the tenant_migration_run.error column, and
+ * triggerTenantMigrationRetry, and its readiness gate returns the German waiting page
+ * (waitingResponse, `tenant` or `tenant-failed`), which carries no failure classification. So the
+ * classification reaches the console line in fleet.ts and the tenant_migration_run.error column, and
  * NOTHING ELSE — an operator debugging a 503 must read the ledger or the logs,
  * not the response. This accessor exists for the structured read that surface
  * should make; wiring it into the 503 body is the follow-up.

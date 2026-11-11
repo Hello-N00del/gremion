@@ -8,6 +8,8 @@ export interface FakePoll {
   description: string
   anonymous: boolean
   expire: number
+  /** Polls `showResults` ('always' | 'closed' | 'never'); absent until a test or a PUT sets it. */
+  showResults?: string
   options: { id: number; text: string }[]
   voters: Map<string, Set<number>> // voter token -> option ids
   /** NC user that created the poll (default: the admin singleton the module uses). */
@@ -32,7 +34,7 @@ export function makeFakeNc() {
       id: p.id,
       type: p.type,
       owner: { userId: p.owner ?? 'admin', displayName: p.owner ?? 'admin' },
-      configuration: { title: p.title, description: p.description, allowComment: false, anonymous: p.anonymous, expire: p.expire },
+      configuration: { title: p.title, description: p.description, allowComment: false, anonymous: p.anonymous, expire: p.expire, ...(p.showResults !== undefined ? { showResults: p.showResults } : {}) },
       status: { expired: p.expire > 0 && p.expire * 1000 < Date.now(), countOptions: p.options.length },
       currentUserStatus: { userRole: 'voter', isLocked: false, countVotes: p.voters.get(who)?.size ?? 0 },
     }
@@ -81,6 +83,7 @@ export function makeFakeNc() {
         if (c.anonymous !== undefined) p.anonymous = c.anonymous
         if (c.description !== undefined) p.description = c.description
         if (c.expire !== undefined) p.expire = c.expire
+        if (c.showResults !== undefined) p.showResults = c.showResults
         if (c.maxVotesPerUser !== undefined) p.maxVotesPerUser = c.maxVotesPerUser
         return json({ poll: view(p, who) })
       }

@@ -7,8 +7,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 // confirmation; the POST form action consumes and maps the three outcomes to a
 // render status. (Not an RFC 8058 one-click endpoint: see +page.server.ts.)
 
-const { mockConsume } = vi.hoisted(() => ({ mockConsume: vi.fn() }))
+const { mockConsume, mockLimit } = vi.hoisted(() => ({ mockConsume: vi.fn(), mockLimit: vi.fn() }))
 vi.mock('$lib/server/content/content-db', () => ({ consumeUnsubscribeToken: mockConsume }))
+// The per-IP limiter of the public unsubscribe consumers (rate-limit.ts), shared with the newsletter one.
+vi.mock('$lib/server/rate-limit', () => ({ requireUnsubscribeRateLimit: mockLimit }))
 
 import { load, actions } from './+page.server'
 
@@ -51,7 +53,19 @@ describe('/content/unsubscribe GET load (never consumes)', () => {
 })
 
 describe('/content/unsubscribe POST action (consumes)', () => {
-  beforeEach(() => mockConsume.mockReset())
+  beforeEach(() => {
+    mockConsume.mockReset()
+    mockLimit.mockReset()
+    mockLimit.mockReturnValue(null)
+  })
+
+  it('is rate limited per client like the newsletter unsubscribe: over the limit it answers 429 and never reads the token', async () => {
+    mockLimit.mockReturnValue(new Response('{}', { status: 429 }))
+    const result = (await actions.default(postEvent({ formToken: 'good' }))) as { status: number; data: { status: string } }
+    expect(result.status).toBe(429)
+    expect(result.data).toEqual({ status: 'invalid' })
+    expect(mockConsume).not.toHaveBeenCalled()
+  })
 
   it('returns ok for a valid form token', async () => {
     mockConsume.mockResolvedValue({ ok: true })

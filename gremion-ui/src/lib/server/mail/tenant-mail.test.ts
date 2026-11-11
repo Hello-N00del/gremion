@@ -105,6 +105,19 @@ describe('tenant-mail seam (SP-2 §2)', () => {
     expect(resolveSecret).toHaveBeenCalledWith('file:/run/secrets/tenants/t2-smtp-pass')
   })
 
+  it('introduces itself with the public host name: Google refuses a container id in EHLO', () => {
+    process.env.PUBLIC_BASE_URL = 'https://rat.musterstadt.example'
+    try {
+      runWithTenant(
+        ctx('tid-ehlo', 'ehlo', { smtp: { host: 'smtp.ehlo.de', port: 587, user: 'u', passwordRef: 'env:X' } }),
+        () => getTenantMailContext(),
+      )
+      expect(createTransport.mock.calls[0][0]).toMatchObject({ name: 'rat.musterstadt.example' })
+    } finally {
+      delete process.env.PUBLIC_BASE_URL
+    }
+  })
+
   it('port 465 resolves to an implicit-TLS (secure) transport', () => {
     runWithTenant(
       ctx('tid-tls', 'tls', { smtp: { host: 'smtp.tls.de', port: 465, user: 'u', passwordRef: 'env:X' } }),

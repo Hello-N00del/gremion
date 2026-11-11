@@ -22,7 +22,9 @@
     "governance": {
       "legacyFloor": 0,
       "legacy": [],
-      "files": {}
+      "files": {
+        "0001_gov_setup.sql": "23e7c5e8c5b0a5a7658f6e70db6605c71ce9e2f9b68e53d7366d5ffac4f8a17b"
+      }
     },
     "kernel-api": {
       "legacyFloor": 0,
@@ -107,8 +109,10 @@
         "0061_audit_log_actor_uuid_check.sql": "fc4f1b7a75dfc4279ceb225eb2654de0b3e55d20bb63a42204f09ca02ed6b441",
         "0062_vorstand_role_backfill.sql": "b39e30467179c5ef369727fae7c2d1cfba8defe60eec5f5c144704bc3e3f3ed1",
         "0063_module_switch_request.sql": "d293b6a55af4f8f046c9d95c3b744d143f1f0e8df79e2e58f82d483392e65b82",
+        "0064_module_karenz.sql": "65f153eb9781f685ec95372d48a03a3b4b1e743b8861a3fcb757469d617757a4",
         "1200_content_news_posts.sql": "dabcd6a81e45b8dc6ac1dbfc4cbfb77286bc5471ee3eb18c2ae5bbacbc508707",
-        "1201_news_posts_public_reader_columns.sql": "b3d0f74a26a63a560111ac9cdad9ba603f2e34b9d75b3bf2769c7dc103acd801"
+        "1201_news_posts_public_reader_columns.sql": "b3d0f74a26a63a560111ac9cdad9ba603f2e34b9d75b3bf2769c7dc103acd801",
+        "1202_news_posts_publish_origin.sql": "a12bed73d2df61131096268ff65e24edf1c657d129752e10cd6eb283e03734aa"
       }
     },
     "mail": {
@@ -189,7 +193,10 @@
         "0011_plt_lease_fence.sql": "907288c31417b64748c7804b22c506986b76f7223ff95de1bafcc0874095738a",
         "0012_plt_purge_run.sql": "202379e02d64111efdd7e5910b56726e3477fb886d1c283b25701dd1569287d7",
         "0013_oac_access_record.sql": "889c39a6fc201feead497d559df152c7ae46ba6121321f003d05df7eb4aded77",
-        "0014_plt_council_requests.sql": "535222ac20bdb8ed08aa76f4ca572deb59e875442f1373697726c9029b7bd82b"
+        "0014_plt_council_requests.sql": "535222ac20bdb8ed08aa76f4ca572deb59e875442f1373697726c9029b7bd82b",
+        "0015_plt_provisioning_step_governance.sql": "60f25259025d5d993564187ca4b46312d807f91d596367f8f76d7fd19345acde",
+        "0016_plt_module_karenz.sql": "4904dfc2def0530de7a7f5fa8fe27b9c12c35da1e1eebf83060b8f2b69b6473d",
+        "0017_plt_karenz_report_mode.sql": "b7414b56813803d5e9d88706e21cad138e48ec0e8bef93ac5123e6c83150708a"
       }
     }
   }

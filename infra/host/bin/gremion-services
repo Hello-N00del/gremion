@@ -1,0 +1,583 @@
+#!/usr/bin/env bash
+set -euo pipefail
+#
+# gremion-services -- the pilot's wiring verb: connect Synapse, Nextcloud and
+# gremion-ui to the customer's realm, once the create request has succeeded.
+#
+#   gremion-services wire <slug>
+#
+# Order of the install it belongs to (docs/ops/pilot-services.md):
+#   bootstrap.sh, gremion-init-secrets, the operator's keys, gremion-render,
+#   nats-auth init, images built from the pinned commit, state and app up,
+#   gremion-switch, gremion-tenant init, gremion-isolation run + record, the create
+#   request from the panel, THIS, then seed_vertical and import_members.
+#
+# `wire` is idempotent: every step either checks what is already true or
+# rewrites the same value. It does, in this order:
+#   1. checks the customer's realm answers publicly with the expected issuer
+#      (https://<PILOT_TENANT_HOST>/auth/realms/<slug>) -- before it writes anything;
+#   2. copies the realm's `synapse` client secret from the tenant secrets
+#      directory to etc/secrets/synapse/oidc_client_secret (0600), which the
+#      matrix service mounts read-only;
+#   3. writes SYNAPSE_KEYCLOAK_ISSUER_URL / SYNAPSE_KEYCLOAK_FETCH_URL into
+#      state.env (the fetch URL is the public issuer: the realm is
+#      sslRequired=all, which refuses a plain-http fetch of keycloak:8080) and
+#      appends the post-realm compose profile(s) of infra/host/module-profiles.json
+#      (messaging) to its COMPOSE_PROFILES;
+#   4. starts matrix in a boot with SYNAPSE_BOOTSTRAP_MODE=1 handed from the
+#      shell, and runs modules/messaging/synapse/bootstrap.sh in it unless the
+#      admin bot's real token is already recorded and verified: the bot registers
+#      ONCE, and the token is printed only then. The token is captured without
+#      echoing or logging it and written into state.env and both app-<colour>.env;
+#   5. boots matrix again WITHOUT bootstrap mode (that closes shared-secret
+#      registration) and asserts the login flows list org.matrix.login.jwt: a
+#      failed realm key fetch boots Synapse without it, and /versions answers
+#      regardless;
+#   6. registers Nextcloud's user_oidc provider (client `nextcloud`, bearer
+#      validation) with the secret handed in BY NAME (docker exec -e NAME: the
+#      value is not on the host's argv; it is on `occ`'s argv inside the
+#      container for the length of the call, because occ has no other input: the
+#      one named exception), activates richdocuments, and reads back that polls,
+#      user_oidc, richdocuments and groupfolders are enabled (the image's install
+#      hooks end in a warning, never in a failure) and that the provider has
+#      checkBearer true and id 1;
+#      Then, when the calendar leaf runs, creates the customer's CalDAV collection
+#      (the leaf's CALDAV_CALENDAR_TEMPLATE with the slug, under its shared
+#      account) by occ and reads it back: the leaf cannot create it itself;
+#      Then, ONLY when MAIL_TRANSPORT=relay (mail.env), wires the customer's mail
+#      login (6c): copies the relay password file to the tenant secrets directory
+#      (0600, owner kept, re-copied on every run so a rotated password propagates),
+#      MERGES the tenant row's domain_profile.smtp in the control database (host, port,
+#      From, login, password ref: values from mail.env), marks the tenant's config.json
+#      smtp.configured with host, port and from_address, and reads all three back. The
+#      password is never read into a variable, an argv or the output;
+#   7. recreates gremion-ui (active colour) and reads its environment back.
+#
+# It takes the host lock (runtime/hostd.lock, non-blocking, exit 3 when busy) like
+# the other mutating verbs, and under sudo hands every file it rewrites back to the
+# owner it had.
+#
+# Post-conditions are read from the RUNNING system (container environment, the
+# edge's own answers, occ), never from an exit code.
+#
+# SECRETS never reach a host argv: the client secrets and the bot token are read
+# and written through files and shell variables only. EXIT CODES: 0 ok - 1 a
+# step or post-condition failed - 2 usage/precondition.
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../lib/common.sh
+. "$SCRIPT_DIR/../lib/common.sh"
+
+umask 077
+
+# env_key, setup_paths, active_colour, need_slug
+# shellcheck source=../lib/customer-ops.sh
+. "$SCRIPT_DIR/../lib/customer-ops.sh"
+
+PROFILES_FILE="${SCRIPT_DIR}/../module-profiles.json"
+WAIT_S="${GREMION_SERVICES_WAIT_S:-420}"
+BOT_LOCALPART="gremion-admin-bot"
+
+usage() {
+    cat >&2 <<'EOF'
+usage: gremion-services wire <slug>
+
+  wire <slug>   connect Synapse, Nextcloud and gremion-ui to the realm of the
+                customer <slug>; run after the create request succeeded.
+                Idempotent. See the header of this file for the steps.
+EOF
+}
+
+# ---------------------------------------------------------------------------
+# helpers
+# ---------------------------------------------------------------------------
+
+STATE_ENV=""
+APP_ENV=""
+STACK=""
+
+# set_env_key <file> <key> <value> -- replace the one `KEY=` line (or append it), atomically,
+# keeping the file 0600. The value reaches awk through its ENVIRONMENT, never its argv.
+set_env_key() {
+    local file="$1" key="$2" value="$3" out owner
+    [[ -f "$file" ]] || die "env file not found: ${file}" "$GREMION_EXIT_USAGE"
+    owner="$(stat -c '%u:%g' "$file")" || die "cannot read the owner of ${file}" "$GREMION_EXIT_ASSERT"
+    [[ "$value" != *$'\n'* ]] || die "refusing a multi-line value for ${key}" "$GREMION_EXIT_ASSERT"
+    out="$(KEY="$key" VAL="$value" awk '
+        BEGIN { k = ENVIRON["KEY"]; v = ENVIRON["VAL"]; done = 0 }
+        index($0, k "=") == 1 { print k "=" v; done = 1; next }
+        { print }
+        END { if (!done) print k "=" v }' "$file")" \
+        || die "cannot rewrite ${key} in ${file}" "$GREMION_EXIT_ASSERT"
+    atomic_write "$file" 600 <<< "$out" || die "cannot write ${file}" "$GREMION_EXIT_ASSERT"
+    keep_owner "$owner" "$file"
+}
+
+# keep_owner <uid:gid> <path> -- under sudo, atomic_write makes a NEW file, which would be root's and
+# unreadable to the deploy user every later compose verb runs as: hand it back to the owner it had.
+keep_owner() {
+    [[ "$(id -u)" -eq 0 ]] || return 0
+    chown "$1" "$2" || die "cannot hand ${2} back to ${1}" "$GREMION_EXIT_ASSERT"
+}
+
+# One host operation at a time: the lock gremion-hostd, gremion-deploy and the executor take (fd 9, so a
+# crash releases it). wire reads the active colour and then rewrites the env files and recreates services
+# of that colour; a concurrent deploy or switch must not interleave with it. Non-blocking: busy is exit 3.
+acquire_host_lock() {
+    local lock
+    if [[ "${GREMION_HOST_LOCK_HELD:-}" != 1 ]]; then
+        need_cmd flock
+        mkdir -p "${ROOT}/runtime"
+        lock="${ROOT}/runtime/hostd.lock"
+        exec 9>>"$lock" || die "cannot open the host lock: ${lock}" 2
+        flock -n 9 \
+            || die "busy: another host operation is running (lock ${lock}); retry when it has finished" 3
+    fi
+    GREMION_HOST_LOCK_HELD=1
+    export GREMION_HOST_LOCK_HELD
+}
+
+compose_app() { ( cd "$RELEASE_DIR" && docker compose --env-file "$APP_ENV" "$@" ); }
+
+# container_of <project> <service> -- the ONE container of a compose service, by its labels.
+container_of() {
+    local project="$1" service="$2" ids n
+    ids="$(docker ps -q --filter "label=com.docker.compose.project=${project}" \
+                        --filter "label=com.docker.compose.service=${service}")" \
+        || die "docker ps failed while looking for ${service} of ${project}" "$GREMION_EXIT_ASSERT"
+    n="$(grep -c . <<< "$ids" || true)"
+    [[ "$n" == "1" ]] || die "expected exactly one running ${service} in ${project}, found ${n}" "$GREMION_EXIT_ASSERT"
+    printf '%s' "${ids//[[:space:]]/}"
+}
+
+# wait_healthy <container> <what> -- until Docker reports healthy (the service's own healthcheck:
+# for matrix that is the login-flow probe, for gremion-ui the liveness one).
+wait_healthy() {
+    local c="$1" what="$2" t=0 st=""
+    while (( t < WAIT_S )); do
+        st="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$c" 2>/dev/null || true)"
+        [[ "$st" == healthy ]] && return 0
+        sleep 2
+        t=$((t + 2))
+    done
+    die "${what} did not become healthy within ${WAIT_S} s (last state: ${st:-unknown}); read its log: docker logs ${c}" "$GREMION_EXIT_ASSERT"
+}
+
+# edge_curl <url> -- the edge answering by its public name, resolved to this host's own edge address
+# (a hairpin to the public address is not assumed). A certificate that is not publicly trusted (an
+# ACME staging directory) fails here, loudly.
+edge_curl() {
+    local url="$1" host rest
+    host="${url#https://}"; host="${host%%/*}"
+    rest="${url#https://"${host}"}"
+    # --resolve pins the PORT too, so a non-443 edge port has to be in the URL for the pin to apply
+    [[ "$EDGE_HTTPS_PORT" == 443 ]] || url="https://${host}:${EDGE_HTTPS_PORT}${rest}"
+    curl -fsS --max-time 20 --resolve "${host}:${EDGE_HTTPS_PORT}:${EDGE_BIND_IP}" "$url"
+}
+
+# Armed by wire's step 4, disarmed once step 5 has recreated matrix: an exit in between (a die)
+# recreates matrix WITHOUT the bootstrap mode, best effort, so shared-secret registration is not
+# left open. The exit status of the script is the one the die chose.
+BOOTSTRAP_MODE_ON=0
+close_bootstrap_mode() {
+    local rc=$?
+    [[ "$BOOTSTRAP_MODE_ON" == 1 ]] || return "$rc"
+    BOOTSTRAP_MODE_ON=0
+    ( cd "$RELEASE_DIR" && unset SYNAPSE_BOOTSTRAP_MODE && docker compose --env-file "$STATE_ENV" up -d --force-recreate matrix ) >/dev/null 2>&1 \
+        || printf 'WARNING: matrix may still run in bootstrap mode (shared-secret registration open): recreate it without SYNAPSE_BOOTSTRAP_MODE\n' >&2
+    return "$rc"
+}
+
+# ---------------------------------------------------------------------------
+# the customer's mail login (step 6c): MAIL_TRANSPORT=relay only
+# ---------------------------------------------------------------------------
+# Under the relay transport every realm and every app mail goes through the ONE relay login. The app
+# reads it from the tenant row (control database, domain_profile.smtp: host, port, From, login, password
+# REF) plus the tenant's config.json (smtp.configured, host, port, from_address). The password itself is a
+# file the app mounts read-only (TENANT_SECRETS_DIR, /run/secrets/tenants). Without this step the operator
+# copies the file, edits the jsonb and the config by hand, and restarts gremion-ui, after every install.
+
+MAIL_LOGIN=off
+ML_TRANSPORT=""
+ML_HOST="" ML_PORT="" ML_USER="" ML_FROM="" ML_FROM_ADDR="" ML_SRC="" ML_PG_USER="" ML_PG_DB=""
+# the password file as gremion-ui sees it (the container side of TENANT_SECRETS_DIR)
+ML_CONTAINER_PW="/run/secrets/tenants/relay-smtp-password"
+
+# mail_login_facts -- reads mail.env and decides whether step 6c runs; with the relay transport it checks
+# every precondition, so that nothing is written before all of them hold. Sets MAIL_LOGIN=on|off.
+mail_login_facts() {
+    local mail_env ref fromdom
+    mail_env="${MAIL_ENV:-${ROOT}/etc/env/mail.env}"
+    ML_TRANSPORT="${MAIL_TRANSPORT:-}"
+    if [[ -z "$ML_TRANSPORT" && -f "$mail_env" ]]; then ML_TRANSPORT="$(env_key "$mail_env" MAIL_TRANSPORT)"; fi
+    if [[ "$ML_TRANSPORT" != relay ]]; then
+        MAIL_LOGIN=off
+        return 0
+    fi
+    MAIL_LOGIN=on
+    [[ -f "$mail_env" ]] || die "MAIL_TRANSPORT=relay but there is no mail env file (${mail_env})" "$GREMION_EXIT_USAGE"
+    ML_HOST="$(env_key "$mail_env" RELAY_SMTP_HOST)"
+    ML_PORT="$(env_key "$mail_env" RELAY_SMTP_PORT)"; ML_PORT="${ML_PORT:-587}"
+    ML_USER="$(env_key "$mail_env" RELAY_SMTP_USER)"
+    fromdom="$(env_key "$mail_env" RELAY_FROM_DOMAIN)"
+    [[ -n "$fromdom" ]] || fromdom="$(env_key "$mail_env" PLATFORM_DOMAIN)"
+    [[ "$ML_HOST" =~ ^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$ ]] \
+        || die "MAIL_TRANSPORT=relay needs RELAY_SMTP_HOST (a host name) in ${mail_env}" "$GREMION_EXIT_USAGE"
+    [[ "$ML_PORT" =~ ^[1-9][0-9]{0,4}$ && "$ML_PORT" -le 65535 ]] \
+        || die "RELAY_SMTP_PORT ${ML_PORT} in ${mail_env} is not a port" "$GREMION_EXIT_USAGE"
+    [[ "$fromdom" =~ ^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$ ]] \
+        || die "the relay From domain is not a lowercase DNS name: set RELAY_FROM_DOMAIN (the domain the relay signs) in ${mail_env}" "$GREMION_EXIT_USAGE"
+    ML_FROM_ADDR="no-reply@${fromdom}"
+    ML_FROM="\"Gremion\" <${ML_FROM_ADDR}>"
+    if [[ -n "$ML_USER" ]]; then
+        [[ "$ML_USER" =~ ^[^[:space:][:cntrl:]]+$ ]] || die "RELAY_SMTP_USER in ${mail_env} holds a space or a control character" "$GREMION_EXIT_USAGE"
+        ref="$(env_key "$mail_env" RELAY_SMTP_PASSWORD_REF)"
+        case "$ref" in
+            secret:*) ML_SRC="${ROOT}/etc/secrets/${ref#secret:}" ;;
+            file:*)   ML_SRC="${ref#file:}" ;;
+            *) die "RELAY_SMTP_PASSWORD_REF in ${mail_env} must be secret:<name> or file:<absolute path> (RELAY_SMTP_USER is set)" "$GREMION_EXIT_USAGE" ;;
+        esac
+        [[ "$ML_SRC" == /* && "$ML_SRC" != *..* ]] || die "RELAY_SMTP_PASSWORD_REF names no absolute path without .. (${ML_SRC})" "$GREMION_EXIT_USAGE"
+        [[ -s "$ML_SRC" ]] || die "the relay password file is absent or empty: ${ML_SRC} (the operator places it; reset removes the copy under the tenant secrets only)" "$GREMION_EXIT_USAGE"
+        [[ "$(stat -c '%u' "$ML_SRC")" == "$(stat -c '%u' "${ROOT}/etc/secrets")" ]] \
+            || die "the relay password file ${ML_SRC} is not owned by the deploy user (the owner of ${ROOT}/etc/secrets)" "$GREMION_EXIT_USAGE"
+        if fs_carries_modes "$(dirname "$ML_SRC")"; then
+            [[ "$(stat -c '%a' "$ML_SRC")" == 600 ]] || die "the relay password file ${ML_SRC} must be mode 0600 (it is $(stat -c '%a' "$ML_SRC"))" "$GREMION_EXIT_USAGE"
+        fi
+    fi
+    ML_PG_USER="$(env_key "$STATE_ENV" POSTGRES_USER)"
+    ML_PG_DB="$(env_key "$STATE_ENV" CONTROL_DB_NAME)"; ML_PG_DB="${ML_PG_DB:-control}"
+    [[ "$ML_PG_USER" =~ ^[A-Za-z0-9_]+$ ]] || die "POSTGRES_USER in ${STATE_ENV} is not a plain role name" "$GREMION_EXIT_USAGE"
+    [[ "$ML_PG_DB" =~ ^[A-Za-z0-9_]+$ ]] || die "CONTROL_DB_NAME in ${STATE_ENV} is not a plain database name" "$GREMION_EXIT_USAGE"
+}
+
+# ml_psql <sql> [-v name=value ...] -- the control database as the state project's postgres user. The SQL
+# is on stdin and every value a psql variable, never interpolated; tuples only.
+ml_psql() {
+    local sql="$1" c
+    shift
+    c="$(container_of "${STACK}-state" postgres)"
+    printf '%s\n' "$sql" | docker exec -i "$c" psql -X -U "$ML_PG_USER" -d "$ML_PG_DB" -tAq -v ON_ERROR_STOP=1 "$@" -f -
+}
+
+# mail_login_visible <gremion-ui container> -- the password file as the running app sees it (the tenant
+# secrets directory is a live read-only bind mount); only when the relay has a login.
+mail_login_visible() {
+    [[ -n "$ML_USER" ]] || return 0
+    docker exec "$1" sh -c "test -r ${ML_CONTAINER_PW} && test -s ${ML_CONTAINER_PW}" \
+        || die "gremion-ui cannot read ${ML_CONTAINER_PW}, the relay-smtp-password file of the tenant secrets directory (docker exec ${1} ls -l /run/secrets/tenants: owner and mode, and the bind mount)" "$GREMION_EXIT_ASSERT"
+}
+
+# mail_login_apply <slug> <tenant secrets dir> -- step 6c (after mail_login_facts). Idempotent.
+mail_login_apply() {
+    local slug="$1" tsd="$2" dest pref="" before after want n cfgout ui_c pwnote
+    if [[ "$MAIL_LOGIN" != on ]]; then
+        info "mail login: not wired, MAIL_TRANSPORT=${ML_TRANSPORT:-unset} (this step is for the relay transport only)"
+        return 0
+    fi
+    # (2) the password file, where gremion-ui mounts the tenant secrets: copied on EVERY run (a rotated
+    # password propagates), through pipes only: it is in no variable, no argv and no output
+    if [[ -n "$ML_USER" ]]; then
+        dest="${tsd}/relay-smtp-password"
+        pref="file:${ML_CONTAINER_PW}"
+        tr -d '\r\n' < "$ML_SRC" | atomic_write "$dest" 600 || die "cannot write ${dest}" "$GREMION_EXIT_ASSERT"
+        keep_owner "$(stat -c '%u:%g' "$tsd")" "$dest"
+        [[ -s "$dest" ]] || die "the relay password copy is empty: ${dest}" "$GREMION_EXIT_ASSERT"
+        [[ "$(tr -d '\r\n' < "$ML_SRC" | sha256sum | cut -d' ' -f1)" == "$(sha256sum < "$dest" | cut -d' ' -f1)" ]] \
+            || die "the relay password copy ${dest} differs from its source" "$GREMION_EXIT_ASSERT"
+    fi
+    # (3) the tenant row: smtp is MERGED into domain_profile (the other keys, residencyZone first, stay)
+    before="$(ml_psql "SELECT domain_profile FROM tenant WHERE slug = :'slug';" -v slug="$slug")" \
+        || die "the control database (${ML_PG_DB}) could not be read" "$GREMION_EXIT_ASSERT"
+    jq -e 'type == "object"' <<< "$before" >/dev/null 2>&1 \
+        || die "there is no tenant row for ${slug} in the control database ${ML_PG_DB} (was the create request run by this install?)" "$GREMION_EXIT_ASSERT"
+    n="$(ml_psql "WITH u AS (UPDATE tenant SET domain_profile = domain_profile || jsonb_build_object('smtp', jsonb_strip_nulls(jsonb_build_object('host', :'host', 'port', (:'port')::int, 'from', :'from', 'user', nullif(:'user', ''), 'passwordRef', nullif(:'pref', '')))), updated_at = now() WHERE slug = :'slug' RETURNING 1) SELECT count(*) FROM u;" \
+            -v slug="$slug" -v host="$ML_HOST" -v port="$ML_PORT" -v from="$ML_FROM" -v user="$ML_USER" -v pref="$pref")" \
+        || die "the tenant row of ${slug} could not be updated (control database ${ML_PG_DB})" "$GREMION_EXIT_ASSERT"
+    [[ "${n//[[:space:]]/}" == 1 ]] || die "the smtp entry of the tenant row of ${slug} was not written (rows updated: ${n//[[:space:]]/})" "$GREMION_EXIT_ASSERT"
+    want="$(jq -nc --arg h "$ML_HOST" --argjson p "$ML_PORT" --arg f "$ML_FROM" --arg u "$ML_USER" --arg r "$pref" \
+            '{host: $h, port: $p, from: $f} + (if $u != "" then {user: $u, passwordRef: $r} else {} end)')"
+    after="$(ml_psql "SELECT domain_profile FROM tenant WHERE slug = :'slug';" -v slug="$slug")" \
+        || die "the control database (${ML_PG_DB}) could not be read back" "$GREMION_EXIT_ASSERT"
+    jq -e --argjson b "$before" --argjson w "$want" '(del(.smtp) == ($b | del(.smtp))) and (.smtp == $w)' <<< "$after" >/dev/null 2>&1 \
+        || die "the tenant row of ${slug} reads back without the expected domain_profile.smtp, or with another key changed" "$GREMION_EXIT_ASSERT"
+    # (4) the tenant's config.json, inside the container that owns the volume (tmp file, then rename, the
+    # owner and mode of the file it replaces kept): the values are not secret, they go in by NAME
+    ui_c="$(container_of "${STACK}-app-${COLOUR}" gremion-ui)"
+    cfgout="$(WIRE_SLUG="$slug" WIRE_SMTP_HOST="$ML_HOST" WIRE_SMTP_PORT="$ML_PORT" WIRE_SMTP_FROM="$ML_FROM_ADDR" \
+        docker exec -i -e WIRE_SLUG -e WIRE_SMTP_HOST -e WIRE_SMTP_PORT -e WIRE_SMTP_FROM "$ui_c" node - <<'NODEJS'
+const fs = require('fs')
+const root = (process.env.TENANT_DATA_ROOT || '/data').replace(/\/+$/, '')
+const f = root + '/' + process.env.WIRE_SLUG + '/config.json'
+const st = fs.statSync(f)
+const cur = JSON.parse(fs.readFileSync(f, 'utf8'))
+const smtp = Object.assign({}, cur.smtp, {
+  configured: true,
+  host: process.env.WIRE_SMTP_HOST,
+  port: Number(process.env.WIRE_SMTP_PORT),
+  from_address: process.env.WIRE_SMTP_FROM,
+})
+const tmp = f + '.tmp'
+fs.writeFileSync(tmp, JSON.stringify(Object.assign({}, cur, { smtp }), null, 2) + '\n', { mode: st.mode & 0o777 })
+if (process.getuid && process.getuid() === 0) fs.chownSync(tmp, st.uid, st.gid)
+fs.renameSync(tmp, f)
+// read back from disk: the post-condition, not the write's return value
+process.stdout.write(JSON.stringify(JSON.parse(fs.readFileSync(f, 'utf8')).smtp))
+NODEJS
+    )" || die "writing the tenant's config.json inside gremion-ui failed (docker exec ${ui_c} node -; its own error is above)" "$GREMION_EXIT_ASSERT"
+    jq -e --arg h "$ML_HOST" --argjson p "$ML_PORT" --arg f "$ML_FROM_ADDR" '.configured == true and .host == $h and .port == $p and .from_address == $f' <<< "$cfgout" >/dev/null 2>&1 \
+        || die "the tenant's config.json reads back without smtp.configured, host, port and from_address as written" "$GREMION_EXIT_ASSERT"
+    mail_login_visible "$ui_c" "$tsd"
+    # the evidence line names only what ran: no login, no password file, nothing read back
+    pwnote="no login (allow-listed relay), no password file"
+    if [[ -n "$ML_USER" ]]; then pwnote="password file copied (0600) and read back from gremion-ui"; fi
+    ok "mail login: relay ${ML_HOST}:${ML_PORT} as ${ML_FROM_ADDR}; tenant row smtp merged, config.json smtp.configured, ${pwnote}"
+}
+
+# ---------------------------------------------------------------------------
+# wire
+# ---------------------------------------------------------------------------
+
+cmd_wire() {
+    local slug="${1:-}"
+    need_slug "$slug"
+    need_cmd docker jq curl awk sed grep
+    setup_paths
+    acquire_host_lock
+    active_colour
+    STATE_ENV="${ROOT}/etc/env/state.env"
+    APP_ENV="${ROOT}/etc/env/app-${COLOUR}.env"
+    [[ -f "$STATE_ENV" && -f "$APP_ENV" ]] || die "env files absent: ${STATE_ENV} / ${APP_ENV} (run gremion-init-secrets)" "$GREMION_EXIT_USAGE"
+    [[ -f "$PROFILES_FILE" ]] || die "module profile map not found: ${PROFILES_FILE}" "$GREMION_EXIT_USAGE"
+
+    # -- facts and preconditions (nothing is written before every one holds) --
+    local host platform edge_ip edge_port bot_id
+    STACK="$(env_key "$STATE_ENV" STACK)"
+    host="$(env_key "$STATE_ENV" PILOT_TENANT_HOST)"
+    platform="$(env_key "$STATE_ENV" PLATFORM_DOMAIN)"
+    edge_ip="$(env_key "$STATE_ENV" EDGE_BIND_IP)"
+    edge_port="$(env_key "$STATE_ENV" EDGE_HTTPS_PORT)"
+    [[ -n "$STACK" ]] || die "STACK is empty in ${STATE_ENV}" "$GREMION_EXIT_USAGE"
+    [[ "$host" =~ ^[a-z0-9]([a-z0-9.-]*[a-z0-9])?\.[a-z]{2,}$ ]] \
+        || die "PILOT_TENANT_HOST in ${STATE_ENV} is not a host name (still the operator placeholder?): it is the realm's public host and must be filled in before the first up" "$GREMION_EXIT_USAGE"
+    [[ "$platform" =~ ^[a-z0-9]([a-z0-9.-]*[a-z0-9])?\.[a-z]{2,}$ ]] \
+        || die "PLATFORM_DOMAIN in ${STATE_ENV} is not a host name" "$GREMION_EXIT_USAGE"
+    [[ -n "$edge_ip" && "$edge_ip" != CHANGE_ME_* ]] || die "EDGE_BIND_IP in ${STATE_ENV} is not set" "$GREMION_EXIT_USAGE"
+    [[ "$edge_port" =~ ^[0-9]+$ ]] || die "EDGE_HTTPS_PORT in ${STATE_ENV} is not a port" "$GREMION_EXIT_USAGE"
+    EDGE_BIND_IP="$edge_ip"; EDGE_HTTPS_PORT="$edge_port"
+    bot_id="@${BOT_LOCALPART}:${platform}"
+
+    local issuer="https://${host}/auth/realms/${slug}"
+    local discovery="${issuer}/.well-known/openid-configuration"
+
+    local tsd syn_file nc_file
+    tsd="$(env_key "$APP_ENV" TENANT_SECRETS_DIR)"
+    [[ -n "$tsd" && "$tsd" == /* ]] || die "TENANT_SECRETS_DIR is not set (absolute) in ${APP_ENV}" "$GREMION_EXIT_USAGE"
+    syn_file="${tsd}/tenant_${slug}_client_synapse"
+    nc_file="${tsd}/tenant_${slug}_client_nextcloud"
+    [[ -s "$syn_file" ]] || die "the realm's synapse client secret is absent: ${syn_file} (was the create request for ${slug} run by this release?)" "$GREMION_EXIT_USAGE"
+    [[ -s "$nc_file" ]] || die "the realm's nextcloud client secret is absent: ${nc_file} (the create request writes it only when it creates the realm, and reconcile does not add it: a realm created before the nextcloud client existed has none; create the client in the realm and write this file by hand, or re-create the customer)" "$GREMION_EXIT_USAGE"
+
+    local nc_c
+    nc_c="$(container_of "${STACK}-state" nextcloud)"
+    # the mail login's preconditions (relay transport only) belong to the facts: nothing is written before they hold
+    mail_login_facts
+
+    # -- 1. the realm answers publicly with the expected issuer --
+    local doc
+    doc="$(edge_curl "$discovery")" \
+        || die "the realm's discovery document is not reachable at ${discovery} through the edge (is the customer's router file written, and is the certificate publicly trusted? a staging ACME certificate fails here)" "$GREMION_EXIT_ASSERT"
+    jq -e --arg i "$issuer" '.issuer == $i' <<< "$doc" >/dev/null 2>&1 \
+        || die "the realm's discovery document names another issuer than ${issuer}: the realm or its frontendUrl was created for a different host" "$GREMION_EXIT_ASSERT"
+    ok "realm ${slug} answers at ${host} with the expected issuer"
+
+    # -- 2. the synapse client secret, 0600, where matrix mounts it --
+    install -d -m 700 "${ROOT}/etc/secrets/synapse" || die "cannot create ${ROOT}/etc/secrets/synapse" "$GREMION_EXIT_ASSERT"
+    keep_owner "$(stat -c '%u:%g' "${ROOT}/etc/secrets")" "${ROOT}/etc/secrets/synapse"
+    tr -d '\r\n' < "$syn_file" | atomic_write "${ROOT}/etc/secrets/synapse/oidc_client_secret" 600 \
+        || die "cannot write the synapse client secret file" "$GREMION_EXIT_ASSERT"
+    keep_owner "$(stat -c '%u:%g' "${ROOT}/etc/secrets")" "${ROOT}/etc/secrets/synapse/oidc_client_secret"
+    [[ -s "${ROOT}/etc/secrets/synapse/oidc_client_secret" ]] || die "the synapse client secret file is empty after the copy" "$GREMION_EXIT_ASSERT"
+    ok "etc/secrets/synapse/oidc_client_secret written (0600)"
+
+    # -- 3. issuer, fetch URL, post-realm profiles --
+    set_env_key "$STATE_ENV" SYNAPSE_KEYCLOAK_ISSUER_URL "$issuer"
+    set_env_key "$STATE_ENV" SYNAPSE_KEYCLOAK_FETCH_URL "${GREMION_WIRE_FETCH_URL:-$issuer}"
+    local profiles p have
+    profiles="$(env_key "$STATE_ENV" COMPOSE_PROFILES)"
+    while IFS= read -r p; do
+        [[ -n "$p" ]] || continue
+        have=",${profiles},"
+        [[ "$have" == *",${p},"* ]] || profiles="${profiles},${p}"
+    done < <(jq -r '[.modules[] | select(.pilot == true) | (.postRealm // [])[]] | unique | .[]' "$PROFILES_FILE")
+    set_env_key "$STATE_ENV" COMPOSE_PROFILES "$profiles"
+    ok "state.env: issuer, fetch URL and COMPOSE_PROFILES=${profiles}"
+
+    # -- 4. matrix in bootstrap mode, the bot --
+    # From here until step 5 has recreated matrix, any exit (a die included) closes the
+    # shared-secret registration again instead of leaving it open.
+    BOOTSTRAP_MODE_ON=1
+    trap close_bootstrap_mode EXIT
+    ( cd "$RELEASE_DIR" && SYNAPSE_BOOTSTRAP_MODE=1 docker compose --env-file "$STATE_ENV" up -d matrix ) \
+        || die "matrix could not be started in bootstrap mode" "$GREMION_EXIT_ASSERT"
+    local mx
+    mx="$(container_of "${STACK}-state" matrix)"
+    wait_healthy "$mx" matrix
+
+    local token cur recorded=no
+    cur="$(env_key "$STATE_ENV" SYNAPSE_ADMIN_TOKEN)"
+    if [[ -n "$cur" && "$cur" != CHANGE_ME_* ]]; then
+        # the token goes into the container by NAME; the shell inside expands it
+        # (printf is a builtin and curl -K - reads the header from its stdin: the token is on no argv
+        # inside the container either)
+        if SYNAPSE_ADMIN_TOKEN="$cur" docker exec -e SYNAPSE_ADMIN_TOKEN "$mx" bash -c \
+            'printf "header = \"Authorization: Bearer %s\"\n" "$SYNAPSE_ADMIN_TOKEN" | curl -sf --max-time 10 -K - http://127.0.0.1:8008/_matrix/client/v3/account/whoami' \
+            2>/dev/null | jq -e --arg u "$bot_id" '.user_id == $u' >/dev/null 2>&1; then
+            recorded=yes
+        fi
+    fi
+    if [[ "$recorded" == yes ]]; then
+        token="$cur"
+        ok "the admin bot's token is already recorded and verified: no bootstrap"
+    else
+        # stdout carries the token and stays in a variable; stderr (bootstrap.sh does not trace) is kept
+        # in a 0600 temp file and shown on failure, so the cause survives: an unreachable database, a
+        # wrong shared secret and an already-registered bot are three different repairs
+        local out errf
+        errf="$(mktemp)" || die "cannot create a temp file for the bootstrap's error output" "$GREMION_EXIT_ASSERT"
+        if ! out="$(docker exec "$mx" bash /bootstrap.sh 2>"$errf")"; then
+            tail -n 20 "$errf" >&2 || true
+            rm -f "$errf"
+            die "the admin bot bootstrap failed (modules/messaging/synapse/bootstrap.sh; its own error is above). If the bot is already registered its token is not recoverable from here: remove the bot account's registration or restore the token into state.env and both app-<colour>.env by hand, then re-run" "$GREMION_EXIT_ASSERT"
+        fi
+        rm -f "$errf"
+        token="$(sed -n 's/^[[:space:]]*SYNAPSE_ADMIN_TOKEN=//p' <<< "$out" | head -n1 | tr -d '[:space:]')"
+        out=""
+        [[ -n "$token" ]] || die "the admin bot bootstrap printed no access token" "$GREMION_EXIT_ASSERT"
+        ok "the admin bot is registered (token captured, not shown)"
+    fi
+    local f
+    for f in "$STATE_ENV" "${ROOT}/etc/env/app-blue.env" "${ROOT}/etc/env/app-green.env"; do
+        [[ -f "$f" ]] || continue
+        set_env_key "$f" SYNAPSE_ADMIN_TOKEN "$token"
+    done
+    ok "SYNAPSE_ADMIN_TOKEN recorded in state.env and both colours"
+
+    # -- 5. matrix again, WITHOUT bootstrap mode; the login flows --
+    ( cd "$RELEASE_DIR" && unset SYNAPSE_BOOTSTRAP_MODE && docker compose --env-file "$STATE_ENV" up -d --force-recreate matrix ) \
+        || die "matrix could not be recreated without bootstrap mode" "$GREMION_EXIT_ASSERT"
+    BOOTSTRAP_MODE_ON=0
+    mx="$(container_of "${STACK}-state" matrix)"
+    wait_healthy "$mx" matrix
+    [[ "$(docker exec "$mx" printenv BOOTSTRAP_MODE 2>/dev/null | tr -d '[:space:]')" == 0 ]] \
+        || die "matrix still runs in bootstrap mode (shared-secret registration is open)" "$GREMION_EXIT_ASSERT"
+    [[ "$(docker exec "$mx" printenv SYNAPSE_KEYCLOAK_ISSUER_URL 2>/dev/null | tr -d '[:space:]')" == "$issuer" ]] \
+        || die "matrix does not carry SYNAPSE_KEYCLOAK_ISSUER_URL=${issuer} (docker exec ${mx} printenv)" "$GREMION_EXIT_ASSERT"
+    [[ -n "$(docker exec "$mx" printenv SYNAPSE_OIDC_CLIENT_SECRET_FILE 2>/dev/null | tr -d '[:space:]')" ]] \
+        || die "matrix carries no SYNAPSE_OIDC_CLIENT_SECRET_FILE" "$GREMION_EXIT_ASSERT"
+    edge_curl "https://${platform}/_matrix/client/versions" >/dev/null \
+        || die "GET /_matrix/client/versions through the edge failed (router, certificate or DNS of ${platform})" "$GREMION_EXIT_ASSERT"
+    edge_curl "https://${platform}/_matrix/client/v3/login" | jq -e '[.flows[]?.type] | index("org.matrix.login.jwt") != null' >/dev/null 2>&1 \
+        || die "GET /_matrix/client/v3/login does not list org.matrix.login.jwt: Synapse booted with jwt_config disabled because the realm key fetch failed (read: docker logs ${mx}; if the in-network fetch is refused under sslRequired=all, GREMION_WIRE_FETCH_URL names the URL to fetch from)" "$GREMION_EXIT_ASSERT"
+    ok "matrix: out of bootstrap mode, login flows list org.matrix.login.jwt"
+
+    # -- 6. Nextcloud: the provider, the apps, richdocuments --
+    wait_healthy "$nc_c" nextcloud
+    NEXTCLOUD_OIDC_CLIENT_SECRET="$(tr -d '\r\n' < "$nc_file")" \
+        docker exec -u www-data -e NEXTCLOUD_OIDC_CLIENT_SECRET "$nc_c" sh -c \
+        'php occ user_oidc:provider Keycloak --clientid=nextcloud --clientsecret="$NEXTCLOUD_OIDC_CLIENT_SECRET" --discoveryuri='"${discovery}"' --unique-uid=0 --check-bearer=1 --bearer-provisioning=1' \
+        >/dev/null || die "occ user_oidc:provider Keycloak failed (nextcloud log: docker logs ${nc_c})" "$GREMION_EXIT_ASSERT"
+    docker exec -u www-data "$nc_c" php occ richdocuments:activate-config >/dev/null \
+        || die "occ richdocuments:activate-config failed: Collabora is not reachable from Nextcloud (is the collabora profile up?)" "$GREMION_EXIT_ASSERT"
+    # activate-config resets the callback URL: Collabora must reach Nextcloud by its in-network name
+    docker exec -u www-data "$nc_c" php occ config:app:set richdocuments wopi_callback_url --value=http://nextcloud >/dev/null \
+        || die "occ config:app:set richdocuments wopi_callback_url failed" "$GREMION_EXIT_ASSERT"
+    local apps app
+    apps="$(docker exec -u www-data "$nc_c" php occ app:list --output=json)" \
+        || die "occ app:list failed" "$GREMION_EXIT_ASSERT"
+    for app in polls user_oidc richdocuments groupfolders; do
+        jq -e --arg a "$app" '.enabled | has($a)' <<< "$apps" >/dev/null 2>&1 \
+            || die "Nextcloud app ${app} is not enabled (the install hooks end in a warning: docker logs ${nc_c}; install it with occ app:install ${app})" "$GREMION_EXIT_ASSERT"
+    done
+    # the install hook sets both URLs (and warns on a failure); a missing one surfaces only when a browser opens an editor
+    local wopi_key
+    for wopi_key in wopi_url public_wopi_url; do
+        [[ -n "$(docker exec -u www-data "$nc_c" php occ config:app:get richdocuments "$wopi_key" 2>/dev/null | tr -d '[:space:]')" ]] \
+            || die "richdocuments ${wopi_key} is not set in Nextcloud (the install hook warns in docker logs ${nc_c}; set it with occ config:app:set richdocuments ${wopi_key} --value=<url>, see docs/ops/pilot-services.md)" "$GREMION_EXIT_ASSERT"
+    done
+    local prov
+    prov="$(docker exec -u www-data "$nc_c" php occ user_oidc:provider Keycloak --output=json)" \
+        || die "occ user_oidc:provider Keycloak (read-back) failed" "$GREMION_EXIT_ASSERT"
+    jq -e '.settings.checkBearer == true and (.id | tostring) == "1"' <<< "$prov" >/dev/null 2>&1 \
+        || die "the user_oidc provider read back without checkBearer true or is not provider id 1 (NEXTCLOUD_OIDC_PROVIDER_ID defaults to 1)" "$GREMION_EXIT_ASSERT"
+    docker exec "$nc_c" curl -fsS --max-time 15 -o /dev/null "$discovery" \
+        || die "the discovery URI is not reachable from inside the nextcloud container (a staging ACME certificate fails here): ${discovery}" "$GREMION_EXIT_ASSERT"
+    ok "nextcloud: provider Keycloak (checkBearer, id 1), apps enabled, richdocuments active, discovery reachable"
+
+    # -- 6b. the customer's CalDAV collection --
+    # The calendar leaf pushes each customer's events to one collection of the shared Nextcloud account
+    # (CALDAV_CALENDAR_TEMPLATE of its environment, read back from the running leaf) and has no way to
+    # create it. Created here by occ, which needs no credential on any argv; idempotent by listing first.
+    local cal_c cal_tpl cal_user cal_name cal_re cal_list
+    cal_c="$(docker ps -q --filter "label=com.docker.compose.project=${STACK}-app-${COLOUR}" \
+                          --filter "label=com.docker.compose.service=calendar-service")" \
+        || die "docker ps failed while looking for calendar-service of ${STACK}-app-${COLOUR}" "$GREMION_EXIT_ASSERT"
+    if [[ -z "${cal_c//[[:space:]]/}" ]]; then
+        info "no calendar-service runs in ${STACK}-app-${COLOUR} (calendar profile off): no CalDAV collection is created"
+    else
+        cal_c="$(container_of "${STACK}-app-${COLOUR}" calendar-service)"
+        cal_tpl="$(docker exec "$cal_c" printenv CALDAV_CALENDAR_TEMPLATE 2>/dev/null | tr -d '[:space:]' || true)"
+        [[ "$cal_tpl" == *"{slug}"* ]] \
+            || die "calendar-service carries no CALDAV_CALENDAR_TEMPLATE with a {slug} (docker exec ${cal_c} printenv): its CalDAV drain would refuse every customer" "$GREMION_EXIT_ASSERT"
+        cal_user="$(docker exec "$cal_c" printenv CALDAV_SHARED_USER 2>/dev/null | tr -d '[:space:]' || true)"
+        [[ -n "$cal_user" ]] || cal_user="$(docker exec "$cal_c" printenv NEXTCLOUD_ADMIN_USER 2>/dev/null | tr -d '[:space:]' || true)"
+        [[ -n "$cal_user" ]] || cal_user="admin"
+        cal_name="${cal_tpl//\{slug\}/${slug}}"
+        [[ "$cal_name" =~ ^[A-Za-z0-9._-]{1,64}$ ]] \
+            || die "the calendar name ${cal_name} (CALDAV_CALENDAR_TEMPLATE with the slug) is not one safe path segment" "$GREMION_EXIT_ASSERT"
+        [[ "$cal_user" =~ ^[A-Za-z0-9._@-]{1,64}$ ]] \
+            || die "the CalDAV owner account name of calendar-service is not a plain account name" "$GREMION_EXIT_ASSERT"
+        cal_list="$(docker exec -u www-data "$nc_c" php occ dav:list-calendars "$cal_user")" \
+            || die "occ dav:list-calendars ${cal_user} failed (does the account exist in Nextcloud? docker logs ${nc_c})" "$GREMION_EXIT_ASSERT"
+        cal_re="${cal_name//./\\.}"
+        if ! grep -Eq -- "^\| ${cal_re} " <<< "$cal_list"; then
+            docker exec -u www-data "$nc_c" php occ dav:create-calendar "$cal_user" "$cal_name" >/dev/null \
+                || die "occ dav:create-calendar ${cal_user} ${cal_name} failed (docker logs ${nc_c})" "$GREMION_EXIT_ASSERT"
+            cal_list="$(docker exec -u www-data "$nc_c" php occ dav:list-calendars "$cal_user")" \
+                || die "occ dav:list-calendars ${cal_user} (read-back) failed" "$GREMION_EXIT_ASSERT"
+        fi
+        grep -Eq -- "^\| ${cal_re} " <<< "$cal_list" \
+            || die "the CalDAV collection ${cal_name} of ${cal_user} is not listed after creating it (occ dav:list-calendars ${cal_user})" "$GREMION_EXIT_ASSERT"
+        ok "calendar: the CalDAV collection ${cal_name} of ${cal_user} exists (the leaf's drain target)"
+    fi
+
+    # -- 6c. the customer's mail login (MAIL_TRANSPORT=relay only) --
+    # Before the recreate below, which is what makes the app read the new row and config: no separate restart.
+    mail_login_apply "$slug" "$tsd"
+
+    # -- 7. gremion-ui, recreated, its environment read back --
+    compose_app up -d --force-recreate gremion-ui \
+        || die "gremion-ui could not be recreated" "$GREMION_EXIT_ASSERT"
+    local ui_c
+    ui_c="$(container_of "${STACK}-app-${COLOUR}" gremion-ui)"
+    wait_healthy "$ui_c" gremion-ui
+    # the relay password file, read back from the RECREATED app
+    if [[ "$MAIL_LOGIN" == on ]]; then mail_login_visible "$ui_c"; fi
+    [[ "$(docker exec "$ui_c" printenv SYNAPSE_ADMIN_TOKEN 2>/dev/null | tr -d '[:space:]')" == "$token" ]] \
+        || die "gremion-ui's SYNAPSE_ADMIN_TOKEN is not the recorded bot token after the recreate (docker exec ${ui_c} printenv)" "$GREMION_EXIT_ASSERT"
+    ok "gremion-ui recreated and carries the bot token"
+
+    printf 'WIRE: ok %s\n' "$slug"
+}
+
+main() {
+    local verb="${1:-}"
+    case "$verb" in
+        wire) shift; cmd_wire "$@" ;;
+        -h|--help) usage; exit "$GREMION_EXIT_OK" ;;
+        '') usage; die "missing verb" "$GREMION_EXIT_USAGE" ;;
+        *) usage; die "unknown verb: ${verb}" "$GREMION_EXIT_USAGE" ;;
+    esac
+}
+
+main "$@"

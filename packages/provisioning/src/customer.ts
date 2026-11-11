@@ -7,7 +7,9 @@
 //                        -> ledger opened -> realm_created -> database_created
 //                        (ensureKernelDatabase, config.json, gremion-ui's
 //                        runMigrations as the owner, seeds off, post-condition
-//                        read from the database) -> domain_bound ->
+//                        read from the database) -> governance_database_created
+//                        (TASK-084-a: ensure, migrate as the owner, bind, post-condition
+//                        read from the governance database) -> domain_bound ->
 //                        storage_prefix_reserved -> first_body_created ->
 //                        broker_account_created (kernel only)
 //   host                 gremion-vendor-mail realm-smtp --tenant, then
@@ -26,7 +28,7 @@ import { doneKinds, latestStatus } from './ledger.ts'
 import { openLedger, runPhase, type RunPhaseResult } from './machine.ts'
 import { enableOne, preflightGate } from './module-gate.ts'
 import { assertEnableList } from './operator-gate.ts'
-import type { AdminSpec, ControlRow, CustomerRef, DpiaSpec, ProvisioningDeps } from './ports.ts'
+import type { AdminSpec, ControlRow, CustomerRef, DpiaSpec, GovernancePostCondition, ProvisioningDeps } from './ports.ts'
 import { assertCustomerSlug, principalFor, tokenFor } from './slug.ts'
 import { EXECUTION_ORDER, isComplete, type StepKind, type StepStatus } from './steps.ts'
 
@@ -158,6 +160,12 @@ export async function createPhaseA(spec: CreateSpec, deps: ProvisioningDeps): Pr
         if (pc.committees !== 0) throw new ProvisioningError('POSTCONDITION', `the fresh kernel database holds ${pc.committees} committee(s), expected 0`)
         if (pc.orgUnits !== 0) throw new ProvisioningError('POSTCONDITION', `the fresh kernel database holds ${pc.orgUnits} org unit(s) before the first body, expected 0`)
       },
+      governance_database_created: async () => {
+        await deps.governance.ensureDatabase(c)
+        await deps.governance.migrate(c)
+        await deps.governance.bind(c)
+        assertGovernancePostCondition(c, await deps.governance.postCondition(c))
+      },
       domain_bound: () => deps.domain.assertBound(c),
       storage_prefix_reserved: () => deps.storage.reservePrefix(c),
       first_body_created: async () => {
@@ -173,6 +181,36 @@ export async function createPhaseA(spec: CreateSpec, deps: ProvisioningDeps): Pr
     },
   })
   return { customer: c, run, registered: created }
+}
+
+/**
+ * TASK-084-a: the governance step's post-condition, checked on what the
+ * adapter read from the database itself, in this order: binding, ledger,
+ * shipped hashes, row level security, CONNECT, where the pool really is.
+ */
+function assertGovernancePostCondition(c: CustomerRef, pc: GovernancePostCondition): void {
+  const fail = (m: string): never => {
+    throw new ProvisioningError('POSTCONDITION', m)
+  }
+  const b = pc.binding
+  if (!b) fail(`gov.database_binding of ${c.id} holds no row: the database was not bound`)
+  else if (b.customerId !== c.id || b.tenantToken !== c.token || b.contextCode !== 'gov') {
+    fail(`gov.database_binding names (${b.customerId}, ${b.tenantToken}, ${b.contextCode}), expected (${c.id}, ${c.token}, gov): a database_binding of another customer is not adopted`)
+  }
+  const shipped = pc.shipped.map((f) => f.filename)
+  if (JSON.stringify(pc.ledger.map((f) => f.filename)) !== JSON.stringify(shipped)) {
+    fail(`the governance ledger lists [${pc.ledger.map((f) => f.filename).join(', ')}], the shipped migrations are [${shipped.join(', ')}]`)
+  }
+  for (const [i, f] of pc.ledger.entries()) {
+    if (f.sha256 !== pc.shipped[i]?.sha256) fail(`the governance ledger sha256 of ${f.filename} is not the shipped file's`)
+  }
+  if (pc.unforcedRlsTables.length) fail(`row level security is not forced on gov.${pc.unforcedRlsTables.join(', gov.')}`)
+  const want = [...pc.expectedConnectGrantees].sort()
+  const got = [...pc.connectGrantees].sort()
+  if (got.includes('PUBLIC') || JSON.stringify(got) !== JSON.stringify(want)) {
+    fail(`CONNECT on the governance database is held by [${got.join(', ')}], expected exactly [${want.join(', ')}] and never PUBLIC`)
+  }
+  if (pc.currentDatabase !== pc.expectedDatabase) fail(`the governance pool is connected to database ${JSON.stringify(pc.currentDatabase)}, not ${JSON.stringify(pc.expectedDatabase)}`)
 }
 
 async function requireCustomer(deps: ProvisioningDeps, slug: string): Promise<CustomerRef & { status: ControlRow['status'] }> {

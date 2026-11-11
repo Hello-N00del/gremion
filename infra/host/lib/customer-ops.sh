@@ -124,9 +124,64 @@ release_tip() {
 # label gremion.request=<id>. The container is the docker daemon's child, not
 # the compose client's: killing the client (a lost lease, a signal) leaves it
 # running, and the executor kills it by this label and confirms it gone.
+# ensure_governance_dir -- the credential directory tenant-create bind-mounts read-write
+# (etc/secrets/governance). A bind source that is missing when the container starts is made by the
+# docker daemon as root:root; the deploy user then cannot chmod it, the files tenant-create writes
+# into it would sit in a root-owned directory, and the host backup (which runs as the deploy user)
+# could not read the tree. So the host makes it, 0700, before EVERY tenant-create run: an upgraded
+# host runs `reconcile` long before it runs `init`. Run as root (sudo), the directory is handed to
+# the owner of etc/secrets, which is the deploy user.
+ensure_governance_dir() {
+    local d="${ROOT}/etc/secrets/governance"
+    mkdir -p "$d" || die "cannot create ${d}" "$GREMION_EXIT_ASSERT"
+    if [[ "${EUID:-$(id -u)}" -eq 0 ]]; then
+        chown --reference="${ROOT}/etc/secrets" "$d" || die "cannot hand ${d} to the owner of ${ROOT}/etc/secrets" "$GREMION_EXIT_ASSERT"
+    fi
+    chmod 700 "$d" || die "cannot chmod 700 ${d} (a directory the docker daemon made is root-owned: chown it to the deploy user once)" "$GREMION_EXIT_ASSERT"
+}
+
+# ensure_tenant_secrets_dir -- the per-customer secrets directory (TENANT_SECRETS_DIR of the colour's env
+# file, #85): gremion-ui, migrate and kernel-api mount it read-only, tenant-create writes it. Its default,
+# ./secrets/tenants, lies INSIDE the release tree, which a redeploy replaces and a build context copies, so
+# app.env.tmpl sets it under etc/secrets and this REFUSES a value that is absent, relative, inside the release
+# tree, or not a leaf apart from the credential directories (the tenant-create admin files and the governance
+# credentials must never sit inside what gremion-ui mounts, and the mount must never be one of their parents:
+# gremion-ui/scripts/check-tenant-secrets-dir.mjs holds the same line for the provisioner file). Made 0700 by
+# the host before EVERY run, like ensure_governance_dir: a bind source the daemon creates is root-owned, and the
+# files tenant-create writes there are handed to uid 1000 (gremion-ui/scripts/tenant-secret-file.ts).
+ensure_tenant_secrets_dir() {
+    local envfile="${ROOT}/etc/env/app-${COLOUR}.env" d rel c
+    d="$(env_key "$envfile" TENANT_SECRETS_DIR)"
+    [[ -n "$d" ]] || die "TENANT_SECRETS_DIR is not set in ${envfile}: compose would bind ./secrets/tenants inside the release tree, which a redeploy replaces and a build copies (#85). Render the env files again (gremion-init-secrets) or set it to a directory under ${ROOT}/etc/secrets" "$GREMION_EXIT_USAGE"
+    [[ "$d" == /* ]] || die "TENANT_SECRETS_DIR '${d}' is not an absolute path (compose would resolve it against the release tree)" "$GREMION_EXIT_USAGE"
+    d="$(realpath -m -- "$d")"
+    rel="$(realpath -m -- "$RELEASE_DIR")"
+    if [[ "$d" == "$rel" || "$d" == "$rel"/* ]]; then
+        die "TENANT_SECRETS_DIR '${d}' is inside the release tree ${rel}: a redeploy would replace it and a build context would copy it (#85)" "$GREMION_EXIT_USAGE"
+    fi
+    for c in "${ROOT}/etc/secrets/tenant-create" "${ROOT}/etc/secrets/governance"; do
+        c="$(realpath -m -- "$c")"
+        # the directory is, contains, or lies inside a credential directory: all three are refused
+        if [[ "$d" == "$c" || "$d" == "$c"/* || "$c" == "$d"/* ]]; then
+            die "TENANT_SECRETS_DIR '${d}' is not a leaf apart from ${c}: gremion-ui mounts it, so a credential directory may neither sit inside it nor contain it" "$GREMION_EXIT_USAGE"
+        fi
+    done
+    # etc/secrets itself, and anything above it, would contain every credential directory
+    if [[ "$(realpath -m -- "${ROOT}/etc/secrets")" == "$d"/* || "$(realpath -m -- "${ROOT}/etc/secrets")" == "$d" ]]; then
+        die "TENANT_SECRETS_DIR '${d}' contains etc/secrets: gremion-ui would mount every credential on the host" "$GREMION_EXIT_USAGE"
+    fi
+    mkdir -p "$d" || die "cannot create ${d}" "$GREMION_EXIT_ASSERT"
+    if [[ "${EUID:-$(id -u)}" -eq 0 ]]; then
+        chown --reference="${ROOT}/etc/secrets" "$d" || die "cannot hand ${d} to the owner of ${ROOT}/etc/secrets" "$GREMION_EXIT_ASSERT"
+    fi
+    chmod 700 "$d" || die "cannot chmod 700 ${d} (a directory the docker daemon made is root-owned: chown it to the deploy user once)" "$GREMION_EXIT_ASSERT"
+}
+
 tc() {
     local envfile="${ROOT}/etc/env/app-${COLOUR}.env"
     [[ -f "$envfile" ]] || die "env file absent: ${envfile}" "$GREMION_EXIT_USAGE"
+    ensure_governance_dir
+    ensure_tenant_secrets_dir
     local tip; tip="$(release_tip)"
     local -a label=()
     if [[ -n "${GREMION_EXECUTOR_REQUEST_ID:-}" ]]; then
@@ -473,7 +528,7 @@ customer_disable_module() {   # <slug> <module> --operator <uuid> [--actor-kind 
     if [[ "$ACTOR_KIND_GIVEN" == yes ]]; then argv+=(--actor-kind "$ACTOR_KIND"); fi
     tc "${argv[@]}" || die "disable of ${MODULE_ID} for ${slug} failed in the container" "$GREMION_EXIT_ASSERT"
     _assert_fingerprint disable_module "$slug" "$before"
-    ok "module ${MODULE_ID} disabled for ${slug} (exported before it was dropped; TRD-440: container set unchanged)"
+    ok "module ${MODULE_ID} disabled for ${slug} (exported, database blocked until the Karenz ends; TRD-440: container set unchanged)"
 }
 
 customer_record_dpia() {   # <slug> <module> --operator <uuid> --requires-dpia yes|no --reason-codes a,b --document-ref <text>

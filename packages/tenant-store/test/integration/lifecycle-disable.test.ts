@@ -1,8 +1,10 @@
 // TASK-021 TDD 8 + 9 (+ Amendment R27 test 9) on the scratch stack: disable
-// exports FIRST and drops only after the export is verified and recorded; a
-// failing or empty export leaves the database and 'disabling'; the real
-// export is a pg_dump -Fc that pg_restore --list parses, whose sha256 equals
-// the record; a platform server's database (synapse) is never touched.
+// exports FIRST and, since the module Karenz, BLOCKS (it no longer drops) only
+// after the export is verified and recorded; a failing or empty export leaves
+// the database open and 'disabling'; the real export is a pg_dump -Fc that
+// pg_restore --list parses, whose sha256 equals the record; a platform
+// server's database (synapse) is never touched. The Karenz itself (30 days,
+// restore, day-30 drop) is lifecycle-karenz.test.ts.
 import { createHash } from 'node:crypto'
 import { readFileSync, writeFileSync } from 'node:fs'
 import type { Sql } from '@gremion/db'
@@ -60,7 +62,7 @@ describe('disableModule on the scratch stack', () => {
     await platform.end()
   })
 
-  it('TDD 8: a recording exporter proves the order — the dump and its verification happen before DROP DATABASE', async () => {
+  it('TDD 8: a recording exporter proves the order — the dump and its verification happen before the block', async () => {
     const X = uuidv7()
     const db = tenantModuleDbName(X, 'lcfix')
     await enableWithRow(X)
@@ -82,6 +84,7 @@ describe('disableModule on the scratch stack', () => {
         const v = Reflect.get(target, prop, receiver)
         if (prop === 'unsafe') {
           return (q: string, ...rest: unknown[]) => {
+            if (q.startsWith('REVOKE CONNECT ON DATABASE')) events.push('block')
             if (q.startsWith('DROP DATABASE')) events.push('drop')
             return (v as (...a: unknown[]) => unknown).call(target, q, ...rest)
           }
@@ -93,9 +96,9 @@ describe('disableModule on the scratch stack', () => {
       },
     })
     const r = await disableModule(X, lcfixModule(), OPERATOR, lifecycleDeps(platform, { ...server, admin: recordingAdmin, open: server.open }, { exporter: recording }))
-    expect(events).toEqual(['dump:present', 'list', 'drop'])
-    expect(r.dropped).toBe(true)
-    expect(await databasesOn(server.admin)).not.toContain(db)
+    expect(events).toEqual(['dump:present', 'list', 'block'])
+    expect(r).toMatchObject({ dropped: false, blocked: true })
+    expect(await databasesOn(server.admin)).toContain(db) // kept for the 30 days
   })
 
   it('TDD 8: an exporter that throws, or writes 0 bytes, leaves the database present and the row "disabling"; a later call resumes', async () => {
@@ -122,11 +125,11 @@ describe('disableModule on the scratch stack', () => {
     expect(en?.state).toBe('disabled')
 
     const r = await disableModule(X, lcfixModule(), OPERATOR, lifecycleDeps(platform, server))
-    expect(r.dropped).toBe(true)
-    expect(await databasesOn(server.admin)).not.toContain(db)
+    expect(r).toMatchObject({ dropped: false, blocked: true })
+    expect(await databasesOn(server.admin)).toContain(db)
   })
 
-  it('TDD 9: the real export — the dump exists, pg_restore --list parses it, its sha256 equals the record, the database is gone', async () => {
+  it('TDD 9: the real export — the dump exists, pg_restore --list parses it, its sha256 equals the record, the database is blocked, not gone', async () => {
     const X = uuidv7()
     const db = tenantModuleDbName(X, 'lcfix')
     await enableWithRow(X)
@@ -142,13 +145,13 @@ describe('disableModule on the scratch stack', () => {
     const toc = await containerExporter().list(exp.path)
     expect(toc).toMatch(new RegExp(`^;\\s+dbname: ${db}$`, 'm'))
     expect(toc).toMatch(/TABLE DATA public item /)
-    expect(await state(X)).toEqual({ state: 'dropped', export_sha256: sha, export_path: exp.path, export_bytes: String(exp.bytes) })
-    expect(await databasesOn(server.admin)).not.toContain(db)
+    expect(await state(X)).toEqual({ state: 'blocked', export_sha256: sha, export_path: exp.path, export_bytes: String(exp.bytes) })
+    expect(await databasesOn(server.admin)).toContain(db)
     // a second disable is a no-op
     expect(await disableModule(X, lcfixModule(), OPERATOR, lifecycleDeps(platform, server))).toMatchObject({ dropped: false, noop: true })
   })
 
-  it('TDD 9 (r2, pipe buffer): a database whose dump is > 1 MB exports, verifies through pg_restore --list and drops, with no stray EPIPE/EOF', async () => {
+  it('TDD 9 (r2, pipe buffer): a database whose dump is > 1 MB exports, verifies through pg_restore --list and blocks, with no stray EPIPE/EOF', async () => {
     const strays: unknown[] = []
     const onStray = (err: unknown) => strays.push(err)
     process.on('uncaughtException', onStray)
@@ -167,10 +170,10 @@ describe('disableModule on the scratch stack', () => {
         await sql.end()
       }
       const r = await disableModule(X, lcfixModule(), OPERATOR, lifecycleDeps(platform, server))
-      expect(r.dropped).toBe(true)
+      expect(r.blocked).toBe(true)
       expect(r.export!.bytes).toBeGreaterThan(1024 * 1024)
-      expect(await state(X)).toMatchObject({ state: 'dropped', export_sha256: r.export!.sha256 })
-      expect(await databasesOn(server.admin)).not.toContain(db)
+      expect(await state(X)).toMatchObject({ state: 'blocked', export_sha256: r.export!.sha256 })
+      expect(await databasesOn(server.admin)).toContain(db)
       await new Promise((res) => setTimeout(res, 500))
       expect(strays).toEqual([])
     } finally {
@@ -179,14 +182,21 @@ describe('disableModule on the scratch stack', () => {
     }
   }, 120_000)
 
-  it('re-enable after a drop creates a fresh database and migrates it again', async () => {
+  it('re-enable within the Karenz brings the blocked database back as it was (the fresh start after day 30 is lifecycle-karenz.test.ts)', async () => {
     const X = uuidv7()
     const db = tenantModuleDbName(X, 'lcfix')
     await enableWithRow(X)
     await disableModule(X, lcfixModule(), OPERATOR, lifecycleDeps(platform, server))
     const r = await enableModule(X, lcfixModule(), OPERATOR, lifecycleDeps(platform, server))
-    expect(r).toMatchObject({ database: db, created: true, applied: ['001_init.sql', '002_item_customer_idx.sql'] })
+    expect(r).toMatchObject({ database: db, created: false, restored: true, applied: [] })
     expect((await state(X))?.state).toBe('enabled')
+    const sql = connectModule(db, { max: 1 })
+    try {
+      expect((await sql<{ note: string }[]>`SELECT note FROM item`).map((x) => x.note)).toEqual(['kept in the export'])
+    } finally {
+      await sql.end()
+    }
+    await platform`UPDATE plt.module_karenz SET state = 'restored', restored_at = now() WHERE customer_id = ${X}` // the pass would report this
     await disableModule(X, lcfixModule(), OPERATOR, lifecycleDeps(platform, server))
   })
 
@@ -198,7 +208,7 @@ describe('disableModule on the scratch stack', () => {
       const messagingLike = lcfixModule({ database: null, export: null, platformServer: { postgresService: MODULE_SERVICE, databases: ['synapse'] } })
       await enableModule(X, messagingLike, OPERATOR, lifecycleDeps(platform, server))
       const r = await disableModule(X, messagingLike, OPERATOR, lifecycleDeps(platform, server))
-      expect(r).toMatchObject({ dropped: false, database: null })
+      expect(r).toMatchObject({ dropped: false, blocked: false, database: null })
       expect(await databasesOn(server.admin)).toContain('synapse')
     } finally {
       await server.admin.unsafe('DROP DATABASE IF EXISTS synapse WITH (FORCE)')

@@ -10,6 +10,8 @@ import { accessWords } from './access-log'
 
 export interface NewCustomerInput {
   slug: string
+  /** The slug typed a second time (a typo guard: the slug is permanent). The form action always sets it; absent (other callers) is not checked. */
+  confirmSlug?: string
   host: string
   itAdmin: string
   councilAdmin: string
@@ -79,6 +81,9 @@ export function validateNewCustomer(
   } else if (RESERVED_SLUGS.has(input.slug)) {
     errors.slug = `Kurzname „${input.slug}“ ist reserviert und kann nicht vergeben werden.`
   }
+  if (input.confirmSlug !== undefined && input.confirmSlug !== input.slug) {
+    errors.confirmSlug = 'Der Kurzname ist dauerhaft und lässt sich später nicht ändern: bitte ihn zur Kontrolle noch einmal genau so eingeben.'
+  }
   if (NON_ASCII.test(input.host)) errors.host = 'Hostname nur in ASCII (a-z, 0-9, Punkt, Bindestrich); Umlaute und IDN-Namen sind im Pilotbetrieb nicht möglich, kein Punycode.'
   else if (!HOST.test(input.host.toLowerCase())) errors.host = 'Hostname in Kleinbuchstaben, z. B. rat.musterstadt.de.'
   if (!EMAIL.test(input.itAdmin.toLowerCase())) errors.itAdmin = 'E-Mail-Adresse der IT-Administration.'
@@ -139,9 +144,12 @@ export function createArgs(input: NewCustomerInput): Record<string, unknown> {
 /** A request the database refused, in the operator's words (SQLSTATE of submit_provisioning_request). */
 export class SubmitRefused extends Error {
   readonly status: 400 | 403 | 409 | 503
-  constructor(status: 400 | 403 | 409 | 503, message: string) {
+  /** The database error behind a 503 that names no detail (for the panel log; never shown to the operator). */
+  readonly dbError: unknown
+  constructor(status: 400 | 403 | 409 | 503, message: string, dbError?: unknown) {
     super(message)
     this.status = status
+    this.dbError = dbError
   }
 }
 
@@ -157,8 +165,12 @@ export function submitRefusal(err: unknown): SubmitRefused {
       return new SubmitRefused(409, 'Dieser Schlüssel wurde schon für eine andere Anfrage benutzt. Bitte das Formular neu laden.')
     case '22023':
       return new SubmitRefused(400, 'Die Anfrage wurde von der Datenbank abgelehnt (ungültige Angaben).')
-    default:
-      return new SubmitRefused(503, 'Die Anfrage konnte nicht gespeichert werden (Plattform-Datenbank; Details im Panel-Log).')
+    default: {
+      // the 503 sends the operator to the panel log: write the cause there, name and SQLSTATE only (the message can carry form content)
+      const e = err as { name?: string } | null
+      console.error(`[control-panel] request write failed: ${e?.name ?? 'Error'}: ${code ?? 'no-sqlstate'}`)
+      return new SubmitRefused(503, 'Die Anfrage konnte nicht gespeichert werden (Plattform-Datenbank; Details im Panel-Log).', err)
+    }
   }
 }
 
@@ -192,10 +204,19 @@ export interface ModuleChoice {
   denied: string | null
 }
 
-/** The module checkboxes: plt.module's toggleable rows, the deny set shown disabled with its reason. */
+/**
+ * The modules the isolation producer proves (PILOT_MODULES in infra/host/bin/gremion-isolation); the create's
+ * preflight refuses any other one (NO_ISOLATION_RESULT) after the form was accepted. A constant on purpose: a
+ * query of the evidence table that is wrong would block every create. requests.test.ts pins it equal to the script.
+ */
+export const PROVEN_MODULES: ReadonlySet<string> = new Set(['calendar', 'content', 'publishing', 'votes', 'files', 'messaging'])
+
+const NOT_PROVEN = 'keine Isolationsprüfung auf diesem Stand; das Modul kann beim Anlegen nicht gewählt werden.'
+
+/** The module checkboxes: plt.module's toggleable rows; the deny set and every module without isolation evidence shown disabled with the reason. */
 export async function listModuleChoices(sql: postgres.Sql, deny: Readonly<Record<string, string>> = DENY_REASONS): Promise<ModuleChoice[]> {
   const rows = await sql<{ module_key: string; name: string }[]>`SELECT module_key, name FROM plt.module WHERE toggleable ORDER BY module_key`
-  return rows.map((r) => ({ id: r.module_key, name: r.name, denied: deny[r.module_key] ?? null }))
+  return rows.map((r) => ({ id: r.module_key, name: r.name, denied: deny[r.module_key] ?? (PROVEN_MODULES.has(r.module_key) ? null : NOT_PROVEN) }))
 }
 
 /** Seconds since the executor's newest heartbeat, or null when there is none. */

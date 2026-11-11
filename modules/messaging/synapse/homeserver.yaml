@@ -26,7 +26,8 @@ database:
 # Media store
 media_store_path: /data/media_store
 
-# Listener — internal Docker network only, and the client API only: no
+# Listener — internal Docker network only: the client API, plus openid (only the
+# userinfo endpoint the LiveKit token check calls, TASK video). No
 # federation resource (PRD-MSG-002, defence in depth; the network proof is
 # TASK-060).
 listeners:
@@ -37,7 +38,7 @@ listeners:
     bind_addresses:
       - "0.0.0.0"
     resources:
-      - names: [client]
+      - names: [client, openid]
         compress: false
 
 # Disable federation — a closed, single-organisation deployment

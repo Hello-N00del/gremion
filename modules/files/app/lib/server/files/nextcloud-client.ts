@@ -257,7 +257,8 @@ export class NextcloudClient {
   ): Promise<void> {
     const url = this.baseUrl.replace(/\/$/, '') + path
     const userAuth = this.webdavUserAuth(userId)
-    const res = await fetch(url, {
+    // The DOM typings lack `duplex`; widen only that one field so method, headers and body stay checked.
+    const init: RequestInit & { duplex?: 'half' } = {
       method: 'PUT',
       headers: {
         Authorization: userAuth ?? this.authHeader(),
@@ -265,8 +266,11 @@ export class NextcloudClient {
         'Content-Type': contentType,
         ...(!userAuth ? { 'X-Nextcloud-User': userId } : {})
       },
-      body
-    })
+      body,
+      // Node fetch requires duplex for a streaming request body (as service-client.ts does).
+      ...(body instanceof ReadableStream ? { duplex: 'half' } : {})
+    }
+    const res = await fetch(url, init)
     if (!res.ok) {
       throw await responseError('PUT', path, res)
     }
@@ -369,6 +373,25 @@ export class NextcloudClient {
       if (msg.includes('already exists') || msg.includes('102')) return
       throw err
     }
+  }
+
+  /** The user ids in one Nextcloud group (OCS provisioning API, Karenz p2 t16: the retained sink
+   *  syncs its read group against the current role holders). The OCS v1 API answers an unknown
+   *  group with HTTP 200 and a failure envelope (statuscode 101), and an answer without a `users`
+   *  list is unreadable: both THROW, because "nobody is in the group" would make the caller add
+   *  everyone and remove nobody on a wrong premise. */
+  async listGroupMembers(groupId: string): Promise<string[]> {
+    const res = await this.request('GET', `/ocs/v1.php/cloud/groups/${encodeURIComponent(groupId)}?format=json`)
+    const json = (await res.json()) as {
+      ocs?: { meta?: { statuscode?: number; message?: string }; data?: { users?: unknown } }
+    }
+    const code = json?.ocs?.meta?.statuscode
+    if (code !== undefined && code !== 100 && code !== 200) {
+      throw new Error(`Nextcloud group members → OCS status ${code}: ${json.ocs?.meta?.message ?? ''}`.trim())
+    }
+    const users = json?.ocs?.data?.users
+    if (!Array.isArray(users)) throw new Error('Nextcloud group members → the answer has no users list')
+    return users.map((u) => String(u))
   }
 
   async deleteGroup(groupId: string): Promise<void> {

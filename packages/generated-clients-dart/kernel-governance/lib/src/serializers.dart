@@ -45,6 +45,8 @@ import 'package:gremion_kernel_governance_client/src/model/api_groups_post201_re
 import 'package:gremion_kernel_governance_client/src/model/api_groups_post201_response_data.dart';
 import 'package:gremion_kernel_governance_client/src/model/api_groups_post_request.dart';
 import 'package:gremion_kernel_governance_client/src/model/api_health_get200_response.dart';
+import 'package:gremion_kernel_governance_client/src/model/api_users_get200_response.dart';
+import 'package:gremion_kernel_governance_client/src/model/api_users_get200_response_data_inner.dart';
 import 'package:gremion_kernel_governance_client/src/model/committee_member.dart';
 import 'package:gremion_kernel_governance_client/src/model/committee_role.dart';
 import 'package:gremion_kernel_governance_client/src/model/governance_error.dart';
@@ -91,6 +93,8 @@ part 'serializers.g.dart';
   ApiGroupsPost201ResponseData,
   ApiGroupsPostRequest,
   ApiHealthGet200Response,
+  ApiUsersGet200Response,
+  ApiUsersGet200ResponseDataInner,
   CommitteeMember,
   CommitteeRole,
   GovernanceError,

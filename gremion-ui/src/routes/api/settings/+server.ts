@@ -6,6 +6,7 @@ import type { SessionUser } from '$lib/auth/types'
 import { z } from 'zod'
 import { env } from '$env/dynamic/private'
 import { isAllowedSmtpPort, resolveSmtpTarget } from '$lib/server/mail/smtp-target-guard'
+import { councilSwitchEnablesIn } from '$lib/server/module-switch/direct-writes'
 
 // G-098: `.strict()` rejects unknown top-level keys (e.g. typos). Per-field
 // constraints below remain tighter than the baseline `configUpdateSchema`
@@ -108,6 +109,22 @@ export const PATCH: RequestHandler = async ({ request, locals }) => {
   // the MERGED stored+patch values whenever host or port is touched, so a
   // host-only / port-only PATCH cannot keep a bad stored counterpart.
   const config = readConfig()
+
+  // Karenz: a council-switchable module that is off comes back only through the council switch (platform
+  // request, DPIA decision, Art. 17 replay of a restore); a direct write has none of those. The whole
+  // request is refused, nothing is written.
+  const switchOnly = councilSwitchEnablesIn(parsed.data.modules, config.modules)
+  if (switchOnly.length > 0) {
+    return json(
+      {
+        success: false,
+        code: 'USE_MODULE_SWITCH',
+        error: `Ein ausgeschaltetes Modul (${switchOnly.join(', ')}) kann nur über die Modulverwaltung wieder eingeschaltet werden.`,
+      },
+      { status: 409 },
+    )
+  }
+
   const smtp = parsed.data.smtp
   if (smtp && (smtp.host !== undefined || smtp.port !== undefined)) {
     const merged = { ...(config.smtp as { host?: string; port?: number } | undefined), ...smtp }

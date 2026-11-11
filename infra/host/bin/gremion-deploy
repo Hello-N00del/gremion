@@ -628,12 +628,46 @@ step_3_space_and_pull() {
     done <<< "$PINNED_IMAGES"
     ok "every pinned image present locally"
 }
+# ensure_governance_dir -- #578. docker-compose.app.yml bind-mounts
+# etc/secrets/governance read-write into tenant-create, and step 4's nats-auth
+# init is the first tenant-create run of a deploy. A bind source that is missing
+# when that container starts is made by the docker daemon as root:root; the
+# deploy user then cannot chmod it, and every later tenant-create verb (the
+# hourly Karenz run, the daily purge, the executor, reconcile --apply) dies on
+# customer-ops.sh's ensure_governance_dir. So the deploy makes the directory
+# first, 0700 and owned like etc/secrets (the deploy user's; run as root, it is
+# handed to that owner), and REFUSES a directory someone else owns before step 4
+# renders anything, naming the repair. Same contract as ensure_governance_dir
+# in lib/customer-ops.sh, which gremion-deploy does not source.
+ensure_governance_dir() {
+    local secrets="${ROOT}/etc/secrets" d="${ROOT}/etc/secrets/governance" want have owner
+    [[ -d "$secrets" ]] || die "etc/secrets is absent: ${secrets} (run bootstrap)" 2
+    want="$(stat -c '%u' -- "$secrets")" || die "cannot stat ${secrets}" 1
+    owner="$(stat -c '%U' -- "$secrets" 2>/dev/null || true)"; owner="${owner:-$want}"
+    if [[ -e "$d" || -L "$d" ]]; then
+        [[ -d "$d" && ! -L "$d" ]] || die "${d} exists and is not a directory: remove it (tenant-create bind-mounts it)" 1
+        have="$(stat -c '%u' -- "$d")" || die "cannot stat ${d}" 1
+        [[ "$have" == "$want" ]] \
+            || die "${d} is owned by uid ${have}, not by the deploy user (${owner}); the docker daemon made it for an earlier tenant-create run. Nothing was changed; repair once: sudo chown ${owner}: ${d} && sudo chmod 700 ${d}" 1
+    else
+        mkdir -m 700 -- "$d" || die "cannot create ${d}" 1
+        if [[ "${EUID:-$(id -u)}" -eq 0 ]]; then
+            chown --reference="$secrets" -- "$d" || die "cannot hand ${d} to the owner of ${secrets}" 1
+        fi
+    fi
+    chmod 700 -- "$d" || die "cannot chmod 700 ${d}" 1
+}
+
 # ── step 4 — host-rendered files (§F.4.4) ───────────────────────────────────
 # bin_path is captured into a variable BEFORE it is invoked, in this step and
 # in 5, 9, 10 and 11. Called inline as `"$(bin_path x)" --flag`, its `die` runs
 # in a command substitution and can only end that subshell: the program would
 # then try to execute `--flag` and exit 127 instead of the documented 2.
 step_4_render() {
+    # #578: first, so a directory the deploy cannot own refuses the deploy
+    # before anything is rendered, and the nats-auth init run below never
+    # makes the bind source as root.
+    ensure_governance_dir
     local prog; prog="$(bin_path gremion-render)"
     "$prog" --release "$RELEASE_DIR"
     ok "host-rendered files produced for $TAG"

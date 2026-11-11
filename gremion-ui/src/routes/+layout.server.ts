@@ -60,7 +60,8 @@ async function loadCounts(canApprove: boolean, financeEnabled: boolean): Promise
 }
 
 // Matrix unread badge count. Same store the /messages page reads — a single
-// short `/sync` against Synapse, summing each room's notification_count. The
+// short `/sync` against Synapse, summing each room's notification_count (the
+// provider may serve a total up to 20 s old from its short per-user cache). The
 // Matrix logic itself now lives in the messages module's data provider (Session-A
 // inversion A3a), so the kernel shell no longer imports messages
 // internals; here we just invoke the registered provider. An absent messages

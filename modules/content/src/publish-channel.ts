@@ -37,6 +37,7 @@ import type { ContentEvent } from '@gremion/ports/broker'
 import type { Sql, TenantRef } from './tenant-store.js'
 import { MailUnconfiguredError, type KernelClient } from './kernel-client.js'
 import { enqueueOutbox } from './outbox.js'
+import { mailErrorFields } from './mail-error.js'
 import { checkLinkBase } from './link-base.js'
 import {
   getPost,
@@ -75,8 +76,18 @@ export interface PublishResult {
   recipientCount?: number
   externalRef?: string
   warnings: string[]
+  /**
+   * The subset of `warnings` that names no recipient address and carries no
+   * transport error text, so it is safe for a log line (the scheduled path has
+   * no UI, so its log is the operator's only summary). Absent on a result that
+   * has nothing of the kind.
+   */
+  operatorWarnings?: string[]
   detail?: string
 }
+
+/** `detail` of a result where mail went out but the delivery ledger could not record it. */
+export const DELIVERY_NOT_RECORDED = 'delivery not recorded'
 
 /**
  * Thrown when the post is unknown or the channel row is missing/disabled. The
@@ -254,6 +265,7 @@ async function publishEmail(
         status: 'failed',
         recipientCount: 0,
         warnings: [linkBase.reason],
+        operatorWarnings: [linkBase.reason],
         detail: 'unusable public base URL',
       },
     }
@@ -273,6 +285,7 @@ async function publishEmail(
         status: 'failed',
         recipientCount: 0,
         warnings: ['no recipients resolved'],
+        operatorWarnings: ['no recipients resolved'],
         detail: 'no recipients',
       },
     }
@@ -330,6 +343,9 @@ async function publishEmail(
       await markFailed(sql, postId, emailLower, message, claimedAt ?? undefined)
       failedCount += 1
       warnings.push(`send to ${emailLower} failed: ${message}`)
+      // Name the cause (class, SMTP code, response code, command, HTTP status);
+      // never the address or message, which can echo the recipient.
+      console.error(`[publish-channel] email send (post ${postId}) failed`, mailErrorFields(err))
       continue
     }
 
@@ -355,16 +371,15 @@ async function publishEmail(
   // auto-retried by the next tick once the claim goes stale. No event, not 'sent'.
   if (unrecordedCount > 0) {
     await flagChannelFailed(sql, postId)
+    const doNotRepublish = `${unrecordedCount} recipient(s) delivered but not recorded in the delivery ledger — do not re-publish before checking the delivery log`
     return {
       result: {
         channel: 'email',
         status: 'failed',
         recipientCount: sentCount,
-        warnings: [
-          ...warnings,
-          `${unrecordedCount} recipient(s) delivered but not recorded in the delivery ledger — do not re-publish before checking the delivery log`,
-        ],
-        detail: 'delivery not recorded',
+        warnings: [...warnings, doNotRepublish],
+        operatorWarnings: [doNotRepublish],
+        detail: DELIVERY_NOT_RECORDED,
       },
     }
   }
@@ -397,6 +412,7 @@ async function publishEmail(
         status: 'failed',
         recipientCount: sentCount,
         warnings: [...warnings, 'SMTP became unconfigured mid-send — remaining recipients not sent'],
+        operatorWarnings: ['SMTP became unconfigured mid-send — remaining recipients not sent'],
         detail: 'SMTP not configured',
       },
     }
@@ -411,6 +427,7 @@ async function publishEmail(
         status: 'failed',
         recipientCount: 0,
         warnings: failedCount > 0 ? [...warnings, 'all sends failed'] : warnings,
+        operatorWarnings: failedCount > 0 ? ['all sends failed'] : [],
         detail: 'all sends failed',
       },
     }
@@ -428,6 +445,7 @@ async function publishEmail(
         status: 'failed',
         recipientCount: sentCount,
         warnings: [...warnings, `${failedCount} recipient(s) not delivered — publish again to retry them`],
+        operatorWarnings: [`${failedCount} recipient(s) not delivered — publish again to retry them`],
         detail: `${failedCount} send(s) failed`,
       },
     }

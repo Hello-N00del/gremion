@@ -97,6 +97,8 @@ COPY modules/files/module.json ./modules/files/
 COPY modules/handover/module.json ./modules/handover/
 COPY modules/messaging/module.json ./modules/messaging/
 COPY modules/votes/module.json ./modules/votes/
+# TASK-084-a: the governance chain tenant-create applies to each customer's governance database
+COPY services/governance/migrations ./services/governance/migrations/
 # TASK-205 Q1: the in-process half of every ENABLED module (routes, api routes, lib/server,
 # components, manifest) lives once under modules/<id>/app and is copied onto gremion-ui/src by
 # scripts/interim-module-overlay.mjs, the first step of `pnpm build`'s prebuild. Without these COPYs
@@ -106,6 +108,7 @@ COPY modules/votes/module.json ./modules/votes/
 COPY modules/disabled.json ./modules/
 COPY modules/board/app ./modules/board/app/
 COPY modules/calendar/app ./modules/calendar/app/
+COPY modules/content/app ./modules/content/app/
 COPY modules/files/app ./modules/files/app/
 COPY modules/messaging/app ./modules/messaging/app/
 COPY modules/votes/app ./modules/votes/app/
@@ -129,6 +132,8 @@ ENV NODE_ENV=production
 COPY --from=builder /deploy/node_modules ./node_modules
 COPY --from=builder /deploy/package.json ./
 COPY --from=builder /repo/gremion-ui/build ./build
+# Runtime entry: adapter-node's server plus the request timeout it does not expose (see the file).
+COPY --from=builder /repo/gremion-ui/scripts/serve.mjs ./scripts/serve.mjs
 COPY --from=builder /repo/gremion-ui/migrations ./migrations
 # P2.1c (#202): control-plane registry migrations (tenant registry + fleet
 # ledger) read at boot by runControlMigrations(). Without this COPY the runtime
@@ -140,6 +145,11 @@ COPY --from=builder /repo/gremion-ui/migrations-control ./migrations-control
 # loadVertical. Without this COPY a vertical ref would be refused as unknown in the running image.
 COPY --from=builder /repo/verticals ./verticals
 ENV GREMION_VERTICALS_DIR=/app/verticals
+
+# Content Engine: the Instagram carousel renderer (satori) needs an explicit .ttf buffer and reads it at
+# runtime from <cwd>/fonts/carousel. The bundled server code has no ./fonts next to it, so without this COPY
+# every slide preview fails. carousel/font-image.test.ts replays this line against render.ts.
+COPY --from=builder /repo/modules/content/app/lib/server/content/carousel/fonts ./fonts/carousel
 
 # AGPL §4/§5: a conveyed copy must be accompanied by the licence text. This
 # image IS a conveyed copy — without these two files the recipient of the image
@@ -157,4 +167,4 @@ RUN mkdir -p /data && chown -R node:node /data
 USER node
 
 EXPOSE 3000
-CMD ["node", "build"]
+CMD ["node", "scripts/serve.mjs"]

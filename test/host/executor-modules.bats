@@ -112,7 +112,8 @@ enable_args() { jq -nc '{slug:"alpha-rat", module:"votes", dpia:{requiresDpia:"n
 drive_real_tc() {
     printf 'STACK=guardstack
 COLOUR=blue
-' > "${GREMION_ROOT}/etc/env/app-blue.env"
+TENANT_SECRETS_DIR=%s/tenant-secrets
+' "$GREMION_ROOT" > "${GREMION_ROOT}/etc/env/app-blue.env"
     shim docker "exec bash '${HOST_TEST_DIR}/fixtures/executor/docker-shim' \"\$@\""
     mkdir -p "${GREMION_ROOT}/current"
     run bash -c '
@@ -183,6 +184,16 @@ COLOUR=blue
     [ "${lines[0]}" = "tc disable-module alpha-rat votes --operator ${OPERATOR}" ]
     [ "${#lines[@]}" -eq 1 ]
     assert_absent 'render-router|mail|suspend' "$ORDER" 'disable touches the module only'
+}
+
+@test "disable_module reports the database as blocked until the Karenz ends, not dropped" {
+    jq -nc '{slug:"alpha-rat", module:"votes"}' > "${WORK}/args.json"
+    drive handle_disable_module
+    [ "$status" -eq 0 ] || { echo "$output"; return 1; }
+    [[ "$output" == *"disabled for alpha-rat (exported, database blocked until the Karenz ends"* ]]
+    [[ "$output" != *"before it was dropped"* ]]
+    assert_absent 'only then dropped' "${SRC}/executor/handlers/disable_module.sh" 'the handler header no longer promises an immediate drop'
+    assert_absent 'before it was dropped' "${SRC}/customer-ops.sh" 'the success line no longer promises an immediate drop'
 }
 
 @test "disable_module: a failing verb (no export volume, export failed) fails the request; drift fails it (TRD-440)" {

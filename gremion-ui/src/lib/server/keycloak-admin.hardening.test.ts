@@ -79,7 +79,7 @@ describe('H03: path segments are encoded (getGroup / getUser and every other id-
     ['listUserRoles', (c: KeycloakAdminClient) => c.listUserRoles(EVIL), `/users/${ENC}/role-mappings/realm/composite`],
     ['assignRoles', (c: KeycloakAdminClient) => c.assignRoles(EVIL, []), `/users/${ENC}/role-mappings/realm`],
     ['executeActionsEmail', (c: KeycloakAdminClient) => c.executeActionsEmail(EVIL, ['VERIFY_EMAIL']), `/users/${ENC}/execute-actions-email`],
-    ['listSubGroups', (c: KeycloakAdminClient) => c.listSubGroups(EVIL), `/groups/${ENC}/children`],
+    ['listSubGroups', (c: KeycloakAdminClient) => c.listSubGroups(EVIL), `/groups/${ENC}/children?first=0&max=100`],
     ['createSubgroup (raw fetch)', (c: KeycloakAdminClient) => c.createSubgroup(EVIL, 'kid'), `/groups/${ENC}/children`],
     ['updateGroup', (c: KeycloakAdminClient) => c.updateGroup(EVIL, { name: 'n' }), `/groups/${ENC}`],
     ['deleteGroup', (c: KeycloakAdminClient) => c.deleteGroup(EVIL), `/groups/${ENC}`],

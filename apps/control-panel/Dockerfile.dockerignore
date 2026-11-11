@@ -1,0 +1,105 @@
+# apps/control-panel/Dockerfile.dockerignore -- the build context of the control panel image, and ONLY of it.
+#
+# BuildKit reads `<Dockerfile name>.dockerignore` next to the Dockerfile in place of the root .dockerignore, for
+# that one Dockerfile. This image copies the whole repository into its builder stage (`COPY . /codemap-src`) so
+# that the code map can be made from the code, and a copy of everything must not carry a secret. So this file is
+# an ALLOW-LIST: the first rule excludes everything, the next lines let the source folders back in, and the
+# last lines exclude again what must never be in a build context. Those last lines mirror what the root .gitignore marks
+# as secret, plus the per-run test state that nested .gitignore files name: a `secrets` folder at any depth, every `.env*` and `*.env` file, key, certificate and keystore files,
+# ssh keys, kubeconfig files, backups, the generated or host-owned files (livekit.prod.yaml, the pgbouncer user list,
+# the keycloak realm export, the element-call config, the compose pins and local compose files) and the Playwright
+# sweep scratch. When .gitignore gains a new secret path, add it here too (dockerignore.test.mjs derives the secret
+# classes from .gitignore and fails when one is not covered). A new top-level folder stays out until it is added here.
+#
+# Those rules hide more tracked files than the map needs, so the image map has a few fewer L0 file nodes than the CI map.
+# Two of the hidden files are the only files of their areas: compose/ci.placeholder.env (a placeholder, no value) and
+# docker/cloudflared/origin-ca-root.pem (a public root certificate). They are the only files of their areas in the
+# code map, so the last two lines of this file let them back in. dockerignore.test.mjs checks that the rules hide
+# no area of the code map; it does not check that every tracked file gets in.
+#
+# BuildKit is the supported builder for this image. Under DOCKER_BUILDKIT=0 (the legacy builder) this file is
+# ignored and the root .dockerignore applies. That one filters far fewer secret classes (no key, certificate,
+# keystore, ssh key, kubeconfig or backups rules, for example), so such a file can land in a discarded builder layer
+# (the COPY layer of the builder stage), never in the runner stage, which copies only the build output and the
+# status file. The code map then also reads its commit as "unknown" and has fewer L0 files, and nothing fails
+# (apps/control-panel/codemap/README.md).
+*
+
+!apps
+!compose
+!docker
+!docker-compose*.yml
+!gremion-public
+!gremion-ui
+!infra
+!k8s
+!modules
+!ops
+!packages
+!services
+!scripts
+!test
+!LICENSE
+!NOTICE
+!package.json
+!pnpm-lock.yaml
+!pnpm-workspace.yaml
+
+# the commit, without a git program: HEAD, and the refs that HEAD can point at
+!.git/HEAD
+!.git/packed-refs
+!.git/refs
+
+# the workflow files, and nothing else of .github: the code map shows the jobs of each workflow
+!.github/workflows
+
+**/node_modules
+**/.svelte-kit
+**/build
+**/coverage
+gremion-ui/_module-lane
+**/.env*
+**/*.env
+**/*.env.local
+**/*.key
+**/*.pem
+**/*.p12
+**/*.pfx
+**/secrets
+docker/livekit/livekit.prod.yaml
+
+# the rest of what .gitignore marks as secret or as host-owned output, at any depth
+**/*.crt
+**/*.csr
+**/*.srl
+**/*.jks
+**/*.keystore
+**/id_rsa*
+**/id_ed25519*
+**/*.kubeconfig
+**/.kube
+**/backups
+**/.claude
+**/CLAUDE.md
+**/TEST_USERS.md
+**/_design_api
+**/docker-compose.g080-throwaway.yml
+**/g080-throwaway-realm.json
+**/docker-compose.local-testdb.yml
+docker-compose.pins.yml
+docker-compose.state-pins.yml
+docker/pgbouncer/userlist.txt
+docker/keycloak/realm-export.json
+docker/element-call/config.json
+gremion-ui/finance/migration/reports
+gremion-ui/sweep-*
+
+# Per-run test state that nested .gitignore files name (throwaway keys, connection state): absent from a clean clone.
+**/.proof-root
+**/.t046-tmp
+**/.testdb-state.json
+**/.stack-state.json
+**/docker-compose.local-testdb.*.yml
+# LAST, so that nothing above hides them again: the tracked public files that the rules above hide (see the header)
+!compose/ci.placeholder.env
+!docker/cloudflared/origin-ca-root.pem

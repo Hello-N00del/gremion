@@ -1,6 +1,7 @@
 import { json } from '@sveltejs/kit'
 import type { RequestHandler } from './$types'
-import { parseConfig, writeConfig } from '$lib/server/config'
+import { parseConfig, readConfig, writeConfig } from '$lib/server/config'
+import { councilSwitchEnablesIn } from '$lib/server/module-switch/direct-writes'
 import { writeAuditEntry } from '$lib/server/audit-db'
 import { hasRole, Role } from '$lib/auth'
 import type { SessionUser } from '$lib/auth/types'
@@ -34,19 +35,24 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 
   try {
     const defaults = parseConfig({})
+    // Karenz: the defaults say "on" for every toggleable module, but a council-switchable module that is
+    // off comes back only through the council switch (platform request, DPIA decision, Art. 17 replay of a
+    // restore). The reset leaves such a module as it is and says so.
+    const heldBack = councilSwitchEnablesIn(defaults.modules, readConfig().modules)
+    const modules = Object.fromEntries(Object.entries(defaults.modules).filter(([id]) => !heldBack.includes(id)))
     const updated = writeConfig({
       org: defaults.org,
       smtp: defaults.smtp,
-      modules: defaults.modules,
+      modules,
       backups: { retention_days: defaults.backups.retention_days },
     })
     await writeAuditEntry({
       userId: user.id,
       field: 'config.reset',
       oldValue: 'org,smtp,modules,backups.retention_days',
-      newValue: 'defaults',
+      newValue: heldBack.length > 0 ? `defaults (left off, switchable only through the module switch: ${heldBack.join(',')})` : 'defaults',
     })
-    return json({ success: true, data: updated })
+    return json({ success: true, data: updated, heldBack })
   } catch (err) {
     console.error('[settings/reset] failed:', err instanceof Error ? err.message : err)
     return json({ success: false, error: 'Zurücksetzen fehlgeschlagen.' }, { status: 500 })

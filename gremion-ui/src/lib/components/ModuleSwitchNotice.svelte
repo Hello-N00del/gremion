@@ -4,20 +4,23 @@
   import type { SwitchStateName } from '$lib/modules/switch-preview'
 
   // The post-switch notice of one module request. It states what the server recorded and nothing more:
-  // a request that has not been applied never reads as "switched", and phase 1 never claims that a mail
-  // went out (mailLine is for phase 2 and is shown only when a caller supplies it).
+  // a request that has not been applied never reads as "switched". The info-mail sentence (mailLine) is
+  // shown only when the caller supplies it, which the settings page does once the switch-off notice step
+  // is done and reached at least one person; mailAlert is the loud line for a notice that failed.
   let {
     moduleLabel,
     action,
     state,
     outcome = null,
     mailLine = null,
+    mailAlert = null,
   }: {
     moduleLabel: string
     action: 'enable' | 'disable'
     state: SwitchStateName
     outcome?: string | null
     mailLine?: string | null
+    mailAlert?: string | null
   } = $props()
 
   const running = $derived(state === 'queued' || state === 'succeeded' || state === 'applying')
@@ -43,4 +46,7 @@
     <p>{fillText($t(action === 'enable' ? 'settings.modules.notice.on' : 'settings.modules.notice.off'), { module: moduleLabel })}</p>
     {#if mailLine}<p class="mt-1">{mailLine}</p>{/if}
   </div>
+  {#if mailAlert}
+    <p role="alert" class="mt-2 rounded-md border border-rust/50 bg-rust-soft px-3 py-2 text-sm font-medium text-rust-ink">{mailAlert}</p>
+  {/if}
 {/if}

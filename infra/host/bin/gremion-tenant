@@ -27,8 +27,9 @@ set -euo pipefail
 # the SAME request into the SAME queue (origin=host, with the reason and the
 # invoking login user, audited), and the executor runs it exactly as a panel
 # request (D10: move, do not duplicate; customer-ops.sh holds the code).
-# The suspend/resume/reconcile/status verbs below retire the same way with the
-# panel's customer screens (TASK-043d-2).
+# The suspend/resume/status verbs below retire the same way with the panel's customer
+# screens (TASK-043d-2). `reconcile` stays: it is a supported operator step of every
+# upgrade (docs/ops/runbook/upgrade.md step 8).
 #
 # suspend: container first (status, realm disabled + notBefore + logout,
 # broker users evicted), then the principal revoked (the realm's sender is
@@ -121,8 +122,17 @@ render_tenant_create_secrets() {
         printf 'postgresql://%s:%s@%s-postgres:5432/postgres\n' "$user" "$pw" "$id" | write_secret "${dir}/module_pg_admin_${id}"
         openssl rand -hex 32 | write_secret "${dir}/module_app_password_${id}"
     done
+    # TASK-084-a: the governance server (a dedicated service server, not a module's) and the directory tenant-create
+    # writes each customer's governance credential into. The admin file is derived from state.env on every run; the
+    # per-customer files under etc/secrets/governance/ are tenant-create's and are never touched here.
+    user="$(env_key "$state" GOVERNANCE_PG_USER)"; user="${user:-governance}"
+    pw="$(env_key "$state" GOVERNANCE_PG_PASSWORD)"
+    [[ -n "$pw" ]] || die "GOVERNANCE_PG_PASSWORD is empty in ${state}" "$GREMION_EXIT_USAGE"
+    rm -f "${dir}/governance_pg_admin"
+    printf 'postgresql://%s:%s@governance-postgres:5432/postgres\n' "$user" "$pw" | write_secret "${dir}/governance_pg_admin"
+    ensure_governance_dir
     pw=""
-    ok "etc/secrets/tenant-create: kernel and $(wc -w <<< "$MODULE_SERVERS") module server credential file(s), 0600"
+    ok "etc/secrets/tenant-create: kernel, $(wc -w <<< "$MODULE_SERVERS") module and governance server credential file(s), 0600"
 }
 
 render_panel_secrets() {
@@ -167,7 +177,8 @@ ensure_provisioner_credential() {
     # shellcheck disable=SC2064
     trap "rm -rf '${out}'; exit 143" TERM
     chmod 700 "$out"
-    TC_MOUNT=(-v "$(realpath "$out"):/run/secrets/provisioner-out"
+    # The image runs as root; the secret must land owned by the deploy user, who moves it out.
+    TC_MOUNT=(--user "$(id -u):$(id -g)" -v "$(realpath "$out"):/run/secrets/provisioner-out"
               -e TENANT_PROVISIONER_SECRET_FILE=/run/secrets/provisioner-out/tenant_provisioner
               -e KEYCLOAK_ADMIN -e KEYCLOAK_ADMIN_PASSWORD)
     # A prefix assignment on a function call: in tc's (and so docker's)

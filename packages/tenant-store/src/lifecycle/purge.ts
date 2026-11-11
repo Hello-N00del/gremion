@@ -170,8 +170,8 @@ export const PURGE_RESIDUAL: readonly { catalogueRow: string; partOf?: true; rea
   { catalogueRow: 'RC-TNT-DOM', reason: 'window is "grace" (no number in the catalogue)' },
   { catalogueRow: 'RC-OPS-RUN', partOf: true, reason: 'provisioning steps (plt.provisioning_step) are append-only by trigger and runbook evidence has an "audit window" without a number; only job runs are mapped' },
   { catalogueRow: 'RC-OPS-EXP', reason: 'window is "on event" (delivered, or the 30-day bound); export requests and manifests are not in this repository' },
-  { catalogueRow: 'RC-MOD-EXPORT', reason: 'the module-switch-off pg_dump is a FILE (30-day grace), to be deleted with the blocked database by the planned Karenz job `karenz-run` (not in this tree yet), not by this row purge; K4 finance exports follow their RC-FIN-* class hold' },
-  { catalogueRow: 'RC-MOD-DATA', reason: '30-day grace after a module switch-off (DSB answer 2026-10-30), to be executed by the planned Karenz job `karenz-run` (not in this tree yet), not by this row purge; no table is mapped in this repository' },
+  { catalogueRow: 'RC-MOD-EXPORT', reason: 'the module-switch-off pg_dump is a FILE (30-day grace), deleted with the blocked database by the Karenz job `karenz-run` (gremion-karenz.timer), not by this row purge; K4 finance exports follow their RC-FIN-* class hold' },
+  { catalogueRow: 'RC-MOD-DATA', reason: '30-day grace after a module switch-off (DSB answer 2026-10-30), executed by the Karenz job `karenz-run` (gremion-karenz.timer), not by this row purge; no table is mapped in this repository' },
   { catalogueRow: 'RC-FIN-BOOKS', reason: 'K4 statutory finance hold in the finance module repository; not purged by a timer here' },
   { catalogueRow: 'RC-FIN-VOUCH', reason: 'K4 statutory finance hold in the finance module repository; not purged by a timer here' },
 ]
@@ -396,6 +396,40 @@ export async function ensureKernelPurgeGrants(server: ModuleServer, tenantId: st
     await db.end({ timeout: 5 })
   }
   return { granted, absent }
+}
+
+/**
+ * The read-only twin of ensureKernelPurgeGrants: what the purger's effective state lacks in the customer's
+ * kernel database ([] = it holds), read from the catalogue (so a grant through PUBLIC counts): USAGE on
+ * schema public and SELECT + DELETE on every kernel-scope purge table that exists. A table the kernel chain
+ * has not created yet is not a problem here (ensureKernelPurgeGrants reports it as absent the same way).
+ * Needs CONNECT on nothing: it runs as the server's admin, with search_path pinned (asAdminIn).
+ */
+export async function kernelPurgeGrantProblems(server: ModuleServer, tenantId: string): Promise<string[]> {
+  const { purger } = kernelRoles(tenantId)
+  const dbName = kernelDbName(tenantId)
+  const db = await server.open(dbName)
+  const problems: string[] = []
+  try {
+    await asAdminIn(db, async (tx) => {
+      const [who] = await tx<{ db: string }[]>`SELECT pg_catalog.current_database() AS db`
+      if (who?.db !== dbName) throw new Error(`the admin pool is connected to ${JSON.stringify(who?.db)}, not ${dbName}`)
+      const [usage] = await tx<{ held: boolean }[]>`SELECT pg_catalog.has_schema_privilege(${purger}::pg_catalog.text, 'public'::pg_catalog.text, 'USAGE') AS held`
+      if (!usage?.held) problems.push(`the purger role ${purger} lacks USAGE on schema public in ${dbName}`)
+      for (const rule of PURGE_RULES.filter((r) => r.scope === 'kernel')) {
+        if (!PLAIN_TABLE.test(rule.table)) throw new RangeError(`table ${JSON.stringify(rule.table)} is not a plain identifier`)
+        const qualified = `public.${rule.table}`
+        const [q] = await tx<{ present: boolean; held: boolean | null }[]>`
+          SELECT pg_catalog.to_regclass(${qualified}::pg_catalog.text) IS NOT NULL AS present,
+                 pg_catalog.has_table_privilege(${purger}::pg_catalog.text, pg_catalog.to_regclass(${qualified}::pg_catalog.text), 'SELECT')
+                   AND pg_catalog.has_table_privilege(${purger}::pg_catalog.text, pg_catalog.to_regclass(${qualified}::pg_catalog.text), 'DELETE') AS held`
+        if (q?.present && !q.held) problems.push(`the purger role ${purger} lacks SELECT, DELETE on ${rule.table} in ${dbName} (the scheduled purge refuses that table)`)
+      }
+    })
+  } finally {
+    await db.end({ timeout: 5 })
+  }
+  return problems
 }
 
 /** What the run reads about a purge table before it deletes from it. */

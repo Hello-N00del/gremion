@@ -28,7 +28,26 @@ vi.mock('./livekit-client', () => ({ evictLivekitSettings: vi.fn() }))
 vi.mock('./backend/service-client', () => ({ evictServiceMatrixTokenCache: vi.fn() }))
 vi.mock('./provisioning/matrix-subsystem', () => ({ createMatrixSubsystem: vi.fn() }))
 
+// The cache key carries the tenant id. The provider runs inside the request's tenant scope in
+// production; here the scope is a settable ref (null = no scope, which makes the real
+// currentTenantId throw).
+const tenantIdRef = vi.hoisted(() => ({ value: 'tenant-a' as string | null }))
+vi.mock('$lib/server/tenant/context', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('$lib/server/tenant/context')>()),
+  currentTenantId: () => {
+    if (tenantIdRef.value === null) throw new Error('no tenant scope')
+    return tenantIdRef.value
+  },
+}))
+
 import { getDataProvider, getErasureHook } from '$lib/server/modules/runtime-registry'
+import {
+  clearAllUnreadCache,
+  forgetUnread,
+  unreadCacheSize,
+  UNREAD_CACHE_MAX,
+} from './unread-cache'
+import { karenzParticipantsFor } from '$lib/server/module-karenz/participants'
 // Side-effect import: registers the messages module's providers/hooks.
 import './register.server'
 
@@ -87,9 +106,152 @@ describe("messages:unread-rooms provider (D11 popover) — design v11 review", (
   })
 })
 
+// Every page navigation re-runs the root layout load, which awaited a full Matrix /sync for the
+// unread badge each time. The count is cached per user for a short time, so a click does not
+// queue behind the homeserver. Failures are never cached: a hiccup must not pin the badge to 0.
+function jwtFor(sub: string): string {
+  const enc = (o: unknown) => Buffer.from(JSON.stringify(o)).toString('base64url')
+  return `${enc({ alg: 'none' })}.${enc({ sub })}.sig`
+}
+
+describe('messages:unread-count provider cache', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-01-01T00:00:00Z'))
+    tenantIdRef.value = 'tenant-a'
+    mockGetMatrixToken.mockReset().mockResolvedValue('mx-user-token')
+    mockSync.mockReset().mockResolvedValue({
+      nextBatch: 'b1',
+      rooms: [
+        { roomId: '!a:hs', events: [], unreadCount: 2 },
+        { roomId: '!b:hs', events: [], unreadCount: 3 },
+      ],
+    })
+    clearAllUnreadCache()
+  })
+
+  afterEach(() => vi.useRealTimers())
+
+  it('answers the second call of the same user from the cache, without another sync', async () => {
+    const provider = getDataProvider('messages:unread-count')!
+    expect(await provider(jwtFor('user-1'))).toBe(5)
+    expect(await provider(jwtFor('user-1'))).toBe(5)
+    expect(mockSync).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not hand one user the count of another user, or of the same sub in another tenant', async () => {
+    const provider = getDataProvider('messages:unread-count')!
+    await provider(jwtFor('user-1'))
+    mockSync.mockResolvedValueOnce({ nextBatch: 'b2', rooms: [{ roomId: '!x:hs', events: [], unreadCount: 7 }] })
+    expect(await provider(jwtFor('user-2'))).toBe(7)
+    mockSync.mockResolvedValueOnce({ nextBatch: 'b3', rooms: [{ roomId: '!y:hs', events: [], unreadCount: 1 }] })
+    tenantIdRef.value = 'tenant-b'
+    expect(await provider(jwtFor('user-1'))).toBe(1)
+    expect(mockSync).toHaveBeenCalledTimes(3)
+  })
+
+  it('syncs again once the 20 s lifetime is over', async () => {
+    const provider = getDataProvider('messages:unread-count')!
+    await provider(jwtFor('user-1'))
+    vi.setSystemTime(new Date('2026-01-01T00:00:19Z'))
+    await provider(jwtFor('user-1'))
+    expect(mockSync).toHaveBeenCalledTimes(1)
+    vi.setSystemTime(new Date('2026-01-01T00:00:21Z'))
+    mockSync.mockResolvedValueOnce({ nextBatch: 'b2', rooms: [{ roomId: '!a:hs', events: [], unreadCount: 9 }] })
+    expect(await provider(jwtFor('user-1'))).toBe(9)
+    expect(mockSync).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not cache a failure: the next call syncs again and sees the real count', async () => {
+    const provider = getDataProvider('messages:unread-count')!
+    mockSync.mockRejectedValueOnce(new Error('homeserver down'))
+    expect(await provider(jwtFor('user-1'))).toBe(0)
+    expect(await provider(jwtFor('user-1'))).toBe(5)
+    expect(mockSync).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not cache a sync whose unread counts were degraded (the /notifications read failed)', async () => {
+    const provider = getDataProvider('messages:unread-count')!
+    mockSync.mockResolvedValueOnce({ nextBatch: 'b1', rooms: [{ roomId: '!a:hs', events: [], unreadCount: 0 }], countsDegraded: true })
+    expect(await provider(jwtFor('user-1'))).toBe(0)
+    expect(await provider(jwtFor('user-1'))).toBe(5)
+    expect(mockSync).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not store a count that was computed before forgetUnread ran while the sync was in flight', async () => {
+    const provider = getDataProvider('messages:unread-count')!
+    let finish!: (v: unknown) => void
+    mockSync.mockReturnValueOnce(new Promise((resolve) => { finish = resolve }))
+    const inFlight = provider(jwtFor('user-1'))
+    await vi.advanceTimersByTimeAsync(0)
+    // The user marks a room read while the sync is still running.
+    forgetUnread(jwtFor('user-1'))
+    finish({ nextBatch: 'b1', rooms: [{ roomId: '!a:hs', events: [], unreadCount: 9 }] })
+    expect(await inFlight).toBe(9)
+    // The stale 9 must not be served from the cache: the next call asks again.
+    expect(await provider(jwtFor('user-1'))).toBe(5)
+    expect(mockSync).toHaveBeenCalledTimes(2)
+  })
+
+  it('stores the answer of a sync that finished after the 4 s cap, so the next page does not start another one', async () => {
+    const provider = getDataProvider('messages:unread-count')!
+    let finish!: (v: unknown) => void
+    mockSync.mockReturnValueOnce(new Promise((resolve) => { finish = resolve }))
+    const first = provider(jwtFor('user-1'))
+    await vi.advanceTimersByTimeAsync(4100)
+    // The page was served with the 0 fallback after the cap ...
+    expect(await first).toBe(0)
+    // ... but the abandoned sync still answers later, and that answer fills the cache.
+    finish({ nextBatch: 'b1', rooms: [{ roomId: '!a:hs', events: [], unreadCount: 6 }] })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(await provider(jwtFor('user-1'))).toBe(6)
+    expect(mockSync).toHaveBeenCalledTimes(1)
+  })
+
+  it('forgetUnread drops the user entry, so a read room refreshes the badge at once', async () => {
+    const provider = getDataProvider('messages:unread-count')!
+    await provider(jwtFor('user-1'))
+    forgetUnread(jwtFor('user-1'))
+    mockSync.mockResolvedValueOnce({ nextBatch: 'b2', rooms: [] })
+    expect(await provider(jwtFor('user-1'))).toBe(0)
+    expect(mockSync).toHaveBeenCalledTimes(2)
+  })
+
+  it('stays bounded: many distinct users never grow the cache past its cap', async () => {
+    const provider = getDataProvider('messages:unread-count')!
+    for (let i = 0; i < UNREAD_CACHE_MAX + 50; i++) await provider(jwtFor(`user-${i}`))
+    expect(unreadCacheSize()).toBeLessThanOrEqual(UNREAD_CACHE_MAX)
+  })
+
+  it('skips the cache without a tenant scope or a token subject, and still answers', async () => {
+    const provider = getDataProvider('messages:unread-count')!
+    tenantIdRef.value = null
+    expect(await provider(jwtFor('user-1'))).toBe(5)
+    expect(await provider(jwtFor('user-1'))).toBe(5)
+    expect(mockSync).toHaveBeenCalledTimes(2)
+    tenantIdRef.value = 'tenant-a'
+    expect(await provider('not-a-jwt')).toBe(5)
+    expect(await provider('not-a-jwt')).toBe(5)
+    expect(mockSync).toHaveBeenCalledTimes(4)
+  })
+})
+
 describe('messaging erasure hook registration (TRD-196)', () => {
   it('registers the messaging erasure hook under its module id', async () => {
     const { messagingErasureHook } = await import('./erasure')
     expect(getErasureHook('messaging')).toBe(messagingErasureHook)
+  })
+})
+
+describe('messaging Karenz participant registration (Module Karenz, Task 15)', () => {
+  it('registers the messaging participant under the messaging catalogue id', async () => {
+    const { messagingKarenz } = await import('./karenz')
+    expect(karenzParticipantsFor('messaging')).toEqual([messagingKarenz])
+  })
+
+  it('declares that messaging seals no retained records (otherwise its retained step fails closed and day 30 never finalizes)', async () => {
+    const { hasRetentionDeclaration, extractorsFor } = await import('$lib/server/module-karenz/retained/extractors')
+    expect(hasRetentionDeclaration('messaging')).toBe(true)
+    expect(extractorsFor('messaging')).toEqual([])
   })
 })

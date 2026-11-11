@@ -15,6 +15,11 @@ import assert from 'node:assert/strict'
 import { bindRefusesMissingHostDir } from './compose-edge.mjs'
 import {
   PLACEMENT,
+  LEAF_PROFILES,
+  SERVICE_POSTGRES_IDS,
+  portBindViolations,
+  leafViolations,
+  tenantMountsExposeGovernance,
   limitsViolations,
   statePurityViolations,
   appShapeViolations,
@@ -68,8 +73,16 @@ function appRender(colour) {
       svc.profiles = [name]
       svc.restart = 'no'
     }
+    if (name in LEAF_PROFILES) {
+      svc.profiles = [LEAF_PROFILES[name]]
+      svc.labels['org.gremion.stack'] = STACK
+      svc.environment.PORT = '8080'
+      svc.networks = Object.fromEntries(row.networks.map((n) => [n, { aliases: [`${name}-${colour}`] }]))
+    }
     services[name] = svc
   }
+  const ui = services['gremion-ui'].environment
+  for (const leaf of Object.keys(LEAF_PROFILES)) ui[`${leaf.replace(/-service$/, '').toUpperCase()}_SERVICE_URL`] = `http://${leaf}-${colour}:8080`
   services['gremion-ui'].environment.INTERNAL_BASE_URL = `http://gremion-ui-${colour}:3000`
   services['gremion-ui'].environment.DATABASE_URL = `postgresql://u:p@pgbouncer-${STACK}:6432/gremion`
   services['gremion-ui'].volumes = [{ type: 'volume', source: 'config-data', target: '/app/config' }]
@@ -104,11 +117,84 @@ test('the synthetic good renders are clean under every rule (the RED cases below
   for (const c of ['blue', 'green']) {
     assert.deepEqual(appShapeViolations(appRender(c), c, STACK), [], c)
     assert.deepEqual(colourSuffixViolations(appRender(c), c), [], c)
+    assert.deepEqual(leafViolations(appRender(c), c, STACK), [], c)
   }
+  for (const { id, render } of allRenders()) assert.deepEqual(portBindViolations(render, id), [], id)
   assert.deepEqual(isolationViolations(allRenders(), STACK), [])
 })
 
 // ── 1. limits (TRD-177) ────────────────────────────────────────────────────
+
+test('TASK-084-a: governance-postgres is a council-store on the state network only', () => {
+  // The pilot adds nextcloud-postgres: a SERVICE server (label service:nextcloud), never a module's.
+  assert.deepEqual([...SERVICE_POSTGRES_IDS], ['governance', 'nextcloud'])
+  assert.deepEqual(PLACEMENT.state['governance-postgres'], { class: 'council-store', networks: ['state'] })
+  assert.deepEqual(PLACEMENT.state['nextcloud-postgres'], { class: 'council-store', networks: ['state'] })
+  assert.equal(PLACEMENT.app['governance-postgres'], undefined)
+})
+
+test('pilot services: the placement rows are the contract (networks per service), and a module leaf is app-tier only', () => {
+  assert.deepEqual(PLACEMENT.state.nextcloud.networks, ['state'])
+  assert.deepEqual(PLACEMENT.state['nextcloud-redis'].networks, ['state'])
+  assert.deepEqual(PLACEMENT.state.collabora.networks, ['edge', 'state'])
+  assert.deepEqual(PLACEMENT.state.livekit.networks, ['edge'])
+  assert.deepEqual(PLACEMENT.state['element-call'].networks, ['state'])
+  assert.deepEqual(PLACEMENT.state.matrix.networks, ['edge', 'state'])
+  assert.deepEqual(Object.keys(LEAF_PROFILES).sort(), ['calendar-service', 'content-service', 'newsletter-service'])
+  for (const leaf of Object.keys(LEAF_PROFILES)) {
+    assert.deepEqual(PLACEMENT.app[leaf], { class: 'council-app', networks: ['app', 'state'] }, leaf)
+    assert.equal(PLACEMENT.state[leaf], undefined, leaf)
+  }
+})
+
+test('publishes: a port with no host address (or a wildcard, in any spelling) is refused, an edge-address publish is clean', () => {
+  const r = stateRender()
+  r.services.livekit.ports = [
+    { mode: 'ingress', host_ip: '203.0.113.10', target: 7881, published: '7881', protocol: 'tcp' },
+    { mode: 'ingress', host_ip: '2001:db8::10', target: 45000, published: '45000-45100', protocol: 'udp' },
+  ]
+  assert.deepEqual(portBindViolations(r, 'state'), [])
+  for (const bad of [undefined, '', '0.0.0.0', '::', '[::]', '::0', '0:0:0:0:0:0:0:0']) {
+    const w = structuredClone(r)
+    w.services.livekit.ports = [{ mode: 'ingress', ...(bad === undefined ? {} : { host_ip: bad }), target: 7881, published: '7881', protocol: 'tcp' }]
+    const v = portBindViolations(w, 'state')
+    assert.equal(v.length, 1, `${JSON.stringify(bad)}: ${v.join(' | ')}`)
+    assert.match(v[0], /state\/livekit: publishes 7881->7881\/tcp with no host address/)
+  }
+})
+
+test('leaves: each way a leaf stops being internal-only, or its URL stops resolving, is named', () => {
+  const cases = [
+    [(r) => delete r.services['calendar-service'], /leaf calendar-service is absent/],
+    [(r) => (r.services['content-service'].networks.edge = null), /content-service: networks .*, want/],
+    [(r) => (r.services['newsletter-service'].ports = [{ target: 8080, published: '8080' }]), /newsletter-service: publishes a port/],
+    [(r) => delete r.services['calendar-service'].labels['org.gremion.stack'], /calendar-service: no org\.gremion\.stack label/],
+    [(r) => (r.services['content-service'].environment.PORT = '3000'), /content-service: environment\.PORT is "3000"/],
+    [(r) => (r.services['newsletter-service'].networks.state = null), /newsletter-service: no newsletter-service-blue alias on teststack_state/],
+    [(r) => (r.services['gremion-ui'].environment.CALENDAR_SERVICE_URL = 'http://calendar-service:8080'), /CALENDAR_SERVICE_URL http:\/\/calendar-service:8080 does not name calendar-service-blue:8080/],
+    [(r) => (r.services['gremion-ui'].environment.CONTENT_SERVICE_URL = 'http://content-service-blue:3000'), /CONTENT_SERVICE_URL .* does not name content-service-blue:8080/],
+    [(r) => delete r.services['gremion-ui'].environment.NEWSLETTER_SERVICE_URL, /NEWSLETTER_SERVICE_URL is "", not a URL/],
+    [(r) => (r.services['gremion-ui'].environment.CALENDAR_SERVICE_URL = 'http://calendar-service-green:8080'), /does not name calendar-service-blue:8080/],
+  ]
+  for (const [mutate, want] of cases) {
+    const r = appRender('blue')
+    mutate(r)
+    const v = leafViolations(r, 'blue', STACK)
+    assert.ok(v.some((x) => want.test(x)), `${want.source}: not caught; got ${JSON.stringify(v)}`)
+  }
+})
+
+test('leaves: a long-running leaf is profile-gated by exactly its own profile; any other long-running service is not', () => {
+  const r = appRender('blue')
+  assert.deepEqual(appShapeViolations(r, 'blue', STACK), [])
+  r.services['calendar-service'].profiles = ['content']
+  assert.match(appShapeViolations(r, 'blue', STACK).join('\n'), /calendar-service: leaf not gated under profiles: \[calendar\] \(has \[content\]\)/)
+  r.services['calendar-service'].profiles = []
+  assert.match(appShapeViolations(r, 'blue', STACK).join('\n'), /calendar-service: leaf not gated under profiles: \[calendar\]/)
+  const w = appRender('blue')
+  w.services['gremion-ui'].profiles = ['x']
+  assert.match(appShapeViolations(w, 'blue', STACK).join('\n'), /gremion-ui: long-running service is profile-gated/)
+})
 
 test('limits: a service without limits fails, by name, for memory and cpus', () => {
   const r = stateRender()
@@ -452,6 +538,88 @@ test('real renders: tenant-create reads TENANT_PROVISIONER_SECRET_FILE from its 
       assert.equal(svc.environment?.TENANT_PROVISIONER_SECRET_FILE, undefined, `${colour}: ${name} names the provisioner credential`)
     }
   }
+})
+
+// TASK-084-a: the governance admin credential and the per-customer credential
+// directory reach tenant-create ONLY. The directory is a host path of its own,
+// mounted read-write there; no other service mounts it, and no
+// /run/secrets/tenants mount (read-only on the other containers) may be the
+// directory or a parent of it.
+const GOV_DIR = 'etc/secrets/governance'
+const isGovDir = (v) => v.type === 'bind' && String(v.source).replaceAll('\\', '/').endsWith(`/${GOV_DIR}`)
+test('real renders: tenant-create carries GOVERNANCE_PG_ADMIN_FILE and GOVERNANCE_SECRETS_DIR; the etc/secrets/governance mount is read-write on tenant-create and on NO other service', () => {
+  for (const { project, colour } of [
+    { project: PROJECTS[1], colour: 'blue' },
+    { project: PROJECTS[2], colour: 'green' },
+  ]) {
+    const render = renderProject(project)
+    const tc = render.services?.['tenant-create']
+    assert.equal(tc.environment?.GOVERNANCE_PG_ADMIN_FILE, '/run/secrets/tenant-create/governance_pg_admin', `${colour}: GOVERNANCE_PG_ADMIN_FILE`)
+    assert.equal(tc.environment?.GOVERNANCE_SECRETS_DIR, '/run/secrets/governance', `${colour}: GOVERNANCE_SECRETS_DIR`)
+    const mounts = (tc.volumes ?? []).filter((v) => v.target === '/run/secrets/governance')
+    assert.equal(mounts.length, 1, `${colour}: tenant-create mounts /run/secrets/governance ${mounts.length} times`)
+    assert.ok(isGovDir(mounts[0]), `${colour}: not the ${GOV_DIR} bind (${JSON.stringify(mounts[0])})`)
+    assert.notEqual(mounts[0].read_only, true, `${colour}: the governance credential directory must be writable by tenant-create`)
+    for (const [name, svc] of Object.entries(render.services ?? {})) {
+      if (name === 'tenant-create') continue
+      assert.ok(!(svc.volumes ?? []).some(isGovDir), `${colour}: ${name} mounts ${GOV_DIR}`)
+      assert.ok(!(svc.volumes ?? []).some((v) => v.target === '/run/secrets/governance'), `${colour}: ${name} mounts /run/secrets/governance`)
+      assert.equal(svc.environment?.GOVERNANCE_SECRETS_DIR, undefined, `${colour}: ${name} names GOVERNANCE_SECRETS_DIR`)
+    }
+  }
+})
+
+test('real renders: no /run/secrets/tenants mount is the governance directory or a parent of it', () => {
+  for (const { project, colour } of [
+    { project: PROJECTS[1], colour: 'blue' },
+    { project: PROJECTS[2], colour: 'green' },
+  ]) {
+    const render = renderProject(project)
+    const gov = (render.services['tenant-create'].volumes ?? []).find((v) => v.target === '/run/secrets/governance')
+    assert.deepEqual(tenantMountsExposeGovernance(render, String(gov.source)), [], `${colour}: a tenant mount exposes the governance credentials`)
+  }
+})
+
+test('guard drill: TENANT_SECRETS_DIR as a parent of etc/secrets/governance is reported on every service that mounts it', () => {
+  const base = renderProject(PROJECTS[1])
+  const gov = String(base.services['tenant-create'].volumes.find((v) => v.target === '/run/secrets/governance').source)
+  const parent = gov.slice(0, gov.lastIndexOf(`/${GOV_DIR}`)) + '/etc/secrets'
+  const bad = renderProject(PROJECTS[1], { env: { TENANT_SECRETS_DIR: parent } })
+  const gov2 = String(bad.services['tenant-create'].volumes.find((v) => v.target === '/run/secrets/governance').source)
+  assert.deepEqual(
+    tenantMountsExposeGovernance(bad, gov2).sort(),
+    ['gremion-ui', 'kernel-api', 'kernel-api-migrate', 'migrate', 'tenant-create'].sort(),
+  )
+})
+
+// TASK-084-a Task 10: the tenant-create environment table in
+// docs/ops/pooled-stack-layout.md names every *_FILE / *_DIR variable of the
+// rendered block (per-module rows are written once with <ID>). Two older
+// variables are documented in docs/runbooks/tenant-lifecycle.md and are exempt.
+test('docs: every *_FILE / *_DIR variable of the tenant-create block appears in the pooled-stack-layout env table', async () => {
+  const { readFileSync } = await import('node:fs')
+  const doc = readFileSync(new URL('../docs/ops/pooled-stack-layout.md', import.meta.url), 'utf8')
+  const exempt = new Set(['TENANT_PROVISIONER_SECRET_FILE', 'TENANT_SECRETS_DIR'])
+  const env = renderProject(PROJECTS[1]).services['tenant-create'].environment
+  const missing = []
+  for (const key of Object.keys(env).filter((k) => /_(FILE|DIR)$/.test(k) && !exempt.has(k))) {
+    const documented = key.replace(/^(MODULE_(?:PG_ADMIN|APP_PASSWORD))_[A-Z]+_FILE$/, '$1_<ID>_FILE')
+    if (!doc.includes(`\`${documented}\``)) missing.push(documented)
+  }
+  assert.deepEqual([...new Set(missing)], [], 'tenant-create variables missing from the env table of docs/ops/pooled-stack-layout.md')
+})
+
+test('tenantMountsExposeGovernance: pure path math (equal, parent, sibling, child)', () => {
+  const r = (src) => ({ services: { a: { volumes: [{ type: 'bind', source: src, target: '/run/secrets/tenants' }] } } })
+  const gov = '/opt/gremion/etc/secrets/governance'
+  assert.deepEqual(tenantMountsExposeGovernance(r(gov), gov), ['a'])
+  assert.deepEqual(tenantMountsExposeGovernance(r('/opt/gremion/etc/secrets'), gov), ['a'])
+  assert.deepEqual(tenantMountsExposeGovernance(r('/opt/gremion'), gov), ['a'])
+  assert.deepEqual(tenantMountsExposeGovernance(r('/opt/gremion/secrets/tenants'), gov), [])
+  assert.deepEqual(tenantMountsExposeGovernance(r('/opt/gremion/etc/secrets/governance-other'), gov), [])
+  // a directory whose NAME starts with two dots is a child, not a parent step
+  assert.deepEqual(tenantMountsExposeGovernance(r('/opt/gremion/etc/secrets'), '/opt/gremion/etc/secrets/..gov'), ['a'])
+  assert.deepEqual(tenantMountsExposeGovernance(r('/opt/gremion/etc/secrets/governance'), '/opt/gremion/etc/secrets/..gov'), [])
 })
 
 // TASK-075: init and phase B write release_ref into every ledger row they

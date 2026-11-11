@@ -258,3 +258,14 @@ docker/keycloak/realm-export.json
 # test/host/fixtures/pooled-stack/.
 /docker-compose.pins.yml
 /docker-compose.state-pins.yml
+
+# The pilot's Element Call config: rendered on the host by gremion-render from
+# docker/element-call/config.json.tmpl (it names the platform domain and the pilot tenant
+# host), so it is host-owned output and is never committed. Rendering must not dirty the
+# release tree (gremion-isolation and verify refuse a dirty tree).
+docker/element-call/config.json
+
+# The video relay's LiveKit config: rendered on the host by gremion-render from
+# docker/livekit/livekit.yaml.tmpl (the relay's host comes from PILOT_TENANT_HOST), so it is
+# host-owned output and never committed, for the same reason as the Element Call config.
+docker/livekit/livekit.yaml

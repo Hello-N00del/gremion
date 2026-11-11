@@ -56,8 +56,36 @@ describe('ModuleOffWarning.svelte', () => {
     expect(text).toContain('Offene Abstimmungen')
     expect(text).toContain('3 Abstimmungen')
     expect(text).toContain('Archiv')
-    expect(text).toMatch(/nach 30 Tagen/)
+    expect(text).toContain('Die Daten bleiben 30 Tage wiederherstellbar.')
     expect(text).toMatch(/wieder eingeschaltet/)
+  })
+
+  it('with graceDays 30 it renders the final date, the retained list and keeps the typed-name gate', async () => {
+    const p = props(
+      preview({
+        retained: [
+          { key: 'extractor:votes', label: 'Beschlüsse und Abstimmungsergebnisse (schreibgeschützte Kopie)', basis: 'Protokollfrist' },
+          { key: 'participant:0', label: 'Dateien bleiben in Nextcloud erhalten: 9', basis: '' },
+        ],
+      }),
+    )
+    const { container } = render(ModuleOffWarning, { props: p })
+    const text = container.textContent ?? ''
+    expect(text).toContain('Am 1. Dezember 2026 werden sie endgültig gelöscht.')
+    expect(text).toContain('Aufbewahrungspflichtige Unterlagen bleiben schreibgeschützt erhalten')
+    expect(text).toContain('Beschlüsse und Abstimmungsergebnisse (schreibgeschützte Kopie) (Protokollfrist)')
+    // an item without a basis shows no empty parentheses
+    expect(text).toContain('Dateien bleiben in Nextcloud erhalten: 9')
+    expect(text).not.toContain('()')
+    // the gate: no confirm without the exact name
+    expect(confirmButton()!.disabled).toBe(true)
+    await typeInto('Abstimmungen')
+    expect(confirmButton()!.disabled).toBe(false)
+  })
+
+  it('without retained items it does not claim that anything is kept', () => {
+    const { container } = render(ModuleOffWarning, { props: props(preview({ retained: [] })) })
+    expect(container.textContent).not.toContain('Aufbewahrungspflichtige Unterlagen')
   })
 
   it('with graceDays null renders the not-yet-available notice, NO confirm button and no sentence that promises removal', () => {

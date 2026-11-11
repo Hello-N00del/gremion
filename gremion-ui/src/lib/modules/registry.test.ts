@@ -18,9 +18,9 @@ const GENERATED_BARREL = join(PKG_ROOT, 'src', 'lib', 'modules', 'manifests', 'i
 // on top (TASK-205: gremion-ui/scripts/interim-module-overlay.mjs overlays modules/<id>/app onto src/
 // before the manifest barrel is generated). Disabled modules (modules/disabled.json) contribute nothing.
 // So every golden below is the composition of the enabled set; each module commit updates it in the same
-// commit. TASK-205: elections, votes, newsletter, calendar, files, messages, board (registration = `order` sequence).
+// commit. TASK-205: elections, votes, content, newsletter, calendar, files, messages, board (registration = `order` sequence).
 const KERNEL_MANIFEST_IDS = ['core', 'governance'] as const
-const MODULE_MANIFEST_IDS = ['elections', 'votes', 'newsletter', 'calendar', 'files', 'messages', 'board'] as const
+const MODULE_MANIFEST_IDS = ['elections', 'votes', 'content', 'newsletter', 'calendar', 'files', 'messages', 'board'] as const
 const COMPOSED_MANIFEST_IDS = [...KERNEL_MANIFEST_IDS, ...MODULE_MANIFEST_IDS] as const
 
 describe('WP2-1 codegen — generated barrel is the single registration source', () => {
@@ -93,6 +93,8 @@ const KERNEL_PAGE_ACCESS: Record<string, Role> = {
   elections: Role.Member,
   polls: Role.Member,
   votes: Role.Member,
+  content: Role.Member,
+  news: Role.CouncilAdmin,
   newsletter: Role.Finance,
   calendar: Role.Guest,
   files: Role.Member,
@@ -119,6 +121,10 @@ describe('registry — moduleRoutePrefixes (golden vs hooks.server.ts)', () => {
       { prefix: '/votes', moduleId: 'votes' },
       { prefix: '/polls', moduleId: 'votes' },
       { prefix: '/api/polls', moduleId: 'votes' },
+      { prefix: '/content', moduleId: 'content' },
+      { prefix: '/api/content', moduleId: 'content' },
+      { prefix: '/news', moduleId: 'content' },
+      { prefix: '/api/news', moduleId: 'content' },
       { prefix: '/newsletter', moduleId: 'newsletter' },
       { prefix: '/api/newsletter', moduleId: 'newsletter' },
       { prefix: '/calendar', moduleId: 'calendar' },
@@ -135,10 +141,14 @@ describe('registry — moduleRoutePrefixes (golden vs hooks.server.ts)', () => {
 })
 
 describe('registry — composeCapabilities (single composition seam)', () => {
-  it('is empty while no composed manifest declares capabilities', () => {
+  it('holds exactly the composed modules capability maps (only content declares any)', () => {
     // core, governance, calendar, files and board declare no capabilities; concrete per-module
     // capability maps (e.g. finance.*) arrive with their modules.
-    expect(composeCapabilities()).toEqual({})
+    expect(composeCapabilities()).toEqual({
+      'content.author': ['admin', 'it-admin'],
+      'content.publish': ['admin', 'it-admin'],
+      'content.publish.instagram': [],
+    })
   })
 })
 
@@ -148,11 +158,11 @@ describe('registry — toggleable manifest ids are real config.modules keys', ()
   // DERIVED defaultModulesConfig()". The governance-only kernel has no toggleable
   // manifests, so this iterates an empty set — the contract still holds vacuously
   // and re-asserts itself the moment a toggleable module is re-attached.
-  it('every toggleable module id is present AND true in defaultModulesConfig()', async () => {
+  it('every toggleable module id is present in defaultModulesConfig(), true unless it declares defaultEnabled: false', async () => {
     const { defaultModulesConfig } = await import('$lib/server/config')
     const defaults = defaultModulesConfig()
     for (const m of MODULE_MANIFESTS.filter((x) => x.toggleable)) {
-      expect(defaults[m.id]).toBe(true)
+      expect(defaults[m.id]).toBe(m.defaultEnabled !== false)
     }
   })
 })

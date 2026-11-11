@@ -3,7 +3,8 @@
 // BEFORE anything connects, and each missing one is a NAMED exit-2 failure,
 // never a default. Spawns the real CLI entrypoint (tsx + the SvelteKit env shim).
 import { spawnSync, execFileSync } from 'node:child_process'
-import { readFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { beforeAll, describe, expect, it } from 'vitest'
@@ -25,6 +26,9 @@ const MODULE_SERVERS = ['BOARD', 'CALENDAR', 'CONTENT', 'FINANCE', 'NEWSLETTER',
 const CONTRACT: Record<string, string> = {
   PLATFORM_DATABASE_URL: 'postgres://gremion_platform:unit@postgres-unitstack:5432/gremion_platform',
   KERNEL_PG_ADMIN_FILE: FIXTURE,
+  // TASK-084-a: the governance server's admin url and the per-customer credential directory (an existing directory)
+  GOVERNANCE_PG_ADMIN_FILE: FIXTURE,
+  GOVERNANCE_SECRETS_DIR: tmpdir(),
   ...Object.fromEntries(MODULE_SERVERS.flatMap((id) => [[`MODULE_PG_ADMIN_${id}_FILE`, FIXTURE], [`MODULE_APP_PASSWORD_${id}_FILE`, FIXTURE]])),
   TENANT_EXPORT_DIR: '/var/lib/gremion/exports',
   GREMION_DISABLE_SEEDS: 'true',
@@ -93,6 +97,46 @@ describe('tenant-create phase-a env contract (TDD 19, G3)', () => {
     expect(r.out).toMatch(/GREMION_DISABLE_SEEDS must be "true"/)
   }, 90_000)
 
+  describe('the governance variables (TASK-084-a)', () => {
+    const scratch = mkdtempSync(join(tmpdir(), 't084-env-'))
+    const file = (name: string, text: string) => {
+      const p = join(scratch, name)
+      writeFileSync(p, text)
+      return p
+    }
+    const refused = (over: Record<string, string>, name: string) => {
+      const r = run(['phase-a', ...FLAGS], { ...CONTRACT, ...over })
+      expect(r.status, r.out).toBe(2)
+      expect(r.out).toContain(name)
+      expect(r.out).not.toMatch(/ECONNREFUSED|ENOTFOUND|getaddrinfo|CONNECT_TIMEOUT/)
+      return r.out
+    }
+
+    it('GOVERNANCE_PG_ADMIN_FILE empty is a named exit-2 failure', () => {
+      expect(refused({ GOVERNANCE_PG_ADMIN_FILE: file('empty.url', '') }, 'GOVERNANCE_PG_ADMIN_FILE')).toMatch(/empty/)
+    }, 90_000)
+    it('GOVERNANCE_PG_ADMIN_FILE that is no postgres url or points at the pooler is a named exit-2 failure', () => {
+      expect(refused({ GOVERNANCE_PG_ADMIN_FILE: file('http.url', 'http://example.invalid/x') }, 'GOVERNANCE_PG_ADMIN_FILE')).toMatch(/not a postgres:\/\/ URL/)
+      expect(refused({ GOVERNANCE_PG_ADMIN_FILE: file('pool.url', 'postgres://u:p@pgbouncer-unit:6432/postgres') }, 'GOVERNANCE_PG_ADMIN_FILE')).toMatch(/pooler/)
+    }, 90_000)
+    it('GOVERNANCE_SECRETS_DIR that is not an existing directory is a named exit-2 failure', () => {
+      expect(refused({ GOVERNANCE_SECRETS_DIR: join(scratch, 'does-not-exist') }, 'GOVERNANCE_SECRETS_DIR')).toContain('GOVERNANCE_SECRETS_DIR')
+      expect(refused({ GOVERNANCE_SECRETS_DIR: file('a-file', 'x') }, 'GOVERNANCE_SECRETS_DIR')).toContain('GOVERNANCE_SECRETS_DIR')
+    }, 90_000)
+    it('GOVERNANCE_SECRETS_DIR equal to, inside or containing TENANT_SECRETS_DIR is a named exit-2 failure naming both', () => {
+      const root = mkdtempSync(join(tmpdir(), 't084-overlap-'))
+      const inner = join(root, 'inner')
+      mkdirSync(inner)
+      // a child whose NAME starts with two dots is still a child, not a parent step
+      const dotted = join(root, '..x')
+      mkdirSync(dotted)
+      for (const [gov, tenant] of [[root, root], [root, inner], [inner, root], [dotted, root], [root, dotted]] as const) {
+        const out = refused({ GOVERNANCE_SECRETS_DIR: gov, TENANT_SECRETS_DIR: tenant }, 'GOVERNANCE_SECRETS_DIR')
+        expect(out).toContain('TENANT_SECRETS_DIR')
+      }
+    }, 90_000)
+  })
+
   it('a PLATFORM_DATABASE_URL on the pooler is refused (the runner needs the server itself)', () => {
     const r = run(['phase-a', ...FLAGS], { ...CONTRACT, PLATFORM_DATABASE_URL: 'postgres://gremion_platform:unit@pgbouncer-unitstack:6432/gremion_platform' })
     expect(r.status, r.out).toBe(2)
@@ -111,6 +155,27 @@ describe('tenant-create phase-a env contract (TDD 19, G3)', () => {
     expect(r.status, r.out).toBe(2)
     expect(r.out).toContain(missing as string)
     expect(r.out).not.toMatch(/ECONNREFUSED|ENOTFOUND|getaddrinfo|CONNECT_TIMEOUT/)
+  }, 90_000)
+
+  // Only phase A (and delete) touch the governance server. A host installed before the governance
+  // server existed has neither GOVERNANCE_PG_ADMIN_FILE nor the credential directory, and every other
+  // live verb (suspend, resume, activate, record-step; the gate, import and Karenz verbs share the
+  // same live set) must keep working there: it stops at the NEXT missing variable, never at a
+  // governance one.
+  it.each([
+    ['suspend', ['suspend', 'musterstadt', '--operator', '8d6b9c7e-1f2a-4b3c-9d4e-5f6a7b8c9d0e']],
+    ['resume', ['resume', 'musterstadt', '--operator', '8d6b9c7e-1f2a-4b3c-9d4e-5f6a7b8c9d0e']],
+    ['activate', ['activate', 'musterstadt']],
+    ['record-step', ['record-step', 'musterstadt', 'mail_principal_issued', '--operator', '8d6b9c7e-1f2a-4b3c-9d4e-5f6a7b8c9d0e']],
+  ])('%s does not need the governance server: with no GOVERNANCE_* it stops at the next missing variable', (_verb, args) => {
+    const env = { ...CONTRACT }
+    delete env.GOVERNANCE_PG_ADMIN_FILE
+    delete env.GOVERNANCE_SECRETS_DIR
+    delete env.TENANT_EXPORT_DIR
+    const r = run(args as string[], env)
+    expect(r.status, r.out).toBe(2)
+    expect(r.out).toContain('TENANT_EXPORT_DIR')
+    expect(r.out).not.toContain('GOVERNANCE_')
   }, 90_000)
 
   // r3 verifier MEDIUM #70: `init` makes the panel's read-only role, so it

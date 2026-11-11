@@ -132,9 +132,10 @@ describe('request-verify: a council row', () => {
     expect(await verdictOf(ctx())).toMatchObject({ verdict: 'refused', reason: expect.stringMatching(/^evidence: /) })
   })
 
-  it('a council disable_module is refused DISABLE_NOT_YET in the printed verdict', async () => {
+  it('a council disable_module verifies in the printed verdict (Karenz phase 2 lifted DISABLE_NOT_YET) with actorKind person', async () => {
     held.row = { ...baseRow, kind: 'disable_module', origin: 'council', actor_kind: 'person', evidence_token: await pair(COUNCIL_ISS, 'gremion-ui', ['council-admin']) }
-    expect(await verdictOf(ctx())).toMatchObject({ verdict: 'refused', reason: expect.stringMatching(/^DISABLE_NOT_YET/) })
+    const v = await verdictOf(ctx())
+    expect(v).toMatchObject({ verdict: 'ok', kind: 'disable_module', origin: 'council', args: { slug: 'musterstadt', module: 'votes', actorKind: 'person' } })
   })
 
   it('a request that is not running is refused for every origin', async () => {
@@ -235,6 +236,19 @@ describe('enable-module / disable-module --actor-kind', () => {
     await runGateVerb('disable-module', gateCtx(['musterstadt', 'votes'], { '--operator': PERSON, '--actor-kind': 'person' }))
     expect(disableCustomerModule).toHaveBeenCalledWith('musterstadt', 'votes', { operatorId: PERSON, actorKind: 'person' }, { marker: 'deps' })
     expect(JSON.parse(out[0]!)).toMatchObject({ verb: 'disable-module', actorKind: 'person' })
+    vi.unstubAllEnvs()
+  })
+
+  it('disable-module prints blocked and finalAt, and its log line says "blocked until <date>" (Karenz)', async () => {
+    const finalAt = new Date('2026-12-01T10:00:00Z')
+    vi.mocked(disableCustomerModule).mockResolvedValue({ moduleKey: 'votes', noop: false, dropped: false, blocked: true, finalAt, database: 'db', export: null, enabled: [], reloaded: false } as never)
+    vi.stubEnv('TENANT_EXPORT_DIR', '/exports')
+    const out: string[] = []
+    vi.spyOn(console, 'log').mockImplementation((s: string) => void out.push(String(s)))
+    const logs: string[] = []
+    await runGateVerb('disable-module', { ...gateCtx(['musterstadt', 'votes'], { '--operator': PERSON }), log: (l) => void logs.push(l) })
+    expect(JSON.parse(out[0]!)).toMatchObject({ verb: 'disable-module', dropped: false, blocked: true, finalAt: '2026-12-01T10:00:00.000Z' })
+    expect(logs.join('\n')).toContain('blocked until 2026-12-01')
     vi.unstubAllEnvs()
   })
 })

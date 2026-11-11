@@ -68,10 +68,11 @@ export const IMPORT_RULES: ImportRule[] = [
     // part of the newsletter service boundary (mirrors the src/routes/api/newsletter exemption).
     sourceExempt: ['src/lib/server/newsletter', 'src/routes/newsletter', 'src/routes/api/newsletter', 'src/routes/api/internal/newsletter', 'src/lib/server/seed', ...COMPOSITION_ROOTS],
     forbiddenTargets: ['src/lib/server/newsletter'],
-    // Carve note: the sole external consumer (routes/news/[id]/edit) was git-rm'd
-    // with the news/content surface, so the allow entry is gone. The rule stays as
-    // a no-op guard (newsletter dir is deleted) that reds if it is re-introduced.
-    allow: [],
+    // The content module is back in the build (modules/disabled.json no longer lists it, 2026-11-09), and
+    // its news editor (routes/news/[id]/edit) converts an .odt draft with the newsletter module's
+    // collabora-convert, the same Collabora round trip the newsletter editor uses. It is the one
+    // consumer outside the newsletter surface; any second one fails this rule.
+    allow: ['src/routes/news/[id]/edit/+page.server.ts'],
   },
   {
     id: 'no-deep-import-into-elections',

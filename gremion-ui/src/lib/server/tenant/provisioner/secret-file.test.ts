@@ -6,7 +6,7 @@ import { existsSync, linkSync, mkdirSync, mkdtempSync, rmSync, readFileSync, wri
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
-import { handConfigToReader, handToReader, isTenantConfigPath, readerIds, writeReaderConfigFile } from '../../../../../scripts/tenant-secret-file'
+import { handConfigToReader, handToReader, isTenantConfigPath, readerIds, writeGovernanceCredentialFile, writeReaderConfigFile } from '../../../../../scripts/tenant-secret-file'
 
 describe('handToReader', () => {
   const dir = mkdtempSync(join(tmpdir(), 'secret-file-'))
@@ -137,4 +137,42 @@ describe('writeReaderConfigFile / handConfigToReader', () => {
     expect(isTenantConfigPath(join(tmpdir(), 'elsewhere', 'config.json'), env)).toBe(false)
   })
   afterAll(() => rmSync(root, { recursive: true, force: true }))
+})
+
+// The governance credential files sit under etc/ on the host, where the backup runs as the deploy user
+// (uid 1000) and copies everything with rsync: a root:root 0600 file there is unreadable (exit 23), so
+// every backup after the first customer create would die at its etc copy. The file is handed to the same
+// uid:gid as the tenant secrets (bootstrap.sh asserts that the deploy user is uid 1000), still 0600.
+describe('writeGovernanceCredentialFile', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'governance-secret-'))
+  it('writes the value 0600 atomically and hands the file to the deploy uid:gid (default 1000:1000)', () => {
+    const calls: Array<[string, number, number]> = []
+    const path = join(dir, 'a'.repeat(32))
+    writeGovernanceCredentialFile(path, 'postgres://x', { chown: (p, u, g) => calls.push([p, u, g]), env: {} })
+    expect(readFileSync(path, 'utf-8')).toBe('postgres://x')
+    // handed over under the tmp name, before the rename: the final name never exists with the wrong owner
+    expect(calls).toEqual([[`${path}.tmp-${process.pid}`, 1000, 1000]])
+    expect(existsSync(`${path}.tmp-${process.pid}`)).toBe(false)
+  })
+  it('honours TENANT_SECRETS_UID / TENANT_SECRETS_GID, the same contract as the tenant secrets', () => {
+    const calls: Array<[string, number, number]> = []
+    const path = join(dir, 'b'.repeat(32))
+    writeGovernanceCredentialFile(path, 'v', { chown: (p, u, g) => calls.push([p, u, g]), env: { TENANT_SECRETS_UID: '1234', TENANT_SECRETS_GID: '4321' } })
+    expect(calls).toEqual([[`${path}.tmp-${process.pid}`, 1234, 4321]])
+  })
+  it('a failed chown is fatal: a root:root file under etc/ would fail every later backup', () => {
+    expect(() =>
+      writeGovernanceCredentialFile(join(dir, 'c'.repeat(32)), 'v', {
+        chown: () => {
+          throw new Error('EPERM')
+        },
+        env: {},
+      }),
+    ).toThrow(/chown .*EPERM/)
+  })
+  it('the launcher script writes the governance credential through it (wired)', () => {
+    const src = readFileSync(join(__dirname, '..', '..', '..', '..', '..', 'scripts', 'tenant-provision.ts'), 'utf-8')
+    expect(src).toMatch(/function writeGovernanceSecretFile[^{]*\{\s*writeGovernanceCredentialFile\(/)
+  })
+  afterAll(() => rmSync(dir, { recursive: true, force: true }))
 })

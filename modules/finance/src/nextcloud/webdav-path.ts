@@ -37,10 +37,32 @@ export function sanitizeRelPath(paramPath: string): string {
   if (decoded.includes('%')) {
     throw new WebdavPathError('Invalid path encoding')
   }
-  if (decoded.split('/').some((seg) => seg === '..')) {
+  // Mirror of the kernel copy: fetch's URL parser reads a backslash as `/` and
+  // deletes tab and newline, so `..\x` or `.<LF>.` becomes a `..` segment after
+  // the check below. A Nextcloud file name never holds these; refuse them.
+  // oxlint-disable-next-line no-control-regex -- the pattern exists to REFUSE control characters
+  if (/[\\\u0000-\u001f\u007f]/.test(decoded)) {
+    throw new WebdavPathError('Invalid path characters')
+  }
+  if (decoded.split('/').some(isDotSegment)) {
     throw new WebdavPathError('Path traversal not allowed')
   }
   return decoded.replace(/^\/+/, '')
+}
+
+/** True when fetch's URL parser would reduce this segment to `.` or `..`: it cuts the
+ *  path at the first `?` or `#`, and a space around the dots is trimmed. `..?x`, `..#x`
+ *  and `.. ` therefore climb out of the caller's namespace like a bare `..`. Mirror of
+ *  the kernel copy; the three copies must agree. */
+function isDotSegment(seg: string): boolean {
+  const head = seg.split(/[?#]/, 1)[0].trim()
+  return head === '.' || head === '..'
+}
+
+/** Percent-encode each segment of an already-sanitised relative path exactly once
+ *  ('/' separators kept), so a `?` or `#` in a name cannot end the URL path. */
+function encodeRelPath(sanitizedRel: string): string {
+  return sanitizedRel.split('/').map(encodeURIComponent).join('/')
 }
 
 /**
@@ -49,6 +71,6 @@ export function sanitizeRelPath(paramPath: string): string {
  * URL-encoded to support email-style `preferred_username` values.
  */
 export function buildWebdavPath(ncUsername: string, paramPath: string): string {
-  const clean = sanitizeRelPath(paramPath)
+  const clean = encodeRelPath(sanitizeRelPath(paramPath))
   return `/remote.php/dav/files/${encodeURIComponent(ncUsername)}/${clean}`
 }

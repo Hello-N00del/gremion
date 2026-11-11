@@ -38,10 +38,16 @@ export interface AppendOnlyTable {
   readonly revoke: readonly ('INSERT' | 'UPDATE' | 'DELETE' | 'TRUNCATE')[]
 }
 
-/** audit_log and its chain anchor (gremion-ui migrations 0009, 0043, 0059). SELECT and INSERT on audit_log stay. */
+/**
+ * audit_log and its chain anchor (gremion-ui migrations 0009, 0043, 0059), and the sealed
+ * retained copies of a module switch-off (0064): written once, read many times, never
+ * rewritten or removed by the application. SELECT and INSERT on audit_log and on
+ * retained_record stay.
+ */
 export const APPEND_ONLY_TABLES: readonly AppendOnlyTable[] = [
   { table: 'audit_log', revoke: ['DELETE', 'UPDATE', 'TRUNCATE'] },
   { table: 'audit_log_chain_anchor', revoke: ['INSERT', 'UPDATE', 'DELETE', 'TRUNCATE'] },
+  { table: 'retained_record', revoke: ['UPDATE', 'DELETE', 'TRUNCATE'] },
 ]
 
 const PLAIN = /^[a-z_]+$/
@@ -106,14 +112,14 @@ export async function kernelAuditAppendOnlyProblems(
         const qualified = `public.${t.table}`
         const [present] = await tx<{ ok: boolean }[]>`SELECT pg_catalog.to_regclass(${qualified}::pg_catalog.text) IS NOT NULL AS ok`
         if (!present?.ok) {
-          if (opts.requirePresent) problems.push(`${t.table}: table is absent (the kernel chain has not created it, so the audit record cannot be append-only)`)
+          if (opts.requirePresent) problems.push(`${t.table}: table is absent (the kernel chain has not created it, so ${t.table} cannot be append-only)`)
           continue
         }
         for (const role of [app, owner]) {
           for (const priv of t.revoke) {
             const [held] = await tx<{ held: boolean }[]>`
               SELECT pg_catalog.has_table_privilege(${role}::pg_catalog.text, ${qualified}::pg_catalog.text, ${priv}::pg_catalog.text) AS held`
-            if (held?.held) problems.push(`${t.table}: ${role} still holds ${priv} (the kernel audit record is append-only)`)
+            if (held?.held) problems.push(`${t.table}: ${role} still holds ${priv} (${t.table} is append-only for the application)`)
           }
         }
       }

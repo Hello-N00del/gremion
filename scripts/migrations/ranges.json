@@ -12,7 +12,7 @@
         "gremion-ui/migrations"
       ],
       "padWidth": 4,
-      "highWater": 63,
+      "highWater": 64,
       "legacyFloor": 58,
       "legacy": [
         "0001_governance_schema.sql",
@@ -52,7 +52,7 @@
           "dir": "modules/content/app/migrations",
           "lo": 1200,
           "hi": 1299,
-          "highWater": 1201
+          "highWater": 1202
         }
       ]
     },
@@ -186,8 +186,11 @@
       "dirs": [
         "services/governance/migrations"
       ],
+      "manifestDirs": [
+        "services/governance/migrations"
+      ],
       "padWidth": 4,
-      "highWater": 0,
+      "highWater": 1,
       "legacyFloor": 0,
       "legacy": []
     },
@@ -212,7 +215,7 @@
         "packages/tenant-store/src/lifecycle/platform-migrations"
       ],
       "padWidth": 4,
-      "highWater": 14,
+      "highWater": 17,
       "legacyFloor": 3,
       "legacy": [
         "0001_plt_setup.sql",

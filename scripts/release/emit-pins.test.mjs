@@ -29,7 +29,8 @@ const FP = 'ghcr.io/hello-n00del'
 // The app project's service set, EXACTLY: this list also guards against an
 // unplanned app service. control-panel is the planned one (TASK-043 Q12, the
 // ops shell per colour; its image is gremion-control-panel).
-const SERVICES = ['gremion-ui', 'gremion-public', 'control-panel', 'migrate', 'tenant-create', 'kernel-api', 'kernel-api-migrate']
+// The pilot adds the three module leaves (profile-gated, built from modules/<id>/Dockerfile).
+const SERVICES = ['gremion-ui', 'gremion-public', 'control-panel', 'migrate', 'tenant-create', 'kernel-api', 'kernel-api-migrate', 'calendar-service', 'content-service', 'newsletter-service']
 const LINES = [
   `gremion-ui=${FP}/gremion-ui@sha256:${D('1')}`,
   `gremion-public=${FP}/gremion-public@sha256:${D('2')}`,
@@ -38,6 +39,9 @@ const LINES = [
   `tenant-create=${FP}/gremion-migrate@sha256:${D('3')}`,
   `kernel-api=${FP}/gremion-kernel-api@sha256:${D('4')}`,
   `kernel-api-migrate=${FP}/gremion-kernel-api@sha256:${D('4')}`,
+  `calendar-service=${FP}/gremion-calendar@sha256:${D('b')}`,
+  `content-service=${FP}/gremion-content@sha256:${D('e')}`,
+  `newsletter-service=${FP}/gremion-newsletter@sha256:${D('f')}`,
 ]
 const codes = (ps) => ps.map((p) => p.code).sort()
 
@@ -133,6 +137,10 @@ const STATE_LINES = [
   `vector=${FP}/gremion-vector@sha256:${D('8')}`,
   // TASK-198: matrix (Synapse) is a state build: service (brief Q1).
   `matrix=${FP}/gremion-synapse@sha256:${D('d')}`,
+  // The pilot's file, office and video services (docker-compose.yml): built here, pinned like matrix.
+  `nextcloud=${FP}/gremion-nextcloud@sha256:${D('5')}`,
+  `collabora=${FP}/gremion-collabora@sha256:${D('6')}`,
+  `element-call=${FP}/gremion-element-call@sha256:${D('a')}`,
   `fallback=${FP}/gremion-fallback@sha256:${D('9')}`,
 ]
 const RELEASE_VALID = join(REPO_ROOT, 'test/host/fixtures/release/valid')
@@ -157,7 +165,7 @@ test('048b: an app service in the state layer is refused, and a state service in
 
 test('048b: selectProject partitions one record by the derived sets; a service in neither project is refused', () => {
   const all = parsePinLines([...LINES, ...STATE_LINES].join('\n'))
-  assert.deepEqual([...selectProject(all, 'state').keys()], ['legal', 'vector', 'matrix', 'fallback'])
+  assert.deepEqual([...selectProject(all, 'state').keys()], ['legal', 'vector', 'matrix', 'nextcloud', 'collabora', 'element-call', 'fallback'])
   assert.deepEqual([...selectProject(all, 'app').keys()], SERVICES)
   const stray = parsePinLines([...LINES, ...STATE_LINES, `postgres=${FP}/postgres@sha256:${D('a')}`].join('\n'))
   assert.throws(() => selectProject(stray, 'state'), /postgres is in no release project/)

@@ -494,6 +494,44 @@ groups:
         annotations:
           summary: "The relay gave up on an outbox row: it holds back every later event of its aggregate (docs/runbooks/dead-letter.md, requeue)"
           component: "{{ $labels.component }}"
+      # The relay cannot publish: the oldest pending outbox row is older than 900 s [A] (gremion:cond:outbox_stalled);
+      # 10m of pending on top, so a busy but healthy relay that catches up does not page.
+      - uid: gremion-outbox-stalled
+        title: OutboxStalled
+        condition: B
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: prometheus
+            model:
+              refId: A
+              expr: gremion:cond:outbox_stalled
+              instant: true
+              range: false
+          - refId: B
+            datasourceUid: __expr__
+            relativeTimeRange:
+              from: 0
+              to: 0
+            model:
+              refId: B
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0]
+        noDataState: Alerting
+        execErrState: Alerting
+        for: 10m
+        isPaused: false
+        labels:
+          severity: critical
+        annotations:
+          summary: "The outbox relay cannot publish: its oldest pending row is over 15 minutes old. If OutboxDeadLettered is open for the same ctx, the held-back rows sit behind a dead-lettered one: requeue that first; otherwise see docs/runbooks/dead-letter.md, section 3"
+          component: "{{ $labels.component }}"
       - uid: gremion-inbox-dead-lettered
         title: InboxDeadLettered
         condition: B
@@ -601,4 +639,40 @@ groups:
           severity: critical
         annotations:
           summary: "The tenant's dead-letter stream holds an entry (docs/runbooks/dead-letter.md); it is kept for 7 days"
+          component: "{{ $labels.component }}"
+      - uid: gremion-module-karenz
+        title: ModuleKarenzFailedOrOverdue
+        condition: B
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 600
+              to: 0
+            datasourceUid: prometheus
+            model:
+              refId: A
+              expr: gremion:cond:module_karenz
+              instant: true
+              range: false
+          - refId: B
+            datasourceUid: __expr__
+            relativeTimeRange:
+              from: 0
+              to: 0
+            model:
+              refId: B
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0]
+        noDataState: Alerting
+        execErrState: Alerting
+        for: 5m
+        isPaused: false
+        labels:
+          severity: critical
+        annotations:
+          summary: "A module switch-off Karenz step failed, a notice or reminder is overdue, or a row is past its final day (docs/runbooks/tenant-lifecycle.md)"
           component: "{{ $labels.component }}"

@@ -5,8 +5,8 @@
 Content engine: a post is written once and published to up to three channels, e-mail
 (through mailing lists), the website portal (news posts) and Instagram (carousel). It also
 holds mailing lists, unsubscribe handling, scheduled publishing and a publish-operation
-queue. Status: **disabled by default** (listed in `modules/disabled.json`, so it is excluded
-from the default build and deploy; [docs/modules.md](../../docs/modules.md)).
+queue. Status: **supported**, part of the default build (not listed in `modules/disabled.json`;
+[docs/modules.md](../../docs/modules.md)).
 
 | | |
 |---|---|
@@ -68,10 +68,10 @@ Leaf, one database per tenant (`content_<slug>`), applied by the leaf and checke
 | `002_posts_status.sql` | dispatch-lifecycle columns on `content.posts` |
 | `003_content_audit.sql` | `content.content_audit` |
 
-Kernel, applied to the kernel database: `app/migrations/1200_content_news_posts.sql` and
-`1201_news_posts_public_reader_columns.sql` (the news posts the portal channel writes). The
-manifest also names the kernel migrations `044_content_schema`, `045_content_publish` and
-`046_content_publish_ops` as owned by this module; those files are not in this tree.
+Kernel, applied to the kernel database: `app/migrations/1200_content_news_posts.sql`,
+`1201_news_posts_public_reader_columns.sql` and `1202_news_posts_publish_origin.sql` (the news
+posts the portal channel writes, and the column that makes a repeated publish find its row).
+The manifest names exactly these three files.
 
 Disabling the module for a tenant exports the database with `pg_dump` (retention profile
 `rp-pub-module-data`), withholding `content.send_tokens.token` (`module.json`). Two timed
@@ -107,9 +107,9 @@ The module's PostgreSQL server is `content-postgres` under the compose profile `
 
 ## Enabling and disabling
 
-- Build: **excluded** by `modules/disabled.json`. The overlay script refuses a disabled
-  module in build mode, and the tenant-lifecycle runbook requires a module not to be in that
-  file before it can be enabled for a customer.
+- Build: **included**. The module is not in `modules/disabled.json`, so the image build copies
+  `modules/content/app` and the overlay script puts it onto `gremion-ui/src/`; the rail shows
+  an "Inhalte" entry (`/content`) while `config.modules.content` is not `false`.
 - Instance setting: `config.modules.content = false` answers `/content` and `/api/content`
   with the module-disabled surface.
 - Leaf: `docker build -f modules/content/Dockerfile .` from the repository root.

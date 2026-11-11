@@ -83,6 +83,16 @@ teardown() {
     grep -q '^set -euo pipefail$' "$BOOTSTRAP"
 }
 
+# #578: tenant-create bind-mounts etc/secrets/governance read-write; a bind source
+# missing at container start is made root:root by the docker daemon. Bootstrap makes
+# it with the other 0700 deploy-user directories of etc/.
+@test "#578: ensure_layout makes etc/secrets/governance with the other 0700 deploy-user directories" {
+    local loop
+    loop="$(grep -E '^[[:space:]]*for d in .*secrets/mail' "$BOOTSTRAP")"
+    [[ "$loop" == *" secrets/governance "* || "$loop" == *" secrets/governance;"* ]]
+    grep -qE 'install -d -m 700 -o "\$\{DEPLOY_USER\}" -g "\$\{DEPLOY_USER\}" "\$\{root\}/etc/\$\{d\}"' "$BOOTSTRAP"
+}
+
 @test "bootstrap.sh sources the shared host library" {
     grep -q 'SCRIPT_DIR/lib/common.sh' "$BOOTSTRAP"
 }
@@ -306,6 +316,23 @@ teardown() {
     [[ "$output" == *"OnCalendar=*-*-* 02:00:00"* ]]
     [[ "$output" == *"Persistent=true"* ]]
     [[ "$output" == *"WantedBy=timers.target"* ]]
+}
+
+@test "bootstrap renders and enables gremion-karenz.timer, and render_unit renders the hourly pair" {
+    grep -qF 'render_unit gremion-karenz.service /etc/systemd/system/gremion-karenz.service' "$BOOTSTRAP"
+    grep -qF 'render_unit gremion-karenz.timer /etc/systemd/system/gremion-karenz.timer' "$BOOTSTRAP"
+    grep -qF 'systemctl enable --now gremion-karenz.timer' "$BOOTSTRAP"
+    grep -qF 'gremion-karenz.timer (hourly' "$BOOTSTRAP"
+    run render_unit gremion-karenz.service "${GREMION_ROOT}/k.service"
+    [ "$status" -eq 0 ]
+    run cat "${GREMION_ROOT}/k.service"
+    [[ "$output" == *"ExecStart=${GREMION_ROOT}/current/infra/host/ops/karenz.sh"* ]]
+    [[ "$output" == *"TimeoutStartSec=170"* ]]
+    run render_unit gremion-karenz.timer "${GREMION_ROOT}/k.timer"
+    [ "$status" -eq 0 ]
+    run cat "${GREMION_ROOT}/k.timer"
+    [[ "$output" == *"OnCalendar=*-*-* *:17:00 UTC"* ]]
+    [[ "$output" == *"Persistent=true"* ]]
 }
 
 @test "render_unit renders the reboot-gate verify unit after docker" {

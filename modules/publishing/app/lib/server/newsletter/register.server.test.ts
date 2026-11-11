@@ -24,4 +24,10 @@ describe('publishing register.server', () => {
     expect(h.erasure).toEqual([publishingErasureHook])
     expect(h.init).toHaveLength(1)
   })
+
+  it('declares that the publishing module seals no retained records (otherwise its retained step fails closed)', async () => {
+    const { hasRetentionDeclaration, extractorsFor } = await import('$lib/server/module-karenz/retained/extractors')
+    expect(hasRetentionDeclaration('publishing')).toBe(true)
+    expect(extractorsFor('publishing')).toEqual([])
+  })
 })

@@ -138,6 +138,20 @@ export function stepup2faGateProblem(execs: readonly FlowExecRep[]): string | nu
   return null
 }
 
+/**
+ * The Keycloak username of an invited user. Synapse takes the Matrix localpart from
+ * preferred_username, and an email address is not a valid localpart, so other characters are
+ * encoded as _hh, which both Matrix and Keycloak's username policy accept (= is refused by
+ * Keycloak). Users still sign in with their address.
+ */
+export function matrixSafeUsername(email: string): string {
+  const bytes = new TextEncoder().encode(email.toLowerCase())
+  return Array.from(bytes, (b) => {
+    const c = String.fromCharCode(b)
+    return /[a-z0-9.-]/.test(c) ? c : `_${b.toString(16).padStart(2, '0')}`
+  }).join('')
+}
+
 export class KcProvisionApi {
   constructor(private readonly transport: KcTransport) {}
 
@@ -588,7 +602,7 @@ export class KcProvisionApi {
     if (!found) {
       try {
         await this.realmReq(realm, 'POST', '/users', {
-          username: email,
+          username: matrixSafeUsername(email),
           email,
           emailVerified: false,
           enabled: true,

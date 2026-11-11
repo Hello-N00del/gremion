@@ -33,6 +33,7 @@ function shippedCatalogueIds(): string[] {
 
 /** The manifest id each HELD-BACK catalogue id registers under (they differ for two). */
 const HELD_BACK_MANIFEST_IDS: Readonly<Record<string, string>> = {
+  content: 'content',
   files: 'files',
   messaging: 'messages',
   publishing: 'newsletter',
@@ -66,8 +67,8 @@ describe('manifestIdOf / catalogueIdOf', () => {
     }
   })
 
-  it('publishing, messaging, files, handover and board are not switchable and map to null', () => {
-    for (const id of ['publishing', 'messaging', 'files', 'handover', 'board']) {
+  it('content, publishing, messaging, files, handover and board are not switchable and map to null', () => {
+    for (const id of ['content', 'publishing', 'messaging', 'files', 'handover', 'board']) {
       expect(SWITCHABLE_CATALOGUE_IDS.has(id)).toBe(false)
       expect(manifestIdOf(id)).toBeNull()
     }
