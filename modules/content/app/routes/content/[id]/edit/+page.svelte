@@ -12,7 +12,7 @@
   import PageTitle from '$lib/components/PageTitle.svelte'
   import RichTextComposer from '$lib/components/news/RichTextComposer.svelte'
   import DateTimeDe from '$lib/components/news/DateTimeDe.svelte'
-  import { formatLocalInputDe, parseDateTimeDe } from '$lib/content/format-de'
+  import { formatLocalInputDe, parseDateTimeDe } from '$lib/components/news/format-de'
   import { untrack } from 'svelte'
   import type { PageData } from './$types'
   import type { ChannelId, ChannelStatus, MailingList } from '$lib/server/content/types'

@@ -4,7 +4,7 @@
   // language (it showed dd/mm/yyyy), so the value is typed as text here; the
   // calendar button opens the native picker as a convenience. The bound value is
   // the German text; the caller turns it into ISO with parseDateTimeDe.
-  import { formatLocalInputDe, parseDateTimeDe } from '$lib/content/format-de'
+  import { formatLocalInputDe, parseDateTimeDe } from '$lib/components/news/format-de'
 
   let { value = $bindable(''), label = 'Geplante Zeit' }: { value?: string; label?: string } = $props()
 

@@ -3,7 +3,7 @@
   // (email + optional name) and remove. CSV import is L2-stretch; out of scope.
   import { invalidateAll } from '$app/navigation'
   import PageTitle from '$lib/components/PageTitle.svelte'
-  import { countLabel } from '$lib/content/format-de'
+  import { countLabel } from '$lib/components/news/format-de'
   import type { PageData } from './$types'
 
   let { data }: { data: PageData } = $props()
