@@ -41,4 +41,22 @@ describe('portal page (K2#2)', () => {
     expect(screen.getByTestId('portal-not-wired').textContent).toMatch(/noch nicht/)
     expect(screen.getAllByText(/stura\.example\.edu/).length).toBeGreaterThan(0)
   })
+
+  it('with no domain says plainly that no portal is set up, links to the setting and shows no sample domain', () => {
+    const { container } = render(Page, { props: { data: { ...DATA, domain: '' } } as never })
+    const text = container.textContent ?? ''
+    expect(text).not.toMatch(/example\.edu/)
+    expect(text).not.toMatch(/localhost/i)
+    expect(screen.getByTestId('portal-not-set-up').textContent).toMatch(/kein öffentliches Portal/)
+    expect(container.querySelector('a[href="/settings/dienste"]')).not.toBeNull()
+    // no preview link to a made-up address
+    expect(container.querySelector('a[href^="https://"]')).toBeNull()
+  })
+
+  it('with a domain set shows it and the preview link', () => {
+    const { container } = render(Page, { props: { data: { ...DATA, domain: 'stura.example.org' } } as never })
+    expect(container.textContent).toMatch(/stura\.example\.org/)
+    expect(container.querySelector('a[href="https://stura.example.org"]')).not.toBeNull()
+    expect(screen.queryByTestId('portal-not-set-up')).toBeNull()
+  })
 })
