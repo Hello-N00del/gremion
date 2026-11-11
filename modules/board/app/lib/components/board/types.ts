@@ -14,7 +14,15 @@ export interface CardView {
   created_by: string | null
   created_at: string | Date
   assignee_name: string | null
+  /** The assignee's user id, only while they are a member of the board's committee (the editor's preselection). */
+  assignee_id: string | null
   is_mine: boolean
+}
+
+/** A member of the board's committee, as the card editor's assignee picker lists them. */
+export interface MemberOption {
+  id: string
+  name: string
 }
 
 export interface StackView {

@@ -67,6 +67,7 @@ export function leafApi(server: http.Server, secret: string): BoardApi {
     createBoard: (as, input) => call(as, 'POST', '/api/v1/boards', input),
     createStack: (as, id, input) => call(as, 'POST', `/api/v1/boards/${seg(id)}/stacks`, input),
     createCard: (as, input) => call(as, 'POST', '/api/v1/cards', input),
+    updateCard: (as, id, patch) => call(as, 'PATCH', `/api/v1/cards/${seg(id)}`, patch),
     moveCard: (as, id, to) => call(as, 'PATCH', `/api/v1/cards/${seg(id)}/move`, to),
     promote: (as, id, input) => call(as, 'POST', `/api/v1/boards/${seg(id)}/promote`, input),
     promoted: (as, candidateIds) => call(as, 'POST', '/api/v1/cards/promoted', { candidateIds }),
