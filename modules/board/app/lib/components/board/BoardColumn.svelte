@@ -5,7 +5,12 @@
   import Card from './Card.svelte'
   import type { CardView } from './types'
 
-  let { boardId, stack, cards }: { boardId: string; stack: { id: string; name: string }; cards: CardView[] } =
+  let {
+    boardId,
+    stack,
+    cards,
+    onopen,
+  }: { boardId: string; stack: { id: string; name: string }; cards: CardView[]; onopen?: (card: CardView) => void } =
     $props()
 
   // A card's status IS the stack it sits in; the terminal stacks get the
@@ -98,7 +103,7 @@
     onfinalize={onFinalize}
   >
     {#each items as c (c.id)}
-      <Card card={c} {done} />
+      <Card card={c} {done} {onopen} />
     {/each}
   </div>
 

@@ -41,7 +41,7 @@ Leaf (`src/http/routes.ts`), all under the shared-secret guard except `/healthz`
 
 `GET|POST /api/v1/boards`, `GET /api/v1/boards/:id`, `POST /api/v1/boards/:id/stacks`,
 `GET /api/v1/boards/:id/deck`, `POST /api/v1/boards/:id/promote`, `POST /api/v1/cards`,
-`PATCH /api/v1/cards/:id/move`, `POST /api/v1/cards/promoted`.
+`PATCH /api/v1/cards/:id`, `PATCH /api/v1/cards/:id/move`, `POST /api/v1/cards/promoted`.
 
 ## Migrations
 

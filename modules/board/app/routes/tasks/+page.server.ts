@@ -4,13 +4,15 @@ import { Role, hasRole } from '$lib/auth'
 import type { SessionUser } from '$lib/auth/types'
 import { resolveBoardOrgUnitScope } from '$lib/server/board/scope'
 import { resolveBoardBackendForPage } from '$lib/server/board/backend/resolve'
-import { listOrgUnits } from '$lib/server/governance/org-units-db'
+import { listOrgUnits, listOrgUnitMembers } from '$lib/server/governance/org-units-db'
 import { getDisplayNameResolver } from '$lib/server/identity/display-names'
-import type { CardView, StackView, BoardView } from '$lib/components/board/types'
+import type { CardView, StackView, BoardView, MemberOption } from '$lib/components/board/types'
 
-// The raw assignee UUID is NEVER emitted to the client; it is resolved to a
-// display name on the server (consistent with WI-4B). CardView lives in a
-// client-safe module so components can type against it.
+// A card's raw assignee column is NEVER emitted; it is resolved to a display name on the
+// server (consistent with WI-4B). The card editor's picker is the one exception it needs: the
+// members of the selected board's own committee as {id, name}, and `assignee_id` on a card
+// only while its assignee is one of them. CardView lives in a client-safe module so components
+// can type against it.
 export const load: PageServerLoad = async ({ locals, url }) => {
   const session = await locals.auth()
   const user = session?.user as SessionUser | undefined
@@ -38,9 +40,23 @@ export const load: PageServerLoad = async ({ locals, url }) => {
   const rawDeck = selectedId && boards.some((b) => b.id === selectedId) ? await backend.deckFor(selectedId) : null
 
   let deck: { board: BoardView & { org_unit_name: string }; stacks: StackView[]; cards: CardView[] } | null = null
+  let members: MemberOption[] = []
   if (rawDeck) {
-    const ids = rawDeck.cards.map((c) => c.assignee_keycloak_id).filter((x): x is string => !!x)
+    const memberRows = await listOrgUnitMembers(rawDeck.board.org_unit_id)
+    const memberIds = new Set(memberRows.map((m) => m.user_keycloak_id))
+    const ids = [
+      ...new Set([
+        ...rawDeck.cards.map((c) => c.assignee_keycloak_id).filter((x): x is string => !!x),
+        ...memberIds,
+      ]),
+    ]
     const names = await getDisplayNameResolver().resolveMany(ids)
+    // the resolver answers the raw id for a user it cannot find: never show that as a name
+    const nameOf = (id: string): string => {
+      const n = names.get(id)
+      return n && n !== id ? n : 'Mitglied ohne Namen'
+    }
+    members = [...memberIds].map((id) => ({ id, name: nameOf(id) })).sort((a, b) => a.name.localeCompare(b.name, 'de'))
     deck = {
       board: {
         id: rawDeck.board.id,
@@ -58,6 +74,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
           // object / full timestamp — the root of the old "Invalid Date" badge.
           due_date: c.due_date ? String(c.due_date).slice(0, 10) : null,
           assignee_name: assignee_keycloak_id ? (names.get(assignee_keycloak_id) ?? null) : null,
+          assignee_id: assignee_keycloak_id && memberIds.has(assignee_keycloak_id) ? assignee_keycloak_id : null,
           is_mine: assignee_keycloak_id === user.id,
         }
       }),
@@ -69,6 +86,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
     archivedCount,
     creatable,
     deck,
+    members,
     me: user.id,
   }
 }

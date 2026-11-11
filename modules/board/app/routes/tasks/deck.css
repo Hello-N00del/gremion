@@ -111,6 +111,12 @@
  * right-aligns the due pill + avatar (audit §1.B — adopt the shared layer). */
 .deck-card-foot { display: flex; align-items: center; gap: 7px; margin-top: 10px; }
 .deck-foot-spacer { flex: 1; }
+.deck-card.editable { cursor: pointer; }
+.deck-edit {
+  width: 24px; height: 24px; flex-shrink: 0; display: grid; place-items: center;
+  background: none; border: 0; border-radius: var(--r-xs); color: var(--ink-faint); cursor: pointer;
+}
+.deck-edit:hover, .deck-edit:focus-visible { background: var(--surface-3); color: var(--ink); }
 .deck-av {
   width: 24px; height: 24px; border-radius: 50%;
   background: var(--surface-3); color: var(--ink-2);
