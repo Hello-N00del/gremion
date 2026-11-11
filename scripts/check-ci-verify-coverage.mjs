@@ -18,7 +18,12 @@
 //   2. A suite two legs both run. Two records then carry the same key and
 //      combine-records.mjs refuses to merge them -- again only at the gate.
 //   3. A leg whose record the gate does not wait for. Its failure would be
-//      invisible: the gate would combine whatever records had arrived.
+//      invisible: the gate would combine whatever records had arrived. The image
+//      builds carry no record, so the gate must need docker-build by name, or a
+//      Dockerfile that no longer builds would leave a green gate. It must need the
+//      `changes` filter too, and accept a pull-request skip of docker-build or the
+//      census only when that filter succeeded and reported no matching input: a
+//      cancelled filter has no outputs, and both jobs then skip as if nothing changed.
 //   4. A way past the strict check. `--allow-missing` exists for one case (a pull
 //      request that touched no census input skips that leg) and must never be
 //      reachable from a push; `continue-on-error` turns any red job into a green
@@ -38,6 +43,11 @@
 //      write` and nothing else, one step, no `uses:`), so a push always carries
 //      every leg's record and the write token never shares a runner with
 //      repository or dependency code; no leg and not the gate holds a write token.
+//
+//   6. Runner hygiene, which fails loudly but on the wrong commit. Every job has a
+//      timeout-minutes; every checkout sets persist-credentials: false; every GitHub
+//      release download retries; pip and global npm tools are pinned to one exact
+//      version; and no step repeats make fresh-init-proof, which a verify leg owns.
 //
 // A scan that found almost nothing would pass every rule above, so it refuses to
 // pass below a floor of verify invocations (the vacuity floor).
@@ -131,6 +141,13 @@ const FAIL_FAST_JOB_IF = "failure() && github.event_name == 'pull_request' && gi
 // The gate's last word on a cancelled run: every step without always() is skipped there.
 const CANCELLED_STEP_IF = 'cancelled()'
 const STRICT_STEP_IF = "github.event_name != 'pull_request' || needs.verify-census.result == 'success'"
+// The only jobs the gate may accept as skipped, and only on a pull request: each one is
+// skipped there when the diff touches none of its inputs. A push always runs both.
+const MAY_SKIP_ON_PR = new Set(['verify-census', 'docker-build'])
+// The output of the `changes` job that decides each of those skips. A skip is legitimate only
+// when `changes` itself succeeded and its output for that job is "false": a cancelled or
+// timed-out `changes` has no outputs, and the job then skips exactly as if nothing had changed.
+const SKIP_DECIDED_BY = { 'verify-census': 'census', 'docker-build': 'docker' }
 const normalizeIf = (v) => text(v === undefined || v === null ? '' : String(v)).replace(/^\s*\$\{\{|\}\}\s*$/g, '').replace(/\s+/g, ' ').trim()
 
 /** The logical lines of a `run` script: backslash continuations joined, comments dropped. */
@@ -183,6 +200,64 @@ export function recordUploaders(doc) {
     if (text(step.uses).startsWith('actions/upload-artifact@') && text(step.with?.name).startsWith('record-')) jobs.add(jobId)
   }
   return jobs
+}
+
+// A GitHub release download. The 2026-11-08 run lost five jobs to one 504 from this CDN.
+const RELEASE_DOWNLOAD = /\bcurl\b.*https:\/\/github\.com\/\S+\/releases\/download\//
+const PIP_INSTALL = /\bpip3?\s+install\s+([^;&|]+)/
+const NPM_GLOBAL_INSTALL = /\bnpm\s+(?:install|i)\s+(?:-g|--global)\s+([^;&|]+)/
+const PIP_PIN = /^([A-Za-z0-9._-]+)==(\d+(?:\.\d+)+)$/
+const NPM_PIN = /^((?:@[^/@\s]+\/)?[^/@\s]+)@(\d+(?:\.\d+)+)$/
+
+function checkPins(label, kind, line, pattern, pin, versions, problems) {
+  const m = pattern.exec(line)
+  if (!m) return
+  for (const spec of m[1].trim().split(/\s+/).filter((t) => !t.startsWith('-'))) {
+    const pinned = pin.exec(spec)
+    if (!pinned) {
+      problems.push(`${label}: ${kind} package ${spec} is not pinned to an exact version -- an upstream release would break every run at once`)
+      continue
+    }
+    versions.set(pinned[1], new Set([...(versions.get(pinned[1]) ?? []), pinned[2]]))
+  }
+}
+
+/** Rule 6 of the header: credentials, downloads, tool versions, runaway jobs and the duplicate proof. */
+function checkRunnerHygiene(doc, problems) {
+  const versions = new Map() // tool -> distinct pinned versions
+  let downloads = 0
+  for (const [jobId, job] of Object.entries(doc.jobs)) {
+    const timeout = job?.['timeout-minutes']
+    if (!Number.isInteger(timeout) || timeout < 1) {
+      problems.push(`${jobId} has no timeout-minutes -- a hung step would hold a runner for GitHub's six-hour default`)
+    }
+  }
+  for (const { label, step } of eachStep(doc)) {
+    if (text(step.uses).startsWith('actions/checkout@') && step.with?.['persist-credentials'] !== false) {
+      problems.push(`${label}: actions/checkout does not set persist-credentials: false -- the job token stays in .git/config while later steps run`)
+    }
+    for (const line of logicalLines(step.run)) {
+      if (RELEASE_DOWNLOAD.test(line)) {
+        downloads += 1
+        if (!/(?:^|\s)--retry\s+[1-9]\d*(?:\s|$)/.test(line) || !/(?:^|\s)--retry-all-errors(?:\s|$)/.test(line)) {
+          problems.push(`${label}: a GitHub release download has no retry (--retry <n> --retry-all-errors) -- one CDN error fails the job before verify starts`)
+        }
+      }
+      checkPins(label, 'pip', line, PIP_INSTALL, PIP_PIN, versions, problems)
+      checkPins(label, 'global npm', line, NPM_GLOBAL_INSTALL, NPM_PIN, versions, problems)
+      if (/\bmake\s+fresh-init-proof\b/.test(line)) {
+        problems.push(`${label}: runs make fresh-init-proof, which verify-integration-db already runs as integration:fresh-init and records for the gate`)
+      }
+    }
+  }
+  // Vacuity floor: a respelled install would otherwise leave these rules checking nothing.
+  if (downloads === 0) problems.push('no GitHub release download found -- the retry rule is not looking at the install steps (respelled? update this guard with it)')
+  for (const tool of ['yamllint', 'bats']) {
+    if (!versions.has(tool)) problems.push(`no pinned install of ${tool} found -- the pin rule is not looking at its install steps (respelled? update this guard with it)`)
+  }
+  for (const [tool, seen] of versions) {
+    if (seen.size > 1) problems.push(`${tool} is installed at ${seen.size} versions (${[...seen].join(', ')}) -- every job must run the same one`)
+  }
 }
 
 /**
@@ -256,6 +331,18 @@ export function checkWorkflow(doc, { requiredSuites, unitParts, integrationParts
   } else if (gate && !needed.has('lint')) {
     problems.push('verify-gate does not need lint -- the legs no longer wait for it, so a red Lint would not reach the verdict')
   }
+  // Fail closed on a renamed job, as for lint.
+  if (!doc.jobs['docker-build']) {
+    problems.push('there is no `docker-build` job -- the gate-needs-the-image-builds check cannot run (renamed? update this guard with it)')
+  } else if (gate && !needed.has('docker-build')) {
+    problems.push('verify-gate does not need docker-build -- a Dockerfile that no longer builds would leave a green gate')
+  }
+  // The gate reads the filter's result and outputs to tell a no-input skip from a fail-open one.
+  if (!doc.jobs.changes) {
+    problems.push('there is no `changes` job -- the gate cannot tell a no-input skip from a cancelled filter (renamed? update this guard with it)')
+  } else if (gate && !needed.has('changes')) {
+    problems.push('verify-gate does not need changes -- a cancelled filter skips docker-build and the census, and the gate would read that as "no input changed"')
+  }
 
   // ── nothing may soften the verdict ──────────────────────────────────────
   for (const [jobId, job] of Object.entries(doc.jobs)) {
@@ -268,8 +355,9 @@ export function checkWorkflow(doc, { requiredSuites, unitParts, integrationParts
     }
   }
 
-  // Jobs whose steps decide the verdict: every leg that produces a record, and the gate.
-  const verdictJobs = new Set([...uploaders, ...invocations.map((i) => i.jobId), ...(gate ? ['verify-gate'] : [])])
+  // Jobs whose steps decide the verdict: every leg that produces a record, the gate, and
+  // the image builds (no record, but the gate reads their result).
+  const verdictJobs = new Set([...uploaders, ...invocations.map((i) => i.jobId), ...(gate ? ['verify-gate'] : []), ...(doc.jobs['docker-build'] ? ['docker-build'] : [])])
   for (const { label, jobId, step } of eachStep(doc)) {
     if (!verdictJobs.has(jobId)) continue
     for (const line of logicalLines(step.run)) {
@@ -295,6 +383,31 @@ export function checkWorkflow(doc, { requiredSuites, unitParts, integrationParts
   for (const { label, step } of legSteps) {
     if (!LEGS_STEP_IFS.has(normalizeIf(step.if))) {
       problems.push(`${label} has \`if: ${normalizeIf(step.if) || '(none)'}\`; the step that checks every leg's result must have \`if: always()\`, because anything else is skipped in a cancelled (fail-fast) run or narrows the check, and a gate whose steps skipped finishes green`)
+    }
+    // Every non-echo line that names `skipped` (an echo only reports a skip). This catches the
+    // spellings the tests plant; a branch that accepts a result without the word `skipped`, or
+    // that joins conditions with `||`, is not caught here -- see SCOPE above.
+    for (const line of logicalLines(step.run).filter((l) => /\bskipped\b/.test(l) && !/^\s*echo\b/.test(l))) {
+      const job = /"\$job"\s*==?\s*"([^"]+)"/.exec(line)?.[1]
+      if (!job || !MAY_SKIP_ON_PR.has(job) || !/"\$EVENT_NAME"\s*==?\s*"pull_request"/.test(line)) {
+        problems.push(`${label}: \`${line.trim()}\` accepts a skipped job; only ${[...MAY_SKIP_ON_PR].join(' and ')} may be skipped, and only when "$EVENT_NAME" is "pull_request"`)
+        continue
+      }
+      const out = SKIP_DECIDED_BY[job]
+      for (const clause of ['"$changes_result" = "success"', `"$${out}_changed" = "false"`]) {
+        const [name, value] = clause.split(' = ')
+        const re = new RegExp(`${name.replace(/[$]/g, '\\$')}\\s*==?\\s*${value}`)
+        if (!re.test(line)) problems.push(`${label}: \`${line.trim()}\` accepts a skipped ${job} without \`${clause}\` -- a cancelled changes filter has no outputs and would read as "no input changed"`)
+      }
+    }
+    const run = String(step.run ?? '')
+    if (!/\bchanges_result=\$\(jq -r '\.changes\.result'/.test(run)) {
+      problems.push(`${label} does not set changes_result from the changes job's result (\`changes_result=$(jq -r '.changes.result' ...)\`)`)
+    }
+    for (const out of Object.values(SKIP_DECIDED_BY)) {
+      if (!new RegExp(`\\b${out}_changed=\\$\\(jq -r '\\.changes\\.outputs\\.${out}\\b`).test(run)) {
+        problems.push(`${label} does not set ${out}_changed from the changes job's ${out} output (\`${out}_changed=$(jq -r '.changes.outputs.${out} // ""' ...)\`)`)
+      }
     }
   }
   if (gate && !GATE_JOB_IFS.has(normalizeIf(gate.if))) {
@@ -373,6 +486,8 @@ export function checkWorkflow(doc, { requiredSuites, unitParts, integrationParts
     }
   }
   if (strictCalls === 0) problems.push('no step calls `check-record.mjs <sha>` without a flag -- the strict check is gone')
+
+  checkRunnerHygiene(doc, problems)
 
   return { problems, invocations: invocations.length, names: [...seen.keys()] }
 }

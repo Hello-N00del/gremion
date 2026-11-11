@@ -11,14 +11,24 @@ const text = JSON.parse(fs.readFileSync(path.join(HERE, 'ste-text.json'), 'utf8'
 const step = (title, nodeId) => text.walkthroughs.find((w) => w.title === title).steps.find((s) => s.nodeId === nodeId).text
 
 describe('claims about the workflows that must stay true', () => {
-  it('verify-gate: it waits for lint and the verify jobs only, so the glossary does not say it is the last job or waits for the other jobs', () => {
-    // ci.yml: the needs of verify-gate are lint and the verify jobs. docker-build, integration-test, e2e-smoke and
-    // codemap-stale are not among them and can finish after it.
+  it('verify-gate: it waits for lint, the verify jobs and the image builds, so the glossary does not say it is the last job or waits for the other jobs', () => {
+    // ci.yml: the needs of verify-gate are lint, the verify jobs, docker-build and the filter changes. integration-test,
+    // e2e-smoke and codemap-stale are not among them and can finish after it.
     const g = text.glossary['verify-gate']
     expect(g).not.toMatch(/last job/i)
     expect(g).not.toMatch(/waits for the other jobs/i)
-    expect(g).toMatch(/waits for lint and for the verify jobs/)
+    expect(g).toMatch(/waits for lint, for the verify jobs and for the image builds/)
     expect(g).toMatch(/does not wait for them/)
+  })
+
+  it('verify-gate: no text says that it does not wait for docker-build', () => {
+    // ci.yml: docker-build is in the needs of verify-gate, so a failed image build makes the verdict red.
+    const gateStep = step('CI: a change is checked and becomes an image', 'job:.github/workflows/ci.yml#verify-gate')
+    expect(gateStep).not.toMatch(/does not wait for docker-build/)
+    expect(gateStep).toMatch(/for docker-build/)
+    const ci = text.areas['area:github-actions/ci@L0']
+    expect(ci.leadsTo).not.toMatch(/docker-build, integration-test and e2e-smoke run beside it/)
+    expect(ci.leadsTo).toMatch(/waits for lint, for the verify jobs and for the job docker-build/)
   })
 
   it('dependabot-unpause: the job unpause runs only when the measured start time is within the limit, and the text says so', () => {
