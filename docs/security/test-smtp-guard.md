@@ -173,12 +173,17 @@ tenant admin is narrowed instead:
 - **The stored relay login follows the relay, not the request.** With the
   `user` / `password` fields empty the test authenticates with the tenant's
   stored login (`domain_profile.smtp.user` + `passwordRef`, the one real sending
-  uses), but only when the body's `host:port` equals the relay real sending dials
-  (the registry `host`/`port`, else `config.smtp`). Aimed at any other target the
-  stored password is never read, so the button cannot be used to hand it to a
-  server the admin chose. Typed `user` / `password` fields override it. The
-  password is never part of a response or a log line, and an unreadable secret
-  is reported without its path (asserted in "stored relay credential (E4)").
+  uses), but only when the body's `host:port` equals the relay the registry names
+  (the registry `host`; the port is the registry's, else `config.smtp`'s). The
+  host in `config.smtp` is typed by the tenant admin and never qualifies: aimed
+  at it, or at any other target, the stored password is never read, so the button
+  cannot be used to hand it to a server the admin chose. The response then says
+  that the stored login was withheld. The login goes out only on an upgraded
+  connection (`requireTLS` on the STARTTLS ports). Typed `user` / `password`
+  fields override it; a typed password without a user is refused with `400`. The
+  password is never part of a response or a log line, and an unusable stored
+  login (incomplete, or an unreadable secret) is reported with a fixed reason
+  and no path (asserted in "stored relay credential (E4)").
 
 Both caps are asserted in `server.test.ts` ("tenant-admin scope hardening"); the
 address cases there use an allowed port so a refusal is always the address

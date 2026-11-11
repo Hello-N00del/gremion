@@ -33,23 +33,46 @@ function sameRelay(host: string, port: number, otherHost: string | undefined, ot
   return !!otherHost && host.trim().toLowerCase() === otherHost.trim().toLowerCase() && port === otherPort
 }
 
+/** Why the stored login could not be used. A fixed reason, never the error text. */
+class StoredLoginError extends Error {
+  constructor(readonly reason: 'incomplete' | 'secret-unreadable', readonly code?: string) {
+    super(reason)
+  }
+}
+
+/** The error code of a failed secret read when it is a plain token; never the message. */
+function safeErrorCode(err: unknown): string | undefined {
+  const code = err instanceof Error ? (err as Error & { code?: unknown }).code : undefined
+  return typeof code === 'string' && /^[A-Z][A-Z0-9_]{1,31}$/.test(code) ? code : undefined
+}
+
+type StoredLogin = {
+  auth?: { user: string; pass: string }
+  /** A stored login exists but the target is not the relay it belongs to. */
+  withheld: boolean
+}
+
 /**
  * The stored relay login, if the tenant has one AND the target is the relay real
- * sending uses (tenant-mail.ts: registry host/port win over config.smtp). The
- * stored password is never attached to a host the admin merely typed: otherwise
- * the test button would hand the relay password to any reachable server.
- * Throws when the stored login is present but unreadable.
+ * sending uses. The relay is named by the registry host only: the registry is
+ * written by the platform operator, whereas config.smtp.host is typed by the
+ * tenant admin (Settings -> E-Mail), so a login must never follow that host. The
+ * port is the registry's, else config.smtp's, as in tenant-mail.ts (it is limited
+ * to the SMTP ports and cannot redirect the login to another server).
+ * Throws StoredLoginError when the stored login is present but unusable.
  */
-function storedLogin(host: string, port: number): { user: string; pass: string } | undefined {
+function storedLogin(host: string, port: number): StoredLogin {
   const svc = getTenant().services?.smtp
-  if (!svc?.passwordRef) return undefined
-  const cfg = readConfig().smtp
-  const realHost = svc.host ?? cfg?.host
-  const realPort = svc.port ?? cfg?.port
-  if (!sameRelay(host, port, realHost, realPort)) return undefined
+  if (!svc?.passwordRef) return { withheld: false }
+  const realPort = svc.port ?? readConfig().smtp?.port
+  if (!svc.host || !sameRelay(host, port, svc.host, realPort)) return { withheld: true }
   // Same rule as tenant-mail.ts: a passwordRef without a user fails closed.
-  if (!svc.user) throw new Error('stored login incomplete')
-  return { user: svc.user, pass: resolveSecret(svc.passwordRef) }
+  if (!svc.user) throw new StoredLoginError('incomplete')
+  try {
+    return { auth: { user: svc.user, pass: resolveSecret(svc.passwordRef) }, withheld: false }
+  } catch (err) {
+    throw new StoredLoginError('secret-unreadable', safeErrorCode(err))
+  }
 }
 
 function failure(error: string) {
@@ -57,7 +80,7 @@ function failure(error: string) {
 }
 
 /** German, user-facing text for a failed send; the password is scrubbed from any raw text. */
-function describeSendFailure(err: unknown, secrets: string[], usedLogin: boolean): string {
+function describeSendFailure(err: unknown, secrets: string[], usedLogin: boolean, withheld: boolean): string {
   const code = err instanceof Error ? (err as Error & { code?: string }).code : undefined
   const raw = err instanceof Error ? err.message : 'Unbekannter Fehler'
   if (code === 'EAUTH') {
@@ -67,7 +90,10 @@ function describeSendFailure(err: unknown, secrets: string[], usedLogin: boolean
     return (
       'Der Mailserver hat die Verbindung unerwartet geschlossen. Häufigste Ursache: Er verlangt eine ' +
       'Anmeldung (SMTP-AUTH), und Benutzer oder Passwort fehlen oder sind falsch.' +
-      (usedLogin ? '' : ' Für diesen Test wurden keine Zugangsdaten gesendet.')
+      (usedLogin ? '' : ' Für diesen Test wurden keine Zugangsdaten gesendet.') +
+      (withheld
+        ? ' Die hinterlegte Anmeldung gilt nur für den vom Betreiber festgelegten Mailserver und wurde für diesen Host nicht verwendet.'
+        : '')
     )
   }
   let text = raw
@@ -122,6 +148,15 @@ export const POST: RequestHandler = async (event) => {
 
   const { host, port, user, password, from_address } = parsed.data
 
+  // A password the admin typed must never be dropped silently: "success" would then
+  // vouch for a credential that was never tried.
+  if (!user && password) {
+    return json(
+      { success: false, error: 'Zum eingegebenen Passwort fehlt der Benutzer.' },
+      { status: 400 },
+    )
+  }
+
   // TASK-042 R28: SMTP ports only, decided before any DNS lookup or socket.
   if (!isAllowedSmtpPort(port, env.SMTP_TEST_ALLOW_PRIVATE === '1')) {
     return json(
@@ -150,17 +185,25 @@ export const POST: RequestHandler = async (event) => {
   // Typed override wins; otherwise the stored relay login, the same one real
   // sending uses. Resolved only after the target guard has passed.
   let auth: { user: string; pass: string } | undefined
+  let fromStore = false
+  let withheld = false
   if (user) {
     auth = { user, pass: password }
   } else {
     try {
-      auth = storedLogin(host, port)
-    } catch {
-      // Deliberately no detail: the error text of a failed secret read carries
-      // the secret's path.
-      console.warn('[test-smtp] stored relay login could not be read')
+      const stored = storedLogin(host, port)
+      auth = stored.auth
+      withheld = stored.withheld
+      fromStore = !!auth
+    } catch (err) {
+      if (!(err instanceof StoredLoginError)) throw err
+      // Fixed reason and a plain error code only: the error text of a failed
+      // secret read carries the secret's path.
+      console.warn(`[test-smtp] stored relay login unusable (${err.reason}${err.code ? `:${err.code}` : ''})`)
       return failure(
-        'Das hinterlegte Passwort für den Mailserver konnte nicht gelesen werden. Bitte die Hinterlegung prüfen.',
+        err.reason === 'incomplete'
+          ? 'Die hinterlegte Anmeldung für den Mailserver ist unvollständig (Benutzer fehlt). Bitte die Hinterlegung prüfen.'
+          : 'Das hinterlegte Passwort für den Mailserver konnte nicht gelesen werden. Bitte die Hinterlegung prüfen.',
       )
     }
   }
@@ -173,6 +216,9 @@ export const POST: RequestHandler = async (event) => {
     name: smtpEhloName(),
     secure: port === 465,
     auth,
+    // The operator's relay secret only goes out on an upgraded connection: a
+    // stripped STARTTLS capability must fail the test, not leak the login.
+    ...(fromStore && port !== 465 ? { requireTLS: true } : {}),
     connectionTimeout: 5000,
     greetingTimeout: 5000,
     ...(target.servername ? { tls: { servername: target.servername } } : {}),
@@ -191,6 +237,6 @@ export const POST: RequestHandler = async (event) => {
     // the login it was given.
     const code = err instanceof Error ? (err as Error & { code?: string }).code : undefined
     console.warn(`[test-smtp] send failed${code ? ` (${code})` : ''}`)
-    return failure(describeSendFailure(err, [password, auth?.pass ?? ''], !!auth))
+    return failure(describeSendFailure(err, [password, auth?.pass ?? ''], !!auth, withheld))
   }
 }
