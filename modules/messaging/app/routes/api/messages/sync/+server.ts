@@ -2,6 +2,7 @@ import { error } from '@sveltejs/kit'
 import type { RequestEvent, RequestHandler } from '@sveltejs/kit'
 import { getMessagesBackend } from '$lib/server/messages/backend'
 import type { SessionUser } from '$lib/auth'
+import { nameSyncResponse, tryGetSenderNameResolver } from '$lib/server/messages/sender-names'
 
 function requireAuth(event: RequestEvent): SessionUser {
   const user = event.locals.user as SessionUser | undefined
@@ -33,6 +34,8 @@ export const GET: RequestHandler = async (event) => {
   }
 
   let since: string | undefined = event.url.searchParams.get('since') ?? undefined
+  // Resolved here, inside the request's tenant context, and reused by every snapshot of the stream.
+  const senderNames = tryGetSenderNameResolver()
 
   // Heartbeat timer — cleared on stream end or cancel.
   // Without this, the 30-second Synapse long-poll leaves the SSE connection
@@ -58,7 +61,7 @@ export const GET: RequestHandler = async (event) => {
           try {
             const syncResp = await mc.sync(matrixToken, since)
             since = syncResp.nextBatch
-            write(`data: ${JSON.stringify(syncResp)}\n\n`)
+            write(`data: ${JSON.stringify(await nameSyncResponse(syncResp, senderNames))}\n\n`)
           } catch (e) {
             if (clientGone) break
             // Observable, not silent. The previous bare `catch {}` discarded the

@@ -4,6 +4,7 @@ import { z } from 'zod'
 import { getMessagesBackend, type MatrixClientPort } from '$lib/server/messages/backend'
 import type { SessionUser } from '$lib/auth'
 import { mediaUrl } from '$lib/server/messages/media-url'
+import { withSenderNames } from '$lib/server/messages/sender-names'
 
 function requireAuth(event: RequestEvent): SessionUser {
   const user = event.locals.user as SessionUser | undefined
@@ -39,7 +40,10 @@ export const GET: RequestHandler = async (event) => {
   if (!joinedRooms.includes(roomId)) throw error(403, 'Not a member of this room')
 
   const from = event.url.searchParams.get('from') ?? undefined
-  const { messages, end } = await mc.getMessages(matrixToken, roomId, from)
+  const { messages: raw, end } = await mc.getMessages(matrixToken, roomId, from)
+  // The client returns the Matrix id as the display name; name each sender from the tenant's
+  // identity data (one lookup per sender, never throws).
+  const messages = await withSenderNames(raw)
 
   // Rewrite any mxc:// URLs to the proxy endpoint
   const rewritten = messages.map((m) => {
