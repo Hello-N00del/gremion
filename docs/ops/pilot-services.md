@@ -182,8 +182,9 @@ after `gremion-ui` is recreated with the token:
   retries a single unit.
 
 With nothing failed the step says so and changes nothing. A customer wired
-before this step existed shows the panel's warning until `wire` has run once
-more (it is idempotent).
+before this step existed is recognised by the relay `smtp` entry the same wire
+wrote; under another mail transport it shows the panel's warning until `wire`
+has run once more (it is idempotent).
 
 `wire` takes the host lock (`runtime/hostd.lock`, non-blocking: another host
 operation holding it is `busy`, exit 3), and when run under `sudo` it hands each

@@ -117,6 +117,12 @@ vi.mock('$lib/server/modules', async (orig) => {
 vi.mock('$lib/server/auth', () => ({
   evidenceFromRequest: async () => ({ token: 'x'.repeat(120), acr: 'loa2', authTime: new Date(), sessionAt: new Date() }),
 }))
+/** What the registry says about the wiring of the customer: wired, not wired, or null when it cannot be read (wiring.test.ts covers the read). */
+let wired: boolean | null = true
+vi.mock('./wiring', async (orig) => {
+  const real = await orig<typeof import('./wiring')>()
+  return { ...real, servicesWired: async () => wired }
+})
 
 const { load, actions } = await import('./+page.server')
 // The host's own verifier, loaded at run time from the package source: the panel image has no such
@@ -154,6 +160,7 @@ beforeEach(() => {
   statusError = null
   submitError = null
   noPlatformDb = false
+  wired = true
 })
 
 describe('the member section is shown only when an action can be queued', () => {
@@ -233,6 +240,54 @@ describe('seedVertical', () => {
     expect(res.status).toBe(400)
     expect(res.data.memberError).toMatch(/Vertikale/)
     expect(submits).toHaveLength(0)
+  })
+})
+
+// The creation order is create, wire (gremion-services wire on the host), seed. Seeding a customer whose services are
+// not wired yet leaves every unit's chat room failed until the wire retries it, so the panel says so; it does not
+// forbid it (the wire repairs it afterwards), and the normal order is untouched.
+describe('seedVertical for a customer whose services are not wired yet', () => {
+  it('the section carries the warning, naming the order, while the actions stay on', async () => {
+    wired = false
+    const d = await loadFor()
+    expect(d.memberSection.canAct).toBe(true)
+    expect(d.memberSection.wiringWarning).toMatch(/anlegen.*verbinden.*einspielen/s)
+  })
+  it.each([['wired', true], ['unknown (the registry cannot be read: nothing is claimed)', null]] as const)('a customer that is %s gets no warning in the section', async (_n, state) => {
+    wired = state
+    expect((await loadFor()).memberSection.wiringWarning).toBeNull()
+  })
+  it('the seed action warns AND queues the request: the order is named, the vertical is still seeded', async () => {
+    wired = false
+    const res = await act('seedVertical', { vertical: 'stura' })
+    expect(res.memberWarning).toMatch(/anlegen.*verbinden.*einspielen/s)
+    expect(res.memberWarning).toContain('wire')
+    expect(submits).toHaveLength(1)
+    const [kind, slug, args] = submits[0]!
+    expect([kind, slug]).toEqual(['seed_vertical', 'proof-z'])
+    expect(verdict('seed_vertical', args)).toMatchObject({ verdict: 'ok' })
+  })
+  it('the normal order is unaffected: a wired customer is seeded with the redirect and no warning', async () => {
+    wired = true
+    await expect(act('seedVertical', { vertical: 'stura' })).rejects.toMatchObject({ status: 303 })
+    expect(submits).toHaveLength(1)
+  })
+  it('an unreadable registry does not stop the seed or warn: it redirects as before', async () => {
+    wired = null
+    await expect(act('seedVertical', { vertical: 'stura' })).rejects.toMatchObject({ status: 303 })
+    expect(submits).toHaveLength(1)
+  })
+  it('a refused request (a request is already open, 409) shows the refusal, not the warning, and writes nothing', async () => {
+    wired = false
+    rows = [row({ state: 'running', kind: 'reconcile' })]
+    const res = await act('seedVertical', { vertical: 'stura' })
+    expect(res.status).toBe(409)
+    expect(res.data.memberWarning).toBeUndefined()
+    expect(submits).toHaveLength(0)
+  })
+  it('the import actions are not seed actions: no warning, the redirect as before', async () => {
+    wired = false
+    await expect(act('importValidate', { vertical: 'stura', list: csvFile(CSV) })).rejects.toMatchObject({ status: 303 })
   })
 })
 
