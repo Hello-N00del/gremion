@@ -7,6 +7,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Sql } from '@gremion/db'
 import type { TenantContext } from '$lib/server/tenant/context'
+import type { AuditEntry } from '$lib/server/audit-db'
 import { CouncilNotConfigured } from '$lib/server/module-switch/council-db'
 import type { SwitchRow } from '$lib/server/module-switch/store'
 import type { ItemState, KarenzItem, KarenzItemRow, StepPatch, StepRow } from './store'
@@ -20,6 +21,7 @@ import {
   _resetKarenzPassForTests,
   _resetKarenzStagesToDefaultsForTests,
   defaultHasLocalEvidence,
+  KARENZ_SERVICE_USER,
   pickStartedActor,
   registerKarenzStages,
   runKarenzPass,
@@ -924,6 +926,128 @@ describe('the final day: the dry run and the real thing', () => {
     await pass()
     expect(a.calls.filter((c) => c === 'finalize:live')).toHaveLength(2)
     expect(rg.reports.filter((r) => r.mark)).toHaveLength(1)
+  })
+
+  describe('the module.karenz.finalized audit entry', () => {
+    const FINALIZED = 'module.karenz.finalized'
+    const finalizedAudits = () => rg.audits.filter((a) => a.field === FINALIZED)
+
+    it('is written exactly once when every participant final step succeeded, names the module, the karenz and the counts, and no person', async () => {
+      rg.rows = [due({ state: 'finalizing', finalMode: 'live' })]
+      await rg.store.markStep(null, K1, STEP.retained, { state: 'done' })
+      part(rg, 'votes', { deleted: { polls: 2 } })
+      await pass()
+      const audits = finalizedAudits()
+      expect(audits).toHaveLength(1)
+      expect(audits[0]!.newValue).toContain(`module=votes`)
+      expect(audits[0]!.newValue).toContain(`karenz=${K1}`)
+      expect(audits[0]!.newValue).toContain('votes.polls=2')
+      expect(audits[0]!.userId).toBe(KARENZ_SERVICE_USER)
+      expect(audits[0]!.oldValue).toBeNull()
+      expect(stepOf(K1, STEP.finalAudit)?.state).toBe('done')
+      expect(rg.rows[0]!.tenantDoneAt).not.toBeNull()
+    })
+
+    it('is not written a second time by a later pass over the same row', async () => {
+      rg.rows = [due({ state: 'finalizing', finalMode: 'live' })]
+      await rg.store.markStep(null, K1, STEP.retained, { state: 'done' })
+      part(rg, 'votes', { deleted: { polls: 2 } })
+      await pass()
+      const before = rg.audits.length
+      rg.advance(5 * MIN)
+      await pass()
+      rg.advance(5 * MIN)
+      await pass()
+      expect(finalizedAudits()).toHaveLength(1)
+      expect(rg.audits).toHaveLength(before)
+    })
+
+    it('is written after the participants final steps', async () => {
+      rg.rows = [due({ state: 'finalizing', finalMode: 'live' })]
+      await rg.store.markStep(null, K1, STEP.retained, { state: 'done' })
+      part(rg, 'votes')
+      const origWrite = rg.deps().writeAudit!
+      const deps = { ...rg.deps(), writeAudit: async (e: AuditEntry) => {
+        if (e.field === FINALIZED) rg.order.push('audit:finalized')
+        return origWrite(e)
+      } }
+      await runKarenzPass(tenant, deps)
+      expect(rg.order.indexOf('votes:finalize:live')).toBeGreaterThanOrEqual(0)
+      expect(rg.order.indexOf('audit:finalized')).toBeGreaterThan(rg.order.indexOf('votes:finalize:live'))
+    })
+
+    it('is not written while a participant final step is still failing', async () => {
+      rg.rows = [due({ state: 'finalizing', finalMode: 'live' })]
+      await rg.store.markStep(null, K1, STEP.retained, { state: 'done' })
+      part(rg, 'votes', { failFinalize: () => new Error('boom') })
+      await pass()
+      expect(finalizedAudits()).toEqual([])
+      expect(stepOf(K1, STEP.finalAudit)).toBeUndefined()
+    })
+
+    it('is not written when the finalize is refused (retained copies not done, or a failed publish step)', async () => {
+      rg.rows = [due({ state: 'finalizing', finalMode: 'live' })]
+      part(rg, 'votes')
+      await pass()
+      expect(finalizedAudits(), 'retained not done').toEqual([])
+
+      await rg.store.markStep(null, K1, STEP.retained, { state: 'done' })
+      await rg.store.markStep(null, K1, STEP.publish('files', 'rec1'), { state: 'failed', error: 'Error (HTTP 503)' })
+      rg.advance(5 * MIN)
+      await pass()
+      expect(finalizedAudits(), 'publish step failed').toEqual([])
+      expect(stepOf(K1, STEP.finalAudit)).toBeUndefined()
+    })
+
+    it('is not written for a row whose deletion mode is not live', async () => {
+      rg.rows = [due({ state: 'finalizing', finalMode: 'dry' })]
+      await rg.store.markStep(null, K1, STEP.retained, { state: 'done' })
+      part(rg, 'votes')
+      await pass()
+      expect(finalizedAudits()).toEqual([])
+    })
+
+    it('a failing audit write records the audit step as failed, does not reach the final step in that pass, and is retried by the next pass', async () => {
+      rg.rows = [due({ state: 'finalizing', finalMode: 'live' })]
+      await rg.store.markStep(null, K1, STEP.retained, { state: 'done' })
+      const a = part(rg, 'votes', { deleted: { polls: 1 } })
+      let broken = true
+      const deps = { ...rg.deps(), writeAudit: async (e: AuditEntry) => {
+        if (e.field === FINALIZED && broken) throw new Error('audit store down')
+        rg.audits.push(e)
+      } }
+      const out = await runKarenzPass(tenant, deps)
+      expect(out.failed).toBeGreaterThan(0)
+      expect(stepOf(K1, STEP.finalAudit)?.state).toBe('failed')
+      expect(stepOf(K1, STEP.final), 'the final step is not reached').toBeUndefined()
+      expect(rg.reports.filter((r) => r.mark)).toEqual([])
+      expect(errorsOf(STEP.finalAudit)).toHaveLength(1)
+
+      broken = false
+      rg.advance(5 * MIN)
+      await runKarenzPass(tenant, deps)
+      expect(finalizedAudits()).toHaveLength(1)
+      expect(stepOf(K1, STEP.finalAudit)?.state).toBe('done')
+      expect(rg.reports.filter((r) => r.mark)).toHaveLength(1)
+      expect(a.calls.filter((c) => c === 'finalize:live'), 'the participant is not run again').toHaveLength(1)
+    })
+
+    it('a tenant_done report that fails is retried without a second audit entry', async () => {
+      rg.rows = [due({ state: 'finalizing', finalMode: 'live' })]
+      await rg.store.markStep(null, K1, STEP.retained, { state: 'done' })
+      part(rg, 'votes')
+      rg.reportFails.times = 1
+      await pass()
+      expect(rg.reports.filter((r) => r.mark)).toEqual([])
+      rg.advance(5 * MIN)
+      await pass()
+      expect(rg.reports.filter((r) => r.mark)).toHaveLength(1)
+      expect(finalizedAudits()).toHaveLength(1)
+    })
+
+    it('the step name is a valid ledger and event-log step name', () => {
+      expect(STEP.finalAudit).toMatch(/^[a-z][a-z0-9:_-]{0,59}$/)
+    })
   })
 })
 
