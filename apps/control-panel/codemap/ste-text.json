@@ -80,8 +80,8 @@
     },
     "area:docker/collabora@L0": {
       "title": "Collabora container build",
-      "what": "This folder holds one Dockerfile. It builds the Collabora image for the office editor. The base is the official Collabora image, pinned by digest. The recipe then upgrades one system library. The library decodes compressed web answers, and its old version has a known security fault.",
-      "why": "Collabora fetches documents and linked files over HTTP, so it uses this library. The upgrade closes the fault. The recipe calls the fix a stopgap, because the Collabora line in use has no new release.",
+      "what": "This folder holds one Dockerfile. It builds the Collabora image for the office editor. The base is the official Collabora image, pinned by digest. The recipe adds nothing to it. The base image has no shell and no package tool, so nothing can be installed in it.",
+      "why": "The old Collabora line needed a patched system library, because its old version had a known security fault. The new line does not contain that library, so the fault is not present. The recipe keeps the notes on this check for the next upgrade.",
       "leadsTo": "The compose file builds the service collabora from this folder. Nextcloud uses the service to let a person edit a document in the browser."
     },
     "area:docker/element-call@L0": {
