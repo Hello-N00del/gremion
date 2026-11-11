@@ -227,11 +227,10 @@ function tenantContext(who: Who): TenantContext {
 /** Everything the board owns in one database, in a stable order. Read over the admin connection. */
 async function fingerprint(who: Who): Promise<string> {
   const sql = admin[who]
-  const boards = await sql`SELECT id, org_unit_id, name, archived FROM board ORDER BY id`
-  const stacks = await sql`SELECT id, board_id, name, sort_order FROM stack ORDER BY id`
-  const cards = await sql`
-    SELECT id, stack_id, title, description, assignee_keycloak_id, sort_order, protocol_action_item_id, created_by
-    FROM card ORDER BY id`
+  // every column, so a write to any of them (due date, label, timestamps) changes the fingerprint
+  const boards = await sql`SELECT * FROM board ORDER BY id`
+  const stacks = await sql`SELECT * FROM stack ORDER BY id`
+  const cards = await sql`SELECT * FROM card ORDER BY id`
   return JSON.stringify({ boards, stacks, cards })
 }
 
@@ -347,7 +346,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   let first: unknown
-  const step = async (fn: () => Promise<unknown> | unknown) => {
+  const step = async (fn: () => unknown) => {
     try {
       await fn()
     } catch (e) {
@@ -537,6 +536,11 @@ describe('board: two customers on real PostgreSQL', () => {
         await expect(
           runWithTenant(ctx[atk], () => backend.createStack(seed[vic].boardId, { name: 'intrusion-8', order: 9 })),
         ).rejects.toBeTruthy()
+        // the rejection must be the refusal, not an unrelated failure: no such stack exists in either database
+        for (const who of ['A', 'B'] as const) {
+          const rows = await admin[who]<{ n: string }[]>`SELECT count(*)::text AS n FROM stack WHERE name = 'intrusion-8'`
+          expect(rows[0].n).toBe('0')
+        }
       }
     })
 
@@ -564,7 +568,7 @@ describe('board: every data handle comes from getDb()', () => {
     readdirSync(dir, { withFileTypes: true }).flatMap((e) =>
       e.isDirectory() ? walk(path.join(dir, e.name)) : [path.join(dir, e.name)],
     )
-  const sources = dirs.flatMap(walk).filter((f) => /\.(ts|svelte)$/.test(f) && !/\.test\.ts$/.test(f))
+  const sources = dirs.flatMap(walk).filter((f) => /\.(ts|svelte)$/.test(f) && !f.endsWith('.test.ts'))
 
   it('the scan sees the board code', () => {
     expect(sources.some((f) => f.endsWith('board-db.ts'))).toBe(true)

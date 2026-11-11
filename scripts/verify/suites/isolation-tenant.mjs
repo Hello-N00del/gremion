@@ -24,6 +24,11 @@
 // physically separate Postgres databases (gremion-ui's integration config), not
 // against a recording fake. The board LEAF (BOARD_BACKEND=service, test
 // environment only) is not what this case proves.
+// The board case states GREMION_PRODUCTION_STACK=none for the databases it creates
+// itself, which replaces the production-stack guard for that case: the safety rests
+// on the server being a throwaway one (loopback, not 5432, see throwawayServerProblem;
+// the producer starts one in its own network namespace). Point the variable only at
+// a server created for the run, never at a loopback port that forwards to a real one.
 //
 // Every part is judged by lib/guard.mjs (combineParts) like any other suite, so
 // zero collected, one skip, a missing tool and an unparseable report all fail it.
