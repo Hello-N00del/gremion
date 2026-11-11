@@ -1,11 +1,13 @@
 # Gremion Documentation Index
 
 **Gremion** is an open, self-hostable digital-governance kernel. This `docs/` tree
-covers the **governance kernel only** — the substrate (identity, multi-tenancy, the
-governance domain, the invariant hooks) and the module SDK. Feature modules
-(elections, newsletter, calendar, files, messages, board, users,
-finance, content, vault, handover) and ready-made verticals live in their own
-repositories — one per module — and carry their own docs.
+covers the **governance kernel** — the substrate (identity, multi-tenancy, the
+governance domain, the invariant hooks), the module SDK, and how the stack is built,
+tested, deployed and operated. The feature modules in this tree (board, calendar,
+content, elections, files, finance, handover, messaging, publishing, vault, votes)
+live under [`modules/`](../modules); each carries its own `README.md`, and
+[modules.md](./modules.md) lists them. Two verticals (`stura`, `municipal`) are
+carried as data under [`verticals/`](../verticals).
 
 ## Start here
 
@@ -38,15 +40,18 @@ following. Update the German text, then re-record the hash with
 
 | Document | Purpose |
 |----------|---------|
-| [architecture.md](./architecture.md) | The kernel technical layer: the 7-service governance stack, OIDC/SSO flow, control-plane + per-tenant DB layout, the module SDK + dependency-direction boundary enforcer, the `getDb()` pool, the group-helper auth model, the nav schema |
+| [architecture.md](./architecture.md) | The kernel technical layer: the two-tier stack (state project, app tier), OIDC/SSO flow, control-plane + platform + per-tenant DB layout, the module SDK + dependency-direction boundary enforcer, the `getDb()` pool, the group-helper auth model, the nav schema, the NATS wire-subject root |
 | [auth.md](./auth.md) | Keycloak OIDC, the role/capability/group model, page-access gating, nav `needs[]` vs server-side enforcement, LoA/ACR step-up |
 | [compliance.md](./compliance.md) | GDPR posture: per-tenant isolation, the retention concept, the tenant-delete crypto-shred pipeline, audit-log retention |
 | [log-retention-policy.md](./log-retention-policy.md) | The Vector log pipeline, retention windows, IP pseudonymisation |
+| [compliance/licence-register.md](./compliance/licence-register.md) | The third-party licence register: what each bundled system's own licence file says, with the commit it was read at |
+| [compliance/retention-catalogue.md](./compliance/retention-catalogue.md) | DRAFT: the retention-window catalogue, the input to the Löschkonzept |
+| [compliance/vendor-mail-licence.md](./compliance/vendor-mail-licence.md) | The licence position of the vendor mail server the distribution runs |
 | [compliance/controller-processor-split.md](./compliance/controller-processor-split.md) | DRAFT: how GDPR controller / processor roles are intended to fall for a self-hosted install and for a hosted control plane |
 | [security/test-smtp-guard.md](./security/test-smtp-guard.md) | The outbound target guard on `/api/setup/test-smtp`: canonical-bytes address predicate, resolve-once, the `SMTP_TEST_ALLOW_PRIVATE` range opt-in and its carve-outs, DNS classification — and the named residuals |
 | [pilot/poll-usage/README.md](./pilot/poll-usage/README.md) | The two open-poll forms of the pilot, the no-anonymity and no-eligibility wording rule, and how poll usage is measured from go-live |
 | [modules.md](./modules.md) | The modules under `modules/`: purpose, support status, external services needed, and a link to each module's README |
-| [pilot/module-defaults.md](./pilot/module-defaults.md) | The intended pilot module set (votes only), the repository checks behind it, what is not claimed for the running system (044-b), and the hand-offs |
+| [pilot/module-defaults.md](./pilot/module-defaults.md) | The intended pilot module set (votes, calendar, content, publishing, files and messaging), the repository checks behind it, what is not claimed for the running system (044-b), and the hand-offs |
 
 ## Develop
 
@@ -55,8 +60,9 @@ following. Update the German text, then re-record the hash with
 | [DEVELOPMENT.md](./DEVELOPMENT.md) | Local development against the governance-only stack |
 | [ENVIRONMENT.md](./ENVIRONMENT.md) | Reference for the kernel environment variables |
 | [LOCAL_TESTING.md](./LOCAL_TESTING.md) | Local manual/smoke testing of the governance surfaces |
-| [TESTING.md](./TESTING.md) | Automated test strategy: svelte-check + tsc, vitest, the boundary backstop, the registry golden test |
+| [TESTING.md](./TESTING.md) | Automated test strategy: the `make verify` gate, svelte-check + tsc, vitest, the boundary backstop, the registry golden test, the BATS suites |
 | [TESTING-UI.md](./TESTING-UI.md) | UI/Playwright testing of the governance surfaces |
+| [lint.md](./lint.md) | Why `.oxlintrc.json` is set the way it is (JSON has no comments) |
 
 ## Operate & deploy
 
@@ -68,8 +74,17 @@ following. Update the German text, then re-record the hash with
 | [ops/host-tooling.md](./ops/host-tooling.md) | The `/opt/gremion` host tooling: the per-project env contract, every `gremion-*` command, the restricted deploy channel and the `noop` dry-run |
 | [ops/runbook/README.md](./ops/runbook/README.md) | The four-procedure operations runbook: install, upgrade, backup and restore (supersedes ops/restore-runbook.md) |
 | [ops/go-live-gate.md](./ops/go-live-gate.md) | The go-live gate: the eight conditions an operator-run instance must prove against the running system before it may hold real users or real personal data |
-| [ops/release-1-waivers.md](./ops/release-1-waivers.md) | The six release-1 waivers (P4): what is waived, which §L item and gate it suspends, who lifts it, and the named residuals |
+| [ops/release-1-waivers.md](./ops/release-1-waivers.md) | The release-1 waivers (P4): the four still waived, which §L item and gate each suspends, who lifts it, the dated list of lifted ones, and the named residuals |
 | [deployment-architecture.md](./deployment-architecture.md) | The deployment shape: two tiers, two colours, networks, the release tree, deploy/switch/rollback and verification |
+| [ops/pooled-stack-layout.md](./ops/pooled-stack-layout.md) | The pooled stack: which service sits in which compose project and network, the container limits and the `tenant-create` environment contract |
+| [ops/topology.md](./ops/topology.md) | The deployment topology record (2026-09-24, amended 2026-10-02) |
+| [ops/pilot-services.md](./ops/pilot-services.md) | The services a single-customer host runs beside the kernel: Nextcloud, Collabora, Matrix, LiveKit, Element Call and the three module leaves |
+| [ops/isolation-evidence.md](./ops/isolation-evidence.md) | Producing the cross-customer isolation evidence a module enable gate reads, and what a pass does and does not mean |
+| [ops/release-cadence.md](./ops/release-cadence.md) | The release cadence policy |
+| [ops/release-signing.md](./ops/release-signing.md) | Signing a first-party image: the manual cosign step after local verify passes |
+| [ops/vendor-patch-notice.md](./ops/vendor-patch-notice.md) | The procedure for security-patch notices on bundled third-party systems |
+| [ops/postgres-major.md](./ops/postgres-major.md) | The pinned PostgreSQL major for release 1 and why |
+| [runbooks/dead-letter.md](./runbooks/dead-letter.md) | Dead letters: find, replay, requeue and rebuild with the `events` CLI |
 | [design-specs/spec-b-kernel-portback-relocatability-release-design.md](./design-specs/spec-b-kernel-portback-relocatability-release-design.md) | Spec B (approved 2026-09-15): kernel port-back, relocatability, release supply chain, the unit registry |
 | [design-specs/spec-d-module-sdk-split-assembler-verticals-design.md](./design-specs/spec-d-module-sdk-split-assembler-verticals-design.md) | Spec D (approved 2026-09-15): module SDK, one repo per module, assembler resolution, the StuRa vertical |
 | [runbooks/tenant-edge.md](./runbooks/tenant-edge.md) | Multi-tenancy edge: Traefik `x-forwarded-host` tenant resolution |
@@ -86,18 +101,25 @@ following. Update the German text, then re-record the hash with
 | [playbooks/extract-a-service.md](./playbooks/extract-a-service.md) | The service-extraction playbook over `@gremion/ports` (branch-by-abstraction → ACL → outbox → flag-flip → decommission → dual-deploy → rollback) |
 | [playbooks/nats-root-cutover.md](./playbooks/nats-root-cutover.md) | Migrating an existing deployment's JetStream streams to the `gremion` wire-subject root — a hard cutover, not a dependency bump |
 
-## Decision records
+## Decision records and history
 
 | Document | Purpose |
 |----------|---------|
-| [adr/2026-03-27-user-management.md](./adr/2026-03-27-user-management.md) | Identity/user-management decision (kernel identity vs the module admin UI) |
+| [architecture/decision-log.md](./architecture/decision-log.md) | The dated architecture decision log (`DL-001` onward); new decisions are appended here |
+| [adr/2026-03-27-user-management.md](./adr/2026-03-27-user-management.md) | Identity/user-management decision (kernel identity vs the module admin UI); the legacy ADR that the decision log is to absorb |
+| [plan/release-1-delta.md](./plan/release-1-delta.md) | The release-1 delta record (dated 2026-09-24, amended 2026-10-02): the verdict table, the paused and dropped units and the harvest checklist; a dated snapshot, not a current status |
+| [ops/extraction-source.md](./ops/extraction-source.md) | The frozen extraction source the in-tree modules were copied from |
+| [ops/migration-portback-2026-09-15.md](./ops/migration-portback-2026-09-15.md) | The ten migrations ported back into the kernel on 2026-09-15 |
+| [ops/shell-port-list.md](./ops/shell-port-list.md) | The shared-shell work ported into the kernel, one row per port |
+| [ops/task-205-ledger.md](./ops/task-205-ledger.md) | The ledger of the module in-process halves moved in-tree |
 
 ---
 
 > **On the carve.** This kernel was carved out of the StuRaOS monorepo. The carve
 > regenerated code (manifests, migrations, compose, realm); these docs were then
 > rewritten to the governance kernel, and the product-only material (the
-> full-product design bundle, historical plans/specs/reviews, and the module
-> runbooks and ADRs) was removed — it stays with the product vertical and with the
-> module repositories. Some pages here are still being revised. See
-> [`KNOWN_ISSUES.md`](../KNOWN_ISSUES.md) for the remaining carve residuals.
+> full-product design bundle, historical plans/specs/reviews) was removed — it
+> stays with the product vertical. The module sources and their
+> READMEs were later copied in under [`modules/`](../modules). Some pages here
+> are still being revised. See [`KNOWN_ISSUES.md`](../KNOWN_ISSUES.md) for the
+> remaining carve residuals.

@@ -31,6 +31,8 @@ Each deployment is a **vertical** that layers config, i18n, seed data, and theme
 
 - **StuRaOS** — the first reference deployment, a German student council instance (the elected-assembly + majority-vote + four-eyes-finance preset). It lives in a private repository; the deployment it ran on has been retired.
 - **Musterstadt** — a municipal *Gemeinderat* vertical (finance off, municipal vocabulary, three *Fraktionen*), the proof that Gremion is a reusable framework rather than StuRaOS-with-tenancy.
+
+This tree carries two verticals as data under [`verticals/`](../verticals): `stura` and `municipal` (see [`verticals/README.md`](../verticals/README.md)).
 - A generic **demo** tenant.
 
 **In scope:** person-membered bodies modelled as a strict tree. **Out of scope** (a separate sibling altitude): the token-weighted / self-executing / owned / sovereign quadrant — DAOs, corporations, sovereign bodies.
@@ -66,12 +68,12 @@ The kernel ships in-tree:
 - **Governance domain** (the flagship governance module) — committees/members, the org-unit tree, protocols, resolutions/*Beschlüsse*, the public portal.
 - **Governance invariants** (kernel hooks, behind no flag) — **INV-1** the hash-chained audit log and **INV-5** the quorum / decision-rule engine; tenant isolation is also a kernel invariant hook.
 - **Module SDK** — manifest-driven registration plus runtime registries and the boundary enforcer (see below).
-- **Shared packages** — `@gremion/db` (pure, zero feature references) and `@gremion/ports` (`BrokerPort` over NATS/JetStream, `TracerPort`, anti-corruption callbacks, transactional outbox + saga).
+- **Shared packages** — `@gremion/db` (the Postgres client factory and shared row types, zero feature references) and `@gremion/ports` (`BrokerPort` over NATS/JetStream, `TracerPort`, the erasure-hook contract), plus the tenancy, provisioning, event (outbox, inbox, relay, dead letters) and broker-auth packages listed in [architecture.md](./architecture.md).
 - **Config / brand** and the **admin shell**.
 
-**Manifests actually shipped:** exactly two. `coreManifest` (id `core`, `toggleable: false`; the minimal kernel shell: dashboard, settings, systemstatus) and `governanceManifest` (id `governance`, `toggleable: false`, because *the Gremion kernel is a governance product*: members, committees, portal, protokolle, beschlüsse). `index.generated.ts` is codegen-built and byte-pinned by `registry.test.ts`; no finance/voting/content/calendar/files/messaging manifest is present.
+**Kernel manifests:** exactly two. `coreManifest` (id `core`, `toggleable: false`; the minimal kernel shell: dashboard, settings, systemstatus) and `governanceManifest` (id `governance`, `toggleable: false`, because *the Gremion kernel is a governance product*: members, committees, portal, protokolle, beschlüsse). The feature modules under `modules/` keep their manifests in their own trees; the build overlays the enabled ones onto `gremion-ui/src`, and in the default build `index.generated.ts` registers ten manifests (`core`, `governance`, `elections`, `votes`, `content`, `newsletter`, `calendar`, `files`, `messages`, `board`), codegen-built and byte-pinned by `registry.test.ts`. `finance` and `vault` are listed in `modules/disabled.json` and contribute none.
 
-**Governance-only stack (7 services):** `postgres`, `keycloak`, `gremion-ui`, `gremion-public`, `legal`, `vector`, `mailpit` — plus `traefik` and `docker-socket-proxy` under the `production` profile, and `pgbouncer` / `cloudflared` / `fallback` from `docker-compose.prod.yml`. Traefik's `x-forwarded-host` resolver is load-bearing for tenancy. The full StuRaOS product was 19 services.
+**Stack:** two tiers (see [architecture.md](./architecture.md) and [ops/pooled-stack-layout.md](./ops/pooled-stack-layout.md)). The state project runs `postgres`, `governance-postgres`, `nats`, `keycloak`, `legal` and `vector`, a PostgreSQL server per module and per collaboration service under their compose profiles, and, under the `production` profile, `traefik`, `docker-socket-proxy` and `fallback`, with `pgbouncer` from `docker-compose.prod.yml`; `mailpit` is dev-only. The app tier runs `gremion-ui`, `gremion-public`, `control-panel`, `kernel-api` and the module leaf services in two colours. Traefik's `x-forwarded-host` resolver is load-bearing for tenancy.
 
 ## Governance charter & invariants
 
@@ -94,7 +96,7 @@ The honest spine is **4 fixed invariants + 3 strategy slots** (an adversarial st
 
 The **meta-model is 7 primitives**: Body, Mandate, Franchise, Decision-Rule, Resolution, Resource-Commitment Guard, and Accountability+Contestability. Each is a generalization of an existing StuRaOS table, so adoption needs no schema rip-out.
 
-**Implementation notes.** The INV-5 quorum gate enforces **at adoption** (protocol publish), not at draft resolution-write — gating drafts returned 422 to the live UI. The decision rule is fixed at creation (a PATCH cannot change the required majority). The audit chain is hash-chained with an advisory-lock-serialized `BEFORE INSERT` trigger and a `verifyAuditChain` check; a known residual is that a self-contained chain cannot detect **tail truncation** (mid-chain edits *are* detected), deferred to a Phase-3 external-anchor follow-up.
+**Implementation notes.** The INV-5 quorum gate enforces **at adoption** (protocol publish), not at draft resolution-write — gating drafts returned 422 to the live UI. The decision rule is fixed at creation (a PATCH cannot change the required majority). The audit chain is hash-chained with an advisory-lock-serialized `BEFORE INSERT` trigger and a `verifyAuditChain` check; a known residual is that a self-contained chain cannot detect **tail truncation** (mid-chain edits *are* detected), deferred to a Phase-3 external-anchor follow-up. Contestability and recall ship in the kernel: the schema (`0055`, `0056`), the resolution-challenge routes (`/api/protocols/resolutions/[resId]/challenges`) and the mandate-revoke route (`/api/governance/committees/[id]/roles/[roleId]/revoke`), with the second-locus strategy seam in the runtime registry; the provenance of these ports is in [`ops/shell-port-list.md`](./ops/shell-port-list.md).
 
 **Theory anchor:** Weber (legal-rational office), Montesquieu (separation), principal-agent (terminable delegation), and Pettit (non-domination / contestability), with Ostrom as the empirical validator. German parliamentary practice is the **reference preset, not the core**. Ratified scope cut: a strict tree body model only (no polycentric/DAG — a documented hard fork).
 
@@ -106,7 +108,7 @@ A **module** = an in-kernel **manifest** (pages, route-gates, capabilities, a re
 
 - **Manifest-driven, zero-shared-edit.** Nav is composed via `composeNavSchema(baseNavSchema, MODULE_MANIFESTS)`; `config.modules` is a dynamic `Record<string, boolean>`. A net-new toggleable module needs no edits to shared files — page-access, route-prefixes, capabilities, nav, realm, config-default, and migration catch-up are all manifest-keyed.
 - **Composition roots are codegen barrels.** Prebuild scripts scan the filesystem (`manifests/*.ts`, `lib/server/*/register.server.ts`, `migrations/*.sql`) to generate the module registry, server-init, and migration manifest. Adding or removing a module re-runs codegen rather than hand-editing import lists.
-- **Runtime-registry seam.** `lib/server/modules/runtime-registry.ts` plus per-module `register.server.ts` (loaded via the codegen `server-init.generated` barrel) invert server-init, tenant-evict, provisioning, and dashboard-counts so the kernel never statically imports a module.
+- **Runtime-registry seam.** `lib/server/modules/runtime-registry.ts` plus per-module `register.server.ts` (loaded via the codegen `server-init.generated` barrel) invert server-init, tenant-evict, provisioning, request-time data providers, the protocol document port, setup health probes, role-group grants, decision-rule and second-locus strategies and erasure hooks, so the kernel never statically imports a module.
 - **Auto-discovery is the open-core hinge.** A private module's manifest cannot be hardcoded in the public kernel — that would leak the module's existence and shape. So the kernel ships the SDK plus a discovery seam and private modules bring their own manifest.
 - **The boundary enforcer.** A comprehensive `boundary/kernel-clean.test.ts` walks every kernel file, resolves `$lib/*` and relative specifiers to canonical paths, skips module-owned and generated dirs, and asserts every import is a subset of a documented ALLOW map — proven non-vacuous by injecting a kernel→module import. The ALLOW set *is* the remaining-work list.
 
@@ -124,7 +126,7 @@ For the full text and rationale, see [`../README.md`](../README.md) and [`../CON
 
 ## Repo topology / product family
 
-Gremion is the open core of a product family. Modules and verticals live in **separate repositories**.
+Gremion is the open core of a product family. The target is modules and verticals in **separate repositories**; today this tree carries the module sources under `modules/` and two verticals under `verticals/`.
 
 | Repo | Visibility | Role |
 |------|-----------|------|
@@ -132,18 +134,19 @@ Gremion is the open core of a product family. Modules and verticals live in **se
 | module repositories | mixed — see below | One repository per module. |
 | verticals and the hosting control plane | private | Deployment-specific config, seed data and theming; hosting / provisioning / billing. |
 
-**Modules are one repository per module, and they are not uniformly closed.** Public, AGPL-3.0-only: the elections, newsletter, calendar, files, messages, board and users modules. That licence covers the module code only; the upstream systems those modules wrap (the Helios overlay, Nextcloud, the Matrix homeserver, LiveKit) keep their own licences, which are recorded in [the licence register](compliance/licence-register.md). Closed: finance, content, vault, handover. Do not read "module layer" as "proprietary layer" — most of it is AGPL. The split out of the single holding repository is in progress, so today the modules are carried in a private holding repository and consumed over git rather than as published packages; `@gremion/db` and `@gremion/ports` begin publishing to npm at 0.1.0.
+**Modules are one repository per module, and they are not uniformly closed.** Public, AGPL-3.0-only: the elections, newsletter, calendar, files, messages, board and users modules. That licence covers the module code only; the upstream systems those modules wrap (the Helios overlay, Nextcloud, the Matrix homeserver, LiveKit) keep their own licences, which are recorded in [the licence register](compliance/licence-register.md). Closed: finance, content, vault, handover. Do not read "module layer" as "proprietary layer" — most of it is AGPL. The split out of the single holding repository is in progress: today the module sources are carried in this tree under `modules/` (frozen copies of one extraction source, see [ops/extraction-source.md](./ops/extraction-source.md)) rather than as published packages; `@gremion/db` and `@gremion/ports` begin publishing to npm at 0.1.0.
 
 **History.** This repository starts from a single root commit. It is a **fresh extraction** of only the ratified core subset, with a secret/PII sweep of that subset, not a re-publish of the private product repository, whose history stays private.
 
 ## Microservice roadmap
 
-The architecture is a **modular monolith — extract on demand**, on the proven `@gremion/ports` plus a 7-section extract-a-service playbook (branch-by-abstraction → ACL → outbox → flag-flip → decommission → dual-deploy → rollback). Phases are ordered by difficulty:
+The architecture is a **modular monolith — extract on demand**, on the proven `@gremion/ports` plus a 7-section extract-a-service playbook (branch-by-abstraction → ACL → outbox → flag-flip → decommission → dual-deploy → rollback). The phases were ordered by difficulty; this is where each stands in this tree:
 
 - **Phase 0 (done) — newsletter.** Own container, own database, HTTP REST ACL, NATS JetStream. Cut over live; the old path decommissioned. The proven template and the first load-bearing Gremion microservice.
-- **Phase 1 (easy) — files, messages, votes.** Already arm's-length HTTP proxies to external systems with no local DB to migrate; the lift is formalizing each proxy as a service over the ports contract.
-- **Phase 2 (medium) — content, calendar.** Own data in the shared DB with no FKs into governance; the lift is a shared-DB → own-DB migration plus outbox wiring. Content needs a portal kernel-callback because `news_posts` is governance-owned.
-- **Phase 3 (hard) — finance.** The module you'd most want private, yet the most entangled with the public governance core (three `ON DELETE RESTRICT` FKs into `public.org_units` plus a reverse-import). The lift is a consistency-model change: app-level guard + reconciliation, invert the reverse-import, and split the atomic `createSubOrg` into a saga.
+- **Phase 1 — files, messages, votes.** Arm's-length HTTP proxies to external systems with no database of their own: `modules/files`, `modules/messaging` and `modules/votes` each carry a thin leaf next to their in-process half. `docker-compose.app.yml` defines no service for them.
+- **Phase 2 — content, calendar.** Each is a leaf service with its own PostgreSQL server (`content-service` and `calendar-service`, compose profiles `content` and `calendar`), the in-process half overlaid on the kernel app. Content publishes to the portal through a kernel callback (`/api/internal/content/portal-publish`).
+- **Board.** The leaf and `board-postgres` exist in the tree; a pilot host runs the board in-process on kernel tables and does not start them.
+- **Phase 3 — finance.** A leaf service only (no app half in this tree) with its own database, disabled by default. It keeps a leaf-local mirror of the org units, fed by the kernel's org-unit change events (`modules/finance/migrations/002_org_unit_mirror.sql`), instead of foreign keys into the kernel schema.
 
 **Open-core prerequisites (the hinge, both executed):** invert the `org-units-db → finance/tx` reverse-import, and make the registry auto-discovery so the kernel never hardcodes a module's manifest.
 
@@ -157,13 +160,12 @@ The architecture is a **modular monolith — extract on demand**, on the proven 
 
 **Carve-time residuals** are tracked, one by one, in [`KNOWN_ISSUES.md`](../KNOWN_ISSUES.md) — leftovers of the extraction, listed there until they are removed or generalised rather than promised against a date.
 
-**Boot smoke confirmed:** the kernel boots standalone — the chain applies clean against a real `postgres:18-alpine` (with seeds disabled, an earlier count of the governance migrations, measured before `0060` landed, plus 5 control migrations; `make fresh-init-proof` re-measures it), registry seams active, no module errors; the only non-green is the expected fresh-kernel "incomplete brand identity" 503 that the Setup wizard resolves.
+**Fresh-init proof:** `make fresh-init-proof` (`gremion-ui/scripts/fresh-init-proof.sh`) applies the whole kernel migration chain to a throwaway PostgreSQL and asserts the resulting tables, a column, a CHECK definition and the public-reader grants in the database. The kernel app starts with zero tenants: boot writes nothing into the tenant registry, and the first-run setup wizard no longer exists (a customer is created by the platform operator).
 
 ## What this repository does not contain
 
 Stated plainly, because a reader would otherwise assume otherwise:
 
-- **Not the product's full schema.** 37 data-plane migrations ship here: 31 of the 58 in the product plus the kernel-only `0059`, `0060`, `0061`, `0062`, `0063` and `0064`, so **27 are absent**. All of them belong to feature modules that are not part of the kernel and ship in their own repositories, namely finance (`013`–`017`, `019`–`023`, `025`–`032`, `035`, `036`) and content (`044`–`047`), or to handover (`050`–`052`), which ships in no release-1 tree at all. No governance-side migration of the product is absent here any more: the 2026-09-15 port-back brought `003`, `034`, `049` and `053`–`058` in, provenance in [`ops/migration-portback-2026-09-15.md`](./ops/migration-portback-2026-09-15.md). The filename gaps are inherited from the larger chain and are not corruption; what is here and what is not is named in [`../gremion-ui/migrations/README.md`](../gremion-ui/migrations/README.md).
-- **Not the full governance feature set.** The contestability / recall **schema** is here (`055`, `056`); its application half (routes, services, UI) and the second-locus model are implemented in the product and are **not** in this kernel, even though the charter above describes accountability and contestability as a meta-model primitive.
+- **Not the product's full schema.** 37 data-plane migrations ship here: 31 of the 58 in the product plus the kernel-only `0059`, `0060`, `0061`, `0062`, `0063` and `0064`, so **27 are absent**. All of them belong to feature modules that are not part of the kernel and keep their schema in their own module trees (`modules/<id>/migrations/`), namely finance (`013`–`017`, `019`–`023`, `025`–`032`, `035`, `036`) and content (`044`–`047`), or to handover (`050`–`052`), which ships in no release-1 tree at all. No governance-side migration of the product is absent here any more: the 2026-09-15 port-back brought `003`, `034`, `049` and `053`–`058` in, provenance in [`ops/migration-portback-2026-09-15.md`](./ops/migration-portback-2026-09-15.md). The filename gaps are inherited from the larger chain and are not corruption; what is here and what is not is named in [`../gremion-ui/migrations/README.md`](../gremion-ui/migrations/README.md).
 - **The runtime-registry contract is not frozen.** `lib/server/modules/runtime-registry.ts` and the manifest shape are the module SDK's seam, and they may still change without a deprecation window. Pin a SHA.
 - **`gremion-ui` and `gremion-public` are a non-normative reference shell.** They are the shell the kernel was extracted with, not a ratified UI contract. A deployment is free to replace them; nothing in the kernel's guarantees depends on their markup.

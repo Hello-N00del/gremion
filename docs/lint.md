@@ -14,8 +14,11 @@ inline; `make lint-js` (`scripts/check-lint-js.mjs`) points back at this file.
 like `--import-plugin`) and named explicitly so both `oxlint` and
 `oxlint --type-aware` pick them up the same way. `correctness` is the only
 category kept at `error`; `suspicious`/`perf` stay `warn`; `pedantic`,
-`style`, `restriction`, `nursery` are `off` — this is a ratchet gate
-(`scripts/lint-js-baseline.json`), not a style enforcer.
+`style`, `restriction`, `nursery` are `off` — this is a gate on the
+error count (`scripts/lint-js-baseline.json`, now 0, so a plain zero-error
+gate that may only ever be lowered), not a style enforcer. `make lint-js` is
+run by the `carve-lint` suite of `make verify`; it is not in the `make lint`
+aggregate.
 
 `options.typeAware: true` mirrors the CLI's `--type-aware` flag (TypeScript
 7 / TS-Go rules via `oxlint-tsgolint`, e.g. `typescript/no-floating-promises`,
@@ -39,6 +42,10 @@ the flag.
   second argument, a custom failure message: `expect(actual, message)`. The
   rule's Jest-derived default (`maxArgs: 1`) flagged every such call (58
   kernel / 246 StuRaOS sites), none of them a vacuous test.
+- **`vitest/expect-expect`** — kept at `error`, with `assertFunctionNames`
+  naming the assertion helpers (`expect`, `expectTypeOf`, `assert`,
+  `assertType`, `expectTyped413`) so a test whose assertions live in a helper
+  with one of those names is not reported as having none.
 - **`typescript/unbound-method: off` in the test-file override** (`**/*.test.ts`,
   `**/*.test.mjs`, `**/*.spec.ts`, `**/test/**/*.ts`) — `expect(mock.method).
   toHaveBeenCalled...()` passes a `vi.fn()` spy, which has no `this` to lose:
@@ -51,10 +58,8 @@ the flag.
   2026-09-27) - the overrides after the test-file override each name ONE
   rule and the exact `modules/**` files where that rule reported an
   error-level diagnostic when TASK-200 moved the StuRa module source
-  in-tree (96 errors in 50 files, 14 rules; the largest:
-  `typescript/no-base-to-string` 23, `typescript/no-redundant-type-constituents`
-  20, `unicorn/no-useless-fallback-in-spread` 15,
-  `vitest/require-to-throw-message` 13). Those files are frozen copies:
+  in-tree (96 errors in 50 files, 14 rules when it landed; the current
+  rule list and file lists are in `.oxlintrc.json`). Those files are frozen copies:
   byte-equal to the `extraction-source-f2` tag or listed in
   `modules/EXTRACTION-DELTA.json`, proven by
   `scripts/check-module-source-parity.mjs`; fixing them in the move would
@@ -84,8 +89,9 @@ the flag.
   in their place, because the override globs treat brackets as a class.
   TASK-205c added the publishing and vault halves: 6 files, 2 rules, 7 findings
   (`typescript/no-redundant-type-constituents` 6 in the vault routes,
-  `vitest/no-conditional-expect` 1 in publishing's resolve test); the baseline
-  stays at 70.
+  `vitest/no-conditional-expect` 1 in publishing's resolve test). The baseline
+  is 0 since 2026-10-29: the findings that were not frozen-copy debt were fixed
+  at the source, and raising it is not allowed.
 
 ## Svelte 5 runes
 
