@@ -1,5 +1,5 @@
 // src/lib/server/governance/provisioning/subsystems/keycloak.ts
-import type { KeycloakAdminClient } from '../../../keycloak-admin'
+import { KcAdminError, type KeycloakAdminClient } from '../../../keycloak-admin'
 import type { OrgUnit } from '../../org-units-db'
 import type { ProvisioningSubsystem, ProvisionContext } from '../types'
 
@@ -13,8 +13,12 @@ export function createKeycloakSubsystem(kc: KeycloakAdminClient): ProvisioningSu
         try {
           await kc.getGroup(existing)
           return { externalId: existing } // still exists — reuse
-        } catch {
-          // fall through and recreate
+        } catch (err) {
+          // Only a real Keycloak 404 means "the group is gone, recreate it". Any
+          // other failure (5xx, timeout, network) says nothing about the group, so
+          // it is rethrown: the orchestrator records the resource failed and the
+          // worker retries, instead of creating a duplicate and moving membership.
+          if (!(err instanceof KcAdminError && err.status === 404)) throw err
         }
       }
       const parentId = unit.parent_id ? requireParent(ctx) : null
