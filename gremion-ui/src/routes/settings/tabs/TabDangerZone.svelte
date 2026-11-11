@@ -10,6 +10,20 @@
   let resetting = false
   let resetError = ''
   let resetSuccess = ''
+  let heldBack: string[] = []
+
+  // The reset answers with `heldBack`, the modules the council switched off. They stay off
+  // and come back only through the module switch. Parsed defensively: anything but an array of
+  // non-empty strings is ignored, and each id is capped so a bad payload cannot flood the page.
+  const HELD_BACK_MAX_ITEMS = 50
+  const HELD_BACK_MAX_ID_LENGTH = 64
+  function parseHeldBack(value: unknown): string[] {
+    if (!Array.isArray(value)) return []
+    return value
+      .filter((v): v is string => typeof v === 'string' && v.trim() !== '')
+      .map((v) => v.trim().slice(0, HELD_BACK_MAX_ID_LENGTH))
+      .slice(0, HELD_BACK_MAX_ITEMS)
+  }
 
   async function confirmReset() {
     if (resetConfirmText !== 'ZURÜCKSETZEN') {
@@ -32,6 +46,8 @@
         resetError = body.error ?? 'Fehler beim Zurücksetzen.'
         return
       }
+      const payload = await res.json().catch(() => null)
+      heldBack = parseHeldBack(payload && typeof payload === 'object' ? (payload as { heldBack?: unknown }).heldBack : undefined)
       resetSuccess = 'Konfiguration zurückgesetzt.'
       resetDialogOpen = false
       resetConfirmText = ''
@@ -55,7 +71,16 @@
 
   {#if resetSuccess}
     <div class="rounded border border-green-500/40 bg-green-50 px-4 py-3 text-sm text-green-800" role="status">
-      {resetSuccess}
+      <p>{resetSuccess}</p>
+      {#if heldBack.length > 0}
+        <p class="mt-1" data-testid="reset-heldback-notice">
+          {heldBack.length === 1 ? 'Das Modul' : 'Die Module'}
+          <strong>{heldBack.join(', ')}</strong>
+          {heldBack.length === 1
+            ? 'bleibt ausgeschaltet und kann nur über den Modulschalter wieder eingeschaltet werden.'
+            : 'bleiben ausgeschaltet und können nur über den Modulschalter wieder eingeschaltet werden.'}
+        </p>
+      {/if}
     </div>
   {/if}
 

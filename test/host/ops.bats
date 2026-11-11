@@ -89,14 +89,14 @@ teardown() {
 # Conditions (recording rules) -- Grafana alerts on them
 # ---------------------------------------------------------------------------
 
-@test "rules.yml records exactly the seventeen conditions (twelve TASK-039, the four TASK-079 dead-letter ones and the module Karenz one)" {
+@test "rules.yml records exactly the eighteen conditions (twelve TASK-039, the four TASK-079 dead-letter ones, the outbox-stall one and the module Karenz one)" {
     [ -f "$RULES" ]
     run awk '/^[[:space:]]*#/ {next} /^[[:space:]]+- record:/ {print $3}' "$RULES"
     [ "$status" -eq 0 ]
-    [ "$(echo "$output" | sort | tr '\n' ' ')" = "gremion:cond:backup_failed gremion:cond:broker_consumer_stalled gremion:cond:cert_expiry gremion:cond:container_unhealthy gremion:cond:dead_letter_queue gremion:cond:disk_above_70 gremion:cond:edge_port80 gremion:cond:inbox_dead_lettered gremion:cond:inbox_stalled gremion:cond:mail_queue gremion:cond:memory_pressure gremion:cond:module_karenz gremion:cond:outbox_dead_lettered gremion:cond:postgres_connections gremion:cond:signal_absent gremion:cond:storage_above_70 gremion:cond:third_party_unreachable " ]
+    [ "$(echo "$output" | sort | tr '\n' ' ')" = "gremion:cond:backup_failed gremion:cond:broker_consumer_stalled gremion:cond:cert_expiry gremion:cond:container_unhealthy gremion:cond:dead_letter_queue gremion:cond:disk_above_70 gremion:cond:edge_port80 gremion:cond:inbox_dead_lettered gremion:cond:inbox_stalled gremion:cond:mail_queue gremion:cond:memory_pressure gremion:cond:module_karenz gremion:cond:outbox_dead_lettered gremion:cond:outbox_stalled gremion:cond:postgres_connections gremion:cond:signal_absent gremion:cond:storage_above_70 gremion:cond:third_party_unreachable " ]
 }
 
-@test "every condition but third_party_unreachable and the four dead-letter ones is fail-closed on a blind collector" {
+@test "every condition but third_party_unreachable, outbox_stalled and the four dead-letter ones is fail-closed on a blind collector" {
     # Comment lines are skipped first: the header explains the absent()
     # contract in prose, and a guard that counts its own documentation lies.
     run awk '/^[[:space:]]*#/ {next} /^[[:space:]]+- record:/{name=$3} /absent\(/{print name}' "$RULES"
@@ -106,7 +106,7 @@ teardown() {
     [[ "$output" == *"module_karenz"* ]]
     [[ "$output" != *"third_party_unreachable"* ]]
     # TASK-079: a host without an events service has no gauge; an absent() arm there would fire for ever.
-    [[ "$output" != *"outbox_dead_lettered"* && "$output" != *"inbox_dead_lettered"* && "$output" != *"inbox_stalled"* && "$output" != *"dead_letter_queue"* ]]
+    [[ "$output" != *"outbox_dead_lettered"* && "$output" != *"inbox_dead_lettered"* && "$output" != *"inbox_stalled"* && "$output" != *"dead_letter_queue"* && "$output" != *"outbox_stalled"* ]]
 }
 
 @test "the unverified mail-queue series is labelled as unverified" {

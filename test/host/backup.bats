@@ -388,8 +388,66 @@ echo "/dev/vda4 1000000000000 999000000000 1000000000 99% /"'
 # Volume enumeration (§J: refuses to run if the enumeration fails)
 # ---------------------------------------------------------------------------
 
+# The running-server discovery (assert_postgres_server_coverage) asks the engine
+# `docker ps --filter label=org.gremion.postgres --filter
+# label=com.docker.compose.project=<stack>-state`. Every docker shim in this file
+# is built through shim_docker_engine, which answers that query from a fixture
+# before handing every other call to the shim's own body: one line per labelled
+# running container, "<compose project> <compose service>". The default is the
+# kernel server alone. The project filter is honoured, so a container of another
+# stack on the same engine is only returned when the query names its project.
+# A file named .ps-fails makes the query itself fail. A file named .pg-users
+# gives servers their OWN superuser, one "<service> <user>" per line (the kernel
+# server is `postgres`, every module and service server has its own, as
+# POSTGRES_USER in the container): for such a server the engine answers
+# `printenv` with that user, refuses `psql` without `-d postgres` (a role's
+# default database is named after it) and refuses any `-U` that is not that user.
+# Servers not named there accept any user, as before.
+set_running_pg() {   # $@ = "<project> <service>" lines
+    printf '%s\n' "$@" > "${GREMION_ROOT}/.pg-containers"
+}
+
+shim_docker_engine() {   # $1 = the shim body for every call that is not `docker ps`
+    local prelude
+    prelude='if [ "$1" = ps ]; then
+  [ -f "$GREMION_ROOT/.ps-fails" ] && exit 1
+  proj=""
+  for a in "$@"; do
+    case "$a" in label=com.docker.compose.project=*) proj="${a#label=com.docker.compose.project=}" ;; esac
+  done
+  if [ -f "$GREMION_ROOT/.pg-containers" ]; then fixture="$(cat "$GREMION_ROOT/.pg-containers")"
+  else fixture="staging-state postgres"; fi
+  printf "%s\n" "$fixture" | while read -r p s; do
+    [ "$p" = "$proj" ] && [ -n "$s" ] && printf "%s\n" "$s"
+  done
+  exit 0
+fi
+case "$*" in *" exec -T "*)
+  svc=""; usr=""; prev=""
+  for a in "$@"; do
+    [ "$prev" = "-T" ] && svc="$a"
+    [ "$prev" = "-U" ] && usr="$a"
+    prev="$a"
+  done
+  want=""
+  if [ -f "$GREMION_ROOT/.pg-users" ]; then
+    want="$(while read -r s u; do if [ "$s" = "$svc" ]; then printf "%s" "$u"; fi; done < "$GREMION_ROOT/.pg-users")"
+  fi
+  if [ -n "$want" ]; then
+    case "$*" in
+      *printenv*) printf "%s\n" "$want"; exit 0 ;;
+      *psql*) case "$*" in *" -d postgres "*) ;; *) echo "psql: FATAL: database does not exist" >&2; exit 2 ;; esac ;;
+    esac
+    case "$*" in
+      *" -U "*) [ "$usr" = "$want" ] || { echo "FATAL: role ${usr} does not exist" >&2; exit 2; } ;;
+    esac
+  fi ;;
+esac'
+    shim docker "${prelude}"$'\n'"$1"
+}
+
 shim_docker_ok() {
-    shim docker 'case "$1 $2" in
+    shim_docker_engine 'case "$1 $2" in
   "volume ls")
      case "$*" in
        *"project=staging-state"*) printf "staging-state_pgdata\nstaging-state_nats\n" ;;
@@ -408,8 +466,8 @@ exit 0'
     [[ "$output" == *"volumes enumerated: 10"* ]]
     # Repeated --filter label= is ANDed by docker, so the two projects MUST be
     # two calls; one call with both filters returns nothing.
-    assert_recorded docker "label=com.docker.compose.project=staging-state"
-    assert_recorded docker "label=com.docker.compose.project=staging-mail"
+    assert_recorded docker "volume ls -q --filter label=com.docker.compose.project=staging-state"
+    assert_recorded docker "volume ls -q --filter label=com.docker.compose.project=staging-mail"
 }
 
 @test "an enumeration that returns zero volumes refuses to back up" {
@@ -481,7 +539,7 @@ exit 0'
 
 shim_docker_with_pg() {   # $1 = extra databases beyond the kernel three
     local extra="${1:-t_pilot}"
-    shim docker "case \"\$1 \$2\" in
+    shim_docker_engine "case \"\$1 \$2\" in
   \"volume ls\")
      case \"\$*\" in
        *\"project=staging-state\"*) printf \"staging-state_pgdata\nstaging-state_nats\n\" ;;
@@ -531,7 +589,7 @@ exit 0"
 
 @test "an enumeration that returns zero databases refuses to back up" {
     shim_baseline
-    shim docker 'case "$1 $2" in
+    shim_docker_engine 'case "$1 $2" in
   "volume ls")
      case "$*" in
        *"project=staging-state"*) printf "staging-state_pgdata\n" ;;
@@ -549,7 +607,7 @@ exit 0'
 # ---------------------------------------------------------------------------
 
 shim_docker_full() {   # everything above plus a `docker run … tar` that writes
-    shim docker 'out="$GREMION_ROOT/backups/current/volumes"
+    shim_docker_engine 'out="$GREMION_ROOT/backups/current/volumes"
 case "$1 $2" in
   "volume ls")
      case "$*" in
@@ -1076,7 +1134,7 @@ result_line() {   # the last line of $output, which must be the BACKUP-RESULT li
     run "$BACKUP" --class daily --label nightly-4
     [ "$(jq -r '.artefacts.volumes' "${GREMION_ROOT}/runtime/last-backup-daily.json")" = "10" ]
     # ...then a snapshot taken while the mail project's volumes are gone.
-    shim docker 'out="$GREMION_ROOT/backups/current/volumes"
+    shim_docker_engine 'out="$GREMION_ROOT/backups/current/volumes"
 case "$1 $2" in
   "volume ls")
      case "$*" in
@@ -1192,7 +1250,7 @@ exit 0'
 # unterminated final line. The coverage guard could not see it, because it only
 # checks the set the enumeration produced.
 shim_docker_pg_no_trailing_newline() {
-    shim docker 'out="$GREMION_ROOT/backups/current/volumes"
+    shim_docker_engine 'out="$GREMION_ROOT/backups/current/volumes"
 case "$1 $2" in
   "volume ls")
      case "$*" in
@@ -1219,7 +1277,7 @@ exit 0'
 # The same shim, but the server's own count disagrees with the names it listed:
 # four names for a server that reports five databases.
 shim_docker_pg_count_mismatch() {
-    shim docker 'out="$GREMION_ROOT/backups/current/volumes"
+    shim_docker_engine 'out="$GREMION_ROOT/backups/current/volumes"
 case "$1 $2" in
   "volume ls")
      case "$*" in
@@ -1290,7 +1348,7 @@ exit 0'
 # the rest of the list, and t_pilot was never backed up. The run still reported
 # ok, because every database it still knew about had a dump.
 shim_docker_pg_stdin_eater() {
-    shim docker 'out="$GREMION_ROOT/backups/current/volumes"
+    shim_docker_engine 'out="$GREMION_ROOT/backups/current/volumes"
 case "$1 $2" in
   "volume ls")
      case "$*" in
@@ -1472,7 +1530,7 @@ exec ${real} \"\$@\""
 # a truncated-but-decompressible file was left sitting exactly where a finished
 # dump belongs — and dump_has_content adopts it.
 shim_docker_pg_dump_dies() {
-    shim docker 'out="$GREMION_ROOT/backups/current/volumes"
+    shim_docker_engine 'out="$GREMION_ROOT/backups/current/volumes"
 case "$1 $2" in
   "volume ls")
      case "$*" in
@@ -1539,7 +1597,8 @@ exit 0'
 # the staged files prove WHICH server each dump came from — a path check alone
 # would pass on two copies of the same server's data.
 shim_docker_two_pg_servers() {
-    shim docker 'out="$GREMION_ROOT/backups/current/volumes"
+    set_running_pg 'staging-state pg1' 'staging-state pg2'
+    shim_docker_engine 'out="$GREMION_ROOT/backups/current/volumes"
 case "$1 $2" in
   "volume ls")
      case "$*" in
@@ -1605,6 +1664,7 @@ exit 0'
     shim_baseline; shim_docker_with_pg "t_pilot"
     # `<service>__<database>.sql.gz` is split at the FIRST '__', so a service
     # name carrying '__' is ambiguous for Task 10's gremion-restore-into.
+    set_running_pg 'staging-state pg__odd'
     export BACKUP_POSTGRES_SERVICES='pg__odd'
     run "$BACKUP" --class daily --label odd-service
     [ "$status" -eq 2 ]
@@ -1635,7 +1695,8 @@ exit 0'
 # naming the server AND the database, so the staged bytes prove which server
 # each artefact came from.
 shim_docker_kernel_listed_second() {
-    shim docker 'out="$GREMION_ROOT/backups/current/volumes"
+    set_running_pg 'staging-state pg2' 'staging-state postgres'
+    shim_docker_engine 'out="$GREMION_ROOT/backups/current/volumes"
 case "$1 $2" in
   "volume ls")
      case "$*" in
@@ -1723,6 +1784,7 @@ exit 0'
     # script — observed, not assumed — and the departure from the contract this
     # program was written against is reported rather than swallowed.
     rename_kernel_stub_exec_service pgkernel
+    set_running_pg 'staging-state pgkernel'
     export BACKUP_POSTGRES_SERVICES='pgkernel'
     run "$BACKUP" --class daily --label renamed-kernel-pg
     [ "$status" -eq 0 ]
@@ -1784,4 +1846,145 @@ exit 0'
         [ "$(stat -c %a "${t}/bk/current/${f}.sql.gz")" = 600 ] \
             || { echo "${f}.sql.gz is mode $(stat -c %a "${t}/bk/current/${f}.sql.gz"), not 600" >&2; return 1; }
     done
+}
+
+# ---------------------------------------------------------------------------
+# K-21 / TASK-232 (spec B27 cross-check): every running PostgreSQL server of the
+# state project must be in BACKUP_POSTGRES_SERVICES.
+#
+# assert_dump_coverage only compares the servers it is GIVEN, so a labelled
+# server missing from the list (nextcloud-postgres, messaging-postgres,
+# governance-postgres) was never enumerated, never dumped and never noticed: the
+# run ended ok with a whole server absent from the snapshot. The cross-check
+# asks the engine which labelled servers run in `<stack>-state` and refuses the
+# run, before anything is staged, when one of them is not in the list.
+# ---------------------------------------------------------------------------
+
+# Every file under the staged tree that is a database dump, kernel zone included.
+staged_dump_files() {
+    find "${GREMION_ROOT}/backups/current" -type f -name '*.sql.gz' 2>/dev/null || true
+}
+
+@test "a running labelled server missing from BACKUP_POSTGRES_SERVICES refuses the run and names it" {
+    shim_baseline; shim_docker_full
+    shim_rsync_honouring_excludes; shim_restic_ok
+    set_running_pg 'staging-state postgres' 'staging-state nextcloud-postgres'
+    export BACKUP_POSTGRES_SERVICES='postgres'
+    run "$BACKUP" --class daily --label missing-server
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"missing from BACKUP_POSTGRES_SERVICES: nextcloud-postgres"* ]]
+    # The listed server is not reported as missing.
+    [[ "$output" != *"missing from BACKUP_POSTGRES_SERVICES: postgres"* ]]
+    # It was the engine's labelled, state-project containers that were asked.
+    assert_recorded docker "ps --filter label=org.gremion.postgres --filter label=com.docker.compose.project=staging-state"
+}
+
+@test "the server cross-check refuses before anything is staged or dumped" {
+    shim_baseline; shim_docker_full
+    shim_rsync_honouring_excludes; shim_restic_ok
+    set_running_pg 'staging-state postgres' 'staging-state nextcloud-postgres'
+    export BACKUP_POSTGRES_SERVICES='postgres'
+    run "$BACKUP" --class daily --label missing-server-early
+    [ "$status" -eq 1 ]
+    # Read back from the filesystem: no dump of any zone exists, the kernel
+    # script never ran, and no database was ever enumerated or dumped.
+    [ -z "$(staged_dump_files)" ]
+    refute_recorded kernel-backup "BACKUP_DIR="
+    refute_recorded docker "pg_dump"
+    refute_recorded docker "pg_database"
+}
+
+@test "a list that names every running labelled server passes the cross-check and prints the count" {
+    shim_baseline; shim_docker_full
+    shim_rsync_honouring_excludes; shim_restic_ok
+    set_running_pg 'staging-state postgres' 'staging-state nextcloud-postgres'
+    export BACKUP_POSTGRES_SERVICES='postgres nextcloud-postgres'
+    run "$BACKUP" --class daily --label all-servers
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"every running PostgreSQL server of staging-state is in BACKUP_POSTGRES_SERVICES (2)"* ]]
+    # The two servers were really dumped, not just listed.
+    assert_recorded docker "exec -T nextcloud-postgres pg_dump -U postgres t_pilot"
+    [ -s "${GREMION_ROOT}/backups/current/nextcloud-postgres__t_pilot.sql.gz" ]
+}
+
+@test "a labelled server of another compose project is not counted as a missing server" {
+    shim_baseline; shim_docker_full
+    shim_rsync_honouring_excludes; shim_restic_ok
+    # A second stack on the same engine: its labelled server runs, and is not
+    # ours to back up.
+    set_running_pg 'staging-state postgres' 'other-state nextcloud-postgres'
+    export BACKUP_POSTGRES_SERVICES='postgres'
+    run "$BACKUP" --class daily --label other-stack
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"is in BACKUP_POSTGRES_SERVICES (1)"* ]]
+    [[ "$output" != *"nextcloud-postgres"* ]]
+}
+
+@test "a server query that fails fails the run closed, before anything is staged" {
+    shim_baseline; shim_docker_full
+    shim_rsync_honouring_excludes; shim_restic_ok
+    touch "${GREMION_ROOT}/.ps-fails"
+    run "$BACKUP" --class daily --label discovery-fails
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"cannot list the running PostgreSQL servers of staging-state"* ]]
+    [ -z "$(staged_dump_files)" ]
+    refute_recorded docker "pg_dump"
+}
+
+@test "a server query that returns no server does not pass vacuously" {
+    shim_baseline; shim_docker_full
+    shim_rsync_honouring_excludes; shim_restic_ok
+    # Only another stack's server is running: the state project has none, yet
+    # the kernel's own server is always expected in it.
+    set_running_pg 'other-state nextcloud-postgres'
+    run "$BACKUP" --class daily --label no-servers
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"no running PostgreSQL server found in staging-state"* ]]
+    [ -z "$(staged_dump_files)" ]
+    refute_recorded docker "pg_dump"
+}
+
+# ---------------------------------------------------------------------------
+# Per-server superuser. Only the kernel's own server runs as `postgres`; every
+# module and service server (governance-postgres, nextcloud-postgres,
+# messaging-postgres, ...) is created with its OWN POSTGRES_USER and has no
+# `postgres` role. Enumerating and dumping every listed server as the kernel's
+# user therefore failed on exactly the servers the cross-check above forces into
+# the list, and no backup could finish. Each server is now asked for its own
+# superuser and connected to as that user, on the maintenance database.
+# ---------------------------------------------------------------------------
+
+@test "every listed server is enumerated and dumped as its own superuser, governance-postgres included" {
+    shim_baseline; shim_docker_full
+    shim_rsync_honouring_excludes; shim_restic_ok
+    set_running_pg 'staging-state postgres' 'staging-state governance-postgres' 'staging-state nextcloud-postgres'
+    printf '%s\n' 'postgres postgres' 'governance-postgres governance' 'nextcloud-postgres nextcloud' \
+        > "${GREMION_ROOT}/.pg-users"
+    export BACKUP_POSTGRES_SERVICES='postgres governance-postgres nextcloud-postgres'
+    run "$BACKUP" --class daily --label own-superuser
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"every running PostgreSQL server of staging-state is in BACKUP_POSTGRES_SERVICES (3)"* ]]
+    # Enumeration on the maintenance database, as the server's own user.
+    assert_recorded docker "exec -T governance-postgres psql -U governance -d postgres"
+    assert_recorded docker "exec -T nextcloud-postgres psql -U nextcloud -d postgres"
+    # Dumps as the same user, never as the kernel's.
+    assert_recorded docker "exec -T governance-postgres pg_dump -U governance t_pilot"
+    assert_recorded docker "exec -T nextcloud-postgres pg_dump -U nextcloud t_pilot"
+    refute_recorded docker "exec -T governance-postgres pg_dump -U postgres"
+    refute_recorded docker "exec -T governance-postgres psql -U postgres"
+    [ -s "${GREMION_ROOT}/backups/current/governance-postgres__t_pilot.sql.gz" ]
+    [ -s "${GREMION_ROOT}/backups/current/nextcloud-postgres__t_pilot.sql.gz" ]
+}
+
+@test "a server whose container cannot be asked for its user is still enumerated as the kernel's user" {
+    shim_baseline; shim_docker_full
+    shim_rsync_honouring_excludes; shim_restic_ok
+    # No .pg-users fixture: `printenv` answers nothing, as a minimal image
+    # without the variable would. The kernel's POSTGRES_USER is the fallback.
+    run "$BACKUP" --class daily --label user-fallback
+    [ "$status" -eq 0 ]
+    assert_recorded docker "exec -T postgres pg_dump -U postgres t_pilot"
+    # The fallback is not silent: a later "role does not exist" can be traced to
+    # the failed lookup.
+    [[ "$output" == *"could not read POSTGRES_USER from postgres; using postgres"* ]]
 }
