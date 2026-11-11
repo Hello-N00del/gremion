@@ -8,18 +8,72 @@ import type { SessionUser } from '$lib/auth/types'
 import { requireSetupRateLimit, checkAndIncrement, RATE_LIMITS } from '$lib/server/rate-limit'
 import { clientIpWithReason } from '$lib/server/client-ip'
 import { isAllowedSmtpPort, resolveSmtpTarget, REFUSAL_HINT, DNS_FAILURE_HINT } from '$lib/server/mail/smtp-target-guard'
-import { currentTenantId } from '$lib/server/tenant/context'
+import { currentTenantId, getTenant } from '$lib/server/tenant/context'
+import { resolveSecret } from '$lib/server/tenant/secrets'
+import { readConfig } from '$lib/server/config'
 import { smtpEhloName } from '$lib/server/mail/ehlo-name'
 
 
+// There is deliberately NO recipient field: the test mail goes to the signed-in
+// admin's own address (the session), never to an address the request names. A
+// `to_address` a client still sends is ignored. `user` / `password` are the
+// OPTIONAL override; empty means "use the tenant's stored relay login".
 const smtpTestSchema = z.object({
   host: z.string().min(1),
   port: z.number().int().min(1).max(65535),
-  user: z.string(),
-  password: z.string(),
+  user: z.string().default(''),
+  password: z.string().default(''),
   from_address: z.string().email(),
-  to_address: z.string().email(),
 })
+
+const CLOSED_CONNECTION = /connection closed|closed unexpectedly|socket (hang up|closed)|ECONNRESET/i
+
+/** Case-insensitive host + exact port equality, the "same relay" test. */
+function sameRelay(host: string, port: number, otherHost: string | undefined, otherPort: number | undefined) {
+  return !!otherHost && host.trim().toLowerCase() === otherHost.trim().toLowerCase() && port === otherPort
+}
+
+/**
+ * The stored relay login, if the tenant has one AND the target is the relay real
+ * sending uses (tenant-mail.ts: registry host/port win over config.smtp). The
+ * stored password is never attached to a host the admin merely typed: otherwise
+ * the test button would hand the relay password to any reachable server.
+ * Throws when the stored login is present but unreadable.
+ */
+function storedLogin(host: string, port: number): { user: string; pass: string } | undefined {
+  const svc = getTenant().services?.smtp
+  if (!svc?.passwordRef) return undefined
+  const cfg = readConfig().smtp
+  const realHost = svc.host ?? cfg?.host
+  const realPort = svc.port ?? cfg?.port
+  if (!sameRelay(host, port, realHost, realPort)) return undefined
+  // Same rule as tenant-mail.ts: a passwordRef without a user fails closed.
+  if (!svc.user) throw new Error('stored login incomplete')
+  return { user: svc.user, pass: resolveSecret(svc.passwordRef) }
+}
+
+function failure(error: string) {
+  return json({ success: false, data: { success: false, error } })
+}
+
+/** German, user-facing text for a failed send; the password is scrubbed from any raw text. */
+function describeSendFailure(err: unknown, secrets: string[], usedLogin: boolean): string {
+  const code = err instanceof Error ? (err as Error & { code?: string }).code : undefined
+  const raw = err instanceof Error ? err.message : 'Unbekannter Fehler'
+  if (code === 'EAUTH') {
+    return 'Die Anmeldung am Mailserver wurde abgelehnt. Benutzer oder Passwort stimmen nicht.'
+  }
+  if (CLOSED_CONNECTION.test(raw)) {
+    return (
+      'Der Mailserver hat die Verbindung unerwartet geschlossen. Häufigste Ursache: Er verlangt eine ' +
+      'Anmeldung (SMTP-AUTH), und Benutzer oder Passwort fehlen oder sind falsch.' +
+      (usedLogin ? '' : ' Für diesen Test wurden keine Zugangsdaten gesendet.')
+    )
+  }
+  let text = raw
+  for (const secret of secrets) if (secret) text = text.split(secret).join('***')
+  return text
+}
 
 export const POST: RequestHandler = async (event) => {
   const { request, locals } = event
@@ -47,6 +101,16 @@ export const POST: RequestHandler = async (event) => {
     return json({ success: false, error: 'Rate limit exceeded' }, { status: 429, headers: { 'Retry-After': '60' } })
   }
 
+  // The recipient is the admin's own address from the session, decided before any
+  // socket exists. An address the request names is never used.
+  const recipient = sessionUser.email
+  if (!recipient || !z.string().email().safeParse(recipient).success) {
+    return json(
+      { success: false, error: 'Dem angemeldeten Konto ist keine E-Mail-Adresse zugeordnet.' },
+      { status: 400 },
+    )
+  }
+
   const body = await request.json()
   const parsed = smtpTestSchema.safeParse(body)
   if (!parsed.success) {
@@ -56,7 +120,7 @@ export const POST: RequestHandler = async (event) => {
     )
   }
 
-  const { host, port, user, password, from_address, to_address } = parsed.data
+  const { host, port, user, password, from_address } = parsed.data
 
   // TASK-042 R28: SMTP ports only, decided before any DNS lookup or socket.
   if (!isAllowedSmtpPort(port, env.SMTP_TEST_ALLOW_PRIVATE === '1')) {
@@ -83,6 +147,24 @@ export const POST: RequestHandler = async (event) => {
     )
   }
 
+  // Typed override wins; otherwise the stored relay login, the same one real
+  // sending uses. Resolved only after the target guard has passed.
+  let auth: { user: string; pass: string } | undefined
+  if (user) {
+    auth = { user, pass: password }
+  } else {
+    try {
+      auth = storedLogin(host, port)
+    } catch {
+      // Deliberately no detail: the error text of a failed secret read carries
+      // the secret's path.
+      console.warn('[test-smtp] stored relay login could not be read')
+      return failure(
+        'Das hinterlegte Passwort für den Mailserver konnte nicht gelesen werden. Bitte die Hinterlegung prüfen.',
+      )
+    }
+  }
+
   const transporter = nodemailer.createTransport({
     // Dial the address that was actually vetted, not the name — re-resolving
     // here would reopen the DNS-rebinding window the guard just closed.
@@ -90,7 +172,7 @@ export const POST: RequestHandler = async (event) => {
     port,
     name: smtpEhloName(),
     secure: port === 465,
-    auth: user ? { user, pass: password } : undefined,
+    auth,
     connectionTimeout: 5000,
     greetingTimeout: 5000,
     ...(target.servername ? { tls: { servername: target.servername } } : {}),
@@ -99,16 +181,16 @@ export const POST: RequestHandler = async (event) => {
   try {
     await transporter.sendMail({
       from: from_address,
-      to: to_address,
+      to: recipient,
       subject: 'Gremion SMTP-Test',
       text: 'Diese E-Mail bestätigt, dass die SMTP-Konfiguration erfolgreich ist.',
     })
     return json({ success: true, data: { success: true } })
   } catch (err) {
-    const message = err instanceof Error ? err.message : 'Unbekannter Fehler'
-    return json({
-      success: false,
-      data: { success: false, error: message },
-    })
+    // Log the failure class only, never the message: a transport error can quote
+    // the login it was given.
+    const code = err instanceof Error ? (err as Error & { code?: string }).code : undefined
+    console.warn(`[test-smtp] send failed${code ? ` (${code})` : ''}`)
+    return failure(describeSendFailure(err, [password, auth?.pass ?? ''], !!auth))
   }
 }

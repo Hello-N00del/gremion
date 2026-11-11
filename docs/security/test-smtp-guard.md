@@ -167,7 +167,20 @@ tenant admin is narrowed instead:
   refused, unauthenticated attempts; the per-user bucket stops an admin who
   rotates client addresses from lifting the bound.
 
-Both are asserted in `server.test.ts` ("tenant-admin scope hardening"); the
+- **The recipient is the caller.** The test mail goes to the signed-in admin's
+  own address from the session; a `to_address` in the body is ignored, and a
+  session without an address is refused with `400` before any socket.
+- **The stored relay login follows the relay, not the request.** With the
+  `user` / `password` fields empty the test authenticates with the tenant's
+  stored login (`domain_profile.smtp.user` + `passwordRef`, the one real sending
+  uses), but only when the body's `host:port` equals the relay real sending dials
+  (the registry `host`/`port`, else `config.smtp`). Aimed at any other target the
+  stored password is never read, so the button cannot be used to hand it to a
+  server the admin chose. Typed `user` / `password` fields override it. The
+  password is never part of a response or a log line, and an unreadable secret
+  is reported without its path (asserted in "stored relay credential (E4)").
+
+Both caps are asserted in `server.test.ts` ("tenant-admin scope hardening"); the
 address cases there use an allowed port so a refusal is always the address
 guard's. Operator/platform scope for this endpoint is **not** adopted; revisit
 if a platform-operator role gains its own SMTP surface (TASK-043).
