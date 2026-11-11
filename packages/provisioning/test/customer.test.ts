@@ -213,10 +213,9 @@ describe('create (phases A, host, B)', () => {
     expect(w.mutations).toEqual(['nats:ensure musterstadt=[kernel]', 'ledger:broker_account_created=done'])
   })
 
-  it('board and vault are refused by name before any write (R29-I1; R30 A1, PRD-PLAT-012 / PRD-REC-003); an unknown module too', async () => {
+  it('vault is refused by name before any write (R30 A1, PRD-PLAT-012 / PRD-REC-003); an unknown module too', async () => {
     const w = world()
     const d = deps(w)
-    await expect(createPhaseA(spec({ enable: ['calendar', 'board'] }), d)).rejects.toMatchObject({ code: 'MODULE_DENIED' })
     await expect(createPhaseA(spec({ enable: ['calendar', 'vault'] }), d)).rejects.toMatchObject({ code: 'MODULE_DENIED' })
     await expect(createPhaseA(spec({ enable: ['nope'] }), d)).rejects.toMatchObject({ code: 'MODULE_UNKNOWN' })
     expect(w.mutations).toEqual([])
@@ -263,14 +262,14 @@ describe('create (phases A, host, B)', () => {
     expect(w.broker.get('musterstadt')).toEqual(['kernel'])
   })
 
-  it('G6 module subset: votes and calendar only are enabled, nothing else, and the ledger is still 9/9; board is refused BY NAME with no write', async () => {
+  it('G6 module subset: votes and calendar only are enabled, nothing else, and the ledger is still 9/9; vault is refused BY NAME with no write', async () => {
     const w = world()
     const { b } = await createAll(w, deps(w), spec({ enable: ['votes', 'calendar'] }))
     expect(b.enabled).toEqual(['calendar', 'votes'])
     expect(w.mutations.filter((x) => x.startsWith('ledger:') && x.endsWith('=done'))).toHaveLength(9)
     const w2 = world()
     const before = w2.mutations.length
-    await expect(createPhaseA(spec({ enable: ['board'] }), deps(w2))).rejects.toMatchObject({ code: 'MODULE_DENIED', message: expect.stringContaining('board') })
+    await expect(createPhaseA(spec({ enable: ['vault'] }), deps(w2))).rejects.toMatchObject({ code: 'MODULE_DENIED', message: expect.stringContaining('vault') })
     expect(w2.mutations.length).toBe(before)
   })
 
@@ -483,7 +482,7 @@ describe('TASK-044: enableCustomerModule (lane note D3, the one path after creat
     expect(w.enabled.get(c.id)!.get('publishing')).toEqual({ gateRefs: [w.isolation.get('publishing')!.id, w.dpia.get(`${c.id}/publishing`)![0]!.id], by: OPERATOR })
   })
 
-  it('board and vault are refused by name with zero mutations and the gate never asked (lane note A2)', async () => {
+  it('vault is refused by name with zero mutations and the gate never asked (lane note A2)', async () => {
     const { w, d } = await active()
     let asked = 0
     const gate = d.gate
@@ -497,7 +496,7 @@ describe('TASK-044: enableCustomerModule (lane note D3, the one path after creat
         hasDpiaDecision: async (c, m) => ((asked++), gate.hasDpiaDecision(c, m)),
       },
     }
-    for (const m of ['vault', 'board']) {
+    for (const m of ['vault']) {
       await expect(enableCustomerModule('musterstadt', m, { operatorId: OPERATOR, dpia: DPIA }, counted)).rejects.toMatchObject({ code: 'MODULE_DENIED' })
     }
     expect(asked).toBe(0)

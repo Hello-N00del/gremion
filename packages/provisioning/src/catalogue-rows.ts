@@ -30,7 +30,7 @@ const RETENTION = /^rp-([a-z]+)-[a-z0-9-]+$/
 const SEMVER = /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]{1,40})?$/
 
 /**
- * Default retention profiles for the modules that have no database and so
+ * Default retention profiles for the modules that have no database (board too: it is served in-process from the kernel tenant database) and so
  * cannot declare runtime.export (the module-catalogue validator refuses an
  * export without a database, and that rule stays). Operator decision R29-I24
  * (2026-10-01), PROVISIONAL pending the DPO's written answer: the ids follow
@@ -40,6 +40,7 @@ const SEMVER = /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-
  * its own runtime.export and leaves this table.
  */
 export const PROVISIONAL_RETENTION_PROFILES: Readonly<Record<string, string>> = Object.freeze({
+  board: 'rp-brd-module-data',
   elections: 'rp-ele-module-data',
   files: 'rp-fil-module-data',
   handover: 'rp-hnd-module-data',

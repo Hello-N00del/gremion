@@ -208,7 +208,9 @@ describe('the platform migration folder (gremion_platform, schema plt)', () => {
       }
     }
     expect(resolved.length).toBeGreaterThan(0)
-    expect(resolved).toContain('board/001_init.sql')
+    // board declares no runtime.database since the board wave (it is served in-process from the kernel tenant
+    // database), so its leaf migrations (BOARD_BACKEND=service, test environment) are no longer iterated here
+    expect(resolved).toContain('calendar/001_init.sql')
   })
 
   it('TASK-075 r2: the shipped baseline is the kernel baseline joined with applied.lock.json (no drift)', () => {

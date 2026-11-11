@@ -1,8 +1,9 @@
 // R29-Q20-RETENTION drift guard (operator decision R29-I24, 2026-10-01): the REAL
 // modules/ tree, read the way `gremion-tenant init` reads it (gremion-ui
 // scripts/tenant-provision.ts loadModules, i.e. loadModuleJsons: one entry per
-// modules/<id> with a module.json), must plan to a full load and no undecided module. The five
-// database-less modules carry the provisional default profiles; the six with a
+// modules/<id> with a module.json), must plan to a full load and no undecided module. The six
+// database-less modules (board since the board wave of 2026-11-11: it is served in-process from
+// the kernel tenant database) carry the provisional default profiles; the five with a
 // database carry their own declared ones.
 import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -20,8 +21,9 @@ interface TreeModule extends CatalogueModule {
 // so this guard sees the tree exactly the way `gremion-tenant init` does.
 const tree = loadModuleJsons(MODULES) as unknown as TreeModule[]
 
-/** The five database-less modules (section 2 of the brief; TASK-077 Q14 contexts). */
+/** The six database-less modules (section 2 of the brief; TASK-077 Q14 contexts). */
 const PROVISIONAL = {
+  board: { profile: 'rp-brd-module-data', context: 'brd' },
   elections: { profile: 'rp-ele-module-data', context: 'ele' },
   files: { profile: 'rp-fil-module-data', context: 'fil' },
   handover: { profile: 'rp-hnd-module-data', context: 'hnd' },
@@ -29,9 +31,8 @@ const PROVISIONAL = {
   votes: { profile: 'rp-gov-module-data', context: 'gov' },
 } as const
 
-/** The six with a database: their own runtime.export.retentionProfile. */
+/** The five with a database: their own runtime.export.retentionProfile. */
 const DECLARED = {
-  board: { profile: 'rp-brd-module-data', context: 'brd' },
   calendar: { profile: 'rp-cal-module-data', context: 'cal' },
   content: { profile: 'rp-pub-module-data', context: 'pub' },
   finance: { profile: 'rp-fin-module-data', context: 'fin' },
@@ -48,13 +49,13 @@ describe('the real modules/ tree plans to a full catalogue load', () => {
     expect(plan.load.map((r) => r.moduleKey)).toEqual(tree.map((m) => m.id).sort())
   })
 
-  it('(b) the five database-less modules carry exactly the provisional profiles, flagged provisional', () => {
+  it('(b) the six database-less modules carry exactly the provisional profiles, flagged provisional', () => {
     for (const [id, want] of Object.entries(PROVISIONAL)) {
       expect(plan.load.find((r) => r.moduleKey === id), id).toMatchObject({ retentionProfile: want.profile, owningContext: want.context, provisional: true })
     }
   })
 
-  it('(b) the six modules with a database carry their declared profiles, not provisional', () => {
+  it('(b) the five modules with a database carry their declared profiles, not provisional', () => {
     for (const [id, want] of Object.entries(DECLARED)) {
       expect(plan.load.find((r) => r.moduleKey === id), id).toMatchObject({ retentionProfile: want.profile, owningContext: want.context, provisional: false })
     }

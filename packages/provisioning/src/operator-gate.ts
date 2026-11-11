@@ -4,18 +4,20 @@
 // TASK-044 replaced TASK-043's interim gate (operatorAllowGate, which answered
 // with an operator attestation as both references): every enable now goes
 // through lifecycle/enable-gate's createEnableGate (module-gate.ts). The deny
-// list stays as belt and braces: board and vault are refused BY NAME before
-// the gate is even asked, so a hand-inserted isolation result can never enable
-// them (the real gate would refuse them anyway: no case covers them, brief Q4).
+// list stays as belt and braces: vault is refused BY NAME before the gate is
+// even asked, so a hand-inserted isolation result can never enable it (the real
+// gate would refuse it anyway: no case covers it, brief Q4). Board was lifted
+// from this list in the board wave of 2026-11-11: it has its own isolation case,
+// so the gate (a passed cross_customer row on the pinned tip) decides it like
+// every other module.
 import { ProvisioningError } from './errors.ts'
 
 /** Why each default-denied module is refused (the MODULE_DENIED message names it). */
 export const DENY_REASONS: Readonly<Record<string, string>> = Object.freeze({
-  board: 'it is not tenant-isolated yet (R29-I1; TASK-058 / R29-BOARD-STORE-K)',
   vault: 'the password vault stays off for the pilot (PRD-PLAT-012 / PRD-REC-003) until its own isolation pass (TRD-064, TASK-058)',
 })
 
-/** Refused by name, before any write: board (R29-I1) and vault (PRD-PLAT-012 / PRD-REC-003, R30 A1). */
+/** Refused by name, before any write: vault (PRD-PLAT-012 / PRD-REC-003, R30 A1). */
 export const DEFAULT_DENY: ReadonlySet<string> = new Set(Object.keys(DENY_REASONS))
 
 /**

@@ -1,5 +1,6 @@
-// The operator's enable list (TASK-043 TDD 7, unit half): board and vault are
-// refused by name before anything is written; an unknown id too. TASK-044
+// The operator's enable list (TASK-043 TDD 7, unit half): vault is
+// refused by name before anything is written (board was lifted from the list
+// in the board wave of 2026-11-11); an unknown id too. TASK-044
 // deleted the interim operatorAllowGate (an attestation id as both
 // references): every enable goes through lifecycle/enable-gate (module-gate.ts,
 // module-gate.test.ts); this deny list stays as belt and braces.
@@ -26,14 +27,17 @@ describe('assertEnableList', () => {
     expect(assertEnableList([], known)).toEqual([])
   })
 
-  it('refuses board by name (R29-I1: not tenant-isolated until TASK-058)', () => {
-    const r = refusal(['calendar', 'board'], known)
-    expect(r).toMatchObject({ provisioning: true, code: 'MODULE_DENIED' })
-    expect(r?.message).toMatch(/module board cannot be enabled/)
-    expect(DEFAULT_DENY.has('board')).toBe(true)
+  it('accepts board: it is no longer refused by name (its isolation case gates it instead)', () => {
+    expect(assertEnableList(['calendar', 'board'], known)).toEqual(['board', 'calendar'])
+    expect(refusal(['board'], known)).toBeNull()
+    expect(DEFAULT_DENY.has('board')).toBe(false)
   })
 
-  it('refuses vault by name (R30 addendum A1; PRD-PLAT-012 / PRD-REC-003: board and vault stay off for the pilot)', () => {
+  it('the deny list is exactly vault', () => {
+    expect([...DEFAULT_DENY]).toEqual(['vault'])
+  })
+
+  it('refuses vault by name (R30 addendum A1; PRD-PLAT-012 / PRD-REC-003: vault stays off for the pilot)', () => {
     const r = refusal(['calendar', 'vault'], known)
     expect(r).toMatchObject({ provisioning: true, code: 'MODULE_DENIED' })
     expect(r?.message).toMatch(/module vault cannot be enabled/)
@@ -42,8 +46,8 @@ describe('assertEnableList', () => {
   })
 
   it('the refusal names the reason of the module it refuses, not another one', () => {
-    expect(refusal(['board'], known)?.message).not.toMatch(/vault/)
     expect(refusal(['vault'], known)?.message).not.toMatch(/board/)
+    expect(refusal(['vault'], known)?.message).toMatch(/password vault/)
   })
 
   it('refuses an id the catalogue does not know', () => {
