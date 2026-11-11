@@ -5,7 +5,7 @@
   import type { SessionUser } from '$lib/auth/types'
   import { makeAuthHelpers } from '$lib/auth/group-helpers'
   import { moduleHref } from '$lib/modules/registry'
-  import { configuredPortalDomain } from '../routes/portal/portal-domain'
+  import { configuredPortalDomain } from './portal/portal-domain'
   import { termFor } from '$lib/terms'
   import { ROLE_LABELS } from '$lib/auth/labels'
   import { INSTANCE_STATE_META, instanceReady, type InstanceState } from '$lib/instance-status'
