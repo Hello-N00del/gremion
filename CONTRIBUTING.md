@@ -81,11 +81,11 @@ inbound = outbound AGPL-3.0-only, **no party, including the maintainers, can
 ever relicense your contribution away from the AGPL.** That guarantee is the
 point.
 
-Most feature modules are themselves AGPL-3.0-only. The few that are closed
-(finance, content, vault, handover) stay closed not by acquiring relicensing
-rights over the core, but by being **separate programs / services** over
-Gremion's stable APIs (AGPL "mere aggregation"). The core stays free; the
-boundary is architectural, not legal-by-CLA.
+Feature modules attach to the core over the module SDK; the ones in this tree
+live under `modules/`. A component that has to stay closed does so not by
+acquiring relicensing rights over the core, but by being a **separate program /
+service** over Gremion's APIs (AGPL "mere aggregation"). The core stays free;
+the boundary is architectural, not legal-by-CLA.
 
 ## Network use (AGPL §13)
 
@@ -105,8 +105,10 @@ modified code is a licence violation, not a cosmetic default.
 
 1. Fork the repository and create a topic branch.
 2. Make your change; keep it focused and covered by tests where applicable.
-3. Sign off every commit (`git commit -s`).
-4. Open a pull request describing the change and its motivation.
+3. Run `make lint` (the static guards) and, before you ask for review,
+   `make verify` (the local gate; see `scripts/verify/required-suites.txt`).
+4. Sign off every commit (`git commit -s`).
+5. Open a pull request describing the change and its motivation.
 
 All contributions are reviewed before merge. Thanks for helping keep civic
 software free.
@@ -133,6 +135,12 @@ that one post-condition rather than a separate rule.
 dir, a leading `~` is expanded against your home directory, a relative value is
 resolved against *this* worktree, and a linked worktree gets its own answer.
 Run the installer from inside the worktree you want covered.
+
+The hook is `gremion-ui/scripts/hooks/pre-commit`; the installed block only
+delegates to it. It runs the boundary lint and the contract checks on the staged
+files (`boundary-lint.ts --staged`), and, when a `package.json`,
+`pnpm-workspace.yaml` or `pnpm-lock.yaml` is staged, the CVE-floor guard
+(`scripts/check-cve-floors.mjs`, also `make lint-cve-floors`).
 
 **The hook fails closed.** Every condition that stops the boundary lint from
 running blocks the commit and prints what to do about it: no repo root, a
@@ -179,7 +187,8 @@ as `re-prepended`) rather than rewriting it where it sits.
 A foreign hook whose shebang names a **non-shell interpreter** (`python3`,
 `node`, …) is **refused**, not rewritten: the managed block is `/bin/sh` code,
 so prepending it would leave a file that is a syntax error for its own
-interpreter. The same refusal covers a hook that is **not UTF-8 text** (a
+interpreter. The same refusal covers a foreign hook with **CRLF line endings** (convert it
+to LF first), and a hook that is **not UTF-8 text** (a
 compiled binary, or Latin-1 text whose `#!/bin/sh` line passes every other
 check), because reading it as UTF-8 and writing it back would replace every
 undecodable byte with `U+FFFD`. It also covers a **symlinked** `pre-commit`,

@@ -1,9 +1,17 @@
 # control-panel — the Gremion ops shell (TASK-043)
 
 SvelteKit 2 (R29-I5), adapter-node, Auth.js, Bits UI. The panel lists the
-customers of the control registry, shows each customer's provisioning ledger
-(`plt.provisioning_step`, in EXECUTION_ORDER) and offers "Neuer Mandant". It
-**mutates nothing itself**: the only thing it writes is a request (`plt.submit_provisioning_request`), which the host-side executor verifies again and runs (TASK-043d).
+customers of the control registry (`/`, and as JSON `GET /api/customers`), shows
+each customer's provisioning ledger (`plt.provisioning_step`, in
+EXECUTION_ORDER) on its page (`/customers/<slug>`) and offers "Neuer Mandant"
+(`/customers/new`). The customer page also queues the other operator actions:
+retry a failed create, suspend and resume ("Mandant sperren" / "Mandant
+fortsetzen"), enable and disable a module, record a DPIA decision, reconcile,
+seed a vertical and import a member list (validate, then apply). Two read-only
+pages sit beside them: `/betrieb` (host key numbers) and `/codemap` (the code
+map). The panel **mutates nothing itself**: the only thing it writes is a
+request (`plt.submit_provisioning_request`), which the host-side executor
+verifies again and runs (TASK-043d).
 
 ## Who may use it (TRD-048)
 
@@ -48,6 +56,7 @@ without vendor mail, `--no-mail` (a temporary password printed once; Q23).
 | `PLATFORM_DATABASE_URL` | no | gremion_platform; absent: no ledger view and "Neuer Mandant" is disabled with the reason |
 | `PANEL_EXECUTOR` | no | `queue` or `none` (default). `queue` needs `PLATFORM_DATABASE_URL`: "Neuer Mandant" writes a request the host-side executor runs; `none`, no platform database, or an executor heartbeat older than 60 s disable it with the reason. `gremion-tenant` is refused (decommissioned, R31-I4) |
 | `INTERNAL_PUSH_SECRET` | no | the switch's evict bearer; absent, `/api/internal/evict` refuses everything |
+| `CODEMAP_DIR` | no | where the image build left `status.json` and `code-map.html` for `/codemap` (default `/app/codemap`; see [`codemap/README.md`](./codemap/README.md)) |
 | `PANEL_PROMETHEUS_URL` | no | the ops stack's Prometheus for the Betrieb page (set by `compose/control-panel/ops-link.yml`: `http://prometheus:9090`); plain http only to the loopback or a compose service name; absent: the page is shown disabled, naming this variable |
 
 `/healthz` answers 200 when the process runs and the contract is valid, 503
