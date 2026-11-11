@@ -732,12 +732,6 @@
       "why": "A package can get a known fault after a person wrote the code. A weekly check finds this fault even when nobody changes the code. The check does not run on a pull request. The job audit also lists old packages in its summary, and this list does not change the result.",
       "leadsTo": "The job report opens one issue, or adds a comment to the issue that is open. A person reads the issue and updates the package."
     },
-    "area:github-actions/dependabot-unpause@L0": {
-      "title": "Dependabot: restore the update limit",
-      "what": "A person starts this workflow by hand. It has no schedule. The job measure reads how fast GitHub starts a job. The job unpause runs only when this time is 120 seconds or less. Then it restores paused update limits in the Dependabot settings, and it opens a pull request when it changes a limit.",
-      "why": "Dependabot is a tool that opens pull requests for new versions of packages. A person can pause it for one kind of package. This workflow reverses a pause. If GitHub is slow to start the job measure, the job unpause does not run and no limit changes. If the settings hold no paused limit, the run makes no change and ends without an error.",
-      "leadsTo": "The pull request has the labels dependencies, ci and automated. A person reads the pull request and merges it. The workflow never merges it."
-    },
     "area:github-actions/semgrep@L0": {
       "title": "Semgrep: a scan for security faults",
       "what": "This workflow runs Semgrep on the code. It starts on a push to the main or develop branch, on a pull request to one of them and once a week. A person can also start it by hand.",
@@ -906,7 +900,6 @@
     "release-images.yml": "The workflow file that builds and pushes the images of a release.",
     "release-npm.yml": "The workflow file that publishes two packages to npm.",
     "dependency-audit.yml": "The workflow file of the weekly check of the packages that the product needs.",
-    "dependabot-unpause.yml": "The workflow file that restores paused update limits of Dependabot.",
     "semgrep.yml": "The workflow file that scans the code for security faults.",
     "scripts/ci-local": "A folder of guards and a snapshot tool. A person runs them on one computer when GitHub Actions does not run.",
     "Semgrep": "A tool that scans code for security faults.",
