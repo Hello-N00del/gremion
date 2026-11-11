@@ -45,8 +45,10 @@ test('a target line that no longer exists makes the check fail loudly (negative 
   const tmp = mkdtempSync(join(tmpdir(), 'mut-targets-'))
   try {
     cpSync(join(ROOT, 'modules'), join(tmp, 'modules'), { recursive: true, filter: (src) => !/[\\/]node_modules([\\/]|$)/.test(src) })
+    // the board mutation targets the kernel's own getDb(), outside modules/
+    cpSync(join(ROOT, 'gremion-ui', 'src', 'lib', 'server', 'db.ts'), join(tmp, 'gremion-ui', 'src', 'lib', 'server', 'db.ts'))
     cpSync(join(ROOT, 'test', 'isolation', 'tenant', 'mutation-proof.sh'), join(tmp, 'test', 'isolation', 'tenant', 'mutation-proof.sh'))
-    const ok = checkTargets(join(tmp, 'test', 'isolation', 'tenant', 'mutation-proof.sh'))
+    const ok =checkTargets(join(tmp, 'test', 'isolation', 'tenant', 'mutation-proof.sh'))
     assert.equal(ok.status, 0, `the copied tree must pass first: ${ok.stdout}\n${ok.stderr}`)
 
     const guard = join(tmp, 'modules', 'files', 'app', 'lib', 'server', 'files', 'webdav-path.ts')
