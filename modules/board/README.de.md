@@ -1,4 +1,4 @@
-<!-- i18n-sync: source=README.md sha256=fb69fd1d54ea6190c10e124d314e652e760be22df733cf2a6b17248f84859467 -->
+<!-- i18n-sync: source=README.md sha256=f695e336c608a1d6e8431201d5e421f5a41198c671dbe363e91f36792d101d9c -->
 [English](./README.md) | **Deutsch**
 
 # board
