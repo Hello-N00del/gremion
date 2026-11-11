@@ -17,7 +17,7 @@ const routes = buildApiRoutes(storeThatThrows)
 const router = createRouter(routes)
 
 describe('board leaf route table — exact endpoint set', () => {
-  it('registers exactly the nine BoardBackendPort endpoints (seven + the two create routes, R29-BOARD-STORE-K A5)', () => {
+  it('registers exactly the ten BoardBackendPort endpoints (seven + the two create routes, R29-BOARD-STORE-K A5, + the card edit)', () => {
     const set = routes.map((r) => `${r.method} ${r.path}`).sort()
     expect(set).toEqual(
       [
@@ -27,6 +27,7 @@ describe('board leaf route table — exact endpoint set', () => {
         'GET /api/v1/boards/:id/deck',
         'POST /api/v1/boards/:id/stacks',
         'POST /api/v1/cards',
+        'PATCH /api/v1/cards/:id',
         'PATCH /api/v1/cards/:id/move',
         'POST /api/v1/cards/promoted',
         'POST /api/v1/boards/:id/promote',
@@ -68,6 +69,13 @@ describe('board leaf router — path-param matching', () => {
     expect(m.type).toBe('matched')
     if (m.type !== 'matched') throw new Error('unreachable')
     expect(m.params).toEqual({ id: 'b-7' })
+  })
+
+  it('extracts :id for PATCH /api/v1/cards/:id (the card edit), distinct from …/move', () => {
+    const m = router.match('PATCH', '/api/v1/cards/c-9')
+    expect(m.type).toBe('matched')
+    if (m.type !== 'matched') throw new Error('unreachable')
+    expect(m.params).toEqual({ id: 'c-9' })
   })
 
   it('extracts :id for PATCH /api/v1/cards/:id/move', () => {

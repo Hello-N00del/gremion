@@ -212,6 +212,42 @@ describe('POST /api/v1/cards', () => {
   })
 })
 
+describe('PATCH /api/v1/cards/:id (the card edit)', () => {
+  async function seedCard(): Promise<string> {
+    const b = await createBoard(sql, { orgUnitId: OU1, name: 'StuRa' })
+    const s = await createStack(sql, { boardId: b.id, name: 'To Do', order: 0 })
+    const created = await callServer(server, 'POST', '/api/v1/cards', guardHeaders(), {
+      stackId: s.id,
+      title: 'Alt',
+      description: 'Beschreibung',
+      dueDate: '2026-12-01',
+      createdBy: 'u1',
+    })
+    return (created.body as { id: string }).id
+  }
+
+  it('changes only the fields the patch names and answers the card', async () => {
+    const cardId = await seedCard()
+    const r = await callServer(server, 'PATCH', `/api/v1/cards/${cardId}`, guardHeaders(), { title: 'Neu', dueDate: null })
+    expect(r.status).toBe(200)
+    const card = r.body as { title: string; description: string | null; due_date: string | null }
+    expect(card.title).toBe('Neu')
+    expect(card.description).toBe('Beschreibung')
+    expect(card.due_date).toBeNull()
+  })
+
+  it('returns 404 for an unknown card', async () => {
+    const r = await callServer(server, 'PATCH', `/api/v1/cards/${MISSING_UUID}`, guardHeaders(), { title: 'x' })
+    expect(r.status).toBe(404)
+  })
+
+  it('returns 400 for an empty title', async () => {
+    const cardId = await seedCard()
+    const r = await callServer(server, 'PATCH', `/api/v1/cards/${cardId}`, guardHeaders(), { title: '' })
+    expect(r.status).toBe(400)
+  })
+})
+
 describe('PATCH /api/v1/cards/:id/move', () => {
   it('moves a card to another stack', async () => {
     const b = await createBoard(sql, { orgUnitId: OU1, name: 'StuRa' })

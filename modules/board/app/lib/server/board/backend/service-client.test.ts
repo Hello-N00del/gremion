@@ -289,6 +289,23 @@ describe('ServiceBoardClient — method routing', () => {
     expect(result.created_at).toBeInstanceOf(Date)
   })
 
+  it('updateCard → PATCH /api/v1/cards/c1 with the patch as body', async () => {
+    resetStub({ body: makeCardBody({ title: 'Neu benannt', due_date: '2026-12-01' }) })
+    const client = new ServiceBoardClient()
+    const result = await withTenant(() => client.updateCard('c1', { title: 'Neu benannt', dueDate: '2026-12-01' }))
+    expect(lastRequest!.method).toBe('PATCH')
+    expect(lastRequest!.url).toBe('/api/v1/cards/c1')
+    expect(lastRequest!.body).toEqual({ title: 'Neu benannt', dueDate: '2026-12-01' })
+    expect(result!.title).toBe('Neu benannt')
+    expect(result!.created_at).toBeInstanceOf(Date)
+  })
+
+  it('updateCard returns null when the leaf answers 404', async () => {
+    resetStub({ firstStatus: 404, body: { success: false, error: 'not found' } })
+    const client = new ServiceBoardClient()
+    expect(await withTenant(() => client.updateCard('missing', { title: 'x' }))).toBeNull()
+  })
+
   it('moveCard → PATCH /api/v1/cards/c1/move', async () => {
     resetStub({ body: makeCardBody({ stack_id: 's2' }) })
     const client = new ServiceBoardClient()
