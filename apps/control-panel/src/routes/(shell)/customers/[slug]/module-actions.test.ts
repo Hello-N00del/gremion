@@ -84,6 +84,8 @@ vi.mock('$lib/server/modules', async (orig) => {
 vi.mock('$lib/server/auth', () => ({
   evidenceFromRequest: async () => ({ token: 'x'.repeat(120), acr: 'loa2', authTime: new Date(), sessionAt: new Date() }),
 }))
+// the wiring state is read from the control database (wiring.test.ts covers it); this file is not about it
+vi.mock('./wiring', async (orig) => ({ ...(await orig<typeof import('./wiring')>()), servicesWired: async () => true }))
 
 const { load, actions } = await import('./+page.server')
 const { DISABLE_LOCKED } = await import('$lib/modules')
